@@ -96,6 +96,11 @@ pub struct TaskEdit {
     /// その場で `ready` に戻す（下記 `edit_task` を見よ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceSpec>,
+    /// ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（`none`/`each_phase`/`after`）。
+    /// 次に計画が採用（新規・replan）されたときに `Event::PausePointsResolved` へ解決される
+    /// （PATCH 自体は解決を起こさない。走っている計画の停止点はそのまま）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_after: Option<task_core::PausePolicy>,
 }
 
 impl TaskEdit {
@@ -329,6 +334,16 @@ pub fn edit_task(
             routing.tier_source = task_core::TierSource::Human;
         }
         fields.push("tier".to_string());
+    }
+    if let Some(pause_after) = edit.pause_after {
+        let routing = task.routing.get_or_insert_with(Default::default);
+        if pause_after != routing.pause_after {
+            routing.pause_after = pause_after;
+            // ADR-0074 D2.1（Phase F3 途中確認）: `PATCH /tasks/{id}` は人だけが呼べる
+            // （管理系。API 層の `require_admin`）ので出自は常に人。
+            routing.pause_after_source = task_core::PauseSource::Human;
+            fields.push("pause_after".to_string());
+        }
     }
     if let Some(adapter) = edit.adapter
         && adapter != task.worker_hint.adapter
@@ -838,6 +853,55 @@ mod tests {
         );
         // `ready_tasks` が見る列も running のまま（列と json が食い違わない）。
         assert!(store.ready_tasks(10).expect("ready").is_empty());
+    }
+
+    /// ADR-0074 D2.1（Phase F3 途中確認、区切り 1 (a)）: `PATCH /tasks/{id}` の `pause_after` は
+    /// `Task.routing.pause_after` に書かれ、出自は常に `PauseSource::Human`（PATCH は管理系 = 人だけ）。
+    /// `routing` が無い（Phase 114 より前の）タスクでも新しく作られる。
+    #[test]
+    fn edit_writes_pause_after_with_human_source_even_without_prior_routing() {
+        let store = SqliteStore::open_in_memory().expect("store");
+        let task = task_with(Status::Ready);
+        assert!(
+            task.routing.is_none(),
+            "この fixture は routing 無しから始める"
+        );
+        let id = task.id;
+        store.insert(&task).expect("insert");
+
+        let result = edit_task(
+            &store,
+            id,
+            TaskEdit {
+                pause_after: Some(task_core::PausePolicy::EachPhase),
+                ..TaskEdit::default()
+            },
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .expect("edit");
+        assert_eq!(result.fields, vec!["pause_after".to_string()]);
+        let routing = result.task.routing.expect("routing created");
+        assert_eq!(routing.pause_after, task_core::PausePolicy::EachPhase);
+        assert_eq!(routing.pause_after_source, task_core::PauseSource::Human);
+
+        let after = store.get(id).expect("get").expect("task");
+        let after_routing = after.routing.expect("routing persisted");
+        assert_eq!(after_routing.pause_after, task_core::PausePolicy::EachPhase);
+
+        // 同じ値をもう一度 PATCH しても、何も変わらないので `fields` は空。
+        let noop = edit_task(
+            &store,
+            id,
+            TaskEdit {
+                pause_after: Some(task_core::PausePolicy::EachPhase),
+                ..TaskEdit::default()
+            },
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .expect("edit");
+        assert!(noop.fields.is_empty(), "{:?}", noop.fields);
     }
 
     /// `expected_status` が現在と違えば 409。何も変えない編集はイベントを積まない。

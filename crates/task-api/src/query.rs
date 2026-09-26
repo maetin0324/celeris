@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 27] = [
+pub(crate) const EVENT_TYPES: [&str; 28] = [
     "created",
     "transitioned",
     "worker_started",
@@ -188,6 +188,8 @@ pub(crate) const EVENT_TYPES: [&str; 27] = [
     "repair_scheduled",
     // ADR-0074 D4.3（Phase F3）: run 1 件の quota 消費の推定。
     "quota_estimated",
+    // ADR-0074 D2.1（Phase F3 途中確認）: `pause_after` を工程の key の集合へ解決した結果。
+    "pause_points_resolved",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -222,6 +224,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkUnitCommitted { .. } => "work_unit_committed",
         Event::PhaseIntegrated { .. } => "phase_integrated",
         Event::WorkUnitsSerialized { .. } => "work_units_serialized",
+        Event::PausePointsResolved { .. } => "pause_points_resolved",
     }
 }
 

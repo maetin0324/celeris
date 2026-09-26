@@ -39,6 +39,8 @@ pub mod mountinfo;
 pub mod node_session;
 pub mod notify;
 pub mod org;
+/// ADR-0074 D2（Phase F3 途中確認）: `PausePolicy` の解決の純粋な型と関数。
+pub mod pause;
 pub mod plan;
 /// ADR-0046 D1（Phase 59）: 組織 = Agent Profile の継承木。
 pub mod profile;
@@ -181,6 +183,8 @@ pub use quota::{
     QuotaCalibration, QuotaMethod, QuotaRunRecord, QuotaUse, QuotaWindow, QuotaWindowUse,
     WindowSnapshot, aggregate_quota_use, merge_quota_use,
 };
+// ---- ADR-0074 D2（Phase F3 途中確認）: PausePolicy の解決 ----
+pub use pause::{PausePolicy, PauseSource, resolve_pause_points};
 
 pub mod model_routing;
 // ---- ADR-0069（Phase 114）: routing の 4 層（lane policy・retry/escalation・監査）----

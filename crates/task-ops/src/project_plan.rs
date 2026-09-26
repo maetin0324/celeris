@@ -148,6 +148,7 @@ pub fn start(
         status: None,
         features: None,
         execution: None,
+        pause_after: None,
         provenance: add::SpecProvenance::system(),
     };
     let task = add::create_support_task(store, spec, roles, genres, now)?;

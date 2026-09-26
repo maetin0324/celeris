@@ -46,9 +46,9 @@ pub fn adopt_plan(
     limits: ExecutionLimits,
     now: OffsetDateTime,
 ) -> Result<ExecutionPlanRow, OpsError> {
-    if store.get(task_id)?.is_none() {
+    let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
-    }
+    };
     let validated = validate(&spec, limits, &[])
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
 
@@ -65,6 +65,24 @@ pub fn adopt_plan(
         &created_at,
         &mut |_| new_id(),
     );
+
+    // ADR-0074 D2.1（Phase F3 途中確認）: 採用と同じトランザクションで `Task.routing.pause_after`
+    // を工程の key の集合へ解決する。v1（`phases` が空）は常に空集合（無害）。
+    let pause_after = task
+        .routing
+        .as_ref()
+        .map(|r| r.pause_after.clone())
+        .unwrap_or_default();
+    let pause_after_source = task
+        .routing
+        .as_ref()
+        .map(|r| r.pause_after_source)
+        .unwrap_or_default();
+    let pause_points_event = Event::PausePointsResolved {
+        plan_id: plan_id.clone(),
+        phases: task_core::resolve_pause_points(&pause_after, &validated.spec.phases),
+        source: pause_after_source,
+    };
 
     let plan = ExecutionPlanRow {
         id: plan_id.clone(),
@@ -85,7 +103,13 @@ pub fn adopt_plan(
         reason: None,
         plan: Box::new(validated.spec),
     };
-    store.execution_plan_adopt(task_id, plan.clone(), work_units, event)?;
+    store.execution_plan_adopt(
+        task_id,
+        plan.clone(),
+        work_units,
+        vec![pause_points_event],
+        event,
+    )?;
     Ok(plan)
 }
 
@@ -125,9 +149,9 @@ pub fn replan(
     limits: ExecutionLimits,
     now: OffsetDateTime,
 ) -> Result<(ExecutionPlanRow, ReplanDiff), OpsError> {
-    if store.get(task_id)?.is_none() {
+    let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
-    }
+    };
     let Some(active) = store.execution_plan_active(task_id)? else {
         return Err(OpsError::Validation(
             "task has no active execution plan to replan".to_string(),
@@ -439,6 +463,25 @@ pub fn replan(
         created_at: created_at.clone(),
         superseded_at: None,
     };
+    // ADR-0074 D2.1（Phase F3 途中確認）: replan のたびに `Task.routing.pause_after` を新しい版の
+    // 工程の key の集合へ解決し直す（済んだ工程の分もそのまま新しい集合に含めてよい。D2.2 の
+    // `PhaseGate` はまだ来ていない工程の統合の後にしか発火しないため、既に統合済みの工程を挙げても
+    // 無害）。
+    let pause_after = task
+        .routing
+        .as_ref()
+        .map(|r| r.pause_after.clone())
+        .unwrap_or_default();
+    let pause_after_source = task
+        .routing
+        .as_ref()
+        .map(|r| r.pause_after_source)
+        .unwrap_or_default();
+    extra_events.push(Event::PausePointsResolved {
+        plan_id: new_plan_id.clone(),
+        phases: task_core::resolve_pause_points(&pause_after, &validated.spec.phases),
+        source: pause_after_source,
+    });
     // ADR-0074 D5.3（Phase F1）: 版の差分の件数を `reason` の後ろに決定的な形で足す（E5 の未実装
     // 「版の差分の件数」の解消）。
     let reason_with_diff = format!(
@@ -621,6 +664,107 @@ mod tests {
         assert_eq!(view.work_units[1].status, WorkUnitStatus::Pending);
         assert_eq!(view.work_units[2].key, "c");
         assert_eq!(view.work_units[2].status, WorkUnitStatus::Pending);
+    }
+
+    fn phase(key: &str, kind: WorkUnitKind) -> task_core::PhaseSpec {
+        task_core::PhaseSpec {
+            key: key.to_string(),
+            kind,
+            title: format!("phase {key}"),
+        }
+    }
+
+    /// ADR-0074 D1.1（Phase F2）/ D2.1（Phase F3 途中確認）: `design` → `build` の 2 工程 v2 計画。
+    fn spec_v2_two_phases() -> ExecutionPlanSpec {
+        let mut a = wu("a", &[]);
+        a.phase = Some("design".to_string());
+        let mut b = wu("b", &["a"]);
+        b.phase = Some("build".to_string());
+        ExecutionPlanSpec {
+            schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+            rationale: "design -> build".to_string(),
+            work_units: vec![a, b],
+            phases: vec![
+                phase("design", WorkUnitKind::Design),
+                phase("build", WorkUnitKind::Implement),
+            ],
+            children: Vec::new(),
+        }
+    }
+
+    /// ADR-0074 D2.1（Phase F3 途中確認、区切り 1 (a)）: v2 の計画を採用すると、`Task.routing.pause_after`
+    /// が工程の key の集合へ解決され、`ExecutionPlanned` と同じトランザクションで
+    /// `Event::PausePointsResolved` に残る。
+    #[test]
+    fn adopt_plan_resolves_pause_points_from_task_routing_for_v2_plans() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut task = sample_task();
+        task.routing = Some(task_core::TaskRouting {
+            pause_after: task_core::PausePolicy::EachPhase,
+            ..Default::default()
+        });
+        store.insert(&task).unwrap();
+
+        let plan = adopt_plan(
+            &store,
+            task.id,
+            spec_v2_two_phases(),
+            PlanOrigin::Human,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+
+        let events = store.events_for(task.id).unwrap();
+        let resolved = events
+            .iter()
+            .find_map(|(_, e)| match e {
+                Event::PausePointsResolved {
+                    plan_id,
+                    phases,
+                    source,
+                } if plan_id == &plan.id => Some((phases.clone(), *source)),
+                _ => None,
+            })
+            .expect("PausePointsResolved recorded");
+        // `EachPhase` = 最後の工程を除くすべて（"design" だけ）。
+        assert_eq!(resolved.0, vec!["design".to_string()]);
+        assert_eq!(resolved.1, task_core::PauseSource::Human);
+    }
+
+    /// (e): v1（`phases` が空）の計画では `pause_after` があっても無害（空集合を解決するだけ）。
+    #[test]
+    fn adopt_plan_resolves_no_pause_points_for_v1_plans() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut task = sample_task();
+        task.routing = Some(task_core::TaskRouting {
+            pause_after: task_core::PausePolicy::EachPhase,
+            ..Default::default()
+        });
+        store.insert(&task).unwrap();
+
+        let plan = adopt_plan(
+            &store,
+            task.id,
+            spec(),
+            PlanOrigin::Human,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+
+        let events = store.events_for(task.id).unwrap();
+        let resolved = events.iter().find_map(|(_, e)| match e {
+            Event::PausePointsResolved {
+                plan_id, phases, ..
+            } if plan_id == &plan.id => Some(phases.clone()),
+            _ => None,
+        });
+        assert_eq!(resolved, Some(Vec::<String>::new()));
+        // Task 自体は 1 バイトも変わらず（v1 は今までどおり動く）。
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, task.status);
     }
 
     #[test]

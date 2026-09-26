@@ -20176,3 +20176,63 @@ run 開始部分で、F3 の `quota_begin` を `dispatch_one` に移して解消
 - **未着手**: (a)〜(f) の残り全部（`PausePolicy` の型・NewTaskSpec/PATCH/CoS 配線、`PhaseGate`/`PhaseResume`
   遷移、途中報告、受信箱・通知、API・GUI）。前任者の下書き（`pause.rs`・`model.rs`/`transition.rs` の Trigger
   追加）は設計が妥当なので土台として使う予定。
+
+### F3(pause) checkpoint — 区切り 1 (a)(e)（完了、commit 待ち）
+
+`PausePolicy`（none / each_phase / after(phase)）の型と、採用時の解決。前任者の `pause.rs` 下書きのうち
+`PauseSource`/`PausePolicy`/`resolve_pause_points` だけを取り込んだ（`PhaseResumeMode`/`PhaseReport` は
+区切り 2（(b)）で足す）。
+
+- **条件 (a)**: 人（`NewTaskSpec`/`PATCH /tasks/{id}`）と CoS（`create_task.pause_after`）が
+  `pause_after` を書け、計画の採用（新規・replan）のときに `Event::PausePointsResolved` へ解決される。
+  planner の出力には欄が無い（`ExecutionPlanSpec` に触れていない。書けば schema 違反になる既存の
+  `deny_unknown_fields` のまま）。
+  - 型: `crates/task-core/src/pause.rs`（`PauseSource`・`PausePolicy`・`resolve_pause_points`）。
+    `crates/task-core/src/model.rs`: `TaskRouting.pause_after`/`pause_after_source`（既定で 1 バイトも
+    変わらない）、`Event::PausePointsResolved { plan_id, phases, source }`。
+  - 解決: `crates/task-ops/src/execution.rs::adopt_plan`/`replan` が `Task.routing.pause_after` を
+    `validated.spec.phases` へ解決し、`ExecutionPlanned`（`extra_events`。`execution_plan_adopt` の
+    store trait に `extra_events: Vec<Event>` を新設、`execution_plan_replan` は既存の `extra_events` を
+    再利用）と同じトランザクションで書く。
+  - 人: `crates/task-ops/src/add.rs::NewTaskSpec.pause_after`（出自 = `spec.provenance.origin` から
+    `PauseSource::Human`/`Agent` を決める）。`crates/task-ops/src/edit.rs::TaskEdit.pause_after`（PATCH は
+    管理系 = 人だけなので常に `Human`。`routing` が無い旧タスクにも新しく作る）。
+  - CoS: `crates/task-core/src/console_action.rs::ConsoleAction::CreateTask.pause_after`
+    （`Box<PausePolicy>`。`clippy::large_enum_variant` 対策、`workspace` と同じ理由）→
+    `crates/task-ops/src/actions.rs::create_task_action` を経由。
+  - 派生の機械的対応: `Event` に新 variant を足したことによる `crates/task-api/src/query.rs::EVENT_TYPES`
+    （27→28、`"pause_points_resolved"`）と `event_type_name` の網羅性。`NewTaskSpec`/`TaskRouting` の
+    構造体リテラルを持つ約 10 箇所（`crates/{celeris,celerisctl,task-dispatch,task-ops}/**`）に
+    `pause_after`/`extra_events` の欄を足した（値は既定 `None`/`Vec::new()`。挙動は変えない）。
+- **条件 (e)**: v1/atomic の計画（`phases` が空）では `pause_after` があっても無害（`resolve_pause_points`
+  が空集合を返すだけ。`adopt_plan_resolves_no_pause_points_for_v1_plans` で確認）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-ops --lib add:: edit:: actions:: execution::` → 全 pass（新規 7 テスト:
+    `create_task_carries_pause_after_from_a_human_spec`、
+    `create_task_defaults_pause_after_to_none_with_human_source`、
+    `create_task_carries_pause_after_from_an_agent_spec_with_agent_source`、
+    `edit_writes_pause_after_with_human_source_even_without_prior_routing`、
+    `create_task_carries_pause_after_from_cos_with_agent_source`、
+    `adopt_plan_resolves_pause_points_from_task_routing_for_v2_plans`、
+    `adopt_plan_resolves_no_pause_points_for_v1_plans`。加えて `pause.rs` 自身の 4 テスト:
+    `none_never_pauses`・`each_phase_excludes_the_last_phase`・`after_matches_by_key_or_kind`・
+    `v1_and_atomic_plans_have_no_phases_so_nothing_resolves`）。
+  - `cargo fmt --all -- --check` → 差分なし（1 回 `cargo fmt --all` で自動整形してから確認）。
+  - `cargo clippy --workspace --all-targets -- -D warnings` → warning 0。
+  - `cargo test --workspace --no-fail-fast` → 1 回目は 138+4 件が `assertion left==right` で FAILED
+    （**本 Phase のバグではない**: `df -h /` がルート 99% 使用・空き 4.5G で、`agent-platform-f4a` の
+    target が 43G を占めていた。既知の「ルートディスク満杯」障害と同型。自分の
+    `agent-platform-f3pause` の target 29G を `rm -rf` して 34G 空きに戻し、`cargo build` からやり直して
+    再実行 → **FAILED 0**（82 の test binary、`test result: ok` 82 件）。他の同時稼働エージェントの
+    target には触れていない）。
+  - `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::tests::committed_schema_matches_generated` と
+    `-p task-core --lib store::tests::event_row_schema_matches_committed` を個別に再生成（`Event`
+    variant 追加のため。ADR-0074 の他の Phase と同じく、schema 一致テストは対象を絞って
+    `UPDATE_SCHEMA=1` を通す必要がある）。再生成後の 3 schema（`docs/api/v1/api-v1.schema.json`・
+    `docs/api/v1/event.schema.json`・`docs/protocol/worker-protocol.schema.json`）はいずれも
+    `PausePolicy`/`PauseSource`/新フィールドの追加だけ（299 行の加算、削除ゼロ）。
+- **持ち越し**: GUI の `gen:types` はこの区切りでは実行していない（区切り 4 でまとめて GUI 側を作る
+  ときに、`api-v1.schema.json` の差分を含めて再生成する）。`PUT /tasks/{id}/execution/pause-after`
+  （ADR D2.1 が触れる、計画採用後に pause_after だけを直す専用エンドポイント）は実装していない
+  （§6 F3 の受け入れ条件 (a) は `NewTaskSpec`/`PATCH`/CoS とだけ書いており、専用 PUT は明示要求されて
+  いないため。必要なら次の一手として追加する）。

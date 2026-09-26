@@ -961,11 +961,15 @@ pub trait TaskStore:
     /// 行を同じトランザクションで書く）。E2 は新規のみ: そのタスクに既に `active` な計画があれば
     /// `StoreError::InUse`（replan は E4。`PlanOrigin::Repair` 等で明示的に旧版を `superseded` にした
     /// 上で採用する経路は別に用意する）。
+    /// `extra_events`（ADR-0074 D2.1（Phase F3 途中確認）: `Event::PausePointsResolved` 用）は
+    /// `event`（`ExecutionPlanned`）より先に、同じトランザクションで書く（`execution_plan_replan` と
+    /// 同じ規律）。
     fn execution_plan_adopt(
         &self,
         task_id: TaskId,
         plan: ExecutionPlanRow,
         work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
         event: Event,
     ) -> Result<(), StoreError>;
 
@@ -4685,6 +4689,7 @@ impl TaskStore for SqliteStore {
         task_id: TaskId,
         plan: ExecutionPlanRow,
         work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
         event: Event,
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
@@ -4719,6 +4724,9 @@ impl TaskStore for SqliteStore {
         )?;
         for wu in &work_units {
             Self::insert_work_unit_tx(&tx, wu)?;
+        }
+        for ev in &extra_events {
+            Self::append_event_tx(&tx, task_id, ev)?;
         }
         Self::append_event_tx(&tx, task_id, &event)?;
         tx.commit()?;
@@ -9146,6 +9154,7 @@ mod tests {
                 task.id,
                 plan.clone(),
                 sample_work_units(task.id, &plan_id),
+                Vec::new(),
                 event,
             )
             .unwrap();
@@ -9302,6 +9311,7 @@ mod tests {
                 task.id,
                 plan("p1", 1),
                 sample_work_units(task.id, "p1"),
+                Vec::new(),
                 event("p1", 1),
             )
             .unwrap();
@@ -9310,6 +9320,7 @@ mod tests {
                 task.id,
                 plan("p2", 2),
                 sample_work_units(task.id, "p2"),
+                Vec::new(),
                 event("p2", 2),
             )
             .unwrap_err();
@@ -9343,6 +9354,7 @@ mod tests {
                 task.id,
                 plan,
                 units,
+                Vec::new(),
                 Event::ExecutionPlanned {
                     plan_id: "p1".into(),
                     version: 1,
@@ -9548,6 +9560,7 @@ mod tests {
                 task.id,
                 plan,
                 sample_work_units(task.id, "p1"),
+                Vec::new(),
                 Event::ExecutionPlanned {
                     plan_id: "p1".into(),
                     version: 1,
@@ -9702,6 +9715,7 @@ mod tests {
                 planned.id,
                 planned_plan.clone(),
                 planned_units,
+                Vec::new(),
                 Event::ExecutionPlanned {
                     plan_id: planned_plan.id,
                     version: 1,
@@ -9723,6 +9737,7 @@ mod tests {
                 repair.id,
                 repair_plan.clone(),
                 repair_units,
+                Vec::new(),
                 Event::ExecutionPlanned {
                     plan_id: repair_plan.id,
                     version: 1,
@@ -10144,6 +10159,7 @@ mod tests {
                 task.id,
                 plan,
                 units,
+                Vec::new(),
                 Event::ExecutionPlanned {
                     plan_id: plan_id.clone(),
                     version: 1,
@@ -10211,6 +10227,7 @@ mod tests {
                 task.id,
                 old_plan,
                 units.clone(),
+                Vec::new(),
                 Event::ExecutionPlanned {
                     plan_id: old_plan_id.clone(),
                     version: 1,

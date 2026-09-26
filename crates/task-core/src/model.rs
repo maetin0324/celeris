@@ -571,6 +571,22 @@ pub struct TaskRouting {
     /// gate が判定した Task にだけ `Some`（`gate = "off"` の Task・E3 より前のタスクには無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::execution_gate::ExecutionGateDecision>,
+    /// ADR-0074 D2.1（Phase F3 途中確認）: `NewTaskSpec.pause_after` / `PATCH` /
+    /// `PUT /tasks/{id}/execution/pause-after` / CoS の `create_task.pause_after` の現在値。
+    /// **Task 専用の欄をわざわざ増やさず、ここに置く**（`TaskRouting` は既に「あとから足された
+    /// 監査用の任意フィールド」の置き場所であり、`Task { .. }` の構造体リテラルを持つ多数の箇所を
+    /// 機械的に更新する回転コストを避けるため。Phase F3(pause) 実装時の逸脱・明確化）。
+    /// 既定 `none`（導入前のタスクと 1 バイトも変わらない）。
+    #[serde(default, skip_serializing_if = "crate::pause::PausePolicy::is_default")]
+    pub pause_after: crate::pause::PausePolicy,
+    /// D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は
+    /// 人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。
+    #[serde(default, skip_serializing_if = "is_default_pause_source")]
+    pub pause_after_source: crate::pause::PauseSource,
+}
+
+fn is_default_pause_source(source: &crate::pause::PauseSource) -> bool {
+    matches!(source, crate::pause::PauseSource::Human)
 }
 
 /// ADR-0016 D1: `[[roles]]` の 1 行。役割ごとの既定（タスクの値 > 役割の既定 > 全体の既定）とプロンプトに前置きする指示文。
@@ -1150,6 +1166,16 @@ pub enum Event {
     WorkUnitsSerialized {
         plan_id: String,
         reason: String,
+    },
+    /// ADR-0074 D2.1（Phase F3 途中確認）: 計画の採用（新規・replan）、または
+    /// `PUT /tasks/{id}/execution/pause-after` の直後に、その時点の `Task.routing.pause_after` を
+    /// 工程の key の集合へ解決した結果を残す。同じ `plan_id` に複数出ることがある（**最後の Event が
+    /// 有効**。`ExecutionPlanned`/`QuotaEstimated` と同じ規律）。状態は変えない（`replay` は無視する）。
+    PausePointsResolved {
+        plan_id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        phases: Vec<String>,
+        source: crate::pause::PauseSource,
     },
 }
 

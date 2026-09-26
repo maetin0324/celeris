@@ -5249,6 +5249,33 @@
             "reason"
           ],
           "type": "object"
+        },
+        {
+          "description": "ADR-0074 D2.1（Phase F3 途中確認）: 計画の採用（新規・replan）、または\n`PUT /tasks/{id}/execution/pause-after` の直後に、その時点の `Task.routing.pause_after` を\n工程の key の集合へ解決した結果を残す。同じ `plan_id` に複数出ることがある（**最後の Event が\n有効**。`ExecutionPlanned`/`QuotaEstimated` と同じ規律）。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "phases": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/PauseSource"
+            },
+            "type": {
+              "const": "pause_points_resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_id",
+            "source"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -8507,6 +8534,18 @@
           ],
           "default": null
         },
+        "pause_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（省略時は `none` = 全工程自動）。\n人（API/CLI）と CoS（`create_task.pause_after`）の両方が書ける。出自は `provenance.origin`\nで記録する（`Agent` なら `PauseSource::Agent`）。**planner は書けない**\n（`ExecutionPlanSpec` に欄が無い）。"
+        },
         "priority": {
           "anyOf": [
             {
@@ -9048,6 +9087,72 @@
         "skill"
       ],
       "type": "object"
+    },
+    "PausePolicy": {
+      "description": "D2.1: `NewTaskSpec.pause_after` / `PATCH` / `PUT /tasks/{id}/execution/pause-after` /\nCoS の `create_task.pause_after` に書ける値。既定は `None`（全工程自動）。\n**planner は書けない**（`ExecutionPlanSpec` に欄が無い。`deny_unknown_fields` で拒否される）。",
+      "oneOf": [
+        {
+          "description": "既定。全工程自動（統合の後で止まらない）。",
+          "properties": {
+            "mode": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "最後の工程を除くすべての工程の後で止まる。",
+          "properties": {
+            "mode": {
+              "const": "each_phase",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "挙げた工程（`key` か `kind` に一致するもの）の後で止まる。",
+          "properties": {
+            "mode": {
+              "const": "after",
+              "type": "string"
+            },
+            "phases": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PauseSource": {
+      "description": "D2.1: `pause_after` を誰が書いたか（ADR-0069 D1 の `SpecOrigin` と同じ考え方。`task_ops::add::SpecOrigin`\nは task-ops 側の内部型なので、`Event` から見える task-core 側にこの小さな型を別に置く）。",
+      "oneOf": [
+        {
+          "const": "human",
+          "description": "人（API・GUI・`celerisctl`。既定）。",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "description": "CoS（`create_task.pause_after` / 案件計画のマイルストーン）。",
+          "type": "string"
+        }
+      ]
     },
     "Permissions": {
       "additionalProperties": false,
@@ -13150,6 +13255,17 @@
             "null"
           ]
         },
+        "pause_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（`none`/`each_phase`/`after`）。\n次に計画が採用（新規・replan）されたときに `Event::PausePointsResolved` へ解決される\n（PATCH 自体は解決を起こさない。走っている計画の停止点はそのまま）。"
+        },
         "priority": {
           "anyOf": [
             {
@@ -13642,6 +13758,14 @@
             }
           ],
           "description": "TaskFeatures の明示の上書き（ADR-0069 D3）。"
+        },
+        "pause_after": {
+          "$ref": "#/$defs/PausePolicy",
+          "description": "ADR-0074 D2.1（Phase F3 途中確認）: `NewTaskSpec.pause_after` / `PATCH` /\n`PUT /tasks/{id}/execution/pause-after` / CoS の `create_task.pause_after` の現在値。\n**Task 専用の欄をわざわざ増やさず、ここに置く**（`TaskRouting` は既に「あとから足された\n監査用の任意フィールド」の置き場所であり、`Task { .. }` の構造体リテラルを持つ多数の箇所を\n機械的に更新する回転コストを避けるため。Phase F3(pause) 実装時の逸脱・明確化）。\n既定 `none`（導入前のタスクと 1 バイトも変わらない）。"
+        },
+        "pause_after_source": {
+          "$ref": "#/$defs/PauseSource",
+          "description": "D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は\n人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。"
         },
         "tier_source": {
           "$ref": "#/$defs/TierSource",

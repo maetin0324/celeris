@@ -206,6 +206,7 @@ fn execute_one(
             assignee,
             workspace,
             execution,
+            pause_after,
         } => create_task_action(
             store,
             org,
@@ -226,6 +227,7 @@ fn execute_one(
             *tier,
             *features,
             *execution,
+            pause_after.as_deref().cloned(),
             human_text,
             now,
         ),
@@ -269,6 +271,7 @@ fn create_task_action(
     tier: Option<task_core::Tier>,
     features: Option<task_core::TaskFeatureHints>,
     execution: Option<task_core::ExecutionMode>,
+    pause_after: Option<task_core::PausePolicy>,
     human_text: &str,
     now: OffsetDateTime,
 ) -> Result<ExecutedAction, String> {
@@ -391,6 +394,7 @@ fn create_task_action(
         status: Some(Status::Ready),
         features,
         execution,
+        pause_after,
         provenance: crate::add::SpecProvenance {
             origin: crate::add::SpecOrigin::Agent,
             human_explicit_tier,
@@ -729,6 +733,41 @@ mod tests {
         assert_eq!(stored.genre.as_deref(), Some("coding"));
         assert_eq!(stored.assignee, None, "matching は別経路");
         assert!(outcome.executed[0].summary.contains("直す"));
+    }
+
+    /// ADR-0074 D2.1（Phase F3 途中確認、区切り 1 (a)）: CoS が `create_task.pause_after` を書けば
+    /// `Task.routing.pause_after` に写り、出自は `PauseSource::Agent`（人の明示より安全側に倒す
+    /// ので、`tier`/`assignee` と違ってそのまま採用する）。
+    #[test]
+    fn create_task_carries_pause_after_from_cos_with_agent_source() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        seed_engineering(&store);
+        let task = cos_task();
+        let parsed = parse(
+            r#"{"actions":[{"type":"create_task","title":"直す","objective":"直して",
+               "acceptance":["直った"],"harness":"coding",
+               "pause_after":{"mode":"each_phase"}}]}"#,
+        );
+        let outcome = execute(
+            &store,
+            &[],
+            &[],
+            &[],
+            &[],
+            &task,
+            "run-1",
+            &parsed.0,
+            &parsed.1,
+            now(),
+        )
+        .unwrap()
+        .expect("not idempotent-skipped");
+        assert!(outcome.failed.is_empty(), "{:?}", outcome.failed);
+        let created = outcome.executed[0].task_id.expect("task id");
+        let stored = store.get(created).unwrap().expect("task exists");
+        let routing = stored.routing.expect("routing recorded");
+        assert_eq!(routing.pause_after, task_core::PausePolicy::EachPhase);
+        assert_eq!(routing.pause_after_source, task_core::PauseSource::Agent);
     }
 
     /// Phase 98（ADR-0018、実機障害 2026-09-22）: `create_task.workspace` が既知のクラスタを指す

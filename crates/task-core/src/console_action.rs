@@ -20,6 +20,11 @@
 //! （`{"kind":"local","path":"…"}` または `{"kind":"remote","cluster":"…","path":"…"}`）。CoS がクラスタ作業
 //! （pegasus / sirius / fern03 でのコマンド実行）を`cluster:<id>` を持つノードへ流すときに使う。実行側
 //! （`task_ops::actions::create_task_action`）が `cluster` を `[[clusters]]` に照らして検証する。
+//!
+//! ADR-0074 D2.1（Phase F3 途中確認）: `create_task.pause_after` は工程ごとに人の確認を挟みたいときに
+//! 付ける（`{"mode":"none"}`（既定）/ `{"mode":"each_phase"}` / `{"mode":"after","phases":["design"]}`）。
+//! 出自は `PauseSource::Agent`（人の明示より安全側に倒すので、CoS の値もそのまま採る。ADR-0069 D1 が
+//! `assignee`/`tier` を捨てるのとは扱いが違う）。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -65,6 +70,12 @@ pub enum ConsoleAction {
         /// gate をバイパスしない）。
         #[serde(default)]
         execution: Option<crate::execution_gate::ExecutionMode>,
+        /// ADR-0074 D2.1（Phase F3 途中確認）: 工程ごとに人の確認が要りそうなら付けてよい
+        /// （`none`/`each_phase`/`after`）。出自は CoS（`PauseSource::Agent`）として記録される。
+        /// `Box` は `clippy::large_enum_variant`（`workspace` と同じ理由）を避けるためだけで、
+        /// 意味は変わらない。
+        #[serde(default)]
+        pause_after: Option<Box<crate::pause::PausePolicy>>,
     },
     ProposeProject {
         title: String,

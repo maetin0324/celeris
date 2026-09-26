@@ -23237,6 +23237,7 @@ mod tests {
             category: None,
             features: None,
             execution: None,
+            pause_after: None,
             provenance: Default::default(),
             status: None,
         };

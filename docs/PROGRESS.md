@@ -20135,3 +20135,44 @@ run 開始部分で、F3 の `quota_begin` を `dispatch_one` に移して解消
 - 発見 2: 終端した dogfood の workspace に `repos/agent-platform/target` が 25G あり、同時に `build-cache/cargo/agent-platform-f1d3fe5cc3`（Celeris が渡す `CARGO_TARGET_DIR`）にも 21G あった。worker か reviewer の cargo が Celeris の `CARGO_TARGET_DIR` を受け取らずに worktree 直下に target を作っている（`~/.cargo/config.toml` の `[build] target-dir` より env が勝つはずなので、env が渡っていない経路がある）。ルートディスクは 88% まで戻った → 両方削除して 69%。提案 P-F5-1: worker / reviewer / checks のすべての cargo 実行に `CARGO_TARGET_DIR` を渡す経路を確認し、終端タスクの prune に `repos/*/target` を含める（P-115-4 と同じ）。
 - 提案 P-F5-2: ルート LVM（252G）は DB + workspaces + build-cache + 実装エージェント 2 本の target で常に 60〜90%。Proxmox 側で 512G へ拡張するか、build-cache を別ボリュームにする（人の判断）。
 - 12:37Z: F5-1 dogfood の配送が作った release `e3465764475c`（main e346576 = F2b の WU 並列本体 + F5-1 の 3 成果: dispatch 前のディスク残量チェックと `celerisctl build-cache prune`、codex cache usage の確認、API docs の追記。gate ok / verify ok / live_ok）を in-flight 0 でライブ昇格（from a770bcb5b7b5）。本番で WU 並列（計画 v2 の `phases`）が使える状態。gate は shadow のまま（人の明示を採用する修正は F3 待ち）。
+
+## Phase F3（途中確認）着手・再開（2026-09-26、branch `worktree-agent-a7a9562a0907d0beb`）
+
+前任者（branch `worktree-agent-a83911fdfc96765ab`、未 commit）が (a)(e) 相当のデータ型骨組み
+（`crates/task-core/src/pause.rs`、`model.rs`/`transition.rs` の下書き差分）を残したまま 12 時間 commit 0 件で
+停止。本エージェントが引き継ぎ、**区切りごとに commit**する方針で再開する。ビルドは
+`CARGO_TARGET_DIR=/var/lib/celeris/build-cache/cargo/agent-platform-f3pause`。
+
+### F3(pause) checkpoint — 区切り 0（完了、commit 待ち）
+
+区切り 0: `[execution] gate = "shadow"` のとき、`ExecutionGateDecision.source = human`
+（`rule_id = human/explicit`）の compound を採用して planner run に進む修正（F5-1 dogfood で見つかった不具合、上の
+「F5-1 dogfood の結果」節参照）。CoS のヒント（`source = hint`）と規則表（`source = policy`）は shadow では
+従来どおり記録のみ。
+
+- **条件**: shadow + human explicit compound → planner run（計画採用・WU 実行）になる。shadow + 規則表の
+  compound（人の明示なし）→ 記録のみで atomic のまま実行される。
+- **変更**: `crates/task-dispatch/src/dispatcher.rs::dispatch_one` の `is_planner_dispatch` 判定に
+  `shadow_human_explicit_compound`（`gate == Shadow && decision.mode == Compound && decision.source == Human`）を
+  追加し、`gate == On || shadow_human_explicit_compound` で planner run にする。ADR-0072「Phase F3（途中確認）
+  実装時の逸脱・明確化」に 1 行追記。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-dispatch --lib -- shadow_gate_adopts_a_human_explicit_compound_decision shadow_gate_does_not_adopt_a_rule_based_compound_decision gate_on_compound_task_runs_a_planner_then_the_planned_work_units_in_order`
+    → `test result: ok. 3 passed; 0 failed`。
+  - `cargo fmt --all -- --check` → 差分なし（exit 0）。
+  - `cargo test --workspace --no-fail-fast` → **FAILED 0**。1 回目の実行で `celeris --test instance_handoff`
+    のプロセス全体が非 0 で終わったが、その binary だけを単体で再実行（`cargo test -p celeris --test
+    instance_handoff`）すると 8 passed / 0 failed。2 回目のフル実行（ログをファイルに保存して確認）では
+    FAILED 0（既知の高負荷時 flake、`docs/PROGRESS.md`「evaluator-flaky-tests」と同種。本 Phase の変更とは
+    無関係な dispatcher/execution_gate 以外のクレート）。
+  - `cargo clippy --workspace --all-targets -- -D warnings` → warning 0（exit 0）。
+  - `UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → 3 件 pass、再生成後の
+    `git diff` 差分なし。
+  - GUI（`cd gui && corepack pnpm@11.27.0`）: `gen:types` は `total_cache_read_tokens`（F5-1 で
+    `ExecutionMetrics` に足された欄）が `gui/app/celeris/types.ts` に未反映だった既存のドリフトを検出
+    （本 Phase の変更とは無関係。再生成のみで解消）。再生成後 `git diff --exit-code -- gui/app/celeris/types.ts`
+    は差分ゼロを確認済み（このコミットで型を追随させた）。`typecheck` exit 0、`lint` exit 0（既存の info 2 件
+    のみ）、`test` 1099 passed、`build` exit 0、`mobile-audit` → `routes=27 schemes=2 violations=0`。
+- **未着手**: (a)〜(f) の残り全部（`PausePolicy` の型・NewTaskSpec/PATCH/CoS 配線、`PhaseGate`/`PhaseResume`
+  遷移、途中報告、受信箱・通知、API・GUI）。前任者の下書き（`pause.rs`・`model.rs`/`transition.rs` の Trigger
+  追加）は設計が妥当なので土台として使う予定。

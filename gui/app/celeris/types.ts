@@ -5866,6 +5866,10 @@ export interface ExecutionMetrics {
   runs_by_role?: {
     [k: string]: number;
   };
+  /**
+   * 観測できた cached input tokens の合計。未報告の run は 0 と見なさず、全 run で未報告なら None。
+   */
+  total_cache_read_tokens?: number | null;
   total_input_tokens?: number | null;
   total_output_tokens?: number | null;
   /**

@@ -125,8 +125,8 @@ pub use notify::{
 };
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,
-    Project, ProjectId, ProjectStatus, assignee_defaults, department_of, valid_org_id,
-    validate_upsert,
+    Project, ProjectId, ProjectStatus, assignee_defaults, department_of, is_milestone_task,
+    valid_org_id, validate_upsert,
 };
 pub use plan::{
     MAX_PLAN_DEPTH, NewTask, NewTaskKind, PlanError, PlanLimits, PlanOutput, fix_harness_artifacts,

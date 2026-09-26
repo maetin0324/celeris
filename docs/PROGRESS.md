@@ -20135,3 +20135,36 @@ run 開始部分で、F3 の `quota_begin` を `dispatch_one` に移して解消
 - 発見 2: 終端した dogfood の workspace に `repos/agent-platform/target` が 25G あり、同時に `build-cache/cargo/agent-platform-f1d3fe5cc3`（Celeris が渡す `CARGO_TARGET_DIR`）にも 21G あった。worker か reviewer の cargo が Celeris の `CARGO_TARGET_DIR` を受け取らずに worktree 直下に target を作っている（`~/.cargo/config.toml` の `[build] target-dir` より env が勝つはずなので、env が渡っていない経路がある）。ルートディスクは 88% まで戻った → 両方削除して 69%。提案 P-F5-1: worker / reviewer / checks のすべての cargo 実行に `CARGO_TARGET_DIR` を渡す経路を確認し、終端タスクの prune に `repos/*/target` を含める（P-115-4 と同じ）。
 - 提案 P-F5-2: ルート LVM（252G）は DB + workspaces + build-cache + 実装エージェント 2 本の target で常に 60〜90%。Proxmox 側で 512G へ拡張するか、build-cache を別ボリュームにする（人の判断）。
 - 12:37Z: F5-1 dogfood の配送が作った release `e3465764475c`（main e346576 = F2b の WU 並列本体 + F5-1 の 3 成果: dispatch 前のディスク残量チェックと `celerisctl build-cache prune`、codex cache usage の確認、API docs の追記。gate ok / verify ok / live_ok）を in-flight 0 でライブ昇格（from a770bcb5b7b5）。本番で WU 並列（計画 v2 の `phases`）が使える状態。gate は shadow のまま（人の明示を採用する修正は F3 待ち）。
+
+## Phase F4a「案件レベルの計画（前半）: マイルストーン Task の述語・CoS の案件計画と提案・人の承認」（着手 2026-09-26）
+
+ADR-0074 D3 の (a)(b)(c) だけを実装する。(d)〜(h)（Go の判定・案件 replan・children・互換テスト・GUI の DAG）は
+F4b に送る。作業は worktree の中（main へ merge / push しない）。
+
+### F4a checkpoint 1: (a) `is_milestone_task` と 1:1 の不変条件（完了 2026-09-26）
+
+- **条件**: `task_core::is_milestone_task` の述語（案件直下 = `project_id.is_some() && parent_id.is_none()
+  && kind == Execute && conversation.is_none() && support_kind.is_none()`）を実装し、`task_ops::add` が
+  案件直下に `milestone_id` 無しで作られる Task について、同じトランザクションで途中目標の行
+  （`approved`、title = Task の title）を作って結ぶ（1:1）。既存の案件（途中目標が手で作られたもの、
+  `milestone_id` を明示する経路）の挙動は変えない。
+- **実装**: `crates/task-core/src/org.rs`（`is_milestone_task`、`crate::report::support_kind` と
+  `task.conversation` を見る）、`crates/task-core/src/lib.rs`（re-export）、`crates/task-core/src/store.rs`
+  （新しい `TaskStore::create_task_with_milestone`: `create_task` と同じトランザクションで
+  `milestones` 行を 1 件追加で作る。呼び出し側があらかじめ新しい `MilestoneId` を `task.milestone_id`
+  に入れて渡す）、`crates/task-ops/src/add.rs`（`insert_task` ヘルパーを新設し、`create_task_with_roles` /
+  `create_support_task` の挿入経路をこれに統一。`is_milestone_task(&task) && milestone_id.is_none()`
+  のときだけ `create_task_with_milestone` を使う）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-core -p task-ops --no-fail-fast` → `test result: ok. 328 passed; 0 failed`（新規
+    `org::tests::is_milestone_task_requires_project_root_execute_position`、
+    `add::tests::creating_a_top_level_execute_task_without_a_milestone_id_auto_creates_an_approved_milestone`、
+    `add::tests::creating_a_top_level_task_with_an_explicit_milestone_id_does_not_auto_create_another`、
+    `add::tests::a_child_task_under_a_project_does_not_auto_create_a_milestone` を含めすべて green）。
+  - `cargo test -p task-api --no-fail-fast` → 全 suite green（`organization.rs` の
+    `projects_and_milestones_round_trip_through_the_api` / `project_detail_returns_the_milestones_and_the_work_tree`
+    を含め、既存の途中目標が手で作られた経路の挙動が変わっていないことを確認）。
+  - `cargo fmt --all -- --check` → 差分ゼロ（`cargo fmt --all` 後）。
+  - `cargo clippy -p task-core -p task-ops --all-targets -- -D warnings` → warning 0。
+- **既知の限界**: 新しい `TaskStore::create_task_with_milestone` は `SqliteStore` にのみ実装（他に実装者は
+  無い）。`docs/protocol/*.schema.json` に影響する型変更は無し（`Milestone` / `Task` の shape は変えていない）。

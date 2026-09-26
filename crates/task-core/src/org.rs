@@ -491,6 +491,21 @@ pub struct Milestone {
     pub updated_at: OffsetDateTime,
 }
 
+/// ADR-0074 D3.1（Phase F4a）: マイルストーン Task か。**案件直下という位置**だけで決める
+/// （`milestone: true` のようなフラグは持たない）。
+///
+/// `project_id.is_some() && parent_id.is_none() && kind == Execute && conversation.is_none()
+/// && support_kind.is_none()`。案件直下にいる対話・`kind = plan` の分解タスク・裏方
+/// （圧縮・知識整理・doc-gardener・承認・合成レビュー）を除く。委譲の子は `parent_id` を持つので
+/// 自動的に除かれる。
+pub fn is_milestone_task(task: &crate::model::Task) -> bool {
+    task.project_id.is_some()
+        && task.parent_id.is_none()
+        && task.kind == crate::model::TaskKind::Execute
+        && task.conversation.is_none()
+        && crate::report::support_kind(task).is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,5 +710,97 @@ mod tests {
             assignee_defaults(&no_genre, "infra", &roles, &genres),
             (None, None)
         );
+    }
+
+    /// ADR-0074 D3.1（Phase F4a）: `is_milestone_task` は「案件直下という位置」だけで決まる。
+    fn plain_task(kind: crate::model::TaskKind) -> crate::model::Task {
+        use crate::model::{
+            Budget, Check, Criterion, Status, Task, TaskId, Tier, WorkerHint, WorkspaceSpec,
+        };
+        let now = OffsetDateTime::now_utc();
+        Task {
+            routing: None,
+            mode: Default::default(),
+            skills: Vec::new(),
+            repos: Vec::new(),
+            id: TaskId::new(),
+            parent_id: None,
+            kind,
+            title: "t".into(),
+            objective: "o".into(),
+            acceptance: vec![Criterion {
+                text: "c".into(),
+                check: Check::Human,
+            }],
+            inputs: vec![],
+            depends_on: vec![],
+            status: Status::Draft,
+            priority: 0,
+            worker_hint: WorkerHint {
+                tier: Tier::Standard,
+                adapter: None,
+            },
+            workspace: WorkspaceSpec::Local {
+                path: "ws".into(),
+                mode: None,
+            },
+            budget: Budget {
+                max_turns: 1,
+                max_wall_secs: 1,
+                max_retries: 0,
+            },
+            attempts: 0,
+            lease: None,
+            created_at: now,
+            updated_at: now,
+            role: None,
+            genre: None,
+            aggregate: false,
+            project_id: None,
+            milestone_id: None,
+            assignee: None,
+            conversation: None,
+            labels: Vec::new(),
+            category: Default::default(),
+        }
+    }
+
+    #[test]
+    fn is_milestone_task_requires_project_root_execute_position() {
+        // 案件が無ければマイルストーンではない。
+        let mut t = plain_task(crate::model::TaskKind::Execute);
+        assert!(!is_milestone_task(&t));
+
+        // 案件直下の Execute タスクはマイルストーン。
+        t.project_id = Some(ProjectId::new());
+        assert!(is_milestone_task(&t));
+
+        // 親を持つ（委譲の子）ならマイルストーンではない。
+        let mut child = t.clone();
+        child.parent_id = Some(crate::model::TaskId::new());
+        assert!(!is_milestone_task(&child));
+
+        // 対話（`conversation` あり）はマイルストーンではない。
+        let mut conv = t.clone();
+        conv.conversation = Some(crate::message::MessageId::new());
+        assert!(!is_milestone_task(&conv));
+
+        // `kind = plan`（分解タスク）はマイルストーンではない。
+        let mut plan = t.clone();
+        plan.kind = crate::model::TaskKind::Plan;
+        assert!(!is_milestone_task(&plan));
+
+        // `kind = approval` / `review` もマイルストーンではない。
+        let mut approval = t.clone();
+        approval.kind = crate::model::TaskKind::Approval;
+        assert!(!is_milestone_task(&approval));
+        let mut review = t.clone();
+        review.kind = crate::model::TaskKind::Review;
+        assert!(!is_milestone_task(&review));
+
+        // 裏方（圧縮・知識整理）の役割もマイルストーンではない。
+        let mut compaction = t.clone();
+        compaction.role = Some(crate::report::COMPACTION_ROLE.to_string());
+        assert!(!is_milestone_task(&compaction));
     }
 }

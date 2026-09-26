@@ -153,6 +153,12 @@ pub fn build_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: 
         return build_execution_plan_prompt(task, context, run_id, artifacts);
     }
     match task.kind {
+        // ADR-0074 D3.3（Phase F4a (b)）: `MILESTONES_PLAN_LABEL` の印がある Plan タスクは、案件全体の
+        // マイルストーン DAG を `project-plan.json` に書く専用のプロンプト（旧来の `plan.json` の
+        // 分解は 1 バイトも変えない）。
+        TaskKind::Plan if task_core::is_milestones_plan_task(task) => {
+            build_project_plan_prompt(task, context, run_id, artifacts)
+        }
         TaskKind::Plan => build_plan_prompt(task, context, run_id, artifacts),
         TaskKind::Review => build_review_prompt(task, context, run_id, artifacts),
         TaskKind::Execute | TaskKind::Approval => {
@@ -694,6 +700,80 @@ fn build_plan_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts:
     out.push_str(&workspace_section_for_plan(context));
     out.push_str(&harness_artifacts_section_for_plan(context));
     out.push_str(&result_json_instructions(artifacts));
+    out
+}
+
+/// ADR-0074 D3.3（Phase F4a (b)）: 案件レベルの計画（マイルストーン Task の DAG）を
+/// `{artifacts}/project-plan.json`（`celeris.project-plan/1`）に書かせるプロンプト。旧来の
+/// `build_plan_prompt`（`plan.json`、単発の分解）とは別物 — ここでは**案件全体**の途中目標の並びを
+/// 設計させる（SPEC §7「途中目標は予め大まかに決めておいて、適宜再設計する」）。
+fn build_project_plan_prompt(
+    task: &Task,
+    context: &RunContext,
+    run_id: &str,
+    artifacts: &str,
+) -> String {
+    let mut out = prompt_header(task, context, run_id, artifacts);
+    out.push_str(
+        "## Instructions\n\
+         Design this project's milestones as a DAG: break the request into 1 to 12 milestones, each a \
+         top-level, independently reportable unit of progress (SPEC §7: \"途中目標は予め大まかに決めておいて、\
+         適宜再設計する\"). A milestone is not a single small task — it is a stage of the project a human \
+         will explicitly approve or reject once it is reached (ADR-0038: ok / discuss / ng). Order them with \
+         `depends_on` (a DAG, not necessarily a single chain): independent milestones may run in parallel, \
+         while a milestone that needs another milestone's result depends on it.\n\n",
+    );
+    out.push_str(&format!(
+        "Write your plan to `{artifacts}/project-plan.json` (create the `{artifacts}/` directory if it \
+         does not exist yet) as a single JSON object of exactly this shape:\n\
+         ```json\n\
+         {{\"schema\":\"celeris.project-plan/1\",\"rationale\":\"...\",\
+         \"milestones\":[{{\"key\":\"<[a-z0-9-]{{1,32}}, unique>\",\"title\":\"...\",\"objective\":\"...\",\
+         \"reach_criteria\":\"what must be shown for a human to call this milestone reached\",\
+         \"acceptance\":[{{\"text\":\"...\",\"check\":{{\"type\":\"human\"}}}}],\
+         \"depends_on\":[\"<key of another milestone in this array>\"],\
+         \"genre\":\"<optional>\",\"skills\":[\"<skill tag>\"],\"repos\":[\"<repo name>\"]}}]}}\n\
+         ```\n\
+         Do not write `assignee`, `tier`, `model` or `lane`: the owner and the model lane are decided by \
+         celeris (ADR-0069). `check` may also be `{{\"type\":\"artifact_exists\",\"name\":\"...\"}}`, \
+         `{{\"type\":\"knowledge_page\",\"path\":\"...\"}}`, `{{\"type\":\"reviewer\"}}`, or \
+         `{{\"type\":\"command\",\"cmd\":\"...\",\"expect_exit\":0}}`. Unknown fields are rejected. Every \
+         milestone must have at least one `acceptance` entry, and if it includes a `human` check, the \
+         `acceptance` must also include an `artifact_exists` or `knowledge_page` check pointing at the \
+         human-readable material (ADR-0067: it must live in registered artifacts or the knowledge base, not \
+         in the target repository's tracked files). `depends_on` values must be keys of other milestones in \
+         this same array and must form a DAG (no self-reference, no cycles). At most 12 milestones.\n\n",
+    ));
+    let schema = serde_json::to_string(&task_core::project_plan::schema_value())
+        .unwrap_or_else(|_| "{}".to_string());
+    out.push_str(&format!(
+        "### Schema for the `{artifacts}/project-plan.json` object\n```json\n"
+    ));
+    out.push_str(&schema);
+    out.push_str("\n```\n\n");
+    out.push_str(&prior_review_section(context));
+    out.push_str(&answers_section(context));
+    out.push_str(&available_genres_section_for_project_plan(context));
+    out.push_str(&workspace_section_for_plan(context));
+    out.push_str(&result_json_instructions(artifacts));
+    out
+}
+
+/// ADR-0074 D3.3（Phase F4a (b)）: 案件計画専用の「使える専門家」節。`available_genres_section_for_plan`
+/// と違い、milestone spec には `role` が無いので `genre` だけを宣言させる（子タスクではなくマイルストーン
+/// の話であることも明示する）。
+fn available_genres_section_for_project_plan(context: &RunContext) -> String {
+    if context.available_genres.is_empty() {
+        return String::new();
+    }
+    let mut out =
+        String::from("## 使える専門家 (available genres a milestone can be tagged with)\n");
+    out.push_str(&genre_list_lines(context));
+    out.push_str(
+        "\nIf a milestone's work belongs to a particular genre, set its `genre` in \
+         `project-plan.json`. Do not set `role` (milestones have none; the owning Task's role, if any, is \
+         decided when it is dispatched).\n\n",
+    );
     out
 }
 
@@ -3115,6 +3195,62 @@ echo '{"type":"result","subtype":"success","is_error":false}'
             "artifacts",
         );
         assert!(!no_genres_prompt.contains("使える専門家"));
+    }
+
+    /// ADR-0074 D3.3（Phase F4a (b)）: `MILESTONES_PLAN_LABEL` の印がある Plan タスクは
+    /// `project-plan.json`（`celeris.project-plan/1`）用のプロンプトを選ぶ（`plan.json` の分解プロンプト
+    /// とは別物）。
+    #[test]
+    fn build_prompt_selects_the_project_plan_prompt_for_a_labelled_plan_task() {
+        let mut task = crate::protocol::tests::sample_task();
+        task.kind = task_core::TaskKind::Plan;
+        task.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+        let prompt = build_prompt(
+            &task,
+            &RunContext::default(),
+            "run-project-plan-1",
+            "artifacts",
+        );
+        assert!(prompt.contains("artifacts/project-plan.json"), "{prompt}");
+        assert!(prompt.contains("celeris.project-plan/1"), "{prompt}");
+        assert!(prompt.contains("reach_criteria"), "{prompt}");
+        assert!(!prompt.contains("artifacts/plan.json"), "{prompt}");
+
+        // ラベルの無い Plan タスクは従来どおり `plan.json` の分解プロンプト。
+        let mut unlabeled = task.clone();
+        unlabeled.labels = Vec::new();
+        let plain = build_prompt(
+            &unlabeled,
+            &RunContext::default(),
+            "run-plan-plain",
+            "artifacts",
+        );
+        assert!(plain.contains("artifacts/plan.json"), "{plain}");
+        assert!(!plain.contains("project-plan.json"), "{plain}");
+    }
+
+    /// 案件計画のプロンプトにも「使える専門家」節が入るが、milestone は `role` を持たないので
+    /// `role` の指示は出さない。
+    #[test]
+    fn build_project_plan_prompt_lists_genres_without_role_instructions() {
+        let mut task = crate::protocol::tests::sample_task();
+        task.kind = task_core::TaskKind::Plan;
+        task.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+        let genre_spec = task_core::GenreSpec {
+            id: "literature".into(),
+            description: "related work survey".into(),
+            default_role: Some("literature-reader".into()),
+            roles: vec!["literature-reader".into()],
+            ..task_core::GenreSpec::default()
+        };
+        let context = RunContext {
+            available_genres: vec![GenreContext::from(&genre_spec)],
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-project-plan-genres", "artifacts");
+        assert!(prompt.contains("使える専門家"));
+        assert!(prompt.contains("literature"));
+        assert!(prompt.contains("Do not set `role`"), "{prompt}");
     }
 
     /// ADR-0072 D14（Phase E3）: `context.execution_planner` があれば、`task.kind` に関わらず

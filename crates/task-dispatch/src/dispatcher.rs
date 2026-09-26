@@ -4998,6 +4998,118 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run が review を通った
+    /// （`task_core::is_milestones_plan_task`。0 件の acceptance なので `all_pass` は常に true）ところ。
+    /// `artifacts/project-plan.json` を読み、検証を通れば `task_ops::project_plan::propose` で
+    /// マイルストーンと top-level の draft Task を作ってから `Trigger::ReviewPass`。不正なら
+    /// `Trigger::ReviewFail`（既存の attempts/max_retries が「1 回だけ再試行、それでも駄目なら諦める」を
+    /// 決める。DESIGN §5.6 の Plan kind の規則）。retries が尽きて `failed` になったら、Task は作らず
+    /// 秘書の返事として「計画を作れなかった」を案件の対話に残す（D3.3）。
+    fn finish_project_plan_run(
+        &mut self,
+        task_id: TaskId,
+        task: &Task,
+        run_id: &str,
+        mut events: Vec<Event>,
+    ) -> Result<task_core::Outcome, StoreError> {
+        let Some(project_id) = task.project_id else {
+            tracing::error!(%task_id, "milestones project plan task has no project_id; treating as failure");
+            return self
+                .store
+                .apply_transition_with_events(task_id, Trigger::ReviewFail, events);
+        };
+        let workspace_dir = self.task_dir(task);
+        let artifacts_dir = workspace_dir.as_ref().map(|d| self.artifacts_dir(task, d));
+        let read = artifacts_dir
+            .as_deref()
+            .map(|d| d.join("project-plan.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok());
+
+        let validation: Result<task_core::ValidatedProjectPlan, String> = match read {
+            None => Err("artifacts/project-plan.json が見つからない".to_string()),
+            Some(text) => match serde_json::from_str::<task_core::ProjectPlanSpec>(&text) {
+                Err(e) => Err(format!("project-plan.json の JSON が不正: {e}")),
+                Ok(spec) => task_core::validate_project_plan(
+                    &spec,
+                    task_core::ProjectPlanLimits::default(),
+                    &std::collections::BTreeSet::new(),
+                )
+                .map_err(|errors| {
+                    errors
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                }),
+            },
+        };
+
+        match validation {
+            Ok(validated) => {
+                let Some(project) = self.store.project_get(project_id)? else {
+                    tracing::error!(%task_id, %project_id, "project vanished before the plan could be proposed");
+                    return self.store.apply_transition_with_events(
+                        task_id,
+                        Trigger::ReviewFail,
+                        events,
+                    );
+                };
+                match task_ops::project_plan::propose(
+                    self.store.as_ref(),
+                    task,
+                    &project,
+                    &validated,
+                    &self.config.roles,
+                    &self.config.genres,
+                    OffsetDateTime::now_utc(),
+                ) {
+                    Ok(proposed) => {
+                        tracing::info!(%task_id, %project_id, milestones = proposed.len(), "project plan proposed");
+                        self.store.apply_transition_with_events(
+                            task_id,
+                            Trigger::ReviewPass,
+                            events,
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!(%task_id, %project_id, error = %e, "failed to materialize the proposed project plan; treating as an invalid attempt");
+                        events.push(Event::worker_progress(
+                            run_id.to_string(),
+                            format!("計画の書き込みに失敗しました: {e}"),
+                        ));
+                        self.store.apply_transition_with_events(
+                            task_id,
+                            Trigger::ReviewFail,
+                            events,
+                        )
+                    }
+                }
+            }
+            Err(reason) => {
+                events.push(Event::worker_progress(
+                    run_id.to_string(),
+                    format!("invalid project plan: {reason}"),
+                ));
+                let outcome = self.store.apply_transition_with_events(
+                    task_id,
+                    Trigger::ReviewFail,
+                    events,
+                )?;
+                if outcome.next == Status::Failed
+                    && let Err(e) = task_ops::project_plan::record_proposal_failure(
+                        self.store.as_ref(),
+                        project_id,
+                        &reason,
+                        OffsetDateTime::now_utc(),
+                    )
+                {
+                    tracing::warn!(%task_id, %project_id, error = %e, "failed to record the project plan failure to the secretary conversation");
+                }
+                Ok(outcome)
+            }
+        }
+    }
+
     /// ADR-0072 D14（Phase E3）/ D17（Phase E4）: planner の出力が不正だった（または run が異常終了
     /// した）ときの、「1 回だけ再試行、それでも駄目なら諦める」の判断。**この「試行」の窓は直近の
     /// `Event::ExecutionPlanned`（無ければ Task の最初）から数える**（E4 の注記: 最初の gate 判定の
@@ -5628,6 +5740,12 @@ impl Dispatcher {
                     tracing::info!(%task_id, %run_id, children = n, auto_accept = self.config.plan_auto_accept, "plan completed; children inserted");
                 }
                 r
+            }
+            // ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run。`plan.json` は
+            // 解析しない（`plan` コンテキストを渡していないので `outcome.plan` は常に `None`）ので、
+            // 通常の Plan kind の失敗（下のアーム）より先に見る。
+            (true, TaskKind::Plan, None) if task_core::is_milestones_plan_task(&task) => {
+                self.finish_project_plan_run(task_id, &task, &run_id, events)
             }
             (true, TaskKind::Plan, None) => {
                 // review_task は Plan kind に必ず暗黙の判定を付けるので、ここには来ないはず。
@@ -10335,7 +10453,10 @@ impl Dispatcher {
             .map_err(DispatchError::from)?;
         }
 
-        let plan = if task.kind == TaskKind::Plan {
+        // ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run は `plan.json` ではなく
+        // `project-plan.json` を書くので、`plan.json` の解析・検証（`PlanCheck`）はしない
+        // （`finish_project_plan_proposal` が別に読む）。
+        let plan = if task.kind == TaskKind::Plan && !task_core::is_milestones_plan_task(&task) {
             Some(PlanCheck {
                 depth: self.plan_depth(&task)?,
                 limits: PlanLimits::default(),
@@ -13605,6 +13726,193 @@ mod tests {
                 ))
                 .count(),
             1
+        );
+    }
+
+    /// ADR-0074 D3.3（Phase F4a (b)）: `artifacts/project-plan.json` を書くテスト用アダプタ
+    /// （案件計画 = マイルストーン DAG の run 専用）。
+    struct ProjectPlanAdapter {
+        project_plan_json: String,
+    }
+
+    #[async_trait]
+    impl WorkerAdapter for ProjectPlanAdapter {
+        fn id(&self) -> &str {
+            "instant"
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            _run_id: &str,
+            _limits: RunLimits,
+            sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+            std::fs::write(
+                req.artifacts_dir.join("project-plan.json"),
+                &self.project_plan_json,
+            )
+            .unwrap();
+            sink.progress("working");
+            Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "planned".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            })
+        }
+    }
+
+    const VALID_PROJECT_PLAN: &str = r#"{"schema":"celeris.project-plan/1","rationale":"2 段階で進める","milestones":[
+        {"key":"survey","title":"調査","objective":"周辺調査","reach_criteria":"候補が出せた",
+         "acceptance":[{"text":"done","check":{"type":"human"}},{"text":"a","check":{"type":"artifact_exists","name":"report.md"}}],
+         "depends_on":[]},
+        {"key":"poc","title":"PoC","objective":"検証","reach_criteria":"動くデモ",
+         "acceptance":[{"text":"done","check":{"type":"human"}},{"text":"a","check":{"type":"artifact_exists","name":"result.md"}}],
+         "depends_on":["survey"]}
+    ]}"#;
+
+    /// ADR-0074 D3.3（Phase F4a (b)）: `POST /projects/{id}/plan {mode: "milestones"}` 相当の run
+    /// （偽アダプタ）が `celeris.project-plan/1` を出し、検証を通ると `ProjectPlanProposed`・途中目標
+    /// （`proposed`）・top-level の draft Task（`depends_on` 付き）ができる。受け入れ条件 (b)。
+    #[tokio::test]
+    async fn milestones_project_plan_task_proposes_milestones_and_top_level_draft_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let now = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            id: task_core::ProjectId::new(),
+            title: "案件".into(),
+            request: "やって".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).unwrap();
+
+        let mut plan = plan_task(dir.path(), 0);
+        plan.project_id = Some(project.id);
+        plan.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+        store.insert(&plan).unwrap();
+
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: VALID_PROJECT_PLAN.into(),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 2);
+        let report = run_until_idle(&mut d, 200).await;
+        assert!(report.idle);
+
+        let p = store.get(plan.id).unwrap().unwrap();
+        assert_eq!(
+            p.status,
+            Status::Done,
+            "{:?}",
+            store.events_for(plan.id).unwrap()
+        );
+
+        let milestones = store.milestone_list(project.id).unwrap();
+        assert_eq!(milestones.len(), 2);
+        assert!(
+            milestones
+                .iter()
+                .all(|m| m.status == task_core::MilestoneStatus::Proposed)
+        );
+
+        let drafts: Vec<Task> = store.list(Some(Status::Draft)).unwrap();
+        assert_eq!(drafts.len(), 2, "{drafts:?}");
+        for t in &drafts {
+            assert_eq!(t.parent_id, None, "top-level（案件直下）");
+            assert_eq!(t.project_id, Some(project.id));
+            assert!(t.milestone_id.is_some());
+            assert!(task_core::is_milestone_task(t));
+        }
+        let survey = drafts.iter().find(|t| t.title == "調査").unwrap();
+        let poc = drafts.iter().find(|t| t.title == "PoC").unwrap();
+        assert_eq!(poc.depends_on, vec![survey.id]);
+        assert_eq!(survey.depends_on, Vec::<TaskId>::new());
+
+        let events = store.events_for(plan.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::ProjectPlanProposed { version, milestones, .. }
+                    if *version == 1 && milestones.len() == 2
+            )),
+            "{events:?}"
+        );
+    }
+
+    /// ADR-0074 D3.3（Phase F4a (b)）: 不正な `project-plan.json`（JSON として壊れている）が
+    /// retries を使い切ると、Task を作らず（途中目標も無し）、秘書の返事として「計画を作れなかった」を
+    /// 案件の対話に残す。
+    #[tokio::test]
+    async fn invalid_project_plan_fails_without_creating_anything_and_notifies_the_secretary() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        store
+            .org_upsert(&org_node_of(
+                "secretary",
+                None,
+                OrgKind::Secretary,
+                Some("secretary"),
+            ))
+            .unwrap();
+        let now = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            id: task_core::ProjectId::new(),
+            title: "案件".into(),
+            request: "やって".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).unwrap();
+
+        let mut plan = plan_task(dir.path(), 0);
+        plan.project_id = Some(project.id);
+        plan.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+        store.insert(&plan).unwrap();
+
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: "not json".into(),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        let report = run_until_idle(&mut d, 200).await;
+        assert!(report.idle);
+
+        let p = store.get(plan.id).unwrap().unwrap();
+        assert_eq!(
+            p.status,
+            Status::Failed,
+            "{:?}",
+            store.events_for(plan.id).unwrap()
+        );
+        assert_eq!(store.milestone_list(project.id).unwrap().len(), 0);
+        assert_eq!(
+            store.list(Some(Status::Draft)).unwrap().len(),
+            0,
+            "no task is created on a failed proposal"
+        );
+
+        let messages = store
+            .message_list("secretary", Some(project.id), 10)
+            .unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, MessageRole::Node);
+        assert!(
+            messages[0].text.contains("計画を作れなかった"),
+            "{}",
+            messages[0].text
         );
     }
 

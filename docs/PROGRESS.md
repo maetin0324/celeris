@@ -20168,3 +20168,80 @@ F4b に送る。作業は worktree の中（main へ merge / push しない）�
   - `cargo clippy -p task-core -p task-ops --all-targets -- -D warnings` → warning 0。
 - **既知の限界**: 新しい `TaskStore::create_task_with_milestone` は `SqliteStore` にのみ実装（他に実装者は
   無い）。`docs/protocol/*.schema.json` に影響する型変更は無し（`Milestone` / `Task` の shape は変えていない）。
+
+### F4a checkpoint 2: (b) `celeris.project-plan/1` の schema・検証・CoS の提案（完了 2026-09-26）
+
+- **条件**: `celeris.project-plan/1` の schema（`docs/protocol/project-plan.schema.json`）と検証
+  （循環・未知 key・件数上限）を `crates/task-core/src/project_plan.rs` に実装。
+  `POST /projects/{id}/plan {mode: "milestones"}` で秘書 run（偽アダプタ）が計画を出し、検証を通ると
+  `Event::ProjectPlanProposed`、途中目標（`proposed`）、top-level の draft Task（`depends_on` 付き）が
+  でき、受信箱の `drafts` に 1 まとまりで出る。秘書のプロンプト（`claude_code.rs`）に案件計画の書き方。
+- **実装**:
+  - `crates/task-core/src/project_plan.rs`（新規）: `PROJECT_PLAN_SCHEMA`、`MilestoneSpec` /
+    `ProjectPlanSpec`（`deny_unknown_fields`。`acceptance` は既存の `task_core::Criterion` を再利用）、
+    `ProjectPlanLimits`（既定 1..=12 件、rationale ≤ 2,000 字）、`validate`（Kahn 法でトポロジカル順・
+    循環検出、未知 key、重複 key、件数、文字数上限、acceptance 必須・human に deliverable 必須を検証）、
+    `is_milestones_plan_task`（`Task.labels` の固定値 `MILESTONES_PLAN_LABEL` で見分ける。フラグ列は
+    増やさない）、`schema_value` / `committed_schema_matches_generated`。
+  - `crates/task-core/src/model.rs`: `Event::ProjectPlanProposed{project_id, version, supersedes, plan,
+    milestones}` / `Event::ProjectPlanDecided{project_id, version, approved, note}`（(c) 用に型だけ先出し）、
+    `ProposedMilestone{key, milestone_id, task_id}`。`docs/api/v1/event.schema.json` を再生成。
+  - `crates/task-ops/src/project_plan.rs`: `start_milestones`（`POST /plan {mode: milestones}` の入口。
+    `MILESTONES_PLAN_LABEL` を付け、既存の途中目標の文脈は渡さない）、`propose`（検証済み計画を
+    トポロジカル順に処理し、`milestone_create`〈proposed〉→ `add::create_task_with_roles`〈draft、
+    `milestone_id` 明示なので (a) の自動生成は起きない、`depends_on` は既に作った兄弟 Task を指す〉を
+    繰り返し、最後に `Event::ProjectPlanProposed` を plan タスクの events に積む）、
+    `record_proposal_failure`（不正が最終的に直らなかったとき、秘書の返事として
+    「計画を作れなかった: …」を案件の対話〈`role = node`〉に残す）。
+  - `crates/task-dispatch/src/dispatcher.rs`: `plan` コンテキスト（`plan.json` 解析）を
+    `is_milestones_plan_task` の Plan タスクには渡さない。`finish_project_plan_run`
+    （`(true, TaskKind::Plan, None) if is_milestones_plan_task(&task)` の新しいアーム）が
+    `artifacts/project-plan.json` を読み、検証を通れば `task_ops::project_plan::propose` → `ReviewPass`、
+    不正なら `ReviewFail`（既存の attempts/max_retries が 1 回再試行・諦めるを決める）。失敗が確定したら
+    `record_proposal_failure` を呼ぶ。
+  - `crates/task-worker/src/claude_code.rs`: `build_project_plan_prompt`
+    （`{artifacts}/project-plan.json` の schema・書き方の指示。milestone は `role` を持たない専用の
+    「使える専門家」節）。`build_plan_prompt` の分岐は `is_milestones_plan_task` で切り替え、旧来の
+    `plan.json` プロンプトは 1 バイトも変えない。
+  - `crates/task-api/src/project_plan.rs`: `ProjectPlanBody.mode`（`decompose`〈既定〉/ `milestones`）。
+    `milestones` に `milestone_id` を添えると 422。
+  - `crates/task-ops/src/inbox.rs`: `build_drafts` を、案件計画の提案（`is_milestone_task` かつ
+    紐づく途中目標が `proposed`）とそれ以外（従来の親でまとめる規則）に分け、提案は案件ごとに 1 つの
+    `DraftGroup`（`parent: None`、`plan_summary` に rationale と DAG の行）にまとめる。根
+    （誰の子でもなくどの提案にも属さない draft）は従来どおり最後。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-core project_plan:: -p task-ops project_plan::` ほか個別クレート → 新規テスト
+    全 green（`project_plan::tests::{a_valid_plan_is_accepted_and_topologically_ordered,
+    rejects_cycles_and_unknown_keys, rejects_wrong_schema_duplicate_keys_and_count_limits,
+    rejects_empty_acceptance_and_human_checks_without_a_deliverable,
+    is_milestones_plan_task_needs_the_kind_and_the_label, committed_schema_matches_generated}`、
+    task-ops 側 `start_milestones_labels_the_plan_task_and_carries_no_milestone_context` /
+    `propose_creates_proposed_milestones_and_draft_tasks_with_resolved_depends_on` /
+    `record_proposal_failure_posts_a_node_message_to_the_project`）。
+  - `cargo test -p task-dispatch milestones_project_plan_task_proposes_milestones_and_top_level_draft_tasks
+    invalid_project_plan_fails_without_creating_anything_and_notifies_the_secretary` → ok（偽アダプタで
+    `POST /plan {mode: milestones}` 相当の全経路〈run → project-plan.json → 検証 → 提案 → drafts〉と、
+    不正な計画が retries 尽きて失敗し秘書に通知される経路の両方を確認）。
+  - `cargo test -p task-api --test project_plan` → 8 件 green（新規
+    `milestones_mode_labels_the_plan_task_and_ignores_existing_milestones` /
+    `milestones_mode_with_a_milestone_id_is_422` を含む）。
+  - `cargo test -p task-ops inbox::` → 14 件 green（新規
+    `inbox_drafts_group_a_project_plan_proposal_as_one_unit_and_keep_root_last`）。
+  - `UPDATE_SCHEMA=1 cargo test -p task-core --no-fail-fast` → 409 passed（`event_row_schema_matches_committed`
+    と新規 `project_plan::tests::committed_schema_matches_generated` を含む。`docs/api/v1/event.schema.json`
+    と `docs/protocol/project-plan.schema.json` を再生成）。
+  - `cargo build --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` → warning 0。
+  - `cargo fmt --all -- --check`（`cargo fmt --all` 後）→ 差分ゼロ。
+  - `cargo test --workspace --no-fail-fast` → **FAILED 0**（`test result: ok. 524 passed; 0 failed; 1 ignored`
+    が task-dispatch の内訳、他クレートも全 0 failed。既存の 1 ignored はこの Phase の変更と無関係）。
+- **既知の限界・F4b への申し送り**:
+  - `version` は常に 1（replan・複数版の追跡は D3.4、F4b）。`ProjectPlanProposed.supersedes` は常に
+    `None`。
+  - `project_plan_summary`（inbox の plan_summary の組み立て）は「その案件の Plan タスクを総なめして
+    `ProjectPlanProposed.milestones` に一致するものを探す」総当たりで、F4a の想定（同時に 1 件の提案）
+    では問題無いが、F4b で複数版が絡むと曖昧になりうる（`plan_task_id` を直接引ける索引が無い）。
+  - `POST /projects/{id}/plan {mode: milestones}` は「既に未決の提案がある案件への二重発行」を防いで
+    いない（F4b の replan・decide の実装と合わせて対処）。
+  - `pause_after` は ADR の `celeris.project-plan/1` 例に載っているが、F3 の `PausePolicy` 型がまだ無い
+    ため MilestoneSpec には含めていない（F4b で型が揃ってから追加する。deny_unknown_fields なので
+    追加は非破壊）。

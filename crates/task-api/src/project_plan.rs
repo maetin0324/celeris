@@ -17,17 +17,31 @@ use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem, store_problem};
 use crate::state::ApiState;
 
+/// ADR-0074 D3.3（Phase F4a (b)）: `POST /projects/{id}/plan` の `mode`。省略時は従来どおりの分解
+/// （`decompose`）。`milestones` は案件全体のマイルストーン DAG を CoS に設計させる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectPlanMode {
+    #[default]
+    Decompose,
+    Milestones,
+}
+
 /// `POST /projects/{id}/plan` の要求本文。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectPlanBody {
     /// 分解の対象にする途中目標。省略すると `approved` / `in_progress` のものを文脈として渡すだけで、
-    /// 特定の 1 件をこのタスクに紐づけない。
+    /// 特定の 1 件をこのタスクに紐づけない。`mode = "milestones"` では使わない（422）。
     #[serde(default)]
     pub milestone_id: Option<MilestoneId>,
     /// 人の一言（任意）。
     #[serde(default)]
     pub note: Option<String>,
+    /// ADR-0074 D3.3（Phase F4a）: `"decompose"`（既定、従来どおり）か `"milestones"`
+    /// （案件レベルの計画。マイルストーン Task の DAG を提案させる）。
+    #[serde(default)]
+    pub mode: ProjectPlanMode,
 }
 
 /// `POST /projects/{id}/plan` の応答（202）。
@@ -47,6 +61,14 @@ pub(crate) async fn create_project_plan(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let post: ProjectPlanBody = read_json(body, true).await?;
+    if post.mode == ProjectPlanMode::Milestones && post.milestone_id.is_some() {
+        return Err(ApiProblem::validation(vec![
+            crate::types::ValidationError {
+                field: Some("milestone_id".into()),
+                message: "not used with mode=\"milestones\" (it plans the whole project)".into(),
+            },
+        ]));
+    }
     let roles = state.inner.roles.clone();
     let genres = state.inner.genres.clone();
     let started = state
@@ -54,15 +76,25 @@ pub(crate) async fn create_project_plan(
             let Some(project) = store.project_get(project_id).map_err(store_problem)? else {
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));
             };
-            task_ops::project_plan::start(
-                store,
-                &project,
-                post.milestone_id,
-                post.note.as_deref(),
-                &roles,
-                &genres,
-                OffsetDateTime::now_utc(),
-            )
+            match post.mode {
+                ProjectPlanMode::Decompose => task_ops::project_plan::start(
+                    store,
+                    &project,
+                    post.milestone_id,
+                    post.note.as_deref(),
+                    &roles,
+                    &genres,
+                    OffsetDateTime::now_utc(),
+                ),
+                ProjectPlanMode::Milestones => task_ops::project_plan::start_milestones(
+                    store,
+                    &project,
+                    post.note.as_deref(),
+                    &roles,
+                    &genres,
+                    OffsetDateTime::now_utc(),
+                ),
+            }
             .map_err(|e| ops_problem(store, e, None))
         })
         .await?;

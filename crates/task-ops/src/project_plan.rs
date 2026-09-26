@@ -12,13 +12,31 @@
 //! I/O はストアの読み書きだけで、LLM は呼ばない（DESIGN 原則 1）。
 
 use task_core::{
-    GenreSpec, Message, Milestone, MilestoneId, MilestoneStatus, OrgKind, Project, ProjectStatus,
-    RoleSpec, Task, TaskKind, TaskStore, Tier, WorkspaceSpec,
+    Event, GenreSpec, ListFilter, ListOrder, Message, MessageId, MessageRole, Milestone,
+    MilestoneId, MilestoneStatus, OrgKind, Project, ProjectId, ProjectStatus, ProposedMilestone,
+    RoleSpec, Status, Task, TaskId, TaskKind, TaskStore, Tier, Trigger, ValidatedProjectPlan,
+    WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
 use crate::add::{self, NewTaskSpec};
 use crate::error::OpsError;
+
+/// D3.3: `POST /projects/{id}/project-plan/{version}/decide` の入力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectPlanDecision {
+    Approve,
+    Reject,
+}
+
+/// `decide` の結果（対象になったマイルストーンと Task）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecidedProjectPlan {
+    pub plan_task_id: TaskId,
+    pub milestones: Vec<MilestoneId>,
+    pub tasks: Vec<TaskId>,
+    pub decision: ProjectPlanDecision,
+}
 
 /// 直近のやり取りを `goal` に含める件数の上限（対話の履歴と同じ既定。ADR-0033 D4）。
 pub const PLAN_HISTORY_LIMIT: usize = 20;
@@ -222,6 +240,266 @@ pub fn compose_goal(
     );
 
     out.trim_end().to_string()
+}
+
+/// ADR-0074 D3.3（Phase F4a (b)）: `POST /projects/{id}/plan {mode: "milestones"}`。既存の `start` と
+/// 同じ入口だが、`kind = plan` タスクに `task_core::MILESTONES_PLAN_LABEL` を付け（ワーカーのプロンプトと
+/// 完了時の扱いをこの印で分ける。D3.3）、案件全体のマイルストーンの DAG を設計させる（既存の途中目標の
+/// 文脈は渡さない — 一から describe する run のため）。
+pub fn start_milestones(
+    store: &dyn TaskStore,
+    project: &Project,
+    note: Option<&str>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<StartedPlan, OpsError> {
+    let Some(secretary) = store
+        .org_list()?
+        .into_iter()
+        .find(|n| n.kind == OrgKind::Secretary)
+    else {
+        return Err(OpsError::Validation(
+            "no secretary is configured".to_string(),
+        ));
+    };
+    let history = store.message_list(&secretary.id, Some(project.id), PLAN_HISTORY_LIMIT)?;
+    let goal = compose_milestones_goal(project, note, &history);
+    let title = truncate_title(&goal, TITLE_MAX_CHARS);
+    let home = task_core::home_dir();
+    let (plan_workspace, plan_cluster, plan_workspace_mode) = match project
+        .workspace
+        .as_ref()
+        .map(|w| w.with_home_expanded(home.as_deref()))
+    {
+        Some(WorkspaceSpec::Local { path, .. }) => (Some(path), None, None),
+        Some(WorkspaceSpec::Remote {
+            cluster,
+            path,
+            mode,
+        }) => (Some(path), Some(cluster), mode),
+        None => (None, None, None),
+    };
+    let spec = NewTaskSpec {
+        repos: Vec::new(),
+        title,
+        objective: goal,
+        acceptance: Vec::new(),
+        kind: TaskKind::Plan,
+        tier: Some(PLAN_TIER),
+        priority: Some(add::PriorityInput::Number(0)),
+        parent: None,
+        depends_on: Vec::new(),
+        max_turns: Some(PLAN_MAX_TURNS),
+        max_wall_secs: Some(PLAN_MAX_WALL_SECS),
+        max_retries: PLAN_MAX_RETRIES,
+        role: None,
+        genre: None,
+        aggregate: false,
+        project_id: Some(project.id),
+        milestone_id: None,
+        assignee: Some(secretary.id.clone()),
+        workspace: plan_workspace,
+        cluster: plan_cluster,
+        workspace_mode: plan_workspace_mode,
+        adapter: None,
+        // D3.3: この印だけが、案件計画（マイルストーン DAG）run と旧来の分解 Plan run を分ける。
+        labels: vec![task_core::MILESTONES_PLAN_LABEL.to_string()],
+        category: None,
+        skills: Vec::new(),
+        mode: None,
+        status: None,
+        features: None,
+        execution: None,
+        provenance: add::SpecProvenance::system(),
+    };
+    let task = add::create_support_task(store, spec, roles, genres, now)?;
+
+    if project.status == ProjectStatus::Proposed {
+        store.project_set_status(project.id, ProjectStatus::Active)?;
+    }
+
+    Ok(StartedPlan { task })
+}
+
+/// `start_milestones` 用の決定的な組み立て（LLM は呼ばない）。既存の途中目標の文脈は渡さない
+/// （案件全体の DAG を一から設計させるため）。
+pub fn compose_milestones_goal(
+    project: &Project,
+    note: Option<&str>,
+    history: &[Message],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "案件: {}\n\n依頼:\n{}\n",
+        project.title,
+        project.request.trim()
+    ));
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        out.push_str(&format!("\n人からの一言:\n{note}\n"));
+    }
+    if !history.is_empty() {
+        out.push_str("\n秘書との直近のやり取り:\n");
+        for m in history {
+            out.push_str(&format!("[{}] {}\n", m.role.as_str(), m.text));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+fn criterion_to_spec(c: task_core::Criterion) -> add::CriterionSpec {
+    match c.check {
+        task_core::Check::Human => add::CriterionSpec::Human { text: c.text },
+        task_core::Check::Command { cmd, expect_exit } => {
+            add::CriterionSpec::Command { cmd, expect_exit }
+        }
+        task_core::Check::ArtifactExists { name } => add::CriterionSpec::ArtifactExists { name },
+        task_core::Check::KnowledgePage { path } => add::CriterionSpec::KnowledgePage { path },
+        task_core::Check::Reviewer => add::CriterionSpec::Reviewer { text: c.text },
+    }
+}
+
+/// ADR-0074 D3.3（Phase F4a (b)）: 検証済みの案件計画（`task_core::project_plan::validate` を通ったもの）
+/// を「提案」として書く。マイルストーンごとに `milestones`（`proposed`）と top-level の draft Task
+/// （`milestone_id` 付き、`depends_on` はトポロジカル順で既に作った兄弟の Task を指す）を作り、
+/// `Event::ProjectPlanProposed` を `plan_task` の events に残す（案件の計画の正本 = plan タスクの列）。
+///
+/// **同じトランザクションではない**（承認 `decide approve` と違い、D3.3 はここに「同じトランザクションで」
+/// を要求していない。呼び出しは複数回のストア操作の列だが、この関数の呼び出し元〈daemon の 1 tick〉の
+/// 中で完結する）。
+pub fn propose(
+    store: &dyn TaskStore,
+    plan_task: &Task,
+    project: &Project,
+    validated: &ValidatedProjectPlan,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<Vec<ProposedMilestone>, OpsError> {
+    let spec = &validated.spec;
+    let mut task_id_by_key: std::collections::HashMap<String, TaskId> =
+        std::collections::HashMap::new();
+    let mut proposed: Vec<ProposedMilestone> = Vec::with_capacity(spec.milestones.len());
+
+    for &idx in &validated.topological_order {
+        let m = &spec.milestones[idx];
+        let milestone = store.milestone_create(
+            project.id,
+            &m.title,
+            &m.objective,
+            MilestoneStatus::Proposed,
+        )?;
+
+        let mut depends_on = Vec::with_capacity(m.depends_on.len());
+        for dep_key in &m.depends_on {
+            let Some(&dep_task_id) = task_id_by_key.get(dep_key) else {
+                // `validate` の依存チェックとトポロジカル順を通っていれば起きない。防御的に扱う。
+                return Err(OpsError::Validation(format!(
+                    "milestone {} depends on {dep_key}, which was not created yet",
+                    m.key
+                )));
+            };
+            depends_on.push(dep_task_id);
+        }
+
+        let mut objective = m.objective.clone();
+        let reach = m.reach_criteria.trim();
+        if !reach.is_empty() {
+            objective.push_str("\n\n達成の基準（人の判定の材料）:\n");
+            objective.push_str(reach);
+        }
+
+        let task_spec = NewTaskSpec {
+            repos: m.repos.clone(),
+            title: m.title.clone(),
+            objective,
+            acceptance: m
+                .acceptance
+                .iter()
+                .cloned()
+                .map(criterion_to_spec)
+                .collect(),
+            kind: TaskKind::Execute,
+            tier: None,
+            priority: Some(add::PriorityInput::Number(0)),
+            parent: None,
+            depends_on,
+            max_turns: None,
+            max_wall_secs: None,
+            max_retries: add::DEFAULT_MAX_RETRIES,
+            role: None,
+            genre: m.genre.clone(),
+            aggregate: false,
+            project_id: Some(project.id),
+            // 明示するので `task_ops::add::insert_task` の自動生成（D3.1/D3.8）は起きない
+            // （このマイルストーンの行に結ぶ）。
+            milestone_id: Some(milestone.id),
+            assignee: None,
+            workspace: None,
+            cluster: None,
+            workspace_mode: None,
+            adapter: None,
+            labels: Vec::new(),
+            category: None,
+            skills: m.skills.clone(),
+            mode: None,
+            status: Some(Status::Draft),
+            features: m.features,
+            execution: m.execution,
+            provenance: add::SpecProvenance::system(),
+        };
+        let task = add::create_task_with_roles(store, task_spec, roles, genres, now)?;
+        task_id_by_key.insert(m.key.clone(), task.id);
+        proposed.push(ProposedMilestone {
+            key: m.key.clone(),
+            milestone_id: milestone.id,
+            task_id: task.id,
+        });
+    }
+
+    store.append_event(
+        plan_task.id,
+        &Event::ProjectPlanProposed {
+            project_id: project.id,
+            version: 1,
+            supersedes: None,
+            plan: Box::new(spec.clone()),
+            milestones: proposed.clone(),
+        },
+    )?;
+
+    Ok(proposed)
+}
+
+/// ADR-0074 D3.3（Phase F4a (b)）: 検証が最終的に失敗した（1 回再試行しても駄目だった）ときに、
+/// 秘書の返事として案件の対話に残す（DESIGN §5.6 の Plan kind の規則に近い扱い。Task は作らない）。
+pub fn record_proposal_failure(
+    store: &dyn TaskStore,
+    project_id: task_core::ProjectId,
+    reason: &str,
+    now: OffsetDateTime,
+) -> Result<(), OpsError> {
+    let Some(secretary) = store
+        .org_list()?
+        .into_iter()
+        .find(|n| n.kind == OrgKind::Secretary)
+    else {
+        return Err(OpsError::Validation(
+            "no secretary is configured".to_string(),
+        ));
+    };
+    store.message_append(&Message {
+        id: MessageId::new(),
+        node_id: secretary.id,
+        project_id: Some(project_id),
+        role: MessageRole::Node,
+        text: format!("計画を作れなかった: {reason}"),
+        run_id: None,
+        task_id: None,
+        metadata: None,
+        created_at: now,
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -538,5 +816,159 @@ mod tests {
             started.task.workspace,
             remote.workspace.clone().expect("some")
         );
+    }
+
+    // ---- ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）----
+
+    #[test]
+    fn start_milestones_labels_the_plan_task_and_carries_no_milestone_context() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Proposed);
+        store.project_create(&project).expect("create project");
+        // 既存の途中目標があっても、milestones モードの goal には含めない（DAG を一から設計させる）。
+        store
+            .milestone_create(project.id, "旧い途中目標", "", MilestoneStatus::Approved)
+            .expect("create milestone");
+
+        let started = start_milestones(&store, &project, Some("急ぎで"), &[], &[], now())
+            .expect("start_milestones");
+        assert_eq!(started.task.kind, TaskKind::Plan);
+        assert_eq!(started.task.status, task_core::Status::Ready);
+        assert_eq!(
+            started.task.labels,
+            vec![task_core::MILESTONES_PLAN_LABEL.to_string()]
+        );
+        assert!(task_core::is_milestones_plan_task(&started.task));
+        assert!(started.task.objective.contains("急ぎで"));
+        assert!(
+            !started.task.objective.contains("旧い途中目標"),
+            "{}",
+            started.task.objective
+        );
+        assert_eq!(started.task.milestone_id, None);
+
+        let updated = store.project_get(project.id).expect("get").expect("some");
+        assert_eq!(updated.status, ProjectStatus::Active);
+    }
+
+    fn milestone_spec(key: &str, depends_on: &[&str]) -> task_core::MilestoneSpec {
+        task_core::MilestoneSpec {
+            key: key.into(),
+            title: format!("title-{key}"),
+            objective: format!("objective-{key}"),
+            reach_criteria: format!("criteria-{key}"),
+            acceptance: vec![
+                task_core::Criterion {
+                    text: "done".into(),
+                    check: task_core::Check::Human,
+                },
+                task_core::Criterion {
+                    text: "artifact".into(),
+                    check: task_core::Check::ArtifactExists {
+                        name: "report.md".into(),
+                    },
+                },
+            ],
+            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            genre: None,
+            skills: vec!["rust".into()],
+            repos: Vec::new(),
+            features: None,
+            execution: None,
+        }
+    }
+
+    #[test]
+    fn propose_creates_proposed_milestones_and_draft_tasks_with_resolved_depends_on() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        let started = start_milestones(&store, &project, None, &[], &[], now()).expect("start");
+
+        let plan_spec = task_core::ProjectPlanSpec {
+            schema: task_core::PROJECT_PLAN_SCHEMA.to_string(),
+            rationale: "2 段階で進める".into(),
+            milestones: vec![
+                milestone_spec("survey", &[]),
+                milestone_spec("poc", &["survey"]),
+            ],
+        };
+        let validated = task_core::validate_project_plan(
+            &plan_spec,
+            task_core::ProjectPlanLimits::default(),
+            &std::collections::BTreeSet::new(),
+        )
+        .expect("valid");
+
+        let proposed =
+            propose(&store, &started.task, &project, &validated, &[], &[], now()).expect("propose");
+        assert_eq!(proposed.len(), 2);
+
+        let milestones = store.milestone_list(project.id).expect("list");
+        assert_eq!(milestones.len(), 2);
+        assert!(
+            milestones
+                .iter()
+                .all(|m| m.status == MilestoneStatus::Proposed)
+        );
+
+        let survey_task_id = proposed
+            .iter()
+            .find(|p| p.key == "survey")
+            .expect("survey")
+            .task_id;
+        let poc_task_id = proposed
+            .iter()
+            .find(|p| p.key == "poc")
+            .expect("poc")
+            .task_id;
+        let poc_task = store.get(poc_task_id).expect("get").expect("some");
+        assert_eq!(poc_task.status, Status::Draft);
+        assert_eq!(poc_task.parent_id, None, "top-level（案件直下）");
+        assert_eq!(poc_task.depends_on, vec![survey_task_id]);
+        assert!(poc_task.objective.contains("criteria-poc"));
+        assert_eq!(poc_task.skills, vec!["rust".to_string()]);
+
+        let survey_task = store.get(survey_task_id).expect("get").expect("some");
+        assert_eq!(survey_task.depends_on, Vec::<TaskId>::new());
+        assert_eq!(
+            survey_task.milestone_id,
+            Some(
+                proposed
+                    .iter()
+                    .find(|p| p.key == "survey")
+                    .expect("survey")
+                    .milestone_id
+            )
+        );
+
+        // ProjectPlanProposed が plan タスクの events に残る。
+        let events = store.events_for(started.task.id).expect("events_for");
+        let found = events.iter().any(|(_, e)| {
+            matches!(
+                e,
+                Event::ProjectPlanProposed { project_id, version, milestones, .. }
+                    if *project_id == project.id && *version == 1 && milestones.len() == 2
+            )
+        });
+        assert!(found, "{events:?}");
+    }
+
+    #[test]
+    fn record_proposal_failure_posts_a_node_message_to_the_project() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+
+        record_proposal_failure(&store, project.id, "schema drift", now()).expect("record");
+        let messages = store
+            .message_list("secretary", Some(project.id), 10)
+            .expect("list");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, MessageRole::Node);
+        assert!(messages[0].text.contains("schema drift"));
     }
 }

@@ -222,6 +222,8 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkUnitCommitted { .. } => "work_unit_committed",
         Event::PhaseIntegrated { .. } => "phase_integrated",
         Event::WorkUnitsSerialized { .. } => "work_units_serialized",
+        Event::ProjectPlanProposed { .. } => "project_plan_proposed",
+        Event::ProjectPlanDecided { .. } => "project_plan_decided",
     }
 }
 

@@ -1,0 +1,324 @@
+{
+  "$defs": {
+    "Check": {
+      "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
+      "oneOf": [
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "expect_exit": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "cmd",
+            "expect_exit"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "artifact_exists",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0067 D2: 知識ベースのページ参照（`task_core::knowledge::page_path` と同じ形。KB の根からの\n相対、`.md`、`..` 不可。実在の検証は組み立て時には行わない — `Check::ArtifactExists` と同様、\n人が確認するときに知識ベース側で気付く）。",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "knowledge_page",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "reviewer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Criterion": {
+      "description": "DESIGN §4.1 の `Criterion`。",
+      "properties": {
+        "check": {
+          "$ref": "#/$defs/Check"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "check"
+      ],
+      "type": "object"
+    },
+    "ExecutionMode": {
+      "description": "D13: atomic / compound の判定結果。",
+      "enum": [
+        "atomic",
+        "compound"
+      ],
+      "type": "string"
+    },
+    "Level": {
+      "description": "各軸の段階（小さな順序尺度）。",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "MilestoneSpec": {
+      "additionalProperties": false,
+      "description": "D3.3: 1 マイルストーンの spec。`assignee` / `tier` / `model` / `lane` は持たない\n（`deny_unknown_fields`。ADR-0069 D1: 担当は matching が決める）。",
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0072 D13 のヒント（+2）。"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatureHints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント（型として検証する。D5.1 と同じ規律）。"
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。",
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "reach_criteria": {
+          "description": "何が示せたら途中目標の達成か（人の判定の材料。SPEC §7「検証の合格線」）。",
+          "type": "string"
+        },
+        "repos": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "objective",
+        "reach_criteria"
+      ],
+      "type": "object"
+    },
+    "TaskFeatureHints": {
+      "additionalProperties": false,
+      "description": "ADR-0069 D3: `TaskFeatures` の明示の上書き（書いた軸だけが勝つ）。API の `features` と CoS の\n`create_task.features` から入る（features は「仕事の性質の記述」であってモデルの選択ではない）。\nADR-0074 D5.1（Phase F1）: `deny_unknown_fields`（`lane`/`assignee`/`tier`/`model` のような\n担当・モデルの選択を紛れ込ませない。書けば schema 違反として計画の検証エラーになる）。",
+      "properties": {
+        "ambiguity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consequence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cross_cutting": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_length": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "judgment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reversibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_intensity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifiability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "D3.3: CoS の計画 run が `<artifacts>/project-plan.json` に書く JSON そのもの。",
+  "properties": {
+    "milestones": {
+      "items": {
+        "$ref": "#/$defs/MilestoneSpec"
+      },
+      "type": "array"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "schema": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "rationale",
+    "milestones"
+  ],
+  "title": "ProjectPlanSpec",
+  "type": "object"
+}

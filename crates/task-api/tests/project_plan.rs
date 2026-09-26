@@ -209,6 +209,96 @@ async fn children_materialized_from_the_plan_output_stay_in_the_same_project() {
     );
 }
 
+/// ADR-0074 D3.3（Phase F4a (b)）: `mode = "milestones"` は `MILESTONES_PLAN_LABEL` の印が付いた
+/// Plan タスクを作る（従来の分解タスクとは別物。既存の途中目標の文脈は goal に含めない）。
+#[tokio::test]
+async fn milestones_mode_labels_the_plan_task_and_ignores_existing_milestones() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "Pluvio 新テーマ", "案件全体の計画を作って欲しい").await;
+    let milestone: Value = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/milestones"),
+            &json!({"title": "旧い途中目標", "status": "approved"}),
+        ),
+    )
+    .await
+    .json();
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones", "note": "急ぎで"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    let task_id: task_core::TaskId = resp.json()["task_id"]
+        .as_str()
+        .expect("task_id")
+        .parse()
+        .expect("id");
+    let task = env.store.get(task_id).expect("get").expect("some");
+    assert_eq!(task.kind, TaskKind::Plan);
+    assert_eq!(task.status, Status::Ready);
+    assert_eq!(
+        task.labels,
+        vec![task_core::MILESTONES_PLAN_LABEL.to_string()]
+    );
+    assert!(task_core::is_milestones_plan_task(&task));
+    assert!(task.objective.contains("急ぎで"));
+    assert!(
+        !task.objective.contains("旧い途中目標"),
+        "{}",
+        task.objective
+    );
+    assert_eq!(task.milestone_id, None);
+
+    // 旧い途中目標は変わらない（milestones モードは案件全体を一から設計する）。
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    let unchanged = detail["milestones"]
+        .as_array()
+        .expect("milestones")
+        .iter()
+        .find(|m| m["id"] == milestone["id"])
+        .expect("milestone");
+    assert_eq!(unchanged["status"], "approved");
+}
+
+/// `mode = "milestones"` に `milestone_id` を添えるのは 422（案件全体を計画する run に、単一の
+/// 途中目標を紐づける意味が無い）。
+#[tokio::test]
+async fn milestones_mode_with_a_milestone_id_is_422() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+    let milestone: Value = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/milestones"),
+            &json!({"title": "m"}),
+        ),
+    )
+    .await
+    .json();
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones", "milestone_id": milestone["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
+}
+
 #[tokio::test]
 async fn plan_on_an_unknown_project_is_404_and_a_foreign_milestone_is_422() {
     let env = env_with_token();

@@ -1135,3 +1135,33 @@ E6 の fixture `crates/task-worker/tests/fixtures/codex-stream.jsonl` は従来 
   `CONVERSATION_READONLY_CELERISCTL` には入れない（CoS の対話 run からは押せない HUMAN GATE のまま）。
 - **API の状態コード**: 成功は 202（`ProjectPlanDecided{decision, plan_task_id, milestones, tasks}`）、reject で note 空は 422、
   無い版は 404、決定済みの版は 409、トークン無しは 401。
+
+## Phase F4b 実装時の逸脱・明確化（2026-09-27）
+
+1. **Go の判定の対象（D3.2 / D3.8）**: 「依存先のマイルストーンが done でも reached まで待つ」は、依存先の途中目標が**案件計画から
+   作られたもの**（新しい列 `milestones.plan_key` が `Some`）のときだけ。`task_ops::add` が自動で作る途中目標・手で作った途中目標
+   （`plan_key` が NULL）への依存は旧い意味（done で開く）のまま。同じ途中目標の中の依存も待たない。判定は ADR-0044 D6 と同じ
+   `SqliteStore::ready_tasks` の中（`milestones_awaiting_go_locked`）。
+2. **migration 0028（`SCHEMA_VERSION` 27 → 28）**: `projects.auto_advance INTEGER NOT NULL DEFAULT 0`、`milestones.plan_key TEXT`。
+   `auto_advance` は `PATCH /projects/{id}` で書く。
+3. **`ok` / `ng` の新しい意味（D3.6）**: `plan_key` のある途中目標だけ。`ok` = `reached` のみ（次の承認・分解 run なし）、`ng` =
+   `redesigned` + `start_replan`（理由を goal に入れた replan の計画 run）、`discuss` は旧いまま。案件計画の途中目標のレビューの返事の
+   `milestone_proposal` は記録しない。`latest_proposal` / `record_proposal` は `plan_key` のある途中目標を対象にしない。
+4. **差分の提案の形（D3.4）**: `Event::ProjectPlanProposed` に `delta: Option<ProjectPlanDelta>` を足し、差分でも `plan` / `milestones`
+   は**当てた後の計画全体**を入れる（現行の版 = 最新の承認済みの版の `plan` をそのまま読めるように）。`propose_delta` は `add` の分だけ
+   `proposed` の途中目標と draft の Task を作り、modify / remove / cancel は承認まで何もしない。承認時に**今の状態で検証し直す**
+   （提案の後に対象が dispatch されていれば `ProjectPlanStale` 409 で何も書かない）。`remove` / `cancel` の途中目標は `cancelled`。
+   却下は `add` の分だけを片付ける。適用は新しい `TaskStore::project_plan_apply`（1 トランザクション）。
+5. **replan の入口**: 新しい `mode` は足さず、承認済みの計画がある案件への `POST /plan {mode: "milestones"}` を replan にする（GUI の
+   「計画を見直す」も同じ）。replan の run は `MILESTONES_REPLAN_LABEL` で見分け、差分を同じ `project-plan.json` に書く。
+   動いている（まだ提案を出していない）案件計画 run か未決の提案がある案件への依頼は `ProjectPlanInFlight` 409。
+   D3.4 の起点 (c)（マイルストーン Task の失敗で自動的に replan）は入れていない（F5 で要否を判断）。
+6. **children（D3.7）**: `ExecutionChildSpec` に `repos` は入れない（子は既存の委譲と同じく 親 > 案件の primary を継ぐ）。子 Task の
+   `child:<key>` との対応は子の `labels` の `child-<key>`（`Event::Created` に残る）で引く。部またぎの判定は、担当になるはずのノード
+   （`matching::decide` の決定的な結果）の部と親の担当の部の比較。未認可なら計画を採用せず `WorkerQuestion` + `approvals`（認可後に
+   planner をもう一度走らせ、同じ子が認可済みとして通る）。replan で新しい子を足すことはしない（既存の key だけ許す）。
+   `children` は v2 のみ（v1 は従来どおり空）。
+7. **GUI の DAG（D3.5）**: 辺は線ではなく節点の「← 依存先」で示し、層（依存の最長経路）ごとにデスクトップで横に並べる。モバイル幅は
+   同じ DOM の縦の一覧（トポロジカル順）。案件計画の途中目標は DAG 側で判定し、下の「途中目標」の一覧には `plan_key` の無いものだけ。
+   `GET /projects/{id}` に `project_plan`（`ProjectPlanDagView`。止まっている理由 `stop_reason` は celeris が決める）、受信箱の
+   `DraftGroup` に `project_plan{project_id, version, supersedes}`（F4a の提案）。

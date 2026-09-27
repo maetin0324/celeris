@@ -20645,3 +20645,46 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
     `planned_milestone_ok_only_reaches_and_ng_starts_a_project_replan`（案件計画の途中目標の `ok` は reached だけ、`ng` は redesigned +
     replan の計画 run〈理由が goal に入る〉）。
   - `cargo clippy -p task-ops --all-targets -- -D warnings` → 0。
+
+### F4b checkpoint 5: (h) GUI の案件ページの DAG（完了 2026-09-27、commit 3c623ce / 4ae0425）
+
+- **条件**: 案件ページに DAG（節点 = マイルストーン Task の状態・進み・quota・止まっている理由）、提案中の計画の承認 / 却下、
+  節点ごとの ok / 議論 / ng。モバイル幅は縦の一覧。`gen:types` 差分ゼロ、`mobile-audit` 違反 0。
+- **実装**: `task_ops::project_plan::dag_view`（`ProjectPlanDagView{current_version, nodes, pending}`、節点に途中目標・Task の状態、
+  WU done/total〈統合 WU 除く〉、子 done/total、quota〈`summarize_execution_metrics`〉、`stop_reason`〈awaiting_human / question /
+  failed / awaiting_go / paused〉、提案の節点に `change`〈add / modify / remove / cancel〉）。`GET /projects/{id}` の `project_plan`。
+  GUI: `app/components/ProjectPlanDag.tsx`（層ごとに横並び・モバイルは同じ DOM の縦の一覧、節点の「判定」で ADR-0038 の
+  `MilestoneReviewPanel` をその場に出す、提案は破線の枠 + 承認 / 却下〈却下は理由必須〉）、`app/lib/project-plan.ts`、
+  `decideProjectPlan`（`POST /projects/{id}/project-plan/{version}/decide`）、`startProjectPlan` の `mode`（「計画を見直す」）、
+  Flash の文言、mobile-audit の偽 celeris に `project_plan` の例。案件計画の途中目標は「途中目標」一覧から外す。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-api --test project_plan` → 13 passed（新規 `project_detail_carries_the_plan_dag_and_the_pending_proposal`）。
+  - `cd gui && corepack pnpm@11.27.0 gen:types` → `types.ts` 差分ゼロ、`typecheck` exit 0、`lint` エラー 0（既存の info 2 件のみ）、
+    `test` → Test Files 73 passed / Tests 1113 passed（新規 `test/unit/project-plan.test.ts` 7 件）、`build` ok、
+    `mobile-audit` → `routes=27 schemes=2 violations=0`（project-detail に DAG と提案が出た状態で）。
+
+### Phase F4b の全体ゲート（2026-09-27）
+
+- `cargo fmt --all -- --check` → 差分ゼロ。
+- `cargo clippy --workspace --all-targets -- -D warnings` → warning 0。
+- `cargo test --workspace --no-fail-fast` → exit 0、合計 **2506 passed / 0 failed / 5 ignored**。
+- `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → FAILED 0、
+  再生成後の `git status` に差分なし。
+- `cd gui && corepack pnpm@11.27.0 gen:types`（差分ゼロ）`&& typecheck && lint && test && build && mobile-audit` → すべて exit 0、違反 0。
+
+### 未解決事項・F5 への申し送り
+
+- migration 0028（`SCHEMA_VERSION` 28）を含む。本番へ出すと古いバイナリはこの DB を開けない（`SchemaTooNew`）。
+  並行している別 branch が 0028 を使っていれば番号の付け替えが要る。
+- D3.4 の起点 (c)（マイルストーン Task の failed / 取り下げで自動的に replan）は未実装（人の依頼と `ng` だけ）。
+- replan の planner run で新しい children を足すことはしない。children の部またぎの質問は単体テストで確かめただけ（dispatcher の e2e 無し）。
+- `propose` / `propose_delta` の作成は 1 トランザクションではない（F4a と同じ）。提案中に daemon が止まると途中まで作った
+  proposed の途中目標・draft が残りうる（提案の event が無いので `plan_state` には出ない）。
+- 途中目標の状態は dispatch で `in_progress` に上げていない（`approved` のまま → レビュー → `reached`）。GUI は Task の状態を併記する。
+- F5 dogfood で確かめたいこと: 秘書の案件計画 / 差分のプロンプトで実際に妥当な DAG・差分が出るか、`awaiting_go` の案件で人の `ok` から
+  依存するマイルストーンが自然に動き出すか、planner の children が「別の deliverable のときだけ」書かれるか。
+
+### 提案
+
+- `docs/celeris-api-v1.md` に `GET /projects/{id}` の `project_plan`、`PATCH /projects/{id}` の `auto_advance`、
+  `POST /projects/{id}/plan` の 409 `project_plan_in_flight`、decide の 409 `project_plan_stale` を追記する（本 Phase では生成 schema のみ更新）。

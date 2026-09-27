@@ -20,6 +20,7 @@ use task_core::{
 use time::OffsetDateTime;
 
 use crate::add::{self, NewTaskSpec};
+use crate::conversation;
 use crate::error::OpsError;
 
 /// D3.3: `POST /projects/{id}/project-plan/{version}/decide` の入力。
@@ -469,6 +470,168 @@ pub fn propose(
     )?;
 
     Ok(proposed)
+}
+
+fn secretary_id(store: &dyn TaskStore) -> Result<String, OpsError> {
+    store
+        .org_list()?
+        .into_iter()
+        .find(|n| n.kind == OrgKind::Secretary)
+        .map(|n| n.id)
+        .ok_or_else(|| OpsError::Validation("no secretary is configured".to_string()))
+}
+
+/// 見つかった提案（`decide` の内部表現）。
+struct FoundProposal {
+    plan_task_id: TaskId,
+    milestones: Vec<ProposedMilestone>,
+}
+
+/// `project_id` の Plan タスク（`is_milestones_plan_task`）を総なめし、`version` に一致する
+/// `Event::ProjectPlanProposed` を持つものを探す。同じ版に `Event::ProjectPlanDecided` が既にあれば
+/// `ProjectPlanAlreadyDecided`、どこにも無ければ `ProjectPlanProposalNotFound`。
+fn find_proposal(
+    store: &dyn TaskStore,
+    project_id: ProjectId,
+    version: u32,
+) -> Result<FoundProposal, OpsError> {
+    let plan_tasks = store
+        .list_page(
+            &ListFilter {
+                project_id: Some(project_id),
+                kinds: vec![TaskKind::Plan],
+                ..ListFilter::default()
+            },
+            ListOrder::CreatedDesc,
+            None,
+            1000,
+        )?
+        .items;
+    for t in plan_tasks {
+        if !task_core::is_milestones_plan_task(&t) {
+            continue;
+        }
+        let rows = store.event_rows_for(t.id, None, crate::view::ALL_EVENTS)?;
+        let mut proposed: Option<Vec<ProposedMilestone>> = None;
+        let mut decided = false;
+        for row in &rows {
+            match &row.event {
+                Event::ProjectPlanProposed {
+                    version: v,
+                    milestones,
+                    ..
+                } if *v == version => {
+                    proposed = Some(milestones.clone());
+                }
+                Event::ProjectPlanDecided { version: v, .. } if *v == version => {
+                    decided = true;
+                }
+                _ => {}
+            }
+        }
+        if let Some(milestones) = proposed {
+            if decided {
+                return Err(OpsError::ProjectPlanAlreadyDecided {
+                    project_id,
+                    version,
+                });
+            }
+            return Ok(FoundProposal {
+                plan_task_id: t.id,
+                milestones,
+            });
+        }
+    }
+    Err(OpsError::ProjectPlanProposalNotFound {
+        project_id,
+        version,
+    })
+}
+
+/// ADR-0074 D3.3（Phase F4a (c)）: `POST /projects/{id}/project-plan/{version}/decide`。
+///
+/// - `approve`: 見つけた提案の全マイルストーンを `approved`、全 Task を `draft → ready`
+///   （`Trigger::Accept`）にする。依存の無いものから dispatch される（既存の `depends_on` 判定のまま）。
+/// - `reject`（`note` 必須。空なら 422）: 全マイルストーンを `redesigned`、全 Task を `cancelled`
+///   （`Trigger::Cancel`）にし、`note` を秘書への対話として送る（ADR-0038 の `ng` と同じ扱い。
+///   案件の replan〈D3.4〉は F4b）。
+///
+/// どちらも `Event::ProjectPlanDecided` を提案元の plan タスクの events に残す。
+#[allow(clippy::too_many_arguments)]
+pub fn decide(
+    store: &dyn TaskStore,
+    project: &Project,
+    version: u32,
+    decision: ProjectPlanDecision,
+    note: Option<&str>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    conversation_genre: &str,
+    now: OffsetDateTime,
+) -> Result<DecidedProjectPlan, OpsError> {
+    let note = note.map(str::trim).filter(|n| !n.is_empty());
+    if decision == ProjectPlanDecision::Reject && note.is_none() {
+        return Err(OpsError::Validation(
+            "note is required to reject a project plan".to_string(),
+        ));
+    }
+    let found = find_proposal(store, project.id, version)?;
+    // 却下の対話先（秘書）が居なければ、何も書く前に弾く。
+    let secretary = if decision == ProjectPlanDecision::Reject {
+        Some(secretary_id(store)?)
+    } else {
+        None
+    };
+
+    let approved = decision == ProjectPlanDecision::Approve;
+    let (milestone_status, trigger) = if approved {
+        (MilestoneStatus::Approved, Trigger::Accept)
+    } else {
+        (MilestoneStatus::Redesigned, Trigger::Cancel)
+    };
+
+    let milestones: Vec<MilestoneId> = found.milestones.iter().map(|m| m.milestone_id).collect();
+    let tasks: Vec<TaskId> = found.milestones.iter().map(|m| m.task_id).collect();
+    // 途中目標の状態・全 Task の遷移・`ProjectPlanDecided` を 1 トランザクションで（D3.3）。
+    // `Trigger::Cancel` のカスケードで既に終端になった Task はストア側で飛ばす。
+    store.project_plan_decide_apply(
+        found.plan_task_id,
+        &milestones,
+        milestone_status,
+        &tasks,
+        trigger,
+        Event::ProjectPlanDecided {
+            project_id: project.id,
+            version,
+            approved,
+            note: note.map(str::to_string),
+        },
+    )?;
+
+    if let Some(secretary) = secretary {
+        // `note.is_none()` はここには来ない（上で 422 にしている）。
+        let text = format!(
+            "案件計画（version {version}）を却下しました: {}",
+            note.unwrap_or_default()
+        );
+        conversation::start(
+            store,
+            &secretary,
+            Some(project.id),
+            &text,
+            roles,
+            genres,
+            conversation_genre,
+            now,
+        )?;
+    }
+
+    Ok(DecidedProjectPlan {
+        plan_task_id: found.plan_task_id,
+        milestones,
+        tasks,
+        decision,
+    })
 }
 
 /// ADR-0074 D3.3（Phase F4a (b)）: 検証が最終的に失敗した（1 回再試行しても駄目だった）ときに、
@@ -970,5 +1133,292 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, MessageRole::Node);
         assert!(messages[0].text.contains("schema drift"));
+    }
+
+    /// `propose` の下ごしらえ: `survey` → `poc` の 2 マイルストーンを提案し、plan タスクを返す。
+    fn propose_survey_and_poc(store: &SqliteStore, project: &task_core::Project) -> Task {
+        let started = start_milestones(store, project, None, &[], &[], now()).expect("start");
+        let plan_spec = task_core::ProjectPlanSpec {
+            schema: task_core::PROJECT_PLAN_SCHEMA.to_string(),
+            rationale: "2 段階で進める".into(),
+            milestones: vec![
+                milestone_spec("survey", &[]),
+                milestone_spec("poc", &["survey"]),
+            ],
+        };
+        let validated = task_core::validate_project_plan(
+            &plan_spec,
+            task_core::ProjectPlanLimits::default(),
+            &std::collections::BTreeSet::new(),
+        )
+        .expect("valid");
+        propose(store, &started.task, project, &validated, &[], &[], now()).expect("propose");
+        started.task
+    }
+
+    /// ADR-0074 D3.3（Phase F4a (c)）: `approve` は提案の全マイルストーンを `approved`、全 Task を
+    /// `ready` にする（受け入れ条件 (c)）。dispatch されるのは依存の無いもの（`survey`）だけで、
+    /// `poc` は既存の `depends_on` 判定で待つ。ストアの適用は 1 トランザクションで、途中で失敗すれば
+    /// 何も書かれない。
+    #[test]
+    fn approve_readies_the_whole_dag_in_one_transaction() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        let plan_task = propose_survey_and_poc(&store, &project);
+
+        let decided = decide(
+            &store,
+            &project,
+            1,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("decide");
+        assert_eq!(decided.decision, ProjectPlanDecision::Approve);
+        assert_eq!(decided.milestones.len(), 2);
+        assert_eq!(decided.tasks.len(), 2);
+
+        let milestones = store.milestone_list(project.id).expect("list");
+        assert!(
+            milestones
+                .iter()
+                .all(|m| m.status == MilestoneStatus::Approved)
+        );
+        for task_id in &decided.tasks {
+            let t = store.get(*task_id).expect("get").expect("some");
+            assert_eq!(t.status, Status::Ready, "{t:?}");
+        }
+        // 依存の無いものから dispatch（`ready_tasks` は depends_on が全て done のものだけ返す）。
+        let dispatchable: Vec<TaskId> = store
+            .ready_tasks(10)
+            .expect("ready_tasks")
+            .into_iter()
+            .map(|t| t.id)
+            .filter(|id| decided.tasks.contains(id))
+            .collect();
+        let survey = store.get(decided.tasks[0]).expect("get").expect("some");
+        assert!(survey.depends_on.is_empty(), "{survey:?}");
+        assert_eq!(
+            dispatchable,
+            vec![survey.id],
+            "only the root milestone task is dispatchable"
+        );
+
+        let events = store.events_for(plan_task.id).expect("events_for");
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::ProjectPlanDecided {
+                    version: 1,
+                    approved: true,
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+    }
+
+    /// `reject` は `note` が空だと 422 相当。埋めれば全マイルストーンを `redesigned`、全 Task を
+    /// `cancelled` にし、`note` を秘書への対話として送る（ADR-0038 の `ng` と同じ扱い）。
+    #[test]
+    fn decide_reject_requires_a_note_and_cancels_everything_notifying_the_secretary() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        propose_survey_and_poc(&store, &project);
+
+        let err = decide(
+            &store,
+            &project,
+            1,
+            ProjectPlanDecision::Reject,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, OpsError::Validation(_)), "{err}");
+        let err = decide(
+            &store,
+            &project,
+            1,
+            ProjectPlanDecision::Reject,
+            Some("   "),
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, OpsError::Validation(_)), "{err}");
+
+        let decided = decide(
+            &store,
+            &project,
+            1,
+            ProjectPlanDecision::Reject,
+            Some("スコープが違う"),
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("decide");
+        assert_eq!(decided.decision, ProjectPlanDecision::Reject);
+
+        let milestones = store.milestone_list(project.id).expect("list");
+        assert!(
+            milestones
+                .iter()
+                .all(|m| m.status == MilestoneStatus::Redesigned)
+        );
+        for task_id in &decided.tasks {
+            let t = store.get(*task_id).expect("get").expect("some");
+            assert_eq!(t.status, Status::Cancelled, "{t:?}");
+        }
+
+        let messages = store
+            .message_list("secretary", Some(project.id), 10)
+            .expect("list");
+        assert!(
+            messages.iter().any(|m| m.text.contains("スコープが違う")),
+            "{messages:?}"
+        );
+    }
+
+    /// 存在しない版は 404 相当、既に決定済みの版へもう一度 `decide` するのは 409 相当。
+    #[test]
+    fn decide_on_an_unknown_or_already_decided_version_is_rejected() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+
+        let err = decide(
+            &store,
+            &project,
+            1,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                OpsError::ProjectPlanProposalNotFound { version: 1, .. }
+            ),
+            "{err}"
+        );
+
+        propose_survey_and_poc(&store, &project);
+        decide(
+            &store,
+            &project,
+            1,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("first decide");
+        let err = decide(
+            &store,
+            &project,
+            1,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, OpsError::ProjectPlanAlreadyDecided { version: 1, .. }),
+            "{err}"
+        );
+    }
+
+    /// `project_plan_decide_apply` は 1 トランザクション: 途中で失敗する（無い Task を含む）と、
+    /// 先に処理した途中目標の状態も Task の遷移も残らない。
+    #[test]
+    fn project_plan_decide_apply_writes_nothing_when_any_step_fails() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        let plan_task = propose_survey_and_poc(&store, &project);
+        let milestones = store.milestone_list(project.id).expect("list");
+        let mut tasks: Vec<TaskId> = milestones
+            .iter()
+            .filter_map(|m| {
+                store
+                    .list_page(
+                        &ListFilter {
+                            project_id: Some(project.id),
+                            ..ListFilter::default()
+                        },
+                        ListOrder::CreatedDesc,
+                        None,
+                        100,
+                    )
+                    .expect("list_page")
+                    .items
+                    .into_iter()
+                    .find(|t| t.milestone_id == Some(m.id))
+                    .map(|t| t.id)
+            })
+            .collect();
+        assert_eq!(tasks.len(), 2);
+        tasks.push(TaskId::new());
+        let ids: Vec<MilestoneId> = milestones.iter().map(|m| m.id).collect();
+        let err = store.project_plan_decide_apply(
+            plan_task.id,
+            &ids,
+            MilestoneStatus::Approved,
+            &tasks,
+            Trigger::Accept,
+            Event::ProjectPlanDecided {
+                project_id: project.id,
+                version: 1,
+                approved: true,
+                note: None,
+            },
+        );
+        assert!(err.is_err());
+        assert!(
+            store
+                .milestone_list(project.id)
+                .expect("list")
+                .iter()
+                .all(|m| m.status == MilestoneStatus::Proposed)
+        );
+        for id in &tasks[..2] {
+            assert_eq!(
+                store.get(*id).expect("get").expect("some").status,
+                Status::Draft
+            );
+        }
+        let events = store.events_for(plan_task.id).expect("events_for");
+        assert!(
+            !events
+                .iter()
+                .any(|(_, e)| matches!(e, Event::ProjectPlanDecided { .. }))
+        );
     }
 }

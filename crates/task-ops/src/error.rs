@@ -57,6 +57,23 @@ pub enum OpsError {
     #[error("project {project_id} project plan version {version} was already decided")]
     ProjectPlanAlreadyDecided { project_id: ProjectId, version: u32 },
 
+    /// ADR-0074 D3.4（Phase F4b (e)）: その案件には既に動いている案件計画 run か、未決の提案がある
+    /// （同じ案件への二重の計画依頼。API は 409）。
+    #[error("project {project_id} already has a project plan in flight: {detail}")]
+    ProjectPlanInFlight {
+        project_id: ProjectId,
+        detail: String,
+    },
+
+    /// ADR-0074 D3.4（Phase F4b (e)）: 差分の提案が、提案の後に変わった現行の計画にもう当てはまらない
+    /// （変える対象のマイルストーンが dispatch された、など。API は 409。replan をやり直す）。
+    #[error("project {project_id} project plan version {version} no longer applies: {detail}")]
+    ProjectPlanStale {
+        project_id: ProjectId,
+        version: u32,
+        detail: String,
+    },
+
     #[error(transparent)]
     Store(#[from] StoreError),
 }

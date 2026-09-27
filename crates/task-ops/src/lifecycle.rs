@@ -320,6 +320,7 @@ mod tests {
     fn a_project(store: &dyn TaskStore, status: ProjectStatus) -> Project {
         let now = OffsetDateTime::now_utc();
         let project = Project {
+            auto_advance: false,
             id: ProjectId::new(),
             title: "案件".to_string(),
             request: "やって".to_string(),

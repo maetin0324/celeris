@@ -342,6 +342,7 @@ fn plan_spec_with_one_milestone() -> task_core::ProjectPlanSpec {
         schema: task_core::PROJECT_PLAN_SCHEMA.into(),
         rationale: "1 段階で進める".into(),
         milestones: vec![task_core::MilestoneSpec {
+            pause_after: None,
             key: "survey".into(),
             title: "調査".into(),
             objective: "周辺調査".into(),

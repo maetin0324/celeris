@@ -1252,6 +1252,7 @@ mod tests {
             })
             .expect("secretary");
         let project = task_core::Project {
+            auto_advance: false,
             id: task_core::ProjectId::new(),
             title: "t".into(),
             request: "r".into(),
@@ -1287,6 +1288,7 @@ mod tests {
             rationale: "2段階で進める".into(),
             milestones: vec![
                 task_core::MilestoneSpec {
+                    pause_after: None,
                     key: "survey".into(),
                     title: "調査".into(),
                     objective: "周辺調査".into(),
@@ -1300,6 +1302,7 @@ mod tests {
                     execution: None,
                 },
                 task_core::MilestoneSpec {
+                    pause_after: None,
                     key: "poc".into(),
                     title: "PoC".into(),
                     objective: "検証".into(),

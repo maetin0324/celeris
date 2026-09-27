@@ -947,6 +947,10 @@ pub struct ProjectPatchBody {
         skip_serializing_if = "Option::is_none"
     )]
     pub workspace: Option<Option<task_core::WorkspaceSpec>>,
+    /// ADR-0074 D3.2（Phase F4b (d)）: 案件計画のマイルストーン Task を、依存先の `done` で進めるか
+    /// （`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_advance: Option<bool>,
 }
 
 /// `GET /projects/{id}` の応答。案件 + 途中目標 + その案件のタスクの要約（GUI の「仕事の木」用）。

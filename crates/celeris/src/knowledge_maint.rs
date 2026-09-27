@@ -424,6 +424,7 @@ mod tests {
     fn seed_project(store: &SqliteStore, archived: bool) -> ProjectId {
         let now = OffsetDateTime::now_utc();
         let project = Project {
+            auto_advance: false,
             archived_at: if archived { Some(now) } else { None },
             paused_from: None,
             id: ProjectId::new(),

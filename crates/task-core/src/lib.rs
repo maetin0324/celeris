@@ -138,9 +138,12 @@ pub use plan::{
 };
 // ---- ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）----
 pub use project_plan::{
-    MILESTONES_PLAN_LABEL, MilestoneSpec, PROJECT_PLAN_SCHEMA, ProjectPlanLimits, ProjectPlanSpec,
-    ProjectPlanValidationError, ValidatedProjectPlan, is_milestones_plan_task,
-    validate as validate_project_plan,
+    MILESTONES_PLAN_LABEL, MILESTONES_REPLAN_LABEL, MilestoneModify, MilestoneSpec,
+    PROJECT_PLAN_DELTA_SCHEMA, PROJECT_PLAN_SCHEMA, PlanNodeState, ProjectPlanDelta,
+    ProjectPlanDeltaError, ProjectPlanLimits, ProjectPlanSpec, ProjectPlanValidationError,
+    ValidatedProjectPlan, ValidatedProjectPlanDelta, is_milestones_plan_task,
+    is_milestones_replan_task, validate as validate_project_plan,
+    validate_delta as validate_project_plan_delta,
 };
 pub use report::{
     COMPACTION_ROLE, Report, ReportFilter, ReportId, ReportKind, ReportStore, ReportsLive,
@@ -151,9 +154,9 @@ pub use repos::{
     resolve_task_repos, valid_repo_name,
 };
 pub use store::{
-    ClusterSettings, EventRow, ListFilter, ListOrder, Page, SCHEMA_VERSION, SqliteStore,
-    StoreError, StoreOptions, TaskStore, backup_database, event_row_schema_value, integrity_check,
-    is_busy_error,
+    ClusterSettings, EventRow, ListFilter, ListOrder, Page, ProjectPlanApply,
+    ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore,
+    backup_database, event_row_schema_value, integrity_check, is_busy_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----

@@ -195,6 +195,7 @@ mod tests {
     fn sample_project(status: ProjectStatus, archived: bool) -> Project {
         let now = OffsetDateTime::now_utc();
         Project {
+            auto_advance: false,
             id: ProjectId::new(),
             title: "Pluvio".into(),
             request: "降水予測の研究".into(),
@@ -283,6 +284,7 @@ mod tests {
 
     fn milestone_spec(key: &str) -> task_core::MilestoneSpec {
         task_core::MilestoneSpec {
+            pause_after: None,
             key: key.into(),
             title: format!("title-{key}"),
             objective: "o".into(),

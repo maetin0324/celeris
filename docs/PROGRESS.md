@@ -20533,3 +20533,31 @@ commit: 22be6d8（区切り 0）、7b926b8（区切り 1 (a)(e)）、8b39f8b（�
      確かめる）。
 - **提案**: F5-2 の dogfood で、`execution: compound` + `pause_after: {"mode":"after","phases":["design"]}` の Task を
   GUI から作り、Discord 通知 1 通 → タスク詳細で途中報告を読む → 「続ける」の往復を 1 回確認する。
+
+## Phase F4b「案件レベルの計画（後半）: reached / Go、案件 replan、planner の children、互換、案件ページの DAG」（着手 2026-09-27、branch `worktree-agent-a46b8a640d3df7cda`）
+
+ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push しない）。ビルドは
+`CARGO_TARGET_DIR=/var/lib/celeris/build-cache/cargo/agent-platform-f4b CARGO_INCREMENTAL=0`。
+
+### F4b checkpoint 1: (d) 途中目標の Go（reached まで依存するマイルストーンを dispatch しない）（完了 2026-09-27）
+
+- **条件**: 依存先のマイルストーン Task が `done` でも、その途中目標（案件計画のもの）が `reached` になるまで依存する
+  マイルストーン Task は dispatch しない。ADR-0038 の `ok` で `reached` → Go が開く。案件の `auto_advance = true` なら `done` で進む。
+- **実装**:
+  - migration 0028（`SCHEMA_VERSION` 27 → 28）: `projects.auto_advance INTEGER NOT NULL DEFAULT 0`、`milestones.plan_key TEXT`。
+    `Project.auto_advance`（`serde(default)`）、`Milestone.plan_key`（`Option`）。`TaskStore::project_set_auto_advance` /
+    `milestone_set_plan_key`。`PATCH /projects/{id}` に `auto_advance`。
+  - `task_ops::project_plan::propose` が作る途中目標に `plan_key`（計画の key）を結ぶ。
+  - `SqliteStore::ready_tasks`（ADR-0044 D6 の一時停止の判定と同じ場所）: マイルストーン Task 同士の依存で、依存先の途中目標が
+    `plan_key` ありで `reached` でなく、案件の `auto_advance = 0` なら ready に出さない（`milestones_awaiting_go_locked`）。
+  - `task_ops::milestone_review::decide`: `plan_key` のある途中目標は `decide_planned`（`ok` = `reached` だけ。次の承認・分解 run は
+    起こさない。`ng` = `redesigned` + 案件 replan の計画 run）。`record_proposal` と dispatcher の `absorb_milestone_proposal` は
+    案件計画の途中目標に触れない。
+  - `MilestoneSpec.pause_after`（F3 の `PausePolicy`。F4a の申し送り）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-dispatch --lib dependent_milestone_waits_for_reached_not_done` → 1 passed（survey done 後も poc は ready で
+    WorkerStarted 0、`ok` 後に poc done。`auto_advance = true` では survey done で poc も done、途中目標は reached でないまま）。
+  - `cargo test -p task-core -p task-ops -p task-api -p celeris --no-fail-fast` → 全 suite 0 failed（task-core 423 passed、task-ops 351 passed）。
+  - `UPDATE_SCHEMA=1 cargo test -p task-core schema` / `--workspace committed_schema_matches_generated` → ok
+    （`event.schema.json`・`project-plan.schema.json`・`api-v1.schema.json` を再生成、`project-plan-delta.schema.json` を新規）。
+  - `cargo clippy --workspace --all-targets -- -D warnings` → warning 0。`cargo fmt --all -- --check` → 差分ゼロ。

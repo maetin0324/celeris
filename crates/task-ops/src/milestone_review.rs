@@ -184,7 +184,10 @@ pub fn record_proposal(
         return Ok(None);
     }
     for old in store.milestone_list(project_id)? {
-        if old.status == MilestoneStatus::Proposed && Some(old.id) != keep {
+        // ADR-0074 D3.8（Phase F4b）: 案件計画の途中目標（`plan_key` あり。提案中の DAG の節点）は
+        // この差し替えの対象にしない（計画の承認 / 却下は `project_plan::decide` だけが決める）。
+        if old.status == MilestoneStatus::Proposed && Some(old.id) != keep && old.plan_key.is_none()
+        {
             store.milestone_set_status(old.id, MilestoneStatus::Redesigned)?;
         }
     }
@@ -240,6 +243,20 @@ pub fn decide(
             "note must not be blank for the {:?} decision",
             decision.as_str()
         )));
+    }
+    // ADR-0074 D3.6（Phase F4b (d)）: 案件計画の途中目標（DAG の節点）では `ok` の意味を改める。
+    if milestone.plan_key.is_some() {
+        return decide_planned(
+            store,
+            project,
+            milestone,
+            decision,
+            note,
+            roles,
+            genres,
+            conversation_genre,
+            now,
+        );
     }
     let proposal = latest_proposal(store, project.id, Some(milestone.id))?;
     match decision {
@@ -311,6 +328,80 @@ pub fn decide(
                 plan_task_id: None,
                 message_id: Some(started.message.id),
                 conversation_task_id: Some(started.task.id),
+            })
+        }
+    }
+}
+
+/// ADR-0074 D3.6（Phase F4b）: 案件計画の途中目標（`plan_key` あり）への人の答え。
+///
+/// - `ok`: この途中目標を `reached` にするだけ。依存するマイルストーン Task の Go は
+///   `ready_tasks` の判定（D3.2）で開く。次の途中目標の承認・分解の run は起こさない（それは案件計画を
+///   持たない案件の旧い意味。D3.8）。
+/// - `discuss`: 旧い意味と同じ（状態は変えず、秘書への対話）。
+/// - `ng`: この途中目標を `redesigned`（Go は開かないまま）にし、案件の replan（D3.4 の起点 (a)）の
+///   計画 run を起こす（理由は計画 run への人の一言として渡る）。
+#[allow(clippy::too_many_arguments)]
+fn decide_planned(
+    store: &dyn TaskStore,
+    project: &Project,
+    milestone: &Milestone,
+    decision: MilestoneDecision,
+    note: Option<&str>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    conversation_genre: &str,
+    now: OffsetDateTime,
+) -> Result<Decided, OpsError> {
+    match decision {
+        MilestoneDecision::Ok => {
+            store.milestone_set_status(milestone.id, MilestoneStatus::Reached)?;
+            if let Some(note) = note {
+                append_user_note(store, project.id, note, now)?;
+            }
+            Ok(Decided {
+                milestone: reload(store, project.id, milestone.id)?,
+                next_milestone: None,
+                plan_task_id: None,
+                message_id: None,
+                conversation_task_id: None,
+            })
+        }
+        MilestoneDecision::Discuss => {
+            let text = discuss_text(milestone, note.unwrap_or_default());
+            let started = send_to_secretary(
+                store,
+                project,
+                &text,
+                roles,
+                genres,
+                conversation_genre,
+                now,
+            )?;
+            Ok(Decided {
+                milestone: reload(store, project.id, milestone.id)?,
+                next_milestone: None,
+                plan_task_id: None,
+                message_id: Some(started.message.id),
+                conversation_task_id: Some(started.task.id),
+            })
+        }
+        MilestoneDecision::Ng => {
+            store.milestone_set_status(milestone.id, MilestoneStatus::Redesigned)?;
+            let reason = format!(
+                "途中目標『{}』（key: {}）は達成にしません。理由: {}",
+                milestone.title,
+                milestone.plan_key.as_deref().unwrap_or_default(),
+                note.unwrap_or_default()
+            );
+            let started =
+                project_plan::start_replan(store, project, Some(&reason), roles, genres, now)?;
+            Ok(Decided {
+                milestone: reload(store, project.id, milestone.id)?,
+                next_milestone: None,
+                plan_task_id: Some(started.task.id),
+                message_id: None,
+                conversation_task_id: None,
             })
         }
     }
@@ -444,6 +535,7 @@ mod tests {
 
         fn seed_project(&self) -> Project {
             let project = Project {
+                auto_advance: false,
                 archived_at: None,
                 paused_from: None,
                 id: ProjectId::new(),

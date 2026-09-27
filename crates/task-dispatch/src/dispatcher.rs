@@ -5089,8 +5089,29 @@ impl Dispatcher {
             .map(|d| d.join("project-plan.json"))
             .and_then(|p| std::fs::read_to_string(p).ok());
 
-        let validation: Result<task_core::ValidatedProjectPlan, String> = match read {
+        // ADR-0074 D3.4（Phase F4b (e)）: replan の run（`is_milestones_replan_task`）は差分
+        // `celeris.project-plan-delta/1` を、初回の run は `celeris.project-plan/1` を書く。
+        enum Proposal {
+            Full(task_core::ValidatedProjectPlan),
+            Delta(Box<task_core::ValidatedProjectPlanDelta>),
+        }
+        let is_replan = task_core::is_milestones_replan_task(task);
+        let validation: Result<Proposal, String> = match read {
             None => Err("artifacts/project-plan.json が見つからない".to_string()),
+            Some(text) if is_replan => {
+                match serde_json::from_str::<task_core::ProjectPlanDelta>(&text) {
+                    Err(e) => Err(format!(
+                        "project-plan.json の JSON が不正（{} を書くこと）: {e}",
+                        task_core::PROJECT_PLAN_DELTA_SCHEMA
+                    )),
+                    Ok(delta) => task_ops::project_plan::validate_delta_against_store(
+                        self.store.as_ref(),
+                        project_id,
+                        &delta,
+                    )
+                    .map(|v| Proposal::Delta(Box::new(v))),
+                }
+            }
             Some(text) => match serde_json::from_str::<task_core::ProjectPlanSpec>(&text) {
                 Err(e) => Err(format!("project-plan.json の JSON が不正: {e}")),
                 Ok(spec) => task_core::validate_project_plan(
@@ -5098,6 +5119,7 @@ impl Dispatcher {
                     task_core::ProjectPlanLimits::default(),
                     &std::collections::BTreeSet::new(),
                 )
+                .map(Proposal::Full)
                 .map_err(|errors| {
                     errors
                         .iter()
@@ -5118,15 +5140,27 @@ impl Dispatcher {
                         events,
                     );
                 };
-                match task_ops::project_plan::propose(
-                    self.store.as_ref(),
-                    task,
-                    &project,
-                    &validated,
-                    &self.config.roles,
-                    &self.config.genres,
-                    OffsetDateTime::now_utc(),
-                ) {
+                let proposed = match &validated {
+                    Proposal::Full(validated) => task_ops::project_plan::propose(
+                        self.store.as_ref(),
+                        task,
+                        &project,
+                        validated,
+                        &self.config.roles,
+                        &self.config.genres,
+                        OffsetDateTime::now_utc(),
+                    ),
+                    Proposal::Delta(validated) => task_ops::project_plan::propose_delta(
+                        self.store.as_ref(),
+                        task,
+                        &project,
+                        validated,
+                        &self.config.roles,
+                        &self.config.genres,
+                        OffsetDateTime::now_utc(),
+                    ),
+                };
+                match proposed {
                     Ok(proposed) => {
                         tracing::info!(%task_id, %project_id, milestones = proposed.len(), "project plan proposed");
                         self.store.apply_transition_with_events(
@@ -5321,6 +5355,14 @@ impl Dispatcher {
         let Some(project_id) = task.project_id else {
             return;
         };
+        // ADR-0074 D3.6（Phase F4b (d)）: 案件計画の途中目標（DAG の節点）のレビューでは、次の途中目標を
+        // 提案として作らない（次は計画の DAG が決めている。見直しは案件の replan で行う）。
+        if let Some(milestone_id) = task.milestone_id
+            && let Ok(Some(m)) = self.store.milestone_get(milestone_id)
+            && m.plan_key.is_some()
+        {
+            return;
+        }
         let Some(workspace) = self.task_dir(task) else {
             return;
         };
@@ -14167,6 +14209,7 @@ mod tests {
         let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             id: task_core::ProjectId::new(),
             title: "案件".into(),
             request: "やって".into(),
@@ -14232,6 +14275,178 @@ mod tests {
         );
     }
 
+    /// 検査が決定的に通る（`command: true`）2 段の案件計画（`poc` は `survey` に依存）。
+    const COMMAND_PROJECT_PLAN: &str = r#"{"schema":"celeris.project-plan/1","rationale":"2 段階","milestones":[
+        {"key":"survey","title":"調査","objective":"周辺調査","reach_criteria":"候補が出せた",
+         "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],"depends_on":[]},
+        {"key":"poc","title":"PoC","objective":"検証","reach_criteria":"動くデモ",
+         "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],"depends_on":["survey"]}
+    ]}"#;
+
+    /// `COMMAND_PROJECT_PLAN` を提案させ（偽アダプタの計画 run）、人の `approve` まで進める。
+    async fn approved_two_step_project_plan(
+        dir: &std::path::Path,
+        auto_advance: bool,
+    ) -> (
+        Arc<dyn TaskStore>,
+        Dispatcher,
+        task_core::Project,
+        Task,
+        Task,
+    ) {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let now = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            auto_advance,
+            id: task_core::ProjectId::new(),
+            title: "案件".into(),
+            request: "やって".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).unwrap();
+        let mut plan = plan_task(dir, 0);
+        plan.project_id = Some(project.id);
+        plan.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+        store.insert(&plan).unwrap();
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: COMMAND_PROJECT_PLAN.into(),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 2);
+        assert!(run_until_idle(&mut d, 200).await.idle);
+        task_ops::project_plan::decide(
+            store.as_ref(),
+            &project,
+            1,
+            task_ops::project_plan::ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            "conversation",
+            now,
+        )
+        .unwrap();
+        // テストでは作業場所を一時ディレクトリに置く（既定の相対パスは使わない）。
+        for t in store.list(None).unwrap() {
+            if task_core::is_milestone_task(&t) {
+                let mut t = t.clone();
+                t.workspace = WorkspaceSpec::Local {
+                    path: dir.join(t.id.to_string()),
+                    mode: None,
+                };
+                store
+                    .update_task(
+                        &t,
+                        Event::Edited {
+                            fields: vec!["workspace".into()],
+                            by: "test".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        let all = store.list(None).unwrap();
+        let survey = all.iter().find(|t| t.title == "調査").unwrap().clone();
+        let poc = all.iter().find(|t| t.title == "PoC").unwrap().clone();
+        (store, d, project, survey, poc)
+    }
+
+    /// ADR-0074 D3.2 / D3.6（Phase F4b (d)）: 依存先のマイルストーン Task が `done` でも、その途中目標が
+    /// `reached`（人の `ok`）になるまで依存するマイルストーン Task は dispatch されない。`ok` で Go が開く。
+    /// 案件の `auto_advance = true` なら `done` で進む。
+    #[tokio::test]
+    async fn dependent_milestone_waits_for_reached_not_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut d, project, survey, poc) =
+            approved_two_step_project_plan(dir.path(), false).await;
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        let survey_now = store.get(survey.id).unwrap().unwrap();
+        assert_eq!(
+            survey_now.status,
+            Status::Done,
+            "{:?}",
+            store.events_for(survey.id).unwrap()
+        );
+        let poc_now = store.get(poc.id).unwrap().unwrap();
+        assert_eq!(
+            poc_now.status,
+            Status::Ready,
+            "reached までは Go が開かない"
+        );
+        assert!(
+            !store
+                .events_for(poc.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(e, Event::WorkerStarted { .. })),
+            "poc must not have been dispatched"
+        );
+        // 途中目標の判定（ADR-0038 の ok）。案件計画の途中目標では `reached` にするだけで、
+        // 次の途中目標の承認・分解の run は起こさない（D3.6）。
+        let survey_milestone = store
+            .milestone_get(survey.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(survey_milestone.plan_key.as_deref(), Some("survey"));
+        let decided = task_ops::milestone_review::decide(
+            store.as_ref(),
+            &project,
+            &survey_milestone,
+            task_core::MilestoneDecision::Ok,
+            None,
+            &[],
+            &[],
+            "conversation",
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert_eq!(
+            decided.milestone.status,
+            task_core::MilestoneStatus::Reached
+        );
+        assert_eq!(
+            decided.plan_task_id, None,
+            "no decomposition run on a DAG milestone"
+        );
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        assert_eq!(
+            store.get(poc.id).unwrap().unwrap().status,
+            Status::Done,
+            "{:?}",
+            store.events_for(poc.id).unwrap()
+        );
+
+        // auto_advance = true: survey が done になった時点で poc も進む（reached を待たない）。
+        let dir2 = tempfile::tempdir().unwrap();
+        let (store2, mut d2, _project2, survey2, poc2) =
+            approved_two_step_project_plan(dir2.path(), true).await;
+        assert!(run_until_idle(&mut d2, 400).await.idle);
+        assert_eq!(
+            store2.get(survey2.id).unwrap().unwrap().status,
+            Status::Done
+        );
+        assert_eq!(
+            store2.get(poc2.id).unwrap().unwrap().status,
+            Status::Done,
+            "{:?}",
+            store2.events_for(poc2.id).unwrap()
+        );
+        let m = store2
+            .milestone_get(survey2.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            m.status,
+            task_core::MilestoneStatus::Reached,
+            "判定は後から"
+        );
+    }
+
     /// ADR-0074 D3.3（Phase F4a (b)）: 不正な `project-plan.json`（JSON として壊れている）が
     /// retries を使い切ると、Task を作らず（途中目標も無し）、秘書の返事として「計画を作れなかった」を
     /// 案件の対話に残す。
@@ -14249,6 +14464,7 @@ mod tests {
             .unwrap();
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             id: task_core::ProjectId::new(),
             title: "案件".into(),
             request: "やって".into(),
@@ -21575,6 +21791,7 @@ mod tests {
     fn titled_project(title: &str) -> Project {
         let now = OffsetDateTime::now_utc();
         Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -23623,6 +23840,7 @@ mod tests {
     ) -> (task_core::ProjectId, Vec<task_core::ProjectRepo>) {
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),

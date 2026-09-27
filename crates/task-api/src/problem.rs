@@ -578,6 +578,12 @@ pub(crate) fn ops_problem(
         OpsError::ProjectPlanAlreadyDecided { .. } => {
             ApiProblem::new(StatusCode::CONFLICT, "project_plan_already_decided", detail)
         }
+        OpsError::ProjectPlanInFlight { .. } => {
+            ApiProblem::new(StatusCode::CONFLICT, "project_plan_in_flight", detail)
+        }
+        OpsError::ProjectPlanStale { .. } => {
+            ApiProblem::new(StatusCode::CONFLICT, "project_plan_stale", detail)
+        }
         OpsError::Store(err) => store_problem(err),
     }
 }

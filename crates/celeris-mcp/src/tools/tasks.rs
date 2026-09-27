@@ -38,7 +38,9 @@ fn map_ops_err(e: OpsError) -> ToolError {
         // ADR-0074 D3.3（Phase F4a (c)）: 案件計画の decide は MCP からは呼べない（celerisctl / API だけ）
         // が、`OpsError` は共有なので網羅性のために分類だけ足す。
         OpsError::ProjectPlanProposalNotFound { .. } => ToolError::not_found(e.to_string()),
-        OpsError::ProjectPlanAlreadyDecided { .. } => ToolError::invalid_params(e.to_string()),
+        OpsError::ProjectPlanAlreadyDecided { .. }
+        | OpsError::ProjectPlanInFlight { .. }
+        | OpsError::ProjectPlanStale { .. } => ToolError::invalid_params(e.to_string()),
         OpsError::InvalidState { .. }
         | OpsError::Validation(_)
         | OpsError::Conflict { .. }

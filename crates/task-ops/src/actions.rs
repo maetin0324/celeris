@@ -486,6 +486,7 @@ fn propose_project_action(
         locations.push(WorkspaceSpec::Local { path, mode: None });
     }
     let project = Project {
+        auto_advance: false,
         archived_at: None,
         paused_from: None,
         id: ProjectId::new(),
@@ -1231,6 +1232,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().unwrap();
         let t = now();
         let project = Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

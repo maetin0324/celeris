@@ -419,6 +419,19 @@ pub fn create_task_with_roles(
     insert_task(store, task, vec![])
 }
 
+/// ADR-0074 D3.4（Phase F4b (e)）: `create_task_with_roles` と同じ規則で `Task` を組み立てるだけ
+/// （挿入しない）。案件の replan の `modify` が、まだ dispatch されていないマイルストーン Task を
+/// 同じ規則で組み立て直すために使う。
+pub fn build_task_with_roles(
+    store: &dyn TaskStore,
+    spec: NewTaskSpec,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<Task, OpsError> {
+    build_task(store, spec, roles, genres, true, now)
+}
+
 /// ADR-0074 D3.1 / D3.8（Phase F4a）: `task` を挿入する。**案件直下**（`task_core::is_milestone_task`）
 /// で `milestone_id` を持たなければ、同じトランザクションで途中目標の行（`approved`、title = Task の
 /// title）を作って結ぶ（1:1 の不変条件を保つ）。既に `milestone_id` があれば（人が明示した／親から
@@ -1132,6 +1145,7 @@ mod tests {
 
         let now_ts = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),
@@ -1182,6 +1196,7 @@ mod tests {
     fn a_project(store: &dyn task_core::TaskStore) -> task_core::Project {
         let now_ts = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),

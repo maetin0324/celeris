@@ -1317,3 +1317,9 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 
 再レビュー対応の全体ゲート: `cargo fmt --all -- --check`、`cargo test --workspace`（2506 passed / 0 failed /
 5 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` はすべて exit 0。
+
+## release c51837427ac5 の昇格（F4b + planner 修正、schema 28、2026-09-27 15:31Z）と F5-1（やり直し）の結果
+
+- F5-1（やり直し）01M3HG7VV6A2HRHTNXWPDS9051: done（atomic に倒れたまま、13:18〜15:31Z）。planner 2 run（Opus 1 分、Sonnet 7 分）は Plan Mode で成果物を書けず失敗。worker 4 run のうち 3 run が `cheap/mechanical-verifiable-reversible` で gpt-6-luna（F1 の規則表が atomic でも Task の features から cheap を選んだ）、retry のエスカレーションで 1 run が frontier（gpt-6-astra）。continuation 1。E6（全 run standard）と比べて lane の分布は変わった。
+- 昇格: in-flight 0 で停止→起動、本番 `c51837427ac5`（schema 28）。本番に F4b（reached / Go、案件 replan、children、案件ページ DAG）と planner の permission_mode 修正が入った。
+- 3 回目の F5-1 を投入（planner が成果物を書ける版で compound の計画が採用されるかを確認）。

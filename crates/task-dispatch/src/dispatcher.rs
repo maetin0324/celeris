@@ -14447,6 +14447,109 @@ mod tests {
         );
     }
 
+    /// ADR-0074 D3.4（Phase F4b (e)）: replan の計画 run（偽アダプタ）が差分を書くと、検証を通って
+    /// version 2 の提案（`supersedes: 1`、`add` の draft）になる。dispatch 済みの節点を `modify` する
+    /// 差分は計画 run の失敗（retries 0 で failed）になり、何も作らない。
+    #[tokio::test]
+    async fn replan_run_proposes_a_delta_and_rejects_modifying_a_started_milestone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut d, project, survey, _poc) =
+            approved_two_step_project_plan(dir.path(), false).await;
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        assert_eq!(store.get(survey.id).unwrap().unwrap().status, Status::Done);
+        store
+            .org_upsert(&org_node_of(
+                "secretary",
+                None,
+                OrgKind::Secretary,
+                Some("secretary"),
+            ))
+            .unwrap();
+        let start = |store: &Arc<dyn TaskStore>| {
+            let started = task_ops::project_plan::start_replan(
+                store.as_ref(),
+                &project,
+                Some("見直し"),
+                &[],
+                &[],
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+            let mut t = started.task.clone();
+            t.workspace = WorkspaceSpec::Local {
+                path: dir.path().join(t.id.to_string()),
+                mode: None,
+            };
+            store
+                .update_task(
+                    &t,
+                    Event::Edited {
+                        fields: vec!["workspace".into()],
+                        by: "test".into(),
+                    },
+                )
+                .unwrap();
+            t
+        };
+
+        // dispatch 済み（done）の survey を modify する差分は拒まれる。
+        let bad = start(&store);
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json:
+                r#"{"schema":"celeris.project-plan-delta/1","base_version":1,"rationale":"r",
+                "modify":[{"key":"survey","title":"x"}]}"#
+                    .into(),
+        });
+        let mut d2 = dispatcher(store.clone(), adapter, 1);
+        assert!(run_until_idle(&mut d2, 200).await.idle);
+        let bad_now = store.get(bad.id).unwrap().unwrap();
+        assert_eq!(
+            bad_now.status,
+            Status::Failed,
+            "{:?}",
+            store.events_for(bad.id).unwrap()
+        );
+        assert!(
+            store
+                .events_for(bad.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(
+                    e,
+                    Event::WorkerProgress { msg, .. } if msg.contains("already dispatched")
+                ))
+        );
+
+        // add の差分は version 2 の提案になる。
+        let good = start(&store);
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: r#"{"schema":"celeris.project-plan-delta/1","base_version":1,"rationale":"r",
+                "add":[{"key":"paper","title":"論文","objective":"書く","reach_criteria":"草稿",
+                 "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],
+                 "depends_on":["poc"]}]}"#
+                .into(),
+        });
+        let mut d3 = dispatcher(store.clone(), adapter, 1);
+        assert!(run_until_idle(&mut d3, 200).await.idle);
+        assert_eq!(store.get(good.id).unwrap().unwrap().status, Status::Done);
+        let events = store.events_for(good.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::ProjectPlanProposed { version: 2, supersedes: Some(1), delta: Some(_), milestones, .. }
+                    if milestones.len() == 3
+            )),
+            "{events:?}"
+        );
+        let paper = store
+            .list(Some(Status::Draft))
+            .unwrap()
+            .into_iter()
+            .find(|t| t.title == "論文")
+            .expect("paper draft");
+        assert!(task_core::is_milestone_task(&paper));
+    }
+
     /// ADR-0074 D3.3（Phase F4a (b)）: 不正な `project-plan.json`（JSON として壊れている）が
     /// retries を使い切ると、Task を作らず（途中目標も無し）、秘書の返事として「計画を作れなかった」を
     /// 案件の対話に残す。

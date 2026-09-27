@@ -541,8 +541,13 @@ export type Event =
     }
   | {
       /**
+       * ADR-0074 D3.4（Phase F4b (e)）: replan の差分（`celeris.project-plan-delta/1`）。初回の提案は `None`。
+       */
+      delta?: ProjectPlanDelta | null;
+      /**
        * この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を
-       * 決定的に引くため。
+       * 決定的に引くため。replan（F4b）では、既存のもの（id はそのまま）と `add` で作ったものを
+       * 合わせた、承認後の計画全体の対応表。
        */
       milestones: ProposedMilestone[];
       plan: ProjectPlanSpec;
@@ -707,6 +712,22 @@ export type QuotaWindow = "five_hour" | "seven_day";
  */
 export type PauseSource = "human" | "agent";
 /**
+ * D2.1: `NewTaskSpec.pause_after` / `PATCH` / `PUT /tasks/{id}/execution/pause-after` /
+ * CoS の `create_task.pause_after` に書ける値。既定は `None`（全工程自動）。
+ * **planner は書けない**（`ExecutionPlanSpec` に欄が無い。`deny_unknown_fields` で拒否される）。
+ */
+export type PausePolicy =
+  | {
+      mode: "none";
+    }
+  | {
+      mode: "each_phase";
+    }
+  | {
+      mode: "after";
+      phases?: string[];
+    };
+/**
  * D5: `execution_plans.status`。
  */
 export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
@@ -822,22 +843,6 @@ export type TaskCategory = "feature" | "bug" | "research" | "ops" | "docs" | "ot
  * 既定は `Production`（導入前のタスクは全部これ。従来の挙動と同じ）。状態機械は見ない。
  */
 export type TaskMode = "prototype" | "production" | "research";
-/**
- * D2.1: `NewTaskSpec.pause_after` / `PATCH` / `PUT /tasks/{id}/execution/pause-after` /
- * CoS の `create_task.pause_after` に書ける値。既定は `None`（全工程自動）。
- * **planner は書けない**（`ExecutionPlanSpec` に欄が無い。`deny_unknown_fields` で拒否される）。
- */
-export type PausePolicy =
-  | {
-      mode: "none";
-    }
-  | {
-      mode: "each_phase";
-    }
-  | {
-      mode: "after";
-      phases?: string[];
-    };
 /**
  * ADR-0044 D3: `priority` の入力。`"P1"` のようなラベルでも整数でも書ける（API は `priority_label` を
  * 返すので、GUI はラベルだけを扱えばよい。`i32` は互換のため残す）。
@@ -2136,6 +2141,13 @@ export interface Milestone {
    * ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。
    */
   paused_from?: MilestoneStatus | null;
+  /**
+   * ADR-0074 D3.3 / D3.8（Phase F4b）: 案件計画（`celeris.project-plan/1` と差分）から作られた
+   * 途中目標の key。`None` の途中目標（既存・手で作ったもの・`task_ops::add` の自動生成）は旧い意味
+   * （直列、ADR-0038 の `ok` で次を承認して分解）のまま。`Some` なら DAG の節点で、`ok` は
+   * `reached` にして依存するマイルストーンの Go を開くだけ（D3.6）。
+   */
+  plan_key?: string | null;
   project_id: ProjectId;
   seq: number;
   status: MilestoneStatus;
@@ -3378,19 +3390,30 @@ export interface PhaseReport {
   work_units?: string[];
 }
 /**
- * `Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。
+ * D3.4: replan の run が `<artifacts>/project-plan.json` に書く差分。
  */
-export interface ProposedMilestone {
-  key: string;
-  milestone_id: MilestoneId;
-  task_id: TaskId;
-}
-/**
- * D3.3: CoS の計画 run が `<artifacts>/project-plan.json` に書く JSON そのもの。
- */
-export interface ProjectPlanSpec {
-  milestones: MilestoneSpec[];
+export interface ProjectPlanDelta {
+  /**
+   * 新しいマイルストーン（key は既存のどれとも衝突しない）。
+   */
+  add?: MilestoneSpec[];
+  /**
+   * この差分の元になった（承認済みの）版。現行の版と違えば古い差分として拒む。
+   */
+  base_version: number;
+  /**
+   * 走っている・まだ終わっていないマイルストーンを明示して取り下げる（承認で `Cancel` を適用）。
+   */
+  cancel?: string[];
+  /**
+   * まだ dispatch されていないマイルストーンの変更。
+   */
+  modify?: MilestoneModify[];
   rationale: string;
+  /**
+   * まだ dispatch されていないマイルストーンを計画から外す。
+   */
+  remove?: string[];
   schema: string;
 }
 /**
@@ -3415,12 +3438,50 @@ export interface MilestoneSpec {
   key: string;
   objective: string;
   /**
+   * ADR-0074 D2.1 / D3.3（Phase F4b）: このマイルストーン Task の途中確認（F3 の `PausePolicy`）。
+   * 書かなければ既定（止めない）。
+   */
+  pause_after?: PausePolicy | null;
+  /**
    * 何が示せたら途中目標の達成か（人の判定の材料。SPEC §7「検証の合格線」）。
    */
   reach_criteria: string;
   repos?: string[];
   skills?: string[];
   title: string;
+}
+/**
+ * D3.4: 既存のマイルストーン 1 件の変更（書いた欄だけを変える。`key` は変えられない）。
+ */
+export interface MilestoneModify {
+  acceptance?: Criterion[] | null;
+  depends_on?: string[] | null;
+  execution?: ExecutionMode | null;
+  features?: TaskFeatureHints | null;
+  genre?: string | null;
+  key: string;
+  objective?: string | null;
+  pause_after?: PausePolicy | null;
+  reach_criteria?: string | null;
+  repos?: string[] | null;
+  skills?: string[] | null;
+  title?: string | null;
+}
+/**
+ * `Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。
+ */
+export interface ProposedMilestone {
+  key: string;
+  milestone_id: MilestoneId;
+  task_id: TaskId;
+}
+/**
+ * 提案が承認されたときの計画**全体**（replan の差分でも、差分を当てた後の全体を入れる）。
+ */
+export interface ProjectPlanSpec {
+  milestones: MilestoneSpec[];
+  rationale: string;
+  schema: string;
 }
 /**
  * `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane`。
@@ -3804,6 +3865,12 @@ export interface DraftGroup {
   drafts: TaskSummary[];
   parent?: TaskRef | null;
   plan_summary?: string | null;
+  /**
+   * ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画の未決の提案なら、その案件と版（GUI は
+   * `POST /projects/{project_id}/project-plan/{version}/decide` をそのまま呼べる）。replan の差分で
+   * `add` が無い（modify / remove / cancel だけの）提案は `drafts` が空でもこの 1 まとまりで出る。
+   */
+  project_plan?: ProjectPlanRef | null;
 }
 export interface TaskSummary {
   /**
@@ -3868,6 +3935,17 @@ export interface TaskSummary {
   tier: Tier;
   title: string;
   updated_at: string;
+}
+/**
+ * `DraftGroup.project_plan`。
+ */
+export interface ProjectPlanRef {
+  project_id: ProjectId;
+  /**
+   * replan の差分なら元の版。
+   */
+  supersedes?: number | null;
+  version: number;
 }
 export interface QuestionItem {
   /**
@@ -4357,6 +4435,13 @@ export interface Milestone1 {
    * ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。
    */
   paused_from?: MilestoneStatus | null;
+  /**
+   * ADR-0074 D3.3 / D3.8（Phase F4b）: 案件計画（`celeris.project-plan/1` と差分）から作られた
+   * 途中目標の key。`None` の途中目標（既存・手で作ったもの・`task_ops::add` の自動生成）は旧い意味
+   * （直列、ADR-0038 の `ok` で次を承認して分解）のまま。`Some` なら DAG の節点で、`ok` は
+   * `reached` にして依存するマイルストーンの Go を開くだけ（D3.6）。
+   */
+  plan_key?: string | null;
   project_id: ProjectId;
   seq: number;
   status: MilestoneStatus;
@@ -4942,6 +5027,13 @@ export interface MilestoneView {
    * ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。
    */
   paused_from?: MilestoneStatus | null;
+  /**
+   * ADR-0074 D3.3 / D3.8（Phase F4b）: 案件計画（`celeris.project-plan/1` と差分）から作られた
+   * 途中目標の key。`None` の途中目標（既存・手で作ったもの・`task_ops::add` の自動生成）は旧い意味
+   * （直列、ADR-0038 の `ok` で次を承認して分解）のまま。`Some` なら DAG の節点で、`ok` は
+   * `reached` にして依存するマイルストーンの Go を開くだけ（D3.6）。
+   */
+  plan_key?: string | null;
   project_id: ProjectId;
   /**
    * その返事が提案した次の途中目標（`proposed` の最新。無ければ省略）。
@@ -4966,6 +5058,11 @@ export interface Project {
    * `Some` の案件（とそのタスク）を隠す。
    */
   archived_at?: string | null;
+  /**
+   * ADR-0074 D3.2（Phase F4b）: `true` なら、案件計画のマイルストーン Task は依存先が `done` になった
+   * 時点で進む（途中目標の `reached` = 人の `ok` を待たない。判定のレビューは後から行う）。既定 `false`。
+   */
+  auto_advance?: boolean;
   created_at: string;
   id: ProjectId;
   /**
@@ -5114,6 +5211,11 @@ export interface ProjectList {
  * `"workspace": null` を明示すると作業場所を消す（案件を「作業場所なし」に戻す）。
  */
 export interface ProjectPatchBody {
+  /**
+   * ADR-0074 D3.2（Phase F4b (d)）: 案件計画のマイルストーン Task を、依存先の `done` で進めるか
+   * （`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。
+   */
+  auto_advance?: boolean | null;
   status?: ProjectStatus | null;
   /**
    * ADR-0039 D1: 省略（`None`）なら変えない、`null`（`Some(None)`）なら消す、値なら差し替える。

@@ -20561,3 +20561,41 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
   - `UPDATE_SCHEMA=1 cargo test -p task-core schema` / `--workspace committed_schema_matches_generated` → ok
     （`event.schema.json`・`project-plan.schema.json`・`api-v1.schema.json` を再生成、`project-plan-delta.schema.json` を新規）。
   - `cargo clippy --workspace --all-targets -- -D warnings` → warning 0。`cargo fmt --all -- --check` → 差分ゼロ。
+
+### F4b checkpoint 2: (e) 案件 replan（差分・同じ承認・二重依頼の防止）（完了 2026-09-27）
+
+- **条件**: 案件 replan の差分（dispatch 前のものだけ変えられる、`cancel` は明示）が F4a と同じ `decide` を通る。承認までは現行の
+  計画で動く。同じ案件への二重の計画依頼を防ぐ。
+- **実装**:
+  - `task_core::project_plan`: `celeris.project-plan-delta/1`（`ProjectPlanDelta{base_version, rationale, add, modify, remove, cancel}`、
+    `MilestoneModify`〈書いた欄だけ〉、`docs/protocol/project-plan-delta.schema.json`）、純粋関数 `validate_delta`（schema・
+    `base_version` = 現行の承認済み版・空でない・key の実在と重複・`modify`/`remove` は dispatch 前だけ・`cancel` は終端でないもの・
+    `add` の key 衝突・当てた後の全体を `validate`）、`MILESTONES_REPLAN_LABEL` / `is_milestones_replan_task`。
+  - `Event::ProjectPlanProposed.delta`（`Option`、追加のみ）。差分の提案でも `plan` / `milestones` は**当てた後の全体**を入れる。
+  - `task_ops::project_plan`: `plan_state`（plan タスクの events から全版・現行〈最新の承認済み〉・未決・次の版番号）、
+    `start_milestones` は動いている計画 run（提案前）か未決の提案があれば `OpsError::ProjectPlanInFlight`（API 409
+    `project_plan_in_flight`）、承認済みの計画があれば `start_replan`（replan の印、goal に `base_version` と各節点の状態・変更可否）。
+    `propose_delta`（`add` の分だけ proposed / draft を作り、modify・remove・cancel は承認まで何も変えない）、`decide` の差分の分岐
+    （承認時に今の状態で検証し直し、古ければ `OpsError::ProjectPlanStale`〈API 409 `project_plan_stale`〉で何も書かない。
+    新しい `TaskStore::project_plan_apply` が 途中目標の状態・題名 → Task の書き換え〈draft/ready で lease 無しのものだけ〉→
+    `Accept`/`Cancel` → `ProjectPlanDecided` を 1 トランザクションで。却下は `add` の分だけ redesigned / cancelled）。
+    `add::build_task_with_roles`（modify の組み立て直しに同じ規則を使う）。
+  - `task_ops::milestone_review::decide_planned` の `ng` が `start_replan` を起こす（D3.4 の起点 (a)）。
+  - dispatcher `finish_project_plan_run`: replan の run は差分を読み `validate_delta_against_store` → `propose_delta`。
+  - `task-worker`: `build_project_replan_prompt`（差分の書き方・規則・schema）。
+  - 受信箱: `DraftGroup.project_plan{project_id, version, supersedes}`（F4a の提案）。未決の提案は `plan_state` で引き、`add` の無い
+    差分も 1 まとまり（drafts 空）で出る。`plan_summary` に `[add]` の印と modify / remove / cancel の key。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-ops project_plan::` → 16 passed（新規 `project_replan_delta_cannot_modify_a_started_milestone`〈running の survey の
+    modify / remove は "already dispatched" で拒否、cancel の明示は通る、poc の modify と add は v2 の提案で承認まで poc は不変・survey は
+    running のまま、未決の間の二重依頼は ProjectPlanInFlight、承認で poc の題名・途中目標の題名が変わり paper が ready、提案後に対象が
+    dispatch されると承認は ProjectPlanStale で無変更、却下は現行を変えない〉、`project_replan_cancel_applies_cancel_to_a_running_milestone_on_approval`）。
+  - `cargo test -p task-core project_plan::` → 新規 `delta_modify_and_remove_only_touch_undispatched_milestones` /
+    `delta_rejects_stale_base_unknown_keys_collisions_and_dangling_dependencies` / `committed_delta_schema_matches_generated` ok。
+  - `cargo test -p task-dispatch --lib replan_run_proposes_a_delta_and_rejects_modifying_a_started_milestone` → ok（偽アダプタの replan run）。
+  - `cargo test -p task-api --test project_plan` → 12 passed（新規 `a_second_milestones_plan_request_is_409_and_auto_advance_round_trips`）。
+  - `cargo test -p task-ops inbox::` → 16 passed。`cargo test -p task-worker --lib replan` → ok（`project_replan_task_gets_the_delta_prompt`）。
+  - `cargo test --workspace --no-fail-fast` → **2501 passed / 0 failed / 5 ignored**。`cargo clippy --workspace --all-targets -- -D warnings` → 0。
+    `cargo fmt --all -- --check` → 差分ゼロ。`UPDATE_SCHEMA=1 …` で `api-v1.schema.json` 再生成、`gui` の `gen:types` → `types.ts` 再生成、`typecheck` exit 0。
+- **既知の限界**: D3.4 の起点 (c)（マイルストーン Task の failed / 取り下げで自動的に replan を起こす）は入れていない（人の依頼 =
+  `POST /plan {mode: milestones}` と途中目標の `ng` だけ）。`propose` / `propose_delta` の作成は 1 トランザクションではない（F4a と同じ）。

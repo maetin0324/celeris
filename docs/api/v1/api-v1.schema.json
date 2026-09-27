@@ -4220,6 +4220,17 @@
             "string",
             "null"
           ]
+        },
+        "project_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectPlanRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画の未決の提案なら、その案件と版（GUI は\n`POST /projects/{project_id}/project-plan/{version}/decide` をそのまま呼べる）。replan の差分で\n`add` が無い（modify / remove / cancel だけの）提案は `drafts` が空でもこの 1 まとまりで出る。"
         }
       },
       "required": [
@@ -10389,6 +10400,33 @@
         "milestones"
       ],
       "type": "string"
+    },
+    "ProjectPlanRef": {
+      "description": "`DraftGroup.project_plan`。",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "supersedes": {
+          "description": "replan の差分なら元の版。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project_id",
+        "version"
+      ],
+      "type": "object"
     },
     "ProjectPlanSpec": {
       "additionalProperties": false,

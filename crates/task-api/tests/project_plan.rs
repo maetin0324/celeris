@@ -270,6 +270,56 @@ async fn milestones_mode_labels_the_plan_task_and_ignores_existing_milestones() 
     assert_eq!(unchanged["status"], "approved");
 }
 
+/// ADR-0074 D3.4（Phase F4b (e)）: 同じ案件に案件計画 run が動いている間の二重の
+/// `POST /plan {mode: milestones}` は 409 `project_plan_in_flight`。`PATCH /projects/{id}` の
+/// `auto_advance` は往復する。
+#[tokio::test]
+async fn a_second_milestones_plan_request_is_409_and_auto_advance_round_trips() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "二重", "案件全体の計画を作って欲しい").await;
+    let first = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones"}),
+        ),
+    )
+    .await;
+    assert_eq!(first.status.as_u16(), 202, "{}", first.text());
+    let second = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones"}),
+        ),
+    )
+    .await;
+    assert_eq!(second.status.as_u16(), 409, "{}", second.text());
+    assert!(
+        second.text().contains("project_plan_in_flight"),
+        "{}",
+        second.text()
+    );
+
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    assert_eq!(detail["project"]["auto_advance"], false);
+    let patched = send(
+        &app,
+        patch_json_with(
+            &format!("/api/v1/projects/{project_id}"),
+            &json!({"auto_advance": true}),
+            &[("authorization", format!("Bearer {TOKEN}").as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(patched.status.as_u16(), 200, "{}", patched.text());
+    assert_eq!(patched.json()["auto_advance"], true);
+}
+
 /// `mode = "milestones"` に `milestone_id` を添えるのは 422（案件全体を計画する run に、単一の
 /// 途中目標を紐づける意味が無い）。
 #[tokio::test]

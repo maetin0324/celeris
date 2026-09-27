@@ -728,7 +728,7 @@ impl PlanVersion {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProjectPlanState {
     pub versions: Vec<PlanVersion>,
-    /// 案件計画 run（`is_milestones_plan_task`）のうち、まだ終端でないもの。
+    /// 案件計画 run（`is_milestones_plan_task`）のうち、まだ終端でなく提案も出していないもの。
     pub in_flight_plan_tasks: Vec<TaskId>,
 }
 
@@ -772,10 +772,15 @@ pub fn plan_state(
         if !task_core::is_milestones_plan_task(&t) {
             continue;
         }
-        if !t.status.is_terminal() {
+        let rows = store.event_rows_for(t.id, None, crate::view::ALL_EVENTS)?;
+        // まだ提案を出していない（run 中・再試行待ちの）計画 run。提案を出した後は `pending` が見る。
+        if !t.status.is_terminal()
+            && !rows
+                .iter()
+                .any(|r| matches!(r.event, Event::ProjectPlanProposed { .. }))
+        {
             state.in_flight_plan_tasks.push(t.id);
         }
-        let rows = store.event_rows_for(t.id, None, crate::view::ALL_EVENTS)?;
         for row in &rows {
             match &row.event {
                 Event::ProjectPlanProposed {
@@ -1796,6 +1801,288 @@ mod tests {
             )),
             "{events:?}"
         );
+    }
+
+    /// `survey` → `poc` を提案して承認し、`survey` を dispatch 済み（running）にする。
+    fn approved_plan_with_started_survey(
+        store: &SqliteStore,
+        project: &task_core::Project,
+    ) -> (TaskId, TaskId) {
+        propose_survey_and_poc(store, project);
+        decide(
+            store,
+            project,
+            1,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("approve");
+        let state = plan_state(store, project.id).expect("state");
+        let current = state.current().expect("current");
+        let key = |k: &str| {
+            current
+                .milestones
+                .iter()
+                .find(|m| m.key == k)
+                .expect("key")
+                .task_id
+        };
+        let (survey, poc) = (key("survey"), key("poc"));
+        assert!(
+            store
+                .acquire_lease(survey, "run-survey", std::time::Duration::from_secs(60))
+                .expect("lease")
+        );
+        (survey, poc)
+    }
+
+    fn replan_delta() -> task_core::ProjectPlanDelta {
+        task_core::ProjectPlanDelta {
+            schema: task_core::PROJECT_PLAN_DELTA_SCHEMA.to_string(),
+            base_version: 1,
+            rationale: "見直し".into(),
+            add: Vec::new(),
+            modify: Vec::new(),
+            remove: Vec::new(),
+            cancel: Vec::new(),
+        }
+    }
+
+    /// ADR-0074 D3.4（Phase F4b (e)）: 案件 replan の差分は、dispatch 済みのマイルストーン（survey）を
+    /// `modify` / `remove` できない（`cancel` の明示だけ）。dispatch 前のもの（poc）の変更・`add` は
+    /// 提案になり、承認までは現行の計画のまま動く（poc の Task は変わらない）。同じ承認（`decide`）を
+    /// 通って適用され、提案の後に対象が dispatch されていれば承認は `ProjectPlanStale` で何も書かない。
+    /// 同じ案件への二重の計画依頼は `ProjectPlanInFlight`。
+    #[test]
+    fn project_replan_delta_cannot_modify_a_started_milestone() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        let (survey, poc) = approved_plan_with_started_survey(&store, &project);
+
+        // 承認済みの計画がある案件への `mode: milestones` は replan の run になる。
+        let replan = start_milestones(&store, &project, Some("PoC を 2 つに"), &[], &[], now())
+            .expect("replan run");
+        assert!(task_core::is_milestones_replan_task(&replan.task));
+        assert!(
+            replan.task.objective.contains("base_version: 1"),
+            "{}",
+            replan.task.objective
+        );
+        assert!(replan.task.objective.contains("survey"));
+        // 二重の依頼は 409 相当。
+        assert!(matches!(
+            start_replan(&store, &project, None, &[], &[], now()),
+            Err(OpsError::ProjectPlanInFlight { .. })
+        ));
+
+        // dispatch 済みの survey の modify / remove は拒まれる。
+        let mut bad = replan_delta();
+        bad.modify.push(task_core::MilestoneModify {
+            key: "survey".into(),
+            title: Some("やり直し".into()),
+            ..task_core::MilestoneModify::default()
+        });
+        let err = validate_delta_against_store(&store, project.id, &bad).expect_err("started");
+        assert!(err.contains("already dispatched"), "{err}");
+        let mut bad = replan_delta();
+        bad.remove.push("survey".into());
+        bad.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            depends_on: Some(Vec::new()),
+            ..task_core::MilestoneModify::default()
+        });
+        assert!(
+            validate_delta_against_store(&store, project.id, &bad)
+                .expect_err("started")
+                .contains("already dispatched")
+        );
+        // cancel を明示すれば通る（poc の依存は modify で外す）。
+        let mut cancel = replan_delta();
+        cancel.cancel.push("survey".into());
+        cancel.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            depends_on: Some(Vec::new()),
+            ..task_core::MilestoneModify::default()
+        });
+        validate_delta_against_store(&store, project.id, &cancel).expect("explicit cancel");
+
+        // dispatch 前の poc の変更と add は提案になる。
+        let mut good = replan_delta();
+        good.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            title: Some("PoC（縮小版）".into()),
+            ..task_core::MilestoneModify::default()
+        });
+        good.add.push(milestone_spec("paper", &["poc"]));
+        let validated = validate_delta_against_store(&store, project.id, &good).expect("valid");
+        let added = propose_delta(&store, &replan.task, &project, &validated, &[], &[], now())
+            .expect("propose_delta");
+        assert_eq!(added.len(), 1);
+        let paper = added[0].task_id;
+        assert_eq!(store.get(paper).unwrap().unwrap().status, Status::Draft);
+        assert_eq!(store.get(paper).unwrap().unwrap().depends_on, vec![poc]);
+        let state = plan_state(&store, project.id).expect("state");
+        assert_eq!(state.current().map(|v| v.version), Some(1), "承認までは v1");
+        assert_eq!(state.pending().map(|v| v.version), Some(2));
+        assert_eq!(state.pending().and_then(|v| v.supersedes), Some(1));
+        // 承認までは現行の計画のまま（poc は変わらない、survey は走り続ける）。
+        assert_eq!(store.get(poc).unwrap().unwrap().title, "title-poc");
+        assert_eq!(store.get(survey).unwrap().unwrap().status, Status::Running);
+        // 未決の提案がある間の二重の依頼も 409 相当。
+        assert!(matches!(
+            start_milestones(&store, &project, None, &[], &[], now()),
+            Err(OpsError::ProjectPlanInFlight { .. })
+        ));
+
+        // 承認で差分が当たる（同じ `decide`）。
+        let decided = decide(
+            &store,
+            &project,
+            2,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("approve v2");
+        assert!(decided.tasks.contains(&poc) && decided.tasks.contains(&paper));
+        let poc_now = store.get(poc).unwrap().unwrap();
+        assert_eq!(poc_now.title, "PoC（縮小版）");
+        assert_eq!(poc_now.status, Status::Ready);
+        assert_eq!(poc_now.depends_on, vec![survey]);
+        assert_eq!(store.get(paper).unwrap().unwrap().status, Status::Ready);
+        assert_eq!(store.get(survey).unwrap().unwrap().status, Status::Running);
+        let state = plan_state(&store, project.id).expect("state");
+        assert_eq!(state.current().map(|v| v.version), Some(2));
+        assert_eq!(
+            state
+                .current()
+                .map(|v| v.plan.milestones.len())
+                .unwrap_or(0),
+            3
+        );
+        let poc_milestone = store
+            .milestone_get(poc_now.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(poc_milestone.title, "PoC（縮小版）");
+
+        // 提案の後に対象が dispatch されたら、承認は古い差分として何も書かない。
+        let replan3 = start_replan(&store, &project, None, &[], &[], now()).expect("replan 3");
+        let mut stale = replan_delta();
+        stale.base_version = 2;
+        stale.modify.push(task_core::MilestoneModify {
+            key: "paper".into(),
+            title: Some("論文 v2".into()),
+            ..task_core::MilestoneModify::default()
+        });
+        let validated = validate_delta_against_store(&store, project.id, &stale).expect("valid");
+        propose_delta(&store, &replan3.task, &project, &validated, &[], &[], now())
+            .expect("propose v3");
+        assert!(
+            store
+                .acquire_lease(paper, "run-paper", std::time::Duration::from_secs(60))
+                .expect("lease")
+        );
+        let err = decide(
+            &store,
+            &project,
+            3,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect_err("stale");
+        assert!(
+            matches!(err, OpsError::ProjectPlanStale { version: 3, .. }),
+            "{err:?}"
+        );
+        assert_eq!(store.get(paper).unwrap().unwrap().title, "title-paper");
+        assert_eq!(
+            plan_state(&store, project.id)
+                .unwrap()
+                .pending()
+                .map(|v| v.version),
+            Some(3),
+            "still undecided"
+        );
+
+        // 却下は `add` の分だけを片付ける（v3 には add が無いので現行は何も変わらない）。
+        decide(
+            &store,
+            &project,
+            3,
+            ProjectPlanDecision::Reject,
+            Some("古い"),
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("reject v3");
+        assert_eq!(store.get(paper).unwrap().unwrap().status, Status::Running);
+        assert_eq!(
+            plan_state(&store, project.id)
+                .unwrap()
+                .current()
+                .map(|v| v.version),
+            Some(2)
+        );
+    }
+
+    /// 走っているマイルストーンの `cancel` は明示すれば承認で `Cancel` が当たり、途中目標は `cancelled`。
+    #[test]
+    fn project_replan_cancel_applies_cancel_to_a_running_milestone_on_approval() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        let (survey, poc) = approved_plan_with_started_survey(&store, &project);
+        let replan = start_replan(&store, &project, None, &[], &[], now()).expect("replan");
+        let mut delta = replan_delta();
+        delta.cancel.push("survey".into());
+        delta.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            depends_on: Some(Vec::new()),
+            ..task_core::MilestoneModify::default()
+        });
+        let validated = validate_delta_against_store(&store, project.id, &delta).expect("valid");
+        propose_delta(&store, &replan.task, &project, &validated, &[], &[], now())
+            .expect("propose");
+        decide(
+            &store,
+            &project,
+            2,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("approve");
+        let survey_now = store.get(survey).unwrap().unwrap();
+        assert_eq!(survey_now.status, Status::Cancelled);
+        let m = store
+            .milestone_get(survey_now.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.status, MilestoneStatus::Cancelled);
+        // poc は依存を外してから survey を取り下げたので、カスケードで巻き込まれない。
+        let poc_now = store.get(poc).unwrap().unwrap();
+        assert_eq!(poc_now.status, Status::Ready);
+        assert!(poc_now.depends_on.is_empty());
     }
 
     /// `reject` は `note` が空だと 422 相当。埋めれば全マイルストーンを `redesigned`、全 Task を

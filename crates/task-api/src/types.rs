@@ -1866,6 +1866,9 @@ pub struct TaskExecutionView {
     /// checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。
     pub runs: Vec<RunSummary>,
     pub metrics: task_core::ExecutionMetrics,
+    /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認で止まっているときだけ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_checkpoint: Option<task_ops::view::PhaseCheckpointView>,
 }
 
 /// `GET /metrics/execution` の 1 グループ（`group_by` の値ごと）。

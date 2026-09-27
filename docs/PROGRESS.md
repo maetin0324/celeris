@@ -20263,3 +20263,41 @@ run 開始部分で、F3 の `quota_begin` を `dispatch_one` に移して解消
   - `cargo test --workspace --no-fail-fast` → exit 0、93 binary、2448 passed、FAILED 0。
   - 環境: 着手時にルートが 100%（空き 0）で `No space left on device`。自分の `agent-platform-f3pause` の target
     だけを消して作り直した（`CARGO_INCREMENTAL=0`・`CARGO_PROFILE_{DEV,TEST}_DEBUG=line-tables-only` で容量を抑える）。
+
+
+### F3(pause) checkpoint — 区切り 3 (c)(d)（完了）
+
+受信箱の `PhaseCheckpoint`、`NotificationKind::PhaseCheckpoint`、`POST /tasks/{id}/execution/phase-gate`
+（continue / replan / withdraw）、`celerisctl execution phase-gate`、CoS のプリアンブルの 1 行。
+判定と操作は新しい `crates/task-ops/src/phase_gate.rs`（`is_awaiting_human`・`latest_phase_checkpoint`・
+`phase_gate`・`phase_replan_instruction`）に集めた（F4a が並行編集中の `inbox.rs` の drafts 側と
+`dispatcher.rs` の案件計画 run には触れていない）。ADR-0074 末尾の逸脱・明確化 5〜11 を追記。
+
+- **条件 (c)**: 受信箱の `attention` に `PhaseCheckpoint`、`questions` には出ない。通知は `PhaseCheckpoint` が
+  1 回だけで `QuestionBlocked` は鳴らない。
+  - `cargo test -p celeris --lib notify::` → 7 passed（`notify::tests::phase_checkpoint_is_not_a_question`: 途中確認の
+    Task は PhaseCheckpoint 1 件・QuestionBlocked 0 件、質問の Task は QuestionBlocked 1 件、2 回目の tick で 0 件）。
+    `cargo test -p celeris --test notify` → 25 passed（既存の通知の振る舞いは不変）。
+  - `cargo test -p task-ops --lib` → 339 passed（`inbox_phase_checkpoint_is_attention_not_a_question`、
+    `phase_gate::tests::*` 6 件を含む）。
+- **条件 (d)**: `continue` / `replan`（note 必須）/ `withdraw` → `PhaseResume{Continue}` / `PhaseResume{Replan}` →
+  planner / `Cancel`。awaiting_human 以外は 409、`Answer` は 409。
+  - `cargo test -p task-dispatch --lib -- phase_gate_ pause_after_design` → 3 passed
+    （`phase_gate_continue_resumes_the_next_phase`: reason `phase_continue`、attempts 不変、build が走って done、
+    途中報告は 1 回、note が `Answered` に残る、replay 差分 0、2 回目は InvalidState。
+    `phase_gate_replan_requires_a_note`: note 無し・空白は Validation で Blocked のまま、`Answer` は InvalidState、
+    note ありで `phase_replan` → 起こした理由「人の指示: build を 2 つに分ける」→ role planner の run が起き、
+    その前に build の WU は走らない）。
+  - `cargo test -p task-api --test execution phase_gate` → 3 passed（401・409〈質問の Task、answer〉・422
+    〈`field = "note"`〉・200 continue・2 回目 409・withdraw → cancelled・受信箱の `phase_checkpoint`・
+    `GET /tasks/{id}/execution` の `phase = awaiting_human` と `phase_checkpoint`）。
+  - `cargo test -p celerisctl --bin celerisctl execution` → 5 passed。CoS のプリアンブル
+    （`crates/task-worker/src/preamble.rs::actions_instructions`）に `pause_after` の 3 行、`cargo test -p task-worker` 全 pass。
+- **ゲート**: `cargo fmt --all -- --check` exit 0。`cargo clippy --workspace --all-targets -- -D warnings` exit 0。
+  `UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` pass（`api-v1.schema.json` に
+  `PhaseGateRequest`・`PhaseCheckpoint`・`phase_gate`・`awaiting_human`・`phase_checkpoint` が加算）。
+  GUI: `gen:types` で `types.ts` を追随し、新しい union 値の表示名（`phase_checkpoint`・`awaiting_human`・
+  `phase_gate`）を足して `typecheck` exit 0（画面は区切り 4）。
+  `cargo test --workspace --no-fail-fast` → 93 binary、2459 passed、3 failed。3 件はいずれも本変更と無関係な
+  高負荷時の flake（`celeris releases::tests::promot*` 2 件は `cargo test -p celeris --lib releases::` 単体で
+  21 passed、`e2e --test provider_admin_scenarios` は単体で 2 回とも 3 passed）。

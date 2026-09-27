@@ -166,6 +166,19 @@ pub enum ExecutionPhase {
     Executing,
     Repairing,
     Verifying,
+    /// ADR-0074 D2.2（Phase F3 途中確認）: 工程の後の途中確認で止まっている（`blocked` で、直前の
+    /// 遷移の reason が `awaiting_human`）。
+    AwaitingHuman,
+}
+
+/// ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と
+/// GUI の 3 つのボタンの材料）。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct PhaseCheckpointView {
+    pub report: task_core::PhaseReport,
+    /// 途中報告の Markdown（`GET /tasks/{id}/artifacts/{idx}`）。書けなかったなら無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_idx: Option<usize>,
 }
 
 /// D19/D20: タスク詳細の Execution 節そのもの。
@@ -180,6 +193,9 @@ pub struct ExecutionView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<ExecutionPlanOverview>,
     pub metrics: task_core::ExecutionMetrics,
+    /// ADR-0074 D2.4（Phase F3 途中確認）: `awaiting_human` のときだけ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_checkpoint: Option<PhaseCheckpointView>,
 }
 
 /// D20: 計画の概要（現在アクティブでない Task でも、生涯で作った WU をまとめて見せる。
@@ -424,6 +440,10 @@ pub enum Action {
     /// （`task_ops::comment::can_rereview` と同じ規則。events を要るので `actions(task)` 単体では
     /// 判定できず、`task_detail` / 受信箱の `build_attention` が events を渡して個別に足す）。
     Rereview,
+    /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認に応える（`POST /tasks/{id}/execution/
+    /// phase-gate` の continue / replan / withdraw）。`blocked(awaiting_human)` のときだけで、その間は
+    /// `Answer` を出さない（events が要るので `actions_with_events` が足す）。
+    PhaseGate,
 }
 
 pub fn task_ref(task: &Task) -> TaskRef {
@@ -473,6 +493,10 @@ pub fn actions_with_events(task: &Task, events: &[(u64, Event)]) -> Vec<Action> 
     let mut out = actions(task);
     if crate::comment::can_rereview(task, events) {
         out.push(Action::Rereview);
+    }
+    if crate::phase_gate::is_awaiting_human(task, events) {
+        out.retain(|a| *a != Action::Answer);
+        out.push(Action::PhaseGate);
     }
     out
 }
@@ -1059,6 +1083,8 @@ fn build_execution_view(
                 | Event::ExecutionPlanned { .. }
                 | Event::CheckpointSaved { .. }
                 | Event::WorkUnitTransitioned { .. }
+                // ADR-0074 D2.3（Phase F3 途中確認）
+                | Event::PhaseReported { .. }
         )
     });
     if !has_activity {
@@ -1195,11 +1221,22 @@ fn build_execution_view(
         }
     };
 
+    let phase_checkpoint =
+        crate::phase_gate::latest_phase_checkpoint(task, events).map(|info| PhaseCheckpointView {
+            report: info.report,
+            report_idx: info.report_idx,
+        });
+    let phase = if phase_checkpoint.is_some() {
+        Some(ExecutionPhase::AwaitingHuman)
+    } else {
+        phase
+    };
     Ok(Some(ExecutionView {
         gate,
         phase,
         plan,
         metrics,
+        phase_checkpoint,
     }))
 }
 

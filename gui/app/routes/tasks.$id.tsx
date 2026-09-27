@@ -193,6 +193,8 @@ const ACTION_LABELS: Record<Action, string> = {
   reopen: "再開",
   // ADR-0070 D2（Phase 116）。failed の失敗バナーに置く。
   rereview: "再レビュー",
+  // celeris ADR-0074 D2.4（Phase F3 途中確認）。実行節の途中報告に 3 つのボタンを置く。
+  phase_gate: "途中確認",
 };
 
 /**

@@ -35,6 +35,10 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             axum::routing::get(get_task_execution),
         )
         .route(
+            "/api/v1/tasks/{id}/execution/phase-gate",
+            axum::routing::post(post_phase_gate),
+        )
+        .route(
             "/api/v1/metrics/execution",
             axum::routing::get(get_execution_metrics),
         )
@@ -152,12 +156,13 @@ async fn get_task_execution(
                 }
                 None => None,
             };
-            let (gate, phase, metrics) = match detail.execution {
-                Some(e) => (e.gate, e.phase, e.metrics),
+            let (gate, phase, metrics, phase_checkpoint) = match detail.execution {
+                Some(e) => (e.gate, e.phase, e.metrics, e.phase_checkpoint),
                 None => (
                     None,
                     None,
                     task_core::summarize_execution_metrics(&task, &[]),
+                    None,
                 ),
             };
             Ok(TaskExecutionView {
@@ -166,10 +171,45 @@ async fn get_task_execution(
                 plan,
                 runs: detail.runs,
                 metrics,
+                phase_checkpoint,
             })
         })
         .await?;
     Ok(json_response(StatusCode::OK, &view))
+}
+
+/// ADR-0074 D2.4（Phase F3 途中確認）: `POST /tasks/{id}/execution/phase-gate`（管理系 = 人だけ）。
+/// 本文 `{"action": "continue" | "replan" | "withdraw", "note": "…"}`。awaiting_human でなければ 409、
+/// `replan` で `note` が空なら 422。応答は `TransitionResult`。
+async fn post_phase_gate(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    headers: HeaderMap,
+    Params(id): Params<String>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let task_id = parse_task_id(&id)?;
+    let req: task_ops::phase_gate::PhaseGateRequest = read_json(body, false).await?;
+    let action = req.action;
+    let result = state
+        .blocking(move |store| {
+            task_ops::phase_gate::phase_gate(store, task_id, req.action, req.note).map_err(|e| {
+                match e {
+                    task_ops::OpsError::Validation(message) => {
+                        ApiProblem::validation(vec![crate::types::ValidationError {
+                            field: Some("note".to_string()),
+                            message,
+                        }])
+                    }
+                    other => ops_problem(store, other, Some("phase_gate")),
+                }
+            })
+        })
+        .await?;
+    tracing::info!(who = "admin", op = "phase_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: phase gate");
+    Ok(json_response(StatusCode::OK, &result))
 }
 
 fn bad_group_by(group_by: &str) -> ApiProblem {

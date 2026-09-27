@@ -6724,6 +6724,18 @@ impl Dispatcher {
         let Some(active_plan) = self.store.execution_plan_active(task_id)? else {
             return Ok(WuDispatchGate::Atomic);
         };
+        // ADR-0074 D2.4（Phase F3 途中確認）: 人が途中確認で「replan」を選んだ（直前の遷移が
+        // `phase_replan`）なら、次の run は replan の planner run（`max_replans` に数える）。
+        // 上限を使い切っていれば人の指示は `answers` に残したまま次の工程へ進める（警告を残す）。
+        if task_ops::phase_gate::last_transition_reason(&self.store.events_for(task_id)?)
+            == Some(task_core::PhaseResumeMode::Replan.name())
+        {
+            let gate = self.replan_gate(task_id)?;
+            if matches!(gate, WuDispatchGate::RunPlanner { .. }) {
+                return Ok(gate);
+            }
+            tracing::warn!(%task_id, "phase replan requested but max_replans is exhausted; continuing with the next phase");
+        }
         // ADR-0074 D1.3（Phase F2b）: v2 の計画は工程ごとの scheduler（`settle_phase` /
         // `runnable_work_units`）で決める。v1 は従来どおり（`next_work_unit`）。
         let v2 = active_plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
@@ -8759,6 +8771,15 @@ impl Dispatcher {
                         .strip_prefix("replan: ")
                         .unwrap_or(outcome)
                         .to_string());
+                }
+                // ADR-0074 D2.4（Phase F3 途中確認）: 途中確認で人が選んだ replan。「人の指示: <note>」。
+                Event::Transitioned { reason, .. }
+                    if reason == task_core::PhaseResumeMode::Replan.name() =>
+                {
+                    return Ok(task_ops::phase_gate::phase_replan_instruction(&events)
+                        .unwrap_or_else(|| {
+                            "a human requested a replan at a phase checkpoint".to_string()
+                        }));
                 }
                 Event::Transitioned { reason, .. } if reason == "review_fail" => {
                     let reasons: Vec<String> = events
@@ -27687,6 +27708,183 @@ mod tests {
         let units = store.work_units_for(task.id).unwrap();
         let b = units.iter().find(|u| u.key == "b").unwrap();
         assert_eq!(b.runs, 0);
+    }
+
+    /// `pause_after = after(design)` の 2 工程（design: a、build: b）の Task を、design の後の
+    /// 途中確認（`awaiting_human`）まで進める。
+    async fn paused_after_design() -> (
+        Arc<dyn TaskStore>,
+        Dispatcher,
+        Arc<ParallelWuAdapter>,
+        Task,
+        tempfile::TempDir,
+        tempfile::TempDir,
+    ) {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
+        task.routing = Some(task_core::TaskRouting {
+            pause_after: task_core::PausePolicy::After {
+                phases: vec!["design".to_string()],
+            },
+            ..Default::default()
+        });
+        store.insert(&task).unwrap();
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["design", "build"],
+            vec![v2_wu("a", "design", &[]), v2_wu("b", "build", &["a"])],
+        );
+        let adapter = Arc::new(
+            ParallelWuAdapter::new(Duration::from_millis(20))
+                .with_file("a", "a.txt", "a")
+                .with_file("b", "b.txt", "b"),
+        );
+        let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+        let report = run_until_idle(&mut d, 600).await;
+        assert!(report.idle, "{report:?}");
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
+        (store, d, adapter, task, repo, root)
+    }
+
+    /// ADR-0074 §6 F3 (d)（途中確認）: `continue` は `PhaseResume{Continue}`（reason `phase_continue`、
+    /// attempts 不変）で次の工程へ進み、Task は最後に done になる。`note` は `Answered` として次の
+    /// run の `answers` に渡る。途中報告は 1 回だけ。awaiting_human でなくなった後の 2 回目は 409 相当。
+    #[tokio::test]
+    async fn phase_gate_continue_resumes_the_next_phase() {
+        let (store, mut d, adapter, task, _repo, _root) = paused_after_design().await;
+        let r = task_ops::phase_gate::phase_gate(
+            store.as_ref(),
+            task.id,
+            task_ops::phase_gate::PhaseGateAction::Continue,
+            Some("build は小さく".to_string()),
+        )
+        .unwrap();
+        assert_eq!(r.from, Status::Blocked);
+        assert_eq!(r.to, Status::Ready);
+        assert_eq!(r.reason, "phase_continue");
+        let report = run_until_idle(&mut d, 600).await;
+        assert!(report.idle, "{report:?}");
+        let stored = store.get(task.id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{stored:?}");
+        assert_eq!(stored.attempts, task.attempts, "attempts 不変");
+        assert_eq!(adapter.keys_seen(), vec!["a", "b"]);
+        let events = events_of(&store, task.id);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseReported { .. }))
+                .count(),
+            1,
+            "最後の工程（build）の後では止まらない"
+        );
+        assert!(events.iter().any(|e| matches!(e,
+            Event::Answered { question, answer }
+                if question == "途中確認: 工程『design』の後" && answer == "build は小さく")));
+        let reasons: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Transitioned { reason, .. } => Some(reason.as_str()),
+                _ => None,
+            })
+            .collect();
+        let gate = reasons.iter().position(|r| *r == "awaiting_human").unwrap();
+        assert_eq!(reasons[gate + 1], "phase_continue", "{reasons:?}");
+        assert!(reasons.contains(&"worker_done"), "{reasons:?}");
+        let replayed = task_ops::replay::replay(store.as_ref()).unwrap();
+        assert!(replayed.mismatches.is_empty(), "{:?}", replayed.mismatches);
+        // もう awaiting_human ではない。
+        let err = task_ops::phase_gate::phase_gate(
+            store.as_ref(),
+            task.id,
+            task_ops::phase_gate::PhaseGateAction::Continue,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, task_ops::OpsError::InvalidState { .. }),
+            "{err:?}"
+        );
+    }
+
+    /// ADR-0074 §6 F3 (d)（途中確認）: `replan` は `note` 必須（空なら検証エラーで状態は変わらない）。
+    /// `note` があれば `PhaseResume{Replan}`（reason `phase_replan`）の後、次の run は replan の
+    /// planner run で、起こした理由は「人の指示: <note>」。`Answer` は awaiting_human には効かない。
+    #[tokio::test]
+    async fn phase_gate_replan_requires_a_note() {
+        let (store, mut d, _adapter, task, _repo, _root) = paused_after_design().await;
+        d.config.execution.planner.adapter = "instant".to_string();
+        for note in [None, Some(String::new()), Some("  ".to_string())] {
+            let err = task_ops::phase_gate::phase_gate(
+                store.as_ref(),
+                task.id,
+                task_ops::phase_gate::PhaseGateAction::Replan,
+                note,
+            )
+            .unwrap_err();
+            assert!(matches!(err, task_ops::OpsError::Validation(_)), "{err:?}");
+        }
+        let err =
+            task_ops::gate::answer(store.as_ref(), task.id, "go".to_string(), None).unwrap_err();
+        assert!(
+            matches!(err, task_ops::OpsError::InvalidState { .. }),
+            "{err:?}"
+        );
+        assert_eq!(
+            store.get(task.id).unwrap().unwrap().status,
+            Status::Blocked,
+            "状態は変わらない"
+        );
+
+        let r = task_ops::phase_gate::phase_gate(
+            store.as_ref(),
+            task.id,
+            task_ops::phase_gate::PhaseGateAction::Replan,
+            Some("build を 2 つに分ける".to_string()),
+        )
+        .unwrap();
+        assert_eq!(r.to, Status::Ready);
+        assert_eq!(r.reason, "phase_replan");
+        assert_eq!(
+            d.replan_trigger_reason(task.id).unwrap(),
+            "人の指示: build を 2 つに分ける"
+        );
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 400, || events_of(&s, id).iter().any(|e| matches!(
+                e,
+                Event::WorkerStarted {
+                    role: Some(task_core::RunRole::Planner),
+                    ..
+                }
+            )))
+            .await,
+            "replan の planner run が起きる"
+        );
+        let events = events_of(&store, task.id);
+        let started_planner = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    Event::WorkerStarted {
+                        role: Some(task_core::RunRole::Planner),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        // planner の前に build の WU は走らない。
+        assert!(
+            !events[..started_planner].iter().any(|e| matches!(e,
+                Event::WorkUnitTransitioned { key, to: task_core::WorkUnitStatus::Running, .. }
+                    if key == "b")),
+            "build の WU は replan の前に走らない"
+        );
     }
 
     /// ADR-0074 §6 F2 (e): 衝突する 2 つの WU で `merge-<phase>-<key>` の repair WU ができ、done の後に

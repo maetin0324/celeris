@@ -231,7 +231,17 @@ pub fn answer(
         });
     }
 
-    let question = latest_question(&store.events_for(id)?);
+    let events = store.events_for(id)?;
+    // ADR-0074 D2.2（Phase F3 途中確認）: 工程の後の途中確認（`awaiting_human`）は質問ではない。
+    // 「続ける」と「質問への回答」を混ぜない（`POST /tasks/{id}/execution/phase-gate` を使う）。
+    if crate::phase_gate::is_awaiting_human(&task, &events) {
+        return Err(OpsError::InvalidState {
+            id,
+            context: format!("status={:?}, reason=awaiting_human", task.status),
+            action: "answered; a phase checkpoint is resumed via execution/phase-gate".to_string(),
+        });
+    }
+    let question = latest_question(&events);
     let from = task.status;
     let since_id = store.latest_event_id()?;
     let outcome = store.apply_transition(

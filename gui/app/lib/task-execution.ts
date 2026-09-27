@@ -27,6 +27,8 @@ export const EXECUTION_PHASE_LABEL: Record<ExecutionPhase, string> = {
   executing: "実行中",
   repairing: "修復中",
   verifying: "検証中",
+  // celeris ADR-0074 D2.2（Phase F3 途中確認）。
+  awaiting_human: "確認待ち",
 };
 
 export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
@@ -34,6 +36,7 @@ export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
   executing: "primary",
   repairing: "warning",
   verifying: "teal",
+  awaiting_human: "warning",
 };
 
 export const WORK_UNIT_STATUS_TONE: Record<WorkUnitStatus, Tone> = {

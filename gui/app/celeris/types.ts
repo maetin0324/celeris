@@ -32,7 +32,8 @@ export type TaskId = string;
  * 永続の規則の識別子（ULID）。
  */
 export type StandingRuleId = string;
-export type Action = ("approve" | "reject" | "answer" | "cancel") | "retry" | "edit" | "reopen" | "rereview";
+export type Action =
+  ("approve" | "reject" | "answer" | "cancel") | "retry" | "edit" | "reopen" | "rereview" | "phase_gate";
 /**
  * DESIGN §4.1 の `TaskKind`。
  */
@@ -729,6 +730,20 @@ export type AttentionItem =
       host: string;
       tasks: number;
       type: "cluster_unavailable";
+    }
+  | {
+      at: string;
+      next_phase?: string | null;
+      phase: string;
+      phase_title: string;
+      /**
+       * 済んだ工程の数（止まった工程を含む）。
+       */
+      phases_done: number;
+      phases_total: number;
+      report_idx?: number | null;
+      task: TaskRef;
+      type: "phase_checkpoint";
     };
 /**
  * ADR-0047 D1 / D4。
@@ -817,7 +832,8 @@ export type NotificationKind =
   | "secretary_reply"
   | "task_ready"
   | "cluster_login_needed"
-  | "task_failed";
+  | "task_failed"
+  | "phase_checkpoint";
 /**
  * 組織のノードの種類（ADR-0033 D1）。`secretary` は根で 1 つだけ。
  */
@@ -830,6 +846,10 @@ export type MountKind = "kb" | "repo" | "dir" | "memory";
  * ADR-0046 D1: `run`（どこで動かすか）。子が勝つ。
  */
 export type ProfileRun = "host" | "container";
+/**
+ * D2.4: `POST /tasks/{id}/execution/phase-gate` の `action`。
+ */
+export type PhaseGateAction = "continue" | "replan" | "withdraw";
 /**
  * 案件の状態（ADR-0033 D2、ADR-0044 D6）。
  */
@@ -860,7 +880,7 @@ export type RepoRun = "auto" | "host" | "container";
  * （`kind = repair`）か `executing`、無ければ（計画はあるのに走っている WU が無い）planner run が
  * 動いていると見なして `planning`。それ以外（計画が無い・終端）は `None`。
  */
-export type ExecutionPhase = "planning" | "executing" | "repairing" | "verifying";
+export type ExecutionPhase = ("planning" | "executing" | "repairing" | "verifying") | "awaiting_human";
 /**
  * ADR-0070 D1（Phase 116）: `failed` の分類。`infra` はレース・切替・供給側都合、`work` はレビュー
  * 不合格やワーカー自身の明示的な失敗（人が中身を見て判断すべきもの）。
@@ -1015,6 +1035,7 @@ export interface ApiV1Schema {
   org_list: OrgList;
   org_patch: OrgPatchBody;
   org_skill_mount: OrgSkillMountBody;
+  phase_gate: PhaseGateRequest;
   problem: Problem;
   project_create: ProjectCreateBody;
   project_detail: ProjectDetail;
@@ -4775,6 +4796,17 @@ export interface OrgSkillMountBody {
   skill: string;
 }
 /**
+ * ADR-0074 D2.4（Phase F3 途中確認）: `POST /tasks/{id}/execution/phase-gate` の本文（応答は
+ * `transition_result`）。
+ */
+export interface PhaseGateRequest {
+  action: PhaseGateAction;
+  /**
+   * `continue` では任意（次の工程の WU の run に「人の指示」として渡す）。`replan` では必須。
+   */
+  note?: string | null;
+}
+/**
  * RFC 9457 の problem details（`application/problem+json`）。`extra` は `code` ごとの付加フィールド。
  */
 export interface Problem {
@@ -5889,6 +5921,10 @@ export interface ExecutionView {
   metrics: ExecutionMetrics;
   phase?: ExecutionPhase | null;
   /**
+   * ADR-0074 D2.4（Phase F3 途中確認）: `awaiting_human` のときだけ。
+   */
+  phase_checkpoint?: PhaseCheckpointView | null;
+  /**
    * 計画が無い Task（D20:「直接実行」の 1 行）は `None`。
    */
   plan?: ExecutionPlanOverview | null;
@@ -5995,6 +6031,17 @@ export interface ExecutionMetrics {
    * 生涯で作られた WorkUnit の数（repair を含む。superseded/cancelled も数える）。
    */
   work_units_total: number;
+}
+/**
+ * ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と
+ * GUI の 3 つのボタンの材料）。
+ */
+export interface PhaseCheckpointView {
+  report: PhaseReport;
+  /**
+   * 途中報告の Markdown（`GET /tasks/{id}/artifacts/{idx}`）。書けなかったなら無い。
+   */
+  report_idx?: number | null;
 }
 /**
  * D20: 計画の概要（現在アクティブでない Task でも、生涯で作った WU をまとめて見せる。
@@ -6245,6 +6292,10 @@ export interface TaskExecutionView {
   gate?: ExecutionGateDecision | null;
   metrics: ExecutionMetrics;
   phase?: ExecutionPhase | null;
+  /**
+   * ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認で止まっているときだけ。
+   */
+  phase_checkpoint?: PhaseCheckpointView | null;
   /**
    * 計画の無い Task（暗黙の WorkUnit）は `None`。
    */

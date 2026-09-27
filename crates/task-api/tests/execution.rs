@@ -488,3 +488,151 @@ async fn execution_metrics_since_filters_out_tasks_updated_before_it() {
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert_eq!(resp.json()["total_tasks"], 0);
 }
+
+// ---- ADR-0074 D2.4（Phase F3 途中確認）: `POST /tasks/{id}/execution/phase-gate` ----
+
+/// 工程 `design` の後で止まった（`blocked(awaiting_human)`）Task を作る。
+fn paused_task(env: &TestEnv) -> task_core::Task {
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    env.store
+        .apply_transition(task.id, task_core::Trigger::Dispatch, None)
+        .expect("dispatch");
+    env.store
+        .apply_transition_with_events(
+            task.id,
+            task_core::Trigger::PhaseGate {
+                phase: "design".into(),
+            },
+            vec![Event::PhaseReported {
+                phase: "design".into(),
+                report: Box::new(task_core::PhaseReport {
+                    phase: "design".into(),
+                    phase_title: "設計".into(),
+                    next_phase: Some("build".into()),
+                    ..Default::default()
+                }),
+            }],
+        )
+        .expect("phase gate");
+    task
+}
+
+#[tokio::test]
+async fn phase_gate_requires_a_token_and_awaiting_human() {
+    let env = env();
+    let app = env.router();
+    let task = paused_task(&env);
+    let path = format!("/api/v1/tasks/{}/execution/phase-gate", task.id);
+
+    let resp = send(
+        &app,
+        post_json_with(&path, &json!({"action": "continue"}), &[]),
+    )
+    .await;
+    assert_eq!(resp.status, 401, "{}", resp.text());
+
+    // 質問で止まった Task は途中確認ではない → 409。
+    let asked = new_task(TaskKind::Execute, Status::Blocked);
+    env.seed(&asked);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/phase-gate", asked.id),
+            &json!({"action": "continue"}),
+        ),
+    )
+    .await;
+    assert_problem(&resp, 409, "invalid_transition");
+
+    // `Answer` は awaiting_human の Task には 409。
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/answer", task.id),
+            &json!({"answer": "go"}),
+        ),
+    )
+    .await;
+    assert_problem(&resp, 409, "invalid_transition");
+
+    // 知らない action は 400/422（本文の検証）。
+    let resp = send(&app, post_admin(&path, &json!({"action": "skip"}))).await;
+    assert!(
+        resp.status == 400 || resp.status == 422,
+        "{} {}",
+        resp.status,
+        resp.text()
+    );
+    assert_eq!(env.status_of(task.id), Status::Blocked);
+}
+
+#[tokio::test]
+async fn phase_gate_replan_without_a_note_is_422_and_continue_resumes() {
+    let env = env();
+    let app = env.router();
+    let task = paused_task(&env);
+    let path = format!("/api/v1/tasks/{}/execution/phase-gate", task.id);
+
+    let resp = send(
+        &app,
+        post_admin(&path, &json!({"action": "replan", "note": "  "})),
+    )
+    .await;
+    let problem = assert_problem(&resp, 422, "validation");
+    assert_eq!(problem["errors"][0]["field"], "note", "{problem}");
+    assert_eq!(env.status_of(task.id), Status::Blocked);
+
+    // 受信箱: questions ではなく attention の phase_checkpoint。
+    let inbox = send(&app, g("/api/v1/inbox")).await;
+    assert_eq!(inbox.status, 200, "{}", inbox.text());
+    let inbox = inbox.json();
+    assert_eq!(inbox["questions"].as_array().map(Vec::len), Some(0));
+    let item = inbox["attention"]
+        .as_array()
+        .and_then(|a| a.iter().find(|i| i["type"] == "phase_checkpoint"))
+        .cloned()
+        .expect("phase_checkpoint in attention");
+    assert_eq!(item["phase"], "design");
+    assert_eq!(item["next_phase"], "build");
+
+    // Execution 節: phase = awaiting_human、途中報告つき。
+    let exec = send(&app, g(&format!("/api/v1/tasks/{}/execution", task.id))).await;
+    assert_eq!(exec.status, 200, "{}", exec.text());
+    let exec = exec.json();
+    assert_eq!(exec["phase"], "awaiting_human", "{exec}");
+    assert_eq!(exec["phase_checkpoint"]["report"]["phase_title"], "設計");
+
+    let resp = send(
+        &app,
+        post_admin(&path, &json!({"action": "continue", "note": "ok"})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["to"], "ready");
+    assert_eq!(body["reason"], "phase_continue");
+    assert_eq!(env.status_of(task.id), Status::Ready);
+
+    // もう awaiting_human ではない → 409。
+    let resp = send(&app, post_admin(&path, &json!({"action": "withdraw"}))).await;
+    assert_problem(&resp, 409, "invalid_transition");
+}
+
+#[tokio::test]
+async fn phase_gate_withdraw_cancels_the_task() {
+    let env = env();
+    let app = env.router();
+    let task = paused_task(&env);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/phase-gate", task.id),
+            &json!({"action": "withdraw"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["to"], "cancelled");
+    assert_eq!(env.status_of(task.id), Status::Cancelled);
+}

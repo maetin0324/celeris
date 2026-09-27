@@ -20,6 +20,8 @@ export const NOTIFY_KIND_LABEL: Record<NotificationKind, string> = {
   task_ready: "仕事の成果が届いた",
   cluster_login_needed: "クラスタのログインが必要（TOTP）",
   task_failed: "タスクが失敗した",
+  // celeris ADR-0074 D2.4（Phase F3 途中確認）。
+  phase_checkpoint: "工程の後で確認を待っている",
 };
 
 export function notifyKindLabel(kind: NotificationKind): string {

@@ -131,6 +131,22 @@ pub enum AttentionItem {
         at: String,
         tasks: u32,
     },
+    /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task（`blocked(awaiting_human)`）。
+    /// 質問ではない（`questions` には出さない）。`report_idx` は途中報告の Markdown
+    /// （`GET /tasks/{id}/artifacts/{idx}`）。
+    PhaseCheckpoint {
+        task: TaskRef,
+        phase: String,
+        phase_title: String,
+        /// 済んだ工程の数（止まった工程を含む）。
+        phases_done: u32,
+        phases_total: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report_idx: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_phase: Option<String>,
+        at: String,
+    },
 }
 
 fn attention_at(item: &AttentionItem) -> &str {
@@ -139,6 +155,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::RequeueLimitNear { at, .. } => at,
         AttentionItem::Unroutable { at, .. } => at,
         AttentionItem::ClusterUnavailable { at, .. } => at,
+        AttentionItem::PhaseCheckpoint { at, .. } => at,
     }
 }
 
@@ -299,6 +316,10 @@ fn build_questions(
     for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
         let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
         let events = view::seq_pairs(&rows);
+        // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認は質問ではない（attention に出す）。
+        if crate::phase_gate::is_awaiting_human(t, &events) {
+            continue;
+        }
         let question = derive::latest_question(&events);
 
         let mut asked_at: Option<String> = None;
@@ -468,6 +489,36 @@ fn build_attention(
             at: view::to_rfc3339(t.updated_at),
             class,
             delivered_release,
+        });
+    }
+
+    // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task。期限は設けない（人の判断を待つ）。
+    for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
+        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
+        let events = view::seq_pairs(&rows);
+        let Some(info) = crate::phase_gate::latest_phase_checkpoint(t, &events) else {
+            continue;
+        };
+        let at = rows
+            .iter()
+            .find(|r| r.seq == info.transition_seq)
+            .map(|r| r.ts.clone())
+            .unwrap_or_else(|| view::to_rfc3339(t.updated_at));
+        let phases_total = store
+            .execution_plan_active(t.id)?
+            .map(|p| p.spec.phases.len() as u32)
+            .unwrap_or(0);
+        let mut task_ref = view::task_ref(t);
+        task_ref.actions = view::actions_with_events(t, &events);
+        items.push(AttentionItem::PhaseCheckpoint {
+            task: task_ref,
+            phase: info.report.phase.clone(),
+            phase_title: info.report.phase_title.clone(),
+            phases_done: info.report.phases_done.len() as u32 + 1,
+            phases_total,
+            report_idx: info.report_idx,
+            next_phase: info.report.next_phase.clone(),
+            at,
         });
     }
 
@@ -961,6 +1012,81 @@ mod tests {
         assert_eq!(result.drafts[1].drafts.len(), 1);
         assert_eq!(result.drafts[1].drafts[0].id, root_draft.id);
         assert_eq!(result.counts.drafts, 2);
+    }
+
+    /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task は `attention` の `PhaseCheckpoint`
+    /// に出て、`questions` には出ない。操作は `phase_gate`（`answer` は出さない）。
+    #[test]
+    fn inbox_phase_checkpoint_is_attention_not_a_question() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let task = sample_task(TaskKind::Execute, Status::Ready);
+        store.insert(&task).expect("insert");
+        store
+            .apply_transition(task.id, task_core::Trigger::Dispatch, None)
+            .expect("dispatch");
+        store
+            .apply_transition_with_events(
+                task.id,
+                task_core::Trigger::PhaseGate {
+                    phase: "design".into(),
+                },
+                vec![
+                    Event::ArtifactProduced {
+                        run_id: "daemon:phase-gate:design".into(),
+                        artifact: ArtifactRef {
+                            name: "1-design.md".into(),
+                            path: "artifacts/phase-reports/1-design.md".into(),
+                            sha256: "abc".into(),
+                            kind: "md".into(),
+                            declared: true,
+                        },
+                    },
+                    Event::PhaseReported {
+                        phase: "design".into(),
+                        report: Box::new(task_core::PhaseReport {
+                            phase: "design".into(),
+                            phase_title: "設計".into(),
+                            next_phase: Some("build".into()),
+                            ..Default::default()
+                        }),
+                    },
+                ],
+            )
+            .expect("phase gate");
+
+        let result = inbox(
+            &store,
+            None,
+            &view_ctx(),
+            OffsetDateTime::now_utc(),
+            &no_evidence,
+        )
+        .expect("inbox");
+        assert!(result.questions.is_empty(), "{:?}", result.questions);
+        let item = result
+            .attention
+            .iter()
+            .find_map(|a| match a {
+                AttentionItem::PhaseCheckpoint {
+                    task: t,
+                    phase,
+                    phase_title,
+                    phases_done,
+                    report_idx,
+                    next_phase,
+                    ..
+                } => Some((t, phase, phase_title, *phases_done, *report_idx, next_phase)),
+                _ => None,
+            })
+            .expect("phase checkpoint item");
+        assert_eq!(item.0.id, task.id);
+        assert_eq!(item.1, "design");
+        assert_eq!(item.2, "設計");
+        assert_eq!(item.3, 1);
+        assert_eq!(item.4, Some(0));
+        assert_eq!(item.5.as_deref(), Some("build"));
+        assert!(item.0.actions.contains(&view::Action::PhaseGate));
+        assert!(!item.0.actions.contains(&view::Action::Answer));
     }
 
     #[test]

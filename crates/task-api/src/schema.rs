@@ -198,6 +198,9 @@ pub struct ApiV1Schema {
     pub execution_plan_create: task_core::ExecutionPlanSpec,
     /// ADR-0072 D19（Phase E5）: `GET /tasks/{id}/execution` と `GET /metrics/execution`。
     pub task_execution: crate::types::TaskExecutionView,
+    /// ADR-0074 D2.4（Phase F3 途中確認）: `POST /tasks/{id}/execution/phase-gate` の本文（応答は
+    /// `transition_result`）。
+    pub phase_gate: task_ops::phase_gate::PhaseGateRequest,
     pub execution_metrics: crate::types::ExecutionMetricsSummary,
 }
 

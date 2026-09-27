@@ -1098,3 +1098,24 @@ E6 の fixture `crates/task-worker/tests/fixtures/codex-stream.jsonl` は従来 
    決定的な切り詰め〈落とす順: diff_stat → integration → phases_done → work_units → next_phase_work_units →
    artifact_paths〉と Markdown の描画を単純にするため）。壁時計は WU 行の `created_at`〜`updated_at` から求める。
    `Trigger` は `PhaseGate { phase: String }` を持つため `Copy` を外した（呼び出し側 3 箇所に `.clone()`）。
+5. **`continue` / `replan` の `note` の運び方**（区切り 3）: 新しい event は足さず、既存の `Event::Answered{question:
+   "途中確認: 工程『<phase>』の後", answer: note}` を `PhaseResume` と同じトランザクションで残す（`answers` の節として
+   次のすべての run のプロンプトに出る。D2.4「`answers` の節と同じ形」）。replan の planner run の起こした理由は、
+   直前の遷移が `phase_replan` のとき `人の指示: <note>`（`replan_trigger_reason`）。
+6. **replan の起こし方**: `wu_dispatch_gate` の先頭で、直前の遷移が `phase_replan` なら `replan_gate`（`max_replans`
+   に数える）を返す。**上限を使い切っていれば**人の指示は `answers` に残したまま次の工程へ進める（`tracing::warn`）。
+   Blocked に戻す専用の遷移を増やさないための割り切りで、未解決に記録する。
+7. **`withdraw` の reason**: D2.4 は `Transitioned.reason = "withdrawn"` と書くが、既存の `Trigger::Cancel`
+   （reason `cancel`）をそのまま使う（取り消しの伝播・後片付け・replay の規則を増やさない）。
+8. **409 / 422 の順**: awaiting_human でなければ（`replan` で `note` が空でも）先に 409。awaiting_human で `replan` の
+   `note` が空なら 422（`errors[0].field = "note"`）。`Trigger::Answer`（`POST /tasks/{id}/answer` と
+   `approvals` の決定経由）は awaiting_human の Task に 409。
+9. **受信箱・操作の表示**: `AttentionItem::PhaseCheckpoint.phases_done` は止まった工程を含む数、`report_idx` は
+   `ArtifactProduced`（run_id `daemon:phase-gate:<phase>`）の出現順の添字。`TaskRef.actions` は awaiting_human の間
+   `answer` を外し、新しい `Action::PhaseGate`（`phase_gate`）を出す。`ExecutionView`/`TaskExecutionView` に
+   `phase_checkpoint`（途中報告と `report_idx`）、`ExecutionPhase::AwaitingHuman` を足した（すべて追加のみ）。
+10. **通知**: `scan_phase_checkpoint` は `scan_question_blocked` と同じく状態で判定する（`started_at` の下限を使わない）。
+    本文は「『<Task>』が工程『<phase_title>』まで進みました。続ける / replan / 取り下げ」と改行つきのリンク。
+    `key` = `task_id:<awaiting_human の遷移の seq>`。
+11. **`celerisctl execution phase-gate <task> continue|replan|withdraw [--note]`** を足した（API と同じ
+    `task_ops::phase_gate::phase_gate`）。

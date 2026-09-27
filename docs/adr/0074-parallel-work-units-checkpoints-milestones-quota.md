@@ -3,8 +3,8 @@
 - 日付: 2026-09-26
 - 状態: **Accepted**（Phase F0 = 設計。Phase F1（WU ごとの lane、planner の lane とサイズ、replan の差分、
   repair の分類、成果物の登録）着手・完了、2026-09-26。Phase F3 の quota 側（(g)〜(k)）着手・完了、
-  2026-09-26。Phase F2（WU の並列。(a)(b) と (c)〜(l)）着手・完了、2026-09-26（F2b）。F3 の途中確認・
-  F4 以降は未着手）
+  2026-09-26。Phase F2（WU の並列。(a)(b) と (c)〜(l)）着手・完了、2026-09-26（F2b）。F3 の途中確認（(a)〜(f)）
+  着手・完了、2026-09-27。F4 以降は未着手）
 - 関連:
   - ADR-0072（Task / ExecutionPlan / WorkUnit / Run。本 ADR はその D6 の直列規則・D13・D14・D16・D17・D18・D19・D21・D22 と §7 U3 / U4 を改める）
   - `docs/execution-decomposition-report-2026-09-25.md`（E6 dogfood の分析。以下「E6 報告」）

@@ -20327,3 +20327,44 @@ GUI: タスク詳細の Execution 節に途中報告と 3 つのボタン、受�
   - `test` → 72 files / 1106 passed（新規: `task-execution.test.ts` の途中確認 4 件、
     `tasks.manage.action.test.ts` の `phaseGateTask` 3 件）。
   - `build` exit 0。`mobile-audit` → `routes=27 schemes=2 violations=0`。
+
+## Phase F3（途中確認）完了（2026-09-27、branch `worktree-agent-a7a9562a0907d0beb`）
+
+ADR-0074 D2 / §6 F3 (a)〜(f) を区切り 0〜4 で実装した（各区切りの詳細は上の「F3(pause) checkpoint」節）。
+commit: 22be6d8（区切り 0）、7b926b8（区切り 1 (a)(e)）、8b39f8b（区切り 2 (b)）、0ee84c1（区切り 3 (c)(d)）、
+7845d1a（区切り 4 (f)）、本節の commit（区切り 5 = 全体ゲート）。main への merge / push はしていない。
+
+- **受け入れ条件と証拠**:
+  - (a) `PausePolicy` を人（`NewTaskSpec`/`PATCH`）と CoS（`create_task.pause_after`、プリアンブルに 3 行）が書け、
+    採用（新規・replan）で `PausePointsResolved`。planner の出力には欄が無い → 区切り 1 の 7 テスト。
+  - (b) 停止点の工程の統合の後で `PhaseGate`（Blocked・`awaiting_human`・attempts 不変）、`PhaseReported`、
+    `phase-reports/<n>-<phase>.md` → `dispatcher::tests::pause_after_design_blocks_with_awaiting_human`。
+  - (c) 受信箱 `PhaseCheckpoint`（questions に出ない）、`NotificationKind::PhaseCheckpoint` が 1 回だけ・
+    `QuestionBlocked` は鳴らない → `notify::tests::phase_checkpoint_is_not_a_question`、
+    `inbox::tests::inbox_phase_checkpoint_is_attention_not_a_question`。
+  - (d) continue / replan（note 必須）/ withdraw → `PhaseResume{Continue}` / `PhaseResume{Replan}` → planner /
+    `Cancel`、awaiting_human 以外は 409、`Answer` は 409 →
+    `dispatcher::tests::phase_gate_continue_resumes_the_next_phase`、`phase_gate_replan_requires_a_note`、
+    `task-api --test execution phase_gate_*` 3 件、`task_ops::phase_gate::tests` 6 件、`celerisctl execution phase-gate`。
+  - (e) v1 / atomic で無害 → `adopt_plan_resolves_no_pause_points_for_v1_plans`。
+  - (f) GUI の途中報告と 3 つのボタン、受信箱の項目 → 区切り 4。
+- **全体ゲート（区切り 5、最終 commit の直前の作業ツリー）**:
+  - `cargo fmt --all -- --check` → exit 0。
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+  - `cargo test --workspace --no-fail-fast` → exit 0、93 binary、2462 passed、FAILED 0。
+  - `UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → pass、再生成後 `git status` 差分 0。
+  - `cd gui && corepack pnpm@11.27.0 gen:types`（`types.ts` 差分ゼロ）`&& typecheck && lint && test && build &&
+    mobile-audit` → すべて exit 0、test 72 files / 1106 passed、`routes=27 schemes=2 violations=0`。
+- **未解決事項**:
+  1. 途中確認で `replan` を選んだが `max_replans` を使い切っている場合、人の指示は `answers` に残したまま次の工程へ
+     進む（`tracing::warn` のみ。ADR-0074 逸脱・明確化 6）。人に見える形（質問に落とす等）にするかは未決。
+  2. `PUT /tasks/{id}/execution/pause-after`（計画採用後に pause_after だけ直す専用エンドポイント）は未実装
+     （`PATCH /tasks/{id}` の `pause_after` で代用可能。ただし既に解決済みの `PausePointsResolved` は次の replan まで
+     変わらない）。
+  3. withdraw の reason は既存の `cancel`（ADR D2.4 の `withdrawn` とは異なる。逸脱・明確化 7）。
+  4. 全体テストで高負荷時の flake を 3 件観測（`celeris releases::tests::promot*`、`e2e provider_admin_scenarios`）。
+     いずれも単体再実行で pass、本変更とは無関係。
+  5. 実機（本番 daemon）での途中確認の往復は未確認（F5 の dogfood で `pause_after = each_phase` の Task を 1 件流して
+     確かめる）。
+- **提案**: F5-2 の dogfood で、`execution: compound` + `pause_after: {"mode":"after","phases":["design"]}` の Task を
+  GUI から作り、Discord 通知 1 通 → タスク詳細で途中報告を読む → 「続ける」の往復を 1 回確認する。

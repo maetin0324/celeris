@@ -1568,3 +1568,7 @@ E6 の受け入れ条件（§6 E6）どおり、dogfood タスク 01M3C33KW8YH33
 - **未解決のまま残ったもの**: ADR §7 の U1・U2・U3・U4・U5・U7・U8・U9 は、dogfood で
   `budget_exhausted`/`peak_context_tokens`/WU 並列/部署またぎ等の状況自体が発生しなかったため、
   検証の機会が無いまま持ち越し。詳細は報告書 §6。
+
+## Phase F3（途中確認）実装時の逸脱・明確化（2026-09-26）
+
+- **D13 の `shadow` の採用対象を人の明示だけに広げた**: F5-1 dogfood（`docs/PROGRESS.md`）で見つかった不具合の修正。`[execution] gate = "shadow"` でも、`ExecutionGateDecision.source = Human`（`rule_id = human/explicit`）の compound だけは採用して planner run に進む（`crates/task-dispatch/src/dispatcher.rs::dispatch_one` の `is_planner_dispatch` 判定）。CoS のヒント（`source = Hint`）と規則表（`source = Policy`）の判定は shadow では従来どおり記録のみで、実行は変えない。詳細は ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」参照。

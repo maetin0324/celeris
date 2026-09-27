@@ -167,6 +167,7 @@ pub fn start(
         status: None,
         features: None,
         execution: None,
+        pause_after: None,
         provenance: add::SpecProvenance::system(),
     };
     let task = add::create_support_task(store, spec, roles, genres, now)?;
@@ -282,6 +283,8 @@ pub fn start_milestones(
         None => (None, None, None),
     };
     let spec = NewTaskSpec {
+        // 案件計画 run（Plan タスク）には途中確認を付けない。
+        pause_after: None,
         repos: Vec::new(),
         title,
         objective: goal,
@@ -411,6 +414,8 @@ pub fn propose(
         }
 
         let task_spec = NewTaskSpec {
+            // F4b で `MilestoneSpec.pause_after` を足すまでは既定（止めない）。
+            pause_after: None,
             repos: m.repos.clone(),
             title: m.title.clone(),
             objective,

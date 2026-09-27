@@ -8699,15 +8699,23 @@ impl Dispatcher {
         // まだ計画が無い（`current_wu` が None = atomic 経路）なら、この run は task-local な
         // planner run にする。`replan_dispatch` は既に計画がある Task の replan（`wu_dispatch_gate`
         // が上限まで確認済み）。
+        // ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」: `gate = "shadow"` でも、人が
+        // `execution: compound` を明示した Task（`ExecutionGateDecision.source = Human`、
+        // `rule_id = human/explicit`）は採用して planner run に進む（F5-1 dogfood で見つかった
+        // 不具合の修正）。CoS のヒント（source = Hint）と規則表の判定（source = Policy）は
+        // shadow では従来どおり記録だけ（採用しない）。
+        let gate_decision = task.routing.as_ref().and_then(|r| r.execution.as_ref());
+        let decision_is_compound =
+            gate_decision.map(|d| d.mode) == Some(task_core::ExecutionMode::Compound);
+        let shadow_human_explicit_compound = self.config.execution.gate
+            == task_core::GateMode::Shadow
+            && decision_is_compound
+            && gate_decision.map(|d| d.source) == Some(task_core::GateSource::Human);
         let is_planner_dispatch = replan_dispatch
             || (current_wu.is_none()
-                && self.config.execution.gate == task_core::GateMode::On
-                && task
-                    .routing
-                    .as_ref()
-                    .and_then(|r| r.execution.as_ref())
-                    .map(|d| d.mode)
-                    == Some(task_core::ExecutionMode::Compound));
+                && decision_is_compound
+                && (self.config.execution.gate == task_core::GateMode::On
+                    || shadow_human_explicit_compound));
         // D18/D14: 上書きする前の Task の予算（WU/planner の既定の計算に使う。ADR-0072 D14）。
         let original_task_budget = task.budget;
         // ADR-0074 D5.3（Phase F1）: planner run は `[execution.planner] tier`（既定 standard）で
@@ -23537,6 +23545,7 @@ mod tests {
             category: None,
             features: None,
             execution: None,
+            pause_after: None,
             provenance: Default::default(),
             status: None,
         };
@@ -25338,6 +25347,129 @@ mod tests {
             .filter(|r| r.work_unit_id.is_some())
             .count();
         assert_eq!(wu_routing, 2, "{routing_records:?}");
+    }
+
+    /// ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」（0 区切り）: `gate = "shadow"` でも、
+    /// 人が `execution: compound` を明示した Task（`source = human`, `rule_id = human/explicit`）は
+    /// 採用され、planner run に進んで計画どおり WU を実行する（F5-1 dogfood で見つかった不具合の
+    /// 修正の確認）。
+    #[tokio::test]
+    async fn shadow_gate_adopts_a_human_explicit_compound_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = compound_task(dir.path());
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+
+        let valid_plan = plan_json(vec![wu_spec("a", &[]), wu_spec("b", &["a"])]);
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(valid_plan)],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::Shadow;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let stored = store.get(task_id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{stored:?}");
+        let decision = stored
+            .routing
+            .as_ref()
+            .and_then(|r| r.execution.as_ref())
+            .expect("gate decision recorded");
+        assert_eq!(decision.mode, task_core::ExecutionMode::Compound);
+        assert_eq!(decision.source, task_core::GateSource::Human);
+        assert_eq!(decision.rule_id, "human/explicit");
+        assert!(decision.shadow, "shadow flag should still be recorded");
+
+        let plan = store
+            .execution_plan_active(task_id)
+            .unwrap()
+            .expect("plan adopted even though gate = shadow");
+        assert_eq!(plan.origin, task_core::PlanOrigin::Planner);
+        let units = store.work_units_for(task_id).unwrap();
+        assert_eq!(units.len(), 2);
+        assert!(
+            units
+                .iter()
+                .all(|u| u.status == task_core::WorkUnitStatus::Done)
+        );
+        let runs = store.runs_for_task(task_id).unwrap();
+        let planner_runs = runs
+            .iter()
+            .filter(|r| r.role == task_core::RunIndexRole::Planner)
+            .count();
+        assert_eq!(planner_runs, 1, "{runs:?}");
+    }
+
+    /// ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」（0 区切り）: `gate = "shadow"` では、
+    /// 規則表（score）が compound と判定しても（`source = policy`）、記録だけで採用されない
+    /// （atomic のまま実行され、計画は作られない）。
+    #[tokio::test]
+    async fn shadow_gate_does_not_adopt_a_rule_based_compound_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        // 強制規則 `atomic/small`（max_turns<=10 かつ目的が 400 文字未満）に当たらないようにする
+        // （score による判定に純粋に依らせるため）。
+        task.budget.max_turns = 40;
+        // 人の明示は無いが、規則表のスコアが閾値（5）に達するように features を直接指定する
+        // （F1 context_size=high(+2) + F2 expected_length=high(+2) + F3 tool_intensity=high(+1) = 5）。
+        task.routing = Some(task_core::TaskRouting {
+            features: Some(task_core::model_policy::TaskFeatureHints {
+                context_size: Some(task_core::model_policy::Level::High),
+                expected_length: Some(task_core::model_policy::Level::High),
+                tool_intensity: Some(task_core::model_policy::Level::High),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+
+        // planner の adapter は呼ばれないはず（呼ばれたらテストが失敗する形にする）。
+        let adapter = Arc::new(PlannerScriptAdapter::new(vec![None], HashMap::new()));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::Shadow;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let stored = store.get(task_id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{stored:?}");
+        let decision = stored
+            .routing
+            .as_ref()
+            .and_then(|r| r.execution.as_ref())
+            .expect("gate decision recorded");
+        assert_eq!(decision.mode, task_core::ExecutionMode::Compound);
+        assert_eq!(decision.source, task_core::GateSource::Policy);
+        assert!(decision.shadow, "shadow flag should be recorded");
+
+        // shadow では採用しないので、計画は作られず atomic のまま 1 本の run で終わる。
+        assert!(store.execution_plan_active(task_id).unwrap().is_none());
+        let runs = store.runs_for_task(task_id).unwrap();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert!(runs[0].work_unit_id.is_none());
+        assert_eq!(runs[0].role, task_core::RunIndexRole::Worker);
+        assert!(
+            adapter
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|c| c.execution_planner.is_none()),
+            "no run should be dispatched as a planner run in shadow mode for a policy-sourced decision"
+        );
     }
 
     /// ADR-0072 §6 E3 (e)(f): planner の出力が不正なら 1 回だけ再試行し、それでも不正なら

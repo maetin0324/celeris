@@ -170,6 +170,12 @@ pub struct NewTaskSpec {
     /// gate をバイパスする）。`Agent`（CoS）が書いたときはヒント（signal `H`）として扱う。
     #[serde(default)]
     pub execution: Option<task_core::ExecutionMode>,
+    /// ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（省略時は `none` = 全工程自動）。
+    /// 人（API/CLI）と CoS（`create_task.pause_after`）の両方が書ける。出自は `provenance.origin`
+    /// で記録する（`Agent` なら `PauseSource::Agent`）。**planner は書けない**
+    /// （`ExecutionPlanSpec` に欄が無い）。
+    #[serde(default)]
+    pub pause_after: Option<task_core::PausePolicy>,
     /// ADR-0069 D1: この spec の出自。**API の JSON からは入らない**（`serde(skip)`。偽装できない）。
     /// 既定は人（`POST /tasks` / `celerisctl add`）。LLM の経路（CoS の actions）はコードが `Agent` を立てる。
     #[serde(skip)]
@@ -649,6 +655,15 @@ fn build_task(
             explicit: spec.provenance.origin == SpecOrigin::Human,
         }),
         execution: None,
+        // ADR-0074 D2.1（Phase F3 途中確認）: 人と CoS が書ける。出自は `provenance.origin`
+        // （`Agent` なら `PauseSource::Agent`、それ以外は `Human`。celeris のコードが
+        // `pause_after` を明示することは無い）。
+        pause_after: spec.pause_after.clone().unwrap_or_default(),
+        pause_after_source: if spec.provenance.origin == SpecOrigin::Agent {
+            task_core::PauseSource::Agent
+        } else {
+            task_core::PauseSource::Human
+        },
     };
     let task = Task {
         routing: Some(routing),
@@ -741,6 +756,7 @@ mod tests {
             status: None,
             features: None,
             execution: None,
+            pause_after: None,
             provenance: SpecProvenance::default(),
         }
     }
@@ -784,6 +800,58 @@ mod tests {
             Event::Created { task: created } => assert_eq!(created.id, task.id),
             other => panic!("expected Created event, got {other:?}"),
         }
+    }
+
+    /// ADR-0074 D2.1（Phase F3 途中確認、区切り 1 (a)）: 人（`SpecOrigin::Human`。既定）が書いた
+    /// `pause_after` は `Task.routing.pause_after` に写り、出自は `PauseSource::Human`。
+    #[test]
+    fn create_task_carries_pause_after_from_a_human_spec() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let mut spec = base_spec();
+        spec.pause_after = Some(task_core::PausePolicy::EachPhase);
+
+        let task = create_task(&store, spec, now()).expect("create_task");
+        let routing = task.routing.expect("routing recorded");
+        assert_eq!(routing.pause_after, task_core::PausePolicy::EachPhase);
+        assert_eq!(routing.pause_after_source, task_core::PauseSource::Human);
+    }
+
+    /// (e): 省略時は `none`（既定）で、出自は `Human`（従来のタスクと 1 バイトも変わらない）。
+    #[test]
+    fn create_task_defaults_pause_after_to_none_with_human_source() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let spec = base_spec();
+
+        let task = create_task(&store, spec, now()).expect("create_task");
+        let routing = task.routing.expect("routing recorded");
+        assert_eq!(routing.pause_after, task_core::PausePolicy::None);
+        assert_eq!(routing.pause_after_source, task_core::PauseSource::Human);
+    }
+
+    /// CoS（`SpecOrigin::Agent`）が書いた `pause_after` は出自 `PauseSource::Agent` で記録される
+    /// （ADR-0069 D1 が `assignee`/`tier` を捨てるのとは違い、`pause_after` は止まる方向で安全側
+    /// なので CoS の値もそのまま採用する。ADR-0074 D2.1）。
+    #[test]
+    fn create_task_carries_pause_after_from_an_agent_spec_with_agent_source() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let mut spec = base_spec();
+        spec.pause_after = Some(task_core::PausePolicy::After {
+            phases: vec!["design".to_string()],
+        });
+        spec.provenance = SpecProvenance {
+            origin: SpecOrigin::Agent,
+            ..Default::default()
+        };
+
+        let task = create_task(&store, spec, now()).expect("create_task");
+        let routing = task.routing.expect("routing recorded");
+        assert_eq!(
+            routing.pause_after,
+            task_core::PausePolicy::After {
+                phases: vec!["design".to_string()]
+            }
+        );
+        assert_eq!(routing.pause_after_source, task_core::PauseSource::Agent);
     }
 
     /// ADR-0016 D1 / M3: タスクの値 > 役割の既定 > 全体の既定。設定に無い役割は名前だけ保存する。

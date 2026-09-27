@@ -1086,7 +1086,7 @@ E6 の fixture `crates/task-worker/tests/fixtures/codex-stream.jsonl` は従来 
 - **D3.3 の 1 トランザクション**: 新しい `TaskStore::project_plan_decide_apply` が、全途中目標の状態・全 Task の
   遷移（`Accept` / `Cancel`）・`ProjectPlanDecided`（提案元の plan タスクの events）を 1 つの `IMMEDIATE` トランザクションで書く。
   `Cancel` は後続へ `DependencyFailed` でカスケードする（ADR-0010 D2）ので、既に `draft` でない Task は飛ばす
-  （reject で依存先の Task は `cancelled` ではなく `dependency_failed` 由来の終端になりうる。どちらも終端で再開しない）。
+  （reject で依存先の Task は兄弟の `Cancel` のカスケードで先に `cancelled` になる。遷移理由が `dependency_failed` になるだけで状態は同じ）。
 - **reject の秘書への対話**は、トランザクションの commit 後に `conversation::start`（ADR-0038 の `ng` と同じ経路）で送る。
   秘書が居ない構成は書き込み前に 422 で弾くので「決定だけ残って対話が無い」状態は生じない（対話の作成自体の失敗は残りうる）。
 - **個別の Accept の禁止**: `task_ops::gate::{accept, approve_as}` が、`is_milestone_task` かつ途中目標が `proposed` の draft を

@@ -20136,7 +20136,7 @@ run 開始部分で、F3 の `quota_begin` を `dispatch_one` に移して解消
 - 提案 P-F5-2: ルート LVM（252G）は DB + workspaces + build-cache + 実装エージェント 2 本の target で常に 60〜90%。Proxmox 側で 512G へ拡張するか、build-cache を別ボリュームにする（人の判断）。
 - 12:37Z: F5-1 dogfood の配送が作った release `e3465764475c`（main e346576 = F2b の WU 並列本体 + F5-1 の 3 成果: dispatch 前のディスク残量チェックと `celerisctl build-cache prune`、codex cache usage の確認、API docs の追記。gate ok / verify ok / live_ok）を in-flight 0 でライブ昇格（from a770bcb5b7b5）。本番で WU 並列（計画 v2 の `phases`）が使える状態。gate は shadow のまま（人の明示を採用する修正は F3 待ち）。
 
-## Phase F4a「案件レベルの計画（前半）: マイルストーン Task の述語・CoS の案件計画と提案・人の承認」（着手 2026-09-26）
+## Phase F4a「案件レベルの計画（前半）: マイルストーン Task の述語・CoS の案件計画と提案・人の承認」（着手 2026-09-26、完了 2026-09-27）
 
 ADR-0074 D3 の (a)(b)(c) だけを実装する。(d)〜(h)（Go の判定・案件 replan・children・互換テスト・GUI の DAG）は
 F4b に送る。作業は worktree の中（main へ merge / push しない）。
@@ -20245,3 +20245,58 @@ F4b に送る。作業は worktree の中（main へ merge / push しない）�
   - `pause_after` は ADR の `celeris.project-plan/1` 例に載っているが、F3 の `PausePolicy` 型がまだ無い
     ため MilestoneSpec には含めていない（F4b で型が揃ってから追加する。deny_unknown_fields なので
     追加は非破壊）。
+
+### F4a checkpoint 3: (c) 案件計画の `decide`（完了 2026-09-27、commit c118844）
+
+- **条件**: `decide approve` で提案中の計画の全途中目標が `approved`、全 Task が `ready`（1 トランザクション）になり、
+  依存の無いものから dispatch される（`depends_on` の既存判定で待つ）。`reject` で途中目標が `redesigned`、Task が
+  `cancelled` になり、却下理由が秘書への対話として投げられる。`celerisctl` にも同じ操作。
+- **実装**:
+  - `crates/task-core/src/store.rs`: `TaskStore::project_plan_decide_apply`（途中目標の状態・Task の遷移・
+    `ProjectPlanDecided` を 1 つの IMMEDIATE トランザクションで。`Cancel` のカスケードで既に終端の Task は飛ばす）。
+  - `crates/task-ops/src/project_plan.rs`: `decide`（`find_proposal` で版を探す〈無ければ `ProjectPlanProposalNotFound`、
+    決定済みなら `ProjectPlanAlreadyDecided`〉、reject は note 必須・秘書の存在を書き込み前に確認、commit 後に
+    `conversation::start` で却下理由を秘書へ）。
+  - `crates/task-ops/src/gate.rs`: 未決の提案に属する draft の個別 `accept` / `approve` を 422 で拒む。
+  - `crates/task-api/src/project_plan.rs`: `POST /api/v1/projects/{id}/project-plan/{version}/decide`（管理系、202）。
+    `schema.rs` に `ProjectPlanDecideBody` / `ProjectPlanDecided`、`docs/api/v1/api-v1.schema.json` と
+    `gui/app/celeris/types.ts` を再生成。
+  - `crates/celerisctl`: `celerisctl projects plan approve|reject <project> [version] [--note] [--config]`（`project` の別名）。
+  - `crates/celeris-mcp/src/tools/tasks.rs`: 新しい `OpsError` の分類だけ（MCP からは呼べない）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-ops project_plan::` → 14 passed / 0 failed（新規 `approve_readies_the_whole_dag_in_one_transaction`
+    〈全 approved / ready、`ready_tasks` に出るのは依存の無い `survey` だけ、`ProjectPlanDecided{approved: true}`〉、
+    `decide_reject_requires_a_note_and_cancels_everything_notifying_the_secretary`、
+    `decide_on_an_unknown_or_already_decided_version_is_rejected`、
+    `project_plan_decide_apply_writes_nothing_when_any_step_fails`〈無い Task を混ぜると途中目標も Task も events も無変更〉）。
+  - `cargo test -p task-ops gate::` の新規 `accept_and_approve_refuse_a_draft_that_belongs_to_an_undecided_project_plan_proposal` → ok。
+  - `cargo test -p task-api --test project_plan` → 11 passed（新規 `decide_approve_readies_the_dag_reject_needs_a_note_and_replays_are_rejected`
+    〈202 / 422 / 404 / 409〉、`decide_reject_redesigns_the_milestone_and_cancels_the_task`、`decide_endpoint_requires_a_token`）。
+  - `cargo test -p celerisctl projects` → 4 passed（新規 `run_plan_decide_approves_and_rejects_a_proposal`、
+    `plan_approve_and_reject_parse_with_a_default_version`）。
+
+### Phase F4a の全体ゲート（2026-09-27）
+
+- `cargo fmt --all -- --check` → exit 0（差分ゼロ）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（warning 0）。
+- `cargo test --workspace --no-fail-fast` → exit 0、合計 **2457 passed / 0 failed / 5 ignored**。
+- `UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → 3 suite とも ok、commit 後の `git status` に差分無し。
+- `cd gui && corepack pnpm@11.27.0 gen:types` → 差分ゼロ、`typecheck` → exit 0、`test` → Test Files 72 passed / Tests 1099 passed。
+
+### 未解決事項・F4b への申し送り
+
+- (d) reached / Go: 依存先が `done` でも途中目標が reached になるまで依存する Task を dispatch しない判定、`ok` で Go、
+  `auto_advance`（F3 の `PausePolicy` が揃ってから。`MilestoneSpec.pause_after` も同時に追加する）。
+- (e) 案件 replan（`celeris.project-plan-delta/1`、`ProjectPlanProposed.supersedes`、version n+1）。今の `decide` は
+  版ごとに 1 回きりで、差分の適用は無い。未決の提案がある案件への二重の `POST /plan {mode: milestones}` も未対処。
+  `find_proposal` / inbox の `project_plan_summary` は plan タスクを総なめする（索引が無い）ので、複数版の前に見直す。
+- (f) execution-plan/2 の `children`（委譲の検証、`child:<key>` 依存、部またぎは秘書への質問）。
+- (g) 案件計画の無い既存案件の互換テスト（`legacy_project_keeps_linear_milestones`）。
+- (h) GUI の案件ページの DAG・提案の承認 / 却下ボタン（API は揃った。受信箱の `DraftGroup` から `decide` を呼ぶ導線が要る。
+  F3 が GUI を並行編集中なので F4a では触っていない）。
+- reject の秘書への対話は commit 後に作るので、対話の作成だけが失敗すると「決定済みだが対話が無い」になりうる（エラーは返る）。
+
+### 提案
+
+- F4b の (h) で GUI から `decide` を呼ぶ際、受信箱の `DraftGroup` に `project_plan: {project_id, version}` を載せると、
+  GUI が plan タスクを探さずに済む（今は `plan_summary` の文字列だけ）。

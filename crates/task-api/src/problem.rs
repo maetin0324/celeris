@@ -571,6 +571,13 @@ pub(crate) fn ops_problem(
             }
             problem
         }
+        // ADR-0074 D3.3（Phase F4a (c)）: 案件計画（マイルストーン DAG）の decide。
+        OpsError::ProjectPlanProposalNotFound { .. } => {
+            ApiProblem::new(StatusCode::NOT_FOUND, "project_plan_not_found", detail)
+        }
+        OpsError::ProjectPlanAlreadyDecided { .. } => {
+            ApiProblem::new(StatusCode::CONFLICT, "project_plan_already_decided", detail)
+        }
         OpsError::Store(err) => store_problem(err),
     }
 }

@@ -9,7 +9,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{Status, TaskKind, TaskStore};
+use task_core::{MilestoneStatus, Status, TaskKind, TaskStore};
 
 fn g(path: &str) -> axum::http::Request<axum::body::Body> {
     get_with(
@@ -209,6 +209,96 @@ async fn children_materialized_from_the_plan_output_stay_in_the_same_project() {
     );
 }
 
+/// ADR-0074 D3.3（Phase F4a (b)）: `mode = "milestones"` は `MILESTONES_PLAN_LABEL` の印が付いた
+/// Plan タスクを作る（従来の分解タスクとは別物。既存の途中目標の文脈は goal に含めない）。
+#[tokio::test]
+async fn milestones_mode_labels_the_plan_task_and_ignores_existing_milestones() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "Pluvio 新テーマ", "案件全体の計画を作って欲しい").await;
+    let milestone: Value = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/milestones"),
+            &json!({"title": "旧い途中目標", "status": "approved"}),
+        ),
+    )
+    .await
+    .json();
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones", "note": "急ぎで"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    let task_id: task_core::TaskId = resp.json()["task_id"]
+        .as_str()
+        .expect("task_id")
+        .parse()
+        .expect("id");
+    let task = env.store.get(task_id).expect("get").expect("some");
+    assert_eq!(task.kind, TaskKind::Plan);
+    assert_eq!(task.status, Status::Ready);
+    assert_eq!(
+        task.labels,
+        vec![task_core::MILESTONES_PLAN_LABEL.to_string()]
+    );
+    assert!(task_core::is_milestones_plan_task(&task));
+    assert!(task.objective.contains("急ぎで"));
+    assert!(
+        !task.objective.contains("旧い途中目標"),
+        "{}",
+        task.objective
+    );
+    assert_eq!(task.milestone_id, None);
+
+    // 旧い途中目標は変わらない（milestones モードは案件全体を一から設計する）。
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    let unchanged = detail["milestones"]
+        .as_array()
+        .expect("milestones")
+        .iter()
+        .find(|m| m["id"] == milestone["id"])
+        .expect("milestone");
+    assert_eq!(unchanged["status"], "approved");
+}
+
+/// `mode = "milestones"` に `milestone_id` を添えるのは 422（案件全体を計画する run に、単一の
+/// 途中目標を紐づける意味が無い）。
+#[tokio::test]
+async fn milestones_mode_with_a_milestone_id_is_422() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+    let milestone: Value = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/milestones"),
+            &json!({"title": "m"}),
+        ),
+    )
+    .await
+    .json();
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones", "milestone_id": milestone["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
+}
+
 #[tokio::test]
 async fn plan_on_an_unknown_project_is_404_and_a_foreign_milestone_is_422() {
     let env = env_with_token();
@@ -245,6 +335,205 @@ async fn plan_on_an_unknown_project_is_404_and_a_foreign_milestone_is_422() {
     )
     .await;
     assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
+}
+
+fn plan_spec_with_one_milestone() -> task_core::ProjectPlanSpec {
+    task_core::ProjectPlanSpec {
+        schema: task_core::PROJECT_PLAN_SCHEMA.into(),
+        rationale: "1 段階で進める".into(),
+        milestones: vec![task_core::MilestoneSpec {
+            key: "survey".into(),
+            title: "調査".into(),
+            objective: "周辺調査".into(),
+            reach_criteria: "候補が出せた".into(),
+            acceptance: vec![
+                task_core::Criterion {
+                    text: "done".into(),
+                    check: task_core::Check::Human,
+                },
+                task_core::Criterion {
+                    text: "a".into(),
+                    check: task_core::Check::ArtifactExists {
+                        name: "report.md".into(),
+                    },
+                },
+            ],
+            depends_on: vec![],
+            genre: None,
+            skills: vec![],
+            repos: vec![],
+            features: None,
+            execution: None,
+        }],
+    }
+}
+
+/// ADR-0074 D3.3（Phase F4a (c)）: `decide approve` は提案の途中目標を `approved`、Task を `ready`
+/// にする。`reject` に `note` が無ければ 422。未知の版は 404、決定済みの版へもう一度は 409。
+#[tokio::test]
+async fn decide_approve_readies_the_dag_reject_needs_a_note_and_replays_are_rejected() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+    let pid: task_core::ProjectId = project_id.parse().expect("project id");
+    let project = env.store.project_get(pid).expect("get").expect("some");
+
+    let started = task_ops::project_plan::start_milestones(
+        &env.store,
+        &project,
+        None,
+        &[],
+        &[],
+        time::OffsetDateTime::now_utc(),
+    )
+    .expect("start_milestones");
+    let validated = task_core::validate_project_plan(
+        &plan_spec_with_one_milestone(),
+        task_core::ProjectPlanLimits::default(),
+        &std::collections::BTreeSet::new(),
+    )
+    .expect("valid plan");
+    task_ops::project_plan::propose(
+        &env.store,
+        &started.task,
+        &project,
+        &validated,
+        &[],
+        &[],
+        time::OffsetDateTime::now_utc(),
+    )
+    .expect("propose");
+
+    // reject に note が無ければ 422。
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
+            &json!({"decision": "reject"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
+
+    // 未知の版は 404。
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/project-plan/2/decide"),
+            &json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
+
+    // approve は 202 で、途中目標が approved・Task が ready になる。
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
+            &json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["milestones"].as_array().expect("milestones").len(), 1);
+    let task_id: task_core::TaskId = body["tasks"][0]
+        .as_str()
+        .expect("task id")
+        .parse()
+        .expect("id");
+    let task = env.store.get(task_id).expect("get").expect("some");
+    assert_eq!(task.status, Status::Ready);
+    let milestones = env.store.milestone_list(pid).expect("list");
+    assert_eq!(milestones[0].status, MilestoneStatus::Approved);
+
+    // 決定済みの版へもう一度は 409。
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
+            &json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
+}
+
+/// `reject` は途中目標を `redesigned`、Task を `cancelled` にする。
+#[tokio::test]
+async fn decide_reject_redesigns_the_milestone_and_cancels_the_task() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+    let pid: task_core::ProjectId = project_id.parse().expect("project id");
+    let project = env.store.project_get(pid).expect("get").expect("some");
+
+    let started = task_ops::project_plan::start_milestones(
+        &env.store,
+        &project,
+        None,
+        &[],
+        &[],
+        time::OffsetDateTime::now_utc(),
+    )
+    .expect("start_milestones");
+    let validated = task_core::validate_project_plan(
+        &plan_spec_with_one_milestone(),
+        task_core::ProjectPlanLimits::default(),
+        &std::collections::BTreeSet::new(),
+    )
+    .expect("valid plan");
+    task_ops::project_plan::propose(
+        &env.store,
+        &started.task,
+        &project,
+        &validated,
+        &[],
+        &[],
+        time::OffsetDateTime::now_utc(),
+    )
+    .expect("propose");
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
+            &json!({"decision": "reject", "note": "スコープが違う"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    let body = resp.json();
+    let task_id: task_core::TaskId = body["tasks"][0]
+        .as_str()
+        .expect("task id")
+        .parse()
+        .expect("id");
+    let task = env.store.get(task_id).expect("get").expect("some");
+    assert_eq!(task.status, Status::Cancelled);
+    let milestones = env.store.milestone_list(pid).expect("list");
+    assert_eq!(milestones[0].status, MilestoneStatus::Redesigned);
+}
+
+#[tokio::test]
+async fn decide_endpoint_requires_a_token() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+
+    let resp = send(
+        &app,
+        post_json(
+            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
+            &json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 401);
 }
 
 #[tokio::test]

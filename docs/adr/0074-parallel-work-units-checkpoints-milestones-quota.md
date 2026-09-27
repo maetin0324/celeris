@@ -1080,3 +1080,19 @@ F2 の (c)〜(l)（鍵 (task, WU)・WU の worktree・統合 WU・伝播・再�
 ## Phase F5-1 dogfood: codex cache usage（2026-09-26）
 
 E6 の fixture `crates/task-worker/tests/fixtures/codex-stream.jsonl` は従来 `turn.completed.usage` に `input_tokens` / `output_tokens` しか含まず、cache の欄は無かった。Codex CLI 0.157.0 の `codex exec --help` は `--json` stream の各 usage field を列挙しないが、[Codex の `exec_events.rs`](https://github.com/openai/codex/blob/main/codex-rs/exec/src/exec_events.rs) は `turn.completed.usage.cached_input_tokens` と `cache_write_input_tokens` を公開する。したがって fixture に両欄を追加し、codex アダプタが `Usage.cache_read_tokens` / `cache_creation_tokens` に写す試験を追加した。`WorkerFinished.usage` は既存の終端経路でその `Usage` を保存し、`ExecutionMetrics.total_cache_read_tokens` は観測できた run の cache read を合計する。欄が無い旧 stream は `None` のままとし、`input_tokens_uncached_estimate` は追加しない。
+
+## Phase F4a 実装時の逸脱・明確化（2026-09-27）
+
+- **D3.3 の 1 トランザクション**: 新しい `TaskStore::project_plan_decide_apply` が、全途中目標の状態・全 Task の
+  遷移（`Accept` / `Cancel`）・`ProjectPlanDecided`（提案元の plan タスクの events）を 1 つの `IMMEDIATE` トランザクションで書く。
+  `Cancel` は後続へ `DependencyFailed` でカスケードする（ADR-0010 D2）ので、既に `draft` でない Task は飛ばす
+  （reject で依存先の Task は兄弟の `Cancel` のカスケードで先に `cancelled` になる。遷移理由が `dependency_failed` になるだけで状態は同じ）。
+- **reject の秘書への対話**は、トランザクションの commit 後に `conversation::start`（ADR-0038 の `ng` と同じ経路）で送る。
+  秘書が居ない構成は書き込み前に 422 で弾くので「決定だけ残って対話が無い」状態は生じない（対話の作成自体の失敗は残りうる）。
+- **個別の Accept の禁止**: `task_ops::gate::{accept, approve_as}` が、`is_milestone_task` かつ途中目標が `proposed` の draft を
+  `OpsError::Validation`（422）で拒む。途中目標が `approved` なら従来どおり。
+- **CLI**: `celerisctl projects plan approve <project> [version]` / `celerisctl projects plan reject <project> [version] --note …`
+  （`projects` に `project` の別名。版の既定は 1）。DB に直接書く既存の celerisctl の書き込み操作と同じ流儀で、
+  `CONVERSATION_READONLY_CELERISCTL` には入れない（CoS の対話 run からは押せない HUMAN GATE のまま）。
+- **API の状態コード**: 成功は 202（`ProjectPlanDecided{decision, plan_task_id, milestones, tasks}`）、reject で note 空は 422、
+  無い版は 404、決定済みの版は 409、トークン無しは 401。

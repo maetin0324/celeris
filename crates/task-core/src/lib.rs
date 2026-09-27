@@ -44,6 +44,8 @@ pub mod pause;
 pub mod plan;
 /// ADR-0046 D1（Phase 59）: 組織 = Agent Profile の継承木。
 pub mod profile;
+/// ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）の schema と検証。
+pub mod project_plan;
 pub mod quota;
 pub mod report;
 /// ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ（`project_repos`）とタスクの `repos`。
@@ -102,10 +104,10 @@ pub use message::{
 pub use model::{
     ArtifactRef, Budget, Check, Criterion, DEFAULT_PRIORITY, Event, GenreSpec, HARNESS_ADAPTERS,
     Lease, MAX_LABELS, MAX_SKILLS, PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES, PhaseCheckResult,
-    PhaseMerged, ProgressFields, ProgressKind, RoleSpec, RunMetrics, RunRole, Status, Task,
-    TaskCategory, TaskId, TaskKind, TaskMode, TaskRouting, Tier, TierSource, Usage, WorkerHint,
-    WorkspaceMode, WorkspaceSpec, artifact_entry_description, artifact_entry_name, expand_home,
-    home_dir, is_valid_label, normalize_labels, normalize_skills, priority_from_label,
+    PhaseMerged, ProgressFields, ProgressKind, ProposedMilestone, RoleSpec, RunMetrics, RunRole,
+    Status, Task, TaskCategory, TaskId, TaskKind, TaskMode, TaskRouting, Tier, TierSource, Usage,
+    WorkerHint, WorkspaceMode, WorkspaceSpec, artifact_entry_description, artifact_entry_name,
+    expand_home, home_dir, is_valid_label, normalize_labels, normalize_skills, priority_from_label,
     priority_label, validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
@@ -127,12 +129,18 @@ pub use notify::{
 };
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,
-    Project, ProjectId, ProjectStatus, assignee_defaults, department_of, valid_org_id,
-    validate_upsert,
+    Project, ProjectId, ProjectStatus, assignee_defaults, department_of, is_milestone_task,
+    valid_org_id, validate_upsert,
 };
 pub use plan::{
     MAX_PLAN_DEPTH, NewTask, NewTaskKind, PlanError, PlanLimits, PlanOutput, fix_harness_artifacts,
     warn_missing_partial_ok,
+};
+// ---- ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）----
+pub use project_plan::{
+    MILESTONES_PLAN_LABEL, MilestoneSpec, PROJECT_PLAN_SCHEMA, ProjectPlanLimits, ProjectPlanSpec,
+    ProjectPlanValidationError, ValidatedProjectPlan, is_milestones_plan_task,
+    validate as validate_project_plan,
 };
 pub use report::{
     COMPACTION_ROLE, Report, ReportFilter, ReportId, ReportKind, ReportStore, ReportsLive,

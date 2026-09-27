@@ -1348,6 +1348,83 @@
             "source"
           ],
           "type": "object"
+        },
+        {
+          "description": "ADR-0074 D3.3（Phase F4a）: CoS の案件計画 run（`mode = \"milestones\"`）が検証を通り、マイルストーン\n（`proposed`）と top-level の draft Task を作った。**`plan_task_id`（この Event が付く Plan\nタスク）の events 列がその提案の正本**。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "milestones": {
+              "description": "この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を\n決定的に引くため。",
+              "items": {
+                "$ref": "#/$defs/ProposedMilestone"
+              },
+              "type": "array"
+            },
+            "plan": {
+              "$ref": "#/$defs/ProjectPlanSpec"
+            },
+            "project_id": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "supersedes": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "project_plan_proposed",
+              "type": "string"
+            },
+            "version": {
+              "description": "1 から始まる連番。replan（D3.4、F4b）のたびに増える。F4a の初回提案は常に 1。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "project_id",
+            "version",
+            "plan",
+            "milestones"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0074 D3.3（Phase F4a）: 人の承認/却下\n（`POST /projects/{id}/project-plan/{version}/decide`）。状態は変えない（マイルストーン/Task の\n遷移は同じ操作の中の他の呼び出しが行う）。",
+          "properties": {
+            "approved": {
+              "type": "boolean"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "project_id": {
+              "$ref": "#/$defs/ProjectId"
+            },
+            "type": {
+              "const": "project_plan_decided",
+              "type": "string"
+            },
+            "version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "project_id",
+            "version",
+            "approved"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1648,6 +1725,89 @@
       "description": "途中目標の一意識別子（ULID）。",
       "type": "string"
     },
+    "MilestoneSpec": {
+      "additionalProperties": false,
+      "description": "D3.3: 1 マイルストーンの spec。`assignee` / `tier` / `model` / `lane` は持たない\n（`deny_unknown_fields`。ADR-0069 D1: 担当は matching が決める）。",
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0072 D13 のヒント（+2）。"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatureHints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント（型として検証する。D5.1 と同じ規律）。"
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。",
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "reach_criteria": {
+          "description": "何が示せたら途中目標の達成か（人の判定の材料。SPEC §7「検証の合格線」）。",
+          "type": "string"
+        },
+        "repos": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "objective",
+        "reach_criteria"
+      ],
+      "type": "object"
+    },
     "PausePolicy": {
       "description": "D2.1: `NewTaskSpec.pause_after` / `PATCH` / `PUT /tasks/{id}/execution/pause-after` /\nCoS の `create_task.pause_after` に書ける値。既定は `None`（全工程自動）。\n**planner は書けない**（`ExecutionPlanSpec` に欄が無い。`deny_unknown_fields` で拒否される）。",
       "oneOf": [
@@ -1820,6 +1980,50 @@
     "ProjectId": {
       "description": "案件の一意識別子（ULID）。`TaskId` と同じ形。",
       "type": "string"
+    },
+    "ProjectPlanSpec": {
+      "additionalProperties": false,
+      "description": "D3.3: CoS の計画 run が `<artifacts>/project-plan.json` に書く JSON そのもの。",
+      "properties": {
+        "milestones": {
+          "items": {
+            "$ref": "#/$defs/MilestoneSpec"
+          },
+          "type": "array"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "rationale",
+        "milestones"
+      ],
+      "type": "object"
+    },
+    "ProposedMilestone": {
+      "description": "`Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "milestone_id": {
+          "$ref": "#/$defs/MilestoneId"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "key",
+        "milestone_id",
+        "task_id"
+      ],
+      "type": "object"
     },
     "QuotaCalibration": {
       "description": "D4.2 の較正値 `k_w`（同じ source の直近の `measured` run から求めた比の和）。",

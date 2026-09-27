@@ -115,6 +115,8 @@ enum Command {
         command: OrgCommand,
     },
     /// ADR-0054 D2（Phase 68）: 案件の一覧・詳細（`ls`/`show` のタスク版）。読み取り専用。
+    /// ADR-0074 D3.3（Phase F4a (c)）: `projects plan approve|reject` だけは書き込み（`project` でも可）。
+    #[command(visible_alias = "project")]
     Projects {
         #[command(subcommand)]
         command: ProjectsCommand,

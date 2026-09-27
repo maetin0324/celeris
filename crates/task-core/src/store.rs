@@ -657,6 +657,34 @@ pub trait TaskStore:
     /// ADR-0010 D2: `insert` + `Event::Created` + `extra_events` を 1 トランザクションで行う。
     fn create_task(&self, task: &Task, extra_events: Vec<Event>) -> Result<(), StoreError>;
 
+    /// ADR-0074 D3.1 / D3.8（Phase F4a）: `task_ops::add` が、案件直下に `milestone_id` 無しで
+    /// 作られる Task（`task_core::is_milestone_task`）のために、`create_task` と同じことを
+    /// **同じトランザクションで**行い、途中目標の行も 1 件作る（1:1 の不変条件を保つ）。
+    /// `task.milestone_id` は呼び出し側があらかじめ新しい `MilestoneId` を入れて渡すこと（挿入する
+    /// 途中目標の行の `id` に使う）。`task.project_id` が無い／存在しない案件を指すなら
+    /// `StoreError::Invalid`。途中目標は `status = approved`、`seq` は案件の最大 + 1。
+    fn create_task_with_milestone(
+        &self,
+        task: &Task,
+        milestone_title: &str,
+        extra_events: Vec<Event>,
+    ) -> Result<Milestone, StoreError>;
+
+    /// ADR-0074 D3.3（Phase F4a (c)）: 案件計画の提案の決定を **1 トランザクションで**適用する。
+    /// `milestones` を全て `milestone_status` にし、`tasks` のうちまだ `draft` のもの（`Trigger::Cancel`
+    /// のカスケードで既に終端になったもの等は飛ばす）に `trigger` を適用し、最後に `decided_event`
+    /// を `plan_task_id` の events に積む。途中で失敗すれば何も書かない。無い途中目標・Task は
+    /// `StoreError::Invalid`。
+    fn project_plan_decide_apply(
+        &self,
+        plan_task_id: TaskId,
+        milestones: &[MilestoneId],
+        milestone_status: MilestoneStatus,
+        tasks: &[TaskId],
+        trigger: Trigger,
+        decided_event: Event,
+    ) -> Result<(), StoreError>;
+
     /// ADR-0016 D2 / M2: 実行中の委譲。子タスク群を挿入（`Created` → `Accept` で `ready`）し、親に
     /// `Event::Delegated{run_id, task_ids}` を追記する。全体が 1 トランザクション。親の状態は変えない。
     /// 子の `parent_id` が `parent_id` と違えば `StoreError::Invalid`。
@@ -3230,6 +3258,117 @@ impl TaskStore for SqliteStore {
         for event in &extra_events {
             Self::append_event_tx(&tx, task.id, event)?;
         }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn create_task_with_milestone(
+        &self,
+        task: &Task,
+        milestone_title: &str,
+        extra_events: Vec<Event>,
+    ) -> Result<Milestone, StoreError> {
+        let Some(milestone_id) = task.milestone_id else {
+            return Err(StoreError::Invalid(
+                "create_task_with_milestone requires task.milestone_id".to_string(),
+            ));
+        };
+        let Some(project_id) = task.project_id else {
+            return Err(StoreError::Invalid(
+                "create_task_with_milestone requires task.project_id".to_string(),
+            ));
+        };
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
+            params![project_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::Invalid(format!(
+                "project not found: {project_id}"
+            )));
+        }
+        let seq: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM milestones WHERE project_id = ?1",
+            params![project_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let now = OffsetDateTime::now_utc();
+        let milestone = Milestone {
+            id: milestone_id,
+            project_id,
+            seq,
+            title: milestone_title.to_string(),
+            description: String::new(),
+            status: MilestoneStatus::Approved,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        tx.execute(
+            "INSERT INTO milestones (id, project_id, seq, title, description, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                milestone.id.to_string(),
+                milestone.project_id.to_string(),
+                milestone.seq,
+                milestone.title,
+                milestone.description,
+                milestone.status.as_str(),
+                format_rfc3339(milestone.created_at)?,
+                format_rfc3339(milestone.updated_at)?,
+            ],
+        )?;
+        Self::insert_tx(&tx, task)?;
+        Self::append_event_tx(
+            &tx,
+            task.id,
+            &Event::Created {
+                task: Box::new(task.clone()),
+            },
+        )?;
+        for event in &extra_events {
+            Self::append_event_tx(&tx, task.id, event)?;
+        }
+        tx.commit()?;
+        Ok(milestone)
+    }
+
+    fn project_plan_decide_apply(
+        &self,
+        plan_task_id: TaskId,
+        milestones: &[MilestoneId],
+        milestone_status: MilestoneStatus,
+        tasks: &[TaskId],
+        trigger: Trigger,
+        decided_event: Event,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = format_rfc3339(OffsetDateTime::now_utc())?;
+        for id in milestones {
+            let affected = tx.execute(
+                "UPDATE milestones SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                params![milestone_status.as_str(), now, id.to_string()],
+            )?;
+            if affected != 1 {
+                return Err(StoreError::Invalid(format!("milestone not found: {id}")));
+            }
+        }
+        for id in tasks {
+            let Some(task) = Self::get_locked(&tx, *id)? else {
+                return Err(StoreError::Invalid(format!("task not found: {id}")));
+            };
+            // `Trigger::Cancel` は後続へカスケードする（ADR-0010 D2）ので、先に処理した兄弟の
+            // cancel で既に終端になったものは飛ばす。
+            if task.status != Status::Draft {
+                continue;
+            }
+            Self::apply_transition_tx(&tx, *id, trigger, vec![])?;
+        }
+        Self::append_event_tx(&tx, plan_task_id, &decided_event)?;
         tx.commit()?;
         Ok(())
     }

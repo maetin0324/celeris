@@ -20533,3 +20533,10 @@ commit: 22be6d8（区切り 0）、7b926b8（区切り 1 (a)(e)）、8b39f8b（�
      確かめる）。
 - **提案**: F5-2 の dogfood で、`execution: compound` + `pause_after: {"mode":"after","phases":["design"]}` の Task を
   GUI から作り、Discord 通知 1 通 → タスク詳細で途中報告を読む → 「続ける」の往復を 1 回確認する。
+
+## release 90d418e2036a の昇格（F3 途中確認 + F4a 案件計画前半、2026-09-27 13:17Z）と release ビルドのローカル化
+
+- F3-pause（Opus 引き継ぎ）: shadow でも人の明示 compound を採用（区切り 0）、PausePolicy、PhaseGate → Blocked(awaiting_human)、PhaseReported と phase-reports、受信箱の PhaseCheckpoint、continue / replan / withdraw の API・CLI・GUI。F4a（Opus 引き継ぎ）: is_milestone_task と途中目標の 1:1、project-plan/1 の schema と CoS の提案、1 トランザクションの承認 / 却下（API 202 / 422 / 404 / 409、celerisctl projects plan approve|reject）。main 90d418e。ゲート: fmt 0 / test FAILED 0 / clippy 0 / GUI typecheck・lint・test 1106 件・gen:types 差分ゼロ・build・mobile-audit 0。
+- release ゲートの繰り返し失敗の原因: NFS 移行後、`~/.local/celeris/releases/.build` と `.cargo-target`（NFS 上）で dispatcher のタイミング依存テストが load 1 でも落ちた（同じテストは単体では通る）。`.build` / `.cargo-target` を `/var/lib/celeris/release-build/` への symlink にしてローカル LVM で回したところ 1 回で通過。verify 全 true（N-1 = e3465764475c も ok）。in-flight 0 でライブ昇格。
+- Sonnet の週次制限（9/28 23:00 UTC まで）: 再起動した F3-pause / F4a も途中で停止 → 同じ worktree を Opus に引き継がせて完了。F4b（(d) reached/Go、(e) 案件 replan、(f) children、(g) 互換、(h) 案件ページ DAG）を Opus で開始。
+- F5-1 dogfood をやり直し（タスク 01M3HG7VV6A2HRHTNXWPDS9051、explicit compound。内容: EVENT_TYPES の補完、フレークテスト 5 件の決定化、PROGRESS.md の分割）。

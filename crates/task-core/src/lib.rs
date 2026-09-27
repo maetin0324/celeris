@@ -184,7 +184,10 @@ pub use quota::{
     WindowSnapshot, aggregate_quota_use, merge_quota_use,
 };
 // ---- ADR-0074 D2（Phase F3 途中確認）: PausePolicy の解決 ----
-pub use pause::{PausePolicy, PauseSource, resolve_pause_points};
+pub use pause::{
+    PHASE_REPORT_MAX_BYTES, PausePolicy, PauseSource, PhaseReport, PhaseResumeMode, format_wall_ms,
+    quota_summary_line, resolve_pause_points, truncate_phase_report,
+};
 
 pub mod model_routing;
 // ---- ADR-0069（Phase 114）: routing の 4 層（lane policy・retry/escalation・監査）----

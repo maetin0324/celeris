@@ -526,6 +526,17 @@ export type Event =
       plan_id: string;
       reason: string;
       type: "work_units_serialized";
+    }
+  | {
+      phases?: string[];
+      plan_id: string;
+      source: PauseSource;
+      type: "pause_points_resolved";
+    }
+  | {
+      phase: string;
+      report: PhaseReport;
+      type: "phase_reported";
     };
 /**
  * DESIGN §5.3/§5.7 の `Check` 種別。
@@ -668,6 +679,11 @@ export type RepairOrigin = "review" | "integration" | "delivery" | "planner";
  */
 export type QuotaWindow = "five_hour" | "seven_day";
 /**
+ * D2.1: `pause_after` を誰が書いたか（ADR-0069 D1 の `SpecOrigin` と同じ考え方。`task_ops::add::SpecOrigin`
+ * は task-ops 側の内部型なので、`Event` から見える task-core 側にこの小さな型を別に置く）。
+ */
+export type PauseSource = "human" | "agent";
+/**
  * D5: `execution_plans.status`。
  */
 export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
@@ -769,6 +785,22 @@ export type TaskCategory = "feature" | "bug" | "research" | "ops" | "docs" | "ot
  * 既定は `Production`（導入前のタスクは全部これ。従来の挙動と同じ）。状態機械は見ない。
  */
 export type TaskMode = "prototype" | "production" | "research";
+/**
+ * D2.1: `NewTaskSpec.pause_after` / `PATCH` / `PUT /tasks/{id}/execution/pause-after` /
+ * CoS の `create_task.pause_after` に書ける値。既定は `None`（全工程自動）。
+ * **planner は書けない**（`ExecutionPlanSpec` に欄が無い。`deny_unknown_fields` で拒否される）。
+ */
+export type PausePolicy =
+  | {
+      mode: "none";
+    }
+  | {
+      mode: "each_phase";
+    }
+  | {
+      mode: "after";
+      phases?: string[];
+    };
 /**
  * ADR-0044 D3: `priority` の入力。`"P1"` のようなラベルでも整数でも書ける（API は `priority_label` を
  * 返すので、GUI はラベルだけを扱えばよい。`i32` は互換のため残す）。
@@ -2795,6 +2827,30 @@ export interface TaskRouting {
    */
   features?: TaskFeatureHints | null;
   /**
+   * ADR-0074 D2.1（Phase F3 途中確認）: `NewTaskSpec.pause_after` / `PATCH` /
+   * `PUT /tasks/{id}/execution/pause-after` / CoS の `create_task.pause_after` の現在値。
+   * **Task 専用の欄をわざわざ増やさず、ここに置く**（`TaskRouting` は既に「あとから足された
+   * 監査用の任意フィールド」の置き場所であり、`Task { .. }` の構造体リテラルを持つ多数の箇所を
+   * 機械的に更新する回転コストを避けるため。Phase F3(pause) 実装時の逸脱・明確化）。
+   * 既定 `none`（導入前のタスクと 1 バイトも変わらない）。
+   */
+  pause_after?:
+    | {
+        mode: "none";
+      }
+    | {
+        mode: "each_phase";
+      }
+    | {
+        mode: "after";
+        phases?: string[];
+      };
+  /**
+   * D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は
+   * 人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。
+   */
+  pause_after_source?: "human" | "agent";
+  /**
    * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
    */
   tier_source?: "human" | "system" | "hint" | "default";
@@ -3224,6 +3280,53 @@ export interface PhaseMerged {
    * 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
    */
   skipped?: boolean;
+}
+/**
+ * D2.3: 途中報告そのもの（`Event::PhaseReported.report` と `artifacts/phase-reports/<n>-<phase>.md`
+ * が同じ内容を持つ）。決定的に組み立てる（LLM は使わない）。各フィールドは既に人が読める 1 行・
+ * 1 段落の文字列にしてある（型を増やしすぎず、レンダリングと切り詰めを単純にするため）。
+ */
+export interface PhaseReport {
+  /**
+   * 成果物へのリンク（workspace 相対パス）。
+   */
+  artifact_paths?: string[];
+  /**
+   * Task ブランチの `git diff --stat` の要約（最大 30 行）。
+   */
+  diff_stat?: string[];
+  /**
+   * 統合の結果（merge・衝突・検査。1 行ずつ）。
+   */
+  integration?: string[];
+  /**
+   * 次の工程の key・title（無ければ `None` = 実質最後の工程）。
+   */
+  next_phase?: string | null;
+  /**
+   * 次の工程の WU の title の一覧。
+   */
+  next_phase_work_units?: string[];
+  /**
+   * 止まった工程の key。
+   */
+  phase: string;
+  /**
+   * 止まった工程の title。
+   */
+  phase_title: string;
+  /**
+   * 済んだ工程の一覧（1 行ずつ: title・WU の数・run の数・壁時計）。
+   */
+  phases_done?: string[];
+  /**
+   * 使った quota と参考の定価（ここまでの合計。1 行）。
+   */
+  quota_summary: string;
+  /**
+   * この工程の WU ごとの要約（1 段落ずつ）。
+   */
+  work_units?: string[];
 }
 /**
  * `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane`。
@@ -4268,6 +4371,13 @@ export interface NewTaskSpec {
   mode?: TaskMode | null;
   objective: string;
   parent?: TaskId | null;
+  /**
+   * ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（省略時は `none` = 全工程自動）。
+   * 人（API/CLI）と CoS（`create_task.pause_after`）の両方が書ける。出自は `provenance.origin`
+   * で記録する（`Agent` なら `PauseSource::Agent`）。**planner は書けない**
+   * （`ExecutionPlanSpec` に欄が無い）。
+   */
+  pause_after?: PausePolicy | null;
   /**
    * ADR-0044 D3: `"P1"` のようなラベルでも `20` のような整数でも書ける。**省略時は P2**
    * （= `task_core::DEFAULT_PRIORITY` = 10）。`celerisctl add` は `--priority` の既定 0 を明示して渡すので
@@ -6074,6 +6184,12 @@ export interface TaskEdit {
    */
   mode?: TaskMode | null;
   objective?: string | null;
+  /**
+   * ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（`none`/`each_phase`/`after`）。
+   * 次に計画が採用（新規・replan）されたときに `Event::PausePointsResolved` へ解決される
+   * （PATCH 自体は解決を起こさない。走っている計画の停止点はそのまま）。
+   */
+  pause_after?: PausePolicy | null;
   /**
    * ADR-0044 D3: `"P1"` でも `20` でもよい。
    */

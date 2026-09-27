@@ -115,7 +115,7 @@ fn cancel_tasks(
         if current.status.is_terminal() {
             continue;
         }
-        store.apply_transition(current.id, trigger, None)?;
+        store.apply_transition(current.id, trigger.clone(), None)?;
         if let Some(after) = store.get(current.id)?
             && after.status == Status::Cancelled
         {

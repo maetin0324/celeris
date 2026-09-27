@@ -1177,6 +1177,14 @@ pub enum Event {
         phases: Vec<String>,
         source: crate::pause::PauseSource,
     },
+    /// ADR-0074 D2.3（Phase F3 途中確認）: 停止点の工程の統合の後に、決定的に組み立てた途中報告を
+    /// 残す（LLM は使わない）。同じ内容を `artifacts/phase-reports/<n>-<phase>.md` にも書く
+    /// （`ArtifactProduced` が別に飛ぶ）。状態は変えない（同じトランザクションの
+    /// `Transitioned{reason:"awaiting_human"}` が Task を `blocked` にする）。
+    PhaseReported {
+        phase: String,
+        report: Box<crate::pause::PhaseReport>,
+    },
 }
 
 /// `Event::PhaseIntegrated.merged[]`（ADR-0074 D1.4）。

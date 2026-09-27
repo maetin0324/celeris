@@ -1080,3 +1080,21 @@ F2 の (c)〜(l)（鍵 (task, WU)・WU の worktree・統合 WU・伝播・再�
 ## Phase F5-1 dogfood: codex cache usage（2026-09-26）
 
 E6 の fixture `crates/task-worker/tests/fixtures/codex-stream.jsonl` は従来 `turn.completed.usage` に `input_tokens` / `output_tokens` しか含まず、cache の欄は無かった。Codex CLI 0.157.0 の `codex exec --help` は `--json` stream の各 usage field を列挙しないが、[Codex の `exec_events.rs`](https://github.com/openai/codex/blob/main/codex-rs/exec/src/exec_events.rs) は `turn.completed.usage.cached_input_tokens` と `cache_write_input_tokens` を公開する。したがって fixture に両欄を追加し、codex アダプタが `Usage.cache_read_tokens` / `cache_creation_tokens` に写す試験を追加した。`WorkerFinished.usage` は既存の終端経路でその `Usage` を保存し、`ExecutionMetrics.total_cache_read_tokens` は観測できた run の cache read を合計する。欄が無い旧 stream は `None` のままとし、`input_tokens_uncached_estimate` は追加しない。
+
+## Phase F3（途中確認）実装時の逸脱・明確化（2026-09-26〜27）
+
+1. **shadow でも人の明示 compound を採用**（区切り 0。ADR-0072 の同名節に対応）: `[execution] gate = "shadow"` で
+   `ExecutionGateDecision.source = Human` の compound だけは planner run に進む。
+2. **D2.2「次の工程は pending のまま」の明確化**: `finish_phase_integration` は従来どおり工程の障壁が外れた次の工程の
+   WU を `ready` にしてから、同じ関数の最後で `Continue{advance}` の代わりに `PhaseGate` を適用する。Task が
+   `blocked` の間は scheduler も `dispatch_one` も WU を拾わないので、次の工程の WU は実質止まっている
+   （`pause_after_design_blocks_with_awaiting_human` で run 0 を確認）。`continue` はそのまま `Ready → Running` で
+   続きを拾い、`replan` は既存の replan の射影（ready を一度 pending に戻して障壁つきで決め直す）で整合する。
+   pending に留めて `continue` で ready にし直す経路を別に作るより、既存の `Continue{advance}` と同じ WU の状態に
+   揃える方が replay・照合の規則を増やさずに済むため。
+3. **途中報告の `ArtifactProduced.run_id`**: daemon が決定的に書く成果物で、ワーカー run に属さないため
+   `daemon:phase-gate:<phase>` という合成の値にする。`<n>` は解決済みの停止点の中での 1 始まりの順番。
+4. **`PhaseReport` の形**: 各欄は人が読める 1 行（または 1 段落）の文字列の配列にした（型を増やさず、16 KiB の
+   決定的な切り詰め〈落とす順: diff_stat → integration → phases_done → work_units → next_phase_work_units →
+   artifact_paths〉と Markdown の描画を単純にするため）。壁時計は WU 行の `created_at`〜`updated_at` から求める。
+   `Trigger` は `PhaseGate { phase: String }` を持つため `Copy` を外した（呼び出し側 3 箇所に `.clone()`）。

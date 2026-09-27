@@ -20236,3 +20236,30 @@ run 開始部分で、F3 の `quota_begin` を `dispatch_one` に移して解消
   （ADR D2.1 が触れる、計画採用後に pause_after だけを直す専用エンドポイント）は実装していない
   （§6 F3 の受け入れ条件 (a) は `NewTaskSpec`/`PATCH`/CoS とだけ書いており、専用 PUT は明示要求されて
   いないため。必要なら次の一手として追加する）。
+
+
+### F3(pause) checkpoint — 区切り 2 (b)（完了）
+
+停止点の工程の統合の後で `PhaseGate` → Blocked（reason `awaiting_human`、attempts 不変）、決定的な途中報告
+`Event::PhaseReported` と `artifacts/phase-reports/<n>-<phase>.md`（`ArtifactProduced`）。前任者の未 commit の下書き
+（8 ファイル）はそのままビルドが通ったので土台にし、受け入れテストを足した。
+
+- **条件 (b)**: `crates/task-dispatch/src/dispatcher.rs::finish_phase_integration` が、次の工程があり、この工程が
+  有効な計画の `PausePointsResolved.phases` に含まれるとき `Continue{advance}` の代わりに `Trigger::PhaseGate` を
+  適用し、`PhaseIntegrated`・`ArtifactProduced`・`PhaseReported` を同じトランザクションで書く。途中報告は
+  `build_phase_report`（checkpoint・統合結果・`git diff --stat`・次の工程・`quota_summary_line`・成果物）で組み、
+  LLM は使わない。型は `crates/task-core/src/pause.rs`（`PhaseReport`・`PhaseResumeMode`・`truncate_phase_report`・
+  `format_wall_ms`・`quota_summary_line`）、遷移は `crates/task-core/src/transition.rs`（`PhaseGate`/`PhaseResume`）。
+  ADR-0074 末尾に「Phase F3（途中確認）実装時の逸脱・明確化」を追加（次の工程の WU は ready になるが Task が
+  Blocked なので走らない、など）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-dispatch --lib -- pause_after_design_blocks_with_awaiting_human` → 1 passed（Blocked、
+    最後の遷移 `awaiting_human`、`worker_done` 無し、attempts 不変、replay・WU 照合の差分 0、`PhaseReported` 1 件、
+    `phase-reports/1-design.md` の本文、build の WU は run 0）。
+  - `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+  - `UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated`（＋ `event_row_schema_matches_committed`）
+    → pass。`api-v1.schema.json`・`event.schema.json` に `PhaseReported`/`PhaseReport` が加算。
+    `gui: corepack pnpm@11.27.0 gen:types` で `types.ts` を追随、`typecheck` exit 0。
+  - `cargo test --workspace --no-fail-fast` → exit 0、93 binary、2448 passed、FAILED 0。
+  - 環境: 着手時にルートが 100%（空き 0）で `No space left on device`。自分の `agent-platform-f3pause` の target
+    だけを消して作り直した（`CARGO_INCREMENTAL=0`・`CARGO_PROFILE_{DEV,TEST}_DEBUG=line-tables-only` で容量を抑える）。

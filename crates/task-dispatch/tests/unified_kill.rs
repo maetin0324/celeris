@@ -206,7 +206,7 @@ async fn stopping_a_run_kills_the_grandchild(trigger: Trigger) {
 
     // 人が止める（`cancel` / コメントによる `Interrupt`）。API と同じく DB の状態だけを変える。
     store
-        .apply_transition(task.id, trigger, None)
+        .apply_transition(task.id, trigger.clone(), None)
         .unwrap_or_else(|e| panic!("{trigger:?}: {e}"));
 
     // 次の tick で `abort_stale_runs` が気付き、プロセスグループごと止める。

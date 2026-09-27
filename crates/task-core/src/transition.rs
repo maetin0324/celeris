@@ -13,7 +13,10 @@ pub struct StateView {
 }
 
 /// タスクの状態遷移を駆動するトリガー。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ADR-0074 D2.2（Phase F3 途中確認）: `PhaseGate` が `String` を持つため `Copy` は外した
+/// （導入前は全 variant が `Copy` だった。呼び出し側は値渡しのままなので影響は無い）。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
     Accept,
     Dispatch,
@@ -72,6 +75,17 @@ pub enum Trigger {
     /// `Reviewing → Ready`、attempts は据え置き（同じ `Event::Transitioned{reason:"review_repair"}`
     /// のトランザクションで、呼び出し側〈`task_ops::execution`〉が repair の WorkUnit を作る）。
     ReviewRepair,
+    /// ADR-0074 D2.2（Phase F3 途中確認）: 停止点の工程の統合の後。`Running → Blocked`、
+    /// `reason = "awaiting_human"`、attempts 不変。`phase` はどの工程の後かを運ぶだけ
+    /// （遷移そのものの判定には使わない）。
+    PhaseGate {
+        phase: String,
+    },
+    /// ADR-0074 D2.2/D2.4: 人の「続ける」/「replan」。`Blocked → Ready`、
+    /// `reason = "phase_continue"` / `"phase_replan"`、attempts 不変。
+    PhaseResume {
+        mode: crate::pause::PhaseResumeMode,
+    },
 }
 
 impl Trigger {
@@ -104,6 +118,8 @@ impl Trigger {
             Trigger::InfraRequeue => "infra_requeue",
             Trigger::Continue { why } => why.name(),
             Trigger::ReviewRepair => "review_repair",
+            Trigger::PhaseGate { .. } => "awaiting_human",
+            Trigger::PhaseResume { mode } => mode.name(),
         }
     }
 
@@ -456,6 +472,33 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
                 Err(invalid(s, t))
             }
         }
+
+        // ADR-0074 D2.2（Phase F3 途中確認）: 停止点の工程の統合の後。attempts は変えない
+        // （replay の attempts 計算に入らない。`retry_or_fail` を通さない）。
+        Trigger::PhaseGate { .. } => {
+            if s.status == Status::Running {
+                Ok(Outcome {
+                    next: Status::Blocked,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+
+        // ADR-0074 D2.2/D2.4: 人の「続ける」/「replan」。attempts は変えない。
+        Trigger::PhaseResume { .. } => {
+            if s.status == Status::Blocked {
+                Ok(Outcome {
+                    next: Status::Ready,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
     }
 }
 
@@ -610,6 +653,22 @@ mod tests {
                     expect_err()
                 }
             }
+            // ADR-0074 D2.2（Phase F3 途中確認）: `Running` からだけ `Blocked` へ。
+            Trigger::PhaseGate { .. } => {
+                if status == Status::Running {
+                    expect_ok(Status::Blocked)
+                } else {
+                    expect_err()
+                }
+            }
+            // ADR-0074 D2.2/D2.4: `Blocked` からだけ `Ready` へ。
+            Trigger::PhaseResume { .. } => {
+                if status == Status::Blocked {
+                    expect_ok(Status::Ready)
+                } else {
+                    expect_err()
+                }
+            }
             _ => unreachable!("handled by retry-aware helper"),
         }
     }
@@ -641,6 +700,14 @@ mod tests {
             // ADR-0072（Phase E1）: 予算切れ・yield の続き（attempts 据え置き）。
             Trigger::Continue {
                 why: crate::execution::ContinueWhy::Continue,
+            },
+            // ADR-0074 D2.2（Phase F3 途中確認）: 停止点の工程の統合の後、および人の「続ける」/
+            // 「replan」（attempts 据え置き）。
+            Trigger::PhaseGate {
+                phase: "design".to_string(),
+            },
+            Trigger::PhaseResume {
+                mode: crate::pause::PhaseResumeMode::Continue,
             },
         ];
 
@@ -685,9 +752,10 @@ mod tests {
                 }
             }
         }
-        // 4 kinds * 8 statuses * 18 triggers（Phase 53 で Interrupt / Reopen、Phase 59 で Unroutable、
-        // Phase 116（ADR-0070 D3）で InfraRequeue、Phase E1（ADR-0072）で Continue を追加）
-        assert_eq!(count, 4 * 8 * 18);
+        // 4 kinds * 8 statuses * 20 triggers（Phase 53 で Interrupt / Reopen、Phase 59 で Unroutable、
+        // Phase 116（ADR-0070 D3）で InfraRequeue、Phase E1（ADR-0072）で Continue、
+        // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume を追加）
+        assert_eq!(count, 4 * 8 * 20);
     }
 
     /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる
@@ -721,6 +789,56 @@ mod tests {
             let err = transition(&not_running, &Trigger::Continue { why }).unwrap_err();
             assert_eq!(err.trigger, expected_reason);
         }
+    }
+
+    /// ADR-0074 D2.2（Phase F3 途中確認）: `PhaseResume` の `reason` は `mode` ごとの静的な名前
+    /// （`Trigger::Continue` の `why` と同じ形）。
+    #[test]
+    fn phase_resume_reason_matches_the_mode() {
+        use crate::pause::PhaseResumeMode;
+        for (mode, expected_reason) in [
+            (PhaseResumeMode::Continue, "phase_continue"),
+            (PhaseResumeMode::Replan, "phase_replan"),
+        ] {
+            let s = StateView {
+                kind: TaskKind::Execute,
+                status: Status::Blocked,
+                attempts: 1,
+                max_retries: 3,
+            };
+            let outcome = transition(&s, &Trigger::PhaseResume { mode }).unwrap();
+            assert_eq!(outcome.next, Status::Ready);
+            assert_eq!(outcome.attempts, 1, "attempts は据え置き");
+            assert_eq!(outcome.reason, expected_reason);
+
+            let not_blocked = StateView {
+                status: Status::Ready,
+                ..s
+            };
+            let err = transition(&not_blocked, &Trigger::PhaseResume { mode }).unwrap_err();
+            assert_eq!(err.trigger, expected_reason);
+        }
+    }
+
+    /// ADR-0074 D2.2: `PhaseGate` は `Running` からだけ `Blocked` へ、`reason` は常に `awaiting_human`。
+    #[test]
+    fn phase_gate_blocks_with_awaiting_human() {
+        let s = StateView {
+            kind: TaskKind::Execute,
+            status: Status::Running,
+            attempts: 2,
+            max_retries: 3,
+        };
+        let outcome = transition(
+            &s,
+            &Trigger::PhaseGate {
+                phase: "build".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.next, Status::Blocked);
+        assert_eq!(outcome.attempts, 2);
+        assert_eq!(outcome.reason, "awaiting_human");
     }
 
     /// ADR-0044 D2（Phase 53）: 割り込みは attempts を消費せず理由は `comment`、再開は attempts を 0 に戻す。

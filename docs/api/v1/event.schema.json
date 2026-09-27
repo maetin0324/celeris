@@ -1348,6 +1348,27 @@
             "source"
           ],
           "type": "object"
+        },
+        {
+          "description": "ADR-0074 D2.3（Phase F3 途中確認）: 停止点の工程の統合の後に、決定的に組み立てた途中報告を\n残す（LLM は使わない）。同じ内容を `artifacts/phase-reports/<n>-<phase>.md` にも書く\n（`ArtifactProduced` が別に飛ぶ）。状態は変えない（同じトランザクションの\n`Transitioned{reason:\"awaiting_human\"}` が Task を `blocked` にする）。",
+          "properties": {
+            "phase": {
+              "type": "string"
+            },
+            "report": {
+              "$ref": "#/$defs/PhaseReport"
+            },
+            "type": {
+              "const": "phase_reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "phase",
+            "report"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1752,6 +1773,78 @@
       "required": [
         "key",
         "commit"
+      ],
+      "type": "object"
+    },
+    "PhaseReport": {
+      "description": "D2.3: 途中報告そのもの（`Event::PhaseReported.report` と `artifacts/phase-reports/<n>-<phase>.md`\nが同じ内容を持つ）。決定的に組み立てる（LLM は使わない）。各フィールドは既に人が読める 1 行・\n1 段落の文字列にしてある（型を増やしすぎず、レンダリングと切り詰めを単純にするため）。",
+      "properties": {
+        "artifact_paths": {
+          "description": "成果物へのリンク（workspace 相対パス）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "diff_stat": {
+          "description": "Task ブランチの `git diff --stat` の要約（最大 30 行）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "integration": {
+          "description": "統合の結果（merge・衝突・検査。1 行ずつ）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "next_phase": {
+          "description": "次の工程の key・title（無ければ `None` = 実質最後の工程）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_phase_work_units": {
+          "description": "次の工程の WU の title の一覧。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phase": {
+          "description": "止まった工程の key。",
+          "type": "string"
+        },
+        "phase_title": {
+          "description": "止まった工程の title。",
+          "type": "string"
+        },
+        "phases_done": {
+          "description": "済んだ工程の一覧（1 行ずつ: title・WU の数・run の数・壁時計）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "quota_summary": {
+          "description": "使った quota と参考の定価（ここまでの合計。1 行）。",
+          "type": "string"
+        },
+        "work_units": {
+          "description": "この工程の WU ごとの要約（1 段落ずつ）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "phase",
+        "phase_title",
+        "quota_summary"
       ],
       "type": "object"
     },

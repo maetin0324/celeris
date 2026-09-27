@@ -1119,3 +1119,19 @@ E6 の fixture `crates/task-worker/tests/fixtures/codex-stream.jsonl` は従来 
     `key` = `task_id:<awaiting_human の遷移の seq>`。
 11. **`celerisctl execution phase-gate <task> continue|replan|withdraw [--note]`** を足した（API と同じ
     `task_ops::phase_gate::phase_gate`）。
+
+## Phase F4a 実装時の逸脱・明確化（2026-09-27）
+
+- **D3.3 の 1 トランザクション**: 新しい `TaskStore::project_plan_decide_apply` が、全途中目標の状態・全 Task の
+  遷移（`Accept` / `Cancel`）・`ProjectPlanDecided`（提案元の plan タスクの events）を 1 つの `IMMEDIATE` トランザクションで書く。
+  `Cancel` は後続へ `DependencyFailed` でカスケードする（ADR-0010 D2）ので、既に `draft` でない Task は飛ばす
+  （reject で依存先の Task は兄弟の `Cancel` のカスケードで先に `cancelled` になる。遷移理由が `dependency_failed` になるだけで状態は同じ）。
+- **reject の秘書への対話**は、トランザクションの commit 後に `conversation::start`（ADR-0038 の `ng` と同じ経路）で送る。
+  秘書が居ない構成は書き込み前に 422 で弾くので「決定だけ残って対話が無い」状態は生じない（対話の作成自体の失敗は残りうる）。
+- **個別の Accept の禁止**: `task_ops::gate::{accept, approve_as}` が、`is_milestone_task` かつ途中目標が `proposed` の draft を
+  `OpsError::Validation`（422）で拒む。途中目標が `approved` なら従来どおり。
+- **CLI**: `celerisctl projects plan approve <project> [version]` / `celerisctl projects plan reject <project> [version] --note …`
+  （`projects` に `project` の別名。版の既定は 1）。DB に直接書く既存の celerisctl の書き込み操作と同じ流儀で、
+  `CONVERSATION_READONLY_CELERISCTL` には入れない（CoS の対話 run からは押せない HUMAN GATE のまま）。
+- **API の状態コード**: 成功は 202（`ProjectPlanDecided{decision, plan_task_id, milestones, tasks}`）、reject で note 空は 422、
+  無い版は 404、決定済みの版は 409、トークン無しは 401。

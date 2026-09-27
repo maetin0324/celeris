@@ -538,6 +538,28 @@ export type Event =
       phase: string;
       report: PhaseReport;
       type: "phase_reported";
+    }
+  | {
+      /**
+       * この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を
+       * 決定的に引くため。
+       */
+      milestones: ProposedMilestone[];
+      plan: ProjectPlanSpec;
+      project_id: ProjectId;
+      supersedes?: number | null;
+      type: "project_plan_proposed";
+      /**
+       * 1 から始まる連番。replan（D3.4、F4b）のたびに増える。F4a の初回提案は常に 1。
+       */
+      version: number;
+    }
+  | {
+      approved: boolean;
+      note?: string | null;
+      project_id: ProjectId;
+      type: "project_plan_decided";
+      version: number;
     };
 /**
  * DESIGN §5.3/§5.7 の `Check` 種別。
@@ -865,6 +887,10 @@ export type RepoKind = "git" | "dir";
  */
 export type RepoSync = "worktree" | "rsync" | "none";
 /**
+ * ADR-0074 D3.3（Phase F4a (c)）: `POST /projects/{id}/project-plan/{version}/decide` の `decision`。
+ */
+export type ProjectPlanDecisionInput = "approve" | "reject";
+/**
  * インスタンスの役割（ADR-0040 D4）。`daemon_instances.role` の綴りと 1 対 1。
  */
 export type InstanceRole = "active" | "standby" | "draining" | "verify";
@@ -1045,6 +1071,8 @@ export interface ApiV1Schema {
   project_patch: ProjectPatchBody;
   project_plan: ProjectPlanBody;
   project_plan_accepted: ProjectPlanAccepted;
+  project_plan_decide: ProjectPlanDecideBody;
+  project_plan_decided: ProjectPlanDecided;
   provider_check: ProviderCheckResponse;
   provider_config: ProviderConfigView1;
   providers: Providers;
@@ -3350,6 +3378,51 @@ export interface PhaseReport {
   work_units?: string[];
 }
 /**
+ * `Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。
+ */
+export interface ProposedMilestone {
+  key: string;
+  milestone_id: MilestoneId;
+  task_id: TaskId;
+}
+/**
+ * D3.3: CoS の計画 run が `<artifacts>/project-plan.json` に書く JSON そのもの。
+ */
+export interface ProjectPlanSpec {
+  milestones: MilestoneSpec[];
+  rationale: string;
+  schema: string;
+}
+/**
+ * D3.3: 1 マイルストーンの spec。`assignee` / `tier` / `model` / `lane` は持たない
+ * （`deny_unknown_fields`。ADR-0069 D1: 担当は matching が決める）。
+ */
+export interface MilestoneSpec {
+  acceptance?: Criterion[];
+  depends_on?: string[];
+  /**
+   * ADR-0072 D13 のヒント（+2）。
+   */
+  execution?: ExecutionMode | null;
+  /**
+   * ADR-0069 D3: `TaskFeatureHints` の上書きヒント（型として検証する。D5.1 と同じ規律）。
+   */
+  features?: TaskFeatureHints | null;
+  genre?: string | null;
+  /**
+   * `[a-z0-9-]{1,32}`。計画の中で一意。
+   */
+  key: string;
+  objective: string;
+  /**
+   * 何が示せたら途中目標の達成か（人の判定の材料。SPEC §7「検証の合格線」）。
+   */
+  reach_criteria: string;
+  repos?: string[];
+  skills?: string[];
+  title: string;
+}
+/**
  * `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane`。
  */
 export interface ExecutionMetricsSummary {
@@ -5053,9 +5126,14 @@ export interface ProjectPatchBody {
 export interface ProjectPlanBody {
   /**
    * 分解の対象にする途中目標。省略すると `approved` / `in_progress` のものを文脈として渡すだけで、
-   * 特定の 1 件をこのタスクに紐づけない。
+   * 特定の 1 件をこのタスクに紐づけない。`mode = "milestones"` では使わない（422）。
    */
   milestone_id?: MilestoneId | null;
+  /**
+   * ADR-0074 D3.3（Phase F4a）: `"decompose"`（既定、従来どおり）か `"milestones"`
+   * （案件レベルの計画。マイルストーン Task の DAG を提案させる）。
+   */
+  mode?: "decompose" | "milestones";
   /**
    * 人の一言（任意）。
    */
@@ -5066,6 +5144,31 @@ export interface ProjectPlanBody {
  */
 export interface ProjectPlanAccepted {
   task_id: TaskId;
+}
+/**
+ * ADR-0074 D3.3（Phase F4a (c)）: `POST /projects/{id}/project-plan/{version}/decide`。
+ */
+export interface ProjectPlanDecideBody {
+  decision: ProjectPlanDecisionInput;
+  /**
+   * `reject` では必須（空なら 422）。`approve` では任意で、秘書へは送らない。
+   */
+  note?: string | null;
+}
+/**
+ * `POST /projects/{id}/project-plan/{version}/decide` の応答（202）。
+ */
+export interface ProjectPlanDecided {
+  decision: ProjectPlanDecisionInput;
+  /**
+   * `approve` は `approved`、`reject` は `redesigned` にした途中目標。
+   */
+  milestones: MilestoneId[];
+  plan_task_id: TaskId;
+  /**
+   * `approve` は `ready`、`reject` は `cancelled` にした Task。
+   */
+  tasks: TaskId[];
 }
 /**
  * `POST /api/v1/providers/{id}/check` の応答（ADR-0017 D2）。

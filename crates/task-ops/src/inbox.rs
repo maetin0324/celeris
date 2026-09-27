@@ -361,6 +361,13 @@ fn build_questions(
 }
 
 /// `status == Draft` のタスクを `parent_id` でまとめる。根（`parent_id == None`）は最後。
+///
+/// ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の提案で作られた draft Task は
+/// **案件直下**（`parent_id == None`）なので、通常の「親でまとめる」規則には乗らない。それらは
+/// `is_milestone_task` かつ紐づく途中目標が `proposed`（=このタスク自身が手で作った・承認済みの
+/// 途中目標ではなく、まだ人が決めていない提案の一部）で見分け、案件ごとに 1 つの `DraftGroup` に
+/// まとめる（1 まとまり）。`plan_summary` は `Event::ProjectPlanProposed` の rationale と、
+/// マイルストーンの DAG の 1 行ずつ。
 fn build_drafts(
     store: &dyn TaskStore,
     all_tasks: &[Task],
@@ -368,22 +375,69 @@ fn build_drafts(
     ctx: &ViewContext,
     now: OffsetDateTime,
 ) -> Result<Vec<DraftGroup>, OpsError> {
-    let mut groups: HashMap<Option<TaskId>, Vec<Task>> = HashMap::new();
-    for t in all_tasks.iter().filter(|t| t.status == Status::Draft) {
-        groups.entry(t.parent_id).or_default().push(t.clone());
+    let all_drafts: Vec<&Task> = all_tasks
+        .iter()
+        .filter(|t| t.status == Status::Draft)
+        .collect();
+
+    // 案件ごとに「proposed の途中目標」の集合を引く（`is_milestone_task` の draft だけを候補にする）。
+    let candidate_projects: HashSet<task_core::ProjectId> = all_drafts
+        .iter()
+        .filter(|t| t.milestone_id.is_some() && task_core::is_milestone_task(t))
+        .filter_map(|t| t.project_id)
+        .collect();
+    let mut proposed_milestones_by_project: HashMap<
+        task_core::ProjectId,
+        HashSet<task_core::MilestoneId>,
+    > = HashMap::new();
+    for project_id in candidate_projects {
+        let proposed: HashSet<task_core::MilestoneId> = store
+            .milestone_list(project_id)?
+            .into_iter()
+            .filter(|m| m.status == task_core::MilestoneStatus::Proposed)
+            .map(|m| m.id)
+            .collect();
+        if !proposed.is_empty() {
+            proposed_milestones_by_project.insert(project_id, proposed);
+        }
     }
 
-    let mut keys: Vec<Option<TaskId>> = groups.keys().copied().collect();
-    keys.sort_by_key(|k| sort_key_for_draft_group(k, by_id));
+    let mut project_plan_drafts: HashMap<task_core::ProjectId, Vec<Task>> = HashMap::new();
+    let mut groups: HashMap<TaskId, Vec<Task>> = HashMap::new();
+    let mut root_drafts: Vec<Task> = Vec::new();
+    for t in all_drafts {
+        let in_proposal =
+            t.project_id
+                .zip(t.milestone_id)
+                .is_some_and(|(project_id, milestone_id)| {
+                    proposed_milestones_by_project
+                        .get(&project_id)
+                        .is_some_and(|set| set.contains(&milestone_id))
+                })
+                && task_core::is_milestone_task(t);
+        if in_proposal {
+            project_plan_drafts
+                .entry(t.project_id.expect("checked above"))
+                .or_default()
+                .push(t.clone());
+        } else if let Some(parent_id) = t.parent_id {
+            groups.entry(parent_id).or_default().push(t.clone());
+        } else {
+            root_drafts.push(t.clone());
+        }
+    }
+
+    let mut keys: Vec<TaskId> = groups.keys().copied().collect();
+    keys.sort_by_key(|k| sort_key_for_draft_group(&Some(*k), by_id));
     // 子の件数は全件から 1 回だけ集計する（draft ごとに全件を読むと件数の二乗になる。Phase 9 監査）。
     let counts = view::child_counts(all_tasks);
 
-    let mut out = Vec::with_capacity(keys.len());
+    let mut out = Vec::with_capacity(keys.len() + project_plan_drafts.len() + 1);
     for key in keys {
         let mut members = groups.remove(&key).unwrap_or_default();
         members.sort_by_key(|t| t.id);
 
-        let parent_task = key.and_then(|pid| by_id.get(&pid));
+        let parent_task = by_id.get(&key);
         let parent = parent_task.map(view::task_ref);
         let plan_summary = match parent_task {
             Some(p) => {
@@ -412,7 +466,94 @@ fn build_drafts(
             drafts,
         });
     }
+
+    // ADR-0074 D3.3: 案件計画の提案。`parent` は無い（構造上どの Task の子でもない）が、根
+    // （後述の `root_drafts`）よりは先に出す（案件の created_at 昇順で決定的に並べる）。
+    let mut project_ids: Vec<task_core::ProjectId> = project_plan_drafts.keys().copied().collect();
+    project_ids.sort_by_key(|pid| {
+        by_id
+            .values()
+            .find(|t| t.project_id == Some(*pid))
+            .map(|t| view::to_rfc3339(t.created_at))
+            .unwrap_or_default()
+    });
+    for project_id in project_ids {
+        let mut members = project_plan_drafts.remove(&project_id).unwrap_or_default();
+        members.sort_by_key(|t| t.id);
+        let plan_summary = project_plan_summary(store, all_tasks, project_id, &members)?;
+        let drafts: Vec<TaskSummary> = members
+            .iter()
+            .map(|t| {
+                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
+                view::build_task_summary(t, children, pending, ctx, now)
+            })
+            .collect();
+        out.push(DraftGroup {
+            parent: None,
+            plan_summary,
+            drafts,
+        });
+    }
+
+    // 根（誰の子でもなく、案件計画の提案でもない draft）は最後。
+    if !root_drafts.is_empty() {
+        root_drafts.sort_by_key(|t| t.id);
+        let drafts: Vec<TaskSummary> = root_drafts
+            .iter()
+            .map(|t| {
+                let (children, pending) = counts.get(&t.id).copied().unwrap_or((0, 0));
+                view::build_task_summary(t, children, pending, ctx, now)
+            })
+            .collect();
+        out.push(DraftGroup {
+            parent: None,
+            plan_summary: None,
+            drafts,
+        });
+    }
     Ok(out)
+}
+
+/// ADR-0074 D3.3（Phase F4a (b)）: `members`（1 つの案件の proposed 途中目標に結ばれた draft Task）を
+/// 提案した `Event::ProjectPlanProposed` を（そのイベントを持つ Plan タスクを total scan して）見つけ、
+/// rationale と DAG の 1 行ずつを組み立てる。見つからなければ `None`（イベントが読めない旧いデータ等）。
+fn project_plan_summary(
+    store: &dyn TaskStore,
+    all_tasks: &[Task],
+    project_id: task_core::ProjectId,
+    members: &[Task],
+) -> Result<Option<String>, OpsError> {
+    let member_ids: HashSet<TaskId> = members.iter().map(|t| t.id).collect();
+    for t in all_tasks {
+        if t.kind != TaskKind::Plan || t.project_id != Some(project_id) {
+            continue;
+        }
+        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
+        for row in rows.iter().rev() {
+            if let Event::ProjectPlanProposed {
+                milestones, plan, ..
+            } = &row.event
+                && milestones.iter().any(|m| member_ids.contains(&m.task_id))
+            {
+                let mut out = plan.rationale.clone();
+                out.push_str("\n\n");
+                for m in &plan.milestones {
+                    if m.depends_on.is_empty() {
+                        out.push_str(&format!("- {}: {}\n", m.key, m.title));
+                    } else {
+                        out.push_str(&format!(
+                            "- {}: {} (depends on: {})\n",
+                            m.key,
+                            m.title,
+                            m.depends_on.join(", ")
+                        ));
+                    }
+                }
+                return Ok(Some(out.trim_end().to_string()));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// 親の `created_at` 昇順、根（`None`）は最後になるようなソートキー。
@@ -1087,6 +1228,127 @@ mod tests {
         assert_eq!(item.5.as_deref(), Some("build"));
         assert!(item.0.actions.contains(&view::Action::PhaseGate));
         assert!(!item.0.actions.contains(&view::Action::Answer));
+    }
+
+    /// ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の提案で作られた top-level の
+    /// draft Task は、`parent_id` を持たないが（それぞれが「案件直下」）1 つの `DraftGroup` にまとまり、
+    /// `plan_summary` に rationale と DAG が入る。無関係の root draft とは混ざらず、root は最後のまま。
+    #[test]
+    fn inbox_drafts_group_a_project_plan_proposal_as_one_unit_and_keep_root_last() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let now = OffsetDateTime::now_utc();
+        store
+            .org_upsert(&task_core::OrgNode {
+                profile: Default::default(),
+                id: "secretary".into(),
+                parent_id: None,
+                name: "秘書".into(),
+                kind: task_core::OrgKind::Secretary,
+                genre: None,
+                brief: String::new(),
+                position: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("secretary");
+        let project = task_core::Project {
+            id: task_core::ProjectId::new(),
+            title: "t".into(),
+            request: "r".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).expect("create project");
+
+        let started = crate::project_plan::start_milestones(&store, &project, None, &[], &[], now)
+            .expect("start");
+
+        fn acceptance() -> Vec<Criterion> {
+            vec![
+                Criterion {
+                    text: "d".into(),
+                    check: Check::Human,
+                },
+                Criterion {
+                    text: "a".into(),
+                    check: Check::ArtifactExists {
+                        name: "r.md".into(),
+                    },
+                },
+            ]
+        }
+        let plan_spec = task_core::ProjectPlanSpec {
+            schema: task_core::PROJECT_PLAN_SCHEMA.into(),
+            rationale: "2段階で進める".into(),
+            milestones: vec![
+                task_core::MilestoneSpec {
+                    key: "survey".into(),
+                    title: "調査".into(),
+                    objective: "周辺調査".into(),
+                    reach_criteria: "候補が出せた".into(),
+                    acceptance: acceptance(),
+                    depends_on: vec![],
+                    genre: None,
+                    skills: vec![],
+                    repos: vec![],
+                    features: None,
+                    execution: None,
+                },
+                task_core::MilestoneSpec {
+                    key: "poc".into(),
+                    title: "PoC".into(),
+                    objective: "検証".into(),
+                    reach_criteria: "動くデモ".into(),
+                    acceptance: acceptance(),
+                    depends_on: vec!["survey".into()],
+                    genre: None,
+                    skills: vec![],
+                    repos: vec![],
+                    features: None,
+                    execution: None,
+                },
+            ],
+        };
+        let validated = task_core::validate_project_plan(
+            &plan_spec,
+            task_core::ProjectPlanLimits::default(),
+            &std::collections::BTreeSet::new(),
+        )
+        .expect("valid plan");
+        crate::project_plan::propose(&store, &started.task, &project, &validated, &[], &[], now)
+            .expect("propose");
+
+        let root_draft = sample_task(TaskKind::Execute, Status::Draft);
+        store.insert(&root_draft).expect("insert root draft");
+
+        let ctx = view_ctx();
+        let result = inbox(&store, None, &ctx, now, &no_evidence).expect("inbox");
+
+        assert_eq!(result.drafts.len(), 2, "{:?}", result.drafts);
+        let proposal_group = &result.drafts[0];
+        assert!(proposal_group.parent.is_none());
+        assert_eq!(proposal_group.drafts.len(), 2);
+        let summary = proposal_group
+            .plan_summary
+            .as_deref()
+            .expect("plan_summary");
+        assert!(summary.contains("2段階で進める"), "{summary}");
+        assert!(summary.contains("survey: 調査"), "{summary}");
+        assert!(
+            summary.contains("poc: PoC (depends on: survey)"),
+            "{summary}"
+        );
+
+        let root_group = &result.drafts[1];
+        assert!(root_group.parent.is_none(), "root group must be last");
+        assert_eq!(root_group.drafts.len(), 1);
+        assert_eq!(root_group.drafts[0].id, root_draft.id);
+        assert_eq!(result.counts.drafts, 3);
     }
 
     #[test]

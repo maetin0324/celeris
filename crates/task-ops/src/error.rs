@@ -48,6 +48,15 @@ pub enum OpsError {
         action: String,
     },
 
+    /// ADR-0074 D3.3（Phase F4a (c)）: その案件にその版の案件計画（マイルストーン DAG）の提案が無い
+    /// （API は 404）。
+    #[error("project {project_id} has no project plan proposal version {version}")]
+    ProjectPlanProposalNotFound { project_id: ProjectId, version: u32 },
+
+    /// ADR-0074 D3.3（Phase F4a (c)）: その版の案件計画は既に承認/却下済み（API は 409）。
+    #[error("project {project_id} project plan version {version} was already decided")]
+    ProjectPlanAlreadyDecided { project_id: ProjectId, version: u32 },
+
     #[error(transparent)]
     Store(#[from] StoreError),
 }

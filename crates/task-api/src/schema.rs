@@ -21,7 +21,9 @@ use crate::approvals::{
 use crate::conversation::{MessageAccepted, MessageList, MessagePostBody};
 use crate::memory::MemoryView;
 use crate::milestones::{MilestoneDecideBody, MilestoneDecided};
-use crate::project_plan::{ProjectPlanAccepted, ProjectPlanBody};
+use crate::project_plan::{
+    ProjectPlanAccepted, ProjectPlanBody, ProjectPlanDecideBody, ProjectPlanDecided,
+};
 use crate::types::{
     AccountCheckResponse, AccountList, AccountLoginResult, AccountLoginStart, AccountView,
     AnswerBody, ArtifactList, CancelBody, ClusterConnectResult, ClusterConnectStart,
@@ -100,6 +102,9 @@ pub struct ApiV1Schema {
     /// GUI 監査対応 Phase 29（ADR-0033 D4 追記）: 分解を起こす（`POST /projects/{id}/plan`）。
     pub project_plan: ProjectPlanBody,
     pub project_plan_accepted: ProjectPlanAccepted,
+    /// ADR-0074 D3.3（Phase F4a (c)）: `POST /projects/{id}/project-plan/{version}/decide`。
+    pub project_plan_decide: ProjectPlanDecideBody,
+    pub project_plan_decided: ProjectPlanDecided,
     /// GUI 監査対応 Phase 29 / H3（ADR-0033 D6）: 記憶を読む（`GET /org/{id}/memory`）。
     pub memory: MemoryView,
     /// Phase 25（ADR-0033 D3）: 報告（生成は決定的、圧縮は別 run）。

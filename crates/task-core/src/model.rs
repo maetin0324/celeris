@@ -1185,6 +1185,38 @@ pub enum Event {
         phase: String,
         report: Box<crate::pause::PhaseReport>,
     },
+    /// ADR-0074 D3.3（Phase F4a）: CoS の案件計画 run（`mode = "milestones"`）が検証を通り、マイルストーン
+    /// （`proposed`）と top-level の draft Task を作った。**`plan_task_id`（この Event が付く Plan
+    /// タスク）の events 列がその提案の正本**。状態は変えない（`replay` は無視する）。
+    ProjectPlanProposed {
+        project_id: crate::org::ProjectId,
+        /// 1 から始まる連番。replan（D3.4、F4b）のたびに増える。F4a の初回提案は常に 1。
+        version: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        supersedes: Option<u32>,
+        plan: Box<crate::project_plan::ProjectPlanSpec>,
+        /// この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を
+        /// 決定的に引くため。
+        milestones: Vec<ProposedMilestone>,
+    },
+    /// ADR-0074 D3.3（Phase F4a）: 人の承認/却下
+    /// （`POST /projects/{id}/project-plan/{version}/decide`）。状態は変えない（マイルストーン/Task の
+    /// 遷移は同じ操作の中の他の呼び出しが行う）。
+    ProjectPlanDecided {
+        project_id: crate::org::ProjectId,
+        version: u32,
+        approved: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+}
+
+/// `Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProposedMilestone {
+    pub key: String,
+    pub milestone_id: crate::org::MilestoneId,
+    pub task_id: TaskId,
 }
 
 /// `Event::PhaseIntegrated.merged[]`（ADR-0074 D1.4）。

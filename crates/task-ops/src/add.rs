@@ -416,7 +416,25 @@ pub fn create_task_with_roles(
     now: OffsetDateTime,
 ) -> Result<Task, OpsError> {
     let task = build_task(store, spec, roles, genres, true, now)?;
-    store.create_task(&task, vec![])?;
+    insert_task(store, task, vec![])
+}
+
+/// ADR-0074 D3.1 / D3.8（Phase F4a）: `task` を挿入する。**案件直下**（`task_core::is_milestone_task`）
+/// で `milestone_id` を持たなければ、同じトランザクションで途中目標の行（`approved`、title = Task の
+/// title）を作って結ぶ（1:1 の不変条件を保つ）。既に `milestone_id` があれば（人が明示した／親から
+/// 継いだ／案件計画が結んだ）何もしない — 既存の案件（途中目標が手で作られたもの）の挙動は変わらない。
+fn insert_task(
+    store: &dyn TaskStore,
+    mut task: Task,
+    extra_events: Vec<task_core::Event>,
+) -> Result<Task, OpsError> {
+    if task_core::is_milestone_task(&task) && task.milestone_id.is_none() {
+        let title = task.title.clone();
+        task.milestone_id = Some(MilestoneId::new());
+        store.create_task_with_milestone(&task, &title, extra_events)?;
+    } else {
+        store.create_task(&task, extra_events)?;
+    }
     Ok(task)
 }
 
@@ -445,13 +463,10 @@ pub fn create_support_task(
         };
     }
     task.status = Status::Ready;
-    store.create_task(
-        &task,
-        vec![task_core::Event::Created {
-            task: Box::new(task.clone()),
-        }],
-    )?;
-    Ok(task)
+    let extra_events = vec![task_core::Event::Created {
+        task: Box::new(task.clone()),
+    }];
+    insert_task(store, task, extra_events)
 }
 
 /// `spec` を検証して `Task` を組み立てる（挿入はしない）。`require_acceptance = false` なら
@@ -1162,6 +1177,101 @@ mod tests {
         let task = create_task_with_roles(&store, spec, &roles, &genres, now()).expect("create");
         assert_eq!(task.project_id, Some(other.id));
         assert_eq!(task.milestone_id, Some(milestone.id));
+    }
+
+    fn a_project(store: &dyn task_core::TaskStore) -> task_core::Project {
+        let now_ts = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            archived_at: None,
+            paused_from: None,
+            id: task_core::ProjectId::new(),
+            title: "t".into(),
+            request: "r".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            created_at: now_ts,
+            updated_at: now_ts,
+        };
+        store.project_create(&project).unwrap();
+        project
+    }
+
+    /// ADR-0074 D3.1 / D3.8（Phase F4a）: 案件直下（`is_milestone_task`）に `milestone_id` 無しで
+    /// Task を作ると、同じトランザクションで途中目標の行（`approved`、title = Task の title）ができ、
+    /// `milestone_id` で結ばれる（1:1 の不変条件）。
+    #[test]
+    fn creating_a_top_level_execute_task_without_a_milestone_id_auto_creates_an_approved_milestone()
+    {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let project = a_project(&store);
+
+        let mut spec = base_spec();
+        spec.title = "隣接領域の調査".into();
+        spec.project_id = Some(project.id);
+        let task = create_task(&store, spec, now()).expect("create_task");
+
+        let milestone_id = task.milestone_id.expect("auto milestone linked");
+        let milestones = store.milestone_list(project.id).expect("list");
+        assert_eq!(milestones.len(), 1);
+        assert_eq!(milestones[0].id, milestone_id);
+        assert_eq!(milestones[0].title, "隣接領域の調査");
+        assert_eq!(milestones[0].status, task_core::MilestoneStatus::Approved);
+        assert_eq!(milestones[0].seq, 1);
+
+        // 作った Task 自体もストアに正しく載っている（挿入とマイルストーン作成が同じトランザクション）。
+        let fetched = store.get(task.id).expect("get").expect("some");
+        assert_eq!(fetched.milestone_id, Some(milestone_id));
+    }
+
+    /// 既に `milestone_id` が明示されていれば（人が手で作った途中目標に結ぶ既存の使い方）、
+    /// 新しい途中目標は作らない — 既存の案件の挙動は変わらない。
+    #[test]
+    fn creating_a_top_level_task_with_an_explicit_milestone_id_does_not_auto_create_another() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let project = a_project(&store);
+        let milestone = store
+            .milestone_create(
+                project.id,
+                "手で作った途中目標",
+                "",
+                task_core::MilestoneStatus::Approved,
+            )
+            .expect("create milestone");
+
+        let mut spec = base_spec();
+        spec.project_id = Some(project.id);
+        spec.milestone_id = Some(milestone.id);
+        let task = create_task(&store, spec, now()).expect("create_task");
+
+        assert_eq!(task.milestone_id, Some(milestone.id));
+        let milestones = store.milestone_list(project.id).expect("list");
+        assert_eq!(milestones.len(), 1, "新しい途中目標を作らない");
+    }
+
+    /// 委譲の子（`parent` あり）は案件直下ではないので、`milestone_id` 無しでも自動生成しない。
+    #[test]
+    fn a_child_task_under_a_project_does_not_auto_create_a_milestone() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let project = a_project(&store);
+
+        let mut parent_spec = base_spec();
+        parent_spec.project_id = Some(project.id);
+        let parent = create_task(&store, parent_spec, now()).expect("create parent");
+        // 親自身がマイルストーンとして自動生成されている前提を確認。
+        assert!(parent.milestone_id.is_some());
+
+        let mut child_spec = base_spec();
+        child_spec.project_id = Some(project.id);
+        child_spec.parent = Some(parent.id);
+        let child = create_task(&store, child_spec, now()).expect("create child");
+        assert_eq!(
+            child.milestone_id, None,
+            "子タスクは案件直下ではないので自動生成しない"
+        );
+
+        let milestones = store.milestone_list(project.id).expect("list");
+        assert_eq!(milestones.len(), 1, "親の分だけ");
     }
 
     fn genre(id: &str, default_role: Option<&str>, roles: &[&str]) -> GenreSpec {

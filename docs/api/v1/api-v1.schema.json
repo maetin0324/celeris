@@ -9845,6 +9845,157 @@
       ],
       "type": "object"
     },
+    "PlanDagNode": {
+      "description": "DAG の 1 節点（= マイルストーン Task）。",
+      "properties": {
+        "change": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanNodeChange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "提案の中の節点だけ: この提案でどう変わるか（変わらなければ省略）。"
+        },
+        "children_done": {
+          "description": "子 Task（委譲・planner の children）の done / total。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "children_total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "depends_on": {
+          "description": "辺（同じ計画の他の節点の key）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": "string"
+        },
+        "milestone_id": {
+          "$ref": "#/$defs/MilestoneId"
+        },
+        "milestone_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MilestoneStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quota": {
+          "default": [],
+          "description": "ADR-0074 D4.3: 使った quota（この Task の run の合計）。",
+          "items": {
+            "$ref": "#/$defs/QuotaUse"
+          },
+          "type": "array"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanStopReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "task_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Status"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "work_units_done": {
+          "description": "進み具合: WU（統合 WU を除く、有効なもの）の done / total。計画の無い Task は 0 / 0。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "work_units_total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "depends_on",
+        "milestone_id",
+        "task_id",
+        "work_units_done",
+        "work_units_total",
+        "children_done",
+        "children_total"
+      ],
+      "type": "object"
+    },
+    "PlanDagProposal": {
+      "description": "未決の提案（初回の提案か replan の差分）。",
+      "properties": {
+        "nodes": {
+          "description": "承認されたときの計画全体（外す・取り下げる節点も `change` 付きで含める）。",
+          "items": {
+            "$ref": "#/$defs/PlanDagNode"
+          },
+          "type": "array"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "supersedes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "rationale",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "PlanNodeChange": {
+      "description": "提案（replan の差分）でこの節点がどう変わるか。",
+      "enum": [
+        "add",
+        "modify",
+        "remove",
+        "cancel"
+      ],
+      "type": "string"
+    },
     "PlanOrigin": {
       "description": "D5: `execution_plans.origin`。",
       "enum": [
@@ -9864,6 +10015,37 @@
         "abandoned"
       ],
       "type": "string"
+    },
+    "PlanStopReason": {
+      "description": "節点が止まっている理由（GUI の DAG の節点に出す）。",
+      "oneOf": [
+        {
+          "enum": [
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "awaiting_human",
+          "description": "工程の後の途中確認（F3 の `awaiting_human`）。",
+          "type": "string"
+        },
+        {
+          "const": "question",
+          "description": "人への質問で止まっている（`blocked`）。",
+          "type": "string"
+        },
+        {
+          "const": "awaiting_go",
+          "description": "依存先は終わったが、その途中目標がまだ `reached` でない（途中目標の Go 待ち。D3.2）。",
+          "type": "string"
+        },
+        {
+          "const": "paused",
+          "description": "途中目標か案件が一時停止中。",
+          "type": "string"
+        }
+      ]
     },
     "PriorityInput": {
       "anyOf": [
@@ -10155,6 +10337,17 @@
         "project": {
           "$ref": "#/$defs/Project"
         },
+        "project_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectPlanDagView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の\n提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。"
+        },
         "repos": {
           "default": [],
           "description": "ADR-0043 D1（Phase 52）: この案件のリポジトリ（primary が先頭）。\n`project.workspace` は primary の `location` の写し（GUI の後方互換）。",
@@ -10338,6 +10531,41 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ProjectPlanDagView": {
+      "description": "`GET /projects/{id}` の `project_plan`（案件計画が無い案件では省略）。",
+      "properties": {
+        "current_version": {
+          "description": "現行の（承認済みの）版。まだ無ければ `None`（提案だけがある）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nodes": {
+          "description": "現行の計画の節点（`plan.milestones` の順）。",
+          "items": {
+            "$ref": "#/$defs/PlanDagNode"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanDagProposal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "nodes"
+      ],
       "type": "object"
     },
     "ProjectPlanDecideBody": {

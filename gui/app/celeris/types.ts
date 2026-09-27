@@ -882,6 +882,14 @@ export type PhaseGateAction = "continue" | "replan" | "withdraw";
  */
 export type ProjectStatus = ("active" | "done") | "proposed" | "paused" | "cancelled";
 /**
+ * 提案（replan の差分）でこの節点がどう変わるか。
+ */
+export type PlanNodeChange = "add" | "modify" | "remove" | "cancel";
+/**
+ * 節点が止まっている理由（GUI の DAG の節点に出す）。
+ */
+export type PlanStopReason = "failed" | "awaiting_human" | "question" | "awaiting_go" | "paused";
+/**
  * リポジトリの種類（ADR-0043 D1）。`git` はタスクごとに worktree を切る。`dir` は
  * シンボリックリンクで見せる（コピーしない。大きいデータを想定）。
  */
@@ -5033,6 +5041,11 @@ export interface ProjectDetail {
   milestones: MilestoneView[];
   project: Project;
   /**
+   * ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の
+   * 提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。
+   */
+  project_plan?: ProjectPlanDagView | null;
+  /**
    * ADR-0043 D1（Phase 52）: この案件のリポジトリ（primary が先頭）。
    * `project.workspace` は primary の `location` の写し（GUI の後方互換）。
    */
@@ -5113,6 +5126,66 @@ export interface Project {
    * 分解した仕事は親の workspace を継ぐ）。
    */
   workspace?: WorkspaceSpec | null;
+}
+/**
+ * `GET /projects/{id}` の `project_plan`（案件計画が無い案件では省略）。
+ */
+export interface ProjectPlanDagView {
+  /**
+   * 現行の（承認済みの）版。まだ無ければ `None`（提案だけがある）。
+   */
+  current_version?: number | null;
+  /**
+   * 現行の計画の節点（`plan.milestones` の順）。
+   */
+  nodes: PlanDagNode[];
+  pending?: PlanDagProposal | null;
+}
+/**
+ * DAG の 1 節点（= マイルストーン Task）。
+ */
+export interface PlanDagNode {
+  /**
+   * 提案の中の節点だけ: この提案でどう変わるか（変わらなければ省略）。
+   */
+  change?: PlanNodeChange | null;
+  /**
+   * 子 Task（委譲・planner の children）の done / total。
+   */
+  children_done: number;
+  children_total: number;
+  /**
+   * 辺（同じ計画の他の節点の key）。
+   */
+  depends_on: string[];
+  key: string;
+  milestone_id: MilestoneId;
+  milestone_status?: MilestoneStatus | null;
+  /**
+   * ADR-0074 D4.3: 使った quota（この Task の run の合計）。
+   */
+  quota?: QuotaUse[];
+  stop_reason?: PlanStopReason | null;
+  task_id: TaskId;
+  task_status?: Status | null;
+  title: string;
+  /**
+   * 進み具合: WU（統合 WU を除く、有効なもの）の done / total。計画の無い Task は 0 / 0。
+   */
+  work_units_done: number;
+  work_units_total: number;
+}
+/**
+ * 未決の提案（初回の提案か replan の差分）。
+ */
+export interface PlanDagProposal {
+  /**
+   * 承認されたときの計画全体（外す・取り下げる節点も `change` 付きで含める）。
+   */
+  nodes: PlanDagNode[];
+  rationale: string;
+  supersedes?: number | null;
+  version: number;
 }
 /**
  * 案件のリポジトリ 1 件（`project_repos` の 1 行。ADR-0043 D1）。

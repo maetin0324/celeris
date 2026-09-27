@@ -703,11 +703,15 @@ async fn project_detail(
                 .collect();
             // ADR-0043 D1: この案件のリポジトリ（primary が先頭）。
             let repos = store.repo_list(project_id).map_err(store_problem)?;
+            // ADR-0074 D3.5（Phase F4b (h)）: 案件計画の DAG（無ければ省略）。
+            let project_plan = task_ops::project_plan::dag_view(store, &project)
+                .map_err(|e| ops_problem(store, e, None))?;
             Ok(ProjectDetail {
                 project,
                 repos,
                 milestones,
                 tasks,
+                project_plan,
             })
         })
         .await?;

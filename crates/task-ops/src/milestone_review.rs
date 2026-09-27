@@ -54,7 +54,11 @@ pub fn latest_proposal(
     let mut proposed: Vec<Milestone> = store
         .milestone_list(project_id)?
         .into_iter()
-        .filter(|m| m.status == MilestoneStatus::Proposed && Some(m.id) != exclude)
+        // ADR-0074 D3.8（Phase F4b）: 案件計画の提案中の途中目標（`plan_key` あり）は旧い意味の
+        // 「次の途中目標の提案」ではない。
+        .filter(|m| {
+            m.status == MilestoneStatus::Proposed && Some(m.id) != exclude && m.plan_key.is_none()
+        })
         .collect();
     proposed.sort_by_key(|m| m.seq);
     Ok(proposed.pop())

@@ -4220,6 +4220,17 @@
             "string",
             "null"
           ]
+        },
+        "project_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectPlanRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画の未決の提案なら、その案件と版（GUI は\n`POST /projects/{project_id}/project-plan/{version}/decide` をそのまま呼べる）。replan の差分で\n`add` が無い（modify / remove / cancel だけの）提案は `drafts` が空でもこの 1 まとまりで出る。"
         }
       },
       "required": [
@@ -5362,15 +5373,27 @@
         {
           "description": "ADR-0074 D3.3（Phase F4a）: CoS の案件計画 run（`mode = \"milestones\"`）が検証を通り、マイルストーン\n（`proposed`）と top-level の draft Task を作った。**`plan_task_id`（この Event が付く Plan\nタスク）の events 列がその提案の正本**。状態は変えない（`replay` は無視する）。",
           "properties": {
+            "delta": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProjectPlanDelta"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR-0074 D3.4（Phase F4b (e)）: replan の差分（`celeris.project-plan-delta/1`）。初回の提案は `None`。"
+            },
             "milestones": {
-              "description": "この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を\n決定的に引くため。",
+              "description": "この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を\n決定的に引くため。replan（F4b）では、既存のもの（id はそのまま）と `add` で作ったものを\n合わせた、承認後の計画全体の対応表。",
               "items": {
                 "$ref": "#/$defs/ProposedMilestone"
               },
               "type": "array"
             },
             "plan": {
-              "$ref": "#/$defs/ProjectPlanSpec"
+              "$ref": "#/$defs/ProjectPlanSpec",
+              "description": "提案が承認されたときの計画**全体**（replan の差分でも、差分を当てた後の全体を入れる）。"
             },
             "project_id": {
               "$ref": "#/$defs/ProjectId"
@@ -5520,6 +5543,68 @@
       },
       "required": [
         "criterion"
+      ],
+      "type": "object"
+    },
+    "ExecutionChildSpec": {
+      "additionalProperties": false,
+      "description": "ADR-0074 D3.7（Phase F4b (f)）: planner が提案する子 Task 1 件（`delegate` メッセージと同じ中身。\n`assignee` / `tier` / `model` は持たない〈担当は matching が決める。ADR-0069 D1〉）。",
+      "properties": {
+        "acceptance": {
+          "description": "1 件以上。",
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "description": "同じ `children` の中の他の子の key。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatureHints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。`children` の中で一意（WU の key とは別の名前空間。`child:<key>` で指す）。",
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "skills": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "objective",
+        "acceptance"
       ],
       "type": "object"
     },
@@ -5977,8 +6062,10 @@
       "properties": {
         "children": {
           "default": [],
-          "description": "D3.7: 子 Task の提案。F4 まで空だけを許す（`validate`）。F2 の時点では中身の schema を\n決めていないので、素の JSON 値のまま持つ（今回のPhaseの先回りをしない）。",
-          "items": true,
+          "description": "ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（v2 のみ。v1 では空でなければならない）。\n採用と同じトランザクションで既存の委譲の検証を通して子 Task になり、WU は\n`depends_on: [\"child:<key>\"]` でその子の `done` を待てる。",
+          "items": {
+            "$ref": "#/$defs/ExecutionChildSpec"
+          },
           "type": "array"
         },
         "phases": {
@@ -8102,6 +8189,13 @@
           ],
           "description": "ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。"
         },
+        "plan_key": {
+          "description": "ADR-0074 D3.3 / D3.8（Phase F4b）: 案件計画（`celeris.project-plan/1` と差分）から作られた\n途中目標の key。`None` の途中目標（既存・手で作ったもの・`task_ops::add` の自動生成）は旧い意味\n（直列、ADR-0038 の `ok` で次を承認して分解）のまま。`Some` なら DAG の節点で、`ok` は\n`reached` にして依存するマイルストーンの Go を開くだけ（D3.6）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "project_id": {
           "$ref": "#/$defs/ProjectId"
         },
@@ -8285,6 +8379,109 @@
       ],
       "type": "object"
     },
+    "MilestoneModify": {
+      "additionalProperties": false,
+      "description": "D3.4: 既存のマイルストーン 1 件の変更（書いた欄だけを変える。`key` は変えられない）。",
+      "properties": {
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatureHints"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pause_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reach_criteria": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repos": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
     "MilestonePatchBody": {
       "additionalProperties": false,
       "description": "`PATCH /milestones/{id}` の要求本文。",
@@ -8373,6 +8570,17 @@
         "objective": {
           "type": "string"
         },
+        "pause_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D2.1 / D3.3（Phase F4b）: このマイルストーン Task の途中確認（F3 の `PausePolicy`）。\n書かなければ既定（止めない）。"
+        },
         "reach_criteria": {
           "description": "何が示せたら途中目標の達成か（人の判定の材料。SPEC §7「検証の合格線」）。",
           "type": "string"
@@ -8451,6 +8659,13 @@
             }
           ],
           "description": "ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。"
+        },
+        "plan_key": {
+          "description": "ADR-0074 D3.3 / D3.8（Phase F4b）: 案件計画（`celeris.project-plan/1` と差分）から作られた\n途中目標の key。`None` の途中目標（既存・手で作ったもの・`task_ops::add` の自動生成）は旧い意味\n（直列、ADR-0038 の `ok` で次を承認して分解）のまま。`Some` なら DAG の節点で、`ok` は\n`reached` にして依存するマイルストーンの Go を開くだけ（D3.6）。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "project_id": {
           "$ref": "#/$defs/ProjectId"
@@ -9630,6 +9845,157 @@
       ],
       "type": "object"
     },
+    "PlanDagNode": {
+      "description": "DAG の 1 節点（= マイルストーン Task）。",
+      "properties": {
+        "change": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanNodeChange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "提案の中の節点だけ: この提案でどう変わるか（変わらなければ省略）。"
+        },
+        "children_done": {
+          "description": "子 Task（委譲・planner の children）の done / total。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "children_total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "depends_on": {
+          "description": "辺（同じ計画の他の節点の key）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": "string"
+        },
+        "milestone_id": {
+          "$ref": "#/$defs/MilestoneId"
+        },
+        "milestone_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MilestoneStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quota": {
+          "default": [],
+          "description": "ADR-0074 D4.3: 使った quota（この Task の run の合計）。",
+          "items": {
+            "$ref": "#/$defs/QuotaUse"
+          },
+          "type": "array"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanStopReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "task_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Status"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "work_units_done": {
+          "description": "進み具合: WU（統合 WU を除く、有効なもの）の done / total。計画の無い Task は 0 / 0。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "work_units_total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "depends_on",
+        "milestone_id",
+        "task_id",
+        "work_units_done",
+        "work_units_total",
+        "children_done",
+        "children_total"
+      ],
+      "type": "object"
+    },
+    "PlanDagProposal": {
+      "description": "未決の提案（初回の提案か replan の差分）。",
+      "properties": {
+        "nodes": {
+          "description": "承認されたときの計画全体（外す・取り下げる節点も `change` 付きで含める）。",
+          "items": {
+            "$ref": "#/$defs/PlanDagNode"
+          },
+          "type": "array"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "supersedes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "rationale",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "PlanNodeChange": {
+      "description": "提案（replan の差分）でこの節点がどう変わるか。",
+      "enum": [
+        "add",
+        "modify",
+        "remove",
+        "cancel"
+      ],
+      "type": "string"
+    },
     "PlanOrigin": {
       "description": "D5: `execution_plans.origin`。",
       "enum": [
@@ -9649,6 +10015,37 @@
         "abandoned"
       ],
       "type": "string"
+    },
+    "PlanStopReason": {
+      "description": "節点が止まっている理由（GUI の DAG の節点に出す）。",
+      "oneOf": [
+        {
+          "enum": [
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "awaiting_human",
+          "description": "工程の後の途中確認（F3 の `awaiting_human`）。",
+          "type": "string"
+        },
+        {
+          "const": "question",
+          "description": "人への質問で止まっている（`blocked`）。",
+          "type": "string"
+        },
+        {
+          "const": "awaiting_go",
+          "description": "依存先は終わったが、その途中目標がまだ `reached` でない（途中目標の Go 待ち。D3.2）。",
+          "type": "string"
+        },
+        {
+          "const": "paused",
+          "description": "途中目標か案件が一時停止中。",
+          "type": "string"
+        }
+      ]
     },
     "PriorityInput": {
       "anyOf": [
@@ -9835,6 +10232,11 @@
             "null"
           ]
         },
+        "auto_advance": {
+          "default": false,
+          "description": "ADR-0074 D3.2（Phase F4b）: `true` なら、案件計画のマイルストーン Task は依存先が `done` になった\n時点で進む（途中目標の `reached` = 人の `ok` を待たない。判定のレビューは後から行う）。既定 `false`。",
+          "type": "boolean"
+        },
         "created_at": {
           "type": "string"
         },
@@ -9934,6 +10336,17 @@
         },
         "project": {
           "$ref": "#/$defs/Project"
+        },
+        "project_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectPlanDagView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の\n提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。"
         },
         "repos": {
           "default": [],
@@ -10045,6 +10458,13 @@
       "additionalProperties": false,
       "description": "`PATCH /projects/{id}` の要求本文。`status` / `workspace` はどちらも任意（書いたものだけ変える）。\n`\"workspace\": null` を明示すると作業場所を消す（案件を「作業場所なし」に戻す）。",
       "properties": {
+        "auto_advance": {
+          "description": "ADR-0074 D3.2（Phase F4b (d)）: 案件計画のマイルストーン Task を、依存先の `done` で進めるか\n（`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "status": {
           "anyOf": [
             {
@@ -10113,6 +10533,41 @@
       },
       "type": "object"
     },
+    "ProjectPlanDagView": {
+      "description": "`GET /projects/{id}` の `project_plan`（案件計画が無い案件では省略）。",
+      "properties": {
+        "current_version": {
+          "description": "現行の（承認済みの）版。まだ無ければ `None`（提案だけがある）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nodes": {
+          "description": "現行の計画の節点（`plan.milestones` の順）。",
+          "items": {
+            "$ref": "#/$defs/PlanDagNode"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanDagProposal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "type": "object"
+    },
     "ProjectPlanDecideBody": {
       "additionalProperties": false,
       "description": "`POST /projects/{id}/project-plan/{version}/decide` の要求本文（ADR-0074 D3.3）。",
@@ -10174,6 +10629,62 @@
       ],
       "type": "string"
     },
+    "ProjectPlanDelta": {
+      "additionalProperties": false,
+      "description": "D3.4: replan の run が `<artifacts>/project-plan.json` に書く差分。",
+      "properties": {
+        "add": {
+          "default": [],
+          "description": "新しいマイルストーン（key は既存のどれとも衝突しない）。",
+          "items": {
+            "$ref": "#/$defs/MilestoneSpec"
+          },
+          "type": "array"
+        },
+        "base_version": {
+          "description": "この差分の元になった（承認済みの）版。現行の版と違えば古い差分として拒む。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cancel": {
+          "default": [],
+          "description": "走っている・まだ終わっていないマイルストーンを明示して取り下げる（承認で `Cancel` を適用）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "modify": {
+          "default": [],
+          "description": "まだ dispatch されていないマイルストーンの変更。",
+          "items": {
+            "$ref": "#/$defs/MilestoneModify"
+          },
+          "type": "array"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "remove": {
+          "default": [],
+          "description": "まだ dispatch されていないマイルストーンを計画から外す。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "base_version",
+        "rationale"
+      ],
+      "type": "object"
+    },
     "ProjectPlanMode": {
       "description": "ADR-0074 D3.3（Phase F4a (b)）: `POST /projects/{id}/plan` の `mode`。省略時は従来どおりの分解\n（`decompose`）。`milestones` は案件全体のマイルストーン DAG を CoS に設計させる。",
       "enum": [
@@ -10181,6 +10692,33 @@
         "milestones"
       ],
       "type": "string"
+    },
+    "ProjectPlanRef": {
+      "description": "`DraftGroup.project_plan`。",
+      "properties": {
+        "project_id": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "supersedes": {
+          "description": "replan の差分なら元の版。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project_id",
+        "version"
+      ],
+      "type": "object"
     },
     "ProjectPlanSpec": {
       "additionalProperties": false,

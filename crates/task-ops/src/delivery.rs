@@ -148,6 +148,7 @@ mod tests {
                 .unwrap();
         }
         let project = Project {
+            auto_advance: false,
             id: ProjectId::new(),
             title: "test".into(),
             request: "fix".into(),

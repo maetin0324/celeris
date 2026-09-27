@@ -138,9 +138,12 @@ pub use plan::{
 };
 // ---- ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）----
 pub use project_plan::{
-    MILESTONES_PLAN_LABEL, MilestoneSpec, PROJECT_PLAN_SCHEMA, ProjectPlanLimits, ProjectPlanSpec,
-    ProjectPlanValidationError, ValidatedProjectPlan, is_milestones_plan_task,
-    validate as validate_project_plan,
+    MILESTONES_PLAN_LABEL, MILESTONES_REPLAN_LABEL, MilestoneModify, MilestoneSpec,
+    PROJECT_PLAN_DELTA_SCHEMA, PROJECT_PLAN_SCHEMA, PlanNodeState, ProjectPlanDelta,
+    ProjectPlanDeltaError, ProjectPlanLimits, ProjectPlanSpec, ProjectPlanValidationError,
+    ValidatedProjectPlan, ValidatedProjectPlanDelta, is_milestones_plan_task,
+    is_milestones_replan_task, validate as validate_project_plan,
+    validate_delta as validate_project_plan_delta,
 };
 pub use report::{
     COMPACTION_ROLE, Report, ReportFilter, ReportId, ReportKind, ReportStore, ReportsLive,
@@ -151,9 +154,9 @@ pub use repos::{
     resolve_task_repos, valid_repo_name,
 };
 pub use store::{
-    ClusterSettings, EventRow, ListFilter, ListOrder, Page, SCHEMA_VERSION, SqliteStore,
-    StoreError, StoreOptions, TaskStore, backup_database, event_row_schema_value, integrity_check,
-    is_busy_error,
+    ClusterSettings, EventRow, ListFilter, ListOrder, Page, ProjectPlanApply,
+    ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore,
+    backup_database, event_row_schema_value, integrity_check, is_busy_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----
@@ -168,13 +171,14 @@ pub use execution::{
     parse_worker_checkpoint, truncate_checkpoint,
 };
 pub use execution_plan::{
-    EXECUTION_PLAN_SCHEMA, EXECUTION_PLAN_SCHEMA_V2, ExecutionLimits, ExecutionPlanRow,
-    ExecutionPlanSpec, INTEGRATE_KEY_PREFIX, NextStep, PhaseSpec, PlanOrigin, PlanStatus,
-    PlanValidationError, RunIndexRole, RunIndexStatus, RunRow, ValidatedPlan,
-    WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck, WorkUnitContext, WorkUnitKind,
-    WorkUnitRow, WorkUnitSpec, WorkUnitStatus, dependents_to_block, integrate_key,
-    integration_work_unit_specs, materialize_work_units, materialized_order, new_id, newly_ready,
-    next_work_unit, phase_leaves, phase_ranks, runnable_work_units, validate,
+    CHILD_DEP_PREFIX, EXECUTION_PLAN_SCHEMA, EXECUTION_PLAN_SCHEMA_V2, ExecutionChildSpec,
+    ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, INTEGRATE_KEY_PREFIX, NextStep,
+    PhaseSpec, PlanOrigin, PlanStatus, PlanValidationError, RunIndexRole, RunIndexStatus, RunRow,
+    ValidatedPlan, WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck, WorkUnitContext,
+    WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus, child_label, dependents_to_block,
+    integrate_key, integration_work_unit_specs, materialize_work_units, materialized_order, new_id,
+    newly_ready, newly_ready_with, next_work_unit, phase_leaves, phase_ranks, runnable_work_units,
+    validate,
 };
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use execution_gate::{

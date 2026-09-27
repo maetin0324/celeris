@@ -952,6 +952,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().expect("store");
         let now = OffsetDateTime::now_utc();
         let project = Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

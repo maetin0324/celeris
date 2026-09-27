@@ -824,6 +824,7 @@ mod tests {
                 .unwrap();
         }
         let p = Project {
+            auto_advance: false,
             id: ProjectId::new(),
             title: "test".into(),
             request: "fix".into(),

@@ -96,6 +96,21 @@ pub struct DraftGroup {
     pub parent: Option<TaskRef>,
     pub plan_summary: Option<String>,
     pub drafts: Vec<TaskSummary>,
+    /// ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画の未決の提案なら、その案件と版（GUI は
+    /// `POST /projects/{project_id}/project-plan/{version}/decide` をそのまま呼べる）。replan の差分で
+    /// `add` が無い（modify / remove / cancel だけの）提案は `drafts` が空でもこの 1 まとまりで出る。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_plan: Option<ProjectPlanRef>,
+}
+
+/// `DraftGroup.project_plan`。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct ProjectPlanRef {
+    pub project_id: task_core::ProjectId,
+    pub version: u32,
+    /// replan の差分なら元の版。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -380,44 +395,36 @@ fn build_drafts(
         .filter(|t| t.status == Status::Draft)
         .collect();
 
-    // 案件ごとに「proposed の途中目標」の集合を引く（`is_milestone_task` の draft だけを候補にする）。
-    let candidate_projects: HashSet<task_core::ProjectId> = all_drafts
+    // ADR-0074 D3.4（Phase F4b）: 案件ごとの未決の案件計画の提案（plan タスクの events が正本。
+    // `project_plan::plan_state`）。案件計画 run を持つ案件だけを見る。
+    let plan_projects: HashSet<task_core::ProjectId> = all_tasks
         .iter()
-        .filter(|t| t.milestone_id.is_some() && task_core::is_milestone_task(t))
+        .filter(|t| task_core::is_milestones_plan_task(t))
         .filter_map(|t| t.project_id)
         .collect();
-    let mut proposed_milestones_by_project: HashMap<
-        task_core::ProjectId,
-        HashSet<task_core::MilestoneId>,
-    > = HashMap::new();
-    for project_id in candidate_projects {
-        let proposed: HashSet<task_core::MilestoneId> = store
-            .milestone_list(project_id)?
-            .into_iter()
-            .filter(|m| m.status == task_core::MilestoneStatus::Proposed)
-            .map(|m| m.id)
-            .collect();
-        if !proposed.is_empty() {
-            proposed_milestones_by_project.insert(project_id, proposed);
+    let mut pending_by_project: HashMap<task_core::ProjectId, crate::project_plan::PlanVersion> =
+        HashMap::new();
+    for project_id in plan_projects {
+        if let Some(pending) = crate::project_plan::plan_state(store, project_id)?.pending() {
+            pending_by_project.insert(project_id, pending.clone());
         }
     }
+    let proposal_task_ids: HashSet<TaskId> = pending_by_project
+        .values()
+        .flat_map(|v| v.created().into_iter().map(|m| m.task_id))
+        .collect();
 
-    let mut project_plan_drafts: HashMap<task_core::ProjectId, Vec<Task>> = HashMap::new();
+    let mut project_plan_drafts: HashMap<task_core::ProjectId, Vec<Task>> = pending_by_project
+        .keys()
+        .map(|pid| (*pid, Vec::new()))
+        .collect();
     let mut groups: HashMap<TaskId, Vec<Task>> = HashMap::new();
     let mut root_drafts: Vec<Task> = Vec::new();
     for t in all_drafts {
-        let in_proposal =
-            t.project_id
-                .zip(t.milestone_id)
-                .is_some_and(|(project_id, milestone_id)| {
-                    proposed_milestones_by_project
-                        .get(&project_id)
-                        .is_some_and(|set| set.contains(&milestone_id))
-                })
-                && task_core::is_milestone_task(t);
-        if in_proposal {
+        let in_proposal = proposal_task_ids.contains(&t.id) && task_core::is_milestone_task(t);
+        if let (true, Some(project_id)) = (in_proposal, t.project_id) {
             project_plan_drafts
-                .entry(t.project_id.expect("checked above"))
+                .entry(project_id)
                 .or_default()
                 .push(t.clone());
         } else if let Some(parent_id) = t.parent_id {
@@ -464,6 +471,7 @@ fn build_drafts(
             parent,
             plan_summary,
             drafts,
+            project_plan: None,
         });
     }
 
@@ -480,7 +488,10 @@ fn build_drafts(
     for project_id in project_ids {
         let mut members = project_plan_drafts.remove(&project_id).unwrap_or_default();
         members.sort_by_key(|t| t.id);
-        let plan_summary = project_plan_summary(store, all_tasks, project_id, &members)?;
+        let Some(pending) = pending_by_project.get(&project_id) else {
+            continue;
+        };
+        let plan_summary = Some(project_plan_summary(pending));
         let drafts: Vec<TaskSummary> = members
             .iter()
             .map(|t| {
@@ -492,6 +503,11 @@ fn build_drafts(
             parent: None,
             plan_summary,
             drafts,
+            project_plan: Some(ProjectPlanRef {
+                project_id,
+                version: pending.version,
+                supersedes: pending.supersedes,
+            }),
         });
     }
 
@@ -509,51 +525,51 @@ fn build_drafts(
             parent: None,
             plan_summary: None,
             drafts,
+            project_plan: None,
         });
     }
     Ok(out)
 }
 
-/// ADR-0074 D3.3（Phase F4a (b)）: `members`（1 つの案件の proposed 途中目標に結ばれた draft Task）を
-/// 提案した `Event::ProjectPlanProposed` を（そのイベントを持つ Plan タスクを total scan して）見つけ、
-/// rationale と DAG の 1 行ずつを組み立てる。見つからなければ `None`（イベントが読めない旧いデータ等）。
-fn project_plan_summary(
-    store: &dyn TaskStore,
-    all_tasks: &[Task],
-    project_id: task_core::ProjectId,
-    members: &[Task],
-) -> Result<Option<String>, OpsError> {
-    let member_ids: HashSet<TaskId> = members.iter().map(|t| t.id).collect();
-    for t in all_tasks {
-        if t.kind != TaskKind::Plan || t.project_id != Some(project_id) {
-            continue;
-        }
-        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
-        for row in rows.iter().rev() {
-            if let Event::ProjectPlanProposed {
-                milestones, plan, ..
-            } = &row.event
-                && milestones.iter().any(|m| member_ids.contains(&m.task_id))
-            {
-                let mut out = plan.rationale.clone();
-                out.push_str("\n\n");
-                for m in &plan.milestones {
-                    if m.depends_on.is_empty() {
-                        out.push_str(&format!("- {}: {}\n", m.key, m.title));
-                    } else {
-                        out.push_str(&format!(
-                            "- {}: {} (depends on: {})\n",
-                            m.key,
-                            m.title,
-                            m.depends_on.join(", ")
-                        ));
-                    }
-                }
-                return Ok(Some(out.trim_end().to_string()));
-            }
+/// ADR-0074 D3.3（Phase F4a (b)）/ D3.4（Phase F4b）: 未決の提案の rationale と、承認後の DAG の 1 行ずつ。
+/// replan の差分なら、変える / 外す / 取り下げる key を添える（決定的。plan タスクの events が正本）。
+fn project_plan_summary(pending: &crate::project_plan::PlanVersion) -> String {
+    let plan = &pending.plan;
+    let mut out = plan.rationale.clone();
+    if let Some(base) = pending.supersedes {
+        out.push_str(&format!("\n\n（version {base} の見直し）"));
+    }
+    out.push_str("\n\n");
+    for m in &plan.milestones {
+        let added = pending
+            .delta
+            .as_ref()
+            .is_some_and(|d| d.add.iter().any(|a| a.key == m.key));
+        let marker = if added { " [add]" } else { "" };
+        if m.depends_on.is_empty() {
+            out.push_str(&format!("- {}: {}{marker}\n", m.key, m.title));
+        } else {
+            out.push_str(&format!(
+                "- {}: {}{marker} (depends on: {})\n",
+                m.key,
+                m.title,
+                m.depends_on.join(", ")
+            ));
         }
     }
-    Ok(None)
+    if let Some(delta) = &pending.delta {
+        if !delta.modify.is_empty() {
+            let keys: Vec<&str> = delta.modify.iter().map(|m| m.key.as_str()).collect();
+            out.push_str(&format!("modify: {}\n", keys.join(", ")));
+        }
+        if !delta.remove.is_empty() {
+            out.push_str(&format!("remove: {}\n", delta.remove.join(", ")));
+        }
+        if !delta.cancel.is_empty() {
+            out.push_str(&format!("cancel: {}\n", delta.cancel.join(", ")));
+        }
+    }
+    out.trim_end().to_string()
 }
 
 /// 親の `created_at` 昇順、根（`None`）は最後になるようなソートキー。
@@ -1252,6 +1268,7 @@ mod tests {
             })
             .expect("secretary");
         let project = task_core::Project {
+            auto_advance: false,
             id: task_core::ProjectId::new(),
             title: "t".into(),
             request: "r".into(),
@@ -1287,6 +1304,7 @@ mod tests {
             rationale: "2段階で進める".into(),
             milestones: vec![
                 task_core::MilestoneSpec {
+                    pause_after: None,
                     key: "survey".into(),
                     title: "調査".into(),
                     objective: "周辺調査".into(),
@@ -1300,6 +1318,7 @@ mod tests {
                     execution: None,
                 },
                 task_core::MilestoneSpec {
+                    pause_after: None,
                     key: "poc".into(),
                     title: "PoC".into(),
                     objective: "検証".into(),
@@ -1349,6 +1368,65 @@ mod tests {
         assert_eq!(root_group.drafts.len(), 1);
         assert_eq!(root_group.drafts[0].id, root_draft.id);
         assert_eq!(result.counts.drafts, 3);
+        assert_eq!(
+            proposal_group.project_plan.as_ref().map(|p| p.version),
+            Some(1)
+        );
+
+        // ADR-0074 D3.4（Phase F4b）: 承認後の replan の差分（modify だけで draft が無い）も、
+        // 未決の提案として 1 まとまりで出る。
+        crate::project_plan::decide(
+            &store,
+            &project,
+            1,
+            crate::project_plan::ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now,
+        )
+        .expect("approve");
+        let replan = crate::project_plan::start_replan(&store, &project, None, &[], &[], now)
+            .expect("replan");
+        let delta = task_core::ProjectPlanDelta {
+            schema: task_core::PROJECT_PLAN_DELTA_SCHEMA.into(),
+            base_version: 1,
+            rationale: "PoC を絞る".into(),
+            add: vec![],
+            modify: vec![task_core::MilestoneModify {
+                key: "poc".into(),
+                title: Some("PoC（小）".into()),
+                ..task_core::MilestoneModify::default()
+            }],
+            remove: vec![],
+            cancel: vec![],
+        };
+        let validated =
+            crate::project_plan::validate_delta_against_store(&store, project.id, &delta)
+                .expect("valid delta");
+        crate::project_plan::propose_delta(
+            &store,
+            &replan.task,
+            &project,
+            &validated,
+            &[],
+            &[],
+            now,
+        )
+        .expect("propose delta");
+        let result = inbox(&store, None, &ctx, now, &no_evidence).expect("inbox");
+        let group = result
+            .drafts
+            .iter()
+            .find(|g| g.project_plan.is_some())
+            .expect("pending replan group");
+        let plan_ref = group.project_plan.as_ref().expect("ref");
+        assert_eq!((plan_ref.version, plan_ref.supersedes), (2, Some(1)));
+        assert!(group.drafts.is_empty());
+        let summary = group.plan_summary.as_deref().expect("summary");
+        assert!(summary.contains("modify: poc"), "{summary}");
+        assert!(summary.contains("PoC（小）"), "{summary}");
     }
 
     #[test]

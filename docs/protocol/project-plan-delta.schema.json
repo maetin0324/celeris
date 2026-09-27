@@ -116,6 +116,109 @@
       ],
       "type": "string"
     },
+    "MilestoneModify": {
+      "additionalProperties": false,
+      "description": "D3.4: 既存のマイルストーン 1 件の変更（書いた欄だけを変える。`key` は変えられない）。",
+      "properties": {
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatureHints"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pause_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reach_criteria": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repos": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
     "MilestoneSpec": {
       "additionalProperties": false,
       "description": "D3.3: 1 マイルストーンの spec。`assignee` / `tier` / `model` / `lane` は持たない\n（`deny_unknown_fields`。ADR-0069 D1: 担当は matching が決める）。",
@@ -361,16 +464,48 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "D3.3: CoS の計画 run が `<artifacts>/project-plan.json` に書く JSON そのもの。",
+  "description": "D3.4: replan の run が `<artifacts>/project-plan.json` に書く差分。",
   "properties": {
-    "milestones": {
+    "add": {
+      "default": [],
+      "description": "新しいマイルストーン（key は既存のどれとも衝突しない）。",
       "items": {
         "$ref": "#/$defs/MilestoneSpec"
       },
       "type": "array"
     },
+    "base_version": {
+      "description": "この差分の元になった（承認済みの）版。現行の版と違えば古い差分として拒む。",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cancel": {
+      "default": [],
+      "description": "走っている・まだ終わっていないマイルストーンを明示して取り下げる（承認で `Cancel` を適用）。",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "modify": {
+      "default": [],
+      "description": "まだ dispatch されていないマイルストーンの変更。",
+      "items": {
+        "$ref": "#/$defs/MilestoneModify"
+      },
+      "type": "array"
+    },
     "rationale": {
       "type": "string"
+    },
+    "remove": {
+      "default": [],
+      "description": "まだ dispatch されていないマイルストーンを計画から外す。",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "schema": {
       "type": "string"
@@ -378,9 +513,9 @@
   },
   "required": [
     "schema",
-    "rationale",
-    "milestones"
+    "base_version",
+    "rationale"
   ],
-  "title": "ProjectPlanSpec",
+  "title": "ProjectPlanDelta",
   "type": "object"
 }

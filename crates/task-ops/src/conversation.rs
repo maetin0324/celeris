@@ -605,6 +605,7 @@ mod tests {
         seed_org(&store);
         let (roles, genres) = specs();
         let project = Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -1128,6 +1129,7 @@ mod tests {
         seed_org(&store);
         let (roles, genres) = specs();
         let project = Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -1239,6 +1241,7 @@ mod tests {
             .expect("org upsert");
         let (roles, genres) = specs();
         let project = Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

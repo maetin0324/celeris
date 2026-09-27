@@ -824,6 +824,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().expect("open store");
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             id: task_core::ProjectId::new(),
             title: "t".into(),
             request: "r".into(),

@@ -11,6 +11,8 @@
 //!
 //! I/O はストアの読み書きだけで、LLM は呼ばない（DESIGN 原則 1）。
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use task_core::{
     Event, GenreSpec, ListFilter, ListOrder, Message, MessageId, MessageRole, Milestone,
     MilestoneId, MilestoneStatus, OrgKind, Project, ProjectId, ProjectStatus, ProposedMilestone,
@@ -248,6 +250,10 @@ pub fn compose_goal(
 /// 同じ入口だが、`kind = plan` タスクに `task_core::MILESTONES_PLAN_LABEL` を付け（ワーカーのプロンプトと
 /// 完了時の扱いをこの印で分ける。D3.3）、案件全体のマイルストーンの DAG を設計させる（既存の途中目標の
 /// 文脈は渡さない — 一から describe する run のため）。
+///
+/// ADR-0074 D3.4（Phase F4b (e)）: 同じ案件に動いている案件計画 run か未決の提案があれば
+/// `OpsError::ProjectPlanInFlight`（二重の計画依頼を防ぐ）。既に承認済みの計画があれば、一からではなく
+/// **replan**（差分を書く run。`start_replan`）になる（GUI の「計画を見直す」も同じ入口）。
 pub fn start_milestones(
     store: &dyn TaskStore,
     project: &Project,
@@ -256,17 +262,71 @@ pub fn start_milestones(
     genres: &[GenreSpec],
     now: OffsetDateTime,
 ) -> Result<StartedPlan, OpsError> {
-    let Some(secretary) = store
-        .org_list()?
-        .into_iter()
-        .find(|n| n.kind == OrgKind::Secretary)
-    else {
-        return Err(OpsError::Validation(
-            "no secretary is configured".to_string(),
-        ));
-    };
+    let state = plan_state(store, project.id)?;
+    ensure_no_plan_in_flight(store, project.id, &state)?;
+    if state.current().is_some() {
+        return start_replan_checked(store, project, &state, note, roles, genres, now);
+    }
+    let secretary = secretary_node(store)?;
     let history = store.message_list(&secretary.id, Some(project.id), PLAN_HISTORY_LIMIT)?;
     let goal = compose_milestones_goal(project, note, &history);
+    let labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+    create_milestones_plan_task(store, project, &secretary, goal, labels, roles, genres, now)
+}
+
+/// ADR-0074 D3.4（Phase F4b (e)）: 案件の replan の計画 run を起こす（起点: 途中目標の `ng`、人の依頼、
+/// マイルストーン Task の失敗）。承認済みの計画が無ければ `OpsError::Validation`、動いている計画 run か
+/// 未決の提案があれば `OpsError::ProjectPlanInFlight`。現行の計画は**止めない**（承認までそのまま動く）。
+pub fn start_replan(
+    store: &dyn TaskStore,
+    project: &Project,
+    note: Option<&str>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<StartedPlan, OpsError> {
+    let state = plan_state(store, project.id)?;
+    ensure_no_plan_in_flight(store, project.id, &state)?;
+    start_replan_checked(store, project, &state, note, roles, genres, now)
+}
+
+fn start_replan_checked(
+    store: &dyn TaskStore,
+    project: &Project,
+    state: &ProjectPlanState,
+    note: Option<&str>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<StartedPlan, OpsError> {
+    let Some(current) = state.current() else {
+        return Err(OpsError::Validation(format!(
+            "project {} has no approved project plan to replan",
+            project.id
+        )));
+    };
+    let secretary = secretary_node(store)?;
+    let history = store.message_list(&secretary.id, Some(project.id), PLAN_HISTORY_LIMIT)?;
+    let nodes = node_views(store, project.id, current)?;
+    let goal = compose_replan_goal(project, current, &nodes, note, &history);
+    let labels = vec![
+        task_core::MILESTONES_PLAN_LABEL.to_string(),
+        task_core::MILESTONES_REPLAN_LABEL.to_string(),
+    ];
+    create_milestones_plan_task(store, project, &secretary, goal, labels, roles, genres, now)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_milestones_plan_task(
+    store: &dyn TaskStore,
+    project: &Project,
+    secretary: &task_core::OrgNode,
+    goal: String,
+    labels: Vec<String>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<StartedPlan, OpsError> {
     let title = truncate_title(&goal, TITLE_MAX_CHARS);
     let home = task_core::home_dir();
     let (plan_workspace, plan_cluster, plan_workspace_mode) = match project
@@ -307,8 +367,9 @@ pub fn start_milestones(
         cluster: plan_cluster,
         workspace_mode: plan_workspace_mode,
         adapter: None,
-        // D3.3: この印だけが、案件計画（マイルストーン DAG）run と旧来の分解 Plan run を分ける。
-        labels: vec![task_core::MILESTONES_PLAN_LABEL.to_string()],
+        // D3.3: この印だけが、案件計画（マイルストーン DAG）run と旧来の分解 Plan run を分ける
+        // （D3.4: replan なら `MILESTONES_REPLAN_LABEL` も）。
+        labels,
         category: None,
         skills: Vec::new(),
         mode: None,
@@ -351,6 +412,58 @@ pub fn compose_milestones_goal(
     out.trim_end().to_string()
 }
 
+/// ADR-0074 D3.4（Phase F4b (e)）: replan の run に渡す決定的な組み立て。現行の計画（版・各マイルストーンの
+/// key / 題名 / 依存 / 途中目標と Task の状態 / dispatch 済みか）を 1 行ずつ並べ、差分の元になる版を示す。
+pub fn compose_replan_goal(
+    project: &Project,
+    current: &PlanVersion,
+    nodes: &[PlanNodeView],
+    note: Option<&str>,
+    history: &[Message],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "案件: {}\n\n依頼:\n{}\n",
+        project.title,
+        project.request.trim()
+    ));
+    out.push_str(&format!(
+        "\n現行の案件計画（base_version: {}）:\n",
+        current.version
+    ));
+    for n in nodes {
+        let deps = if n.spec.depends_on.is_empty() {
+            "-".to_string()
+        } else {
+            n.spec.depends_on.join(", ")
+        };
+        let changeable = if n.state.dispatched || n.state.terminal {
+            "変更不可（cancel のみ）"
+        } else {
+            "変更可"
+        };
+        out.push_str(&format!(
+            "- {} 『{}』 依存: {deps} / 途中目標: {} / Task: {} / {changeable}\n",
+            n.spec.key,
+            n.spec.title,
+            n.milestone_status.map(|s| s.as_str()).unwrap_or("?"),
+            n.task_status
+                .map(|s| format!("{s:?}").to_lowercase())
+                .unwrap_or_else(|| "?".to_string()),
+        ));
+    }
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        out.push_str(&format!("\n見直しの理由・人からの一言:\n{note}\n"));
+    }
+    if !history.is_empty() {
+        out.push_str("\n秘書との直近のやり取り:\n");
+        for m in history {
+            out.push_str(&format!("[{}] {}\n", m.role.as_str(), m.text));
+        }
+    }
+    out.trim_end().to_string()
+}
+
 fn criterion_to_spec(c: task_core::Criterion) -> add::CriterionSpec {
     match c.check {
         task_core::Check::Human => add::CriterionSpec::Human { text: c.text },
@@ -361,6 +474,102 @@ fn criterion_to_spec(c: task_core::Criterion) -> add::CriterionSpec {
         task_core::Check::KnowledgePage { path } => add::CriterionSpec::KnowledgePage { path },
         task_core::Check::Reviewer => add::CriterionSpec::Reviewer { text: c.text },
     }
+}
+
+/// マイルストーンの spec から、そのマイルストーン Task の `NewTaskSpec` を作る（初回の提案・replan の
+/// `add`・`modify` の組み立て直しが同じ規則を使う）。
+fn milestone_task_spec(
+    project: &Project,
+    m: &task_core::MilestoneSpec,
+    milestone_id: MilestoneId,
+    depends_on: Vec<TaskId>,
+) -> NewTaskSpec {
+    let mut objective = m.objective.clone();
+    let reach = m.reach_criteria.trim();
+    if !reach.is_empty() {
+        objective.push_str("\n\n達成の基準（人の判定の材料）:\n");
+        objective.push_str(reach);
+    }
+    NewTaskSpec {
+        // ADR-0074 D2.1（Phase F4b）: 計画が書いた途中確認（無ければ既定 = 止めない）。
+        pause_after: m.pause_after.clone(),
+        repos: m.repos.clone(),
+        title: m.title.clone(),
+        objective,
+        acceptance: m
+            .acceptance
+            .iter()
+            .cloned()
+            .map(criterion_to_spec)
+            .collect(),
+        kind: TaskKind::Execute,
+        tier: None,
+        priority: Some(add::PriorityInput::Number(0)),
+        parent: None,
+        depends_on,
+        max_turns: None,
+        max_wall_secs: None,
+        max_retries: add::DEFAULT_MAX_RETRIES,
+        role: None,
+        genre: m.genre.clone(),
+        aggregate: false,
+        project_id: Some(project.id),
+        // 明示するので `task_ops::add::insert_task` の自動生成（D3.1/D3.8）は起きない
+        // （このマイルストーンの行に結ぶ）。
+        milestone_id: Some(milestone_id),
+        assignee: None,
+        workspace: None,
+        cluster: None,
+        workspace_mode: None,
+        adapter: None,
+        labels: Vec::new(),
+        category: None,
+        skills: m.skills.clone(),
+        mode: None,
+        status: Some(Status::Draft),
+        features: m.features,
+        execution: m.execution,
+        provenance: add::SpecProvenance::system(),
+    }
+}
+
+/// 途中目標（`proposed`、`plan_key` 付き）と draft のマイルストーン Task を 1 組作る。
+#[allow(clippy::too_many_arguments)]
+fn create_proposed_node(
+    store: &dyn TaskStore,
+    project: &Project,
+    m: &task_core::MilestoneSpec,
+    task_id_by_key: &std::collections::HashMap<String, TaskId>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<ProposedMilestone, OpsError> {
+    let mut depends_on = Vec::with_capacity(m.depends_on.len());
+    for dep_key in &m.depends_on {
+        let Some(&dep_task_id) = task_id_by_key.get(dep_key) else {
+            // `validate` の依存チェックとトポロジカル順を通っていれば起きない。防御的に扱う。
+            return Err(OpsError::Validation(format!(
+                "milestone {} depends on {dep_key}, which was not created yet",
+                m.key
+            )));
+        };
+        depends_on.push(dep_task_id);
+    }
+    let milestone = store.milestone_create(
+        project.id,
+        &m.title,
+        &m.objective,
+        MilestoneStatus::Proposed,
+    )?;
+    // ADR-0074 D3.2 / D3.8（Phase F4b）: 案件計画の途中目標の印（DAG の節点・Go の判定・`ok` の新しい意味）。
+    store.milestone_set_plan_key(milestone.id, &m.key)?;
+    let task_spec = milestone_task_spec(project, m, milestone.id, depends_on);
+    let task = add::create_task_with_roles(store, task_spec, roles, genres, now)?;
+    Ok(ProposedMilestone {
+        key: m.key.clone(),
+        milestone_id: milestone.id,
+        task_id: task.id,
+    })
 }
 
 /// ADR-0074 D3.3（Phase F4a (b)）: 検証済みの案件計画（`task_core::project_plan::validate` を通ったもの）
@@ -381,125 +590,173 @@ pub fn propose(
     now: OffsetDateTime,
 ) -> Result<Vec<ProposedMilestone>, OpsError> {
     let spec = &validated.spec;
+    let version = plan_state(store, project.id)?.next_version();
     let mut task_id_by_key: std::collections::HashMap<String, TaskId> =
         std::collections::HashMap::new();
     let mut proposed: Vec<ProposedMilestone> = Vec::with_capacity(spec.milestones.len());
 
     for &idx in &validated.topological_order {
         let m = &spec.milestones[idx];
-        let milestone = store.milestone_create(
-            project.id,
-            &m.title,
-            &m.objective,
-            MilestoneStatus::Proposed,
-        )?;
-
-        let mut depends_on = Vec::with_capacity(m.depends_on.len());
-        for dep_key in &m.depends_on {
-            let Some(&dep_task_id) = task_id_by_key.get(dep_key) else {
-                // `validate` の依存チェックとトポロジカル順を通っていれば起きない。防御的に扱う。
-                return Err(OpsError::Validation(format!(
-                    "milestone {} depends on {dep_key}, which was not created yet",
-                    m.key
-                )));
-            };
-            depends_on.push(dep_task_id);
-        }
-
-        let mut objective = m.objective.clone();
-        let reach = m.reach_criteria.trim();
-        if !reach.is_empty() {
-            objective.push_str("\n\n達成の基準（人の判定の材料）:\n");
-            objective.push_str(reach);
-        }
-
-        let task_spec = NewTaskSpec {
-            // F4b で `MilestoneSpec.pause_after` を足すまでは既定（止めない）。
-            pause_after: None,
-            repos: m.repos.clone(),
-            title: m.title.clone(),
-            objective,
-            acceptance: m
-                .acceptance
-                .iter()
-                .cloned()
-                .map(criterion_to_spec)
-                .collect(),
-            kind: TaskKind::Execute,
-            tier: None,
-            priority: Some(add::PriorityInput::Number(0)),
-            parent: None,
-            depends_on,
-            max_turns: None,
-            max_wall_secs: None,
-            max_retries: add::DEFAULT_MAX_RETRIES,
-            role: None,
-            genre: m.genre.clone(),
-            aggregate: false,
-            project_id: Some(project.id),
-            // 明示するので `task_ops::add::insert_task` の自動生成（D3.1/D3.8）は起きない
-            // （このマイルストーンの行に結ぶ）。
-            milestone_id: Some(milestone.id),
-            assignee: None,
-            workspace: None,
-            cluster: None,
-            workspace_mode: None,
-            adapter: None,
-            labels: Vec::new(),
-            category: None,
-            skills: m.skills.clone(),
-            mode: None,
-            status: Some(Status::Draft),
-            features: m.features,
-            execution: m.execution,
-            provenance: add::SpecProvenance::system(),
-        };
-        let task = add::create_task_with_roles(store, task_spec, roles, genres, now)?;
-        task_id_by_key.insert(m.key.clone(), task.id);
-        proposed.push(ProposedMilestone {
-            key: m.key.clone(),
-            milestone_id: milestone.id,
-            task_id: task.id,
-        });
+        let node = create_proposed_node(store, project, m, &task_id_by_key, roles, genres, now)?;
+        task_id_by_key.insert(m.key.clone(), node.task_id);
+        proposed.push(node);
     }
+    // `plan.milestones` と同じ順に並べ直す（Event の約束）。
+    proposed.sort_by_key(|p| {
+        spec.milestones
+            .iter()
+            .position(|m| m.key == p.key)
+            .unwrap_or(usize::MAX)
+    });
 
     store.append_event(
         plan_task.id,
         &Event::ProjectPlanProposed {
             project_id: project.id,
-            version: 1,
+            version,
             supersedes: None,
             plan: Box::new(spec.clone()),
             milestones: proposed.clone(),
+            delta: None,
         },
     )?;
 
     Ok(proposed)
 }
 
-fn secretary_id(store: &dyn TaskStore) -> Result<String, OpsError> {
+/// ADR-0074 D3.4（Phase F4b (e)）: 検証済みの replan の差分を「提案」として書く。`add` の分だけ途中目標
+/// （`proposed`）と draft のマイルストーン Task を作り（依存は現行の Task か、同じ差分で作ったもの）、
+/// `modify` / `remove` / `cancel` は**まだ何も変えない**（承認までは現行の計画のまま動く。D3.4）。
+/// `Event::ProjectPlanProposed{version: n+1, supersedes: n, plan: 当てた後の全体, delta}` を残す。
+#[allow(clippy::too_many_arguments)]
+pub fn propose_delta(
+    store: &dyn TaskStore,
+    plan_task: &Task,
+    project: &Project,
+    validated: &task_core::ValidatedProjectPlanDelta,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<Vec<ProposedMilestone>, OpsError> {
+    let state = plan_state(store, project.id)?;
+    let Some(current) = state.current() else {
+        return Err(OpsError::Validation(format!(
+            "project {} has no approved project plan to replan",
+            project.id
+        )));
+    };
+    let mut task_id_by_key: std::collections::HashMap<String, TaskId> = current
+        .milestones
+        .iter()
+        .map(|m| (m.key.clone(), m.task_id))
+        .collect();
+    let mut mapping: Vec<ProposedMilestone> = Vec::new();
+    for &idx in &validated.topological_order {
+        let m = &validated.result.milestones[idx];
+        if !validated.is_added(&m.key) {
+            continue;
+        }
+        let node = create_proposed_node(store, project, m, &task_id_by_key, roles, genres, now)?;
+        task_id_by_key.insert(m.key.clone(), node.task_id);
+        mapping.push(node);
+    }
+    let mut milestones: Vec<ProposedMilestone> = Vec::new();
+    for m in &validated.result.milestones {
+        if let Some(existing) = current.milestones.iter().find(|x| x.key == m.key) {
+            milestones.push(existing.clone());
+        } else if let Some(added) = mapping.iter().find(|x| x.key == m.key) {
+            milestones.push(added.clone());
+        }
+    }
+    store.append_event(
+        plan_task.id,
+        &Event::ProjectPlanProposed {
+            project_id: project.id,
+            version: state.next_version(),
+            supersedes: Some(current.version),
+            plan: Box::new(validated.result.clone()),
+            milestones: milestones.clone(),
+            delta: Some(Box::new(validated.delta.clone())),
+        },
+    )?;
+    Ok(mapping)
+}
+
+fn secretary_node(store: &dyn TaskStore) -> Result<task_core::OrgNode, OpsError> {
     store
         .org_list()?
         .into_iter()
         .find(|n| n.kind == OrgKind::Secretary)
-        .map(|n| n.id)
         .ok_or_else(|| OpsError::Validation("no secretary is configured".to_string()))
 }
 
-/// 見つかった提案（`decide` の内部表現）。
-struct FoundProposal {
-    plan_task_id: TaskId,
-    milestones: Vec<ProposedMilestone>,
+fn secretary_id(store: &dyn TaskStore) -> Result<String, OpsError> {
+    secretary_node(store).map(|n| n.id)
 }
 
-/// `project_id` の Plan タスク（`is_milestones_plan_task`）を総なめし、`version` に一致する
-/// `Event::ProjectPlanProposed` を持つものを探す。同じ版に `Event::ProjectPlanDecided` が既にあれば
-/// `ProjectPlanAlreadyDecided`、どこにも無ければ `ProjectPlanProposalNotFound`。
-fn find_proposal(
+// ---- ADR-0074 D3.4（Phase F4b (e)）: 案件計画の版（plan タスクの events が正本）----
+
+/// 案件計画の 1 つの版（`Event::ProjectPlanProposed` と、あれば `Event::ProjectPlanDecided`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanVersion {
+    pub version: u32,
+    pub plan_task_id: TaskId,
+    pub supersedes: Option<u32>,
+    /// 承認されたときの計画全体。
+    pub plan: task_core::ProjectPlanSpec,
+    /// 承認されたときの計画全体の key → 途中目標 / Task。
+    pub milestones: Vec<ProposedMilestone>,
+    /// replan の差分（初回は `None`）。
+    pub delta: Option<task_core::ProjectPlanDelta>,
+    /// `Some(true)` 承認、`Some(false)` 却下、`None` 未決。
+    pub decided: Option<bool>,
+}
+
+impl PlanVersion {
+    /// この版の提案が新しく作った（`add` の、初回なら全部の）key → 途中目標 / Task。
+    pub fn created(&self) -> Vec<&ProposedMilestone> {
+        match &self.delta {
+            None => self.milestones.iter().collect(),
+            Some(delta) => self
+                .milestones
+                .iter()
+                .filter(|m| delta.add.iter().any(|a| a.key == m.key))
+                .collect(),
+        }
+    }
+}
+
+/// 案件の案件計画の全版（版の昇順）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectPlanState {
+    pub versions: Vec<PlanVersion>,
+    /// 案件計画 run（`is_milestones_plan_task`）のうち、まだ終端でなく提案も出していないもの。
+    pub in_flight_plan_tasks: Vec<TaskId>,
+}
+
+impl ProjectPlanState {
+    /// 現行の（最新の承認済みの）版。
+    pub fn current(&self) -> Option<&PlanVersion> {
+        self.versions.iter().rev().find(|v| v.decided == Some(true))
+    }
+    /// 未決の提案（あれば 1 つ。二重の依頼は `ensure_no_plan_in_flight` が防ぐ）。
+    pub fn pending(&self) -> Option<&PlanVersion> {
+        self.versions.iter().rev().find(|v| v.decided.is_none())
+    }
+    pub fn version(&self, version: u32) -> Option<&PlanVersion> {
+        self.versions.iter().find(|v| v.version == version)
+    }
+    /// 次に提案する版（既存の最大 + 1。却下された版の番号も再利用しない）。
+    pub fn next_version(&self) -> u32 {
+        self.versions.iter().map(|v| v.version).max().unwrap_or(0) + 1
+    }
+}
+
+/// 案件の plan タスク（`is_milestones_plan_task`）の events から、案件計画の全版を決定的に組み立てる。
+pub fn plan_state(
     store: &dyn TaskStore,
     project_id: ProjectId,
-    version: u32,
-) -> Result<FoundProposal, OpsError> {
+) -> Result<ProjectPlanState, OpsError> {
     let plan_tasks = store
         .list_page(
             &ListFilter {
@@ -512,54 +769,182 @@ fn find_proposal(
             1000,
         )?
         .items;
+    let mut state = ProjectPlanState::default();
     for t in plan_tasks {
         if !task_core::is_milestones_plan_task(&t) {
             continue;
         }
         let rows = store.event_rows_for(t.id, None, crate::view::ALL_EVENTS)?;
-        let mut proposed: Option<Vec<ProposedMilestone>> = None;
-        let mut decided = false;
+        // まだ提案を出していない（run 中・再試行待ちの）計画 run。提案を出した後は `pending` が見る。
+        if !t.status.is_terminal()
+            && !rows
+                .iter()
+                .any(|r| matches!(r.event, Event::ProjectPlanProposed { .. }))
+        {
+            state.in_flight_plan_tasks.push(t.id);
+        }
         for row in &rows {
             match &row.event {
                 Event::ProjectPlanProposed {
-                    version: v,
+                    version,
+                    supersedes,
+                    plan,
                     milestones,
+                    delta,
                     ..
-                } if *v == version => {
-                    proposed = Some(milestones.clone());
-                }
-                Event::ProjectPlanDecided { version: v, .. } if *v == version => {
-                    decided = true;
+                } => state.versions.push(PlanVersion {
+                    version: *version,
+                    plan_task_id: t.id,
+                    supersedes: *supersedes,
+                    plan: (**plan).clone(),
+                    milestones: milestones.clone(),
+                    delta: delta.as_deref().cloned(),
+                    decided: None,
+                }),
+                Event::ProjectPlanDecided {
+                    version, approved, ..
+                } => {
+                    if let Some(v) = state.versions.iter_mut().find(|v| v.version == *version) {
+                        v.decided = Some(*approved);
+                    }
                 }
                 _ => {}
             }
         }
-        if let Some(milestones) = proposed {
-            if decided {
-                return Err(OpsError::ProjectPlanAlreadyDecided {
-                    project_id,
-                    version,
-                });
-            }
-            return Ok(FoundProposal {
-                plan_task_id: t.id,
-                milestones,
-            });
-        }
     }
-    Err(OpsError::ProjectPlanProposalNotFound {
-        project_id,
-        version,
+    state.versions.sort_by_key(|v| v.version);
+    Ok(state)
+}
+
+/// 二重の計画依頼を防ぐ（F4a の申し送り）。動いている案件計画 run か、未決の提案があれば 409。
+fn ensure_no_plan_in_flight(
+    _store: &dyn TaskStore,
+    project_id: ProjectId,
+    state: &ProjectPlanState,
+) -> Result<(), OpsError> {
+    if let Some(id) = state.in_flight_plan_tasks.first() {
+        return Err(OpsError::ProjectPlanInFlight {
+            project_id,
+            detail: format!("project plan run {id} is still running"),
+        });
+    }
+    if let Some(v) = state.pending() {
+        return Err(OpsError::ProjectPlanInFlight {
+            project_id,
+            detail: format!("project plan version {} is awaiting a decision", v.version),
+        });
+    }
+    Ok(())
+}
+
+/// 現行の計画の 1 節点の見え方（replan の文脈・GUI の DAG・差分の検証が使う）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanNodeView {
+    pub spec: task_core::MilestoneSpec,
+    pub milestone_id: MilestoneId,
+    pub task_id: TaskId,
+    pub milestone_status: Option<MilestoneStatus>,
+    pub task_status: Option<Status>,
+    pub state: task_core::PlanNodeState,
+}
+
+/// 版の各節点について、途中目標と Task の今の状態を読む（`plan.milestones` の順）。
+pub fn node_views(
+    store: &dyn TaskStore,
+    project_id: ProjectId,
+    version: &PlanVersion,
+) -> Result<Vec<PlanNodeView>, OpsError> {
+    let milestones = store.milestone_list(project_id)?;
+    let mut out = Vec::with_capacity(version.plan.milestones.len());
+    for spec in &version.plan.milestones {
+        let Some(mapped) = version.milestones.iter().find(|m| m.key == spec.key) else {
+            continue;
+        };
+        let task = store.get(mapped.task_id)?;
+        let task_status = task.as_ref().map(|t| t.status);
+        let state = match &task {
+            Some(t) => node_state(store, t)?,
+            None => task_core::PlanNodeState::default(),
+        };
+        out.push(PlanNodeView {
+            spec: spec.clone(),
+            milestone_id: mapped.milestone_id,
+            task_id: mapped.task_id,
+            milestone_status: milestones
+                .iter()
+                .find(|m| m.id == mapped.milestone_id)
+                .map(|m| m.status),
+            task_status,
+            state,
+        });
+    }
+    Ok(out)
+}
+
+/// マイルストーン Task が dispatch 済みか・終端か（`draft` / `ready` でも run が 1 度でも起きていれば
+/// dispatch 済み）。
+fn node_state(store: &dyn TaskStore, task: &Task) -> Result<task_core::PlanNodeState, OpsError> {
+    let terminal = task.status.is_terminal();
+    let dispatched = if matches!(task.status, Status::Draft | Status::Ready) {
+        task.lease.is_some()
+            || store
+                .event_rows_for(task.id, None, crate::view::ALL_EVENTS)?
+                .iter()
+                .any(|r| matches!(r.event, Event::WorkerStarted { .. }))
+    } else {
+        true
+    };
+    Ok(task_core::PlanNodeState {
+        dispatched,
+        terminal,
     })
 }
 
-/// ADR-0074 D3.3（Phase F4a (c)）: `POST /projects/{id}/project-plan/{version}/decide`。
+/// ADR-0074 D3.4（Phase F4b (e)）: 差分を現行の計画に対して検証する（`validate_project_plan_delta` に、
+/// ストアから読んだ現行の版と各節点の状態を渡す）。
+pub fn validate_delta_against_store(
+    store: &dyn TaskStore,
+    project_id: ProjectId,
+    delta: &task_core::ProjectPlanDelta,
+) -> Result<task_core::ValidatedProjectPlanDelta, String> {
+    let state = plan_state(store, project_id).map_err(|e| e.to_string())?;
+    let Some(current) = state.current() else {
+        return Err("the project has no approved project plan to replan".to_string());
+    };
+    let nodes = node_views(store, project_id, current).map_err(|e| e.to_string())?;
+    let states: std::collections::BTreeMap<String, task_core::PlanNodeState> = nodes
+        .iter()
+        .map(|n| (n.spec.key.clone(), n.state))
+        .collect();
+    task_core::validate_project_plan_delta(
+        delta,
+        &current.plan,
+        current.version,
+        &states,
+        task_core::ProjectPlanLimits::default(),
+    )
+    .map_err(|errs| {
+        errs.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+}
+
+/// ADR-0074 D3.3（Phase F4a (c)）/ D3.4（Phase F4b (e)）: `POST /projects/{id}/project-plan/{version}/decide`。
 ///
-/// - `approve`: 見つけた提案の全マイルストーンを `approved`、全 Task を `draft → ready`
-///   （`Trigger::Accept`）にする。依存の無いものから dispatch される（既存の `depends_on` 判定のまま）。
+/// 初回の提案:
+/// - `approve`: 全マイルストーンを `approved`、全 Task を `draft → ready`（`Trigger::Accept`）にする。
+///   依存の無いものから dispatch される（`depends_on` と途中目標の Go〈D3.2〉の判定のまま）。
 /// - `reject`（`note` 必須。空なら 422）: 全マイルストーンを `redesigned`、全 Task を `cancelled`
-///   （`Trigger::Cancel`）にし、`note` を秘書への対話として送る（ADR-0038 の `ng` と同じ扱い。
-///   案件の replan〈D3.4〉は F4b）。
+///   （`Trigger::Cancel`）にし、`note` を秘書への対話として送る（ADR-0038 の `ng` と同じ扱い）。
+///
+/// replan の差分（D3.4）:
+/// - `approve`: 差分を**今の状態に対して検証し直し**（提案の後に `modify` / `remove` の対象が dispatch
+///   されていれば `OpsError::ProjectPlanStale`、何も書かない）、1 トランザクションで `add` を承認
+///   （approved / ready）、`modify` を Task と途中目標に書き、`remove` / `cancel` の Task を `Cancel`
+///   （途中目標は `cancelled`）にする。
+/// - `reject`: `add` で作った分だけを `redesigned` / `cancelled` にする（現行の計画は変えない）。
 ///
 /// どちらも `Event::ProjectPlanDecided` を提案元の plan タスクの events に残す。
 #[allow(clippy::too_many_arguments)]
@@ -580,38 +965,113 @@ pub fn decide(
             "note is required to reject a project plan".to_string(),
         ));
     }
-    let found = find_proposal(store, project.id, version)?;
+    let state = plan_state(store, project.id)?;
+    let Some(found) = state.version(version) else {
+        return Err(OpsError::ProjectPlanProposalNotFound {
+            project_id: project.id,
+            version,
+        });
+    };
+    if found.decided.is_some() {
+        return Err(OpsError::ProjectPlanAlreadyDecided {
+            project_id: project.id,
+            version,
+        });
+    }
     // 却下の対話先（秘書）が居なければ、何も書く前に弾く。
     let secretary = if decision == ProjectPlanDecision::Reject {
         Some(secretary_id(store)?)
     } else {
         None
     };
-
     let approved = decision == ProjectPlanDecision::Approve;
-    let (milestone_status, trigger) = if approved {
-        (MilestoneStatus::Approved, Trigger::Accept)
-    } else {
-        (MilestoneStatus::Redesigned, Trigger::Cancel)
+    let decided_event = Event::ProjectPlanDecided {
+        project_id: project.id,
+        version,
+        approved,
+        note: note.map(str::to_string),
     };
 
-    let milestones: Vec<MilestoneId> = found.milestones.iter().map(|m| m.milestone_id).collect();
-    let tasks: Vec<TaskId> = found.milestones.iter().map(|m| m.task_id).collect();
-    // 途中目標の状態・全 Task の遷移・`ProjectPlanDecided` を 1 トランザクションで（D3.3）。
-    // `Trigger::Cancel` のカスケードで既に終端になった Task はストア側で飛ばす。
-    store.project_plan_decide_apply(
-        found.plan_task_id,
-        &milestones,
-        milestone_status,
-        &tasks,
-        trigger,
-        Event::ProjectPlanDecided {
-            project_id: project.id,
-            version,
-            approved,
-            note: note.map(str::to_string),
-        },
-    )?;
+    let (milestones, tasks) = match &found.delta {
+        None => {
+            let (milestone_status, trigger) = if approved {
+                (MilestoneStatus::Approved, Trigger::Accept)
+            } else {
+                (MilestoneStatus::Redesigned, Trigger::Cancel)
+            };
+            let milestones: Vec<MilestoneId> =
+                found.milestones.iter().map(|m| m.milestone_id).collect();
+            let tasks: Vec<TaskId> = found.milestones.iter().map(|m| m.task_id).collect();
+            // 途中目標の状態・全 Task の遷移・`ProjectPlanDecided` を 1 トランザクションで（D3.3）。
+            // `Trigger::Cancel` のカスケードで既に終端になった Task はストア側で飛ばす。
+            store.project_plan_decide_apply(
+                found.plan_task_id,
+                &milestones,
+                milestone_status,
+                &tasks,
+                trigger,
+                decided_event,
+            )?;
+            (milestones, tasks)
+        }
+        Some(delta) => {
+            let apply = if approved {
+                delta_apply_for_approval(
+                    store,
+                    project,
+                    found,
+                    delta,
+                    decided_event,
+                    roles,
+                    genres,
+                    now,
+                )?
+            } else {
+                let created = found.created();
+                task_core::ProjectPlanApply {
+                    plan_task_id: found.plan_task_id,
+                    milestones: created
+                        .iter()
+                        .map(|m| task_core::ProjectPlanMilestoneChange {
+                            id: m.milestone_id,
+                            status: MilestoneStatus::Redesigned,
+                            title: None,
+                            description: None,
+                        })
+                        .collect(),
+                    task_updates: Vec::new(),
+                    transitions: created
+                        .iter()
+                        .map(|m| (m.task_id, Trigger::Cancel))
+                        .collect(),
+                    decided_event,
+                }
+            };
+            let milestones = apply.milestones.iter().map(|m| m.id).collect();
+            let tasks = apply
+                .task_updates
+                .iter()
+                .map(|t| t.id)
+                .chain(apply.transitions.iter().map(|(id, _)| *id))
+                .fold(Vec::new(), |mut acc: Vec<TaskId>, id| {
+                    if !acc.contains(&id) {
+                        acc.push(id);
+                    }
+                    acc
+                });
+            store.project_plan_apply(&apply).map_err(|e| match e {
+                task_core::StoreError::Invalid(detail) if detail.contains("dispatched") => {
+                    OpsError::ProjectPlanStale {
+                        project_id: project.id,
+                        version,
+                        detail,
+                    }
+                }
+                other => OpsError::Store(other),
+            })?;
+            (milestones, tasks)
+        }
+    };
 
     if let Some(secretary) = secretary {
         // `note.is_none()` はここには来ない（上で 422 にしている）。
@@ -639,6 +1099,395 @@ pub fn decide(
     })
 }
 
+/// replan の差分の承認で当てる変更を組み立てる（今の状態で検証し直す。古ければ `ProjectPlanStale`）。
+#[allow(clippy::too_many_arguments)]
+fn delta_apply_for_approval(
+    store: &dyn TaskStore,
+    project: &Project,
+    found: &PlanVersion,
+    delta: &task_core::ProjectPlanDelta,
+    decided_event: Event,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+) -> Result<task_core::ProjectPlanApply, OpsError> {
+    let stale = |detail: String| OpsError::ProjectPlanStale {
+        project_id: project.id,
+        version: found.version,
+        detail,
+    };
+    let validated = validate_delta_against_store(store, project.id, delta).map_err(stale)?;
+    let key_to_task: std::collections::HashMap<&str, TaskId> = found
+        .milestones
+        .iter()
+        .map(|m| (m.key.as_str(), m.task_id))
+        .collect();
+    let state = plan_state(store, project.id)?;
+    let current = state
+        .current()
+        .ok_or_else(|| stale("the project has no approved project plan".to_string()))?;
+
+    let mut milestones = Vec::new();
+    let mut task_updates = Vec::new();
+    let mut transitions = Vec::new();
+    // modify: Task を同じ規則（`milestone_task_spec`）で組み立て直し、id・作成時刻・状態などは今の行を継ぐ。
+    for change in &delta.modify {
+        let Some(node) = current.milestones.iter().find(|m| m.key == change.key) else {
+            return Err(stale(format!(
+                "milestone {} is not in the plan",
+                change.key
+            )));
+        };
+        let Some(spec) = validated
+            .result
+            .milestones
+            .iter()
+            .find(|m| m.key == change.key)
+        else {
+            return Err(stale(format!(
+                "milestone {} is not in the result",
+                change.key
+            )));
+        };
+        let Some(existing) = store.get(node.task_id)? else {
+            return Err(OpsError::NotFound(node.task_id));
+        };
+        let mut depends_on = Vec::with_capacity(spec.depends_on.len());
+        for dep in &spec.depends_on {
+            let Some(id) = key_to_task.get(dep.as_str()) else {
+                return Err(stale(format!(
+                    "milestone {} depends on unknown {dep}",
+                    spec.key
+                )));
+            };
+            depends_on.push(*id);
+        }
+        let rebuilt = add::build_task_with_roles(
+            store,
+            milestone_task_spec(project, spec, node.milestone_id, depends_on),
+            roles,
+            genres,
+            now,
+        )?;
+        task_updates.push(Task {
+            id: existing.id,
+            status: existing.status,
+            attempts: existing.attempts,
+            lease: existing.lease.clone(),
+            created_at: existing.created_at,
+            updated_at: now,
+            assignee: existing.assignee.clone().or(rebuilt.assignee.clone()),
+            labels: existing.labels.clone(),
+            ..rebuilt
+        });
+        milestones.push(task_core::ProjectPlanMilestoneChange {
+            id: node.milestone_id,
+            status: store
+                .milestone_get(node.milestone_id)?
+                .map(|m| m.status)
+                .unwrap_or(MilestoneStatus::Approved),
+            title: Some(spec.title.clone()),
+            description: Some(spec.objective.clone()),
+        });
+    }
+    for created in found.created() {
+        milestones.push(task_core::ProjectPlanMilestoneChange {
+            id: created.milestone_id,
+            status: MilestoneStatus::Approved,
+            title: None,
+            description: None,
+        });
+        transitions.push((created.task_id, Trigger::Accept));
+    }
+    for key in delta.remove.iter().chain(delta.cancel.iter()) {
+        let Some(node) = current.milestones.iter().find(|m| &m.key == key) else {
+            return Err(stale(format!("milestone {key} is not in the plan")));
+        };
+        milestones.push(task_core::ProjectPlanMilestoneChange {
+            id: node.milestone_id,
+            status: MilestoneStatus::Cancelled,
+            title: None,
+            description: None,
+        });
+        transitions.push((node.task_id, Trigger::Cancel));
+    }
+    Ok(task_core::ProjectPlanApply {
+        plan_task_id: found.plan_task_id,
+        milestones,
+        task_updates,
+        transitions,
+        decided_event,
+    })
+}
+
+// ---- ADR-0074 D3.5（Phase F4b (h)）: 案件ページの DAG（決定的な読み取りだけ）----
+
+/// 節点が止まっている理由（GUI の DAG の節点に出す）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStopReason {
+    /// 工程の後の途中確認（F3 の `awaiting_human`）。
+    AwaitingHuman,
+    /// 人への質問で止まっている（`blocked`）。
+    Question,
+    Failed,
+    /// 依存先は終わったが、その途中目標がまだ `reached` でない（途中目標の Go 待ち。D3.2）。
+    AwaitingGo,
+    /// 途中目標か案件が一時停止中。
+    Paused,
+}
+
+/// 提案（replan の差分）でこの節点がどう変わるか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanNodeChange {
+    Add,
+    Modify,
+    Remove,
+    Cancel,
+}
+
+/// DAG の 1 節点（= マイルストーン Task）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanDagNode {
+    pub key: String,
+    pub title: String,
+    /// 辺（同じ計画の他の節点の key）。
+    pub depends_on: Vec<String>,
+    pub milestone_id: MilestoneId,
+    pub task_id: TaskId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone_status: Option<MilestoneStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<Status>,
+    /// 進み具合: WU（統合 WU を除く、有効なもの）の done / total。計画の無い Task は 0 / 0。
+    pub work_units_done: u32,
+    pub work_units_total: u32,
+    /// 子 Task（委譲・planner の children）の done / total。
+    pub children_done: u32,
+    pub children_total: u32,
+    /// ADR-0074 D4.3: 使った quota（この Task の run の合計）。
+    #[serde(default)]
+    pub quota: Vec<task_core::QuotaUse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<PlanStopReason>,
+    /// 提案の中の節点だけ: この提案でどう変わるか（変わらなければ省略）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<PlanNodeChange>,
+}
+
+/// 未決の提案（初回の提案か replan の差分）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanDagProposal {
+    pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<u32>,
+    pub rationale: String,
+    /// 承認されたときの計画全体（外す・取り下げる節点も `change` 付きで含める）。
+    pub nodes: Vec<PlanDagNode>,
+}
+
+/// `GET /projects/{id}` の `project_plan`（案件計画が無い案件では省略）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectPlanDagView {
+    /// 現行の（承認済みの）版。まだ無ければ `None`（提案だけがある）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_version: Option<u32>,
+    /// 現行の計画の節点（`plan.milestones` の順）。
+    pub nodes: Vec<PlanDagNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<PlanDagProposal>,
+}
+
+/// ADR-0074 D3.5（Phase F4b (h)）: 案件ページの DAG を組み立てる（案件計画の版が 1 つも無ければ `None`）。
+pub fn dag_view(
+    store: &dyn TaskStore,
+    project: &Project,
+) -> Result<Option<ProjectPlanDagView>, OpsError> {
+    let state = plan_state(store, project.id)?;
+    if state.versions.is_empty() {
+        return Ok(None);
+    }
+    let milestones = store.milestone_list(project.id)?;
+    let project_paused = project.status == ProjectStatus::Paused;
+    let current = state.current();
+    let nodes = match current {
+        Some(v) => dag_nodes(store, project, v, &milestones, project_paused, None)?,
+        None => Vec::new(),
+    };
+    let pending = match state.pending() {
+        Some(p) => {
+            let mut nodes = dag_nodes(
+                store,
+                project,
+                p,
+                &milestones,
+                project_paused,
+                p.delta.as_ref(),
+            )?;
+            // 差分で外す・取り下げる節点は、承認後の計画には無いので現行の版から足して印を付ける。
+            if let (Some(delta), Some(cur)) = (&p.delta, current) {
+                for (keys, change) in [
+                    (&delta.remove, PlanNodeChange::Remove),
+                    (&delta.cancel, PlanNodeChange::Cancel),
+                ] {
+                    for key in keys {
+                        let dropped =
+                            dag_nodes(store, project, cur, &milestones, project_paused, None)?
+                                .into_iter()
+                                .find(|n| &n.key == key);
+                        if let Some(mut n) = dropped {
+                            n.change = Some(change);
+                            nodes.push(n);
+                        }
+                    }
+                }
+            }
+            Some(PlanDagProposal {
+                version: p.version,
+                supersedes: p.supersedes,
+                rationale: p.plan.rationale.clone(),
+                nodes,
+            })
+        }
+        None => None,
+    };
+    Ok(Some(ProjectPlanDagView {
+        current_version: current.map(|v| v.version),
+        nodes,
+        pending,
+    }))
+}
+
+fn dag_nodes(
+    store: &dyn TaskStore,
+    project: &Project,
+    version: &PlanVersion,
+    milestones: &[Milestone],
+    project_paused: bool,
+    delta: Option<&task_core::ProjectPlanDelta>,
+) -> Result<Vec<PlanDagNode>, OpsError> {
+    let mut out = Vec::with_capacity(version.plan.milestones.len());
+    for spec in &version.plan.milestones {
+        let Some(mapped) = version.milestones.iter().find(|m| m.key == spec.key) else {
+            continue;
+        };
+        let task = store.get(mapped.task_id)?;
+        let milestone = milestones.iter().find(|m| m.id == mapped.milestone_id);
+        let (wu_done, wu_total) = match &task {
+            Some(_) => {
+                let units = store.work_units_for(mapped.task_id)?;
+                let active: Vec<&task_core::WorkUnitRow> = units
+                    .iter()
+                    .filter(|u| {
+                        u.status.is_active() && u.kind != task_core::WorkUnitKind::Integrate
+                    })
+                    .collect();
+                (
+                    active
+                        .iter()
+                        .filter(|u| u.status == task_core::WorkUnitStatus::Done)
+                        .count() as u32,
+                    active.len() as u32,
+                )
+            }
+            None => (0, 0),
+        };
+        let children = store.children(mapped.task_id)?;
+        let quota = match &task {
+            Some(t) => {
+                let events: Vec<Event> = store
+                    .events_for(t.id)?
+                    .into_iter()
+                    .map(|(_, e)| e)
+                    .collect();
+                task_core::summarize_execution_metrics(t, &events).quota
+            }
+            None => Vec::new(),
+        };
+        let stop_reason = match &task {
+            Some(t) => stop_reason_of(store, project, t, milestone, project_paused)?,
+            None => None,
+        };
+        let change = delta.and_then(|d| {
+            if d.add.iter().any(|a| a.key == spec.key) {
+                Some(PlanNodeChange::Add)
+            } else if d.modify.iter().any(|m| m.key == spec.key) {
+                Some(PlanNodeChange::Modify)
+            } else {
+                None
+            }
+        });
+        out.push(PlanDagNode {
+            key: spec.key.clone(),
+            title: spec.title.clone(),
+            depends_on: spec.depends_on.clone(),
+            milestone_id: mapped.milestone_id,
+            task_id: mapped.task_id,
+            milestone_status: milestone.map(|m| m.status),
+            task_status: task.as_ref().map(|t| t.status),
+            work_units_done: wu_done,
+            work_units_total: wu_total,
+            children_done: children.iter().filter(|c| c.status == Status::Done).count() as u32,
+            children_total: children.len() as u32,
+            quota,
+            stop_reason,
+            change,
+        });
+    }
+    Ok(out)
+}
+
+fn stop_reason_of(
+    store: &dyn TaskStore,
+    project: &Project,
+    task: &Task,
+    milestone: Option<&Milestone>,
+    project_paused: bool,
+) -> Result<Option<PlanStopReason>, OpsError> {
+    if project_paused || milestone.is_some_and(|m| m.status == MilestoneStatus::Paused) {
+        return Ok(Some(PlanStopReason::Paused));
+    }
+    match task.status {
+        Status::Failed => Ok(Some(PlanStopReason::Failed)),
+        Status::Blocked => {
+            let reason = store
+                .events_for(task.id)?
+                .into_iter()
+                .rev()
+                .find_map(|(_, e)| match e {
+                    Event::Transitioned { reason, .. } => Some(reason),
+                    _ => None,
+                });
+            Ok(Some(if reason.as_deref() == Some("awaiting_human") {
+                PlanStopReason::AwaitingHuman
+            } else {
+                PlanStopReason::Question
+            }))
+        }
+        Status::Ready if !project.auto_advance => {
+            // 依存先が done で、その途中目標（案件計画のもの）がまだ reached でなければ Go 待ち。
+            for dep in &task.depends_on {
+                let Some(dep_task) = store.get(*dep)? else {
+                    continue;
+                };
+                if dep_task.status != Status::Done || dep_task.milestone_id == task.milestone_id {
+                    continue;
+                }
+                if let Some(mid) = dep_task.milestone_id
+                    && let Some(m) = store.milestone_get(mid)?
+                    && m.plan_key.is_some()
+                    && m.status != MilestoneStatus::Reached
+                {
+                    return Ok(Some(PlanStopReason::AwaitingGo));
+                }
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
 /// ADR-0074 D3.3（Phase F4a (b)）: 検証が最終的に失敗した（1 回再試行しても駄目だった）ときに、
 /// 秘書の返事として案件の対話に残す（DESIGN §5.6 の Plan kind の規則に近い扱い。Task は作らない）。
 pub fn record_proposal_failure(
@@ -647,15 +1496,7 @@ pub fn record_proposal_failure(
     reason: &str,
     now: OffsetDateTime,
 ) -> Result<(), OpsError> {
-    let Some(secretary) = store
-        .org_list()?
-        .into_iter()
-        .find(|n| n.kind == OrgKind::Secretary)
-    else {
-        return Err(OpsError::Validation(
-            "no secretary is configured".to_string(),
-        ));
-    };
+    let secretary = secretary_node(store)?;
     store.message_append(&Message {
         id: MessageId::new(),
         node_id: secretary.id,
@@ -709,6 +1550,7 @@ mod tests {
     fn sample_project(status: ProjectStatus) -> Project {
         let t = now();
         Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -726,6 +1568,7 @@ mod tests {
     fn compose_goal_includes_request_milestones_note_and_history() {
         let project = sample_project(ProjectStatus::Proposed);
         let milestone = Milestone {
+            plan_key: None,
             paused_from: None,
             id: MilestoneId::new(),
             project_id: project.id,
@@ -1022,6 +1865,7 @@ mod tests {
 
     fn milestone_spec(key: &str, depends_on: &[&str]) -> task_core::MilestoneSpec {
         task_core::MilestoneSpec {
+            pause_after: None,
             key: key.into(),
             title: format!("title-{key}"),
             objective: format!("objective-{key}"),
@@ -1227,6 +2071,288 @@ mod tests {
             )),
             "{events:?}"
         );
+    }
+
+    /// `survey` → `poc` を提案して承認し、`survey` を dispatch 済み（running）にする。
+    fn approved_plan_with_started_survey(
+        store: &SqliteStore,
+        project: &task_core::Project,
+    ) -> (TaskId, TaskId) {
+        propose_survey_and_poc(store, project);
+        decide(
+            store,
+            project,
+            1,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("approve");
+        let state = plan_state(store, project.id).expect("state");
+        let current = state.current().expect("current");
+        let key = |k: &str| {
+            current
+                .milestones
+                .iter()
+                .find(|m| m.key == k)
+                .expect("key")
+                .task_id
+        };
+        let (survey, poc) = (key("survey"), key("poc"));
+        assert!(
+            store
+                .acquire_lease(survey, "run-survey", std::time::Duration::from_secs(60))
+                .expect("lease")
+        );
+        (survey, poc)
+    }
+
+    fn replan_delta() -> task_core::ProjectPlanDelta {
+        task_core::ProjectPlanDelta {
+            schema: task_core::PROJECT_PLAN_DELTA_SCHEMA.to_string(),
+            base_version: 1,
+            rationale: "見直し".into(),
+            add: Vec::new(),
+            modify: Vec::new(),
+            remove: Vec::new(),
+            cancel: Vec::new(),
+        }
+    }
+
+    /// ADR-0074 D3.4（Phase F4b (e)）: 案件 replan の差分は、dispatch 済みのマイルストーン（survey）を
+    /// `modify` / `remove` できない（`cancel` の明示だけ）。dispatch 前のもの（poc）の変更・`add` は
+    /// 提案になり、承認までは現行の計画のまま動く（poc の Task は変わらない）。同じ承認（`decide`）を
+    /// 通って適用され、提案の後に対象が dispatch されていれば承認は `ProjectPlanStale` で何も書かない。
+    /// 同じ案件への二重の計画依頼は `ProjectPlanInFlight`。
+    #[test]
+    fn project_replan_delta_cannot_modify_a_started_milestone() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        let (survey, poc) = approved_plan_with_started_survey(&store, &project);
+
+        // 承認済みの計画がある案件への `mode: milestones` は replan の run になる。
+        let replan = start_milestones(&store, &project, Some("PoC を 2 つに"), &[], &[], now())
+            .expect("replan run");
+        assert!(task_core::is_milestones_replan_task(&replan.task));
+        assert!(
+            replan.task.objective.contains("base_version: 1"),
+            "{}",
+            replan.task.objective
+        );
+        assert!(replan.task.objective.contains("survey"));
+        // 二重の依頼は 409 相当。
+        assert!(matches!(
+            start_replan(&store, &project, None, &[], &[], now()),
+            Err(OpsError::ProjectPlanInFlight { .. })
+        ));
+
+        // dispatch 済みの survey の modify / remove は拒まれる。
+        let mut bad = replan_delta();
+        bad.modify.push(task_core::MilestoneModify {
+            key: "survey".into(),
+            title: Some("やり直し".into()),
+            ..task_core::MilestoneModify::default()
+        });
+        let err = validate_delta_against_store(&store, project.id, &bad).expect_err("started");
+        assert!(err.contains("already dispatched"), "{err}");
+        let mut bad = replan_delta();
+        bad.remove.push("survey".into());
+        bad.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            depends_on: Some(Vec::new()),
+            ..task_core::MilestoneModify::default()
+        });
+        assert!(
+            validate_delta_against_store(&store, project.id, &bad)
+                .expect_err("started")
+                .contains("already dispatched")
+        );
+        // cancel を明示すれば通る（poc の依存は modify で外す）。
+        let mut cancel = replan_delta();
+        cancel.cancel.push("survey".into());
+        cancel.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            depends_on: Some(Vec::new()),
+            ..task_core::MilestoneModify::default()
+        });
+        validate_delta_against_store(&store, project.id, &cancel).expect("explicit cancel");
+
+        // dispatch 前の poc の変更と add は提案になる。
+        let mut good = replan_delta();
+        good.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            title: Some("PoC（縮小版）".into()),
+            ..task_core::MilestoneModify::default()
+        });
+        good.add.push(milestone_spec("paper", &["poc"]));
+        let validated = validate_delta_against_store(&store, project.id, &good).expect("valid");
+        let added = propose_delta(&store, &replan.task, &project, &validated, &[], &[], now())
+            .expect("propose_delta");
+        assert_eq!(added.len(), 1);
+        let paper = added[0].task_id;
+        assert_eq!(store.get(paper).unwrap().unwrap().status, Status::Draft);
+        assert_eq!(store.get(paper).unwrap().unwrap().depends_on, vec![poc]);
+        let state = plan_state(&store, project.id).expect("state");
+        assert_eq!(state.current().map(|v| v.version), Some(1), "承認までは v1");
+        assert_eq!(state.pending().map(|v| v.version), Some(2));
+        assert_eq!(state.pending().and_then(|v| v.supersedes), Some(1));
+        // 承認までは現行の計画のまま（poc は変わらない、survey は走り続ける）。
+        assert_eq!(store.get(poc).unwrap().unwrap().title, "title-poc");
+        assert_eq!(store.get(survey).unwrap().unwrap().status, Status::Running);
+        // 未決の提案がある間の二重の依頼も 409 相当。
+        assert!(matches!(
+            start_milestones(&store, &project, None, &[], &[], now()),
+            Err(OpsError::ProjectPlanInFlight { .. })
+        ));
+
+        // 承認で差分が当たる（同じ `decide`）。
+        let decided = decide(
+            &store,
+            &project,
+            2,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("approve v2");
+        assert!(decided.tasks.contains(&poc) && decided.tasks.contains(&paper));
+        let poc_now = store.get(poc).unwrap().unwrap();
+        assert_eq!(poc_now.title, "PoC（縮小版）");
+        assert_eq!(poc_now.status, Status::Ready);
+        assert_eq!(poc_now.depends_on, vec![survey]);
+        assert_eq!(store.get(paper).unwrap().unwrap().status, Status::Ready);
+        assert_eq!(store.get(survey).unwrap().unwrap().status, Status::Running);
+        let state = plan_state(&store, project.id).expect("state");
+        assert_eq!(state.current().map(|v| v.version), Some(2));
+        assert_eq!(
+            state
+                .current()
+                .map(|v| v.plan.milestones.len())
+                .unwrap_or(0),
+            3
+        );
+        let poc_milestone = store
+            .milestone_get(poc_now.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(poc_milestone.title, "PoC（縮小版）");
+
+        // 提案の後に対象が dispatch されたら、承認は古い差分として何も書かない。
+        let replan3 = start_replan(&store, &project, None, &[], &[], now()).expect("replan 3");
+        let mut stale = replan_delta();
+        stale.base_version = 2;
+        stale.modify.push(task_core::MilestoneModify {
+            key: "paper".into(),
+            title: Some("論文 v2".into()),
+            ..task_core::MilestoneModify::default()
+        });
+        let validated = validate_delta_against_store(&store, project.id, &stale).expect("valid");
+        propose_delta(&store, &replan3.task, &project, &validated, &[], &[], now())
+            .expect("propose v3");
+        assert!(
+            store
+                .acquire_lease(paper, "run-paper", std::time::Duration::from_secs(60))
+                .expect("lease")
+        );
+        let err = decide(
+            &store,
+            &project,
+            3,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect_err("stale");
+        assert!(
+            matches!(err, OpsError::ProjectPlanStale { version: 3, .. }),
+            "{err:?}"
+        );
+        assert_eq!(store.get(paper).unwrap().unwrap().title, "title-paper");
+        assert_eq!(
+            plan_state(&store, project.id)
+                .unwrap()
+                .pending()
+                .map(|v| v.version),
+            Some(3),
+            "still undecided"
+        );
+
+        // 却下は `add` の分だけを片付ける（v3 には add が無いので現行は何も変わらない）。
+        decide(
+            &store,
+            &project,
+            3,
+            ProjectPlanDecision::Reject,
+            Some("古い"),
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("reject v3");
+        assert_eq!(store.get(paper).unwrap().unwrap().status, Status::Running);
+        assert_eq!(
+            plan_state(&store, project.id)
+                .unwrap()
+                .current()
+                .map(|v| v.version),
+            Some(2)
+        );
+    }
+
+    /// 走っているマイルストーンの `cancel` は明示すれば承認で `Cancel` が当たり、途中目標は `cancelled`。
+    #[test]
+    fn project_replan_cancel_applies_cancel_to_a_running_milestone_on_approval() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        seed_org(&store);
+        let project = sample_project(ProjectStatus::Active);
+        store.project_create(&project).expect("create project");
+        let (survey, poc) = approved_plan_with_started_survey(&store, &project);
+        let replan = start_replan(&store, &project, None, &[], &[], now()).expect("replan");
+        let mut delta = replan_delta();
+        delta.cancel.push("survey".into());
+        delta.modify.push(task_core::MilestoneModify {
+            key: "poc".into(),
+            depends_on: Some(Vec::new()),
+            ..task_core::MilestoneModify::default()
+        });
+        let validated = validate_delta_against_store(&store, project.id, &delta).expect("valid");
+        propose_delta(&store, &replan.task, &project, &validated, &[], &[], now())
+            .expect("propose");
+        decide(
+            &store,
+            &project,
+            2,
+            ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .expect("approve");
+        let survey_now = store.get(survey).unwrap().unwrap();
+        assert_eq!(survey_now.status, Status::Cancelled);
+        let m = store
+            .milestone_get(survey_now.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.status, MilestoneStatus::Cancelled);
+        // poc は依存を外してから survey を取り下げたので、カスケードで巻き込まれない。
+        let poc_now = store.get(poc).unwrap().unwrap();
+        assert_eq!(poc_now.status, Status::Ready);
+        assert!(poc_now.depends_on.is_empty());
     }
 
     /// `reject` は `note` が空だと 422 相当。埋めれば全マイルストーンを `redesigned`、全 Task を

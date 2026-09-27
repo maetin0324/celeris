@@ -947,6 +947,10 @@ pub struct ProjectPatchBody {
         skip_serializing_if = "Option::is_none"
     )]
     pub workspace: Option<Option<task_core::WorkspaceSpec>>,
+    /// ADR-0074 D3.2（Phase F4b (d)）: 案件計画のマイルストーン Task を、依存先の `done` で進めるか
+    /// （`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_advance: Option<bool>,
 }
 
 /// `GET /projects/{id}` の応答。案件 + 途中目標 + その案件のタスクの要約（GUI の「仕事の木」用）。
@@ -962,6 +966,10 @@ pub struct ProjectDetail {
     pub milestones: Vec<MilestoneView>,
     /// 仕事の木を描くのに必要な最小限だけ（詳細は `GET /tasks/{id}`）。
     pub tasks: Vec<ProjectTaskView>,
+    /// ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の
+    /// 提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_plan: Option<task_ops::project_plan::ProjectPlanDagView>,
 }
 
 /// 途中目標 1 件のビュー（ADR-0038 D1 / D4。Phase 41）。`Milestone` のフィールドは**平らに**出るので、

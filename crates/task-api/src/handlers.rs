@@ -606,6 +606,7 @@ async fn create_project(
         .blocking(move |store| {
             let now = OffsetDateTime::now_utc();
             let project = Project {
+                auto_advance: false,
                 archived_at: None,
                 paused_from: None,
                 id: ProjectId::new(),
@@ -702,11 +703,15 @@ async fn project_detail(
                 .collect();
             // ADR-0043 D1: この案件のリポジトリ（primary が先頭）。
             let repos = store.repo_list(project_id).map_err(store_problem)?;
+            // ADR-0074 D3.5（Phase F4b (h)）: 案件計画の DAG（無ければ省略）。
+            let project_plan = task_ops::project_plan::dag_view(store, &project)
+                .map_err(|e| ops_problem(store, e, None))?;
             Ok(ProjectDetail {
                 project,
                 repos,
                 milestones,
                 tasks,
+                project_plan,
             })
         })
         .await?;
@@ -724,10 +729,10 @@ async fn patch_project(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let patch: ProjectPatchBody = read_json(body, false).await?;
-    if patch.status.is_none() && patch.workspace.is_none() {
+    if patch.status.is_none() && patch.workspace.is_none() && patch.auto_advance.is_none() {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
-            message: "specify at least one of `status` or `workspace`".into(),
+            message: "specify at least one of `status`, `workspace` or `auto_advance`".into(),
         }]));
     }
     // ADR-0044 D6（Phase 55）: `paused` / `cancelled` は**専用のエンドポイント**でしか入れない。
@@ -765,6 +770,14 @@ async fn patch_project(
             if let Some(spec) = &workspace
                 && !store
                     .project_set_workspace(project_id, spec.as_ref())
+                    .map_err(store_problem)?
+            {
+                return Err(ApiProblem::project_not_found(&project_id.to_string()));
+            }
+            // ADR-0074 D3.2（Phase F4b (d)）。
+            if let Some(auto_advance) = patch.auto_advance
+                && !store
+                    .project_set_auto_advance(project_id, auto_advance)
                     .map_err(store_problem)?
             {
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));

@@ -20547,3 +20547,157 @@ commit: 22be6d8（区切り 0）、7b926b8（区切り 1 (a)(e)）、8b39f8b（�
 - 修正: 既定を `"bypassPermissions"`（アダプタ既定と同じ）に変更（`config.rs`）。planner は成果物を書く役なので Plan Mode は使わない。
 - 副次の発見: claude-oauth（Max）の 7 日枠が utilization 0.91（`rate_limit_event`、9/28 23:00 UTC にリセット）。私の実装エージェント（Sonnet）の週次制限と同じ枠。planner run 2 回目は `claude-sonnet-5` で走った（残量による lane の降格）。
 - F5-1 は 3 回目のやり直しが要る（release に本修正を含めてから）。それまでの F5-1（やり直し）タスク自身は atomic で done / reviewing まで進んでいる。
+## Phase F4b「案件レベルの計画（後半）: reached / Go、案件 replan、planner の children、互換、案件ページの DAG」（着手 2026-09-27、branch `worktree-agent-a46b8a640d3df7cda`）
+
+ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push しない）。ビルドは
+`CARGO_TARGET_DIR=/var/lib/celeris/build-cache/cargo/agent-platform-f4b CARGO_INCREMENTAL=0`。
+
+### F4b checkpoint 1: (d) 途中目標の Go（reached まで依存するマイルストーンを dispatch しない）（完了 2026-09-27）
+
+- **条件**: 依存先のマイルストーン Task が `done` でも、その途中目標（案件計画のもの）が `reached` になるまで依存する
+  マイルストーン Task は dispatch しない。ADR-0038 の `ok` で `reached` → Go が開く。案件の `auto_advance = true` なら `done` で進む。
+- **実装**:
+  - migration 0028（`SCHEMA_VERSION` 27 → 28）: `projects.auto_advance INTEGER NOT NULL DEFAULT 0`、`milestones.plan_key TEXT`。
+    `Project.auto_advance`（`serde(default)`）、`Milestone.plan_key`（`Option`）。`TaskStore::project_set_auto_advance` /
+    `milestone_set_plan_key`。`PATCH /projects/{id}` に `auto_advance`。
+  - `task_ops::project_plan::propose` が作る途中目標に `plan_key`（計画の key）を結ぶ。
+  - `SqliteStore::ready_tasks`（ADR-0044 D6 の一時停止の判定と同じ場所）: マイルストーン Task 同士の依存で、依存先の途中目標が
+    `plan_key` ありで `reached` でなく、案件の `auto_advance = 0` なら ready に出さない（`milestones_awaiting_go_locked`）。
+  - `task_ops::milestone_review::decide`: `plan_key` のある途中目標は `decide_planned`（`ok` = `reached` だけ。次の承認・分解 run は
+    起こさない。`ng` = `redesigned` + 案件 replan の計画 run）。`record_proposal` と dispatcher の `absorb_milestone_proposal` は
+    案件計画の途中目標に触れない。
+  - `MilestoneSpec.pause_after`（F3 の `PausePolicy`。F4a の申し送り）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-dispatch --lib dependent_milestone_waits_for_reached_not_done` → 1 passed（survey done 後も poc は ready で
+    WorkerStarted 0、`ok` 後に poc done。`auto_advance = true` では survey done で poc も done、途中目標は reached でないまま）。
+  - `cargo test -p task-core -p task-ops -p task-api -p celeris --no-fail-fast` → 全 suite 0 failed（task-core 423 passed、task-ops 351 passed）。
+  - `UPDATE_SCHEMA=1 cargo test -p task-core schema` / `--workspace committed_schema_matches_generated` → ok
+    （`event.schema.json`・`project-plan.schema.json`・`api-v1.schema.json` を再生成、`project-plan-delta.schema.json` を新規）。
+  - `cargo clippy --workspace --all-targets -- -D warnings` → warning 0。`cargo fmt --all -- --check` → 差分ゼロ。
+
+### F4b checkpoint 2: (e) 案件 replan（差分・同じ承認・二重依頼の防止）（完了 2026-09-27）
+
+- **条件**: 案件 replan の差分（dispatch 前のものだけ変えられる、`cancel` は明示）が F4a と同じ `decide` を通る。承認までは現行の
+  計画で動く。同じ案件への二重の計画依頼を防ぐ。
+- **実装**:
+  - `task_core::project_plan`: `celeris.project-plan-delta/1`（`ProjectPlanDelta{base_version, rationale, add, modify, remove, cancel}`、
+    `MilestoneModify`〈書いた欄だけ〉、`docs/protocol/project-plan-delta.schema.json`）、純粋関数 `validate_delta`（schema・
+    `base_version` = 現行の承認済み版・空でない・key の実在と重複・`modify`/`remove` は dispatch 前だけ・`cancel` は終端でないもの・
+    `add` の key 衝突・当てた後の全体を `validate`）、`MILESTONES_REPLAN_LABEL` / `is_milestones_replan_task`。
+  - `Event::ProjectPlanProposed.delta`（`Option`、追加のみ）。差分の提案でも `plan` / `milestones` は**当てた後の全体**を入れる。
+  - `task_ops::project_plan`: `plan_state`（plan タスクの events から全版・現行〈最新の承認済み〉・未決・次の版番号）、
+    `start_milestones` は動いている計画 run（提案前）か未決の提案があれば `OpsError::ProjectPlanInFlight`（API 409
+    `project_plan_in_flight`）、承認済みの計画があれば `start_replan`（replan の印、goal に `base_version` と各節点の状態・変更可否）。
+    `propose_delta`（`add` の分だけ proposed / draft を作り、modify・remove・cancel は承認まで何も変えない）、`decide` の差分の分岐
+    （承認時に今の状態で検証し直し、古ければ `OpsError::ProjectPlanStale`〈API 409 `project_plan_stale`〉で何も書かない。
+    新しい `TaskStore::project_plan_apply` が 途中目標の状態・題名 → Task の書き換え〈draft/ready で lease 無しのものだけ〉→
+    `Accept`/`Cancel` → `ProjectPlanDecided` を 1 トランザクションで。却下は `add` の分だけ redesigned / cancelled）。
+    `add::build_task_with_roles`（modify の組み立て直しに同じ規則を使う）。
+  - `task_ops::milestone_review::decide_planned` の `ng` が `start_replan` を起こす（D3.4 の起点 (a)）。
+  - dispatcher `finish_project_plan_run`: replan の run は差分を読み `validate_delta_against_store` → `propose_delta`。
+  - `task-worker`: `build_project_replan_prompt`（差分の書き方・規則・schema）。
+  - 受信箱: `DraftGroup.project_plan{project_id, version, supersedes}`（F4a の提案）。未決の提案は `plan_state` で引き、`add` の無い
+    差分も 1 まとまり（drafts 空）で出る。`plan_summary` に `[add]` の印と modify / remove / cancel の key。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-ops project_plan::` → 16 passed（新規 `project_replan_delta_cannot_modify_a_started_milestone`〈running の survey の
+    modify / remove は "already dispatched" で拒否、cancel の明示は通る、poc の modify と add は v2 の提案で承認まで poc は不変・survey は
+    running のまま、未決の間の二重依頼は ProjectPlanInFlight、承認で poc の題名・途中目標の題名が変わり paper が ready、提案後に対象が
+    dispatch されると承認は ProjectPlanStale で無変更、却下は現行を変えない〉、`project_replan_cancel_applies_cancel_to_a_running_milestone_on_approval`）。
+  - `cargo test -p task-core project_plan::` → 新規 `delta_modify_and_remove_only_touch_undispatched_milestones` /
+    `delta_rejects_stale_base_unknown_keys_collisions_and_dangling_dependencies` / `committed_delta_schema_matches_generated` ok。
+  - `cargo test -p task-dispatch --lib replan_run_proposes_a_delta_and_rejects_modifying_a_started_milestone` → ok（偽アダプタの replan run）。
+  - `cargo test -p task-api --test project_plan` → 12 passed（新規 `a_second_milestones_plan_request_is_409_and_auto_advance_round_trips`）。
+  - `cargo test -p task-ops inbox::` → 16 passed。`cargo test -p task-worker --lib replan` → ok（`project_replan_task_gets_the_delta_prompt`）。
+  - `cargo test --workspace --no-fail-fast` → **2501 passed / 0 failed / 5 ignored**。`cargo clippy --workspace --all-targets -- -D warnings` → 0。
+    `cargo fmt --all -- --check` → 差分ゼロ。`UPDATE_SCHEMA=1 …` で `api-v1.schema.json` 再生成、`gui` の `gen:types` → `types.ts` 再生成、`typecheck` exit 0。
+- **既知の限界**: D3.4 の起点 (c)（マイルストーン Task の failed / 取り下げで自動的に replan を起こす）は入れていない（人の依頼 =
+  `POST /plan {mode: milestones}` と途中目標の `ng` だけ）。`propose` / `propose_delta` の作成は 1 トランザクションではない（F4a と同じ）。
+
+### F4b checkpoint 3: (f) planner の `children` → 委譲の子 Task、`child:<key>` の依存（完了 2026-09-27）
+
+- **条件**: execution-plan/2 の `children` が既存の委譲の検証を通って子 Task になり、`child:<key>` の依存で WU が待つ。部またぎは
+  秘書への質問。planner のプロンプトに children の書き方。
+- **実装**:
+  - `task_core::execution_plan`: `ExecutionChildSpec{key, title, objective, acceptance, genre, skills, features, depends_on}`
+    （`deny_unknown_fields`、`assignee`/`tier`/`model` なし）で `ExecutionPlanSpec.children` を型付け。v1 では空のまま（`NonEmptyChildren`）、
+    v2 では件数（`max_children` 既定 8）・key・子同士の依存と循環・受け入れ条件を検証。WU の `depends_on` の `child:<key>` は既知の子だけ。
+    `CHILD_DEP_PREFIX`、`child_label(key)`（子 Task の印 `child-<key>`）、`newly_ready_with(units, external_done)`。
+    `docs/protocol/execution-plan.schema.json` 再生成。
+  - `task_ops::delegate::plan_children`: 子を `DelegateTask` に写して既存の `plan_delegation`（深さ・件数・木の run 数・`validate_each`・
+    作業場所の解決）に通す。1 件でも拒否なら `Err`。部をまたぐかは、担当になるはずのノード（`matching::decide`）の部と親の担当の部を
+    比べ、`cross_authorization` が Pending なら `NeedsAuthorization`（`CrossDepartment::question()` の形）、Denied なら `Err`。
+  - `TaskStore::execution_plan_adopt_delegating`（計画・WU・events と子 Task〈Created → Accept〉・`Event::Delegated{run_id: <planner run>}`
+    を 1 トランザクション）、`task_ops::execution::adopt_plan_with_children`。
+  - dispatcher: planner の完了で `plan_children` を通す（`Err` → 既存の retry / give-up、`NeedsAuthorization` → `WorkerQuestion` と
+    `approvals` の行〈答えれば planner が同じ子で再試行し、認可済みとして通る〉）。`wu_dispatch_gate` の先頭で `resolve_child_dependencies`
+    （子が done なら `pending → ready`〈reason `child_done`〉、failed / cancelled なら `pending → blocked(dependency_failed)` → D17 の replan、
+    未完了の子を待つだけなら Skip）。
+  - `task-worker`: v2 の planner プロンプトに「#### Child tasks」節（別の deliverable のときだけ、`child:<key>` の待ち方）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-dispatch --lib planner_children_become_delegated_child_tasks` → ok（子 1 件が `child-lit` の印・ready → done、
+    `Delegated{run_id: planner run}`、WU a は `child_done` で ready、Task done）。
+  - `cargo test -p task-ops --lib plan_children` → ok（`plan_children_runs_the_delegation_checks_and_asks_before_crossing_departments`: 同じ部は通る、
+    別の部は `cross-department: engineering -> research` の質問、once で通る、denied で拒否、木の深さの上限で拒否）。
+  - `cargo test -p task-core execution_plan` → 新規 `children_are_v2_only_and_child_dependencies_must_be_known` ok。
+  - `cargo test --workspace --no-fail-fast` → 1 件失敗（v1 の planner プロンプトが schema の説明文に `child:<key>` を含むため、
+    テストの否定の判定を節見出しに直した）→ 修正後 `cargo test -p task-worker --lib` ok。`cargo clippy …` 0、`cargo fmt --check` 差分ゼロ、
+    `UPDATE_SCHEMA=1 …` で `execution-plan.schema.json` / `event.schema.json` / `api-v1.schema.json`、`gen:types`、`typecheck` exit 0。
+- **既知の限界**: replan（既に計画がある Task の planner run）で新しい子を足すことはしない（既存の子の key だけ許す。不正な試行として扱う）。
+  `repos` は `ExecutionChildSpec` に入れていない（子は既存の委譲と同じく 親 > 案件の primary を継ぐ）。部またぎの質問の e2e は
+  `plan_children` の単体テストで代える。
+
+### F4b checkpoint 4: (g) 案件計画の無い既存の案件の互換（完了 2026-09-27）
+
+- **条件**: 案件計画の無い既存の案件の挙動（直列の途中目標、ADR-0038 の `ok` の旧い意味）が変わらない。
+- **実装**: 追加の実装は無し（(d) の Go の判定は `milestones.plan_key` のある途中目標だけ、`ok` の新しい意味も `plan_key` のある途中目標だけ）。
+  テストで固定する。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-ops --lib milestone_review` → 6 passed。新規 `legacy_project_keeps_linear_milestones`（`plan_key` の無い途中目標に属する
+    案件直下の Task 同士の依存は、依存先 done で同じ途中目標でも別の途中目標でも ready に出る〈reached を待たない〉、`ok` は reached +
+    最新の提案を approved → in_progress にして `kind = plan`〈案件計画の印なし〉の分解 run を起こす、案件計画の版は 0）、
+    `planned_milestone_ok_only_reaches_and_ng_starts_a_project_replan`（案件計画の途中目標の `ok` は reached だけ、`ng` は redesigned +
+    replan の計画 run〈理由が goal に入る〉）。
+  - `cargo clippy -p task-ops --all-targets -- -D warnings` → 0。
+
+### F4b checkpoint 5: (h) GUI の案件ページの DAG（完了 2026-09-27、commit 3c623ce / 4ae0425）
+
+- **条件**: 案件ページに DAG（節点 = マイルストーン Task の状態・進み・quota・止まっている理由）、提案中の計画の承認 / 却下、
+  節点ごとの ok / 議論 / ng。モバイル幅は縦の一覧。`gen:types` 差分ゼロ、`mobile-audit` 違反 0。
+- **実装**: `task_ops::project_plan::dag_view`（`ProjectPlanDagView{current_version, nodes, pending}`、節点に途中目標・Task の状態、
+  WU done/total〈統合 WU 除く〉、子 done/total、quota〈`summarize_execution_metrics`〉、`stop_reason`〈awaiting_human / question /
+  failed / awaiting_go / paused〉、提案の節点に `change`〈add / modify / remove / cancel〉）。`GET /projects/{id}` の `project_plan`。
+  GUI: `app/components/ProjectPlanDag.tsx`（層ごとに横並び・モバイルは同じ DOM の縦の一覧、節点の「判定」で ADR-0038 の
+  `MilestoneReviewPanel` をその場に出す、提案は破線の枠 + 承認 / 却下〈却下は理由必須〉）、`app/lib/project-plan.ts`、
+  `decideProjectPlan`（`POST /projects/{id}/project-plan/{version}/decide`）、`startProjectPlan` の `mode`（「計画を見直す」）、
+  Flash の文言、mobile-audit の偽 celeris に `project_plan` の例。案件計画の途中目標は「途中目標」一覧から外す。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-api --test project_plan` → 13 passed（新規 `project_detail_carries_the_plan_dag_and_the_pending_proposal`）。
+  - `cd gui && corepack pnpm@11.27.0 gen:types` → `types.ts` 差分ゼロ、`typecheck` exit 0、`lint` エラー 0（既存の info 2 件のみ）、
+    `test` → Test Files 73 passed / Tests 1113 passed（新規 `test/unit/project-plan.test.ts` 7 件）、`build` ok、
+    `mobile-audit` → `routes=27 schemes=2 violations=0`（project-detail に DAG と提案が出た状態で）。
+
+### Phase F4b の全体ゲート（2026-09-27）
+
+- `cargo fmt --all -- --check` → 差分ゼロ。
+- `cargo clippy --workspace --all-targets -- -D warnings` → warning 0。
+- `cargo test --workspace --no-fail-fast` → exit 0、合計 **2506 passed / 0 failed / 5 ignored**。
+- `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → FAILED 0、
+  再生成後の `git status` に差分なし。
+- `cd gui && corepack pnpm@11.27.0 gen:types`（差分ゼロ）`&& typecheck && lint && test && build && mobile-audit` → すべて exit 0、違反 0。
+
+### 未解決事項・F5 への申し送り
+
+- migration 0028（`SCHEMA_VERSION` 28）を含む。本番へ出すと古いバイナリはこの DB を開けない（`SchemaTooNew`）。
+  並行している別 branch が 0028 を使っていれば番号の付け替えが要る。
+- D3.4 の起点 (c)（マイルストーン Task の failed / 取り下げで自動的に replan）は未実装（人の依頼と `ng` だけ）。
+- replan の planner run で新しい children を足すことはしない。children の部またぎの質問は単体テストで確かめただけ（dispatcher の e2e 無し）。
+- `propose` / `propose_delta` の作成は 1 トランザクションではない（F4a と同じ）。提案中に daemon が止まると途中まで作った
+  proposed の途中目標・draft が残りうる（提案の event が無いので `plan_state` には出ない）。
+- 途中目標の状態は dispatch で `in_progress` に上げていない（`approved` のまま → レビュー → `reached`）。GUI は Task の状態を併記する。
+- F5 dogfood で確かめたいこと: 秘書の案件計画 / 差分のプロンプトで実際に妥当な DAG・差分が出るか、`awaiting_go` の案件で人の `ok` から
+  依存するマイルストーンが自然に動き出すか、planner の children が「別の deliverable のときだけ」書かれるか。
+
+### 提案
+
+- `docs/celeris-api-v1.md` に `GET /projects/{id}` の `project_plan`、`PATCH /projects/{id}` の `auto_advance`、
+  `POST /projects/{id}/plan` の 409 `project_plan_in_flight`、decide の 409 `project_plan_stale` を追記する（本 Phase では生成 schema のみ更新）。

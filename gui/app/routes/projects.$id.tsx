@@ -10,6 +10,7 @@ import {
   cancelProject,
   createMilestone,
   decideMilestone,
+  decideProjectPlan,
   patchMilestoneStatus,
   patchProjectStatus,
   patchProjectWorkspace,
@@ -53,6 +54,7 @@ import { ErrorFlash, FieldErrors, ProjectActionFlash, RetryFlash } from "~/compo
 import { HelpLink } from "~/components/HelpLink";
 import { MarkdownViewer } from "~/components/MarkdownViewer";
 import { ProjectIntegrations } from "~/components/ProjectIntegrations";
+import { ProjectPlanDag } from "~/components/ProjectPlanDag";
 import { ProjectRepos } from "~/components/ProjectRepos";
 import { ReportsList } from "~/components/ReportsList";
 import { RouteRecovery } from "~/components/RouteRecovery";
@@ -267,6 +269,10 @@ export async function action({ request, params }: Route.ActionArgs) {
     case "milestone_decide":
       outcome = await decideMilestone(client, formString(form, "milestone_id") ?? "", form, request.signal);
       break;
+    // ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 提案中の案件計画の承認 / 却下（**管理系**、202）。
+    case "project_plan_decide":
+      outcome = await decideProjectPlan(client, params.id, form, request.signal);
+      break;
     // 作業場所の保存・消去（ADR-0039 D1、Phase G13k）。保存は選んだ kind（local/remote）をそのまま送り、
     // 消去は明示的に `workspace: null` を送る（別ボタン。編集フォームで「まだ決めない」は選べない）。
     case "project_workspace_save":
@@ -366,6 +372,10 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
   // 同じ判断に揃えるため、ここで 1 度だけ絞る。
   const workTasks = useMemo(() => visibleWorkTasks(tasks), [tasks]);
   const graph = useMemo(() => projectTasksToGraph(tasks, orgById), [tasks, orgById]);
+  // ADR-0074 D3.5 / D3.8（Phase F4b (h)）: 案件計画の途中目標（`plan_key` あり）は DAG の節点で判定する
+  // ので、下の「途中目標」の一覧には案件計画を持たない途中目標（旧い意味のもの）だけを出す。
+  const projectPlan = detail.project_plan ?? null;
+  const listedMilestones = projectPlan ? milestones.filter((m) => !m.plan_key) : milestones;
 
   return (
     <div className="space-y-8">
@@ -436,6 +446,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
           { id: "project-workspace-heading", icon: "folder", label: "作業場所" },
           { id: "project-repos-heading", icon: "database", label: "リポジトリ" },
           { id: "project-integrations-heading", icon: "gitBranch", label: "PR と取り込み" },
+          ...(projectPlan ? [{ id: "project-plan-dag-heading", icon: "gitBranch" as const, label: "案件計画" }] : []),
           { id: "milestones-heading", icon: "target", label: "途中目標" },
           { id: "project-plan-heading", icon: "sparkles", label: "この方針で進める" },
           { id: "work-tree-heading", icon: "gitBranch", label: "仕事の木" },
@@ -577,15 +588,50 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
         <ProjectIntegrations items={integrations} />
       </section>
 
+      {/* ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。節点を選ぶと ADR-0038 の
+          判定をその場で出し、提案中の計画は破線で重ねて承認 / 却下を置く。案件計画の無い案件では出さない。 */}
+      {projectPlan && (
+        <section aria-labelledby="project-plan-dag-heading" data-testid="project-plan-section" className="space-y-4">
+          <SectionTitle icon="gitBranch" id="project-plan-dag-heading" count={projectPlan.nodes.length}>
+            案件計画
+          </SectionTitle>
+          <ProjectPlanDag
+            plan={projectPlan}
+            milestones={milestones}
+            renderReview={(m) => <MilestoneReviewPanel milestone={m} projectId={project.id} />}
+          />
+          {projectPlan.current_version != null && !projectPlan.pending && (
+            <fetcher.Form method="post" className="space-y-2" data-testid="project-replan-form">
+              <input type="hidden" name="intent" value="project_plan" />
+              <input type="hidden" name="mode" value="milestones" />
+              <label htmlFor="project-replan-note" className={labelClass}>
+                計画を見直す（理由を CoS に伝えます。承認するまで今の計画のまま動きます）
+              </label>
+              <textarea id="project-replan-note" name="note" rows={2} className={`${textareaClass} w-full`} />
+              <Button
+                type="submit"
+                variant="secondary"
+                size="sm"
+                disabled={submitting}
+                data-testid="project-replan-submit"
+              >
+                <Icon name="sparkles" />
+                計画を見直す
+              </Button>
+            </fetcher.Form>
+          )}
+        </section>
+      )}
+
       <section aria-labelledby="milestones-heading" data-testid="milestones-section" className="space-y-4">
-        <SectionTitle icon="target" id="milestones-heading" count={milestones.length}>
+        <SectionTitle icon="target" id="milestones-heading" count={listedMilestones.length}>
           途中目標
         </SectionTitle>
-        {milestones.length === 0 ? (
+        {listedMilestones.length === 0 ? (
           <EmptyState icon="target" title="途中目標がありません" />
         ) : (
           <ul className="space-y-2">
-            {milestones
+            {listedMilestones
               .slice()
               .sort((a, b) => a.seq - b.seq)
               .map((m) => (

@@ -442,6 +442,18 @@ const MILESTONE_DECIDE_LABEL: Record<string, string> = {
 export function ProjectActionFlash({ outcome }: { outcome: ProjectOpOutcome | undefined | null }) {
   if (!outcome) return null;
   if (!outcome.ok) return <ErrorFlash error={outcome.error} />;
+  // ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画の承認 / 却下。
+  if (outcome.op === "project_plan_decide") {
+    return (
+      <Alert role="status" data-testid="flash" data-flash-kind="ok" tone="success" className="my-2">
+        <p data-testid="flash-project-plan-decide">
+          {outcome.decided.decision === "approve"
+            ? `案件計画を承認しました（途中目標 ${outcome.decided.milestones.length} 件）。依存の無いものから動き始めます`
+            : "案件計画を却下しました。理由を CoS に伝えました"}
+        </p>
+      </Alert>
+    );
+  }
   if (outcome.op === "milestone_decide") {
     const { decided } = outcome;
     return (

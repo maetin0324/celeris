@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 29] = [
+pub(crate) const EVENT_TYPES: [&str; 31] = [
     "created",
     "transitioned",
     "worker_started",
@@ -192,6 +192,10 @@ pub(crate) const EVENT_TYPES: [&str; 29] = [
     "pause_points_resolved",
     // ADR-0074 D2.3（Phase F3 途中確認）: 停止点の工程の統合の後の決定的な途中報告。
     "phase_reported",
+    // ADR-0074 D8.1（Phase F4a）: CoS が案件計画を提案した。
+    "project_plan_proposed",
+    // ADR-0074 D8.2（Phase F4a）: 人が案件計画の提案を採否決定した。
+    "project_plan_decided",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -277,6 +281,21 @@ mod tests {
             .unwrap_or_else(|_| panic!("parse"));
         let set = q.event_types().ok().flatten().unwrap_or_default();
         assert!(set.contains("transitioned") && set.contains("worker_finished") && set.len() == 2);
+        let f5 = QueryParams::parse(
+            Some("types=project_plan_proposed,project_plan_decided,phase_reported,pause_points_resolved"),
+            &["types"],
+        )
+        .unwrap_or_else(|_| panic!("parse"));
+        let f5_types = f5.event_types().ok().flatten().unwrap_or_default();
+        assert_eq!(f5_types.len(), 4);
+        for event_type in [
+            "project_plan_proposed",
+            "project_plan_decided",
+            "phase_reported",
+            "pause_points_resolved",
+        ] {
+            assert!(f5_types.contains(event_type), "{event_type}");
+        }
         let bad =
             QueryParams::parse(Some("types=nope"), &["types"]).unwrap_or_else(|_| panic!("parse"));
         assert!(bad.event_types().is_err());

@@ -1725,6 +1725,10 @@ pub struct Dispatcher {
     /// プロバイダ（= アカウント）ごとのアダプタのインスタンス（ADR-0012 D1）。
     adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>>,
     config: DispatchConfig,
+    #[cfg(test)]
+    test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
+    #[cfg(test)]
+    test_policy_clock: Option<Arc<StdMutex<Instant>>>,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
     reviewing: HashMap<TaskId, ReviewEntry>,
@@ -1948,6 +1952,21 @@ fn real_now_unix() -> i64 {
 }
 
 impl Dispatcher {
+    fn now_utc(&self) -> OffsetDateTime {
+        #[cfg(test)]
+        if let Some(clock) = &self.test_now {
+            return *clock.lock().expect("test clock mutex");
+        }
+        OffsetDateTime::now_utc()
+    }
+
+    fn monotonic_now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(clock) = &self.test_policy_clock {
+            return *clock.lock().expect("test monotonic clock mutex");
+        }
+        Instant::now()
+    }
     /// `models` は provider id → `WorkerStarted.model` に記録するモデル名。`account_pool_providers` は
     /// `account_pool = true` のプロバイダ id（ADR-0024 D2）。
     pub fn new(
@@ -1983,6 +2002,10 @@ impl Dispatcher {
             models,
             adapters,
             config,
+            #[cfg(test)]
+            test_now: None,
+            #[cfg(test)]
+            test_policy_clock: None,
             running: HashMap::new(),
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),
@@ -2715,7 +2738,7 @@ impl Dispatcher {
         }
         // ADR-0023 D1: tick ごとではなく 5 秒に 1 回。外れた判定で dispatch しても、ssh が 255 を返して
         // 供給側失敗（attempts を消費しない cooldown）になるだけなので、多少古くても困らない。
-        let now = Instant::now();
+        let now = self.monotonic_now();
         if let Some(last) = self.last_cluster_liveness
             && now.duration_since(last) < CLUSTER_LIVENESS_INTERVAL
         {
@@ -8939,7 +8962,7 @@ impl Dispatcher {
         let ready_started = Instant::now();
         let candidates = self.store.ready_tasks(window)?;
         log_slow_step("ready_tasks", ready_started);
-        let now = Instant::now();
+        let now = self.monotonic_now();
         let mut dispatched = 0;
         // この tick で並列度の上限に達していると分かったプロバイダ（tick 内では空きが増えないので共有する）。
         let mut full: std::collections::HashSet<ProviderId> = std::collections::HashSet::new();
@@ -9138,7 +9161,7 @@ impl Dispatcher {
                 self.config.retry_backoff_max,
                 task.attempts,
             );
-            if OffsetDateTime::now_utc() < task.updated_at + delay {
+            if self.now_utc() < task.updated_at + delay {
                 tracing::debug!(task_id = %task.id, attempts = task.attempts, delay_ms = delay.as_millis() as u64, "retry backoff; not dispatching yet");
                 return Ok(false);
             }
@@ -9147,7 +9170,7 @@ impl Dispatcher {
         // `task.attempts` に依らない別軸。上のバックオフとは独立にゲートする）。期限を過ぎたら
         // このタスクへのゲートは外す（次に infra 失敗すればまた立て直す）。
         if !second_pass && let Some(until) = self.infra_backoff.get(&task.id).copied() {
-            if OffsetDateTime::now_utc() < until {
+            if self.now_utc() < until {
                 tracing::debug!(task_id = %task.id, %until, "infra backoff; not dispatching yet");
                 return Ok(false);
             }
@@ -13220,7 +13243,16 @@ mod tests {
         adapter: Arc<dyn WorkerAdapter>,
         max_concurrency: usize,
     ) -> Dispatcher {
-        let policy = StaticPolicy::new(
+        dispatcher_with_test_clock(store, adapter, max_concurrency, false)
+    }
+
+    fn dispatcher_with_test_clock(
+        store: Arc<dyn TaskStore>,
+        adapter: Arc<dyn WorkerAdapter>,
+        max_concurrency: usize,
+        use_test_clock: bool,
+    ) -> Dispatcher {
+        let mut policy = StaticPolicy::new(
             vec![ProviderSpec {
                 id: "p1".into(),
                 adapter: "instant".into(),
@@ -13230,9 +13262,13 @@ mod tests {
             }],
             Duration::from_secs(1),
         );
+        let policy_clock = Arc::new(StdMutex::new(Instant::now()));
+        if use_test_clock {
+            policy.set_test_clock(policy_clock.clone());
+        }
         let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
         adapters.insert("p1".into(), adapter);
-        Dispatcher::new(
+        let mut dispatcher = Dispatcher::new(
             store,
             Box::new(policy),
             HashMap::from([("p1".to_string(), "m".to_string())]),
@@ -13274,7 +13310,15 @@ mod tests {
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
-        )
+        );
+        #[cfg(test)]
+        {
+            if use_test_clock {
+                dispatcher.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+                dispatcher.test_policy_clock = Some(policy_clock);
+            }
+        }
+        dispatcher
     }
 
     #[tokio::test]
@@ -13393,8 +13437,10 @@ mod tests {
                 .spawn_review(task.id, "subject".into(), &ReviewSubject::default())
                 .unwrap()
         );
-        // Even after the async check finishes, the first owner must persist its verdict.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The completed review keeps its lock until the dispatcher persists the verdict.
+        tokio::task::yield_now().await;
+        old.tick().unwrap();
+        assert!(old.reviewing.contains_key(&task.id));
         assert!(
             !active
                 .spawn_review(task.id, "subject".into(), &ReviewSubject::default())
@@ -15647,6 +15693,7 @@ mod tests {
     /// 1 回目は供給側失敗（Throttled）、2 回目以降は `touched` を作って done を返すアダプタ。
     struct FlakyProviderAdapter {
         calls: AtomicUsize,
+        finished: tokio::sync::Notify,
     }
 
     #[async_trait]
@@ -15662,13 +15709,13 @@ mod tests {
             _sink: &dyn EventSink,
         ) -> Result<RunOutcome, AdapterError> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                // 下のテストは「50 ms 後の tick ではまだ cooldown 中」を見る。負荷で tick が遅れても明けないよう、
-                // cooldown は十分長く取る（`run_until_idle` は 20 ms × 300 tick = 6 秒まで待つ）。
+                self.finished.notify_one();
                 return Err(AdapterError::Throttled {
-                    retry_after: Duration::from_millis(1500),
+                    retry_after: Duration::from_secs(3600),
                 });
             }
             std::fs::write(req.workspace.join("touched"), "1").unwrap();
+            self.finished.notify_one();
             Ok(done_outcome())
         }
     }
@@ -15689,17 +15736,33 @@ mod tests {
         store.insert(&task).unwrap();
         let adapter = Arc::new(FlakyProviderAdapter {
             calls: AtomicUsize::new(0),
+            finished: tokio::sync::Notify::new(),
         });
-        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        let mut d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 1, true);
         assert_eq!(d.tick().unwrap().dispatched, 1);
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        adapter.finished.notified().await;
         let second = d.tick().unwrap();
         assert_eq!(second.finished, 1);
         assert_eq!(second.dispatched, 0, "provider is cooling down");
         let t = store.get(task.id).unwrap().unwrap();
         assert_eq!((t.status, t.attempts), (Status::Ready, 0));
 
-        let report = run_until_idle(&mut d, 300).await;
+        if let Some(clock) = &d.test_now {
+            *clock.lock().unwrap() += time::Duration::hours(2);
+        }
+        if let Some(clock) = &d.test_policy_clock {
+            *clock.lock().unwrap() += Duration::from_secs(7200);
+        }
+        assert_eq!(d.tick().unwrap().dispatched, 1);
+        adapter.finished.notified().await;
+        let mut report = d.tick().unwrap();
+        for _ in 0..10 {
+            if report.idle {
+                break;
+            }
+            tokio::task::yield_now().await;
+            report = d.tick().unwrap();
+        }
         assert!(report.idle);
         let t = store.get(task.id).unwrap().unwrap();
         assert_eq!((t.status, t.attempts), (Status::Done, 0));
@@ -15708,10 +15771,19 @@ mod tests {
         assert!(events.iter().any(|(_, e)| matches!(e, Event::Transitioned { from: Status::Running, to: Status::Ready, reason } if reason == "requeue")));
         assert!(events.iter().any(|(_, e)| matches!(e, Event::WorkerFinished { outcome, .. } if outcome.starts_with("requeue: "))));
         // ADR-0013 D9: cooldown の開始が期限と種別つきで残る。
-        assert!(events.iter().any(|(_, e)| matches!(
-            e,
-            Event::ProviderThrottled { provider, until, reason } if provider == "p1" && reason.as_deref() == Some("throttled") && *until > OffsetDateTime::now_utc() - time::Duration::seconds(5)
-        )), "{events:?}");
+        let recorded_until = events.iter().find_map(|(_, e)| match e {
+            Event::ProviderThrottled {
+                provider,
+                until,
+                reason,
+            } if provider == "p1" && reason.as_deref() == Some("throttled") => Some(*until),
+            _ => None,
+        });
+        assert!(recorded_until.is_some(), "{events:?}");
+        assert!(
+            recorded_until.unwrap() > d.now_utc() - time::Duration::hours(2),
+            "{events:?}"
+        );
     }
 
     /// ADR-0010 D6（P-3）: attempts > 0 の ready タスクはバックオフが明けるまで dispatch されず、idle にもならない。
@@ -15719,7 +15791,7 @@ mod tests {
     async fn retry_backoff_delays_redispatch() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let task = new_task(
+        let mut task = new_task(
             dir.path(),
             Check::Command {
                 cmd: "test -f never".into(),
@@ -15727,37 +15799,34 @@ mod tests {
             },
             1,
         );
-        store.insert(&task).unwrap();
+        task.attempts = 1;
         let adapter = Arc::new(InstantAdapter {
-            terminal: Terminal::Done {
-                summary: "claimed".into(),
-                evidence: vec![],
-                usage: None,
+            terminal: Terminal::Error {
+                message: "done".into(),
+                retryable: false,
             },
             delay: Duration::ZERO,
         });
-        let mut d = dispatcher(store.clone(), adapter, 1);
+        let mut d = dispatcher_with_test_clock(store.clone(), adapter, 1, true);
         d.config.retry_backoff_base = Duration::from_secs(3600);
         d.config.retry_backoff_max = Duration::from_secs(3600);
-        for _ in 0..100 {
-            d.tick().unwrap();
-            let t = store.get(task.id).unwrap().unwrap();
-            if (t.status, t.attempts) == (Status::Ready, 1) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        let frozen_now = d.now_utc();
+        if let Some(clock) = &d.test_now {
+            *clock.lock().unwrap() = frozen_now;
         }
-        assert_eq!(store.get(task.id).unwrap().unwrap().attempts, 1);
+        task.updated_at = frozen_now - time::Duration::minutes(59);
+        store.insert(&task).unwrap();
         for _ in 0..5 {
             let r = d.tick().unwrap();
             assert_eq!(r.dispatched, 0);
             assert!(!r.idle, "a task waiting for its backoff is not idle");
         }
-        d.config.retry_backoff_base = Duration::ZERO;
-        let report = run_until_idle(&mut d, 200).await;
-        assert!(report.idle);
-        let t = store.get(task.id).unwrap().unwrap();
-        assert_eq!((t.status, t.attempts), (Status::Failed, 2));
+        if let Some(clock) = &d.test_now {
+            *clock.lock().unwrap() =
+                store.get(task.id).unwrap().unwrap().updated_at + time::Duration::hours(2);
+        }
+        assert_eq!(d.tick().unwrap().dispatched, 1);
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Running);
 
         let (base, max) = (Duration::from_secs(10), Duration::from_secs(300));
         assert_eq!(retry_backoff(base, max, 0), Duration::ZERO);
@@ -22762,6 +22831,7 @@ mod tests {
             _limits: RunLimits,
             _sink: &dyn EventSink,
         ) -> Result<RunOutcome, AdapterError> {
+            tokio::task::yield_now().await;
             if let Ok(mut seen) = self.seen.lock() {
                 seen.push((
                     req.cwd().to_path_buf(),

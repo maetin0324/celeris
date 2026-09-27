@@ -1,6 +1,8 @@
 //! `ProviderPolicy` と `StaticPolicy`（DESIGN §5.5, ADR-0005 D6, ADR-0012 D2）。
 
 use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use task_core::{Tier, WorkerHint};
@@ -81,11 +83,22 @@ pub trait ProviderPolicy: Send {
 }
 
 /// 設定表の優先順位どおりに選ぶ。Throttled は cooldown まで除外。
-#[derive(Debug)]
 pub struct StaticPolicy {
     providers: Vec<ProviderSpec>,
     error_cooldown: Duration,
     cooldown_until: HashMap<ProviderId, (Instant, CooldownReason)>,
+    #[cfg(test)]
+    test_clock: Option<Arc<std::sync::Mutex<Instant>>>,
+}
+
+impl std::fmt::Debug for StaticPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticPolicy")
+            .field("providers", &self.providers)
+            .field("error_cooldown", &self.error_cooldown)
+            .field("cooldown_until", &self.cooldown_until)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StaticPolicy {
@@ -94,11 +107,34 @@ impl StaticPolicy {
             providers,
             error_cooldown,
             cooldown_until: HashMap::new(),
+            #[cfg(test)]
+            test_clock: None,
         }
     }
 
     pub fn providers(&self) -> &[ProviderSpec] {
         &self.providers
+    }
+
+    #[cfg(test)]
+    pub fn set_test_clock(&mut self, clock: Arc<std::sync::Mutex<Instant>>) {
+        self.test_clock = Some(clock);
+    }
+
+    #[cfg(test)]
+    pub fn advance_test_clock(&mut self, by: Duration) {
+        if let Some(clock) = &self.test_clock {
+            let mut now = clock.lock().unwrap();
+            *now += by;
+        }
+    }
+
+    fn report_now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(clock) = &self.test_clock {
+            return *clock.lock().unwrap();
+        }
+        Instant::now()
     }
 
     /// 指定プロバイダの `model`（`WorkerStarted.model` 用）。
@@ -143,13 +179,13 @@ impl ProviderPolicy for StaticPolicy {
         match outcome {
             ProviderOutcome::Ok => {}
             ProviderOutcome::Throttled { retry_after } => {
-                let until = Instant::now() + *retry_after;
+                let until = self.report_now() + *retry_after;
                 tracing::debug!(%provider, ?until, "policy: throttled");
                 self.cooldown_until
                     .insert(provider, (until, CooldownReason::Throttled));
             }
             ProviderOutcome::AuthFailed | ProviderOutcome::Exhausted => {
-                let until = Instant::now() + self.error_cooldown;
+                let until = self.report_now() + self.error_cooldown;
                 let reason = if *outcome == ProviderOutcome::AuthFailed {
                     CooldownReason::AuthFailed
                 } else {

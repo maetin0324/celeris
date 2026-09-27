@@ -4998,6 +4998,74 @@ impl Dispatcher {
                     metrics,
                     end: run_end,
                 };
+                // ADR-0074 D3.7（Phase F4b (f)）: planner の `children` を既存の委譲の検証に通す
+                // （初回の採用だけ。replan で新しい子を足すことはしない — 既存の子の key だけを許す）。
+                let children = if active_plan.is_some() {
+                    let existing: std::collections::BTreeSet<String> = self
+                        .store
+                        .children(task_id)?
+                        .into_iter()
+                        .flat_map(|c| c.labels.into_iter())
+                        .collect();
+                    match validated
+                        .spec
+                        .children
+                        .iter()
+                        .find(|c| !existing.contains(&task_core::child_label(&c.key)))
+                    {
+                        Some(c) => Err(format!(
+                            "child {} is new; children can only be added when the plan is first adopted",
+                            c.key
+                        )),
+                        None => Ok(task_ops::delegate::ChildrenPlan::Ready(Vec::new())),
+                    }
+                } else {
+                    task_ops::delegate::plan_children(
+                        self.store.as_ref(),
+                        task,
+                        &validated.spec.children,
+                        &self.config.roles,
+                        &self.config.genres,
+                        &self.config.delegation,
+                        now,
+                    )
+                };
+                let children = match children {
+                    Ok(task_ops::delegate::ChildrenPlan::Ready(children)) => children,
+                    Ok(task_ops::delegate::ChildrenPlan::NeedsAuthorization(questions)) => {
+                        // SPEC §3.1 / ADR-0033 D4・D5: 部をまたぐ子は秘書（人）への質問。認可されたら
+                        // planner をもう一度走らせ、同じ子が認可済みとして通る。
+                        let question = questions.join("\n");
+                        let progress = Event::worker_progress(run_id.clone(), question.clone());
+                        self.store.apply_transition_with_events(
+                            task_id,
+                            Trigger::WorkerQuestion,
+                            vec![finished, progress],
+                        )?;
+                        for q in &questions {
+                            if let Err(e) = crate::approvals::record_question_approval(
+                                self.store.as_ref(),
+                                task,
+                                q,
+                                now,
+                            ) {
+                                tracing::warn!(%task_id, error = %e, "failed to record the cross-department approval for planner children");
+                            }
+                        }
+                        return Ok(());
+                    }
+                    Err(reason) => {
+                        self.give_up_or_retry_planner(
+                            task_id,
+                            task,
+                            &run_id,
+                            finished,
+                            format!("子 Task の提案が委譲の検証に通りませんでした: {reason}"),
+                            now,
+                        )?;
+                        return Ok(());
+                    }
+                };
                 let adopted = if active_plan.is_some() {
                     // ADR-0072 D17（Phase E4）: replan。done の WU は保持し、旧版を supersede する。
                     task_ops::execution::replan(
@@ -5012,7 +5080,7 @@ impl Dispatcher {
                     )
                     .map(|(plan, _diff)| plan)
                 } else {
-                    task_ops::execution::adopt_plan(
+                    task_ops::execution::adopt_plan_with_children(
                         self.store.as_ref(),
                         task_id,
                         validated.spec,
@@ -5020,6 +5088,7 @@ impl Dispatcher {
                         Some(run_id.clone()),
                         task_core::ExecutionLimits::default(),
                         now,
+                        children,
                     )
                 };
                 match adopted {
@@ -6900,6 +6969,24 @@ impl Dispatcher {
         // `runnable_work_units`）で決める。v1 は従来どおり（`next_work_unit`）。
         let v2 = active_plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
         let mut units = self.store.work_units_for(task_id)?;
+        // ADR-0074 D3.7（Phase F4b (f)）: `child:<key>` の依存を子 Task の状態で決定的に解く。
+        let (changed, waiting_on_children) = self.resolve_child_dependencies(task_id, &units)?;
+        if changed {
+            units = self.store.work_units_for(task_id)?;
+        }
+        if waiting_on_children
+            && !units.iter().any(|u| {
+                matches!(
+                    u.status,
+                    task_core::WorkUnitStatus::Ready
+                        | task_core::WorkUnitStatus::NeedsContinuation
+                        | task_core::WorkUnitStatus::Running
+                )
+            })
+        {
+            // 進められる WU は子の完了待ちのものだけ（Task は ready のまま待つ）。
+            return Ok(WuDispatchGate::Skip);
+        }
         let stuck = if v2 {
             matches!(
                 crate::execution_scheduler::settle_phase(&units),
@@ -7005,6 +7092,99 @@ impl Dispatcher {
                 }
             }
         }
+    }
+
+    /// ADR-0074 D3.7（Phase F4b (f)）: `depends_on: ["child:<key>"]` の WU を、子 Task（`child-<key>` の
+    /// 印を持つ `parent_id = task_id` の Task）の状態で進める。子が `done` なら（他の依存も満たされて
+    /// いれば）`pending → ready`、子が `failed` / `cancelled` なら `pending → blocked(dependency_failed)`
+    /// （D17 の replan の対象）。戻り値は（書き換えたか、まだ終わっていない子を待っている WU があるか）。
+    fn resolve_child_dependencies(
+        &self,
+        task_id: TaskId,
+        units: &[task_core::WorkUnitRow],
+    ) -> Result<(bool, bool), DispatchError> {
+        let prefix = task_core::CHILD_DEP_PREFIX;
+        let has_child_deps =
+            |u: &task_core::WorkUnitRow| u.depends_on.iter().any(|d| d.starts_with(prefix));
+        if !units
+            .iter()
+            .any(|u| u.status == task_core::WorkUnitStatus::Pending && has_child_deps(u))
+        {
+            return Ok((false, false));
+        }
+        let mut done: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut failed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for child in self.store.children(task_id)? {
+            for label in &child.labels {
+                let Some(key) = label.strip_prefix("child-") else {
+                    continue;
+                };
+                let dep = format!("{prefix}{key}");
+                match child.status {
+                    Status::Done => {
+                        done.insert(dep);
+                    }
+                    Status::Failed | Status::Cancelled => {
+                        failed.insert(dep);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut changed = false;
+        for u in units.iter().filter(|u| {
+            u.status == task_core::WorkUnitStatus::Pending
+                && u.depends_on.iter().any(|d| failed.contains(d))
+        }) {
+            let mut row = u.clone();
+            row.status = task_core::WorkUnitStatus::Blocked;
+            row.blocked_reason = Some(task_core::WorkUnitBlockedReason::DependencyFailed);
+            self.store.work_unit_transition(
+                task_id,
+                row,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: task_core::WorkUnitStatus::Pending,
+                    to: task_core::WorkUnitStatus::Blocked,
+                    reason: "dependency_failed".to_string(),
+                    run_id: None,
+                },
+            )?;
+            changed = true;
+        }
+        if !changed {
+            for id in task_core::newly_ready_with(units, &done) {
+                let Some(u) = units.iter().find(|u| u.id == id) else {
+                    continue;
+                };
+                if !has_child_deps(u) {
+                    continue;
+                }
+                let mut row = u.clone();
+                row.status = task_core::WorkUnitStatus::Ready;
+                self.store.work_unit_transition(
+                    task_id,
+                    row,
+                    Event::WorkUnitTransitioned {
+                        work_unit_id: u.id.clone(),
+                        key: u.key.clone(),
+                        from: task_core::WorkUnitStatus::Pending,
+                        to: task_core::WorkUnitStatus::Ready,
+                        reason: "child_done".to_string(),
+                        run_id: None,
+                    },
+                )?;
+                changed = true;
+            }
+        }
+        let waiting = units.iter().any(|u| {
+            u.status == task_core::WorkUnitStatus::Pending
+                && u.depends_on
+                    .iter()
+                    .any(|d| d.starts_with(prefix) && !done.contains(d) && !failed.contains(d))
+        });
+        Ok((changed, waiting))
     }
 
     /// ADR-0074 D1.3/D1.6（Phase F2b）: v2 の計画の Ready な Task が次に何をするか。
@@ -26044,6 +26224,102 @@ mod tests {
             .filter(|r| r.work_unit_id.is_some())
             .count();
         assert_eq!(wu_routing, 2, "{routing_records:?}");
+    }
+
+    /// ADR-0074 D3.7（Phase F4b (f)）: execution-plan/2 の `children` は採用と同じトランザクションで既存の
+    /// 委譲の検証を通って子 Task（`parent_id` = この Task、`child-<key>` の印、ready）になり、
+    /// `Event::Delegated{run_id: <planner run>}` が残る。`depends_on: ["child:<key>"]` の WU は子が
+    /// `done` になるまで待ち（`child_done` で ready）、Task は最後に done になる。
+    #[tokio::test]
+    async fn planner_children_become_delegated_child_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = compound_task(dir.path());
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+
+        let spec = task_core::ExecutionPlanSpec {
+            schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+            rationale: "a child deliverable first".to_string(),
+            phases: vec![task_core::PhaseSpec {
+                key: "build".into(),
+                kind: task_core::WorkUnitKind::Implement,
+                title: "build".into(),
+            }],
+            work_units: vec![{
+                let mut a = wu_spec("a", &["child:lit"]);
+                a.phase = Some("build".into());
+                a
+            }],
+            children: vec![task_core::ExecutionChildSpec {
+                key: "lit".into(),
+                title: "関連研究の調査".into(),
+                objective: "別の deliverable として調べる".into(),
+                acceptance: vec![task_core::Criterion {
+                    text: "ok".into(),
+                    check: Check::Command {
+                        cmd: "true".into(),
+                        expect_exit: 0,
+                    },
+                }],
+                genre: None,
+                skills: vec!["survey".into()],
+                features: None,
+                depends_on: vec![],
+            }],
+        };
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(serde_json::to_string(&spec).unwrap())],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 2);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 600).await;
+        assert!(report.idle, "{report:?}");
+
+        let children = store.children(task_id).unwrap();
+        assert_eq!(children.len(), 1, "{children:?}");
+        let child = &children[0];
+        assert_eq!(child.parent_id, Some(task_id));
+        assert!(child.labels.contains(&"child-lit".to_string()));
+        assert_eq!(child.skills, vec!["survey".to_string()]);
+        assert_eq!(
+            child.assignee, None,
+            "ADR-0069 D1: owner is decided by matching"
+        );
+        assert!(!task_core::is_milestone_task(child));
+        assert_eq!(
+            child.status,
+            Status::Done,
+            "{:?}",
+            store.events_for(child.id).unwrap()
+        );
+
+        let events = store.events_for(task_id).unwrap();
+        let planner_run = store
+            .runs_for_task(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.role == task_core::RunIndexRole::Planner)
+            .expect("planner run")
+            .run_id;
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::Delegated { run_id, task_ids } if run_id == &planner_run && task_ids == &vec![child.id]
+            )),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::WorkUnitTransitioned { key, reason, .. } if key == "a" && reason == "child_done"
+            )),
+            "{events:?}"
+        );
+        let stored = store.get(task_id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{events:?}");
     }
 
     /// ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」（0 区切り）: `gate = "shadow"` でも、

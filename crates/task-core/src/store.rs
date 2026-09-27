@@ -1040,6 +1040,21 @@ pub trait TaskStore:
         event: Event,
     ) -> Result<(), StoreError>;
 
+    /// ADR-0074 D3.7（Phase F4b (f)）: `execution_plan_adopt` と同じことを行い、**同じトランザクションで**
+    /// planner の `children` から作った子 Task（`parent_id = task_id`、draft なら `Accept`）を挿入し、
+    /// `Event::Delegated{run_id: <planner run>, task_ids}` を親に残す（`delegate_children` と同じ形）。
+    #[allow(clippy::too_many_arguments)]
+    fn execution_plan_adopt_delegating(
+        &self,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        run_id: &str,
+        children: Vec<Task>,
+    ) -> Result<Vec<TaskId>, StoreError>;
+
     /// そのタスクの `active` な計画（無ければ `None`）。
     fn execution_plan_active(
         &self,
@@ -2325,6 +2340,53 @@ impl SqliteStore {
     /// 写しの列を**全部**書き直す（挿入時にしか書いていなかった `objective` / `genre` / `project_id` /
     /// `milestone_id` / `assignee` も、編集で変わりうるのでここで揃える）。状態機械は通らない
     /// （`status` / `attempts` / `lease` は触らない）。
+    /// `execution_plan_adopt` / `execution_plan_adopt_delegating` の共通部分（tx の中で計画・WU・events を書く）。
+    fn adopt_plan_tx(
+        tx: &Connection,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+    ) -> Result<(), StoreError> {
+        let existing: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM execution_plans WHERE task_id = ?1 AND status = 'active'",
+            params![task_id.to_string()],
+            |r| r.get(0),
+        )?;
+        if existing > 0 {
+            return Err(StoreError::InUse {
+                kind: "execution_plan",
+                id: task_id.to_string(),
+                detail: "task already has an active execution plan (replan is Phase E4)"
+                    .to_string(),
+            });
+        }
+        tx.execute(
+            "INSERT INTO execution_plans (id, task_id, version, origin, planner_run_id, status, \
+             json, created_at, superseded_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                plan.id,
+                plan.task_id,
+                plan.version,
+                plan.origin.as_str(),
+                plan.planner_run_id,
+                plan.status.as_str(),
+                serde_json::to_string(&plan.spec)?,
+                plan.created_at,
+                plan.superseded_at,
+            ],
+        )?;
+        for wu in &work_units {
+            Self::insert_work_unit_tx(tx, wu)?;
+        }
+        for ev in &extra_events {
+            Self::append_event_tx(tx, task_id, ev)?;
+        }
+        Self::append_event_tx(tx, task_id, &event)?;
+        Ok(())
+    }
+
     fn update_task_tx(tx: &Connection, task: &Task) -> Result<(), StoreError> {
         let json = serde_json::to_string(task)?;
         let updated_at = format_rfc3339(task.updated_at)?;
@@ -5013,43 +5075,57 @@ impl TaskStore for SqliteStore {
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM execution_plans WHERE task_id = ?1 AND status = 'active'",
-            params![task_id.to_string()],
-            |r| r.get(0),
-        )?;
-        if existing > 0 {
-            return Err(StoreError::InUse {
-                kind: "execution_plan",
-                id: task_id.to_string(),
-                detail: "task already has an active execution plan (replan is Phase E4)"
-                    .to_string(),
-            });
-        }
-        tx.execute(
-            "INSERT INTO execution_plans (id, task_id, version, origin, planner_run_id, status, \
-             json, created_at, superseded_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![
-                plan.id,
-                plan.task_id,
-                plan.version,
-                plan.origin.as_str(),
-                plan.planner_run_id,
-                plan.status.as_str(),
-                serde_json::to_string(&plan.spec)?,
-                plan.created_at,
-                plan.superseded_at,
-            ],
-        )?;
-        for wu in &work_units {
-            Self::insert_work_unit_tx(&tx, wu)?;
-        }
-        for ev in &extra_events {
-            Self::append_event_tx(&tx, task_id, ev)?;
-        }
-        Self::append_event_tx(&tx, task_id, &event)?;
+        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn execution_plan_adopt_delegating(
+        &self,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        run_id: &str,
+        children: Vec<Task>,
+    ) -> Result<Vec<TaskId>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
+        let mut ids = Vec::with_capacity(children.len());
+        for child in &children {
+            if child.parent_id != Some(task_id) {
+                return Err(StoreError::Invalid(format!(
+                    "child {} does not belong to task {task_id}",
+                    child.id
+                )));
+            }
+            Self::insert_tx(&tx, child)?;
+            Self::append_event_tx(
+                &tx,
+                child.id,
+                &Event::Created {
+                    task: Box::new(child.clone()),
+                },
+            )?;
+            if child.status == Status::Draft {
+                Self::apply_transition_tx(&tx, child.id, Trigger::Accept, vec![])?;
+            }
+            ids.push(child.id);
+        }
+        if !ids.is_empty() {
+            Self::append_event_tx(
+                &tx,
+                task_id,
+                &Event::Delegated {
+                    run_id: run_id.to_string(),
+                    task_ids: ids.clone(),
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(ids)
     }
 
     fn execution_plan_active(

@@ -20599,3 +20599,36 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
     `cargo fmt --all -- --check` → 差分ゼロ。`UPDATE_SCHEMA=1 …` で `api-v1.schema.json` 再生成、`gui` の `gen:types` → `types.ts` 再生成、`typecheck` exit 0。
 - **既知の限界**: D3.4 の起点 (c)（マイルストーン Task の failed / 取り下げで自動的に replan を起こす）は入れていない（人の依頼 =
   `POST /plan {mode: milestones}` と途中目標の `ng` だけ）。`propose` / `propose_delta` の作成は 1 トランザクションではない（F4a と同じ）。
+
+### F4b checkpoint 3: (f) planner の `children` → 委譲の子 Task、`child:<key>` の依存（完了 2026-09-27）
+
+- **条件**: execution-plan/2 の `children` が既存の委譲の検証を通って子 Task になり、`child:<key>` の依存で WU が待つ。部またぎは
+  秘書への質問。planner のプロンプトに children の書き方。
+- **実装**:
+  - `task_core::execution_plan`: `ExecutionChildSpec{key, title, objective, acceptance, genre, skills, features, depends_on}`
+    （`deny_unknown_fields`、`assignee`/`tier`/`model` なし）で `ExecutionPlanSpec.children` を型付け。v1 では空のまま（`NonEmptyChildren`）、
+    v2 では件数（`max_children` 既定 8）・key・子同士の依存と循環・受け入れ条件を検証。WU の `depends_on` の `child:<key>` は既知の子だけ。
+    `CHILD_DEP_PREFIX`、`child_label(key)`（子 Task の印 `child-<key>`）、`newly_ready_with(units, external_done)`。
+    `docs/protocol/execution-plan.schema.json` 再生成。
+  - `task_ops::delegate::plan_children`: 子を `DelegateTask` に写して既存の `plan_delegation`（深さ・件数・木の run 数・`validate_each`・
+    作業場所の解決）に通す。1 件でも拒否なら `Err`。部をまたぐかは、担当になるはずのノード（`matching::decide`）の部と親の担当の部を
+    比べ、`cross_authorization` が Pending なら `NeedsAuthorization`（`CrossDepartment::question()` の形）、Denied なら `Err`。
+  - `TaskStore::execution_plan_adopt_delegating`（計画・WU・events と子 Task〈Created → Accept〉・`Event::Delegated{run_id: <planner run>}`
+    を 1 トランザクション）、`task_ops::execution::adopt_plan_with_children`。
+  - dispatcher: planner の完了で `plan_children` を通す（`Err` → 既存の retry / give-up、`NeedsAuthorization` → `WorkerQuestion` と
+    `approvals` の行〈答えれば planner が同じ子で再試行し、認可済みとして通る〉）。`wu_dispatch_gate` の先頭で `resolve_child_dependencies`
+    （子が done なら `pending → ready`〈reason `child_done`〉、failed / cancelled なら `pending → blocked(dependency_failed)` → D17 の replan、
+    未完了の子を待つだけなら Skip）。
+  - `task-worker`: v2 の planner プロンプトに「#### Child tasks」節（別の deliverable のときだけ、`child:<key>` の待ち方）。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-dispatch --lib planner_children_become_delegated_child_tasks` → ok（子 1 件が `child-lit` の印・ready → done、
+    `Delegated{run_id: planner run}`、WU a は `child_done` で ready、Task done）。
+  - `cargo test -p task-ops --lib plan_children` → ok（`plan_children_runs_the_delegation_checks_and_asks_before_crossing_departments`: 同じ部は通る、
+    別の部は `cross-department: engineering -> research` の質問、once で通る、denied で拒否、木の深さの上限で拒否）。
+  - `cargo test -p task-core execution_plan` → 新規 `children_are_v2_only_and_child_dependencies_must_be_known` ok。
+  - `cargo test --workspace --no-fail-fast` → 1 件失敗（v1 の planner プロンプトが schema の説明文に `child:<key>` を含むため、
+    テストの否定の判定を節見出しに直した）→ 修正後 `cargo test -p task-worker --lib` ok。`cargo clippy …` 0、`cargo fmt --check` 差分ゼロ、
+    `UPDATE_SCHEMA=1 …` で `execution-plan.schema.json` / `event.schema.json` / `api-v1.schema.json`、`gen:types`、`typecheck` exit 0。
+- **既知の限界**: replan（既に計画がある Task の planner run）で新しい子を足すことはしない（既存の子の key だけ許す。不正な試行として扱う）。
+  `repos` は `ExecutionChildSpec` に入れていない（子は既存の委譲と同じく 親 > 案件の primary を継ぐ）。部またぎの質問の e2e は
+  `plan_children` の単体テストで代える。

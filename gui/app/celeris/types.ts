@@ -3212,10 +3212,11 @@ export interface CheckpointTestRun {
  */
 export interface ExecutionPlanSpec {
   /**
-   * D3.7: 子 Task の提案。F4 まで空だけを許す（`validate`）。F2 の時点では中身の schema を
-   * 決めていないので、素の JSON 値のまま持つ（今回のPhaseの先回りをしない）。
+   * ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（v2 のみ。v1 では空でなければならない）。
+   * 採用と同じトランザクションで既存の委譲の検証を通して子 Task になり、WU は
+   * `depends_on: ["child:<key>"]` でその子の `done` を待てる。
    */
-  children?: unknown[];
+  children?: ExecutionChildSpec[];
   /**
    * v2 のみ。v1 では空でなければならない（`validate`）。
    */
@@ -3223,6 +3224,32 @@ export interface ExecutionPlanSpec {
   rationale: string;
   schema: string;
   work_units: WorkUnitSpec[];
+}
+/**
+ * ADR-0074 D3.7（Phase F4b (f)）: planner が提案する子 Task 1 件（`delegate` メッセージと同じ中身。
+ * `assignee` / `tier` / `model` は持たない〈担当は matching が決める。ADR-0069 D1〉）。
+ */
+export interface ExecutionChildSpec {
+  /**
+   * 1 件以上。
+   */
+  acceptance: Criterion[];
+  /**
+   * 同じ `children` の中の他の子の key。
+   */
+  depends_on?: string[];
+  /**
+   * ADR-0069 D3: `TaskFeatureHints` の上書きヒント。
+   */
+  features?: TaskFeatureHints | null;
+  genre?: string | null;
+  /**
+   * `[a-z0-9-]{1,32}`。`children` の中で一意（WU の key とは別の名前空間。`child:<key>` で指す）。
+   */
+  key: string;
+  objective: string;
+  skills?: string[];
+  title: string;
 }
 /**
  * ADR-0074 D1.1（Phase F2）: `celeris.execution-plan/2` の工程。配列の順が実行順（D1.1）。

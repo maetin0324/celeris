@@ -161,6 +161,7 @@ pub struct ExecutionPlanMismatch {
 /// 壊れている等で万一失敗しても、パニックせず元の並び順にフォールバックする。
 fn topological_order(spec: &ExecutionPlanSpec) -> Vec<usize> {
     let permissive = ExecutionLimits {
+        max_children: 8,
         max_work_units: usize::MAX,
         work_unit_max_turns: u32::MAX,
         work_unit_max_wall_secs: u64::MAX,

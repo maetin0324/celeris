@@ -5546,6 +5546,68 @@
       ],
       "type": "object"
     },
+    "ExecutionChildSpec": {
+      "additionalProperties": false,
+      "description": "ADR-0074 D3.7（Phase F4b (f)）: planner が提案する子 Task 1 件（`delegate` メッセージと同じ中身。\n`assignee` / `tier` / `model` は持たない〈担当は matching が決める。ADR-0069 D1〉）。",
+      "properties": {
+        "acceptance": {
+          "description": "1 件以上。",
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "description": "同じ `children` の中の他の子の key。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatureHints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。`children` の中で一意（WU の key とは別の名前空間。`child:<key>` で指す）。",
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "skills": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "objective",
+        "acceptance"
+      ],
+      "type": "object"
+    },
     "ExecutionGateDecision": {
       "description": "D13: `Event::ExecutionGated` の中身、および `Task.routing.execution`。",
       "properties": {
@@ -6000,8 +6062,10 @@
       "properties": {
         "children": {
           "default": [],
-          "description": "D3.7: 子 Task の提案。F4 まで空だけを許す（`validate`）。F2 の時点では中身の schema を\n決めていないので、素の JSON 値のまま持つ（今回のPhaseの先回りをしない）。",
-          "items": true,
+          "description": "ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（v2 のみ。v1 では空でなければならない）。\n採用と同じトランザクションで既存の委譲の検証を通して子 Task になり、WU は\n`depends_on: [\"child:<key>\"]` でその子の `done` を待てる。",
+          "items": {
+            "$ref": "#/$defs/ExecutionChildSpec"
+          },
           "type": "array"
         },
         "phases": {

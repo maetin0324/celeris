@@ -986,9 +986,23 @@ fn parallel_phases_section(max_phases: usize) -> String {
          (it then starts from that WorkUnit's branch). If it needs two or more, put it in a later phase.\n\
          - `depends_on` may point to WorkUnits in the same phase or an earlier phase, never a later one.\n\
          - Do not use keys starting with `integrate-` and do not write `\"kind\":\"integrate\"` \
-         (celeris adds one integration step per phase itself).\n\
-         - `\"children\"` must be `[]` or omitted.\n\n"
+         (celeris adds one integration step per phase itself).\n\n"
     ));
+    // ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（`children`）の書き方。
+    out.push_str(
+        "#### Child tasks (`children`, optional)\n\
+         Only when part of this goal is really a **separate deliverable** — it needs a different \
+         department's skills, a different repository, or a human wants to approve it on its own — propose \
+         it as a child task instead of a WorkUnit: add a top-level `\"children\":[{\"key\":\"<[a-z0-9-]{1,32}>\",\
+         \"title\":\"...\",\"objective\":\"...\",\"acceptance\":[{\"text\":\"...\",\"check\":{\"type\":\"command\",\
+         \"cmd\":\"...\",\"expect_exit\":0}}],\"genre\":\"<optional>\",\"skills\":[\"<skill tag>\"],\
+         \"features\":{...},\"depends_on\":[\"<another child key>\"]}]` array (at most 8). Do not write \
+         `assignee`, `tier` or `model` (celeris picks the owner). A WorkUnit that needs a child's result \
+         waits for it with `\"depends_on\":[\"child:<key>\"]`. celeris creates the children through the same \
+         checks as delegation when it adopts the plan; a child in another department is first confirmed \
+         with the secretary. Do not split a WorkUnit that is merely too large into children — make it \
+         smaller WorkUnits instead. Otherwise leave `\"children\"` out.\n\n",
+    );
     out.push_str(
         "Example: `{\"schema\":\"celeris.execution-plan/2\",\"rationale\":\"...\",\"phases\":[\
          {\"key\":\"build\",\"kind\":\"implement\",\"title\":\"core pieces\"},\
@@ -2058,6 +2072,10 @@ mod tests {
         assert!(parallel.contains("same phase may run in parallel"));
         assert!(parallel.contains("at most one"));
         assert!(parallel.contains("1 to 5 phases"));
+        // ADR-0074 D3.7（Phase F4b (f)）: v2 の planner には children の書き方がある（v1 には無い）。
+        assert!(parallel.contains("\"children\":[{\"key\""), "{parallel}");
+        assert!(parallel.contains("child:<key>"));
+        assert!(!serial.contains("#### Child tasks"));
     }
 
     #[test]

@@ -171,13 +171,14 @@ pub use execution::{
     parse_worker_checkpoint, truncate_checkpoint,
 };
 pub use execution_plan::{
-    EXECUTION_PLAN_SCHEMA, EXECUTION_PLAN_SCHEMA_V2, ExecutionLimits, ExecutionPlanRow,
-    ExecutionPlanSpec, INTEGRATE_KEY_PREFIX, NextStep, PhaseSpec, PlanOrigin, PlanStatus,
-    PlanValidationError, RunIndexRole, RunIndexStatus, RunRow, ValidatedPlan,
-    WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck, WorkUnitContext, WorkUnitKind,
-    WorkUnitRow, WorkUnitSpec, WorkUnitStatus, dependents_to_block, integrate_key,
-    integration_work_unit_specs, materialize_work_units, materialized_order, new_id, newly_ready,
-    next_work_unit, phase_leaves, phase_ranks, runnable_work_units, validate,
+    CHILD_DEP_PREFIX, EXECUTION_PLAN_SCHEMA, EXECUTION_PLAN_SCHEMA_V2, ExecutionChildSpec,
+    ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, INTEGRATE_KEY_PREFIX, NextStep,
+    PhaseSpec, PlanOrigin, PlanStatus, PlanValidationError, RunIndexRole, RunIndexStatus, RunRow,
+    ValidatedPlan, WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck, WorkUnitContext,
+    WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus, child_label, dependents_to_block,
+    integrate_key, integration_work_unit_specs, materialize_work_units, materialized_order, new_id,
+    newly_ready, newly_ready_with, next_work_unit, phase_leaves, phase_ranks, runnable_work_units,
+    validate,
 };
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use execution_gate::{

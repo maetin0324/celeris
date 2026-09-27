@@ -27,7 +27,14 @@ import { type CelerisRouteErrorData, celerisErrorResponse, toActionError } from 
 import { runRetryAction, runTaskAction } from "~/celeris/route-actions.server";
 import { loadTaskChanges, readTaskChangesQuery, type TaskChangesData } from "~/celeris/task-changes";
 import { loadTaskFiles, readTaskFilesQuery, type TaskFilesData } from "~/celeris/task-files";
-import { buildTaskEdit, commentOnTask, editTask, reopenTask, rereviewTask } from "~/celeris/tasks-admin.server";
+import {
+  buildTaskEdit,
+  commentOnTask,
+  editTask,
+  phaseGateTask,
+  reopenTask,
+  rereviewTask,
+} from "~/celeris/tasks-admin.server";
 import type {
   Action,
   ApprovalItem,
@@ -445,6 +452,11 @@ export async function action({ request, params }: Route.ActionArgs) {
   // ADR-0044 D7（Phase 57 / G20）: 成果物を案件の文書に昇格する（**管理系**。宛先は人が決める）。
   if (intent === "promote") {
     const outcome = await promoteArtifact(client, params.id, readArtifactPromoteBody(form), request.signal);
+    return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
+  }
+  // celeris ADR-0074 D2.4（Phase F3 途中確認）: 途中確認への応答（`POST /tasks/{id}/execution/phase-gate`）。
+  if (intent === "phase_gate") {
+    const outcome = await phaseGateTask(client, params.id, form, request.signal);
     return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
   }
   const outcome = await runTaskAction(client, params.id, form, request.signal);
@@ -1144,7 +1156,7 @@ function OverviewTab({
 
       {/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（計画・WU の表・replan の履歴）。
           計画も gate の判定も無い古いタスクは execution が無いので何も出ない（D23 の後方互換）。 */}
-      <ExecutionSection execution={detail.execution} />
+      <ExecutionSection execution={detail.execution} taskId={task.id} />
 
       <section aria-labelledby="runs-heading" data-testid="runs-section">
         <Card>

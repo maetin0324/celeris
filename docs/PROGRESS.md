@@ -20301,3 +20301,29 @@ run 開始部分で、F3 の `quota_begin` を `dispatch_one` に移して解消
   `cargo test --workspace --no-fail-fast` → 93 binary、2459 passed、3 failed。3 件はいずれも本変更と無関係な
   高負荷時の flake（`celeris releases::tests::promot*` 2 件は `cargo test -p celeris --lib releases::` 単体で
   21 passed、`e2e --test provider_admin_scenarios` は単体で 2 回とも 3 passed）。
+
+
+### F3(pause) checkpoint — 区切り 4 (f)（完了）
+
+GUI: タスク詳細の Execution 節に途中報告と 3 つのボタン、受信箱の新しい項目。
+
+- **条件 (f)**:
+  - `gui/app/components/ExecutionSection.tsx::PhaseCheckpointPanel`: `execution.phase_checkpoint` があるとき、
+    見出し（工程「<title>」まで進みました）・次の工程・途中報告の節（済んだ工程 / この工程の WU / 統合 / 差分 /
+    quota / 成果物。空の節は出さない）・途中報告の Markdown へのリンク（`/files/tasks/:id/artifacts/:idx`）・
+    「人の指示」欄と 3 つのボタン（続ける / 計画を立て直す（replan） / 取り下げる）。送り先は `/tasks/:id` の
+    action の `intent=phase_gate`（`gui/app/celeris/tasks-admin.server.ts::phaseGateTask` →
+    `POST /tasks/{id}/execution/phase-gate`。GUI は検証しない。422 の `note` の文言は欄の下に出す）。
+    取り下げの前に取り込み（merge / PR）する旨を添えた。表示用の純粋関数は `gui/app/lib/task-execution.ts`。
+  - `gui/app/routes/inbox.tsx`: `attention` の `phase_checkpoint`（「工程「<title>」まで進みました（n/m 工程）。
+    確認を待っています。次: …」と、タスク詳細へのリンク）。この項目には取り消しボタンを出さない（判断は
+    タスク詳細の 3 つのボタンで）。
+  - 型の追随で `NotificationKind.phase_checkpoint`・`ExecutionPhase.awaiting_human`・`Action.phase_gate` の表示名。
+  - mobile-audit の偽データ（`gui/scripts/lib/celeris-fixture.mjs`）に途中報告つきの Execution 節と受信箱の
+    `phase_checkpoint` 項目を足した（1 回目の実行で暗色テーマのリンクの contrast 4.26:1 を検出 → 本文色＋下線に直した）。
+- **実行したコマンド・出力の要点**（`cd gui && corepack pnpm@11.27.0 …`）:
+  - `gen:types` → `git diff --exit-code -- app/celeris/types.ts` 差分ゼロ。
+  - `typecheck` exit 0。`lint` exit 0（既存の info 2 件のみ）。
+  - `test` → 72 files / 1106 passed（新規: `task-execution.test.ts` の途中確認 4 件、
+    `tasks.manage.action.test.ts` の `phaseGateTask` 3 件）。
+  - `build` exit 0。`mobile-audit` → `routes=27 schemes=2 violations=0`。

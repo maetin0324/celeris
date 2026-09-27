@@ -18,6 +18,7 @@ import { Alert, EmptyState, PageHeader, SectionTitle, StatCard } from "~/compone
 import type { Tone } from "~/components/ui/tone";
 import { knowledgeHref } from "~/lib/knowledge";
 import { revalidateAfterActionErrors } from "~/lib/revalidate";
+import { phaseCheckpointAttentionText } from "~/lib/task-execution";
 import type { Route } from "./+types/inbox";
 
 export function meta(_: Route.MetaArgs) {
@@ -562,7 +563,18 @@ function AttentionRow({ item }: { item: Exclude<AttentionItem, { type: "cluster_
         </Link>
       </p>
       <p className="mt-1 text-fg">{attentionText(item)}</p>
-      {item.task.actions.includes("cancel") && (
+      {item.type === "phase_checkpoint" && (
+        <p className="mt-2">
+          <Link
+            to={`/tasks/${item.task.id}`}
+            className="inline-flex min-h-11 items-center font-medium text-primary hover:underline"
+            data-testid="attention-phase-checkpoint-link"
+          >
+            途中報告を見て、続ける / replan / 取り下げを選ぶ
+          </Link>
+        </p>
+      )}
+      {item.type !== "phase_checkpoint" && item.task.actions.includes("cancel") && (
         <fetcher.Form method="post" action="/inbox" className="mt-3 border-t border-danger-border/60 pt-3">
           <input type="hidden" name="task_id" value={item.task.id} />
           <input type="hidden" name="expected_status" value={item.task.status} />
@@ -644,6 +656,9 @@ function attentionText(item: AttentionItem): string {
       return `経路なし（hint: tier=${item.hint.tier}）`;
     case "cluster_unavailable":
       return `クラスタに接続できません（host: ${item.host}、対象 ${item.tasks} 件）`;
+    // celeris ADR-0074 D2.4（Phase F3 途中確認）: 質問ではなく進捗の確認（questions には出ない）。
+    case "phase_checkpoint":
+      return phaseCheckpointAttentionText(item);
     default:
       return "";
   }

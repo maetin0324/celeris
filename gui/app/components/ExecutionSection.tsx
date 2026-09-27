@@ -1,7 +1,11 @@
-import type { ExecutionView, ExecutionWorkUnitView } from "~/celeris/types";
+import { useFetcher } from "react-router";
+import type { TaskPhaseGateOutcome } from "~/celeris/action-types";
+import type { ExecutionView, ExecutionWorkUnitView, PhaseCheckpointView, PhaseGateAction } from "~/celeris/types";
+import { FieldErrors, TaskPhaseGateFlash } from "~/components/Flash";
 import { Badge, RoleLabel } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
-import { tableClass, tdClass, thClass, theadClass } from "~/components/ui/form";
+import { hintClass, tableClass, tdClass, textareaClass, thClass, theadClass } from "~/components/ui/form";
 import { Mono } from "~/components/ui/misc";
 import {
   checkpointSummary as checkpointSummaryLine,
@@ -11,7 +15,11 @@ import {
   EXECUTION_SECTION_LABEL,
   gateModeLabel,
   isRepairWorkUnit,
+  PHASE_GATE_ACTION_LABEL,
   parallelSummaryLine,
+  phaseCheckpointHeadline,
+  phaseCheckpointNextLine,
+  phaseCheckpointSections,
   planSummaryLine,
   planVersionLabel,
   quotaSummaryLines,
@@ -27,7 +35,14 @@ import { cn } from "~/lib/utils";
  * 計画のある Task は WU の表・版の履歴（replan）を出す。`detail.execution` が `null`（events に
  * E-phase の活動が無い古いタスク）なら何も描かない（D23 の後方互換）。
  */
-export function ExecutionSection({ execution }: { execution: ExecutionView | null | undefined }) {
+export function ExecutionSection({
+  execution,
+  taskId,
+}: {
+  execution: ExecutionView | null | undefined;
+  /** 途中確認のボタンの送り先（`/tasks/:id` の action）。無ければボタンを出さない。 */
+  taskId?: string;
+}) {
   if (!execution) return null;
   const { plan, metrics } = execution;
   const gate = gateModeLabel(execution);
@@ -53,6 +68,9 @@ export function ExecutionSection({ execution }: { execution: ExecutionView | nul
           }
         />
         <CardBody className="space-y-4">
+          {execution.phase_checkpoint && (
+            <PhaseCheckpointPanel checkpoint={execution.phase_checkpoint} taskId={taskId} />
+          )}
           {gate && (
             <p className="text-sm text-fg-muted" data-testid="execution-gate">
               gate: {gate}
@@ -262,5 +280,92 @@ function WorkUnitRow({ wu, isCurrent }: { wu: ExecutionWorkUnitView; isCurrent: 
         )}
       </td>
     </tr>
+  );
+}
+
+const PHASE_GATE_BUTTONS: { action: PhaseGateAction; variant: "primary" | "secondary" | "danger" }[] = [
+  { action: "continue", variant: "primary" },
+  { action: "replan", variant: "secondary" },
+  { action: "withdraw", variant: "danger" },
+];
+
+/**
+ * celeris ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 工程の後で止まった Task の途中報告と 3 つのボタン
+ * （続ける / replan / 取り下げる）。報告は celeris が決定的に組み立てたものをそのまま並べる。
+ * **GUI は検証しない**（replan の指示が空なら celeris が 422 を返し、その文言を欄の下に出す）。
+ */
+function PhaseCheckpointPanel({ checkpoint, taskId }: { checkpoint: PhaseCheckpointView; taskId?: string }) {
+  const fetcher = useFetcher<TaskPhaseGateOutcome>({ key: `task-phase-gate-${taskId ?? "none"}` });
+  const submitting = fetcher.state !== "idle";
+  const error = fetcher.data && !fetcher.data.ok ? fetcher.data.error : null;
+  return (
+    <div
+      data-testid="phase-checkpoint"
+      className="space-y-3 rounded-lg border border-warning-border bg-warning-soft p-3 text-sm"
+    >
+      <p className="font-semibold text-warning-soft-fg" data-testid="phase-checkpoint-headline">
+        {phaseCheckpointHeadline(checkpoint)}
+      </p>
+      <p className="text-fg" data-testid="phase-checkpoint-next">
+        {phaseCheckpointNextLine(checkpoint)}
+      </p>
+      {phaseCheckpointSections(checkpoint).map((section) => (
+        <div key={section.title} data-testid="phase-checkpoint-section">
+          <p className="font-medium text-fg-subtle lg:text-xs">{section.title}</p>
+          <ul className="mt-1 space-y-0.5 break-words text-fg-muted">
+            {section.lines.map((line, i) => (
+              // 行は celeris が決定的に並べたもの。同じ文言が並ぶこともあるので添字を key に含める。
+              // biome-ignore lint/suspicious/noArrayIndexKey: 並び替えない静的な一覧
+              <li key={`${i}-${line}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {taskId && checkpoint.report_idx != null && (
+        <p>
+          <a
+            href={`/files/tasks/${taskId}/artifacts/${checkpoint.report_idx}`}
+            // 警告色の背景の上では primary の文字色が暗色テーマで 4.5:1 に届かない（mobile-audit）ので、
+            // 本文色＋下線でリンクと分かるようにする。
+            className="inline-flex min-h-11 items-center font-medium text-fg underline"
+            data-testid="phase-checkpoint-report-link"
+          >
+            途中報告（Markdown）を開く
+          </a>
+        </p>
+      )}
+      {taskId && (
+        <fetcher.Form method="post" action={`/tasks/${taskId}`} className="space-y-2" data-testid="phase-gate-form">
+          <input type="hidden" name="intent" value="phase_gate" />
+          <label className="block">
+            <span className="font-medium text-fg">人の指示（replan では必須、続けるときは任意）</span>
+            <textarea name="note" rows={2} className={textareaClass} data-testid="phase-gate-note" />
+          </label>
+          <FieldErrors error={error} field="note" />
+          <div className="flex flex-wrap gap-2">
+            {PHASE_GATE_BUTTONS.map(({ action, variant }) => (
+              <Button
+                key={action}
+                type="submit"
+                name="phase_action"
+                value={action}
+                variant={variant}
+                size="sm"
+                disabled={submitting}
+                data-testid={`phase-gate-${action}`}
+              >
+                {PHASE_GATE_ACTION_LABEL[action]}
+              </Button>
+            ))}
+          </div>
+          <p className={hintClass}>
+            取り下げると worktree
+            とブランチを片付けます。部分成果を残したいときは、取り下げる前に「変更」タブから取り込み（merge /
+            PR）してください。
+          </p>
+        </fetcher.Form>
+      )}
+      <TaskPhaseGateFlash outcome={fetcher.data} />
+    </div>
   );
 }

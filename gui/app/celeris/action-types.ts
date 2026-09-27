@@ -112,6 +112,15 @@ export type TaskRereviewOutcome =
   | { ok: true; op: "rereview"; taskId: string; result: TransitionResult }
   | { ok: false; op: "rereview"; taskId: string; error: ActionError };
 
+/**
+ * celeris ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認への応答
+ * （`POST /tasks/{id}/execution/phase-gate`。**管理系**）。awaiting_human でなければ 409、
+ * `replan` で `note` が空なら 422（どちらも celeris の判断。GUI は検証しない）。
+ */
+export type TaskPhaseGateOutcome =
+  | { ok: true; op: "phase_gate"; taskId: string; result: TransitionResult }
+  | { ok: false; op: "phase_gate"; taskId: string; error: ActionError };
+
 /** 作成（`POST /tasks` / `POST /plans`）の失敗。成功は詳細へ redirect するので data にならない。 */
 export interface CreateFailure {
   ok: false;

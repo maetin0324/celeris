@@ -108,7 +108,7 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     }
 
     /// ADR-0072 D14（Phase E4b 項目3）: `--permission-mode` を上書きした複製。planner run に
-    /// `[execution.planner].permission_mode`（既定 `"plan"`）を実際の CLI 引数へ反映するために使う
+    /// `[execution.planner].permission_mode`（既定 `"bypassPermissions"`）を実際の CLI 引数へ反映するために使う
     /// （`with_model`/`with_env` と同じ形。ADR-0072「Phase E3 実装時の逸脱・明確化」で見送っていた
     /// フック）。
     fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {

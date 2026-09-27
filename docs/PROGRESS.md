@@ -20540,3 +20540,10 @@ commit: 22be6d8（区切り 0）、7b926b8（区切り 1 (a)(e)）、8b39f8b（�
 - release ゲートの繰り返し失敗の原因: NFS 移行後、`~/.local/celeris/releases/.build` と `.cargo-target`（NFS 上）で dispatcher のタイミング依存テストが load 1 でも落ちた（同じテストは単体では通る）。`.build` / `.cargo-target` を `/var/lib/celeris/release-build/` への symlink にしてローカル LVM で回したところ 1 回で通過。verify 全 true（N-1 = e3465764475c も ok）。in-flight 0 でライブ昇格。
 - Sonnet の週次制限（9/28 23:00 UTC まで）: 再起動した F3-pause / F4a も途中で停止 → 同じ worktree を Opus に引き継がせて完了。F4b（(d) reached/Go、(e) 案件 replan、(f) children、(g) 互換、(h) 案件ページ DAG）を Opus で開始。
 - F5-1 dogfood をやり直し（タスク 01M3HG7VV6A2HRHTNXWPDS9051、explicit compound。内容: EVENT_TYPES の補完、フレークテスト 5 件の決定化、PROGRESS.md の分割）。
+
+## F5-1（やり直し）の発見: planner が Plan Mode で成果物を書けず atomic に倒れた（2026-09-27）
+
+- 事実: gate=shadow でも人の明示 compound は採用されるようになり planner run は起きた（`ExecutionGated source=human`）。しかし planner run（claude-code、標準 lane）は 2 回とも `claude exited without …/artifacts/result.json` で失敗し、`atomic/planner-invalid`（`planner_retry_exhausted`）で atomic に倒れた。stdout を見ると、`--permission-mode plan`（E4b で配線した `[execution.planner].permission_mode` の既定 `"plan"`）により claude-code が Plan Mode に入り、`Write` が plan ファイル以外に書けず、非対話では `ExitPlanMode` も使えないため `execution-plan.json` / `result.json` を書けなかった（2 回目の run は自分でそう報告している）。
+- 修正: 既定を `"bypassPermissions"`（アダプタ既定と同じ）に変更（`config.rs`）。planner は成果物を書く役なので Plan Mode は使わない。
+- 副次の発見: claude-oauth（Max）の 7 日枠が utilization 0.91（`rate_limit_event`、9/28 23:00 UTC にリセット）。私の実装エージェント（Sonnet）の週次制限と同じ枠。planner run 2 回目は `claude-sonnet-5` で走った（残量による lane の降格）。
+- F5-1 は 3 回目のやり直しが要る（release に本修正を含めてから）。それまでの F5-1（やり直し）タスク自身は atomic で done / reviewing まで進んでいる。

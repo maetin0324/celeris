@@ -14,6 +14,7 @@ import type {
   StandingRuleOpOutcome,
   TaskCommentOutcome,
   TaskEditOutcome,
+  TaskPhaseGateOutcome,
   TaskReopenOutcome,
   TaskRereviewOutcome,
   TransitionOutcome,
@@ -188,6 +189,21 @@ export function TaskRereviewFlash({ outcome }: { outcome: TaskRereviewOutcome | 
     <Alert role="status" data-testid="flash" data-flash-kind="ok" tone="success" className="my-2">
       <p data-testid="flash-task-rereview">
         再レビューを始めました: <span data-testid="flash-from">{result.from}</span> →{" "}
+        <span data-testid="flash-to">{result.to}</span>（reason: {result.reason}）
+      </p>
+    </Alert>
+  );
+}
+
+/** celeris ADR-0074 D2.4（Phase F3 途中確認）: 途中確認への応答の結果。 */
+export function TaskPhaseGateFlash({ outcome }: { outcome: TaskPhaseGateOutcome | undefined | null }) {
+  if (!outcome) return null;
+  if (!outcome.ok) return <ErrorFlash error={outcome.error} />;
+  const { result } = outcome;
+  return (
+    <Alert role="status" data-testid="flash" data-flash-kind="ok" tone="success" className="my-2">
+      <p data-testid="flash-task-phase-gate">
+        途中確認に応えました: <span data-testid="flash-from">{result.from}</span> →{" "}
         <span data-testid="flash-to">{result.to}</span>（reason: {result.reason}）
       </p>
     </Alert>

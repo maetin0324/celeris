@@ -85,6 +85,9 @@ pub enum NotificationKind {
     /// ADR-0070 D1（Phase 116）: タスクが `failed` に遷移した。`key` = `task_id:updated_at`
     /// （同じタスクが後で再び failed になったときにも新しい key になるよう、遷移の時刻を含める）。
     TaskFailed,
+    /// ADR-0074 D2.4（Phase F3 途中確認）: Task が工程の後の途中確認で止まった（`blocked(awaiting_human)`）。
+    /// 質問ではない（`QuestionBlocked` は鳴らさない）。`key` = task id:遷移番号。
+    PhaseCheckpoint,
 }
 
 impl NotificationKind {
@@ -98,6 +101,7 @@ impl NotificationKind {
             NotificationKind::TaskReady => "task_ready",
             NotificationKind::ClusterLoginNeeded => "cluster_login_needed",
             NotificationKind::TaskFailed => "task_failed",
+            NotificationKind::PhaseCheckpoint => "phase_checkpoint",
         }
     }
 
@@ -111,12 +115,13 @@ impl NotificationKind {
             "task_ready" => Some(NotificationKind::TaskReady),
             "cluster_login_needed" => Some(NotificationKind::ClusterLoginNeeded),
             "task_failed" => Some(NotificationKind::TaskFailed),
+            "phase_checkpoint" => Some(NotificationKind::PhaseCheckpoint),
             _ => None,
         }
     }
 
     /// 判定の順（GUI と再送の順を決定的にするため）。
-    pub const ALL: [NotificationKind; 8] = [
+    pub const ALL: [NotificationKind; 9] = [
         NotificationKind::MilestoneReady,
         NotificationKind::ApprovalPending,
         NotificationKind::QuestionBlocked,
@@ -125,6 +130,7 @@ impl NotificationKind {
         NotificationKind::TaskReady,
         NotificationKind::ClusterLoginNeeded,
         NotificationKind::TaskFailed,
+        NotificationKind::PhaseCheckpoint,
     ];
 }
 

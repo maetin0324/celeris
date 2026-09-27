@@ -523,7 +523,32 @@ export async function setupMockCeleris() {
           signals: [],
           shadow: false,
         },
-        phase: null,
+        phase: "awaiting_human",
+        // celeris ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中報告と 3 つのボタンも 393px で崩れないことを
+        // 確かめる（`PhaseCheckpointPanel`）。長い行（diff の stat・WU の要約）が折り返すことも見る。
+        phase_checkpoint: {
+          report: {
+            phase: "build",
+            phase_title: "調査と実装",
+            phases_done: [],
+            work_units: [
+              "survey: 現行の dispatch と review の調査 / completed: dispatcher の調査; review の経路の整理 / decisions: finish_worker_result に分割する（on_worker_finished が長すぎるため）",
+            ],
+            integration: [
+              "merged survey @ 0123456789abcdef0123456789abcdef01234567",
+              "cargo test --workspace: pass (ok)",
+            ],
+            diff_stat: [
+              " crates/task-dispatch/src/dispatcher.rs | 120 ++++++++++++++++++++++++++++++++++---------",
+              " 1 file changed, 96 insertions(+), 24 deletions(-)",
+            ],
+            next_phase: "verify",
+            next_phase_work_units: ["検証"],
+            quota_summary: "acct-a five_hour 3.2pt / acct-a seven_day 0.4pt・参考 $1.50",
+            artifact_paths: [],
+          },
+          report_idx: 0,
+        },
         plan: {
           id: "01PLANBBBBBBBBBBBBBBBBBBB",
           version: 2,
@@ -919,8 +944,26 @@ export async function setupMockCeleris() {
           },
           type: "failed",
         },
+        // celeris ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task（`phase_checkpoint`）。
+        {
+          at: "2026-09-20T21:00:00Z",
+          phase: "design",
+          phase_title: "設計（長い工程名でも折り返しが崩れないことを確かめる）",
+          phases_done: 1,
+          phases_total: 3,
+          next_phase: "build",
+          report_idx: 0,
+          task: {
+            actions: ["cancel", "edit", "phase_gate"],
+            id: "01INBOXPHASECHECKPOINT001",
+            kind: "execute",
+            status: "blocked",
+            title: "レビューの修復の二工程化",
+          },
+          type: "phase_checkpoint",
+        },
       ],
-      counts: { approvals: 1, attention: 1, by_status: {}, drafts: 2, questions: 1 },
+      counts: { approvals: 1, attention: 2, by_status: {}, drafts: 2, questions: 1 },
       // Phase 88（P-G39-1）: `draft-group`（`DraftGroupRow`、`draft-item` 2 件）を機械検査対象にする。
       drafts: [
         {

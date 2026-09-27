@@ -3366,7 +3366,7 @@ impl TaskStore for SqliteStore {
             if task.status != Status::Draft {
                 continue;
             }
-            Self::apply_transition_tx(&tx, *id, trigger, vec![])?;
+            Self::apply_transition_tx(&tx, *id, trigger.clone(), vec![])?;
         }
         Self::append_event_tx(&tx, plan_task_id, &decided_event)?;
         tx.commit()?;

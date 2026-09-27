@@ -1000,6 +1000,9 @@ fn actions_instructions() -> String {
      大きな・工程がいくつもある依頼だと思ったら、任意で `\"execution\": \"compound\"` を付けてよいです\
      （調査→設計→実装→検証のように複数の作業段階に分かれる依頼が目安）。これはヒントで、実際に分割するか\
      どうかは Complexity Gate が決定的に判定します（ADR-0072）。\n\
+     工程ごとに人の確認が要りそうなら、任意で `\"pause_after\": {\"mode\": \"each_phase\"}`\
+     （特定の工程だけなら `{\"mode\": \"after\", \"phases\": [\"design\"]}`）を付けてよいです\
+     （その工程の後で止まり、人が続ける / replan / 取り下げを選びます。ADR-0074）。\n\
      `create_task.mode` は進め方で、prototype / production / research のいずれかです。通常実装は `mode: \"production\"` とし、mode に standard（tier の名前）は書かないでください。\n\
      `create_task.repos` は案件内の登録名です。指定するときは必ず所属する案件の ID を `project` に書き、\
      上の登録済み repos から選んでください。`project: null` と非空の `repos` の組み合わせは禁止です。\

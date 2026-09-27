@@ -32,7 +32,8 @@ export type TaskId = string;
  * 永続の規則の識別子（ULID）。
  */
 export type StandingRuleId = string;
-export type Action = ("approve" | "reject" | "answer" | "cancel") | "retry" | "edit" | "reopen" | "rereview";
+export type Action =
+  ("approve" | "reject" | "answer" | "cancel") | "retry" | "edit" | "reopen" | "rereview" | "phase_gate";
 /**
  * DESIGN §4.1 の `TaskKind`。
  */
@@ -534,6 +535,11 @@ export type Event =
       type: "pause_points_resolved";
     }
   | {
+      phase: string;
+      report: PhaseReport;
+      type: "phase_reported";
+    }
+  | {
       /**
        * この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を
        * 決定的に引くため。
@@ -746,6 +752,20 @@ export type AttentionItem =
       host: string;
       tasks: number;
       type: "cluster_unavailable";
+    }
+  | {
+      at: string;
+      next_phase?: string | null;
+      phase: string;
+      phase_title: string;
+      /**
+       * 済んだ工程の数（止まった工程を含む）。
+       */
+      phases_done: number;
+      phases_total: number;
+      report_idx?: number | null;
+      task: TaskRef;
+      type: "phase_checkpoint";
     };
 /**
  * ADR-0047 D1 / D4。
@@ -834,7 +854,8 @@ export type NotificationKind =
   | "secretary_reply"
   | "task_ready"
   | "cluster_login_needed"
-  | "task_failed";
+  | "task_failed"
+  | "phase_checkpoint";
 /**
  * 組織のノードの種類（ADR-0033 D1）。`secretary` は根で 1 つだけ。
  */
@@ -847,6 +868,10 @@ export type MountKind = "kb" | "repo" | "dir" | "memory";
  * ADR-0046 D1: `run`（どこで動かすか）。子が勝つ。
  */
 export type ProfileRun = "host" | "container";
+/**
+ * D2.4: `POST /tasks/{id}/execution/phase-gate` の `action`。
+ */
+export type PhaseGateAction = "continue" | "replan" | "withdraw";
 /**
  * 案件の状態（ADR-0033 D2、ADR-0044 D6）。
  */
@@ -881,7 +906,7 @@ export type RepoRun = "auto" | "host" | "container";
  * （`kind = repair`）か `executing`、無ければ（計画はあるのに走っている WU が無い）planner run が
  * 動いていると見なして `planning`。それ以外（計画が無い・終端）は `None`。
  */
-export type ExecutionPhase = "planning" | "executing" | "repairing" | "verifying";
+export type ExecutionPhase = ("planning" | "executing" | "repairing" | "verifying") | "awaiting_human";
 /**
  * ADR-0070 D1（Phase 116）: `failed` の分類。`infra` はレース・切替・供給側都合、`work` はレビュー
  * 不合格やワーカー自身の明示的な失敗（人が中身を見て判断すべきもの）。
@@ -1036,6 +1061,7 @@ export interface ApiV1Schema {
   org_list: OrgList;
   org_patch: OrgPatchBody;
   org_skill_mount: OrgSkillMountBody;
+  phase_gate: PhaseGateRequest;
   problem: Problem;
   project_create: ProjectCreateBody;
   project_detail: ProjectDetail;
@@ -3305,6 +3331,53 @@ export interface PhaseMerged {
   skipped?: boolean;
 }
 /**
+ * D2.3: 途中報告そのもの（`Event::PhaseReported.report` と `artifacts/phase-reports/<n>-<phase>.md`
+ * が同じ内容を持つ）。決定的に組み立てる（LLM は使わない）。各フィールドは既に人が読める 1 行・
+ * 1 段落の文字列にしてある（型を増やしすぎず、レンダリングと切り詰めを単純にするため）。
+ */
+export interface PhaseReport {
+  /**
+   * 成果物へのリンク（workspace 相対パス）。
+   */
+  artifact_paths?: string[];
+  /**
+   * Task ブランチの `git diff --stat` の要約（最大 30 行）。
+   */
+  diff_stat?: string[];
+  /**
+   * 統合の結果（merge・衝突・検査。1 行ずつ）。
+   */
+  integration?: string[];
+  /**
+   * 次の工程の key・title（無ければ `None` = 実質最後の工程）。
+   */
+  next_phase?: string | null;
+  /**
+   * 次の工程の WU の title の一覧。
+   */
+  next_phase_work_units?: string[];
+  /**
+   * 止まった工程の key。
+   */
+  phase: string;
+  /**
+   * 止まった工程の title。
+   */
+  phase_title: string;
+  /**
+   * 済んだ工程の一覧（1 行ずつ: title・WU の数・run の数・壁時計）。
+   */
+  phases_done?: string[];
+  /**
+   * 使った quota と参考の定価（ここまでの合計。1 行）。
+   */
+  quota_summary: string;
+  /**
+   * この工程の WU ごとの要約（1 段落ずつ）。
+   */
+  work_units?: string[];
+}
+/**
  * `Event::ProjectPlanProposed.milestones[]`（ADR-0074 D3.3）。
  */
 export interface ProposedMilestone {
@@ -4796,6 +4869,17 @@ export interface OrgSkillMountBody {
   skill: string;
 }
 /**
+ * ADR-0074 D2.4（Phase F3 途中確認）: `POST /tasks/{id}/execution/phase-gate` の本文（応答は
+ * `transition_result`）。
+ */
+export interface PhaseGateRequest {
+  action: PhaseGateAction;
+  /**
+   * `continue` では任意（次の工程の WU の run に「人の指示」として渡す）。`replan` では必須。
+   */
+  note?: string | null;
+}
+/**
  * RFC 9457 の problem details（`application/problem+json`）。`extra` は `code` ごとの付加フィールド。
  */
 export interface Problem {
@@ -5940,6 +6024,10 @@ export interface ExecutionView {
   metrics: ExecutionMetrics;
   phase?: ExecutionPhase | null;
   /**
+   * ADR-0074 D2.4（Phase F3 途中確認）: `awaiting_human` のときだけ。
+   */
+  phase_checkpoint?: PhaseCheckpointView | null;
+  /**
    * 計画が無い Task（D20:「直接実行」の 1 行）は `None`。
    */
   plan?: ExecutionPlanOverview | null;
@@ -6046,6 +6134,17 @@ export interface ExecutionMetrics {
    * 生涯で作られた WorkUnit の数（repair を含む。superseded/cancelled も数える）。
    */
   work_units_total: number;
+}
+/**
+ * ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と
+ * GUI の 3 つのボタンの材料）。
+ */
+export interface PhaseCheckpointView {
+  report: PhaseReport;
+  /**
+   * 途中報告の Markdown（`GET /tasks/{id}/artifacts/{idx}`）。書けなかったなら無い。
+   */
+  report_idx?: number | null;
 }
 /**
  * D20: 計画の概要（現在アクティブでない Task でも、生涯で作った WU をまとめて見せる。
@@ -6296,6 +6395,10 @@ export interface TaskExecutionView {
   gate?: ExecutionGateDecision | null;
   metrics: ExecutionMetrics;
   phase?: ExecutionPhase | null;
+  /**
+   * ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認で止まっているときだけ。
+   */
+  phase_checkpoint?: PhaseCheckpointView | null;
   /**
    * 計画の無い Task（暗黙の WorkUnit）は `None`。
    */

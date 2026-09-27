@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
-import { buildProjectTaskSpec, buildTaskEdit, commentOnTask, editTask, reopenTask } from "~/celeris/tasks-admin.server";
+import {
+  buildProjectTaskSpec,
+  buildTaskEdit,
+  commentOnTask,
+  editTask,
+  phaseGateTask,
+  reopenTask,
+} from "~/celeris/tasks-admin.server";
 import type { CommentEffect } from "~/celeris/types";
 import { commentResult, editResult, taskComment } from "../mock-celeris/fixtures";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
@@ -338,5 +345,56 @@ describe("buildProjectTaskSpec（案件・途中目標の「タスクを追加�
       "01PROJECT000000000000001",
     );
     expect(spec.acceptance).toEqual([]);
+  });
+});
+
+describe("phaseGateTask（POST /tasks/{id}/execution/phase-gate。celeris ADR-0074 D2.4）", () => {
+  it("action と note をそのまま写し、遷移を返す", async () => {
+    mock.on("POST", `/api/v1/tasks/${ID}/execution/phase-gate`, (_req, res, body) => {
+      expect(JSON.parse(body)).toEqual({ action: "continue", note: "小さく" });
+      sendJson(res, 200, { id: ID, from: "blocked", to: "ready", reason: "phase_continue", cascaded: [] });
+    });
+    const outcome = await phaseGateTask(
+      client,
+      ID,
+      form([
+        ["phase_action", "continue"],
+        ["note", "小さく"],
+      ]),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected success");
+    expect(outcome.result.reason).toBe("phase_continue");
+  });
+
+  it("空の note は送らず、celeris の 422（replan の note 必須）をそのまま返す", async () => {
+    mock.on("POST", `/api/v1/tasks/${ID}/execution/phase-gate`, (_req, res, body) => {
+      expect(JSON.parse(body)).toEqual({ action: "replan" });
+      sendProblem(res, {
+        status: 422,
+        code: "validation",
+        detail: "note: replan requires a non-empty note",
+        extra: { errors: [{ field: "note", message: "note: replan requires a non-empty note" }] },
+      });
+    });
+    const outcome = await phaseGateTask(
+      client,
+      ID,
+      form([
+        ["phase_action", "replan"],
+        ["note", ""],
+      ]),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("expected failure");
+    expect(outcome.error.status).toBe(422);
+    expect(outcome.error.fields.note).toEqual(["note: replan requires a non-empty note"]);
+  });
+
+  it("知らない phase_action は celeris に送らない", async () => {
+    const outcome = await phaseGateTask(client, ID, form([["phase_action", "skip"]]));
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("expected failure");
+    expect(outcome.error.status).toBe(400);
   });
 });

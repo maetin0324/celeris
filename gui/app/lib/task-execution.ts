@@ -1,4 +1,5 @@
 import type {
+  AttentionItem,
   Checkpoint,
   ExecutionMetrics,
   ExecutionPhase,
@@ -6,6 +7,8 @@ import type {
   ExecutionPlanVersionSummary,
   ExecutionView,
   ExecutionWorkUnitView,
+  PhaseCheckpointView,
+  PhaseGateAction,
   QuotaUse,
   RunEnd,
   WorkUnitKind,
@@ -27,6 +30,8 @@ export const EXECUTION_PHASE_LABEL: Record<ExecutionPhase, string> = {
   executing: "実行中",
   repairing: "修復中",
   verifying: "検証中",
+  // celeris ADR-0074 D2.2（Phase F3 途中確認）。
+  awaiting_human: "確認待ち",
 };
 
 export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
@@ -34,6 +39,7 @@ export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
   executing: "primary",
   repairing: "warning",
   verifying: "teal",
+  awaiting_human: "warning",
 };
 
 export const WORK_UNIT_STATUS_TONE: Record<WorkUnitStatus, Tone> = {
@@ -258,4 +264,53 @@ export function costReferenceLabel(metrics: ExecutionMetrics): string | null {
   return metrics.cost_usd_complete === false
     ? `参考 ${amount}（一部のモデルの単価が不明なため過小）`
     : `参考 ${amount}`;
+}
+
+/**
+ * celeris ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中報告の見出し（`工程「<title>」まで進みました`）。
+ * 報告そのものは celeris が決定的に組み立てたもの。GUI は並べ替えも要約もしない。
+ */
+export function phaseCheckpointHeadline(cp: PhaseCheckpointView): string {
+  const title = cp.report.phase_title || cp.report.phase;
+  return `工程「${title}」まで進みました。続けるか・計画を立て直すか・取り下げるかを選んでください。`;
+}
+
+/** 次の工程の 1 行（無ければ「最終レビューへ」）。 */
+export function phaseCheckpointNextLine(cp: PhaseCheckpointView): string {
+  const next = cp.report.next_phase;
+  if (!next) return "次: この工程が最後です（続けると最終レビューへ）。";
+  const wus = cp.report.next_phase_work_units ?? [];
+  return wus.length > 0 ? `次の工程: ${next}（${wus.join("、")}）` : `次の工程: ${next}`;
+}
+
+/** 途中報告の節（見出し・行）。空の節は出さない。 */
+export function phaseCheckpointSections(cp: PhaseCheckpointView): { title: string; lines: string[] }[] {
+  const r = cp.report;
+  const sections: { title: string; lines: string[] }[] = [
+    { title: "済んだ工程", lines: r.phases_done ?? [] },
+    { title: "この工程の WU", lines: r.work_units ?? [] },
+    { title: "統合", lines: r.integration ?? [] },
+    { title: "差分", lines: r.diff_stat ?? [] },
+    { title: "quota", lines: r.quota_summary ? [r.quota_summary] : [] },
+    { title: "成果物", lines: r.artifact_paths ?? [] },
+  ];
+  return sections.filter((s) => s.lines.length > 0);
+}
+
+/** 3 つのボタンの表示名。 */
+export const PHASE_GATE_ACTION_LABEL: Record<PhaseGateAction, string> = {
+  continue: "続ける",
+  replan: "計画を立て直す（replan）",
+  withdraw: "取り下げる",
+};
+
+/**
+ * celeris ADR-0074 D2.4（Phase F3 途中確認）: 受信箱の「工程の後で止まった」1 行。値は celeris のもの
+ * （`phases_done` は止まった工程を含む数）。
+ */
+export function phaseCheckpointAttentionText(item: Extract<AttentionItem, { type: "phase_checkpoint" }>): string {
+  const title = item.phase_title || item.phase;
+  const progress = item.phases_total > 0 ? `（${item.phases_done}/${item.phases_total} 工程）` : "";
+  const next = item.next_phase ? `次: ${item.next_phase}` : "次: 最終レビュー";
+  return `工程「${title}」まで進みました${progress}。確認を待っています。${next}`;
 }

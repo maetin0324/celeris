@@ -4,6 +4,7 @@ import type {
   ExecutionPlanOverview,
   ExecutionView,
   ExecutionWorkUnitView,
+  PhaseCheckpointView,
   QuotaUse,
 } from "~/celeris/types";
 import {
@@ -12,7 +13,12 @@ import {
   directExecutionSummary,
   gateModeLabel,
   isRepairWorkUnit,
+  PHASE_GATE_ACTION_LABEL,
   parallelSummaryLine,
+  phaseCheckpointAttentionText,
+  phaseCheckpointHeadline,
+  phaseCheckpointNextLine,
+  phaseCheckpointSections,
   planSummaryLine,
   planVersionLabel,
   quotaSummaryLines,
@@ -320,5 +326,59 @@ describe("task-execution", () => {
       "参考 $11.21（一部のモデルの単価が不明なため過小）",
     );
     expect(costReferenceLabel(metrics())).toBeNull();
+  });
+});
+
+describe("途中確認（celeris ADR-0074 D2.3/D2.4、Phase F3）", () => {
+  const cp = (over: Partial<PhaseCheckpointView["report"]> = {}): PhaseCheckpointView => ({
+    report: {
+      phase: "design",
+      phase_title: "設計",
+      phases_done: [],
+      work_units: ["a: 設計書 / completed: 案を 2 つ比べた"],
+      integration: ["merged a @ abc123"],
+      diff_stat: [],
+      next_phase: "build",
+      next_phase_work_units: ["実装 A", "実装 B"],
+      quota_summary: "acct-a five_hour 3.0pt・参考 $0.50",
+      artifact_paths: [],
+      ...over,
+    },
+    report_idx: 2,
+  });
+
+  it("見出しは工程の title（無ければ key）で、次の工程と WU を 1 行に並べる", () => {
+    expect(phaseCheckpointHeadline(cp())).toContain("工程「設計」まで進みました");
+    expect(phaseCheckpointHeadline(cp({ phase_title: "" }))).toContain("工程「design」");
+    expect(phaseCheckpointNextLine(cp())).toBe("次の工程: build（実装 A、実装 B）");
+    expect(phaseCheckpointNextLine(cp({ next_phase_work_units: [] }))).toBe("次の工程: build");
+    expect(phaseCheckpointNextLine(cp({ next_phase: null }))).toContain("最終レビュー");
+  });
+
+  it("空の節は出さず、celeris が並べた順のまま返す", () => {
+    expect(phaseCheckpointSections(cp()).map((s) => s.title)).toEqual(["この工程の WU", "統合", "quota"]);
+  });
+
+  it("3 つのボタンの表示名", () => {
+    expect(Object.keys(PHASE_GATE_ACTION_LABEL)).toEqual(["continue", "replan", "withdraw"]);
+  });
+
+  it("受信箱の 1 行は進んだ工程の数と次の工程を出す", () => {
+    const base = {
+      type: "phase_checkpoint" as const,
+      task: { id: "01T", title: "t", kind: "execute" as const, status: "blocked" as const, actions: [] },
+      phase: "design",
+      phase_title: "設計",
+      phases_done: 1,
+      phases_total: 3,
+      next_phase: "build",
+      at: "2026-09-27T00:00:00Z",
+    };
+    expect(phaseCheckpointAttentionText(base)).toBe(
+      "工程「設計」まで進みました（1/3 工程）。確認を待っています。次: build",
+    );
+    expect(phaseCheckpointAttentionText({ ...base, phases_total: 0, next_phase: null })).toBe(
+      "工程「設計」まで進みました。確認を待っています。次: 最終レビュー",
+    );
   });
 });

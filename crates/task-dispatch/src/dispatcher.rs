@@ -449,6 +449,70 @@ fn is_phase_lease_holder(holder: &str) -> bool {
 fn rfc3339(t: OffsetDateTime) -> String {
     t.format(&Rfc3339).unwrap_or_default()
 }
+
+/// ADR-0074 D2.3（Phase F3 途中確認）: `WorkUnitRow.created_at`/`updated_at`（RFC 3339 の文字列）を
+/// 壁時計の計算のために読む。読めなければ `None`（決定的な組み立てを諦め、その分は 0m 扱いになる）。
+fn parse_rfc3339(s: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(s, &Rfc3339).ok()
+}
+
+/// ADR-0074 D2.3（Phase F3 途中確認）: `PhaseReport` を人が読める Markdown にする（決定的。LLM 不使用）。
+/// `Event::PhaseReported.report` と同じ内容を `artifacts/phase-reports/<n>-<phase>.md` にも残す。
+fn render_phase_report_markdown(report: &task_core::PhaseReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# 途中報告: {} ({})\n\n",
+        report.phase_title, report.phase
+    ));
+    if !report.phases_done.is_empty() {
+        out.push_str("## 済んだ工程\n\n");
+        for line in &report.phases_done {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
+    if !report.work_units.is_empty() {
+        out.push_str("## この工程の WU\n\n");
+        for line in &report.work_units {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
+    if !report.integration.is_empty() {
+        out.push_str("## 統合\n\n");
+        for line in &report.integration {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
+    if !report.diff_stat.is_empty() {
+        out.push_str("## 差分\n\n```\n");
+        for line in &report.diff_stat {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str("```\n\n");
+    }
+    out.push_str("## 次の工程\n\n");
+    match &report.next_phase {
+        Some(p) => {
+            out.push_str(&format!("- {p}\n"));
+            for wu in &report.next_phase_work_units {
+                out.push_str(&format!("  - {wu}\n"));
+            }
+        }
+        None => out.push_str("- (この工程が最後。最終レビューへ)\n"),
+    }
+    out.push('\n');
+    out.push_str(&format!("## quota\n\n{}\n\n", report.quota_summary));
+    if !report.artifact_paths.is_empty() {
+        out.push_str("## 成果物\n\n");
+        for p in &report.artifact_paths {
+            out.push_str(&format!("- {p}\n"));
+        }
+    }
+    out
+}
 use crate::review::{
     HumanVerdicts, PLAN_FILE_NAME, PlanCheck, ReviewExtras, ReviewOutcome, ReviewSubject,
     ReviewerRun, Verdict, needs_reviewer_run, review_task,
@@ -6437,7 +6501,7 @@ impl Dispatcher {
                 .collect();
             match self
                 .store
-                .apply_transition_with_events(task.id, trigger, finished)
+                .apply_transition_with_events(task.id, trigger.clone(), finished)
             {
                 Ok(outcome) => {
                     tracing::warn!(task_id = %task.id, run_id = %lease.worker_run_id, next = ?outcome.next, attempts = outcome.attempts, "lease expired; reclaimed");
@@ -6778,6 +6842,18 @@ impl Dispatcher {
         let Some(active_plan) = self.store.execution_plan_active(task_id)? else {
             return Ok(WuDispatchGate::Atomic);
         };
+        // ADR-0074 D2.4（Phase F3 途中確認）: 人が途中確認で「replan」を選んだ（直前の遷移が
+        // `phase_replan`）なら、次の run は replan の planner run（`max_replans` に数える）。
+        // 上限を使い切っていれば人の指示は `answers` に残したまま次の工程へ進める（警告を残す）。
+        if task_ops::phase_gate::last_transition_reason(&self.store.events_for(task_id)?)
+            == Some(task_core::PhaseResumeMode::Replan.name())
+        {
+            let gate = self.replan_gate(task_id)?;
+            if matches!(gate, WuDispatchGate::RunPlanner { .. }) {
+                return Ok(gate);
+            }
+            tracing::warn!(%task_id, "phase replan requested but max_replans is exhausted; continuing with the next phase");
+        }
         // ADR-0074 D1.3（Phase F2b）: v2 の計画は工程ごとの scheduler（`settle_phase` /
         // `runnable_work_units`）で決める。v1 は従来どおり（`next_work_unit`）。
         let v2 = active_plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
@@ -7980,16 +8056,58 @@ impl Dispatcher {
             crate::execution_scheduler::settle_phase(&units),
             crate::execution_scheduler::PhaseSettle::AllDone
         );
-        let trigger = if all_done {
+        // ADR-0074 D2.2/D2.3（Phase F3 途中確認）: 次の工程があり、かつこの工程が停止点として
+        // 解決されているなら、`Continue{advance}` の代わりに `PhaseGate` で Blocked にする
+        // （F2b からの申し送り: `finish_phase_integration` が `Continue{advance}`/`WorkerDone` を
+        // 選ぶ場所に判定を差し込む）。最後の工程（`all_done`）では常に `WorkerDone`（D1.6 の表）。
+        let mut extra_events = vec![phase_event];
+        let mut trigger = if all_done {
             Trigger::WorkerDone
         } else {
             Trigger::Continue {
                 why: task_core::ContinueWhy::Advance,
             }
         };
+        if !all_done
+            && let Ok(Some(active)) = self.store.execution_plan_active(task_id)
+            && let Ok(events) = self.store.events_for(task_id)
+        {
+            let resolved = events
+                .iter()
+                .rev()
+                .find_map(|(_, e)| match e {
+                    Event::PausePointsResolved {
+                        plan_id, phases, ..
+                    } if *plan_id == active.id => Some(phases.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if resolved.iter().any(|p| p == &phase) {
+                let report = self.build_phase_report(task, &phase, &units, &active, &run, &events);
+                if let Some(artifact_event) = self.write_phase_report_artifact(
+                    task,
+                    &phase,
+                    resolved
+                        .iter()
+                        .position(|p| p == &phase)
+                        .map(|i| i + 1)
+                        .unwrap_or(1),
+                    &report,
+                ) {
+                    extra_events.push(artifact_event);
+                }
+                extra_events.push(Event::PhaseReported {
+                    phase: phase.clone(),
+                    report: Box::new(report),
+                });
+                trigger = Trigger::PhaseGate {
+                    phase: phase.clone(),
+                };
+            }
+        }
         match self
             .store
-            .apply_transition_with_events(task_id, trigger, vec![phase_event])
+            .apply_transition_with_events(task_id, trigger, extra_events)
         {
             Ok(outcome) => {
                 tracing::info!(%task_id, %phase, next = ?outcome.next, "phase integrated");
@@ -8016,6 +8134,255 @@ impl Dispatcher {
             }
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// ADR-0074 D2.3（Phase F3 途中確認）: 停止点の工程の統合の後に、決定的に途中報告を組み立てる
+    /// （LLM は使わない。checkpoint・`PhaseIntegrated` の材料・quota の記録済み値を機械的に束ねる）。
+    fn build_phase_report(
+        &self,
+        task: &Task,
+        phase: &str,
+        units: &[task_core::WorkUnitRow],
+        active: &task_core::ExecutionPlanRow,
+        run: &IntegrationRun,
+        events: &[(u64, Event)],
+    ) -> task_core::PhaseReport {
+        let phase_title_of = |key: &str| -> String {
+            active
+                .spec
+                .phases
+                .iter()
+                .find(|p| p.key == key)
+                .map(|p| p.title.clone())
+                .unwrap_or_else(|| key.to_string())
+        };
+        let phase_order: Vec<&str> = active.spec.phases.iter().map(|p| p.key.as_str()).collect();
+        let current_idx = phase_order.iter().position(|k| *k == phase).unwrap_or(0);
+
+        // 済んだ工程の一覧（現在の工程より前の工程だけ。工程の障壁により、それらは既に統合済み）。
+        let mut phases_done = Vec::new();
+        for &key in &phase_order[..current_idx] {
+            let phase_units: Vec<&task_core::WorkUnitRow> = units
+                .iter()
+                .filter(|u| {
+                    u.phase.as_deref() == Some(key) && u.kind != task_core::WorkUnitKind::Integrate
+                })
+                .collect();
+            let n_wu = phase_units.len();
+            let n_run: u32 = phase_units.iter().map(|u| u.runs).sum();
+            let start = phase_units
+                .iter()
+                .filter_map(|u| parse_rfc3339(&u.created_at))
+                .min();
+            let end = phase_units
+                .iter()
+                .filter_map(|u| parse_rfc3339(&u.updated_at))
+                .max();
+            let wall = match (start, end) {
+                (Some(s), Some(e)) => {
+                    task_core::format_wall_ms((e - s).whole_milliseconds() as i64)
+                }
+                _ => "0m".to_string(),
+            };
+            phases_done.push(format!(
+                "{}: {n_wu} WU / {n_run} run / {wall}",
+                phase_title_of(key)
+            ));
+        }
+
+        // この工程の WU ごとの要約（最終 checkpoint の completed 上位 5 件・decisions・known_failures）。
+        let mut work_units = Vec::new();
+        for u in units.iter().filter(|u| {
+            u.phase.as_deref() == Some(phase) && u.kind != task_core::WorkUnitKind::Integrate
+        }) {
+            let mut parts = vec![u.spec.title.clone()];
+            if let Some(cp) = task_ops::derive::latest_checkpoint(events, Some(&u.key)) {
+                if !cp.completed.is_empty() {
+                    let top: Vec<String> = cp.completed.iter().take(5).cloned().collect();
+                    parts.push(format!("completed: {}", top.join("; ")));
+                }
+                if !cp.decisions.is_empty() {
+                    let d: Vec<String> = cp
+                        .decisions
+                        .iter()
+                        .map(|d| format!("{} ({})", d.what, d.why))
+                        .collect();
+                    parts.push(format!("decisions: {}", d.join("; ")));
+                }
+                if !cp.known_failures.is_empty() {
+                    let f: Vec<String> = cp
+                        .known_failures
+                        .iter()
+                        .map(|f| match &f.detail {
+                            Some(detail) => format!("{}: {detail}", f.what),
+                            None => f.what.clone(),
+                        })
+                        .collect();
+                    parts.push(format!("known_failures: {}", f.join("; ")));
+                }
+            }
+            work_units.push(format!("{}: {}", u.key, parts.join(" / ")));
+        }
+
+        // 統合の結果（merge・検査。`run` は今まさに終えた統合そのもの）。
+        let mut integration: Vec<String> = run
+            .merged
+            .iter()
+            .map(|m| {
+                if m.skipped {
+                    format!("{}: already integrated (skipped)", m.key)
+                } else {
+                    format!("merged {} @ {}", m.key, m.commit)
+                }
+            })
+            .collect();
+        for (cmd, pass, summary) in &run.checks {
+            integration.push(format!(
+                "{cmd}: {} ({summary})",
+                if *pass { "pass" } else { "fail" }
+            ));
+        }
+
+        let diff_stat = self.phase_diff_stat(task, units, &run.head);
+
+        let next_key = phase_order.get(current_idx + 1).copied();
+        let next_phase_work_units: Vec<String> = next_key
+            .map(|k| {
+                active
+                    .spec
+                    .work_units
+                    .iter()
+                    .filter(|w| w.phase.as_deref() == Some(k))
+                    .map(|w| w.title.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let plain_events: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
+        let metrics = task_core::summarize_execution_metrics(task, &plain_events);
+        let quota_summary = task_core::quota_summary_line(&metrics);
+
+        // 成果物へのリンク（この工程の WU の run が出した `ArtifactProduced`）。
+        let phase_wu_ids: std::collections::HashSet<&str> = units
+            .iter()
+            .filter(|u| {
+                u.phase.as_deref() == Some(phase) && u.kind != task_core::WorkUnitKind::Integrate
+            })
+            .map(|u| u.id.as_str())
+            .collect();
+        let phase_run_ids: std::collections::HashSet<&str> = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::WorkUnitTransitioned {
+                    work_unit_id,
+                    to: task_core::WorkUnitStatus::Running,
+                    run_id: Some(rid),
+                    ..
+                } if phase_wu_ids.contains(work_unit_id.as_str()) => Some(rid.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut artifact_paths: Vec<String> = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::ArtifactProduced { run_id, artifact }
+                    if phase_run_ids.contains(run_id.as_str()) =>
+                {
+                    Some(artifact.path.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        artifact_paths.sort();
+        artifact_paths.dedup();
+
+        let mut report = task_core::PhaseReport {
+            phase: phase.to_string(),
+            phase_title: phase_title_of(phase),
+            phases_done,
+            work_units,
+            integration,
+            diff_stat,
+            next_phase: next_key.map(|k| k.to_string()),
+            next_phase_work_units,
+            quota_summary,
+            artifact_paths,
+        };
+        task_core::truncate_phase_report(&mut report);
+        report
+    }
+
+    /// D2.3: `git diff --stat <base>..<head>` の要約（最大 30 行）。base はこの Task の v2 計画で
+    /// 最初に走った WU の `base_commit`（工程をまたいだ全体の差分）。git が使えない・base が無い・
+    /// コマンドが失敗した場合は空（決定的な組み立ての一部として、失敗を報告に混ぜない）。
+    fn phase_diff_stat(
+        &self,
+        task: &Task,
+        units: &[task_core::WorkUnitRow],
+        head: &str,
+    ) -> Vec<String> {
+        if head.is_empty() {
+            return Vec::new();
+        }
+        let Some(ws) = self.task_workspaces_for(task) else {
+            return Vec::new();
+        };
+        let Some(repo) = ws.repos.iter().find(|r| r.is_git()) else {
+            return Vec::new();
+        };
+        let Some(base) = units
+            .iter()
+            .filter(|u| u.kind != task_core::WorkUnitKind::Integrate)
+            .min_by_key(|u| u.seq)
+            .and_then(|u| u.base_commit.clone())
+        else {
+            return Vec::new();
+        };
+        let output = std::process::Command::new("git")
+            .current_dir(&repo.dir)
+            .args(["diff", "--stat", &format!("{base}..{head}")])
+            .output();
+        match output {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .take(30)
+                .map(|s| s.to_string())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// D2.3: 途中報告を `artifacts/phase-reports/<n>-<phase>.md`（人が読める形。ADR-0067）として書き、
+    /// `Event::ArtifactProduced` を返す（書けなければ `None`。工程を止めること自体は諦めない）。
+    /// `run_id` は特定のワーカー run に属さない daemon 発の成果物なので、`PhaseIntegrated`/
+    /// `WorkUnitCommitted` と同じ「daemon が決定的に作る」ことが分かる合成の値にする。
+    fn write_phase_report_artifact(
+        &self,
+        task: &Task,
+        phase: &str,
+        n: usize,
+        report: &task_core::PhaseReport,
+    ) -> Option<Event> {
+        let workspace_dir = self.task_dir(task)?;
+        let artifacts_dir = self.artifacts_dir(task, &workspace_dir);
+        let rel_prefix = task_core::artifacts::artifacts_rel_for(task, &workspace_dir);
+        let filename = format!("{n}-{phase}.md");
+        let abs_path = artifacts_dir.join("phase-reports").join(&filename);
+        if let Some(parent) = abs_path.parent() {
+            std::fs::create_dir_all(parent).ok()?;
+        }
+        std::fs::write(&abs_path, render_phase_report_markdown(report)).ok()?;
+        let sha256 = task_worker::artifact::sha256_file(&abs_path).ok()?;
+        Some(Event::ArtifactProduced {
+            run_id: format!("daemon:phase-gate:{phase}"),
+            artifact: ArtifactRef {
+                name: filename.clone(),
+                path: format!("{rel_prefix}/phase-reports/{filename}"),
+                sha256,
+                kind: "md".to_string(),
+                declared: true,
+            },
+        })
     }
 
     /// D15/ADR-0074 D1.4: 最終レビューに渡す決定的な要約（WU ごとの最終 checkpoint の `completed` を
@@ -8522,6 +8889,15 @@ impl Dispatcher {
                         .strip_prefix("replan: ")
                         .unwrap_or(outcome)
                         .to_string());
+                }
+                // ADR-0074 D2.4（Phase F3 途中確認）: 途中確認で人が選んだ replan。「人の指示: <note>」。
+                Event::Transitioned { reason, .. }
+                    if reason == task_core::PhaseResumeMode::Replan.name() =>
+                {
+                    return Ok(task_ops::phase_gate::phase_replan_instruction(&events)
+                        .unwrap_or_else(|| {
+                            "a human requested a replan at a phase checkpoint".to_string()
+                        }));
                 }
                 Event::Transitioned { reason, .. } if reason == "review_fail" => {
                     let reasons: Vec<String> = events
@@ -27528,6 +27904,295 @@ mod tests {
             repo.path(),
             &["merge-base", "--is-ancestor", &a_branch, &task_branch]
         ));
+    }
+
+    /// ADR-0074 §6 F3 (b)（途中確認）: `pause_after = after(design)` の Task は、design の統合の後で
+    /// `PhaseGate` により Blocked（reason `awaiting_human`、attempts 不変）になり、決定的な
+    /// `PhaseReported` と `artifacts/phase-reports/1-design.md` を残す。次の工程（build）の WU は走らない。
+    #[tokio::test]
+    async fn pause_after_design_blocks_with_awaiting_human() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = parallel_task(repo.path(), "test -f a.txt");
+        task.routing = Some(task_core::TaskRouting {
+            pause_after: task_core::PausePolicy::After {
+                phases: vec!["design".to_string()],
+            },
+            ..Default::default()
+        });
+        store.insert(&task).unwrap();
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["design", "build"],
+            vec![v2_wu("a", "design", &[]), v2_wu("b", "build", &["a"])],
+        );
+        let adapter = Arc::new(
+            ParallelWuAdapter::new(Duration::from_millis(20))
+                .with_file("a", "a.txt", "a")
+                .with_file("b", "b.txt", "b"),
+        );
+        let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+        let report = run_until_idle(&mut d, 600).await;
+        assert!(report.idle, "{report:?}");
+
+        let stored = store.get(task.id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Blocked, "{stored:?}");
+        assert_eq!(adapter.keys_seen(), vec!["a"], "build の WU は走らない");
+        let events = events_of(&store, task.id);
+        // 最後の遷移は `awaiting_human`、attempts は変わらない（Dispatch も PhaseGate も据え置き）。
+        let reasons: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Transitioned { reason, .. } => Some(reason.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reasons.last().copied(),
+            Some("awaiting_human"),
+            "{reasons:?}"
+        );
+        assert!(!reasons.contains(&"worker_done"), "{reasons:?}");
+        assert_eq!(stored.attempts, task.attempts, "attempts 不変");
+        // replay でも attempts・状態が一致する（`awaiting_human` は attempts の集合に入らない）。
+        let replayed = task_ops::replay::replay(store.as_ref()).unwrap();
+        assert!(replayed.mismatches.is_empty(), "{:?}", replayed.mismatches);
+        let (wu_mismatches, _runs, plan_mismatches, _) =
+            task_ops::replay::check_and_apply_execution(store.as_ref(), false).unwrap();
+        assert!(wu_mismatches.is_empty(), "{wu_mismatches:?}");
+        assert!(plan_mismatches.is_empty(), "{plan_mismatches:?}");
+
+        // 決定的な途中報告。
+        let reports: Vec<&task_core::PhaseReport> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PhaseReported { phase, report } => {
+                    assert_eq!(phase, "design");
+                    Some(report.as_ref())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reports.len(), 1, "途中報告は 1 回だけ");
+        let r = reports[0];
+        assert_eq!(r.phase, "design");
+        assert_eq!(r.next_phase.as_deref(), Some("build"));
+        assert_eq!(r.next_phase_work_units, vec!["Work on b".to_string()]);
+        assert_eq!(r.work_units.len(), 1, "{r:?}");
+        assert!(r.work_units[0].starts_with("a: Work on a"), "{r:?}");
+        assert!(
+            r.integration.iter().any(|l| l.starts_with("merged a @ ")),
+            "{r:?}"
+        );
+        assert!(r.diff_stat.iter().any(|l| l.contains("a.txt")), "{r:?}");
+        assert!(!r.quota_summary.is_empty());
+        // 同じ内容の Markdown が phase-reports/1-design.md に残り、`ArtifactProduced` が飛ぶ。
+        let artifact = events
+            .iter()
+            .find_map(|e| match e {
+                Event::ArtifactProduced { artifact, .. }
+                    if artifact.path.ends_with("phase-reports/1-design.md") =>
+                {
+                    Some(artifact.clone())
+                }
+                _ => None,
+            })
+            .expect("phase report artifact");
+        let ws = d.task_dir(&stored).expect("task dir");
+        let body = std::fs::read_to_string(ws.join(&artifact.path)).unwrap();
+        assert!(body.starts_with("# 途中報告: design (design)"), "{body}");
+        assert!(body.contains("## 次の工程"), "{body}");
+        assert!(body.contains("- build"), "{body}");
+        // 通常の統合の記録も残る。
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::PhaseIntegrated { phase, .. } if phase == "design"))
+        );
+        // 次の工程は走っていない（Task が Blocked の間は dispatch されない）。
+        let units = store.work_units_for(task.id).unwrap();
+        let b = units.iter().find(|u| u.key == "b").unwrap();
+        assert_eq!(b.runs, 0);
+    }
+
+    /// `pause_after = after(design)` の 2 工程（design: a、build: b）の Task を、design の後の
+    /// 途中確認（`awaiting_human`）まで進める。
+    async fn paused_after_design() -> (
+        Arc<dyn TaskStore>,
+        Dispatcher,
+        Arc<ParallelWuAdapter>,
+        Task,
+        tempfile::TempDir,
+        tempfile::TempDir,
+    ) {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
+        task.routing = Some(task_core::TaskRouting {
+            pause_after: task_core::PausePolicy::After {
+                phases: vec!["design".to_string()],
+            },
+            ..Default::default()
+        });
+        store.insert(&task).unwrap();
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["design", "build"],
+            vec![v2_wu("a", "design", &[]), v2_wu("b", "build", &["a"])],
+        );
+        let adapter = Arc::new(
+            ParallelWuAdapter::new(Duration::from_millis(20))
+                .with_file("a", "a.txt", "a")
+                .with_file("b", "b.txt", "b"),
+        );
+        let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+        let report = run_until_idle(&mut d, 600).await;
+        assert!(report.idle, "{report:?}");
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
+        (store, d, adapter, task, repo, root)
+    }
+
+    /// ADR-0074 §6 F3 (d)（途中確認）: `continue` は `PhaseResume{Continue}`（reason `phase_continue`、
+    /// attempts 不変）で次の工程へ進み、Task は最後に done になる。`note` は `Answered` として次の
+    /// run の `answers` に渡る。途中報告は 1 回だけ。awaiting_human でなくなった後の 2 回目は 409 相当。
+    #[tokio::test]
+    async fn phase_gate_continue_resumes_the_next_phase() {
+        let (store, mut d, adapter, task, _repo, _root) = paused_after_design().await;
+        let r = task_ops::phase_gate::phase_gate(
+            store.as_ref(),
+            task.id,
+            task_ops::phase_gate::PhaseGateAction::Continue,
+            Some("build は小さく".to_string()),
+        )
+        .unwrap();
+        assert_eq!(r.from, Status::Blocked);
+        assert_eq!(r.to, Status::Ready);
+        assert_eq!(r.reason, "phase_continue");
+        let report = run_until_idle(&mut d, 600).await;
+        assert!(report.idle, "{report:?}");
+        let stored = store.get(task.id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{stored:?}");
+        assert_eq!(stored.attempts, task.attempts, "attempts 不変");
+        assert_eq!(adapter.keys_seen(), vec!["a", "b"]);
+        let events = events_of(&store, task.id);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::PhaseReported { .. }))
+                .count(),
+            1,
+            "最後の工程（build）の後では止まらない"
+        );
+        assert!(events.iter().any(|e| matches!(e,
+            Event::Answered { question, answer }
+                if question == "途中確認: 工程『design』の後" && answer == "build は小さく")));
+        let reasons: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Transitioned { reason, .. } => Some(reason.as_str()),
+                _ => None,
+            })
+            .collect();
+        let gate = reasons.iter().position(|r| *r == "awaiting_human").unwrap();
+        assert_eq!(reasons[gate + 1], "phase_continue", "{reasons:?}");
+        assert!(reasons.contains(&"worker_done"), "{reasons:?}");
+        let replayed = task_ops::replay::replay(store.as_ref()).unwrap();
+        assert!(replayed.mismatches.is_empty(), "{:?}", replayed.mismatches);
+        // もう awaiting_human ではない。
+        let err = task_ops::phase_gate::phase_gate(
+            store.as_ref(),
+            task.id,
+            task_ops::phase_gate::PhaseGateAction::Continue,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, task_ops::OpsError::InvalidState { .. }),
+            "{err:?}"
+        );
+    }
+
+    /// ADR-0074 §6 F3 (d)（途中確認）: `replan` は `note` 必須（空なら検証エラーで状態は変わらない）。
+    /// `note` があれば `PhaseResume{Replan}`（reason `phase_replan`）の後、次の run は replan の
+    /// planner run で、起こした理由は「人の指示: <note>」。`Answer` は awaiting_human には効かない。
+    #[tokio::test]
+    async fn phase_gate_replan_requires_a_note() {
+        let (store, mut d, _adapter, task, _repo, _root) = paused_after_design().await;
+        d.config.execution.planner.adapter = "instant".to_string();
+        for note in [None, Some(String::new()), Some("  ".to_string())] {
+            let err = task_ops::phase_gate::phase_gate(
+                store.as_ref(),
+                task.id,
+                task_ops::phase_gate::PhaseGateAction::Replan,
+                note,
+            )
+            .unwrap_err();
+            assert!(matches!(err, task_ops::OpsError::Validation(_)), "{err:?}");
+        }
+        let err =
+            task_ops::gate::answer(store.as_ref(), task.id, "go".to_string(), None).unwrap_err();
+        assert!(
+            matches!(err, task_ops::OpsError::InvalidState { .. }),
+            "{err:?}"
+        );
+        assert_eq!(
+            store.get(task.id).unwrap().unwrap().status,
+            Status::Blocked,
+            "状態は変わらない"
+        );
+
+        let r = task_ops::phase_gate::phase_gate(
+            store.as_ref(),
+            task.id,
+            task_ops::phase_gate::PhaseGateAction::Replan,
+            Some("build を 2 つに分ける".to_string()),
+        )
+        .unwrap();
+        assert_eq!(r.to, Status::Ready);
+        assert_eq!(r.reason, "phase_replan");
+        assert_eq!(
+            d.replan_trigger_reason(task.id).unwrap(),
+            "人の指示: build を 2 つに分ける"
+        );
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 400, || events_of(&s, id).iter().any(|e| matches!(
+                e,
+                Event::WorkerStarted {
+                    role: Some(task_core::RunRole::Planner),
+                    ..
+                }
+            )))
+            .await,
+            "replan の planner run が起きる"
+        );
+        let events = events_of(&store, task.id);
+        let started_planner = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    Event::WorkerStarted {
+                        role: Some(task_core::RunRole::Planner),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        // planner の前に build の WU は走らない。
+        assert!(
+            !events[..started_planner].iter().any(|e| matches!(e,
+                Event::WorkUnitTransitioned { key, to: task_core::WorkUnitStatus::Running, .. }
+                    if key == "b")),
+            "build の WU は replan の前に走らない"
+        );
     }
 
     /// ADR-0074 §6 F2 (e): 衝突する 2 つの WU で `merge-<phase>-<key>` の repair WU ができ、done の後に

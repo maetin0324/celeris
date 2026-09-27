@@ -1177,6 +1177,14 @@ pub enum Event {
         phases: Vec<String>,
         source: crate::pause::PauseSource,
     },
+    /// ADR-0074 D2.3（Phase F3 途中確認）: 停止点の工程の統合の後に、決定的に組み立てた途中報告を
+    /// 残す（LLM は使わない）。同じ内容を `artifacts/phase-reports/<n>-<phase>.md` にも書く
+    /// （`ArtifactProduced` が別に飛ぶ）。状態は変えない（同じトランザクションの
+    /// `Transitioned{reason:"awaiting_human"}` が Task を `blocked` にする）。
+    PhaseReported {
+        phase: String,
+        report: Box<crate::pause::PhaseReport>,
+    },
     /// ADR-0074 D3.3（Phase F4a）: CoS の案件計画 run（`mode = "milestones"`）が検証を通り、マイルストーン
     /// （`proposed`）と top-level の draft Task を作った。**`plan_task_id`（この Event が付く Plan
     /// タスク）の events 列がその提案の正本**。状態は変えない（`replay` は無視する）。

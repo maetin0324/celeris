@@ -1,4 +1,5 @@
-//! `celerisctl execution plan set|show`（ADR-0072 D14。Phase E2）。
+//! `celerisctl execution plan set|show`（ADR-0072 D14。Phase E2）と `execution phase-gate`
+//! （ADR-0074 D2.4。Phase F3 途中確認）。
 //!
 //! `set` は JSON ファイル（または `-` で stdin）から `celeris.execution-plan/1` を読み、D14 の検証を
 //! 通してから採用する（`task_ops::execution::adopt_plan`、origin は常に `human`）。`show` は現在の
@@ -22,6 +23,30 @@ pub enum ExecutionCommand {
         #[command(subcommand)]
         command: ExecutionPlanCommand,
     },
+    /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認（`blocked(awaiting_human)`）に応える
+    /// （`POST /tasks/{id}/execution/phase-gate` と同じ操作）。
+    PhaseGate(ExecutionPhaseGateArgs),
+}
+
+/// `celerisctl execution phase-gate <task> <action>` の `action`。
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum PhaseGateActionArg {
+    /// 次の工程へ進める。
+    Continue,
+    /// replan の planner run を起こす（`--note` 必須）。
+    Replan,
+    /// 取り下げる（cancel）。
+    Withdraw,
+}
+
+#[derive(Args, Debug)]
+pub struct ExecutionPhaseGateArgs {
+    pub task_id: String,
+    #[arg(value_enum)]
+    pub action: PhaseGateActionArg,
+    /// 人の指示（`continue` では任意、`replan` では必須）。
+    #[arg(long)]
+    pub note: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -51,7 +76,30 @@ pub fn run(store: &dyn TaskStore, command: ExecutionCommand) -> Result<ExitCode,
             ExecutionPlanCommand::Set(args) => run_set(store, args),
             ExecutionPlanCommand::Show(args) => run_show(store, args),
         },
+        ExecutionCommand::PhaseGate(args) => run_phase_gate(store, args),
     }
+}
+
+fn run_phase_gate(
+    store: &dyn TaskStore,
+    args: ExecutionPhaseGateArgs,
+) -> Result<ExitCode, CliError> {
+    use task_ops::phase_gate::PhaseGateAction;
+    let task_id = parse_task_id(&args.task_id)?;
+    let action = match args.action {
+        PhaseGateActionArg::Continue => PhaseGateAction::Continue,
+        PhaseGateActionArg::Replan => PhaseGateAction::Replan,
+        PhaseGateActionArg::Withdraw => PhaseGateAction::Withdraw,
+    };
+    let result = task_ops::phase_gate::phase_gate(store, task_id, action, args.note)?;
+    outln!(
+        "phase gate {}; task {} moved to {:?} ({})",
+        action.as_str(),
+        result.id,
+        result.to,
+        result.reason
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 fn read_plan_file(path: &PathBuf) -> Result<String, CliError> {
@@ -276,6 +324,22 @@ mod tests {
             ExecutionPlanSetArgs {
                 task_id: TaskId::new().to_string(),
                 file: path,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CliError::Message(_)), "{err:?}");
+    }
+
+    /// ADR-0074 D2.4: 途中確認で止まっていない Task（ここでは存在しない Task）には効かない。
+    #[test]
+    fn phase_gate_on_a_missing_task_is_an_error() {
+        let store = task_core::SqliteStore::open_in_memory().expect("open store");
+        let err = run_phase_gate(
+            &store,
+            ExecutionPhaseGateArgs {
+                task_id: task_core::TaskId::new().to_string(),
+                action: PhaseGateActionArg::Continue,
+                note: None,
             },
         )
         .unwrap_err();

@@ -1,4 +1,10 @@
-import type { TaskCommentOutcome, TaskEditOutcome, TaskReopenOutcome, TaskRereviewOutcome } from "./action-types";
+import type {
+  TaskCommentOutcome,
+  TaskEditOutcome,
+  TaskPhaseGateOutcome,
+  TaskReopenOutcome,
+  TaskRereviewOutcome,
+} from "./action-types";
 import { toActionError } from "./actions.server";
 import type { CelerisClient } from "./client.server";
 import { formString } from "./forms";
@@ -8,6 +14,8 @@ import type {
   CriterionSpec,
   EditResult,
   NewTaskSpec,
+  PhaseGateAction,
+  PhaseGateRequest,
   PriorityInput,
   ReopenBody,
   Status,
@@ -207,5 +215,50 @@ export async function rereviewTask(
     return { ok: true, op: "rereview", taskId, result };
   } catch (e) {
     return { ok: false, op: "rereview", taskId, error: toActionError(e) };
+  }
+}
+
+const PHASE_GATE_ACTIONS: readonly PhaseGateAction[] = ["continue", "replan", "withdraw"];
+
+/**
+ * celeris ADR-0074 D2.4（Phase F3 途中確認）: 途中確認への応答（`POST /tasks/{id}/execution/phase-gate`）。
+ * フォームの `phase_action`（continue / replan / withdraw）と `note` をそのまま写す（**GUI は検証しない**:
+ * replan の note が空なら celeris が 422 を返し、その文言をそのまま画面に出す）。知らない `phase_action` は
+ * 送らずに 400 相当の失敗にする（フォームの改ざん）。
+ */
+export async function phaseGateTask(
+  client: CelerisClient,
+  taskId: string,
+  form: FormData,
+  signal?: AbortSignal,
+): Promise<TaskPhaseGateOutcome> {
+  const action = formString(form, "phase_action");
+  if (action === null || !(PHASE_GATE_ACTIONS as readonly string[]).includes(action)) {
+    return {
+      ok: false,
+      op: "phase_gate",
+      taskId,
+      error: {
+        status: 400,
+        code: "bad_request",
+        detail: `unknown phase_action: ${String(action)}`,
+        conflict: false,
+        fields: {},
+        messages: [],
+      },
+    };
+  }
+  const note = formString(form, "note");
+  const body: PhaseGateRequest = { action: action as PhaseGateAction };
+  if (note !== null) body.note = note;
+  try {
+    const result = await client.post<TransitionResult>(
+      `/tasks/${encodeURIComponent(taskId)}/execution/phase-gate`,
+      body,
+      { signal },
+    );
+    return { ok: true, op: "phase_gate", taskId, result };
+  } catch (e) {
+    return { ok: false, op: "phase_gate", taskId, error: toActionError(e) };
   }
 }

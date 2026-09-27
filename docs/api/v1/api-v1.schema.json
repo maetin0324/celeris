@@ -513,6 +513,11 @@
           "const": "rereview",
           "description": "ADR-0070 D2（Phase 116）: 既存成果の再判定（`POST /tasks/{id}/rereview`。ADR-0051 /\nADR-0054 Phase 113 D3）。`done`、または直前の遷移が `review_fail` だった `failed` だけ\n（`task_ops::comment::can_rereview` と同じ規則。events を要るので `actions(task)` 単体では\n判定できず、`task_detail` / 受信箱の `build_attention` が events を渡して個別に足す）。",
           "type": "string"
+        },
+        {
+          "const": "phase_gate",
+          "description": "ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認に応える（`POST /tasks/{id}/execution/\nphase-gate` の continue / replan / withdraw）。`blocked(awaiting_human)` のときだけで、その間は\n`Answer` を出さない（events が要るので `actions_with_events` が足す）。",
+          "type": "string"
         }
       ]
     },
@@ -1168,6 +1173,62 @@
             "host",
             "at",
             "tasks"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task（`blocked(awaiting_human)`）。\n質問ではない（`questions` には出さない）。`report_idx` は途中報告の Markdown\n（`GET /tasks/{id}/artifacts/{idx}`）。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "next_phase": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "type": "string"
+            },
+            "phase_title": {
+              "type": "string"
+            },
+            "phases_done": {
+              "description": "済んだ工程の数（止まった工程を含む）。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "phases_total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "report_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "phase_checkpoint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "phase",
+            "phase_title",
+            "phases_done",
+            "phases_total",
+            "at"
           ],
           "type": "object"
         }
@@ -5278,6 +5339,27 @@
           "type": "object"
         },
         {
+          "description": "ADR-0074 D2.3（Phase F3 途中確認）: 停止点の工程の統合の後に、決定的に組み立てた途中報告を\n残す（LLM は使わない）。同じ内容を `artifacts/phase-reports/<n>-<phase>.md` にも書く\n（`ArtifactProduced` が別に飛ぶ）。状態は変えない（同じトランザクションの\n`Transitioned{reason:\"awaiting_human\"}` が Task を `blocked` にする）。",
+          "properties": {
+            "phase": {
+              "type": "string"
+            },
+            "report": {
+              "$ref": "#/$defs/PhaseReport"
+            },
+            "type": {
+              "const": "phase_reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "phase",
+            "report"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0074 D3.3（Phase F4a）: CoS の案件計画 run（`mode = \"milestones\"`）が検証を通り、マイルストーン\n（`proposed`）と top-level の draft Task を作った。**`plan_task_id`（この Event が付く Plan\nタスク）の events 列がその提案の正本**。状態は変えない（`replay` は無視する）。",
           "properties": {
             "milestones": {
@@ -5817,13 +5899,22 @@
     },
     "ExecutionPhase": {
       "description": "ADR-0072 D20（Phase E5）: タスクの状態バッジの横に出す、今どの段階かの導出値（D6 の R3 の代替。\n状態機械そのものには足さない）。`Task.status` から次のとおり決める（[`build_execution_view`] 参照）:\n`reviewing` は常に `verifying`。`running` は、進行中の WorkUnit があれば `repairing`\n（`kind = repair`）か `executing`、無ければ（計画はあるのに走っている WU が無い）planner run が\n動いていると見なして `planning`。それ以外（計画が無い・終端）は `None`。",
-      "enum": [
-        "planning",
-        "executing",
-        "repairing",
-        "verifying"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "planning",
+            "executing",
+            "repairing",
+            "verifying"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "awaiting_human",
+          "description": "ADR-0074 D2.2（Phase F3 途中確認）: 工程の後の途中確認で止まっている（`blocked` で、直前の\n遷移の reason が `awaiting_human`）。",
+          "type": "string"
+        }
+      ]
     },
     "ExecutionPlanOverview": {
       "description": "D20: 計画の概要（現在アクティブでない Task でも、生涯で作った WU をまとめて見せる。\n`versions` が replan の履歴）。",
@@ -6101,6 +6192,17 @@
               "type": "null"
             }
           ]
+        },
+        "phase_checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseCheckpointView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D2.4（Phase F3 途中確認）: `awaiting_human` のときだけ。"
         },
         "plan": {
           "anyOf": [
@@ -8876,6 +8978,11 @@
           "const": "task_failed",
           "description": "ADR-0070 D1（Phase 116）: タスクが `failed` に遷移した。`key` = `task_id:updated_at`\n（同じタスクが後で再び failed になったときにも新しい key になるよう、遷移の時刻を含める）。",
           "type": "string"
+        },
+        {
+          "const": "phase_checkpoint",
+          "description": "ADR-0074 D2.4（Phase F3 途中確認）: Task が工程の後の途中確認で止まった（`blocked(awaiting_human)`）。\n質問ではない（`QuestionBlocked` は鳴らさない）。`key` = task id:遷移番号。",
+          "type": "string"
         }
       ]
     },
@@ -9347,6 +9454,67 @@
       ],
       "type": "object"
     },
+    "PhaseCheckpointView": {
+      "description": "ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と\nGUI の 3 つのボタンの材料）。",
+      "properties": {
+        "report": {
+          "$ref": "#/$defs/PhaseReport"
+        },
+        "report_idx": {
+          "description": "途中報告の Markdown（`GET /tasks/{id}/artifacts/{idx}`）。書けなかったなら無い。",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "report"
+      ],
+      "type": "object"
+    },
+    "PhaseGateAction": {
+      "description": "D2.4: `POST /tasks/{id}/execution/phase-gate` の `action`。",
+      "oneOf": [
+        {
+          "const": "continue",
+          "description": "次の工程へ進める（`PhaseResume{Continue}`）。",
+          "type": "string"
+        },
+        {
+          "const": "replan",
+          "description": "replan の planner run を起こす（`PhaseResume{Replan}`。`note` 必須）。",
+          "type": "string"
+        },
+        {
+          "const": "withdraw",
+          "description": "取り下げる（既存の `Cancel`）。",
+          "type": "string"
+        }
+      ]
+    },
+    "PhaseGateRequest": {
+      "additionalProperties": false,
+      "description": "D2.4: `POST /tasks/{id}/execution/phase-gate` の本文。",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/PhaseGateAction"
+        },
+        "note": {
+          "description": "`continue` では任意（次の工程の WU の run に「人の指示」として渡す）。`replan` では必須。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
     "PhaseMerged": {
       "description": "`Event::PhaseIntegrated.merged[]`（ADR-0074 D1.4）。",
       "properties": {
@@ -9365,6 +9533,78 @@
       "required": [
         "key",
         "commit"
+      ],
+      "type": "object"
+    },
+    "PhaseReport": {
+      "description": "D2.3: 途中報告そのもの（`Event::PhaseReported.report` と `artifacts/phase-reports/<n>-<phase>.md`\nが同じ内容を持つ）。決定的に組み立てる（LLM は使わない）。各フィールドは既に人が読める 1 行・\n1 段落の文字列にしてある（型を増やしすぎず、レンダリングと切り詰めを単純にするため）。",
+      "properties": {
+        "artifact_paths": {
+          "description": "成果物へのリンク（workspace 相対パス）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "diff_stat": {
+          "description": "Task ブランチの `git diff --stat` の要約（最大 30 行）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "integration": {
+          "description": "統合の結果（merge・衝突・検査。1 行ずつ）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "next_phase": {
+          "description": "次の工程の key・title（無ければ `None` = 実質最後の工程）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_phase_work_units": {
+          "description": "次の工程の WU の title の一覧。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phase": {
+          "description": "止まった工程の key。",
+          "type": "string"
+        },
+        "phase_title": {
+          "description": "止まった工程の title。",
+          "type": "string"
+        },
+        "phases_done": {
+          "description": "済んだ工程の一覧（1 行ずつ: title・WU の数・run の数・壁時計）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "quota_summary": {
+          "description": "使った quota と参考の定価（ここまでの合計。1 行）。",
+          "type": "string"
+        },
+        "work_units": {
+          "description": "この工程の WU ごとの要約（1 段落ずつ）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "phase",
+        "phase_title",
+        "quota_summary"
       ],
       "type": "object"
     },
@@ -13640,6 +13880,17 @@
             }
           ]
         },
+        "phase_checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseCheckpointView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認で止まっているときだけ。"
+        },
         "plan": {
           "anyOf": [
             {
@@ -15616,6 +15867,10 @@
     "org_skill_mount": {
       "$ref": "#/$defs/OrgSkillMountBody"
     },
+    "phase_gate": {
+      "$ref": "#/$defs/PhaseGateRequest",
+      "description": "ADR-0074 D2.4（Phase F3 途中確認）: `POST /tasks/{id}/execution/phase-gate` の本文（応答は\n`transition_result`）。"
+    },
     "problem": {
       "$ref": "#/$defs/Problem"
     },
@@ -15920,6 +16175,7 @@
     "execution_plan",
     "execution_plan_create",
     "task_execution",
+    "phase_gate",
     "execution_metrics"
   ],
   "title": "ApiV1Schema",

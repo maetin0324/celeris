@@ -20632,3 +20632,16 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - **既知の限界**: replan（既に計画がある Task の planner run）で新しい子を足すことはしない（既存の子の key だけ許す。不正な試行として扱う）。
   `repos` は `ExecutionChildSpec` に入れていない（子は既存の委譲と同じく 親 > 案件の primary を継ぐ）。部またぎの質問の e2e は
   `plan_children` の単体テストで代える。
+
+### F4b checkpoint 4: (g) 案件計画の無い既存の案件の互換（完了 2026-09-27）
+
+- **条件**: 案件計画の無い既存の案件の挙動（直列の途中目標、ADR-0038 の `ok` の旧い意味）が変わらない。
+- **実装**: 追加の実装は無し（(d) の Go の判定は `milestones.plan_key` のある途中目標だけ、`ok` の新しい意味も `plan_key` のある途中目標だけ）。
+  テストで固定する。
+- **実行したコマンド・出力の要点**:
+  - `cargo test -p task-ops --lib milestone_review` → 6 passed。新規 `legacy_project_keeps_linear_milestones`（`plan_key` の無い途中目標に属する
+    案件直下の Task 同士の依存は、依存先 done で同じ途中目標でも別の途中目標でも ready に出る〈reached を待たない〉、`ok` は reached +
+    最新の提案を approved → in_progress にして `kind = plan`〈案件計画の印なし〉の分解 run を起こす、案件計画の版は 0）、
+    `planned_milestone_ok_only_reaches_and_ng_starts_a_project_replan`（案件計画の途中目標の `ok` は reached だけ、`ng` は redesigned +
+    replan の計画 run〈理由が goal に入る〉）。
+  - `cargo clippy -p task-ops --all-targets -- -D warnings` → 0。

@@ -377,6 +377,10 @@ pub struct Project {
     /// ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_from: Option<ProjectStatus>,
+    /// ADR-0074 D3.2（Phase F4b）: `true` なら、案件計画のマイルストーン Task は依存先が `done` になった
+    /// 時点で進む（途中目標の `reached` = 人の `ok` を待たない。判定のレビューは後から行う）。既定 `false`。
+    #[serde(default)]
+    pub auto_advance: bool,
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub created_at: OffsetDateTime,
@@ -483,6 +487,12 @@ pub struct Milestone {
     /// ADR-0044 D6: `pause` する直前の状態（`resume` の戻り先）。`paused` でなければ `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_from: Option<MilestoneStatus>,
+    /// ADR-0074 D3.3 / D3.8（Phase F4b）: 案件計画（`celeris.project-plan/1` と差分）から作られた
+    /// 途中目標の key。`None` の途中目標（既存・手で作ったもの・`task_ops::add` の自動生成）は旧い意味
+    /// （直列、ADR-0038 の `ok` で次を承認して分解）のまま。`Some` なら DAG の節点で、`ok` は
+    /// `reached` にして依存するマイルストーンの Go を開くだけ（D3.6）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_key: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub created_at: OffsetDateTime,

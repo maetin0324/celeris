@@ -56,6 +56,7 @@ impl Env {
 
     fn project(&self) -> Project {
         let project = Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

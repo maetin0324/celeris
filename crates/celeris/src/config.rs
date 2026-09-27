@@ -1217,8 +1217,11 @@ fn default_max_parallel_work_units() -> usize {
 pub struct ExecutionPlannerTomlConfig {
     #[serde(default = "default_planner_adapter")]
     pub adapter: String,
-    /// 読み取り中心の permission mode（既定 `"plan"`）。**E3 時点では配線していない**（実行時は
-    /// アダプタ既定の `permission_mode` のまま。ADR-0072 Phase E3 実装時の逸脱・明確化を参照）。
+    /// planner run の `--permission-mode`。既定 `"bypassPermissions"`（アダプタ既定と同じ）。
+    /// 2026-09-27 の F5-1 dogfood で `"plan"` だと claude-code が Plan Mode に入り、`Write` が plan
+    /// ファイル以外へ書けず `ExitPlanMode` も非対話では使えないため、`execution-plan.json` /
+    /// `result.json` を書けずに planner が 2 回失敗して atomic に倒れた。planner は成果物を
+    /// **書く**役なので Plan Mode は使わない（ADR-0074「Phase F5 実装時の逸脱・明確化」）。
     #[serde(default = "default_planner_permission_mode")]
     pub permission_mode: String,
     /// ADR-0074 D5.3（Phase F1）: planner run の lane。既定 `standard`（E3〜E6 の固定 `frontier` から
@@ -1248,7 +1251,7 @@ fn default_planner_adapter() -> String {
     "claude-code".to_string()
 }
 fn default_planner_permission_mode() -> String {
-    "plan".to_string()
+    "bypassPermissions".to_string()
 }
 fn default_planner_tier() -> Tier {
     Tier::Standard

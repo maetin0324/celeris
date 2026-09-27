@@ -270,6 +270,56 @@ async fn milestones_mode_labels_the_plan_task_and_ignores_existing_milestones() 
     assert_eq!(unchanged["status"], "approved");
 }
 
+/// ADR-0074 D3.4（Phase F4b (e)）: 同じ案件に案件計画 run が動いている間の二重の
+/// `POST /plan {mode: milestones}` は 409 `project_plan_in_flight`。`PATCH /projects/{id}` の
+/// `auto_advance` は往復する。
+#[tokio::test]
+async fn a_second_milestones_plan_request_is_409_and_auto_advance_round_trips() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "二重", "案件全体の計画を作って欲しい").await;
+    let first = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones"}),
+        ),
+    )
+    .await;
+    assert_eq!(first.status.as_u16(), 202, "{}", first.text());
+    let second = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/plan"),
+            &json!({"mode": "milestones"}),
+        ),
+    )
+    .await;
+    assert_eq!(second.status.as_u16(), 409, "{}", second.text());
+    assert!(
+        second.text().contains("project_plan_in_flight"),
+        "{}",
+        second.text()
+    );
+
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    assert_eq!(detail["project"]["auto_advance"], false);
+    let patched = send(
+        &app,
+        patch_json_with(
+            &format!("/api/v1/projects/{project_id}"),
+            &json!({"auto_advance": true}),
+            &[("authorization", format!("Bearer {TOKEN}").as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(patched.status.as_u16(), 200, "{}", patched.text());
+    assert_eq!(patched.json()["auto_advance"], true);
+}
+
 /// `mode = "milestones"` に `milestone_id` を添えるのは 422（案件全体を計画する run に、単一の
 /// 途中目標を紐づける意味が無い）。
 #[tokio::test]
@@ -342,6 +392,7 @@ fn plan_spec_with_one_milestone() -> task_core::ProjectPlanSpec {
         schema: task_core::PROJECT_PLAN_SCHEMA.into(),
         rationale: "1 段階で進める".into(),
         milestones: vec![task_core::MilestoneSpec {
+            pause_after: None,
             key: "survey".into(),
             title: "調査".into(),
             objective: "周辺調査".into(),
@@ -366,6 +417,83 @@ fn plan_spec_with_one_milestone() -> task_core::ProjectPlanSpec {
             execution: None,
         }],
     }
+}
+
+/// ADR-0074 D3.5（Phase F4b (h)）: `GET /projects/{id}` の `project_plan` は、提案中は `pending`（節点・
+/// rationale・版）、承認後は `current_version` と節点（途中目標・Task の状態・進み・止まっている理由）。
+/// 案件計画の無い案件では省略。
+#[tokio::test]
+async fn project_detail_carries_the_plan_dag_and_the_pending_proposal() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    assert!(detail.get("project_plan").is_none(), "{detail}");
+
+    let pid: task_core::ProjectId = project_id.parse().expect("project id");
+    let project = env.store.project_get(pid).expect("get").expect("some");
+    let started = task_ops::project_plan::start_milestones(
+        &env.store,
+        &project,
+        None,
+        &[],
+        &[],
+        time::OffsetDateTime::now_utc(),
+    )
+    .expect("start_milestones");
+    let validated = task_core::validate_project_plan(
+        &plan_spec_with_one_milestone(),
+        task_core::ProjectPlanLimits::default(),
+        &std::collections::BTreeSet::new(),
+    )
+    .expect("valid plan");
+    task_ops::project_plan::propose(
+        &env.store,
+        &started.task,
+        &project,
+        &validated,
+        &[],
+        &[],
+        time::OffsetDateTime::now_utc(),
+    )
+    .expect("propose");
+
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    let plan = &detail["project_plan"];
+    assert!(plan.get("current_version").is_none(), "{plan}");
+    assert_eq!(plan["nodes"].as_array().map(Vec::len), Some(0));
+    assert_eq!(plan["pending"]["version"], 1);
+    assert_eq!(plan["pending"]["rationale"], "1 段階で進める");
+    assert_eq!(plan["pending"]["nodes"][0]["key"], "survey");
+    assert_eq!(plan["pending"]["nodes"][0]["task_status"], "draft");
+    assert_eq!(plan["pending"]["nodes"][0]["milestone_status"], "proposed");
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
+            &json!({"decision": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    let plan = &detail["project_plan"];
+    assert_eq!(plan["current_version"], 1);
+    assert!(plan.get("pending").is_none(), "{plan}");
+    let node = &plan["nodes"][0];
+    assert_eq!(node["title"], "調査");
+    assert_eq!(node["task_status"], "ready");
+    assert_eq!(node["milestone_status"], "approved");
+    assert_eq!(node["work_units_total"], 0);
+    assert_eq!(node["children_total"], 0);
 }
 
 /// ADR-0074 D3.3（Phase F4a (c)）: `decide approve` は提案の途中目標を `approved`、Task を `ready`

@@ -46,6 +46,32 @@ pub fn adopt_plan(
     limits: ExecutionLimits,
     now: OffsetDateTime,
 ) -> Result<ExecutionPlanRow, OpsError> {
+    adopt_plan_with_children(
+        store,
+        task_id,
+        spec,
+        origin,
+        planner_run_id,
+        limits,
+        now,
+        Vec::new(),
+    )
+}
+
+/// ADR-0074 D3.7（Phase F4b (f)）: `adopt_plan` と同じ。`children`（`delegate::plan_children` を
+/// 通った子 Task）が空でなければ、採用と同じトランザクションで子を作り `Event::Delegated{run_id:
+/// <planner run>}` を残す（`TaskStore::execution_plan_adopt_delegating`）。
+#[allow(clippy::too_many_arguments)]
+pub fn adopt_plan_with_children(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    spec: ExecutionPlanSpec,
+    origin: PlanOrigin,
+    planner_run_id: Option<String>,
+    limits: ExecutionLimits,
+    now: OffsetDateTime,
+    children: Vec<task_core::Task>,
+) -> Result<ExecutionPlanRow, OpsError> {
     let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
     };
@@ -103,13 +129,25 @@ pub fn adopt_plan(
         reason: None,
         plan: Box::new(validated.spec),
     };
-    store.execution_plan_adopt(
-        task_id,
-        plan.clone(),
-        work_units,
-        vec![pause_points_event],
-        event,
-    )?;
+    if children.is_empty() {
+        store.execution_plan_adopt(
+            task_id,
+            plan.clone(),
+            work_units,
+            vec![pause_points_event],
+            event,
+        )?;
+    } else {
+        store.execution_plan_adopt_delegating(
+            task_id,
+            plan.clone(),
+            work_units,
+            vec![pause_points_event],
+            event,
+            plan.planner_run_id.as_deref().unwrap_or("planner"),
+            children,
+        )?;
+    }
     Ok(plan)
 }
 

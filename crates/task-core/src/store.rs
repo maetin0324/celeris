@@ -79,10 +79,33 @@ const MIGRATION_0025: &str = include_str!("../migrations/0025_cluster_settings.s
 const MIGRATION_0026: &str = include_str!("../migrations/0026_execution.sql");
 /// ADR-0074 D1/§5.2（Phase F2）: `work_units` に v2（並列実行）の phase/lease/branch/commit 列を足す。
 const MIGRATION_0027: &str = include_str!("../migrations/0027_parallel_work_units.sql");
+/// ADR-0074 D3.2 / D3.8（Phase F4b）: `projects.auto_advance` と `milestones.plan_key`。
+const MIGRATION_0028: &str = include_str!("../migrations/0028_project_plan_go.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 27;
+pub const SCHEMA_VERSION: u32 = 28;
+
+/// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectPlanApply {
+    /// `decided_event` を積む Plan タスク（提案の正本）。
+    pub plan_task_id: TaskId,
+    pub milestones: Vec<ProjectPlanMilestoneChange>,
+    /// 書き換える Task の新しい値（状態・attempts・lease はトランザクションの中で読んだ値を使う）。
+    pub task_updates: Vec<Task>,
+    pub transitions: Vec<(TaskId, Trigger)>,
+    pub decided_event: Event,
+}
+
+/// `ProjectPlanApply.milestones[]`。`title` / `description` は `Some` のときだけ書き換える。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectPlanMilestoneChange {
+    pub id: MilestoneId,
+    pub status: MilestoneStatus,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
 
 /// `SqliteStore::open_with` に渡す接続オプション（ADR-0013 D5、ADR-0064 D1/D4/D5）。
 #[derive(Debug, Clone, Copy)]
@@ -685,6 +708,13 @@ pub trait TaskStore:
         decided_event: Event,
     ) -> Result<(), StoreError>;
 
+    /// ADR-0074 D3.4（Phase F4b (e)）: 案件計画の決定（replan の差分を含む）を **1 トランザクションで**
+    /// 適用する。順に: 途中目標の状態・題名の更新 → Task の書き換え（`draft` / `ready` で lease の無い
+    /// ものだけ。dispatch 済みなら `StoreError::Invalid` で何も書かない）→ 遷移（`Accept` は `draft` の
+    /// ときだけ、それ以外は終端でないときだけ適用。`Cancel` のカスケードで先に終端になったものは飛ばす）
+    /// → `decided_event` を `plan_task_id` の events に積む。
+    fn project_plan_apply(&self, apply: &ProjectPlanApply) -> Result<(), StoreError>;
+
     /// ADR-0016 D2 / M2: 実行中の委譲。子タスク群を挿入（`Created` → `Accept` で `ready`）し、親に
     /// `Event::Delegated{run_id, task_ids}` を追記する。全体が 1 トランザクション。親の状態は変えない。
     /// 子の `parent_id` が `parent_id` と違えば `StoreError::Invalid`。
@@ -780,6 +810,12 @@ pub trait TaskStore:
         id: ProjectId,
         at: Option<OffsetDateTime>,
     ) -> Result<bool, StoreError>;
+    /// ADR-0074 D3.2（Phase F4b）: `projects.auto_advance` を書く。無い案件は `Ok(false)`。
+    fn project_set_auto_advance(
+        &self,
+        id: ProjectId,
+        auto_advance: bool,
+    ) -> Result<bool, StoreError>;
 
     // ---- ADR-0043 D1（Phase 52）: 案件のリポジトリ（`project_repos`）----
 
@@ -832,6 +868,9 @@ pub trait TaskStore:
         description: &str,
         status: MilestoneStatus,
     ) -> Result<Milestone, StoreError>;
+    /// ADR-0074 D3.3（Phase F4b）: 案件計画から作った途中目標に key を結ぶ（`milestones.plan_key`）。
+    /// 無い途中目標は `Ok(false)`。
+    fn milestone_set_plan_key(&self, id: MilestoneId, plan_key: &str) -> Result<bool, StoreError>;
     /// その案件の途中目標を `seq` 昇順で返す。
     fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError>;
     /// ADR-0044 D6（Phase 55）: 途中目標を id 1 つで引く（案件を知らなくてよい）。
@@ -1000,6 +1039,21 @@ pub trait TaskStore:
         extra_events: Vec<Event>,
         event: Event,
     ) -> Result<(), StoreError>;
+
+    /// ADR-0074 D3.7（Phase F4b (f)）: `execution_plan_adopt` と同じことを行い、**同じトランザクションで**
+    /// planner の `children` から作った子 Task（`parent_id = task_id`、draft なら `Accept`）を挿入し、
+    /// `Event::Delegated{run_id: <planner run>, task_ids}` を親に残す（`delegate_children` と同じ形）。
+    #[allow(clippy::too_many_arguments)]
+    fn execution_plan_adopt_delegating(
+        &self,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        run_id: &str,
+        children: Vec<Task>,
+    ) -> Result<Vec<TaskId>, StoreError>;
 
     /// そのタスクの `active` な計画（無ければ `None`）。
     fn execution_plan_active(
@@ -1588,6 +1642,7 @@ impl SqliteStore {
             25 => Ok(MIGRATION_0025),
             26 => Ok(MIGRATION_0026),
             27 => Ok(MIGRATION_0027),
+            28 => Ok(MIGRATION_0028),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -1731,6 +1786,8 @@ impl SqliteStore {
                     None => None,
                 },
                 paused_from,
+                // ADR-0074 D3.2（Phase F4b）: 11 列目 `auto_advance`。
+                auto_advance: row.get::<_, i64>(10)? != 0,
                 created_at: parse_rfc3339(&created_at)?,
                 updated_at: parse_rfc3339(&updated_at)?,
             })
@@ -2081,6 +2138,23 @@ impl SqliteStore {
         Ok(out)
     }
 
+    /// ADR-0074 D3.2（Phase F4b (d)）: 依存するマイルストーンの Go がまだ開いていない途中目標の id
+    /// （案件計画のもの〈`plan_key` あり〉で `reached` でなく、案件の `auto_advance` が 0）。
+    fn milestones_awaiting_go_locked(
+        conn: &Connection,
+    ) -> Result<std::collections::HashSet<String>, StoreError> {
+        let mut stmt = conn.prepare(
+            "SELECT m.id FROM milestones m JOIN projects p ON p.id = m.project_id \
+             WHERE m.plan_key IS NOT NULL AND m.status <> 'reached' AND p.auto_advance = 0",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = std::collections::HashSet::new();
+        for row in rows {
+            out.insert(row?);
+        }
+        Ok(out)
+    }
+
     fn milestone_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Milestone, StoreError>> {
         let id: String = row.get(0)?;
         let project_id: String = row.get(1)?;
@@ -2118,6 +2192,8 @@ impl SqliteStore {
                 description: row.get(4)?,
                 status,
                 paused_from,
+                // ADR-0074 D3.3（Phase F4b）: 10 列目 `plan_key`。
+                plan_key: row.get(9)?,
                 created_at: parse_rfc3339(&created_at)?,
                 updated_at: parse_rfc3339(&updated_at)?,
             })
@@ -2264,6 +2340,53 @@ impl SqliteStore {
     /// 写しの列を**全部**書き直す（挿入時にしか書いていなかった `objective` / `genre` / `project_id` /
     /// `milestone_id` / `assignee` も、編集で変わりうるのでここで揃える）。状態機械は通らない
     /// （`status` / `attempts` / `lease` は触らない）。
+    /// `execution_plan_adopt` / `execution_plan_adopt_delegating` の共通部分（tx の中で計画・WU・events を書く）。
+    fn adopt_plan_tx(
+        tx: &Connection,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+    ) -> Result<(), StoreError> {
+        let existing: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM execution_plans WHERE task_id = ?1 AND status = 'active'",
+            params![task_id.to_string()],
+            |r| r.get(0),
+        )?;
+        if existing > 0 {
+            return Err(StoreError::InUse {
+                kind: "execution_plan",
+                id: task_id.to_string(),
+                detail: "task already has an active execution plan (replan is Phase E4)"
+                    .to_string(),
+            });
+        }
+        tx.execute(
+            "INSERT INTO execution_plans (id, task_id, version, origin, planner_run_id, status, \
+             json, created_at, superseded_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                plan.id,
+                plan.task_id,
+                plan.version,
+                plan.origin.as_str(),
+                plan.planner_run_id,
+                plan.status.as_str(),
+                serde_json::to_string(&plan.spec)?,
+                plan.created_at,
+                plan.superseded_at,
+            ],
+        )?;
+        for wu in &work_units {
+            Self::insert_work_unit_tx(tx, wu)?;
+        }
+        for ev in &extra_events {
+            Self::append_event_tx(tx, task_id, ev)?;
+        }
+        Self::append_event_tx(tx, task_id, &event)?;
+        Ok(())
+    }
+
     fn update_task_tx(tx: &Connection, task: &Task) -> Result<(), StoreError> {
         let json = serde_json::to_string(task)?;
         let updated_at = format_rfc3339(task.updated_at)?;
@@ -3133,6 +3256,9 @@ impl TaskStore for SqliteStore {
             // 止まっている案件でも対話は起こす（判断は下の Rust 側。`Task` を読まないと見分けられない）。
             let halted_projects = Self::halted_projects_locked(conn)?;
             let halted_milestones = Self::halted_milestones_locked(conn)?;
+            // ADR-0074 D3.2（Phase F4b (d)）: 途中目標の Go がまだ開いていない途中目標（案件計画の
+            // もので `reached` でない。案件の `auto_advance` が立っていれば含めない）。
+            let awaiting_go = Self::milestones_awaiting_go_locked(conn)?;
 
             // ADR-0010 D2（P-36）: dispatch されない Approval は取得件数を占有しないよう SQL 段階で除外する。
             let mut stmt = conn.prepare(
@@ -3165,8 +3291,24 @@ impl TaskStore for SqliteStore {
                 // （`done` だけでなく `failed` / `cancelled` でも）次の対話タスクへ進めてよい。
                 let is_conv = is_conversation(&task);
                 let mut deps_done = true;
+                let is_milestone = crate::org::is_milestone_task(&task);
                 for dep_id in &task.depends_on {
                     match Self::get_locked(conn, *dep_id)? {
+                        // ADR-0074 D3.2（Phase F4b (d)）: マイルストーン Task 同士の依存は、依存先が `done`
+                        // でも、その途中目標（案件計画のもの）が `reached` になるまで開かない（人の `ok` が
+                        // Go）。案件計画を持たない途中目標（`plan_key` が無い）は旧い意味のまま（D3.8）。
+                        Some(dep)
+                            if dep.status == Status::Done
+                                && is_milestone
+                                && crate::org::is_milestone_task(&dep)
+                                && dep.milestone_id != task.milestone_id
+                                && dep
+                                    .milestone_id
+                                    .is_some_and(|m| awaiting_go.contains(&m.to_string())) =>
+                        {
+                            deps_done = false;
+                            break;
+                        }
                         Some(dep) if dep.status == Status::Done => {}
                         Some(dep) if is_conv && dep.status.is_terminal() => {}
                         _ => {
@@ -3297,6 +3439,7 @@ impl TaskStore for SqliteStore {
         )?;
         let now = OffsetDateTime::now_utc();
         let milestone = Milestone {
+            plan_key: None,
             id: milestone_id,
             project_id,
             seq,
@@ -3369,6 +3512,73 @@ impl TaskStore for SqliteStore {
             Self::apply_transition_tx(&tx, *id, trigger.clone(), vec![])?;
         }
         Self::append_event_tx(&tx, plan_task_id, &decided_event)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn project_plan_apply(&self, apply: &ProjectPlanApply) -> Result<(), StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = format_rfc3339(OffsetDateTime::now_utc())?;
+        for m in &apply.milestones {
+            let affected = tx.execute(
+                "UPDATE milestones SET status = ?1, updated_at = ?2, \
+                 title = COALESCE(?3, title), description = COALESCE(?4, description) WHERE id = ?5",
+                params![
+                    m.status.as_str(),
+                    now,
+                    m.title.as_deref(),
+                    m.description.as_deref(),
+                    m.id.to_string()
+                ],
+            )?;
+            if affected != 1 {
+                return Err(StoreError::Invalid(format!(
+                    "milestone not found: {}",
+                    m.id
+                )));
+            }
+        }
+        for task in &apply.task_updates {
+            let Some(current) = Self::get_locked(&tx, task.id)? else {
+                return Err(StoreError::Invalid(format!("task not found: {}", task.id)));
+            };
+            if !matches!(current.status, Status::Draft | Status::Ready) || current.lease.is_some() {
+                return Err(StoreError::Invalid(format!(
+                    "task {} was already dispatched ({:?}); it cannot be modified",
+                    task.id, current.status
+                )));
+            }
+            let merged = Task {
+                status: current.status,
+                attempts: current.attempts,
+                lease: current.lease.clone(),
+                ..task.clone()
+            };
+            Self::update_task_tx(&tx, &merged)?;
+            Self::append_event_tx(
+                &tx,
+                task.id,
+                &Event::Edited {
+                    fields: vec!["project_plan".to_string()],
+                    by: "project-plan".to_string(),
+                },
+            )?;
+        }
+        for (id, trigger) in &apply.transitions {
+            let Some(task) = Self::get_locked(&tx, *id)? else {
+                return Err(StoreError::Invalid(format!("task not found: {id}")));
+            };
+            let applicable = match trigger {
+                Trigger::Accept => task.status == Status::Draft,
+                _ => !task.status.is_terminal(),
+            };
+            if !applicable {
+                continue;
+            }
+            Self::apply_transition_tx(&tx, *id, trigger.clone(), vec![])?;
+        }
+        Self::append_event_tx(&tx, apply.plan_task_id, &apply.decided_event)?;
         tx.commit()?;
         Ok(())
     }
@@ -3864,8 +4074,8 @@ impl TaskStore for SqliteStore {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "INSERT INTO projects (id, title, request, status, secretary_summary, created_at, updated_at, workspace, \
-             archived_at, paused_from) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             archived_at, paused_from, auto_advance) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 project.id.to_string(),
                 project.title,
@@ -3877,6 +4087,7 @@ impl TaskStore for SqliteStore {
                 Self::project_workspace_column(project.workspace.as_ref())?,
                 project.archived_at.map(format_rfc3339).transpose()?,
                 project.paused_from.map(|s| s.as_str()),
+                i64::from(project.auto_advance),
             ],
         )?;
         // ADR-0043 D1: 案件の作業場所は `is_primary = 1` のリポジトリ 1 件として持つ
@@ -3910,7 +4121,7 @@ impl TaskStore for SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from \
+                     p.archived_at, p.paused_from, p.auto_advance \
                      FROM projects p WHERE p.id = ?1",
                     params![id.to_string()],
                     Self::project_row,
@@ -3927,7 +4138,7 @@ impl TaskStore for SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from \
+                     p.archived_at, p.paused_from, p.auto_advance \
                  FROM projects p ORDER BY p.created_at DESC, p.id DESC",
             )?;
             let rows = stmt.query_map([], Self::project_row)?;
@@ -3990,6 +4201,23 @@ impl TaskStore for SqliteStore {
             "UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3",
             params![
                 at.map(format_rfc3339).transpose()?,
+                format_rfc3339(OffsetDateTime::now_utc())?,
+                id.to_string()
+            ],
+        )?;
+        Ok(affected == 1)
+    }
+
+    fn project_set_auto_advance(
+        &self,
+        id: ProjectId,
+        auto_advance: bool,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let affected = conn.execute(
+            "UPDATE projects SET auto_advance = ?1, updated_at = ?2 WHERE id = ?3",
+            params![
+                i64::from(auto_advance),
                 format_rfc3339(OffsetDateTime::now_utc())?,
                 id.to_string()
             ],
@@ -4307,6 +4535,7 @@ impl TaskStore for SqliteStore {
         )?;
         let now = OffsetDateTime::now_utc();
         let milestone = Milestone {
+            plan_key: None,
             id: MilestoneId::new(),
             project_id,
             seq,
@@ -4335,10 +4564,23 @@ impl TaskStore for SqliteStore {
         Ok(milestone)
     }
 
+    fn milestone_set_plan_key(&self, id: MilestoneId, plan_key: &str) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let affected = conn.execute(
+            "UPDATE milestones SET plan_key = ?1, updated_at = ?2 WHERE id = ?3",
+            params![
+                plan_key,
+                format_rfc3339(OffsetDateTime::now_utc())?,
+                id.to_string()
+            ],
+        )?;
+        Ok(affected == 1)
+    }
+
     fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, project_id, seq, title, description, status, created_at, updated_at, paused_from \
+                "SELECT id, project_id, seq, title, description, status, created_at, updated_at, paused_from, plan_key \
                  FROM milestones WHERE project_id = ?1 ORDER BY seq ASC",
             )?;
             let rows = stmt.query_map(params![project_id.to_string()], Self::milestone_row)?;
@@ -4354,7 +4596,7 @@ impl TaskStore for SqliteStore {
         self.with_read_conn(|conn| {
             let row = conn
                 .query_row(
-                    "SELECT id, project_id, seq, title, description, status, created_at, updated_at, paused_from \
+                    "SELECT id, project_id, seq, title, description, status, created_at, updated_at, paused_from, plan_key \
                      FROM milestones WHERE id = ?1",
                     params![id.to_string()],
                     Self::milestone_row,
@@ -4833,43 +5075,57 @@ impl TaskStore for SqliteStore {
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM execution_plans WHERE task_id = ?1 AND status = 'active'",
-            params![task_id.to_string()],
-            |r| r.get(0),
-        )?;
-        if existing > 0 {
-            return Err(StoreError::InUse {
-                kind: "execution_plan",
-                id: task_id.to_string(),
-                detail: "task already has an active execution plan (replan is Phase E4)"
-                    .to_string(),
-            });
-        }
-        tx.execute(
-            "INSERT INTO execution_plans (id, task_id, version, origin, planner_run_id, status, \
-             json, created_at, superseded_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-            params![
-                plan.id,
-                plan.task_id,
-                plan.version,
-                plan.origin.as_str(),
-                plan.planner_run_id,
-                plan.status.as_str(),
-                serde_json::to_string(&plan.spec)?,
-                plan.created_at,
-                plan.superseded_at,
-            ],
-        )?;
-        for wu in &work_units {
-            Self::insert_work_unit_tx(&tx, wu)?;
-        }
-        for ev in &extra_events {
-            Self::append_event_tx(&tx, task_id, ev)?;
-        }
-        Self::append_event_tx(&tx, task_id, &event)?;
+        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn execution_plan_adopt_delegating(
+        &self,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        run_id: &str,
+        children: Vec<Task>,
+    ) -> Result<Vec<TaskId>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
+        let mut ids = Vec::with_capacity(children.len());
+        for child in &children {
+            if child.parent_id != Some(task_id) {
+                return Err(StoreError::Invalid(format!(
+                    "child {} does not belong to task {task_id}",
+                    child.id
+                )));
+            }
+            Self::insert_tx(&tx, child)?;
+            Self::append_event_tx(
+                &tx,
+                child.id,
+                &Event::Created {
+                    task: Box::new(child.clone()),
+                },
+            )?;
+            if child.status == Status::Draft {
+                Self::apply_transition_tx(&tx, child.id, Trigger::Accept, vec![])?;
+            }
+            ids.push(child.id);
+        }
+        if !ids.is_empty() {
+            Self::append_event_tx(
+                &tx,
+                task_id,
+                &Event::Delegated {
+                    run_id: run_id.to_string(),
+                    task_ids: ids.clone(),
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(ids)
     }
 
     fn execution_plan_active(
@@ -7606,7 +7862,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 27);
+        assert_eq!(SCHEMA_VERSION, 28);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -7832,6 +8088,7 @@ mod tests {
     fn sample_project() -> Project {
         let now = OffsetDateTime::now_utc();
         Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -8147,7 +8404,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 27);
+        assert_eq!(SCHEMA_VERSION, 28);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -8638,7 +8895,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 27);
+        assert_eq!(SCHEMA_VERSION, 28);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -8704,7 +8961,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 27);
+        assert_eq!(SCHEMA_VERSION, 28);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -8797,7 +9054,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 27);
+        assert_eq!(SCHEMA_VERSION, 28);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -9253,7 +9510,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 27);
+        assert_eq!(SCHEMA_VERSION, 28);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -9341,7 +9598,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 27);
+        assert_eq!(SCHEMA_VERSION, 28);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();

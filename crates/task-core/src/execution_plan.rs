@@ -165,10 +165,43 @@ pub struct ExecutionPlanSpec {
     #[serde(default)]
     pub phases: Vec<PhaseSpec>,
     pub work_units: Vec<WorkUnitSpec>,
-    /// D3.7: 子 Task の提案。F4 まで空だけを許す（`validate`）。F2 の時点では中身の schema を
-    /// 決めていないので、素の JSON 値のまま持つ（今回のPhaseの先回りをしない）。
+    /// ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（v2 のみ。v1 では空でなければならない）。
+    /// 採用と同じトランザクションで既存の委譲の検証を通して子 Task になり、WU は
+    /// `depends_on: ["child:<key>"]` でその子の `done` を待てる。
     #[serde(default)]
-    pub children: Vec<serde_json::Value>,
+    pub children: Vec<ExecutionChildSpec>,
+}
+
+/// ADR-0074 D3.7（Phase F4b (f)）: WU の `depends_on` で子 Task を指す接頭辞（`child:<key>`）。
+pub const CHILD_DEP_PREFIX: &str = "child:";
+
+/// ADR-0074 D3.7（Phase F4b (f)）: 子 Task の印（`Task.labels` に `child-<key>`）。scheduler が
+/// `child:<key>` の依存を子 Task の状態へ決定的に引くのに使う（`Event::Created` に残るので正本は events）。
+pub fn child_label(key: &str) -> String {
+    format!("child-{key}")
+}
+
+/// ADR-0074 D3.7（Phase F4b (f)）: planner が提案する子 Task 1 件（`delegate` メッセージと同じ中身。
+/// `assignee` / `tier` / `model` は持たない〈担当は matching が決める。ADR-0069 D1〉）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionChildSpec {
+    /// `[a-z0-9-]{1,32}`。`children` の中で一意（WU の key とは別の名前空間。`child:<key>` で指す）。
+    pub key: String,
+    pub title: String,
+    pub objective: String,
+    /// 1 件以上。
+    pub acceptance: Vec<crate::model::Criterion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// ADR-0069 D3: `TaskFeatureHints` の上書きヒント。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<crate::model_policy::TaskFeatureHints>,
+    /// 同じ `children` の中の他の子の key。
+    #[serde(default)]
+    pub depends_on: Vec<String>,
 }
 
 /// 生成したスキーマ（`docs/protocol/execution-plan.schema.json`。`UPDATE_SCHEMA=1` で再生成）。
@@ -348,6 +381,8 @@ pub struct ExecutionLimits {
     pub max_work_units_v2: usize,
     /// ADR-0074 §4（Phase F2）: `phases` の件数上限（既定 5）。
     pub max_phases: usize,
+    /// ADR-0074 D3.7（Phase F4b (f)）: `children` の件数上限（既定 8 = 委譲の 1 run あたりの上限）。
+    pub max_children: usize,
 }
 
 impl Default for ExecutionLimits {
@@ -365,6 +400,7 @@ impl Default for ExecutionLimits {
             max_plan_json_bytes: 24 * 1024,
             max_work_units_v2: 10,
             max_phases: 5,
+            max_children: 8,
         }
     }
 }
@@ -494,8 +530,33 @@ pub enum PlanValidationError {
         key: String,
         phase: String,
     },
-    /// ADR-0074 D3.7（Phase F2）: `children` が空でない（F4 まで空だけを許す）。
+    /// ADR-0074 D3.7: `children` は `celeris.execution-plan/2` だけ（v1 では空でなければならない）。
     NonEmptyChildren,
+    /// ADR-0074 D3.7（Phase F4b (f)）: 子の件数・key・依存・受け入れ条件。
+    TooManyChildren {
+        count: usize,
+        max: usize,
+    },
+    InvalidChildKey {
+        key: String,
+    },
+    DuplicateChildKey {
+        key: String,
+    },
+    UnknownChildDependency {
+        key: String,
+        depends_on: String,
+    },
+    CyclicChildDependency {
+        cycle: Vec<String>,
+    },
+    ChildNoAcceptance {
+        key: String,
+    },
+    ChildInvalidAcceptance {
+        key: String,
+        detail: String,
+    },
     /// ADR-0074 D1.4（Phase F2）: `kind = integrate` は daemon が足す system WU 専用の予約語で、
     /// 計画（planner・人）が自分の WorkUnit にこの kind を書くことはできない。
     ReservedKind {
@@ -633,7 +694,34 @@ impl std::fmt::Display for PlanValidationError {
                 )
             }
             PlanValidationError::NonEmptyChildren => {
-                write!(f, "children must be empty (not implemented until Phase F4)")
+                write!(
+                    f,
+                    "children are only allowed in {EXECUTION_PLAN_SCHEMA_V2} (must be empty in v1)"
+                )
+            }
+            PlanValidationError::TooManyChildren { count, max } => {
+                write!(f, "too many children: {count} > {max}")
+            }
+            PlanValidationError::InvalidChildKey { key } => {
+                write!(
+                    f,
+                    "invalid child key: {key:?} (must match [a-z0-9-]{{1,32}})"
+                )
+            }
+            PlanValidationError::DuplicateChildKey { key } => {
+                write!(f, "duplicate child key: {key}")
+            }
+            PlanValidationError::UnknownChildDependency { key, depends_on } => {
+                write!(f, "child {key} depends on unknown child {depends_on}")
+            }
+            PlanValidationError::CyclicChildDependency { cycle } => {
+                write!(f, "cyclic child dependency: {}", cycle.join(" -> "))
+            }
+            PlanValidationError::ChildNoAcceptance { key } => {
+                write!(f, "child {key}: acceptance must not be empty")
+            }
+            PlanValidationError::ChildInvalidAcceptance { key, detail } => {
+                write!(f, "child {key}: {detail}")
             }
             PlanValidationError::ReservedKind { key } => {
                 write!(
@@ -734,9 +822,14 @@ pub fn validate(
         });
     }
 
-    // ADR-0074 D3.7（Phase F2）: `children` は F4 まで空だけを許す（v1/v2 共通）。
-    if !spec.children.is_empty() {
+    // ADR-0074 D3.7（Phase F4b (f)）: `children` は v2 だけ。件数・key・子同士の依存（循環なし）・
+    // 受け入れ条件（1 件以上、human には deliverable）。
+    if !is_v2 && !spec.children.is_empty() {
         errors.push(PlanValidationError::NonEmptyChildren);
+    }
+    let child_keys: BTreeSet<&str> = spec.children.iter().map(|c| c.key.as_str()).collect();
+    if is_v2 {
+        errors.extend(validate_children(&spec.children, limits));
     }
 
     // ADR-0074 D1.1（Phase F2）: `phases`（v2 のみ）。
@@ -825,6 +918,16 @@ pub fn validate(
     let known_keys: BTreeSet<&str> = spec.work_units.iter().map(|w| w.key.as_str()).collect();
     for wu in &spec.work_units {
         for dep in &wu.depends_on {
+            // ADR-0074 D3.7（Phase F4b (f)）: `child:<key>` は子 Task への依存（v2 の既知の子だけ）。
+            if let Some(child) = dep.strip_prefix(CHILD_DEP_PREFIX) {
+                if !is_v2 || !child_keys.contains(child) {
+                    errors.push(PlanValidationError::UnknownDependency {
+                        key: wu.key.clone(),
+                        depends_on: dep.clone(),
+                    });
+                }
+                continue;
+            }
             if !known_keys.contains(dep.as_str()) {
                 errors.push(PlanValidationError::UnknownDependency {
                     key: wu.key.clone(),
@@ -1032,6 +1135,96 @@ pub fn validate(
         rounding_notes,
         topological_order,
     })
+}
+
+/// ADR-0074 D3.7（Phase F4b (f)）: `children` の検証（v2 のみ呼ぶ）。
+fn validate_children(
+    children: &[ExecutionChildSpec],
+    limits: ExecutionLimits,
+) -> Vec<PlanValidationError> {
+    let mut errors = Vec::new();
+    if children.len() > limits.max_children {
+        errors.push(PlanValidationError::TooManyChildren {
+            count: children.len(),
+            max: limits.max_children,
+        });
+    }
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for c in children {
+        if !valid_key(&c.key) {
+            errors.push(PlanValidationError::InvalidChildKey { key: c.key.clone() });
+            continue;
+        }
+        if !seen.insert(c.key.as_str()) {
+            errors.push(PlanValidationError::DuplicateChildKey { key: c.key.clone() });
+        }
+    }
+    let known: BTreeSet<&str> = children.iter().map(|c| c.key.as_str()).collect();
+    for c in children {
+        for dep in &c.depends_on {
+            if !known.contains(dep.as_str()) || dep == &c.key {
+                errors.push(PlanValidationError::UnknownChildDependency {
+                    key: c.key.clone(),
+                    depends_on: dep.clone(),
+                });
+            }
+        }
+        if c.acceptance.is_empty() {
+            errors.push(PlanValidationError::ChildNoAcceptance { key: c.key.clone() });
+        } else if let Err(detail) =
+            crate::model::validate_human_checks_have_deliverable(&c.acceptance)
+        {
+            errors.push(PlanValidationError::ChildInvalidAcceptance {
+                key: c.key.clone(),
+                detail,
+            });
+        }
+    }
+    if errors.is_empty() {
+        // 子同士の循環（Kahn 法。`topo_sort` を WU と同じ形で使う）。
+        let as_units: Vec<WorkUnitSpec> = children
+            .iter()
+            .map(|c| WorkUnitSpec {
+                key: c.key.clone(),
+                kind: WorkUnitKind::Implement,
+                title: c.title.clone(),
+                objective: c.objective.clone(),
+                depends_on: c.depends_on.clone(),
+                done_when: Vec::new(),
+                checks: Vec::new(),
+                context: WorkUnitContext::default(),
+                harness: None,
+                features: None,
+                budget: None,
+                outputs: Vec::new(),
+                phase: None,
+            })
+            .collect();
+        if let Err(cycle) = topo_sort(&as_units, &BTreeMap::new()) {
+            errors.push(PlanValidationError::CyclicChildDependency { cycle });
+        }
+    }
+    errors
+}
+
+/// ADR-0074 D3.7（Phase F4b (f)）: `newly_ready` の一般化。`external_done` は満たされた外部の依存
+/// （`child:<key>` のうち子 Task が `done` のもの）。`child:` の依存は `external_done` にあれば満たす。
+pub fn newly_ready_with(units: &[WorkUnitRow], external_done: &BTreeSet<String>) -> Vec<String> {
+    let done: BTreeSet<&str> = units
+        .iter()
+        .filter(|u| u.status == WorkUnitStatus::Done)
+        .map(|u| u.key.as_str())
+        .chain(external_done.iter().map(String::as_str))
+        .collect();
+    let ranks = phase_ranks(units);
+    units
+        .iter()
+        .filter(|u| u.status == WorkUnitStatus::Pending)
+        .filter(|u| u.kind != WorkUnitKind::Integrate)
+        .filter(|u| u.depends_on.iter().all(|d| done.contains(d.as_str())))
+        .filter(|u| earlier_phases_done(units, &ranks, u))
+        .map(|u| u.id.clone())
+        .collect()
 }
 
 /// Kahn's algorithm。`Ok` はトポロジカル順（`work_units` の index。同順位は
@@ -2685,10 +2878,31 @@ mod tests {
         validate(&p, limits, &[]).expect("9 work units fit under the v2 limit of 10");
     }
 
+    fn child(key: &str, deps: &[&str]) -> ExecutionChildSpec {
+        ExecutionChildSpec {
+            key: key.into(),
+            title: format!("child {key}"),
+            objective: format!("do {key}"),
+            acceptance: vec![crate::model::Criterion {
+                text: "ok".into(),
+                check: crate::model::Check::Command {
+                    cmd: "true".into(),
+                    expect_exit: 0,
+                },
+            }],
+            genre: None,
+            skills: vec![],
+            features: None,
+            depends_on: deps.iter().map(|d| d.to_string()).collect(),
+        }
+    }
+
+    /// ADR-0074 D3.7（Phase F4b (f)）: `children` は v1 では拒否、v2 では検証を通り、WU は
+    /// `child:<key>` で既知の子だけを指せる。
     #[test]
-    fn rejects_children_being_non_empty_in_either_version() {
+    fn children_are_v2_only_and_child_dependencies_must_be_known() {
         let mut v1 = plan(vec![spec("a", &[])]);
-        v1.children = vec![serde_json::json!({"key": "child"})];
+        v1.children = vec![child("c", &[])];
         let errs = validate(&v1, ExecutionLimits::default(), &[]).unwrap_err();
         assert!(
             errs.iter()
@@ -2696,12 +2910,40 @@ mod tests {
             "{errs:?}"
         );
 
-        let mut v2 = plan_v2(vec![phase("build")], vec![spec_v2("a", "build", &[])]);
-        v2.children = vec![serde_json::json!({"key": "child"})];
-        let errs = validate(&v2, ExecutionLimits::default(), &[]).unwrap_err();
+        let mut v2 = plan_v2(
+            vec![phase("build")],
+            vec![spec_v2("a", "build", &["child:c"])],
+        );
+        v2.children = vec![child("c", &[]), child("d", &["c"])];
+        validate(&v2, ExecutionLimits::default(), &[]).expect("valid v2 with children");
+
+        let mut bad = v2.clone();
+        bad.work_units[0].depends_on = vec!["child:zzz".into()];
+        bad.children.push(child("e", &["e"]));
+        bad.children.push(child("c", &[]));
+        let mut no_acc = child("f", &[]);
+        no_acc.acceptance.clear();
+        bad.children.push(no_acc);
+        let errs = validate(&bad, ExecutionLimits::default(), &[]).unwrap_err();
+        assert!(errs.iter().any(|e| matches!(e, PlanValidationError::UnknownDependency { depends_on, .. } if depends_on == "child:zzz")), "{errs:?}");
+        assert!(errs.iter().any(|e| matches!(e, PlanValidationError::UnknownChildDependency { key, .. } if key == "e")), "{errs:?}");
         assert!(
             errs.iter()
-                .any(|e| matches!(e, PlanValidationError::NonEmptyChildren)),
+                .any(|e| matches!(e, PlanValidationError::DuplicateChildKey { key } if key == "c")),
+            "{errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, PlanValidationError::ChildNoAcceptance { key } if key == "f")),
+            "{errs:?}"
+        );
+
+        let mut cyclic = v2.clone();
+        cyclic.children = vec![child("c", &["d"]), child("d", &["c"])];
+        let errs = validate(&cyclic, ExecutionLimits::default(), &[]).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, PlanValidationError::CyclicChildDependency { .. })),
             "{errs:?}"
         );
     }

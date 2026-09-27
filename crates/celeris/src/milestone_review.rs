@@ -312,6 +312,7 @@ mod tests {
         use task_core::{Project, ProjectId, ProjectStatus};
         let now = OffsetDateTime::now_utc();
         let project = Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

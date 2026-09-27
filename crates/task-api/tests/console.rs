@@ -43,6 +43,7 @@ fn kinds(page: &serde_json::Value) -> Vec<String> {
 fn project(env: &TestEnv, title: &str) -> Project {
     let now = OffsetDateTime::now_utc();
     let project = Project {
+        auto_advance: false,
         id: ProjectId::new(),
         title: title.to_string(),
         request: "do it".into(),

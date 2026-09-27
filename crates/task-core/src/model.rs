@@ -1194,10 +1194,15 @@ pub enum Event {
         version: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         supersedes: Option<u32>,
+        /// 提案が承認されたときの計画**全体**（replan の差分でも、差分を当てた後の全体を入れる）。
         plan: Box<crate::project_plan::ProjectPlanSpec>,
         /// この提案で作った途中目標と Task（`plan.milestones` と同じ順）。承認/却下の対象を
-        /// 決定的に引くため。
+        /// 決定的に引くため。replan（F4b）では、既存のもの（id はそのまま）と `add` で作ったものを
+        /// 合わせた、承認後の計画全体の対応表。
         milestones: Vec<ProposedMilestone>,
+        /// ADR-0074 D3.4（Phase F4b (e)）: replan の差分（`celeris.project-plan-delta/1`）。初回の提案は `None`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delta: Option<Box<crate::project_plan::ProjectPlanDelta>>,
     },
     /// ADR-0074 D3.3（Phase F4a）: 人の承認/却下
     /// （`POST /projects/{id}/project-plan/{version}/decide`）。状態は変えない（マイルストーン/Task の

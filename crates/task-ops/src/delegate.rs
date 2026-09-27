@@ -294,6 +294,134 @@ pub fn plan_delegation(
     })
 }
 
+/// ADR-0074 D3.7（Phase F4b (f)）: planner の `children` をどう扱うか。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChildrenPlan {
+    /// 子を作ってよい（`plan_delegation` を通った draft の子。`child-<key>` の印・`skills`・`features`
+    /// 付き。挿入時に `Accept` される）。`children` の順。
+    Ready(Vec<Task>),
+    /// 部をまたぐ子があり、まだ認可されていない。秘書への質問文（`CrossDepartment::question()`）。
+    NeedsAuthorization(Vec<String>),
+}
+
+/// ADR-0074 D3.7（Phase F4b (f)）: execution-plan/2 の `children` を、既存の委譲の検証（`plan_delegation`:
+/// 木の深さ・件数・木の run 数の上限、`validate_each`、担当の解決〈`assignee` は持たないので matching に
+/// 任せる。ADR-0069 D1〉）に通す。1 件でも拒否されれば `Err(理由)`（計画の採用は不正な試行として扱う）。
+/// 部をまたぐ判定は、子の担当になるはずのノード（`matching::decide` の決定的な結果）の部と、親の担当の
+/// 部を比べる（SPEC §3.1 / ADR-0033 D4・D5）。認可されていないものがあれば `NeedsAuthorization`、
+/// 人が認めなかったものがあれば `Err`。
+#[allow(clippy::too_many_arguments)]
+pub fn plan_children(
+    store: &dyn TaskStore,
+    parent: &Task,
+    children: &[task_core::ExecutionChildSpec],
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    limits: &DelegationLimits,
+    now: OffsetDateTime,
+) -> Result<ChildrenPlan, String> {
+    if children.is_empty() {
+        return Ok(ChildrenPlan::Ready(Vec::new()));
+    }
+    let index_of = |key: &str| children.iter().position(|c| c.key == key);
+    let proposals: Vec<DelegateTask> = children
+        .iter()
+        .map(|c| DelegateTask {
+            title: c.title.clone(),
+            objective: c.objective.clone(),
+            acceptance: c.acceptance.clone(),
+            role: None,
+            genre: c.genre.clone(),
+            depends_on: c
+                .depends_on
+                .iter()
+                .filter_map(|d| index_of(d).map(DelegateDep::Index))
+                .collect(),
+            tier: None,
+            assignee: None,
+            workspace: None,
+        })
+        .collect();
+    let outcome = plan_delegation(store, parent, &proposals, 0, roles, genres, limits, now)
+        .map_err(|e| format!("children: {e}"))?;
+    if !outcome.rejected.is_empty() {
+        return Err(format!(
+            "children rejected: {}",
+            outcome.rejected.join("; ")
+        ));
+    }
+    if outcome.accepted.len() != children.len() {
+        return Err("children: not every child was accepted".to_string());
+    }
+    let mut tasks = outcome.accepted;
+    for (task, spec) in tasks.iter_mut().zip(children) {
+        task.labels.push(task_core::child_label(&spec.key));
+        if !spec.skills.is_empty() {
+            task.skills = spec.skills.clone();
+        }
+        if let Some(features) = spec.features.filter(|f| !f.is_empty()) {
+            task.routing.get_or_insert_with(Default::default).features = Some(features);
+        }
+    }
+
+    // 部をまたぐか（担当は matching が決めるので、決まるはずのノードで判定する）。
+    let org = store.org_list().map_err(|e| e.to_string())?;
+    let Some(from) = parent.assignee.as_deref() else {
+        return Ok(ChildrenPlan::Ready(tasks));
+    };
+    let Some(from_dept) = task_core::department_of(&org, from) else {
+        return Ok(ChildrenPlan::Ready(tasks));
+    };
+    let rules = store
+        .standing_rule_list(Some(from))
+        .map_err(|e| e.to_string())?;
+    let approvals = store
+        .approval_list(None, None, Some(from))
+        .map_err(|e| e.to_string())?;
+    let mut pending: Vec<String> = Vec::new();
+    for task in &tasks {
+        let crate::matching::Assignment::Assigned { node, .. } =
+            crate::matching::decide(&org, task)
+        else {
+            continue;
+        };
+        if task_core::department_of(&org, &node).is_none_or(|d| d == from_dept) {
+            continue;
+        }
+        let crossing = crate::conversation::CrossDepartment {
+            from: from.to_string(),
+            to: node,
+            title: task.title.clone(),
+        };
+        match crate::conversation::cross_authorization(
+            &crossing.key(),
+            parent.id,
+            &approvals,
+            &rules,
+        ) {
+            crate::conversation::CrossAuthorization::Allowed => {}
+            crate::conversation::CrossAuthorization::Pending => {
+                let q = crossing.question();
+                if !pending.contains(&q) {
+                    pending.push(q);
+                }
+            }
+            crate::conversation::CrossAuthorization::Denied => {
+                return Err(format!(
+                    "child {:?} crosses departments ({}) and the delegation was denied",
+                    task.title,
+                    crossing.key()
+                ));
+            }
+        }
+    }
+    if pending.is_empty() {
+        Ok(ChildrenPlan::Ready(tasks))
+    } else {
+        Ok(ChildrenPlan::NeedsAuthorization(pending))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +453,153 @@ mod tests {
             assignee: None,
             workspace: None,
         }
+    }
+
+    fn profile_node(
+        id: &str,
+        parent: Option<&str>,
+        kind: task_core::OrgKind,
+        allowed: &[&str],
+    ) -> task_core::OrgNode {
+        let t = now();
+        task_core::OrgNode {
+            id: id.into(),
+            parent_id: parent.map(str::to_string),
+            name: id.into(),
+            kind,
+            genre: None,
+            brief: String::new(),
+            profile: task_core::Profile {
+                harnesses: task_core::HarnessPrefs {
+                    allowed: allowed.iter().map(|s| s.to_string()).collect(),
+                    default: allowed.first().map(|s| s.to_string()),
+                },
+                ..task_core::Profile::default()
+            },
+            position: 0,
+            created_at: t,
+            updated_at: t,
+        }
+    }
+
+    fn child_spec(key: &str, genre: &str, deps: &[&str]) -> task_core::ExecutionChildSpec {
+        task_core::ExecutionChildSpec {
+            key: key.into(),
+            title: format!("child {key}"),
+            objective: format!("do {key}"),
+            acceptance: vec![Criterion {
+                text: "c".into(),
+                check: Check::Command {
+                    cmd: "true".into(),
+                    expect_exit: 0,
+                },
+            }],
+            genre: Some(genre.into()),
+            skills: vec!["survey".into()],
+            features: None,
+            depends_on: deps.iter().map(|d| d.to_string()).collect(),
+        }
+    }
+
+    /// ADR-0074 D3.7（Phase F4b (f)）: planner の `children` は既存の委譲の検証（`plan_delegation`）を
+    /// 通って `child-<key>` の印つきの子になる。担当になるはずのノードが親と別の部なら秘書への質問
+    /// （認可されるまで子は作らない）、認可（`once`）の後は通る、`denied` なら拒否。木の深さの上限など
+    /// 委譲の検証に落ちれば拒否。
+    #[test]
+    fn plan_children_runs_the_delegation_checks_and_asks_before_crossing_departments() {
+        use task_core::OrgKind;
+        use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
+        let store = SqliteStore::open_in_memory().unwrap();
+        for n in [
+            profile_node("cos", None, OrgKind::Secretary, &["conversation"]),
+            profile_node("engineering", Some("cos"), OrgKind::Department, &["coding"]),
+            profile_node(
+                "research",
+                Some("cos"),
+                OrgKind::Department,
+                &["literature"],
+            ),
+        ] {
+            store.org_upsert(&n).unwrap();
+        }
+        let genres: Vec<GenreSpec> = ["coding", "literature"]
+            .iter()
+            .map(|g| GenreSpec {
+                id: g.to_string(),
+                ..GenreSpec::default()
+            })
+            .collect();
+        let mut parent = make_task(None, Status::Running);
+        parent.assignee = Some("engineering".into());
+        parent.genre = Some("coding".into());
+        store.insert(&parent).unwrap();
+        let limits = DelegationLimits::default();
+
+        // 同じ部（coding）の子はそのまま通る。依存は同じ children の中の index になる。
+        let same = [
+            child_spec("impl", "coding", &[]),
+            child_spec("tests", "coding", &["impl"]),
+        ];
+        match plan_children(&store, &parent, &same, &[], &genres, &limits, now()).unwrap() {
+            ChildrenPlan::Ready(tasks) => {
+                assert_eq!(tasks.len(), 2);
+                assert!(tasks[0].labels.contains(&"child-impl".to_string()));
+                assert_eq!(tasks[1].depends_on, vec![tasks[0].id]);
+                assert!(tasks.iter().all(|t| t.parent_id == Some(parent.id)));
+                assert!(tasks.iter().all(|t| t.assignee.is_none()));
+                assert_eq!(tasks[0].skills, vec!["survey".to_string()]);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // 別の部（literature → research）の子は秘書への質問。
+        let cross = [child_spec("lit", "literature", &[])];
+        let question =
+            match plan_children(&store, &parent, &cross, &[], &genres, &limits, now()).unwrap() {
+                ChildrenPlan::NeedsAuthorization(qs) => {
+                    assert_eq!(qs.len(), 1);
+                    assert!(
+                        qs[0].starts_with("cross-department: engineering -> research"),
+                        "{qs:?}"
+                    );
+                    qs[0].clone()
+                }
+                other => panic!("{other:?}"),
+            };
+        // 人が「今回だけ」認めれば通る。
+        let mut approval = Approval {
+            id: ApprovalId::new(),
+            project_id: None,
+            node_id: "engineering".into(),
+            task_id: Some(parent.id),
+            question: question.clone(),
+            decision: Some(Decision::Once),
+            answer: None,
+            created_at: now(),
+            decided_at: Some(now()),
+        };
+        store.approval_append(&approval).unwrap();
+        assert!(matches!(
+            plan_children(&store, &parent, &cross, &[], &genres, &limits, now()).unwrap(),
+            ChildrenPlan::Ready(t) if t.len() == 1
+        ));
+        // 後から「認めない」と答え直せば拒否。
+        approval.id = ApprovalId::new();
+        approval.decision = Some(Decision::Denied);
+        approval.decided_at = Some(now() + time::Duration::seconds(5));
+        store.approval_append(&approval).unwrap();
+        let err = plan_children(&store, &parent, &cross, &[], &genres, &limits, now())
+            .expect_err("denied");
+        assert!(err.contains("denied"), "{err}");
+
+        // 委譲の検証（木の深さの上限）に落ちれば拒否。
+        let shallow = DelegationLimits {
+            max_tree_depth: 1,
+            ..DelegationLimits::default()
+        };
+        let err = plan_children(&store, &parent, &same, &[], &genres, &shallow, now())
+            .expect_err("too deep");
+        assert!(err.contains("tree depth"), "{err}");
     }
 
     fn make_task(parent_id: Option<TaskId>, status: Status) -> Task {
@@ -674,6 +949,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().expect("open");
         let now_ts = now();
         let project = task_core::Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),

@@ -5021,6 +5021,74 @@ impl Dispatcher {
                     metrics,
                     end: run_end,
                 };
+                // ADR-0074 D3.7（Phase F4b (f)）: planner の `children` を既存の委譲の検証に通す
+                // （初回の採用だけ。replan で新しい子を足すことはしない — 既存の子の key だけを許す）。
+                let children = if active_plan.is_some() {
+                    let existing: std::collections::BTreeSet<String> = self
+                        .store
+                        .children(task_id)?
+                        .into_iter()
+                        .flat_map(|c| c.labels.into_iter())
+                        .collect();
+                    match validated
+                        .spec
+                        .children
+                        .iter()
+                        .find(|c| !existing.contains(&task_core::child_label(&c.key)))
+                    {
+                        Some(c) => Err(format!(
+                            "child {} is new; children can only be added when the plan is first adopted",
+                            c.key
+                        )),
+                        None => Ok(task_ops::delegate::ChildrenPlan::Ready(Vec::new())),
+                    }
+                } else {
+                    task_ops::delegate::plan_children(
+                        self.store.as_ref(),
+                        task,
+                        &validated.spec.children,
+                        &self.config.roles,
+                        &self.config.genres,
+                        &self.config.delegation,
+                        now,
+                    )
+                };
+                let children = match children {
+                    Ok(task_ops::delegate::ChildrenPlan::Ready(children)) => children,
+                    Ok(task_ops::delegate::ChildrenPlan::NeedsAuthorization(questions)) => {
+                        // SPEC §3.1 / ADR-0033 D4・D5: 部をまたぐ子は秘書（人）への質問。認可されたら
+                        // planner をもう一度走らせ、同じ子が認可済みとして通る。
+                        let question = questions.join("\n");
+                        let progress = Event::worker_progress(run_id.clone(), question.clone());
+                        self.store.apply_transition_with_events(
+                            task_id,
+                            Trigger::WorkerQuestion,
+                            vec![finished, progress],
+                        )?;
+                        for q in &questions {
+                            if let Err(e) = crate::approvals::record_question_approval(
+                                self.store.as_ref(),
+                                task,
+                                q,
+                                now,
+                            ) {
+                                tracing::warn!(%task_id, error = %e, "failed to record the cross-department approval for planner children");
+                            }
+                        }
+                        return Ok(());
+                    }
+                    Err(reason) => {
+                        self.give_up_or_retry_planner(
+                            task_id,
+                            task,
+                            &run_id,
+                            finished,
+                            format!("子 Task の提案が委譲の検証に通りませんでした: {reason}"),
+                            now,
+                        )?;
+                        return Ok(());
+                    }
+                };
                 let adopted = if active_plan.is_some() {
                     // ADR-0072 D17（Phase E4）: replan。done の WU は保持し、旧版を supersede する。
                     task_ops::execution::replan(
@@ -5035,7 +5103,7 @@ impl Dispatcher {
                     )
                     .map(|(plan, _diff)| plan)
                 } else {
-                    task_ops::execution::adopt_plan(
+                    task_ops::execution::adopt_plan_with_children(
                         self.store.as_ref(),
                         task_id,
                         validated.spec,
@@ -5043,6 +5111,7 @@ impl Dispatcher {
                         Some(run_id.clone()),
                         task_core::ExecutionLimits::default(),
                         now,
+                        children,
                     )
                 };
                 match adopted {
@@ -5112,8 +5181,29 @@ impl Dispatcher {
             .map(|d| d.join("project-plan.json"))
             .and_then(|p| std::fs::read_to_string(p).ok());
 
-        let validation: Result<task_core::ValidatedProjectPlan, String> = match read {
+        // ADR-0074 D3.4（Phase F4b (e)）: replan の run（`is_milestones_replan_task`）は差分
+        // `celeris.project-plan-delta/1` を、初回の run は `celeris.project-plan/1` を書く。
+        enum Proposal {
+            Full(task_core::ValidatedProjectPlan),
+            Delta(Box<task_core::ValidatedProjectPlanDelta>),
+        }
+        let is_replan = task_core::is_milestones_replan_task(task);
+        let validation: Result<Proposal, String> = match read {
             None => Err("artifacts/project-plan.json が見つからない".to_string()),
+            Some(text) if is_replan => {
+                match serde_json::from_str::<task_core::ProjectPlanDelta>(&text) {
+                    Err(e) => Err(format!(
+                        "project-plan.json の JSON が不正（{} を書くこと）: {e}",
+                        task_core::PROJECT_PLAN_DELTA_SCHEMA
+                    )),
+                    Ok(delta) => task_ops::project_plan::validate_delta_against_store(
+                        self.store.as_ref(),
+                        project_id,
+                        &delta,
+                    )
+                    .map(|v| Proposal::Delta(Box::new(v))),
+                }
+            }
             Some(text) => match serde_json::from_str::<task_core::ProjectPlanSpec>(&text) {
                 Err(e) => Err(format!("project-plan.json の JSON が不正: {e}")),
                 Ok(spec) => task_core::validate_project_plan(
@@ -5121,6 +5211,7 @@ impl Dispatcher {
                     task_core::ProjectPlanLimits::default(),
                     &std::collections::BTreeSet::new(),
                 )
+                .map(Proposal::Full)
                 .map_err(|errors| {
                     errors
                         .iter()
@@ -5141,15 +5232,27 @@ impl Dispatcher {
                         events,
                     );
                 };
-                match task_ops::project_plan::propose(
-                    self.store.as_ref(),
-                    task,
-                    &project,
-                    &validated,
-                    &self.config.roles,
-                    &self.config.genres,
-                    OffsetDateTime::now_utc(),
-                ) {
+                let proposed = match &validated {
+                    Proposal::Full(validated) => task_ops::project_plan::propose(
+                        self.store.as_ref(),
+                        task,
+                        &project,
+                        validated,
+                        &self.config.roles,
+                        &self.config.genres,
+                        OffsetDateTime::now_utc(),
+                    ),
+                    Proposal::Delta(validated) => task_ops::project_plan::propose_delta(
+                        self.store.as_ref(),
+                        task,
+                        &project,
+                        validated,
+                        &self.config.roles,
+                        &self.config.genres,
+                        OffsetDateTime::now_utc(),
+                    ),
+                };
+                match proposed {
                     Ok(proposed) => {
                         tracing::info!(%task_id, %project_id, milestones = proposed.len(), "project plan proposed");
                         self.store.apply_transition_with_events(
@@ -5344,6 +5447,14 @@ impl Dispatcher {
         let Some(project_id) = task.project_id else {
             return;
         };
+        // ADR-0074 D3.6（Phase F4b (d)）: 案件計画の途中目標（DAG の節点）のレビューでは、次の途中目標を
+        // 提案として作らない（次は計画の DAG が決めている。見直しは案件の replan で行う）。
+        if let Some(milestone_id) = task.milestone_id
+            && let Ok(Some(m)) = self.store.milestone_get(milestone_id)
+            && m.plan_key.is_some()
+        {
+            return;
+        }
         let Some(workspace) = self.task_dir(task) else {
             return;
         };
@@ -6881,6 +6992,24 @@ impl Dispatcher {
         // `runnable_work_units`）で決める。v1 は従来どおり（`next_work_unit`）。
         let v2 = active_plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
         let mut units = self.store.work_units_for(task_id)?;
+        // ADR-0074 D3.7（Phase F4b (f)）: `child:<key>` の依存を子 Task の状態で決定的に解く。
+        let (changed, waiting_on_children) = self.resolve_child_dependencies(task_id, &units)?;
+        if changed {
+            units = self.store.work_units_for(task_id)?;
+        }
+        if waiting_on_children
+            && !units.iter().any(|u| {
+                matches!(
+                    u.status,
+                    task_core::WorkUnitStatus::Ready
+                        | task_core::WorkUnitStatus::NeedsContinuation
+                        | task_core::WorkUnitStatus::Running
+                )
+            })
+        {
+            // 進められる WU は子の完了待ちのものだけ（Task は ready のまま待つ）。
+            return Ok(WuDispatchGate::Skip);
+        }
         let stuck = if v2 {
             matches!(
                 crate::execution_scheduler::settle_phase(&units),
@@ -6986,6 +7115,99 @@ impl Dispatcher {
                 }
             }
         }
+    }
+
+    /// ADR-0074 D3.7（Phase F4b (f)）: `depends_on: ["child:<key>"]` の WU を、子 Task（`child-<key>` の
+    /// 印を持つ `parent_id = task_id` の Task）の状態で進める。子が `done` なら（他の依存も満たされて
+    /// いれば）`pending → ready`、子が `failed` / `cancelled` なら `pending → blocked(dependency_failed)`
+    /// （D17 の replan の対象）。戻り値は（書き換えたか、まだ終わっていない子を待っている WU があるか）。
+    fn resolve_child_dependencies(
+        &self,
+        task_id: TaskId,
+        units: &[task_core::WorkUnitRow],
+    ) -> Result<(bool, bool), DispatchError> {
+        let prefix = task_core::CHILD_DEP_PREFIX;
+        let has_child_deps =
+            |u: &task_core::WorkUnitRow| u.depends_on.iter().any(|d| d.starts_with(prefix));
+        if !units
+            .iter()
+            .any(|u| u.status == task_core::WorkUnitStatus::Pending && has_child_deps(u))
+        {
+            return Ok((false, false));
+        }
+        let mut done: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut failed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for child in self.store.children(task_id)? {
+            for label in &child.labels {
+                let Some(key) = label.strip_prefix("child-") else {
+                    continue;
+                };
+                let dep = format!("{prefix}{key}");
+                match child.status {
+                    Status::Done => {
+                        done.insert(dep);
+                    }
+                    Status::Failed | Status::Cancelled => {
+                        failed.insert(dep);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut changed = false;
+        for u in units.iter().filter(|u| {
+            u.status == task_core::WorkUnitStatus::Pending
+                && u.depends_on.iter().any(|d| failed.contains(d))
+        }) {
+            let mut row = u.clone();
+            row.status = task_core::WorkUnitStatus::Blocked;
+            row.blocked_reason = Some(task_core::WorkUnitBlockedReason::DependencyFailed);
+            self.store.work_unit_transition(
+                task_id,
+                row,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: task_core::WorkUnitStatus::Pending,
+                    to: task_core::WorkUnitStatus::Blocked,
+                    reason: "dependency_failed".to_string(),
+                    run_id: None,
+                },
+            )?;
+            changed = true;
+        }
+        if !changed {
+            for id in task_core::newly_ready_with(units, &done) {
+                let Some(u) = units.iter().find(|u| u.id == id) else {
+                    continue;
+                };
+                if !has_child_deps(u) {
+                    continue;
+                }
+                let mut row = u.clone();
+                row.status = task_core::WorkUnitStatus::Ready;
+                self.store.work_unit_transition(
+                    task_id,
+                    row,
+                    Event::WorkUnitTransitioned {
+                        work_unit_id: u.id.clone(),
+                        key: u.key.clone(),
+                        from: task_core::WorkUnitStatus::Pending,
+                        to: task_core::WorkUnitStatus::Ready,
+                        reason: "child_done".to_string(),
+                        run_id: None,
+                    },
+                )?;
+                changed = true;
+            }
+        }
+        let waiting = units.iter().any(|u| {
+            u.status == task_core::WorkUnitStatus::Pending
+                && u.depends_on
+                    .iter()
+                    .any(|d| d.starts_with(prefix) && !done.contains(d) && !failed.contains(d))
+        });
+        Ok((changed, waiting))
     }
 
     /// ADR-0074 D1.3/D1.6（Phase F2b）: v2 の計画の Ready な Task が次に何をするか。
@@ -13438,15 +13660,30 @@ mod tests {
                 .unwrap()
         );
         // The completed review keeps its lock until the dispatcher persists the verdict.
-        tokio::task::yield_now().await;
-        old.tick().unwrap();
+        // Await the actual review task, leaving its completion queued and verdict unsaved.
+        (&mut old.reviewing.get_mut(&task.id).unwrap().handle)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get(task.id).unwrap().unwrap().status,
+            Status::Reviewing
+        );
+        assert!(
+            !store
+                .events_for(task.id)
+                .unwrap()
+                .iter()
+                .any(|(_, event)| matches!(event, Event::ReviewVerdict { .. }))
+        );
         assert!(old.reviewing.contains_key(&task.id));
         assert!(
             !active
                 .spawn_review(task.id, "subject".into(), &ReviewSubject::default())
                 .unwrap()
         );
-        assert!(run_until_idle(&mut old, 100).await.idle);
+        let report = old.tick().unwrap();
+        assert_eq!(report.reviewed, 1);
+        assert!(report.idle);
         assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
         active.tick().unwrap();
         assert!(active.reviewing.is_empty());
@@ -13470,6 +13707,39 @@ mod tests {
             )
             .unwrap();
         file.try_lock().unwrap();
+    }
+
+    // For single-run tests: await the worker wrapper, not just the adapter. The wrapper
+    // finishes filesystem work and queues Completion::Worker before its handle resolves.
+    async fn await_worker_completion(d: &mut Dispatcher, task_id: TaskId) {
+        let key = RunKey {
+            task: task_id,
+            work_unit: None,
+        };
+        (&mut d
+            .running
+            .get_mut(&key)
+            .expect("worker was dispatched")
+            .handle)
+            .await
+            .expect("worker task panicked");
+    }
+
+    // These tests have exactly one worker and one command review, with no retry/backoff.
+    // Each tick consumes an explicitly completed stage, regardless of filesystem speed.
+    async fn finish_worker_and_review(d: &mut Dispatcher, task_id: TaskId) {
+        await_worker_completion(d, task_id).await;
+        assert_eq!(d.tick().unwrap().finished, 1);
+        (&mut d
+            .reviewing
+            .get_mut(&task_id)
+            .expect("review was spawned")
+            .handle)
+            .await
+            .expect("review task panicked");
+        let report = d.tick().unwrap();
+        assert_eq!(report.reviewed, 1);
+        assert!(report.idle);
     }
 
     pub(super) async fn run_until_idle(d: &mut Dispatcher, max_ticks: usize) -> TickReport {
@@ -14213,6 +14483,7 @@ mod tests {
         let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             id: task_core::ProjectId::new(),
             title: "案件".into(),
             request: "やって".into(),
@@ -14278,6 +14549,281 @@ mod tests {
         );
     }
 
+    /// 検査が決定的に通る（`command: true`）2 段の案件計画（`poc` は `survey` に依存）。
+    const COMMAND_PROJECT_PLAN: &str = r#"{"schema":"celeris.project-plan/1","rationale":"2 段階","milestones":[
+        {"key":"survey","title":"調査","objective":"周辺調査","reach_criteria":"候補が出せた",
+         "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],"depends_on":[]},
+        {"key":"poc","title":"PoC","objective":"検証","reach_criteria":"動くデモ",
+         "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],"depends_on":["survey"]}
+    ]}"#;
+
+    /// `COMMAND_PROJECT_PLAN` を提案させ（偽アダプタの計画 run）、人の `approve` まで進める。
+    async fn approved_two_step_project_plan(
+        dir: &std::path::Path,
+        auto_advance: bool,
+    ) -> (
+        Arc<dyn TaskStore>,
+        Dispatcher,
+        task_core::Project,
+        Task,
+        Task,
+    ) {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let now = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            auto_advance,
+            id: task_core::ProjectId::new(),
+            title: "案件".into(),
+            request: "やって".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).unwrap();
+        let mut plan = plan_task(dir, 0);
+        plan.project_id = Some(project.id);
+        plan.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+        store.insert(&plan).unwrap();
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: COMMAND_PROJECT_PLAN.into(),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 2);
+        assert!(run_until_idle(&mut d, 200).await.idle);
+        task_ops::project_plan::decide(
+            store.as_ref(),
+            &project,
+            1,
+            task_ops::project_plan::ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            "conversation",
+            now,
+        )
+        .unwrap();
+        // テストでは作業場所を一時ディレクトリに置く（既定の相対パスは使わない）。
+        for t in store.list(None).unwrap() {
+            if task_core::is_milestone_task(&t) {
+                let mut t = t.clone();
+                t.workspace = WorkspaceSpec::Local {
+                    path: dir.join(t.id.to_string()),
+                    mode: None,
+                };
+                store
+                    .update_task(
+                        &t,
+                        Event::Edited {
+                            fields: vec!["workspace".into()],
+                            by: "test".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        let all = store.list(None).unwrap();
+        let survey = all.iter().find(|t| t.title == "調査").unwrap().clone();
+        let poc = all.iter().find(|t| t.title == "PoC").unwrap().clone();
+        (store, d, project, survey, poc)
+    }
+
+    /// ADR-0074 D3.2 / D3.6（Phase F4b (d)）: 依存先のマイルストーン Task が `done` でも、その途中目標が
+    /// `reached`（人の `ok`）になるまで依存するマイルストーン Task は dispatch されない。`ok` で Go が開く。
+    /// 案件の `auto_advance = true` なら `done` で進む。
+    #[tokio::test]
+    async fn dependent_milestone_waits_for_reached_not_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut d, project, survey, poc) =
+            approved_two_step_project_plan(dir.path(), false).await;
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        let survey_now = store.get(survey.id).unwrap().unwrap();
+        assert_eq!(
+            survey_now.status,
+            Status::Done,
+            "{:?}",
+            store.events_for(survey.id).unwrap()
+        );
+        let poc_now = store.get(poc.id).unwrap().unwrap();
+        assert_eq!(
+            poc_now.status,
+            Status::Ready,
+            "reached までは Go が開かない"
+        );
+        assert!(
+            !store
+                .events_for(poc.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(e, Event::WorkerStarted { .. })),
+            "poc must not have been dispatched"
+        );
+        // 途中目標の判定（ADR-0038 の ok）。案件計画の途中目標では `reached` にするだけで、
+        // 次の途中目標の承認・分解の run は起こさない（D3.6）。
+        let survey_milestone = store
+            .milestone_get(survey.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(survey_milestone.plan_key.as_deref(), Some("survey"));
+        let decided = task_ops::milestone_review::decide(
+            store.as_ref(),
+            &project,
+            &survey_milestone,
+            task_core::MilestoneDecision::Ok,
+            None,
+            &[],
+            &[],
+            "conversation",
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert_eq!(
+            decided.milestone.status,
+            task_core::MilestoneStatus::Reached
+        );
+        assert_eq!(
+            decided.plan_task_id, None,
+            "no decomposition run on a DAG milestone"
+        );
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        assert_eq!(
+            store.get(poc.id).unwrap().unwrap().status,
+            Status::Done,
+            "{:?}",
+            store.events_for(poc.id).unwrap()
+        );
+
+        // auto_advance = true: survey が done になった時点で poc も進む（reached を待たない）。
+        let dir2 = tempfile::tempdir().unwrap();
+        let (store2, mut d2, _project2, survey2, poc2) =
+            approved_two_step_project_plan(dir2.path(), true).await;
+        assert!(run_until_idle(&mut d2, 400).await.idle);
+        assert_eq!(
+            store2.get(survey2.id).unwrap().unwrap().status,
+            Status::Done
+        );
+        assert_eq!(
+            store2.get(poc2.id).unwrap().unwrap().status,
+            Status::Done,
+            "{:?}",
+            store2.events_for(poc2.id).unwrap()
+        );
+        let m = store2
+            .milestone_get(survey2.milestone_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            m.status,
+            task_core::MilestoneStatus::Reached,
+            "判定は後から"
+        );
+    }
+
+    /// ADR-0074 D3.4（Phase F4b (e)）: replan の計画 run（偽アダプタ）が差分を書くと、検証を通って
+    /// version 2 の提案（`supersedes: 1`、`add` の draft）になる。dispatch 済みの節点を `modify` する
+    /// 差分は計画 run の失敗（retries 0 で failed）になり、何も作らない。
+    #[tokio::test]
+    async fn replan_run_proposes_a_delta_and_rejects_modifying_a_started_milestone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut d, project, survey, _poc) =
+            approved_two_step_project_plan(dir.path(), false).await;
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        assert_eq!(store.get(survey.id).unwrap().unwrap().status, Status::Done);
+        store
+            .org_upsert(&org_node_of(
+                "secretary",
+                None,
+                OrgKind::Secretary,
+                Some("secretary"),
+            ))
+            .unwrap();
+        let start = |store: &Arc<dyn TaskStore>| {
+            let started = task_ops::project_plan::start_replan(
+                store.as_ref(),
+                &project,
+                Some("見直し"),
+                &[],
+                &[],
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+            let mut t = started.task.clone();
+            t.workspace = WorkspaceSpec::Local {
+                path: dir.path().join(t.id.to_string()),
+                mode: None,
+            };
+            store
+                .update_task(
+                    &t,
+                    Event::Edited {
+                        fields: vec!["workspace".into()],
+                        by: "test".into(),
+                    },
+                )
+                .unwrap();
+            t
+        };
+
+        // dispatch 済み（done）の survey を modify する差分は拒まれる。
+        let bad = start(&store);
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json:
+                r#"{"schema":"celeris.project-plan-delta/1","base_version":1,"rationale":"r",
+                "modify":[{"key":"survey","title":"x"}]}"#
+                    .into(),
+        });
+        let mut d2 = dispatcher(store.clone(), adapter, 1);
+        assert!(run_until_idle(&mut d2, 200).await.idle);
+        let bad_now = store.get(bad.id).unwrap().unwrap();
+        assert_eq!(
+            bad_now.status,
+            Status::Failed,
+            "{:?}",
+            store.events_for(bad.id).unwrap()
+        );
+        assert!(
+            store
+                .events_for(bad.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(
+                    e,
+                    Event::WorkerProgress { msg, .. } if msg.contains("already dispatched")
+                ))
+        );
+
+        // add の差分は version 2 の提案になる。
+        let good = start(&store);
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: r#"{"schema":"celeris.project-plan-delta/1","base_version":1,"rationale":"r",
+                "add":[{"key":"paper","title":"論文","objective":"書く","reach_criteria":"草稿",
+                 "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],
+                 "depends_on":["poc"]}]}"#
+                .into(),
+        });
+        let mut d3 = dispatcher(store.clone(), adapter, 1);
+        assert!(run_until_idle(&mut d3, 200).await.idle);
+        assert_eq!(store.get(good.id).unwrap().unwrap().status, Status::Done);
+        let events = store.events_for(good.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::ProjectPlanProposed { version: 2, supersedes: Some(1), delta: Some(_), milestones, .. }
+                    if milestones.len() == 3
+            )),
+            "{events:?}"
+        );
+        let paper = store
+            .list(Some(Status::Draft))
+            .unwrap()
+            .into_iter()
+            .find(|t| t.title == "論文")
+            .expect("paper draft");
+        assert!(task_core::is_milestone_task(&paper));
+    }
+
     /// ADR-0074 D3.3（Phase F4a (b)）: 不正な `project-plan.json`（JSON として壊れている）が
     /// retries を使い切ると、Task を作らず（途中目標も無し）、秘書の返事として「計画を作れなかった」を
     /// 案件の対話に残す。
@@ -14295,6 +14841,7 @@ mod tests {
             .unwrap();
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             id: task_core::ProjectId::new(),
             title: "案件".into(),
             request: "やって".into(),
@@ -15693,7 +16240,6 @@ mod tests {
     /// 1 回目は供給側失敗（Throttled）、2 回目以降は `touched` を作って done を返すアダプタ。
     struct FlakyProviderAdapter {
         calls: AtomicUsize,
-        finished: tokio::sync::Notify,
     }
 
     #[async_trait]
@@ -15709,13 +16255,11 @@ mod tests {
             _sink: &dyn EventSink,
         ) -> Result<RunOutcome, AdapterError> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                self.finished.notify_one();
                 return Err(AdapterError::Throttled {
                     retry_after: Duration::from_secs(3600),
                 });
             }
             std::fs::write(req.workspace.join("touched"), "1").unwrap();
-            self.finished.notify_one();
             Ok(done_outcome())
         }
     }
@@ -15736,11 +16280,10 @@ mod tests {
         store.insert(&task).unwrap();
         let adapter = Arc::new(FlakyProviderAdapter {
             calls: AtomicUsize::new(0),
-            finished: tokio::sync::Notify::new(),
         });
         let mut d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 1, true);
         assert_eq!(d.tick().unwrap().dispatched, 1);
-        adapter.finished.notified().await;
+        await_worker_completion(&mut d, task.id).await;
         let second = d.tick().unwrap();
         assert_eq!(second.finished, 1);
         assert_eq!(second.dispatched, 0, "provider is cooling down");
@@ -15754,16 +16297,7 @@ mod tests {
             *clock.lock().unwrap() += Duration::from_secs(7200);
         }
         assert_eq!(d.tick().unwrap().dispatched, 1);
-        adapter.finished.notified().await;
-        let mut report = d.tick().unwrap();
-        for _ in 0..10 {
-            if report.idle {
-                break;
-            }
-            tokio::task::yield_now().await;
-            report = d.tick().unwrap();
-        }
-        assert!(report.idle);
+        finish_worker_and_review(&mut d, task.id).await;
         let t = store.get(task.id).unwrap().unwrap();
         assert_eq!((t.status, t.attempts), (Status::Done, 0));
         assert_eq!(adapter.calls.load(Ordering::SeqCst), 2);
@@ -21644,6 +22178,7 @@ mod tests {
     fn titled_project(title: &str) -> Project {
         let now = OffsetDateTime::now_utc();
         Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -23534,7 +24069,8 @@ mod tests {
             files: vec![],
         });
         let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
-        run_until_idle(&mut d, 60).await;
+        assert_eq!(d.tick().unwrap().dispatched, 1);
+        finish_worker_and_review(&mut d, task.id).await;
         // 終端に達した次の tick で「片付け」が回っても消えない。
         d.tick().unwrap();
 
@@ -23693,6 +24229,7 @@ mod tests {
     ) -> (task_core::ProjectId, Vec<task_core::ProjectRepo>) {
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
+            auto_advance: false,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),
@@ -23886,7 +24423,8 @@ mod tests {
             "{note}"
         );
 
-        run_until_idle(&mut d, 60).await;
+        assert_eq!(d.tick().unwrap().dispatched, 1);
+        finish_worker_and_review(&mut d, task.id).await;
 
         let task_dir = ws_root.path().join(task.id.to_string());
         assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
@@ -25793,6 +26331,102 @@ mod tests {
             .filter(|r| r.work_unit_id.is_some())
             .count();
         assert_eq!(wu_routing, 2, "{routing_records:?}");
+    }
+
+    /// ADR-0074 D3.7（Phase F4b (f)）: execution-plan/2 の `children` は採用と同じトランザクションで既存の
+    /// 委譲の検証を通って子 Task（`parent_id` = この Task、`child-<key>` の印、ready）になり、
+    /// `Event::Delegated{run_id: <planner run>}` が残る。`depends_on: ["child:<key>"]` の WU は子が
+    /// `done` になるまで待ち（`child_done` で ready）、Task は最後に done になる。
+    #[tokio::test]
+    async fn planner_children_become_delegated_child_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = compound_task(dir.path());
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+
+        let spec = task_core::ExecutionPlanSpec {
+            schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+            rationale: "a child deliverable first".to_string(),
+            phases: vec![task_core::PhaseSpec {
+                key: "build".into(),
+                kind: task_core::WorkUnitKind::Implement,
+                title: "build".into(),
+            }],
+            work_units: vec![{
+                let mut a = wu_spec("a", &["child:lit"]);
+                a.phase = Some("build".into());
+                a
+            }],
+            children: vec![task_core::ExecutionChildSpec {
+                key: "lit".into(),
+                title: "関連研究の調査".into(),
+                objective: "別の deliverable として調べる".into(),
+                acceptance: vec![task_core::Criterion {
+                    text: "ok".into(),
+                    check: Check::Command {
+                        cmd: "true".into(),
+                        expect_exit: 0,
+                    },
+                }],
+                genre: None,
+                skills: vec!["survey".into()],
+                features: None,
+                depends_on: vec![],
+            }],
+        };
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(serde_json::to_string(&spec).unwrap())],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 2);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 600).await;
+        assert!(report.idle, "{report:?}");
+
+        let children = store.children(task_id).unwrap();
+        assert_eq!(children.len(), 1, "{children:?}");
+        let child = &children[0];
+        assert_eq!(child.parent_id, Some(task_id));
+        assert!(child.labels.contains(&"child-lit".to_string()));
+        assert_eq!(child.skills, vec!["survey".to_string()]);
+        assert_eq!(
+            child.assignee, None,
+            "ADR-0069 D1: owner is decided by matching"
+        );
+        assert!(!task_core::is_milestone_task(child));
+        assert_eq!(
+            child.status,
+            Status::Done,
+            "{:?}",
+            store.events_for(child.id).unwrap()
+        );
+
+        let events = store.events_for(task_id).unwrap();
+        let planner_run = store
+            .runs_for_task(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.role == task_core::RunIndexRole::Planner)
+            .expect("planner run")
+            .run_id;
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::Delegated { run_id, task_ids } if run_id == &planner_run && task_ids == &vec![child.id]
+            )),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::WorkUnitTransitioned { key, reason, .. } if key == "a" && reason == "child_done"
+            )),
+            "{events:?}"
+        );
+        let stored = store.get(task_id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{events:?}");
     }
 
     /// ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」（0 区切り）: `gate = "shadow"` でも、

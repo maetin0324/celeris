@@ -25,6 +25,7 @@ import type {
   Project,
   ProjectLifecycle,
   ProjectPlanAccepted,
+  ProjectPlanDecided,
   ProjectRepo,
   ProviderCheckResponse,
   ProviderConfigView1,
@@ -237,6 +238,8 @@ export type ProjectOpOutcome =
   // 途中目標の判定（`POST /milestones/{id}/decide`。**管理系**、202。ADR-0038 D2、docs/celeris-api-v1.md §3.63、
   // Phase 41 / G13j）。`ok` / `discuss` / `ng` のどれでも同じ形（`decided.decision` を見て画面が出し分ける）。
   | { ok: true; op: "milestone_decide"; decided: MilestoneDecided }
+  // ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 提案中の案件計画の承認 / 却下（**管理系**、202）。
+  | { ok: true; op: "project_plan_decide"; decided: ProjectPlanDecided }
   // 案件のリポジトリ（ADR-0043 D1、docs/celeris-api-v1.md §3.68〜3.71。Phase 52 / G16）。
   // 変更系は**管理系**（`token_file` 未設定でも 401）。`repo_primary` は `PATCH /repos/{id}` の
   // `is_primary: true` で、他の行の付け替えは celeris が行う（GUI は再計算しない）。
@@ -259,6 +262,7 @@ export type ProjectOpOutcome =
         | "milestone_status"
         | "project_plan"
         | "milestone_decide"
+        | "project_plan_decide"
         | "repo_create"
         | "repo_patch"
         | "repo_primary"

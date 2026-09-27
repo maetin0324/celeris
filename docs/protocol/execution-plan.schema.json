@@ -1,5 +1,175 @@
 {
   "$defs": {
+    "Check": {
+      "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
+      "oneOf": [
+        {
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "expect_exit": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": {
+              "const": "command",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "cmd",
+            "expect_exit"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "artifact_exists",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0067 D2: 知識ベースのページ参照（`task_core::knowledge::page_path` と同じ形。KB の根からの\n相対、`.md`、`..` 不可。実在の検証は組み立て時には行わない — `Check::ArtifactExists` と同様、\n人が確認するときに知識ベース側で気付く）。",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "knowledge_page",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "reviewer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Criterion": {
+      "description": "DESIGN §4.1 の `Criterion`。",
+      "properties": {
+        "check": {
+          "$ref": "#/$defs/Check"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "check"
+      ],
+      "type": "object"
+    },
+    "ExecutionChildSpec": {
+      "additionalProperties": false,
+      "description": "ADR-0074 D3.7（Phase F4b (f)）: planner が提案する子 Task 1 件（`delegate` メッセージと同じ中身。\n`assignee` / `tier` / `model` は持たない〈担当は matching が決める。ADR-0069 D1〉）。",
+      "properties": {
+        "acceptance": {
+          "description": "1 件以上。",
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "description": "同じ `children` の中の他の子の key。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatureHints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。`children` の中で一意（WU の key とは別の名前空間。`child:<key>` で指す）。",
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "skills": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "objective",
+        "acceptance"
+      ],
+      "type": "object"
+    },
+    "Level": {
+      "description": "各軸の段階（小さな順序尺度）。",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "PhaseSpec": {
       "additionalProperties": false,
       "description": "ADR-0074 D1.1（Phase F2）: `celeris.execution-plan/2` の工程。配列の順が実行順（D1.1）。",
@@ -20,6 +190,103 @@
         "kind",
         "title"
       ],
+      "type": "object"
+    },
+    "TaskFeatureHints": {
+      "additionalProperties": false,
+      "description": "ADR-0069 D3: `TaskFeatures` の明示の上書き（書いた軸だけが勝つ）。API の `features` と CoS の\n`create_task.features` から入る（features は「仕事の性質の記述」であってモデルの選択ではない）。\nADR-0074 D5.1（Phase F1）: `deny_unknown_fields`（`lane`/`assignee`/`tier`/`model` のような\n担当・モデルの選択を紛れ込ませない。書けば schema 違反として計画の検証エラーになる）。",
+      "properties": {
+        "ambiguity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consequence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cross_cutting": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_length": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "judgment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reversibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_intensity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifiability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "WorkUnitBudget": {
@@ -209,8 +476,10 @@
   "properties": {
     "children": {
       "default": [],
-      "description": "D3.7: 子 Task の提案。F4 まで空だけを許す（`validate`）。F2 の時点では中身の schema を\n決めていないので、素の JSON 値のまま持つ（今回のPhaseの先回りをしない）。",
-      "items": true,
+      "description": "ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（v2 のみ。v1 では空でなければならない）。\n採用と同じトランザクションで既存の委譲の検証を通して子 Task になり、WU は\n`depends_on: [\"child:<key>\"]` でその子の `done` を待てる。",
+      "items": {
+        "$ref": "#/$defs/ExecutionChildSpec"
+      },
       "type": "array"
     },
     "phases": {

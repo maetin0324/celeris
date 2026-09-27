@@ -17,6 +17,8 @@ import type {
   ProjectPatchBody,
   ProjectPlanAccepted,
   ProjectPlanBody,
+  ProjectPlanDecideBody,
+  ProjectPlanDecided,
   ProjectStatus,
   WorkspaceSpec,
 } from "./types";
@@ -164,6 +166,34 @@ export async function decideMilestone(
 }
 
 /**
+ * `POST /projects/{id}/project-plan/{version}/decide`（**管理系**、202。ADR-0074 D3.3 / D3.4、Phase F4b (h)）。
+ * 提案中の案件計画（初回の DAG か replan の差分）の承認 / 却下。フォームの `version` / `decision` / `note` を
+ * そのまま送る（却下の理由が要るかは celeris が 422 で言う。画面は押す前にも言う）。
+ */
+export async function decideProjectPlan(
+  client: CelerisClient,
+  projectId: string,
+  form: FormData,
+  signal?: AbortSignal,
+): Promise<ProjectOpOutcome> {
+  try {
+    const version = formString(form, "version") ?? "";
+    const decision = (formString(form, "decision") ?? "approve") as ProjectPlanDecideBody["decision"];
+    const body: ProjectPlanDecideBody = { decision };
+    const note = formString(form, "note");
+    if (note) body.note = note;
+    const decided = await client.post<ProjectPlanDecided>(
+      `/projects/${encodeURIComponent(projectId)}/project-plan/${encodeURIComponent(version)}/decide`,
+      body,
+      { signal },
+    );
+    return { ok: true, op: "project_plan_decide", decided };
+  } catch (e) {
+    return { ok: false, op: "project_plan_decide", error: toActionError(e) };
+  }
+}
+
+/**
  * `POST /projects/{id}/plan`（**管理系**、202 `{task_id}`。docs/celeris-api-v1.md §3.61、Phase 29）。
  * 案件の「この方針で進める」。案件の依頼文・途中目標・人の一言・秘書との直近のやり取りを celeris が 1 つの
  * `goal` にまとめ、秘書に `kind = "plan"` の仕事を 1 件作る（分解の起点）。GUI は待たない（202）ので、
@@ -182,6 +212,9 @@ export async function startProjectPlan(
     if (milestoneId) body.milestone_id = milestoneId;
     const note = formString(form, "note");
     if (note) body.note = note;
+    // ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画（`milestones`）。承認済みの計画がある案件では replan になる
+    // （どちらになるかは celeris が決める）。
+    if (formString(form, "mode") === "milestones") body.mode = "milestones";
     const accepted = await client.post<ProjectPlanAccepted>(`/projects/${encodeURIComponent(projectId)}/plan`, body, {
       signal,
     });

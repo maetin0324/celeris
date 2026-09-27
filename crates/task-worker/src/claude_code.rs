@@ -108,7 +108,7 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     }
 
     /// ADR-0072 D14（Phase E4b 項目3）: `--permission-mode` を上書きした複製。planner run に
-    /// `[execution.planner].permission_mode`（既定 `"plan"`）を実際の CLI 引数へ反映するために使う
+    /// `[execution.planner].permission_mode`（既定 `"bypassPermissions"`）を実際の CLI 引数へ反映するために使う
     /// （`with_model`/`with_env` と同じ形。ADR-0072「Phase E3 実装時の逸脱・明確化」で見送っていた
     /// フック）。
     fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
@@ -156,6 +156,11 @@ pub fn build_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: 
         // ADR-0074 D3.3（Phase F4a (b)）: `MILESTONES_PLAN_LABEL` の印がある Plan タスクは、案件全体の
         // マイルストーン DAG を `project-plan.json` に書く専用のプロンプト（旧来の `plan.json` の
         // 分解は 1 バイトも変えない）。
+        // ADR-0074 D3.4（Phase F4b (e)）: 承認済みの計画がある案件の replan は差分
+        // （`celeris.project-plan-delta/1`）を書く専用のプロンプト。
+        TaskKind::Plan if task_core::is_milestones_replan_task(task) => {
+            build_project_replan_prompt(task, context, run_id, artifacts)
+        }
         TaskKind::Plan if task_core::is_milestones_plan_task(task) => {
             build_project_plan_prompt(task, context, run_id, artifacts)
         }
@@ -759,6 +764,61 @@ fn build_project_plan_prompt(
     out
 }
 
+/// ADR-0074 D3.4（Phase F4b (e)）: 案件の replan。目的（objective）に現行の計画（`base_version` と各
+/// マイルストーンの key・状態・変更できるか）が載っているので、それに対する**差分**を
+/// `{artifacts}/project-plan.json`（`celeris.project-plan-delta/1`）に書かせる。
+fn build_project_replan_prompt(
+    task: &Task,
+    context: &RunContext,
+    run_id: &str,
+    artifacts: &str,
+) -> String {
+    let mut out = prompt_header(task, context, run_id, artifacts);
+    out.push_str(
+        "## Instructions\n\
+         This project already has an approved milestone plan (a DAG of milestones; the objective above lists \
+         it with its `base_version`, each milestone's key, state and whether it can still be changed). \
+         Revise the plan by writing a **delta** against it — do not rewrite the whole plan. The current plan \
+         keeps running until a human approves your delta, so only change what the reason for this replan \
+         requires.\n\n\
+         Rules: `modify` and `remove` may only name milestones that have not been dispatched yet (marked \
+         変更可). A milestone that is running or finished cannot be modified or removed; if it must stop, \
+         list it in `cancel` explicitly (a running one will be cancelled on approval; a finished one cannot \
+         be cancelled). A key may appear in only one of `modify` / `remove` / `cancel`. New milestones go to \
+         `add` with keys that do not collide with any existing key. After the delta, every `depends_on` must \
+         name a milestone that is still in the plan (so when you remove or cancel a milestone, modify the \
+         not-yet-dispatched milestones that depended on it), the plan must stay a DAG, and it must keep 1 to \
+         12 milestones.\n\n",
+    );
+    out.push_str(&format!(
+        "Write the delta to `{artifacts}/project-plan.json` (create the `{artifacts}/` directory if it does \
+         not exist yet) as a single JSON object of exactly this shape:\n\
+         ```json\n\
+         {{\"schema\":\"celeris.project-plan-delta/1\",\"base_version\":<the base_version above>,\
+         \"rationale\":\"why the plan changes\",\
+         \"add\":[<milestone objects in the celeris.project-plan/1 shape>],\
+         \"modify\":[{{\"key\":\"<existing key>\",\"title\":\"<only the fields you change>\"}}],\
+         \"remove\":[\"<existing key>\"],\"cancel\":[\"<existing key>\"]}}\n\
+         ```\n\
+         Do not write `assignee`, `tier`, `model` or `lane` (ADR-0069). Unknown fields are rejected. Every \
+         added milestone needs at least one `acceptance` entry, and a `human` check needs an \
+         `artifact_exists` or `knowledge_page` check next to it (ADR-0067).\n\n",
+    ));
+    let schema = serde_json::to_string(&task_core::project_plan::delta_schema_value())
+        .unwrap_or_else(|_| "{}".to_string());
+    out.push_str(&format!(
+        "### Schema for the `{artifacts}/project-plan.json` delta object\n```json\n"
+    ));
+    out.push_str(&schema);
+    out.push_str("\n```\n\n");
+    out.push_str(&prior_review_section(context));
+    out.push_str(&answers_section(context));
+    out.push_str(&available_genres_section_for_project_plan(context));
+    out.push_str(&workspace_section_for_plan(context));
+    out.push_str(&result_json_instructions(artifacts));
+    out
+}
+
 /// ADR-0074 D3.3（Phase F4a (b)）: 案件計画専用の「使える専門家」節。`available_genres_section_for_plan`
 /// と違い、milestone spec には `role` が無いので `genre` だけを宣言させる（子タスクではなくマイルストーン
 /// の話であることも明示する）。
@@ -926,9 +986,23 @@ fn parallel_phases_section(max_phases: usize) -> String {
          (it then starts from that WorkUnit's branch). If it needs two or more, put it in a later phase.\n\
          - `depends_on` may point to WorkUnits in the same phase or an earlier phase, never a later one.\n\
          - Do not use keys starting with `integrate-` and do not write `\"kind\":\"integrate\"` \
-         (celeris adds one integration step per phase itself).\n\
-         - `\"children\"` must be `[]` or omitted.\n\n"
+         (celeris adds one integration step per phase itself).\n\n"
     ));
+    // ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（`children`）の書き方。
+    out.push_str(
+        "#### Child tasks (`children`, optional)\n\
+         Only when part of this goal is really a **separate deliverable** — it needs a different \
+         department's skills, a different repository, or a human wants to approve it on its own — propose \
+         it as a child task instead of a WorkUnit: add a top-level `\"children\":[{\"key\":\"<[a-z0-9-]{1,32}>\",\
+         \"title\":\"...\",\"objective\":\"...\",\"acceptance\":[{\"text\":\"...\",\"check\":{\"type\":\"command\",\
+         \"cmd\":\"...\",\"expect_exit\":0}}],\"genre\":\"<optional>\",\"skills\":[\"<skill tag>\"],\
+         \"features\":{...},\"depends_on\":[\"<another child key>\"]}]` array (at most 8). Do not write \
+         `assignee`, `tier` or `model` (celeris picks the owner). A WorkUnit that needs a child's result \
+         waits for it with `\"depends_on\":[\"child:<key>\"]`. celeris creates the children through the same \
+         checks as delegation when it adopts the plan; a child in another department is first confirmed \
+         with the secretary. Do not split a WorkUnit that is merely too large into children — make it \
+         smaller WorkUnits instead. Otherwise leave `\"children\"` out.\n\n",
+    );
     out.push_str(
         "Example: `{\"schema\":\"celeris.execution-plan/2\",\"rationale\":\"...\",\"phases\":[\
          {\"key\":\"build\",\"kind\":\"implement\",\"title\":\"core pieces\"},\
@@ -1998,6 +2072,10 @@ mod tests {
         assert!(parallel.contains("same phase may run in parallel"));
         assert!(parallel.contains("at most one"));
         assert!(parallel.contains("1 to 5 phases"));
+        // ADR-0074 D3.7（Phase F4b (f)）: v2 の planner には children の書き方がある（v1 には無い）。
+        assert!(parallel.contains("\"children\":[{\"key\""), "{parallel}");
+        assert!(parallel.contains("child:<key>"));
+        assert!(!serial.contains("#### Child tasks"));
     }
 
     #[test]
@@ -3231,6 +3309,24 @@ echo '{"type":"result","subtype":"success","is_error":false}'
 
     /// 案件計画のプロンプトにも「使える専門家」節が入るが、milestone は `role` を持たないので
     /// `role` の指示は出さない。
+    /// ADR-0074 D3.4（Phase F4b (e)）: replan の印がある案件計画の Plan タスクは差分のプロンプトになる。
+    #[test]
+    fn project_replan_task_gets_the_delta_prompt() {
+        let mut task = crate::protocol::tests::sample_task();
+        task.kind = task_core::TaskKind::Plan;
+        task.labels = vec![
+            task_core::MILESTONES_PLAN_LABEL.to_string(),
+            task_core::MILESTONES_REPLAN_LABEL.to_string(),
+        ];
+        let prompt = build_prompt(&task, &RunContext::default(), "run-1", "/tmp/a");
+        assert!(prompt.contains("celeris.project-plan-delta/1"), "{prompt}");
+        assert!(prompt.contains("cancel"));
+        assert!(!prompt.contains("\"schema\":\"celeris.project-plan/1\""));
+        task.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
+        let prompt = build_prompt(&task, &RunContext::default(), "run-1", "/tmp/a");
+        assert!(!prompt.contains("celeris.project-plan-delta/1"));
+    }
+
     #[test]
     fn build_project_plan_prompt_lists_genres_without_role_instructions() {
         let mut task = crate::protocol::tests::sample_task();

@@ -54,7 +54,11 @@ pub fn latest_proposal(
     let mut proposed: Vec<Milestone> = store
         .milestone_list(project_id)?
         .into_iter()
-        .filter(|m| m.status == MilestoneStatus::Proposed && Some(m.id) != exclude)
+        // ADR-0074 D3.8（Phase F4b）: 案件計画の提案中の途中目標（`plan_key` あり）は旧い意味の
+        // 「次の途中目標の提案」ではない。
+        .filter(|m| {
+            m.status == MilestoneStatus::Proposed && Some(m.id) != exclude && m.plan_key.is_none()
+        })
         .collect();
     proposed.sort_by_key(|m| m.seq);
     Ok(proposed.pop())
@@ -184,7 +188,10 @@ pub fn record_proposal(
         return Ok(None);
     }
     for old in store.milestone_list(project_id)? {
-        if old.status == MilestoneStatus::Proposed && Some(old.id) != keep {
+        // ADR-0074 D3.8（Phase F4b）: 案件計画の途中目標（`plan_key` あり。提案中の DAG の節点）は
+        // この差し替えの対象にしない（計画の承認 / 却下は `project_plan::decide` だけが決める）。
+        if old.status == MilestoneStatus::Proposed && Some(old.id) != keep && old.plan_key.is_none()
+        {
             store.milestone_set_status(old.id, MilestoneStatus::Redesigned)?;
         }
     }
@@ -240,6 +247,20 @@ pub fn decide(
             "note must not be blank for the {:?} decision",
             decision.as_str()
         )));
+    }
+    // ADR-0074 D3.6（Phase F4b (d)）: 案件計画の途中目標（DAG の節点）では `ok` の意味を改める。
+    if milestone.plan_key.is_some() {
+        return decide_planned(
+            store,
+            project,
+            milestone,
+            decision,
+            note,
+            roles,
+            genres,
+            conversation_genre,
+            now,
+        );
     }
     let proposal = latest_proposal(store, project.id, Some(milestone.id))?;
     match decision {
@@ -311,6 +332,80 @@ pub fn decide(
                 plan_task_id: None,
                 message_id: Some(started.message.id),
                 conversation_task_id: Some(started.task.id),
+            })
+        }
+    }
+}
+
+/// ADR-0074 D3.6（Phase F4b）: 案件計画の途中目標（`plan_key` あり）への人の答え。
+///
+/// - `ok`: この途中目標を `reached` にするだけ。依存するマイルストーン Task の Go は
+///   `ready_tasks` の判定（D3.2）で開く。次の途中目標の承認・分解の run は起こさない（それは案件計画を
+///   持たない案件の旧い意味。D3.8）。
+/// - `discuss`: 旧い意味と同じ（状態は変えず、秘書への対話）。
+/// - `ng`: この途中目標を `redesigned`（Go は開かないまま）にし、案件の replan（D3.4 の起点 (a)）の
+///   計画 run を起こす（理由は計画 run への人の一言として渡る）。
+#[allow(clippy::too_many_arguments)]
+fn decide_planned(
+    store: &dyn TaskStore,
+    project: &Project,
+    milestone: &Milestone,
+    decision: MilestoneDecision,
+    note: Option<&str>,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    conversation_genre: &str,
+    now: OffsetDateTime,
+) -> Result<Decided, OpsError> {
+    match decision {
+        MilestoneDecision::Ok => {
+            store.milestone_set_status(milestone.id, MilestoneStatus::Reached)?;
+            if let Some(note) = note {
+                append_user_note(store, project.id, note, now)?;
+            }
+            Ok(Decided {
+                milestone: reload(store, project.id, milestone.id)?,
+                next_milestone: None,
+                plan_task_id: None,
+                message_id: None,
+                conversation_task_id: None,
+            })
+        }
+        MilestoneDecision::Discuss => {
+            let text = discuss_text(milestone, note.unwrap_or_default());
+            let started = send_to_secretary(
+                store,
+                project,
+                &text,
+                roles,
+                genres,
+                conversation_genre,
+                now,
+            )?;
+            Ok(Decided {
+                milestone: reload(store, project.id, milestone.id)?,
+                next_milestone: None,
+                plan_task_id: None,
+                message_id: Some(started.message.id),
+                conversation_task_id: Some(started.task.id),
+            })
+        }
+        MilestoneDecision::Ng => {
+            store.milestone_set_status(milestone.id, MilestoneStatus::Redesigned)?;
+            let reason = format!(
+                "途中目標『{}』（key: {}）は達成にしません。理由: {}",
+                milestone.title,
+                milestone.plan_key.as_deref().unwrap_or_default(),
+                note.unwrap_or_default()
+            );
+            let started =
+                project_plan::start_replan(store, project, Some(&reason), roles, genres, now)?;
+            Ok(Decided {
+                milestone: reload(store, project.id, milestone.id)?,
+                next_milestone: None,
+                plan_task_id: Some(started.task.id),
+                message_id: None,
+                conversation_task_id: None,
             })
         }
     }
@@ -444,6 +539,7 @@ mod tests {
 
         fn seed_project(&self) -> Project {
             let project = Project {
+                auto_advance: false,
                 archived_at: None,
                 paused_from: None,
                 id: ProjectId::new(),
@@ -460,6 +556,261 @@ mod tests {
                 .unwrap_or_else(|e| panic!("project: {e}"));
             project
         }
+    }
+
+    fn legacy_task(
+        project: &Project,
+        milestone: MilestoneId,
+        status: task_core::Status,
+        depends_on: Vec<TaskId>,
+    ) -> Task {
+        Task {
+            routing: None,
+            mode: Default::default(),
+            skills: Vec::new(),
+            repos: Vec::new(),
+            id: TaskId::new(),
+            parent_id: None,
+            kind: task_core::TaskKind::Execute,
+            title: "t".into(),
+            objective: "o".into(),
+            acceptance: vec![],
+            inputs: vec![],
+            depends_on,
+            status,
+            priority: 3,
+            worker_hint: task_core::WorkerHint {
+                tier: task_core::Tier::Standard,
+                adapter: None,
+            },
+            workspace: task_core::WorkspaceSpec::Local {
+                path: std::path::PathBuf::from("/tmp/ws"),
+                mode: None,
+            },
+            budget: task_core::Budget {
+                max_turns: 10,
+                max_wall_secs: 600,
+                max_retries: 1,
+            },
+            attempts: 0,
+            lease: None,
+            created_at: now(),
+            updated_at: now(),
+            role: None,
+            genre: None,
+            aggregate: false,
+            project_id: Some(project.id),
+            milestone_id: Some(milestone),
+            assignee: None,
+            conversation: None,
+            labels: Vec::new(),
+            category: Default::default(),
+        }
+    }
+
+    /// ADR-0074 D3.8（Phase F4b (g)）: 案件計画を持たない既存の案件は旧い挙動のまま。
+    /// - 途中目標（`plan_key` 無し）に属する案件直下の Task 同士の依存は、依存先が `done` になれば
+    ///   （途中目標の `reached` を待たずに）開く（同じ途中目標の中でも、別の途中目標をまたいでも）。
+    /// - ADR-0038 の `ok` は旧い意味（`reached` + 最新の提案を `approved` にして**分解の計画 run** を起こす）。
+    /// - 案件計画の版は 1 つも無い。
+    #[test]
+    fn legacy_project_keeps_linear_milestones() {
+        let env = Env::new();
+        env.seed_secretary();
+        let project = env.seed_project();
+        let m1 = env
+            .store
+            .milestone_create(
+                project.id,
+                "隣接領域の調査",
+                "",
+                MilestoneStatus::InProgress,
+            )
+            .unwrap_or_else(|e| panic!("m1: {e}"));
+        let m2 = env
+            .store
+            .milestone_create(project.id, "候補の比較", "", MilestoneStatus::Approved)
+            .unwrap_or_else(|e| panic!("m2: {e}"));
+        assert_eq!(m1.plan_key, None);
+        let a = legacy_task(&project, m1.id, task_core::Status::Done, vec![]);
+        let b = legacy_task(&project, m1.id, task_core::Status::Ready, vec![a.id]);
+        let d = legacy_task(&project, m2.id, task_core::Status::Ready, vec![a.id]);
+        for t in [&a, &b, &d] {
+            env.store
+                .insert(t)
+                .unwrap_or_else(|e| panic!("insert: {e}"));
+            assert!(task_core::is_milestone_task(t));
+        }
+        let ready: Vec<TaskId> = env
+            .store
+            .ready_tasks(10)
+            .unwrap_or_else(|e| panic!("ready: {e}"))
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert!(ready.contains(&b.id), "same milestone: {ready:?}");
+        assert!(
+            ready.contains(&d.id),
+            "a legacy milestone does not gate on reached: {ready:?}"
+        );
+
+        // 秘書のレビューが次の途中目標を提案し、人が ok を押す（ADR-0038 の旧い意味）。
+        let next = record_proposal(&env.store, project.id, Some(m1.id), "実験計画", "3 本")
+            .unwrap_or_else(|e| panic!("record: {e}"))
+            .unwrap_or_else(|| panic!("no proposal"));
+        let decided = decide(
+            &env.store,
+            &project,
+            &m1,
+            MilestoneDecision::Ok,
+            Some("この方針で"),
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_or_else(|e| panic!("decide: {e}"));
+        assert_eq!(decided.milestone.status, MilestoneStatus::Reached);
+        assert_eq!(decided.next_milestone.as_ref().map(|m| m.id), Some(next.id));
+        let plan_task_id = decided
+            .plan_task_id
+            .unwrap_or_else(|| panic!("the old ok starts a decomposition plan run"));
+        let plan_task = env
+            .store
+            .get(plan_task_id)
+            .unwrap_or_else(|e| panic!("get: {e}"))
+            .unwrap_or_else(|| panic!("plan task"));
+        assert_eq!(plan_task.kind, task_core::TaskKind::Plan);
+        assert!(!task_core::is_milestones_plan_task(&plan_task));
+        assert_eq!(plan_task.milestone_id, Some(next.id));
+        let next_now = env
+            .store
+            .milestone_get(next.id)
+            .unwrap_or_else(|e| panic!("get: {e}"))
+            .unwrap_or_else(|| panic!("next"));
+        assert_eq!(next_now.status, MilestoneStatus::InProgress);
+        assert!(
+            project_plan::plan_state(&env.store, project.id)
+                .unwrap_or_else(|e| panic!("state: {e}"))
+                .versions
+                .is_empty()
+        );
+    }
+
+    /// ADR-0074 D3.6（Phase F4b）: 案件計画の途中目標への `ng` は `redesigned`（Go は開かない）にし、
+    /// 案件の replan の計画 run（差分を書く run）を起こす。`ok` は `reached` だけ（次の分解 run は無い）。
+    #[test]
+    fn planned_milestone_ok_only_reaches_and_ng_starts_a_project_replan() {
+        let env = Env::new();
+        env.seed_secretary();
+        let project = env.seed_project();
+        let started = project_plan::start_milestones(&env.store, &project, None, &[], &[], now())
+            .unwrap_or_else(|e| panic!("start: {e}"));
+        let spec = |key: &str, deps: &[&str]| task_core::MilestoneSpec {
+            key: key.into(),
+            title: key.into(),
+            objective: "o".into(),
+            reach_criteria: "r".into(),
+            acceptance: vec![task_core::Criterion {
+                text: "ok".into(),
+                check: task_core::Check::Command {
+                    cmd: "true".into(),
+                    expect_exit: 0,
+                },
+            }],
+            depends_on: deps.iter().map(|d| d.to_string()).collect(),
+            genre: None,
+            skills: vec![],
+            repos: vec![],
+            features: None,
+            execution: None,
+            pause_after: None,
+        };
+        let validated = task_core::validate_project_plan(
+            &task_core::ProjectPlanSpec {
+                schema: task_core::PROJECT_PLAN_SCHEMA.into(),
+                rationale: "r".into(),
+                milestones: vec![spec("survey", &[]), spec("poc", &["survey"])],
+            },
+            task_core::ProjectPlanLimits::default(),
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap_or_else(|e| panic!("valid: {e:?}"));
+        project_plan::propose(
+            &env.store,
+            &started.task,
+            &project,
+            &validated,
+            &[],
+            &[],
+            now(),
+        )
+        .unwrap_or_else(|e| panic!("propose: {e}"));
+        project_plan::decide(
+            &env.store,
+            &project,
+            1,
+            project_plan::ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_or_else(|e| panic!("approve: {e}"));
+        let milestones = env
+            .store
+            .milestone_list(project.id)
+            .unwrap_or_else(|e| panic!("list: {e}"));
+        let by_key = |k: &str| {
+            milestones
+                .iter()
+                .find(|m| m.plan_key.as_deref() == Some(k))
+                .cloned()
+                .unwrap_or_else(|| panic!("{k}"))
+        };
+        let (survey, poc) = (by_key("survey"), by_key("poc"));
+
+        let ok = decide(
+            &env.store,
+            &project,
+            &survey,
+            MilestoneDecision::Ok,
+            None,
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_or_else(|e| panic!("ok: {e}"));
+        assert_eq!(ok.milestone.status, MilestoneStatus::Reached);
+        assert_eq!(ok.plan_task_id, None);
+        assert_eq!(ok.next_milestone, None);
+
+        let ng = decide(
+            &env.store,
+            &project,
+            &poc,
+            MilestoneDecision::Ng,
+            Some("PoC の切り方が悪い"),
+            &[],
+            &[],
+            task_core::CONVERSATION_GENRE,
+            now(),
+        )
+        .unwrap_or_else(|e| panic!("ng: {e}"));
+        assert_eq!(ng.milestone.status, MilestoneStatus::Redesigned);
+        let replan = env
+            .store
+            .get(ng.plan_task_id.unwrap_or_else(|| panic!("replan run")))
+            .unwrap_or_else(|e| panic!("get: {e}"))
+            .unwrap_or_else(|| panic!("task"));
+        assert!(task_core::is_milestones_replan_task(&replan));
+        assert!(
+            replan.objective.contains("PoC の切り方が悪い"),
+            "{}",
+            replan.objective
+        );
     }
 
     /// ADR-0038 D1: 提案は 1 件だけ `proposed` で残り、古い提案は `redesigned` に差し替わる。

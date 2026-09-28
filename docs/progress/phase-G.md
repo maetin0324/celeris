@@ -191,3 +191,9 @@ ADR-0075 に「Phase G1 実装時の逸脱・明確化」1〜13 を追記した�
 
 - 人へ: 本番の `config.toml` に `[scratch] dir = "/var/lib/celeris/scratch"` を足す（既定でも build_cache_dir の親から同じ値になるが、明示
   しておくと `build_cache_dir` を動かしたときに pool が動かない）。`mp1` の専用ボリュームを足す判断（ADR-0075 D1）は変わらず人。
+
+## G1 の本番反映（2026-09-28 03:4xZ）と、設定の新セクションが N-1 を壊す件
+
+- 統合 main（G1: scratch pool / semantic GC / watermark / `celerisctl scratch` / metrics / release.sh の lease）。ゲート: fmt 0 / test FAILED 0（2543 件）/ clippy 0 / GUI typecheck・lint・test 1116 件・gen:types 差分ゼロ・build / selfdeploy tests ok。release `10bb975a731a`。
+- verify の N-1（check 5）が false: 本番 config に先に足した `[scratch]` セクションを、旧バイナリ（ba2134a9fcc2）が `unknown field scratch` で拒否して起動できなかった。**設定に新しいセクションを足すのは、それを知るリリースが昇格した後**（さもないと N-1 と rollback が壊れ、旧デーモンの再起動も失敗する）。`[scratch]` を外して再 verify → live_ok → ライブ昇格。scratch は既定の dir（`build_cache_dir` の親 = `/var/lib/celeris/scratch`）で有効。
+- 提案 P-G1-1: ADR-0075 D7 に上の順序を明記し、`release.sh` のゲートに「現行 config を N-1 の版でも parse できるか」を足す（rollback 可能性の確認）。

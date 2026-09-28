@@ -2032,3 +2032,45 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
   不合格 → replan v2（remerge / reship 追加）→ remerge が task ブランチに直接 commit（7725ed6）したため `celeris-wu/<task>/remerge` が無く、
   reship の worktree 準備が「dependency branch of remerge does not exist yet」で 2 秒ごとに失敗し続け、event も無く task が `ready` に見えた（18:58〜19:19Z）。
   人が branch を作って解消。修正は F5-fix7 として委譲（依存 WU のブランチ解決の規則と、準備失敗を blocked + event で見せる）。
+
+## F5-fix8: pegasus の ssh master を長く保ち、無駄な再接続をやめ、切断を数えて知らせる（ADR-0078、2026-09-28）
+
+タスク 01M3MQQ9CQT3Q1NQGKPCT4H0BR（WorkUnit `fix`）。ADR-0078 D1〜D5 の実装（未昇格）。
+
+**変更**（ADR の決定ごと）:
+- D1: master の argv（`start_publickey` / `start_totp`）に `-o ControlPersist=yes`（`persist_args`、`-M -N` の前）。`[[clusters]] control_persist`
+  （既定 `"yes"`、`"yes"` か正の秒数だけ。他は `Config::validate` のエラー）。`scripts/cluster-login.sh` にも `ControlPersist=yes` と keepalive。
+- D2: `crates/celeris/src/control_path.rs`。起動時（verify 以外）に背景スレッドで `ssh -G <host>` を読み、ControlPath の `none`・90 バイト超・
+  親ディレクトリの所有/0700・`XDG_RUNTIME_DIR` 下で Linger 無し・`controlmaster no` を warn、人の `controlpersist` を info で 1 回ずつ。
+- D3: 鍵認証の再接続は totp / manual で切断 1 回につき 1 回、publickey は 6 秒から倍々で 5 分まで。実通信 probe は別スレッドで走らせ tick を
+  塞がない。probe の失敗で `-O exit` しない（片付けフックを削除）。3 回連続で lost。
+- D4: `Dispatcher::set_cluster_connected` を `cluster_connected` の唯一の書き込み口にし、true→false で `ClusterLoginNeeded`（本文に切れた時刻・
+  接続していた時間・推定の理由）を outage ごとに 1 件。publickey は再接続 3 回失敗で `ClusterUnavailable` の報告 1 件。GUI の「クラスタ」画面に
+  直近 24 時間の回数と「最後に切れた時刻（理由）」。
+- D5: log の固定文言 `cluster ssh master connected`（method, attempt）/ `cluster ssh master lost`（cause, uptime_secs, last_tick_gap_ms）/
+  `cluster key-auth reconnect attempt`（ok, backoff_secs）/ `cluster totp prompt relayed`。記録は新しい表 `cluster_connection_log`
+  （migration 0030、**schema 29 → 30**）。`GET /api/v1/clusters` の各クラスタに `stats.last_24h`（DB から）と `stats.since_start`（スナップショット）。
+  Event にしなかった理由は ADR-0078 §7。
+
+**証拠**:
+- 試験（新規）: task-worker `cluster_login::tests`（`ControlPersist=yes` が両経路で `-M` より前 / 設定の秒数・空は付けない /
+  偽 ssh で `a_control_persist_yes_master_survives_a_daemon_restart_gap`〈`-O check` が 1.5 秒途切れても master が残り、新 daemon は借りて
+  master を張り直さない〉と対照の `without_control_persist_yes_the_master_dies_in_the_restart_gap`〈消えるまで読み切ってから判定〉）、
+  celeris `config`（control_persist の既定と検証）・`control_path`（7 件）・`tests/cluster_login_script.rs`（偽 ssh で script の argv）、
+  task-dispatch `dispatcher::tests`（probe 1〜2 回の失敗は接続中・3 回で lost 1 件 / 遅い probe が refresh を塞がない / totp で 100 tick 回しても
+  鍵認証 1 回・通知 1 件、繋ぎ直した後の切断でもう 1 回 / publickey のバックオフ 6→…→300 と 3 回失敗の報告印 / 遷移ごとに lost 1 件・通知 1 件・
+  master_exited も同じ経路 / dispatcher を作り直しても既存 master を `borrowed` で借り connector を呼ばず、DB の回数は同じ）、
+  task-core `store::tests::cluster_connection_log_records_and_lists_since`、GUI `clusters.test.ts`（`clusterConnectionSummary` 2 件）。
+- `cargo test --workspace --no-fail-fast` → exit 0（passed 2674 / failed 0 / ignored 7、99 binaries）。
+  `cargo clippy --workspace -- -D warnings` → 0、`--all-targets` も 0。`cargo fmt --all -- --check` → 0。
+  `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema` で `docs/api/v1/api-v1.schema.json` を再生成、GUI `gen:types` で `types.ts` を再生成。
+  GUI `typecheck` 0 / `test` 0（75 files, 1149 tests）/ biome（変更ファイル）0。
+- pegasus への新規ログインは無し（テストは偽 ssh とフックだけ）。
+
+**未解決・提案**:
+- 本番での確認は人の操作が要る（ADR-0078 §6-6。TOTP 1 回）: 昇格後に GUI で pegasus に 1 回接続 → `systemctl --user restart celeris@<sha>` 1 回と
+  次のライブ切替 1 回を経ても `GET /api/v1/clusters` の pegasus が `connected=true`、`stats.last_24h.connects_totp` が増えず、
+  journal に `cluster ssh master lost` が出ないこと。確認の ssh は `ssh -O check pegasus` だけ。
+- schema 30 に上がるので、昇格後に旧 release へ戻すと `SchemaTooNew` で起動しない（戻すときは backup から）。
+- 人の `~/.ssh/config` の `ControlPersist 10` → `8h`、`ServerAliveInterval 30` の提案は ADR-0078 §4（任意。celeris の master には不要）。
+- 次は release WorkUnit（`scripts/selfdeploy/release.sh` / `verify.sh`）。

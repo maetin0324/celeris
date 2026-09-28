@@ -11,7 +11,7 @@ import {
   submitClusterConnectCode,
 } from "~/celeris/clusters-admin.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
-import type { ClusterForwardView, Clusters, ClusterView } from "~/celeris/types";
+import type { ClusterConnectionStats, ClusterForwardView, Clusters, ClusterView } from "~/celeris/types";
 import { ErrorFlash, FieldErrors } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { RouteRecovery } from "~/components/RouteRecovery";
@@ -155,6 +155,25 @@ export function clusterStatusWord(item: Pick<ClusterView, "connected" | "tunnel_
 }
 
 /**
+ * ADR-0078 D4/D5: ssh 接続の回数を 1 行に（`stats.last_24h`。DB から数えるので daemon の再起動をまたぐ）。
+ * 「最後に切れた」は時刻と推定の理由。回数が全部 0 で切断も無ければ `null`（何も出さない）。
+ */
+export function clusterConnectionSummary(
+  stats: ClusterConnectionStats | null | undefined,
+): { counts: string; lastLost: string | null } | null {
+  if (!stats) return null;
+  const totp = stats.connects_totp ?? 0;
+  const publickey = stats.connects_publickey ?? 0;
+  const borrowed = stats.connects_borrowed ?? 0;
+  const losses = stats.losses ?? 0;
+  const keyAuth = stats.key_auth_attempts ?? 0;
+  if (totp + publickey + borrowed + losses + keyAuth === 0 && !stats.last_lost_at) return null;
+  const counts = `TOTP ${totp} / 鍵 ${publickey} / 借用 ${borrowed} / 切断 ${losses} / 鍵認証の試行 ${keyAuth}`;
+  const lastLost = stats.last_lost_at ? `${stats.last_lost_at}（${stats.last_lost_cause ?? "unknown"}）` : null;
+  return { counts, lastLost };
+}
+
+/**
  * 接続パネルのどの部分を出すかを決める（ADR-0032 D6）。**描画から切り離して単体テストできるようにしてある**:
  * 一度「進行中だと入力欄に戻れなくなる」不具合を実機で出したため（`gui/test/unit/clusters.test.ts`）。
  */
@@ -288,6 +307,8 @@ function ClusterCard({
         </dl>
 
         <ClusterWorkDirSection item={item} fetcher={fetcher} submitting={submitting} />
+
+        <ClusterConnectionStatsRow stats={item.stats?.last_24h} />
 
         {item.tunnel_login_needed && (
           <Alert tone="danger" title="ログインが必要（TOTP）" data-testid="cluster-tunnel-login-needed">
@@ -626,5 +647,18 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       <p className="mt-2 text-sm text-fg-muted">予期しないエラーが起きました。</p>
       <RouteRecovery />
     </main>
+  );
+}
+
+/** ADR-0078 D5: 直近 24 時間の ssh 接続・切断の回数と、最後に切れた時刻・理由（表示の追加だけ）。 */
+function ClusterConnectionStatsRow({ stats }: { stats: ClusterConnectionStats | undefined }) {
+  const summary = clusterConnectionSummary(stats);
+  if (!summary) return null;
+  return (
+    <div className="space-y-1 text-sm text-fg-muted" data-testid="cluster-connection-stats">
+      <p className="font-medium text-fg-muted">ssh 接続（直近 24 時間）</p>
+      <p className="tabular-nums">{summary.counts}</p>
+      {summary.lastLost && <p data-testid="cluster-last-lost">最後に切れた: {summary.lastLost}</p>}
+    </div>
   );
 }

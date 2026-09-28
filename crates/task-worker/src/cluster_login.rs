@@ -322,6 +322,9 @@ fn launch_master_command(
 /// （publickey / totp 両経路）。コマンドラインの `-o` は `~/.ssh/config` より優先されるので、
 /// 人の設定を変えずに効く。sirius のように NAT / ファイアウォールの idle timeout で TCP が黙って
 /// 死ぬホストでも、OS の keepalive プローブが先に切断を検出できるようにする。
+///
+/// ADR-0078 D1: `control_persist` は master の argv に足す `-o ControlPersist=<v>`（既定 `"yes"`、
+/// 空文字なら足さない。publickey / totp 両経路）。
 #[allow(clippy::too_many_arguments)]
 pub async fn start_connect(
     ssh_command: &[String],
@@ -332,6 +335,7 @@ pub async fn start_connect(
     prompt_timeout: Duration,
     connect_timeout: Duration,
     keepalive_secs: u64,
+    control_persist: &str,
 ) -> Result<ClusterConnectStart, ClusterConnectError> {
     if check_master(ssh_command, host).await {
         return Ok(ClusterConnectStart::Connected(None));
@@ -344,6 +348,7 @@ pub async fn start_connect(
             launcher,
             prompt_timeout,
             keepalive_secs,
+            control_persist,
         )
         .await
     } else {
@@ -354,6 +359,7 @@ pub async fn start_connect(
             launcher,
             connect_timeout,
             keepalive_secs,
+            control_persist,
         )
         .await
     }
@@ -371,6 +377,20 @@ fn keepalive_args(keepalive_secs: u64) -> Vec<String> {
         "ServerAliveCountMax=3".to_string(),
         "-o".to_string(),
         "TCPKeepAlive=yes".to_string(),
+    ]
+}
+
+/// ADR-0078 D1: master の argv に足す `-o ControlPersist=<v>`（空文字なら足さない）。
+/// 既定の `"yes"` にすると、最後の client が離れても master は idle で終わらない
+/// （終わるのは明示切断・keepalive による断の検出・相手側の切断だけ）。
+/// コマンドラインの `-o` は `~/.ssh/config` より優先されるので、人の設定を変えずに効く。
+pub fn persist_args(control_persist: &str) -> Vec<String> {
+    if control_persist.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-o".to_string(),
+        format!("ControlPersist={control_persist}"),
     ]
 }
 
@@ -411,6 +431,7 @@ async fn start_publickey(
     launcher: &MasterLauncher,
     connect_timeout: Duration,
     keepalive_secs: u64,
+    control_persist: &str,
 ) -> Result<ClusterConnectStart, ClusterConnectError> {
     let (program, rest) = ssh_command
         .split_first()
@@ -419,6 +440,7 @@ async fn start_publickey(
     args.push("-o".into());
     args.push("BatchMode=yes".into());
     args.extend(keepalive_args(keepalive_secs));
+    args.extend(persist_args(control_persist));
     args.push("-M".into());
     args.push("-N".into());
     args.push(host.to_string());
@@ -453,6 +475,7 @@ async fn start_totp(
     launcher: &MasterLauncher,
     prompt_timeout: Duration,
     keepalive_secs: u64,
+    control_persist: &str,
 ) -> Result<ClusterConnectStart, ClusterConnectError> {
     let dir =
         make_secure_tempdir().map_err(|e| ClusterConnectError::Spawn(format!("tempdir: {e}")))?;
@@ -479,6 +502,7 @@ async fn start_totp(
     };
     let mut args: Vec<String> = rest.to_vec();
     args.extend(keepalive_args(keepalive_secs));
+    args.extend(persist_args(control_persist));
     args.push("-M".into());
     args.push("-N".into());
     args.push(host.to_string());
@@ -853,6 +877,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(2),
             0,
+            "yes",
         )
         .await;
         match result {
@@ -883,6 +908,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await;
         match result {
@@ -925,6 +951,7 @@ mod tests {
             Duration::from_millis(300),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await;
         match result {
@@ -962,6 +989,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1025,6 +1053,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1061,6 +1090,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1094,6 +1124,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1130,6 +1161,7 @@ mod tests {
                 Duration::from_secs(5),
                 Duration::from_secs(5),
                 0,
+                "yes",
             )
             .await
             .unwrap();
@@ -1167,6 +1199,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1199,6 +1232,7 @@ mod tests {
             Duration::from_millis(300),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await;
         assert!(
@@ -1406,6 +1440,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1441,6 +1476,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(5),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1483,6 +1519,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(2),
             15,
+            "yes",
         )
         .await
         .unwrap();
@@ -1512,6 +1549,7 @@ mod tests {
             Duration::from_millis(200),
             Duration::from_secs(2),
             0,
+            "yes",
         )
         .await
         .unwrap();
@@ -1555,6 +1593,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             20,
+            "yes",
         )
         .await
         .unwrap();
@@ -1569,6 +1608,268 @@ mod tests {
         assert!(argv.contains("ServerAliveInterval=20"), "{argv}");
         if let Some(master) = master {
             master.kill().await;
+        }
+    }
+
+    /// ADR-0078 D1: argv 中で `-o ControlPersist=<want>` が `-M` より前にある。
+    fn assert_persist_before_master(argv: &str, want: &str) {
+        let lines: Vec<&str> = argv.lines().collect();
+        let opt = format!("ControlPersist={want}");
+        let opt_at = lines
+            .iter()
+            .position(|l| *l == opt)
+            .unwrap_or_else(|| panic!("{opt} missing: {argv}"));
+        assert_eq!(lines[opt_at - 1], "-o", "{argv}");
+        let m_at = lines
+            .iter()
+            .position(|l| *l == "-M")
+            .unwrap_or_else(|| panic!("-M missing: {argv}"));
+        assert!(opt_at < m_at, "{argv}");
+    }
+
+    #[test]
+    fn persist_args_is_pure() {
+        assert_eq!(persist_args("yes"), vec!["-o", "ControlPersist=yes"]);
+        assert_eq!(persist_args("28800"), vec!["-o", "ControlPersist=28800"]);
+        assert!(persist_args("").is_empty());
+    }
+
+    /// ADR-0078 D1 の偽 ssh: `-M -N` は master を背景に切り離して即座に終わる（本物の `ControlPersist`
+    /// と同じ）。argv に `ControlPersist=yes` が無ければ、人の設定の `ControlPersist 10` を模して「mux の
+    /// クライアント（`-O check`）が 1 秒来ない」と master が自分で終わる。`-O check` は master が生きて
+    /// いれば通り、最後のクライアントの時刻を更新する。`$STATE/master_calls` に master を張った回数を書く。
+    fn persisting_master_script(state: &Path) -> String {
+        format!(
+            "#!/bin/sh\nSTATE={state:?}\n{preamble}\
+             persist=no\n\
+             for a in \"$@\"; do [ \"$a\" = ControlPersist=yes ] && persist=yes; done\n\
+             if [ \"$is_master\" -ge 2 ]; then\n  \
+               echo x >> \"$STATE/master_calls\"\n  \
+               date +%s%N > \"$STATE/last_client\"\n  \
+               STATE=\"$STATE\" PERSIST=$persist nohup sh -c '\
+                 echo $$ > \"$STATE/alive\"; \
+                 while [ ! -f \"$STATE/stop\" ]; do \
+                   if [ \"$PERSIST\" != yes ]; then \
+                     last=$(cat \"$STATE/last_client\"); now=$(date +%s%N); \
+                     if [ $(( (now - last) / 1000000 )) -gt 1000 ]; then break; fi; \
+                   fi; \
+                   sleep 0.05; \
+                 done; \
+                 rm -f \"$STATE/alive\"' </dev/null >/dev/null 2>&1 &\n  \
+               while [ ! -f \"$STATE/alive\" ]; do sleep 0.01; done\n  \
+               exit 0\nfi\n\
+             if [ \"$is_check\" = 1 ]; then\n  \
+               if [ -f \"$STATE/alive\" ] && kill -0 \"$(cat \"$STATE/alive\")\" 2>/dev/null; then\n    \
+                 date +%s%N > \"$STATE/last_client\"; exit 0\n  \
+               fi\n  \
+               exit 1\nfi\n\
+             exit 1\n",
+            preamble = preamble(),
+        )
+    }
+
+    /// `persisting_master_script` の背景の master を止め、消えるまで待つ（テストの後片付け）。
+    fn stop_persisting_master(state: &Path) {
+        let _ = std::fs::write(state.join("stop"), "");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while state.join("alive").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// ADR-0078 D1 / §6: daemon の停止→起動（あるいはリリース切り替え・tick の停止）で `-O check` が
+    /// 途切れても、`ControlPersist=yes` で張った master は残る。新しい daemon の `start_connect` は既存の
+    /// master を見つけて借り（`Connected(None)`）、master を張り直さない（= TOTP を求めない）。
+    #[tokio::test]
+    async fn a_control_persist_yes_master_survives_a_daemon_restart_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let ssh = fake_ssh(dir.path(), "ssh", &persisting_master_script(state.path()));
+        let first = start_connect(
+            &ssh,
+            "cluster-host",
+            "c1",
+            &MasterLauncher::Inline,
+            false,
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+            30,
+            "yes",
+        )
+        .await;
+        assert!(
+            matches!(first, Ok(ClusterConnectStart::Connected(_))),
+            "{first:?}"
+        );
+        // 旧 daemon が止まり、`-O check` が 1.5 秒途切れる（偽の idle 上限 1 秒より長い）。
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        // 新 daemon の最初の `-O check` と接続。
+        let alive = control_master_alive_blocking(&ssh, "cluster-host");
+        let second = start_connect(
+            &ssh,
+            "cluster-host",
+            "c1",
+            &MasterLauncher::Inline,
+            false,
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+            30,
+            "yes",
+        )
+        .await;
+        let master_calls = std::fs::read_to_string(state.path().join("master_calls"))
+            .unwrap_or_default()
+            .lines()
+            .count();
+        stop_persisting_master(state.path());
+        assert!(alive, "the master must survive the gap");
+        assert!(
+            matches!(second, Ok(ClusterConnectStart::Connected(None))),
+            "{second:?}"
+        );
+        assert_eq!(master_calls, 1, "no new master (no TOTP) after the restart");
+    }
+
+    /// 対照（修正前の挙動）: `ControlPersist=yes` を渡さないと、人の設定の短い `ControlPersist` のまま
+    /// `-O check` の途切れで master が消える。消えるまでを読み切ってから判定する（固定の sleep で
+    /// 「消えたはず」と決めない）。
+    #[tokio::test]
+    async fn without_control_persist_yes_the_master_dies_in_the_restart_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let ssh = fake_ssh(dir.path(), "ssh", &persisting_master_script(state.path()));
+        let first = start_connect(
+            &ssh,
+            "cluster-host",
+            "c1",
+            &MasterLauncher::Inline,
+            false,
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+            30,
+            "",
+        )
+        .await;
+        assert!(
+            matches!(first, Ok(ClusterConnectStart::Connected(_))),
+            "{first:?}"
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while state.path().join("alive").exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let gone = !state.path().join("alive").exists();
+        let alive = control_master_alive_blocking(&ssh, "cluster-host");
+        stop_persisting_master(state.path());
+        assert!(gone, "the fake idle limit should have ended the master");
+        assert!(!alive);
+    }
+
+    #[tokio::test]
+    async fn control_persist_yes_is_added_before_m_on_the_publickey_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let ssh = fake_ssh(dir.path(), "ssh", &argv_recording_script(state.path()));
+        let result = start_connect(
+            &ssh,
+            "cluster-host",
+            "c1",
+            &MasterLauncher::Inline,
+            false,
+            Duration::from_millis(200),
+            Duration::from_secs(2),
+            15,
+            "yes",
+        )
+        .await
+        .unwrap();
+        let ClusterConnectStart::Connected(Some(master)) = result else {
+            panic!("expected Connected(Some(_))");
+        };
+        let pid = master.child.id().expect("pid");
+        master.kill().await;
+        wait_until_process_gone(pid).await;
+        let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();
+        assert_persist_before_master(&argv, "yes");
+    }
+
+    #[tokio::test]
+    async fn control_persist_yes_is_added_before_m_on_the_totp_path_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let prompt = "(rmaeda@130.158.241.2) Verification code: ";
+        let script = format!(
+            "#!/bin/sh\nSTATE={state:?}\n{preamble}\
+             if [ \"$is_master\" -ge 2 ]; then\n  \
+               printf '%s\\n' \"$@\" > \"$STATE/argv\"\n  \
+               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               if [ \"$code\" = \"123456\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
+               while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
+             if [ \"$is_check\" = 1 ]; then\n  \
+               if [ -f \"$STATE/authed\" ]; then exit 0; else exit 1; fi\nfi\n\
+             exit 1\n",
+            preamble = preamble(),
+            state = state.path(),
+        );
+        let ssh = fake_ssh(dir.path(), "ssh", &script);
+        let result = start_connect(
+            &ssh,
+            "cluster-host",
+            "c1",
+            &MasterLauncher::Inline,
+            true,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            0,
+            "yes",
+        )
+        .await
+        .unwrap();
+        let ClusterConnectStart::NeedsCode { session, .. } = result else {
+            panic!("expected NeedsCode");
+        };
+        let master = session
+            .submit_code("123456", Duration::from_secs(5))
+            .await
+            .unwrap();
+        let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();
+        assert_persist_before_master(&argv, "yes");
+        if let Some(master) = master {
+            master.kill().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn control_persist_uses_the_configured_seconds_and_empty_omits_it() {
+        for (value, expect_present) in [("28800", true), ("", false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let ssh = fake_ssh(dir.path(), "ssh", &argv_recording_script(state.path()));
+            let result = start_connect(
+                &ssh,
+                "cluster-host",
+                "c1",
+                &MasterLauncher::Inline,
+                false,
+                Duration::from_millis(200),
+                Duration::from_secs(2),
+                0,
+                value,
+            )
+            .await
+            .unwrap();
+            let ClusterConnectStart::Connected(Some(master)) = result else {
+                panic!("expected Connected(Some(_))");
+            };
+            let pid = master.child.id().expect("pid");
+            master.kill().await;
+            wait_until_process_gone(pid).await;
+            let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();
+            if expect_present {
+                assert_persist_before_master(&argv, value);
+            } else {
+                assert!(!argv.contains("ControlPersist"), "{argv}");
+            }
         }
     }
 

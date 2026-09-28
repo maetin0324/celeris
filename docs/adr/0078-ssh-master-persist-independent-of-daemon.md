@@ -173,3 +173,21 @@ ControlPath は今の `/run/user/1001/ssh-mux-…` のままでよい（長さ 5
    その後 `systemctl --user restart celeris@<sha>`（停止→起動）を 1 回と、次のライブ切替 1 回を経ても、`GET /api/v1/clusters` の
    pegasus が `connected=true` のまま、`stats.connects_totp` が増えず、journal に `cluster ssh master lost` が出ないことを確かめる。
    確認に使う ssh は `ssh -O check pegasus`（ローカルの socket を見るだけ）に限る。
+
+## 7. 実装での補足（2026-09-28、WorkUnit `fix`）
+
+実装で次の 3 点を D の文言から具体化した（方針は変えない）。
+
+1. **D5 の「記録」は `events` ではなく新しい表 `cluster_connection_log`（migration 0030、schema 30）に置く**。
+   `Event` は `append_event(task_id, …)` でタスクに紐づけて積む作りで、クラスタの接続・切断はどのタスクにも属さない
+   （idle のときにこそ起きる。観測した 3 回はどれも `in_flight: 0`）。追記だけの表にして、`GET /clusters` の
+   `stats.last_24h` はそこから数える。`ClusterConnected` / `ClusterMasterLost` の Event と `EVENT_TYPES` の変更は行わない。
+   行の `kind` は `connected`（`method` = `totp|publickey|borrowed`）/ `lost`（`cause`、`uptime_secs`）/ `key_auth_attempt`（`cause` = `ok|failed`）。
+2. **D3-3 の「probe の失敗で `connected=false`」は、連続 3 回に達したときにだけ行う**。1〜2 回の失敗は warn の log と数だけにして
+   接続中のまま扱う（D4 の検知点〈true→false の遷移〉を 1 か所に保つため。遅いだけの timeout で dispatch を止めない）。
+   3 回で lost（`cause = probe_failed`）にした後は、`-O check` が通っても probe が 1 回成功するまで接続中に戻さない。
+   `-O exit` の片付けフック（`Dispatcher::set_cluster_disconnector`）は使い道が無くなったので外した。
+3. **D4 の totp の通知**は、forward を持つクラスタでは鍵認証の 1 回の試行が失敗した時点で、forward を持たない
+   （`ensure_cluster_master_for_tunnel` を通らない）クラスタでは true→false の遷移の時点で、`ClusterLoginNeeded` を 1 件出す。
+   `auth = "manual"` は totp と同じ扱い（切断 1 回につき鍵認証 1 回）。`method = totp` は「GUI の接続が終わった直後の
+   false→true」で判定する（`set_cluster_connect_pending(false)` が印を立てる）。

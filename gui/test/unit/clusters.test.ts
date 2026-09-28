@@ -9,6 +9,7 @@ import {
 } from "~/celeris/clusters-admin.server";
 import type { ClusterConnectResult, ClusterConnectStart, ClusterSettingsView, Clusters } from "~/celeris/types";
 import {
+  clusterConnectionSummary,
   clusterConnectPanelState,
   clusterStatusWord,
   clusterWorkDirWord,
@@ -347,6 +348,29 @@ describe("clusterConnectPanelState", () => {
  * `/clusters` のスマホ版 1 語バッジ（ADR-0055 D1-3、Phase 86）: connected / login-needed / down。
  * `tunnel_login_needed` を「down」より優先する（鍵認証も失敗して人の TOTP が要る状態を先に伝える）。
  */
+/** ADR-0078 D5: `stats.last_24h` を 1 行に。何も起きていなければ出さない。 */
+describe("clusterConnectionSummary", () => {
+  it("回数と最後の切断（時刻・理由）を出す", () => {
+    const summary = clusterConnectionSummary({
+      connects_totp: 1,
+      connects_publickey: 0,
+      connects_borrowed: 3,
+      losses: 1,
+      losses_by_cause: { check_failed: 1 },
+      key_auth_attempts: 1,
+      last_lost_at: "2026-09-28T12:13:00Z",
+      last_lost_cause: "check_failed",
+    });
+    expect(summary?.counts).toBe("TOTP 1 / 鍵 0 / 借用 3 / 切断 1 / 鍵認証の試行 1");
+    expect(summary?.lastLost).toBe("2026-09-28T12:13:00Z（check_failed）");
+  });
+
+  it("記録が無ければ null（値を捏造しない）", () => {
+    expect(clusterConnectionSummary(undefined)).toBeNull();
+    expect(clusterConnectionSummary({})).toBeNull();
+  });
+});
+
 describe("clusterStatusWord", () => {
   it("tunnel_login_needed を最優先する（connected が false でも true でも）", () => {
     expect(clusterStatusWord({ connected: false, tunnel_login_needed: true })).toBe("login-needed");

@@ -301,8 +301,77 @@ pub type ClusterCommandProbe = Arc<dyn Fn(&[String], &str, Duration) -> bool + S
 /// ADR-0062 A: 実通信 probe の打ち切りに使うタイムアウト（既定 10 秒）。
 const LIVENESS_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// ADR-0062 A: 死んだ接続の残骸を `ssh -O exit` で片付けるフック。引数は `(cluster_id, host)`。
-pub type ClusterDisconnector = Arc<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
+/// ADR-0078 D3-3: 実通信 probe がこの回数だけ続けて失敗したら、接続を「死んだ」と確定する
+/// （1〜2 回の失敗〈遅いだけの timeout を含む〉では master に触らず、接続中のまま扱う）。
+const LIVENESS_PROBE_FAILURES_TO_LOSE: u32 = 3;
+
+/// ADR-0078 D3-2: `auth = "publickey"` の鍵認証による自動再接続のバックオフの初期値（6 秒）。
+const KEY_AUTH_BACKOFF_MIN: Duration = Duration::from_secs(6);
+/// ADR-0078 D3-2: 同じく上限（5 分）。
+const KEY_AUTH_BACKOFF_MAX: Duration = Duration::from_secs(300);
+/// ADR-0078 D4: publickey のクラスタで、鍵認証の再接続がこの回数だけ続けて失敗したら報告する。
+const KEY_AUTH_FAILURES_TO_REPORT: u32 = 3;
+
+/// ADR-0078 D3-2: 次の鍵認証の再接続までの間隔（純関数）。初回は `KEY_AUTH_BACKOFF_MIN`、以後は倍々で
+/// `KEY_AUTH_BACKOFF_MAX` で頭打ち（6 → 12 → 24 → … → 300 秒）。
+fn next_key_auth_backoff(current: Duration) -> Duration {
+    if current.is_zero() {
+        return KEY_AUTH_BACKOFF_MIN;
+    }
+    current.saturating_mul(2).min(KEY_AUTH_BACKOFF_MAX)
+}
+
+/// ADR-0078 D4/D5: `cluster_connected` を書き換えたきっかけ（遷移の `method` / `cause` を決める）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClusterConnChange {
+    /// `ssh -O check`（`refresh_cluster_liveness`）の結果。
+    Checked,
+    /// 実通信 probe が `LIVENESS_PROBE_FAILURES_TO_LOSE` 回続けて失敗した。
+    ProbeFailed,
+    /// celeris が保持している master（`Child`）が自分で終了した。
+    MasterExited,
+    /// 鍵認証の再接続（`cluster_connector`）が成功した。
+    KeyAuth,
+}
+
+impl ClusterConnChange {
+    fn lost_cause(self) -> &'static str {
+        match self {
+            ClusterConnChange::Checked | ClusterConnChange::KeyAuth => "check_failed",
+            ClusterConnChange::ProbeFailed => "probe_failed",
+            ClusterConnChange::MasterExited => "master_exited",
+        }
+    }
+}
+
+/// ADR-0078: クラスタ 1 つの接続の帳簿（生存の遷移・probe・鍵認証の再接続・回数）。
+#[derive(Debug, Default)]
+struct ClusterConnState {
+    /// 最後に繋がった時刻（切れたら `None`）。`uptime_secs` に使う。
+    connected_since: Option<Instant>,
+    /// D3-3: 実通信 probe の連続失敗の回数。
+    probe_failures: u32,
+    /// D3-3: probe の連続失敗で「死んだ」と確定した。`-O check` が通っても probe が 1 回成功するまで
+    /// 接続中に戻さない。
+    probe_dead: bool,
+    /// D3-4: 別スレッドで走っている実通信 probe の結果の受け口（tick は待たない）。
+    probe_inflight: Option<std::sync::mpsc::Receiver<bool>>,
+    /// D3-1: totp / manual のクラスタで、この切断について鍵認証の再接続を試したか。
+    key_auth_tried: bool,
+    /// D3-2: publickey の現在のバックオフと、次に試してよい時刻。
+    key_auth_backoff: Duration,
+    next_key_auth_at: Option<Instant>,
+    /// D4: publickey の鍵認証の再接続が続けて失敗した回数と、この切断で報告したか。
+    key_auth_failures: u32,
+    unavailable_reported: bool,
+    /// GUI 発の接続（`POST /clusters/{id}/connect`）が終わった直後か（次の false→true の `method` を
+    /// `borrowed` ではなく `auth` の値にする）。
+    gui_connect_finished: bool,
+    /// D4: 最後の切断の説明（通知の本文に使う）。
+    last_lost_detail: Option<String>,
+    /// D5: この daemon の起動以降の回数。
+    stats: task_core::ClusterConnectionStats,
+}
 
 /// ADR-0062 A: celeris が保持している ssh master の終了を検出するフック。呼ぶたびに、その時点で
 /// 新たに終了が確認できた master の一覧を返す（同じ終了を二度返さない契約。本物の実装は
@@ -1963,9 +2032,12 @@ pub struct Dispatcher {
     cluster_command_probe: Option<ClusterCommandProbe>,
     /// ADR-0062 A: クラスタごとに最後に実通信 probe を行った時刻（`liveness_probe_secs` の間引きに使う）。
     last_cluster_command_probe: HashMap<String, Instant>,
-    /// ADR-0062 A: 実通信 probe が失敗した／master が自分で終了したときに `-O exit` で残骸を片付ける
-    /// フック（引数は `(cluster_id, host)`）。`None` なら片付けを試みない。
-    cluster_disconnector: Option<ClusterDisconnector>,
+    /// ADR-0078: クラスタごとの接続の帳簿（遷移・probe・鍵認証の再接続・回数）。
+    cluster_conn: HashMap<String, ClusterConnState>,
+    /// ADR-0078 D5: 直前の tick の開始時刻と、その前の tick との間隔（`cluster ssh master lost` の
+    /// `last_tick_gap_ms`。tick の停止による切断〈ADR-0078 C3〉を見分ける）。
+    last_tick_started: Option<Instant>,
+    last_tick_gap_ms: u64,
     /// ADR-0062 A: 明示的な切断を経ずに接続が失われたクラスタの詳細（exit code・stderr の末尾）。
     /// `mark_cluster_unavailable` が拾って報告に足し、`Event::ClusterMasterExited` を 1 回だけ残す
     /// （`reported`）。接続が戻れば消す。
@@ -2227,7 +2299,9 @@ impl Dispatcher {
             cluster_connector: None,
             cluster_command_probe: None,
             last_cluster_command_probe: HashMap::new(),
-            cluster_disconnector: None,
+            cluster_conn: HashMap::new(),
+            last_tick_started: None,
+            last_tick_gap_ms: 0,
             cluster_disconnect_info: HashMap::new(),
             cluster_master_watcher: None,
             connect_pending_clusters: std::collections::HashSet::new(),
@@ -2526,8 +2600,12 @@ impl Dispatcher {
     pub fn set_cluster_connect_pending(&mut self, id: &str, pending: bool) {
         if pending {
             self.connect_pending_clusters.insert(id.to_string());
-        } else {
-            self.connect_pending_clusters.remove(id);
+        } else if self.connect_pending_clusters.remove(id) {
+            // ADR-0078 D5: 次に繋がったら、それは GUI 発の接続（`method = auth`）として数える。
+            self.cluster_conn
+                .entry(id.to_string())
+                .or_default()
+                .gui_connect_finished = true;
         }
     }
 
@@ -2559,11 +2637,6 @@ impl Dispatcher {
     /// ADR-0062 A（Phase 107）: master 越しの実通信 probe を挿す（celeris 側の配線）。
     pub fn set_cluster_command_probe(&mut self, probe: ClusterCommandProbe) {
         self.cluster_command_probe = Some(probe);
-    }
-
-    /// ADR-0062 A: 死んだ接続を `-O exit` で片付けるフックを挿す（celeris 側の配線）。
-    pub fn set_cluster_disconnector(&mut self, disconnector: ClusterDisconnector) {
-        self.cluster_disconnector = Some(disconnector);
     }
 
     /// ADR-0062 A: celeris が保持している master の終了検出フックを挿す（celeris 側の配線）。
@@ -3034,6 +3107,11 @@ impl Dispatcher {
     /// 1 tick。tokio ランタイム内から呼ぶ（ワーカーとレビューを `tokio::spawn` する）。
     pub fn tick(&mut self) -> Result<TickReport, DispatchError> {
         self.ticks += 1;
+        let tick_started = Instant::now();
+        if let Some(prev) = self.last_tick_started.replace(tick_started) {
+            self.last_tick_gap_ms =
+                u64::try_from(tick_started.duration_since(prev).as_millis()).unwrap_or(u64::MAX);
+        }
         // ADR-0024 D1: 選択のたびに読み直さないよう、スキャンは tick ごとに高々 1 回（このキャッシュを毎 tick 捨てる）。
         self.accounts_scan_cache.clear();
         let now = (self.now_unix_fn)();
@@ -3295,6 +3373,15 @@ impl Dispatcher {
         specs.sort();
         for (id, host, liveness_probe_secs) in specs {
             let mut alive = (self.cluster_liveness_probe)(&ssh_command, &host);
+            let mut change = ClusterConnChange::Checked;
+            if !alive {
+                // `-O check` が落ちた: probe の途中経過は捨てる（次に繋がったら数え直す）。
+                if let Some(state) = self.cluster_conn.get_mut(&id) {
+                    state.probe_failures = 0;
+                    state.probe_dead = false;
+                    state.probe_inflight = None;
+                }
+            }
             // ADR-0062 A（Phase 107）: `-O check` は unix ソケットを見るだけで、NAT / ファイアウォールの
             // idle timeout で TCP が黙って死んでいても「Master running」を返し続ける。master 越しの
             // 実通信（`ssh -o BatchMode=yes <host> -- true`）で定期的に確定させる。
@@ -3302,44 +3389,71 @@ impl Dispatcher {
                 && liveness_probe_secs > 0
                 && let Some(probe) = self.cluster_command_probe.clone()
             {
-                let due = self.last_cluster_command_probe.get(&id).is_none_or(|last| {
-                    now.duration_since(*last) >= Duration::from_secs(liveness_probe_secs)
-                });
+                // ADR-0078 D3-4: probe は別スレッドで走らせ、ここでは終わった結果だけを拾う（tick を
+                // `LIVENESS_PROBE_TIMEOUT` まで塞がない）。
+                if let Some(ok) = self.take_cluster_probe_result(&id) {
+                    let state = self.cluster_conn.entry(id.clone()).or_default();
+                    if ok {
+                        state.probe_failures = 0;
+                        state.probe_dead = false;
+                    } else {
+                        state.probe_failures += 1;
+                        let failures = state.probe_failures;
+                        tracing::warn!(
+                            cluster = %id, %host, failures,
+                            "liveness probe (ssh -- true) failed; the master is kept (ADR-0078 D3-3)"
+                        );
+                        // ADR-0078 D3-3: `-O exit` はしない（遅いだけの timeout で TOTP の要る master を
+                        // 捨てない）。本当に TCP が死んでいれば master は keepalive で自分で終わる。
+                        if failures >= LIVENESS_PROBE_FAILURES_TO_LOSE && !state.probe_dead {
+                            state.probe_dead = true;
+                            self.cluster_disconnect_info.insert(
+                                id.clone(),
+                                ClusterDisconnectInfo {
+                                    exit_code: None,
+                                    detail: format!(
+                                        "liveness probe: `ssh -o BatchMode=yes {host} -- true` failed or timed out {failures} times in a row"
+                                    ),
+                                    reported: false,
+                                },
+                            );
+                        }
+                    }
+                }
+                let state = self.cluster_conn.entry(id.clone()).or_default();
+                if state.probe_dead {
+                    alive = false;
+                    change = ClusterConnChange::ProbeFailed;
+                }
+                let due = state.probe_inflight.is_none()
+                    && self.last_cluster_command_probe.get(&id).is_none_or(|last| {
+                        now.duration_since(*last) >= Duration::from_secs(liveness_probe_secs)
+                    });
                 if due {
                     self.last_cluster_command_probe.insert(id.clone(), now);
+                    let (tx, rx) = std::sync::mpsc::channel();
                     let ssh_command = ssh_command.clone();
                     let host_for_probe = host.clone();
-                    let ok = run_cluster_hooks_off_async(move || {
-                        probe(&ssh_command, &host_for_probe, LIVENESS_PROBE_TIMEOUT)
-                    });
-                    if !ok {
-                        alive = false;
-                        tracing::warn!(
-                            cluster = %id, %host,
-                            "liveness probe (ssh -- true) failed; treating the connection as dead (ADR-0062 A)"
-                        );
-                        self.cluster_disconnect_info.insert(
-                            id.clone(),
-                            ClusterDisconnectInfo {
-                                exit_code: None,
-                                detail: format!(
-                                    "liveness probe: `ssh -o BatchMode=yes {host} -- true` failed or timed out"
-                                ),
-                                reported: false,
-                            },
-                        );
-                        // ADR-0062 A: 死んだ接続の残骸を片付ける（`-O exit`。ベストエフォート）。
-                        if let Some(disconnector) = self.cluster_disconnector.clone() {
-                            let id_for_disconnect = id.clone();
-                            let host_for_disconnect = host.clone();
-                            let _ = run_cluster_hooks_off_async(move || {
-                                disconnector(&id_for_disconnect, &host_for_disconnect)
-                            });
+                    match std::thread::Builder::new()
+                        .name(format!("celeris-cluster-probe-{id}"))
+                        .spawn(move || {
+                            let ok = probe(&ssh_command, &host_for_probe, LIVENESS_PROBE_TIMEOUT);
+                            // 受け手（dispatcher）が先に捨てていれば送れないだけ。
+                            let _ = tx.send(ok);
+                        }) {
+                        Ok(_) => {
+                            self.cluster_conn
+                                .entry(id.clone())
+                                .or_default()
+                                .probe_inflight = Some(rx);
+                        }
+                        Err(e) => {
+                            tracing::warn!(cluster = %id, error = %e, "could not start the liveness probe thread");
                         }
                     }
                 }
             }
-            self.cluster_connected.insert(id.clone(), alive);
+            self.set_cluster_connected(&id, alive, change);
             if alive {
                 // ADR-0062 A: 接続が戻ったら、前回の切断の詳細は捨てる（次に切れたときは新しい詳細で
                 // 1 回だけ報告する）。
@@ -3348,6 +3462,185 @@ impl Dispatcher {
                     tracing::info!(cluster = %id, %host, "ssh ControlMaster connection is back; cluster cooldown cleared");
                 }
             }
+        }
+    }
+
+    /// ADR-0078 D3-4: 別スレッドの実通信 probe が終わっていればその結果を取り出す（まだなら `None`。
+    /// スレッドが結果を送らずに終わった〈panic〉なら失敗として数える）。
+    fn take_cluster_probe_result(&mut self, id: &str) -> Option<bool> {
+        let state = self.cluster_conn.get_mut(id)?;
+        let rx = state.probe_inflight.as_ref()?;
+        let result = match rx.try_recv() {
+            Ok(ok) => ok,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        };
+        state.probe_inflight = None;
+        Some(result)
+    }
+
+    /// ADR-0078 D4/D5: `cluster_connected` の書き換えはすべてここを通す。true→false（切断）と
+    /// false→true（接続）の遷移を 1 か所で拾い、log（固定の文言と構造化フィールド。journal で数えられる）・
+    /// `cluster_connection_log`（daemon の再起動をまたいで数える）・起動以降の回数に残す。切断では
+    /// 人への通知も出す（totp で鍵認証の出番が無いときはここで、ある場合は鍵認証が失敗したときに
+    /// `ensure_cluster_master_for_tunnel` が出す）。同じ値の書き込み（false のままの tick 等）では何もしない。
+    fn set_cluster_connected(&mut self, id: &str, alive: bool, change: ClusterConnChange) {
+        let was = self
+            .cluster_connected
+            .insert(id.to_string(), alive)
+            .unwrap_or(false);
+        if was == alive {
+            return;
+        }
+        let spec = self.config.clusters.get(id).cloned();
+        let host = spec.as_ref().map(|s| s.host.clone()).unwrap_or_default();
+        let auth = spec.as_ref().map(|s| s.auth.clone()).unwrap_or_default();
+        let now = OffsetDateTime::now_utc();
+        let last_tick_gap_ms = self.last_tick_gap_ms;
+        let state = self.cluster_conn.entry(id.to_string()).or_default();
+        let record = if alive {
+            let method = if change == ClusterConnChange::KeyAuth {
+                "publickey"
+            } else if std::mem::take(&mut state.gui_connect_finished) {
+                if auth == "totp" { "totp" } else { "publickey" }
+            } else {
+                "borrowed"
+            };
+            state.connected_since = Some(Instant::now());
+            state.probe_failures = 0;
+            state.probe_dead = false;
+            state.key_auth_tried = false;
+            state.key_auth_backoff = Duration::ZERO;
+            state.next_key_auth_at = None;
+            state.key_auth_failures = 0;
+            state.unavailable_reported = false;
+            let record = task_core::ClusterConnectionRecord {
+                cluster_id: id.to_string(),
+                kind: "connected".into(),
+                method: Some(method.into()),
+                cause: None,
+                uptime_secs: None,
+                at: now,
+            };
+            state.stats.add(&record);
+            let attempt = state.stats.connects_totp
+                + state.stats.connects_publickey
+                + state.stats.connects_borrowed;
+            tracing::info!(cluster = %id, %host, method, attempt, "cluster ssh master connected");
+            record
+        } else {
+            let cause = change.lost_cause();
+            let uptime_secs = state.connected_since.take().map(|t| t.elapsed().as_secs());
+            tracing::warn!(
+                cluster = %id, %host, cause, uptime_secs = ?uptime_secs, last_tick_gap_ms,
+                "cluster ssh master lost"
+            );
+            let at = now.format(&Rfc3339).unwrap_or_default();
+            let uptime = uptime_secs
+                .map(|s| format!("{s} 秒"))
+                .unwrap_or_else(|| "不明".to_string());
+            state.last_lost_detail = Some(format!(
+                "切れた時刻: {at}（接続していた時間: {uptime}、推定の理由: {cause}）"
+            ));
+            let record = task_core::ClusterConnectionRecord {
+                cluster_id: id.to_string(),
+                kind: "lost".into(),
+                method: None,
+                cause: Some(cause.into()),
+                uptime_secs,
+                at: now,
+            };
+            state.stats.add(&record);
+            record
+        };
+        if let Err(e) = self.store.cluster_connection_record(&record) {
+            tracing::warn!(cluster = %id, error = %e, "failed to record the cluster connection change");
+        }
+        if alive {
+            // 繋がったら「ログインが要る」は解く（forward の無いクラスタは `ensure_cluster_master_for_tunnel`
+            // を通らないので、ここで解かないと次の切断を知らせられない）。
+            self.clear_login_needed(id);
+        }
+        // ADR-0078 D4: totp / manual のクラスタで、鍵認証の再接続の出番が無い（forward が無いので
+        // `ensure_cluster_master_for_tunnel` を通らない、または接続フックが無い）なら、ここで人に知らせる。
+        if !alive
+            && let Some(spec) = spec
+            && spec.auth != "publickey"
+            && (spec.forwards.is_empty() || self.cluster_connector.is_none())
+        {
+            self.mark_login_needed(&spec);
+        }
+    }
+
+    /// ADR-0078 D3: 今、このクラスタで鍵認証の再接続を試してよいか。totp / manual は切断 1 回につき
+    /// 1 回だけ（ADR-0032 §3）、publickey は指数バックオフ。
+    fn key_auth_allowed(&self, spec: &ClusterSpec) -> bool {
+        let Some(state) = self.cluster_conn.get(&spec.id) else {
+            return true;
+        };
+        if spec.auth == "publickey" {
+            state
+                .next_key_auth_at
+                .is_none_or(|at| self.monotonic_now() >= at)
+        } else {
+            !state.key_auth_tried
+        }
+    }
+
+    /// ADR-0078 D3/D5: 鍵認証の再接続を 1 回試した結果を帳簿・log・`cluster_connection_log` に残す。
+    fn note_key_auth_attempt(&mut self, spec: &ClusterSpec, ok: bool) {
+        let now_instant = self.monotonic_now();
+        let state = self.cluster_conn.entry(spec.id.clone()).or_default();
+        state.key_auth_tried = true;
+        if ok {
+            state.key_auth_backoff = Duration::ZERO;
+            state.next_key_auth_at = None;
+            state.key_auth_failures = 0;
+        } else if spec.auth == "publickey" {
+            state.key_auth_backoff = next_key_auth_backoff(state.key_auth_backoff);
+            state.next_key_auth_at = Some(now_instant + state.key_auth_backoff);
+            state.key_auth_failures += 1;
+        }
+        let backoff_secs = state.key_auth_backoff.as_secs();
+        let record = task_core::ClusterConnectionRecord {
+            cluster_id: spec.id.clone(),
+            kind: "key_auth_attempt".into(),
+            method: None,
+            cause: Some(if ok { "ok" } else { "failed" }.into()),
+            uptime_secs: None,
+            at: OffsetDateTime::now_utc(),
+        };
+        state.stats.add(&record);
+        tracing::info!(cluster = %spec.id, ok, backoff_secs, "cluster key-auth reconnect attempt");
+        if let Err(e) = self.store.cluster_connection_record(&record) {
+            tracing::warn!(cluster = %spec.id, error = %e, "failed to record the cluster key-auth attempt");
+        }
+    }
+
+    /// ADR-0078 D4: publickey のクラスタで鍵認証の再接続が `KEY_AUTH_FAILURES_TO_REPORT` 回続けて
+    /// 失敗したら、`ClusterUnavailable` の報告を切断 1 回につき 1 件だけ出す。
+    fn maybe_report_publickey_outage(&mut self, spec: &ClusterSpec) {
+        let Some(state) = self.cluster_conn.get_mut(&spec.id) else {
+            return;
+        };
+        if state.unavailable_reported || state.key_auth_failures < KEY_AUTH_FAILURES_TO_REPORT {
+            return;
+        }
+        state.unavailable_reported = true;
+        let reason = format!(
+            "鍵認証による再接続が {} 回続けて失敗しました。{}",
+            state.key_auth_failures,
+            state.last_lost_detail.clone().unwrap_or_default()
+        );
+        if let Err(e) = crate::reports::record_cluster_unavailable_report(
+            self.store.as_ref(),
+            &spec.id,
+            &spec.host,
+            &reason,
+            None,
+            OffsetDateTime::now_utc(),
+        ) {
+            tracing::warn!(cluster = %spec.id, error = %e, "failed to record the cluster report");
         }
     }
 
@@ -3363,7 +3656,7 @@ impl Dispatcher {
             return;
         };
         for exit in watcher() {
-            self.cluster_connected.insert(exit.cluster.clone(), false);
+            self.set_cluster_connected(&exit.cluster, false, ClusterConnChange::MasterExited);
             tracing::warn!(
                 cluster = %exit.cluster, exit_code = ?exit.exit_code,
                 "cluster ssh master exited on its own (ADR-0062 A)"
@@ -3455,19 +3748,30 @@ impl Dispatcher {
             self.clear_login_needed(&spec.id);
             return true;
         }
-        if let Some(connector) = self.cluster_connector.clone() {
-            match connector(&spec.id, &spec.host) {
+        // ADR-0078 D3-1/D3-2: 鍵認証の再接続は、totp / manual なら切断 1 回につき 1 回だけ、publickey は
+        // 指数バックオフで試す（以前は約 6 秒ごとに試し、TOTP が要る pegasus では 2 日で 7,461 回失敗した）。
+        if let Some(connector) = self.cluster_connector.clone()
+            && self.key_auth_allowed(spec)
+        {
+            let result = connector(&spec.id, &spec.host);
+            self.note_key_auth_attempt(spec, result.is_ok());
+            match result {
                 Ok(()) => {
-                    self.cluster_connected.insert(spec.id.clone(), true);
+                    self.set_cluster_connected(&spec.id, true, ClusterConnChange::KeyAuth);
                     self.cluster_cooldown.remove(&spec.id);
                     self.clear_login_needed(&spec.id);
                     tracing::info!(cluster = %spec.id, host = %spec.host, "tunnel: key auth reconnected the ssh master");
                     return true;
                 }
                 Err(detail) => {
-                    tracing::debug!(cluster = %spec.id, host = %spec.host, %detail, "tunnel: key auth did not reconnect; a TOTP login is needed");
+                    tracing::debug!(cluster = %spec.id, host = %spec.host, %detail, "tunnel: key auth did not reconnect");
                 }
             }
+        }
+        if spec.auth == "publickey" {
+            // ADR-0078 D4: publickey は TOTP を求めない。続けて失敗したときだけ報告する。
+            self.maybe_report_publickey_outage(spec);
+            return false;
         }
         self.mark_login_needed(spec);
         false
@@ -3486,10 +3790,15 @@ impl Dispatcher {
         }
         let now = OffsetDateTime::now_utc();
         self.push_tunnel_event(&spec.id, "", TunnelEventKind::LoginNeeded, now);
+        let detail = self
+            .cluster_conn
+            .get(&spec.id)
+            .and_then(|s| s.last_lost_detail.clone());
         if let Err(e) = crate::reports::record_cluster_login_needed_report(
             self.store.as_ref(),
             &spec.id,
             &spec.host,
+            detail.as_deref(),
             now,
         ) {
             tracing::warn!(cluster = %spec.id, error = %e, "failed to record the cluster login-needed report");
@@ -3788,6 +4097,11 @@ impl Dispatcher {
                 connect_pending: self.connect_pending_clusters.contains(&spec.id),
                 // ADR-0053 D3（Phase 66）: トンネル（forward）の生存。`forwards` が無いクラスタは空。
                 tunnel_login_needed: self.cluster_login_needed.contains(&spec.id),
+                connection_stats: self
+                    .cluster_conn
+                    .get(&spec.id)
+                    .map(|c| c.stats.clone())
+                    .unwrap_or_default(),
                 tunnel_forwards: spec
                     .forwards
                     .iter()
@@ -10565,9 +10879,13 @@ impl Dispatcher {
                 // 1 回だけ接続を試みる（cooldown 中はここに来ないので、tick ごとに ssh は湧かない。
                 // 同じ tick の別タスクが同じクラスタを指していても、成功時は `cluster_connected` の
                 // キャッシュが true になり、失敗時は下で cooldown が立つので、2 本目は走らない）。
-                match self.try_auto_connect_cluster(&spec) {
+                let attempt = self.try_auto_connect_cluster(&spec);
+                if let Some(result) = &attempt {
+                    self.note_key_auth_attempt(&spec, result.is_ok());
+                }
+                match attempt {
                     Some(Ok(())) => {
-                        self.cluster_connected.insert(spec.id.clone(), true);
+                        self.set_cluster_connected(&spec.id, true, ClusterConnChange::KeyAuth);
                     }
                     Some(Err(detail)) => {
                         self.mark_cluster_unavailable(
@@ -19399,12 +19717,9 @@ mod tests {
         assert_eq!(exits_again, 1, "{events_again:?}");
     }
 
-    /// ADR-0062 A（Phase 107）: `-O check` は生きている（unix ソケットはある）が、master 越しの実通信
-    /// probe（`ssh -- true`）が失敗するとき、`refresh_cluster_liveness` は接続を死んだと判定し、
-    /// `-O exit` の片付けフック（`cluster_disconnector`）を 1 回呼ぶ。
-    #[test]
-    fn a_failing_command_probe_marks_the_connection_dead_and_cleans_up() {
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    // ---- ADR-0078: 接続の維持・再接続の抑制・切断の通知と回数（偽のフックで決定的に） ----
+
+    fn instant_done_dispatcher(store: Arc<dyn TaskStore>) -> Dispatcher {
         let adapter = Arc::new(InstantAdapter {
             terminal: Terminal::Done {
                 summary: "ok".into(),
@@ -19413,40 +19728,403 @@ mod tests {
             },
             delay: Duration::ZERO,
         });
-        let mut d = dispatcher(store, adapter, 1);
+        dispatcher(store, adapter, 1)
+    }
+
+    /// `refresh_cluster_liveness` を 1 巡させる: 間引きを外して呼び、別スレッドの実通信 probe が
+    /// 始まったら、その結果を拾い終わるまで呼び続ける（SIGSTOP stutter の教訓: 固定の sleep で待たず、
+    /// 結果を読み切ってから判定する）。
+    fn liveness_round(d: &mut Dispatcher, id: &str) {
+        d.last_cluster_liveness = None;
+        d.last_cluster_command_probe.clear();
+        d.refresh_cluster_liveness();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while d
+            .cluster_conn
+            .get(id)
+            .is_some_and(|s| s.probe_inflight.is_some())
+        {
+            assert!(
+                Instant::now() < deadline,
+                "the liveness probe did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+            d.last_cluster_liveness = None;
+            d.refresh_cluster_liveness();
+        }
+    }
+
+    fn connection_log(store: &Arc<dyn TaskStore>) -> Vec<task_core::ClusterConnectionRecord> {
+        store
+            .cluster_connection_list_since(OffsetDateTime::UNIX_EPOCH)
+            .unwrap()
+    }
+
+    /// ADR-0078 D3-3（ADR-0062 D2 を改める）: 実通信 probe が 1〜2 回失敗しても接続中のまま（`-O exit`
+    /// の片付けフックはもう無い）。3 回続けて初めて「lost（probe_failed）」になり、その後も失敗が続く間は
+    /// 数を増やさない。probe が 1 回成功すれば接続に戻る。
+    #[test]
+    fn probe_failures_keep_the_master_until_three_in_a_row() {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut d = instant_done_dispatcher(store.clone());
         let mut spec = cluster_spec_with_auth("sirius", "sirius", "manual");
         spec.liveness_probe_secs = 30;
         d.config.clusters.insert("sirius".into(), spec);
-        // `-O check` は常に成功（unix ソケットはある）。
         d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
-        // 実通信 probe は失敗（NAT の idle timeout で TCP が黙って死んでいる、を模す）。
+        let probe_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe_calls = Arc::new(AtomicUsize::new(0));
+        let (ok_hook, calls_hook) = (probe_ok.clone(), probe_calls.clone());
         d.set_cluster_command_probe(Arc::new(
-            |_ssh_command: &[String], _host: &str, _timeout: Duration| false,
+            move |_ssh_command: &[String], _host: &str, _timeout: Duration| {
+                calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                ok_hook.load(std::sync::atomic::Ordering::SeqCst)
+            },
         ));
-        let disconnect_calls = Arc::new(AtomicUsize::new(0));
-        let calls = disconnect_calls.clone();
-        d.set_cluster_disconnector(Arc::new(move |_id: &str, _host: &str| {
-            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }));
 
-        d.refresh_cluster_liveness();
-        assert_eq!(
-            d.cluster_connected.get("sirius"),
-            Some(&false),
-            "実通信 probe が失敗したら死んだ扱いにする"
-        );
-        assert_eq!(
-            disconnect_calls.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "-O exit で片付ける"
-        );
+        for round in 1..=2 {
+            liveness_round(&mut d, "sirius");
+            assert_eq!(
+                d.cluster_connected.get("sirius"),
+                Some(&true),
+                "round {round}: 1〜2 回の失敗では接続中のまま"
+            );
+        }
+        liveness_round(&mut d, "sirius");
+        assert_eq!(d.cluster_connected.get("sirius"), Some(&false));
         assert!(
             d.cluster_disconnect_info
                 .get("sirius")
-                .is_some_and(|info| info.detail.contains("liveness probe")),
+                .is_some_and(|info| info.detail.contains("3 times in a row")),
             "{:?}",
             d.cluster_disconnect_info
+        );
+        liveness_round(&mut d, "sirius");
+        assert_eq!(d.cluster_connected.get("sirius"), Some(&false));
+        assert_eq!(probe_calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+        let log = connection_log(&store);
+        let kinds: Vec<(&str, Option<&str>)> = log
+            .iter()
+            .map(|r| (r.kind.as_str(), r.cause.as_deref().or(r.method.as_deref())))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("connected", Some("borrowed")),
+                ("lost", Some("probe_failed"))
+            ]
+        );
+
+        probe_ok.store(true, std::sync::atomic::Ordering::SeqCst);
+        liveness_round(&mut d, "sirius");
+        // この巡の頭ではまだ `probe_dead`（結果を拾う前）なので false のまま。結果を拾った次の巡で戻る。
+        liveness_round(&mut d, "sirius");
+        assert_eq!(d.cluster_connected.get("sirius"), Some(&true));
+        let stats = &d.cluster_conn["sirius"].stats;
+        assert_eq!(stats.losses, 1);
+        assert_eq!(stats.losses_by_cause.get("probe_failed"), Some(&1));
+        assert_eq!(stats.connects_borrowed, 2);
+    }
+
+    /// ADR-0078 D3-4: 実通信 probe は tick を塞がない（probe が眠っていても `refresh_cluster_liveness`
+    /// はすぐ戻り、結果は後の tick で拾う）。
+    #[test]
+    fn a_slow_probe_does_not_block_the_liveness_refresh() {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut d = instant_done_dispatcher(store);
+        let mut spec = cluster_spec_with_auth("sirius", "sirius", "manual");
+        spec.liveness_probe_secs = 30;
+        d.config.clusters.insert("sirius".into(), spec);
+        d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let release_hook = release.clone();
+        d.set_cluster_command_probe(Arc::new(
+            move |_ssh_command: &[String], _host: &str, _timeout: Duration| {
+                // 放されるまで（最大 10 秒）眠る = timeout 寸前まで返らない遅い probe。
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !release_hook.load(std::sync::atomic::Ordering::SeqCst)
+                    && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                true
+            },
+        ));
+        let started = Instant::now();
+        d.refresh_cluster_liveness();
+        d.last_cluster_liveness = None;
+        d.refresh_cluster_liveness();
+        let elapsed = started.elapsed();
+        // probe はまだ走っている（結果を拾っていない）ことを先に確かめてから時間を判定する。
+        assert!(d.cluster_conn["sirius"].probe_inflight.is_some());
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "refresh waited for the probe: {elapsed:?}"
+        );
+        assert_eq!(d.cluster_connected.get("sirius"), Some(&true));
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        liveness_round(&mut d, "sirius");
+        assert!(d.cluster_conn["sirius"].probe_inflight.is_none());
+    }
+
+    /// ADR-0078 D3-1 / D4: totp のクラスタでは、鍵認証の再接続は切断 1 回につき 1 回だけ。`-O check` が
+    /// false のまま 100 tick 回しても connector は 1 回、「ログインが要る」の通知も 1 件。人が繋ぎ直して
+    /// から再び切れたら、そこでもう 1 回だけ試す。
+    #[test]
+    fn totp_key_auth_reconnect_is_tried_once_per_outage() {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut d = instant_done_dispatcher(store.clone());
+        d.config.clusters.insert(
+            "pegasus".into(),
+            cluster_spec_with_forward(
+                "pegasus",
+                "pegasus",
+                "totp",
+                "127.0.0.1:19001",
+                "bnode150:19001",
+            ),
+        );
+        let master_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let up_hook = master_up.clone();
+        d.set_cluster_liveness_probe(Arc::new(move |_ssh_command: &[String], _host: &str| {
+            up_hook.load(std::sync::atomic::Ordering::SeqCst)
+        }));
+        let connector_calls = Arc::new(AtomicUsize::new(0));
+        let calls_hook = connector_calls.clone();
+        d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+            calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("Permission denied (keyboard-interactive)".to_string())
+        }));
+        let run_ticks = |d: &mut Dispatcher, n: usize| {
+            for _ in 0..n {
+                d.last_cluster_liveness = None;
+                d.last_cluster_tunnel_refresh = None;
+                d.refresh_cluster_liveness();
+                d.refresh_cluster_tunnels();
+            }
+        };
+        let login_needed_events = |d: &mut Dispatcher| {
+            d.take_tunnel_events()
+                .iter()
+                .filter(|e| e.kind == TunnelEventKind::LoginNeeded)
+                .count()
+        };
+
+        run_ticks(&mut d, 100);
+        assert_eq!(connector_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(login_needed_events(&mut d), 1);
+        assert_eq!(d.clusters_needing_login(), vec!["pegasus".to_string()]);
+
+        // 人が GUI で TOTP を入れて繋いだ。
+        d.set_cluster_connect_pending("pegasus", true);
+        d.set_cluster_connect_pending("pegasus", false);
+        master_up.store(true, std::sync::atomic::Ordering::SeqCst);
+        run_ticks(&mut d, 3);
+        assert!(d.clusters_needing_login().is_empty());
+        // 再び切れた: 鍵認証はもう 1 回だけ、通知ももう 1 件だけ。
+        master_up.store(false, std::sync::atomic::Ordering::SeqCst);
+        run_ticks(&mut d, 100);
+        assert_eq!(connector_calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(login_needed_events(&mut d), 1);
+
+        let log = connection_log(&store);
+        let summary: Vec<(&str, Option<&str>)> = log
+            .iter()
+            .map(|r| (r.kind.as_str(), r.method.as_deref().or(r.cause.as_deref())))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("key_auth_attempt", Some("failed")),
+                ("connected", Some("totp")),
+                ("lost", Some("check_failed")),
+                ("key_auth_attempt", Some("failed")),
+            ]
+        );
+        let stats = &d.cluster_conn["pegasus"].stats;
+        assert_eq!(
+            (stats.connects_totp, stats.losses, stats.key_auth_attempts),
+            (1, 1, 2)
+        );
+        assert_eq!(stats.last_lost_cause.as_deref(), Some("check_failed"));
+    }
+
+    /// ADR-0078 D3-2: publickey のクラスタの鍵認証の再接続は 6 秒から倍々で 5 分に頭打ち。間隔の間は
+    /// 呼ばない。3 回続けて失敗したら報告済みの印が立つ（切断 1 回につき 1 回）。
+    #[test]
+    fn publickey_key_auth_reconnect_backs_off_up_to_five_minutes() {
+        let mut secs = Vec::new();
+        let mut current = Duration::ZERO;
+        for _ in 0..8 {
+            current = next_key_auth_backoff(current);
+            secs.push(current.as_secs());
+        }
+        assert_eq!(secs, vec![6, 12, 24, 48, 96, 192, 300, 300]);
+
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut d = instant_done_dispatcher(store);
+        let spec = cluster_spec_with_forward(
+            "fern03",
+            "fern03",
+            "publickey",
+            "127.0.0.1:19002",
+            "localhost:8000",
+        );
+        d.config.clusters.insert("fern03".into(), spec.clone());
+        d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| false));
+        let connector_calls = Arc::new(AtomicUsize::new(0));
+        let calls_hook = connector_calls.clone();
+        d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+            calls_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("Connection timed out".to_string())
+        }));
+        for _ in 0..50 {
+            assert!(!d.ensure_cluster_master_for_tunnel(&spec));
+        }
+        assert_eq!(
+            connector_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "バックオフの間は呼ばない"
+        );
+        assert_eq!(
+            d.cluster_conn["fern03"].key_auth_backoff,
+            Duration::from_secs(6)
+        );
+        // 期限が来たことにして、さらに 2 回失敗させる。
+        for _ in 0..2 {
+            d.cluster_conn.get_mut("fern03").unwrap().next_key_auth_at = None;
+            assert!(!d.ensure_cluster_master_for_tunnel(&spec));
+        }
+        let state = &d.cluster_conn["fern03"];
+        assert_eq!(state.key_auth_backoff, Duration::from_secs(24));
+        assert_eq!(state.key_auth_failures, 3);
+        assert!(state.unavailable_reported);
+        assert!(
+            d.clusters_needing_login().is_empty(),
+            "publickey は TOTP を求めない"
+        );
+    }
+
+    /// ADR-0078 D4/D5: true→false の遷移 1 回につき lost の記録 1 件・通知 1 件。false のままの tick では
+    /// 増えない。totp で forward が無い（鍵認証の出番が無い）クラスタは、遷移の時点で「ログインが要る」を
+    /// 1 件出し、本文に切れた時刻と理由を書く。
+    #[test]
+    fn a_lost_master_is_recorded_and_notified_once_per_transition() {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut d = instant_done_dispatcher(store.clone());
+        d.config.clusters.insert(
+            "pegasus".into(),
+            cluster_spec_with_auth("pegasus", "pegasus", "totp"),
+        );
+        let master_up = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let up_hook = master_up.clone();
+        d.set_cluster_liveness_probe(Arc::new(move |_ssh_command: &[String], _host: &str| {
+            up_hook.load(std::sync::atomic::Ordering::SeqCst)
+        }));
+        let tick_liveness = |d: &mut Dispatcher| {
+            d.last_cluster_liveness = None;
+            d.refresh_cluster_liveness();
+        };
+        tick_liveness(&mut d);
+        tick_liveness(&mut d);
+        master_up.store(false, std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..10 {
+            tick_liveness(&mut d);
+        }
+        let log = connection_log(&store);
+        assert_eq!(log.len(), 2, "{log:?}");
+        assert_eq!(log[0].method.as_deref(), Some("borrowed"));
+        assert_eq!(log[1].kind, "lost");
+        assert_eq!(log[1].cause.as_deref(), Some("check_failed"));
+        assert!(log[1].uptime_secs.is_some());
+        let login_needed: Vec<_> = d
+            .take_tunnel_events()
+            .into_iter()
+            .filter(|e| e.kind == TunnelEventKind::LoginNeeded)
+            .collect();
+        assert_eq!(login_needed.len(), 1);
+        let detail = d.cluster_conn["pegasus"]
+            .last_lost_detail
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            detail.contains("切れた時刻") && detail.contains("check_failed"),
+            "{detail}"
+        );
+        // master の終了（celeris が抱えた子）でも同じ経路で数える。
+        master_up.store(true, std::sync::atomic::Ordering::SeqCst);
+        tick_liveness(&mut d);
+        d.set_cluster_master_watcher(Arc::new(|| {
+            vec![ClusterMasterExit {
+                cluster: "pegasus".into(),
+                exit_code: Some(255),
+                stderr_tail: "Broken pipe".into(),
+            }]
+        }));
+        d.refresh_cluster_master_exits();
+        let stats = &d.cluster_conn["pegasus"].stats;
+        assert_eq!(stats.losses, 2);
+        assert_eq!(stats.losses_by_cause.get("master_exited"), Some(&1));
+        assert_eq!(stats.connects_borrowed, 2);
+    }
+
+    /// ADR-0078 D1/D5: daemon の再起動を模す。前の dispatcher が繋いでいた master は（`ControlPersist=yes`
+    /// で）残っているので、作り直した dispatcher は最初の `-O check` でそれを見つけ `borrowed` として
+    /// 数え、鍵認証も TOTP も求めない。直近 24 時間の回数（DB から数える）は再起動をまたいで同じ。
+    #[test]
+    fn a_restarted_dispatcher_borrows_the_surviving_master_and_keeps_the_counts() {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let connector_calls = Arc::new(AtomicUsize::new(0));
+        let make = |store: Arc<dyn TaskStore>, calls: Arc<AtomicUsize>| {
+            let mut d = instant_done_dispatcher(store);
+            d.config.clusters.insert(
+                "pegasus".into(),
+                cluster_spec_with_forward(
+                    "pegasus",
+                    "pegasus",
+                    "totp",
+                    "127.0.0.1:19001",
+                    "bnode150:19001",
+                ),
+            );
+            // master は生き続けている（ControlPersist=yes。celeris の停止と無関係）。
+            d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
+            d.set_cluster_connector(Arc::new(move |_id: &str, _host: &str| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err("must not be called".to_string())
+            }));
+            d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
+            d.set_tunnel_probe(Arc::new(|_listen: &str| Ok(())));
+            d
+        };
+        let mut before = make(store.clone(), connector_calls.clone());
+        before.set_cluster_connect_pending("pegasus", true);
+        before.set_cluster_connect_pending("pegasus", false);
+        before.refresh_cluster_liveness();
+        before.refresh_cluster_tunnels();
+        let counts_before =
+            task_core::ClusterConnectionStats::from_records(&connection_log(&store), "pegasus");
+        assert_eq!(counts_before.connects_totp, 1);
+        drop(before);
+
+        let mut after = make(store.clone(), connector_calls.clone());
+        for _ in 0..5 {
+            after.last_cluster_liveness = None;
+            after.last_cluster_tunnel_refresh = None;
+            after.refresh_cluster_liveness();
+            after.refresh_cluster_tunnels();
+        }
+        assert_eq!(after.cluster_connected.get("pegasus"), Some(&true));
+        assert!(after.clusters_needing_login().is_empty());
+        assert_eq!(connector_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let counts_after =
+            task_core::ClusterConnectionStats::from_records(&connection_log(&store), "pegasus");
+        assert_eq!(counts_after.connects_totp, 1, "TOTP は増えない");
+        assert_eq!(counts_after.connects_borrowed, 1);
+        assert_eq!(counts_after.losses, 0);
+        let since_start = &after.cluster_conn["pegasus"].stats;
+        assert_eq!(
+            (since_start.connects_totp, since_start.connects_borrowed),
+            (0, 1)
         );
     }
 

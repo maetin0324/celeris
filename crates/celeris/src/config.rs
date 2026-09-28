@@ -1288,6 +1288,11 @@ pub struct ClusterConfig {
     /// 既定 300 秒、`0` で無効。
     #[serde(default = "default_liveness_probe_secs")]
     pub liveness_probe_secs: u64,
+    /// ADR-0078 D1: master の argv に足す `-o ControlPersist=<v>`。既定 `"yes"`（idle で終わらない）。
+    /// `"yes"` か正の秒数（例 `"28800"`）だけを受ける（それ以外は `Config::validate` のエラー）。
+    /// 既定を変える運用は想定しない（逃げ道）。
+    #[serde(default = "default_control_persist")]
+    pub control_persist: String,
 }
 
 /// `[[clusters.forwards]]`（ADR-0053 D3）: 1 本の port forward。
@@ -1335,6 +1340,9 @@ fn default_master_launcher() -> String {
 }
 fn default_keepalive_secs() -> u64 {
     30
+}
+fn default_control_persist() -> String {
+    "yes".to_string()
 }
 fn default_liveness_probe_secs() -> u64 {
     300
@@ -2788,6 +2796,17 @@ impl Config {
                 return Err(ConfigError::Invalid(format!(
                     "[[clusters]] {}: master_launcher must be \"auto\", \"systemd-run\" or \"inline\" (got {:?})",
                     c.id, c.master_launcher
+                )));
+            }
+            // ADR-0078 D1: `control_persist` は "yes" か正の秒数だけ（"no"・"0"・空・"10m" は不可）。
+            let persist_ok = c.control_persist == "yes"
+                || (!c.control_persist.is_empty()
+                    && c.control_persist.bytes().all(|b| b.is_ascii_digit())
+                    && c.control_persist.parse::<u64>().is_ok_and(|n| n > 0));
+            if !persist_ok {
+                return Err(ConfigError::Invalid(format!(
+                    "[[clusters]] {}: control_persist must be \"yes\" or a positive number of seconds (got {:?})",
+                    c.id, c.control_persist
                 )));
             }
             // ADR-0019 D2: 自動削除は実装しない（実行結果を消してしまわないため）。
@@ -4591,6 +4610,48 @@ host = "h"
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("auth must be"), "{err}");
         assert!(err.contains("password"), "{err}");
+    }
+
+    /// ADR-0078 D1: `control_persist` の既定は "yes"。"yes" か正の秒数だけを受ける。
+    #[test]
+    fn cluster_control_persist_defaults_to_yes_and_accepts_only_yes_or_positive_seconds() {
+        let base = |extra: &str| {
+            format!(
+                r#"[[providers]]
+id = "x"
+adapter = "fake"
+[[clusters]]
+id = "c"
+host = "h"
+{extra}
+"#
+            )
+        };
+        let cfg: Config = toml::from_str(&base("")).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.clusters[0].control_persist, "yes");
+
+        for ok in ["yes", "28800", "1"] {
+            let cfg: Config =
+                toml::from_str(&base(&format!(r#"control_persist = "{ok}""#))).unwrap();
+            cfg.validate().unwrap();
+            assert_eq!(cfg.clusters[0].control_persist, ok);
+        }
+        for bad in [
+            "no",
+            "0",
+            "",
+            "10m",
+            "-5",
+            "+5",
+            "1.5",
+            "99999999999999999999999",
+        ] {
+            let cfg: Config =
+                toml::from_str(&base(&format!(r#"control_persist = "{bad}""#))).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains("control_persist must be"), "{bad}: {err}");
+        }
     }
 
     #[test]

@@ -537,6 +537,14 @@ pub struct ClusterSettingsView {
     pub updated_at: String,
 }
 
+/// ADR-0078 D5: `ClusterView.stats`。`last_24h` は DB の `cluster_connection_log` から（再起動をまたぐ）、
+/// `since_start` はこの daemon の起動以降（スナップショットが無ければ `null`）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterStatsView {
+    pub last_24h: task_core::ClusterConnectionStats,
+    pub since_start: Option<task_core::ClusterConnectionStats>,
+}
+
 /// 設定（`[[clusters]]`）とスナップショット（`ClusterLive`）を結合したもの。`env` の値は出さない。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ClusterView {
@@ -573,6 +581,9 @@ pub struct ClusterView {
     /// スナップショットが無ければ `false`。
     #[serde(default)]
     pub tunnel_login_needed: bool,
+    /// ADR-0078 D5: ssh master の接続・切断・鍵認証の再接続の回数。
+    #[serde(default)]
+    pub stats: ClusterStatsView,
     /// ADR-0059 D6: 実効の作業ディレクトリ（DB の上書き `cluster_settings` があればそれ、無ければ
     /// 設定ファイルの `work_dir`）。どちらも無ければ `null`（`WorkspaceSpec::Remote.path` が相対・
     /// 省略のタスクはこのクラスタでは失敗する）。

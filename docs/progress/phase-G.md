@@ -912,3 +912,5 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 
 **未解決**: harness が作る reviewer の失敗文言（`… is not a valid ReviewOutput: <serde のエラー>`）も同じ字句フォールバックを通る。serde の文言が将来 `format` を含むと同じ誤分類になりうる（今は含まない）。harness 生成の失敗を字句判定から外すかは D16 の設計判断なので、ここでは変えていない。
 
+**昇格**: 修正（main 1bb7fd6）は release `1bb7fd6473a4` として 2026-09-28 15:52:01Z にライブ昇格（backup 20260928-155150-pre-1bb7fd6473a4）。ゲート cargo-test 97 s、verify 29 s。人は同日 15:35Z に `[execution] parallel = true` を config に入れて daemon を再起動済み（P-F-1）。
+

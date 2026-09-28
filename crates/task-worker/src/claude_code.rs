@@ -926,6 +926,12 @@ fn build_execution_plan_prompt(
          omit it, the default is max({default_max_turns}, task budget) turns and \
          max({default_max_wall_secs}, task budget) seconds.\n\n"
     ));
+    // Phase F5-fix3: 検証が使う上限をすべて、計画の形の説明のすぐ後に出す。前の試行が拒否されていれば、
+    // その理由も（同じ間違いを繰り返させない。dogfood 4 回目は 2 回とも `too many checks: 8 > 6`）。
+    if let Some(planner) = &context.execution_planner {
+        out.push_str(&plan_limits_section(planner));
+        out.push_str(&previous_attempt_errors_section(planner, artifacts));
+    }
     let schema = serde_json::to_string(&task_core::execution_plan::schema_value())
         .unwrap_or_else(|_| "{}".to_string());
     out.push_str(&format!(
@@ -966,6 +972,114 @@ fn build_execution_plan_prompt(
     out.push_str(&prior_review_section(context));
     out.push_str(&answers_section(context));
     out.push_str(&result_json_instructions(artifacts));
+    out
+}
+
+/// Phase F5-fix3: planner context の上限を `ExecutionLimits` に戻す。0（古い request で欄が無い）は
+/// `ExecutionLimits::default()` の値に倒す。
+fn planner_limits(
+    planner: &crate::protocol::ExecutionPlannerContext,
+) -> task_core::ExecutionLimits {
+    let d = task_core::ExecutionLimits::default();
+    let or = |v: usize, dv: usize| if v == 0 { dv } else { v };
+    task_core::ExecutionLimits {
+        max_work_units: or(planner.max_work_units, d.max_work_units),
+        work_unit_max_turns: if planner.work_unit_max_turns == 0 {
+            d.work_unit_max_turns
+        } else {
+            planner.work_unit_max_turns
+        },
+        work_unit_max_wall_secs: if planner.work_unit_max_wall_secs == 0 {
+            d.work_unit_max_wall_secs
+        } else {
+            planner.work_unit_max_wall_secs
+        },
+        max_rationale_chars: or(planner.max_rationale_chars, d.max_rationale_chars),
+        max_title_chars: or(planner.max_title_chars, d.max_title_chars),
+        max_objective_chars: or(planner.max_objective_chars, d.max_objective_chars),
+        max_done_when_items: or(planner.max_done_when_items, d.max_done_when_items),
+        max_done_when_chars: or(planner.max_done_when_chars, d.max_done_when_chars),
+        max_checks: or(planner.max_checks, d.max_checks),
+        max_plan_json_bytes: or(planner.max_plan_json_bytes, d.max_plan_json_bytes),
+        // `max_work_units` は dispatcher が v1/v2 に応じて選んだ値（`max_work_units_v2` を含む）。
+        max_work_units_v2: or(planner.max_work_units, d.max_work_units_v2),
+        max_phases: or(planner.max_phases, d.max_phases),
+        max_children: or(planner.max_children, d.max_children),
+    }
+}
+
+/// Phase F5-fix3: 計画の上限（`task_core::execution_plan::validate` が拒否する条件）を全部並べる。
+/// 値は run の `ExecutionPlannerContext`（dispatcher が実際に検証に使う `ExecutionLimits` から埋める）。
+fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> String {
+    let l = planner_limits(planner);
+    let mut out = String::from(
+        "### Plan limits (celeris validates the plan against these; a plan that exceeds ANY of them \
+         is rejected as a whole)\n",
+    );
+    out.push_str(&format!(
+        "- `work_units`: 1 to {} WorkUnits (celeris-added integration steps and repairs do not count).\n",
+        l.max_work_units
+    ));
+    if planner.parallel {
+        out.push_str(&format!(
+            "- `phases`: 1 to {} phases. `children`: at most {} child tasks.\n",
+            l.max_phases, l.max_children
+        ));
+    }
+    out.push_str(&format!(
+        "- Per WorkUnit: `title` at most {} characters; `objective` at most {} characters; at most {} \
+         `done_when` items, each at most {} characters; **at most {} `checks`**. If more commands need to \
+         run, combine related ones into a single check (e.g. `{{\"cmd\":\"cargo fmt --all -- --check && \
+         cargo clippy --workspace -- -D warnings\",\"expect_exit\":0}}`) or move them into `done_when`.\n",
+        l.max_title_chars,
+        l.max_objective_chars,
+        l.max_done_when_items,
+        l.max_done_when_chars,
+        l.max_checks
+    ));
+    out.push_str(&format!(
+        "- `rationale` at most {} characters; the whole plan JSON at most {} bytes.\n",
+        l.max_rationale_chars, l.max_plan_json_bytes
+    ));
+    out.push_str(&format!(
+        "- A WorkUnit `budget` is not rejected but capped: `max_turns` at {}, `max_wall_secs` at {}.\n",
+        l.work_unit_max_turns, l.work_unit_max_wall_secs
+    ));
+    if planner.replan {
+        out.push_str(
+            "- When replanning with a diff, the limits apply to the resulting plan after the diff is \
+             applied (including the WorkUnits that carry over unchanged).\n",
+        );
+    }
+    out.push_str(
+        "Count these yourself before you finish: celeris does not trim or merge anything for you.\n\n",
+    );
+    out
+}
+
+/// Phase F5-fix3: 前の planner run の計画が拒否された理由（同じ計画の回の中）。拒否された計画のファイルは
+/// dispatcher が `execution-plan.rejected.json` に移してある（そのまま再提出させない）。
+fn previous_attempt_errors_section(
+    planner: &crate::protocol::ExecutionPlannerContext,
+    artifacts: &str,
+) -> String {
+    if planner.previous_attempt_errors.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("### Your previous plan was REJECTED\n");
+    out.push_str(
+        "A previous planner run for this same plan wrote a plan that celeris rejected with these \
+         validation error(s):\n",
+    );
+    for e in &planner.previous_attempt_errors {
+        out.push_str(&format!("- {e}\n"));
+    }
+    out.push_str(&format!(
+        "\nThe rejected file was moved to `{artifacts}/execution-plan.rejected.json`. Do NOT resubmit it \
+         unchanged and do not assume any plan file you find is valid: start from it if useful, fix \
+         exactly the problems listed above (keep everything else as it was), check the result against \
+         the plan limits above, and write the corrected plan to `{artifacts}/execution-plan.json`.\n\n"
+    ));
     out
 }
 
@@ -3379,6 +3493,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
             preserve_done_keys: Vec::new(),
             parallel: false,
             max_phases: 0,
+            ..Default::default()
         };
         let context = RunContext {
             available_genres: vec![GenreContext::from(&genre_spec)],
@@ -3446,6 +3561,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
             preserve_done_keys: Vec::new(),
             parallel: false,
             max_phases: 0,
+            ..Default::default()
         };
         let context = RunContext {
             execution_planner: Some(planner_ctx),
@@ -3494,6 +3610,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
             preserve_done_keys: vec!["a".to_string()],
             parallel: false,
             max_phases: 0,
+            ..Default::default()
         };
         let context = RunContext {
             execution_planner: Some(planner_ctx),
@@ -3509,6 +3626,97 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         assert!(prompt.contains("c (release) status=blocked (dependency_failed): waiting on b"));
         assert!(prompt.contains("MUST appear unchanged"));
         assert!(prompt.contains("will be rejected: a."));
+    }
+
+    /// Phase F5-fix3: planner のプロンプトは検証が使う上限をすべて、run の context（= dispatcher の
+    /// `ExecutionLimits`）の値のまま出す（既定と違う値で確かめる）。
+    #[test]
+    fn the_planner_prompt_states_every_plan_limit_from_the_context() {
+        let task = crate::protocol::tests::sample_task();
+        let planner_ctx = crate::protocol::ExecutionPlannerContext {
+            max_work_units: 7,
+            work_unit_max_turns: 55,
+            work_unit_max_wall_secs: 1234,
+            default_max_turns: 30,
+            default_max_wall_secs: 1800,
+            parallel: true,
+            max_phases: 4,
+            max_title_chars: 99,
+            max_objective_chars: 1777,
+            max_done_when_items: 5,
+            max_done_when_chars: 222,
+            max_checks: 3,
+            max_rationale_chars: 1111,
+            max_plan_json_bytes: 20000,
+            max_children: 6,
+            ..Default::default()
+        };
+        for replan in [false, true] {
+            let context = RunContext {
+                execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+                    replan,
+                    ..planner_ctx.clone()
+                }),
+                ..RunContext::default()
+            };
+            let prompt = build_prompt(&task, &context, "run-limits", "artifacts");
+            assert!(prompt.contains("### Plan limits"), "replan={replan}");
+            for needle in [
+                "1 to 7 WorkUnits",
+                "1 to 4 phases",
+                "at most 6 child tasks",
+                "`title` at most 99 characters",
+                "`objective` at most 1777 characters",
+                "at most 5 `done_when` items, each at most 222 characters",
+                "**at most 3 `checks`**",
+                "`rationale` at most 1111 characters",
+                "at most 20000 bytes",
+                "`max_turns` at 55, `max_wall_secs` at 1234",
+            ] {
+                assert!(
+                    prompt.contains(needle),
+                    "replan={replan}: missing {needle:?}"
+                );
+            }
+            // 上限の節は計画の形の説明と schema の間（schema の指示のすぐ隣）にある。
+            let limits_at = prompt.find("### Plan limits").unwrap_or(usize::MAX);
+            let schema_at = prompt
+                .find("### Schema for the `artifacts/execution-plan.json` object")
+                .unwrap_or(0);
+            assert!(limits_at < schema_at, "replan={replan}");
+            assert_eq!(
+                prompt.contains("after the diff is applied"),
+                replan,
+                "the diff note is only for replans"
+            );
+            // 最初の試行には「拒否された」節が出ない。
+            assert!(!prompt.contains("Your previous plan was REJECTED"));
+        }
+    }
+
+    /// Phase F5-fix3: 前の planner run の計画が拒否されていたら、その検証エラーをそのまま渡し、
+    /// 拒否されたファイルを再提出しないよう指示する。
+    #[test]
+    fn the_retry_planner_prompt_contains_the_previous_validation_error() {
+        let task = crate::protocol::tests::sample_task();
+        let context = RunContext {
+            execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+                max_work_units: 10,
+                replan: true,
+                previous_attempt_errors: vec![
+                    "work unit sync-main: too many checks: 8 > 6".to_string(),
+                ],
+                ..Default::default()
+            }),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-retry", "artifacts");
+        assert!(prompt.contains("### Your previous plan was REJECTED"));
+        assert!(prompt.contains("- work unit sync-main: too many checks: 8 > 6\n"));
+        assert!(prompt.contains("artifacts/execution-plan.rejected.json"));
+        assert!(prompt.contains("Do NOT resubmit it"));
+        // 欄の無い古い context（0）は既定の上限に倒す。
+        assert!(prompt.contains("**at most 6 `checks`**"));
     }
 
     /// Phase 38（ADR-0028 追記）テスト用: ハーネス系の `literature`（`default_role` が `paperqa`）と、

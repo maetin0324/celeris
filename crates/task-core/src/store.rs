@@ -2547,6 +2547,7 @@ impl SqliteStore {
                     serde_json::to_string(&event)?
                 ],
             )?;
+            Self::close_run_row_for_event_tx(tx, &event, &ts)?;
             next_seq += 1;
         }
 
@@ -3033,7 +3034,47 @@ impl SqliteStore {
             "INSERT INTO events (task_id, seq, ts, json) VALUES (?1, ?2, ?3, ?4)",
             params![task_id.to_string(), next_seq, ts, json],
         )?;
+        Self::close_run_row_for_event_tx(conn, event, &ts)?;
         Ok(next_seq as u64)
+    }
+
+    /// Phase F5-fix3: `WorkerFinished` を書いたら、その run の `runs` 行がまだ `running` なら同じ
+    /// トランザクションで終端にする（status は `end` から、無ければ `harness_error`。`finished_at` は
+    /// event の ts）。`task_ops::replay::rebuild_work_units_and_runs` と同じ規則なので `replay --check` と
+    /// 食い違わない。既に `run_index_finish` で閉じた行（checkpoint 等を持つ）には触れない。
+    /// dogfood 4 回目、lease 失効の requeue（`reclaim_expired_leases`）は `WorkerFinished` だけを書き、
+    /// `runs` 行は `running` のまま残っていた。どの経路で run を終えても行が閉じるよう、ここで保証する。
+    fn close_run_row_for_event_tx(
+        conn: &Connection,
+        event: &Event,
+        ts: &str,
+    ) -> Result<(), StoreError> {
+        let Event::WorkerFinished {
+            run_id,
+            usage,
+            metrics,
+            end,
+            ..
+        } = event
+        else {
+            return Ok(());
+        };
+        let status = end
+            .map(RunIndexStatus::from_run_end)
+            .unwrap_or(RunIndexStatus::HarnessError);
+        conn.execute(
+            "UPDATE runs SET status = ?1, usage_json = COALESCE(?2, usage_json), \
+             metrics_json = COALESCE(?3, metrics_json), finished_at = ?4 \
+             WHERE run_id = ?5 AND status = 'running'",
+            params![
+                status.as_str(),
+                usage.as_ref().map(serde_json::to_string).transpose()?,
+                metrics.as_ref().map(serde_json::to_string).transpose()?,
+                ts,
+                run_id,
+            ],
+        )?;
+        Ok(())
     }
 }
 
@@ -10063,6 +10104,79 @@ mod tests {
                 )
                 .unwrap()
         );
+    }
+
+    /// Phase F5-fix3: `WorkerFinished` を書いたら、まだ `running` の `runs` 行は同じトランザクションで
+    /// 終端になる（`end` から。無ければ `harness_error`）。既に閉じた行（`run_index_finish`）は変えない。
+    #[test]
+    fn worker_finished_closes_a_still_running_runs_row() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let task = sample_task(Status::Draft);
+        store.insert(&task).unwrap();
+        let row = |run_id: &str| RunRow {
+            run_id: run_id.into(),
+            task_id: task.id.to_string(),
+            work_unit_id: None,
+            role: RunIndexRole::Worker,
+            seq: 1,
+            status: RunIndexStatus::Running,
+            adapter: None,
+            model: None,
+            account: None,
+            session_id: None,
+            checkpoint: None,
+            usage: None,
+            metrics: None,
+            started_at: "2026-09-28T00:00:00Z".into(),
+            finished_at: None,
+        };
+        for id in ["lease-lost", "no-end", "already-closed"] {
+            store.run_index_start(row(id)).unwrap();
+        }
+        store
+            .run_index_finish(
+                "already-closed",
+                RunIndexStatus::Completed,
+                None,
+                None,
+                None,
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+        let finished =
+            |run_id: &str, end: Option<crate::execution::RunEnd>| Event::WorkerFinished {
+                run_id: run_id.into(),
+                outcome: "infra_requeue: lease expired".into(),
+                usage: None,
+                role: None,
+                metrics: None,
+                end,
+            };
+        store
+            .append_event(
+                task.id,
+                &finished(
+                    "lease-lost",
+                    Some(crate::execution::RunEnd::HarnessError {
+                        class: crate::execution::HarnessErrorClass::LeaseExpired,
+                    }),
+                ),
+            )
+            .unwrap();
+        store
+            .append_event(task.id, &finished("no-end", None))
+            .unwrap();
+        store
+            .append_event(
+                task.id,
+                &finished("already-closed", Some(crate::execution::RunEnd::Cancelled)),
+            )
+            .unwrap();
+        let got = |id: &str| store.run_index_get(id).unwrap().unwrap();
+        assert_eq!(got("lease-lost").status, RunIndexStatus::HarnessError);
+        assert!(got("lease-lost").finished_at.is_some());
+        assert_eq!(got("no-end").status, RunIndexStatus::HarnessError);
+        assert_eq!(got("already-closed").status, RunIndexStatus::Completed);
     }
 
     #[test]

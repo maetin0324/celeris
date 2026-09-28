@@ -797,8 +797,56 @@
           },
           "type": "array"
         },
+        "max_checks": {
+          "description": "WU の `checks` の件数上限。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_children": {
+          "description": "v2 の `children` の件数上限（`parallel` のときだけ意味を持つ）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_done_when_chars": {
+          "description": "WU の `done_when` の 1 件あたりの文字数上限。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_done_when_items": {
+          "description": "WU の `done_when` の件数上限。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_objective_chars": {
+          "description": "WU の `objective` の文字数上限。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "max_phases": {
           "description": "ADR-0074 §4: v2 の工程の数の上限（`parallel` のときだけ意味を持つ）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_plan_json_bytes": {
+          "description": "計画の JSON 全体の大きさの上限（バイト）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_rationale_chars": {
+          "description": "`rationale` の文字数上限。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_title_chars": {
+          "description": "WU の `title` の文字数上限。",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -815,6 +863,13 @@
         },
         "preserve_done_keys": {
           "description": "`done` の WorkUnit の key（新しい版でも変えてはいけない。D14「replan のときは done の WU の\nkey と spec が変わっていないこと」）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "previous_attempt_errors": {
+          "description": "同じ計画の回（直近の `ExecutionPlanned` の後）で、前の planner run の計画が拒否された理由\n（古い順、検証エラーの文字列そのもの）。空なら最初の試行。",
           "items": {
             "type": "string"
           },

@@ -1446,3 +1446,103 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - 2 回目の run の `worker_progress` が 05:40:47Z（item_33）で止まり stdout.jsonl は 05:43:01Z（item_38）まで続いていた件は未調査
   （draining 中の旧デーモンの progress の間引き・書き込みの問題の可能性。完了の喪失とは独立）。
 - 本番への反映は昇格待ち（本 fix は production に触れていない）。
+
+### 昇格の証跡（2026-09-28）
+
+- release af65cfb6592d（main af65cfb）: gate FMT / TEST / CLIPPY すべて exit 0（workspace の test run は 07:54〜07:57Z）。
+  verify `ok=true live_ok=true`、schema 28。2026-09-28T09:24:03Z に live へ昇格（backup `20260928-092356-pre-af65cfb6592d`）。
+- 観察: gate を `RUSTC_WRAPPER` を export した環境で走らせると、`cache_server_down_means_no_rustc_wrapper` と
+  `runs_fall_back_to_plain_cargo_when_the_server_is_down` の 2 本が落ちる（run の環境が daemon の環境の `RUSTC_WRAPPER` を継ぐため）。
+  後の Phase への問い: cache server が落ちているとき、daemon は継いだ `RUSTC_WRAPPER` を run の環境から外すべきか。
+
+## F5-fix3: planner が計画の上限を知らない / lease 失効 run の runs 行（2026-09-28）
+
+### 症状
+
+- 不具合 1（タスク 01M3JXB3DHVBWKWKPW04DTG6SJ、events seq 1282〜1351）: reviewer が criterion 5（`docs/progress/phase-F.md` の main との
+  競合）で不合格 → `review_fail` → replan の planner run 01M3KHDJ5YWCM3659ZWC50GPX1（claude-opus-5-5）が 08:18:36Z に
+  `error(retryable=true): invalid execution plan: work unit sync-main: too many checks: 8 > 6`。再試行の planner run
+  01M3KHGNJC6V8M6MCRV6VA2KQC（08:18:46Z〜08:19:42Z）も同じエラー → `blocked`（worker_question）。人が上限を答えて解除した。
+- 不具合 2: 同じタスクの `runs` 行 01M3K0X49JB5JP5TQH304ZTRW2（03:28:29Z 開始）と 01M3K7WNJGYAPNBPMBVJXZ96CC（05:30:34Z 開始）が、
+  daemon が `worker_finished{outcome: "infra_requeue: lease expired …", end: harness_error(lease_expired)}`（seq 985 / 1054）を
+  書いた後も `status = 'running'`・`finished_at = NULL` のまま（WU はその後 done）。
+
+### 根本原因
+
+- 不具合 1:
+  - planner のプロンプトは上限のうち WU の数と budget の丸めしか書いていなかった（修正前 `crates/task-worker/src/claude_code.rs:923`
+    「Plan at most {max_work_units} WorkUnits」）。`ExecutionPlannerContext`（修正前 `crates/task-worker/src/protocol.rs:525-570`）に
+    `max_checks` 等の欄が無く、dispatcher も渡していなかった（修正前 `crates/task-dispatch/src/dispatcher.rs:9597` `let limits =
+    task_core::ExecutionLimits::default();` から `max_work_units` / `max_phases` / budget だけを詰める）。検証は
+    `crates/task-core/src/execution_plan.rs:1043`（`wu.checks.len() > limits.max_checks`、既定 6 は L399）。
+  - 再試行の planner run は前の拒否理由を受け取っていなかった: `give_up_or_retry_planner`（修正前 `dispatcher.rs:5696-5699`）は
+    `worker_progress`「計画を採用できませんでした（…）。もう一度だけ試します。」を events に書くだけで、`execution_planner_context` は
+    それを読まない。
+  - **2 回目が同じ 8 本を出した直接の原因**: 拒否された `artifacts/execution-plan.json` がそのまま残っていた。2 回目の planner は
+    08:19:25Z に「The plan from the previous attempt is still there, and it checks out: done WUs are unchanged and it adds one WU,
+    sync-main. I'll keep it and write result.json.」と書き、同じファイルを再提出した（seq 1345）。
+  - 検証の上限が dispatcher の 3 か所（修正前 `dispatcher.rs:5339 / 5457 / 5468`）とプロンプト用（L9597）でそれぞれ
+    `ExecutionLimits::default()` を呼んでいた（出どころが 1 つでない）。
+- 不具合 2: `reclaim_expired_leases` の requeue の経路（修正前 `dispatcher.rs:7013-7030`）は `WorkerFinished` を
+  `apply_transition_with_events` で書くだけで `run_index_finish` を呼ばない（通常の完了 L4999・planner L5361・確定失敗 L7337 は呼ぶ）。
+  同じく `abort_stale_runs`（修正前 L7099〜。cancel 等で止めた run）は `WorkerFinished` も `runs` 行も書かず、drain の打ち切り
+  （`abort_all_runs`、L2293〜）で止めた Reviewer run の行も誰も閉じない。
+
+### 修正（schema 変更なし）
+
+- (a) 上限の出どころを 1 つに: `ExecutionConfig.limits: ExecutionLimits`（既定 `ExecutionLimits::default()`、config.toml の欄は無い）。
+  planner の出力の検証・`adopt_plan_with_children`・`replan`・planner のプロンプトがすべてこの値を使う。`ExecutionPlannerContext` に
+  `max_title_chars` / `max_objective_chars` / `max_done_when_items` / `max_done_when_chars` / `max_checks` / `max_rationale_chars` /
+  `max_plan_json_bytes` / `max_children` を追加（0 = 古い request、プロンプト側で既定に倒す。worker-protocol の schema は追加のみ）。
+  プロンプトは計画の形の説明の直後（schema の前）に「### Plan limits」節で全部の上限を出す（WU 数、v2 なら phases・children、WU ごとの
+  title / objective / done_when / **checks**、rationale、JSON の大きさ、budget の丸め、replan の差分は適用後の計画に対して数えること、
+  checks が足りなければ `&&` で 1 本にまとめる例）。初回・replan の両方。
+- (b) 再試行: `planner_rejections_since_last_plan`（純粋関数）が直近の `ExecutionPlanned` より後の拒否理由（再試行の進捗と、2 回とも
+  拒否されたときの質問の文面。同じ定数から組み立て・取り出す）を集め、`ExecutionPlannerContext.previous_attempt_errors` に入れる。
+  プロンプトは「### Your previous plan was REJECTED」節でエラーをそのまま並べ、「その点だけ直せ、再提出するな」と指示する。
+  `give_up_or_retry_planner` は拒否した `artifacts/execution-plan.json` を `execution-plan.rejected.json` に移す（次の試行が
+  「残っている計画は検証済み」と思い込まない）。
+- (c) 決定的な正規化（余った checks を `sh -c "a && b"` に畳む等）は**入れない**（ADR-0074 の F5-fix3 節に理由）。
+- 不具合 2: `SqliteStore` が `WorkerFinished` を書く同じトランザクションで、その run の `runs` 行がまだ `running` なら終端にする
+  （status は `end` から、無ければ `harness_error`、`finished_at` は event の ts、usage/metrics は event にあれば。
+  `crates/task-core/src/store.rs` `close_run_row_for_event_tx`、`append_event_tx` と `apply_transition_tx` の両方）。
+  `task_ops::replay::rebuild_work_units_and_runs` と同じ規則なので `replay --check` とも一致する。既に `run_index_finish` で閉じた行
+  （checkpoint を持つ）は変えない。lease 失効の requeue・コメントの割り込み・F5-fix2 の確定失敗はこれで閉じる。誰も `WorkerFinished` を
+  書かなかった経路は dispatcher の `close_aborted_run` が `WorkerFinished{outcome: "interrupted: …", end: cancelled}` を足す:
+  `abort_stale_runs` の worker run（cancel 等）と Reviewer run、drain の打ち切りの Reviewer run（worker run は従来どおり新しい active の
+  lease 失効の経路で閉じる）。`interrupted: ` 接頭辞なので GUI の分類は Interrupted（失敗に数えない）、コメントの割り込みも消費しない。
+- `runs.status` の利用者の確認: `execution_metrics`（最新 run の status）、WU の continuation 文脈（`Run #n <status>`）、
+  `replay --check`、`run_work_unit_keys`（status を見ない）。GUI は `runs` 行を直接読まない（events の `WorkerFinished` から組む）。
+  どれも「終わった run が running に見える」誤りが消えるだけで、新しい status 値は増えない。
+
+### 証拠
+
+- 新しいテスト:
+  - `task_worker::claude_code::tests::the_planner_prompt_states_every_plan_limit_from_the_context`（既定と違う値で全上限が
+    文面に出る、schema 指示の前にある、初回・replan）
+  - `task_worker::claude_code::tests::the_retry_planner_prompt_contains_the_previous_validation_error`
+  - `task_dispatch::dispatcher::tests::the_retry_planner_run_receives_the_previous_validation_error_and_config_limits`
+    （`limits.max_checks = 3` の config で 4 本の checks → 1 回目の context に `max_checks = 3`、2 回目の context に
+    `"work unit sync-main: too many checks: 4 > 3"`、拒否ファイルが `execution-plan.rejected.json` に移り 2 回目は古い計画を読まない）
+  - `task_dispatch::dispatcher::tests::planner_rejections_are_collected_since_the_last_adopted_plan`
+  - `task_dispatch::dispatcher::tests::a_lease_expiry_requeue_closes_the_runs_row`（`harness_error`、`finished_at` あり）
+  - `task_dispatch::dispatcher::tests::a_run_aborted_by_cancel_closes_its_runs_row`（`cancelled`）
+  - `task_core::store::tests::worker_finished_closes_a_still_running_runs_row`
+- 修正を外して（store の `close_run_row_for_event_tx` 呼び出しと `set_aside_rejected_plan` を無効化）実行 →
+  `a_lease_expiry_requeue_closes_the_runs_row` と `the_retry_planner_run_receives_…` が FAILED。戻して ok。
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-planner-limits/target`、`RUSTC_WRAPPER` 無し）:
+  - `cargo fmt --all -- --check` → exit 0
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+  - `cargo test --workspace --no-fail-fast` → exit 0、passed 2583 / failed 0 / ignored 7
+  - worker-protocol の schema は `UPDATE_SCHEMA=1 cargo test -p task-worker` で再生成（欄の追加のみ）。GUI・API の生成型は触っていない。
+
+### 未解決事項・提案
+
+- 本番の 2 行（01M3K0X49JB5JP5TQH304ZTRW2 / 01M3K7WNJGYAPNBPMBVJXZ96CC）は `running` のまま（本 fix は既存の行を直さない）。
+  `celerisctl replay --check` の修復、または 1 回限りの `UPDATE runs … WHERE status='running' AND run_id IN (SELECT … FROM events …)` を
+  人の判断で。
+- 提案: replan の差分（`execution-plan-delta/1`）は phases を足せない（dogfood 4 回目の planner は「差分では工程を足せない」と判断して
+  全体形式に書き直した）。差分に `add_phases` を足すか、プロンプトで「新しい工程が要るなら全体形式」を明示する。
+- 提案: task-api の人の `PUT /tasks/{id}/execution-plan` と celerisctl は引き続き `ExecutionLimits::default()`（config.toml に欄が無いので
+  本番では同じ値）。上限を設定可能にするなら、そのとき `ExecutionConfig.limits` を API にも渡す。
+- 本番への反映は昇格待ち（本 fix は production に触れていない。本番 DB は read-only の照会だけ）。

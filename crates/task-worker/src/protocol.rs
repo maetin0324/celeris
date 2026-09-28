@@ -567,6 +567,39 @@ pub struct ExecutionPlannerContext {
     /// ADR-0074 §4: v2 の工程の数の上限（`parallel` のときだけ意味を持つ）。
     #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub max_phases: usize,
+    // ---- Phase F5-fix3: 検証（`task_core::execution_plan::validate`）が使う `ExecutionLimits` の残りの
+    // 上限。planner のプロンプトに「計画の上限」として全部出す（dogfood 4 回目で planner は checks の
+    // 上限 6 を知らずに 8 本書き、2 回とも拒否された）。0 は「不明」（古い request）で、プロンプト側が
+    // `ExecutionLimits::default()` の値に倒す。---- ここから
+    /// WU の `title` の文字数上限。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_title_chars: usize,
+    /// WU の `objective` の文字数上限。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_objective_chars: usize,
+    /// WU の `done_when` の件数上限。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_done_when_items: usize,
+    /// WU の `done_when` の 1 件あたりの文字数上限。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_done_when_chars: usize,
+    /// WU の `checks` の件数上限。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_checks: usize,
+    /// `rationale` の文字数上限。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_rationale_chars: usize,
+    /// 計画の JSON 全体の大きさの上限（バイト）。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_plan_json_bytes: usize,
+    /// v2 の `children` の件数上限（`parallel` のときだけ意味を持つ）。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub max_children: usize,
+    /// 同じ計画の回（直近の `ExecutionPlanned` の後）で、前の planner run の計画が拒否された理由
+    /// （古い順、検証エラーの文字列そのもの）。空なら最初の試行。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempt_errors: Vec<String>,
+    // ---- ここまで ----
 }
 
 fn is_zero_usize(n: &usize) -> bool {

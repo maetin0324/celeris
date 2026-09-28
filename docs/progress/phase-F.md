@@ -1623,3 +1623,36 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - F5-fix と G1 の効果を本番で確認: `build` 工程の 3 WU（api-docs / milestone-progress / quota-roles）が並列に走り、`request.json` の `cargo_target_dir` は WU ごとに `scratch/targets/task-<id>/wu-<id>/target`（共有 target の混線は再現せず）。`integrate-build` も done。replan v2 / v3（差分 changed=2）が daemon 由来の統合 WU を理由に拒否されなくなった。
 - 異常 1 件: `gate` WU の run（03:28 開始）が 05:30 に `infra_requeue: lease expired` で回収され再 dispatch（再実行は 10 分で done）。1 回目の run 自身は「全体ゲート成功（2515 passed）」の result を残しているので、run の終わり際に lease が切れた（G1 昇格 03:42 のライブ切替で旧デーモンが draining のまま 2 時間の run を持っていた経路。旧デーモンが run より先に終了した可能性）。journal が取れず未確定 → 提案 P-F5-3: 「draining 中の旧デーモンが持つ run の lease」を新デーモン側が引き継いで heartbeat する（Phase 116 D5 の拡張）か、旧デーモンの終了条件に「run の lease を渡すまで待つ」を足す。
 - 途中の lane 分布: planner 3 run は standard（Opus）、worker 12 run は standard（gpt-6-sol / Opus）7 と cheap（gpt-6-luna）5。E6（全 run standard）から cheap が増えた。
+
+## F5-1 dogfood（4 回目）の最終結果（2026-09-28 02:26〜10:24Z、タスク 01M3JXB3DHVBWKWKPW04DTG6SJ）: failed で終了、成果は人が統合
+
+**結果**: task は 10:24Z に `failed`（`sync-main` WU の checks `cargo test --workspace` が exit 101。G3-fix1 の 2 テスト）。
+内容は reviewer（run 01M3KH3JX1E99NWQYD8FACZAAV、gpt-6-sol）が基準 4（3 成果の実装・テスト・文書）を合格、基準 5（main へ取り込める）だけ
+`docs/progress/phase-F.md` の競合で不合格 → replan v4 の `sync-main` が main dde19a4 / e50a876 を取り込み競合を解消（merge commit aba1b64、fee4190）
+→ その checks が継承した `RUSTC_WRAPPER` で落ちた。成果 branch `celeris/01M3JXB3DHVBWKWKPW04DTG6SJ`（fee4190、17 files +811 −68）は
+人（Fable）が main に統合（ebe7008、G3-fix1 と同じ release）。
+
+**指標**（`GET /tasks/{id}/execution` の `metrics`）: WU 12（done 8、superseded 2、failed 1、blocked 1）、run 26（planner 6 / worker 19 / reviewer 1）、
+replan 3、repair 1（class planner）、retries 6、continuations 0、input 10.70M / cache read 21.13M / output 0.105M tokens、cost_usd 5.94、
+run の壁時計合計 401 分。lane: cheap/gpt-6-luna 10、standard/claude-opus-5-5 8（planner 6 + worker 2）、standard/gpt-6-sol 7、cheap/claude-sonnet-5 1
+（Sonnet は週次制限中で 55 秒で失敗）。quota: claude_max_lab seven_day 7.0%（3 run、measured 1 / apportioned 2）、codex は 14 run すべて unknown。
+
+**この dogfood で見つかり、同日に直した不具合（すべて本番で再現→修正→昇格）**
+- F5-fix2（release af65cfb6592d、09:24Z 昇格）: WU checks と工程統合が in-flight に数えられず、live handoff 中の旧 daemon が checks 途中で exit → 完了消失。
+  gate WU が 111 分ごとに lease 失効→再実行を 2 回繰り返した（1.59M tokens × 2 の無駄）。
+- F5-fix3（release e50a8768c0dd、10:32Z 昇格）: planner が計画の上限（checks ≤ 6）を知らず、却下された計画ファイルをそのまま再提出 → blocked。
+  人が `POST /tasks/{id}/answer` で上限を伝えて再開。lease 失効で requeue された run の `runs` 行が `running` のまま。
+- F5-fix4（同 release）: codex の sandbox が worktree の git 管理領域（登録元 `.git/worktrees/<name>` と common dir）に書けず `git merge main` が失敗
+  → blocked。人が「昇格実行で再実行」と answer して再開。
+- G3-fix1（この節と同じ release、`docs/progress/phase-G.md`）: daemon から継承した `RUSTC_WRAPPER` が run と checks に漏れ、self-dogfood の
+  `cargo test --workspace` が cache-server-down の 2 テストで必ず落ちる → task failed の直接原因。
+
+**人の介入**: answer 2 回（上限の提示、昇格実行の指示）、成果の手動統合 1 回、journald の復旧（root）。
+
+**未解決・提案**
+- P-F5-1-4a: replan の planner が `sync-main` のような「main を取り込む」WU を作るのは妥当だが、worktree の登録元が `~/workspace/agent-platform`
+  である限り main は人の作業ツリーと同じ `.git` を共有する。F5-fix4 の提案どおり task checkout を clone（`--reference`）にする ADR を別に起こす。
+- P-F5-1-4b: 本番 DB に `running` のまま残った 2 行（01M3K0X49JB5JP5TQH304ZTRW2、01M3K7WNJGYAPNBPMBVJXZ96CC）は F5-fix3 では直らない。
+  `replay --check` の修復か一回限りの UPDATE を人が選ぶ。
+- P-F5-1-4c: task が failed になったとき、成果 branch がゲートを通っていれば「人が統合できる」状態を GUI に出す（今回は人が git で判断した）。
+- P-F5-1-4d: Sonnet が制限中でも cheap lane に振られて 55 秒で失敗した。quota の `resets_at` を見て provider を避ける（F1 の quota-aware 規則の拡張）。

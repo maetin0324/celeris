@@ -459,6 +459,9 @@ pub struct ClusterLive {
     /// （forward を持たないクラスタ、または古いスナップショット）。
     #[serde(default)]
     pub tunnel_forwards: Vec<TunnelForwardLive>,
+    /// ADR-0078 D5: この daemon の起動以降の接続・切断の回数。古いスナップショットには無いので既定は 0。
+    #[serde(default)]
+    pub connection_stats: task_core::ClusterConnectionStats,
 }
 
 fn default_cluster_live_auth() -> String {

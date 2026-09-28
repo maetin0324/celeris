@@ -229,7 +229,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 - 担当は matching が決める（ADR-0069 D1。unit は担当を書けない）。部署をまたぐ子は ADR-0074 F4b の規則のまま（未認可なら計画を採用せず
   approvals で聞く。SPEC §3.1）。
 - `TaskFeatures` は子の目的・受け入れから `infer_with_hints` で推定し、unit の `features` をヒント（出自 `planner`）として重ねる。
-- `Task.tree = {root_id, depth, parent_unit: {task_id, plan_id, unit_key, stage}, base_commit}`（Task の JSON）と列 `tasks.root_id`（索引。migration 0030）。
+- `Task.tree = {root_id, depth, parent_unit: {task_id, plan_id, unit_key, stage}, base_commit}`（Task の JSON）と列 `tasks.root_id`（索引。migration 0031）。
 - 親の unit の行を `running`、`child_task_id` を書き、親の events に `Event::ChildTaskCreated{unit_key, child_task_id, depth}`、子の `Created` に
   `origin: plan_unit`。
 - 子の中からの委譲（`delegate.json`）は使えない（木の節点の run には `available_genres` を渡さない。子を作る入口は計画の unit だけ）。
@@ -300,7 +300,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
   その unit を `blocked(decision)` にする。それ以外は run の完了を妨げない）、(c) daemon（`leaf_too_large` / `limit` / `plan_invalid`。D3・D4・D9）。
   `path` と `id` は daemon が付ける（LLM に書かせない）。
 - **置き場**: `Event::DecisionRequested{decision}` / `DecisionAnswered{id, option, note, by}` / `DecisionWithdrawn{id, reason}` を出した節点の events に積み、
-  派生の表 `decisions(id, root_id, task_id, key, kind, status, needed_before_json, json, created_at, answered_at)`（migration 0030）に同じトランザクションで書く。
+  派生の表 `decisions(id, root_id, task_id, key, kind, status, needed_before_json, json, created_at, answered_at)`（migration 0031）に同じトランザクションで書く。
   `approvals`（SPEC §3.6 の「今回だけ / 今後ずっと」の認可）とも `QuestionRaised`（task を止める自由文の質問）とも別物にする。
 - **待つもの・待たないもの**: `needs_decisions` を持つ unit と、`needed_before` が指す unit / 段階だけが pending のまま待つ。他の unit・兄弟の subtree は進む。
   `needed_before` に指された子 task はまだ作られない（D4 (4)）。
@@ -422,7 +422,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
   `Event::ChildAdopted` を root に残す。
 - API / GUI は追加（`Task.tree`、`TaskDetail.tree`、`GET /tasks/{id}/tree`、`/decisions`、`plan-gate`）と D13 の削除（410 / 422）。`api-v1.schema.json` /
   `event.schema.json` / `execution-plan.schema.json` を再生成し、`decision.schema.json` を足す。
-- migration 0030（`SCHEMA_VERSION` 29 → 30）: `ALTER TABLE tasks ADD COLUMN root_id TEXT`（+ 索引）、`ALTER TABLE work_units ADD COLUMN child_task_id TEXT`、
+- migration 0031（`SCHEMA_VERSION` 30 → 31）: `ALTER TABLE tasks ADD COLUMN root_id TEXT`（+ 索引）、`ALTER TABLE work_units ADD COLUMN child_task_id TEXT`、
   `ALTER TABLE work_units ADD COLUMN needs_decisions_json TEXT NOT NULL DEFAULT '[]'`、`CREATE TABLE decisions …`。すべて events の派生（replay で作り直せる）。
   `SchemaTooNew` の規則どおり旧いバイナリは 30 を開けない。ロールバックは ADR-0040 D2。
 
@@ -498,7 +498,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 
 | Phase | 範囲 | 大きさ | 依存 |
 |---|---|---|---|
-| R1a | plan/3 の型と検証（純粋関数）、`Task.tree`、migration 0030、新しい Event、`[execution.tree]` の設定 | M | — |
+| R1a | plan/3 の型と検証（純粋関数）、`Task.tree`、migration 0031、新しい Event、`[execution.tree]` の設定 | M | — |
 | R1b | daemon: unit から子 task を作る、子の状態の写し、段階の完了（子を含む）、`awaiting_children`、subtree の中止の連鎖、木での委譲の禁止 | M | R1a |
 | R1c | 親ブランチへの取り込み: 子の基点、統合 WU が子のブランチを merge、子の最終レビューの基点、子の取り込み（配送）の抑止、root だけ main | M | R1b |
 | R2a | 再帰の gate: 深さの閾値、木では shadow でも採用、unit の gate（上げる / 下げる / 決定）と不一致の記録、木の上限と超過の決定の要求 | M | R1b |
@@ -510,21 +510,21 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 | R5a | 案件モデル: project-plan API・GUI・celerisctl の削除（410 / 422）、途中目標の自動作成と Go / ADR-0077 / 判定 run の停止、`is_root_task`、subtree の一時停止、CoS の preamble（D12）と `add_milestone` の廃止 | M | R1b（CoS 文面は R2b の後） |
 | R5b | 本番の移行と dogfood: `tree adopt`、browser の root（Phase 1 = 既存の done task を採用、Phase 2〜4 = 子 task、H1〜H7 = 決定）、BenchFS の root（「国際会議フルペーパー化」、止まっている framing を決定に）、`enabled = true`、Phase 2 の子を 1 本通す | M（実機） | すべて |
 
-### R1a: plan/3 とデータモデル（migration 0030）
+### R1a: plan/3 とデータモデル（migration 0031）
 
 - **範囲**: `task_core::execution_plan` に `celeris.execution-plan/3`（`stages` / `units` / `decisions`、`WorkUnitKind::Task`、leaf の基準の検証、kind task の
   必須欄と禁止欄、`child:` / `children` の拒否、決定の形と上限）。`task_core::tree`（`TreeInfo`、`TreeLimits`、深さの計算）、`task_core::decision`（型と検証）。
   `Task.tree`（serde(default)）。Event: `ChildTaskCreated` / `ChildAdopted` / `UnitGateOverridden` / `DecisionRequested` / `DecisionAnswered` / `DecisionWithdrawn` /
-  `PlanApprovalRequested` / `StallDetected`（型と replay の読みだけ。発行は後の Phase）。migration 0030。`[execution.tree]` の設定（R5b まで `enabled = false`）。
+  `PlanApprovalRequested` / `StallDetected`（型と replay の読みだけ。発行は後の Phase）。migration 0031。`[execution.tree]` の設定（R5b まで `enabled = false`）。
   schema の再生成。
 - **受け入れ条件**:
   - (a) /3 の fixture が通り、/1・/2 の既存 fixture の検証結果と出力 JSON が変わらない（`plan_v1_and_v2_fixtures_are_byte_identical`）。
   - (b) 拒否: leaf に `checks` が無い / `context.repo` が 2 / kind task に `checks` / kind task に `acceptance` 無し / `child:` 依存 / `children` / 循環 / 未知の
     `needed_before` / `needs_decisions` が未知の key / 段階あたり 7 unit / 決定 9 件（`rejects_*` のテスト 10 本）。
   - (c) `enabled = false` で /3 は `TreeDisabled` で拒否される（`v3_is_rejected_when_tree_is_disabled`）。
-  - (d) migration 0030 が 29 の DB に当たり、`rebuild_work_units_and_runs` と `decisions` の再構築で events から同じ行ができる（`replay_rebuilds_decisions_and_child_links`）。
+  - (d) migration 0031 が 30 の DB に当たり、`rebuild_work_units_and_runs` と `decisions` の再構築で events から同じ行ができる（`replay_rebuilds_decisions_and_child_links`）。
   - (e) `event.schema.json` / `execution-plan.schema.json` / `decision.schema.json` の一致テスト。
-- **テスト**: 上記。**触るファイル**: `crates/task-core/src/{execution_plan.rs, tree.rs(新), decision.rs(新), model.rs, event.rs, store.rs}`、`crates/task-core/migrations/0030_task_tree.sql`、
+- **テスト**: 上記。**触るファイル**: `crates/task-core/src/{execution_plan.rs, tree.rs(新), decision.rs(新), model.rs, event.rs, store.rs}`、`crates/task-core/migrations/0031_task_tree.sql`、
   `crates/celeris/src/config.rs`、`docs/protocol/*.schema.json`。
 
 ### R1b: 子 task の生成と段階の完了
@@ -693,14 +693,14 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 
 ## 付記: R1a 実装時の逸脱・明確化（2026-09-28）
 
-R1a（plan/3 の型と検証、`Task.tree`、migration 0030、Event、`[execution.tree]`）で決めたこと。本文の決定は変えていない。
+R1a（plan/3 の型と検証、`Task.tree`、migration 0031、Event、`[execution.tree]`）で決めたこと。本文の決定は変えていない。
 
 1. **U-R1 の数え方に合わせた式の読み替え**: `max_depth` は task の層数（root 1 / 子 2 / 孫 3）。深さ `d` の task の計画が kind task の unit を
    持てるのは **`d < max_depth`**（D3 の表の「`d + 1 < max_depth`」を置き換える）。planner に渡す `remaining_depth` は **`max_depth − d`**
    （D4 (2) の「`max_depth − depth − 1`」を置き換える。1 以上なら kind task を書ける）。gate の閾値 `5 + step × (d − 1)` は変えない。
    実装は `task_core::tree::{can_have_child_tasks, remaining_depth, gate_threshold}`。検証は `validate_with(.., PlanContext{origin, depth})` の
    `depth`（`tree::depth_of(task)`、`tree` の無い task は 1）で見る（`ChildTaskTooDeep`）。
-2. **`tasks.root_id` は埋め戻さない**: migration 0030 は列・表・索引を足すだけで既存の行を書き換えない（D13「凍結」、D15「root_id は NULL のまま」）。
+2. **`tasks.root_id` は埋め戻さない**: migration 0031 は列・表・索引を足すだけで既存の行を書き換えない（D13「凍結」、D15「root_id は NULL のまま」）。
    列は `Task.tree.root_id` の写しで、`tree` を持つ task（R1b で作る子と、その root）にだけ入る。root の `tree` を誰がいつ書くか（root 自身の
    `root_id = id`）は R1b が子を作るときに決める。
 3. **型**: /3 は `ExecutionPlanSpec` の同じ型に `stages` / `units` / `decisions` を足した（空なら出力しない。/1・/2 の JSON は 1 バイトも変わらない）。

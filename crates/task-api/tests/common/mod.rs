@@ -423,6 +423,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
             auth: "manual".into(),
             connect_pending: false,
             tunnel_login_needed: false,
+            connection_stats: Default::default(),
             tunnel_forwards: vec![],
         }],
         providers: vec![

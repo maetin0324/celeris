@@ -2564,10 +2564,10 @@ pub struct WorkUnitRow {
     pub head_commit: Option<String>,
     /// ADR-0074 D1.4: `PhaseIntegrated` の Task ブランチの HEAD（統合 WU の行だけ）。
     pub integrated_commit: Option<String>,
-    /// ADR-0079 D4 (4) / D15（migration 0030）: kind task の unit の子 task（`ChildTaskCreated` /
+    /// ADR-0079 D4 (4) / D15（migration 0031）: kind task の unit の子 task（`ChildTaskCreated` /
     /// `ChildAdopted` の写し。leaf・統合 WU は `None`）。
     pub child_task_id: Option<String>,
-    /// ADR-0079 D7（migration 0030）: この unit が回答を待つ決定の key（/3 の
+    /// ADR-0079 D7（migration 0031）: この unit が回答を待つ決定の key（/3 の
     /// [`effective_needs_decisions`]。/1・/2 は空）。
     pub needs_decisions: Vec<String>,
 }

@@ -534,7 +534,7 @@ fn wu_field_pairs(w: &WorkUnitRow) -> Vec<(&'static str, String)> {
                 .clone()
                 .unwrap_or_else(|| "none".to_string()),
         ),
-        // ADR-0079（Phase R1a / migration 0030）: 子 task の結び付きと、回答を待つ決定。
+        // ADR-0079（Phase R1a / migration 0031）: 子 task の結び付きと、回答を待つ決定。
         (
             "child_task_id",
             w.child_task_id
@@ -2172,7 +2172,7 @@ mod tests {
         }
     }
 
-    /// ADR-0079 R1a (d): migration 0030 の派生（`work_units.child_task_id` / `needs_decisions_json`・
+    /// ADR-0079 R1a (d): migration 0031 の派生（`work_units.child_task_id` / `needs_decisions_json`・
     /// `decisions`）は events だけから作り直せる。store が Event と同じトランザクションで書いた行と、
     /// `rebuild_work_units_and_runs` / `rebuild_decisions` の再構築が一致し、壊れた索引は `--apply` で戻る。
     #[test]

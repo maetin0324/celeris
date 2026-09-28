@@ -83,13 +83,15 @@ const MIGRATION_0027: &str = include_str!("../migrations/0027_parallel_work_unit
 const MIGRATION_0028: &str = include_str!("../migrations/0028_project_plan_go.sql");
 /// ADR-0044 D7 追記 / ADR-0047 追記（Phase K-1）: `projects.slug`（知識ベースの `projects/<slug>/`）。
 const MIGRATION_0029: &str = include_str!("../migrations/0029_project_slug.sql");
+/// ADR-0078 D5: `cluster_connection_log`（クラスタの ssh master の接続・切断の記録）。
+const MIGRATION_0030: &str = include_str!("../migrations/0030_cluster_connection_log.sql");
 /// ADR-0079 D4 / D7 / D15（Phase R1a）: `tasks.root_id`・`work_units.child_task_id` /
 /// `needs_decisions_json`・`decisions`（再帰的な task の木。既存の行は書き換えない）。
-const MIGRATION_0030: &str = include_str!("../migrations/0030_task_tree.sql");
+const MIGRATION_0031: &str = include_str!("../migrations/0031_task_tree.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 30;
+pub const SCHEMA_VERSION: u32 = 31;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -1045,6 +1047,14 @@ pub trait TaskStore:
         work_dir: Option<&str>,
         now: OffsetDateTime,
     ) -> Result<(), StoreError>;
+    /// ADR-0078 D5: クラスタの接続・切断・鍵認証の試みを 1 行追記する。
+    fn cluster_connection_record(&self, record: &ClusterConnectionRecord)
+    -> Result<(), StoreError>;
+    /// ADR-0078 D5: `since` 以降（含む）の記録（古い順）。`GET /clusters` の `stats` が数える。
+    fn cluster_connection_list_since(
+        &self,
+        since: OffsetDateTime,
+    ) -> Result<Vec<ClusterConnectionRecord>, StoreError>;
 
     // ---- ADR-0072 D5（Phase E2）: 実行層の派生索引（execution_plans / work_units / runs）----
     //
@@ -1096,7 +1106,7 @@ pub trait TaskStore:
     /// 1 件。無ければ `None`。
     fn work_unit_get(&self, id: &str) -> Result<Option<WorkUnitRow>, StoreError>;
 
-    /// ADR-0079 D7（Phase R1a / migration 0030）: 決定の要求の行（`created_at` 昇順、同順位は id）。
+    /// ADR-0079 D7（Phase R1a / migration 0031）: 決定の要求の行（`created_at` 昇順、同順位は id）。
     /// `root_id` を渡せばその木だけ。行は `Event::DecisionRequested` / `DecisionAnswered` /
     /// `DecisionWithdrawn` の追記と同じトランザクションで store が書く（派生）。
     fn decisions_list(
@@ -1270,6 +1280,80 @@ pub struct ClusterSettings {
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub updated_at: OffsetDateTime,
+}
+
+/// ADR-0078 D5: `cluster_connection_log` の 1 行。`kind` / `method` / `cause` の値は
+/// migration 0030 の注釈を見よ（文字列のまま持つ。書き手は dispatcher だけ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterConnectionRecord {
+    pub cluster_id: String,
+    pub kind: String,
+    pub method: Option<String>,
+    pub cause: Option<String>,
+    pub uptime_secs: Option<u64>,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub at: OffsetDateTime,
+}
+
+/// ADR-0078 D5: クラスタごとの接続・切断の回数（`GET /clusters` の `stats`）。
+/// `ClusterConnectionRecord` を `add` で積んで作る（dispatcher の起動以降の値も、DB から数える直近
+/// 24 時間の値も同じ規則で数える）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterConnectionStats {
+    #[serde(default)]
+    pub connects_totp: u64,
+    #[serde(default)]
+    pub connects_publickey: u64,
+    /// 人（や前の daemon）が張った master を `-O check` で見つけた回数。
+    #[serde(default)]
+    pub connects_borrowed: u64,
+    #[serde(default)]
+    pub losses: u64,
+    /// `cause`（`check_failed` / `probe_failed` / `master_exited` / `explicit`）ごとの切断の回数。
+    #[serde(default)]
+    pub losses_by_cause: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    pub key_auth_attempts: u64,
+    /// 最後に切れた時刻（RFC 3339）。
+    #[serde(default)]
+    pub last_lost_at: Option<String>,
+    #[serde(default)]
+    pub last_lost_cause: Option<String>,
+}
+
+impl ClusterConnectionStats {
+    /// 1 行を数える（`kind` が未知なら何もしない）。
+    pub fn add(&mut self, record: &ClusterConnectionRecord) {
+        match record.kind.as_str() {
+            "connected" => match record.method.as_deref() {
+                Some("totp") => self.connects_totp += 1,
+                Some("publickey") => self.connects_publickey += 1,
+                _ => self.connects_borrowed += 1,
+            },
+            "lost" => {
+                self.losses += 1;
+                let cause = record
+                    .cause
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                *self.losses_by_cause.entry(cause.clone()).or_insert(0) += 1;
+                self.last_lost_at = record.at.format(&Rfc3339).ok();
+                self.last_lost_cause = Some(cause);
+            }
+            "key_auth_attempt" => self.key_auth_attempts += 1,
+            _ => {}
+        }
+    }
+
+    /// `records` のうち `cluster_id` の行だけを数える。
+    pub fn from_records(records: &[ClusterConnectionRecord], cluster_id: &str) -> Self {
+        let mut stats = Self::default();
+        for record in records.iter().filter(|r| r.cluster_id == cluster_id) {
+            stats.add(record);
+        }
+        stats
+    }
 }
 
 pub struct SqliteStore {
@@ -1686,6 +1770,7 @@ impl SqliteStore {
             28 => Ok(MIGRATION_0028),
             29 => Ok(MIGRATION_0029),
             30 => Ok(MIGRATION_0030),
+            31 => Ok(MIGRATION_0031),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -2449,7 +2534,7 @@ impl SqliteStore {
                 // `update_task_tx` が同じ 2 列を書き直す。
                 serde_json::to_string(&task.skills)?,
                 task.mode.as_str(),
-                // ADR-0079 D4 (4)（migration 0030）: `Task.tree.root_id` の写し（木に属さない task は NULL）。
+                // ADR-0079 D4 (4)（migration 0031）: `Task.tree.root_id` の写し（木に属さない task は NULL）。
                 task.tree.as_ref().map(|t| t.root_id.to_string()),
             ],
         )?;
@@ -3061,7 +3146,7 @@ impl SqliteStore {
         let base_commit: Option<String> = row.get(21)?;
         let head_commit: Option<String> = row.get(22)?;
         let integrated_commit: Option<String> = row.get(23)?;
-        // ADR-0079（migration 0030）。
+        // ADR-0079（migration 0031）。
         let child_task_id: Option<String> = row.get(24)?;
         let needs_decisions_json: String = row.get(25)?;
         Ok((|| -> Result<WorkUnitRow, StoreError> {
@@ -5496,6 +5581,70 @@ impl TaskStore for SqliteStore {
         Ok(())
     }
 
+    fn cluster_connection_record(
+        &self,
+        record: &ClusterConnectionRecord,
+    ) -> Result<(), StoreError> {
+        let conn = self.lock()?;
+        let uptime = record
+            .uptime_secs
+            .map(|v| i64::try_from(v).unwrap_or(i64::MAX));
+        conn.execute(
+            "INSERT INTO cluster_connection_log (cluster_id, kind, method, cause, uptime_secs, at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                record.cluster_id,
+                record.kind,
+                record.method,
+                record.cause,
+                uptime,
+                format_rfc3339(record.at)?
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn cluster_connection_list_since(
+        &self,
+        since: OffsetDateTime,
+    ) -> Result<Vec<ClusterConnectionRecord>, StoreError> {
+        // RFC 3339 の文字列は小数秒の桁数で順序が崩れうるので、比較は読んでから時刻で行う
+        // （行は接続・切断ごとに 1 行で少ない）。
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT cluster_id, kind, method, cause, uptime_secs, at FROM cluster_connection_log \
+                 ORDER BY id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (cluster_id, kind, method, cause, uptime, at) = row?;
+                let at = parse_rfc3339(&at)?;
+                if at < since {
+                    continue;
+                }
+                out.push(ClusterConnectionRecord {
+                    cluster_id,
+                    kind,
+                    method,
+                    cause,
+                    uptime_secs: uptime.and_then(|v| u64::try_from(v).ok()),
+                    at,
+                });
+            }
+            Ok(out)
+        })
+    }
+
     // ---- ADR-0072 D5（Phase E2）: execution_plans / work_units / runs ----
 
     fn execution_plan_adopt(
@@ -7420,6 +7569,50 @@ mod tests {
 
     /// ADR-0059 D6（Phase 99）: `cluster_settings` の get/list/set。`work_dir = None` で行を削除する
     /// （上書きを消す）。
+    /// ADR-0078 D5: 接続の記録は追記され、`since` より前のものは返らない（古い順）。
+    #[test]
+    fn cluster_connection_log_records_and_lists_since() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let t0 = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
+        let rec = |kind: &str, at: OffsetDateTime| ClusterConnectionRecord {
+            cluster_id: "pegasus".into(),
+            kind: kind.into(),
+            method: (kind == "connected").then(|| "totp".to_string()),
+            cause: (kind == "lost").then(|| "check_failed".to_string()),
+            uptime_secs: (kind == "lost").then_some(42),
+            at,
+        };
+        store
+            .cluster_connection_record(&rec("connected", t0))
+            .unwrap();
+        store
+            .cluster_connection_record(&rec("lost", t0 + time::Duration::milliseconds(1500)))
+            .unwrap();
+        store
+            .cluster_connection_record(&rec("connected", t0 + time::Duration::hours(30)))
+            .unwrap();
+        let all = store.cluster_connection_list_since(t0).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[1].kind, "lost");
+        assert_eq!(all[1].uptime_secs, Some(42));
+        assert_eq!(all[1].cause.as_deref(), Some("check_failed"));
+        let recent = store
+            .cluster_connection_list_since(t0 + time::Duration::hours(1))
+            .unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].method.as_deref(), Some("totp"));
+        let stats = ClusterConnectionStats::from_records(&all, "pegasus");
+        assert_eq!(stats.connects_totp, 2);
+        assert_eq!(stats.losses, 1);
+        assert_eq!(stats.losses_by_cause.get("check_failed"), Some(&1));
+        assert_eq!(stats.last_lost_cause.as_deref(), Some("check_failed"));
+        assert!(stats.last_lost_at.is_some());
+        assert_eq!(
+            ClusterConnectionStats::from_records(&all, "sirius"),
+            ClusterConnectionStats::default()
+        );
+    }
+
     #[test]
     fn cluster_settings_get_list_and_set_including_clearing_the_override() {
         let store = SqliteStore::open_in_memory().unwrap();
@@ -8348,7 +8541,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -8897,7 +9090,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -9388,7 +9581,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -9454,7 +9647,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -9547,7 +9740,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -10006,7 +10199,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -10173,14 +10366,14 @@ mod tests {
         assert!(slug_of(&again.id.to_string()).starts_with("celeris-"));
     }
 
-    /// ADR-0079 D15（Phase R1a）: migration 0030 は版数 29 の DB に `tasks.root_id`・
+    /// ADR-0079 D15（Phase R1a）: migration 0031 は版数 30 の DB に `tasks.root_id`・
     /// `work_units.child_task_id` / `needs_decisions_json`・`decisions` を足すだけで、**既存の行は書き換えない**
     /// （D13「凍結」、D15「root_id は NULL のまま。埋め戻さない」）。旧い task は `tree` を持たず深さ 1 として読め、
     /// 旧い WU 行は `child_task_id = None`・`needs_decisions = []` で読める。
     #[test]
-    fn migration_30_adds_tree_columns_without_rewriting_rows() {
+    fn migration_31_adds_tree_columns_without_rewriting_rows() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("schema29.sqlite3");
+        let path = dir.path().join("schema30.sqlite3");
         let root = sample_task(Status::Running);
         let mut child = sample_task(Status::Ready);
         child.parent_id = Some(root.id);
@@ -10193,10 +10386,10 @@ mod tests {
                 "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
             )
             .unwrap();
-            for version in 1..=29 {
+            for version in 1..=30 {
                 SqliteStore::apply_migration_version(&mut conn, version).unwrap();
             }
-            // 版数 29 の列だけで書く（`root_id` 列はまだ無い）。
+            // 版数 30 の列だけで書く（`root_id` 列はまだ無い）。
             for t in [&root, &child] {
                 conn.execute(
                     "INSERT INTO tasks (id, status, kind, parent_id, priority, created_at, json, title, updated_at) \
@@ -10251,7 +10444,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
 
         let conn = Connection::open(&path).unwrap();
         // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -10267,7 +10460,7 @@ mod tests {
         for ((id_b, json_b), (id_a, json_a, root_id)) in json_before.iter().zip(&after) {
             assert_eq!(id_b, id_a);
             assert_eq!(json_b, json_a);
-            assert_eq!(root_id, &None, "migration 0030 must not backfill root_id");
+            assert_eq!(root_id, &None, "migration 0031 must not backfill root_id");
         }
         let reread = store.get(child.id).unwrap().unwrap();
         assert_eq!(reread.tree, None);
@@ -10309,14 +10502,14 @@ mod tests {
                 "idx_work_units_child_task"
             ]
         );
-        // 旧いバイナリ（版数 29）は版数 30 の DB を開けない（昇格は stop → start）。
+        // 旧いバイナリ（版数 30）は版数 31 の DB を開けない（昇格は stop → start）。
         drop(store);
         let max: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(max, 30);
+        assert_eq!(max, 31);
     }
 
     /// ADR-0079 D4 (4) / D7（Phase R1a）: `Task.tree` は `tasks.root_id` に写り（挿入・更新）、木の Event は
@@ -10501,7 +10694,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();

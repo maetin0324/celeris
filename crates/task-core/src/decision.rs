@@ -3,7 +3,7 @@
 //! - [`DecisionSpec`]: 計画（`celeris.execution-plan/3` の `decisions`、unit の `decisions`）に書く形。
 //! - [`DecisionRequest`]: daemon が id と path を付けた完全な形（`Event::DecisionRequested`、
 //!   `decisions.json`、`docs/protocol/decision.schema.json`）。
-//! - [`DecisionRow`]: 派生の表 `decisions`（migration 0030）の 1 行と、events からの畳み込み
+//! - [`DecisionRow`]: 派生の表 `decisions`（migration 0031）の 1 行と、events からの畳み込み
 //!   （[`DecisionRow::from_request`] / [`DecisionRow::apply_answer`] / [`DecisionRow::apply_withdrawal`]）。
 //!   store の書き込み（`Event` と同じトランザクション）と replay の再構築がこの同じ関数を通る。
 //!

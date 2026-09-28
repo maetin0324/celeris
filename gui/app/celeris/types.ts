@@ -1835,6 +1835,7 @@ export interface ClusterView {
    */
   in_use?: number | null;
   rsync_excludes: string[];
+  stats?: ClusterStatsView;
   /**
    * `"rsync"` | `"none"`。
    */
@@ -1859,6 +1860,39 @@ export interface ClusterView {
    * `work_dir` が `null` なら `null`。
    */
   work_dir_source?: string | null;
+}
+/**
+ * ADR-0078 D5: ssh master の接続・切断・鍵認証の再接続の回数。
+ */
+export interface ClusterStatsView {
+  last_24h: ClusterConnectionStats;
+  since_start?: ClusterConnectionStats | null;
+}
+/**
+ * ADR-0078 D5: クラスタごとの接続・切断の回数（`GET /clusters` の `stats`）。
+ * `ClusterConnectionRecord` を `add` で積んで作る（dispatcher の起動以降の値も、DB から数える直近
+ * 24 時間の値も同じ規則で数える）。
+ */
+export interface ClusterConnectionStats {
+  /**
+   * 人（や前の daemon）が張った master を `-O check` で見つけた回数。
+   */
+  connects_borrowed?: number;
+  connects_publickey?: number;
+  connects_totp?: number;
+  key_auth_attempts?: number;
+  /**
+   * 最後に切れた時刻（RFC 3339）。
+   */
+  last_lost_at?: string | null;
+  last_lost_cause?: string | null;
+  losses?: number;
+  /**
+   * `cause`（`check_failed` / `probe_failed` / `master_exited` / `explicit`）ごとの切断の回数。
+   */
+  losses_by_cause?: {
+    [k: string]: number;
+  };
 }
 /**
  * ADR-0053 D3（Phase 66）: `[[clusters.forwards]]` 1 本の要約と生存（`GET /clusters` にそのまま出す）。
@@ -2560,6 +2594,7 @@ export interface ClusterLive {
    * この tick で `ssh -O check` が成功した（人が張った多重接続がある）。
    */
   connected: boolean;
+  connection_stats?: ClusterConnectionStats1;
   /**
    * 多重接続が無くて cooldown 中なら、その終わり（RFC 3339）。
    */
@@ -2583,6 +2618,30 @@ export interface ClusterLive {
    * 古いスナップショットには無いので既定は `false`。
    */
   tunnel_login_needed?: boolean;
+}
+/**
+ * ADR-0078 D5: この daemon の起動以降の接続・切断の回数。古いスナップショットには無いので既定は 0。
+ */
+export interface ClusterConnectionStats1 {
+  /**
+   * 人（や前の daemon）が張った master を `-O check` で見つけた回数。
+   */
+  connects_borrowed?: number;
+  connects_publickey?: number;
+  connects_totp?: number;
+  key_auth_attempts?: number;
+  /**
+   * 最後に切れた時刻（RFC 3339）。
+   */
+  last_lost_at?: string | null;
+  last_lost_cause?: string | null;
+  losses?: number;
+  /**
+   * `cause`（`check_failed` / `probe_failed` / `master_exited` / `explicit`）ごとの切断の回数。
+   */
+  losses_by_cause?: {
+    [k: string]: number;
+  };
 }
 /**
  * ADR-0053 D3（Phase 66）: 1 本の port forward の生存（`GET /clusters` にそのまま出す）。

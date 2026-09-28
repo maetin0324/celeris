@@ -1,4 +1,4 @@
--- Migration 30 (schema_version=30): ADR-0079 D4 / D7 / D15（Phase R1a）。再帰的な task の木。
+-- Migration 31 (schema_version=31): ADR-0079 D4 / D7 / D15（Phase R1a）。再帰的な task の木。
 --
 -- すべて events の派生（落としても replay で作り直せる）。**既存の行は書き換えない**（D13「migration は
 -- 行を書き換えない。凍結」、D15「tree を持たない既存の task は深さ 1 の節点として扱う（root_id は NULL の
@@ -13,7 +13,7 @@
 --   decisions                      — 人への決定の要求（`Event::DecisionRequested` / `DecisionAnswered` /
 --                                    `DecisionWithdrawn` の畳み込み。`json` は DecisionRequest 全体）。
 --
--- `SchemaTooNew` の規則どおり、旧いバイナリ（SCHEMA_VERSION 29）は版数 30 の DB を開けない
+-- `SchemaTooNew` の規則どおり、旧いバイナリ（SCHEMA_VERSION 30）は版数 31 の DB を開けない
 -- （昇格は stop → start。ロールバックは ADR-0040 D2）。
 
 ALTER TABLE tasks ADD COLUMN root_id TEXT;

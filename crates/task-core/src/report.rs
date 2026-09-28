@@ -467,12 +467,15 @@ pub fn report_for_cluster_login_needed(
     level: u32,
     cluster: &str,
     host: &str,
+    detail: Option<&str>,
     now: OffsetDateTime,
 ) -> Report {
     let headline = cluster_login_needed_headline(host);
+    // ADR-0078 D4: いつ切れたか・接続していた時間・推定の理由（`detail`）を本文に足す。
+    let detail = detail.map(|d| format!("{d}\n\n")).unwrap_or_default();
     let body = format!(
         "クラスタ {cluster}（{host}）の ssh 多重接続が切れ、鍵認証だけでは繋がりませんでした。\n\n\
-         GUI の「クラスタ」画面から TOTP を入力して接続してください。\n"
+         {detail}GUI の「クラスタ」画面から TOTP を入力して接続してください。\n"
     );
     new_report(
         node_id,

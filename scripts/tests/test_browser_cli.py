@@ -168,7 +168,8 @@ class BrowserCliTest(unittest.TestCase):
         self.mode({'sleep': 10, 'stderr': SECRET})
         original_run = cli.subprocess.run
         def short_timeout(*args, **kwargs):
-            kwargs['timeout'] = 0.1
+            # Leave enough time for the Python child to start under workspace-test load.
+            kwargs['timeout'] = 2
             return original_run(*args, **kwargs)
         with patch.object(cli.subprocess, 'run', side_effect=short_timeout):
             code, stdout = self.run_cli('screenshot')

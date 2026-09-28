@@ -891,4 +891,24 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
   テスト用に短くする別 Phase（P-SD3-1、製品の既定値は変えずにテストからだけ注入できるかを先に確かめる）。
 
 **昇格**: release `61990335abc4`（main 6199033）。1 回目のゲートは並列 flake（`rereview_from_failed_…`、単体では通る）で失敗、2 回目で通過（cargo-test は nextest）。verify ok / live_ok。2026-09-28 15:12:09Z にライブ昇格（backup 20260928-151147-pre-61990335abc4）。cargo-test 97 s / clippy 18 s / build 58 s、verify 45 s。
+### SD-2 追記: nextest で出た flake（rereview_from_failed…）の原因と修正（2026-09-28）
+
+**症状**: release gate（nextest、8 jobs）で `task-dispatch dispatcher::tests::rereview_from_failed_reuses_the_approved_human_child_and_only_reruns_the_reviewer` が約 10 回に 1 回、1 回目の判定の後に `Failed` ではなく `Done` になった（`dispatcher.rs:17197`）。単独では通る。
+
+**原因（製品コードの不具合。プロセス間の共有状態・時刻の競合ではない）**: `task_core::execution::classify_reviewer_reason`（ADR-0072 D16 の字句フォールバック。repair ヒントの無い `Check::Reviewer` の不合格を、reason が fmt / clippy の語を含めば `reviewer_local` の repair に倒す）が、reason 全体を小文字にして部分文字列 `fmt` を探していた。reason には `reviewer(<run_id>): …` の接頭辞（`review.json` が読めなかったときは `.taskd/artifacts/<task_id>/review.json` のパスも）が入る。ULID（Crockford base32）は `F`・`M`・`T` を含みうるので、id に `FMT` が出ると（1 id あたり約 0.04 %）中身の不合格が `review_repair` になる。この test では repair WU → 2 回目の reviewer run（偽アダプタは 2 回目から合格）→ `Done`。並列実行とは無関係で、gate の回数が増えて当たっただけ。`L`/`I`/`O` は ULID に出ないので `lint`/`clippy`/`format` は id から生じない（`fmt` だけが当たる）。
+
+**再現（修正前）**:
+- 対象 test を単体で 20,000 回（10 並列、`--exact … --test-threads 1`）: **8 / 20,000 失敗**。8 件すべて、診断出力で 1 回目の遷移が `review_repair`、reviewer run id に `FMT` を含む（例 `reviewer(01M3MA0HNXEZFMTSDF4BZ9HDFH): r`）、adapter の呼び出し 2 回。
+- 同じ型の兄弟 `dispatcher::tests::invalid_plan_is_retried_with_prior_review_then_children_auto_accepted`（子 `c` の `review.json` が読めない不合格。reason に task id のパスが入る）: `test-parallel.sh` 全体 7 回中 1 回失敗（`c` が `review_repair` を 2 回経て `Ready` のまま。task id `01M3M9HHKY97MQ5WXFMTS0W8SX`）、単体 5,000 回で **4 / 5,000 失敗**。
+- SIGSTOP/SIGCONT の stutter（1〜6.5 s の停止を含む）や 16 並列の負荷だけでは 0 / 572（原因が時刻でないことの傍証）。
+
+**修正**: `classify_reviewer_reason` が字句を見る前に、ULID の形の語（英数字の連続で 26 文字、すべて Crockford の大文字・数字、先頭 `0`〜`7`）を取り除く（`without_ulid_tokens`）。reviewer 自身の文の `fmt` / `clippy` はこれまでどおり読む。test の assertion は変えていない。単体 test を 2 本足した（`ulid_ids_in_a_reviewer_reason_are_not_read_as_fmt`: gate で出た実際の id 3 つが substantive のままで、id が付いていても `run cargo fmt` は format repair になる／`without_ulid_tokens_keeps_everything_but_ulid_shaped_words`）。
+
+**修正後**:
+- 対象 test 単体 20,000 回（10 並列）: **0 / 20,000**。stutter（停止 1〜80 ms、6 並列）60 回: 0 / 60。
+- 兄弟の test 単体 5,000 回: **0 / 5,000**。
+- `scripts/dev/test-parallel.sh`（doc-test 込み）3 回連続: 3 回とも exit 0、passed 2617 / failed 0 / ignored 7（nextest 77 バイナリ + doc 10）。
+- `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0。
+
+**未解決**: harness が作る reviewer の失敗文言（`… is not a valid ReviewOutput: <serde のエラー>`）も同じ字句フォールバックを通る。serde の文言が将来 `format` を含むと同じ誤分類になりうる（今は含まない）。harness 生成の失敗を字句判定から外すかは D16 の設計判断なので、ここでは変えていない。
 

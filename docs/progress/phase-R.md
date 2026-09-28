@@ -68,3 +68,10 @@ R5a（案件モデルの変更と CoS の指針）→ R5b（本番の移行と d
 ### 次の一歩
 
 U-R1（max_depth の数え方）に人が答えた後、R1a（plan/3 の型と検証・`Task.tree`・migration 0030・新しい Event・`[execution.tree]`）を 1 セッションで実装する。
+
+### R0 追記: 未決点への人の決定（2026-09-28 21:0xZ）
+
+U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない）、U-R2 = 認可は今のまま、U-R3 = 承認不要の計画は通知なし、U-R4 = 既定値は草案どおり
+（dogfood で調整）、U-R5 = gate は設定に従う、U-R6 = `POST /plans` も 410、U-R7 = reviewer run は当面許容し深さ別・部分木別の review 数と費用を
+指標化（Prometheus は棚上げ）、U-R8 = 未終了の途中目標は凍結し将来非表示。追加で **R6 回収フェーズ**（既存の案件・task を新モデルの実情に合わせる）を置く。
+次: R1a（plan/3 の型と検証、Task.tree、migration 0030、events、`[execution.tree]` 設定）。

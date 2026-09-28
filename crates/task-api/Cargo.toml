@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 task-core = { path = "../task-core" }
 task-ops = { path = "../task-ops" }
+celeris-credentiald = { path = "../celeris-credentiald" }
 async-trait = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 tokio = { version = "1.53.1", features = ["sync", "time", "net", "rt", "macros", "fs", "io-util"] }

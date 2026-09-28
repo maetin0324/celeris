@@ -26,6 +26,11 @@ pub enum ControlRequest {
         revision: u64,
         secret: SecretEnvelope,
     },
+    Inspect {
+        reference: CredentialRef,
+        revision: u64,
+        origin: String,
+    },
     Revoke {
         lease_id: String,
         actor_id: String,
@@ -167,6 +172,17 @@ fn serve_one(mut stream: UnixStream, broker: &Broker, control: bool, control_pid
                         broker
                             .provider()
                             .register(&reference, &policy, revision, &secret)?;
+                        Ok(IpcReply::ok())
+                    }
+                    ControlRequest::Inspect {
+                        reference,
+                        revision,
+                        origin,
+                    } => {
+                        // Verification performs authenticated decryption, but never returns the secret.
+                        let _secret = broker
+                            .provider()
+                            .resolve_registered(&reference, revision, &origin)?;
                         Ok(IpcReply::ok())
                     }
                     ControlRequest::Revoke { lease_id, actor_id } => {

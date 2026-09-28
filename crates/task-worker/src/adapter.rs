@@ -101,6 +101,16 @@ impl AdapterError {
 pub trait EventSink: Send + Sync {
     /// Capability lifecycle, produced by the supervisor, never parsed from model text.
     fn browser_updated(&self, _browser: &task_core::BrowserRun) {}
+    /// Trusted browser supervisor only. Implementations persist a wait and release the worker lease.
+    fn browser_wait_open(
+        &self,
+        _request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        Ok(Vec::new())
+    }
     fn progress(&self, msg: &str);
     /// ADR-0048 D2（Phase 60a）: 構造化した進行（`kind` / `tool` / `summary` / `detail`）。
     /// 既定は `msg` だけを `progress` に流す（この口を実装していないシンクでも従来どおり動く）。

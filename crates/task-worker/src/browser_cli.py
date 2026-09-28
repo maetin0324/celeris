@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Celeris transport/observability shim for agent-browser 0.38.1, not a browser agent.
 
-Only public, unauthenticated browsing is supported. This same-UID shim is not a
+Credential requests stop the browser run and contain no secret. This same-UID shim is not a
 security sandbox. The substrate enforces navigation/network and action policies.
 """
 import fcntl
@@ -103,6 +103,29 @@ def plan(args, output):
 def main(args):
     config = json.loads((ROOT / "config.json").read_text())
     output = Path(config["output"])
+    if args and args[0] == "request-credential":
+        policy = load_policy(config)
+        try:
+            if policy is None or not config.get("credential_use") or len(args) != 4:
+                raise ValueError()
+            policy_id, origin, purpose = args[1:]
+            parsed = urlsplit(origin)
+            if (policy_id not in config.get("credential_policy_ids", [])
+                    or parsed.scheme != "https" or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment
+                    or parsed.netloc.lower() != parsed.netloc
+                    or not host_allowed(parsed.hostname, config["allowed_domains"])
+                    or not 1 <= len(purpose) <= 500 or any(ord(c) < 32 for c in purpose)):
+                raise ValueError()
+            with (ROOT / "credential-request.json").open("x") as request:
+                json.dump({"policy_id": policy_id, "origin": origin, "purpose": purpose}, request)
+        except (ValueError, OSError):
+            audit("policy_block", "blocked")
+            print('{"success":false,"error":"credential request blocked"}')
+            return 2
+        audit("credential_request", "success")
+        print('{"success":true,"status":"waiting_for_auth"}')
+        return 0
     try:
         operation, command, artifact = plan(args, output)
     except (ValueError, OverflowError):

@@ -14,6 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
+use crate::browser::BrowserTaskPolicy;
 use crate::store::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 use crate::{Event, Status, TaskId, Trigger};
 
@@ -343,6 +344,16 @@ impl BrowserWaitError {
 
 /// `BrowserWait` の読み書き。`TaskStore` の supertrait。
 pub trait BrowserWaitStore: Send + Sync {
+    /// A missing policy is a deny. Only a trusted administrator may write this record.
+    fn browser_task_policy_get(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<BrowserTaskPolicy>, StoreError>;
+    fn browser_task_policy_set(
+        &self,
+        task_id: TaskId,
+        policy: &BrowserTaskPolicy,
+    ) -> Result<(), StoreError>;
     /// running の task に wait を開く（task → `Blocked`、worker の lease を解放、`BrowserWaitOpened`）。
     /// 同じ `resume_key` の再送は既存の wait を返す（`created = false`）。
     fn browser_wait_open(
@@ -903,6 +914,62 @@ fn approval_rows(
 }
 
 impl BrowserWaitStore for SqliteStore {
+    fn browser_task_policy_get(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<BrowserTaskPolicy>, StoreError> {
+        self.with_read_conn(|conn| {
+            let raw: Option<String> = conn
+                .query_row(
+                    "SELECT policy_json FROM browser_task_policies WHERE task_id = ?1",
+                    params![task_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            raw.map(|value| {
+                BrowserTaskPolicy::from_json(&value)
+                    .map_err(|e| StoreError::Invalid(e.code().into()))
+            })
+            .transpose()
+        })
+    }
+
+    fn browser_task_policy_set(
+        &self,
+        task_id: TaskId,
+        policy: &BrowserTaskPolicy,
+    ) -> Result<(), StoreError> {
+        policy
+            .validate()
+            .map_err(|e| StoreError::Invalid(e.code().into()))?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: Option<String> = tx
+            .query_row(
+                "SELECT status FROM tasks WHERE id = ?1",
+                params![task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match state.as_deref() {
+            Some("draft" | "ready") => {}
+            Some(_) => {
+                return Err(StoreError::Invalid(
+                    "browser policy can only change while draft or ready".into(),
+                ));
+            }
+            None => return Err(StoreError::Invalid("task not found".into())),
+        }
+        let raw = serde_json::to_string(policy)?;
+        tx.execute(
+            "INSERT INTO browser_task_policies (task_id, policy_json) VALUES (?1, ?2)
+            ON CONFLICT(task_id) DO UPDATE SET policy_json = excluded.policy_json",
+            params![task_id.to_string(), raw],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn browser_wait_open(
         &self,
         task_id: TaskId,

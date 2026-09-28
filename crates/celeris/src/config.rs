@@ -943,6 +943,12 @@ pub struct ApiConfig {
     /// 追加で許可する `Host` ヘッダの値（`localhost` / `127.0.0.1` / `[::1]` とポート付きの形は常に許可）。
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
+    /// Browser human attestation verifier (Ed25519 public key, raw or hex).
+    #[serde(default)]
+    pub browser_attestation_public_key_file: Option<PathBuf>,
+    /// Private local credentiald control socket. The daemon PID must be admitted by credentiald.
+    #[serde(default)]
+    pub browser_credentiald_control_socket: Option<PathBuf>,
 }
 
 impl ApiConfig {
@@ -2345,6 +2351,16 @@ impl Config {
             && token_file.is_relative()
         {
             cfg.api.token_file = Some(base.join(token_file));
+        }
+        for slot in [
+            &mut cfg.api.browser_attestation_public_key_file,
+            &mut cfg.api.browser_credentiald_control_socket,
+        ] {
+            if let Some(path) = slot.as_ref()
+                && path.is_relative()
+            {
+                *slot = Some(base.join(path));
+            }
         }
         // ADR-0033 D1: 組織図の種。ファイルが無ければ設定エラー（書いたのに読めないのは事故なので黙らない）。
         if let Some(org_include) = &cfg.org_include {

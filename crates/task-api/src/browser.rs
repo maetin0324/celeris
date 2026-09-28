@@ -20,6 +20,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::BrowserTaskPolicy;
 use task_core::browser_wait::{
     BrowserDecision, BrowserWait, BrowserWaitError, BrowserWaitStore, CredentialRecord,
     HumanDecision, NewBrowserWait,
@@ -91,7 +92,95 @@ pub enum BrokerFailure {
 pub trait CredentialBrokerControl: Send + Sync {
     fn register(&self, registration: ManualRegistration) -> Result<BrokerReceipt, BrokerFailure>;
     /// receipt が broker の登録と一致するか（存在・origin・policy・revision）。
-    fn verify_receipt(&self, receipt: &BrokerReceipt) -> Result<bool, BrokerFailure>;
+    fn verify_receipt(&self, wait_id: &str, receipt: &BrokerReceipt)
+    -> Result<bool, BrokerFailure>;
+}
+
+/// Production control client. Only the daemon PID admitted by credentiald may use this socket.
+#[derive(Debug, Clone)]
+pub struct UnixCredentialBrokerControl {
+    pub socket: std::path::PathBuf,
+}
+
+impl CredentialBrokerControl for UnixCredentialBrokerControl {
+    fn register(&self, registration: ManualRegistration) -> Result<BrokerReceipt, BrokerFailure> {
+        use celeris_credentiald::{CredentialPolicy, CredentialRef};
+        #[derive(Serialize)]
+        struct Secret<'a> {
+            username: &'a str,
+            password: &'a str,
+        }
+        #[derive(Serialize)]
+        struct Request<'a> {
+            op: &'static str,
+            reference: &'a CredentialRef,
+            policy: &'a CredentialPolicy,
+            revision: u64,
+            secret: Secret<'a>,
+        }
+        let credential_id = format!("cred-{}", registration.wait_id);
+        let reference = CredentialRef {
+            credential_id: credential_id.clone(),
+            provider: "manual".into(),
+            policy_id: registration.policy_id.clone(),
+        };
+        let policy = CredentialPolicy {
+            policy_id: registration.policy_id.clone(),
+            revision: 1,
+            exact_origin: registration.origin.clone(),
+            task_id: registration.task_id.to_string(),
+            max_ttl_seconds: 60,
+            require_approval: true,
+            allow_persistence: false,
+        };
+        let request = Request {
+            op: "register",
+            reference: &reference,
+            policy: &policy,
+            revision: 1,
+            secret: Secret {
+                username: registration.username.expose(),
+                password: registration.password.expose(),
+            },
+        };
+        let bytes =
+            Zeroizing::new(serde_json::to_vec(&request).map_err(|_| BrokerFailure::Unavailable)?);
+        let reply = celeris_credentiald::ipc::call(&self.socket, &bytes)
+            .map_err(|_| BrokerFailure::Unavailable)?;
+        if !reply.success {
+            return Err(BrokerFailure::Rejected("broker_rejected"));
+        }
+        Ok(BrokerReceipt {
+            credential_id,
+            provider: reference.provider,
+            policy_id: reference.policy_id,
+            credential_revision: 1,
+            origin: registration.origin,
+            receipt_id: format!("reg-{}", registration.wait_id),
+        })
+    }
+
+    fn verify_receipt(
+        &self,
+        wait_id: &str,
+        receipt: &BrokerReceipt,
+    ) -> Result<bool, BrokerFailure> {
+        if receipt.credential_id != format!("cred-{wait_id}")
+            || receipt.receipt_id != format!("reg-{wait_id}")
+            || receipt.provider != "manual"
+        {
+            return Ok(false);
+        }
+        let request = serde_json::json!({
+            "op": "inspect",
+            "reference": {"credential_id": receipt.credential_id, "provider": receipt.provider, "policy_id": receipt.policy_id},
+            "revision": receipt.credential_revision, "origin": receipt.origin,
+        });
+        let bytes = serde_json::to_vec(&request).map_err(|_| BrokerFailure::Unavailable)?;
+        let reply = celeris_credentiald::ipc::call(&self.socket, &bytes)
+            .map_err(|_| BrokerFailure::Unavailable)?;
+        Ok(reply.success)
+    }
 }
 
 /// browser API の設定。既定（鍵も broker も無い）では人の操作は 503 `browser_unavailable`。
@@ -456,6 +545,64 @@ pub(crate) async fn task_waits(
     )))
 }
 
+pub(crate) async fn get_task_policy(
+    State(state): State<ApiState>,
+    Params(id): Params<String>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    no_query(&raw)?;
+    let task_id = parse_task_id(&id)?;
+    let policy = state
+        .blocking(move |store| {
+            if store.get(task_id).map_err(store_problem)?.is_none() {
+                return Err(ApiProblem::task_not_found(task_id));
+            }
+            store
+                .browser_task_policy_get(task_id)
+                .map_err(store_problem)
+        })
+        .await?;
+    Ok(no_store(json_response(
+        StatusCode::OK,
+        &serde_json::json!({"policy": policy}),
+    )))
+}
+
+pub(crate) async fn put_task_policy(
+    State(state): State<ApiState>,
+    Params(id): Params<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let task_id = parse_task_id(&id)?;
+    let bytes = read_body(body).await?;
+    if bytes.len() > BROWSER_BODY_MAX_BYTES {
+        return Err(body_invalid());
+    }
+    let raw = std::str::from_utf8(&bytes).map_err(|_| body_invalid())?;
+    let policy = BrowserTaskPolicy::from_json(raw).map_err(|_| body_invalid())?;
+    state
+        .blocking(move |store| {
+            store
+                .browser_task_policy_set(task_id, &policy)
+                .map_err(|_| {
+                    ApiProblem::new(
+                        StatusCode::CONFLICT,
+                        "browser_policy_state",
+                        "browser policy cannot be changed in this task state",
+                    )
+                })
+        })
+        .await?;
+    Ok(no_store(json_response(
+        StatusCode::OK,
+        &serde_json::json!({"updated": true}),
+    )))
+}
+
 pub(crate) async fn pending_waits(
     State(state): State<ApiState>,
     RawQuery(raw): RawQuery,
@@ -614,7 +761,7 @@ pub(crate) async fn registered(
                 now,
             )?;
             if !broker
-                .verify_receipt(&body.receipt)
+                .verify_receipt(&wait.wait_id, &body.receipt)
                 .map_err(broker_problem)?
             {
                 return Err(ApiProblem::new(
@@ -765,6 +912,10 @@ pub(crate) async fn revoke(
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::{get, post};
     axum::Router::new()
+        .route(
+            "/api/v1/tasks/{id}/browser/policy",
+            get(get_task_policy).put(put_task_policy),
+        )
         .route("/api/v1/tasks/{id}/browser/requests", post(open_request))
         .route("/api/v1/tasks/{id}/browser/waits", get(task_waits))
         .route("/api/v1/browser/waits", get(pending_waits))

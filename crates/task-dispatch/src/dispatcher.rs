@@ -1761,6 +1761,20 @@ impl StoreSink {
 }
 
 impl EventSink for StoreSink {
+    fn browser_wait_open(
+        &self,
+        request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        self.store
+            .browser_wait_open(self.task_id, request, OffsetDateTime::now_utc())
+            .map(|_| ())
+            .map_err(|e| e.code().into())
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        self.store
+            .browser_waits_for_task(self.task_id)
+            .map_err(|_| "browser wait store unavailable".into())
+    }
     fn browser_updated(&self, browser: &task_core::BrowserRun) {
         if let Err(e) = self.store.append_event(
             self.task_id,
@@ -14841,8 +14855,9 @@ async fn run_worker(
         artifacts_dir,
         context: RunContext {
             browser: None,
-            // ADR-0080 D1: filled from Task.browser_policy when the task field lands (waits/e2e).
-            browser_policy: None,
+            browser_policy: store
+                .browser_task_policy_get(task.id)
+                .map_err(|e| AdapterError::Other(format!("browser policy: {e}")))?,
             prior_review,
             inputs: task.inputs.clone(),
             answers: to_answers(answers_from_events(&events)),

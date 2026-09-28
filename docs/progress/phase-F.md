@@ -1777,3 +1777,7 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
   4 回目の節の「codex は 14 run すべて unknown」は、正確には 5 時間窓が 14 run すべて unknown・7 日窓は measured だが 13 run が前後同値（0.0pt）。
 - 次の一歩（提案）: `[execution] parallel` を採用の関門にするか決めて本番の設定と揃え、181939898ec3 の上で F5b の形（案件計画 + `pause_after` + 並列）の
   dogfood を 1 回流し、codex の quota が取れない件と合わせて `parallel` / `gate` の既定を人が判断する（報告 §8）。
+
+**人の決定（2026-09-28 15:2xZ）**: P-F-1 は「`[execution] parallel = true` にして実態に合わせる」。本番 `~/.config/celeris/config.toml` の `[execution]` に
+`parallel = true` を足し、idle のときに `systemctl --user restart celeris@<current>` で反映する（config の reload 機構は無い。`parallel` は F2b 以降の全 release が
+知っている key なので N-1 は壊れない）。費用指標（決定 4: quota 消費）は、codex の quota が measured で取れるようになりデータが揃ってから改めて判断する。

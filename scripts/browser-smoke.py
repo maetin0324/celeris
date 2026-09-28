@@ -115,6 +115,15 @@ def main():
             data = json.loads(result.stdout)
             assert data.get("success") is False, raw
             results.append({"upstream_denied": raw[0], "success": data["success"]})
+        # Upstream 0.38.1 treats an empty/unreadable policy as no policy; the shim must refuse.
+        good_policy = (runtime / "policy.json").read_text()
+        for broken in ['{"default":"deny","allow":[]}', '{"default":"deny","allow":']:
+            (runtime / "policy.json").write_text(broken)
+            command("snapshot", success=False)
+        (runtime / "policy.json").unlink()
+        command("snapshot", success=False)
+        (runtime / "policy.json").write_text(good_policy)
+        results.append({"policy_fail_closed": ["empty_allow", "unparsable", "missing"], "success": True})
         # Observe harmless page-rendered storage state through normal snapshots.
         # Do not use raw cookie/storage reads or eval to test session isolation.
         command("open", f"http://127.0.0.1:{server.server_port}/index.html")

@@ -33,3 +33,10 @@ Phase 1 は公開・未認証ページ向け。同一 UID の任意 shell を隔
 `artifacts/adopt.md` にある。`gui`（lint/typecheck/test 1154件/build）と Rust（fmt 2 回収束・clippy・
 `cargo test --workspace` 再実行で 0 failed・関係 crate 個別実行）・`scripts/tests/test_browser_cli.py`
 （単体 10 件 OK）を確認済み。本番へは未昇格。
+
+## 2026-09-28 追記: MVP 受け入れ監査（task 01M3MFS5T52FXA63W4V10XGC4S）
+
+固定版 agent-browser 0.38.1 の実機で、policy ファイルが無い・壊れている・`allow: []` のとき `eval` が成功する
+（fail-open）ことを確認した。shim（`browser_cli.py`）は呼び出し前に生成 policy（`default: deny`、非空で既知 action のみ）と
+非空の `allowed_domains` を検査し、満たさなければ substrate を起動せず `policy_block` を記録する。
+Python 単体 12 件、`scripts/browser-smoke.py` 実機 26 checks、`gui/scripts/browser-check.mjs` を確認した。

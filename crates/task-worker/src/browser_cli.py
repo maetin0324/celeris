@@ -23,6 +23,26 @@ class PolicyBlocked(ValueError):
     pass
 
 
+# Must equal the supervisor's action_policy(). Upstream 0.38.1 treats a missing,
+# unparsable or empty-allow policy as "no policy" (fail-open), so never invoke it then.
+ACTIONS = {"launch", "navigate", "click", "snapshot", "gettext", "screenshot", "download", "scroll", "close"}
+
+
+def guarded(config):
+    """Fail closed unless the generated policy and domain filter are intact."""
+    try:
+        policy = json.loads((ROOT / "policy.json").read_text())
+    except (OSError, ValueError):
+        return False
+    domains = config.get("allowed_domains")
+    return (isinstance(policy, dict) and set(policy) == {"default", "allow"}
+            and policy["default"] == "deny" and isinstance(policy["allow"], list)
+            and len(policy["allow"]) > 0
+            and all(isinstance(a, str) and a in ACTIONS for a in policy["allow"])
+            and isinstance(domains, list) and len(domains) > 0
+            and all(isinstance(d, str) and re.fullmatch(r"(\*\.)?[A-Za-z0-9.-]+", d) for d in domains))
+
+
 def audit(operation, status, artifact=None):
     event = {"operation": operation, "status": status}
     if artifact:
@@ -72,6 +92,10 @@ def main(args):
     except (ValueError, OverflowError):
         audit("policy_block", "blocked")
         print('{"success":false,"error":"command blocked by browser capability"}')
+        return 2
+    if not guarded(config):
+        audit("policy_block", "blocked")
+        print('{"success":false,"error":"browser policy unavailable; refusing to run"}')
         return 2
     # Do not inherit CDP, profiles, persistent state, extensions, plugins, proxies,
     # executable overrides or credentials from the harness/daemon environment.

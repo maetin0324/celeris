@@ -211,3 +211,63 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R1c: 子のブランチと親ブランチへの取り込み、子の review 基準、根だけが main へ（完了 2026-09-28）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R1c・D5・D6、付記「R1c 実装時の逸脱・明確化」（10 項目）。
+- 種類: コード（task-core / task-worker / task-dispatch / task-ops / task-api / celeris）。**migration なし（schema 31 のまま）**、API の型・
+  schema・GUI の型の変更なし（`gen:types` の差分 0）。`[execution.tree] enabled = false`（既定）では /3 が採用されず子が作られないので、
+  daemon の挙動は変わらない（木でない task の worktree の base・統合・取り込み・通知は 1 バイトも変えていない）。本番の DB・設定・サービスには触れていない。
+
+### 実装したもの
+
+- **子のブランチと基点**: 子は普通の task の作業場所（`<workspace_root>/<child_id>/repos/<name>`、旧い形は `/tree`）とブランチ `celeris/<child_id>`
+  を持つ（付記 1.）。子を作る tick で `Dispatcher::child_base_commit` が葉と同じ規則（同じ段階の依存先は `integration::dependency_base`、
+  無ければ親の task ブランチの HEAD = 段階の基点）で基点を決め、子の `tree.base_commit` に書く。`Dispatcher::worktree_base_for` は木の子の
+  worktree を `BaseKind::Parent`（前置きの出どころ `parent`）でこの sha から切る。`dependency_base` は依存先が子 task なら子のブランチの HEAD。
+- **子の done の記録**: unit を `done` に写す tick で子の worktree に残った変更を決定的に commit し、unit の `head_commit` / `base_commit` と
+  `WorkUnitCommitted{branch: celeris/<child_id>}` を `child_done` と同じトランザクションで残す（replay も同じ値を作る）。
+- **統合**: `integrate-<stage>` は葉の WU のブランチに、段階の done の子のブランチを `seq` 順で足して親ブランチへ `merge --no-ff`
+  （既に入っていれば `skipped`、リポジトリに無い子のブランチは飛ばす）。段階の検査を再実行し、`PhaseIntegrated.merged` に子の key と子の
+  ブランチの HEAD が入る。衝突・検査の失敗は既存の repair / replan。統合の後で子の worktree を消す（ブランチは残す）。
+- **子の最終レビュー**: `review::tree_child_review_view` が、検査の `merge-base --is-ancestor main`（等）を親のブランチに置き換え、reviewer の
+  前置きに「## 取り込み先（ADR-0079 D6）」（親のブランチ・差分の基点・main が進んでも不合格にしない）を足す。checkpoint の差分の基点も `base_commit`。
+- **根だけが main へ**: 木の子は `task_ops::delivery::begin`（ADR-0051）で `deliveries` の行も merge の条件も作られず、`celeris` の delivery の tick も
+  木の子の行を進めない。`POST /tasks/{id}/changes/{repo}/integrate`（ADR-0043 D5）は 409 `tree_child`（文言は「成果の取り込み」）。`TaskReady` は
+  root の done だけ。root の経路は変えていない。
+
+### 受け入れ条件（ADR-0079 §7 R1c と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) 子は `celeris/<child_id>` を段階の基点から切り、`integrate-S` が leaf と子を親ブランチに merge し、`PhaseIntegrated.merged` に子と commit が残る | `cargo test -p task-dispatch --lib -- dispatcher::tests::tree_branches::integration_merges_child_task_branch` | ok。s2 の子 c の `tree.base_commit` = `integrate-s1` の `integrated_commit`、c の cwd = `<ws>/<child_id>/tree`、`merged(s2)` = `[(b,false),(c,false)]` で c の commit = `celeris/<child_id>` の HEAD、親ブランチに a/b/c.txt、子の worktree は消えブランチは残る、main は不変、`WorkUnitCommitted{c}`。壊した c の `head_commit` を `replay --check` が検出し `--apply` で `head_commit` / `base_commit` が戻る |
+| (b) 同じ段階で子に依存する leaf は子の HEAD から切られる | `… tree_branches::same_stage_dependency_on_child_bases_on_child_head`、`cargo test -p task-dispatch --lib -- integration::tests::child_task_branches_are_optional_and_idempotent` | ok。b の `base_commit` = c の `head_commit`、`merged(s1)` = `[(c,false),(b,false)]`。`dependency_base` は子のブランチ → 記録した head → task ブランチ |
+| (c) 子の最終レビュー中に main が進んでも、子の merge-base の検査は親ブランチと比べて通る | `… tree_branches::child_review_ignores_main_moving`、`cargo test -p task-dispatch --lib -- review::tests::merge_base_ref_is_rebased_on_the_parent_branch review::tests::only_tree_children_get_the_parent_branch_review_view` | ok。子の判定は 1 回で合格、理由に `--is-ancestor celeris/<root> HEAD`、main の新しい commit は子にも親にも入らない、子の保存された条件は `main` のまま。root は view が変わらない |
+| (d) 子の done で `deliveries` も取り込みの通知も作られず、root だけが ADR-0051 に進む | `cargo test -p task-ops --lib delivery`、`cargo test -p celeris --test notify a_tree_child_done_does_not_notify_task_ready_but_the_root_does`、`cargo test -p task-api --test changes` | ok。木の子は `begin` が `None`・条件を足さない・行なし、同じ task を root として渡すと従来どおり `Some`（回帰）。`TaskReady` は root の 1 件だけ。子の merge / pr / discard は 409 `tree_child`（main・ブランチ・記録は不変）、既存の取り込みの試験 7 本は通過 |
+| 孫（深さ 3）→ 子（深さ 2）→ root | `… tree_branches::grandchild_integrates_into_child_which_integrates_into_root` | ok。子は compound（自分の計画）、孫の `depth = 3`・基点は子の段階の基点の子孫、子の `merged(t1)` に g（孫のブランチの HEAD）と l、root の `merged(s1)` = c（子のブランチの HEAD）、g/l.txt が子と root のブランチに入る、main 不変 |
+| worktree の base（木の子は `Parent`、root は `Main`、基点が無いリポジトリでは親のブランチの HEAD） | `… tree_branches::worktree_base_of_a_tree_child_is_the_parent_base` | ok |
+| (e) 既に入っている子は統合で飛ばす（採用は R5b。付記 10.） | `… integration::tests::child_task_branches_are_optional_and_idempotent` | ok。2 回目は `skipped`、リポジトリに無い子のブランチは `merged` に出ない、WU のブランチが無ければ従来どおり Err |
+| tree 無効で挙動不変・root の取り込みは不変 | 既存の全テスト（R1b の `tree_disabled_rejects_v3_and_creates_no_child`、ADR-0041 / 0043 / 0051 / 0074 の worktree・統合・取り込みの試験） | ok（下の gate） |
+| replay | 各試験の末尾の `assert_replay_is_clean` と (a) の壊した索引の復元 | ok。status / attempts・`work_units`（`head_commit`・`child_task_id`）・`execution_plans` の差分 0 |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 88（nextest 78 + doc 10）、**passed 2761 / failed 0 / ignored 7**（R1b の 2751 から +10）
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、2 回とも `gui/app/celeris/types.ts` の md5 が同じ（6c7d2447bd379177f13be9c3702ef15f、R1b と同じ）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 285 files、2 infos）/ `test` → exit 0（Test Files 76 passed、Tests 1175 passed）
+
+### 未解決・R2 以降へ
+
+- **木のブランチの後片付け**: 子の worktree は統合の後で消すが、done の子のブランチ `celeris/<child_id>` は root の取り込み・中止の後も残る（付記 9.。
+  中止の連鎖で cancelled になった子は既存の ADR-0043 D2 の後片付けで消える）。root の終端で木のブランチをまとめて消すのは R4b 以降。
+- **子の `TaskFailed` 通知**は今どおり鳴る（D11 の抑止は R3b）。子の失敗 → 親の replan の中身は R2b。
+- **`base_commit` は先頭のリポジトリの sha だけ**（付記 2.）。子の repos の 2 つ目以降は worktree を切る時点の親のブランチの HEAD（段階の途中では動かない）。
+- GUI の「配送」→「成果の取り込み」の全面的な言い換えと、子の取り込み先（「成果の取り込み（親『…』の段階『…』へ）」）の表示は R4b。
+  `GET /tasks/{id}/changes` は子にも今どおり差分を出す（取り込みのボタンを押すと 409）。
+- 採用（adopt）した done の子の統合の試験（§7 R1c (e) の名前の試験）は R5b（統合の冪等性は R1c で確かめた）。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

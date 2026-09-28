@@ -799,3 +799,53 @@ R1b（kind task の unit からの子 task の生成、状態の写し、段階�
     作り直せる（`celerisctl replay --check` の `work_units` 差分 0。壊した索引は `--apply` で戻る）。ただし `runs` の表は、偽のアダプタで走らせた
     /2・/3 の計画で planner run の role と並列 WU の run の `work_unit_id` / `seq` が events から復元しきれない差が **R1b 以前から**ある
     （木と無関係。R1b では直していない）。
+
+## 付記: R1c 実装時の逸脱・明確化（2026-09-28）
+
+R1c（子のブランチの基点、統合 WU での子のブランチの merge、子の最終レビューの基点、子の取り込みの抑止、root だけが main）で決めたこと。
+本文の決定は変えていない。migration は足していない（schema 31 のまま）。
+
+1. **子の作業場所は task の作業場所の規則のまま**: 子は親の作業場所の下に入れ子にせず、普通の task と同じ
+   `<workspace_root>/<child_id>/repos/<name>`（1 リポジトリの旧い形は `<workspace_root>/<child_id>/tree`）に worktree を持ち、ブランチは
+   `celeris/<child_id>`（`worktree_branch_prefix`）。成果物・`runs/`・目印・レビューの錠・中止の後片付け（ADR-0043 D2）・生成物の刈り取り
+   （ADR-0066 D2）など task id で引く経路がすべてそのまま効くため。違うのは worktree の base だけ（下の 2.）。子が compound なら、子の WU は
+   今どおり `<child_dir>/wu/<key>`・`celeris-wu/<child_id>/<key>` で、子のブランチに対して統合される（孫も同じ）。
+2. **base の決め方**（`Dispatcher::worktree_base_for`）: 木の子（`tree.parent_unit` を持つ task）の worktree は `BaseKind::Parent`
+   （前置きの base の出どころは `parent`）で、`tree.base_commit` から切る。`base_commit` は**親の先頭の git リポジトリの sha 1 つ**
+   （`TreeInfo` の形を変えないため）。子の repos の 2 つ目以降のように、その sha がリポジトリで解決できなければ、そのリポジトリの親のブランチ
+   `celeris/<parent_id>` の HEAD（親のブランチは段階の途中では動かない。D6）。どちらも無ければ WARN を出して従来の規則（main）に倒す。
+   木でない task・root は今どおり（1 バイトも変わらない）。
+3. **`base_commit` を決める時点**: 子を作るとき（unit が ready になった tick、`Dispatcher::child_base_commit`）に、葉と同じ規則で決めて子の
+   `tree.base_commit` に書く（`Created` の Task の JSON に入るので replay は同じ値）: 同じ段階の依存先があれば `integration::dependency_base`、
+   無ければ親の task ブランチの HEAD（= 段階の基点。段階の unit が子だけのときは親の worktree を先に用意する）。親が並列 1 に倒れている
+   （remote / `shared` / git でない。`parallel_mode` の fallback）なら `None`（子もブランチを持たず、統合は子を merge しない。D5）。基点が
+   決まらなければ unit を `failed`（reason `child_create_failed`、理由は進行に残す）にし、既存の失敗の経路に乗せる（黙って待たない。D10）。
+4. **`dependency_base` を子に広げた**: 引数に `branch_prefix` を足し、依存先が kind task の unit なら子のブランチ `<prefix><child_id>` の HEAD →
+   記録した `head_commit` → 親の task ブランチの HEAD の順（子がブランチを持たなかったとき）。葉が子に依存しても、子が子に依存しても同じ関数。
+5. **子の done の記録**: 子が `done` になり unit を `done` に写す tick で、daemon が子の worktree に残った変更を決定的に commit し（WU の完了時と
+   同じ `integration::commit_all`、メッセージ `task/<child_id>: <title>`、変更が無ければ commit しない）、unit の行に `head_commit`（子のブランチの
+   HEAD）と `base_commit`（子の基点）を書き、`WorkUnitTransitioned{child_done}` と `Event::WorkUnitCommitted{branch: celeris/<child_id>, base, commit}`
+   を 1 トランザクションで積む（`work_units_apply`）。unit の行の `branch` は書かない（「WU の worktree を持たない」の印のまま）。replay は
+   `WorkUnitCommitted` の `branch` が `celeris-wu/` でなく unit が kind task なら `base_commit` も写す（`head_commit` は従来どおり）。
+6. **統合**: 段階の統合 WU が merge するのは、葉の WU のブランチ（`phase_leaves`、従来どおり）に、その段階の `done` の kind task の unit の子の
+   ブランチを足したもの（**葉かどうかに関わらず**入れる。子に依存する同じ段階の葉があっても子の commit は 1 度だけ入り、`merged` には子と葉の
+   両方が残る）。順は `seq`。子のブランチは `MergeItem::child_task`（**リポジトリに無ければ飛ばす**。子の repos は親の部分集合なので）で、
+   2 つ目以降のリポジトリの `merged` も和を取る。子が `base_commit` を持つ（= ブランチを切った）のにどのリポジトリにもブランチが無ければ
+   統合の失敗（`integration_gives_up`、replan）。既に入っている子は `skipped`（冪等。採用した done の子の成果が既に親ブランチにある場合も同じ）。
+   衝突は既存の `merge-<stage>-<key>` の repair、検査の再実行と失敗は既存の repair / replan のまま。統合が済んだら子の worktree を消す
+   （ブランチは残す）。
+7. **子の最終レビュー**（`review::tree_child_review_view`、レビューに渡す task の view だけを変え、保存した task は変えない）: `Check::Command` の
+   `merge-base --is-ancestor <ref>` の `<ref>` が既定のブランチ（`main` / `master` / `origin/main` / `origin/master` / `refs/heads/main` /
+   `refs/heads/master` / `origin/HEAD`）なら親のブランチに置き換える（条件の数と順は変えない）。したがって merge-base の不成立で daemon が
+   決定的に merge するのも親のブランチになり、main の commit が子に入らない。reviewer run の前置き（目的）の末尾に「## 取り込み先（ADR-0079 D6）」
+   （親のブランチ、差分の基点 `base_commit`、main が進んでいても不合格にしない）を固定の書式で足す。checkpoint の差分の基点も `base_commit`。
+8. **取り込みの抑止**: 子には ADR-0051 の部署の取り込み判定（`task_ops::delivery::begin` が `None`。`deliveries` の行・merge の条件・release を
+   作らない）も、ADR-0043 D5 の人の取り込み（`POST /tasks/{id}/changes/{repo}/integrate` の merge / pr / discard はすべて 409 `tree_child`、
+   文言は「成果の取り込み」）も無い。`celeris` の delivery の tick も木の子の行は進めない（保険）。`TaskReady` は木の子では鳴らさない（root の done
+   だけ）。**子の `TaskFailed` は R3b まで今どおり鳴る**（D11 の「子の失敗は鳴らさない」は R3b の範囲）。
+9. **後片付けの範囲**: 子の worktree は親の統合の後で消す。中止の連鎖で `cancelled` になった子は既存の `cleanup_cancelled_worktrees` が
+   worktree とブランチを消す（ADR-0043 D2 のまま）。**root の取り込み・中止で木の done の子のブランチをまとめて消すのは R1c ではやっていない**
+   （done の子のブランチは root の終端の後も残る。R4b 以降で木の後片付けとして扱う）。
+10. **受け入れ条件 (e)**（採用した done の子の成果が既に main にあるとき統合は飛ばす）は、採用（adopt）が R5b なので、統合の冪等性
+    （`integration::tests::child_task_branches_are_optional_and_idempotent`: 既に入っている子のブランチは `skipped`）で確かめた。採用の入口の
+    試験は R5b。

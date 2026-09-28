@@ -1335,6 +1335,39 @@ fn task_completion_survives_a_restart_between_completion_and_the_next_scan() {
     assert_eq!(env.store.notification_scan_at().unwrap(), Some(at(23)));
 }
 
+/// ADR-0079 D6 / D11（Phase R1c）: 木の子 task の done は `TaskReady` を鳴らさない（親の段階で取り込まれる
+/// 準備ができただけ）。root の done は今どおり鳴る。
+#[test]
+fn a_tree_child_done_does_not_notify_task_ready_but_the_root_does() {
+    let env = Env::new();
+    let config = NotifyConfig::default();
+    notify::schedule(env.as_store(), &config, at(0), at(10)).unwrap();
+    let mut root = task(Status::Done);
+    root.updated_at = at(15);
+    env.store.insert(&root).unwrap();
+    let mut child = task(Status::Done);
+    child.updated_at = at(15);
+    child.parent_id = Some(root.id);
+    child.tree = Some(task_core::TreeInfo::child_of(
+        &root,
+        task_core::ParentUnit {
+            task_id: root.id,
+            plan_id: "plan".into(),
+            unit_key: "c".into(),
+            stage: "s1".into(),
+        },
+        None,
+    ));
+    env.store.insert(&child).unwrap();
+    let created = notify::schedule(env.as_store(), &config, at(20), at(21)).unwrap();
+    let completed: Vec<String> = created
+        .iter()
+        .filter(|n| n.kind == NotificationKind::TaskReady)
+        .map(|n| n.key.clone())
+        .collect();
+    assert_eq!(completed, vec![root.id.to_string()]);
+}
+
 #[test]
 fn unresolved_approval_and_question_survive_restart_and_decided_approval_does_not_hide_question() {
     let mut env = Env::new();

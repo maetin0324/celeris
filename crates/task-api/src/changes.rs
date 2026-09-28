@@ -320,6 +320,19 @@ fn default_branch_busy(detail: String) -> ApiProblem {
     ApiProblem::new(StatusCode::CONFLICT, "default_branch_busy", detail)
 }
 
+/// ADR-0079 D6（Phase R1c）: 木の子 task の成果は親の段階末尾の統合で親のブランチに取り込まれる。
+/// 人の取り込み（merge / pr / discard）は root だけ（409）。
+fn tree_child_integration(parent: TaskId) -> ApiProblem {
+    ApiProblem::new(
+        StatusCode::CONFLICT,
+        "tree_child",
+        format!(
+            "この task は木の子 task です。成果は親 task {parent} の段階の統合で親のブランチに取り込まれます\
+             （成果の取り込み。ADR-0079 D6）。main への成果の取り込みは root task だけで行います"
+        ),
+    )
+}
+
 /// ADR-0043 D5: `pr` の前提（`origin` と `gh`）が揃っていない（409）。
 fn pr_unavailable(detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::CONFLICT, "pr_unavailable", detail)
@@ -348,6 +361,9 @@ async fn integrate(
     let result = state
         .blocking(move |store| {
             let task = load_task(store, task_id)?;
+            if let Some(parent) = task_core::tree::tree_parent(&task) {
+                return Err(tree_child_integration(parent));
+            }
             let targets = targets_for(store, &task, &workspace_root)?;
             let target = pick_target(&targets, &repo)?;
             let now = OffsetDateTime::now_utc();

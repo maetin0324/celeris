@@ -40,6 +40,9 @@ pub enum BaseKind {
     Current,
     /// `main` が無いリポジトリの `HEAD`。
     Head,
+    /// ADR-0079 D6（Phase R1c）: 木の子 task の基点（親の段階の基点、または同じ段階の依存先の HEAD。
+    /// `Task.tree.base_commit`）。子の成果は親のブランチに取り込まれ、main とは比べない。
+    Parent,
 }
 
 impl BaseKind {
@@ -48,6 +51,7 @@ impl BaseKind {
             BaseKind::Main => "main",
             BaseKind::Current => "current",
             BaseKind::Head => "head",
+            BaseKind::Parent => "parent",
         }
     }
 }

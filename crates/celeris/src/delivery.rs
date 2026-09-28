@@ -144,6 +144,14 @@ fn maybe_retry_push(
 }
 pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Result<(), StoreError> {
     for delivery in store.delivery_list()? {
+        // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（`task_ops::delivery::begin` が行を
+        // 作らない。旧い行が残っていても merge / release に進めない保険）。
+        if store
+            .get(delivery.task_id)?
+            .is_some_and(|t| task_core::tree::is_tree_child(&t))
+        {
+            continue;
+        }
         if config
             .selfdeploy
             .delivery_projects

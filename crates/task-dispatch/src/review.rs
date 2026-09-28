@@ -273,6 +273,89 @@ fn merge_base_ancestor_ref(cmd: &str) -> Option<String> {
     tokens.get(idx + 1).map(|s| s.trim_matches('"').to_string())
 }
 
+/// ADR-0079 D6（Phase R1c）: 木の子 task の最終レビューで「既定のブランチ」と読む ref。子の検査では
+/// これらを親のブランチに置き換える（子は main ではなく親のブランチに取り込まれる）。
+const DEFAULT_BRANCH_REFS: &[&str] = &[
+    "main",
+    "master",
+    "origin/main",
+    "origin/master",
+    "refs/heads/main",
+    "refs/heads/master",
+    "origin/HEAD",
+];
+
+/// ADR-0079 D6: 子の最終レビューの検査で置き換えた先（見出しの文言にも使う）。
+pub const TREE_CHILD_REVIEW_HEADING: &str = "## 取り込み先（ADR-0079 D6）";
+
+/// ADR-0079 D6（Phase R1c）: `cmd` の `merge-base --is-ancestor <ref>` の `<ref>` が既定のブランチ
+/// （[`DEFAULT_BRANCH_REFS`]、引用符付きも）なら `parent_branch` に置き換える（すべての出現。決定的な字句の
+/// 置き換えで、他の部分は 1 バイトも変えない）。当たらなければ `None`。
+pub fn rebase_merge_base_ref(cmd: &str, parent_branch: &str) -> Option<String> {
+    let lower = cmd.to_lowercase();
+    if !lower.contains("merge-base") || !lower.contains("--is-ancestor") {
+        return None;
+    }
+    const FLAG: &str = "--is-ancestor";
+    let mut out = String::with_capacity(cmd.len() + parent_branch.len());
+    let mut rest = cmd;
+    let mut changed = false;
+    while let Some(pos) = rest.find(FLAG) {
+        let after_flag = pos + FLAG.len();
+        out.push_str(&rest[..after_flag]);
+        let tail = &rest[after_flag..];
+        let ws_len = tail.len() - tail.trim_start().len();
+        let token_start = &tail[ws_len..];
+        let token_len = token_start
+            .find(char::is_whitespace)
+            .unwrap_or(token_start.len());
+        let token = &token_start[..token_len];
+        out.push_str(&tail[..ws_len]);
+        let bare = token.trim_matches(|c| c == '"' || c == '\'');
+        if ws_len > 0 && DEFAULT_BRANCH_REFS.contains(&bare) {
+            out.push_str(parent_branch);
+            changed = true;
+        } else {
+            out.push_str(token);
+        }
+        rest = &token_start[token_len..];
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
+/// ADR-0079 D6（Phase R1c）: 最終レビューに渡す対象の task。木の子 task（`tree.parent_unit` を持つ）なら、
+/// - `Check::Command` の `merge-base --is-ancestor <main 等>` を親のブランチ `parent_branch` に置き換え
+///   （[`rebase_merge_base_ref`]。条件の数と順は変えないので `criterion_idx` はそのまま）、
+/// - 目的（reviewer run の前置きに出る）の末尾に、取り込み先と差分の基点を固定の書式で足す
+///   （[`TREE_CHILD_REVIEW_HEADING`]。main が進んでいても不合格の理由にしない）。
+///
+/// 親のブランチは段階の途中では動かない（動くのは段階末尾の統合だけ）ので、子の最終レビュー中に基点が
+/// ずれない（人の決定 4）。木の子でなければ `task` をそのまま返す（root は今どおり main と比べる）。
+pub fn tree_child_review_view(task: Task, branch_prefix: &str) -> Task {
+    let Some(parent_branch) = task_core::tree::parent_branch(&task, branch_prefix) else {
+        return task;
+    };
+    let base = task_core::tree::child_base_commit(&task)
+        .map(|sha| sha.chars().take(12).collect::<String>())
+        .unwrap_or_else(|| "-".to_string());
+    let mut view = task;
+    for criterion in &mut view.acceptance {
+        if let Check::Command { cmd, .. } = &mut criterion.check
+            && let Some(rewritten) = rebase_merge_base_ref(cmd, &parent_branch)
+        {
+            *cmd = rewritten;
+        }
+    }
+    view.objective.push_str(&format!(
+        "\n\n{TREE_CHILD_REVIEW_HEADING}\n\
+         この task は親 task の計画の段階の子 task。成果は親のブランチ `{parent_branch}` に親の段階末尾の統合で\
+         取り込まれ、main には直接取り込まれない。差分の基点は `{base}`（親の段階の基点）、merge-base / \
+         fast-forward の相手は `{parent_branch}`。main が進んでいることは不合格の理由にしない。\n"
+    ));
+    view
+}
+
 /// 1 回だけ command を実行して判定する（`review_task`/`run_work_unit_checks` の元の判定ロジック）。
 /// `label` は理由の頭に付ける接頭辞（`workspace.toml` の check だけ `"workspace.toml check: "`。
 /// それ以外は空文字で、既存の文面と 1 バイトも変わらない）。
@@ -1210,6 +1293,84 @@ mod tests {
             1,
             "no retry once already at the cap"
         );
+    }
+
+    /// ADR-0079 D6（Phase R1c）: 子の検査の `merge-base --is-ancestor main` は親のブランチに置き換わる
+    /// （他の ref・他の部分は変えない）。
+    #[test]
+    fn merge_base_ref_is_rebased_on_the_parent_branch() {
+        let p = "celeris/01PARENT";
+        assert_eq!(
+            rebase_merge_base_ref("git merge-base --is-ancestor main HEAD", p).as_deref(),
+            Some("git merge-base --is-ancestor celeris/01PARENT HEAD")
+        );
+        assert_eq!(
+            rebase_merge_base_ref(
+                "git fetch -q && git merge-base  --is-ancestor \"origin/main\" HEAD && echo ok",
+                p
+            )
+            .as_deref(),
+            Some("git fetch -q && git merge-base  --is-ancestor celeris/01PARENT HEAD && echo ok")
+        );
+        assert_eq!(
+            rebase_merge_base_ref(
+                "git merge-base --is-ancestor master HEAD && git merge-base --is-ancestor main HEAD",
+                p
+            )
+            .as_deref(),
+            Some(
+                "git merge-base --is-ancestor celeris/01PARENT HEAD && git merge-base --is-ancestor celeris/01PARENT HEAD"
+            )
+        );
+        assert_eq!(
+            rebase_merge_base_ref("git merge-base --is-ancestor feature HEAD", p),
+            None
+        );
+        assert_eq!(rebase_merge_base_ref("cargo test", p), None);
+    }
+
+    /// ADR-0079 D6: 木の子だけが置き換わる（root は 1 バイトも変わらない）。
+    #[test]
+    fn only_tree_children_get_the_parent_branch_review_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = task_with(
+            vec![Check::Command {
+                cmd: "git merge-base --is-ancestor main HEAD".into(),
+                expect_exit: 0,
+            }],
+            dir.path(),
+        );
+        let same = tree_child_review_view(root.clone(), "celeris/");
+        assert_eq!(same, root);
+        let parent_id = TaskId::new();
+        root.tree = Some(task_core::TreeInfo {
+            root_id: parent_id,
+            depth: 2,
+            parent_unit: Some(task_core::ParentUnit {
+                task_id: parent_id,
+                plan_id: "plan".into(),
+                unit_key: "c".into(),
+                stage: "s1".into(),
+            }),
+            base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+        });
+        let view = tree_child_review_view(root.clone(), "celeris/");
+        assert_eq!(view.acceptance.len(), root.acceptance.len());
+        assert_eq!(
+            view.acceptance[0].check,
+            Check::Command {
+                cmd: format!("git merge-base --is-ancestor celeris/{parent_id} HEAD"),
+                expect_exit: 0,
+            }
+        );
+        assert!(view.objective.starts_with(&root.objective));
+        assert!(view.objective.contains(TREE_CHILD_REVIEW_HEADING));
+        assert!(
+            view.objective.contains("`0123456789ab`"),
+            "{}",
+            view.objective
+        );
+        assert!(!view.objective.contains("配送"));
     }
 
     /// (h): `merge-base --is-ancestor` が不成立でも、衝突なく merge できれば daemon が決定的に

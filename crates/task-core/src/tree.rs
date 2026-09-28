@@ -88,6 +88,36 @@ pub fn root_id_of(task: &Task) -> TaskId {
     task.tree.as_ref().map(|t| t.root_id).unwrap_or(task.id)
 }
 
+/// ADR-0079 D6（Phase R1c）: 親の計画の unit から作られた木の子 task か（`tree.parent_unit` を持つ）。
+/// 子の成果は親のブランチに取り込まれ、main への取り込み（ADR-0051 の `deliveries`・ADR-0043 D5 の
+/// 取り込み）と `TaskReady` の通知は持たない。root（`tree` を持たない task）は `false`。
+pub fn is_tree_child(task: &Task) -> bool {
+    tree_parent(task).is_some()
+}
+
+/// D6: 木の子 task の親（`tree.parent_unit.task_id`。採用〈adopt〉で `parent_id` を書き換えない子でも
+/// 木の親を指す）。木の子でなければ `None`。
+pub fn tree_parent(task: &Task) -> Option<TaskId> {
+    task.tree
+        .as_ref()
+        .and_then(|t| t.parent_unit.as_ref())
+        .map(|u| u.task_id)
+}
+
+/// D6: 木の子 task の取り込み先 = 親の task ブランチ（`<prefix><parent_id>`。`prefix` は設定の
+/// `worktree_branch_prefix`、既定 `celeris/`）。木の子でなければ `None`（root は main と比べる）。
+pub fn parent_branch(task: &Task, prefix: &str) -> Option<String> {
+    tree_parent(task).map(|parent| format!("{prefix}{parent}"))
+}
+
+/// D6: 木の子 task の worktree を切る基点（`tree.base_commit`）。木の子でなければ `None`。
+pub fn child_base_commit(task: &Task) -> Option<&str> {
+    if !is_tree_child(task) {
+        return None;
+    }
+    task.tree.as_ref().and_then(|t| t.base_commit.as_deref())
+}
+
 /// U-R1: 深さ `depth` の task の計画が kind task の unit（子 task）を持てるか（`depth < max_depth`）。
 pub fn can_have_child_tasks(depth: u32, max_depth: u32) -> bool {
     depth < max_depth

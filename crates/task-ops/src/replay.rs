@@ -364,6 +364,10 @@ pub fn rebuild_work_units_and_runs(
                     if branch.starts_with("celeris-wu/") {
                         wu.branch = Some(branch.clone());
                         wu.base_commit = base.clone();
+                    } else if wu.kind == task_core::WorkUnitKind::Task {
+                        // ADR-0079 D6（Phase R1c）: kind task の unit の子の done（子のブランチの HEAD と
+                        // 子の基点。`branch` は行に書かない = WU の worktree を持たない印のまま）。
+                        wu.base_commit = base.clone();
                     }
                     wu.head_commit = Some(commit.clone());
                 }

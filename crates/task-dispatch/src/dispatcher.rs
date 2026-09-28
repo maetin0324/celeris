@@ -8852,6 +8852,7 @@ impl Dispatcher {
                     &task_id,
                     dep_row,
                     &task_wt.branch,
+                    &self.config.worktree_branch_prefix,
                 )
                 .map_err(WuPrepareError::permanent)?,
                 (None, None) => crate::integration::rev_parse(
@@ -9099,7 +9100,9 @@ impl Dispatcher {
             .and_then(|r| r.branch())
             .unwrap_or_default()
             .to_string();
-        (artifacts_dir, cwd, branch, None)
+        // ADR-0079 D6（Phase R1c）: 木の子の差分の基点は `tree.base_commit`（main との merge-base ではない）。
+        let base = task_core::tree::child_base_commit(task).map(str::to_string);
+        (artifacts_dir, cwd, branch, base)
     }
 
     /// ADR-0074 D1.6（Phase F2b）: 兄弟が走っている間に question / 失敗で止まった WU（`id`）について、
@@ -9228,6 +9231,176 @@ impl Dispatcher {
         self.start_integration(task, &wu.id)
     }
 
+    /// ADR-0079 D6（Phase R1c）: kind task の unit `unit` から作る子 task の worktree の基点（親の先頭の git
+    /// リポジトリの sha）。葉の WU と同じ規則（`prepare_work_unit_workspace`）: 同じ段階の依存先があれば
+    /// `integration::dependency_base`（依存先が子 task ならその子のブランチの HEAD）、無ければ親の task
+    /// ブランチの HEAD（= 段階の基点。親のブランチは段階の途中では動かない）。親が WU の worktree を持たない
+    /// （並列 1 に倒した: remote / shared / git でない）なら `None`（子もブランチを持たず、統合は子を merge しない。D5）。
+    /// `Err` は子を作れない理由（unit を `failed` にする）。
+    fn child_base_commit(
+        &self,
+        parent: &Task,
+        unit: &task_core::WorkUnitRow,
+        units: &[task_core::WorkUnitRow],
+    ) -> Result<Option<String>, String> {
+        let mode = self.parallel_mode(parent).map_err(|e| e.to_string())?;
+        if !mode.worktrees || mode.fallback.is_some() {
+            return Ok(None);
+        }
+        let Some(ws) = self.task_workspaces_for(parent) else {
+            return Ok(None);
+        };
+        let Some((repo, task_wt)) = ws
+            .repos
+            .iter()
+            .find_map(|r| r.worktree.as_ref().map(|wt| (r, wt)))
+        else {
+            return Ok(None);
+        };
+        // 親の task ブランチ（段階の基点）を先に用意する（段階の unit が子だけのときはまだ無い）。
+        task_wt
+            .ensure_blocking()
+            .map_err(|e| format!("cannot prepare the parent's worktree: {e}"))?;
+        let intra_dep = unit.depends_on.iter().find_map(|d| {
+            units
+                .iter()
+                .find(|u| &u.key == d && u.phase.is_some() && u.phase == unit.phase)
+        });
+        let base = match intra_dep {
+            Some(dep) => crate::integration::dependency_base(
+                &repo.source,
+                &parent.id.to_string(),
+                dep,
+                &task_wt.branch,
+                &self.config.worktree_branch_prefix,
+            )?,
+            None => crate::integration::rev_parse(
+                &repo.source,
+                &format!("refs/heads/{}", task_wt.branch),
+            )
+            .ok_or_else(|| format!("the parent's task branch {} does not exist", task_wt.branch))?,
+        };
+        Ok(Some(base))
+    }
+
+    /// ADR-0079 D6（Phase R1c）: done になった子 task の worktree で、残った変更を決定的に commit する
+    /// （WU の完了時と同じ `integration::commit_all`、メッセージ `task/<child_id>: <title>`。変更が無ければ
+    /// commit しない）。戻り値は子のブランチと、先頭の git リポジトリのその HEAD。子の worktree が既に無ければ
+    /// ブランチの HEAD を元のリポジトリで引く。子がブランチを持たない（shared / remote）なら `None`。
+    fn commit_child_branch(&self, child: &Task) -> Option<(String, String)> {
+        let ws = self.task_workspaces_for(child)?;
+        let mut first: Option<(String, String)> = None;
+        for repo in &ws.repos {
+            let Some(wt) = &repo.worktree else {
+                continue;
+            };
+            let head = if wt.dir.is_dir() {
+                match crate::integration::commit_all(
+                    &wt.dir,
+                    &format!("task/{}: {}", child.id, child.title),
+                ) {
+                    Ok((head, _)) => Some(head),
+                    Err(e) => {
+                        tracing::warn!(child_id = %child.id, repo = %repo.name, error = %e, "could not commit the child task's remaining changes (ADR-0079 D6)");
+                        crate::integration::rev_parse(&wt.dir, "HEAD")
+                    }
+                }
+            } else {
+                crate::integration::rev_parse(&wt.repo, &format!("refs/heads/{}", wt.branch))
+            };
+            if let Some(head) = head {
+                first.get_or_insert((wt.branch.clone(), head));
+            }
+        }
+        first
+    }
+
+    /// ADR-0079 D6（Phase R1c）: 段階 `phase` の統合が済んだ子 task の worktree を消す（ブランチは残す）。
+    /// 失敗は警告だけ（取り込みは済んでいる。後片付けで段階を止めない）。
+    fn remove_integrated_child_worktrees(
+        &self,
+        task_id: TaskId,
+        units: &[task_core::WorkUnitRow],
+        phase: &str,
+    ) {
+        for u in units.iter().filter(|u| {
+            u.kind == task_core::WorkUnitKind::Task
+                && u.status == task_core::WorkUnitStatus::Done
+                && u.phase.as_deref() == Some(phase)
+        }) {
+            let Some(child) = u
+                .child_task_id
+                .as_deref()
+                .and_then(|id| id.parse::<TaskId>().ok())
+                .and_then(|id| self.store.get(id).ok().flatten())
+            else {
+                continue;
+            };
+            let Some(ws) = self.task_workspaces_for(&child) else {
+                continue;
+            };
+            for wt in ws.repos.iter().filter_map(|r| r.worktree.as_ref()) {
+                if let Err(e) = crate::integration::remove_wu_worktree(wt) {
+                    tracing::warn!(%task_id, work_unit = %u.key, child_id = %child.id, error = %e, "could not remove the child task's worktree after integration (ADR-0079 D6)");
+                }
+            }
+        }
+    }
+
+    /// ADR-0074 D1.4 / ADR-0079 D5・D6（Phase R1c）: 段階 `phase` の統合で merge するブランチ（`seq` 順）と、
+    /// ブランチが必ずあるはずの子（`(unit key, branch)`。子の worktree を切った = `tree.base_commit` を持つ子）。
+    /// - 葉の WU: `celeris-wu/<task>/<key>`（`phase_leaves`。従来どおり）。
+    /// - done の kind task の unit: 子 task のブランチ `<prefix><child_id>`（`MergeItem::child_task`。
+    ///   葉かどうかに関わらず入れる。子に依存する葉があっても子の commit は 1 度だけ入る）。子が
+    ///   `workspace_mode = shared` か remote でブランチを持たなければ（`base_commit` が無い）、どのリポジトリにも
+    ///   無くて構わない（D5 の「merge しない」）。
+    fn integration_items(
+        &self,
+        units: &[task_core::WorkUnitRow],
+        phase: &str,
+    ) -> (Vec<crate::integration::MergeItem>, Vec<(String, String)>) {
+        let mut ordered: Vec<(u32, crate::integration::MergeItem)> =
+            task_core::phase_leaves(units, phase)
+                .into_iter()
+                .filter_map(|u| {
+                    u.branch.clone().map(|branch| {
+                        (
+                            u.seq,
+                            crate::integration::MergeItem::work_unit(&u.key, branch),
+                        )
+                    })
+                })
+                .collect();
+        let mut expected = Vec::new();
+        for u in units.iter().filter(|u| {
+            u.kind == task_core::WorkUnitKind::Task
+                && u.status == task_core::WorkUnitStatus::Done
+                && u.phase.as_deref() == Some(phase)
+        }) {
+            let Some(child_id) = u.child_task_id.as_deref() else {
+                continue;
+            };
+            let branch = format!("{}{child_id}", self.config.worktree_branch_prefix);
+            let has_branch = child_id
+                .parse::<TaskId>()
+                .ok()
+                .and_then(|id| self.store.get(id).ok().flatten())
+                .is_some_and(|child| task_core::tree::child_base_commit(&child).is_some());
+            if has_branch {
+                expected.push((u.key.clone(), branch.clone()));
+            }
+            ordered.push((
+                u.seq,
+                crate::integration::MergeItem::child_task(&u.key, branch),
+            ));
+        }
+        ordered.sort_by_key(|(seq, _)| *seq);
+        (
+            ordered.into_iter().map(|(_, item)| item).collect(),
+            expected,
+        )
+    }
+
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を始める（統合 WU を running にし、Task の lease を延ばし、
     /// 葉の WU のブランチの merge と検査の再実行を spawn する。git の I/O は tick を止めない）。
     /// 並列 1 に倒した Task（WU の worktree が無い）では no-op（すぐに done）。
@@ -9271,17 +9444,10 @@ impl Dispatcher {
             // 並列 1（WU は Task の worktree を共有した）: merge するブランチは無い（D1.2）。
             return self.on_integration_finished(task.id, &integ.id, Ok(IntegrationRun::default()));
         };
-        let items: Vec<crate::integration::MergeItem> = task_core::phase_leaves(&units, &phase)
-            .into_iter()
-            .filter_map(|u| {
-                u.branch
-                    .clone()
-                    .map(|branch| crate::integration::MergeItem {
-                        key: u.key.clone(),
-                        branch,
-                    })
-            })
-            .collect();
+        // ADR-0079 D5 / D6（Phase R1c）: 葉の WU のブランチに、この段階の done の kind task の unit の
+        // 子 task のブランチ `celeris/<child_id>` を足し、`seq` 順に merge する（子に依存する同じ段階の葉は
+        // 子の HEAD から切られているので、どちらが先でも子の commit は 1 度だけ入る。既に入っていれば飛ばす）。
+        let (items, expected_children) = self.integration_items(&units, &phase);
         let repos: Vec<PathBuf> = ws
             .repos
             .iter()
@@ -9327,11 +9493,29 @@ impl Dispatcher {
                     if i == 0 {
                         run.merged = out.merged.clone();
                         run.head = out.head.clone();
+                    } else {
+                        // ADR-0079 D6: 子のブランチは子の repos（親の部分集合）にだけある。先頭の
+                        // リポジトリに無かった子の merge も `merged` に残す（1 件目の commit）。
+                        for m in &out.merged {
+                            if !run.merged.iter().any(|x| x.key == m.key) {
+                                run.merged.push(m.clone());
+                            }
+                        }
                     }
                     if out.conflict.is_some() {
                         run.conflict = out.conflict;
                         break;
                     }
+                }
+                if run.conflict.is_none()
+                    && let Some((key, branch)) = expected_children
+                        .iter()
+                        .find(|(key, _)| !run.merged.iter().any(|m| &m.key == key))
+                {
+                    return Err(format!(
+                        "child task unit {key}: its branch {branch} exists in none of the task's repositories \
+                         (ADR-0079 D6)"
+                    ));
                 }
                 Ok(run)
             })
@@ -9823,6 +10007,9 @@ impl Dispatcher {
                 }
             }
         }
+        // ADR-0079 D6（Phase R1c）: 取り込んだ子 task の worktree を消す（ブランチ `celeris/<child_id>` は
+        // root の終端まで残す。監査のため）。
+        self.remove_integrated_child_worktrees(task_id, &units, &phase);
         // 次の工程の WU（工程の障壁が外れた）を ready にする。
         for id in task_core::newly_ready(&units) {
             if let Some(u) = units.iter().find(|u| u.id == id) {
@@ -10457,18 +10644,33 @@ impl Dispatcher {
                 row.blocked_reason = None;
                 row.clear_lease();
                 row.updated_at = rfc3339(now);
-                self.store.work_unit_transition(
-                    task_id,
-                    row,
-                    Event::WorkUnitTransitioned {
+                let mut events = vec![Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: u.status,
+                    to,
+                    reason: reason.to_string(),
+                    run_id: None,
+                }];
+                // ADR-0079 D6（Phase R1c）: 子の done は「親の段階で取り込まれる準備ができた」。子の worktree に
+                // 残った変更を決定的に commit し（WU の完了時の commit と同じ規則）、子のブランチの HEAD を
+                // unit の `head_commit`、子の基点を `base_commit` に残す（`WorkUnitCommitted`、同じトランザクション）。
+                if to == task_core::WorkUnitStatus::Done
+                    && let Some((branch, head)) = self.commit_child_branch(&child)
+                {
+                    row.head_commit = Some(head.clone());
+                    row.base_commit =
+                        task_core::tree::child_base_commit(&child).map(str::to_string);
+                    events.push(Event::WorkUnitCommitted {
                         work_unit_id: u.id.clone(),
                         key: u.key.clone(),
-                        from: u.status,
-                        to,
-                        reason: reason.to_string(),
-                        run_id: None,
-                    },
-                )?;
+                        branch,
+                        base: row.base_commit.clone(),
+                        commit: head,
+                    });
+                }
+                self.store
+                    .work_units_apply(task_id, Vec::new(), vec![row], events)?;
                 tracing::info!(%task_id, work_unit = %u.key, %child_id, child_status = ?child.status, to = ?to, "task unit mirrors its child task (ADR-0079 D4 (5))");
                 changed = true;
             }
@@ -10547,7 +10749,9 @@ impl Dispatcher {
                     // 答えの無い決定を待つ（この unit だけ。兄弟は止めない。ADR-0079 D7）。
                     continue;
                 };
-                match task_ops::tree::build_child_task(
+                // ADR-0079 D6（Phase R1c）: 子の worktree の基点（段階の基点か、同じ段階の依存先の HEAD）を
+                // 子の `tree.base_commit` に書く（`Created` の Task の JSON に入るので replay で同じ値になる）。
+                let built = task_ops::tree::build_child_task(
                     self.store.as_ref(),
                     &parent,
                     &plan.id,
@@ -10556,7 +10760,15 @@ impl Dispatcher {
                     &self.config.roles,
                     &self.config.genres,
                     now,
-                ) {
+                )
+                .and_then(|(mut child, downgrades)| {
+                    let base = self.child_base_commit(&parent, u, &units)?;
+                    if let Some(tree) = child.tree.as_mut() {
+                        tree.base_commit = base;
+                    }
+                    Ok((child, downgrades))
+                });
+                match built {
                     Ok((child, downgrades)) => {
                         for reason in &downgrades {
                             tracing::info!(%task_id, child_id = %child.id, %reason, "workspace downgraded to local (ADR-0062 B2)");
@@ -13148,6 +13360,9 @@ impl Dispatcher {
         // ADR-0046 D4（Phase 59）: `mode = research` は「結果に出典か計測の記録」を暗黙の条件に足す。
         let research = task.mode == task_core::TaskMode::Research;
         let running_review_lock = review_lock.clone();
+        // ADR-0079 D6（Phase R1c）: 木の子の最終レビューは親のブランチと比べる（検査の
+        // `merge-base --is-ancestor main` を親のブランチに置き換え、reviewer の前置きに取り込み先を書く）。
+        let task = crate::review::tree_child_review_view(task, &self.config.worktree_branch_prefix);
         let handle = tokio::spawn(async move {
             let _review_lock = running_review_lock;
             let ws: Box<dyn Workspace> = match remote_review {
@@ -13947,7 +14162,7 @@ impl Dispatcher {
                 && mode.unwrap_or_default() == task_core::WorkspaceMode::Worktree
                 && task_worker::is_git_repo(&source);
             let base = if wants_worktree {
-                self.worktree_base(&source)
+                self.worktree_base_for(task, &source)
             } else {
                 None
             };
@@ -14114,7 +14329,7 @@ impl Dispatcher {
         if !task_worker::is_git_repo(&repo) {
             return None;
         }
-        let base = self.worktree_base(&repo)?;
+        let base = self.worktree_base_for(task, &repo)?;
         Some(task_worker::LocalWorktree {
             dir: task_dir.join(task_worker::WORKTREE_DIR_NAME),
             task_dir: task_dir.to_path_buf(),
@@ -14122,6 +14337,32 @@ impl Dispatcher {
             branch: format!("{}{}", self.config.worktree_branch_prefix, task.id),
             base,
         })
+    }
+
+    /// ADR-0079 D6（Phase R1c）: task の worktree の base。木の子 task は既定ブランチではなく
+    /// `Task.tree.base_commit`（親の段階の基点、または同じ段階の依存先の HEAD。子を作るときに
+    /// [`Self::child_base_commit`] が決めた値）から切る（`BaseKind::Parent`）。この値が `repo` で解決できない
+    /// （子の repos のうち先頭以外のリポジトリ。基点は先頭のリポジトリの sha だけを持つ）ときは、そのリポジトリの
+    /// 親のブランチ `celeris/<parent_id>` の HEAD（親のブランチは段階の途中では動かない。D6）。どちらも
+    /// 無ければ従来の規則（`main`）に倒す。木の子でない task は従来どおり [`Self::worktree_base`]。
+    fn worktree_base_for(&self, task: &Task, repo: &Path) -> Option<task_worker::BaseRef> {
+        if let Some(parent_branch) =
+            task_core::tree::parent_branch(task, &self.config.worktree_branch_prefix)
+        {
+            let sha = task_core::tree::child_base_commit(task)
+                .and_then(|sha| crate::integration::commit_in(repo, sha))
+                .or_else(|| {
+                    crate::integration::rev_parse(repo, &format!("refs/heads/{parent_branch}"))
+                });
+            if let Some(sha) = sha {
+                return Some(task_worker::BaseRef {
+                    kind: task_worker::BaseKind::Parent,
+                    sha,
+                });
+            }
+            tracing::warn!(task_id = %task.id, repo = %repo.display(), %parent_branch, "neither the child's base_commit nor the parent's branch exists in this repository; the child's worktree falls back to the default base (ADR-0079 D6)");
+        }
+        self.worktree_base(repo)
     }
 
     /// ADR-0041 D1 の base の規則（`main` / 本番の `current` / `HEAD`）。
@@ -34879,6 +35120,10 @@ mod tests {
     /// ADR-0079 §7 R1b: plan/3 の kind task の unit から子 task を作り、状態を写し、段階の完了・
     /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。
     mod tree;
+
+    /// ADR-0079 §7 R1c: 子のブランチの基点・統合での子のブランチの merge・子の最終レビューの基点・孫 → 子 → root
+    /// （`src/dispatcher/tests/tree_branches.rs`）。
+    mod tree_branches;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

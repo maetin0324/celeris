@@ -1,10 +1,10 @@
 # celeris HTTP API v1: 実行・計画・再実行
 
 ---
-tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ]
+tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ, 01M3JXB3DHVBWKWKPW04DTG6SJ]
 ---
 
-共通の base path は `/api/v1`。読み取りはトークン不要、変更系は管理トークンが必要（未設定でも 401）。JSON の正本は [`api-v1.schema.json`](api/v1/api-v1.schema.json)、従来のエンドポイント一覧は [`gui/api.md`](gui/api.md)。以下の型名は同スキーマの `$defs` を指す。
+共通の base path は `/api/v1`。読み取りはトークン不要、変更系は管理トークンが必要（未設定でも 401）。JSON 本文の上限は 1 MiB（超過時は 413）。JSON の正本は [`api-v1.schema.json`](api/v1/api-v1.schema.json)、従来のエンドポイント一覧は [`gui/api.md`](gui/api.md)。以下の型名は同スキーマの `$defs` を指す。
 
 ### `GET /tasks/{id}/execution` → 200 `TaskExecutionView`
 
@@ -29,3 +29,23 @@ tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ]
 ### `POST /tasks/{id}/retry` → 201 `RetryResult`（管理系）
 
 `failed` または `cancelled` のタスクを複製し、新しいタスクの `task_id` と `rewired` を返す。本文は省略可能な `RetryBody`。`accept` の既定は **`true`** で、新しいタスクは `ready` で始まる。`false` の場合だけ `draft`。`workspace` を指定すると複製先の作業場所を差し替える。応答の `Location` は新しいタスクの URL。クエリは受け付けない。
+
+### `GET /projects/{id}` → 200 `ProjectDetail`
+
+案件詳細。`project`（`Project`）、`milestones[]`（`MilestoneView`）、`tasks[]`（`ProjectTaskView`）は必須で、`repos[]`（`ProjectRepo`）は既定で空配列。`project_plan` は案件計画がある場合だけ返す `ProjectPlanDagView` で、`nodes[]`（`PlanDagNode`）が必須、`current_version` と `pending`（`PlanDagProposal`）は省略可能。承認済みの版がまだ無ければ `current_version` は省略され、未決の提案があれば `pending` に入る。`project.auto_advance` は `boolean`、既定は `false`。管理トークンは不要。不明な案件は 404。クエリは受け付けない。
+
+### `PATCH /projects/{id}` → 200 `Project`（管理系）
+
+本文は `ProjectPatchBody`。`auto_advance?: boolean | null` は、案件計画のマイルストーン Task を依存先 Task の `done` で進めるかを指定する。`true` なら進め、`false`（既定）なら途中目標の `reached` を待つ。省略または `null` は変更しない（`null` だけの本文は変更項目が無いため 422）。同じ本文には `status` と `workspace` も指定できる。管理トークンが無ければ 401、JSON の構文・型が不正なら 400、空の変更指定や許されない状態変更は 422、不明な案件は 404。クエリは受け付けない。
+
+### `POST /projects/{id}/plan` → 202 `ProjectPlanAccepted`（管理系）
+
+案件の計画タスクを作り、`task_id` を返す。本文は `ProjectPlanBody`（空本文も可）。`mode` は `ProjectPlanMode` の `decompose`（既定）または `milestones`、`milestone_id` と `note` は省略可能。`milestones` は案件全体の DAG を提案するモードで、`milestone_id` を併用できない。管理トークンが無ければ 401、JSON の構文・型が不正なら 400、併用時は 422、不明な案件は 404、計画依頼が進行中なら 409 `project_plan_in_flight`。クエリは受け付けない。
+
+### `POST /projects/{id}/project-plan/{version}/decide` → 202 `ProjectPlanDecided`（管理系）
+
+案件計画の提案を判定する。本文は `ProjectPlanDecideBody` で、`decision`（`ProjectPlanDecisionInput`: `approve` または `reject`）が必須。`note` は `approve` では任意、`reject` では空白以外の文字が必要。応答の `decision`、`plan_task_id`、`milestones[]`（`MilestoneId`）、`tasks[]`（`TaskId`）は必須。`approve` は途中目標を `approved`、Task を `ready` にし、`reject` はそれぞれ `redesigned`、`cancelled` にする。管理トークンが無ければ 401、不正な版番号または JSON は 400、空の reject note は 422、不明な案件・提案は 404、既決または古くなった提案は 409。クエリは受け付けない。
+
+### `POST /tasks/{id}/execution/phase-gate` → 200 `TransitionResult`（管理系）
+
+途中確認中の Task を判定する。本文は `PhaseGateRequest` で、`action`（`PhaseGateAction`: `continue`、`replan`、`withdraw`）が必須。`note` は `continue` では任意の次工程への指示、`replan` では空白以外の文字が必要。応答の `id`、`from`、`to`、`reason` は必須で、`cascaded[]` は既定で空配列。管理トークンが無ければ 401、JSON の構文・型が不正なら 400、空の replan note は 422、不明な Task は 404、Task が `awaiting_human` でなければ 409 `invalid_transition`。クエリは受け付けない。

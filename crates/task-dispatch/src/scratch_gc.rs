@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use task_ops::daemon::{
     SCRATCH_STATUS_SCHEMA, ScratchGcRemovedView, ScratchGcView, ScratchLegacyView,
-    ScratchOwnerView, ScratchStatus,
+    ScratchOwnerView, ScratchSccacheStats, ScratchSccacheView, ScratchStatus,
 };
 use task_worker::scratch::{
     self, AdoptCandidate, Class, DELETING_PREFIX, GcEntry, GcParams, GcPlan, Lease, Owner, Pool,
@@ -624,6 +624,7 @@ pub fn build_status(
         owners,
         legacy,
         last_gc,
+        sccache: None,
     }
 }
 
@@ -648,7 +649,82 @@ pub fn disabled_status(settings: &ScratchSettings, now: SystemTime) -> ScratchSt
         owners: Vec::new(),
         legacy: Vec::new(),
         last_gc: None,
+        sccache: None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// sccache L1（ADR-0075 D4 / D6、Phase G2）
+// ---------------------------------------------------------------------------
+
+/// `ScratchStatus.sccache`（統計なし。統計は `query_sccache_stats` で足す）。
+pub fn sccache_view(
+    settings: &ScratchSettings,
+    state: &scratch::SccacheState,
+) -> ScratchSccacheView {
+    ScratchSccacheView {
+        state: state.label().to_string(),
+        reason: state.reason().map(str::to_string),
+        binary: settings.sccache.binary.display().to_string(),
+        port: settings.sccache.server_port,
+        dir: settings.pool().l1_dir().display().to_string(),
+        max_bytes: settings.l1_max_bytes,
+        stats: None,
+    }
+}
+
+/// `sccache --show-stats --stats-format=json`（0.18）の要約。`cache_hits.counts` は言語ごと（`Rust` / `C/C++` / …）。
+pub fn parse_sccache_stats(json: &str) -> Option<ScratchSccacheStats> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let stats = v.get("stats")?;
+    let counts = |key: &str| -> (u64, u64) {
+        let Some(map) = stats
+            .get(key)
+            .and_then(|c| c.get("counts"))
+            .and_then(|c| c.as_object())
+        else {
+            return (0, 0);
+        };
+        let total = map.values().filter_map(|n| n.as_u64()).sum();
+        let rust = map.get("Rust").and_then(|n| n.as_u64()).unwrap_or(0);
+        (total, rust)
+    };
+    let (hits, rust_hits) = counts("cache_hits");
+    let (misses, rust_misses) = counts("cache_misses");
+    Some(ScratchSccacheStats {
+        compile_requests: stats
+            .get("compile_requests")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0),
+        hits,
+        misses,
+        rust_hits,
+        rust_misses,
+        cache_size_bytes: v.get("cache_size").and_then(|n| n.as_u64()),
+    })
+}
+
+/// server に統計を問い合わせる（`Ready` のときだけ。直前にもう一度 port を確かめる: sccache の client は server が
+/// 無いと起こしてしまうので、万一の起動に備えて server と同じ env も渡す）。
+pub fn query_sccache_stats(
+    settings: &ScratchSettings,
+    state: &scratch::SccacheState,
+) -> Option<ScratchSccacheStats> {
+    state.wrapper()?;
+    if !scratch::server_listening(settings.sccache.server_port) {
+        return None;
+    }
+    let out = std::process::Command::new(&settings.sccache.binary)
+        .args(["--show-stats", "--stats-format=json"])
+        .envs(scratch::sccache_server_env(settings))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_sccache_stats(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// GC の 1 回を記録用の view にする。
@@ -893,5 +969,33 @@ mod tests {
             .unwrap();
         assert!(l.size_bytes.unwrap() >= 8192);
         assert_eq!(scratch::mtime(&pool.lease_path(&owner)), before);
+    }
+
+    /// ADR-0075 D6（Phase G2）: `sccache --show-stats --stats-format=json`（0.18 の形）の要約。
+    #[test]
+    fn sccache_stats_summary_reads_the_json_shape_of_0_18() {
+        let json = r#"{"stats":{"compile_requests":624,"requests_executed":576,
+            "cache_hits":{"counts":{"Rust":163,"C/C++":261,"Assembler":121},"adv_counts":{}},
+            "cache_misses":{"counts":{"Rust":29},"adv_counts":{}},"multi_level":null},
+            "cache_location":"Local disk: \"/x\"","cache_size":1073741824,"max_cache_size":21474836480,"version":"0.18.0"}"#;
+        let s = parse_sccache_stats(json).unwrap();
+        assert_eq!(
+            s,
+            ScratchSccacheStats {
+                compile_requests: 624,
+                hits: 545,
+                misses: 29,
+                rust_hits: 163,
+                rust_misses: 29,
+                cache_size_bytes: Some(1_073_741_824),
+            }
+        );
+        // 起動直後（counts が空、cache_size が null）。
+        let s = parse_sccache_stats(
+            r#"{"stats":{"compile_requests":0,"cache_hits":{"counts":{}},"cache_misses":{"counts":{}}},"cache_size":null}"#,
+        )
+        .unwrap();
+        assert_eq!((s.hits, s.misses, s.cache_size_bytes), (0, 0, None));
+        assert!(parse_sccache_stats("not json").is_none());
     }
 }

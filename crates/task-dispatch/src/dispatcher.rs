@@ -2092,6 +2092,23 @@ impl Dispatcher {
             tracing::warn!(%reason, "scratch pool disabled");
         } else if config.scratch.enabled && config.shared_build_cache {
             tracing::info!(dir = %config.scratch.dir.display(), "scratch pool enabled (ADR-0075)");
+            // ADR-0075 D4（Phase G2）: sccache を配線するか（run ごとにも確かめる。ここは起動ログだけ）。
+            let state = task_worker::scratch::resolve_sccache(
+                &config.scratch,
+                task_worker::scratch::server_listening,
+            );
+            match state.reason() {
+                None => tracing::info!(
+                    port = config.scratch.sccache.server_port,
+                    binary = %config.scratch.sccache.binary.display(),
+                    "sccache L1 wired into cargo runs (ADR-0075 D4)"
+                ),
+                Some(reason) => tracing::info!(
+                    state = state.label(),
+                    reason,
+                    "sccache L1 not wired; runs use plain cargo (ADR-0075 D4)"
+                ),
+            }
         }
         Self {
             store,
@@ -2698,7 +2715,7 @@ impl Dispatcher {
                 self.scratch.measuring.clone(),
             );
         }
-        self.scratch.view = Some(crate::scratch_gc::build_status(
+        let mut view = crate::scratch_gc::build_status(
             &settings,
             &run.scan,
             &run.plan,
@@ -2707,7 +2724,14 @@ impl Dispatcher {
             &sizes,
             self.scratch.last_gc.clone(),
             now,
-        ));
+        );
+        // ADR-0075 D6（Phase G2）: sccache の配線の状態（統計は `celerisctl scratch status` だけ。tick で client を起こさない）。
+        let sccache = task_worker::scratch::resolve_sccache(
+            &settings,
+            task_worker::scratch::server_listening,
+        );
+        view.sccache = Some(crate::scratch_gc::sccache_view(&settings, &sccache));
+        self.scratch.view = Some(view);
         executed.removed.len()
     }
 
@@ -12807,7 +12831,8 @@ impl Dispatcher {
                 ..self.config.scratch.clone()
             };
             allocate_scratch_target(&settings, &[], &owner, repo, None);
-            return task_worker::scratch::cargo_env(&settings.pool(), &owner);
+            // ADR-0075 D4（Phase G2）: run と同じ `cargo_env`（`[scratch.cargo]` と、server が応答すれば sccache 系）。
+            return task_worker::scratch::cargo_env(&settings, &owner);
         }
         let dir = match work_unit_id {
             Some(id) => task_worker::build_cache::work_unit_cargo_target_dir(
@@ -13547,7 +13572,9 @@ async fn run_worker(
         .and_then(|wt| wt.repos.first())
         .filter(|r| r.is_git() && container_plan.is_none() && remote.is_none())
         .cloned();
-    let target: Option<PathBuf> = match (&cargo_target, repo_for_target) {
+    // ADR-0075 D4（Phase G2）: scratch なら env は `task_worker::scratch::cargo_env`（checks・`celerisctl scratch env` と
+    // 同じ関数。`CARGO_TARGET_DIR`・`[scratch.cargo]`・server が応答すれば sccache 系）。legacy は `CARGO_TARGET_DIR` だけ。
+    let target: Option<(PathBuf, Vec<(String, String)>)> = match (&cargo_target, repo_for_target) {
         (CargoTargetPlan::None, _) | (_, None) => None,
         // ADR-0075 D3: owner は Task 単位の run なら `task-<id>`、自分の worktree の WU なら `task-<id>/wu-<id>`。
         (
@@ -13563,9 +13590,20 @@ async fn run_worker(
             };
             let (settings, candidates) = (settings.clone(), candidates.clone());
             let key = cargo_target_work_unit.as_ref().map(|(_, k)| k.clone());
-            let fallback = settings.pool().target_dir(&owner);
+            let fallback = (
+                settings.pool().target_dir(&owner),
+                task_worker::scratch::target_env(&settings.pool(), &owner),
+            );
             match tokio::task::spawn_blocking(move || {
-                allocate_scratch_target(&settings, &candidates, &owner, &repo, key)
+                let target = allocate_scratch_target(&settings, &candidates, &owner, &repo, key);
+                let state =
+                    task_worker::scratch::resolve_sccache(&settings, task_worker::scratch::server_listening);
+                if let Some(reason) = state.reason() {
+                    tracing::debug!(owner = %owner, state = state.label(), reason, "scratch: sccache is not wired for this run (ADR-0075 D4)");
+                }
+                // adopt は owner のパスへ rename するので、`target` は env の `CARGO_TARGET_DIR` と同じ。
+                let env = task_worker::scratch::cargo_env_with(&settings, &owner, &state);
+                (target, env)
             })
             .await
             {
@@ -13579,21 +13617,22 @@ async fn run_worker(
         // ADR-0074 F5-fix（不具合 1）: 並列の WU は `<repo-key>/wu-<id>`（兄弟 WU の別ブランチの
         // 生成物を混ぜない）。Task 単位の run は従来どおり `<repo-key>`。
         (CargoTargetPlan::Legacy(build_cache_dir), Some(repo)) => {
-            Some(match &cargo_target_work_unit {
+            let dir = match &cargo_target_work_unit {
                 Some((id, _)) => task_worker::build_cache::work_unit_cargo_target_dir(
                     build_cache_dir,
                     &repo.source,
                     id,
                 ),
                 None => task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source),
-            })
+            };
+            let env = vec![(
+                task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+                dir.display().to_string(),
+            )];
+            Some((dir, env))
         }
     };
-    let adapter = if let Some(target) = target {
-        let env = [(
-            task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
-            target.display().to_string(),
-        )];
+    let adapter = if let Some((target, env)) = target {
         match adapter.with_env(&env) {
             Some(wrapped) => {
                 // request.json（監査）に実際に与えた値を残す。
@@ -30052,7 +30091,7 @@ mod tests {
                 .filter(|(k, _)| k == "CARGO_TARGET_DIR")
                 .cloned()
                 .collect::<Vec<_>>(),
-            task_worker::scratch::cargo_env(&settings.pool(), &owner),
+            task_worker::scratch::target_env(&settings.pool(), &owner),
         );
         let lease = task_worker::scratch::read_lease(&settings.pool().lease_path(&owner))
             .unwrap()
@@ -30061,6 +30100,174 @@ mod tests {
             lease.repo_key,
             task_worker::build_cache::repo_cache_key(repo_dir.path())
         );
+    }
+
+    /// ADR-0075 §5 G2: Task 単位の run（`task-<id>`）を 1 回走らせ、run の env と reviewer の checks の env
+    /// （`RUSTC_WRAPPER|SCCACHE_DIR|SCCACHE_SERVER_PORT|CARGO_INCREMENTAL|CARGO_PROFILE_DEV_DEBUG|CARGO_TARGET_DIR`）を返す。
+    async fn run_with_sccache(
+        sccache: task_worker::scratch::SccacheSettings,
+    ) -> (
+        task_worker::scratch::ScratchSettings,
+        task_worker::scratch::Owner,
+        Vec<(String, String)>,
+        String,
+    ) {
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_test_repo(repo_dir.path());
+        let root = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let log = logs.path().join("check-env.log");
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = git_task(
+            repo_dir.path(),
+            None,
+            Check::Command {
+                cmd: format!(
+                    "echo \"$RUSTC_WRAPPER|$SCCACHE_DIR|$SCCACHE_SERVER_PORT|$CARGO_INCREMENTAL|$CARGO_PROFILE_DEV_DEBUG|$CARGO_TARGET_DIR\" >> {}",
+                    log.display()
+                ),
+                expect_exit: 0,
+            },
+        );
+        store.insert(&task).unwrap();
+        let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+        let mut d = worktree_dispatcher(
+            store.clone(),
+            done_pool_adapter(&captured),
+            root.path(),
+            None,
+        );
+        scratch_on(&mut d, scratch_dir.path());
+        d.config.scratch.sccache = sccache;
+        let settings = d.config.scratch.clone();
+        run_until_idle(&mut d, 60).await;
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        let runs = captured.lock().unwrap().clone();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        let owner = task_worker::scratch::Owner::task(task.id.to_string());
+        let check = std::fs::read_to_string(&log).unwrap();
+        (settings, owner, runs[0].clone(), check)
+    }
+
+    fn fake_sccache_binary(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("sccache");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    /// ADR-0075 §5 G2 受け入れ条件 2: sccache が有効で server が応答するとき、Task 単位の run と reviewer の checks の
+    /// env に `RUSTC_WRAPPER`（`<scratch>/bin/sccache`）・`SCCACHE_DIR`・`SCCACHE_CACHE_SIZE`・`SCCACHE_SERVER_PORT`・
+    /// `CARGO_INCREMENTAL=0`・`CARGO_PROFILE_DEV_DEBUG=line-tables-only` が入り、`cargo_env`（= `celerisctl scratch env`）と
+    /// 一致する。WU の run と checks・統合の検査は同じ `cargo_env` を通る（`every_cargo_path_uses_the_scratch_target_dir`）。
+    #[tokio::test]
+    async fn runs_get_sccache_env_when_the_server_is_up() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        // 偽の server（接続を受けて閉じるだけ。tick ごとの probe で backlog を溢れさせない）。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                drop(conn);
+            }
+        });
+        let sccache = task_worker::scratch::SccacheSettings {
+            enabled: true,
+            binary: fake_sccache_binary(bin_dir.path()),
+            server_port: port,
+        };
+        let (settings, owner, run_env, check) = run_with_sccache(sccache).await;
+        let wrapper = settings.pool().root().join("bin/sccache");
+        let expected = task_worker::scratch::cargo_env_with(
+            &settings,
+            &owner,
+            &task_worker::scratch::SccacheState::Ready {
+                wrapper: wrapper.clone(),
+            },
+        );
+        assert_eq!(task_worker::scratch::cargo_env(&settings, &owner), expected);
+        let got: Vec<(String, String)> = run_env
+            .iter()
+            .filter(|(k, _)| expected.iter().any(|(e, _)| e == k))
+            .cloned()
+            .collect();
+        assert_eq!(got, expected, "{run_env:?}");
+        for key in [
+            "RUSTC_WRAPPER",
+            "SCCACHE_DIR",
+            "SCCACHE_CACHE_SIZE",
+            "SCCACHE_SERVER_PORT",
+            "CARGO_INCREMENTAL",
+            "CARGO_PROFILE_DEV_DEBUG",
+        ] {
+            assert!(got.iter().any(|(k, _)| k == key), "{key} missing: {got:?}");
+        }
+        assert!(wrapper.is_file());
+        let line = check.lines().next().unwrap_or_default().to_string();
+        assert_eq!(
+            line,
+            format!(
+                "{}|{}|{port}|0|line-tables-only|{}",
+                wrapper.display(),
+                settings.pool().l1_dir().display(),
+                settings.pool().target_dir(&owner).display()
+            ),
+            "{check}"
+        );
+    }
+
+    /// ADR-0075 §5 G2 受け入れ条件 2: server が応答しない・バイナリが無い・`enabled = false` なら sccache 系を与えず、
+    /// run と checks は素の cargo（`CARGO_TARGET_DIR` と `[scratch.cargo]` は残る）。
+    #[tokio::test]
+    async fn runs_fall_back_to_plain_cargo_when_the_server_is_down() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        // 閉じた port は 1（特権 port。並行するテストが bind して偶然応答することが無い）。
+        let closed = 1;
+        let bin = fake_sccache_binary(bin_dir.path());
+        let cases = [
+            task_worker::scratch::SccacheSettings {
+                enabled: true,
+                binary: bin.clone(),
+                server_port: closed,
+            },
+            task_worker::scratch::SccacheSettings {
+                enabled: true,
+                binary: bin_dir.path().join("missing"),
+                server_port: closed,
+            },
+            task_worker::scratch::SccacheSettings {
+                enabled: false,
+                binary: bin,
+                server_port: closed,
+            },
+        ];
+        for sccache in cases {
+            let (settings, owner, run_env, check) = run_with_sccache(sccache.clone()).await;
+            assert!(
+                !run_env
+                    .iter()
+                    .any(|(k, _)| k == "RUSTC_WRAPPER" || k.starts_with("SCCACHE_")),
+                "{sccache:?}: {run_env:?}"
+            );
+            let target = settings.pool().target_dir(&owner).display().to_string();
+            for (k, v) in [
+                ("CARGO_TARGET_DIR", target.as_str()),
+                ("CARGO_INCREMENTAL", "0"),
+                ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
+            ] {
+                assert!(
+                    run_env.iter().any(|(a, b)| a == k && b == v),
+                    "{k}: {run_env:?}"
+                );
+            }
+            assert_eq!(
+                check.lines().next().unwrap_or_default(),
+                format!("|||0|line-tables-only|{target}"),
+                "{check}"
+            );
+        }
     }
 
     /// ADR-0075 §5 G1 受け入れ条件 3: WU が done になると、その target は次の tick で rename され、別スレッドで

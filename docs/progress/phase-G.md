@@ -240,3 +240,30 @@ target は `celerisctl scratch lease` で取った `agent-g2-{a,b,c,d}`（各回
 - 実装への帰結（逸脱として ADR に書く）: `RUSTC_WRAPPER` は本物の sccache ではなく、Celeris が生成する小さな shell の wrapper
   `<scratch>/bin/sccache`（`unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR` → `exec <本物の sccache> "$@"`）にする。
 - 測定用の target（`agent-g2-{a,b,c,d}`）と L1（`sccache-l1-measure`）、`git archive` の展開は測定後に削除（checkpoint 3 の後）。
+
+### G2 checkpoint 2: env の配線（`cargo_env` に揃える）・`[scratch.sccache]` / `[scratch.cargo]`・status（完了 2026-09-28）
+
+- `task_worker::scratch`: `SccacheSettings`（enabled / binary / server_port）・`CargoTuning`（incremental / dev_debug）を
+  `ScratchSettings` に足した。`resolve_sccache`（scratch 無効 / `enabled = false` → disabled、バイナリが無い・server が応答しない →
+  unavailable、それ以外 → wrapper を置いて ready）、`server_listening`（127.0.0.1:<port> への TCP 接続だけ。**sccache の client は
+  呼ばない**〈server を起こしてしまう〉）、`wrapper_script` / `ensure_wrapper`（`<scratch>/bin/sccache`。U1 の結論どおり
+  `CARGO_TARGET_DIR` / `CARGO_BUILD_TARGET_DIR` を外して本物を exec）、`sccache_server_env` / `sccache_env` / `cargo_tuning_env` /
+  `cargo_env_with`（純粋）/ `cargo_env`（probe つき）。env の順は `CARGO_TARGET_DIR`、`CARGO_INCREMENTAL=0`、
+  `CARGO_PROFILE_DEV_DEBUG=line-tables-only`、`RUSTC_WRAPPER`、`SCCACHE_DIR`、`SCCACHE_CACHE_SIZE=<l1_max_gb>G`、`SCCACHE_SERVER_PORT`、
+  `SCCACHE_IDLE_TIMEOUT=0`。
+- dispatcher: run の経路（`run_worker` の scratch の分岐）を `cargo_env_with` に揃えた（G1 の申し送り。`spawn_blocking` の中で
+  allocate → resolve → env）。checks（WU の checks・統合の検査・reviewer の checks）の `check_cargo_target_env` も `cargo_env`。
+  legacy（scratch 無効）は従来どおり `CARGO_TARGET_DIR` だけ。起動ログに sccache の状態。スナップショットの `ScratchStatus.sccache`
+  に状態（統計なし）。
+- config: `[scratch.sccache]`（`enabled` 既定 true、`port` 既定 4236、`binary` 既定 `$CELERIS_STATE_DIR/tools/sccache/bin/sccache`）と
+  `[scratch.cargo]`（`incremental` 既定 false、`dev_debug` 既定 `"line-tables-only"`、`""` で与えない）。どちらも書かなくても動く。
+- `celerisctl scratch env` は `cargo_env`（dispatcher と同じ）、`env --server` は server の env と `CELERIS_SCCACHE_BIN`。
+  `scratch status` に `sccache L1 <dir> (<state>) · <binary> · port` と、server が居れば `--show-stats --stats-format=json` の要約
+  （hits / misses / Rust の hit / miss / サイズ）。
+- `task_ops::daemon::{ScratchSccacheView, ScratchSccacheStats}`、`ScratchStatus.sccache`（`#[serde(default)]`）。schema と GUI の生成型を再生成。
+- preamble の定型文に 1 行（`RUSTC_WRAPPER` などを上書きしない・server を起こさない）、`.claude/agents/{implementer,auditor}.md` に G2 の注記。
+- テスト: `task_worker::scratch::tests::{sccache_env_is_complete_and_stable, sccache_env_is_omitted_without_binary_or_server}`、
+  `task_dispatch::dispatcher::tests::{runs_get_sccache_env_when_the_server_is_up, runs_fall_back_to_plain_cargo_when_the_server_is_down}`、
+  `task_dispatch::scratch_gc::tests::sccache_stats_summary_reads_the_json_shape_of_0_18`、`celeris::config::tests::scratch_cargo_defaults_disable_incremental`、
+  `celerisctl::commands::scratch::tests::env_includes_sccache_when_the_server_is_up`。偽の server は loopback の port 0 に bind して accept
+  するだけのスレッド、閉じた port は特権 port の 1（並行するテストと競合しない）。

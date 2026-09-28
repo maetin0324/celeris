@@ -6,6 +6,9 @@
 //!   消さない）。`status --json` は `GET /api/v1/metrics/scratch` と同じ `celeris.scratch-status/1`。
 //!
 //! `env` が出す値は dispatcher と同じ関数（`task_worker::scratch::cargo_env`）で組む（D4 の「env は一か所で組む」）。
+//! Phase G2: `env` には `[scratch.cargo]` と、sccache の server が応答すれば sccache 系も入る。`env --server` は
+//! `celeris-sccache.service` が server を起こすときの env（`SCCACHE_DIR` など、client と同じ値）。`status` は sccache の
+//! 配線の状態と `sccache --show-stats` の要約（hit / miss / サイズ）も出す。
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -32,7 +35,8 @@ pub enum ScratchCommand {
     Touch(OwnerArgs),
     /// lease に `released_at` を書く（P3 に落とす）。
     Release(OwnerArgs),
-    /// dispatcher と同じ env を `export NAME=value` で出す（`--repo` を渡せば lease も作る）。
+    /// dispatcher と同じ env を `export NAME=value` で出す（`--repo` を渡せば lease も作る）。`--server` は
+    /// sccache の server の env（`celeris-sccache.service` 用。owner は要らない）。
     Env(EnvArgs),
 }
 
@@ -103,6 +107,10 @@ pub struct EnvArgs {
     pub base: Option<String>,
     #[arg(long)]
     pub ttl: Option<u64>,
+    /// sccache の server の env（`SCCACHE_DIR` / `SCCACHE_CACHE_SIZE` / `SCCACHE_SERVER_PORT` / `SCCACHE_IDLE_TIMEOUT` と
+    /// 本物のバイナリ `CELERIS_SCCACHE_BIN`）を出す。sccache が無効・バイナリが無ければ失敗する。
+    #[arg(long, conflicts_with_all = ["repo", "worktree", "base", "ttl"])]
+    pub server: bool,
 }
 
 fn owner_of(args: &OwnerArgs) -> Result<Owner, CliError> {
@@ -146,12 +154,32 @@ fn shell_quote(v: &str) -> String {
     }
 }
 
-/// `export NAME=value` の行（dispatcher と同じ `cargo_env`）。
-pub fn render_env(settings: &ScratchSettings, owner: &Owner) -> String {
-    scratch::cargo_env(&settings.pool(), owner)
-        .into_iter()
+fn render_exports(env: Vec<(String, String)>) -> String {
+    env.into_iter()
         .map(|(k, v)| format!("export {k}={}\n", shell_quote(&v)))
         .collect()
+}
+
+/// `export NAME=value` の行（dispatcher と同じ `cargo_env`）。
+pub fn render_env(settings: &ScratchSettings, owner: &Owner) -> String {
+    render_exports(scratch::cargo_env(settings, owner))
+}
+
+/// `env --server`: sccache の server の env（client と同じ値）と本物のバイナリ。server は起こさない。
+pub fn render_server_env(settings: &ScratchSettings) -> Result<String, CliError> {
+    let state = scratch::resolve_sccache(settings, |_| true);
+    if let Some(reason) = state.reason() {
+        return Err(CliError::msg(format!(
+            "sccache is {}: {reason}",
+            state.label()
+        )));
+    }
+    let mut env = scratch::sccache_server_env(settings);
+    env.push((
+        "CELERIS_SCCACHE_BIN".to_string(),
+        settings.sccache.binary.display().to_string(),
+    ));
+    Ok(render_exports(env))
 }
 
 /// 外部の owner の lease を取る（adopt は同じ repo の P3 の外部 owner の target から。DB は見ない）。
@@ -302,6 +330,11 @@ pub fn run(cli_db: Option<PathBuf>, command: ScratchCommand) -> Result<ExitCode,
         ScratchCommand::Env(args) => {
             let cfg = load(&args.owner.config.config)?;
             let settings = active_settings(&cfg)?;
+            if args.server {
+                let text = render_server_env(&settings)?;
+                outln!("{}", text.trim_end());
+                return Ok(ExitCode::SUCCESS);
+            }
             let owner = owner_of(&args.owner)?;
             if let Some(repo) = &args.repo {
                 take_lease(
@@ -369,7 +402,7 @@ pub fn status_of(
     );
     let sizes = measure_unleased(&settings, &legacy);
     let min_free = cfg.dispatch.min_free_disk_mb.saturating_mul(1024 * 1024);
-    Ok(with_lookup(cfg, cli_db, |lookup, has_db| {
+    let mut status = with_lookup(cfg, cli_db, |lookup, has_db| {
         let run = scratch_gc::run_gc(
             &settings,
             &legacy,
@@ -384,7 +417,13 @@ pub fn status_of(
         scratch_gc::build_status(
             &settings, &run.scan, &run.plan, run.fs, min_free, &sizes, None, now,
         )
-    }))
+    });
+    // ADR-0075 D6（Phase G2）: sccache の配線の状態と、server が居れば `--show-stats` の要約。
+    let state = scratch::resolve_sccache(&settings, scratch::server_listening);
+    let mut view = scratch_gc::sccache_view(&settings, &state);
+    view.stats = scratch_gc::query_sccache_stats(&settings, &state);
+    status.sccache = Some(view);
+    Ok(status)
 }
 
 fn gc(
@@ -496,6 +535,41 @@ fn print_status(s: &task_ops::daemon::ScratchStatus) {
             );
         }
     }
+    if let Some(c) = &s.sccache {
+        outln!(
+            "sccache L1 {} ({}{}) · {} · port {}",
+            c.dir,
+            c.state,
+            c.reason
+                .as_deref()
+                .map(|r| format!(": {r}"))
+                .unwrap_or_default(),
+            c.binary,
+            c.port
+        );
+        if let Some(st) = &c.stats {
+            let rate = |h: u64, m: u64| {
+                if h + m == 0 {
+                    "-".to_string()
+                } else {
+                    format!("{:.1}%", h as f64 * 100.0 / (h + m) as f64)
+                }
+            };
+            outln!(
+                "  hits {} / misses {} ({}) · rust {} / {} ({}) · size {} / {}",
+                st.hits,
+                st.misses,
+                rate(st.hits, st.misses),
+                st.rust_hits,
+                st.rust_misses,
+                rate(st.rust_hits, st.rust_misses),
+                st.cache_size_bytes
+                    .map(gb)
+                    .unwrap_or_else(|| "-".to_string()),
+                gb(c.max_bytes)
+            );
+        }
+    }
     if let Some(g) = &s.last_gc {
         outln!(
             "last gc {} · {} removed · {}",
@@ -554,10 +628,7 @@ mod tests {
                 (k.to_string(), v.to_string())
             })
             .collect();
-        assert_eq!(
-            parsed,
-            task_worker::scratch::cargo_env(&settings.pool(), &owner)
-        );
+        assert_eq!(parsed, task_worker::scratch::cargo_env(&settings, &owner));
         assert_eq!(
             parsed[0].1,
             tmp.path()
@@ -574,10 +645,95 @@ mod tests {
                 worktree: None,
                 base: None,
                 ttl: None,
+                server: false,
             }),
         )
         .unwrap();
         assert!(settings.pool().lease_path(&owner).exists());
+    }
+
+    /// ADR-0075 §5 G2 受け入れ条件 2: server が応答するとき `scratch env` は dispatcher と同じ sccache 系を含み、
+    /// `env --server` は server の env（client と同じ値）と本物のバイナリを出す。`status` に配線の状態が出る。
+    #[test]
+    fn env_includes_sccache_when_the_server_is_up() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("sccache-real");
+        std::fs::write(&bin, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                drop(conn);
+            }
+        });
+        let cfg_path = config(tmp.path());
+        let mut text = std::fs::read_to_string(&cfg_path).unwrap();
+        text.push_str(&format!(
+            "[scratch.sccache]\nbinary = \"{}\"\nport = {port}\n",
+            bin.display()
+        ));
+        std::fs::write(&cfg_path, text).unwrap();
+        let cfg = load(&cfg_path).unwrap();
+        let settings = active_settings(&cfg).unwrap();
+        assert_eq!(cfg.dispatch_config().scratch, settings);
+        let owner = Owner::parse("agent-g2").unwrap();
+        let env = task_worker::scratch::cargo_env(&settings, &owner);
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "CARGO_TARGET_DIR",
+                "CARGO_INCREMENTAL",
+                "CARGO_PROFILE_DEV_DEBUG",
+                "RUSTC_WRAPPER",
+                "SCCACHE_DIR",
+                "SCCACHE_CACHE_SIZE",
+                "SCCACHE_SERVER_PORT",
+                "SCCACHE_IDLE_TIMEOUT"
+            ]
+        );
+        let rendered = render_env(&settings, &owner);
+        let parsed: Vec<(String, String)> = rendered
+            .lines()
+            .map(|l| {
+                let (k, v) = l.strip_prefix("export ").unwrap().split_once('=').unwrap();
+                (k.to_string(), v.to_string())
+            })
+            .collect();
+        assert_eq!(parsed, env);
+        let server = render_server_env(&settings).unwrap();
+        assert!(server.contains(&format!(
+            "export SCCACHE_DIR={}\n",
+            tmp.path().join("scratch/sccache-l1").display()
+        )));
+        assert!(server.contains(&format!("export SCCACHE_SERVER_PORT={port}\n")));
+        assert!(server.contains("export SCCACHE_CACHE_SIZE=40G\n"));
+        assert!(server.contains(&format!("export CELERIS_SCCACHE_BIN={}\n", bin.display())));
+        assert!(!server.contains("RUSTC_WRAPPER"));
+        let status = status_of(&cfg, None).unwrap();
+        let view = status.sccache.unwrap();
+        assert_eq!(view.state, "ready");
+        assert_eq!(view.port, port);
+        // 偽のバイナリは `--show-stats` に失敗するので統計は無い（status は落ちない）。
+        assert!(view.stats.is_none());
+        // server が居なければ sccache 系は消え、`status` は理由を出す（閉じた port は特権 port の 1。並行するテストと
+        // 競合しない）。
+        let text = std::fs::read_to_string(&cfg_path)
+            .unwrap()
+            .replace(&format!("port = {port}"), "port = 1");
+        std::fs::write(&cfg_path, text).unwrap();
+        let cfg = load(&cfg_path).unwrap();
+        let settings = active_settings(&cfg).unwrap();
+        let env = task_worker::scratch::cargo_env(&settings, &owner);
+        assert!(!env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"));
+        let view = status_of(&cfg, None).unwrap().sccache.unwrap();
+        assert_eq!(view.state, "unavailable");
+        assert!(view.reason.unwrap().contains("no sccache server"));
+        // バイナリが無ければ `env --server` は失敗する（unit は起動に失敗して気づける）。
+        std::fs::remove_file(&bin).unwrap();
+        assert!(render_server_env(&settings).is_err());
     }
 
     /// 外部 lease の作成 → touch → release（P3）→ 再 lease の往復。daemon の owner には lease を取らせない。

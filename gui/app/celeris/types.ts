@@ -2641,6 +2641,10 @@ export interface ScratchStatus {
    */
   pressure: string;
   /**
+   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   */
+  sccache?: ScratchSccacheView | null;
+  /**
    * 常に `celeris.scratch-status/1`。
    */
   schema: string;
@@ -2738,6 +2742,57 @@ export interface ScratchOwnerView {
    */
   size_bytes?: number | null;
   work_unit_key?: string | null;
+}
+/**
+ * ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+ */
+export interface ScratchSccacheView {
+  /**
+   * 本物の sccache（`[scratch.sccache] binary`）。
+   */
+  binary: string;
+  /**
+   * `SCCACHE_DIR`。
+   */
+  dir: string;
+  /**
+   * `SCCACHE_CACHE_SIZE`（byte）。
+   */
+  max_bytes: number;
+  /**
+   * `SCCACHE_SERVER_PORT`。
+   */
+  port: number;
+  /**
+   * `ready` でない理由。
+   */
+  reason?: string | null;
+  /**
+   * `ready`（run に `RUSTC_WRAPPER` を与える）| `disabled`（設定で無効）| `unavailable`（バイナリか server が無い）。
+   */
+  state: string;
+  /**
+   * `sccache --show-stats` の要約（`celerisctl scratch status` が server に問い合わせたときだけ。daemon の
+   * スナップショットでは `None`〈tick で client を起こさない〉）。
+   */
+  stats?: ScratchSccacheStats | null;
+}
+/**
+ * `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+ */
+export interface ScratchSccacheStats {
+  /**
+   * L1 の使用量（byte。読めなければ `None`）。
+   */
+  cache_size_bytes?: number | null;
+  compile_requests: number;
+  hits: number;
+  misses: number;
+  /**
+   * Rust だけの hit / miss（owner をまたいだ依存の hit を見る。U1）。
+   */
+  rust_hits: number;
+  rust_misses: number;
 }
 /**
  * `POST /tasks/{id}/approve`、`POST /tasks/{id}/reject` の本文。
@@ -4611,6 +4666,10 @@ export interface ScratchStatus1 {
    * `none` | `high_watermark` | `low_disk` | `emergency`。
    */
   pressure: string;
+  /**
+   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   */
+  sccache?: ScratchSccacheView | null;
   /**
    * 常に `celeris.scratch-status/1`。
    */

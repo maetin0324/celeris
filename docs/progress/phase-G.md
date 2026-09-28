@@ -77,3 +77,8 @@ docs 配下だけの変更（コードは変更しない）。作業は git work
 
 - 人へ: G1 の前に F5-fix を merge し、`/tmp/agent-platform-f5-1-target`（32G）を消してよいか判断してほしい（本 Phase では触っていない）。
   `mp1` の専用ボリュームを足すなら `/var/lib/celeris/scratch` に mount する（Celeris の設定は同じパスのまま）。
+
+## ルートディスクの「見えない 110 GB」の正体（2026-09-28、人と Fable）
+
+- `du -x /*` では 23 GB しか見えないのに `df` が 137 GB を示していた原因は `/.migration/home.raw`（見かけ 1 TiB のスパース raw、実使用 115 GB。2026-09-25 のホーム移行時にホスト側から作られたコピー。所有者がコンテナの uid 範囲外のため CT の root でも削除不可）。Proxmox ホストから `rm -rf /proc/<init-pid>/root/.migration` で削除 → `/` は 137 GB → 22 GB（空き 220 GB）。
+- これで ADR-0075 D1 の scratch pool（targets 100 GB + L1 40 GB）はルート LVM に収まる。U2 は解消（`mp1` の追加は不要になった。LVM 拡張も当面不要）。

@@ -576,3 +576,11 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 - P-G3-2: 毎 run 約 100 MB の再利用されない L2 書き込み（owner ごとに key が変わる約 30 crate）を減らす。案: (a) `OUT_DIR` 依存の key を
   owner に依らなくする（build script の出力先の path を wrapper で正規化できるかの調査）、(b) L2 への admission を「L1 で 1 回以上 hit した
   entry だけ」にする（初回の run の entry は L2 に行かず、2 回目から効く）。
+
+## 障害調査: クラスタ画面の pegasus TOTP で 503（2026-09-28）
+
+- 事実: `POST /clusters/pegasus/connect` は 30 秒待って 502 `timed out waiting for ssh`。GUI の API クライアントの timeout は 15 秒（`client.server.ts` の `DEFAULT_TIMEOUT_MS`）なので、GUI 側が先に諦めて「celeris に接続できません」（503）になる。
+- 原因: `ssh pegasus` が **publickey で拒否**される（`Permission denied (publickey)`。pegasus03 は `Authentications that can continue: publickey` しか返さず、TOTP の keyboard-interactive 段階に進まない）。同じ鍵（`~/.ssh/id_ed25519`、SHA256:vzR0g5GM…）で sirius は `Server accepts key` → keyboard-interactive に進むので、手元の鍵・設定（NFS 移行後の `~/.ssh`、ControlPath の変更）は問題なし。pegasus 側で公開鍵が外れている（authorized_keys / アカウント状態）と考えられる。人がログインノードで鍵を登録し直す必要がある。
+- 副次: sirius に 5 時間 pending のままの接続試行（ssh master の scope）が残っていたので `DELETE /clusters/sirius/connect` で取り消した。pegasus の失敗した scope（`celeris-ssh-master-pegasus-BJ8B8QND.scope`、failed）も残っている。
+- 提案 P-G3-3: (a) connect の API は ssh の `Permission denied` / 接続失敗を待たずに即時返す（stderr を監視）、(b) GUI の connect 系だけ timeout を API の待ち（30 秒）より長くするか、API が即座に pending を返して GUI が状態を poll する、(c) 失敗した ssh master の scope を daemon が片付ける。
+- 別の異常: ユーザー journal（`journalctl --user`）が 9/26 06:00 以降のエントリを持たない（`_UID=1001` で 0 行、`/var/log/journal` に user-1001 の journal が無い）。デーモンのログが追えない。root で `journalctl -u user@1001.service -n 5` と `systemctl status systemd-journald` を確認する必要がある（人）。

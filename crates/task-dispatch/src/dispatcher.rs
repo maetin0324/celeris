@@ -521,6 +521,9 @@ const MAX_MERGE_REPAIRS_PER_PHASE: usize = 2;
 /// ADR-0074 D1.5（Phase F2）: v2 の Task の lease の保持者（run ではなく工程）の接頭辞。
 const PHASE_LEASE_PREFIX: &str = "phase:";
 
+/// Phase F5-fix2: 完了の確定に失敗した WU の run を戻すときの `WorkUnitTransitioned.reason`。
+const FINALISE_FAILED_REASON: &str = "finalise_failed";
+
 /// ADR-0074 D1.5: Task の lease の保持者が工程（`phase:<plan_id>:<phase>:<ulid>`）か。
 fn is_phase_lease_holder(holder: &str) -> bool {
     holder.starts_with(PHASE_LEASE_PREFIX)
@@ -1246,6 +1249,15 @@ struct IntegrationEntry {
     handle: JoinHandle<()>,
 }
 
+/// ADR-0072 D14/D6・E4 (g) / Phase F5-fix2: WU の `checks` を走らせている run（`spawn_work_unit_checks`
+/// が spawn した検査。run 自身は `running` から既に外れている）。`in_flight` に数え（draining の
+/// インスタンスが検査の途中で exit して完了を失わないため）、lease の照合では「生きている run」と
+/// みなす。
+struct CheckingEntry {
+    task_id: TaskId,
+    handle: JoinHandle<()>,
+}
+
 /// ADR-0074 D1.4: 工程の統合（spawn した git 操作と検査）の結果。
 #[derive(Debug, Clone, Default)]
 struct IntegrationRun {
@@ -1854,6 +1866,8 @@ pub struct Dispatcher {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
     /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
     integrating: HashMap<TaskId, IntegrationEntry>,
+    /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
+    checking: HashMap<String, CheckingEntry>,
     tx: mpsc::UnboundedSender<Completion>,
     rx: mpsc::UnboundedReceiver<Completion>,
     /// ADR-0018 D2: 多重接続が無いクラスタの cooldown（この時刻まで dispatch しない）。
@@ -2136,6 +2150,7 @@ impl Dispatcher {
             awaiting_human: std::collections::HashSet::new(),
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
+            checking: HashMap::new(),
             tx,
             rx,
             cluster_cooldown: HashMap::new(),
@@ -2262,8 +2277,14 @@ impl Dispatcher {
     }
 
     /// 手元で動いている run とレビューの数（ADR-0040 D4 の drain の判定に使う）。
+    ///
+    /// Phase F5-fix2: run が終わった後の WU の `checks`（`checking`）と工程の統合（`integrating`）も
+    /// 数える。数えないと、draining のインスタンスは run の完了を受けて検査を spawn した直後に
+    /// 「手元が 0」と判断して exit し、検査の完了（`Completion::WorkUnitChecks`）ごと失う。
+    /// 本番（dogfood 4 回目の `gate` WU）では、その run は `running` のまま検査前に延ばした lease
+    /// （`review_timeout × (2n+1) + lease_grace`）が切れるまで放置され、`lease expired` で requeue された。
     pub fn in_flight(&self) -> usize {
-        self.running.len() + self.reviewing.len()
+        self.running.len() + self.reviewing.len() + self.checking.len() + self.integrating.len()
     }
 
     /// ADR-0040 D4: `[handoff] drain_timeout_secs` を超えたときに、残っている run とレビューを
@@ -2288,6 +2309,18 @@ impl Dispatcher {
             if let Some(review_run_id) = &entry.review_run_id {
                 task_worker::kill_tree(review_run_id, kill_grace);
             }
+            entry.handle.abort();
+            aborted += 1;
+        }
+        // Phase F5-fix2: 検査中の WU と工程の統合も止める（DB は変えない。lease 切れの経路で
+        // 新しい active が拾う。検査前の run の result.json があれば、そこから確定させる）。
+        for (run_id, entry) in self.checking.drain() {
+            tracing::warn!(task_id = %entry.task_id, %run_id, "drain timeout; aborting the work unit checks");
+            entry.handle.abort();
+            aborted += 1;
+        }
+        for (task_id, entry) in self.integrating.drain() {
+            tracing::warn!(%task_id, work_unit = %entry.work_unit_id, "drain timeout; aborting the phase integration");
             entry.handle.abort();
             aborted += 1;
         }
@@ -2885,7 +2918,7 @@ impl Dispatcher {
             0
         };
         let dispatch_ms = lap(&mut at);
-        report.in_flight = self.running.len() + self.reviewing.len();
+        report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
         let idle_ms = lap(&mut at);
         self.publish_snapshot();
@@ -3713,7 +3746,14 @@ impl Dispatcher {
                     provider,
                     result,
                 } => {
-                    self.on_worker_finished(task_id, run_id, provider, result)?;
+                    // Phase F5-fix2: 完了の確定に失敗しても（DB・作業ツリーの一時的な失敗など）、
+                    // 残りの完了の処理は続け、この run は「インフラ都合の失敗」として記録する
+                    // （`?` で tick ごと抜けると、受信済みの完了が消えて run が `running` のまま残る）。
+                    if let Err(e) =
+                        self.on_worker_finished(task_id, run_id.clone(), provider, result)
+                    {
+                        self.record_finalisation_failure(task_id, &run_id, &e);
+                    }
                     finished += 1;
                 }
                 Completion::Review {
@@ -3734,16 +3774,19 @@ impl Dispatcher {
                     result,
                     check_results,
                 } => {
-                    self.on_work_unit_checks_finished(
+                    self.checking.remove(&run_id);
+                    if let Err(e) = self.on_work_unit_checks_finished(
                         task_id,
-                        run_id,
+                        run_id.clone(),
                         account,
                         account_adapter,
                         run_since,
                         provider,
                         *result,
                         check_results,
-                    )?;
+                    ) {
+                        self.record_finalisation_failure(task_id, &run_id, &e);
+                    }
                     finished += 1;
                 }
                 Completion::Integration {
@@ -4233,7 +4276,8 @@ impl Dispatcher {
         let checks = wu.spec.checks.clone();
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
-        tokio::spawn(async move {
+        let checking_run_id = run_id.clone();
+        let handle = tokio::spawn(async move {
             let check_results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
             let _ = tx.send(Completion::WorkUnitChecks {
                 task_id,
@@ -4246,6 +4290,9 @@ impl Dispatcher {
                 check_results,
             });
         });
+        // Phase F5-fix2: 検査の間も「手元の仕事」として数える（`in_flight`・lease の照合）。
+        self.checking
+            .insert(checking_run_id, CheckingEntry { task_id, handle });
         Ok(())
     }
 
@@ -6872,6 +6919,27 @@ impl Dispatcher {
                     }
                 }
             }
+            // Phase F5-fix2: run は終わったが WU の `checks` がまだ走っている（`checking`）。検査が
+            // 延ばした lease（`review_timeout × (2n+1)`）より長引いても、検査の完了を受け取るまで回収しない。
+            let checking_run = self
+                .checking
+                .iter()
+                .find(|(_, e)| e.task_id == task.id)
+                .map(|(run_id, _)| run_id.clone());
+            if let Some(run_id) = checking_run {
+                let ttl = self.config.review_timeout + self.config.lease_grace;
+                match self.store.renew_lease(task.id, &run_id, ttl) {
+                    Ok(true) => {
+                        tracing::warn!(task_id = %task.id, %run_id, "lease expired while the work unit checks are still running; extended instead of reclaiming (Phase F5-fix2)");
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to extend the lease for running work unit checks; will retry reclaiming next tick");
+                        continue;
+                    }
+                }
+            }
             // ADR-0061（Phase 104）: `entry` を消費する前に `since`（wall time 計算用）を取っておく。
             let mut run_since: Option<OffsetDateTime> = None;
             let keys: Vec<RunKey> = self
@@ -6905,6 +6973,19 @@ impl Dispatcher {
             } else {
                 vec![lease.worker_run_id.clone()]
             };
+            // Phase F5-fix2（P-F5-3）: 終端の result.json を残して消えた run は、requeue せずに
+            // その内容で確定させる。1 本でも確定させたらこの tick の回収はやめる（Task の遷移・lease は
+            // 確定の経路が決めた。残りの死んだ WU の run は次の tick の照合が拾う）。
+            let mut finalised_any = false;
+            for run_id in &wu_runs {
+                if self.finalise_from_result_json(&task, run_id) {
+                    finalised_any = true;
+                }
+            }
+            if finalised_any {
+                count += 1;
+                continue;
+            }
             let metrics = run_since.map(|since| task_core::RunMetrics {
                 wall_ms: wall_ms_since(since),
                 retries: task.attempts,
@@ -7054,6 +7135,21 @@ impl Dispatcher {
                 self.just_aborted.insert(id);
             }
         }
+        // Phase F5-fix2: Running でなくなった Task の WU の検査も止める（結果は捨てられるだけなので、
+        // draining のインスタンスを待たせない）。
+        let checking: Vec<(String, TaskId)> = self
+            .checking
+            .iter()
+            .map(|(run_id, e)| (run_id.clone(), e.task_id))
+            .collect();
+        for (run_id, id) in checking {
+            let still_running =
+                matches!(self.store.get(id)?, Some(t) if t.status == Status::Running);
+            if !still_running && let Some(entry) = self.checking.remove(&run_id) {
+                tracing::warn!(task_id = %id, %run_id, "aborting the work unit checks (task no longer running)");
+                entry.handle.abort();
+            }
+        }
         let aborted: Vec<TaskId> = self.just_aborted.iter().copied().collect();
         for id in aborted {
             if let Some(t) = self.store.get(id)?
@@ -7192,6 +7288,186 @@ impl Dispatcher {
     /// ADR-0074 D1.5（Phase F2）: `run_id` の run がまだこの Task の lease を持っているか。
     /// v1・atomic は従来どおり Task の lease の保持者と比べる。v2（工程の lease）では WU の
     /// `lease_run_id` と比べる（lease を失った WU の run の結果を捨てる判定）。
+    /// Phase F5-fix2: run の完了（`on_worker_finished` / `on_work_unit_checks_finished`）の確定が
+    /// エラーで終わった。`drain_completions` が `?` で tick ごと抜けると受信済みの完了が消え、run は
+    /// `running` のまま lease 切れまで残る。ここでエラーを event に残し、run を「インフラ都合の失敗」
+    /// （ADR-0070 D3 の `InfraRequeue`、上限を超えたら `infra failure ×N`）として閉じる。記録にも
+    /// 失敗したら ERROR だけ残す（lease 切れの経路が拾い、`runs/<run_id>/result.json` があれば
+    /// そこから確定させる）。
+    fn record_finalisation_failure(
+        &mut self,
+        task_id: TaskId,
+        run_id: &str,
+        error: &DispatchError,
+    ) {
+        tracing::error!(%task_id, %run_id, %error, "failed to finalise a finished run; recording it as an infra failure (Phase F5-fix2)");
+        if let Err(e) = self.close_run_after_finalisation_failure(task_id, run_id, error) {
+            tracing::error!(%task_id, %run_id, error = %e, "could not record the finalisation failure either; the lease expiry will reclaim the run");
+        }
+    }
+
+    fn close_run_after_finalisation_failure(
+        &mut self,
+        task_id: TaskId,
+        run_id: &str,
+        error: &DispatchError,
+    ) -> Result<(), DispatchError> {
+        let Some(task) = self.store.get(task_id)? else {
+            return Ok(());
+        };
+        // 途中まで書けていて、既に run が lease を手放している（Task の遷移まで済んだ）なら何もしない。
+        if !self.run_holds_lease(&task, run_id)? {
+            return Ok(());
+        }
+        let Some(lease) = task.lease.clone() else {
+            return Ok(());
+        };
+        let now = OffsetDateTime::now_utc();
+        let events = self.store.events_for(task_id)?;
+        let finished = |outcome: String| Event::WorkerFinished {
+            run_id: run_id.to_string(),
+            outcome,
+            usage: None,
+            role: None,
+            metrics: None,
+            end: Some(task_core::RunEnd::HarnessError {
+                class: task_core::HarnessErrorClass::Infra,
+            }),
+        };
+        if let Err(e) = self.store.run_index_finish(
+            run_id,
+            task_core::RunIndexStatus::HarnessError,
+            None,
+            None,
+            None,
+            now,
+        ) {
+            tracing::warn!(%task_id, %run_id, error = %e, "failed to finish the runs index row");
+        }
+        if is_phase_lease_holder(&lease.worker_run_id) {
+            // ADR-0074 D1.5/D1.7: 工程の lease（v2）。兄弟の WU の run を巻き込まないよう Task は
+            // 遷移させず、この WU だけを戻す（何も走っていなければ `reconcile_parallel_tasks` が
+            // Task を ready に戻す）。同じ WU で `max_infra_retries` を超えたら WU を failed にする
+            // （ADR-0072 D12/D17: replan の余地があれば replan、無ければ Task の失敗）。
+            let wu = self.store.work_units_for(task_id)?.into_iter().find(|u| {
+                u.status == task_core::WorkUnitStatus::Running
+                    && u.lease_run_id.as_deref() == Some(run_id)
+            });
+            let Some(wu) = wu else {
+                return Ok(());
+            };
+            let failures_so_far = events
+                .iter()
+                .filter(|(_, e)| {
+                    matches!(
+                        e,
+                        Event::WorkUnitTransitioned { work_unit_id, reason, .. }
+                            if work_unit_id == &wu.id && reason == FINALISE_FAILED_REASON
+                    )
+                })
+                .count() as u32;
+            let infra_n = failures_so_far + 1;
+            let exhausted = infra_n > self.config.max_infra_retries;
+            let outcome = if exhausted {
+                format!("{INFRA_FAILURE_MARKER}{infra_n}: finalisation failed: {error}")
+            } else {
+                format!("infra_requeue: finalisation failed: {error}")
+            };
+            self.store.append_event(task_id, &finished(outcome))?;
+            if exhausted {
+                let mut updated = wu.clone();
+                updated.status = task_core::WorkUnitStatus::Failed;
+                updated.clear_lease();
+                updated.updated_at = rfc3339(now);
+                self.store.work_unit_transition(
+                    task_id,
+                    updated,
+                    Event::WorkUnitTransitioned {
+                        work_unit_id: wu.id.clone(),
+                        key: wu.key.clone(),
+                        from: task_core::WorkUnitStatus::Running,
+                        to: task_core::WorkUnitStatus::Failed,
+                        reason: FINALISE_FAILED_REASON.to_string(),
+                        run_id: Some(run_id.to_string()),
+                    },
+                )?;
+            } else {
+                self.reconcile_work_unit_run(task_id, run_id, FINALISE_FAILED_REASON)?;
+            }
+            return Ok(());
+        }
+        // Task の lease をこの run が持つ（atomic・v1 の WU の run）: lease 切れの回収と同じ遷移。
+        let infra_n = consecutive_infra_requeues(&events) + 1;
+        let (trigger, outcome) = if infra_n <= self.config.max_infra_retries {
+            (
+                Trigger::InfraRequeue,
+                format!("infra_requeue: finalisation failed: {error}"),
+            )
+        } else {
+            (
+                Trigger::WorkerError { retryable: false },
+                format!("{INFRA_FAILURE_MARKER}{infra_n}: finalisation failed: {error}"),
+            )
+        };
+        self.store.apply_transition_with_events(
+            task_id,
+            trigger.clone(),
+            vec![finished(outcome)],
+        )?;
+        if matches!(trigger, Trigger::InfraRequeue) {
+            self.infra_backoff
+                .insert(task_id, now + infra_backoff_delay(infra_n));
+        }
+        self.reconcile_work_unit_run(task_id, run_id, FINALISE_FAILED_REASON)?;
+        Ok(())
+    }
+
+    /// Phase F5-fix2（P-F5-3 の result.json の部分）: lease（または WU の lease）が切れた run で、
+    /// このインスタンスが抱えていない（`running`/`checking` に無い）もののうち、
+    /// `runs/<run_id>/result.json` に終端が残っているものは、requeue せずにその内容で確定させる
+    /// （`on_worker_finished` と同じ経路。WU の `checks` があればここから走り直す）。
+    /// 本番では draining の旧デーモンが WU の検査の途中で exit し、完了した run が `lease expired`
+    /// で捨てられてやり直しになった。確定させた（または確定の失敗を記録した）ら `true`。
+    fn finalise_from_result_json(&mut self, task: &Task, run_id: &str) -> bool {
+        if self.running.values().any(|e| e.run_id == run_id) || self.checking.contains_key(run_id) {
+            return false;
+        }
+        let Some(dir) = self.task_dir(task) else {
+            return false;
+        };
+        let Some(terminal) = terminal_from_run_dir(&dir, run_id) else {
+            return false;
+        };
+        let provider = self
+            .store
+            .events_for(task.id)
+            .ok()
+            .and_then(|events| {
+                events.iter().rev().find_map(|(_, e)| match e {
+                    Event::WorkerStarted {
+                        run_id: r,
+                        provider,
+                        ..
+                    } if r == run_id => provider.clone(),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        tracing::warn!(task_id = %task.id, %run_id, "the run's lease expired but it left a terminal result.json; finalising from it instead of requeueing (Phase F5-fix2)");
+        if let Err(e) = self.on_worker_finished(
+            task.id,
+            run_id.to_string(),
+            provider,
+            Ok(RunOutcome {
+                terminal,
+                exit_code: None,
+            }),
+        ) {
+            self.record_finalisation_failure(task.id, run_id, &e);
+        }
+        true
+    }
+
     fn run_holds_lease(&self, task: &Task, run_id: &str) -> Result<bool, DispatchError> {
         if task.status != Status::Running {
             return Ok(false);
@@ -8988,13 +9264,18 @@ impl Dispatcher {
                 let Some(run_id) = u.lease_run_id.clone().or_else(|| u.last_run_id.clone()) else {
                     continue;
                 };
-                let ours = self.running.values().any(|e| e.run_id == run_id);
+                // Phase F5-fix2: 検査中の run（`checking`）も手元の run。
+                let ours = self.running.values().any(|e| e.run_id == run_id)
+                    || self.checking.contains_key(&run_id);
                 let expired = u
                     .lease_expires_at
                     .as_deref()
                     .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
                     .is_none_or(|t| t <= now);
                 if !ours && expired {
+                    if self.finalise_from_result_json(&task, &run_id) {
+                        continue;
+                    }
                     tracing::warn!(task_id = %task.id, work_unit = %u.key, %run_id, "work unit lease expired without a live run; reconciling (ADR-0074 D1.7)");
                     self.reconcile_work_unit_run(task.id, &run_id, "restart_reconcile")?;
                 }
@@ -13881,6 +14162,45 @@ fn ops_to_store(e: task_ops::OpsError) -> DispatchError {
 
 /// デーモン再起動後の復旧用: `runs/<run_id>/result.json`（`fake`/`run_subprocess` が書く終端メッセージ）から
 /// `done` の内容を復元する。無ければ空（ADR-0007 D5）。
+/// Phase F5-fix2（P-F5-3 の result.json の部分）: `runs/<run_id>/result.json`（アダプタが終端を
+/// 正規化して書く `WorkerMessage`。P-26 / ADR-0010 D10）に残った終端を `Terminal` に戻す。
+/// 無い・読めない・終端でない・供給側の失敗（`provider_failure` 付きの `error`。cooldown の判断に
+/// アダプタの文脈が要る）は `None`（呼び出し側は従来どおり lease 切れとして扱う）。
+fn terminal_from_run_dir(dir: &std::path::Path, run_id: &str) -> Option<Terminal> {
+    let path = dir.join("runs").join(run_id).join("result.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<WorkerMessage>(text.trim()).ok()? {
+        WorkerMessage::Done {
+            summary,
+            evidence,
+            usage,
+        } => Some(Terminal::Done {
+            summary,
+            evidence,
+            usage,
+        }),
+        WorkerMessage::Question { text } => Some(Terminal::Question { text }),
+        WorkerMessage::Error {
+            message,
+            retryable,
+            provider_failure: None,
+        } => Some(Terminal::Error { message, retryable }),
+        WorkerMessage::Yielded { checkpoint, usage } => {
+            Some(Terminal::Yielded { checkpoint, usage })
+        }
+        WorkerMessage::BudgetExhausted {
+            kind,
+            message,
+            usage,
+        } => Some(Terminal::BudgetExhausted {
+            kind,
+            message,
+            usage,
+        }),
+        _ => None,
+    }
+}
+
 fn subject_from_run_dir(dir: &std::path::Path, run_id: &str) -> ReviewSubject {
     let path = dir.join("runs").join(run_id).join("result.json");
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -29913,6 +30233,509 @@ mod tests {
                 .all(|n| !n.starts_with("wu-") && !n.starts_with(".deleting-")),
             "{left:?}"
         );
+    }
+
+    // ---- Phase F5-fix2: WU run の完了が記録されない（dogfood 4 回目） ----
+
+    /// 本番の `gate` WU（kind = test、5 つの checks）と同じ形の 1 工程の v2 計画。1 回目の検査は
+    /// `flag` が無いので落ち（`work_unit_retry`。本番の replan v3 で failed → ready に戻った後と同じく
+    /// WU の `runs` が 2 になる）、2 回目は `flag` があるので `sleep` の後に通る（検査の窓）。
+    fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sleep: &str) {
+        let mut gate = v2_wu("gate", "gate", &[]);
+        gate.kind = task_core::WorkUnitKind::Test;
+        gate.checks = vec![
+            task_core::WorkUnitCheck {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            task_core::WorkUnitCheck {
+                cmd: format!(
+                    "if [ -f {f} ]; then sleep {sleep}; else touch {f}; exit 1; fi",
+                    f = flag.display()
+                ),
+                expect_exit: 0,
+            },
+        ];
+        let spec = task_core::ExecutionPlanSpec {
+            schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+            rationale: "gate".to_string(),
+            work_units: vec![gate],
+            phases: vec![task_core::PhaseSpec {
+                key: "gate".to_string(),
+                kind: task_core::WorkUnitKind::Test,
+                title: "gate".to_string(),
+            }],
+            children: Vec::new(),
+        };
+        task_ops::execution::adopt_plan(
+            store.as_ref(),
+            task_id,
+            spec,
+            task_core::PlanOrigin::Fixture,
+            None,
+            task_core::ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("adopt gate plan");
+    }
+
+    /// 本番の result.json と同じ形（criterion 0/1 の evidence、~1.59M input tokens の usage）。
+    fn gate_done_terminal() -> Terminal {
+        Terminal::Done {
+            summary: "全体ゲートを再実行し、全項目成功を確認".into(),
+            evidence: vec![
+                Evidence {
+                    criterion: 0,
+                    command: Some("cargo test --workspace".into()),
+                    exit: Some(0),
+                    stdout_tail: Some("2515 passed, 0 failed, 5 ignored".into()),
+                },
+                Evidence {
+                    criterion: 1,
+                    command: Some("Reviewed gate.md".into()),
+                    exit: Some(0),
+                    stdout_tail: Some("gate.md lists every command".into()),
+                },
+            ],
+            usage: Some(Usage {
+                input_tokens: Some(1_594_550),
+                output_tokens: Some(7_540),
+                cache_read_tokens: Some(1_531_392),
+                cache_creation_tokens: Some(0),
+                cost_usd: None,
+            }),
+        }
+    }
+
+    fn gate_row(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::WorkUnitRow {
+        store
+            .work_units_for(id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "gate")
+            .unwrap()
+    }
+
+    fn worker_finished_outcomes(
+        store: &Arc<dyn TaskStore>,
+        id: TaskId,
+        run_id: &str,
+    ) -> Vec<String> {
+        events_of(store, id)
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::WorkerFinished {
+                    run_id: r, outcome, ..
+                } if r == run_id => Some(outcome),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 1 回目の run（検査で落ちて retry）を終え、2 回目の run が終わって検査が走り始めたところまで
+    /// 進める。2 回目の run の id を返す。
+    async fn run_gate_until_second_checks(
+        d: &mut Dispatcher,
+        store: &Arc<dyn TaskStore>,
+        id: TaskId,
+    ) -> String {
+        let s = store.clone();
+        assert!(
+            run_until(d, 500, || {
+                let u = gate_row(&s, id);
+                u.retries == 1 && u.runs == 2 && u.status == task_core::WorkUnitStatus::Running
+            })
+            .await,
+            "{:?}",
+            events_of(store, id)
+        );
+        let run_id = gate_row(store, id).last_run_id.unwrap();
+        // 2 回目の run の完了を受け取り、検査を spawn するまで（run は `running` から外れる）。
+        for _ in 0..200 {
+            d.tick().unwrap();
+            if d.running.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(d.running.is_empty());
+        let u = gate_row(store, id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Running, "{u:?}");
+        assert!(worker_finished_outcomes(store, id, &run_id).is_empty());
+        run_id
+    }
+
+    /// Phase F5-fix2（根本原因）: run が終わって WU の `checks` を走らせている間に、デーモンが
+    /// draining になった（本番: 03:39 に検査開始 → 03:42 G1 のライブ切替 / 05:38 に切替 → 05:43 に
+    /// 検査開始）。検査は `running` から外れた後に spawn されるので、修正前の `in_flight()` は 0 を返し、
+    /// supervisor（`instance.rs` の drain）はその tick でプロセスを終わらせ、検査の完了
+    /// （`Completion::WorkUnitChecks`）ごと失っていた。修正後は検査が終わるまで in-flight に数え、
+    /// draining のまま完了（`WorkerFinished`・`runs` の finish・WU done）を記録してから 0 になる。
+    #[tokio::test]
+    async fn draining_dispatcher_keeps_work_unit_checks_in_flight_until_the_completion_is_recorded()
+    {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.5");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        let run_id = run_gate_until_second_checks(&mut d, &store, task.id).await;
+
+        // live handoff: このインスタンスは draining になる（新しい仕事は始めない）。
+        d.set_accepting_new_work(false);
+        assert!(
+            d.in_flight() > 0,
+            "WU の checks が走っているのに in_flight() == 0（draining のデーモンがここで exit する）"
+        );
+        // supervisor と同じく、in_flight が 0 になるまで tick する。
+        let mut drained = false;
+        for _ in 0..500 {
+            d.tick().unwrap();
+            if d.in_flight() == 0 {
+                drained = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(drained);
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert_eq!(outcomes.len(), 1, "{:?}", events_of(&store, task.id));
+        assert!(outcomes[0].starts_with("done: "), "{outcomes:?}");
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Done, "{u:?}");
+        assert_eq!(u.runs, 2);
+        let row = store.run_index_get(&run_id).unwrap().unwrap();
+        assert_eq!(row.status, task_core::RunIndexStatus::Completed, "{row:?}");
+        assert!(row.finished_at.is_some());
+    }
+
+    /// Phase F5-fix2（P-F5-3 の result.json の部分）: 検査の途中でデーモンが消え（旧デーモンの exit）、
+    /// run は `running` のまま lease が切れた。`runs/<run_id>/result.json` に終端が残っているので、
+    /// 新しいデーモンは `lease expired` で requeue せず（修正前: `infra_requeue: lease expired` →
+    /// WU ready → 3 回目の run）、その内容で確定させる（検査を走らせ直して WU done、run は 2 回のまま）。
+    #[tokio::test]
+    async fn lease_expired_work_unit_run_with_a_result_json_is_finalised_instead_of_requeued() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "30");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut old = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
+        let run_id = run_gate_until_second_checks(&mut old, &store, task.id).await;
+        let task_dir = old.task_dir(&task).unwrap();
+        // 旧デーモンが検査の途中で消える（検査の完了は届かない）。
+        old.abort_all_runs();
+        drop(old);
+        // アダプタが正規化して残す `runs/<run_id>/result.json`（本番と同じ形）。
+        let Terminal::Done {
+            summary,
+            evidence,
+            usage,
+        } = gate_done_terminal()
+        else {
+            unreachable!()
+        };
+        let run_dir = task_dir.join("runs").join(&run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("result.json"),
+            serde_json::to_string(&WorkerMessage::Done {
+                summary,
+                evidence,
+                usage,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        // 検査の途中で lease を切らし（本番: 検査前に延ばした lease の期限）、新しいデーモンに拾わせる。
+        // 新しいデーモンが走らせ直す検査は `sleep 30` なので、ここでは「確定の経路に乗ったこと」と
+        // 「検査中は回収しないこと」だけを見る（最後まで通すのは次のテスト）。
+        let holder = store
+            .get(task.id)
+            .unwrap()
+            .unwrap()
+            .lease
+            .unwrap()
+            .worker_run_id;
+        assert!(is_phase_lease_holder(&holder), "{holder}");
+        store.renew_lease(task.id, &holder, Duration::ZERO).unwrap();
+        store.renew_lease(task.id, &run_id, Duration::ZERO).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let mut active = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        active.tick().unwrap();
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert!(
+            outcomes.iter().all(|o| !o.contains("lease expired")),
+            "{outcomes:?}"
+        );
+        // result.json から確定させ、WU の検査を走らせ直している（run は増えない）。
+        assert!(active.checking.contains_key(&run_id));
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Running, "{u:?}");
+        assert_eq!(u.runs, 2);
+        // 検査の間に lease が切れても、検査の完了を受け取るまで回収しない。
+        store.renew_lease(task.id, &holder, Duration::ZERO).unwrap();
+        store.renew_lease(task.id, &run_id, Duration::ZERO).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        active.tick().unwrap();
+        assert!(
+            worker_finished_outcomes(&store, task.id, &run_id).is_empty(),
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        assert_eq!(gate_row(&store, task.id).runs, 2);
+        assert!(active.in_flight() > 0);
+        active.abort_all_runs();
+    }
+
+    /// Phase F5-fix2: 検査が短い版で、lease 切れの後に result.json から確定させた run が最後まで
+    /// 記録される（`WorkerFinished` は `done:` の 1 件、`runs` は completed、WU done、run は 2 回）。
+    #[tokio::test]
+    async fn result_json_finalisation_records_the_completion_end_to_end() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.2");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut old = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
+        let run_id = run_gate_until_second_checks(&mut old, &store, task.id).await;
+        let task_dir = old.task_dir(&task).unwrap();
+        old.abort_all_runs();
+        drop(old);
+        let run_dir = task_dir.join("runs").join(&run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let Terminal::Done {
+            summary,
+            evidence,
+            usage,
+        } = gate_done_terminal()
+        else {
+            unreachable!()
+        };
+        std::fs::write(
+            run_dir.join("result.json"),
+            serde_json::to_string(&WorkerMessage::Done {
+                summary,
+                evidence,
+                usage,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let holder = store
+            .get(task.id)
+            .unwrap()
+            .unwrap()
+            .lease
+            .unwrap()
+            .worker_run_id;
+        store.renew_lease(task.id, &holder, Duration::ZERO).unwrap();
+        store.renew_lease(task.id, &run_id, Duration::ZERO).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let mut active = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut active, 500, || gate_row(&s, id).status
+                == task_core::WorkUnitStatus::Done)
+            .await,
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        assert!(outcomes[0].starts_with("done: "), "{outcomes:?}");
+        assert_eq!(gate_row(&store, task.id).runs, 2);
+        let row = store.run_index_get(&run_id).unwrap().unwrap();
+        assert_eq!(row.status, task_core::RunIndexStatus::Completed, "{row:?}");
+    }
+
+    /// Phase F5-fix2 (b): 完了の確定がエラーで終わったら、run を黙って `running` に残さず、
+    /// インフラ都合の失敗として記録する。Task の lease を持つ run（v1 の WU の run）は
+    /// `InfraRequeue`（Task は ready、WU は ready〈reason `finalise_failed`〉、`runs` は harness_error）。
+    #[tokio::test]
+    async fn a_finalisation_failure_is_recorded_as_an_infra_requeue() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        task.status = Status::Running;
+        let run_id = "run-finalise".to_string();
+        task.lease = Some(task_core::Lease {
+            worker_run_id: run_id.clone(),
+            expires_at: OffsetDateTime::now_utc() + Duration::from_secs(3600),
+        });
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        adopt_three_step_plan(&store, task_id);
+        let a = store
+            .work_units_for(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+        let mut running_a = a.clone();
+        running_a.status = task_core::WorkUnitStatus::Running;
+        running_a.runs = 1;
+        running_a.last_run_id = Some(run_id.clone());
+        store
+            .work_unit_transition(
+                task_id,
+                running_a,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: a.id.clone(),
+                    key: a.key.clone(),
+                    from: task_core::WorkUnitStatus::Ready,
+                    to: task_core::WorkUnitStatus::Running,
+                    reason: "dispatch".into(),
+                    run_id: Some(run_id.clone()),
+                },
+            )
+            .unwrap();
+        let adapter = Arc::new(WuScriptAdapter::new(HashMap::new()));
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        d.record_finalisation_failure(
+            task_id,
+            &run_id,
+            &DispatchError::Store(StoreError::Invalid("boom".into())),
+        );
+
+        assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Ready);
+        let events = events_of(&store, task_id);
+        let finished: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::WorkerFinished {
+                    run_id: r,
+                    outcome,
+                    end,
+                    ..
+                } if r == &run_id => Some((outcome.clone(), *end)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finished.len(), 1, "{events:?}");
+        assert!(
+            finished[0]
+                .0
+                .starts_with("infra_requeue: finalisation failed: invalid stored data: boom"),
+            "{finished:?}"
+        );
+        assert_eq!(
+            finished[0].1,
+            Some(task_core::RunEnd::HarnessError {
+                class: task_core::HarnessErrorClass::Infra
+            })
+        );
+        let a = store
+            .work_units_for(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+        assert_eq!(a.status, task_core::WorkUnitStatus::Ready, "{a:?}");
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::WorkUnitTransitioned { reason, to: task_core::WorkUnitStatus::Ready, .. }
+                if reason == FINALISE_FAILED_REASON
+        )));
+    }
+
+    /// Phase F5-fix2 (b): 工程の lease（v2）の WU の run の確定が失敗したら、Task は遷移させずに
+    /// その WU だけを戻す（兄弟を巻き込まない）。同じ WU で `max_infra_retries` を超えたら WU を
+    /// failed にする（replan / 失敗の既存の経路へ）。検査の完了が後から届いても stale として捨てる。
+    #[tokio::test]
+    async fn a_finalisation_failure_of_a_parallel_work_unit_resets_only_that_unit() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.2");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        d.config.max_infra_retries = 1;
+        let run_id = run_gate_until_second_checks(&mut d, &store, task.id).await;
+        let err = DispatchError::Store(StoreError::Invalid("boom".into()));
+        d.record_finalisation_failure(task.id, &run_id, &err);
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Running);
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Ready, "{u:?}");
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert_eq!(outcomes.len(), 1);
+        assert!(
+            outcomes[0].starts_with("infra_requeue: finalisation failed"),
+            "{outcomes:?}"
+        );
+        let row = store.run_index_get(&run_id).unwrap().unwrap();
+        assert_eq!(row.status, task_core::RunIndexStatus::HarnessError);
+        // 後から届いた検査の完了は stale として捨てられる（WorkerFinished は増えない）。
+        for _ in 0..100 {
+            d.tick().unwrap();
+            if d.checking.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(worker_finished_outcomes(&store, task.id, &run_id).len(), 1);
+
+        // 次の run（3 回目）の確定もまた失敗 → 上限（1）を超えたので WU は failed。
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 500, || {
+                let u = gate_row(&s, id);
+                u.runs == 3 && u.status == task_core::WorkUnitStatus::Running
+            })
+            .await,
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        let third = gate_row(&store, task.id).last_run_id.unwrap();
+        d.record_finalisation_failure(task.id, &third, &err);
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Failed, "{u:?}");
+        let outcomes = worker_finished_outcomes(&store, task.id, &third);
+        assert!(
+            outcomes[0].starts_with(INFRA_FAILURE_MARKER),
+            "{outcomes:?}"
+        );
+        d.abort_all_runs();
     }
 
     // ---- ADR-0075（Phase G1）: scratch pool ----

@@ -112,11 +112,26 @@ struct QuotaRunSnapshot {
     source: String,
     account: Option<String>,
     windows: Vec<QuotaWindowUse>,
+    /// ADR-0076: 同じ events の `WorkerStarted.role`（無い・見つからなければ worker）。
+    role: RunRole,
 }
 
 /// D4.3: events から `Event::QuotaEstimated` を run_id ごとに畳み込む（同じ `run_id` は
 /// 後から来た Event で上書き。`events` は古い順という契約なので、これで「最後の Event が有効」になる）。
+/// ADR-0076: run の役割は `Event::WorkerStarted.role` から join する（`QuotaEstimated` は role を
+/// 持たない）。`role` の無い・`WorkerStarted` の無い run は worker。
 fn latest_quota_by_run(events: &[Event]) -> BTreeMap<String, QuotaRunSnapshot> {
+    let role_by_run: BTreeMap<&str, RunRole> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::WorkerStarted {
+                run_id,
+                role: Some(role),
+                ..
+            } => Some((run_id.as_str(), *role)),
+            _ => None,
+        })
+        .collect();
     let mut by_run: BTreeMap<String, QuotaRunSnapshot> = BTreeMap::new();
     for event in events {
         if let Event::QuotaEstimated {
@@ -135,6 +150,10 @@ fn latest_quota_by_run(events: &[Event]) -> BTreeMap<String, QuotaRunSnapshot> {
                     source: source.clone(),
                     account: account.clone(),
                     windows: windows.clone(),
+                    role: role_by_run
+                        .get(run_id.as_str())
+                        .copied()
+                        .unwrap_or(RunRole::Worker),
                 },
             );
         }
@@ -155,6 +174,7 @@ pub fn group_quota_by_work_unit(events: &[Event]) -> BTreeMap<Option<String>, Ve
                 source: &snapshot.source,
                 account: snapshot.account.as_deref(),
                 windows: &snapshot.windows,
+                role: snapshot.role,
             });
     }
     by_wu
@@ -230,11 +250,7 @@ pub fn summarize(task: &Task, events: &[Event]) -> ExecutionMetrics {
                 repair_bucket_by_key.insert(key.clone(), class.clone());
             }
             Event::WorkerStarted { role, .. } => {
-                let name = match role {
-                    None | Some(RunRole::Worker) => "worker",
-                    Some(RunRole::Reviewer) => "reviewer",
-                    Some(RunRole::Planner) => "planner",
-                };
+                let name = role.unwrap_or(RunRole::Worker).as_str();
                 *runs_by_role.entry(name.to_string()).or_insert(0) += 1;
             }
             Event::WorkerFinished {
@@ -326,6 +342,7 @@ pub fn summarize(task: &Task, events: &[Event]) -> ExecutionMetrics {
         source: &s.source,
         account: s.account.as_deref(),
         windows: &s.windows,
+        role: s.role,
     }));
 
     ExecutionMetrics {
@@ -818,6 +835,65 @@ mod tests {
         assert_eq!(row.runs, 2);
         assert_eq!(row.used_pct, Some(10.0));
         assert_eq!(m.quota_unknown_runs, 0);
+    }
+
+    /// ADR-0076: `QuotaUse.runs_by_role` は `WorkerStarted.role` と run_id で join して数える。
+    /// role の無い（旧）`WorkerStarted`・`WorkerStarted` の無い run は worker。同じ run_id の
+    /// 再送は 1 件。WU ごとの集計（`group_quota_by_work_unit`）も同じ規則。
+    #[test]
+    fn quota_runs_by_role_defaults_legacy_events_to_worker() {
+        let task = sample_task("x", vec![]);
+        let started = |run_id: &str, role: Option<RunRole>| Event::WorkerStarted {
+            run_id: run_id.to_string(),
+            adapter: "claude-code".to_string(),
+            model: "m".to_string(),
+            provider: None,
+            account: Some("a".to_string()),
+            role,
+            task_role: None,
+        };
+        let q = |run_id: &str, pct: f64| {
+            quota_event(
+                run_id,
+                None,
+                "claude-oauth",
+                Some("a"),
+                vec![measured_window(crate::quota::QuotaWindow::FiveHour, pct)],
+            )
+        };
+        let events = vec![
+            started("w1", None),
+            started("p1", Some(RunRole::Planner)),
+            started("rv1", Some(RunRole::Reviewer)),
+            started("w2", Some(RunRole::Worker)),
+            q("w1", 1.0),
+            q("p1", 2.0),
+            q("rv1", 3.0),
+            q("rv1", 3.5), // 同じ run_id の再送（最後が有効、1 件）
+            q("w2", 4.0),
+            q("orphan", 0.5), // WorkerStarted の無い run（別タスクへの按分の再送など）
+        ];
+        let m = summarize(&task, &events);
+        assert_eq!(m.quota.len(), 1, "{:?}", m.quota);
+        let row = &m.quota[0];
+        assert_eq!(row.runs, 5);
+        assert_eq!(row.runs_by_role.get("worker"), Some(&3), "{row:?}");
+        assert_eq!(row.runs_by_role.get("planner"), Some(&1));
+        assert_eq!(row.runs_by_role.get("reviewer"), Some(&1));
+        assert_eq!(row.runs_by_role.values().sum::<u32>(), row.runs);
+
+        let by_wu = group_quota_by_work_unit(&events);
+        let atomic = &by_wu[&None][0];
+        assert_eq!(atomic.runs_by_role, row.runs_by_role);
+
+        // 旧 JSON（`runs_by_role` の無い `ExecutionMetrics.quota` 行）も読める。
+        let mut legacy = serde_json::to_value(&m).expect("serialize");
+        legacy["quota"][0]
+            .as_object_mut()
+            .expect("quota row")
+            .remove("runs_by_role");
+        let back: ExecutionMetrics = serde_json::from_value(legacy).expect("legacy metrics JSON");
+        assert!(back.quota[0].runs_by_role.is_empty());
     }
 
     /// D4.3: `apportioned` は同じ `run_id` にもう 1 件出ることがある（グループが閉じたとき）。

@@ -1,0 +1,16 @@
+{
+  "errors": [
+    "duplicate child key: k",
+    "child k: acceptance must not be empty",
+    "child k depends on unknown child k",
+    "child k depends on unknown child zz",
+    "child k: 人が確認する成果物が GUI から見える場所（artifacts か知識ベース）に無い",
+    "duplicate phase key: p1",
+    "work unit integrate-p1: keys starting with \"integrate-\" are reserved for daemon-created integration work units（daemon が足した WU（kind = integrate の統合 WU・統合の repair WU）は書かなくてよい（daemon が旧版から持ち越す・補う））",
+    "work unit c: phase is required in celeris.execution-plan/2",
+    "work unit integrate-p1: unknown phase \"nope\"",
+    "work unit a: depends on b, which is in a later phase",
+    "work unit e: depends on more than one work unit within phase p3 (at most one intra-phase dependency is allowed)"
+  ],
+  "reserialized": "{\"schema\":\"celeris.execution-plan/2\",\"rationale\":\"壊れた v2\",\"phases\":[{\"key\":\"p1\",\"kind\":\"implement\",\"title\":\"p1\"},{\"key\":\"p1\",\"kind\":\"test\",\"title\":\"dup\"},{\"key\":\"p3\",\"kind\":\"test\",\"title\":\"p3\"}],\"work_units\":[{\"key\":\"a\",\"kind\":\"implement\",\"title\":\"a\",\"objective\":\"alpha work\",\"depends_on\":[\"b\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"p1\"},{\"key\":\"b\",\"kind\":\"implement\",\"title\":\"b\",\"objective\":\"beta work\",\"depends_on\":[],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"p3\"},{\"key\":\"c\",\"kind\":\"implement\",\"title\":\"c\",\"objective\":\"gamma work\",\"depends_on\":[],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[]},{\"key\":\"integrate-p1\",\"kind\":\"implement\",\"title\":\"i\",\"objective\":\"reserved\",\"depends_on\":[],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"nope\"},{\"key\":\"e\",\"kind\":\"implement\",\"title\":\"e\",\"objective\":\"epsilon work\",\"depends_on\":[\"b\",\"f\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"p3\"},{\"key\":\"f\",\"kind\":\"implement\",\"title\":\"f\",\"objective\":\"phi work\",\"depends_on\":[],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"p3\"}],\"children\":[{\"key\":\"k\",\"title\":\"k\",\"objective\":\"k\",\"acceptance\":[],\"skills\":[],\"depends_on\":[]},{\"key\":\"k\",\"title\":\"k2\",\"objective\":\"k2\",\"acceptance\":[{\"text\":\"h\",\"check\":{\"type\":\"human\"}}],\"skills\":[],\"depends_on\":[\"k\",\"zz\"]}]}"
+}

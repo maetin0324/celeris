@@ -1,0 +1,13 @@
+{
+  "errors": [
+    "children are only allowed in celeris.execution-plan/2 (must be empty in v1)",
+    "phases must be empty in celeris.execution-plan/1",
+    "work unit b: kind \"integrate\" is reserved for daemon-created integration work units（daemon が足した WU（kind = integrate の統合 WU・統合の repair WU）は書かなくてよい（daemon が旧版から持ち越す・補う））",
+    "work unit b: phase must not be set in celeris.execution-plan/1",
+    "invalid work unit key: \"A\" (must match [a-z0-9-]{1,32})",
+    "work unit b depends on unknown key zzz",
+    "work unit b depends on unknown key child:q",
+    "work unit c: features must parse as TaskFeatureHints: unknown field `nope`, expected one of `judgment`, `ambiguity`, `verifiability`, `reversibility`, `consequence`, `context_size`, `tool_intensity`, `expected_length`, `cross_cutting`"
+  ],
+  "reserialized": "{\"schema\":\"celeris.execution-plan/1\",\"rationale\":\"壊れた計画\",\"phases\":[{\"key\":\"x\",\"kind\":\"implement\",\"title\":\"x\"}],\"work_units\":[{\"key\":\"A\",\"kind\":\"implement\",\"title\":\"t\",\"objective\":\"o one\",\"depends_on\":[],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[]},{\"key\":\"b\",\"kind\":\"integrate\",\"title\":\"t2\",\"objective\":\"o two\",\"depends_on\":[\"zzz\",\"child:q\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"x\"},{\"key\":\"c\",\"kind\":\"test\",\"title\":\"t3\",\"objective\":\"o three\",\"depends_on\":[\"d\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"features\":{\"nope\":1},\"outputs\":[]},{\"key\":\"d\",\"kind\":\"test\",\"title\":\"t4\",\"objective\":\"o four\",\"depends_on\":[\"c\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[]}],\"children\":[{\"key\":\"q\",\"title\":\"q\",\"objective\":\"q\",\"acceptance\":[{\"text\":\"x\",\"check\":{\"type\":\"reviewer\"}}],\"skills\":[],\"depends_on\":[]}]}"
+}

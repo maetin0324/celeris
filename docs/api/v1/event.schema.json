@@ -33,6 +33,30 @@
       ],
       "type": "object"
     },
+    "BrowserPolicyBinding": {
+      "additionalProperties": false,
+      "description": "What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).",
+      "properties": {
+        "hash": {
+          "description": "`sha256:<hex>` of the canonical effective policy.",
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy_id",
+        "revision",
+        "hash"
+      ],
+      "type": "object"
+    },
     "BrowserRun": {
       "additionalProperties": false,
       "properties": {
@@ -41,6 +65,17 @@
             "string",
             "null"
           ]
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserPolicyBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The effective policy this run was launched with (ADR-0080 D1)."
         },
         "run_id": {
           "type": "string"

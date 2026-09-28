@@ -14826,6 +14826,8 @@ async fn run_worker(
         artifacts_dir,
         context: RunContext {
             browser: None,
+            // ADR-0080 D1: filled from Task.browser_policy when the task field lands (waits/e2e).
+            browser_policy: None,
             prior_review,
             inputs: task.inputs.clone(),
             answers: to_answers(answers_from_events(&events)),

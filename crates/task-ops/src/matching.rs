@@ -332,6 +332,8 @@ mod tests {
         nodes[3].profile.browser = Some(task_core::BrowserCapability {
             allowed_domains: vec!["example.com".into()],
             live_view_url: None,
+            allowed_actions: None,
+            credential_policy_ids: vec![],
         });
         assert!(
             matches!(decide(&nodes, &browser_task), Assignment::Assigned { ref node, .. } if node == "systems-performance")

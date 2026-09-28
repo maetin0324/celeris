@@ -544,6 +544,7 @@ async fn browser_lifecycle_events_filter_and_page_with_task_execution_identity()
             session_id: "celeris-isolated-session".into(),
             state,
             live_view_url: Some("https://browser.example.com/live".into()),
+            policy: None,
         },
     };
     env.seed_with(

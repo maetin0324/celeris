@@ -6,6 +6,7 @@ security sandbox. The substrate enforces navigation/network and action policies.
 """
 import fcntl
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,24 +24,39 @@ class PolicyBlocked(ValueError):
     pass
 
 
-# Must equal the supervisor's action_policy(). Upstream 0.38.1 treats a missing,
+# Must equal task-core's HARNESS_UPSTREAM_ACTIONS. Upstream 0.38.1 treats a missing,
 # unparsable or empty-allow policy as "no policy" (fail-open), so never invoke it then.
 ACTIONS = {"launch", "navigate", "click", "snapshot", "gettext", "screenshot", "download", "scroll", "close"}
+# Shim verb -> upstream internal action checked against the generated allow list.
+VERB_ACTIONS = {"open": "navigate", "click": "click", "snapshot": "snapshot", "extract": "gettext",
+                "screenshot": "screenshot", "download": "download", "scroll": "scroll", "close": "close"}
+HOST = re.compile(r"(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+|[a-z0-9-]+")
 
 
-def guarded(config):
-    """Fail closed unless the generated policy and domain filter are intact."""
+def load_policy(config):
+    """The generated policy, or None unless it and the domain filter are intact."""
     try:
-        policy = json.loads((ROOT / "policy.json").read_text())
+        raw = (ROOT / "policy.json").read_bytes()
+        policy = json.loads(raw)
     except (OSError, ValueError):
-        return False
+        return None
     domains = config.get("allowed_domains")
-    return (isinstance(policy, dict) and set(policy) == {"default", "allow"}
-            and policy["default"] == "deny" and isinstance(policy["allow"], list)
-            and len(policy["allow"]) > 0
-            and all(isinstance(a, str) and a in ACTIONS for a in policy["allow"])
-            and isinstance(domains, list) and len(domains) > 0
-            and all(isinstance(d, str) and re.fullmatch(r"(\*\.)?[A-Za-z0-9.-]+", d) for d in domains))
+    digest = config.get("policy_sha256")
+    ok = (isinstance(digest, str) and hashlib.sha256(raw).hexdigest() == digest
+          and isinstance(policy, dict) and set(policy) == {"default", "allow"}
+          and policy["default"] == "deny" and isinstance(policy["allow"], list)
+          and {"launch", "close"} < set(policy["allow"])
+          and len(set(policy["allow"])) == len(policy["allow"])
+          and all(isinstance(a, str) and a in ACTIONS for a in policy["allow"])
+          and isinstance(domains, list) and len(domains) > 0
+          and all(isinstance(d, str) and HOST.fullmatch(d) for d in domains))
+    return policy if ok else None
+
+
+def host_allowed(host, domains):
+    """Same containment rule as task-core: `*.base` admits subdomains, never the apex."""
+    host = host.lower() if host else ""
+    return any(host.endswith(d[1:]) if d.startswith("*.") else host == d for d in domains)
 
 
 def audit(operation, status, artifact=None):
@@ -93,9 +109,17 @@ def main(args):
         audit("policy_block", "blocked")
         print('{"success":false,"error":"command blocked by browser capability"}')
         return 2
-    if not guarded(config):
+    policy = load_policy(config)
+    if policy is None:
         audit("policy_block", "blocked")
         print('{"success":false,"error":"browser policy unavailable; refusing to run"}')
+        return 2
+    # Defence in depth ahead of the substrate: actions and hosts outside the task policy
+    # never reach agent-browser, whatever page content asked for.
+    if (VERB_ACTIONS[args[0]] not in policy["allow"]
+            or (args[0] == "open" and not host_allowed(urlsplit(args[1]).hostname, config["allowed_domains"]))):
+        audit("policy_block", "blocked")
+        print('{"success":false,"error":"command not permitted by the task browser policy"}')
         return 2
     # Do not inherit CDP, profiles, persistent state, extensions, plugins, proxies,
     # executable overrides or credentials from the harness/daemon environment.

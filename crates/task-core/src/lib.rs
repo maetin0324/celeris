@@ -6,7 +6,11 @@ pub use delivery::{Delivery, DeliveryState, DeliveryStore};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
-pub use browser::{BrowserCapability, BrowserRun, BrowserRunState};
+pub use browser::{
+    AgentBrowserActionPolicy, BrowserAction, BrowserCapability, BrowserDomainMode,
+    BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,
+    EffectiveBrowserPolicy,
+};
 pub mod artifacts;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;

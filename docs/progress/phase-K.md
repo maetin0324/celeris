@@ -168,3 +168,5 @@ DB の参照（読み取り専用 `file:/var/lib/celeris/celeris.sqlite3?mode=ro
   （既に作られた文書リポジトリの場所を動かさないため）。
 - 知識 GC（`knowledge_gc.rs`）は案件の一覧なしのガード（`apply_candidates_with_policy`）を通す。GC は既存ページの update/merge/retire だけなので
   実害は無いが、案件 ID のラベルは slug に直らない。
+
+**昇格**: release `0633d1c91b96`（main 0633d1c = K-1 3635e18 + PROGRESS.md の重複解消）。release.sh のゲート: cargo test 239 s / clippy 18 s / build 43 s、GUI の 3 step は skip（gui/ の差分あり→実行。exit 0）。verify ok=true、live_ok=false（schema 28→29 なので N-1 は想定どおり不可）。2026-09-28 13:26:44Z に **停止→起動** で昇格（backup 20260928-132621-pre-0633d1c91b96）。昇格後、`projects.slug` は pluvio / pluvio-jp572bat / agent-platform / benchfs に backfill 済み。

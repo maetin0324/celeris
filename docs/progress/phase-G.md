@@ -662,6 +662,8 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 - P-G3fix1-2: legacy（scratch 無効）の経路でも daemon から継いだ `RUSTC_WRAPPER` を外すか。今は「Celeris が sccache を判定する経路だけ」を
   決定的にした（legacy で人が daemon に wrapper を export しているなら、それを尊重する従来の挙動を変えない）。
 
+**昇格**: G3-fix1 は release `57efebe4fb7d` に含めて 2026-09-28 11:02:23Z にライブ昇格（`docs/progress/phase-F.md` の dogfood 4 回目の配送を参照）。
+
 ## 障害調査: クラスタ画面の pegasus TOTP で 503（2026-09-28）
 
 - 事実: `POST /clusters/pegasus/connect` は 30 秒待って 502 `timed out waiting for ssh`。GUI の API クライアントの timeout は 15 秒（`client.server.ts` の `DEFAULT_TIMEOUT_MS`）なので、GUI 側が先に諦めて「celeris に接続できません」（503）になる。

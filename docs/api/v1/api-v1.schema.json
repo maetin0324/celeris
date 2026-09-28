@@ -1241,6 +1241,56 @@
         }
       ]
     },
+    "AttestationClaims": {
+      "additionalProperties": false,
+      "description": "attestation が束縛する値（ADR-0080 D5）。",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "decision": {
+          "description": "`approve_once` | `deny` | `revoke` | `register`。",
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "Unix 秒。発行から 30 秒以内。",
+          "format": "int64",
+          "type": "integer"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "owner_session_hash": {
+          "type": "string"
+        },
+        "policy_hash": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wait_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "owner_session_hash",
+        "task_id",
+        "wait_id",
+        "version",
+        "decision",
+        "policy_hash",
+        "nonce",
+        "expires_at"
+      ],
+      "type": "object"
+    },
     "BrowserCapability": {
       "additionalProperties": false,
       "properties": {
@@ -1261,6 +1311,148 @@
       },
       "required": [
         "allowed_domains"
+      ],
+      "type": "object"
+    },
+    "BrowserCredentialBody": {
+      "description": "`POST .../credential` の本文の形（スキーマ用。秘密の値の例は載せない）。",
+      "properties": {
+        "attestation": {
+          "$ref": "#/$defs/HumanAttestation"
+        },
+        "expected_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "password": {
+          "description": "秘密。broker にだけ渡し、保存・反射しない。",
+          "type": "string"
+        },
+        "username": {
+          "description": "秘密。broker にだけ渡し、保存・反射しない。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_version",
+        "username",
+        "password",
+        "attestation"
+      ],
+      "type": "object"
+    },
+    "BrowserDecision": {
+      "enum": [
+        "approve_once",
+        "deny",
+        "revoke"
+      ],
+      "type": "string"
+    },
+    "BrowserDecisionBody": {
+      "additionalProperties": false,
+      "description": "`POST .../decision` の本文。",
+      "properties": {
+        "attestation": {
+          "$ref": "#/$defs/HumanAttestation"
+        },
+        "decision": {
+          "$ref": "#/$defs/BrowserDecision",
+          "description": "`approve_once` | `deny`。"
+        },
+        "expected_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idempotency_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision",
+        "expected_version",
+        "idempotency_key",
+        "attestation"
+      ],
+      "type": "object"
+    },
+    "BrowserPendingList": {
+      "description": "`GET /browser/waits` の応答（人の対応待ち。inbox の `browser_waits` と同じ形）。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/BrowserWaitItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "BrowserRegisteredBody": {
+      "additionalProperties": false,
+      "description": "`POST .../registered` の本文。",
+      "properties": {
+        "attestation": {
+          "$ref": "#/$defs/HumanAttestation"
+        },
+        "expected_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "receipt": {
+          "$ref": "#/$defs/CredentialRecord"
+        }
+      },
+      "required": [
+        "expected_version",
+        "receipt",
+        "attestation"
+      ],
+      "type": "object"
+    },
+    "BrowserRequestResult": {
+      "description": "`POST /tasks/{id}/browser/requests` の応答。",
+      "properties": {
+        "created": {
+          "description": "`false` は同じ `resume_key` の再送（既存の wait）。",
+          "type": "boolean"
+        },
+        "wait": {
+          "$ref": "#/$defs/BrowserWait"
+        }
+      },
+      "required": [
+        "wait",
+        "created"
+      ],
+      "type": "object"
+    },
+    "BrowserRevokeBody": {
+      "additionalProperties": false,
+      "description": "`POST .../revoke` の本文。",
+      "properties": {
+        "attestation": {
+          "$ref": "#/$defs/HumanAttestation"
+        },
+        "expected_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idempotency_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_version",
+        "idempotency_key",
+        "attestation"
       ],
       "type": "object"
     },
@@ -1304,6 +1496,230 @@
         "FAILED"
       ],
       "type": "string"
+    },
+    "BrowserWait": {
+      "additionalProperties": false,
+      "description": "耐久の wait 1 件（ADR-0080 D4 `BrowserWait`）。**秘密を持たない**。",
+      "properties": {
+        "approval_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "登録済み（または使用する）credential の参照。"
+        },
+        "credential_policy_id": {
+          "description": "登録待ちが要求する credential policy、または承認待ちが使う credential の policy。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadline": {
+          "type": "string"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationIntent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "description": "trusted exact HTTPS origin。",
+          "type": "string"
+        },
+        "owner_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_hash": {
+          "type": "string"
+        },
+        "policy_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "purpose": {
+          "description": "何のためか（untrusted な plain text として表示する）。",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/BrowserWaitReason"
+        },
+        "resolution_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resolved_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume_key": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/BrowserWaitState"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wait_id": {
+          "type": "string"
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "wait_id",
+        "task_id",
+        "run_id",
+        "session_id",
+        "reason",
+        "origin",
+        "purpose",
+        "policy_revision",
+        "policy_hash",
+        "deadline",
+        "resume_key",
+        "version",
+        "state",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "BrowserWaitItem": {
+      "description": "inbox の 1 件: 人の対応を待っている browser の wait。",
+      "properties": {
+        "run_state": {
+          "$ref": "#/$defs/BrowserRunState",
+          "description": "`WAITING_FOR_AUTH` / `WAITING_FOR_APPROVAL`。"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "wait": {
+          "$ref": "#/$defs/BrowserWait"
+        }
+      },
+      "required": [
+        "task",
+        "run_state",
+        "wait"
+      ],
+      "type": "object"
+    },
+    "BrowserWaitList": {
+      "description": "`GET /tasks/{id}/browser/waits` の応答。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/BrowserWait"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "BrowserWaitReason": {
+      "enum": [
+        "waiting_for_auth",
+        "waiting_for_approval"
+      ],
+      "type": "string"
+    },
+    "BrowserWaitResult": {
+      "description": "解決系（登録・決定・失効）の応答。",
+      "properties": {
+        "replayed": {
+          "description": "`true` は冪等な再送（何も書いていない）。",
+          "type": "boolean"
+        },
+        "task_status": {
+          "$ref": "#/$defs/Status"
+        },
+        "wait": {
+          "$ref": "#/$defs/BrowserWait"
+        }
+      },
+      "required": [
+        "wait",
+        "task_status",
+        "replayed"
+      ],
+      "type": "object"
+    },
+    "BrowserWaitState": {
+      "description": "wait の状態。`pending` と `approved`（未消費）が「開いている」。",
+      "oneOf": [
+        {
+          "enum": [
+            "pending",
+            "denied",
+            "expired",
+            "cancelled",
+            "revoked",
+            "invalidated"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "registered",
+          "description": "登録依頼に人が credential を登録した（使用承認は兼ねない）。",
+          "type": "string"
+        },
+        {
+          "const": "approved",
+          "description": "人が一回だけの実行を承認した（未消費）。",
+          "type": "string"
+        },
+        {
+          "const": "resumed",
+          "description": "承認の一回の実行権を worker が消費した。",
+          "type": "string"
+        }
+      ]
     },
     "Budget": {
       "description": "DESIGN §4.1 の `Budget`。",
@@ -3395,6 +3811,63 @@
       ],
       "type": "object"
     },
+    "CredentialRecord": {
+      "additionalProperties": false,
+      "description": "登録された credential の台帳行（ADR-0080 D3: id・provider・policy・origin だけ）。",
+      "properties": {
+        "credential_id": {
+          "type": "string"
+        },
+        "credential_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "receipt_id": {
+          "description": "broker が発行した登録 receipt（秘密ではない）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_id",
+        "provider",
+        "policy_id",
+        "credential_revision",
+        "origin",
+        "receipt_id"
+      ],
+      "type": "object"
+    },
+    "CredentialRef": {
+      "additionalProperties": false,
+      "description": "credential の参照（ADR-0080 D2 `CredentialRef`）。秘密ではない。",
+      "properties": {
+        "credential_id": {
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_id",
+        "provider",
+        "policy_id"
+      ],
+      "type": "object"
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -4686,6 +5159,76 @@
           "required": [
             "type",
             "browser"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた。wait は参照と固定の値だけで、秘密を持たない。",
+          "properties": {
+            "type": {
+              "const": "browser_wait_opened",
+              "type": "string"
+            },
+            "wait": {
+              "$ref": "#/$defs/BrowserWait"
+            }
+          },
+          "required": [
+            "type",
+            "wait"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0080 D4: browser の wait が解決・終端化した（`code` は固定の語だけ）。",
+          "properties": {
+            "actor_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "approval_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "code": {
+              "type": "string"
+            },
+            "credential_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/BrowserWaitReason"
+            },
+            "state": {
+              "$ref": "#/$defs/BrowserWaitState"
+            },
+            "type": {
+              "const": "browser_wait_resolved",
+              "type": "string"
+            },
+            "version": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "wait_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "wait_id",
+            "reason",
+            "state",
+            "code",
+            "version"
           ],
           "type": "object"
         },
@@ -7112,6 +7655,24 @@
       ],
       "type": "object"
     },
+    "HumanAttestation": {
+      "additionalProperties": false,
+      "description": "GUI が署名する human attestation。`payload` は `AttestationClaims` の JSON（そのまま署名対象）。",
+      "properties": {
+        "payload": {
+          "type": "string"
+        },
+        "signature": {
+          "description": "Ed25519 署名（hex）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "type": "object"
+    },
     "InFlight": {
       "description": "実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。",
       "properties": {
@@ -7161,6 +7722,13 @@
           },
           "type": "array"
         },
+        "browser_waits": {
+          "description": "ADR-0080 D5: 人の対応（credential の登録・一回だけの承認・拒否）を待っている browser の wait。",
+          "items": {
+            "$ref": "#/$defs/BrowserWaitItem"
+          },
+          "type": "array"
+        },
         "counts": {
           "$ref": "#/$defs/InboxCounts"
         },
@@ -7182,6 +7750,7 @@
         "questions",
         "drafts",
         "attention",
+        "browser_waits",
         "counts"
       ],
       "type": "object"
@@ -7194,6 +7763,12 @@
           "type": "integer"
         },
         "attention": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "browser_waits": {
+          "description": "ADR-0080 D5: `browser_waits` の件数。",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -7223,6 +7798,7 @@
         "questions",
         "drafts",
         "attention",
+        "browser_waits",
         "by_status"
       ],
       "type": "object"
@@ -9161,6 +9737,96 @@
         }
       ]
     },
+    "NewBrowserWait": {
+      "additionalProperties": false,
+      "description": "wait を開く要求（trusted supervisor が組む）。秘密の欄は無い。",
+      "properties": {
+        "credential": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "credential_policy_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationIntent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_hash": {
+          "type": "string"
+        },
+        "policy_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/BrowserWaitReason"
+        },
+        "resume_key": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "ttl_secs": {
+          "description": "待つ秒数。省略・上限超えは reason ごとの上限に丸める。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "session_id",
+        "reason",
+        "origin",
+        "purpose",
+        "policy_revision",
+        "policy_hash",
+        "resume_key"
+      ],
+      "type": "object"
+    },
     "NewPlanSpec": {
       "additionalProperties": false,
       "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/gui/api.md` §3.14）。",
@@ -9696,6 +10362,30 @@
           "type": "string"
         }
       ]
+    },
+    "OperationIntent": {
+      "additionalProperties": false,
+      "description": "承認を求める操作 intent（内部 action 名と、非秘密の引数 digest）。",
+      "properties": {
+        "action": {
+          "description": "agent-browser の内部 action 名（例: `click`・`download`・`credential_use`）。",
+          "type": "string"
+        },
+        "args_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "action"
+      ],
+      "type": "object"
     },
     "OrgCreateBody": {
       "additionalProperties": false,
@@ -17364,6 +18054,40 @@
     "artifact_promote": {
       "$ref": "#/$defs/ArtifactPromoteBody"
     },
+    "browser_attestation_claims": {
+      "$ref": "#/$defs/AttestationClaims",
+      "description": "human attestation の `payload`（署名対象の JSON）。"
+    },
+    "browser_credential": {
+      "$ref": "#/$defs/BrowserCredentialBody",
+      "description": "`POST .../credential`（秘密は broker にだけ渡す）・`.../registered`・`.../decision`・`.../revoke`。"
+    },
+    "browser_decision": {
+      "$ref": "#/$defs/BrowserDecisionBody"
+    },
+    "browser_pending_list": {
+      "$ref": "#/$defs/BrowserPendingList"
+    },
+    "browser_registered": {
+      "$ref": "#/$defs/BrowserRegisteredBody"
+    },
+    "browser_request": {
+      "$ref": "#/$defs/NewBrowserWait",
+      "description": "`POST /tasks/{id}/browser/requests` の本文と応答。"
+    },
+    "browser_request_result": {
+      "$ref": "#/$defs/BrowserRequestResult"
+    },
+    "browser_revoke": {
+      "$ref": "#/$defs/BrowserRevokeBody"
+    },
+    "browser_wait_list": {
+      "$ref": "#/$defs/BrowserWaitList",
+      "description": "`GET /tasks/{id}/browser/waits` と `GET /browser/waits`。"
+    },
+    "browser_wait_result": {
+      "$ref": "#/$defs/BrowserWaitResult"
+    },
     "cancel": {
       "$ref": "#/$defs/CancelBody"
     },
@@ -17883,7 +18607,17 @@
     "task_execution",
     "phase_gate",
     "execution_metrics",
-    "metrics_scratch"
+    "metrics_scratch",
+    "browser_request",
+    "browser_request_result",
+    "browser_wait_list",
+    "browser_pending_list",
+    "browser_credential",
+    "browser_registered",
+    "browser_decision",
+    "browser_revoke",
+    "browser_wait_result",
+    "browser_attestation_claims"
   ],
   "title": "ApiV1Schema",
   "type": "object"

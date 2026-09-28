@@ -1932,6 +1932,7 @@ dependencies = [
  "axum",
  "form_urlencoded",
  "futures-util",
+ "ring",
  "rusqlite",
  "schemars",
  "serde",
@@ -1947,6 +1948,7 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+ "zeroize",
 ]
 
 [[package]]

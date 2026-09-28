@@ -85,10 +85,12 @@ const MIGRATION_0028: &str = include_str!("../migrations/0028_project_plan_go.sq
 const MIGRATION_0029: &str = include_str!("../migrations/0029_project_slug.sql");
 /// ADR-0078 D5: `cluster_connection_log`（クラスタの ssh master の接続・切断の記録）。
 const MIGRATION_0030: &str = include_str!("../migrations/0030_cluster_connection_log.sql");
+/// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）と credential 台帳（秘密なし）。
+const MIGRATION_0031: &str = include_str!("../migrations/0031_browser_waits.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 30;
+pub const SCHEMA_VERSION: u32 = 31;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -617,6 +619,7 @@ pub trait TaskStore:
     + crate::node_session::NodeSessionStore
     + crate::mcp::McpClientStore
     + crate::mcp::McpCallStore
+    + crate::browser_wait::BrowserWaitStore
 {
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
@@ -1754,6 +1757,7 @@ impl SqliteStore {
             28 => Ok(MIGRATION_0028),
             29 => Ok(MIGRATION_0029),
             30 => Ok(MIGRATION_0030),
+            31 => Ok(MIGRATION_0031),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -2451,7 +2455,7 @@ impl SqliteStore {
 
     /// 既にロック済みの connection を使ってタスクを取得する内部ヘルパー。
     /// `get()` が再度 Mutex をロックしないようにするために分離してある。
-    fn get_locked(conn: &Connection, id: TaskId) -> Result<Option<Task>, StoreError> {
+    pub(crate) fn get_locked(conn: &Connection, id: TaskId) -> Result<Option<Task>, StoreError> {
         let json: Option<String> = conn
             .query_row(
                 "SELECT json FROM tasks WHERE id = ?1",
@@ -2637,7 +2641,7 @@ impl SqliteStore {
 
     /// `apply_transition_with_events` の本体（ADR-0004 D1 / ADR-0005 D4）。`tx` 内で任意のトリガーを
     /// 検証し、tasks の更新と Event::Transitioned (+ extra_events) の追記を行う。commit は呼び出し側。
-    fn apply_transition_tx(
+    pub(crate) fn apply_transition_tx(
         tx: &Connection,
         task_id: TaskId,
         trigger: Trigger,
@@ -2666,6 +2670,19 @@ impl SqliteStore {
             max_retries: task.budget.max_retries,
         };
         let outcome = transition(&view, &trigger)?;
+        // ADR-0080 D4: browser の wait が未解決の間は、一般の回答・途中確認の再開で `ready` に戻さない
+        // （解除は専用の browser 操作〈`BrowserResume` / `BrowserFail`〉だけ）。
+        if matches!(trigger, Trigger::Answer | Trigger::PhaseResume { .. })
+            && crate::browser_wait::has_pending_wait_tx(tx, task_id)?
+        {
+            return Err(StoreError::InvalidTransition(
+                crate::transition::InvalidTransition {
+                    status: view.status,
+                    kind: view.kind,
+                    trigger: "browser_wait_pending",
+                },
+            ));
+        }
 
         let now = OffsetDateTime::now_utc();
         // ADR-0002 D1: running から出る全遷移でリースを解放する。
@@ -2747,6 +2764,11 @@ impl SqliteStore {
                 crate::approval::WITHDRAWN_BY_TRANSITION,
                 now,
             )?;
+        }
+        // ADR-0080 D4: 終端（cancel・連鎖の中止を含む）になったら、未解決の browser wait を
+        // `cancelled` に閉じる（未消費の承認も同時に失効する）。
+        if !view.status.is_terminal() && outcome.next.is_terminal() {
+            crate::browser_wait::cancel_open_for_task_tx(tx, task_id, now)?;
         }
 
         Self::cascade_after_transition_tx(tx, &task, view.status, outcome.next)?;
@@ -8306,7 +8328,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 30);
+        assert_eq!(SCHEMA_VERSION, 31);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store

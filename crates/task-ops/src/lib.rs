@@ -9,6 +9,8 @@
 pub mod actions;
 pub mod add;
 pub mod approval;
+/// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の inbox と照合。
+pub mod browser;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）の足回り。
 pub mod changes;
 pub mod comment;

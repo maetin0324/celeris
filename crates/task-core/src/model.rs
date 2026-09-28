@@ -903,6 +903,24 @@ pub enum Event {
     BrowserUpdated {
         browser: crate::BrowserRun,
     },
+    /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた。wait は参照と固定の値だけで、秘密を持たない。
+    BrowserWaitOpened {
+        wait: Box<crate::browser_wait::BrowserWait>,
+    },
+    /// ADR-0080 D4: browser の wait が解決・終端化した（`code` は固定の語だけ）。
+    BrowserWaitResolved {
+        wait_id: String,
+        reason: crate::browser_wait::BrowserWaitReason,
+        state: crate::browser_wait::BrowserWaitState,
+        code: String,
+        version: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credential_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor_id: Option<String>,
+    },
     Created {
         task: Box<Task>,
     },

@@ -2556,6 +2556,15 @@ impl Dispatcher {
         report.finished = finished;
         report.reviewed = reviewed;
         self.settle_awaiting_children()?;
+        // ADR-0077 D2: `auto_advance` の案件で、`done` になったマイルストーン Task の途中目標を `reached` に。
+        match task_ops::project_plan::auto_reach_done_milestones(self.store.as_ref()) {
+            Ok(reached) => {
+                for mid in reached {
+                    tracing::info!(milestone_id = %mid, "milestone reached (auto_advance)");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to auto-reach milestones"),
+        }
         report.reclaimed = self.reclaim_expired_leases()?;
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
         self.reconcile_parallel_tasks()?;
@@ -9717,6 +9726,16 @@ impl Dispatcher {
                 task_role: task.role.clone(),
             },
         )?;
+        // ADR-0077 D1: マイルストーン Task の dispatch で途中目標を `approved` → `in_progress`（冪等）。
+        match task_ops::project_plan::mark_milestone_dispatched(self.store.as_ref(), &task) {
+            Ok(true) => {
+                tracing::info!(task_id = %task.id, milestone_id = ?task.milestone_id, "milestone in_progress");
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to mark the milestone in_progress");
+            }
+        }
         // ADR-0072 D5（E2b の指摘）: 計画の無い Task（暗黙の WorkUnit）の worker run も `runs`
         // 索引に書く（(g)「全タスクの run について書く」。WU の run は `start_work_unit_run`、
         // planner run はこの少し上で、それぞれ自分で `run_index_start` を呼ぶ）。
@@ -14870,10 +14889,79 @@ mod tests {
             .milestone_get(survey2.milestone_id.unwrap())
             .unwrap()
             .unwrap();
-        assert_ne!(
+        assert_eq!(
             m.status,
             task_core::MilestoneStatus::Reached,
-            "判定は後から"
+            "ADR-0077 D2: auto_advance なら done で reached"
+        );
+    }
+
+    /// ADR-0077 D1 / D2: 承認直後は `approved`、マイルストーン Task の dispatch で `in_progress`（冪等）。
+    /// `auto_advance = false` なら Task が `done` でも `in_progress` のまま（人の `ok` 待ち）、`true` なら
+    /// `done` で `reached`（後続も同じ）。
+    #[tokio::test]
+    async fn planned_milestone_becomes_in_progress_when_dispatched_and_reached_on_auto_advance() {
+        use task_core::MilestoneStatus;
+        let milestone_status = |store: &Arc<dyn TaskStore>, t: &Task| {
+            store
+                .milestone_get(t.milestone_id.unwrap())
+                .unwrap()
+                .unwrap()
+                .status
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut d, _project, survey, poc) =
+            approved_two_step_project_plan(dir.path(), false).await;
+        assert_eq!(milestone_status(&store, &survey), MilestoneStatus::Approved);
+        assert_eq!(milestone_status(&store, &poc), MilestoneStatus::Approved);
+        d.tick().unwrap();
+        assert!(
+            store
+                .events_for(survey.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(e, Event::WorkerStarted { .. })),
+            "survey dispatched on the first tick"
+        );
+        assert_eq!(
+            milestone_status(&store, &survey),
+            MilestoneStatus::InProgress
+        );
+        assert_eq!(
+            milestone_status(&store, &poc),
+            MilestoneStatus::Approved,
+            "poc はまだ dispatch されない"
+        );
+        // 再 dispatch・2 本目の WU 相当の呼び出しでも変わらない（冪等）。
+        let survey_now = store.get(survey.id).unwrap().unwrap();
+        assert!(
+            !task_ops::project_plan::mark_milestone_dispatched(store.as_ref(), &survey_now)
+                .unwrap()
+        );
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        assert_eq!(store.get(survey.id).unwrap().unwrap().status, Status::Done);
+        assert_eq!(
+            milestone_status(&store, &survey),
+            MilestoneStatus::InProgress,
+            "auto_advance = false: done でも reached 待ち"
+        );
+
+        let dir2 = tempfile::tempdir().unwrap();
+        let (store2, mut d2, _project2, survey2, poc2) =
+            approved_two_step_project_plan(dir2.path(), true).await;
+        assert!(run_until_idle(&mut d2, 400).await.idle);
+        assert_eq!(store2.get(poc2.id).unwrap().unwrap().status, Status::Done);
+        assert_eq!(
+            milestone_status(&store2, &survey2),
+            MilestoneStatus::Reached
+        );
+        assert_eq!(milestone_status(&store2, &poc2), MilestoneStatus::Reached);
+        // 一回限り: 既に reached なら候補にならない。
+        assert!(
+            task_ops::project_plan::auto_reach_done_milestones(store2.as_ref())
+                .unwrap()
+                .is_empty()
         );
     }
 

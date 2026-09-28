@@ -13,6 +13,7 @@ import {
   MILESTONE_PAUSED_BANNER,
   milestoneCancelConfirmText,
   milestoneStatusLabel,
+  milestoneStatusTone,
   orgKindMark,
   PAUSE_LABEL,
   PROJECT_PAUSED_BANNER,
@@ -58,6 +59,13 @@ describe("labels", () => {
     expect(milestoneStatusLabel("paused")).toBe("一時停止");
     expect(milestoneStatusLabel("cancelled")).toBe("中止");
     expect(milestoneStatusLabel("unknown")).toBe("unknown");
+  });
+
+  it("途中目標の状態の色（一覧と DAG で共通。ADR-0077 D5）", () => {
+    expect(milestoneStatusTone("approved")).toBe("primary");
+    expect(milestoneStatusTone("in_progress")).toBe("warning");
+    expect(milestoneStatusTone("reached")).toBe("success");
+    expect(milestoneStatusTone("unknown")).toBe("neutral");
   });
 
   it("タスクの状態", () => {

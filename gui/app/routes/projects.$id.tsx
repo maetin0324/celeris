@@ -95,6 +95,7 @@ import {
   MILESTONE_PAUSED_BANNER,
   milestoneCancelConfirmText,
   milestoneStatusLabel,
+  milestoneStatusTone,
   PAUSE_LABEL,
   PROJECT_ARCHIVED_BANNER,
   PROJECT_CANCELLED_BANNER,
@@ -344,16 +345,6 @@ const PROJECT_STATUS_TONE: Record<ProjectStatus, Tone> = {
   active: "primary",
   paused: "warning",
   done: "success",
-  cancelled: "neutral",
-};
-
-const MILESTONE_STATUS_TONE: Record<MilestoneStatus, Tone> = {
-  proposed: "info",
-  approved: "primary",
-  in_progress: "warning",
-  reached: "success",
-  redesigned: "teal",
-  paused: "warning",
   cancelled: "neutral",
 };
 
@@ -642,7 +633,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
                         <span className="font-mono text-xs text-fg-subtle">#{m.seq}</span>
                         <span className="font-medium">{m.title}</span>
                         <Badge
-                          tone={MILESTONE_STATUS_TONE[m.status]}
+                          tone={milestoneStatusTone(m.status)}
                           data-testid="milestone-status"
                           data-status-badge="milestone"
                         >

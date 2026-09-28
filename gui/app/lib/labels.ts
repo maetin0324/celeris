@@ -18,6 +18,7 @@ import type {
   TaskMode,
   Tier,
 } from "~/celeris/types";
+import type { Tone } from "~/components/ui/tone";
 import type { BoardColumnId } from "~/lib/board";
 
 /**
@@ -58,6 +59,21 @@ const MILESTONE_STATUS_LABEL: Record<MilestoneStatus, string> = {
 
 export function milestoneStatusLabel(status: MilestoneStatus | string): string {
   return MILESTONE_STATUS_LABEL[status as MilestoneStatus] ?? status;
+}
+
+/** 途中目標の状態の色（案件ページの途中目標一覧と DAG の節点で揃える。ADR-0077 D5）。 */
+const MILESTONE_STATUS_TONE: Record<MilestoneStatus, Tone> = {
+  proposed: "info",
+  approved: "primary",
+  in_progress: "warning",
+  reached: "success",
+  redesigned: "teal",
+  paused: "warning",
+  cancelled: "neutral",
+};
+
+export function milestoneStatusTone(status: MilestoneStatus | string): Tone {
+  return MILESTONE_STATUS_TONE[status as MilestoneStatus] ?? "neutral";
 }
 
 /**

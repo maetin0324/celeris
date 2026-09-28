@@ -361,6 +361,9 @@ impl OrgNodeContext {
 /// `run.context`。未知フィールドは無視する（前方互換）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RunContext {
+    /// A supervisor-provisioned CLI; absent on ordinary, planner and reviewer runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<crate::browser::BrowserContext>,
     pub prior_review: Vec<PriorReview>,
     pub inputs: Vec<ArtifactRef>,
     /// `celerisctl answer` で与えられた回答の履歴（時系列）。無ければ省略（ADR-0010 D3）。

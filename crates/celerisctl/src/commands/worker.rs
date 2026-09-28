@@ -263,6 +263,14 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
     })?;
     let events = store.events_for(task_id)?;
 
+    // Manual adapter probes do not resolve an administrator profile or persist lifecycle.
+    // Never silently run a capability-bearing task without its supervisor.
+    if task_core::browser::requests_browser(&task.skills) {
+        return Err(CliError::msg(
+            "browser capability requires dispatcher execution with an administrator profile; manual worker run is unsupported",
+        ));
+    }
+
     let (provider_id, adapter_kind) = select_provider(&config, &task, &args)?;
     let account = resolve_account(&config, &provider_id, &adapter_kind, &args)?;
 

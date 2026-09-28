@@ -2,10 +2,11 @@ import { type MouseEvent, useEffect } from "react";
 import { useFetcher, useNavigate } from "react-router";
 import type { RetryOutcome, TaskDecomposeOutcome } from "~/celeris/action-types";
 import type { ExecutionView, Task } from "~/celeris/types";
-import { ErrorFlash, FieldErrors, TaskDecomposeFlash } from "~/components/Flash";
+import { ErrorFlash, FieldErrors } from "~/components/Flash";
 import { Button } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
 import { hintClass, textareaClass } from "~/components/ui/form";
+import { Alert } from "~/components/ui/misc";
 import {
   EXECUTION_MODE_ACTION_CONFIRM,
   EXECUTION_MODE_ACTION_LABEL,
@@ -128,5 +129,26 @@ export function ExecutionModeControl({ task, execution }: { task: Task; executio
         </CardBody>
       </Card>
     </section>
+  );
+}
+
+/**
+ * celeris ADR-0072「Phase F6 実装時の決定」: 実行の形を決め直した結果（次の dispatch から効く）。
+ * F6-fix（ADR-0055 性能予算）: 使うのはこの部品だけなので、タスク詳細の初回チャンクに載る `~/components/Flash` から移した。
+ */
+export function TaskDecomposeFlash({ outcome }: { outcome: TaskDecomposeOutcome | undefined | null }) {
+  if (!outcome) return null;
+  if (!outcome.ok) return <ErrorFlash error={outcome.error} />;
+  const { result } = outcome;
+  return (
+    <Alert role="status" data-testid="flash" data-flash-kind="ok" tone="success" className="my-2">
+      <p data-testid="flash-task-decompose">
+        {result.replan
+          ? "計画の見直し（replan）を依頼しました。次の run は replan の planner run です。"
+          : result.mode === "compound"
+            ? "compound に切り替えました。次の run は計画を作る planner run です。"
+            : "atomic に切り替えました。次の run は直接実行です。"}
+      </p>
+    </Alert>
   );
 }

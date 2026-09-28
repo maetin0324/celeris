@@ -1946,6 +1946,26 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 - `blocked` の Task に compound を書いても、回答で `ready` に戻るまで planner は起きない（P1）。人が「今すぐ計画から」と言うなら、回答と同時に使う必要がある。
 - CoS（対話 run）の道具には decompose を入れていない（CoS の `create_task.execution` は従来どおりヒント +2）。CoS が既存タスクの再分解を人に提案する経路は
   別に考える。
+### F6-fix: mobile-audit の違反 7 件（tap-target 2、perf 5）（2026-09-28）
+
+main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 schemes=2 violations=7 perf_worst=task-overview 598.4KB`）。
+
+- **tap-target（project-detail の light / dark）**: F6 で足した「進め方」の radio を包む `<label>` が `flex items-start gap-2 text-sm`
+  だけで高さ 40px（319.0x40.0 < 44x44）。ADR-0055 D1-2 の既存の作り（`~/components/ui/form.ts` の `chipLabelClass`、`min-h-11`。
+  `/projects`・`/board`・`/reports` のチェックボックスと同じ）に揃えた（`w-full`、radio は `shrink-0`）。
+- **perf（task-overview / timeline / changes / files / artifacts、light）**: F6 の「実行の形」カード（`ExecutionModeControl`・`~/lib/execution-mode.ts`・
+  確認文言・`TaskDecomposeFlash`）が `tasks.$id` の初回チャンクに静的 import で載り、初回 JS が 537.2KB > 532KB。予算（ADR-0055）は変えずに:
+  `ExecutionModeControl` を `React.lazy` + `Suspense`（fallback なし）にし、`TaskDecomposeFlash` を `Flash.tsx` から `ExecutionModeControl.tsx` へ移した
+  （初回チャンクの `Flash` に残らないように）。これだけだと 531.6KB（余裕 0.4KB）だったので、判断待ちがある review タスクでしか出ない
+  `HumanReviewPanel` も同じく `React.lazy`（fallback は Skeleton）にした。
+- 数字（mobile-audit の `report.json`、`load` までの script の Content-Length 合計）: task 系 5 画面の初回 JS **537.2KB → 525.0KB**（予算 532KB、余裕 7.0KB、
+  26 チャンクのまま）。`tasks._id-*.js` 82,771 → 71,929 bytes、遅延チャンク `ExecutionModeControl-*.js` 6,267 / `HumanReviewPanel-*.js` 6,524 bytes。
+- 関門（すべて exit 0）: `corepack pnpm@11.27.0 -C gui typecheck`、`lint`（info 2 件は既存の scripts/check-resume-recovery.mjs）、`test`（75 ファイル / 1147 件）、
+  `build`、`MOBILE_AUDIT_SKIP_BUILD=1 pnpm mobile-audit`（`routes=27 schemes=2 violations=0 perf_worst=task-overview 586.5KB`）、`E2E_SKIP_BUILD=1 pnpm e2e:mock`（ok）。
+- 再現時（修正前）の audit は上記 7 件に加えて `knowledge-skill-edit` の LCP 8648ms（load1 ≈ 12 の高負荷下の揺れ。修正後の実行では出ていない）も出した。
+- 気付き（未対応）: build が `INEFFECTIVE_DYNAMIC_IMPORT` を出している（`task-changes.tsx` / `task-files.tsx` は兄弟ルートから静的 import されているので
+  Phase 77 の `React.lazy` が別チャンクに分かれていない）。今回の予算超過とは別件。
+
 ## F7: 認可要求の自動クローズ（2026-09-28）
 
 **人の報告**: 「認可待ちのところに dogfood 時のすでに不要な認可待ちが溜まっている。消すのと、認可元のタスクを手動でキャンセルした

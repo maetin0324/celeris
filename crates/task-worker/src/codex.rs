@@ -278,8 +278,55 @@ struct CodexAttempt {
     saw_any_stdout_line: bool,
 }
 
+/// ADR-0074 Phase F5-fix4: この run が触るリポジトリの git 管理領域（`--add-dir` で足す分）。
+///
+/// 対象のリポジトリは request に一覧として載っていないので、ディスパッチャの配置（ADR-0043 D2 /
+/// ADR-0074 D1.2）から決定的に拾う: cwd（先頭のリポジトリ、または `tree`）、cwd の親が `repos/` なら
+/// その兄弟（`<task_dir>/repos/<name>` や `<task_dir>/wu/<key>/repos/<name>` の他のリポジトリ）、
+/// そして `<workspace>/repos/<name>`。それぞれ `local_worktree::git_admin_dirs` にかけ、作業ツリーの
+/// 最上位であるものだけの gitdir と common dir を、重複なく、見つけた順に返す。git でなければ空。
+fn git_writable_roots(req: &RunRequest) -> Vec<std::path::PathBuf> {
+    let cwd = req.cwd();
+    let mut candidates: Vec<std::path::PathBuf> = vec![cwd.to_path_buf()];
+    let mut push_children = |parent: &std::path::Path| {
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            return;
+        };
+        let mut children: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            // `kind = dir` / `mode = shared` の兄弟は実体へのシンボリックリンク（ADR-0043 D2）。
+            // その先は celeris の worktree ではないので、管理領域を広げない。
+            .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir()))
+            .collect();
+        children.sort();
+        candidates.extend(children);
+    };
+    if let Some(parent) = cwd.parent()
+        && parent.file_name() == Some(std::ffi::OsStr::new(crate::task_repos::REPOS_DIR_NAME))
+    {
+        push_children(parent);
+    }
+    push_children(&req.workspace.join(crate::task_repos::REPOS_DIR_NAME));
+    let mut seen_candidates: Vec<std::path::PathBuf> = Vec::new();
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for candidate in candidates {
+        let key = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        if seen_candidates.contains(&key) {
+            continue;
+        }
+        seen_candidates.push(key);
+        for dir in crate::local_worktree::git_admin_dirs(&candidate) {
+            if !roots.contains(&dir) {
+                roots.push(dir);
+            }
+        }
+    }
+    roots
+}
+
 /// `codex exec`（または `codex exec resume <id>`）を 1 回起動し、終了まで読み切る（ADR-0008 D3）。
-/// `resume_id` が `Some` なら resume、`None` なら fresh（`--add-dir` 付き）。プロンプトは呼び出し側が
+/// `resume_id` が `Some` なら resume、`None` なら fresh（`--add-dir` 付き。成果物ディレクトリと、
+/// `workspace-write` の run ではリポジトリの git 管理領域。Phase F5-fix4）。プロンプトは呼び出し側が
 /// 一度だけ組んで渡す（Phase 98 のリトライでも同じ文面を使う。ADR-0054 D1 のとおり fresh 側の前置きは
 /// 本来「差分でなく全量」だが、intra-run のやり直しでは前置きを組み直さない — 動くことを優先する）。
 #[allow(clippy::too_many_arguments)]
@@ -374,7 +421,8 @@ async fn run_codex_once(
             .arg(format!("model_reasoning_effort=\"{effort}\""));
     }
     // Worktrees and shared workspaces keep results outside cwd. Grant only the
-    // dispatcher-selected artifact directory, not its parent or other tasks — but only on the forms
+    // dispatcher-selected artifact directory, not its parent or other tasks (plus, since Phase
+    // F5-fix4, the git admin dirs of this run's own repos; see `git_writable_roots`) — but only on the forms
     // of `codex exec` that accept `--add-dir` (see the usage-line comment above; `exec resume` does
     // not). A resumed thread already carries the writable-roots grant it received on the *first*
     // (non-resume) `exec` invocation that created it, since that one goes through plain `codex exec`
@@ -418,6 +466,19 @@ async fn run_codex_once(
         }
     } else {
         command.arg("--add-dir").arg(&req.artifacts_dir);
+        // ADR-0074 Phase F5-fix4（本番障害 01M3JXB3DHVBWKWKPW04DTG6SJ）: cwd が git worktree だと、
+        // `git commit` / `git merge` の書き込み先（per-worktree gitdir `…/.git/worktrees/<name>` と
+        // 共通の `…/.git`）は cwd の外にあり、`workspace-write` では read-only になる（`ORIG_HEAD` で
+        // `git merge main` が落ちた）。書き込みを許す run に限り、その 2 つを `--add-dir` で足す
+        // （`--add-dir` は繰り返せる: codex-cli 0.157.0 で `codex exec --add-dir A --add-dir B --help`
+        // は exit 0、単一値の `--model x --model y --help` は "cannot be used multiple times" で exit 2）。
+        // read-only の CoS run には足さない（読み取り専用の意味を変えない）。resume は上のとおり
+        // `--add-dir` を受け付けないので、最初の fresh `exec` で与えたこの許可を引き継ぐ前提のまま。
+        if sandbox_mode == "workspace-write" {
+            for dir in git_writable_roots(req) {
+                command.arg("--add-dir").arg(dir);
+            }
+        }
         command.args(&config.extra_args);
     }
     command.arg(prompt);
@@ -1410,7 +1471,7 @@ echo '{"type":"turn.completed"}'
             r#"
 artifact_root=''
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = '--add-dir' ]; then shift; artifact_root="$1"; fi
+    if [ "$1" = '--add-dir' ]; then shift; [ -n "$artifact_root" ] || artifact_root="$1"; fi
     shift
 done
 [ -n "$artifact_root" ] && [ -d "$artifact_root" ] || exit 10
@@ -1453,7 +1514,7 @@ echo '{"type":"turn.completed"}'
             r#"
 artifact_root=''
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = '--add-dir' ]; then shift; artifact_root="$1"; fi
+    if [ "$1" = '--add-dir' ]; then shift; [ -n "$artifact_root" ] || artifact_root="$1"; fi
     shift
 done
 printf '%s' '{"summary":"ok","evidence":[]}' > "$artifact_root/result.json"
@@ -2449,6 +2510,225 @@ printf '%s\n' '{"type":"turn.completed"}'
         );
         assert!(args[7].contains("# Task:"), "prompt is last: {args:?}");
     }
+
+    // ---- ADR-0074 Phase F5-fix4（本番障害 01M3JXB3DHVBWKWKPW04DTG6SJ。`git merge main` が worktree の
+    // 登録元 `…/.git/worktrees/<name>/ORIG_HEAD` を書けず落ちた）: fresh の `workspace-write` run は
+    // cwd（と兄弟の repos）の gitdir と common dir を `--add-dir` で足す。ここから ----
+
+    fn git_in(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// `<root>/origin-<name>` に commit 1 つの登録元リポジトリを作り、`<task_dir>/repos/<name>` に
+    /// worktree を切る。返り値は (worktree, per-worktree gitdir, common dir)。後の 2 つは canonical。
+    fn make_task_worktree(
+        root: &std::path::Path,
+        task_dir: &std::path::Path,
+        name: &str,
+    ) -> (std::path::PathBuf, String, String) {
+        let origin = root.join(format!("origin-{name}"));
+        std::fs::create_dir_all(&origin).unwrap();
+        git_in(&origin, &["init", "-q", "-b", "main"]);
+        git_in(&origin, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let wt = task_dir.join("repos").join(name);
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        git_in(
+            &origin,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("celeris/{name}"),
+                wt.to_str().unwrap(),
+            ],
+        );
+        let common = origin.join(".git").canonicalize().unwrap();
+        let gitdir = common.join("worktrees").join(name).canonicalize().unwrap();
+        (
+            wt,
+            gitdir.to_str().unwrap().to_string(),
+            common.to_str().unwrap().to_string(),
+        )
+    }
+
+    fn add_dir_values(args: &[String]) -> Vec<&str> {
+        args.windows(2)
+            .filter(|w| w[0] == "--add-dir")
+            .map(|w| w[1].as_str())
+            .collect()
+    }
+
+    /// cwd が worktree の fresh run: `--add-dir <artifacts> --add-dir <gitdir> --add-dir <common>`、
+    /// 兄弟のリポジトリ（`repos/` の他の worktree）の gitdir / common dir も続く。
+    #[tokio::test]
+    async fn f5_fix4_worktree_cwd_adds_gitdir_and_common_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_dir = dir.path().join("task");
+        let (wt, gitdir, common) = make_task_worktree(dir.path(), &task_dir, "code");
+        let (_other, other_gitdir, other_common) =
+            make_task_worktree(dir.path(), &task_dir, "other");
+        // `kind = dir` の兄弟（シンボリックリンク）は足さない。
+        std::os::unix::fs::symlink(
+            dir.path().join("origin-code"),
+            task_dir.join("repos/linked"),
+        )
+        .unwrap();
+        let config = stub_codex(dir.path(), args_log_script());
+        let mut req = sample_req(task_dir.clone());
+        req.work_dir = Some(wt.clone());
+        let artifacts_dir = req.artifacts_dir.to_str().unwrap().to_string();
+        let _ = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-f5fix4-wt",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        let args = captured_args(&wt);
+        assert_eq!(
+            &args[..15],
+            [
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "-c",
+                "sandbox_mode=\"workspace-write\"",
+                "--add-dir",
+                artifacts_dir.as_str(),
+                "--add-dir",
+                gitdir.as_str(),
+                "--add-dir",
+                common.as_str(),
+                "--add-dir",
+                other_gitdir.as_str(),
+                "--add-dir",
+                other_common.as_str(),
+            ],
+            "{args:?}"
+        );
+        assert_eq!(args.len(), 16, "{args:?}");
+        assert!(args[15].contains("# Task:"), "prompt is last: {args:?}");
+    }
+
+    /// git でない cwd（兄弟も git でない）の fresh run は成果物ディレクトリだけ（従来どおり）。
+    #[tokio::test]
+    async fn f5_fix4_non_git_cwd_adds_only_the_artifacts_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let work_dir = dir.path().join("repos/plain");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        std::fs::create_dir_all(dir.path().join("repos/also-plain")).unwrap();
+        let config = stub_codex(dir.path(), args_log_script());
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.work_dir = Some(work_dir.clone());
+        let artifacts_dir = req.artifacts_dir.to_str().unwrap().to_string();
+        let _ = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-f5fix4-plain",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        let args = captured_args(&work_dir);
+        assert_eq!(add_dir_values(&args), [artifacts_dir.as_str()], "{args:?}");
+    }
+
+    /// read-only の CoS run には git の管理領域を足さない（読み取り専用の意味を変えない）。
+    #[tokio::test]
+    async fn f5_fix4_readonly_cos_run_does_not_add_git_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_dir = dir.path().join("task");
+        let (wt, _gitdir, _common) = make_task_worktree(dir.path(), &task_dir, "code");
+        let config = stub_codex(dir.path(), args_log_script());
+        let mut req = sample_req(task_dir.clone());
+        req.work_dir = Some(wt.clone());
+        req.context.conversation_addressee =
+            Some(crate::protocol::ConversationAddressee::Secretary);
+        let artifacts_dir = req.artifacts_dir.to_str().unwrap().to_string();
+        let _ = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-f5fix4-cos",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        let args = captured_args(&wt);
+        assert_eq!(add_dir_values(&args), [artifacts_dir.as_str()], "{args:?}");
+    }
+
+    /// resume（`exec resume`）には従来どおり `--add-dir` を一つも付けない（worktree の cwd でも）。
+    #[tokio::test]
+    async fn f5_fix4_exec_resume_still_has_no_add_dir_in_a_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_dir = dir.path().join("task");
+        let (wt, _gitdir, _common) = make_task_worktree(dir.path(), &task_dir, "code");
+        let config = stub_codex(dir.path(), args_log_script());
+        let mut req = sample_req(task_dir.clone());
+        req.work_dir = Some(wt.clone());
+        req.context.session = Some(crate::protocol::SessionHandle {
+            adapter: CodexAdapter::ID.to_string(),
+            session_id: "thread-f5fix4".to_string(),
+            resume: true,
+        });
+        let _ = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-f5fix4-resume",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        let args = captured_args(&wt);
+        assert_eq!(&args[..2], ["exec", "resume"], "{args:?}");
+        assert!(!args.contains(&"--add-dir".to_string()), "{args:?}");
+    }
+
+    /// `git_admin_dirs` は作業ツリーの最上位だけを見る（サブディレクトリからは上位の `.git` を拾わない）。
+    #[test]
+    fn f5_fix4_git_admin_dirs_ignores_subdirectories_and_plain_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let task_dir = dir.path().join("task");
+        let (wt, gitdir, common) = make_task_worktree(dir.path(), &task_dir, "code");
+        assert_eq!(
+            crate::local_worktree::git_admin_dirs(&wt),
+            [
+                std::path::PathBuf::from(&gitdir),
+                std::path::PathBuf::from(&common)
+            ]
+        );
+        let sub = wt.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(crate::local_worktree::git_admin_dirs(&sub).is_empty());
+        assert!(crate::local_worktree::git_admin_dirs(dir.path()).is_empty());
+        // 通常のリポジトリは `.git` 1 つ（gitdir == common dir）。
+        let origin = dir.path().join("origin-code");
+        assert_eq!(
+            crate::local_worktree::git_admin_dirs(&origin),
+            [std::path::PathBuf::from(&common)]
+        );
+    }
+
+    // ---- ADR-0074 Phase F5-fix4 ここまで ----
 
     // ADR-0054 Phase 68c（本番障害 2026-09-21 15:44 UTC、release a2942d5d8a94。68b 配備後、fresh run は
     // 成功したが resume run が `--approve-for-me`（`[adapters.codex] extra_args` 由来）で exit 2）:

@@ -1541,6 +1541,82 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
   本番では同じ値）。上限を設定可能にするなら、そのとき `ExecutionConfig.limits` を API にも渡す。
 - 本番への反映は昇格待ち（本 fix は production に触れていない。本番 DB は read-only の照会だけ）。
 
+## F5-fix4: codex の sandbox が worktree の git 管理領域に書けない（2026-09-28）
+
+### 症状
+
+- タスク 01M3JXB3DHVBWKWKPW04DTG6SJ の計画 v4 が足した repair WU `sync-main`（`git merge main`、adapter codex / gpt-6-luna /
+  `sandbox_mode="workspace-write"`）が 09:33〜09:35Z に 2 回続けて失敗した。run 01M3KND7D33TV57X0PVP8YH3N3 は `work_unit_retry`、
+  run 01M3KNSM5W26W01E9HF9K84W1M は質問で `blocked`:「`git merge main` は worktree の登録元
+  `/home/rmaeda/workspace/agent-platform/.git/worktrees/agent-platform3/ORIG_HEAD` が read-only のため失敗し、
+  `-c core.logAllRefUpdates=false` でも … Celeris 側で writable な worktree を用意してください。」
+- 同じタスクの前の WU がコミットできていたのは、codex の on-failure 承認がたまたま昇格実行したから（再現性が無い）。
+
+### 根本原因
+
+- タスクの checkout `/var/lib/celeris/workspaces/01M3JXB3DHVBWKWKPW04DTG6SJ/repos/agent-platform` は
+  `/home/rmaeda/workspace/agent-platform` の `git worktree`（`.git` はファイルで `gitdir: …/.git/worktrees/agent-platform3`）。
+  `git merge` / `git commit` は per-worktree gitdir（`ORIG_HEAD`・`index`・`HEAD`）と共通の `.git`（objects・refs・packed-refs）に書く。
+  どちらも cwd の外。
+- codex の `workspace-write` は cwd と `--add-dir` の root しか書けない。celeris は fresh `exec` に `--add-dir <artifacts_dir>` しか
+  渡していなかった（修正前 `crates/task-worker/src/codex.rs:420` `command.arg("--add-dir").arg(&req.artifacts_dir);`）。
+- ADR-0074 D1.2 の WU worktree（`<task_dir>/wu/<key>/repos/<repo>`）も gitdir は登録元の `.git/worktrees/<name>` にあり、同じ問題を持つ。
+
+### 修正（`crates/task-worker`、schema 変更なし）
+
+- `local_worktree::git_admin_dirs(dir)`（新設）: `git -C <dir> rev-parse --path-format=absolute --show-toplevel --absolute-git-dir
+  --git-common-dir`（`GIT_DIR` 等の環境変数は外す）。`dir` が作業ツリーの最上位のときだけ gitdir と common dir を canonical・重複なしで
+  返す。git でない・起動できない・サブディレクトリなら空（上位ディレクトリのリポジトリの `.git` を拾って広げない）。
+- `codex::git_writable_roots(req)`（新設）: cwd、cwd の親が `repos/` ならその兄弟（シンボリックリンクは除く）、`<workspace>/repos/*`
+  を順に `git_admin_dirs` にかける（request にリポジトリの一覧は無いので、ADR-0043 D2 / ADR-0074 D1.2 の配置から拾う）。
+- `run_codex_once` の fresh 経路: `--add-dir <artifacts_dir>` の直後に、`sandbox_mode == "workspace-write"` のときだけ上の各 root を
+  `--add-dir` で足す（`crates/task-worker/src/codex.rs:468-481`）。read-only の CoS run・`exec resume` は変えない（resume は
+  `--add-dir` を拒否する。Phase 68b/68c のコメントを更新）。sandbox mode の既定は変えない。
+- テストの fake codex（`worktree_can_write_results_outside_cwd` ほか 1 本）は `--add-dir` の**最初**の値を成果物ディレクトリとして読む
+  （繰り返しを受ける）。
+- claude-code は `--permission-mode`（OS の sandbox なし）、acp も writable roots の概念が無いので変更なし。
+
+### 証拠
+
+- `--add-dir` が繰り返せること（codex-cli 0.157.0、LLM を呼ばない `--help` 経由）: `codex exec --add-dir /tmp/a --add-dir /tmp/b --help`
+  → exit 0。対照の単一値 `codex exec --model x --model y --help` → `error: the argument '--model <MODEL>' cannot be used multiple
+  times`、exit 2。
+- `codex debug prompt-input -c sandbox_mode="workspace-write" -c sandbox_workspace_write.writable_roots=[<common>]`（LLM を呼ばない）で、
+  worktree の cwd の実効 permission profile は `write: <cwd>`, `write: <common>`, `write: :slash_tmp / :tmpdir`、`read: <cwd>/.git`
+  （codex は各 root 直下の `.git` を read-only にする。worktree では `.git` はポインタファイルで、実体は `<common>/worktrees/<name>`）。
+- 実際の codex の Linux sandbox（`codex sandbox -P probe -c 'permissions.probe.filesystem={…}'`、上と同じ entry、LLM なし）で
+  tempdir の worktree に `git merge --no-edit main` + `git commit`:
+  - 成果物ディレクトリだけ（修正前と同じ許可）→ `fatal: update_ref failed for ref 'ORIG_HEAD': cannot lock ref 'ORIG_HEAD': Unable to
+    create '…/origin/.git/worktrees/code/ORIG_HEAD.lock': Read-only file system`、exit 128（本番と同じ失敗）
+  - 成果物 + gitdir + common（修正後の許可）→ `Fast-forward`、続く commit も成功、exit 0
+- 本番の checkout に対する（read-only の）`git rev-parse --path-format=absolute --show-toplevel --absolute-git-dir --git-common-dir` →
+  toplevel = cwd、`/home/rmaeda/workspace/agent-platform/.git/worktrees/agent-platform3`、`/home/rmaeda/workspace/agent-platform/.git`
+  （修正後はこの 2 つが `--add-dir` に載る）。
+- 新しいテスト（`crates/task-worker/src/codex.rs`）:
+  - `f5_fix4_worktree_cwd_adds_gitdir_and_common_dir`（tempdir に `git worktree add` した 2 リポジトリ + シンボリックリンク 1 つ →
+    argv は `--add-dir <artifacts> --add-dir <gitdir> --add-dir <common> --add-dir <兄弟の gitdir> --add-dir <兄弟の common>`、
+    リンクは載らない）
+  - `f5_fix4_non_git_cwd_adds_only_the_artifacts_dir`
+  - `f5_fix4_readonly_cos_run_does_not_add_git_dirs`
+  - `f5_fix4_exec_resume_still_has_no_add_dir_in_a_worktree`
+  - `f5_fix4_git_admin_dirs_ignores_subdirectories_and_plain_dirs`
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-codex-gitdir/target`、`RUSTC_WRAPPER` 無し）:
+  `cargo fmt --all -- --check` → exit 0、`cargo clippy --workspace --all-targets -- -D warnings` → exit 0、
+  `cargo test --workspace` → exit 0、passed 2588 / failed 0 / ignored 7（F5-fix3 の 2583 + 新規 5）。
+
+### 未解決事項・提案
+
+- `codex exec --add-dir` が `sandbox_workspace_write.writable_roots` と同じ permission profile の write entry になることは upstream の
+  実装と `--help` の文言（"Additional directories that should be writable"）に依る。fresh `exec` 自体は LLM を呼ぶので実機では未確認
+  （sandbox の効き目は `codex sandbox` で同じ entry を与えて確認した）。昇格後、本番で最初の codex の merge / commit を含む WU の
+  `stdout.jsonl` に `Read-only file system` が出ないことを確認する。
+- 登録元 `/home/rmaeda/workspace/agent-platform/.git` 全体が codex に書けるようになる（objects / refs / packed-refs は共通なので
+  避けられない）。他のタスクのブランチの ref も書けてしまう。提案: 本当に隔離したいなら、タスクの checkout を登録元の worktree でなく
+  `git clone --shared`（または `--reference`）の独立リポジトリにし、統合は fetch で取り込む（ADR-0043 D2 の変更になるので別 ADR）。
+- 通常のリポジトリ（`mode = shared` で cwd = 実リポジトリ）では、codex は `<cwd>/.git` を read-only entry にし、本 fix は同じパスを
+  write root として足す。どちらが勝つかは codex の entry の優先順位に依る（未確認）。celeris の既定の配置（worktree）には影響しない。
+- 本番への反映は昇格待ち（本 fix は production に触れていない。本番のファイルは read-only の参照だけ）。
+
 ## F5-1 dogfood（4 回目、2026-09-28 02:26Z〜、タスク 01M3JXB3DHVBWKWKPW04DTG6SJ）: 途中経過
 
 - F5-fix と G1 の効果を本番で確認: `build` 工程の 3 WU（api-docs / milestone-progress / quota-roles）が並列に走り、`request.json` の `cargo_target_dir` は WU ごとに `scratch/targets/task-<id>/wu-<id>/target`（共有 target の混線は再現せず）。`integrate-build` も done。replan v2 / v3（差分 changed=2）が daemon 由来の統合 WU を理由に拒否されなくなった。

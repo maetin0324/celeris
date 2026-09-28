@@ -1248,3 +1248,18 @@ F5-1 dogfood 4 回目で、replan の planner が WU の checks の上限（6）
    `rebuild_work_units_and_runs` と同じ規則）。既に閉じた行は変えない。誰も `WorkerFinished` を書かない経路（cancel 等で止めた run、
    止めた Reviewer run、drain の打ち切りの Reviewer run）は dispatcher が `WorkerFinished{outcome: "interrupted: …", end: cancelled}` を
    足す。drain の打ち切りの worker run は従来どおり DB を変えず、新しい active の lease 失効の経路で閉じる（ADR-0040 D4 のまま）。
+
+## Phase F5-fix4 実装時の逸脱・明確化（2026-09-28）
+
+F5-1 dogfood（タスク 01M3JXB3DHVBWKWKPW04DTG6SJ）の repair WU `sync-main` で、codex の `workspace-write` sandbox が worktree の
+git 管理領域（`<登録元>/.git/worktrees/<name>/ORIG_HEAD`）を read-only にし、`git merge main` が 2 回続けて落ちた。
+
+1. **sandbox 付きアダプタの書き込み許可に、その run のリポジトリの git 管理領域を含める**（D1.2 の WU worktree・ADR-0043 D2 の
+   task worktree の明確化）: codex の fresh `exec` は `--add-dir <artifacts_dir>` に加えて、cwd・cwd の兄弟（親が `repos/` のとき）・
+   `<workspace>/repos/*` のうち**作業ツリーの最上位**であるものについて `git rev-parse --absolute-git-dir` と `--git-common-dir` を
+   `--add-dir` で渡す（重複なし）。決定的（`git` を起こすだけ）。`git` でない・起動できない・サブディレクトリなら何も足さない。
+   `repos/` の兄弟がシンボリックリンク（`kind = dir` / `mode = shared`）なら足さない。
+2. **広げない範囲**: read-only の CoS run（ADR-0054 D2）には足さない。sandbox mode の既定は変えない。ホームや登録元の作業ツリー
+   そのものは足さない（足すのは `.git` 配下だけ。登録元の `.git` は共通の objects / refs / packed-refs のため避けられない）。
+3. **resume は変えない**（ADR-0054 Phase 68b/68c のまま）: `exec resume` は `--add-dir` を受け付けないので、最初の fresh `exec` で
+   与えた許可を継ぐ前提を維持する。claude-code（`--permission-mode`、OS の sandbox なし）・acp には同じ概念が無いので変えない。

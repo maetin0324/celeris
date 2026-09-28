@@ -625,6 +625,7 @@ pub fn build_status(
         legacy,
         last_gc,
         sccache: None,
+        cache: None,
     }
 }
 
@@ -650,6 +651,7 @@ pub fn disabled_status(settings: &ScratchSettings, now: SystemTime) -> ScratchSt
         legacy: Vec::new(),
         last_gc: None,
         sccache: None,
+        cache: None,
     }
 }
 

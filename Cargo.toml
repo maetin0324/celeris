@@ -10,6 +10,7 @@ members = [
     "crates/celeris-mcp",
     "crates/celeris",
     "crates/celerisctl",
+    "crates/scratch-cache",
     "tests/e2e",
 ]
 exclude = ["examples/hello-crate"]

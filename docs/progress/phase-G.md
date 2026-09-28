@@ -415,3 +415,33 @@ ADR-0075 に「Phase G2 実装時の逸脱・明確化」1〜13 と、D7 に「�
   でなければ G2 の `SCCACHE_DIR` / `SCCACHE_CACHE_SIZE`。選んだ方式を `<scratch>/bin/sccache-server.mode` に書き、dispatcher はそれが
   webdav のときだけ `/healthz` も確かめる。client（run）の env は G2 のまま（webdav 系を入れない: 万一 client が server を起こしても
   local disk で起動し、token を run の env に出さない）。
+
+### G3 checkpoint 2: `crates/scratch-cache` の中核（TieredStore・flusher・L2 の GC）+ 単体テスト（完了 2026-09-28）
+
+- 新規 crate `crates/scratch-cache`（`bucket` = token bucket、`clock` = 時計〈テストは仮想〉、`key`、`l2` = `L2Backend` / `DirL2` /
+  上限付きの I/O スレッド `L2Exec` / 切り離しの `Breaker`、`store` = `TieredStore`、`server` = WebDAV のサブセット〈checkpoint 3〉）。
+- L1 `<l1>/<k0k1>/<key>`（tmp → rename、索引はメモリ、起動時に 1 回走査、hit で mtime を 1 時間に 1 回 touch）。L1 の上限
+  （`l1_max × 0.9` を超えたら `× 0.7` まで LRU）は**未 flush の entry を落とさない**。
+- L2 `<l2>/<k0k1>/<key>.zst`（zstd level 3・content checksum 付き、tmp `.<key>.zst.tmp-<pid>-<nanos>-<seq>` → write → fsync →
+  rename、既にあれば書かない）。L2 の root が見えない（NFS が外れた・dir を消された）ときは root を作り直さずエラー
+  （mount point の下のローカルに書かないため）。
+- GET の L2 は `L2Exec`（4 スレッド、待ち行列 16）で `l2_get_timeout`（500 ms）まで待ち、失敗・タイムアウト・満杯は miss。3 回連続で
+  切り離し（5 s → 最大 300 s の指数バックオフ）、明けたら 1 回試して成功で復帰。壊れた `.zst` は miss にして消す（切り離しの理由にしない）。
+  L2 hit で mtime を 1 日 1 回まで touch（L2 の GC の LRU）。
+- flusher（1 スレッド）: 待ち行列の先頭を L1 から読み、L2 に既にあれば書かず、zstd で包んで token bucket（既定 25 MB/s、burst 25 MB）
+  の不足分を待ってから書く。失敗は先頭に戻して breaker に数える。待ち行列の上限（4096 MB）を超えたら古いものから「L2 に書かない」で
+  落とす（L1 の LRU の対象に戻す）。未 flush の key は `<l1>/.pending`（`<key>` = 積んだ / `-<key>` = 済んだ）に追記し、再起動後に
+  積み直す（空になったら切り詰め）。
+- L2 の GC: 走査して `l2_max_bytes` を超えていれば mtime の古い順に `× 0.9` まで消す（1 日 1 回、起動 60 s 後に初回。走査で古い tmp も片づける）。
+- stats の型 `task_ops::daemon::ScratchCacheStats`（`celeris.scratch-cache-stats/1`）と `ScratchStatus.cache`（`ScratchCacheView`、
+  `#[serde(default)]`）。schema と GUI の生成型を再生成（checkpoint 4 で表示に使う）。
+- テスト: `cargo test -p scratch-cache` → **13 passed / 0 failed**（3 回繰り返して同じ、1.5 s）:
+  `get_prefers_l1_then_l2_then_miss`、`l2_hit_is_promoted_to_l1`、`put_returns_before_the_l2_write`（L2 の書き込みが 1.5 s 遅い
+  `SlowDirL2` で PUT が 500 ms 未満に返り、その時点で L2 に無く、後で flusher が書く）、`flusher_respects_the_token_bucket`（仮想の
+  時計で 40 × 2.5 MB の非圧縮データ〈≈100 MB〉を flush: burst を除いた帯域が **25.00 MB/s 以下かつ 22.5 以上**）、
+  `token_bucket_limits_bytes_over_any_interval`、`l2_write_is_atomic_and_idempotent`（8 スレッドが同じ key を同時に書いても中身が
+  正しく tmp が残らない、2 回目は書かない）、`corrupt_l2_entry_is_discarded`（1 byte 反転と末尾 7 byte の切り詰めが miss になり消える）、
+  `l2_unavailable_degrades_to_l1_only`（dir の rename・権限 000・2 s 遅い L2〈100 ms で打ち切り〉のそれぞれで L1 は応答し続け、
+  3 回で degraded、バックオフ後に復帰）、`l2_gc_evicts_lru`（10 個中 hit で touch した最古の 1 個を残して古い 5 個を消す）、
+  `l1_eviction_keeps_unflushed_entries`、`pending_log_is_replayed_after_restart`、`invalid_keys_are_rejected`、`l1_only_store_never_queues`。
+- `cargo clippy --workspace --all-targets -- -D warnings` → 警告 0。

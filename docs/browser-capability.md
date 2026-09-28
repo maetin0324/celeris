@@ -119,3 +119,17 @@ GUI は `gui/` で `pnpm install --frozen-lockfile` 後に `pnpm typecheck` / `p
 release/verify は指定 worktree の full SHA を渡し、gate.json / verify.json を task artifacts に保管する。
 ADR-0041 により旧 `self/<task-id>` 規約は Celeris が用意した task branch に置き換わっている。
 本番へ昇格するのは人の GUI 操作だけである。
+
+## 後続機能との境界
+
+[ADR-0078 D3〜D7](adr/0078-browser-execution-capability.md) の durable wait、
+`celeris-credentiald` / `CredentialProvider`、task policy の細分化、persistent identity、
+GUI の pause/takeover/resume/stop、container + egress は後続設計であり、Phase 1 の設定項目ではない。
+WAITING_FOR_AUTH / WAITING_FOR_APPROVAL は現在は予約 state で、認証用 lease を発行しない。
+将来の直接表示では frame/status/tabs/url/console と Celeris の監査 event feed を区別する。
+Browser Use backend の互換性は未確認であり、現行 routing の選択肢には加えない。
+
+upstream の skill には auth、restore、eval 等の例があるが、MVP は上記 managed CLI のみを使う。
+agent-browser の `chat` や dashboard AI Chat を task harness の代わりとして有効化しない。
+0.38.1 の配布物の同梱文書と CLI を確認したことは、native Rust 本体の再現ビルドや
+ブラウザ通信の完全な隔離を検証したことを意味しない。版更新時には禁止操作の負例を再検証する。

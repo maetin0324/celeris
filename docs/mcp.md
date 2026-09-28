@@ -106,8 +106,20 @@ token: <64+ 文字の値。この 1 回しか出ない>
 
 - **知識**: `knowledge_list { scope?, tag?, limit? }`、`knowledge_search { query, scope?, limit? }`、
   `knowledge_get { path }`（`_retired` は not_found）、
-  `knowledge_propose { title, body, scope, tags?, sources?, confidence? }`（`_inbox` に置く。出典に
+  `knowledge_propose { title, body, scope, path?, op?, tags?, sources?, confidence? }`（`_inbox` に置く。出典に
   `mcp:<client_id>` を必ず足す。秘密を含む本文は拒否）。
+  - **置き場のガード**（Phase K-1。`docs/knowledge.md` §2.1。`celerisctl knowledge record` と知識整理 run と
+    同じ関数）: `scope` は `user` / `environment` / `experience` / `project:<slug>`。**案件 ID を渡すと
+    slug に直す**（`project:01M2…` → `project:agent-platform`）。知らない案件・`environment/` 直下・ULID の段・
+    scope と `path` の食い違い・日本語だけの題名で `path` が無い、は `-32002 rejected` で、`message` に
+    正しい書き方（分類の一覧・知っている slug）が入る。クライアントはそれを見て直してもう一度呼ぶ。
+  - 同じ scope に同じ題名のページがある・人についての事実（`user/profile|expertise|preferences|goals`）は、
+    新しいページを作らずそのページへの候補になる（出力の `target` と `op: "append"`、向け直した理由の
+    `redirect: {kind: same_title | user_canonical, from}`）。`op: "merge"` を付けると「本文は
+    `knowledge_get` で読んだ既存ページを統合した完全な版」で、accept で上書きする。
+  - `tools/list` の `knowledge_propose` の `description` の後半には、その時点の置き場（`environment` の
+    分類と、案件の `project:<slug>` = 題名（id）の一覧）が載る（呼ぶたびに DB と KB から組み直す）。
+  - `knowledge_list` / `knowledge_search` の `scope` に `project:<案件 ID>` を渡しても slug として引く。
 - **タスク・案件**（読むだけ）: `tasks_list { status?, project_id?, limit? }`、`tasks_get { id }`、
   `projects_list { status?, limit? }`、`projects_get { id }`。
 - **タスクの操作**（Phase 101。外部エージェント（ChatGPT・RDC 経由）向けに、汎用 curl で HTTP API を

@@ -951,6 +951,11 @@ pub struct ProjectPatchBody {
     /// （`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_advance: Option<bool>,
+    /// ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug を変える
+    /// （小文字の `[a-z0-9-]`、案件 ID の形は不可、案件の間で一意。重複は 409）。省略なら変えない。
+    /// **KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
 }
 
 /// `GET /projects/{id}` の応答。案件 + 途中目標 + その案件のタスクの要約（GUI の「仕事の木」用）。

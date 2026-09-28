@@ -4408,9 +4408,10 @@ export interface KnowledgeCandidate {
   html: string;
   id: string;
   /**
-   * ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`。`celerisctl knowledge record`
-   * が書いた候補（Phase 61）には無い（`null`）。`retire` の accept は `target` を `_retired/` へ動かし、
-   * `merge` の accept は `target` を必ず上書きする（P-61-k。`docs/knowledge.md` 参照）。
+   * ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。
+   * 取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を
+   * `_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は
+   * `target` の末尾に節として足す（`docs/knowledge.md` 参照）。
    */
   op?: string | null;
   /**
@@ -4428,7 +4429,7 @@ export interface KnowledgeCandidate {
    */
   target: string;
   /**
-   * 取り込み先に既にページがある（accept は `overwrite` が要る）。
+   * 取り込み先に既にページがある（`op` が無ければ accept は `overwrite` が要る）。
    */
   target_exists: boolean;
   title: string;
@@ -5529,6 +5530,14 @@ export interface Project {
    * 秘書の理解確認・方針（Phase 24 で秘書が書く）。
    */
   secretary_summary?: string | null;
+  /**
+   * ADR-0044 D7 追記（Phase K-1）: 知識ベースでのこの案件の置き場 `projects/<slug>/` の slug
+   * （front matter の `scope: project:<slug>`）。案件を作るときに題名 → primary リポジトリの名前 →
+   * id の末尾から決め（[`crate::knowledge::derive_project_slug`]）、`PATCH /projects/{id}
+   * {slug}` で変えられる。案件の間で一意。`None` は migration 0029 より前の行（読むときは
+   * [`Project::kb_slug`] が同じ規則で補う）。
+   */
+  slug?: string | null;
   status: ProjectStatus;
   title: string;
   updated_at: string;
@@ -5728,6 +5737,12 @@ export interface ProjectPatchBody {
    * （`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。
    */
   auto_advance?: boolean | null;
+  /**
+   * ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug を変える
+   * （小文字の `[a-z0-9-]`、案件 ID の形は不可、案件の間で一意。重複は 409）。省略なら変えない。
+   * **KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。
+   */
+  slug?: string | null;
   status?: ProjectStatus | null;
   /**
    * ADR-0039 D1: 省略（`None`）なら変えない、`null`（`Some(None)`）なら消す、値なら差し替える。

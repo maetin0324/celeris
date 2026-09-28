@@ -1269,6 +1269,7 @@ mod tests {
             .expect("secretary");
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             id: task_core::ProjectId::new(),
             title: "t".into(),
             request: "r".into(),

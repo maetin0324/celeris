@@ -487,6 +487,7 @@ fn propose_project_action(
     }
     let project = Project {
         auto_advance: false,
+        slug: None,
         archived_at: None,
         paused_from: None,
         id: ProjectId::new(),
@@ -1233,6 +1234,7 @@ mod tests {
         let t = now();
         let project = Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

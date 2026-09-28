@@ -23,8 +23,8 @@
 ```
 ~/.local/share/celeris/knowledge/
   user/                 profile.md / expertise.md / preferences.md / goals.md
-  environment/          clusters/<name>.md, servers/<name>.md, tools/<name>.md
-  projects/<slug>/      design.md / decisions.md / status.md …（slug は ADR-0044 D7 の案件 slug）
+  environment/          <分類>/<name>.md（分類: celeris / clusters / hosts / servers / tools ＋ 既にあるディレクトリ）
+  projects/<slug>/      design.md / decisions.md / status.md …（slug は案件の `slug`。ADR-0044 D7 追記）
   experience/           YYYY/MM/<slug>.md（問題・解法・結果・採らなかった案と理由）
   _inbox/               抽出された候補。**索引にも検索にも出ない**（人が accept / reject する）
   index.json            派生物。再生成できる（バージョン管理には入れない）
@@ -53,7 +53,7 @@ confidence: high
 |---|---|
 | `title` | ページの題名。無ければ本文の最初の `# `、それも無ければファイル名 |
 | `tags` | 検索の第一の手掛かり（`[a, b]` か `- a` の並び） |
-| `scope` | `user` / `environment` / `project:<slug>` / `experience`。無ければ置き場から決まる |
+| `scope` | `user` / `environment` / `project:<slug>` / `experience`。無ければ置き場から決まる。**置き場と一致させる**（§2.1） |
 | `sources` | `task:<id>` / `message:<id>` / `human` / `url:<…>`。**`record` では必須** |
 | `created` / `updated` | `YYYY-MM-DD` か RFC 3339 |
 | `confidence` | `high` / `medium` / `low` |
@@ -63,6 +63,36 @@ confidence: high
 **派生物**なので、壊れても `celerisctl knowledge reindex` で作り直せる。`_inbox/` は入らない。
 
 パスは常に **KB の根からの相対**。`..`・絶対パス・`.md` 以外は、CLI でも API でも通らない。
+
+### 2.1 置き場のガード（Phase K-1。決定的・LLM 不在）
+
+`celerisctl knowledge record`・MCP の `knowledge_propose`・知識整理 run の `apply_candidates` は、
+**同じ 1 つの関数** `task_core::knowledge::place` を通してから `_inbox/`（または KB）に書く。
+落ちた候補は書かず、理由（正しい置き場の書き方つき）を返す: `record` は終了コード 1 と文面、
+`knowledge_propose` は `-32002 rejected` の `message`、`apply_candidates` は `dropped` の理由
+（Console の「破棄」とタイムラインに出る）。
+
+| 規則 | 中身 |
+|---|---|
+| 案件の slug | `project:<x>` の `<x>` と `projects/<x>/` の `<x>` は**案件の slug**（`GET /projects` の `slug`。ADR-0044 D7 追記）。案件 ID（ULID）が来たら slug に直す。どちらでもなければ拒否（知っている slug を並べて返す）。DB を開かない `celerisctl` は案件を知らないので、「ULID でない正しい綴りの slug」だけを通す |
+| 置き場 | `user/<name>.md`、`environment/<分類>/<name>.md`、`projects/<slug>/<name>.md`、`experience/YYYY/MM/<name>.md` のどれか。`environment/` と `projects/` の**直下**には `README.md` 以外を置かない。`skills/`・`_inbox/`・`_retired/`・根の直下は知識のページの置き場ではない |
+| `environment` の分類 | `celeris` / `clusters` / `hosts` / `servers` / `tools`（`task_core::knowledge::ENVIRONMENT_CATEGORIES`）＋ `environment/` の下に**既にある**ディレクトリ。新しい分類は人がディレクトリを作る。`path` が無ければタグから当てる（分類名・単数形・既存ページの stem。例: タグ `pegasus` → `clusters/`）。当たらなければ拒否 |
+| ULID | パスのどの段にも ULID（案件 ID・タスク ID）を使わない（`-` で区切った一部でも） |
+| scope のラベル | 置き場と一致させる。無ければ置き場から決め、食い違えば拒否。`projects/README.md` は置き場の説明なので scope を持たない |
+| ファイル名 | `path` が無ければ題名の slug、題名が日本語だけならタグの slug。どちらも作れなければ拒否（`path` を付けてもらう。タイムスタンプの名前は作らない） |
+| 同じ題名 | 同じ scope（`environment` は同じ分類）に同じ題名のページがあれば、新しいページを作らずそのページに向ける |
+| `user/` の正準ページ | `profile` / `expertise` / `preferences` / `goals` は、ファイル名・題名（「人のプロフィール」など）・タグ（`profile` など。1 つだけ当たるとき）のどれかが当たれば**必ずそこへ**入れる |
+
+取り込み先が既にある（上の 2 つの向け直しを含む）`record` / `knowledge_propose` の候補は
+**`op: append`** になり、accept で既存のページの**末尾に節として足す**（`## 追記（YYYY-MM-DD）` か
+`## <候補の題名>（YYYY-MM-DD 追記）`。候補の本文の先頭の `# 題名` は落とす。`tags` / `sources` は和、
+`updated` は今日）。取り込み先が `init` の雛形のまま（空欄と書き方だけ）なら、雛形の本文を候補の本文で
+置き換える。`knowledge_propose { op: "merge" }` は「本文は既存のページを読んで統合した完全な版」で、
+accept で上書きする（`merge` と同じ）。知識整理 run の `create` も、置き場が既にあるか同じ題名の
+ページがあれば `append` として `_inbox/` に置く（直接コミットしない）。
+
+accept は、取り込み先に ULID の段があれば人が指定したパスでも止める（`projects/<案件 ID>/` を二度と
+作らない）。人が GUI・エディタで直接書くページ（`PUT /knowledge/page`）にはガードをかけない（KB は人の物）。
 
 ## 3. 道具（D3）— エージェントはここだけを使う
 
@@ -182,6 +212,8 @@ run が書く `artifacts/knowledge-candidates.json` の各候補
 | 条件 | 結果 |
 |---|---|
 | path 境界違反・`.md` 以外・題名や出典が無い・本文が空（`retire` を除く）・64 KiB 超・秘密を含む | **落とす**（どこにも書かない） |
+| 置き場のガード（§2.1）に落ちる（`environment/` 直下・知らない案件・ULID の段・scope と置き場の食い違い …） | **落とす**（理由は `placement: …`）。案件 ID は落とさずに slug へ直す |
+| `create` なのに置き場が既にある・同じ scope に同じ題名のページがある | そのページへの **`append`** として `_inbox/` へ（Phase K-1） |
 | `confidence: high` かつ `op: create`（対象がまだ無い）または `op: update`（対象があり、人の未コミット編集が無い） | **KB へ直接コミット**（author `Celeris (knowledge) <celeris@local>`、message `knowledge: <op> <path> (task <id>)`。`update` は既存の `sources` と和集合にする） |
 | それ以外（`merge`/`retire`/`medium`/`low`/対象に人の未コミット編集がある/`create` なのに既にある/`update` なのに無い） | `_inbox/` へ（front matter に取り込み先 `path` と `op` を持たせる） |
 
@@ -192,6 +224,7 @@ run が書く `artifacts/knowledge-candidates.json` の各候補
 - `op` が無い候補（`record` が書いたもの）は Phase 61 のまま: accept が `path`（既定は `scope` と
   題名から決めたもの）へ書き、reject が捨てる
 - **`op: merge`** の accept は、候補の本文（= 書き直した完全な版）で `target` を**必ず上書き**する
+- **`op: append`**（Phase K-1）の accept は、候補の本文を `target` の末尾に節として足す（§2.1。既存の本文は残す）
 - **`op: retire`** の accept は、`target`（対象の既存ページ）を `_retired/<同じ相対パス>` へ動かす
   （P-61-k の答え: `DELETE /knowledge/page` は足さない。ページを消す経路は「retire → 候補を
   accept」の 1 本に統一する。`_retired/` は `_inbox/` と同じく索引にも検索にも出ない）

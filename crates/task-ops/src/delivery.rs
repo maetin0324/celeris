@@ -149,6 +149,7 @@ mod tests {
         }
         let project = Project {
             auto_advance: false,
+            slug: None,
             id: ProjectId::new(),
             title: "test".into(),
             request: "fix".into(),

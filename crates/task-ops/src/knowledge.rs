@@ -204,7 +204,8 @@ fn seed_files() -> Vec<(String, String)> {
             &FrontMatter {
                 title: Some(title.to_string()),
                 tags: tags.iter().map(|t| (*t).to_string()).collect(),
-                scope: Some(scope.to_string()),
+                // Phase K-1: `projects/README.md` は置き場の説明なので scope を持たない（空で渡す）。
+                scope: Some(scope.to_string()).filter(|s| !s.is_empty()),
                 sources: vec!["human".to_string()],
                 created: Some(today.clone()),
                 updated: Some(today.clone()),
@@ -282,10 +283,10 @@ fn seed_files() -> Vec<(String, String)> {
             page(
                 "案件の知識",
                 &["projects"],
-                "user",
+                "",
                 "# 案件の知識\n\n`projects/<slug>/` に 1 案件ずつ（`design.md` / `decisions.md` / `status.md` …）。\n\
-                 `<slug>` は案件の文書リポジトリと同じ slug（ADR-0044 D7）。案件のタスクの前置きには\n\
-                 この `projects/<slug>` が自動でマウントされる。\n",
+                 `<slug>` は案件の slug（ADR-0044 D7 追記。`GET /projects` の `slug`）。案件のタスクの前置きには\n\
+                 この `projects/<slug>` が自動でマウントされる。**案件 ID をディレクトリ名に使わない**。\n",
             ),
         ),
     ]
@@ -327,7 +328,7 @@ fn readme() -> String {
          `index.json` は再生成できる派生物なので git には入れない。\n\n\
          ```\n\
          user/                 人のこと（profile / expertise / preferences / goals）\n\
-         environment/          環境（clusters/ servers/ tools/）\n\
+         environment/          環境（<分類>/<name>.md。分類は celeris/ clusters/ hosts/ servers/ tools/）\n\
          projects/<slug>/      案件の知識（design.md / decisions.md / status.md …）\n\
          experience/           経験（YYYY/MM/<slug>.md。問題・解法・結果・採らなかった案）\n\
          {INBOX_DIR}/               抽出された候補。まだ索引に入らない（人が accept / reject する）\n\
@@ -345,7 +346,10 @@ fn readme() -> String {
          confidence: high\n\
          ---\n\
          ```\n\n\
-         `scope` は `user` / `environment` / `project:<slug>` / `experience`。\n\
+         `scope` は `user` / `environment` / `project:<slug>` / `experience`（置き場と一致させる）。\n\
+         `<slug>` は案件の slug（`GET /projects` の `slug`）。**案件 ID を置き場に使わない**。\n\
+         `environment/` と `projects/` の直下には README 以外を置かない。同じ scope に同じ題名の\n\
+         ページがあれば、新しいページは作らずそのページへの追記・統合の候補になる（Phase K-1）。\n\
          `sources` は `task:<id>` / `message:<id>` / `human` / `url:<…>`。\n\n\
          ## 道具\n\n\
          ```\n\
@@ -429,7 +433,11 @@ fn default_scope(path: &str) -> Option<String> {
     let top = path.split('/').next()?;
     match top {
         "user" | "environment" | "experience" => Some(top.to_string()),
-        "projects" => path.split('/').nth(1).map(|slug| format!("project:{slug}")),
+        // Phase K-1: `projects/README.md`（置き場の説明）は案件ではない。
+        "projects" => {
+            let parts: Vec<&str> = path.split('/').collect();
+            (parts.len() > 2).then(|| format!("project:{}", parts[1]))
+        }
         _ => None,
     }
 }
@@ -747,8 +755,12 @@ pub struct RecordRequest {
     pub sources: Vec<String>,
     pub confidence: Option<Confidence>,
     pub body: String,
-    /// 取り込む先の KB 相対パス（省略なら accept のときに `scope` と `title` から決める）。
+    /// 取り込む先の KB 相対パス（省略なら `scope` と `title` から決める。Phase K-1: どちらも
+    /// [`kb::place`] のガードを通す）。
     pub path: Option<String>,
+    /// Phase K-1: 取り込み先が既にあるときの扱い。`Some(Merge)` は「本文は既存ページを統合した
+    /// 完全な版」（accept で上書き）、それ以外は `Append`（accept で末尾に節として足す）。
+    pub op: Option<kb::CandidateOp>,
 }
 
 /// `record` の失敗（CLI は 1、API は 422）。
@@ -765,6 +777,9 @@ pub enum RecordError {
     /// ADR-0047 D4: 秘密は保存しない。
     #[error("refused: the candidate contains a secret（{0}）")]
     Secret(&'static str),
+    /// Phase K-1: 置き場のガード（[`kb::place`]）に落ちた。文面に正しい置き場の書き方が入る。
+    #[error("refused: {0}")]
+    Placement(#[from] kb::PlacementError),
     #[error("{0}")]
     Failed(String),
 }
@@ -777,10 +792,61 @@ pub struct RecordOutcome {
     /// `_inbox` の中での id（ファイル名から `.md` を取ったもの）。
     pub id: String,
     pub sha: String,
+    /// Phase K-1: 取り込み先（ガードを通した KB 相対パス）。
+    pub target: String,
+    /// Phase K-1: 取り込み先が既にあれば `Append` か `Merge`。新しいページなら `None`。
+    pub op: Option<kb::CandidateOp>,
+    /// Phase K-1: 同じ題名のページ・`user/` の正準ページへ向け直したとき。
+    pub redirect: Option<kb::Redirect>,
 }
 
-/// ADR-0047 D3: **候補**を `_inbox/` に書く（正本には直接書かない）。
+/// Phase K-1: [`kb::place`] に渡す置き場の状況を集める（`environment/` の下のディレクトリ・索引・今日）。
+/// `projects` は案件の一覧（DB を開ける呼び出し側だけが渡せる。`None` は「案件を知らない」）。
+pub fn layout(root: &Path, projects: Option<Vec<kb::ProjectRef>>) -> kb::Layout {
+    let env_dirs = std::fs::read_dir(root.join("environment"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let pages = if exists(root) {
+        ensure_index(root).items
+    } else {
+        Vec::new()
+    };
+    kb::Layout::new(projects, env_dirs, pages, today())
+}
+
+/// Phase K-1: 案件の一覧を [`kb::ProjectRef`] にする（slug は [`task_core::Project::kb_slug`]）。
+pub fn project_refs<S: task_core::TaskStore + ?Sized>(
+    store: &S,
+) -> Result<Vec<kb::ProjectRef>, task_core::StoreError> {
+    Ok(store
+        .project_list()?
+        .into_iter()
+        .map(|p| kb::ProjectRef {
+            id: p.id.to_string(),
+            slug: p.kb_slug(),
+            title: p.title,
+        })
+        .collect())
+}
+
+/// ADR-0047 D3: **候補**を `_inbox/` に書く（正本には直接書かない）。案件を知らない呼び出し
+/// （`celerisctl knowledge record`）の形。案件の一覧を持つ側は [`record_in`] を使う。
 pub fn record(root: &Path, request: &RecordRequest) -> Result<RecordOutcome, RecordError> {
+    record_in(root, request, &layout(root, None))
+}
+
+/// [`record`] に置き場の状況（[`layout`]）を渡す形（MCP の `knowledge_propose` が案件の一覧つきで呼ぶ）。
+pub fn record_in(
+    root: &Path,
+    request: &RecordRequest,
+    layout: &kb::Layout,
+) -> Result<RecordOutcome, RecordError> {
     let title = request.title.trim();
     let scope = request.scope.trim();
     let body = request.body.trim();
@@ -813,14 +879,31 @@ pub fn record(root: &Path, request: &RecordRequest) -> Result<RecordOutcome, Rec
             root.display()
         )));
     }
-    let target = request
-        .path
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(kb::page_path)
-        .transpose()
-        .map_err(|e| RecordError::Failed(e.to_string()))?;
+    let tags: Vec<String> = request
+        .tags
+        .iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    // Phase K-1: 置き場のガード（apply_candidates と同じ関数）。
+    let placement = kb::place(
+        &kb::PlacementRequest {
+            op: None,
+            path: request.path.as_deref(),
+            scope: Some(scope),
+            title,
+            tags: &tags,
+        },
+        layout,
+    )?;
+    let target = placement.path.clone();
+    let op = root.join(&target).exists().then(|| {
+        if request.op == Some(kb::CandidateOp::Merge) {
+            kb::CandidateOp::Merge
+        } else {
+            kb::CandidateOp::Append
+        }
+    });
     let now = OffsetDateTime::now_utc();
     let stamp = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
@@ -842,21 +925,14 @@ pub fn record(root: &Path, request: &RecordRequest) -> Result<RecordOutcome, Rec
     let page = kb::render_page(
         &FrontMatter {
             title: Some(title.to_string()),
-            tags: dedup_tags_preserve_order(
-                request
-                    .tags
-                    .iter()
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty())
-                    .collect(),
-            ),
-            scope: Some(scope.to_string()),
+            tags: dedup_tags_preserve_order(tags),
+            scope: placement.scope.clone(),
             sources,
             created: Some(today()),
             updated: Some(today()),
             confidence: request.confidence,
-            path: target,
-            op: None,
+            path: Some(target.clone()),
+            op: op.map(|o| o.as_str().to_string()),
         },
         body,
     );
@@ -872,7 +948,14 @@ pub fn record(root: &Path, request: &RecordRequest) -> Result<RecordOutcome, Rec
         &[path.as_str()],
     )
     .map_err(RecordError::Failed)?;
-    Ok(RecordOutcome { path, id, sha })
+    Ok(RecordOutcome {
+        path,
+        id,
+        sha,
+        target,
+        op,
+        redirect: placement.redirect,
+    })
 }
 
 /// `_inbox/` の候補 1 件。
@@ -939,7 +1022,7 @@ pub fn inbox_get(root: &Path, id: &str) -> Option<InboxItem> {
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .and_then(|p| kb::page_path(p).ok())
-        .unwrap_or_else(|| default_target(front.scope.as_deref(), &title, id));
+        .unwrap_or_else(|| default_target(root, &front, &title, id));
     let op = front.op.as_deref().and_then(|o| o.parse().ok());
     Some(InboxItem {
         id: id.trim().to_string(),
@@ -956,9 +1039,25 @@ pub fn inbox_get(root: &Path, id: &str) -> Option<InboxItem> {
     })
 }
 
-/// 取り込み先の既定（`scope` のディレクトリ ＋ 題名の slug）。
-fn default_target(scope: Option<&str>, title: &str, id: &str) -> String {
-    let dir = scope
+/// 取り込み先の既定（Phase K-1 より前の、`path` を持たない候補のため）。置き場のガード
+/// （[`kb::place`]）が通ればそれ、通らなければ従来どおり `scope` のディレクトリ ＋ 題名の slug
+/// （その場合 accept は [`accept_target_problem`] で止まることがある）。
+fn default_target(root: &Path, front: &FrontMatter, title: &str, id: &str) -> String {
+    if let Ok(p) = kb::place(
+        &kb::PlacementRequest {
+            op: None,
+            path: None,
+            scope: front.scope.as_deref(),
+            title,
+            tags: &front.tags,
+        },
+        &layout(root, None),
+    ) {
+        return p.path;
+    }
+    let dir = front
+        .scope
+        .as_deref()
         .and_then(kb::scope_dir)
         .unwrap_or_else(|| "experience".to_string());
     let slug = kb::slugify(title).unwrap_or_else(|| id.to_ascii_lowercase());
@@ -1019,6 +1118,17 @@ pub fn inbox_accept(root: &Path, id: &str, path: Option<&str>, overwrite: bool) 
             detail: "取り込み先を `_inbox/`・`_retired/` にはできません".to_string(),
         };
     }
+    if let Some(detail) = accept_target_problem(&target) {
+        return InboxOutcome::Failed { detail };
+    }
+    // Phase K-1: `op = append` は既存のページの末尾に節として足す（取り込み先を人が変えたときは従来どおり）。
+    // 候補を作ったあとで取り込み先が消えていれば、新しいページとして書く（下の従来の経路）。
+    if item.op == Some(kb::CandidateOp::Append)
+        && target == item.target
+        && root.join(&target).exists()
+    {
+        return inbox_accept_append(root, &item);
+    }
     let overwrite = overwrite || item.op == Some(kb::CandidateOp::Merge);
     if !overwrite && root.join(&target).exists() {
         return InboxOutcome::Exists { path: target };
@@ -1065,6 +1175,112 @@ pub fn inbox_accept(root: &Path, id: &str, path: Option<&str>, overwrite: bool) 
         }
         Err(detail) => InboxOutcome::Failed { detail },
     }
+}
+
+/// Phase K-1: 取り込み先に案件 ID（ULID）の段があれば止める（`projects/<ULID>/` を二度と作らない）。
+/// 人が GUI で取り込み先を書き換えたときも同じ（案件 ID のディレクトリは他のどこからも読まれない）。
+fn accept_target_problem(target: &str) -> Option<String> {
+    target
+        .split('/')
+        .any(|seg| {
+            let stem = seg.strip_suffix(".md").unwrap_or(seg);
+            kb::looks_like_ulid(stem)
+        })
+        .then(|| {
+            format!(
+                "取り込み先 {target} に案件 ID（ULID）の段があります。`projects/<slug>/…` のような置き場を指定してください"
+            )
+        })
+}
+
+/// Phase K-1: `op = append` の accept。取り込み先の既存ページに、候補の本文を**節として足す**
+/// （既存の本文は消さない）。`tags` / `sources` は和、`updated` は今日。取り込み先が `init` の雛形の
+/// ままなら（[`is_seed_body`]）、雛形の本文を候補の本文で置き換える。
+fn inbox_accept_append(root: &Path, item: &InboxItem) -> InboxOutcome {
+    let Some(existing) = read_page(root, &item.target) else {
+        return InboxOutcome::Failed {
+            detail: format!("{} を読めませんでした", item.target),
+        };
+    };
+    let page = append_page(&existing, &item.target, item, &today());
+    if std::fs::write(root.join(&item.target), page.as_bytes()).is_err() {
+        return InboxOutcome::Failed {
+            detail: format!("{} を書けませんでした", item.target),
+        };
+    }
+    if std::fs::remove_file(root.join(&item.path)).is_err() {
+        return InboxOutcome::Failed {
+            detail: format!("{} を消せませんでした", item.path),
+        };
+    }
+    match commit_paths(
+        root,
+        &format!(
+            "knowledge: {}（候補 {} を追記で取り込む）",
+            item.target, item.id
+        ),
+        (kb::HUMAN_AUTHOR_NAME, kb::HUMAN_AUTHOR_EMAIL),
+        &[item.target.as_str(), item.path.as_str()],
+    ) {
+        Ok(sha) => {
+            let _ = reindex(root);
+            InboxOutcome::Accepted {
+                etag: etag(root, &item.target),
+                path: item.target.clone(),
+                sha,
+            }
+        }
+        Err(detail) => InboxOutcome::Failed { detail },
+    }
+}
+
+/// `init` の雛形のままの本文か（空欄と書き方だけで、人も celeris もまだ何も書いていない）。
+fn is_seed_body(target: &str, body: &str) -> bool {
+    seed_files()
+        .into_iter()
+        .find(|(path, _)| path == target)
+        .is_some_and(|(_, raw)| kb::front_matter(&raw).1.trim() == body.trim())
+}
+
+/// 既存のページ `existing` に候補 `item` を足した 1 枚（純粋。`today` は `YYYY-MM-DD`）。
+fn append_page(existing: &str, target: &str, item: &InboxItem, today: &str) -> String {
+    let (mut front, body) = kb::front_matter(existing);
+    let mut tags = front.tags.clone();
+    tags.extend(item.tags.iter().cloned());
+    front.tags = dedup_tags_preserve_order(tags);
+    for s in &item.sources {
+        if !front.sources.contains(s) {
+            front.sources.push(s.clone());
+        }
+    }
+    front.updated = Some(today.to_string());
+    front.path = None;
+    front.op = None;
+    let title = front.title.clone().unwrap_or_default();
+    let body = if is_seed_body(target, body) {
+        // 雛形の空欄は情報を持たないので、候補の本文で置き換える（created は候補のものにしない:
+        // ページそのものは init のときからある）。
+        if front.confidence.is_none() || front.confidence == Some(Confidence::Medium) {
+            front.confidence = item.confidence.or(front.confidence);
+        }
+        format!("{}\n", item.body.trim())
+    } else {
+        // 候補の本文の先頭の `# <題名>` は節の見出しと重なるので落とす。
+        let mut added = item.body.trim();
+        if let Some(rest) = added.strip_prefix("# ") {
+            let (first, tail) = rest.split_once('\n').unwrap_or((rest, ""));
+            if first.trim() == item.title.trim() || first.trim() == title.trim() {
+                added = tail.trim_start();
+            }
+        }
+        let heading = if item.title.trim() == title.trim() || item.title.trim().is_empty() {
+            format!("追記（{today}）")
+        } else {
+            format!("{}（{today} 追記）", item.title.trim())
+        };
+        format!("{}\n\n## {heading}\n\n{}\n", body.trim_end(), added.trim())
+    };
+    kb::render_page(&front, &body)
 }
 
 /// ADR-0047 D4（Phase 62）: `op = retire` の accept。候補の本文は書かず、`item.target`
@@ -1217,6 +1433,23 @@ pub fn apply_candidates_with_policy(
     candidates: &[kb::Candidate],
     policy: ApplyPolicy,
 ) -> ApplyOutcome {
+    apply_candidates_in(root, task_id, candidates, policy, &layout(root, None))
+}
+
+/// [`apply_candidates_with_policy`] に置き場の状況（[`layout`]。案件の一覧つき）を渡す形。
+///
+/// Phase K-1: 検査（[`kb::validate_candidate`]）のあとに**置き場のガード**（[`kb::place`]。
+/// `record` / MCP `knowledge_propose` と同じ関数）を通す。落ちた候補は `dropped` に理由を残す。
+/// `project:<案件 ID>` は `project:<slug>` に、`projects/<案件 ID>/…` は `projects/<slug>/…` に直す。
+/// `create` の置き場が既にあるか、同じ scope に同じ題名のページがあれば、そのページへの
+/// `append`（`_inbox/`。人が accept すると末尾に節として足す）にする。
+pub fn apply_candidates_in(
+    root: &Path,
+    task_id: &str,
+    candidates: &[kb::Candidate],
+    policy: ApplyPolicy,
+    layout: &kb::Layout,
+) -> ApplyOutcome {
     let mut out = ApplyOutcome::default();
     for candidate in candidates {
         let path = match kb::validate_candidate(candidate) {
@@ -1242,6 +1475,33 @@ pub fn apply_candidates_with_policy(
                 .push((candidate.path.clone(), "GC cannot create pages".into()));
             continue;
         }
+        let placement = match kb::place(
+            &kb::PlacementRequest {
+                op: Some(candidate.op),
+                path: Some(&path),
+                scope: Some(candidate.scope.as_str()),
+                title: &candidate.title,
+                tags: &candidate.tags,
+            },
+            layout,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                out.dropped
+                    .push((candidate.path.clone(), format!("placement: {e}")));
+                continue;
+            }
+        };
+        let mut placed = candidate.clone();
+        placed.path = placement.path.clone();
+        placed.scope = placement.scope.clone().unwrap_or_default();
+        if candidate.op == kb::CandidateOp::Create
+            && (placement.redirect.is_some() || root.join(&placement.path).exists())
+        {
+            placed.op = kb::CandidateOp::Append;
+        }
+        let candidate = &placed;
+        let path = placement.path;
         let eligible = policy == ApplyPolicy::Task
             && candidate.confidence == Confidence::High
             && candidate.op.direct_commit_eligible()
@@ -1266,7 +1526,7 @@ fn direct_commit_fits(root: &Path, path: &str, op: kb::CandidateOp) -> bool {
     match op {
         kb::CandidateOp::Create => !exists,
         kb::CandidateOp::Update => exists && !has_uncommitted_changes(root, path),
-        kb::CandidateOp::Merge | kb::CandidateOp::Retire => false,
+        kb::CandidateOp::Merge | kb::CandidateOp::Retire | kb::CandidateOp::Append => false,
     }
 }
 
@@ -1810,11 +2070,13 @@ mod tests {
             &RecordRequest {
                 title: "pegasus の投げ方".into(),
                 scope: "environment".into(),
-                tags: vec!["hpc".into()],
+                // Phase K-1: `environment` は分類が要る（タグ `cluster` → `clusters/`）。
+                tags: vec!["hpc".into(), "cluster".into()],
                 sources: vec!["task:01J1".into()],
                 confidence: Some(Confidence::High),
                 body: "pjsub -L node=1 で投げる。".into(),
                 path: None,
+                op: None,
             },
         )
         .expect("record");
@@ -1875,6 +2137,7 @@ mod tests {
                 ],
                 sources: vec!["human".into()],
                 body: "本文。".into(),
+                path: Some("environment/tools/dup-tags.md".into()),
                 ..RecordRequest::default()
             },
         )
@@ -1937,21 +2200,46 @@ mod tests {
             InboxOutcome::Missing
         );
 
-        // 宛先が既にあれば 409。
+        // Phase K-1: 宛先が既にあれば `append`（accept で末尾に節として足す。既存の本文は残る）。
         let two = record(
             &root,
             &RecordRequest {
                 title: "fern03 の使い方".into(),
                 scope: "environment".into(),
-                sources: vec!["human".into()],
+                sources: vec!["task:01J2".into()],
                 body: "別の版。".into(),
                 path: Some("environment/servers/fern03.md".into()),
                 ..RecordRequest::default()
             },
         )
         .expect("record");
-        assert_eq!(
+        assert_eq!(two.op, Some(kb::CandidateOp::Append));
+        assert!(matches!(
             inbox_accept(&root, &two.id, None, false),
+            InboxOutcome::Accepted { .. }
+        ));
+        let raw = std::fs::read_to_string(root.join(&path)).expect("read");
+        assert!(raw.contains("ssh fern03。"), "{raw}");
+        assert!(raw.contains("## 追記（"), "{raw}");
+        assert!(raw.contains("別の版。"), "{raw}");
+        assert!(raw.contains("\"task:01J2\""), "{raw}");
+        assert_eq!(history(&root, &path).len(), 2);
+        // 取り込み先を人が既存のページに変えたときは従来どおり 409。
+        let two = record(
+            &root,
+            &RecordRequest {
+                title: "fern03 の別件".into(),
+                scope: "environment".into(),
+                sources: vec!["human".into()],
+                body: "別の件。".into(),
+                path: Some("environment/servers/fern03-other.md".into()),
+                ..RecordRequest::default()
+            },
+        )
+        .expect("record");
+        assert_eq!(two.op, None);
+        assert_eq!(
+            inbox_accept(&root, &two.id, Some("environment/servers/fern03.md"), false),
             InboxOutcome::Exists {
                 path: "environment/servers/fern03.md".into()
             }
@@ -2491,6 +2779,177 @@ mod tests {
             mounts,
             vec!["rust-review".to_string()],
             "不正な名前は触らない"
+        );
+    }
+
+    // ---- Phase K-1: 置き場のガード ----
+
+    fn guard_layout(root: &Path) -> kb::Layout {
+        layout(
+            root,
+            Some(vec![kb::ProjectRef {
+                id: "01M2WTS3DKNZBSZ2JMVB4CZMBW".into(),
+                slug: "agent-platform".into(),
+                title: "agent-platform の自己改善".into(),
+            }]),
+        )
+    }
+
+    /// 知識整理 run の候補も `record` と同じガードを通る: environment 直下は落とし、案件 ID は slug に、
+    /// 同じ題名の `create` は既存のページへの `append`（`_inbox/`）にする。
+    #[test]
+    fn apply_candidates_guard_the_placement() {
+        let (_dir, root) = kb_dir();
+        let layout = guard_layout(&root);
+        let mut root_level = candidate(
+            kb::CandidateOp::Create,
+            "environment/pegasus-qwen.md",
+            Confidence::High,
+        );
+        root_level.title = "Qwen forward target".into();
+        let mut by_id = candidate(
+            kb::CandidateOp::Create,
+            "projects/01M2WTS3DKNZBSZ2JMVB4CZMBW/celeris.md",
+            Confidence::High,
+        );
+        by_id.title = "Celeris direction".into();
+        by_id.scope = "project:01M2WTS3DKNZBSZ2JMVB4CZMBW".into();
+        let mut mismatch = candidate(kb::CandidateOp::Create, "user/x.md", Confidence::High);
+        mismatch.title = "Mismatch".into();
+        mismatch.scope = "project:agent-platform".into();
+        // seed の `environment/clusters/pegasus.md` と同じ題名（「pegasus の使い方」）。
+        let same_title = candidate(
+            kb::CandidateOp::Create,
+            "environment/clusters/pegasus-howto.md",
+            Confidence::High,
+        );
+        let out = apply_candidates_in(
+            &root,
+            "01JTASK",
+            &[root_level, by_id, mismatch, same_title],
+            ApplyPolicy::Task,
+            &layout,
+        );
+        assert_eq!(out.dropped.len(), 2, "{out:?}");
+        assert!(out.dropped[0].1.contains("placement:"), "{out:?}");
+        assert!(out.dropped[0].1.contains("environment/{"), "{out:?}");
+        assert!(out.dropped[1].1.contains("does not match"), "{out:?}");
+        assert_eq!(
+            out.committed,
+            vec!["projects/agent-platform/celeris.md".to_string()]
+        );
+        let raw =
+            std::fs::read_to_string(root.join("projects/agent-platform/celeris.md")).expect("read");
+        assert!(raw.contains("scope: \"project:agent-platform\""), "{raw}");
+        assert!(!root.join("projects/01M2WTS3DKNZBSZ2JMVB4CZMBW").exists());
+        assert_eq!(out.inboxed.len(), 1, "{out:?}");
+        let id = out.inboxed[0]
+            .strip_prefix("_inbox/")
+            .and_then(|p| p.strip_suffix(".md"))
+            .expect("id")
+            .to_string();
+        let item = inbox_get(&root, &id).expect("inbox");
+        assert_eq!(item.op, Some(kb::CandidateOp::Append));
+        assert_eq!(item.target, "environment/clusters/pegasus.md");
+        assert!(!root.join("environment/clusters/pegasus-howto.md").exists());
+    }
+
+    /// `append` の accept は既存の本文を残して末尾に節を足す（tags / sources は和）。
+    #[test]
+    fn append_accept_keeps_the_existing_body() {
+        let (_dir, root) = kb_dir();
+        let layout = guard_layout(&root);
+        let first = record_in(
+            &root,
+            &RecordRequest {
+                title: "Celeris direction".into(),
+                scope: "project:01M2WTS3DKNZBSZ2JMVB4CZMBW".into(),
+                tags: vec!["celeris".into()],
+                sources: vec!["human".into()],
+                body: "# Celeris direction\n\n最初の方針。".into(),
+                ..RecordRequest::default()
+            },
+            &layout,
+        )
+        .expect("record");
+        assert_eq!(first.target, "projects/agent-platform/celeris-direction.md");
+        assert_eq!(first.op, None);
+        assert!(matches!(
+            inbox_accept(&root, &first.id, None, false),
+            InboxOutcome::Accepted { .. }
+        ));
+        let layout = guard_layout(&root);
+        let second = record_in(
+            &root,
+            &RecordRequest {
+                title: "Celeris direction".into(),
+                scope: "project:agent-platform".into(),
+                tags: vec!["research".into()],
+                sources: vec!["mcp:chatgpt-rdc".into()],
+                body: "# Celeris direction\n\n研究としての方針。".into(),
+                ..RecordRequest::default()
+            },
+            &layout,
+        )
+        .expect("record");
+        assert_eq!(second.target, first.target);
+        assert_eq!(second.op, Some(kb::CandidateOp::Append));
+        assert!(matches!(
+            inbox_accept(&root, &second.id, None, false),
+            InboxOutcome::Accepted { .. }
+        ));
+        let raw = std::fs::read_to_string(root.join(&first.target)).expect("read");
+        assert!(raw.contains("最初の方針。"), "{raw}");
+        assert!(raw.contains("## 追記（"), "{raw}");
+        assert!(raw.contains("研究としての方針。"), "{raw}");
+        assert_eq!(raw.matches("# Celeris direction").count(), 1, "{raw}");
+        assert!(raw.contains("tags: [celeris, research]"), "{raw}");
+        assert!(raw.contains("\"mcp:chatgpt-rdc\""), "{raw}");
+        // 案件 ID の段がある取り込み先は、人が指定しても止める。
+        let third = record_in(
+            &root,
+            &RecordRequest {
+                title: "Other".into(),
+                scope: "project:agent-platform".into(),
+                sources: vec!["human".into()],
+                body: "x".into(),
+                ..RecordRequest::default()
+            },
+            &layout,
+        )
+        .expect("record");
+        assert!(matches!(
+            inbox_accept(
+                &root,
+                &third.id,
+                Some("projects/01M2WTS3DKNZBSZ2JMVB4CZMBW/other.md"),
+                false
+            ),
+            InboxOutcome::Failed { .. }
+        ));
+        // `record`（案件を知らない）でも案件 ID は拒否する。
+        let offline = record(
+            &root,
+            &RecordRequest {
+                title: "x".into(),
+                scope: "project:01M2WTS3DKNZBSZ2JMVB4CZMBW".into(),
+                sources: vec!["human".into()],
+                body: "y".into(),
+                ..RecordRequest::default()
+            },
+        );
+        assert!(
+            matches!(offline, Err(RecordError::Placement(_))),
+            "{offline:?}"
+        );
+    }
+
+    #[test]
+    fn projects_readme_has_no_project_scope() {
+        assert_eq!(default_scope("projects/README.md"), None);
+        assert_eq!(
+            default_scope("projects/agent-platform/design.md").as_deref(),
+            Some("project:agent-platform")
         );
     }
 }

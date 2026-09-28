@@ -609,6 +609,7 @@ async fn create_project(
             let now = OffsetDateTime::now_utc();
             let project = Project {
                 auto_advance: false,
+                slug: None,
                 archived_at: None,
                 paused_from: None,
                 id: ProjectId::new(),
@@ -731,10 +732,26 @@ async fn patch_project(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let patch: ProjectPatchBody = read_json(body, false).await?;
-    if patch.status.is_none() && patch.workspace.is_none() && patch.auto_advance.is_none() {
+    if patch.status.is_none()
+        && patch.workspace.is_none()
+        && patch.auto_advance.is_none()
+        && patch.slug.is_none()
+    {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
-            message: "specify at least one of `status`, `workspace` or `auto_advance`".into(),
+            message: "specify at least one of `status`, `workspace`, `auto_advance` or `slug`"
+                .into(),
+        }]));
+    }
+    // Phase K-1: slug の綴りは先に見る（422）。重複は store が 409 で返す。
+    if let Some(slug) = patch.slug.as_deref()
+        && !task_core::knowledge::is_valid_project_slug(slug.trim())
+    {
+        return Err(ApiProblem::validation(vec![ValidationError {
+            field: Some("slug".into()),
+            message: format!(
+                "slug must be lowercase [a-z0-9-] (1..64 chars, no leading/trailing/double '-', not a project id): {slug:?}"
+            ),
         }]));
     }
     // ADR-0044 D6（Phase 55）: `paused` / `cancelled` は**専用のエンドポイント**でしか入れない。
@@ -780,6 +797,13 @@ async fn patch_project(
             if let Some(auto_advance) = patch.auto_advance
                 && !store
                     .project_set_auto_advance(project_id, auto_advance)
+                    .map_err(store_problem)?
+            {
+                return Err(ApiProblem::project_not_found(&project_id.to_string()));
+            }
+            if let Some(slug) = patch.slug.as_deref()
+                && !store
+                    .project_set_slug(project_id, slug)
                     .map_err(store_problem)?
             {
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));

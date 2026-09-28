@@ -11434,7 +11434,8 @@ impl Dispatcher {
             .and_then(|id| self.store.project_get(id).ok().flatten());
         let mut project_mounts = Vec::new();
         if let Some(project) = &project {
-            let slug = task_ops::docs::project_slug(&project.title, &project.id.to_string());
+            // Phase K-1: 案件の slug（`projects.slug`。ADR-0044 D7 追記）。
+            let slug = project.kb_slug();
             project_mounts.push(task_core::KnowledgeMount::kb(format!("projects/{slug}")));
         }
         // ADR-0046 D1（Phase 59 追記）: 実効 profile ＋ 設定の既定 ＋ 案件の順で和を取る。
@@ -15579,6 +15580,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             id: task_core::ProjectId::new(),
             title: "案件".into(),
             request: "やって".into(),
@@ -15667,6 +15669,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
             auto_advance,
+            slug: None,
             id: task_core::ProjectId::new(),
             title: "案件".into(),
             request: "やって".into(),
@@ -16006,6 +16009,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             id: task_core::ProjectId::new(),
             title: "案件".into(),
             request: "やって".into(),
@@ -23358,6 +23362,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -25414,6 +25419,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),

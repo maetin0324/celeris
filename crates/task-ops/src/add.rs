@@ -1146,6 +1146,7 @@ mod tests {
         let now_ts = OffsetDateTime::now_utc();
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),
@@ -1197,6 +1198,7 @@ mod tests {
         let now_ts = OffsetDateTime::now_utc();
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),

@@ -248,3 +248,23 @@ D7 を実装して決めた 6 つ。**決定そのものは変えていない**�
 6. **front matter は最小の自前パーサ**（P57-6）: `serde_yaml` は入れず、`title` / `tags` / `tasks` の
    3 つだけを読む（`[a, b]` と `- a` の両方。閉じていない `---` は front matter として扱わない）。
    Markdown の描画は `pulldown-cmark`（`default-features = false`、`html` のみ）を足した。
+
+## D7 追記（2026-09-28。Phase K-1: 案件の slug）
+
+D7 は「`~/workspace/<案件 slug>/`」と書くだけで、slug を案件に持たせていなかった（題名から毎回
+`project_slug(title, id)` で作っていた）。題名が日本語だけなら slug は案件 ID になり、題名を変えれば
+知識ベースの `projects/<slug>/`（ADR-0047 D2）の場所が変わり、同じ題名の案件（Pluvio の 2 件）は同じ slug になった。
+MCP の `knowledge_propose` が `project:<案件 ID>` を渡すと `projects/<案件 ID>/` ができた。
+
+- **案件に `slug` を持たせる**（`projects.slug`、migration **0029**、案件の間で一意）。作るときに題名の slug →
+  primary リポジトリの名前の slug → `project-<id の末尾 8 文字>` の順で決め、他の案件と重なれば
+  `<slug>-<id の末尾 8 文字>`（`task_core::knowledge::derive_project_slug`）。ULID の形にはしない。
+- **既存の案件は migration 0029 が作った順で埋める**（同じトランザクションの中の Rust の backfill。migration 0012 と
+  同じ形）。本番の 4 件は `pluvio`（01M2RBJB…）、`pluvio-jp572bat`（01M2RCYV…）、`agent-platform`（01M2WTS3…）、
+  `benchfs`（01M35WRV…）になる。前の 2 つは今の題名 slug（= 今の `projects/<slug>` のマウント）と同じなので、
+  KB のディレクトリは動かない。人の手の作業は要らない。
+- **変えるのは `PATCH /projects/{id} {slug}`**（管理系。綴り違いは 422、重複は 409）。KB のディレクトリは動かさない
+  （人が `projects/<旧>/` を動かす）。
+- 案件の自動マウント（ADR-0047 D2）と置き場のガード（ADR-0047 Phase K-1 追記）はこの slug を使う。既定の文書
+  リポジトリのディレクトリ名（`~/workspace/<slug>/`、`task_ops::docs::project_slug`）は**今回は変えない**
+  （既に作られた文書リポジトリの場所を動かさないため）。

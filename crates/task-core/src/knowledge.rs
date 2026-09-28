@@ -17,6 +17,13 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+/// Phase K-1: 置き場のガード（`record` / MCP `knowledge_propose` / `apply_candidates` が共有する）。
+pub mod layout;
+pub use layout::{
+    ENVIRONMENT_CATEGORIES, Layout, Placement, PlacementError, PlacementRequest, ProjectRef,
+    Redirect, USER_CANONICAL, derive_project_slug, is_valid_project_slug, looks_like_ulid, place,
+};
+
 /// ADR-0047 D1: `[knowledge] root` を設定しなかったときの正本の置き場。
 pub const DEFAULT_ROOT: &str = "~/.local/share/celeris/knowledge";
 
@@ -929,6 +936,10 @@ pub enum CandidateOp {
     Update,
     Merge,
     Retire,
+    /// Phase K-1: 既存のページの**末尾に節として足す**（既存の本文は残す。`_inbox/` で人が accept する）。
+    /// `record` / `knowledge_propose` の候補の置き場が既にあるとき、知識整理 run の `create` の置き場が
+    /// 既にある（または同じ題名のページがある）ときに付く。
+    Append,
 }
 
 impl CandidateOp {
@@ -938,6 +949,7 @@ impl CandidateOp {
             CandidateOp::Update => "update",
             CandidateOp::Merge => "merge",
             CandidateOp::Retire => "retire",
+            CandidateOp::Append => "append",
         }
     }
 
@@ -962,8 +974,9 @@ impl FromStr for CandidateOp {
             "update" => Ok(CandidateOp::Update),
             "merge" => Ok(CandidateOp::Merge),
             "retire" => Ok(CandidateOp::Retire),
+            "append" => Ok(CandidateOp::Append),
             other => Err(format!(
-                "op must be create | update | merge | retire (got {other:?})"
+                "op must be create | update | merge | retire | append (got {other:?})"
             )),
         }
     }
@@ -1145,6 +1158,9 @@ pub fn maintenance_objective(input: &MaintenanceInput) -> String {
            `retire`（そのページはもう使えない）を使う\n\
          - 確信度は `confidence`（`high` / `medium` / `low`）で正直に書く。`high` の `create`/`update` は\n\
            そのまま知識ベースに入る（他は人が確認してから入る）\n\
+         - 置き場（Phase K-1。守らない候補は落ちる）: `user/<name>.md`、`environment/<分類>/<name>.md`\n\
+           （`environment/` の直下は不可）、`projects/<slug>/<name>.md`（`scope = project:<slug>`。案件 ID は\n\
+           パスにもラベルにも使わない）、`experience/YYYY/MM/<name>.md`。`scope` は置き場と一致させる\n\
          - 何も抽出するものが無ければ、空の `candidates` を書いてよい\n",
     );
     out

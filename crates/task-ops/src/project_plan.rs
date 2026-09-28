@@ -1597,6 +1597,7 @@ mod tests {
         let t = now();
         Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

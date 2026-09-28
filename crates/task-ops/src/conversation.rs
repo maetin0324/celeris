@@ -606,6 +606,7 @@ mod tests {
         let (roles, genres) = specs();
         let project = Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -1130,6 +1131,7 @@ mod tests {
         let (roles, genres) = specs();
         let project = Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -1242,6 +1244,7 @@ mod tests {
         let (roles, genres) = specs();
         let project = Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

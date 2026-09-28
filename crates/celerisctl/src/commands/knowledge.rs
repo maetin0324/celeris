@@ -309,17 +309,29 @@ fn run_record(args: &RecordArgs) -> Result<ExitCode, CliError> {
         confidence,
         body,
         path: args.path.clone(),
+        op: None,
     };
     match ops::record(&root, &request) {
         Ok(outcome) => {
             if args.json {
-                let value = serde_json::json!({ "id": outcome.id, "path": outcome.path, "sha": outcome.sha });
+                let value = serde_json::json!({
+                    "id": outcome.id,
+                    "path": outcome.path,
+                    "sha": outcome.sha,
+                    "target": outcome.target,
+                    "op": outcome.op.map(|o| o.as_str()),
+                });
                 let json = serde_json::to_string_pretty(&value)
                     .map_err(|e| CliError::msg(format!("failed to render json: {e}")))?;
                 outln!("{json}");
             } else {
+                // Phase K-1: 取り込み先（置き場のガードを通したもの）と、既にあるページへの追記かを出す。
+                let how = match outcome.op {
+                    Some(op) => format!("{} へ {op}", outcome.target),
+                    None => outcome.target.clone(),
+                };
                 outln!(
-                    "recorded {} （人が確認してから正本に入ります）",
+                    "recorded {} → {how}（人が確認してから正本に入ります）",
                     outcome.path
                 );
             }

@@ -81,10 +81,12 @@ const MIGRATION_0026: &str = include_str!("../migrations/0026_execution.sql");
 const MIGRATION_0027: &str = include_str!("../migrations/0027_parallel_work_units.sql");
 /// ADR-0074 D3.2 / D3.8（Phase F4b）: `projects.auto_advance` と `milestones.plan_key`。
 const MIGRATION_0028: &str = include_str!("../migrations/0028_project_plan_go.sql");
+/// ADR-0044 D7 追記 / ADR-0047 追記（Phase K-1）: `projects.slug`（知識ベースの `projects/<slug>/`）。
+const MIGRATION_0029: &str = include_str!("../migrations/0029_project_slug.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 28;
+pub const SCHEMA_VERSION: u32 = 29;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -816,6 +818,10 @@ pub trait TaskStore:
         id: ProjectId,
         auto_advance: bool,
     ) -> Result<bool, StoreError>;
+    /// ADR-0044 D7 追記（Phase K-1）: `projects.slug` を書く。綴りが違えば `StoreError::Invalid`
+    /// （API は 422）、他の案件が使っていれば `StoreError::InUse`（409）。無い案件は `Ok(false)`。
+    /// **知識ベースのディレクトリは動かさない**（`projects/<旧>/` を `projects/<新>/` へ動かすのは人）。
+    fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError>;
 
     // ---- ADR-0043 D1（Phase 52）: 案件のリポジトリ（`project_repos`）----
 
@@ -1653,6 +1659,7 @@ impl SqliteStore {
             26 => Ok(MIGRATION_0026),
             27 => Ok(MIGRATION_0027),
             28 => Ok(MIGRATION_0028),
+            29 => Ok(MIGRATION_0029),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -1668,6 +1675,10 @@ impl SqliteStore {
         // （migration 0012 のコメント参照）。同じトランザクションの中で 1 度だけ走る。
         if version == 12 {
             Self::backfill_project_repos(&tx)?;
+        }
+        // Phase K-1: 既存の案件に `slug` を付ける（作り方は Rust にしか無い。migration 0029 のコメント参照）。
+        if version == 29 {
+            Self::backfill_project_slugs(&tx)?;
         }
         let ts = format_rfc3339(OffsetDateTime::now_utc())?;
         tx.execute(
@@ -1798,6 +1809,8 @@ impl SqliteStore {
                 paused_from,
                 // ADR-0074 D3.2（Phase F4b）: 11 列目 `auto_advance`。
                 auto_advance: row.get::<_, i64>(10)? != 0,
+                // Phase K-1: 12 列目 `slug`。
+                slug: row.get(11)?,
                 created_at: parse_rfc3339(&created_at)?,
                 updated_at: parse_rfc3339(&updated_at)?,
             })
@@ -2116,6 +2129,74 @@ impl SqliteStore {
             Self::repo_write_tx(conn, &repo)?;
         }
         Ok(())
+    }
+
+    /// Phase K-1: 渡された slug の検査（綴りと、他の案件との重複）。
+    fn check_project_slug(conn: &Connection, id: &str, slug: &str) -> Result<(), StoreError> {
+        if !crate::knowledge::is_valid_project_slug(slug) {
+            return Err(StoreError::Invalid(format!(
+                "project slug must be lowercase [a-z0-9-] (1..64 chars, no leading/trailing/double '-', not an id): {slug:?}"
+            )));
+        }
+        let other: Option<String> = conn
+            .query_row(
+                "SELECT id FROM projects WHERE slug = ?1 AND id <> ?2",
+                params![slug, id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(other) = other {
+            return Err(StoreError::InUse {
+                kind: "project slug",
+                id: slug.to_string(),
+                detail: format!("already used by project {other}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Phase K-1（migration 0029）: `slug` の無い案件に、作った順に slug を付ける
+    /// （[`crate::knowledge::derive_project_slug`]。題名 → primary リポジトリの名前 → id の末尾。
+    /// 先に作った案件が先に取る。重複は `<slug>-<id の末尾 8 文字>`）。
+    fn backfill_project_slugs(conn: &Connection) -> Result<(), StoreError> {
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.title, \
+                    (SELECT r.name FROM project_repos r WHERE r.project_id = p.id AND r.is_primary = 1 \
+                     ORDER BY r.created_at ASC, r.id ASC LIMIT 1) \
+             FROM projects p WHERE p.slug IS NULL ORDER BY p.created_at ASC, p.id ASC",
+        )?;
+        let rows: Vec<(String, String, Option<String>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for (id, title, repo) in rows {
+            let slug = Self::unique_project_slug(conn, &title, &id, repo.as_deref())?;
+            conn.execute(
+                "UPDATE projects SET slug = ?1 WHERE id = ?2",
+                params![slug, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 他の案件が使っていない slug を決める（Phase K-1）。
+    fn unique_project_slug(
+        conn: &Connection,
+        title: &str,
+        id: &str,
+        primary_repo: Option<&str>,
+    ) -> Result<String, StoreError> {
+        let mut stmt =
+            conn.prepare("SELECT slug FROM projects WHERE slug IS NOT NULL AND id <> ?1")?;
+        let taken: std::collections::HashSet<String> = stmt
+            .query_map(params![id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(crate::knowledge::derive_project_slug(
+            title,
+            id,
+            primary_repo,
+            &|s| taken.contains(s),
+        ))
     }
 
     /// ADR-0044 D6（Phase 55）: いま dispatch を止めている案件の id（`paused` / `cancelled` /
@@ -4123,10 +4204,27 @@ impl TaskStore for SqliteStore {
     fn project_create(&self, project: &Project) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Phase K-1: slug は案件を作るときに決める（渡されたものは検査だけ）。
+        let slug = match project.slug.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => {
+                Self::check_project_slug(&tx, &project.id.to_string(), s)?;
+                s.to_string()
+            }
+            _ => Self::unique_project_slug(
+                &tx,
+                &project.title,
+                &project.id.to_string(),
+                project
+                    .workspace
+                    .as_ref()
+                    .map(crate::repos::default_repo_name)
+                    .as_deref(),
+            )?,
+        };
         tx.execute(
             "INSERT INTO projects (id, title, request, status, secretary_summary, created_at, updated_at, workspace, \
-             archived_at, paused_from, auto_advance) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             archived_at, paused_from, auto_advance, slug) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 project.id.to_string(),
                 project.title,
@@ -4139,6 +4237,7 @@ impl TaskStore for SqliteStore {
                 project.archived_at.map(format_rfc3339).transpose()?,
                 project.paused_from.map(|s| s.as_str()),
                 i64::from(project.auto_advance),
+                slug,
             ],
         )?;
         // ADR-0043 D1: 案件の作業場所は `is_primary = 1` のリポジトリ 1 件として持つ
@@ -4172,7 +4271,7 @@ impl TaskStore for SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance \
+                     p.archived_at, p.paused_from, p.auto_advance, p.slug \
                      FROM projects p WHERE p.id = ?1",
                     params![id.to_string()],
                     Self::project_row,
@@ -4189,7 +4288,7 @@ impl TaskStore for SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance \
+                     p.archived_at, p.paused_from, p.auto_advance, p.slug \
                  FROM projects p ORDER BY p.created_at DESC, p.id DESC",
             )?;
             let rows = stmt.query_map([], Self::project_row)?;
@@ -4257,6 +4356,20 @@ impl TaskStore for SqliteStore {
             ],
         )?;
         Ok(affected == 1)
+    }
+
+    fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let slug = slug.trim();
+        Self::check_project_slug(&tx, &id.to_string(), slug)?;
+        let now = format_rfc3339(OffsetDateTime::now_utc())?;
+        let n = tx.execute(
+            "UPDATE projects SET slug = ?1, updated_at = ?2 WHERE id = ?3",
+            params![slug, now, id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(n > 0)
     }
 
     fn project_set_auto_advance(
@@ -7958,7 +8071,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 28);
+        assert_eq!(SCHEMA_VERSION, 29);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -8185,6 +8298,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),
@@ -8334,9 +8448,15 @@ mod tests {
         let store = SqliteStore::open_in_memory().unwrap();
         let project = sample_project();
         store.project_create(&project).unwrap();
+        // Phase K-1: slug は作るときに題名から決まる（`sample_project` は `None` で渡す）。
+        let expected = Project {
+            slug: Some(project.kb_slug()),
+            ..project.clone()
+        };
+        assert_eq!(expected.slug.as_deref(), Some("pluvio"));
         assert_eq!(
             store.project_get(project.id).unwrap().as_ref(),
-            Some(&project)
+            Some(&expected)
         );
         assert_eq!(store.project_list().unwrap().len(), 1);
 
@@ -8500,7 +8620,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 28);
+        assert_eq!(SCHEMA_VERSION, 29);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -8991,7 +9111,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 28);
+        assert_eq!(SCHEMA_VERSION, 29);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -9057,7 +9177,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 28);
+        assert_eq!(SCHEMA_VERSION, 29);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -9150,7 +9270,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 28);
+        assert_eq!(SCHEMA_VERSION, 29);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -9606,7 +9726,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 28);
+        assert_eq!(SCHEMA_VERSION, 29);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -9664,6 +9784,115 @@ mod tests {
     /// integrated_commit の列が足される（`ALTER TABLE ADD COLUMN` のみ）。旧い行は新しい列が
     /// NULL のまま読め、新しい列は書き込める（`idx_work_units_lease` の部分索引も使える）。
     /// これらの列は Rust の `WorkUnitRow` にはまだ無い（Phase F2 (c)〜(h) で使う。ADR-0074 §5.2）。
+    /// Phase K-1: migration 0029 は `projects.slug` を足し、既存の案件に作った順で slug を付ける
+    /// （題名 → primary リポジトリの名前 → id の末尾。重複は `<slug>-<id の末尾 8 文字>`）。
+    /// 本番の 4 案件と同じ形（Pluvio が 2 件、2 件目の primary は benchfs）で確かめる。
+    #[test]
+    fn migration_29_backfills_unique_project_slugs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema28.sqlite3");
+        let rows = [
+            (
+                "01M2RBJBPQS3ZKG04YHGD9D5WS",
+                "Pluvio を基盤に用いた新たな研究テーマの模索、検証",
+                "2026-09-17T18:55:21Z",
+                None,
+            ),
+            (
+                "01M2RCYVZH6RGX8RX0JP572BAT",
+                "Pluvio を基盤に用いた新たな研究テーマの模索、検証",
+                "2026-09-17T19:19:39Z",
+                Some("benchfs"),
+            ),
+            (
+                "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+                "agent-platform の自己改善",
+                "2026-09-19T12:38:08Z",
+                Some("agent-platform"),
+            ),
+            (
+                "01M35WRV77A2JPYGERQGXF6V7K",
+                "BenchFS 国際会議フルペーパー化",
+                "2026-09-23T01:06:07Z",
+                Some("benchfs"),
+            ),
+            (
+                "01M36AAAAAAAAAAAAAAAAAAAAA",
+                "調査",
+                "2026-09-24T00:00:00Z",
+                Some("研究"),
+            ),
+        ];
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            SqliteStore::configure_pragmas(&conn, &StoreOptions::default()).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+            )
+            .unwrap();
+            for version in 1..=28 {
+                SqliteStore::apply_migration_version(&mut conn, version).unwrap();
+            }
+            for (id, title, at, repo) in rows {
+                conn.execute(
+                    "INSERT INTO projects (id, title, request, status, created_at, updated_at) \
+                     VALUES (?1, ?2, '', 'active', ?3, ?3)",
+                    params![id, title, at],
+                )
+                .unwrap();
+                if let Some(repo) = repo {
+                    conn.execute(
+                        "INSERT INTO project_repos (id, project_id, name, kind, location_json, is_primary, created_at) \
+                         VALUES (?1, ?2, ?3, 'git', '{\"kind\":\"local\",\"path\":\"/tmp/x\"}', 1, ?4)",
+                        params![format!("r-{id}"), id, repo, at],
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 29);
+        let slug_of = |id: &str| {
+            store
+                .project_get(id.parse().unwrap())
+                .unwrap()
+                .unwrap()
+                .slug
+                .unwrap()
+        };
+        assert_eq!(slug_of("01M2RBJBPQS3ZKG04YHGD9D5WS"), "pluvio");
+        assert_eq!(slug_of("01M2RCYVZH6RGX8RX0JP572BAT"), "pluvio-jp572bat");
+        assert_eq!(slug_of("01M2WTS3DKNZBSZ2JMVB4CZMBW"), "agent-platform");
+        assert_eq!(slug_of("01M35WRV77A2JPYGERQGXF6V7K"), "benchfs");
+        // 題名もリポジトリの名前も ASCII にならなければ `project-<id の末尾>`（ULID の形にしない）。
+        assert_eq!(slug_of("01M36AAAAAAAAAAAAAAAAAAAAA"), "project-aaaaaaaa");
+        // 変えられる。重複・綴り違いは拒否。
+        let ap: ProjectId = "01M2WTS3DKNZBSZ2JMVB4CZMBW".parse().unwrap();
+        assert!(matches!(
+            store.project_set_slug(ap, "benchfs"),
+            Err(StoreError::InUse {
+                kind: "project slug",
+                ..
+            })
+        ));
+        assert!(matches!(
+            store.project_set_slug(ap, "01M2WTS3DKNZBSZ2JMVB4CZMBW"),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(store.project_set_slug(ap, "celeris").unwrap());
+        assert_eq!(slug_of("01M2WTS3DKNZBSZ2JMVB4CZMBW"), "celeris");
+        assert!(!store.project_set_slug(ProjectId::new(), "x").unwrap());
+        // 新しい案件は作るときに付く（既に使われている slug は避ける）。
+        let mut fresh = sample_project();
+        fresh.title = "agent-platform の続き".into();
+        store.project_create(&fresh).unwrap();
+        assert_eq!(slug_of(&fresh.id.to_string()), "agent-platform");
+        let mut again = sample_project();
+        again.title = "celeris".into();
+        store.project_create(&again).unwrap();
+        assert!(slug_of(&again.id.to_string()).starts_with("celeris-"));
+    }
+
     #[test]
     fn migration_27_adds_work_unit_lease_columns() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -9694,7 +9923,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 28);
+        assert_eq!(SCHEMA_VERSION, 29);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();

@@ -7075,7 +7075,7 @@
           "type": "string"
         },
         "op": {
-          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`。`celerisctl knowledge record`\nが書いた候補（Phase 61）には無い（`null`）。`retire` の accept は `target` を `_retired/` へ動かし、\n`merge` の accept は `target` を必ず上書きする（P-61-k。`docs/knowledge.md` 参照）。",
+          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。\n取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を\n`_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は\n`target` の末尾に節として足す（`docs/knowledge.md` 参照）。",
           "type": [
             "string",
             "null"
@@ -7109,7 +7109,7 @@
           "type": "string"
         },
         "target_exists": {
-          "description": "取り込み先に既にページがある（accept は `overwrite` が要る）。",
+          "description": "取り込み先に既にページがある（`op` が無ければ accept は `overwrite` が要る）。",
           "type": "boolean"
         },
         "title": {
@@ -10276,6 +10276,13 @@
             "null"
           ]
         },
+        "slug": {
+          "description": "ADR-0044 D7 追記（Phase K-1）: 知識ベースでのこの案件の置き場 `projects/<slug>/` の slug\n（front matter の `scope: project:<slug>`）。案件を作るときに題名 → primary リポジトリの名前 →\nid の末尾から決め（[`crate::knowledge::derive_project_slug`]）、`PATCH /projects/{id}\n{slug}` で変えられる。案件の間で一意。`None` は migration 0029 より前の行（読むときは\n[`Project::kb_slug`] が同じ規則で補う）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "$ref": "#/$defs/ProjectStatus"
         },
@@ -10473,6 +10480,13 @@
           "description": "ADR-0074 D3.2（Phase F4b (d)）: 案件計画のマイルストーン Task を、依存先の `done` で進めるか\n（`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "slug": {
+          "description": "ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug を変える\n（小文字の `[a-z0-9-]`、案件 ID の形は不可、案件の間で一意。重複は 409）。省略なら変えない。\n**KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。",
+          "type": [
+            "string",
             "null"
           ]
         },

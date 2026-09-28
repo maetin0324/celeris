@@ -49,6 +49,8 @@ pub struct AiderConfig {
     pub model: Option<String>,
     /// 追加の環境変数（`OPENAI_API_KEY` 等）。
     pub env: Vec<(String, String)>,
+    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
+    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `aider` をコンテナの中で起こす（`container::wrap`）。
     pub container: Option<crate::container::SharedPlan>,
 }
@@ -60,6 +62,7 @@ impl Default for AiderConfig {
             extra_args: Vec::new(),
             model: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             container: None,
         }
     }
@@ -103,6 +106,12 @@ impl WorkerAdapter for AiderAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.env.extend(extra.iter().cloned());
+        Some(Arc::new(Self::new(config)))
+    }
+
+    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
         Some(Arc::new(Self::new(config)))
     }
 
@@ -173,6 +182,8 @@ async fn run_aider(
     }
     command.args(&config.extra_args);
     command.arg("--message").arg(&prompt);
+    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
+    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());
@@ -752,6 +763,7 @@ printf '%s' '{"yield":{"completed":["A"],"next_action":"do B"}}' > artifacts/res
                 ("OPENAI_API_BASE".into(), format!("http://{addr}/v1")),
                 ("OPENAI_API_KEY".into(), "dummy".into()),
             ],
+            env_remove: Vec::new(),
             container: None,
         };
         let adapter = AiderAdapter::new(config);

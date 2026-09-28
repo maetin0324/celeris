@@ -23,3 +23,4 @@ cargo を使う前に `eval "$(celerisctl scratch env --owner agent-<worktree �
 G2 以降の `scratch env` は sccache の server が動いていれば `RUSTC_WRAPPER`（sccache）と `SCCACHE_*`、常に
 `CARGO_INCREMENTAL=0` と `CARGO_PROFILE_DEV_DEBUG=line-tables-only` も出す。長い「編集 → 再ビルド」のループでは
 `unset CARGO_INCREMENTAL` してよい（sccache は incremental の crate をキャッシュしないだけで、依存の hit は変わらない）。
+G3-fix1 以降の `scratch env` は、与えない sccache の族（server が居なければ `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` の全部）を先頭の `unset` 行で外す（dispatcher が run と checks でするのと同じ）。

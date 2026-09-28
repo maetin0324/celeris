@@ -1064,6 +1064,114 @@ pub fn cargo_env(settings: &ScratchSettings, owner: &Owner) -> Vec<(String, Stri
 }
 
 // ---------------------------------------------------------------------------
+// 継いだ sccache 系の env を外す（G3-fix1）
+// ---------------------------------------------------------------------------
+
+/// 経路の子プロセスに与える env の全体（G3-fix1）。`set` は `cargo_env` と同じ（重ねる値）、`remove` は
+/// 親（daemon・テストの process・人の shell）から継いだものを**外す** key（`Command::env_remove`）。
+/// sccache を配線しないときに継いだ `RUSTC_WRAPPER` が run に漏れると、Celeris が Celeris を build する run
+/// （ADR-0040 の self-dogfood）の中で配線の判定が親の値に上書きされる。`remove` と `set` は交わらない。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CargoEnv {
+    pub set: Vec<(String, String)>,
+    pub remove: Vec<String>,
+}
+
+impl CargoEnv {
+    /// `set` だけ（`remove` 無し。legacy の `CARGO_TARGET_DIR` など、sccache の判定をしない経路）。
+    pub fn set_only(set: Vec<(String, String)>) -> Self {
+        Self {
+            set,
+            remove: Vec::new(),
+        }
+    }
+
+    /// `set` から `remove` を組む（`sccache_env_removals`。親の process の env を見る）。
+    pub fn from_set(set: Vec<(String, String)>) -> Self {
+        let remove = sccache_env_removals(&set);
+        Self { set, remove }
+    }
+
+    /// `env_remove` を持たない経路（`WorkerAdapter::with_env_removed` が `None` のアダプタ）への代替: `remove` に
+    /// ある `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` を空の値で上書きした `set`。cargo は空の値を「未設定」と
+    /// 扱う（cargo 1.98.1 で確かめた。G3-fix1）。`SCCACHE_*` は空にしない（sccache は空の値を「設定あり」と
+    /// 読みうる。wrapper が無ければ cargo は sccache を起こさない）。
+    pub fn set_with_empty_wrappers(&self) -> Vec<(String, String)> {
+        let mut set = self.set.clone();
+        for key in RUSTC_WRAPPER_VARS {
+            if self.remove.iter().any(|k| k == key) {
+                set.push((key.to_string(), String::new()));
+            }
+        }
+        set
+    }
+}
+
+/// cargo が rustc を包む env（G3-fix1）。sccache を配線しないときは両方、配線するときは `RUSTC_WORKSPACE_WRAPPER`
+/// だけを外す（`RUSTC_WRAPPER` は Celeris の wrapper）。
+pub const RUSTC_WRAPPER_VARS: [&str; 2] = ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"];
+/// sccache が読む env の接頭辞。
+pub const SCCACHE_VAR_PREFIX: &str = "SCCACHE_";
+/// 親の env に無くても `remove` に常に入れる `SCCACHE_*`（Celeris が与えうる key。結果を親の env に依らせない）。
+pub const KNOWN_SCCACHE_VARS: [&str; 7] = [
+    "SCCACHE_DIR",
+    "SCCACHE_CACHE_SIZE",
+    "SCCACHE_SERVER_PORT",
+    "SCCACHE_IDLE_TIMEOUT",
+    "SCCACHE_WEBDAV_ENDPOINT",
+    "SCCACHE_WEBDAV_KEY_PREFIX",
+    "SCCACHE_WEBDAV_TOKEN",
+];
+
+/// sccache の配線に関わる env か（`RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*`）。
+pub fn is_sccache_family(key: &str) -> bool {
+    RUSTC_WRAPPER_VARS.contains(&key) || key.starts_with(SCCACHE_VAR_PREFIX)
+}
+
+/// 外す key（純粋。G3-fix1）: sccache の族（`RUSTC_WRAPPER_VARS`、`KNOWN_SCCACHE_VARS`、`inherited` に居る `SCCACHE_*`）
+/// のうち `set` が与えないもの。並びは辞書順・重複なし。shell の名前にならない key は入れない（`unset` に出すため）。
+pub fn sccache_env_removals_with(
+    set: &[(String, String)],
+    inherited: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    let mut keys: Vec<String> = RUSTC_WRAPPER_VARS
+        .iter()
+        .chain(KNOWN_SCCACHE_VARS.iter())
+        .map(|k| k.to_string())
+        .chain(inherited.into_iter().filter(|k| {
+            k.starts_with(SCCACHE_VAR_PREFIX)
+                && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }))
+        .filter(|k| !set.iter().any(|(s, _)| s == k))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// `sccache_env_removals_with` に今の process の env を渡す。
+pub fn sccache_env_removals(set: &[(String, String)]) -> Vec<String> {
+    sccache_env_removals_with(
+        set,
+        std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()),
+    )
+}
+
+/// `cargo_env_with` に `remove` を足したもの（dispatcher の run・checks が使う）。
+pub fn cargo_child_env_with(
+    settings: &ScratchSettings,
+    owner: &Owner,
+    state: &SccacheState,
+) -> CargoEnv {
+    CargoEnv::from_set(cargo_env_with(settings, owner, state))
+}
+
+/// `cargo_env` に `remove` を足したもの（dispatcher と `celerisctl scratch env` が使う）。
+pub fn cargo_child_env(settings: &ScratchSettings, owner: &Owner) -> CargoEnv {
+    CargoEnv::from_set(cargo_env(settings, owner))
+}
+
+// ---------------------------------------------------------------------------
 // L2 の cache server（D5 (b)、Phase G3）
 // ---------------------------------------------------------------------------
 
@@ -2602,6 +2710,74 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    /// G3-fix1: 配線しないときは sccache の族（`RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / 既知と継いだ `SCCACHE_*`）
+    /// を全部外し、配線するときは与えない key だけを外す。結果は親の env に依らない（既知の key は常に入る）。
+    #[test]
+    fn sccache_family_is_removed_unless_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_sccache(tmp.path());
+        let owner = Owner::task("01TASK");
+        let settings = sccache_settings(tmp.path(), bin);
+        let inherited = || {
+            [
+                "RUSTC_WRAPPER",
+                "SCCACHE_REDIS_ENDPOINT",
+                "SCCACHE_WEIRD-NAME",
+                "PATH",
+            ]
+            .map(String::from)
+        };
+        let down = resolve_sccache(&settings, |_| false);
+        let set = cargo_env_with(&settings, &owner, &down);
+        let removed = sccache_env_removals_with(&set, inherited());
+        let mut want: Vec<String> = RUSTC_WRAPPER_VARS
+            .iter()
+            .chain(KNOWN_SCCACHE_VARS.iter())
+            .map(|k| k.to_string())
+            .chain(["SCCACHE_REDIS_ENDPOINT".to_string()])
+            .collect();
+        want.sort();
+        assert_eq!(removed, want);
+        // 親に何も無くても既知の key は外す（判定が親の env に依らない）。
+        let bare = sccache_env_removals_with(&set, Vec::new());
+        assert!(bare.iter().any(|k| k == "RUSTC_WRAPPER"), "{bare:?}");
+        assert!(bare.iter().any(|k| k == "SCCACHE_DIR"), "{bare:?}");
+        // 空の値の代替は wrapper の 2 つだけ（SCCACHE_* は空にしない）。
+        let env = CargoEnv {
+            set: set.clone(),
+            remove: removed,
+        };
+        let fallback = env.set_with_empty_wrappers();
+        assert_eq!(&fallback[..set.len()], &set[..]);
+        assert_eq!(
+            fallback[set.len()..].to_vec(),
+            vec![
+                ("RUSTC_WRAPPER".to_string(), String::new()),
+                ("RUSTC_WORKSPACE_WRAPPER".to_string(), String::new()),
+            ]
+        );
+        // 配線するとき: 与える key は外さない。与えない族（workspace wrapper・webdav 系・継いだ他の SCCACHE_*）は外す。
+        let up = resolve_sccache(&settings, |_| true);
+        let set = cargo_env_with(&settings, &owner, &up);
+        let removed = sccache_env_removals_with(&set, inherited());
+        assert!(
+            removed.iter().all(|k| !set.iter().any(|(s, _)| s == k)),
+            "{removed:?}"
+        );
+        assert_eq!(
+            removed,
+            vec![
+                "RUSTC_WORKSPACE_WRAPPER",
+                "SCCACHE_REDIS_ENDPOINT",
+                "SCCACHE_WEBDAV_ENDPOINT",
+                "SCCACHE_WEBDAV_KEY_PREFIX",
+                "SCCACHE_WEBDAV_TOKEN",
+            ]
+        );
+        assert!(is_sccache_family("SCCACHE_DIR") && is_sccache_family("RUSTC_WRAPPER"));
+        assert!(!is_sccache_family("CARGO_TARGET_DIR"));
     }
 
     #[test]

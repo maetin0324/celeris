@@ -146,6 +146,28 @@ impl EventSink for NullSink {
     fn artifact(&self, _artifact: &ArtifactRef) {}
 }
 
+/// ADR-0075 G3-fix1: `with_env_removed` の共通部。設定の `env` から `keys` を消し、`remove`（子プロセスで
+/// `env_remove` する key）に足す（重複なし）。
+pub(crate) fn remove_env_keys(
+    env: &mut Vec<(String, String)>,
+    remove: &mut Vec<String>,
+    keys: &[String],
+) {
+    env.retain(|(k, _)| !keys.contains(k));
+    for key in keys {
+        if !remove.contains(key) {
+            remove.push(key.clone());
+        }
+    }
+}
+
+/// ADR-0075 G3-fix1: 子プロセスの `Command` から `keys` を外す（`envs` より先に呼ぶ。後から足した値は残る）。
+pub(crate) fn apply_env_removal(command: &mut tokio::process::Command, keys: &[String]) {
+    for key in keys {
+        command.env_remove(key);
+    }
+}
+
 /// DESIGN §5.4 `trait WorkerAdapter`。`run_id` は成果物・ログのひも付け用（`runs/<run_id>/`）。
 #[async_trait]
 pub trait WorkerAdapter: Send + Sync {
@@ -196,6 +218,13 @@ pub trait WorkerAdapter: Send + Sync {
     /// アカウント）。プール（`account_pool = true`）で選んだアカウントの `CLAUDE_SECURESTORAGE_CONFIG_DIR` を
     /// 足すために使う。既定は `None`（この経路をサポートしないアダプタ）。
     fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+        None
+    }
+
+    /// ADR-0075 G3-fix1: `keys` を子プロセスの環境から**外す**複製を返す（親〈daemon〉から継いだ値も、
+    /// アダプタの設定の `env` にある同名の値も外す。`Command::env_remove`）。この後に `with_env` で足した値は残る。
+    /// 既定は `None`（この経路を持たないアダプタ。dispatcher は `RUSTC_WRAPPER` などを空の値で上書きして代える）。
+    fn with_env_removed(&self, _keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
         None
     }
 

@@ -40,6 +40,8 @@ pub struct ClaudeCodeConfig {
     pub model: Option<String>,
     /// 追加の環境変数（例: `CLAUDE_CONFIG_DIR`）。
     pub env: Vec<(String, String)>,
+    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
+    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `claude` をコンテナの中で起こす（`container::wrap`）。
     /// TOML には書かない（ディスパッチャが `with_container` で入れる）。
     pub container: Option<crate::container::SharedPlan>,
@@ -53,6 +55,7 @@ impl Default for ClaudeCodeConfig {
             permission_mode: "bypassPermissions".to_string(),
             model: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             container: None,
         }
     }
@@ -97,6 +100,11 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.env.extend(extra.iter().cloned());
+        Some(Arc::new(ClaudeCodeAdapter::new(config)))
+    }
+    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
         Some(Arc::new(ClaudeCodeAdapter::new(config)))
     }
 
@@ -1476,6 +1484,8 @@ async fn run_claude_code(
         command.arg("--allowedTools").arg(allowed);
     }
     command.args(&config.extra_args);
+    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
+    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());

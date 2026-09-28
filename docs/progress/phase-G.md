@@ -579,6 +579,89 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
   owner に依らなくする（build script の出力先の path を wrapper で正規化できるかの調査）、(b) L2 への admission を「L1 で 1 回以上 hit した
   entry だけ」にする（初回の run の entry は L2 に行かず、2 回目から効く）。
 
+## G3-fix1: 継承した RUSTC_WRAPPER が run に漏れる（self-dogfood のゲートが通らない）（2026-09-28）
+
+### 症状
+
+- 本番の dogfood Task 01M3JXB3DHVBWKWKPW04DTG6SJ の WU `sync-main`（run 01M3KPR4PDPT3JGEQ1KH7ZNZ6C、2026-09-28 10:04Z）で、worker（codex）が
+  run の中で `cargo test --workspace` を走らせると `dispatcher::tests::cache_server_down_means_no_rustc_wrapper` と
+  `dispatcher::tests::runs_fall_back_to_plain_cargo_when_the_server_is_down` が 2 回とも決定的に落ち、retry 2/2 を使い切った。
+- 開発者の shell でも `RUSTC_WRAPPER=/var/lib/celeris/scratch/bin/sccache` を export すると同じ 2 本が落ち、export しなければ通る
+  （F5-fix2 の昇格の証跡の「観察」と同じ現象）。
+
+### 根本原因
+
+- dispatcher は run と checks の env を「親（daemon・テストの process）の env に重ねる (key, value) の列」として組み、sccache を配線しない
+  と決めたとき（server が応答しない・webdav で cache server が応答しない・sccache が無効）は `RUSTC_WRAPPER` / `SCCACHE_*` を**入れない
+  だけ**だった。親が持っている値はそのまま子に漏れる。
+  - `crates/task-worker/src/scratch.rs:1024-1031`（main e50a876）`sccache_env` は `Ready` でなければ空を返す。
+  - `crates/task-dispatch/src/dispatcher.rs:13256`（`check_cargo_target_env`: WU の checks・統合 WU の検査・reviewer の checks）と
+    `:14026`（`run_worker` の run）がそれを重ねるだけ。
+  - `crates/task-worker/src/workspace.rs:160`（`LocalWorkspace::exec`、判定コマンド）と各アダプタの `.envs(config.env…)`
+    （`codex.rs:486` など）は重ねるだけで、何も外さない。
+- Celeris が Celeris を build する run（ADR-0040 の self-dogfood）は、sccache が有効なら dispatcher から Celeris の `RUSTC_WRAPPER` を
+  受け取る。その run の中の `cargo test` のテスト process はそれを継ぎ、テストの dispatcher が「server が居ない」と判定しても、検査の子
+  process には継いだ `RUSTC_WRAPPER` が残る（2 本のテストは checks の `$RUSTC_WRAPPER` が空であることを見ていた）。sccache を有効に
+  している限り self-gate が通らない。
+
+### 修正
+
+- `task_worker::scratch::CargoEnv { set, remove }`（`scratch.rs`）: `set` は従来の `cargo_env` と同じ。`remove` = sccache の族
+  （`RUSTC_WRAPPER`、`RUSTC_WORKSPACE_WRAPPER`、既知の `SCCACHE_*` 7 個〈`KNOWN_SCCACHE_VARS`〉、親の env に居る他の `SCCACHE_*`）のうち
+  `set` が与えないもの（辞書順・重複なし・shell の名前だけ）。既知の key は親に無くても入るので、結果は親の env に依らない。
+  配線するときも `RUSTC_WORKSPACE_WRAPPER` と webdav 系（client には与えない）と継いだ他の `SCCACHE_*` は外す。
+  `cargo_child_env` / `cargo_child_env_with` / `sccache_env_removals(_with)`。
+- 外し方は `Command::env_remove`（`envs` より先。後から足した値は残る）:
+  - 判定コマンド: `LocalWorkspace::with_env_removed` / `with_cargo_env`。dispatcher の 3 経路（WU の checks、統合 WU の検査、reviewer の
+    checks）は `check_cargo_target_env` が `CargoEnv` を返し、`with_cargo_env` で渡す。
+  - run: `WorkerAdapter::with_env_removed(&[String])`（既定 `None`）。codex / claude-code / acp / aider は設定に `env_remove` を持ち、
+    設定の `env` から同名の値も消す（dispatcher の判定が `[adapters.*] env` にも勝つ）。`TieredAdapter` は base に委ねる。
+    `with_env_removed` が `None` のアダプタ（paperqa / langmem / local-deep-research と、テストの一部のアダプタ）には、dispatcher が
+    `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` を**空の値で上書き**して代える（`CargoEnv::set_with_empty_wrappers`）。
+  - コンテナ実行は `container::wrap` が `get_envs` の removal を無視する（コンテナは host の env を継がない）。scratch はそもそもホスト実行だけ。
+- **cargo の空の値の扱いを確かめた**（cargo 1.98.1、依存の無い最小の bin crate）: `RUSTC_WRAPPER=/bin/false cargo build` は exit 101
+  （`/bin/false …/rustc -vV` が失敗）、`RUSTC_WRAPPER= cargo build` は exit 0。`RUSTC_WORKSPACE_WRAPPER` も同じ（101 / 0）。空は未設定と同じ。
+  ただし `SCCACHE_*` の空の値は sccache が「設定あり」と読みうる（例: `SCCACHE_DIR=""`）ので、空の上書きは wrapper の 2 つだけにし、
+  本命は `env_remove` にした。
+- `celerisctl scratch env` は先頭に `unset <remove>` の 1 行を出す（`eval` した人の shell から継いだ wrapper と `SCCACHE_*` を外す。
+  server が居なければ `RUSTC_WRAPPER` を含む）。`.claude/agents/{implementer,auditor}.md` に 1 行。
+- `legacy`（scratch 無効）の経路は sccache の判定をしないので従来どおり何も外さない（`CargoEnv::set_only`）。
+
+### テスト
+
+- `scratch::tests::sccache_family_is_removed_unless_set`: 配線しない / する の `remove` の中身、継いだ `SCCACHE_REDIS_ENDPOINT` を拾い、
+  shell の名前にならない key を捨て、`set_with_empty_wrappers` は wrapper の 2 つだけ。
+- `codex::tests::with_env_removed_drops_inherited_and_configured_keys`: `TieredAdapter` 越しに、継いだ `HOME` と設定の `env` の値が子で
+  未設定になり、後の `with_env` の値は残る。
+- dispatcher: 検査コマンドを `${RUSTC_WRAPPER-unset}` 形（空と未設定を区別）にし、2 行目に子の env の sccache の族の全部を書く。
+  `runs_fall_back_to_plain_cargo_when_the_server_is_down` と `cache_server_down_means_no_rustc_wrapper` は「与えない」ではなく
+  「run では外した（`with_env_removed` が受けた）・checks の子の env に族が 1 つも無い」を見る（`assert_sccache_family_removed`）。
+  配線する側は「`RUSTC_WRAPPER` は Celeris の `<scratch>/bin/sccache`、族は与えた 5 つだけ」（`assert_celeris_wrapper_only`）。
+- 新規 `sccache_family_is_deterministic_regardless_of_the_parent_env`（server 無し → 全部外す、server あり → Celeris の wrapper だけ）と
+  `inherited_sccache_env_does_not_leak`: この test binary を `RUSTC_WRAPPER=/inherited/bin/sccache`・`RUSTC_WORKSPACE_WRAPPER`・
+  `SCCACHE_DIR`・`SCCACHE_SERVER_PORT`・`SCCACHE_WEBDAV_ENDPOINT`・`SCCACHE_REDIS_ENDPOINT` を持つ env で `--exact` に走らせ直し、上の 3 本が
+  通る（`std::env::set_var` は使わない。並行するテストの env を汚さない）。
+  **修正を 1 か所外すと落ちる**ことを確かめた: `LocalWorkspace::exec` の `env_remove` を一時的に外すと、走らせ直した 3 本が
+  `left: "RUSTC_WORKSPACE_WRAPPER=/inherited/bin/ws-wrapper RUSTC_WRAPPER=/inherited/bin/sccache SCCACHE_DIR=/inherited/sccache …" right: ""` で
+  落ち、`inherited_sccache_env_does_not_leak` が FAILED（戻して全部 ok）。
+- celerisctl: `env_matches_the_dispatcher_env` は `unset` 行 = `cargo_child_env().remove`、`export` 行 = `cargo_env`、`sh` で eval すると継いだ
+  値が消えて Celeris の値だけが残る。server の有無の 2 つのテストに `unset` 行の中身。
+
+### 証跡（2026-09-28、`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-rustc-wrapper/target`、`CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG=line-tables-only`）
+
+- `cargo fmt --all -- --check` exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` exit 0。
+- `cargo test --workspace`（`RUSTC_WRAPPER` 無し）exit 0: 98 の test result 行の合計 2592 passed / 0 failed / 7 ignored。
+- `RUSTC_WRAPPER=/var/lib/celeris/scratch/bin/sccache cargo test --workspace` exit 0: 2592 passed / 0 failed / 7 ignored（修正前はここで 2 本落ちた）。
+- GUI と生成型には触れていない。本番には触れていない（昇格は別）。
+
+### 未解決・提案
+
+- 本番への反映は昇格待ち。反映後に dogfood 01M3JXB3 の `sync-main` を再試行すれば、self-gate の 2 本は通るはず（未確認）。
+- P-G3fix1-1: paperqa / langmem / local-deep-research にも `with_env_removed` を足すか（cargo を走らせないので今は空の上書きの代替で足りる）。
+- P-G3fix1-2: legacy（scratch 無効）の経路でも daemon から継いだ `RUSTC_WRAPPER` を外すか。今は「Celeris が sccache を判定する経路だけ」を
+  決定的にした（legacy で人が daemon に wrapper を export しているなら、それを尊重する従来の挙動を変えない）。
+
 ## 障害調査: クラスタ画面の pegasus TOTP で 503（2026-09-28）
 
 - 事実: `POST /clusters/pegasus/connect` は 30 秒待って 502 `timed out waiting for ssh`。GUI の API クライアントの timeout は 15 秒（`client.server.ts` の `DEFAULT_TIMEOUT_MS`）なので、GUI 側が先に諦めて「celeris に接続できません」（503）になる。

@@ -160,9 +160,20 @@ fn render_exports(env: Vec<(String, String)>) -> String {
         .collect()
 }
 
-/// `export NAME=value` の行（dispatcher と同じ `cargo_env`）。
+/// `export NAME=value` の行（dispatcher と同じ `cargo_env`）と、G3-fix1: 与えない sccache の族を外す
+/// `unset NAME ...` の 1 行（dispatcher が run・checks の子プロセスで `env_remove` するのと同じ key）。
 pub fn render_env(settings: &ScratchSettings, owner: &Owner) -> String {
-    render_exports(scratch::cargo_env(settings, owner))
+    render_cargo_env(scratch::cargo_child_env(settings, owner))
+}
+
+fn render_cargo_env(env: scratch::CargoEnv) -> String {
+    let mut text = String::new();
+    if !env.remove.is_empty() {
+        // key は `sccache_env_removals` が shell の名前だけに絞っている。
+        text.push_str(&format!("unset {}\n", env.remove.join(" ")));
+    }
+    text.push_str(&render_exports(env.set));
+    text
 }
 
 /// `env --server`: sccache の server の env と本物のバイナリ。server は起こさない。Phase G3: cache server
@@ -760,14 +771,57 @@ mod tests {
         assert_eq!(cfg.dispatch_config().scratch, settings);
         let owner = Owner::parse("agent-a5caa712b0867e383").unwrap();
         let text = render_env(&settings, &owner);
-        let parsed: Vec<(String, String)> = text
-            .lines()
+        // G3-fix1: 先頭の 1 行は dispatcher が外すのと同じ key の `unset`（sccache の族のうち与えないもの。この
+        // host の既定の sccache の server が動いているかで中身は変わる）。
+        let mut lines = text.lines();
+        let unset: Vec<String> = lines
+            .next()
+            .unwrap()
+            .strip_prefix("unset ")
+            .unwrap()
+            .split(' ')
+            .map(String::from)
+            .collect();
+        let child = task_worker::scratch::cargo_child_env(&settings, &owner);
+        assert_eq!(unset, child.remove);
+        for key in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "SCCACHE_DIR"] {
+            let set = child.set.iter().any(|(k, _)| k == key);
+            assert!(
+                set != unset.iter().any(|k| k == key),
+                "{key} must be either exported or unset: {text}"
+            );
+        }
+        let parsed: Vec<(String, String)> = lines
             .map(|l| {
                 let (k, v) = l.strip_prefix("export ").unwrap().split_once('=').unwrap();
                 (k.to_string(), v.to_string())
             })
             .collect();
         assert_eq!(parsed, task_worker::scratch::cargo_env(&settings, &owner));
+        assert_eq!(parsed, child.set);
+        // shell で評価すると、継いだ RUSTC_WRAPPER / SCCACHE_* は消え、Celeris の値だけが残る。
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "{text}echo \"${{RUSTC_WRAPPER-unset}}|${{SCCACHE_DIR-unset}}|${{RUSTC_WORKSPACE_WRAPPER-unset}}\""
+            ))
+            .env("RUSTC_WRAPPER", "/inherited/sccache")
+            .env("RUSTC_WORKSPACE_WRAPPER", "/inherited/ws")
+            .env("SCCACHE_DIR", "/inherited/dir")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let value = |key: &str| {
+            child
+                .set
+                .iter()
+                .find(|(k, _)| k == key)
+                .map_or("unset".to_string(), |(_, v)| v.clone())
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            format!("{}|{}|unset", value("RUSTC_WRAPPER"), value("SCCACHE_DIR"))
+        );
         assert_eq!(
             parsed[0].1,
             tmp.path()
@@ -977,8 +1031,17 @@ mod tests {
             ]
         );
         let rendered = render_env(&settings, &owner);
-        let parsed: Vec<(String, String)> = rendered
-            .lines()
+        // G3-fix1: 配線するときは与えない族（workspace wrapper・webdav 系）だけを `unset` する。
+        let mut lines = rendered.lines();
+        let unset = lines.next().unwrap_or_default();
+        assert!(
+            unset.starts_with("unset ")
+                && !unset.contains("RUSTC_WRAPPER ")
+                && !unset.contains(" SCCACHE_DIR"),
+            "{rendered}"
+        );
+        assert!(unset.contains("RUSTC_WORKSPACE_WRAPPER"), "{rendered}");
+        let parsed: Vec<(String, String)> = lines
             .map(|l| {
                 let (k, v) = l.strip_prefix("export ").unwrap().split_once('=').unwrap();
                 (k.to_string(), v.to_string())
@@ -1014,6 +1077,20 @@ mod tests {
         let settings = active_settings(&cfg).unwrap();
         let env = task_worker::scratch::cargo_env(&settings, &owner);
         assert!(!env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"));
+        // G3-fix1: shell の snippet は人の shell が継いだ wrapper と SCCACHE_* を外す。
+        let text = render_env(&settings, &owner);
+        let unset = text.lines().next().unwrap_or_default();
+        for key in [
+            "RUSTC_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "SCCACHE_DIR",
+            "SCCACHE_SERVER_PORT",
+        ] {
+            assert!(
+                unset.starts_with("unset ") && unset.split(' ').any(|k| k == key),
+                "{key}: {text}"
+            );
+        }
         let view = status_of(&cfg, None).unwrap().sccache.unwrap();
         assert_eq!(view.state, "unavailable");
         assert!(view.reason.unwrap().contains("no sccache server"));

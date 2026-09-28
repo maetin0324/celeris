@@ -67,6 +67,8 @@ pub struct AcpConfig {
     pub args: Vec<String>,
     /// 追加の環境変数。
     pub env: Vec<(String, String)>,
+    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
+    pub env_remove: Vec<String>,
     /// `session/request_permission` への即答（既定 `Allow`）。
     pub permission: AcpPermission,
     /// `session/set_config_option` で設定するモデル（空/`None` なら送らない）。
@@ -85,6 +87,7 @@ impl Default for AcpConfig {
             command: "opencode".to_string(),
             args: vec!["acp".to_string()],
             env: Vec::new(),
+            env_remove: Vec::new(),
             permission: AcpPermission::Allow,
             model: None,
             model_option_id: "model".to_string(),
@@ -128,6 +131,11 @@ impl WorkerAdapter for AcpAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.env.extend(extra.iter().cloned());
+        Some(Arc::new(AcpAdapter::new(config)))
+    }
+    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
         Some(Arc::new(AcpAdapter::new(config)))
     }
 
@@ -853,6 +861,8 @@ async fn run_acp(
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 
     let mut command = Command::new(&config.command);
+    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
+    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .args(&config.args)
         .envs(config.env.iter().cloned())

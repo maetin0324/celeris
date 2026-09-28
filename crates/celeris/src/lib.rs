@@ -192,6 +192,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
+                    // ADR-0075 G3-fix1: 外す env は run ごとに dispatcher が `with_env_removed` で足す。
+                    env_remove: Vec::new(),
                     container: None,
                 }))
             }
@@ -213,6 +215,7 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
+                    env_remove: Vec::new(),
                     container: None,
                     // ADR-0054 D1（Phase 67）: `[adapters.codex] resume_mode`（既定 `exec_resume`）。
                     resume_mode: base.resolved_resume_mode(),
@@ -235,6 +238,7 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
+                    env_remove: Vec::new(),
                     container: None,
                 }))
             }
@@ -260,6 +264,7 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     startup_timeout: Duration::from_secs(base.startup_timeout_secs),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
+                    env_remove: Vec::new(),
                     container: None,
                 }))
             }

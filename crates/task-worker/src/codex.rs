@@ -68,6 +68,8 @@ pub struct CodexConfig {
     pub reasoning_effort: Option<String>,
     /// 追加の環境変数。
     pub env: Vec<(String, String)>,
+    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
+    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `codex` をコンテナの中で起こす（`container::wrap`）。
     pub container: Option<crate::container::SharedPlan>,
     /// ADR-0054 D1（Phase 67）: `context.session` が resume を求めたときの継続手段。
@@ -84,6 +86,7 @@ impl Default for CodexConfig {
             model: None,
             reasoning_effort: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             container: None,
             resume_mode: CodexResumeMode::default(),
             resume_bypass: CodexResumeBypass::default(),
@@ -139,6 +142,11 @@ impl WorkerAdapter for CodexAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.env.extend(extra.iter().cloned());
+        Some(Arc::new(CodexAdapter::new(config)))
+    }
+    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut config = self.config.clone();
+        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
         Some(Arc::new(CodexAdapter::new(config)))
     }
 
@@ -482,6 +490,8 @@ async fn run_codex_once(
         command.args(&config.extra_args);
     }
     command.arg(prompt);
+    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
+    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());
@@ -1991,6 +2001,7 @@ echo '{"type":"turn.completed"}'
             model: Some("gpt-5-codex".into()),
             reasoning_effort: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             container: None,
             resume_mode: CodexResumeMode::default(),
             resume_bypass: CodexResumeBypass::default(),
@@ -2121,6 +2132,50 @@ echo '{"type":"turn.completed"}'
         assert!(matches!(outcome.terminal, Terminal::Done { .. }));
         let seen = std::fs::read_to_string(&out_file).unwrap();
         assert_eq!(seen, "new-account-dir");
+    }
+    /// ADR-0075 G3-fix1: `with_env_removed` は親から継いだ値（ここでは `HOME`）も設定の `env` の値も子から外し、
+    /// その後の `with_env` で足した値は残る。`TieredAdapter` を通しても同じ。
+    #[tokio::test]
+    async fn with_env_removed_drops_inherited_and_configured_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let out_file = dir.path().join("env-seen.txt");
+        let mut config = CodexConfig {
+            command: {
+                let path = dir.path().join("codex_stub.sh");
+                crate::test_support::write_executable(
+                    &path,
+                    &format!(
+                        "#!/bin/sh\nmkdir -p artifacts\nprintf '%s' \"${{HOME-unset}}|${{FROM_CONFIG-unset}}|${{LATER-unset}}\" > {out}\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > artifacts/result.json\necho '{{\"type\":\"turn.completed\"}}'\n",
+                        out = out_file.display()
+                    ),
+                );
+                path.to_string_lossy().into_owned()
+            },
+            ..CodexConfig::default()
+        };
+        config
+            .env
+            .push(("FROM_CONFIG".to_string(), "x".to_string()));
+        let tiered = crate::tiered::TieredAdapter {
+            base: Arc::new(CodexAdapter::new(config)),
+            account_id: None,
+            credential_error: None,
+            models: Default::default(),
+        };
+        let adapter = tiered
+            .with_env_removed(&["HOME".to_string(), "FROM_CONFIG".to_string()])
+            .expect("codex supports with_env_removed")
+            .with_env(&[("LATER".to_string(), "y".to_string())])
+            .expect("codex supports with_env");
+        let req = sample_req(dir.path().to_path_buf());
+        let sink = RecordingSink::default();
+        let outcome = adapter
+            .run(req, "run-env-removed", default_limits(), &sink)
+            .await
+            .unwrap();
+        assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+        let seen = std::fs::read_to_string(&out_file).unwrap();
+        assert_eq!(seen, "unset|unset|y");
     }
     #[tokio::test]
     async fn tier_binding_reaches_cli_model_argument_and_preserves_account_env() {

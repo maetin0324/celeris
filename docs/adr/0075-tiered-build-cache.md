@@ -559,3 +559,17 @@ G1 の実装で本文と食い違った点・本文が決めていなかった�
     L1 hit と同じ率（壁時計 37.8 s）。NFS の遅延での頭打ちは未測定（本番の L2 で測る）。事前 promote は入れていない。
 17. **所見（提案 P-G3-2）**: 毎回 miss する約 30 crate（workspace のメンバーと `OUT_DIR` 依存。G2 の残り）は owner ごとに key が変わるので、
     毎 run 約 100 MB を L2 に書き、二度と hit しない（L2 の LRU で回収されるが NFS の帯域を使う）。
+
+## G3-fix1 実装時の明確化（2026-09-28）
+
+1. **「`RUSTC_WRAPPER` を与えない」は「継いだ値も外す」の意味**（D4 / D5 と G3 の 3）。run と checks の env は親（daemon）の env に重ねる
+   ので、入れないだけでは daemon が持つ `RUSTC_WRAPPER` / `SCCACHE_*` が子に漏れる（self-dogfood の run の中の `cargo test` で、
+   server 無しの判定が効かず 2 本のテストが落ちた。phase-G.md の G3-fix1）。
+2. env は `task_worker::scratch::CargoEnv { set, remove }` で一か所で組む（D4 の「env は一か所で組む」のまま）。`remove` = sccache の族
+   （`RUSTC_WRAPPER`、`RUSTC_WORKSPACE_WRAPPER`、Celeris が与えうる `SCCACHE_*` 7 個、親に居る他の `SCCACHE_*`）のうち `set` が与えないもの。
+   配線するときも与えない族（`RUSTC_WORKSPACE_WRAPPER`・webdav 系・他の `SCCACHE_*`）は外す。
+3. 外し方は `Command::env_remove`（判定コマンドは `LocalWorkspace`、run は `WorkerAdapter::with_env_removed`。codex / claude-code / acp /
+   aider が実装し、設定の `env` の同名の値も消す）。`with_env_removed` を持たないアダプタには `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` を
+   空の値で上書きする（cargo 1.98.1 で空 = 未設定を確かめた）。`SCCACHE_*` は空にしない。
+4. `celerisctl scratch env` は `unset <remove>` の 1 行を先に出す（dispatcher と同じ key）。legacy（scratch 無効）の経路は sccache を
+   判定しないので何も外さない。

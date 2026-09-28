@@ -4336,7 +4336,7 @@ impl Dispatcher {
             Some(w) if w.is_dir() => task_worker::LocalWorkspace::new(&dir).with_work_dir(w),
             _ => task_worker::LocalWorkspace::new(&dir),
         }
-        .with_env(check_env);
+        .with_cargo_env(check_env);
         let checks = wu.spec.checks.clone();
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
@@ -8491,7 +8491,7 @@ impl Dispatcher {
                         }
                         _ => task_worker::LocalWorkspace::new(&task_dir),
                     }
-                    .with_env(check_env);
+                    .with_cargo_env(check_env);
                     let results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
                     run.checks = checks
                         .iter()
@@ -11946,7 +11946,7 @@ impl Dispatcher {
                         }
                         _ => LocalWorkspace::new(&dir),
                     }
-                    .with_env(review_check_env),
+                    .with_cargo_env(review_check_env),
                 ),
             };
             let extras = ReviewExtras {
@@ -13227,19 +13227,22 @@ impl Dispatcher {
     /// reviewer の checks）に与える `CARGO_TARGET_DIR`。`run_worker` と同じ条件（共有ビルドキャッシュが
     /// 有効、ローカルの git の作業場所）で、`work_unit_id` が `Some` なら `<repo-key>/wu-<id>`、`None` なら
     /// `<repo-key>`。条件に当たらなければ空（従来どおり daemon の環境を継ぐ）。
+    /// ADR-0075 G3-fix1: scratch のときは `remove`（sccache の族のうち与えないもの）も返す。検査の子プロセスは
+    /// daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*` を外してから `set` を重ねる。
     fn check_cargo_target_env(
         &self,
         task: &Task,
         work_unit_id: Option<&str>,
-    ) -> Vec<(String, String)> {
+    ) -> task_worker::scratch::CargoEnv {
+        use task_worker::scratch::CargoEnv;
         if !self.config.shared_build_cache {
-            return Vec::new();
+            return CargoEnv::default();
         }
         let Some(ws) = self.task_workspaces_for(task) else {
-            return Vec::new();
+            return CargoEnv::default();
         };
         let Some(repo) = ws.repos.first().filter(|r| r.is_git()) else {
-            return Vec::new();
+            return CargoEnv::default();
         };
         // ADR-0075 D3（Phase G1）: scratch が有効なら run と同じ owner の target（lease を touch する。adopt はしない）。
         if self.scratch_active() {
@@ -13253,7 +13256,8 @@ impl Dispatcher {
             };
             allocate_scratch_target(&settings, &[], &owner, repo, None);
             // ADR-0075 D4（Phase G2）: run と同じ `cargo_env`（`[scratch.cargo]` と、server が応答すれば sccache 系）。
-            return task_worker::scratch::cargo_env(&settings, &owner);
+            // G3-fix1: 与えない sccache の族は外す（`remove`）。
+            return task_worker::scratch::cargo_child_env(&settings, &owner);
         }
         let dir = match work_unit_id {
             Some(id) => task_worker::build_cache::work_unit_cargo_target_dir(
@@ -13266,10 +13270,10 @@ impl Dispatcher {
                 &repo.source,
             ),
         };
-        vec![(
+        CargoEnv::set_only(vec![(
             task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
             dir.display().to_string(),
-        )]
+        )])
     }
 
     /// ADR-0074 F5-fix（不具合 1）: 終端（done / cancelled / superseded）になった WU の target
@@ -13995,7 +13999,10 @@ async fn run_worker(
         .cloned();
     // ADR-0075 D4（Phase G2）: scratch なら env は `task_worker::scratch::cargo_env`（checks・`celerisctl scratch env` と
     // 同じ関数。`CARGO_TARGET_DIR`・`[scratch.cargo]`・server が応答すれば sccache 系）。legacy は `CARGO_TARGET_DIR` だけ。
-    let target: Option<(PathBuf, Vec<(String, String)>)> = match (&cargo_target, repo_for_target) {
+    let target: Option<(PathBuf, task_worker::scratch::CargoEnv)> = match (
+        &cargo_target,
+        repo_for_target,
+    ) {
         (CargoTargetPlan::None, _) | (_, None) => None,
         // ADR-0075 D3: owner は Task 単位の run なら `task-<id>`、自分の worktree の WU なら `task-<id>/wu-<id>`。
         (
@@ -14011,9 +14018,13 @@ async fn run_worker(
             };
             let (settings, candidates) = (settings.clone(), candidates.clone());
             let key = cargo_target_work_unit.as_ref().map(|(_, k)| k.clone());
+            // 割り当てに失敗したら sccache は配線しない（継いだ族は外す。G3-fix1）。
             let fallback = (
                 settings.pool().target_dir(&owner),
-                task_worker::scratch::target_env(&settings.pool(), &owner),
+                task_worker::scratch::CargoEnv::from_set(task_worker::scratch::target_env(
+                    &settings.pool(),
+                    &owner,
+                )),
             );
             match tokio::task::spawn_blocking(move || {
                 let target = allocate_scratch_target(&settings, &candidates, &owner, &repo, key);
@@ -14023,7 +14034,8 @@ async fn run_worker(
                     tracing::debug!(owner = %owner, state = state.label(), reason, "scratch: sccache is not wired for this run (ADR-0075 D4)");
                 }
                 // adopt は owner のパスへ rename するので、`target` は env の `CARGO_TARGET_DIR` と同じ。
-                let env = task_worker::scratch::cargo_env_with(&settings, &owner, &state);
+                // G3-fix1: 与えない sccache の族は `remove`（継いだ値を外す）。
+                let env = task_worker::scratch::cargo_child_env_with(&settings, &owner, &state);
                 (target, env)
             })
             .await
@@ -14046,15 +14058,29 @@ async fn run_worker(
                 ),
                 None => task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source),
             };
-            let env = vec![(
+            let env = task_worker::scratch::CargoEnv::set_only(vec![(
                 task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
                 dir.display().to_string(),
-            )];
+            )]);
             Some((dir, env))
         }
     };
     let adapter = if let Some((target, env)) = target {
-        match adapter.with_env(&env) {
+        // ADR-0075 G3-fix1: 与えない sccache の族（daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*`）を先に外す。
+        // `env_remove` を持たないアダプタには `RUSTC_WRAPPER` などを空の値で上書きして代える（cargo は空を未設定と扱う）。
+        let (adapter, set) = if env.remove.is_empty() {
+            (adapter, env.set)
+        } else {
+            match adapter.with_env_removed(&env.remove) {
+                Some(wrapped) => (wrapped, env.set),
+                None => {
+                    tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env_removed; overriding RUSTC_WRAPPER with an empty value (ADR-0075 G3-fix1)");
+                    let set = env.set_with_empty_wrappers();
+                    (adapter, set)
+                }
+            }
+        };
+        match adapter.with_env(&set) {
             Some(wrapped) => {
                 // request.json（監査）に実際に与えた値を残す。
                 req.cargo_target_dir = Some(target);
@@ -20849,6 +20875,8 @@ mod tests {
 
     /// 走った run の env を記録し、`with_env` を実装するテスト用アダプタ（ADR-0024 D2）。
     type CapturedEnvs = Arc<StdMutex<Vec<Vec<(String, String)>>>>;
+    /// `PoolAdapter::with_env_removed` が外した key に付ける印（実アダプタの `Command::env_remove` の代わり）。
+    const ENV_REMOVED: &str = "<env_remove>";
 
     #[derive(Clone)]
     struct PoolAdapter {
@@ -20898,6 +20926,15 @@ mod tests {
         fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
             let mut env = self.env.clone();
             env.extend(extra.iter().cloned());
+            Some(Arc::new(PoolAdapter {
+                env,
+                ..self.clone()
+            }))
+        }
+        fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
+            let mut env = self.env.clone();
+            env.retain(|(k, _)| !keys.contains(k));
+            env.extend(keys.iter().map(|k| (k.clone(), ENV_REMOVED.to_string())));
             Some(Arc::new(PoolAdapter {
                 env,
                 ..self.clone()
@@ -31379,10 +31416,12 @@ mod tests {
         let task = git_task(
             repo_dir.path(),
             None,
+            // 1 行目: 値（未設定は `unset`。空の値と区別する）。2 行目: G3-fix1 の sccache の族の全部（辞書順、空白区切り）。
             Check::Command {
                 cmd: format!(
-                    "echo \"$RUSTC_WRAPPER|$SCCACHE_DIR|$SCCACHE_SERVER_PORT|$CARGO_INCREMENTAL|$CARGO_PROFILE_DEV_DEBUG|$CARGO_TARGET_DIR\" >> {}",
-                    log.display()
+                    "echo \"${{RUSTC_WRAPPER-unset}}|${{SCCACHE_DIR-unset}}|${{SCCACHE_SERVER_PORT-unset}}|$CARGO_INCREMENTAL|$CARGO_PROFILE_DEV_DEBUG|$CARGO_TARGET_DIR\" >> {log}; \
+                     (env | grep -E '^(RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|SCCACHE_)' | sort | tr '\\n' ' '; echo) >> {log}",
+                    log = log.display()
                 ),
                 expect_exit: 0,
             },
@@ -31508,12 +31547,8 @@ mod tests {
         ];
         for sccache in cases {
             let (settings, owner, run_env, check) = run_with_sccache(sccache.clone()).await;
-            assert!(
-                !run_env
-                    .iter()
-                    .any(|(k, _)| k == "RUSTC_WRAPPER" || k.starts_with("SCCACHE_")),
-                "{sccache:?}: {run_env:?}"
-            );
+            // G3-fix1: 与えないだけでなく、継いだ値を外す（呼び出し側の env に依らない）。
+            assert_sccache_family_removed(&run_env, &check);
             let target = settings.pool().target_dir(&owner).display().to_string();
             for (k, v) in [
                 ("CARGO_TARGET_DIR", target.as_str()),
@@ -31527,10 +31562,34 @@ mod tests {
             }
             assert_eq!(
                 check.lines().next().unwrap_or_default(),
-                format!("|||0|line-tables-only|{target}"),
+                format!("unset|unset|unset|0|line-tables-only|{target}"),
                 "{check}"
             );
         }
+    }
+
+    /// G3-fix1: run（`PoolAdapter` が `with_env_removed` で受けた key）と checks（子プロセスの実 env）で、
+    /// sccache の族が 1 つも残っていない。親（テストの process）が `RUSTC_WRAPPER` などを持っていても同じ。
+    fn assert_sccache_family_removed(run_env: &[(String, String)], check: &str) {
+        let set: Vec<&(String, String)> = run_env
+            .iter()
+            .filter(|(k, v)| task_worker::scratch::is_sccache_family(k) && v != ENV_REMOVED)
+            .collect();
+        assert!(set.is_empty(), "{set:?}: {run_env:?}");
+        for key in task_worker::scratch::RUSTC_WRAPPER_VARS
+            .iter()
+            .chain(task_worker::scratch::KNOWN_SCCACHE_VARS.iter())
+        {
+            assert!(
+                run_env.iter().any(|(k, v)| k == key && v == ENV_REMOVED),
+                "{key} was not removed: {run_env:?}"
+            );
+        }
+        assert_eq!(
+            check.lines().nth(1).unwrap_or_default().trim(),
+            "",
+            "{check}"
+        );
     }
 
     /// ADR-0075 §5 G3 受け入れ条件 5: sccache の server が webdav（cache server）で動いているのに cache server が
@@ -31581,32 +31640,131 @@ mod tests {
         // webdav + cache server が居ない（閉じた特権 port の 1）→ 素の cargo。
         let (settings, owner, run_env, check) =
             run_with_sccache_and_cache(sccache.clone(), Some(cache(1)), Some("webdav")).await;
-        assert!(
-            !run_env
-                .iter()
-                .any(|(k, _)| k == "RUSTC_WRAPPER" || k.starts_with("SCCACHE_")),
-            "{run_env:?}"
-        );
+        // G3-fix1: 継いだ `RUSTC_WRAPPER` / `SCCACHE_*` も外す（呼び出し側の env に依らない）。
+        assert_sccache_family_removed(&run_env, &check);
         let target = settings.pool().target_dir(&owner).display().to_string();
         assert_eq!(
             check.lines().next().unwrap_or_default(),
-            format!("|||0|line-tables-only|{target}"),
+            format!("unset|unset|unset|0|line-tables-only|{target}"),
             "{check}"
         );
         // webdav + cache server が応答 → 与える。
-        let (_, _, run_env, _) =
+        let (settings, _, run_env, check) =
             run_with_sccache_and_cache(sccache.clone(), Some(cache(cache_port)), Some("webdav"))
                 .await;
+        assert_celeris_wrapper_only(&settings, &run_env, &check);
+        // disk（G2 の local disk）なら cache server が居なくても与える。
+        let (settings, _, run_env, check) =
+            run_with_sccache_and_cache(sccache, Some(cache(1)), Some("disk")).await;
+        assert_celeris_wrapper_only(&settings, &run_env, &check);
+    }
+
+    /// G3-fix1: 配線するとき、run と checks の `RUSTC_WRAPPER` は Celeris の `<scratch>/bin/sccache`（継いだ値ではない）で、
+    /// 与えない族（`RUSTC_WORKSPACE_WRAPPER`・webdav 系・継いだ他の `SCCACHE_*`）は外れている。
+    fn assert_celeris_wrapper_only(
+        settings: &task_worker::scratch::ScratchSettings,
+        run_env: &[(String, String)],
+        check: &str,
+    ) {
+        let wrapper = settings
+            .pool()
+            .root()
+            .join("bin/sccache")
+            .display()
+            .to_string();
         assert!(
-            run_env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"),
+            run_env
+                .iter()
+                .any(|(k, v)| k == "RUSTC_WRAPPER" && *v == wrapper),
             "{run_env:?}"
         );
-        // disk（G2 の local disk）なら cache server が居なくても与える。
-        let (_, _, run_env, _) =
-            run_with_sccache_and_cache(sccache, Some(cache(1)), Some("disk")).await;
         assert!(
-            run_env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"),
+            run_env
+                .iter()
+                .any(|(k, v)| k == "RUSTC_WORKSPACE_WRAPPER" && v == ENV_REMOVED),
             "{run_env:?}"
+        );
+        let family = check.lines().nth(1).unwrap_or_default();
+        let keys: Vec<&str> = family
+            .split_whitespace()
+            .filter_map(|kv| kv.split_once('=').map(|(k, _)| k))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "RUSTC_WRAPPER",
+                "SCCACHE_CACHE_SIZE",
+                "SCCACHE_DIR",
+                "SCCACHE_IDLE_TIMEOUT",
+                "SCCACHE_SERVER_PORT"
+            ],
+            "{check}"
+        );
+        assert!(
+            family.contains(&format!("RUSTC_WRAPPER={wrapper} ")),
+            "{check}"
+        );
+    }
+
+    /// G3-fix1: sccache を配線しない判定（server が応答しない・webdav で cache server が応答しない）と、配線する判定の
+    /// 両方で、run と checks の env は親の env に依らない。`inherited_sccache_env_does_not_leak` がこのテストを
+    /// `RUSTC_WRAPPER` などを持つ env で走らせ直す（self-dogfood で daemon の cargo の env を継いだ run の姿）。
+    #[tokio::test]
+    async fn sccache_family_is_deterministic_regardless_of_the_parent_env() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        let sccache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sccache_port = sccache_listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in sccache_listener.incoming() {
+                drop(conn);
+            }
+        });
+        let bin = fake_sccache_binary(bin_dir.path());
+        let settings = |port| task_worker::scratch::SccacheSettings {
+            enabled: true,
+            binary: bin.clone(),
+            server_port: port,
+        };
+        // server が居ない（閉じた特権 port の 1）→ 族を全部外す。
+        let (_, _, run_env, check) = run_with_sccache(settings(1)).await;
+        assert_sccache_family_removed(&run_env, &check);
+        // server が居る（disk）→ Celeris の wrapper だけ。
+        let (scratch, _, run_env, check) =
+            run_with_sccache_and_cache(settings(sccache_port), None, Some("disk")).await;
+        assert_celeris_wrapper_only(&scratch, &run_env, &check);
+    }
+
+    /// G3-fix1 の再現: `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` を export した env（Celeris の run の中で
+    /// `cargo test` した姿。production の dogfood 01M3JXB3 の sync-main）でこの test binary を走らせ直し、server が
+    /// 落ちているときの 2 本と上のテストが通る。修正前は run の checks が継いだ `RUSTC_WRAPPER` を見て落ちた。
+    #[test]
+    fn inherited_sccache_env_does_not_leak() {
+        let exe = std::env::current_exe().unwrap();
+        let tests = [
+            "dispatcher::tests::sccache_family_is_deterministic_regardless_of_the_parent_env",
+            "dispatcher::tests::runs_fall_back_to_plain_cargo_when_the_server_is_down",
+            "dispatcher::tests::cache_server_down_means_no_rustc_wrapper",
+        ];
+        let out = std::process::Command::new(exe)
+            .args(tests)
+            .arg("--exact")
+            .env("RUSTC_WRAPPER", "/inherited/bin/sccache")
+            .env("RUSTC_WORKSPACE_WRAPPER", "/inherited/bin/ws-wrapper")
+            .env("SCCACHE_DIR", "/inherited/sccache")
+            .env("SCCACHE_SERVER_PORT", "4226")
+            .env("SCCACHE_WEBDAV_ENDPOINT", "http://127.0.0.1:1")
+            .env("SCCACHE_REDIS_ENDPOINT", "redis://127.0.0.1:1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains(&format!("test result: ok. {} passed", tests.len())),
+            "{stdout}"
         );
     }
 

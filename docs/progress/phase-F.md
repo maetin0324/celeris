@@ -1453,7 +1453,8 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
   verify `ok=true live_ok=true`、schema 28。2026-09-28T09:24:03Z に live へ昇格（backup `20260928-092356-pre-af65cfb6592d`）。
 - 観察: gate を `RUSTC_WRAPPER` を export した環境で走らせると、`cache_server_down_means_no_rustc_wrapper` と
   `runs_fall_back_to_plain_cargo_when_the_server_is_down` の 2 本が落ちる（run の環境が daemon の環境の `RUSTC_WRAPPER` を継ぐため）。
-  後の Phase への問い: cache server が落ちているとき、daemon は継いだ `RUSTC_WRAPPER` を run の環境から外すべきか。
+  → 答えは「外す」。**phase-G.md の G3-fix1**（継承した RUSTC_WRAPPER が run に漏れる）で、sccache を配線しないとき run と checks の
+  子プロセスから `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` を `env_remove` するようにした（ADR-0075「G3-fix1 実装時の明確化」）。
 
 ## F5-fix3: planner が計画の上限を知らない / lease 失効 run の runs 行（2026-09-28）
 

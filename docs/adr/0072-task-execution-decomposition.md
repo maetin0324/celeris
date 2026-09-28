@@ -1572,3 +1572,28 @@ E6 の受け入れ条件（§6 E6）どおり、dogfood タスク 01M3C33KW8YH33
 ## Phase F3（途中確認）実装時の逸脱・明確化（2026-09-26）
 
 - **D13 の `shadow` の採用対象を人の明示だけに広げた**: F5-1 dogfood（`docs/PROGRESS.md`）で見つかった不具合の修正。`[execution] gate = "shadow"` でも、`ExecutionGateDecision.source = Human`（`rule_id = human/explicit`）の compound だけは採用して planner run に進む（`crates/task-dispatch/src/dispatcher.rs::dispatch_one` の `is_planner_dispatch` 判定）。CoS のヒント（`source = Hint`）と規則表（`source = Policy`）の判定は shadow では従来どおり記録のみで、実行は変えない。詳細は ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」参照。
+
+## Phase F5-fix5 実装時の明確化（2026-09-28）
+
+本番の gate WU の run（タスク 01M3JXB3DHVBWKWKPW04DTG6SJ / run 01M3KF2HFMHPJR7YEB5HMT38MQ、claude-code / claude-sonnet-5）が
+`cargo test --workspace` を Bash の `run_in_background` で走らせ、「完了の通知を待つ」と書いて turn を終えた。headless の `claude -p` は
+turn の終わりで session を閉じ、background task を殺す。`result` は success / `end_turn` なのに `result.json` が無い。
+
+1. **予防は adapter の境界で、全 run に**（D10 の「harness ごとの可否」の claude-code 行の明確化）: claude-code アダプタは全 run
+   （worker / planner / reviewer / 対話）に `--append-system-prompt <preamble::HEADLESS_RUN_NOTE>`（headless であること・turn を終えると
+   run が終わること・長い command も foreground で走らせること・通知を待って turn を終えないこと）と、環境変数
+   `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`（CLI 2.1.283 は Bash / Agent の `run_in_background` を道具の schema から外す）・
+   `BASH_MAX_TIMEOUT_MS = max(600000, 壁時計)` を渡す。`config.env` の同名が勝つ。プロンプト本文（`prompt.txt`）は変えない
+   （既存の「バイト単位で同じ」の約束を崩さない）。
+2. **回復は resume ではなく continuation**（D9 の規則の適用）: `result` が success（`stop_reason` が `end_turn` か無し）で `result.json` が
+   無く、その `result` の時点で stream-json の `task_started`（background）に対応する終わり（`task_notification` / `task_updated` の
+   終端状態）が無いとき、coding 系の execute run（D10 の予算の予告と同じ範囲）は `Terminal::Yielded` を返す。checkpoint は worker の
+   `checkpoint.json` を土台に、`next_action` を「殺された command を foreground で再実行して続け、result.json を書け」に、`known_failures`
+   に `headless_background_task: …` を足したもの。続きの run はディスパッチャの既存の continuation（新しい session + checkpoint、
+   `max_continuations_per_work_unit`・`no_progress_limit`、`CheckpointSaved` / `WorkerFinished{end: yielded}`）に任せる。
+   同じ session の resume を採らない理由: 仕事の run は `--no-session-persistence` で resume できる session が残らない。resume のために
+   session を残すのは D9 (a) wrap-up（未実装）と同じ変更で、D9 (b)「InfraRequeue で同じ session を resume」は採らないと決めている。
+   上限・進捗なしの判定もアダプタ内の再起動では数えられない。
+3. **continuation を持たない run**（レビュー・計画・対話）は従来どおり `result.json` 不在の失敗（`AdapterError::Other`、ADR-0070 D3 の
+   InfraRequeue）のまま、文言に `headless_background_task` を足す。`HarnessErrorClass` は増やさない（schema 変更なし）。どの run でも
+   分類名で始まる進行（`WorkerProgress`）を 1 件残す。

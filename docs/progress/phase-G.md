@@ -77,3 +77,18 @@ docs 配下だけの変更（コードは変更しない）。作業は git work
 
 - 人へ: G1 の前に F5-fix を merge し、`/tmp/agent-platform-f5-1-target`（32G）を消してよいか判断してほしい（本 Phase では触っていない）。
   `mp1` の専用ボリュームを足すなら `/var/lib/celeris/scratch` に mount する（Celeris の設定は同じパスのまま）。
+
+## Phase G1（scratch pool + 割り当て + semantic GC + watermark + celerisctl / metrics）— 着手 2026-09-28
+
+ADR-0075 の状態を Accepted にした。作業は git worktree の中（main へ merge / push しない）。
+
+### G1 checkpoint 1: `scratch.rs` の純粋部 + `[scratch]` 設定（完了 2026-09-28）
+
+- `crates/task-worker/src/scratch.rs`（新規）: owner（`task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>`）と
+  パス、`lease.json`（`celeris.scratch-lease/1`、`deny_unknown_fields`）の読み書き、`.lock` の flock、`allocate`（lease の作成・touch と
+  adopt）、`touch` / `release`、`cargo_env`（dispatcher と `celerisctl scratch env` が共有）、`classify`（D2 の表）、`legacy_class`、
+  `plan_gc`（純粋関数）、`choose_adopt`、`is_on_nfs` / `apply_nfs_check`、`measure_tree`。
+- `crates/celeris/src/config.rs`: `[scratch]`（`enabled` / `dir` / `targets_max_gb` / `l1_max_gb` / `total_max_gb` /
+  `high_watermark` / `low_watermark` / 保持期限 / `gc_max_per_tick` / `adopt` / `adopt_max_distance` / `measure_interval_secs`）。
+  `dir` の既定は `build_cache_dir` の親の `scratch/`。`scratch_settings()` が NFS の検査をして `DispatchConfig.scratch` に入れる。
+- テスト: `cargo test -p task-worker --lib scratch` → 17 passed、`cargo test -p celeris --lib scratch` → 2 passed。

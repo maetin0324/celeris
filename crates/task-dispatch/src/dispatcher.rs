@@ -644,6 +644,9 @@ pub struct DispatchConfig {
     pub shared_build_cache: bool,
     /// ADR-0066 D1: `[workspace] build_cache_dir`（既定 `~/.local/celeris/build-cache`）。
     pub build_cache_dir: PathBuf,
+    /// ADR-0075（Phase G1）: `[scratch]`。有効なら `CARGO_TARGET_DIR` は `<scratch>/targets/<owner>/target`
+    /// （`build_cache_dir` を使わない）。無効（設定・NFS 上）なら ADR-0066 D1 / F5-fix の挙動。
+    pub scratch: task_worker::scratch::ScratchSettings,
     /// ADR-0066 D2（Phase 110b）: `[workspace] prune_after_secs`（既定 86400、`0` で無効）。終端に
     /// なってからこの秒数経った作業場所から、ビルド生成物だけを刈る。
     pub workspace_prune_after_secs: u64,
@@ -13685,6 +13688,7 @@ mod tests {
                 // 副作用を避ける。専用のテストが明示的に有効化する）。
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15489,6 +15493,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15648,6 +15653,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15824,6 +15830,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -20184,6 +20191,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -30208,6 +30216,7 @@ mod knowledge_fallback_tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },

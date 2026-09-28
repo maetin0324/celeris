@@ -1,7 +1,7 @@
 # ADR-0075: ビルドキャッシュの 2 層化 — target は使い捨ての scratch、再利用は sccache の L1（ローカル）/ L2（NFS）に集約し、Celeris が semantic cache manager になる
 
 - 日付: 2026-09-28
-- 状態: **Proposed**（Phase G0 = 設計。G1〜G3 は未着手）
+- 状態: **Accepted**（2026-09-28 Phase G1 着手。G0 = 設計、G2・G3 は未着手）
 - 入力: `docs/notes/build-cache-tiering-input-2026-09-28.md`（人の設計方針。本 ADR はこれに沿う。以下「入力メモ」）
 - 関連:
   - ADR-0066（D1 共有 `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>`、D2 終端の作業場所の生成物の刈り取り）。本 ADR は D1 を**置き換える**（D2 は残す）

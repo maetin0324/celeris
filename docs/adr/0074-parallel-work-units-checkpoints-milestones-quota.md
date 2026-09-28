@@ -1201,3 +1201,25 @@ F5-1 dogfood（3 回目、タスク 01M3HS2E19BRC021ZXMDZANP5B）で見つかっ
    同じ親の中で `.deleting-wu-<id>` に rename（その tick のうちに元のパスから消える）してから別スレッドで `remove_dir_all` する
    （数 GB を tick の中で消さない。同時に 1 本）。途中で残った `.deleting-*` も次の掃除で消す。`failed` / `blocked` は replan で同じ
    行がやり直しうるので残す。行が見つからない target（別の DB、消えた Task）には触れない。
+
+## Phase F5-fix2 実装時の逸脱・明確化（2026-09-28）
+
+F5-1 dogfood 4 回目で、`gate` WU の run が result.json（done）を残して終わったのに完了が記録されず、2 時間後に
+`infra_requeue: lease expired` で捨てられた（2 回）。原因は、run の後に daemon が走らせる WU の `checks`（D1.2・ADR-0072 D14/D6）が
+`running` から外れた後に spawn され、`Dispatcher::in_flight()`（ADR-0040 D4 の drain の判定）に数えられていなかったこと。ライブ
+切替で draining になった旧デーモンは、検査を spawn した直後に「手元が 0」と判断して exit し、検査の完了ごと失った。新しい active は
+その run を持たず、検査前に延ばした lease（`review_timeout × (2n+1) + lease_grace`）が切れるまで何もしなかった。
+
+1. **検査・統合も in-flight**: `in_flight()` は `running + reviewing + checking + integrating`。`checking`（run id → spawn の handle）は
+   `spawn_work_unit_checks` が入れ、`Completion::WorkUnitChecks` を受けたとき・Task が Running でなくなったとき・drain の打ち切り
+   （`abort_all_runs`）で外す。lease の照合（`reclaim_expired_leases`・D1.7 の `reconcile_parallel_tasks`）は `checking` の run を
+   「生きている run」とみなし、lease が切れても回収せずに延ばす。
+2. **lease が切れた run の result.json**（P-F5-3 の一部）: lease（または WU の lease）が切れた run で、このインスタンスが抱えて
+   いないもののうち、`runs/<run_id>/result.json` に終端（done / question / yielded / budget_exhausted / 供給側の失敗でない error）が
+   残っているものは、requeue せずに `on_worker_finished` と同じ経路でその内容から確定させる（checks があれば走らせ直す）。
+   result.json が無ければ従来どおり `InfraRequeue`。
+3. **確定の失敗は記録する**: `drain_completions` は `on_worker_finished` / `on_work_unit_checks_finished` のエラーで tick ごと抜けず、
+   その run を `WorkerFinished{outcome: "infra_requeue: finalisation failed: …", end: harness_error(infra)}`・`runs` の
+   `harness_error` として閉じる。Task の lease を持つ run は `InfraRequeue`（`max_infra_retries` を超えたら `infra failure ×N`）、
+   工程の lease（v2）の WU の run は Task を遷移させずにその WU だけを戻し（reason `finalise_failed`）、同じ WU で上限を超えたら
+   WU を failed にする（D12/D17 の replan / 失敗へ）。

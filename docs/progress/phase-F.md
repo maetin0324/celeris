@@ -1365,3 +1365,84 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - F5-fix と G1 の効果を本番で確認: `build` 工程の 3 WU（api-docs / milestone-progress / quota-roles）が並列に走り、`request.json` の `cargo_target_dir` は WU ごとに `scratch/targets/task-<id>/wu-<id>/target`（共有 target の混線は再現せず）。`integrate-build` も done。replan v2 / v3（差分 changed=2）が daemon 由来の統合 WU を理由に拒否されなくなった。
 - 異常 1 件: `gate` WU の run（03:28 開始）が 05:30 に `infra_requeue: lease expired` で回収され再 dispatch（再実行は 10 分で done）。1 回目の run 自身は「全体ゲート成功（2515 passed）」の result を残しているので、run の終わり際に lease が切れた（G1 昇格 03:42 のライブ切替で旧デーモンが draining のまま 2 時間の run を持っていた経路。旧デーモンが run より先に終了した可能性）。journal が取れず未確定 → 提案 P-F5-3: 「draining 中の旧デーモンが持つ run の lease」を新デーモン側が引き継いで heartbeat する（Phase 116 D5 の拡張）か、旧デーモンの終了条件に「run の lease を渡すまで待つ」を足す。
 - 途中の lane 分布: planner 3 run は standard（Opus）、worker 12 run は standard（gpt-6-sol / Opus）7 と cheap（gpt-6-luna）5。E6（全 run standard）から cheap が増えた。
+
+## F5-fix2: WU run の完了が記録されない（dogfood 4 回目）（2026-09-28）
+
+### 症状
+
+- タスク 01M3JXB3DHVBWKWKPW04DTG6SJ（計画 v3 01M3K0X3Z4ZF3XGKEVCP5TQ77B）の `gate` WU（kind = test、checks 5 本）の run が
+  `runs/<run>/result.json`（type = done、evidence criterion 0/1、input ~1.59M tokens）を書いて終わったのに、`worker_finished` が無く、
+  `runs.status = running`・WU `running` のまま。約 2 時間後に `infra_requeue: lease expired (run_id=phase:…:gate:…)` →
+  `restart_reconcile` で ready に戻され、やり直しになった。2 回発生:
+  - run 01M3K0X49JB5JP5TQH304ZTRW2: result.json 03:39:03Z → lease 失効 05:30:04Z（seq 984〜986）。
+  - run 01M3K7WNJGYAPNBPMBVJXZ96CC: result.json 05:43:02Z → lease 失効 07:34:04Z（seq 1053〜1055。本 fix の調査中に本番で予測どおり
+    発生。その後 run 01M3KF2HFMHPJR7YEB5HMT38MQ〈claude、result.json 無しの infra_requeue〉、run 01M3KFDDQRTKPT7881HEC1DDVW が走っている）。
+
+### 根本原因
+
+- **lease の期限が決め手**: 失効時刻は result.json の時刻 + 111 分（03:39:04 → 05:30:04、05:43:03 → 07:34:03）。
+  `review_timeout_secs = 600 × (checks 5 × 2 + 1) + lease_grace_secs 60 = 6660 s` で、`spawn_work_unit_checks` が検査の前に延ばす
+  lease と一致する（修正前 `crates/task-dispatch/src/dispatcher.rs:4214-4223`）。つまり run の完了は受け取られ、**WU の checks が
+  spawn された後に、検査の完了（`Completion::WorkUnitChecks`）が失われた**。WU の scratch target には 05:43:06 の cargo 起動
+  （`.rustc_info.json`）以降の書き込みが無く、GUI の vitest の結果（`node_modules/.vite/vitest/*/results.json`）も worker の 05:40:31
+  のまま（検査は途中で止まった）。
+- **なぜ失われたか**: `on_worker_finished` は run を `running` から外してから（`take_running_by_run_id`、修正前 L4090）
+  `spawn_work_unit_checks`（修正前 L4180-4250、spawn は L4236）で検査を `tokio::spawn` するが、その handle をどこにも持たない。
+  `Dispatcher::in_flight()`（修正前 L2265-2267（L2266: `self.running.len() + self.reviewing.len()`））と `TickReport.in_flight`（修正前 L2888）は
+  検査を数えないので、draining のインスタンスの supervisor（`crates/celeris/src/instance.rs:412` `if in_flight == 0` → drained、exit 0）
+  は検査を spawn した直後の tick で exit し、検査ごと完了を失う。2 回とも検査の最中にライブ切替があった（1 回目: 03:39 検査開始 →
+  03:42 G1 の昇格、2 回目: 05:38:56 切替で旧 G1 デーモンが draining → 05:43:02 run 完了・検査開始 → その tick で exit）。
+  新しい active はこの run を持たず、reconcile は WU の lease（検査が延ばした 111 分）が切れるまで何もしなかった。
+  replan v3 そのものは原因ではない（v2 の gate run は検査の途中に切替が無かったので記録された。v3 以降の 2 run がたまたま切替と重なった）。
+- 同じ形の潜在不具合: 工程の統合（`integrating`）も `in_flight` に数えていなかった。また `drain_completions`（修正前 L3716 / L3746）は
+  `on_worker_finished` / `on_work_unit_checks_finished` のエラーを `?` で tick ごと返し、受信済みの完了を捨てていた（今回の 2 件の直接の
+  原因ではないが、同じ「完了が黙って消える」症状になる）。
+
+### 修正（`crates/task-dispatch/src/dispatcher.rs`、schema 変更なし）
+
+- (a) `checking: HashMap<run_id, CheckingEntry{task_id, handle}>` を足し、`spawn_work_unit_checks` が入れ、`Completion::WorkUnitChecks`
+  の受信・Task が Running でなくなったとき（`abort_stale_runs`）・`abort_all_runs` で外す。`in_flight()` は
+  `running + reviewing + checking + integrating`、`TickReport.in_flight` も `in_flight()`。draining のインスタンスは検査・統合が
+  終わって完了を記録するまで exit しない。
+- (a') lease の照合: `reclaim_expired_leases` は `checking` の run がある Task の lease を回収せずに延ばす（検査が
+  `review_timeout × (2n+1)` より長引く場合。timeout の 2 倍の再試行があるので最悪 3n 倍かかりうる）。`reconcile_parallel_tasks` は
+  `checking` の run を「手元の run」とみなす。
+- (b) `drain_completions` は確定のエラーで抜けず `record_finalisation_failure` を呼ぶ: `WorkerFinished{outcome: "infra_requeue:
+  finalisation failed: <err>", end: harness_error(infra)}` と `runs` の `harness_error` を残し、Task の lease を持つ run は
+  `InfraRequeue`（上限超過で `infra failure ×N`）+ WU を ready（reason `finalise_failed`）、工程の lease（v2）の WU の run は Task を
+  遷移させずに WU だけを戻し、同じ WU で `max_infra_retries` を超えたら WU を failed（ADR-0072 D12/D17 の replan / 失敗へ）。
+- (c) P-F5-3 の result.json の部分: lease（または WU の lease）が切れた run で、このインスタンスの `running`/`checking` に無く、
+  `runs/<run_id>/result.json` に終端（done / question / yielded / budget_exhausted / 供給側の失敗でない error）があるものは、
+  requeue せず `on_worker_finished` と同じ経路で確定させる（checks があれば走らせ直す。`finalise_from_result_json`、
+  `terminal_from_run_dir`）。`reclaim_expired_leases` と `reconcile_parallel_tasks` の両方から呼ぶ。
+- ADR-0074 末尾に「Phase F5-fix2 実装時の逸脱・明確化」を追記。
+
+### 証拠
+
+- 再現テスト（`task_dispatch::dispatcher::tests`、本番と同じ形: 1 工程・kind = test の `gate` WU・checks 2 本、1 回目は検査で落ちて
+  `work_unit_retry`〈runs = 2、本番の replan v3 後と同じ行の形〉、2 回目の run が criterion 0/1 の evidence と 1.59M tokens の usage で done）:
+  - `draining_dispatcher_keeps_work_unit_checks_in_flight_until_the_completion_is_recorded`
+  - `lease_expired_work_unit_run_with_a_result_json_is_finalised_instead_of_requeued`
+  - `result_json_finalisation_records_the_completion_end_to_end`
+  - `a_finalisation_failure_is_recorded_as_an_infra_requeue`（v1 の WU、Task の lease）
+  - `a_finalisation_failure_of_a_parallel_work_unit_resets_only_that_unit`（v2、上限超過で WU failed）
+- 修正前の挙動に戻して（`in_flight()` を `running + reviewing`、result.json からの確定を無効化）実行 → 上の最初の 3 本が FAILED:
+  「WU の checks が走っているのに in_flight() == 0」、`["infra_requeue: lease expired (run_id=phase:…:gate:…)"]`（本番と同じ
+  `infra_requeue` → `restart_reconcile` の列）。修正後は 5 本とも ok。
+- 全体ゲート:
+  - `cargo fmt --all -- --check` → exit 0
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0、警告 0
+  - `cargo test --workspace --no-fail-fast` → exit 0、passed 2576 / failed 0 / ignored 7
+  - GUI・生成型・schema は触っていない（gen-diff 不要）。
+
+### 未解決事項・提案
+
+- P-F5-3 の残り: 新しい active が「draining の旧デーモンが持つ run」を lease 失効より前に引き継ぐこと（run のプロセスが消え
+  result.json があるなら、どのインスタンスも持っていないと判断できれば即座に確定できる）はしていない。今回の (a) で旧デーモンは検査が
+  終わるまで exit しないので、本番の 2 件の経路は閉じた。旧デーモンがクラッシュした場合は lease 失効（最大 `review_timeout × (2n+1)`）
+  まで待ってから (c) で確定する。
+- 検査前に延ばす lease の式（`review_timeout × (2n+1) + lease_grace`）は timeout の再試行（最大 3 倍）を含まない。(a') で検査中は
+  回収しないので実害は無くしたが、式そのものは変えていない。
+- 2 回目の run の `worker_progress` が 05:40:47Z（item_33）で止まり stdout.jsonl は 05:43:01Z（item_38）まで続いていた件は未調査
+  （draining 中の旧デーモンの progress の間引き・書き込みの問題の可能性。完了の喪失とは独立）。
+- 本番への反映は昇格待ち（本 fix は production に触れていない）。

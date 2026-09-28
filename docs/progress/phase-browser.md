@@ -76,14 +76,14 @@ release.sh / verify.sh の結果と検証済み SHA は WorkUnit の `artifacts/
 
 ## 2026-09-28 追記: 最新 main の再統合と再検証
 
-`7725ed6` による再統合後に main が `6fe2871` へ進んだため、main を再度 merge した。
+`7725ed6` による再統合後に main が `6fe2871`、さらに `06e9a03`（F5-fix7）へ進んだため、main を再度 merge した。
 `EVENT_TYPES` は `browser_updated` と main の認可イベントをともに保持し、task 画面は Browser Live View と実行の形の操作をともに保持した。
 GUI lint で検出した lazy import の重複を解消してから、以下を sandbox 外で再検証した。
 
 | 検査 | コマンド | 結果 |
 | --- | --- | --- |
 | Rust format | `cargo fmt --all -- --check` | exit 0 |
-| Rust tests | `cargo test --workspace` | exit 0、2673 passed / 0 failed / 7 ignored |
+| Rust tests | `cargo test --workspace` | `06e9a03` の取り込み前は 2673 passed、取り込み後は exit 0、2678 passed / 0 failed / 7 ignored |
 | Rust lint | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | GUI lint | `cd gui && pnpm lint` | 初回は重複定義 2 件で exit 1、修正後 exit 0 |
 | GUI types | `cd gui && pnpm typecheck` | exit 0 |

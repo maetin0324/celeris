@@ -327,6 +327,9 @@ fn make_repair(
             stamp.clone(),
         );
         let plan_spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.into(),
             rationale: "delivery repair: 暗黙の WorkUnit を実体化".into(),
             work_units: vec![main, spec],

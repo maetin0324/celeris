@@ -540,6 +540,7 @@ pub fn materialize_logging(
                 genres,
             );
             Task {
+                tree: None,
                 id: ids[i],
                 parent_id: Some(parent.id),
                 kind: match t.kind {
@@ -701,6 +702,7 @@ mod tests {
     fn parent() -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

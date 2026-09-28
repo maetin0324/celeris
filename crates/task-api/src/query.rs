@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 34] = [
+pub(crate) const EVENT_TYPES: [&str; 42] = [
     "browser_updated",
     "created",
     "transitioned",
@@ -201,6 +201,15 @@ pub(crate) const EVENT_TYPES: [&str; 34] = [
     "project_plan_proposed",
     // ADR-0074 D8.2（Phase F4a）: 人が案件計画の提案を採否決定した。
     "project_plan_decided",
+    // ADR-0079（Phase R1a）: 再帰的な task の木（型と replay の読みだけ。発行は R1b 以降）。
+    "child_task_created",
+    "child_adopted",
+    "unit_gate_overridden",
+    "decision_requested",
+    "decision_answered",
+    "decision_withdrawn",
+    "plan_approval_requested",
+    "stall_detected",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -242,6 +251,14 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ProjectPlanDecided { .. } => "project_plan_decided",
         Event::PausePointsResolved { .. } => "pause_points_resolved",
         Event::PhaseReported { .. } => "phase_reported",
+        Event::ChildTaskCreated { .. } => "child_task_created",
+        Event::ChildAdopted { .. } => "child_adopted",
+        Event::UnitGateOverridden { .. } => "unit_gate_overridden",
+        Event::DecisionRequested { .. } => "decision_requested",
+        Event::DecisionAnswered { .. } => "decision_answered",
+        Event::DecisionWithdrawn { .. } => "decision_withdrawn",
+        Event::PlanApprovalRequested { .. } => "plan_approval_requested",
+        Event::StallDetected { .. } => "stall_detected",
     }
 }
 
@@ -307,5 +324,59 @@ mod tests {
         let bad =
             QueryParams::parse(Some("types=nope"), &["types"]).unwrap_or_else(|_| panic!("parse"));
         assert!(bad.event_types().is_err());
+    }
+
+    /// ADR-0079（Phase R1a）: 木の Event の `type` 名が serde の名前・`event_type_name`・`EVENT_TYPES` で一致する。
+    #[test]
+    fn tree_event_types_match_their_serde_names() {
+        let child = TaskId::new();
+        let events = vec![
+            Event::ChildTaskCreated {
+                plan_id: "p".into(),
+                unit_key: "u".into(),
+                child_task_id: child,
+                depth: 2,
+            },
+            Event::ChildAdopted {
+                plan_id: "p".into(),
+                unit_key: "u".into(),
+                stage: "s".into(),
+                child_task_id: child,
+            },
+            Event::UnitGateOverridden {
+                plan_id: "p".into(),
+                unit_key: "u".into(),
+                declared: task_core::UnitDeclared::Leaf,
+                gate: task_core::ExecutionMode::Compound,
+                action: task_core::UnitGateAction::Promoted,
+                depth: 2,
+                threshold: 7,
+            },
+            Event::DecisionAnswered {
+                id: "d".into(),
+                option: "a".into(),
+                note: None,
+                by: "human".into(),
+            },
+            Event::DecisionWithdrawn {
+                id: "d".into(),
+                reason: "r".into(),
+            },
+            Event::PlanApprovalRequested {
+                plan_id: "p".into(),
+                reasons: vec!["has_decisions".into()],
+            },
+            Event::StallDetected {
+                task_id: child,
+                detail: "x".into(),
+            },
+        ];
+        for e in &events {
+            let v = serde_json::to_value(e).unwrap_or_default();
+            let serde_name = v.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+            assert_eq!(serde_name, event_type_name(e));
+            assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
+        }
+        assert!(EVENT_TYPES.contains(&"decision_requested"));
     }
 }

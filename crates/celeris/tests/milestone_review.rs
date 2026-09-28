@@ -123,6 +123,7 @@ impl Env {
 
 fn task(status: Status) -> Task {
     Task {
+        tree: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),

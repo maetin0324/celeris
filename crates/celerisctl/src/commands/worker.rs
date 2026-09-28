@@ -934,6 +934,7 @@ mod tests {
     fn task_fixture(status: Status, workspace: WorkspaceSpec) -> Task {
         let now = time::OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

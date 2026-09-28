@@ -690,3 +690,45 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 - **U-R7**: 子 task ごとの reviewer run は当面許容。ただし review 数が増えすぎる恐れがあるので、**深さ別・部分木別の review run 数と費用を指標として出す**（R4a の集約に含める）。本格的な Prometheus metrics の導入は将来課題として棚上げ。
 - **U-R8**: agent-platform の未終了の途中目標行は凍結し、将来的に GUI から見えないようにする（R5a で凍結 + 既定非表示）。
 - **追加: R6 回収フェーズ**: 仕様変更に伴い、既存の案件・task の中身（案件の方向性文、途中目標、親子関係、知識の置き場）を新モデルの実情に合わせて整える回収フェーズを R5b の後に置く。
+
+## 付記: R1a 実装時の逸脱・明確化（2026-09-28）
+
+R1a（plan/3 の型と検証、`Task.tree`、migration 0030、Event、`[execution.tree]`）で決めたこと。本文の決定は変えていない。
+
+1. **U-R1 の数え方に合わせた式の読み替え**: `max_depth` は task の層数（root 1 / 子 2 / 孫 3）。深さ `d` の task の計画が kind task の unit を
+   持てるのは **`d < max_depth`**（D3 の表の「`d + 1 < max_depth`」を置き換える）。planner に渡す `remaining_depth` は **`max_depth − d`**
+   （D4 (2) の「`max_depth − depth − 1`」を置き換える。1 以上なら kind task を書ける）。gate の閾値 `5 + step × (d − 1)` は変えない。
+   実装は `task_core::tree::{can_have_child_tasks, remaining_depth, gate_threshold}`。検証は `validate_with(.., PlanContext{origin, depth})` の
+   `depth`（`tree::depth_of(task)`、`tree` の無い task は 1）で見る（`ChildTaskTooDeep`）。
+2. **`tasks.root_id` は埋め戻さない**: migration 0030 は列・表・索引を足すだけで既存の行を書き換えない（D13「凍結」、D15「root_id は NULL のまま」）。
+   列は `Task.tree.root_id` の写しで、`tree` を持つ task（R1b で作る子と、その root）にだけ入る。root の `tree` を誰がいつ書くか（root 自身の
+   `root_id = id`）は R1b が子を作るときに決める。
+3. **型**: /3 は `ExecutionPlanSpec` の同じ型に `stages` / `units` / `decisions` を足した（空なら出力しない。/1・/2 の JSON は 1 バイトも変わらない）。
+   `work_units` は `serde(default)` にした（/3 は書かない）。そのため /1・/2 で `work_units` を省いた JSON は、parse の失敗ではなく検証の
+   `NoWorkUnits` で拒否される（拒否されることは変わらない）。/3 を直列化すると空の `phases` / `work_units` / `children` が付く（読み戻しは同じ値）。
+   unit は /2 の `WorkUnitSpec` とは別の型 `PlanUnitSpec`（`stage`・kind task の欄・leaf の欄・`needs_decisions`・`decisions`・`adopt`）で、
+   `internal_view` が /2 の形（`phases` / `work_units`、`work_units.phase` = 段階の key）に写す。統合 WU・工程の障壁・replay はこの写しを使う。
+   leaf の `context.repo` は文字列か配列（`RepoSelector`。2 つ以上なら `LeafMultipleRepos`）。
+4. **検証の細部**: kind task の unit は `checks` / `budget` / `harness` / `context.paths` を拒否（D2 の列挙どおり。`done_when` / `outputs` は拒否しない）。
+   leaf は kind task 専用の欄（`acceptance` / `genre` / `skills` / `repos` / `adopt`）を拒否。/3 の leaf の予算は **丸めずに拒否**（D4 (2) の
+   「上限超過 → 拒否」。/1・/2 は従来どおり丸める）。段階の kind に `task` / `integrate` は使えない。unit の `decisions` は `needed_before` に
+   その unit を足して計画の決定に並べる（`normalized_decisions`）。決定の上限（計画あたり 8）は unit 側を含めた総数で数える。`needed_before` に
+   `self` は計画では書けない（worker 専用。R3a）。`repos` が親の repos の部分集合かは R1b（子の生成で親を知るとき）に検査する。
+5. **`[execution.tree]` の値の持ち方**: `ExecutionLimits.tree: TreeLimits`（/3 の検証だけが見る）。`approval_near_limit_ratio`（設定は 0 < r ≤ 1）は
+   `ExecutionLimits` を `Eq` のまま保つため千分率 `approval_near_limit_permille` で持つ。`max_open_decisions`（木あたり）と
+   `max_open_decisions_per_plan` を別の欄にした（D3 の「12 / 木、8 / 計画」）。`max_depth` は `1..=3` 以外なら設定エラー。
+   daemon（dispatcher の planner 検証）は設定の値を使うが、**API の `PUT/POST /tasks/{id}/execution-plan` と `celerisctl execution` は従来どおり
+   `ExecutionLimits::default()`（tree 無効）**で検証する。R5b で人が /3 を `PUT` する前に、この 2 つの入口へ設定を配線する（R1b〜R5b のどこかで。
+   `enabled = false` の間は挙動が同じなので R1a では変えない）。
+6. **Event の欄**: `ChildTaskCreated` / `ChildAdopted` に `plan_id` を足した（`work_units` の行を events だけから結び付けるため）。
+   `UnitGateOverridden` は `{plan_id, unit_key, declared, gate, action, depth, threshold}`。`DecisionRequest` に `answer` / `withdrawn_reason`
+   （表の `json` に回答・取り下げを残すため。どちらも省略可）と `DecisionOrigin::Human`（人の計画の決定）を足した。`decisions.root_id` は
+   `path` の先頭（空なら出した節点）。`Created{origin: plan_unit}`（D4 (4)）は子の生成と一緒に R1b で足す。
+7. **派生の書き込みの場所**: `work_units.child_task_id` と `decisions` は、store が Event を追記するのと同じトランザクションで書く
+   （`append_event_tx` と遷移の `extra_events` の両方から `apply_tree_event_tx`。F5-fix3 の `close_run_row_for_event_tx` と同じ形）。畳み込みは
+   `task_core::DecisionRow::{from_request, apply_answer, apply_withdrawal}` を store と `task_ops::replay::rebuild_decisions` が共有する。
+   `celerisctl replay --check/--apply` は `decisions` も突き合わせる（`DECISION_MISMATCH`）。`work_units.needs_decisions_json` は採用時に
+   `effective_needs_decisions`（`needs_decisions` と、その unit か `stage:<その段階>` を `needed_before` に持つ決定）で決まる。
+8. **daemon の挙動は変えない**: `enabled = false`（既定）では /3 は `TreeDisabled` の 1 件だけで拒否され（planner の出力・人の PUT とも）、他は
+   何も変わらない。保険として、scheduler（`runnable_work_units`）は kind task の行を LLM run の候補にしない（子の生成は R1b）。
+   `review: human` の段階を途中確認（`pause_after`）に解決するのは R1b 以降（R1a の採用では `PausePointsResolved` は段階を拾わない）。

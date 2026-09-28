@@ -1449,6 +1449,35 @@
       ],
       "type": "object"
     },
+    "ParentUnit": {
+      "additionalProperties": false,
+      "description": "D4 (4): 子 task が親の計画のどの unit から作られたか（`Task.tree.parent_unit`）。",
+      "properties": {
+        "plan_id": {
+          "description": "親の計画の版（`execution_plans.id`）。",
+          "type": "string"
+        },
+        "stage": {
+          "description": "その unit の段階の key（`work_units.phase`）。",
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "親 task（`Task.parent_id` と同じ値。採用〈adopt、D15〉で `parent_id` を書き換えない子では\nこちらだけが木の親を指す）。"
+        },
+        "unit_key": {
+          "description": "親の計画の unit の key（`work_units.key`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "plan_id",
+        "unit_key",
+        "stage"
+      ],
+      "type": "object"
+    },
     "PausePolicy": {
       "description": "D2.1: `NewTaskSpec.pause_after` / `PATCH` / `PUT /tasks/{id}/execution/pause-after` /\nCoS の `create_task.pause_after` に書ける値。既定は `None`（全工程自動）。\n**planner は書けない**（`ExecutionPlanSpec` に欄が無い。`deny_unknown_fields` で拒否される）。",
       "oneOf": [
@@ -2338,6 +2367,17 @@
         "title": {
           "type": "string"
         },
+        "tree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TreeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 D4 (4) / D15（Phase R1a）: 再帰的な task の木の中の位置（root・深さ・親の unit・基点）。\n木に属さない従来の task には無い（深さ 1 の節点として扱う。`tasks.root_id` も NULL のまま）。\n子 task の生成（R1b）が書く。"
+        },
         "updated_at": {
           "type": "string"
         },
@@ -2605,6 +2645,45 @@
           "type": "string"
         }
       ]
+    },
+    "TreeInfo": {
+      "additionalProperties": false,
+      "description": "D4 (4) / D15: `Task.tree`。木に属する task だけが持つ（`None` は木を持たない従来の task = 深さ 1 の\n節点として扱う。`root_id` 列も NULL のまま埋め戻さない。D15）。",
+      "properties": {
+        "base_commit": {
+          "description": "D6: 子の worktree を切る基点（親の段階の基点、または同じ段階の依存先の HEAD。R1c で使う）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "depth": {
+          "description": "task の層数で数えた深さ（root = 1、子 = 2、孫 = 3。U-R1）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parent_unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParentUnit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "子 task なら、作られた元の親の unit（root は `None`）。"
+        },
+        "root_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "木の root task（root 自身なら自分の id）。`tasks.root_id` 列（索引）の正本。"
+        }
+      },
+      "required": [
+        "root_id",
+        "depth"
+      ],
+      "type": "object"
     },
     "Usage": {
       "description": "DESIGN §5.3 の `usage`。取れない項目は省略可。\n\nADR-0061（Phase 104）: harness routing 基盤で `cache_read_tokens` / `cache_creation_tokens` /\n`cost_usd` を追加した（追加のみ。既存の `input_tokens` / `output_tokens` の意味は変えない）。\n`Eq` は落とした（`cost_usd: Option<f64>` は `Eq` を持てない）。",

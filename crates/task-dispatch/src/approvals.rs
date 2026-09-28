@@ -115,6 +115,7 @@ mod tests {
     fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

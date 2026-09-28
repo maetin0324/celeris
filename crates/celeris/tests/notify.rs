@@ -158,6 +158,7 @@ impl Env {
 fn task(status: Status) -> Task {
     let now = at(0);
     Task {
+        tree: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),

@@ -140,6 +140,7 @@ fn seed(env: &Env) -> (Vec<OrgNode>, TaskId) {
     // `coding-poc` に割り当てられたタスク（合流の側）。
     let id = TaskId::new();
     let task = Task {
+        tree: None,
         routing: None,
         id,
         parent_id: None,

@@ -17,6 +17,16 @@ pub const EXECUTION_PLAN_SCHEMA: &str = "celeris.execution-plan/1";
 /// （`validate` が schema の値で分ける。D1.1）。
 pub const EXECUTION_PLAN_SCHEMA_V2: &str = "celeris.execution-plan/2";
 
+/// ADR-0079 D2（Phase R1a）: 段階（`stages`）と unit（leaf | 子 task、`units`）と決定（`decisions`）を
+/// 持つ計画の schema 版。`[execution.tree] enabled = true` のときだけ採用できる（`false` なら検証で
+/// `TreeDisabled`）。内部では /2 の `phases` / `work_units` と同じ行に写す（[`internal_view`]）。
+pub const EXECUTION_PLAN_SCHEMA_V3: &str = "celeris.execution-plan/3";
+
+/// 工程（/2 の `phases`、/3 の `stages`）を持つ schema か（統合 WU・工程の障壁の対象）。
+pub fn is_phased_schema(schema: &str) -> bool {
+    schema == EXECUTION_PLAN_SCHEMA_V2 || schema == EXECUTION_PLAN_SCHEMA_V3
+}
+
 /// `execution_plans.id` / `work_units.id` に使う ULID の発行（`TaskId` 等と同じ ULID 系を使う。
 /// 型付きの id にしていないのは、この 2 表が対応する Event の中に既に `plan_id` / `work_unit_id` が
 /// 文字列で入っているため。I/O は無い純粋な採番）。
@@ -43,6 +53,9 @@ pub enum WorkUnitKind {
     /// `runs = 0`、LLM run を起こさない）。planner の出力に書かれていれば検証で拒否する
     /// （`validate` の `ReservedKind`。system WU 専用の予約語）。
     Integrate,
+    /// ADR-0079 D2（Phase R1a）: 子 task の unit（`celeris.execution-plan/3` だけ。/1・/2 では検証で拒否）。
+    /// `work_units` の行は子 task の代理で、LLM run を起こさない（子 task の生成は R1b）。
+    Task,
 }
 
 impl WorkUnitKind {
@@ -56,6 +69,7 @@ impl WorkUnitKind {
             WorkUnitKind::Repair => "repair",
             WorkUnitKind::Other => "other",
             WorkUnitKind::Integrate => "integrate",
+            WorkUnitKind::Task => "task",
         }
     }
 
@@ -69,6 +83,7 @@ impl WorkUnitKind {
             "repair" => Some(WorkUnitKind::Repair),
             "other" => Some(WorkUnitKind::Other),
             "integrate" => Some(WorkUnitKind::Integrate),
+            "task" => Some(WorkUnitKind::Task),
             _ => None,
         }
     }
@@ -164,12 +179,243 @@ pub struct ExecutionPlanSpec {
     /// v2 のみ。v1 では空でなければならない（`validate`）。
     #[serde(default)]
     pub phases: Vec<PhaseSpec>,
+    /// /1・/2 では 1 件以上。ADR-0079（Phase R1a）: /3 は `units` を使い、ここは空（省略可）。
+    #[serde(default)]
     pub work_units: Vec<WorkUnitSpec>,
     /// ADR-0074 D3.7（Phase F4b (f)）: 子 Task の提案（v2 のみ。v1 では空でなければならない）。
     /// 採用と同じトランザクションで既存の委譲の検証を通して子 Task になり、WU は
     /// `depends_on: ["child:<key>"]` でその子の `done` を待てる。
     #[serde(default)]
     pub children: Vec<ExecutionChildSpec>,
+    /// ADR-0079 D2（Phase R1a）: /3 の段階（/1・/2 では空。空なら出力しない〈/1・/2 の JSON は不変〉）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<StageSpec>,
+    /// ADR-0079 D2: /3 の unit（leaf | 子 task）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub units: Vec<PlanUnitSpec>,
+    /// ADR-0079 D2 / D7: /3 の決定（人に選んでもらう点）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<crate::decision::DecisionSpec>,
+}
+
+/// ADR-0079 D2 / D5: 段階の後の人の確認（`review: human` は ADR-0074 D2 の `pause_after` をその段階に
+/// 指定したのと同じ意味。既定 none）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StageReview {
+    #[default]
+    None,
+    Human,
+}
+
+impl StageReview {
+    pub fn is_none(&self) -> bool {
+        *self == StageReview::None
+    }
+}
+
+/// ADR-0079 D2: /3 の段階（/2 の `PhaseSpec` に `review` を足した形）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StageSpec {
+    /// `[a-z0-9-]{1,32}`。計画の中で一意。`work_units.phase` の値になる。
+    pub key: String,
+    pub kind: WorkUnitKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "StageReview::is_none")]
+    pub review: StageReview,
+}
+
+/// ADR-0079 D4 (2): leaf の `context.repo`（1 つの文字列、または配列。leaf は高々 1 つ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum RepoSelector {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl RepoSelector {
+    pub fn count(&self) -> usize {
+        match self {
+            RepoSelector::One(_) => 1,
+            RepoSelector::Many(v) => v.len(),
+        }
+    }
+}
+
+/// ADR-0079 D2: /3 の unit の context（/1・/2 の `WorkUnitContext` に `repo` を足した形）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnitContext {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from_work_units: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<RepoSelector>,
+}
+
+impl UnitContext {
+    pub fn is_empty(&self) -> bool {
+        *self == UnitContext::default()
+    }
+}
+
+/// ADR-0079 D2: /3 の unit。`kind = task` なら子 task（`acceptance` 必須、`checks` / `budget` /
+/// `harness` / `context.paths` は持たない）、それ以外は leaf（今の WorkUnit の欄 + `needs_decisions`。
+/// `checks` 1 本以上）。`assignee` / `tier` / `model` / `lane` は持たない（`deny_unknown_fields`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanUnitSpec {
+    /// `[a-z0-9-]{1,32}`。計画の中で一意。
+    pub key: String,
+    /// `stages` の key。
+    pub stage: String,
+    pub kind: WorkUnitKind,
+    pub title: String,
+    pub objective: String,
+    /// unit の key（leaf・task を問わない）。/2 の `child:<key>` は書けない。
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// 回答を待つ決定の key（計画の `decisions`・unit の `decisions`）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs_decisions: Vec<String>,
+    /// この unit が持ち込む決定（計画の `decisions` に `needed_before: [<この unit>]` を付けて移した
+    /// ものとして読む。D2 の糖衣）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<crate::decision::DecisionSpec>,
+    // ---- kind task だけ ----
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance: Vec<crate::model::Criterion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    /// 親の repos の部分集合（repo の名前。子の生成〈R1b〉で検証する）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+    /// D15: 既存の task をこの unit の子として採用する（人の計画〈origin human〉だけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopt: Option<crate::model::TaskId>,
+    // ---- leaf だけ ----
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub done_when: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<WorkUnitCheck>,
+    #[serde(default, skip_serializing_if = "UnitContext::is_empty")]
+    pub context: UnitContext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<WorkUnitBudget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+    // ---- 両方 ----
+    /// ADR-0069 D3: `TaskFeatureHints` の上書きヒント。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<serde_json::Value>,
+}
+
+impl PlanUnitSpec {
+    /// kind task の unit（子 task）か。
+    pub fn is_task(&self) -> bool {
+        self.kind == WorkUnitKind::Task
+    }
+
+    /// `work_units` の行の spec（/2 の `WorkUnitSpec` と同じ形。`phase` = 段階）。
+    pub fn to_work_unit_spec(&self) -> WorkUnitSpec {
+        WorkUnitSpec {
+            key: self.key.clone(),
+            kind: self.kind,
+            title: self.title.clone(),
+            objective: self.objective.clone(),
+            depends_on: self.depends_on.clone(),
+            done_when: self.done_when.clone(),
+            checks: self.checks.clone(),
+            context: WorkUnitContext {
+                paths: self.context.paths.clone(),
+                from_work_units: self.context.from_work_units.clone(),
+                knowledge: self.context.knowledge.clone(),
+            },
+            harness: self.harness.clone(),
+            features: self.features.clone(),
+            budget: self.budget,
+            outputs: self.outputs.clone(),
+            phase: Some(self.stage.clone()),
+        }
+    }
+}
+
+/// ADR-0079 D2: /3 の計画を /2 の形（`phases` / `work_units`）に写す（DB の列は増やさず
+/// `work_units.phase` に段階の key。統合 WU・工程の障壁・scheduler をそのまま使うため）。
+/// /1・/2 はそのまま返す。
+pub fn internal_view(spec: &ExecutionPlanSpec) -> std::borrow::Cow<'_, ExecutionPlanSpec> {
+    if spec.schema != EXECUTION_PLAN_SCHEMA_V3 {
+        return std::borrow::Cow::Borrowed(spec);
+    }
+    std::borrow::Cow::Owned(ExecutionPlanSpec {
+        schema: spec.schema.clone(),
+        rationale: spec.rationale.clone(),
+        phases: spec
+            .stages
+            .iter()
+            .map(|s| PhaseSpec {
+                key: s.key.clone(),
+                kind: s.kind,
+                title: s.title.clone(),
+            })
+            .collect(),
+        work_units: spec
+            .units
+            .iter()
+            .map(PlanUnitSpec::to_work_unit_spec)
+            .collect(),
+        children: Vec::new(),
+        stages: Vec::new(),
+        units: Vec::new(),
+        decisions: Vec::new(),
+    })
+}
+
+/// ADR-0079 D2 / D7: 計画の決定を 1 列にする（計画の `decisions` の後に、unit の `decisions` を
+/// `needed_before` にその unit を足して）。
+pub fn normalized_decisions(spec: &ExecutionPlanSpec) -> Vec<crate::decision::DecisionSpec> {
+    let mut out: Vec<crate::decision::DecisionSpec> = spec.decisions.clone();
+    for u in &spec.units {
+        for d in &u.decisions {
+            let mut d = d.clone();
+            if !d.needed_before.iter().any(|n| n == &u.key) {
+                d.needed_before.push(u.key.clone());
+            }
+            out.push(d);
+        }
+    }
+    out
+}
+
+/// ADR-0079 D7: unit が回答を待つ決定の key（`needs_decisions` と、`needed_before` がその unit か
+/// その段階〈`stage:<key>`〉を指す決定。重複なし・昇順）。`work_units.needs_decisions_json` の値。
+pub fn effective_needs_decisions(spec: &ExecutionPlanSpec, unit_key: &str) -> Vec<String> {
+    let Some(unit) = spec.units.iter().find(|u| u.key == unit_key) else {
+        return Vec::new();
+    };
+    let stage_ref = format!(
+        "{}{}",
+        crate::decision::NEEDED_BEFORE_STAGE_PREFIX,
+        unit.stage
+    );
+    let mut keys: BTreeSet<String> = unit.needs_decisions.iter().cloned().collect();
+    for d in normalized_decisions(spec) {
+        if d.needed_before
+            .iter()
+            .any(|n| n == unit_key || *n == stage_ref)
+        {
+            keys.insert(d.key);
+        }
+    }
+    keys.into_iter().collect()
 }
 
 /// ADR-0074 D3.7（Phase F4b (f)）: WU の `depends_on` で子 Task を指す接頭辞（`child:<key>`）。
@@ -348,6 +594,10 @@ pub fn apply_delta(
         // 工程構成自体を作り直すことは無い。Phase F2 実装時の逸脱・明確化）。
         phases: base.phases.clone(),
         children: base.children.clone(),
+        // ADR-0079（Phase R1a）: /3 の差分（段階・unit の replan）は R2b。ここでは持ち越すだけ。
+        stages: base.stages.clone(),
+        units: base.units.clone(),
+        decisions: base.decisions.clone(),
     })
 }
 
@@ -383,6 +633,31 @@ pub struct ExecutionLimits {
     pub max_phases: usize,
     /// ADR-0074 D3.7（Phase F4b (f)）: `children` の件数上限（既定 8 = 委譲の 1 run あたりの上限）。
     pub max_children: usize,
+    /// ADR-0079 D3（Phase R1a）: `[execution.tree]` の上限。`celeris.execution-plan/3` の検証だけが
+    /// 見る（/1・/2 の検証・丸めは 1 バイトも変えない）。
+    pub tree: crate::tree::TreeLimits,
+}
+
+impl ExecutionLimits {
+    /// replay（採用済みの計画のトポロジカル順の復元）用: 形の検査だけをし、上限では拒否しない。
+    pub fn permissive() -> Self {
+        ExecutionLimits {
+            max_children: 8,
+            max_work_units: usize::MAX,
+            work_unit_max_turns: u32::MAX,
+            work_unit_max_wall_secs: u64::MAX,
+            max_rationale_chars: usize::MAX,
+            max_title_chars: usize::MAX,
+            max_objective_chars: usize::MAX,
+            max_done_when_items: usize::MAX,
+            max_done_when_chars: usize::MAX,
+            max_checks: usize::MAX,
+            max_plan_json_bytes: usize::MAX,
+            max_work_units_v2: usize::MAX,
+            max_phases: usize::MAX,
+            tree: crate::tree::TreeLimits::permissive(),
+        }
+    }
 }
 
 impl Default for ExecutionLimits {
@@ -401,6 +676,7 @@ impl Default for ExecutionLimits {
             max_work_units_v2: 10,
             max_phases: 5,
             max_children: 8,
+            tree: crate::tree::TreeLimits::default(),
         }
     }
 }
@@ -567,6 +843,119 @@ pub enum PlanValidationError {
     ReservedKey {
         key: String,
     },
+    // ---- ADR-0079（Phase R1a）: /1・/2 に /3 の欄・語彙が書かれている ----
+    /// `stages` / `units` / `decisions` は /3 だけ。
+    V3FieldNotAllowed {
+        field: &'static str,
+    },
+    /// `kind = task` は /3 だけ。
+    TaskKindRequiresV3 {
+        key: String,
+    },
+    // ---- ADR-0079 D2 / D3 / D4（Phase R1a）: /3 の検証 ----
+    /// `[execution.tree] enabled = false` なので /3 は採用できない。
+    TreeDisabled,
+    /// /3 に /2 の欄（`phases` / `work_units` / `children`）が書かれている。
+    V2FieldInV3 {
+        field: &'static str,
+    },
+    NoStages,
+    TooManyStages {
+        count: usize,
+        max: usize,
+    },
+    InvalidStageKey {
+        key: String,
+    },
+    DuplicateStageKey {
+        key: String,
+    },
+    /// 段階の kind に `task` / `integrate` は使えない。
+    InvalidStageKind {
+        key: String,
+    },
+    NoUnits,
+    UnknownUnitStage {
+        key: String,
+        stage: String,
+    },
+    TooManyUnitsInStage {
+        stage: String,
+        count: usize,
+        max: usize,
+    },
+    TooManyChildTasks {
+        count: usize,
+        max: usize,
+    },
+    /// この深さの task の計画は kind task の unit を持てない（U-R1: `depth < max_depth` のときだけ）。
+    ChildTaskTooDeep {
+        key: String,
+        depth: u32,
+        max_depth: u32,
+    },
+    /// /2 の `child:<key>` は /3 では書けない（kind task の unit を依存先にする）。
+    ChildDependencyNotAllowed {
+        key: String,
+        depends_on: String,
+    },
+    TaskUnitNoAcceptance {
+        key: String,
+    },
+    TaskUnitInvalidAcceptance {
+        key: String,
+        detail: String,
+    },
+    /// kind task の unit に `checks` / `budget` / `harness` / `context.paths` が書かれている。
+    TaskUnitFieldNotAllowed {
+        key: String,
+        field: &'static str,
+    },
+    /// leaf に kind task 専用の欄（`acceptance` / `genre` / `skills` / `repos` / `adopt`）が書かれている。
+    LeafFieldNotAllowed {
+        key: String,
+        field: &'static str,
+    },
+    /// D4 (2) (c): leaf に機械的な検査が無い。
+    LeafWithoutChecks {
+        key: String,
+    },
+    /// D4 (2) (b): leaf の `context.repo` が 2 つ以上。
+    LeafMultipleRepos {
+        key: String,
+        count: usize,
+    },
+    /// D4 (2) (a): leaf の予算が 1 run の上限を超える（/3 は丸めずに拒否する）。
+    LeafBudgetOverLimit {
+        key: String,
+        detail: String,
+    },
+    /// D2 / D15: `adopt` は人の計画（origin human）だけ。
+    AdoptNotAllowed {
+        key: String,
+    },
+    /// D7: 決定の形の誤り。
+    InvalidDecision {
+        detail: String,
+    },
+    DuplicateDecisionKey {
+        key: String,
+    },
+    /// D7: `needed_before` が計画に無い unit / 段階を指している。
+    UnknownNeededBefore {
+        key: String,
+        target: String,
+    },
+    /// D2: `needs_decisions` が計画に無い決定を指している。
+    UnknownNeedsDecision {
+        key: String,
+        decision: String,
+    },
+    /// D3 / D7: 計画あたりの未回答の決定の上限。
+    TooManyDecisions {
+        count: usize,
+        max: usize,
+    },
 }
 
 impl std::fmt::Display for PlanValidationError {
@@ -575,7 +964,7 @@ impl std::fmt::Display for PlanValidationError {
             PlanValidationError::WrongSchema { found } => {
                 write!(
                     f,
-                    "schema must be {EXECUTION_PLAN_SCHEMA} or {EXECUTION_PLAN_SCHEMA_V2}, found {found}"
+                    "schema must be {EXECUTION_PLAN_SCHEMA}, {EXECUTION_PLAN_SCHEMA_V2} or {EXECUTION_PLAN_SCHEMA_V3}, found {found}"
                 )
             }
             PlanValidationError::NoWorkUnits => write!(f, "work_units must not be empty"),
@@ -738,6 +1127,120 @@ impl std::fmt::Display for PlanValidationError {
                     "work unit {key}: keys starting with \"{INTEGRATE_KEY_PREFIX}\" are reserved for daemon-created integration work units（{DAEMON_ADDED_HINT}）"
                 )
             }
+            PlanValidationError::V3FieldNotAllowed { field } => write!(
+                f,
+                "{field} is only allowed in {EXECUTION_PLAN_SCHEMA_V3} (must be empty in v1/v2)"
+            ),
+            PlanValidationError::TaskKindRequiresV3 { key } => write!(
+                f,
+                "work unit {key}: kind \"task\" (a child task unit) is only allowed in {EXECUTION_PLAN_SCHEMA_V3}"
+            ),
+            PlanValidationError::TreeDisabled => write!(
+                f,
+                "{EXECUTION_PLAN_SCHEMA_V3} (recursive task decomposition, ADR-0079) is disabled: \
+                 set [execution.tree] enabled = true to adopt it, or write a {EXECUTION_PLAN_SCHEMA_V2} plan"
+            ),
+            PlanValidationError::V2FieldInV3 { field } => {
+                let hint = match *field {
+                    "children" => "use units with kind \"task\" instead",
+                    "phases" => "use stages instead",
+                    _ => "use units instead",
+                };
+                write!(
+                    f,
+                    "{field} is not allowed in {EXECUTION_PLAN_SCHEMA_V3} ({hint})"
+                )
+            }
+            PlanValidationError::NoStages => {
+                write!(f, "stages must not be empty in {EXECUTION_PLAN_SCHEMA_V3}")
+            }
+            PlanValidationError::TooManyStages { count, max } => {
+                write!(f, "too many stages: {count} > {max}")
+            }
+            PlanValidationError::InvalidStageKey { key } => write!(
+                f,
+                "invalid stage key: {key:?} (must match [a-z0-9-]{{1,32}})"
+            ),
+            PlanValidationError::DuplicateStageKey { key } => {
+                write!(f, "duplicate stage key: {key}")
+            }
+            PlanValidationError::InvalidStageKind { key } => write!(
+                f,
+                "stage {key}: kind \"task\" / \"integrate\" cannot be used for a stage"
+            ),
+            PlanValidationError::NoUnits => {
+                write!(f, "units must not be empty in {EXECUTION_PLAN_SCHEMA_V3}")
+            }
+            PlanValidationError::UnknownUnitStage { key, stage } => {
+                write!(f, "unit {key}: unknown stage {stage:?}")
+            }
+            PlanValidationError::TooManyUnitsInStage { stage, count, max } => write!(
+                f,
+                "stage {stage}: too many units: {count} > {max} (leaf + task; split the stage or group units into a child task)"
+            ),
+            PlanValidationError::TooManyChildTasks { count, max } => {
+                write!(f, "too many units with kind \"task\": {count} > {max}")
+            }
+            PlanValidationError::ChildTaskTooDeep {
+                key,
+                depth,
+                max_depth,
+            } => write!(
+                f,
+                "unit {key}: a task at depth {depth} cannot have child task units (max_depth = {max_depth} task levels); make it a leaf"
+            ),
+            PlanValidationError::ChildDependencyNotAllowed { key, depends_on } => write!(
+                f,
+                "unit {key}: depends_on {depends_on:?} uses the {EXECUTION_PLAN_SCHEMA_V2} \"{CHILD_DEP_PREFIX}\" prefix; depend on the key of a unit with kind \"task\" instead"
+            ),
+            PlanValidationError::TaskUnitNoAcceptance { key } => write!(
+                f,
+                "unit {key}: a unit with kind \"task\" must have at least one acceptance criterion"
+            ),
+            PlanValidationError::TaskUnitInvalidAcceptance { key, detail } => {
+                write!(f, "unit {key}: {detail}")
+            }
+            PlanValidationError::TaskUnitFieldNotAllowed { key, field } => write!(
+                f,
+                "unit {key}: a unit with kind \"task\" must not set {field} (the child task decides it)"
+            ),
+            PlanValidationError::LeafFieldNotAllowed { key, field } => write!(
+                f,
+                "unit {key}: {field} is only allowed on a unit with kind \"task\""
+            ),
+            PlanValidationError::LeafWithoutChecks { key } => write!(
+                f,
+                "unit {key}: a leaf must have at least one mechanical check (make it a unit with kind \"task\" or add checks)"
+            ),
+            PlanValidationError::LeafMultipleRepos { key, count } => write!(
+                f,
+                "unit {key}: a leaf works in at most one repository, found {count} in context.repo (make it a unit with kind \"task\" or split it)"
+            ),
+            PlanValidationError::LeafBudgetOverLimit { key, detail } => write!(
+                f,
+                "unit {key}: {detail} exceeds what one run can do (make it a unit with kind \"task\" or shrink it)"
+            ),
+            PlanValidationError::AdoptNotAllowed { key } => write!(
+                f,
+                "unit {key}: adopt is only allowed in a plan written by a human (origin human)"
+            ),
+            PlanValidationError::InvalidDecision { detail } => write!(f, "{detail}"),
+            PlanValidationError::DuplicateDecisionKey { key } => {
+                write!(f, "duplicate decision key: {key}")
+            }
+            PlanValidationError::UnknownNeededBefore { key, target } => write!(
+                f,
+                "decision {key}: needed_before {target:?} is neither a unit key nor stage:<key> of this plan"
+            ),
+            PlanValidationError::UnknownNeedsDecision { key, decision } => {
+                write!(
+                    f,
+                    "unit {key}: needs_decisions names unknown decision {decision}"
+                )
+            }
+            PlanValidationError::TooManyDecisions { count, max } => {
+                write!(f, "too many decisions in one plan: {count} > {max}")
+            }
         }
     }
 }
@@ -799,6 +1302,37 @@ pub fn validate(
     limits: ExecutionLimits,
     done_work_units: &[(String, WorkUnitSpec)],
 ) -> Result<ValidatedPlan, Vec<PlanValidationError>> {
+    validate_with(spec, limits, done_work_units, PlanContext::default())
+}
+
+/// ADR-0079（Phase R1a）: 計画を書いた者と、計画を持つ task の木の中の深さ。/3 の検証だけが見る
+/// （`adopt` は origin human だけ、kind task の unit は `depth < max_depth` のときだけ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanContext {
+    pub origin: PlanOrigin,
+    /// task の層数で数えた深さ（root = 1。`task_core::tree::depth_of`）。
+    pub depth: u32,
+}
+
+impl Default for PlanContext {
+    fn default() -> Self {
+        PlanContext {
+            origin: PlanOrigin::Planner,
+            depth: 1,
+        }
+    }
+}
+
+/// [`validate`] に計画の出どころと深さを添えたもの。/1・/2 は `ctx` を見ない（[`validate`] と同じ結果）。
+pub fn validate_with(
+    spec: &ExecutionPlanSpec,
+    limits: ExecutionLimits,
+    done_work_units: &[(String, WorkUnitSpec)],
+    ctx: PlanContext,
+) -> Result<ValidatedPlan, Vec<PlanValidationError>> {
+    if spec.schema == EXECUTION_PLAN_SCHEMA_V3 {
+        return validate_v3(spec, limits, done_work_units, ctx);
+    }
     let mut errors = Vec::new();
 
     // ADR-0074 D1.1（Phase F2）: `schema` の値で v1 / v2 を分ける。どちらでもなければ
@@ -872,6 +1406,22 @@ pub fn validate(
             errors.push(PlanValidationError::ReservedKey {
                 key: wu.key.clone(),
             });
+        }
+        // ADR-0079（Phase R1a）: `kind = task`（子 task の unit）は /3 だけ。
+        if wu.kind == WorkUnitKind::Task {
+            errors.push(PlanValidationError::TaskKindRequiresV3 {
+                key: wu.key.clone(),
+            });
+        }
+    }
+    // ADR-0079（Phase R1a）: /3 の欄は /1・/2 では空（`serde(default)` で読めるが採用しない）。
+    for (field, present) in [
+        ("stages", !spec.stages.is_empty()),
+        ("units", !spec.units.is_empty()),
+        ("decisions", !spec.decisions.is_empty()),
+    ] {
+        if present {
+            errors.push(PlanValidationError::V3FieldNotAllowed { field });
         }
     }
 
@@ -1208,6 +1758,429 @@ fn validate_children(
         }
     }
     errors
+}
+
+/// ADR-0079 D2 / D3 / D4 (2)（Phase R1a）: `celeris.execution-plan/3` の検証（純粋関数）。
+///
+/// - `[execution.tree] enabled = false` なら `TreeDisabled` だけを返す（他は見ない）。
+/// - 段階: 1..=`max_stages`、key の形・一意、kind に `task` / `integrate` を使わない。
+/// - unit: key の形・一意・`integrate-` の予約、段階は既知、段階あたり `max_units_per_stage`、
+///   kind task は計画あたり `max_child_tasks_per_plan` で `depth < max_depth` のときだけ。
+/// - kind task: `acceptance` 1 件以上（human には成果物）、`checks` / `budget` / `harness` /
+///   `context.paths` を持たない、`adopt` は origin human だけ。
+/// - leaf: kind task 専用の欄を持たない、`checks` 1 本以上、`context.repo` は高々 1、予算は 1 run の
+///   上限以内（/3 は丸めずに拒否）。
+/// - 依存: /2 の規則（既知の key、同じか前の段階、同じ段階の中は高々 1 つ）、`child:` は拒否、循環なし。
+/// - 決定: 形（D7）、key の一意、`needed_before` は既知の unit か `stage:<key>`、計画あたり
+///   `max_open_decisions_per_plan`。`needs_decisions` は既知の決定。
+/// - /2 と同じ: `features`・サイズの上限・重複の検出・replan の done の不変条件。
+fn validate_v3(
+    spec: &ExecutionPlanSpec,
+    limits: ExecutionLimits,
+    done_work_units: &[(String, WorkUnitSpec)],
+    ctx: PlanContext,
+) -> Result<ValidatedPlan, Vec<PlanValidationError>> {
+    let tree = limits.tree;
+    if !tree.enabled {
+        return Err(vec![PlanValidationError::TreeDisabled]);
+    }
+    let mut errors = Vec::new();
+
+    for (field, present) in [
+        ("phases", !spec.phases.is_empty()),
+        ("work_units", !spec.work_units.is_empty()),
+        ("children", !spec.children.is_empty()),
+    ] {
+        if present {
+            errors.push(PlanValidationError::V2FieldInV3 { field });
+        }
+    }
+
+    // 段階。
+    if spec.stages.is_empty() {
+        errors.push(PlanValidationError::NoStages);
+    }
+    if spec.stages.len() > tree.max_stages {
+        errors.push(PlanValidationError::TooManyStages {
+            count: spec.stages.len(),
+            max: tree.max_stages,
+        });
+    }
+    let mut seen_stage_keys: BTreeSet<&str> = BTreeSet::new();
+    for s in &spec.stages {
+        if !valid_key(&s.key) {
+            errors.push(PlanValidationError::InvalidStageKey { key: s.key.clone() });
+            continue;
+        }
+        if !seen_stage_keys.insert(s.key.as_str()) {
+            errors.push(PlanValidationError::DuplicateStageKey { key: s.key.clone() });
+        }
+        if matches!(s.kind, WorkUnitKind::Task | WorkUnitKind::Integrate) {
+            errors.push(PlanValidationError::InvalidStageKind { key: s.key.clone() });
+        }
+    }
+    let stage_index: BTreeMap<&str, usize> = spec
+        .stages
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.key.as_str(), i))
+        .collect();
+
+    // unit の key・kind・段階。
+    if spec.units.is_empty() {
+        errors.push(PlanValidationError::NoUnits);
+    }
+    let mut seen_keys: BTreeSet<&str> = BTreeSet::new();
+    for u in &spec.units {
+        if !valid_key(&u.key) {
+            errors.push(PlanValidationError::InvalidKey { key: u.key.clone() });
+            continue;
+        }
+        if !seen_keys.insert(u.key.as_str()) {
+            errors.push(PlanValidationError::DuplicateKey { key: u.key.clone() });
+        }
+        if u.key.starts_with(INTEGRATE_KEY_PREFIX) {
+            errors.push(PlanValidationError::ReservedKey { key: u.key.clone() });
+        }
+        if u.kind == WorkUnitKind::Integrate {
+            errors.push(PlanValidationError::ReservedKind { key: u.key.clone() });
+        }
+        if !stage_index.contains_key(u.stage.as_str()) {
+            errors.push(PlanValidationError::UnknownUnitStage {
+                key: u.key.clone(),
+                stage: u.stage.clone(),
+            });
+        }
+    }
+    for s in &spec.stages {
+        let count = spec.units.iter().filter(|u| u.stage == s.key).count();
+        if count > tree.max_units_per_stage {
+            errors.push(PlanValidationError::TooManyUnitsInStage {
+                stage: s.key.clone(),
+                count,
+                max: tree.max_units_per_stage,
+            });
+        }
+    }
+    let task_units = spec.units.iter().filter(|u| u.is_task()).count();
+    if task_units > tree.max_child_tasks_per_plan {
+        errors.push(PlanValidationError::TooManyChildTasks {
+            count: task_units,
+            max: tree.max_child_tasks_per_plan,
+        });
+    }
+
+    // kind task / leaf の欄。
+    for u in &spec.units {
+        let key = u.key.clone();
+        if u.is_task() {
+            if !crate::tree::can_have_child_tasks(ctx.depth, tree.max_depth) {
+                errors.push(PlanValidationError::ChildTaskTooDeep {
+                    key: key.clone(),
+                    depth: ctx.depth,
+                    max_depth: tree.max_depth,
+                });
+            }
+            if u.acceptance.is_empty() {
+                errors.push(PlanValidationError::TaskUnitNoAcceptance { key: key.clone() });
+            } else if let Err(detail) =
+                crate::model::validate_human_checks_have_deliverable(&u.acceptance)
+            {
+                errors.push(PlanValidationError::TaskUnitInvalidAcceptance {
+                    key: key.clone(),
+                    detail,
+                });
+            }
+            for (field, present) in [
+                ("checks", !u.checks.is_empty()),
+                ("budget", u.budget.is_some()),
+                ("harness", u.harness.is_some()),
+                ("context.paths", !u.context.paths.is_empty()),
+            ] {
+                if present {
+                    errors.push(PlanValidationError::TaskUnitFieldNotAllowed {
+                        key: key.clone(),
+                        field,
+                    });
+                }
+            }
+            if u.adopt.is_some() && ctx.origin != PlanOrigin::Human {
+                errors.push(PlanValidationError::AdoptNotAllowed { key: key.clone() });
+            }
+        } else {
+            for (field, present) in [
+                ("acceptance", !u.acceptance.is_empty()),
+                ("genre", u.genre.is_some()),
+                ("skills", !u.skills.is_empty()),
+                ("repos", !u.repos.is_empty()),
+                ("adopt", u.adopt.is_some()),
+            ] {
+                if present {
+                    errors.push(PlanValidationError::LeafFieldNotAllowed {
+                        key: key.clone(),
+                        field,
+                    });
+                }
+            }
+            if u.checks.is_empty() {
+                errors.push(PlanValidationError::LeafWithoutChecks { key: key.clone() });
+            }
+            let repo_count = u
+                .context
+                .repo
+                .as_ref()
+                .map(RepoSelector::count)
+                .unwrap_or(0);
+            if repo_count > 1 {
+                errors.push(PlanValidationError::LeafMultipleRepos {
+                    key: key.clone(),
+                    count: repo_count,
+                });
+            }
+            if let Some(budget) = u.budget {
+                if let Some(turns) = budget.max_turns
+                    && turns > limits.work_unit_max_turns
+                {
+                    errors.push(PlanValidationError::LeafBudgetOverLimit {
+                        key: key.clone(),
+                        detail: format!(
+                            "budget.max_turns {turns} > {}",
+                            limits.work_unit_max_turns
+                        ),
+                    });
+                }
+                if let Some(wall) = budget.max_wall_secs
+                    && wall > limits.work_unit_max_wall_secs
+                {
+                    errors.push(PlanValidationError::LeafBudgetOverLimit {
+                        key: key.clone(),
+                        detail: format!(
+                            "budget.max_wall_secs {wall} > {}",
+                            limits.work_unit_max_wall_secs
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // 依存（/2 の規則 + `child:` の拒否）。
+    let known_keys: BTreeSet<&str> = spec.units.iter().map(|u| u.key.as_str()).collect();
+    let unit_stage_of: BTreeMap<&str, usize> = spec
+        .units
+        .iter()
+        .filter_map(|u| {
+            stage_index
+                .get(u.stage.as_str())
+                .map(|&i| (u.key.as_str(), i))
+        })
+        .collect();
+    for u in &spec.units {
+        let mut intra_stage_deps = 0usize;
+        for dep in &u.depends_on {
+            if dep.starts_with(CHILD_DEP_PREFIX) {
+                errors.push(PlanValidationError::ChildDependencyNotAllowed {
+                    key: u.key.clone(),
+                    depends_on: dep.clone(),
+                });
+                continue;
+            }
+            if !known_keys.contains(dep.as_str()) {
+                errors.push(PlanValidationError::UnknownDependency {
+                    key: u.key.clone(),
+                    depends_on: dep.clone(),
+                });
+                continue;
+            }
+            let (Some(&own), Some(&other)) = (
+                unit_stage_of.get(u.key.as_str()),
+                unit_stage_of.get(dep.as_str()),
+            ) else {
+                continue;
+            };
+            match other.cmp(&own) {
+                std::cmp::Ordering::Greater => {
+                    errors.push(PlanValidationError::DependencyInLaterPhase {
+                        key: u.key.clone(),
+                        depends_on: dep.clone(),
+                    })
+                }
+                std::cmp::Ordering::Equal => intra_stage_deps += 1,
+                std::cmp::Ordering::Less => {}
+            }
+        }
+        if intra_stage_deps > 1 {
+            errors.push(PlanValidationError::TooManyIntraPhaseDependencies {
+                key: u.key.clone(),
+                phase: u.stage.clone(),
+            });
+        }
+    }
+
+    // 決定（D7）。
+    let decisions = normalized_decisions(spec);
+    let mut decision_keys: BTreeSet<&str> = BTreeSet::new();
+    for d in &decisions {
+        for e in crate::decision::validate_shape(d) {
+            errors.push(PlanValidationError::InvalidDecision {
+                detail: e.to_string(),
+            });
+        }
+        if !decision_keys.insert(d.key.as_str()) {
+            errors.push(PlanValidationError::DuplicateDecisionKey { key: d.key.clone() });
+        }
+        for target in &d.needed_before {
+            let known = match target.strip_prefix(crate::decision::NEEDED_BEFORE_STAGE_PREFIX) {
+                Some(stage) => stage_index.contains_key(stage),
+                None => known_keys.contains(target.as_str()),
+            };
+            if !known {
+                errors.push(PlanValidationError::UnknownNeededBefore {
+                    key: d.key.clone(),
+                    target: target.clone(),
+                });
+            }
+        }
+    }
+    if decisions.len() > tree.max_open_decisions_per_plan {
+        errors.push(PlanValidationError::TooManyDecisions {
+            count: decisions.len(),
+            max: tree.max_open_decisions_per_plan,
+        });
+    }
+    for u in &spec.units {
+        for d in &u.needs_decisions {
+            if !decision_keys.contains(d.as_str()) {
+                errors.push(PlanValidationError::UnknownNeedsDecision {
+                    key: u.key.clone(),
+                    decision: d.clone(),
+                });
+            }
+        }
+    }
+
+    // /2 と同じ検査（`features`・サイズ・重複・replan の不変条件）は /2 の形に写して行う。
+    let internal = internal_view(spec);
+    for wu in &internal.work_units {
+        if let Some(features) = &wu.features
+            && let Err(e) =
+                serde_json::from_value::<crate::model_policy::TaskFeatureHints>(features.clone())
+        {
+            errors.push(PlanValidationError::InvalidFeatures {
+                key: wu.key.clone(),
+                detail: e.to_string(),
+            });
+        }
+    }
+    let rationale_len = spec.rationale.chars().count();
+    if rationale_len > limits.max_rationale_chars {
+        errors.push(PlanValidationError::RationaleTooLong {
+            len: rationale_len,
+            max: limits.max_rationale_chars,
+        });
+    }
+    for wu in &internal.work_units {
+        let title_len = wu.title.chars().count();
+        if title_len > limits.max_title_chars {
+            errors.push(PlanValidationError::TitleTooLong {
+                key: wu.key.clone(),
+                len: title_len,
+                max: limits.max_title_chars,
+            });
+        }
+        let objective_len = wu.objective.chars().count();
+        if objective_len > limits.max_objective_chars {
+            errors.push(PlanValidationError::ObjectiveTooLong {
+                key: wu.key.clone(),
+                len: objective_len,
+                max: limits.max_objective_chars,
+            });
+        }
+        if wu.done_when.len() > limits.max_done_when_items {
+            errors.push(PlanValidationError::TooManyDoneWhen {
+                key: wu.key.clone(),
+                count: wu.done_when.len(),
+                max: limits.max_done_when_items,
+            });
+        }
+        for (index, item) in wu.done_when.iter().enumerate() {
+            let len = item.chars().count();
+            if len > limits.max_done_when_chars {
+                errors.push(PlanValidationError::DoneWhenItemTooLong {
+                    key: wu.key.clone(),
+                    index,
+                    len,
+                    max: limits.max_done_when_chars,
+                });
+            }
+        }
+        if wu.checks.len() > limits.max_checks {
+            errors.push(PlanValidationError::TooManyChecks {
+                key: wu.key.clone(),
+                count: wu.checks.len(),
+                max: limits.max_checks,
+            });
+        }
+    }
+    let plan_bytes = serde_json::to_vec(spec).map(|v| v.len()).unwrap_or(0);
+    if plan_bytes > limits.max_plan_json_bytes {
+        errors.push(PlanValidationError::PlanTooLarge {
+            bytes: plan_bytes,
+            max: limits.max_plan_json_bytes,
+        });
+    }
+
+    let mut topological_order = Vec::new();
+    if errors.is_empty() {
+        match topo_sort(&internal.work_units, &stage_index) {
+            Ok(order) => topological_order = order,
+            Err(cycle) => errors.push(PlanValidationError::CyclicDependency { cycle }),
+        }
+    }
+
+    for i in 0..internal.work_units.len() {
+        for j in (i + 1)..internal.work_units.len() {
+            let a = &internal.work_units[i];
+            let b = &internal.work_units[j];
+            if normalize_title(&a.title) == normalize_title(&b.title) && !a.title.is_empty() {
+                errors.push(PlanValidationError::DuplicateWorkUnit {
+                    a: a.key.clone(),
+                    b: b.key.clone(),
+                    reason: "identical normalized title".to_string(),
+                });
+                continue;
+            }
+            let sim = jaccard(&token_set(&a.objective), &token_set(&b.objective));
+            if sim >= 0.9 {
+                errors.push(PlanValidationError::DuplicateWorkUnit {
+                    a: a.key.clone(),
+                    b: b.key.clone(),
+                    reason: format!("objective token overlap {sim:.2}"),
+                });
+            }
+        }
+    }
+
+    let by_key: BTreeMap<&str, &WorkUnitSpec> = internal
+        .work_units
+        .iter()
+        .map(|w| (w.key.as_str(), w))
+        .collect();
+    for (key, done_spec) in done_work_units {
+        match by_key.get(key.as_str()) {
+            Some(new_spec) if *new_spec == done_spec => {}
+            _ => errors.push(PlanValidationError::DoneWorkUnitChanged { key: key.clone() }),
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(ValidatedPlan {
+        spec: spec.clone(),
+        rounding_notes: Vec::new(),
+        topological_order,
+    })
 }
 
 /// ADR-0074 D3.7（Phase F4b (f)）: `newly_ready` の一般化。`external_done` は満たされた外部の依存
@@ -1591,6 +2564,12 @@ pub struct WorkUnitRow {
     pub head_commit: Option<String>,
     /// ADR-0074 D1.4: `PhaseIntegrated` の Task ブランチの HEAD（統合 WU の行だけ）。
     pub integrated_commit: Option<String>,
+    /// ADR-0079 D4 (4) / D15（migration 0030）: kind task の unit の子 task（`ChildTaskCreated` /
+    /// `ChildAdopted` の写し。leaf・統合 WU は `None`）。
+    pub child_task_id: Option<String>,
+    /// ADR-0079 D7（migration 0030）: この unit が回答を待つ決定の key（/3 の
+    /// [`effective_needs_decisions`]。/1・/2 は空）。
+    pub needs_decisions: Vec<String>,
 }
 
 impl WorkUnitRow {
@@ -1628,6 +2607,8 @@ impl WorkUnitRow {
             base_commit: None,
             head_commit: None,
             integrated_commit: None,
+            child_task_id: None,
+            needs_decisions: Vec::new(),
         }
     }
 
@@ -1738,6 +2719,8 @@ pub fn runnable_work_units(units: &[WorkUnitRow], in_flight: usize, limit: usize
         .into_iter()
         .filter(|u| u.spec.phase.as_deref() == current_phase)
         .filter(|u| u.kind != WorkUnitKind::Integrate)
+        // ADR-0079（Phase R1a）: kind task の unit は子 task の代理で、LLM run を起こさない（R1b）。
+        .filter(|u| u.kind != WorkUnitKind::Task)
         .collect();
 
     let has_failed_or_blocked = in_phase
@@ -1839,9 +2822,11 @@ pub fn integrate_key(phase: &str) -> String {
 /// その工程のすべての WU）。計画の spec（`ExecutionPlanned.plan`）には入れない（daemon が足す
 /// system WU。`max_work_units` にも数えない）。v1 は空。
 pub fn integration_work_unit_specs(spec: &ExecutionPlanSpec) -> Vec<WorkUnitSpec> {
-    if spec.schema != EXECUTION_PLAN_SCHEMA_V2 {
+    if !is_phased_schema(&spec.schema) {
         return Vec::new();
     }
+    // ADR-0079（Phase R1a）: /3 は段階を工程として同じ統合 WU を足す（`internal_view`）。
+    let spec = internal_view(spec);
     spec.phases
         .iter()
         .map(|p| WorkUnitSpec {
@@ -1878,9 +2863,12 @@ pub const DAEMON_ADDED_HINT: &str = "daemon が足した WU（kind = integrate �
 /// 無い WU（統合の repair WU）。planner の視野に無いので、replan の done の不変条件の対象にしない。
 pub fn is_daemon_added_work_unit(active: &ExecutionPlanSpec, row: &WorkUnitRow) -> bool {
     row.kind == WorkUnitKind::Integrate
-        || (active.schema == EXECUTION_PLAN_SCHEMA_V2
+        || (is_phased_schema(&active.schema)
             && row.phase.is_some()
-            && !active.work_units.iter().any(|w| w.key == row.key))
+            && !internal_view(active)
+                .work_units
+                .iter()
+                .any(|w| w.key == row.key))
 }
 
 /// ADR-0074 D5.3/D1.4（F5-fix）: replan の `validate` に渡す done の WU（`(key, spec)`）。
@@ -1902,14 +2890,17 @@ pub fn materialized_order(
     spec: &ExecutionPlanSpec,
     topological_order: &[usize],
 ) -> Vec<WorkUnitSpec> {
+    // ADR-0079（Phase R1a）: /3 は `units` を /2 の `work_units` の形に写してから並べる
+    // （`topological_order` は `units` の index。写しても index は変わらない）。
+    let integrations = integration_work_unit_specs(spec);
+    let spec = internal_view(spec);
     let in_order: Vec<WorkUnitSpec> = topological_order
         .iter()
         .filter_map(|&i| spec.work_units.get(i).cloned())
         .collect();
-    if spec.schema != EXECUTION_PLAN_SCHEMA_V2 {
+    if !is_phased_schema(&spec.schema) {
         return in_order;
     }
-    let integrations = integration_work_unit_specs(spec);
     let mut out = Vec::with_capacity(in_order.len() + integrations.len());
     for (phase, integrate) in spec.phases.iter().zip(integrations) {
         out.extend(
@@ -1935,7 +2926,8 @@ pub fn materialize_work_units(
     created_at: &str,
     id_of: &mut dyn FnMut(&WorkUnitSpec) -> String,
 ) -> Vec<WorkUnitRow> {
-    let v2 = spec.schema == EXECUTION_PLAN_SCHEMA_V2;
+    let v2 = is_phased_schema(&spec.schema);
+    let v3 = spec.schema == EXECUTION_PLAN_SCHEMA_V3;
     let mut rows: Vec<WorkUnitRow> = materialized_order(spec, topological_order)
         .into_iter()
         .enumerate()
@@ -1956,6 +2948,12 @@ pub fn materialize_work_units(
             )
         })
         .collect();
+    // ADR-0079 D7（Phase R1a）: /3 の unit が回答を待つ決定（`work_units.needs_decisions_json`）。
+    if v3 {
+        for r in rows.iter_mut() {
+            r.needs_decisions = effective_needs_decisions(spec, &r.key);
+        }
+    }
     if v2 {
         let ready = newly_ready(&rows);
         for r in rows.iter_mut() {
@@ -2044,6 +3042,9 @@ mod tests {
 
     fn plan(work_units: Vec<WorkUnitSpec>) -> ExecutionPlanSpec {
         ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "test".to_string(),
             work_units,
@@ -2070,6 +3071,9 @@ mod tests {
 
     fn plan_v2(phases: Vec<PhaseSpec>, work_units: Vec<WorkUnitSpec>) -> ExecutionPlanSpec {
         ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "test v2".to_string(),
             work_units,
@@ -3128,5 +4132,699 @@ mod tests {
             "{msg}"
         );
         assert!(msg.contains("daemon が足した WU"), "{msg}");
+    }
+
+    // ---- ADR-0079 R1a (a): /1・/2 の fixture の検証結果と出力 JSON が変わらないこと ----
+
+    /// fixture 1 本の「検証の結果と出力」を決定的な JSON にする（parse → 再直列化、検証の結果、
+    /// 採用時の行）。スナップショットは R1a の変更の**前**のコードで作った（`UPDATE_PLAN_FIXTURES=1`）。
+    fn fixture_outcome(text: &str) -> serde_json::Value {
+        let spec: ExecutionPlanSpec = match serde_json::from_str(text) {
+            Ok(s) => s,
+            Err(e) => return serde_json::json!({ "parse_error": e.to_string() }),
+        };
+        let reserialized = serde_json::to_string(&spec).unwrap();
+        match validate(&spec, ExecutionLimits::default(), &[]) {
+            Err(errors) => serde_json::json!({
+                "reserialized": reserialized,
+                "errors": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+            }),
+            Ok(v) => {
+                let rows = materialize_work_units(
+                    "task",
+                    "plan",
+                    &v.spec,
+                    &v.topological_order,
+                    "T",
+                    &mut |w| format!("id-{}", w.key),
+                );
+                let rows: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "id": r.id, "key": r.key, "seq": r.seq, "kind": r.kind.as_str(),
+                            "status": r.status.as_str(), "phase": r.phase,
+                            "depends_on": r.depends_on,
+                            "spec": serde_json::to_string(&r.spec).unwrap(),
+                        })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "reserialized": reserialized,
+                    "validated": serde_json::to_string(&v.spec).unwrap(),
+                    "topological_order": v.topological_order,
+                    "rounding_notes": v.rounding_notes,
+                    "rows": rows,
+                })
+            }
+        }
+    }
+
+    #[test]
+    fn plan_v1_and_v2_fixtures_are_byte_identical() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/execution-plan");
+        for name in [
+            "v1-basic",
+            "v1-invalid",
+            "v2-phases",
+            "v2-children",
+            "v2-invalid",
+        ] {
+            let input = std::fs::read_to_string(format!("{dir}/{name}.json")).unwrap();
+            let outcome = serde_json::to_string_pretty(&fixture_outcome(&input)).unwrap() + "\n";
+            let snap_path = format!("{dir}/{name}.expected.json");
+            if std::env::var_os("UPDATE_PLAN_FIXTURES").is_some() {
+                std::fs::write(&snap_path, &outcome).unwrap();
+            }
+            let expected = std::fs::read_to_string(&snap_path)
+                .unwrap_or_else(|e| panic!("read {snap_path}: {e}"));
+            assert_eq!(expected, outcome, "fixture {name} changed");
+        }
+    }
+
+    // ---- ADR-0079（Phase R1a）: `celeris.execution-plan/3` ----
+
+    fn tree_on() -> ExecutionLimits {
+        ExecutionLimits {
+            tree: crate::tree::TreeLimits {
+                enabled: true,
+                ..crate::tree::TreeLimits::default()
+            },
+            ..ExecutionLimits::default()
+        }
+    }
+
+    fn v3_fixture() -> ExecutionPlanSpec {
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/execution-plan/v3-browser.json"
+        ))
+        .unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn v3_errors(spec: &ExecutionPlanSpec) -> Vec<PlanValidationError> {
+        validate(spec, tree_on(), &[]).expect_err("must be rejected")
+    }
+
+    fn leaf(key: &str, stage: &str) -> PlanUnitSpec {
+        PlanUnitSpec {
+            key: key.into(),
+            stage: stage.into(),
+            kind: WorkUnitKind::Implement,
+            title: format!("leaf {key}"),
+            objective: format!("objective of leaf {key} that is distinct"),
+            depends_on: vec![],
+            needs_decisions: vec![],
+            decisions: vec![],
+            acceptance: vec![],
+            genre: None,
+            skills: vec![],
+            repos: vec![],
+            adopt: None,
+            done_when: vec![],
+            checks: vec![WorkUnitCheck {
+                cmd: "true".into(),
+                expect_exit: 0,
+            }],
+            context: UnitContext::default(),
+            harness: None,
+            budget: None,
+            outputs: vec![],
+            features: None,
+        }
+    }
+
+    fn task_unit(key: &str, stage: &str) -> PlanUnitSpec {
+        PlanUnitSpec {
+            kind: WorkUnitKind::Task,
+            title: format!("task {key}"),
+            objective: format!("objective of child task {key} which differs"),
+            checks: vec![],
+            acceptance: vec![crate::model::Criterion {
+                text: "ok".into(),
+                check: crate::model::Check::Reviewer,
+            }],
+            ..leaf(key, stage)
+        }
+    }
+
+    /// R1a (a): /3 の fixture が通り、段階ごとに統合 WU が付き、kind task の unit は `task` の行になり、
+    /// 回答を待つ決定（`needs_decisions` と `needed_before`）が行に写る。最初の段階だけが ready。
+    #[test]
+    fn v3_fixture_validates_and_materializes_stages_units_and_decisions() {
+        let spec = v3_fixture();
+        let v = validate(&spec, tree_on(), &[]).expect("valid /3");
+        assert!(v.rounding_notes.is_empty());
+        // JSON の往復（/3 は `stages`/`units`/`decisions` を出し、/2 の欄は空のまま）。
+        let back: ExecutionPlanSpec =
+            serde_json::from_str(&serde_json::to_string(&v.spec).unwrap()).unwrap();
+        assert_eq!(back, spec);
+        assert!(spec.work_units.is_empty() && spec.phases.is_empty());
+
+        let rows =
+            materialize_work_units("t", "plan", &v.spec, &v.topological_order, "T", &mut |w| {
+                format!("id-{}", w.key)
+            });
+        type RowSummary<'a> = (String, &'a str, &'a str, Option<String>, Vec<String>);
+        let summary: Vec<RowSummary> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.key.clone(),
+                    r.kind.as_str(),
+                    r.status.as_str(),
+                    r.phase.clone(),
+                    r.needs_decisions.clone(),
+                )
+            })
+            .collect();
+        let s = |x: &str| x.to_string();
+        assert_eq!(
+            summary,
+            vec![
+                (s("p1"), "task", "ready", Some(s("phase-1")), vec![]),
+                (s("p1-note"), "design", "ready", Some(s("phase-1")), vec![]),
+                (
+                    s("integrate-phase-1"),
+                    "integrate",
+                    "pending",
+                    Some(s("phase-1")),
+                    vec![]
+                ),
+                (
+                    s("p2-a"),
+                    "task",
+                    "pending",
+                    Some(s("phase-2")),
+                    vec![s("h2")]
+                ),
+                (
+                    s("p2-b"),
+                    "task",
+                    "pending",
+                    Some(s("phase-2")),
+                    vec![s("h1"), s("h3")]
+                ),
+                (
+                    s("integrate-phase-2"),
+                    "integrate",
+                    "pending",
+                    Some(s("phase-2")),
+                    vec![]
+                ),
+                (
+                    s("p3"),
+                    "implement",
+                    "pending",
+                    Some(s("phase-3")),
+                    vec![s("h2")]
+                ),
+                (
+                    s("integrate-phase-3"),
+                    "integrate",
+                    "pending",
+                    Some(s("phase-3")),
+                    vec![]
+                ),
+            ]
+        );
+        // 統合 WU は段階のすべての unit（子 task を含む）に依存する。
+        let integ2 = rows.iter().find(|r| r.key == "integrate-phase-2").unwrap();
+        assert_eq!(
+            integ2.depends_on,
+            vec!["p2-a".to_string(), "p2-b".to_string()]
+        );
+        // kind task の unit は LLM run を起こさない（scheduler の候補にならない。子の生成は R1b）。
+        assert_eq!(
+            runnable_work_units(&rows, 0, 3),
+            vec!["id-p1-note".to_string()]
+        );
+        // unit の `decisions` は計画の決定に `needed_before: [<unit>]` を付けて読む。
+        let all = normalized_decisions(&spec);
+        assert_eq!(
+            all.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(),
+            vec!["h1", "h2", "h3"]
+        );
+        assert_eq!(all[2].needed_before, vec!["p2-b".to_string()]);
+    }
+
+    /// R1a (c): `[execution.tree] enabled = false`（既定）なら /3 は `TreeDisabled` だけで拒否される。
+    #[test]
+    fn v3_is_rejected_when_tree_is_disabled() {
+        let errs = validate(&v3_fixture(), ExecutionLimits::default(), &[]).unwrap_err();
+        assert_eq!(errs, vec![PlanValidationError::TreeDisabled]);
+        let msg = errs[0].to_string();
+        assert!(msg.contains("[execution.tree] enabled = true"), "{msg}");
+        assert!(msg.contains(EXECUTION_PLAN_SCHEMA_V3), "{msg}");
+    }
+
+    /// R1a (b): leaf に機械的な検査が無い。
+    #[test]
+    fn rejects_leaf_without_checks() {
+        let mut p = v3_fixture();
+        p.units[1].checks.clear();
+        let errs = v3_errors(&p);
+        assert!(
+            errs.contains(&PlanValidationError::LeafWithoutChecks {
+                key: "p1-note".into()
+            }),
+            "{errs:?}"
+        );
+        assert!(errs.iter().any(|e| e.to_string().contains("task")));
+    }
+
+    /// R1a (b): leaf の `context.repo` が 2 つ。
+    #[test]
+    fn rejects_leaf_with_two_repos() {
+        let mut p = v3_fixture();
+        p.units[1].context.repo = Some(RepoSelector::Many(vec!["a".into(), "b".into()]));
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::LeafMultipleRepos {
+                key: "p1-note".into(),
+                count: 2
+            })
+        );
+        // 1 つなら文字列でも配列でも通る。
+        p.units[1].context.repo = Some(RepoSelector::Many(vec!["a".into()]));
+        validate(&p, tree_on(), &[]).expect("one repo is fine");
+    }
+
+    /// R1a (b): kind task の unit に `checks`（と `budget` / `harness` / `context.paths`）。
+    #[test]
+    fn rejects_task_unit_with_checks() {
+        let mut p = v3_fixture();
+        p.units[0].checks = vec![WorkUnitCheck {
+            cmd: "true".into(),
+            expect_exit: 0,
+        }];
+        p.units[0].budget = Some(WorkUnitBudget {
+            max_turns: Some(10),
+            max_wall_secs: None,
+        });
+        p.units[0].harness = Some("claude-code".into());
+        p.units[0].context.paths = vec!["src/".into()];
+        let errs = v3_errors(&p);
+        for field in ["checks", "budget", "harness", "context.paths"] {
+            assert!(
+                errs.contains(&PlanValidationError::TaskUnitFieldNotAllowed {
+                    key: "p1".into(),
+                    field
+                }),
+                "{field}: {errs:?}"
+            );
+        }
+    }
+
+    /// R1a (b): kind task の unit に `acceptance` が無い。
+    #[test]
+    fn rejects_task_unit_without_acceptance() {
+        let mut p = v3_fixture();
+        p.units[0].acceptance.clear();
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::TaskUnitNoAcceptance { key: "p1".into() })
+        );
+        // human の受け入れ条件には成果物が要る（ADR-0067 D2。子の生成と同じ規則）。
+        let mut p = v3_fixture();
+        p.units[3].acceptance.truncate(1);
+        assert!(v3_errors(&p).iter().any(|e| matches!(
+            e,
+            PlanValidationError::TaskUnitInvalidAcceptance { key, .. } if key == "p2-b"
+        )));
+    }
+
+    /// R1a (b): /2 の `child:<key>` の依存は /3 では書けない。
+    #[test]
+    fn rejects_child_prefix_dependency_in_v3() {
+        let mut p = v3_fixture();
+        p.units[4].depends_on = vec!["child:p2-b".into()];
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::ChildDependencyNotAllowed {
+                key: "p3".into(),
+                depends_on: "child:p2-b".into()
+            })
+        );
+    }
+
+    /// R1a (b): /2 の `children` は /3 では書けない（`phases` / `work_units` も）。
+    #[test]
+    fn rejects_children_in_v3() {
+        let mut p = v3_fixture();
+        p.children = vec![child("c", &[])];
+        p.phases = vec![phase("x")];
+        p.work_units = vec![spec("w", &[])];
+        let errs = v3_errors(&p);
+        for field in ["children", "phases", "work_units"] {
+            assert!(
+                errs.contains(&PlanValidationError::V2FieldInV3 { field }),
+                "{field}: {errs:?}"
+            );
+        }
+        assert!(
+            PlanValidationError::V2FieldInV3 { field: "children" }
+                .to_string()
+                .contains("kind \"task\"")
+        );
+    }
+
+    /// R1a (b): 依存の循環（同じ段階の中で互いに依存）。
+    #[test]
+    fn rejects_cycle_in_v3() {
+        let mut p = v3_fixture();
+        // phase-2 の p2-a -> p2-b -> p2-a（どちらも同じ段階の依存は 1 つだけ）。
+        p.units[2].depends_on = vec!["p2-b".into()];
+        let errs = v3_errors(&p);
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, PlanValidationError::CyclicDependency { .. })),
+            "{errs:?}"
+        );
+    }
+
+    /// R1a (b): `needed_before` が計画に無い unit / 段階を指す。
+    #[test]
+    fn rejects_unknown_needed_before() {
+        let mut p = v3_fixture();
+        p.decisions[0].needed_before = vec!["nope".into(), "stage:phase-9".into()];
+        let errs = v3_errors(&p);
+        for target in ["nope", "stage:phase-9"] {
+            assert!(
+                errs.contains(&PlanValidationError::UnknownNeededBefore {
+                    key: "h1".into(),
+                    target: target.into()
+                }),
+                "{target}: {errs:?}"
+            );
+        }
+        // 空の `needed_before`（何を止めるか書いていない）も拒否。
+        let mut p = v3_fixture();
+        p.decisions[0].needed_before.clear();
+        assert!(v3_errors(&p).iter().any(|e| matches!(
+            e,
+            PlanValidationError::InvalidDecision { detail } if detail.contains("needed_before")
+        )));
+    }
+
+    /// R1a (b): `needs_decisions` が計画に無い決定を指す。
+    #[test]
+    fn rejects_unknown_needs_decision() {
+        let mut p = v3_fixture();
+        p.units[2].needs_decisions = vec!["h9".into()];
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::UnknownNeedsDecision {
+                key: "p2-a".into(),
+                decision: "h9".into()
+            })
+        );
+    }
+
+    /// R1a (b): 段階あたり 7 unit（既定の上限 6）。
+    #[test]
+    fn rejects_seven_units_in_a_stage() {
+        let mut p = v3_fixture();
+        for i in 0..5 {
+            p.units.push(leaf(&format!("extra-{i}"), "phase-1"));
+        }
+        assert_eq!(p.units.iter().filter(|u| u.stage == "phase-1").count(), 7);
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::TooManyUnitsInStage {
+                stage: "phase-1".into(),
+                count: 7,
+                max: 6
+            })
+        );
+        p.units.pop();
+        validate(&p, tree_on(), &[]).expect("6 units fit");
+    }
+
+    /// R1a (b): 決定 9 件（計画あたりの上限 8）。
+    #[test]
+    fn rejects_nine_decisions() {
+        let mut p = v3_fixture();
+        let template = p.decisions[0].clone();
+        for i in 0..6 {
+            let mut d = template.clone();
+            d.key = format!("x{i}");
+            p.decisions.push(d);
+        }
+        assert_eq!(normalized_decisions(&p).len(), 9);
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::TooManyDecisions { count: 9, max: 8 })
+        );
+        p.decisions.pop();
+        validate(&p, tree_on(), &[]).expect("8 decisions fit");
+    }
+
+    /// D2: 決定の key の重複と形（選択肢 1 つ・推奨が選択肢に無い）。
+    #[test]
+    fn rejects_duplicate_and_malformed_decisions() {
+        let mut p = v3_fixture();
+        p.decisions[1].key = "h1".into();
+        p.decisions[0].options.truncate(1);
+        let errs = v3_errors(&p);
+        assert!(errs.contains(&PlanValidationError::DuplicateDecisionKey { key: "h1".into() }));
+        assert!(errs.iter().any(|e| matches!(
+            e,
+            PlanValidationError::InvalidDecision { detail } if detail.contains("options")
+        )));
+    }
+
+    /// U-R1: kind task の unit は `depth < max_depth` の task の計画だけ（既定 3 層: root・子は可、孫は不可）。
+    #[test]
+    fn rejects_task_unit_at_max_depth() {
+        let p = v3_fixture();
+        for depth in [1, 2] {
+            validate_with(
+                &p,
+                tree_on(),
+                &[],
+                PlanContext {
+                    origin: PlanOrigin::Planner,
+                    depth,
+                },
+            )
+            .unwrap_or_else(|e| panic!("depth {depth}: {e:?}"));
+        }
+        let errs = validate_with(
+            &p,
+            tree_on(),
+            &[],
+            PlanContext {
+                origin: PlanOrigin::Planner,
+                depth: 3,
+            },
+        )
+        .unwrap_err();
+        assert!(errs.contains(&PlanValidationError::ChildTaskTooDeep {
+            key: "p1".into(),
+            depth: 3,
+            max_depth: 3
+        }));
+        // leaf だけの計画は最下段（depth 3）でも書ける。
+        let mut leaves_only = p.clone();
+        leaves_only.units.retain(|u| !u.is_task());
+        leaves_only
+            .units
+            .iter_mut()
+            .for_each(|u| u.depends_on.clear());
+        leaves_only.decisions.clear();
+        validate_with(
+            &leaves_only,
+            tree_on(),
+            &[],
+            PlanContext {
+                origin: PlanOrigin::Planner,
+                depth: 3,
+            },
+        )
+        .expect("leaves are fine at the bottom level");
+    }
+
+    /// D2 / D15: `adopt` は人の計画（origin human）だけ。leaf には書けない。
+    #[test]
+    fn adopt_is_only_allowed_in_human_plans() {
+        let mut p = v3_fixture();
+        p.units[0].adopt = Some(crate::model::TaskId::new());
+        assert!(v3_errors(&p).contains(&PlanValidationError::AdoptNotAllowed { key: "p1".into() }));
+        validate_with(
+            &p,
+            tree_on(),
+            &[],
+            PlanContext {
+                origin: PlanOrigin::Human,
+                depth: 1,
+            },
+        )
+        .expect("a human may adopt an existing task");
+        let mut p = v3_fixture();
+        p.units[1].adopt = Some(crate::model::TaskId::new());
+        p.units[1].acceptance = p.units[0].acceptance.clone();
+        let errs = validate_with(
+            &p,
+            tree_on(),
+            &[],
+            PlanContext {
+                origin: PlanOrigin::Human,
+                depth: 1,
+            },
+        )
+        .unwrap_err();
+        assert!(errs.contains(&PlanValidationError::LeafFieldNotAllowed {
+            key: "p1-note".into(),
+            field: "adopt"
+        }));
+        assert!(errs.contains(&PlanValidationError::LeafFieldNotAllowed {
+            key: "p1-note".into(),
+            field: "acceptance"
+        }));
+    }
+
+    /// D4 (2) (a): /3 の leaf は予算を丸めずに拒否する（/1・/2 は従来どおり丸める）。
+    #[test]
+    fn v3_leaf_budget_over_the_limit_is_rejected_not_rounded() {
+        let mut p = v3_fixture();
+        p.units[1].budget = Some(WorkUnitBudget {
+            max_turns: Some(81),
+            max_wall_secs: Some(3601),
+        });
+        let errs = v3_errors(&p);
+        assert_eq!(
+            errs.iter()
+                .filter(|e| matches!(e, PlanValidationError::LeafBudgetOverLimit { .. }))
+                .count(),
+            2,
+            "{errs:?}"
+        );
+    }
+
+    /// D2: 段階の形（空・上限・key・kind）と unit の段階・予約語。
+    #[test]
+    fn rejects_malformed_stages_and_unknown_unit_stage() {
+        let mut p = v3_fixture();
+        p.stages.push(StageSpec {
+            key: "phase-1".into(),
+            kind: WorkUnitKind::Task,
+            title: "dup".into(),
+            review: StageReview::None,
+        });
+        p.units[4].stage = "phase-9".into();
+        let mut reserved = leaf("integrate-phase-1", "phase-1");
+        reserved.kind = WorkUnitKind::Integrate;
+        p.units.push(reserved);
+        let errs = v3_errors(&p);
+        assert!(errs.contains(&PlanValidationError::DuplicateStageKey {
+            key: "phase-1".into()
+        }));
+        assert!(errs.contains(&PlanValidationError::InvalidStageKind {
+            key: "phase-1".into()
+        }));
+        assert!(errs.contains(&PlanValidationError::UnknownUnitStage {
+            key: "p3".into(),
+            stage: "phase-9".into()
+        }));
+        assert!(errs.contains(&PlanValidationError::ReservedKey {
+            key: "integrate-phase-1".into()
+        }));
+        assert!(errs.contains(&PlanValidationError::ReservedKind {
+            key: "integrate-phase-1".into()
+        }));
+
+        let mut empty = v3_fixture();
+        empty.stages.clear();
+        empty.units.clear();
+        empty.decisions.clear();
+        let errs = v3_errors(&empty);
+        assert!(errs.contains(&PlanValidationError::NoStages));
+        assert!(errs.contains(&PlanValidationError::NoUnits));
+
+        let mut many = v3_fixture();
+        for i in 0..3 {
+            many.stages.push(StageSpec {
+                key: format!("more-{i}"),
+                kind: WorkUnitKind::Test,
+                title: format!("more {i}"),
+                review: StageReview::None,
+            });
+        }
+        assert!(
+            v3_errors(&many).contains(&PlanValidationError::TooManyStages { count: 6, max: 5 })
+        );
+    }
+
+    /// D3: 計画あたりの kind task の unit の上限（既定 6）。
+    #[test]
+    fn rejects_too_many_child_task_units() {
+        let mut p = v3_fixture();
+        p.decisions.clear();
+        p.units.iter_mut().for_each(|u| {
+            u.needs_decisions.clear();
+            u.decisions.clear();
+        });
+        for i in 0..4 {
+            p.units.push(task_unit(&format!("more-{i}"), "phase-3"));
+        }
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 })
+        );
+    }
+
+    /// /1・/2 に /3 の欄・語彙を書けば拒否（`kind = task`・`stages` / `units` / `decisions`）。
+    #[test]
+    fn v1_and_v2_reject_v3_fields_and_the_task_kind() {
+        let mut a = spec("a", &[]);
+        a.kind = WorkUnitKind::Task;
+        let mut p = plan(vec![a]);
+        p.stages = v3_fixture().stages;
+        p.units = vec![leaf("u", "phase-1")];
+        p.decisions = v3_fixture().decisions;
+        let errs = validate(&p, tree_on(), &[]).unwrap_err();
+        assert!(errs.contains(&PlanValidationError::TaskKindRequiresV3 { key: "a".into() }));
+        for field in ["stages", "units", "decisions"] {
+            assert!(
+                errs.contains(&PlanValidationError::V3FieldNotAllowed { field }),
+                "{field}"
+            );
+        }
+        let mut b = spec_v2("b", "build", &[]);
+        b.kind = WorkUnitKind::Task;
+        let errs = validate(&plan_v2(vec![phase("build")], vec![b]), tree_on(), &[]).unwrap_err();
+        assert!(errs.contains(&PlanValidationError::TaskKindRequiresV3 { key: "b".into() }));
+        // /1・/2 の検証は `[execution.tree]` を見ない（enabled でも既定でも同じ結果）。
+        let v1 = plan(vec![spec("a", &[]), spec("b", &["a"])]);
+        assert_eq!(
+            validate(&v1, tree_on(), &[]),
+            validate(&v1, ExecutionLimits::default(), &[])
+        );
+    }
+
+    /// `schema` の値で /3 に振り分け、未知の版は従来どおり `WrongSchema`（文言は /3 を含む）。
+    #[test]
+    fn wrong_schema_message_lists_all_three_versions() {
+        let msg = PlanValidationError::WrongSchema { found: "x".into() }.to_string();
+        assert!(msg.contains(EXECUTION_PLAN_SCHEMA_V3), "{msg}");
+        assert!(is_phased_schema(EXECUTION_PLAN_SCHEMA_V3));
+        assert!(is_phased_schema(EXECUTION_PLAN_SCHEMA_V2));
+        assert!(!is_phased_schema(EXECUTION_PLAN_SCHEMA));
+    }
+
+    /// D2: `deny_unknown_fields`（`assignee` / `tier` / `lane` は書けない）と `review` の語彙。
+    #[test]
+    fn v3_json_rejects_unknown_fields_and_parses_review() {
+        let mut v: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/testdata/execution-plan/v3-browser.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let parsed: ExecutionPlanSpec = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(parsed.stages[1].review, StageReview::Human);
+        assert_eq!(parsed.stages[0].review, StageReview::None);
+        v["units"][0]["assignee"] = serde_json::json!("dev");
+        assert!(serde_json::from_value::<ExecutionPlanSpec>(v.clone()).is_err());
+        v["units"][0].as_object_mut().unwrap().remove("assignee");
+        v["stages"][0]["review"] = serde_json::json!("sometimes");
+        assert!(serde_json::from_value::<ExecutionPlanSpec>(v).is_err());
     }
 }

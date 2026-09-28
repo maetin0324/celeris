@@ -524,6 +524,11 @@ pub struct Task {
     /// 導入前のタスクには無い（従来どおり `worker_hint.tier` のまま走る）。DB の列は増やさない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<TaskRouting>,
+    /// ADR-0079 D4 (4) / D15（Phase R1a）: 再帰的な task の木の中の位置（root・深さ・親の unit・基点）。
+    /// 木に属さない従来の task には無い（深さ 1 の節点として扱う。`tasks.root_id` も NULL のまま）。
+    /// 子 task の生成（R1b）が書く。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<crate::tree::TreeInfo>,
 }
 
 /// ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
@@ -1261,6 +1266,69 @@ pub enum Event {
         approved: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+    },
+    // ---- ADR-0079（Phase R1a）: 再帰的な task の木。型と replay の読みだけ（発行は R1b 以降）----
+    /// ADR-0079 D4 (4): 親の計画の kind task の unit から子 task を作った（親の events に積む）。
+    /// 同じトランザクションで `work_units.child_task_id` を書く（store の派生の書き込み）。
+    /// 状態は変えない（`replay` は無視する）。
+    ChildTaskCreated {
+        /// 親の計画の版（`execution_plans.id`）。
+        plan_id: String,
+        unit_key: String,
+        child_task_id: TaskId,
+        /// 子の深さ（task の層数。root = 1。ADR-0079 付記 U-R1）。
+        depth: u32,
+    },
+    /// ADR-0079 D15: 既存の task を root の計画の kind task の unit の子として採用した（root の events に
+    /// 積む）。同じトランザクションで `work_units.child_task_id` を書く。状態は変えない。
+    ChildAdopted {
+        plan_id: String,
+        unit_key: String,
+        stage: String,
+        child_task_id: TaskId,
+    },
+    /// ADR-0079 D4 (3): unit の gate が planner の宣言と食い違い、daemon が扱いを決めた。
+    /// 状態は変えない（発行は R2a）。
+    UnitGateOverridden {
+        plan_id: String,
+        unit_key: String,
+        declared: crate::tree::UnitDeclared,
+        gate: crate::execution_gate::ExecutionMode,
+        action: crate::tree::UnitGateAction,
+        /// unit の深さ（= 計画を持つ task の深さ + 1）。
+        depth: u32,
+        /// その深さの gate の閾値（`task_core::tree::gate_threshold`）。
+        threshold: u32,
+    },
+    /// ADR-0079 D7: 人への決定の要求（出した節点の events に積む）。同じトランザクションで
+    /// `decisions` の行を書く（store の派生の書き込み）。状態は変えない（発行は R3a 以降）。
+    DecisionRequested {
+        decision: Box<crate::decision::DecisionRequest>,
+    },
+    /// ADR-0079 D7: 決定への回答（revise も同じ Event。最後の回答が有効）。状態は変えない。
+    DecisionAnswered {
+        id: String,
+        option: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        by: String,
+    },
+    /// ADR-0079 D7: 決定の取り下げ（計画の replan・subtree の中止など）。状態は変えない。
+    DecisionWithdrawn {
+        id: String,
+        reason: String,
+    },
+    /// ADR-0079 D8: root の計画に人の承認が要る（決定を含む / `review: human` / 上限に近い）。
+    /// 状態は変えない（同じトランザクションの `Transitioned` が止める。発行は R3b）。
+    PlanApprovalRequested {
+        plan_id: String,
+        reasons: Vec<String>,
+    },
+    /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
+    /// `stall_secs` 続いた。状態は変えない（発行は R3b）。
+    StallDetected {
+        task_id: TaskId,
+        detail: String,
     },
 }
 

@@ -83,6 +83,15 @@
         }
       ]
     },
+    "CostOfReversal": {
+      "description": "D7: 後戻りの大きさ。",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -96,6 +105,79 @@
       "required": [
         "text",
         "check"
+      ],
+      "type": "object"
+    },
+    "DecisionOption": {
+      "additionalProperties": false,
+      "description": "D7: 選択肢 1 つ。",
+      "properties": {
+        "consequence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。決定の中で一意。",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label"
+      ],
+      "type": "object"
+    },
+    "DecisionSpec": {
+      "additionalProperties": false,
+      "description": "D2 / D7: 計画に書く決定の形（`id` / `path` / `raised_by` / `status` は daemon が付ける）。",
+      "properties": {
+        "cost_note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_of_reversal": {
+          "$ref": "#/$defs/CostOfReversal"
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。",
+          "type": "string"
+        },
+        "needed_before": {
+          "default": [],
+          "description": "止める unit の key か `stage:<key>`。計画の `decisions` では 1 件以上（何を止めるかを書かせる）。\nunit に書いた `decisions` では省略でき、その unit が補われる（D2 の糖衣）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "options": {
+          "description": "2..=5 件。",
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "recommended": {
+          "description": "`options` のどれかの key。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "question",
+        "options",
+        "recommended",
+        "cost_of_reversal"
       ],
       "type": "object"
     },
@@ -180,6 +262,182 @@
         },
         "kind": {
           "$ref": "#/$defs/WorkUnitKind"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "title"
+      ],
+      "type": "object"
+    },
+    "PlanUnitSpec": {
+      "additionalProperties": false,
+      "description": "ADR-0079 D2: /3 の unit。`kind = task` なら子 task（`acceptance` 必須、`checks` / `budget` /\n`harness` / `context.paths` は持たない）、それ以外は leaf（今の WorkUnit の欄 + `needs_decisions`。\n`checks` 1 本以上）。`assignee` / `tier` / `model` / `lane` は持たない（`deny_unknown_fields`）。",
+      "properties": {
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "adopt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "D15: 既存の task をこの unit の子として採用する（人の計画〈origin human〉だけ）。"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkUnitBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/WorkUnitCheck"
+          },
+          "type": "array"
+        },
+        "context": {
+          "$ref": "#/$defs/UnitContext"
+        },
+        "decisions": {
+          "description": "この unit が持ち込む決定（計画の `decisions` に `needed_before: [<この unit>]` を付けて移した\nものとして読む。D2 の糖衣）。",
+          "items": {
+            "$ref": "#/$defs/DecisionSpec"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "description": "unit の key（leaf・task を問わない）。/2 の `child:<key>` は書けない。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "done_when": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "features": {
+          "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkUnitKind"
+        },
+        "needs_decisions": {
+          "description": "回答を待つ決定の key（計画の `decisions`・unit の `decisions`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "outputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repos": {
+          "description": "親の repos の部分集合（repo の名前。子の生成〈R1b〉で検証する）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stage": {
+          "description": "`stages` の key。",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "stage",
+        "kind",
+        "title",
+        "objective"
+      ],
+      "type": "object"
+    },
+    "RepoSelector": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "ADR-0079 D4 (2): leaf の `context.repo`（1 つの文字列、または配列。leaf は高々 1 つ）。"
+    },
+    "StageReview": {
+      "description": "ADR-0079 D2 / D5: 段階の後の人の確認（`review: human` は ADR-0074 D2 の `pause_after` をその段階に\n指定したのと同じ意味。既定 none）。",
+      "enum": [
+        "none",
+        "human"
+      ],
+      "type": "string"
+    },
+    "StageSpec": {
+      "additionalProperties": false,
+      "description": "ADR-0079 D2: /3 の段階（/2 の `PhaseSpec` に `review` を足した形）。",
+      "properties": {
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。`work_units.phase` の値になる。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkUnitKind"
+        },
+        "review": {
+          "$ref": "#/$defs/StageReview"
         },
         "title": {
           "type": "string"
@@ -289,6 +547,45 @@
       },
       "type": "object"
     },
+    "TaskId": {
+      "description": "タスクの一意識別子（ULID）。DESIGN §4.1。",
+      "type": "string"
+    },
+    "UnitContext": {
+      "additionalProperties": false,
+      "description": "ADR-0079 D2: /3 の unit の context（/1・/2 の `WorkUnitContext` に `repo` を足した形）。",
+      "properties": {
+        "from_work_units": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "knowledge": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepoSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "WorkUnitBudget": {
       "additionalProperties": false,
       "description": "D14/D18: WU ごとの予算（任意。書かなければ D18 の既定を使う）。",
@@ -376,6 +673,11 @@
         {
           "const": "integrate",
           "description": "ADR-0074 D1.4（Phase F2）: 工程末尾の統合 WU（daemon が計画の採用時に足す system WU。\n`runs = 0`、LLM run を起こさない）。planner の出力に書かれていれば検証で拒否する\n（`validate` の `ReservedKind`。system WU 専用の予約語）。",
+          "type": "string"
+        },
+        {
+          "const": "task",
+          "description": "ADR-0079 D2（Phase R1a）: 子 task の unit（`celeris.execution-plan/3` だけ。/1・/2 では検証で拒否）。\n`work_units` の行は子 task の代理で、LLM run を起こさない（子 task の生成は R1b）。",
           "type": "string"
         }
       ]
@@ -482,6 +784,13 @@
       },
       "type": "array"
     },
+    "decisions": {
+      "description": "ADR-0079 D2 / D7: /3 の決定（人に選んでもらう点）。",
+      "items": {
+        "$ref": "#/$defs/DecisionSpec"
+      },
+      "type": "array"
+    },
     "phases": {
       "default": [],
       "description": "v2 のみ。v1 では空でなければならない（`validate`）。",
@@ -496,7 +805,23 @@
     "schema": {
       "type": "string"
     },
+    "stages": {
+      "description": "ADR-0079 D2（Phase R1a）: /3 の段階（/1・/2 では空。空なら出力しない〈/1・/2 の JSON は不変〉）。",
+      "items": {
+        "$ref": "#/$defs/StageSpec"
+      },
+      "type": "array"
+    },
+    "units": {
+      "description": "ADR-0079 D2: /3 の unit（leaf | 子 task）。",
+      "items": {
+        "$ref": "#/$defs/PlanUnitSpec"
+      },
+      "type": "array"
+    },
     "work_units": {
+      "default": [],
+      "description": "/1・/2 では 1 件以上。ADR-0079（Phase R1a）: /3 は `units` を使い、ここは空（省略可）。",
       "items": {
         "$ref": "#/$defs/WorkUnitSpec"
       },
@@ -505,8 +830,7 @@
   },
   "required": [
     "schema",
-    "rationale",
-    "work_units"
+    "rationale"
   ],
   "title": "ExecutionPlanSpec",
   "type": "object"

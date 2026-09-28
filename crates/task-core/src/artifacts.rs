@@ -75,6 +75,7 @@ mod tests {
         use crate::model::*;
         let now = time::OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

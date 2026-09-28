@@ -636,6 +636,7 @@ fn check_plan_file(
 pub fn synthetic_review_task(subject_task: &Task, run_id: &str, hint: &WorkerHint) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        tree: None,
         routing: None,
         repos: Vec::new(),
         id: TaskId::new(),
@@ -917,6 +918,7 @@ mod tests {
     fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
         let now = time::OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

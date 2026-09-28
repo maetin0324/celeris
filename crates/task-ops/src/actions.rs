@@ -600,6 +600,7 @@ mod tests {
         use task_core::{Budget, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec};
         let t = now();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

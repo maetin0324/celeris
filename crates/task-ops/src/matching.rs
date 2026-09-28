@@ -362,6 +362,7 @@ mod tests {
         };
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             id: TaskId::new(),
             parent_id: None,

@@ -702,6 +702,7 @@ fn build_task(
         },
     };
     let task = Task {
+        tree: None,
         routing: Some(routing),
         repos,
         id,

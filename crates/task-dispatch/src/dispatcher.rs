@@ -5630,10 +5630,14 @@ impl Dispatcher {
                     Err(e) => Err(e),
                     Ok(spec) => match validate_plan_harnesses(&spec, &self.config.genres) {
                         Err(e) => Err(e),
-                        Ok(()) => task_core::execution_plan::validate(
+                        Ok(()) => task_core::execution_plan::validate_with(
                             &spec,
                             self.config.execution.limits,
                             &done_work_units,
+                            task_core::PlanContext {
+                                origin: task_core::PlanOrigin::Planner,
+                                depth: task_core::tree::depth_of(task),
+                            },
                         )
                         .map_err(|errors| task_ops::execution::describe_validation_errors(&errors)),
                     },
@@ -6880,6 +6884,9 @@ impl Dispatcher {
                     now.clone(),
                 );
                 let plan_spec = task_core::ExecutionPlanSpec {
+                    stages: Vec::new(),
+                    units: Vec::new(),
+                    decisions: Vec::new(),
                     schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
                     rationale: "reviewer repair: 暗黙の WorkUnit を実体化".to_string(),
                     work_units: vec![main_spec, spec],
@@ -12633,6 +12640,7 @@ impl Dispatcher {
     ) -> Result<Task, DispatchError> {
         let now = OffsetDateTime::now_utc();
         let approval = Task {
+            tree: None,
             routing: None,
             repos: Vec::new(),
             id: TaskId::new(),
@@ -15006,6 +15014,7 @@ mod tests {
     fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -27890,6 +27899,9 @@ mod tests {
         task_id: TaskId,
     ) -> task_core::ExecutionPlanRow {
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "A -> B -> C".to_string(),
             work_units: vec![
@@ -28054,6 +28066,9 @@ mod tests {
 
     fn plan_json(work_units: Vec<task_core::WorkUnitSpec>) -> String {
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "test plan".to_string(),
             work_units,
@@ -28445,6 +28460,9 @@ mod tests {
         store.insert(&task).unwrap();
 
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "a child deliverable first".to_string(),
             phases: vec![task_core::PhaseSpec {
@@ -28808,6 +28826,9 @@ mod tests {
                     supersedes: None,
                     reason: None,
                     plan: Box::new(task_core::ExecutionPlanSpec {
+                        stages: Vec::new(),
+                        units: Vec::new(),
+                        decisions: Vec::new(),
                         schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
                         rationale: String::new(),
                         work_units: Vec::new(),
@@ -29220,6 +29241,9 @@ mod tests {
             store.as_ref(),
             task_id,
             task_core::ExecutionPlanSpec {
+                stages: Vec::new(),
+                units: Vec::new(),
+                decisions: Vec::new(),
                 schema: task_core::EXECUTION_PLAN_SCHEMA.into(),
                 rationale: "initial implementation".into(),
                 work_units: vec![main_spec],
@@ -29570,6 +29594,9 @@ mod tests {
             expect_exit: 0,
         }];
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "single WU with a deterministic check".to_string(),
             work_units: vec![a],
@@ -30728,6 +30755,9 @@ mod tests {
         work_units: Vec<task_core::WorkUnitSpec>,
     ) -> task_core::ExecutionPlanRow {
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "parallel".to_string(),
             work_units,
@@ -31027,6 +31057,9 @@ mod tests {
         let task = parallel_task(repo.path(), "true");
         store.insert(&task).unwrap();
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "v1".into(),
             work_units: vec![wu_spec("a", &[]), wu_spec("b", &[]), wu_spec("c", &[])],
@@ -31933,6 +31966,9 @@ mod tests {
             },
         ];
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "gate".to_string(),
             work_units: vec![gate],
@@ -33899,6 +33935,7 @@ mod knowledge_fallback_tests {
     fn knowledge_task(dir: &std::path::Path) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

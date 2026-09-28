@@ -1310,6 +1310,7 @@ mod tests {
     fn sample_task(kind: TaskKind, status: Status) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -2432,6 +2433,9 @@ mod tests {
 
     fn plan_spec(work_units: Vec<task_core::WorkUnitSpec>) -> task_core::ExecutionPlanSpec {
         task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "investigate then implement".to_string(),
             work_units,

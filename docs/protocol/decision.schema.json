@@ -1,0 +1,258 @@
+{
+  "$defs": {
+    "CostOfReversal": {
+      "description": "D7: 後戻りの大きさ。",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "DecisionAnswer": {
+      "additionalProperties": false,
+      "description": "D7: 回答（`Event::DecisionAnswered` の写し。R1a の明確化: 表の `json` に回答を残すため\n`DecisionRequest.answer` に持つ）。",
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "option",
+        "by"
+      ],
+      "type": "object"
+    },
+    "DecisionKind": {
+      "description": "D7: 決定の要求の種類。",
+      "oneOf": [
+        {
+          "const": "choice",
+          "description": "計画・worker が出す選択。",
+          "type": "string"
+        },
+        {
+          "const": "leaf_too_large",
+          "description": "daemon: compound な leaf を子 task にできない深さ（D4 (3)。R2a）。",
+          "type": "string"
+        },
+        {
+          "const": "limit",
+          "description": "daemon: 木の上限の超過（D3。R2a）。",
+          "type": "string"
+        },
+        {
+          "const": "plan_invalid",
+          "description": "daemon: plan/3 の計画が 2 回不正（D9。R2b）。",
+          "type": "string"
+        }
+      ]
+    },
+    "DecisionOption": {
+      "additionalProperties": false,
+      "description": "D7: 選択肢 1 つ。",
+      "properties": {
+        "consequence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。決定の中で一意。",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label"
+      ],
+      "type": "object"
+    },
+    "DecisionOrigin": {
+      "description": "D7: 決定を出した者の種類。",
+      "oneOf": [
+        {
+          "enum": [
+            "planner",
+            "worker",
+            "daemon"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "human",
+          "description": "人が書いた計画（`PUT /tasks/{id}/execution-plan`、origin human）の `decisions`。",
+          "type": "string"
+        }
+      ]
+    },
+    "DecisionPathEntry": {
+      "additionalProperties": false,
+      "description": "D7: 木の中の位置の 1 段（root から出した節点まで）。",
+      "properties": {
+        "stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "title": {
+          "type": "string"
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "DecisionRaisedBy": {
+      "additionalProperties": false,
+      "description": "D7: 決定を出した節点と run。",
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/DecisionOrigin"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "origin"
+      ],
+      "type": "object"
+    },
+    "DecisionStatus": {
+      "description": "D7: 決定の状態。",
+      "enum": [
+        "open",
+        "answered",
+        "withdrawn"
+      ],
+      "type": "string"
+    },
+    "TaskId": {
+      "description": "タスクの一意識別子（ULID）。DESIGN §4.1。",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "D7: 決定の要求（`docs/protocol/decision.schema.json`）。`id` と `path` は daemon が付ける\n（LLM に書かせない）。",
+  "properties": {
+    "answer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionAnswer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "回答（`status = answered` のときだけ）。"
+    },
+    "cost_note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cost_of_reversal": {
+      "$ref": "#/$defs/CostOfReversal"
+    },
+    "id": {
+      "description": "daemon が振る ULID（木の中で一意）。",
+      "type": "string"
+    },
+    "key": {
+      "description": "出した者が付けた key（計画・run の中で一意）。",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/DecisionKind"
+    },
+    "needed_before": {
+      "description": "`<unit key>` | `stage:<key>` | `self`。",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "options": {
+      "items": {
+        "$ref": "#/$defs/DecisionOption"
+      },
+      "type": "array"
+    },
+    "path": {
+      "description": "root から出した節点まで。",
+      "items": {
+        "$ref": "#/$defs/DecisionPathEntry"
+      },
+      "type": "array"
+    },
+    "question": {
+      "type": "string"
+    },
+    "raised_by": {
+      "$ref": "#/$defs/DecisionRaisedBy"
+    },
+    "recommended": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/DecisionStatus"
+    },
+    "withdrawn_reason": {
+      "description": "取り下げの理由（`status = withdrawn` のときだけ）。",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "key",
+    "kind",
+    "question",
+    "options",
+    "recommended",
+    "cost_of_reversal",
+    "needed_before",
+    "path",
+    "raised_by",
+    "status"
+  ],
+  "title": "DecisionRequest",
+  "type": "object"
+}

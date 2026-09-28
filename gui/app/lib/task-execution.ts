@@ -62,6 +62,8 @@ export const WORK_UNIT_KIND_LABEL: Record<WorkUnitKind, string> = {
   release: "リリース",
   repair: "修復",
   integrate: "統合",
+  // ADR-0079（Phase R1a）: plan/3 の子 task の unit（行は子 task の代理）。
+  task: "子 task",
   other: "その他",
 };
 

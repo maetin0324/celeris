@@ -846,6 +846,7 @@ pub(crate) mod tests {
     pub(crate) fn task(objective: &str, acceptance: Vec<Criterion>) -> Task {
         let now = time::OffsetDateTime::UNIX_EPOCH;
         Task {
+            tree: None,
             id: TaskId::new(),
             parent_id: None,
             kind: TaskKind::Execute,

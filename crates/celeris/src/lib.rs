@@ -2414,6 +2414,7 @@ async fn check_provider(
     let dir = std::env::temp_dir().join(format!("celeris-provider-check-{}", ulid::Ulid::new()));
     let now = OffsetDateTime::now_utc();
     let task = task_core::Task {
+        tree: None,
         routing: None,
         repos: Vec::new(),
         id: task_core::TaskId::new(),
@@ -3645,6 +3646,7 @@ auth = "publickey"
             SqliteStore::open(&config.db.path).unwrap_or_else(|e| panic!("open store: {e}"));
         let now = OffsetDateTime::now_utc();
         let task = task_core::Task {
+            tree: None,
             routing: None,
             repos: Vec::new(),
             id: task_core::TaskId::new(),

@@ -1456,6 +1456,180 @@ pub struct ExecutionTomlConfig {
     /// ADR-0074 D1.3/§4（Phase F2b）: Task ごとの同時 WU 数の上限（既定 3、1..=6）。
     #[serde(default = "default_max_parallel_work_units")]
     pub max_parallel_work_units: usize,
+    /// ADR-0079 D3（Phase R1a）: `[execution.tree]`（再帰的な task 分解の上限。既定 `enabled = false`）。
+    #[serde(default)]
+    pub tree: ExecutionTreeTomlConfig,
+}
+
+/// `[execution.tree]`（ADR-0079 D3、Phase R1a）: plan/3 と子 task の上限。すべて任意で、既定は D3 の表
+/// （U-R4 の決定どおり）。`max_depth` は **task の層数**（root 1 / 子 2 / 孫 3。付記 U-R1）で 1..=3。
+/// `enabled = false`（既定。R5b で人が `true` に）なら `celeris.execution-plan/3` は検証で拒否される。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionTreeTomlConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_tree_max_depth")]
+    pub max_depth: u32,
+    #[serde(default = "default_tree_max_units_per_stage")]
+    pub max_units_per_stage: usize,
+    #[serde(default = "default_tree_max_stages")]
+    pub max_stages: usize,
+    #[serde(default = "default_tree_max_child_tasks_per_plan")]
+    pub max_child_tasks_per_plan: usize,
+    #[serde(default = "default_tree_max_parallel_child_tasks")]
+    pub max_parallel_child_tasks: usize,
+    #[serde(default = "default_tree_max_tree_leaves")]
+    pub max_tree_leaves: u32,
+    #[serde(default = "default_tree_max_tree_runs")]
+    pub max_tree_runs: u32,
+    #[serde(default = "default_tree_max_tree_replans")]
+    pub max_tree_replans: u32,
+    /// 木全体の input + output トークンの上限（設定したときだけ）。
+    #[serde(default)]
+    pub max_tree_tokens: Option<u64>,
+    /// 未回答の決定の上限（木あたり）。
+    #[serde(default = "default_tree_max_open_decisions")]
+    pub max_open_decisions: usize,
+    /// 未回答の決定の上限（計画あたり）。
+    #[serde(default = "default_tree_max_open_decisions_per_plan")]
+    pub max_open_decisions_per_plan: usize,
+    #[serde(default = "default_tree_gate_depth_step")]
+    pub gate_depth_step: u32,
+    /// D8 の「上限に近い」の比（0 < r <= 1、既定 0.8）。
+    #[serde(default = "default_tree_approval_near_limit_ratio")]
+    pub approval_near_limit_ratio: f64,
+}
+
+impl Default for ExecutionTreeTomlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_depth: default_tree_max_depth(),
+            max_units_per_stage: default_tree_max_units_per_stage(),
+            max_stages: default_tree_max_stages(),
+            max_child_tasks_per_plan: default_tree_max_child_tasks_per_plan(),
+            max_parallel_child_tasks: default_tree_max_parallel_child_tasks(),
+            max_tree_leaves: default_tree_max_tree_leaves(),
+            max_tree_runs: default_tree_max_tree_runs(),
+            max_tree_replans: default_tree_max_tree_replans(),
+            max_tree_tokens: None,
+            max_open_decisions: default_tree_max_open_decisions(),
+            max_open_decisions_per_plan: default_tree_max_open_decisions_per_plan(),
+            gate_depth_step: default_tree_gate_depth_step(),
+            approval_near_limit_ratio: default_tree_approval_near_limit_ratio(),
+        }
+    }
+}
+
+impl ExecutionTreeTomlConfig {
+    /// `ExecutionLimits.tree`（plan/3 の検証だけが見る）。`validate()` を通った値を前提にする。
+    pub fn limits(&self) -> task_core::TreeLimits {
+        task_core::TreeLimits {
+            enabled: self.enabled,
+            max_depth: self.max_depth,
+            max_units_per_stage: self.max_units_per_stage,
+            max_stages: self.max_stages,
+            max_child_tasks_per_plan: self.max_child_tasks_per_plan,
+            max_parallel_child_tasks: self.max_parallel_child_tasks,
+            max_tree_leaves: self.max_tree_leaves,
+            max_tree_runs: self.max_tree_runs,
+            max_tree_replans: self.max_tree_replans,
+            max_tree_tokens: self.max_tree_tokens,
+            max_open_decisions_per_tree: self.max_open_decisions,
+            max_open_decisions_per_plan: self.max_open_decisions_per_plan,
+            gate_depth_step: self.gate_depth_step,
+            approval_near_limit_permille: (self.approval_near_limit_ratio * 1000.0).round() as u32,
+        }
+    }
+
+    /// 設定の綴り・範囲（`Config::validate` から呼ぶ）。
+    fn validate(&self) -> Result<(), String> {
+        if !(1..=task_core::tree::MAX_DEPTH_CAP).contains(&self.max_depth) {
+            return Err(format!(
+                "max_depth must be between 1 and {} task levels (root = 1, child = 2, grandchild = 3; got {})",
+                task_core::tree::MAX_DEPTH_CAP,
+                self.max_depth
+            ));
+        }
+        for (name, v) in [
+            ("max_units_per_stage", self.max_units_per_stage),
+            ("max_stages", self.max_stages),
+            ("max_child_tasks_per_plan", self.max_child_tasks_per_plan),
+            ("max_parallel_child_tasks", self.max_parallel_child_tasks),
+            ("max_open_decisions", self.max_open_decisions),
+            (
+                "max_open_decisions_per_plan",
+                self.max_open_decisions_per_plan,
+            ),
+        ] {
+            if v == 0 {
+                return Err(format!("{name} must be >= 1"));
+            }
+        }
+        for (name, v) in [
+            ("max_tree_leaves", self.max_tree_leaves),
+            ("max_tree_runs", self.max_tree_runs),
+            ("max_tree_replans", self.max_tree_replans),
+        ] {
+            if v == 0 {
+                return Err(format!("{name} must be >= 1"));
+            }
+        }
+        if self.max_tree_tokens == Some(0) {
+            return Err("max_tree_tokens must be >= 1 when set".to_string());
+        }
+        if self.max_open_decisions_per_plan > self.max_open_decisions {
+            return Err(format!(
+                "max_open_decisions_per_plan ({}) must not exceed max_open_decisions ({})",
+                self.max_open_decisions_per_plan, self.max_open_decisions
+            ));
+        }
+        let r = self.approval_near_limit_ratio;
+        if !(r.is_finite() && r > 0.0 && r <= 1.0) {
+            return Err(format!(
+                "approval_near_limit_ratio must be in (0, 1] (got {r})"
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_tree_max_depth() -> u32 {
+    task_core::tree::DEFAULT_MAX_DEPTH
+}
+fn default_tree_max_units_per_stage() -> usize {
+    task_core::TreeLimits::default().max_units_per_stage
+}
+fn default_tree_max_stages() -> usize {
+    task_core::TreeLimits::default().max_stages
+}
+fn default_tree_max_child_tasks_per_plan() -> usize {
+    task_core::TreeLimits::default().max_child_tasks_per_plan
+}
+fn default_tree_max_parallel_child_tasks() -> usize {
+    task_core::TreeLimits::default().max_parallel_child_tasks
+}
+fn default_tree_max_tree_leaves() -> u32 {
+    task_core::TreeLimits::default().max_tree_leaves
+}
+fn default_tree_max_tree_runs() -> u32 {
+    task_core::TreeLimits::default().max_tree_runs
+}
+fn default_tree_max_tree_replans() -> u32 {
+    task_core::TreeLimits::default().max_tree_replans
+}
+fn default_tree_max_open_decisions() -> usize {
+    task_core::TreeLimits::default().max_open_decisions_per_tree
+}
+fn default_tree_max_open_decisions_per_plan() -> usize {
+    task_core::TreeLimits::default().max_open_decisions_per_plan
+}
+fn default_tree_gate_depth_step() -> u32 {
+    task_core::TreeLimits::default().gate_depth_step
+}
+fn default_tree_approval_near_limit_ratio() -> f64 {
+    0.8
 }
 
 impl Default for ExecutionTomlConfig {
@@ -1472,6 +1646,7 @@ impl Default for ExecutionTomlConfig {
             work_unit_lane_cap: default_work_unit_lane_cap(),
             parallel: false,
             max_parallel_work_units: default_max_parallel_work_units(),
+            tree: ExecutionTreeTomlConfig::default(),
         }
     }
 }
@@ -2584,6 +2759,10 @@ impl Config {
                 self.execution.max_parallel_work_units
             )));
         }
+        // ADR-0079 D3（Phase R1a）: `[execution.tree]` の範囲（max_depth は task の層数で 1..=3）。
+        if let Err(why) = self.execution.tree.validate() {
+            return Err(ConfigError::Invalid(format!("[execution.tree] {why}")));
+        }
         // ADR-0043 D3: runtime は 3 つだけ（綴り間違いで黙ってホスト実行に倒れないように）。
         if task_worker::RuntimePreference::parse(&self.containers.runtime).is_none() {
             return Err(ConfigError::Invalid(format!(
@@ -3396,7 +3575,11 @@ impl Config {
                 parallel: self.execution.parallel,
                 max_parallel_work_units: self.execution.max_parallel_work_units,
                 // Phase F5-fix3: config.toml に欄は無い（ADR-0072 D18 / ADR-0074 §4 の既定のまま）。
-                limits: task_core::ExecutionLimits::default(),
+                // ADR-0079 D3（Phase R1a）: `[execution.tree]` は plan/3 の検証だけに効く。
+                limits: task_core::ExecutionLimits {
+                    tree: self.execution.tree.limits(),
+                    ..task_core::ExecutionLimits::default()
+                },
             },
         }
     }
@@ -4355,6 +4538,7 @@ tiers = ["cheap", "standard", "frontier"]
         };
         let now = time::OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             id: TaskId::new(),
             parent_id: None,
@@ -6876,6 +7060,64 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
             let cfg: Config = toml::from_str(&text).unwrap_or_else(|e| panic!("{section}: {e}"));
             let _ = cfg;
         }
+    }
+
+    /// ADR-0079 D3（Phase R1a）: `[execution.tree]` の既定（`enabled = false`・`max_depth = 3` 層・D3 / U-R4 の
+    /// 上限）と範囲の検査（`max_depth` は task の層数で 1..=3）。値は `ExecutionLimits.tree` に写る。
+    #[test]
+    fn execution_tree_defaults_and_validation() {
+        let base = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
+        let cfg: Config = toml::from_str(base).unwrap();
+        cfg.validate().unwrap();
+        assert!(!cfg.execution.tree.enabled);
+        let limits = cfg.dispatch_config().execution.limits;
+        assert_eq!(limits.tree, task_core::TreeLimits::default());
+        assert!(!limits.tree.enabled);
+        assert_eq!(limits.tree.max_depth, 3);
+        // /1・/2 の上限は変わらない。
+        assert_eq!(limits, task_core::ExecutionLimits::default());
+
+        let cfg: Config = toml::from_str(&format!(
+            "{base}[execution.tree]\nenabled = true\nmax_depth = 2\nmax_units_per_stage = 4\n\
+             max_tree_tokens = 5000000\napproval_near_limit_ratio = 0.75\n"
+        ))
+        .unwrap();
+        cfg.validate().unwrap();
+        let limits = cfg.dispatch_config().execution.limits;
+        let tree = limits.tree;
+        assert!(tree.enabled);
+        assert_eq!(tree.max_depth, 2);
+        assert_eq!(tree.max_units_per_stage, 4);
+        assert_eq!(tree.max_tree_tokens, Some(5_000_000));
+        assert_eq!(tree.approval_near_limit_permille, 750);
+        assert_eq!(tree.max_tree_runs, 120);
+        assert_eq!(
+            task_core::ExecutionLimits {
+                tree: task_core::TreeLimits::default(),
+                ..limits
+            },
+            task_core::ExecutionLimits::default(),
+            "[execution.tree] must not change the /1・/2 limits"
+        );
+
+        for bad in [
+            "max_depth = 0",
+            "max_depth = 4",
+            "max_units_per_stage = 0",
+            "max_tree_runs = 0",
+            "max_tree_tokens = 0",
+            "approval_near_limit_ratio = 0.0",
+            "approval_near_limit_ratio = 1.5",
+            "max_open_decisions = 4\nmax_open_decisions_per_plan = 8",
+        ] {
+            let cfg: Config = toml::from_str(&format!("{base}[execution.tree]\n{bad}\n")).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains("[execution.tree]"), "{bad}: {err}");
+        }
+        // 綴り間違いは設定エラー（`deny_unknown_fields`）。
+        assert!(
+            toml::from_str::<Config>(&format!("{base}[execution.tree]\nmax_detph = 3\n")).is_err()
+        );
     }
 
     /// 例の設定ファイルにコメントアウトされた `[accounts]` / `account_pool` の節も構文として妥当なことを確認する

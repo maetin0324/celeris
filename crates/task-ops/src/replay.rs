@@ -14,7 +14,7 @@ use serde::Serialize;
 use task_core::{
     Event, EventRow, ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, PlanStatus,
     RunIndexRole, RunIndexStatus, RunRole, RunRow, Status, Task, TaskId, TaskStore,
-    WorkUnitBlockedReason, WorkUnitRow, WorkUnitStatus, validate,
+    WorkUnitBlockedReason, WorkUnitRow, WorkUnitStatus,
 };
 
 use crate::error::OpsError;
@@ -160,24 +160,16 @@ pub struct ExecutionPlanMismatch {
 /// 既に採用済み（＝一度 D14 の検証を通っている）ものを対象にするので、通常は必ず `Ok`。events が
 /// 壊れている等で万一失敗しても、パニックせず元の並び順にフォールバックする。
 fn topological_order(spec: &ExecutionPlanSpec) -> Vec<usize> {
-    let permissive = ExecutionLimits {
-        max_children: 8,
-        max_work_units: usize::MAX,
-        work_unit_max_turns: u32::MAX,
-        work_unit_max_wall_secs: u64::MAX,
-        max_rationale_chars: usize::MAX,
-        max_title_chars: usize::MAX,
-        max_objective_chars: usize::MAX,
-        max_done_when_items: usize::MAX,
-        max_done_when_chars: usize::MAX,
-        max_checks: usize::MAX,
-        max_plan_json_bytes: usize::MAX,
-        max_work_units_v2: usize::MAX,
-        max_phases: usize::MAX,
+    // ADR-0079（Phase R1a）: /3 の形の検査も上限なし（`[execution.tree]` の有無・深さ・`adopt` の出どころに
+    // よらず、採用済みの計画の並びを復元する。`topological_order` は `units` の index）。
+    let permissive = ExecutionLimits::permissive();
+    let ctx = task_core::PlanContext {
+        origin: task_core::PlanOrigin::Human,
+        depth: 1,
     };
-    match validate(spec, permissive, &[]) {
+    match task_core::validate_with(spec, permissive, &[], ctx) {
         Ok(v) => v.topological_order,
-        Err(_) => (0..spec.work_units.len()).collect(),
+        Err(_) => (0..task_core::internal_view(spec).work_units.len()).collect(),
     }
 }
 
@@ -386,6 +378,22 @@ pub fn rebuild_work_units_and_runs(
                     wu.integrated_commit = Some(head.clone());
                 }
             }
+            // ADR-0079 D4 (4) / D15（Phase R1a）: kind task の unit の子 task（store が同じトランザクションで
+            // `work_units.child_task_id` に書く値と同じ）。
+            Event::ChildTaskCreated {
+                unit_key,
+                child_task_id,
+                ..
+            }
+            | Event::ChildAdopted {
+                unit_key,
+                child_task_id,
+                ..
+            } => {
+                if let Some(wu) = wu_rows.values_mut().find(|w| &w.key == unit_key) {
+                    wu.child_task_id = Some(child_task_id.to_string());
+                }
+            }
             Event::RepairScheduled {
                 key,
                 origin: task_core::execution::RepairOrigin::Integration,
@@ -526,6 +534,14 @@ fn wu_field_pairs(w: &WorkUnitRow) -> Vec<(&'static str, String)> {
                 .clone()
                 .unwrap_or_else(|| "none".to_string()),
         ),
+        // ADR-0079（Phase R1a / migration 0030）: 子 task の結び付きと、回答を待つ決定。
+        (
+            "child_task_id",
+            w.child_task_id
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        ),
+        ("needs_decisions", w.needs_decisions.join(",")),
     ]
 }
 
@@ -738,6 +754,149 @@ pub fn diff_execution_plans(
     mismatches
 }
 
+// ---------------------------------------------------------------------------
+// ADR-0079 D7 / D15（Phase R1a）: `decisions` の再構築（events が正本、表は派生）
+// ---------------------------------------------------------------------------
+
+/// `replay` が検出した 1 件の `decisions` の食い違い。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct DecisionMismatch {
+    pub id: String,
+    /// 比較した欄の名前（`presence`/`root_id`/`task_id`/`key`/`kind`/`status`/`needed_before`/`json`/
+    /// `created_at`/`answered_at`）。
+    pub field: String,
+    pub replayed: String,
+    pub stored: String,
+}
+
+/// ADR-0079 D7 / D15: 全 task の events から `decisions` の行を作り直す（純粋関数）。`events` は
+/// `(その events を積んだ task, その task の events)` の列。畳み込みは store の書き込みと同じ
+/// `task_core::DecisionRow` の関数（`from_request` / `apply_answer` / `apply_withdrawal`）で、`created_at` /
+/// `answered_at` は event の ts（store も同じ ts を書く）なので、store の行と 1 対 1 で一致する。
+pub fn rebuild_decisions(events: &[(TaskId, Vec<EventRow>)]) -> Vec<task_core::DecisionRow> {
+    let mut rows: BTreeMap<String, task_core::DecisionRow> = BTreeMap::new();
+    for (task_id, task_events) in events {
+        for er in task_events {
+            match &er.event {
+                Event::DecisionRequested { decision } => {
+                    rows.insert(
+                        decision.id.clone(),
+                        task_core::DecisionRow::from_request(*task_id, decision, &er.ts),
+                    );
+                }
+                Event::DecisionAnswered {
+                    id,
+                    option,
+                    note,
+                    by,
+                } => {
+                    if let Some(row) = rows.get_mut(id) {
+                        row.apply_answer(option, note.as_deref(), by, &er.ts);
+                    }
+                }
+                Event::DecisionWithdrawn { id, reason } => {
+                    if let Some(row) = rows.get_mut(id) {
+                        row.apply_withdrawal(reason);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out: Vec<task_core::DecisionRow> = rows.into_values().collect();
+    out.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
+    out
+}
+
+fn decision_field_pairs(d: &task_core::DecisionRow) -> Vec<(&'static str, String)> {
+    vec![
+        ("root_id", d.root_id.to_string()),
+        ("task_id", d.task_id.to_string()),
+        ("key", d.key.clone()),
+        ("kind", d.kind.as_str().to_string()),
+        ("status", d.status.as_str().to_string()),
+        ("needed_before", d.needed_before.join(",")),
+        (
+            "json",
+            serde_json::to_string(&d.request).unwrap_or_default(),
+        ),
+        ("created_at", d.created_at.clone()),
+        (
+            "answered_at",
+            d.answered_at.clone().unwrap_or_else(|| "none".to_string()),
+        ),
+    ]
+}
+
+/// ADR-0079 D15: 再構築した `decisions` と保存されている行を id で突き合わせる。
+pub fn diff_decisions(
+    replayed: &[task_core::DecisionRow],
+    stored: &[task_core::DecisionRow],
+) -> Vec<DecisionMismatch> {
+    let mut out = Vec::new();
+    let stored_by_id: BTreeMap<&str, &task_core::DecisionRow> =
+        stored.iter().map(|d| (d.id.as_str(), d)).collect();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for r in replayed {
+        seen.insert(r.id.as_str());
+        match stored_by_id.get(r.id.as_str()) {
+            None => out.push(DecisionMismatch {
+                id: r.id.clone(),
+                field: "presence".to_string(),
+                replayed: "present".to_string(),
+                stored: "<missing>".to_string(),
+            }),
+            Some(s) => {
+                for ((field, rv), (_, sv)) in decision_field_pairs(r)
+                    .into_iter()
+                    .zip(decision_field_pairs(s))
+                {
+                    if rv != sv {
+                        out.push(DecisionMismatch {
+                            id: r.id.clone(),
+                            field: field.to_string(),
+                            replayed: rv,
+                            stored: sv,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    for s in stored {
+        if !seen.contains(s.id.as_str()) {
+            out.push(DecisionMismatch {
+                id: s.id.clone(),
+                field: "presence".to_string(),
+                replayed: "<missing>".to_string(),
+                stored: "present".to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// ADR-0079 D15: `celerisctl replay --check` / `--apply` の `decisions` の分。食い違いがあり `apply` なら
+/// 表を再構築の結果でまるごと置き換える（`events` は変えない）。戻り値は `(食い違い, 書き直したか)`。
+pub fn check_and_apply_decisions(
+    store: &dyn TaskStore,
+    apply: bool,
+) -> Result<(Vec<DecisionMismatch>, bool), OpsError> {
+    let tasks = store.list(None)?;
+    let mut all_events: Vec<(TaskId, Vec<EventRow>)> = Vec::with_capacity(tasks.len());
+    for task in &tasks {
+        all_events.push((task.id, store.event_rows_for(task.id, None, usize::MAX)?));
+    }
+    let rebuilt = rebuild_decisions(&all_events);
+    let stored = store.decisions_list(None)?;
+    let mismatches = diff_decisions(&rebuilt, &stored);
+    if apply && !mismatches.is_empty() {
+        store.decisions_replace(rebuilt)?;
+        return Ok((Vec::new(), true));
+    }
+    Ok((mismatches, false))
+}
+
 /// [`check_and_apply_execution`] の戻り値: `(work_unit_mismatches, run_mismatches,
 /// execution_plan_mismatches, applied_task_count)`。
 pub type ExecutionCheckReport = (
@@ -816,6 +975,7 @@ mod tests {
     fn sample_task(status: Status) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -1208,6 +1368,9 @@ mod tests {
         let now = OffsetDateTime::now_utc();
 
         let spec = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "A -> B -> C".to_string(),
             work_units: vec![
@@ -1601,6 +1764,9 @@ mod tests {
         let now = OffsetDateTime::now_utc();
 
         let spec = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "A only".to_string(),
             work_units: vec![wu_spec("a", &[])],
@@ -1743,6 +1909,9 @@ mod tests {
         let now = OffsetDateTime::now_utc();
 
         let v1_spec = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "v1".to_string(),
             work_units: vec![wu_spec("a", &[])],
@@ -1761,6 +1930,9 @@ mod tests {
         .expect("adopt v1");
 
         let v2_spec = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "v2".to_string(),
             work_units: vec![wu_spec("a", &[]), wu_spec("b", &["a"])],
@@ -1958,6 +2130,251 @@ mod tests {
         assert_eq!(
             runs.iter().find(|r| r.run_id == "rev-1").unwrap().status,
             RunIndexStatus::HarnessError
+        );
+    }
+
+    fn decision_request(root: &Task, key: &str, needed_before: &str) -> task_core::DecisionRequest {
+        task_core::DecisionRequest {
+            id: format!("dec-{key}"),
+            key: key.into(),
+            kind: task_core::DecisionKind::Choice,
+            question: format!("{key}?"),
+            options: vec![
+                task_core::DecisionOption {
+                    key: "a".into(),
+                    label: "A".into(),
+                    consequence: None,
+                },
+                task_core::DecisionOption {
+                    key: "b".into(),
+                    label: "B".into(),
+                    consequence: Some("slower".into()),
+                },
+            ],
+            recommended: "a".into(),
+            cost_of_reversal: task_core::CostOfReversal::High,
+            cost_note: None,
+            needed_before: vec![needed_before.into()],
+            path: vec![task_core::DecisionPathEntry {
+                task_id: root.id,
+                title: root.title.clone(),
+                stage: Some("phase-2".into()),
+                unit: None,
+            }],
+            raised_by: task_core::DecisionRaisedBy {
+                task_id: root.id,
+                run_id: Some("planner-1".into()),
+                origin: task_core::DecisionOrigin::Planner,
+            },
+            status: task_core::DecisionStatus::Open,
+            answer: None,
+            withdrawn_reason: None,
+        }
+    }
+
+    /// ADR-0079 R1a (d): migration 0030 の派生（`work_units.child_task_id` / `needs_decisions_json`・
+    /// `decisions`）は events だけから作り直せる。store が Event と同じトランザクションで書いた行と、
+    /// `rebuild_work_units_and_runs` / `rebuild_decisions` の再構築が一致し、壊れた索引は `--apply` で戻る。
+    #[test]
+    fn replay_rebuilds_decisions_and_child_links() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        let mut root = sample_task(Status::Running);
+        root.tree = Some(task_core::TreeInfo::root(root.id));
+        store.insert(&root).expect("insert root");
+        let now = OffsetDateTime::now_utc();
+        let spec: ExecutionPlanSpec = serde_json::from_str(include_str!(
+            "../../task-core/testdata/execution-plan/v3-browser.json"
+        ))
+        .expect("v3 fixture");
+        let limits = ExecutionLimits {
+            tree: task_core::TreeLimits {
+                enabled: true,
+                ..task_core::TreeLimits::default()
+            },
+            ..ExecutionLimits::default()
+        };
+        // `enabled = false`（既定）では人の計画でも採用されない。
+        assert!(
+            crate::execution::adopt_plan(
+                &store,
+                root.id,
+                spec.clone(),
+                task_core::PlanOrigin::Human,
+                None,
+                ExecutionLimits::default(),
+                now,
+            )
+            .is_err()
+        );
+        let plan = crate::execution::adopt_plan(
+            &store,
+            root.id,
+            spec,
+            task_core::PlanOrigin::Human,
+            None,
+            limits,
+            now,
+        )
+        .expect("adopt /3");
+
+        // 子 task（p1 から作った子）と、採用した既存の task（p2-a）。
+        let mut child = sample_task(Status::Ready);
+        child.parent_id = Some(root.id);
+        child.tree = Some(task_core::TreeInfo::child_of(
+            &root,
+            task_core::ParentUnit {
+                task_id: root.id,
+                plan_id: plan.id.clone(),
+                unit_key: "p1".into(),
+                stage: "phase-1".into(),
+            },
+            None,
+        ));
+        store.insert(&child).expect("insert child");
+        store
+            .append_event(
+                root.id,
+                &Event::ChildTaskCreated {
+                    plan_id: plan.id.clone(),
+                    unit_key: "p1".into(),
+                    child_task_id: child.id,
+                    depth: 2,
+                },
+            )
+            .unwrap();
+        let adopted = sample_task(Status::Done);
+        store.insert(&adopted).expect("insert adopted");
+        store
+            .append_event(
+                root.id,
+                &Event::ChildAdopted {
+                    plan_id: plan.id.clone(),
+                    unit_key: "p2-a".into(),
+                    stage: "phase-2".into(),
+                    child_task_id: adopted.id,
+                },
+            )
+            .unwrap();
+
+        // 決定: h1 は回答、h2 は取り下げ、子の節点からも 1 件（木の root は path の先頭）。
+        for (task, req) in [
+            (root.id, decision_request(&root, "h1", "p2-b")),
+            (root.id, decision_request(&root, "h2", "stage:phase-3")),
+            (child.id, {
+                let mut r = decision_request(&root, "c1", "self");
+                r.id = "dec-child-c1".into();
+                r.raised_by.task_id = child.id;
+                r.raised_by.origin = task_core::DecisionOrigin::Worker;
+                r
+            }),
+        ] {
+            store
+                .append_event(
+                    task,
+                    &Event::DecisionRequested {
+                        decision: Box::new(req),
+                    },
+                )
+                .unwrap();
+        }
+        store
+            .append_event(
+                root.id,
+                &Event::DecisionAnswered {
+                    id: "dec-h1".into(),
+                    option: "b".into(),
+                    note: Some("推奨と異なる".into()),
+                    by: "human".into(),
+                },
+            )
+            .unwrap();
+        store
+            .append_event(
+                root.id,
+                &Event::DecisionWithdrawn {
+                    id: "dec-h2".into(),
+                    reason: "replan".into(),
+                },
+            )
+            .unwrap();
+
+        // store が書いた派生。
+        let units = store.work_units_for(root.id).unwrap();
+        let by_key = |k: &str| units.iter().find(|u| u.key == k).unwrap().clone();
+        assert_eq!(by_key("p1").child_task_id, Some(child.id.to_string()));
+        assert_eq!(by_key("p2-a").child_task_id, Some(adopted.id.to_string()));
+        assert_eq!(by_key("p1-note").child_task_id, None);
+        assert_eq!(
+            by_key("p2-b").needs_decisions,
+            vec!["h1".to_string(), "h3".to_string()]
+        );
+        assert_eq!(by_key("p3").needs_decisions, vec!["h2".to_string()]);
+        let stored_decisions = store.decisions_list(None).unwrap();
+        assert_eq!(stored_decisions.len(), 3);
+        assert!(stored_decisions.iter().all(|d| d.root_id == root.id));
+        assert_eq!(store.decisions_list(Some(root.id)).unwrap().len(), 3);
+
+        // events だけからの再構築が一致する。
+        let root_events = store.event_rows_for(root.id, None, usize::MAX).unwrap();
+        let (rebuilt_units, rebuilt_runs) = rebuild_work_units_and_runs(root.id, &root_events);
+        let (wu_mm, run_mm) = diff_execution(
+            root.id,
+            &rebuilt_units,
+            &units,
+            &rebuilt_runs,
+            &store.runs_for_task(root.id).unwrap(),
+        );
+        assert!(wu_mm.is_empty(), "{wu_mm:?}");
+        assert!(run_mm.is_empty(), "{run_mm:?}");
+        let mut all_events = Vec::new();
+        for t in [root.id, child.id, adopted.id] {
+            all_events.push((t, store.event_rows_for(t, None, usize::MAX).unwrap()));
+        }
+        let rebuilt_decisions = rebuild_decisions(&all_events);
+        assert_eq!(rebuilt_decisions, stored_decisions);
+        assert!(diff_decisions(&rebuilt_decisions, &stored_decisions).is_empty());
+        let h1 = stored_decisions.iter().find(|d| d.key == "h1").unwrap();
+        assert_eq!(h1.status, task_core::DecisionStatus::Answered);
+        let c1 = stored_decisions.iter().find(|d| d.key == "c1").unwrap();
+        assert_eq!(c1.task_id, child.id);
+        assert_eq!(c1.root_id, root.id);
+
+        // 壊れた索引は `replay --apply` で events から戻る。
+        let (mm, applied) = check_and_apply_decisions(&store, false).unwrap();
+        assert!(mm.is_empty() && !applied, "{mm:?}");
+        store.decisions_replace(Vec::new()).unwrap();
+        let (mm, _) = check_and_apply_decisions(&store, false).unwrap();
+        assert_eq!(mm.len(), 3);
+        assert!(mm.iter().all(|m| m.field == "presence"));
+        let (mm, applied) = check_and_apply_decisions(&store, true).unwrap();
+        assert!(mm.is_empty() && applied);
+        assert_eq!(store.decisions_list(None).unwrap(), stored_decisions);
+
+        let mut corrupted = units.clone();
+        for u in &mut corrupted {
+            u.child_task_id = None;
+            u.needs_decisions.clear();
+        }
+        store.work_units_replace(root.id, corrupted).unwrap();
+        let (wu_mm, _, _, _) = check_and_apply_execution(&store, false).unwrap();
+        assert!(
+            wu_mm
+                .iter()
+                .any(|m| m.key == "p1" && m.field == "child_task_id"),
+            "{wu_mm:?}"
+        );
+        assert!(
+            wu_mm
+                .iter()
+                .any(|m| m.key == "p2-b" && m.field == "needs_decisions"),
+            "{wu_mm:?}"
+        );
+        let (wu_mm, _, _, applied) = check_and_apply_execution(&store, true).unwrap();
+        assert!(wu_mm.is_empty() && applied == 1);
+        let fixed = store.work_units_for(root.id).unwrap();
+        assert_eq!(
+            fixed.iter().find(|u| u.key == "p1").unwrap().child_task_id,
+            Some(child.id.to_string())
         );
     }
 }

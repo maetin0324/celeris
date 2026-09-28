@@ -1,10 +1,15 @@
 # ADR-0074: WorkUnit の並列実行・工程ごとの途中確認・案件レベルの計画（マイルストーン Task の DAG）・quota を主にした費用指標
 
 - 日付: 2026-09-26
-- 状態: **Accepted**（Phase F0 = 設計。Phase F1（WU ごとの lane、planner の lane とサイズ、replan の差分、
-  repair の分類、成果物の登録）着手・完了、2026-09-26。Phase F3 の quota 側（(g)〜(k)）着手・完了、
-  2026-09-26。Phase F2（WU の並列。(a)(b) と (c)〜(l)）着手・完了、2026-09-26（F2b）。F3 の途中確認（(a)〜(f)）
-  着手・完了、2026-09-27。F4 以降は未着手）
+- 状態: **Partially implemented (2026-09-28)**。F1〜F4 と F5-fix〜F5-fix5 は実装・本番反映済み（最終報告
+  `docs/execution-parallel-report-2026-09-28.md` §2）。部分のもの: D1.3（並列数を Task・CoS・profile で狭める経路が無い）、
+  D2.1（`PUT /tasks/{id}/execution/pause-after` が無い）、D3.4（起点 (c) の自動 replan が無い）、D3.8（CoS の `create_task` が
+  案件直下に作る Task の draft 化を確認できない）、D6.2（配送の repair の `RepairScheduled` を出さない）。F5b の案件計画と途中確認の
+  dogfood は未実施。
+  - 経緯: Accepted（Phase F0 = 設計）。Phase F1（WU ごとの lane、planner の lane とサイズ、replan の差分、
+    repair の分類、成果物の登録）着手・完了、2026-09-26。Phase F3 の quota 側（(g)〜(k)）着手・完了、
+    2026-09-26。Phase F2（WU の並列。(a)(b) と (c)〜(l)）着手・完了、2026-09-26（F2b）。F3 の途中確認（(a)〜(f)）
+    着手・完了、2026-09-27。F4a / F4b 完了、2026-09-27。F5-1 dogfood 1〜4 回目と F5-fix〜F5-fix5、2026-09-26〜28
 - 関連:
   - ADR-0072（Task / ExecutionPlan / WorkUnit / Run。本 ADR はその D6 の直列規則・D13・D14・D16・D17・D18・D19・D21・D22 と §7 U3 / U4 を改める）
   - `docs/execution-decomposition-report-2026-09-25.md`（E6 dogfood の分析。以下「E6 報告」）

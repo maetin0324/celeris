@@ -197,3 +197,47 @@ lease 失効で reclaim されない（`process_group::group_alive` を使う）
 生きている run は（`drain_force_abort` が既定 `false` の間は）abort されない。(e) GUI:
 `failed` のタスク詳細にバナーとボタン、受信箱に失敗項目（vitest）、モバイル幅で崩れない
 （`mobile-audit` 違反 0）。
+
+## 付記: F5-fix6 実装時の明確化（2026-09-28）— 持ち主の居ない run を lease の失効を待たずに回収する
+
+本番 2026-09-28（task 01M3MCA20JSAKGENH571NZES1F、run 01M3MDZF188TRHFZ9554F7H7KN）: 人が設定の反映のために
+`systemctl --user restart celeris@1bb7fd6473a4` を実行した。止まるデーモンは SIGTERM を受けた tick でループを
+抜け（17:05:50.849Z）、0.6 秒後にアダプタが `result.json` = `error(retryable, exit=143)` を書いたが、完了を
+受け取る者が居ないまま自分の `daemon_instances` の行を消して exit した（`worker_finished` 無し、`runs.status`
+は `running`）。新しいデーモンは lease（17:20:03Z まで）+ `lease_grace` が切れるまで何もしなかった。D4 は
+「新しい active が旧が抱える run の lease を横取りしない」を lease の失効に任せ、lease に `instance_id` を
+埋め込む案は採らなかった（未解決に記録）。本付記はその未解決を、**lease の形を変えずに**
+`daemon_instances` の行と pid の生死で閉じる。
+
+1. **「持ち主が居ない」の定義**（`crates/task-dispatch/src/orphan.rs`）。次の 2 つが両方成り立つ run だけ:
+   - (i) このインスタンスがその Task を手元に持っていない（`running` / `checking` / `integrating` /
+     `reviewing` / `awaiting_children` のどれにも無い。v2 の WU は run id で `running` / `checking` を見る）。
+   - (ii) run を抱えうる**他の**インスタンスが 1 つも生きていない: `daemon_instances` の自分以外の行で、
+     `role ∈ {active, draining}`、`drained_at` が無く、`heartbeat_at` が `freshness`（D4 の
+     `3 × tick + lease_grace`）以内、かつ `pid` のプロセスが生きている（`/proc/<pid>`。判定できなければ生きている扱い）
+     ものが無い。`standby` は dispatch しないので数えない。行が無い（SIGTERM の exit で消した）・heartbeat が古い・
+     pid が消えた（SIGKILL 直後）・`drained_at` が付いた（手元 0 で exit）はどれも「居ない」。
+   - run の pid は DB にも run ディレクトリにも残らない（`process_group` の表はプロセス内のメモリ）。ワーカーは
+     起こしたデーモンの子で、stdout/stderr はデーモンへの pipe、`result.json` もデーモン内のアダプタが書くので、
+     持ち主のデーモンが居なければその run の結果を記録できる者は居ない。したがって「ワーカーのプロセスが
+     生きていない」は (ii) で代える（systemd の `KillMode=control-group` では子も同時に止まる）。
+2. **ライブ切替の例外**: draining の旧デーモンは自分の run の面倒を見続け、heartbeat を打ち続ける。その行は
+   (ii) に当たるので、新しい active は旧が抱える run を**横取りしない**（D4 のまま）。その間は、別の（落ちた）
+   デーモンの孤児も lease の失効を待つ（保守的な側に倒す。同時に 2 つ以上の旧が居るのは異常系）。
+3. **回収するのは active だけ**: `accepting_new_work`（active）で、かつ celeris が自分の行を持つとき
+   （`Dispatcher::set_orphan_takeover`。`--mode verify`・テスト・設定を渡さない組み立てでは無効）。
+   `daemon_instances` が読めない tick は回収しない。
+4. **回収の中身**は lease 失効の経路（D5・F5-fix2）と同じで、待たないだけ:
+   `result.json` に終端（done / question / yielded / budget_exhausted / 供給側でない error）があれば
+   `on_worker_finished` で確定（error(retryable) は通常の再試行、done は検査・レビューへ）。無ければ
+   `WorkerFinished{outcome: "interrupted: orphan_takeover: …", end: harness_error(infra)}` で閉じ、Task の lease を
+   持つ run は `InfraRequeue`（attempts を消費しない。バックオフは付けない。上限超過は `infra failure ×N`）、
+   WU は reason `orphan_takeover` で ready / needs_continuation（ADR-0072 D9/D10）。v2 の工程の lease は WU ごとに
+   同じ判定（`reconcile_parallel_tasks`）、統合 WU は pending に戻す。回収の前に `worker_progress`
+   （`orphan_takeover: …`）と WARN ログを残す。
+5. **止まるデーモン側**（SIGTERM / SIGINT の `Exit::Signal` だけ。drain・`--until-idle`・`--max-ticks` は従来どおり）:
+   `Dispatcher::interrupt_runs_on_shutdown` が、届いた完了を記録し、残りの worker run をプロセスグループごと止め、
+   `WorkerFinished{outcome: "interrupted: daemon shutdown (SIGTERM/SIGINT) …", end: cancelled}` と
+   `InfraRequeue`（WU は reason `shutdown`）を書いてから exit する。run が error 以外の終端の `result.json` を
+   書き終えていたら DB は触らず、次のデーモンの 4. に任せる（ここで検査・レビューを spawn しても exit で失われる）。
+   レビュー・検査・統合は触らない（次のデーモンの `recover_reviews` と 4. が拾う）。

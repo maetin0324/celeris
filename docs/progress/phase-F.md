@@ -1754,6 +1754,96 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 
 **昇格**: release `7667410c23d5`（main 7667410）。ゲート fmt / test / clippy 0、GUI 0、gen:types 差分ゼロ。verify ok=true live_ok=true schema 28。2026-09-28 12:06:01Z にライブ昇格（backup 20260928-120553-pre-7667410c23d5）。
 
+## F5-fix6: 再起動直後に孤児 run を lease 失効を待たずに回収する（2026-09-28）
+
+### 症状（本番 2026-09-28、task 01M3MCA20JSAKGENH571NZES1F、run 01M3MDZF188TRHFZ9554F7H7KN）
+
+- 人が設定の反映（gate=on）のため 17:05:50Z に `systemctl --user restart celeris@1bb7fd6473a4.service` を実行した。
+  worker run（claude-code、Opus、16:36:11Z 開始）が走っていた。
+- journal: 17:05:50.849Z「SIGTERM; exiting」→ api / llm-proxy / mcp を止め、backup の停止を 5 秒待ち → 17:05:55.852Z
+  「instance row removed」→「celeris stopped, exit: Signal」。その間の 17:05:51.45Z に `runs/<run>/result.json` =
+  `{"type":"error","message":"worker exited without a result message (exit=143)","retryable":true}` と
+  `artifact_produced`（seq 314〜319、未申告成果物の走査）が書かれたが、`worker_finished` は無く、`runs.status` は
+  `running`、`tasks.lease_worker_run_id` はその run、`lease_expires_at` 17:20:03Z のまま。
+- 新しいデーモン（17:06:06Z 起動、instance 01M3MFP7BYXBC8MXVTBKQZSX5E）は起動時の照合で何もしなかった
+  （lease がまだ有効）。lease + `lease_grace_secs` 60 の失効後に F5-fix2 の経路で拾われるまで約 15 分、人からは
+  「止まっている」。F5-fix2 の未解決「新しい active が旧の孤児 run を lease 失効の前に引き継がない」そのもの。
+
+### 根本原因（修正前の file:line）
+
+- 止まる側: `crates/celeris/src/lib.rs:2097` の SIGTERM の分岐は tick ループを即座に抜け（`Exit::Signal`）、
+  `run()`（L1627〜1660）は listener と背景ジョブを止めて `supervisor.deregister()`（L1659）するだけで、
+  `Dispatcher` の完了のチャネルを誰も読まない。systemd（`KillMode=control-group`）は子にも同時に SIGTERM を送るので、
+  アダプタはその 0.6 秒後に `result.json` を書いて `Completion` を送ったが、受け取る tick はもう来なかった。
+  `abort_all_runs`（drain timeout の強制 abort 用）はこの経路では呼ばれず、呼ばれても worker run の DB は触らない
+  （「lease が切れて新しい active が拾う」設計）。つまり「記録しようとして競争に負けた」のではなく、記録する経路が無かった。
+- 起きる側: `crates/task-dispatch/src/dispatcher.rs:7042`（`reclaim_expired_leases`）の `if lease.expires_at > now
+  { continue; }` と、L9462 / L9481（`reconcile_parallel_tasks`。工程の lease と WU の lease が切れていなければ触らない）。
+  lease に持ち主のインスタンスが無く（ADR-0070 D4 で採らなかった）、run の pid も DB に残らないので、
+  「持ち主が居ない」を判定する経路が無かった。
+
+### 修正（schema 変更なし。migration 0030 は無い）
+
+- (1) 孤児の回収（`crates/task-dispatch/src/orphan.rs` 新設、`dispatcher.rs` の `reclaim_expired_leases` /
+  `reconcile_parallel_tasks` と補助の `holds_task_in_hand` / `lease_holders_gone` / `note_orphan_takeover` /
+  `requeue_orphaned_work_unit_run`）。**「持ち主が居ない」**= (i) このインスタンスがその Task を手元に持っていない
+  （`running` / `checking` / `integrating` / `reviewing` / `awaiting_children`）かつ (ii) `daemon_instances` の自分以外に、
+  `role ∈ {active, draining}`・`drained_at` 無し・heartbeat が `3 × tick + lease_grace` 以内・pid が生きている行が無い。
+  そのとき lease の失効を待たずに F5-fix2 と同じ確定をする: result.json に終端があれば `on_worker_finished`
+  （error(retryable) → 通常の再試行、done → 検査・レビュー）、無ければ `WorkerFinished{outcome: "interrupted:
+  orphan_takeover: …", end: harness_error(infra)}` + `InfraRequeue`（attempts を消費しない、バックオフ無し）、
+  WU は reason `orphan_takeover` で ready / needs_continuation。v2 は WU ごと、統合 WU は pending に戻す。回収の前に
+  `worker_progress`（`orphan_takeover: …`）と WARN ログ（`reason=orphan_takeover`）を残す。active（`accepting_new_work`）
+  で、celeris が `set_orphan_takeover` を渡したときだけ（verify・テスト既定・draining は従来どおり）。
+- **ライブ切替の例外**: draining の旧は heartbeat を打ち続けるので (ii) に当たり、新しい active は旧の run を
+  横取りしない（ADR-0040 D4 / ADR-0070 D4 のまま）。
+- (2) 止まる側（`crates/celeris/src/lib.rs` の `run()`、`Exit::Signal` のときだけ）: `Dispatcher::interrupt_runs_on_shutdown`
+  が、届いた完了を `drain_completions` で記録し、残りの worker run をプロセスグループごと止めて
+  `WorkerFinished{outcome: "interrupted: daemon shutdown (SIGTERM/SIGINT) …", end: cancelled}` + `InfraRequeue`
+  （WU は reason `shutdown`）を書いてから exit する。error 以外の終端の result.json を書き終えた run は触らず、次の
+  デーモンの (1) に任せる。レビュー・検査・統合は触らない（次のデーモンの `recover_reviews` と (1)）。
+  SIGKILL・OOM・停止中の DB エラーなど (2) が書けなかった場合は (1) が拾う。
+- ADR-0070 末尾に「付記: F5-fix6 実装時の明確化」（定義と drain の例外）。
+
+### 証拠
+
+- 新しいテスト（`crates/task-dispatch/src/dispatcher/tests/orphan_takeover.rs`、`crates/task-dispatch/src/orphan.rs`）:
+  - `an_orphaned_run_with_an_error_result_is_retried_without_waiting_for_the_lease`（本番の result.json そのまま、
+    lease 残り 14 分、旧の行なし → 1 tick で `WorkerFinished`〈exit=143〉と `worker_error` の Running → Ready、`runs` 行が閉じる）
+  - `an_orphaned_run_with_a_done_result_is_finalised`（done → 検査 `true` → Done、新しい run は起きない）
+  - `a_run_held_by_a_live_draining_instance_is_left_alone`（draining の旧が heartbeat・pid 生存 → 何もしない。
+    draining 側・設定なしの dispatcher も回収しない。旧の pid が死んでいれば回収する）
+  - `an_orphaned_run_without_a_result_is_requeued_as_interrupted`（v1 計画の WU、`interrupted: orphan_takeover`・
+    `harness_error(infra)`・`InfraRequeue`・WU ready〈reason `orphan_takeover`〉・attempts 0・バックオフ無し）
+  - `an_orphaned_parallel_work_unit_run_is_reconciled_without_waiting_for_its_lease`（v2 の工程の lease）
+  - `a_shutdown_records_the_interrupted_runs_before_exiting`（(2)。`interrupted: daemon shutdown`・`cancelled`・Ready・
+    lease なし、2 回目は 0 件）
+  - `orphan::tests::the_holder_is_gone_only_when_no_other_live_active_or_draining_instance_exists`、
+    `orphan::tests::proc_pid_alive_sees_this_process_and_not_an_unused_pid`
+- 修正を外して（`lease_holders_gone` を常に `false`）実行 → 孤児の 5 本（error / done / draining の最後の段 / result なし /
+  v2 の WU）が FAILED、戻して 6 本とも ok（shutdown の 1 本は (2) の別経路なので外しても ok）。
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-takeover/target`、`RUSTC_WRAPPER` 無し）:
+  - `cargo fmt --all -- --check` → exit 0
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0、警告 0
+  - `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY` passed 2627 / failed 0 / ignored 7（nextest 77 バイナリ + doc 10）
+  - GUI・生成型・schema・migration は触っていない。
+
+### 未解決事項・提案
+
+- 本番の run 01M3MDZF188TRHFZ9554F7H7KN は、本 fix の調査中に lease 失効（17:20:03Z + 60 s）後の F5-fix2 の経路で
+  既に拾われ、planner → WU `merge-and-check` に進んでいる（本 fix は本番に触れていない。DB は read-only の照会だけ）。
+- (ii) は保守的: draining の旧が生きている間は、別の落ちたデーモンの孤児も lease 失効まで待つ。lease に `instance_id` を
+  持たせれば run ごとに判定できるが、`acquire_lease` の trait の形と schema を変えるので今回もやらない。
+- pid の再利用で死んだ旧の pid が別プロセスに使われていると「生きている」と誤認し、lease 失効まで待つ（安全側）。
+- 持ち主のデーモンが SIGKILL で消え、systemd の外（開発時の端末など）で子が生き残った場合、その子は stdout の pipe を
+  失って次の書き込みで止まる想定だが、孫（`cargo` 等）は残りうる。新しい active はその run を即座に requeue するので、
+  同じ worktree に一時的に 2 つの書き手が重なりうる（systemd 配下の本番では cgroup ごと止まるので起きない）。
+- (2) で requeue した run は `interrupted:` なので GUI では「中断」（失敗に数えない）。止めた run の続き（continuation）は
+  WU の checkpoint があるときだけ（v1 の atomic Task は通常の再 dispatch）。
+- `abort_all_runs`（`drain_force_abort = true` の drain timeout）は従来どおり DB を触らないが、そのデーモンは
+  `drained_at` を付けて exit するので、新しい active は (1) で即座に拾う。
+- 本番への反映は昇格待ち。
+
 ## 人の決定と本番 DB の修正（2026-09-28 11:2xZ、記録は 14:4xZ）
 
 - **P-F5-1-4b は実施**: 本番 DB の `runs` で `status='running'` のまま残っていた 7 行を人の指示で UPDATE した。dogfood 4 回目の gate run 2 行

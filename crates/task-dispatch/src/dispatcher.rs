@@ -1342,6 +1342,54 @@ struct WorkUnitWorkspace {
     artifacts_dir: PathBuf,
 }
 
+/// ADR-0074「Phase F5-fix7 実装時の明確化」: WU の worktree を用意できなかった理由。
+/// `permanent` は時間では直らないもの（依存先の成果が解決できない・Task ブランチが無い）で、1 回目で
+/// WU を blocked にする。それ以外（git の錠・EBUSY・DB の一時的な失敗など）は
+/// [`MAX_WU_PREPARE_ATTEMPTS`] 回までバックオフしてやり直し、使い切ったら blocked にする。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WuPrepareError {
+    message: String,
+    permanent: bool,
+}
+
+impl WuPrepareError {
+    fn permanent(message: String) -> Self {
+        WuPrepareError {
+            message,
+            permanent: true,
+        }
+    }
+
+    fn transient(message: String) -> Self {
+        WuPrepareError {
+            message,
+            permanent: false,
+        }
+    }
+}
+
+impl std::fmt::Display for WuPrepareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗で WU の worktree の用意をやり直す上限
+/// （連続。この回数目の失敗で blocked にする）。
+const MAX_WU_PREPARE_ATTEMPTS: u32 = 5;
+
+/// 一時的な失敗の `n` 回目（1 始まり）の後に待つ時間（2 s, 4 s, 8 s, 16 s …、上限 60 s）。
+fn wu_prepare_backoff(n: u32) -> time::Duration {
+    time::Duration::seconds(2i64.saturating_pow(n.min(6)).min(60))
+}
+
+/// 同じ WU の worktree の用意が連続して失敗した回数と、次に試してよい時刻（プロセス内メモリのみ）。
+#[derive(Debug, Clone, Copy)]
+struct WuPrepareFailures {
+    count: u32,
+    retry_at: OffsetDateTime,
+}
+
 /// ADR-0016 M5: 子待ちの親について覚えておくもの。
 struct AwaitingChildren {
     run_id: String,
@@ -1903,6 +1951,9 @@ pub struct Dispatcher {
     /// 永続化しない。dispatcher の再起動で猶予は失われるが、上限判定自体は `consecutive_infra_requeues`
     /// が events から数え直すので安全側。ADR-0070 §2 D3 参照）。
     infra_backoff: HashMap<TaskId, OffsetDateTime>,
+    /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
+    /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
+    wu_prepare_failures: HashMap<String, WuPrepareFailures>,
     disk_low: bool,
     /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
     removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
@@ -2205,6 +2256,7 @@ impl Dispatcher {
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
+            wu_prepare_failures: HashMap::new(),
             disk_low: false,
             removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scratch: ScratchState::default(),
@@ -8390,14 +8442,17 @@ impl Dispatcher {
     /// ADR-0074 D1.2（Phase F2b）: WU の run の worktree を用意する（冪等）。
     /// - 並列 1 に倒した Task（理由を記録）・統合の repair WU（Task の worktree で走る）は `Ok(None)`。
     /// - 基点は、既にブランチがあればそれを使い回し、無ければ同じ工程の依存先の WU ブランチの HEAD
-    ///   （積み上げ）か Task ブランチの HEAD。
+    ///   （積み上げ）か Task ブランチの HEAD。依存先の WU ブランチが無ければ
+    ///   `integration::dependency_base`（F5-fix7: 依存先の記録した commit か Task ブランチの HEAD）。
     fn prepare_work_unit_workspace(
         &self,
         task: &Task,
         wu: &task_core::WorkUnitRow,
         task_ws: Option<&task_worker::TaskWorkspaces>,
-    ) -> Result<Option<WorkUnitWorkspace>, String> {
-        let mode = self.parallel_mode(task).map_err(|e| e.to_string())?;
+    ) -> Result<Option<WorkUnitWorkspace>, WuPrepareError> {
+        let mode = self
+            .parallel_mode(task)
+            .map_err(|e| WuPrepareError::transient(e.to_string()))?;
         if let Some(reason) = &mode.fallback {
             self.record_serialized(task.id, &wu.plan_id, reason);
             return Ok(None);
@@ -8411,18 +8466,19 @@ impl Dispatcher {
         // Task の worktree（基点のブランチ）を先に用意する。
         for repo in &ws.repos {
             if let Some(wt) = &repo.worktree {
-                wt.ensure_blocking()
-                    .map_err(|e| format!("cannot prepare the task worktree: {e}"))?;
+                wt.ensure_blocking().map_err(|e| {
+                    WuPrepareError::transient(format!("cannot prepare the task worktree: {e}"))
+                })?;
             }
         }
         let units = self
             .store
             .work_units_for(task.id)
-            .map_err(|e| e.to_string())?;
-        let intra_dep = wu.depends_on.iter().find(|d| {
+            .map_err(|e| WuPrepareError::transient(e.to_string()))?;
+        let intra_dep = wu.depends_on.iter().find_map(|d| {
             units
                 .iter()
-                .any(|u| &u.key == *d && u.phase.is_some() && u.phase == wu.phase)
+                .find(|u| &u.key == d && u.phase.is_some() && u.phase == wu.phase)
         });
         let task_id = task.id.to_string();
         let branch = crate::integration::wu_branch(&task_id, &wu.key);
@@ -8441,19 +8497,26 @@ impl Dispatcher {
                     .clone()
                     .or_else(|| existing.clone())
                     .unwrap_or_default(),
-                (None, Some(dep)) => crate::integration::rev_parse(
+                // ADR-0074「Phase F5-fix7 実装時の明確化」: 依存先の WU ブランチが無い（Task の worktree で
+                // 走った repair / 統合 WU、ref が消えた）ときは、依存先の記録した commit か Task ブランチの
+                // HEAD に倒す（`integration::dependency_base`）。解決できなければ時間では直らない。
+                (None, Some(dep_row)) => crate::integration::dependency_base(
                     &repo.source,
-                    &format!(
-                        "refs/heads/{}",
-                        crate::integration::wu_branch(&task_id, dep)
-                    ),
+                    &task_id,
+                    dep_row,
+                    &task_wt.branch,
                 )
-                .ok_or_else(|| format!("dependency branch of {dep} does not exist yet"))?,
+                .map_err(WuPrepareError::permanent)?,
                 (None, None) => crate::integration::rev_parse(
                     &repo.source,
                     &format!("refs/heads/{}", task_wt.branch),
                 )
-                .ok_or_else(|| format!("task branch {} does not exist", task_wt.branch))?,
+                .ok_or_else(|| {
+                    WuPrepareError::permanent(format!(
+                        "task branch {} does not exist",
+                        task_wt.branch
+                    ))
+                })?,
             };
             let lwt = crate::integration::wu_worktree(
                 &ws.task_dir,
@@ -8463,7 +8526,7 @@ impl Dispatcher {
                 &repo.source,
                 &base,
             );
-            crate::integration::ensure_wu_worktree(&lwt)?;
+            crate::integration::ensure_wu_worktree(&lwt).map_err(WuPrepareError::transient)?;
             first_base.get_or_insert(base);
             repos.push(task_worker::TaskRepo::git(repo.name.clone(), lwt));
         }
@@ -8479,6 +8542,98 @@ impl Dispatcher {
             base: wu.base_commit.clone().or(first_base).unwrap_or_default(),
             artifacts_dir: wu_dir.join(task_core::artifacts::ARTIFACTS_DIR_NAME),
         }))
+    }
+
+    /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU の worktree を用意できなかった。黙って tick ごとに
+    /// やり直し続けない（本番 2026-09-28 の 20 分の停止）:
+    /// - 一時的な失敗は [`MAX_WU_PREPARE_ATTEMPTS`] 回まで [`wu_prepare_backoff`] で待ってやり直す。
+    /// - 時間で直らない失敗（依存先の成果が解決できない等）と、上限を使い切った一時的な失敗は、WU を
+    ///   `blocked(question)`（`WorkUnitTransitioned{reason: "prepare_failed"}`）にし、理由を
+    ///   `worker_progress` に残す。Task が Ready（1 本目）なら `approvals` に 1 件作って `Trigger::Unroutable`
+    ///   で `ready → blocked`（`QuestionRaised`。ADR-0062 B1 の `block_task_missing_cluster_tool` と同じ出口）。
+    ///   人が直して回答すると、D18 の `answer` の経路でこの WU が ready に戻り、もう一度用意を試す。
+    ///   並列の 2 本目以降（Task は Running）は WU だけ blocked にし、兄弟の run が終わったときの
+    ///   `settle_phase` → `Question` が Task を blocked にする。
+    fn on_work_unit_prepare_failed(
+        &mut self,
+        task: &Task,
+        wu: &task_core::WorkUnitRow,
+        error: &WuPrepareError,
+        second_pass: bool,
+    ) -> Result<(), DispatchError> {
+        let now = self.now_utc();
+        if !error.permanent {
+            let count = self
+                .wu_prepare_failures
+                .get(&wu.id)
+                .map_or(0, |f| f.count)
+                .saturating_add(1);
+            if count < MAX_WU_PREPARE_ATTEMPTS {
+                let retry_at = now + wu_prepare_backoff(count);
+                self.wu_prepare_failures
+                    .insert(wu.id.clone(), WuPrepareFailures { count, retry_at });
+                tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, attempt = count, max_attempts = MAX_WU_PREPARE_ATTEMPTS, %retry_at, "cannot prepare the work unit worktree (transient); retrying after a backoff");
+                return Ok(());
+            }
+        }
+        self.wu_prepare_failures.remove(&wu.id);
+        tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, permanent = error.permanent, "cannot prepare the work unit worktree; blocking the work unit and asking a human (reason=prepare_failed)");
+        let mut row = wu.clone();
+        row.status = task_core::WorkUnitStatus::Blocked;
+        row.blocked_reason = Some(task_core::WorkUnitBlockedReason::Question);
+        row.clear_lease();
+        row.updated_at = rfc3339(now);
+        self.store.work_unit_transition(
+            task.id,
+            row,
+            Event::WorkUnitTransitioned {
+                work_unit_id: wu.id.clone(),
+                key: wu.key.clone(),
+                from: wu.status,
+                to: task_core::WorkUnitStatus::Blocked,
+                reason: "prepare_failed".to_string(),
+                run_id: None,
+            },
+        )?;
+        let question = format!(
+            "WorkUnit `{}` の作業場所（git worktree）を用意できないため、この WU を止めました: {}。\
+             依存先のブランチ・Task ブランチ・git の状態を直してから回答すると、この WU の用意をやり直します。",
+            wu.key, error.message
+        );
+        let progress = Event::worker_progress(
+            "prepare",
+            format!("prepare_failed: work unit {}: {}", wu.key, error.message),
+        );
+        if second_pass {
+            self.store.append_event(task.id, &progress)?;
+            return Ok(());
+        }
+        if let Err(e) = crate::approvals::record_question_approval(
+            self.store.as_ref(),
+            task,
+            &question,
+            OffsetDateTime::now_utc(),
+        ) {
+            tracing::warn!(task_id = %task.id, error = %e, "failed to record the approval for the work unit prepare failure");
+        }
+        let events = vec![
+            progress,
+            Event::QuestionRaised {
+                run_id: format!("wu-prepare-{}", wu.id),
+                text: question,
+            },
+        ];
+        match self
+            .store
+            .apply_transition_with_events(task.id, Trigger::Unroutable, events)
+        {
+            Ok(_) => Ok(()),
+            Err(StoreError::InvalidTransition(e)) => {
+                tracing::warn!(task_id = %task.id, error = %e, "prepare-failed transition could not be applied");
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// ADR-0074 D1.2（Phase F2b）: v2 の WU が作業したツリー（`(dir, branch)`。repo ごと）。WU の
@@ -10625,10 +10780,20 @@ impl Dispatcher {
         let task_worktree = worktree.clone();
         let mut wu_workspace: Option<WorkUnitWorkspace> = None;
         if let Some(wu) = &v2_wu {
+            // ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗の後のバックオフ中は試さない。
+            if let Some(f) = self.wu_prepare_failures.get(&wu.id)
+                && self.now_utc() < f.retry_at
+            {
+                tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures = f.count, retry_at = %f.retry_at, "work unit worktree backoff; not dispatching yet");
+                return Ok(false);
+            }
             match self.prepare_work_unit_workspace(&task, wu, task_worktree.as_ref()) {
-                Ok(prepared) => wu_workspace = prepared,
+                Ok(prepared) => {
+                    self.wu_prepare_failures.remove(&wu.id);
+                    wu_workspace = prepared;
+                }
                 Err(e) => {
-                    tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %e, "cannot prepare the work unit worktree; not dispatching this tick");
+                    self.on_work_unit_prepare_failed(&task, wu, &e, second_pass)?;
                     return Ok(false);
                 }
             }
@@ -33673,6 +33838,10 @@ mod tests {
 
     /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。
     mod orphan_takeover;
+
+    /// Phase F5-fix7: 依存 WU のブランチが無いときの基点と、準備の失敗で黙って止まらないこと
+    /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。
+    mod work_unit_dependency_base;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

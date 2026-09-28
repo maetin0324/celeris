@@ -273,7 +273,10 @@ pub fn rebuild_work_units_and_runs(
                 }
                 let blocked_reason = if *to == WorkUnitStatus::Blocked {
                     match reason.as_str() {
-                        "question" | "integration_failed" => Some(WorkUnitBlockedReason::Question),
+                        // F5-fix7: WU の worktree を用意できずに止めた WU も、人の回答で再開する質問。
+                        "question" | "integration_failed" | "prepare_failed" => {
+                            Some(WorkUnitBlockedReason::Question)
+                        }
                         "plan_issue" => Some(WorkUnitBlockedReason::PlanIssue),
                         "dependency_failed" => Some(WorkUnitBlockedReason::DependencyFailed),
                         "limit" => Some(WorkUnitBlockedReason::Limit),

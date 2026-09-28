@@ -1268,3 +1268,36 @@ git 管理領域（`<登録元>/.git/worktrees/<name>/ORIG_HEAD`）を read-only
    そのものは足さない（足すのは `.git` 配下だけ。登録元の `.git` は共通の objects / refs / packed-refs のため避けられない）。
 3. **resume は変えない**（ADR-0054 Phase 68b/68c のまま）: `exec resume` は `--add-dir` を受け付けないので、最初の fresh `exec` で
    与えた許可を継ぐ前提を維持する。claude-code（`--permission-mode`、OS の sandbox なし）・acp には同じ概念が無いので変えない。
+
+## Phase F5-fix7 実装時の明確化（2026-09-28）
+
+本番（task 01M3MFS5T52FXA63W4V10XGC4S、replan 後の plan v2 01M3MMTCWK98A11E6HAJ1YS0CN）で、planner が書いた kind `repair` の WU
+`remerge`（main を Task ブランチに merge する）が Task の worktree で走って Task ブランチに commit し、同じ工程の `reship`
+（depends_on: remerge）が `celeris-wu/<task>/remerge` を探して見つからず、20 分間 tick ごとに WARN を出すだけで Task は `ready` の
+まま止まった（イベントなし）。
+
+1. **WU ブランチを持たない WU がある**（D1.2 の明確化）: `WorkUnitRow.branch == None` は「Task の worktree で走った」の印で、
+   kind `repair` の WU（統合の repair WU に限らず、planner が書いた repair WU も kind で決まる）・統合 WU・並列 1 に倒した Task の
+   WU が当たる。これらの成果（`WorkUnitCommitted.branch` は Task ブランチ）は Task ブランチにある。**`celeris-wu/<task>/<key>` を
+   後から作ることはしない**（`branch == None` の意味、`celeris-wu/*` の一覧 = WU の worktree を切った WU、という対応を崩さない。
+   統合の merge 対象は `WorkUnitRow.branch` から決まるので、ref を足しても統合は変わらないが、ref と行の食い違いを増やすだけ）。
+2. **依存先の基点**（D1.2「積み上げ」の明確化。`integration::dependency_base`、決定的、ref も行も書き換えない）: 同じ工程の依存先
+   `dep` の上に WU を切るとき、(i) `celeris-wu/<task>/<dep>` があればその HEAD。(ii) 依存先が WU ブランチを持たなかった
+   （`branch == None`）なら `head_commit` → `integrated_commit`（統合 WU）→ `base_commit` のうちこのリポジトリで解決できる最初のもの、
+   どれも無ければ Task ブランチの HEAD（commit しなかった repair WU = 依存先の基点 = Task ブランチ）。(iii) WU ブランチを持っていたのに
+   ref が消えている: `head_commit` → `base_commit`（commit の無い done は `head_commit == base_commit`）。どれも解決できなければ
+   「時間では直らない失敗」。複数 repo では `head_commit` は最初の repo の値なので、他の repo では解決できずに (ii) の Task ブランチの
+   HEAD に落ちる（Task の worktree で走った WU の成果はそこにある）。
+3. **WU の準備の失敗で黙って止まらない**（D1.3 / ADR-0072 D18 の明確化）: WU の worktree を用意できなかったとき、
+   - 時間では直らない失敗（2. で解決できない、Task ブランチが無い）は 1 回目で、一時的な失敗（git の錠・EBUSY・DB の一時的な失敗、
+     worktree の作成の失敗など、それ以外すべて）は連続 5 回目（間に 2 s / 4 s / 8 s / 16 s の待ち。プロセス内メモリ）で、WU を
+     `blocked(question)` にする（`WorkUnitTransitioned{reason: "prepare_failed"}`。replay は `prepare_failed → Question` と読む）。
+     理由の本文は `worker_progress`（`prepare_failed: work unit <key>: <error>`）と質問に残す（`blocked_reason` 列は enum なので
+     文字列は入れない。schema 変更なし）。
+   - Task が Ready（1 本目の dispatch）なら `approvals` に 1 件作り、`QuestionRaised` と `Trigger::Unroutable`（`ready → blocked`）で
+     人に聞く。ADR-0062 B1 の「担当が cluster の道具を持たない」と同じ出口（`WorkerQuestion` は `running → blocked` だけなので使えない）。
+     `Transitioned.reason` は `unroutable` になるが、質問の本文と `worker_progress` が理由を示す。
+   - 並列の 2 本目以降（Task は Running）は WU だけを blocked にし、兄弟の run が終わったときの `settle_phase` → `Question` が
+     Task を blocked にする（D1.6 のまま。質問の本文は既定の「WorkUnit <key> が質問しています」）。
+   - 人が直して回答すると、D18 の `answer` の経路（`resume_after_answer`）でこの WU が ready に戻り、もう一度用意を試す。
+   「ready のまま理由を見せる」は採らない: ready の Task は GUI の inbox に出ず、人が気づかない（本件の 20 分がそれ）。

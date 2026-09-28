@@ -1338,3 +1338,16 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - `RunRequest.cargo_target_dir` で `request.json` に実際の値を残す。終端（done / cancelled / superseded）の WU の target は tick ごとの `cleanup_work_unit_build_caches` が rename → 別スレッドで削除。
 - ADR-0074: §4 に「並列数 × target の容量」の注意、末尾に「Phase F5-fix 実装時の逸脱・明確化」。
 - テスト: `task_dispatch::dispatcher::tests::parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_when_done`（並列 2 WU の request.json の `cargo_target_dir` が WU ごとに異なり期待値と一致、WU の checks は各 `wu-<id>`、統合・reviewer の checks は `<repo-key>`、WU done 後に target が消える）、`task_worker::build_cache::tests::work_unit_target_dir_is_nested_under_the_repo_key`。
+
+### Phase F5-fix の全体ゲート（2026-09-28）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test --workspace --no-fail-fast` → exit 0、passed 2511 / failed 0 / ignored 5
+- `cargo clippy --workspace --all-targets -- -D warnings` → 警告 0
+- `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → ok（`docs/protocol/worker-protocol.schema.json` に `cargo_target_dir` が追加、commit 済み）
+- `cd gui && corepack pnpm@11.27.0 gen:types`（差分ゼロ）`&& typecheck && test` → Test Files 73 passed、Tests 1113 passed
+
+### 未解決事項・提案
+
+- 本番での確認（F5-1 dogfood の 4 回目）: 並列 WU の `runs/<run_id>/request.json` の `cargo_target_dir` が WU ごとに違うこと、WU done 後に `<build_cache_dir>/cargo/<repo-key>/wu-*` が消えること、replan の差分が統合 WU で拒否されないことを確かめる。
+- 別 Task 同士（同じリポジトリの Task 単位の run）は今も `<repo-key>` を共有する（ADR-0066 D1 のまま）。同じ偽のコンパイルエラーが Task をまたいで出るなら、Task 単位にも分けるかを判断する。

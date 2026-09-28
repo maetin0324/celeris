@@ -1301,3 +1301,12 @@ git 管理領域（`<登録元>/.git/worktrees/<name>/ORIG_HEAD`）を read-only
      Task を blocked にする（D1.6 のまま。質問の本文は既定の「WorkUnit <key> が質問しています」）。
    - 人が直して回答すると、D18 の `answer` の経路（`resume_after_answer`）でこの WU が ready に戻り、もう一度用意を試す。
    「ready のまま理由を見せる」は採らない: ready の Task は GUI の inbox に出ず、人が気づかない（本件の 20 分がそれ）。
+
+## ADR-0079 による置き換え（2026-09-28）
+
+人の決定（2026-09-28）により、**§2「3 層に固定」と D3 全体（D3.1〜D3.8: 案件直下のマイルストーン Task、途中目標の Go、`auto_advance`、
+`celeris.project-plan/1`・`POST /projects/{id}/plan {mode: milestones}`・`project-plan/{version}/decide`、案件の replan、案件ページの DAG）は廃止**する
+（ADR-0079 D13。本番で採用された案件計画は 0 件）。案件は粗い方向と常設の文脈だけを持ち、依存は root task の木の中にだけある。**D3.7 の
+`children`** は plan/3 の kind task の unit に置き換わり、/2 の互換としてだけ残る。§4 の「案件計画のマイルストーン数」の行と §6 R15 の
+「大きすぎれば children」も同様。**D1（工程・統合 WU・鍵 (task, WU)）と D2（途中確認）は維持**し、再帰の各段で使う（統合 WU は子 task の
+ブランチも merge する。段階の `review: human` は D2 の停止点と同じ）。本文は書き換えない。

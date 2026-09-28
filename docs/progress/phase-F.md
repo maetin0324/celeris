@@ -1359,3 +1359,26 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 
 - 本番での確認（F5-1 dogfood の 4 回目）: 並列 WU の `runs/<run_id>/request.json` の `cargo_target_dir` が WU ごとに違うこと、WU done 後に `<build_cache_dir>/cargo/<repo-key>/wu-*` が消えること、replan の差分が統合 WU で拒否されないことを確かめる。
 - 別 Task 同士（同じリポジトリの Task 単位の run）は今も `<repo-key>` を共有する（ADR-0066 D1 のまま）。同じ偽のコンパイルエラーが Task をまたいで出るなら、Task 単位にも分けるかを判断する。
+
+## Phase F5-1 dogfood（4 回目、2026-09-28）
+
+3 成果を独立した WU で実装し、統合後の HEAD `5470893aa3a9` で全体ゲートを通した。
+
+- planner / reviewer run を worker と同じ `QuotaActivity` の開始・終了に通し、`Event::QuotaEstimated` を記録する。`ExecutionMetrics.quota` の `runs_by_role` は `WorkerStarted.role` から導き、旧イベントで役割が不明なら worker として数える（ADR-0076）。dispatcher と集計の回帰テストを追加した。
+- 案件計画のマイルストーン Task が dispatch されたら途中目標を `approved` → `in_progress` に上げる。Task が `done` になっても `auto_advance = false` では人の `ok` を待ち、`true` では tick で一度だけ `reached` にする。案件 DAG の節点バッジもこの状態を表示する（ADR-0077）。dispatch・完了・DAG のテストを追加した。
+- `docs/celeris-api-v1.md` に案件計画の生成・決定、案件詳細の `project_plan`、phase-gate、`auto_advance` 更新の型と状態コードを追記した。
+
+### 統合後の証拠
+
+`wu/gate/artifacts/gate.md` の結果（Cargo は Celeris 指定の `CARGO_TARGET_DIR` を使用）:
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → exit 0、**2515 passed / 0 failed / 5 ignored**。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cd gui && pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test -- --reporter=dot` → 各 exit 0。GUI は 74 files / **1115 passed / 0 failed**。lint は 275 files、error 0、既存の informational finding 2 件。
+
+### 未解決事項・提案
+
+- この dogfood の本来の目的である、並列 WU の `CARGO_TARGET_DIR` 分離と終端後の削除、および replan で daemon 由来の統合 WU が拒否されないことは、本番実行で確認する。上記のコード検査はその代わりにはならない。
+- 同じリポジトリの別 Task 間で共有する target は引き続き監視し、同種の偽コンパイルエラーが再発した場合に Task 単位の分離を検討する。
+- GUI lint の informational finding 2 件は既存の `gui/scripts/check-resume-recovery.mjs` に残る。今回の成果の受け入れは妨げない。

@@ -40,3 +40,36 @@ Phase 1 は公開・未認証ページ向け。同一 UID の任意 shell を隔
 （fail-open）ことを確認した。shim（`browser_cli.py`）は呼び出し前に生成 policy（`default: deny`、非空で既知 action のみ）と
 非空の `allowed_domains` を検査し、満たさなければ substrate を起動せず `policy_block` を記録する。
 Python 単体 12 件、`scripts/browser-smoke.py` 実機 26 checks、`gui/scripts/browser-check.mjs` を確認した。
+
+## 2026-09-28 追記: 完了 gate（task 01M3MFS5T52FXA63W4V10XGC4S、release WorkUnit）
+
+完了日: 2026-09-28。統合後の HEAD（`2031861` = adopt/design-gap/mvp-audit の merge 後）で sandbox 外実行。
+
+| 検査 | コマンド | 結果 |
+| --- | --- | --- |
+| fmt | `cargo fmt --all -- --check`（2 回） | 2 回とも exit 0、差分なし |
+| clippy | `cargo clippy --workspace -- -D warnings` | exit 0 |
+| Rust test | `cargo test --workspace` | exit 0、2639 passed / 0 failed / 7 ignored（初回で成功、再実行なし） |
+| GUI | `pnpm install --frozen-lockfile` → `pnpm lint` / `typecheck` / `test` / `build` | すべて exit 0、test 75 files / 1154 passed |
+| shim | `python3 scripts/tests/test_browser_cli.py` | 12 tests OK |
+
+release.sh / verify.sh の結果と検証済み SHA は WorkUnit の `artifacts/release.md` に記録する。本番へは昇格しない（人が GUI で行う）。
+
+### 未解決事項（ADR-0078 D8）
+
+- Phase 2: task policy と admin grant の交差（P2-A）、CredentialBroker の 1 provider 実装（P2-B）、承認・認証待ちの durable wait（P2-C）。
+- Phase 3: project/origin 限定の Browser Identity（P3-A）、task 別 ACL 付き live view proxy（P3-B）、pause/takeover/resume/stop（P3-C）。
+- Phase 4: container/別 UID と egress 境界（P4-A）、broker→injector の強い注入（P4-B）、Codex/Browser Use/browser-specialist への backend routing（P4-C）。
+- 既知の限界: Phase 1 は公開・未認証ページ向けで、同一 UID shell を隔離しない。dashboard は operator 専用運用が前提。
+
+### 人の決定点
+
+- credential backend の選択（既存 vault 優先、無ければ専用 1Password vault が初期候補）、lease の承認頻度、認証区間の観測制限（Phase 2 着手前）。
+- persistent identity の範囲と保存期間（Phase 3 着手前。個人 Chrome profile の共用は避ける）。
+- 機密 task に使う前に P4-A（container/egress）を前倒しするか。
+- 本番の profile へ `browser` grant を付けるか、および本番昇格（GUI）。
+
+### 提案
+
+- Phase 2 は P2-A（policy 契約）を単独 task として先に起票し、backend 決定を待たずに進める。
+- agent-browser の版上げ時は `scripts/browser-smoke.py` の fail-open 負例（policy 欠落・破損・空 allow）を必ず再実行する。

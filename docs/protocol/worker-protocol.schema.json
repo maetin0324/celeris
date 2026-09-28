@@ -159,6 +159,11 @@
         "cli": {
           "type": "string"
         },
+        "credential_used": {
+          "default": false,
+          "description": "Celeris already logged in with an approved credential in this session. Observation\nactions are off until the session ends.",
+          "type": "boolean"
+        },
         "run": {
           "$ref": "#/$defs/BrowserRun"
         }

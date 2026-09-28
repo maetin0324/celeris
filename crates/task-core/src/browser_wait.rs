@@ -14,6 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
+use crate::browser::BrowserTaskPolicy;
 use crate::store::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 use crate::{Event, Status, TaskId, Trigger};
 
@@ -343,6 +344,16 @@ impl BrowserWaitError {
 
 /// `BrowserWait` の読み書き。`TaskStore` の supertrait。
 pub trait BrowserWaitStore: Send + Sync {
+    /// A missing policy is a deny. Only a trusted administrator may write this record.
+    fn browser_task_policy_get(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<BrowserTaskPolicy>, StoreError>;
+    fn browser_task_policy_set(
+        &self,
+        task_id: TaskId,
+        policy: &BrowserTaskPolicy,
+    ) -> Result<(), StoreError>;
     /// running の task に wait を開く（task → `Blocked`、worker の lease を解放、`BrowserWaitOpened`）。
     /// 同じ `resume_key` の再送は既存の wait を返す（`created = false`）。
     fn browser_wait_open(
@@ -396,6 +407,77 @@ pub trait BrowserWaitStore: Send + Sync {
         &self,
         credential_id: &str,
     ) -> Result<Option<CredentialRecord>, StoreError>;
+}
+
+/// 承認済み credential 使用の一回消費の結果（trusted supervisor が broker へ lease を求める材料）。
+/// 秘密は持たない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumedBrowserApproval {
+    pub wait: BrowserWait,
+    pub credential: CredentialRecord,
+    pub approved_by: String,
+}
+
+/// 承認済みの credential 使用 wait を、それを開いた論理 run/session の continuation として一度だけ消費する。
+/// dispatch ごとの run id は変わるので、continuation の照合には wait 自身の run/session を使う
+/// （lease と browser session もその session に結び付く）。承認記録と credential 台帳が揃わなければ拒否する。
+pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
+    store: &S,
+    task_id: TaskId,
+    wait: &BrowserWait,
+    now: OffsetDateTime,
+) -> Result<ConsumedBrowserApproval, &'static str> {
+    if wait.reason != BrowserWaitReason::WaitingForApproval
+        || wait
+            .operation
+            .as_ref()
+            .is_none_or(|o| o.action != "credential_use")
+    {
+        return Err("browser approval is not a credential use");
+    }
+    let consumed = store
+        .browser_wait_consume(
+            task_id,
+            &wait.wait_id,
+            &wait.resume_key,
+            &wait.run_id,
+            &wait.session_id,
+            now,
+        )
+        .map_err(|e| e.code())?;
+    let reference = consumed
+        .credential
+        .clone()
+        .ok_or("approved credential reference missing")?;
+    let credential = store
+        .browser_credential_get(&reference.credential_id)
+        .map_err(|_| "browser credential store unavailable")?
+        .filter(|c| {
+            c.provider == reference.provider
+                && c.policy_id == reference.policy_id
+                && c.origin == consumed.origin
+        })
+        .ok_or("approved credential record missing")?;
+    let approval_id = consumed
+        .approval_id
+        .clone()
+        .ok_or("approval record missing")?;
+    let approved_by = store
+        .browser_approvals_for_wait(&consumed.wait_id)
+        .map_err(|_| "browser approval store unavailable")?
+        .into_iter()
+        .find(|a| {
+            a.approval_id == approval_id
+                && a.decision == BrowserDecision::ApproveOnce
+                && a.consumed_at.is_some()
+        })
+        .map(|a| a.actor_id)
+        .ok_or("approval record missing")?;
+    Ok(ConsumedBrowserApproval {
+        wait: consumed,
+        credential,
+        approved_by,
+    })
 }
 
 // ---- 検証 ----
@@ -903,6 +985,62 @@ fn approval_rows(
 }
 
 impl BrowserWaitStore for SqliteStore {
+    fn browser_task_policy_get(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<BrowserTaskPolicy>, StoreError> {
+        self.with_read_conn(|conn| {
+            let raw: Option<String> = conn
+                .query_row(
+                    "SELECT policy_json FROM browser_task_policies WHERE task_id = ?1",
+                    params![task_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            raw.map(|value| {
+                BrowserTaskPolicy::from_json(&value)
+                    .map_err(|e| StoreError::Invalid(e.code().into()))
+            })
+            .transpose()
+        })
+    }
+
+    fn browser_task_policy_set(
+        &self,
+        task_id: TaskId,
+        policy: &BrowserTaskPolicy,
+    ) -> Result<(), StoreError> {
+        policy
+            .validate()
+            .map_err(|e| StoreError::Invalid(e.code().into()))?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: Option<String> = tx
+            .query_row(
+                "SELECT status FROM tasks WHERE id = ?1",
+                params![task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match state.as_deref() {
+            Some("draft" | "ready") => {}
+            Some(_) => {
+                return Err(StoreError::Invalid(
+                    "browser policy can only change while draft or ready".into(),
+                ));
+            }
+            None => return Err(StoreError::Invalid("task not found".into())),
+        }
+        let raw = serde_json::to_string(policy)?;
+        tx.execute(
+            "INSERT INTO browser_task_policies (task_id, policy_json) VALUES (?1, ?2)
+            ON CONFLICT(task_id) DO UPDATE SET policy_json = excluded.policy_json",
+            params![task_id.to_string(), raw],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn browser_wait_open(
         &self,
         task_id: TaskId,

@@ -40,6 +40,18 @@ fn runtime() -> Result<PathBuf, Error> {
 fn run() -> Result<(), Error> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
+        Some("init") => {
+            if args.next().is_some() {
+                return Err(Error::Invalid);
+            }
+            let h = home()?;
+            let config = h.join(".config/celeris/credentiald");
+            let data = h.join(".local/celeris/credentiald");
+            private_dir(&config)?;
+            private_dir(&data)?;
+            let provider = ManualProvider::open(config.join("keys"), data.join("vault"))?;
+            provider.initialize_key()
+        }
         Some("serve") => {
             let h = home()?;
             let config = h.join(".config/celeris/credentiald");

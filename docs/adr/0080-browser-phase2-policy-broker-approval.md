@@ -215,3 +215,11 @@ waits が task policy の保存欄と API wiring を担当し、policy はその
 - 現行コード: [browser schema](../../crates/task-core/src/browser.rs)、[Status](../../crates/task-core/src/model.rs)、[worker](../../crates/task-worker/src/browser.rs)、[shim](../../crates/task-worker/src/browser_cli.py)、[一般承認](../../crates/task-core/src/approval.rs)、[既存secret保存](../../crates/task-api/src/secrets.rs)、[GUI認証](../../gui/app/auth.server.ts)、[GUI panel](../../gui/app/components/BrowserRunsPanel.tsx)。
 - 固定版の [policy evaluator](https://github.com/vercel-labs/agent-browser/blob/aff6125c023b810ea3f2e5deec5379e9a4270bdc/cli/src/native/policy.rs) と [auth_login 実装](https://github.com/vercel-labs/agent-browser/blob/aff6125c023b810ea3f2e5deec5379e9a4270bdc/cli/src/native/actions.rs)、[plugin protocol](https://github.com/vercel-labs/agent-browser/blob/aff6125c023b810ea3f2e5deec5379e9a4270bdc/docs/src/app/plugins/page.mdx) を2026-09-28に読み取り確認。source確認は実機負例の代わりにはしない。
 - [Cargo.lock](../../Cargo.lock) とローカル ring 0.17.14 `aead/nonce.rs` を確認。[RustCrypto chacha20poly1305 0.10.1](https://github.com/RustCrypto/AEADs/blob/chacha20poly1305-v0.10.1/chacha20poly1305/src/lib.rs) の XChaCha20Poly1305 を保存方式として採用。依存追加と実行検証は broker WU の責務。
+
+## 補足（e2e WU の実装判断、2026-09-28）
+
+- 承認の消費: 承認 wait を開いた run は browser を起動しない。承認後の dispatch は新しい run ID を持つので、store の「同じ run/session」照合には wait に記録した論理 run/session を使う。browser session もその予約 session ID を使い続け、broker の binding と lease も同じ論理 run/session に結び付ける。消費は substrate の版確認の後に行い、起動できない run で承認を失わせない。
+- broker ID: task policy hash は `sha256:<hex>` 形式である。broker の ID 制約（`[A-Za-z0-9_-]{1,64}`）に合わせ、binding と lease には `<hex>` だけを渡す。
+- 認証後の区間: 同じ session の harness policy から snapshot・gettext・screenshot・download を外し、Live View の URL も出さない（D3）。cleanup は supervisor の credential 区間 policy に含まれる `close` で行う。
+- 実機未検証の境界: `auth login` の lease 参照 flag、plugin 設定の形、daemon 経由の FD 3 継承は fake substrate でしか確かめていない。実 agent-browser で確認するまで、fake の成功を実機の成功として扱わない。
+- 端から端の試験は `tests/e2e` ではなく `crates/task-api/tests/browser_e2e.rs` に置いた。API の test harness と broker の実 IPC を同じ process で使うためである。

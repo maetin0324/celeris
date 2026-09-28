@@ -20,6 +20,241 @@ use time::OffsetDateTime;
 const SENTINEL_USER: &str = "SENTINEL-user-7c1e";
 const SENTINEL_PASS: &str = "SENTINEL-pass-4d9b";
 
+#[tokio::test]
+async fn task_browser_policy_is_persisted_and_running_tasks_cannot_expand_it() {
+    let f = fixture();
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    f.env.seed(&task);
+    let path = format!("/api/v1/tasks/{}/browser/policy", task.id);
+    let policy = json!({
+        "policy_id":"read-only", "revision":1, "domain_mode":"common_hosts",
+        "network_domains":["example.com"], "allowed_actions":["navigate","snapshot"],
+        "approval_actions":[], "credential_policy_ids":[]
+    });
+    let put = |value: &Value| {
+        axum::http::Request::put(&path)
+            .header("host", HOST)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(value.to_string()))
+            .unwrap()
+    };
+    let response = send(&f.app, put(&policy)).await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    let fetched = send(&f.app, get_admin(&path)).await;
+    assert_eq!(fetched.status, 200);
+    assert_eq!(fetched.json()["policy"]["policy_id"], "read-only");
+    assert!(
+        f.env
+            .store
+            .browser_task_policy_get(task.id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        f.env
+            .store
+            .acquire_lease(task.id, "run-policy", std::time::Duration::from_secs(60))
+            .unwrap()
+    );
+    let response = send(&f.app, put(&policy)).await;
+    assert_problem(&response, 409, "browser_policy_state");
+}
+
+#[tokio::test]
+async fn real_broker_registration_keeps_sentinel_out_of_db_events_artifacts_and_worker_output() {
+    use celeris_credentiald::{Broker, ManualProvider, ipc};
+    use std::os::unix::fs::DirBuilderExt;
+    let env = admin_env();
+    let root = env.dir.path();
+    let runtime = root.join("runtime");
+    let config = root.join("broker-config");
+    let data = root.join("broker-data");
+    for dir in [&runtime, &config, &data] {
+        std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+    }
+    let manual = ManualProvider::open(config.join("keys"), data.join("vault")).unwrap();
+    manual.initialize_key().unwrap();
+    let broker = Arc::new(Broker::new(manual, data.join("audit")).unwrap());
+    let socket = runtime.join("celeris-credentiald/control.sock");
+    std::thread::spawn(move || ipc::serve(broker, &runtime, vec![std::process::id()]).unwrap());
+    for _ in 0..100 {
+        if socket.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(socket.exists());
+    let key = keypair();
+    let app = task_api::router(env.state.clone().with_browser(BrowserApiConfig {
+        attestation_public_key: Some(key.public_key().as_ref().to_vec()),
+        broker: Some(Arc::new(task_api::browser::UnixCredentialBrokerControl {
+            socket: socket.clone(),
+        })),
+    }));
+    let task_id = running_task(&env);
+    let response = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{task_id}/browser/requests"),
+            &auth_request("rk-real"),
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 201, "{}", response.text());
+    let wait_id = response.json()["wait"]["wait_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let response = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{task_id}/browser/waits/{wait_id}/credential"),
+            &json!({"expected_version":1,"username":SENTINEL_USER,"password":SENTINEL_PASS,
+            "attestation":attest(&key, &claims(task_id, &wait_id, "register", "nonce-real"))}),
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    assert_eq!(env.status_of(task_id), Status::Ready);
+    let credential_id = response.json()["wait"]["credential"]["credential_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        env.store
+            .acquire_lease(task_id, "approval-run", std::time::Duration::from_secs(60))
+            .unwrap()
+    );
+    let mut approval_body = approval_request("rk-real-approval");
+    approval_body["run_id"] = json!("approval-run");
+    approval_body["session_id"] = json!("approval-session");
+    approval_body["credential"]["credential_id"] = json!(credential_id);
+    let response = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{task_id}/browser/requests"),
+            &approval_body,
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 201, "{}", response.text());
+    let approval = response.json()["wait"].clone();
+    let approval_wait_id = approval["wait_id"].as_str().unwrap();
+    let response = send(&app, post_admin(
+        &format!("/api/v1/tasks/{task_id}/browser/waits/{approval_wait_id}/decision"),
+        &json!({"decision":"approve_once", "expected_version":1, "idempotency_key":"real-approval",
+            "attestation":attest(&key, &claims(task_id, approval_wait_id, "approve_once", "nonce-real-approval"))}),
+    )).await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    assert_eq!(env.status_of(task_id), Status::Ready);
+    let approved = response.json()["wait"].clone();
+    let consumed = env
+        .store
+        .browser_wait_consume(
+            task_id,
+            approval_wait_id,
+            "rk-real-approval",
+            "approval-run",
+            "approval-session",
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    assert_eq!(consumed.state.as_str(), "resumed");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let binding = json!({"op":"bind","binding":{
+        "token":"", "task_id":task_id.to_string(),"run_id":"approval-run",
+        "session_id":"approval-session","exact_origin":"https://login.example.com",
+        "policy_hash":"sha256-policy","expires_at":now+60}});
+    let bound = ipc::call(&socket, &serde_json::to_vec(&binding).unwrap()).unwrap();
+    assert!(bound.success);
+    let binding_token = bound.binding_token.unwrap();
+    let grant = json!({"op":"grant","request":{
+        "reference":{"credential_id":credential_id,"provider":"manual","policy_id":"pol-example"},
+        "policy":{"policy_id":"pol-example","revision":1,"exact_origin":"https://login.example.com",
+            "task_id":task_id.to_string(),"max_ttl_seconds":60,"require_approval":true,"allow_persistence":false},
+        "credential_revision":1,"task_id":task_id.to_string(),"run_id":"approval-run",
+        "session_id":"approval-session","approval_id":approved["approval_id"],
+        "approved_by":"owner","policy_hash":"sha256-policy","idempotency_key":"real-lease",
+        "ttl_seconds":60,"approval_expires_at":now+60,"session_expires_at":now+60}});
+    let granted = ipc::call(&socket, &serde_json::to_vec(&grant).unwrap()).unwrap();
+    assert!(granted.success);
+    let lease_id = granted.lease_id.unwrap();
+    let plugin = |url: &str| {
+        json!({"protocol":"agent-browser.plugin.v1","type":"credential.resolve",
+        "capability":"credential.read","request":{"profileName":"default","itemRef":lease_id,"url":url}})
+    };
+    let resolve = socket.with_file_name("resolve.sock");
+    let wrong = ipc::bridge_request(
+        &serde_json::to_vec(&plugin("https://other.example.com/login")).unwrap(),
+        &binding_token,
+        &resolve,
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&wrong).unwrap()["success"],
+        false
+    );
+    let raw = ipc::bridge_request(
+        &serde_json::to_vec(&plugin("https://login.example.com/login")).unwrap(),
+        &binding_token,
+        &resolve,
+    );
+    let private = serde_json::from_slice::<Value>(&raw).unwrap();
+    assert_eq!(private["success"], true);
+    assert_eq!(private["credential"]["password"], SENTINEL_PASS);
+    let replay = ipc::bridge_request(
+        &serde_json::to_vec(&plugin("https://login.example.com/login")).unwrap(),
+        &binding_token,
+        &resolve,
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&replay).unwrap()["success"],
+        false
+    );
+    // The fake substrate's plugin pipe is private. The worker/model sees only this fixed result.
+    let public_result = json!({"success": private["success"]});
+    let artifacts = root.join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    std::fs::write(artifacts.join("result.json"), public_result.to_string()).unwrap();
+    let worker = root.join("worker-output.json");
+    std::fs::write(&worker, public_result.to_string()).unwrap();
+    let mut inspected = Vec::new();
+    fn walk(path: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, files);
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    walk(root, &mut inspected);
+    assert!(inspected.iter().any(|p| p.ends_with("celeris.db")));
+    assert!(
+        inspected
+            .iter()
+            .any(|p| p.ends_with("vault".to_string() + "/cred-" + &wait_id + ".json"))
+    );
+    assert!(inspected.iter().any(|p| p == &worker));
+    assert!(inspected.iter().any(|p| p.ends_with("result.json")));
+    for path in inspected {
+        let bytes = std::fs::read(&path).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains(SENTINEL_USER) && !text.contains(SENTINEL_PASS),
+            "secret leaked to {}",
+            path.display()
+        );
+    }
+    let events = env.store.events_for(task_id).unwrap();
+    let text = serde_json::to_string(&events).unwrap();
+    assert!(!text.contains(SENTINEL_USER) && !text.contains(SENTINEL_PASS));
+}
+
 /// broker の偽物: 受け取った秘密を記録し（転送の確認用）、receipt だけを返す。
 #[derive(Default)]
 struct FakeBroker {
@@ -43,7 +278,7 @@ impl CredentialBrokerControl for FakeBroker {
         })
     }
 
-    fn verify_receipt(&self, receipt: &BrokerReceipt) -> Result<bool, BrokerFailure> {
+    fn verify_receipt(&self, _: &str, receipt: &BrokerReceipt) -> Result<bool, BrokerFailure> {
         Ok(receipt.receipt_id == "rcpt-1")
     }
 }

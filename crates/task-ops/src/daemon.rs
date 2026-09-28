@@ -59,6 +59,109 @@ pub struct DaemonSnapshot {
     /// 古いスナップショットには無いので既定は `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub containers: Option<ContainersLive>,
+    /// ADR-0075 D6（Phase G1）: scratch pool の観測値（`GET /api/v1/metrics/scratch` と `celerisctl scratch status --json`
+    /// と同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scratch: Option<ScratchStatus>,
+}
+
+/// `ScratchStatus.schema` の値。
+pub const SCRATCH_STATUS_SCHEMA: &str = "celeris.scratch-status/1";
+
+/// ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。
+/// 容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchStatus {
+    /// 常に `celeris.scratch-status/1`。
+    pub schema: String,
+    /// scratch が有効か（`[scratch] enabled = false`、または NFS 上で無効化したら `false`）。
+    pub enabled: bool,
+    /// 無効化した理由（NFS 上など）。
+    pub disabled_reason: Option<String>,
+    /// `[scratch] dir`。
+    pub dir: String,
+    /// この状態を組んだ時刻（RFC 3339）。
+    pub observed_at: String,
+    /// `dir` の filesystem の容量と空き（statvfs。読めなければ `None`）。
+    pub fs_total_bytes: Option<u64>,
+    pub fs_free_bytes: Option<u64>,
+    /// `targets/` の推定使用量と、そのうち P0（絶対に消さない）の量。
+    pub targets_bytes: u64,
+    pub pinned_bytes: u64,
+    pub targets_max_bytes: u64,
+    pub total_max_bytes: u64,
+    /// 実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。
+    pub effective_max_bytes: u64,
+    pub high_watermark: f64,
+    pub low_watermark: f64,
+    /// `none` | `high_watermark` | `low_disk` | `emergency`。
+    pub pressure: String,
+    /// owner ごとの行（owner の文字列順）。
+    pub owners: Vec<ScratchOwnerView>,
+    /// pool の外の旧い target（`build_cache_dir/cargo/*`、`release-build/.cargo-target`）の残り。
+    pub legacy: Vec<ScratchLegacyView>,
+    /// 直近の GC（rename したものがあった回）。
+    pub last_gc: Option<ScratchGcView>,
+}
+
+/// scratch pool の owner 1 つ（`targets/<owner>/`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchOwnerView {
+    /// `task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>`（owner として読めない野良はパス）。
+    pub owner: String,
+    /// `task` | `work_unit` | `release` | `agent` | `stray`。
+    pub kind: String,
+    /// `p0` | `p1` | `p2` | `p3` | `seed` | `stray`。
+    pub class: String,
+    /// 分類の理由（`task running`、`lease expired` など）。
+    pub reason: String,
+    /// `target/` があるか（GC が刈った後は lease だけが残る）。
+    pub has_target: bool,
+    /// 測定したサイズ（未測定は `None`）と、GC が使う推定値。
+    pub size_bytes: Option<u64>,
+    pub estimated_bytes: u64,
+    pub measured_at: Option<String>,
+    /// `lease.json` の mtime（生存の合図）。
+    pub lease_mtime: Option<String>,
+    pub repo_key: Option<String>,
+    /// base commit の先頭 12 桁。
+    pub base_commit: Option<String>,
+    /// adopt で引き継いだ元の owner。
+    pub adopted_from: Option<String>,
+    pub work_unit_key: Option<String>,
+}
+
+/// pool の外の旧い target 1 つ。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchLegacyView {
+    pub path: String,
+    /// `legacy`（1 時間以上更新が無く回収できる）| `p0`（未測定・1 時間以内に更新あり）。
+    pub class: String,
+    pub size_bytes: Option<u64>,
+    pub last_write: Option<String>,
+}
+
+/// 直近の GC 1 回。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchGcView {
+    pub at: String,
+    /// その回の `pressure`。
+    pub pressure: String,
+    /// 空き < `min_free_disk_mb` の緊急 GC か。
+    pub emergency: bool,
+    pub removed: Vec<ScratchGcRemovedView>,
+    pub reclaimed_bytes: u64,
+}
+
+/// GC が rename した 1 つ。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchGcRemovedView {
+    pub id: String,
+    /// `legacy` | `stray` | `p1` | `p2` | `p3` | `seed`。
+    pub class: String,
+    pub estimated_bytes: u64,
+    /// `immediate`（watermark に関係なく回収）| `pressure`（目標に届くまで）。
+    pub why: String,
 }
 
 /// ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出（**観測値**。DB には書かない）。

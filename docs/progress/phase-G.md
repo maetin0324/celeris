@@ -92,3 +92,20 @@ ADR-0075 の状態を Accepted にした。作業は git worktree の中（main 
   `high_watermark` / `low_watermark` / 保持期限 / `gc_max_per_tick` / `adopt` / `adopt_max_distance` / `measure_interval_secs`）。
   `dir` の既定は `build_cache_dir` の親の `scratch/`。`scratch_settings()` が NFS の検査をして `DispatchConfig.scratch` に入れる。
 - テスト: `cargo test -p task-worker --lib scratch` → 17 passed、`cargo test -p celeris --lib scratch` → 2 passed。
+
+### G1 checkpoint 2: dispatcher / review の割り当て、WU 終端の回収、adopt、緊急 GC（完了 2026-09-28）
+
+- `crates/task-dispatch/src/scratch_gc.rs`（新規）: pool の走査（lease と DB の状態で分類。木は辿らない）、`run_gc`（走査 → `plan_gc` →
+  `.deleting-*` へ rename）、削除スレッド・測定スレッド（同時にそれぞれ 1 本、測定は間隔ごとに 1 つ）、legacy の根
+  （`build_cache_dir/cargo/*`、`<releases_dir>/.cargo-target` の先）、実効上限、`ScratchStatus` の組み立て。
+- `dispatcher.rs`: run の `CARGO_TARGET_DIR` を `CargoTargetPlan`（None / Legacy / Scratch）で決める。scratch なら run の開始時に
+  `allocate_scratch_target`（lease の作成・touch と adopt。commit の距離はここだけで計算）。WU の checks・統合 WU の検査・reviewer の
+  checks は `check_cargo_target_env` が同じ owner の lease を touch して env を返す。tick の `scratch_gc` phase が F5-fix の
+  `cleanup_work_unit_build_caches` を置き換える（scratch が無効なら従来どおり呼ぶ）。`check_disk_space` は scratch の dir も見て、
+  足りなければ緊急 GC → 保留 + 通知 1 回（消せるものが P0 だけなら本文に pinned の一覧）。watermark の到達・解除、GC、実効上限の縮小は
+  tracing（journal）。`DaemonSnapshot.scratch` に観測値。起動時に NFS で無効化した理由を warn。
+- テスト: `task_dispatch::dispatcher::tests::{every_cargo_path_uses_the_scratch_target_dir, terminal_work_unit_target_is_reclaimed_on_the_next_tick,
+  low_disk_runs_emergency_gc_before_pausing_dispatch, scratch_on_nfs_falls_back_to_build_cache_dir,
+  run_start_adopts_a_finished_target_that_predates_the_checkout}`、`shared_build_cache_is_not_applied_to_remote_workspaces`（scratch の計画を
+  渡しても Remote には与えない）、`task_dispatch::scratch_gc::tests::*`（4 件）。
+- `cargo test -p task-dispatch -p task-worker -p celeris -p task-ops --no-fail-fast` → FAILED 0。`cargo clippy --workspace --all-targets -- -D warnings` → 警告 0。

@@ -159,6 +159,8 @@ pub(crate) const EVENT_TYPES: [&str; 32] = [
     "review_verdict",
     "approval_requested",
     "approval_decided",
+    // Phase F7: 認可元のタスクが終端になり、未決の認可の要求を celeris が取り下げた。
+    "approvals_withdrawn",
     "answered",
     "provider_throttled",
     "cluster_unavailable",
@@ -211,6 +213,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ReviewVerdict { .. } => "review_verdict",
         Event::ApprovalRequested => "approval_requested",
         Event::ApprovalDecided { .. } => "approval_decided",
+        Event::ApprovalsWithdrawn { .. } => "approvals_withdrawn",
         Event::Answered { .. } => "answered",
         Event::ProviderThrottled { .. } => "provider_throttled",
         Event::ClusterUnavailable { .. } => "cluster_unavailable",

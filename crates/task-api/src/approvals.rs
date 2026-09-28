@@ -4,6 +4,8 @@
 //!   `true` = 未決定だけ、`false` = 決定済みだけ、省略 = 全件（GUI からの依頼 R5。Phase 27）。
 //! - `POST /approvals/{id}/decide` — 人が `once` / `standing` / `denied` で答える（**管理系**）。
 //!   タスクの再開は既存の「質問に答える」経路（`task_ops::gate::answer`）に相乗りする（`task_ops::approval`）。
+//!   Phase F7: 認可元のタスクが終端なら決定だけ記録して 200 + `note`、終端でも `blocked` でもなければ
+//!   409（何も書かない）。`withdrawn` は celeris だけが書く（人が送ると 400）。
 //! - `GET /standing-rules?node=` — 一覧（読み取り）。
 //! - `POST /standing-rules` / `DELETE /standing-rules/{id}` — GUI から直接編集する（**管理系**）。
 //!
@@ -56,6 +58,10 @@ pub struct ApprovalDecideResult {
     /// 元の質問にタスクが紐づいていたときだけ `Some`（既存の「質問に答える」経路の結果）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<task_ops::gate::TransitionResult>,
+    /// Phase F7: 認可元のタスクが既に終端（または無い）ため、決定だけ記録してタスクには答えなかった
+    /// ときの説明。タスクに答えたとき・タスクの無い approval では出ない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// `GET /standing-rules` の応答。
@@ -179,6 +185,7 @@ pub(crate) async fn decide(
             approval: outcome.approval,
             standing_rule: outcome.standing_rule,
             transition: outcome.transition,
+            note: outcome.note,
         },
     ))
 }

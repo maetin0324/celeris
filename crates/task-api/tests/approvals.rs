@@ -597,6 +597,186 @@ async fn the_daemon_snapshot_carries_the_pending_approval_count() {
             OffsetDateTime::now_utc(),
         )
         .expect("decide");
-    let resp = send(&app, get("/api/v1/daemon")).await;
+    let resp = send(&app, g("/api/v1/daemon")).await;
     assert_eq!(resp.json()["snapshot"]["approvals_pending"], 0);
+}
+
+// ---- Phase F7: 認可元のタスクの終端で認可の要求を閉じる ----
+
+fn withdrawn_event_count(env: &TestEnv, task_id: TaskId) -> usize {
+    env.store
+        .events_for(task_id)
+        .expect("events")
+        .iter()
+        .filter(|(_, e)| matches!(e, task_core::Event::ApprovalsWithdrawn { .. }))
+        .count()
+}
+
+/// 人がタスクを取り消すと、その未決の認可が `withdrawn` で閉じ、`pending=true`・`approvals_pending`
+/// から消え、`pending=false`（決めたものの履歴）に残る。イベントが 1 件つく。
+#[tokio::test]
+async fn cancelling_the_task_withdraws_its_pending_approval_from_every_surface() {
+    let env = env_with_token();
+    let app = env.router();
+    env.daemon_tx.send_replace(Some(snapshot(3)));
+    seed_org(&env);
+    let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
+    let resp = send(&app, g("/api/v1/daemon")).await;
+    assert_eq!(resp.json()["snapshot"]["approvals_pending"], 1);
+
+    let resp = send(
+        &app,
+        p(&format!("/api/v1/tasks/{}/cancel", task.id), &json!({})),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(env.status_of(task.id), Status::Cancelled);
+
+    let resp = send(&app, g("/api/v1/approvals?pending=true")).await;
+    assert!(
+        resp.json()["items"].as_array().expect("items").is_empty(),
+        "{}",
+        resp.text()
+    );
+    let resp = send(&app, g("/api/v1/approvals?pending=false")).await;
+    let items = resp.json()["items"].as_array().cloned().expect("items");
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["id"], approval.id.to_string());
+    assert_eq!(items[0]["decision"], "withdrawn");
+    assert!(
+        items[0]["answer"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("task cancelled")),
+        "{items:?}"
+    );
+    let resp = send(&app, g("/api/v1/daemon")).await;
+    assert_eq!(resp.json()["snapshot"]["approvals_pending"], 0);
+    let resp = send(&app, g("/api/v1/inbox")).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert!(
+        resp.json()["questions"]
+            .as_array()
+            .expect("questions")
+            .is_empty(),
+        "{}",
+        resp.text()
+    );
+    assert_eq!(withdrawn_event_count(&env, task.id), 1);
+    // `types` の語彙にも入っている。
+    let resp = send(
+        &app,
+        g(&format!(
+            "/api/v1/tasks/{}/events?types=approvals_withdrawn",
+            task.id
+        )),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert!(
+        resp.text().contains("approvals_withdrawn"),
+        "{}",
+        resp.text()
+    );
+}
+
+/// 本番で見た不具合（2026-09-28）: 取り消し済みのタスクの認可に `denied` で答えると、決定だけ書かれて
+/// 409 が返っていた。今は決定を記録して 200 + `note`、タスクには答えない（`Answered` を積まない）。
+#[tokio::test]
+async fn deciding_an_approval_of_a_terminal_task_records_the_decision_and_returns_a_note() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&env);
+    let (task, _) = blocked_task_with_approval(&env, "coding-poc", None);
+    env.store
+        .apply_transition(task.id, task_core::Trigger::Cancel, None)
+        .expect("cancel");
+    // F7 より前の残りを再現する: 取り消しの後に未決の行がある。
+    let stale = Approval {
+        id: ApprovalId::new(),
+        project_id: None,
+        node_id: "coding-poc".into(),
+        task_id: Some(task.id),
+        question: "もう要らない質問".into(),
+        decision: None,
+        answer: None,
+        created_at: OffsetDateTime::now_utc(),
+        decided_at: None,
+    };
+    env.store.approval_append(&stale).expect("append");
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/approvals/{}/decide", stale.id),
+            &json!({"decision": "denied", "answer": "不要になった"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["approval"]["decision"], "denied");
+    assert!(body.get("transition").is_none(), "{body}");
+    assert!(
+        body["note"]
+            .as_str()
+            .is_some_and(|s| s.contains("already cancelled")),
+        "{body}"
+    );
+    assert_eq!(env.status_of(task.id), Status::Cancelled);
+    let answered = env
+        .store
+        .events_for(task.id)
+        .expect("events")
+        .iter()
+        .any(|(_, e)| matches!(e, task_core::Event::Answered { .. }));
+    assert!(!answered, "a terminal task must not be answered");
+    let resp = send(&app, g("/api/v1/approvals?pending=true")).await;
+    assert!(resp.json()["items"].as_array().expect("items").is_empty());
+}
+
+/// 終端でも `blocked` でもないタスク（例: 既に `ready` に戻った）の認可への決定は 409 で、何も書かない。
+/// `withdrawn` は celeris だけが書く（人が送ると 422）。
+#[tokio::test]
+async fn deciding_when_the_task_cannot_take_an_answer_is_409_without_side_effects() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&env);
+    let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
+    env.store
+        .apply_transition(task.id, task_core::Trigger::Answer, None)
+        .expect("answer");
+    assert_eq!(env.status_of(task.id), Status::Ready);
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/approvals/{}/decide", approval.id),
+            &json!({"decision": "denied", "answer": "x"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
+    let back = env
+        .store
+        .approval_get(approval.id)
+        .expect("get")
+        .expect("some");
+    assert!(back.is_pending(), "no half-applied decision: {back:?}");
+
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/approvals/{}/decide", approval.id),
+            &json!({"decision": "withdrawn", "answer": "x"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
+    assert!(
+        env.store
+            .approval_get(approval.id)
+            .expect("get")
+            .expect("some")
+            .is_pending()
+    );
 }

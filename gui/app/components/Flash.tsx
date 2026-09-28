@@ -21,7 +21,7 @@ import type {
   TransitionOutcome,
 } from "~/celeris/action-types";
 import { Alert } from "~/components/ui/misc";
-import { cancelledCountLabel, commentEffectMessage, taskFieldLabel } from "~/lib/labels";
+import { cancelledCountLabel, commentEffectMessage, decisionLabel, taskFieldLabel } from "~/lib/labels";
 import type { PromoteFlashState } from "~/lib/releases";
 
 /**
@@ -668,12 +668,6 @@ export function ReleasePromoteFlash({
   );
 }
 
-const APPROVAL_DECISION_LABEL: Record<string, string> = {
-  once: "今回だけ",
-  standing: "今後ずっと",
-  denied: "認めない",
-};
-
 /**
  * 「認可」画面の action の結果（SPEC §3.6、ADR-0033 D5）: `POST /approvals/{id}/decide`。
  * `standing` で答えたときは、続けて足された永続の認可があることも出す。
@@ -685,9 +679,15 @@ export function ApprovalActionFlash({ outcome }: { outcome: ApprovalOpOutcome | 
   return (
     <Alert role="status" data-testid="flash" data-flash-kind="ok" tone="success" className="my-2">
       <p data-testid="flash-approval-op">
-        答えました: {decision ? (APPROVAL_DECISION_LABEL[decision] ?? decision) : "決定"}
+        答えました: {decision ? decisionLabel(decision) : "決定"}
         {outcome.result.standing_rule && <>（永続の認可に追加しました）</>}
       </p>
+      {/* Phase F7: 認可元のタスクが既に終わっていたときは、決定だけ記録した（タスクは再開していない）。 */}
+      {outcome.result.note && (
+        <p data-testid="flash-approval-note" className="text-sm">
+          元のタスクは既に終わっているため、決定だけ記録しました（{outcome.result.note}）
+        </p>
+      )}
     </Alert>
   );
 }

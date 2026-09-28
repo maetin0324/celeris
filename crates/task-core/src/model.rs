@@ -978,6 +978,16 @@ pub enum Event {
         approved: bool,
         note: Option<String>,
     },
+    /// Phase F7（ADR-0033 D5 追記 2026-09-28）: このタスクが終端（`done` / `failed` / `cancelled`）に
+    /// なったので、未決の認可の要求（`approvals` 表の行）を celeris が `withdrawn` で閉じた。
+    /// `reason` は `"task_terminal"`（終端への遷移と同じトランザクション）か `"reconcile"`
+    /// （tick の照合）。状態は変えない（`replay` は無視する）。`ApprovalDecided`（`kind = approval`
+    /// タスクの承認・却下）とは別物。
+    ApprovalsWithdrawn {
+        approval_ids: Vec<crate::approval::ApprovalId>,
+        task_status: Status,
+        reason: String,
+    },
     /// `blocked` のタスクへの人間の回答（ADR-0010 D3, P-10）。`Transitioned{reason:"answer"}` と同一トランザクションで
     /// 追記し、次の run の `context.answers` に載せる。
     Answered {

@@ -429,13 +429,16 @@ pub fn cross_authorization(
     let decided = approvals
         .iter()
         .filter(|a| a.task_id == Some(task_id) && a.question.starts_with(key))
+        // Phase F7: `withdrawn`（認可元のタスクが終わって celeris が取り下げた）は人の決定ではない。
+        // 「まだ決まっていない」と読む（やり直した run がもう一度聞けるように）。
+        .filter(|a| a.decision != Some(Decision::Withdrawn))
         .filter_map(|a| a.decision.map(|d| (a.decided_at, a.created_at, d)))
         .max_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)))
         .map(|(_, _, d)| d);
     match decided {
         Some(Decision::Once) | Some(Decision::Standing) => CrossAuthorization::Allowed,
         Some(Decision::Denied) => CrossAuthorization::Denied,
-        None => CrossAuthorization::Pending,
+        Some(Decision::Withdrawn) | None => CrossAuthorization::Pending,
     }
 }
 
@@ -1120,7 +1123,23 @@ mod tests {
             .expect("decide");
         let split = split_delegation(&store, &org, &parent, &proposals).expect("split");
         assert!(split.allowed.is_empty() && split.pending.is_empty());
-        assert_eq!(split.denied, vec![crossing]);
+        assert_eq!(split.denied, vec![crossing.clone()]);
+
+        // Phase F7: `withdrawn`（認可元のタスクが終わって celeris が取り下げた）は人の決定ではない。
+        // 「まだ決まっていない」（もう一度聞く）として読む。
+        store
+            .approval_decide(
+                approval.id,
+                Decision::Withdrawn,
+                Some(task_core::approval::withdrawn_answer(
+                    task_core::Status::Cancelled,
+                )),
+                now(),
+            )
+            .expect("withdraw");
+        let split = split_delegation(&store, &org, &parent, &proposals).expect("split");
+        assert!(split.allowed.is_empty() && split.denied.is_empty());
+        assert_eq!(split.pending, vec![crossing]);
     }
 
     /// 監査 M-3: 同じノード・同じ案件の対話は直列化する（2 通目は 1 通目が終わるまで `ready` にならない）。

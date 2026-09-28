@@ -18,6 +18,7 @@ import {
 } from "~/lib/console";
 import { shortId, truncateLabel } from "~/lib/format";
 import { isKnowledgeFallback } from "~/lib/knowledge";
+import { decisionLabel } from "~/lib/labels";
 import { resolveMcpAuthorLabel } from "~/lib/mcp";
 import { milestoneDecisionValid } from "~/lib/milestone-review";
 import { cn } from "~/lib/utils";
@@ -713,7 +714,7 @@ function ApprovalBlockView({
       </div>
       {decided ? (
         <p className="mt-2 text-sm text-fg-muted" data-testid="console-approval-decided">
-          {a.decision} ・ {a.answer || "-"}
+          {a.decision ? decisionLabel(a.decision) : ""} ・ {a.answer || "-"}
         </p>
       ) : (
         <fetcher.Form method="post" action="/approvals" className="mt-2 space-y-2">

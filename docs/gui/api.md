@@ -575,7 +575,10 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 Console（§3.98）はこの形だけを見る。
 
 `types` の語彙（`Event` の `type`、17 種）: `created`、`transitioned`、`worker_started`、`worker_progress`、`artifact_produced`、
-`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`answered`、`provider_throttled`、
+`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、
+`approvals_withdrawn`（Phase F7。`{approval_ids, task_status, reason}`。タスクが終端になり、未決の認可の要求
+〈§3.56〉を celeris が `withdrawn` で閉じた。`reason` は `task_terminal` か `reconcile`。状態は変えない）、
+`answered`、`provider_throttled`、
 `cluster_unavailable`（Phase 12。`{cluster, host, reason}`）、
 `delegated`（Phase 10。`{run_id, task_ids}`。状態は変えないので `replay` は無視する）、
 `question_raised`（ADR-0021。`{run_id, text}`。ディスパッチャが人に出した質問。同じトランザクションの
@@ -1405,7 +1408,18 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
   「決めたものの履歴」）、省略すると全件（GUI からの依頼 R5。Phase 27 で `false` が絞り込むようになった）。
   `project` / `node` と AND で効く。
 - `Approval`: `{id, project_id?, node_id, task_id?, question, decision?, answer?, created_at, decided_at?}`。
-  `decision` は `once` / `standing` / `denied`（未決定は無い）。
+  `decision` は `once` / `standing` / `denied` / `withdrawn`（未決定は無い）。
+- **`withdrawn`（Phase F7、ADR-0033 D5 追記 2026-09-28）**: 認可元のタスク（`task_id`）が終端
+  （`done` / `failed` / `cancelled`）になったので、**celeris が自動で閉じた**（人の決定ではない）。
+  人が中止した・子として連鎖で中止された・依存先の失敗で `dependency_failed` になった・run が失敗した・
+  完了した、のどれでも、その終端への遷移と**同じトランザクション**で、そのタスクの未決の行がすべて
+  `decision = "withdrawn"`、`answer = "task <status>: 認可元のタスクが終わったため、celeris が自動で取り下げました"`、
+  `decided_at` = 遷移の時刻になり、タスクに `Event::ApprovalsWithdrawn {approval_ids, task_status,
+  reason: "task_terminal"}`（`type = "approvals_withdrawn"`）が 1 件つく。F7 より前に残った行や遷移との
+  競合で取りこぼした行は、ディスパッチャの tick の照合が同じ形で閉じる（`reason: "reconcile"`）。
+  閉じた行は `pending=true`・`DaemonSnapshot.approvals_pending`・受信箱の `questions[].approval_id`・
+  通知から消え、`pending=false`（決めたものの履歴）に残る。部をまたぐ委譲の判定では `withdrawn` を
+  「まだ決まっていない」と読む（`denied` のように「もう聞かない」にはしない）。
 - **部をまたぐ委譲の認可**（SPEC §3.1 / Phase 27）は `question` が
   **`"cross-department: <委譲元> -> <委譲先>: <理由>"`** の固定の形で来る（`node_id` = 委譲元、
   `task_id` = 委譲しようとした親タスク）。`once` ならそのタスクの次の run で委譲が通り、`standing` なら
@@ -1423,8 +1437,19 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 - `standing` → 同じことをして、さらに `standing_rules` に 1 行追加する（`scope = "node"` ならそのノード宛て、
   `"all"` なら全員）。
 - `denied` → 答えを `"認めない: <answer>"` にして再開する（ワーカーが自分で判断できるように）。
-- 応答は `{approval, standing_rule?, transition?}`。`standing_rule` は `decision = "standing"` のときだけ、
-  `transition`（`TransitionResult`。3.12 `POST /tasks/{id}/answer` と同じ形）は `approval.task_id` があるときだけ載る。
+- 応答は `{approval, standing_rule?, transition?, note?}`。`standing_rule` は `decision = "standing"` のときだけ、
+  `transition`（`TransitionResult`。3.12 `POST /tasks/{id}/answer` と同じ形）は `approval.task_id` のタスクに
+  答えて再開したときだけ載る。
+- **認可元のタスクの状態で分かれる（Phase F7）**。どれも**書く前に**判定する（半端に書かない）:
+  - `blocked`（途中確認 `awaiting_human` ではない）: 上のとおり答えて再開する。
+  - **終端（`done` / `failed` / `cancelled`）またはタスクが無い**: 答える相手がいないので、**決定だけ記録して
+    200**（`once` / `standing` / `denied` のどれでも。`standing` なら規則も足す）。`transition` は載らず、
+    `note`（例 `"task … is already cancelled; decision recorded without resuming the task"`）が載る。
+    取り下げ済み（`withdrawn`）の行に人が答え直すのもこれ。
+  - それ以外（`ready` / `running` / `reviewing` / `draft`、途中確認の `blocked`）: 409 `invalid_transition`、
+    **何も書かない**（行は未決のまま）。
+  以前は決定を書いてから答えに行き、終端のタスクでは 409 を返しつつ決定だけ残っていた（2026-09-28 に本番で確認）。
+- `decision = "withdrawn"` は celeris だけが書く。人が送ると 422 `validation`。
 - `answer` が空白だけは 422 `validation`。無い id・ULID でない id は 404 `approval_not_found`。
   `scope` が `"node"`/`"all"` 以外は 400。
 

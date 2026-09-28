@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ulid::Ulid;
 
-use crate::model::TaskId;
+use crate::model::{Event, Status, TaskId};
 use crate::org::ProjectId;
 use crate::store::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 
@@ -98,6 +98,11 @@ pub enum Decision {
     Standing,
     /// 認めない。
     Denied,
+    /// 取り下げ（Phase F7。**celeris だけが書く**。人は `POST /approvals/{id}/decide` で選べない）:
+    /// 認可元のタスクが終端（`done` / `failed` / `cancelled`）になったので、答える相手がいなくなった。
+    /// 人の「認めない」（`Denied`）とは区別する（部をまたぐ委譲の `cross_authorization` は `Withdrawn` を
+    /// 「まだ決まっていない」と読む。やり直した run がもう一度聞けるように）。
+    Withdrawn,
 }
 
 impl Decision {
@@ -106,6 +111,7 @@ impl Decision {
             Decision::Once => "once",
             Decision::Standing => "standing",
             Decision::Denied => "denied",
+            Decision::Withdrawn => "withdrawn",
         }
     }
 
@@ -114,6 +120,7 @@ impl Decision {
             "once" => Some(Decision::Once),
             "standing" => Some(Decision::Standing),
             "denied" => Some(Decision::Denied),
+            "withdrawn" => Some(Decision::Withdrawn),
             _ => None,
         }
     }
@@ -197,12 +204,106 @@ pub trait ApprovalStore: Send + Sync {
         at: OffsetDateTime,
     ) -> Result<Option<Approval>, StoreError>;
 
+    /// Phase F7（取りこぼしの照合）: 未決のまま、認可元のタスクが既に終端（`done` / `failed` /
+    /// `cancelled`）になっている行を `Withdrawn` で閉じ、タスクごとに `Event::ApprovalsWithdrawn`
+    /// （`reason = "reconcile"`）を追記する（1 トランザクション）。通常の経路は終端への遷移
+    /// （`apply_transition` と同じトランザクション）で閉じるので、ここに来るのは F7 より前の残りと、
+    /// 遷移と追記の競合だけ。閉じたものが無ければ空。
+    fn approval_withdraw_stale(
+        &self,
+        at: OffsetDateTime,
+    ) -> Result<Vec<WithdrawnApprovals>, StoreError>;
+
     fn standing_rule_append(&self, rule: &StandingRule) -> Result<(), StoreError>;
     /// `node_id = Some(id)` なら「全員向け（`node_id IS NULL`）」+「そのノード向け」、`None` なら絞り込み無し
     /// （全ノード分。GUI の一覧・編集に使う）。古い順。
     fn standing_rule_list(&self, node_id: Option<&str>) -> Result<Vec<StandingRule>, StoreError>;
     /// 無い id は `Ok(false)`。
     fn standing_rule_delete(&self, id: StandingRuleId) -> Result<bool, StoreError>;
+}
+
+/// Phase F7: `Event::ApprovalsWithdrawn.reason` — 終端への遷移と同じトランザクションで閉じた。
+pub const WITHDRAWN_BY_TRANSITION: &str = "task_terminal";
+/// Phase F7: `Event::ApprovalsWithdrawn.reason` — 照合（`approval_withdraw_stale`）で閉じた。
+pub const WITHDRAWN_BY_RECONCILE: &str = "reconcile";
+
+fn status_word(status: Status) -> &'static str {
+    match status {
+        Status::Draft => "draft",
+        Status::Ready => "ready",
+        Status::Running => "running",
+        Status::Blocked => "blocked",
+        Status::Reviewing => "reviewing",
+        Status::Done => "done",
+        Status::Failed => "failed",
+        Status::Cancelled => "cancelled",
+    }
+}
+
+/// Phase F7: 取り下げた行の `answer`（人が一覧で読む決定的な文面。先頭は `task <status>`）。
+pub fn withdrawn_answer(status: Status) -> String {
+    format!(
+        "task {}: 認可元のタスクが終わったため、celeris が自動で取り下げました",
+        status_word(status)
+    )
+}
+
+/// Phase F7: 1 タスク分の取り下げ（`approval_withdraw_stale` の戻り値）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WithdrawnApprovals {
+    pub task_id: TaskId,
+    pub task_status: Status,
+    pub approval_ids: Vec<ApprovalId>,
+}
+
+/// Phase F7: `task_id` の未決の行を `Withdrawn` で閉じ、1 件以上あればそのタスクに
+/// `Event::ApprovalsWithdrawn` を 1 件追記する。呼び出し側のトランザクション内で使う
+/// （`SqliteStore::apply_transition_tx` の終端化と、`approval_withdraw_stale`）。
+pub(crate) fn withdraw_pending_for_task_tx(
+    conn: &rusqlite::Connection,
+    task_id: TaskId,
+    task_status: Status,
+    reason: &str,
+    at: OffsetDateTime,
+) -> Result<Vec<ApprovalId>, StoreError> {
+    let raw: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM approvals WHERE task_id = ?1 AND decision IS NULL \
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        stmt.query_map(params![task_id.to_string()], |row| row.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?
+    };
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut ids = Vec::with_capacity(raw.len());
+    for r in &raw {
+        ids.push(
+            r.parse::<ApprovalId>()
+                .map_err(|_| StoreError::Invalid(format!("invalid approval id: {r}")))?,
+        );
+    }
+    conn.execute(
+        "UPDATE approvals SET decision = ?2, answer = ?3, decided_at = ?4 \
+         WHERE task_id = ?1 AND decision IS NULL",
+        params![
+            task_id.to_string(),
+            Decision::Withdrawn.as_str(),
+            withdrawn_answer(task_status),
+            format_rfc3339(at)?
+        ],
+    )?;
+    SqliteStore::append_event_tx(
+        conn,
+        task_id,
+        &Event::ApprovalsWithdrawn {
+            approval_ids: ids.clone(),
+            task_status,
+            reason: reason.to_string(),
+        },
+    )?;
+    Ok(ids)
 }
 
 fn row_to_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Approval, StoreError>> {
@@ -393,6 +494,57 @@ impl ApprovalStore for SqliteStore {
             Some(r) => Ok(Some(r?)),
             None => Ok(None),
         }
+    }
+
+    fn approval_withdraw_stale(
+        &self,
+        at: OffsetDateTime,
+    ) -> Result<Vec<WithdrawnApprovals>, StoreError> {
+        const STALE_SQL: &str = "SELECT DISTINCT a.task_id, t.status FROM approvals a \
+             JOIN tasks t ON t.id = a.task_id \
+             WHERE a.decision IS NULL AND t.status IN ('done', 'failed', 'cancelled') \
+             ORDER BY a.task_id ASC";
+        fn stale_rows(conn: &rusqlite::Connection) -> Result<Vec<(String, String)>, StoreError> {
+            let mut stmt = conn.prepare(STALE_SQL)?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            Ok(rows)
+        }
+        let mut conn = self.lock()?;
+        // tick ごとに呼ばれるので、何も無いとき（ほぼ常に）は書き込みのロックを取らない。
+        if stale_rows(&conn)?.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let stale = stale_rows(&tx)?;
+        let mut out = Vec::new();
+        for (task_raw, status_raw) in stale {
+            let task_id = task_raw.parse::<TaskId>().map_err(|_| {
+                StoreError::Invalid(format!("invalid approval task_id: {task_raw}"))
+            })?;
+            let task_status = match status_raw.as_str() {
+                "done" => Status::Done,
+                "failed" => Status::Failed,
+                _ => Status::Cancelled,
+            };
+            let approval_ids = withdraw_pending_for_task_tx(
+                &tx,
+                task_id,
+                task_status,
+                WITHDRAWN_BY_RECONCILE,
+                at,
+            )?;
+            if !approval_ids.is_empty() {
+                out.push(WithdrawnApprovals {
+                    task_id,
+                    task_status,
+                    approval_ids,
+                });
+            }
+        }
+        tx.commit()?;
+        Ok(out)
     }
 
     fn standing_rule_append(&self, rule: &StandingRule) -> Result<(), StoreError> {
@@ -607,6 +759,343 @@ mod tests {
             .expect("some");
         assert_eq!(redone.decision, Some(Decision::Once));
         assert_eq!(redone.answer.as_deref(), Some("やっぱりいいです"));
+    }
+
+    // ---- Phase F7: 認可元のタスクの終端で認可の要求を閉じる ----
+
+    fn f7_task(status: Status, kind: crate::model::TaskKind) -> crate::model::Task {
+        use crate::model::{Budget, Tier, WorkerHint, WorkspaceSpec};
+        let now = OffsetDateTime::now_utc();
+        crate::model::Task {
+            routing: None,
+            mode: Default::default(),
+            skills: Vec::new(),
+            repos: Vec::new(),
+            id: TaskId::new(),
+            parent_id: None,
+            kind,
+            title: "t".into(),
+            objective: "o".into(),
+            acceptance: vec![],
+            inputs: vec![],
+            depends_on: vec![],
+            status,
+            priority: 0,
+            worker_hint: WorkerHint {
+                tier: Tier::Standard,
+                adapter: None,
+            },
+            workspace: WorkspaceSpec::Local {
+                path: "ws".into(),
+                mode: None,
+            },
+            budget: Budget {
+                max_turns: 1,
+                max_wall_secs: 1,
+                max_retries: 0,
+            },
+            attempts: 0,
+            lease: None,
+            created_at: now,
+            updated_at: now,
+            role: None,
+            genre: None,
+            aggregate: false,
+            project_id: None,
+            milestone_id: None,
+            assignee: Some("coding-poc".into()),
+            conversation: None,
+            labels: Vec::new(),
+            category: Default::default(),
+        }
+    }
+
+    fn pending_for(store: &SqliteStore, task_id: TaskId, question: &str) -> Approval {
+        let mut a = sample("coding-poc", None, question, OffsetDateTime::now_utc());
+        a.task_id = Some(task_id);
+        store.approval_append(&a).expect("append");
+        a
+    }
+
+    fn withdrawn_events(
+        store: &SqliteStore,
+        task_id: TaskId,
+    ) -> Vec<(Vec<ApprovalId>, Status, String)> {
+        store
+            .events_for(task_id)
+            .expect("events")
+            .into_iter()
+            .filter_map(|(_, e)| match e {
+                Event::ApprovalsWithdrawn {
+                    approval_ids,
+                    task_status,
+                    reason,
+                } => Some((approval_ids, task_status, reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn withdrawn_has_a_fixed_spelling() {
+        assert_eq!(Decision::Withdrawn.as_str(), "withdrawn");
+        assert_eq!(Decision::parse("withdrawn"), Some(Decision::Withdrawn));
+        assert_eq!(
+            serde_json::to_string(&Decision::Withdrawn).expect("json"),
+            "\"withdrawn\""
+        );
+    }
+
+    #[test]
+    fn cancelling_a_task_withdraws_its_pending_approvals_in_the_same_transition() {
+        use crate::transition::Trigger;
+        let store = store_with_org();
+        let task = f7_task(Status::Blocked, crate::model::TaskKind::Execute);
+        store.insert(&task).expect("insert");
+        let a = pending_for(&store, task.id, "どのクラスタを使いますか");
+        let b = pending_for(&store, task.id, "予算を超えてよいですか");
+        let decided = pending_for(&store, task.id, "前の質問");
+        store
+            .approval_decide(
+                decided.id,
+                Decision::Once,
+                Some("はい".into()),
+                OffsetDateTime::now_utc(),
+            )
+            .expect("decide");
+        let other = f7_task(Status::Blocked, crate::model::TaskKind::Execute);
+        store.insert(&other).expect("insert");
+        let untouched = pending_for(&store, other.id, "別のタスクの質問");
+
+        store
+            .apply_transition(task.id, Trigger::Cancel, None)
+            .expect("cancel");
+
+        let pending = store.approval_list(Some(true), None, None).expect("list");
+        assert_eq!(
+            pending.iter().map(|x| x.id).collect::<Vec<_>>(),
+            vec![untouched.id],
+            "only the other task's approval stays pending"
+        );
+        for id in [a.id, b.id] {
+            let back = store.approval_get(id).expect("get").expect("some");
+            assert_eq!(back.decision, Some(Decision::Withdrawn));
+            assert!(
+                back.answer
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("task cancelled")),
+                "answer: {:?}",
+                back.answer
+            );
+            assert!(back.decided_at.is_some());
+        }
+        // 人が決めたものは書き換えない。
+        let kept = store.approval_get(decided.id).expect("get").expect("some");
+        assert_eq!(kept.decision, Some(Decision::Once));
+        assert_eq!(kept.answer.as_deref(), Some("はい"));
+        assert_eq!(
+            withdrawn_events(&store, task.id),
+            vec![(
+                vec![a.id, b.id],
+                Status::Cancelled,
+                WITHDRAWN_BY_TRANSITION.to_string()
+            )]
+        );
+        assert!(withdrawn_events(&store, other.id).is_empty());
+    }
+
+    #[test]
+    fn a_task_without_pending_approvals_gets_no_withdrawn_event() {
+        use crate::transition::Trigger;
+        let store = store_with_org();
+        let task = f7_task(Status::Ready, crate::model::TaskKind::Execute);
+        store.insert(&task).expect("insert");
+        store
+            .apply_transition(task.id, Trigger::Cancel, None)
+            .expect("cancel");
+        assert!(withdrawn_events(&store, task.id).is_empty());
+    }
+
+    #[test]
+    fn cascade_cancel_withdraws_the_approvals_of_dependents_and_approval_children() {
+        use crate::model::TaskKind;
+        use crate::transition::Trigger;
+        let store = store_with_org();
+        let parent = f7_task(Status::Ready, TaskKind::Execute);
+        store.insert(&parent).expect("insert");
+        // 後続（depends_on）: 親の取り消しで dependency_failed → cancelled。
+        let mut dependent = f7_task(Status::Blocked, TaskKind::Execute);
+        dependent.depends_on = vec![parent.id];
+        store.insert(&dependent).expect("insert");
+        // `kind = approval` の子: 親の終端で cancel（P-37）。
+        let mut child = f7_task(Status::Ready, TaskKind::Approval);
+        child.parent_id = Some(parent.id);
+        store.insert(&child).expect("insert");
+        let dep_a = pending_for(&store, dependent.id, "後続の質問");
+        let child_a = pending_for(&store, child.id, "子の質問");
+
+        store
+            .apply_transition(parent.id, Trigger::Cancel, None)
+            .expect("cancel");
+
+        assert_eq!(
+            store.get(dependent.id).expect("get").expect("some").status,
+            Status::Cancelled
+        );
+        assert_eq!(
+            store.get(child.id).expect("get").expect("some").status,
+            Status::Cancelled
+        );
+        assert!(
+            store
+                .approval_list(Some(true), None, None)
+                .expect("list")
+                .is_empty()
+        );
+        assert_eq!(
+            withdrawn_events(&store, dependent.id),
+            vec![(
+                vec![dep_a.id],
+                Status::Cancelled,
+                WITHDRAWN_BY_TRANSITION.to_string()
+            )]
+        );
+        assert_eq!(
+            withdrawn_events(&store, child.id),
+            vec![(
+                vec![child_a.id],
+                Status::Cancelled,
+                WITHDRAWN_BY_TRANSITION.to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn failing_withdraws_but_a_non_terminal_transition_does_not() {
+        use crate::transition::Trigger;
+        let store = store_with_org();
+        let task = f7_task(Status::Blocked, crate::model::TaskKind::Execute);
+        store.insert(&task).expect("insert");
+        let a = pending_for(&store, task.id, "質問");
+        // blocked → ready（答え）は終端ではないので、ストアは閉じない（`gate::answer` が `once` で閉じる）。
+        store
+            .apply_transition(task.id, Trigger::Answer, None)
+            .expect("answer");
+        assert!(
+            store
+                .approval_get(a.id)
+                .expect("get")
+                .expect("some")
+                .is_pending()
+        );
+        assert!(withdrawn_events(&store, task.id).is_empty());
+
+        // running → failed（やり直せない失敗）でも閉じる。
+        let running = f7_task(Status::Running, crate::model::TaskKind::Execute);
+        store.insert(&running).expect("insert");
+        let b = pending_for(&store, running.id, "質問");
+        store
+            .apply_transition(running.id, Trigger::WorkerError { retryable: false }, None)
+            .expect("fail");
+        assert_eq!(
+            store.get(running.id).expect("get").expect("some").status,
+            Status::Failed
+        );
+        let back = store.approval_get(b.id).expect("get").expect("some");
+        assert_eq!(back.decision, Some(Decision::Withdrawn));
+        assert!(
+            back.answer
+                .as_deref()
+                .is_some_and(|s| s.starts_with("task failed"))
+        );
+        assert_eq!(
+            withdrawn_events(&store, running.id),
+            vec![(
+                vec![b.id],
+                Status::Failed,
+                WITHDRAWN_BY_TRANSITION.to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn withdraw_stale_closes_only_approvals_of_terminal_tasks_and_is_idempotent() {
+        use crate::model::TaskKind;
+        let store = store_with_org();
+        // F7 より前の残り: タスクは既に終端（insert で直接その状態にする）なのに未決の行がある。
+        let done = f7_task(Status::Done, TaskKind::Execute);
+        let failed = f7_task(Status::Failed, TaskKind::Execute);
+        let cancelled = f7_task(Status::Cancelled, TaskKind::Execute);
+        let live = f7_task(Status::Blocked, TaskKind::Execute);
+        for t in [&done, &failed, &cancelled, &live] {
+            store.insert(t).expect("insert");
+        }
+        let a_done = pending_for(&store, done.id, "q");
+        let a_failed = pending_for(&store, failed.id, "q");
+        let a_cancelled = pending_for(&store, cancelled.id, "q");
+        let a_live = pending_for(&store, live.id, "q");
+        // タスクの無い approval は対象外。
+        let mut orphan = sample(
+            "secretary",
+            None,
+            "タスクの無い質問",
+            OffsetDateTime::now_utc(),
+        );
+        orphan.task_id = None;
+        store.approval_append(&orphan).expect("append");
+
+        let now = OffsetDateTime::now_utc();
+        let mut out = store.approval_withdraw_stale(now).expect("withdraw");
+        out.sort_by_key(|w| w.task_id);
+        let mut expected = vec![
+            WithdrawnApprovals {
+                task_id: done.id,
+                task_status: Status::Done,
+                approval_ids: vec![a_done.id],
+            },
+            WithdrawnApprovals {
+                task_id: failed.id,
+                task_status: Status::Failed,
+                approval_ids: vec![a_failed.id],
+            },
+            WithdrawnApprovals {
+                task_id: cancelled.id,
+                task_status: Status::Cancelled,
+                approval_ids: vec![a_cancelled.id],
+            },
+        ];
+        expected.sort_by_key(|w| w.task_id);
+        assert_eq!(out, expected);
+
+        let pending = store.approval_list(Some(true), None, None).expect("list");
+        assert_eq!(
+            pending.iter().map(|x| x.id).collect::<Vec<_>>(),
+            vec![a_live.id, orphan.id]
+        );
+        let back = store.approval_get(a_failed.id).expect("get").expect("some");
+        assert_eq!(back.decision, Some(Decision::Withdrawn));
+        assert!(
+            back.answer
+                .as_deref()
+                .is_some_and(|s| s.starts_with("task failed"))
+        );
+        assert_eq!(back.decided_at, Some(now));
+        assert_eq!(
+            withdrawn_events(&store, done.id),
+            vec![(
+                vec![a_done.id],
+                Status::Done,
+                WITHDRAWN_BY_RECONCILE.to_string()
+            )]
+        );
+        // 2 回目は何もしない（イベントも増えない）。
+        assert!(
+            store
+                .approval_withdraw_stale(now)
+                .expect("again")
+                .is_empty()
+        );
+        assert_eq!(withdrawn_events(&store, done.id).len(), 1);
     }
 
     #[test]

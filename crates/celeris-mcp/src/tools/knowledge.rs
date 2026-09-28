@@ -22,6 +22,15 @@ fn kb_root(state: &McpState) -> Result<PathBuf, ToolError> {
         .ok_or_else(|| ToolError::internal("knowledge base is not configured ([knowledge] root)"))
 }
 
+/// Phase K-1: 絞り込みの `scope` に案件 ID が来たら slug のラベルに直す（直せなければそのまま）。
+fn resolve_scope(root: &std::path::Path, store: &task_core::SqliteStore, scope: &str) -> String {
+    if !scope.trim().starts_with("project:") {
+        return scope.to_string();
+    }
+    task_core::knowledge::layout::resolve_scope_label(scope, &layout_with_projects(root, store))
+        .unwrap_or_else(|_| scope.to_string())
+}
+
 // ---- knowledge_list ----
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -49,10 +58,11 @@ async fn list_impl(
         serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
     let root = kb_root(state)?;
     let limit = clamp_limit(args.limit);
-    let scope = args.scope;
     let tag = args.tag;
     let items = state
-        .blocking(move |_store| {
+        .blocking(move |store| {
+            // Phase K-1: `project:<案件 ID>` は `project:<slug>` として引く。
+            let scope = args.scope.map(|s| resolve_scope(&root, store, &s));
             let index = kb::ensure_index(&root);
             let mut items: Vec<_> = index
                 .items
@@ -118,7 +128,10 @@ async fn search_impl(
     let root = kb_root(state)?;
     let limit = clamp_limit(args.limit);
     let items = state
-        .blocking(move |_store| kb::search(&root, &args.query, args.scope.as_deref(), limit))
+        .blocking(move |store| {
+            let scope = args.scope.map(|s| resolve_scope(&root, store, &s));
+            kb::search(&root, &args.query, scope.as_deref(), limit)
+        })
         .await;
     ToolOutput::from_serialize(&SearchOutput { items })
 }
@@ -219,14 +232,36 @@ pub fn get_def() -> ToolDef {
 
 // ---- knowledge_propose ----
 
+/// Phase K-1: 取り込み先が既にあるときの扱い。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposeOp {
+    /// 既存のページの末尾に節として足す（既定）。
+    Append,
+    /// 本文は既存のページを読んで統合した**完全な版**（accept で既存のページを置き換える）。
+    Merge,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProposeArgs {
+    /// ページの題名。同じ scope に同じ題名のページがあれば、そのページへの追記・統合の候補になる。
     pub title: String,
+    /// Markdown の本文（front matter は付けない）。
     pub body: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// `user` / `environment` / `experience` / `project:<slug>`（案件 ID ではなく slug。
+    /// 案件 ID を渡しても slug に直すが、知らない値は拒否する）。
     pub scope: String,
+    /// 取り込み先の KB 相対パス（任意）。`user/<name>.md`・`environment/<category>/<name>.md`・
+    /// `projects/<slug>/<name>.md`・`experience/YYYY/MM/<name>.md`。省略すると scope と題名
+    /// （日本語だけの題名ならタグ）から決める。`environment` は分類が要る（パスかタグで示す）。
+    #[serde(default)]
+    pub path: Option<String>,
+    /// 取り込み先が既にあるとき: `append`（既定。末尾に節として足す）か `merge`（本文は統合済みの完全な版）。
+    #[serde(default)]
+    pub op: Option<ProposeOp>,
     #[serde(default)]
     pub sources: Vec<String>,
     #[serde(default)]
@@ -235,8 +270,25 @@ pub struct ProposeArgs {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ProposeOutput {
+    /// `_inbox/<id>.md`（候補そのもの）。
     pub path: String,
     pub id: String,
+    /// 取り込み先（置き場のガードを通した KB 相対パス）。
+    pub target: String,
+    /// 取り込み先が既にあれば `append` か `merge`。新しいページなら無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
+    /// 同じ題名のページ・`user/` の正準ページへ向け直したとき、その理由と元の置き場。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect: Option<task_core::knowledge::Redirect>,
+}
+
+/// Phase K-1: 置き場の状況（案件の一覧つき）。store を読むのでブロッキングの中で呼ぶ。
+fn layout_with_projects(
+    root: &std::path::Path,
+    store: &task_core::SqliteStore,
+) -> task_core::knowledge::Layout {
+    kb::layout(root, kb::project_refs(store).ok())
 }
 
 async fn propose_impl(
@@ -259,19 +311,34 @@ async fn propose_impl(
         sources,
         confidence: args.confidence,
         body: args.body,
-        path: None,
+        path: args.path,
+        op: match args.op {
+            Some(ProposeOp::Merge) => Some(task_core::knowledge::CandidateOp::Merge),
+            Some(ProposeOp::Append) | None => None,
+        },
     };
     let outcome = state
-        .blocking(move |_store| kb::record(&root, &request))
+        .blocking(move |store| {
+            let layout = layout_with_projects(&root, store);
+            kb::record_in(&root, &request, &layout)
+        })
         .await;
     match outcome {
         Ok(o) => ToolOutput::from_serialize(&ProposeOutput {
             path: o.path,
             id: o.id,
+            target: o.target,
+            op: o.op.map(|op| op.as_str().to_string()),
+            redirect: o.redirect,
         }),
         Err(kb::RecordError::Secret(why)) => {
             Err(ToolError::rejected(format!("秘密が含まれています: {why}")))
         }
+        // Phase K-1: 置き場のガードに落ちた。文面に正しい置き場が入っているので、そのまま返す
+        // （クライアントは path / scope を直してもう一度呼べる）。
+        Err(kb::RecordError::Placement(e)) => Err(ToolError::rejected(format!(
+            "知識の置き場が規則に合いません: {e}"
+        ))),
         Err(e) => Err(ToolError::invalid_params(e.to_string())),
     }
 }
@@ -284,10 +351,26 @@ fn propose_call<'a>(
     Box::pin(propose_impl(state, client, args))
 }
 
+/// `knowledge_propose` の説明の固定部分（`tools/list` はこれに [`propose_layout_hint`] を足す）。
+pub const PROPOSE_DESCRIPTION: &str = "`_inbox/` に知識の候補を置く（人が GUI で accept して正本に入る。直接コミットはしない。出典に `mcp:<client_id>` を必ず足す。秘密は拒否）。\n\
+置き場の規則（違反は拒否し、理由を返す）: scope は `user` / `environment` / `experience` / `project:<slug>`。案件の知識は `projects/<slug>/`（slug は下の一覧。案件 ID をパスやラベルに使わない）。`environment/` の直下には置かず `environment/<category>/<name>.md`。`experience/YYYY/MM/<name>.md`。人についての事実は `user/profile.md`・`expertise.md`・`preferences.md`・`goals.md` に入れる（新しいページを作らない）。同じ scope に同じ題名のページがあれば、そのページへの追記（既定）か `op: merge`（knowledge_get で既存を読み、統合した完全な本文を送る）になる。題名が日本語だけのときは `path` に英小文字のファイル名を付ける。";
+
+/// Phase K-1: `tools/list` の `knowledge_propose` の説明の後半（今の分類と案件の slug の一覧）。
+pub async fn propose_layout_hint(state: &Arc<McpState>) -> Option<String> {
+    let root = state.knowledge_root.clone()?;
+    Some(
+        state
+            .blocking(move |store| {
+                task_core::knowledge::layout::layout_hint(&layout_with_projects(&root, store))
+            })
+            .await,
+    )
+}
+
 pub fn propose_def() -> ToolDef {
     ToolDef {
         name: "knowledge_propose",
-        description: "`_inbox/` に知識の候補を置く（出典に `mcp:<client_id>` を必ず足す。秘密は拒否。直接コミットはしない）。",
+        description: PROPOSE_DESCRIPTION,
         scope: McpScope::KnowledgePropose,
         input_schema: schema::<ProposeArgs>,
         call: propose_call,

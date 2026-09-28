@@ -379,6 +379,7 @@ async fn candidates_can_be_accepted_or_rejected() {
             confidence: Some(task_core::Confidence::Medium),
             body: "ssh fern03 で入る。".into(),
             path: Some("environment/servers/fern03.md".into()),
+            op: None,
         },
     )
     .expect("record");
@@ -473,7 +474,7 @@ async fn candidates_can_be_accepted_or_rejected() {
         "candidate_not_found",
     );
 
-    // 宛先が既にあれば 409（`overwrite: true` なら通る）。
+    // Phase K-1: 宛先が既にある候補は `append`（accept で末尾に節として足す）。
     let two = task_ops::knowledge::record(
         &env.knowledge_root,
         &task_ops::knowledge::RecordRequest {
@@ -488,12 +489,41 @@ async fn candidates_can_be_accepted_or_rejected() {
     .expect("record");
     let listed = send(&app, g("/api/v1/knowledge/inbox")).await;
     assert_eq!(listed.json()["items"][0]["target_exists"], true);
+    assert_eq!(listed.json()["items"][0]["op"], "append");
+    let appended = send(
+        &app,
+        p(
+            &format!("/api/v1/knowledge/inbox/{}/accept", two.id),
+            &json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(appended.status.as_u16(), 200, "{}", appended.text());
+    let raw = std::fs::read_to_string(env.knowledge_root.join("environment/servers/fern03.md"))
+        .expect("read");
+    assert!(
+        raw.contains("ssh fern03 で入る。") && raw.contains("別の版。"),
+        "{raw}"
+    );
+    // 取り込み先を人が既存のページに変えれば 409（`overwrite: true` なら通る）。
+    let two = task_ops::knowledge::record(
+        &env.knowledge_root,
+        &task_ops::knowledge::RecordRequest {
+            title: "fern03 の別件".into(),
+            scope: "environment".into(),
+            sources: vec!["human".into()],
+            body: "別の件。".into(),
+            path: Some("environment/servers/fern03-other.md".into()),
+            ..task_ops::knowledge::RecordRequest::default()
+        },
+    )
+    .expect("record");
     assert_problem(
         &send(
             &app,
             p(
                 &format!("/api/v1/knowledge/inbox/{}/accept", two.id),
-                &json!({}),
+                &json!({"path": "environment/servers/fern03.md"}),
             ),
         )
         .await,
@@ -504,7 +534,7 @@ async fn candidates_can_be_accepted_or_rejected() {
         &app,
         p(
             &format!("/api/v1/knowledge/inbox/{}/accept", two.id),
-            &json!({"overwrite": true}),
+            &json!({"path": "environment/servers/fern03.md", "overwrite": true}),
         ),
     )
     .await;
@@ -518,6 +548,7 @@ async fn candidates_can_be_accepted_or_rejected() {
             scope: "user".into(),
             sources: vec!["human".into()],
             body: "いらない。".into(),
+            path: Some("user/throwaway.md".into()),
             ..task_ops::knowledge::RecordRequest::default()
         },
     )

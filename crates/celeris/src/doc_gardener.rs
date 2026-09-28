@@ -273,6 +273,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let project = Project {
             auto_advance: false,
+            slug: None,
             id: ProjectId::new(),
             title: "fixture".into(),
             request: "".into(),

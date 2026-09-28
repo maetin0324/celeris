@@ -252,6 +252,8 @@ export function knowledgeOpTone(op: string | null | undefined): "neutral" | "inf
       return "neutral";
     case "merge":
       return "warning";
+    case "append":
+      return "info";
     case "retire":
       return "danger";
     default:
@@ -272,6 +274,9 @@ export function knowledgeOpHint(op: string | null | undefined): string | null {
   switch (op) {
     case "merge":
       return "取り込むと、この本文で取り込み先のページを上書きします。";
+    case "append":
+      // Phase K-1: 取り込み先（同じ題名のページ・user の正準ページ）が既にある候補。
+      return "取り込むと、この本文を取り込み先のページの末尾に節として足します（既存の本文は残ります）。";
     case "retire":
       return "取り込むと、取り込み先のページを `_retired/` へ動かします（本文は使いません）。";
     default:

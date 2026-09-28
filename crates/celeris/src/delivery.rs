@@ -825,6 +825,7 @@ mod tests {
         }
         let p = Project {
             auto_advance: false,
+            slug: None,
             id: ProjectId::new(),
             title: "test".into(),
             request: "fix".into(),

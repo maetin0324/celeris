@@ -188,11 +188,12 @@ pub struct KnowledgeCandidate {
     pub body: String,
     /// 本文を描画した HTML（生 HTML は捨ててある）。
     pub html: String,
-    /// 取り込み先に既にページがある（accept は `overwrite` が要る）。
+    /// 取り込み先に既にページがある（`op` が無ければ accept は `overwrite` が要る）。
     pub target_exists: bool,
-    /// ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`。`celerisctl knowledge record`
-    /// が書いた候補（Phase 61）には無い（`null`）。`retire` の accept は `target` を `_retired/` へ動かし、
-    /// `merge` の accept は `target` を必ず上書きする（P-61-k。`docs/knowledge.md` 参照）。
+    /// ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。
+    /// 取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を
+    /// `_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は
+    /// `target` の末尾に節として足す（`docs/knowledge.md` 参照）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub op: Option<String>,
 }

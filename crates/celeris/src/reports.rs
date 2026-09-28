@@ -296,6 +296,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: ProjectId::new(),

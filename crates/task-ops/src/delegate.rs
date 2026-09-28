@@ -950,6 +950,7 @@ mod tests {
         let now_ts = now();
         let project = task_core::Project {
             auto_advance: false,
+            slug: None,
             archived_at: None,
             paused_from: None,
             id: task_core::ProjectId::new(),

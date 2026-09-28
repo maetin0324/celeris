@@ -607,6 +607,11 @@ pub(crate) fn store_problem(err: StoreError) -> ApiProblem {
             kind: "execution_plan",
             ..
         } => ApiProblem::execution_plan_in_use(err.to_string()),
+        // Phase K-1: 案件の slug は案件の間で一意（`PATCH /projects/{id} {slug}`）。
+        StoreError::InUse {
+            kind: "project slug",
+            ..
+        } => ApiProblem::new(StatusCode::CONFLICT, "project_slug_in_use", err.to_string()),
         StoreError::InUse { .. } => ApiProblem::org_node_in_use(err.to_string()),
         StoreError::Org(_) | StoreError::Repo(_) => ApiProblem::validation(vec![ValidationError {
             field: None,

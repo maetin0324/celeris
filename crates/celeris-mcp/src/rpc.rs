@@ -139,13 +139,23 @@ pub async fn dispatch(
         "notifications/initialized" => (RpcResponse::ok(id, serde_json::json!({})), None),
         "ping" => (RpcResponse::ok(id, serde_json::json!({})), None),
         "tools/list" => {
+            // Phase K-1: `knowledge_propose` の説明には、今の置き場（分類と案件の slug）を足す。
+            let propose_hint = if client.has_scope(task_core::McpScope::KnowledgePropose) {
+                tools::knowledge::propose_layout_hint(state).await
+            } else {
+                None
+            };
             let items: Vec<_> = tools::all()
                 .into_iter()
                 .filter(|t| client.has_scope(t.scope))
                 .map(|t| {
+                    let description = match (&propose_hint, t.name) {
+                        (Some(hint), "knowledge_propose") => format!("{}\n{hint}", t.description),
+                        _ => t.description.to_string(),
+                    };
                     serde_json::json!({
                         "name": t.name,
-                        "description": t.description,
+                        "description": description,
                         "inputSchema": (t.input_schema)(),
                     })
                 })

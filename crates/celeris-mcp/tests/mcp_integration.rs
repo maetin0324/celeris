@@ -1121,3 +1121,228 @@ async fn task_approve_and_task_reject_require_scope_and_record_the_mcp_actor() {
 
     server.stop().await;
 }
+
+// ---------------------------------------------------------------------------
+// Phase K-1: knowledge_propose の置き場のガード（案件 ID → slug、environment 直下、同じ題名）
+// ---------------------------------------------------------------------------
+
+fn tool_json(body: &Value) -> Value {
+    let text = body["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no result: {body}"));
+    serde_json::from_str(text).expect("inner json")
+}
+
+#[tokio::test]
+async fn knowledge_propose_resolves_project_ids_rejects_misplaced_pages_and_merges_same_titles() {
+    let server = spawn_token_server(600).await;
+    let now = OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        id: task_core::ProjectId::new(),
+        title: "agent-platform の自己改善".into(),
+        request: "自己改善".into(),
+        status: task_core::ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        auto_advance: false,
+        slug: None,
+        created_at: now,
+        updated_at: now,
+    };
+    server.store.project_create(&project).expect("project");
+    // slug は題名から決まる（ADR-0044 D7 追記）。
+    let stored = server
+        .store
+        .project_get(project.id)
+        .expect("get")
+        .expect("some");
+    assert_eq!(stored.slug.as_deref(), Some("agent-platform"));
+    create_client(
+        &server.store,
+        "chatgpt-rdc",
+        Some("secret"),
+        vec![McpScope::KnowledgeRead, McpScope::KnowledgePropose],
+    );
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &server.base_url, Some("secret")).await;
+    let call = |id: u32, name: &str, arguments: Value| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+            "name": name, "arguments": arguments
+        }})
+    };
+
+    // tools/list の説明に、置き場の規則と案件の slug が載る。
+    let resp = rpc(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        Some(&session),
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+    )
+    .await;
+    let body: Value = resp.json().await.expect("json");
+    let tools = body["result"]["tools"].as_array().expect("tools");
+    let propose = tools
+        .iter()
+        .find(|t| t["name"] == "knowledge_propose")
+        .expect("propose");
+    let description = propose["description"].as_str().expect("description");
+    assert!(
+        description.contains("`project:agent-platform` = agent-platform の自己改善"),
+        "{description}"
+    );
+    assert!(
+        description.contains("environment/<category>/<name>.md"),
+        "{description}"
+    );
+    assert!(
+        propose["inputSchema"]["properties"]["path"].is_object(),
+        "{propose}"
+    );
+
+    // `project:<案件 ID>` は `projects/<slug>/` に入る（ラベルも slug）。
+    let resp = rpc(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        Some(&session),
+        call(
+            2,
+            "knowledge_propose",
+            json!({
+                "title": "Celeris research direction",
+                "body": "上位方針。",
+                "scope": format!("project:{}", project.id),
+                "tags": ["celeris"]
+            }),
+        ),
+    )
+    .await;
+    let out = tool_json(&resp.json().await.expect("json"));
+    assert_eq!(
+        out["target"], "projects/agent-platform/celeris-research-direction.md",
+        "{out}"
+    );
+    let kb_root = server._kb_root.as_ref().expect("kb root").path();
+    let raw = std::fs::read_to_string(kb_root.join(out["path"].as_str().expect("path")))
+        .expect("candidate");
+    assert!(raw.contains("scope: \"project:agent-platform\""), "{raw}");
+    assert!(raw.contains("path: projects/agent-platform/"), "{raw}");
+    // 取り込むと slug の置き場にできる（案件 ID のディレクトリは作らない）。
+    let id = out["id"].as_str().expect("id").to_string();
+    assert!(matches!(
+        task_ops::knowledge::inbox_accept(kb_root, &id, None, false),
+        task_ops::knowledge::InboxOutcome::Accepted { .. }
+    ));
+    assert!(
+        kb_root
+            .join("projects/agent-platform/celeris-research-direction.md")
+            .exists()
+    );
+    assert!(!kb_root.join(format!("projects/{}", project.id)).exists());
+
+    // environment の直下は拒否され、理由（正しい置き場）が返る。
+    let resp = rpc(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        Some(&session),
+        call(
+            3,
+            "knowledge_propose",
+            json!({
+                "title": "Qwen forward target",
+                "body": "10.110.0.150:18000",
+                "scope": "environment",
+                "path": "environment/pegasus-qwen.md"
+            }),
+        ),
+    )
+    .await;
+    let body: Value = resp.json().await.expect("json");
+    assert_eq!(body["error"]["code"], -32002, "{body}");
+    let message = body["error"]["message"].as_str().expect("message");
+    assert!(message.contains("environment/{"), "{message}");
+    // 知らない案件も拒否（知っている slug を並べる）。
+    let resp = rpc(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        Some(&session),
+        call(
+            4,
+            "knowledge_propose",
+            json!({"title": "x", "body": "y", "scope": "project:01M2WTS3DKNZBSZ2JMVB4CZMBX"}),
+        ),
+    )
+    .await;
+    let body: Value = resp.json().await.expect("json");
+    assert_eq!(body["error"]["code"], -32002, "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("agent-platform")),
+        "{body}"
+    );
+
+    // 同じ scope・同じ題名のページがあれば、新しいページを作らずそのページへの追記になる。
+    let resp = rpc(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        Some(&session),
+        call(
+            5,
+            "knowledge_propose",
+            json!({
+                "title": "Celeris research direction",
+                "body": "追加の方針。",
+                "scope": "project:agent-platform",
+                "path": "projects/agent-platform/direction-2.md"
+            }),
+        ),
+    )
+    .await;
+    let out = tool_json(&resp.json().await.expect("json"));
+    assert_eq!(
+        out["target"], "projects/agent-platform/celeris-research-direction.md",
+        "{out}"
+    );
+    assert_eq!(out["op"], "append", "{out}");
+    assert_eq!(out["redirect"]["kind"], "same_title", "{out}");
+    // user の正準ページ: 日本語の題名でも profile.md に入る（ノートを増やさない）。
+    let resp = rpc(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        Some(&session),
+        call(
+            6,
+            "knowledge_propose",
+            json!({
+                "title": "人のプロフィール",
+                "body": "- 所属: 筑波大学",
+                "scope": "user",
+                "tags": ["user", "profile"]
+            }),
+        ),
+    )
+    .await;
+    let out = tool_json(&resp.json().await.expect("json"));
+    assert_eq!(out["target"], "user/profile.md", "{out}");
+    assert_eq!(out["op"], "append", "{out}");
+    // 雛形のままの正準ページに accept すると、雛形の本文が候補の本文に置き換わる。
+    let id = out["id"].as_str().expect("id").to_string();
+    assert!(matches!(
+        task_ops::knowledge::inbox_accept(kb_root, &id, None, false),
+        task_ops::knowledge::InboxOutcome::Accepted { .. }
+    ));
+    let profile = std::fs::read_to_string(kb_root.join("user/profile.md")).expect("profile");
+    assert!(profile.contains("- 所属: 筑波大学"), "{profile}");
+    assert!(!profile.contains("- 呼び方・言語:"), "{profile}");
+    assert!(profile.contains("mcp:chatgpt-rdc"), "{profile}");
+
+    server.stop().await;
+}

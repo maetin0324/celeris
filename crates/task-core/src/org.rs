@@ -381,12 +381,36 @@ pub struct Project {
     /// 時点で進む（途中目標の `reached` = 人の `ok` を待たない。判定のレビューは後から行う）。既定 `false`。
     #[serde(default)]
     pub auto_advance: bool,
+    /// ADR-0044 D7 追記（Phase K-1）: 知識ベースでのこの案件の置き場 `projects/<slug>/` の slug
+    /// （front matter の `scope: project:<slug>`）。案件を作るときに題名 → primary リポジトリの名前 →
+    /// id の末尾から決め（[`crate::knowledge::derive_project_slug`]）、`PATCH /projects/{id}
+    /// {slug}` で変えられる。案件の間で一意。`None` は migration 0029 より前の行（読むときは
+    /// [`Project::kb_slug`] が同じ規則で補う）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub updated_at: OffsetDateTime,
+}
+
+impl Project {
+    /// ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug。
+    /// 列が空の（migration 0029 より前の）行は題名 → id の末尾から補う（他の案件との重複は見ない。
+    /// 重複を避けた値は migration 0029 の backfill と `project_create` が列に書く）。
+    pub fn kb_slug(&self) -> String {
+        match self.slug.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => crate::knowledge::derive_project_slug(
+                &self.title,
+                &self.id.to_string(),
+                None,
+                &|_| false,
+            ),
+        }
+    }
 }
 
 /// 途中目標の状態（ADR-0033 D2。SPEC §7 のアジャイル: 達成ごとに人が判定し、Go か再設計）。

@@ -363,10 +363,17 @@ pub fn apply_finished(
             .and_then(|text| serde_json::from_str::<CandidatesFile>(&text).ok())
             .map(|f| f.candidates)
             .unwrap_or_default();
-        let outcome = task_ops::knowledge::apply_candidates(
+        // Phase K-1: 置き場のガードは案件の一覧（`project:<案件 ID>` → `project:<slug>`）つきで通す。
+        let layout = task_ops::knowledge::layout(
+            knowledge_root,
+            task_ops::knowledge::project_refs(store).ok(),
+        );
+        let outcome = task_ops::knowledge::apply_candidates_in(
             knowledge_root,
             &run.task_id.to_string(),
             &candidates,
+            task_ops::knowledge::ApplyPolicy::Task,
+            &layout,
         );
         tracing::info!(
             task_id = %run.task_id,
@@ -425,6 +432,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let project = Project {
             auto_advance: false,
+            slug: None,
             archived_at: if archived { Some(now) } else { None },
             paused_from: None,
             id: ProjectId::new(),

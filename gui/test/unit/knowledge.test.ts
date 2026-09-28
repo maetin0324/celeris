@@ -240,6 +240,8 @@ describe("言葉", () => {
     expect(knowledgeOpTone(undefined)).toBe("neutral");
 
     expect(knowledgeOpHint("merge")).toContain("上書き");
+    expect(knowledgeOpTone("append")).toBe("info");
+    expect(knowledgeOpHint("append")).toContain("末尾に節として足します");
     expect(knowledgeOpHint("retire")).toContain("_retired/");
     expect(knowledgeOpHint("create")).toBeNull();
     expect(knowledgeOpHint(null)).toBeNull();

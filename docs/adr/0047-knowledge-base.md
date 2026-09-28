@@ -228,3 +228,39 @@
 **`$XDG_DATA_HOME/celeris/knowledge`（無ければ `~/.local/share/celeris/knowledge`）**に改める（知識は人が持つデータなので
 XDG_DATA_HOME）。`[knowledge] root` / `CELERIS_KNOWLEDGE_ROOT` / `--root` で変えられるのは従来どおり。本文中の `~/knowledge` は
 この新しい既定に読み替える。本番は `~/knowledge`（雛形だけ）を新しい場所へ `mv` し、`config.toml` の `root` を直した。
+
+## Phase K-1 追記（2026-09-28。知識の置き場の整理と配置ガード）
+
+**人の報告**: 「chatgpt-rdc（MCP client、knowledge:propose）で agent-platform の自己改善案件に celeris の大まかな
+目的や方針、研究として成立させるための方針を投下させたところ、既存のパスではなく新たに案件 ID に紐づいた知識として
+登録してしまった。pegasus の Qwen の知識も environment 直下に置かれているなど、知識の置き場が混沌としている。」
+
+**原因**: (1) 案件に slug が無く、`scope_dir("project:<x>")` は `<x>` を素通しで `projects/<x>` にしていた
+（ChatGPT が案件 ID を渡すと `projects/01M2…/` ができる）。D1 は `project:<slug>` と書き、front matter の
+`scope: project:<id>` とも書いていた（1 節の中で食い違っていた）。(2) `record`（= MCP `knowledge_propose`）の
+取り込み先は accept のときに `scope` のディレクトリ ＋ 題名の slug で決まり、`environment` は分類なしの
+`environment/<slug>.md`、日本語だけの題名は候補の id（タイムスタンプ）の名前になった（`user/20260922t…-note.md`）。
+(3) 同じ題名のページがあっても新しいページを作った。
+
+### 決定
+
+- **K1-a（D1 の訂正）**: front matter の `scope` は `project:<slug>` だけ。**案件 ID は置き場にもラベルにも使わない**。
+  slug は案件の `slug`（ADR-0044 D7 追記。`projects.slug`、migration 0029）。
+- **K1-b 置き場のガード**: `task_core::knowledge::place`（純粋関数。I/O・LLM 無し）を `record`・MCP
+  `knowledge_propose`・`apply_candidates` の**全部が通す**。規則は `docs/knowledge.md` §2.1: 案件 ID → slug の解決と
+  知らない案件の拒否、`user/`・`environment/<分類>/`・`projects/<slug>/`・`experience/YYYY/MM/` 以外の拒否、
+  `environment/`・`projects/` 直下の拒否（README を除く）、ULID の段の拒否、scope ラベルと置き場の一致、
+  同じ scope・同じ題名のページと `user/` の正準ページへの向け直し。拒否は理由と正しい書き方を返す（ChatGPT が
+  直して呼び直せる）。案件の一覧は呼び出し側が渡す（MCP と知識整理 run は DB から。`celerisctl knowledge record`
+  は DB を開かないので、ULID でない正しい綴りの slug だけを通す — D3「このサブコマンドは DB を開かない」を保つ）。
+- **K1-c `environment/` の分類**: `celeris` / `clusters` / `hosts` / `servers` / `tools` ＋ 既にあるディレクトリ。
+  D1 の `clusters / servers / tools` に、実際に使われてきた `hosts`（手元の機械）と `celeris`（Celeris 自身の運用の癖。
+  旧名 `taskd/` はこの整理で `celeris/` に統合した）を足した。新しい分類は人がディレクトリを作れば通る。
+- **K1-d `op: append`**: 取り込み先が既にある候補は、上書き（`merge`）ではなく**末尾に節として足す**新しい op。
+  人の知識を候補 1 件で消さないため（`merge` は「統合した完全な版」を明示したときだけ。MCP の `op: "merge"`）。
+  取り込み先が `init` の雛形のままなら雛形を置き換える（空欄は情報を持たない）。知識整理 run の `create` が既存の
+  置き場・同じ題名に当たったときも `append` として `_inbox/` へ（直接コミットしない）。
+- **K1-e MCP の説明**: `tools/list` の `knowledge_propose` の `description` に、規則と**その時点の**分類・案件の
+  `project:<slug>` の一覧を載せる（呼ぶたびに組む）。`inputSchema` に `path` と `op` を足した。
+- **採らない**: 既存の誤った置き場を daemon が自動で動かすこと（KB は人の物。今回の整理は人の指示で一度だけ行い、
+  KB の git に 1 件 1 コミットで残した）。人の直接の編集（`PUT /knowledge/page`・エディタ）へのガード。

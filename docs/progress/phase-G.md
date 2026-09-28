@@ -832,3 +832,6 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 - 計測のリリース `a3e3c1377890` は削除した。共有の作業ツリー `releases/.build/tree` と `release-build` の lease は release.sh の通常の
   動作どおり残した（次のリリースが使う）。
 - commit の sha は計測の後に docs を足したため a3e3c1377890 とは違う（Rust と scripts の差分は同じ）。
+
+**昇格**: release `181939898ec3`（main 1819398 = SD-2 93d4e59 + PROGRESS.md 重複解消）。release.sh のゲート（nextest）: cargo-test 116.8 s / clippy 17.5 s / build 43.5 s、verify 27.3 s（ok / live_ok）。2026-09-28 14:33:36Z にライブ昇格（backup 20260928-143328-pre-181939898ec3）。release 開始から昇格完了まで 8 分 49 秒（14:24:55→14:33:44Z、SD-1 前は約 18〜21 分）。
+

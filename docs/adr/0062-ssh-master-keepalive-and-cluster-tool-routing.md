@@ -242,3 +242,8 @@ codex のサンドボックス内ではその Include 先が別所有者に見�
 5. 実機（親エージェントが行う）: web-research / literature-research の remote タスクを `PATCH`/`retry`
    で Local に直して進めること、software-engineering の codex run で `remote-exec` が
    `-F ~/.ssh/config` で通ること。
+
+## ADR-0079 との関係（2026-09-28）
+
+本 ADR の D5（`create_task` と plan.json の子タスクで明示された remote workspace は `cluster:<id>` を持つ担当だけ）は**維持**し、ADR-0079 で
+計画の kind task の unit から daemon が作る子 task にも同じ検証を当てる（ADR-0079 D4 (4)・D16）。置き換える決定は無い。

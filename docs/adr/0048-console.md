@@ -183,3 +183,10 @@ Phase 60b で D3（`POST /console/instruct` と CoS の `actions`）と D4（GUI
 CoS に進行中の案件ごとの登録済みリポジトリ名を渡し、この対応と必須条件をプロンプトに明記する。
 案件の無い例では `repos: []` を用いる。案件名だけから登録名を推測させず、
 曖昧な案件を決定的処理で勝手に選ばない。既存の入力検証は維持する。
+
+## ADR-0079 による置き換え（2026-09-28）
+
+D3 の CoS の `actions` のうち **`add_milestone` は廃止**する（action の検証で「途中目標は root task の段階で表す（ADR-0079）」として落とし、
+理由を人に見せる）。`create_task` の目安（「1 時間以内・承認不要なら 1 つ」「人が儀式を求めれば途中目標」）は、**1 つの依頼 = 1 つの
+`create_task`（root task）、CoS は大きさを判断せず範囲を狭めない、人が名指しした段階は `stages_hint` に写す**に置き換わる（ADR-0079 D12）。
+`propose_project` は人が新しい方向を名指ししたときだけ。`POST /console/instruct` と action の決定的な実行の仕組みは変えない。

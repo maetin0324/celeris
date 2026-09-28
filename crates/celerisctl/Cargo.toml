@@ -23,3 +23,5 @@ tokio = { version = "1", features = ["rt", "macros", "signal"] }
 
 [dev-dependencies]
 tempfile = "3"
+# ADR-0075 D6（Phase G3）: `scratch status` が本物の cache server の `/stats` を読むテスト。
+scratch-cache = { path = "../scratch-cache" }

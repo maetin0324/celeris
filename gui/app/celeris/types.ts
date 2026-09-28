@@ -2597,6 +2597,11 @@ export interface ReportsLive {
  */
 export interface ScratchStatus {
   /**
+   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
+   * スナップショットには無い。
+   */
+  cache?: ScratchCacheView | null;
+  /**
    * `[scratch] dir`。
    */
   dir: string;
@@ -2654,6 +2659,128 @@ export interface ScratchStatus {
   targets_bytes: number;
   targets_max_bytes: number;
   total_max_bytes: number;
+}
+/**
+ * ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+ */
+export interface ScratchCacheView {
+  /**
+   * `http://127.0.0.1:<port>`（`SCCACHE_WEBDAV_ENDPOINT`）。
+   */
+  endpoint: string;
+  /**
+   * `ready` でない理由。
+   */
+  reason?: string | null;
+  /**
+   * sccache の server が起動時に選んだ backend（`celerisctl scratch env --server` が `<scratch>/bin/sccache-server.mode`
+   * に書く）: `webdav`（この cache server）| `disk`（G2 の local disk）。記録が無ければ `None`。
+   */
+  sccache_mode?: string | null;
+  /**
+   * `ready`（`/healthz` が応答）| `disabled`（`[scratch.cache_server] enabled = false`）| `unavailable`（応答なし）。
+   */
+  state: string;
+  /**
+   * cache server の `/stats`（応答が無ければ `None`）。
+   */
+  stats?: ScratchCacheStats | null;
+}
+/**
+ * ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
+ * 累計、容量は byte、時刻は RFC 3339。
+ */
+export interface ScratchCacheStats {
+  /**
+   * 待ち行列の上限で「L2 に書かない」で落とした数。
+   */
+  flush_dropped: number;
+  flush_last_at?: string | null;
+  /**
+   * flusher の帯域の上限（MB/s、0 = 無制限）。
+   */
+  flush_mbps: number;
+  /**
+   * 待ち行列の先頭（最古）の待ち時間（秒）。空なら `None`。
+   */
+  flush_oldest_age_secs?: number | null;
+  flush_queue_bytes: number;
+  /**
+   * flusher（L1 → L2 の非同期 write-back）の待ち行列と遅延。
+   */
+  flush_queue_len: number;
+  /**
+   * L2 に既にあったので書かなかった数。
+   */
+  flush_skipped_existing: number;
+  flush_written: number;
+  flush_written_bytes: number;
+  /**
+   * GET（HEAD を含み、`.sccache_check` を除く）と PUT の数。
+   */
+  gets: number;
+  l1_bytes: number;
+  /**
+   * L1（ローカル）。
+   */
+  l1_dir: string;
+  l1_entries: number;
+  /**
+   * L1 の上限で LRU に落とした数（未 flush の entry は落とさない）。
+   */
+  l1_evicted: number;
+  /**
+   * GET の結果: L1 hit / L2 hit / miss（`gets = l1_hits + l2_hits + misses`）。
+   */
+  l1_hits: number;
+  l1_max_bytes: number;
+  /**
+   * L2 の使用量と entry 数（直近の走査〈GC〉と以後の flush から。走査前は `None`）。
+   */
+  l2_bytes?: number | null;
+  l2_corrupt: number;
+  l2_degraded_since?: string | null;
+  l2_dir?: string | null;
+  /**
+   * L2（NFS。content-addressed な immutable `<k0k1>/<key>.zst`）。
+   */
+  l2_enabled: boolean;
+  l2_entries?: number | null;
+  /**
+   * L2 の I/O の失敗・GET のタイムアウト・checksum 不一致で捨てた entry の数。
+   */
+  l2_errors: number;
+  /**
+   * 直近の L2 の GC（`l2_max_bytes` を超えた分を mtime の古い順に消す）。
+   */
+  l2_gc_last_at?: string | null;
+  l2_gc_removed: number;
+  l2_gc_removed_bytes: number;
+  l2_hits: number;
+  l2_last_error?: string | null;
+  l2_max_bytes: number;
+  /**
+   * 切り離し中なら次に L2 を試す時刻。
+   */
+  l2_retry_at?: string | null;
+  l2_scanned_at?: string | null;
+  /**
+   * `ok` | `degraded`（連続失敗で切り離し中。GET は L1 だけで応答し、flusher は待つ）| `disabled`。
+   */
+  l2_state: string;
+  l2_timeouts: number;
+  misses: number;
+  observed_at: string;
+  /**
+   * L2 hit を L1 へ書き戻した数。
+   */
+  promotes: number;
+  puts: number;
+  /**
+   * 常に `celeris.scratch-cache-stats/1`。
+   */
+  schema: string;
+  started_at: string;
 }
 /**
  * 直近の GC 1 回。
@@ -4622,6 +4749,11 @@ export interface MessagePostBody {
  * 容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。
  */
 export interface ScratchStatus1 {
+  /**
+   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
+   * スナップショットには無い。
+   */
+  cache?: ScratchCacheView | null;
   /**
    * `[scratch] dir`。
    */

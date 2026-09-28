@@ -176,6 +176,73 @@ describe("scratchLine", () => {
     expect(scratchLine({ ...base, effective_max_bytes: 106 * G }).warn).toBe(true);
   });
 
+  it("adds the L1 / L2 hit rates and the flush delay of the cache server (Phase G3)", () => {
+    const stats = {
+      schema: "celeris.scratch-cache-stats/1",
+      started_at: "2026-09-28T00:00:00Z",
+      observed_at: "2026-09-28T00:10:00Z",
+      gets: 100,
+      puts: 20,
+      l1_hits: 71,
+      l2_hits: 12,
+      misses: 17,
+      promotes: 12,
+      l1_dir: "/var/lib/celeris/scratch/cache-l1",
+      l1_bytes: 3 * G,
+      l1_entries: 900,
+      l1_max_bytes: 40 * G,
+      l1_evicted: 0,
+      l2_enabled: true,
+      l2_dir: "/home/u/.local/celeris/cache/sccache-l2",
+      l2_state: "ok",
+      l2_bytes: 20 * G,
+      l2_entries: 5000,
+      l2_scanned_at: null,
+      l2_max_bytes: 300 * G,
+      l2_errors: 0,
+      l2_timeouts: 0,
+      l2_corrupt: 0,
+      l2_degraded_since: null,
+      l2_retry_at: null,
+      l2_last_error: null,
+      l2_gc_last_at: null,
+      l2_gc_removed: 0,
+      l2_gc_removed_bytes: 0,
+      flush_queue_len: 4,
+      flush_queue_bytes: 1024,
+      flush_oldest_age_secs: 3,
+      flush_last_at: null,
+      flush_written: 16,
+      flush_written_bytes: 4096,
+      flush_skipped_existing: 0,
+      flush_dropped: 0,
+      flush_mbps: 25,
+    };
+    const cache = {
+      state: "ready",
+      reason: null,
+      endpoint: "http://127.0.0.1:4237",
+      sccache_mode: "webdav",
+      stats,
+    };
+    expect(scratchLine({ ...base, cache })).toEqual({
+      text: "scratch 62 GB / 100 GB（pinned 18 GB、実効上限 150 GB） · L1 hit 71% · L2 hit 12% · flush 遅延 3 s",
+      warn: false,
+    });
+    const degraded = scratchLine({
+      ...base,
+      cache: { ...cache, stats: { ...stats, l2_state: "degraded", flush_oldest_age_secs: null } },
+    });
+    expect(degraded.text).toContain("L2 切り離し中 · flush 遅延 0 s");
+    expect(degraded.warn).toBe(true);
+    const down = scratchLine({ ...base, cache: { ...cache, state: "unavailable", stats: null } });
+    expect(down.text).toContain("· cache server unavailable");
+    expect(down.warn).toBe(false);
+    expect(scratchLine({ ...base, cache: { ...cache, state: "disabled", stats: null } }).text).not.toContain(
+      "cache server",
+    );
+  });
+
   it("shows why scratch is disabled", () => {
     const line = scratchLine({ ...base, enabled: false, disabled_reason: "scratch dir /x is on NFS" });
     expect(line.text).toBe("scratch 無効（scratch dir /x is on NFS）");

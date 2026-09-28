@@ -3260,6 +3260,7 @@ mod tests {
                 max_bytes: 40 << 30,
                 stats: None,
             }),
+            cache: None,
         };
         let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
             "instance_id": "01TEST", "pid": 1, "hostname": "h", "started_at": "2026-09-28T00:00:00Z",

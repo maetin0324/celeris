@@ -45,7 +45,8 @@ const gb = (bytes: number) => `${(bytes / GIB).toFixed(bytes >= 10 * GIB ? 0 : 1
 /**
  * ADR-0075 D6（Phase G1）: デーモン画面の scratch pool の 1 行。
  * 「scratch 62 / 100 GB（pinned 18 GB、実効上限 150 GB）」。watermark 超過（pressure が none 以外）・実効上限の縮小の
- * ときだけ注意色（warning）。無効なら理由。L1 / L2 の hit 率・flush 遅延は G2 / G3 で足す。
+ * ときだけ注意色（warning）。無効なら理由。Phase G3: cache server が応答すれば「· L1 hit 71% · L2 hit 12% · flush 遅延 3 s」を
+ * 足し、L2 の切り離し（degraded）も注意色にする。
  */
 export function scratchLine(status: ScratchStatus): { text: string; warn: boolean } {
   if (!status.enabled) {
@@ -58,8 +59,26 @@ export function scratchLine(status: ScratchStatus): { text: string; warn: boolea
   const pressure = status.pressure !== "none";
   let text = `scratch ${gb(status.targets_bytes)} / ${gb(status.targets_max_bytes)}（pinned ${gb(status.pinned_bytes)}、実効上限 ${gb(status.effective_max_bytes)}）`;
   if (pressure) text += ` · ${status.pressure}`;
-  return { text, warn: pressure || shrunk };
+  // ADR-0075 D6（Phase G3）: cache server の L1 / L2 の hit 率と flush の遅延。L2 の切り離しは注意色。
+  let detached = false;
+  const cache = status.cache;
+  const stats = cache?.stats;
+  if (stats) {
+    text += ` · L1 hit ${pct(stats.l1_hits, stats.gets)} · L2 hit ${pct(stats.l2_hits, stats.gets)}`;
+    if (stats.l2_state === "degraded") {
+      detached = true;
+      text += " · L2 切り離し中";
+    } else if (stats.l2_state === "disabled") {
+      text += " · L2 無効";
+    }
+    text += ` · flush 遅延 ${stats.flush_oldest_age_secs ?? 0} s`;
+  } else if (cache && cache.state !== "disabled") {
+    text += ` · cache server ${cache.state}`;
+  }
+  return { text, warn: pressure || shrunk || detached };
 }
+
+const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n * 100) / d)}%` : "-");
 
 // 409 / 422 の action 後も再検証する（docs/adr/0005 D2）。
 export const shouldRevalidate = revalidateAfterActionErrors;

@@ -1,9 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { isRouteErrorResponse, Link } from "react-router";
-import { loadBrowserRuns } from "~/celeris/browser";
+import { browserOwnerView } from "~/browser-owner.server";
+import { loadBrowserRuns, loadTaskBrowserWaits } from "~/celeris/browser";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import type { BrowserRun, RunList, RunSummary, TaskDetail } from "~/celeris/types";
+import type { LiveViewState } from "~/components/BrowserRunsPanel";
 import { CodeViewer } from "~/components/CodeViewer";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { RunLog, RunLogKindCounts } from "~/components/RunLog";
@@ -12,7 +14,14 @@ import { buttonClass } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
 import { Icon } from "~/components/ui/Icon";
 import { Alert, CopyButton } from "~/components/ui/misc";
-import { activeBrowserRunIds } from "~/lib/browser";
+import {
+  activeBrowserRunIds,
+  type BrowserOwnerView,
+  liveViewLinkFor,
+  liveViewPath,
+  NO_BROWSER_OWNER,
+  redactLiveViewUrls,
+} from "~/lib/browser";
 import { isTransientStatus } from "~/lib/recovery";
 import { countByKind, parseRunLog } from "~/lib/run-log";
 import { CelerisBanner } from "~/root";
@@ -31,7 +40,8 @@ const BrowserRunsPanel = lazy(() =>
 export interface RunDetailData {
   taskId: string;
   browserRuns: BrowserRun[];
-  activeBrowserRunIds: string[];
+  /** ADR-0080 D6: run の Live View の導線（本人・実行中だけ。URL は同一 origin の経路）。 */
+  liveViews: Record<string, LiveViewState>;
   run: RunSummary;
   stdout: string | null;
   stderr: string | null;
@@ -56,6 +66,7 @@ export async function loadRunDetail(
   taskId: string,
   runId: string,
   request: Request,
+  owner: BrowserOwnerView = NO_BROWSER_OWNER,
 ): Promise<RunDetailData> {
   const runs = await client.get<RunList>(`/tasks/${taskId}/runs`, { signal: request.signal });
   const run = runs.runs.find((r) => r.run_id === runId);
@@ -70,19 +81,32 @@ export async function loadRunDetail(
   }
   const files = run.files;
   const base = `/tasks/${taskId}/runs/${runId}`;
-  const [task, browserRuns, stdout, stderr, result, requestJson, promptText] = await Promise.all([
+  const [task, browserRuns, browserWaits, stdout, stderr, result, requestJson, promptText] = await Promise.all([
     client.get<TaskDetail>(`/tasks/${taskId}`, { signal: request.signal }).catch(() => null),
     loadBrowserRuns(client, taskId, request.signal).catch(() => []),
+    loadTaskBrowserWaits(client, taskId, request.signal).catch(() => []),
     files?.stdout ? readFileText(client, `${base}/stdout`, request.signal) : Promise.resolve(null),
     files?.stderr ? readFileText(client, `${base}/stderr`, request.signal) : Promise.resolve(null),
     files?.result ? readFileText(client, `${base}/result`, request.signal) : Promise.resolve(null),
     files?.request ? readFileText(client, `${base}/request`, request.signal) : Promise.resolve(null),
     files?.prompt ? readFileText(client, `${base}/prompt`, request.signal) : Promise.resolve(null),
   ]);
+  const active = activeBrowserRunIds([run], task?.task.status ?? "failed");
+  const ownRuns = browserRuns.filter((b) => b.run_id === runId);
+  const liveViews: Record<string, LiveViewState> = {};
+  for (const b of ownRuns) {
+    liveViews[b.run_id] = liveViewLinkFor(b, {
+      isOwner: owner.isOwner,
+      ownerAvailable: owner.available,
+      active: active.includes(b.run_id),
+      waits: browserWaits,
+      href: liveViewPath(taskId, b.run_id),
+    });
+  }
   return {
     taskId,
-    activeBrowserRunIds: activeBrowserRunIds([run], task?.task.status ?? "failed"),
-    browserRuns: browserRuns.filter((b) => b.run_id === runId),
+    liveViews,
+    browserRuns: redactLiveViewUrls(ownRuns),
     run,
     stdout,
     stderr,
@@ -98,7 +122,7 @@ export function meta(_: Route.MetaArgs) {
 
 export async function loader({ params, request }: Route.LoaderArgs): Promise<RunDetailData> {
   try {
-    return await loadRunDetail(getCelerisClient(), params.id, params.runId, request);
+    return await loadRunDetail(getCelerisClient(), params.id, params.runId, request, await browserOwnerView(request));
   } catch (e) {
     throw celerisErrorResponse(e);
   }
@@ -178,7 +202,7 @@ export default function RunDetailPage({ loaderData }: Route.ComponentProps) {
 
       {browserRuns.length > 0 && (
         <Suspense fallback={null}>
-          <BrowserRunsPanel runs={browserRuns} activeRunIds={loaderData.activeBrowserRunIds} />
+          <BrowserRunsPanel runs={browserRuns} liveViews={loaderData.liveViews} />
         </Suspense>
       )}
 

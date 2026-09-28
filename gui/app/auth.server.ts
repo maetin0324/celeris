@@ -127,21 +127,39 @@ export async function clearSessionCookie(config: AuthConfig, request: Request): 
   return sessionCookie(config, isSecureRequest(request)).serialize("", { maxAge: 0, expires: new Date(0) });
 }
 
-/** 要求の `Cookie` から有効なセッションがあるか（署名が正しく、`iat` が `maxAge` 以内）。 */
-export async function hasValidSession(config: AuthConfig, request: Request, now = Date.now()): Promise<boolean> {
+/** 有効なセッションの中身（署名が正しく、`iat` が `maxAge` 以内）。`id` はログイン session の識別子でユーザー ID ではない。 */
+export interface ValidSession {
+  id: string;
+  iat: number;
+  /** クッキーの期限（Unix ミリ秒）。 */
+  expiresAtMs: number;
+}
+
+/** 要求の `Cookie` から有効なセッションを読む。無効なら null。 */
+export async function readValidSession(
+  config: AuthConfig,
+  request: Request,
+  now = Date.now(),
+): Promise<ValidSession | null> {
   const header = request.headers.get("cookie");
-  if (!header) return false;
+  if (!header) return null;
   let parsed: unknown;
   try {
     parsed = await sessionCookie(config, isSecureRequest(request)).parse(header);
   } catch {
-    return false;
+    return null;
   }
-  if (!parsed || typeof parsed !== "object") return false;
+  if (!parsed || typeof parsed !== "object") return null;
   const { iat, id } = parsed as Partial<SessionPayload>;
-  if (typeof iat !== "number" || typeof id !== "string" || !id) return false;
+  if (typeof iat !== "number" || typeof id !== "string" || !id) return null;
   const ageMs = now - iat;
-  return ageMs >= 0 && ageMs <= SESSION_MAX_AGE_SECONDS * 1000;
+  if (ageMs < 0 || ageMs > SESSION_MAX_AGE_SECONDS * 1000) return null;
+  return { id, iat, expiresAtMs: iat + SESSION_MAX_AGE_SECONDS * 1000 };
+}
+
+/** 要求の `Cookie` から有効なセッションがあるか（署名が正しく、`iat` が `maxAge` 以内）。 */
+export async function hasValidSession(config: AuthConfig, request: Request, now = Date.now()): Promise<boolean> {
+  return (await readValidSession(config, request, now)) !== null;
 }
 
 export interface SessionState {
@@ -155,8 +173,8 @@ export const sessionContext = createContext<SessionState>({ enabled: false, auth
 
 /** 認証を要求しないパス。 */
 const PUBLIC_PATHS = new Set(["/login", "/logout", "/healthz"]);
-/** 未認証で 302 ではなく 401 を返す resource route（EventSource / <a download> / <img> から呼ばれる）。 */
-const RESOURCE_PREFIXES = ["/events", "/files/"];
+/** 未認証で 302 ではなく 401 を返す resource route（EventSource / <a download> / <img> / browser の本人専用経路。ADR-0080 D5/D6）。 */
+const RESOURCE_PREFIXES = ["/events", "/files/", "/browser/"];
 
 /** `next` として受け付けるのは同一オリジンの絶対パスだけ（`//evil` のようなスキーム相対 URL は拒否）。 */
 export function safeNextPath(next: string | null | undefined): string {

@@ -22,7 +22,8 @@ const emptyInbox: Inbox = {
   questions: [],
   drafts: [],
   attention: [],
-  counts: { approvals: 0, questions: 0, drafts: 0, attention: 0, by_status: {} },
+  browser_waits: [],
+  counts: { approvals: 0, questions: 0, drafts: 0, attention: 0, browser_waits: 0, by_status: {} },
 };
 
 describe("loadInbox", () => {

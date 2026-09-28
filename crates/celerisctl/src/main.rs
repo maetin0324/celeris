@@ -13,6 +13,7 @@ use task_core::SqliteStore;
 
 use commands::accept::{self, AcceptArgs};
 use commands::add::{self, AddArgs};
+use commands::browser::{self as browser_cmd, BrowserCommand};
 use commands::build_cache::{self, BuildCacheCommand};
 use commands::cancel::{self, CancelArgs};
 use commands::config::{self as config_cmd, ConfigCommand};
@@ -63,6 +64,11 @@ enum Command {
     BuildCache {
         #[command(subcommand)]
         command: BuildCacheCommand,
+    },
+    /// ADR-0080 D6: browser の本人（owner）session を GUI の control socket で確定する（DB は開かない）。
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
     },
     /// Read-only docs audit and human-approved reconciliation.
     DocsMaintenance {
@@ -158,6 +164,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
     match command {
         Command::DocsMaintenance { .. } => unreachable!("handled before store open"),
         Command::BuildCache { .. } => unreachable!("handled before store open"),
+        Command::Browser { .. } => unreachable!("handled before store open"),
         Command::Scratch { .. } => unreachable!("handled before store open"),
         Command::Org { command } => org_cmd::run(store, db_path, command),
         // `Config` は DB を開く前に処理される（`main` を見よ）。
@@ -195,6 +202,15 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Command::Scratch { command } = cli.command {
         return match scratch_cmd::run(cli.db, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Command::Browser { command } = cli.command {
+        return match browser_cmd::run(command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");

@@ -202,6 +202,73 @@ pub fn is_git_repo(path: &Path) -> bool {
     path.is_dir() && git(path, &["rev-parse", "--git-dir"]).is_some_and(|o| o.ok)
 }
 
+/// ADR-0074 Phase F5-fix4: `dir` が git の作業ツリーの**最上位**なら、そこで `git commit` / `git merge`
+/// するのに書き込みが要る git の管理領域を返す（`git rev-parse --absolute-git-dir` と
+/// `--git-common-dir`。重複は 1 つにまとめる。通常のリポジトリなら `<dir>/.git` 1 つ、worktree なら
+/// `<登録元>/.git/worktrees/<name>` と `<登録元>/.git` の 2 つ）。
+///
+/// sandbox 付きのアダプタ（codex の `workspace-write`）は cwd の外に書けないので、worktree の
+/// `ORIG_HEAD`・index・refs・objects が read-only になる（本番障害 01M3JXB3DHVBWKWKPW04DTG6SJ）。
+/// その書き込み先を明示的に足すための材料。決定的（`git` を起こすだけ。LLM は使わない）。
+///
+/// 次のときは空（何も足さない）: `dir` が無い・git でない・git が起動できない・`dir` が作業ツリーの
+/// 最上位でない（上位のディレクトリのリポジトリ ― 例えばホームのドットファイル ― の `.git` を
+/// たまたま拾って広げない）。呼び出し元の環境の `GIT_DIR` などには引きずられない。
+pub fn git_admin_dirs(dir: &Path) -> Vec<PathBuf> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--absolute-git-dir",
+            "--git-common-dir",
+        ])
+        .output();
+    let Ok(out) = out else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut lines = stdout.lines().map(str::trim).filter(|l| !l.is_empty());
+    let (Some(toplevel), Some(git_dir), Some(common_dir)) =
+        (lines.next(), lines.next(), lines.next())
+    else {
+        return Vec::new();
+    };
+    let is_toplevel = match (std::fs::canonicalize(toplevel), std::fs::canonicalize(dir)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if !is_toplevel {
+        return Vec::new();
+    }
+    let mut dirs: Vec<PathBuf> = Vec::with_capacity(2);
+    for candidate in [git_dir, common_dir] {
+        let path = PathBuf::from(candidate);
+        if !path.is_absolute() || !path.is_dir() {
+            continue;
+        }
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        if !dirs.contains(&path) {
+            dirs.push(path);
+        }
+    }
+    dirs
+}
+
 /// ADR-0041 D1 の base の規則（決定的）:
 ///
 /// 1. `main` があればその sha。無ければ `HEAD`。

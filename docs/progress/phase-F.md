@@ -2032,3 +2032,81 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
   不合格 → replan v2（remerge / reship 追加）→ remerge が task ブランチに直接 commit（7725ed6）したため `celeris-wu/<task>/remerge` が無く、
   reship の worktree 準備が「dependency branch of remerge does not exist yet」で 2 秒ごとに失敗し続け、event も無く task が `ready` に見えた（18:58〜19:19Z）。
   人が branch を作って解消。修正は F5-fix7 として委譲（依存 WU のブランチ解決の規則と、準備失敗を blocked + event で見せる）。
+## F5-fix7: 依存 WU のブランチが無いと WU の準備が無音で失敗し続ける（2026-09-28）
+
+### 症状（本番 2026-09-28 18:58〜19:19Z、task 01M3MFS5T52FXA63W4V10XGC4S、plan v2 01M3MMTCWK98A11E6HAJ1YS0CN）
+
+- review_fail の後の replan（plan v2）が、工程 `remerge` に WU `remerge`（kind `repair`、main を Task ブランチに merge して衝突を解く）と
+  `reship`（kind `release`、depends_on: remerge）、`integrate-remerge` を足した。
+- `remerge`（codex、run 01M3MMVP19EJCN7J9WVJXM9TF7）は 18:58:35Z に done、`work_unit_committed {key: remerge, branch:
+  "celeris/01M3MFS5T52FXA63W4V10XGC4S", commit: 7725ed6167cb…}`。`work_units` の行は `branch` 空・`base_commit` 空・
+  `head_commit` 7725ed6167。`reship` は `dependency_ready` で ready、Task は `advance` で ready。
+- 以後 20 分間、tick ごと（約 2 s）に WARN `cannot prepare the work unit worktree; not dispatching this tick … work_unit=reship
+  error="dependency branch of remerge does not exist yet"`。イベントは 1 件も無く、Task は ready のまま（GUI の inbox に出ない）。
+  `celeris-wu/<task>/*` は adopt-prior・design-gap・mvp-audit・release だけ。コーディネータが `celeris-wu/<task>/remerge` を
+  7725ed6 に手で作ると、reship は直ちに dispatch された。
+
+### 根本原因（修正前の file:line、`crates/task-dispatch/src/dispatcher.rs`、HEAD 6fe2871）
+
+- L8395 `if !mode.worktrees || wu.kind == task_core::WorkUnitKind::Repair { return Ok(None); }`: kind `repair` の WU は（統合の
+  repair WU に限らず、planner が書いた repair WU も）WU の worktree を切らず、Task の worktree で走る。完了時の commit は
+  `work_unit_trees`（L8504 付近）が `wu.branch == None` のため Task の worktree を返し、Task ブランチに入る。WU ブランチは作られない。
+- L8412〜8441: 同じ工程の依存先（`intra_dep`）があると、基点は `refs/heads/celeris-wu/<task>/<dep>` だけを見て、無ければ
+  `"dependency branch of {dep} does not exist yet"`。依存先の行の `branch` / `head_commit` / `integrated_commit` / `base_commit` を
+  見ない。依存先は既に done なので、この ref は二度と現れない（"yet" ではない）。
+- L10621: `prepare_work_unit_workspace` の `Err` はすべて WARN を出して `return Ok(false)`。回数も分類もイベントも無く、
+  WU・Task の状態を変えないので、次の tick が同じことを永遠に繰り返す。
+
+### 修正（schema 変更なし）
+
+- `crates/task-dispatch/src/integration.rs` `dependency_base`（新設）: 依存先の基点の規則（ADR-0074「Phase F5-fix7 実装時の明確化」2.）。
+  WU ブランチ → （`branch == None` なら）`head_commit` → `integrated_commit` → `base_commit` → Task ブランチの HEAD、
+  （`branch` があるのに ref が無ければ）`head_commit` → `base_commit`、どれも無ければ `Err`。ref は作らない（同 1.）。
+- `dispatcher.rs` `prepare_work_unit_workspace`: 依存先の行を渡して `dependency_base` を使う。エラーは `WuPrepareError
+  {message, permanent}`（依存先が解決できない・Task ブランチが無い = permanent、それ以外 = transient）。
+- `dispatcher.rs` `on_work_unit_prepare_failed`（新設）と dispatch の入口: transient は連続 `MAX_WU_PREPARE_ATTEMPTS = 5` 回目まで
+  `wu_prepare_backoff`（2/4/8/16 s、上限 60 s。`wu_prepare_failures`、プロセス内メモリ）で待ってやり直す。permanent は 1 回目、
+  transient は 5 回目で WU を `blocked(question)`（`WorkUnitTransitioned{reason: "prepare_failed"}`）にし、`worker_progress`
+  （`prepare_failed: work unit <key>: <error>`）を残す。Task が Ready なら `approvals` に 1 件・`QuestionRaised`・`Trigger::Unroutable`
+  （`ready → blocked`）。並列の 2 本目以降（Task は Running）は WU だけ blocked にし、兄弟の終了時の `settle_phase` が Task を止める。
+  回答（`Trigger::Answer`）で WU は D18 の `answer` の経路で ready に戻る。
+- `crates/task-ops/src/replay.rs`: `prepare_failed` の blocked を `Question` と読む（WU の行を events から作り直せる）。
+- ADR-0074 末尾に「Phase F5-fix7 実装時の明確化」（1. WU ブランチを作らない理由、2. 基点の規則、3. 失敗の扱い）。
+
+### 証拠
+
+- 新しいテスト（`crates/task-dispatch/src/dispatcher/tests/work_unit_dependency_base.rs`）:
+  - `a_dependent_of_a_unit_that_committed_on_the_task_branch_dispatches`（本番の形: repair `remerge` が Task の worktree で
+    `remerge.txt` を commit → `WorkUnitCommitted.branch == celeris/<task>`、`remerge.branch == None`、`celeris-wu/<task>/remerge`
+    は作られない。`reship` は `remerge.txt` が見える worktree で走り `base_commit == remerge.head_commit`、Task は Done、
+    `prepare_failed` 0 件、replay の差分 0）
+  - `a_dependent_of_a_unit_that_made_no_commit_bases_on_the_task_branch`（repair が何も変えずに done → reship の基点は Task
+    ブランチ（main）、Done）
+  - `an_unresolvable_dependency_blocks_the_unit_once_and_asks_a_human`（依存先 a が done・`branch` あり・ref 無し・`head_commit`
+    がリポジトリに無い → 最初の tick で b が `blocked(question)`・`prepare_failed` 1 件・`QuestionRaised`（"dependency branch of a"）・
+    `worker_progress`・Task Blocked、その後 20 tick 回しても `prepare_failed` は 1 件のまま、replay の差分 0。人が
+    `celeris-wu/<task>/a` を作って `Answer` → b が ready に戻り、a のブランチから切られて走り Done）
+  - `transient_prepare_failures_retry_with_backoff_then_block`（git の錠の transient: 1〜4 回目はイベントなし・Task Ready・
+    `retry_at` が未来、5 回目で `prepare_failed`・Task Blocked。バックオフ 2 s / 16 s / 60 s 上限）
+  - `integration::tests::dependency_base_falls_back_to_the_recorded_commits_and_the_task_branch`（WU ブランチ優先・repair の
+    head・commit の無い repair = Task ブランチの HEAD・記録した head が無い repair = Task ブランチの HEAD・統合 WU =
+    `integrated_commit`・ref の消えた WU = head → base・解決できなければ `Err`）
+- 修正を外して確認: `dependency_base` を「WU ブランチが無ければ `Err`」に戻す → 依存の 2 本（task ブランチに commit した依存先・
+  commit の無い依存先）が FAILED。`on_work_unit_prepare_failed` を「何もしない」（修正前の WARN して戻るだけ）にする →
+  `an_unresolvable_dependency_blocks_the_unit_once_and_asks_a_human` と transient の 1 本が FAILED。戻して 4 本とも ok。
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-depbranch/target`、`RUSTC_WRAPPER` 無し）: 下の「ゲート」。
+
+### 未解決事項・提案
+
+- 本番の task 01M3MFS5T52FXA63W4V10XGC4S は、コーディネータが手で作った `celeris-wu/<task>/remerge` のまま進んでいる
+  （本 fix は本番に触れていない。DB は read-only の照会だけ）。この ref は 1. の規則とは食い違う（`branch == None` の WU に
+  ref がある）が、害は無い（統合の merge 対象は行の `branch` から決まり、remerge は葉でもない）。
+- 並列の 2 本目以降で blocked にした WU の質問の本文は、兄弟の終了時に既定の「WorkUnit <key> が質問しています」になる
+  （理由は `worker_progress` にある）。`deferred_work_unit_trigger` が `prepare_failed` の進捗を読めば本文に出せる（今回はやらない）。
+- transient の回数はプロセス内メモリなので、再起動で 0 から数え直す（上限は再起動ごとに 5 回。無限にはならない）。
+- `Transitioned.reason` は `unroutable`（`Trigger::Unroutable` を借りたため）。専用の trigger を足すかは transition の表の変更なので
+  提案に留める。
+- planner が kind `repair` を「main を merge する」WU に使うと、その WU は Task の worktree で走る（同じ工程で依存の無い repair WU が
+  2 本あれば Task の worktree を共有して並列に走りうる。未確認）。planner のプロンプトで repair の用途を明示するか、repair を Task の worktree に倒すのを統合・
+  最終レビューの repair（`RepairScheduled` のある WU）に限るかは次の判断に回す。
+- 本番への反映は昇格待ち。

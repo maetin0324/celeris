@@ -674,7 +674,9 @@ pub struct RepoNote {
 /// （owner ごと）になったので、文言を「自分で決めない・`/tmp` と worktree 直下に置かない」にした。
 pub fn shared_build_cache_note() -> &'static str {
     "`target/` は Celeris が渡した `CARGO_TARGET_DIR`（ローカルの scratch）を使う。`CARGO_TARGET_DIR` を\
-     自分で決めない。`/tmp` と worktree 直下に target を置かない。\n"
+     自分で決めない。`/tmp` と worktree 直下に target を置かない。\n\
+     `RUSTC_WRAPPER`（sccache）・`SCCACHE_*`・`CARGO_INCREMENTAL`・`CARGO_PROFILE_DEV_DEBUG` も Celeris が渡した値のまま使い、\
+     上書き・unset しない（sccache の server は起こさない・止めない）。\n"
 }
 
 /// ADR-0043 D2 / D8: タスクが複数のリポジトリを持つときの「作業場所」の本文（純粋関数）。

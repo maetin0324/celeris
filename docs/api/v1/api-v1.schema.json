@@ -13553,6 +13553,110 @@
       ],
       "type": "object"
     },
+    "ScratchSccacheStats": {
+      "description": "`sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。",
+      "properties": {
+        "cache_size_bytes": {
+          "description": "L1 の使用量（byte。読めなければ `None`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "compile_requests": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hits": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "misses": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rust_hits": {
+          "description": "Rust だけの hit / miss（owner をまたいだ依存の hit を見る。U1）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rust_misses": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "compile_requests",
+        "hits",
+        "misses",
+        "rust_hits",
+        "rust_misses"
+      ],
+      "type": "object"
+    },
+    "ScratchSccacheView": {
+      "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。",
+      "properties": {
+        "binary": {
+          "description": "本物の sccache（`[scratch.sccache] binary`）。",
+          "type": "string"
+        },
+        "dir": {
+          "description": "`SCCACHE_DIR`。",
+          "type": "string"
+        },
+        "max_bytes": {
+          "description": "`SCCACHE_CACHE_SIZE`（byte）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "port": {
+          "description": "`SCCACHE_SERVER_PORT`。",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "`ready` でない理由。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`ready`（run に `RUSTC_WRAPPER` を与える）| `disabled`（設定で無効）| `unavailable`（バイナリか server が無い）。",
+          "type": "string"
+        },
+        "stats": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchSccacheStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`sccache --show-stats` の要約（`celerisctl scratch status` が server に問い合わせたときだけ。daemon の\nスナップショットでは `None`〈tick で client を起こさない〉）。"
+        }
+      },
+      "required": [
+        "state",
+        "binary",
+        "port",
+        "dir",
+        "max_bytes"
+      ],
+      "type": "object"
+    },
     "ScratchStatus": {
       "description": "ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。\n容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。",
       "properties": {
@@ -13639,6 +13743,18 @@
         "pressure": {
           "description": "`none` | `high_watermark` | `low_disk` | `emergency`。",
           "type": "string"
+        },
+        "sccache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchSccacheView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。"
         },
         "schema": {
           "description": "常に `celeris.scratch-status/1`。",

@@ -102,6 +102,42 @@ pub struct ScratchStatus {
     pub legacy: Vec<ScratchLegacyView>,
     /// 直近の GC（rename したものがあった回）。
     pub last_gc: Option<ScratchGcView>,
+    /// ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+    #[serde(default)]
+    pub sccache: Option<ScratchSccacheView>,
+}
+
+/// ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchSccacheView {
+    /// `ready`（run に `RUSTC_WRAPPER` を与える）| `disabled`（設定で無効）| `unavailable`（バイナリか server が無い）。
+    pub state: String,
+    /// `ready` でない理由。
+    pub reason: Option<String>,
+    /// 本物の sccache（`[scratch.sccache] binary`）。
+    pub binary: String,
+    /// `SCCACHE_SERVER_PORT`。
+    pub port: u16,
+    /// `SCCACHE_DIR`。
+    pub dir: String,
+    /// `SCCACHE_CACHE_SIZE`（byte）。
+    pub max_bytes: u64,
+    /// `sccache --show-stats` の要約（`celerisctl scratch status` が server に問い合わせたときだけ。daemon の
+    /// スナップショットでは `None`〈tick で client を起こさない〉）。
+    pub stats: Option<ScratchSccacheStats>,
+}
+
+/// `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchSccacheStats {
+    pub compile_requests: u64,
+    pub hits: u64,
+    pub misses: u64,
+    /// Rust だけの hit / miss（owner をまたいだ依存の hit を見る。U1）。
+    pub rust_hits: u64,
+    pub rust_misses: u64,
+    /// L1 の使用量（byte。読めなければ `None`）。
+    pub cache_size_bytes: Option<u64>,
 }
 
 /// scratch pool の owner 1 つ（`targets/<owner>/`）。

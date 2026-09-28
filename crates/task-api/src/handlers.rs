@@ -3251,6 +3251,15 @@ mod tests {
                 }],
                 reclaimed_bytes: 3 << 30,
             }),
+            sccache: Some(task_ops::daemon::ScratchSccacheView {
+                state: "ready".into(),
+                reason: None,
+                binary: "/home/u/.local/celeris/tools/sccache/bin/sccache".into(),
+                port: 4236,
+                dir: "/var/lib/celeris/scratch/sccache-l1".into(),
+                max_bytes: 40 << 30,
+                stats: None,
+            }),
         };
         let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
             "instance_id": "01TEST", "pid": 1, "hostname": "h", "started_at": "2026-09-28T00:00:00Z",

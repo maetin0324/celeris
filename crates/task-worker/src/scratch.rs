@@ -234,12 +234,64 @@ pub struct ScratchSettings {
     pub adopt_max_distance: u64,
     /// 測定スレッドが owner を 1 つ測る間隔（D2。既定 30 秒）。
     pub measure_interval_secs: u64,
+    /// ADR-0075 D4（Phase G2）: `[scratch.sccache]`。
+    pub sccache: SccacheSettings,
+    /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
+    pub cargo: CargoTuning,
 }
+
+/// ADR-0075 D4（Phase G2）: `[scratch.sccache]` を解決した値。`enabled` でも `binary` が無い・server が応答しない
+/// なら配線しない（`resolve_sccache`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SccacheSettings {
+    pub enabled: bool,
+    /// 本物の sccache（既定 `$CELERIS_STATE_DIR/tools/sccache/bin/sccache`）。`RUSTC_WRAPPER` にはこれを包む
+    /// `<scratch>/bin/sccache` を与える（`wrapper_script`）。
+    pub binary: PathBuf,
+    /// `SCCACHE_SERVER_PORT`（既定 4236。人が自分で使う sccache の既定 4226 と分ける）。
+    pub server_port: u16,
+}
+
+/// sccache の server の既定の port（D4）。
+pub const DEFAULT_SCCACHE_PORT: u16 = 4236;
+
+impl SccacheSettings {
+    /// 配線しない設定（テストと、sccache を使わない構成）。
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            binary: PathBuf::new(),
+            server_port: DEFAULT_SCCACHE_PORT,
+        }
+    }
+}
+
+/// ADR-0075 D4（Phase G2）: `[scratch.cargo]` を解決した値。scratch が有効な経路に常に与える（sccache の有無に依らない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CargoTuning {
+    /// `false`（既定）なら `CARGO_INCREMENTAL=0`。`true` なら env を与えない（cargo の既定に任せる）。
+    pub incremental: bool,
+    /// `CARGO_PROFILE_DEV_DEBUG` の値（既定 `line-tables-only`）。`None` なら与えない。
+    pub dev_debug: Option<String>,
+}
+
+impl Default for CargoTuning {
+    fn default() -> Self {
+        Self {
+            incremental: false,
+            dev_debug: Some(DEFAULT_DEV_DEBUG.to_string()),
+        }
+    }
+}
+
+/// `[scratch.cargo] dev_debug` の既定（D4）。
+pub const DEFAULT_DEV_DEBUG: &str = "line-tables-only";
 
 pub const GIB: u64 = 1024 * 1024 * 1024;
 
 impl ScratchSettings {
-    /// 既定値（ADR-0075 の表）で `dir` を指す有効な設定。
+    /// 既定値（ADR-0075 の表）で `dir` を指す有効な設定。sccache は配線しない（`[scratch.sccache]` の既定は
+    /// `celeris::config` が解決する。テストが手元の sccache の server を拾わないため）。
     pub fn with_dir(dir: impl Into<PathBuf>) -> Self {
         Self {
             enabled: true,
@@ -259,6 +311,8 @@ impl ScratchSettings {
             adopt: true,
             adopt_max_distance: 200,
             measure_interval_secs: 30,
+            sccache: SccacheSettings::disabled(),
+            cargo: CargoTuning::default(),
         }
     }
 
@@ -704,13 +758,215 @@ pub fn release(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     Ok(true)
 }
 
-/// 経路に渡す env（G1 は `CARGO_TARGET_DIR` だけ。G2 で sccache 系を足す）。dispatcher と
-/// `celerisctl scratch env` の両方がこれを使う（ADR-0075 D4 の「env は一か所で組む」）。
-pub fn cargo_env(pool: &Pool, owner: &Owner) -> Vec<(String, String)> {
+/// `CARGO_TARGET_DIR` だけ（G1 の値。`cargo_env` の先頭）。
+pub fn target_env(pool: &Pool, owner: &Owner) -> Vec<(String, String)> {
     vec![(
         CARGO_TARGET_DIR_VAR.to_string(),
         pool.target_dir(owner).display().to_string(),
     )]
+}
+
+// ---------------------------------------------------------------------------
+// sccache L1（D4、Phase G2）
+// ---------------------------------------------------------------------------
+
+/// `<scratch>/bin/`（Celeris が生成する wrapper の置き場。`targets/` の外なので GC の対象にならない）。
+pub const WRAPPER_DIR: &str = "bin";
+/// wrapper のファイル名。**`sccache` でなければならない**: cc-rs は `RUSTC_WRAPPER` の stem が `sccache` のときだけ
+/// C/C++ にも同じ wrapper を使う（G2 の U1 の測定）。
+pub const WRAPPER_NAME: &str = "sccache";
+
+/// sccache の配線の状態（`resolve_sccache` の結果）。`scratch status` と起動ログに出す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SccacheState {
+    /// 配線する。`wrapper` = `RUSTC_WRAPPER` に与える `<scratch>/bin/sccache`。
+    Ready { wrapper: PathBuf },
+    /// `[scratch.sccache] enabled = false`、または scratch 自体が無効。
+    Disabled { reason: String },
+    /// 有効だが使えない（バイナリが無い・server が応答しない・wrapper を書けない）。
+    Unavailable { reason: String },
+}
+
+impl SccacheState {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SccacheState::Ready { .. } => "ready",
+            SccacheState::Disabled { .. } => "disabled",
+            SccacheState::Unavailable { .. } => "unavailable",
+        }
+    }
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            SccacheState::Ready { .. } => None,
+            SccacheState::Disabled { reason } | SccacheState::Unavailable { reason } => {
+                Some(reason)
+            }
+        }
+    }
+    pub fn wrapper(&self) -> Option<&Path> {
+        match self {
+            SccacheState::Ready { wrapper } => Some(wrapper),
+            _ => None,
+        }
+    }
+}
+
+/// `127.0.0.1:<port>` に TCP で繋がるか（sccache の server が居るか）。**sccache の client は呼ばない**
+/// （`sccache --show-stats` は server が無いと起こしてしまう。server は run の中から起こさない。D4）。
+pub fn server_listening(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+}
+
+/// `path` が実行できる通常のファイルか。
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// sh の単一引用符で包む。
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// `<scratch>/bin/sccache` の中身（決定的）。sccache 0.18 は `CARGO_` で始まる env を全て Rust の key に入れるので、
+/// owner ごとに違う `CARGO_TARGET_DIR` を rustc の env から外してから本物の sccache を exec する（G2 の U1）。
+pub fn wrapper_script(binary: &Path) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # Celeris が生成（ADR-0075 D4、Phase G2）。手で編集しない（次の run で書き直される）。\n\
+         # sccache は CARGO_* の env を Rust の cache key に入れる。owner ごとに違う target の場所を外し、\n\
+         # owner をまたいで依存 crate の cache を共有する。\n\
+         unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR\n\
+         exec {} \"$@\"\n",
+        sh_quote(&binary.display().to_string())
+    )
+}
+
+/// wrapper を置く（中身が同じなら触らない。違えば tmp → rename）。
+pub fn ensure_wrapper(pool: &Pool, binary: &Path) -> io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = pool.root().join(WRAPPER_DIR);
+    let path = dir.join(WRAPPER_NAME);
+    let want = wrapper_script(binary);
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(want.as_str())
+        && is_executable_file(&path)
+    {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(&dir)?;
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{WRAPPER_NAME}.tmp-{}-{seq}", std::process::id()));
+    std::fs::write(&tmp, want.as_bytes())?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(path)
+}
+
+/// sccache を配線するかを決める（D4）。`server_up` は `server_listening`（テストでは差し替える）。
+pub fn resolve_sccache(
+    settings: &ScratchSettings,
+    server_up: impl Fn(u16) -> bool,
+) -> SccacheState {
+    if !settings.enabled {
+        return SccacheState::Disabled {
+            reason: "scratch is disabled".to_string(),
+        };
+    }
+    let s = &settings.sccache;
+    if !s.enabled {
+        return SccacheState::Disabled {
+            reason: "[scratch.sccache] enabled = false".to_string(),
+        };
+    }
+    if !is_executable_file(&s.binary) {
+        return SccacheState::Unavailable {
+            reason: format!(
+                "sccache binary {} not found (run scripts/scratch/setup-sccache.sh)",
+                s.binary.display()
+            ),
+        };
+    }
+    if !server_up(s.server_port) {
+        return SccacheState::Unavailable {
+            reason: format!(
+                "no sccache server on 127.0.0.1:{} (celeris-sccache.service)",
+                s.server_port
+            ),
+        };
+    }
+    match ensure_wrapper(&settings.pool(), &s.binary) {
+        Ok(wrapper) => SccacheState::Ready { wrapper },
+        Err(e) => SccacheState::Unavailable {
+            reason: format!("could not write the sccache wrapper: {e}"),
+        },
+    }
+}
+
+/// sccache の server に与える env（`celeris-sccache.service` と `celerisctl scratch env --server`）。client の env と
+/// 同じ値（D4 の「server は 1 つ、最初に起こした client の env で動く」への備え）。
+pub fn sccache_server_env(settings: &ScratchSettings) -> Vec<(String, String)> {
+    vec![
+        (
+            "SCCACHE_DIR".to_string(),
+            settings.pool().l1_dir().display().to_string(),
+        ),
+        (
+            "SCCACHE_CACHE_SIZE".to_string(),
+            format!("{}G", settings.l1_max_bytes / GIB),
+        ),
+        (
+            "SCCACHE_SERVER_PORT".to_string(),
+            settings.sccache.server_port.to_string(),
+        ),
+        ("SCCACHE_IDLE_TIMEOUT".to_string(), "0".to_string()),
+    ]
+}
+
+/// sccache 系の env（`RUSTC_WRAPPER` と server の env）。`Ready` でなければ空。
+pub fn sccache_env(settings: &ScratchSettings, state: &SccacheState) -> Vec<(String, String)> {
+    let Some(wrapper) = state.wrapper() else {
+        return Vec::new();
+    };
+    let mut env = vec![("RUSTC_WRAPPER".to_string(), wrapper.display().to_string())];
+    env.extend(sccache_server_env(settings));
+    env
+}
+
+/// `[scratch.cargo]` の env（`CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG`）。
+pub fn cargo_tuning_env(tuning: &CargoTuning) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if !tuning.incremental {
+        env.push(("CARGO_INCREMENTAL".to_string(), "0".to_string()));
+    }
+    if let Some(v) = tuning.dev_debug.as_deref().filter(|v| !v.is_empty()) {
+        env.push(("CARGO_PROFILE_DEV_DEBUG".to_string(), v.to_string()));
+    }
+    env
+}
+
+/// 経路に渡す env の全体（純粋。`state` は `resolve_sccache` の結果）。順序は固定:
+/// `CARGO_TARGET_DIR`、`[scratch.cargo]`、sccache 系。
+pub fn cargo_env_with(
+    settings: &ScratchSettings,
+    owner: &Owner,
+    state: &SccacheState,
+) -> Vec<(String, String)> {
+    let mut env = target_env(&settings.pool(), owner);
+    env.extend(cargo_tuning_env(&settings.cargo));
+    env.extend(sccache_env(settings, state));
+    env
+}
+
+/// 経路に渡す env（D3 / D4）。dispatcher（run・WU の checks・統合の検査・reviewer の checks）と
+/// `celerisctl scratch env` の両方がこれを使う（ADR-0075 D4 の「env は一か所で組む」）。sccache は server が
+/// 応答するときだけ（`resolve_sccache`）。
+pub fn cargo_env(settings: &ScratchSettings, owner: &Owner) -> Vec<(String, String)> {
+    let state = resolve_sccache(settings, server_listening);
+    cargo_env_with(settings, owner, &state)
 }
 
 // ---------------------------------------------------------------------------
@@ -1316,7 +1572,7 @@ mod tests {
             assert!(Owner::parse(bad).is_err(), "{bad}");
         }
         assert_eq!(
-            cargo_env(&pool, &wu),
+            target_env(&pool, &wu),
             vec![(
                 "CARGO_TARGET_DIR".to_string(),
                 "/var/lib/celeris/scratch/targets/task-01TASK/wu-01WU/target".to_string()
@@ -1904,5 +2160,165 @@ mod tests {
         assert!(size >= 10_000, "{size}");
         assert!(latest > at(T0 - 1_000_000_000));
         assert_eq!(measure_tree(&tmp.path().join("missing")).unwrap().0, 0);
+    }
+
+    /// テスト用の sccache のバイナリ（実行ビットつきの空の script。呼ばれない）。
+    fn fake_sccache(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("tools/sccache/bin/sccache");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    fn sccache_settings(dir: &Path, binary: PathBuf) -> ScratchSettings {
+        ScratchSettings {
+            l1_max_bytes: 40 * GIB,
+            sccache: SccacheSettings {
+                enabled: true,
+                binary,
+                server_port: 4236,
+            },
+            ..ScratchSettings::with_dir(dir.join("scratch"))
+        }
+    }
+
+    /// ADR-0075 D4 / G2 受け入れ条件 2: server が応答するとき、env は `CARGO_TARGET_DIR`・`[scratch.cargo]`・sccache 系を
+    /// 固定の順で全部持ち、何度組んでも同じ。wrapper は `<scratch>/bin/sccache`（cc-rs が認める名前）で、
+    /// `CARGO_TARGET_DIR` を外して本物の sccache を exec する。
+    #[test]
+    fn sccache_env_is_complete_and_stable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_sccache(tmp.path());
+        let settings = sccache_settings(tmp.path(), bin.clone());
+        let owner = Owner::work_unit("01TASK", "01WU");
+        let up = |p: u16| p == 4236;
+        let state = resolve_sccache(&settings, up);
+        let root = tmp.path().join("scratch");
+        let wrapper = root.join("bin/sccache");
+        assert_eq!(
+            state,
+            SccacheState::Ready {
+                wrapper: wrapper.clone()
+            }
+        );
+        let env = cargo_env_with(&settings, &owner, &state);
+        let s = |p: PathBuf| p.display().to_string();
+        assert_eq!(
+            env,
+            vec![
+                (
+                    "CARGO_TARGET_DIR".to_string(),
+                    s(root.join("targets/task-01TASK/wu-01WU/target"))
+                ),
+                ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+                (
+                    "CARGO_PROFILE_DEV_DEBUG".to_string(),
+                    "line-tables-only".to_string()
+                ),
+                ("RUSTC_WRAPPER".to_string(), s(wrapper.clone())),
+                ("SCCACHE_DIR".to_string(), s(root.join("sccache-l1"))),
+                ("SCCACHE_CACHE_SIZE".to_string(), "40G".to_string()),
+                ("SCCACHE_SERVER_PORT".to_string(), "4236".to_string()),
+                ("SCCACHE_IDLE_TIMEOUT".to_string(), "0".to_string()),
+            ]
+        );
+        // 何度組んでも同じ（wrapper は書き直さない）。
+        let before = mtime(&wrapper);
+        let again = cargo_env_with(&settings, &owner, &resolve_sccache(&settings, up));
+        assert_eq!(env, again);
+        assert_eq!(mtime(&wrapper), before);
+        let script = std::fs::read_to_string(&wrapper).unwrap();
+        assert!(script.starts_with("#!/bin/sh\n"), "{script}");
+        assert!(
+            script.contains("unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR"),
+            "{script}"
+        );
+        assert!(
+            script.contains(&format!("exec '{}' \"$@\"", bin.display())),
+            "{script}"
+        );
+        // server の env は client の sccache 系と同じ値（RUSTC_WRAPPER を除く）。
+        assert_eq!(sccache_server_env(&settings), env[4..].to_vec());
+        // [scratch.cargo] を変えれば与えない。
+        let tuned = ScratchSettings {
+            cargo: CargoTuning {
+                incremental: true,
+                dev_debug: None,
+            },
+            ..settings.clone()
+        };
+        let env = cargo_env_with(&tuned, &owner, &state);
+        assert!(
+            !env.iter()
+                .any(|(k, _)| k.starts_with("CARGO_INCREMENTAL") || k == "CARGO_PROFILE_DEV_DEBUG")
+        );
+        // 実際に wrapper を通すと CARGO_TARGET_DIR が消えている（本物の sccache の代わりに env を出す script）。
+        let echo = tmp.path().join("echo-env");
+        std::fs::write(
+            &echo,
+            "#!/bin/sh\necho \"T=${CARGO_TARGET_DIR-unset} A=$1\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&echo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let w = ensure_wrapper(&settings.pool(), &echo).unwrap();
+        let out = std::process::Command::new(&w)
+            .arg("rustc")
+            .env("CARGO_TARGET_DIR", "/somewhere")
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "T=unset A=rustc\n");
+    }
+
+    /// ADR-0075 D4 / G2 受け入れ条件 2: バイナリが無い・server が応答しない・`enabled = false`・scratch が無効のときは
+    /// sccache 系を与えない（`CARGO_TARGET_DIR` と `[scratch.cargo]` は残る）。
+    #[test]
+    fn sccache_env_is_omitted_without_binary_or_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_sccache(tmp.path());
+        let owner = Owner::task("01TASK");
+        let keys =
+            |env: &[(String, String)]| env.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
+        let plain = vec![
+            "CARGO_TARGET_DIR".to_string(),
+            "CARGO_INCREMENTAL".to_string(),
+            "CARGO_PROFILE_DEV_DEBUG".to_string(),
+        ];
+        // バイナリが無い。
+        let settings = sccache_settings(tmp.path(), tmp.path().join("missing/sccache"));
+        let state = resolve_sccache(&settings, |_| true);
+        assert_eq!(state.label(), "unavailable");
+        assert!(state.reason().unwrap().contains("not found"), "{state:?}");
+        assert_eq!(keys(&cargo_env_with(&settings, &owner, &state)), plain);
+        // server が応答しない。
+        let settings = sccache_settings(tmp.path(), bin.clone());
+        let state = resolve_sccache(&settings, |_| false);
+        assert_eq!(state.label(), "unavailable");
+        assert!(
+            state.reason().unwrap().contains("127.0.0.1:4236"),
+            "{state:?}"
+        );
+        assert_eq!(keys(&cargo_env_with(&settings, &owner, &state)), plain);
+        // `[scratch.sccache] enabled = false`。
+        let mut off = sccache_settings(tmp.path(), bin.clone());
+        off.sccache.enabled = false;
+        let state = resolve_sccache(&off, |_| true);
+        assert_eq!(state.label(), "disabled");
+        assert_eq!(keys(&cargo_env_with(&off, &owner, &state)), plain);
+        // scratch が無効。
+        let mut off = sccache_settings(tmp.path(), bin);
+        off.enabled = false;
+        assert_eq!(resolve_sccache(&off, |_| true).label(), "disabled");
+        // wrapper は Ready のときだけ書く。
+        assert!(!tmp.path().join("scratch/bin/sccache").exists());
+        // 本物の probe（loopback だけ）。閉じた port には port 1（特権 port。テストが bind できないので他のテストと
+        // 競合しない）を使う。
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        assert!(server_listening(l.local_addr().unwrap().port()));
+        assert!(!server_listening(1));
     }
 }

@@ -748,8 +748,15 @@ fn classify_command(cmd: &str, reason: &str) -> Option<RepairClass> {
 
 /// D16「reason が fmt / clippy の語だけを指す（字句の予備判定）」: 明示の `repair` ヒントが無い
 /// `Check::Reviewer` の不合格に対する、決定的な字句フォールバック。
+///
+/// 字句を見る前に ULID の形の語（`reviewer(<run_id>): ` の接頭辞や `.taskd/artifacts/<task_id>/`
+/// の id）を外す。Crockford base32 の ULID は `F`・`M`・`T` を含みうるので、id の一部の `FMT` を
+/// `fmt` の語と誤読して、中身の不合格を format の repair に倒していた（nextest の gate で
+/// `rereview_from_failed_reuses_the_approved_human_child_and_only_reruns_the_reviewer` が約 0.04 % で
+/// `Done` になった原因。docs/progress/phase-G.md「SD-2 追記」）。`L`・`I`・`O` は ULID に出ないので
+/// `lint` / `clippy` / `format` は id から生じないが、同じ理由で一律に外す。
 fn classify_reviewer_reason(reason: &str) -> Option<RepairClass> {
-    let r = reason.to_lowercase();
+    let r = without_ulid_tokens(reason).to_lowercase();
     let mentions_fmt = r.contains("fmt") || r.contains("format");
     let mentions_lint = r.contains("clippy") || r.contains("lint");
     if mentions_fmt && !mentions_lint {
@@ -759,6 +766,38 @@ fn classify_reviewer_reason(reason: &str) -> Option<RepairClass> {
         return Some(RepairClass::ReviewerLocal(ReviewerRepairKind::Lint));
     }
     None
+}
+
+/// `s` から ULID の形の語（英数字の連続で、26 文字すべてが Crockford base32 の大文字・数字、
+/// 先頭が `0`〜`7`）を取り除いた文字列。区切り（英数字以外）はそのまま残す。
+fn without_ulid_tokens(s: &str) -> String {
+    fn is_ulid(tok: &str) -> bool {
+        tok.len() == 26
+            && tok.as_bytes()[0] <= b'7'
+            && tok
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'H' | b'J' | b'K' | b'M' | b'N' | b'P'..=b'T' | b'V'..=b'Z'))
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut token_start: Option<usize> = None;
+    for (i, ch) in s.char_indices() {
+        if ch.is_ascii_alphanumeric() {
+            token_start.get_or_insert(i);
+            continue;
+        }
+        if let Some(start) = token_start.take()
+            && !is_ulid(&s[start..i])
+        {
+            out.push_str(&s[start..i]);
+        }
+        out.push(ch);
+    }
+    if let Some(start) = token_start
+        && !is_ulid(&s[start..])
+    {
+        out.push_str(&s[start..]);
+    }
+    out
 }
 
 fn classify_one(f: &FailedCheck) -> Option<RepairClass> {
@@ -1229,6 +1268,53 @@ mod tests {
             d,
             RepairDecision::Repairable(RepairClass::ReviewerLocal(ReviewerRepairKind::Format))
         );
+    }
+
+    /// SD-2 追記（nextest の flake）: `reviewer(<run_id>)` や成果物のパスの ULID に `FMT` が
+    /// 含まれても、fmt の語としては読まない（中身の不合格は substantive のまま）。
+    #[test]
+    fn ulid_ids_in_a_reviewer_reason_are_not_read_as_fmt() {
+        for reason in [
+            // gate で実際に出た run id（`...ZFMTS...`）。
+            "reviewer(01M3MA0HNXEZFMTSDF4BZ9HDFH): r",
+            "reviewer(01M3M9XFFMTADBQ0865122NCCK): r",
+            // 成果物のパスに入る task id（`...WXFMTS...`）。
+            "reviewer(01M3M9HHREV0B8AK6C6WH5R66D): .taskd/artifacts/01M3M9HHKY97MQ5WXFMTS0W8SX/review.json is not a valid ReviewOutput: EOF while parsing a value at line 1 column 0",
+        ] {
+            assert_eq!(
+                classify_review_failure(&[reviewer(reason, None)]),
+                RepairDecision::Substantive,
+                "{reason}"
+            );
+        }
+        // id を外しても、reviewer 自身の文の `fmt` はこれまでどおり読む。
+        assert_eq!(
+            classify_review_failure(&[reviewer(
+                "reviewer(01M3M9XFFMTADBQ0865122NCCK): run cargo fmt",
+                None
+            )]),
+            RepairDecision::Repairable(RepairClass::ReviewerLocal(ReviewerRepairKind::Format))
+        );
+    }
+
+    #[test]
+    fn without_ulid_tokens_keeps_everything_but_ulid_shaped_words() {
+        assert_eq!(
+            without_ulid_tokens(
+                "reviewer(01M3M9XFFMTADBQ0865122NCCK): a/01M3M9HHKY97MQ5WXFMTS0W8SX/b"
+            ),
+            "reviewer(): a//b"
+        );
+        // 26 文字でも小文字・Crockford に無い文字（`L`/`I`/`O`/`U`）・先頭が 8 以上なら残す。
+        for keep in [
+            "01m3m9xffmtadbq0865122ncck",
+            "01M3M9XFFMTADBQ0865122NCCL",
+            "81M3M9XFFMTADBQ0865122NCCK",
+            "01M3M9XFFMTADBQ0865122NCC",
+            "日本語 fmt ✓",
+        ] {
+            assert_eq!(without_ulid_tokens(keep), keep);
+        }
     }
 
     #[test]

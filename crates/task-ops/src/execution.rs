@@ -210,8 +210,9 @@ pub fn replan(
         .map(|w| w.key.as_str())
         .collect();
     let v2 = spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
+    // ADR-0074 F5-fix: dispatcher（planner run の検証）と同じ規則を task-core の関数で共有する。
     let daemon_added = |u: &WorkUnitRow| -> bool {
-        u.kind == task_core::WorkUnitKind::Integrate
+        task_core::is_daemon_added_work_unit(&active.spec, u)
             || (v2 && u.phase.is_some() && !plan_keys.contains(u.key.as_str()))
     };
     let done_work_units: Vec<(String, task_core::WorkUnitSpec)> = current
@@ -252,7 +253,18 @@ pub fn replan(
     // 削除: 現在アクティブだが新しい版に無い（done では起き得ない。validate が検証済み）。
     // 統合 WU は下で工程ごとにまとめて扱う。
     for u in &current {
+        // ADR-0074 F5-fix: daemon が足した WU（統合 WU・統合の repair WU）は planner の視野に無い
+        // ので、新しい版に書かれていなくても superseded にしない（base のまま持ち越す）。統合 WU は
+        // 下で工程ごとにまとめて扱う。統合の repair WU は、その工程が新しい版から消えたときだけ
+        // superseded にする（統合 WU と一緒に消える）。
         if u.kind == task_core::WorkUnitKind::Integrate {
+            continue;
+        }
+        if daemon_added(u)
+            && u.phase
+                .as_deref()
+                .is_some_and(|p| spec.phases.iter().any(|ph| ph.key == p))
+        {
             continue;
         }
         if u.status != WorkUnitStatus::Done && !new_keys.contains(u.key.as_str()) {
@@ -1045,6 +1057,68 @@ mod tests {
         // 何も書き込まれていない。
         let units = store.work_units_for(task.id).unwrap();
         assert_eq!(units.len(), 3);
+    }
+
+    /// ADR-0074 F5-fix（不具合 2）: 全体形式の replan で planner が統合 WU を書かなくても、done の
+    /// `integrate-design`（daemon の統合 WU）と done の統合の repair WU は不変条件の対象にならず、
+    /// 行は base のまま持ち越される。新しい版の工程の統合 WU は daemon が補う。
+    #[test]
+    fn replan_carries_daemon_added_units_without_the_planner_restating_them() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let task = sample_task();
+        store.insert(&task).unwrap();
+        let v1 = adopt_plan(
+            &store,
+            task.id,
+            spec_v2_two_phases(),
+            PlanOrigin::Human,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        mark_done(&store, task.id, "a");
+        mark_done(&store, task.id, "integrate-design");
+        let mut repair_spec = wu("integ-repair-design-1", &[]);
+        repair_spec.kind = WorkUnitKind::Repair;
+        repair_spec.phase = Some("design".to_string());
+        let mut repair = task_core::WorkUnitRow::new(
+            "wu-repair".to_string(),
+            task.id.to_string(),
+            v1.id.clone(),
+            1,
+            repair_spec,
+            WorkUnitStatus::Done,
+            "2026-09-27T00:00:00Z".to_string(),
+        );
+        repair.status = WorkUnitStatus::Done;
+        store
+            .work_units_apply(task.id, vec![repair], vec![], vec![])
+            .unwrap();
+
+        let mut new_spec = spec_v2_two_phases();
+        new_spec.work_units[1].objective = "do b again, now with the quota fix".to_string();
+        replan(
+            &store,
+            task.id,
+            new_spec,
+            "retry b".to_string(),
+            PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("daemon-added done units must not block the replan");
+
+        let units = store.work_units_for(task.id).unwrap();
+        let get = |k: &str| units.iter().find(|u| u.key == k).unwrap();
+        assert_eq!(get("integrate-design").status, WorkUnitStatus::Done);
+        assert_eq!(get("integrate-design").plan_id, v1.id);
+        assert_eq!(get("integ-repair-design-1").status, WorkUnitStatus::Done);
+        assert_eq!(get("integ-repair-design-1").plan_id, v1.id);
+        assert_eq!(get("b").status, WorkUnitStatus::Ready);
+        assert_eq!(get("integrate-build").kind, WorkUnitKind::Integrate);
+        assert_eq!(get("integrate-build").status, WorkUnitStatus::Pending);
     }
 
     #[test]

@@ -767,6 +767,11 @@ pub struct RunRequest {
     /// `<workspace>/.taskd/artifacts/<task_id>`。決めるのはディスパッチャで、アダプタはここに書くだけ。
     pub artifacts_dir: PathBuf,
     pub context: RunContext,
+    /// ADR-0074 F5-fix: この run に daemon が実際に与えた `CARGO_TARGET_DIR`（共有ビルドキャッシュ。
+    /// 並列の WU は WU ごと）。与えていなければ `None`（`request.json` に出ない）。ワーカーは読まなくてよい
+    /// （環境変数そのものは別に渡る。ここは監査用の写し）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_target_dir: Option<PathBuf>,
 }
 
 impl RunRequest {
@@ -1088,6 +1093,7 @@ pub(crate) mod tests {
     #[test]
     fn run_request_serializes_with_type_tag() {
         let req = RunRequest {
+            cargo_target_dir: None,
             protocol: PROTOCOL_VERSION,
             task: sample_task(),
             workspace: PathBuf::from("/tmp/ws"),

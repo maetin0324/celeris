@@ -601,7 +601,10 @@ impl std::fmt::Display for PlanValidationError {
                 write!(f, "work units {a} and {b} look like duplicates ({reason})")
             }
             PlanValidationError::DoneWorkUnitChanged { key } => {
-                write!(f, "done work unit {key} must not change on replan")
+                write!(
+                    f,
+                    "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}）"
+                )
             }
             PlanValidationError::InvalidFeatures { key, detail } => {
                 write!(
@@ -726,13 +729,13 @@ impl std::fmt::Display for PlanValidationError {
             PlanValidationError::ReservedKind { key } => {
                 write!(
                     f,
-                    "work unit {key}: kind \"integrate\" is reserved for daemon-created integration work units"
+                    "work unit {key}: kind \"integrate\" is reserved for daemon-created integration work units（{DAEMON_ADDED_HINT}）"
                 )
             }
             PlanValidationError::ReservedKey { key } => {
                 write!(
                     f,
-                    "work unit {key}: keys starting with \"{INTEGRATE_KEY_PREFIX}\" are reserved for daemon-created integration work units"
+                    "work unit {key}: keys starting with \"{INTEGRATE_KEY_PREFIX}\" are reserved for daemon-created integration work units（{DAEMON_ADDED_HINT}）"
                 )
             }
         }
@@ -1867,6 +1870,32 @@ pub fn integration_work_unit_specs(spec: &ExecutionPlanSpec) -> Vec<WorkUnitSpec
         .collect()
 }
 
+/// ADR-0074 F5-fix: 検証エラーに添える「daemon が足した WU は書かなくてよい」の一文。
+pub const DAEMON_ADDED_HINT: &str = "daemon が足した WU（kind = integrate の統合 WU・統合の repair WU）は書かなくてよい（daemon が旧版から持ち越す・補う）";
+
+/// ADR-0074 D1.4（Phase F2b、F5-fix で共通化）: この行が daemon の足した WU（計画の spec に無い
+/// system WU）か。`kind = integrate` の統合 WU、および v2 で `phase` を持ち `active` な計画の spec に
+/// 無い WU（統合の repair WU）。planner の視野に無いので、replan の done の不変条件の対象にしない。
+pub fn is_daemon_added_work_unit(active: &ExecutionPlanSpec, row: &WorkUnitRow) -> bool {
+    row.kind == WorkUnitKind::Integrate
+        || (active.schema == EXECUTION_PLAN_SCHEMA_V2
+            && row.phase.is_some()
+            && !active.work_units.iter().any(|w| w.key == row.key))
+}
+
+/// ADR-0074 D5.3/D1.4（F5-fix）: replan の `validate` に渡す done の WU（`(key, spec)`）。
+/// daemon が足した WU（[`is_daemon_added_work_unit`]）は除く（行は replan が触れずに持ち越す）。
+/// dispatcher（planner run の検証）と `task_ops::execution::replan` の両方がこれを使う。
+pub fn replan_done_work_units(
+    active: &ExecutionPlanSpec,
+    rows: &[WorkUnitRow],
+) -> Vec<(String, WorkUnitSpec)> {
+    rows.iter()
+        .filter(|u| u.status == WorkUnitStatus::Done && !is_daemon_added_work_unit(active, u))
+        .map(|u| (u.key.clone(), u.spec.clone()))
+        .collect()
+}
+
 /// ADR-0074 D1.1/D1.4（Phase F2b）: 採用する計画の WU の並び（`seq` の順）。v1 はトポロジカル順
 /// そのまま（従来どおり）。v2 は工程ごとに「その工程の WU（トポロジカル順）→ `integrate-<phase>`」。
 pub fn materialized_order(
@@ -2992,5 +3021,112 @@ mod tests {
             .map(|&i| validated.spec.work_units[i].key.as_str())
             .collect();
         assert_eq!(order, vec!["a", "z"], "{order:?}");
+    }
+
+    /// ADR-0074 F5-fix（不具合 2 の再現）: v2・2 工程で `integrate-investigate`（daemon の統合 WU）と
+    /// 統合の repair WU が done のとき、planner の差分（`modify: [impl-quota]` だけ）を当てて
+    /// `validate` が通る。daemon 由来の WU は差分の結果に現れず（base の spec にも無い）、行は
+    /// 不変条件の対象から外れる。外さなければ（F5-1 dogfood の挙動）拒否され、文言に
+    /// 「daemon が足した WU は書かなくてよい」が出る。
+    #[test]
+    fn replan_delta_does_not_treat_daemon_added_done_units_as_changed() {
+        let base = plan_v2(
+            vec![phase("investigate"), phase("implement")],
+            vec![
+                spec_v2("inv-a", "investigate", &[]),
+                spec_v2("inv-b", "investigate", &[]),
+                spec_v2("impl-quota", "implement", &["inv-a"]),
+                spec_v2("impl-api", "implement", &["inv-b"]),
+                spec_v2("impl-ui", "implement", &["inv-a", "inv-b"]),
+            ],
+        );
+        let validated = validate(&base, ExecutionLimits::default(), &[]).expect("valid base");
+        let mut rows = materialize_work_units(
+            "t",
+            "p",
+            &validated.spec,
+            &validated.topological_order,
+            "2026-09-27T00:00:00Z",
+            &mut |w| format!("id-{}", w.key),
+        );
+        for r in rows.iter_mut() {
+            if r.phase.as_deref() == Some("investigate") {
+                r.status = WorkUnitStatus::Done;
+            }
+        }
+        // 統合の repair WU（daemon が足す。計画の spec に無い、工程を持つ）も done。
+        let mut repair = row_v2(
+            "integ-repair-investigate-1",
+            "investigate",
+            2,
+            WorkUnitStatus::Done,
+            &[],
+        );
+        repair.kind = WorkUnitKind::Repair;
+        rows.push(repair);
+        let integ = rows
+            .iter()
+            .find(|r| r.key == "integrate-investigate")
+            .expect("integration unit");
+        assert!(is_daemon_added_work_unit(&validated.spec, integ));
+        assert!(!is_daemon_added_work_unit(
+            &validated.spec,
+            rows.iter().find(|r| r.key == "inv-a").expect("inv-a")
+        ));
+
+        let d = delta(
+            1,
+            vec![],
+            vec![WorkUnitPatch {
+                key: "impl-quota".to_string(),
+                objective: Some("quota を runs_by_role から数える（やり直し）".to_string()),
+                ..Default::default()
+            }],
+            vec![],
+        );
+        let applied = apply_delta(&validated.spec, &d).expect("delta applies");
+        assert!(
+            applied
+                .work_units
+                .iter()
+                .all(|w| w.kind != WorkUnitKind::Integrate
+                    && !w.key.starts_with(INTEGRATE_KEY_PREFIX)
+                    && w.key != "integ-repair-investigate-1"),
+            "daemon 由来の WU は差分の結果（計画の spec）に入らない"
+        );
+        let done = replan_done_work_units(&validated.spec, &rows);
+        let done_keys: Vec<&str> = done.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(done_keys, vec!["inv-a", "inv-b"]);
+        validate(&applied, ExecutionLimits::default(), &done).expect("delta replan validates");
+
+        // 全体形式でも、planner が統合 WU を書かなければ通る（daemon が採用時に補う）。
+        let full = applied.clone();
+        let revalidated = validate(&full, ExecutionLimits::default(), &done).expect("full replan");
+        let integ_keys: Vec<String> = integration_work_unit_specs(&revalidated.spec)
+            .into_iter()
+            .map(|w| w.key)
+            .collect();
+        assert_eq!(
+            integ_keys,
+            vec!["integrate-investigate", "integrate-implement"]
+        );
+
+        // F5-1 dogfood の挙動（daemon 由来の WU も不変条件に入れる）は拒否され、文言が案内する。
+        let naive: Vec<(String, WorkUnitSpec)> = rows
+            .iter()
+            .filter(|u| u.status == WorkUnitStatus::Done)
+            .map(|u| (u.key.clone(), u.spec.clone()))
+            .collect();
+        let errs = validate(&applied, ExecutionLimits::default(), &naive).unwrap_err();
+        let msg = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            msg.contains("done work unit integrate-investigate must not change on replan"),
+            "{msg}"
+        );
+        assert!(msg.contains("daemon が足した WU"), "{msg}");
     }
 }

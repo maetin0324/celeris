@@ -2446,6 +2446,7 @@ async fn check_provider(
     // ADR-0036 D1: 疎通確認用の単独タスク（親なし）なので従来どおり `<workspace>/artifacts`。
     let artifacts_dir = task_core::artifacts::artifacts_dir_for(&task, &prepared);
     let req = task_worker::RunRequest {
+        cargo_target_dir: None,
         protocol: task_worker::PROTOCOL_VERSION,
         task,
         workspace: prepared,

@@ -1332,3 +1332,30 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - lane の分布（F1 の効果、E6 = 全 run standard との比較）: planner 3 run は claude-oauth の残量降格で cheap（claude-sonnet-5）と standard（claude-opus-5-5）、worker 7 run は standard（gpt-6-sol / claude-opus-5-5）と cheap（claude-sonnet-5）。規則は `frontier/judgment-under-uncertainty` に当たった WU も上限（max(Task lane, standard)）で standard に丸まっている。continuation 0、repair 0、replan 2。
 - 20:18Z に cancelled（人の操作と思われる）。修正は Phase F5-fix（Opus）へ: WU ごとの `CARGO_TARGET_DIR`（終端で削除）、replan で daemon 由来の WU を不変条件から除外して持ち越す。
 - 参考: release `353d32fbe0ea`（F5-1 やり直しの配送: EVENT_TYPES 補完、フレークテスト 5 件の決定化、PROGRESS.md の分割）を 15:52Z に停止→起動で昇格。本番はこれ。
+## Phase F5-fix「F5-1 dogfood（3 回目）の 2 不具合の修正」（着手 2026-09-28）
+
+### F5-fix checkpoint 1: 不具合 2（replan の差分が daemon の統合 WU で拒否される）（完了 2026-09-28）
+
+- 原因: `task_ops::execution::replan` は F2b で daemon が足した WU（`kind = integrate`・統合の repair WU）を done の不変条件から外していたが、**dispatcher の planner run の検証**（`replan_done_work_units` の手前、`run_planner` の `validate`）は done の WU をすべて渡していた。planner の差分（`apply_delta` の結果）は計画の spec（daemon の WU を含まない）なので、`integrate-investigate` が「無い＝変わった」扱いになり 2 回拒否 → blocked(question)。
+- 修正: `task_core::{is_daemon_added_work_unit, replan_done_work_units}` を足し、dispatcher と `replan` の両方がこれを使う。`replan` の削除ループは統合の repair WU を（その工程が新しい版に残る限り）superseded にしない。`DoneWorkUnitChanged` / `ReservedKind` / `ReservedKey` の文言に「daemon が足した WU（kind = integrate の統合 WU・統合の repair WU）は書かなくてよい」を足す（`DAEMON_ADDED_HINT`）。
+- テスト: `task_core::execution_plan::tests::replan_delta_does_not_treat_daemon_added_done_units_as_changed`（fixture v2・2 工程・`integrate-investigate` done・統合 repair done、差分 `modify: [impl-quota]` → `apply_delta` → `validate` が通る。旧挙動の done 集合では拒否され文言に案内が出る）、`task_ops::execution::tests::replan_carries_daemon_added_units_without_the_planner_restating_them`（全体形式）、`task_dispatch::dispatcher::tests::replan_delta_after_an_integrated_phase_keeps_the_daemon_integration_unit`（dispatcher 経由の再現。修正前の done 集合に戻すと FAILED、修正後 ok を確認）。
+
+### F5-fix checkpoint 2: 不具合 1（並列 WU が同じ `CARGO_TARGET_DIR` を共有する）（完了 2026-09-28）
+
+- 自分の worktree で走る v2 の WU の run・その checks は `<build_cache_dir>/cargo/<repo-key>/wu-<work_unit_id>`、Task 単位の run・統合 WU の検査・reviewer の checks は `<repo-key>`（`task_worker::build_cache::work_unit_cargo_target_dir`、`LocalWorkspace::with_env`、`Dispatcher::check_cargo_target_env`）。
+- `RunRequest.cargo_target_dir` で `request.json` に実際の値を残す。終端（done / cancelled / superseded）の WU の target は tick ごとの `cleanup_work_unit_build_caches` が rename → 別スレッドで削除。
+- ADR-0074: §4 に「並列数 × target の容量」の注意、末尾に「Phase F5-fix 実装時の逸脱・明確化」。
+- テスト: `task_dispatch::dispatcher::tests::parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_when_done`（並列 2 WU の request.json の `cargo_target_dir` が WU ごとに異なり期待値と一致、WU の checks は各 `wu-<id>`、統合・reviewer の checks は `<repo-key>`、WU done 後に target が消える）、`task_worker::build_cache::tests::work_unit_target_dir_is_nested_under_the_repo_key`。
+
+### Phase F5-fix の全体ゲート（2026-09-28）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test --workspace --no-fail-fast` → exit 0、passed 2511 / failed 0 / ignored 5
+- `cargo clippy --workspace --all-targets -- -D warnings` → 警告 0
+- `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → ok（`docs/protocol/worker-protocol.schema.json` に `cargo_target_dir` が追加、commit 済み）
+- `cd gui && corepack pnpm@11.27.0 gen:types`（差分ゼロ）`&& typecheck && test` → Test Files 73 passed、Tests 1113 passed
+
+### 未解決事項・提案
+
+- 本番での確認（F5-1 dogfood の 4 回目）: 並列 WU の `runs/<run_id>/request.json` の `cargo_target_dir` が WU ごとに違うこと、WU done 後に `<build_cache_dir>/cargo/<repo-key>/wu-*` が消えること、replan の差分が統合 WU で拒否されないことを確かめる。
+- 別 Task 同士（同じリポジトリの Task 単位の run）は今も `<repo-key>` を共有する（ADR-0066 D1 のまま）。同じ偽のコンパイルエラーが Task をまたいで出るなら、Task 単位にも分けるかを判断する。

@@ -2918,6 +2918,13 @@
           "description": "絶対パス。この run の成果物と結果ファイル（`result.json`）の置き場（ADR-0036 D1）。\nworkspace を自分で所有するタスクは `<workspace>/artifacts`、親から継いだタスク（plan / delegate の子）は\n`<workspace>/.taskd/artifacts/<task_id>`。決めるのはディスパッチャで、アダプタはここに書くだけ。",
           "type": "string"
         },
+        "cargo_target_dir": {
+          "description": "ADR-0074 F5-fix: この run に daemon が実際に与えた `CARGO_TARGET_DIR`（共有ビルドキャッシュ。\n並列の WU は WU ごと）。与えていなければ `None`（`request.json` に出ない）。ワーカーは読まなくてよい\n（環境変数そのものは別に渡る。ここは監査用の写し）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "context": {
           "$ref": "#/$defs/RunContext"
         },

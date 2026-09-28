@@ -30,6 +30,7 @@ import { loadTaskFiles, readTaskFilesQuery, type TaskFilesData } from "~/celeris
 import {
   buildTaskEdit,
   commentOnTask,
+  decomposeTask,
   editTask,
   phaseGateTask,
   reopenTask,
@@ -60,6 +61,7 @@ import { CodeViewer } from "~/components/CodeViewer";
 /* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
 import { ReplyStepRow } from "~/components/ConsoleBlockItem";
 /* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（Execution 節・ExecutionPhase）。 */
+import { ExecutionModeControl } from "~/components/ExecutionModeControl";
 import { ExecutionSection } from "~/components/ExecutionSection";
 import {
   ErrorFlash,
@@ -457,6 +459,12 @@ export async function action({ request, params }: Route.ActionArgs) {
   // celeris ADR-0074 D2.4（Phase F3 途中確認）: 途中確認への応答（`POST /tasks/{id}/execution/phase-gate`）。
   if (intent === "phase_gate") {
     const outcome = await phaseGateTask(client, params.id, form, request.signal);
+    return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
+  }
+  // celeris ADR-0072「Phase F6 実装時の決定」: 起票済みのタスクの実行の形を決め直す
+  // （`POST /tasks/{id}/execution/decompose`）。終端のタスクの「計画を作らせてやり直す」は `retry` の `execution`。
+  if (intent === "execution_decompose") {
+    const outcome = await decomposeTask(client, params.id, form, request.signal);
     return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
   }
   const outcome = await runTaskAction(client, params.id, form, request.signal);
@@ -1157,6 +1165,7 @@ function OverviewTab({
       {/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（計画・WU の表・replan の履歴）。
           計画も gate の判定も無い古いタスクは execution が無いので何も出ない（D23 の後方互換）。 */}
       <ExecutionSection execution={detail.execution} taskId={task.id} />
+      <ExecutionModeControl task={task} execution={detail.execution} />
 
       <section aria-labelledby="runs-heading" data-testid="runs-section">
         <Card>

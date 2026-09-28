@@ -38,6 +38,29 @@ pub fn retry_task(
     workspace: Option<WorkspaceSpec>,
     now: OffsetDateTime,
 ) -> Result<RetryResult, OpsError> {
+    retry_task_with_execution(store, id, accept, workspace, None, "human", now)
+}
+
+/// ADR-0072「Phase F6 実装時の決定」: [`retry_task`] に、複製先の実行の形（`execution`）の人の明示を
+/// 足したもの。`Some(mode)` なら、複製を作った直後に [`crate::regate::set_execution_mode`] で
+/// `execution_hint = {mode, explicit: true}` を書き、`Event::ExecutionHintSet{source}` を複製先に残す
+/// （`source` は `"human"` / `"mcp:<client_id>"`）。gate の対象外のタスクに `execution` を書くと
+/// 複製の**前に** `OpsError::Validation`（API は 422）。
+///
+/// どちらの場合も、複製先の `routing.execution`（元の gate の判定）は**引き継がない**: 複製先の最初の
+/// dispatch で gate が今の設定（`[execution] gate`）で判定し直し、複製先自身の `ExecutionGated` を残す
+/// （本番 2026-09-28: shadow の判定 `shadow: true / source: hint` が複製に写り、gate=on の下で古い判定の
+/// まま planner に進み、GUI にも古い判定が出た）。`execution_hint`（人の明示・CoS のヒント）は引き継ぐ。
+#[allow(clippy::too_many_arguments)]
+pub fn retry_task_with_execution(
+    store: &dyn TaskStore,
+    id: TaskId,
+    accept: bool,
+    workspace: Option<WorkspaceSpec>,
+    execution: Option<task_core::ExecutionMode>,
+    source: &str,
+    now: OffsetDateTime,
+) -> Result<RetryResult, OpsError> {
     let original = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     if !matches!(original.status, Status::Failed | Status::Cancelled) {
         return Err(OpsError::InvalidState {
@@ -45,6 +68,12 @@ pub fn retry_task(
             context: format!("status={:?}", original.status),
             action: "retried".to_string(),
         });
+    }
+    if execution.is_some() && task_core::execution_gate::out_of_scope_rule(&original).is_some() {
+        return Err(OpsError::Validation(
+            "execution: this task is out of scope of the Complexity Gate (it always runs atomic)"
+                .to_string(),
+        ));
     }
 
     let workspace = match workspace {
@@ -68,9 +97,14 @@ pub fn retry_task(
         None => original.workspace.clone(),
     };
 
+    // ADR-0069: やり直しは元のタスクの routing の出自を引き継ぐ。ただし gate の判定
+    // （`routing.execution`）は引き継がない（上の doc comment。複製先で判定し直す）。
+    let routing = original.routing.clone().map(|mut r| {
+        r.execution = None;
+        r
+    });
     let new_task = Task {
-        // ADR-0069: やり直しは元のタスクの routing の出自を引き継ぐ。
-        routing: original.routing.clone(),
+        routing,
         // ADR-0043 D2: やり直しは元のタスクと同じリポジトリで作業する。
         repos: original.repos.clone(),
         id: TaskId::new(),
@@ -106,6 +140,9 @@ pub fn retry_task(
     };
     let new_id = new_task.id;
     let rewired = store.retry_task(id, &new_task)?;
+    if let Some(mode) = execution {
+        crate::regate::set_execution_mode(store, new_id, mode, source, None, now)?;
+    }
     Ok(RetryResult {
         task_id: new_id,
         rewired,
@@ -537,5 +574,98 @@ mod tests {
         let store = store();
         let err = retry_task(&store, TaskId::new(), false, None, now()).unwrap_err();
         assert!(matches!(err, OpsError::NotFound(_)));
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」: gate=shadow の下で判定された（`shadow: true`）タスクを
+    /// やり直すと、複製先は元の判定を持たず（最初の dispatch で今の設定で判定し直す）、人の明示の
+    /// `execution_hint` はそのまま残る。
+    fn fail_with_routing(store: &SqliteStore, hint: task_core::ExecutionHintSpec) -> Task {
+        let original = make_failed(store, "gated under shadow");
+        let mut t = original.clone();
+        let mut routing = t.routing.clone().unwrap_or_default();
+        routing.execution_hint = Some(hint);
+        routing.execution = Some(task_core::ExecutionGateDecision {
+            mode: task_core::ExecutionMode::Compound,
+            source: task_core::GateSource::Hint,
+            score: 13,
+            threshold: 5,
+            rule_id: "compound/long-and-broad".to_string(),
+            signals: Vec::new(),
+            policy_version: "exec-gate/1".to_string(),
+            shadow: true,
+        });
+        t.routing = Some(routing);
+        store
+            .update_task(
+                &t,
+                Event::Edited {
+                    fields: vec!["routing".into()],
+                    by: "test".into(),
+                },
+            )
+            .expect("update")
+    }
+
+    #[test]
+    fn retry_drops_the_copied_gate_decision_and_keeps_an_explicit_hint() {
+        let store = store();
+        let hint = task_core::ExecutionHintSpec {
+            mode: task_core::ExecutionMode::Compound,
+            explicit: true,
+        };
+        let original = fail_with_routing(&store, hint);
+        let result = retry_task(&store, original.id, true, None, now()).expect("retry");
+        let copy = store.get(result.task_id).expect("get").expect("some");
+        let routing = copy.routing.expect("routing");
+        assert_eq!(routing.execution_hint, Some(hint));
+        assert!(
+            routing.execution.is_none(),
+            "the copy is re-gated under the current config"
+        );
+        // 複製先に ExecutionHintSet は積まない（`execution` を書いていない）。
+        let events = store.events_for(result.task_id).expect("events");
+        assert!(
+            !events
+                .iter()
+                .any(|(_, e)| matches!(e, Event::ExecutionHintSet { .. }))
+        );
+    }
+
+    #[test]
+    fn retry_with_execution_sets_an_explicit_hint_on_the_copy_with_its_source() {
+        let store = store();
+        let original = fail_with_routing(
+            &store,
+            task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: false,
+            },
+        );
+        let result = retry_task_with_execution(
+            &store,
+            original.id,
+            true,
+            None,
+            Some(task_core::ExecutionMode::Compound),
+            "mcp:chatgpt",
+            now(),
+        )
+        .expect("retry");
+        let copy = store.get(result.task_id).expect("get").expect("some");
+        assert_eq!(copy.status, Status::Ready);
+        let routing = copy.routing.expect("routing");
+        assert_eq!(
+            routing.execution_hint,
+            Some(task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: true
+            })
+        );
+        assert!(routing.execution.is_none());
+        let events = store.events_for(result.task_id).expect("events");
+        assert!(events.iter().any(|(_, e)| matches!(
+            e,
+            Event::ExecutionHintSet { source, .. } if source == "mcp:chatgpt"
+        )));
     }
 }

@@ -967,6 +967,103 @@ async fn task_retry_requires_scope_and_duplicates_the_failed_task() {
     server.stop().await;
 }
 
+/// ADR-0072「Phase F6 実装時の決定」: `task_decompose` は scope `tasks:interact`。既存の ready の Task に
+/// compound を明示し（`execution_hint.explicit = true`、前の判定を消す）、`execution_hint_set` の
+/// `source` は `mcp:<client_id>`。`tasks:read` だけのクライアントには出ない。
+#[tokio::test]
+async fn task_decompose_requires_tasks_interact_and_records_the_mcp_source() {
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "reader",
+        Some("s0"),
+        vec![McpScope::TasksRead],
+    );
+    create_client(
+        &server.store,
+        "chatgpt",
+        Some("secret"),
+        vec![McpScope::TasksInteract],
+    );
+    let mut task = sample_task(TaskKind::Execute, Status::Ready);
+    task.routing = Some(task_core::TaskRouting {
+        execution: Some(task_core::ExecutionGateDecision {
+            mode: task_core::ExecutionMode::Atomic,
+            source: task_core::GateSource::Policy,
+            score: 1,
+            threshold: 5,
+            rule_id: "atomic/score".to_string(),
+            signals: Vec::new(),
+            policy_version: "exec-gate/1".to_string(),
+            shadow: true,
+        }),
+        ..Default::default()
+    });
+    let task_id = task.id;
+    server.store.insert(&task).unwrap();
+    let client = reqwest::Client::new();
+
+    let session0 = initialize(&client, &server.base_url, Some("s0")).await;
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("s0"),
+        &session0,
+        "task_decompose",
+        json!({"id": task_id.to_string(), "mode": "compound"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+
+    let session = initialize(&client, &server.base_url, Some("secret")).await;
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "task_decompose",
+        json!({"id": task_id.to_string(), "mode": "compound", "note": "計画を作って"}),
+    )
+    .await;
+    let out = structured(&body);
+    assert_eq!(out["mode"], "compound", "{out}");
+    assert_eq!(out["replan"], false, "{out}");
+    let stored = server.store.get(task_id).unwrap().unwrap();
+    let routing = stored.routing.expect("routing");
+    assert_eq!(
+        routing.execution_hint,
+        Some(task_core::ExecutionHintSpec {
+            mode: task_core::ExecutionMode::Compound,
+            explicit: true
+        })
+    );
+    assert!(routing.execution.is_none());
+    let events = server.store.events_for(task_id).unwrap();
+    assert!(
+        events.iter().any(|(_, e)| matches!(
+            e,
+            task_core::Event::ExecutionHintSet { source, note, .. }
+                if source == "mcp:chatgpt" && note.as_deref() == Some("計画を作って")
+        )),
+        "{events:?}"
+    );
+
+    // 終端のタスクは invalid_params（retry の execution を案内する）。
+    let failed = insert_task(&server.store, TaskKind::Execute, Status::Failed);
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "task_decompose",
+        json!({"id": failed.to_string(), "mode": "compound"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn task_cancel_requires_scope_and_records_an_optional_reason_comment() {
     let server = spawn_token_server(60).await;

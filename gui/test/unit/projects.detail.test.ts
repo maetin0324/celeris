@@ -5,6 +5,7 @@ import {
   decideMilestone,
   patchMilestoneStatus,
   patchProjectStatus,
+  patchProjectText,
   startProjectPlan,
 } from "~/celeris/projects-admin.server";
 import type {
@@ -634,5 +635,79 @@ describe("decideMilestone (POST /milestones/{id}/decide)", () => {
       op: "milestone_decide",
       error: { status: 409, code: "milestone_reached" },
     });
+  });
+});
+
+/**
+ * celeris ADR-0072「Phase F6 実装時の決定」: 案件の名前・説明（依頼文）・slug の編集（`PATCH /projects/{id}`）と、
+ * 案件計画を持たない既存の案件から「案件計画を提案させる」（`mode = "milestones"`）。GUI は検証しない。
+ */
+describe("patchProjectText (PATCH /projects/{id} の title / request / slug)", () => {
+  it("名前と説明をそのまま送り、slug は今の値と違うときだけ送る", async () => {
+    const bodies: unknown[] = [];
+    mock.on("PATCH", "/api/v1/projects/p1", (_req, res, body) => {
+      bodies.push(JSON.parse(body));
+      sendJson(res, 200, project({ title: "BenchFS paper", request: "新しい説明" }));
+    });
+    const form = new FormData();
+    form.set("title", "BenchFS paper");
+    form.set("request", "新しい説明");
+    form.set("slug", "benchfs");
+    form.set("slug_current", "benchfs");
+    const result = await patchProjectText(client, "p1", form);
+    expect(result).toMatchObject({ ok: true, op: "project_edit", project: { title: "BenchFS paper" } });
+
+    const renamed = new FormData();
+    renamed.set("title", "BenchFS paper");
+    renamed.set("request", "新しい説明");
+    renamed.set("slug", " benchfs-paper ");
+    renamed.set("slug_current", "benchfs");
+    await patchProjectText(client, "p1", renamed);
+    expect(bodies).toEqual([
+      { title: "BenchFS paper", request: "新しい説明" },
+      { title: "BenchFS paper", request: "新しい説明", slug: "benchfs-paper" },
+    ]);
+  });
+
+  it("422 validation（空の名前）は ActionError にして返す", async () => {
+    mock.on("PATCH", "/api/v1/projects/p1", (_req, res) =>
+      sendProblem(res, {
+        status: 422,
+        code: "validation",
+        detail: "title must not be blank",
+      }),
+    );
+    const form = new FormData();
+    form.set("title", " ");
+    form.set("request", "r");
+    const result = await patchProjectText(client, "p1", form);
+    expect(result).toMatchObject({ ok: false, op: "project_edit", error: { status: 422, code: "validation" } });
+  });
+});
+
+describe("startProjectPlan の mode = milestones（既存の案件から案件計画を起こす）", () => {
+  it("mode=milestones を送り、途中目標は送らない（celeris が 422 を返すため）", async () => {
+    mock.on("POST", "/api/v1/projects/p1/plan", (_req, res, body) => {
+      expect(JSON.parse(body)).toEqual({ mode: "milestones", note: "止まっているので" });
+      sendJson(res, 202, { task_id: "01JPLAN" });
+    });
+    const form = new FormData();
+    form.set("mode", "milestones");
+    form.set("milestone_id", "m1");
+    form.set("note", "止まっているので");
+    const result = await startProjectPlan(client, "p1", form);
+    expect(result).toEqual({ ok: true, op: "project_plan", accepted: { task_id: "01JPLAN" } });
+  });
+
+  it("mode=decompose（従来）は mode を送らない", async () => {
+    mock.on("POST", "/api/v1/projects/p1/plan", (_req, res, body) => {
+      expect(JSON.parse(body)).toEqual({ milestone_id: "m1" });
+      sendJson(res, 202, { task_id: "01JPLAN" });
+    });
+    const form = new FormData();
+    form.set("mode", "decompose");
+    form.set("milestone_id", "m1");
+    const result = await startProjectPlan(client, "p1", form);
+    expect(result.ok).toBe(true);
   });
 });

@@ -1923,6 +1923,8 @@ pub struct Dispatcher {
     integrating: HashMap<TaskId, IntegrationEntry>,
     /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
     checking: HashMap<String, CheckingEntry>,
+    /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
+    orphan_takeover: Option<crate::orphan::OrphanTakeover>,
     tx: mpsc::UnboundedSender<Completion>,
     rx: mpsc::UnboundedReceiver<Completion>,
     /// ADR-0018 D2: 多重接続が無いクラスタの cooldown（この時刻まで dispatch しない）。
@@ -2206,6 +2208,7 @@ impl Dispatcher {
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
             checking: HashMap::new(),
+            orphan_takeover: None,
             tx,
             rx,
             cluster_cooldown: HashMap::new(),
@@ -2320,6 +2323,12 @@ impl Dispatcher {
         self.accepting_new_work = accepting;
     }
 
+    /// Phase F5-fix6: 孤児の回収を有効にする（celeris が `daemon_instances` の自分の行を持つときに
+    /// 渡す。判定の定義は `crate::orphan`）。
+    pub fn set_orphan_takeover(&mut self, takeover: crate::orphan::OrphanTakeover) {
+        self.orphan_takeover = Some(takeover);
+    }
+
     /// ADR-0041 D5: 面倒を見てよいタスクを絞る（`--mode verify` の煙試験）。呼ばなければ従来どおり全部。
     /// 絞られたタスクは **ready のまま放置**され、リースの回収もレビューの拾い上げも起きない。
     pub fn set_eligible_tasks(&mut self, eligible: TaskFilter) {
@@ -2390,6 +2399,121 @@ impl Dispatcher {
         }
         self.pending_subjects.clear();
         aborted
+    }
+
+    /// Phase F5-fix6: SIGTERM / SIGINT（`systemctl restart`、`promote.sh` の停止→起動）で止まる直前に、
+    /// 手元の worker run の終わりを DB に記録する。本番 2026-09-28 17:05:50Z: 止まるデーモンは SIGTERM を
+    /// 受けた tick でループを抜け、0.6 秒後にアダプタが `result.json`（exit=143）を書いたが、完了を
+    /// 受け取る者が居ないまま exit し、`worker_finished` も Task の遷移も残らなかった（新しいデーモンは
+    /// lease の失効まで 15 分待った）。
+    ///
+    /// 1. 既に届いた完了を記録する（`drain_completions`）。
+    /// 2. 残りの run はプロセスグループごと止め（`stop_run`）、`WorkerFinished{outcome: "interrupted:
+    ///    daemon shutdown …", end: cancelled}` を残す。Task の lease を持つ run は `InfraRequeue`
+    ///    （attempts を消費しない。上限超過は `infra failure ×N`）、WU の run は WU を ready /
+    ///    needs_continuation に戻す（reason `shutdown`）。
+    /// 3. ただし run が既に error 以外の終端の `result.json`（done 等）を書き終えていたら DB は触らない
+    ///    （次のデーモンが孤児の回収でその内容から確定させる。ここで検査・レビューを spawn しても exit で
+    ///    失われるため）。
+    ///
+    /// レビュー・WU の検査・工程の統合は触らない（次のデーモンの `recover_reviews` と孤児の回収が拾う）。
+    /// DB に記録した run の数を返す。
+    pub fn interrupt_runs_on_shutdown(&mut self) -> usize {
+        if let Err(e) = self.drain_completions() {
+            tracing::warn!(error = %e, "failed to record the completions received before the shutdown");
+        }
+        let entries: Vec<(RunKey, RunEntry)> = self.running.drain().collect();
+        let mut recorded = 0;
+        for (key, entry) in entries {
+            let run_id = entry.run_id.clone();
+            let since = entry.since;
+            self.stop_run(&run_id, entry.handle, entry.container);
+            let task = match self.store.get(key.task) {
+                Ok(Some(t)) => t,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(task_id = %key.task, %run_id, error = %e, "could not read the task while recording the shutdown");
+                    continue;
+                }
+            };
+            if let Some(dir) = self.task_dir(&task)
+                && let Some(terminal) = terminal_from_run_dir(&dir, &run_id)
+                && !matches!(terminal, Terminal::Error { .. })
+            {
+                tracing::info!(task_id = %task.id, %run_id, "the run already wrote a terminal result.json; leaving it to the next daemon's orphan takeover (Phase F5-fix6)");
+                continue;
+            }
+            match self.record_shutdown_interrupt(&task, &run_id, since) {
+                Ok(()) => {
+                    tracing::warn!(task_id = %task.id, %run_id, "daemon shutdown: the run was stopped and recorded as interrupted (Phase F5-fix6)");
+                    recorded += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the shutdown interrupt; the next daemon's orphan takeover will pick it up");
+                }
+            }
+        }
+        recorded
+    }
+
+    fn record_shutdown_interrupt(
+        &mut self,
+        task: &Task,
+        run_id: &str,
+        since: OffsetDateTime,
+    ) -> Result<(), DispatchError> {
+        let events = self.store.events_for(task.id)?;
+        if events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id))
+        {
+            return Ok(());
+        }
+        let finished = |outcome: String| Event::WorkerFinished {
+            run_id: run_id.to_string(),
+            outcome,
+            usage: None,
+            role: None,
+            metrics: Some(task_core::RunMetrics {
+                wall_ms: wall_ms_since(since),
+                retries: task.attempts,
+                peak_context_tokens: None,
+                turns: None,
+            }),
+            end: Some(task_core::RunEnd::Cancelled),
+        };
+        let holds_task_lease = task.status == Status::Running
+            && task
+                .lease
+                .as_ref()
+                .is_some_and(|l| l.worker_run_id == run_id);
+        if holds_task_lease {
+            let infra_n = consecutive_infra_requeues(&events) + 1;
+            let (trigger, outcome) = if infra_n <= self.config.max_infra_retries {
+                (
+                    Trigger::InfraRequeue,
+                    format!("interrupted: {SHUTDOWN_WHY} (run_id={run_id})"),
+                )
+            } else {
+                (
+                    Trigger::WorkerError { retryable: false },
+                    format!("{INFRA_FAILURE_MARKER}{infra_n}: {SHUTDOWN_WHY} (run_id={run_id})"),
+                )
+            };
+            match self
+                .store
+                .apply_transition_with_events(task.id, trigger, vec![finished(outcome)])
+            {
+                Ok(_) | Err(StoreError::InvalidTransition(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        } else {
+            self.store.append_event(
+                task.id,
+                &finished(format!("interrupted: {SHUTDOWN_WHY} (run_id={run_id})")),
+            )?;
+        }
+        self.reconcile_work_unit_run(task.id, run_id, "shutdown")
     }
 
     /// ADR-0032 D3: `auth = "publickey"` のクラスタへの自動接続を有効にする（celeris 側が本番の実装を挿す）。
@@ -7030,17 +7154,34 @@ impl Dispatcher {
     /// 死んでいる（またはこのインスタンスの管理外）ときだけ、ADR-0070 D3 の分岐
     /// （`InfraRequeue` でバックオフ再試行、`max_infra_retries` 到達で打ち切り）に乗せる。
     /// `Trigger::LeaseExpired`（無条件に attempts を消費する）はもう使わない。
+    ///
+    /// Phase F5-fix6: lease がまだ切れていなくても、持ち主のデーモンが居ない run（孤児。定義は
+    /// `crate::orphan`）は同じ経路で**すぐに**回収する（result.json があればその内容で確定、無ければ
+    /// `interrupted: orphan_takeover` で requeue）。v2 の工程の lease は `reconcile_parallel_tasks` が
+    /// WU ごとに扱う。
     fn reclaim_expired_leases(&mut self) -> Result<usize, DispatchError> {
         let now = OffsetDateTime::now_utc();
         let mut count = 0;
+        let mut holders_gone: Option<bool> = None;
         for task in self.store.list(Some(Status::Running))? {
             // ADR-0041 D5: 面倒を見ないタスクのリースは奪わない（verify は本番のコピーの行を書き換えない）。
             if !self.is_eligible(&task) {
                 continue;
             }
             let Some(lease) = &task.lease else { continue };
-            if lease.expires_at > now {
-                continue;
+            let orphaned = if lease.expires_at > now {
+                if is_phase_lease_holder(&lease.worker_run_id)
+                    || self.holds_task_in_hand(task.id)
+                    || !self.lease_holders_gone(&mut holders_gone, now)
+                {
+                    continue;
+                }
+                true
+            } else {
+                false
+            };
+            if orphaned {
+                self.note_orphan_takeover(&task, &lease.worker_run_id, lease.expires_at);
             }
             // ADR-0074 D1.5（Phase F2）: v2 の並列 WU では同じ Task の run が複数ありうる。
             // どれか 1 本でも生きていれば、その run の lease（WU の lease）を延ばす
@@ -7141,22 +7282,39 @@ impl Dispatcher {
                 turns: None,
             });
             let infra_n = consecutive_infra_requeues(&self.store.events_for(task.id)?) + 1;
+            // Phase F5-fix6: 孤児は lease 切れではなく「持ち主のデーモンが居なくなって中断された run」。
+            let why = if orphaned {
+                ORPHAN_WHY
+            } else {
+                "lease expired"
+            };
             let (trigger, outcome_text) = if infra_n <= self.config.max_infra_retries {
                 (
                     Trigger::InfraRequeue,
-                    format!(
-                        "infra_requeue: lease expired (run_id={})",
-                        lease.worker_run_id
-                    ),
+                    if orphaned {
+                        format!("interrupted: {why} (run_id={})", lease.worker_run_id)
+                    } else {
+                        format!("infra_requeue: {why} (run_id={})", lease.worker_run_id)
+                    },
                 )
             } else {
                 (
                     Trigger::WorkerError { retryable: false },
                     format!(
-                        "{INFRA_FAILURE_MARKER}{infra_n}: lease expired (run_id={})",
+                        "{INFRA_FAILURE_MARKER}{infra_n}: {why} (run_id={})",
                         lease.worker_run_id
                     ),
                 )
+            };
+            let class = if orphaned {
+                task_core::HarnessErrorClass::Infra
+            } else {
+                task_core::HarnessErrorClass::LeaseExpired
+            };
+            let wu_reason = if orphaned {
+                crate::orphan::ORPHAN_TAKEOVER_REASON
+            } else {
+                "restart_reconcile"
             };
             let finished: Vec<Event> = wu_runs
                 .iter()
@@ -7166,9 +7324,7 @@ impl Dispatcher {
                     usage: None,
                     role: None,
                     metrics,
-                    end: Some(task_core::RunEnd::HarnessError {
-                        class: task_core::HarnessErrorClass::LeaseExpired,
-                    }),
+                    end: Some(task_core::RunEnd::HarnessError { class }),
                 })
                 .collect();
             match self
@@ -7176,8 +7332,9 @@ impl Dispatcher {
                 .apply_transition_with_events(task.id, trigger.clone(), finished)
             {
                 Ok(outcome) => {
-                    tracing::warn!(task_id = %task.id, run_id = %lease.worker_run_id, next = ?outcome.next, attempts = outcome.attempts, "lease expired; reclaimed");
-                    if matches!(trigger, Trigger::InfraRequeue) {
+                    tracing::warn!(task_id = %task.id, run_id = %lease.worker_run_id, next = ?outcome.next, attempts = outcome.attempts, orphaned, "{why}; reclaimed");
+                    // 孤児（再起動の中断）はバックオフしない（インフラの不調ではなく人の再起動）。
+                    if matches!(trigger, Trigger::InfraRequeue) && !orphaned {
                         let until = now + infra_backoff_delay(infra_n);
                         self.infra_backoff.insert(task.id, until);
                     }
@@ -7185,9 +7342,7 @@ impl Dispatcher {
                     // その WU の行も `running` のまま残さず、checkpoint があれば `needs_continuation`、
                     // 無ければ `ready` に戻す（`WorkUnitTransitioned{reason: "restart_reconcile"}`）。
                     for run_id in &wu_runs {
-                        if let Err(e) =
-                            self.reconcile_work_unit_run(task.id, run_id, "restart_reconcile")
-                        {
+                        if let Err(e) = self.reconcile_work_unit_run(task.id, run_id, wu_reason) {
                             tracing::warn!(task_id = %task.id, run_id = %run_id, error = %e, "failed to reconcile the work unit for a reclaimed lease");
                         }
                     }
@@ -7659,7 +7814,7 @@ impl Dispatcher {
                 })
             })
             .unwrap_or_default();
-        tracing::warn!(task_id = %task.id, %run_id, "the run's lease expired but it left a terminal result.json; finalising from it instead of requeueing (Phase F5-fix2)");
+        tracing::warn!(task_id = %task.id, %run_id, "the run's lease expired (or its daemon is gone) but it left a terminal result.json; finalising from it instead of requeueing (Phase F5-fix2 / F5-fix6)");
         if let Err(e) = self.on_worker_finished(
             task.id,
             run_id.to_string(),
@@ -7672,6 +7827,95 @@ impl Dispatcher {
             self.record_finalisation_failure(task.id, run_id, &e);
         }
         true
+    }
+
+    /// Phase F5-fix6: このインスタンスがその Task の run・検査・統合・レビューを手元に持っているか
+    /// （`crate::orphan` の定義の 1.）。
+    fn holds_task_in_hand(&self, task_id: TaskId) -> bool {
+        self.running.keys().any(|k| k.task == task_id)
+            || self.checking.values().any(|e| e.task_id == task_id)
+            || self.integrating.contains_key(&task_id)
+            || self.reviewing.contains_key(&task_id)
+            || self.awaiting_children.contains_key(&task_id)
+    }
+
+    /// Phase F5-fix6: run を抱えうる他のデーモンが 1 つも生きていないか（`crate::orphan::holder_gone`）。
+    /// 孤児の回収が無効（設定なし）・このインスタンスが新しい仕事を受けていない（draining / standby）・
+    /// `daemon_instances` が読めないときは `false`（従来どおり lease の失効を待つ）。1 回の照合の中では
+    /// `cache` に覚えて DB を 1 回だけ読む。
+    fn lease_holders_gone(&self, cache: &mut Option<bool>, now: OffsetDateTime) -> bool {
+        if let Some(v) = *cache {
+            return v;
+        }
+        let gone = match &self.orphan_takeover {
+            Some(t) if self.accepting_new_work => match self.store.instance_list() {
+                Ok(rows) => crate::orphan::holder_gone(
+                    &rows,
+                    &t.instance_id,
+                    now,
+                    t.freshness,
+                    t.pid_alive.as_ref(),
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not read daemon_instances; not taking over orphaned runs this tick");
+                    false
+                }
+            },
+            _ => false,
+        };
+        *cache = Some(gone);
+        gone
+    }
+
+    /// Phase F5-fix6: 孤児を回収することを log と event（`worker_progress`、`orphan_takeover: …`）に残す。
+    fn note_orphan_takeover(&self, task: &Task, run_id: &str, lease_until: OffsetDateTime) {
+        tracing::warn!(
+            task_id = %task.id, %run_id, lease_expires_at = %rfc3339(lease_until),
+            reason = crate::orphan::ORPHAN_TAKEOVER_REASON,
+            "the daemon that held this run is gone (no live active/draining instance besides this one, and the run is not in hand); taking it over without waiting for the lease (Phase F5-fix6)"
+        );
+        let ev = Event::worker_progress(
+            run_id.to_string(),
+            format!(
+                "{}: このランを持っていたデーモンが居ないため、lease の期限（{}）を待たずに回収します。",
+                crate::orphan::ORPHAN_TAKEOVER_REASON,
+                rfc3339(lease_until)
+            ),
+        );
+        if let Err(e) = self.store.append_event(task.id, &ev) {
+            tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the orphan takeover");
+        }
+    }
+
+    /// Phase F5-fix6: 工程の lease（v2）の WU の孤児 run で result.json が無いもの。`WorkerFinished`
+    /// （`interrupted: …`、`harness_error(infra)`）で `runs` 行を閉じ、WU を ready / needs_continuation
+    /// に戻す（reason `orphan_takeover`。Task は遷移させない）。
+    fn requeue_orphaned_work_unit_run(
+        &mut self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<(), DispatchError> {
+        let already = self
+            .store
+            .events_for(task.id)?
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id));
+        if !already {
+            self.store.append_event(
+                task.id,
+                &Event::WorkerFinished {
+                    run_id: run_id.to_string(),
+                    outcome: format!("interrupted: {ORPHAN_WHY} (run_id={run_id})"),
+                    usage: None,
+                    role: None,
+                    metrics: None,
+                    end: Some(task_core::RunEnd::HarnessError {
+                        class: task_core::HarnessErrorClass::Infra,
+                    }),
+                },
+            )?;
+        }
+        self.reconcile_work_unit_run(task.id, run_id, crate::orphan::ORPHAN_TAKEOVER_REASON)
     }
 
     fn run_holds_lease(&self, task: &Task, run_id: &str) -> Result<bool, DispatchError> {
@@ -7767,10 +8011,22 @@ impl Dispatcher {
         let Some(active_plan) = self.store.execution_plan_active(task_id)? else {
             return Ok(WuDispatchGate::Atomic);
         };
+        // ADR-0072「Phase F6 実装時の決定」: 計画を持つ Task に人が後から compound を依頼した
+        // （`POST /tasks/{id}/execution/decompose`、`ExecutionHintSet{replan: true}`）なら、次の run は
+        // replan の planner run（D17 5.。`max_replans` に数える）。依頼はこの dispatch の
+        // `Transitioned{to: running}` で消費される（`pending_replan_request`）。
+        let events = self.store.events_for(task_id)?;
+        if task_ops::regate::pending_replan_request(&events).is_some() {
+            let gate = self.replan_gate(task_id)?;
+            if matches!(gate, WuDispatchGate::RunPlanner { .. }) {
+                return Ok(gate);
+            }
+            tracing::warn!(%task_id, "a human replan was requested but max_replans is exhausted; continuing with the current plan");
+        }
         // ADR-0074 D2.4（Phase F3 途中確認）: 人が途中確認で「replan」を選んだ（直前の遷移が
         // `phase_replan`）なら、次の run は replan の planner run（`max_replans` に数える）。
         // 上限を使い切っていれば人の指示は `answers` に残したまま次の工程へ進める（警告を残す）。
-        if task_ops::phase_gate::last_transition_reason(&self.store.events_for(task_id)?)
+        if task_ops::phase_gate::last_transition_reason(&events)
             == Some(task_core::PhaseResumeMode::Replan.name())
         {
             let gate = self.replan_gate(task_id)?;
@@ -9452,8 +9708,13 @@ impl Dispatcher {
     /// - Task が Running で、WU も統合も走っていない → `Continue{advance}`（Ready に戻して通常の経路へ）。
     ///
     /// Task の lease ごと切れた（全部が死んだ）Task は `reclaim_expired_leases` → `InfraRequeue` が扱う。
+    ///
+    /// Phase F5-fix6: WU の lease がまだ切れていなくても、その run の持ち主のデーモンが居なければ
+    /// （孤児。`crate::orphan`）同じく戻す（result.json があればその内容で確定、無ければ reason
+    /// `orphan_takeover` で ready / needs_continuation）。統合 WU も同じ（spawn が手元に無ければ pending）。
     fn reconcile_parallel_tasks(&mut self) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
+        let mut holders_gone: Option<bool> = None;
         for task in self.store.list(Some(Status::Running))? {
             if !self.is_eligible(&task) {
                 continue;
@@ -9478,13 +9739,40 @@ impl Dispatcher {
                     .as_deref()
                     .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
                     .is_none_or(|t| t <= now);
-                if !ours && expired {
+                if ours {
+                    continue;
+                }
+                if expired {
                     if self.finalise_from_result_json(&task, &run_id) {
                         continue;
                     }
                     tracing::warn!(task_id = %task.id, work_unit = %u.key, %run_id, "work unit lease expired without a live run; reconciling (ADR-0074 D1.7)");
                     self.reconcile_work_unit_run(task.id, &run_id, "restart_reconcile")?;
+                } else if self.lease_holders_gone(&mut holders_gone, now) {
+                    // Phase F5-fix6: 持ち主のデーモンが居ない WU の run。lease の失効を待たない。
+                    let until = u
+                        .lease_expires_at
+                        .as_deref()
+                        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+                        .unwrap_or(now);
+                    self.note_orphan_takeover(&task, &run_id, until);
+                    if self.finalise_from_result_json(&task, &run_id) {
+                        continue;
+                    }
+                    self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
+            }
+            // Phase F5-fix6: 持ち主の居ない工程の統合（統合 WU が running で、spawn が手元に無い）。
+            if !self.integrating.contains_key(&task.id)
+                && self.running_for_task(task.id) == 0
+                && units.iter().any(|u| {
+                    u.kind == task_core::WorkUnitKind::Integrate
+                        && u.status == task_core::WorkUnitStatus::Running
+                })
+                && self.lease_holders_gone(&mut holders_gone, now)
+            {
+                tracing::warn!(task_id = %task.id, "the phase integration's daemon is gone; returning the integration to pending without waiting for the lease (Phase F5-fix6 orphan_takeover)");
+                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
             }
             if self.running_for_task(task.id) > 0 || self.integrating.contains_key(&task.id) {
                 continue;
@@ -9940,6 +10228,18 @@ impl Dispatcher {
         let events = self.store.events_for(task_id)?;
         for (_, ev) in events.iter().rev() {
             match ev {
+                // ADR-0072「Phase F6 実装時の決定」: 人が後から依頼した replan（「人の指示: <note>」）。
+                Event::ExecutionHintSet {
+                    replan: true,
+                    note,
+                    source,
+                    ..
+                } => {
+                    return Ok(match note.as_deref() {
+                        Some(n) if !n.is_empty() => format!("人の指示（{source}）: {n}"),
+                        _ => format!("a human ({source}) requested a replan of this task"),
+                    });
+                }
                 Event::WorkerFinished { outcome, .. } if outcome.starts_with("replan: ") => {
                     return Ok(outcome
                         .strip_prefix("replan: ")
@@ -14415,6 +14715,12 @@ fn ops_to_store(e: task_ops::OpsError) -> DispatchError {
     }
 }
 
+/// Phase F5-fix6: 孤児の回収で残す `WorkerFinished.outcome` の理由（`interrupted: <これ> (run_id=…)`）。
+const ORPHAN_WHY: &str = "orphan_takeover: the daemon holding this run is gone";
+
+/// Phase F5-fix6: SIGTERM / SIGINT で止まるデーモンが手元の run を止めたときの理由。
+const SHUTDOWN_WHY: &str = "daemon shutdown (SIGTERM/SIGINT)";
+
 /// デーモン再起動後の復旧用: `runs/<run_id>/result.json`（`fake`/`run_subprocess` が書く終端メッセージ）から
 /// `done` の内容を復元する。無ければ空（ADR-0007 D5）。
 /// Phase F5-fix2（P-F5-3 の result.json の部分）: `runs/<run_id>/result.json`（アダプタが終端を
@@ -15643,6 +15949,167 @@ mod tests {
                     if *version == 1 && milestones.len() == 2
             )),
             "{events:?}"
+        );
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」P2（本番 2026-09-28: `project_plan_proposed` が本番で一度も起きて
+    /// いない）: 仕事が止まった**既存の**案件（案件直下に done / failed の Task がある。BenchFS の形）に、
+    /// 人が `POST /projects/{id}/plan {mode: "milestones"}`（`start_milestones`）で案件計画を起こすと、
+    /// CoS の計画 run（偽アダプタ）の `celeris.project-plan/1` が検証を通り、提案（`pending`、人の承認待ち）に
+    /// なる。`decide approve` で途中目標が `approved`、マイルストーン Task が `ready` になり、既存の Task には
+    /// 触らない。
+    #[tokio::test]
+    async fn milestones_plan_on_an_existing_stalled_project_reaches_the_human_gate_and_is_approved()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let now = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            auto_advance: false,
+            slug: Some("benchfs".into()),
+            id: task_core::ProjectId::new(),
+            title: "BenchFS 国際会議フルペーパー化".into(),
+            request: "既存成果を国際会議フルペーパーにする".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).unwrap();
+        store
+            .org_upsert(&org_node_of(
+                "secretary",
+                None,
+                OrgKind::Secretary,
+                Some("secretary"),
+            ))
+            .unwrap();
+        // 止まった案件: 案件直下の done（framing の調査）と failed（関連研究の調査）。
+        let mut old_done = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        old_done.project_id = Some(project.id);
+        old_done.status = Status::Done;
+        old_done.title = "Phase1: framing".into();
+        store.insert(&old_done).unwrap();
+        let mut old_failed = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        old_failed.project_id = Some(project.id);
+        old_failed.status = Status::Failed;
+        old_failed.title = "Phase1: Related work".into();
+        store.insert(&old_failed).unwrap();
+
+        let started = task_ops::project_plan::start_milestones(
+            store.as_ref(),
+            &project,
+            Some("止まっているので、ここから先を途中目標に分けて"),
+            &[],
+            &[],
+            now,
+        )
+        .unwrap();
+        // テストでは作業場所を一時ディレクトリに置く。
+        let mut plan_task = store.get(started.task.id).unwrap().unwrap();
+        plan_task.workspace = WorkspaceSpec::Local {
+            path: dir.path().to_path_buf(),
+            mode: None,
+        };
+        store
+            .update_task(
+                &plan_task,
+                Event::Edited {
+                    fields: vec!["workspace".into()],
+                    by: "test".into(),
+                },
+            )
+            .unwrap();
+        assert!(task_core::is_milestones_plan_task(&plan_task));
+
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: VALID_PROJECT_PLAN.into(),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 2);
+        assert!(run_until_idle(&mut d, 200).await.idle);
+
+        let events = store.events_for(plan_task.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::ProjectPlanProposed { version: 1, milestones, .. } if milestones.len() == 2
+            )),
+            "{events:?}"
+        );
+        // 人の承認待ち（案件ページの `project_plan.pending`）。
+        let view = task_ops::project_plan::dag_view(store.as_ref(), &project)
+            .unwrap()
+            .expect("dag view");
+        assert_eq!(view.current_version, None);
+        let pending = view.pending.expect("a pending proposal awaits the human");
+        assert_eq!(pending.version, 1);
+        assert_eq!(pending.nodes.len(), 2);
+
+        let decided = task_ops::project_plan::decide(
+            store.as_ref(),
+            &project,
+            1,
+            task_ops::project_plan::ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            "conversation",
+            now,
+        )
+        .unwrap();
+        assert_eq!(decided.tasks.len(), 2);
+        for id in &decided.tasks {
+            let t = store.get(*id).unwrap().unwrap();
+            assert!(
+                matches!(t.status, Status::Ready | Status::Draft),
+                "{:?}",
+                t.status
+            );
+        }
+        let survey = decided
+            .tasks
+            .iter()
+            .map(|id| store.get(*id).unwrap().unwrap())
+            .find(|t| t.title == "調査")
+            .expect("survey");
+        assert_eq!(survey.status, Status::Ready);
+        let milestones = store.milestone_list(project.id).unwrap();
+        assert_eq!(milestones.len(), 2);
+        assert!(
+            milestones
+                .iter()
+                .all(|m| m.status == task_core::MilestoneStatus::Approved)
+        );
+        let view = task_ops::project_plan::dag_view(store.as_ref(), &project)
+            .unwrap()
+            .expect("dag view");
+        assert_eq!(view.current_version, Some(1));
+        assert!(view.pending.is_none());
+        // 既存の Task には触らない。
+        assert_eq!(
+            store.get(old_done.id).unwrap().unwrap().status,
+            Status::Done
+        );
+        assert_eq!(
+            store.get(old_failed.id).unwrap().unwrap().status,
+            Status::Failed
         );
     }
 
@@ -27523,6 +27990,251 @@ mod tests {
         assert_eq!(wu_routing, 2, "{routing_records:?}");
     }
 
+    /// shadow の下で CoS のヒントから判定された（`shadow: true`、`source: hint`）判定を持つ Task。
+    fn shadow_gated_task(dir: &std::path::Path, mode: task_core::ExecutionMode) -> Task {
+        let mut task = new_task(
+            dir,
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        task.routing = Some(task_core::TaskRouting {
+            execution_hint: Some(task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: false,
+            }),
+            execution: Some(task_core::ExecutionGateDecision {
+                mode,
+                source: task_core::GateSource::Hint,
+                score: 13,
+                threshold: 5,
+                rule_id: "compound/long-and-broad".to_string(),
+                signals: Vec::new(),
+                policy_version: "exec-gate/1".to_string(),
+                shadow: true,
+            }),
+            ..Default::default()
+        });
+        task
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」(a): shadow の下で atomic に走る判定を持つ起票済みの Task を、人が
+    /// `set_execution_mode(compound)`（`POST /tasks/{id}/execution/decompose` と同じ関数）で分解の経路に
+    /// 入れると、次の dispatch で gate が `human/explicit` として判定し直し（新しい `ExecutionGated`）、
+    /// その run が planner run になって計画を採用し、WU を実行して done になる（gate = shadow のまま）。
+    #[tokio::test]
+    async fn regate_of_an_atomic_task_starts_a_planner_run_and_yields_a_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = shadow_gated_task(dir.path(), task_core::ExecutionMode::Atomic);
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        let result = task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task_id,
+            task_core::ExecutionMode::Compound,
+            "human",
+            Some("計画を作って分けて進めて".to_string()),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert!(!result.replan);
+        assert!(result.task.routing.as_ref().unwrap().execution.is_none());
+
+        let valid_plan = plan_json(vec![wu_spec("a", &[]), wu_spec("b", &["a"])]);
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(valid_plan)],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::Shadow;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let stored = store.get(task_id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{stored:?}");
+        let decision = stored
+            .routing
+            .as_ref()
+            .and_then(|r| r.execution.as_ref())
+            .expect("re-gated");
+        assert_eq!(decision.mode, task_core::ExecutionMode::Compound);
+        assert_eq!(decision.source, task_core::GateSource::Human);
+        assert_eq!(decision.rule_id, "human/explicit");
+        let plan = store
+            .execution_plan_active(task_id)
+            .unwrap()
+            .expect("plan adopted");
+        assert_eq!(plan.origin, task_core::PlanOrigin::Planner);
+        assert_eq!(store.work_units_for(task_id).unwrap().len(), 2);
+        let runs = store.runs_for_task(task_id).unwrap();
+        assert_eq!(
+            runs.iter()
+                .filter(|r| r.role == task_core::RunIndexRole::Planner)
+                .count(),
+            1,
+            "{runs:?}"
+        );
+        // 監査: ExecutionHintSet（source human）の後に、新しい ExecutionGated（human/explicit）。
+        let events = store.events_for(task_id).unwrap();
+        let hint_at = events
+            .iter()
+            .position(
+                |(_, e)| matches!(e, Event::ExecutionHintSet { source, .. } if source == "human"),
+            )
+            .expect("hint set recorded");
+        let gated_at = events
+            .iter()
+            .position(|(_, e)| matches!(e, Event::ExecutionGated { decision } if decision.rule_id == "human/explicit"))
+            .expect("fresh gate decision");
+        assert!(hint_at < gated_at, "{events:?}");
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」(b): 計画を持つ Task への compound の依頼は replan の依頼
+    /// （`ExecutionHintSet{replan: true}`）で、次の dispatch が replan の planner run になり、版が 2 になる。
+    /// 人の note は planner の「起こした理由」に渡る。
+    #[tokio::test]
+    async fn regate_of_a_planned_task_is_a_replan_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = compound_task(dir.path());
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        task_ops::execution::adopt_plan(
+            store.as_ref(),
+            task_id,
+            serde_json::from_str(&plan_json(vec![wu_spec("a", &[])])).unwrap(),
+            task_core::PlanOrigin::Human,
+            None,
+            task_core::ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        let result = task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task_id,
+            task_core::ExecutionMode::Compound,
+            "mcp:chatgpt",
+            Some("migration を先に".to_string()),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert!(result.replan);
+        // 計画を持つ Task を atomic に戻すことはしない。
+        let err = task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task_id,
+            task_core::ExecutionMode::Atomic,
+            "human",
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, task_ops::OpsError::InvalidState { .. }),
+            "{err:?}"
+        );
+
+        let replan = plan_json(vec![wu_spec("m", &[]), wu_spec("a", &["m"])]);
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(replan)],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let plan = store.execution_plan_active(task_id).unwrap().expect("plan");
+        assert_eq!(plan.version, 2, "{plan:?}");
+        let planner_contexts: Vec<task_worker::RunContext> = adapter
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.execution_planner.is_some())
+            .cloned()
+            .collect();
+        assert_eq!(planner_contexts.len(), 1, "exactly one replan run");
+        let ctx = planner_contexts[0].execution_planner.as_ref().unwrap();
+        assert!(ctx.replan);
+        assert!(
+            ctx.replan_reason.contains("migration を先に")
+                && ctx.replan_reason.contains("mcp:chatgpt"),
+            "{:?}",
+            ctx.replan_reason
+        );
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」(c)（本番 2026-09-28 の 01M3MBV3… → 01M3MFS5…）: gate = shadow の下で
+    /// 判定された Task を中止し、gate = on に切り替えてから retry すると、複製先は元の判定（`shadow: true`）を
+    /// 写さず、最初の dispatch で今の設定で判定し直して、自分自身の `ExecutionGated`（`shadow: false`）を残す。
+    #[tokio::test]
+    async fn retry_after_switching_gate_to_on_regates_the_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = shadow_gated_task(dir.path(), task_core::ExecutionMode::Compound);
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        store
+            .apply_transition(task_id, task_core::Trigger::Cancel, None)
+            .unwrap();
+        let retried = task_ops::retry::retry_task(
+            store.as_ref(),
+            task_id,
+            true,
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        let copy_id = retried.task_id;
+        let copy = store.get(copy_id).unwrap().unwrap();
+        assert!(copy.routing.as_ref().unwrap().execution.is_none());
+
+        let valid_plan = plan_json(vec![wu_spec("a", &[])]);
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(valid_plan)],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let copy = store.get(copy_id).unwrap().unwrap();
+        let decision = copy
+            .routing
+            .as_ref()
+            .and_then(|r| r.execution.as_ref())
+            .expect("the copy is gated under the current config");
+        assert!(!decision.shadow, "{decision:?}");
+        let events = store.events_for(copy_id).unwrap();
+        let gated: Vec<&task_core::ExecutionGateDecision> = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::ExecutionGated { decision } => Some(decision.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(gated.len(), 1, "a fresh gate event on the copy: {events:?}");
+        assert!(!gated[0].shadow);
+        // CoS のヒント（explicit=false）は引き継ぎ、規則表の判定に +2 として効く。
+        assert_eq!(
+            copy.routing.as_ref().unwrap().execution_hint,
+            Some(task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: false
+            })
+        );
+        assert_eq!(gated[0].source, task_core::GateSource::Hint);
+        assert_eq!(copy.status, Status::Done, "{copy:?}");
+    }
+
     /// ADR-0074 D3.7（Phase F4b (f)）: execution-plan/2 の `children` は採用と同じトランザクションで既存の
     /// 委譲の検証を通って子 Task（`parent_id` = この Task、`child-<key>` の印、ready）になり、
     /// `Event::Delegated{run_id: <planner run>}` が残る。`depends_on: ["child:<key>"]` の WU は子が
@@ -32926,6 +33638,9 @@ mod tests {
             }
         );
     }
+
+    /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。
+    mod orphan_takeover;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

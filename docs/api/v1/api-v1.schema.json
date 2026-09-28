@@ -3716,6 +3716,59 @@
       },
       "type": "object"
     },
+    "DecomposeRequest": {
+      "additionalProperties": false,
+      "description": "`POST /tasks/{id}/execution/decompose` の要求本文。",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ExecutionMode",
+          "description": "`\"compound\"`（計画を作らせる）か `\"atomic\"`（1 つの run で直接実行する）。"
+        },
+        "note": {
+          "description": "人の一言（任意、2,000 文字まで）。replan の依頼では planner run の「起こした理由」に渡る。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "DecomposeResult": {
+      "description": "`POST /tasks/{id}/execution/decompose` の応答（200）。",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ExecutionMode"
+        },
+        "previous_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionGateDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "消した前の gate の判定（無ければ `null`）。"
+        },
+        "replan": {
+          "description": "`true` なら計画を既に持つ Task への replan の依頼（次の dispatch で replan の planner run）。",
+          "type": "boolean"
+        },
+        "task": {
+          "$ref": "#/$defs/Task"
+        }
+      },
+      "required": [
+        "task",
+        "mode",
+        "replan"
+      ],
+      "type": "object"
+    },
     "DelegatedView": {
       "description": "ADR-0016 D2: 1 回の `delegate`（`Event::Delegated`）の要約。",
       "properties": {
@@ -5131,6 +5184,59 @@
           "required": [
             "type",
             "decision"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形（atomic / compound）を人が後から\n決めた（`POST /tasks/{id}/execution/decompose`、MCP `task_decompose`、retry の `execution`）。\n同じトランザクションで `Task.routing.execution_hint = {mode, explicit: true}` を書き、\n`Task.routing.execution`（前の gate の判定）を消す（次の dispatch で gate が `human/explicit` として\n判定し直し、新しい `ExecutionGated` を残す）。`replan = true` は計画を既に持つ Task への\ncompound の依頼（次の dispatch で replan の planner run になる。ADR-0072 D17 5.）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExecutionHintSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "変える前の `execution_hint`（無ければ省略）。"
+            },
+            "previous_decision": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExecutionGateDecision"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "消した前の gate の判定（`rule_id` と `source` と `shadow` の監査用。無ければ省略）。"
+            },
+            "replan": {
+              "type": "boolean"
+            },
+            "source": {
+              "description": "誰が決めたか（`\"human\"`、`\"mcp:<client_id>\"`）。",
+              "type": "string"
+            },
+            "type": {
+              "const": "execution_hint_set",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode",
+            "source"
           ],
           "type": "object"
         },
@@ -10483,6 +10589,13 @@
             "null"
           ]
         },
+        "request": {
+          "description": "ADR-0072「Phase F6 実装時の決定」: 案件の説明（依頼文 `request`。GUI の「依頼文」）。前後の空白を\n除いて 1〜20,000 文字。省略なら変えない。**CoS への再依頼ではない**（書き換えても run は起きない。\n次に案件計画・分解を起こしたときの `goal` に今の文面が入る）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "slug": {
           "description": "ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug を変える\n（小文字の `[a-z0-9-]`、案件 ID の形は不可、案件の間で一意。重複は 409）。省略なら変えない。\n**KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。",
           "type": [
@@ -10498,6 +10611,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "title": {
+          "description": "ADR-0072「Phase F6 実装時の決定」: 案件の名前。前後の空白を除いて 1〜200 文字。省略なら変えない。",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "workspace": {
@@ -12662,6 +12782,17 @@
           "default": true,
           "description": "ADR-0070 D2 追記（Phase 116。本番で確認: `accept` を省略すると `draft` のまま止まり、\n「やり直したのに動かない」状態になった）。既定 `true`（`ready` で始める）。\n`draft` のまま始めたいときだけ明示で `false` を送る。",
           "type": "boolean"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0072「Phase F6 実装時の決定」: 複製先の実行の形の人の明示（`\"compound\"` で計画を作らせる、\n`\"atomic\"` で直接実行）。省略なら元の `execution_hint` をそのまま引き継ぐ。どちらでも元の gate の\n判定は引き継がず、複製先の最初の dispatch で今の設定で判定し直す。gate の対象外のタスクは 422。"
         },
         "workspace": {
           "anyOf": [
@@ -17057,6 +17188,13 @@
     "events_page": {
       "$ref": "#/$defs/EventsPage"
     },
+    "execution_decompose": {
+      "$ref": "#/$defs/DecomposeRequest",
+      "description": "ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。"
+    },
+    "execution_decompose_result": {
+      "$ref": "#/$defs/DecomposeResult"
+    },
     "execution_metrics": {
       "$ref": "#/$defs/ExecutionMetricsSummary"
     },
@@ -17377,6 +17515,8 @@
     "transition_result",
     "retry",
     "retry_result",
+    "execution_decompose",
+    "execution_decompose_result",
     "replay_report",
     "providers",
     "provider_config",

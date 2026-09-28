@@ -54,7 +54,12 @@ install -m 755 "$REPO/scripts/rdc/celeris-chat" "$STAGE/celeris-chat"
 if [ -n "$TOKEN_SRC" ]; then
   install -m 600 "$TOKEN_SRC" "$STAGE/mcp-token"
 fi
+# useradd -m が home を root 所有で作る（あるいは既存 home の所有者がずれている）ことがあるので、所有者を揃えてから閉じる。
+sudo -n chown "$RDC_USER:$RDC_USER" "$HOME_DIR"
 sudo -n chmod 700 "$HOME_DIR"
+for f in .profile .bashrc .bash_profile .bash_logout; do
+  [ -e "$HOME_DIR/$f" ] && sudo -n chown "$RDC_USER:$RDC_USER" "$HOME_DIR/$f" || true
+done
 sudo -n install -d -m 700 -o "$RDC_USER" -g "$RDC_USER" "$HOME_DIR/.config" "$HOME_DIR/.config/celeris"
 sudo -n install -d -m 755 -o "$RDC_USER" -g "$RDC_USER" "$HOME_DIR/.local" "$HOME_DIR/.local/bin"
 sudo -n install -m 755 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/celerisctl" "$HOME_DIR/.local/bin/celerisctl"

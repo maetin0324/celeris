@@ -51,7 +51,7 @@ env:
   SD_RELEASE_PRUNE   0 なら最後の掃除（古いリリースと使われない .pnpm-prod-cache の削除）を飛ばす
   SD_GATE_TEST_RUNNER  既定 nextest（`scripts/dev/test-parallel.sh`: テストバイナリを並列。Phase SD-2）。
                        cargo-test なら従来の `cargo test --workspace`（直列。非常用）
-  SD_TEST_PARALLEL     既定 この release.sh の隣の ../dev/test-parallel.sh（テスト用の差し替え口）
+  SD_TEST_PARALLEL     既定 ビルドする sha の scripts/dev/test-parallel.sh（テスト用の差し替え口）
   CELERIS_TEST_JOBS    並列に走らせるテストの数（既定 min(8, max(2, nproc/3))。test-parallel.sh が読む）
 EOF
   exit 2
@@ -62,12 +62,16 @@ REF="$1"
 
 sd_require_json_tool
 command -v cargo >/dev/null 2>&1 || sd_die "cargo not found"
-SD_TEST_PARALLEL="${SD_TEST_PARALLEL:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dev/test-parallel.sh}"
+# 既定の runner は**ビルドする sha の** `scripts/dev/test-parallel.sh`（作業ツリーを作った後で決める）。
+# release.sh の隣を見ない: リリースに同梱した release.sh（`current/scripts/release.sh`、配送の prepare.sh が
+# 起こす）は `scripts/` に平らに置かれ、`dev/` を持たないので「test runner … not found」で落ちていた。
 if [ "${SD_GATE_TEST_RUNNER:-nextest}" = nextest ]; then
-  [ -f "$SD_TEST_PARALLEL" ] || sd_die "test runner $SD_TEST_PARALLEL not found"
+  if [ -n "${SD_TEST_PARALLEL:-}" ]; then
+    [ -f "$SD_TEST_PARALLEL" ] || sd_die "test runner $SD_TEST_PARALLEL not found"
+  fi
   # 早めに（作業ツリーを作る前に）分かりやすく落とす。版の照合は test-parallel.sh が行う。
   cargo nextest --version >/dev/null 2>&1 \
-    || sd_die "cargo-nextest is not installed; install once: cargo install cargo-nextest --locked --version $(cat "$(dirname "$SD_TEST_PARALLEL")/../../tools/nextest/VERSION" 2>/dev/null || echo '<tools/nextest/VERSION>') (docs/ops/nextest.md), or set SD_GATE_TEST_RUNNER=cargo-test"
+    || sd_die "cargo-nextest is not installed; install once: cargo install cargo-nextest --locked --version $(git -C "$SD_REPO" show "$REF:tools/nextest/VERSION" 2>/dev/null | tr -d ' \n' || true) (docs/ops/nextest.md), or set SD_GATE_TEST_RUNNER=cargo-test"
 fi
 sd_use_pnpm
 
@@ -393,7 +397,9 @@ run_step cargo-fmt-check "$BUILD" -- cargo fmt --all -- --check
 # `SD_GATE_TEST_RUNNER=cargo-test` で従来の `cargo test --workspace`（直列）に戻せる（非常用）。
 run_cargo_test_step() {
   case "${SD_GATE_TEST_RUNNER:-nextest}" in
-    nextest) run_step cargo-test "$BUILD" -- bash "$SD_TEST_PARALLEL" ;;
+    nextest)
+      # 無ければ bash が exit 127 で落ち、gate.json の cargo-test 段に残る（sd_die だと gate.json が残らない）。
+      run_step cargo-test "$BUILD" -- bash "${SD_TEST_PARALLEL:-$BUILD/scripts/dev/test-parallel.sh}" ;;
     cargo-test) run_step cargo-test "$BUILD" -- cargo test --workspace ;;
     *) sd_die "SD_GATE_TEST_RUNNER must be nextest or cargo-test (got ${SD_GATE_TEST_RUNNER})" ;;
   esac

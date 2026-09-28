@@ -1502,6 +1502,25 @@ async fn start_api(
                     socket: socket.clone(),
                 })),
             };
+            // ADR-0080 D2: the browser supervisor asks the same broker for one-use leases and
+            // runs the release's own `celeris-credentiald bridge` as the fixed plugin.
+            let bridge = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.join("celeris-credentiald")))
+                .unwrap_or_else(|| PathBuf::from("celeris-credentiald"));
+            task_worker::browser_credential::configure(
+                task_worker::browser_credential::CredentialSupervisor {
+                    broker: Arc::new(task_worker::browser_credential::UnixLeaseBroker {
+                        control_socket: socket.clone(),
+                    }),
+                    bridge,
+                    // `<runtime>/celeris-credentiald/control.sock`
+                    runtime_dir: socket
+                        .parent()
+                        .and_then(|dir| dir.parent())
+                        .map(PathBuf::from),
+                },
+            );
         }
         (None, None) => {}
         _ => {

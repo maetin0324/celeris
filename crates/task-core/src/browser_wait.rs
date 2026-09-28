@@ -409,6 +409,77 @@ pub trait BrowserWaitStore: Send + Sync {
     ) -> Result<Option<CredentialRecord>, StoreError>;
 }
 
+/// 承認済み credential 使用の一回消費の結果（trusted supervisor が broker へ lease を求める材料）。
+/// 秘密は持たない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumedBrowserApproval {
+    pub wait: BrowserWait,
+    pub credential: CredentialRecord,
+    pub approved_by: String,
+}
+
+/// 承認済みの credential 使用 wait を、それを開いた論理 run/session の continuation として一度だけ消費する。
+/// dispatch ごとの run id は変わるので、continuation の照合には wait 自身の run/session を使う
+/// （lease と browser session もその session に結び付く）。承認記録と credential 台帳が揃わなければ拒否する。
+pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
+    store: &S,
+    task_id: TaskId,
+    wait: &BrowserWait,
+    now: OffsetDateTime,
+) -> Result<ConsumedBrowserApproval, &'static str> {
+    if wait.reason != BrowserWaitReason::WaitingForApproval
+        || wait
+            .operation
+            .as_ref()
+            .is_none_or(|o| o.action != "credential_use")
+    {
+        return Err("browser approval is not a credential use");
+    }
+    let consumed = store
+        .browser_wait_consume(
+            task_id,
+            &wait.wait_id,
+            &wait.resume_key,
+            &wait.run_id,
+            &wait.session_id,
+            now,
+        )
+        .map_err(|e| e.code())?;
+    let reference = consumed
+        .credential
+        .clone()
+        .ok_or("approved credential reference missing")?;
+    let credential = store
+        .browser_credential_get(&reference.credential_id)
+        .map_err(|_| "browser credential store unavailable")?
+        .filter(|c| {
+            c.provider == reference.provider
+                && c.policy_id == reference.policy_id
+                && c.origin == consumed.origin
+        })
+        .ok_or("approved credential record missing")?;
+    let approval_id = consumed
+        .approval_id
+        .clone()
+        .ok_or("approval record missing")?;
+    let approved_by = store
+        .browser_approvals_for_wait(&consumed.wait_id)
+        .map_err(|_| "browser approval store unavailable")?
+        .into_iter()
+        .find(|a| {
+            a.approval_id == approval_id
+                && a.decision == BrowserDecision::ApproveOnce
+                && a.consumed_at.is_some()
+        })
+        .map(|a| a.actor_id)
+        .ok_or("approval record missing")?;
+    Ok(ConsumedBrowserApproval {
+        wait: consumed,
+        credential,
+        approved_by,
+    })
+}
+
 // ---- 検証 ----
 
 fn valid_token(s: &str) -> bool {

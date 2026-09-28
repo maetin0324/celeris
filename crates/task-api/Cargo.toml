@@ -27,6 +27,7 @@ ring = "0.17"
 zeroize = "1"
 
 [dev-dependencies]
+task-worker = { path = "../task-worker" }
 async-trait = "0.1"
 tempfile = "3"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "time"] }

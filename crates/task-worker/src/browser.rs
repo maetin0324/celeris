@@ -21,6 +21,10 @@ pub const SUPPORTED_VERSION: &str = "0.38.1";
 pub struct BrowserContext {
     pub run: BrowserRun,
     pub cli: PathBuf,
+    /// Celeris already logged in with an approved credential in this session. Observation
+    /// actions are off until the session ends.
+    #[serde(default)]
+    pub credential_used: bool,
 }
 
 pub fn prompt(browser: &BrowserContext) -> String {
@@ -38,9 +42,15 @@ pub fn prompt(browser: &BrowserContext) -> String {
          <short-purpose>, then stop. The task policy may block this request. Never enter\n\
          credentials or use auth, cookies, storage, eval, CDP, profiles, plugins, other\n\
          browser sessions or raw CLI.\n\
-         Never include secrets in model output or artifacts.\n",
+         Never include secrets in model output or artifacts.\n{credential}",
         cli = browser.cli.display().to_string(),
         session = browser.run.session_id,
+        credential = if browser.credential_used {
+            "Celeris already signed in to this session with the approved credential (result: success).\n\
+             Snapshot, extract, screenshot and download are disabled for the rest of this session.\n"
+        } else {
+            ""
+        },
     )
 }
 
@@ -257,6 +267,45 @@ fn forward_events(
     *offset = end;
 }
 
+/// argv (after `python3` for the shim, or the substrate itself) that closes the session.
+fn segment_close_argv(executable: &Path, runtime: &Path, session: &str) -> Vec<std::ffi::OsString> {
+    let mut argv: Vec<std::ffi::OsString> = vec![executable.into()];
+    argv.extend([
+        "--config".into(),
+        runtime.join("upstream-credential.json").into_os_string(),
+        "--session".into(),
+        session.into(),
+        "--action-policy".into(),
+        runtime.join("policy-credential.json").into_os_string(),
+        "--json".into(),
+        "close".into(),
+    ]);
+    argv
+}
+
+/// `[cli]` runs the shim's `close`; a longer argv runs the substrate directly.
+async fn close_with(argv: &[std::ffi::OsString]) -> bool {
+    let mut cmd = if argv.len() == 1 {
+        let mut c = tokio::process::Command::new("python3");
+        c.arg(&argv[0]).arg("close");
+        c
+    } else {
+        let mut c = tokio::process::Command::new(&argv[0]);
+        c.args(&argv[1..]);
+        if let Some(dir) = Path::new(&argv[2]).parent() {
+            c.current_dir(dir);
+        }
+        c
+    };
+    let status = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    matches!(tokio::time::timeout(Duration::from_secs(50), status).await, Ok(Ok(status)) if status.success())
+}
+
 pub async fn run(
     adapter: Arc<dyn WorkerAdapter>,
     req: RunRequest,
@@ -271,17 +320,24 @@ pub async fn run(
         limits,
         sink,
         Path::new("agent-browser"),
+        crate::browser_credential::configured(),
     )
     .await
 }
 
-async fn run_with_executable(
+/// Observation actions stay off for the rest of a session once a credential was injected
+/// (ADR-0080 D3): authenticated pages may reflect secrets.
+const OBSERVATION_UPSTREAM_ACTIONS: [&str; 4] = ["download", "gettext", "screenshot", "snapshot"];
+
+/// `run` with an explicit substrate and credential broker (integration tests use fakes).
+pub async fn run_with_executable(
     adapter: Arc<dyn WorkerAdapter>,
     mut req: RunRequest,
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
     executable: &Path,
+    credentials: Option<&crate::browser_credential::CredentialSupervisor>,
 ) -> Result<RunOutcome, AdapterError> {
     if !task_core::browser::requests_browser(&req.task.skills)
         || req.context.execution_planner.is_some()
@@ -310,11 +366,27 @@ async fn run_with_executable(
     let waits = sink
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
-    if waits
+    let approved = waits
         .last()
-        .is_some_and(|w| w.state == BrowserWaitState::Approved)
+        .filter(|w| w.state == BrowserWaitState::Approved)
+        .cloned();
+    if let Some(wait) = &approved
+        && (wait.policy_hash != policy.binding.hash
+            || wait.policy_revision != policy.binding.revision
+            || !policy
+                .effective
+                .actions
+                .contains(&task_core::BrowserAction::CredentialUse)
+            || wait
+                .credential_policy_id
+                .as_ref()
+                .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
+            || !host_in_domains(&wait.origin, policy.allowed_domains())
+            || credentials.is_none())
     {
-        return Err(AdapterError::Other("approved browser credential use is unavailable until origin-safe injection is configured".into()));
+        return Err(AdapterError::Other(
+            "approved browser credential use denied".into(),
+        ));
     }
     if let Some(registered) = waits
         .last()
@@ -393,7 +465,30 @@ async fn run_with_executable(
             "browser capability requires agent-browser {SUPPORTED_VERSION}"
         )));
     }
-    let session = session_id(req.task.id, run_id);
+    // Consume only after the substrate is known to be usable: a failed version check must not
+    // burn the one-time approval. The continuation keeps the approved session.
+    let approval =
+        match (&approved, credentials) {
+            (Some(wait), Some(_)) => Some(sink.browser_approval_consume(wait).map_err(|_| {
+                AdapterError::Other("browser approval could not be consumed".into())
+            })?),
+            _ => None,
+        };
+    let session = approval
+        .as_ref()
+        .map(|a| a.wait.session_id.clone())
+        .unwrap_or_else(|| session_id(req.task.id, run_id));
+    let harness_policy = if approval.is_some() {
+        let mut file: task_core::AgentBrowserActionPolicy =
+            serde_json::from_slice(&policy.action_policy)
+                .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+        file.allow
+            .retain(|a| !OBSERVATION_UPSTREAM_ACTIONS.contains(&a.as_str()));
+        serde_json::to_vec(&file)
+            .map_err(|_| AdapterError::Other("browser policy rejected".into()))?
+    } else {
+        policy.action_policy.clone()
+    };
     let runtime = req.workspace.join("runs").join(run_id).join("browser");
     let output = req.artifacts_dir.join("browser").join(&session);
     std::fs::create_dir_all(&runtime)?;
@@ -405,13 +500,13 @@ async fn run_with_executable(
         &runtime.join("upstream.json"),
         br#"{"idleTimeout":"5m","noWebmcp":true}"#,
     )?;
-    policy.write(&runtime)?;
+    write_private(&runtime.join("policy.json"), &harness_policy)?;
     write_private(
         &runtime.join("config.json"),
         serde_json::to_vec(&serde_json::json!({
             "executable":executable, "session_id":session,
             "allowed_domains":policy.allowed_domains(), "output":output,
-            "policy_sha256":policy.action_policy_sha256,
+            "policy_sha256":format!("{:x}", Sha256::digest(&harness_policy)),
             "credential_policy_ids":policy.effective.credential_policy_ids,
             "credential_use":policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),
         }))?,
@@ -421,19 +516,86 @@ async fn run_with_executable(
         run_id: run_id.into(),
         session_id: session,
         state: BrowserRunState::Running,
-        live_view_url: capability.live_view_url.clone(),
+        // Live View stops with credential use (ADR-0080 D3).
+        live_view_url: capability
+            .live_view_url
+            .clone()
+            .filter(|_| approval.is_none()),
         policy: Some(policy.binding.clone()),
     };
+    sink.browser_updated(&browser);
+    let credential_segment = match (&approval, credentials) {
+        (Some(approval), Some(sup)) => {
+            write_private(
+                &runtime.join("policy-credential.json"),
+                crate::browser_credential::segment_policy(),
+            )?;
+            write_private(
+                &runtime.join("upstream-credential.json"),
+                crate::browser_credential::segment_upstream_config(&sup.bridge),
+            )?;
+            let segment = crate::browser_credential::Segment {
+                executable,
+                credentiald_runtime: sup.runtime_dir.as_deref(),
+                runtime: &runtime,
+                session_id: &browser.session_id,
+                allowed_domains: policy.allowed_domains(),
+                origin: &approval.wait.origin,
+            };
+            let result = crate::browser_credential::use_credential(
+                sup,
+                &segment,
+                approval,
+                &req.task.id.to_string(),
+            )
+            .await;
+            let status = if result.is_ok() { "success" } else { "failure" };
+            sink.progress_with(
+                &format!("browser.credential_use: {status}"),
+                &ProgressFields {
+                    kind: Some(ProgressKind::ToolResult),
+                    tool: Some("browser.credential_use".into()),
+                    summary: Some(result.err().unwrap_or(status).into()),
+                    error: result.is_err(),
+                    ..Default::default()
+                },
+            );
+            Some((
+                segment_close_argv(executable, &runtime, &browser.session_id),
+                result,
+            ))
+        }
+        _ => None,
+    };
+    if let Some((close, Err(code))) = &credential_segment {
+        let closed = close_with(close).await;
+        browser.state = BrowserRunState::Failed;
+        sink.browser_updated(&browser);
+        return Ok(RunOutcome {
+            terminal: Terminal::Error {
+                message: format!(
+                    "browser credential use failed ({code}){}",
+                    if closed {
+                        ""
+                    } else {
+                        "; session cleanup failed"
+                    }
+                ),
+                retryable: false,
+            },
+            exit_code: None,
+        });
+    }
     req.context.browser = Some(BrowserContext {
         run: browser.clone(),
         cli: cli.clone(),
+        credential_used: credential_segment.is_some(),
     });
     let monitor_req = req.clone();
     let mut guard = SessionGuard {
         cli: cli.clone(),
         armed: true,
     };
-    sink.browser_updated(&browser);
     let mut offset = 0;
     let events = runtime.join("events.jsonl");
     let mut outcome = {
@@ -485,16 +647,13 @@ async fn run_with_executable(
             Err(e) => outcome = Err(e),
         }
     }
-    let cleanup = tokio::process::Command::new("python3")
-        .arg(&cli)
-        .arg("close")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .status();
-    if matches!(tokio::time::timeout(Duration::from_secs(50), cleanup).await, Ok(Ok(status)) if status.success())
-    {
+    // After credential use the harness policy may be close-less; the supervisor's segment
+    // policy always carries `close`.
+    let closed = match &credential_segment {
+        Some((close, _)) => close_with(close).await,
+        None => close_with(&[cli.clone().into_os_string()]).await,
+    };
+    if closed {
         guard.armed = false;
     } else {
         outcome = Ok(RunOutcome {

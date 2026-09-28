@@ -102,6 +102,7 @@ fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-')
     );
     let prompt = prompt(&BrowserContext {
+        credential_used: false,
         cli: PathBuf::from("/workspace/runs/run1/browser/celeris-browser.py"),
         run: BrowserRun {
             task_id: first,
@@ -385,6 +386,7 @@ async fn worker_credential_request_opens_durable_auth_wait_and_discards_done() {
         limits(),
         &sink,
         &substrate(temp.path()),
+        None,
     )
     .await
     .unwrap();
@@ -447,6 +449,7 @@ async fn registered_credential_requires_approval_and_denial_fails_task() {
         limits(),
         &sink,
         &substrate(temp.path()),
+        None,
     )
     .await
     .unwrap();
@@ -493,6 +496,7 @@ async fn registered_credential_requires_approval_and_denial_fails_task() {
         limits(),
         &sink,
         &temp.path().join("must-not-launch"),
+        None,
     )
     .await
     .unwrap();
@@ -574,6 +578,7 @@ async fn credential_origin_outside_effective_domain_is_denied_before_substrate()
         limits(),
         &sink,
         &substrate(temp.path()),
+        None,
     )
     .await
     .unwrap();
@@ -605,6 +610,7 @@ async fn opencode_and_claude_share_supervised_browser_lifecycle_artifacts_and_cl
             limits(),
             &sink,
             &executable,
+            None,
         )
         .await
         .unwrap();
@@ -668,6 +674,7 @@ async fn unsupported_adapter_and_missing_administrator_grant_fail_before_harness
         limits(),
         &sink,
         &absent,
+        None,
     )
     .await
     .unwrap_err();
@@ -684,6 +691,7 @@ async fn unsupported_adapter_and_missing_administrator_grant_fail_before_harness
         limits(),
         &sink,
         &absent,
+        None,
     )
     .await
     .unwrap_err();
@@ -711,6 +719,7 @@ async fn cleanup_failure_marks_browser_failed_instead_of_reporting_completion() 
         limits(),
         &sink,
         &executable,
+        None,
     )
     .await
     .unwrap();
@@ -767,6 +776,7 @@ async fn launch_uses_generated_policy_and_binds_its_hash_to_the_run() {
         limits(),
         &sink,
         &executable,
+        None,
     )
     .await
     .unwrap();
@@ -851,6 +861,7 @@ async fn actions_and_domains_outside_task_policy_are_stopped_before_the_substrat
         limits(),
         &sink,
         &executable,
+        None,
     )
     .await
     .unwrap();
@@ -902,6 +913,7 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
             limits(),
             &sink,
             &absent,
+            None,
         )
         .await
         .unwrap_err();

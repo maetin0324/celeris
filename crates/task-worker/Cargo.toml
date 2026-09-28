@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 task-core = { path = "../task-core" }
+celeris-credentiald = { path = "../celeris-credentiald" }
+zeroize = "1"
 tokio = { version = "1", features = ["process", "io-util", "time", "sync", "macros", "rt-multi-thread", "fs"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

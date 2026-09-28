@@ -1775,6 +1775,18 @@ impl EventSink for StoreSink {
             .browser_waits_for_task(self.task_id)
             .map_err(|_| "browser wait store unavailable".into())
     }
+    fn browser_approval_consume(
+        &self,
+        wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        task_core::browser_wait::consume_credential_approval(
+            self.store.as_ref(),
+            self.task_id,
+            wait,
+            OffsetDateTime::now_utc(),
+        )
+        .map_err(String::from)
+    }
     fn browser_updated(&self, browser: &task_core::BrowserRun) {
         if let Err(e) = self.store.append_event(
             self.task_id,

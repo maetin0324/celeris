@@ -111,6 +111,13 @@ pub trait EventSink: Send + Sync {
     fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
         Ok(Vec::new())
     }
+    /// Trusted browser supervisor only: consume an approved credential use exactly once.
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
+    }
     fn progress(&self, msg: &str);
     /// ADR-0048 D2（Phase 60a）: 構造化した進行（`kind` / `tool` / `summary` / `detail`）。
     /// 既定は `msg` だけを `progress` に流す（この口を実装していないシンクでも従来どおり動く）。

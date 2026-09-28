@@ -2731,6 +2731,8 @@ impl Dispatcher {
             task_worker::scratch::server_listening,
         );
         view.sccache = Some(crate::scratch_gc::sccache_view(&settings, &sccache));
+        // ADR-0075 D6（Phase G3）: cache server の `/stats`（loopback、500 ms。無効なら問い合わせない）。
+        view.cache = Some(crate::scratch_gc::cache_view(&settings, true));
         self.scratch.view = Some(view);
         executed.removed.len()
     }

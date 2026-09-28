@@ -462,6 +462,8 @@ pub fn status_of(
     let mut view = scratch_gc::sccache_view(&settings, &state);
     view.stats = scratch_gc::query_sccache_stats(&settings, &state);
     status.sccache = Some(view);
+    // ADR-0075 D6（Phase G3）: cache server の状態と `/stats`（L1 / L2 の hit・使用量・flusher の遅延）。
+    status.cache = Some(scratch_gc::cache_view(&settings, true));
     Ok(status)
 }
 
@@ -522,6 +524,100 @@ fn gc(
     }
     out.push_str(&format!("{} candidate(s)\n", picks.len()));
     Ok(out)
+}
+
+/// 小さな量も読める表示（KB / MB / GB）。
+fn human(b: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if b < MIB {
+        format!("{:.1} KB", b as f64 / 1024.0)
+    } else if b < scratch::GIB {
+        format!("{:.1} MB", b as f64 / MIB as f64)
+    } else {
+        gb(b)
+    }
+}
+
+fn pct(n: u64, d: u64) -> String {
+    if d == 0 {
+        "-".to_string()
+    } else {
+        format!("{:.1}%", n as f64 * 100.0 / d as f64)
+    }
+}
+
+/// ADR-0075 D6（Phase G3）: cache server（L1 / L2）の行。
+fn print_cache(c: &task_ops::daemon::ScratchCacheView) {
+    outln!(
+        "cache server {} ({}{}) · sccache backend {}",
+        c.endpoint,
+        c.state,
+        c.reason
+            .as_deref()
+            .map(|r| format!(": {r}"))
+            .unwrap_or_default(),
+        c.sccache_mode.as_deref().unwrap_or("-")
+    );
+    let Some(st) = &c.stats else { return };
+    outln!(
+        "  gets {} · L1 hit {} · L2 hit {} · miss {} · promotes {} · puts {}",
+        st.gets,
+        pct(st.l1_hits, st.gets),
+        pct(st.l2_hits, st.gets),
+        pct(st.misses, st.gets),
+        st.promotes,
+        st.puts
+    );
+    outln!(
+        "  L1 {} {} / {} ({} entries, evicted {})",
+        st.l1_dir,
+        human(st.l1_bytes),
+        human(st.l1_max_bytes),
+        st.l1_entries,
+        st.l1_evicted
+    );
+    outln!(
+        "  L2 {} ({}) {} / {} ({} entries, scanned {}) · errors {} · timeouts {} · corrupt {}",
+        st.l2_dir.as_deref().unwrap_or("-"),
+        st.l2_state,
+        st.l2_bytes.map(human).unwrap_or_else(|| "-".to_string()),
+        human(st.l2_max_bytes),
+        st.l2_entries
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        st.l2_scanned_at.as_deref().unwrap_or("-"),
+        st.l2_errors,
+        st.l2_timeouts,
+        st.l2_corrupt
+    );
+    if let Some(since) = &st.l2_degraded_since {
+        outln!(
+            "  L2 detached since {since} (retry at {}): {}",
+            st.l2_retry_at.as_deref().unwrap_or("-"),
+            st.l2_last_error.as_deref().unwrap_or("-")
+        );
+    }
+    outln!(
+        "  flush queue {} ({}, oldest {}) · last flush {} · written {} ({}) · skipped {} · dropped {} · cap {} MB/s",
+        st.flush_queue_len,
+        human(st.flush_queue_bytes),
+        st.flush_oldest_age_secs
+            .map(|s| format!("{s} s"))
+            .unwrap_or_else(|| "-".to_string()),
+        st.flush_last_at.as_deref().unwrap_or("-"),
+        st.flush_written,
+        human(st.flush_written_bytes),
+        st.flush_skipped_existing,
+        st.flush_dropped,
+        st.flush_mbps
+    );
+    if let Some(at) = &st.l2_gc_last_at {
+        outln!(
+            "  L2 GC {at}: removed {} ({})",
+            st.l2_gc_removed,
+            human(st.l2_gc_removed_bytes)
+        );
+    }
 }
 
 fn print_status(s: &task_ops::daemon::ScratchStatus) {
@@ -609,6 +705,9 @@ fn print_status(s: &task_ops::daemon::ScratchStatus) {
             );
         }
     }
+    if let Some(c) = &s.cache {
+        print_cache(c);
+    }
     if let Some(g) = &s.last_gc {
         outln!(
             "last gc {} · {} removed · {}",
@@ -690,6 +789,81 @@ mod tests {
         )
         .unwrap();
         assert!(settings.pool().lease_path(&owner).exists());
+    }
+
+    /// ADR-0075 §5 G3 受け入れ条件 6: `scratch status` は cache server の `/stats`（L1 / L2 の hit・promote・使用量・
+    /// flusher の待ち行列と最終 flush 時刻・L2 の状態）を `cache` に入れる。cache server が居なければ `unavailable`。
+    #[test]
+    fn status_reads_the_cache_server_stats() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cs/l2")).unwrap();
+        let mut sc = scratch_cache::StoreConfig::new(
+            tmp.path().join("cs/l1"),
+            Some(tmp.path().join("cs/l2")),
+        );
+        sc.l2_gc_interval = std::time::Duration::ZERO;
+        let store = scratch_cache::TieredStore::open(sc).unwrap();
+        let k = "ab".repeat(32);
+        store.put(&k, b"entry").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while store.queue_len() > 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(store.get(&k).unwrap().into_bytes().is_some());
+        let (ptx, prx) = std::sync::mpsc::channel();
+        let served = store.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                ptx.send(l.local_addr().unwrap().port()).unwrap();
+                let app = scratch_cache::server::router(served, Default::default());
+                let _ = scratch_cache::server::serve(l, app, std::future::pending()).await;
+            });
+        });
+        let port = prx.recv().unwrap();
+        let cfg_path = config(tmp.path());
+        let text = std::fs::read_to_string(&cfg_path).unwrap().replace(
+            "[scratch.cache_server]\nport = 1\n",
+            &format!("[scratch.cache_server]\nport = {port}\n"),
+        );
+        std::fs::write(&cfg_path, text).unwrap();
+        // 手元の sccache の server（本番の 4236）を拾わない。
+        let mut text = std::fs::read_to_string(&cfg_path).unwrap();
+        text.push_str("[scratch.sccache]\nport = 1\n");
+        std::fs::write(&cfg_path, text).unwrap();
+        let cfg = load(&cfg_path).unwrap();
+        let status = status_of(&cfg, None).unwrap();
+        let cache = status.cache.clone().unwrap();
+        assert_eq!(cache.state, "ready", "{cache:?}");
+        assert_eq!(cache.endpoint, format!("http://127.0.0.1:{port}"));
+        let st = cache.stats.unwrap();
+        assert_eq!((st.puts, st.gets, st.l1_hits), (1, 1, 1));
+        assert_eq!(st.flush_written, 1);
+        assert!(st.flush_last_at.is_some());
+        assert_eq!(st.l2_state, "ok");
+        assert_eq!(st.flush_queue_len, 0);
+        print_status(&status);
+        // 同じ形を JSON でも出す（`status --json` と `GET /metrics/scratch` は同じ型）。
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(
+            json["cache"]["stats"]["schema"],
+            "celeris.scratch-cache-stats/1"
+        );
+        // cache server が居なければ unavailable（config の既定の port 1 は閉じた特権 port）。
+        let cfg_path = config(tmp.path());
+        let mut text = std::fs::read_to_string(&cfg_path).unwrap();
+        text.push_str("[scratch.sccache]\nport = 1\n");
+        std::fs::write(&cfg_path, text).unwrap();
+        let cfg = load(&cfg_path).unwrap();
+        let cache = status_of(&cfg, None).unwrap().cache.unwrap();
+        assert_eq!(cache.state, "unavailable");
+        assert!(cache.stats.is_none());
+        store.shutdown();
     }
 
     /// ADR-0075 §5 G3: `env --server` は cache server が応答すれば webdav（`SCCACHE_WEBDAV_*`、token、`SCCACHE_DIR` なし）、

@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use task_ops::daemon::{
-    SCRATCH_STATUS_SCHEMA, ScratchGcRemovedView, ScratchGcView, ScratchLegacyView,
-    ScratchOwnerView, ScratchSccacheStats, ScratchSccacheView, ScratchStatus,
+    SCRATCH_STATUS_SCHEMA, ScratchCacheStats, ScratchCacheView, ScratchGcRemovedView,
+    ScratchGcView, ScratchLegacyView, ScratchOwnerView, ScratchSccacheStats, ScratchSccacheView,
+    ScratchStatus,
 };
 use task_worker::scratch::{
     self, AdoptCandidate, Class, DELETING_PREFIX, GcEntry, GcParams, GcPlan, Lease, Owner, Pool,
@@ -704,6 +705,65 @@ pub fn parse_sccache_stats(json: &str) -> Option<ScratchSccacheStats> {
         rust_misses,
         cache_size_bytes: v.get("cache_size").and_then(|n| n.as_u64()),
     })
+}
+
+// ---------------------------------------------------------------------------
+// L2 の cache server（ADR-0075 D5 (b) / D6、Phase G3）
+// ---------------------------------------------------------------------------
+
+/// cache server の `/stats`（500 ms。応答が無い・読めなければ `None`）。
+pub fn query_cache_stats(settings: &ScratchSettings) -> Option<ScratchCacheStats> {
+    let (code, body) = scratch::http_get_local(
+        settings.cache_server.port,
+        "/stats",
+        std::time::Duration::from_millis(500),
+    )?;
+    if code != 200 {
+        return None;
+    }
+    serde_json::from_str(&body).ok()
+}
+
+/// `ScratchStatus.cache`。`fetch` なら `/stats` を問い合わせる（応答すれば `ready`）。
+pub fn cache_view(settings: &ScratchSettings, fetch: bool) -> ScratchCacheView {
+    let endpoint = scratch::cache_server_endpoint(settings);
+    let sccache_mode = scratch::read_sccache_mode(&settings.pool());
+    if !settings.enabled || !settings.cache_server.enabled {
+        return ScratchCacheView {
+            state: "disabled".to_string(),
+            reason: Some(if settings.enabled {
+                "[scratch.cache_server] enabled = false".to_string()
+            } else {
+                "scratch is disabled".to_string()
+            }),
+            endpoint,
+            sccache_mode,
+            stats: None,
+        };
+    }
+    let stats = if fetch {
+        query_cache_stats(settings)
+    } else {
+        None
+    };
+    let (state, reason) = match (&stats, fetch) {
+        (Some(_), _) => ("ready", None),
+        (None, true) => (
+            "unavailable",
+            Some(format!(
+                "no cache server on 127.0.0.1:{} (celeris-scratch-cache.service)",
+                settings.cache_server.port
+            )),
+        ),
+        (None, false) => ("unavailable", Some("not queried".to_string())),
+    };
+    ScratchCacheView {
+        state: state.to_string(),
+        reason,
+        endpoint,
+        sccache_mode,
+        stats,
+    }
 }
 
 /// server に統計を問い合わせる（`Ready` のときだけ。直前にもう一度 port を確かめる: sccache の client は server が

@@ -484,3 +484,39 @@ ADR-0075 に「Phase G2 実装時の逸脱・明確化」1〜13 と、D7 に「�
 
   （最初の実行は B が 0 / 3: wrapper を通さず `RUSTC_WRAPPER=sccache` にしたため、owner ごとの `CARGO_TARGET_DIR` が key に入った。
   G2 の U1 と同じ。e2e は `<scratch>/bin/sccache` と同じ wrapper を使うように直した。）
+
+### G3 checkpoint 4: 監視（status / API / GUI）、schema と gen:types（完了 2026-09-28）
+
+- `ScratchStatus.cache`（`ScratchCacheView`: state `ready` / `disabled` / `unavailable`、reason、endpoint、sccache_mode〈`webdav` / `disk`〉、
+  stats = cache server の `/stats`〈`ScratchCacheStats`〉）。`task_dispatch::scratch_gc::{cache_view, query_cache_stats}`（loopback の
+  `/stats`、500 ms。`[scratch.cache_server] enabled = false` なら問い合わせない）。
+- daemon の tick（`DaemonSnapshot.scratch.cache`）→ `GET /api/v1/metrics/scratch` に同じ欄。`celerisctl scratch status` に 5〜6 行
+  （cache server の状態と sccache の backend、gets と L1 / L2 hit・miss の率・promotes・puts、L1 の使用量、L2 の状態・使用量・
+  errors / timeouts / corrupt、切り離し中なら理由と再試行の時刻、flush の待ち行列・最古の待ち時間・最終 flush・書いた量・帯域の上限、L2 GC）。
+- GUI のデーモン画面の 1 行: 「scratch 62 GB / 100 GB（pinned 18 GB、実効上限 150 GB） · L1 hit 71% · L2 hit 12% · flush 遅延 3 s」。
+  L2 の切り離し（degraded）は注意色、cache server が応答しなければ「· cache server unavailable」。
+- テスト: `celerisctl::commands::scratch::tests::status_reads_the_cache_server_stats`（本物の `scratch_cache` の server を loopback の
+  port 0 に立てて `status_of` → `ready`、puts / gets / l1_hits / flush_written / l2_state、居なければ `unavailable`）、GUI
+  `scratchLine` の G3 のケース（`gui/test/unit/daemon.test.ts`）。
+- schema / 生成型: `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated`
+  → ok、`cd gui && corepack pnpm@11.27.0 gen:types && typecheck && test` → Test Files 73 / Tests 1117 passed、lint 0 error。
+- **手動 e2e（本物の `celeris cache-server` + `celerisctl scratch env --server` + sccache 0.18 でこのリポジトリの `cargo build --workspace`）**。
+  config・scratch・L2 は `/var/lib/celeris/scratch/targets/agent-g3-srv/` の下（L2 もローカル。NFS の遅延は測っていない）、cache server
+  4293、sccache 4294（`celeris-sccache.service` と同じ `SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1`、env は `env --server`）。
+
+  | 回 | 状態 | 壁時計 | CPU user / sys | sccache Rust hit / miss | cache server |
+  |---|---|---|---|---|---|
+  | env --server（cache server なし） | — | — | — | — | `# celeris: sccache backend = disk …（no cache server on 127.0.0.1:4293 …）`、`SCCACHE_DIR` |
+  | env --server（あり） | — | — | — | — | `backend = webdav http://127.0.0.1:4293`、`SCCACHE_WEBDAV_*`、mode = `webdav` |
+  | A | 空（cold） | 44.3 s | 15.5 / 9.5 s | 0 / 196 | puts 614、misses 616、**flush 612 件 215.8 MB、ビルドの終了時に待ち行列は空**（25 MB/s で ≈ 8.6 s 分） |
+  | B | cache server を止め L1 を消して起こし直す（L2 だけ） | 37.8 s | 15.1 / 9.5 s | **165 / 196** | **l2_hits 582、promotes 582**、misses 33、puts 31（104.9 MB） |
+  | C | 別 owner（L1） | 37.8 s | 15.0 / 9.4 s | 166 / 196 | l1_hits 585、puts 30 |
+
+  - `scratch status`: `cache server http://127.0.0.1:4293 (ready) · sccache backend webdav` / `gets 1234 · L1 hit 47.6% · L2 hit 47.2% ·
+    miss 5.3% · promotes 582 · puts 61` / `L2 … (ok) 401.0 MB / 300.0 GB (673 entries …)` / `flush queue 0 … · written 61 (195.2 MB) · cap 25 MB/s`。
+  - cache server を止めると `scratch status` の sccache 行が `unavailable: sccache uses the webdav backend but the cache server on
+    127.0.0.1:4293 does not answer /healthz`（dispatcher と `scratch env` は `RUSTC_WRAPPER` を与えない）、cache server 行は `unavailable`。
+  - **所見**: 毎回 miss する約 30 crate（workspace のメンバーと `OUT_DIR` 依存。G2 の残り）は owner ごとに key が変わるので、**毎 run 約
+    100 MB を L2 に書き、二度と hit しない**。L2 の LRU（300 GB）で回収されるが NFS の帯域を使う（提案 P-G3-2）。
+  - 壁時計の得は小さい（44.3 → 37.8 s。リンクと workspace のメンバーが律速、G2 の U3 と同じ）。L2 の価値は「L1 を失った後・別マシン
+    でも依存を作り直さない」（B が C と同じ hit 率）。

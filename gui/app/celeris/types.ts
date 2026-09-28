@@ -2716,7 +2716,7 @@ export interface ScratchCacheStats {
   flush_written: number;
   flush_written_bytes: number;
   /**
-   * GET（`.sccache_check` を除く）と PUT の数。
+   * GET（HEAD を含み、`.sccache_check` を除く）と PUT の数。
    */
   gets: number;
   l1_bytes: number;

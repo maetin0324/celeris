@@ -13430,7 +13430,7 @@
           "type": "integer"
         },
         "gets": {
-          "description": "GET（`.sccache_check` を除く）と PUT の数。",
+          "description": "GET（HEAD を含み、`.sccache_check` を除く）と PUT の数。",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"

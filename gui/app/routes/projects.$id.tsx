@@ -65,6 +65,7 @@ import { Button, buttonClass } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
 import {
   checkboxClass,
+  chipLabelClass,
   hintClass,
   inputClass,
   labelClass,
@@ -771,25 +772,26 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
               <input type="hidden" name="intent" value="project_plan" />
               {/* celeris ADR-0072「Phase F6 実装時の決定」: 案件計画を持たない既存の案件（仕事が止まった案件）でも、
                   ここから案件計画（途中目標の DAG の提案 → 人の承認）を起こせる。 */}
+              {/* ADR-0055 D1-2: 押せる範囲は包む `<label>`（`chipLabelClass` の `min-h-11`）で 44×44 を満たす（F6-fix）。 */}
               <fieldset className="space-y-1.5" data-testid="project-plan-mode">
                 <legend className={labelClass}>進め方</legend>
-                <label className="flex items-start gap-2 text-sm">
+                <label className={`${chipLabelClass} w-full`}>
                   <input
                     type="radio"
                     name="mode"
                     value="decompose"
                     defaultChecked
-                    className="mt-1"
+                    className="shrink-0"
                     data-testid="project-plan-mode-decompose"
                   />
                   <span>仕事に分解する（従来どおり。CoS が仕事を作り、すぐ動き始めます）</span>
                 </label>
-                <label className="flex items-start gap-2 text-sm">
+                <label className={`${chipLabelClass} w-full`}>
                   <input
                     type="radio"
                     name="mode"
                     value="milestones"
-                    className="mt-1"
+                    className="shrink-0"
                     data-testid="project-plan-mode-milestones"
                   />
                   <span>

@@ -61,7 +61,6 @@ import { CodeViewer } from "~/components/CodeViewer";
 /* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
 import { ReplyStepRow } from "~/components/ConsoleBlockItem";
 /* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（Execution 節・ExecutionPhase）。 */
-import { ExecutionModeControl } from "~/components/ExecutionModeControl";
 import { ExecutionSection } from "~/components/ExecutionSection";
 import {
   ErrorFlash,
@@ -73,7 +72,6 @@ import {
   TransitionFlash,
 } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
-import { HumanReviewPanel } from "~/components/HumanReviewPanel";
 import { ImageViewer } from "~/components/ImageViewer";
 import { LocalTime } from "~/components/LocalTime";
 import { MarkdownViewer } from "~/components/MarkdownViewer";
@@ -153,6 +151,17 @@ import type { Route } from "./+types/tasks.$id";
 // そのまま残すので、そちらの動作・バンドルは変えない）。
 const TaskChanges = lazy(() => import("~/components/task-changes").then((m) => ({ default: m.TaskChanges })));
 const TaskFiles = lazy(() => import("~/components/task-files").then((m) => ({ default: m.TaskFiles })));
+// Phase F6-fix（ADR-0055 性能予算）: 「実行の形」カード（`~/components/ExecutionModeControl`・
+// `~/lib/execution-mode.ts`・確認文言）は gate の対象になるタスクでしか出ない補助の操作なので、初回の JS に載せず
+// 別チャンクにする（F6 で task 系ルートの初回 JS が 532KB の予算を 5KB 超えた）。
+const ExecutionModeControl = lazy(() =>
+  import("~/components/ExecutionModeControl").then((m) => ({ default: m.ExecutionModeControl })),
+);
+// 同じく F6-fix: 人の判断待ちの確認パネル（`~/components/HumanReviewPanel`）は review タスクで判断待ちが
+// あるときだけ出るので、それ以外のタスクの初回 JS から外す（予算に余裕を残すため）。
+const HumanReviewPanel = lazy(() =>
+  import("~/components/HumanReviewPanel").then((m) => ({ default: m.HumanReviewPanel })),
+);
 
 /**
  * タブの中身の読み込み中プレースホルダ（Phase 77、ADR-0055 D3「体感速度」）。チャンク待ち（`Suspense`）と
@@ -1003,13 +1012,16 @@ function OverviewTab({
   const { task } = detail;
   return (
     <>
+      {/* Phase F6-fix: `React.lazy`（このファイル冒頭）なので `Suspense` で包む。 */}
       {humanReview.length > 0 && (
-        <HumanReviewPanel
-          items={humanReview}
-          criteria={detail.criteria}
-          priorReview={detail.prior_review}
-          reviewTaskId={task.id}
-        />
+        <Suspense fallback={<Skeleton className="h-32 w-full" />}>
+          <HumanReviewPanel
+            items={humanReview}
+            criteria={detail.criteria}
+            priorReview={detail.prior_review}
+            reviewTaskId={task.id}
+          />
+        </Suspense>
       )}
 
       <section aria-labelledby="info-heading" data-testid="info-section">
@@ -1165,7 +1177,10 @@ function OverviewTab({
       {/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（計画・WU の表・replan の履歴）。
           計画も gate の判定も無い古いタスクは execution が無いので何も出ない（D23 の後方互換）。 */}
       <ExecutionSection execution={detail.execution} taskId={task.id} />
-      <ExecutionModeControl task={task} execution={detail.execution} />
+      {/* Phase F6-fix: `React.lazy`（このファイル冒頭）なので `Suspense` で包む。読み込み中は何も出さない（補助の操作）。 */}
+      <Suspense fallback={null}>
+        <ExecutionModeControl task={task} execution={detail.execution} />
+      </Suspense>
 
       <section aria-labelledby="runs-heading" data-testid="runs-section">
         <Card>

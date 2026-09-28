@@ -527,3 +527,93 @@ async fn global_events_page_by_id_with_task_and_type_filters() {
     );
     assert_eq!(items.len(), 2, "{only_b}");
 }
+
+/// The live-view loader uses this real filter, not just event serialization.
+#[tokio::test]
+async fn browser_lifecycle_events_filter_and_page_with_task_execution_identity() {
+    use task_core::{BrowserRun, BrowserRunState};
+    let env = TestEnv::new();
+    let app = env.router();
+    let task = new_task(TaskKind::Execute, Status::Running);
+    let other = new_task(TaskKind::Execute, Status::Running);
+    let run_id = ulid::Ulid::new().to_string();
+    let lifecycle = |task_id, state| Event::BrowserUpdated {
+        browser: BrowserRun {
+            task_id,
+            run_id: run_id.clone(),
+            session_id: "celeris-isolated-session".into(),
+            state,
+            live_view_url: Some("https://browser.example.com/live".into()),
+        },
+    };
+    env.seed_with(
+        &task,
+        vec![
+            progress("before browser"),
+            lifecycle(task.id, BrowserRunState::Running),
+            progress("browser action"),
+            lifecycle(task.id, BrowserRunState::Completed),
+            progress("after browser"),
+        ],
+    );
+    env.seed_with(&other, vec![lifecycle(other.id, BrowserRunState::Running)]);
+
+    let first = send(
+        &app,
+        get(&format!(
+            "/api/v1/tasks/{}/events?types=browser_updated&limit=1",
+            task.id
+        )),
+    )
+    .await;
+    assert_eq!(first.status, 200, "{}", first.text());
+    let first = first.json();
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    assert_eq!(first["has_more"], true);
+    let item = &first["items"][0];
+    assert_eq!(item["task_id"], task.id.to_string());
+    assert_eq!(item["event"]["type"], "browser_updated");
+    assert_eq!(item["event"]["browser"]["task_id"], task.id.to_string());
+    assert_eq!(item["event"]["browser"]["run_id"], run_id);
+    assert_eq!(item["event"]["browser"]["state"], "RUNNING");
+    let after_seq = item["seq"].as_u64().unwrap();
+    let after_id = item["id"].as_u64().unwrap();
+
+    let second = send(
+        &app,
+        get(&format!(
+            "/api/v1/tasks/{}/events?types=browser_updated&limit=1&after_seq={after_seq}",
+            task.id
+        )),
+    )
+    .await;
+    assert_eq!(second.status, 200, "{}", second.text());
+    let second = second.json();
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["has_more"], false);
+    let completed = &second["items"][0];
+    assert!(completed["seq"].as_u64().unwrap() > after_seq);
+    assert_eq!(completed["event"]["browser"]["state"], "COMPLETED");
+    assert_eq!(
+        completed["event"]["browser"]["task_id"],
+        task.id.to_string()
+    );
+    assert_eq!(completed["event"]["browser"]["run_id"], run_id);
+    assert_eq!(
+        completed["event"]["browser"]["session_id"],
+        "celeris-isolated-session"
+    );
+
+    let global = send(
+        &app,
+        get(&format!(
+            "/api/v1/events?task_id={}&types=browser_updated&after_id={after_id}&limit=1",
+            task.id
+        )),
+    )
+    .await;
+    assert_eq!(global.status, 200, "{}", global.text());
+    let global = global.json();
+    assert_eq!(global["items"].as_array().unwrap(), &[completed.clone()]);
+    assert_eq!(global["has_more"], false);
+}

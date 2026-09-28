@@ -155,6 +155,14 @@ pub(crate) fn work_dir_note(
 /// `artifacts` は成果物ディレクトリの workspace 相対表記（`RunRequest::artifacts_rel`。ADR-0036 D3。
 /// 単独タスクでは `artifacts` なので、文面は Phase 34 までと 1 バイトも変わらない）。
 pub fn build_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
+    let mut prompt = build_prompt_inner(task, context, run_id, artifacts);
+    if let Some(browser) = &context.browser {
+        prompt.push_str(&crate::browser::prompt(browser));
+    }
+    prompt
+}
+
+fn build_prompt_inner(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
     // ADR-0072 D14（Phase E3）: task-local な planner run は `task.kind` に依らず（常に `Execute`）、
     // `context.execution_planner` の有無で選ぶ。
     if context.execution_planner.is_some() {
@@ -1504,8 +1512,16 @@ async fn run_claude_code(
 ) -> Result<RunOutcome, AdapterError> {
     let run_dir = req.workspace.join("runs").join(run_id);
     tokio::fs::create_dir_all(&run_dir).await?;
-    let stdout_log_path = run_dir.join("stdout.jsonl");
-    let stderr_log_path = run_dir.join("stderr.log");
+    // Browser commands and page content must not be persisted through the harness's raw
+    // stream capture. Parsing still uses the pipes; the browser supervisor emits safe audit events.
+    let (stdout_log_path, stderr_log_path) = if req.context.browser.is_some() {
+        (
+            Path::new("/dev/null").to_path_buf(),
+            Path::new("/dev/null").to_path_buf(),
+        )
+    } else {
+        (run_dir.join("stdout.jsonl"), run_dir.join("stderr.log"))
+    };
     // `stderr_task` (below) moves a copy into its `async move` block; this one stays available for
     // the crash-classification read after the loop (ADR-0010 D5).
     let stderr_log_path_for_task = stderr_log_path.clone();
@@ -1755,7 +1771,7 @@ async fn run_claude_code(
     }
     stdout_file.flush().await?;
 
-    let (terminal, provider_failure): (Terminal, Option<ProviderFailure>) = match (
+    let (mut terminal, provider_failure): (Terminal, Option<ProviderFailure>) = match (
         timeout_terminal,
         &last_result,
     ) {
@@ -1818,6 +1834,7 @@ async fn run_claude_code(
                 _ => None,
             };
             if let Some(message) = missing_result_json
+                && req.context.browser.is_none()
                 && !meta.is_error
                 && meta.subtype == "success"
                 && meta.stop_reason.as_deref().is_none_or(|r| r == "end_turn")
@@ -1882,6 +1899,20 @@ async fn run_claude_code(
 
     forward_delegate_file(&req.artifacts_dir, sink).await;
 
+    // CLI result errors can reflect command arguments or page text even when raw capture is off.
+    // Keep the failure classification and normal public summaries, but omit reflected error bodies.
+    if req.context.browser.is_some() {
+        match &mut terminal {
+            Terminal::Error { message, .. } | Terminal::BudgetExhausted { message, .. } => {
+                if message.starts_with(RESULT_JSON_MISSING_MARKER) {
+                    *message = format!("{RESULT_JSON_MISSING_MARKER}browser result.json");
+                } else {
+                    *message = "browser harness failed".into();
+                }
+            }
+            _ => {}
+        }
+    }
     write_result_json(&run_dir, &terminal, provider_failure).await?;
 
     if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
@@ -2739,6 +2770,84 @@ mod tests {
         );
         // `result` は進行ではない（終端の合成に使う）。
         assert!(last_result.is_some());
+    }
+
+    #[tokio::test]
+    async fn browser_cli_result_errors_are_redacted_before_normalized_result_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = ClaudeCodeAdapter::new(stub_claude(
+            dir.path(),
+            r#"echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"401 Unauthorized rpc-secret-sentinel"}'
+"#,
+        ));
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.context.browser = Some(crate::browser::BrowserContext {
+            run: task_core::BrowserRun {
+                task_id: req.task.id,
+                run_id: "browser-error-test".into(),
+                session_id: "isolated-test".into(),
+                state: task_core::BrowserRunState::Running,
+                live_view_url: None,
+            },
+            cli: dir.path().join("celeris-browser.py"),
+        });
+        let sink = RecordingSink::default();
+        let result = adapter
+            .run(req, "browser-error-test", default_limits(), &sink)
+            .await;
+        let error = result.unwrap_err();
+        assert!(!error.to_string().contains("rpc-secret-sentinel"));
+        assert!(matches!(error, AdapterError::AuthFailed(_)));
+        let run = dir.path().join("runs/browser-error-test");
+        for entry in std::fs::read_dir(run).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(!String::from_utf8_lossy(&bytes).contains("rpc-secret-sentinel"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_run_discards_raw_logs_but_still_parses_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = stub_claude(
+            dir.path(),
+            r#"mkdir -p artifacts
+echo 'raw-browser-secret-sentinel'
+echo 'raw-browser-secret-sentinel' >&2
+printf '%s' '{"summary":"safe browser result","evidence":[]}' > artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false}'
+"#,
+        );
+        let adapter = ClaudeCodeAdapter::new(config);
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.context.browser = Some(crate::browser::BrowserContext {
+            run: task_core::BrowserRun {
+                task_id: req.task.id,
+                run_id: "browser-log-test".into(),
+                session_id: "isolated-test".into(),
+                state: task_core::BrowserRunState::Running,
+                live_view_url: None,
+            },
+            cli: dir.path().join("celeris-browser.py"),
+        });
+        let sink = RecordingSink::default();
+        let result = adapter
+            .run(req, "browser-log-test", default_limits(), &sink)
+            .await
+            .unwrap();
+        assert!(matches!(result.terminal, Terminal::Done { .. }));
+        let run = dir.path().join("runs/browser-log-test");
+        assert!(!run.join("stdout.jsonl").exists());
+        assert!(!run.join("stderr.log").exists());
+        for entry in std::fs::read_dir(run).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(!String::from_utf8_lossy(&bytes).contains("raw-browser-secret-sentinel"));
+            }
+        }
     }
 
     #[tokio::test]

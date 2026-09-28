@@ -128,6 +128,66 @@ pub fn rev_parse(dir: &Path, rev: &str) -> Option<String> {
     if sha.is_empty() { None } else { Some(sha) }
 }
 
+/// `sha` がこのリポジトリの commit として解決できれば、その全長 sha。
+fn commit_in(dir: &Path, sha: &str) -> Option<String> {
+    if sha.is_empty() {
+        return None;
+    }
+    rev_parse(dir, &format!("{sha}^{{commit}}"))
+}
+
+/// ADR-0074「Phase F5-fix7 実装時の明確化」: 同じ工程の依存先 `dep` の成果の上に WU を積むときの基点 sha
+/// （`repo` は登録元のリポジトリ、`task_branch` は Task ブランチ）。決定的で、ref も行も書き換えない。
+///
+/// 1. `celeris-wu/<task_id>/<dep>` があればその HEAD（従来どおり）。
+/// 2. 依存先が WU の worktree を持たなかった（`dep.branch == None`。Task の worktree で走った repair WU・
+///    統合 WU・並列 1 の WU）: その成果は Task ブランチにあるので、`head_commit` → `integrated_commit` →
+///    `base_commit`（このリポジトリで解決できるもの）→ Task ブランチの HEAD の順。commit しなかった
+///    （`head_commit` も `base_commit` も無い）依存先は Task ブランチの HEAD になる。
+/// 3. 依存先が WU のブランチを持っていたのに ref が消えている: `head_commit` → `base_commit`
+///    （commit の無い done は `head_commit == base_commit`）。どちらも解決できなければ `Err`
+///    （時間では直らない。呼び出し側は WU を blocked にして人に聞く）。
+pub fn dependency_base(
+    repo: &Path,
+    task_id: &str,
+    dep: &task_core::WorkUnitRow,
+    task_branch: &str,
+) -> Result<String, String> {
+    if let Some(sha) = rev_parse(
+        repo,
+        &format!("refs/heads/{}", wu_branch(task_id, &dep.key)),
+    ) {
+        return Ok(sha);
+    }
+    let recorded = |c: &Option<String>| c.as_deref().and_then(|sha| commit_in(repo, sha));
+    if dep.branch.is_none() {
+        return recorded(&dep.head_commit)
+            .or_else(|| recorded(&dep.integrated_commit))
+            .or_else(|| recorded(&dep.base_commit))
+            .or_else(|| rev_parse(repo, &format!("refs/heads/{task_branch}")))
+            .ok_or_else(|| {
+                format!(
+                    "dependency {} ran in the task worktree but neither its recorded commits nor the \
+                     task branch {task_branch} exist in {}",
+                    dep.key,
+                    repo.display()
+                )
+            });
+    }
+    recorded(&dep.head_commit)
+        .or_else(|| recorded(&dep.base_commit))
+        .ok_or_else(|| {
+            format!(
+                "dependency branch of {} does not exist in {} and its recorded head_commit/base_commit \
+                 ({}/{}) cannot be resolved",
+                dep.key,
+                repo.display(),
+                dep.head_commit.as_deref().unwrap_or("-"),
+                dep.base_commit.as_deref().unwrap_or("-"),
+            )
+        })
+}
+
 /// `ancestor` が `descendant` の祖先（または同じ）か。
 pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> bool {
     git(dir, &["merge-base", "--is-ancestor", ancestor, descendant]).is_ok_and(|o| o.ok)
@@ -528,5 +588,115 @@ mod tests {
 
     fn status_clean(dir: &Path) -> bool {
         sh(dir, &["status", "--porcelain"]).is_empty()
+    }
+
+    fn dep_row(key: &str, kind: task_core::WorkUnitKind) -> task_core::WorkUnitRow {
+        let spec = task_core::WorkUnitSpec {
+            key: key.to_string(),
+            kind,
+            title: key.to_string(),
+            objective: key.to_string(),
+            depends_on: vec![],
+            done_when: vec![],
+            checks: vec![],
+            context: task_core::WorkUnitContext::default(),
+            harness: None,
+            features: None,
+            budget: None,
+            outputs: vec![],
+            phase: Some("p".into()),
+        };
+        let mut row = task_core::WorkUnitRow::new(
+            format!("id-{key}"),
+            "T1".into(),
+            "plan".into(),
+            0,
+            spec,
+            task_core::WorkUnitStatus::Done,
+            "2026-09-28T00:00:00Z".into(),
+        );
+        row.phase = Some("p".into());
+        row
+    }
+
+    /// 1 回 commit して、その sha を返す。
+    fn commit_file(dir: &Path, name: &str) -> String {
+        std::fs::write(dir.join(name), name).unwrap();
+        commit_all(dir, &format!("add {name}")).unwrap().0
+    }
+
+    /// ADR-0074「Phase F5-fix7 実装時の明確化」: 依存先の基点の決め方（ブランチ → 記録した commit →
+    /// Task ブランチ）。
+    #[test]
+    fn dependency_base_falls_back_to_the_recorded_commits_and_the_task_branch() {
+        let root = tempfile::tempdir().unwrap();
+        let (repo, task_dir, task_tree) = setup(root.path());
+        let main = rev_parse(&repo, "main").unwrap();
+        let bogus = "0123456789abcdef0123456789abcdef01234567".to_string();
+
+        // 1. WU ブランチがあればその HEAD。
+        let wt = make_wu(&repo, &task_dir, &task_tree, "a", "HEAD");
+        let a_head = commit_file(&wt.dir, "a.txt");
+        let mut a = dep_row("a", task_core::WorkUnitKind::Implement);
+        a.branch = Some(wu_branch("T1", "a"));
+        a.head_commit = Some(bogus.clone());
+        assert_eq!(
+            dependency_base(&repo, "T1", &a, "celeris/T1").unwrap(),
+            a_head
+        );
+
+        // 2. Task の worktree で走った repair WU（本番の remerge）: Task ブランチに commit した head。
+        let repair_head = commit_file(&task_tree, "remerge.txt");
+        let mut remerge = dep_row("remerge", task_core::WorkUnitKind::Repair);
+        remerge.head_commit = Some(repair_head.clone());
+        assert_eq!(
+            dependency_base(&repo, "T1", &remerge, "celeris/T1").unwrap(),
+            repair_head
+        );
+        // commit しなかった（head も base も無い）repair WU: Task ブランチの HEAD。
+        let task_head = commit_file(&task_tree, "later.txt");
+        let nothing = dep_row("nothing", task_core::WorkUnitKind::Repair);
+        assert_eq!(
+            dependency_base(&repo, "T1", &nothing, "celeris/T1").unwrap(),
+            task_head
+        );
+        // 記録した head がこのリポジトリに無ければ Task ブランチの HEAD。
+        let mut stale = dep_row("stale", task_core::WorkUnitKind::Repair);
+        stale.head_commit = Some(bogus.clone());
+        assert_eq!(
+            dependency_base(&repo, "T1", &stale, "celeris/T1").unwrap(),
+            task_head
+        );
+
+        // 統合 WU: integrated_commit。
+        let mut integ = dep_row("integrate-p", task_core::WorkUnitKind::Integrate);
+        integ.integrated_commit = Some(repair_head.clone());
+        assert_eq!(
+            dependency_base(&repo, "T1", &integ, "celeris/T1").unwrap(),
+            repair_head
+        );
+
+        // 3. WU ブランチを持っていたのに ref が無い: head_commit → base_commit（commit の無い done）。
+        let mut gone = dep_row("gone", task_core::WorkUnitKind::Implement);
+        gone.branch = Some(wu_branch("T1", "gone"));
+        gone.head_commit = Some(repair_head.clone());
+        assert_eq!(
+            dependency_base(&repo, "T1", &gone, "celeris/T1").unwrap(),
+            repair_head
+        );
+        gone.head_commit = None;
+        gone.base_commit = Some(main.clone());
+        assert_eq!(
+            dependency_base(&repo, "T1", &gone, "celeris/T1").unwrap(),
+            main
+        );
+        // どれも解決できない: Err（呼び出し側は blocked にする）。
+        gone.head_commit = Some(bogus.clone());
+        gone.base_commit = None;
+        let err = dependency_base(&repo, "T1", &gone, "celeris/T1").unwrap_err();
+        assert!(err.contains("dependency branch of gone"), "{err}");
+        // Task の worktree で走った WU でも、Task ブランチまで無ければ Err。
+        let err = dependency_base(&repo, "T1", &nothing, "celeris/missing").unwrap_err();
+        assert!(err.contains("ran in the task worktree"), "{err}");
     }
 }

@@ -4947,13 +4947,12 @@ impl Dispatcher {
         // WU の key/spec が変わっていないことも検証する（D14「replan のときは done の WU の key と
         // spec が変わっていないこと」）。
         let active_plan = self.store.execution_plan_active(task_id)?;
-        let done_work_units: Vec<(String, task_core::WorkUnitSpec)> = if active_plan.is_some() {
-            self.store
-                .work_units_for(task_id)?
-                .into_iter()
-                .filter(|u| u.status == task_core::WorkUnitStatus::Done)
-                .map(|u| (u.key, u.spec))
-                .collect()
+        // ADR-0074 F5-fix（不具合 2）: daemon が足した WU（`kind = integrate`・統合の repair WU）は
+        // planner の視野に無いので対象から外す（`task_ops::execution::replan` と同じ規則）。
+        let done_work_units: Vec<(String, task_core::WorkUnitSpec)> = if let Some(active) =
+            active_plan.as_ref()
+        {
+            task_core::replan_done_work_units(&active.spec, &self.store.work_units_for(task_id)?)
         } else {
             Vec::new()
         };
@@ -28038,6 +28037,10 @@ mod tests {
         /// この key の run は `gate` が開くまで終わらない（再起動・Cancel の試験用）。
         hold: StdMutex<std::collections::HashSet<String>>,
         gate: tokio::sync::Notify,
+        /// planner run（`context.execution_planner`）が順に書く `execution-plan.json`（F5-fix）。
+        planner_outputs: StdMutex<std::collections::VecDeque<String>>,
+        /// run ごとの `(key, CARGO_TARGET_DIR)`（request の環境。F5-fix）。
+        cargo_target_dirs: StdMutex<Vec<(String, Option<String>)>>,
     }
 
     impl ParallelWuAdapter {
@@ -28053,7 +28056,14 @@ mod tests {
                 seen: StdMutex::new(Vec::new()),
                 hold: StdMutex::new(std::collections::HashSet::new()),
                 gate: tokio::sync::Notify::new(),
+                planner_outputs: StdMutex::new(std::collections::VecDeque::new()),
+                cargo_target_dirs: StdMutex::new(Vec::new()),
             }
+        }
+
+        fn with_planner_output(self, json: String) -> Self {
+            self.planner_outputs.lock().unwrap().push_back(json);
+            self
         }
 
         fn with_file(mut self, key: &str, path: &str, content: &str) -> Self {
@@ -28118,6 +28128,21 @@ mod tests {
             _sink: &dyn EventSink,
         ) -> Result<RunOutcome, AdapterError> {
             use std::sync::atomic::Ordering;
+            if req.context.execution_planner.is_some() {
+                let next = self.planner_outputs.lock().unwrap().pop_front();
+                if let Some(json) = next {
+                    std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+                    std::fs::write(req.artifacts_dir.join("execution-plan.json"), json).unwrap();
+                }
+                return Ok(RunOutcome {
+                    terminal: Terminal::Done {
+                        summary: "planned".into(),
+                        evidence: vec![],
+                        usage: None,
+                    },
+                    exit_code: Some(0),
+                });
+            }
             let key = req
                 .context
                 .work_unit
@@ -29099,6 +29124,84 @@ mod tests {
                 .any(|e| matches!(e, Event::RepairScheduled { .. })),
             "repair は作らない"
         );
+    }
+
+    /// ADR-0074 F5-fix（不具合 2 の再現、タスク 01M3HS2E19BRC021ZXMDZANP5B）: 2 工程の v2 で
+    /// `integrate-investigate` が done になった後、`implement` の WU が retry 上限で failed →
+    /// replan。planner の差分（`modify: [impl-quota]` だけ）が「done work unit integrate-investigate
+    /// must not change on replan」で拒否されず v2 が採用され、統合 WU の行は元の版のまま持ち越される。
+    #[tokio::test]
+    async fn replan_delta_after_an_integrated_phase_keeps_the_daemon_integration_unit() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        let plan = adopt_v2_plan(
+            &store,
+            task.id,
+            &["investigate", "implement"],
+            vec![
+                v2_wu("inv-a", "investigate", &[]),
+                v2_wu("inv-b", "investigate", &[]),
+                v2_wu("impl-quota", "implement", &["inv-a"]),
+            ],
+        );
+        let delta = serde_json::json!({
+            "schema": task_core::execution_plan::EXECUTION_PLAN_DELTA_SCHEMA,
+            "base_version": 1,
+            "rationale": "impl-quota をやり直す",
+            "modify": [{"key": "impl-quota", "objective": "do impl-quota, this time correctly"}]
+        })
+        .to_string();
+        let boom = || Terminal::Error {
+            message: "E0609 no field runs_by_role".into(),
+            retryable: true,
+        };
+        let adapter = Arc::new(
+            ParallelWuAdapter::new(Duration::from_millis(5))
+                .with_script("impl-quota", vec![boom(), boom(), boom(), boom()])
+                .with_planner_output(delta),
+        );
+        let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+        d.config.execution.planner.adapter = "instant".to_string();
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 800, || s
+                .execution_plan_list(id)
+                .map(|p| p.len() >= 2)
+                .unwrap_or(false))
+            .await,
+            "差分の replan が採用される: {:?}",
+            events_of(&store, task.id)
+                .iter()
+                .filter(|e| matches!(e, Event::WorkerFinished { .. }))
+                .collect::<Vec<_>>()
+        );
+        let events = events_of(&store, task.id);
+        assert!(
+            !events
+                .iter()
+                .any(|e| format!("{e:?}").contains("must not change on replan")),
+            "done の統合 WU を「変わった」扱いにしない"
+        );
+        let units = store.work_units_for(task.id).unwrap();
+        let integ = units
+            .iter()
+            .find(|u| u.key == "integrate-investigate")
+            .unwrap();
+        assert_eq!(integ.status, task_core::WorkUnitStatus::Done);
+        assert_eq!(integ.plan_id, plan.id, "統合 WU の行は base のまま持ち越す");
+        let plans = store.execution_plan_list(task.id).unwrap();
+        let quota = plans[1]
+            .spec
+            .work_units
+            .iter()
+            .find(|w| w.key == "impl-quota")
+            .unwrap();
+        assert_eq!(quota.objective, "do impl-quota, this time correctly");
     }
 
     /// ADR-0074 §6 F2 (g): 兄弟が走っている間の WU の failed / question で Task は遷移せず、in-flight が

@@ -1323,3 +1323,11 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - F5-1（やり直し）01M3HG7VV6A2HRHTNXWPDS9051: done（atomic に倒れたまま、13:18〜15:31Z）。planner 2 run（Opus 1 分、Sonnet 7 分）は Plan Mode で成果物を書けず失敗。worker 4 run のうち 3 run が `cheap/mechanical-verifiable-reversible` で gpt-6-luna（F1 の規則表が atomic でも Task の features から cheap を選んだ）、retry のエスカレーションで 1 run が frontier（gpt-6-astra）。continuation 1。E6（全 run standard）と比べて lane の分布は変わった。
 - 昇格: in-flight 0 で停止→起動、本番 `c51837427ac5`（schema 28）。本番に F4b（reached / Go、案件 replan、children、案件ページ DAG）と planner の permission_mode 修正が入った。
 - 3 回目の F5-1 を投入（planner が成果物を書ける版で compound の計画が採用されるかを確認）。
+
+## Phase F5-fix「F5-1 dogfood（3 回目）の 2 不具合の修正」（着手 2026-09-28）
+
+### F5-fix checkpoint 1: 不具合 2（replan の差分が daemon の統合 WU で拒否される）（完了 2026-09-28）
+
+- 原因: `task_ops::execution::replan` は F2b で daemon が足した WU（`kind = integrate`・統合の repair WU）を done の不変条件から外していたが、**dispatcher の planner run の検証**（`replan_done_work_units` の手前、`run_planner` の `validate`）は done の WU をすべて渡していた。planner の差分（`apply_delta` の結果）は計画の spec（daemon の WU を含まない）なので、`integrate-investigate` が「無い＝変わった」扱いになり 2 回拒否 → blocked(question)。
+- 修正: `task_core::{is_daemon_added_work_unit, replan_done_work_units}` を足し、dispatcher と `replan` の両方がこれを使う。`replan` の削除ループは統合の repair WU を（その工程が新しい版に残る限り）superseded にしない。`DoneWorkUnitChanged` / `ReservedKind` / `ReservedKey` の文言に「daemon が足した WU（kind = integrate の統合 WU・統合の repair WU）は書かなくてよい」を足す（`DAEMON_ADDED_HINT`）。
+- テスト: `task_core::execution_plan::tests::replan_delta_does_not_treat_daemon_added_done_units_as_changed`（fixture v2・2 工程・`integrate-investigate` done・統合 repair done、差分 `modify: [impl-quota]` → `apply_delta` → `validate` が通る。旧挙動の done 集合では拒否され文言に案内が出る）、`task_ops::execution::tests::replan_carries_daemon_added_units_without_the_planner_restating_them`（全体形式）、`task_dispatch::dispatcher::tests::replan_delta_after_an_integrated_phase_keeps_the_daemon_integration_unit`（dispatcher 経由の再現。修正前の done 集合に戻すと FAILED、修正後 ok を確認）。

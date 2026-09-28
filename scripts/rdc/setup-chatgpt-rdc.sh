@@ -29,7 +29,10 @@ sudo -n true 2>/dev/null || die "sudo が使えません（パスワード付き
 [ -f "$REPO/scripts/rdc/celeris-chat" ] || die "scripts/rdc/celeris-chat がありません（Phase 101 以降のリポジトリで実行）"
 if [ -n "$TOKEN_SRC" ]; then
   [ -f "$TOKEN_SRC" ] || die "TOKEN_FILE が無い: $TOKEN_SRC"
-  [ "$(stat -c '%a' "$TOKEN_SRC")" = "600" ] || die "TOKEN_FILE は 600 にしてください: $TOKEN_SRC"
+  # NFS の home で POSIX ACL（mask）が付くと mode が 660 等に見えるので、「other が 0、owner が自分」で判定する。
+  [ "$(stat -c '%U' "$TOKEN_SRC")" = "$(id -un)" ] || die "TOKEN_FILE は自分の所有にしてください: $TOKEN_SRC"
+  case "$(stat -c '%a' "$TOKEN_SRC")" in *0) ;; *) die "TOKEN_FILE は other に権限を付けないでください（chmod 600）: $TOKEN_SRC" ;; esac
+  [ -s "$TOKEN_SRC" ] || die "TOKEN_FILE が空です: $TOKEN_SRC"
 fi
 
 if id "$RDC_USER" >/dev/null 2>&1; then

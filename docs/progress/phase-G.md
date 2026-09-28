@@ -520,3 +520,53 @@ ADR-0075 に「Phase G2 実装時の逸脱・明確化」1〜13 と、D7 に「�
     100 MB を L2 に書き、二度と hit しない**。L2 の LRU（300 GB）で回収されるが NFS の帯域を使う（提案 P-G3-2）。
   - 壁時計の得は小さい（44.3 → 37.8 s。リンクと workspace のメンバーが律速、G2 の U3 と同じ）。L2 の価値は「L1 を失った後・別マシン
     でも依存を作り直さない」（B が C と同じ hit 率）。
+
+### Phase G3 の全体ゲート（2026-09-28、完了）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test --workspace --no-fail-fast` → exit 0、passed 2571 / failed 0 / ignored 7（G2 の 2550 / 6 から +21 / +1〈手動の `sccache_webdav_e2e`〉）
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0、警告 0
+- `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → ok、再生成後の差分ゼロ
+- `cd gui && corepack pnpm@11.27.0 gen:types`（差分ゼロ）`&& typecheck && test` → exit 0、Test Files 73 / Tests 1117 passed。lint 0 error
+- `bash -n`（`scripts/selfdeploy/*.sh`・`scripts/scratch/*.sh`・`scripts/scratch/u5/*.sh` の 12 ファイル）→ 構文エラー 0。`scripts/selfdeploy/tests/*.sh` 3 本 → ok
+- 手動: `CELERIS_E2E_SCCACHE=$HOME/.cargo/bin/sccache CELERIS_E2E_DIR=/var/lib/celeris/scratch/targets/agent-g3-e2e cargo test -p scratch-cache
+  --test sccache_webdav_e2e -- --ignored --nocapture` → 1 passed（checkpoint 3）。本物の `celeris cache-server` でこのリポジトリ（checkpoint 4）。
+
+### 受け入れ条件（ADR-0075 §5 G3）との対応
+
+1. U5 の記録 → checkpoint 1（メソッドとパス、PROPFIND の `getlastmodified`、起動時の storage check の失敗、起動後の停止でコンパイル継続、
+   遅い backend を待ち続ける）。実装したメソッドは記録した集合 + HEAD。
+2. GET は L1 → L2 → 404、L2 hit は promote、PUT は L1 で即応答、flusher は 25 MB/s を超えない、tmp → fsync → rename、同時書き込みで壊れない →
+   `get_prefers_l1_then_l2_then_miss`、`l2_hit_is_promoted_to_l1`、`put_returns_before_the_l2_write`、`flusher_respects_the_token_bucket`、
+   `token_bucket_limits_bytes_over_any_interval`、`l2_write_is_atomic_and_idempotent`、`sccache_request_sequence_round_trips`、`l2_hit_through_http_is_promoted`。
+3. L2 が読めない（dir を消す・権限 000・遅い L2）→ L1 だけで応答、連続失敗で切り離し、バックオフ後に復帰。壊れた `.zst` は miss で消す →
+   `l2_unavailable_degrades_to_l1_only`、`corrupt_l2_entry_is_discarded`。
+4. L1 の上限で LRU、未 flush は落とさない、再起動後に `.pending` から積み直す → `l1_eviction_keeps_unflushed_entries`、`pending_log_is_replayed_after_restart`。
+   L2 の GC → `l2_gc_evicts_lru`。
+5. cache server が止まっているとき run は素の cargo で成功（webdav のとき）→ `cache_server_down_means_no_rustc_wrapper`、
+   `env_server_switches_to_webdav_when_the_cache_server_is_up`。sccache 自身の挙動は U5（down-mid: exit 0）と e2e の D（cache server 停止中の
+   ビルド ok）。
+6. `scratch status` / metrics / GUI に L1 / L2 の hit 率・サイズ・flush の遅延 → `status_reads_the_cache_server_stats`、GUI `scratchLine`、
+   手動 e2e の `scratch status` の出力（checkpoint 4）。
+
+ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、状態の行を更新した。`docs/ops/sccache-l1.md` に「L2」の節（有効化の手順・確認・注意）。
+
+### 未解決事項・人への依頼
+
+- **有効化（人）**: G3 を含む release の昇格後に `scripts/selfdeploy/install-units.sh` → `systemctl --user enable --now
+  celeris-scratch-cache.service` → `systemctl --user restart celeris-sccache.service` → `celerisctl scratch status` で
+  `cache server … (ready) · sccache backend webdav` を確かめる（`docs/ops/sccache-l1.md` の「L2」）。**`[scratch.l2]` /
+  `[scratch.cache_server]` は本番 config に足さない**（既定で動く。足すなら昇格後）。
+- **NFS 上の L2 の測定（U4）**: 本番の L2（`~/.local/celeris/cache/sccache-l2`、TrueNAS の NFS、1GbE）で、L1 を消した後の再ビルドの壁時計と
+  `l2_timeouts`（GET の L2 は 500 ms で打ち切る）を見る。頭打ちなら事前 promote（D5 の最後）を別 Phase で検討。
+- L2 に NFS の root が無い状態（mount が外れた）で cache server を起動すると、初回の `create_dir_all` が mount point の下のローカルに
+  root を作りうる（`TieredStore::open` の初回だけ。以後の書き込みは root を作らない）。`/home` が NFS そのものなので現状は起きないが、
+  L2 を別の mount に移すなら起動時の NFS 検査（D1 の `is_on_nfs` を L2 に使う）を足す。
+
+### 提案
+
+- P-G3-1: `celeris-sccache.service` を cache server の再起動に追従させる（`PartOf=celeris-scratch-cache.service` か、cache server が
+  `/healthz` を返し始めた後に `systemctl --user try-restart celeris-sccache.service`）。今は人が再起動する。
+- P-G3-2: 毎 run 約 100 MB の再利用されない L2 書き込み（owner ごとに key が変わる約 30 crate）を減らす。案: (a) `OUT_DIR` 依存の key を
+  owner に依らなくする（build script の出力先の path を wrapper で正規化できるかの調査）、(b) L2 への admission を「L1 で 1 回以上 hit した
+  entry だけ」にする（初回の run の entry は L2 に行かず、2 回目から効く）。

@@ -1,7 +1,7 @@
 # ADR-0075: ビルドキャッシュの 2 層化 — target は使い捨ての scratch、再利用は sccache の L1（ローカル）/ L2（NFS）に集約し、Celeris が semantic cache manager になる
 
 - 日付: 2026-09-28
-- 状態: **Accepted**（2026-09-28 Phase G1 完了・本番反映、Phase G2 実装。G3 は未着手）
+- 状態: **Accepted**（2026-09-28 Phase G1 完了・本番反映、Phase G2 実装、Phase G3 実装〈cache server の有効化は人〉）
 - 入力: `docs/notes/build-cache-tiering-input-2026-09-28.md`（人の設計方針。本 ADR はこれに沿う。以下「入力メモ」）
 - 関連:
   - ADR-0066（D1 共有 `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>`、D2 終端の作業場所の生成物の刈り取り）。本 ADR は D1 を**置き換える**（D2 は残す）
@@ -501,3 +501,61 @@ G1 の実装で本文と食い違った点・本文が決めていなかった�
     clippy-driver を通る workspace のメンバーは non-cacheable。
 13. **`[commands] setup` には与えない**（G1 の逸脱 13 のまま）。setup は worktree を作った直後に 1 度だけ流すコマンドで、cargo を呼ぶ
     とは限らない。必要になれば別 Phase。
+
+## Phase G3 実装時の逸脱・明確化（2026-09-28）
+
+1. **U5 の答え**（phase-G.md の G3 checkpoint 1。loopback の記録用 stub に本物の sccache 0.18 を向けた）:
+   - 発行されるメソッドは `GET`（entry と起動時の `/<prefix>/.sccache_check`）、`PUT`（同）、`PROPFIND`（Depth 0。PUT の前に毎回
+     親の collection）、`MKCOL`（PROPFIND が 404 のときだけ親から順に）。HEAD・DELETE・MOVE・COPY・PROPPATCH・Range は出なかった。
+     path は `/<SCCACHE_WEBDAV_KEY_PREFIX>/<k0>/<k1>/<k2>/<key>`（key は 64 桁の 16 進）。**207 の応答に `getlastmodified` が
+     無いと opendal は PUT せずに失敗する**。cache server は collection の PROPFIND に常に 207 を返す（ディレクトリは仮想）。
+   - **backend が起動時に応答しない（接続拒否・500）と sccache の server は起動に失敗する**（`Server startup failed: cache storage
+     failed to read`、exit 2）。**起動後に backend が死んでもコンパイルは続く**（GET の失敗は miss、PUT の失敗は write error）。
+     **backend が遅いと sccache は GET と PUT の両方を timeout なしで待つ**（8 秒の遅延で 1 crate のビルドが 16.4 秒）。
+   - D5 の「cache server 自身の停止」の行の未確認事項（コンパイルを続けるか）は「続ける。ただし起動時は失敗し、遅い backend は待つ」
+     で確定。これに合わせて配線を次の 2 と 3 にした。
+2. **sccache の server の backend は起動時に `celerisctl scratch env --server` が選ぶ**: cache server の `/healthz` が応答すれば webdav
+   （`SCCACHE_WEBDAV_ENDPOINT` / `SCCACHE_WEBDAV_KEY_PREFIX=sccache` / `SCCACHE_WEBDAV_TOKEN` / `SCCACHE_SERVER_PORT` /
+   `SCCACHE_IDLE_TIMEOUT`、`SCCACHE_DIR` なし）、応答しなければ G2 の local disk（`SCCACHE_DIR`）。選んだ方を
+   `<scratch>/bin/sccache-server.mode` に書く。backend は起動時に決まるので、cache server を後から有効にしたら
+   `celeris-sccache.service` を再起動する（unit の順序は `After=` / `Before=` だけで、互いを引き込まない）。
+3. **dispatcher の `/healthz` の確認は、mode が webdav のときだけ**（D5 は「run の開始時に `/healthz` を見る」）。disk で動く sccache は
+   cache server の有無に関係なく使える。webdav で動く sccache に対して cache server が応答しなければ（hang を含む。U5 の「遅い
+   backend を待ち続ける」への備え）`RUSTC_WRAPPER` を与えない。client（run）の env は G2 のまま（webdav 系も token も入れない。
+   client が万一 server を起こしても local disk で起動する）。
+4. **unit の名前は `celeris-scratch-cache.service`**（D5 本文の `celeris-cache.service` から、依頼文の名前に合わせた）。
+   `celeris --config … --log-format text cache-server`。port の既定は D5 のとおり 4237。
+5. **認証は Bearer**（D5 は Basic を第一候補）。sccache 0.18 は `SCCACHE_WEBDAV_TOKEN` を読み `Authorization: Bearer` で送る（U5 で確認）。
+   token は **`<scratch>/cache-server.token`**（D5 は `~/.config/celeris/cache-server.token`。scratch pool はローカルで owner だけが
+   書ける場所なので同じ保護になり、人の手順が要らない）。cache server が初回に `/dev/urandom` から作る（0600）。
+   `[scratch.cache_server] token_file` で変えられる。`/healthz` と `/stats` は認証しない（loopback だけに bind）。
+6. **cache server の L1 は `<scratch>/cache-l1/<k0k1>/<key>`**（D1 / D5 は `sccache-l1/` を G3 で作り直す）。cache server が落ちたときの
+   fallback で sccache が `sccache-l1/` を disk cache として使い続けるので、同じ dir にすると sccache の LRU が cache server の entry を
+   消しうる。**2 つの dir が両方育つと最悪 `2 × l1_max_gb`**（実際にはどちらか一方だけが使われる。`scratch status` に両方出る）。
+   G2 の `sccache-l1/` は消さない。
+7. **設定の欄の名前**: `[scratch.l2]` = `enabled` / `dir`（既定 `$CELERIS_STATE_DIR/cache/sccache-l2`）/ `max_gb`（D1 の `l2_max_gb`、
+   既定 300）/ `flush_mbps`（D5 の `flush_mb_per_sec`、既定 25、MB = 10^6 byte、0 = 無制限）/ `flush_queue_max_mb`（4096）/
+   `get_timeout_ms`（D5 の `l2_get_timeout_ms`、500）/ `io_threads`（4）/ `gc_interval_secs`（86400）。`[scratch.cache_server]` =
+   `enabled` / `port`（4237）/ `token_file`。どちらも書かなくても動く（D7 の N-1 の規則）。L1 の上限は `[scratch] l1_max_gb` を使う。
+8. **L2 の I/O の閉じ込め**: GET の L2 は 4 スレッド・待ち行列 16 の `L2Exec` で `get_timeout_ms` まで待ち、タイムアウト・満杯・I/O
+   エラーは miss。**3 回連続の失敗で切り離し**（degraded）、5 s から倍々で最大 300 s のバックオフ、明けたら 1 回試して成功で復帰。
+   flusher の書き込みは flusher のスレッドで直接行う（NFS が hang すると flusher だけが止まり、`flush_oldest_age_secs` が伸びる）。
+   **L2 の root が見えない（mount が外れた・dir を消された）ときは作り直さずにエラー**（mount point の下のローカルに書かない）。
+   壊れた `.zst`（checksum 不一致・切れ）は miss にして消し、切り離しの理由には数えない。
+9. **L2 の書き込み**: tmp は同じ shard の `.<key>.zst.tmp-<pid>-<nanos>-<seq>`（D5 の `<key>.zst.tmp-<pid>-<ulid>` を隠しファイルにした。
+   GC の走査で 1 時間より古いものを片づける）→ write → fsync → rename。既にあれば書かない（flusher も stat してから）。
+10. **`.pending` は追記ログ**: `<key>`（積んだ）と `-<key>`（済んだ）。起動時に最後の記録が「積んだ」の key だけを積み直し、待ち行列が
+    空になったら切り詰める（D5 は「未 flush の key を書く」だけ）。
+11. **token bucket は負債を許す形**（不足分を待ってから書く）。burst は 1 秒分。区間 T に書く量は `burst + rate × T` を超えない
+    （`token_bucket_limits_bytes_over_any_interval`、`flusher_respects_the_token_bucket` は仮想の時計で 100 MB を 25.00 MB/s 以下）。
+12. **L2 の GC**: 走査して `max_gb` を超えていれば mtime の古い順に `× 0.9` まで消す。起動 60 s 後に初回（`l2_bytes` が分かる）、以後
+    `gc_interval_secs` ごと。LRU は mtime（L2 hit で 1 日 1 回まで touch。NFS の atime は当てにしない）。
+13. **HEAD は GET と同じに数える**（sccache は HEAD を送らない）。ファイルの PROPFIND は L1 の索引、無ければ L2 の stat（stats に数えない）。
+14. **`celeris cache-server` は scratch が無効なら起動しない**（L1 を NFS に置かない。D1 の原則）。SIGTERM で待ち行列を `.pending` に
+    残して止まる。
+15. **sccache 0.18 は multilevel cache（disk + remote）を内蔵している**（U5 の調査で判明）。D5 (b) のまま Celeris の cache server が
+    階層を持つ（L2 への書き込みを critical path の外に置く・帯域制限・切り離し・GC を Celeris が制御するため）。
+16. **U4 は保留のまま**: 手動 e2e（このリポジトリ、L2 はローカル）で L1 を消した後の再ビルドが Rust 165 / 196 hit・promote 582 で、
+    L1 hit と同じ率（壁時計 37.8 s）。NFS の遅延での頭打ちは未測定（本番の L2 で測る）。事前 promote は入れていない。
+17. **所見（提案 P-G3-2）**: 毎回 miss する約 30 crate（workspace のメンバーと `OUT_DIR` 依存。G2 の残り）は owner ごとに key が変わるので、
+    毎 run 約 100 MB を L2 に書き、二度と hit しない（L2 の LRU で回収されるが NFS の帯域を使う）。

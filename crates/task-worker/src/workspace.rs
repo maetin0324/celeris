@@ -64,6 +64,8 @@ pub struct LocalWorkspace {
     /// ADR-0043 D3（Phase 56）: `Some` なら `exec` をコンテナの中で走らせる（`[commands] setup` が
     /// 「その実行環境で」走るために要る）。`None` はホスト実行（従来どおり）。
     container: Option<crate::container::SharedPlan>,
+    /// ADR-0074 F5-fix: `exec`（判定コマンド）に足す環境変数（`CARGO_TARGET_DIR` など）。空なら従来どおり。
+    env: Vec<(String, String)>,
 }
 
 impl LocalWorkspace {
@@ -73,7 +75,14 @@ impl LocalWorkspace {
             dir: dir.into(),
             work_dir: None,
             container: None,
+            env: Vec::new(),
         }
+    }
+
+    /// ADR-0074 F5-fix: 判定コマンドに環境変数を足す（WU の run と同じ `CARGO_TARGET_DIR` で検査するため）。
+    pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
+        self.env = env;
+        self
     }
 
     /// ADR-0041 D1: `runs/` `inputs/` `artifacts/` は `dir`、コマンドは `work_dir`（worktree）で動かす。
@@ -148,6 +157,7 @@ impl Workspace for LocalWorkspace {
         command.arg("-c").arg(cmd);
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する。
         command.current_dir(self.work_dir());
+        command.envs(self.env.iter().cloned());
         // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
         let mut command = crate::container::wrap(command, self.container.as_deref());
         command.stdin(Stdio::null());

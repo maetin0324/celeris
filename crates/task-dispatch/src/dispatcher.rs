@@ -1293,6 +1293,9 @@ struct RunExtras {
     /// ADR-0074 D1.2（Phase F2b）: v2 の WU の run の成果物の置き場（`<task_dir>/wu/<key>/artifacts`。
     /// 並列の WU が同じ `artifacts/checkpoint.json` を上書きしないため）。`runs/` は Task のものを共有する。
     artifacts_dir_override: Option<PathBuf>,
+    /// ADR-0074 F5-fix: 自分の worktree で走る v2 の WU の run だけ `Some("wu-<work_unit_id>")`。
+    /// `run_worker` が `CARGO_TARGET_DIR` を `<repo-key>/wu-<id>` にする（兄弟 WU と target を共有しない）。
+    cargo_target_subdir: Option<String>,
 }
 
 struct ReviewEntry {
@@ -1740,6 +1743,8 @@ pub struct Dispatcher {
     /// が events から数え直すので安全側。ADR-0070 §2 D3 参照）。
     infra_backoff: HashMap<TaskId, OffsetDateTime>,
     disk_low: bool,
+    /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
+    removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
     disk_ready: bool,
     /// 「設定に合うプロバイダが無い」警告を出した（連続 tick で繰り返さない）タスク（ADR-0012 D2）。
     warned_unroutable: std::collections::HashSet<TaskId>,
@@ -2011,6 +2016,7 @@ impl Dispatcher {
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
             disk_low: false,
+            removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             disk_ready: true,
             warned_unroutable: std::collections::HashSet::new(),
             warned_cluster_tool: std::collections::HashSet::new(),
@@ -2557,6 +2563,8 @@ impl Dispatcher {
         self.abort_stale_runs()?;
         // ADR-0043 D2: **中止**されたタスクの worktree とブランチを消す（終端〈done / failed〉では消さない）。
         self.cleanup_cancelled_worktrees()?;
+        // ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
+        self.cleanup_work_unit_build_caches();
         let abort_ms = lap(&mut at);
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
@@ -3916,10 +3924,15 @@ impl Dispatcher {
                 tracing::warn!(%task_id, %run_id, error = %e, "could not extend the work unit lease for its checks");
             }
         }
+        // ADR-0074 F5-fix（不具合 1）: 検査も run と同じ `CARGO_TARGET_DIR` で走らせる（自分の
+        // worktree の WU は `<repo-key>/wu-<id>`、それ以外は `<repo-key>`）。
+        let own_tree = !self.work_unit_trees(&task, &wu)?.is_empty();
+        let check_env = self.check_cargo_target_env(&task, own_tree.then_some(wu.id.as_str()));
         let ws: task_worker::LocalWorkspace = match work_dir {
             Some(w) if w.is_dir() => task_worker::LocalWorkspace::new(&dir).with_work_dir(w),
             _ => task_worker::LocalWorkspace::new(&dir),
-        };
+        }
+        .with_env(check_env);
         let checks = wu.spec.checks.clone();
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
@@ -7743,6 +7756,8 @@ impl Dispatcher {
             }
         }
         let task_dir = ws.task_dir.clone();
+        // ADR-0074 F5-fix: 統合 WU の検査は Task の worktree で走るので `<repo-key>`。
+        let check_env = self.check_cargo_target_env(task, None);
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
         let task_id = task.id;
@@ -7776,7 +7791,8 @@ impl Dispatcher {
                             task_worker::LocalWorkspace::new(&task_dir).with_work_dir(w)
                         }
                         _ => task_worker::LocalWorkspace::new(&task_dir),
-                    };
+                    }
+                    .with_env(check_env);
                     let results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
                     run.checks = checks
                         .iter()
@@ -9844,6 +9860,11 @@ impl Dispatcher {
         }
         if let Some(w) = &wu_workspace {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
+            // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。
+            if let Some(wu) = &v2_wu {
+                extras.cargo_target_subdir =
+                    Some(task_worker::build_cache::work_unit_target_name(&wu.id));
+            }
         }
         if current_wu.is_some() {
             // ADR-0072 D22（Phase E3）: 計画のある Task の WU の run からは delegate.json を
@@ -10332,6 +10353,7 @@ impl Dispatcher {
             // 上書きする（ここでは常に `None`）。
             planner_permission_mode: None,
             artifacts_dir_override: None,
+            cargo_target_subdir: None,
         })
     }
 
@@ -11178,6 +11200,9 @@ impl Dispatcher {
         let remote_review = remote_settings.clone();
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する（元のリポジトリでは実行しない）。
         let review_work_dir = self.work_dir_for(&task);
+        // ADR-0074 F5-fix: reviewer の checks は Task の worktree で走るので `<repo-key>`
+        // （Task 単位の run と同じ target）。
+        let review_check_env = self.check_cargo_target_env(&task, None);
         // ADR-0043 D4: リポジトリが宣言した検査コマンド（`workspace.toml` の `[commands] check`）。
         // ADR-0046 D4（Phase 59）: `mode = prototype` は「明示の受け入れ条件だけ」なので使わない。
         let repo_checks = if task.mode == task_core::TaskMode::Prototype {
@@ -11192,10 +11217,15 @@ impl Dispatcher {
             let _review_lock = running_review_lock;
             let ws: Box<dyn Workspace> = match remote_review {
                 Some(settings) => Box::new(SshWorkspace::new(&dir, settings)),
-                None => Box::new(match review_work_dir {
-                    Some(work) if work.is_dir() => LocalWorkspace::new(&dir).with_work_dir(work),
-                    _ => LocalWorkspace::new(&dir),
-                }),
+                None => Box::new(
+                    match review_work_dir {
+                        Some(work) if work.is_dir() => {
+                            LocalWorkspace::new(&dir).with_work_dir(work)
+                        }
+                        _ => LocalWorkspace::new(&dir),
+                    }
+                    .with_env(review_check_env),
+                ),
             };
             let extras = ReviewExtras {
                 subject,
@@ -12471,6 +12501,119 @@ impl Dispatcher {
     }
 
     /// ADR-0043 D2: ワーカーのカレントディレクトリ（先頭のリポジトリ）。レビューの判定コマンドもここで動かす。
+    /// ADR-0074 F5-fix（不具合 1）: daemon が走らせる判定コマンド（WU の checks・統合 WU の検査・
+    /// reviewer の checks）に与える `CARGO_TARGET_DIR`。`run_worker` と同じ条件（共有ビルドキャッシュが
+    /// 有効、ローカルの git の作業場所）で、`work_unit_id` が `Some` なら `<repo-key>/wu-<id>`、`None` なら
+    /// `<repo-key>`。条件に当たらなければ空（従来どおり daemon の環境を継ぐ）。
+    fn check_cargo_target_env(
+        &self,
+        task: &Task,
+        work_unit_id: Option<&str>,
+    ) -> Vec<(String, String)> {
+        if !self.config.shared_build_cache {
+            return Vec::new();
+        }
+        let Some(ws) = self.task_workspaces_for(task) else {
+            return Vec::new();
+        };
+        let Some(repo) = ws.repos.first().filter(|r| r.is_git()) else {
+            return Vec::new();
+        };
+        let dir = match work_unit_id {
+            Some(id) => task_worker::build_cache::work_unit_cargo_target_dir(
+                &self.config.build_cache_dir,
+                &repo.source,
+                id,
+            ),
+            None => task_worker::build_cache::cargo_target_dir(
+                &self.config.build_cache_dir,
+                &repo.source,
+            ),
+        };
+        vec![(
+            task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+            dir.display().to_string(),
+        )]
+    }
+
+    /// ADR-0074 F5-fix（不具合 1）: 終端（done / cancelled / superseded）になった WU の target
+    /// （`<build_cache_dir>/cargo/<repo-key>/wu-<id>`）を消す。消す前に同じ親の中で
+    /// `.deleting-wu-<id>` へ rename し（この tick のうちにパスから消える）、中身の削除は別スレッドで
+    /// 行う（数 GB になりうるため tick を止めない）。前回途中で残った `.deleting-*` も消す。
+    /// 行が見つからない WU（別の DB・消えた Task）の target には触れない。
+    fn cleanup_work_unit_build_caches(&mut self) {
+        if !self.config.shared_build_cache {
+            return;
+        }
+        if self
+            .removing_build_caches
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let root = task_worker::build_cache::cargo_root(&self.config.build_cache_dir);
+        let Ok(repos) = std::fs::read_dir(&root) else {
+            return;
+        };
+        let mut doomed: Vec<PathBuf> = Vec::new();
+        for repo in repos.flatten() {
+            let Ok(entries) = std::fs::read_dir(repo.path()) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with(".deleting-") {
+                    doomed.push(entry.path());
+                    continue;
+                }
+                let Some(id) = name.strip_prefix(task_worker::build_cache::WORK_UNIT_TARGET_PREFIX)
+                else {
+                    continue;
+                };
+                match self.store.work_unit_get(id) {
+                    Ok(Some(row)) if row.status.is_terminal() => {
+                        let trash = repo.path().join(format!(".deleting-{name}"));
+                        match std::fs::rename(entry.path(), &trash) {
+                            Ok(()) => {
+                                tracing::info!(work_unit = %row.key, task_id = %row.task_id, path = %entry.path().display(), "build cache: removing the target of a finished work unit");
+                                doomed.push(trash);
+                            }
+                            Err(e) => {
+                                tracing::warn!(path = %entry.path().display(), error = %e, "build cache: could not move the work unit target aside")
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(work_unit_id = %id, error = %e, "build cache: could not read the work unit")
+                    }
+                }
+            }
+        }
+        if doomed.is_empty() {
+            return;
+        }
+        let busy = self.removing_build_caches.clone();
+        busy.store(true, std::sync::atomic::Ordering::SeqCst);
+        let spawned = std::thread::Builder::new()
+            .name("celeris-wu-target-rm".to_string())
+            .spawn({
+                let busy = busy.clone();
+                move || {
+                    for path in doomed {
+                        if let Err(e) = std::fs::remove_dir_all(&path) {
+                            tracing::warn!(path = %path.display(), error = %e, "build cache: could not remove a work unit target");
+                        }
+                    }
+                    busy.store(false, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+        if let Err(e) = spawned {
+            busy.store(false, std::sync::atomic::Ordering::SeqCst);
+            tracing::warn!(error = %e, "build cache: could not spawn the removal thread");
+        }
+    }
+
     fn work_dir_for(&self, task: &Task) -> Option<PathBuf> {
         self.task_workspaces_for(task)
             .and_then(|ws| ws.cwd().map(Path::to_path_buf))
@@ -13043,7 +13186,9 @@ async fn run_worker(
     let prior_review = to_prior_review(prior_review_from_events(&events));
     // ADR-0044 D2: 対話 run（人への返事だけをする run。Phase 28）にはコメントの書き方を出さない。
     let writes_comments = extras.conversation_addressee.is_none();
-    let req = RunRequest {
+    let cargo_target_subdir = extras.cargo_target_subdir.clone();
+    let mut req = RunRequest {
+        cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: task.clone(),
         workspace,
@@ -13114,12 +13259,24 @@ async fn run_worker(
         && let Some(repo) = worktree.as_ref().and_then(|wt| wt.repos.first())
         && repo.is_git()
     {
-        let env = [task_worker::build_cache::cargo_target_dir_env(
-            build_cache_dir,
-            &repo.source,
+        // ADR-0074 F5-fix（不具合 1）: 並列の WU は `<repo-key>/wu-<id>`（兄弟 WU の別ブランチの
+        // 生成物を混ぜない）。Task 単位の run は従来どおり `<repo-key>`。
+        let target = match &cargo_target_subdir {
+            Some(sub) => {
+                task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source).join(sub)
+            }
+            None => task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source),
+        };
+        let env = [(
+            task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+            target.display().to_string(),
         )];
         match adapter.with_env(&env) {
-            Some(wrapped) => wrapped,
+            Some(wrapped) => {
+                // request.json（監査）に実際に与えた値を残す。
+                req.cargo_target_dir = Some(target);
+                wrapped
+            }
             None => {
                 tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
                 adapter
@@ -28039,8 +28196,6 @@ mod tests {
         gate: tokio::sync::Notify,
         /// planner run（`context.execution_planner`）が順に書く `execution-plan.json`（F5-fix）。
         planner_outputs: StdMutex<std::collections::VecDeque<String>>,
-        /// run ごとの `(key, CARGO_TARGET_DIR)`（request の環境。F5-fix）。
-        cargo_target_dirs: StdMutex<Vec<(String, Option<String>)>>,
     }
 
     impl ParallelWuAdapter {
@@ -28057,7 +28212,6 @@ mod tests {
                 hold: StdMutex::new(std::collections::HashSet::new()),
                 gate: tokio::sync::Notify::new(),
                 planner_outputs: StdMutex::new(std::collections::VecDeque::new()),
-                cargo_target_dirs: StdMutex::new(Vec::new()),
             }
         }
 
@@ -29202,6 +29356,189 @@ mod tests {
             .find(|w| w.key == "impl-quota")
             .unwrap();
         assert_eq!(quota.objective, "do impl-quota, this time correctly");
+    }
+
+    /// ADR-0074 F5-fix（不具合 1）: `with_env` を受け、`runs/<run_id>/request.json` を書き（実アダプタの
+    /// `write_run_request` と同じく `RunRequest` をそのまま）、与えられた `CARGO_TARGET_DIR` に cargo の
+    /// 生成物の代わりのファイルを置く WU 用アダプタ。
+    #[derive(Clone)]
+    struct TargetDirAdapter {
+        env: Vec<(String, String)>,
+        delay: Duration,
+        /// `(key, request.json のパス)`。
+        seen: Arc<StdMutex<Vec<(String, PathBuf)>>>,
+    }
+
+    #[async_trait]
+    impl WorkerAdapter for TargetDirAdapter {
+        fn id(&self) -> &str {
+            "instant"
+        }
+        fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+            let mut next = self.clone();
+            next.env.extend(extra.iter().cloned());
+            Some(Arc::new(next))
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            run_id: &str,
+            _limits: RunLimits,
+            _sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            let key = req
+                .context
+                .work_unit
+                .as_ref()
+                .map(|w| w.key.clone())
+                .unwrap_or_else(|| "atomic".to_string());
+            let run_dir = req.workspace.join("runs").join(run_id);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            let request = run_dir.join("request.json");
+            std::fs::write(&request, serde_json::to_string_pretty(&req).unwrap()).unwrap();
+            if let Some((_, target)) = self.env.iter().find(|(k, _)| k == "CARGO_TARGET_DIR") {
+                let debug = PathBuf::from(target).join("debug");
+                std::fs::create_dir_all(&debug).unwrap();
+                std::fs::write(debug.join("libtask_core.rlib"), key.as_bytes()).unwrap();
+            }
+            self.seen.lock().unwrap().push((key, request));
+            tokio::time::sleep(self.delay).await;
+            Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "ok".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            })
+        }
+    }
+
+    /// ADR-0074 F5-fix（不具合 1 の再現、タスク 01M3HS2E19BRC021ZXMDZANP5B）: 並列の 2 WU の run は
+    /// 別々の `CARGO_TARGET_DIR`（`<repo-key>/wu-<id>`）を受け取り、`request.json` にその値が残る。
+    /// WU の checks も同じ値で走り、統合 WU の検査・reviewer の checks は `<repo-key>`。WU が done に
+    /// なると daemon がその target を消す。
+    #[tokio::test]
+    async fn parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_when_done() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let log = logs.path().join("check-env.log");
+        let record = format!("echo \"$CARGO_TARGET_DIR\" >> {}", log.display());
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), &format!("{record} # review"));
+        store.insert(&task).unwrap();
+        let with_check = |key: &str| {
+            let mut w = v2_wu(key, "build", &[]);
+            w.checks = vec![task_core::WorkUnitCheck {
+                cmd: format!("{record} # {key}"),
+                expect_exit: 0,
+            }];
+            w
+        };
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["build"],
+            vec![with_check("a"), with_check("b")],
+        );
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let adapter = Arc::new(TargetDirAdapter {
+            env: Vec::new(),
+            delay: Duration::from_millis(50),
+            seen: seen.clone(),
+        });
+        let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+        d.config.shared_build_cache = true;
+        d.config.build_cache_dir = cache.path().to_path_buf();
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 800, || s
+                .get(id)
+                .ok()
+                .flatten()
+                .is_some_and(|t| t.status == Status::Done))
+            .await,
+            "{:?}",
+            events_of(&store, task.id)
+        );
+
+        let units = store.work_units_for(task.id).unwrap();
+        let id_of = |k: &str| units.iter().find(|u| u.key == k).unwrap().id.clone();
+        let repo_target = task_worker::build_cache::cargo_target_dir(cache.path(), repo.path());
+        let expected: std::collections::BTreeMap<String, PathBuf> = ["a", "b"]
+            .iter()
+            .map(|k| {
+                (
+                    k.to_string(),
+                    task_worker::build_cache::work_unit_cargo_target_dir(
+                        cache.path(),
+                        repo.path(),
+                        &id_of(k),
+                    ),
+                )
+            })
+            .collect();
+        let runs = seen.lock().unwrap().clone();
+        let mut recorded = std::collections::BTreeMap::new();
+        for (key, request) in &runs {
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(request).unwrap()).unwrap();
+            recorded.insert(
+                key.clone(),
+                PathBuf::from(v["cargo_target_dir"].as_str().expect("cargo_target_dir")),
+            );
+        }
+        assert_eq!(recorded, expected, "{runs:?}");
+        assert_ne!(recorded["a"], recorded["b"]);
+
+        // WU の checks は WU ごと、統合 WU の検査と reviewer の checks は `<repo-key>`。
+        let lines = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = lines.lines().collect();
+        for dir in expected.values() {
+            assert!(
+                lines.iter().any(|l| Path::new(l) == dir.as_path()),
+                "{lines:?}"
+            );
+        }
+        assert!(
+            lines.iter().any(|l| Path::new(l) == repo_target.as_path()),
+            "{lines:?}"
+        );
+        assert!(lines.iter().all(|l| !l.is_empty()), "{lines:?}");
+
+        // done の WU の target は消える（rename は tick の中、中身の削除は別スレッド）。
+        assert!(
+            run_until(&mut d, 200, || expected.values().all(|p| !p.exists())).await,
+            "done の WU の target が残っている"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::fs::read_dir(&repo_target)
+            .map(|rd| {
+                rd.flatten()
+                    .any(|e| e.file_name().to_string_lossy().starts_with(".deleting-"))
+            })
+            .unwrap_or(false)
+            && Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            d.tick().unwrap();
+        }
+        let left: Vec<String> = std::fs::read_dir(&repo_target)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            left.iter()
+                .all(|n| !n.starts_with("wu-") && !n.starts_with(".deleting-")),
+            "{left:?}"
+        );
     }
 
     /// ADR-0074 §6 F2 (g): 兄弟が走っている間の WU の failed / question で Task は遷移せず、in-flight が

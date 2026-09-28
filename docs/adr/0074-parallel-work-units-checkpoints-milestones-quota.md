@@ -573,6 +573,13 @@ ADR-0033 D2 監査 D-3）。新しい案件計画（D3.3）はマイルストー
 | 案件計画のマイルストーン数 | 12 | 新設 | 拒否 → 1 回再試行 |
 | `max_task_tokens` | 無し | 変えない。**quota の上限は作らない**（D4.3） | — |
 
+> **注意（Phase F5-fix で追記）: 並列数 × target の容量。** 自分の worktree で走る v2 の WU は `CARGO_TARGET_DIR` を WU ごと
+> （`<build_cache_dir>/cargo/<repo-key>/wu-<work_unit_id>`）に持つ。Rust のリポジトリでは 1 つの target が数 GB〜十数 GB になるので、
+> ビルドキャッシュのディスクには最悪「`max_parallel_work_units` × 並列に走る Task の数 × 1 target の大きさ」が同時に要る
+> （本番は 252G）。daemon は WU が終端（done / cancelled / superseded）になった時点でその target を消すが、並列に走っている間の
+> 分は消せない。`min_free_disk_mb` の検査（`build_cache_dir` を含む）が新しい run を止める最後の砦になる。大きなリポジトリで
+> 並列数を上げるときはこの容量を見積もってからにする。
+
 ## 5. 監査・互換・SPEC との関係
 
 ### 5.1 監査（events が正本）
@@ -1165,3 +1172,32 @@ E6 の fixture `crates/task-worker/tests/fixtures/codex-stream.jsonl` は従来 
    同じ DOM の縦の一覧（トポロジカル順）。案件計画の途中目標は DAG 側で判定し、下の「途中目標」の一覧には `plan_key` の無いものだけ。
    `GET /projects/{id}` に `project_plan`（`ProjectPlanDagView`。止まっている理由 `stop_reason` は celeris が決める）、受信箱の
    `DraftGroup` に `project_plan{project_id, version, supersedes}`（F4a の提案）。
+
+## Phase F5-fix 実装時の逸脱・明確化（2026-09-28）
+
+F5-1 dogfood（3 回目、タスク 01M3HS2E19BRC021ZXMDZANP5B）で見つかった 2 つの不具合の修正。
+
+1. **replan の done の不変条件と daemon が足した WU（D1.4 / D5.3、F2b の逸脱節の実装漏れ）**: F2b は `task_ops::execution::replan`
+   の中でだけ daemon が足した WU（`kind = integrate` の統合 WU、v2 で `phase` を持ち計画の spec に無い統合の repair WU）を done の
+   不変条件から外していた。planner run の出力を検証する dispatcher 側（`validate` の手前）は done の WU をすべて渡していたので、
+   差分（`execution-plan-delta/1`）を当てた計画（daemon の WU を含まない）に対して「done work unit integrate-<phase> must not change
+   on replan」が必ず出た。判定を `task_core::{is_daemon_added_work_unit, replan_done_work_units}` に移し、両方が同じ関数を使う。
+   daemon が足した WU は base から不変のまま持ち越す（`replan` の削除の段で superseded にしない。統合の repair WU は、その工程が
+   新しい版から消えたときだけ superseded）。全体形式の replan でも planner は統合 WU を書かなくてよい（daemon が補う。書けば従来
+   どおり予約語として拒否）。`DoneWorkUnitChanged` / `ReservedKind` / `ReservedKey` の文言に「daemon が足した WU は書かなくてよい」
+   を足す（`DAEMON_ADDED_HINT`）。
+2. **WU ごとの `CARGO_TARGET_DIR`（ADR-0066 D1 の明確化）**: 自分の worktree で走る v2 の WU（`prepare_work_unit_workspace` が
+   worktree を切ったもの）の run は `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>/wu-<work_unit_id>`。`<key>` には WU の
+   **行の id**（ULID）を使う（WU の key は Task の中でだけ一意で、同じリポジトリの別 Task が同じ key を持ちうるため）。replan で
+   持ち越した WU は行の id が変わらないので、やり直しでも同じ target を使い回す。Task 単位の run（暗黙 WU・v1・並列 1 に倒した
+   Task・Task の worktree を共有する統合の repair WU）は従来どおり `<repo-key>`。
+3. **daemon の検査にも同じ target**: 以前は daemon が走らせる判定コマンド（`LocalWorkspace::exec`）は `CARGO_TARGET_DIR` を与えず
+   daemon の環境を継いでいた。WU の checks は run と同じ値（自分の worktree があれば `wu-<id>`、無ければ `<repo-key>`）、統合 WU の
+   検査と reviewer の checks は Task の worktree で走るので `<repo-key>` を与える（`LocalWorkspace::with_env`）。条件は run と同じ
+   （共有ビルドキャッシュが有効、ローカルの git の作業場所。remote は対象外）。
+4. **監査**: `RunRequest.cargo_target_dir`（`Option`、`request.json` に出る）に daemon が実際に与えた値を残す（`with_env` を持たない
+   アダプタでは `None`）。worker-protocol の schema が 1 欄増える（追加のみ）。
+5. **終端の WU の target の削除**: tick ごとに `<build_cache_dir>/cargo/*/wu-*` を見て、行が終端（done / cancelled / superseded）なら
+   同じ親の中で `.deleting-wu-<id>` に rename（その tick のうちに元のパスから消える）してから別スレッドで `remove_dir_all` する
+   （数 GB を tick の中で消さない。同時に 1 本）。途中で残った `.deleting-*` も次の掃除で消す。`failed` / `blocked` は replan で同じ
+   行がやり直しうるので残す。行が見つからない target（別の DB、消えた Task）には触れない。

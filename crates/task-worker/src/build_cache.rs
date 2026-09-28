@@ -41,6 +41,30 @@ pub fn cargo_target_dir(build_cache_dir: &Path, repo_source: &Path) -> PathBuf {
         .join(repo_cache_key(repo_source))
 }
 
+/// ADR-0074 F5-fix: WU ごとの target の名前の接頭辞（`<repo-key>/wu-<work_unit_id>`）。
+pub const WORK_UNIT_TARGET_PREFIX: &str = "wu-";
+
+/// ADR-0074 F5-fix: 並列の WU（自分の worktree で走る v2 の WU）の `CARGO_TARGET_DIR`
+/// （`<build_cache_dir>/cargo/<repo-key>/wu-<work_unit_id>`）。兄弟 WU の別ブランチの生成物が
+/// 混ざらないよう WU ごとに分ける。`work_unit_id` は WU の行の id（ULID。Task をまたいで一意）。
+pub fn work_unit_cargo_target_dir(
+    build_cache_dir: &Path,
+    repo_source: &Path,
+    work_unit_id: &str,
+) -> PathBuf {
+    cargo_target_dir(build_cache_dir, repo_source).join(work_unit_target_name(work_unit_id))
+}
+
+/// `wu-<work_unit_id>`。
+pub fn work_unit_target_name(work_unit_id: &str) -> String {
+    format!("{WORK_UNIT_TARGET_PREFIX}{work_unit_id}")
+}
+
+/// `<build_cache_dir>/cargo`（WU の target の掃除が走査する根）。
+pub fn cargo_root(build_cache_dir: &Path) -> PathBuf {
+    build_cache_dir.join(CARGO_SUBDIR)
+}
+
 /// `run_worker` に渡す環境変数の 1 行（`(CARGO_TARGET_DIR, <path>)`）。
 pub fn cargo_target_dir_env(build_cache_dir: &Path, repo_source: &Path) -> (String, String) {
     (
@@ -70,6 +94,16 @@ mod tests {
         let a = repo_cache_key(Path::new("/home/u/workspace/benchfs"));
         let b = repo_cache_key(Path::new("/home/u/other/benchfs"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn work_unit_target_dir_is_nested_under_the_repo_key() {
+        let repo = Path::new("/home/u/workspace/benchfs");
+        let dir = work_unit_cargo_target_dir(Path::new("/cache"), repo, "01ABC");
+        assert_eq!(
+            dir,
+            cargo_target_dir(Path::new("/cache"), repo).join("wu-01ABC")
+        );
     }
 
     #[test]

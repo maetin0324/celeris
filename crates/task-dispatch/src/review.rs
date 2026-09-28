@@ -744,6 +744,7 @@ async fn run_reviewer_inner(
         review_task.assignee = Some(node.id.clone());
     }
     let req = RunRequest {
+        cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
         task: review_task,
         workspace: workspace_dir.to_path_buf(),

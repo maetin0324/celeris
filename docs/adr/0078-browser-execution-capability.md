@@ -1,7 +1,7 @@
 # ADR-0078: 既存 harness に agent-browser execution capability を付与する
 
 ---
-tasks: [01M3MBV3AKXZGEG5RXR60XC62J]
+tasks: [01M3MBV3AKXZGEG5RXR60XC62J, 01M3MFS5T52FXA63W4V10XGC4S]
 ---
 
 - 日付: 2026-09-28
@@ -27,6 +27,14 @@ tasks: [01M3MBV3AKXZGEG5RXR60XC62J]
 
 Celeris CLI shim は固定 command grammar の転送と監査だけを行う。ref 解決や navigation 戦略を再実装しない。任意 flags/path/eval/auth を受け付けず、操作の可否は agent-browser の policy を併用する。
 
+### D1 補足: 固定版と調査の証拠範囲
+
+2026-09-28 に手元の npm 配布物 `agent-browser/package.json` と native CLI `--version` で **0.38.1** を確認した。同梱 `README.md`、`skill-data/core/references/{session-management,streaming,trust-boundaries}.md`、`plugin --help` を契約確認に使う。配布物のソースは JS launcher と導入スクリプト等であり、native Rust 本体は同梱されていない。上記 tag commit と native binary の再現ビルド一致は未確認。D4/D7 の内部 policy 評価の注意は既存検証に基づく前提として維持し、更新時には同梱文書だけで安全性を判定せず負例を再実行する。
+
+ローカル CLI で OpenCode **1.18.31** の ACP/run/session/skill・plugin コマンド、Claude Code **2.1.283** の print/stream-json/session/skills/MCP・plugin オプションを確認した。両者の会話 session と browser auth state は別物であり、browser session の分離は Celeris と substrate の責務とする。Browser Use の配布物・一次資料は手元に見つからず、その skill/CLI、auth state、policy、stream、credential provider の互換性は**未確認**。これを Phase 1 の依存や安全性根拠にしない。
+
+agent-browser 自身にも `chat`/dashboard AI Chat があるが、採用する loop は既存 harness のものだけである。同梱 skill の広い操作例（fill、cookie import、restore 等）は MVP の許可ではなく、Celeris の制限された CLI 契約が優先する。調査表・候補比較は当該 WorkUnit の成果物に置き、本節は採用契約の証拠範囲だけを記録する。
+
 ## D2. Capability と routing 契約
 
 Phase 1 の公開 schema は `task-core/src/browser.rs`:
@@ -45,6 +53,10 @@ Phase 1 の公開 schema は `task-core/src/browser.rs`:
 task の `skills: ["browser-enabled"]` は能力の**要求**であり grant ではない。`matching::decide` は有効な grant を持つ node のみ候補とする。`add::build_task` は既定 adapter を `acp`、明示 `claude-code` を許可し、未対応 adapter を拒否する。capability を失う silent fallback はしない。worker 起動時にも profile と adapter を再検証する。
 
 profile/browser-specialist は通常の org profile の拡張点として残す。Phase 4 の backend selector は capability の実行要件と harness の提供能力を照合し、browser専用 backend も同じ task/run/event 契約に接続する。
+
+### D2 補足: 将来 backend の適合契約（Proposed）
+
+browser-specialist は通常の org profile として `browser-enabled`、長時間実行予算、許可 origin、利用可能 harness を管理者が設定する。profile 名だけでは credential grant を与えない。将来の selector は `isolated_session / action_policy / network_policy / credential_lease / human_control / live_view` の要求と backend が検証済みの能力を照合する。Browser Use 等は既存 agent loop を含む backend として `WorkerAdapter` に接続し、二重に loop を実装しない。不足能力があれば routing を拒否し、fallback 時も同じ制約と新しい run/session を要求する。
 
 ## D3. Session、state、task lifecycle
 
@@ -72,6 +84,21 @@ profile/browser-specialist は通常の org profile の拡張点として残す�
 MVP の waiting は live browser の持ち越しを保証しない。再開runは新session。正常終了は `close`、cancel/drop も session固有 cleanup を試みる。close失敗は非retryable errorとFAILEDへ写し、upstream idle timeoutを5分に設定する。daemon/host crash後の全session reconcile、durable lease/wait、pause/resume は後続対象。GUIはrunのactive状態も照合し、古いRUNNING eventだけでLive Viewを表示しない。
 
 Phase 2 は外部待ちの意図と期限をdurable recordへ保存し、worker slotを解放して再投入する。upstream confirmationには短いtimeoutがあるため、承認待ちの間ずっとpending CLIを保持せず、Celeris承認後に新しい操作/leaseを開始する。retryはidempotency keyで重複実行を防ぐ。
+
+### D3 補足: durable wait と状態遷移（Proposed / Phase 2 以降）
+
+`BrowserWait { wait_id, task_id, run_id, session_id, reason, approval_id?, credential_ref?, deadline, resume_key, policy_revision }` を制御側に保存し、秘密・ページ本文を入れない。browser の存続期限と worker slot の占有は別に管理する。
+
+| 遷移 | 条件と副作用 |
+| --- | --- |
+| RUNNING → WAITING_FOR_AUTH | broker の認証・unlock・MFA が必要。observation と agent 操作を止め、期限付き wait を保存 |
+| RUNNING → WAITING_FOR_APPROVAL | task policy が要求する操作単位の承認が未取得。対象操作と policy revision を束縛 |
+| RUNNING → WAITING_FOR_HUMAN | 質問または takeover が必要。制御 lease を取り上げてから人へ渡す |
+| WAITING_* → RUNNING | 正当な回答/承認、期限内、最新 policy と origin の再検証、単一 controller の取得が全て成功 |
+| RUNNING → COMPLETED | harness 完了と cleanup 成功を確認 |
+| RUNNING / WAITING_* → FAILED | 拒否・待機期限切れ・cancel・回復不能 error。lease 失効、browser cleanup、理由は固定 code |
+
+Phase 1 の question は既存 D3 のとおり browser を閉じる。後続で同一 session を再開できるのは生存・排他・policy を確認した場合だけで、失われていれば新 run/session を作り承認を取り直す。COMPLETED/FAILED を直接 RUNNING に戻さない。副作用を送信済みか不明な crash は idempotency key だけで安全に再送できないため、照合または人間確認を要する。wait の期限到達・再起動時は reconciler が一度だけ終端化し、承認通知の重複は `resume_key` で排除する。
 
 ## D4. Policy、events、artifacts
 
@@ -106,6 +133,25 @@ screenshots、抽出JSON、downloadはrunごとのtask artifacts下へgenerated 
 
 **秘密が存在しないという一般保証ではない。**公開ページでも文字列・画像・downloadに秘密やPIIが含まれ得る。Phase 1 の保証範囲はcredential入力経路を設けないこと、秘密参照だけのcontract、危険操作の既定拒否、操作eventへ任意内容を転記しないこと。DOM/screenshotの任意秘密除去、認証後の画面への秘密再表示防止は未実装である。
 
+### D4 補足: task policy の生成と監査契約（Proposed）
+
+```text
+BrowserTaskPolicy {
+  policy_id, revision,
+  navigation_origins: [HTTPS origin],
+  network_domains: [host pattern],
+  allowed_actions, approval_actions,
+  credential_policy_ids, artifact_policy_id
+}
+EffectiveBrowserPolicy = admin grant ∩ task policy ∩ backend supported actions
+```
+
+ページ・モデルが提案する task policy は grant を狭める要求に限り、広げる変更は認証済み管理者の別経路で行う。生成器は不明 action/壊れた schema/空の実効許可集合を起動前に拒否し、版ごとの内部 action 名へ写像する。deny は allow/承認より優先し、承認は deny を解除しない。生成 policy の revision/hash を run と承認へ結び付け、変更後の古い承認を再利用しない。cleanup に必要な close は agent の業務操作とは分けて supervisor が保持する。
+
+navigation は top-level・iframe・popup・redirect ごとに origin を検証し、subresource/network は fetch・画像・script・WS 等の通信先を別に制限する。CDN を通信先に追加しても navigation は許可しない。現行 upstream の単一 allowlist の union ではこの意味を実現できないため、P2-A は既存の enforcement 接点で分離できることを先に検証する。できなければ共通集合の MVP を維持し、分離を必要とする task は拒否して P4-A に依存させる。DNS/IP やポートの制約を origin/host パターンで代用しない。
+
+将来 event は D4 の参照フィールドに加え `schema_version, actor_id, decision_code, policy_revision` を持つ。broker は grant/use/deny/expire/revoke を永続監査し、秘密取得前に記録不能なら拒否する。`sequence` は task の event 順序で、browser の stream sequence とは分ける。live URL/query、console、frame、credential 値は監査 event へコピーしない。認証後 artifact は policy に従って capture を止めるか保留領域へ置き、閲覧 ACL・保管期限・削除を適用する。
+
 ## D5. CredentialBroker（Proposed / Phase 2）
 
 agent-browser はout-of-process `agent-browser.plugin.v1` の `credential.read` / `credential.resolve` を持つ。Celeris broker adapter はこの接点を使い、provider SDKをbrowser coreへ追加しない。
@@ -133,6 +179,26 @@ originはscheme/host/effective portの完全一致、redirect時再確認、expi
 
 plugin/coreのredaction機構を再利用するが、入力後の秘密はページやCDPから再取得され得る。認証区間のobservation停止・再開、screenshot漏洩試験をPhase 2に含め、より強い要件ではPhase 4のbroker→extension/injectorによるE2E injectionを評価する。
 
+### D5 補足: celeris-credentiald と CredentialProvider 抽象（Proposed）
+
+broker の仮称を **celeris-credentiald** とし、harness とは別 process/権限で配置する。1Password、Bitwarden、手動登録は次の同じ内部 interface を実装する。特定 vendor の SDK や API が利用可能という確認は未了で、Google Password Manager は必須にしない。
+
+```text
+CredentialProvider {
+  capabilities() -> { interactive_unlock, totp, revoke, persistent_session }
+  resolve(CredentialRef, AuthorizedLeaseContext) -> SecretEnvelope | NeedsHuman | ErrorCode
+  revoke(lease_id) -> ResultCode
+}
+AuthorizedLeaseContext { lease_id, task_id, run_id, session_id, exact_origin, expires_at }
+SecretEnvelope { username?, password?, otp? } // broker/plugin 専用、保存・LLM 出力不可
+```
+
+lease 発行/承認/TTL/uses/origin/audit は broker が担当し、provider は vendor 認証と取得だけを担当する。provider の revoke が未対応でも broker は即時に以後の使用を拒否する（既に発行されたサイト側 cookie の失効とは別）。手動登録は認証済み人の専用 UI/IPC で受け付け、task 入力や LLM 会話へ秘密を渡さない。MFA の人間待ちは WAITING_FOR_AUTH とし、TOTP seed は provider 側に留める。
+
+upstream は `credential.read` capability と `credential.resolve` request を持つが、task/run/lease の Celeris 用認証を提供するわけではない。固定 plugin bridge が peer 認証済み broker IPC を呼び、制御側発行の session binding を参照する。モデルが渡した item 名・URL・lease_id 単体を権限証明にしない。取得直前と注入直前の現在 origin、および redirect/iframe の対象 origin を trusted browser 側で照合できることを P2-B の受け入れ条件とする。upstream plugin に必要な情報/原子性が無ければ broker-only で解決したとせず、認証利用を保留して P4-B に依存させる。
+
+secret は broker→plugin→browser の短命メモリ経路だけに限定し、プロセス引数・環境・一時ファイル・trace・core dump に出さない。通常の LLM-facing 結果は `CredentialUseResult` のみとする。ただし同一 UID からのメモリ/IPC/CDP 取得への強い隔離は Phase 4 が前提であり、この interface だけでは成立しない。
+
 ## D6. GUI と運用
 
 Phase 1 は `BrowserRunsPanel` をtask/run画面へ追加し、現在のstate/sessionと **Open Browser Live View** を示す。live_urlはoperatorが設定したHTTPS dashboard base、現在activeなRUNNINGだけクリック可能。外部リンクに `noopener noreferrer` を付ける。未設定/完了時は理由を表示する。自前frame転送は作らない。
@@ -142,6 +208,12 @@ agent-browser dashboardは独立processでloopbackにbindし、同一namespace�
 operatorはCeleris用namespaceでdashboardを起動し、認証済みHTTPS reverse proxyとupstream exact allowed-originsを設定する。upstream初回fragment token/cookieはDB・event・LLMへ保存せず、人へ別経路でbootstrapする。proxyはcookiesをログから除外し、Celeris API tokenを別originへ転送しない。多人数/task別ACL環境へ共有dashboardをそのまま開放しない。
 
 Phase 3 は既存WS `frame/status/tabs/url/console/event` を認証済みCeleris proxy経由で統合する。pause/takeover/resume/stopはharness実行状態とbrowser制御leaseを同期し、human/agentの二重操作を防ぐ。観測UIは復元可能なviewとし、監査記録を置き換えない。
+
+### D6 補足: stream と制御 API の役割（Proposed / Phase 3）
+
+同梱 `streaming.md` で確認できる server message は `frame/status/tabs/url/console`、client message は mouse/keyboard/touch/config/ack である。一般化された `event` message の wire schema はこの資料では**未確認**。D6 の将来 UI にある event は Celeris の永続 event feed で供給し、upstream activity feed の転送を監査の代用にしない。
+
+proxy は接続時と再接続時に task/run ACL を確認し、ブラウザへ raw CDP/port/token を公開しない。frame・URL・console は機密となり得るため認証区間で停止し、通常監査ログに保存しない。pause は新しい agent 操作を停止して実行中操作の収束を確認、takeover は期限付き controller lease を人へ移譲、resume は lease を回収して fresh snapshot と policy/origin を再確認、stop は task cancel と lease 失効/cleanup を同期する。制御要求には expected state/version と idempotency key を付け、切断だけで agent を自動再開しない。これらは upstream の同名コマンドの存在を仮定した API ではなく Celeris の制御契約である。
 
 ## D7. Threat model と限界
 
@@ -156,6 +228,14 @@ Phase 3 は既存WS `frame/status/tabs/url/console/event` を認証済みCeleris
 | dashboard経由の他task制御 | operator専用namespace/proxy、全session画面であることを明示。Phase 3/4でtask別authorization |
 | stale/orphan browser | normal/drop cleanupとGUI active照合。host crash・悪意あるprocessの完全reapingはPhase 4 |
 | download / screenshot | generated path、登録時検証、サイズ制限。内容はuntrusted、downloadの実行を自動化しない |
+
+### D7 補足: prompt injection と container/egress の境界
+
+ページ本文に加え aria/ref label、download、console、error、画像中の文字も untrusted と扱う。content boundary は由来の表示であり検出器や権限制御ではない。注入された「policy を変更」「別 task の session を使う」「秘密を送る」という指示は拒否し、固定 code の policy_block のみ監査する。ページ由来の要求で credential 承認 UI や shell tool の権限を拡張しない。許可サイト自体への情報送信や destructive click は domain 制限だけでは防げず、後続の操作単位承認を要する。
+
+P4-A は worker と browser を task 単位の隔離 runtime に置き、broker/control-plane を別 UID/namespace に分離する。host network、host home、個人 browser profile、container socket、他 task artifacts を mount しない。policy/config は worker から read-only、書込みは run scratch と検査対象 artifacts だけに限定する。UID、mount、process/IPC、CPU/メモリ/存続期限も制約する。
+
+egress は既定拒否とし、許可 proxy/DNS 経由だけに固定する。直接 IP、loopback/private/link-local/metadata endpoint、IPv6、DNS rebinding、redirect、WebSocket、QUIC/WebRTC 等の bypass を負例に含める。worker の shell 通信にも同じ制約を適用し、container 化だけで network 制約済みとしない。broker socket は認可 bridge だけへ、CDP/stream は制御側だけへ露出する。private service を対象にする例外は origin と接続先を管理者が別途指定する。隔離の実装選択は後続だが、この境界を満たさない runtime は機密 task に routing しない。
 
 ## D8. 小さな後続タスクと依存関係
 

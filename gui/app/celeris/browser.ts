@@ -1,6 +1,6 @@
 import type { CelerisClient } from "./client.server";
 import { CelerisError } from "./errors";
-import type { BrowserRun, EventsPage } from "./types";
+import type { BrowserRun, BrowserWait, BrowserWaitList, EventsPage } from "./types";
 
 /** Dedicated lifecycle feed: generic progress and user-selected event filters are never trusted. */
 export async function loadBrowserRuns(
@@ -40,4 +40,24 @@ export async function loadBrowserRuns(
     afterSeq = next;
   }
   throw new Error("Browser lifecycle history exceeds page limit");
+}
+
+/** ADR-0080 D5: task の wait 一覧（非秘密）。この API を持たない N-1 の celeris（404/400）は空にする。 */
+export async function loadTaskBrowserWaits(
+  client: CelerisClient,
+  taskId: string,
+  signal: AbortSignal,
+): Promise<BrowserWait[]> {
+  try {
+    const list = await client.get<BrowserWaitList>(`/tasks/${encodeURIComponent(taskId)}/browser/waits`, { signal });
+    return list.items.filter((w) => w.task_id === taskId);
+  } catch (e) {
+    if (e instanceof CelerisError && (e.status === 404 || e.status === 400 || e.status === 405)) return [];
+    throw e;
+  }
+}
+
+/** 人の操作を待っている wait か。 */
+export function isOpenBrowserWait(w: BrowserWait): boolean {
+  return w.state === "pending";
 }

@@ -7,6 +7,7 @@ import { celerisErrorResponse, isCelerisUnavailable } from "~/celeris/errors";
 import { runInboxAction } from "~/celeris/route-actions.server";
 import type { ApprovalItem, AttentionItem, DraftGroup, Inbox, QuestionItem } from "~/celeris/types";
 import { ApprovalArtifactPreview } from "~/components/ApprovalArtifactPreview";
+import { BrowserWaitInboxList } from "~/components/BrowserWaitsPanel";
 import { RetryFlash, TransitionFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { LocalTime } from "~/components/LocalTime";
@@ -160,6 +161,19 @@ export default function InboxPage({ loaderData }: Route.ComponentProps) {
           </ul>
         )}
       </SectionCard>
+
+      {(inbox.browser_waits ?? []).length > 0 && (
+        // ADR-0080 D5: credential の登録依頼・一回だけの承認（操作は task 画面の本人専用フォーム）
+        <SectionCard
+          sectionTestId="browser-waits-section"
+          headingId="browser-waits-heading"
+          icon="shield"
+          tone="warning"
+          heading={`ブラウザの人待ち（${inbox.counts.browser_waits ?? inbox.browser_waits.length}）`}
+        >
+          <BrowserWaitInboxList items={inbox.browser_waits} />
+        </SectionCard>
+      )}
 
       <SectionCard
         sectionTestId="questions-section"

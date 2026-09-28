@@ -55,19 +55,25 @@ it("fails closed for terminal task/run and unknown run", () => {
   expect(activeBrowserRunIds([], "running")).toEqual([]);
 });
 
-it("renders only safe live links for active runs and keeps terminal history", () => {
-  const html = renderToStaticMarkup(<BrowserRunsPanel runs={[browser()]} activeRunIds={["R1"]} />);
+it("renders only the server-authorized same-origin live path, never the raw dashboard URL", () => {
+  const link = { R1: { state: "link", href: "/browser/live/T1/R1" } } as const;
+  const html = renderToStaticMarkup(<BrowserRunsPanel runs={[browser()]} liveViews={link} />);
+  expect(html).toContain('href="/browser/live/T1/R1"');
   expect(html).toContain('rel="noopener noreferrer"');
-  expect(html).toContain('target="_blank"');
   expect(html).toContain("Open Browser Live View");
   expect(html).toContain("isolated-r1");
-  for (const run of [browser({ state: "COMPLETED" }), browser({ live_view_url: "javascript:alert(1)" })]) {
-    expect(renderToStaticMarkup(<BrowserRunsPanel runs={[run]} activeRunIds={["R1"]} />)).not.toContain("href=");
+  expect(html).not.toContain("browser.example");
+  // 同一 origin の `/browser/live/...` 以外は href にしない
+  const bad = { R1: { state: "link", href: "https://browser.example/dashboard" } } as const;
+  expect(renderToStaticMarkup(<BrowserRunsPanel runs={[browser()]} liveViews={bad} />)).not.toContain("href=");
+  for (const reason of ["not_owner", "owner_unavailable", "not_running", "relay_unavailable"] as const) {
+    const out = renderToStaticMarkup(
+      <BrowserRunsPanel runs={[browser()]} liveViews={{ R1: { state: "disabled", reason } }} />,
+    );
+    expect(out).not.toContain("href=");
+    expect(out).not.toContain("browser.example");
   }
-  expect(renderToStaticMarkup(<BrowserRunsPanel runs={[browser()]} activeRunIds={[]} />)).not.toContain("href=");
-  expect(
-    renderToStaticMarkup(<BrowserRunsPanel runs={[browser({ live_view_url: null })]} activeRunIds={["R1"]} />),
-  ).toContain("未設定");
+  expect(renderToStaticMarkup(<BrowserRunsPanel runs={[browser()]} liveViews={{}} />)).toContain("実行中のみ");
 });
 
 describe("dedicated browser lifecycle feed", () => {

@@ -135,6 +135,9 @@ describe("loadTaskDetail", () => {
     expect(result).toEqual({
       detail: taskDetail,
       browserRuns: [],
+      browserWaits: [],
+      browserOwner: { available: false, isOwner: false, challengePending: false, csrfToken: null },
+      liveViews: {},
       events: eventsPage,
       artifacts: artifactList,
       timeline,

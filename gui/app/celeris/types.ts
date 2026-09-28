@@ -38,6 +38,12 @@ export type Action =
  * DESIGN §4.1 の `TaskKind`。
  */
 export type TaskKind = "plan" | "execute" | "review" | "approval";
+export type BrowserWaitReason = "waiting_for_auth" | "waiting_for_approval";
+/**
+ * wait の状態。`pending` と `approved`（未消費）が「開いている」。
+ */
+export type BrowserWaitState =
+  ("pending" | "denied" | "expired" | "cancelled" | "revoked" | "invalidated") | "registered" | "approved" | "resumed";
 /**
  * 対話の 1 行の識別子（ULID）。
  */
@@ -260,6 +266,21 @@ export type Event =
   | {
       browser: BrowserRun;
       type: "browser_updated";
+    }
+  | {
+      type: "browser_wait_opened";
+      wait: BrowserWait;
+    }
+  | {
+      actor_id?: string | null;
+      approval_id?: string | null;
+      code: string;
+      credential_id?: string | null;
+      reason: BrowserWaitReason;
+      state: BrowserWaitState;
+      type: "browser_wait_resolved";
+      version: number;
+      wait_id: string;
     }
   | {
       task: Task;
@@ -1050,6 +1071,16 @@ export interface ApiV1Schema {
   approval_list: ApprovalList;
   artifact_list: ArtifactList;
   artifact_promote: ArtifactPromoteBody;
+  browser_attestation_claims: AttestationClaims;
+  browser_credential: BrowserCredentialBody;
+  browser_decision: BrowserDecisionBody;
+  browser_pending_list: BrowserPendingList;
+  browser_registered: BrowserRegisteredBody;
+  browser_request: NewBrowserWait;
+  browser_request_result: BrowserRequestResult;
+  browser_revoke: BrowserRevokeBody;
+  browser_wait_list: BrowserWaitList;
+  browser_wait_result: BrowserWaitResult;
   cancel: CancelBody;
   change_diff: ChangeDiffView;
   changes: ChangesView;
@@ -1483,6 +1514,217 @@ export interface ArtifactPromoteBody {
    * front matter の `title`（省略時は成果物の中身から）。
    */
   title?: string | null;
+}
+/**
+ * human attestation の `payload`（署名対象の JSON）。
+ */
+export interface AttestationClaims {
+  actor_id: string;
+  /**
+   * `approve_once` | `deny` | `revoke` | `register`。
+   */
+  decision: string;
+  /**
+   * Unix 秒。発行から 30 秒以内。
+   */
+  expires_at: number;
+  nonce: string;
+  owner_session_hash: string;
+  policy_hash: string;
+  task_id: string;
+  version: number;
+  wait_id: string;
+}
+/**
+ * `POST .../credential`（秘密は broker にだけ渡す）・`.../registered`・`.../decision`・`.../revoke`。
+ */
+export interface BrowserCredentialBody {
+  attestation: HumanAttestation;
+  expected_version: number;
+  /**
+   * 秘密。broker にだけ渡し、保存・反射しない。
+   */
+  password: string;
+  /**
+   * 秘密。broker にだけ渡し、保存・反射しない。
+   */
+  username: string;
+}
+/**
+ * GUI が署名する human attestation。`payload` は `AttestationClaims` の JSON（そのまま署名対象）。
+ */
+export interface HumanAttestation {
+  payload: string;
+  /**
+   * Ed25519 署名（hex）。
+   */
+  signature: string;
+}
+/**
+ * `POST .../decision` の本文。
+ */
+export interface BrowserDecisionBody {
+  attestation: HumanAttestation;
+  /**
+   * `approve_once` | `deny`。
+   */
+  decision: "approve_once" | "deny" | "revoke";
+  expected_version: number;
+  idempotency_key: string;
+}
+/**
+ * `GET /browser/waits` の応答（人の対応待ち。inbox の `browser_waits` と同じ形）。
+ */
+export interface BrowserPendingList {
+  items: BrowserWaitItem[];
+}
+/**
+ * inbox の 1 件: 人の対応を待っている browser の wait。
+ */
+export interface BrowserWaitItem {
+  /**
+   * `WAITING_FOR_AUTH` / `WAITING_FOR_APPROVAL`。
+   */
+  run_state: "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
+  task: TaskRef;
+  wait: BrowserWait;
+}
+/**
+ * 耐久の wait 1 件（ADR-0080 D4 `BrowserWait`）。**秘密を持たない**。
+ */
+export interface BrowserWait {
+  approval_id?: string | null;
+  created_at: string;
+  /**
+   * 登録済み（または使用する）credential の参照。
+   */
+  credential?: CredentialRef | null;
+  /**
+   * 登録待ちが要求する credential policy、または承認待ちが使う credential の policy。
+   */
+  credential_policy_id?: string | null;
+  deadline: string;
+  operation?: OperationIntent | null;
+  /**
+   * trusted exact HTTPS origin。
+   */
+  origin: string;
+  owner_id?: string | null;
+  policy_hash: string;
+  policy_revision: number;
+  /**
+   * 何のためか（untrusted な plain text として表示する）。
+   */
+  purpose: string;
+  reason: BrowserWaitReason;
+  resolution_code?: string | null;
+  resolved_at?: string | null;
+  resume_key: string;
+  run_id: string;
+  session_id: string;
+  state: BrowserWaitState;
+  task_id: TaskId;
+  version: number;
+  wait_id: string;
+  work_unit_id?: string | null;
+}
+/**
+ * credential の参照（ADR-0080 D2 `CredentialRef`）。秘密ではない。
+ */
+export interface CredentialRef {
+  credential_id: string;
+  policy_id: string;
+  provider: string;
+}
+/**
+ * 承認を求める操作 intent（内部 action 名と、非秘密の引数 digest）。
+ */
+export interface OperationIntent {
+  /**
+   * agent-browser の内部 action 名（例: `click`・`download`・`credential_use`）。
+   */
+  action: string;
+  args_digest?: string | null;
+  intent_id: string;
+}
+/**
+ * `POST .../registered` の本文。
+ */
+export interface BrowserRegisteredBody {
+  attestation: HumanAttestation;
+  expected_version: number;
+  receipt: CredentialRecord;
+}
+/**
+ * 登録された credential の台帳行（ADR-0080 D3: id・provider・policy・origin だけ）。
+ */
+export interface CredentialRecord {
+  credential_id: string;
+  credential_revision: number;
+  origin: string;
+  policy_id: string;
+  provider: string;
+  /**
+   * broker が発行した登録 receipt（秘密ではない）。
+   */
+  receipt_id: string;
+}
+/**
+ * `POST /tasks/{id}/browser/requests` の本文と応答。
+ */
+export interface NewBrowserWait {
+  credential?: CredentialRef | null;
+  credential_policy_id?: string | null;
+  operation?: OperationIntent | null;
+  origin: string;
+  owner_id?: string | null;
+  policy_hash: string;
+  policy_revision: number;
+  purpose: string;
+  reason: BrowserWaitReason;
+  resume_key: string;
+  run_id: string;
+  session_id: string;
+  /**
+   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
+   */
+  ttl_secs?: number | null;
+  work_unit_id?: string | null;
+}
+/**
+ * `POST /tasks/{id}/browser/requests` の応答。
+ */
+export interface BrowserRequestResult {
+  /**
+   * `false` は同じ `resume_key` の再送（既存の wait）。
+   */
+  created: boolean;
+  wait: BrowserWait;
+}
+/**
+ * `POST .../revoke` の本文。
+ */
+export interface BrowserRevokeBody {
+  attestation: HumanAttestation;
+  expected_version: number;
+  idempotency_key: string;
+}
+/**
+ * `GET /tasks/{id}/browser/waits` と `GET /browser/waits`。
+ */
+export interface BrowserWaitList {
+  items: BrowserWait[];
+}
+/**
+ * 解決系（登録・決定・失効）の応答。
+ */
+export interface BrowserWaitResult {
+  /**
+   * `true` は冪等な再送（何も書いていない）。
+   */
+  replayed: boolean;
+  task_status: Status;
+  wait: BrowserWait;
 }
 /**
  * `POST /tasks/{id}/cancel` の本文。
@@ -4261,6 +4503,10 @@ export interface DbInfo {
 export interface Inbox {
   approvals: ApprovalItem[];
   attention: AttentionItem[];
+  /**
+   * ADR-0080 D5: 人の対応（credential の登録・一回だけの承認・拒否）を待っている browser の wait。
+   */
+  browser_waits: BrowserWaitItem[];
   counts: InboxCounts;
   drafts: DraftGroup[];
   questions: QuestionItem[];
@@ -4382,6 +4628,10 @@ export interface ApprovalDecisionView {
 export interface InboxCounts {
   approvals: number;
   attention: number;
+  /**
+   * ADR-0080 D5: `browser_waits` の件数。
+   */
+  browser_waits: number;
   /**
    * status 名 → 件数（DB 全体）。
    */

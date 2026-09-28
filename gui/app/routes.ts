@@ -61,6 +61,12 @@ export default [
   route("console/new-conversation", "routes/console.new-conversation.ts"),
   route("files/tasks/:id/runs/:runId/:name", "routes/files.runs.ts"),
   route("files/tasks/:id/artifacts/:idx", "routes/files.artifacts.ts"),
+  // browser の本人専用経路（ADR-0080 D5/D6）。未認証は 401（`auth.server.ts` の RESOURCE_PREFIXES）
+  route("browser/owner-session", "routes/browser.owner-session.ts"),
+  route("browser/waits/:waitId/credential", "routes/browser.waits.$waitId.credential.ts"),
+  route("browser/waits/:waitId/decision", "routes/browser.waits.$waitId.decision.ts"),
+  route("browser/live/:taskId/:runId", "routes/browser.live.ts", { id: "browser-live" }),
+  route("browser/live/:taskId/:runId/*", "routes/browser.live.ts", { id: "browser-live-sub" }),
   // 未定義パスも root middleware を通す（docs/adr/0008 D15）。必ず最後に置く
   route("*", "routes/$.tsx"),
 ] satisfies RouteConfig;

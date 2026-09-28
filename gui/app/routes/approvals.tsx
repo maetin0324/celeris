@@ -13,6 +13,8 @@ import { formString } from "~/celeris/forms";
 import type {
   Approval,
   ApprovalList,
+  BrowserPendingList,
+  BrowserWaitItem,
   OrgList,
   OrgNode,
   Project,
@@ -20,6 +22,7 @@ import type {
   StandingRule,
   StandingRuleList,
 } from "~/celeris/types";
+import { BrowserWaitInboxList } from "~/components/BrowserWaitsPanel";
 import { ApprovalActionFlash, StandingRuleActionFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { LocalTime } from "~/components/LocalTime";
@@ -66,16 +69,22 @@ export interface ApprovalsData {
   org: OrgNode[];
   projects: Project[];
   standingRules: StandingRule[];
+  /** ADR-0080 D5: browser の人待ち（`GET /browser/waits`。この API を持たない celeris では空）。 */
+  browserWaits: BrowserWaitItem[];
   fetchedAt: string;
 }
 
 export async function loadApprovals(client: CelerisClient, request: Request): Promise<ApprovalsData> {
-  const [pendingList, decidedList, org, projects, standingRules] = await Promise.all([
+  const [pendingList, decidedList, org, projects, standingRules, browserWaits] = await Promise.all([
     client.get<ApprovalList>("/approvals", { query: { pending: true }, signal: request.signal }),
     client.get<ApprovalList>("/approvals", { query: { pending: false }, signal: request.signal }),
     client.get<OrgList>("/org", { signal: request.signal }).catch(() => ({ items: [] }) as OrgList),
     client.get<ProjectList>("/projects", { signal: request.signal }).catch(() => ({ items: [] }) as ProjectList),
     client.get<StandingRuleList>("/standing-rules", { signal: request.signal }),
+    client
+      .get<BrowserPendingList>("/browser/waits", { signal: request.signal })
+      .then((l) => l.items)
+      .catch(() => [] as BrowserWaitItem[]),
   ]);
   return {
     pending: pendingList.items,
@@ -83,6 +92,7 @@ export async function loadApprovals(client: CelerisClient, request: Request): Pr
     org: org.items,
     projects: projects.items,
     standingRules: standingRules.items,
+    browserWaits,
     fetchedAt: new Date().toISOString(),
   };
 }
@@ -147,7 +157,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function ApprovalsPage({ loaderData }: Route.ComponentProps) {
-  const { pending, decided, org, projects, standingRules, fetchedAt } = loaderData;
+  const { pending, decided, org, projects, standingRules, browserWaits, fetchedAt } = loaderData;
   const addFetcher = useFetcher<StandingRuleOpOutcome>({ key: "standing-rule-add" });
   const addSubmitting = addFetcher.state !== "idle";
 
@@ -163,6 +173,15 @@ export default function ApprovalsPage({ loaderData }: Route.ComponentProps) {
         }
         description="担当が「少しでも聞くべきだ」と判断したことがここに並びます。「今回だけ」か「今後ずっと」で答えてください。今後ずっとの答えは規則文として記録され、以後その担当に前置きされます。"
       />
+
+      {browserWaits.length > 0 && (
+        <section aria-labelledby="browser-waits-heading" data-testid="browser-waits-section" className="space-y-3">
+          <SectionTitle icon="shield" id="browser-waits-heading" count={browserWaits.length} className="mb-3">
+            ブラウザの人待ち（credential 登録・一回だけの承認）
+          </SectionTitle>
+          <BrowserWaitInboxList items={browserWaits} />
+        </section>
+      )}
 
       <section aria-labelledby="approvals-heading" data-testid="approvals-section" className="space-y-6">
         <div>

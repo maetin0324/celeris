@@ -32,7 +32,16 @@ SD_REPO="${SD_REPO:-$HOME/workspace/agent-platform}"
 
 SD_RELEASES="$CELERIS_STATE_DIR/releases"
 SD_BUILD_ROOT="$SD_RELEASES/.build"
+# Phase SD-1（ADR-0075 追記「Phase SD-1 実装時の逸脱」）: release.sh の作業ツリーは**場所を固定して使い回す**
+# （`git checkout --force` + `git clean -ffdx` で毎回その sha のきれいな checkout にする）。git は内容の変わった
+# ファイルしか書き直さないので、共有の target と組み合わせると cargo は変わった crate だけを作り直す。
+# `.build/<sha12>/` は gate が落ちたときの gate.json とログの置き場（ただのディレクトリ）として残る。
+SD_BUILD_TREE="$SD_BUILD_ROOT/tree"
 SD_CARGO_TARGET="$SD_RELEASES/.cargo-target"
+# Phase SD-1: リリースの gui の本番依存（`pnpm install --prod --frozen-lockfile` の node_modules）の置き場。
+# `<key>` = gui の package.json / pnpm-lock.yaml / pnpm-workspace.yaml と node / pnpm の版の sha256。
+# リリースの `gui/node_modules` はここへの相対 symlink（NFS 上で 4,000 余のファイルを毎回書かないため）。
+SD_PNPM_PROD_CACHE="$SD_RELEASES/.pnpm-prod-cache"
 SD_STAGING="$CELERIS_STATE_DIR/staging"
 SD_BACKUPS="$CELERIS_STATE_DIR/backups"
 SD_CURRENT="$CELERIS_STATE_DIR/current"
@@ -67,9 +76,11 @@ SD_DB="${CELERIS_DB:-$(sd_db_from_config)}"
 SD_PROD_API="http://127.0.0.1:7710"
 SD_PROD_GUI_PORT=7700
 # staging のポート（D3）。
-SD_STAGING_API_PORT=7711
-SD_STAGING_GUI_PORT=7701
-SD_STAGING_OLD_API_PORT=7712
+# Phase SD-1: テスト（`scripts/selfdeploy/tests/`）が空いているポートで verify.sh を回せるよう env で変えられる。
+# 本番のポート（7710 / 7700）にはしないこと（verify.sh が起動前に拒む）。
+SD_STAGING_API_PORT="${SD_STAGING_API_PORT:-7711}"
+SD_STAGING_GUI_PORT="${SD_STAGING_GUI_PORT:-7701}"
+SD_STAGING_OLD_API_PORT="${SD_STAGING_OLD_API_PORT:-7712}"
 
 # corepack の pnpm（このホストでは PATH に無い）。
 SD_PNPM_SHIM_DIR="${SD_PNPM_SHIM_DIR:-/usr/lib/node_modules/corepack/shims}"
@@ -80,6 +91,9 @@ SD_LOG_FILE="${SD_LOG_FILE:-}"
 
 sd_ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 sd_stamp() { date +%Y%m%d-%H%M%S; }
+# 壁時計の秒（小数）と、そこからの経過秒（小数 3 桁）。gate.json / verify.json の `secs`（Phase SD-1）。
+sd_now() { date +%s.%N; }
+sd_secs_since() { awk -v a="$1" -v b="$(date +%s.%N)" 'BEGIN { printf "%.3f", b - a }'; }
 
 sd_log() {
   local line
@@ -393,14 +407,25 @@ sd_use_pnpm() {
   command -v pnpm >/dev/null 2>&1 || sd_die "pnpm not found (looked in $SD_PNPM_SHIM_DIR)"
 }
 
-# ---- scratch pool の lease（ADR-0075 D7、Phase G1） -------------------------
+# ---- scratch pool の lease（ADR-0075 D7、Phase G1。Phase SD-1 で owner を共有に） ----
 
-# release ゲートの `CARGO_TARGET_DIR` は scratch pool の lease（owner `release-<sha12>`）から取る。
+# release ゲートの `CARGO_TARGET_DIR` は scratch pool の lease から取る。
 # `celerisctl` が無い・scratch が無効（`[scratch] enabled = false`・NFS 上）・lease に失敗したときは
 # 従来どおり `$SD_RELEASES/.cargo-target`（上の `SD_CARGO_TARGET` の既定）のまま。
 #
+# Phase SD-1（ADR-0075 追記「Phase SD-1 実装時の逸脱」）: owner は sha ごとの `release-<sha12>` ではなく
+# **全リリースで 1 つ**の `release-build`（`SD_RELEASE_SCRATCH_OWNER`）。場所を固定した作業ツリー
+# （`SD_BUILD_TREE`）と組み合わせて、cargo の fingerprint で変わった crate だけを作り直す。
+# 2 本の release.sh が同じ target を同時に触らないのは `$SD_RELEASES/.lock-release`（release.sh 全体を包む
+# flock）による。終了時は `release` せず `touch` する: `released_at` を書くと P3 になり、daemon の
+# `scratch_gc` が次の tick で即回収する（release-* の P3 は seed でなければ即回収。ADR-0075 D2）ため。
+# 代わりに lease の TTL を `SD_RELEASE_TARGET_TTL`（既定 172800 = 48h）にし、最後のリリースから TTL の間は
+# P0、過ぎれば P3 で GC がそのまま回収する（GC の規則は変えていない）。
+#
 # `celerisctl` の場所: `SD_CELERISCTL`（テストの偽物）> PATH の `celerisctl` > `$SD_CURRENT/bin/celerisctl`。
 SD_SCRATCH_OWNER=""
+SD_RELEASE_SCRATCH_OWNER="${SD_RELEASE_SCRATCH_OWNER:-release-build}"
+SD_RELEASE_TARGET_TTL="${SD_RELEASE_TARGET_TTL:-172800}"
 
 sd_celerisctl_bin() {
   if [ -n "${SD_CELERISCTL:-}" ]; then
@@ -415,23 +440,25 @@ sd_celerisctl_bin() {
   return 1
 }
 
-# `sd_scratch_lease <sha12> <sha_full> <build_worktree>` — 成功すれば `SD_CARGO_TARGET` と `SD_SCRATCH_OWNER` を書き換える。
-# 引き継ぎ（adopt）の安全条件の checkout 時刻は `<build_worktree>/.git` の mtime（`git worktree add` の直後に呼ぶ）。
+# `sd_scratch_lease <owner> <sha_full> <build_worktree>` — 成功すれば `SD_CARGO_TARGET` と `SD_SCRATCH_OWNER` を書き換える。
+# 引き継ぎ（adopt）の安全条件の checkout 時刻は `<build_worktree>/.git` の mtime。固定の作業ツリーでも、
+# その中のファイルは全て `.git` を書いた後に書かれている（`git worktree add` → 以後の checkout）ので条件は保たれる。
 sd_scratch_lease() {
-  local sha12="$1" sha="$2" tree="$3" ctl out
+  local owner="$1" sha="$2" tree="$3" ctl out
   ctl="$(sd_celerisctl_bin)" || { sd_log "scratch: celerisctl not found; using $SD_CARGO_TARGET"; return 1; }
-  if ! out="$("$ctl" scratch lease --config "$SD_CONFIG" --owner "release-$sha12" \
-    --repo "$SD_REPO" --worktree "$tree" --base "$sha" 8>&- 9>&-)"; then
+  if ! out="$("$ctl" scratch lease --config "$SD_CONFIG" --owner "$owner" \
+    --repo "$SD_REPO" --worktree "$tree" --base "$sha" --ttl "$SD_RELEASE_TARGET_TTL" 8>&- 9>&-)"; then
     sd_log "scratch: lease failed (disabled or unavailable); using $SD_CARGO_TARGET"
     return 1
   fi
   [ -n "$out" ] || return 1
   SD_CARGO_TARGET="$out"
-  SD_SCRATCH_OWNER="release-$sha12"
+  SD_SCRATCH_OWNER="$owner"
   return 0
 }
 
-# 長い step の前に lease の mtime を今にする（TTL 切れで GC に回収されないように）。失敗しても続ける。
+# 長い step の前（と release.sh の終了時）に lease の mtime を今にする（TTL 切れで GC に回収されないように）。
+# 失敗しても続ける。
 sd_scratch_touch() {
   [ -n "$SD_SCRATCH_OWNER" ] || return 0
   local ctl
@@ -439,7 +466,8 @@ sd_scratch_touch() {
   "$ctl" scratch touch --config "$SD_CONFIG" --owner "$SD_SCRATCH_OWNER" >/dev/null 2>&1 8>&- 9>&- || true
 }
 
-# 終了時（成功・失敗とも。`trap`）に lease を返す（P3 に落ちる。次の release が adopt できる）。
+# lease を返す（P3 に落ち、GC が即回収する）。Phase SD-1 から release.sh の終了時には呼ばない（上の説明）。
+# 共有の target を今すぐ手放したいとき（人の手作業）に使う。
 sd_scratch_release() {
   [ -n "$SD_SCRATCH_OWNER" ] || return 0
   local ctl

@@ -168,3 +168,27 @@ Playwright の Chromium 実行ファイルは `pnpm install --frozen-lockfile` �
 `pnpm e2e:staging`）はそのまま変更していない。
 
 gate は D2 の記述どおり「7 段」から**9 段**になった。受け入れ条件は `docs/PROGRESS.md` の Phase 89。
+
+## 7. Phase SD-1 追記（2026-09-28）: gui/ に変更の無いリリースは GUI の検査だけの段を飛ばす・verify の 4b と 5 を並行に
+
+release.sh の gate の 11 段のうち、`pnpm-mobile-audit`（実測 98 s）・`pnpm-e2e-mock`（12 s）・`pnpm-test`（3 s）の入力は
+**gui/ の下だけ**（偽の celeris も `gui/test/mock-celeris` / `gui/scripts/lib/celeris-fixture.mjs`。`gen:types` は手動でビルドの一部ではない）。
+Rust だけを変えたリリースでも毎回 2 分近く回していた。
+
+- **規則**: `current`（gate を全段通り、昇格されたリリース）の sha から、ビルドする sha までの `git diff --name-only <current> <sha> -- gui/`
+  が空のときだけ、上の 3 段を**回さずに**gate.json に `{"skipped": true, "reason": "no change under gui/", "exit": 0, "secs": 0}` と書く。
+  判断に使った base は gate.json の `gui_skip_base`（sha12。飛ばさなかったら `null`）。
+- **飛ばさない**: `current` が無い、`current/manifest.json` の sha をリポジトリが知らない、`git diff` が失敗した、gui/ に 1 ファイルでも
+  差がある、`SD_GATE_FORCE_GUI=1`。
+- **必ず回す**: Rust の段（fmt / test / clippy / build）、`pnpm-install` / `pnpm-typecheck` / `pnpm-build`（梱包に `gui/build` が要る。
+  合わせて 6 s 程度なので、前のリリースの `gui/build` を写して使い回すことはしない〈出所の記録と引き換えにするほど速くならない〉）。
+- `changes.json` の base（D4）と同じ `current` を base にする。`current` は gate を通ったリリースしか指さないので、「同じ gui/ で gate が
+  通った」ことが保証される（その `current` 自身が段を飛ばしていても、飛ばした根拠の gui/ も同じなので連鎖して成り立つ）。
+- `GET /releases` の `gate.steps[]` は `skipped` / `reason` を読まない（exit 0・0 秒の段として出る）。GUI に「飛ばした」と出すのは提案
+  （`docs/progress/phase-G.md` SD-1 の P-SD1-3）。
+
+**verify.sh**: 検査ごとの秒数を `checks[].secs` に、`durations`（`lock_wait_s` / `prepare_s` / `parallel_4b_5_s` / `total_s`）を
+verify.json に書く。検査 4b（gui-e2e: 7711 / 7701 を読むだけ）と検査 5（N-1: 7712 に旧 celeris を起こして GET だけ）は**並行**に回す。
+どちらも同じスナップショットのファイルを開くが、新しい celeris が起きたまま検査 5 を回すのは以前からで、どちらも書き込まない
+（D2 / D5: 書き込むのは検査 6 の煙試験だけで、両方が終わってから回す）。旧 celeris は親のシェルで起こして後始末の対象にし、
+待ち・集計・判定だけを裏のサブシェルで行う。verify.json の `checks` の順（1, 2, 3, 4, 4b, 5, 6）は変えない。

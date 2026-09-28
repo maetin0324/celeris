@@ -671,3 +671,91 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 - 副次: sirius に 5 時間 pending のままの接続試行（ssh master の scope）が残っていたので `DELETE /clusters/sirius/connect` で取り消した。pegasus の失敗した scope（`celeris-ssh-master-pegasus-BJ8B8QND.scope`、failed）も残っている。
 - 提案 P-G3-3: (a) connect の API は ssh の `Permission denied` / 接続失敗を待たずに即時返す（stderr を監視）、(b) GUI の connect 系だけ timeout を API の待ち（30 秒）より長くするか、API が即座に pending を返して GUI が状態を poll する、(c) 失敗した ssh master の scope を daemon が片付ける。
 - 別の異常: ユーザー journal（`journalctl --user`）が 9/26 06:00 以降のエントリを持たない（`_UID=1001` で 0 行、`/var/log/journal` に user-1001 の journal が無い）。デーモンのログが追えない。root で `journalctl -u user@1001.service -n 5` と `systemctl status systemd-journald` を確認する必要がある（人）。
+
+## SD-1: release / verify の所要時間の短縮（2026-09-28、完了・worktree、main 未 merge）
+
+依頼: 1 周（`release.sh` 8.5 分 + `verify.sh` 5.5 分）が 14 分、1 日 5 周。人が承認した計画 B / C / D を実装して測る。
+設計の記録は ADR-0075 追記「Phase SD-1 実装時の逸脱」（共有 owner・固定の作業ツリー・終了時 touch）と ADR-0041 §7（GUI の段を飛ばす規則・verify の並行）。
+
+### 変えたこと
+
+- **B（共有 target）** `scripts/selfdeploy/lib.sh` / `release.sh`: scratch の owner を `release-<sha12>` → **`release-build`**（全リリースで 1 つ、
+  `--ttl 172800`）。作業ツリーを **`releases/.build/tree` に固定**し、毎回 `git checkout --detach --force <sha>` + `git clean -ffdx`、
+  HEAD と `git status --porcelain --ignored` が空であることを確かめてから gate。`cargo-workspace-clean` は target の
+  `.celeris-release-tree` がこの作業ツリーを指すときだけ飛ばす（新しい・adopt した target では従来どおり掃除）。`CARGO_INCREMENTAL=0` 固定。
+  終了時は lease を release せず touch（release-* の P3 は GC が即回収するため）。2 本同時は既存の `.lock-release` で直列。gate が落ちた
+  記録は `.build/<sha12>/` に写す。gate.json に `build` と `cargo_test`（バイナリ数・合格数）を足した。
+- **C（GUI の段を飛ばす）** `release.sh`: `current` の sha から gui/ に差が無いときだけ `pnpm-test` / `pnpm-mobile-audit` / `pnpm-e2e-mock`
+  を `skipped: true, reason: "no change under gui/"` にする（`gui_skip_base`）。`current` が無い・sha が分からない・diff 失敗・
+  `SD_GATE_FORCE_GUI=1` では飛ばさない。Rust の段と `pnpm-install` / `pnpm-typecheck` / `pnpm-build` は常に回す（`gui/build` を前の
+  リリースから写す案は採らなかった: 3 段で 6 s しかかからず、出所の記録と引き換えにするほど速くならない）。
+- **D（verify）** `verify.sh`: `checks[].secs` と `durations`（`lock_wait_s` / `prepare_s` / `parallel_4b_5_s` / `total_s`）。検査 4b と 5 を
+  並行（旧 celeris は親で起こして後始末の対象、判定だけ裏のサブシェル。書き込むのは検査 6 だけで両方の後）。staging のポートを env で
+  変えられるようにした（テスト用。7710 / 7700 は拒む）。
+- **D（梱包の本番依存）** `release.sh`: `pnpm install --prod --frozen-lockfile` を `releases/.pnpm-prod-cache/<key>/` で lockfile ごとに 1 度だけ
+  （key = gui の package.json / pnpm-lock.yaml / pnpm-workspace.yaml + node / pnpm の版の sha256、作り終えてから rename、`provenance.json`）。
+  リリースの `gui/node_modules` は**相対 symlink**（依頼の「copy/hardlink」からの逸脱: NFS 上の `cp -al` は 6 分で 1,806 / 4,345 エントリ
+  ＝1 エントリ約 0.2 s で、毎回の install〈約 90 s〉より遅かった。実測して中止、消すのにも 87 s）。manifest.json に `gui_prod_deps`。
+  どのリリースからも指されない entry は掃除で消す。
+- ついでに直したこと: 掃除の `rm -rf` が NFS の `.nfsXXXX`（drain 中の旧 celeris が開いているバイナリ）で EBUSY になり、**リリースは
+  できたのに release.sh が exit 1** になっていた（1 回目の計測で踏んだ。`b8ca4eefda28/bin/.nfs…`）。警告にして続ける。
+  `SD_RELEASE_PRUNE=0` で掃除を飛ばせる（計測のリリースが他の検証済みリリースを押し出さないため）。
+- テスト: `scripts/selfdeploy/tests/release_gui_skip_and_shared_tree.sh`（新規。Rust だけの変更で 3 段が skipped・理由・`gui_skip_base`、
+  Rust と梱包の段は回る、gui/ の変更・`SD_GATE_FORCE_GUI=1`・`current` 無しでは回る、2 回目は作業ツリーを使い回し掃除を飛ばす、
+  依存の cache の miss → hit → lockfile 変更で別 key と古い entry の掃除、`cargo_test` の集計）、
+  `verify_durations_and_parallel.sh`（新規。偽の celeris / GUI / pnpm を空きポートで。`checks[].secs`・`durations`・順序 1..6・
+  4b と 5 の壁時計が和より短い・後始末でポートが空く）、`release_uses_scratch_lease.sh`（owner `release-build`・`--ttl`・終了時 touch・
+  release しない・失敗時の gate.json が `.build/<sha12>/` に残る、に更新）。
+
+### 計測（2026-09-28、このホスト。before = 57efebe4fb7d の gate.json、after = このブランチ）
+
+| 段 | before 57efebe4fb7d | after 1 回目 d30f9e1182d4（初回・cold） | after 2 回目 943115c6e490（llm-proxy の doc comment だけ） |
+|---|---|---|---|
+| cargo-workspace-clean | 1.4 | 2.0 | skipped |
+| cargo-fmt-check | 2.3 | 2.3 | 2.3 |
+| cargo-test | 220.5（compile 30.7、11 crate） | 242.9（compile 44.0、180 crate: `CARGO_INCREMENTAL=0` で adopt した target の依存も作り直し） | 213.8（compile 11.6、3 crate: llm-proxy・celeris・celerisctl） |
+| cargo-clippy | 18.3 | 21.5 | 5.7 |
+| cargo-build --release | 43.7（10 crate） | 43.8 | 18.5（3 crate） |
+| pnpm-install / typecheck | 1.3 / 1.7 | 1.1 / 1.7 | 1.0 / 1.7 |
+| pnpm-test | 2.9 | skipped | skipped |
+| pnpm-build | 3.4 | 3.5 | 3.6 |
+| pnpm-mobile-audit | 97.6 | skipped | skipped |
+| pnpm-e2e-mock | 12.4 | skipped | skipped |
+| 梱包（うち本番依存） | ≈100（≈90） | 118.4（101.1、cache miss） | 12.3（0.5、cache hit） |
+| **release.sh 全体** | **≈505（8.5 分）** | **439.6** | **260.6（4.3 分）** |
+
+- テストが全部走った証拠: 3 回とも `cargo_test` = 87 バイナリ（Running + Doc-tests）、2601 passed / 0 failed / 7 ignored
+  （before は 2596 passed。この間に main で増えた分）。2 回目は 3 crate しかコンパイルしていないが、87 本は全部走っている。
+- `verify.sh 943115c6e490` → exit 0、ok / live_ok = true、**total 28.2 s**（lock 待ち 0.0、prepare 3.3、1: 1.2、2: 0.7、3: 0.4、4: 3.2、
+  4b: 13.8、5: 2.3、並行の壁時計 14.0、6: 5.5）。**依頼の「verify 5.5 分」は再現しなかった**: 7667410c23d5 の verify（12:03）も staging の
+  ログの時刻で約 30 s。5.5 分は verify の外（lock 待ち、または release の後に verify を起こすまでの間）と思われる（未確認。次からは
+  `durations.lock_wait_s` で分かる）。並行化で縮んだのは約 2 s だけ（検査 5 が 2.3 s と短いため）。
+- 1 周（release + verify）: **before ≈ 14 分（依頼の値）→ after 約 4.8 分**（Rust だけの変更の 2 回目以降）。
+
+### 残る時間と提案
+
+- 残りの 8 割は `cargo test` の**実行**（2 回目で 213.8 − 11.6 ≈ 202 s）。cargo はテストバイナリを 1 本ずつ走らせる: task_core 49.8 s、
+  task_worker 31.3 s、task_ops 31.3 s、tests/scenarios 30.4 s。**P-SD1-2**: `cargo nextest`（バイナリをまたいで並列）か、重い 4 本の
+  中の待ち（sleep・タイムアウト待ち）を減らす。ゲートの意味を変えるので人の判断。
+- **P-SD1-1**（ADR-0075 追記）: 共有 target を最後のリリースから 48h の P0 にする代わりに、`released_at` のある `release-build` を P1 に
+  分類する規則を `classify` に足す（watermark の圧力で消せるように）。daemon の昇格が要る。
+- **P-SD1-3**: `GET /releases` と GUI のリリース画面で `gate.steps[].skipped` / `reason` を出す（今は exit 0・0 s の段に見える）。
+- **P-SD1-4**: 梱包の残り 12 s のうち約 10 s は `cp -r gui/build` とスクリプト・ログの写し（NFS への書き込み）。必要なら同じく数を減らす。
+
+### ゲート（このブランチ、`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-selfdeploy-speed/target`、`CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG=line-tables-only`、`RUSTC_WRAPPER` 無し）
+
+- `cargo test --workspace` → exit 0、98 の test result 行の合計 2601 passed / 0 failed / 7 ignored
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash -n` を selfdeploy の全スクリプトに → 構文エラー 0。`bash scripts/selfdeploy/tests/{pid_resolution_test,prepare_timeout_test,release_uses_scratch_lease,release_gui_skip_and_shared_tree,verify_durations_and_parallel}.sh` → 5 本とも exit 0
+- `scripts/selfdeploy/release.sh worktree-agent-a0bc02e4050bd8682` を 2 回（1 回目は掃除の EBUSY で exit 1、リリースはできていた → 修正、
+  2 回目 exit 0）、`scripts/selfdeploy/verify.sh 943115c6e490` exit 0。昇格はしていない。本番には触れていない。
+
+### 後始末と未解決
+
+- 計測用の llm-proxy の doc comment は計測後に戻した（最終の commit の Rust の差分はゼロ）。計測のリリース `d30f9e1182d4` / `943115c6e490` は削除した。1 回目の掃除で、既存の未昇格リリース `b8ca4eefda28`（既に bin/ しか残って
+  いない残骸）の中身が消え、`.nfs…` 1 つだけが残った（旧 celeris が開いているため。閉じれば NFS が消す）。
+- `release-build` の lease は `celerisctl scratch release` で返した（GC が回収する。このブランチが main に入った後の最初のリリースは、
+  また adopt + 掃除 + 依存の作り直しから始まる）。`.pnpm-prod-cache/ca92282492d21e7e8b134a8e160f1b7d`（いまの lockfile の本番依存）と
+  固定の作業ツリー `releases/.build/tree`（`$SD_REPO` の git worktree として登録されたまま）は次のリリースが使うので残した。
+- 旧い `release.sh`（main）は `.build/<sha12>` を使うので、`.build/tree` と `.pnpm-prod-cache` があっても影響しない。

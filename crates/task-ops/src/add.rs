@@ -563,6 +563,29 @@ fn build_task(
     let labels = task_core::normalize_labels(&spec.labels).map_err(OpsError::Validation)?;
     // ADR-0046 D2: 必要な能力タグ（綴りの規則は `labels` と同じ扱いで、違反は 422）。
     let skills = task_core::normalize_skills(&spec.skills).map_err(OpsError::Validation)?;
+    // Request tags cannot grant browser access: only an administrator's resolved profile can.
+    let browser_requested = task_core::browser::requests_browser(&skills);
+    let browser_adapter = if browser_requested {
+        if let Some(assignee) = &spec.assignee {
+            let effective = task_core::resolve_profile(&store.org_list()?, assignee);
+            let capability = effective.browser.as_ref().ok_or_else(|| {
+                OpsError::Validation("assignee has no browser capability grant".into())
+            })?;
+            capability.validate().map_err(OpsError::Validation)?;
+        }
+        if spec.cluster.is_some() {
+            return Err(OpsError::Validation(
+                "browser capability currently requires a local workspace".into(),
+            ));
+        }
+        Some(
+            task_core::browser::browser_adapter(spec.adapter.as_deref())
+                .map_err(OpsError::Validation)?
+                .to_owned(),
+        )
+    } else {
+        None
+    };
     let category = spec.category.unwrap_or_default();
     // ADR-0044 D3: 省略時は P2（`celerisctl add` は `--priority` の既定 0 を明示して渡す）。
     let priority = spec
@@ -698,8 +721,8 @@ fn build_task(
                 .or(org_role.and_then(|r| r.tier))
                 .or(genre_role.and_then(|r| r.tier))
                 .unwrap_or(DEFAULT_TIER),
-            adapter: spec
-                .adapter
+            adapter: browser_adapter
+                .or(spec.adapter)
                 .or_else(|| role.and_then(|r| r.adapter.clone()))
                 .or_else(|| org_role.and_then(|r| r.adapter.clone()))
                 .or_else(|| genre_role.and_then(|r| r.adapter.clone())),
@@ -729,6 +752,39 @@ fn build_task(
 mod tests {
     use super::*;
     use task_core::{Event, SqliteStore};
+
+    #[test]
+    fn browser_task_routes_to_opencode_and_can_switch_to_claude() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        for (explicit, expected) in [(None, "acp"), (Some("claude-code"), "claude-code")] {
+            let mut spec = base_spec();
+            spec.skills = vec!["browser-enabled".into()];
+            spec.adapter = explicit.map(str::to_owned);
+            let task = create_task(&store, spec, now()).unwrap();
+            assert_eq!(task.worker_hint.adapter.as_deref(), Some(expected));
+        }
+        let mut spec = base_spec();
+        spec.skills = vec!["browser-enabled".into()];
+        spec.adapter = Some("codex".into());
+        assert!(create_task(&store, spec, now()).is_err());
+        let mut spec = base_spec();
+        spec.skills = vec!["browser-enabled".into()];
+        spec.cluster = Some("pegasus".into());
+        assert!(create_task(&store, spec, now()).is_err());
+    }
+
+    #[test]
+    fn explicit_assignee_cannot_gain_browser_access_from_task_skill() {
+        let store = org_store();
+        let mut spec = base_spec();
+        spec.skills = vec!["browser-enabled".into()];
+        spec.assignee = Some("research-survey".into());
+        let error = create_task(&store, spec, now()).unwrap_err();
+        assert!(
+            error.to_string().contains("no browser capability grant"),
+            "{error}"
+        );
+    }
 
     fn base_spec() -> NewTaskSpec {
         NewTaskSpec {

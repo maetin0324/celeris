@@ -100,6 +100,85 @@
       ],
       "type": "object"
     },
+    "BrowserCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "live_view_url": {
+          "description": "Administrator-operated authenticated HTTPS reverse proxy to the substrate dashboard.\nThis is not a CDP endpoint or a bearer-token URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "allowed_domains"
+      ],
+      "type": "object"
+    },
+    "BrowserContext": {
+      "properties": {
+        "cli": {
+          "type": "string"
+        },
+        "run": {
+          "$ref": "#/$defs/BrowserRun"
+        }
+      },
+      "required": [
+        "run",
+        "cli"
+      ],
+      "type": "object"
+    },
+    "BrowserRun": {
+      "additionalProperties": false,
+      "properties": {
+        "live_view_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/BrowserRunState"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id",
+        "session_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "BrowserRunState": {
+      "enum": [
+        "RUNNING",
+        "WAITING_FOR_AUTH",
+        "WAITING_FOR_APPROVAL",
+        "WAITING_FOR_HUMAN",
+        "COMPLETED",
+        "FAILED"
+      ],
+      "type": "string"
+    },
     "Budget": {
       "description": "DESIGN §4.1 の `Budget`。",
       "properties": {
@@ -526,6 +605,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Administrator-granted browser capability; child profiles replace the complete grant."
         },
         "chain": {
           "description": "根→葉のノード id（GUI が「どこから継いだか」を出すため）。",
@@ -1743,6 +1833,17 @@
             "$ref": "#/$defs/GenreContext"
           },
           "type": "array"
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A supervisor-provisioned CLI; absent on ordinary, planner and reviewer runs."
         },
         "children": {
           "description": "集約 run（`aggregate = true` の親の、子が全て終端になった後の run）でのみ非空（ADR-0016 D3）。",

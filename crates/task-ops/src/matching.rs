@@ -115,6 +115,14 @@ pub fn decide(org: &[OrgNode], task: &Task) -> Assignment {
             continue;
         }
         let effective = task_core::resolve_profile(org, &node.id);
+        if task_core::browser::requests_browser(&task.skills)
+            && effective
+                .browser
+                .as_ref()
+                .is_none_or(|browser| browser.validate().is_err())
+        {
+            continue;
+        }
         if !effective.allows_harness(harness) {
             continue;
         }
@@ -311,6 +319,34 @@ mod tests {
                 &["hpc", "benchmark", "rust"],
             ),
         ]
+    }
+
+    #[test]
+    fn browser_matching_requires_administrator_capability_grant() {
+        let mut nodes = org();
+        let browser_task = task(Some("coding"), &["browser-enabled", "rust"]);
+        assert!(matches!(
+            decide(&nodes, &browser_task),
+            Assignment::Unroutable { .. }
+        ));
+        nodes[3].profile.browser = Some(task_core::BrowserCapability {
+            allowed_domains: vec!["example.com".into()],
+            live_view_url: None,
+        });
+        assert!(
+            matches!(decide(&nodes, &browser_task), Assignment::Assigned { ref node, .. } if node == "systems-performance")
+        );
+        nodes[3]
+            .profile
+            .browser
+            .as_mut()
+            .unwrap()
+            .allowed_domains
+            .clear();
+        assert!(matches!(
+            decide(&nodes, &browser_task),
+            Assignment::Unroutable { .. }
+        ));
     }
 
     fn task(harness: Option<&str>, skills: &[&str]) -> Task {

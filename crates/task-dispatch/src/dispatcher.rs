@@ -1644,6 +1644,16 @@ impl StoreSink {
 }
 
 impl EventSink for StoreSink {
+    fn browser_updated(&self, browser: &task_core::BrowserRun) {
+        if let Err(e) = self.store.append_event(
+            self.task_id,
+            &Event::BrowserUpdated {
+                browser: browser.clone(),
+            },
+        ) {
+            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record browser lifecycle");
+        }
+    }
     fn progress(&self, msg: &str) {
         let ev = Event::worker_progress(self.run_id.clone(), msg);
         if let Err(e) = self.store.append_event(self.task_id, &ev) {
@@ -14025,6 +14035,7 @@ async fn run_worker(
         work_dir,
         artifacts_dir,
         context: RunContext {
+            browser: None,
             prior_review,
             inputs: task.inputs.clone(),
             answers: to_answers(answers_from_events(&events)),
@@ -14239,7 +14250,15 @@ async fn run_worker(
         account_book,
         session_key,
     };
-    let outcome = adapter.run(req, run_id, limits, &sink).await;
+    let outcome = if task_core::browser::requests_browser(&req.task.skills)
+        && (remote.is_some() || container_plan.is_some())
+    {
+        Err(AdapterError::Other(
+            "browser capability currently requires a local host run".into(),
+        ))
+    } else {
+        task_worker::browser::run(adapter, req, run_id, limits, &sink).await
+    };
     // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）: run が成功したら未申告の成果物を登録する。
     // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
     //   （`artifacts_dir` の外を含む）から `*.md` を拾う（従来どおり。取りこぼし防止）。

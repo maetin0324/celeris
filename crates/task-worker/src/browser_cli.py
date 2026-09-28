@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Celeris transport/observability shim for agent-browser 0.38.1, not a browser agent.
+
+Only public, unauthenticated browsing is supported. This same-UID shim is not a
+security sandbox. The substrate enforces navigation/network and action policies.
+"""
+import fcntl
+import contextlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import uuid
+from urllib.parse import urlsplit
+
+os.umask(0o077)
+ROOT = Path(__file__).resolve().parent
+
+
+class PolicyBlocked(ValueError):
+    pass
+
+
+def audit(operation, status, artifact=None):
+    event = {"operation": operation, "status": status}
+    if artifact:
+        event["artifact"] = artifact
+    with (ROOT / "events.jsonl").open("a") as out:
+        out.write(json.dumps(event) + "\n")
+
+
+def plan(args, output):
+    """Restrict CLI grammar, not DOM semantics. Never accept arbitrary flags or paths."""
+    if not args:
+        raise ValueError()
+    verb, *rest = args
+    ref = lambda value: re.fullmatch(r"@e[0-9]+", value) is not None
+    if verb == "open" and len(rest) == 1:
+        url = urlsplit(rest[0])
+        if (url.scheme not in ("http", "https") or not url.hostname or url.username
+                or url.password or url.query or url.fragment or "\\" in rest[0]
+                or any(ord(c) <= 32 for c in rest[0])):
+            raise ValueError()
+        return "navigate", ["open", rest[0]], None
+    if verb == "click" and len(rest) == 1 and ref(rest[0]):
+        return "click", args, None
+    if verb == "snapshot" and not rest:
+        return "extract", ["snapshot", "-i"], None
+    if verb == "extract" and len(rest) == 1 and ref(rest[0]):
+        name = "extract-" + uuid.uuid4().hex + ".json"
+        return "extract", ["get", "text", rest[0]], output / name
+    if verb == "screenshot" and not rest:
+        path = output / ("screenshot-" + uuid.uuid4().hex + ".png")
+        return "screenshot", ["screenshot", str(path)], path
+    if verb == "download" and len(rest) == 1 and ref(rest[0]):
+        path = output / ("download-" + uuid.uuid4().hex + ".bin")
+        return "download", ["download", rest[0], str(path)], path
+    if verb == "scroll" and len(rest) == 2 and rest[0] in ("up", "down") and rest[1].isdigit() and 1 <= int(rest[1]) <= 2000:
+        return "scroll", args, None
+    if verb == "close" and not rest:
+        return "close", args, None
+    raise ValueError()
+
+
+def main(args):
+    config = json.loads((ROOT / "config.json").read_text())
+    output = Path(config["output"])
+    try:
+        operation, command, artifact = plan(args, output)
+    except (ValueError, OverflowError):
+        audit("policy_block", "blocked")
+        print('{"success":false,"error":"command blocked by browser capability"}')
+        return 2
+    # Do not inherit CDP, profiles, persistent state, extensions, plugins, proxies,
+    # executable overrides or credentials from the harness/daemon environment.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_BROWSER_")}
+    env["AGENT_BROWSER_NAMESPACE"] = "celeris"
+    argv = [config["executable"], "--config", str(ROOT / "upstream.json"),
+            "--session", config["session_id"], "--action-policy", str(ROOT / "policy.json"),
+            "--allowed-domains", ",".join(config["allowed_domains"]),
+            "--content-boundaries", "--max-output", "16000", "--json"] + command
+    try:
+        # Serialize calls within a session so refs/artifact/event order stays meaningful.
+        with (ROOT / "lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            result = subprocess.run(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, timeout=45, check=False)
+        if len(result.stdout) > 1024 * 1024:
+            raise ValueError()
+        data = json.loads(result.stdout)
+        if isinstance(data, dict) and data.get("success") is False:
+            error = data.get("error")
+            if isinstance(error, str) and any(marker in error.lower() for marker in
+                    ("denied by policy", "allowed domains", "not allowed by domain filter")):
+                raise PolicyBlocked()
+        if result.returncode or not isinstance(data, dict) or data.get("success") is not True:
+            # Error text can contain URL credentials or reflected page content.
+            raise ValueError()
+        if artifact and operation == "extract":
+            artifact.write_text(json.dumps({"untrusted": True, "data": data.get("data")}))
+        if artifact:
+            if artifact.is_symlink() or not artifact.is_file() or artifact.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError()
+        audit(operation, "success", artifact.name if artifact else None)
+        if operation == "extract":
+            print("<untrusted_browser_content>")
+            # Keep upstream's nonce/origin boundary instead of inventing a replacement protocol.
+            print(json.dumps({"_boundary": data.get("_boundary"), "data": data.get("data")}))
+            print("</untrusted_browser_content>")
+        else:
+            print(json.dumps({"success": True, "artifact": artifact.name if artifact else None}))
+        return 0
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as error:
+        if artifact:
+            with contextlib.suppress(OSError):
+                artifact.unlink(missing_ok=True)
+        # All substrate failures are opaque. Never echo stdout/stderr/arguments.
+        if isinstance(error, PolicyBlocked):
+            audit("policy_block", "blocked")
+        else:
+            audit(operation, "failure")
+        print('{"success":false,"error":"browser action failed or was blocked"}')
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

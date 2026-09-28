@@ -149,7 +149,8 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 31] = [
+pub(crate) const EVENT_TYPES: [&str; 32] = [
+    "browser_updated",
     "created",
     "transitioned",
     "worker_started",
@@ -201,6 +202,7 @@ pub(crate) const EVENT_TYPES: [&str; 31] = [
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
     match event {
         Event::Created { .. } => "created",
+        Event::BrowserUpdated { .. } => "browser_updated",
         Event::Transitioned { .. } => "transitioned",
         Event::WorkerStarted { .. } => "worker_started",
         Event::WorkerProgress { .. } => "worker_progress",

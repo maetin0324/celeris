@@ -6,6 +6,7 @@ pub mod adapter;
 /// ADR-0061（Phase 104）: `aider` CLI アダプタ（明確で局所的な少数ファイル修正向け）。
 pub mod aider;
 pub mod artifact;
+pub mod browser;
 /// ADR-0066 D1（Phase 110b）: 同一リポジトリの worktree 間で cargo のビルドキャッシュを共有する。
 pub mod build_cache;
 pub mod claude_account;

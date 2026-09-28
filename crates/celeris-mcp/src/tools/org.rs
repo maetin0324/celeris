@@ -187,6 +187,7 @@ impl ProfileInput {
     /// 「`tools` と `permissions` は外からは触れない」）。
     fn into_profile(self) -> Profile {
         Profile {
+            browser: None,
             budget: Default::default(),
             skills: self.skills,
             knowledge: self.knowledge,

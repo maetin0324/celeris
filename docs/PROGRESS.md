@@ -6,6 +6,8 @@
 
 ## 目次
 
+- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線（本番未昇格）。
+
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)
 - [Phase 101–150](progress/phase-101-150.md)

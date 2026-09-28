@@ -1323,3 +1323,12 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - F5-1（やり直し）01M3HG7VV6A2HRHTNXWPDS9051: done（atomic に倒れたまま、13:18〜15:31Z）。planner 2 run（Opus 1 分、Sonnet 7 分）は Plan Mode で成果物を書けず失敗。worker 4 run のうち 3 run が `cheap/mechanical-verifiable-reversible` で gpt-6-luna（F1 の規則表が atomic でも Task の features から cheap を選んだ）、retry のエスカレーションで 1 run が frontier（gpt-6-astra）。continuation 1。E6（全 run standard）と比べて lane の分布は変わった。
 - 昇格: in-flight 0 で停止→起動、本番 `c51837427ac5`（schema 28）。本番に F4b（reached / Go、案件 replan、children、案件ページ DAG）と planner の permission_mode 修正が入った。
 - 3 回目の F5-1 を投入（planner が成果物を書ける版で compound の計画が採用されるかを確認）。
+
+## F5-1 dogfood（3 回目、2026-09-27 15:52〜16:32Z、タスク 01M3HS2E19BRC021ZXMDZANP5B）: compound の計画が初めて本番で採用され、2 つの不具合が見つかった
+
+- 経過: 人の明示 compound → gate（shadow でも採用）→ planner v1（6 WU、`investigate` / `implement` の 2 工程 + 統合 WU）。`investigate` 工程は並列に完走し `integrate-investigate` も done（**WU 並列と統合が本番で動いた**）。`implement` 工程で 3 WU が並列に走り、5 / 9 WU done。
+- 不具合 1: WU `impl-quota` の検査が、兄弟 WU と共有する `CARGO_TARGET_DIR`（`build-cache/cargo/<repo-key>`）に残った別ブランチの `task-core` の生成物で偽のコンパイルエラー（E0609）→ retry 2 回 → failed → replan。並列 WU は target を分けなければならない（実装エージェントでも同じ問題が出ていた）。
+- 不具合 2: replan の planner は差分（`modify: [impl-quota]` だけ）を出したが「done work unit integrate-investigate must not change on replan」で 2 回拒否 → Task は blocked（question）。daemon が足した統合 WU が差分の適用か不変条件の検査で「変わった」扱いになる。
+- lane の分布（F1 の効果、E6 = 全 run standard との比較）: planner 3 run は claude-oauth の残量降格で cheap（claude-sonnet-5）と standard（claude-opus-5-5）、worker 7 run は standard（gpt-6-sol / claude-opus-5-5）と cheap（claude-sonnet-5）。規則は `frontier/judgment-under-uncertainty` に当たった WU も上限（max(Task lane, standard)）で standard に丸まっている。continuation 0、repair 0、replan 2。
+- 20:18Z に cancelled（人の操作と思われる）。修正は Phase F5-fix（Opus）へ: WU ごとの `CARGO_TARGET_DIR`（終端で削除）、replan で daemon 由来の WU を不変条件から除外して持ち越す。
+- 参考: release `353d32fbe0ea`（F5-1 やり直しの配送: EVENT_TYPES 補完、フレークテスト 5 件の決定化、PROGRESS.md の分割）を 15:52Z に停止→起動で昇格。本番はこれ。

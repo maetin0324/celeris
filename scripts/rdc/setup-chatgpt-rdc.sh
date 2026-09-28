@@ -48,11 +48,11 @@ HOME_DIR=$(getent passwd "$RDC_USER" | cut -d: -f6)
 # 写してから root で入れる（staging は 700、終了時に消す）。
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/setup-chatgpt-rdc.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
-chmod 755 "$STAGE"
+chmod 700 "$STAGE"
 install -m 755 "$CELERIS_HOME/current/bin/celerisctl" "$STAGE/celerisctl"
 install -m 755 "$REPO/scripts/rdc/celeris-chat" "$STAGE/celeris-chat"
 if [ -n "$TOKEN_SRC" ]; then
-  install -m 644 "$TOKEN_SRC" "$STAGE/mcp-token"
+  install -m 600 "$TOKEN_SRC" "$STAGE/mcp-token"
 fi
 sudo -n chmod 700 "$HOME_DIR"
 sudo -n install -d -m 700 -o "$RDC_USER" -g "$RDC_USER" "$HOME_DIR/.config" "$HOME_DIR/.config/celeris"

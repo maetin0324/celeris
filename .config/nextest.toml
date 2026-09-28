@@ -1,0 +1,26 @@
+# cargo-nextest の設定（Phase SD-2、ADR-0041 §8）。release.sh の `cargo-test` 段と scripts/dev/test-parallel.sh が使う。
+# 版は tools/nextest/VERSION（docs/ops/nextest.md）。`cargo test --workspace` はこのファイルを読まない（そちらは従来どおり）。
+#
+# nextest はテストを 1 つずつ別プロセスで、バイナリをまたいで並列に回す。直列が要るテストはここで test-group に入れて縛る
+# （消さない）。何をなぜ縛ったかは ADR-0041 §8。
+
+[profile.default]
+# gate は 1 回の失敗で落とす（flaky を retry で隠さない）。
+retries = 0
+fail-fast = false
+# 60 秒ごとに SLOW と出し、10 分（60 s × 10）で止める（gate が固まらないように。cargo test には無かった上限）。
+slow-timeout = { period = "60s", terminate-after = 10 }
+# 通ったテストの行は出さない（失敗と遅いものだけ。Starting / Summary の行は常に出る）。
+status-level = "fail"
+final-status-level = "slow"
+failure-output = "immediate-final"
+
+# ssh の多重接続（ControlMaster `celeris-localhost`）を共有する 2 つのバイナリ。cargo test では別々のバイナリが重ならなかったので、
+# 同時のセッションは 1 バイナリ分（9 本 / 6 本）までだった。nextest ではバイナリをまたいで重なり、sshd の MaxSessions（既定 10）を
+# 超えうる（15 本）ので、2 つを合わせて 4 本までに抑える（多重接続が無いホストではどちらも skip して即終わる）。
+[test-groups]
+ssh-control-master = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = "binary_id(task-worker::ssh_localhost) | binary_id(e2e::cluster_scenarios)"
+test-group = "ssh-control-master"

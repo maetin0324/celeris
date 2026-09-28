@@ -192,3 +192,39 @@ verify.json に書く。検査 4b（gui-e2e: 7711 / 7701 を読むだけ）と�
 どちらも同じスナップショットのファイルを開くが、新しい celeris が起きたまま検査 5 を回すのは以前からで、どちらも書き込まない
 （D2 / D5: 書き込むのは検査 6 の煙試験だけで、両方が終わってから回す）。旧 celeris は親のシェルで起こして後始末の対象にし、
 待ち・集計・判定だけを裏のサブシェルで行う。verify.json の `checks` の順（1, 2, 3, 4, 4b, 5, 6）は変えない。
+
+## 8. Phase SD-2 追記（2026-09-28）: release の gate の `cargo-test` をテストバイナリ並列に
+
+人の判断（2026-09-28「バイナリ並列で動かすようにしてください」、`docs/progress/phase-G.md` SD-1 の P-SD1-2）。
+SD-1 の計測で gate の `cargo-test` は 214 s、うち約 200 s が**実行**で、`cargo test` はテストバイナリを 1 本ずつ回していた
+（task_core 50 s・task_worker 31 s・task_ops 31 s・tests/scenarios 30 s が直列に足される）。
+
+- **なぜ並列か**: 遅いバイナリの中身は待ち（タイムアウトを待つテスト・子プロセスの kill を待つテスト）で CPU を使っていない。
+  バイナリをまたいで重ねれば、全体は「一番遅い 1 本のテスト」（task_core の `pause::tests::truncate_shrinks_…` 49 s）まで縮む。
+- **採った方法**: `cargo nextest run --workspace`（(a)。`cargo-nextest` 0.9.146 を `cargo install --locked` で入れ、版は
+  `tools/nextest/VERSION`。バイナリはリポジトリに置かない）+ nextest が回さない doc-test を `cargo test --doc --workspace` で別に。
+  入口は `scripts/dev/test-parallel.sh`（release.sh の `cargo-test` 段と開発者の両方）。(b)（`--no-run` で実行ファイルを集めて
+  `xargs -P`）は採らなかった: 実行ファイルごとの cwd（crate のディレクトリ）と env（`CARGO_BIN_EXE_*` 等）の再現を自前で持つことになり、
+  テスト単位の並列・タイムアウト・group 制御も無い。
+- **並列数**: `CELERIS_TEST_JOBS`、既定 `min(8, max(2, nproc/3))`（24 CPU → 8）。daemon の run が同居するので nproc いっぱいにしない。
+  8・16・24・8 + 負荷（busy loop 6 本）で回し、8 と 24 の差は 13 s（`truncate_…` 1 本が律速）なので 8 で十分。
+- **gate が証明すること**: `CELERIS_TEST_SUMMARY {json}` の 1 行を gate.json の `cargo_test` に写す（`runner`・`nextest_version`・`jobs`・
+  `binaries` = nextest のバイナリ数 + doc-test の crate 数・`passed` / `failed` / `ignored`・各 exit と秒数・`summary_parsed`）。
+  nextest か doc-test が非 0、または nextest の `Starting N tests across M binaries` / `Summary … tests run:` が読めない（全部走った
+  証拠が無い）なら段が落ちる。`--no-fail-fast` で全部の失敗を 1 回で出し、nextest が落ちても doc-test は回す。retry はしない（flaky を
+  隠さない）。1 テスト 10 分で止める（`slow-timeout`。cargo test には無かった上限）。
+- **直列の前提の洗い出しと扱い**（`.config/nextest.toml`）:
+  - 固定ポートで bind するテストは無い（全部 `127.0.0.1:0`。7710 / 7700 / 18xxx は文字列として設定の検証に出るだけ）。一時ファイルは
+    `tempfile` の一意なディレクトリ。SQLite もテストごとの一時ディレクトリ。→ 何もしない。
+  - プロセス全体の状態（`std::env::set_var` の `celeris::instance` のテスト、`waitpid(-1)` の `task-worker::reap_finished_children`、
+    `task-worker::process_group` の `static` の Mutex による直列化）: nextest は**テストごとに別プロセス**なので、互いに干渉しない
+    （同じバイナリの中の `static` の Mutex は nextest の下では効かないが、守っていたのはそのプロセスの中の状態なので不要になる）。
+    `cargo test` では従来どおり Mutex が効く。→ 何もしない。
+  - ssh の多重接続（ControlMaster `celeris-localhost`）を共有する `task-worker::ssh_localhost`（9 本）と `e2e::cluster_scenarios`（6 本）:
+    cargo test では 2 つのバイナリが重ならなかったが、nextest では重なって sshd の MaxSessions（既定 10）を超えうる。→ test-group
+    `ssh-control-master`（max-threads 4）で 2 つを合わせて縛る（多重接続の無いホストではどちらも skip）。
+  - `free_port()`（空きポートを選んで閉じ、子の celeris が bind する）の僅かな競合は、並列が増える分だけ起こりやすくなる。7 回の実行
+    （手元 6 回 + release 1 回、計 18,207 テスト）では 1 度も起きなかった。起きたら該当テストを test-group に入れる（未対処の残り）。
+- **逃げ道**: `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（gate.json の `runner` が `cargo-test`）。
+  `cargo-nextest` が無ければ release.sh は作業ツリーを作る前に入れ方を示して落ちる。
+- 開発者向けの「`cargo test --workspace`」（CLAUDE.md）は変えない。両方が通ることを保つ。

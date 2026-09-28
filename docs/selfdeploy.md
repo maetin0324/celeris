@@ -107,10 +107,21 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `CARGO_INCREMENTAL=0` 固定。詳細は ADR-0075 追記「Phase SD-1 実装時の逸脱」。
 - gate（この順。1 つでも非 0 ならリリースを作らない。全 11 段）:
   `cargo-workspace-clean`（自前の workspace パッケージの `cargo clean -p …`。外部依存は保持。**共有 target がこの作業ツリーから
-  作られていれば飛ばす**）→ `cargo fmt --check` → `cargo test --workspace` → `cargo clippy --workspace -- -D warnings`
+  作られていれば飛ばす**）→ `cargo fmt --check` → `cargo-test`※※（`scripts/dev/test-parallel.sh`）→ `cargo clippy --workspace -- -D warnings`
   → `cargo build --release -p celeris -p celerisctl`
   → GUI `pnpm install --frozen-lockfile` → `pnpm typecheck` → `pnpm test`※ → `pnpm build`
   → `pnpm mobile-audit`（`pnpm-mobile-audit`）※ → `pnpm e2e:mock`（`pnpm-e2e-mock`）※
+- **※※ `cargo-test` はテストバイナリを並列に回す（Phase SD-2、ADR-0041 §8、人の判断 2026-09-28）**: `scripts/dev/test-parallel.sh`
+  = `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`（既定 `min(8, max(2, nproc/3))`）の後に
+  `cargo test --doc --workspace`（nextest は doc-test を回さない）。範囲は `cargo test --workspace` と同じ。直列が要るテストは
+  **ビルドする sha の** `.config/nextest.toml` の test-group で縛る。gate.json の `cargo_test` は
+  `{runner: "nextest", nextest_version, jobs, binaries（nextest のバイナリ数 + doc-test の crate 数）, nextest_binaries, doc_binaries,
+  passed, failed, ignored, nextest_exit, doctest_exit, nextest_secs, doctest_secs, summary_parsed}`。どちらかが落ちる・nextest の
+  `Starting … across N binaries` / `Summary …` の行が読めない（全部走った証拠が無い）ときは段が落ちる。
+  - `cargo-nextest` が要る（版は `tools/nextest/VERSION` で固定。入れ方は `docs/ops/nextest.md`）。無ければ作業ツリーを作る前に
+    入れ方を示して落ちる。非常用に `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列の `cargo test --workspace`（`runner: "cargo-test"`）。
+  - 開発者は従来どおり `cargo test --workspace` でよい（CLAUDE.md。両方が通ることを保つ）。並列で速く回すなら
+    `scripts/dev/test-parallel.sh [-p <crate> …]`。
 - **※ GUI の検査だけの段を飛ばす規則（Phase SD-1、ADR-0041 §7）**: `current` の sha からこの sha までに **gui/ の下が 1 ファイルも
   変わっていない**ときだけ、`pnpm-test`・`pnpm-mobile-audit`・`pnpm-e2e-mock` を回さず、gate.json の `steps[]` に
   `{"skipped": true, "reason": "no change under gui/", "exit": 0, "secs": 0}` を書く（`gui_skip_base` に判断した base）。

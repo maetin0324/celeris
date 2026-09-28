@@ -18,8 +18,10 @@ sha="$(git -C "$root/repo" rev-parse HEAD)"
 sha12="${sha:0:12}"
 
 # 偽の cargo: 見えた CARGO_TARGET_DIR を記録して失敗する（gate の最初の step で止める）。
+# `cargo nextest --version`（Phase SD-2: release.sh が最初に確かめる）だけは通す。
 cat >"$root/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
+[ "$1 ${2:-}" = "nextest --version" ] && { echo 'cargo-nextest 0.9.146 (fake)'; exit 0; }
 printf '%s\n' "${CARGO_TARGET_DIR:-}" >>"$CARGO_ENV_LOG"
 exit 1
 EOF

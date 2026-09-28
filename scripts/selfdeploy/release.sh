@@ -2,7 +2,7 @@
 # scripts/selfdeploy/release.sh <git-ref> — ADR-0040 D1/D2 の「リリース」段。
 #
 #   作業チェックアウトとは別の detached の作業ツリー（$CELERIS_STATE_DIR/releases/.build/<sha12>）で
-#   cargo test → clippy → build --release → GUI pnpm install/typecheck/test/build
+#   cargo test（Phase SD-2: scripts/dev/test-parallel.sh でバイナリ並列）→ clippy → build --release → GUI pnpm install/typecheck/test/build
 #   → pnpm mobile-audit → pnpm e2e:mock を順に回し、
 #   全部 exit 0 のときだけ $CELERIS_STATE_DIR/releases/<sha12>/ を作る。
 #   1 つでも非 0 なら**リリースを作らず**、.build/<sha12>/gate.json だけ残す。
@@ -49,6 +49,10 @@ env:
   SD_RELEASE_SCRATCH_OWNER  既定 release-build（全リリースで共有する scratch の owner。Phase SD-1）
   SD_RELEASE_TARGET_TTL     既定 172800（秒）。共有 target の lease の TTL（最後のリリースからこの間は P0）
   SD_RELEASE_PRUNE   0 なら最後の掃除（古いリリースと使われない .pnpm-prod-cache の削除）を飛ばす
+  SD_GATE_TEST_RUNNER  既定 nextest（`scripts/dev/test-parallel.sh`: テストバイナリを並列。Phase SD-2）。
+                       cargo-test なら従来の `cargo test --workspace`（直列。非常用）
+  SD_TEST_PARALLEL     既定 この release.sh の隣の ../dev/test-parallel.sh（テスト用の差し替え口）
+  CELERIS_TEST_JOBS    並列に走らせるテストの数（既定 min(8, max(2, nproc/3))。test-parallel.sh が読む）
 EOF
   exit 2
 }
@@ -58,6 +62,13 @@ REF="$1"
 
 sd_require_json_tool
 command -v cargo >/dev/null 2>&1 || sd_die "cargo not found"
+SD_TEST_PARALLEL="${SD_TEST_PARALLEL:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dev/test-parallel.sh}"
+if [ "${SD_GATE_TEST_RUNNER:-nextest}" = nextest ]; then
+  [ -f "$SD_TEST_PARALLEL" ] || sd_die "test runner $SD_TEST_PARALLEL not found"
+  # 早めに（作業ツリーを作る前に）分かりやすく落とす。版の照合は test-parallel.sh が行う。
+  cargo nextest --version >/dev/null 2>&1 \
+    || sd_die "cargo-nextest is not installed; install once: cargo install cargo-nextest --locked --version $(cat "$(dirname "$SD_TEST_PARALLEL")/../../tools/nextest/VERSION" 2>/dev/null || echo '<tools/nextest/VERSION>') (docs/ops/nextest.md), or set SD_GATE_TEST_RUNNER=cargo-test"
+fi
 sd_use_pnpm
 
 SHA12="$(sd_sha12 "$REF")"
@@ -243,11 +254,21 @@ run_pnpm_e2e_mock() {
 
 # `cargo test` のログから「走ったテストバイナリの数・合格・失敗・無視」を数える（Phase SD-1）。共有 target で
 # 作り直さなかったバイナリも cargo は必ず走らせるので、数が前回と同じなら「全部走った」証拠になる。
+# Phase SD-2: 並列の runner（test-parallel.sh）は最後に `CELERIS_TEST_SUMMARY {json}` を 1 行出すので、あればそれを
+# そのまま使う（`binaries` / `passed` / `failed` / `ignored` に runner・nextest の版・並列数・内訳が付く）。無ければ従来の
+# `cargo test` の出力（Running / Doc-tests / test result 行）を数える。
 cargo_test_summary_json() {
   local log="$BUILD/.gate-cargo-test.log"
   { [ -f "$log" ] && [ "$SD_JSON_TOOL" = python3 ]; } || { printf 'null'; return 0; }
   python3 - "$log" <<'PY'
 import json, re, sys
+for line in reversed(open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()):
+    if line.startswith("CELERIS_TEST_SUMMARY "):
+        try:
+            print(json.dumps(json.loads(line.split(" ", 1)[1])))
+            sys.exit(0)
+        except ValueError:
+            break
 binaries = passed = failed = ignored = 0
 with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     for line in fh:
@@ -259,7 +280,7 @@ with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
             passed += int(m.group(1))
             failed += int(m.group(2))
             ignored += int(m.group(3))
-print(json.dumps({"binaries": binaries, "passed": passed, "failed": failed, "ignored": ignored}))
+print(json.dumps({"runner": "cargo-test", "binaries": binaries, "passed": passed, "failed": failed, "ignored": ignored}))
 PY
 }
 
@@ -365,7 +386,19 @@ else
 fi
 # Phase 116 追記: Celeris の reviewer は `cargo fmt --check` を見るので、main が未整形だと配送が全部落ちる。
 run_step cargo-fmt-check "$BUILD" -- cargo fmt --all -- --check
-run_step cargo-test "$BUILD" -- cargo test --workspace
+# Phase SD-2（ADR-0041 §8、人の判断 2026-09-28「バイナリ並列で動かす」）: テストバイナリを並列に回す
+# （`scripts/dev/test-parallel.sh` = `cargo nextest run --workspace` + `cargo test --doc --workspace`）。
+# 直列が要るテストは**ビルドする sha の** `.config/nextest.toml` の test-group で縛る。
+# cargo-nextest が無ければこの段は分かりやすく落ちる（入れ方は docs/ops/nextest.md）。
+# `SD_GATE_TEST_RUNNER=cargo-test` で従来の `cargo test --workspace`（直列）に戻せる（非常用）。
+run_cargo_test_step() {
+  case "${SD_GATE_TEST_RUNNER:-nextest}" in
+    nextest) run_step cargo-test "$BUILD" -- bash "$SD_TEST_PARALLEL" ;;
+    cargo-test) run_step cargo-test "$BUILD" -- cargo test --workspace ;;
+    *) sd_die "SD_GATE_TEST_RUNNER must be nextest or cargo-test (got ${SD_GATE_TEST_RUNNER})" ;;
+  esac
+}
+run_cargo_test_step
 run_step cargo-clippy "$BUILD" -- cargo clippy --workspace -- -D warnings
 run_step cargo-build "$BUILD" -- cargo build --release -p celeris -p celerisctl
 run_step pnpm-install "$BUILD/gui" -- pnpm install --frozen-lockfile

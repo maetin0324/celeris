@@ -352,3 +352,66 @@ ADR-0075 に「Phase G2 実装時の逸脱・明確化」1〜13 と、D7 に「�
 
 - P-G2-1: release.sh のゲートでも `celerisctl scratch env --owner release-<sha12>` の sccache 系を使う（今は `CARGO_TARGET_DIR` だけを
   lease から取る。`[scratch.cargo]` の容量の得と依存の hit を release ゲートにも）。G1 の P-G1-1（N-1 の config の parse 確認）と一緒に。
+
+## Phase G3（L2: webdav の階層 cache server + 非同期 flusher + L2 の GC + 監視）— 着手 2026-09-28
+
+作業は git worktree の中（main へ merge / push しない）。自分のビルドは
+`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-g3/target CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only`。
+
+### G3 checkpoint 1: U5 の実測と設計の確定（完了 2026-09-28）
+
+測定の条件: sccache 0.18.0（`~/.cargo/bin/sccache`）、専用の sccache server（`SCCACHE_SERVER_PORT=4292`、
+`SCCACHE_WEBDAV_ENDPOINT=http://127.0.0.1:4291`、`SCCACHE_WEBDAV_KEY_PREFIX=sccache`、`SCCACHE_WEBDAV_TOKEN=u5-secret-token`）、
+記録用の stub（`scripts/scratch/u5/webdav-record-stub.py`。loopback の 4291、メソッド・パス・応答・長さ・`Authorization` を 1 行ずつ記録）。
+ビルドは 2 crate（lib + bin）の小さな workspace を `CARGO_INCREMENTAL=0 RUSTC_WRAPPER=sccache cargo build --offline`（target は
+`/var/lib/celeris/scratch/targets/agent-g3-u5/target`、各回 空から）。再現: `scripts/scratch/u5/measure.sh <case>`。
+
+1. **発行されるメソッドとパス**（case `ok`、stub が PROPFIND に正しく答えるとき）:
+
+   ```
+   GET      /sccache/.sccache_check                -> 404          # server 起動時の storage check（読み）
+   PROPFIND /sccache/            (Depth: 0)        -> 207          # 親の collection があるか
+   PUT      /sccache/.sccache_check  (13 bytes)    -> 201          # storage check（書き。中身 "Hello, World!"）
+   GET      /sccache/9/8/8/988fc487…c95a7          -> 404          # 1 回目のビルド: miss
+   PROPFIND /sccache/9/8/8/      (Depth: 0)        -> 207          # PUT の前に毎回、親の collection を確かめる
+   PUT      /sccache/9/8/8/988fc487…c95a7 (10868 bytes) -> 201
+   GET      /sccache/9/8/8/988fc487…c95a7          -> 200 (10868) # 2 回目のビルド: hit
+   ```
+
+   - path は `/<KEY_PREFIX>/<k0>/<k1>/<k2>/<key>`（sccache の `normalize_key`）。key は 64 桁の 16 進（sha256）。
+     `SCCACHE_WEBDAV_TOKEN` は `Authorization: Bearer <token>` で毎回送られる（0.18 の config は `USERNAME` / `PASSWORD` / `TOKEN` を読む）。
+   - HEAD・DELETE・MOVE・COPY・PROPPATCH・Range 付きの GET は出なかった。
+   - **PROPFIND が 404 なら opendal は親から順に PROPFIND して MKCOL する**（stub の初版: `PROPFIND /sccache/9/8/8/` `/sccache/9/8/`
+     `/sccache/9/` → 404 のあと `/sccache/` の 207 で止まった）。**207 の応答に `getlastmodified` が無いと opendal は PUT せずに
+     失敗する**（`write close failed … propfind response missing getlastmodified`、sccache の stats は `cache_write_errors 1`）。
+     → cache server は **collection（`/` で終わる path）の PROPFIND に常に 207 + `resourcetype collection` + `getlastmodified`** を返す
+     （ディレクトリは仮想。MKCOL は実装するが 201 を返すだけで、通常は呼ばれない）。
+   - stats: 1 回目 `misses Rust 1 / writes 1`、2 回目 `hits Rust 1`。entry の中身は ZIP（各 member は sccache が zstd で圧縮済み。
+     `cache_io.rs`）。L2 の zstd は容量の得ではなく checksum のため（ADR の見込みどおり）。
+2. **backend が起動時に居ない**（case `down-at-start`）: `sccache: error: Server startup failed: cache storage failed to read: …
+   Connection refused`、exit 2。**sccache の server が起動しない**。storage check の GET が 404 以外（case `500`: 500 を返す）でも同じく
+   起動失敗。→ `celerisctl scratch env --server` は cache server の `/healthz` を確かめ、応答が無ければ webdav を与えず G2 の
+   local disk（`SCCACHE_DIR`）に戻す（さもないと `celeris-sccache.service` が restart を繰り返す）。
+3. **backend が起動後に死ぬ**（case `down-mid`: storage check の後に stub を止める）: ビルドは **exit 0**。stats は
+   `misses Rust 1 / writes 0 / write_err 1`（GET の失敗は miss、PUT の失敗は write error。compile は失敗しない）。
+4. **backend が遅い**（case `slow`: GET と PUT に 8 秒の sleep）: ビルドは exit 0 だが **16.4 秒**（通常 1 秒未満）。sccache は
+   GET の応答を待ってから compile し、**PUT の完了も待ってから結果を返す**（stub の PUT の応答時刻 = ビルドの終了時刻）。0.18 には
+   backend の timeout が無い（8 秒では切れなかった。`cache_timeouts 0`）。→ (a) PUT は L1 に書いた時点で応答する（L2 を critical path
+   に入れない。入力メモの原則が必須であることの実測）、(b) GET の L2 は `get_timeout_ms`（既定 500）で打ち切って miss を返す、
+   (c) cache server が hang した場合に備え、dispatcher は run の開始時に `/healthz`（300 ms）を見て、sccache が webdav で動いているのに
+   応答が無ければ `RUSTC_WRAPPER` を与えない（素の cargo）。
+5. **sccache 0.18 は multilevel cache（disk + remote の階層）を内蔵**している（`src/cache/multilevel.rs`）。本 Phase は ADR の決定
+   （D5 (b): 階層は Celeris の cache server が持ち、sccache からは 1 つの webdav に見える）のまま進める。理由: multilevel の L2 への
+   書き込みが critical path の外かは未確認で、帯域制限・L2 の切り離し・GC を Celeris が制御できない。
+
+**確定した設計**（ADR-0075「Phase G3 実装時の逸脱・明確化」に同じ内容）:
+
+- 実装するメソッド: GET / HEAD / PUT / PROPFIND（Depth 0 のみ。collection は常に 207、ファイルは L1 か L2 にあれば 207）/ MKCOL（201）。
+  それ以外は 405。key = path の最後の要素。`.sccache_check` は L2 に流さずメモリだけで扱う。`/healthz` と `/stats` は認証なし、DAV は
+  token（`Authorization: Bearer`、または Basic の password）。
+- cache server の L1 は `<scratch>/cache-l1/`（G2 の sccache の disk cache `<scratch>/sccache-l1/` と分ける。cache server が落ちたときの
+  fallback で sccache が同じ dir を LRU 走査して cache server の entry を消さないため）。
+- `celerisctl scratch env --server`: cache server が健康なら `SCCACHE_WEBDAV_ENDPOINT` / `SCCACHE_WEBDAV_KEY_PREFIX` / `SCCACHE_WEBDAV_TOKEN`、
+  でなければ G2 の `SCCACHE_DIR` / `SCCACHE_CACHE_SIZE`。選んだ方式を `<scratch>/bin/sccache-server.mode` に書き、dispatcher はそれが
+  webdav のときだけ `/healthz` も確かめる。client（run）の env は G2 のまま（webdav 系を入れない: 万一 client が server を起こしても
+  local disk で起動し、token を run の env に出さない）。

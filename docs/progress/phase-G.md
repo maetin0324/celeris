@@ -759,3 +759,76 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
   また adopt + 掃除 + 依存の作り直しから始まる）。`.pnpm-prod-cache/ca92282492d21e7e8b134a8e160f1b7d`（いまの lockfile の本番依存）と
   固定の作業ツリー `releases/.build/tree`（`$SD_REPO` の git worktree として登録されたまま）は次のリリースが使うので残した。
 - 旧い `release.sh`（main）は `.build/<sha12>` を使うので、`.build/tree` と `.pnpm-prod-cache` があっても影響しない。
+
+## SD-2: テストバイナリの並列実行（2026-09-28、完了・worktree、main 未 merge）
+
+依頼: 人の判断（2026-09-28「バイナリ並列で動かすようにしてください」、SD-1 の P-SD1-2）。release の gate の `cargo-test`
+（SD-1 の 2 回目で 213.8 s、うち実行 ≈ 202 s。cargo はテストバイナリを 1 本ずつ回す）を並列にする。設計の記録は ADR-0041 §8。
+
+### 変えたこと
+
+- **`scripts/dev/test-parallel.sh`（新規）**: `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`
+  （既定 `min(8, max(2, nproc/3))`）→ `cargo test --doc --workspace`（nextest は doc-test を回さない。このワークスペースの doc-test は
+  10 crate で 0 passed / 1 ignored だが、範囲を `cargo test --workspace` と同じに保つため回す。5.5 s）。最後に
+  `CELERIS_TEST_SUMMARY {json}`。どちらかが非 0、または nextest の `Starting … across N binaries` / `Summary …` が読めなければ非 0。
+  `cargo-nextest` が無い・版が `tools/nextest/VERSION`（0.9.146）と違うときは入れ方を示して止まる。開発者もそのまま使える。
+- **`.config/nextest.toml`（新規）**: retry 0、`slow-timeout` 60 s × 10 で打ち切り、通ったテストの行は出さない。test-group
+  `ssh-control-master`（max-threads 4）に `task-worker::ssh_localhost` と `e2e::cluster_scenarios`（ControlMaster `celeris-localhost` を
+  共有。直列の前提の洗い出しは ADR-0041 §8）。
+- **`scripts/selfdeploy/release.sh`**: `cargo-test` 段を `bash scripts/dev/test-parallel.sh` に（release.sh の隣の runner、nextest の設定は
+  ビルドする sha の `.config/nextest.toml`）。作業ツリーを作る前に `cargo nextest --version` を確かめ、無ければ入れ方を示して落ちる。
+  `SD_GATE_TEST_RUNNER=cargo-test` で従来の直列（非常用）。gate.json の `cargo_test` は `CELERIS_TEST_SUMMARY` をそのまま写す
+  （`runner` / `nextest_version` / `jobs` / `binaries` / `nextest_binaries` / `doc_binaries` / `passed` / `failed` / `ignored` / 各 exit・秒数 /
+  `summary_parsed`）。無ければ従来の `cargo test` の出力を数える（`runner: "cargo-test"` を足した）。
+- **`tools/nextest/VERSION`**（0.9.146）、**`docs/ops/nextest.md`**（入れ方・版の上げ方・無いとき・並列数）、`docs/selfdeploy.md` §2。
+- テスト: `scripts/selfdeploy/tests/release_parallel_test_gate.sh`（新規。偽の cargo で (1) 通る → `cargo_test` =
+  `{runner: nextest, binaries: 3, nextest_binaries: 2, doc_binaries: 1, passed: 8, failed: 0, ignored: 2, jobs: 3}`・`--test-threads 3`、
+  (2) nextest のテストが 1 つ落ちる → `failed_step: cargo-test`・リリース無し・`.build/<sha12>/gate.json` の `cargo_test.failed == 1`・
+  clippy 以降は回らない・doc-test は回る、(3) doc-test が落ちる → 落ちる、(4) exit 0 でも Summary 行が無い → 落ちる
+  （`summary_parsed: false`）、(5) nextest が無い → 作業ツリーを作る前に `cargo install cargo-nextest --locked --version 0.9.146` を
+  示して落ちる、(6) `SD_GATE_TEST_RUNNER=cargo-test` → 従来の `cargo test --workspace`）。`release_gui_skip_and_shared_tree.sh` と
+  `release_uses_scratch_lease.sh` の偽の cargo に `nextest` を足した。
+
+### 計測（2026-09-28、このホスト 24 CPU）
+
+| | before（SD-1 2 回目 943115c6e490、`cargo test --workspace`） | after（a3e3c1377890、このブランチ。nextest 8 並列） |
+|---|---|---|
+| **`cargo-test` 段** | **213.8 s** | **115.0 s** |
+| うちコンパイル | 11.6 s（3 crate） | 37.0 s（11 crate: 共有 target の最後のビルドから main が進んだ分） |
+| うちテストの実行 | ≈ 202 s（87 バイナリを直列） | 72.0 s（nextest の Summary）+ doc-test 5.5 s |
+| 走ったテスト | 87 バイナリ、2601 passed / 0 failed / 7 ignored | 87（nextest 77 + doc-test 10）、2601 passed / 0 failed / 7 ignored |
+| release.sh 全体 | 260.6 s（GUI の 3 段は skipped） | 313.4 s（`current` = 0633d1c91b96 から gui/ に差があり GUI の 3 段も回った: mobile-audit 97.5 s ほか） |
+
+- 実行だけで比べると **≈ 202 s → 77.5 s（約 2.6 倍）**。同じコンパイル量なら `cargo-test` 段は ≈ 90 s。
+- load average（15 s ごと）: `cargo-test` の間の load1 は 2.6〜6.7（最大 6.69）、release 全体の最大 7.62。8 並列でも 12 に届かない
+  （遅いテストは待ちが主で CPU を使わない）。
+- 手元の繰り返し（`scripts/dev/test-parallel.sh`、実行のみ・コンパイル済み）: 8 並列 76 s / 75 s / 76 s、16 並列 65 s、24 並列 63 s、
+  8 並列 + busy loop 6 本（nice 19）77 s（load1 最大 7.5）。**7 回とも 2601 passed / 0 failed**、flaky 0、LEAK 0。
+- 律速は 1 本のテスト: `task-core pause::tests::truncate_shrinks_to_the_overall_byte_cap_and_keeps_the_headline` 49.2 s（次点
+  `e2e::scenarios expired_lease_is_reclaimed_and_task_completes` 30.5 s、`task-ops changes::tests::a_command_that_never_finishes_is_killed`
+  30.0 s）。並列数を上げても 60 s 前後で頭打ちなのはこのため。
+
+### 提案
+
+- **P-SD2-1**: `task_core::pause::truncate_phase_report` は 1 要素 pop するごとに報告全体を JSON に直列化し直す（O(n²)。テストの
+  1 万要素で 49 s）。長さを差分で持てば一瞬になり、gate の実行は ≈ 30 s（次点の 2 本）まで縮む。製品コードの変更なので別 Phase。
+- **P-SD2-2**: `free_port()`（選んで閉じてから子が bind）の競合が nextest で出たら、該当のテストを test-group に入れる（今回は 0 回）。
+
+### ゲート（このブランチ、`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-nextest/target`、`CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG=line-tables-only`、`RUSTC_WRAPPER` 無し）
+
+- `cargo fmt --all -- --check` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`Starting 2601 tests across 77 binaries (6 tests skipped)`、`Summary … 2601 tests run: 2601 passed, 6 skipped`、
+  doc-test 10 crate（0 passed / 1 ignored）→ 合計 87 バイナリ、2601 passed / 0 failed / 7 ignored
+- `cargo test --workspace` → exit 0、98 の test result 行の合計 2601 passed / 0 failed / 7 ignored（196 s）
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `bash -n` を selfdeploy と scripts/dev の全スクリプトに → 構文エラー 0。`scripts/selfdeploy/tests/*.sh` 6 本とも exit 0
+- `SD_RELEASE_PRUNE=0 scripts/selfdeploy/release.sh worktree-agent-adb440bfe66cff75a` → exit 0（a3e3c1377890）。計測の後に削除した。
+  昇格はしていない。本番には触れていない。GUI は変えていない。
+
+### 後始末と未解決
+
+- `cargo-nextest` 0.9.146 を `~/.cargo/bin` に入れた（`cargo install cargo-nextest --locked --version 0.9.146`、build は scratch。
+  crates.io からの取得が遅く約 50 分）。release を回す別のホストがあれば同じく入れる（`docs/ops/nextest.md`）。
+- 計測のリリース `a3e3c1377890` は削除した。共有の作業ツリー `releases/.build/tree` と `release-build` の lease は release.sh の通常の
+  動作どおり残した（次のリリースが使う）。
+- commit の sha は計測の後に docs を足したため a3e3c1377890 とは違う（Rust と scripts の差分は同じ）。

@@ -29,9 +29,20 @@ cat >"$root/bin/cargo" <<'EOF'
 printf '%s\t%s\n' "${CARGO_TARGET_DIR:-}" "$*" >>"$CARGO_LOG"
 case "$1" in
   metadata) printf '{"workspace_members":["x 0.1.0"],"packages":[{"id":"x 0.1.0","name":"x"}]}\n' ;;
+  nextest)
+    case "$2" in
+      --version) echo 'cargo-nextest 0.9.146 (fake)' ;;
+      run)
+        printf '    Starting 3 tests across 1 binary (1 test skipped)\n'
+        printf '     Summary [   0.010s] 3 tests run: 3 passed, 1 skipped\n'
+        ;;
+    esac
+    ;;
   test)
-    printf '     Running unittests src/lib.rs (target/debug/deps/x-1)\n'
-    printf 'test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'
+    if [ "${2:-}" != --doc ]; then
+      printf '     Running unittests src/lib.rs (target/debug/deps/x-1)\n'
+      printf 'test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'
+    fi
     printf '   Doc-tests x\n'
     printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'
     ;;
@@ -129,12 +140,13 @@ gate_is "$c1_12" "g['gui_skip_base'] == '$c0_12'" || fail "gui_skip_base is not 
 gate_is "$c1_12" "g['build']['tree_reused'] is False and not steps['cargo-workspace-clean']['skipped']" \
   || fail "first release should create the build tree and clean the workspace members"
 gate_is "$c1_12" "g['build']['scratch_owner'] == 'release-build'" || fail "scratch owner is not release-build"
-gate_is "$c1_12" "g['cargo_test'] == {'binaries': 2, 'passed': 5, 'failed': 0, 'ignored': 1}" \
+gate_is "$c1_12" "{k: g['cargo_test'][k] for k in ('runner', 'binaries', 'passed', 'failed', 'ignored')} == {'runner': 'nextest', 'binaries': 2, 'passed': 5, 'failed': 0, 'ignored': 1}" \
   || fail "cargo_test summary is wrong"
 if cut -f2 "$root/pnpm.log" | grep -qxE 'test|mobile-audit|e2e:mock'; then
   fail "a skipped gui step was run: $(cat "$root/pnpm.log")"
 fi
-grep -q $'\ttest --workspace$' "$root/cargo.log" || fail "cargo test did not run"
+grep -q $'\tnextest run --workspace' "$root/cargo.log" || fail "cargo nextest run did not run"
+grep -q $'\ttest --doc --workspace' "$root/cargo.log" || fail "cargo test --doc did not run"
 [ -L "$root/state/releases/$c1_12/gui/node_modules" ] || fail "gui/node_modules is not a symlink"
 link1="$(readlink "$root/state/releases/$c1_12/gui/node_modules")"
 case "$link1" in ../../.pnpm-prod-cache/*/node_modules) ;; *) fail "unexpected node_modules link: $link1" ;; esac

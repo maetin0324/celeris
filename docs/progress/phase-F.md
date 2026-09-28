@@ -1753,3 +1753,15 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 - 本番への反映は昇格待ち（本 fix は production に触れていない。本番のファイルは read-only の参照だけ）。
 
 **昇格**: release `7667410c23d5`（main 7667410）。ゲート fmt / test / clippy 0、GUI 0、gen:types 差分ゼロ。verify ok=true live_ok=true schema 28。2026-09-28 12:06:01Z にライブ昇格（backup 20260928-120553-pre-7667410c23d5）。
+
+## 人の決定と本番 DB の修正（2026-09-28 11:2xZ、記録は 14:4xZ）
+
+- **P-F5-1-4b は実施**: 本番 DB の `runs` で `status='running'` のまま残っていた 7 行を人の指示で UPDATE した。dogfood 4 回目の gate run 2 行
+  （01M3K0X49JB5JP5TQH304ZTRW2 → 05:30:04Z、01M3K7WNJGYAPNBPMBVJXZ96CC → 07:34:04Z。lease 失効の requeue 時刻）、それ以前の reviewer 3 行と worker 2 行
+  （task はすべて done / cancelled。task の終了時刻）を `status='harness_error'`、`finished_at` を対応する時刻に。事前バックアップ
+  `~/.local/celeris/backups/20260928-112219-pre-runs-update.sqlite3`。UPDATE 後 `running` は 0 行。以後は F5-fix3 の store hook が同じ状態を作らない。
+- **P-F5-1-4a は取り下げ（人の決定）**: task の checkout は git worktree のまま使う（clone / `--reference` は容量と時間のコストが重い）。codex の書き込みは
+  F5-fix4 の `--add-dir`（worktree の gitdir と common dir）で足りる。共有 `.git` の他ブランチへの書き込みは reviewer とブランチ規約で受け止める。
+- **P-F5-1-4d は誤りだったので訂正**: 07:36Z の Sonnet run（01M3KF2HFMHPJR7YEB5HMT38MQ）の `rate_limit_event` は `status: allowed`（five_hour 13%、seven_day 11%）で、
+  制限には当たっていない。実際の原因は headless の claude-code が `cargo test --workspace` を background task にして turn を終え、セッション終了で
+  background task が kill され `result.json` 無しで終わったこと（F5-fix5 で修正・昇格済み）。router の不具合ではない。

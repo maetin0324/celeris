@@ -7417,3 +7417,27 @@ fixture（`test/mock-celeris/fixtures.ts::orgList`）には既に depth 5 のノ
   `pnpm mobile-audit`（routes=27 violations=0）、`pnpm e2e:mock`（exit 0）、`pnpm gen:types` の差分ゼロ、
   `node scripts/check-run-log.mjs`（幅 360 / 390 / 412 / 1440 × claude-code / codex / opencode で ok、実行中 run の追記を確認）。
 - 未解決: `pnpm e2e`（実 celeris）の `stdout-line` は `run-log-event` に置き換えた（fake ワーカーの行は 1 行 1 イベントなので件数は同じ）が、この run では未実行。
+
+## browser Phase 2: credential 登録画面・承認操作・Live View の本人限定（ADR-0080 D5/D6。タスク 01M3MZKB3DFYJNBH015MJGQ0BT、WU gui。2026-09-28）
+
+- 本人（owner）: `app/browser-owner.server.ts`。認証有効の単一所有者 instance だけ。`POST /browser/owner-session` が一回限り・5 分の
+  challenge を出し、本人がローカルで `celerisctl browser owner-session approve <challenge>` を実行すると、`CELERIS_GUI_OWNER_SOCKET`
+  （0700 directory / 0600 socket）経由でその cookie session に grant が付く。grant は cookie 期限まで・再登録で旧 grant 失効・logout と
+  GUI 再起動で失効。loopback 既定（認証なし）では登録・承認・Live View を全て拒否する。
+- 登録と承認: `POST /browser/waits/:waitId/credential`・`/decision`（resource route）。本人 + exact Origin（無い要求も拒否）+ session 束縛の
+  CSRF token + 保存済み wait の version/期限/理由を検査し、`CELERIS_GUI_ATTESTATION_KEY_FILE`（Ed25519 PKCS#8、0600 / 親 0700）で
+  human attestation を署名して daemon API へ中継する。秘密は応答・loader data・URL・ログに出さず、応答は固定コードだけ（`no-store`）。
+  フォームは既定値なし・`autocomplete="off"`・送信後に reset。GET は 405。
+- 表示: task 画面の「ブラウザの人待ち」（サイト・用途・run/session・期限、承認は対象操作・引数 digest・credential・policy revision）。
+  フォームは本人にだけ出す。inbox と認可画面に `browser_waits` の一覧（操作は task 画面）。
+- Live View: `BrowserRunsPanel` は raw `live_view_url` を使わず、サーバが決めた `/browser/live/:taskId/:runId` だけを href にする。
+  task/run の loader data と `/events` の SSE から `live_view_url` の値を消す。`/browser/live/**` は毎回 owner・task/run・RUNNING・
+  認証区間外を照合し、未認証 401 / 他 session 403 / 他 run 404。**読み取り専用 relay（HTTP/WS/assets の guard、token bootstrap の除去）は
+  未検証のため、guard を通った本人にも 503 `live_view_relay_unavailable` を返す**（ADR-0080 D6 の「満たせない場合の安全な動作」）。
+- 証拠: `pnpm typecheck` exit 0、`pnpm lint` 0 error、`pnpm test` 77 files / 1194 passed（`browser-phase2.test.tsx` 19）、`pnpm build` exit 0、
+  `pnpm e2e:mock` exit 0、`pnpm gen:types` は waits WU の schema を取り込み（types.ts +250 行。以後の再生成は差分ゼロ）、
+  `cargo test -p celerisctl --bin celerisctl browser` 2 passed。実プロセス smoke（本番 build + celerisctl）: 未認証 401、承認前 403、
+  CLI approve exit 0・再送 exit 1（`unknown_challenge`）、他 session 403、Origin なし POST 403、logout 後 403。
+- 未解決: dashboard relay（未実装のため Live View は本人にも開かない）。Node は SO_PEERCRED を読めないので control socket は
+  peer UID を照合しない（file mode のみ。同一 UID の相手は区別できない）。`pnpm e2e`（実 celeris）と登録→承認→再開のブラウザ確認は
+  e2e / integrate-wire WU で行う。新しい依存は無い。

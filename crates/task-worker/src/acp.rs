@@ -201,11 +201,21 @@ fn jsonrpc_error_response(id: serde_json::Value, code: i64, message: String) -> 
 }
 
 /// エラーオブジェクト（`{"code":.., "message":..}`）を分類・ログ用の 1 行にする。
-fn jsonrpc_error_text(error: &serde_json::Value) -> String {
+fn jsonrpc_error_text(error: &serde_json::Value, browser: bool) -> String {
     let message = error
         .get("message")
         .and_then(|m| m.as_str())
         .unwrap_or("unknown error");
+    if browser {
+        // Preserve provider routing without retaining reflected RPC message bodies.
+        let category = match classify_provider_failure(message) {
+            Some(ProviderFailure::Exhausted) => ": quota exhausted",
+            Some(ProviderFailure::Throttled { .. }) => ": rate limit",
+            Some(ProviderFailure::AuthFailed) => ": authentication failed",
+            None => "",
+        };
+        return format!("browser harness RPC failed{category}");
+    }
     match error.get("code").and_then(|c| c.as_i64()) {
         Some(code) => format!("{message} (code {code})"),
         None => message.to_string(),
@@ -272,7 +282,7 @@ async fn pump_one_line(
             if value.get("id").is_some() {
                 return Ok(Pumped::Response(value));
             }
-            warn!("run {run_id}: discarding unrecognized line from acp agent stdout: {trimmed}");
+            warn!("run {run_id}: discarding unrecognized line from acp agent stdout");
             Ok(Pumped::Handled)
         }
     }
@@ -309,7 +319,7 @@ async fn handle_incoming_request(
         }
         other => {
             warn!(
-                "run {run_id}: acp agent sent an unsupported request {other:?}; responding with method not found"
+                "run {run_id}: acp agent sent an unsupported request; responding with method not found"
             );
             write_line(
                 stdin,
@@ -597,7 +607,7 @@ async fn wait_for_response(
                 if value.get("id").and_then(|v| v.as_u64()) == Some(expected_id) {
                     return Ok(WaitOutcome::Response(value));
                 }
-                warn!("run {run_id}: discarding response with unexpected id: {value}");
+                warn!("run {run_id}: discarding response with unexpected id");
                 continue;
             }
         }
@@ -841,8 +851,16 @@ async fn run_acp(
     };
     let run_dir = req.workspace.join("runs").join(run_id);
     tokio::fs::create_dir_all(&run_dir).await?;
-    let stdout_log_path = run_dir.join("stdout.jsonl");
-    let stderr_log_path = run_dir.join("stderr.log");
+    // Browser commands and page content must not be persisted through the harness's raw
+    // stream capture. Parsing still uses the pipes; the browser supervisor emits safe audit events.
+    let (stdout_log_path, stderr_log_path) = if req.context.browser.is_some() {
+        (
+            Path::new("/dev/null").to_path_buf(),
+            Path::new("/dev/null").to_path_buf(),
+        )
+    } else {
+        (run_dir.join("stdout.jsonl"), run_dir.join("stderr.log"))
+    };
     let stderr_log_path_for_task = stderr_log_path.clone();
 
     // 前回の run（リトライ）が残した結果ファイルを、今回の run の結果と誤読しないよう先に消す
@@ -963,7 +981,7 @@ async fn run_acp(
     };
 
     if let Some(error) = init_response.get("error") {
-        let msg = jsonrpc_error_text(error);
+        let msg = jsonrpc_error_text(error, req.context.browser.is_some());
         return Err(kill_and_classify(
             &mut child,
             stderr_task,
@@ -1095,7 +1113,7 @@ async fn run_acp(
         }
     };
     if let Some(error) = new_session_response.get("error") {
-        let msg = jsonrpc_error_text(error);
+        let msg = jsonrpc_error_text(error, req.context.browser.is_some());
         // ADR-0054 D1（Phase 67）: `session/load` が拒否された（セッションが無い・失効した）ことを
         // 報告する。ディスパッチャはこれを見て `node_sessions` の該当行を retire し、次の run は
         // 新規セッションになる。`session/new`（継続でない run）の拒否はこれまでどおりただのエラー。
@@ -1193,7 +1211,7 @@ async fn run_acp(
                         if let Some(error) = v.get("error") {
                             warn!(
                                 "run {run_id}: acp agent rejected session/set_config_option: {}",
-                                jsonrpc_error_text(error)
+                                jsonrpc_error_text(error, req.context.browser.is_some())
                             );
                         }
                     }
@@ -1305,7 +1323,7 @@ async fn run_acp(
         WaitOutcome::Response(value) => match value.get("error") {
             Some(error) => RawOutcome::RpcError {
                 context: "session/prompt",
-                error_text: jsonrpc_error_text(error),
+                error_text: jsonrpc_error_text(error, req.context.browser.is_some()),
             },
             None => {
                 let stop_reason = value
@@ -1313,6 +1331,15 @@ async fn run_acp(
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string();
+                let stop_reason = if req.context.browser.is_some()
+                    && !matches!(
+                        stop_reason.as_str(),
+                        "end_turn" | "max_turn_requests" | "cancelled" | "refusal"
+                    ) {
+                    "unknown".to_string()
+                } else {
+                    stop_reason
+                };
                 RawOutcome::Success { stop_reason }
             }
         },
@@ -1504,6 +1531,97 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapab
 read -r _new
 printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-1","configOptions":[]}}'
 "#;
+
+    #[tokio::test]
+    async fn browser_rpc_errors_are_redacted_at_initialize_and_prompt() {
+        for initialize_failure in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = if initialize_failure {
+                r#"read -r _init
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"401 Unauthorized rpc-secret-sentinel"}}'
+"#.to_string()
+            } else {
+                format!(
+                    r#"{HANDSHAKE}
+read -r _prompt
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":-32000,"message":"401 Unauthorized rpc-secret-sentinel"}}}}'
+"#
+                )
+            };
+            let adapter = AcpAdapter::new(stub_acp(dir.path(), &script));
+            let mut req = sample_req(dir.path().to_path_buf());
+            req.context.browser = Some(crate::browser::BrowserContext {
+                run: task_core::BrowserRun {
+                    task_id: req.task.id,
+                    run_id: "browser-error-test".into(),
+                    session_id: "isolated-test".into(),
+                    state: task_core::BrowserRunState::Running,
+                    live_view_url: None,
+                },
+                cli: dir.path().join("celeris-browser.py"),
+            });
+            let sink = RecordingSink::default();
+            let result = adapter
+                .run(req, "browser-error-test", default_limits(), &sink)
+                .await;
+            let error = result.unwrap_err();
+            assert!(!error.to_string().contains("rpc-secret-sentinel"));
+            assert!(matches!(error, AdapterError::AuthFailed(_)));
+            let run = dir.path().join("runs/browser-error-test");
+            for entry in std::fs::read_dir(run).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_file() {
+                    let bytes = std::fs::read(path).unwrap();
+                    assert!(!String::from_utf8_lossy(&bytes).contains("rpc-secret-sentinel"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_run_discards_raw_logs_but_still_parses_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = stub_acp(
+            dir.path(),
+            &format!(
+                r#"{HANDSHAKE}
+read -r _prompt
+echo 'raw-browser-secret-sentinel'
+echo 'raw-browser-secret-sentinel' >&2
+printf '%s' '{{"summary":"safe browser result","evidence":[]}}' > artifacts/result.json
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+"#
+            ),
+        );
+        let adapter = AcpAdapter::new(config);
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.context.browser = Some(crate::browser::BrowserContext {
+            run: task_core::BrowserRun {
+                task_id: req.task.id,
+                run_id: "browser-log-test".into(),
+                session_id: "isolated-test".into(),
+                state: task_core::BrowserRunState::Running,
+                live_view_url: None,
+            },
+            cli: dir.path().join("celeris-browser.py"),
+        });
+        let sink = RecordingSink::default();
+        let result = adapter
+            .run(req, "browser-log-test", default_limits(), &sink)
+            .await
+            .unwrap();
+        assert!(matches!(result.terminal, Terminal::Done { .. }));
+        let run = dir.path().join("runs/browser-log-test");
+        assert!(!run.join("stdout.jsonl").exists());
+        assert!(!run.join("stderr.log").exists());
+        for entry in std::fs::read_dir(run).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(!String::from_utf8_lossy(&bytes).contains("raw-browser-secret-sentinel"));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn happy_path_progress_and_done_from_result_file() {

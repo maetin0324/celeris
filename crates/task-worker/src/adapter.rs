@@ -99,6 +99,8 @@ impl AdapterError {
 /// run 途中のイベント受け口。ディスパッチャがストアへ `WorkerProgress` / `ArtifactProduced` を追記する。
 /// 同期 API（ストアは `Mutex<Connection>` で直列化されるため）。
 pub trait EventSink: Send + Sync {
+    /// Capability lifecycle, produced by the supervisor, never parsed from model text.
+    fn browser_updated(&self, _browser: &task_core::BrowserRun) {}
     fn progress(&self, msg: &str);
     /// ADR-0048 D2（Phase 60a）: 構造化した進行（`kind` / `tool` / `summary` / `detail`）。
     /// 既定は `msg` だけを `progress` に流す（この口を実装していないシンクでも従来どおり動く）。

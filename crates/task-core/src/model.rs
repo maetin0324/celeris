@@ -899,6 +899,10 @@ pub fn truncate_detail(detail: &str) -> (String, bool) {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// Credential-free mapping between one isolated browser session and a worker execution.
+    BrowserUpdated {
+        browser: crate::BrowserRun,
+    },
     Created {
         task: Box<Task>,
     },

@@ -258,6 +258,10 @@ export type InFlightKind = "worker" | "reviewer";
  */
 export type Event =
   | {
+      browser: BrowserRun;
+      type: "browser_updated";
+    }
+  | {
       task: Task;
       type: "created";
     }
@@ -566,6 +570,8 @@ export type Event =
       type: "project_plan_decided";
       version: number;
     };
+export type BrowserRunState =
+  "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
 /**
  * DESIGN §5.3/§5.7 の `Check` 種別。
  */
@@ -3088,6 +3094,13 @@ export interface EventRow {
    */
   ts: string;
 }
+export interface BrowserRun {
+  live_view_url?: string | null;
+  run_id: string;
+  session_id: string;
+  state: BrowserRunState;
+  task_id: TaskId;
+}
 /**
  * DESIGN §4.1 の `Task`。
  */
@@ -5130,6 +5143,10 @@ export interface OrgCreateBody {
  * `org_nodes.profile_json` にも JSON にも出ない（導入前のノードと 1 バイトも変わらない）。
  */
 export interface Profile {
+  /**
+   * Administrator-granted browser capability; child profiles replace the complete grant.
+   */
+  browser?: BrowserCapability | null;
   budget?: BudgetPrefs;
   /**
    * 禁止する道具。和だが**常に勝つ**（実効の `tools` から引かれる）。
@@ -5162,6 +5179,17 @@ export interface Profile {
    * ADR-0046 D8 の語彙。親と和。
    */
   tools?: string[];
+}
+export interface BrowserCapability {
+  /**
+   * Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.
+   */
+  allowed_domains: string[];
+  /**
+   * Administrator-operated authenticated HTTPS reverse proxy to the substrate dashboard.
+   * This is not a CDP endpoint or a bearer-token URL.
+   */
+  live_view_url?: string | null;
 }
 /**
  * ADR-0069 D2（Phase 114）: 予算の天井（最も厳しい値が勝つ）。
@@ -5263,6 +5291,10 @@ export interface EffectiveProfile {
   allowed_tiers?: Tier[];
   approvals?: string[];
   /**
+   * Administrator-granted browser capability; child profiles replace the complete grant.
+   */
+  browser?: BrowserCapability | null;
+  /**
    * 根→葉のノード id（GUI が「どこから継いだか」を出すため）。
    */
   chain?: string[];
@@ -5336,6 +5368,10 @@ export interface OrgNode {
  * `org_nodes.profile_json` にも JSON にも出ない（導入前のノードと 1 バイトも変わらない）。
  */
 export interface Profile1 {
+  /**
+   * Administrator-granted browser capability; child profiles replace the complete grant.
+   */
+  browser?: BrowserCapability | null;
   budget?: BudgetPrefs;
   /**
    * 禁止する道具。和だが**常に勝つ**（実効の `tools` から引かれる）。

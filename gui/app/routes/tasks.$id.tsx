@@ -20,6 +20,7 @@ import type {
   TransitionOutcome,
 } from "~/celeris/action-types";
 import { retryData, transitionData } from "~/celeris/actions.server";
+import { loadBrowserRuns } from "~/celeris/browser";
 import type { CelerisClient } from "~/celeris/client.server";
 import { getCelerisClient } from "~/celeris/client.server";
 import { promoteArtifact, readArtifactPromoteBody } from "~/celeris/docs-admin.server";
@@ -40,6 +41,7 @@ import type {
   ApprovalItem,
   ArtifactList,
   ArtifactView,
+  BrowserRun,
   CommentList,
   ConfigView,
   Event,
@@ -102,6 +104,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import type { Tone } from "~/components/ui/tone";
 import { artifactStatusMessage, isJson, pickViewer } from "~/lib/artifact-view";
 import { isValidLabel, MAX_LABELS, PRIORITY_LABELS } from "~/lib/board";
+import { activeBrowserRunIds } from "~/lib/browser";
 import { defaultPromotePath, docsHref, isMarkdownName } from "~/lib/docs";
 import { shortId, splitOutcome } from "~/lib/format";
 import { isKnowledgeFallback } from "~/lib/knowledge";
@@ -143,6 +146,10 @@ import { cn } from "~/lib/utils";
 import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/tasks.$id";
 
+const BrowserRunsPanel = lazy(() =>
+  import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
+);
+
 // Phase 77（ADR-0055 性能予算）: 「変更」「ファイル」タブの本体（`~/components/task-changes.tsx`・
 // `~/components/task-files.tsx`）は、5 つあるタブのうち一度に 1 つしか出ない（`?tab=` で切り替え）のに
 // これまで両方とも静的 import していたので、どのタブを開いても他の 4 タブぶんの JS まで初回に届いていた。
@@ -174,6 +181,7 @@ function TaskTabSkeleton() {
  * `docs/celeris-api-v1.md` §3.6 の `types` フィルタの選択肢。`Event` の `type` タグと同じ。
  */
 const EVENT_TYPES: Event["type"][] = [
+  "browser_updated",
   "created",
   "transitioned",
   "worker_started",
@@ -242,6 +250,7 @@ const TIMELINE_TONE: Record<string, Tone> = {
 
 export interface TaskDetailData {
   detail: TaskDetail;
+  browserRuns: BrowserRun[];
   events: EventsPage;
   artifacts: ArtifactList;
   /** ADR-0044 D5: `GET /tasks/{id}/timeline`（時刻の昇順で 1 本）。 */
@@ -320,7 +329,8 @@ export async function loadTaskDetail(client: CelerisClient, taskId: string, requ
   // フォームは `types` チェックボックスごとに 1 つずつ付ける（`?types=a&types=b`）。
   // celeris 側はカンマ区切りの単一パラメータを期待する（docs/celeris-api-v1.md §3.6）ので、ここで結合する。
   const types = url.searchParams.getAll("types");
-  const [detail, events, artifacts, timeline, comments] = await Promise.all([
+  const [browserRuns, detail, events, artifacts, timeline, comments] = await Promise.all([
+    loadBrowserRuns(client, taskId, request.signal).catch(() => []),
     client.get<TaskDetail>(`/tasks/${taskId}`, { signal: request.signal }),
     client.get<EventsPage>(`/tasks/${taskId}/events`, {
       query: { types: types.length > 0 ? types.join(",") : undefined },
@@ -380,6 +390,7 @@ export async function loadTaskDetail(client: CelerisClient, taskId: string, requ
   }
   return {
     detail,
+    browserRuns,
     events,
     artifacts,
     timeline,
@@ -466,6 +477,7 @@ export async function action({ request, params }: Route.ActionArgs) {
 export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
   const {
     detail,
+    browserRuns,
     events,
     artifacts,
     timeline,
@@ -699,6 +711,7 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
         <>
           {tab === "overview" && (
             <OverviewTab
+              browserRuns={browserRuns}
               detail={detail}
               artifactCount={artifacts.items.length}
               org={org}
@@ -968,6 +981,7 @@ function FailureBanner({
 
 /** 概要タブ（ADR-0044 D5）: 従来の詳細一式に、人が直接直せる編集フォーム（D1）を足したもの。 */
 function OverviewTab({
+  browserRuns,
   detail,
   artifactCount,
   org,
@@ -982,6 +996,7 @@ function OverviewTab({
 }: {
   humanReview: ApprovalItem[];
   detail: TaskDetail;
+  browserRuns: BrowserRun[];
   artifactCount: number;
   org: OrgNode[];
   milestones: MilestoneView[];
@@ -1157,6 +1172,11 @@ function OverviewTab({
       {/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（計画・WU の表・replan の履歴）。
           計画も gate の判定も無い古いタスクは execution が無いので何も出ない（D23 の後方互換）。 */}
       <ExecutionSection execution={detail.execution} taskId={task.id} />
+      {browserRuns.length > 0 && (
+        <Suspense fallback={null}>
+          <BrowserRunsPanel runs={browserRuns} activeRunIds={activeBrowserRunIds(detail.runs, task.status)} />
+        </Suspense>
+      )}
 
       <section aria-labelledby="runs-heading" data-testid="runs-section">
         <Card>

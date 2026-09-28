@@ -93,6 +93,46 @@ fn stdout_of(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+#[test]
+fn manual_run_cannot_silently_drop_browser_capability() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("celeris.sqlite3");
+    let script = write_script(tmp.path(), "must-not-run.sh", "touch invoked\n");
+    let config = write_config(
+        tmp.path(),
+        &script,
+        "[[providers]]\nid = \"fake-local\"\nadapter = \"fake\"\n",
+    );
+    let store = SqliteStore::open(&db).unwrap();
+    let mut task = sample_task(
+        Status::Ready,
+        WorkspaceSpec::Local {
+            path: tmp.path().join("ws"),
+            mode: None,
+        },
+    );
+    task.skills = vec!["browser-enabled".into()];
+    store.insert(&task).unwrap();
+    let out = run_celerisctl(
+        &db,
+        &[
+            "worker",
+            "run",
+            "--config",
+            config.to_str().unwrap(),
+            "--task",
+            &task.id.to_string(),
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("browser capability requires dispatcher execution")
+    );
+    assert!(!tmp.path().join("ws").exists());
+    assert!(store.events_for(task.id).unwrap().is_empty());
+}
+
 /// done: progress / artifact を逐次出し、`context.answers` に事前の `Answered` イベントが載り、
 /// DB には一切書き込まれない（events_for の件数・status が不変）。
 #[test]

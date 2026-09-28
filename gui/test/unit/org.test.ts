@@ -114,6 +114,32 @@ describe("buildProfileInput（ADR-0046 D1、GUI の「profile を編集」フォ
     expect(buildProfileInput(new FormData())).toEqual({});
   });
 
+  it("preserves the own browser grant when another profile field changes", async () => {
+    const browser = { allowed_domains: ["example.com"], live_view_url: "https://browser.example/dashboard" };
+    const node = orgNode("browser-team", { profile: { browser, skills: ["browser-enabled"] } });
+    const form = new FormData();
+    form.set("profile_present", "1");
+    form.set("profile_browser", JSON.stringify(node.profile?.browser ?? null));
+    form.set("profile_skills", "browser-enabled rust");
+    const body = buildOrgPatchInput(form);
+    expect(body.profile).toEqual({ browser, skills: ["browser-enabled", "rust"] });
+    mock.on("PATCH", "/api/v1/org/browser-team", (_req, res) => sendJson(res, 200, node));
+    expect((await patchOrgNode(client, node.id, body)).ok).toBe(true);
+    expect(JSON.parse(mock.requests.at(-1)?.body ?? "")).toEqual(body);
+  });
+
+  it.each([null, "", "null"])("does not grant browser capability from an absent own grant: %s", (value) => {
+    const form = new FormData();
+    if (value !== null) form.set("profile_browser", value);
+    expect(buildProfileInput(form)).toEqual({});
+  });
+
+  it("rejects malformed preservation data instead of silently revoking the browser grant", () => {
+    const form = new FormData();
+    form.set("profile_browser", "{");
+    expect(() => buildProfileInput(form)).toThrow();
+  });
+
   it("skills: 空白・カンマ区切りの自由記述を配列にする（開いた語彙なのでチェックボックスにできない）", () => {
     const form = new FormData();
     form.set("profile_skills", "rust, sqlite  io_uring");

@@ -7403,3 +7403,17 @@ fixture（`test/mock-celeris/fixtures.ts::orgList`）には既に depth 5 のノ
 - 対応(2): loader が reviewing / approval のタスクのときだけ `GET /inbox` を引き（失敗しても画面は出す）、概要タブ先頭に `HumanReviewPanel`（条件・直近 run の要約・条件別判定・reviewer 指摘・証拠・成果物と「変更」タブへのリンク・承認/却下）を出す。API 変更なし。
 - 検証: `pnpm lint/typecheck/test(1065)/build`、`node scripts/check-human-review.mjs`（デスクトップ 1440・スマホ 393 で全チェック true、`docs/gui/human-review/*.png`）。
 - 未確認: 実 celeris での実機確認、`pnpm e2e`、Console 画面の `run 終了:` 表示（未変更）。
+
+## run ログの会話形式の表示（ADR-GUI-0013。タスク 01M3MCA20JSAKGENH571NZES1F。2026-09-28）
+
+- 変更: `/tasks/:id/runs/:runId`（タスクと WorkUnit の run）の stdout.jsonl を、生の JSON の行から、種類ごとに見分けられる時系列の
+  イベント（発言 Markdown・思考・ツール呼び出しと結果・コマンドと出力/exit・ファイル変更の差分・エラー・使用量/費用/所要時間・システム・未対応の形式）に。
+  変換は `app/lib/run-log.ts`（claude-code stream-json / codex exec json / ACP の adapter）、表示は `app/components/RunLog.tsx`（harness を知らない）。
+  長い本文は既定で畳み、各イベントに「JSON」「コピー」、run 全体に「元の JSON（全体）」「全体をコピー」。追記は従来の 1 秒ごとの `?offset=` 追尾のまま。
+  WorkUnit 表の実行中 run からログへのリンクを足した。`lib/stream-json.ts` は置き換えて削除。
+- fixture: `test/fixtures/run-log/*-real.jsonl` は本番の run の実ログから行を選び長い文字列を切り詰めたもの（claude-code / codex / opencode ACP）。
+  `acp-synthetic.jsonl` は本文を持つ ACP の run が本番にまだ無いので仕様どおりに作ったもの。
+- 証拠: `pnpm lint`（0 error）、`pnpm typecheck`（exit 0）、`pnpm test`（74 files / 1128 tests passed、うち `run-log.test.ts` 19）、`pnpm build`（exit 0）、
+  `pnpm mobile-audit`（routes=27 violations=0）、`pnpm e2e:mock`（exit 0）、`pnpm gen:types` の差分ゼロ、
+  `node scripts/check-run-log.mjs`（幅 360 / 390 / 412 / 1440 × claude-code / codex / opencode で ok、実行中 run の追記を確認）。
+- 未解決: `pnpm e2e`（実 celeris）の `stdout-line` は `run-log-event` に置き換えた（fake ワーカーの行は 1 行 1 イベントなので件数は同じ）が、この run では未実行。

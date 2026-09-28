@@ -8,13 +8,21 @@ import remarkGfm from "remark-gfm";
  * `React.lazy` の窓口）からだけ読み込む。ここを直接 import しない。
  * DESIGN §8.3: LLM が書いた信用できない内容なので、生の HTML タグは `react-markdown` の既定どおりテキストとしてエスケープされる。
  */
-export function MarkdownViewerBody({ content, live = false }: { content: string; live?: boolean }) {
+export function MarkdownViewerBody({
+  content,
+  live = false,
+  bare = false,
+}: {
+  content: string;
+  live?: boolean;
+  bare?: boolean;
+}) {
   return (
     <div
       data-testid="markdown-viewer"
       aria-live={live ? "polite" : undefined}
       aria-atomic={live ? "false" : undefined}
-      className="markdown rounded-lg border border-border bg-surface p-4"
+      className={bare ? "markdown min-w-0 break-words" : "markdown rounded-lg border border-border bg-surface p-4"}
     >
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>

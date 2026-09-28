@@ -126,7 +126,7 @@ test.describe("受け入れ条件 1・2・3・6: /clusters、受信箱の cluste
 
     await page.getByTestId("run-log-link").first().click();
     await expect(page).toHaveURL(/\/tasks\/.+\/runs\/.+$/);
-    await expect(page.getByTestId("stdout-line").first()).toContainText("used the cluster file");
+    await expect(page.getByTestId("run-log-event").first()).toContainText("used the cluster file");
   });
 
   test("/clusters の a11y: critical / serious な violation が無い", async ({ page }) => {

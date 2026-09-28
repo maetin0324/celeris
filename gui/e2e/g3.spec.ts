@@ -87,7 +87,7 @@ test.describe("受け入れ条件 1: run のログビューア", () => {
     expect(expectedLines).toBeGreaterThan(0);
 
     await page.goto(`/tasks/${taskId}/runs/${runId}`);
-    await expect(page.getByTestId("stdout-line")).toHaveCount(expectedLines);
+    await expect(page.getByTestId("run-log-event")).toHaveCount(expectedLines);
     await expect(page.getByTestId("result-section")).toContainText("fixture done");
   });
 });
@@ -231,9 +231,9 @@ test.describe("受け入れ条件 7: 実行中の run の追尾", () => {
     expect(runId).toBeTruthy();
 
     await gotoWithStream(page, `/tasks/${id}/runs/${runId}`);
-    const initialCount = await page.getByTestId("stdout-line").count();
+    const initialCount = await page.getByTestId("run-log-event").count();
     await expect
-      .poll(async () => page.getByTestId("stdout-line").count(), { timeout: 8_000, intervals: [500] })
+      .poll(async () => page.getByTestId("run-log-event").count(), { timeout: 8_000, intervals: [500] })
       .toBeGreaterThan(initialCount);
 
     // 最終的に done まで進む（後片付けと合わせて replay の健全性も確認）。仕様に時間の上限は無い。

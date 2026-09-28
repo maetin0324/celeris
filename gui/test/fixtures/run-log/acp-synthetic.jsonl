@@ -1,0 +1,9 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"まず構成を"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"確かめる。"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"README を"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"直します。"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"Edit README.md","kind":"edit","status":"pending","rawInput":{"filePath":"README.md"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","content":[{"type":"diff","path":"README.md","oldText":"# old\nbody","newText":"# new\nbody"}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"plan","entries":[{"content":"調べる","status":"completed"},{"content":"直す","status":"pending"}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"brand_new_update","foo":1}}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}

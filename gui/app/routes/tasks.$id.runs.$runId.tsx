@@ -1,17 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isRouteErrorResponse, Link } from "react-router";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import type { RunList, RunSummary } from "~/celeris/types";
 import { CodeViewer } from "~/components/CodeViewer";
 import { RouteRecovery } from "~/components/RouteRecovery";
+import { RunLog, RunLogKindCounts } from "~/components/RunLog";
 import { Badge } from "~/components/ui/badge";
 import { buttonClass } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
 import { Icon } from "~/components/ui/Icon";
-import { Alert } from "~/components/ui/misc";
+import { Alert, CopyButton } from "~/components/ui/misc";
 import { isTransientStatus } from "~/lib/recovery";
-import { classifyStreamJsonLine, type FormattedLine } from "~/lib/stream-json";
+import { countByKind, parseRunLog } from "~/lib/run-log";
 import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/tasks.$id.runs.$runId";
 
@@ -127,7 +128,9 @@ export default function RunDetailPage({ loaderData }: Route.ComponentProps) {
     };
   }, [running, taskId, run.run_id]);
 
-  const formatted: FormattedLine[] = lines.map((line) => classifyStreamJsonLine(line));
+  // 追記のたびに全体を変換し直す（行をまたいで tool_use と結果を結ぶので。ADR-GUI-0013 D3）。
+  const events = useMemo(() => parseRunLog(lines), [lines]);
+  const counts = useMemo(() => countByKind(events), [events]);
 
   return (
     <div className="space-y-6">
@@ -159,51 +162,45 @@ export default function RunDetailPage({ loaderData }: Route.ComponentProps) {
             icon="terminal"
             title={
               <h2 id="stdout-heading" className="text-[0.95rem] font-semibold text-fg">
-                stdout.jsonl（{lines.length} 行）
+                ログ（{events.length} 件 / stdout.jsonl {lines.length} 行）
               </h2>
             }
+            description={rawMode ? undefined : <RunLogKindCounts counts={counts} />}
             actions={
-              <button
-                type="button"
-                onClick={() => setRawMode((v) => !v)}
-                className={buttonClass({ variant: "secondary", size: "xs" })}
-                data-testid="stdout-toggle-raw"
-              >
-                <Icon name="code" />
-                {rawMode ? "構造化表示" : "生テキスト"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setRawMode((v) => !v)}
+                  aria-pressed={rawMode}
+                  className={buttonClass({ variant: "secondary", size: "xs" })}
+                  data-testid="stdout-toggle-raw"
+                >
+                  <Icon name="code" />
+                  {rawMode ? "会話形式で表示" : "元の JSON（全体）"}
+                </button>
+                <CopyButton value={lines.join("\n")} label="全体をコピー" />
+              </>
             }
           />
-          <CardBody className={rawMode ? "p-0" : undefined}>
+          <CardBody className={rawMode ? "p-0" : "px-3 py-4 sm:px-5"}>
             {rawMode ? (
-              <CodeViewer content={lines.join("\n")} />
+              <div data-testid="run-log-raw">
+                <CodeViewer content={lines.join("\n")} />
+              </div>
             ) : (
-              <ul
-                className="space-y-1.5 rounded-lg bg-surface-2 p-3 font-mono text-xs leading-relaxed text-fg"
-                data-testid="stdout-lines"
+              <RunLog events={events} />
+            )}
+            {running && !rawMode && (
+              <p
+                className="mt-3 flex items-center gap-1.5 text-sm text-fg-subtle"
+                data-testid="run-log-live"
+                aria-live="polite"
               >
-                {formatted.map((entry, i) => (
-                  <li
-                    // biome-ignore lint/suspicious/noArrayIndexKey: 行は追尾で末尾に追加されるだけで並び替えない
-                    key={i}
-                    data-testid="stdout-line"
-                    data-line-kind={entry.kind}
-                    className="rounded-md border border-border-strong/40 bg-surface/40 px-2.5 py-1.5"
-                  >
-                    {entry.kind === "utterance" && <p className="whitespace-pre-wrap">{entry.text}</p>}
-                    {entry.kind === "tool" && (
-                      <p>
-                        <span className="text-fg-subtle">tool:</span> {entry.label}
-                        {entry.detail ? ` ${entry.detail}` : ""}
-                      </p>
-                    )}
-                    {entry.kind === "result" && (
-                      <p className={entry.isError ? "text-danger" : "text-success"}>result: {entry.text}</p>
-                    )}
-                    {entry.kind === "raw" && <p className="text-fg-subtle">{entry.text}</p>}
-                  </li>
-                ))}
-              </ul>
+                <Badge tone="primary" dot pulse>
+                  実行中
+                </Badge>
+                新しい出力を 1 秒ごとに追記しています
+              </p>
             )}
           </CardBody>
         </Card>

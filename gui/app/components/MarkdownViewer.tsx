@@ -11,10 +11,19 @@ const MarkdownViewerBody = lazy(() => import("./MarkdownViewerBody").then((m) =>
  * クライアントの再水和がこのチャンクを取りに行く一瞬だけ、下の `MarkdownSkeleton` に差し替わりうる
  * （SSR からの遷移では通常見えない。クライアント遷移直後の初回だけ見えることがある）。
  */
-export function MarkdownViewer({ content, live = false }: { content: string; live?: boolean }) {
+export function MarkdownViewer({
+  content,
+  live = false,
+  bare = false,
+}: {
+  content: string;
+  live?: boolean;
+  /** 枠・背景・余白を付けない（run ログの発言のように、外側の部品が枠を持つとき）。 */
+  bare?: boolean;
+}) {
   return (
     <Suspense fallback={<MarkdownSkeleton />}>
-      <MarkdownViewerBody content={content} live={live} />
+      <MarkdownViewerBody content={content} live={live} bare={bare} />
     </Suspense>
   );
 }

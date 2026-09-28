@@ -1,4 +1,4 @@
-import { useFetcher } from "react-router";
+import { Link, useFetcher } from "react-router";
 import type { TaskPhaseGateOutcome } from "~/celeris/action-types";
 import type { ExecutionView, ExecutionWorkUnitView, PhaseCheckpointView, PhaseGateAction } from "~/celeris/types";
 import { FieldErrors, TaskPhaseGateFlash } from "~/components/Flash";
@@ -151,7 +151,12 @@ export function ExecutionSection({
                         </tr>
                       )}
                       {group.units.map((wu) => (
-                        <WorkUnitRow key={wu.id} wu={wu} isCurrent={currentWorkUnit(plan)?.id === wu.id} />
+                        <WorkUnitRow
+                          key={wu.id}
+                          wu={wu}
+                          isCurrent={currentWorkUnit(plan)?.id === wu.id}
+                          taskId={taskId}
+                        />
                       ))}
                     </tbody>
                   ))}
@@ -186,7 +191,16 @@ function CellLabel({ children }: { children: string }) {
 const cardCellClass =
   "max-sm:block max-sm:border-0 max-sm:px-1 max-sm:first:col-span-2 max-sm:first:pl-1 max-sm:last:col-span-2 max-sm:last:pr-1 max-sm:break-words";
 
-function WorkUnitRow({ wu, isCurrent }: { wu: ExecutionWorkUnitView; isCurrent: boolean }) {
+function WorkUnitRow({
+  wu,
+  isCurrent,
+  taskId,
+}: {
+  wu: ExecutionWorkUnitView;
+  isCurrent: boolean;
+  /** 実行中の run のログ（`/tasks/:id/runs/:runId`）へのリンク先。 */
+  taskId?: string;
+}) {
   const repair = isRepairWorkUnit(wu);
   return (
     <tr
@@ -229,7 +243,18 @@ function WorkUnitRow({ wu, isCurrent }: { wu: ExecutionWorkUnitView; isCurrent: 
         {wu.blocked_reason && <span className="ml-1.5 text-fg-subtle">（{wu.blocked_reason}）</span>}
         {wu.running_run_id && (
           <span className="mt-0.5 block break-all text-fg-subtle" data-testid="work-unit-running-run">
-            run <Mono>{wu.running_run_id}</Mono>
+            run{" "}
+            {taskId ? (
+              <Link
+                to={`/tasks/${taskId}/runs/${wu.running_run_id}`}
+                className="inline-flex min-h-11 items-center break-all text-primary hover:underline lg:min-h-0"
+                data-testid="work-unit-run-log-link"
+              >
+                <Mono className="text-primary">{wu.running_run_id}</Mono>
+              </Link>
+            ) : (
+              <Mono>{wu.running_run_id}</Mono>
+            )}
           </span>
         )}
       </td>

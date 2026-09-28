@@ -11459,6 +11459,16 @@
           "minimum": 0,
           "type": "integer"
         },
+        "runs_by_role": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "ADR-0076: `runs` の役割別の内訳（`\"worker\"` / `\"planner\"` / `\"reviewer\"`。値の合計は `runs`）。\n欄の無い旧 JSON は空 map として読む。",
+          "type": "object"
+        },
         "source": {
           "type": "string"
         },

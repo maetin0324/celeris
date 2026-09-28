@@ -889,3 +889,6 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 
 - なし（P-SD2-1 は解消）。gate の下限は 30 s の 2 本（待ち時間で決まるテスト）。縮めるならそれらのタイムアウトを
   テスト用に短くする別 Phase（P-SD3-1、製品の既定値は変えずにテストからだけ注入できるかを先に確かめる）。
+
+**昇格**: release `61990335abc4`（main 6199033）。1 回目のゲートは並列 flake（`rereview_from_failed_…`、単体では通る）で失敗、2 回目で通過（cargo-test は nextest）。verify ok / live_ok。2026-09-28 15:12:09Z にライブ昇格（backup 20260928-151147-pre-61990335abc4）。cargo-test 97 s / clippy 18 s / build 58 s、verify 45 s。
+

@@ -141,6 +141,10 @@ export async function applyRetry(
   // 「やり直したのに動かない」状態になった）: 既定は `ready`（`accept: true`）。`draft` のまま
   // 始めたいときだけフォームが明示で `draft=true` を送る（celeris 側の既定と揃える）。
   const body: RetryBody = { accept: form.get("draft") !== "true" };
+  // celeris ADR-0072「Phase F6 実装時の決定」: 「計画を作らせてやり直す」は複製先の実行の形を人が明示する
+  // （`execution: "compound"`）。値の検証は celeris（知らない値は 400）。
+  const execution = form.get("execution");
+  if (execution === "compound" || execution === "atomic") body.execution = execution;
   try {
     const result = await client.post<RetryResult>(`/tasks/${encodeURIComponent(taskId)}/retry`, body, { signal });
     return { ok: true, taskId, result };

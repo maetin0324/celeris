@@ -103,6 +103,10 @@ repo="$root/repo"
 mkdir -p "$repo/gui" "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
 cp "$here"/*.sh "$repo/scripts/selfdeploy/"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
+# runner はビルドする sha の中のものを使う（release.sh の隣ではない）。
+mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
+cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
+cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 printf '{"name":"celeris-gui","version":"0.1.0","packageManager":"pnpm@11.27.0"}\n' >"$repo/gui/package.json"
 printf 'lockfileVersion: 9.0\n' >"$repo/gui/pnpm-lock.yaml"
 printf 'packages:\n  - "."\n' >"$repo/gui/pnpm-workspace.yaml"
@@ -195,5 +199,20 @@ g="$root/state/releases/$c12/gate.json"
 gate_is "$g" "g['cargo_test'] == {'runner': 'cargo-test', 'binaries': 2, 'passed': 5, 'failed': 0, 'ignored': 1}" \
   || fail "legacy cargo_test summary is wrong"
 grep -qx 'test --workspace' "$root/cargo.log" || fail "cargo test --workspace did not run"
+
+# ---- 7. リリースに同梱した release.sh（scripts/ に平らに置かれ、dev/ が無い）からでも runner が見つかる ----
+# 配送の prepare.sh は `current/scripts/release.sh` を起こす。以前は `current/dev/test-parallel.sh` を探して落ちていた。
+bundled="$root/state/releases/$c12/scripts"
+[ -f "$bundled/release.sh" ] && [ ! -e "$bundled/../dev" ] || fail "unexpected bundled layout under $bundled"
+c="$(new_commit)"
+c12="${c:0:12}"
+: >"$root/cargo.log"
+CELERIS_STATE_DIR="$root/state" CELERIS_CONFIG_DIR="$root/config" CELERIS_CONFIG="$root/config/config.toml" \
+  SD_REPO="$repo" SD_CELERISCTL="$root/bin/celerisctl" SD_PNPM_SHIM_DIR="$root/bin" \
+  CARGO_LOG="$root/cargo.log" FAKE_SCRATCH="$root/scratch" SD_RELEASE_PRUNE=0 \
+  PATH="$root/bin:$PATH" bash "$bundled/release.sh" "$c" >"$root/release.out" 2>&1 \
+  || fail "release from the bundled release.sh failed"
+gate_is "$root/state/releases/$c12/gate.json" "g['ok'] and g['cargo_test']['runner'] == 'nextest'" \
+  || fail "bundled release.sh did not run the nextest runner"
 
 echo "release_parallel_test_gate: ok"

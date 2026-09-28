@@ -982,6 +982,16 @@ pub enum Event {
         approved: bool,
         note: Option<String>,
     },
+    /// Phase F7（ADR-0033 D5 追記 2026-09-28）: このタスクが終端（`done` / `failed` / `cancelled`）に
+    /// なったので、未決の認可の要求（`approvals` 表の行）を celeris が `withdrawn` で閉じた。
+    /// `reason` は `"task_terminal"`（終端への遷移と同じトランザクション）か `"reconcile"`
+    /// （tick の照合）。状態は変えない（`replay` は無視する）。`ApprovalDecided`（`kind = approval`
+    /// タスクの承認・却下）とは別物。
+    ApprovalsWithdrawn {
+        approval_ids: Vec<crate::approval::ApprovalId>,
+        task_status: Status,
+        reason: String,
+    },
     /// `blocked` のタスクへの人間の回答（ADR-0010 D3, P-10）。`Transitioned{reason:"answer"}` と同一トランザクションで
     /// 追記し、次の run の `context.answers` に載せる。
     Answered {
@@ -1114,6 +1124,28 @@ pub enum Event {
     /// `Task.routing.execution` と同じトランザクションで書く。状態は変えない（`replay` は無視する）。
     ExecutionGated {
         decision: Box<crate::execution_gate::ExecutionGateDecision>,
+    },
+    /// ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形（atomic / compound）を人が後から
+    /// 決めた（`POST /tasks/{id}/execution/decompose`、MCP `task_decompose`、retry の `execution`）。
+    /// 同じトランザクションで `Task.routing.execution_hint = {mode, explicit: true}` を書き、
+    /// `Task.routing.execution`（前の gate の判定）を消す（次の dispatch で gate が `human/explicit` として
+    /// 判定し直し、新しい `ExecutionGated` を残す）。`replan = true` は計画を既に持つ Task への
+    /// compound の依頼（次の dispatch で replan の planner run になる。ADR-0072 D17 5.）。
+    /// 状態は変えない（`replay` は無視する）。
+    ExecutionHintSet {
+        mode: crate::execution_gate::ExecutionMode,
+        /// 変える前の `execution_hint`（無ければ省略）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous: Option<crate::execution_gate::ExecutionHintSpec>,
+        /// 消した前の gate の判定（`rule_id` と `source` と `shadow` の監査用。無ければ省略）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_decision: Option<Box<crate::execution_gate::ExecutionGateDecision>>,
+        /// 誰が決めたか（`"human"`、`"mcp:<client_id>"`）。
+        source: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        replan: bool,
     },
     /// ADR-0074 D6.2（Phase F1）: repair WU を起こしたこと（class・起こした場所）を残す。
     /// `execution_metrics::summarize` はこの Event から `repairs_by_class` を組み立てる

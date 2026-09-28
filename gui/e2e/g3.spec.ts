@@ -9,7 +9,7 @@ import { expect, test } from "./test";
 
 // Phase G3 の受け入れ条件 1・3・4・6・7（docs/DESIGN.md §10 Phase G3、docs/adr/0006-g3-decisions.md D6）。
 // 条件 2（stream-json の整形）と条件 5（mock-celeris の 403）は Playwright ではなく `pnpm test`
-// （test/unit/stream-json.test.ts、test/unit/files.route.test.ts、test/unit/artifact-view.test.ts）で確認する
+// （test/unit/run-log.test.ts、test/unit/files.route.test.ts、test/unit/artifact-view.test.ts）で確認する
 // （DESIGN 本文が「実 celeris での細工 DB は celeris 側のテストに任せる」と明記しているため）。
 // `scripts/celeris.sh fixture basic && scripts/celeris.sh start basic` の実 celeris（fake ワーカー並走）に対して検証する。
 

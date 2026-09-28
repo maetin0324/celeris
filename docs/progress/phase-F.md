@@ -1754,6 +1754,96 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 
 **昇格**: release `7667410c23d5`（main 7667410）。ゲート fmt / test / clippy 0、GUI 0、gen:types 差分ゼロ。verify ok=true live_ok=true schema 28。2026-09-28 12:06:01Z にライブ昇格（backup 20260928-120553-pre-7667410c23d5）。
 
+## F5-fix6: 再起動直後に孤児 run を lease 失効を待たずに回収する（2026-09-28）
+
+### 症状（本番 2026-09-28、task 01M3MCA20JSAKGENH571NZES1F、run 01M3MDZF188TRHFZ9554F7H7KN）
+
+- 人が設定の反映（gate=on）のため 17:05:50Z に `systemctl --user restart celeris@1bb7fd6473a4.service` を実行した。
+  worker run（claude-code、Opus、16:36:11Z 開始）が走っていた。
+- journal: 17:05:50.849Z「SIGTERM; exiting」→ api / llm-proxy / mcp を止め、backup の停止を 5 秒待ち → 17:05:55.852Z
+  「instance row removed」→「celeris stopped, exit: Signal」。その間の 17:05:51.45Z に `runs/<run>/result.json` =
+  `{"type":"error","message":"worker exited without a result message (exit=143)","retryable":true}` と
+  `artifact_produced`（seq 314〜319、未申告成果物の走査）が書かれたが、`worker_finished` は無く、`runs.status` は
+  `running`、`tasks.lease_worker_run_id` はその run、`lease_expires_at` 17:20:03Z のまま。
+- 新しいデーモン（17:06:06Z 起動、instance 01M3MFP7BYXBC8MXVTBKQZSX5E）は起動時の照合で何もしなかった
+  （lease がまだ有効）。lease + `lease_grace_secs` 60 の失効後に F5-fix2 の経路で拾われるまで約 15 分、人からは
+  「止まっている」。F5-fix2 の未解決「新しい active が旧の孤児 run を lease 失効の前に引き継がない」そのもの。
+
+### 根本原因（修正前の file:line）
+
+- 止まる側: `crates/celeris/src/lib.rs:2097` の SIGTERM の分岐は tick ループを即座に抜け（`Exit::Signal`）、
+  `run()`（L1627〜1660）は listener と背景ジョブを止めて `supervisor.deregister()`（L1659）するだけで、
+  `Dispatcher` の完了のチャネルを誰も読まない。systemd（`KillMode=control-group`）は子にも同時に SIGTERM を送るので、
+  アダプタはその 0.6 秒後に `result.json` を書いて `Completion` を送ったが、受け取る tick はもう来なかった。
+  `abort_all_runs`（drain timeout の強制 abort 用）はこの経路では呼ばれず、呼ばれても worker run の DB は触らない
+  （「lease が切れて新しい active が拾う」設計）。つまり「記録しようとして競争に負けた」のではなく、記録する経路が無かった。
+- 起きる側: `crates/task-dispatch/src/dispatcher.rs:7042`（`reclaim_expired_leases`）の `if lease.expires_at > now
+  { continue; }` と、L9462 / L9481（`reconcile_parallel_tasks`。工程の lease と WU の lease が切れていなければ触らない）。
+  lease に持ち主のインスタンスが無く（ADR-0070 D4 で採らなかった）、run の pid も DB に残らないので、
+  「持ち主が居ない」を判定する経路が無かった。
+
+### 修正（schema 変更なし。migration 0030 は無い）
+
+- (1) 孤児の回収（`crates/task-dispatch/src/orphan.rs` 新設、`dispatcher.rs` の `reclaim_expired_leases` /
+  `reconcile_parallel_tasks` と補助の `holds_task_in_hand` / `lease_holders_gone` / `note_orphan_takeover` /
+  `requeue_orphaned_work_unit_run`）。**「持ち主が居ない」**= (i) このインスタンスがその Task を手元に持っていない
+  （`running` / `checking` / `integrating` / `reviewing` / `awaiting_children`）かつ (ii) `daemon_instances` の自分以外に、
+  `role ∈ {active, draining}`・`drained_at` 無し・heartbeat が `3 × tick + lease_grace` 以内・pid が生きている行が無い。
+  そのとき lease の失効を待たずに F5-fix2 と同じ確定をする: result.json に終端があれば `on_worker_finished`
+  （error(retryable) → 通常の再試行、done → 検査・レビュー）、無ければ `WorkerFinished{outcome: "interrupted:
+  orphan_takeover: …", end: harness_error(infra)}` + `InfraRequeue`（attempts を消費しない、バックオフ無し）、
+  WU は reason `orphan_takeover` で ready / needs_continuation。v2 は WU ごと、統合 WU は pending に戻す。回収の前に
+  `worker_progress`（`orphan_takeover: …`）と WARN ログ（`reason=orphan_takeover`）を残す。active（`accepting_new_work`）
+  で、celeris が `set_orphan_takeover` を渡したときだけ（verify・テスト既定・draining は従来どおり）。
+- **ライブ切替の例外**: draining の旧は heartbeat を打ち続けるので (ii) に当たり、新しい active は旧の run を
+  横取りしない（ADR-0040 D4 / ADR-0070 D4 のまま）。
+- (2) 止まる側（`crates/celeris/src/lib.rs` の `run()`、`Exit::Signal` のときだけ）: `Dispatcher::interrupt_runs_on_shutdown`
+  が、届いた完了を `drain_completions` で記録し、残りの worker run をプロセスグループごと止めて
+  `WorkerFinished{outcome: "interrupted: daemon shutdown (SIGTERM/SIGINT) …", end: cancelled}` + `InfraRequeue`
+  （WU は reason `shutdown`）を書いてから exit する。error 以外の終端の result.json を書き終えた run は触らず、次の
+  デーモンの (1) に任せる。レビュー・検査・統合は触らない（次のデーモンの `recover_reviews` と (1)）。
+  SIGKILL・OOM・停止中の DB エラーなど (2) が書けなかった場合は (1) が拾う。
+- ADR-0070 末尾に「付記: F5-fix6 実装時の明確化」（定義と drain の例外）。
+
+### 証拠
+
+- 新しいテスト（`crates/task-dispatch/src/dispatcher/tests/orphan_takeover.rs`、`crates/task-dispatch/src/orphan.rs`）:
+  - `an_orphaned_run_with_an_error_result_is_retried_without_waiting_for_the_lease`（本番の result.json そのまま、
+    lease 残り 14 分、旧の行なし → 1 tick で `WorkerFinished`〈exit=143〉と `worker_error` の Running → Ready、`runs` 行が閉じる）
+  - `an_orphaned_run_with_a_done_result_is_finalised`（done → 検査 `true` → Done、新しい run は起きない）
+  - `a_run_held_by_a_live_draining_instance_is_left_alone`（draining の旧が heartbeat・pid 生存 → 何もしない。
+    draining 側・設定なしの dispatcher も回収しない。旧の pid が死んでいれば回収する）
+  - `an_orphaned_run_without_a_result_is_requeued_as_interrupted`（v1 計画の WU、`interrupted: orphan_takeover`・
+    `harness_error(infra)`・`InfraRequeue`・WU ready〈reason `orphan_takeover`〉・attempts 0・バックオフ無し）
+  - `an_orphaned_parallel_work_unit_run_is_reconciled_without_waiting_for_its_lease`（v2 の工程の lease）
+  - `a_shutdown_records_the_interrupted_runs_before_exiting`（(2)。`interrupted: daemon shutdown`・`cancelled`・Ready・
+    lease なし、2 回目は 0 件）
+  - `orphan::tests::the_holder_is_gone_only_when_no_other_live_active_or_draining_instance_exists`、
+    `orphan::tests::proc_pid_alive_sees_this_process_and_not_an_unused_pid`
+- 修正を外して（`lease_holders_gone` を常に `false`）実行 → 孤児の 5 本（error / done / draining の最後の段 / result なし /
+  v2 の WU）が FAILED、戻して 6 本とも ok（shutdown の 1 本は (2) の別経路なので外しても ok）。
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-takeover/target`、`RUSTC_WRAPPER` 無し）:
+  - `cargo fmt --all -- --check` → exit 0
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0、警告 0
+  - `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY` passed 2627 / failed 0 / ignored 7（nextest 77 バイナリ + doc 10）
+  - GUI・生成型・schema・migration は触っていない。
+
+### 未解決事項・提案
+
+- 本番の run 01M3MDZF188TRHFZ9554F7H7KN は、本 fix の調査中に lease 失効（17:20:03Z + 60 s）後の F5-fix2 の経路で
+  既に拾われ、planner → WU `merge-and-check` に進んでいる（本 fix は本番に触れていない。DB は read-only の照会だけ）。
+- (ii) は保守的: draining の旧が生きている間は、別の落ちたデーモンの孤児も lease 失効まで待つ。lease に `instance_id` を
+  持たせれば run ごとに判定できるが、`acquire_lease` の trait の形と schema を変えるので今回もやらない。
+- pid の再利用で死んだ旧の pid が別プロセスに使われていると「生きている」と誤認し、lease 失効まで待つ（安全側）。
+- 持ち主のデーモンが SIGKILL で消え、systemd の外（開発時の端末など）で子が生き残った場合、その子は stdout の pipe を
+  失って次の書き込みで止まる想定だが、孫（`cargo` 等）は残りうる。新しい active はその run を即座に requeue するので、
+  同じ worktree に一時的に 2 つの書き手が重なりうる（systemd 配下の本番では cgroup ごと止まるので起きない）。
+- (2) で requeue した run は `interrupted:` なので GUI では「中断」（失敗に数えない）。止めた run の続き（continuation）は
+  WU の checkpoint があるときだけ（v1 の atomic Task は通常の再 dispatch）。
+- `abort_all_runs`（`drain_force_abort = true` の drain timeout）は従来どおり DB を触らないが、そのデーモンは
+  `drained_at` を付けて exit するので、新しい active は (1) で即座に拾う。
+- 本番への反映は昇格待ち。
+
 ## 人の決定と本番 DB の修正（2026-09-28 11:2xZ、記録は 14:4xZ）
 
 - **P-F5-1-4b は実施**: 本番 DB の `runs` で `status='running'` のまま残っていた 7 行を人の指示で UPDATE した。dogfood 4 回目の gate run 2 行
@@ -1781,3 +1871,133 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 **人の決定（2026-09-28 15:2xZ）**: P-F-1 は「`[execution] parallel = true` にして実態に合わせる」。本番 `~/.config/celeris/config.toml` の `[execution]` に
 `parallel = true` を足し、idle のときに `systemctl --user restart celeris@<current>` で反映する（config の reload 機構は無い。`parallel` は F2b 以降の全 release が
 知っている key なので N-1 は壊れない）。費用指標（決定 4: quota 消費）は、codex の quota が measured で取れるようになりデータが揃ってから改めて判断する。
+
+## Phase F6: 既存の Task / 案件を後から分解の経路に入れる、案件の編集（2026-09-28）
+
+### 症状・動機
+
+- 人の依頼（2026-09-28）: (1)「すでにタスクや案件として起票されてしまっているものに関して、後から分解の経路（ExecutionPlan）に入れられるようにしたい」
+  — 人・CoS（ChatGPT RDC 経由を含む）が起票し、gate で atomic になった（または gate=shadow の下で CoS のヒントだけの compound が記録だけになり
+  atomic で走った）Task を、人の操作で planner の経路に入れたい。止まった案件（`benchfs` 01M35WRV77A2JPYGERQGXF6V7K「BenchFS 国際会議フルペーパー化」。
+  最後の仕事は 2026-09-24 の Phase 1 framing の調査・承認・報告のまとめ）を GUI から案件計画（CoS がマイルストーン Task の DAG を提案 → 人が承認）に
+  入れたい。(2)「案件の名前や説明を後から GUI 上で変更できるようにしたい」。
+- 本番で見つかった不具合（coordinator 経由、2026-09-28）: `POST /tasks/{id}/retry` が元の gate の判定を写す。01M3MBV3AKXZGEG5RXR60XC62J は
+  15:58Z に gate=shadow で判定（`compound/long-and-broad`、`source: hint`、`shadow: true`）され atomic で走り、人が中止 → 17:06Z に gate=on で再起動 →
+  retry。複製 01M3MFS5T52FXA63W4V10XGC4S には自分の `execution_gated` が無く、`GET /tasks/{id}/execution` の `gate` は元の `shadow: true / source: hint`
+  のまま。それでも daemon は写された判定（mode compound）を gate=on で採用して planner run を起こし、計画 v1（7 WU）を実行中。GUI は古い判定を出していた。
+- 調べて分かったこと: 案件計画の API（`POST /projects/{id}/plan {mode: "milestones"}` → CoS の計画 run → `ProjectPlanProposed` → `decide`）は既存の案件でも
+  そのまま動く（下の結合テスト）。本番で `project_plan_proposed` が 0 件だった理由は GUI に**初回の**案件計画を起こす入口が無かったこと（「計画を見直す」は
+  承認済みの計画がある案件にしか出ず、「この方針で進める」は `mode` を送っていなかった）。benchfs には途中目標が 0 件（`milestones` の行なし）。
+
+### 決定（ADR-0072「Phase F6 実装時の決定」P1〜P7）
+
+- P1 `POST /tasks/{id}/execution/decompose {mode, note?}`（管理系）: 人の明示（`execution_hint = {mode, explicit: true}`）を書き、前の判定を消し、
+  `execution_hint_set{source}` を残す。次の dispatch で gate が `human/explicit` として判定し直す（D13「1 回だけ」の例外）。`draft`/`ready`/`blocked` のみ。
+  `running`/`reviewing` は 409（run を止めない。止めるなら中止 → retry）、終端は 409（retry の `execution`）、計画を持つ Task の `compound` は replan の依頼
+  （`max_replans` の範囲、依頼は次の `Transitioned{to: running}` で消費）、計画を持つ Task の `atomic` は 409、gate の対象外は 422。
+- P2 GUI の「この方針で進める」に「進め方」（仕事に分解する / 案件計画を提案させる）を足した。提案は既存の DAG 節の破線 + 承認 / 却下に出る。
+- P3 `PATCH /projects/{id}` に `title`・`request`（= 説明、依頼文）。空は 422、200 / 20,000 文字まで。新しい `description` 欄は作らない。slug（K-1）も同じフォームに。
+- P4 案件の編集の監査は管理系の構造化ログ `op = "project_updated" fields=[…]`（案件の events 列は無い。作るなら migration。提案に残す）。
+- P5 retry は `routing.execution` を写さない（`execution_hint` は写す）。複製先は今の設定で判定し直し、自分の `execution_gated` を残す。`RetryBody.execution` で
+  複製先に人の明示を書ける。
+- P6 MCP `task_decompose { id, mode, note? }` は `tasks:interact`（run を止めない・複製しない・承認しない・取り消せる。ChatGPT RDC の推奨 scope のまま使える）。
+  `task_retry { id, execution? }` は `tasks:control` のまま。
+- P7 GUI のタスク詳細に「実行の形（atomic / compound）」節: gate の判定の出どころ（規則表 / CoS のヒント + 規則表 / 人の明示、shadow）と `execution_hint`、
+  確認ダイアログ付きのボタン。
+- migration なし（`SCHEMA_VERSION` 28 のまま）。新しい Event `execution_hint_set`（`docs/api/v1/event.schema.json`）。
+
+### 使い方
+
+- GUI（タスク）: `/tasks/<id>` の「実行」節の下「実行の形」→「計画を作らせる（compound に切り替え）」（確認 → 次の run が planner run）。終端のタスクは
+  「計画を作らせてやり直す」（新しいタスクへ移る）。計画のあるタスクは「計画を見直させる（replan を依頼）」。
+- GUI（案件）: `/projects/<id>` の「依頼」節の「名前・説明を編集」（名前・説明・slug）。「この方針で進める」で「案件計画を提案させる」を選んで送ると、CoS の
+  計画 run が提案を出し、「案件計画」節に破線の提案と「承認 / 却下」が出る。
+- API: `curl -X POST -H "Authorization: Bearer $TOKEN" -d '{"mode":"compound","note":"工程に分けて"}' $CELERIS/api/v1/tasks/<id>/execution/decompose`、
+  `-d '{"execution":"compound"}' …/tasks/<id>/retry`、`-X PATCH -d '{"title":"…","request":"…"}' …/projects/<id>`、
+  `-d '{"mode":"milestones","note":"…"}' …/projects/<id>/plan` → `-d '{"decision":"approve"}' …/projects/<id>/project-plan/1/decide`。
+- MCP: `tools/call {"name":"task_decompose","arguments":{"id":"<id>","mode":"compound"}}`（scope `tasks:interact`）。
+
+### 証拠
+
+- Rust の新しいテスト:
+  - `task_ops::regate::tests`（4 件: 明示の書き込み・判定の消去・source/note の記録、running/終端の 409、対象外・長い note の 422、replan の依頼の消費）。
+  - `task_ops::retry::tests::{retry_drops_the_copied_gate_decision_and_keeps_an_explicit_hint, retry_with_execution_sets_an_explicit_hint_on_the_copy_with_its_source}`。
+  - `task_dispatch::dispatcher::tests::regate_of_an_atomic_task_starts_a_planner_run_and_yields_a_plan`（gate=shadow、偽アダプタ。hint_set → 新しい
+    `execution_gated{human/explicit}` → planner run 1 本 → 計画 2 WU → done）、`regate_of_a_planned_task_is_a_replan_request`（版 2、planner の理由に note と
+    `mcp:chatgpt`）、`retry_after_switching_gate_to_on_regates_the_copy`（shadow の判定を持つ Task を中止 → gate=on で retry → 複製に `execution_gated` が
+    1 件・`shadow: false`・`source: hint`、done）、`milestones_plan_on_an_existing_stalled_project_reaches_the_human_gate_and_is_approved`（done / failed の
+    Task がある案件 → `start_milestones` → 偽 CoS の project-plan/1 → `ProjectPlanProposed v1`・`dag_view.pending`（2 節点）→ `decide approve` →
+    途中目標 approved・「調査」ready・`current_version = 1`・既存の Task はそのまま）。
+  - `task-api` `tests/execution.rs`（decompose の 200 / 409 / 422 / 400 / 401 / 404、retry の `execution` と 422）、`tests/project_plan.rs`
+    `patch_project_edits_title_and_request_and_validates_them`（trim、題名だけ + slug、空・長すぎの 422、知らない欄の 400、401、404）。
+  - `celeris-mcp` `task_decompose_requires_tasks_interact_and_records_the_mcp_source`（`tasks:read` だけは -32601、`source: mcp:chatgpt`、終端は -32602）。
+- GUI の新しいテスト: `test/unit/execution-mode.test.ts`（判定の 1 行 1 件、表示の判定 5 件、描画 3 件、decompose の写し 2 件、retry の `execution` 1 件）、`test/unit/projects.detail.test.ts`
+  （`patchProjectText` 2 件、`startProjectPlan` の `mode` 2 件）。
+- 関門（すべて exit 0）: `cargo fmt --all -- --check`、`scripts/dev/test-parallel.sh`（nextest 77 バイナリ + doc 10、passed 2634 / failed 0 / ignored 7）、
+  `cargo clippy --workspace --all-targets -- -D warnings`、`corepack pnpm@11.27.0 -C gui typecheck`、`lint`（info 2 件は既存の scripts/）、`test`
+  （75 ファイル / 1144 件）、`gen:types` の後 `git diff --exit-code gui/app/celeris/types.ts` 差分なし。
+
+### 未解決事項・提案
+
+- 本番の反映は未（release・昇格は人）。昇格後に確かめること: (a) benchfs で「案件計画を提案させる」→ `project_plan_proposed` → 承認、(b) 01M3MBV3… の
+  やり直しのような retry で複製に `execution_gated` が付くこと。**既に走っている 01M3MFS5T52FXA63W4V10XGC4S の `routing.execution` は古い判定のまま**
+  （計画は採用済みなので動作には影響しない。GUI の gate 表示だけが古い。DB は直していない）。
+- 案件の events 列（`project_updated` を GUI の履歴に出す）は migration が要るので見送った（P4）。要るなら次の schema 変更と一緒に。
+- `blocked` の Task に compound を書いても、回答で `ready` に戻るまで planner は起きない（P1）。人が「今すぐ計画から」と言うなら、回答と同時に使う必要がある。
+- CoS（対話 run）の道具には decompose を入れていない（CoS の `create_task.execution` は従来どおりヒント +2）。CoS が既存タスクの再分解を人に提案する経路は
+  別に考える。
+## F7: 認可要求の自動クローズ（2026-09-28）
+
+**人の報告**: 「認可待ちのところに dogfood 時のすでに不要な認可待ちが溜まっている。消すのと、認可元のタスクを手動でキャンセルした
+場合に自動で消えるように修正して。」
+
+**事実（本番、読み取りのみ）**: `GET /approvals?pending=true` に 1 件（01M3HVC62B3WQGF8CKKACAR627）。認可元のタスク
+01M3HS2E19BRC021ZXMDZANP5B（dogfood 3 回目）は 2026-09-27 に人が取り消し済み。ナビのバッジ（`DaemonSnapshot.approvals_pending`）は 1。
+`POST /approvals/{id}/decide {decision:"denied"}` は **409 invalid_transition**（「status=Cancelled … only blocked tasks accept an answer」）を
+返したが、決定は書かれて一覧とバッジからは消えた（半端な副作用）。本番の残りはこの手動の決定で既に 0 件。
+
+**原因**:
+- `approvals` 行は run が `Question` で終わったときに追記するだけ（`crates/task-dispatch/src/approvals.rs` `record_question_approval`）で、
+  タスクが終端になっても閉じる処理がどこにも無かった（終端化の伝播は `crates/task-core/src/store.rs:2645`〈変更前〉の
+  `cascade_after_transition_tx` だけで、`approvals` を見ない）。
+- `crates/task-ops/src/approval.rs:64`（変更前）で `approval_decide`（決定を書く）→ `:76` で `gate::answer`（タスクに答える）の順。
+  後者が `InvalidState` で失敗しても前者は戻らない。
+
+**修正**（ADR-0033 追記 2026-09-28）:
+- `Decision::Withdrawn`（`"withdrawn"`）を追加。celeris だけが書く（人が送ると 422）。DB は既存の TEXT 列（**migration 無し**）。
+- `SqliteStore::apply_transition_tx`: 非終端 → 終端（done / failed / cancelled）の遷移と同じトランザクションで、そのタスクの未決の行を
+  `withdrawn`（`answer = "task <status>: 認可元のタスクが終わったため、celeris が自動で取り下げました"`）にし、
+  `Event::ApprovalsWithdrawn {approval_ids, task_status, reason:"task_terminal"}` を追記（`crates/task-core/src/approval.rs`
+  `withdraw_pending_for_task_tx`）。連鎖（子・後続・案件/途中目標の中止）も同じ関数を通るので同じく閉じる。
+- 照合: `ApprovalStore::approval_withdraw_stale`（未決で、タスクが既に終端の行を閉じる。`reason:"reconcile"`）をディスパッチャの tick で呼ぶ
+  （`dispatcher.rs` の `tick` に 1 呼び出しだけ）。`record_question_approval` は追記の直前にタスクを読み直し、終端なら追記しない。
+- `task_ops::approval::decide`: **書く前に**タスクの状態で分ける。`blocked`（途中確認ではない）→ 従来どおり答える。終端・タスク無し →
+  決定だけ記録して 200 + `note`（`transition` 無し）。それ以外 → 409、何も書かない。
+- 部をまたぐ委譲の判定（`conversation::cross_authorization`）は `withdrawn` を「未決」と読む（`denied` の「もう聞かない」にしない）。
+- 他の表面の確認: 質問（`blocked` の worker_question）・途中確認（`blocked` + `awaiting_human`）・`DaemonSnapshot.awaiting_human`
+  （メモリ上の集合、`recover_reviews` が reviewing 以外を落とす）・受信箱の `approvals`（`kind=approval` かつ `ready`）はどれも生きている
+  タスクの状態から毎回導くので、終端のタスクについて残る永続の表現は `approvals` 行だけ。本番の 30 件の `awaiting_human` の遷移イベントは
+  履歴で、どの画面の件数にも入らない。
+- GUI: `withdrawn` のラベル「取り下げ（元のタスクが終了）」（`~/lib/labels.ts`）、決めたものの履歴で `warning` の色
+  （`decidedApprovalBadgeTone`）、Console の認可ブロックもラベルで表示、決定の結果の `note` を Flash に出す。
+- API 文書 `docs/gui/api.md` §3.56 / §3.57 / events の `types` 語彙（→ `scripts/sync-gui-docs.sh` で `gui/docs/celeris-api-v1.md` に反映）。
+  スキーマ `docs/api/v1/{api-v1,event}.schema.json`、`gui/app/celeris/types.ts` を再生成。
+
+**証拠**:
+- 試験（新規）: task-core `approval::tests`（取り消しで閉じる + イベント 1 件・人の決定は触らない・他タスクは残る / 閉じるものが無ければイベント無し /
+  後続〈dependency_failed〉と `kind=approval` の子の連鎖 / running→failed で閉じ blocked→ready では閉じない / 照合は終端のタスクだけ・冪等）、
+  task-dispatch `approvals::tests`（終端のタスクの質問は追記しない / 照合が残りを閉じる）、task-api `tests/approvals.rs`
+  （`POST /tasks/{id}/cancel` の後に `pending=true`・`approvals_pending`・受信箱の questions から消え `pending=false` に `withdrawn` で残る、
+  `types=approvals_withdrawn` / 終端のタスクの認可に `denied` → 200 + note・`Answered` 無し / `ready` のタスクの認可 → 409 で未決のまま・
+  `withdrawn` を送ると 422）、task-ops `conversation`（`withdrawn` は pending と読む）、GUI `test/unit/approvals.test.ts`（3 件）。
+  既存の `dispatcher::tests::child_failure_question_is_not_repeated_…` は「未決 1 件」→「全 1 件で `withdrawn`」に直した（親が done になるため）。
+- `cargo fmt --all -- --check` → 0。`scripts/dev/test-parallel.sh` → 0（passed 2630 / failed 0 / ignored 7、87 binaries）。
+  `cargo clippy --workspace --all-targets -- -D warnings` → 0。GUI `typecheck` 0 / `lint` 0 / `test` 0（74 files, 1131 tests）/
+  `gen:types` の再生成で差分ゼロ（コミットした types.ts と一致）/ `scripts/sync-gui-docs.sh --check` 0。
+- 1 回目の test-parallel（load 17）で `e2e::api_scenarios::api_enforces_token_host_and_workspace_boundaries_…` が replay の MISMATCH
+  （status replayed=Running stored=Ready）で落ちた。単独 1 回・`--stress-count 8` で全部通り、2 回目の全体実行でも通った。replay は `Created` /
+  `Transitioned` しか読まず、F7 の変更は遷移のイベントの並びを変えないので、高負荷時のタイミング依存（既知の型）と判断した。
+
+**未解決・提案**:
+- 既存の install の残りは次の tick で `reconcile` として閉じる（本番は既に 0 件なので、昇格しても何も起きない想定）。
+- 取り下げた行を一覧から消す（隠す）かは GUI 側の判断。今は「決めたものの履歴」に `取り下げ` として残る。

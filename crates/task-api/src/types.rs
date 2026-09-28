@@ -232,6 +232,11 @@ pub struct RetryBody {
     pub accept: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<task_core::WorkspaceSpec>,
+    /// ADR-0072「Phase F6 実装時の決定」: 複製先の実行の形の人の明示（`"compound"` で計画を作らせる、
+    /// `"atomic"` で直接実行）。省略なら元の `execution_hint` をそのまま引き継ぐ。どちらでも元の gate の
+    /// 判定は引き継がず、複製先の最初の dispatch で今の設定で判定し直す。gate の対象外のタスクは 422。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<task_core::ExecutionMode>,
 }
 
 fn default_retry_accept() -> bool {
@@ -956,7 +961,20 @@ pub struct ProjectPatchBody {
     /// **KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
+    /// ADR-0072「Phase F6 実装時の決定」: 案件の名前。前後の空白を除いて 1〜200 文字。省略なら変えない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// ADR-0072「Phase F6 実装時の決定」: 案件の説明（依頼文 `request`。GUI の「依頼文」）。前後の空白を
+    /// 除いて 1〜20,000 文字。省略なら変えない。**CoS への再依頼ではない**（書き換えても run は起きない。
+    /// 次に案件計画・分解を起こしたときの `goal` に今の文面が入る）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
 }
+
+/// ADR-0072「Phase F6 実装時の決定」: `PATCH /projects/{id}` の `title` の上限（文字数）。
+pub const PROJECT_TITLE_MAX_CHARS: usize = 200;
+/// `PATCH /projects/{id}` の `request`（説明）の上限（文字数）。
+pub const PROJECT_REQUEST_MAX_CHARS: usize = 20_000;
 
 /// `GET /projects/{id}` の応答。案件 + 途中目標 + その案件のタスクの要約（GUI の「仕事の木」用）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

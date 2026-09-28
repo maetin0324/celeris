@@ -13,6 +13,7 @@ import {
   decideProjectPlan,
   patchMilestoneStatus,
   patchProjectStatus,
+  patchProjectText,
   patchProjectWorkspace,
   pauseMilestone,
   pauseProject,
@@ -40,6 +41,7 @@ import type {
   MilestoneView,
   OrgList,
   OrgNode,
+  Project,
   ProjectDetail,
   ProjectIntegrationItem,
   ProjectIntegrations as ProjectIntegrationsView,
@@ -253,6 +255,10 @@ export async function action({ request, params }: Route.ActionArgs) {
         request.signal,
       );
       break;
+    // celeris ADR-0072「Phase F6 実装時の決定」: 案件の名前・説明（依頼文）・slug の編集。
+    case "project_edit":
+      outcome = await patchProjectText(client, params.id, form, request.signal);
+      break;
     case "milestone_create":
       outcome = await createMilestone(client, params.id, form, request.signal);
       break;
@@ -458,6 +464,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
                 {project.request}
               </p>
             </DataItem>
+            <ProjectEditForm project={project} />
             {project.secretary_summary && (
               <Alert tone="info" title="CoS の理解の確認・方針" data-testid="project-secretary-summary">
                 <p className="whitespace-pre-wrap">{project.secretary_summary}</p>
@@ -762,6 +769,35 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
           <CardBody>
             <fetcher.Form method="post" data-testid="project-plan-form" className="space-y-3">
               <input type="hidden" name="intent" value="project_plan" />
+              {/* celeris ADR-0072「Phase F6 実装時の決定」: 案件計画を持たない既存の案件（仕事が止まった案件）でも、
+                  ここから案件計画（途中目標の DAG の提案 → 人の承認）を起こせる。 */}
+              <fieldset className="space-y-1.5" data-testid="project-plan-mode">
+                <legend className={labelClass}>進め方</legend>
+                <label className="flex min-h-11 items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="mode"
+                    value="decompose"
+                    defaultChecked
+                    className="mt-1"
+                    data-testid="project-plan-mode-decompose"
+                  />
+                  <span>仕事に分解する（従来どおり。CoS が仕事を作り、すぐ動き始めます）</span>
+                </label>
+                <label className="flex min-h-11 items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="mode"
+                    value="milestones"
+                    className="mt-1"
+                    data-testid="project-plan-mode-milestones"
+                  />
+                  <span>
+                    案件計画を提案させる（CoS が途中目標の DAG
+                    を提案し、あなたが承認するまで動きません。承認済みの計画が あれば見直しになります）
+                  </span>
+                </label>
+              </fieldset>
               <div>
                 <label htmlFor="project-plan-milestone" className={labelClass}>
                   どの途中目標まで進めるか
@@ -784,7 +820,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
                     ))}
                 </select>
                 <p className={hintClass}>
-                  選べるのは承認済み・進行中の途中目標だけです（提案のままのものは出ません）。
+                  選べるのは承認済み・進行中の途中目標だけです（提案のままのものは出ません）。案件計画を提案させるときは使いません。
                 </p>
               </div>
               <div>
@@ -1557,5 +1593,86 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       <p className="mt-2 text-sm text-fg-muted">予期しないエラーが起きました。</p>
       <RouteRecovery />
     </main>
+  );
+}
+
+/**
+ * celeris ADR-0072「Phase F6 実装時の決定」: 案件の名前・説明（依頼文）・slug を後から変える（`PATCH /projects/{id}`）。
+ * 折り畳みで出し、送った値の検証（空・長さ・slug の綴りと重複）は celeris が行う（422 / 409 の文言をそのまま出す）。
+ * 説明を変えても CoS への再依頼にはならない（次に分解・案件計画を起こしたときに今の文面が渡る）。
+ */
+function ProjectEditForm({ project }: { project: Project }) {
+  const fetcher = useFetcher<ProjectOpOutcome>({ key: `project-edit-${project.id}` });
+  const submitting = fetcher.state !== "idle";
+  const error = fetcher.data && !fetcher.data.ok ? fetcher.data.error : null;
+  return (
+    <details className="rounded-lg border border-border p-3" data-testid="project-edit">
+      <summary className="cursor-pointer select-none text-sm font-medium text-fg">名前・説明を編集</summary>
+      <fetcher.Form method="post" className="mt-3 space-y-3" data-testid="project-edit-form">
+        <input type="hidden" name="intent" value="project_edit" />
+        <input type="hidden" name="slug_current" value={project.slug ?? ""} />
+        <div>
+          <label htmlFor="project-edit-title" className={labelClass}>
+            名前
+          </label>
+          <input
+            id="project-edit-title"
+            name="title"
+            type="text"
+            required
+            maxLength={200}
+            defaultValue={project.title}
+            data-testid="project-edit-title"
+            className={`${inputClass} mt-1.5 w-full`}
+          />
+          <FieldErrors error={error} field="title" />
+        </div>
+        <div>
+          <label htmlFor="project-edit-request" className={labelClass}>
+            説明（依頼文）
+          </label>
+          <textarea
+            id="project-edit-request"
+            name="request"
+            rows={6}
+            required
+            maxLength={20000}
+            defaultValue={project.request}
+            data-testid="project-edit-request"
+            className={`${textareaClass} mt-1.5 w-full`}
+          />
+          <p className={hintClass}>
+            変えても CoS への再依頼にはなりません。次に分解・案件計画を起こしたときに今の文面が渡ります。
+          </p>
+          <FieldErrors error={error} field="request" />
+        </div>
+        <div>
+          <label htmlFor="project-edit-slug" className={labelClass}>
+            知識ベースの置き場（slug）
+          </label>
+          <input
+            id="project-edit-slug"
+            name="slug"
+            type="text"
+            defaultValue={project.slug ?? ""}
+            data-testid="project-edit-slug"
+            className={`${inputClass} mt-1.5 w-full max-w-md font-mono`}
+          />
+          <p className={hintClass}>
+            小文字の英数字とハイフン。変えても知識ベースのディレクトリ（projects/&lt;slug&gt;/）は動きません。
+          </p>
+          <FieldErrors error={error} field="slug" />
+        </div>
+        {error && !error.fields.title && !error.fields.request && !error.fields.slug && <ErrorFlash error={error} />}
+        {fetcher.data?.ok && fetcher.data.op === "project_edit" && (
+          <p className="text-sm text-fg-muted" data-testid="project-edit-saved">
+            保存しました。
+          </p>
+        )}
+        <Button type="submit" variant="primary" size="sm" disabled={submitting} data-testid="project-edit-submit">
+          保存する
+        </Button>
+      </fetcher.Form>
+    </details>
   );
 }

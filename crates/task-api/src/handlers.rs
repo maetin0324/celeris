@@ -736,12 +736,46 @@ async fn patch_project(
         && patch.workspace.is_none()
         && patch.auto_advance.is_none()
         && patch.slug.is_none()
+        && patch.title.is_none()
+        && patch.request.is_none()
     {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
-            message: "specify at least one of `status`, `workspace`, `auto_advance` or `slug`"
+            message: "specify at least one of `status`, `workspace`, `auto_advance`, `slug`, `title` or `request`"
                 .into(),
         }]));
+    }
+    // ADR-0072「Phase F6 実装時の決定」: 名前と説明（依頼文）。前後の空白を除き、空と長すぎるものは 422。
+    let title = patch.title.as_deref().map(str::trim).map(str::to_string);
+    let request = patch.request.as_deref().map(str::trim).map(str::to_string);
+    let mut text_errors = Vec::new();
+    for (field, value, max) in [
+        (
+            "title",
+            title.as_deref(),
+            crate::types::PROJECT_TITLE_MAX_CHARS,
+        ),
+        (
+            "request",
+            request.as_deref(),
+            crate::types::PROJECT_REQUEST_MAX_CHARS,
+        ),
+    ] {
+        let Some(value) = value else { continue };
+        if value.is_empty() {
+            text_errors.push(ValidationError {
+                field: Some(field.into()),
+                message: format!("{field} must not be blank"),
+            });
+        } else if value.chars().count() > max {
+            text_errors.push(ValidationError {
+                field: Some(field.into()),
+                message: format!("{field} must be at most {max} characters"),
+            });
+        }
+    }
+    if !text_errors.is_empty() {
+        return Err(ApiProblem::validation(text_errors));
     }
     // Phase K-1: slug の綴りは先に見る（422）。重複は store が 409 で返す。
     if let Some(slug) = patch.slug.as_deref()
@@ -808,12 +842,40 @@ async fn patch_project(
             {
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));
             }
-            store
+            // ADR-0072「Phase F6 実装時の決定」: 変わった欄だけを書き、監査用に名前を返す。
+            let before = store
                 .project_get(project_id)
                 .map_err(store_problem)?
-                .ok_or_else(|| ApiProblem::project_not_found(&project_id.to_string()))
+                .ok_or_else(|| ApiProblem::project_not_found(&project_id.to_string()))?;
+            let new_title = title.as_deref().filter(|t| *t != before.title);
+            let new_request = request.as_deref().filter(|r| *r != before.request);
+            let mut text_fields: Vec<&'static str> = Vec::new();
+            if new_title.is_some() {
+                text_fields.push("title");
+            }
+            if new_request.is_some() {
+                text_fields.push("request");
+            }
+            if !text_fields.is_empty()
+                && !store
+                    .project_set_text(project_id, new_title, new_request)
+                    .map_err(store_problem)?
+            {
+                return Err(ApiProblem::project_not_found(&project_id.to_string()));
+            }
+            let project = store
+                .project_get(project_id)
+                .map_err(store_problem)?
+                .ok_or_else(|| ApiProblem::project_not_found(&project_id.to_string()))?;
+            Ok((project, text_fields, before.title))
         })
         .await?;
+    let (project, text_fields, old_title) = project;
+    if !text_fields.is_empty() {
+        // 案件には events の列が無い（events は Task ごと）ので、監査は管理系の構造化ログに残す
+        // （ADR-0072「Phase F6 実装時の決定」P4）。
+        tracing::info!(who = "admin", op = "project_updated", project_id = %project_id, fields = ?text_fields, old_title = %old_title, title = %project.title, "admin: project updated");
+    }
     Ok(json_response(StatusCode::OK, &project))
 }
 
@@ -1618,15 +1680,27 @@ async fn retry(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
-    let RetryBody { accept, workspace } = read_json(body, true).await?;
+    let RetryBody {
+        accept,
+        workspace,
+        execution,
+    } = read_json(body, true).await?;
     // ADR-0062 Phase 108: `workspace` の検証は `PATCH /tasks/{id}` と同じ（先に 422 を返す）。
     let workspace = workspace
         .map(|spec| validated_workspace(&state, spec))
         .transpose()?;
     let result = state
         .blocking(move |store| {
-            task_ops::retry::retry_task(store, id, accept, workspace, OffsetDateTime::now_utc())
-                .map_err(|e| ops_problem(store, e, Some("retry")))
+            task_ops::retry::retry_task_with_execution(
+                store,
+                id,
+                accept,
+                workspace,
+                execution,
+                "human",
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(|e| ops_problem(store, e, Some("retry")))
         })
         .await?;
     let mut response = json_response(StatusCode::CREATED, &result);

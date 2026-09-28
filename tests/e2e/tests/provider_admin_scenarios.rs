@@ -470,16 +470,21 @@ fi"#,
     assert_eq!(reloaded.status, 200, "{}", reloaded.body);
     assert_eq!(reloaded.json()["reloaded"], true);
 
-    let after = env.get("/providers").json();
-    let ids: Vec<&str> = after["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|p| p["id"].as_str().unwrap())
-        .collect();
+    // `GET /providers` は tick ごとに出すスナップショットを読むので、reload の直後は古い一覧が返ることがある。
+    // 次の tick で新しい一覧が出るまで待つ。
+    let has_new_providers = |v: &Value| {
+        let ids: Vec<&str> = v["items"]
+            .as_array()
+            .map(|items| items.iter().filter_map(|p| p["id"].as_str()).collect())
+            .unwrap_or_default();
+        ids.contains(&"acct-b") && ids.contains(&"acct-c-authfail")
+    };
     assert!(
-        ids.contains(&"acct-b") && ids.contains(&"acct-c-authfail"),
-        "{after}"
+        wait_until(Duration::from_secs(10), || has_new_providers(
+            &env.get("/providers").json()
+        )),
+        "{}",
+        env.get("/providers").body
     );
 
     let ws_quick = env.workspace("ws-quick");

@@ -60,6 +60,9 @@ pub struct ApiV1Schema {
     /// Phase 31（実機の事故、2026-09-18）: `POST /tasks/{id}/retry` の要求本文と応答。
     pub retry: RetryBody,
     pub retry_result: RetryResult,
+    /// ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。
+    pub execution_decompose: task_ops::regate::DecomposeRequest,
+    pub execution_decompose_result: task_ops::regate::DecomposeResult,
     pub replay_report: ReplayReport,
     pub providers: Providers,
     /// `POST /api/v1/providers` と `PATCH /api/v1/providers/{id}` の応答（ADR-0017）。

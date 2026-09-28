@@ -31,6 +31,7 @@ import { loadTaskFiles, readTaskFilesQuery, type TaskFilesData } from "~/celeris
 import {
   buildTaskEdit,
   commentOnTask,
+  decomposeTask,
   editTask,
   phaseGateTask,
   reopenTask,
@@ -61,7 +62,6 @@ import type {
 import { CodeViewer } from "~/components/CodeViewer";
 /* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
 import { ReplyStepRow } from "~/components/ConsoleBlockItem";
-/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（Execution 節・ExecutionPhase）。 */
 import { ExecutionSection } from "~/components/ExecutionSection";
 import {
   ErrorFlash,
@@ -73,7 +73,6 @@ import {
   TransitionFlash,
 } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
-import { HumanReviewPanel } from "~/components/HumanReviewPanel";
 import { ImageViewer } from "~/components/ImageViewer";
 import { LocalTime } from "~/components/LocalTime";
 import { MarkdownViewer } from "~/components/MarkdownViewer";
@@ -106,6 +105,8 @@ import { artifactStatusMessage, isJson, pickViewer } from "~/lib/artifact-view";
 import { isValidLabel, MAX_LABELS, PRIORITY_LABELS } from "~/lib/board";
 import { activeBrowserRunIds } from "~/lib/browser";
 import { defaultPromotePath, docsHref, isMarkdownName } from "~/lib/docs";
+/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（Execution 節・ExecutionPhase）。 */
+import { isGateCandidate } from "~/lib/execution-mode";
 import { shortId, splitOutcome } from "~/lib/format";
 import { isKnowledgeFallback } from "~/lib/knowledge";
 import {
@@ -148,6 +149,12 @@ import type { Route } from "./+types/tasks.$id";
 
 const BrowserRunsPanel = lazy(() =>
   import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
+);
+const ExecutionModeControl = lazy(() =>
+  import("~/components/ExecutionModeControl").then((m) => ({ default: m.ExecutionModeControl })),
+);
+const HumanReviewPanel = lazy(() =>
+  import("~/components/HumanReviewPanel").then((m) => ({ default: m.HumanReviewPanel })),
 );
 
 // Phase 77（ADR-0055 性能予算）: 「変更」「ファイル」タブの本体（`~/components/task-changes.tsx`・
@@ -468,6 +475,12 @@ export async function action({ request, params }: Route.ActionArgs) {
   // celeris ADR-0074 D2.4（Phase F3 途中確認）: 途中確認への応答（`POST /tasks/{id}/execution/phase-gate`）。
   if (intent === "phase_gate") {
     const outcome = await phaseGateTask(client, params.id, form, request.signal);
+    return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
+  }
+  // celeris ADR-0072「Phase F6 実装時の決定」: 起票済みのタスクの実行の形を決め直す
+  // （`POST /tasks/{id}/execution/decompose`）。終端のタスクの「計画を作らせてやり直す」は `retry` の `execution`。
+  if (intent === "execution_decompose") {
+    const outcome = await decomposeTask(client, params.id, form, request.signal);
     return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
   }
   const outcome = await runTaskAction(client, params.id, form, request.signal);
@@ -1011,12 +1024,14 @@ function OverviewTab({
   return (
     <>
       {humanReview.length > 0 && (
-        <HumanReviewPanel
-          items={humanReview}
-          criteria={detail.criteria}
-          priorReview={detail.prior_review}
-          reviewTaskId={task.id}
-        />
+        <Suspense fallback={null}>
+          <HumanReviewPanel
+            items={humanReview}
+            criteria={detail.criteria}
+            priorReview={detail.prior_review}
+            reviewTaskId={task.id}
+          />
+        </Suspense>
       )}
 
       <section aria-labelledby="info-heading" data-testid="info-section">
@@ -1172,6 +1187,11 @@ function OverviewTab({
       {/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（計画・WU の表・replan の履歴）。
           計画も gate の判定も無い古いタスクは execution が無いので何も出ない（D23 の後方互換）。 */}
       <ExecutionSection execution={detail.execution} taskId={task.id} />
+      {isGateCandidate(task) && (
+        <Suspense fallback={null}>
+          <ExecutionModeControl task={task} execution={detail.execution} />
+        </Suspense>
+      )}
       {browserRuns.length > 0 && (
         <Suspense fallback={null}>
           <BrowserRunsPanel runs={browserRuns} activeRunIds={activeBrowserRunIds(detail.runs, task.status)} />

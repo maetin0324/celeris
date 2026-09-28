@@ -70,3 +70,12 @@ export function approvalGroupNodeNames(group: ApprovalGroup, org: OrgNode[]): st
 export function approvalsPendingCount(daemon: DaemonView | null | undefined): number {
   return daemon?.snapshot?.approvals_pending ?? 0;
 }
+
+/**
+ * 決めたものの履歴 1 行のバッジ（docs/celeris-api-v1.md §3.56）。`withdrawn`（Phase F7）は人の決定ではなく、
+ * 認可元のタスクが終わったので celeris が自動で閉じたもの。人の決定（`neutral`）と見分けられるよう
+ * `warning` の色にする。
+ */
+export function decidedApprovalBadgeTone(approval: Pick<Approval, "decision">): "neutral" | "warning" {
+  return approval.decision === "withdrawn" ? "warning" : "neutral";
+}

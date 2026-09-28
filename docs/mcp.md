@@ -86,7 +86,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
 | `knowledge:read` | `knowledge_list` / `knowledge_search` / `knowledge_get` / `resources/read`（`celeris://knowledge/*`） |
 | `knowledge:propose` | `knowledge_propose`（`_inbox` に候補を置く） |
 | `tasks:read` | `tasks_list` / `tasks_get` / `projects_list` / `projects_get` |
-| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ） |
+| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）、`task_decompose`（Phase F6。`POST /tasks/{id}/execution/decompose` と同じ） |
 | `tasks:control`（Phase 101） | `task_retry` / `task_cancel`（`POST /tasks/{id}/retry` / `/cancel` と同じ） |
 | `tasks:decide`（Phase 101） | `task_approve` / `task_reject`（`POST /tasks/{id}/approve` / `/reject` と同じ） |
 | `console:instruct` | `console_instruct` / `console_reply` |
@@ -130,8 +130,16 @@ token: <64+ 文字の値。この 1 回しか出ない>
     コメントの `author` は `mcp:<client_id>`）。
   - `task_answer { id, answer, expected_status? }`（scope `tasks:interact`。`POST /tasks/{id}/answer` と
     同じ。フィールド名は既存の `AnswerBody.answer` に合わせてある）。
-  - `task_retry { id }`（scope `tasks:control`。`POST /tasks/{id}/retry`（`accept=false`）と同じ。
-    `failed`/`cancelled` のタスクを複製して新しい `draft` を作る）。
+  - `task_decompose { id, mode, note? }`（scope `tasks:interact`。ADR-0072「Phase F6 実装時の決定」P1/P6。
+    `POST /tasks/{id}/execution/decompose` と同じ。`mode = "compound"` で起票済みの `draft`/`ready`/`blocked` の
+    タスクを分解の経路に入れる（次の dispatch が planner run。計画を既に持つタスクには replan の依頼）、
+    `"atomic"` で直接実行に戻す。`execution_hint_set` の `source` は `mcp:<client_id>`。`running`/`reviewing`/
+    終端・gate の対象外は `-32602`（終端は `task_retry` の `execution` を使う）。run を止めない・複製しない・
+    承認しない操作なので、`task_answer` と同じ `tasks:interact` に置いた（§8.2 の推奨 scope のまま使える）。
+    例: `{"name":"task_decompose","arguments":{"id":"01M3…","mode":"compound","note":"工程に分けて"}}`）。
+  - `task_retry { id, execution? }`（scope `tasks:control`。`POST /tasks/{id}/retry`（`accept=false`）と同じ。
+    `failed`/`cancelled` のタスクを複製して新しい `draft` を作る。`execution: "compound" | "atomic"` で複製先の
+    実行の形を明示できる（`source` は `mcp:<client_id>`）。複製先は元の gate の判定を持たず、今の設定で判定し直す）。
   - `task_cancel { id, reason? }`（scope `tasks:control`。`POST /tasks/{id}/cancel` と同じ。`reason` を
     渡すと、取り消す前に「人を起こさない」コメント（`author = mcp:<client_id>`）として記録する —
     `gate::cancel` 自体には理由を運ぶ欄が無いため）。

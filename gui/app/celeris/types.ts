@@ -15,7 +15,7 @@ export type Status = "draft" | "ready" | "running" | "blocked" | "reviewing" | "
 /**
  * 人の決定（SPEC §3.6）。
  */
-export type Decision = "once" | "standing" | "denied";
+export type Decision = "once" | "standing" | "denied" | "withdrawn";
 /**
  * 認可 1 件の識別子（ULID）。
  */
@@ -348,6 +348,12 @@ export type Event =
       type: "approval_decided";
     }
   | {
+      approval_ids: ApprovalId[];
+      reason: string;
+      task_status: Status;
+      type: "approvals_withdrawn";
+    }
+  | {
       answer: string;
       question: string;
       type: "answered";
@@ -469,6 +475,24 @@ export type Event =
   | {
       decision: ExecutionGateDecision;
       type: "execution_gated";
+    }
+  | {
+      mode: ExecutionMode;
+      note?: string | null;
+      /**
+       * 変える前の `execution_hint`（無ければ省略）。
+       */
+      previous?: ExecutionHintSpec | null;
+      /**
+       * 消した前の gate の判定（`rule_id` と `source` と `shadow` の監査用。無ければ省略）。
+       */
+      previous_decision?: ExecutionGateDecision | null;
+      replan?: boolean;
+      /**
+       * 誰が決めたか（`"human"`、`"mcp:<client_id>"`）。
+       */
+      source: string;
+      type: "execution_hint_set";
     }
   | {
       /**
@@ -1045,6 +1069,8 @@ export interface ApiV1Schema {
   docs_init: DocsInitResult;
   docs_tree: DocsTree;
   events_page: EventsPage;
+  execution_decompose: DecomposeRequest;
+  execution_decompose_result: DecomposeResult;
   execution_metrics: ExecutionMetricsSummary;
   execution_plan: ExecutionPlanView;
   execution_plan_create: ExecutionPlanSpec;
@@ -1310,6 +1336,11 @@ export interface ApprovalDecideBody {
  */
 export interface ApprovalDecideResult {
   approval: Approval;
+  /**
+   * Phase F7: 認可元のタスクが既に終端（または無い）ため、決定だけ記録してタスクには答えなかった
+   * ときの説明。タスクに答えたとき・タスクの無い approval では出ない。
+   */
+  note?: string | null;
   /**
    * `decision = "standing"` のときだけ `Some`。
    */
@@ -3868,6 +3899,34 @@ export interface ProjectPlanSpec {
   schema: string;
 }
 /**
+ * ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。
+ */
+export interface DecomposeRequest {
+  /**
+   * `"compound"`（計画を作らせる）か `"atomic"`（1 つの run で直接実行する）。
+   */
+  mode: "atomic" | "compound";
+  /**
+   * 人の一言（任意、2,000 文字まで）。replan の依頼では planner run の「起こした理由」に渡る。
+   */
+  note?: string | null;
+}
+/**
+ * `POST /tasks/{id}/execution/decompose` の応答（200）。
+ */
+export interface DecomposeResult {
+  mode: ExecutionMode;
+  /**
+   * 消した前の gate の判定（無ければ `null`）。
+   */
+  previous_decision?: ExecutionGateDecision | null;
+  /**
+   * `true` なら計画を既に持つ Task への replan の依頼（次の dispatch で replan の planner run）。
+   */
+  replan: boolean;
+  task: Task;
+}
+/**
  * `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane`。
  */
 export interface ExecutionMetricsSummary {
@@ -5774,12 +5833,22 @@ export interface ProjectPatchBody {
    */
   auto_advance?: boolean | null;
   /**
+   * ADR-0072「Phase F6 実装時の決定」: 案件の説明（依頼文 `request`。GUI の「依頼文」）。前後の空白を
+   * 除いて 1〜20,000 文字。省略なら変えない。**CoS への再依頼ではない**（書き換えても run は起きない。
+   * 次に案件計画・分解を起こしたときの `goal` に今の文面が入る）。
+   */
+  request?: string | null;
+  /**
    * ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug を変える
    * （小文字の `[a-z0-9-]`、案件 ID の形は不可、案件の間で一意。重複は 409）。省略なら変えない。
    * **KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。
    */
   slug?: string | null;
   status?: ProjectStatus | null;
+  /**
+   * ADR-0072「Phase F6 実装時の決定」: 案件の名前。前後の空白を除いて 1〜200 文字。省略なら変えない。
+   */
+  title?: string | null;
   /**
    * ADR-0039 D1: 省略（`None`）なら変えない、`null`（`Some(None)`）なら消す、値なら差し替える。
    */
@@ -6400,6 +6469,12 @@ export interface RetryBody {
    * `draft` のまま始めたいときだけ明示で `false` を送る。
    */
   accept?: boolean;
+  /**
+   * ADR-0072「Phase F6 実装時の決定」: 複製先の実行の形の人の明示（`"compound"` で計画を作らせる、
+   * `"atomic"` で直接実行）。省略なら元の `execution_hint` をそのまま引き継ぐ。どちらでも元の gate の
+   * 判定は引き継がず、複製先の最初の dispatch で今の設定で判定し直す。gate の対象外のタスクは 422。
+   */
+  execution?: ExecutionMode | null;
   workspace?: WorkspaceSpec | null;
 }
 /**

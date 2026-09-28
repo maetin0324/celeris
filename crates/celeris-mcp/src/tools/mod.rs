@@ -119,6 +119,7 @@ pub fn all() -> Vec<ToolDef> {
         tasks::comment_def(),
         tasks::answer_def(),
         tasks::retry_def(),
+        tasks::decompose_def(),
         tasks::cancel_def(),
         tasks::approve_def(),
         tasks::reject_def(),

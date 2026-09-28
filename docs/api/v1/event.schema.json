@@ -1,5 +1,9 @@
 {
   "$defs": {
+    "ApprovalId": {
+      "description": "認可 1 件の識別子（ULID）。",
+      "type": "string"
+    },
     "ArtifactRef": {
       "description": "DESIGN §4.4 の `ArtifactRef`。実体は `workspace/<task_id>/artifacts/` 配下。",
       "properties": {
@@ -767,6 +771,34 @@
           "type": "object"
         },
         {
+          "description": "Phase F7（ADR-0033 D5 追記 2026-09-28）: このタスクが終端（`done` / `failed` / `cancelled`）に\nなったので、未決の認可の要求（`approvals` 表の行）を celeris が `withdrawn` で閉じた。\n`reason` は `\"task_terminal\"`（終端への遷移と同じトランザクション）か `\"reconcile\"`\n（tick の照合）。状態は変えない（`replay` は無視する）。`ApprovalDecided`（`kind = approval`\nタスクの承認・却下）とは別物。",
+          "properties": {
+            "approval_ids": {
+              "items": {
+                "$ref": "#/$defs/ApprovalId"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "task_status": {
+              "$ref": "#/$defs/Status"
+            },
+            "type": {
+              "const": "approvals_withdrawn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "approval_ids",
+            "task_status",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "description": "`blocked` のタスクへの人間の回答（ADR-0010 D3, P-10）。`Transitioned{reason:\"answer\"}` と同一トランザクションで\n追記し、次の run の `context.answers` に載せる。",
           "properties": {
             "answer": {
@@ -1178,6 +1210,59 @@
           "required": [
             "type",
             "decision"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形（atomic / compound）を人が後から\n決めた（`POST /tasks/{id}/execution/decompose`、MCP `task_decompose`、retry の `execution`）。\n同じトランザクションで `Task.routing.execution_hint = {mode, explicit: true}` を書き、\n`Task.routing.execution`（前の gate の判定）を消す（次の dispatch で gate が `human/explicit` として\n判定し直し、新しい `ExecutionGated` を残す）。`replan = true` は計画を既に持つ Task への\ncompound の依頼（次の dispatch で replan の planner run になる。ADR-0072 D17 5.）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExecutionHintSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "変える前の `execution_hint`（無ければ省略）。"
+            },
+            "previous_decision": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExecutionGateDecision"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "消した前の gate の判定（`rule_id` と `source` と `shadow` の監査用。無ければ省略）。"
+            },
+            "replan": {
+              "type": "boolean"
+            },
+            "source": {
+              "description": "誰が決めたか（`\"human\"`、`\"mcp:<client_id>\"`）。",
+              "type": "string"
+            },
+            "type": {
+              "const": "execution_hint_set",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode",
+            "source"
           ],
           "type": "object"
         },

@@ -578,13 +578,24 @@ mod tests {
     use super::*;
 
     fn stub_command(dir: &std::path::Path, script: &str) -> String {
+        use std::io::Write;
         let path = dir.join("claude_stub.sh");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        // ETXTBSY 対策（ADR-0010 D10）: テストプロセス自身が書き込み fd を持つと、並行するテストの fork に
+        // 継承されて exec が `Text file busy` で失敗しうる。task-worker の `test_support` と同じく別プロセスで書く。
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(r#"cat > "$1" && chmod 755 "$1""#)
+            .arg("sh")
+            .arg(&path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(format!("#!/bin/sh\n{script}\n").as_bytes())
+            .unwrap();
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
         path.to_string_lossy().into_owned()
     }
 

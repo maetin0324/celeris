@@ -312,3 +312,43 @@ target の容量は `du -sb`。sccache なしの 3 通り（owner `agent-g2-{a,b
   どちらも exit 0、Rust 188 hit（依存の `--emit=metadata`）、`Non-cacheable calls 135`（clippy-driver を通る workspace のメンバー）、
   壁時計 21.0 s / 21.1 s。**clippy と `RUSTC_WRAPPER` の組み合わせは壊れない**（メンバーはキャッシュされない。依存だけ hit）。
 - 測定の途中で、`CargoTargetPlan::Scratch` の `ScratchSettings` が大きくなって clippy の `large_enum_variant` に当たったので `Box` にした。
+
+### Phase G2 の全体ゲート（2026-09-28、完了）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test --workspace --no-fail-fast` → exit 0、passed 2550 / failed 0 / ignored 6（G1 の 2543 / 5 から +7 / +1〈手動の `scratch_sccache_e2e`〉）
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0、警告 0
+- `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → ok、再生成後の差分ゼロ
+  （`ScratchStatus.sccache` の schema と生成型は checkpoint 2 で commit 済み）
+- `cd gui && corepack pnpm@11.27.0 gen:types`（差分ゼロ）`&& typecheck && test` → exit 0、Test Files 73 / Tests 1116 passed
+- `bash -n`（`scripts/selfdeploy/*.sh` と `scripts/scratch/*.sh` の 11 ファイルを 1 つずつ）→ 構文エラー 0。`scripts/selfdeploy/tests/*.sh` 3 本 → ok
+- 手動: `CELERIS_E2E_SCCACHE=$HOME/.cargo/bin/sccache cargo test -p task-worker --test scratch_sccache_e2e -- --ignored --nocapture` → 1 passed（checkpoint 3）
+
+### 受け入れ条件（ADR-0075 §5 G2）との対応
+
+1. U1 の実測 → checkpoint 1（素の sccache は別 owner で Rust 0 / 192、`CARGO_TARGET_DIR` を外す wrapper で 163 / 192、別パスでも 162 / 192）。
+   `scratch_sccache_e2e` が同じ現象を小さな crate で再現する。
+2. 全経路の env と `celerisctl scratch env` の一致、server・バイナリが無い／`enabled = false` なら sccache 系なし →
+   `sccache_env_is_complete_and_stable`、`sccache_env_is_omitted_without_binary_or_server`、`runs_get_sccache_env_when_the_server_is_up`、
+   `runs_fall_back_to_plain_cargo_when_the_server_is_down`、`env_includes_sccache_when_the_server_is_up`、`env_matches_the_dispatcher_env`、
+   `every_cargo_path_uses_the_scratch_target_dir`（WU の run と checks・統合の検査も同じ `cargo_env`）、`scratch_cargo_defaults_disable_incremental`。
+3. target の容量 19.48 GiB → 6.47 GiB、壁時計（clean 53.5 s → 39.3 s、1 行の編集後 5.5 s → 11.2 s）→ checkpoint 4。
+
+ADR-0075 に「Phase G2 実装時の逸脱・明確化」1〜13 と、D7 に「設定の新しい節は昇格後にだけ本番 config に足す」を追記した。
+
+### 未解決事項・人への依頼
+
+- **有効化（人）**: G2 を含む release の昇格後に `scripts/scratch/setup-sccache.sh --from ~/.cargo/bin/sccache`（または引数なしで
+  `cargo install`）→ `scripts/selfdeploy/install-units.sh` → `systemctl --user enable --now celeris-sccache.service` →
+  `celerisctl scratch status` で `(ready)` を確かめる（`docs/ops/sccache-l1.md`）。**`[scratch.sccache]` / `[scratch.cargo]` は本番 config に
+  足さない**（既定で動く。足すなら昇格後）。
+- 残る miss（約 29 / 192）の内訳（workspace のメンバーと `OUT_DIR` 依存の crate）は未確認。G3 の hit 率の測定で見る。
+- sccache の得はこのリポジトリの壁時計ではほぼ出ない（CPU 時間と並列 run の負荷は未測定）。G3 の L2 の価値は「新しい worktree で依存を
+  作り直す CPU」と「L1 を失った後の復帰」なので、G3 の測定では壁時計に加えて CPU 時間（`/usr/bin/time` の user+sys）も取る提案。
+- server が「確かめた直後に落ちた」run の中では sccache の client が server を起こしうる（逸脱 6）。頻度が問題になれば、wrapper の中で
+  port を確かめて落ちていれば本物の rustc を直接 exec する案（別 Phase）。
+
+### 提案
+
+- P-G2-1: release.sh のゲートでも `celerisctl scratch env --owner release-<sha12>` の sccache 系を使う（今は `CARGO_TARGET_DIR` だけを
+  lease から取る。`[scratch.cargo]` の容量の得と依存の hit を release ゲートにも）。G1 の P-G1-1（N-1 の config の parse 確認）と一緒に。

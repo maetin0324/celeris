@@ -1,7 +1,7 @@
 # ADR-0075: ビルドキャッシュの 2 層化 — target は使い捨ての scratch、再利用は sccache の L1（ローカル）/ L2（NFS）に集約し、Celeris が semantic cache manager になる
 
 - 日付: 2026-09-28
-- 状態: **Accepted**（2026-09-28 Phase G1 着手。G0 = 設計、G2・G3 は未着手）
+- 状態: **Accepted**（2026-09-28 Phase G1 完了・本番反映、Phase G2 実装。G3 は未着手）
 - 入力: `docs/notes/build-cache-tiering-input-2026-09-28.md`（人の設計方針。本 ADR はこれに沿う。以下「入力メモ」）
 - 関連:
   - ADR-0066（D1 共有 `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>`、D2 終端の作業場所の生成物の刈り取り）。本 ADR は D1 を**置き換える**（D2 は残す）
@@ -290,6 +290,11 @@ sccache の版上げに強い。(4) 可用性は (b) でも、L2 の I/O の隔�
   > `celerisctl scratch release --owner agent-<worktree 名>`。
 
   `celerisctl` が PATH に無い環境では `~/.local/celeris/current/bin/celerisctl` を使う（`--config` は `CELERIS_CONFIG`）。
+- **設定の新しい節は、それを知る release の昇格後にだけ本番 config に足す**（2026-09-28 G1 の本番反映で `[scratch]` を先に足し、
+  旧い版〈N-1〉が `unknown field scratch` で起動できず verify の N-1 が壊れた）。`[scratch]` 以下の節（G2 の `[scratch.sccache]` /
+  `[scratch.cargo]`、G3 の `[scratch.l2]` / `[scratch.cache_server]`）はどれも**既定値だけで動く**ように作り、変えたいときだけ、
+  昇格して N-1 がその節を知る版になった後に足す。rollback 先の版が知らない節を config に残すと rollback も壊れる（提案 P-G1-1:
+  release.sh のゲートに「現行 config を N-1 の版でも parse できるか」を足す）。
 
 ## 3. 採らない案
 
@@ -447,3 +452,52 @@ G1 の実装で本文と食い違った点・本文が決めていなかった�
 13. **対象外のまま**: `[commands] setup`（worktree を作った直後に 1 度流すコマンド）には `CARGO_TARGET_DIR` を与えていない（F5-fix と同じ）。
     コンテナ実行は Remote と同じ条件（`container_plan.is_none()`）で外しており、専用のテストは Remote（`shared_build_cache_is_not_applied_to_remote_workspaces`
     に scratch の計画を渡す）だけ。
+
+## Phase G2 実装時の逸脱・明確化（2026-09-28）
+
+1. **U1 の答え: sccache 0.18 は `CARGO_` で始まる env を全て Rust の key に入れる**（`src/compiler/rust.rs` の `generate_hash_key`。除外は
+   `CARGO_MAKEFLAGS` / `CARGO_REGISTRIES_*` / `CARGO_BUILD_JOBS` / `CARGO_ENCODED_RUSTFLAGS` だけ）。cargo は自分の env を rustc に渡すので、
+   owner ごとに違う `CARGO_TARGET_DIR` が全ての key を変え、owner をまたいだ Rust の hit は **0 / 192**。`--out-dir` / `-L` / `--extern` の
+   パスは key から除かれ（extern は中身の hash）、registry の依存は cwd も同じ。`--remap-path-prefix` は env の値を変えず、
+   `SCCACHE_BASEDIRS` は 0.18 では C/C++ の preprocessor 出力にしか効かない。**D4 の配線を変えた**: `RUSTC_WRAPPER` は本物の sccache
+   ではなく、Celeris が生成する `<scratch>/bin/sccache`（`unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR` → `exec <本物> "$@"`。
+   `task_worker::scratch::{wrapper_script, ensure_wrapper}`）。これで別 owner の target で Rust **163 / 192（84.9 %）**、別のパスに展開した
+   同じ commit でも 162 / 192 が hit（phase-G.md の G2 checkpoint 1）。残る miss は workspace のメンバーと、build script の `OUT_DIR`
+   （target の中の絶対パス。dep-info の env として値ごと key に入る）に依存する crate とその下流（内訳は未確認）。
+2. **wrapper のファイル名は `sccache`**。cc-rs は `RUSTC_WRAPPER` の stem が `sccache` のときだけ C/C++ にも同じ wrapper を使う
+   （`cc-1.4.6` の `rustc_wrapper_fallback`）。置き場は `targets/` の外の `<scratch>/bin/`（GC の対象にしない）。中身が同じなら書き直さない。
+3. **`SCCACHE_IDLE_TIMEOUT=0` も env に入れる**（D4 本文の列挙どおり。G2 の受け入れ条件 2 の列挙には無いが、client が万一 server を起こした
+   ときに idle で止まって別の env の server に入れ替わらないように）。env の順は固定: `CARGO_TARGET_DIR`、`CARGO_INCREMENTAL`、
+   `CARGO_PROFILE_DEV_DEBUG`、`RUSTC_WRAPPER`、`SCCACHE_DIR`、`SCCACHE_CACHE_SIZE`、`SCCACHE_SERVER_PORT`、`SCCACHE_IDLE_TIMEOUT`。
+4. **`[scratch.cargo]` は sccache と独立に、scratch が有効な経路に常に与える**（受け入れ条件 2 の「sccache 系を与えない（scratch 系は残る）」の
+   「scratch 系」に含めた。容量の得〈受け入れ条件 3〉は sccache の有無に依らないため）。欄の名前は D4 の `dev_debug`（依頼文の `debug`）。
+   `incremental = true` は `CARGO_INCREMENTAL` を与えない（`=1` にしない）、`dev_debug = ""` は `CARGO_PROFILE_DEV_DEBUG` を与えない。
+5. **`[scratch.sccache]` の欄は `enabled` / `port` / `binary`**（D4 の `server_port` は `port`）。既定は `enabled = true`、`port = 4236`、
+   `binary = $CELERIS_STATE_DIR/tools/sccache/bin/sccache`。`enabled` でもバイナリが無い・server が応答しなければ自動で配線しない
+   （`resolve_sccache` の `unavailable`）。**節を書かなくても動く**（D7 の N-1 の規則）。`ScratchSettings::with_dir`（テスト用の既定）は
+   sccache を配線しない（手元の server をテストが拾わないため）。
+6. **server の有無は `127.0.0.1:<port>` への TCP 接続（300 ms）だけで見る**。sccache の client（`--show-stats` など）は server が無いと
+   自分で起こすので、run の開始時・checks・tick では呼ばない。`celerisctl scratch status` だけが、TCP で確かめた直後に `--show-stats
+   --stats-format=json` を呼ぶ（万一の起動に備えて server と同じ env を渡す）。確かめた直後に server が落ちた run の中では client が
+   server を起こしうる（run の cgroup に入る。残る危険として `docs/ops/sccache-l1.md` に書いた）。
+7. **`celeris-sccache.service` の起動方法**: `SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1 sccache`（sccache の内部の起動経路。0.18.0 で
+   前景に留まることを確認）。env は `celerisctl scratch env --server`（新設。`SCCACHE_DIR` / `SCCACHE_CACHE_SIZE` / `SCCACHE_SERVER_PORT` /
+   `SCCACHE_IDLE_TIMEOUT` と `CELERIS_SCCACHE_BIN`。sccache が無効・バイナリが無ければ失敗）を `eval` して exec。unit の雛形は
+   `deploy/systemd/celeris-sccache.service`（`install-units.sh` が置くだけ）。手順書 `docs/ops/sccache-l1.md`。
+8. **`tools/sccache/VERSION` は版だけ（`0.18.0`）**。D4 の「配布バイナリの sha256 を照合」は採らず、`setup-sccache.sh` は
+   `cargo install sccache --locked --version <VERSION> --root <tools>/sccache`（target は scratch の `agent-setup-sccache`、終わったら消す）か、
+   `--from <binary>`（同じ版の既存のバイナリを写す。ネットワークに出ない）。
+9. **`ScratchStatus.sccache`（`ScratchSccacheView`: state / reason / binary / port / dir / max_bytes / stats）を足した**（`#[serde(default)]`。
+   逸脱 11 の「G2 で `Option` の欄として足す」）。daemon のスナップショットは状態だけ（stats は `None`）、`celerisctl scratch status` は
+   `--show-stats` の要約（hits / misses / Rust の hits / misses / cache_size）も入れる。GUI の 1 行は G3（L1 / L2 の hit 率）まで変えない。
+10. **run の経路を `cargo_env` に揃えた**（G1 の申し送り）。`run_worker` の scratch の分岐は `spawn_blocking` の中で allocate → resolve →
+    `cargo_env_with`。checks は `check_cargo_target_env` → `cargo_env`。legacy（scratch 無効）は従来どおり `CARGO_TARGET_DIR` だけ。
+    `CargoTargetPlan::Scratch` の設定は `Box`（clippy の `large_enum_variant`）。
+11. **U3 の結果**: `cargo test --workspace --no-run` で target 19.48 GiB → 6.47 GiB（incremental の廃止で −5.2 GiB、`line-tables-only` で
+    −7.8 GiB。`test` profile にも効く）。空からのビルドは 53.5 s → 39.3 s と速くなり、1 行の編集後の再ビルドは 5.5 s → 11.2 s（約 2 倍）。
+    既定は `incremental = false` のまま（Celeris の run は空の target から始まることが多い）。sccache の依存の hit（85 %）はこのリポジトリの
+    壁時計をほとんど縮めない（39.3 s → 41.0 s。リンクと workspace のメンバーが律速）。
+12. **U6 の結果**: `cargo clippy --workspace --all-targets` は wrapper 経由の sccache でも exit 0。依存（`--emit=metadata`）は hit し、
+    clippy-driver を通る workspace のメンバーは non-cacheable。
+13. **`[commands] setup` には与えない**（G1 の逸脱 13 のまま）。setup は worktree を作った直後に 1 度だけ流すコマンドで、cargo を呼ぶ
+    とは限らない。必要になれば別 Phase。

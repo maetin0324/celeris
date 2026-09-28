@@ -559,10 +559,12 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 
 ### 未解決事項・人への依頼
 
-- **有効化（人）**: G3 を含む release の昇格後に `scripts/selfdeploy/install-units.sh` → `systemctl --user enable --now
-  celeris-scratch-cache.service` → `systemctl --user restart celeris-sccache.service` → `celerisctl scratch status` で
-  `cache server … (ready) · sccache backend webdav` を確かめる（`docs/ops/sccache-l1.md` の「L2」）。**`[scratch.l2]` /
-  `[scratch.cache_server]` は本番 config に足さない**（既定で動く。足すなら昇格後）。
+- **有効化（完了 2026-09-28 07:34Z）**: release b8ca4eefda28 を 06:54Z にライブ昇格し、in-flight 0 を待って
+  `scripts/selfdeploy/install-units.sh` → `systemctl --user enable --now celeris-scratch-cache.service` →
+  `systemctl --user restart celeris-sccache.service` を実行。`celerisctl scratch status --config ~/.config/celeris/config.toml` は
+  `sccache L1 /var/lib/celeris/scratch/sccache-l1 (ready) · port 4236` / `cache server http://127.0.0.1:4237 (ready) · sccache backend webdav` /
+  `L2 /home/rmaeda/.local/celeris/cache/sccache-l2 (ok) · errors 0 · timeouts 0 · corrupt 0`。両 unit は `active running`。
+  **`[scratch.l2]` / `[scratch.cache_server]` は本番 config に足していない**（既定で動く）。
 - **NFS 上の L2 の測定（U4）**: 本番の L2（`~/.local/celeris/cache/sccache-l2`、TrueNAS の NFS、1GbE）で、L1 を消した後の再ビルドの壁時計と
   `l2_timeouts`（GET の L2 は 500 ms で打ち切る）を見る。頭打ちなら事前 promote（D5 の最後）を別 Phase で検討。
 - L2 に NFS の root が無い状態（mount が外れた）で cache server を起動すると、初回の `create_dir_all` が mount point の下のローカルに

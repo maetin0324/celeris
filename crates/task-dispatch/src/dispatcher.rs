@@ -3214,6 +3214,21 @@ impl Dispatcher {
         ) {
             tracing::warn!(error = %e, "failed to withdraw stale approvals");
         }
+        // ADR-0080 D4: 期限の過ぎた browser の wait を一度だけ終端化する（起動直後の最初の tick が
+        // 再起動時の照合を兼ねる）。人待ちの task は lease を持たないので worker slot は使っていない。
+        match task_ops::browser::expire_due(self.store.as_ref(), OffsetDateTime::now_utc()) {
+            Ok(expired) => {
+                for w in expired {
+                    tracing::info!(
+                        task_id = %w.task_id,
+                        wait_id = %w.wait_id,
+                        reason = w.reason.as_str(),
+                        "browser wait expired"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to expire browser waits"),
+        }
         report.reclaimed = self.reclaim_expired_leases()?;
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
         self.reconcile_parallel_tasks()?;

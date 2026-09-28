@@ -20,6 +20,8 @@ use tokio::sync::{mpsc, watch};
 mod accounts;
 mod admin;
 mod approvals;
+/// ADR-0080 D5: browser の人待ち（登録依頼・承認・手動登録の受付）。
+pub mod browser;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）。
 pub mod changes;
 /// ADR-0048 D1（Phase 60a）: Console の読み取り側（一本の流れと SSE）。
@@ -225,6 +227,9 @@ pub struct ApiSettings {
     /// `llm_proxy_unavailable`。
     pub llm_sources: Option<llm_sources::SharedLlmSourcesReader>,
     // ---- ADR-0053（Phase 65）: ここまで ----
+    /// ADR-0080 D5: human attestation の公開鍵と credential broker の control IPC。既定（どちらも無し）では
+    /// 人の登録・決定は 503 `browser_unavailable`。
+    pub browser: browser::BrowserApiConfig,
 }
 
 /// ADR-0043 D5（Phase 54）: `[github]` の写し。celeris が設定から渡す（task-api は TOML を読まない）。
@@ -282,6 +287,7 @@ impl std::fmt::Debug for ApiSettings {
                 "llm_sources",
                 &self.llm_sources.as_ref().map(|_| "<reader>"),
             )
+            .field("browser", &self.browser)
             .finish()
     }
 }

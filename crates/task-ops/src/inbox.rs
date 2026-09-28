@@ -23,6 +23,8 @@ pub struct Inbox {
     pub questions: Vec<QuestionItem>,
     pub drafts: Vec<DraftGroup>,
     pub attention: Vec<AttentionItem>,
+    /// ADR-0080 D5: 人の対応（credential の登録・一回だけの承認・拒否）を待っている browser の wait。
+    pub browser_waits: Vec<crate::browser::BrowserWaitItem>,
     pub counts: InboxCounts,
 }
 
@@ -32,6 +34,8 @@ pub struct InboxCounts {
     pub questions: u32,
     pub drafts: u32,
     pub attention: u32,
+    /// ADR-0080 D5: `browser_waits` の件数。
+    pub browser_waits: u32,
     /// status 名 → 件数（DB 全体）。
     pub by_status: std::collections::BTreeMap<String, u64>,
 }
@@ -327,8 +331,18 @@ fn build_questions(
         .filter_map(|a| a.task_id.map(|task_id| (task_id, a.id)))
         .collect();
 
+    // ADR-0080 D5: browser の wait で止まっている task は質問ではない（`browser_waits` に出し、
+    // 一般の回答では再開できない）。
+    let browser_waiting: std::collections::HashSet<TaskId> = store
+        .browser_waits_pending()?
+        .into_iter()
+        .map(|w| w.task_id)
+        .collect();
     let mut items = Vec::new();
-    for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
+    for t in all_tasks
+        .iter()
+        .filter(|t| t.status == Status::Blocked && !browser_waiting.contains(&t.id))
+    {
         let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
         let events = view::seq_pairs(&rows);
         // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認は質問ではない（attention に出す）。
@@ -796,6 +810,7 @@ pub fn inbox(
     let questions = build_questions(store, &all_tasks)?;
     let drafts = build_drafts(store, &all_tasks, &by_id, ctx, now)?;
     let attention = build_attention(store, &all_tasks, &by_id, snapshot, ctx, now)?;
+    let browser_waits = crate::browser::pending_items(store, &by_id)?;
 
     let by_status = store
         .count_by_status()?
@@ -809,6 +824,7 @@ pub fn inbox(
         // グループ数ではなく draft タスクの件数（バッジ表示用。Phase 9 監査）。
         drafts: drafts.iter().map(|g| g.drafts.len() as u32).sum(),
         attention: attention.len() as u32,
+        browser_waits: browser_waits.len() as u32,
         by_status,
     };
 
@@ -817,6 +833,7 @@ pub fn inbox(
         questions,
         drafts,
         attention,
+        browser_waits,
         counts,
     })
 }

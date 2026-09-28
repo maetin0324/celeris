@@ -45,6 +45,8 @@ impl Default for StreamTuning {
 pub struct ApiState {
     pub(crate) inner: Arc<Inner>,
     pub(crate) tuning: StreamTuning,
+    /// ADR-0080 D5: browser の人の操作に要る鍵と broker。
+    pub(crate) browser: Arc<crate::browser::BrowserApiConfig>,
 }
 
 pub(crate) struct Inner {
@@ -128,6 +130,7 @@ impl ApiState {
         let journal_mode = measure_journal_mode(&settings)?;
         let db_mount = detect_db_mount(&settings.db_path);
         let (shutdown, _) = watch::channel(false);
+        let browser = Arc::new(settings.browser.clone());
         let inner = Inner {
             store: Arc::new(store),
             token_digest: settings.token.as_deref().map(token_digest),
@@ -175,7 +178,14 @@ impl ApiState {
         Ok(Self {
             inner: Arc::new(inner),
             tuning: StreamTuning::default(),
+            browser,
         })
+    }
+
+    /// ADR-0080 D5: browser の鍵・broker を差し替える（テストと、起動後に broker を結線する経路）。
+    pub fn with_browser(mut self, browser: crate::browser::BrowserApiConfig) -> Self {
+        self.browser = Arc::new(browser);
+        self
     }
 
     /// SSE の上限と間隔を差し替える（テスト用。本番は既定値のまま）。

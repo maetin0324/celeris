@@ -327,6 +327,7 @@ pub fn settings(
         // ADR-0047（Phase 61）: 知識ベースも tempdir の中。
         knowledge_root: Some(knowledge_root.to_path_buf()),
         llm_sources: options.llm_sources,
+        browser: Default::default(),
     }
 }
 

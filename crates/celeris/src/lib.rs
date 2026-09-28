@@ -1188,6 +1188,8 @@ pub fn api_settings(
     llm_proxy_state: Option<Arc<llm_proxy::ProxyState>>,
 ) -> ApiSettings {
     ApiSettings {
+        // ADR-0080 D5: human attestation の鍵と broker の結線は e2e の WU（既定は 503）。
+        browser: Default::default(),
         listen,
         token,
         allowed_hosts: config.api.allowed_hosts.clone(),

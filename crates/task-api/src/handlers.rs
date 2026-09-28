@@ -180,6 +180,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::timeline::routes())
         // ADR-0069 D5: タスクの routing の監査。実装は `crate::routing`。
         .merge(crate::routing::routes())
+        // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
+        .merge(crate::browser::routes())
         // ADR-0048 D1（Phase 60a）: Console の読み取り側。実装は `crate::console`。
         .merge(crate::console::routes())
         // ADR-0053 D4（Phase 65）: LLM source の観測。実装は `crate::llm_sources`。
@@ -258,7 +260,7 @@ where
 }
 
 /// 本文を 1 MiB まで読む（超えたら 413）。
-async fn read_body(body: Body) -> Result<Vec<u8>, ApiProblem> {
+pub(crate) async fn read_body(body: Body) -> Result<Vec<u8>, ApiProblem> {
     let mut stream = body.into_data_stream();
     let mut buf = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -3213,6 +3215,7 @@ mod tests {
         rx: tokio::sync::watch::Receiver<Option<task_ops::daemon::DaemonSnapshot>>,
     ) -> ApiState {
         let settings = ApiSettings {
+            browser: Default::default(),
             documentation_state_dir: None,
             listen: "127.0.0.1:7710".parse().unwrap_or_else(|e| panic!("{e}")),
             // ADR-0044 §5 Phase 53 追記（Phase 55）: `POST /replay` は管理系になったので、

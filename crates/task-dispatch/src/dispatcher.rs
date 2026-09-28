@@ -7767,10 +7767,22 @@ impl Dispatcher {
         let Some(active_plan) = self.store.execution_plan_active(task_id)? else {
             return Ok(WuDispatchGate::Atomic);
         };
+        // ADR-0072「Phase F6 実装時の決定」: 計画を持つ Task に人が後から compound を依頼した
+        // （`POST /tasks/{id}/execution/decompose`、`ExecutionHintSet{replan: true}`）なら、次の run は
+        // replan の planner run（D17 5.。`max_replans` に数える）。依頼はこの dispatch の
+        // `Transitioned{to: running}` で消費される（`pending_replan_request`）。
+        let events = self.store.events_for(task_id)?;
+        if task_ops::regate::pending_replan_request(&events).is_some() {
+            let gate = self.replan_gate(task_id)?;
+            if matches!(gate, WuDispatchGate::RunPlanner { .. }) {
+                return Ok(gate);
+            }
+            tracing::warn!(%task_id, "a human replan was requested but max_replans is exhausted; continuing with the current plan");
+        }
         // ADR-0074 D2.4（Phase F3 途中確認）: 人が途中確認で「replan」を選んだ（直前の遷移が
         // `phase_replan`）なら、次の run は replan の planner run（`max_replans` に数える）。
         // 上限を使い切っていれば人の指示は `answers` に残したまま次の工程へ進める（警告を残す）。
-        if task_ops::phase_gate::last_transition_reason(&self.store.events_for(task_id)?)
+        if task_ops::phase_gate::last_transition_reason(&events)
             == Some(task_core::PhaseResumeMode::Replan.name())
         {
             let gate = self.replan_gate(task_id)?;
@@ -9940,6 +9952,18 @@ impl Dispatcher {
         let events = self.store.events_for(task_id)?;
         for (_, ev) in events.iter().rev() {
             match ev {
+                // ADR-0072「Phase F6 実装時の決定」: 人が後から依頼した replan（「人の指示: <note>」）。
+                Event::ExecutionHintSet {
+                    replan: true,
+                    note,
+                    source,
+                    ..
+                } => {
+                    return Ok(match note.as_deref() {
+                        Some(n) if !n.is_empty() => format!("人の指示（{source}）: {n}"),
+                        _ => format!("a human ({source}) requested a replan of this task"),
+                    });
+                }
                 Event::WorkerFinished { outcome, .. } if outcome.starts_with("replan: ") => {
                     return Ok(outcome
                         .strip_prefix("replan: ")
@@ -15643,6 +15667,167 @@ mod tests {
                     if *version == 1 && milestones.len() == 2
             )),
             "{events:?}"
+        );
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」P2（本番 2026-09-28: `project_plan_proposed` が本番で一度も起きて
+    /// いない）: 仕事が止まった**既存の**案件（案件直下に done / failed の Task がある。BenchFS の形）に、
+    /// 人が `POST /projects/{id}/plan {mode: "milestones"}`（`start_milestones`）で案件計画を起こすと、
+    /// CoS の計画 run（偽アダプタ）の `celeris.project-plan/1` が検証を通り、提案（`pending`、人の承認待ち）に
+    /// なる。`decide approve` で途中目標が `approved`、マイルストーン Task が `ready` になり、既存の Task には
+    /// 触らない。
+    #[tokio::test]
+    async fn milestones_plan_on_an_existing_stalled_project_reaches_the_human_gate_and_is_approved()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let now = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            auto_advance: false,
+            slug: Some("benchfs".into()),
+            id: task_core::ProjectId::new(),
+            title: "BenchFS 国際会議フルペーパー化".into(),
+            request: "既存成果を国際会議フルペーパーにする".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            archived_at: None,
+            paused_from: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).unwrap();
+        store
+            .org_upsert(&org_node_of(
+                "secretary",
+                None,
+                OrgKind::Secretary,
+                Some("secretary"),
+            ))
+            .unwrap();
+        // 止まった案件: 案件直下の done（framing の調査）と failed（関連研究の調査）。
+        let mut old_done = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        old_done.project_id = Some(project.id);
+        old_done.status = Status::Done;
+        old_done.title = "Phase1: framing".into();
+        store.insert(&old_done).unwrap();
+        let mut old_failed = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        old_failed.project_id = Some(project.id);
+        old_failed.status = Status::Failed;
+        old_failed.title = "Phase1: Related work".into();
+        store.insert(&old_failed).unwrap();
+
+        let started = task_ops::project_plan::start_milestones(
+            store.as_ref(),
+            &project,
+            Some("止まっているので、ここから先を途中目標に分けて"),
+            &[],
+            &[],
+            now,
+        )
+        .unwrap();
+        // テストでは作業場所を一時ディレクトリに置く。
+        let mut plan_task = store.get(started.task.id).unwrap().unwrap();
+        plan_task.workspace = WorkspaceSpec::Local {
+            path: dir.path().to_path_buf(),
+            mode: None,
+        };
+        store
+            .update_task(
+                &plan_task,
+                Event::Edited {
+                    fields: vec!["workspace".into()],
+                    by: "test".into(),
+                },
+            )
+            .unwrap();
+        assert!(task_core::is_milestones_plan_task(&plan_task));
+
+        let adapter = Arc::new(ProjectPlanAdapter {
+            project_plan_json: VALID_PROJECT_PLAN.into(),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 2);
+        assert!(run_until_idle(&mut d, 200).await.idle);
+
+        let events = store.events_for(plan_task.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::ProjectPlanProposed { version: 1, milestones, .. } if milestones.len() == 2
+            )),
+            "{events:?}"
+        );
+        // 人の承認待ち（案件ページの `project_plan.pending`）。
+        let view = task_ops::project_plan::dag_view(store.as_ref(), &project)
+            .unwrap()
+            .expect("dag view");
+        assert_eq!(view.current_version, None);
+        let pending = view.pending.expect("a pending proposal awaits the human");
+        assert_eq!(pending.version, 1);
+        assert_eq!(pending.nodes.len(), 2);
+
+        let decided = task_ops::project_plan::decide(
+            store.as_ref(),
+            &project,
+            1,
+            task_ops::project_plan::ProjectPlanDecision::Approve,
+            None,
+            &[],
+            &[],
+            "conversation",
+            now,
+        )
+        .unwrap();
+        assert_eq!(decided.tasks.len(), 2);
+        for id in &decided.tasks {
+            let t = store.get(*id).unwrap().unwrap();
+            assert!(
+                matches!(t.status, Status::Ready | Status::Draft),
+                "{:?}",
+                t.status
+            );
+        }
+        let survey = decided
+            .tasks
+            .iter()
+            .map(|id| store.get(*id).unwrap().unwrap())
+            .find(|t| t.title == "調査")
+            .expect("survey");
+        assert_eq!(survey.status, Status::Ready);
+        let milestones = store.milestone_list(project.id).unwrap();
+        assert_eq!(milestones.len(), 2);
+        assert!(
+            milestones
+                .iter()
+                .all(|m| m.status == task_core::MilestoneStatus::Approved)
+        );
+        let view = task_ops::project_plan::dag_view(store.as_ref(), &project)
+            .unwrap()
+            .expect("dag view");
+        assert_eq!(view.current_version, Some(1));
+        assert!(view.pending.is_none());
+        // 既存の Task には触らない。
+        assert_eq!(
+            store.get(old_done.id).unwrap().unwrap().status,
+            Status::Done
+        );
+        assert_eq!(
+            store.get(old_failed.id).unwrap().unwrap().status,
+            Status::Failed
         );
     }
 
@@ -27521,6 +27706,251 @@ mod tests {
             .filter(|r| r.work_unit_id.is_some())
             .count();
         assert_eq!(wu_routing, 2, "{routing_records:?}");
+    }
+
+    /// shadow の下で CoS のヒントから判定された（`shadow: true`、`source: hint`）判定を持つ Task。
+    fn shadow_gated_task(dir: &std::path::Path, mode: task_core::ExecutionMode) -> Task {
+        let mut task = new_task(
+            dir,
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        task.routing = Some(task_core::TaskRouting {
+            execution_hint: Some(task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: false,
+            }),
+            execution: Some(task_core::ExecutionGateDecision {
+                mode,
+                source: task_core::GateSource::Hint,
+                score: 13,
+                threshold: 5,
+                rule_id: "compound/long-and-broad".to_string(),
+                signals: Vec::new(),
+                policy_version: "exec-gate/1".to_string(),
+                shadow: true,
+            }),
+            ..Default::default()
+        });
+        task
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」(a): shadow の下で atomic に走る判定を持つ起票済みの Task を、人が
+    /// `set_execution_mode(compound)`（`POST /tasks/{id}/execution/decompose` と同じ関数）で分解の経路に
+    /// 入れると、次の dispatch で gate が `human/explicit` として判定し直し（新しい `ExecutionGated`）、
+    /// その run が planner run になって計画を採用し、WU を実行して done になる（gate = shadow のまま）。
+    #[tokio::test]
+    async fn regate_of_an_atomic_task_starts_a_planner_run_and_yields_a_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = shadow_gated_task(dir.path(), task_core::ExecutionMode::Atomic);
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        let result = task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task_id,
+            task_core::ExecutionMode::Compound,
+            "human",
+            Some("計画を作って分けて進めて".to_string()),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert!(!result.replan);
+        assert!(result.task.routing.as_ref().unwrap().execution.is_none());
+
+        let valid_plan = plan_json(vec![wu_spec("a", &[]), wu_spec("b", &["a"])]);
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(valid_plan)],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::Shadow;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let stored = store.get(task_id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{stored:?}");
+        let decision = stored
+            .routing
+            .as_ref()
+            .and_then(|r| r.execution.as_ref())
+            .expect("re-gated");
+        assert_eq!(decision.mode, task_core::ExecutionMode::Compound);
+        assert_eq!(decision.source, task_core::GateSource::Human);
+        assert_eq!(decision.rule_id, "human/explicit");
+        let plan = store
+            .execution_plan_active(task_id)
+            .unwrap()
+            .expect("plan adopted");
+        assert_eq!(plan.origin, task_core::PlanOrigin::Planner);
+        assert_eq!(store.work_units_for(task_id).unwrap().len(), 2);
+        let runs = store.runs_for_task(task_id).unwrap();
+        assert_eq!(
+            runs.iter()
+                .filter(|r| r.role == task_core::RunIndexRole::Planner)
+                .count(),
+            1,
+            "{runs:?}"
+        );
+        // 監査: ExecutionHintSet（source human）の後に、新しい ExecutionGated（human/explicit）。
+        let events = store.events_for(task_id).unwrap();
+        let hint_at = events
+            .iter()
+            .position(
+                |(_, e)| matches!(e, Event::ExecutionHintSet { source, .. } if source == "human"),
+            )
+            .expect("hint set recorded");
+        let gated_at = events
+            .iter()
+            .position(|(_, e)| matches!(e, Event::ExecutionGated { decision } if decision.rule_id == "human/explicit"))
+            .expect("fresh gate decision");
+        assert!(hint_at < gated_at, "{events:?}");
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」(b): 計画を持つ Task への compound の依頼は replan の依頼
+    /// （`ExecutionHintSet{replan: true}`）で、次の dispatch が replan の planner run になり、版が 2 になる。
+    /// 人の note は planner の「起こした理由」に渡る。
+    #[tokio::test]
+    async fn regate_of_a_planned_task_is_a_replan_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = compound_task(dir.path());
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        task_ops::execution::adopt_plan(
+            store.as_ref(),
+            task_id,
+            serde_json::from_str(&plan_json(vec![wu_spec("a", &[])])).unwrap(),
+            task_core::PlanOrigin::Human,
+            None,
+            task_core::ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        let result = task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task_id,
+            task_core::ExecutionMode::Compound,
+            "mcp:chatgpt",
+            Some("migration を先に".to_string()),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert!(result.replan);
+        // 計画を持つ Task を atomic に戻すことはしない。
+        let err = task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task_id,
+            task_core::ExecutionMode::Atomic,
+            "human",
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, task_ops::OpsError::InvalidState { .. }),
+            "{err:?}"
+        );
+
+        let replan = plan_json(vec![wu_spec("m", &[]), wu_spec("a", &["m"])]);
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(replan)],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let plan = store.execution_plan_active(task_id).unwrap().expect("plan");
+        assert_eq!(plan.version, 2, "{plan:?}");
+        let planner_contexts: Vec<task_worker::RunContext> = adapter
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.execution_planner.is_some())
+            .cloned()
+            .collect();
+        assert_eq!(planner_contexts.len(), 1, "exactly one replan run");
+        let ctx = planner_contexts[0].execution_planner.as_ref().unwrap();
+        assert!(ctx.replan);
+        assert!(
+            ctx.replan_reason.contains("migration を先に")
+                && ctx.replan_reason.contains("mcp:chatgpt"),
+            "{:?}",
+            ctx.replan_reason
+        );
+    }
+
+    /// ADR-0072「Phase F6 実装時の決定」(c)（本番 2026-09-28 の 01M3MBV3… → 01M3MFS5…）: gate = shadow の下で
+    /// 判定された Task を中止し、gate = on に切り替えてから retry すると、複製先は元の判定（`shadow: true`）を
+    /// 写さず、最初の dispatch で今の設定で判定し直して、自分自身の `ExecutionGated`（`shadow: false`）を残す。
+    #[tokio::test]
+    async fn retry_after_switching_gate_to_on_regates_the_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = shadow_gated_task(dir.path(), task_core::ExecutionMode::Compound);
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        store
+            .apply_transition(task_id, task_core::Trigger::Cancel, None)
+            .unwrap();
+        let retried = task_ops::retry::retry_task(
+            store.as_ref(),
+            task_id,
+            true,
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        let copy_id = retried.task_id;
+        let copy = store.get(copy_id).unwrap().unwrap();
+        assert!(copy.routing.as_ref().unwrap().execution.is_none());
+
+        let valid_plan = plan_json(vec![wu_spec("a", &[])]);
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(valid_plan)],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let copy = store.get(copy_id).unwrap().unwrap();
+        let decision = copy
+            .routing
+            .as_ref()
+            .and_then(|r| r.execution.as_ref())
+            .expect("the copy is gated under the current config");
+        assert!(!decision.shadow, "{decision:?}");
+        let events = store.events_for(copy_id).unwrap();
+        let gated: Vec<&task_core::ExecutionGateDecision> = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::ExecutionGated { decision } => Some(decision.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(gated.len(), 1, "a fresh gate event on the copy: {events:?}");
+        assert!(!gated[0].shadow);
+        // CoS のヒント（explicit=false）は引き継ぎ、規則表の判定に +2 として効く。
+        assert_eq!(
+            copy.routing.as_ref().unwrap().execution_hint,
+            Some(task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: false
+            })
+        );
+        assert_eq!(gated[0].source, task_core::GateSource::Hint);
+        assert_eq!(copy.status, Status::Done, "{copy:?}");
     }
 
     /// ADR-0074 D3.7（Phase F4b (f)）: execution-plan/2 の `children` は採用と同じトランザクションで既存の

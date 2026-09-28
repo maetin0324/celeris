@@ -98,6 +98,34 @@ export async function patchProjectWorkspace(
   }
 }
 
+/**
+ * celeris ADR-0072「Phase F6 実装時の決定」: 案件の名前（`title`）・説明（依頼文 `request`）・slug を変える
+ * （`PATCH /projects/{id}`、**管理系**）。フォームの値をそのまま写す（前後の空白・空・長さの検証は celeris。
+ * 422 の文言をそのまま画面に出す）。slug は今の値（hidden `slug_current`）と違うときだけ送る（空なら送らない）。
+ */
+export async function patchProjectText(
+  client: CelerisClient,
+  id: string,
+  form: FormData,
+  signal?: AbortSignal,
+): Promise<ProjectOpOutcome> {
+  const body: ProjectPatchBody = {};
+  const title = form.get("title");
+  if (typeof title === "string") body.title = title;
+  const request = form.get("request");
+  if (typeof request === "string") body.request = request;
+  const slug = formString(form, "slug");
+  if (slug !== null && slug.trim() !== "" && slug.trim() !== (formString(form, "slug_current") ?? "")) {
+    body.slug = slug.trim();
+  }
+  try {
+    const project = await client.patch<Project>(`/projects/${encodeURIComponent(id)}`, body, { signal });
+    return { ok: true, op: "project_edit", project };
+  } catch (e) {
+    return { ok: false, op: "project_edit", error: toActionError(e) };
+  }
+}
+
 /** `POST /projects/{id}/milestones`（途中目標を足す。`seq` はストアが採番する）。 */
 export async function createMilestone(
   client: CelerisClient,
@@ -208,13 +236,16 @@ export async function startProjectPlan(
 ): Promise<ProjectOpOutcome> {
   try {
     const body: ProjectPlanBody = {};
+    const milestones = formString(form, "mode") === "milestones";
     const milestoneId = formString(form, "milestone_id");
-    if (milestoneId) body.milestone_id = milestoneId;
+    // `mode = "milestones"` は案件全体を計画するので途中目標は送らない（送ると celeris が 422 を返す）。
+    if (milestoneId && !milestones) body.milestone_id = milestoneId;
     const note = formString(form, "note");
     if (note) body.note = note;
     // ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画（`milestones`）。承認済みの計画がある案件では replan になる
-    // （どちらになるかは celeris が決める）。
-    if (formString(form, "mode") === "milestones") body.mode = "milestones";
+    // （どちらになるかは celeris が決める）。ADR-0072「Phase F6 実装時の決定」: 案件計画を持たない既存の案件も
+    // 「この方針で進める」の選択で初回の案件計画を起こせる。
+    if (milestones) body.mode = "milestones";
     const accepted = await client.post<ProjectPlanAccepted>(`/projects/${encodeURIComponent(projectId)}/plan`, body, {
       signal,
     });

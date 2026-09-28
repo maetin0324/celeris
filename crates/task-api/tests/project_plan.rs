@@ -694,3 +694,98 @@ async fn admin_endpoints_are_401_even_without_a_configured_token() {
     .await;
     assert_eq!(resp.status.as_u16(), 401);
 }
+
+// ---- ADR-0072「Phase F6 実装時の決定」P3: 案件の名前・説明（依頼文）を後から変える ----
+
+fn patch(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
+    patch_json_with(
+        path,
+        body,
+        &[("authorization", format!("Bearer {TOKEN}").as_str())],
+    )
+}
+
+#[tokio::test]
+async fn patch_project_edits_title_and_request_and_validates_them() {
+    let env = env_with_token();
+    let app = env.router();
+    let project_id = create_project(&app, "BenchFS", "古い依頼文").await;
+
+    let resp = send(
+        &app,
+        patch(
+            &format!("/api/v1/projects/{project_id}"),
+            &json!({"title": "  BenchFS 国際会議フルペーパー化  ", "request": "新しい説明"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["title"], "BenchFS 国際会議フルペーパー化", "trimmed");
+    assert_eq!(body["request"], "新しい説明");
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    assert_eq!(detail["project"]["title"], "BenchFS 国際会議フルペーパー化");
+    assert_eq!(detail["project"]["request"], "新しい説明");
+
+    // 題名だけ（説明は変えない）。slug も同じ PATCH で変えられる（K-1）。
+    let resp = send(
+        &app,
+        patch(
+            &format!("/api/v1/projects/{project_id}"),
+            &json!({"title": "BenchFS paper", "slug": "benchfs-paper"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["title"], "BenchFS paper");
+    assert_eq!(body["request"], "新しい説明");
+    assert_eq!(body["slug"], "benchfs-paper");
+
+    // 空（空白だけ）と長すぎるものは 422 で、何も変えない。
+    for bad in [
+        json!({"title": "   "}),
+        json!({"request": ""}),
+        json!({"title": "x".repeat(201)}),
+        json!({"request": "y".repeat(20_001)}),
+    ] {
+        let resp = send(&app, patch(&format!("/api/v1/projects/{project_id}"), &bad)).await;
+        assert_eq!(resp.status.as_u16(), 422, "{bad}: {}", resp.text());
+    }
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    assert_eq!(detail["project"]["title"], "BenchFS paper");
+
+    // 知らない欄は 400（`deny_unknown_fields`）、トークン無しは 401、無い案件は 404。
+    let resp = send(
+        &app,
+        patch(
+            &format!("/api/v1/projects/{project_id}"),
+            &json!({"description": "x"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 400, "{}", resp.text());
+    let resp = send(
+        &app,
+        patch_json_with(
+            &format!("/api/v1/projects/{project_id}"),
+            &json!({"title": "t"}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 401, "{}", resp.text());
+    let resp = send(
+        &app,
+        patch(
+            &format!("/api/v1/projects/{}", task_core::ProjectId::new()),
+            &json!({"title": "t"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
+}

@@ -22,6 +22,7 @@ pub enum McpScope {
     KnowledgePropose,
     TasksRead,
     /// Phase 101: `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）。
+    /// ADR-0072「Phase F6 実装時の決定」: `task_decompose`（`POST /tasks/{id}/execution/decompose` と同じ）。
     TasksInteract,
     /// Phase 101: `task_retry` / `task_cancel`（`POST /tasks/{id}/retry` / `/cancel` と同じ）。
     TasksControl,

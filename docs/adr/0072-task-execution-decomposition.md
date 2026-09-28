@@ -1597,3 +1597,56 @@ turn の終わりで session を閉じ、background task を殺す。`result` �
 3. **continuation を持たない run**（レビュー・計画・対話）は従来どおり `result.json` 不在の失敗（`AdapterError::Other`、ADR-0070 D3 の
    InfraRequeue）のまま、文言に `headless_background_task` を足す。`HarnessErrorClass` は増やさない（schema 変更なし）。どの run でも
    分類名で始まる進行（`WorkerProgress`）を 1 件残す。
+
+## Phase F6 実装時の決定（2026-09-28）
+
+人の依頼（2026-09-28）: (1) 起票済みの Task・案件を、後から分解の経路（ExecutionPlan / 案件計画）に入れたい。(2) 案件の名前・説明を GUI で
+変えたい。加えて本番で見つかった不具合: retry の複製が元の gate の判定を写す（01M3MBV3AKXZGEG5RXR60XC62J → 01M3MFS5T52FXA63W4V10XGC4S。
+gate=shadow の判定 `source: hint, shadow: true` が複製に写り、複製自身の `execution_gated` が無いまま gate=on で planner に進み、GUI にも古い判定が
+出た）。新しい ADR は起こさない（D13 の「最初の dispatch で 1 回だけ判定」の例外と、D17 5. の人の replan 依頼の入口を足すだけ）。schema 変更なし
+（migration 無し。`execution_hint` は Task の JSON、案件の `title` / `request` は既存の列）。
+
+- **P1. Task の実行の形を人が後から決め直す**: `POST /tasks/{id}/execution/decompose {mode: "compound" | "atomic", note?}`（管理系）。
+  `task_ops::regate::set_execution_mode` が `routing.execution_hint = {mode, explicit: true}`（人の明示）を書き、前の gate の判定
+  （`routing.execution`）を消し、`Event::ExecutionHintSet{mode, previous, previous_decision, source, note, replan}` を同じトランザクションに積む。
+  gate の判定そのものは API が書かない: 次の dispatch で daemon の `execution_gate_if_needed` が `human/explicit` として判定し直し、
+  新しい `ExecutionGated` を残す（**D13「Task の最初の dispatch で 1 回だけ」の例外**: 人が明示を書き直したときだけ、もう 1 回判定する）。
+  以後は新しく作った「人が `execution: compound` を明示した Task」と同じ経路（`gate = "shadow"` でも人の明示の compound は planner run に進む。
+  ADR-0074「Phase F3（途中確認）」）。`gate = "off"` では新規の明示と同じく効かない。
+  - **受け付ける状態**: `draft` / `ready` / `blocked`（`blocked` は回答などで `ready` に戻った次の dispatch から効く）。
+  - **`running` / `reviewing` は 409（走っている run を止めない）**。止めて再判定する案（run を打ち切って re-gate）は採らない: 打ち切りは worktree の
+    途中状態・lease・レビュー中の判定を巻き込み、「人が押したら途中の仕事が消えた」を作る。人が止めたいなら中止してから P5 の retry を使う。
+  - **終端（`done` / `failed` / `cancelled`）も 409**。`failed` / `cancelled` は `POST /tasks/{id}/retry {execution}`（P5）で複製を分解の経路に入れる
+    （終端を非終端に戻す遷移は足さない。Phase 31 の retry と同じ理由）。
+  - **計画を既に持つ Task への `compound` は replan の依頼**（`replan: true`。D17 5.）。daemon の `wu_dispatch_gate` が
+    `task_ops::regate::pending_replan_request`（最後の `ExecutionHintSet{replan}` の後に `ExecutionPlanned` も `Transitioned{to: running}` も無い）を
+    見て `replan_gate`（`max_replans`）を通し、replan の planner run を起こす。依頼はその dispatch の `Transitioned{to: running}` で消費される
+    （planner が失敗しても依頼が残り続けて planner run を繰り返すことは無い）。「起こした理由」は `人の指示（<source>）: <note>`。
+    **計画を持つ Task の `atomic` は 409**（採用済みの WU を宙に浮かせない。中止してから `retry {execution: "atomic"}`）。
+  - **gate の対象外は 422**（`execution_gate::out_of_scope_rule` の 6 条件: `kind != execute`・対話・support-task・`routing` の無い旧タスク・
+    固定パイプラインの harness・`workspace_mode = shared`。gate が常に atomic にするので、書いても効かない）。`note` は 2,000 文字まで（422）。
+- **P2. 案件計画を既存の案件から起こす（GUI）**: API（`POST /projects/{id}/plan {mode: "milestones"}` → CoS の計画 run → `ProjectPlanProposed` →
+  `project-plan/{version}/decide`）は既存の案件（案件直下に done / failed の Task がある）にもそのまま効く（dispatcher の結合テストで確認。本番では
+  `project_plan_proposed` が 0 件だった理由は、GUI に**初回の**案件計画を起こす入口が無かったこと: 「計画を見直す」は承認済みの計画がある案件にしか
+  出ず、「この方針で進める」は `mode` を送っていなかった）。「この方針で進める」に「進め方」（仕事に分解する = `decompose` / 案件計画を提案させる
+  = `milestones`）を足す。`milestones` のときは途中目標を送らない（API は 422）。提案（`pending`）は既存の DAG 節（破線 + 承認 / 却下）に出る。
+- **P3. 案件の名前・説明を後から変える**: `PATCH /projects/{id}` に `title` と `request` を足す。**「説明」は既存の `Project.request`（依頼文）**
+  （新しい `description` 欄は作らない: GUI の「依頼」節が既に説明として `request` を出しており、欄を増やすと migration と「どちらが説明か」の二重化が
+  要る）。前後の空白を除き、空は 422、`title` は 200 文字・`request` は 20,000 文字まで（422）。値が変わった欄だけを書く（`TaskStore::project_set_text`）。
+  説明を変えても CoS への再依頼にはならない（run は起きない。次に分解・案件計画を起こしたときの `goal` に今の文面が入る）。`slug`（K-1）は同じ
+  `PATCH` で従来どおり変えられ、GUI の編集フォームにも並べる。
+- **P4. 案件の編集の監査は管理系の構造化ログ**: `tracing::info!(op = "project_updated", fields = [...], old_title, title)`。events は Task ごとの列で
+  案件の列が無い（案件の events を作るには新しい表 = migration が要る。今回は不採用。提案として残す）。`PATCH /projects/{id}` の他の欄
+  （`status` / `workspace` / `auto_advance` / `slug`）も events を持たないのと同じ扱い。
+- **P5. retry は gate の判定を写さない**: `task_ops::retry` は複製先の `routing.execution` を `None` にする（`execution_hint` = 人の明示・CoS のヒントは
+  引き継ぐ）。複製先の最初の dispatch で gate が**今の設定**で判定し直し、複製先自身の `ExecutionGated` を残す（`GET /tasks/{id}/execution` の `gate` は
+  `routing.execution` を読むので、複製先の判定になる）。`RetryBody.execution`（`"compound" | "atomic"`、省略可）で複製先に人の明示を書ける
+  （`retry_task_with_execution` が複製の直後に P1 の `set_execution_mode` を呼び、`ExecutionHintSet{source}` を複製先に残す）。gate の対象外の
+  タスクに `execution` を書くと、複製の**前に** 422。
+- **P6. MCP**: `task_decompose { id, mode, note? }` は scope **`tasks:interact`**（`task_answer` と同じ重さ: run を止めない・複製しない・承認しない・
+  atomic に戻せる）。ChatGPT（RDC）の推奨 scope（`docs/mcp.md` §8.2 は `tasks:control` を与えない）のまま使える。`source` は `mcp:<client_id>`。
+  複製を伴う `task_retry { id, execution? }` は従来どおり `tasks:control`。
+- **P7. GUI（タスク詳細）**: 「実行」節の下に「実行の形（atomic / compound）」を置く。gate の判定の出どころ（規則表 / CoS のヒント + 規則表 / 人の明示、
+  shadow なら「記録だけ」）と `execution_hint` を出し、状態に応じて「計画を作らせる（compound に切り替え）」「atomic に戻す」「計画を見直させる
+  （replan を依頼）」「計画を作らせてやり直す（retry + compound）」を確認ダイアログ付きで出す。どのボタンを出すかは表示の判定だけ
+  （`~/lib/execution-mode.ts`）で、押せるかどうかは celeris が決める（409 / 422 の文言を出す）。

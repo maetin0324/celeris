@@ -39,6 +39,10 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             axum::routing::post(post_phase_gate),
         )
         .route(
+            "/api/v1/tasks/{id}/execution/decompose",
+            axum::routing::post(post_decompose),
+        )
+        .route(
             "/api/v1/metrics/execution",
             axum::routing::get(get_execution_metrics),
         )
@@ -209,6 +213,40 @@ async fn post_phase_gate(
         })
         .await?;
     tracing::info!(who = "admin", op = "phase_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: phase gate");
+    Ok(json_response(StatusCode::OK, &result))
+}
+
+/// ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose`（管理系 = 人だけ）。
+/// 本文 `{"mode": "compound" | "atomic", "note": "…"}`。起票済みの Task の実行の形を人が決め直す
+/// （`execution_hint = {mode, explicit: true}`、前の gate の判定を消す、`ExecutionHintSet{source: "human"}`）。
+/// 次の dispatch で gate が `human/explicit` として判定し直す。計画を持つ Task への `compound` は
+/// replan の依頼。応答は `DecomposeResult`（200）。409: `running` / `reviewing` / 終端 / 計画を持つ Task の
+/// `atomic`。422: gate の対象外・`note` が長すぎる。
+async fn post_decompose(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    headers: HeaderMap,
+    Params(id): Params<String>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let task_id = parse_task_id(&id)?;
+    let req: task_ops::regate::DecomposeRequest = read_json(body, false).await?;
+    let result = state
+        .blocking(move |store| {
+            task_ops::regate::set_execution_mode(
+                store,
+                task_id,
+                req.mode,
+                "human",
+                req.note,
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(|e| ops_problem(store, e, Some("execution_decompose")))
+        })
+        .await?;
+    tracing::info!(who = "admin", op = "execution_decompose", task_id = %task_id, mode = result.mode.as_str(), replan = result.replan, "admin: execution mode set by a human");
     Ok(json_response(StatusCode::OK, &result))
 }
 

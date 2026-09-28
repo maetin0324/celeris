@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 31] = [
+pub(crate) const EVENT_TYPES: [&str; 32] = [
     "created",
     "transitioned",
     "worker_started",
@@ -184,6 +184,8 @@ pub(crate) const EVENT_TYPES: [&str; 31] = [
     "work_unit_transitioned",
     // ADR-0072 D5/D13（Phase E3）: Complexity Gate の判定。
     "execution_gated",
+    // ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形を人が後から決めた。
+    "execution_hint_set",
     // ADR-0074 D6.2（Phase F1）: repair WU を起こしたこと（class・起こした場所）。
     "repair_scheduled",
     // ADR-0074 D4.3（Phase F3）: run 1 件の quota 消費の推定。
@@ -225,6 +227,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ExecutionPlanned { .. } => "execution_planned",
         Event::WorkUnitTransitioned { .. } => "work_unit_transitioned",
         Event::ExecutionGated { .. } => "execution_gated",
+        Event::ExecutionHintSet { .. } => "execution_hint_set",
         Event::RepairScheduled { .. } => "repair_scheduled",
         Event::QuotaEstimated { .. } => "quota_estimated",
         Event::WorkUnitCommitted { .. } => "work_unit_committed",

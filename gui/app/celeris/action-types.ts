@@ -10,6 +10,7 @@ import type {
   ClusterSettingsView,
   CommentResult,
   ConsoleInstructAccepted,
+  DecomposeResult,
   DocPageResult,
   DocsInitResult,
   EditResult,
@@ -118,6 +119,11 @@ export type TaskRereviewOutcome =
  * （`POST /tasks/{id}/execution/phase-gate`。**管理系**）。awaiting_human でなければ 409、
  * `replan` で `note` が空なら 422（どちらも celeris の判断。GUI は検証しない）。
  */
+/** celeris ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の結果。 */
+export type TaskDecomposeOutcome =
+  | { ok: true; op: "execution_decompose"; taskId: string; result: DecomposeResult }
+  | { ok: false; op: "execution_decompose"; taskId: string; error: ActionError };
+
 export type TaskPhaseGateOutcome =
   | { ok: true; op: "phase_gate"; taskId: string; result: TransitionResult }
   | { ok: false; op: "phase_gate"; taskId: string; error: ActionError };
@@ -232,6 +238,8 @@ export type ProjectOpOutcome =
   // `project_workspace` は作業場所の保存・消去（`PATCH /projects/{id}` の `workspace`。ADR-0039 D1、
   // Phase G13k）。`status` の変更と同じ `Project` を返す形なのでまとめる。
   | { ok: true; op: "project_status" | "project_workspace"; project: Project }
+  // celeris ADR-0072「Phase F6 実装時の決定」: 案件の名前・説明（依頼文）・slug の編集（`PATCH /projects/{id}`）。
+  | { ok: true; op: "project_edit"; project: Project }
   | { ok: true; op: "milestone_create" | "milestone_status"; milestone: Milestone }
   // 「この方針で進める」（`POST /projects/{id}/plan`。**管理系**、202。docs/celeris-api-v1.md §3.61、Phase 29）。
   | { ok: true; op: "project_plan"; accepted: ProjectPlanAccepted }
@@ -258,6 +266,7 @@ export type ProjectOpOutcome =
       op:
         | "project_status"
         | "project_workspace"
+        | "project_edit"
         | "milestone_create"
         | "milestone_status"
         | "project_plan"

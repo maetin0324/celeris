@@ -1,5 +1,6 @@
 import type {
   TaskCommentOutcome,
+  TaskDecomposeOutcome,
   TaskEditOutcome,
   TaskPhaseGateOutcome,
   TaskReopenOutcome,
@@ -12,6 +13,8 @@ import type {
   CommentBody,
   CommentResult,
   CriterionSpec,
+  DecomposeRequest,
+  DecomposeResult,
   EditResult,
   NewTaskSpec,
   PhaseGateAction,
@@ -260,5 +263,50 @@ export async function phaseGateTask(
     return { ok: true, op: "phase_gate", taskId, result };
   } catch (e) {
     return { ok: false, op: "phase_gate", taskId, error: toActionError(e) };
+  }
+}
+
+const EXECUTION_MODES: readonly DecomposeRequest["mode"][] = ["compound", "atomic"];
+
+/**
+ * celeris ADR-0072「Phase F6 実装時の決定」: 起票済みのタスクの実行の形を決め直す
+ * （`POST /tasks/{id}/execution/decompose`、**管理系**）。フォームの `mode`（compound / atomic）と `note` を
+ * そのまま写す（**GUI は検証しない**: 走っている・終端・対象外のタスクは celeris が 409 / 422 を返し、その文言を
+ * 画面に出す）。知らない `mode` は送らずに 400 相当の失敗にする（フォームの改ざん）。
+ */
+export async function decomposeTask(
+  client: CelerisClient,
+  taskId: string,
+  form: FormData,
+  signal?: AbortSignal,
+): Promise<TaskDecomposeOutcome> {
+  const mode = formString(form, "mode");
+  if (mode === null || !(EXECUTION_MODES as readonly string[]).includes(mode)) {
+    return {
+      ok: false,
+      op: "execution_decompose",
+      taskId,
+      error: {
+        status: 400,
+        code: "bad_request",
+        detail: `unknown mode: ${String(mode)}`,
+        conflict: false,
+        fields: {},
+        messages: [],
+      },
+    };
+  }
+  const body: DecomposeRequest = { mode: mode as DecomposeRequest["mode"] };
+  const note = formString(form, "note");
+  if (note !== null && note.trim() !== "") body.note = note;
+  try {
+    const result = await client.post<DecomposeResult>(
+      `/tasks/${encodeURIComponent(taskId)}/execution/decompose`,
+      body,
+      { signal },
+    );
+    return { ok: true, op: "execution_decompose", taskId, result };
+  } catch (e) {
+    return { ok: false, op: "execution_decompose", taskId, error: toActionError(e) };
   }
 }

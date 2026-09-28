@@ -1080,6 +1080,9 @@ fn build_execution_view(
         matches!(
             e,
             Event::ExecutionGated { .. }
+                // ADR-0072「Phase F6 実装時の決定」: 人が後から実行の形を決めた（gate の判定は
+                // 次の dispatch まで空になるが、節は出す）。
+                | Event::ExecutionHintSet { .. }
                 | Event::ExecutionPlanned { .. }
                 | Event::CheckpointSaved { .. }
                 | Event::WorkUnitTransitioned { .. }

@@ -1781,3 +1781,78 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 **人の決定（2026-09-28 15:2xZ）**: P-F-1 は「`[execution] parallel = true` にして実態に合わせる」。本番 `~/.config/celeris/config.toml` の `[execution]` に
 `parallel = true` を足し、idle のときに `systemctl --user restart celeris@<current>` で反映する（config の reload 機構は無い。`parallel` は F2b 以降の全 release が
 知っている key なので N-1 は壊れない）。費用指標（決定 4: quota 消費）は、codex の quota が measured で取れるようになりデータが揃ってから改めて判断する。
+
+## Phase F6: 既存の Task / 案件を後から分解の経路に入れる、案件の編集（2026-09-28）
+
+### 症状・動機
+
+- 人の依頼（2026-09-28）: (1)「すでにタスクや案件として起票されてしまっているものに関して、後から分解の経路（ExecutionPlan）に入れられるようにしたい」
+  — 人・CoS（ChatGPT RDC 経由を含む）が起票し、gate で atomic になった（または gate=shadow の下で CoS のヒントだけの compound が記録だけになり
+  atomic で走った）Task を、人の操作で planner の経路に入れたい。止まった案件（`benchfs` 01M35WRV77A2JPYGERQGXF6V7K「BenchFS 国際会議フルペーパー化」。
+  最後の仕事は 2026-09-24 の Phase 1 framing の調査・承認・報告のまとめ）を GUI から案件計画（CoS がマイルストーン Task の DAG を提案 → 人が承認）に
+  入れたい。(2)「案件の名前や説明を後から GUI 上で変更できるようにしたい」。
+- 本番で見つかった不具合（coordinator 経由、2026-09-28）: `POST /tasks/{id}/retry` が元の gate の判定を写す。01M3MBV3AKXZGEG5RXR60XC62J は
+  15:58Z に gate=shadow で判定（`compound/long-and-broad`、`source: hint`、`shadow: true`）され atomic で走り、人が中止 → 17:06Z に gate=on で再起動 →
+  retry。複製 01M3MFS5T52FXA63W4V10XGC4S には自分の `execution_gated` が無く、`GET /tasks/{id}/execution` の `gate` は元の `shadow: true / source: hint`
+  のまま。それでも daemon は写された判定（mode compound）を gate=on で採用して planner run を起こし、計画 v1（7 WU）を実行中。GUI は古い判定を出していた。
+- 調べて分かったこと: 案件計画の API（`POST /projects/{id}/plan {mode: "milestones"}` → CoS の計画 run → `ProjectPlanProposed` → `decide`）は既存の案件でも
+  そのまま動く（下の結合テスト）。本番で `project_plan_proposed` が 0 件だった理由は GUI に**初回の**案件計画を起こす入口が無かったこと（「計画を見直す」は
+  承認済みの計画がある案件にしか出ず、「この方針で進める」は `mode` を送っていなかった）。benchfs には途中目標が 0 件（`milestones` の行なし）。
+
+### 決定（ADR-0072「Phase F6 実装時の決定」P1〜P7）
+
+- P1 `POST /tasks/{id}/execution/decompose {mode, note?}`（管理系）: 人の明示（`execution_hint = {mode, explicit: true}`）を書き、前の判定を消し、
+  `execution_hint_set{source}` を残す。次の dispatch で gate が `human/explicit` として判定し直す（D13「1 回だけ」の例外）。`draft`/`ready`/`blocked` のみ。
+  `running`/`reviewing` は 409（run を止めない。止めるなら中止 → retry）、終端は 409（retry の `execution`）、計画を持つ Task の `compound` は replan の依頼
+  （`max_replans` の範囲、依頼は次の `Transitioned{to: running}` で消費）、計画を持つ Task の `atomic` は 409、gate の対象外は 422。
+- P2 GUI の「この方針で進める」に「進め方」（仕事に分解する / 案件計画を提案させる）を足した。提案は既存の DAG 節の破線 + 承認 / 却下に出る。
+- P3 `PATCH /projects/{id}` に `title`・`request`（= 説明、依頼文）。空は 422、200 / 20,000 文字まで。新しい `description` 欄は作らない。slug（K-1）も同じフォームに。
+- P4 案件の編集の監査は管理系の構造化ログ `op = "project_updated" fields=[…]`（案件の events 列は無い。作るなら migration。提案に残す）。
+- P5 retry は `routing.execution` を写さない（`execution_hint` は写す）。複製先は今の設定で判定し直し、自分の `execution_gated` を残す。`RetryBody.execution` で
+  複製先に人の明示を書ける。
+- P6 MCP `task_decompose { id, mode, note? }` は `tasks:interact`（run を止めない・複製しない・承認しない・取り消せる。ChatGPT RDC の推奨 scope のまま使える）。
+  `task_retry { id, execution? }` は `tasks:control` のまま。
+- P7 GUI のタスク詳細に「実行の形（atomic / compound）」節: gate の判定の出どころ（規則表 / CoS のヒント + 規則表 / 人の明示、shadow）と `execution_hint`、
+  確認ダイアログ付きのボタン。
+- migration なし（`SCHEMA_VERSION` 28 のまま）。新しい Event `execution_hint_set`（`docs/api/v1/event.schema.json`）。
+
+### 使い方
+
+- GUI（タスク）: `/tasks/<id>` の「実行」節の下「実行の形」→「計画を作らせる（compound に切り替え）」（確認 → 次の run が planner run）。終端のタスクは
+  「計画を作らせてやり直す」（新しいタスクへ移る）。計画のあるタスクは「計画を見直させる（replan を依頼）」。
+- GUI（案件）: `/projects/<id>` の「依頼」節の「名前・説明を編集」（名前・説明・slug）。「この方針で進める」で「案件計画を提案させる」を選んで送ると、CoS の
+  計画 run が提案を出し、「案件計画」節に破線の提案と「承認 / 却下」が出る。
+- API: `curl -X POST -H "Authorization: Bearer $TOKEN" -d '{"mode":"compound","note":"工程に分けて"}' $CELERIS/api/v1/tasks/<id>/execution/decompose`、
+  `-d '{"execution":"compound"}' …/tasks/<id>/retry`、`-X PATCH -d '{"title":"…","request":"…"}' …/projects/<id>`、
+  `-d '{"mode":"milestones","note":"…"}' …/projects/<id>/plan` → `-d '{"decision":"approve"}' …/projects/<id>/project-plan/1/decide`。
+- MCP: `tools/call {"name":"task_decompose","arguments":{"id":"<id>","mode":"compound"}}`（scope `tasks:interact`）。
+
+### 証拠
+
+- Rust の新しいテスト:
+  - `task_ops::regate::tests`（4 件: 明示の書き込み・判定の消去・source/note の記録、running/終端の 409、対象外・長い note の 422、replan の依頼の消費）。
+  - `task_ops::retry::tests::{retry_drops_the_copied_gate_decision_and_keeps_an_explicit_hint, retry_with_execution_sets_an_explicit_hint_on_the_copy_with_its_source}`。
+  - `task_dispatch::dispatcher::tests::regate_of_an_atomic_task_starts_a_planner_run_and_yields_a_plan`（gate=shadow、偽アダプタ。hint_set → 新しい
+    `execution_gated{human/explicit}` → planner run 1 本 → 計画 2 WU → done）、`regate_of_a_planned_task_is_a_replan_request`（版 2、planner の理由に note と
+    `mcp:chatgpt`）、`retry_after_switching_gate_to_on_regates_the_copy`（shadow の判定を持つ Task を中止 → gate=on で retry → 複製に `execution_gated` が
+    1 件・`shadow: false`・`source: hint`、done）、`milestones_plan_on_an_existing_stalled_project_reaches_the_human_gate_and_is_approved`（done / failed の
+    Task がある案件 → `start_milestones` → 偽 CoS の project-plan/1 → `ProjectPlanProposed v1`・`dag_view.pending`（2 節点）→ `decide approve` →
+    途中目標 approved・「調査」ready・`current_version = 1`・既存の Task はそのまま）。
+  - `task-api` `tests/execution.rs`（decompose の 200 / 409 / 422 / 400 / 401 / 404、retry の `execution` と 422）、`tests/project_plan.rs`
+    `patch_project_edits_title_and_request_and_validates_them`（trim、題名だけ + slug、空・長すぎの 422、知らない欄の 400、401、404）。
+  - `celeris-mcp` `task_decompose_requires_tasks_interact_and_records_the_mcp_source`（`tasks:read` だけは -32601、`source: mcp:chatgpt`、終端は -32602）。
+- GUI の新しいテスト: `test/unit/execution-mode.test.ts`（判定の 1 行 1 件、表示の判定 5 件、描画 3 件、decompose の写し 2 件、retry の `execution` 1 件）、`test/unit/projects.detail.test.ts`
+  （`patchProjectText` 2 件、`startProjectPlan` の `mode` 2 件）。
+- 関門（すべて exit 0）: `cargo fmt --all -- --check`、`scripts/dev/test-parallel.sh`（nextest 77 バイナリ + doc 10、passed 2634 / failed 0 / ignored 7）、
+  `cargo clippy --workspace --all-targets -- -D warnings`、`corepack pnpm@11.27.0 -C gui typecheck`、`lint`（info 2 件は既存の scripts/）、`test`
+  （75 ファイル / 1144 件）、`gen:types` の後 `git diff --exit-code gui/app/celeris/types.ts` 差分なし。
+
+### 未解決事項・提案
+
+- 本番の反映は未（release・昇格は人）。昇格後に確かめること: (a) benchfs で「案件計画を提案させる」→ `project_plan_proposed` → 承認、(b) 01M3MBV3… の
+  やり直しのような retry で複製に `execution_gated` が付くこと。**既に走っている 01M3MFS5T52FXA63W4V10XGC4S の `routing.execution` は古い判定のまま**
+  （計画は採用済みなので動作には影響しない。GUI の gate 表示だけが古い。DB は直していない）。
+- 案件の events 列（`project_updated` を GUI の履歴に出す）は migration が要るので見送った（P4）。要るなら次の schema 変更と一緒に。
+- `blocked` の Task に compound を書いても、回答で `ready` に戻るまで planner は起きない（P1）。人が「今すぐ計画から」と言うなら、回答と同時に使う必要がある。
+- CoS（対話 run）の道具には decompose を入れていない（CoS の `create_task.execution` は従来どおりヒント +2）。CoS が既存タスクの再分解を人に提案する経路は
+  別に考える。

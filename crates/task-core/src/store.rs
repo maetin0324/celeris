@@ -881,6 +881,16 @@ pub trait TaskStore:
         id: MilestoneId,
         status: MilestoneStatus,
     ) -> Result<bool, StoreError>;
+    /// 現在の状態が `from` のときだけ更新する。dispatch と自動到達が人の状態変更を上書きしないために使う。
+    fn milestone_transition_status(
+        &self,
+        id: MilestoneId,
+        from: MilestoneStatus,
+        to: MilestoneStatus,
+    ) -> Result<bool, StoreError>;
+    /// ADR-0077 D2: `auto_advance = true` の案件で、マイルストーン Task が `done` になった案件計画の途中目標
+    /// （`plan_key` あり、状態が `approved` / `in_progress`）の id。`reached` にしてよい候補。
+    fn milestones_auto_reach_candidates(&self) -> Result<Vec<MilestoneId>, StoreError>;
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
     /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い途中目標は `Ok(false)`。
     fn milestone_set_lifecycle(
@@ -4662,6 +4672,51 @@ impl TaskStore for SqliteStore {
             ],
         )?;
         Ok(affected == 1)
+    }
+
+    fn milestone_transition_status(
+        &self,
+        id: MilestoneId,
+        from: MilestoneStatus,
+        to: MilestoneStatus,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let affected = conn.execute(
+            "UPDATE milestones SET status = ?1, updated_at = ?2 WHERE id = ?3 AND status = ?4",
+            params![
+                to.as_str(),
+                format_rfc3339(OffsetDateTime::now_utc())?,
+                id.to_string(),
+                from.as_str(),
+            ],
+        )?;
+        Ok(affected == 1)
+    }
+
+    fn milestones_auto_reach_candidates(&self) -> Result<Vec<MilestoneId>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT m.id FROM milestones m JOIN projects p ON p.id = m.project_id \
+                 WHERE m.plan_key IS NOT NULL AND m.status IN ('approved', 'in_progress') \
+                   AND p.auto_advance = 1 \
+                   AND EXISTS (SELECT 1 FROM tasks t WHERE t.milestone_id = m.id \
+                               AND t.parent_id IS NULL AND t.kind = ?1 AND t.status = ?2) \
+                 ORDER BY m.project_id, m.seq",
+            )?;
+            let rows = stmt.query_map(
+                params![kind_str(TaskKind::Execute), status_str(Status::Done)],
+                |row| row.get::<_, String>(0),
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                let id = row?;
+                out.push(
+                    id.parse::<MilestoneId>()
+                        .map_err(|_| StoreError::Invalid(format!("invalid milestone id: {id}")))?,
+                );
+            }
+            Ok(out)
+        })
     }
 
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を 1 回の UPDATE で書く（`project_set_lifecycle` と同じ）。

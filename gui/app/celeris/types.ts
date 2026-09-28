@@ -3930,6 +3930,13 @@ export interface QuotaUse {
    * この (source, account, window) にこの窓の値を持つ run の数（`unknown` も含む）。
    */
   runs: number;
+  /**
+   * ADR-0076: `runs` の役割別の内訳（`"worker"` / `"planner"` / `"reviewer"`。値の合計は `runs`）。
+   * 欄の無い旧 JSON は空 map として読む。
+   */
+  runs_by_role?: {
+    [k: string]: number;
+  };
   source: string;
   /**
    * 決められた run だけの合計（`unknown` の run は寄与しない）。全部 `unknown`/`free` なら

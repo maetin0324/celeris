@@ -1360,12 +1360,6 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - 本番での確認（F5-1 dogfood の 4 回目）: 並列 WU の `runs/<run_id>/request.json` の `cargo_target_dir` が WU ごとに違うこと、WU done 後に `<build_cache_dir>/cargo/<repo-key>/wu-*` が消えること、replan の差分が統合 WU で拒否されないことを確かめる。
 - 別 Task 同士（同じリポジトリの Task 単位の run）は今も `<repo-key>` を共有する（ADR-0066 D1 のまま）。同じ偽のコンパイルエラーが Task をまたいで出るなら、Task 単位にも分けるかを判断する。
 
-## F5-1 dogfood（4 回目、2026-09-28 02:26Z〜、タスク 01M3JXB3DHVBWKWKPW04DTG6SJ）: 途中経過
-
-- F5-fix と G1 の効果を本番で確認: `build` 工程の 3 WU（api-docs / milestone-progress / quota-roles）が並列に走り、`request.json` の `cargo_target_dir` は WU ごとに `scratch/targets/task-<id>/wu-<id>/target`（共有 target の混線は再現せず）。`integrate-build` も done。replan v2 / v3（差分 changed=2）が daemon 由来の統合 WU を理由に拒否されなくなった。
-- 異常 1 件: `gate` WU の run（03:28 開始）が 05:30 に `infra_requeue: lease expired` で回収され再 dispatch（再実行は 10 分で done）。1 回目の run 自身は「全体ゲート成功（2515 passed）」の result を残しているので、run の終わり際に lease が切れた（G1 昇格 03:42 のライブ切替で旧デーモンが draining のまま 2 時間の run を持っていた経路。旧デーモンが run より先に終了した可能性）。journal が取れず未確定 → 提案 P-F5-3: 「draining 中の旧デーモンが持つ run の lease」を新デーモン側が引き継いで heartbeat する（Phase 116 D5 の拡張）か、旧デーモンの終了条件に「run の lease を渡すまで待つ」を足す。
-- 途中の lane 分布: planner 3 run は standard（Opus）、worker 12 run は standard（gpt-6-sol / Opus）7 と cheap（gpt-6-luna）5。E6（全 run standard）から cheap が増えた。
-
 ## F5-fix2: WU run の完了が記録されない（dogfood 4 回目）（2026-09-28）
 
 ### 症状
@@ -1623,3 +1617,9 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - 通常のリポジトリ（`mode = shared` で cwd = 実リポジトリ）では、codex は `<cwd>/.git` を read-only entry にし、本 fix は同じパスを
   write root として足す。どちらが勝つかは codex の entry の優先順位に依る（未確認）。celeris の既定の配置（worktree）には影響しない。
 - 本番への反映は昇格待ち（本 fix は production に触れていない。本番のファイルは read-only の参照だけ）。
+
+## F5-1 dogfood（4 回目、2026-09-28 02:26Z〜、タスク 01M3JXB3DHVBWKWKPW04DTG6SJ）: 途中経過
+
+- F5-fix と G1 の効果を本番で確認: `build` 工程の 3 WU（api-docs / milestone-progress / quota-roles）が並列に走り、`request.json` の `cargo_target_dir` は WU ごとに `scratch/targets/task-<id>/wu-<id>/target`（共有 target の混線は再現せず）。`integrate-build` も done。replan v2 / v3（差分 changed=2）が daemon 由来の統合 WU を理由に拒否されなくなった。
+- 異常 1 件: `gate` WU の run（03:28 開始）が 05:30 に `infra_requeue: lease expired` で回収され再 dispatch（再実行は 10 分で done）。1 回目の run 自身は「全体ゲート成功（2515 passed）」の result を残しているので、run の終わり際に lease が切れた（G1 昇格 03:42 のライブ切替で旧デーモンが draining のまま 2 時間の run を持っていた経路。旧デーモンが run より先に終了した可能性）。journal が取れず未確定 → 提案 P-F5-3: 「draining 中の旧デーモンが持つ run の lease」を新デーモン側が引き継いで heartbeat する（Phase 116 D5 の拡張）か、旧デーモンの終了条件に「run の lease を渡すまで待つ」を足す。
+- 途中の lane 分布: planner 3 run は standard（Opus）、worker 12 run は standard（gpt-6-sol / Opus）7 と cheap（gpt-6-luna）5。E6（全 run standard）から cheap が増えた。

@@ -760,6 +760,18 @@ pub enum RunRole {
     Planner,
 }
 
+impl RunRole {
+    /// `"worker"` / `"reviewer"` / `"planner"`（serde 名と同じ。`ExecutionMetrics.runs_by_role` と
+    /// ADR-0076 の `QuotaUse.runs_by_role` のキー）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunRole::Worker => "worker",
+            RunRole::Reviewer => "reviewer",
+            RunRole::Planner => "planner",
+        }
+    }
+}
+
 /// ADR-0048 D2（Phase 60a）: ワーカーの進行の種別。アダプタごとの差はアダプタ側で吸収し、
 /// Console（ADR-0048 D1）はこの 5 種だけを知る。`comment` はプロトコルの別 type（ADR-0044 D2）の
 /// ままなのでここには無い。

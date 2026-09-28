@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::accounts::RateLimitObservation;
-use crate::model::Usage;
+use crate::model::{RunRole, Usage};
 
 /// D4.2: 窓の種別（ADR-0024 と同じ 2 窓）。
 #[derive(
@@ -347,6 +347,10 @@ pub struct QuotaUse {
     /// この (source, account, window) にこの窓の値を持つ run の数（`unknown` も含む）。
     pub runs: u32,
     pub method_counts: BTreeMap<String, u32>,
+    /// ADR-0076: `runs` の役割別の内訳（`"worker"` / `"planner"` / `"reviewer"`。値の合計は `runs`）。
+    /// 欄の無い旧 JSON は空 map として読む。
+    #[serde(default)]
+    pub runs_by_role: BTreeMap<String, u32>,
 }
 
 /// `QuotaEstimated` 相当の 1 run 分の情報（`execution_metrics::summarize` と WU ごとの集計が
@@ -356,6 +360,8 @@ pub struct QuotaRunRecord<'a> {
     pub source: &'a str,
     pub account: Option<&'a str>,
     pub windows: &'a [QuotaWindowUse],
+    /// ADR-0076: この run の役割（`WorkerStarted.role` から。無ければ worker）。
+    pub role: RunRole,
 }
 
 /// D4.3: 複数 run の `QuotaRunRecord` を (source, account, window) ごとに合計する純粋関数。
@@ -369,6 +375,7 @@ pub fn aggregate_quota_use<'a>(
         used_pct: Option<f64>,
         runs: u32,
         method_counts: BTreeMap<String, u32>,
+        runs_by_role: BTreeMap<String, u32>,
     }
     let mut acc: BTreeMap<(String, Option<String>, QuotaWindow), Acc> = BTreeMap::new();
     for record in records {
@@ -380,6 +387,10 @@ pub fn aggregate_quota_use<'a>(
             );
             let entry = acc.entry(key).or_default();
             entry.runs += 1;
+            *entry
+                .runs_by_role
+                .entry(record.role.as_str().to_string())
+                .or_insert(0) += 1;
             *entry
                 .method_counts
                 .entry(w.method.as_str().to_string())
@@ -397,6 +408,7 @@ pub fn aggregate_quota_use<'a>(
             used_pct: a.used_pct,
             runs: a.runs,
             method_counts: a.method_counts,
+            runs_by_role: a.runs_by_role,
         })
         .collect()
 }
@@ -422,6 +434,9 @@ pub fn merge_quota_use(rows: impl IntoIterator<Item = QuotaUse>) -> Vec<QuotaUse
                 };
                 for (method, count) in row.method_counts {
                     *existing.method_counts.entry(method).or_insert(0) += count;
+                }
+                for (role, count) in row.runs_by_role {
+                    *existing.runs_by_role.entry(role).or_insert(0) += count;
                 }
             }
         }
@@ -817,11 +832,13 @@ mod tests {
                 source: "claude-oauth",
                 account: Some("a"),
                 windows: &w1,
+                role: RunRole::Worker,
             },
             QuotaRunRecord {
                 source: "claude-oauth",
                 account: Some("a"),
                 windows: &w2,
+                role: RunRole::Reviewer,
             },
         ];
         let agg = aggregate_quota_use(records);
@@ -838,6 +855,8 @@ mod tests {
         );
         assert_eq!(row.method_counts.get("measured"), Some(&1));
         assert_eq!(row.method_counts.get("unknown"), Some(&1));
+        assert_eq!(row.runs_by_role.get("worker"), Some(&1));
+        assert_eq!(row.runs_by_role.get("reviewer"), Some(&1));
     }
 
     // ---- merge_quota_use ----
@@ -851,11 +870,13 @@ mod tests {
             used_pct: Some(3.0),
             runs: 1,
             method_counts: BTreeMap::from([("measured".to_string(), 1)]),
+            runs_by_role: BTreeMap::from([("worker".to_string(), 1)]),
         };
         let b = QuotaUse {
             used_pct: Some(2.0),
             runs: 1,
             method_counts: BTreeMap::from([("measured".to_string(), 1)]),
+            runs_by_role: BTreeMap::from([("planner".to_string(), 1)]),
             ..a.clone()
         };
         let c_unknown = QuotaUse {
@@ -882,11 +903,21 @@ mod tests {
         );
         assert_eq!(claude.method_counts.get("measured"), Some(&2));
         assert_eq!(claude.method_counts.get("unknown"), Some(&1));
+        assert_eq!(claude.runs_by_role.get("worker"), Some(&2));
+        assert_eq!(claude.runs_by_role.get("planner"), Some(&1));
         let codex = merged
             .iter()
             .find(|r| r.source == "codex-oauth")
             .expect("codex row");
         assert_eq!(codex.runs, 1);
+    }
+
+    #[test]
+    fn quota_use_without_runs_by_role_reads_as_empty() {
+        let legacy = r#"{"source":"claude-oauth","account":"x","window":"five_hour","used_pct":1.5,"runs":2,"method_counts":{"measured":2}}"#;
+        let row: QuotaUse = serde_json::from_str(legacy).expect("legacy QuotaUse JSON");
+        assert_eq!(row.runs, 2);
+        assert!(row.runs_by_role.is_empty());
     }
 
     #[test]

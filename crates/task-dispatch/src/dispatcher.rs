@@ -2934,6 +2934,15 @@ impl Dispatcher {
         report.finished = finished;
         report.reviewed = reviewed;
         self.settle_awaiting_children()?;
+        // ADR-0077 D2: `auto_advance` の案件で、`done` になったマイルストーン Task の途中目標を `reached` に。
+        match task_ops::project_plan::auto_reach_done_milestones(self.store.as_ref()) {
+            Ok(reached) => {
+                for mid in reached {
+                    tracing::info!(milestone_id = %mid, "milestone reached (auto_advance)");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to auto-reach milestones"),
+        }
         report.reclaimed = self.reclaim_expired_leases()?;
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
         self.reconcile_parallel_tasks()?;
@@ -3868,9 +3877,9 @@ impl Dispatcher {
     /// ADR-0074 D4（Phase F3 quota）: run の開始で、そのアカウントの現在の観測値をグループの
     /// `before` として `QuotaActivity` に登録する。アカウントプールを使わない run
     /// （`account`/`account_adapter` が `None`）は何もしない（D4.2 手順 5 の `free` は完了時に
-    /// 決める。プールが無いのでそもそも重なりを追う意味が無い）。**planner run では呼ばない**
-    /// （`is_planner_dispatch`。completion が `on_planner_finished` に分岐し、この worker 用の
-    /// `end` を通らないため。呼ぶと `QuotaActivity` にこの run が開いたまま残ってしまう）。
+    /// 決める。プールが無いのでそもそも重なりを追う意味が無い）。ADR-0076: worker / planner /
+    /// reviewer のどの run でも呼ぶ。呼んだ run は終了のすべての経路で `resolve_quota_estimate`
+    /// か `release_quota_if_tracked` を通すこと（開いたまま残ると重なりの判定が狂う）。
     fn quota_begin(
         &mut self,
         account: Option<&str>,
@@ -3893,11 +3902,27 @@ impl Dispatcher {
             .begin(adapter, account_id, run_id, before, before_valid);
     }
 
+    /// ADR-0074 D4 / ADR-0076: `run_id` の `Event::WorkerStarted.model`（quota の `r_out` を引く
+    /// ため。読めなければ空文字 = 既定の比）。
+    fn started_model_of(&self, task_id: TaskId, run_id: &str) -> String {
+        self.store
+            .events_for(task_id)
+            .ok()
+            .and_then(|events_so_far| {
+                events_so_far.iter().rev().find_map(|(_, e)| match e {
+                    Event::WorkerStarted {
+                        run_id: r, model, ..
+                    } if r == run_id => Some(model.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default()
+    }
+
     /// ADR-0074 D4（Phase F3 quota）: 何も永続化しない早期 return（不明なタスク・stale な結果の
     /// 破棄）でも `QuotaActivity` の bookkeeping だけは必ず閉じる（さもないと重なりの判定が永遠に
-    /// 狂う）。`is_tracked` で「`quota_begin` を呼んだ run か」を確かめてから呼ぶ（planner run は
-    /// `quota_begin` を呼んでいないので `false`。誤って無関係な他の run のグループを壊さないための
-    /// 防御。`quota_begin` の doc 参照）。戻り値（この run 自身の Event）は捨てる（グループが閉じて
+    /// 狂う）。`is_tracked` で「`quota_begin` を呼んだ run か」を確かめてから呼ぶ（誤って無関係な
+    /// 他の run のグループを壊さないための防御）。戻り値（この run 自身の Event）は捨てる（グループが閉じて
     /// 他のメンバー分が確定すれば、それらは `resolve_quota_estimate` の中で別タスクへ直接書かれる）。
     fn release_quota_if_tracked(
         &mut self,
@@ -4238,8 +4263,15 @@ impl Dispatcher {
                 )
             });
             if started_as_planner {
-                return self
-                    .on_planner_finished(task_id, &task, run_id, run_since, provider, result);
+                return self.on_planner_finished(
+                    task_id,
+                    &task,
+                    run_id,
+                    run_since,
+                    provider,
+                    (account.as_deref(), account_adapter),
+                    result,
+                );
             }
         }
         // ADR-0072 D14/D6・E4 (g): この WU に決定的な `checks`（`Command`）があり、run が
@@ -5125,19 +5157,7 @@ impl Dispatcher {
         // トランザクションで残す。重なった run のグループがこれで閉じれば、他のメンバー分は
         // `resolve_quota_estimate` の中で別タスクへ直接書く）。
         {
-            let model_for_quota = self
-                .store
-                .events_for(task_id)
-                .ok()
-                .and_then(|events_so_far| {
-                    events_so_far.iter().rev().find_map(|(_, e)| match e {
-                        Event::WorkerStarted {
-                            run_id: r, model, ..
-                        } if r == &run_id => Some(model.clone()),
-                        _ => None,
-                    })
-                })
-                .unwrap_or_default();
+            let model_for_quota = self.started_model_of(task_id, &run_id);
             let quota_event = self.resolve_quota_estimate(
                 task_id,
                 &run_id,
@@ -5289,6 +5309,7 @@ impl Dispatcher {
     /// - 不正・run 自体が異常終了（error/question/budget_exhausted/yielded）なら、1 回だけ再試行する
     ///   （もう一度 planner run を起こす。2 回目もだめなら計画を作らず atomic に倒す。D14「1 回だけ
     ///   再試行し、それでも不正なら atomic に倒す」）。Task は失敗させない（D12）。
+    #[allow(clippy::too_many_arguments)]
     fn on_planner_finished(
         &mut self,
         task_id: TaskId,
@@ -5296,6 +5317,7 @@ impl Dispatcher {
         run_id: String,
         run_since: Option<OffsetDateTime>,
         provider: ProviderId,
+        (account, account_adapter): (Option<&str>, Option<AccountAdapter>),
         result: Result<RunOutcome, AdapterError>,
     ) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
@@ -5306,7 +5328,7 @@ impl Dispatcher {
             Ok(_) => ProviderOutcome::Ok,
             Err(e) => provider_failure_outcome(e).unwrap_or(ProviderOutcome::Ok),
         };
-        self.policy.report(provider, &policy_outcome);
+        self.policy.report(provider.clone(), &policy_outcome);
 
         let (run_end, describe, usage): (
             Option<task_core::RunEnd>,
@@ -5362,6 +5384,23 @@ impl Dispatcher {
                 *usage,
             ),
             Err(e) => (None, format!("infra error: {e}"), None),
+        };
+
+        // ADR-0076: planner run の quota 消費も worker と同じ `resolve_quota_estimate` で見積もる。
+        // 以降の `?` で抜けても `QuotaActivity` が閉じているよう、分岐より前に一度だけ求め、
+        // `WorkerFinished` を保存するすべての分岐で同じトランザクションに添える。
+        let quota_event = {
+            let model = self.started_model_of(task_id, &run_id);
+            self.resolve_quota_estimate(
+                task_id,
+                &run_id,
+                None,
+                account,
+                account_adapter,
+                &provider,
+                &model,
+                usage.as_ref(),
+            )
         };
 
         // ADR-0072 D17（Phase E4）: この run が replan（既に `active` な計画がある）なら、done の
@@ -5483,7 +5522,7 @@ impl Dispatcher {
                         self.store.apply_transition_with_events(
                             task_id,
                             Trigger::WorkerQuestion,
-                            vec![finished, progress],
+                            vec![finished, quota_event, progress],
                         )?;
                         for q in &questions {
                             if let Err(e) = crate::approvals::record_question_approval(
@@ -5502,7 +5541,7 @@ impl Dispatcher {
                             task_id,
                             task,
                             &run_id,
-                            finished,
+                            vec![finished, quota_event],
                             format!("子 Task の提案が委譲の検証に通りませんでした: {reason}"),
                             now,
                         )?;
@@ -5541,7 +5580,7 @@ impl Dispatcher {
                             Trigger::Continue {
                                 why: task_core::ContinueWhy::Planned,
                             },
-                            vec![finished],
+                            vec![finished, quota_event],
                         )?;
                     }
                     Err(e) => {
@@ -5552,7 +5591,7 @@ impl Dispatcher {
                             task_id,
                             task,
                             &run_id,
-                            finished,
+                            vec![finished, quota_event],
                             format!("計画の採用に失敗しました: {e}"),
                             now,
                         )?;
@@ -5568,7 +5607,14 @@ impl Dispatcher {
                     metrics,
                     end: run_end,
                 };
-                self.give_up_or_retry_planner(task_id, task, &run_id, finished, reason, now)?;
+                self.give_up_or_retry_planner(
+                    task_id,
+                    task,
+                    &run_id,
+                    vec![finished, quota_event],
+                    reason,
+                    now,
+                )?;
             }
         }
         Ok(())
@@ -5728,6 +5774,7 @@ impl Dispatcher {
     /// 諦めたときの振る舞いは呼び出し時点の状態で決める: 既に `active` な計画が無ければ fresh
     /// planning の give up（atomic に倒す。D14）、既に `active` な計画があれば replan の give up
     /// （`blocked`。D12「失敗にしないもの」、D17/D18）。Task を `failed` にはしない。
+    // `finished` は `WorkerFinished` とそれに添える Event（ADR-0076 の `QuotaEstimated`）。
     /// Phase F5-fix3: 拒否した planner の計画（`artifacts/execution-plan.json`）を
     /// `artifacts/execution-plan.rejected.json` に移す（上書き）。無ければ何もしない。失敗しても警告だけ。
     fn set_aside_rejected_plan(&self, task: &Task) {
@@ -5752,7 +5799,7 @@ impl Dispatcher {
         task_id: TaskId,
         task: &Task,
         run_id: &str,
-        finished: Event,
+        finished: Vec<Event>,
         reason: String,
         now: OffsetDateTime,
     ) -> Result<(), DispatchError> {
@@ -5785,7 +5832,7 @@ impl Dispatcher {
                 Trigger::Continue {
                     why: task_core::ContinueWhy::Planned,
                 },
-                vec![finished, progress],
+                finished.into_iter().chain([progress]).collect(),
             )?;
         } else if self.store.execution_plan_active(task_id)?.is_some() {
             // ADR-0072 D17（Phase E4）: これは replan の planner run（既に `active` な計画がある）。
@@ -5797,7 +5844,7 @@ impl Dispatcher {
             self.store.apply_transition_with_events(
                 task_id,
                 Trigger::WorkerQuestion,
-                vec![finished, progress],
+                finished.into_iter().chain([progress]).collect(),
             )?;
             if let Err(e) = crate::approvals::record_question_approval(
                 self.store.as_ref(),
@@ -5845,7 +5892,7 @@ impl Dispatcher {
                 Trigger::Continue {
                     why: task_core::ContinueWhy::Planned,
                 },
-                vec![finished, progress],
+                finished.into_iter().chain([progress]).collect(),
             )?;
         }
         Ok(())
@@ -6036,6 +6083,26 @@ impl Dispatcher {
             metrics: review_metrics,
             end: None,
         });
+        // ADR-0076: Reviewer run の quota 消費も worker と同じ `resolve_quota_estimate` で一度だけ
+        // 見積もる（対象タスクが消えた・stale でも `QuotaActivity` を閉じるため、分岐より前）。
+        // Reviewer run を起こさなかったレビュー（command 等だけ）には作らない。
+        let reviewer_quota = match (&completed_review_run, entry.as_ref()) {
+            (Some(review_run_id), Some(e)) => e.provider.clone().map(|provider| {
+                let model = self.started_model_of(task_id, review_run_id);
+                let usage = worker_finished_usage(&reviewer_finished);
+                self.resolve_quota_estimate(
+                    task_id,
+                    review_run_id,
+                    None,
+                    e.account.as_deref(),
+                    e.account_adapter,
+                    &provider,
+                    &model,
+                    usage.as_ref(),
+                )
+            }),
+            _ => None,
+        };
         let Some(task) = self.store.get(task_id)? else {
             return Ok(());
         };
@@ -6071,7 +6138,7 @@ impl Dispatcher {
         if task.status != Status::Reviewing {
             tracing::warn!(%task_id, status = ?task.status, "review result discarded (task no longer reviewing)");
             set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
-            if let Some(ev) = &reviewer_finished {
+            for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
                 self.store.append_event(task_id, ev)?;
             }
             finish_reviewer_run_index(
@@ -6159,7 +6226,7 @@ impl Dispatcher {
                         },
                     },
                 );
-                if let Some(ev) = &reviewer_finished {
+                for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
                     self.store.append_event(task_id, ev)?;
                 }
                 for ev in &throttled_events {
@@ -6281,6 +6348,7 @@ impl Dispatcher {
         );
         let mut events: Vec<Event> = reviewer_finished
             .into_iter()
+            .chain(reviewer_quota)
             .chain(outcome.verdicts.iter().map(|v| Event::ReviewVerdict {
                 run_id: run_id.clone(),
                 criterion_idx: v.criterion_idx,
@@ -7284,6 +7352,18 @@ impl Dispatcher {
                 matches!(self.store.get(id)?, Some(t) if t.status == Status::Reviewing);
             if !still_reviewing && let Some(entry) = self.reviewing.remove(&id) {
                 tracing::warn!(task_id = %id, "aborting review (task no longer reviewing)");
+                // ADR-0076: 止めた Reviewer run の `QuotaActivity` も閉じる（Event は残さない）。
+                if let (Some(review_run_id), Some(provider)) =
+                    (entry.review_run_id.clone(), entry.provider.clone())
+                {
+                    self.release_quota_if_tracked(
+                        &review_run_id,
+                        entry.account.as_deref(),
+                        entry.account_adapter,
+                        &provider,
+                        id,
+                    );
+                }
                 if let Some(review_run_id) = entry.review_run_id.clone() {
                     self.close_aborted_run(
                         id,
@@ -10433,6 +10513,16 @@ impl Dispatcher {
                 task_role: task.role.clone(),
             },
         )?;
+        // ADR-0077 D1: マイルストーン Task の dispatch で途中目標を `approved` → `in_progress`（冪等）。
+        match task_ops::project_plan::mark_milestone_dispatched(self.store.as_ref(), &task) {
+            Ok(true) => {
+                tracing::info!(task_id = %task.id, milestone_id = ?task.milestone_id, "milestone in_progress");
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to mark the milestone in_progress");
+            }
+        }
         // ADR-0072 D5（E2b の指摘）: 計画の無い Task（暗黙の WorkUnit）の worker run も `runs`
         // 索引に書く（(g)「全タスクの run について書く」。WU の run は `start_work_unit_run`、
         // planner run はこの少し上で、それぞれ自分で `run_index_start` を呼ぶ）。
@@ -10669,12 +10759,9 @@ impl Dispatcher {
         if let Some(ws) = &task_worktree {
             self.task_workspaces.insert(task.id, ws.clone());
         }
-        // ADR-0074 D4（Phase F3 quota）: 観測の `before` を記録する。planner run は completion が
-        // `on_planner_finished` に分岐し `resolve_quota_estimate`（`end`）を通らないため、ここでは
-        // 呼ばない（`quota_begin` 自身のコメント参照）。
-        if !is_planner_dispatch {
-            self.quota_begin(account.as_deref(), account_adapter, &run_id);
-        }
+        // ADR-0074 D4（Phase F3 quota）: 観測の `before` を記録する。ADR-0076: planner run も同じく
+        // 登録する（`on_planner_finished` が `resolve_quota_estimate` で閉じる）。
+        self.quota_begin(account.as_deref(), account_adapter, &run_id);
         let handle = self.spawn_worker(
             task.id,
             task.worker_hint.tier,
@@ -11910,6 +11997,9 @@ impl Dispatcher {
             }) {
                 tracing::warn!(%task_id, run_id = %review_run_id, error = %e, "failed to record the reviewer run start in the runs index");
             }
+            // ADR-0076: reviewer run も worker と同じく quota の `before` を登録する
+            // （`on_review_finished` が `resolve_quota_estimate` で閉じる）。
+            self.quota_begin(account.as_deref(), account_adapter, review_run_id);
         }
         let timeout = self.config.review_timeout;
         // ADR-0036 D1/D2: 判定（`plan.json` / `review.json` / `summary.md` / `ArtifactExists` の既定パス）は
@@ -15719,10 +15809,79 @@ mod tests {
             .milestone_get(survey2.milestone_id.unwrap())
             .unwrap()
             .unwrap();
-        assert_ne!(
+        assert_eq!(
             m.status,
             task_core::MilestoneStatus::Reached,
-            "判定は後から"
+            "ADR-0077 D2: auto_advance なら done で reached"
+        );
+    }
+
+    /// ADR-0077 D1 / D2: 承認直後は `approved`、マイルストーン Task の dispatch で `in_progress`（冪等）。
+    /// `auto_advance = false` なら Task が `done` でも `in_progress` のまま（人の `ok` 待ち）、`true` なら
+    /// `done` で `reached`（後続も同じ）。
+    #[tokio::test]
+    async fn planned_milestone_becomes_in_progress_when_dispatched_and_reached_on_auto_advance() {
+        use task_core::MilestoneStatus;
+        let milestone_status = |store: &Arc<dyn TaskStore>, t: &Task| {
+            store
+                .milestone_get(t.milestone_id.unwrap())
+                .unwrap()
+                .unwrap()
+                .status
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut d, _project, survey, poc) =
+            approved_two_step_project_plan(dir.path(), false).await;
+        assert_eq!(milestone_status(&store, &survey), MilestoneStatus::Approved);
+        assert_eq!(milestone_status(&store, &poc), MilestoneStatus::Approved);
+        d.tick().unwrap();
+        assert!(
+            store
+                .events_for(survey.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(e, Event::WorkerStarted { .. })),
+            "survey dispatched on the first tick"
+        );
+        assert_eq!(
+            milestone_status(&store, &survey),
+            MilestoneStatus::InProgress
+        );
+        assert_eq!(
+            milestone_status(&store, &poc),
+            MilestoneStatus::Approved,
+            "poc はまだ dispatch されない"
+        );
+        // 再 dispatch・2 本目の WU 相当の呼び出しでも変わらない（冪等）。
+        let survey_now = store.get(survey.id).unwrap().unwrap();
+        assert!(
+            !task_ops::project_plan::mark_milestone_dispatched(store.as_ref(), &survey_now)
+                .unwrap()
+        );
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        assert_eq!(store.get(survey.id).unwrap().unwrap().status, Status::Done);
+        assert_eq!(
+            milestone_status(&store, &survey),
+            MilestoneStatus::InProgress,
+            "auto_advance = false: done でも reached 待ち"
+        );
+
+        let dir2 = tempfile::tempdir().unwrap();
+        let (store2, mut d2, _project2, survey2, poc2) =
+            approved_two_step_project_plan(dir2.path(), true).await;
+        assert!(run_until_idle(&mut d2, 400).await.idle);
+        assert_eq!(store2.get(poc2.id).unwrap().unwrap().status, Status::Done);
+        assert_eq!(
+            milestone_status(&store2, &survey2),
+            MilestoneStatus::Reached
+        );
+        assert_eq!(milestone_status(&store2, &poc2), MilestoneStatus::Reached);
+        // 一回限り: 既に reached なら候補にならない。
+        assert!(
+            task_ops::project_plan::auto_reach_done_milestones(store2.as_ref())
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -27888,6 +28047,154 @@ mod tests {
 
     /// ADR-0074 §6 F1 (d): planner run は既定で `standard` lane（`rule_id = planner/system-standard`）、
     /// `[execution.planner] max_turns`/`max_wall_secs`（テストでは既定 24/900）が予算に反映される。
+    /// ADR-0076: planner / Reviewer run もアカウントプールの run なら `QuotaActivity` を通り、終了で
+    /// `Event::QuotaEstimated` を残す（worker と同じ）。終わった後に開いたままの run は残らず、
+    /// `ExecutionMetrics.quota` の `runs_by_role` に worker / planner / reviewer が現れる。
+    #[tokio::test]
+    async fn planner_and_reviewer_runs_emit_quota_estimates() {
+        struct RolesAdapter;
+        #[async_trait]
+        impl WorkerAdapter for RolesAdapter {
+            fn id(&self) -> &str {
+                "claude-code"
+            }
+            async fn run(
+                &self,
+                req: RunRequest,
+                _run_id: &str,
+                _limits: RunLimits,
+                _sink: &dyn EventSink,
+            ) -> Result<RunOutcome, AdapterError> {
+                std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+                if req.context.execution_planner.is_some() {
+                    std::fs::write(
+                        req.artifacts_dir.join("execution-plan.json"),
+                        plan_json(vec![wu_spec("a", &[])]),
+                    )
+                    .unwrap();
+                } else if req.task.kind == TaskKind::Review {
+                    std::fs::write(
+                        req.artifacts_dir.join("review.json"),
+                        r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#,
+                    )
+                    .unwrap();
+                }
+                Ok(RunOutcome {
+                    terminal: Terminal::Done {
+                        summary: "ok".into(),
+                        evidence: vec![],
+                        usage: Some(task_core::Usage {
+                            input_tokens: Some(1000),
+                            output_tokens: Some(100),
+                            cache_read_tokens: None,
+                            cache_creation_tokens: None,
+                            cost_usd: None,
+                        }),
+                    },
+                    exit_code: Some(0),
+                })
+            }
+            // アカウントプールは選んだアカウントの env を `with_env` で足す（`None` だと選べない）。
+            fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+                Some(Arc::new(RolesAdapter))
+            }
+        }
+
+        let accounts = accounts_fixture();
+        {
+            let mut book = AccountBook::load(&accounts.path().join(".celeris-usage.json"));
+            book.record_observation("a", usage_window(0.2, 90_000), ObservationSource::Run);
+            book.record_observation("b", usage_window(0.1, 90_000), ObservationSource::Run);
+            book.save().unwrap();
+        }
+        let ws_dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = compound_task(ws_dir.path());
+        task.acceptance = vec![task_core::Criterion {
+            text: "reviewed".into(),
+            check: Check::Reviewer,
+        }];
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        let mut d = pool_dispatcher(
+            store.clone(),
+            Arc::new(RolesAdapter),
+            None,
+            accounts.path().to_path_buf(),
+            2,
+            2,
+        );
+        d.set_now_unix_fn(Arc::new(|| 10_000));
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "claude-code".to_string();
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+        let stored = store.get(task_id).unwrap().unwrap();
+        assert_eq!(stored.status, Status::Done, "{stored:?}");
+
+        let events: Vec<Event> = store
+            .events_for(task_id)
+            .unwrap()
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let started: Vec<(String, Option<RunRole>, Option<String>)> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::WorkerStarted {
+                    run_id,
+                    role,
+                    account,
+                    ..
+                } => Some((run_id.clone(), *role, account.clone())),
+                _ => None,
+            })
+            .collect();
+        for want in [Some(RunRole::Planner), Some(RunRole::Reviewer), None] {
+            let (run_id, _, account) = started
+                .iter()
+                .find(|(_, role, _)| *role == want)
+                .unwrap_or_else(|| panic!("a {want:?} run: {started:?}"));
+            let account = account.as_deref().expect("pool account selected");
+            let quota = events.iter().find_map(|e| match e {
+                Event::QuotaEstimated {
+                    run_id: r,
+                    account,
+                    weighted_tokens,
+                    ..
+                } if r == run_id => Some((account.clone(), *weighted_tokens)),
+                _ => None,
+            });
+            let (quota_account, weighted) =
+                quota.unwrap_or_else(|| panic!("QuotaEstimated for {want:?} run {run_id}"));
+            assert_eq!(quota_account.as_deref(), Some(account));
+            assert!(weighted > 0.0, "usage is weighted for {want:?}");
+            assert!(
+                !d.quota_activity
+                    .is_tracked(AccountAdapter::ClaudeCode, account, run_id),
+                "{want:?} run {run_id} must not stay open in QuotaActivity"
+            );
+        }
+
+        let metrics = task_core::execution_metrics::summarize(&stored, &events);
+        let mut by_role: std::collections::BTreeMap<String, u32> = Default::default();
+        for row in metrics
+            .quota
+            .iter()
+            .filter(|r| r.window == task_core::QuotaWindow::FiveHour)
+        {
+            for (role, n) in &row.runs_by_role {
+                *by_role.entry(role.clone()).or_insert(0) += n;
+            }
+        }
+        assert_eq!(by_role.get("planner"), Some(&1), "{metrics:?}");
+        assert_eq!(by_role.get("reviewer"), Some(&1), "{metrics:?}");
+        assert!(
+            by_role.get("worker").copied().unwrap_or(0) >= 1,
+            "{metrics:?}"
+        );
+    }
+
     #[tokio::test]
     async fn planner_run_uses_the_standard_lane_by_default() {
         let dir = tempfile::tempdir().unwrap();

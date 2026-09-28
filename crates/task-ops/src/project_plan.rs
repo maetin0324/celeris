@@ -1299,6 +1299,52 @@ pub struct ProjectPlanDagView {
     pub pending: Option<PlanDagProposal>,
 }
 
+/// ADR-0077 D1: マイルストーン Task が dispatch されたら、その案件計画の途中目標を `approved` → `in_progress` に
+/// 上げる。`approved` 以外（既に `in_progress` 以降・一時停止・中止など）や案件計画の外の Task では何もしない
+/// （冪等。2 本目の WU や再試行でも変わらない）。決定的で、LLM は呼ばない。変えたら `true`。
+pub fn mark_milestone_dispatched(store: &dyn TaskStore, task: &Task) -> Result<bool, OpsError> {
+    if !task_core::is_milestone_task(task) {
+        return Ok(false);
+    }
+    let Some(mid) = task.milestone_id else {
+        return Ok(false);
+    };
+    let Some(milestone) = store.milestone_get(mid)? else {
+        return Ok(false);
+    };
+    if milestone.plan_key.is_none() || milestone.status != MilestoneStatus::Approved {
+        return Ok(false);
+    }
+    Ok(store.milestone_transition_status(
+        mid,
+        MilestoneStatus::Approved,
+        MilestoneStatus::InProgress,
+    )?)
+}
+
+/// ADR-0077 D2: `auto_advance = true` の案件で、マイルストーン Task が `done` になった案件計画の途中目標を
+/// `reached` にする（一回限り。`reached` から戻さない。一時停止・中止・再設計の途中目標は対象外）。
+/// dispatcher の tick から呼ぶ。`reached` にした途中目標の id を返す。
+pub fn auto_reach_done_milestones(store: &dyn TaskStore) -> Result<Vec<MilestoneId>, OpsError> {
+    let mut reached = Vec::new();
+    for mid in store.milestones_auto_reach_candidates()? {
+        // 候補の読み取りと書き込みの間に人が一時停止・中止した場合は上書きしない。
+        let Some(milestone) = store.milestone_get(mid)? else {
+            continue;
+        };
+        if !matches!(
+            milestone.status,
+            MilestoneStatus::Approved | MilestoneStatus::InProgress
+        ) {
+            continue;
+        }
+        if store.milestone_transition_status(mid, milestone.status, MilestoneStatus::Reached)? {
+            reached.push(mid);
+        }
+    }
+    Ok(reached)
+}
+
 /// ADR-0074 D3.5（Phase F4b (h)）: 案件ページの DAG を組み立てる（案件計画の版が 1 つも無ければ `None`）。
 pub fn dag_view(
     store: &dyn TaskStore,

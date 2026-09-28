@@ -1765,3 +1765,15 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 - **P-F5-1-4d は誤りだったので訂正**: 07:36Z の Sonnet run（01M3KF2HFMHPJR7YEB5HMT38MQ）の `rate_limit_event` は `status: allowed`（five_hour 13%、seven_day 11%）で、
   制限には当たっていない。実際の原因は headless の claude-code が `cargo test --workspace` を background task にして turn を終え、セッション終了で
   background task が kill され `result.json` 無しで終わったこと（F5-fix5 で修正・昇格済み）。router の不具合ではない。
+
+## Phase F 最終報告（2026-09-28）
+
+- 報告: [`docs/execution-parallel-report-2026-09-28.md`](../execution-parallel-report-2026-09-28.md)（ADR-0074 の決定と実装・release・昇格の対応、
+  受け入れ条件 46 件の判定〈満たす 42 / 部分 2 / 未 2〉、E6 と dogfood 1〜4 回目の比較、見つかった不具合 11 件、quota の観測の範囲、未解決・提案の集約）。
+- ADR-0074 の状態は **Partially implemented**（D1.3 の Task / CoS / profile による並列数の絞り込み、D2.1 の `PUT …/pause-after`、
+  D3.4 起点 (c) の自動 replan、D3.8 の CoS の案件直下 Task の draft 化〈未確認〉、D6.2 の配送の `RepairScheduled`）。
+- 本番で一度も通っていないもの: 案件計画（`project_plan_proposed` 0 件）と途中確認（`awaiting_human` 0 件）。F5b の残り。
+- 訂正: 本ファイルの「Phase F5-1 dogfood やり直し」節の `01M3HJYF9ZN09GE0ZFT9VT4V8J` は Task ではなく run の id（Task は 01M3HG7VV6A2HRHTNXWPDS9051）。
+  4 回目の節の「codex は 14 run すべて unknown」は、正確には 5 時間窓が 14 run すべて unknown・7 日窓は measured だが 13 run が前後同値（0.0pt）。
+- 次の一歩（提案）: `[execution] parallel` を採用の関門にするか決めて本番の設定と揃え、181939898ec3 の上で F5b の形（案件計画 + `pause_after` + 並列）の
+  dogfood を 1 回流し、codex の quota が取れない件と合わせて `parallel` / `gate` の既定を人が判断する（報告 §8）。

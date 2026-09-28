@@ -1751,3 +1751,5 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 - 提案 P-F5-fix5-c: `headless_background_task` を `HarnessErrorClass` / run の終わり方として構造化し、GUI の run 一覧で数える
   （schema 変更が要るので、再発が観測されたら）。
 - 本番への反映は昇格待ち（本 fix は production に触れていない。本番のファイルは read-only の参照だけ）。
+
+**昇格**: release `7667410c23d5`（main 7667410）。ゲート fmt / test / clippy 0、GUI 0、gen:types 差分ゼロ。verify ok=true live_ok=true schema 28。2026-09-28 12:06:01Z にライブ昇格（backup 20260928-120553-pre-7667410c23d5）。

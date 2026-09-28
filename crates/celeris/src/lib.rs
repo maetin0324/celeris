@@ -2,6 +2,7 @@
 //! 判断ロジックは `task-dispatch` にあり、ここはループと配線だけ。
 
 mod accounts_admin;
+pub mod cache_server;
 mod cluster_admin;
 pub mod config;
 /// ADR-0064 D3 / D5（Phase 110a）: 背景チェックポイントと定期バックアップ。

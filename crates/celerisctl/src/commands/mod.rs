@@ -33,6 +33,8 @@ pub mod retry;
 /// ADR-0069 Phase 118 D3: `celerisctl routing show`。設定ファイルだけを読む読み取り専用コマンド
 /// （DB は開かない。`config to-harnesses` と同じ扱い）。
 pub mod routing;
+/// ADR-0075（Phase G1）: `celerisctl scratch status|gc|lease|touch|release|env`。
+pub mod scratch;
 pub mod worker;
 /// ADR-0066 D2（Phase 110b）: `celerisctl workspace prune`。
 pub mod workspace;

@@ -97,6 +97,86 @@ fn free_disk_mb(path: &Path) -> Result<u64, String> {
     Ok(stat.blocks_available().saturating_mul(stat.fragment_size()) / (1024 * 1024))
 }
 
+/// ADR-0075（Phase G1）: dispatcher が持つ scratch pool の GC の状態（プロセス内メモリだけ。DB に書かない）。
+#[derive(Default)]
+struct ScratchState {
+    /// 測定スレッドの結果（パス → サイズ）。
+    sizes: crate::scratch_gc::SizeCache,
+    /// 削除スレッド・測定スレッドが動いている間は `true`（重ねて起こさない）。
+    removing: Arc<std::sync::atomic::AtomicBool>,
+    measuring: Arc<std::sync::atomic::AtomicBool>,
+    last_measure: Option<Instant>,
+    /// 直近の走査で P3 だった target（run の開始時の adopt の候補）。
+    candidates: Vec<task_worker::scratch::AdoptCandidate>,
+    /// `DaemonSnapshot.scratch`。
+    view: Option<task_ops::daemon::ScratchStatus>,
+    last_gc: Option<task_ops::daemon::ScratchGcView>,
+    /// journal の遷移（watermark の到達・解除）を 1 回だけ出すための直前の値。
+    pressure: Option<task_worker::scratch::Pressure>,
+    /// 実効上限の縮小を 1 回だけ出すための直前の値（GiB）。
+    effective_warned_gib: Option<u64>,
+    /// ディスク不足の通知の本文に足す P0 の一覧（直近の走査）。
+    pinned_summary: Option<String>,
+    /// この tick で緊急 GC を回した（通常の `scratch_gc` phase を重ねない）。
+    ran_this_tick: bool,
+}
+
+/// ADR-0075 D3: run の `CARGO_TARGET_DIR` をどこから取るか（`run_worker` に渡す）。
+#[derive(Debug, Clone)]
+enum CargoTargetPlan {
+    /// `[workspace] shared_build_cache = false`（与えない）。
+    None,
+    /// ADR-0066 D1 / F5-fix（`[scratch]` が無効）: `<build_cache_dir>/cargo/<repo-key>[/wu-<id>]`。
+    Legacy(PathBuf),
+    /// scratch pool（`<scratch>/targets/<owner>/target`。adopt の候補つき）。
+    Scratch {
+        settings: Box<task_worker::scratch::ScratchSettings>,
+        candidates: Vec<task_worker::scratch::AdoptCandidate>,
+    },
+}
+
+/// ADR-0075 D3: run の開始時の割り当て（lease の作成と adopt）。commit の距離もここで計算する（tick では計算しない）。
+fn allocate_scratch_target(
+    settings: &task_worker::scratch::ScratchSettings,
+    candidates: &[task_worker::scratch::AdoptCandidate],
+    owner: &task_worker::scratch::Owner,
+    repo: &task_worker::TaskRepo,
+    work_unit_key: Option<String>,
+) -> PathBuf {
+    let pool = settings.pool();
+    let base = repo.worktree.as_ref().map(|w| w.base.sha.clone());
+    let checkout = task_worker::scratch::checkout_time(&repo.dir);
+    let source = repo.source.clone();
+    let distance = |c: &task_worker::scratch::AdoptCandidate| match (&base, &c.base_commit) {
+        (Some(a), Some(b)) => crate::scratch_gc::commit_distance(&source, a, b),
+        _ => None,
+    };
+    let req = task_worker::scratch::AllocateRequest {
+        owner,
+        repo_path: &repo.source,
+        base_commit: base.clone(),
+        work_unit_key,
+        checkout,
+        candidates,
+        distance: &distance,
+        adopt: settings.adopt,
+        max_distance: settings.adopt_max_distance,
+    };
+    match task_worker::scratch::allocate(&pool, &req) {
+        Ok(a) => {
+            if let Some(from) = &a.adopted_from {
+                tracing::info!(owner = %owner, adopted_from = %from, target = %a.target_dir.display(), "scratch: adopted a warm target (ADR-0075 D3)");
+            }
+            a.target_dir
+        }
+        Err(e) => {
+            // lease を作れなくてもパスは与える（worktree の直下に target を作らせない）。
+            tracing::warn!(owner = %owner, error = %e, "scratch: could not write the lease; using the target path without it");
+            pool.target_dir(owner)
+        }
+    }
+}
+
 /// ADR-0018: コマンドを実行するクラスタ 1 つ分の設定（`celeris::config::ClusterConfig` の写し。task-dispatch は celeris に依存しない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterSpec {
@@ -441,6 +521,9 @@ const MAX_MERGE_REPAIRS_PER_PHASE: usize = 2;
 /// ADR-0074 D1.5（Phase F2）: v2 の Task の lease の保持者（run ではなく工程）の接頭辞。
 const PHASE_LEASE_PREFIX: &str = "phase:";
 
+/// Phase F5-fix2: 完了の確定に失敗した WU の run を戻すときの `WorkUnitTransitioned.reason`。
+const FINALISE_FAILED_REASON: &str = "finalise_failed";
+
 /// ADR-0074 D1.5: Task の lease の保持者が工程（`phase:<plan_id>:<phase>:<ulid>`）か。
 fn is_phase_lease_holder(holder: &str) -> bool {
     holder.starts_with(PHASE_LEASE_PREFIX)
@@ -644,6 +727,9 @@ pub struct DispatchConfig {
     pub shared_build_cache: bool,
     /// ADR-0066 D1: `[workspace] build_cache_dir`（既定 `~/.local/celeris/build-cache`）。
     pub build_cache_dir: PathBuf,
+    /// ADR-0075（Phase G1）: `[scratch]`。有効なら `CARGO_TARGET_DIR` は `<scratch>/targets/<owner>/target`
+    /// （`build_cache_dir` を使わない）。無効（設定・NFS 上）なら ADR-0066 D1 / F5-fix の挙動。
+    pub scratch: task_worker::scratch::ScratchSettings,
     /// ADR-0066 D2（Phase 110b）: `[workspace] prune_after_secs`（既定 86400、`0` で無効）。終端に
     /// なってからこの秒数経った作業場所から、ビルド生成物だけを刈る。
     pub workspace_prune_after_secs: u64,
@@ -682,6 +768,10 @@ pub struct ExecutionConfig {
     /// ADR-0074 D1.3/§4（Phase F2b）: `[execution] max_parallel_work_units`。Task ごとの同時 WU 数の
     /// 上限（既定 3、上限 6）。
     pub max_parallel_work_units: usize,
+    /// Phase F5-fix3: planner の計画の検証・採用に使う上限（ADR-0072 D18 / ADR-0074 §4）。planner の
+    /// プロンプトにもこの値をそのまま出す（検証と文面の出どころを 1 つにする）。config.toml の欄は無く、
+    /// 常に `ExecutionLimits::default()`（テストが既定と違う値を挿す）。
+    pub limits: task_core::ExecutionLimits,
 }
 
 /// ADR-0074 §4: `max_parallel_work_units` の上限。
@@ -701,6 +791,7 @@ impl Default for ExecutionConfig {
             work_unit_lane_cap: task_core::WorkUnitLaneCap::default(),
             parallel: false,
             max_parallel_work_units: 3,
+            limits: task_core::ExecutionLimits::default(),
         }
     }
 }
@@ -899,6 +990,56 @@ fn describe_run_end(end: task_core::RunEnd) -> String {
         task_core::RunEnd::HarnessError { class } => format!("harness_error({class:?})"),
         task_core::RunEnd::Cancelled => "cancelled".to_string(),
     }
+}
+
+/// Phase F5-fix3: 拒否した planner の計画の移し先（`artifacts/` の中）。
+const REJECTED_PLAN_FILE: &str = "execution-plan.rejected.json";
+/// Phase F5-fix3: `give_up_or_retry_planner` の進捗・質問の文面（`planner_rejections_since_last_plan` が
+/// 同じ定数で理由を取り出す。文面は F5-fix2 までと 1 バイトも変えない）。
+const PLANNER_RETRY_PREFIX: &str = "計画を採用できませんでした（";
+const PLANNER_RETRY_SUFFIX: &str = "）。もう一度だけ試します。";
+const PLANNER_BLOCKED_PREFIX: &str = "計画を直せませんでした（";
+const PLANNER_BLOCKED_SUFFIX: &str = "）。予算を増やして続ける／人が計画を書き直す\n（PUT /tasks/{id}/execution-plan）／中止のいずれかを選んでください。";
+
+fn planner_retry_message(reason: &str) -> String {
+    format!("{PLANNER_RETRY_PREFIX}{reason}{PLANNER_RETRY_SUFFIX}")
+}
+
+fn planner_blocked_question(reason: &str) -> String {
+    format!("{PLANNER_BLOCKED_PREFIX}{reason}{PLANNER_BLOCKED_SUFFIX}")
+}
+
+/// Phase F5-fix3: 直近の `ExecutionPlanned`（無ければ最初）より後で、daemon が planner の計画を拒否した
+/// 理由（`planner_retry_message` / `planner_blocked_question` の進捗から、古い順・重複なし）。次の
+/// planner run のプロンプトに「前の計画はこの理由で拒否された」として渡す（純粋関数）。
+fn planner_rejections_since_last_plan(events: &[(u64, Event)]) -> Vec<String> {
+    let since = events
+        .iter()
+        .rposition(|(_, e)| matches!(e, Event::ExecutionPlanned { .. }))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let mut out: Vec<String> = Vec::new();
+    for (_, e) in &events[since..] {
+        let Event::WorkerProgress {
+            msg, kind: None, ..
+        } = e
+        else {
+            continue;
+        };
+        let reason = msg
+            .strip_prefix(PLANNER_RETRY_PREFIX)
+            .and_then(|r| r.strip_suffix(PLANNER_RETRY_SUFFIX))
+            .or_else(|| {
+                msg.strip_prefix(PLANNER_BLOCKED_PREFIX)
+                    .and_then(|r| r.strip_suffix(PLANNER_BLOCKED_SUFFIX))
+            });
+        if let Some(reason) = reason
+            && !out.iter().any(|r| r == reason)
+        {
+            out.push(reason.to_string());
+        }
+    }
+    out
 }
 
 /// ADR-0072 D5（E2b の指摘、Phase E3 で配線）: reviewer run の `runs` 索引の finish。`completed_review_run`
@@ -1163,6 +1304,15 @@ struct IntegrationEntry {
     handle: JoinHandle<()>,
 }
 
+/// ADR-0072 D14/D6・E4 (g) / Phase F5-fix2: WU の `checks` を走らせている run（`spawn_work_unit_checks`
+/// が spawn した検査。run 自身は `running` から既に外れている）。`in_flight` に数え（draining の
+/// インスタンスが検査の途中で exit して完了を失わないため）、lease の照合では「生きている run」と
+/// みなす。
+struct CheckingEntry {
+    task_id: TaskId,
+    handle: JoinHandle<()>,
+}
+
 /// ADR-0074 D1.4: 工程の統合（spawn した git 操作と検査）の結果。
 #[derive(Debug, Clone, Default)]
 struct IntegrationRun {
@@ -1293,9 +1443,10 @@ struct RunExtras {
     /// ADR-0074 D1.2（Phase F2b）: v2 の WU の run の成果物の置き場（`<task_dir>/wu/<key>/artifacts`。
     /// 並列の WU が同じ `artifacts/checkpoint.json` を上書きしないため）。`runs/` は Task のものを共有する。
     artifacts_dir_override: Option<PathBuf>,
-    /// ADR-0074 F5-fix: 自分の worktree で走る v2 の WU の run だけ `Some("wu-<work_unit_id>")`。
-    /// `run_worker` が `CARGO_TARGET_DIR` を `<repo-key>/wu-<id>` にする（兄弟 WU と target を共有しない）。
-    cargo_target_subdir: Option<String>,
+    /// ADR-0074 F5-fix / ADR-0075 D3: 自分の worktree で走る v2 の WU の run だけ `Some((work_unit_id, key))`。
+    /// `run_worker` が `CARGO_TARGET_DIR` を WU ごとにする（scratch なら owner `task-<id>/wu-<id>`、無効なら
+    /// `<repo-key>/wu-<id>`。兄弟 WU と target を共有しない）。
+    cargo_target_work_unit: Option<(String, String)>,
 }
 
 struct ReviewEntry {
@@ -1745,6 +1896,8 @@ pub struct Dispatcher {
     disk_low: bool,
     /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
     removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
+    /// ADR-0075（Phase G1）: scratch pool の GC の状態（測定の cache・削除 / 測定スレッドの印・adopt の候補・観測値）。
+    scratch: ScratchState,
     disk_ready: bool,
     /// 「設定に合うプロバイダが無い」警告を出した（連続 tick で繰り返さない）タスク（ADR-0012 D2）。
     warned_unroutable: std::collections::HashSet<TaskId>,
@@ -1768,6 +1921,8 @@ pub struct Dispatcher {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
     /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
     integrating: HashMap<TaskId, IntegrationEntry>,
+    /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
+    checking: HashMap<String, CheckingEntry>,
     tx: mpsc::UnboundedSender<Completion>,
     rx: mpsc::UnboundedReceiver<Completion>,
     /// ADR-0018 D2: 多重接続が無いクラスタの cooldown（この時刻まで dispatch しない）。
@@ -2001,6 +2156,29 @@ impl Dispatcher {
                     .collect(),
                 None => HashMap::new(),
             };
+        // ADR-0075 D1: scratch を NFS 上で無効化したときは起動ログに理由を出す（従来の build_cache_dir に戻る）。
+        if let Some(reason) = &config.scratch.disabled_reason {
+            tracing::warn!(%reason, "scratch pool disabled");
+        } else if config.scratch.enabled && config.shared_build_cache {
+            tracing::info!(dir = %config.scratch.dir.display(), "scratch pool enabled (ADR-0075)");
+            // ADR-0075 D4（Phase G2）: sccache を配線するか（run ごとにも確かめる。ここは起動ログだけ）。
+            let state = task_worker::scratch::resolve_sccache(
+                &config.scratch,
+                task_worker::scratch::server_listening,
+            );
+            match state.reason() {
+                None => tracing::info!(
+                    port = config.scratch.sccache.server_port,
+                    binary = %config.scratch.sccache.binary.display(),
+                    "sccache L1 wired into cargo runs (ADR-0075 D4)"
+                ),
+                Some(reason) => tracing::info!(
+                    state = state.label(),
+                    reason,
+                    "sccache L1 not wired; runs use plain cargo (ADR-0075 D4)"
+                ),
+            }
+        }
         Self {
             store,
             policy,
@@ -2017,6 +2195,7 @@ impl Dispatcher {
             infra_backoff: HashMap::new(),
             disk_low: false,
             removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scratch: ScratchState::default(),
             disk_ready: true,
             warned_unroutable: std::collections::HashSet::new(),
             warned_cluster_tool: std::collections::HashSet::new(),
@@ -2026,6 +2205,7 @@ impl Dispatcher {
             awaiting_human: std::collections::HashSet::new(),
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
+            checking: HashMap::new(),
             tx,
             rx,
             cluster_cooldown: HashMap::new(),
@@ -2152,8 +2332,14 @@ impl Dispatcher {
     }
 
     /// 手元で動いている run とレビューの数（ADR-0040 D4 の drain の判定に使う）。
+    ///
+    /// Phase F5-fix2: run が終わった後の WU の `checks`（`checking`）と工程の統合（`integrating`）も
+    /// 数える。数えないと、draining のインスタンスは run の完了を受けて検査を spawn した直後に
+    /// 「手元が 0」と判断して exit し、検査の完了（`Completion::WorkUnitChecks`）ごと失う。
+    /// 本番（dogfood 4 回目の `gate` WU）では、その run は `running` のまま検査前に延ばした lease
+    /// （`review_timeout × (2n+1) + lease_grace`）が切れるまで放置され、`lease expired` で requeue された。
     pub fn in_flight(&self) -> usize {
-        self.running.len() + self.reviewing.len()
+        self.running.len() + self.reviewing.len() + self.checking.len() + self.integrating.len()
     }
 
     /// ADR-0040 D4: `[handoff] drain_timeout_secs` を超えたときに、残っている run とレビューを
@@ -2172,12 +2358,33 @@ impl Dispatcher {
             entry.handle.abort();
             aborted += 1;
         }
-        for (task_id, entry) in self.reviewing.drain() {
+        let reviewing: Vec<(TaskId, ReviewEntry)> = self.reviewing.drain().collect();
+        for (task_id, entry) in reviewing {
             tracing::warn!(task_id = %task_id, "drain timeout; aborting the review");
             task_worker::kill_tree(&entry.run_id, kill_grace);
             if let Some(review_run_id) = &entry.review_run_id {
                 task_worker::kill_tree(review_run_id, kill_grace);
+                // Phase F5-fix3: Reviewer run は lease を持たない（新しい active は review をやり直すだけで
+                // この run を閉じない）ので、ここで `runs` 行ごと閉じる。Task の状態は変えない。
+                self.close_aborted_run(
+                    task_id,
+                    review_run_id,
+                    Some(RunRole::Reviewer),
+                    "review aborted (drain timeout)",
+                );
             }
+            entry.handle.abort();
+            aborted += 1;
+        }
+        // Phase F5-fix2: 検査中の WU と工程の統合も止める（DB は変えない。lease 切れの経路で
+        // 新しい active が拾う。検査前の run の result.json があれば、そこから確定させる）。
+        for (run_id, entry) in self.checking.drain() {
+            tracing::warn!(task_id = %entry.task_id, %run_id, "drain timeout; aborting the work unit checks");
+            entry.handle.abort();
+            aborted += 1;
+        }
+        for (task_id, entry) in self.integrating.drain() {
+            tracing::warn!(%task_id, work_unit = %entry.work_unit_id, "drain timeout; aborting the phase integration");
             entry.handle.abort();
             aborted += 1;
         }
@@ -2478,6 +2685,155 @@ impl Dispatcher {
         }
     }
 
+    /// ADR-0075: scratch pool を使うか（`shared_build_cache` かつ `[scratch]` が有効〈NFS で無効化されていない〉）。
+    fn scratch_active(&self) -> bool {
+        self.config.shared_build_cache && self.config.scratch.enabled
+    }
+
+    /// ADR-0075 D2（Phase G1）: tick の `scratch_gc` phase。lease と DB の状態を読み、`plan_gc` で決めた target を
+    /// `.deleting-*` へ rename する（`remove_dir_all` は削除スレッド、サイズは測定スレッド）。`emergency` は空き <
+    /// `min_free_disk_mb` のときの緊急モード。rename した件数を返す。
+    fn scratch_gc(&mut self, emergency: bool) -> usize {
+        use task_worker::scratch::{GIB, Pressure};
+        let settings = self.config.scratch.clone();
+        let legacy = crate::scratch_gc::legacy_paths(
+            &self.config.build_cache_dir,
+            self.config.releases_dir.as_deref(),
+        );
+        let sizes = self
+            .scratch
+            .sizes
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default();
+        let min_free = self.config.min_free_disk_mb.saturating_mul(1024 * 1024);
+        let lookup = task_worker::scratch::StoreLookup(self.store.as_ref());
+        let run = crate::scratch_gc::run_gc(
+            &settings,
+            &legacy,
+            &lookup,
+            true,
+            &sizes,
+            min_free,
+            emergency,
+            &std::collections::BTreeSet::new(),
+            false,
+        );
+        let now = std::time::SystemTime::now();
+        // journal: watermark の到達・解除（tracing だけ。満杯の瞬間に DB へ書かない。D2）。
+        if self.scratch.pressure != Some(run.plan.pressure) {
+            match run.plan.pressure {
+                Pressure::None => {
+                    if self.scratch.pressure.is_some() {
+                        tracing::info!(
+                            targets_bytes = run.plan.used_bytes,
+                            "scratch: below the watermark again"
+                        );
+                    }
+                }
+                p => tracing::warn!(
+                    pressure = p.as_str(),
+                    targets_bytes = run.plan.used_bytes,
+                    pinned_bytes = run.plan.pinned_bytes,
+                    high = (settings.targets_max_bytes as f64 * settings.high_watermark) as u64,
+                    free_bytes = ?run.fs.map(|f| f.1),
+                    "scratch: watermark reached; reclaiming targets"
+                ),
+            }
+            self.scratch.pressure = Some(run.plan.pressure);
+        }
+        let eff = crate::scratch_gc::effective_max(
+            settings.total_max_bytes,
+            run.fs,
+            run.plan.used_bytes,
+            min_free,
+        );
+        let eff_gib = eff / GIB;
+        if eff < settings.total_max_bytes && self.scratch.effective_warned_gib != Some(eff_gib) {
+            tracing::warn!(
+                "scratch: 実効上限 {eff_gib} GB（設定 {} GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）",
+                settings.total_max_bytes / GIB
+            );
+            self.scratch.effective_warned_gib = Some(eff_gib);
+        }
+        let executed = run.executed.clone().unwrap_or(crate::scratch_gc::Executed {
+            removed: Vec::new(),
+            reclaimed_bytes: 0,
+        });
+        let removed: std::collections::BTreeSet<String> =
+            executed.removed.iter().map(|p| p.id.clone()).collect();
+        if !executed.removed.is_empty() {
+            tracing::info!(
+                removed = executed.removed.len(),
+                reclaimed_bytes = executed.reclaimed_bytes,
+                emergency,
+                pressure = run.plan.pressure.as_str(),
+                "scratch gc: moved targets aside"
+            );
+            self.scratch.last_gc = Some(crate::scratch_gc::gc_view(
+                &run.plan, &executed, emergency, now,
+            ));
+        }
+        self.scratch.candidates = run
+            .scan
+            .candidates
+            .iter()
+            .filter(|c| !removed.contains(&c.owner.to_string()))
+            .cloned()
+            .collect();
+        self.scratch.pinned_summary = Some(crate::scratch_gc::pinned_summary(&run.scan, &run.plan));
+        // 削除スレッド（同時に 1 本）。
+        let roots = crate::scratch_gc::deleting_roots(&settings.pool(), &legacy);
+        if !self
+            .scratch
+            .removing
+            .load(std::sync::atomic::Ordering::SeqCst)
+            && crate::scratch_gc::has_pending_deletes(&roots)
+        {
+            crate::scratch_gc::spawn_removal(roots, self.scratch.removing.clone());
+        }
+        // 測定スレッド（同時に 1 本、間隔ごとに 1 つ）。
+        let due = self
+            .scratch
+            .last_measure
+            .is_none_or(|t| t.elapsed() >= crate::scratch_gc::measure_interval(&settings));
+        if due
+            && !self
+                .scratch
+                .measuring
+                .load(std::sync::atomic::Ordering::SeqCst)
+            && let Some((path, lease)) = crate::scratch_gc::next_to_measure(&run.scan, &sizes)
+        {
+            self.scratch.last_measure = Some(Instant::now());
+            crate::scratch_gc::spawn_measure(
+                path,
+                lease,
+                self.scratch.sizes.clone(),
+                self.scratch.measuring.clone(),
+            );
+        }
+        let mut view = crate::scratch_gc::build_status(
+            &settings,
+            &run.scan,
+            &run.plan,
+            run.fs,
+            min_free,
+            &sizes,
+            self.scratch.last_gc.clone(),
+            now,
+        );
+        // ADR-0075 D6（Phase G2）: sccache の配線の状態（統計は `celerisctl scratch status` だけ。tick で client を起こさない）。
+        let sccache = task_worker::scratch::resolve_sccache(
+            &settings,
+            task_worker::scratch::server_listening,
+        );
+        view.sccache = Some(crate::scratch_gc::sccache_view(&settings, &sccache));
+        // ADR-0075 D6（Phase G3）: cache server の `/stats`（loopback、500 ms。無効なら問い合わせない）。
+        view.cache = Some(crate::scratch_gc::cache_view(&settings, true));
+        self.scratch.view = Some(view);
+        executed.removed.len()
+    }
+
     /// ディスク不足は Phase 116 の infra 障害として一度だけ通知し、空きが戻ると自動で解除する。
     /// 検査不能も安全側に倒して run を開始しない。
     fn check_disk_space(&mut self) -> bool {
@@ -2485,19 +2841,41 @@ impl Dispatcher {
             self.disk_low = false;
             return true;
         }
-        let paths = [
-            Path::new("/"),
-            &self.config.workspace_root,
-            &self.config.build_cache_dir,
+        let mut paths: Vec<PathBuf> = vec![
+            PathBuf::from("/"),
+            self.config.workspace_root.clone(),
+            self.config.build_cache_dir.clone(),
         ];
-        let low = paths.iter().find_map(|path| match free_disk_mb(path) {
-            Ok(free) if free < self.config.min_free_disk_mb => Some(format!(
-                "{}: {free} MiB free (minimum {} MiB)",
-                path.display(),
-                self.config.min_free_disk_mb
-            )),
-            Err(error) => Some(error),
-            _ => None,
+        // ADR-0075 D3: scratch pool の filesystem も見る。
+        if self.scratch_active() {
+            paths.push(self.config.scratch.dir.clone());
+        }
+        let min_free = self.config.min_free_disk_mb;
+        let find_low = move |paths: &[PathBuf]| {
+            paths.iter().find_map(|path| match free_disk_mb(path) {
+                Ok(free) if free < min_free => Some(format!(
+                    "{}: {free} MiB free (minimum {min_free} MiB)",
+                    path.display(),
+                )),
+                Err(error) => Some(error),
+                _ => None,
+            })
+        };
+        let mut low = find_low(&paths);
+        // ADR-0075 D3: 空きが足りなければ、新しい run を始める前にこの tick で緊急 GC（rename まで）を回す。
+        // 削除は別スレッドなので空きが戻るのは数 tick 後。その間は下の保留と通知 1 回（attempts を消費しない）。
+        let mut pinned_note = None;
+        if low.is_some() && self.scratch_active() {
+            let selected = self.scratch_gc(true);
+            self.scratch.ran_this_tick = true;
+            if selected == 0 {
+                pinned_note = self.scratch.pinned_summary.clone();
+            }
+            low = find_low(&paths);
+        }
+        let low = low.map(|reason| match pinned_note {
+            Some(note) => format!("{reason}; {note}"),
+            None => reason,
         });
         match low {
             Some(reason) => {
@@ -2572,8 +2950,22 @@ impl Dispatcher {
         self.abort_stale_runs()?;
         // ADR-0043 D2: **中止**されたタスクの worktree とブランチを消す（終端〈done / failed〉では消さない）。
         self.cleanup_cancelled_worktrees()?;
-        // ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
-        self.cleanup_work_unit_build_caches();
+        // ADR-0075 D2（Phase G1）: scratch pool の semantic GC（`scratch_gc` phase。rename まで、削除と測定は別スレッド）。
+        // scratch が無効なら ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
+        if self.scratch_active() {
+            if !self.scratch.ran_this_tick {
+                self.scratch_gc(false);
+            }
+        } else {
+            self.cleanup_work_unit_build_caches();
+            self.scratch.view = self.config.shared_build_cache.then(|| {
+                crate::scratch_gc::disabled_status(
+                    &self.config.scratch,
+                    std::time::SystemTime::now(),
+                )
+            });
+        }
+        self.scratch.ran_this_tick = false;
         let abort_ms = lap(&mut at);
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
@@ -2599,7 +2991,7 @@ impl Dispatcher {
             0
         };
         let dispatch_ms = lap(&mut at);
-        report.in_flight = self.running.len() + self.reviewing.len();
+        report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
         let idle_ms = lap(&mut at);
         self.publish_snapshot();
@@ -3302,6 +3694,8 @@ impl Dispatcher {
             max_runs_per_account,
             accounts_roots,
             accounts,
+            // ADR-0075 D6（Phase G1）: scratch pool の観測値（`scratch_gc` が tick ごとに組む）。
+            scratch: self.scratch.view.clone(),
             // ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出。
             containers: Some(task_ops::daemon::ContainersLive {
                 preference: self.config.containers.preference.as_str().to_string(),
@@ -3425,7 +3819,14 @@ impl Dispatcher {
                     provider,
                     result,
                 } => {
-                    self.on_worker_finished(task_id, run_id, provider, result)?;
+                    // Phase F5-fix2: 完了の確定に失敗しても（DB・作業ツリーの一時的な失敗など）、
+                    // 残りの完了の処理は続け、この run は「インフラ都合の失敗」として記録する
+                    // （`?` で tick ごと抜けると、受信済みの完了が消えて run が `running` のまま残る）。
+                    if let Err(e) =
+                        self.on_worker_finished(task_id, run_id.clone(), provider, result)
+                    {
+                        self.record_finalisation_failure(task_id, &run_id, &e);
+                    }
                     finished += 1;
                 }
                 Completion::Review {
@@ -3446,16 +3847,19 @@ impl Dispatcher {
                     result,
                     check_results,
                 } => {
-                    self.on_work_unit_checks_finished(
+                    self.checking.remove(&run_id);
+                    if let Err(e) = self.on_work_unit_checks_finished(
                         task_id,
-                        run_id,
+                        run_id.clone(),
                         account,
                         account_adapter,
                         run_since,
                         provider,
                         *result,
                         check_results,
-                    )?;
+                    ) {
+                        self.record_finalisation_failure(task_id, &run_id, &e);
+                    }
                     finished += 1;
                 }
                 Completion::Integration {
@@ -3968,7 +4372,8 @@ impl Dispatcher {
         let checks = wu.spec.checks.clone();
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
-        tokio::spawn(async move {
+        let checking_run_id = run_id.clone();
+        let handle = tokio::spawn(async move {
             let check_results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
             let _ = tx.send(Completion::WorkUnitChecks {
                 task_id,
@@ -3981,6 +4386,9 @@ impl Dispatcher {
                 check_results,
             });
         });
+        // Phase F5-fix2: 検査の間も「手元の仕事」として数える（`in_flight`・lease の照合）。
+        self.checking
+            .insert(checking_run_id, CheckingEntry { task_id, handle });
         Ok(())
     }
 
@@ -5031,7 +5439,7 @@ impl Dispatcher {
                         Err(e) => Err(e),
                         Ok(()) => task_core::execution_plan::validate(
                             &spec,
-                            task_core::ExecutionLimits::default(),
+                            self.config.execution.limits,
                             &done_work_units,
                         )
                         .map_err(|errors| task_ops::execution::describe_validation_errors(&errors)),
@@ -5149,7 +5557,7 @@ impl Dispatcher {
                         "replan (planner run)".to_string(),
                         task_core::PlanOrigin::Planner,
                         Some(run_id.clone()),
-                        task_core::ExecutionLimits::default(),
+                        self.config.execution.limits,
                         now,
                     )
                     .map(|(plan, _diff)| plan)
@@ -5160,7 +5568,7 @@ impl Dispatcher {
                         validated.spec,
                         task_core::PlanOrigin::Planner,
                         Some(run_id.clone()),
-                        task_core::ExecutionLimits::default(),
+                        self.config.execution.limits,
                         now,
                         children,
                     )
@@ -5366,7 +5774,26 @@ impl Dispatcher {
     /// 諦めたときの振る舞いは呼び出し時点の状態で決める: 既に `active` な計画が無ければ fresh
     /// planning の give up（atomic に倒す。D14）、既に `active` な計画があれば replan の give up
     /// （`blocked`。D12「失敗にしないもの」、D17/D18）。Task を `failed` にはしない。
-    /// `finished` は `WorkerFinished` とそれに添える Event（ADR-0076 の `QuotaEstimated`）。
+    // `finished` は `WorkerFinished` とそれに添える Event（ADR-0076 の `QuotaEstimated`）。
+    /// Phase F5-fix3: 拒否した planner の計画（`artifacts/execution-plan.json`）を
+    /// `artifacts/execution-plan.rejected.json` に移す（上書き）。無ければ何もしない。失敗しても警告だけ。
+    fn set_aside_rejected_plan(&self, task: &Task) {
+        let Some(dir) = self
+            .task_dir(task)
+            .map(|d| self.artifacts_dir(task, d.as_path()))
+        else {
+            return;
+        };
+        let from = dir.join("execution-plan.json");
+        if !from.exists() {
+            return;
+        }
+        let to = dir.join(REJECTED_PLAN_FILE);
+        if let Err(e) = std::fs::rename(&from, &to) {
+            tracing::warn!(task_id = %task.id, error = %e, "failed to set the rejected execution plan aside");
+        }
+    }
+
     fn give_up_or_retry_planner(
         &self,
         task_id: TaskId,
@@ -5376,6 +5803,9 @@ impl Dispatcher {
         reason: String,
         now: OffsetDateTime,
     ) -> Result<(), DispatchError> {
+        // Phase F5-fix3: 拒否した計画のファイルを残すと、次の planner run はそれを見つけて「検証済み」と
+        // 思い込みそのまま再提出する（dogfood 4 回目の 2 回目の試行）。`execution-plan.rejected.json` に移す。
+        self.set_aside_rejected_plan(task);
         let events = self.store.events_for(task_id)?;
         let since_idx = events
             .iter()
@@ -5396,10 +5826,7 @@ impl Dispatcher {
             .count();
         const MAX_PLANNER_ATTEMPTS: usize = 2;
         if attempts_so_far < MAX_PLANNER_ATTEMPTS {
-            let progress = Event::worker_progress(
-                run_id,
-                format!("計画を採用できませんでした（{reason}）。もう一度だけ試します。"),
-            );
+            let progress = Event::worker_progress(run_id, planner_retry_message(&reason));
             self.store.apply_transition_with_events(
                 task_id,
                 Trigger::Continue {
@@ -5412,10 +5839,7 @@ impl Dispatcher {
             // 2 回とも不正だったので、直せないまま突き進まず人に聞く（`blocked`。D12「失敗にしない
             // もの」の一つ。atomic への書き換えはしない — 既に WU の履歴がある計画を捨てるのは
             // 安全ではない）。
-            let question = format!(
-                "計画を直せませんでした（{reason}）。予算を増やして続ける／人が計画を書き直す
-（PUT /tasks/{{id}}/execution-plan）／中止のいずれかを選んでください。"
-            );
+            let question = planner_blocked_question(&reason);
             let progress = Event::worker_progress(run_id, question.clone());
             self.store.apply_transition_with_events(
                 task_id,
@@ -6643,6 +7067,27 @@ impl Dispatcher {
                     }
                 }
             }
+            // Phase F5-fix2: run は終わったが WU の `checks` がまだ走っている（`checking`）。検査が
+            // 延ばした lease（`review_timeout × (2n+1)`）より長引いても、検査の完了を受け取るまで回収しない。
+            let checking_run = self
+                .checking
+                .iter()
+                .find(|(_, e)| e.task_id == task.id)
+                .map(|(run_id, _)| run_id.clone());
+            if let Some(run_id) = checking_run {
+                let ttl = self.config.review_timeout + self.config.lease_grace;
+                match self.store.renew_lease(task.id, &run_id, ttl) {
+                    Ok(true) => {
+                        tracing::warn!(task_id = %task.id, %run_id, "lease expired while the work unit checks are still running; extended instead of reclaiming (Phase F5-fix2)");
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to extend the lease for running work unit checks; will retry reclaiming next tick");
+                        continue;
+                    }
+                }
+            }
             // ADR-0061（Phase 104）: `entry` を消費する前に `since`（wall time 計算用）を取っておく。
             let mut run_since: Option<OffsetDateTime> = None;
             let keys: Vec<RunKey> = self
@@ -6676,6 +7121,19 @@ impl Dispatcher {
             } else {
                 vec![lease.worker_run_id.clone()]
             };
+            // Phase F5-fix2（P-F5-3）: 終端の result.json を残して消えた run は、requeue せずに
+            // その内容で確定させる。1 本でも確定させたらこの tick の回収はやめる（Task の遷移・lease は
+            // 確定の経路が決めた。残りの死んだ WU の run は次の tick の照合が拾う）。
+            let mut finalised_any = false;
+            for run_id in &wu_runs {
+                if self.finalise_from_result_json(&task, run_id) {
+                    finalised_any = true;
+                }
+            }
+            if finalised_any {
+                count += 1;
+                continue;
+            }
             let metrics = run_since.map(|since| task_core::RunMetrics {
                 wall_ms: wall_ms_since(since),
                 retries: task.attempts,
@@ -6784,6 +7242,35 @@ impl Dispatcher {
         entry.handle.abort();
     }
 
+    /// Phase F5-fix3: 止めた run に `WorkerFinished` がまだ無ければ、`interrupted: <why>`（`end =
+    /// cancelled`。GUI では割り込みと同じ「失敗ではない」扱い、コメントの割り込みも消費しない）を追記する。
+    /// ストアが同じトランザクションで `runs` 行を `cancelled` にする。失敗しても警告だけ。
+    fn close_aborted_run(&self, task_id: TaskId, run_id: &str, role: Option<RunRole>, why: &str) {
+        let already = match self.store.events_for(task_id) {
+            Ok(events) => events
+                .iter()
+                .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id)),
+            Err(e) => {
+                tracing::warn!(%task_id, %run_id, error = %e, "failed to read events before closing an aborted run");
+                return;
+            }
+        };
+        if already {
+            return;
+        }
+        let finished = Event::WorkerFinished {
+            run_id: run_id.to_string(),
+            outcome: format!("interrupted: {why}"),
+            usage: None,
+            role,
+            metrics: None,
+            end: Some(task_core::RunEnd::Cancelled),
+        };
+        if let Err(e) = self.store.append_event(task_id, &finished) {
+            tracing::warn!(%task_id, %run_id, error = %e, "failed to close an aborted run");
+        }
+    }
+
     /// ADR-0002 D9: ストア上で `running` でなくなった（cancel / ADR-0044 D2 の割り込み等）run を
     /// 強制終了する。打ち切ったタスクは `just_aborted` に入れ、**この tick では dispatch し直さない**。
     fn abort_stale_runs(&mut self) -> Result<(), DispatchError> {
@@ -6799,7 +7286,16 @@ impl Dispatcher {
             if !still_ours && let Some(entry) = self.running.remove(&key) {
                 tracing::warn!(task_id = %id, run_id = %entry.run_id, "aborting run (task no longer running under this lease)");
                 // ADR-0044 Phase 53 追記: プロセスグループごと止める（孫まで。コンテナならその中も）。
+                let run_id = entry.run_id.clone();
                 self.stop_run(&entry.run_id, entry.handle, entry.container);
+                // Phase F5-fix3: cancel 等で止めた run は誰も `WorkerFinished` を書かない（割り込み・lease の
+                // 回収なら書いてある）。書かれていなければ閉じる（`runs` 行も終端になる）。
+                self.close_aborted_run(
+                    id,
+                    &run_id,
+                    None,
+                    "aborted (task no longer running under this lease)",
+                );
                 self.just_aborted.insert(id);
                 // ADR-0074 D1.6/D1.7（Phase F2）: v2 の WU の run を止めたなら、WU を `running` の
                 // まま残さない（割り込み・lease 喪失なら checkpoint の有無で needs_continuation /
@@ -6823,6 +7319,21 @@ impl Dispatcher {
                 tracing::warn!(task_id = %id, "aborting the phase integration (task no longer running)");
                 entry.handle.abort();
                 self.just_aborted.insert(id);
+            }
+        }
+        // Phase F5-fix2: Running でなくなった Task の WU の検査も止める（結果は捨てられるだけなので、
+        // draining のインスタンスを待たせない）。
+        let checking: Vec<(String, TaskId)> = self
+            .checking
+            .iter()
+            .map(|(run_id, e)| (run_id.clone(), e.task_id))
+            .collect();
+        for (run_id, id) in checking {
+            let still_running =
+                matches!(self.store.get(id)?, Some(t) if t.status == Status::Running);
+            if !still_running && let Some(entry) = self.checking.remove(&run_id) {
+                tracing::warn!(task_id = %id, %run_id, "aborting the work unit checks (task no longer running)");
+                entry.handle.abort();
             }
         }
         let aborted: Vec<TaskId> = self.just_aborted.iter().copied().collect();
@@ -6851,6 +7362,14 @@ impl Dispatcher {
                         entry.account_adapter,
                         &provider,
                         id,
+                    );
+                }
+                if let Some(review_run_id) = entry.review_run_id.clone() {
+                    self.close_aborted_run(
+                        id,
+                        &review_run_id,
+                        Some(RunRole::Reviewer),
+                        "review aborted (task no longer reviewing)",
                     );
                 }
                 self.stop_review(entry);
@@ -6975,6 +7494,186 @@ impl Dispatcher {
     /// ADR-0074 D1.5（Phase F2）: `run_id` の run がまだこの Task の lease を持っているか。
     /// v1・atomic は従来どおり Task の lease の保持者と比べる。v2（工程の lease）では WU の
     /// `lease_run_id` と比べる（lease を失った WU の run の結果を捨てる判定）。
+    /// Phase F5-fix2: run の完了（`on_worker_finished` / `on_work_unit_checks_finished`）の確定が
+    /// エラーで終わった。`drain_completions` が `?` で tick ごと抜けると受信済みの完了が消え、run は
+    /// `running` のまま lease 切れまで残る。ここでエラーを event に残し、run を「インフラ都合の失敗」
+    /// （ADR-0070 D3 の `InfraRequeue`、上限を超えたら `infra failure ×N`）として閉じる。記録にも
+    /// 失敗したら ERROR だけ残す（lease 切れの経路が拾い、`runs/<run_id>/result.json` があれば
+    /// そこから確定させる）。
+    fn record_finalisation_failure(
+        &mut self,
+        task_id: TaskId,
+        run_id: &str,
+        error: &DispatchError,
+    ) {
+        tracing::error!(%task_id, %run_id, %error, "failed to finalise a finished run; recording it as an infra failure (Phase F5-fix2)");
+        if let Err(e) = self.close_run_after_finalisation_failure(task_id, run_id, error) {
+            tracing::error!(%task_id, %run_id, error = %e, "could not record the finalisation failure either; the lease expiry will reclaim the run");
+        }
+    }
+
+    fn close_run_after_finalisation_failure(
+        &mut self,
+        task_id: TaskId,
+        run_id: &str,
+        error: &DispatchError,
+    ) -> Result<(), DispatchError> {
+        let Some(task) = self.store.get(task_id)? else {
+            return Ok(());
+        };
+        // 途中まで書けていて、既に run が lease を手放している（Task の遷移まで済んだ）なら何もしない。
+        if !self.run_holds_lease(&task, run_id)? {
+            return Ok(());
+        }
+        let Some(lease) = task.lease.clone() else {
+            return Ok(());
+        };
+        let now = OffsetDateTime::now_utc();
+        let events = self.store.events_for(task_id)?;
+        let finished = |outcome: String| Event::WorkerFinished {
+            run_id: run_id.to_string(),
+            outcome,
+            usage: None,
+            role: None,
+            metrics: None,
+            end: Some(task_core::RunEnd::HarnessError {
+                class: task_core::HarnessErrorClass::Infra,
+            }),
+        };
+        if let Err(e) = self.store.run_index_finish(
+            run_id,
+            task_core::RunIndexStatus::HarnessError,
+            None,
+            None,
+            None,
+            now,
+        ) {
+            tracing::warn!(%task_id, %run_id, error = %e, "failed to finish the runs index row");
+        }
+        if is_phase_lease_holder(&lease.worker_run_id) {
+            // ADR-0074 D1.5/D1.7: 工程の lease（v2）。兄弟の WU の run を巻き込まないよう Task は
+            // 遷移させず、この WU だけを戻す（何も走っていなければ `reconcile_parallel_tasks` が
+            // Task を ready に戻す）。同じ WU で `max_infra_retries` を超えたら WU を failed にする
+            // （ADR-0072 D12/D17: replan の余地があれば replan、無ければ Task の失敗）。
+            let wu = self.store.work_units_for(task_id)?.into_iter().find(|u| {
+                u.status == task_core::WorkUnitStatus::Running
+                    && u.lease_run_id.as_deref() == Some(run_id)
+            });
+            let Some(wu) = wu else {
+                return Ok(());
+            };
+            let failures_so_far = events
+                .iter()
+                .filter(|(_, e)| {
+                    matches!(
+                        e,
+                        Event::WorkUnitTransitioned { work_unit_id, reason, .. }
+                            if work_unit_id == &wu.id && reason == FINALISE_FAILED_REASON
+                    )
+                })
+                .count() as u32;
+            let infra_n = failures_so_far + 1;
+            let exhausted = infra_n > self.config.max_infra_retries;
+            let outcome = if exhausted {
+                format!("{INFRA_FAILURE_MARKER}{infra_n}: finalisation failed: {error}")
+            } else {
+                format!("infra_requeue: finalisation failed: {error}")
+            };
+            self.store.append_event(task_id, &finished(outcome))?;
+            if exhausted {
+                let mut updated = wu.clone();
+                updated.status = task_core::WorkUnitStatus::Failed;
+                updated.clear_lease();
+                updated.updated_at = rfc3339(now);
+                self.store.work_unit_transition(
+                    task_id,
+                    updated,
+                    Event::WorkUnitTransitioned {
+                        work_unit_id: wu.id.clone(),
+                        key: wu.key.clone(),
+                        from: task_core::WorkUnitStatus::Running,
+                        to: task_core::WorkUnitStatus::Failed,
+                        reason: FINALISE_FAILED_REASON.to_string(),
+                        run_id: Some(run_id.to_string()),
+                    },
+                )?;
+            } else {
+                self.reconcile_work_unit_run(task_id, run_id, FINALISE_FAILED_REASON)?;
+            }
+            return Ok(());
+        }
+        // Task の lease をこの run が持つ（atomic・v1 の WU の run）: lease 切れの回収と同じ遷移。
+        let infra_n = consecutive_infra_requeues(&events) + 1;
+        let (trigger, outcome) = if infra_n <= self.config.max_infra_retries {
+            (
+                Trigger::InfraRequeue,
+                format!("infra_requeue: finalisation failed: {error}"),
+            )
+        } else {
+            (
+                Trigger::WorkerError { retryable: false },
+                format!("{INFRA_FAILURE_MARKER}{infra_n}: finalisation failed: {error}"),
+            )
+        };
+        self.store.apply_transition_with_events(
+            task_id,
+            trigger.clone(),
+            vec![finished(outcome)],
+        )?;
+        if matches!(trigger, Trigger::InfraRequeue) {
+            self.infra_backoff
+                .insert(task_id, now + infra_backoff_delay(infra_n));
+        }
+        self.reconcile_work_unit_run(task_id, run_id, FINALISE_FAILED_REASON)?;
+        Ok(())
+    }
+
+    /// Phase F5-fix2（P-F5-3 の result.json の部分）: lease（または WU の lease）が切れた run で、
+    /// このインスタンスが抱えていない（`running`/`checking` に無い）もののうち、
+    /// `runs/<run_id>/result.json` に終端が残っているものは、requeue せずにその内容で確定させる
+    /// （`on_worker_finished` と同じ経路。WU の `checks` があればここから走り直す）。
+    /// 本番では draining の旧デーモンが WU の検査の途中で exit し、完了した run が `lease expired`
+    /// で捨てられてやり直しになった。確定させた（または確定の失敗を記録した）ら `true`。
+    fn finalise_from_result_json(&mut self, task: &Task, run_id: &str) -> bool {
+        if self.running.values().any(|e| e.run_id == run_id) || self.checking.contains_key(run_id) {
+            return false;
+        }
+        let Some(dir) = self.task_dir(task) else {
+            return false;
+        };
+        let Some(terminal) = terminal_from_run_dir(&dir, run_id) else {
+            return false;
+        };
+        let provider = self
+            .store
+            .events_for(task.id)
+            .ok()
+            .and_then(|events| {
+                events.iter().rev().find_map(|(_, e)| match e {
+                    Event::WorkerStarted {
+                        run_id: r,
+                        provider,
+                        ..
+                    } if r == run_id => provider.clone(),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        tracing::warn!(task_id = %task.id, %run_id, "the run's lease expired but it left a terminal result.json; finalising from it instead of requeueing (Phase F5-fix2)");
+        if let Err(e) = self.on_worker_finished(
+            task.id,
+            run_id.to_string(),
+            provider,
+            Ok(RunOutcome {
+                terminal,
+                exit_code: None,
+            }),
+        ) {
+            self.record_finalisation_failure(task.id, run_id, &e);
+        }
+        true
+    }
+
     fn run_holds_lease(&self, task: &Task, run_id: &str) -> Result<bool, DispatchError> {
         if task.status != Status::Running {
             return Ok(false);
@@ -8771,13 +9470,18 @@ impl Dispatcher {
                 let Some(run_id) = u.lease_run_id.clone().or_else(|| u.last_run_id.clone()) else {
                     continue;
                 };
-                let ours = self.running.values().any(|e| e.run_id == run_id);
+                // Phase F5-fix2: 検査中の run（`checking`）も手元の run。
+                let ours = self.running.values().any(|e| e.run_id == run_id)
+                    || self.checking.contains_key(&run_id);
                 let expired = u
                     .lease_expires_at
                     .as_deref()
                     .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
                     .is_none_or(|t| t <= now);
                 if !ours && expired {
+                    if self.finalise_from_result_json(&task, &run_id) {
+                        continue;
+                    }
                     tracing::warn!(task_id = %task.id, work_unit = %u.key, %run_id, "work unit lease expired without a live run; reconciling (ADR-0074 D1.7)");
                     self.reconcile_work_unit_run(task.id, &run_id, "restart_reconcile")?;
                 }
@@ -9096,7 +9800,10 @@ impl Dispatcher {
         replan: bool,
     ) -> Result<task_worker::protocol::ExecutionPlannerContext, DispatchError> {
         let decision = task.routing.as_ref().and_then(|r| r.execution.clone());
-        let limits = task_core::ExecutionLimits::default();
+        let limits = self.config.execution.limits;
+        // Phase F5-fix3: 同じ計画の回で前の planner run の計画が拒否されていれば、その理由を渡す。
+        let previous_attempt_errors =
+            planner_rejections_since_last_plan(&self.store.events_for(task.id)?);
         let (replan_reason, current_plan_version, work_unit_summaries, preserve_done_keys) =
             if replan {
                 let version = self
@@ -9157,6 +9864,15 @@ impl Dispatcher {
             } else {
                 0
             },
+            max_title_chars: limits.max_title_chars,
+            max_objective_chars: limits.max_objective_chars,
+            max_done_when_items: limits.max_done_when_items,
+            max_done_when_chars: limits.max_done_when_chars,
+            max_checks: limits.max_checks,
+            max_rationale_chars: limits.max_rationale_chars,
+            max_plan_json_bytes: limits.max_plan_json_bytes,
+            max_children: limits.max_children,
+            previous_attempt_errors,
         })
     }
 
@@ -9952,8 +10668,7 @@ impl Dispatcher {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
             // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。
             if let Some(wu) = &v2_wu {
-                extras.cargo_target_subdir =
-                    Some(task_worker::build_cache::work_unit_target_name(&wu.id));
+                extras.cargo_target_work_unit = Some((wu.id.clone(), wu.key.clone()));
             }
         }
         if current_wu.is_some() {
@@ -10440,7 +11155,7 @@ impl Dispatcher {
             // 上書きする（ここでは常に `None`）。
             planner_permission_mode: None,
             artifacts_dir_override: None,
-            cargo_target_subdir: None,
+            cargo_target_work_unit: None,
         })
     }
 
@@ -11061,10 +11776,17 @@ impl Dispatcher {
         let delegation = self.config.delegation;
         let account_book = account_adapter.and_then(|a| self.account_book(a));
         // ADR-0066 D1（Phase 110b）: `[workspace] shared_build_cache`（既定 true）。
-        let build_cache_dir = self
-            .config
-            .shared_build_cache
-            .then(|| self.config.build_cache_dir.clone());
+        // ADR-0075 D3（Phase G1）: `[scratch]` が有効なら scratch pool、無効なら `build_cache_dir`。
+        let cargo_target = if !self.config.shared_build_cache {
+            CargoTargetPlan::None
+        } else if self.scratch_active() {
+            CargoTargetPlan::Scratch {
+                settings: Box::new(self.config.scratch.clone()),
+                candidates: self.scratch.candidates.clone(),
+            }
+        } else {
+            CargoTargetPlan::Legacy(self.config.build_cache_dir.clone())
+        };
         tokio::spawn(async move {
             let result = run_worker(
                 store,
@@ -11084,7 +11806,7 @@ impl Dispatcher {
                 account,
                 account_book,
                 container,
-                build_cache_dir,
+                cargo_target,
             )
             .await;
             let _ = tx.send(Completion::Worker {
@@ -12609,6 +13331,20 @@ impl Dispatcher {
         let Some(repo) = ws.repos.first().filter(|r| r.is_git()) else {
             return Vec::new();
         };
+        // ADR-0075 D3（Phase G1）: scratch が有効なら run と同じ owner の target（lease を touch する。adopt はしない）。
+        if self.scratch_active() {
+            let owner = match work_unit_id {
+                Some(id) => task_worker::scratch::Owner::work_unit(task.id.to_string(), id),
+                None => task_worker::scratch::Owner::task(task.id.to_string()),
+            };
+            let settings = task_worker::scratch::ScratchSettings {
+                adopt: false,
+                ..self.config.scratch.clone()
+            };
+            allocate_scratch_target(&settings, &[], &owner, repo, None);
+            // ADR-0075 D4（Phase G2）: run と同じ `cargo_env`（`[scratch.cargo]` と、server が応答すれば sccache 系）。
+            return task_worker::scratch::cargo_env(&settings, &owner);
+        }
         let dir = match work_unit_id {
             Some(id) => task_worker::build_cache::work_unit_cargo_target_dir(
                 &self.config.build_cache_dir,
@@ -13027,11 +13763,10 @@ async fn run_worker(
     account: Option<String>,
     account_book: Option<Arc<StdMutex<AccountBook>>>,
     container: ContainerDecision,
-    // ADR-0066 D1（Phase 110b）: `[workspace] shared_build_cache` が有効なときだけ `Some`
-    // （`<build_cache_dir>`）。ローカルの git worktree のホスト実行に限って
-    // `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>` を与える（コンテナ・Remote は対象外。
-    // `container_plan` が決まってから判断する）。
-    build_cache_dir: Option<PathBuf>,
+    // ADR-0066 D1（Phase 110b）/ ADR-0075 D3（Phase G1）: ローカルの git worktree のホスト実行に限って
+    // `CARGO_TARGET_DIR` を与える（コンテナ・Remote は対象外。`container_plan` が決まってから判断する）。
+    // scratch なら `<scratch>/targets/<owner>/target`、無効なら `<build_cache_dir>/cargo/<repo-key>[/wu-<id>]`。
+    cargo_target: CargoTargetPlan,
 ) -> Result<RunOutcome, AdapterError> {
     // リース取得後の状態（running, lease あり）をワーカーに渡す。
     let mut task = store
@@ -13276,7 +14011,7 @@ async fn run_worker(
     let prior_review = to_prior_review(prior_review_from_events(&events));
     // ADR-0044 D2: 対話 run（人への返事だけをする run。Phase 28）にはコメントの書き方を出さない。
     let writes_comments = extras.conversation_addressee.is_none();
-    let cargo_target_subdir = extras.cargo_target_subdir.clone();
+    let cargo_target_work_unit = extras.cargo_target_work_unit.clone();
     let mut req = RunRequest {
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
@@ -13343,24 +14078,72 @@ async fn run_worker(
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの
     // `CARGO_TARGET_DIR` を与える（コンテナ実行〈`container_plan.is_some()`〉と Remote は対象外）。
-    let adapter = if container_plan.is_none()
-        && remote.is_none()
-        && let Some(build_cache_dir) = &build_cache_dir
-        && let Some(repo) = worktree.as_ref().and_then(|wt| wt.repos.first())
-        && repo.is_git()
-    {
+    let repo_for_target = worktree
+        .as_ref()
+        .and_then(|wt| wt.repos.first())
+        .filter(|r| r.is_git() && container_plan.is_none() && remote.is_none())
+        .cloned();
+    // ADR-0075 D4（Phase G2）: scratch なら env は `task_worker::scratch::cargo_env`（checks・`celerisctl scratch env` と
+    // 同じ関数。`CARGO_TARGET_DIR`・`[scratch.cargo]`・server が応答すれば sccache 系）。legacy は `CARGO_TARGET_DIR` だけ。
+    let target: Option<(PathBuf, Vec<(String, String)>)> = match (&cargo_target, repo_for_target) {
+        (CargoTargetPlan::None, _) | (_, None) => None,
+        // ADR-0075 D3: owner は Task 単位の run なら `task-<id>`、自分の worktree の WU なら `task-<id>/wu-<id>`。
+        (
+            CargoTargetPlan::Scratch {
+                settings,
+                candidates,
+            },
+            Some(repo),
+        ) => {
+            let owner = match &cargo_target_work_unit {
+                Some((id, _)) => task_worker::scratch::Owner::work_unit(task_id.to_string(), id),
+                None => task_worker::scratch::Owner::task(task_id.to_string()),
+            };
+            let (settings, candidates) = (settings.clone(), candidates.clone());
+            let key = cargo_target_work_unit.as_ref().map(|(_, k)| k.clone());
+            let fallback = (
+                settings.pool().target_dir(&owner),
+                task_worker::scratch::target_env(&settings.pool(), &owner),
+            );
+            match tokio::task::spawn_blocking(move || {
+                let target = allocate_scratch_target(&settings, &candidates, &owner, &repo, key);
+                let state =
+                    task_worker::scratch::resolve_sccache(&settings, task_worker::scratch::server_listening);
+                if let Some(reason) = state.reason() {
+                    tracing::debug!(owner = %owner, state = state.label(), reason, "scratch: sccache is not wired for this run (ADR-0075 D4)");
+                }
+                // adopt は owner のパスへ rename するので、`target` は env の `CARGO_TARGET_DIR` と同じ。
+                let env = task_worker::scratch::cargo_env_with(&settings, &owner, &state);
+                (target, env)
+            })
+            .await
+            {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!(task_id = %task_id, error = %e, "scratch: allocation task failed; using the target path");
+                    Some(fallback)
+                }
+            }
+        }
         // ADR-0074 F5-fix（不具合 1）: 並列の WU は `<repo-key>/wu-<id>`（兄弟 WU の別ブランチの
         // 生成物を混ぜない）。Task 単位の run は従来どおり `<repo-key>`。
-        let target = match &cargo_target_subdir {
-            Some(sub) => {
-                task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source).join(sub)
-            }
-            None => task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source),
-        };
-        let env = [(
-            task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
-            target.display().to_string(),
-        )];
+        (CargoTargetPlan::Legacy(build_cache_dir), Some(repo)) => {
+            let dir = match &cargo_target_work_unit {
+                Some((id, _)) => task_worker::build_cache::work_unit_cargo_target_dir(
+                    build_cache_dir,
+                    &repo.source,
+                    id,
+                ),
+                None => task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source),
+            };
+            let env = vec![(
+                task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+                dir.display().to_string(),
+            )];
+            Some((dir, env))
+        }
+    };
+    let adapter = if let Some((target, env)) = target {
         match adapter.with_env(&env) {
             Some(wrapped) => {
                 // request.json（監査）に実際に与えた値を残す。
@@ -13607,6 +14390,45 @@ fn ops_to_store(e: task_ops::OpsError) -> DispatchError {
 
 /// デーモン再起動後の復旧用: `runs/<run_id>/result.json`（`fake`/`run_subprocess` が書く終端メッセージ）から
 /// `done` の内容を復元する。無ければ空（ADR-0007 D5）。
+/// Phase F5-fix2（P-F5-3 の result.json の部分）: `runs/<run_id>/result.json`（アダプタが終端を
+/// 正規化して書く `WorkerMessage`。P-26 / ADR-0010 D10）に残った終端を `Terminal` に戻す。
+/// 無い・読めない・終端でない・供給側の失敗（`provider_failure` 付きの `error`。cooldown の判断に
+/// アダプタの文脈が要る）は `None`（呼び出し側は従来どおり lease 切れとして扱う）。
+fn terminal_from_run_dir(dir: &std::path::Path, run_id: &str) -> Option<Terminal> {
+    let path = dir.join("runs").join(run_id).join("result.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<WorkerMessage>(text.trim()).ok()? {
+        WorkerMessage::Done {
+            summary,
+            evidence,
+            usage,
+        } => Some(Terminal::Done {
+            summary,
+            evidence,
+            usage,
+        }),
+        WorkerMessage::Question { text } => Some(Terminal::Question { text }),
+        WorkerMessage::Error {
+            message,
+            retryable,
+            provider_failure: None,
+        } => Some(Terminal::Error { message, retryable }),
+        WorkerMessage::Yielded { checkpoint, usage } => {
+            Some(Terminal::Yielded { checkpoint, usage })
+        }
+        WorkerMessage::BudgetExhausted {
+            kind,
+            message,
+            usage,
+        } => Some(Terminal::BudgetExhausted {
+            kind,
+            message,
+            usage,
+        }),
+        _ => None,
+    }
+}
+
 fn subject_from_run_dir(dir: &std::path::Path, run_id: &str) -> ReviewSubject {
     let path = dir.join("runs").join(run_id).join("result.json");
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -13775,6 +14597,7 @@ mod tests {
                 // 副作用を避ける。専用のテストが明示的に有効化する）。
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15648,6 +16471,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15807,6 +16631,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15983,6 +16808,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -18381,7 +19207,7 @@ mod tests {
             None,
             None,
             ContainerDecision::Host,
-            None,
+            CargoTargetPlan::None,
         )
         .await
     }
@@ -20343,6 +21169,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -24129,8 +24956,13 @@ mod tests {
             None,
             None,
             ContainerDecision::Host,
-            // `Some` のまま渡しても、`remote.is_some()` なので適用されないことを確かめる。
-            Some(tmp.path().join("build-cache")),
+            // scratch を渡しても、`remote.is_some()` なので適用されないことを確かめる（ADR-0075 D3）。
+            CargoTargetPlan::Scratch {
+                settings: Box::new(task_worker::scratch::ScratchSettings::with_dir(
+                    tmp.path().join("scratch"),
+                )),
+                candidates: Vec::new(),
+            },
         )
         .await;
         assert!(outcome.is_ok(), "{:?}", outcome.err());
@@ -26942,6 +27774,127 @@ mod tests {
         );
     }
 
+    /// Phase F5-fix3（dogfood 4 回目の不具合 1）: planner は検証と同じ `ExecutionLimits`（config の値）を
+    /// プロンプトで受け取り、計画が拒否されたら次の試行はその検証エラーを受け取る。拒否された計画の
+    /// ファイルは `execution-plan.rejected.json` に移る（次の試行が「検証済み」と思い込んで再提出しない）。
+    #[tokio::test]
+    async fn the_retry_planner_run_receives_the_previous_validation_error_and_config_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = compound_task(dir.path());
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+
+        let mut wu = wu_spec("sync-main", &[]);
+        wu.checks = (0..4)
+            .map(|i| task_core::WorkUnitCheck {
+                cmd: format!("true {i}"),
+                expect_exit: 0,
+            })
+            .collect();
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(plan_json(vec![wu])), None],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        // 既定（6）と違う上限。検証とプロンプトの両方がこの値を使う。
+        d.config.execution.limits.max_checks = 3;
+        d.config.execution.limits.max_title_chars = 77;
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let planner_contexts: Vec<task_worker::protocol::ExecutionPlannerContext> = adapter
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.execution_planner.clone())
+            .collect();
+        assert_eq!(planner_contexts.len(), 2, "{planner_contexts:?}");
+        assert_eq!(planner_contexts[0].max_checks, 3);
+        assert_eq!(planner_contexts[0].max_title_chars, 77);
+        assert!(planner_contexts[0].previous_attempt_errors.is_empty());
+        assert_eq!(
+            planner_contexts[1].previous_attempt_errors,
+            vec!["work unit sync-main: too many checks: 4 > 3".to_string()],
+        );
+        let events = store.events_for(task_id).unwrap();
+        assert!(events.iter().any(|(_, e)| matches!(
+            e,
+            Event::WorkerFinished { outcome, .. }
+                if outcome == "error(retryable=true): invalid execution plan: work unit sync-main: too many checks: 4 > 3"
+        )));
+        // 拒否された計画は移され、2 回目（ファイルを書かない）は古い計画を読まずに「見つからない」になる。
+        let stored = store.get(task_id).unwrap().unwrap();
+        let artifacts = d
+            .task_dir(&stored)
+            .map(|w| d.artifacts_dir(&stored, &w))
+            .expect("artifacts dir");
+        assert!(artifacts.join(REJECTED_PLAN_FILE).exists());
+        assert!(!artifacts.join("execution-plan.json").exists());
+        assert!(events.iter().any(|(_, e)| matches!(
+            e,
+            Event::WorkerProgress { msg, .. } if msg.contains("execution-plan.json が見つからない")
+        )));
+    }
+
+    /// Phase F5-fix3: `planner_rejections_since_last_plan` は直近の `ExecutionPlanned` より後の拒否だけを
+    /// 古い順・重複なしで返す（再試行の進捗と、2 回とも拒否されたときの質問の両方）。
+    #[test]
+    fn planner_rejections_are_collected_since_the_last_adopted_plan() {
+        let progress = |msg: String| Event::worker_progress("run-p", msg);
+        let events: Vec<(u64, Event)> = vec![
+            (0, progress(planner_retry_message("old reason"))),
+            (
+                1,
+                Event::ExecutionPlanned {
+                    plan_id: "p1".into(),
+                    version: 1,
+                    origin: task_core::PlanOrigin::Planner,
+                    supersedes: None,
+                    reason: None,
+                    plan: Box::new(task_core::ExecutionPlanSpec {
+                        schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
+                        rationale: String::new(),
+                        work_units: Vec::new(),
+                        phases: Vec::new(),
+                        children: Vec::new(),
+                    }),
+                },
+            ),
+            (
+                2,
+                progress(planner_retry_message("work unit x: too many checks: 8 > 6")),
+            ),
+            (
+                3,
+                progress("計画を採用できませんでした（unrelated".to_string()),
+            ),
+            (
+                4,
+                progress(planner_blocked_question(
+                    "work unit x: too many checks: 8 > 6",
+                )),
+            ),
+            (
+                5,
+                progress(planner_blocked_question(
+                    "rationale is too long: 2000 > 1500 characters",
+                )),
+            ),
+        ];
+        assert_eq!(
+            planner_rejections_since_last_plan(&events),
+            vec![
+                "work unit x: too many checks: 8 > 6".to_string(),
+                "rationale is too long: 2000 > 1500 characters".to_string(),
+            ]
+        );
+        assert!(planner_rejections_since_last_plan(&events[..2]).is_empty());
+    }
+
     /// ADR-0074 §6 F1 (b): WU の `features` が `TaskFeatureHints` として読めない計画（未知の欄
     /// `"lane"` を書いた）は検証エラーになり、1 回だけ再試行してそれでも駄目なら atomic に倒れる
     /// （`invalid_planner_output_retries_once_then_falls_back_to_atomic` と同じ経路）。
@@ -28480,6 +29433,164 @@ mod tests {
         );
     }
 
+    /// Phase F5-fix3（dogfood 4 回目の不具合 2）: lease 失効で requeue した run の `runs` 行は `running`
+    /// のまま残らず、`harness_error`・`finished_at` つきで閉じる（本番の 01M3K0X49JB5JP5TQH304ZTRW2 と
+    /// 01M3K7WNJGYAPNBPMBVJXZ96CC は `worker_finished{lease_expired}` があるのに `running` のままだった）。
+    #[tokio::test]
+    async fn a_lease_expiry_requeue_closes_the_runs_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        task.status = Status::Running;
+        let run_id = "run-lease-lost".to_string();
+        task.lease = Some(task_core::Lease {
+            worker_run_id: run_id.clone(),
+            expires_at: OffsetDateTime::now_utc() - Duration::from_secs(60),
+        });
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        store
+            .append_event(
+                task_id,
+                &Event::Created {
+                    task: Box::new(task.clone()),
+                },
+            )
+            .unwrap();
+        adopt_three_step_plan(&store, task_id);
+        let a = store
+            .work_units_for(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+        let mut running_a = a.clone();
+        running_a.status = task_core::WorkUnitStatus::Running;
+        running_a.runs = 1;
+        running_a.last_run_id = Some(run_id.clone());
+        store
+            .work_unit_transition(
+                task_id,
+                running_a,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: a.id.clone(),
+                    key: a.key.clone(),
+                    from: task_core::WorkUnitStatus::Ready,
+                    to: task_core::WorkUnitStatus::Running,
+                    reason: "dispatch".into(),
+                    run_id: Some(run_id.clone()),
+                },
+            )
+            .unwrap();
+        store
+            .run_index_start(task_core::RunRow {
+                run_id: run_id.clone(),
+                task_id: task_id.to_string(),
+                work_unit_id: Some(a.id.clone()),
+                role: task_core::RunIndexRole::Worker,
+                seq: 1,
+                status: task_core::RunIndexStatus::Running,
+                adapter: Some("instant".into()),
+                model: Some("m".into()),
+                account: None,
+                session_id: None,
+                checkpoint: None,
+                usage: None,
+                metrics: None,
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+                finished_at: None,
+            })
+            .unwrap();
+
+        let adapter = Arc::new(WuScriptAdapter::new(HashMap::new()));
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        d.tick().unwrap();
+
+        let events = store.events_for(task_id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::WorkerFinished { run_id: r, outcome, .. }
+                    if r == &run_id && outcome.starts_with("infra_requeue: lease expired")
+            )),
+            "{events:?}"
+        );
+        let row = store.run_index_get(&run_id).unwrap().expect("runs row");
+        assert_eq!(
+            row.status,
+            task_core::RunIndexStatus::HarnessError,
+            "{row:?}"
+        );
+        assert!(row.finished_at.is_some(), "{row:?}");
+    }
+
+    /// Phase F5-fix3: cancel で止めた run（誰も `WorkerFinished` を書かない）も `runs` 行を閉じる
+    /// （`interrupted: …`、`cancelled`）。
+    #[tokio::test]
+    async fn a_run_aborted_by_cancel_closes_its_runs_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        let adapter = Arc::new(InstantAdapter {
+            terminal: Terminal::Done {
+                summary: "never".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            delay: Duration::from_secs(600),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        d.tick().unwrap();
+        let run_id = store
+            .get(task_id)
+            .unwrap()
+            .unwrap()
+            .lease
+            .expect("leased")
+            .worker_run_id;
+        assert_eq!(
+            store.run_index_get(&run_id).unwrap().map(|r| r.status),
+            Some(task_core::RunIndexStatus::Running)
+        );
+        store
+            .apply_transition(task_id, Trigger::Cancel, None)
+            .unwrap();
+        d.tick().unwrap();
+        let row = store.run_index_get(&run_id).unwrap().expect("runs row");
+        assert_eq!(row.status, task_core::RunIndexStatus::Cancelled, "{row:?}");
+        assert!(row.finished_at.is_some());
+        let events = store.events_for(task_id).unwrap();
+        let finished: Vec<&str> = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::WorkerFinished {
+                    run_id: r, outcome, ..
+                } if r == &run_id => Some(outcome.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finished,
+            vec!["interrupted: aborted (task no longer running under this lease)"]
+        );
+    }
+
     // ========== ADR-0074（Phase F2b）: WU の並列実行・WU の worktree・工程の統合 ==========
 
     /// 並列 WU のテスト用アダプタ。WU の key ごとに、作業ツリー（`req.work_dir`）へ書くファイル
@@ -29848,6 +30959,1320 @@ mod tests {
         );
     }
 
+    // ---- Phase F5-fix2: WU run の完了が記録されない（dogfood 4 回目） ----
+
+    /// 本番の `gate` WU（kind = test、5 つの checks）と同じ形の 1 工程の v2 計画。1 回目の検査は
+    /// `flag` が無いので落ち（`work_unit_retry`。本番の replan v3 で failed → ready に戻った後と同じく
+    /// WU の `runs` が 2 になる）、2 回目は `flag` があるので `sleep` の後に通る（検査の窓）。
+    fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sleep: &str) {
+        let mut gate = v2_wu("gate", "gate", &[]);
+        gate.kind = task_core::WorkUnitKind::Test;
+        gate.checks = vec![
+            task_core::WorkUnitCheck {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            task_core::WorkUnitCheck {
+                cmd: format!(
+                    "if [ -f {f} ]; then sleep {sleep}; else touch {f}; exit 1; fi",
+                    f = flag.display()
+                ),
+                expect_exit: 0,
+            },
+        ];
+        let spec = task_core::ExecutionPlanSpec {
+            schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+            rationale: "gate".to_string(),
+            work_units: vec![gate],
+            phases: vec![task_core::PhaseSpec {
+                key: "gate".to_string(),
+                kind: task_core::WorkUnitKind::Test,
+                title: "gate".to_string(),
+            }],
+            children: Vec::new(),
+        };
+        task_ops::execution::adopt_plan(
+            store.as_ref(),
+            task_id,
+            spec,
+            task_core::PlanOrigin::Fixture,
+            None,
+            task_core::ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("adopt gate plan");
+    }
+
+    /// 本番の result.json と同じ形（criterion 0/1 の evidence、~1.59M input tokens の usage）。
+    fn gate_done_terminal() -> Terminal {
+        Terminal::Done {
+            summary: "全体ゲートを再実行し、全項目成功を確認".into(),
+            evidence: vec![
+                Evidence {
+                    criterion: 0,
+                    command: Some("cargo test --workspace".into()),
+                    exit: Some(0),
+                    stdout_tail: Some("2515 passed, 0 failed, 5 ignored".into()),
+                },
+                Evidence {
+                    criterion: 1,
+                    command: Some("Reviewed gate.md".into()),
+                    exit: Some(0),
+                    stdout_tail: Some("gate.md lists every command".into()),
+                },
+            ],
+            usage: Some(Usage {
+                input_tokens: Some(1_594_550),
+                output_tokens: Some(7_540),
+                cache_read_tokens: Some(1_531_392),
+                cache_creation_tokens: Some(0),
+                cost_usd: None,
+            }),
+        }
+    }
+
+    fn gate_row(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::WorkUnitRow {
+        store
+            .work_units_for(id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "gate")
+            .unwrap()
+    }
+
+    fn worker_finished_outcomes(
+        store: &Arc<dyn TaskStore>,
+        id: TaskId,
+        run_id: &str,
+    ) -> Vec<String> {
+        events_of(store, id)
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::WorkerFinished {
+                    run_id: r, outcome, ..
+                } if r == run_id => Some(outcome),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 1 回目の run（検査で落ちて retry）を終え、2 回目の run が終わって検査が走り始めたところまで
+    /// 進める。2 回目の run の id を返す。
+    async fn run_gate_until_second_checks(
+        d: &mut Dispatcher,
+        store: &Arc<dyn TaskStore>,
+        id: TaskId,
+    ) -> String {
+        let s = store.clone();
+        assert!(
+            run_until(d, 500, || {
+                let u = gate_row(&s, id);
+                u.retries == 1 && u.runs == 2 && u.status == task_core::WorkUnitStatus::Running
+            })
+            .await,
+            "{:?}",
+            events_of(store, id)
+        );
+        let run_id = gate_row(store, id).last_run_id.unwrap();
+        // 2 回目の run の完了を受け取り、検査を spawn するまで（run は `running` から外れる）。
+        for _ in 0..200 {
+            d.tick().unwrap();
+            if d.running.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(d.running.is_empty());
+        let u = gate_row(store, id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Running, "{u:?}");
+        assert!(worker_finished_outcomes(store, id, &run_id).is_empty());
+        run_id
+    }
+
+    /// Phase F5-fix2（根本原因）: run が終わって WU の `checks` を走らせている間に、デーモンが
+    /// draining になった（本番: 03:39 に検査開始 → 03:42 G1 のライブ切替 / 05:38 に切替 → 05:43 に
+    /// 検査開始）。検査は `running` から外れた後に spawn されるので、修正前の `in_flight()` は 0 を返し、
+    /// supervisor（`instance.rs` の drain）はその tick でプロセスを終わらせ、検査の完了
+    /// （`Completion::WorkUnitChecks`）ごと失っていた。修正後は検査が終わるまで in-flight に数え、
+    /// draining のまま完了（`WorkerFinished`・`runs` の finish・WU done）を記録してから 0 になる。
+    #[tokio::test]
+    async fn draining_dispatcher_keeps_work_unit_checks_in_flight_until_the_completion_is_recorded()
+    {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.5");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        let run_id = run_gate_until_second_checks(&mut d, &store, task.id).await;
+
+        // live handoff: このインスタンスは draining になる（新しい仕事は始めない）。
+        d.set_accepting_new_work(false);
+        assert!(
+            d.in_flight() > 0,
+            "WU の checks が走っているのに in_flight() == 0（draining のデーモンがここで exit する）"
+        );
+        // supervisor と同じく、in_flight が 0 になるまで tick する。
+        let mut drained = false;
+        for _ in 0..500 {
+            d.tick().unwrap();
+            if d.in_flight() == 0 {
+                drained = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(drained);
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert_eq!(outcomes.len(), 1, "{:?}", events_of(&store, task.id));
+        assert!(outcomes[0].starts_with("done: "), "{outcomes:?}");
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Done, "{u:?}");
+        assert_eq!(u.runs, 2);
+        let row = store.run_index_get(&run_id).unwrap().unwrap();
+        assert_eq!(row.status, task_core::RunIndexStatus::Completed, "{row:?}");
+        assert!(row.finished_at.is_some());
+    }
+
+    /// Phase F5-fix2（P-F5-3 の result.json の部分）: 検査の途中でデーモンが消え（旧デーモンの exit）、
+    /// run は `running` のまま lease が切れた。`runs/<run_id>/result.json` に終端が残っているので、
+    /// 新しいデーモンは `lease expired` で requeue せず（修正前: `infra_requeue: lease expired` →
+    /// WU ready → 3 回目の run）、その内容で確定させる（検査を走らせ直して WU done、run は 2 回のまま）。
+    #[tokio::test]
+    async fn lease_expired_work_unit_run_with_a_result_json_is_finalised_instead_of_requeued() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "30");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut old = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
+        let run_id = run_gate_until_second_checks(&mut old, &store, task.id).await;
+        let task_dir = old.task_dir(&task).unwrap();
+        // 旧デーモンが検査の途中で消える（検査の完了は届かない）。
+        old.abort_all_runs();
+        drop(old);
+        // アダプタが正規化して残す `runs/<run_id>/result.json`（本番と同じ形）。
+        let Terminal::Done {
+            summary,
+            evidence,
+            usage,
+        } = gate_done_terminal()
+        else {
+            unreachable!()
+        };
+        let run_dir = task_dir.join("runs").join(&run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("result.json"),
+            serde_json::to_string(&WorkerMessage::Done {
+                summary,
+                evidence,
+                usage,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        // 検査の途中で lease を切らし（本番: 検査前に延ばした lease の期限）、新しいデーモンに拾わせる。
+        // 新しいデーモンが走らせ直す検査は `sleep 30` なので、ここでは「確定の経路に乗ったこと」と
+        // 「検査中は回収しないこと」だけを見る（最後まで通すのは次のテスト）。
+        let holder = store
+            .get(task.id)
+            .unwrap()
+            .unwrap()
+            .lease
+            .unwrap()
+            .worker_run_id;
+        assert!(is_phase_lease_holder(&holder), "{holder}");
+        store.renew_lease(task.id, &holder, Duration::ZERO).unwrap();
+        store.renew_lease(task.id, &run_id, Duration::ZERO).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let mut active = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        active.tick().unwrap();
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert!(
+            outcomes.iter().all(|o| !o.contains("lease expired")),
+            "{outcomes:?}"
+        );
+        // result.json から確定させ、WU の検査を走らせ直している（run は増えない）。
+        assert!(active.checking.contains_key(&run_id));
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Running, "{u:?}");
+        assert_eq!(u.runs, 2);
+        // 検査の間に lease が切れても、検査の完了を受け取るまで回収しない。
+        store.renew_lease(task.id, &holder, Duration::ZERO).unwrap();
+        store.renew_lease(task.id, &run_id, Duration::ZERO).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        active.tick().unwrap();
+        assert!(
+            worker_finished_outcomes(&store, task.id, &run_id).is_empty(),
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        assert_eq!(gate_row(&store, task.id).runs, 2);
+        assert!(active.in_flight() > 0);
+        active.abort_all_runs();
+    }
+
+    /// Phase F5-fix2: 検査が短い版で、lease 切れの後に result.json から確定させた run が最後まで
+    /// 記録される（`WorkerFinished` は `done:` の 1 件、`runs` は completed、WU done、run は 2 回）。
+    #[tokio::test]
+    async fn result_json_finalisation_records_the_completion_end_to_end() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.2");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut old = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
+        let run_id = run_gate_until_second_checks(&mut old, &store, task.id).await;
+        let task_dir = old.task_dir(&task).unwrap();
+        old.abort_all_runs();
+        drop(old);
+        let run_dir = task_dir.join("runs").join(&run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let Terminal::Done {
+            summary,
+            evidence,
+            usage,
+        } = gate_done_terminal()
+        else {
+            unreachable!()
+        };
+        std::fs::write(
+            run_dir.join("result.json"),
+            serde_json::to_string(&WorkerMessage::Done {
+                summary,
+                evidence,
+                usage,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let holder = store
+            .get(task.id)
+            .unwrap()
+            .unwrap()
+            .lease
+            .unwrap()
+            .worker_run_id;
+        store.renew_lease(task.id, &holder, Duration::ZERO).unwrap();
+        store.renew_lease(task.id, &run_id, Duration::ZERO).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let mut active = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut active, 500, || gate_row(&s, id).status
+                == task_core::WorkUnitStatus::Done)
+            .await,
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        assert!(outcomes[0].starts_with("done: "), "{outcomes:?}");
+        assert_eq!(gate_row(&store, task.id).runs, 2);
+        let row = store.run_index_get(&run_id).unwrap().unwrap();
+        assert_eq!(row.status, task_core::RunIndexStatus::Completed, "{row:?}");
+    }
+
+    /// Phase F5-fix2 (b): 完了の確定がエラーで終わったら、run を黙って `running` に残さず、
+    /// インフラ都合の失敗として記録する。Task の lease を持つ run（v1 の WU の run）は
+    /// `InfraRequeue`（Task は ready、WU は ready〈reason `finalise_failed`〉、`runs` は harness_error）。
+    #[tokio::test]
+    async fn a_finalisation_failure_is_recorded_as_an_infra_requeue() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        task.status = Status::Running;
+        let run_id = "run-finalise".to_string();
+        task.lease = Some(task_core::Lease {
+            worker_run_id: run_id.clone(),
+            expires_at: OffsetDateTime::now_utc() + Duration::from_secs(3600),
+        });
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        adopt_three_step_plan(&store, task_id);
+        let a = store
+            .work_units_for(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+        let mut running_a = a.clone();
+        running_a.status = task_core::WorkUnitStatus::Running;
+        running_a.runs = 1;
+        running_a.last_run_id = Some(run_id.clone());
+        store
+            .work_unit_transition(
+                task_id,
+                running_a,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: a.id.clone(),
+                    key: a.key.clone(),
+                    from: task_core::WorkUnitStatus::Ready,
+                    to: task_core::WorkUnitStatus::Running,
+                    reason: "dispatch".into(),
+                    run_id: Some(run_id.clone()),
+                },
+            )
+            .unwrap();
+        let adapter = Arc::new(WuScriptAdapter::new(HashMap::new()));
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        d.record_finalisation_failure(
+            task_id,
+            &run_id,
+            &DispatchError::Store(StoreError::Invalid("boom".into())),
+        );
+
+        assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Ready);
+        let events = events_of(&store, task_id);
+        let finished: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::WorkerFinished {
+                    run_id: r,
+                    outcome,
+                    end,
+                    ..
+                } if r == &run_id => Some((outcome.clone(), *end)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finished.len(), 1, "{events:?}");
+        assert!(
+            finished[0]
+                .0
+                .starts_with("infra_requeue: finalisation failed: invalid stored data: boom"),
+            "{finished:?}"
+        );
+        assert_eq!(
+            finished[0].1,
+            Some(task_core::RunEnd::HarnessError {
+                class: task_core::HarnessErrorClass::Infra
+            })
+        );
+        let a = store
+            .work_units_for(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+        assert_eq!(a.status, task_core::WorkUnitStatus::Ready, "{a:?}");
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::WorkUnitTransitioned { reason, to: task_core::WorkUnitStatus::Ready, .. }
+                if reason == FINALISE_FAILED_REASON
+        )));
+    }
+
+    /// Phase F5-fix2 (b): 工程の lease（v2）の WU の run の確定が失敗したら、Task は遷移させずに
+    /// その WU だけを戻す（兄弟を巻き込まない）。同じ WU で `max_infra_retries` を超えたら WU を
+    /// failed にする（replan / 失敗の既存の経路へ）。検査の完了が後から届いても stale として捨てる。
+    #[tokio::test]
+    async fn a_finalisation_failure_of_a_parallel_work_unit_resets_only_that_unit() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let flags = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), "true");
+        store.insert(&task).unwrap();
+        adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.2");
+        let adapter = Arc::new(InstantAdapter {
+            terminal: gate_done_terminal(),
+            delay: Duration::from_millis(20),
+        });
+        let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+        d.config.max_infra_retries = 1;
+        let run_id = run_gate_until_second_checks(&mut d, &store, task.id).await;
+        let err = DispatchError::Store(StoreError::Invalid("boom".into()));
+        d.record_finalisation_failure(task.id, &run_id, &err);
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Running);
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Ready, "{u:?}");
+        let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
+        assert_eq!(outcomes.len(), 1);
+        assert!(
+            outcomes[0].starts_with("infra_requeue: finalisation failed"),
+            "{outcomes:?}"
+        );
+        let row = store.run_index_get(&run_id).unwrap().unwrap();
+        assert_eq!(row.status, task_core::RunIndexStatus::HarnessError);
+        // 後から届いた検査の完了は stale として捨てられる（WorkerFinished は増えない）。
+        for _ in 0..100 {
+            d.tick().unwrap();
+            if d.checking.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(worker_finished_outcomes(&store, task.id, &run_id).len(), 1);
+
+        // 次の run（3 回目）の確定もまた失敗 → 上限（1）を超えたので WU は failed。
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 500, || {
+                let u = gate_row(&s, id);
+                u.runs == 3 && u.status == task_core::WorkUnitStatus::Running
+            })
+            .await,
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        let third = gate_row(&store, task.id).last_run_id.unwrap();
+        d.record_finalisation_failure(task.id, &third, &err);
+        let u = gate_row(&store, task.id);
+        assert_eq!(u.status, task_core::WorkUnitStatus::Failed, "{u:?}");
+        let outcomes = worker_finished_outcomes(&store, task.id, &third);
+        assert!(
+            outcomes[0].starts_with(INFRA_FAILURE_MARKER),
+            "{outcomes:?}"
+        );
+        d.abort_all_runs();
+    }
+
+    // ---- ADR-0075（Phase G1）: scratch pool ----
+
+    fn scratch_on(d: &mut Dispatcher, dir: &Path) -> task_worker::scratch::ScratchSettings {
+        let s = task_worker::scratch::ScratchSettings::with_dir(dir);
+        d.config.shared_build_cache = true;
+        d.config.scratch = s.clone();
+        s
+    }
+
+    fn done_pool_adapter(captured: &CapturedEnvs) -> Arc<PoolAdapter> {
+        Arc::new(PoolAdapter {
+            terminal_or_throttled: Ok(Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            }),
+            delay: Duration::ZERO,
+            observation: None,
+            env: Vec::new(),
+            captured: captured.clone(),
+            spawn_failure: false,
+        })
+    }
+
+    fn no_deleting_left(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                !rd.flatten()
+                    .any(|e| e.file_name().to_string_lossy().starts_with(".deleting-"))
+            })
+            .unwrap_or(true)
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 1: 全ての経路（Task 単位の run、v2 の WU の run と checks、統合 WU の検査、
+    /// reviewer の checks）の `CARGO_TARGET_DIR` が `<scratch>/targets/<owner>/target` で、`request.json` の
+    /// `cargo_target_dir` と一致する（`build_cache_dir` は使わない）。Remote には与えない
+    /// （`shared_build_cache_is_not_applied_to_remote_workspaces` が scratch の計画を渡して確かめる）。
+    #[tokio::test]
+    async fn every_cargo_path_uses_the_scratch_target_dir() {
+        // (1) v2 の並列 WU の run と checks、統合 WU の検査、reviewer の checks。
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let log = logs.path().join("check-env.log");
+        let record = format!("echo \"$CARGO_TARGET_DIR\" >> {}", log.display());
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), &format!("{record} # review"));
+        store.insert(&task).unwrap();
+        let with_check = |key: &str| {
+            let mut w = v2_wu(key, "build", &[]);
+            w.checks = vec![task_core::WorkUnitCheck {
+                cmd: format!("{record} # {key}"),
+                expect_exit: 0,
+            }];
+            w
+        };
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["build"],
+            vec![with_check("a"), with_check("b")],
+        );
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let adapter = Arc::new(TargetDirAdapter {
+            env: Vec::new(),
+            delay: Duration::from_millis(50),
+            seen: seen.clone(),
+        });
+        let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        d.config.build_cache_dir = cache.path().to_path_buf();
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 800, || s
+                .get(id)
+                .ok()
+                .flatten()
+                .is_some_and(|t| t.status == Status::Done))
+            .await,
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        let pool = settings.pool();
+        let units = store.work_units_for(task.id).unwrap();
+        let id_of = |k: &str| units.iter().find(|u| u.key == k).unwrap().id.clone();
+        let expected: std::collections::BTreeMap<String, PathBuf> = ["a", "b"]
+            .iter()
+            .map(|k| {
+                (
+                    k.to_string(),
+                    pool.target_dir(&task_worker::scratch::Owner::work_unit(
+                        task.id.to_string(),
+                        id_of(k),
+                    )),
+                )
+            })
+            .collect();
+        let task_target = pool.target_dir(&task_worker::scratch::Owner::task(task.id.to_string()));
+        let runs = seen.lock().unwrap().clone();
+        let mut recorded = std::collections::BTreeMap::new();
+        for (key, request) in &runs {
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(request).unwrap()).unwrap();
+            recorded.insert(
+                key.clone(),
+                PathBuf::from(v["cargo_target_dir"].as_str().expect("cargo_target_dir")),
+            );
+        }
+        assert_eq!(recorded, expected, "{runs:?}");
+        // WU の lease には key も写る（表示用）。
+        for k in ["a", "b"] {
+            let owner = task_worker::scratch::Owner::work_unit(task.id.to_string(), id_of(k));
+            let lease = task_worker::scratch::read_lease(&pool.lease_path(&owner))
+                .unwrap()
+                .unwrap();
+            assert_eq!(lease.work_unit_key.as_deref(), Some(k));
+            assert_eq!(lease.kind, task_worker::scratch::OwnerKind::WorkUnit);
+        }
+        // WU の checks は WU の owner、統合 WU の検査と reviewer の checks は Task の owner。
+        let lines = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = lines.lines().collect();
+        for dir in expected.values() {
+            assert!(
+                lines.iter().any(|l| Path::new(l) == dir.as_path()),
+                "{lines:?}"
+            );
+        }
+        assert!(
+            lines.iter().any(|l| Path::new(l) == task_target.as_path()),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|l| Path::new(l).starts_with(scratch_dir.path())),
+            "{lines:?}"
+        );
+        // 旧い `build_cache_dir/cargo/<repo-key>` は作られない。
+        assert!(!cache.path().join("cargo").exists());
+
+        // (2) Task 単位の run（v2 でない local git worktree の Task）は owner `task-<id>`。
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_test_repo(repo_dir.path());
+        let root = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = git_task(
+            repo_dir.path(),
+            None,
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        );
+        store.insert(&task).unwrap();
+        let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+        let mut d = worktree_dispatcher(
+            store.clone(),
+            done_pool_adapter(&captured),
+            root.path(),
+            None,
+        );
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        run_until_idle(&mut d, 60).await;
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        let runs = captured.lock().unwrap().clone();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        let owner = task_worker::scratch::Owner::task(task.id.to_string());
+        assert_eq!(
+            runs[0]
+                .iter()
+                .filter(|(k, _)| k == "CARGO_TARGET_DIR")
+                .cloned()
+                .collect::<Vec<_>>(),
+            task_worker::scratch::target_env(&settings.pool(), &owner),
+        );
+        let lease = task_worker::scratch::read_lease(&settings.pool().lease_path(&owner))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lease.repo_key,
+            task_worker::build_cache::repo_cache_key(repo_dir.path())
+        );
+    }
+
+    /// ADR-0075 §5 G2: Task 単位の run（`task-<id>`）を 1 回走らせ、run の env と reviewer の checks の env
+    /// （`RUSTC_WRAPPER|SCCACHE_DIR|SCCACHE_SERVER_PORT|CARGO_INCREMENTAL|CARGO_PROFILE_DEV_DEBUG|CARGO_TARGET_DIR`）を返す。
+    async fn run_with_sccache(
+        sccache: task_worker::scratch::SccacheSettings,
+    ) -> (
+        task_worker::scratch::ScratchSettings,
+        task_worker::scratch::Owner,
+        Vec<(String, String)>,
+        String,
+    ) {
+        run_with_sccache_and_cache(sccache, None, None).await
+    }
+
+    /// `run_with_sccache` に Phase G3 の cache server の設定と、sccache の server が選んだ backend の記録
+    /// （`<scratch>/bin/sccache-server.mode`）を足す。
+    async fn run_with_sccache_and_cache(
+        sccache: task_worker::scratch::SccacheSettings,
+        cache_server: Option<task_worker::scratch::CacheServerSettings>,
+        mode: Option<&str>,
+    ) -> (
+        task_worker::scratch::ScratchSettings,
+        task_worker::scratch::Owner,
+        Vec<(String, String)>,
+        String,
+    ) {
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_test_repo(repo_dir.path());
+        let root = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let log = logs.path().join("check-env.log");
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = git_task(
+            repo_dir.path(),
+            None,
+            Check::Command {
+                cmd: format!(
+                    "echo \"$RUSTC_WRAPPER|$SCCACHE_DIR|$SCCACHE_SERVER_PORT|$CARGO_INCREMENTAL|$CARGO_PROFILE_DEV_DEBUG|$CARGO_TARGET_DIR\" >> {}",
+                    log.display()
+                ),
+                expect_exit: 0,
+            },
+        );
+        store.insert(&task).unwrap();
+        let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+        let mut d = worktree_dispatcher(
+            store.clone(),
+            done_pool_adapter(&captured),
+            root.path(),
+            None,
+        );
+        scratch_on(&mut d, scratch_dir.path());
+        d.config.scratch.sccache = sccache;
+        if let Some(cs) = cache_server {
+            d.config.scratch.cache_server = cs;
+        }
+        if let Some(mode) = mode {
+            task_worker::scratch::write_sccache_mode(&d.config.scratch.pool(), mode).unwrap();
+        }
+        let settings = d.config.scratch.clone();
+        run_until_idle(&mut d, 60).await;
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        let runs = captured.lock().unwrap().clone();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        let owner = task_worker::scratch::Owner::task(task.id.to_string());
+        let check = std::fs::read_to_string(&log).unwrap();
+        (settings, owner, runs[0].clone(), check)
+    }
+
+    fn fake_sccache_binary(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("sccache");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    /// ADR-0075 §5 G2 受け入れ条件 2: sccache が有効で server が応答するとき、Task 単位の run と reviewer の checks の
+    /// env に `RUSTC_WRAPPER`（`<scratch>/bin/sccache`）・`SCCACHE_DIR`・`SCCACHE_CACHE_SIZE`・`SCCACHE_SERVER_PORT`・
+    /// `CARGO_INCREMENTAL=0`・`CARGO_PROFILE_DEV_DEBUG=line-tables-only` が入り、`cargo_env`（= `celerisctl scratch env`）と
+    /// 一致する。WU の run と checks・統合の検査は同じ `cargo_env` を通る（`every_cargo_path_uses_the_scratch_target_dir`）。
+    #[tokio::test]
+    async fn runs_get_sccache_env_when_the_server_is_up() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        // 偽の server（接続を受けて閉じるだけ。tick ごとの probe で backlog を溢れさせない）。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                drop(conn);
+            }
+        });
+        let sccache = task_worker::scratch::SccacheSettings {
+            enabled: true,
+            binary: fake_sccache_binary(bin_dir.path()),
+            server_port: port,
+        };
+        let (settings, owner, run_env, check) = run_with_sccache(sccache).await;
+        let wrapper = settings.pool().root().join("bin/sccache");
+        let expected = task_worker::scratch::cargo_env_with(
+            &settings,
+            &owner,
+            &task_worker::scratch::SccacheState::Ready {
+                wrapper: wrapper.clone(),
+            },
+        );
+        assert_eq!(task_worker::scratch::cargo_env(&settings, &owner), expected);
+        let got: Vec<(String, String)> = run_env
+            .iter()
+            .filter(|(k, _)| expected.iter().any(|(e, _)| e == k))
+            .cloned()
+            .collect();
+        assert_eq!(got, expected, "{run_env:?}");
+        for key in [
+            "RUSTC_WRAPPER",
+            "SCCACHE_DIR",
+            "SCCACHE_CACHE_SIZE",
+            "SCCACHE_SERVER_PORT",
+            "CARGO_INCREMENTAL",
+            "CARGO_PROFILE_DEV_DEBUG",
+        ] {
+            assert!(got.iter().any(|(k, _)| k == key), "{key} missing: {got:?}");
+        }
+        assert!(wrapper.is_file());
+        let line = check.lines().next().unwrap_or_default().to_string();
+        assert_eq!(
+            line,
+            format!(
+                "{}|{}|{port}|0|line-tables-only|{}",
+                wrapper.display(),
+                settings.pool().l1_dir().display(),
+                settings.pool().target_dir(&owner).display()
+            ),
+            "{check}"
+        );
+    }
+
+    /// ADR-0075 §5 G2 受け入れ条件 2: server が応答しない・バイナリが無い・`enabled = false` なら sccache 系を与えず、
+    /// run と checks は素の cargo（`CARGO_TARGET_DIR` と `[scratch.cargo]` は残る）。
+    #[tokio::test]
+    async fn runs_fall_back_to_plain_cargo_when_the_server_is_down() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        // 閉じた port は 1（特権 port。並行するテストが bind して偶然応答することが無い）。
+        let closed = 1;
+        let bin = fake_sccache_binary(bin_dir.path());
+        let cases = [
+            task_worker::scratch::SccacheSettings {
+                enabled: true,
+                binary: bin.clone(),
+                server_port: closed,
+            },
+            task_worker::scratch::SccacheSettings {
+                enabled: true,
+                binary: bin_dir.path().join("missing"),
+                server_port: closed,
+            },
+            task_worker::scratch::SccacheSettings {
+                enabled: false,
+                binary: bin,
+                server_port: closed,
+            },
+        ];
+        for sccache in cases {
+            let (settings, owner, run_env, check) = run_with_sccache(sccache.clone()).await;
+            assert!(
+                !run_env
+                    .iter()
+                    .any(|(k, _)| k == "RUSTC_WRAPPER" || k.starts_with("SCCACHE_")),
+                "{sccache:?}: {run_env:?}"
+            );
+            let target = settings.pool().target_dir(&owner).display().to_string();
+            for (k, v) in [
+                ("CARGO_TARGET_DIR", target.as_str()),
+                ("CARGO_INCREMENTAL", "0"),
+                ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
+            ] {
+                assert!(
+                    run_env.iter().any(|(a, b)| a == k && b == v),
+                    "{k}: {run_env:?}"
+                );
+            }
+            assert_eq!(
+                check.lines().next().unwrap_or_default(),
+                format!("|||0|line-tables-only|{target}"),
+                "{check}"
+            );
+        }
+    }
+
+    /// ADR-0075 §5 G3 受け入れ条件 5: sccache の server が webdav（cache server）で動いているのに cache server が
+    /// `/healthz` に応答しなければ、run と checks に `RUSTC_WRAPPER` を与えず素の cargo で成功する（U5: sccache 0.18 は
+    /// backend の応答を timeout なしで待つ）。cache server が応答すれば与える。sccache が disk で動いていれば cache server
+    /// の有無に関係なく与える（G2 と同じ）。
+    #[tokio::test]
+    async fn cache_server_down_means_no_rustc_wrapper() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        let sccache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sccache_port = sccache_listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in sccache_listener.incoming() {
+                drop(conn);
+            }
+        });
+        // 偽の cache server（`/healthz` に 200 を返す）。
+        let cache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let cache_port = cache_listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for conn in cache_listener.incoming() {
+                let Ok(mut c) = conn else { continue };
+                let mut req = Vec::new();
+                let mut buf = [0u8; 1024];
+                // 要求の終わり（空行）まで読み切ってから答える（高負荷で要求が分かれて届いても RST にしない）。
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => req.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = c.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n",
+                );
+            }
+        });
+        let sccache = task_worker::scratch::SccacheSettings {
+            enabled: true,
+            binary: fake_sccache_binary(bin_dir.path()),
+            server_port: sccache_port,
+        };
+        let cache = |port| task_worker::scratch::CacheServerSettings {
+            enabled: true,
+            port,
+            token_file: bin_dir.path().join("token"),
+        };
+        // webdav + cache server が居ない（閉じた特権 port の 1）→ 素の cargo。
+        let (settings, owner, run_env, check) =
+            run_with_sccache_and_cache(sccache.clone(), Some(cache(1)), Some("webdav")).await;
+        assert!(
+            !run_env
+                .iter()
+                .any(|(k, _)| k == "RUSTC_WRAPPER" || k.starts_with("SCCACHE_")),
+            "{run_env:?}"
+        );
+        let target = settings.pool().target_dir(&owner).display().to_string();
+        assert_eq!(
+            check.lines().next().unwrap_or_default(),
+            format!("|||0|line-tables-only|{target}"),
+            "{check}"
+        );
+        // webdav + cache server が応答 → 与える。
+        let (_, _, run_env, _) =
+            run_with_sccache_and_cache(sccache.clone(), Some(cache(cache_port)), Some("webdav"))
+                .await;
+        assert!(
+            run_env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"),
+            "{run_env:?}"
+        );
+        // disk（G2 の local disk）なら cache server が居なくても与える。
+        let (_, _, run_env, _) =
+            run_with_sccache_and_cache(sccache, Some(cache(1)), Some("disk")).await;
+        assert!(
+            run_env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"),
+            "{run_env:?}"
+        );
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 3: WU が done になると、その target は次の tick で rename され、別スレッドで
+    /// 消える。同じ repo の最新の 1 つは seed として残る。`failed` / `blocked` の WU の target は残る。
+    #[tokio::test]
+    async fn terminal_work_unit_target_is_reclaimed_on_the_next_tick() {
+        use task_worker::scratch::{AdoptCandidate, AllocateRequest, Owner};
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = parallel_task(repo.path(), "true");
+        task.status = Status::Blocked;
+        store.insert(&task).unwrap();
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["build"],
+            vec![
+                v2_wu("old-done", "build", &[]),
+                v2_wu("new-done", "build", &[]),
+                v2_wu("failed", "build", &[]),
+                v2_wu("blocked", "build", &[]),
+            ],
+        );
+        let units = store.work_units_for(task.id).unwrap();
+        let unit = |k: &str| units.iter().find(|u| u.key == k).unwrap().clone();
+        for (k, to) in [
+            ("old-done", task_core::WorkUnitStatus::Done),
+            ("new-done", task_core::WorkUnitStatus::Done),
+            ("failed", task_core::WorkUnitStatus::Failed),
+            ("blocked", task_core::WorkUnitStatus::Blocked),
+        ] {
+            let before = unit(k);
+            let mut after = before.clone();
+            after.status = to;
+            store
+                .work_unit_transition(
+                    task.id,
+                    after,
+                    Event::WorkUnitTransitioned {
+                        work_unit_id: before.id.clone(),
+                        key: before.key.clone(),
+                        from: before.status,
+                        to,
+                        reason: "test".into(),
+                        run_id: None,
+                    },
+                )
+                .unwrap();
+        }
+        let mut d = dispatcher(store.clone(), done_adapter(), 1);
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let pool = settings.pool();
+        let none = |_: &AdoptCandidate| None;
+        let tid = task.id.to_string();
+        let owners: Vec<(Owner, u64)> = vec![
+            (Owner::task(tid.clone()), 10),
+            (Owner::work_unit(tid.clone(), unit("old-done").id), 300),
+            (Owner::work_unit(tid.clone(), unit("new-done").id), 200),
+            (Owner::work_unit(tid.clone(), unit("failed").id), 100),
+            (Owner::work_unit(tid.clone(), unit("blocked").id), 100),
+        ];
+        for (owner, ago) in &owners {
+            let a = task_worker::scratch::allocate(
+                &pool,
+                &AllocateRequest {
+                    owner,
+                    repo_path: repo.path(),
+                    base_commit: None,
+                    work_unit_key: None,
+                    checkout: None,
+                    candidates: &[],
+                    distance: &none,
+                    adopt: false,
+                    max_distance: 0,
+                },
+            )
+            .unwrap();
+            std::fs::write(a.target_dir.join("libtask_core.rlib"), "x").unwrap();
+            task_worker::scratch::set_mtime(
+                &pool.lease_path(owner),
+                std::time::SystemTime::now() - Duration::from_secs(*ago),
+            )
+            .unwrap();
+        }
+        d.tick().unwrap();
+        let exists = |i: usize| pool.target_dir(&owners[i].0).exists();
+        // 古い方の done の WU は次の tick で rename 済み、最新の done の WU は seed（Task が非終端で同じ repo）。
+        assert!(
+            !exists(1),
+            "old done work unit target should be moved aside"
+        );
+        assert!(
+            exists(2),
+            "the newest done work unit target is kept as the seed"
+        );
+        assert!(exists(3), "failed work unit target must stay");
+        assert!(exists(4), "blocked work unit target must stay");
+        assert!(exists(0), "the waiting task target must stay");
+        let view = d.scratch.view.clone().expect("scratch view");
+        let class_of = |o: &Owner| {
+            view.owners
+                .iter()
+                .find(|r| r.owner == o.to_string())
+                .map(|r| r.class.clone())
+        };
+        assert_eq!(class_of(&owners[2].0).as_deref(), Some("seed"));
+        assert_eq!(class_of(&owners[3].0).as_deref(), Some("p1"));
+        assert_eq!(class_of(&owners[0].0).as_deref(), Some("p1"));
+        assert_eq!(view.last_gc.as_ref().map(|g| g.removed.len()), Some(1));
+        // 中身の削除は別スレッド。
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !no_deleting_left(&pool.targets_dir()) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            d.tick().unwrap();
+        }
+        assert!(no_deleting_left(&pool.targets_dir()));
+        // lease は「刈った」記録として残る。
+        assert!(pool.lease_path(&owners[1].0).exists());
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 5: 空きが `min_free_disk_mb` 未満なら、新しい run の前に緊急 GC（P0 以外を
+    /// 目標まで rename）→ 空きが戻るまで dispatch を保留し「ディスク不足 (infra)」を 1 回だけ通知 → 戻れば自動解除。
+    /// 消せるものが P0 だけなら通知の本文に pinned の一覧が付く。
+    #[tokio::test]
+    async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
+        use task_worker::scratch::{AdoptCandidate, AllocateRequest, Owner};
+        let none = |_: &AdoptCandidate| None;
+        let lease = |pool: &task_worker::scratch::Pool, name: &str| {
+            let owner = Owner::parse(name).unwrap();
+            task_worker::scratch::allocate(
+                pool,
+                &AllocateRequest {
+                    owner: &owner,
+                    repo_path: Path::new("/repo/agent-platform"),
+                    base_commit: None,
+                    work_unit_key: None,
+                    checkout: None,
+                    candidates: &[],
+                    distance: &none,
+                    adopt: false,
+                    max_distance: 0,
+                },
+            )
+            .unwrap();
+            owner
+        };
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: ":".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        store.insert(&task).unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let mut d = dispatcher(store.clone(), done_adapter(), 1);
+        d.config.workspace_root = dir.path().to_path_buf();
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let pool = settings.pool();
+        let live = lease(&pool, "agent-live");
+        let released = lease(&pool, "agent-released");
+        task_worker::scratch::release(&pool, &released).unwrap();
+        d.config.min_free_disk_mb = u64::MAX;
+        assert_eq!(d.tick().unwrap().dispatched, 0);
+        // 緊急 GC: agent の P3（通常は watermark まで残る）も rename、P0 は残る。
+        assert!(!pool.target_dir(&released).exists());
+        assert!(pool.target_dir(&live).exists());
+        assert!(d.disk_low);
+        assert_eq!(
+            d.scratch.view.as_ref().map(|v| v.pressure.as_str()),
+            Some("emergency")
+        );
+        assert!(
+            d.scratch
+                .view
+                .as_ref()
+                .unwrap()
+                .last_gc
+                .as_ref()
+                .unwrap()
+                .emergency
+        );
+        assert_eq!(d.tick().unwrap().dispatched, 0);
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
+        let notifications = store.notification_recent(10).unwrap();
+        assert_eq!(notifications.len(), 1, "{notifications:?}");
+        assert!(notifications[0].body.contains("ディスク不足 (infra)"));
+        // 空きが戻れば自動で解除して dispatch する。
+        d.config.min_free_disk_mb = 0;
+        assert_eq!(d.tick().unwrap().dispatched, 1);
+        assert!(!d.disk_low);
+        assert!(pool.target_dir(&live).exists());
+
+        // 消せるものが P0 だけ → 保留の通知に pinned の一覧。
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let mut d = dispatcher(store.clone(), done_adapter(), 1);
+        d.config.workspace_root = dir.path().to_path_buf();
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let live = lease(&settings.pool(), "agent-live");
+        d.config.min_free_disk_mb = u64::MAX;
+        d.tick().unwrap();
+        assert!(settings.pool().target_dir(&live).exists());
+        let notifications = store.notification_recent(10).unwrap();
+        assert_eq!(notifications.len(), 1);
+        assert!(
+            notifications[0].body.contains("scratch pool: pinned")
+                && notifications[0].body.contains("agent-live"),
+            "{}",
+            notifications[0].body
+        );
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 7: `[scratch] dir` が NFS 上（起動時の検査で無効化）、または `[scratch] enabled =
+    /// false` なら、ADR-0066 D1 / F5-fix の `build_cache_dir/cargo/<repo-key>` に戻る。
+    #[tokio::test]
+    async fn scratch_on_nfs_falls_back_to_build_cache_dir() {
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let nfs = task_worker::scratch::apply_nfs_check(
+            task_worker::scratch::ScratchSettings::with_dir(scratch_dir.path()),
+            |_| Ok(true),
+        );
+        assert!(!nfs.enabled);
+        assert!(nfs.disabled_reason.as_deref().unwrap_or("").contains("NFS"));
+        let disabled = task_worker::scratch::ScratchSettings {
+            enabled: false,
+            ..task_worker::scratch::ScratchSettings::with_dir(scratch_dir.path())
+        };
+        for settings in [nfs, disabled] {
+            let repo_dir = tempfile::tempdir().unwrap();
+            init_test_repo(repo_dir.path());
+            let root = tempfile::tempdir().unwrap();
+            let cache_dir = tempfile::tempdir().unwrap();
+            let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+            let task = git_task(
+                repo_dir.path(),
+                None,
+                Check::Command {
+                    cmd: "true".into(),
+                    expect_exit: 0,
+                },
+            );
+            store.insert(&task).unwrap();
+            let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+            let mut d = worktree_dispatcher(
+                store.clone(),
+                done_pool_adapter(&captured),
+                root.path(),
+                None,
+            );
+            d.config.shared_build_cache = true;
+            d.config.build_cache_dir = cache_dir.path().to_path_buf();
+            d.config.scratch = settings.clone();
+            run_until_idle(&mut d, 60).await;
+            assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+            let runs = captured.lock().unwrap().clone();
+            let expected =
+                task_worker::build_cache::cargo_target_dir_env(cache_dir.path(), repo_dir.path());
+            assert!(runs[0].contains(&expected), "{:?}", runs[0]);
+            assert!(!scratch_dir.path().join("targets").exists());
+            let view = d.scratch.view.clone().expect("disabled view");
+            assert!(!view.enabled);
+            assert_eq!(view.disabled_reason, settings.disabled_reason);
+        }
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 4（dispatcher 経由）: run の開始時、同じ repo の P3 の target が checkout より前に
+    /// 書かれたものなら rename で引き継ぐ（lease に `adopted_from`）。
+    #[tokio::test]
+    async fn run_start_adopts_a_finished_target_that_predates_the_checkout() {
+        use task_worker::scratch::{AdoptCandidate, AllocateRequest, Owner};
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_test_repo(repo_dir.path());
+        let root = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = git_task(
+            repo_dir.path(),
+            None,
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        );
+        store.insert(&task).unwrap();
+        let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+        let mut d = worktree_dispatcher(
+            store.clone(),
+            done_pool_adapter(&captured),
+            root.path(),
+            None,
+        );
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let pool = settings.pool();
+        // 前の release の target（released = P3）。最終書き込みは 1 時間前。
+        let old = Owner::parse("release-0123456789ab").unwrap();
+        let none = |_: &AdoptCandidate| None;
+        let a = task_worker::scratch::allocate(
+            &pool,
+            &AllocateRequest {
+                owner: &old,
+                repo_path: repo_dir.path(),
+                base_commit: None,
+                work_unit_key: None,
+                checkout: None,
+                candidates: &[],
+                distance: &none,
+                adopt: false,
+                max_distance: 0,
+            },
+        )
+        .unwrap();
+        std::fs::write(a.target_dir.join("warm.rlib"), "x").unwrap();
+        task_worker::scratch::release(&pool, &old).unwrap();
+        let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        for p in [
+            a.target_dir.join("warm.rlib"),
+            a.target_dir.clone(),
+            pool.lease_path(&old),
+        ] {
+            std::fs::File::open(&p)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(hour_ago))
+                .unwrap();
+        }
+        // release の P3 は即回収の対象なので、seed になるよう同じ repo の P0（生きている agent の lease）を置く。
+        let live = Owner::parse("agent-live").unwrap();
+        task_worker::scratch::allocate(
+            &pool,
+            &AllocateRequest {
+                owner: &live,
+                repo_path: repo_dir.path(),
+                base_commit: None,
+                work_unit_key: None,
+                checkout: None,
+                candidates: &[],
+                distance: &none,
+                adopt: false,
+                max_distance: 0,
+            },
+        )
+        .unwrap();
+        run_until_idle(&mut d, 60).await;
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        let owner = Owner::task(task.id.to_string());
+        let lease = task_worker::scratch::read_lease(&pool.lease_path(&owner))
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.adopted_from.as_deref(), Some("release-0123456789ab"));
+        assert!(pool.target_dir(&owner).join("warm.rlib").exists());
+        assert!(!pool.target_dir(&old).exists());
+    }
+
     /// ADR-0074 §6 F2 (g): 兄弟が走っている間の WU の failed / question で Task は遷移せず、in-flight が
     /// 0 になってから replan / `WorkerQuestion` になる。
     #[tokio::test]
@@ -30515,6 +32940,7 @@ mod knowledge_fallback_tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },

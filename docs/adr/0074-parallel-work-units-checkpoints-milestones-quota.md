@@ -1201,3 +1201,50 @@ F5-1 dogfood（3 回目、タスク 01M3HS2E19BRC021ZXMDZANP5B）で見つかっ
    同じ親の中で `.deleting-wu-<id>` に rename（その tick のうちに元のパスから消える）してから別スレッドで `remove_dir_all` する
    （数 GB を tick の中で消さない。同時に 1 本）。途中で残った `.deleting-*` も次の掃除で消す。`failed` / `blocked` は replan で同じ
    行がやり直しうるので残す。行が見つからない target（別の DB、消えた Task）には触れない。
+
+## Phase F5-fix2 実装時の逸脱・明確化（2026-09-28）
+
+F5-1 dogfood 4 回目で、`gate` WU の run が result.json（done）を残して終わったのに完了が記録されず、2 時間後に
+`infra_requeue: lease expired` で捨てられた（2 回）。原因は、run の後に daemon が走らせる WU の `checks`（D1.2・ADR-0072 D14/D6）が
+`running` から外れた後に spawn され、`Dispatcher::in_flight()`（ADR-0040 D4 の drain の判定）に数えられていなかったこと。ライブ
+切替で draining になった旧デーモンは、検査を spawn した直後に「手元が 0」と判断して exit し、検査の完了ごと失った。新しい active は
+その run を持たず、検査前に延ばした lease（`review_timeout × (2n+1) + lease_grace`）が切れるまで何もしなかった。
+
+1. **検査・統合も in-flight**: `in_flight()` は `running + reviewing + checking + integrating`。`checking`（run id → spawn の handle）は
+   `spawn_work_unit_checks` が入れ、`Completion::WorkUnitChecks` を受けたとき・Task が Running でなくなったとき・drain の打ち切り
+   （`abort_all_runs`）で外す。lease の照合（`reclaim_expired_leases`・D1.7 の `reconcile_parallel_tasks`）は `checking` の run を
+   「生きている run」とみなし、lease が切れても回収せずに延ばす。
+2. **lease が切れた run の result.json**（P-F5-3 の一部）: lease（または WU の lease）が切れた run で、このインスタンスが抱えて
+   いないもののうち、`runs/<run_id>/result.json` に終端（done / question / yielded / budget_exhausted / 供給側の失敗でない error）が
+   残っているものは、requeue せずに `on_worker_finished` と同じ経路でその内容から確定させる（checks があれば走らせ直す）。
+   result.json が無ければ従来どおり `InfraRequeue`。
+3. **確定の失敗は記録する**: `drain_completions` は `on_worker_finished` / `on_work_unit_checks_finished` のエラーで tick ごと抜けず、
+   その run を `WorkerFinished{outcome: "infra_requeue: finalisation failed: …", end: harness_error(infra)}`・`runs` の
+   `harness_error` として閉じる。Task の lease を持つ run は `InfraRequeue`（`max_infra_retries` を超えたら `infra failure ×N`）、
+   工程の lease（v2）の WU の run は Task を遷移させずにその WU だけを戻し（reason `finalise_failed`）、同じ WU で上限を超えたら
+   WU を failed にする（D12/D17 の replan / 失敗へ）。
+
+## Phase F5-fix3 実装時の逸脱・明確化（2026-09-28）
+
+F5-1 dogfood 4 回目で、replan の planner が WU の checks の上限（6）を知らずに 8 本書き、再試行も同じ計画を再提出して `blocked` に
+なった。また lease 失効で requeue した run の `runs` 行が `running` のまま残った。
+
+1. **計画の上限は 1 か所から**（§4・ADR-0072 D18 の明確化）: dispatcher の `ExecutionConfig.limits`（既定 `ExecutionLimits::default()`、
+   config.toml の欄は作らない）を planner の出力の検証・採用・replan と planner のプロンプトが共有する。プロンプトは検証が拒否する上限を
+   すべて（WU 数、phases、children、WU ごとの title / objective / done_when / checks、rationale、JSON の大きさ）と budget の丸めを、
+   計画の形の説明の直後に出す。
+2. **再試行には前の拒否理由を渡す**（ADR-0072 D14「1 回だけ再試行」の明確化）: 同じ計画の回（直近の `ExecutionPlanned` の後）で
+   daemon が拒否した理由を `ExecutionPlannerContext.previous_attempt_errors` に入れ、プロンプトはそれをそのまま示して「その点だけ直す」
+   よう求める。拒否した `artifacts/execution-plan.json` は `execution-plan.rejected.json` に移す（残すと次の試行が再提出する）。
+3. **決定的な正規化はしない**（検討の結果、採らない）: 上限を超えた checks を `sh -c "a && b"` の 1 本に畳む等の自動修正は入れない。
+   理由: (i) checks は 1 本ずつ `expect_exit` を持ち（0 以外もある）、`&&` で連結すると意味が変わる（非 0 を期待する check は連結できず、
+   どの check が落ちたかの evidence・repair の分類の粒度も失う）。(ii) planner の出力を daemon が黙って書き換えると、計画は planner が
+   書いたものではなくなり（D5.1「読めない features を黙って捨てない」と同じ原則）、人が見る計画と planner の意図がずれる。
+   (iii) 上限ごとに別の正規化（title の切り詰め、done_when の併合、WU の分割…）が要り、どれも意味を持つ判断で LLM を使わずに決め
+   られない。(iv) 本件の原因は「上限を知らされていない」「拒否理由が次の試行に届かない」「拒否したファイルが残る」の 3 つで、
+   1.・2. で直接塞いだ。再試行 1 回の費用は正規化の誤りの費用より小さい。
+4. **run の行は `WorkerFinished` と一緒に閉じる**（D5 の `runs` 索引の明確化。schema 変更なし）: ストアは `WorkerFinished` を書く
+   同じトランザクションで、その run の `runs` 行がまだ `running` なら `end` から終端にする（無ければ `harness_error`。
+   `rebuild_work_units_and_runs` と同じ規則）。既に閉じた行は変えない。誰も `WorkerFinished` を書かない経路（cancel 等で止めた run、
+   止めた Reviewer run、drain の打ち切りの Reviewer run）は dispatcher が `WorkerFinished{outcome: "interrupted: …", end: cancelled}` を
+   足す。drain の打ち切りの worker run は従来どおり DB を変えず、新しい active の lease 失効の経路で閉じる（ADR-0040 D4 のまま）。

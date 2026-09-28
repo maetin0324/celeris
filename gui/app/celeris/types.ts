@@ -1061,6 +1061,7 @@ export interface ApiV1Schema {
   message_accepted: MessageAccepted;
   message_list: MessageList;
   message_post: MessagePostBody;
+  metrics_scratch: ScratchStatus1;
   milestone_create: MilestoneCreateBody;
   milestone_decide: MilestoneDecideBody;
   milestone_decided: MilestoneDecided;
@@ -2327,6 +2328,11 @@ export interface DaemonSnapshot {
    * ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。
    */
   reports?: ReportsLive | null;
+  /**
+   * ADR-0075 D6（Phase G1）: scratch pool の観測値（`GET /api/v1/metrics/scratch` と `celerisctl scratch status --json`
+   * と同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。
+   */
+  scratch?: ScratchStatus | null;
   started_at: string;
   tick_ms: number;
   ticks: number;
@@ -2584,6 +2590,336 @@ export interface ReportsLive {
    * 秘書レベル（`level = 0`）の未読の件数。
    */
   unread_secretary: number;
+}
+/**
+ * ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。
+ * 容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。
+ */
+export interface ScratchStatus {
+  /**
+   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
+   * スナップショットには無い。
+   */
+  cache?: ScratchCacheView | null;
+  /**
+   * `[scratch] dir`。
+   */
+  dir: string;
+  /**
+   * 無効化した理由（NFS 上など）。
+   */
+  disabled_reason?: string | null;
+  /**
+   * 実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。
+   */
+  effective_max_bytes: number;
+  /**
+   * scratch が有効か（`[scratch] enabled = false`、または NFS 上で無効化したら `false`）。
+   */
+  enabled: boolean;
+  fs_free_bytes?: number | null;
+  /**
+   * `dir` の filesystem の容量と空き（statvfs。読めなければ `None`）。
+   */
+  fs_total_bytes?: number | null;
+  high_watermark: number;
+  /**
+   * 直近の GC（rename したものがあった回）。
+   */
+  last_gc?: ScratchGcView | null;
+  /**
+   * pool の外の旧い target（`build_cache_dir/cargo/*`、`release-build/.cargo-target`）の残り。
+   */
+  legacy: ScratchLegacyView[];
+  low_watermark: number;
+  /**
+   * この状態を組んだ時刻（RFC 3339）。
+   */
+  observed_at: string;
+  /**
+   * owner ごとの行（owner の文字列順）。
+   */
+  owners: ScratchOwnerView[];
+  pinned_bytes: number;
+  /**
+   * `none` | `high_watermark` | `low_disk` | `emergency`。
+   */
+  pressure: string;
+  /**
+   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   */
+  sccache?: ScratchSccacheView | null;
+  /**
+   * 常に `celeris.scratch-status/1`。
+   */
+  schema: string;
+  /**
+   * `targets/` の推定使用量と、そのうち P0（絶対に消さない）の量。
+   */
+  targets_bytes: number;
+  targets_max_bytes: number;
+  total_max_bytes: number;
+}
+/**
+ * ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+ */
+export interface ScratchCacheView {
+  /**
+   * `http://127.0.0.1:<port>`（`SCCACHE_WEBDAV_ENDPOINT`）。
+   */
+  endpoint: string;
+  /**
+   * `ready` でない理由。
+   */
+  reason?: string | null;
+  /**
+   * sccache の server が起動時に選んだ backend（`celerisctl scratch env --server` が `<scratch>/bin/sccache-server.mode`
+   * に書く）: `webdav`（この cache server）| `disk`（G2 の local disk）。記録が無ければ `None`。
+   */
+  sccache_mode?: string | null;
+  /**
+   * `ready`（`/healthz` が応答）| `disabled`（`[scratch.cache_server] enabled = false`）| `unavailable`（応答なし）。
+   */
+  state: string;
+  /**
+   * cache server の `/stats`（応答が無ければ `None`）。
+   */
+  stats?: ScratchCacheStats | null;
+}
+/**
+ * ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
+ * 累計、容量は byte、時刻は RFC 3339。
+ */
+export interface ScratchCacheStats {
+  /**
+   * 待ち行列の上限で「L2 に書かない」で落とした数。
+   */
+  flush_dropped: number;
+  flush_last_at?: string | null;
+  /**
+   * flusher の帯域の上限（MB/s、0 = 無制限）。
+   */
+  flush_mbps: number;
+  /**
+   * 待ち行列の先頭（最古）の待ち時間（秒）。空なら `None`。
+   */
+  flush_oldest_age_secs?: number | null;
+  flush_queue_bytes: number;
+  /**
+   * flusher（L1 → L2 の非同期 write-back）の待ち行列と遅延。
+   */
+  flush_queue_len: number;
+  /**
+   * L2 に既にあったので書かなかった数。
+   */
+  flush_skipped_existing: number;
+  flush_written: number;
+  flush_written_bytes: number;
+  /**
+   * GET（HEAD を含み、`.sccache_check` を除く）と PUT の数。
+   */
+  gets: number;
+  l1_bytes: number;
+  /**
+   * L1（ローカル）。
+   */
+  l1_dir: string;
+  l1_entries: number;
+  /**
+   * L1 の上限で LRU に落とした数（未 flush の entry は落とさない）。
+   */
+  l1_evicted: number;
+  /**
+   * GET の結果: L1 hit / L2 hit / miss（`gets = l1_hits + l2_hits + misses`）。
+   */
+  l1_hits: number;
+  l1_max_bytes: number;
+  /**
+   * L2 の使用量と entry 数（直近の走査〈GC〉と以後の flush から。走査前は `None`）。
+   */
+  l2_bytes?: number | null;
+  l2_corrupt: number;
+  l2_degraded_since?: string | null;
+  l2_dir?: string | null;
+  /**
+   * L2（NFS。content-addressed な immutable `<k0k1>/<key>.zst`）。
+   */
+  l2_enabled: boolean;
+  l2_entries?: number | null;
+  /**
+   * L2 の I/O の失敗・GET のタイムアウト・checksum 不一致で捨てた entry の数。
+   */
+  l2_errors: number;
+  /**
+   * 直近の L2 の GC（`l2_max_bytes` を超えた分を mtime の古い順に消す）。
+   */
+  l2_gc_last_at?: string | null;
+  l2_gc_removed: number;
+  l2_gc_removed_bytes: number;
+  l2_hits: number;
+  l2_last_error?: string | null;
+  l2_max_bytes: number;
+  /**
+   * 切り離し中なら次に L2 を試す時刻。
+   */
+  l2_retry_at?: string | null;
+  l2_scanned_at?: string | null;
+  /**
+   * `ok` | `degraded`（連続失敗で切り離し中。GET は L1 だけで応答し、flusher は待つ）| `disabled`。
+   */
+  l2_state: string;
+  l2_timeouts: number;
+  misses: number;
+  observed_at: string;
+  /**
+   * L2 hit を L1 へ書き戻した数。
+   */
+  promotes: number;
+  puts: number;
+  /**
+   * 常に `celeris.scratch-cache-stats/1`。
+   */
+  schema: string;
+  started_at: string;
+}
+/**
+ * 直近の GC 1 回。
+ */
+export interface ScratchGcView {
+  at: string;
+  /**
+   * 空き < `min_free_disk_mb` の緊急 GC か。
+   */
+  emergency: boolean;
+  /**
+   * その回の `pressure`。
+   */
+  pressure: string;
+  reclaimed_bytes: number;
+  removed: ScratchGcRemovedView[];
+}
+/**
+ * GC が rename した 1 つ。
+ */
+export interface ScratchGcRemovedView {
+  /**
+   * `legacy` | `stray` | `p1` | `p2` | `p3` | `seed`。
+   */
+  class: string;
+  estimated_bytes: number;
+  id: string;
+  /**
+   * `immediate`（watermark に関係なく回収）| `pressure`（目標に届くまで）。
+   */
+  why: string;
+}
+/**
+ * pool の外の旧い target 1 つ。
+ */
+export interface ScratchLegacyView {
+  /**
+   * `legacy`（1 時間以上更新が無く回収できる）| `p0`（未測定・1 時間以内に更新あり）。
+   */
+  class: string;
+  last_write?: string | null;
+  path: string;
+  size_bytes?: number | null;
+}
+/**
+ * scratch pool の owner 1 つ（`targets/<owner>/`）。
+ */
+export interface ScratchOwnerView {
+  /**
+   * adopt で引き継いだ元の owner。
+   */
+  adopted_from?: string | null;
+  /**
+   * base commit の先頭 12 桁。
+   */
+  base_commit?: string | null;
+  /**
+   * `p0` | `p1` | `p2` | `p3` | `seed` | `stray`。
+   */
+  class: string;
+  estimated_bytes: number;
+  /**
+   * `target/` があるか（GC が刈った後は lease だけが残る）。
+   */
+  has_target: boolean;
+  /**
+   * `task` | `work_unit` | `release` | `agent` | `stray`。
+   */
+  kind: string;
+  /**
+   * `lease.json` の mtime（生存の合図）。
+   */
+  lease_mtime?: string | null;
+  measured_at?: string | null;
+  /**
+   * `task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>`（owner として読めない野良はパス）。
+   */
+  owner: string;
+  /**
+   * 分類の理由（`task running`、`lease expired` など）。
+   */
+  reason: string;
+  repo_key?: string | null;
+  /**
+   * 測定したサイズ（未測定は `None`）と、GC が使う推定値。
+   */
+  size_bytes?: number | null;
+  work_unit_key?: string | null;
+}
+/**
+ * ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+ */
+export interface ScratchSccacheView {
+  /**
+   * 本物の sccache（`[scratch.sccache] binary`）。
+   */
+  binary: string;
+  /**
+   * `SCCACHE_DIR`。
+   */
+  dir: string;
+  /**
+   * `SCCACHE_CACHE_SIZE`（byte）。
+   */
+  max_bytes: number;
+  /**
+   * `SCCACHE_SERVER_PORT`。
+   */
+  port: number;
+  /**
+   * `ready` でない理由。
+   */
+  reason?: string | null;
+  /**
+   * `ready`（run に `RUSTC_WRAPPER` を与える）| `disabled`（設定で無効）| `unavailable`（バイナリか server が無い）。
+   */
+  state: string;
+  /**
+   * `sccache --show-stats` の要約（`celerisctl scratch status` が server に問い合わせたときだけ。daemon の
+   * スナップショットでは `None`〈tick で client を起こさない〉）。
+   */
+  stats?: ScratchSccacheStats | null;
+}
+/**
+ * `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+ */
+export interface ScratchSccacheStats {
+  /**
+   * L1 の使用量（byte。読めなければ `None`）。
+   */
+  cache_size_bytes?: number | null;
+  compile_requests: number;
+  hits: number;
+  misses: number;
+  /**
+   * Rust だけの hit / miss（owner をまたいだ依存の hit を見る。U1）。
+   */
+  rust_hits: number;
+  rust_misses: number;
 }
 /**
  * `POST /tasks/{id}/approve`、`POST /tasks/{id}/reject` の本文。
@@ -4414,6 +4750,75 @@ export interface MessagePostBody {
    * 本文（空白だけは 422）。
    */
   text: string;
+}
+/**
+ * ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。
+ * 容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。
+ */
+export interface ScratchStatus1 {
+  /**
+   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
+   * スナップショットには無い。
+   */
+  cache?: ScratchCacheView | null;
+  /**
+   * `[scratch] dir`。
+   */
+  dir: string;
+  /**
+   * 無効化した理由（NFS 上など）。
+   */
+  disabled_reason?: string | null;
+  /**
+   * 実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。
+   */
+  effective_max_bytes: number;
+  /**
+   * scratch が有効か（`[scratch] enabled = false`、または NFS 上で無効化したら `false`）。
+   */
+  enabled: boolean;
+  fs_free_bytes?: number | null;
+  /**
+   * `dir` の filesystem の容量と空き（statvfs。読めなければ `None`）。
+   */
+  fs_total_bytes?: number | null;
+  high_watermark: number;
+  /**
+   * 直近の GC（rename したものがあった回）。
+   */
+  last_gc?: ScratchGcView | null;
+  /**
+   * pool の外の旧い target（`build_cache_dir/cargo/*`、`release-build/.cargo-target`）の残り。
+   */
+  legacy: ScratchLegacyView[];
+  low_watermark: number;
+  /**
+   * この状態を組んだ時刻（RFC 3339）。
+   */
+  observed_at: string;
+  /**
+   * owner ごとの行（owner の文字列順）。
+   */
+  owners: ScratchOwnerView[];
+  pinned_bytes: number;
+  /**
+   * `none` | `high_watermark` | `low_disk` | `emergency`。
+   */
+  pressure: string;
+  /**
+   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   */
+  sccache?: ScratchSccacheView | null;
+  /**
+   * 常に `celeris.scratch-status/1`。
+   */
+  schema: string;
+  /**
+   * `targets/` の推定使用量と、そのうち P0（絶対に消さない）の量。
+   */
+  targets_bytes: number;
+  targets_max_bytes: number;
+  total_max_bytes: number;
 }
 /**
  * `POST /projects/{id}/milestones` の要求本文。`seq` はストアが採番する。

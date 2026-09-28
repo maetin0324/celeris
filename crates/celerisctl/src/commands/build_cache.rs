@@ -1,4 +1,8 @@
 //! `celerisctl build-cache prune`: 設定した共有 Cargo キャッシュの古い repo-key だけを消す。
+//!
+//! ADR-0075 D7（Phase G1）: target は scratch pool へ移行済み（`[scratch] enabled = true` が既定）。旧い
+//! `build_cache_dir/cargo/*` は daemon の `scratch_gc` が legacy として回収する。手で回すなら `celerisctl scratch gc`。
+//! このコマンドは G3 の後に撤去する予定（1 リリースの間の退路として残す）。
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -12,6 +16,7 @@ use crate::outln;
 
 #[derive(Debug, Subcommand)]
 pub enum BuildCacheCommand {
+    /// 旧い `build_cache_dir/cargo/*` を刈る。scratch へ移行済み。通常は `celerisctl scratch gc` を使う（ADR-0075 D7）。
     Prune(PruneArgs),
 }
 

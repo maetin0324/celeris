@@ -670,10 +670,13 @@ pub struct RepoNote {
 
 /// ADR-0066 D1（Phase 110b）: `[workspace] shared_build_cache` が有効で git のリポジトリがあるときだけ、
 /// `repos_note` の後ろに足す 1 行（ディスパッチャが `shared_build_cache` の設定を見て呼ぶかどうかを決める。
-/// ここは文面だけの純粋関数）。
+/// ここは文面だけの純粋関数）。ADR-0075 D7（Phase G1）: target は Celeris が渡すローカルの scratch
+/// （owner ごと）になったので、文言を「自分で決めない・`/tmp` と worktree 直下に置かない」にした。
 pub fn shared_build_cache_note() -> &'static str {
-    "`target/` はリポジトリ間で共有するビルドキャッシュにある（`CARGO_TARGET_DIR`）。worktree ごとに\
-     再ビルドしない。\n"
+    "`target/` は Celeris が渡した `CARGO_TARGET_DIR`（ローカルの scratch）を使う。`CARGO_TARGET_DIR` を\
+     自分で決めない。`/tmp` と worktree 直下に target を置かない。\n\
+     `RUSTC_WRAPPER`（sccache）・`SCCACHE_*`・`CARGO_INCREMENTAL`・`CARGO_PROFILE_DEV_DEBUG` も Celeris が渡した値のまま使い、\
+     上書き・unset しない（sccache の server は起こさない・止めない）。\n"
 }
 
 /// ADR-0043 D2 / D8: タスクが複数のリポジトリを持つときの「作業場所」の本文（純粋関数）。

@@ -148,6 +148,9 @@ pub struct Config {
     /// ADR-0041 D1（Phase 49）: ローカルの作業場所を worktree にするときの設定。
     #[serde(default)]
     pub workspace: WorkspaceConfig,
+    /// ADR-0075 D1〜D3（Phase G1）: `[scratch]`。ローカルの scratch pool（owner ごとの `CARGO_TARGET_DIR` と semantic GC）。
+    #[serde(default)]
+    pub scratch: ScratchConfig,
     /// ADR-0043 D5（Phase 54）: 変更の取り込みで GitHub を使うときの設定（`gh` の場所と merge の方法）。
     #[serde(default)]
     pub github: GithubConfig,
@@ -343,6 +346,297 @@ fn default_build_cache_dir() -> PathBuf {
 
 fn default_prune_after_secs() -> u64 {
     86400
+}
+
+/// `[scratch]`（ADR-0075 D1〜D3、Phase G1）: ローカルの scratch pool。既定は有効。`enabled = false` で ADR-0066 D1 /
+/// F5-fix の `build_cache_dir` の挙動に戻る（1 リリースの間の退路）。`dir` が NFS 上なら起動時に無効化する。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchConfig {
+    #[serde(default = "default_scratch_enabled")]
+    pub enabled: bool,
+    /// 既定は `[workspace] build_cache_dir` の**親の `scratch/`**（本番は `/var/lib/celeris/scratch`）。
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    #[serde(default = "default_scratch_targets_max_gb")]
+    pub targets_max_gb: u64,
+    #[serde(default = "default_scratch_l1_max_gb")]
+    pub l1_max_gb: u64,
+    #[serde(default = "default_scratch_total_max_gb")]
+    pub total_max_gb: u64,
+    #[serde(default = "default_scratch_high_watermark")]
+    pub high_watermark: f64,
+    #[serde(default = "default_scratch_low_watermark")]
+    pub low_watermark: f64,
+    #[serde(default = "default_scratch_external_lease_ttl_secs")]
+    pub external_lease_ttl_secs: u64,
+    #[serde(default = "default_scratch_waiting_keep_secs")]
+    pub waiting_keep_secs: u64,
+    #[serde(default = "default_scratch_failed_keep_secs")]
+    pub failed_keep_secs: u64,
+    #[serde(default = "default_scratch_completed_grace_secs")]
+    pub completed_grace_secs: u64,
+    #[serde(default = "default_scratch_warm_seeds_per_repo")]
+    pub warm_seeds_per_repo: usize,
+    #[serde(default = "default_scratch_gc_max_per_tick")]
+    pub gc_max_per_tick: usize,
+    #[serde(default = "default_scratch_enabled")]
+    pub adopt: bool,
+    #[serde(default = "default_scratch_adopt_max_distance")]
+    pub adopt_max_distance: u64,
+    #[serde(default = "default_scratch_measure_interval_secs")]
+    pub measure_interval_secs: u64,
+    /// ADR-0075 D4（Phase G2）: `[scratch.sccache]`。既定は有効（バイナリか server が無ければ自動で配線しない）。
+    #[serde(default)]
+    pub sccache: ScratchSccacheConfig,
+    /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
+    #[serde(default)]
+    pub cargo: ScratchCargoConfig,
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]`。既定で動く（D7 の N-1 の規則）。
+    #[serde(default)]
+    pub l2: ScratchL2Config,
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.cache_server]`。既定で動く。
+    #[serde(default)]
+    pub cache_server: ScratchCacheServerConfig,
+}
+
+/// `[scratch.l2]`（ADR-0075 D5 (b)、Phase G3）: cache server の L2（NFS 上の content-addressed な immutable object）。
+/// **既定値だけで動く**（本番 config に足すのは、この節を知る release の昇格後。D7）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchL2Config {
+    #[serde(default = "default_scratch_enabled")]
+    pub enabled: bool,
+    /// 既定 `$CELERIS_STATE_DIR/cache/sccache-l2`（`~/.local/celeris/cache/sccache-l2`、NFS）。`~` は展開する。
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    /// L2 の上限（GB。超えたら mtime の古い順に消す）。
+    #[serde(default = "default_scratch_l2_max_gb")]
+    pub max_gb: u64,
+    /// flusher の帯域（MB/s。0 = 無制限）。
+    #[serde(default = "default_scratch_l2_flush_mbps")]
+    pub flush_mbps: u64,
+    /// flush の待ち行列の上限（MB）。
+    #[serde(default = "default_scratch_l2_flush_queue_max_mb")]
+    pub flush_queue_max_mb: u64,
+    /// GET の L2 の読み込みを待つ上限（ms）。
+    #[serde(default = "default_scratch_l2_get_timeout_ms")]
+    pub get_timeout_ms: u64,
+    /// L2 の I/O スレッドの数。
+    #[serde(default = "default_scratch_l2_io_threads")]
+    pub io_threads: usize,
+    /// L2 の GC の間隔（秒）。
+    #[serde(default = "default_scratch_l2_gc_interval_secs")]
+    pub gc_interval_secs: u64,
+}
+
+impl Default for ScratchL2Config {
+    fn default() -> Self {
+        Self {
+            enabled: default_scratch_enabled(),
+            dir: None,
+            max_gb: default_scratch_l2_max_gb(),
+            flush_mbps: default_scratch_l2_flush_mbps(),
+            flush_queue_max_mb: default_scratch_l2_flush_queue_max_mb(),
+            get_timeout_ms: default_scratch_l2_get_timeout_ms(),
+            io_threads: default_scratch_l2_io_threads(),
+            gc_interval_secs: default_scratch_l2_gc_interval_secs(),
+        }
+    }
+}
+
+fn default_scratch_l2_max_gb() -> u64 {
+    300
+}
+fn default_scratch_l2_flush_mbps() -> u64 {
+    25
+}
+fn default_scratch_l2_flush_queue_max_mb() -> u64 {
+    4096
+}
+fn default_scratch_l2_get_timeout_ms() -> u64 {
+    500
+}
+fn default_scratch_l2_io_threads() -> usize {
+    4
+}
+fn default_scratch_l2_gc_interval_secs() -> u64 {
+    86_400
+}
+
+/// `[scratch.cache_server]`（ADR-0075 D5 (b)、Phase G3）: `celeris cache-server`（loopback だけに bind）。既定で動く。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchCacheServerConfig {
+    /// `false` なら sccache の server は常に G2 の local disk で動く（`celerisctl scratch env --server`）。
+    #[serde(default = "default_scratch_enabled")]
+    pub enabled: bool,
+    /// `127.0.0.1:<port>`（既定 4237）。
+    #[serde(default = "default_scratch_cache_server_port")]
+    pub port: u16,
+    /// DAV の Bearer token（`SCCACHE_WEBDAV_TOKEN`）。既定 `<scratch>/cache-server.token`（cache server が初回に作る）。
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
+}
+
+impl Default for ScratchCacheServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_scratch_enabled(),
+            port: default_scratch_cache_server_port(),
+            token_file: None,
+        }
+    }
+}
+
+fn default_scratch_cache_server_port() -> u16 {
+    task_worker::scratch::DEFAULT_CACHE_SERVER_PORT
+}
+
+/// `[scratch.l2] dir` の既定（ADR-0075 D1 / D5）。
+fn default_l2_dir() -> PathBuf {
+    celeris_state_dir().join("cache/sccache-l2")
+}
+
+fn celeris_state_dir() -> PathBuf {
+    std::env::var_os("CELERIS_STATE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| task_core::home_dir().map(|h| h.join(".local/celeris")))
+        .unwrap_or_else(|| PathBuf::from(".local/celeris"))
+}
+
+/// `[scratch.sccache]`（ADR-0075 D4、Phase G2）。**既定値だけで動く**（本番 config に足すのは、この節を知る
+/// release の昇格後。D7 の N-1 の規則）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchSccacheConfig {
+    #[serde(default = "default_scratch_enabled")]
+    pub enabled: bool,
+    /// `SCCACHE_SERVER_PORT`（既定 4236）。
+    #[serde(default = "default_scratch_sccache_port")]
+    pub port: u16,
+    /// 本物の sccache。既定 `$CELERIS_STATE_DIR/tools/sccache/bin/sccache`（`scripts/scratch/setup-sccache.sh` が置く）。
+    /// `~` は展開し、相対ならこの設定ファイル基準。
+    #[serde(default)]
+    pub binary: Option<PathBuf>,
+}
+
+impl Default for ScratchSccacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_scratch_enabled(),
+            port: default_scratch_sccache_port(),
+            binary: None,
+        }
+    }
+}
+
+fn default_scratch_sccache_port() -> u16 {
+    task_worker::scratch::DEFAULT_SCCACHE_PORT
+}
+
+/// `[scratch.cargo]`（ADR-0075 D4、Phase G2）: scratch を使う経路の cargo の既定。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchCargoConfig {
+    /// `false`（既定）なら `CARGO_INCREMENTAL=0` を与える。
+    #[serde(default)]
+    pub incremental: bool,
+    /// `CARGO_PROFILE_DEV_DEBUG`（既定 `"line-tables-only"`）。`""` なら与えない。
+    #[serde(default = "default_scratch_dev_debug")]
+    pub dev_debug: String,
+}
+
+impl Default for ScratchCargoConfig {
+    fn default() -> Self {
+        Self {
+            incremental: false,
+            dev_debug: default_scratch_dev_debug(),
+        }
+    }
+}
+
+fn default_scratch_dev_debug() -> String {
+    task_worker::scratch::DEFAULT_DEV_DEBUG.to_string()
+}
+
+/// `[scratch.sccache] binary` の既定（ADR-0075 D4）。
+fn default_sccache_binary() -> PathBuf {
+    std::env::var_os("CELERIS_STATE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| task_core::home_dir().map(|h| h.join(".local/celeris")))
+        .unwrap_or_else(|| PathBuf::from(".local/celeris"))
+        .join("tools/sccache/bin/sccache")
+}
+
+impl Default for ScratchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_scratch_enabled(),
+            dir: None,
+            targets_max_gb: default_scratch_targets_max_gb(),
+            l1_max_gb: default_scratch_l1_max_gb(),
+            total_max_gb: default_scratch_total_max_gb(),
+            high_watermark: default_scratch_high_watermark(),
+            low_watermark: default_scratch_low_watermark(),
+            external_lease_ttl_secs: default_scratch_external_lease_ttl_secs(),
+            waiting_keep_secs: default_scratch_waiting_keep_secs(),
+            failed_keep_secs: default_scratch_failed_keep_secs(),
+            completed_grace_secs: default_scratch_completed_grace_secs(),
+            warm_seeds_per_repo: default_scratch_warm_seeds_per_repo(),
+            gc_max_per_tick: default_scratch_gc_max_per_tick(),
+            adopt: default_scratch_enabled(),
+            adopt_max_distance: default_scratch_adopt_max_distance(),
+            measure_interval_secs: default_scratch_measure_interval_secs(),
+            sccache: ScratchSccacheConfig::default(),
+            cargo: ScratchCargoConfig::default(),
+            l2: ScratchL2Config::default(),
+            cache_server: ScratchCacheServerConfig::default(),
+        }
+    }
+}
+
+fn default_scratch_enabled() -> bool {
+    true
+}
+fn default_scratch_targets_max_gb() -> u64 {
+    100
+}
+fn default_scratch_l1_max_gb() -> u64 {
+    40
+}
+fn default_scratch_total_max_gb() -> u64 {
+    150
+}
+fn default_scratch_high_watermark() -> f64 {
+    0.90
+}
+fn default_scratch_low_watermark() -> f64 {
+    0.70
+}
+fn default_scratch_external_lease_ttl_secs() -> u64 {
+    21_600
+}
+fn default_scratch_waiting_keep_secs() -> u64 {
+    172_800
+}
+fn default_scratch_failed_keep_secs() -> u64 {
+    86_400
+}
+fn default_scratch_completed_grace_secs() -> u64 {
+    600
+}
+fn default_scratch_warm_seeds_per_repo() -> usize {
+    1
+}
+fn default_scratch_gc_max_per_tick() -> usize {
+    8
+}
+fn default_scratch_adopt_max_distance() -> u64 {
+    200
+}
+fn default_scratch_measure_interval_secs() -> u64 {
+    30
 }
 
 /// `[containers]`（ADR-0043 D3。Phase 56）: リポジトリの `run` が `container` のタスクを
@@ -2021,6 +2315,24 @@ impl Config {
         if cfg.workspace.build_cache_dir.is_relative() {
             cfg.workspace.build_cache_dir = base.join(&cfg.workspace.build_cache_dir);
         }
+        // ADR-0075 D7: `[scratch] dir`（書いたときだけ。既定は `scratch_dir()` が build_cache_dir の親から組む）。
+        if let Some(dir) = &cfg.scratch.dir {
+            let expanded = task_core::expand_home(dir, task_core::home_dir().as_deref());
+            cfg.scratch.dir = Some(if expanded.is_relative() {
+                base.join(&expanded)
+            } else {
+                expanded
+            });
+        }
+        // ADR-0075 D4（Phase G2）: `[scratch.sccache] binary`（書いたときだけ）。
+        if let Some(bin) = &cfg.scratch.sccache.binary {
+            let expanded = task_core::expand_home(bin, task_core::home_dir().as_deref());
+            cfg.scratch.sccache.binary = Some(if expanded.is_relative() {
+                base.join(&expanded)
+            } else {
+                expanded
+            });
+        }
         if let Some(token_file) = &cfg.api.token_file
             && token_file.is_relative()
         {
@@ -2890,6 +3202,91 @@ impl Config {
         });
     }
 
+    /// ADR-0075 D7: `[scratch] dir`。書いていなければ `[workspace] build_cache_dir` の親の `scratch/`。
+    pub fn scratch_dir(&self) -> PathBuf {
+        match &self.scratch.dir {
+            Some(dir) => dir.clone(),
+            None => self
+                .workspace
+                .build_cache_dir
+                .parent()
+                .map(|p| p.join("scratch"))
+                .unwrap_or_else(|| self.workspace.build_cache_dir.join("scratch")),
+        }
+    }
+
+    /// ADR-0075 D1: `[scratch]` を解決した値（NFS の検査をしない。テストと `scratch_settings` の下請け）。
+    pub fn scratch_settings_unchecked(&self) -> task_worker::scratch::ScratchSettings {
+        let c = &self.scratch;
+        let gib = task_worker::scratch::GIB;
+        task_worker::scratch::ScratchSettings {
+            enabled: c.enabled,
+            disabled_reason: None,
+            dir: self.scratch_dir(),
+            targets_max_bytes: c.targets_max_gb.saturating_mul(gib),
+            l1_max_bytes: c.l1_max_gb.saturating_mul(gib),
+            total_max_bytes: c.total_max_gb.saturating_mul(gib),
+            high_watermark: c.high_watermark,
+            low_watermark: c.low_watermark,
+            external_lease_ttl_secs: c.external_lease_ttl_secs,
+            waiting_keep_secs: c.waiting_keep_secs,
+            failed_keep_secs: c.failed_keep_secs,
+            completed_grace_secs: c.completed_grace_secs,
+            warm_seeds_per_repo: c.warm_seeds_per_repo,
+            gc_max_per_tick: c.gc_max_per_tick,
+            adopt: c.adopt,
+            adopt_max_distance: c.adopt_max_distance,
+            measure_interval_secs: c.measure_interval_secs,
+            sccache: task_worker::scratch::SccacheSettings {
+                enabled: c.sccache.enabled,
+                binary: c
+                    .sccache
+                    .binary
+                    .clone()
+                    .unwrap_or_else(default_sccache_binary),
+                server_port: c.sccache.port,
+            },
+            cargo: task_worker::scratch::CargoTuning {
+                incremental: c.cargo.incremental,
+                dev_debug: Some(c.cargo.dev_debug.clone()).filter(|v| !v.is_empty()),
+            },
+            l2: task_worker::scratch::L2Settings {
+                enabled: c.l2.enabled,
+                dir: c
+                    .l2
+                    .dir
+                    .as_deref()
+                    .map(|d| task_core::expand_home(d, task_core::home_dir().as_deref()))
+                    .unwrap_or_else(default_l2_dir),
+                max_bytes: c.l2.max_gb.saturating_mul(gib),
+                flush_mbps: c.l2.flush_mbps,
+                flush_queue_max_mb: c.l2.flush_queue_max_mb,
+                get_timeout_ms: c.l2.get_timeout_ms,
+                io_threads: c.l2.io_threads,
+                gc_interval_secs: c.l2.gc_interval_secs,
+            },
+            cache_server: task_worker::scratch::CacheServerSettings {
+                enabled: c.cache_server.enabled,
+                port: c.cache_server.port,
+                token_file: c
+                    .cache_server
+                    .token_file
+                    .as_deref()
+                    .map(|d| task_core::expand_home(d, task_core::home_dir().as_deref()))
+                    .unwrap_or_else(|| self.scratch_dir().join("cache-server.token")),
+            },
+        }
+    }
+
+    /// ADR-0075 D1: 起動時の検査つき。`dir` か `sccache-l1/` が NFS 上なら `enabled = false` と理由
+    /// （dispatcher が起動ログに出す）。
+    pub fn scratch_settings(&self) -> task_worker::scratch::ScratchSettings {
+        task_worker::scratch::apply_nfs_check(
+            self.scratch_settings_unchecked(),
+            task_worker::scratch::is_on_nfs,
+        )
+    }
+
     pub fn dispatch_config(&self) -> DispatchConfig {
         DispatchConfig {
             delivery: task_ops::delivery::DeliveryPolicy {
@@ -2974,6 +3371,8 @@ impl Config {
             shared_build_cache: self.workspace.shared_build_cache,
             build_cache_dir: self.workspace.build_cache_dir.clone(),
             workspace_prune_after_secs: self.workspace.prune_after_secs,
+            // ADR-0075（Phase G1）: scratch pool（NFS 上なら無効化した理由つき）。
+            scratch: self.scratch_settings(),
             // ADR-0072 D18（Phase E1）/ D13・D14（Phase E3）: continuation・gate・planner。
             execution: task_dispatch::ExecutionConfig {
                 continuation: self.execution.continuation,
@@ -2996,6 +3395,8 @@ impl Config {
                 .unwrap_or_default(),
                 parallel: self.execution.parallel,
                 max_parallel_work_units: self.execution.max_parallel_work_units,
+                // Phase F5-fix3: config.toml に欄は無い（ADR-0072 D18 / ADR-0074 §4 の既定のまま）。
+                limits: task_core::ExecutionLimits::default(),
             },
         }
     }
@@ -4943,6 +5344,192 @@ tiers = ["cheap"]
                 adapter: Some("claude-code".into())
             }
         );
+    }
+
+    /// ADR-0075 D4（Phase G2）: `[scratch.cargo]` の既定は `CARGO_INCREMENTAL=0` と `line-tables-only`、
+    /// `[scratch.sccache]` の既定は有効・port 4236・`$CELERIS_STATE_DIR/tools/sccache/bin/sccache`。節を書かなくても
+    /// 動き（D7 の N-1 の規則）、書けば上書きでき、未知のキーは拒否する。
+    #[test]
+    fn scratch_cargo_defaults_disable_incremental() {
+        let cfg: Config =
+            toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert_eq!(
+            s.cargo,
+            task_worker::scratch::CargoTuning {
+                incremental: false,
+                dev_debug: Some("line-tables-only".to_string()),
+            }
+        );
+        assert!(s.sccache.enabled);
+        assert_eq!(s.sccache.server_port, 4236);
+        assert!(
+            s.sccache.binary.ends_with("tools/sccache/bin/sccache"),
+            "{}",
+            s.sccache.binary.display()
+        );
+        let owner = task_worker::scratch::Owner::task("01T");
+        let env = task_worker::scratch::cargo_env_with(
+            &s,
+            &owner,
+            &task_worker::scratch::SccacheState::Disabled {
+                reason: String::new(),
+            },
+        );
+        assert!(env.contains(&("CARGO_INCREMENTAL".to_string(), "0".to_string())));
+        assert!(env.contains(&(
+            "CARGO_PROFILE_DEV_DEBUG".to_string(),
+            "line-tables-only".to_string()
+        )));
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.sccache]\nenabled = false\nport = 4300\nbinary = \"/opt/sccache\"\n[scratch.cargo]\nincremental = true\ndev_debug = \"\"\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert!(!s.sccache.enabled);
+        assert_eq!(s.sccache.server_port, 4300);
+        assert_eq!(s.sccache.binary, PathBuf::from("/opt/sccache"));
+        assert_eq!(
+            s.cargo,
+            task_worker::scratch::CargoTuning {
+                incremental: true,
+                dev_debug: None,
+            }
+        );
+        for bad in [
+            "[scratch.sccache]\nbogus = 1\n",
+            "[scratch.cargo]\nbogus = 1\n",
+        ] {
+            assert!(
+                toml::from_str::<Config>(&format!(
+                    "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{bad}"
+                ))
+                .is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]` / `[scratch.cache_server]` は書かなくても既定で動く（D7 の N-1 の
+    /// 規則）。L2 の既定は `$CELERIS_STATE_DIR/cache/sccache-l2`（NFS）、25 MB/s、300 GB。cache server は 4237、token は
+    /// `<scratch>/cache-server.token`、L1 は `<scratch>/cache-l1`。書けば上書きでき、未知のキーは拒否する。
+    #[test]
+    fn scratch_l2_defaults_work_without_the_section() {
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"/srv/scratch\"\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert!(s.l2.enabled);
+        assert!(
+            s.l2.dir.ends_with("cache/sccache-l2"),
+            "{}",
+            s.l2.dir.display()
+        );
+        assert_eq!(s.l2.max_bytes, 300 * task_worker::scratch::GIB);
+        assert_eq!(
+            (
+                s.l2.flush_mbps,
+                s.l2.flush_queue_max_mb,
+                s.l2.get_timeout_ms
+            ),
+            (25, 4096, 500)
+        );
+        assert!(s.cache_server.enabled);
+        assert_eq!(s.cache_server.port, 4237);
+        assert_eq!(
+            s.cache_server.token_file,
+            PathBuf::from("/srv/scratch/cache-server.token")
+        );
+        let store = crate::cache_server::store_config(&s);
+        assert_eq!(store.l1_dir, PathBuf::from("/srv/scratch/cache-l1"));
+        assert_eq!(store.l2_dir.as_deref(), Some(s.l2.dir.as_path()));
+        assert_eq!(store.flush_bytes_per_sec, 25_000_000);
+        assert_eq!(store.l1_max_bytes, 40 * task_worker::scratch::GIB);
+        assert_eq!(store.l2_get_timeout, Duration::from_millis(500));
+
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.l2]\nenabled = false\ndir = \"/nfs/l2\"\nmax_gb = 10\nflush_mbps = 0\n[scratch.cache_server]\nport = 4299\ntoken_file = \"/etc/t\"\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert!(!s.l2.enabled);
+        assert_eq!(s.l2.dir, PathBuf::from("/nfs/l2"));
+        assert_eq!(s.cache_server.port, 4299);
+        assert_eq!(s.cache_server.token_file, PathBuf::from("/etc/t"));
+        let store = crate::cache_server::store_config(&s);
+        assert_eq!(
+            store.l2_dir, None,
+            "L2 disabled means an L1-only cache server"
+        );
+        assert_eq!(store.flush_bytes_per_sec, 0);
+        for bad in [
+            "[scratch.l2]\nbogus = 1\n",
+            "[scratch.cache_server]\nbogus = 1\n",
+        ] {
+            assert!(
+                toml::from_str::<Config>(&format!(
+                    "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{bad}"
+                ))
+                .is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// ADR-0075 D7: `[scratch] dir` の既定は `build_cache_dir` の親の `scratch/`。
+    #[test]
+    fn scratch_defaults_follow_the_build_cache_parent() {
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[workspace]\nbuild_cache_dir = \"/var/lib/celeris/build-cache\"\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert!(s.enabled);
+        assert_eq!(s.dir, PathBuf::from("/var/lib/celeris/scratch"));
+        assert_eq!(s.targets_max_bytes, 100 * task_worker::scratch::GIB);
+        assert_eq!(s.l1_max_bytes, 40 * task_worker::scratch::GIB);
+        assert_eq!(s.total_max_bytes, 150 * task_worker::scratch::GIB);
+        assert_eq!((s.high_watermark, s.low_watermark), (0.90, 0.70));
+        assert_eq!(s.external_lease_ttl_secs, 21_600);
+        assert_eq!(s.gc_max_per_tick, 8);
+        assert!(s.adopt);
+        // 明示すればそれを使う。未知のキーは拒否。
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"/srv/scratch\"\ntargets_max_gb = 10\nhigh_watermark = 0.8\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert_eq!(s.dir, PathBuf::from("/srv/scratch"));
+        assert_eq!(s.targets_max_bytes, 10 * task_worker::scratch::GIB);
+        assert_eq!(s.high_watermark, 0.8);
+        assert!(
+            toml::from_str::<Config>(
+                "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nbogus = 1\n"
+            )
+            .is_err()
+        );
+        // 起動時の検査は一時ディレクトリ（ローカル）では有効のまま。
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg: Config = toml::from_str(&format!(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"{}\"\n",
+            tmp.path().join("scratch").display()
+        ))
+        .unwrap();
+        assert!(cfg.dispatch_config().scratch.enabled);
+    }
+
+    /// ADR-0075 D7: `[scratch] enabled = false` で F5-fix の挙動に戻す（dispatcher は build_cache_dir を使う）。
+    #[test]
+    fn scratch_can_be_disabled() {
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nenabled = false\n",
+        )
+        .unwrap();
+        let d = cfg.dispatch_config();
+        assert!(!d.scratch.enabled);
+        assert_eq!(d.scratch.disabled_reason, None);
+        assert!(d.shared_build_cache);
     }
 
     #[test]

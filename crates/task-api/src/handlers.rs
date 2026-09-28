@@ -190,6 +190,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         // ADR-0072 D14（Phase E2）: ExecutionPlan の採用。実装は `crate::execution`。
         .merge(crate::execution::routes())
         .route("/api/v1/daemon", get(daemon))
+        // ADR-0075 D6（Phase G1）: scratch pool の観測値（`celerisctl scratch status --json` と同じ schema）。
+        .route("/api/v1/metrics/scratch", get(metrics_scratch))
         .route("/api/v1/config", get(config))
         .route("/api/v1/schema", get(schema))
         .fallback(fallback)
@@ -2988,6 +2990,21 @@ async fn daemon(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiRe
     ))
 }
 
+/// ADR-0075 D6（Phase G1）: `GET /metrics/scratch`。ディスパッチャが tick ごとに組んだ `DaemonSnapshot.scratch`
+/// （`celeris.scratch-status/1`）をそのまま返す。スナップショットが無い（daemon が動いていない）・scratch を持たない
+/// 構成（`shared_build_cache = false`）は 404 `scratch_unavailable`（`celerisctl scratch status` は daemon 無しでも出せる）。
+async fn metrics_scratch(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
+    no_query(&raw)?;
+    match state.snapshot().and_then(|s| s.scratch) {
+        Some(status) => Ok(json_response(StatusCode::OK, &status)),
+        None => Err(ApiProblem::new(
+            StatusCode::NOT_FOUND,
+            "scratch_unavailable",
+            "no scratch status yet (the daemon has not published a snapshot, or [workspace] shared_build_cache is off); use `celerisctl scratch status`",
+        )),
+    }
+}
+
 /// ADR-0033 D3 / D5: ディスパッチャのスナップショットに、秘書レベルの未読の報告・通知の判定・未決定の
 /// 認可の件数を載せる。
 fn daemon_snapshot_with_reports(state: &ApiState) -> Option<task_ops::daemon::DaemonSnapshot> {
@@ -3072,6 +3089,13 @@ mod tests {
     use crate::{ApiSettings, ApiState};
 
     fn state(dir: &std::path::Path) -> ApiState {
+        state_rx(dir, tokio::sync::watch::channel(None).1)
+    }
+
+    fn state_rx(
+        dir: &std::path::Path,
+        rx: tokio::sync::watch::Receiver<Option<task_ops::daemon::DaemonSnapshot>>,
+    ) -> ApiState {
         let settings = ApiSettings {
             documentation_state_dir: None,
             listen: "127.0.0.1:7710".parse().unwrap_or_else(|e| panic!("{e}")),
@@ -3143,8 +3167,132 @@ mod tests {
             docs_repo_root: Some(dir.join("workspace")),
             llm_sources: None,
         };
-        let (_tx, rx) = tokio::sync::watch::channel(None);
         ApiState::new(settings, rx).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    fn state_with_tx(
+        dir: &std::path::Path,
+    ) -> (
+        ApiState,
+        tokio::sync::watch::Sender<Option<task_ops::daemon::DaemonSnapshot>>,
+    ) {
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        (state_rx(dir, rx), tx)
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 8: `GET /api/v1/metrics/scratch` は `DaemonSnapshot.scratch`（`celerisctl scratch
+    /// status --json` と同じ `task_ops::daemon::ScratchStatus`）を返し、その JSON のキーは committed schema の
+    /// `ScratchStatus` の properties と一致する。スナップショットが無ければ 404。
+    #[tokio::test]
+    async fn metrics_scratch_matches_the_status_schema() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let (state, tx) = state_with_tx(dir.path());
+        let app = router(state);
+        let get = || {
+            Request::get("/api/v1/metrics/scratch")
+                .header("host", "127.0.0.1:7710")
+                .header("authorization", format!("Bearer {REPLAY_TEST_TOKEN}"))
+                .body(Body::empty())
+                .unwrap_or_else(|e| panic!("{e}"))
+        };
+        let resp = app
+            .clone()
+            .oneshot(get())
+            .await
+            .unwrap_or_else(|e| match e {});
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let status = task_ops::daemon::ScratchStatus {
+            schema: task_ops::daemon::SCRATCH_STATUS_SCHEMA.to_string(),
+            enabled: true,
+            disabled_reason: None,
+            dir: "/var/lib/celeris/scratch".into(),
+            observed_at: "2026-09-28T00:00:00Z".into(),
+            fs_total_bytes: Some(252 << 30),
+            fs_free_bytes: Some(91 << 30),
+            targets_bytes: 62 << 30,
+            pinned_bytes: 18 << 30,
+            targets_max_bytes: 100 << 30,
+            total_max_bytes: 150 << 30,
+            effective_max_bytes: 106 << 30,
+            high_watermark: 0.9,
+            low_watermark: 0.7,
+            pressure: "none".into(),
+            owners: vec![task_ops::daemon::ScratchOwnerView {
+                owner: "task-01ABC".into(),
+                kind: "task".into(),
+                class: "p0".into(),
+                reason: "task running".into(),
+                has_target: true,
+                size_bytes: Some(18 << 30),
+                estimated_bytes: 18 << 30,
+                measured_at: None,
+                lease_mtime: Some("2026-09-28T00:00:00Z".into()),
+                repo_key: Some("agent-platform-0123456789".into()),
+                base_commit: Some("0123456789ab".into()),
+                adopted_from: None,
+                work_unit_key: None,
+            }],
+            legacy: vec![task_ops::daemon::ScratchLegacyView {
+                path: "/var/lib/celeris/build-cache/cargo/agent-platform-dev".into(),
+                class: "legacy".into(),
+                size_bytes: Some(21 << 30),
+                last_write: None,
+            }],
+            last_gc: Some(task_ops::daemon::ScratchGcView {
+                at: "2026-09-28T00:00:00Z".into(),
+                pressure: "none".into(),
+                emergency: false,
+                removed: vec![task_ops::daemon::ScratchGcRemovedView {
+                    id: "task-01ABC/wu-01DEF".into(),
+                    class: "p3".into(),
+                    estimated_bytes: 3 << 30,
+                    why: "immediate".into(),
+                }],
+                reclaimed_bytes: 3 << 30,
+            }),
+            sccache: Some(task_ops::daemon::ScratchSccacheView {
+                state: "ready".into(),
+                reason: None,
+                binary: "/home/u/.local/celeris/tools/sccache/bin/sccache".into(),
+                port: 4236,
+                dir: "/var/lib/celeris/scratch/sccache-l1".into(),
+                max_bytes: 40 << 30,
+                stats: None,
+            }),
+            cache: None,
+        };
+        let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
+            "instance_id": "01TEST", "pid": 1, "hostname": "h", "started_at": "2026-09-28T00:00:00Z",
+            "last_tick_at": "2026-09-28T00:00:00Z", "ticks": 1, "tick_ms": 1000, "in_flight": [],
+            "cooldowns": [], "awaiting_human": [], "unroutable": [], "providers": []
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        snapshot.scratch = Some(status.clone());
+        tx.send_replace(Some(snapshot));
+        let resp = app.oneshot(get()).await.unwrap_or_else(|e| match e {});
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            json,
+            serde_json::to_value(&status).unwrap_or_else(|e| panic!("{e}"))
+        );
+        // committed schema の `ScratchStatus` と同じキー（CLI の `--json` も同じ型を出す）。
+        let schema = crate::schema::api_v1_schema_value();
+        let props = schema["$defs"]["ScratchStatus"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("ScratchStatus is not in the api schema"));
+        let mut schema_keys: Vec<&String> = props.keys().collect();
+        schema_keys.sort();
+        let obj = json.as_object().unwrap_or_else(|| panic!("not an object"));
+        let mut keys: Vec<&String> = obj.keys().collect();
+        keys.sort();
+        assert_eq!(keys, schema_keys);
+        assert_eq!(json["schema"], "celeris.scratch-status/1");
     }
 
     /// この単体テストだけで使う管理系トークン。

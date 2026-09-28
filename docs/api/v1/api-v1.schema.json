@@ -3537,6 +3537,17 @@
           "default": null,
           "description": "ADR-0033 D3（Phase 25）: 秘書レベルの未読の報告と通知の判定。**API が応答を組むときに埋める**\n唯一のフィールド（`last_notified_at` は `POST /reports/notified` が進める API プロセスの観測値で、\nディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。"
         },
+        "scratch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0075 D6（Phase G1）: scratch pool の観測値（`GET /api/v1/metrics/scratch` と `celerisctl scratch status --json`\nと同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。"
+        },
         "started_at": {
           "type": "string"
         },
@@ -13371,6 +13382,737 @@
       ],
       "type": "object"
     },
+    "ScratchCacheStats": {
+      "description": "ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の\n累計、容量は byte、時刻は RFC 3339。",
+      "properties": {
+        "flush_dropped": {
+          "description": "待ち行列の上限で「L2 に書かない」で落とした数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flush_last_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flush_mbps": {
+          "description": "flusher の帯域の上限（MB/s、0 = 無制限）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flush_oldest_age_secs": {
+          "description": "待ち行列の先頭（最古）の待ち時間（秒）。空なら `None`。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "flush_queue_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flush_queue_len": {
+          "description": "flusher（L1 → L2 の非同期 write-back）の待ち行列と遅延。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flush_skipped_existing": {
+          "description": "L2 に既にあったので書かなかった数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flush_written": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "flush_written_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gets": {
+          "description": "GET（HEAD を含み、`.sccache_check` を除く）と PUT の数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l1_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l1_dir": {
+          "description": "L1（ローカル）。",
+          "type": "string"
+        },
+        "l1_entries": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l1_evicted": {
+          "description": "L1 の上限で LRU に落とした数（未 flush の entry は落とさない）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l1_hits": {
+          "description": "GET の結果: L1 hit / L2 hit / miss（`gets = l1_hits + l2_hits + misses`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l1_max_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_bytes": {
+          "description": "L2 の使用量と entry 数（直近の走査〈GC〉と以後の flush から。走査前は `None`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "l2_corrupt": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_degraded_since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "l2_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "l2_enabled": {
+          "description": "L2（NFS。content-addressed な immutable `<k0k1>/<key>.zst`）。",
+          "type": "boolean"
+        },
+        "l2_entries": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "l2_errors": {
+          "description": "L2 の I/O の失敗・GET のタイムアウト・checksum 不一致で捨てた entry の数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_gc_last_at": {
+          "description": "直近の L2 の GC（`l2_max_bytes` を超えた分を mtime の古い順に消す）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "l2_gc_removed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_gc_removed_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_hits": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "l2_max_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_retry_at": {
+          "description": "切り離し中なら次に L2 を試す時刻。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "l2_scanned_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "l2_state": {
+          "description": "`ok` | `degraded`（連続失敗で切り離し中。GET は L1 だけで応答し、flusher は待つ）| `disabled`。",
+          "type": "string"
+        },
+        "l2_timeouts": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "misses": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "promotes": {
+          "description": "L2 hit を L1 へ書き戻した数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "puts": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema": {
+          "description": "常に `celeris.scratch-cache-stats/1`。",
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "started_at",
+        "observed_at",
+        "gets",
+        "puts",
+        "l1_hits",
+        "l2_hits",
+        "misses",
+        "promotes",
+        "l1_dir",
+        "l1_bytes",
+        "l1_entries",
+        "l1_max_bytes",
+        "l1_evicted",
+        "l2_enabled",
+        "l2_state",
+        "l2_max_bytes",
+        "l2_errors",
+        "l2_timeouts",
+        "l2_corrupt",
+        "l2_gc_removed",
+        "l2_gc_removed_bytes",
+        "flush_queue_len",
+        "flush_queue_bytes",
+        "flush_written",
+        "flush_written_bytes",
+        "flush_skipped_existing",
+        "flush_dropped",
+        "flush_mbps"
+      ],
+      "type": "object"
+    },
+    "ScratchCacheView": {
+      "description": "ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。",
+      "properties": {
+        "endpoint": {
+          "description": "`http://127.0.0.1:<port>`（`SCCACHE_WEBDAV_ENDPOINT`）。",
+          "type": "string"
+        },
+        "reason": {
+          "description": "`ready` でない理由。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sccache_mode": {
+          "description": "sccache の server が起動時に選んだ backend（`celerisctl scratch env --server` が `<scratch>/bin/sccache-server.mode`\nに書く）: `webdav`（この cache server）| `disk`（G2 の local disk）。記録が無ければ `None`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`ready`（`/healthz` が応答）| `disabled`（`[scratch.cache_server] enabled = false`）| `unavailable`（応答なし）。",
+          "type": "string"
+        },
+        "stats": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchCacheStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "cache server の `/stats`（応答が無ければ `None`）。"
+        }
+      },
+      "required": [
+        "state",
+        "endpoint"
+      ],
+      "type": "object"
+    },
+    "ScratchGcRemovedView": {
+      "description": "GC が rename した 1 つ。",
+      "properties": {
+        "class": {
+          "description": "`legacy` | `stray` | `p1` | `p2` | `p3` | `seed`。",
+          "type": "string"
+        },
+        "estimated_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "why": {
+          "description": "`immediate`（watermark に関係なく回収）| `pressure`（目標に届くまで）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "class",
+        "estimated_bytes",
+        "why"
+      ],
+      "type": "object"
+    },
+    "ScratchGcView": {
+      "description": "直近の GC 1 回。",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "emergency": {
+          "description": "空き < `min_free_disk_mb` の緊急 GC か。",
+          "type": "boolean"
+        },
+        "pressure": {
+          "description": "その回の `pressure`。",
+          "type": "string"
+        },
+        "reclaimed_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed": {
+          "items": {
+            "$ref": "#/$defs/ScratchGcRemovedView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "at",
+        "pressure",
+        "emergency",
+        "removed",
+        "reclaimed_bytes"
+      ],
+      "type": "object"
+    },
+    "ScratchLegacyView": {
+      "description": "pool の外の旧い target 1 つ。",
+      "properties": {
+        "class": {
+          "description": "`legacy`（1 時間以上更新が無く回収できる）| `p0`（未測定・1 時間以内に更新あり）。",
+          "type": "string"
+        },
+        "last_write": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "class"
+      ],
+      "type": "object"
+    },
+    "ScratchOwnerView": {
+      "description": "scratch pool の owner 1 つ（`targets/<owner>/`）。",
+      "properties": {
+        "adopted_from": {
+          "description": "adopt で引き継いだ元の owner。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_commit": {
+          "description": "base commit の先頭 12 桁。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "class": {
+          "description": "`p0` | `p1` | `p2` | `p3` | `seed` | `stray`。",
+          "type": "string"
+        },
+        "estimated_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "has_target": {
+          "description": "`target/` があるか（GC が刈った後は lease だけが残る）。",
+          "type": "boolean"
+        },
+        "kind": {
+          "description": "`task` | `work_unit` | `release` | `agent` | `stray`。",
+          "type": "string"
+        },
+        "lease_mtime": {
+          "description": "`lease.json` の mtime（生存の合図）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "measured_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "description": "`task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>`（owner として読めない野良はパス）。",
+          "type": "string"
+        },
+        "reason": {
+          "description": "分類の理由（`task running`、`lease expired` など）。",
+          "type": "string"
+        },
+        "repo_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "description": "測定したサイズ（未測定は `None`）と、GC が使う推定値。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "work_unit_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "owner",
+        "kind",
+        "class",
+        "reason",
+        "has_target",
+        "estimated_bytes"
+      ],
+      "type": "object"
+    },
+    "ScratchSccacheStats": {
+      "description": "`sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。",
+      "properties": {
+        "cache_size_bytes": {
+          "description": "L1 の使用量（byte。読めなければ `None`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "compile_requests": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hits": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "misses": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rust_hits": {
+          "description": "Rust だけの hit / miss（owner をまたいだ依存の hit を見る。U1）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rust_misses": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "compile_requests",
+        "hits",
+        "misses",
+        "rust_hits",
+        "rust_misses"
+      ],
+      "type": "object"
+    },
+    "ScratchSccacheView": {
+      "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。",
+      "properties": {
+        "binary": {
+          "description": "本物の sccache（`[scratch.sccache] binary`）。",
+          "type": "string"
+        },
+        "dir": {
+          "description": "`SCCACHE_DIR`。",
+          "type": "string"
+        },
+        "max_bytes": {
+          "description": "`SCCACHE_CACHE_SIZE`（byte）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "port": {
+          "description": "`SCCACHE_SERVER_PORT`。",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "`ready` でない理由。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`ready`（run に `RUSTC_WRAPPER` を与える）| `disabled`（設定で無効）| `unavailable`（バイナリか server が無い）。",
+          "type": "string"
+        },
+        "stats": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchSccacheStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`sccache --show-stats` の要約（`celerisctl scratch status` が server に問い合わせたときだけ。daemon の\nスナップショットでは `None`〈tick で client を起こさない〉）。"
+        }
+      },
+      "required": [
+        "state",
+        "binary",
+        "port",
+        "dir",
+        "max_bytes"
+      ],
+      "type": "object"
+    },
+    "ScratchStatus": {
+      "description": "ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。\n容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。",
+      "properties": {
+        "cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchCacheView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の\nスナップショットには無い。"
+        },
+        "dir": {
+          "description": "`[scratch] dir`。",
+          "type": "string"
+        },
+        "disabled_reason": {
+          "description": "無効化した理由（NFS 上など）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_max_bytes": {
+          "description": "実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "scratch が有効か（`[scratch] enabled = false`、または NFS 上で無効化したら `false`）。",
+          "type": "boolean"
+        },
+        "fs_free_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fs_total_bytes": {
+          "description": "`dir` の filesystem の容量と空き（statvfs。読めなければ `None`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "high_watermark": {
+          "format": "double",
+          "type": "number"
+        },
+        "last_gc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchGcView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "直近の GC（rename したものがあった回）。"
+        },
+        "legacy": {
+          "description": "pool の外の旧い target（`build_cache_dir/cargo/*`、`release-build/.cargo-target`）の残り。",
+          "items": {
+            "$ref": "#/$defs/ScratchLegacyView"
+          },
+          "type": "array"
+        },
+        "low_watermark": {
+          "format": "double",
+          "type": "number"
+        },
+        "observed_at": {
+          "description": "この状態を組んだ時刻（RFC 3339）。",
+          "type": "string"
+        },
+        "owners": {
+          "description": "owner ごとの行（owner の文字列順）。",
+          "items": {
+            "$ref": "#/$defs/ScratchOwnerView"
+          },
+          "type": "array"
+        },
+        "pinned_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pressure": {
+          "description": "`none` | `high_watermark` | `low_disk` | `emergency`。",
+          "type": "string"
+        },
+        "sccache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScratchSccacheView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。"
+        },
+        "schema": {
+          "description": "常に `celeris.scratch-status/1`。",
+          "type": "string"
+        },
+        "targets_bytes": {
+          "description": "`targets/` の推定使用量と、そのうち P0（絶対に消さない）の量。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "targets_max_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_max_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "enabled",
+        "dir",
+        "observed_at",
+        "targets_bytes",
+        "pinned_bytes",
+        "targets_max_bytes",
+        "total_max_bytes",
+        "effective_max_bytes",
+        "high_watermark",
+        "low_watermark",
+        "pressure",
+        "owners",
+        "legacy"
+      ],
+      "type": "object"
+    },
     "SecretList": {
       "description": "`GET /secrets`。`[secrets]` が未設定なら 409 `secrets_unavailable`（`dir: None` の応答は返さない）。",
       "properties": {
@@ -16373,6 +17115,10 @@
       "$ref": "#/$defs/MessagePostBody",
       "description": "Phase 24（ADR-0033 D4）: 対話（`POST /org/{id}/messages` と `GET /org/{id}/messages`）。"
     },
+    "metrics_scratch": {
+      "$ref": "#/$defs/ScratchStatus",
+      "description": "ADR-0075 D6（Phase G1）: `GET /metrics/scratch`（`celerisctl scratch status --json` と同じ `celeris.scratch-status/1`）。"
+    },
     "milestone_create": {
       "$ref": "#/$defs/MilestoneCreateBody"
     },
@@ -16724,7 +17470,8 @@
     "execution_plan_create",
     "task_execution",
     "phase_gate",
-    "execution_metrics"
+    "execution_metrics",
+    "metrics_scratch"
   ],
   "title": "ApiV1Schema",
   "type": "object"

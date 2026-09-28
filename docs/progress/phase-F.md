@@ -1360,25 +1360,189 @@ ADR-0074 D3 の (d)〜(h)。作業は worktree の中（main へ merge / push �
 - 本番での確認（F5-1 dogfood の 4 回目）: 並列 WU の `runs/<run_id>/request.json` の `cargo_target_dir` が WU ごとに違うこと、WU done 後に `<build_cache_dir>/cargo/<repo-key>/wu-*` が消えること、replan の差分が統合 WU で拒否されないことを確かめる。
 - 別 Task 同士（同じリポジトリの Task 単位の run）は今も `<repo-key>` を共有する（ADR-0066 D1 のまま）。同じ偽のコンパイルエラーが Task をまたいで出るなら、Task 単位にも分けるかを判断する。
 
-## Phase F5-1 dogfood（4 回目、2026-09-28）
+## F5-fix2: WU run の完了が記録されない（dogfood 4 回目）（2026-09-28）
 
-3 成果を独立した WU で実装し、統合後の HEAD `5470893aa3a9` で全体ゲートを通した。
+### 症状
 
-- planner / reviewer run を worker と同じ `QuotaActivity` の開始・終了に通し、`Event::QuotaEstimated` を記録する。`ExecutionMetrics.quota` の `runs_by_role` は `WorkerStarted.role` から導き、旧イベントで役割が不明なら worker として数える（ADR-0076）。dispatcher と集計の回帰テストを追加した。
-- 案件計画のマイルストーン Task が dispatch されたら途中目標を `approved` → `in_progress` に上げる。Task が `done` になっても `auto_advance = false` では人の `ok` を待ち、`true` では tick で一度だけ `reached` にする。案件 DAG の節点バッジもこの状態を表示する（ADR-0077）。dispatch・完了・DAG のテストを追加した。
-- `docs/celeris-api-v1.md` に案件計画の生成・決定、案件詳細の `project_plan`、phase-gate、`auto_advance` 更新の型と状態コードを追記した。
+- タスク 01M3JXB3DHVBWKWKPW04DTG6SJ（計画 v3 01M3K0X3Z4ZF3XGKEVCP5TQ77B）の `gate` WU（kind = test、checks 5 本）の run が
+  `runs/<run>/result.json`（type = done、evidence criterion 0/1、input ~1.59M tokens）を書いて終わったのに、`worker_finished` が無く、
+  `runs.status = running`・WU `running` のまま。約 2 時間後に `infra_requeue: lease expired (run_id=phase:…:gate:…)` →
+  `restart_reconcile` で ready に戻され、やり直しになった。2 回発生:
+  - run 01M3K0X49JB5JP5TQH304ZTRW2: result.json 03:39:03Z → lease 失効 05:30:04Z（seq 984〜986）。
+  - run 01M3K7WNJGYAPNBPMBVJXZ96CC: result.json 05:43:02Z → lease 失効 07:34:04Z（seq 1053〜1055。本 fix の調査中に本番で予測どおり
+    発生。その後 run 01M3KF2HFMHPJR7YEB5HMT38MQ〈claude、result.json 無しの infra_requeue〉、run 01M3KFDDQRTKPT7881HEC1DDVW が走っている）。
 
-### 統合後の証拠
+### 根本原因
 
-`wu/gate/artifacts/gate.md` の結果（Cargo は Celeris 指定の `CARGO_TARGET_DIR` を使用）:
+- **lease の期限が決め手**: 失効時刻は result.json の時刻 + 111 分（03:39:04 → 05:30:04、05:43:03 → 07:34:03）。
+  `review_timeout_secs = 600 × (checks 5 × 2 + 1) + lease_grace_secs 60 = 6660 s` で、`spawn_work_unit_checks` が検査の前に延ばす
+  lease と一致する（修正前 `crates/task-dispatch/src/dispatcher.rs:4214-4223`）。つまり run の完了は受け取られ、**WU の checks が
+  spawn された後に、検査の完了（`Completion::WorkUnitChecks`）が失われた**。WU の scratch target には 05:43:06 の cargo 起動
+  （`.rustc_info.json`）以降の書き込みが無く、GUI の vitest の結果（`node_modules/.vite/vitest/*/results.json`）も worker の 05:40:31
+  のまま（検査は途中で止まった）。
+- **なぜ失われたか**: `on_worker_finished` は run を `running` から外してから（`take_running_by_run_id`、修正前 L4090）
+  `spawn_work_unit_checks`（修正前 L4180-4250、spawn は L4236）で検査を `tokio::spawn` するが、その handle をどこにも持たない。
+  `Dispatcher::in_flight()`（修正前 L2265-2267（L2266: `self.running.len() + self.reviewing.len()`））と `TickReport.in_flight`（修正前 L2888）は
+  検査を数えないので、draining のインスタンスの supervisor（`crates/celeris/src/instance.rs:412` `if in_flight == 0` → drained、exit 0）
+  は検査を spawn した直後の tick で exit し、検査ごと完了を失う。2 回とも検査の最中にライブ切替があった（1 回目: 03:39 検査開始 →
+  03:42 G1 の昇格、2 回目: 05:38:56 切替で旧 G1 デーモンが draining → 05:43:02 run 完了・検査開始 → その tick で exit）。
+  新しい active はこの run を持たず、reconcile は WU の lease（検査が延ばした 111 分）が切れるまで何もしなかった。
+  replan v3 そのものは原因ではない（v2 の gate run は検査の途中に切替が無かったので記録された。v3 以降の 2 run がたまたま切替と重なった）。
+- 同じ形の潜在不具合: 工程の統合（`integrating`）も `in_flight` に数えていなかった。また `drain_completions`（修正前 L3716 / L3746）は
+  `on_worker_finished` / `on_work_unit_checks_finished` のエラーを `?` で tick ごと返し、受信済みの完了を捨てていた（今回の 2 件の直接の
+  原因ではないが、同じ「完了が黙って消える」症状になる）。
 
-- `cargo fmt --all -- --check` → exit 0。
-- `cargo test --workspace` → exit 0、**2515 passed / 0 failed / 5 ignored**。
-- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
-- `cd gui && pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm test -- --reporter=dot` → 各 exit 0。GUI は 74 files / **1115 passed / 0 failed**。lint は 275 files、error 0、既存の informational finding 2 件。
+### 修正（`crates/task-dispatch/src/dispatcher.rs`、schema 変更なし）
+
+- (a) `checking: HashMap<run_id, CheckingEntry{task_id, handle}>` を足し、`spawn_work_unit_checks` が入れ、`Completion::WorkUnitChecks`
+  の受信・Task が Running でなくなったとき（`abort_stale_runs`）・`abort_all_runs` で外す。`in_flight()` は
+  `running + reviewing + checking + integrating`、`TickReport.in_flight` も `in_flight()`。draining のインスタンスは検査・統合が
+  終わって完了を記録するまで exit しない。
+- (a') lease の照合: `reclaim_expired_leases` は `checking` の run がある Task の lease を回収せずに延ばす（検査が
+  `review_timeout × (2n+1)` より長引く場合。timeout の 2 倍の再試行があるので最悪 3n 倍かかりうる）。`reconcile_parallel_tasks` は
+  `checking` の run を「手元の run」とみなす。
+- (b) `drain_completions` は確定のエラーで抜けず `record_finalisation_failure` を呼ぶ: `WorkerFinished{outcome: "infra_requeue:
+  finalisation failed: <err>", end: harness_error(infra)}` と `runs` の `harness_error` を残し、Task の lease を持つ run は
+  `InfraRequeue`（上限超過で `infra failure ×N`）+ WU を ready（reason `finalise_failed`）、工程の lease（v2）の WU の run は Task を
+  遷移させずに WU だけを戻し、同じ WU で `max_infra_retries` を超えたら WU を failed（ADR-0072 D12/D17 の replan / 失敗へ）。
+- (c) P-F5-3 の result.json の部分: lease（または WU の lease）が切れた run で、このインスタンスの `running`/`checking` に無く、
+  `runs/<run_id>/result.json` に終端（done / question / yielded / budget_exhausted / 供給側の失敗でない error）があるものは、
+  requeue せず `on_worker_finished` と同じ経路で確定させる（checks があれば走らせ直す。`finalise_from_result_json`、
+  `terminal_from_run_dir`）。`reclaim_expired_leases` と `reconcile_parallel_tasks` の両方から呼ぶ。
+- ADR-0074 末尾に「Phase F5-fix2 実装時の逸脱・明確化」を追記。
+
+### 証拠
+
+- 再現テスト（`task_dispatch::dispatcher::tests`、本番と同じ形: 1 工程・kind = test の `gate` WU・checks 2 本、1 回目は検査で落ちて
+  `work_unit_retry`〈runs = 2、本番の replan v3 後と同じ行の形〉、2 回目の run が criterion 0/1 の evidence と 1.59M tokens の usage で done）:
+  - `draining_dispatcher_keeps_work_unit_checks_in_flight_until_the_completion_is_recorded`
+  - `lease_expired_work_unit_run_with_a_result_json_is_finalised_instead_of_requeued`
+  - `result_json_finalisation_records_the_completion_end_to_end`
+  - `a_finalisation_failure_is_recorded_as_an_infra_requeue`（v1 の WU、Task の lease）
+  - `a_finalisation_failure_of_a_parallel_work_unit_resets_only_that_unit`（v2、上限超過で WU failed）
+- 修正前の挙動に戻して（`in_flight()` を `running + reviewing`、result.json からの確定を無効化）実行 → 上の最初の 3 本が FAILED:
+  「WU の checks が走っているのに in_flight() == 0」、`["infra_requeue: lease expired (run_id=phase:…:gate:…)"]`（本番と同じ
+  `infra_requeue` → `restart_reconcile` の列）。修正後は 5 本とも ok。
+- 全体ゲート:
+  - `cargo fmt --all -- --check` → exit 0
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0、警告 0
+  - `cargo test --workspace --no-fail-fast` → exit 0、passed 2576 / failed 0 / ignored 7
+  - GUI・生成型・schema は触っていない（gen-diff 不要）。
 
 ### 未解決事項・提案
 
-- この dogfood の本来の目的である、並列 WU の `CARGO_TARGET_DIR` 分離と終端後の削除、および replan で daemon 由来の統合 WU が拒否されないことは、本番実行で確認する。上記のコード検査はその代わりにはならない。
-- 同じリポジトリの別 Task 間で共有する target は引き続き監視し、同種の偽コンパイルエラーが再発した場合に Task 単位の分離を検討する。
-- GUI lint の informational finding 2 件は既存の `gui/scripts/check-resume-recovery.mjs` に残る。今回の成果の受け入れは妨げない。
+- P-F5-3 の残り: 新しい active が「draining の旧デーモンが持つ run」を lease 失効より前に引き継ぐこと（run のプロセスが消え
+  result.json があるなら、どのインスタンスも持っていないと判断できれば即座に確定できる）はしていない。今回の (a) で旧デーモンは検査が
+  終わるまで exit しないので、本番の 2 件の経路は閉じた。旧デーモンがクラッシュした場合は lease 失効（最大 `review_timeout × (2n+1)`）
+  まで待ってから (c) で確定する。
+- 検査前に延ばす lease の式（`review_timeout × (2n+1) + lease_grace`）は timeout の再試行（最大 3 倍）を含まない。(a') で検査中は
+  回収しないので実害は無くしたが、式そのものは変えていない。
+- 2 回目の run の `worker_progress` が 05:40:47Z（item_33）で止まり stdout.jsonl は 05:43:01Z（item_38）まで続いていた件は未調査
+  （draining 中の旧デーモンの progress の間引き・書き込みの問題の可能性。完了の喪失とは独立）。
+- 本番への反映は昇格待ち（本 fix は production に触れていない）。
+
+### 昇格の証跡（2026-09-28）
+
+- release af65cfb6592d（main af65cfb）: gate FMT / TEST / CLIPPY すべて exit 0（workspace の test run は 07:54〜07:57Z）。
+  verify `ok=true live_ok=true`、schema 28。2026-09-28T09:24:03Z に live へ昇格（backup `20260928-092356-pre-af65cfb6592d`）。
+- 観察: gate を `RUSTC_WRAPPER` を export した環境で走らせると、`cache_server_down_means_no_rustc_wrapper` と
+  `runs_fall_back_to_plain_cargo_when_the_server_is_down` の 2 本が落ちる（run の環境が daemon の環境の `RUSTC_WRAPPER` を継ぐため）。
+  後の Phase への問い: cache server が落ちているとき、daemon は継いだ `RUSTC_WRAPPER` を run の環境から外すべきか。
+
+## F5-fix3: planner が計画の上限を知らない / lease 失効 run の runs 行（2026-09-28）
+
+### 症状
+
+- 不具合 1（タスク 01M3JXB3DHVBWKWKPW04DTG6SJ、events seq 1282〜1351）: reviewer が criterion 5（`docs/progress/phase-F.md` の main との
+  競合）で不合格 → `review_fail` → replan の planner run 01M3KHDJ5YWCM3659ZWC50GPX1（claude-opus-5-5）が 08:18:36Z に
+  `error(retryable=true): invalid execution plan: work unit sync-main: too many checks: 8 > 6`。再試行の planner run
+  01M3KHGNJC6V8M6MCRV6VA2KQC（08:18:46Z〜08:19:42Z）も同じエラー → `blocked`（worker_question）。人が上限を答えて解除した。
+- 不具合 2: 同じタスクの `runs` 行 01M3K0X49JB5JP5TQH304ZTRW2（03:28:29Z 開始）と 01M3K7WNJGYAPNBPMBVJXZ96CC（05:30:34Z 開始）が、
+  daemon が `worker_finished{outcome: "infra_requeue: lease expired …", end: harness_error(lease_expired)}`（seq 985 / 1054）を
+  書いた後も `status = 'running'`・`finished_at = NULL` のまま（WU はその後 done）。
+
+### 根本原因
+
+- 不具合 1:
+  - planner のプロンプトは上限のうち WU の数と budget の丸めしか書いていなかった（修正前 `crates/task-worker/src/claude_code.rs:923`
+    「Plan at most {max_work_units} WorkUnits」）。`ExecutionPlannerContext`（修正前 `crates/task-worker/src/protocol.rs:525-570`）に
+    `max_checks` 等の欄が無く、dispatcher も渡していなかった（修正前 `crates/task-dispatch/src/dispatcher.rs:9597` `let limits =
+    task_core::ExecutionLimits::default();` から `max_work_units` / `max_phases` / budget だけを詰める）。検証は
+    `crates/task-core/src/execution_plan.rs:1043`（`wu.checks.len() > limits.max_checks`、既定 6 は L399）。
+  - 再試行の planner run は前の拒否理由を受け取っていなかった: `give_up_or_retry_planner`（修正前 `dispatcher.rs:5696-5699`）は
+    `worker_progress`「計画を採用できませんでした（…）。もう一度だけ試します。」を events に書くだけで、`execution_planner_context` は
+    それを読まない。
+  - **2 回目が同じ 8 本を出した直接の原因**: 拒否された `artifacts/execution-plan.json` がそのまま残っていた。2 回目の planner は
+    08:19:25Z に「The plan from the previous attempt is still there, and it checks out: done WUs are unchanged and it adds one WU,
+    sync-main. I'll keep it and write result.json.」と書き、同じファイルを再提出した（seq 1345）。
+  - 検証の上限が dispatcher の 3 か所（修正前 `dispatcher.rs:5339 / 5457 / 5468`）とプロンプト用（L9597）でそれぞれ
+    `ExecutionLimits::default()` を呼んでいた（出どころが 1 つでない）。
+- 不具合 2: `reclaim_expired_leases` の requeue の経路（修正前 `dispatcher.rs:7013-7030`）は `WorkerFinished` を
+  `apply_transition_with_events` で書くだけで `run_index_finish` を呼ばない（通常の完了 L4999・planner L5361・確定失敗 L7337 は呼ぶ）。
+  同じく `abort_stale_runs`（修正前 L7099〜。cancel 等で止めた run）は `WorkerFinished` も `runs` 行も書かず、drain の打ち切り
+  （`abort_all_runs`、L2293〜）で止めた Reviewer run の行も誰も閉じない。
+
+### 修正（schema 変更なし）
+
+- (a) 上限の出どころを 1 つに: `ExecutionConfig.limits: ExecutionLimits`（既定 `ExecutionLimits::default()`、config.toml の欄は無い）。
+  planner の出力の検証・`adopt_plan_with_children`・`replan`・planner のプロンプトがすべてこの値を使う。`ExecutionPlannerContext` に
+  `max_title_chars` / `max_objective_chars` / `max_done_when_items` / `max_done_when_chars` / `max_checks` / `max_rationale_chars` /
+  `max_plan_json_bytes` / `max_children` を追加（0 = 古い request、プロンプト側で既定に倒す。worker-protocol の schema は追加のみ）。
+  プロンプトは計画の形の説明の直後（schema の前）に「### Plan limits」節で全部の上限を出す（WU 数、v2 なら phases・children、WU ごとの
+  title / objective / done_when / **checks**、rationale、JSON の大きさ、budget の丸め、replan の差分は適用後の計画に対して数えること、
+  checks が足りなければ `&&` で 1 本にまとめる例）。初回・replan の両方。
+- (b) 再試行: `planner_rejections_since_last_plan`（純粋関数）が直近の `ExecutionPlanned` より後の拒否理由（再試行の進捗と、2 回とも
+  拒否されたときの質問の文面。同じ定数から組み立て・取り出す）を集め、`ExecutionPlannerContext.previous_attempt_errors` に入れる。
+  プロンプトは「### Your previous plan was REJECTED」節でエラーをそのまま並べ、「その点だけ直せ、再提出するな」と指示する。
+  `give_up_or_retry_planner` は拒否した `artifacts/execution-plan.json` を `execution-plan.rejected.json` に移す（次の試行が
+  「残っている計画は検証済み」と思い込まない）。
+- (c) 決定的な正規化（余った checks を `sh -c "a && b"` に畳む等）は**入れない**（ADR-0074 の F5-fix3 節に理由）。
+- 不具合 2: `SqliteStore` が `WorkerFinished` を書く同じトランザクションで、その run の `runs` 行がまだ `running` なら終端にする
+  （status は `end` から、無ければ `harness_error`、`finished_at` は event の ts、usage/metrics は event にあれば。
+  `crates/task-core/src/store.rs` `close_run_row_for_event_tx`、`append_event_tx` と `apply_transition_tx` の両方）。
+  `task_ops::replay::rebuild_work_units_and_runs` と同じ規則なので `replay --check` とも一致する。既に `run_index_finish` で閉じた行
+  （checkpoint を持つ）は変えない。lease 失効の requeue・コメントの割り込み・F5-fix2 の確定失敗はこれで閉じる。誰も `WorkerFinished` を
+  書かなかった経路は dispatcher の `close_aborted_run` が `WorkerFinished{outcome: "interrupted: …", end: cancelled}` を足す:
+  `abort_stale_runs` の worker run（cancel 等）と Reviewer run、drain の打ち切りの Reviewer run（worker run は従来どおり新しい active の
+  lease 失効の経路で閉じる）。`interrupted: ` 接頭辞なので GUI の分類は Interrupted（失敗に数えない）、コメントの割り込みも消費しない。
+- `runs.status` の利用者の確認: `execution_metrics`（最新 run の status）、WU の continuation 文脈（`Run #n <status>`）、
+  `replay --check`、`run_work_unit_keys`（status を見ない）。GUI は `runs` 行を直接読まない（events の `WorkerFinished` から組む）。
+  どれも「終わった run が running に見える」誤りが消えるだけで、新しい status 値は増えない。
+
+### 証拠
+
+- 新しいテスト:
+  - `task_worker::claude_code::tests::the_planner_prompt_states_every_plan_limit_from_the_context`（既定と違う値で全上限が
+    文面に出る、schema 指示の前にある、初回・replan）
+  - `task_worker::claude_code::tests::the_retry_planner_prompt_contains_the_previous_validation_error`
+  - `task_dispatch::dispatcher::tests::the_retry_planner_run_receives_the_previous_validation_error_and_config_limits`
+    （`limits.max_checks = 3` の config で 4 本の checks → 1 回目の context に `max_checks = 3`、2 回目の context に
+    `"work unit sync-main: too many checks: 4 > 3"`、拒否ファイルが `execution-plan.rejected.json` に移り 2 回目は古い計画を読まない）
+  - `task_dispatch::dispatcher::tests::planner_rejections_are_collected_since_the_last_adopted_plan`
+  - `task_dispatch::dispatcher::tests::a_lease_expiry_requeue_closes_the_runs_row`（`harness_error`、`finished_at` あり）
+  - `task_dispatch::dispatcher::tests::a_run_aborted_by_cancel_closes_its_runs_row`（`cancelled`）
+  - `task_core::store::tests::worker_finished_closes_a_still_running_runs_row`
+- 修正を外して（store の `close_run_row_for_event_tx` 呼び出しと `set_aside_rejected_plan` を無効化）実行 →
+  `a_lease_expiry_requeue_closes_the_runs_row` と `the_retry_planner_run_receives_…` が FAILED。戻して ok。
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-planner-limits/target`、`RUSTC_WRAPPER` 無し）:
+  - `cargo fmt --all -- --check` → exit 0
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+  - `cargo test --workspace --no-fail-fast` → exit 0、passed 2583 / failed 0 / ignored 7
+  - worker-protocol の schema は `UPDATE_SCHEMA=1 cargo test -p task-worker` で再生成（欄の追加のみ）。GUI・API の生成型は触っていない。
+
+### 未解決事項・提案
+
+- 本番の 2 行（01M3K0X49JB5JP5TQH304ZTRW2 / 01M3K7WNJGYAPNBPMBVJXZ96CC）は `running` のまま（本 fix は既存の行を直さない）。
+  `celerisctl replay --check` の修復、または 1 回限りの `UPDATE runs … WHERE status='running' AND run_id IN (SELECT … FROM events …)` を
+  人の判断で。
+- 提案: replan の差分（`execution-plan-delta/1`）は phases を足せない（dogfood 4 回目の planner は「差分では工程を足せない」と判断して
+  全体形式に書き直した）。差分に `add_phases` を足すか、プロンプトで「新しい工程が要るなら全体形式」を明示する。
+- 提案: task-api の人の `PUT /tasks/{id}/execution-plan` と celerisctl は引き続き `ExecutionLimits::default()`（config.toml に欄が無いので
+  本番では同じ値）。上限を設定可能にするなら、そのとき `ExecutionConfig.limits` を API にも渡す。
+- 本番への反映は昇格待ち（本 fix は production に触れていない。本番 DB は read-only の照会だけ）。
+
+## F5-1 dogfood（4 回目、2026-09-28 02:26Z〜、タスク 01M3JXB3DHVBWKWKPW04DTG6SJ）: 途中経過
+
+- F5-fix と G1 の効果を本番で確認: `build` 工程の 3 WU（api-docs / milestone-progress / quota-roles）が並列に走り、`request.json` の `cargo_target_dir` は WU ごとに `scratch/targets/task-<id>/wu-<id>/target`（共有 target の混線は再現せず）。`integrate-build` も done。replan v2 / v3（差分 changed=2）が daemon 由来の統合 WU を理由に拒否されなくなった。
+- 異常 1 件: `gate` WU の run（03:28 開始）が 05:30 に `infra_requeue: lease expired` で回収され再 dispatch（再実行は 10 分で done）。1 回目の run 自身は「全体ゲート成功（2515 passed）」の result を残しているので、run の終わり際に lease が切れた（G1 昇格 03:42 のライブ切替で旧デーモンが draining のまま 2 時間の run を持っていた経路。旧デーモンが run より先に終了した可能性）。journal が取れず未確定 → 提案 P-F5-3: 「draining 中の旧デーモンが持つ run の lease」を新デーモン側が引き継いで heartbeat する（Phase 116 D5 の拡張）か、旧デーモンの終了条件に「run の lease を渡すまで待つ」を足す。
+- 途中の lane 分布: planner 3 run は standard（Opus）、worker 12 run は standard（gpt-6-sol / Opus）7 と cheap（gpt-6-luna）5。E6（全 run standard）から cheap が増えた。

@@ -147,6 +147,7 @@ fn dispatcher(
             session_rollover_tokens: 400_000,
             shared_build_cache: false,
             build_cache_dir: std::path::PathBuf::from("/nonexistent-build-cache"),
+            scratch: task_worker::scratch::ScratchSettings::disabled(),
             workspace_prune_after_secs: 0,
             execution: task_dispatch::ExecutionConfig::default(),
         },

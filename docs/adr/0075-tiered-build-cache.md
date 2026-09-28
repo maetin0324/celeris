@@ -1,7 +1,7 @@
 # ADR-0075: ビルドキャッシュの 2 層化 — target は使い捨ての scratch、再利用は sccache の L1（ローカル）/ L2（NFS）に集約し、Celeris が semantic cache manager になる
 
 - 日付: 2026-09-28
-- 状態: **Proposed**（Phase G0 = 設計。G1〜G3 は未着手）
+- 状態: **Accepted**（2026-09-28 Phase G1 完了・本番反映、Phase G2 実装、Phase G3 実装〈cache server の有効化は人〉）
 - 入力: `docs/notes/build-cache-tiering-input-2026-09-28.md`（人の設計方針。本 ADR はこれに沿う。以下「入力メモ」）
 - 関連:
   - ADR-0066（D1 共有 `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>`、D2 終端の作業場所の生成物の刈り取り）。本 ADR は D1 を**置き換える**（D2 は残す）
@@ -290,6 +290,11 @@ sccache の版上げに強い。(4) 可用性は (b) でも、L2 の I/O の隔�
   > `celerisctl scratch release --owner agent-<worktree 名>`。
 
   `celerisctl` が PATH に無い環境では `~/.local/celeris/current/bin/celerisctl` を使う（`--config` は `CELERIS_CONFIG`）。
+- **設定の新しい節は、それを知る release の昇格後にだけ本番 config に足す**（2026-09-28 G1 の本番反映で `[scratch]` を先に足し、
+  旧い版〈N-1〉が `unknown field scratch` で起動できず verify の N-1 が壊れた）。`[scratch]` 以下の節（G2 の `[scratch.sccache]` /
+  `[scratch.cargo]`、G3 の `[scratch.l2]` / `[scratch.cache_server]`）はどれも**既定値だけで動く**ように作り、変えたいときだけ、
+  昇格して N-1 がその節を知る版になった後に足す。rollback 先の版が知らない節を config に残すと rollback も壊れる（提案 P-G1-1:
+  release.sh のゲートに「現行 config を N-1 の版でも parse できるか」を足す）。
 
 ## 3. 採らない案
 
@@ -409,3 +414,148 @@ commit。テストは外部ネットワークに出ない（HTTP は loopback �
   l2_failures_detach_and_back_off, l1_eviction_keeps_unflushed_entries, pending_log_is_replayed_after_restart, invalid_keys_are_rejected}`、
   `task_dispatch::dispatcher::tests::cache_server_down_means_no_rustc_wrapper`。本物の sccache を使う e2e は `#[ignore]`。
 - **並行可否**: `crates/scratch-cache` の純粋部（store・flusher・GC）は G2 と並行できる。dispatcher / celerisctl / GUI の配線は G2 の後。
+
+## Phase G1 実装時の逸脱・明確化（2026-09-28）
+
+G1 の実装で本文と食い違った点・本文が決めていなかった点を記録する（黙って逸脱しない）。
+
+1. **`lease.json` に `ttl_secs` を足した**（D1 の欄の追加）。`celerisctl scratch lease --ttl <secs>` で外部の owner ごとに TTL を
+   変えられる（無ければ `[scratch] external_lease_ttl_secs`）。`deny_unknown_fields` のまま、欠けていてもよい欄として足した。
+2. **測定は lease の mtime を変えない**（D2 の明確化）。測定スレッドは `size_bytes` / `measured_at` を書いた後に mtime を元に戻す
+   （mtime は外部の owner の唯一の生存の合図で、測定で延命させない）。daemon の測定結果はプロセス内の cache にも持つ（legacy・野良は
+   lease が無いのでここだけ）。
+3. **seed の「その repo を使う非終端の Task」は pool の中で近似した**（D2）。P0〜P2 に分類された owner と同じ `repo_key` を「使われている
+   repo」とみなす（まだ lease を持たない ready の Task の repo までは tick で DB から引かない）。G2 以降に不足が分かれば dispatcher の
+   `task_workspaces` から足す。
+4. **未測定の推定**: 同じ repo の最大値。repo に測定済みが無ければ **pool 全体の最大値**（本文は repo の最大値だけ。0 にしないための補い）。
+5. **野良・lease の無い owner・legacy は「測定した木の最新の mtime」が 1 時間以上前のときだけ回収**する（ディレクトリ自身の mtime は
+   cargo の書き込みで更新されないため）。未測定のものは P0 扱いで消さない。legacy は pool の外なので pool の使用量・pinned に数えない
+   （空きの目標には数える）。
+6. **刈った後の lease の記録は 7 日で片づける**（`LEASE_RECORD_KEEP_SECS`、本文に無い）。target を刈られた P3 の owner で、`wu-*` の
+   子を持たないものだけ。
+7. **rename の行き先**: owner の target は `targets/.deleting-<owner-flat>-<nanos>`（Task の下の WU も pool の根に集める）、legacy は
+   同じ親の中。削除スレッドは pool の `targets/` と legacy の親の `.deleting-*` を消す。
+8. **`scratch_gc` は毎 tick 回す**（間引かない。「次の tick で rename」を守る）。空きが `min_free_disk_mb` 未満なら `check_disk_space` の
+   中で緊急 GC を先に回し、その tick の通常の phase は重ねない。
+9. **checks は adopt しない**（D3 の明確化）。WU の checks・統合 WU の検査・reviewer の checks は run と同じ owner の lease を touch して
+   env を返すだけ。adopt は run の開始時（`run_worker` の `spawn_blocking`）だけで、commit の距離もそこでだけ計算する。lease の書き込みに
+   失敗しても `CARGO_TARGET_DIR` のパスは与える（worktree 直下に target を作らせない）。
+10. **`celerisctl scratch lease` / `env` の adopt**: 候補は同じ repo の P3 の**外部の owner**（release / agent）だけ（DB を開かない）。
+    安全条件の checkout 時刻は `--worktree <path>`（無ければ `--repo`）の `.git` が**ファイル**（git worktree）のときのその mtime。分から
+    なければ adopt しない。release.sh は `git worktree add` の直後に `--repo "$SD_REPO" --worktree "$BUILD"` で呼ぶ。owner は位置引数でも
+    `--owner` でもよい。scratch が無効なら `lease` / `env` は失敗し、release.sh は従来の `$SD_RELEASES/.cargo-target` に戻る。
+11. **`ScratchStatus` に L1 / L2 の欄はまだ無い**（D6 は「G3 まで null」）。G2 / G3 で `Option` の欄として足す（追加だけなので互換）。
+    `celerisctl scratch status --json` の `last_gc` は常に null（直近の GC は daemon のメモリにしか無い）。`GET /metrics/scratch` は
+    スナップショットが無い（daemon が動いていない）・`shared_build_cache = false` のとき 404 `scratch_unavailable`。
+12. **`[scratch]` の欄**: 本文の欄に加えて `measure_interval_secs`（既定 30）を設定にした。`l1_max_gb` は G2 まで使わない。`total_max_gb`
+    は実効上限の表示と journal にだけ使う（G1 の GC の目標は `targets_max_gb` の watermark と空き）。
+13. **対象外のまま**: `[commands] setup`（worktree を作った直後に 1 度流すコマンド）には `CARGO_TARGET_DIR` を与えていない（F5-fix と同じ）。
+    コンテナ実行は Remote と同じ条件（`container_plan.is_none()`）で外しており、専用のテストは Remote（`shared_build_cache_is_not_applied_to_remote_workspaces`
+    に scratch の計画を渡す）だけ。
+
+## Phase G2 実装時の逸脱・明確化（2026-09-28）
+
+1. **U1 の答え: sccache 0.18 は `CARGO_` で始まる env を全て Rust の key に入れる**（`src/compiler/rust.rs` の `generate_hash_key`。除外は
+   `CARGO_MAKEFLAGS` / `CARGO_REGISTRIES_*` / `CARGO_BUILD_JOBS` / `CARGO_ENCODED_RUSTFLAGS` だけ）。cargo は自分の env を rustc に渡すので、
+   owner ごとに違う `CARGO_TARGET_DIR` が全ての key を変え、owner をまたいだ Rust の hit は **0 / 192**。`--out-dir` / `-L` / `--extern` の
+   パスは key から除かれ（extern は中身の hash）、registry の依存は cwd も同じ。`--remap-path-prefix` は env の値を変えず、
+   `SCCACHE_BASEDIRS` は 0.18 では C/C++ の preprocessor 出力にしか効かない。**D4 の配線を変えた**: `RUSTC_WRAPPER` は本物の sccache
+   ではなく、Celeris が生成する `<scratch>/bin/sccache`（`unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR` → `exec <本物> "$@"`。
+   `task_worker::scratch::{wrapper_script, ensure_wrapper}`）。これで別 owner の target で Rust **163 / 192（84.9 %）**、別のパスに展開した
+   同じ commit でも 162 / 192 が hit（phase-G.md の G2 checkpoint 1）。残る miss は workspace のメンバーと、build script の `OUT_DIR`
+   （target の中の絶対パス。dep-info の env として値ごと key に入る）に依存する crate とその下流（内訳は未確認）。
+2. **wrapper のファイル名は `sccache`**。cc-rs は `RUSTC_WRAPPER` の stem が `sccache` のときだけ C/C++ にも同じ wrapper を使う
+   （`cc-1.4.6` の `rustc_wrapper_fallback`）。置き場は `targets/` の外の `<scratch>/bin/`（GC の対象にしない）。中身が同じなら書き直さない。
+3. **`SCCACHE_IDLE_TIMEOUT=0` も env に入れる**（D4 本文の列挙どおり。G2 の受け入れ条件 2 の列挙には無いが、client が万一 server を起こした
+   ときに idle で止まって別の env の server に入れ替わらないように）。env の順は固定: `CARGO_TARGET_DIR`、`CARGO_INCREMENTAL`、
+   `CARGO_PROFILE_DEV_DEBUG`、`RUSTC_WRAPPER`、`SCCACHE_DIR`、`SCCACHE_CACHE_SIZE`、`SCCACHE_SERVER_PORT`、`SCCACHE_IDLE_TIMEOUT`。
+4. **`[scratch.cargo]` は sccache と独立に、scratch が有効な経路に常に与える**（受け入れ条件 2 の「sccache 系を与えない（scratch 系は残る）」の
+   「scratch 系」に含めた。容量の得〈受け入れ条件 3〉は sccache の有無に依らないため）。欄の名前は D4 の `dev_debug`（依頼文の `debug`）。
+   `incremental = true` は `CARGO_INCREMENTAL` を与えない（`=1` にしない）、`dev_debug = ""` は `CARGO_PROFILE_DEV_DEBUG` を与えない。
+5. **`[scratch.sccache]` の欄は `enabled` / `port` / `binary`**（D4 の `server_port` は `port`）。既定は `enabled = true`、`port = 4236`、
+   `binary = $CELERIS_STATE_DIR/tools/sccache/bin/sccache`。`enabled` でもバイナリが無い・server が応答しなければ自動で配線しない
+   （`resolve_sccache` の `unavailable`）。**節を書かなくても動く**（D7 の N-1 の規則）。`ScratchSettings::with_dir`（テスト用の既定）は
+   sccache を配線しない（手元の server をテストが拾わないため）。
+6. **server の有無は `127.0.0.1:<port>` への TCP 接続（300 ms）だけで見る**。sccache の client（`--show-stats` など）は server が無いと
+   自分で起こすので、run の開始時・checks・tick では呼ばない。`celerisctl scratch status` だけが、TCP で確かめた直後に `--show-stats
+   --stats-format=json` を呼ぶ（万一の起動に備えて server と同じ env を渡す）。確かめた直後に server が落ちた run の中では client が
+   server を起こしうる（run の cgroup に入る。残る危険として `docs/ops/sccache-l1.md` に書いた）。
+7. **`celeris-sccache.service` の起動方法**: `SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1 sccache`（sccache の内部の起動経路。0.18.0 で
+   前景に留まることを確認）。env は `celerisctl scratch env --server`（新設。`SCCACHE_DIR` / `SCCACHE_CACHE_SIZE` / `SCCACHE_SERVER_PORT` /
+   `SCCACHE_IDLE_TIMEOUT` と `CELERIS_SCCACHE_BIN`。sccache が無効・バイナリが無ければ失敗）を `eval` して exec。unit の雛形は
+   `deploy/systemd/celeris-sccache.service`（`install-units.sh` が置くだけ）。手順書 `docs/ops/sccache-l1.md`。
+8. **`tools/sccache/VERSION` は版だけ（`0.18.0`）**。D4 の「配布バイナリの sha256 を照合」は採らず、`setup-sccache.sh` は
+   `cargo install sccache --locked --version <VERSION> --root <tools>/sccache`（target は scratch の `agent-setup-sccache`、終わったら消す）か、
+   `--from <binary>`（同じ版の既存のバイナリを写す。ネットワークに出ない）。
+9. **`ScratchStatus.sccache`（`ScratchSccacheView`: state / reason / binary / port / dir / max_bytes / stats）を足した**（`#[serde(default)]`。
+   逸脱 11 の「G2 で `Option` の欄として足す」）。daemon のスナップショットは状態だけ（stats は `None`）、`celerisctl scratch status` は
+   `--show-stats` の要約（hits / misses / Rust の hits / misses / cache_size）も入れる。GUI の 1 行は G3（L1 / L2 の hit 率）まで変えない。
+10. **run の経路を `cargo_env` に揃えた**（G1 の申し送り）。`run_worker` の scratch の分岐は `spawn_blocking` の中で allocate → resolve →
+    `cargo_env_with`。checks は `check_cargo_target_env` → `cargo_env`。legacy（scratch 無効）は従来どおり `CARGO_TARGET_DIR` だけ。
+    `CargoTargetPlan::Scratch` の設定は `Box`（clippy の `large_enum_variant`）。
+11. **U3 の結果**: `cargo test --workspace --no-run` で target 19.48 GiB → 6.47 GiB（incremental の廃止で −5.2 GiB、`line-tables-only` で
+    −7.8 GiB。`test` profile にも効く）。空からのビルドは 53.5 s → 39.3 s と速くなり、1 行の編集後の再ビルドは 5.5 s → 11.2 s（約 2 倍）。
+    既定は `incremental = false` のまま（Celeris の run は空の target から始まることが多い）。sccache の依存の hit（85 %）はこのリポジトリの
+    壁時計をほとんど縮めない（39.3 s → 41.0 s。リンクと workspace のメンバーが律速）。
+12. **U6 の結果**: `cargo clippy --workspace --all-targets` は wrapper 経由の sccache でも exit 0。依存（`--emit=metadata`）は hit し、
+    clippy-driver を通る workspace のメンバーは non-cacheable。
+13. **`[commands] setup` には与えない**（G1 の逸脱 13 のまま）。setup は worktree を作った直後に 1 度だけ流すコマンドで、cargo を呼ぶ
+    とは限らない。必要になれば別 Phase。
+
+## Phase G3 実装時の逸脱・明確化（2026-09-28）
+
+1. **U5 の答え**（phase-G.md の G3 checkpoint 1。loopback の記録用 stub に本物の sccache 0.18 を向けた）:
+   - 発行されるメソッドは `GET`（entry と起動時の `/<prefix>/.sccache_check`）、`PUT`（同）、`PROPFIND`（Depth 0。PUT の前に毎回
+     親の collection）、`MKCOL`（PROPFIND が 404 のときだけ親から順に）。HEAD・DELETE・MOVE・COPY・PROPPATCH・Range は出なかった。
+     path は `/<SCCACHE_WEBDAV_KEY_PREFIX>/<k0>/<k1>/<k2>/<key>`（key は 64 桁の 16 進）。**207 の応答に `getlastmodified` が
+     無いと opendal は PUT せずに失敗する**。cache server は collection の PROPFIND に常に 207 を返す（ディレクトリは仮想）。
+   - **backend が起動時に応答しない（接続拒否・500）と sccache の server は起動に失敗する**（`Server startup failed: cache storage
+     failed to read`、exit 2）。**起動後に backend が死んでもコンパイルは続く**（GET の失敗は miss、PUT の失敗は write error）。
+     **backend が遅いと sccache は GET と PUT の両方を timeout なしで待つ**（8 秒の遅延で 1 crate のビルドが 16.4 秒）。
+   - D5 の「cache server 自身の停止」の行の未確認事項（コンパイルを続けるか）は「続ける。ただし起動時は失敗し、遅い backend は待つ」
+     で確定。これに合わせて配線を次の 2 と 3 にした。
+2. **sccache の server の backend は起動時に `celerisctl scratch env --server` が選ぶ**: cache server の `/healthz` が応答すれば webdav
+   （`SCCACHE_WEBDAV_ENDPOINT` / `SCCACHE_WEBDAV_KEY_PREFIX=sccache` / `SCCACHE_WEBDAV_TOKEN` / `SCCACHE_SERVER_PORT` /
+   `SCCACHE_IDLE_TIMEOUT`、`SCCACHE_DIR` なし）、応答しなければ G2 の local disk（`SCCACHE_DIR`）。選んだ方を
+   `<scratch>/bin/sccache-server.mode` に書く。backend は起動時に決まるので、cache server を後から有効にしたら
+   `celeris-sccache.service` を再起動する（unit の順序は `After=` / `Before=` だけで、互いを引き込まない）。
+3. **dispatcher の `/healthz` の確認は、mode が webdav のときだけ**（D5 は「run の開始時に `/healthz` を見る」）。disk で動く sccache は
+   cache server の有無に関係なく使える。webdav で動く sccache に対して cache server が応答しなければ（hang を含む。U5 の「遅い
+   backend を待ち続ける」への備え）`RUSTC_WRAPPER` を与えない。client（run）の env は G2 のまま（webdav 系も token も入れない。
+   client が万一 server を起こしても local disk で起動する）。
+4. **unit の名前は `celeris-scratch-cache.service`**（D5 本文の `celeris-cache.service` から、依頼文の名前に合わせた）。
+   `celeris --config … --log-format text cache-server`。port の既定は D5 のとおり 4237。
+5. **認証は Bearer**（D5 は Basic を第一候補）。sccache 0.18 は `SCCACHE_WEBDAV_TOKEN` を読み `Authorization: Bearer` で送る（U5 で確認）。
+   token は **`<scratch>/cache-server.token`**（D5 は `~/.config/celeris/cache-server.token`。scratch pool はローカルで owner だけが
+   書ける場所なので同じ保護になり、人の手順が要らない）。cache server が初回に `/dev/urandom` から作る（0600）。
+   `[scratch.cache_server] token_file` で変えられる。`/healthz` と `/stats` は認証しない（loopback だけに bind）。
+6. **cache server の L1 は `<scratch>/cache-l1/<k0k1>/<key>`**（D1 / D5 は `sccache-l1/` を G3 で作り直す）。cache server が落ちたときの
+   fallback で sccache が `sccache-l1/` を disk cache として使い続けるので、同じ dir にすると sccache の LRU が cache server の entry を
+   消しうる。**2 つの dir が両方育つと最悪 `2 × l1_max_gb`**（実際にはどちらか一方だけが使われる。`scratch status` に両方出る）。
+   G2 の `sccache-l1/` は消さない。
+7. **設定の欄の名前**: `[scratch.l2]` = `enabled` / `dir`（既定 `$CELERIS_STATE_DIR/cache/sccache-l2`）/ `max_gb`（D1 の `l2_max_gb`、
+   既定 300）/ `flush_mbps`（D5 の `flush_mb_per_sec`、既定 25、MB = 10^6 byte、0 = 無制限）/ `flush_queue_max_mb`（4096）/
+   `get_timeout_ms`（D5 の `l2_get_timeout_ms`、500）/ `io_threads`（4）/ `gc_interval_secs`（86400）。`[scratch.cache_server]` =
+   `enabled` / `port`（4237）/ `token_file`。どちらも書かなくても動く（D7 の N-1 の規則）。L1 の上限は `[scratch] l1_max_gb` を使う。
+8. **L2 の I/O の閉じ込め**: GET の L2 は 4 スレッド・待ち行列 16 の `L2Exec` で `get_timeout_ms` まで待ち、タイムアウト・満杯・I/O
+   エラーは miss。**3 回連続の失敗で切り離し**（degraded）、5 s から倍々で最大 300 s のバックオフ、明けたら 1 回試して成功で復帰。
+   flusher の書き込みは flusher のスレッドで直接行う（NFS が hang すると flusher だけが止まり、`flush_oldest_age_secs` が伸びる）。
+   **L2 の root が見えない（mount が外れた・dir を消された）ときは作り直さずにエラー**（mount point の下のローカルに書かない）。
+   壊れた `.zst`（checksum 不一致・切れ）は miss にして消し、切り離しの理由には数えない。
+9. **L2 の書き込み**: tmp は同じ shard の `.<key>.zst.tmp-<pid>-<nanos>-<seq>`（D5 の `<key>.zst.tmp-<pid>-<ulid>` を隠しファイルにした。
+   GC の走査で 1 時間より古いものを片づける）→ write → fsync → rename。既にあれば書かない（flusher も stat してから）。
+10. **`.pending` は追記ログ**: `<key>`（積んだ）と `-<key>`（済んだ）。起動時に最後の記録が「積んだ」の key だけを積み直し、待ち行列が
+    空になったら切り詰める（D5 は「未 flush の key を書く」だけ）。
+11. **token bucket は負債を許す形**（不足分を待ってから書く）。burst は 1 秒分。区間 T に書く量は `burst + rate × T` を超えない
+    （`token_bucket_limits_bytes_over_any_interval`、`flusher_respects_the_token_bucket` は仮想の時計で 100 MB を 25.00 MB/s 以下）。
+12. **L2 の GC**: 走査して `max_gb` を超えていれば mtime の古い順に `× 0.9` まで消す。起動 60 s 後に初回（`l2_bytes` が分かる）、以後
+    `gc_interval_secs` ごと。LRU は mtime（L2 hit で 1 日 1 回まで touch。NFS の atime は当てにしない）。
+13. **HEAD は GET と同じに数える**（sccache は HEAD を送らない）。ファイルの PROPFIND は L1 の索引、無ければ L2 の stat（stats に数えない）。
+14. **`celeris cache-server` は scratch が無効なら起動しない**（L1 を NFS に置かない。D1 の原則）。SIGTERM で待ち行列を `.pending` に
+    残して止まる。
+15. **sccache 0.18 は multilevel cache（disk + remote）を内蔵している**（U5 の調査で判明）。D5 (b) のまま Celeris の cache server が
+    階層を持つ（L2 への書き込みを critical path の外に置く・帯域制限・切り離し・GC を Celeris が制御するため）。
+16. **U4 は保留のまま**: 手動 e2e（このリポジトリ、L2 はローカル）で L1 を消した後の再ビルドが Rust 165 / 196 hit・promote 582 で、
+    L1 hit と同じ率（壁時計 37.8 s）。NFS の遅延での頭打ちは未測定（本番の L2 で測る）。事前 promote は入れていない。
+17. **所見（提案 P-G3-2）**: 毎回 miss する約 30 crate（workspace のメンバーと `OUT_DIR` 依存。G2 の残り）は owner ごとに key が変わるので、
+    毎 run 約 100 MB を L2 に書き、二度と hit しない（L2 の LRU で回収されるが NFS の帯域を使う）。

@@ -393,6 +393,60 @@ sd_use_pnpm() {
   command -v pnpm >/dev/null 2>&1 || sd_die "pnpm not found (looked in $SD_PNPM_SHIM_DIR)"
 }
 
+# ---- scratch pool の lease（ADR-0075 D7、Phase G1） -------------------------
+
+# release ゲートの `CARGO_TARGET_DIR` は scratch pool の lease（owner `release-<sha12>`）から取る。
+# `celerisctl` が無い・scratch が無効（`[scratch] enabled = false`・NFS 上）・lease に失敗したときは
+# 従来どおり `$SD_RELEASES/.cargo-target`（上の `SD_CARGO_TARGET` の既定）のまま。
+#
+# `celerisctl` の場所: `SD_CELERISCTL`（テストの偽物）> PATH の `celerisctl` > `$SD_CURRENT/bin/celerisctl`。
+SD_SCRATCH_OWNER=""
+
+sd_celerisctl_bin() {
+  if [ -n "${SD_CELERISCTL:-}" ]; then
+    [ -x "$SD_CELERISCTL" ] && { printf '%s' "$SD_CELERISCTL"; return 0; }
+    return 1
+  fi
+  if command -v celerisctl >/dev/null 2>&1; then
+    command -v celerisctl
+    return 0
+  fi
+  [ -x "$SD_CURRENT/bin/celerisctl" ] && { printf '%s' "$SD_CURRENT/bin/celerisctl"; return 0; }
+  return 1
+}
+
+# `sd_scratch_lease <sha12> <sha_full> <build_worktree>` — 成功すれば `SD_CARGO_TARGET` と `SD_SCRATCH_OWNER` を書き換える。
+# 引き継ぎ（adopt）の安全条件の checkout 時刻は `<build_worktree>/.git` の mtime（`git worktree add` の直後に呼ぶ）。
+sd_scratch_lease() {
+  local sha12="$1" sha="$2" tree="$3" ctl out
+  ctl="$(sd_celerisctl_bin)" || { sd_log "scratch: celerisctl not found; using $SD_CARGO_TARGET"; return 1; }
+  if ! out="$("$ctl" scratch lease --config "$SD_CONFIG" --owner "release-$sha12" \
+    --repo "$SD_REPO" --worktree "$tree" --base "$sha" 8>&- 9>&-)"; then
+    sd_log "scratch: lease failed (disabled or unavailable); using $SD_CARGO_TARGET"
+    return 1
+  fi
+  [ -n "$out" ] || return 1
+  SD_CARGO_TARGET="$out"
+  SD_SCRATCH_OWNER="release-$sha12"
+  return 0
+}
+
+# 長い step の前に lease の mtime を今にする（TTL 切れで GC に回収されないように）。失敗しても続ける。
+sd_scratch_touch() {
+  [ -n "$SD_SCRATCH_OWNER" ] || return 0
+  local ctl
+  ctl="$(sd_celerisctl_bin)" || return 0
+  "$ctl" scratch touch --config "$SD_CONFIG" --owner "$SD_SCRATCH_OWNER" >/dev/null 2>&1 8>&- 9>&- || true
+}
+
+# 終了時（成功・失敗とも。`trap`）に lease を返す（P3 に落ちる。次の release が adopt できる）。
+sd_scratch_release() {
+  [ -n "$SD_SCRATCH_OWNER" ] || return 0
+  local ctl
+  ctl="$(sd_celerisctl_bin)" || return 0
+  "$ctl" scratch release --config "$SD_CONFIG" --owner "$SD_SCRATCH_OWNER" >/dev/null 2>&1 8>&- 9>&- || true
+}
+
 # ---- 直列化（flock。ADR-0041 D2） -----------------------------------------
 
 # `verify.sh` は `$SD_STAGING` とポート 7711 / 7701 / 7712 を固定で使うので、2 本同時に走ると

@@ -1108,6 +1108,26 @@ fn status_label(status: task_core::Status) -> &'static str {
     }
 }
 
+/// F5-fix5: claude-code の run は headless（`claude -p`）で、turn を終えた時点で run が終わる。本番の
+/// gate WU（タスク 01M3JXB3DHVBWKWKPW04DTG6SJ / run 01M3KF2HFMHPJR7YEB5HMT38MQ）は `cargo test --workspace` を
+/// Bash の `run_in_background` で走らせ、「完了の通知を待つ」と書いて turn を終え、その command は殺された。
+/// claude-code アダプタはこれを `--append-system-prompt` で**全ての** run（worker / planner / reviewer /
+/// 対話）に渡す（役割ごとの指示文〈config.toml〉には置かない。プロンプト本文〈`prompt.txt`〉も変えない）。
+/// 決定的な定数（run ごとの値を埋め込まない）。
+pub const HEADLESS_RUN_NOTE: &str = "\
+## headless 実行（celeris）
+この run は celeris が `claude -p`（非対話・headless）で起動している。人は見ていない。\
+あなたが turn を終えた（道具を呼ばずに返答を終えた）時点で run は終わり、プロセスは終了する。\
+続きの turn は来ない。\n\
+- background task を使わない: Bash の `run_in_background`、Agent / Task の background 実行、\
+Monitor・ScheduleWakeup・Cron など「後で通知が来る」「後で起こす」仕組みは、turn を終えた瞬間に殺され、\
+通知は二度と届かない（celeris はこの run の background task を無効にしている）。\n\
+- 長い command（`cargo test --workspace`、`cargo clippy`、ビルド、GUI の test など）も foreground で実行し、\
+終わるまで待って exit code と出力を確かめる。Bash の `timeout` 引数（ミリ秒）を明示して長めに取る\
+（既定の 2 分では打ち切られる。上限はこの run の壁時計）。\n\
+- 「完了の通知を待つ」「終わったら続ける」と書いて turn を終えてはいけない。turn を終えるのは、\
+成果物と `result.json`（または `yield`）を書き終えたときだけ。\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2021,5 +2041,29 @@ mod tests {
             !out.contains("### これまでの Run"),
             "prior_runs が空なら節ごと出さない: {out}"
         );
+    }
+
+    /// F5-fix5: claude-code の全 run に足す system prompt は、headless であること・turn を終えると
+    /// run が終わること・長い command も foreground で走らせること・通知を待って turn を終えないことを言う。
+    #[test]
+    fn f5_fix5_headless_run_note_forbids_background_tasks_and_waiting_for_notifications() {
+        let note = HEADLESS_RUN_NOTE;
+        for needle in [
+            "`claude -p`",
+            "headless",
+            "turn を終えた",
+            "run は終わり",
+            "`run_in_background`",
+            "background task を使わない",
+            "foreground で実行",
+            "`cargo test --workspace`",
+            "`timeout`",
+            "「完了の通知を待つ」",
+            "`result.json`",
+        ] {
+            assert!(note.contains(needle), "missing {needle:?} in:\n{note}");
+        }
+        // 決定的（run ごとの値を持たない）で、プロンプト本文（`render`）には入らない。
+        assert!(!render(&RunContext::default(), "artifacts").contains("headless 実行"));
     }
 }

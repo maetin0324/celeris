@@ -1660,3 +1660,94 @@ run の壁時計合計 401 分。lane: cheap/gpt-6-luna 10、standard/claude-opu
 **配送**: release `57efebe4fb7d`（main 57efebe = G3-fix1 95c7267 + dogfood 成果の統合 ebe7008 + この記録）。ゲート: fmt / test / clippy 0、
 GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48Z）。verify ok=true live_ok=true schema 28。2026-09-28 11:02:23Z にライブ昇格
 （backup 20260928-110212-pre-57efebe4fb7d）。これで本番は F5-fix2 / fix3 / fix4 / G3-fix1 と dogfood 4 回目の 3 成果を含む。
+
+## F5-fix5: headless の claude-code が background task を残して turn を終える（2026-09-28）
+
+### 症状
+
+- タスク 01M3JXB3DHVBWKWKPW04DTG6SJ の `gate` WU、run 01M3KF2HFMHPJR7YEB5HMT38MQ（claude-code / claude-sonnet-5、07:36:06〜07:37:02Z）。
+  `runs/01M3KF2HFMHPJR7YEB5HMT38MQ/stdout.jsonl`:
+  - 11〜13 行目: `cargo fmt` を foreground で実行（exit 0）。
+  - 15 行目: `timeout 1800 cargo test --workspace > …/logs/test1.log` を Bash の `"run_in_background": true` で起動。16〜18 行目
+    `background_tasks_changed` / `task_started`（`is_backgrounded: true`、task `bdk7bdta1`）/ 「You will be notified when it completes」。
+  - 19〜49 行目: `ScheduleWakeup`（`prompt` 欠落で失敗）、`sleep 60`（CLI が「standalone sleep」として拒否）、`Monitor` の読み込みなどを
+    挟み、「I'll wait for the background test run to complete (a notification will arrive automatically) rather than polling」
+    を繰り返して turn を終える。
+  - 50 行目: `result` success、`stop_reason: end_turn`、`num_turns: 11`、`duration_ms: 45938`。
+  - 51〜53 行目: `background_tasks_changed []`、`task_updated … status: killed`、`task_notification … status: stopped`。
+- `artifacts/result.json` は書かれず、`result.json`（run dir）は `claude exited without …/result.json`（retryable）。WU は再実行に回り、
+  約 1 分と 1 run を失った。`rate_limit_event` は `allowed`（five_hour 13 %、seven_day 11 %）で quota ではない。
+
+### 根本原因
+
+- `claude -p`（headless）は turn を終えると session を閉じ、残った background task を殺す（51〜53 行目）。完了の通知を受け取る
+  次の turn は来ない。
+- celeris は claude-code を `claude -p <prompt> --output-format stream-json --verbose --permission-mode … --max-turns N
+  --no-session-persistence` で起動していた（修正前 `crates/task-worker/src/claude_code.rs:1421-1468`）。background task を無効にする
+  環境変数も、headless であることを伝える system prompt も渡しておらず（同 `:1488` の env の組み立て）、Bash の道具の説明
+  （「run_in_background … you will be notified」）がそのままモデルに見えていた。
+- 事後の扱いも区別が無かった: `result` success で `result.json` が無い run は一律 `RESULT_JSON_MISSING_MARKER`（修正前 `:1968`）→
+  `AdapterError::Other` → InfraRequeue で、background task が殺された事情は記録にも残らない。
+- CLI 側の切り替えの確認（LLM・ネットワークなし）: `claude --version` → 2.1.283。バイナリの文字列に
+  `function _l(){return mq().backgroundTasksDisabled||a.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS}`、Bash の入力 schema
+  `_l()?f3t().omit({run_in_background:!0,…}):…`、Agent の schema `_l()||sZ()?n.omit({run_in_background:!0}):n`、道具の説明文
+  `if(_l())return null;return"You can use the \`run_in_background\` parameter…"`。`claude --help` に background を切るフラグは無い
+  （`--bg` は session 自体を background で起動する別物）。Bash の timeout 上限は `BASH_MAX_TIMEOUT_MS`（既定 600000）。
+
+### 修正（`crates/task-worker`、schema 変更なし）
+
+- 予防（全 run）:
+  - `preamble::HEADLESS_RUN_NOTE`（新設、`crates/task-worker/src/preamble.rs:1117`）: headless であること、turn を終えると run が終わる
+    こと、`run_in_background`・Agent の background・Monitor / ScheduleWakeup / Cron に頼らないこと、長い command も foreground で
+    `timeout` を明示して走らせること、「通知を待つ」と書いて turn を終えないこと。
+  - `run_claude_code` が全 run（worker / planner / reviewer / 対話）に `--append-system-prompt <HEADLESS_RUN_NOTE>` を付ける
+    （`claude_code.rs:1556`）。プロンプト本文（`prompt.txt`）は変えない。config.toml の役割ごとの指示文には置かない。
+  - 環境変数 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` と `BASH_MAX_TIMEOUT_MS = max(600000, 壁時計 ms)`（`claude_code.rs:1622`）。
+    `env_remove` の後・`config.env` の前に置く（`config.env` の同名が勝つ）。コンテナ実行でも `container::wrap` が env を運ぶ。
+- 回復（ADR-0072 D9 の continuation。ADR-0072「Phase F5-fix5 実装時の明確化」）:
+  - `BackgroundTasks`（`claude_code.rs:1383`）: stream-json の `system` 行の `task_started`（`is_backgrounded: false` 以外）と、
+    `task_notification` / `task_updated`（completed・failed・killed・stopped・cancelled）を追う。`result` を観測した時点の
+    未完了の task を `ResultMeta.outstanding_background` に写す（`stop_reason` も読む）。
+  - `result` が success（`stop_reason` が `end_turn` か無し）・`result.json` 無し・未完了の background task ありのとき
+    （`claude_code.rs:1812`〜）:
+    - coding 系の execute run（`is_continuable_execute_run`: Execute / Approval、planner でも対話でもない）→ `Terminal::Yielded`。
+      checkpoint は worker の `checkpoint.json` を土台に `next_action`（殺された command を foreground で再実行して続け、result.json を
+      書け。前の `next_action` は括弧で残す）と `known_failures`（`headless_background_task: killed when the turn ended: <command>`）を
+      足す（`headless_background_checkpoint`）。usage も運ぶ。続きはディスパッチャの既存の continuation（新しい session +
+      checkpoint、上限 `max_continuations_per_work_unit`、進捗なし `no_progress_limit`、`CheckpointSaved` / `WorkerFinished{end:
+      yielded}`）で、会話の履歴は再送しない。
+    - それ以外（レビュー・計画・対話）→ 従来どおり `AdapterError::Other`（InfraRequeue）で、文言に
+      `(headless_background_task: background task killed when the headless turn ended: <command>)` を足す。
+    - どちらも `headless_background_task: …` で始まる進行（`WorkerProgress`）を 1 件残す（GUI の run の進行に出る）。
+  - resume（同じ session に短い追いプロンプト）は採らなかった: 仕事の run は `--no-session-persistence` で resume できる session が
+    残らず、残すには D9 (a) の wrap-up（未実装）と同じ変更が要る。D9 (b)「InfraRequeue で同じ session を resume」は ADR で不採用。
+    アダプタ内の再起動では continuation の上限・進捗なしも数えられない。新しい `HarnessErrorClass` も足していない（schema・GUI の
+    型の変更を避けた。分類は文言・進行・checkpoint の `known_failures` で見える）。
+
+### 証拠
+
+- fixture `crates/task-worker/tests/fixtures/claude-code-headless-background.jsonl`（本番の stdout.jsonl 3・14〜18・25・49〜53 行目の形を
+  縮めたもの）を流す fake claude のテスト（`crates/task-worker/src/claude_code.rs`）:
+  - `f5_fix5_background_task_killed_at_end_turn_becomes_a_continuation`（`Terminal::Yielded`、`next_action` に foreground と command、
+    worker の `completed` を保持、`WorkerCheckpointInput` として読める、usage 2277 output tokens、進行に分類名、run dir の result.json に
+    yield）
+  - `f5_fix5_a_review_run_keeps_the_missing_result_error_with_the_class`
+  - `f5_fix5_a_background_task_finished_before_the_result_is_not_misclassified`
+  - `f5_fix5_every_run_gets_the_headless_system_prompt_and_background_off`（argv に `--append-system-prompt <HEADLESS_RUN_NOTE>`、
+    子の env が `1|3600000`、`config.env` の上書きが勝ち、短い壁時計は `600000`）
+- `crates/task-worker/src/preamble.rs`: `f5_fix5_headless_run_note_forbids_background_tasks_and_waiting_for_notifications`。
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-headless-bg/target`、`RUSTC_WRAPPER` 無し）: `cargo fmt --all -- --check` → exit 0、`cargo clippy --workspace --all-targets -- -D warnings` → exit 0、`cargo test --workspace` → exit 0、passed 2601 / failed 0 / ignored 7（新規 5 本。GUI・生成型は触っていないので gen:types / typecheck は対象外）。
+
+### 未解決事項・提案
+
+- `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` の効き目はバイナリの実装（2.1.283）で確認しただけで、LLM を呼ぶ実機の run では未確認。
+  昇格後、claude-code の run の `stdout.jsonl` の `init` に続く道具呼び出しで `run_in_background` が出ないこと、`task_started` が
+  出ないことを確かめる。CLI の更新で名前が変わった場合は system prompt と回復の経路が残る。
+- foreground の Bash が `BASH_MAX_TIMEOUT_MS` を超えたときの CLI の振る舞い（background が無効なら kill のはず。
+  `CLAUDE_CODE_AUTO_BACKGROUND_TIMEOUT_MS` の自動 background は `_l()` で抑止されるように読める）は未確認。
+- 提案 P-F5-fix5-a: `ScheduleWakeup` / `Cron*` / `PushNotification` / `RemoteTrigger` など headless で意味の無い道具を
+  `--disallowedTools` で外す（今回は system prompt で禁じるだけ。道具名が CLI の版で変わるので別途）。
+- 提案 P-F5-fix5-b: 同じ形が codex / acp に無いかを確かめる（codex の `exec` も turn の終わりで終了する）。
+- 提案 P-F5-fix5-c: `headless_background_task` を `HarnessErrorClass` / run の終わり方として構造化し、GUI の run 一覧で数える
+  （schema 変更が要るので、再発が観測されたら）。
+- 本番への反映は昇格待ち（本 fix は production に触れていない。本番のファイルは read-only の参照だけ）。

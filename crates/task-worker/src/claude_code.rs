@@ -1369,6 +1369,130 @@ struct ResultMeta {
     usage: Option<Usage>,
     /// `result` フィールド（文字列。エラー時の文面）。供給側失敗の分類に使う（ADR-0010 D5）。
     result: Option<String>,
+    /// F5-fix5: `result` の `stop_reason`（`end_turn` など。無ければ `None`）。
+    stop_reason: Option<String>,
+    /// F5-fix5: この `result` を観測した時点で、まだ終わっていなかった background task の説明
+    /// （`BackgroundTasks::outstanding`）。headless の run は turn を終えると background task を殺す。
+    outstanding_background: Vec<String>,
+}
+
+/// F5-fix5: stream-json の `system` 行（`task_started` / `task_notification` / `task_updated`）から追う
+/// background task（Claude Code CLI 2.1.283 の形。本番の run 01M3KF2HFMHPJR7YEB5HMT38MQ の stdout.jsonl
+/// 17・52・53 行目）。未知の形は無視する（ADR-0006 D5）。
+#[derive(Debug, Default)]
+struct BackgroundTasks {
+    /// 開始順の `(task_id, description)`（`is_backgrounded: false` と明示されたものは除く）。
+    started: Vec<(String, String)>,
+    /// 終わった（通知・状態更新で完了・失敗・停止・kill が観測された）task_id。
+    finished: std::collections::BTreeSet<String>,
+}
+
+impl BackgroundTasks {
+    fn observe(&mut self, value: &serde_json::Value) {
+        let subtype = value.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
+        let Some(task_id) = value.get("task_id").and_then(|s| s.as_str()) else {
+            return;
+        };
+        match subtype {
+            "task_started" => {
+                if value.get("is_backgrounded").and_then(|b| b.as_bool()) == Some(false) {
+                    return;
+                }
+                if self.started.iter().any(|(id, _)| id == task_id) {
+                    return;
+                }
+                let description = value
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or(task_id);
+                self.started
+                    .push((task_id.to_string(), truncate(description, 300)));
+            }
+            // 終わりの通知（`status`: completed / failed / stopped …）。どの status でも「もう走っていない」。
+            "task_notification" => {
+                self.finished.insert(task_id.to_string());
+            }
+            "task_updated" => {
+                let status = value
+                    .pointer("/patch/status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                if matches!(
+                    status,
+                    "completed" | "failed" | "killed" | "stopped" | "cancelled"
+                ) {
+                    self.finished.insert(task_id.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// まだ終わっていない background task の説明（開始順）。
+    fn outstanding(&self) -> Vec<String> {
+        self.started
+            .iter()
+            .filter(|(id, _)| !self.finished.contains(id))
+            .map(|(_, d)| d.clone())
+            .collect()
+    }
+}
+
+/// F5-fix5: headless の run が background task を残して turn を終えたときの、続きの run への申し送り
+/// （`Terminal::Yielded` の checkpoint。ADR-0072 D9 の continuation）。worker 自身の `checkpoint.json`
+/// があれば、その欄を土台にして `next_action` と `known_failures` だけを足す。
+async fn headless_background_checkpoint(
+    artifacts_dir: &Path,
+    outstanding: &[String],
+) -> serde_json::Value {
+    let mut checkpoint = match tokio::fs::read_to_string(artifacts_dir.join("checkpoint.json"))
+        .await
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    {
+        Some(v @ serde_json::Value::Object(_)) => v,
+        _ => serde_json::json!({}),
+    };
+    let commands = outstanding
+        .iter()
+        .map(|c| format!("`{c}`"))
+        .collect::<Vec<_>>()
+        .join("、");
+    let previous_next = checkpoint
+        .get("next_action")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| format!("（前の run の次の一手: {s}）"))
+        .unwrap_or_default();
+    let next_action = format!(
+        "前の run は headless なのに background で command を走らせたまま turn を終えたため、その command は \
+         run の終わりと同時に殺され、結果は残っていない。background を使わず foreground で（Bash の \
+         `timeout` を長めに指定して）もう一度実行し、結果を確かめてから続け、最後に result.json を書くこと: \
+         {commands}{previous_next}"
+    );
+    if let Some(obj) = checkpoint.as_object_mut() {
+        obj.insert("next_action".into(), serde_json::Value::String(next_action));
+        let mut failures = obj
+            .get("known_failures")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for c in outstanding {
+            failures.push(serde_json::json!({
+                "what": format!("headless_background_task: killed when the turn ended: {c}"),
+            }));
+        }
+        obj.insert("known_failures".into(), serde_json::Value::Array(failures));
+    }
+    checkpoint
+}
+
+/// F5-fix5: 続き（continuation）に回してよい run か。coding 系の execute run だけ（ADR-0072 D10 の
+/// 予算の予告と同じ範囲。対話・計画・レビューの run は continuation の仕組みを持たない）。
+fn is_continuable_execute_run(task: &Task, context: &RunContext) -> bool {
+    matches!(task.kind, TaskKind::Execute | TaskKind::Approval)
+        && context.execution_planner.is_none()
+        && context.conversation_addressee.is_none()
 }
 
 async fn run_claude_code(
@@ -1426,7 +1550,11 @@ async fn run_claude_code(
         .arg("--permission-mode")
         .arg(&config.permission_mode)
         .arg("--max-turns")
-        .arg(req.task.budget.max_turns.to_string());
+        .arg(req.task.budget.max_turns.to_string())
+        // F5-fix5: どの run（worker / planner / reviewer / 対話）にも、headless であること・turn を
+        // 終えると run が終わること・長い command も foreground で走らせることを system prompt に足す。
+        .arg("--append-system-prompt")
+        .arg(crate::preamble::HEADLESS_RUN_NOTE);
     // ADR-0054 D1（Phase 67）: `context.session`（この run が継続セッションの一部）が無ければ、
     // Phase 66 までと同じ `--no-session-persistence`（session を残さない）。ある場合は、そのアダプタが
     // `claude-code` のときだけ、初回は `--session-id <id>`（これから使う id を固定）、2 回目以降は
@@ -1486,6 +1614,19 @@ async fn run_claude_code(
     command.args(&config.extra_args);
     // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
     crate::adapter::apply_env_removal(&mut command, &config.env_remove);
+    // F5-fix5: headless の run では background task を無効にする（Claude Code CLI 2.1.283 は
+    // `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` が立っていると Bash / Agent の `run_in_background` を道具の
+    // schema から外す）。background が無いぶん、foreground の Bash が run の壁時計まで待てるよう
+    // `BASH_MAX_TIMEOUT_MS`（既定 600000）を壁時計に合わせる。どちらも `config.env` が同名を持てば
+    // そちらが勝つ（後に `envs` で重ねる）。
+    command.env(DISABLE_BACKGROUND_TASKS_ENV, "1").env(
+        BASH_MAX_TIMEOUT_ENV,
+        limits
+            .wall_clock
+            .as_millis()
+            .clamp(600_000, u128::from(u32::MAX))
+            .to_string(),
+    );
     command
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());
@@ -1540,6 +1681,7 @@ async fn run_claude_code(
     let start = Instant::now();
     let mut last_activity = Instant::now();
     let mut last_result: Option<ResultMeta> = None;
+    let mut background = BackgroundTasks::default();
     let mut force_kill = false;
     let mut timeout_terminal: Option<Terminal> = None;
 
@@ -1596,7 +1738,7 @@ async fn run_claude_code(
                 let text = String::from_utf8_lossy(&bytes);
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    handle_line(trimmed, sink, &mut last_result);
+                    handle_line(trimmed, sink, &mut last_result, &mut background);
                 }
             }
         }
@@ -1613,75 +1755,130 @@ async fn run_claude_code(
     }
     stdout_file.flush().await?;
 
-    let (terminal, provider_failure): (Terminal, Option<ProviderFailure>) =
-        match (timeout_terminal, &last_result) {
-            // タイムアウト（wall-clock / idle）は分類しない（ADR-0010 D5）。
-            (Some(t), _) => (t, None),
-            // `result` メッセージを一度も観測できずに exit した場合はクラッシュとして扱い、
-            // artifacts/result.json（前回の run の名残や書きかけの内容）を一切信用しない（ADR-0006 D4）。
-            // stderr.log の末尾を供給側失敗として分類する（ADR-0010 D5）。
-            (None, None) => {
-                let exit_repr = match exit_status.code() {
-                    Some(code) => code.to_string(),
-                    None => "signal".to_string(),
-                };
+    let (terminal, provider_failure): (Terminal, Option<ProviderFailure>) = match (
+        timeout_terminal,
+        &last_result,
+    ) {
+        // タイムアウト（wall-clock / idle）は分類しない（ADR-0010 D5）。
+        (Some(t), _) => (t, None),
+        // `result` メッセージを一度も観測できずに exit した場合はクラッシュとして扱い、
+        // artifacts/result.json（前回の run の名残や書きかけの内容）を一切信用しない（ADR-0006 D4）。
+        // stderr.log の末尾を供給側失敗として分類する（ADR-0010 D5）。
+        (None, None) => {
+            let exit_repr = match exit_status.code() {
+                Some(code) => code.to_string(),
+                None => "signal".to_string(),
+            };
+            let tail = read_tail(&stderr_log_path, 4096).await;
+            let pf = classify_provider_failure(&tail);
+            // ADR-0054 D1（Phase 67）: resume を頼んだ run が、セッションを拒否されたように見える
+            // crash なら報告する（ディスパッチャが `node_sessions` を retire し、次の run は新規
+            // セッションになる）。文言は実機で確認していない（`provider::looks_like_resume_rejection`
+            // のコメント参照）。
+            if is_resuming && crate::provider::looks_like_resume_rejection(&tail) {
+                sink.session_resume_failed(&tail);
+            }
+            (
+                Terminal::Error {
+                    message: format!("worker exited without a result message (exit={exit_repr})"),
+                    retryable: true,
+                },
+                pf,
+            )
+        }
+        (None, Some(meta)) => {
+            // ADR-0006 Phase 115 D2: `result.json` を読む前に、work_dir 側の名残を採用する
+            // （Phase 112 D3 相当の「回収」はこのアダプタには無いが、同じ原則で最優先に判定する）。
+            adopt_result_json_written_under_work_dir(
+                &req.artifacts_dir,
+                req.work_dir.as_deref(),
+                &req.workspace,
+                run_id,
+            )
+            .await;
+            let mut outcome = terminal_from_result(
+                &req.artifacts_dir,
+                &artifacts_rel,
+                meta,
+                config.model.as_deref(),
+            )
+            .await;
+            // F5-fix5: `result` は success（`stop_reason: end_turn`）なのに `result.json` が無く、
+            // その `result` の時点で background task がまだ走っていた＝headless の run が「通知を
+            // 待つ」と言って turn を終え、CLI がその task を殺した（本番 run 01M3KF2HFMHPJR7YEB5HMT38MQ）。
+            // coding 系の execute run は ADR-0072 D9 の continuation（新しい session + checkpoint）に
+            // 回す（`Terminal::Yielded`。continuation の上限・進捗なしの判定はディスパッチャの既存の
+            // 規則に任せる）。それ以外の run は従来どおり `result.json` 不在の失敗のまま、文言に分類名を足す。
+            let missing_result_json = match &outcome {
+                (Terminal::Error { message, .. }, None)
+                    if message.starts_with(RESULT_JSON_MISSING_MARKER) =>
+                {
+                    Some(message.clone())
+                }
+                _ => None,
+            };
+            if let Some(message) = missing_result_json
+                && !meta.is_error
+                && meta.subtype == "success"
+                && meta.stop_reason.as_deref().is_none_or(|r| r == "end_turn")
+                && !meta.outstanding_background.is_empty()
+            {
+                let commands = meta.outstanding_background.join(" | ");
+                if is_continuable_execute_run(&req.task, &req.context) {
+                    sink.progress(&format!(
+                            "{HEADLESS_BACKGROUND_TASK_CLASS}: the run ended its turn while background \
+                             task(s) were still running; they were killed and no result.json was written. \
+                             Handing over to a continuation run (re-run in the foreground): {commands}"
+                        ));
+                    outcome = (
+                        Terminal::Yielded {
+                            checkpoint: headless_background_checkpoint(
+                                &req.artifacts_dir,
+                                &meta.outstanding_background,
+                            )
+                            .await,
+                            usage: usage_with_cost(meta.usage, config.model.as_deref()),
+                        },
+                        None,
+                    );
+                } else {
+                    sink.progress(&format!(
+                        "{HEADLESS_BACKGROUND_TASK_CLASS}: the run ended its turn while background \
+                             task(s) were still running; they were killed: {commands}"
+                    ));
+                    outcome = (
+                        Terminal::Error {
+                            message: format!(
+                                "{message} ({HEADLESS_BACKGROUND_TASK_CLASS}: background task \
+                                     killed when the headless turn ended: {commands})"
+                            ),
+                            retryable: true,
+                        },
+                        None,
+                    );
+                }
+            }
+            // ADR-0054 D1（Phase 113 追記）: `result` メッセージは一度観測できたが、供給側の失敗
+            // （`subtype: error_during_execution` かつ `is_error`）として終わった run は、上の
+            // `(None, None)` のクラッシュ分類（resume 拒否の検出）を一切通らなかった。本番の
+            // タスク 01M35X86XTK84F97QW0CN5PGMR / reviewer run 01M388BENASH3JEBWFS03KEQYT はこの
+            // 穴に落ちた（stderr は `No conversation found with session ID: …` の 1 行だったが、
+            // stdout の `result` の `result` フィールドにはその文言が無かったため、`result` を
+            // 観測できてしまった＝ここに来て、resume 拒否として扱われなかった）。resume を頼んだ
+            // run が `error_during_execution`/`is_error` で終わったときは、stderr の末尾と
+            // `result` メッセージ自身の文面の両方を resume 拒否の文言と照らす。
+            if is_resuming && meta.is_error && meta.subtype == "error_during_execution" {
                 let tail = read_tail(&stderr_log_path, 4096).await;
-                let pf = classify_provider_failure(&tail);
-                // ADR-0054 D1（Phase 67）: resume を頼んだ run が、セッションを拒否されたように見える
-                // crash なら報告する（ディスパッチャが `node_sessions` を retire し、次の run は新規
-                // セッションになる）。文言は実機で確認していない（`provider::looks_like_resume_rejection`
-                // のコメント参照）。
-                if is_resuming && crate::provider::looks_like_resume_rejection(&tail) {
+                let result_text = meta.result.as_deref().unwrap_or("");
+                if crate::provider::looks_like_resume_rejection(&tail)
+                    || crate::provider::looks_like_resume_rejection(result_text)
+                {
                     sink.session_resume_failed(&tail);
                 }
-                (
-                    Terminal::Error {
-                        message: format!(
-                            "worker exited without a result message (exit={exit_repr})"
-                        ),
-                        retryable: true,
-                    },
-                    pf,
-                )
             }
-            (None, Some(meta)) => {
-                // ADR-0006 Phase 115 D2: `result.json` を読む前に、work_dir 側の名残を採用する
-                // （Phase 112 D3 相当の「回収」はこのアダプタには無いが、同じ原則で最優先に判定する）。
-                adopt_result_json_written_under_work_dir(
-                    &req.artifacts_dir,
-                    req.work_dir.as_deref(),
-                    &req.workspace,
-                    run_id,
-                )
-                .await;
-                let outcome = terminal_from_result(
-                    &req.artifacts_dir,
-                    &artifacts_rel,
-                    meta,
-                    config.model.as_deref(),
-                )
-                .await;
-                // ADR-0054 D1（Phase 113 追記）: `result` メッセージは一度観測できたが、供給側の失敗
-                // （`subtype: error_during_execution` かつ `is_error`）として終わった run は、上の
-                // `(None, None)` のクラッシュ分類（resume 拒否の検出）を一切通らなかった。本番の
-                // タスク 01M35X86XTK84F97QW0CN5PGMR / reviewer run 01M388BENASH3JEBWFS03KEQYT はこの
-                // 穴に落ちた（stderr は `No conversation found with session ID: …` の 1 行だったが、
-                // stdout の `result` の `result` フィールドにはその文言が無かったため、`result` を
-                // 観測できてしまった＝ここに来て、resume 拒否として扱われなかった）。resume を頼んだ
-                // run が `error_during_execution`/`is_error` で終わったときは、stderr の末尾と
-                // `result` メッセージ自身の文面の両方を resume 拒否の文言と照らす。
-                if is_resuming && meta.is_error && meta.subtype == "error_during_execution" {
-                    let tail = read_tail(&stderr_log_path, 4096).await;
-                    let result_text = meta.result.as_deref().unwrap_or("");
-                    if crate::provider::looks_like_resume_rejection(&tail)
-                        || crate::provider::looks_like_resume_rejection(result_text)
-                    {
-                        sink.session_resume_failed(&tail);
-                    }
-                }
-                outcome
-            }
-        };
+            outcome
+        }
+    };
 
     forward_delegate_file(&req.artifacts_dir, sink).await;
 
@@ -1715,7 +1912,12 @@ pub(crate) fn now_unix_secs() -> i64 {
 }
 
 /// stream-json の 1 行を解釈する。既知でない `type` や JSON として不正な行は無視する（ADR-0006 D5）。
-fn handle_line(line: &str, sink: &dyn EventSink, last_result: &mut Option<ResultMeta>) {
+fn handle_line(
+    line: &str,
+    sink: &dyn EventSink,
+    last_result: &mut Option<ResultMeta>,
+    background: &mut BackgroundTasks,
+) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
     };
@@ -1834,13 +2036,21 @@ fn handle_line(line: &str, sink: &dyn EventSink, last_result: &mut Option<Result
                 .get("result")
                 .and_then(|r| r.as_str())
                 .map(|s| s.to_string());
+            let stop_reason = value
+                .get("stop_reason")
+                .and_then(|r| r.as_str())
+                .map(|s| s.to_string());
             *last_result = Some(ResultMeta {
                 subtype,
                 is_error,
                 usage,
                 result,
+                stop_reason,
+                outstanding_background: background.outstanding(),
             });
         }
+        // F5-fix5: background task の開始・終わり（`result` の後に届く kill の通知も含めて追う）。
+        "system" => background.observe(&value),
         _ => {}
     }
 }
@@ -1896,6 +2106,16 @@ fn usage_with_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
 /// `Terminal::Error.message` の接頭辞。`run` がこの接頭辞を見て `Err(AdapterError)`（InfraRequeue）に
 /// 倒す（他の `result.json` の失敗〈壊れた JSON・必須欄の欠落〉は worker 自身の誤りのまま）。
 const RESULT_JSON_MISSING_MARKER: &str = "claude exited without ";
+
+/// F5-fix5: headless の run が background task を残して turn を終えた失敗の分類名（`Terminal` の文言・
+/// 進行のメッセージに載せる。GUI の run の終わり方・進行の欄にそのまま出る）。
+pub const HEADLESS_BACKGROUND_TASK_CLASS: &str = "headless_background_task";
+
+/// F5-fix5: Claude Code CLI の background task を無効にする環境変数（2.1.283 で確認）。
+const DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
+
+/// F5-fix5: Claude Code CLI の Bash の `timeout` の上限（ミリ秒。既定 600000）。
+const BASH_MAX_TIMEOUT_ENV: &str = "BASH_MAX_TIMEOUT_MS";
 
 async fn terminal_from_result(
     artifacts_dir: &Path,
@@ -2431,8 +2651,9 @@ mod tests {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let sink = RecordingSink::default();
         let mut last_result = None;
+        let mut background = BackgroundTasks::default();
         for line in text.lines() {
-            handle_line(line, &sink, &mut last_result);
+            handle_line(line, &sink, &mut last_result, &mut background);
         }
         let items = sink
             .structured
@@ -4735,5 +4956,185 @@ printf '%s\n' '{"type":"turn.completed"}'
             !dir.path().join("args.log").exists(),
             "the claude stub must not have been spawned"
         );
+    }
+
+    /// F5-fix5: 本番 run 01M3KF2HFMHPJR7YEB5HMT38MQ の stdout.jsonl の形（`task_started`〈background〉→
+    /// `result`〈success / end_turn〉→ `task_updated`〈killed〉→ `task_notification`〈stopped〉、result.json 無し）
+    /// を流す fake claude。`extra` は fixture を流す前に実行するシェル（checkpoint.json を置くなど）。
+    fn headless_background_stub(dir: &Path, extra: &str) -> ClaudeCodeConfig {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/claude-code-headless-background.jsonl"
+        );
+        stub_claude(dir, &format!("{extra}\ncat '{fixture}'"))
+    }
+
+    /// F5-fix5: execute run では continuation（`Terminal::Yielded`）になり、checkpoint の `next_action` が
+    /// 殺された command を foreground で再実行するよう申し送る。worker の checkpoint.json の欄は保つ。
+    #[tokio::test]
+    async fn f5_fix5_background_task_killed_at_end_turn_becomes_a_continuation() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = headless_background_stub(
+            dir.path(),
+            r#"mkdir -p artifacts
+printf '%s' '{"completed":["cargo fmt"],"next_action":"run clippy"}' > artifacts/checkpoint.json"#,
+        );
+        let adapter = ClaudeCodeAdapter::new(config);
+        let req = sample_req(dir.path().to_path_buf());
+        let sink = RecordingSink::default();
+        let outcome = adapter
+            .run(req, "run-headless-1", default_limits(), &sink)
+            .await
+            .expect("a killed background task is a continuation, not an adapter error");
+        match outcome.terminal {
+            Terminal::Yielded { checkpoint, usage } => {
+                let next = checkpoint["next_action"].as_str().unwrap_or_default();
+                assert!(next.contains("foreground"), "{next}");
+                assert!(
+                    next.contains("timeout 1800 cargo test --workspace"),
+                    "{next}"
+                );
+                assert!(
+                    next.contains("run clippy"),
+                    "previous next_action kept: {next}"
+                );
+                assert_eq!(checkpoint["completed"][0], "cargo fmt");
+                let failure = checkpoint["known_failures"][0]["what"]
+                    .as_str()
+                    .unwrap_or_default();
+                assert!(
+                    failure.starts_with(HEADLESS_BACKGROUND_TASK_CLASS),
+                    "{failure}"
+                );
+                // dispatcher が読む形（`WorkerCheckpointInput`）として解釈できる。
+                let parsed: task_core::WorkerCheckpointInput =
+                    serde_json::from_value(checkpoint.clone()).expect("checkpoint schema");
+                assert_eq!(parsed.completed, vec!["cargo fmt".to_string()]);
+                assert_eq!(usage.and_then(|u| u.output_tokens), Some(2277));
+            }
+            other => panic!("expected yielded, got {other:?}"),
+        }
+        let progress = sink.progress.lock().unwrap().clone();
+        assert!(
+            progress
+                .iter()
+                .any(|p| p.starts_with(HEADLESS_BACKGROUND_TASK_CLASS)),
+            "the classification is recorded as a progress event: {progress:?}"
+        );
+        // run dir の result.json（celeris の記録）も yield を残す。
+        let recorded =
+            std::fs::read_to_string(dir.path().join("runs/run-headless-1/result.json")).unwrap();
+        assert!(recorded.contains("yield"), "{recorded}");
+    }
+
+    /// F5-fix5: continuation の仕組みを持たない run（レビュー）は、従来どおり result.json 不在の失敗
+    /// （`AdapterError::Other`）のまま、文言に分類名を足す。
+    #[tokio::test]
+    async fn f5_fix5_a_review_run_keeps_the_missing_result_error_with_the_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = headless_background_stub(dir.path(), "");
+        let adapter = ClaudeCodeAdapter::new(config);
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.task.kind = TaskKind::Review;
+        let err = adapter
+            .run(
+                req,
+                "run-headless-2",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap_err();
+        match err {
+            AdapterError::Other(message) => {
+                assert!(message.starts_with(RESULT_JSON_MISSING_MARKER), "{message}");
+                assert!(
+                    message.contains(HEADLESS_BACKGROUND_TASK_CLASS),
+                    "{message}"
+                );
+            }
+            other => panic!("expected AdapterError::Other, got {other:?}"),
+        }
+    }
+
+    /// F5-fix5: `result` より前に終わった background task は数えない（従来の result.json 不在の失敗）。
+    #[tokio::test]
+    async fn f5_fix5_a_background_task_finished_before_the_result_is_not_misclassified() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = stub_claude(
+            dir.path(),
+            r#"echo '{"type":"system","subtype":"task_started","task_id":"t1","description":"cargo build","is_backgrounded":true}'
+echo '{"type":"system","subtype":"task_notification","task_id":"t1","status":"completed"}'
+echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn"}'"#,
+        );
+        let adapter = ClaudeCodeAdapter::new(config);
+        let req = sample_req(dir.path().to_path_buf());
+        let err = adapter
+            .run(
+                req,
+                "run-headless-3",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap_err();
+        match err {
+            AdapterError::Other(message) => {
+                assert!(message.starts_with(RESULT_JSON_MISSING_MARKER), "{message}");
+                assert!(
+                    !message.contains(HEADLESS_BACKGROUND_TASK_CLASS),
+                    "{message}"
+                );
+            }
+            other => panic!("expected AdapterError::Other, got {other:?}"),
+        }
+    }
+
+    /// F5-fix5: 予防。全 run の CLI 引数に headless の system prompt を足し、background task を無効にし、
+    /// foreground の Bash の上限を壁時計に合わせる。`config.env` の同名はそちらが勝つ。
+    #[tokio::test]
+    async fn f5_fix5_every_run_gets_the_headless_system_prompt_and_background_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = format!(
+            "{}\nprintf '%s|%s' \"$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS\" \"$BASH_MAX_TIMEOUT_MS\" > env.log",
+            args_log_script()
+        );
+        let config = stub_claude(dir.path(), &script);
+        let adapter = ClaudeCodeAdapter::new(config);
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.task.kind = TaskKind::Review;
+        let limits = RunLimits {
+            wall_clock: Duration::from_secs(3600),
+            ..default_limits()
+        };
+        let _ = adapter
+            .run(req, "run-headless-4", limits, &RecordingSink::default())
+            .await;
+        let args = captured_args(dir.path());
+        let i = args
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .expect("--append-system-prompt present");
+        assert_eq!(args[i + 1], crate::preamble::HEADLESS_RUN_NOTE);
+        let env = std::fs::read_to_string(dir.path().join("env.log")).unwrap();
+        assert_eq!(env, "1|3600000");
+
+        // `config.env` が同名を持てば、そちらが勝つ。
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = stub_claude(dir.path(), &script);
+        config.env = vec![(
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS".to_string(),
+            "0".to_string(),
+        )];
+        let _ = ClaudeCodeAdapter::new(config)
+            .run(
+                sample_req(dir.path().to_path_buf()),
+                "run-headless-5",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await;
+        let env = std::fs::read_to_string(dir.path().join("env.log")).unwrap();
+        assert_eq!(env, "0|600000", "short wall clocks keep the CLI default");
     }
 }

@@ -1650,3 +1650,12 @@ gate=shadow の判定 `source: hint, shadow: true` が複製に写り、複製�
   shadow なら「記録だけ」）と `execution_hint` を出し、状態に応じて「計画を作らせる（compound に切り替え）」「atomic に戻す」「計画を見直させる
   （replan を依頼）」「計画を作らせてやり直す（retry + compound）」を確認ダイアログ付きで出す。どのボタンを出すかは表示の判定だけ
   （`~/lib/execution-mode.ts`）で、押せるかどうかは celeris が決める（409 / 422 の文言を出す）。
+
+## ADR-0079 による置き換え（2026-09-28）
+
+ADR-0079（再帰的な task 分解）が次を置き換える。本文は書き換えない。**D14 の「入れ子の計画は禁止（固定 2 層）」と D18 の
+`max_planning_depth = 1（固定）`** は、計画の unit を子 task にできる再帰（`celeris.execution-plan/3`、`max_depth = 3`）に置き換わる。
+**D13** は節点ごと（子 task も最初の dispatch で gate を通る）・深さで閾値を上げる・木の節点では shadow でも採用する、に広がる（規則表は維持）。
+**D14 の「不正な計画は atomic に倒す」**は /3 では採らず、決定の要求にする（/1・/2 は維持）。**D22 / D24**（子 Task は Plan / 委譲だけ）は、
+子を作る入口を計画の kind task の unit に一本化し、木の節点では委譲を使わない、に置き換わる。**D12 の「分割し直す / 中止」の自由文の質問**は
+木の節点では構造化した決定の要求になる。**D2（WorkUnit を子 Task にしない）は leaf について維持**する。詳細は ADR-0079 §4。

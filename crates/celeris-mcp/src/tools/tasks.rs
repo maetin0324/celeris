@@ -385,20 +385,33 @@ pub fn answer_def() -> ToolDef {
 #[serde(deny_unknown_fields)]
 pub struct RetryArgs {
     pub id: String,
+    /// ADR-0072「Phase F6 実装時の決定」: 複製先の実行の形（`"compound"` で計画を作らせる、`"atomic"`）。
+    /// 省略なら元の execution_hint を引き継ぐ。どちらでも複製先は今の gate の設定で判定し直す。
+    #[serde(default)]
+    pub execution: Option<task_core::ExecutionMode>,
 }
 
 async fn retry_impl(
     state: &Arc<McpState>,
-    _client: &AuthedClient,
+    client: &AuthedClient,
     args: serde_json::Value,
 ) -> Result<ToolOutput, ToolError> {
     let args: RetryArgs =
         serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
     let id = parse_task_id(&args.id)?;
+    let source = format!("mcp:{}", client.id);
     let result = state
         .blocking(move |store| {
-            task_ops::retry::retry_task(store, id, false, None, OffsetDateTime::now_utc())
-                .map_err(map_ops_err)
+            task_ops::retry::retry_task_with_execution(
+                store,
+                id,
+                false,
+                None,
+                args.execution,
+                &source,
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(map_ops_err)
         })
         .await?;
     ToolOutput::from_serialize(&result)
@@ -415,10 +428,68 @@ fn retry_call<'a>(
 pub fn retry_def() -> ToolDef {
     ToolDef {
         name: "task_retry",
-        description: "Duplicate a failed or cancelled task into a new ready/draft one (same as POST /tasks/{id}/retry, accept=false).",
+        description: "Duplicate a failed or cancelled task into a new ready/draft one (same as POST /tasks/{id}/retry, accept=false). Optional execution=\"compound\"|\"atomic\" records an explicit execution mode on the copy (source mcp:<client_id>); the copy is always re-gated under the current config.",
         scope: McpScope::TasksControl,
         input_schema: schema::<RetryArgs>,
         call: retry_call,
+    }
+}
+
+// ---- ADR-0072「Phase F6 実装時の決定」: task_decompose (scope tasks:interact) ----
+// scope は `tasks:interact`（`task_answer` と同じ重さ）: draft / ready / blocked の Task の実行の形を決め直すだけで、
+// run を止めない・複製しない・承認しない・atomic に戻せる（取り消せる）。複製を伴う `task_retry { execution }` は
+// 従来どおり `tasks:control`。ChatGPT（RDC）の推奨 scope（docs/mcp.md §8.2）のまま使える。
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DecomposeArgs {
+    pub id: String,
+    /// `"compound"`（計画を作らせる）か `"atomic"`（1 つの run で直接実行する）。
+    pub mode: task_core::ExecutionMode,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+async fn decompose_impl(
+    state: &Arc<McpState>,
+    client: &AuthedClient,
+    args: serde_json::Value,
+) -> Result<ToolOutput, ToolError> {
+    let args: DecomposeArgs =
+        serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
+    let id = parse_task_id(&args.id)?;
+    let source = format!("mcp:{}", client.id);
+    let result = state
+        .blocking(move |store| {
+            task_ops::regate::set_execution_mode(
+                store,
+                id,
+                args.mode,
+                &source,
+                args.note,
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(map_ops_err)
+        })
+        .await?;
+    ToolOutput::from_serialize(&result)
+}
+
+fn decompose_call<'a>(
+    state: &'a Arc<McpState>,
+    client: &'a AuthedClient,
+    args: serde_json::Value,
+) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>> {
+    Box::pin(decompose_impl(state, client, args))
+}
+
+pub fn decompose_def() -> ToolDef {
+    ToolDef {
+        name: "task_decompose",
+        description: "Set the execution mode of an existing draft/ready/blocked task (same as POST /tasks/{id}/execution/decompose): mode=\"compound\" makes the next dispatch a planner run that writes an ExecutionPlan (a replan request if the task already has a plan), mode=\"atomic\" runs it directly. Records execution_hint_set with source mcp:<client_id>. Running/reviewing/terminal tasks are refused (use task_retry with execution for terminal ones).",
+        scope: McpScope::TasksInteract,
+        input_schema: schema::<DecomposeArgs>,
+        call: decompose_call,
     }
 }
 

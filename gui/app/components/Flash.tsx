@@ -13,6 +13,7 @@ import type {
   SecretActionResult,
   StandingRuleOpOutcome,
   TaskCommentOutcome,
+  TaskDecomposeOutcome,
   TaskEditOutcome,
   TaskPhaseGateOutcome,
   TaskReopenOutcome,
@@ -210,6 +211,24 @@ export function TaskPhaseGateFlash({ outcome }: { outcome: TaskPhaseGateOutcome 
   );
 }
 
+/** celeris ADR-0072「Phase F6 実装時の決定」: 実行の形を決め直した結果（次の dispatch から効く）。 */
+export function TaskDecomposeFlash({ outcome }: { outcome: TaskDecomposeOutcome | undefined | null }) {
+  if (!outcome) return null;
+  if (!outcome.ok) return <ErrorFlash error={outcome.error} />;
+  const { result } = outcome;
+  return (
+    <Alert role="status" data-testid="flash" data-flash-kind="ok" tone="success" className="my-2">
+      <p data-testid="flash-task-decompose">
+        {result.replan
+          ? "計画の見直し（replan）を依頼しました。次の run は replan の planner run です。"
+          : result.mode === "compound"
+            ? "compound に切り替えました。次の run は計画を作る planner run です。"
+            : "atomic に切り替えました。次の run は直接実行です。"}
+      </p>
+    </Alert>
+  );
+}
+
 export function ErrorFlash({ error }: { error: ActionError | undefined | null }) {
   if (!error) return null;
   return (
@@ -391,6 +410,7 @@ export function OrgActionFlash({ outcome }: { outcome: OrgOpOutcome | undefined 
 const PROJECT_OP_LABEL: Record<string, string> = {
   project_status: "案件の状態を変更",
   project_workspace: "作業場所を変更",
+  project_edit: "案件の名前・説明を変更しました",
   milestone_create: "途中目標を追加",
   milestone_status: "途中目標の状態を変更",
   project_plan: "分解を CoS に頼みました",

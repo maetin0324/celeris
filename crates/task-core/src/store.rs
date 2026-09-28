@@ -822,6 +822,15 @@ pub trait TaskStore:
     /// （API は 422）、他の案件が使っていれば `StoreError::InUse`（409）。無い案件は `Ok(false)`。
     /// **知識ベースのディレクトリは動かさない**（`projects/<旧>/` を `projects/<新>/` へ動かすのは人）。
     fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError>;
+    /// ADR-0072「Phase F6 実装時の決定」P3: 案件の題名（`title`）と説明（依頼文 `request`）を
+    /// 人が書き換える。`None` の欄は変えない。検証（空でない・長さの上限）は呼び出し側（API）が行う。
+    /// 無い案件は `Ok(false)`。
+    fn project_set_text(
+        &self,
+        id: ProjectId,
+        title: Option<&str>,
+        request: Option<&str>,
+    ) -> Result<bool, StoreError>;
 
     // ---- ADR-0043 D1（Phase 52）: 案件のリポジトリ（`project_repos`）----
 
@@ -4370,6 +4379,26 @@ impl TaskStore for SqliteStore {
         )?;
         tx.commit()?;
         Ok(n > 0)
+    }
+
+    fn project_set_text(
+        &self,
+        id: ProjectId,
+        title: Option<&str>,
+        request: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let affected = conn.execute(
+            "UPDATE projects SET title = COALESCE(?1, title), request = COALESCE(?2, request), \
+             updated_at = ?3 WHERE id = ?4",
+            params![
+                title,
+                request,
+                format_rfc3339(OffsetDateTime::now_utc())?,
+                id.to_string()
+            ],
+        )?;
+        Ok(affected == 1)
     }
 
     fn project_set_auto_advance(

@@ -636,3 +636,202 @@ async fn phase_gate_withdraw_cancels_the_task() {
     assert_eq!(resp.json()["to"], "cancelled");
     assert_eq!(env.status_of(task.id), Status::Cancelled);
 }
+
+// ---- ADR-0072「Phase F6 実装時の決定」: POST /tasks/{id}/execution/decompose と retry の execution ----
+
+fn routed_task(status: Status) -> task_core::Task {
+    let mut task = new_task(TaskKind::Execute, status);
+    task.routing = Some(task_core::TaskRouting {
+        execution: Some(task_core::ExecutionGateDecision {
+            mode: task_core::ExecutionMode::Atomic,
+            source: task_core::GateSource::Hint,
+            score: 3,
+            threshold: 5,
+            rule_id: "atomic/score".to_string(),
+            signals: Vec::new(),
+            policy_version: "exec-gate/1".to_string(),
+            shadow: true,
+        }),
+        execution_hint: Some(task_core::ExecutionHintSpec {
+            mode: task_core::ExecutionMode::Compound,
+            explicit: false,
+        }),
+        ..Default::default()
+    });
+    task
+}
+
+#[tokio::test]
+async fn decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision() {
+    let env = env();
+    let app = env.router();
+    let task = routed_task(Status::Ready);
+    env.seed(&task);
+
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/decompose", task.id),
+            &json!({"mode": "compound", "note": "計画を作って"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["mode"], "compound");
+    assert_eq!(body["replan"], false);
+    assert_eq!(body["previous_decision"]["rule_id"], "atomic/score");
+    assert_eq!(
+        body["task"]["routing"]["execution_hint"],
+        json!({"mode": "compound", "explicit": true})
+    );
+    assert!(body["task"]["routing"].get("execution").is_none(), "{body}");
+
+    let events = env.store.events_for(task.id).expect("events");
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::ExecutionHintSet { source, note, .. }
+            if source == "human" && note.as_deref() == Some("計画を作って")
+    )));
+
+    // atomic に戻すこともできる（計画はまだ無い）。
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/decompose", task.id),
+            &json!({"mode": "atomic"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(
+        resp.json()["task"]["routing"]["execution_hint"],
+        json!({"mode": "atomic", "explicit": true})
+    );
+}
+
+#[tokio::test]
+async fn decompose_refuses_running_terminal_and_out_of_scope_tasks() {
+    let env = env();
+    let app = env.router();
+    let running = routed_task(Status::Running);
+    env.seed(&running);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/decompose", running.id),
+            &json!({"mode": "compound"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 409, "{}", resp.text());
+
+    let failed = routed_task(Status::Failed);
+    env.seed(&failed);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/decompose", failed.id),
+            &json!({"mode": "compound"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 409, "{}", resp.text());
+    assert!(resp.text().contains("retry"), "{}", resp.text());
+
+    // routing の無い旧タスクは gate の対象外（422）。
+    let legacy = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&legacy);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/decompose", legacy.id),
+            &json!({"mode": "compound"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 422, "{}", resp.text());
+
+    // 知らない mode は 400（本文の JSON が型に合わない）、トークン無しは 401、無いタスクは 404。
+    let ready = routed_task(Status::Ready);
+    env.seed(&ready);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/decompose", ready.id),
+            &json!({"mode": "split"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 400, "{}", resp.text());
+    let resp = send(
+        &app,
+        post_json_with(
+            &format!("/api/v1/tasks/{}/execution/decompose", ready.id),
+            &json!({"mode": "compound"}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 401, "{}", resp.text());
+    let resp = send(
+        &app,
+        post_admin(
+            &format!(
+                "/api/v1/tasks/{}/execution/decompose",
+                task_core::TaskId::new()
+            ),
+            &json!({"mode": "compound"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+}
+
+#[tokio::test]
+async fn retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision() {
+    let env = env();
+    let app = env.router();
+    let failed = routed_task(Status::Failed);
+    env.seed(&failed);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/retry", failed.id),
+            &json!({"execution": "compound"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    let new_id: task_core::TaskId = resp.json()["task_id"]
+        .as_str()
+        .expect("task_id")
+        .parse()
+        .expect("id");
+    let copy = env.store.get(new_id).expect("get").expect("some");
+    assert_eq!(copy.status, Status::Ready);
+    let routing = copy.routing.expect("routing");
+    assert_eq!(
+        routing.execution_hint,
+        Some(task_core::ExecutionHintSpec {
+            mode: task_core::ExecutionMode::Compound,
+            explicit: true
+        })
+    );
+    assert!(routing.execution.is_none());
+
+    // routing の無い旧タスクに execution を書くと 422（複製もしない）。
+    let legacy = new_task(TaskKind::Execute, Status::Failed);
+    env.seed(&legacy);
+    let before = env.store.list(None).expect("list").len();
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/retry", legacy.id),
+            &json!({"execution": "compound"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 422, "{}", resp.text());
+    assert_eq!(env.store.list(None).expect("list").len(), before);
+}

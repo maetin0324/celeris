@@ -6,7 +6,7 @@
 
 ## 目次
 
-- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。完了 gate 2026-09-28（test 2639 passed、GUI 1154 passed）。本番未昇格。
+- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2673 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
 
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)

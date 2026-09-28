@@ -151,12 +151,6 @@ import type { Route } from "./+types/tasks.$id";
 const BrowserRunsPanel = lazy(() =>
   import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
 );
-const ExecutionModeControl = lazy(() =>
-  import("~/components/ExecutionModeControl").then((m) => ({ default: m.ExecutionModeControl })),
-);
-const HumanReviewPanel = lazy(() =>
-  import("~/components/HumanReviewPanel").then((m) => ({ default: m.HumanReviewPanel })),
-);
 
 // Phase 77（ADR-0055 性能予算）: 「変更」「ファイル」タブの本体（`~/components/task-changes.tsx`・
 // `~/components/task-files.tsx`）は、5 つあるタブのうち一度に 1 つしか出ない（`?tab=` で切り替え）のに

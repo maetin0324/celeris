@@ -352,3 +352,10 @@ ADR-0075 に「Phase G2 実装時の逸脱・明確化」1〜13 と、D7 に「�
 
 - P-G2-1: release.sh のゲートでも `celerisctl scratch env --owner release-<sha12>` の sccache 系を使う（今は `CARGO_TARGET_DIR` だけを
   lease から取る。`[scratch.cargo]` の容量の得と依存の hit を release ゲートにも）。G1 の P-G1-1（N-1 の config の parse 確認）と一緒に。
+
+## G2 の本番反映と sccache L1 の有効化（2026-09-28 05:39Z）
+
+- release `89854b08d3b1`（G2: sccache L1 の配線、`<scratch>/bin/sccache` ラッパー、`CARGO_INCREMENTAL=0` + `line-tables-only`、`celeris-sccache.service` の雛形）。ゲート全通過、verify 全 true（N-1 も ok。config に新セクションを足していないため）。dogfood 4 回目が走行中のままライブ切替（Phase 116 の drain で旧デーモンが run を持ち続ける）。
+- 人の手順を Fable が実行: `scripts/scratch/setup-sccache.sh --from ~/.cargo/bin/sccache`（`~/.local/celeris/tools/sccache/bin/sccache` 0.18.0）→ `scripts/selfdeploy/install-units.sh`（`celeris-sccache.service` を配置）→ `systemctl --user enable --now celeris-sccache.service` → `celerisctl scratch status` に `sccache L1 … (ready) · port 4236`。以後の run は `RUSTC_WRAPPER` 経由で L1 を使う。
+- 発見 P-G2-2: release の bundle（`~/.local/celeris/releases/<sha>/scripts/`）には `scripts/selfdeploy/` しか入らず、`scripts/scratch/` と `deploy/systemd/` が無い（release からは setup-sccache.sh / install-units.sh の unit 配置が動かない）。今回は作業チェックアウトから実行。release.sh の bundle に両方を含めるべき。
+- scratch pool の実物: `targets 28.9 GB / 100 GB`（走行中の WU の target 21 GB が p0、release のゲートの target 7.9 GB が seed）。legacy 2 件は 1 時間更新なしで回収予定。

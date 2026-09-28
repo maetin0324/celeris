@@ -197,3 +197,46 @@ ADR-0075 に「Phase G1 実装時の逸脱・明確化」1〜13 を追記した�
 - 統合 main（G1: scratch pool / semantic GC / watermark / `celerisctl scratch` / metrics / release.sh の lease）。ゲート: fmt 0 / test FAILED 0（2543 件）/ clippy 0 / GUI typecheck・lint・test 1116 件・gen:types 差分ゼロ・build / selfdeploy tests ok。release `10bb975a731a`。
 - verify の N-1（check 5）が false: 本番 config に先に足した `[scratch]` セクションを、旧バイナリ（ba2134a9fcc2）が `unknown field scratch` で拒否して起動できなかった。**設定に新しいセクションを足すのは、それを知るリリースが昇格した後**（さもないと N-1 と rollback が壊れ、旧デーモンの再起動も失敗する）。`[scratch]` を外して再 verify → live_ok → ライブ昇格。scratch は既定の dir（`build_cache_dir` の親 = `/var/lib/celeris/scratch`）で有効。
 - 提案 P-G1-1: ADR-0075 D7 に上の順序を明記し、`release.sh` のゲートに「現行 config を N-1 の版でも parse できるか」を足す（rollback 可能性の確認）。
+
+## Phase G2（sccache L1 の導入と Celeris の run への配線 + `CARGO_INCREMENTAL=0`）— 着手 2026-09-28
+
+作業は git worktree の中（main へ merge / push しない）。自分のビルドは
+`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-g2/target CARGO_INCREMENTAL=0`（lease は `celerisctl scratch lease --owner agent-g2 --ttl 21600`）。
+
+### G2 checkpoint 1: U1 の実測（完了 2026-09-28）
+
+測定の条件: sccache 0.18.0（`~/.cargo/bin/sccache`、`cargo install sccache`）、rustc 1.98.1、24 コア。専用の server
+（`SCCACHE_DIR=/var/lib/celeris/scratch/sccache-l1-measure SCCACHE_CACHE_SIZE=20G SCCACHE_SERVER_PORT=4236 SCCACHE_IDLE_TIMEOUT=0 sccache --start-server`）。
+ビルドは main ab8571c と同じ tree で `cargo build --workspace`、`CARGO_INCREMENTAL=0`、`RUSTC_WRAPPER=sccache`。各回の前に `sccache --zero-stats`。
+target は `celerisctl scratch lease` で取った `agent-g2-{a,b,c,d}`（各回 空から）。壁時計は `date +%s%3N` の差。
+
+| 回 | target の渡し方 | target / ソースの場所 | 壁時計 | Rust hit / miss | C/C++・asm hit / miss |
+|---|---|---|---|---|---|
+| A | env `CARGO_TARGET_DIR` | agent-g2-a / この worktree | 49.99 s | 0 / 192 | 0 / 382（L1 が空） |
+| B | env `CARGO_TARGET_DIR` | agent-g2-b / この worktree | 45.13 s | **0 / 192** | 382 / 0 |
+| C | `cargo build --target-dir`（env に無し） | agent-g2-c / この worktree | 45.93 s | 0 / 192（新しい key） | 382 / 0 |
+| B' | `--target-dir`（env に無し） | agent-g2-b（空から）/ この worktree | 41.61 s | **163 / 29（84.9 %）** | 382 / 0 |
+| D | `--target-dir`（env に無し） | agent-g2-d / **別のパスに展開した同じ commit**（`git archive HEAD`） | 41.76 s | **162 / 30（84.4 %）** | 382 / 0 |
+| A' | env `CARGO_TARGET_DIR` + `CARGO_TARGET_DIR` を外して sccache を exec する wrapper | agent-g2-a（空から）/ この worktree | 45.67 s | **163 / 29（84.9 %）** | （wrapper の名前が `sccache` でなく cc-rs が使わなかった） |
+| B'' | 同上 | agent-g2-b（空から、B' と同じパス）/ この worktree | **12.75 s** | **192 / 0（100 %）** | — |
+
+- **原因（U1 の答え）**: owner をまたいだ Rust の hit が 0 だったのは、sccache 0.18 が Rust の key に **`CARGO_` で始まる env を全部**
+  入れるから（`src/compiler/rust.rs` の `generate_hash_key` 8.。除外は `CARGO_MAKEFLAGS` / `CARGO_REGISTRIES_*` / `CARGO_BUILD_JOBS` /
+  `CARGO_ENCODED_RUSTFLAGS` だけ）。cargo は自分の env を rustc にそのまま渡すので、owner ごとに違う `CARGO_TARGET_DIR` が全ての key を
+  変える。`--out-dir` / `-L` / `--extern` のパスは key から除かれ（extern は中身の hash）、registry の依存は cwd も同じなので、
+  **`CARGO_TARGET_DIR` を rustc の env から外せば依存は hit する**（B' / D / A'）。ソースの場所が違っても依存は hit する（D）。
+- **残る miss（約 29）**: workspace のメンバーと、build script の `OUT_DIR`（target の中の絶対パス）を `env!` で読む crate とその下流
+  （dep-info の env は値ごと key に入る）。同じ target のパスで作り直すと 100 % hit（B''）になることから、残りは target のパスに依存する分と
+  判断した（`SCCACHE_LOG=debug` の server log でも miss の理由は出ない。crate ごとの内訳は**未確認**）。
+- **basedir 系は Rust に効かない**: 0.18 の `SCCACHE_BASEDIRS` は C/C++ の preprocessor 出力の正規化にだけ使われる（`rust.rs` に参照が無い）。
+  `--remap-path-prefix` は env の値を変えないので原因（`CARGO_TARGET_DIR`）には効かない。試した対策は「rustc に渡る env から
+  `CARGO_TARGET_DIR` を外す」の 1 つで、依存の hit が出たので G2 を続ける。
+- **壁時計の得は小さい**: 冷えた L1（A）50.0 s → 依存が hit（B' / D / A'）41.6〜45.7 s（−9〜17 %）。残りは workspace のメンバー
+  （`task-dispatch` の 3 万行など、依存の後に直列で走る）と、キャッシュできない呼び出し 45（bin / proc-macro / build script の
+  `crate-type`、42）とリンク。同じパスの再ビルド（B''）だけが 12.8 s。Celeris の run は owner ごとに新しい target なので、得は
+  主に依存（Rust 163 件 + C/C++・asm 382 件）の CPU 時間。
+- **cc-rs との関係**: cc-rs は `RUSTC_WRAPPER` のファイル名（stem）が `sccache` のときだけ C/C++ にも同じ wrapper を使う
+  （`cc-1.4.6/src/lib.rs` の `rustc_wrapper_fallback`）。wrapper を挟むなら**ファイル名を `sccache` にする**（A' はこれを満たさず C のキャッシュを使っていない）。
+- 実装への帰結（逸脱として ADR に書く）: `RUSTC_WRAPPER` は本物の sccache ではなく、Celeris が生成する小さな shell の wrapper
+  `<scratch>/bin/sccache`（`unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR` → `exec <本物の sccache> "$@"`）にする。
+- 測定用の target（`agent-g2-{a,b,c,d}`）と L1（`sccache-l1-measure`）、`git archive` の展開は測定後に削除（checkpoint 3 の後）。

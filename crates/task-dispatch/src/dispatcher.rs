@@ -1923,6 +1923,8 @@ pub struct Dispatcher {
     integrating: HashMap<TaskId, IntegrationEntry>,
     /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
     checking: HashMap<String, CheckingEntry>,
+    /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
+    orphan_takeover: Option<crate::orphan::OrphanTakeover>,
     tx: mpsc::UnboundedSender<Completion>,
     rx: mpsc::UnboundedReceiver<Completion>,
     /// ADR-0018 D2: 多重接続が無いクラスタの cooldown（この時刻まで dispatch しない）。
@@ -2206,6 +2208,7 @@ impl Dispatcher {
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
             checking: HashMap::new(),
+            orphan_takeover: None,
             tx,
             rx,
             cluster_cooldown: HashMap::new(),
@@ -2320,6 +2323,12 @@ impl Dispatcher {
         self.accepting_new_work = accepting;
     }
 
+    /// Phase F5-fix6: 孤児の回収を有効にする（celeris が `daemon_instances` の自分の行を持つときに
+    /// 渡す。判定の定義は `crate::orphan`）。
+    pub fn set_orphan_takeover(&mut self, takeover: crate::orphan::OrphanTakeover) {
+        self.orphan_takeover = Some(takeover);
+    }
+
     /// ADR-0041 D5: 面倒を見てよいタスクを絞る（`--mode verify` の煙試験）。呼ばなければ従来どおり全部。
     /// 絞られたタスクは **ready のまま放置**され、リースの回収もレビューの拾い上げも起きない。
     pub fn set_eligible_tasks(&mut self, eligible: TaskFilter) {
@@ -2390,6 +2399,121 @@ impl Dispatcher {
         }
         self.pending_subjects.clear();
         aborted
+    }
+
+    /// Phase F5-fix6: SIGTERM / SIGINT（`systemctl restart`、`promote.sh` の停止→起動）で止まる直前に、
+    /// 手元の worker run の終わりを DB に記録する。本番 2026-09-28 17:05:50Z: 止まるデーモンは SIGTERM を
+    /// 受けた tick でループを抜け、0.6 秒後にアダプタが `result.json`（exit=143）を書いたが、完了を
+    /// 受け取る者が居ないまま exit し、`worker_finished` も Task の遷移も残らなかった（新しいデーモンは
+    /// lease の失効まで 15 分待った）。
+    ///
+    /// 1. 既に届いた完了を記録する（`drain_completions`）。
+    /// 2. 残りの run はプロセスグループごと止め（`stop_run`）、`WorkerFinished{outcome: "interrupted:
+    ///    daemon shutdown …", end: cancelled}` を残す。Task の lease を持つ run は `InfraRequeue`
+    ///    （attempts を消費しない。上限超過は `infra failure ×N`）、WU の run は WU を ready /
+    ///    needs_continuation に戻す（reason `shutdown`）。
+    /// 3. ただし run が既に error 以外の終端の `result.json`（done 等）を書き終えていたら DB は触らない
+    ///    （次のデーモンが孤児の回収でその内容から確定させる。ここで検査・レビューを spawn しても exit で
+    ///    失われるため）。
+    ///
+    /// レビュー・WU の検査・工程の統合は触らない（次のデーモンの `recover_reviews` と孤児の回収が拾う）。
+    /// DB に記録した run の数を返す。
+    pub fn interrupt_runs_on_shutdown(&mut self) -> usize {
+        if let Err(e) = self.drain_completions() {
+            tracing::warn!(error = %e, "failed to record the completions received before the shutdown");
+        }
+        let entries: Vec<(RunKey, RunEntry)> = self.running.drain().collect();
+        let mut recorded = 0;
+        for (key, entry) in entries {
+            let run_id = entry.run_id.clone();
+            let since = entry.since;
+            self.stop_run(&run_id, entry.handle, entry.container);
+            let task = match self.store.get(key.task) {
+                Ok(Some(t)) => t,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(task_id = %key.task, %run_id, error = %e, "could not read the task while recording the shutdown");
+                    continue;
+                }
+            };
+            if let Some(dir) = self.task_dir(&task)
+                && let Some(terminal) = terminal_from_run_dir(&dir, &run_id)
+                && !matches!(terminal, Terminal::Error { .. })
+            {
+                tracing::info!(task_id = %task.id, %run_id, "the run already wrote a terminal result.json; leaving it to the next daemon's orphan takeover (Phase F5-fix6)");
+                continue;
+            }
+            match self.record_shutdown_interrupt(&task, &run_id, since) {
+                Ok(()) => {
+                    tracing::warn!(task_id = %task.id, %run_id, "daemon shutdown: the run was stopped and recorded as interrupted (Phase F5-fix6)");
+                    recorded += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the shutdown interrupt; the next daemon's orphan takeover will pick it up");
+                }
+            }
+        }
+        recorded
+    }
+
+    fn record_shutdown_interrupt(
+        &mut self,
+        task: &Task,
+        run_id: &str,
+        since: OffsetDateTime,
+    ) -> Result<(), DispatchError> {
+        let events = self.store.events_for(task.id)?;
+        if events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id))
+        {
+            return Ok(());
+        }
+        let finished = |outcome: String| Event::WorkerFinished {
+            run_id: run_id.to_string(),
+            outcome,
+            usage: None,
+            role: None,
+            metrics: Some(task_core::RunMetrics {
+                wall_ms: wall_ms_since(since),
+                retries: task.attempts,
+                peak_context_tokens: None,
+                turns: None,
+            }),
+            end: Some(task_core::RunEnd::Cancelled),
+        };
+        let holds_task_lease = task.status == Status::Running
+            && task
+                .lease
+                .as_ref()
+                .is_some_and(|l| l.worker_run_id == run_id);
+        if holds_task_lease {
+            let infra_n = consecutive_infra_requeues(&events) + 1;
+            let (trigger, outcome) = if infra_n <= self.config.max_infra_retries {
+                (
+                    Trigger::InfraRequeue,
+                    format!("interrupted: {SHUTDOWN_WHY} (run_id={run_id})"),
+                )
+            } else {
+                (
+                    Trigger::WorkerError { retryable: false },
+                    format!("{INFRA_FAILURE_MARKER}{infra_n}: {SHUTDOWN_WHY} (run_id={run_id})"),
+                )
+            };
+            match self
+                .store
+                .apply_transition_with_events(task.id, trigger, vec![finished(outcome)])
+            {
+                Ok(_) | Err(StoreError::InvalidTransition(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        } else {
+            self.store.append_event(
+                task.id,
+                &finished(format!("interrupted: {SHUTDOWN_WHY} (run_id={run_id})")),
+            )?;
+        }
+        self.reconcile_work_unit_run(task.id, run_id, "shutdown")
     }
 
     /// ADR-0032 D3: `auth = "publickey"` のクラスタへの自動接続を有効にする（celeris 側が本番の実装を挿す）。
@@ -7030,17 +7154,34 @@ impl Dispatcher {
     /// 死んでいる（またはこのインスタンスの管理外）ときだけ、ADR-0070 D3 の分岐
     /// （`InfraRequeue` でバックオフ再試行、`max_infra_retries` 到達で打ち切り）に乗せる。
     /// `Trigger::LeaseExpired`（無条件に attempts を消費する）はもう使わない。
+    ///
+    /// Phase F5-fix6: lease がまだ切れていなくても、持ち主のデーモンが居ない run（孤児。定義は
+    /// `crate::orphan`）は同じ経路で**すぐに**回収する（result.json があればその内容で確定、無ければ
+    /// `interrupted: orphan_takeover` で requeue）。v2 の工程の lease は `reconcile_parallel_tasks` が
+    /// WU ごとに扱う。
     fn reclaim_expired_leases(&mut self) -> Result<usize, DispatchError> {
         let now = OffsetDateTime::now_utc();
         let mut count = 0;
+        let mut holders_gone: Option<bool> = None;
         for task in self.store.list(Some(Status::Running))? {
             // ADR-0041 D5: 面倒を見ないタスクのリースは奪わない（verify は本番のコピーの行を書き換えない）。
             if !self.is_eligible(&task) {
                 continue;
             }
             let Some(lease) = &task.lease else { continue };
-            if lease.expires_at > now {
-                continue;
+            let orphaned = if lease.expires_at > now {
+                if is_phase_lease_holder(&lease.worker_run_id)
+                    || self.holds_task_in_hand(task.id)
+                    || !self.lease_holders_gone(&mut holders_gone, now)
+                {
+                    continue;
+                }
+                true
+            } else {
+                false
+            };
+            if orphaned {
+                self.note_orphan_takeover(&task, &lease.worker_run_id, lease.expires_at);
             }
             // ADR-0074 D1.5（Phase F2）: v2 の並列 WU では同じ Task の run が複数ありうる。
             // どれか 1 本でも生きていれば、その run の lease（WU の lease）を延ばす
@@ -7141,22 +7282,39 @@ impl Dispatcher {
                 turns: None,
             });
             let infra_n = consecutive_infra_requeues(&self.store.events_for(task.id)?) + 1;
+            // Phase F5-fix6: 孤児は lease 切れではなく「持ち主のデーモンが居なくなって中断された run」。
+            let why = if orphaned {
+                ORPHAN_WHY
+            } else {
+                "lease expired"
+            };
             let (trigger, outcome_text) = if infra_n <= self.config.max_infra_retries {
                 (
                     Trigger::InfraRequeue,
-                    format!(
-                        "infra_requeue: lease expired (run_id={})",
-                        lease.worker_run_id
-                    ),
+                    if orphaned {
+                        format!("interrupted: {why} (run_id={})", lease.worker_run_id)
+                    } else {
+                        format!("infra_requeue: {why} (run_id={})", lease.worker_run_id)
+                    },
                 )
             } else {
                 (
                     Trigger::WorkerError { retryable: false },
                     format!(
-                        "{INFRA_FAILURE_MARKER}{infra_n}: lease expired (run_id={})",
+                        "{INFRA_FAILURE_MARKER}{infra_n}: {why} (run_id={})",
                         lease.worker_run_id
                     ),
                 )
+            };
+            let class = if orphaned {
+                task_core::HarnessErrorClass::Infra
+            } else {
+                task_core::HarnessErrorClass::LeaseExpired
+            };
+            let wu_reason = if orphaned {
+                crate::orphan::ORPHAN_TAKEOVER_REASON
+            } else {
+                "restart_reconcile"
             };
             let finished: Vec<Event> = wu_runs
                 .iter()
@@ -7166,9 +7324,7 @@ impl Dispatcher {
                     usage: None,
                     role: None,
                     metrics,
-                    end: Some(task_core::RunEnd::HarnessError {
-                        class: task_core::HarnessErrorClass::LeaseExpired,
-                    }),
+                    end: Some(task_core::RunEnd::HarnessError { class }),
                 })
                 .collect();
             match self
@@ -7176,8 +7332,9 @@ impl Dispatcher {
                 .apply_transition_with_events(task.id, trigger.clone(), finished)
             {
                 Ok(outcome) => {
-                    tracing::warn!(task_id = %task.id, run_id = %lease.worker_run_id, next = ?outcome.next, attempts = outcome.attempts, "lease expired; reclaimed");
-                    if matches!(trigger, Trigger::InfraRequeue) {
+                    tracing::warn!(task_id = %task.id, run_id = %lease.worker_run_id, next = ?outcome.next, attempts = outcome.attempts, orphaned, "{why}; reclaimed");
+                    // 孤児（再起動の中断）はバックオフしない（インフラの不調ではなく人の再起動）。
+                    if matches!(trigger, Trigger::InfraRequeue) && !orphaned {
                         let until = now + infra_backoff_delay(infra_n);
                         self.infra_backoff.insert(task.id, until);
                     }
@@ -7185,9 +7342,7 @@ impl Dispatcher {
                     // その WU の行も `running` のまま残さず、checkpoint があれば `needs_continuation`、
                     // 無ければ `ready` に戻す（`WorkUnitTransitioned{reason: "restart_reconcile"}`）。
                     for run_id in &wu_runs {
-                        if let Err(e) =
-                            self.reconcile_work_unit_run(task.id, run_id, "restart_reconcile")
-                        {
+                        if let Err(e) = self.reconcile_work_unit_run(task.id, run_id, wu_reason) {
                             tracing::warn!(task_id = %task.id, run_id = %run_id, error = %e, "failed to reconcile the work unit for a reclaimed lease");
                         }
                     }
@@ -7659,7 +7814,7 @@ impl Dispatcher {
                 })
             })
             .unwrap_or_default();
-        tracing::warn!(task_id = %task.id, %run_id, "the run's lease expired but it left a terminal result.json; finalising from it instead of requeueing (Phase F5-fix2)");
+        tracing::warn!(task_id = %task.id, %run_id, "the run's lease expired (or its daemon is gone) but it left a terminal result.json; finalising from it instead of requeueing (Phase F5-fix2 / F5-fix6)");
         if let Err(e) = self.on_worker_finished(
             task.id,
             run_id.to_string(),
@@ -7672,6 +7827,95 @@ impl Dispatcher {
             self.record_finalisation_failure(task.id, run_id, &e);
         }
         true
+    }
+
+    /// Phase F5-fix6: このインスタンスがその Task の run・検査・統合・レビューを手元に持っているか
+    /// （`crate::orphan` の定義の 1.）。
+    fn holds_task_in_hand(&self, task_id: TaskId) -> bool {
+        self.running.keys().any(|k| k.task == task_id)
+            || self.checking.values().any(|e| e.task_id == task_id)
+            || self.integrating.contains_key(&task_id)
+            || self.reviewing.contains_key(&task_id)
+            || self.awaiting_children.contains_key(&task_id)
+    }
+
+    /// Phase F5-fix6: run を抱えうる他のデーモンが 1 つも生きていないか（`crate::orphan::holder_gone`）。
+    /// 孤児の回収が無効（設定なし）・このインスタンスが新しい仕事を受けていない（draining / standby）・
+    /// `daemon_instances` が読めないときは `false`（従来どおり lease の失効を待つ）。1 回の照合の中では
+    /// `cache` に覚えて DB を 1 回だけ読む。
+    fn lease_holders_gone(&self, cache: &mut Option<bool>, now: OffsetDateTime) -> bool {
+        if let Some(v) = *cache {
+            return v;
+        }
+        let gone = match &self.orphan_takeover {
+            Some(t) if self.accepting_new_work => match self.store.instance_list() {
+                Ok(rows) => crate::orphan::holder_gone(
+                    &rows,
+                    &t.instance_id,
+                    now,
+                    t.freshness,
+                    t.pid_alive.as_ref(),
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not read daemon_instances; not taking over orphaned runs this tick");
+                    false
+                }
+            },
+            _ => false,
+        };
+        *cache = Some(gone);
+        gone
+    }
+
+    /// Phase F5-fix6: 孤児を回収することを log と event（`worker_progress`、`orphan_takeover: …`）に残す。
+    fn note_orphan_takeover(&self, task: &Task, run_id: &str, lease_until: OffsetDateTime) {
+        tracing::warn!(
+            task_id = %task.id, %run_id, lease_expires_at = %rfc3339(lease_until),
+            reason = crate::orphan::ORPHAN_TAKEOVER_REASON,
+            "the daemon that held this run is gone (no live active/draining instance besides this one, and the run is not in hand); taking it over without waiting for the lease (Phase F5-fix6)"
+        );
+        let ev = Event::worker_progress(
+            run_id.to_string(),
+            format!(
+                "{}: このランを持っていたデーモンが居ないため、lease の期限（{}）を待たずに回収します。",
+                crate::orphan::ORPHAN_TAKEOVER_REASON,
+                rfc3339(lease_until)
+            ),
+        );
+        if let Err(e) = self.store.append_event(task.id, &ev) {
+            tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the orphan takeover");
+        }
+    }
+
+    /// Phase F5-fix6: 工程の lease（v2）の WU の孤児 run で result.json が無いもの。`WorkerFinished`
+    /// （`interrupted: …`、`harness_error(infra)`）で `runs` 行を閉じ、WU を ready / needs_continuation
+    /// に戻す（reason `orphan_takeover`。Task は遷移させない）。
+    fn requeue_orphaned_work_unit_run(
+        &mut self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<(), DispatchError> {
+        let already = self
+            .store
+            .events_for(task.id)?
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id));
+        if !already {
+            self.store.append_event(
+                task.id,
+                &Event::WorkerFinished {
+                    run_id: run_id.to_string(),
+                    outcome: format!("interrupted: {ORPHAN_WHY} (run_id={run_id})"),
+                    usage: None,
+                    role: None,
+                    metrics: None,
+                    end: Some(task_core::RunEnd::HarnessError {
+                        class: task_core::HarnessErrorClass::Infra,
+                    }),
+                },
+            )?;
+        }
+        self.reconcile_work_unit_run(task.id, run_id, crate::orphan::ORPHAN_TAKEOVER_REASON)
     }
 
     fn run_holds_lease(&self, task: &Task, run_id: &str) -> Result<bool, DispatchError> {
@@ -9452,8 +9696,13 @@ impl Dispatcher {
     /// - Task が Running で、WU も統合も走っていない → `Continue{advance}`（Ready に戻して通常の経路へ）。
     ///
     /// Task の lease ごと切れた（全部が死んだ）Task は `reclaim_expired_leases` → `InfraRequeue` が扱う。
+    ///
+    /// Phase F5-fix6: WU の lease がまだ切れていなくても、その run の持ち主のデーモンが居なければ
+    /// （孤児。`crate::orphan`）同じく戻す（result.json があればその内容で確定、無ければ reason
+    /// `orphan_takeover` で ready / needs_continuation）。統合 WU も同じ（spawn が手元に無ければ pending）。
     fn reconcile_parallel_tasks(&mut self) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
+        let mut holders_gone: Option<bool> = None;
         for task in self.store.list(Some(Status::Running))? {
             if !self.is_eligible(&task) {
                 continue;
@@ -9478,13 +9727,40 @@ impl Dispatcher {
                     .as_deref()
                     .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
                     .is_none_or(|t| t <= now);
-                if !ours && expired {
+                if ours {
+                    continue;
+                }
+                if expired {
                     if self.finalise_from_result_json(&task, &run_id) {
                         continue;
                     }
                     tracing::warn!(task_id = %task.id, work_unit = %u.key, %run_id, "work unit lease expired without a live run; reconciling (ADR-0074 D1.7)");
                     self.reconcile_work_unit_run(task.id, &run_id, "restart_reconcile")?;
+                } else if self.lease_holders_gone(&mut holders_gone, now) {
+                    // Phase F5-fix6: 持ち主のデーモンが居ない WU の run。lease の失効を待たない。
+                    let until = u
+                        .lease_expires_at
+                        .as_deref()
+                        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+                        .unwrap_or(now);
+                    self.note_orphan_takeover(&task, &run_id, until);
+                    if self.finalise_from_result_json(&task, &run_id) {
+                        continue;
+                    }
+                    self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
+            }
+            // Phase F5-fix6: 持ち主の居ない工程の統合（統合 WU が running で、spawn が手元に無い）。
+            if !self.integrating.contains_key(&task.id)
+                && self.running_for_task(task.id) == 0
+                && units.iter().any(|u| {
+                    u.kind == task_core::WorkUnitKind::Integrate
+                        && u.status == task_core::WorkUnitStatus::Running
+                })
+                && self.lease_holders_gone(&mut holders_gone, now)
+            {
+                tracing::warn!(task_id = %task.id, "the phase integration's daemon is gone; returning the integration to pending without waiting for the lease (Phase F5-fix6 orphan_takeover)");
+                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
             }
             if self.running_for_task(task.id) > 0 || self.integrating.contains_key(&task.id) {
                 continue;
@@ -14414,6 +14690,12 @@ fn ops_to_store(e: task_ops::OpsError) -> DispatchError {
         other => DispatchError::Store(StoreError::Invalid(other.to_string())),
     }
 }
+
+/// Phase F5-fix6: 孤児の回収で残す `WorkerFinished.outcome` の理由（`interrupted: <これ> (run_id=…)`）。
+const ORPHAN_WHY: &str = "orphan_takeover: the daemon holding this run is gone";
+
+/// Phase F5-fix6: SIGTERM / SIGINT で止まるデーモンが手元の run を止めたときの理由。
+const SHUTDOWN_WHY: &str = "daemon shutdown (SIGTERM/SIGINT)";
 
 /// デーモン再起動後の復旧用: `runs/<run_id>/result.json`（`fake`/`run_subprocess` が書く終端メッセージ）から
 /// `done` の内容を復元する。無ければ空（ADR-0007 D5）。
@@ -32926,6 +33208,9 @@ mod tests {
             }
         );
     }
+
+    /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。
+    mod orphan_takeover;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

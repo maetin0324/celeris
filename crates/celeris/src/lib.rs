@@ -1548,7 +1548,16 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                     );
                     return Ok(Exit::DuplicateRelease);
                 }
-                instance::Started::Running(supervisor) => Some(supervisor),
+                instance::Started::Running(supervisor) => {
+                    // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの
+                    // run（孤児）を lease の失効を待たずに回収できる（定義は `task_dispatch::orphan`）。
+                    dispatcher.set_orphan_takeover(task_dispatch::orphan::OrphanTakeover {
+                        instance_id: identity.instance_id.clone(),
+                        freshness,
+                        pid_alive: Arc::new(instance::pid_alive),
+                    });
+                    Some(supervisor)
+                }
             }
         }
     };
@@ -1633,6 +1642,16 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         &mut roles,
     )
     .await;
+    // Phase F5-fix6: SIGTERM / SIGINT の停止（`systemctl restart`、`promote.sh` の停止→起動）では、
+    // 手元の run を止めてその終わりを DB に記録してから exit する（記録できなかった run は次の
+    // デーモンの孤児の回収が拾う）。drain・`--until-idle`・`--max-ticks` の終了では何もしない。
+    if matches!(result, Ok(Exit::Signal)) {
+        let recorded = dispatcher.interrupt_runs_on_shutdown();
+        tracing::info!(
+            recorded,
+            "shutdown: the runs in hand were stopped and recorded (Phase F5-fix6)"
+        );
+    }
     if let Some(api) = roles.api.take() {
         api.stop().await;
     }

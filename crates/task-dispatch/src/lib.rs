@@ -12,6 +12,8 @@ pub mod dispatcher;
 pub mod execution_scheduler;
 /// ADR-0074 D1.2 / D1.4（Phase F2）: WU の worktree と工程の統合（daemon 側の git 操作だけ。LLM なし）。
 pub mod integration;
+/// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する判定。
+pub mod orphan;
 pub mod policy;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;

@@ -148,6 +148,9 @@ pub struct Config {
     /// ADR-0041 D1（Phase 49）: ローカルの作業場所を worktree にするときの設定。
     #[serde(default)]
     pub workspace: WorkspaceConfig,
+    /// ADR-0075 D1〜D3（Phase G1）: `[scratch]`。ローカルの scratch pool（owner ごとの `CARGO_TARGET_DIR` と semantic GC）。
+    #[serde(default)]
+    pub scratch: ScratchConfig,
     /// ADR-0043 D5（Phase 54）: 変更の取り込みで GitHub を使うときの設定（`gh` の場所と merge の方法）。
     #[serde(default)]
     pub github: GithubConfig,
@@ -343,6 +346,112 @@ fn default_build_cache_dir() -> PathBuf {
 
 fn default_prune_after_secs() -> u64 {
     86400
+}
+
+/// `[scratch]`（ADR-0075 D1〜D3、Phase G1）: ローカルの scratch pool。既定は有効。`enabled = false` で ADR-0066 D1 /
+/// F5-fix の `build_cache_dir` の挙動に戻る（1 リリースの間の退路）。`dir` が NFS 上なら起動時に無効化する。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchConfig {
+    #[serde(default = "default_scratch_enabled")]
+    pub enabled: bool,
+    /// 既定は `[workspace] build_cache_dir` の**親の `scratch/`**（本番は `/var/lib/celeris/scratch`）。
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    #[serde(default = "default_scratch_targets_max_gb")]
+    pub targets_max_gb: u64,
+    #[serde(default = "default_scratch_l1_max_gb")]
+    pub l1_max_gb: u64,
+    #[serde(default = "default_scratch_total_max_gb")]
+    pub total_max_gb: u64,
+    #[serde(default = "default_scratch_high_watermark")]
+    pub high_watermark: f64,
+    #[serde(default = "default_scratch_low_watermark")]
+    pub low_watermark: f64,
+    #[serde(default = "default_scratch_external_lease_ttl_secs")]
+    pub external_lease_ttl_secs: u64,
+    #[serde(default = "default_scratch_waiting_keep_secs")]
+    pub waiting_keep_secs: u64,
+    #[serde(default = "default_scratch_failed_keep_secs")]
+    pub failed_keep_secs: u64,
+    #[serde(default = "default_scratch_completed_grace_secs")]
+    pub completed_grace_secs: u64,
+    #[serde(default = "default_scratch_warm_seeds_per_repo")]
+    pub warm_seeds_per_repo: usize,
+    #[serde(default = "default_scratch_gc_max_per_tick")]
+    pub gc_max_per_tick: usize,
+    #[serde(default = "default_scratch_enabled")]
+    pub adopt: bool,
+    #[serde(default = "default_scratch_adopt_max_distance")]
+    pub adopt_max_distance: u64,
+    #[serde(default = "default_scratch_measure_interval_secs")]
+    pub measure_interval_secs: u64,
+}
+
+impl Default for ScratchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_scratch_enabled(),
+            dir: None,
+            targets_max_gb: default_scratch_targets_max_gb(),
+            l1_max_gb: default_scratch_l1_max_gb(),
+            total_max_gb: default_scratch_total_max_gb(),
+            high_watermark: default_scratch_high_watermark(),
+            low_watermark: default_scratch_low_watermark(),
+            external_lease_ttl_secs: default_scratch_external_lease_ttl_secs(),
+            waiting_keep_secs: default_scratch_waiting_keep_secs(),
+            failed_keep_secs: default_scratch_failed_keep_secs(),
+            completed_grace_secs: default_scratch_completed_grace_secs(),
+            warm_seeds_per_repo: default_scratch_warm_seeds_per_repo(),
+            gc_max_per_tick: default_scratch_gc_max_per_tick(),
+            adopt: default_scratch_enabled(),
+            adopt_max_distance: default_scratch_adopt_max_distance(),
+            measure_interval_secs: default_scratch_measure_interval_secs(),
+        }
+    }
+}
+
+fn default_scratch_enabled() -> bool {
+    true
+}
+fn default_scratch_targets_max_gb() -> u64 {
+    100
+}
+fn default_scratch_l1_max_gb() -> u64 {
+    40
+}
+fn default_scratch_total_max_gb() -> u64 {
+    150
+}
+fn default_scratch_high_watermark() -> f64 {
+    0.90
+}
+fn default_scratch_low_watermark() -> f64 {
+    0.70
+}
+fn default_scratch_external_lease_ttl_secs() -> u64 {
+    21_600
+}
+fn default_scratch_waiting_keep_secs() -> u64 {
+    172_800
+}
+fn default_scratch_failed_keep_secs() -> u64 {
+    86_400
+}
+fn default_scratch_completed_grace_secs() -> u64 {
+    600
+}
+fn default_scratch_warm_seeds_per_repo() -> usize {
+    1
+}
+fn default_scratch_gc_max_per_tick() -> usize {
+    8
+}
+fn default_scratch_adopt_max_distance() -> u64 {
+    200
+}
+fn default_scratch_measure_interval_secs() -> u64 {
+    30
 }
 
 /// `[containers]`（ADR-0043 D3。Phase 56）: リポジトリの `run` が `container` のタスクを
@@ -2021,6 +2130,15 @@ impl Config {
         if cfg.workspace.build_cache_dir.is_relative() {
             cfg.workspace.build_cache_dir = base.join(&cfg.workspace.build_cache_dir);
         }
+        // ADR-0075 D7: `[scratch] dir`（書いたときだけ。既定は `scratch_dir()` が build_cache_dir の親から組む）。
+        if let Some(dir) = &cfg.scratch.dir {
+            let expanded = task_core::expand_home(dir, task_core::home_dir().as_deref());
+            cfg.scratch.dir = Some(if expanded.is_relative() {
+                base.join(&expanded)
+            } else {
+                expanded
+            });
+        }
         if let Some(token_file) = &cfg.api.token_file
             && token_file.is_relative()
         {
@@ -2890,6 +3008,53 @@ impl Config {
         });
     }
 
+    /// ADR-0075 D7: `[scratch] dir`。書いていなければ `[workspace] build_cache_dir` の親の `scratch/`。
+    pub fn scratch_dir(&self) -> PathBuf {
+        match &self.scratch.dir {
+            Some(dir) => dir.clone(),
+            None => self
+                .workspace
+                .build_cache_dir
+                .parent()
+                .map(|p| p.join("scratch"))
+                .unwrap_or_else(|| self.workspace.build_cache_dir.join("scratch")),
+        }
+    }
+
+    /// ADR-0075 D1: `[scratch]` を解決した値（NFS の検査をしない。テストと `scratch_settings` の下請け）。
+    pub fn scratch_settings_unchecked(&self) -> task_worker::scratch::ScratchSettings {
+        let c = &self.scratch;
+        let gib = task_worker::scratch::GIB;
+        task_worker::scratch::ScratchSettings {
+            enabled: c.enabled,
+            disabled_reason: None,
+            dir: self.scratch_dir(),
+            targets_max_bytes: c.targets_max_gb.saturating_mul(gib),
+            l1_max_bytes: c.l1_max_gb.saturating_mul(gib),
+            total_max_bytes: c.total_max_gb.saturating_mul(gib),
+            high_watermark: c.high_watermark,
+            low_watermark: c.low_watermark,
+            external_lease_ttl_secs: c.external_lease_ttl_secs,
+            waiting_keep_secs: c.waiting_keep_secs,
+            failed_keep_secs: c.failed_keep_secs,
+            completed_grace_secs: c.completed_grace_secs,
+            warm_seeds_per_repo: c.warm_seeds_per_repo,
+            gc_max_per_tick: c.gc_max_per_tick,
+            adopt: c.adopt,
+            adopt_max_distance: c.adopt_max_distance,
+            measure_interval_secs: c.measure_interval_secs,
+        }
+    }
+
+    /// ADR-0075 D1: 起動時の検査つき。`dir` か `sccache-l1/` が NFS 上なら `enabled = false` と理由
+    /// （dispatcher が起動ログに出す）。
+    pub fn scratch_settings(&self) -> task_worker::scratch::ScratchSettings {
+        task_worker::scratch::apply_nfs_check(
+            self.scratch_settings_unchecked(),
+            task_worker::scratch::is_on_nfs,
+        )
+    }
+
     pub fn dispatch_config(&self) -> DispatchConfig {
         DispatchConfig {
             delivery: task_ops::delivery::DeliveryPolicy {
@@ -2974,6 +3139,8 @@ impl Config {
             shared_build_cache: self.workspace.shared_build_cache,
             build_cache_dir: self.workspace.build_cache_dir.clone(),
             workspace_prune_after_secs: self.workspace.prune_after_secs,
+            // ADR-0075（Phase G1）: scratch pool（NFS 上なら無効化した理由つき）。
+            scratch: self.scratch_settings(),
             // ADR-0072 D18（Phase E1）/ D13・D14（Phase E3）: continuation・gate・planner。
             execution: task_dispatch::ExecutionConfig {
                 continuation: self.execution.continuation,
@@ -4943,6 +5110,61 @@ tiers = ["cheap"]
                 adapter: Some("claude-code".into())
             }
         );
+    }
+
+    /// ADR-0075 D7: `[scratch] dir` の既定は `build_cache_dir` の親の `scratch/`。
+    #[test]
+    fn scratch_defaults_follow_the_build_cache_parent() {
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[workspace]\nbuild_cache_dir = \"/var/lib/celeris/build-cache\"\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert!(s.enabled);
+        assert_eq!(s.dir, PathBuf::from("/var/lib/celeris/scratch"));
+        assert_eq!(s.targets_max_bytes, 100 * task_worker::scratch::GIB);
+        assert_eq!(s.l1_max_bytes, 40 * task_worker::scratch::GIB);
+        assert_eq!(s.total_max_bytes, 150 * task_worker::scratch::GIB);
+        assert_eq!((s.high_watermark, s.low_watermark), (0.90, 0.70));
+        assert_eq!(s.external_lease_ttl_secs, 21_600);
+        assert_eq!(s.gc_max_per_tick, 8);
+        assert!(s.adopt);
+        // 明示すればそれを使う。未知のキーは拒否。
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"/srv/scratch\"\ntargets_max_gb = 10\nhigh_watermark = 0.8\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert_eq!(s.dir, PathBuf::from("/srv/scratch"));
+        assert_eq!(s.targets_max_bytes, 10 * task_worker::scratch::GIB);
+        assert_eq!(s.high_watermark, 0.8);
+        assert!(
+            toml::from_str::<Config>(
+                "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nbogus = 1\n"
+            )
+            .is_err()
+        );
+        // 起動時の検査は一時ディレクトリ（ローカル）では有効のまま。
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg: Config = toml::from_str(&format!(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"{}\"\n",
+            tmp.path().join("scratch").display()
+        ))
+        .unwrap();
+        assert!(cfg.dispatch_config().scratch.enabled);
+    }
+
+    /// ADR-0075 D7: `[scratch] enabled = false` で F5-fix の挙動に戻す（dispatcher は build_cache_dir を使う）。
+    #[test]
+    fn scratch_can_be_disabled() {
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nenabled = false\n",
+        )
+        .unwrap();
+        let d = cfg.dispatch_config();
+        assert!(!d.scratch.enabled);
+        assert_eq!(d.scratch.disabled_reason, None);
+        assert!(d.shared_build_cache);
     }
 
     #[test]

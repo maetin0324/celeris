@@ -11,7 +11,7 @@
 - [Phase 101–150](progress/phase-101-150.md)
 - [Phase E](progress/phase-E.md)
 - [Phase F](progress/phase-F.md)
-- [Phase G（ビルドキャッシュの 2 層化、ADR-0075）](progress/phase-G.md) — G0（設計）完了 2026-09-28。G1〜G3 は未着手
+- [Phase G（ビルドキャッシュの 2 層化、ADR-0075）](progress/phase-G.md) — G0（設計）完了 2026-09-28。G1（scratch pool + semantic GC + celerisctl / metrics）完了 2026-09-28（worktree、main 未 merge）。G2・G3 は未着手
 
 各 Phase の詳細・証跡・申し送りは上記の分割ファイルを参照。既存の `docs/PROGRESS.md` 参照はこの目次を入口として維持する。
 

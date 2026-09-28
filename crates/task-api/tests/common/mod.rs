@@ -411,6 +411,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         accounts_roots: std::collections::HashMap::new(),
         accounts: vec![],
         containers: None,
+        scratch: None,
         clusters: vec![ClusterLive {
             id: "pegasus".into(),
             host: "pegasus".into(),

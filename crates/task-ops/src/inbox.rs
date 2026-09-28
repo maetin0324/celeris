@@ -1655,6 +1655,7 @@ mod tests {
             max_runs_per_account: None,
             accounts: vec![],
             containers: None,
+            scratch: None,
         };
         let with_snapshot = inbox(
             &store,
@@ -1939,6 +1940,7 @@ mod tests {
             max_runs_per_account: None,
             accounts: vec![],
             containers: None,
+            scratch: None,
         };
         let still_present = inbox(
             &store,

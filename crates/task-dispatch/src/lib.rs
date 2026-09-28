@@ -16,6 +16,8 @@ pub mod policy;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;
+/// ADR-0075 D2 / D6（Phase G1）: scratch pool の走査・GC の実行・削除と測定のスレッド・状態の組み立て。
+pub mod scratch_gc;
 /// ADR-0054 D1（Phase 67）: ノードごとの継続セッションの決定的な判断（純粋関数）。
 pub mod sessions;
 /// ADR-0067 D3: 未申告の成果物（`artifacts/` の外に書かれた `*.md`）を拾う走査。

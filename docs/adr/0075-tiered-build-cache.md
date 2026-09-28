@@ -1,7 +1,7 @@
 # ADR-0075: ビルドキャッシュの 2 層化 — target は使い捨ての scratch、再利用は sccache の L1（ローカル）/ L2（NFS）に集約し、Celeris が semantic cache manager になる
 
 - 日付: 2026-09-28
-- 状態: **Proposed**（Phase G0 = 設計。G1〜G3 は未着手）
+- 状態: **Accepted**（2026-09-28 Phase G1 着手。G0 = 設計、G2・G3 は未着手）
 - 入力: `docs/notes/build-cache-tiering-input-2026-09-28.md`（人の設計方針。本 ADR はこれに沿う。以下「入力メモ」）
 - 関連:
   - ADR-0066（D1 共有 `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>`、D2 終端の作業場所の生成物の刈り取り）。本 ADR は D1 を**置き換える**（D2 は残す）
@@ -409,3 +409,41 @@ commit。テストは外部ネットワークに出ない（HTTP は loopback �
   l2_failures_detach_and_back_off, l1_eviction_keeps_unflushed_entries, pending_log_is_replayed_after_restart, invalid_keys_are_rejected}`、
   `task_dispatch::dispatcher::tests::cache_server_down_means_no_rustc_wrapper`。本物の sccache を使う e2e は `#[ignore]`。
 - **並行可否**: `crates/scratch-cache` の純粋部（store・flusher・GC）は G2 と並行できる。dispatcher / celerisctl / GUI の配線は G2 の後。
+
+## Phase G1 実装時の逸脱・明確化（2026-09-28）
+
+G1 の実装で本文と食い違った点・本文が決めていなかった点を記録する（黙って逸脱しない）。
+
+1. **`lease.json` に `ttl_secs` を足した**（D1 の欄の追加）。`celerisctl scratch lease --ttl <secs>` で外部の owner ごとに TTL を
+   変えられる（無ければ `[scratch] external_lease_ttl_secs`）。`deny_unknown_fields` のまま、欠けていてもよい欄として足した。
+2. **測定は lease の mtime を変えない**（D2 の明確化）。測定スレッドは `size_bytes` / `measured_at` を書いた後に mtime を元に戻す
+   （mtime は外部の owner の唯一の生存の合図で、測定で延命させない）。daemon の測定結果はプロセス内の cache にも持つ（legacy・野良は
+   lease が無いのでここだけ）。
+3. **seed の「その repo を使う非終端の Task」は pool の中で近似した**（D2）。P0〜P2 に分類された owner と同じ `repo_key` を「使われている
+   repo」とみなす（まだ lease を持たない ready の Task の repo までは tick で DB から引かない）。G2 以降に不足が分かれば dispatcher の
+   `task_workspaces` から足す。
+4. **未測定の推定**: 同じ repo の最大値。repo に測定済みが無ければ **pool 全体の最大値**（本文は repo の最大値だけ。0 にしないための補い）。
+5. **野良・lease の無い owner・legacy は「測定した木の最新の mtime」が 1 時間以上前のときだけ回収**する（ディレクトリ自身の mtime は
+   cargo の書き込みで更新されないため）。未測定のものは P0 扱いで消さない。legacy は pool の外なので pool の使用量・pinned に数えない
+   （空きの目標には数える）。
+6. **刈った後の lease の記録は 7 日で片づける**（`LEASE_RECORD_KEEP_SECS`、本文に無い）。target を刈られた P3 の owner で、`wu-*` の
+   子を持たないものだけ。
+7. **rename の行き先**: owner の target は `targets/.deleting-<owner-flat>-<nanos>`（Task の下の WU も pool の根に集める）、legacy は
+   同じ親の中。削除スレッドは pool の `targets/` と legacy の親の `.deleting-*` を消す。
+8. **`scratch_gc` は毎 tick 回す**（間引かない。「次の tick で rename」を守る）。空きが `min_free_disk_mb` 未満なら `check_disk_space` の
+   中で緊急 GC を先に回し、その tick の通常の phase は重ねない。
+9. **checks は adopt しない**（D3 の明確化）。WU の checks・統合 WU の検査・reviewer の checks は run と同じ owner の lease を touch して
+   env を返すだけ。adopt は run の開始時（`run_worker` の `spawn_blocking`）だけで、commit の距離もそこでだけ計算する。lease の書き込みに
+   失敗しても `CARGO_TARGET_DIR` のパスは与える（worktree 直下に target を作らせない）。
+10. **`celerisctl scratch lease` / `env` の adopt**: 候補は同じ repo の P3 の**外部の owner**（release / agent）だけ（DB を開かない）。
+    安全条件の checkout 時刻は `--worktree <path>`（無ければ `--repo`）の `.git` が**ファイル**（git worktree）のときのその mtime。分から
+    なければ adopt しない。release.sh は `git worktree add` の直後に `--repo "$SD_REPO" --worktree "$BUILD"` で呼ぶ。owner は位置引数でも
+    `--owner` でもよい。scratch が無効なら `lease` / `env` は失敗し、release.sh は従来の `$SD_RELEASES/.cargo-target` に戻る。
+11. **`ScratchStatus` に L1 / L2 の欄はまだ無い**（D6 は「G3 まで null」）。G2 / G3 で `Option` の欄として足す（追加だけなので互換）。
+    `celerisctl scratch status --json` の `last_gc` は常に null（直近の GC は daemon のメモリにしか無い）。`GET /metrics/scratch` は
+    スナップショットが無い（daemon が動いていない）・`shared_build_cache = false` のとき 404 `scratch_unavailable`。
+12. **`[scratch]` の欄**: 本文の欄に加えて `measure_interval_secs`（既定 30）を設定にした。`l1_max_gb` は G2 まで使わない。`total_max_gb`
+    は実効上限の表示と journal にだけ使う（G1 の GC の目標は `targets_max_gb` の watermark と空き）。
+13. **対象外のまま**: `[commands] setup`（worktree を作った直後に 1 度流すコマンド）には `CARGO_TARGET_DIR` を与えていない（F5-fix と同じ）。
+    コンテナ実行は Remote と同じ条件（`container_plan.is_none()`）で外しており、専用のテストは Remote（`shared_build_cache_is_not_applied_to_remote_workspaces`
+    に scratch の計画を渡す）だけ。

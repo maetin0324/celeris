@@ -207,6 +207,8 @@ pub struct ApiV1Schema {
     /// `transition_result`）。
     pub phase_gate: task_ops::phase_gate::PhaseGateRequest,
     pub execution_metrics: crate::types::ExecutionMetricsSummary,
+    /// ADR-0075 D6（Phase G1）: `GET /metrics/scratch`（`celerisctl scratch status --json` と同じ `celeris.scratch-status/1`）。
+    pub metrics_scratch: task_ops::daemon::ScratchStatus,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

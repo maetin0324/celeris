@@ -82,3 +82,112 @@ docs 配下だけの変更（コードは変更しない）。作業は git work
 
 - `du -x /*` では 23 GB しか見えないのに `df` が 137 GB を示していた原因は `/.migration/home.raw`（見かけ 1 TiB のスパース raw、実使用 115 GB。2026-09-25 のホーム移行時にホスト側から作られたコピー。所有者がコンテナの uid 範囲外のため CT の root でも削除不可）。Proxmox ホストから `rm -rf /proc/<init-pid>/root/.migration` で削除 → `/` は 137 GB → 22 GB（空き 220 GB）。
 - これで ADR-0075 D1 の scratch pool（targets 100 GB + L1 40 GB）はルート LVM に収まる。U2 は解消（`mp1` の追加は不要になった。LVM 拡張も当面不要）。
+## Phase G1（scratch pool + 割り当て + semantic GC + watermark + celerisctl / metrics）— 着手 2026-09-28
+
+ADR-0075 の状態を Accepted にした。作業は git worktree の中（main へ merge / push しない）。
+
+### G1 checkpoint 1: `scratch.rs` の純粋部 + `[scratch]` 設定（完了 2026-09-28）
+
+- `crates/task-worker/src/scratch.rs`（新規）: owner（`task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>`）と
+  パス、`lease.json`（`celeris.scratch-lease/1`、`deny_unknown_fields`）の読み書き、`.lock` の flock、`allocate`（lease の作成・touch と
+  adopt）、`touch` / `release`、`cargo_env`（dispatcher と `celerisctl scratch env` が共有）、`classify`（D2 の表）、`legacy_class`、
+  `plan_gc`（純粋関数）、`choose_adopt`、`is_on_nfs` / `apply_nfs_check`、`measure_tree`。
+- `crates/celeris/src/config.rs`: `[scratch]`（`enabled` / `dir` / `targets_max_gb` / `l1_max_gb` / `total_max_gb` /
+  `high_watermark` / `low_watermark` / 保持期限 / `gc_max_per_tick` / `adopt` / `adopt_max_distance` / `measure_interval_secs`）。
+  `dir` の既定は `build_cache_dir` の親の `scratch/`。`scratch_settings()` が NFS の検査をして `DispatchConfig.scratch` に入れる。
+- テスト: `cargo test -p task-worker --lib scratch` → 17 passed、`cargo test -p celeris --lib scratch` → 2 passed。
+
+### G1 checkpoint 2: dispatcher / review の割り当て、WU 終端の回収、adopt、緊急 GC（完了 2026-09-28）
+
+- `crates/task-dispatch/src/scratch_gc.rs`（新規）: pool の走査（lease と DB の状態で分類。木は辿らない）、`run_gc`（走査 → `plan_gc` →
+  `.deleting-*` へ rename）、削除スレッド・測定スレッド（同時にそれぞれ 1 本、測定は間隔ごとに 1 つ）、legacy の根
+  （`build_cache_dir/cargo/*`、`<releases_dir>/.cargo-target` の先）、実効上限、`ScratchStatus` の組み立て。
+- `dispatcher.rs`: run の `CARGO_TARGET_DIR` を `CargoTargetPlan`（None / Legacy / Scratch）で決める。scratch なら run の開始時に
+  `allocate_scratch_target`（lease の作成・touch と adopt。commit の距離はここだけで計算）。WU の checks・統合 WU の検査・reviewer の
+  checks は `check_cargo_target_env` が同じ owner の lease を touch して env を返す。tick の `scratch_gc` phase が F5-fix の
+  `cleanup_work_unit_build_caches` を置き換える（scratch が無効なら従来どおり呼ぶ）。`check_disk_space` は scratch の dir も見て、
+  足りなければ緊急 GC → 保留 + 通知 1 回（消せるものが P0 だけなら本文に pinned の一覧）。watermark の到達・解除、GC、実効上限の縮小は
+  tracing（journal）。`DaemonSnapshot.scratch` に観測値。起動時に NFS で無効化した理由を warn。
+- テスト: `task_dispatch::dispatcher::tests::{every_cargo_path_uses_the_scratch_target_dir, terminal_work_unit_target_is_reclaimed_on_the_next_tick,
+  low_disk_runs_emergency_gc_before_pausing_dispatch, scratch_on_nfs_falls_back_to_build_cache_dir,
+  run_start_adopts_a_finished_target_that_predates_the_checkout}`、`shared_build_cache_is_not_applied_to_remote_workspaces`（scratch の計画を
+  渡しても Remote には与えない）、`task_dispatch::scratch_gc::tests::*`（4 件）。
+- `cargo test -p task-dispatch -p task-worker -p celeris -p task-ops --no-fail-fast` → FAILED 0。`cargo clippy --workspace --all-targets -- -D warnings` → 警告 0。
+
+### G1 checkpoint 3: `celerisctl scratch`、`SD_CARGO_TARGET` の lease、定型文（完了 2026-09-28）
+
+- `crates/celerisctl/src/commands/scratch.rs`（新規）: `status [--json]` / `gc [--dry-run]` / `lease <owner> --repo [--worktree] [--base] [--ttl]` /
+  `touch` / `release` / `env <owner> [--repo …]`（owner は位置引数でも `--owner` でもよい）。`env` は dispatcher と同じ
+  `task_worker::scratch::cargo_env`。scratch が無効なら `lease` / `env` は失敗（release.sh が従来の target に戻る合図）。
+  `lease.json` に `ttl_secs`（`--ttl`）を足した。`build-cache prune` の help に「scratch へ移行済み。`celerisctl scratch gc`」。
+- `scripts/selfdeploy/lib.sh`: `sd_celerisctl_bin` / `sd_scratch_lease` / `sd_scratch_touch` / `sd_scratch_release`。`release.sh` は
+  `git worktree add` の直後に lease（`--repo "$SD_REPO" --worktree "$BUILD" --base <sha>`）→ 成功すれば `SD_CARGO_TARGET` をその target に、
+  `trap` で終了時に release、各 step の前に touch。
+- 定型文: `crates/task-worker/src/preamble.rs` の `shared_build_cache_note`、`.claude/agents/{implementer,auditor}.md`、
+  `docs/ops/home-nfs-migration-2026-09-25.md` §5 の訂正（`~/.cargo/config.toml` に target-dir を置かない）。
+- テスト: `celerisctl::commands::scratch::tests::{env_matches_the_dispatcher_env, lease_touch_release_round_trip, gc_dry_run_lists_without_removing,
+  disabled_scratch_makes_lease_fail_so_release_sh_falls_back}` → 4 passed。`bash scripts/selfdeploy/tests/release_uses_scratch_lease.sh` →
+  `release_uses_scratch_lease: ok`（偽の celerisctl / cargo / pnpm。lease → touch → release の順、gate の `CARGO_TARGET_DIR` が scratch、
+  lease 失敗で `$SD_RELEASES/.cargo-target`）。
+
+### G1 checkpoint 4: metrics / API / GUI の 1 行、schema と生成型（完了 2026-09-28）
+
+- `task_ops::daemon::{ScratchStatus, ScratchOwnerView, ScratchLegacyView, ScratchGcView, ScratchGcRemovedView}`（`celeris.scratch-status/1`）と
+  `DaemonSnapshot.scratch`（`#[serde(default)]`）。`GET /api/v1/metrics/scratch` はスナップショットの `scratch` を返す（無ければ 404
+  `scratch_unavailable`）。`celerisctl scratch status --json` は同じ型を出す（daemon の直近の GC は持たないので `last_gc` は null）。
+- `docs/api/v1/api-v1.schema.json`（`metrics_scratch` と `DaemonSnapshot.scratch`）と `gui/app/celeris/types.ts` を再生成して commit。
+- GUI: `gui/app/routes/daemon.tsx` に `scratchLine`（「scratch 62 GB / 100 GB（pinned 18 GB、実効上限 150 GB）」。pressure が none 以外・実効上限の
+  縮小・NFS で無効のときだけ注意色）を 1 行。
+- テスト: `task_api::handlers::tests::metrics_scratch_matches_the_status_schema`（応答が `ScratchStatus` そのもの、キーが committed schema の
+  properties と一致、スナップショット無しで 404）、`gui/test/unit/daemon.test.ts` の `scratchLine` 3 件。
+- `cd gui && corepack pnpm@11.27.0 typecheck && lint && test && build` → exit 0、Test Files 73 passed / Tests 1116 passed。
+
+### Phase G1 の全体ゲート（2026-09-28、完了）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test --workspace --no-fail-fast` → exit 0、passed 2543 / failed 0 / ignored 5（F5-fix 時点 2511 から +32）
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0、警告 0
+- `UPDATE_SCHEMA=1 cargo test -p task-core schema && UPDATE_SCHEMA=1 cargo test --workspace committed_schema_matches_generated` → ok、再生成後 `git status` 差分ゼロ
+- `cd gui && corepack pnpm@11.27.0 gen:types`（差分ゼロ）`&& typecheck && lint && test && build` → すべて exit 0、Test Files 73 / Tests 1116 passed
+- `bash -n scripts/selfdeploy/*.sh`（10 ファイル）→ 構文エラー 0。`bash scripts/selfdeploy/tests/*.sh` → 3 本とも exit 0
+
+### 受け入れ条件（ADR-0075 §5 G1）との対応
+
+1. 全経路の `CARGO_TARGET_DIR` = `<scratch>/targets/<owner>/target`、`request.json` と一致、Remote に与えない →
+   `every_cargo_path_uses_the_scratch_target_dir`、`shared_build_cache_is_not_applied_to_remote_workspaces`。
+2. `plan_gc` が P0 を選ばず順序と low watermark を守る → `plan_gc_never_selects_pinned_owners`、`plan_gc_follows_the_semantic_order_and_stops_at_low_watermark`、
+   `plan_gc_keeps_one_warm_seed_per_repo`、`plan_gc_treats_unmeasured_owners_as_the_repo_maximum`、`legacy_build_cache_entries_are_reclaimed_only_when_idle`。
+3. WU 終端で次の tick に rename → 別スレッドで削除（seed を除く）、failed / blocked は残る → `terminal_work_unit_target_is_reclaimed_on_the_next_tick`。
+4. adopt は安全条件のときだけ → `adopt_requires_the_target_to_predate_the_checkout`、`adopt_prefers_the_nearest_commit_within_the_limit`、
+   `adopt_skips_a_candidate_that_was_leased_again_after_the_scan`、`run_start_adopts_a_finished_target_that_predates_the_checkout`。
+5. 空き不足 → 緊急 GC → 保留 + 通知 1 回 → 自動解除 → `low_disk_runs_emergency_gc_before_pausing_dispatch`。
+6. 外部 lease の TTL 切れ・release で P3、`scratch env` と dispatcher の env が一致 → `external_lease_expires_after_ttl`、`lease_touch_release_round_trip`、
+   `env_matches_the_dispatcher_env`。
+7. NFS なら無効化・`enabled = false` で F5-fix → `scratch_on_nfs_falls_back_to_build_cache_dir`、`nfs_check_disables_scratch_with_a_reason`、
+   `scratch_can_be_disabled`、`scratch_defaults_follow_the_build_cache_parent`。
+8. `status --json` と `GET /api/v1/metrics/scratch` が同じ schema、GUI に 1 行、再生成で差分ゼロ → `metrics_scratch_matches_the_status_schema`、
+   `gui/test/unit/daemon.test.ts`（scratchLine）、上のゲート。
+9. release.sh が lease を取り終了時に release → `scripts/selfdeploy/tests/release_uses_scratch_lease.sh`。
+
+ADR-0075 に「Phase G1 実装時の逸脱・明確化」1〜13 を追記した（`ttl_secs` の追加、測定は mtime を変えない、seed の近似、未測定の推定、
+野良・legacy は測定した mtime で 1h 判定、lease 記録の 7 日の片づけ、checks は adopt しない、CLI の adopt 条件と `--worktree`、L1/L2 の欄は G2/G3、
+`measure_interval_secs`、`[commands] setup` は対象外のまま など）。
+
+### 未解決事項・G2 への申し送り
+
+- **本番での確認（人）**: 昇格後に `celerisctl scratch status` で `/var/lib/celeris/scratch` が有効（NFS でない）こと、Task / WU の run の
+  `runs/<run_id>/request.json` の `cargo_target_dir` が `/var/lib/celeris/scratch/targets/task-<id>[/wu-<id>]/target` であること、WU done の
+  次の tick で WU の target が消えること、legacy の `build-cache/cargo/*` と `release-build/.cargo-target` が 1h idle の後に消えることを確かめる。
+  **今動いている実装エージェントが手で指している `build-cache/cargo/agent-platform-<name>` も 1h 書き込みが無ければ回収される**（定型文の
+  `celerisctl scratch env` に移ってもらう）。本番の config には `[scratch] dir = "/var/lib/celeris/scratch"` を明示することを勧める。
+- **実効上限**: U2 のまま（見えない約 100G）。`scratch status` の `effective_max_bytes` と journal の「実効上限 N GB」で観測できるようになった。
+- **G2 へ**: `task_worker::scratch::cargo_env` に sccache 系（`RUSTC_WRAPPER` / `SCCACHE_*`）と `CARGO_INCREMENTAL=0` /
+  `CARGO_PROFILE_DEV_DEBUG` を足せば dispatcher（`check_cargo_target_env` と run の `with_env`）と `celerisctl scratch env` の両方に入る
+  （今は run の経路は `CARGO_TARGET_DIR` だけを直接組んでいるので、G2 で `cargo_env` を使う形に揃える）。`ScratchStatus` に L1 の欄を
+  `Option` で足す。`[commands] setup` にも env を与えるかを決める。
+- seed の「使われている repo」は pool の中の P0〜P2 で近似（逸脱 3）。ready のまま lease を持たない Task の repo は数えない。
+
+### 提案
+
+- 人へ: 本番の `config.toml` に `[scratch] dir = "/var/lib/celeris/scratch"` を足す（既定でも build_cache_dir の親から同じ値になるが、明示
+  しておくと `build_cache_dir` を動かしたときに pool が動かない）。`mp1` の専用ボリュームを足す判断（ADR-0075 D1）は変わらず人。

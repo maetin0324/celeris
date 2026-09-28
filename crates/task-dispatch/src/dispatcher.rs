@@ -97,6 +97,86 @@ fn free_disk_mb(path: &Path) -> Result<u64, String> {
     Ok(stat.blocks_available().saturating_mul(stat.fragment_size()) / (1024 * 1024))
 }
 
+/// ADR-0075（Phase G1）: dispatcher が持つ scratch pool の GC の状態（プロセス内メモリだけ。DB に書かない）。
+#[derive(Default)]
+struct ScratchState {
+    /// 測定スレッドの結果（パス → サイズ）。
+    sizes: crate::scratch_gc::SizeCache,
+    /// 削除スレッド・測定スレッドが動いている間は `true`（重ねて起こさない）。
+    removing: Arc<std::sync::atomic::AtomicBool>,
+    measuring: Arc<std::sync::atomic::AtomicBool>,
+    last_measure: Option<Instant>,
+    /// 直近の走査で P3 だった target（run の開始時の adopt の候補）。
+    candidates: Vec<task_worker::scratch::AdoptCandidate>,
+    /// `DaemonSnapshot.scratch`。
+    view: Option<task_ops::daemon::ScratchStatus>,
+    last_gc: Option<task_ops::daemon::ScratchGcView>,
+    /// journal の遷移（watermark の到達・解除）を 1 回だけ出すための直前の値。
+    pressure: Option<task_worker::scratch::Pressure>,
+    /// 実効上限の縮小を 1 回だけ出すための直前の値（GiB）。
+    effective_warned_gib: Option<u64>,
+    /// ディスク不足の通知の本文に足す P0 の一覧（直近の走査）。
+    pinned_summary: Option<String>,
+    /// この tick で緊急 GC を回した（通常の `scratch_gc` phase を重ねない）。
+    ran_this_tick: bool,
+}
+
+/// ADR-0075 D3: run の `CARGO_TARGET_DIR` をどこから取るか（`run_worker` に渡す）。
+#[derive(Debug, Clone)]
+enum CargoTargetPlan {
+    /// `[workspace] shared_build_cache = false`（与えない）。
+    None,
+    /// ADR-0066 D1 / F5-fix（`[scratch]` が無効）: `<build_cache_dir>/cargo/<repo-key>[/wu-<id>]`。
+    Legacy(PathBuf),
+    /// scratch pool（`<scratch>/targets/<owner>/target`。adopt の候補つき）。
+    Scratch {
+        settings: task_worker::scratch::ScratchSettings,
+        candidates: Vec<task_worker::scratch::AdoptCandidate>,
+    },
+}
+
+/// ADR-0075 D3: run の開始時の割り当て（lease の作成と adopt）。commit の距離もここで計算する（tick では計算しない）。
+fn allocate_scratch_target(
+    settings: &task_worker::scratch::ScratchSettings,
+    candidates: &[task_worker::scratch::AdoptCandidate],
+    owner: &task_worker::scratch::Owner,
+    repo: &task_worker::TaskRepo,
+    work_unit_key: Option<String>,
+) -> PathBuf {
+    let pool = settings.pool();
+    let base = repo.worktree.as_ref().map(|w| w.base.sha.clone());
+    let checkout = task_worker::scratch::checkout_time(&repo.dir);
+    let source = repo.source.clone();
+    let distance = |c: &task_worker::scratch::AdoptCandidate| match (&base, &c.base_commit) {
+        (Some(a), Some(b)) => crate::scratch_gc::commit_distance(&source, a, b),
+        _ => None,
+    };
+    let req = task_worker::scratch::AllocateRequest {
+        owner,
+        repo_path: &repo.source,
+        base_commit: base.clone(),
+        work_unit_key,
+        checkout,
+        candidates,
+        distance: &distance,
+        adopt: settings.adopt,
+        max_distance: settings.adopt_max_distance,
+    };
+    match task_worker::scratch::allocate(&pool, &req) {
+        Ok(a) => {
+            if let Some(from) = &a.adopted_from {
+                tracing::info!(owner = %owner, adopted_from = %from, target = %a.target_dir.display(), "scratch: adopted a warm target (ADR-0075 D3)");
+            }
+            a.target_dir
+        }
+        Err(e) => {
+            // lease を作れなくてもパスは与える（worktree の直下に target を作らせない）。
+            tracing::warn!(owner = %owner, error = %e, "scratch: could not write the lease; using the target path without it");
+            pool.target_dir(owner)
+        }
+    }
+}
+
 /// ADR-0018: コマンドを実行するクラスタ 1 つ分の設定（`celeris::config::ClusterConfig` の写し。task-dispatch は celeris に依存しない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterSpec {
@@ -644,6 +724,9 @@ pub struct DispatchConfig {
     pub shared_build_cache: bool,
     /// ADR-0066 D1: `[workspace] build_cache_dir`（既定 `~/.local/celeris/build-cache`）。
     pub build_cache_dir: PathBuf,
+    /// ADR-0075（Phase G1）: `[scratch]`。有効なら `CARGO_TARGET_DIR` は `<scratch>/targets/<owner>/target`
+    /// （`build_cache_dir` を使わない）。無効（設定・NFS 上）なら ADR-0066 D1 / F5-fix の挙動。
+    pub scratch: task_worker::scratch::ScratchSettings,
     /// ADR-0066 D2（Phase 110b）: `[workspace] prune_after_secs`（既定 86400、`0` で無効）。終端に
     /// なってからこの秒数経った作業場所から、ビルド生成物だけを刈る。
     pub workspace_prune_after_secs: u64,
@@ -1293,9 +1376,10 @@ struct RunExtras {
     /// ADR-0074 D1.2（Phase F2b）: v2 の WU の run の成果物の置き場（`<task_dir>/wu/<key>/artifacts`。
     /// 並列の WU が同じ `artifacts/checkpoint.json` を上書きしないため）。`runs/` は Task のものを共有する。
     artifacts_dir_override: Option<PathBuf>,
-    /// ADR-0074 F5-fix: 自分の worktree で走る v2 の WU の run だけ `Some("wu-<work_unit_id>")`。
-    /// `run_worker` が `CARGO_TARGET_DIR` を `<repo-key>/wu-<id>` にする（兄弟 WU と target を共有しない）。
-    cargo_target_subdir: Option<String>,
+    /// ADR-0074 F5-fix / ADR-0075 D3: 自分の worktree で走る v2 の WU の run だけ `Some((work_unit_id, key))`。
+    /// `run_worker` が `CARGO_TARGET_DIR` を WU ごとにする（scratch なら owner `task-<id>/wu-<id>`、無効なら
+    /// `<repo-key>/wu-<id>`。兄弟 WU と target を共有しない）。
+    cargo_target_work_unit: Option<(String, String)>,
 }
 
 struct ReviewEntry {
@@ -1745,6 +1829,8 @@ pub struct Dispatcher {
     disk_low: bool,
     /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
     removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
+    /// ADR-0075（Phase G1）: scratch pool の GC の状態（測定の cache・削除 / 測定スレッドの印・adopt の候補・観測値）。
+    scratch: ScratchState,
     disk_ready: bool,
     /// 「設定に合うプロバイダが無い」警告を出した（連続 tick で繰り返さない）タスク（ADR-0012 D2）。
     warned_unroutable: std::collections::HashSet<TaskId>,
@@ -2001,6 +2087,12 @@ impl Dispatcher {
                     .collect(),
                 None => HashMap::new(),
             };
+        // ADR-0075 D1: scratch を NFS 上で無効化したときは起動ログに理由を出す（従来の build_cache_dir に戻る）。
+        if let Some(reason) = &config.scratch.disabled_reason {
+            tracing::warn!(%reason, "scratch pool disabled");
+        } else if config.scratch.enabled && config.shared_build_cache {
+            tracing::info!(dir = %config.scratch.dir.display(), "scratch pool enabled (ADR-0075)");
+        }
         Self {
             store,
             policy,
@@ -2017,6 +2109,7 @@ impl Dispatcher {
             infra_backoff: HashMap::new(),
             disk_low: false,
             removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            scratch: ScratchState::default(),
             disk_ready: true,
             warned_unroutable: std::collections::HashSet::new(),
             warned_cluster_tool: std::collections::HashSet::new(),
@@ -2478,6 +2571,146 @@ impl Dispatcher {
         }
     }
 
+    /// ADR-0075: scratch pool を使うか（`shared_build_cache` かつ `[scratch]` が有効〈NFS で無効化されていない〉）。
+    fn scratch_active(&self) -> bool {
+        self.config.shared_build_cache && self.config.scratch.enabled
+    }
+
+    /// ADR-0075 D2（Phase G1）: tick の `scratch_gc` phase。lease と DB の状態を読み、`plan_gc` で決めた target を
+    /// `.deleting-*` へ rename する（`remove_dir_all` は削除スレッド、サイズは測定スレッド）。`emergency` は空き <
+    /// `min_free_disk_mb` のときの緊急モード。rename した件数を返す。
+    fn scratch_gc(&mut self, emergency: bool) -> usize {
+        use task_worker::scratch::{GIB, Pressure};
+        let settings = self.config.scratch.clone();
+        let legacy = crate::scratch_gc::legacy_paths(
+            &self.config.build_cache_dir,
+            self.config.releases_dir.as_deref(),
+        );
+        let sizes = self
+            .scratch
+            .sizes
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default();
+        let min_free = self.config.min_free_disk_mb.saturating_mul(1024 * 1024);
+        let lookup = task_worker::scratch::StoreLookup(self.store.as_ref());
+        let run = crate::scratch_gc::run_gc(
+            &settings,
+            &legacy,
+            &lookup,
+            true,
+            &sizes,
+            min_free,
+            emergency,
+            &std::collections::BTreeSet::new(),
+            false,
+        );
+        let now = std::time::SystemTime::now();
+        // journal: watermark の到達・解除（tracing だけ。満杯の瞬間に DB へ書かない。D2）。
+        if self.scratch.pressure != Some(run.plan.pressure) {
+            match run.plan.pressure {
+                Pressure::None => {
+                    if self.scratch.pressure.is_some() {
+                        tracing::info!(
+                            targets_bytes = run.plan.used_bytes,
+                            "scratch: below the watermark again"
+                        );
+                    }
+                }
+                p => tracing::warn!(
+                    pressure = p.as_str(),
+                    targets_bytes = run.plan.used_bytes,
+                    pinned_bytes = run.plan.pinned_bytes,
+                    high = (settings.targets_max_bytes as f64 * settings.high_watermark) as u64,
+                    free_bytes = ?run.fs.map(|f| f.1),
+                    "scratch: watermark reached; reclaiming targets"
+                ),
+            }
+            self.scratch.pressure = Some(run.plan.pressure);
+        }
+        let eff = crate::scratch_gc::effective_max(
+            settings.total_max_bytes,
+            run.fs,
+            run.plan.used_bytes,
+            min_free,
+        );
+        let eff_gib = eff / GIB;
+        if eff < settings.total_max_bytes && self.scratch.effective_warned_gib != Some(eff_gib) {
+            tracing::warn!(
+                "scratch: 実効上限 {eff_gib} GB（設定 {} GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）",
+                settings.total_max_bytes / GIB
+            );
+            self.scratch.effective_warned_gib = Some(eff_gib);
+        }
+        let executed = run.executed.clone().unwrap_or(crate::scratch_gc::Executed {
+            removed: Vec::new(),
+            reclaimed_bytes: 0,
+        });
+        let removed: std::collections::BTreeSet<String> =
+            executed.removed.iter().map(|p| p.id.clone()).collect();
+        if !executed.removed.is_empty() {
+            tracing::info!(
+                removed = executed.removed.len(),
+                reclaimed_bytes = executed.reclaimed_bytes,
+                emergency,
+                pressure = run.plan.pressure.as_str(),
+                "scratch gc: moved targets aside"
+            );
+            self.scratch.last_gc = Some(crate::scratch_gc::gc_view(
+                &run.plan, &executed, emergency, now,
+            ));
+        }
+        self.scratch.candidates = run
+            .scan
+            .candidates
+            .iter()
+            .filter(|c| !removed.contains(&c.owner.to_string()))
+            .cloned()
+            .collect();
+        self.scratch.pinned_summary = Some(crate::scratch_gc::pinned_summary(&run.scan, &run.plan));
+        // 削除スレッド（同時に 1 本）。
+        let roots = crate::scratch_gc::deleting_roots(&settings.pool(), &legacy);
+        if !self
+            .scratch
+            .removing
+            .load(std::sync::atomic::Ordering::SeqCst)
+            && crate::scratch_gc::has_pending_deletes(&roots)
+        {
+            crate::scratch_gc::spawn_removal(roots, self.scratch.removing.clone());
+        }
+        // 測定スレッド（同時に 1 本、間隔ごとに 1 つ）。
+        let due = self
+            .scratch
+            .last_measure
+            .is_none_or(|t| t.elapsed() >= crate::scratch_gc::measure_interval(&settings));
+        if due
+            && !self
+                .scratch
+                .measuring
+                .load(std::sync::atomic::Ordering::SeqCst)
+            && let Some((path, lease)) = crate::scratch_gc::next_to_measure(&run.scan, &sizes)
+        {
+            self.scratch.last_measure = Some(Instant::now());
+            crate::scratch_gc::spawn_measure(
+                path,
+                lease,
+                self.scratch.sizes.clone(),
+                self.scratch.measuring.clone(),
+            );
+        }
+        self.scratch.view = Some(crate::scratch_gc::build_status(
+            &settings,
+            &run.scan,
+            &run.plan,
+            run.fs,
+            min_free,
+            &sizes,
+            self.scratch.last_gc.clone(),
+            now,
+        ));
+        executed.removed.len()
+    }
+
     /// ディスク不足は Phase 116 の infra 障害として一度だけ通知し、空きが戻ると自動で解除する。
     /// 検査不能も安全側に倒して run を開始しない。
     fn check_disk_space(&mut self) -> bool {
@@ -2485,19 +2718,41 @@ impl Dispatcher {
             self.disk_low = false;
             return true;
         }
-        let paths = [
-            Path::new("/"),
-            &self.config.workspace_root,
-            &self.config.build_cache_dir,
+        let mut paths: Vec<PathBuf> = vec![
+            PathBuf::from("/"),
+            self.config.workspace_root.clone(),
+            self.config.build_cache_dir.clone(),
         ];
-        let low = paths.iter().find_map(|path| match free_disk_mb(path) {
-            Ok(free) if free < self.config.min_free_disk_mb => Some(format!(
-                "{}: {free} MiB free (minimum {} MiB)",
-                path.display(),
-                self.config.min_free_disk_mb
-            )),
-            Err(error) => Some(error),
-            _ => None,
+        // ADR-0075 D3: scratch pool の filesystem も見る。
+        if self.scratch_active() {
+            paths.push(self.config.scratch.dir.clone());
+        }
+        let min_free = self.config.min_free_disk_mb;
+        let find_low = move |paths: &[PathBuf]| {
+            paths.iter().find_map(|path| match free_disk_mb(path) {
+                Ok(free) if free < min_free => Some(format!(
+                    "{}: {free} MiB free (minimum {min_free} MiB)",
+                    path.display(),
+                )),
+                Err(error) => Some(error),
+                _ => None,
+            })
+        };
+        let mut low = find_low(&paths);
+        // ADR-0075 D3: 空きが足りなければ、新しい run を始める前にこの tick で緊急 GC（rename まで）を回す。
+        // 削除は別スレッドなので空きが戻るのは数 tick 後。その間は下の保留と通知 1 回（attempts を消費しない）。
+        let mut pinned_note = None;
+        if low.is_some() && self.scratch_active() {
+            let selected = self.scratch_gc(true);
+            self.scratch.ran_this_tick = true;
+            if selected == 0 {
+                pinned_note = self.scratch.pinned_summary.clone();
+            }
+            low = find_low(&paths);
+        }
+        let low = low.map(|reason| match pinned_note {
+            Some(note) => format!("{reason}; {note}"),
+            None => reason,
         });
         match low {
             Some(reason) => {
@@ -2563,8 +2818,22 @@ impl Dispatcher {
         self.abort_stale_runs()?;
         // ADR-0043 D2: **中止**されたタスクの worktree とブランチを消す（終端〈done / failed〉では消さない）。
         self.cleanup_cancelled_worktrees()?;
-        // ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
-        self.cleanup_work_unit_build_caches();
+        // ADR-0075 D2（Phase G1）: scratch pool の semantic GC（`scratch_gc` phase。rename まで、削除と測定は別スレッド）。
+        // scratch が無効なら ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
+        if self.scratch_active() {
+            if !self.scratch.ran_this_tick {
+                self.scratch_gc(false);
+            }
+        } else {
+            self.cleanup_work_unit_build_caches();
+            self.scratch.view = self.config.shared_build_cache.then(|| {
+                crate::scratch_gc::disabled_status(
+                    &self.config.scratch,
+                    std::time::SystemTime::now(),
+                )
+            });
+        }
+        self.scratch.ran_this_tick = false;
         let abort_ms = lap(&mut at);
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
@@ -3293,6 +3562,8 @@ impl Dispatcher {
             max_runs_per_account,
             accounts_roots,
             accounts,
+            // ADR-0075 D6（Phase G1）: scratch pool の観測値（`scratch_gc` が tick ごとに組む）。
+            scratch: self.scratch.view.clone(),
             // ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出。
             containers: Some(task_ops::daemon::ContainersLive {
                 preference: self.config.containers.preference.as_str().to_string(),
@@ -9862,8 +10133,7 @@ impl Dispatcher {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
             // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。
             if let Some(wu) = &v2_wu {
-                extras.cargo_target_subdir =
-                    Some(task_worker::build_cache::work_unit_target_name(&wu.id));
+                extras.cargo_target_work_unit = Some((wu.id.clone(), wu.key.clone()));
             }
         }
         if current_wu.is_some() {
@@ -10353,7 +10623,7 @@ impl Dispatcher {
             // 上書きする（ここでは常に `None`）。
             planner_permission_mode: None,
             artifacts_dir_override: None,
-            cargo_target_subdir: None,
+            cargo_target_work_unit: None,
         })
     }
 
@@ -10974,10 +11244,17 @@ impl Dispatcher {
         let delegation = self.config.delegation;
         let account_book = account_adapter.and_then(|a| self.account_book(a));
         // ADR-0066 D1（Phase 110b）: `[workspace] shared_build_cache`（既定 true）。
-        let build_cache_dir = self
-            .config
-            .shared_build_cache
-            .then(|| self.config.build_cache_dir.clone());
+        // ADR-0075 D3（Phase G1）: `[scratch]` が有効なら scratch pool、無効なら `build_cache_dir`。
+        let cargo_target = if !self.config.shared_build_cache {
+            CargoTargetPlan::None
+        } else if self.scratch_active() {
+            CargoTargetPlan::Scratch {
+                settings: self.config.scratch.clone(),
+                candidates: self.scratch.candidates.clone(),
+            }
+        } else {
+            CargoTargetPlan::Legacy(self.config.build_cache_dir.clone())
+        };
         tokio::spawn(async move {
             let result = run_worker(
                 store,
@@ -10997,7 +11274,7 @@ impl Dispatcher {
                 account,
                 account_book,
                 container,
-                build_cache_dir,
+                cargo_target,
             )
             .await;
             let _ = tx.send(Completion::Worker {
@@ -12519,6 +12796,19 @@ impl Dispatcher {
         let Some(repo) = ws.repos.first().filter(|r| r.is_git()) else {
             return Vec::new();
         };
+        // ADR-0075 D3（Phase G1）: scratch が有効なら run と同じ owner の target（lease を touch する。adopt はしない）。
+        if self.scratch_active() {
+            let owner = match work_unit_id {
+                Some(id) => task_worker::scratch::Owner::work_unit(task.id.to_string(), id),
+                None => task_worker::scratch::Owner::task(task.id.to_string()),
+            };
+            let settings = task_worker::scratch::ScratchSettings {
+                adopt: false,
+                ..self.config.scratch.clone()
+            };
+            allocate_scratch_target(&settings, &[], &owner, repo, None);
+            return task_worker::scratch::cargo_env(&settings.pool(), &owner);
+        }
         let dir = match work_unit_id {
             Some(id) => task_worker::build_cache::work_unit_cargo_target_dir(
                 &self.config.build_cache_dir,
@@ -12937,11 +13227,10 @@ async fn run_worker(
     account: Option<String>,
     account_book: Option<Arc<StdMutex<AccountBook>>>,
     container: ContainerDecision,
-    // ADR-0066 D1（Phase 110b）: `[workspace] shared_build_cache` が有効なときだけ `Some`
-    // （`<build_cache_dir>`）。ローカルの git worktree のホスト実行に限って
-    // `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>` を与える（コンテナ・Remote は対象外。
-    // `container_plan` が決まってから判断する）。
-    build_cache_dir: Option<PathBuf>,
+    // ADR-0066 D1（Phase 110b）/ ADR-0075 D3（Phase G1）: ローカルの git worktree のホスト実行に限って
+    // `CARGO_TARGET_DIR` を与える（コンテナ・Remote は対象外。`container_plan` が決まってから判断する）。
+    // scratch なら `<scratch>/targets/<owner>/target`、無効なら `<build_cache_dir>/cargo/<repo-key>[/wu-<id>]`。
+    cargo_target: CargoTargetPlan,
 ) -> Result<RunOutcome, AdapterError> {
     // リース取得後の状態（running, lease あり）をワーカーに渡す。
     let mut task = store
@@ -13186,7 +13475,7 @@ async fn run_worker(
     let prior_review = to_prior_review(prior_review_from_events(&events));
     // ADR-0044 D2: 対話 run（人への返事だけをする run。Phase 28）にはコメントの書き方を出さない。
     let writes_comments = extras.conversation_addressee.is_none();
-    let cargo_target_subdir = extras.cargo_target_subdir.clone();
+    let cargo_target_work_unit = extras.cargo_target_work_unit.clone();
     let mut req = RunRequest {
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
@@ -13253,20 +13542,54 @@ async fn run_worker(
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの
     // `CARGO_TARGET_DIR` を与える（コンテナ実行〈`container_plan.is_some()`〉と Remote は対象外）。
-    let adapter = if container_plan.is_none()
-        && remote.is_none()
-        && let Some(build_cache_dir) = &build_cache_dir
-        && let Some(repo) = worktree.as_ref().and_then(|wt| wt.repos.first())
-        && repo.is_git()
-    {
+    let repo_for_target = worktree
+        .as_ref()
+        .and_then(|wt| wt.repos.first())
+        .filter(|r| r.is_git() && container_plan.is_none() && remote.is_none())
+        .cloned();
+    let target: Option<PathBuf> = match (&cargo_target, repo_for_target) {
+        (CargoTargetPlan::None, _) | (_, None) => None,
+        // ADR-0075 D3: owner は Task 単位の run なら `task-<id>`、自分の worktree の WU なら `task-<id>/wu-<id>`。
+        (
+            CargoTargetPlan::Scratch {
+                settings,
+                candidates,
+            },
+            Some(repo),
+        ) => {
+            let owner = match &cargo_target_work_unit {
+                Some((id, _)) => task_worker::scratch::Owner::work_unit(task_id.to_string(), id),
+                None => task_worker::scratch::Owner::task(task_id.to_string()),
+            };
+            let (settings, candidates) = (settings.clone(), candidates.clone());
+            let key = cargo_target_work_unit.as_ref().map(|(_, k)| k.clone());
+            let fallback = settings.pool().target_dir(&owner);
+            match tokio::task::spawn_blocking(move || {
+                allocate_scratch_target(&settings, &candidates, &owner, &repo, key)
+            })
+            .await
+            {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!(task_id = %task_id, error = %e, "scratch: allocation task failed; using the target path");
+                    Some(fallback)
+                }
+            }
+        }
         // ADR-0074 F5-fix（不具合 1）: 並列の WU は `<repo-key>/wu-<id>`（兄弟 WU の別ブランチの
         // 生成物を混ぜない）。Task 単位の run は従来どおり `<repo-key>`。
-        let target = match &cargo_target_subdir {
-            Some(sub) => {
-                task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source).join(sub)
-            }
-            None => task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source),
-        };
+        (CargoTargetPlan::Legacy(build_cache_dir), Some(repo)) => {
+            Some(match &cargo_target_work_unit {
+                Some((id, _)) => task_worker::build_cache::work_unit_cargo_target_dir(
+                    build_cache_dir,
+                    &repo.source,
+                    id,
+                ),
+                None => task_worker::build_cache::cargo_target_dir(build_cache_dir, &repo.source),
+            })
+        }
+    };
+    let adapter = if let Some(target) = target {
         let env = [(
             task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
             target.display().to_string(),
@@ -13685,6 +14008,7 @@ mod tests {
                 // 副作用を避ける。専用のテストが明示的に有効化する）。
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15489,6 +15813,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15648,6 +15973,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -15824,6 +16150,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -18222,7 +18549,7 @@ mod tests {
             None,
             None,
             ContainerDecision::Host,
-            None,
+            CargoTargetPlan::None,
         )
         .await
     }
@@ -20184,6 +20511,7 @@ mod tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },
@@ -23970,8 +24298,13 @@ mod tests {
             None,
             None,
             ContainerDecision::Host,
-            // `Some` のまま渡しても、`remote.is_some()` なので適用されないことを確かめる。
-            Some(tmp.path().join("build-cache")),
+            // scratch を渡しても、`remote.is_some()` なので適用されないことを確かめる（ADR-0075 D3）。
+            CargoTargetPlan::Scratch {
+                settings: task_worker::scratch::ScratchSettings::with_dir(
+                    tmp.path().join("scratch"),
+                ),
+                candidates: Vec::new(),
+            },
         )
         .await;
         assert!(outcome.is_ok(), "{:?}", outcome.err());
@@ -29541,6 +29874,551 @@ mod tests {
         );
     }
 
+    // ---- ADR-0075（Phase G1）: scratch pool ----
+
+    fn scratch_on(d: &mut Dispatcher, dir: &Path) -> task_worker::scratch::ScratchSettings {
+        let s = task_worker::scratch::ScratchSettings::with_dir(dir);
+        d.config.shared_build_cache = true;
+        d.config.scratch = s.clone();
+        s
+    }
+
+    fn done_pool_adapter(captured: &CapturedEnvs) -> Arc<PoolAdapter> {
+        Arc::new(PoolAdapter {
+            terminal_or_throttled: Ok(Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            }),
+            delay: Duration::ZERO,
+            observation: None,
+            env: Vec::new(),
+            captured: captured.clone(),
+            spawn_failure: false,
+        })
+    }
+
+    fn no_deleting_left(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                !rd.flatten()
+                    .any(|e| e.file_name().to_string_lossy().starts_with(".deleting-"))
+            })
+            .unwrap_or(true)
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 1: 全ての経路（Task 単位の run、v2 の WU の run と checks、統合 WU の検査、
+    /// reviewer の checks）の `CARGO_TARGET_DIR` が `<scratch>/targets/<owner>/target` で、`request.json` の
+    /// `cargo_target_dir` と一致する（`build_cache_dir` は使わない）。Remote には与えない
+    /// （`shared_build_cache_is_not_applied_to_remote_workspaces` が scratch の計画を渡して確かめる）。
+    #[tokio::test]
+    async fn every_cargo_path_uses_the_scratch_target_dir() {
+        // (1) v2 の並列 WU の run と checks、統合 WU の検査、reviewer の checks。
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let log = logs.path().join("check-env.log");
+        let record = format!("echo \"$CARGO_TARGET_DIR\" >> {}", log.display());
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = parallel_task(repo.path(), &format!("{record} # review"));
+        store.insert(&task).unwrap();
+        let with_check = |key: &str| {
+            let mut w = v2_wu(key, "build", &[]);
+            w.checks = vec![task_core::WorkUnitCheck {
+                cmd: format!("{record} # {key}"),
+                expect_exit: 0,
+            }];
+            w
+        };
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["build"],
+            vec![with_check("a"), with_check("b")],
+        );
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let adapter = Arc::new(TargetDirAdapter {
+            env: Vec::new(),
+            delay: Duration::from_millis(50),
+            seen: seen.clone(),
+        });
+        let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        d.config.build_cache_dir = cache.path().to_path_buf();
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 800, || s
+                .get(id)
+                .ok()
+                .flatten()
+                .is_some_and(|t| t.status == Status::Done))
+            .await,
+            "{:?}",
+            events_of(&store, task.id)
+        );
+        let pool = settings.pool();
+        let units = store.work_units_for(task.id).unwrap();
+        let id_of = |k: &str| units.iter().find(|u| u.key == k).unwrap().id.clone();
+        let expected: std::collections::BTreeMap<String, PathBuf> = ["a", "b"]
+            .iter()
+            .map(|k| {
+                (
+                    k.to_string(),
+                    pool.target_dir(&task_worker::scratch::Owner::work_unit(
+                        task.id.to_string(),
+                        id_of(k),
+                    )),
+                )
+            })
+            .collect();
+        let task_target = pool.target_dir(&task_worker::scratch::Owner::task(task.id.to_string()));
+        let runs = seen.lock().unwrap().clone();
+        let mut recorded = std::collections::BTreeMap::new();
+        for (key, request) in &runs {
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(request).unwrap()).unwrap();
+            recorded.insert(
+                key.clone(),
+                PathBuf::from(v["cargo_target_dir"].as_str().expect("cargo_target_dir")),
+            );
+        }
+        assert_eq!(recorded, expected, "{runs:?}");
+        // WU の lease には key も写る（表示用）。
+        for k in ["a", "b"] {
+            let owner = task_worker::scratch::Owner::work_unit(task.id.to_string(), id_of(k));
+            let lease = task_worker::scratch::read_lease(&pool.lease_path(&owner))
+                .unwrap()
+                .unwrap();
+            assert_eq!(lease.work_unit_key.as_deref(), Some(k));
+            assert_eq!(lease.kind, task_worker::scratch::OwnerKind::WorkUnit);
+        }
+        // WU の checks は WU の owner、統合 WU の検査と reviewer の checks は Task の owner。
+        let lines = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = lines.lines().collect();
+        for dir in expected.values() {
+            assert!(
+                lines.iter().any(|l| Path::new(l) == dir.as_path()),
+                "{lines:?}"
+            );
+        }
+        assert!(
+            lines.iter().any(|l| Path::new(l) == task_target.as_path()),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|l| Path::new(l).starts_with(scratch_dir.path())),
+            "{lines:?}"
+        );
+        // 旧い `build_cache_dir/cargo/<repo-key>` は作られない。
+        assert!(!cache.path().join("cargo").exists());
+
+        // (2) Task 単位の run（v2 でない local git worktree の Task）は owner `task-<id>`。
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_test_repo(repo_dir.path());
+        let root = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = git_task(
+            repo_dir.path(),
+            None,
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        );
+        store.insert(&task).unwrap();
+        let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+        let mut d = worktree_dispatcher(
+            store.clone(),
+            done_pool_adapter(&captured),
+            root.path(),
+            None,
+        );
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        run_until_idle(&mut d, 60).await;
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        let runs = captured.lock().unwrap().clone();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        let owner = task_worker::scratch::Owner::task(task.id.to_string());
+        assert_eq!(
+            runs[0]
+                .iter()
+                .filter(|(k, _)| k == "CARGO_TARGET_DIR")
+                .cloned()
+                .collect::<Vec<_>>(),
+            task_worker::scratch::cargo_env(&settings.pool(), &owner),
+        );
+        let lease = task_worker::scratch::read_lease(&settings.pool().lease_path(&owner))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lease.repo_key,
+            task_worker::build_cache::repo_cache_key(repo_dir.path())
+        );
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 3: WU が done になると、その target は次の tick で rename され、別スレッドで
+    /// 消える。同じ repo の最新の 1 つは seed として残る。`failed` / `blocked` の WU の target は残る。
+    #[tokio::test]
+    async fn terminal_work_unit_target_is_reclaimed_on_the_next_tick() {
+        use task_worker::scratch::{AdoptCandidate, AllocateRequest, Owner};
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = parallel_task(repo.path(), "true");
+        task.status = Status::Blocked;
+        store.insert(&task).unwrap();
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["build"],
+            vec![
+                v2_wu("old-done", "build", &[]),
+                v2_wu("new-done", "build", &[]),
+                v2_wu("failed", "build", &[]),
+                v2_wu("blocked", "build", &[]),
+            ],
+        );
+        let units = store.work_units_for(task.id).unwrap();
+        let unit = |k: &str| units.iter().find(|u| u.key == k).unwrap().clone();
+        for (k, to) in [
+            ("old-done", task_core::WorkUnitStatus::Done),
+            ("new-done", task_core::WorkUnitStatus::Done),
+            ("failed", task_core::WorkUnitStatus::Failed),
+            ("blocked", task_core::WorkUnitStatus::Blocked),
+        ] {
+            let before = unit(k);
+            let mut after = before.clone();
+            after.status = to;
+            store
+                .work_unit_transition(
+                    task.id,
+                    after,
+                    Event::WorkUnitTransitioned {
+                        work_unit_id: before.id.clone(),
+                        key: before.key.clone(),
+                        from: before.status,
+                        to,
+                        reason: "test".into(),
+                        run_id: None,
+                    },
+                )
+                .unwrap();
+        }
+        let mut d = dispatcher(store.clone(), done_adapter(), 1);
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let pool = settings.pool();
+        let none = |_: &AdoptCandidate| None;
+        let tid = task.id.to_string();
+        let owners: Vec<(Owner, u64)> = vec![
+            (Owner::task(tid.clone()), 10),
+            (Owner::work_unit(tid.clone(), unit("old-done").id), 300),
+            (Owner::work_unit(tid.clone(), unit("new-done").id), 200),
+            (Owner::work_unit(tid.clone(), unit("failed").id), 100),
+            (Owner::work_unit(tid.clone(), unit("blocked").id), 100),
+        ];
+        for (owner, ago) in &owners {
+            let a = task_worker::scratch::allocate(
+                &pool,
+                &AllocateRequest {
+                    owner,
+                    repo_path: repo.path(),
+                    base_commit: None,
+                    work_unit_key: None,
+                    checkout: None,
+                    candidates: &[],
+                    distance: &none,
+                    adopt: false,
+                    max_distance: 0,
+                },
+            )
+            .unwrap();
+            std::fs::write(a.target_dir.join("libtask_core.rlib"), "x").unwrap();
+            task_worker::scratch::set_mtime(
+                &pool.lease_path(owner),
+                std::time::SystemTime::now() - Duration::from_secs(*ago),
+            )
+            .unwrap();
+        }
+        d.tick().unwrap();
+        let exists = |i: usize| pool.target_dir(&owners[i].0).exists();
+        // 古い方の done の WU は次の tick で rename 済み、最新の done の WU は seed（Task が非終端で同じ repo）。
+        assert!(
+            !exists(1),
+            "old done work unit target should be moved aside"
+        );
+        assert!(
+            exists(2),
+            "the newest done work unit target is kept as the seed"
+        );
+        assert!(exists(3), "failed work unit target must stay");
+        assert!(exists(4), "blocked work unit target must stay");
+        assert!(exists(0), "the waiting task target must stay");
+        let view = d.scratch.view.clone().expect("scratch view");
+        let class_of = |o: &Owner| {
+            view.owners
+                .iter()
+                .find(|r| r.owner == o.to_string())
+                .map(|r| r.class.clone())
+        };
+        assert_eq!(class_of(&owners[2].0).as_deref(), Some("seed"));
+        assert_eq!(class_of(&owners[3].0).as_deref(), Some("p1"));
+        assert_eq!(class_of(&owners[0].0).as_deref(), Some("p1"));
+        assert_eq!(view.last_gc.as_ref().map(|g| g.removed.len()), Some(1));
+        // 中身の削除は別スレッド。
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !no_deleting_left(&pool.targets_dir()) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            d.tick().unwrap();
+        }
+        assert!(no_deleting_left(&pool.targets_dir()));
+        // lease は「刈った」記録として残る。
+        assert!(pool.lease_path(&owners[1].0).exists());
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 5: 空きが `min_free_disk_mb` 未満なら、新しい run の前に緊急 GC（P0 以外を
+    /// 目標まで rename）→ 空きが戻るまで dispatch を保留し「ディスク不足 (infra)」を 1 回だけ通知 → 戻れば自動解除。
+    /// 消せるものが P0 だけなら通知の本文に pinned の一覧が付く。
+    #[tokio::test]
+    async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
+        use task_worker::scratch::{AdoptCandidate, AllocateRequest, Owner};
+        let none = |_: &AdoptCandidate| None;
+        let lease = |pool: &task_worker::scratch::Pool, name: &str| {
+            let owner = Owner::parse(name).unwrap();
+            task_worker::scratch::allocate(
+                pool,
+                &AllocateRequest {
+                    owner: &owner,
+                    repo_path: Path::new("/repo/agent-platform"),
+                    base_commit: None,
+                    work_unit_key: None,
+                    checkout: None,
+                    candidates: &[],
+                    distance: &none,
+                    adopt: false,
+                    max_distance: 0,
+                },
+            )
+            .unwrap();
+            owner
+        };
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: ":".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        store.insert(&task).unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let mut d = dispatcher(store.clone(), done_adapter(), 1);
+        d.config.workspace_root = dir.path().to_path_buf();
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let pool = settings.pool();
+        let live = lease(&pool, "agent-live");
+        let released = lease(&pool, "agent-released");
+        task_worker::scratch::release(&pool, &released).unwrap();
+        d.config.min_free_disk_mb = u64::MAX;
+        assert_eq!(d.tick().unwrap().dispatched, 0);
+        // 緊急 GC: agent の P3（通常は watermark まで残る）も rename、P0 は残る。
+        assert!(!pool.target_dir(&released).exists());
+        assert!(pool.target_dir(&live).exists());
+        assert!(d.disk_low);
+        assert_eq!(
+            d.scratch.view.as_ref().map(|v| v.pressure.as_str()),
+            Some("emergency")
+        );
+        assert!(
+            d.scratch
+                .view
+                .as_ref()
+                .unwrap()
+                .last_gc
+                .as_ref()
+                .unwrap()
+                .emergency
+        );
+        assert_eq!(d.tick().unwrap().dispatched, 0);
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
+        let notifications = store.notification_recent(10).unwrap();
+        assert_eq!(notifications.len(), 1, "{notifications:?}");
+        assert!(notifications[0].body.contains("ディスク不足 (infra)"));
+        // 空きが戻れば自動で解除して dispatch する。
+        d.config.min_free_disk_mb = 0;
+        assert_eq!(d.tick().unwrap().dispatched, 1);
+        assert!(!d.disk_low);
+        assert!(pool.target_dir(&live).exists());
+
+        // 消せるものが P0 だけ → 保留の通知に pinned の一覧。
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let mut d = dispatcher(store.clone(), done_adapter(), 1);
+        d.config.workspace_root = dir.path().to_path_buf();
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let live = lease(&settings.pool(), "agent-live");
+        d.config.min_free_disk_mb = u64::MAX;
+        d.tick().unwrap();
+        assert!(settings.pool().target_dir(&live).exists());
+        let notifications = store.notification_recent(10).unwrap();
+        assert_eq!(notifications.len(), 1);
+        assert!(
+            notifications[0].body.contains("scratch pool: pinned")
+                && notifications[0].body.contains("agent-live"),
+            "{}",
+            notifications[0].body
+        );
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 7: `[scratch] dir` が NFS 上（起動時の検査で無効化）、または `[scratch] enabled =
+    /// false` なら、ADR-0066 D1 / F5-fix の `build_cache_dir/cargo/<repo-key>` に戻る。
+    #[tokio::test]
+    async fn scratch_on_nfs_falls_back_to_build_cache_dir() {
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let nfs = task_worker::scratch::apply_nfs_check(
+            task_worker::scratch::ScratchSettings::with_dir(scratch_dir.path()),
+            |_| Ok(true),
+        );
+        assert!(!nfs.enabled);
+        assert!(nfs.disabled_reason.as_deref().unwrap_or("").contains("NFS"));
+        let disabled = task_worker::scratch::ScratchSettings {
+            enabled: false,
+            ..task_worker::scratch::ScratchSettings::with_dir(scratch_dir.path())
+        };
+        for settings in [nfs, disabled] {
+            let repo_dir = tempfile::tempdir().unwrap();
+            init_test_repo(repo_dir.path());
+            let root = tempfile::tempdir().unwrap();
+            let cache_dir = tempfile::tempdir().unwrap();
+            let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+            let task = git_task(
+                repo_dir.path(),
+                None,
+                Check::Command {
+                    cmd: "true".into(),
+                    expect_exit: 0,
+                },
+            );
+            store.insert(&task).unwrap();
+            let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+            let mut d = worktree_dispatcher(
+                store.clone(),
+                done_pool_adapter(&captured),
+                root.path(),
+                None,
+            );
+            d.config.shared_build_cache = true;
+            d.config.build_cache_dir = cache_dir.path().to_path_buf();
+            d.config.scratch = settings.clone();
+            run_until_idle(&mut d, 60).await;
+            assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+            let runs = captured.lock().unwrap().clone();
+            let expected =
+                task_worker::build_cache::cargo_target_dir_env(cache_dir.path(), repo_dir.path());
+            assert!(runs[0].contains(&expected), "{:?}", runs[0]);
+            assert!(!scratch_dir.path().join("targets").exists());
+            let view = d.scratch.view.clone().expect("disabled view");
+            assert!(!view.enabled);
+            assert_eq!(view.disabled_reason, settings.disabled_reason);
+        }
+    }
+
+    /// ADR-0075 §5 G1 受け入れ条件 4（dispatcher 経由）: run の開始時、同じ repo の P3 の target が checkout より前に
+    /// 書かれたものなら rename で引き継ぐ（lease に `adopted_from`）。
+    #[tokio::test]
+    async fn run_start_adopts_a_finished_target_that_predates_the_checkout() {
+        use task_worker::scratch::{AdoptCandidate, AllocateRequest, Owner};
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_test_repo(repo_dir.path());
+        let root = tempfile::tempdir().unwrap();
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = git_task(
+            repo_dir.path(),
+            None,
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        );
+        store.insert(&task).unwrap();
+        let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+        let mut d = worktree_dispatcher(
+            store.clone(),
+            done_pool_adapter(&captured),
+            root.path(),
+            None,
+        );
+        let settings = scratch_on(&mut d, scratch_dir.path());
+        let pool = settings.pool();
+        // 前の release の target（released = P3）。最終書き込みは 1 時間前。
+        let old = Owner::parse("release-0123456789ab").unwrap();
+        let none = |_: &AdoptCandidate| None;
+        let a = task_worker::scratch::allocate(
+            &pool,
+            &AllocateRequest {
+                owner: &old,
+                repo_path: repo_dir.path(),
+                base_commit: None,
+                work_unit_key: None,
+                checkout: None,
+                candidates: &[],
+                distance: &none,
+                adopt: false,
+                max_distance: 0,
+            },
+        )
+        .unwrap();
+        std::fs::write(a.target_dir.join("warm.rlib"), "x").unwrap();
+        task_worker::scratch::release(&pool, &old).unwrap();
+        let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        for p in [
+            a.target_dir.join("warm.rlib"),
+            a.target_dir.clone(),
+            pool.lease_path(&old),
+        ] {
+            std::fs::File::open(&p)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(hour_ago))
+                .unwrap();
+        }
+        // release の P3 は即回収の対象なので、seed になるよう同じ repo の P0（生きている agent の lease）を置く。
+        let live = Owner::parse("agent-live").unwrap();
+        task_worker::scratch::allocate(
+            &pool,
+            &AllocateRequest {
+                owner: &live,
+                repo_path: repo_dir.path(),
+                base_commit: None,
+                work_unit_key: None,
+                checkout: None,
+                candidates: &[],
+                distance: &none,
+                adopt: false,
+                max_distance: 0,
+            },
+        )
+        .unwrap();
+        run_until_idle(&mut d, 60).await;
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        let owner = Owner::task(task.id.to_string());
+        let lease = task_worker::scratch::read_lease(&pool.lease_path(&owner))
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.adopted_from.as_deref(), Some("release-0123456789ab"));
+        assert!(pool.target_dir(&owner).join("warm.rlib").exists());
+        assert!(!pool.target_dir(&old).exists());
+    }
+
     /// ADR-0074 §6 F2 (g): 兄弟が走っている間の WU の failed / question で Task は遷移せず、in-flight が
     /// 0 になってから replan / `WorkerQuestion` になる。
     #[tokio::test]
@@ -30208,6 +31086,7 @@ mod knowledge_fallback_tests {
                 session_rollover_tokens: 400_000,
                 shared_build_cache: false,
                 build_cache_dir: PathBuf::from("/nonexistent-build-cache"),
+                scratch: task_worker::scratch::ScratchSettings::disabled(),
                 workspace_prune_after_secs: 0,
                 execution: ExecutionConfig::default(),
             },

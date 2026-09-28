@@ -81,3 +81,18 @@ rsync -aHAX --numeric-ids --info=progress2 \
 - `~/.claude` / `~/.codex` の状態ファイル（JSON / SQLite）は NFS 上でも概ね動くが、同時アクセスがあると壊れうる。問題が出たら `/var/lib/celeris/cli-state/` に置いて symlink する。
 - docker（groups に docker）を使うなら、コンテナのボリュームはホームに置かない。
 - NFS が落ちると `hard` mount でプロセスが D state になる。TrueNAS のメンテ前は CT を止める。
+
+## 2026-09-28 追記: TrueNAS の POSIX ACL（uid 100000）が mode bit を緩め、ssh が鍵を拒否した
+
+- CT は unprivileged なので CT の root は NFS 上では uid 100000。root で home 配下を読めるように、TrueNAS で
+  `setfacl -R -m u:100000:rwx -m d:u:100000:rwx /mnt/tank/share_home/rmaeda` を入れた（rdc の setup と将来の root 操作のため）。
+- 副作用: POSIX ACL の mask が group bit に映るため、既存ファイルの mode が 600→670、700→770 に見える。ssh は秘密鍵の mode を検査するので
+  `Permissions 0670 for '~/.ssh/id_ed25519' are too open` → 鍵を使わず `Permission denied (publickey)`。GUI のクラスタ接続（TOTP）は
+  `timed out waiting for ssh` → 503 に見える。pegasus / sirius とも同じ。
+- 対処（CT 側、rmaeda）: `chmod 700 ~/.ssh; chmod 600 ~/.ssh/id_* ~/.ssh/config` と、秘密情報（`~/.config/celeris/secrets`、`api.token`、
+  `~/.local/celeris/{claude,codex}-accounts`、`~/.codex/auth.json`、`~/.claude/.credentials.json`、`~/.gnupg`）を 700 / 600 に戻した。
+  `chmod` は mask を縮めるだけで ACL エントリは残る（root の読み取りはこれらのファイルでは不要）。
+- 残る注意: `~/.ssh` などに**新しく**作られるファイルは default ACL を継承して再び 670 になる（ssh が known_hosts / config を書き換える場合など）。
+  恒久策は TrueNAS 側で秘密のディレクトリだけ default ACL を外す:
+  `setfacl -R -b /mnt/tank/share_home/rmaeda/.ssh && setfacl -R -k /mnt/tank/share_home/rmaeda/.ssh`（`.config/celeris/secrets`、
+  `.local/celeris/*-accounts`、`.gnupg`、`.codex`、`.claude` も同様）。

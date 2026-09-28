@@ -16,7 +16,7 @@ import { Card, CardBody } from "~/components/ui/card";
 import { labelClass, textareaClass } from "~/components/ui/form";
 import { Icon } from "~/components/ui/Icon";
 import { Alert } from "~/components/ui/misc";
-import { milestoneStatusLabel } from "~/lib/labels";
+import { milestoneStatusLabel, milestoneStatusTone } from "~/lib/labels";
 import {
   planChangeLabel,
   planLayers,
@@ -159,7 +159,11 @@ function DagNode({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {node.milestone_status && (
-          <Badge tone="neutral" data-status-badge="milestone">
+          <Badge
+            tone={milestoneStatusTone(node.milestone_status)}
+            data-status-badge="milestone"
+            data-milestone-status={node.milestone_status}
+          >
             {milestoneStatusLabel(node.milestone_status)}
           </Badge>
         )}

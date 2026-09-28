@@ -2110,3 +2110,15 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
   2 本あれば Task の worktree を共有して並列に走りうる。未確認）。planner のプロンプトで repair の用途を明示するか、repair を Task の worktree に倒すのを統合・
   最終レビューの repair（`RepairScheduled` のある WU）に限るかは次の判断に回す。
 - 本番への反映は昇格待ち。
+
+## gate=on での ExecutionPlan 経路の本番確認（browser capability task 01M3MFS5T52FXA63W4V10XGC4S、2026-09-28 17:07〜20:11Z）: done
+
+- 人が gate=on / parallel=true で再起動（17:06Z）後、cancel した atomic task を `retry` で複製（17:07Z）。planner（Opus、99 s）が plan v1（adopt / harden / ship の 3 工程、WU 7 =
+  adopt-prior / design-gap / mvp-audit / release + 統合 3）を作り、cancel 前の run が worktree に残した ADR-0078・docs・MVP コードを adopt-prior で回収。
+- WU 7/7 done → 最終 review で基準 0（task 直下の report.md 無し）と main との衝突を指摘され不合格 → replan v2（remerge / reship 追加）→ remerge が main を取り込み
+  → reship の準備が依存ブランチ不在で無音停止（F5-fix7 の発端、人が branch 作成）→ reship done → 統合 → 最終 review 全 11 基準合格 → 20:11Z done。
+- 指標: WU 10/10、run 10（planner 2 / worker 6 / reviewer 2）、replan 1、cost_usd 6.45、壁時計 3h04m（うち無音停止 20 分）。人の介入 1 回（branch 作成）。
+- 配送: task ブランチが main 06e9a03 を統合済みで fast-forward 可能 → main は 09a6b0c（browser capability Phase 1 + F5-fix7）。task が作った release
+  `5fcb7eebbe9a`（gate ok: cargo test 2678 / GUI 1173 / mobile-audit 0、verify ok / live_ok）は main 09a6b0c と tree が同一なので、それを 20:13:05Z にライブ昇格
+  （backup 20260928-201255-pre-5fcb7eebbe9a）。これで F5-fix7 も本番に入った。
+- 見つかった不具合: F5-fix7（依存 WU のブランチ解決・準備失敗の blocked 化）、retry が gate 判定を複製する（F6 で修正済み）。

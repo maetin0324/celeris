@@ -33,6 +33,47 @@
       ],
       "type": "object"
     },
+    "BrowserRun": {
+      "additionalProperties": false,
+      "properties": {
+        "live_view_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/BrowserRunState"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id",
+        "session_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "BrowserRunState": {
+      "enum": [
+        "RUNNING",
+        "WAITING_FOR_AUTH",
+        "WAITING_FOR_APPROVAL",
+        "WAITING_FOR_HUMAN",
+        "COMPLETED",
+        "FAILED"
+      ],
+      "type": "string"
+    },
     "Budget": {
       "description": "DESIGN §4.1 の `Budget`。",
       "properties": {
@@ -410,6 +451,23 @@
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
+        {
+          "description": "Credential-free mapping between one isolated browser session and a worker execution.",
+          "properties": {
+            "browser": {
+              "$ref": "#/$defs/BrowserRun"
+            },
+            "type": {
+              "const": "browser_updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "browser"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "task": {

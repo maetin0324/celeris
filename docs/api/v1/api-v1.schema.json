@@ -1241,6 +1241,70 @@
         }
       ]
     },
+    "BrowserCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "live_view_url": {
+          "description": "Administrator-operated authenticated HTTPS reverse proxy to the substrate dashboard.\nThis is not a CDP endpoint or a bearer-token URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "allowed_domains"
+      ],
+      "type": "object"
+    },
+    "BrowserRun": {
+      "additionalProperties": false,
+      "properties": {
+        "live_view_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/BrowserRunState"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id",
+        "session_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "BrowserRunState": {
+      "enum": [
+        "RUNNING",
+        "WAITING_FOR_AUTH",
+        "WAITING_FOR_APPROVAL",
+        "WAITING_FOR_HUMAN",
+        "COMPLETED",
+        "FAILED"
+      ],
+      "type": "string"
+    },
     "Budget": {
       "description": "DESIGN §4.1 の `Budget`。",
       "properties": {
@@ -4464,6 +4528,17 @@
           },
           "type": "array"
         },
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Administrator-granted browser capability; child profiles replace the complete grant."
+        },
         "chain": {
           "description": "根→葉のノード id（GUI が「どこから継いだか」を出すため）。",
           "items": {
@@ -4597,6 +4672,23 @@
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
+        {
+          "description": "Credential-free mapping between one isolated browser session and a worker execution.",
+          "properties": {
+            "browser": {
+              "$ref": "#/$defs/BrowserRun"
+            },
+            "type": {
+              "const": "browser_updated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "browser"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "task": {
@@ -10385,6 +10477,17 @@
       "additionalProperties": false,
       "description": "ADR-0046 D1: ノードが持つ profile。**全ての項目が任意**（既定は空）で、空の profile は\n`org_nodes.profile_json` にも JSON にも出ない（導入前のノードと 1 バイトも変わらない）。",
       "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Administrator-granted browser capability; child profiles replace the complete grant."
+        },
         "budget": {
           "$ref": "#/$defs/BudgetPrefs",
           "description": "ADR-0069 D2（Phase 114）: 予算の天井（最も厳しい値が勝つ）。"

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { isRouteErrorResponse, Link } from "react-router";
+import { loadBrowserRuns } from "~/celeris/browser";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
-import type { RunList, RunSummary } from "~/celeris/types";
+import type { BrowserRun, RunList, RunSummary, TaskDetail } from "~/celeris/types";
 import { CodeViewer } from "~/components/CodeViewer";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { RunLog, RunLogKindCounts } from "~/components/RunLog";
@@ -11,10 +12,15 @@ import { buttonClass } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
 import { Icon } from "~/components/ui/Icon";
 import { Alert, CopyButton } from "~/components/ui/misc";
+import { activeBrowserRunIds } from "~/lib/browser";
 import { isTransientStatus } from "~/lib/recovery";
 import { countByKind, parseRunLog } from "~/lib/run-log";
 import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/tasks.$id.runs.$runId";
+
+const BrowserRunsPanel = lazy(() =>
+  import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
+);
 
 /**
  * `/tasks/:id/runs/:runId`（生ログ、docs/DESIGN.md §4.3「生ログ」、§6.2、docs/adr/0006-g3-decisions.md D4）。
@@ -24,6 +30,8 @@ import type { Route } from "./+types/tasks.$id.runs.$runId";
  */
 export interface RunDetailData {
   taskId: string;
+  browserRuns: BrowserRun[];
+  activeBrowserRunIds: string[];
   run: RunSummary;
   stdout: string | null;
   stderr: string | null;
@@ -62,14 +70,26 @@ export async function loadRunDetail(
   }
   const files = run.files;
   const base = `/tasks/${taskId}/runs/${runId}`;
-  const [stdout, stderr, result, requestJson, promptText] = await Promise.all([
+  const [task, browserRuns, stdout, stderr, result, requestJson, promptText] = await Promise.all([
+    client.get<TaskDetail>(`/tasks/${taskId}`, { signal: request.signal }).catch(() => null),
+    loadBrowserRuns(client, taskId, request.signal).catch(() => []),
     files?.stdout ? readFileText(client, `${base}/stdout`, request.signal) : Promise.resolve(null),
     files?.stderr ? readFileText(client, `${base}/stderr`, request.signal) : Promise.resolve(null),
     files?.result ? readFileText(client, `${base}/result`, request.signal) : Promise.resolve(null),
     files?.request ? readFileText(client, `${base}/request`, request.signal) : Promise.resolve(null),
     files?.prompt ? readFileText(client, `${base}/prompt`, request.signal) : Promise.resolve(null),
   ]);
-  return { taskId, run, stdout, stderr, result, request: requestJson, prompt: promptText };
+  return {
+    taskId,
+    activeBrowserRunIds: activeBrowserRunIds([run], task?.task.status ?? "failed"),
+    browserRuns: browserRuns.filter((b) => b.run_id === runId),
+    run,
+    stdout,
+    stderr,
+    result,
+    request: requestJson,
+    prompt: promptText,
+  };
 }
 
 export function meta(_: Route.MetaArgs) {
@@ -97,7 +117,7 @@ function stderrTail(content: string, maxLines = 200): string {
 }
 
 export default function RunDetailPage({ loaderData }: Route.ComponentProps) {
-  const { taskId, run, stdout, stderr, result, request, prompt } = loaderData;
+  const { taskId, browserRuns, run, stdout, stderr, result, request, prompt } = loaderData;
   const [rawMode, setRawMode] = useState(false);
   const [lines, setLines] = useState<string[]>(() => splitLines(stdout ?? ""));
   const offsetRef = useRef(new TextEncoder().encode(stdout ?? "").length);
@@ -155,6 +175,12 @@ export default function RunDetailPage({ loaderData }: Route.ComponentProps) {
           {run.adapter} / {run.provider ?? "-"} / {run.model} — {run.started_at} 〜 {run.finished_at ?? "実行中"}
         </p>
       </section>
+
+      {browserRuns.length > 0 && (
+        <Suspense fallback={null}>
+          <BrowserRunsPanel runs={browserRuns} activeRunIds={loaderData.activeBrowserRunIds} />
+        </Suspense>
+      )}
 
       <section aria-labelledby="stdout-heading" data-testid="stdout-section">
         <Card>

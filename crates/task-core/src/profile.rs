@@ -160,6 +160,9 @@ pub struct Profile {
     /// タグ）とは別物。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills_mounts: Vec<String>,
+    /// Administrator-granted browser capability; child profiles replace the complete grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<crate::BrowserCapability>,
     #[serde(default, skip_serializing_if = "HarnessPrefs::is_empty")]
     pub harnesses: HarnessPrefs,
     /// ADR-0046 D8 の語彙。親と和。
@@ -190,6 +193,7 @@ impl Profile {
         self.skills.is_empty()
             && self.knowledge.is_empty()
             && self.skills_mounts.is_empty()
+            && self.browser.is_none()
             && self.harnesses.is_empty()
             && self.tools.is_empty()
             && self.deny_tools.is_empty()
@@ -217,6 +221,9 @@ pub struct EffectiveProfile {
     /// ADR-0056 D3（Phase 78）: 継いだ後の skills mount（skill 名。`knowledge` と同じ和の規則）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills_mounts: Vec<String>,
+    /// Administrator-granted browser capability; child profiles replace the complete grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<crate::BrowserCapability>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harnesses_allowed: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,6 +273,7 @@ impl EffectiveProfile {
         self.skills.is_empty()
             && self.knowledge.is_empty()
             && self.skills_mounts.is_empty()
+            && self.browser.is_none()
             && self.harnesses_allowed.is_empty()
             && self.harness_default.is_none()
             && self.tools.is_empty()
@@ -378,6 +386,9 @@ pub fn resolve(nodes: &[OrgNode], node_id: &str) -> EffectiveProfile {
         // policy は連結（重複も残す。根→葉の順）。
         out.policy.extend(p.policy.iter().cloned());
         // 子が勝つ。
+        if p.browser.is_some() {
+            out.browser = p.browser.clone();
+        }
         if p.harnesses.default.is_some() {
             out.harness_default = p.harnesses.default.clone();
         }
@@ -439,6 +450,8 @@ fn push_unique(out: &mut Vec<String>, items: impl IntoIterator<Item = String>) {
 /// profile の検証の失敗（ADR-0046 D1）。API は 422 にする。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProfileError {
+    #[error("{0}")]
+    InvalidBrowser(String),
     #[error("unknown tool {tool:?} (allowed: gh, tavily, exa, docker, cluster:<id>)")]
     UnknownTool { tool: String },
     #[error("unknown harness {harness:?} in {field} (known: {known})")]
@@ -475,6 +488,9 @@ pub fn is_known_tool(tool: &str) -> bool {
 /// ADR-0046 D1: profile の決定的な検証。`known_harnesses` が空なら harness の検査はしない
 /// （`[[genres]]` / `[[harnesses]]` を使わない最小構成を壊さないため。`handlers::genre` と同じ規律）。
 pub fn validate_profile(profile: &Profile, known_harnesses: &[String]) -> Result<(), ProfileError> {
+    if let Some(browser) = &profile.browser {
+        browser.validate().map_err(ProfileError::InvalidBrowser)?;
+    }
     for skill in &profile.skills {
         if !is_valid_skill(skill) {
             return Err(ProfileError::InvalidSkill {
@@ -771,6 +787,38 @@ mod tests {
             ..sample_task()
         };
         assert_eq!(eff.clone().with_task(&bare).skills, eff.skills);
+    }
+
+    #[test]
+    fn browser_grant_is_inherited_but_task_skills_cannot_create_it() {
+        let mut org = tree();
+        let grant = crate::BrowserCapability {
+            allowed_domains: vec!["example.com".into()],
+            live_view_url: Some("https://browser.example.com/live".into()),
+        };
+        org[1].profile.browser = Some(grant.clone());
+        let effective = resolve(&org, "software-engineering");
+        assert_eq!(effective.browser, Some(grant));
+        let mut task = sample_task();
+        task.skills = vec![crate::browser::BROWSER_SKILL.into()];
+        assert_eq!(
+            effective.clone().with_task(&task).browser,
+            effective.browser
+        );
+        assert!(
+            EffectiveProfile::default()
+                .with_task(&task)
+                .browser
+                .is_none()
+        );
+        let invalid = Profile {
+            browser: Some(crate::BrowserCapability::default()),
+            ..Profile::default()
+        };
+        assert!(matches!(
+            validate_profile(&invalid, &[]),
+            Err(ProfileError::InvalidBrowser(_))
+        ));
     }
 
     fn sample_task() -> crate::model::Task {

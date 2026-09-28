@@ -134,6 +134,7 @@ describe("loadTaskDetail", () => {
     // 案件・担当・途中目標（監査 M2）。この fixture のタスクは案件にも担当にも属さないので全部 null。
     expect(result).toEqual({
       detail: taskDetail,
+      browserRuns: [],
       events: eventsPage,
       artifacts: artifactList,
       timeline,
@@ -315,7 +316,7 @@ describe("loadTaskDetail", () => {
 
     await loadTaskDetail(client, "T1", new Request("http://gui.invalid/tasks/T1?types=transitioned"));
 
-    const eventsReq = mock.requests.find((r) => r.url.startsWith("/api/v1/tasks/T1/events"));
+    const eventsReq = mock.requests.find((r) => r.url === "/api/v1/tasks/T1/events?types=transitioned");
     expect(eventsReq?.url).toBe("/api/v1/tasks/T1/events?types=transitioned");
   });
 

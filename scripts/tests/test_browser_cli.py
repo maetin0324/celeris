@@ -195,6 +195,38 @@ class BrowserCliTest(unittest.TestCase):
             self.assertEqual(self.events()[-1], {'operation': 'policy_block', 'status': 'blocked'})
             self.assert_no_secret(stdout)
 
+    def test_missing_empty_or_broken_policy_fails_closed_without_invoking_substrate(self):
+        # agent-browser 0.38.1 runs eval with these policies (fail-open); the shim must not call it.
+        good = (self.root / 'policy.json').read_text()
+        cases = [None, '', '{"default":"deny","allow":', json.dumps({'default': 'deny', 'allow': []}),
+                 json.dumps({'default': 'allow', 'allow': ['navigate']}), json.dumps({'default': 'deny'}),
+                 json.dumps({'default': 'deny', 'allow': ['navigate', 'evaluate']}),
+                 json.dumps({'default': 'deny', 'allow': ['navigate'], 'deny': []}), '[]']
+        for policy in cases:
+            with self.subTest(policy=policy):
+                (self.root / 'invocation.json').unlink(missing_ok=True)
+                (self.root / 'policy.json').unlink(missing_ok=True)
+                if policy is not None:
+                    (self.root / 'policy.json').write_text(policy)
+                code, stdout = self.run_cli('open', 'https://example.com/public')
+                self.assertEqual(code, 2)
+                self.assertFalse((self.root / 'invocation.json').exists())
+                self.assertEqual(self.events()[-1], {'operation': 'policy_block', 'status': 'blocked'})
+        (self.root / 'policy.json').write_text(good)
+        for domains in [[], [''], ['example.com,evil.com'], ['*'], None]:
+            with self.subTest(domains=domains):
+                (self.root / 'invocation.json').unlink(missing_ok=True)
+                (self.root / 'config.json').write_text(json.dumps(dict(self.config, allowed_domains=domains)))
+                code, _ = self.run_cli('snapshot')
+                self.assertEqual(code, 2)
+                self.assertFalse((self.root / 'invocation.json').exists())
+
+    def test_shim_action_allowlist_matches_supervisor_policy(self):
+        source = (SOURCE.parent / 'browser.rs').read_text()
+        block = source[source.index('fn action_policy'):]
+        block = block[block.index('"allow":['):block.index(']')]
+        self.assertEqual(set(json.loads('[' + block.split('[', 1)[1] + ']')), cli.ACTIONS)
+
 
 if __name__ == '__main__':
     unittest.main()

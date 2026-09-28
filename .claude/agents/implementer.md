@@ -12,3 +12,11 @@ tools: Read, Write, Edit, Grep, Glob, Bash
 - 設計判断が必要になったら、勝手に決めずに「判断が必要な点」として報告に書いて終了する
 - `unwrap()` はテスト以外で使わない
 - 報告は「変更したファイル」「実行したコマンドと結果（exit code、テスト数）」「未解決事項」の3節だけ。コードの再掲は不要
+
+## cargo の target（ADR-0075 D7）
+
+cargo を使う前に `eval "$(celerisctl scratch env --owner agent-<worktree 名> --repo <worktree の絶対パス>)"` を 1 回実行する
+（`CARGO_TARGET_DIR` が設定され、scratch の lease が作られる。`celerisctl` が PATH に無ければ `~/.local/celeris/current/bin/celerisctl`、
+`--config` は `CELERIS_CONFIG`）。長いビルドの前には `celerisctl scratch touch --owner agent-<worktree 名>`。
+`CARGO_TARGET_DIR` を自分で決めない。`~/.cargo/config.toml` と `/tmp` と worktree 直下に target を置かない。
+作業が終わったら `celerisctl scratch release --owner agent-<worktree 名>`。

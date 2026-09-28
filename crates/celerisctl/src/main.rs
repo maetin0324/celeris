@@ -30,6 +30,7 @@ use commands::replay::{self, ReplayArgs};
 use commands::rereview::{self, RereviewArgs};
 use commands::retry::{self, RetryArgs};
 use commands::routing::{self as routing_cmd, RoutingCommand};
+use commands::scratch::{self as scratch_cmd, ScratchCommand};
 use commands::worker::{self, WorkerCommand};
 use commands::workspace::{self, WorkspaceCommand};
 use error::CliError;
@@ -51,7 +52,14 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// ADR-0075（Phase G1）: scratch pool（`status [--json]` / `gc [--dry-run]` / 外部 lease の `lease` / `touch` /
+    /// `release` / `env`）。`lease` 系は DB を開かない。`status` / `gc` は DB があれば読む（daemon と同じ分類）。
+    Scratch {
+        #[command(subcommand)]
+        command: ScratchCommand,
+    },
     /// 共有 Cargo ビルドキャッシュの古い repo-key を列挙・削除する（DB は開かない）。
+    /// ADR-0075: scratch へ移行済み。通常は `celerisctl scratch gc` を使う。
     BuildCache {
         #[command(subcommand)]
         command: BuildCacheCommand,
@@ -150,6 +158,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
     match command {
         Command::DocsMaintenance { .. } => unreachable!("handled before store open"),
         Command::BuildCache { .. } => unreachable!("handled before store open"),
+        Command::Scratch { .. } => unreachable!("handled before store open"),
         Command::Org { command } => org_cmd::run(store, db_path, command),
         // `Config` は DB を開く前に処理される（`main` を見よ）。
         Command::Config { command } => config_cmd::run(command),
@@ -184,6 +193,15 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::Scratch { command } = cli.command {
+        return match scratch_cmd::run(cli.db, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if let Command::BuildCache { command } = cli.command {
         return match build_cache::run(command) {
             Ok(code) => code,

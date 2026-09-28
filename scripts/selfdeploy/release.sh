@@ -75,7 +75,6 @@ fi
 
 sd_log "ref=$REF sha=$SHA_FULL sha12=$SHA12"
 sd_log "build worktree: $BUILD"
-sd_log "CARGO_TARGET_DIR: $SD_CARGO_TARGET"
 
 # ---- detached worktree -----------------------------------------------------
 
@@ -83,6 +82,13 @@ git -C "$SD_REPO" worktree remove --force "$BUILD" >/dev/null 2>&1 || true
 rm -rf "$BUILD"
 git -C "$SD_REPO" worktree prune
 git -C "$SD_REPO" worktree add --detach "$BUILD" "$SHA_FULL" >&2
+# ADR-0075 D7（Phase G1）: target は scratch pool の lease（owner `release-<sha12>`）。worktree を切った直後に取る
+# （adopt の安全条件の checkout 時刻が `.build/<sha12>/.git` の mtime になる）。終了時は成功・失敗とも release する。
+# celerisctl が無い・scratch が無効なら従来どおり `$SD_RELEASES/.cargo-target`。
+if sd_scratch_lease "$SHA12" "$SHA_FULL" "$BUILD"; then
+  trap 'rm -f "$GATE_TSV"; sd_scratch_release' EXIT
+fi
+sd_log "CARGO_TARGET_DIR: $SD_CARGO_TARGET"
 mkdir -p "$SD_CARGO_TARGET"
 
 export CARGO_TARGET_DIR="$SD_CARGO_TARGET"
@@ -101,6 +107,8 @@ run_step() {
   local log="$BUILD/.gate-$name.log" start end secs rc
   if [ "$GATE_OK" != true ]; then return 0; fi
   sd_log "step $name: $* (cwd $workdir)"
+  # ADR-0075 D2: 長い step の前に scratch の lease を touch する（TTL で回収されないように）。
+  sd_scratch_touch
   start="$(date +%s.%N)"
   rc=0
   # lock の fd（8, 9）を子に継がせない（応答しない子が残ると lock が外れない。lib.sh の sd_lock_or_tempfail 参照）。

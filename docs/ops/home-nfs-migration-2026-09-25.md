@@ -66,7 +66,13 @@ rsync -aHAX --numeric-ids --info=progress2 \
 - `[workspace] build_cache_dir = "/var/lib/celeris/build-cache"`。
 - `[memory] dir = "/var/lib/celeris/memory"`（langmem の SQLite。移行時に `~/.local/celeris/memory` をコピー）。
 - `[db] backup_dir` はホーム（NFS、snapshot あり）のままでよい。releases / staging / tools もローカル（`/var/lib/celeris`）へ寄せると昇格が速い（`CELERIS_STATE_DIR` を変えるか symlink）。
-- 実装エージェント（Fable 配下）の worktree `~/workspace/agent-platform/.claude/worktrees` は NFS 上に残るが、`CARGO_TARGET_DIR=/var/lib/celeris/build-cache/cargo/agent-platform-dev` を `~/.cargo/config.toml` の `[build] target-dir` で指定してビルド生成物をローカルへ。
+- 実装エージェント（Fable 配下）の worktree `~/workspace/agent-platform/.claude/worktrees` は NFS 上に残るが、ビルド生成物はローカルへ。
+  **訂正（2026-09-28、ADR-0075 D7）**: 以前は `~/.cargo/config.toml` の `[build] target-dir` で 1 つの target を指定すると書いていたが、
+  worktree 間で target を共有すると別ブランチの生成物が混ざる（F5-1 の E0609）ので廃止した。`~/.cargo/config.toml` に target-dir を
+  置かない。`CARGO_TARGET_DIR` は経路ごとに env で与える: Celeris の run は dispatcher が scratch pool
+  （`/var/lib/celeris/scratch/targets/<owner>/target`）を渡し、実装エージェントは
+  `eval "$(celerisctl scratch env --owner agent-<worktree 名> --repo <worktree の絶対パス>)"` で同じ pool の lease を取る。
+  `/tmp` にも target を置かない。
 
 ## 戻し方
 `pct stop 100` → `100.conf` の `mp0` 行を消し、旧 `/home` ボリュームの行を戻す → idmap 行を消す（`/var/lib/celeris` の所有者を 101001 に戻す）→ `pct start 100`。TrueNAS 側のデータはそのまま残る。

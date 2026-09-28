@@ -440,6 +440,10 @@ pub struct Lease {
     pub measured_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adopted_from: Option<String>,
+    /// 外部の owner の lease の TTL（`celerisctl scratch lease --ttl`。無ければ `[scratch] external_lease_ttl_secs`）。
+    /// G1 の明確化（ADR-0075 D1 の欄に足した）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
 }
 
 pub fn rfc3339(t: SystemTime) -> String {
@@ -611,6 +615,7 @@ pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation
         size_bytes: None,
         measured_at: None,
         adopted_from: None,
+        ttl_secs: None,
     });
     lease.released_at = None;
     if req.base_commit.is_some() {
@@ -672,6 +677,18 @@ pub fn touch(pool: &Pool, owner: &Owner) -> io::Result<bool> {
         return Ok(false);
     }
     set_mtime(&path, SystemTime::now())?;
+    Ok(true)
+}
+
+/// 外部の lease の TTL を書く（`celerisctl scratch lease --ttl`）。
+pub fn set_ttl(pool: &Pool, owner: &Owner, ttl_secs: Option<u64>) -> io::Result<bool> {
+    let _lock = pool.lock()?;
+    let path = pool.lease_path(owner);
+    let Some(mut lease) = read_lease(&path)? else {
+        return Ok(false);
+    };
+    lease.ttl_secs = ttl_secs;
+    write_lease(&path, &lease)?;
     Ok(true)
 }
 
@@ -856,7 +873,11 @@ pub fn classify(
         Owner::Release { .. } | Owner::Agent { .. } => {
             if lease.and_then(|l| l.released_at.as_ref()).is_some() {
                 (Class::Completed, "lease released")
-            } else if a >= s.external_lease_ttl_secs {
+            } else if a
+                >= lease
+                    .and_then(|l| l.ttl_secs)
+                    .unwrap_or(s.external_lease_ttl_secs)
+            {
                 (Class::Completed, "lease expired")
             } else {
                 (Class::Pinned, "lease live")
@@ -1468,6 +1489,7 @@ mod tests {
             size_bytes: None,
             measured_at: None,
             adopted_from: None,
+            ttl_secs: None,
         }
     }
 
@@ -1575,6 +1597,11 @@ mod tests {
         };
         assert_eq!(c(&lease, T0 + 21_599), Class::Pinned);
         assert_eq!(c(&lease, T0 + 21_600), Class::Completed);
+        // lease ごとの TTL（`--ttl`）が既定より優先。
+        lease.ttl_secs = Some(60);
+        assert_eq!(c(&lease, T0 + 59), Class::Pinned);
+        assert_eq!(c(&lease, T0 + 60), Class::Completed);
+        lease.ttl_secs = None;
         lease.released_at = Some(rfc3339(at(T0 + 1)));
         assert_eq!(c(&lease, T0 + 2), Class::Completed);
     }

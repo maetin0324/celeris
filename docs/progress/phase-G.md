@@ -109,3 +109,19 @@ ADR-0075 の状態を Accepted にした。作業は git worktree の中（main 
   run_start_adopts_a_finished_target_that_predates_the_checkout}`、`shared_build_cache_is_not_applied_to_remote_workspaces`（scratch の計画を
   渡しても Remote には与えない）、`task_dispatch::scratch_gc::tests::*`（4 件）。
 - `cargo test -p task-dispatch -p task-worker -p celeris -p task-ops --no-fail-fast` → FAILED 0。`cargo clippy --workspace --all-targets -- -D warnings` → 警告 0。
+
+### G1 checkpoint 3: `celerisctl scratch`、`SD_CARGO_TARGET` の lease、定型文（完了 2026-09-28）
+
+- `crates/celerisctl/src/commands/scratch.rs`（新規）: `status [--json]` / `gc [--dry-run]` / `lease <owner> --repo [--worktree] [--base] [--ttl]` /
+  `touch` / `release` / `env <owner> [--repo …]`（owner は位置引数でも `--owner` でもよい）。`env` は dispatcher と同じ
+  `task_worker::scratch::cargo_env`。scratch が無効なら `lease` / `env` は失敗（release.sh が従来の target に戻る合図）。
+  `lease.json` に `ttl_secs`（`--ttl`）を足した。`build-cache prune` の help に「scratch へ移行済み。`celerisctl scratch gc`」。
+- `scripts/selfdeploy/lib.sh`: `sd_celerisctl_bin` / `sd_scratch_lease` / `sd_scratch_touch` / `sd_scratch_release`。`release.sh` は
+  `git worktree add` の直後に lease（`--repo "$SD_REPO" --worktree "$BUILD" --base <sha>`）→ 成功すれば `SD_CARGO_TARGET` をその target に、
+  `trap` で終了時に release、各 step の前に touch。
+- 定型文: `crates/task-worker/src/preamble.rs` の `shared_build_cache_note`、`.claude/agents/{implementer,auditor}.md`、
+  `docs/ops/home-nfs-migration-2026-09-25.md` §5 の訂正（`~/.cargo/config.toml` に target-dir を置かない）。
+- テスト: `celerisctl::commands::scratch::tests::{env_matches_the_dispatcher_env, lease_touch_release_round_trip, gc_dry_run_lists_without_removing,
+  disabled_scratch_makes_lease_fail_so_release_sh_falls_back}` → 4 passed。`bash scripts/selfdeploy/tests/release_uses_scratch_lease.sh` →
+  `release_uses_scratch_lease: ok`（偽の celerisctl / cargo / pnpm。lease → touch → release の順、gate の `CARGO_TARGET_DIR` が scratch、
+  lease 失敗で `$SD_RELEASES/.cargo-target`）。

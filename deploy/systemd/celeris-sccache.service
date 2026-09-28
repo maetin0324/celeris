@@ -1,0 +1,26 @@
+[Unit]
+# sccache の server（ADR-0075 D4、Phase G2）。Celeris の run の cargo が `RUSTC_WRAPPER` で使う L1（`<scratch>/sccache-l1`）。
+# `celeris@<sha12>` の cgroup の外で動かす（run の中から起こすと昇格の停止で巻き添えになる。ADR-0060 と同じ教訓）。
+# env（`SCCACHE_DIR` / `SCCACHE_CACHE_SIZE` / `SCCACHE_SERVER_PORT` / `SCCACHE_IDLE_TIMEOUT`）は client と同じ値を
+# `celerisctl scratch env --server` から取る（sccache の server は最初に起こした env で動き続けるため、一か所で組む）。
+# インストール: scripts/selfdeploy/install-units.sh（置くだけ）。有効化は人: `systemctl --user enable --now celeris-sccache.service`。
+# 昇格で自動的には再起動しない（`current` の celerisctl を使うのは起動時だけ）。
+Description=sccache server for Celeris cargo runs (ADR-0075 D4)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/celeris
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CELERIS_CONFIG=%h/.config/celeris/config.toml
+# 前景の server（`SCCACHE_START_SERVER=1` は sccache の内部の起動経路、`SCCACHE_NO_DAEMON=1` で fork しない。0.18.0 で確認）。
+Environment=SCCACHE_START_SERVER=1
+Environment=SCCACHE_NO_DAEMON=1
+ExecStart=/bin/sh -c 'set -e; env_text="$(%h/.local/celeris/current/bin/celerisctl scratch env --server --config "$CELERIS_CONFIG")"; eval "$env_text"; exec "$CELERIS_SCCACHE_BIN"'
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=default.target

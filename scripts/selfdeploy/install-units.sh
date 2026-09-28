@@ -3,7 +3,8 @@
 # テンプレート unit を ~/.config/systemd/user/ に置いて `systemctl --user daemon-reload` する
 # （ADR-0040 D4、ADR-0045 D3）。
 #
-# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない。
+# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない
+# （celeris-sccache.service も置くだけで、有効化しない。ADR-0075 D4）。
 # linger は既に有効（`loginctl enable-linger rmaeda`）である前提。
 #
 #   --remove-old  改名前のテンプレート unit も消す。**移行のときだけ**使う。消す対象の名前は
@@ -51,7 +52,9 @@ DEST="${SD_UNIT_DIR:-$HOME/.config/systemd/user}"
 [ -d "$SRC" ] || sd_die "no such directory: $SRC"
 mkdir -p "$DEST"
 
-for unit in celeris@.service celeris-gui@.service; do
+# ADR-0075 D4（Phase G2）: celeris-sccache.service（sccache の server）も置くだけ。有効化は人
+# （`systemctl --user enable --now celeris-sccache.service`、手順は docs/ops/sccache-l1.md）。
+for unit in celeris@.service celeris-gui@.service celeris-sccache.service; do
   [ -f "$SRC/$unit" ] || sd_die "missing $SRC/$unit"
   if [ -f "$DEST/$unit" ] && ! cmp -s "$SRC/$unit" "$DEST/$unit"; then
     cp -p "$DEST/$unit" "$DEST/$unit.bak-$(sd_stamp)"

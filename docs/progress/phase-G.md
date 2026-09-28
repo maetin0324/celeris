@@ -267,3 +267,20 @@ target は `celerisctl scratch lease` で取った `agent-g2-{a,b,c,d}`（各回
   `task_dispatch::scratch_gc::tests::sccache_stats_summary_reads_the_json_shape_of_0_18`、`celeris::config::tests::scratch_cargo_defaults_disable_incremental`、
   `celerisctl::commands::scratch::tests::env_includes_sccache_when_the_server_is_up`。偽の server は loopback の port 0 に bind して accept
   するだけのスレッド、閉じた port は特権 port の 1（並行するテストと競合しない）。
+
+### G2 checkpoint 3: 導入スクリプト・unit の雛形・手動 e2e（完了 2026-09-28）
+
+- `tools/sccache/VERSION`（`0.18.0`）、`scripts/scratch/setup-sccache.sh`（既定は `cargo install sccache --locked --version <VERSION>
+  --root $CELERIS_STATE_DIR/tools/sccache`〈target は scratch の `agent-setup-sccache`、終わったら消す〉、`--from <binary>` は同じ版の
+  バイナリを写すだけ）。確認: `CELERIS_STATE_DIR=<scratchpad>/state scripts/scratch/setup-sccache.sh --from ~/.cargo/bin/sccache` →
+  `ok: sccache 0.18.0`、`--from /bin/true` → exit 1（版の不一致）。本番の `~/.local/celeris/tools` には入れていない（人が行う）。
+- `deploy/systemd/celeris-sccache.service`（前景の server: `SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1`、env は
+  `celerisctl scratch env --server`）と `scripts/selfdeploy/install-units.sh` の対象に追加（置くだけ。有効化は人）。
+  `systemctl` は使わずに ExecStart の shell を模して確認: port 4239 で LISTEN → `scratch status` が `(ready)` と
+  `hits 0 / misses 0`、`scratch env` に sccache 系 → server を止めると `(unavailable: no sccache server on 127.0.0.1:4239 …)` と
+  sccache 系が消える。前景起動（`SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1 sccache`）は 0.18.0 で fork しないことを確認（ADR の未確認事項）。
+- 手順書 `docs/ops/sccache-l1.md`（導入・有効化・確認・注意）。
+- `crates/task-worker/tests/scratch_sccache_e2e.rs`（`#[ignore]`、手動）:
+  `CELERIS_E2E_SCCACHE=$HOME/.cargo/bin/sccache cargo test -p task-worker --test scratch_sccache_e2e -- --ignored --nocapture` →
+  `wrapper a: rust hits 0 misses 3 (560 ms)` / `wrapper b: rust hits 3 misses 0 (150 ms)` / `plain c: 0 / 3` / `plain d: 0 / 3`、
+  `test result: ok. 1 passed`（`cargo_env_with` の wrapper なら別 owner の target で依存も crate も hit、素の sccache は 0）。

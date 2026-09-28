@@ -284,3 +284,31 @@ target は `celerisctl scratch lease` で取った `agent-g2-{a,b,c,d}`（各回
   `CELERIS_E2E_SCCACHE=$HOME/.cargo/bin/sccache cargo test -p task-worker --test scratch_sccache_e2e -- --ignored --nocapture` →
   `wrapper a: rust hits 0 misses 3 (560 ms)` / `wrapper b: rust hits 3 misses 0 (150 ms)` / `plain c: 0 / 3` / `plain d: 0 / 3`、
   `test result: ok. 1 passed`（`cargo_env_with` の wrapper なら別 owner の target で依存も crate も hit、素の sccache は 0）。
+
+### G2 checkpoint 4: 受け入れ条件 3（target の容量）と U3（壁時計）・U6（clippy）（完了 2026-09-28）
+
+`cargo test --workspace --no-run`（`cargo test --workspace` が作る target と同じ。テストの実行時間は含めない）を、空の target から
+1 回（clean）と、`crates/task-dispatch/src/dispatcher.rs` の末尾に 1 行のコメントを足した後にもう 1 回（edit、編集ループの代表）。
+target の容量は `du -sb`。sccache なしの 3 通り（owner `agent-g2-{a,b,c}`）と、sccache（wrapper 経由、測定用 server）ありの 2 回。
+
+| 構成 | target の容量 | うち `debug/incremental` | clean の壁時計 | edit 後の壁時計 |
+|---|---|---|---|---|
+| before: cargo の既定（incremental、`debug = true`） | **19.48 GiB**（20,917,220,011 B） | 4.4 G | 53.5 s | **5.5 s** |
+| `CARGO_INCREMENTAL=0` だけ | 14.26 GiB | 0 | 43.2 s | 13.0 s |
+| **after: `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only`（Celeris の既定）** | **6.47 GiB**（6,942,244,190 B、**−67 %**） | 0 | **39.3 s** | **11.2 s** |
+| after + sccache（L1 に同じ flags の entry が無い 1 回目） | 6.47 GiB | 0 | 43.6 s（Rust 0 / 197 hit、C/C++・asm 382 hit） | 13.4 s |
+| after + sccache（別 owner の空の target、L1 が温まった 2 回目） | 6.47 GiB | 0 | 41.0 s（Rust **168 / 29 hit、85.3 %**） | 13.3 s |
+
+- **受け入れ条件 3**: target の容量は 19.48 GiB → 6.47 GiB（−13.0 GiB）。内訳は incremental の廃止で −5.2 GiB、`line-tables-only` で
+  さらに −7.8 GiB。`test` profile は `dev` を継ぐので `CARGO_PROFILE_DEV_DEBUG` がテストの実行ファイルにも効く（ADR の未確認事項 → 確認）。
+- **U3（壁時計）**: 空からのビルドは速くなった（53.5 s → 39.3 s。incremental の書き出しと debug info が減る）。1 行の編集の後の
+  再ビルドは 5.5 s → 11.2 s（**約 2 倍、+5.7 s**。`task-dispatch` の 3 万行を丸ごと作り直す）。Celeris の run は新しい worktree の
+  空の target から始まることが多いので既定は `incremental = false` のままにする。長い編集ループの実装エージェントは `unset CARGO_INCREMENTAL`
+  してよい（定型文に書いた）。
+- **sccache の壁時計**: このリポジトリでは依存の hit（Rust 85 %）でも clean は 39.3 s → 41.0 s とほぼ変わらない（テストの実行ファイルの
+  リンク・proc-macro・workspace のメンバーが律速で、依存のコンパイルは 24 コアで並列に隠れる）。sccache の得は主に CPU 時間と、
+  並列の run が同時に依存を作り直すときの負荷（未測定）。
+- **U6（clippy）**: `cargo clippy --workspace --all-targets -- -D warnings` を wrapper 経由の sccache で 2 つの owner の空の target から →
+  どちらも exit 0、Rust 188 hit（依存の `--emit=metadata`）、`Non-cacheable calls 135`（clippy-driver を通る workspace のメンバー）、
+  壁時計 21.0 s / 21.1 s。**clippy と `RUSTC_WRAPPER` の組み合わせは壊れない**（メンバーはキャッシュされない。依存だけ hit）。
+- 測定の途中で、`CargoTargetPlan::Scratch` の `ScratchSettings` が大きくなって clippy の `large_enum_variant` に当たったので `Box` にした。

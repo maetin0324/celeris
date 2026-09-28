@@ -130,7 +130,7 @@ enum CargoTargetPlan {
     Legacy(PathBuf),
     /// scratch pool（`<scratch>/targets/<owner>/target`。adopt の候補つき）。
     Scratch {
-        settings: task_worker::scratch::ScratchSettings,
+        settings: Box<task_worker::scratch::ScratchSettings>,
         candidates: Vec<task_worker::scratch::AdoptCandidate>,
     },
 }
@@ -11273,7 +11273,7 @@ impl Dispatcher {
             CargoTargetPlan::None
         } else if self.scratch_active() {
             CargoTargetPlan::Scratch {
-                settings: self.config.scratch.clone(),
+                settings: Box::new(self.config.scratch.clone()),
                 candidates: self.scratch.candidates.clone(),
             }
         } else {
@@ -24339,9 +24339,9 @@ mod tests {
             ContainerDecision::Host,
             // scratch を渡しても、`remote.is_some()` なので適用されないことを確かめる（ADR-0075 D3）。
             CargoTargetPlan::Scratch {
-                settings: task_worker::scratch::ScratchSettings::with_dir(
+                settings: Box::new(task_worker::scratch::ScratchSettings::with_dir(
                     tmp.path().join("scratch"),
-                ),
+                )),
                 candidates: Vec::new(),
             },
         )

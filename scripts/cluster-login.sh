@@ -18,7 +18,9 @@ fi
 
 echo "== $host に接続します。2 要素認証の入力を求められたら応答してください。"
 # -M -N: master のみ（コマンドは実行しない）。-f: 認証の後にバックグラウンドへ。
-if ! ssh -M -N -f "$host"; then
+# ADR-0078 D1: ControlPersist=yes（idle で master を終わらせない）と keepalive（30 秒 x 3 = 最大 90 秒で断を検出）
+# をコマンドラインで明示する（`-o` は ~/.ssh/config より優先される。celeris が張る master と同じ値）。
+if ! ssh -o ControlPersist=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -M -N -f "$host"; then
   echo "接続できませんでした。~/.ssh/config の Host 設定（config/ssh-config.example）を確認してください。" >&2
   exit 1
 fi

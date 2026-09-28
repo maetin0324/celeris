@@ -261,6 +261,7 @@ pub(crate) fn record_cluster_login_needed_report(
     store: &dyn TaskStore,
     cluster: &str,
     host: &str,
+    detail: Option<&str>,
     now: OffsetDateTime,
 ) -> Result<Option<Report>, StoreError> {
     let org = store.org_list()?;
@@ -269,7 +270,8 @@ pub(crate) fn record_cluster_login_needed_report(
     };
     let node_id = node.id.clone();
     let level = report::level_of(&org, &node_id);
-    let report = report::report_for_cluster_login_needed(&node_id, level, cluster, host, now);
+    let report =
+        report::report_for_cluster_login_needed(&node_id, level, cluster, host, detail, now);
     append_with_escalation(store, &org, report).map(Some)
 }
 

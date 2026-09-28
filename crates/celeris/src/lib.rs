@@ -5,6 +5,7 @@ mod accounts_admin;
 pub mod cache_server;
 mod cluster_admin;
 pub mod config;
+pub mod control_path;
 /// ADR-0064 D3 / D5（Phase 110a）: 背景チェックポイントと定期バックアップ。
 pub mod db_maintenance;
 pub mod delivery;
@@ -614,6 +615,7 @@ pub fn build_dispatcher(
         masters.clone(),
         master_launchers(config),
         cluster_keepalive_secs(config),
+        cluster_control_persist(config),
     ));
     // ADR-0062 A（Phase 107）: master 越しの実通信 probe・死んだ接続の片付け・celeris 保持 master の
     // 終了検出は、ここ（テストからも広く呼ばれる `build_dispatcher`）では配線しない。実 ssh を打つ
@@ -678,6 +680,17 @@ fn cluster_keepalive_secs(config: &Config) -> Arc<HashMap<String, u64>> {
     )
 }
 
+/// ADR-0078 D1: クラスタ id ごとの `ControlPersist` の値（`[[clusters]] control_persist`）。
+fn cluster_control_persist(config: &Config) -> Arc<HashMap<String, String>> {
+    Arc::new(
+        config
+            .clusters
+            .iter()
+            .map(|c| (c.id.clone(), c.control_persist.clone()))
+            .collect(),
+    )
+}
+
 /// ADR-0060（Phase 103）: `[[clusters]] master_launcher` を、クラスタ id ごとに実際の起こし方へ解決する。
 /// `[[clusters]]` は `POST /reload` で変わらない（起動時に再読込しない）ので、起動時に一度だけ計算すれば
 /// 十分（`cluster_connector` の呼び出しごとに `systemd-run` の PATH 検索をやり直さない）。
@@ -713,6 +726,7 @@ fn cluster_connector(
     masters: ClusterMasters,
     launchers: Arc<HashMap<String, task_worker::cluster_login::MasterLauncher>>,
     keepalives: Arc<HashMap<String, u64>>,
+    persists: Arc<HashMap<String, String>>,
 ) -> task_dispatch::dispatcher::ClusterConnector {
     /// 自動接続に使う上限。ディスパッチループを止めないために短くしてある（上の説明）。
     const AUTO_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
@@ -728,6 +742,11 @@ fn cluster_connector(
             .unwrap_or(task_worker::cluster_login::MasterLauncher::Inline);
         // ADR-0062 A（Phase 107）。
         let keepalive_secs = keepalives.get(&cluster_id).copied().unwrap_or(0);
+        // ADR-0078 D1: 表に無ければ既定の "yes"。
+        let control_persist = persists
+            .get(&cluster_id)
+            .cloned()
+            .unwrap_or_else(|| "yes".to_string());
         // Phase 66b（本番 2026-09-21 の観測）: このクロージャは非同期の `start_connect` を専用ランタイムで
         // `block_on` する。呼び出し元（`task_dispatch::dispatcher::run_cluster_hooks_off_async`）は
         // tokio の文脈を持たない OS スレッドへ逃がしてから呼ぶ契約になっているが、万一これが破られて
@@ -759,6 +778,7 @@ fn cluster_connector(
             AUTO_CONNECT_TIMEOUT,
             AUTO_CONNECT_TIMEOUT,
             keepalive_secs,
+            &control_persist,
         ));
         match outcome {
             Ok(task_worker::cluster_login::ClusterConnectStart::Connected(master)) => {
@@ -788,8 +808,31 @@ fn cluster_connector(
     })
 }
 
-/// ADR-0062 A（Phase 107）: 実 ssh を打つ 3 つのフック（実通信 probe・死んだ接続の片付け・
-/// celeris 保持 master の終了検出）を配線する。**本番の起動経路からだけ**呼ぶこと
+/// ADR-0078 D2: クラスタごとの `ControlPath` 検査を背景スレッドで 1 回走らせる（`ssh -G` は通信しない）。
+/// `auth = "manual"` のクラスタも人が張る master を借りるので、全クラスタを対象にする。
+fn spawn_control_path_inspection(config: &Config) {
+    let targets: Vec<(String, String)> = config
+        .clusters
+        .iter()
+        .map(|c| (c.id.clone(), c.host.clone()))
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("control-path-inspect".to_string())
+        .spawn(move || {
+            for (id, host) in targets {
+                control_path::inspect_cluster_control_path(&id, &host);
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::debug!("control_path: could not spawn the inspection thread: {e}");
+    }
+}
+
+/// ADR-0062 A（Phase 107）: 実 ssh を打つフック（実通信 probe・celeris 保持 master の終了検出）を
+/// 配線する（ADR-0078 D3-3: probe の失敗で `-O exit` しないので、片付けのフックは外した）。**本番の起動経路からだけ**呼ぶこと
 /// （`build_dispatcher` は `accounts_admin`/`lib.rs` の多数のテストから呼ばれ、そこでは
 /// `cluster_liveness_probe` を偽物にすり替えるだけで済ませているため、実 ssh を打つこの 3 つを
 /// そこに混ぜると CLAUDE.md の「テストで外部ネットワークに出ない」を破る）。
@@ -799,20 +842,6 @@ pub fn wire_cluster_liveness_hooks(dispatcher: &mut Dispatcher, masters: Cluster
             task_worker::ssh::control_master_command_probe_blocking(ssh_command, host, timeout)
         },
     ));
-    dispatcher.set_cluster_disconnector(Arc::new(move |_cluster_id: &str, host: &str| {
-        // `disconnect` は非同期なので、`cluster_connector` と同じく専用ランタイムで回す
-        // （tick ループの同期の文脈から呼ばれるため）。
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("could not build a runtime for the cluster disconnect: {e}"))?;
-        runtime
-            .block_on(task_worker::cluster_login::disconnect(
-                &["ssh".to_string()],
-                host,
-            ))
-            .map_err(|e| e.to_string())
-    }));
     dispatcher.set_cluster_master_watcher(cluster_master_watcher(masters));
 }
 
@@ -1515,6 +1544,11 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // ADR-0062 A（Phase 107）: 実 ssh を打つフック（実通信 probe・死んだ接続の片付け）は本番の起動経路
     // だけで配線する（`build_dispatcher` はテストからも広く呼ばれるため、そこでは配線しない）。
     wire_cluster_liveness_hooks(&mut dispatcher, Arc::clone(&cluster_masters));
+    // ADR-0078 D2: ControlPath の置き場所を起動時に 1 回だけ検査する（warn のみ。起動は遅らせず止めない）。
+    // `--mode verify` は実 ssh を打たない。
+    if !verify {
+        spawn_control_path_inspection(&config);
+    }
     let role = SharedRole::new(if verify {
         InstanceRole::Verify
     } else {

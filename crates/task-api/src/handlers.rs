@@ -37,12 +37,13 @@ use crate::types::{
     AccountCheckResponse, AccountCreateBody, AccountList, AccountLoginCodeBody, AccountLoginResult,
     AccountLoginStart, AccountStats, AccountView, AnswerBody, ArtifactList, CancelBody,
     ClusterConnectCodeBody, ClusterConnectResult, ClusterConnectStart, ClusterForwardView,
-    ClusterSettingsPutBody, ClusterSettingsView, ClusterView, Clusters, CommentBody, CommentList,
-    DaemonView, DbInfo, DecisionBody, EventsPage, Health, MilestoneCreateBody, MilestonePatchBody,
-    MilestoneReviewView, MilestoneView, OrgCreateBody, OrgList, OrgPatchBody, ProjectCreateBody,
-    ProjectDetail, ProjectList, ProjectPatchBody, ProjectTaskView, ProviderCheckResponse,
-    ProviderConfigView, ProviderView, Providers, ReloadResult, ReopenBody, RetryBody, RunList,
-    SecretList, SecretPutBody, SecretPutResult, SecretView, ValidationError,
+    ClusterSettingsPutBody, ClusterSettingsView, ClusterStatsView, ClusterView, Clusters,
+    CommentBody, CommentList, DaemonView, DbInfo, DecisionBody, EventsPage, Health,
+    MilestoneCreateBody, MilestonePatchBody, MilestoneReviewView, MilestoneView, OrgCreateBody,
+    OrgList, OrgPatchBody, ProjectCreateBody, ProjectDetail, ProjectList, ProjectPatchBody,
+    ProjectTaskView, ProviderCheckResponse, ProviderConfigView, ProviderView, Providers,
+    ReloadResult, ReopenBody, RetryBody, RunList, SecretList, SecretPutBody, SecretPutResult,
+    SecretView, ValidationError,
 };
 use crate::{API_VERSION, MAX_BODY_BYTES};
 
@@ -2636,6 +2637,16 @@ async fn clusters(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Api
     let overrides: Vec<task_core::ClusterSettings> = state
         .blocking(|store| store.cluster_settings_list().map_err(store_problem))
         .await?;
+    // ADR-0078 D5: 直近 24 時間の接続・切断の回数は DB（`cluster_connection_log`）から数える
+    // （daemon の再起動をまたぐため。起動以降の値はスナップショットから）。
+    let since = now - time::Duration::hours(24);
+    let connection_log: Vec<task_core::ClusterConnectionRecord> = state
+        .blocking(move |store| {
+            store
+                .cluster_connection_list_since(since)
+                .map_err(store_problem)
+        })
+        .await?;
     let items = state
         .inner
         .config_view
@@ -2704,6 +2715,13 @@ async fn clusters(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Api
                     })
                     .collect(),
                 tunnel_login_needed: live.map(|live| live.tunnel_login_needed).unwrap_or(false),
+                stats: ClusterStatsView {
+                    last_24h: task_core::ClusterConnectionStats::from_records(
+                        &connection_log,
+                        &cluster.id,
+                    ),
+                    since_start: live.map(|live| live.connection_stats.clone()),
+                },
                 work_dir,
                 work_dir_source,
             }

@@ -920,6 +920,7 @@ mod tests {
             master_launcher: "auto".into(),
             keepalive_secs: 0,
             liveness_probe_secs: 0,
+            control_persist: "yes".into(),
         }
     }
 

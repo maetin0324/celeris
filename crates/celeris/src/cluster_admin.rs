@@ -78,6 +78,8 @@ pub fn spawn_connect_start(
     let host = cluster.host.clone();
     let interactive = cluster.auth == "totp";
     let keepalive_secs = cluster.keepalive_secs;
+    // ADR-0078 D1。
+    let control_persist = cluster.control_persist.clone();
     // ADR-0060（Phase 103）: master の起こし方を解決する（環境の判定は同期・軽いのでここで済ませる）。
     let launcher = task_worker::cluster_login::resolve_master_launcher(
         &cluster.master_launcher,
@@ -99,6 +101,7 @@ pub fn spawn_connect_start(
             PROMPT_TIMEOUT,
             CONNECT_TIMEOUT,
             keepalive_secs,
+            &control_persist,
         )
         .await;
         match outcome {
@@ -126,6 +129,9 @@ pub fn spawn_connect_start(
                     cluster = %id,
                     "cluster: waiting for a verification code"
                 );
+                // ADR-0078 D5: TOTP のプロンプトを人へ中継した回数を journal で数えるための固定の文言
+                // （コードもプロンプトの中身も書かない）。
+                tracing::info!(cluster = %id, "cluster totp prompt relayed");
                 let _ = reply.send(Ok(ClusterConnectStartOutcome {
                     kind: "needs_code".to_string(),
                     prompt: Some(prompt),

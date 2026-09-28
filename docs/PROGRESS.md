@@ -16,6 +16,11 @@
 
 各 Phase の詳細・証跡・申し送りは上記の分割ファイルを参照。既存の `docs/PROGRESS.md` 参照はこの目次を入口として維持する。
 
+## F5-fix8: クラスタの ssh master の維持と切断の記録（ADR-0078）
+
+2026-09-28 実装完了（未昇格、schema 30）。`ControlPersist=yes` の明示・鍵認証の再接続の抑制・切断の通知と回数（`cluster_connection_log`、
+`GET /clusters` の `stats`）。[記録](progress/phase-F.md#f5-fix8-pegasus-の-ssh-master-を長く保ち無駄な再接続をやめ切断を数えて知らせるadr-00782026-09-28)。
+
 ## Phase F5-1 dogfood（再レビュー対応）
 
 worker・review の完了を JoinHandle で明示同期し、実時間の待機回数に依存しない検証へ変更。

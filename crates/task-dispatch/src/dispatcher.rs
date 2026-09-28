@@ -30112,6 +30112,21 @@ mod tests {
         Vec<(String, String)>,
         String,
     ) {
+        run_with_sccache_and_cache(sccache, None, None).await
+    }
+
+    /// `run_with_sccache` に Phase G3 の cache server の設定と、sccache の server が選んだ backend の記録
+    /// （`<scratch>/bin/sccache-server.mode`）を足す。
+    async fn run_with_sccache_and_cache(
+        sccache: task_worker::scratch::SccacheSettings,
+        cache_server: Option<task_worker::scratch::CacheServerSettings>,
+        mode: Option<&str>,
+    ) -> (
+        task_worker::scratch::ScratchSettings,
+        task_worker::scratch::Owner,
+        Vec<(String, String)>,
+        String,
+    ) {
         let repo_dir = tempfile::tempdir().unwrap();
         init_test_repo(repo_dir.path());
         let root = tempfile::tempdir().unwrap();
@@ -30140,6 +30155,12 @@ mod tests {
         );
         scratch_on(&mut d, scratch_dir.path());
         d.config.scratch.sccache = sccache;
+        if let Some(cs) = cache_server {
+            d.config.scratch.cache_server = cs;
+        }
+        if let Some(mode) = mode {
+            task_worker::scratch::write_sccache_mode(&d.config.scratch.pool(), mode).unwrap();
+        }
         let settings = d.config.scratch.clone();
         run_until_idle(&mut d, 60).await;
         assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
@@ -30268,6 +30289,83 @@ mod tests {
                 "{check}"
             );
         }
+    }
+
+    /// ADR-0075 §5 G3 受け入れ条件 5: sccache の server が webdav（cache server）で動いているのに cache server が
+    /// `/healthz` に応答しなければ、run と checks に `RUSTC_WRAPPER` を与えず素の cargo で成功する（U5: sccache 0.18 は
+    /// backend の応答を timeout なしで待つ）。cache server が応答すれば与える。sccache が disk で動いていれば cache server
+    /// の有無に関係なく与える（G2 と同じ）。
+    #[tokio::test]
+    async fn cache_server_down_means_no_rustc_wrapper() {
+        let bin_dir = tempfile::tempdir().unwrap();
+        let sccache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sccache_port = sccache_listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in sccache_listener.incoming() {
+                drop(conn);
+            }
+        });
+        // 偽の cache server（`/healthz` に 200 を返す）。
+        let cache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let cache_port = cache_listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for conn in cache_listener.incoming() {
+                let Ok(mut c) = conn else { continue };
+                let mut req = Vec::new();
+                let mut buf = [0u8; 1024];
+                // 要求の終わり（空行）まで読み切ってから答える（高負荷で要求が分かれて届いても RST にしない）。
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => req.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = c.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n",
+                );
+            }
+        });
+        let sccache = task_worker::scratch::SccacheSettings {
+            enabled: true,
+            binary: fake_sccache_binary(bin_dir.path()),
+            server_port: sccache_port,
+        };
+        let cache = |port| task_worker::scratch::CacheServerSettings {
+            enabled: true,
+            port,
+            token_file: bin_dir.path().join("token"),
+        };
+        // webdav + cache server が居ない（閉じた特権 port の 1）→ 素の cargo。
+        let (settings, owner, run_env, check) =
+            run_with_sccache_and_cache(sccache.clone(), Some(cache(1)), Some("webdav")).await;
+        assert!(
+            !run_env
+                .iter()
+                .any(|(k, _)| k == "RUSTC_WRAPPER" || k.starts_with("SCCACHE_")),
+            "{run_env:?}"
+        );
+        let target = settings.pool().target_dir(&owner).display().to_string();
+        assert_eq!(
+            check.lines().next().unwrap_or_default(),
+            format!("|||0|line-tables-only|{target}"),
+            "{check}"
+        );
+        // webdav + cache server が応答 → 与える。
+        let (_, _, run_env, _) =
+            run_with_sccache_and_cache(sccache.clone(), Some(cache(cache_port)), Some("webdav"))
+                .await;
+        assert!(
+            run_env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"),
+            "{run_env:?}"
+        );
+        // disk（G2 の local disk）なら cache server が居なくても与える。
+        let (_, _, run_env, _) =
+            run_with_sccache_and_cache(sccache, Some(cache(1)), Some("disk")).await;
+        assert!(
+            run_env.iter().any(|(k, _)| k == "RUSTC_WRAPPER"),
+            "{run_env:?}"
+        );
     }
 
     /// ADR-0075 §5 G1 受け入れ条件 3: WU が done になると、その target は次の tick で rename され、別スレッドで

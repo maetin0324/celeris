@@ -392,6 +392,117 @@ pub struct ScratchConfig {
     /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
     #[serde(default)]
     pub cargo: ScratchCargoConfig,
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]`。既定で動く（D7 の N-1 の規則）。
+    #[serde(default)]
+    pub l2: ScratchL2Config,
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.cache_server]`。既定で動く。
+    #[serde(default)]
+    pub cache_server: ScratchCacheServerConfig,
+}
+
+/// `[scratch.l2]`（ADR-0075 D5 (b)、Phase G3）: cache server の L2（NFS 上の content-addressed な immutable object）。
+/// **既定値だけで動く**（本番 config に足すのは、この節を知る release の昇格後。D7）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchL2Config {
+    #[serde(default = "default_scratch_enabled")]
+    pub enabled: bool,
+    /// 既定 `$CELERIS_STATE_DIR/cache/sccache-l2`（`~/.local/celeris/cache/sccache-l2`、NFS）。`~` は展開する。
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    /// L2 の上限（GB。超えたら mtime の古い順に消す）。
+    #[serde(default = "default_scratch_l2_max_gb")]
+    pub max_gb: u64,
+    /// flusher の帯域（MB/s。0 = 無制限）。
+    #[serde(default = "default_scratch_l2_flush_mbps")]
+    pub flush_mbps: u64,
+    /// flush の待ち行列の上限（MB）。
+    #[serde(default = "default_scratch_l2_flush_queue_max_mb")]
+    pub flush_queue_max_mb: u64,
+    /// GET の L2 の読み込みを待つ上限（ms）。
+    #[serde(default = "default_scratch_l2_get_timeout_ms")]
+    pub get_timeout_ms: u64,
+    /// L2 の I/O スレッドの数。
+    #[serde(default = "default_scratch_l2_io_threads")]
+    pub io_threads: usize,
+    /// L2 の GC の間隔（秒）。
+    #[serde(default = "default_scratch_l2_gc_interval_secs")]
+    pub gc_interval_secs: u64,
+}
+
+impl Default for ScratchL2Config {
+    fn default() -> Self {
+        Self {
+            enabled: default_scratch_enabled(),
+            dir: None,
+            max_gb: default_scratch_l2_max_gb(),
+            flush_mbps: default_scratch_l2_flush_mbps(),
+            flush_queue_max_mb: default_scratch_l2_flush_queue_max_mb(),
+            get_timeout_ms: default_scratch_l2_get_timeout_ms(),
+            io_threads: default_scratch_l2_io_threads(),
+            gc_interval_secs: default_scratch_l2_gc_interval_secs(),
+        }
+    }
+}
+
+fn default_scratch_l2_max_gb() -> u64 {
+    300
+}
+fn default_scratch_l2_flush_mbps() -> u64 {
+    25
+}
+fn default_scratch_l2_flush_queue_max_mb() -> u64 {
+    4096
+}
+fn default_scratch_l2_get_timeout_ms() -> u64 {
+    500
+}
+fn default_scratch_l2_io_threads() -> usize {
+    4
+}
+fn default_scratch_l2_gc_interval_secs() -> u64 {
+    86_400
+}
+
+/// `[scratch.cache_server]`（ADR-0075 D5 (b)、Phase G3）: `celeris cache-server`（loopback だけに bind）。既定で動く。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScratchCacheServerConfig {
+    /// `false` なら sccache の server は常に G2 の local disk で動く（`celerisctl scratch env --server`）。
+    #[serde(default = "default_scratch_enabled")]
+    pub enabled: bool,
+    /// `127.0.0.1:<port>`（既定 4237）。
+    #[serde(default = "default_scratch_cache_server_port")]
+    pub port: u16,
+    /// DAV の Bearer token（`SCCACHE_WEBDAV_TOKEN`）。既定 `<scratch>/cache-server.token`（cache server が初回に作る）。
+    #[serde(default)]
+    pub token_file: Option<PathBuf>,
+}
+
+impl Default for ScratchCacheServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_scratch_enabled(),
+            port: default_scratch_cache_server_port(),
+            token_file: None,
+        }
+    }
+}
+
+fn default_scratch_cache_server_port() -> u16 {
+    task_worker::scratch::DEFAULT_CACHE_SERVER_PORT
+}
+
+/// `[scratch.l2] dir` の既定（ADR-0075 D1 / D5）。
+fn default_l2_dir() -> PathBuf {
+    celeris_state_dir().join("cache/sccache-l2")
+}
+
+fn celeris_state_dir() -> PathBuf {
+    std::env::var_os("CELERIS_STATE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| task_core::home_dir().map(|h| h.join(".local/celeris")))
+        .unwrap_or_else(|| PathBuf::from(".local/celeris"))
 }
 
 /// `[scratch.sccache]`（ADR-0075 D4、Phase G2）。**既定値だけで動く**（本番 config に足すのは、この節を知る
@@ -479,6 +590,8 @@ impl Default for ScratchConfig {
             measure_interval_secs: default_scratch_measure_interval_secs(),
             sccache: ScratchSccacheConfig::default(),
             cargo: ScratchCargoConfig::default(),
+            l2: ScratchL2Config::default(),
+            cache_server: ScratchCacheServerConfig::default(),
         }
     }
 }
@@ -3137,6 +3250,31 @@ impl Config {
                 incremental: c.cargo.incremental,
                 dev_debug: Some(c.cargo.dev_debug.clone()).filter(|v| !v.is_empty()),
             },
+            l2: task_worker::scratch::L2Settings {
+                enabled: c.l2.enabled,
+                dir: c
+                    .l2
+                    .dir
+                    .as_deref()
+                    .map(|d| task_core::expand_home(d, task_core::home_dir().as_deref()))
+                    .unwrap_or_else(default_l2_dir),
+                max_bytes: c.l2.max_gb.saturating_mul(gib),
+                flush_mbps: c.l2.flush_mbps,
+                flush_queue_max_mb: c.l2.flush_queue_max_mb,
+                get_timeout_ms: c.l2.get_timeout_ms,
+                io_threads: c.l2.io_threads,
+                gc_interval_secs: c.l2.gc_interval_secs,
+            },
+            cache_server: task_worker::scratch::CacheServerSettings {
+                enabled: c.cache_server.enabled,
+                port: c.cache_server.port,
+                token_file: c
+                    .cache_server
+                    .token_file
+                    .as_deref()
+                    .map(|d| task_core::expand_home(d, task_core::home_dir().as_deref()))
+                    .unwrap_or_else(|| self.scratch_dir().join("cache-server.token")),
+            },
         }
     }
 
@@ -5259,6 +5397,73 @@ tiers = ["cheap"]
         for bad in [
             "[scratch.sccache]\nbogus = 1\n",
             "[scratch.cargo]\nbogus = 1\n",
+        ] {
+            assert!(
+                toml::from_str::<Config>(&format!(
+                    "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{bad}"
+                ))
+                .is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]` / `[scratch.cache_server]` は書かなくても既定で動く（D7 の N-1 の
+    /// 規則）。L2 の既定は `$CELERIS_STATE_DIR/cache/sccache-l2`（NFS）、25 MB/s、300 GB。cache server は 4237、token は
+    /// `<scratch>/cache-server.token`、L1 は `<scratch>/cache-l1`。書けば上書きでき、未知のキーは拒否する。
+    #[test]
+    fn scratch_l2_defaults_work_without_the_section() {
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"/srv/scratch\"\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert!(s.l2.enabled);
+        assert!(
+            s.l2.dir.ends_with("cache/sccache-l2"),
+            "{}",
+            s.l2.dir.display()
+        );
+        assert_eq!(s.l2.max_bytes, 300 * task_worker::scratch::GIB);
+        assert_eq!(
+            (
+                s.l2.flush_mbps,
+                s.l2.flush_queue_max_mb,
+                s.l2.get_timeout_ms
+            ),
+            (25, 4096, 500)
+        );
+        assert!(s.cache_server.enabled);
+        assert_eq!(s.cache_server.port, 4237);
+        assert_eq!(
+            s.cache_server.token_file,
+            PathBuf::from("/srv/scratch/cache-server.token")
+        );
+        let store = crate::cache_server::store_config(&s);
+        assert_eq!(store.l1_dir, PathBuf::from("/srv/scratch/cache-l1"));
+        assert_eq!(store.l2_dir.as_deref(), Some(s.l2.dir.as_path()));
+        assert_eq!(store.flush_bytes_per_sec, 25_000_000);
+        assert_eq!(store.l1_max_bytes, 40 * task_worker::scratch::GIB);
+        assert_eq!(store.l2_get_timeout, Duration::from_millis(500));
+
+        let cfg: Config = toml::from_str(
+            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.l2]\nenabled = false\ndir = \"/nfs/l2\"\nmax_gb = 10\nflush_mbps = 0\n[scratch.cache_server]\nport = 4299\ntoken_file = \"/etc/t\"\n",
+        )
+        .unwrap();
+        let s = cfg.scratch_settings_unchecked();
+        assert!(!s.l2.enabled);
+        assert_eq!(s.l2.dir, PathBuf::from("/nfs/l2"));
+        assert_eq!(s.cache_server.port, 4299);
+        assert_eq!(s.cache_server.token_file, PathBuf::from("/etc/t"));
+        let store = crate::cache_server::store_config(&s);
+        assert_eq!(
+            store.l2_dir, None,
+            "L2 disabled means an L1-only cache server"
+        );
+        assert_eq!(store.flush_bytes_per_sec, 0);
+        for bad in [
+            "[scratch.l2]\nbogus = 1\n",
+            "[scratch.cache_server]\nbogus = 1\n",
         ] {
             assert!(
                 toml::from_str::<Config>(&format!(

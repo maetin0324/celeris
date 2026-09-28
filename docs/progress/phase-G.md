@@ -445,3 +445,42 @@ ADR-0075 に「Phase G2 実装時の逸脱・明確化」1〜13 と、D7 に「�
   3 回で degraded、バックオフ後に復帰）、`l2_gc_evicts_lru`（10 個中 hit で touch した最古の 1 個を残して古い 5 個を消す）、
   `l1_eviction_keeps_unflushed_entries`、`pending_log_is_replayed_after_restart`、`invalid_keys_are_rejected`、`l1_only_store_never_queues`。
 - `cargo clippy --workspace --all-targets -- -D warnings` → 警告 0。
+
+### G3 checkpoint 3: WebDAV server・`celeris cache-server`・unit の雛形・`scratch env --server` の切替とフォールバック（完了 2026-09-28）
+
+- `scratch_cache::server`（axum の fallback 1 つで method を見る）: `GET` / `HEAD` / `PUT` / `PROPFIND`（collection は常に 207 +
+  `getlastmodified`、ファイルは在れば 207）/ `MKCOL`（201）、それ以外 405。key = path の最後の要素（不正は 400）、`.sccache_check` は
+  メモリ。`Authorization: Bearer <token>`（違えば 401）、`/healthz`・`/stats` は認証なし。本文の上限 1 GiB。
+- `celeris cache-server`（`crates/celeris/src/cache_server.rs`、`celeris --config <path> cache-server`）: scratch が無効なら起動しない
+  （L1 を NFS に置かない）、token を `ensure_token`（既定 `<scratch>/cache-server.token`、0600、初回に生成）、`127.0.0.1:<port>` に bind、
+  SIGTERM で止まり未 flush は `.pending` に残す。
+- 設定: `[scratch.l2]`（`enabled` / `dir` 既定 `$CELERIS_STATE_DIR/cache/sccache-l2` / `max_gb` 300 / `flush_mbps` 25 /
+  `flush_queue_max_mb` 4096 / `get_timeout_ms` 500 / `io_threads` 4 / `gc_interval_secs` 86400）と `[scratch.cache_server]`
+  （`enabled` / `port` 4237 / `token_file`）。どちらも書かなくても動く（D7 の N-1 の規則）。
+- `celerisctl scratch env --server`: cache server の `/healthz` を最大 5 回（200 ms 間隔）見て、応答すれば webdav
+  （`SCCACHE_WEBDAV_ENDPOINT` / `SCCACHE_WEBDAV_KEY_PREFIX=sccache` / `SCCACHE_WEBDAV_TOKEN` / `SCCACHE_SERVER_PORT` /
+  `SCCACHE_IDLE_TIMEOUT`、`SCCACHE_DIR` なし）、応答しなければ G2 の local disk。先頭に `# celeris: sccache backend = …` の 1 行
+  （journal に残る）。選んだ方を `<scratch>/bin/sccache-server.mode` に書く。
+- dispatcher / `scratch env`（client）: `resolve_sccache` が、mode が webdav のときだけ cache server の `/healthz`（300 ms）も見て、
+  応答が無ければ `RUSTC_WRAPPER` を与えない（U5 の「backend が遅いと sccache が待ち続ける」への備え）。client の env は G2 のまま。
+- unit の雛形 `deploy/systemd/celeris-scratch-cache.service`（`celeris … cache-server`、`Before=celeris-sccache.service`）と
+  `install-units.sh` の対象に追加（置くだけ）。`celeris-sccache.service` に `After=celeris-scratch-cache.service`（引き込まない）。
+- テスト: `scratch_cache` の統合テスト `tests/webdav.rs` 3 件（`sccache_request_sequence_round_trips` = U5 の順序をなぞる、
+  `auth_and_invalid_requests_are_rejected`、`l2_hit_through_http_is_promoted`）→ 3 passed。
+  `task_dispatch::dispatcher::tests::cache_server_down_means_no_rustc_wrapper`（webdav + cache server なし → 素の cargo、webdav +
+  応答あり → 与える、disk → cache server が無くても与える）、`celerisctl::commands::scratch::tests::env_server_switches_to_webdav_when_the_cache_server_is_up`、
+  `task_worker::scratch::tests::cache_server_health_reads_a_minimal_http_response`、`celeris::config::tests::scratch_l2_defaults_work_without_the_section`
+  → いずれも passed。偽の server は要求の空行まで読み切ってから答える（高負荷で要求が分かれて届いても RST にしない）。
+- 手動 e2e（`#[ignore]`）: `CELERIS_E2E_SCCACHE=$HOME/.cargo/bin/sccache CELERIS_E2E_DIR=/var/lib/celeris/scratch/targets/agent-g3-e2e
+  cargo test -p scratch-cache --test sccache_webdav_e2e -- --ignored --nocapture` → 1 passed:
+
+  ```
+  A (cold): 340.68 ms rust hits 0 misses 3 · server puts 3 gets 3 misses 3
+     flushed to L2: written 3 (23886 bytes) at 25 MB/s cap
+  B (L1): 168.79 ms rust hits 3 misses 0 · server l1_hits 3 l2_hits 0
+  C (L2 → promote): 172.80 ms rust hits 3 misses 0 · server l2_hits 3 promotes 3
+  D (cache server down): ok=true 208.20 ms rust hits 0 misses 3
+  ```
+
+  （最初の実行は B が 0 / 3: wrapper を通さず `RUSTC_WRAPPER=sccache` にしたため、owner ごとの `CARGO_TARGET_DIR` が key に入った。
+  G2 の U1 と同じ。e2e は `<scratch>/bin/sccache` と同じ wrapper を使うように直した。）

@@ -165,21 +165,60 @@ pub fn render_env(settings: &ScratchSettings, owner: &Owner) -> String {
     render_exports(scratch::cargo_env(settings, owner))
 }
 
-/// `env --server`: sccache の server の env（client と同じ値）と本物のバイナリ。server は起こさない。
+/// `env --server`: sccache の server の env と本物のバイナリ。server は起こさない。Phase G3: cache server
+/// （`celeris cache-server`）が `/healthz` に応答すれば webdav（`SCCACHE_WEBDAV_*`）、でなければ G2 の local disk
+/// （`SCCACHE_DIR`。U5: backend が応答しないと sccache の server は起動に失敗するため）。選んだ方を
+/// `<scratch>/bin/sccache-server.mode` に書く（dispatcher は webdav のときだけ cache server の応答も確かめる）。
 pub fn render_server_env(settings: &ScratchSettings) -> Result<String, CliError> {
-    let state = scratch::resolve_sccache(settings, |_| true);
+    // unit の起動順（After=celeris-scratch-cache.service）では listen の前に来うるので、少しだけ待つ。
+    let cache_up = |port: u16| {
+        (0..5).any(|i| {
+            if i > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            scratch::cache_server_healthy(port)
+        })
+    };
+    render_server_env_with(settings, cache_up)
+}
+
+/// `render_server_env` の本体（`cache_up` はテストで差し替える）。
+pub fn render_server_env_with(
+    settings: &ScratchSettings,
+    cache_up: impl Fn(u16) -> bool,
+) -> Result<String, CliError> {
+    let state = scratch::resolve_sccache_with(settings, |_| true, |_| true);
     if let Some(reason) = state.reason() {
         return Err(CliError::msg(format!(
             "sccache is {}: {reason}",
             state.label()
         )));
     }
-    let mut env = scratch::sccache_server_env(settings);
+    let backend = scratch::choose_sccache_backend(settings, cache_up);
+    if let Err(e) = scratch::write_sccache_mode(&settings.pool(), backend.mode()) {
+        return Err(CliError::msg(format!(
+            "could not record the sccache backend: {e}"
+        )));
+    }
+    let mut env = scratch::sccache_server_env_for(settings, &backend);
     env.push((
         "CELERIS_SCCACHE_BIN".to_string(),
         settings.sccache.binary.display().to_string(),
     ));
-    Ok(render_exports(env))
+    let note = match &backend {
+        scratch::SccacheBackend::Webdav { endpoint, .. } => {
+            format!("# celeris: sccache backend = webdav {endpoint} (ADR-0075 D5)\n")
+        }
+        scratch::SccacheBackend::Disk { reason } => format!(
+            "# celeris: sccache backend = disk {}{}\n",
+            settings.pool().l1_dir().display(),
+            reason
+                .as_deref()
+                .map(|r| format!(" ({r})"))
+                .unwrap_or_default()
+        ),
+    };
+    Ok(format!("{note}{}", render_exports(env)))
 }
 
 /// 外部の owner の lease を取る（adopt は同じ repo の P3 の外部 owner の target から。DB は見ない）。
@@ -589,10 +628,11 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "db = \"{}\"\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[selfdeploy]\nreleases_dir = \"{}\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+                "db = \"{}\"\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[scratch.l2]\ndir = \"{}\"\n[scratch.cache_server]\nport = 1\n[selfdeploy]\nreleases_dir = \"{}\"\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
                 tmp.join("celeris.sqlite3").display(),
                 tmp.join("build-cache").display(),
                 tmp.join("scratch").display(),
+                tmp.join("l2").display(),
                 tmp.join("releases").display(),
             ),
         )
@@ -652,6 +692,74 @@ mod tests {
         assert!(settings.pool().lease_path(&owner).exists());
     }
 
+    /// ADR-0075 §5 G3: `env --server` は cache server が応答すれば webdav（`SCCACHE_WEBDAV_*`、token、`SCCACHE_DIR` なし）、
+    /// 応答しなければ G2 の local disk を選び、選んだ方を `<scratch>/bin/sccache-server.mode` に書く。dispatcher と
+    /// `scratch env` は webdav のときだけ cache server の応答も確かめ、無ければ sccache 系を与えない。
+    #[test]
+    fn env_server_switches_to_webdav_when_the_cache_server_is_up() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("sccache-real");
+        std::fs::write(&bin, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg_path = config(tmp.path());
+        let mut text = std::fs::read_to_string(&cfg_path).unwrap();
+        text.push_str(&format!(
+            "[scratch.sccache]\nbinary = \"{}\"\nport = 1\n",
+            bin.display()
+        ));
+        std::fs::write(&cfg_path, text).unwrap();
+        let settings = active_settings(&load(&cfg_path).unwrap()).unwrap();
+        task_worker::scratch::ensure_token(&settings.cache_server.token_file).unwrap();
+        let token = task_worker::scratch::read_token(&settings.cache_server.token_file).unwrap();
+        assert_eq!(token.len(), 64);
+
+        let server = render_server_env_with(&settings, |_| true).unwrap();
+        assert!(
+            server.starts_with("# celeris: sccache backend = webdav http://127.0.0.1:1 "),
+            "{server}"
+        );
+        assert!(server.contains("export SCCACHE_WEBDAV_ENDPOINT=http://127.0.0.1:1\n"));
+        assert!(server.contains("export SCCACHE_WEBDAV_KEY_PREFIX=sccache\n"));
+        assert!(server.contains(&format!("export SCCACHE_WEBDAV_TOKEN={token}\n")));
+        assert!(server.contains("export SCCACHE_SERVER_PORT=1\n"));
+        assert!(!server.contains("SCCACHE_DIR"), "{server}");
+        let pool = settings.pool();
+        assert_eq!(
+            task_worker::scratch::read_sccache_mode(&pool).as_deref(),
+            Some("webdav")
+        );
+        // webdav の sccache に対して cache server が応答しなければ配線しない。
+        let down = task_worker::scratch::resolve_sccache_with(&settings, |_| true, |_| false);
+        assert!(
+            down.reason().unwrap_or_default().contains("cache server"),
+            "{down:?}"
+        );
+        let up = task_worker::scratch::resolve_sccache_with(&settings, |_| true, |_| true);
+        assert!(up.wrapper().is_some(), "{up:?}");
+        // client（run）の env は G2 のまま（webdav 系も token も入れない）。
+        let env = task_worker::scratch::cargo_env_with(
+            &settings,
+            &Owner::parse("agent-g3").unwrap(),
+            &up,
+        );
+        assert!(
+            env.iter().all(|(k, _)| !k.starts_with("SCCACHE_WEBDAV")),
+            "{env:?}"
+        );
+
+        // cache server が居なければ disk に戻り、記録も disk（cache server の有無に関係なく配線する）。
+        let server = render_server_env_with(&settings, |_| false).unwrap();
+        assert!(server.contains("export SCCACHE_DIR="), "{server}");
+        assert!(!server.contains("WEBDAV"), "{server}");
+        assert_eq!(
+            task_worker::scratch::read_sccache_mode(&pool).as_deref(),
+            Some("disk")
+        );
+        let disk = task_worker::scratch::resolve_sccache_with(&settings, |_| true, |_| false);
+        assert!(disk.wrapper().is_some(), "{disk:?}");
+    }
+
     /// ADR-0075 §5 G2 受け入れ条件 2: server が応答するとき `scratch env` は dispatcher と同じ sccache 系を含み、
     /// `env --server` は server の env（client と同じ値）と本物のバイナリを出す。`status` に配線の状態が出る。
     #[test]
@@ -703,7 +811,11 @@ mod tests {
             })
             .collect();
         assert_eq!(parsed, env);
-        let server = render_server_env(&settings).unwrap();
+        let server = render_server_env_with(&settings, |_| false).unwrap();
+        assert!(
+            server.starts_with("# celeris: sccache backend = disk "),
+            "{server}"
+        );
         assert!(server.contains(&format!(
             "export SCCACHE_DIR={}\n",
             tmp.path().join("scratch/sccache-l1").display()

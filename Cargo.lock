@@ -222,6 +222,7 @@ dependencies = [
  "llm-proxy",
  "reqwest",
  "rusqlite",
+ "scratch-cache",
  "serde",
  "serde_json",
  "socket2 0.5.10",

@@ -134,20 +134,13 @@ fn authorized(app: &App, headers: &HeaderMap) -> bool {
         .is_some_and(|t| t.trim() == token)
 }
 
-fn octets(bytes: Vec<u8>, head: bool) -> Response {
-    let len = bytes.len();
-    let mut r = if head {
-        (StatusCode::OK, Body::empty()).into_response()
-    } else {
-        (StatusCode::OK, bytes).into_response()
-    };
+/// 本文つきの 200。HEAD でも本文を渡す（hyper は HEAD の本文を送らず、`Content-Length` は本文の長さになる）。
+fn octets(bytes: Vec<u8>) -> Response {
+    let mut r = (StatusCode::OK, bytes).into_response();
     r.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
     );
-    if head && let Ok(v) = HeaderValue::from_str(&len.to_string()) {
-        r.headers_mut().insert(header::CONTENT_LENGTH, v);
-    }
     r
 }
 
@@ -214,13 +207,12 @@ async fn handle(
         }
         "MKCOL" => status(StatusCode::CREATED),
         "GET" | "HEAD" => {
-            let head = method == Method::HEAD;
             if collection {
                 return status(StatusCode::NOT_FOUND);
             }
             if last == CHECK_KEY {
                 return match app.store.check_object() {
-                    Some(b) => octets(b, head),
+                    Some(b) => octets(b),
                     None => status(StatusCode::NOT_FOUND),
                 };
             }
@@ -230,7 +222,7 @@ async fn handle(
             let store = app.store.clone();
             let k = last.to_string();
             match tokio::task::spawn_blocking(move || store.get(&k)).await {
-                Ok(Ok(Lookup::L1(b) | Lookup::L2(b))) => octets(b, head),
+                Ok(Ok(Lookup::L1(b) | Lookup::L2(b))) => octets(b),
                 Ok(Ok(Lookup::Miss)) => status(StatusCode::NOT_FOUND),
                 Ok(Err(e)) => {
                     tracing::warn!(error = %e, "scratch-cache: GET failed");

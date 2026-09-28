@@ -26,6 +26,8 @@ pub const TARGET_SUBDIR: &str = "target";
 pub const TARGETS_DIR: &str = "targets";
 /// G2 の sccache の local disk cache（G1 では作るだけ・使わない）。
 pub const L1_DIR: &str = "sccache-l1";
+/// ADR-0075 D5 (b)（Phase G3）: cache server の L1。
+pub const CACHE_L1_DIR: &str = "cache-l1";
 pub const LOCK_FILE: &str = ".lock";
 /// GC が rename した削除待ち（`targets/.deleting-<owner-flat>-<nanos>`）。
 pub const DELETING_PREFIX: &str = ".deleting-";
@@ -238,6 +240,62 @@ pub struct ScratchSettings {
     pub sccache: SccacheSettings,
     /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
     pub cargo: CargoTuning,
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]`。
+    pub l2: L2Settings,
+    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.cache_server]`。
+    pub cache_server: CacheServerSettings,
+}
+
+/// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]` を解決した値（L2 = NFS 上の content-addressed な immutable object）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct L2Settings {
+    pub enabled: bool,
+    /// 既定 `$CELERIS_STATE_DIR/cache/sccache-l2`（NFS）。
+    pub dir: PathBuf,
+    pub max_bytes: u64,
+    /// flusher の帯域（MB/s = 10^6 byte / 秒。0 = 無制限）。
+    pub flush_mbps: u64,
+    pub flush_queue_max_mb: u64,
+    pub get_timeout_ms: u64,
+    pub io_threads: usize,
+    pub gc_interval_secs: u64,
+}
+
+impl L2Settings {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            dir: PathBuf::new(),
+            max_bytes: 300 * GIB,
+            flush_mbps: 25,
+            flush_queue_max_mb: 4096,
+            get_timeout_ms: 500,
+            io_threads: 4,
+            gc_interval_secs: 86_400,
+        }
+    }
+}
+
+/// ADR-0075 D5 (b)（Phase G3）: `[scratch.cache_server]` を解決した値（`celeris cache-server`、loopback だけ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheServerSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// DAV の Bearer token（`SCCACHE_WEBDAV_TOKEN`）。既定 `<scratch>/cache-server.token`（cache server が初回に作る）。
+    pub token_file: PathBuf,
+}
+
+/// cache server の既定の port（D5）。
+pub const DEFAULT_CACHE_SERVER_PORT: u16 = 4237;
+
+impl CacheServerSettings {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            port: DEFAULT_CACHE_SERVER_PORT,
+            token_file: PathBuf::new(),
+        }
+    }
 }
 
 /// ADR-0075 D4（Phase G2）: `[scratch.sccache]` を解決した値。`enabled` でも `binary` が無い・server が応答しない
@@ -313,6 +371,8 @@ impl ScratchSettings {
             measure_interval_secs: 30,
             sccache: SccacheSettings::disabled(),
             cargo: CargoTuning::default(),
+            l2: L2Settings::disabled(),
+            cache_server: CacheServerSettings::disabled(),
         }
     }
 
@@ -394,6 +454,10 @@ impl Pool {
     }
     pub fn l1_dir(&self) -> PathBuf {
         self.root.join(L1_DIR)
+    }
+    /// ADR-0075 D5 (b)（Phase G3）: cache server の L1（G2 の sccache の disk cache `sccache-l1/` とは分ける）。
+    pub fn cache_l1_dir(&self) -> PathBuf {
+        self.root.join(CACHE_L1_DIR)
     }
     pub fn owner_dir(&self, owner: &Owner) -> PathBuf {
         self.targets_dir().join(owner.relative_dir())
@@ -867,10 +931,40 @@ pub fn ensure_wrapper(pool: &Pool, binary: &Path) -> io::Result<PathBuf> {
 }
 
 /// sccache を配線するかを決める（D4）。`server_up` は `server_listening`（テストでは差し替える）。
+/// sccache の server が webdav（G3 の cache server）で動いているなら cache server の `/healthz` も見る
+/// （`resolve_sccache_with`）。
 pub fn resolve_sccache(
     settings: &ScratchSettings,
     server_up: impl Fn(u16) -> bool,
 ) -> SccacheState {
+    resolve_sccache_with(settings, server_up, cache_server_healthy)
+}
+
+/// `resolve_sccache` の本体。`cache_up` は `cache_server_healthy`（テストでは差し替える）。U5: sccache 0.18 は backend の
+/// 応答を timeout なしで待つので、webdav で動く sccache の server に対して cache server が応答しなければ（hang を含む）
+/// `RUSTC_WRAPPER` を与えない（素の cargo）。
+pub fn resolve_sccache_with(
+    settings: &ScratchSettings,
+    server_up: impl Fn(u16) -> bool,
+    cache_up: impl Fn(u16) -> bool,
+) -> SccacheState {
+    let state = resolve_sccache_l1(settings, server_up);
+    if state.wrapper().is_some()
+        && read_sccache_mode(&settings.pool()).as_deref() == Some(SCCACHE_MODE_WEBDAV)
+        && !cache_up(settings.cache_server.port)
+    {
+        return SccacheState::Unavailable {
+            reason: format!(
+                "sccache uses the webdav backend but the cache server on 127.0.0.1:{} does not answer /healthz \
+                 (celeris-scratch-cache.service)",
+                settings.cache_server.port
+            ),
+        };
+    }
+    state
+}
+
+fn resolve_sccache_l1(settings: &ScratchSettings, server_up: impl Fn(u16) -> bool) -> SccacheState {
     if !settings.enabled {
         return SccacheState::Disabled {
             reason: "scratch is disabled".to_string(),
@@ -967,6 +1061,189 @@ pub fn cargo_env_with(
 pub fn cargo_env(settings: &ScratchSettings, owner: &Owner) -> Vec<(String, String)> {
     let state = resolve_sccache(settings, server_listening);
     cargo_env_with(settings, owner, &state)
+}
+
+// ---------------------------------------------------------------------------
+// L2 の cache server（D5 (b)、Phase G3）
+// ---------------------------------------------------------------------------
+
+/// sccache の server が起動時に選んだ backend の記録（`<scratch>/bin/sccache-server.mode`）。
+pub const SCCACHE_MODE_FILE: &str = "sccache-server.mode";
+pub const SCCACHE_MODE_WEBDAV: &str = "webdav";
+pub const SCCACHE_MODE_DISK: &str = "disk";
+/// `SCCACHE_WEBDAV_KEY_PREFIX`（cache server は path の最後の要素だけを key に使うので、値は表示のため）。
+pub const WEBDAV_KEY_PREFIX: &str = "sccache";
+
+/// `http://127.0.0.1:<port>`。
+pub fn cache_server_endpoint(settings: &ScratchSettings) -> String {
+    format!("http://127.0.0.1:{}", settings.cache_server.port)
+}
+
+/// loopback の HTTP/1.1 の GET（`/healthz`・`/stats`）。`(status, body)`。reqwest を持ち込まない最小の実装
+/// （cache server は `Content-Length` を付けて返し、`Connection: close` で閉じる）。
+pub fn http_get_local(port: u16, path: &str, timeout: Duration) -> Option<(u16, String)> {
+    use std::io::{Read, Write};
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut s = std::net::TcpStream::connect_timeout(&addr, timeout).ok()?;
+    s.set_read_timeout(Some(timeout)).ok()?;
+    s.set_write_timeout(Some(timeout)).ok()?;
+    // 1 回の write にまとめる（`write!` は断片ごとに write し、相手が 1 回の read で要求を読み切れないことがある）。
+    let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    s.write_all(req.as_bytes()).ok()?;
+    // 読み切り（上限 4 MiB）→ 判定。
+    let mut buf = Vec::new();
+    let _ = s.take(4 * 1024 * 1024).read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf);
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    let code = head.split_whitespace().nth(1)?.parse().ok()?;
+    let length = head.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        if k.eq_ignore_ascii_case("content-length") {
+            v.trim().parse::<usize>().ok()
+        } else {
+            None
+        }
+    });
+    let body = match length {
+        Some(n) if n <= body.len() => body[..n].to_string(),
+        Some(_) => return None,
+        None => body.to_string(),
+    };
+    Some((code, body))
+}
+
+/// cache server の `/healthz` が 200 を返すか（300 ms）。
+pub fn cache_server_healthy(port: u16) -> bool {
+    matches!(
+        http_get_local(port, "/healthz", Duration::from_millis(300)),
+        Some((200, _))
+    )
+}
+
+/// `<scratch>/bin/sccache-server.mode` を読む（`webdav` | `disk`）。
+pub fn read_sccache_mode(pool: &Pool) -> Option<String> {
+    let text =
+        std::fs::read_to_string(pool.root().join(WRAPPER_DIR).join(SCCACHE_MODE_FILE)).ok()?;
+    Some(text.split_whitespace().next()?.to_string())
+}
+
+/// `<scratch>/bin/sccache-server.mode` を書く（tmp → rename）。
+pub fn write_sccache_mode(pool: &Pool, mode: &str) -> io::Result<()> {
+    let dir = pool.root().join(WRAPPER_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let tmp = dir.join(format!(".{SCCACHE_MODE_FILE}.tmp-{}", std::process::id()));
+    std::fs::write(&tmp, format!("{mode}\n"))?;
+    std::fs::rename(&tmp, dir.join(SCCACHE_MODE_FILE))
+}
+
+/// token を読む（無い・空なら `None`）。
+pub fn read_token(path: &Path) -> Option<String> {
+    let t = std::fs::read_to_string(path).ok()?;
+    let t = t.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+/// token を読み、無ければ作る（mode 0600、`/dev/urandom` の 32 byte の 16 進）。cache server が起動時に呼ぶ。
+pub fn ensure_token(path: &Path) -> io::Result<String> {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(t) = read_token(path) {
+        return Ok(t);
+    }
+    let mut raw = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut raw)?;
+    let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(token.as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path)?;
+    Ok(token)
+}
+
+/// sccache の server の backend（`celerisctl scratch env --server` が起動時に選ぶ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SccacheBackend {
+    /// G3: Celeris の cache server（`SCCACHE_WEBDAV_*`）。
+    Webdav {
+        endpoint: String,
+        token: Option<String>,
+    },
+    /// G2: sccache の local disk cache（`SCCACHE_DIR`）。`reason` は webdav にしなかった理由。
+    Disk { reason: Option<String> },
+}
+
+impl SccacheBackend {
+    pub fn mode(&self) -> &'static str {
+        match self {
+            SccacheBackend::Webdav { .. } => SCCACHE_MODE_WEBDAV,
+            SccacheBackend::Disk { .. } => SCCACHE_MODE_DISK,
+        }
+    }
+}
+
+/// U5: sccache 0.18 は起動時の storage check で backend が応答しないと**起動に失敗する**。cache server が有効で
+/// `/healthz` が応答するときだけ webdav、でなければ G2 の local disk に戻す。
+pub fn choose_sccache_backend(
+    settings: &ScratchSettings,
+    cache_up: impl Fn(u16) -> bool,
+) -> SccacheBackend {
+    let cs = &settings.cache_server;
+    if !cs.enabled {
+        return SccacheBackend::Disk {
+            reason: Some("[scratch.cache_server] enabled = false".to_string()),
+        };
+    }
+    if !cache_up(cs.port) {
+        return SccacheBackend::Disk {
+            reason: Some(format!(
+                "no cache server on 127.0.0.1:{} (celeris-scratch-cache.service)",
+                cs.port
+            )),
+        };
+    }
+    SccacheBackend::Webdav {
+        endpoint: cache_server_endpoint(settings),
+        token: read_token(&cs.token_file),
+    }
+}
+
+/// sccache の server に与える env（backend ごと）。disk は G2 の `sccache_server_env` と同じ。webdav は
+/// `SCCACHE_DIR` を与えない（remote の backend と disk を併記しない）。
+pub fn sccache_server_env_for(
+    settings: &ScratchSettings,
+    backend: &SccacheBackend,
+) -> Vec<(String, String)> {
+    match backend {
+        SccacheBackend::Disk { .. } => sccache_server_env(settings),
+        SccacheBackend::Webdav { endpoint, token } => {
+            let mut env = vec![
+                ("SCCACHE_WEBDAV_ENDPOINT".to_string(), endpoint.clone()),
+                (
+                    "SCCACHE_WEBDAV_KEY_PREFIX".to_string(),
+                    WEBDAV_KEY_PREFIX.to_string(),
+                ),
+            ];
+            if let Some(t) = token {
+                env.push(("SCCACHE_WEBDAV_TOKEN".to_string(), t.clone()));
+            }
+            env.push((
+                "SCCACHE_SERVER_PORT".to_string(),
+                settings.sccache.server_port.to_string(),
+            ));
+            env.push(("SCCACHE_IDLE_TIMEOUT".to_string(), "0".to_string()));
+            env
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2276,6 +2553,57 @@ mod tests {
 
     /// ADR-0075 D4 / G2 受け入れ条件 2: バイナリが無い・server が応答しない・`enabled = false`・scratch が無効のときは
     /// sccache 系を与えない（`CARGO_TARGET_DIR` と `[scratch.cargo]` は残る）。
+    /// Phase G3: `/healthz` と `/stats` を読む最小の HTTP クライアント（`Content-Length` で切る。閉じた port・
+    /// 200 以外は unhealthy）。
+    #[test]
+    fn cache_server_health_reads_a_minimal_http_response() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut c) = conn else { continue };
+                let mut req = Vec::new();
+                let mut buf = [0u8; 1024];
+                // 要求の終わり（空行）まで読み切ってから答える（高負荷で要求が分かれて届いても RST にしない）。
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match c.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => req.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let req = String::from_utf8_lossy(&req).to_string();
+                let resp: &[u8] = if req.starts_with("GET /healthz ") {
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\nok\ntrailing"
+                } else {
+                    b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n"
+                };
+                let _ = c.write_all(resp);
+            }
+        });
+        assert_eq!(
+            http_get_local(port, "/healthz", Duration::from_secs(2)),
+            Some((200, "ok\n".to_string()))
+        );
+        assert!(cache_server_healthy(port));
+        assert_eq!(
+            http_get_local(port, "/stats", Duration::from_secs(2)).map(|r| r.0),
+            Some(404)
+        );
+        assert!(!cache_server_healthy(1));
+        // token は 0600 で作り、2 回目は同じ値を返す。
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sub/cache-server.token");
+        let t = ensure_token(&path).unwrap();
+        assert_eq!(t.len(), 64);
+        assert_eq!(ensure_token(&path).unwrap(), t);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
     #[test]
     fn sccache_env_is_omitted_without_binary_or_server() {
         let tmp = tempfile::tempdir().unwrap();

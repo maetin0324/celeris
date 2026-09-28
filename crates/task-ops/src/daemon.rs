@@ -138,7 +138,7 @@ pub struct ScratchCacheStats {
     pub schema: String,
     pub started_at: String,
     pub observed_at: String,
-    /// GET（`.sccache_check` を除く）と PUT の数。
+    /// GET（HEAD を含み、`.sccache_check` を除く）と PUT の数。
     pub gets: u64,
     pub puts: u64,
     /// GET の結果: L1 hit / L2 hit / miss（`gets = l1_hits + l2_hits + misses`）。

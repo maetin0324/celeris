@@ -1,7 +1,7 @@
 # ADR-0078: 既存 harness に agent-browser execution capability を付与する
 
 ---
-tasks: [01M3MBV3AKXZGEG5RXR60XC62J, 01M3MFS5T52FXA63W4V10XGC4S]
+tasks: [01M3MBV3AKXZGEG5RXR60XC62J, 01M3MFS5T52FXA63W4V10XGC4S, 01M3MZKB3DFYJNBH015MJGQ0BT]
 ---
 
 - 日付: 2026-09-28
@@ -259,7 +259,15 @@ egress は既定拒否とし、許可 proxy/DNS 経由だけに固定する。�
 
 ## 人の決定事項
 
-Phase 2でcredential backend、leaseの承認頻度、認証区間の観測制限を選ぶ。既存vaultがあれば優先し、なければ専用1Password vaultを初期候補とする。Phase 3でproject/origin限定persistent identityの保存期間を選び、個人Chrome profileの共用は避ける。MVP運用はoperator専用dashboardを推奨し、多人数/task別ACLには後続proxyを必須とする。機密taskの前にcontainer/egress境界を評価する。各候補の比較材料はtaskの調査成果物に保持し、決定後の契約は後続ADRへ記録する。
+2026-09-28 の人の決定により、Phase 2 の credential provider は**手動登録から開始する**。以前の「既存vault優先／専用1Password vaultを初期候補」は、この開始方針で置き換える。CredentialProvider 抽象を残し、外部vaultは後から追加できるようにする。
+
+LLM が credential を必要としたら、**どのサイトで何のために必要かを示して人へ登録依頼を出す**。人は Celeris Web GUI の専用画面から登録する。秘密値を会話や task の回答へ渡さない。credential 使用と高リスク操作は人の承認を挟む。
+
+**Live View の導線は本人の認証済み session だけに限定する**。他の利用者や外部から全session dashboardへ届かないことを、表示制御だけでなく接続経路でも確かめる。
+
+上記の人の決定を具体化する [ADR-0080](0080-browser-phase2-policy-broker-approval.md) を Phase 2 の実装契約とする。同 ADR は D3/D4 補足・D5 と補足・D6・D8 P2-A〜C の対応部分を更新し、policy生成、暗号化保存、leaseと承認頻度、Blockedへの写像、owner sessionと保護導線を定める。これは実装・実機検証の完了宣言ではない。
+
+Phase 3でproject/origin限定persistent identityの保存期間を選び、個人Chrome profileの共用は避ける。多人数/task別ACLには後続の認証・proxyを必須とする。機密taskの前にcontainer/egress境界を評価する。各候補の比較材料はtaskの調査成果物に保持し、決定後の契約はADRへ記録する。
 
 ## 検証とリリースの扱い
 

@@ -38,10 +38,17 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
                         scripts/          selfdeploy 一式の写し（ADR-0040 D6。昇格に作業チェックアウトが要らない）
                         promote.log       この API 経由の昇格の出力（§4c）
                         promote.lock      昇格中の pid
-  releases/.build/      release.sh が生やす detached の作業ツリー（成功したら消える）
+  releases/.build/tree/  release.sh の detached の作業ツリー（Phase SD-1: 場所を固定して使い回す。毎回
+                        `git checkout --force <sha>` + `git clean -ffdx` でその sha のきれいな checkout にする）
+  releases/.build/<sha12>/  その sha の gate が落ちたときの gate.json と .gate-<step>.log（次に同じ sha を回すと消える）
   releases/.build/.lock-<sha12>  同じ sha の二重ビルドを止める flock（ADR-0041 D2）
-  releases/.lock-release  異なる sha も含め、検査から成果物のコピーまでを直列化する flock
-  releases/.cargo-target/  CARGO_TARGET_DIR（リリース間で共有。ビルドを速くするだけ）
+  releases/.lock-release  異なる sha も含め、検査から成果物のコピーまでを直列化する flock（共有 target と
+                        作業ツリーを 2 本が同時に触らないのもこれ）
+  releases/.pnpm-prod-cache/<key>/  gui の本番依存（`pnpm install --prod --frozen-lockfile`）。<key> は gui の
+                        package.json / pnpm-lock.yaml / pnpm-workspace.yaml と node / pnpm の版の sha256。
+                        各リリースの `gui/node_modules` はここへの相対 symlink（Phase SD-1）
+  releases/.cargo-target/  CARGO_TARGET_DIR の退路（scratch が無効・celerisctl が無いとき。普段は scratch の
+                        `release-build` の target。ADR-0075 追記「Phase SD-1 実装時の逸脱」）
   staging/              verify.sh の作業場所（毎回作り直す。`.lock` だけは残る）
   staging/.lock         verify.sh を 1 本に直列化する flock（ADR-0041 D2）
   backups/              昇格前の DB のコピーと promote-<ts>.log
@@ -91,13 +98,24 @@ scripts/selfdeploy/release.sh HEAD          # または ブランチ名 / タグ
 scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装ブランチ（celeris が切る。ADR-0041 D1）
 ```
 
-- `~/.local/celeris/releases/.build/<sha12>` に **detached worktree** を生やして、そこでだけビルドする。
-  作業チェックアウト（`~/workspace/agent-platform`）が汚れていても、その中身は使われない。
-- gate（この順。1 つでも非 0 ならリリースを作らない。全 9 段）:
-  自前のworkspaceパッケージの `cargo clean -p …`（外部依存のキャッシュは保持）
-  → `cargo test --workspace` → `cargo clippy --workspace -- -D warnings` → `cargo build --release -p celeris -p celerisctl`
-  → GUI `pnpm install --frozen-lockfile` → `pnpm typecheck` → `pnpm test` → `pnpm build`
-  → `pnpm mobile-audit`（`pnpm-mobile-audit`） → `pnpm e2e:mock`（`pnpm-e2e-mock`）
+- `~/.local/celeris/releases/.build/tree` の **detached worktree** でだけビルドする（Phase SD-1: 場所は固定で、毎回
+  `git checkout --detach --force <sha>` + `git clean -ffdx` してから HEAD と「追跡外・変更が 0」を確かめる。無い・壊れていれば
+  `git worktree add` で作り直す）。作業チェックアウト（`~/workspace/agent-platform`）が汚れていても、その中身は使われない。
+- `CARGO_TARGET_DIR` は scratch pool の lease（**全リリースで 1 つの owner `release-build`**、TTL `SD_RELEASE_TARGET_TTL` 既定 48h）。
+  作業ツリーの場所と target が変わらないので、cargo は変わった crate とその下流だけを作り直す（テストは毎回全部走る。gate.json の
+  `cargo_test` にバイナリ数・合格数）。終了時は lease を release せず touch する（release すると GC が即回収するため）。
+  `CARGO_INCREMENTAL=0` 固定。詳細は ADR-0075 追記「Phase SD-1 実装時の逸脱」。
+- gate（この順。1 つでも非 0 ならリリースを作らない。全 11 段）:
+  `cargo-workspace-clean`（自前の workspace パッケージの `cargo clean -p …`。外部依存は保持。**共有 target がこの作業ツリーから
+  作られていれば飛ばす**）→ `cargo fmt --check` → `cargo test --workspace` → `cargo clippy --workspace -- -D warnings`
+  → `cargo build --release -p celeris -p celerisctl`
+  → GUI `pnpm install --frozen-lockfile` → `pnpm typecheck` → `pnpm test`※ → `pnpm build`
+  → `pnpm mobile-audit`（`pnpm-mobile-audit`）※ → `pnpm e2e:mock`（`pnpm-e2e-mock`）※
+- **※ GUI の検査だけの段を飛ばす規則（Phase SD-1、ADR-0041 §7）**: `current` の sha からこの sha までに **gui/ の下が 1 ファイルも
+  変わっていない**ときだけ、`pnpm-test`・`pnpm-mobile-audit`・`pnpm-e2e-mock` を回さず、gate.json の `steps[]` に
+  `{"skipped": true, "reason": "no change under gui/", "exit": 0, "secs": 0}` を書く（`gui_skip_base` に判断した base）。
+  `current` が無い・その sha をリポジトリが知らない・`git diff` が失敗した・`SD_GATE_FORCE_GUI=1` のときは飛ばさない。
+  Rust の段と `pnpm-install` / `pnpm-typecheck` / `pnpm-build`（梱包に要る）は常に回す。
 - **Phase 89（`pnpm-mobile-audit` / `pnpm-e2e-mock`。ADR-0041 追記、ADR-0055 D3）**: `pnpm-build` の直後に
   足した 2 段。どちらも `$BUILD/gui` で走り、直前の `pnpm-build` が作った `$BUILD/gui/build` を
   そのまま使い回す（`MOBILE_AUDIT_SKIP_BUILD=1` / `E2E_SKIP_BUILD=1`。ビルドをやり直さない）。
@@ -120,18 +138,28 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
     installed`（`.gate-pnpm-mobile-audit.log` / `.gate-pnpm-e2e-mock.log`）で即座に失敗する。
 - 異なるSHAのビルドも共有出力を上書きしないよう直列化する。待ち時間の上限は
   `SD_RELEASE_LOCK_WAIT`（既定1800秒）。Cargo自身のロックだけでは、doctestや成果物コピーまで保護できない。
-  別worktreeの相対dep-info・mtimeによる古いメタデータの再利用も防ぐため、自前パッケージを先に掃除する。
+  別worktreeの相対dep-info・mtimeによる古いメタデータの再利用も防ぐため、共有 target が別の作業ツリー（や新しい・adopt した
+  target）から来たときは自前パッケージを先に掃除する（target の `.celeris-release-tree` に作業ツリーのパスを書いて見分ける）。
 - 成功したら `~/.local/celeris/releases/<sha12>/` に `bin/`（celeris, celerisctl）、`gui/`（build/ server.js package.json
-  pnpm-lock.yaml pnpm-workspace.yaml と `pnpm install --prod` の node_modules）、`manifest.json`、`gate.json`、
-  `gate-logs/`、`scripts/` を置き、ビルド用の worktree を消す。
+  pnpm-lock.yaml pnpm-workspace.yaml と node_modules）、`manifest.json`、`gate.json`、`gate-logs/`、`scripts/` を置く。
+  ビルド用の worktree は消さない（次のリリースが使い回す）。
+- **gui の本番依存（Phase SD-1）**: `gui/node_modules` は `../../.pnpm-prod-cache/<key>/node_modules` への相対 symlink。
+  同じ入力の `pnpm install --prod --frozen-lockfile` は `.pnpm-prod-cache/.tmp-*` で 1 度だけ行い、作り終えてから rename で
+  公開する（`provenance.json` に作ったリリース・node / pnpm の版）。manifest.json の `gui_prod_deps`（`cache_key` / `reused` /
+  `created_by_sha12`）に出所が残る。どのリリースからも指されなくなった entry は掃除のときに消える。以前の「毎回 install」は NFS 上に
+  4,000 余のファイルを書いて約 90 秒、hardlink の複製も NFS では 1 ファイル数百 ms で速くならなかった（phase-G.md SD-1）。
 - `scripts/` は **その sha の `scripts/selfdeploy/*.sh` をそのまま写したもの**（実行ビットごと。ADR-0040 D6、
   Phase 48）。`POST /releases/{sha12}/promote` はこの `<release>/scripts/promote.sh` を起こすので、
   **作業チェックアウトが別のブランチにいても、無くても昇格できる**。`lib.sh` は
   `dirname "${BASH_SOURCE[0]}"` で自分の隣を読むだけで、場所はすべて `CELERIS_STATE_DIR` 基準なので
   リリースの中から source しても動く（`SD_REPO` を要るのは `release.sh` の worktree 操作だけ）。
 - 失敗したら**リリースディレクトリは作らず**、`~/.local/celeris/releases/.build/<sha12>/gate.json` と
-  `.gate-<step>.log` を残す（次に同じ sha で `release.sh` を回すと消える）。
+  `.gate-<step>.log` を残す（作業ツリーから写したもの。次に同じ sha で `release.sh` を回すと消える）。
 - 掃除: `current` / `previous` / いま作った版 / 検証済み（`verify.json.ok`）の新しい 3 件だけを残す。
+  どのリリースからも指されない `.pnpm-prod-cache/<key>` も消す。
+- gate.json の追加の欄（Phase SD-1。読む側は無視してよい）: `build`（`tree` / `tree_reused` / `cargo_target` / `scratch_owner` /
+  `workspace_clean`）、`gui_skip_base`、`cargo_test`（`binaries` / `passed` / `failed` / `ignored`）、`bundle`（`secs` /
+  `gui_prod_deps_secs` / `gui_prod_deps_reused` / `release_total_secs`）、`steps[].skipped` / `steps[].reason`。
 
 `manifest.json`:
 
@@ -212,8 +240,15 @@ SD_E2E_TIMEOUT=120 scripts/selfdeploy/verify.sh <sha12>       # 検査 4b（gui-
       **煙試験（6）はここではやらない**（旧バイナリは `smoke` を知らない）
    6. **煙試験（ADR-0041 D5）**: staging に 1 件だけタスクを流し、**dispatch → ワーカー起動 →
       結果の取り込み → レビュー → 終端 → 報告の生成**までを通す。詳しくは下の節
+   **4b と 5 は並行に回す（Phase SD-1、ADR-0041 §7）**: どちらも読むだけ（4b は 7711 / 7701、5 は 7712）で、同じ
+   スナップショットを新旧の celeris が同時に開くのは以前から。書き込むのは 6 だけで、4b と 5 の両方が終わってから回す。
 4. `~/.local/celeris/releases/<sha12>/verify.json` を書く。`ok` は **1〜4・4b・6 が全部真**のとき。`live_ok` は 5。
+   Phase SD-1 から、検査ごとの壁時計の秒数が `checks[].secs`、全体が `durations`
+   （`lock_wait_s` / `prepare_s`〈staging の作り直し・スナップショット・数え〉/ `parallel_4b_5_s` / `total_s`）に入る。
+   `checks[].elapsed_s` は従来どおり煙試験のタスクが `done` になるまでの秒数（検査 6 だけ）。
 5. 起こしたプロセスは `trap` で必ず止める（自分が起こした pid だけ）。
+6. staging のポートは env（`SD_STAGING_API_PORT` / `SD_STAGING_GUI_PORT` / `SD_STAGING_OLD_API_PORT`）で変えられる
+   （`scripts/selfdeploy/tests/` 用。7710 / 7700 は拒む）。
 
 ### 検査 4b: GUI の e2e（read-only。Phase 83 / G36、ADR-0041 追記）
 

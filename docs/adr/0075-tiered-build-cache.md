@@ -573,3 +573,36 @@ G1 の実装で本文と食い違った点・本文が決めていなかった�
    空の値で上書きする（cargo 1.98.1 で空 = 未設定を確かめた）。`SCCACHE_*` は空にしない。
 4. `celerisctl scratch env` は `unset <remove>` の 1 行を先に出す（dispatcher と同じ key）。legacy（scratch 無効）の経路は sccache を
    判定しないので何も外さない。
+
+## Phase SD-1 実装時の逸脱（2026-09-28）
+
+release / verify の 1 周が 14 分かかる（release 8.5 分 + verify 5.5 分、1 日 5 周）のを縮める作業（`docs/progress/phase-G.md` の SD-1）で、
+D3 / D7 の「release ゲートの owner は `release-<sha12>`」から次のように外れた。
+
+1. **owner は全リリースで 1 つの `release-build`**（`lib.sh` の `SD_RELEASE_SCRATCH_OWNER`）。`Owner::parse` は `release-` の後を sha12 と
+   呼ぶだけで中身を検査しないので、Rust の変更は無い（`kind = release` のまま）。理由: owner が sha ごとだと、adopt で直前の target を
+   引き継いでも**安全条件そのもの**（checkout が target より新しい）のせいで workspace の全メンバー（11 crate）と全リンクをやり直す
+   （57efebe4fb7d の実測: `cargo test` のコンパイル 30.7 s・11 crate、`build --release` 43.6 s・10 crate）。1 crate の変更でも同じ。
+2. **作業ツリーも場所を固定**（`releases/.build/tree`）し、毎回 `git checkout --detach --force <sha>` + `git clean -ffdx` で
+   その sha のきれいな checkout にする（HEAD と `git status --porcelain --ignored` が空であることを確かめてから gate を回す）。
+   git は内容の変わったファイルだけを書き直すので、cargo の mtime による fingerprint は「変わった crate とその下流」だけを作り直す。
+   内容の同じファイルは mtime が前回の checkout のまま（前回の成果物より古い）で、中身も同じなので再利用は正しい。作業ツリーの
+   パスが変わらないので、`env!("CARGO_MANIFEST_DIR")` や workspace の外（`../../../docs/...`）を指す dep-info の絶対パスも毎回同じになる。
+   gate が落ちたときの gate.json とログは `.build/<sha12>/`（ただのディレクトリ）に写す（従来の置き場所のまま）。
+3. **2 本の release.sh が同じ target・作業ツリーを触らない**のは、既にある `$SD_RELEASES/.lock-release`（release.sh 全体を包む flock、
+   commit 3d66bb5）による。同じ sha の `.lock-<sha12>`（待たずに 75）もそのまま。
+4. **`cargo-workspace-clean` 段は、共有 target がこの作業ツリーから作られたときだけ飛ばす**。target の中の `.celeris-release-tree` に
+   作業ツリーのパスを書いておき、一致しない（新しい target・他の owner から adopt した target・Phase SD-1 より前の `.cargo-target`）
+   ときは従来どおり掃除してから印を書く。飛ばした段は gate.json に `skipped: true` と理由が残る。
+5. **終了時は `release` しない（`touch` する）**。`released_at` を書くと P3 になり、`release-*` の P3 は seed でなければ次の tick で
+   即回収される（D2。同じ repo の agent-* の P3 の方が新しければ seed にもならない）ので、共有した意味が無くなる。代わりに lease の
+   `--ttl` を `SD_RELEASE_TARGET_TTL`（既定 172800 = 48h）にし、**最後のリリースから 48h は P0**、過ぎれば P3 として GC が
+   **今の規則のまま**即回収する（GC は変えていない。watermark の圧力でも P0 は消さないので、リリースを作り続ける限り 1 本
+   ≒ 9 GB〈lease の `size_bytes` 実測 8.8 GB〉を常に抱える）。手で手放すときは `celerisctl scratch release --owner release-build`。
+6. **`CARGO_INCREMENTAL=0` を release.sh で固定**した（呼び出し元の env で profile が変わると全メンバーを作り直すため。D4 と同じ値）。
+7. adopt の安全条件は保たれる: `.build/tree` の中のファイルは全て `git worktree add` で `.git` を書いた後に書かれている（その後の
+   checkout はさらに新しい）ので、「候補の最終書き込み < `.git` の mtime」を満たす候補の成果物は、作業ツリーのどのファイルよりも古い。
+   target が TTL 切れで回収された後の初回は、今と同じく adopt（または空）+ 掃除から始まる。
+
+**提案（P-SD1-1）**: `release-build` を P0 に固定する代わりに、`released_at` のある `release-build` を P1（waiting_keep_secs の間は保持、
+watermark の圧力では消せる）に分類する規則を `classify` に足す。daemon の昇格が要るので SD-1 ではやらない。

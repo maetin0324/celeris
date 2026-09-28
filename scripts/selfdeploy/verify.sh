@@ -26,6 +26,12 @@
 #        **偽のアダプタ**の組み込み（LLM は呼ばない）。**検査 5 の後**に行う（検査 2 / 5 の件数を動かさない）
 #   を行い、`$CELERIS_STATE_DIR/releases/<sha12>/verify.json` を書く。`ok` は 1〜4・4b・6 が全部真のとき。
 #
+#   **所要時間と並行（Phase SD-1）**: 検査ごとの秒数を verify.json の `checks[].secs` に、準備・ロック待ち・
+#   全体の秒数を `durations` に書く。検査 4b（gui-e2e: 新しい celeris 7711 / GUI 7701 を読むだけ）と
+#   検査 5（N-1: 旧 celeris を 7712 に起こして読むだけ）は**並行に**回す。どちらも同じスナップショットを
+#   開くが、それは以前から（新しい celeris が起きたまま検査 5 を回していた）で、どちらも書き込まない
+#   （4b はタスクを作らない、5 は GET だけ）。書き込むのは検査 6 だけで、両方が終わってから回す。
+#
 #   **直列化（ADR-0041 D2）**: `$SD_STAGING/.lock` を `flock` で取る（待ちの上限
 #   `SD_VERIFY_LOCK_WAIT`、既定 1800 秒）。取れなければ exit 75（EX_TEMPFAIL）。
 #   staging のディレクトリもポート（7711 / 7701 / 7712）も固定なので、2 本同時には走れない。
@@ -86,6 +92,14 @@ REL="$(sd_release_dir "$SHA12")"
 NEW_SCHEMA="$(sd_json_get "$REL/manifest.json" schema_version)" \
   || sd_die "manifest.json has no schema_version"
 CUR="$(sd_current_sha)"
+
+# staging のポートは env で変えられる（テスト用。lib.sh）が、本番のポートにはさせない（ADR-0040 D1 の安全規則）。
+for p in "$SD_STAGING_API_PORT" "$SD_STAGING_GUI_PORT" "$SD_STAGING_OLD_API_PORT"; do
+  case "$p" in
+    7710 | 7700 | "") sd_die "staging port '$p' is a production port or empty; refusing" ;;
+  esac
+done
+VERIFY_T0="$(sd_now)"
 
 # ---- 起こしたプロセスだけを止める後始末 ------------------------------------
 
@@ -168,7 +182,9 @@ PY
 # （staging を作り直すときもこのファイルだけは消さない。消すと inode が変わって排他が効かなくなる）。
 mkdir -p "$SD_STAGING"
 sd_lock_or_tempfail 9 "$SD_STAGING/.lock" "$SD_VERIFY_LOCK_WAIT" "verify.sh"
-sd_log "staging lock acquired: $SD_STAGING/.lock"
+LOCK_WAIT_SECS="$(sd_secs_since "$VERIFY_T0")"
+sd_log "staging lock acquired: $SD_STAGING/.lock (waited ${LOCK_WAIT_SECS}s)"
+PREPARE_T0="$(sd_now)"
 
 # ---- staging を作り直してスナップショットを取る ----------------------------
 
@@ -198,6 +214,7 @@ sd_log "snapshot counts: tasks=$(sd_json_get "$SNAP_JSON" tasks) projects=$(sd_j
 
 head -c 32 /dev/urandom | base64 | tr -d '\n' >"$ST_TOKEN"
 chmod 600 "$ST_TOKEN"
+PREPARE_SECS="$(sd_secs_since "$PREPARE_T0")"
 
 NEW_CMD=("$REL/bin/celeris" --config "$SD_CONFIG" --mode verify --db "$SNAP"
   --listen "127.0.0.1:$SD_STAGING_API_PORT" --workspace-root "$SD_STAGING/workspaces"
@@ -265,13 +282,19 @@ fi
 
 CHECKS_TSV="$(mktemp)"
 # `id` は文字列（`s`）。検査 4b（Phase 83 / G36。ADR-0041 追記）が id `4b` を足すため、数値専用の `i` にはできない。
-printf 'id:s name:s ok:b detail:s task_id:s elapsed_s:f\n' >"$CHECKS_TSV"
+# `secs`（Phase SD-1）はその検査の壁時計の秒数（`check_begin` から `record` まで）。
+printf 'id:s name:s ok:b detail:s task_id:s elapsed_s:f secs:f\n' >"$CHECKS_TSV"
+# `check_begin` — 次の `record` までを 1 つの検査の所要時間として測り始める。
+CHECK_T0="$(sd_now)"
+check_begin() { CHECK_T0="$(sd_now)"; }
 # record <id> <name> <ok:true|false> <detail> [task_id] [elapsed_s]
 # `task_id` / `elapsed_s` は検査 6（煙試験。ADR-0041 D5）だけが埋める。他の検査では空 / 0。
 record() {
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(printf '%s' "$4" | tr '\t\n' '  ')" \
-    "${5:-}" "${6:-0}" >>"$CHECKS_TSV"
-  sd_log "check $1 ($2): $3 — $4"
+  local secs
+  secs="$(sd_secs_since "$CHECK_T0")"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(printf '%s' "$4" | tr '\t\n' '  ')" \
+    "${5:-}" "${6:-0}" "$secs" >>"$CHECKS_TSV"
+  sd_log "check $1 ($2): $3 — $4 (${secs}s)"
 }
 
 # ---- 件数を集める python3 --------------------------------------------------
@@ -524,6 +547,7 @@ COUNT_KEYS="tasks tasks_total projects milestones org approvals approvals_decide
 
 # ---- 1. 新リリースを verify モードで起こす ---------------------------------
 
+check_begin
 NEW_LOG="$SD_STAGING/logs/celeris-new.log"
 sd_log "starting: ${NEW_CMD[*]}"
 "${NEW_CMD[@]}" >"$NEW_LOG" 2>&1 &
@@ -554,6 +578,7 @@ fi
 # staging API（同じファイルを新バイナリがマイグレーションした後）。**本番は出てこない**ので、
 # 本番が動いていてもこの検査は揺れない。
 
+check_begin
 OK2=false
 STG_JSON="$SD_STAGING/logs/counts-staging.json"
 COUNT_DIFF=""
@@ -618,6 +643,7 @@ probe_api() {
   printf '%s' "$bad"
 }
 
+check_begin
 OK3=false
 if [ "$OK1" = true ]; then
   BAD3="$(probe_api "$NEW_BASE" "$ST_TOKEN")"
@@ -633,6 +659,7 @@ fi
 
 # ---- 4. GUI -----------------------------------------------------------------
 
+check_begin
 OK4=false
 GUI_LOG="$SD_STAGING/logs/gui.log"
 if [ "$OK1" = true ]; then
@@ -667,6 +694,71 @@ else
   record 4 gui false "skipped (check 1 failed)"
 fi
 
+# ---- 5. N-1 互換（live_ok） -------------------------------------------------
+
+# Phase SD-1: 検査 4b と並行に回す（冒頭の「所要時間と並行」）。旧 celeris はこの（親の）シェルで起こして
+# `sd_track` する（後始末が止められるように）。待ち・集計・判定は裏のサブシェルで行い、結果は
+# `$N1_TSV`（検査の 1 行）と `$N1_LIVE`（true/false）に書く。親は 4b の後で待ち合わせて取り込む。
+LIVE_OK=false
+OLD_LOG="$SD_STAGING/logs/celeris-old.log"
+N1_TSV="$SD_STAGING/logs/check-5.tsv"
+N1_LIVE="$SD_STAGING/logs/check-5.live"
+N1_PID=""
+PARALLEL_T0="$(sd_now)"
+check_begin
+: >"$N1_TSV"
+printf 'false' >"$N1_LIVE"
+# 検査 5 の行は、どの場合も `$N1_TSV` に書いて 4b の後で取り込む（verify.json の checks の順を 4b → 5 に保つ）。
+if [ ${#OLD_CMD[@]} -eq 0 ]; then
+  CHECKS_TSV="$N1_TSV" record 5 n-1-compat false "no \`current\` release (first migration): live_ok = false"
+elif [ "$OK1" != true ]; then
+  CHECKS_TSV="$N1_TSV" record 5 n-1-compat false "skipped (check 1 failed): live_ok = false"
+else
+  mkdir -p "$SD_STAGING/workspaces-n1"
+  sd_log "starting N-1: ${OLD_CMD[*]}"
+  "${OLD_CMD[@]}" >"$OLD_LOG" 2>&1 &
+  OLD_PID=$!
+  sd_track "$OLD_PID"
+  OLD_BASE="http://127.0.0.1:$SD_STAGING_OLD_API_PORT"
+  (
+  # 親の後始末（EXIT の trap）をサブシェルで走らせない（走らせると親が起こしたプロセスを止めてしまう）。
+  trap - EXIT INT TERM
+  CHECKS_TSV="$N1_TSV"
+  LIVE_OK=false
+  if sd_wait_http_200 "$OLD_BASE/api/v1/health" 60; then
+    OLD_HEALTH="$SD_STAGING/logs/health-old.json"
+    sd_http_get "$OLD_BASE/api/v1/health" >"$OLD_HEALTH" || true
+    OLD_SCHEMA="$(sd_json_get "$OLD_HEALTH" schema_version || echo "?")"
+    OLD_COUNTS="$SD_STAGING/logs/counts-n1.json"
+    collect "$OLD_BASE" "$ST_TOKEN" >"$OLD_COUNTS" || true
+    BAD5="$(probe_api "$OLD_BASE" "$ST_TOKEN")"
+    DIFF5=""
+    # 比べる相手は**スナップショット**（マイグレーション前の生の行数。ADR-0041 D2）。
+    # 本番 API はここでも読まない。
+    if sd_json_valid "$OLD_COUNTS" && sd_json_valid "$SNAP_JSON"; then
+      for key in $COUNT_KEYS; do
+        a="$(sd_json_get "$SNAP_JSON" "$key" || echo "?")"
+        b="$(sd_json_get "$OLD_COUNTS" "$key" || echo "??")"
+        [ "$a" = "$b" ] || DIFF5="$DIFF5 $key(snapshot=$a old=$b)"
+      done
+    else
+      DIFF5=" could-not-collect"
+    fi
+    if [ "$OLD_SCHEMA" = "$NEW_SCHEMA" ] && [ -z "$BAD5" ] && [ -z "$DIFF5" ]; then
+      LIVE_OK=true
+      record 5 n-1-compat true "old celeris ($CUR) reads the migrated snapshot: schema_version=$OLD_SCHEMA, counts match the pre-migration snapshot, main GETs 200"
+    else
+      record 5 n-1-compat false "old celeris ($CUR) is not compatible: schema=$OLD_SCHEMA(want $NEW_SCHEMA) gets:$BAD5 counts:$DIFF5"
+    fi
+  else
+    record 5 n-1-compat false "old celeris ($CUR) did not become healthy on $OLD_BASE within 60s (SchemaTooNew?); see $OLD_LOG ($(tail -n 3 "$OLD_LOG" | tr '\n' ' '))"
+  fi
+  printf '%s' "$LIVE_OK" >"$N1_LIVE"
+  ) &
+  N1_PID=$!
+  sd_track "$N1_PID"
+fi
+
 # ---- 4b. GUI の e2e（read-only。Phase 83 / G36、ADR-0041 追記）-------------
 #
 # `pnpm e2e`（gui/e2e/*.spec.ts）はタスクを作って承認する結合テストなので、staging にはそのまま使えない
@@ -678,6 +770,7 @@ fi
 # release の `gui/`（`release.sh` が `pnpm install --prod` した方）には Playwright が devDependency なので
 # 入っていない。**リポジトリの `gui/`**（`$SD_REPO/gui`。人・自己改善の作業ツリーが `pnpm install` 済みの方）
 # から走らせ、どちらにも `@playwright/test` が無ければクラッシュさせずに「未インストール」で false にする。
+check_begin
 OK4B=false
 E2E_LOG="$SD_STAGING/logs/e2e-staging.log"
 SD_E2E_TIMEOUT="${SD_E2E_TIMEOUT:-240}"
@@ -718,56 +811,28 @@ else
   record 4b gui-e2e false "skipped (check 1 or 4 failed)"
 fi
 
-# ---- 5. N-1 互換（live_ok） -------------------------------------------------
+# ---- 検査 5（裏で回っている N-1）と待ち合わせる（Phase SD-1） -----------------
 
-LIVE_OK=false
-OLD_LOG="$SD_STAGING/logs/celeris-old.log"
-if [ ${#OLD_CMD[@]} -eq 0 ]; then
-  record 5 n-1-compat false "no \`current\` release (first migration): live_ok = false"
-elif [ "$OK1" != true ]; then
-  record 5 n-1-compat false "skipped (check 1 failed): live_ok = false"
-else
-  mkdir -p "$SD_STAGING/workspaces-n1"
-  sd_log "starting N-1: ${OLD_CMD[*]}"
-  "${OLD_CMD[@]}" >"$OLD_LOG" 2>&1 &
-  OLD_PID=$!
-  sd_track "$OLD_PID"
-  OLD_BASE="http://127.0.0.1:$SD_STAGING_OLD_API_PORT"
-  if sd_wait_http_200 "$OLD_BASE/api/v1/health" 60; then
-    OLD_HEALTH="$SD_STAGING/logs/health-old.json"
-    sd_http_get "$OLD_BASE/api/v1/health" >"$OLD_HEALTH" || true
-    OLD_SCHEMA="$(sd_json_get "$OLD_HEALTH" schema_version || echo "?")"
-    OLD_COUNTS="$SD_STAGING/logs/counts-n1.json"
-    collect "$OLD_BASE" "$ST_TOKEN" >"$OLD_COUNTS" || true
-    BAD5="$(probe_api "$OLD_BASE" "$ST_TOKEN")"
-    DIFF5=""
-    # 比べる相手は**スナップショット**（マイグレーション前の生の行数。ADR-0041 D2）。
-    # 本番 API はここでも読まない。
-    if sd_json_valid "$OLD_COUNTS" && sd_json_valid "$SNAP_JSON"; then
-      for key in $COUNT_KEYS; do
-        a="$(sd_json_get "$SNAP_JSON" "$key" || echo "?")"
-        b="$(sd_json_get "$OLD_COUNTS" "$key" || echo "??")"
-        [ "$a" = "$b" ] || DIFF5="$DIFF5 $key(snapshot=$a old=$b)"
-      done
-    else
-      DIFF5=" could-not-collect"
-    fi
-    if [ "$OLD_SCHEMA" = "$NEW_SCHEMA" ] && [ -z "$BAD5" ] && [ -z "$DIFF5" ]; then
-      LIVE_OK=true
-      record 5 n-1-compat true "old celeris ($CUR) reads the migrated snapshot: schema_version=$OLD_SCHEMA, counts match the pre-migration snapshot, main GETs 200"
-    else
-      record 5 n-1-compat false "old celeris ($CUR) is not compatible: schema=$OLD_SCHEMA(want $NEW_SCHEMA) gets:$BAD5 counts:$DIFF5"
-    fi
-  else
-    record 5 n-1-compat false "old celeris ($CUR) did not become healthy on $OLD_BASE within 60s (SchemaTooNew?); see $OLD_LOG ($(tail -n 3 "$OLD_LOG" | tr '\n' ' '))"
-  fi
+N1_RC=0
+if [ -n "$N1_PID" ]; then
+  wait "$N1_PID" || N1_RC=$?
 fi
+if [ -s "$N1_TSV" ]; then
+  cat "$N1_TSV" >>"$CHECKS_TSV"
+  [ "$(cat "$N1_LIVE" 2>/dev/null || echo false)" = true ] && LIVE_OK=true
+else
+  check_begin
+  record 5 n-1-compat false "the N-1 check did not report a result (subshell exit $N1_RC); see $OLD_LOG: live_ok = false"
+fi
+PARALLEL_SECS="$(sd_secs_since "$PARALLEL_T0")"
+sd_log "checks 4b + 5 (in parallel): ${PARALLEL_SECS}s wall"
 
 # ---- 6. 煙試験（ADR-0041 D5）------------------------------------------------
 #
 # **検査 5 の後**に回す。ここで 1 件タスクを足すので、先に回すと検査 2（件数一致）と検査 5（N-1）の
 # 基準がずれてしまう。足したタスクは staging のスナップショットの中だけで、本番には残らない。
 
+check_begin
 OK6=false
 SMOKE_JSON="$SD_STAGING/logs/smoke.json"
 if [ "$OK1" = true ]; then
@@ -794,7 +859,9 @@ if [ "$OK1" = true ] && [ "$OK2" = true ] && [ "$OK3" = true ] && [ "$OK4" = tru
   OK=true
 fi
 
+# 検査の順は 1, 2, 3, 4, 4b, 5, 6（5 は裏で回し、4b の後で取り込む）。
 CHECKS_JSON="$(sd_tsv_to_json "$CHECKS_TSV")"
+TOTAL_SECS="$(sd_secs_since "$VERIFY_T0")"
 counts_or_null() { if sd_json_valid "$1"; then cat "$1"; else printf 'null'; fi; }
 
 {
@@ -808,6 +875,8 @@ counts_or_null() { if sd_json_valid "$1"; then cat "$1"; else printf 'null'; fi;
   printf '  "current": %s,\n' "$(sd_json_str "$CUR")"
   printf '  "staging_dir": %s,\n' "$(sd_json_str "$SD_STAGING")"
   printf '  "checks": %s,\n' "$CHECKS_JSON"
+  printf '  "durations": {"lock_wait_s": %s, "prepare_s": %s, "parallel_4b_5_s": %s, "total_s": %s},\n' \
+    "$LOCK_WAIT_SECS" "$PREPARE_SECS" "${PARALLEL_SECS:-0}" "$TOTAL_SECS"
   printf '  "counts": {\n'
   printf '    "snapshot": %s,\n' "$(counts_or_null "$SNAP_JSON")"
   printf '    "staging": %s\n' "$(counts_or_null "$STG_JSON")"
@@ -816,5 +885,5 @@ counts_or_null() { if sd_json_valid "$1"; then cat "$1"; else printf 'null'; fi;
 } >"$REL/verify.json"
 rm -f "$CHECKS_TSV"
 
-sd_log "verify.json: $REL/verify.json (ok=$OK live_ok=$LIVE_OK)"
+sd_log "verify.json: $REL/verify.json (ok=$OK live_ok=$LIVE_OK, ${TOTAL_SECS}s)"
 [ "$OK" = true ] || exit 1

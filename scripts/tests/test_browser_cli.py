@@ -1,10 +1,12 @@
 """Run the real CLI transport against an executable fake agent-browser."""
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -48,13 +50,19 @@ class BrowserCliTest(unittest.TestCase):
         self.executable.chmod(0o700)
         self.config = {'executable': str(self.executable), 'output': str(self.output),
                        'session_id': 'celeris-test-session', 'allowed_domains': ['example.com', '*.example.org']}
-        (self.root / 'config.json').write_text(json.dumps(self.config))
         (self.root / 'upstream.json').write_text('{}')
-        (self.root / 'policy.json').write_text(json.dumps({'default': 'deny', 'allow': ['navigate', 'snapshot', 'gettext', 'screenshot', 'download', 'click', 'scroll', 'close', 'launch']}))
+        self.policy(['click', 'close', 'download', 'gettext', 'launch', 'navigate', 'screenshot', 'scroll', 'snapshot'])
         self.mode({})
         root_patch = patch.object(cli, 'ROOT', self.root)
         root_patch.start()
         self.addCleanup(root_patch.stop)
+
+    def policy(self, allow):
+        """Write policy.json and config.json the way the supervisor does (hash-bound)."""
+        raw = json.dumps({'default': 'deny', 'allow': allow}, separators=(',', ':')).encode()
+        (self.root / 'policy.json').write_bytes(raw)
+        self.config['policy_sha256'] = hashlib.sha256(raw).hexdigest()
+        (self.root / 'config.json').write_text(json.dumps(self.config))
 
     def mode(self, value):
         (self.root / 'fake.json').write_text(json.dumps(value))
@@ -202,19 +210,28 @@ class BrowserCliTest(unittest.TestCase):
         cases = [None, '', '{"default":"deny","allow":', json.dumps({'default': 'deny', 'allow': []}),
                  json.dumps({'default': 'allow', 'allow': ['navigate']}), json.dumps({'default': 'deny'}),
                  json.dumps({'default': 'deny', 'allow': ['navigate', 'evaluate']}),
-                 json.dumps({'default': 'deny', 'allow': ['navigate'], 'deny': []}), '[]']
+                 json.dumps({'default': 'deny', 'allow': ['navigate'], 'deny': []}), '[]',
+                 json.dumps({'default': 'deny', 'allow': ['navigate']}),
+                 json.dumps({'default': 'deny', 'allow': ['launch', 'close']}),
+                 json.dumps({'default': 'deny', 'allow': ['close', 'launch', 'navigate', 'navigate']}),
+                 json.dumps({'default': 'deny', 'allow': ['close', 'launch', 'navigate', 'cookies_get']}),
+                 json.dumps({'default': 'deny', 'allow': ['close', 'launch', 'navigate', 'state_save']})]
         for policy in cases:
             with self.subTest(policy=policy):
                 (self.root / 'invocation.json').unlink(missing_ok=True)
                 (self.root / 'policy.json').unlink(missing_ok=True)
                 if policy is not None:
                     (self.root / 'policy.json').write_text(policy)
+                    # Hash matches, so the shape check alone must refuse it.
+                    self.config['policy_sha256'] = hashlib.sha256(policy.encode()).hexdigest()
+                    (self.root / 'config.json').write_text(json.dumps(self.config))
                 code, stdout = self.run_cli('open', 'https://example.com/public')
                 self.assertEqual(code, 2)
                 self.assertFalse((self.root / 'invocation.json').exists())
                 self.assertEqual(self.events()[-1], {'operation': 'policy_block', 'status': 'blocked'})
         (self.root / 'policy.json').write_text(good)
-        for domains in [[], [''], ['example.com,evil.com'], ['*'], None]:
+        self.policy(json.loads(good)['allow'])
+        for domains in [[], [''], ['example.com,evil.com'], ['*'], ['*.'], ['Example.com'], None]:
             with self.subTest(domains=domains):
                 (self.root / 'invocation.json').unlink(missing_ok=True)
                 (self.root / 'config.json').write_text(json.dumps(dict(self.config, allowed_domains=domains)))
@@ -222,11 +239,58 @@ class BrowserCliTest(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertFalse((self.root / 'invocation.json').exists())
 
-    def test_shim_action_allowlist_matches_supervisor_policy(self):
-        source = (SOURCE.parent / 'browser.rs').read_text()
-        block = source[source.index('fn action_policy'):]
-        block = block[block.index('"allow":['):block.index(']')]
-        self.assertEqual(set(json.loads('[' + block.split('[', 1)[1] + ']')), cli.ACTIONS)
+    def test_shim_action_allowlist_matches_generator_vocabulary(self):
+        source = (SOURCE.parents[2] / 'task-core/src/browser.rs').read_text()
+        block = source[source.index('// harness-upstream-actions:begin'):source.index('// harness-upstream-actions:end')]
+        names = set(re.findall(r'"([a-z_]+)"', block))
+        self.assertEqual(names, cli.ACTIONS)
+        self.assertEqual(set(cli.VERB_ACTIONS.values()) | {'launch'}, cli.ACTIONS)
+
+    def test_tampered_policy_hash_fails_closed(self):
+        # A same-UID harness rewriting policy.json (e.g. adding evaluate) is refused.
+        for allow in [['close', 'launch', 'navigate', 'snapshot', 'evaluate'], ['close', 'launch', 'navigate']]:
+            with self.subTest(allow=allow):
+                (self.root / 'policy.json').write_text(json.dumps({'default': 'deny', 'allow': allow}))
+                code, _ = self.run_cli('open', 'https://example.com/public')
+                self.assertEqual(code, 2)
+                self.assertFalse((self.root / 'invocation.json').exists())
+        (self.root / 'config.json').write_text(json.dumps({k: v for k, v in self.config.items() if k != 'policy_sha256'}))
+        code, _ = self.run_cli('snapshot')
+        self.assertEqual(code, 2)
+        self.assertFalse((self.root / 'invocation.json').exists())
+
+    def test_actions_outside_task_policy_never_reach_substrate(self):
+        # Generated for a task allowed only snapshot + extract.
+        self.policy(['close', 'gettext', 'launch', 'snapshot'])
+        for args in [('open', 'https://example.com/public'), ('click', '@e1'), ('screenshot',),
+                     ('download', '@e1'), ('scroll', 'down', '10')]:
+            with self.subTest(verb=args[0]):
+                code, stdout = self.run_cli(*args)
+                self.assertEqual(code, 2)
+                self.assertIn('not permitted', stdout)
+                self.assertFalse((self.root / 'invocation.json').exists())
+                self.assertEqual(self.events()[-1], {'operation': 'policy_block', 'status': 'blocked'})
+        self.assertEqual(list(self.output.iterdir()), [])
+        for args in [('snapshot',), ('extract', '@e1'), ('close',)]:
+            with self.subTest(allowed=args[0]):
+                code, _ = self.run_cli(*args)
+                self.assertEqual(code, 0)
+
+    def test_navigation_outside_allowed_domains_is_blocked(self):
+        # Page content asking the model to go elsewhere is untrusted: the shim refuses.
+        for url in ['https://evil.example/', 'https://example.org/', 'https://example.com.evil.example/',
+                    'https://notexample.org/', 'https://evil-example.com/', 'https://example.com./',
+                    'http://ｅxample.com/', 'https://a.example.org.evil.example/']:
+            with self.subTest(url=url):
+                (self.root / 'invocation.json').unlink(missing_ok=True)
+                code, stdout = self.run_cli('open', url)
+                self.assertEqual(code, 2)
+                self.assertFalse((self.root / 'invocation.json').exists())
+                self.assertNotIn('evil', stdout)
+        for url in ['https://example.com/public', 'https://app.example.org/', 'https://A.B.Example.org/x']:
+            with self.subTest(allowed=url):
+                code, _ = self.run_cli('open', url)
+                self.assertEqual(code, 0)
 
 
 if __name__ == '__main__':

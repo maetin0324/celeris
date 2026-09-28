@@ -1557,6 +1557,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":-32000,"message":"401 U
                     session_id: "isolated-test".into(),
                     state: task_core::BrowserRunState::Running,
                     live_view_url: None,
+                    policy: None,
                 },
                 cli: dir.path().join("celeris-browser.py"),
             });
@@ -1602,6 +1603,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
                 session_id: "isolated-test".into(),
                 state: task_core::BrowserRunState::Running,
                 live_view_url: None,
+                policy: None,
             },
             cli: dir.path().join("celeris-browser.py"),
         });

@@ -1,6 +1,9 @@
 use super::*;
 use std::sync::Mutex;
-use task_core::{ArtifactRef, BrowserCapability, EffectiveProfile, TaskId};
+use task_core::{
+    ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserTaskPolicy,
+    EffectiveProfile, TaskId,
+};
 
 #[derive(Default)]
 struct RecordingSink {
@@ -42,14 +45,35 @@ fn request(workspace: &Path) -> RunRequest {
         context: crate::protocol::RunContext {
             profile: Some(EffectiveProfile {
                 browser: Some(BrowserCapability {
-                    allowed_domains: vec!["example.com".into()],
+                    allowed_domains: vec!["example.com".into(), "*.example.org".into()],
                     live_view_url: Some("https://browser.example.com/live".into()),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }),
+            browser_policy: Some(task_policy(&[
+                BrowserAction::Navigate,
+                BrowserAction::Snapshot,
+                BrowserAction::Extract,
+                BrowserAction::Screenshot,
+            ])),
             ..Default::default()
         },
         cargo_target_dir: None,
+    }
+}
+
+fn task_policy(actions: &[BrowserAction]) -> BrowserTaskPolicy {
+    BrowserTaskPolicy {
+        policy_id: "public-read".into(),
+        revision: 1,
+        domain_mode: BrowserDomainMode::CommonHosts,
+        navigation_origins: vec![],
+        network_domains: vec!["example.com".into(), "docs.example.org".into()],
+        allowed_actions: actions.to_vec(),
+        approval_actions: vec![],
+        credential_policy_ids: vec![],
+        artifact_policy_id: None,
     }
 }
 
@@ -82,6 +106,7 @@ fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
             session_id: session.clone(),
             state: BrowserRunState::Running,
             live_view_url: None,
+            policy: None,
         },
     });
     for expected in [
@@ -92,40 +117,6 @@ fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
         "raw CLI",
     ] {
         assert!(prompt.contains(expected), "missing {expected}");
-    }
-}
-
-#[test]
-fn substrate_action_policy_defaults_to_deny_and_never_grants_privileged_actions() {
-    let policy = action_policy();
-    assert_eq!(policy["default"], "deny");
-    let allow = policy["allow"].as_array().unwrap();
-    assert!(!allow.is_empty());
-    for action in ["navigate", "snapshot", "gettext", "screenshot", "download"] {
-        assert!(
-            allow.contains(&serde_json::json!(action)),
-            "missing {action}"
-        );
-    }
-    for action in [
-        "eval",
-        "evaluate",
-        "cookies",
-        "cookies_get",
-        "storage",
-        "localstorage",
-        "auth",
-        "auth_login",
-        "connect",
-        "cdp",
-        "fill",
-        "type",
-        "launch_persistent_context",
-    ] {
-        assert!(
-            !allow.contains(&serde_json::json!(action)),
-            "granted {action}"
-        );
     }
 }
 
@@ -432,4 +423,163 @@ fn python_transport_security_regressions_are_part_of_workspace_gate() {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
+}
+
+#[tokio::test]
+async fn launch_uses_generated_policy_and_binds_its_hash_to_the_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    run_with_executable(
+        Arc::new(CliHarness {
+            id: "acp",
+            question: false,
+        }),
+        request(temp.path()),
+        "generated",
+        limits(),
+        &sink,
+        &executable,
+    )
+    .await
+    .unwrap();
+    let runtime = temp.path().join("runs/generated/browser");
+    let policy = std::fs::read(runtime.join("policy.json")).unwrap();
+    assert_eq!(
+        policy,
+        br#"{"default":"deny","allow":["close","gettext","launch","navigate","screenshot","snapshot"]}"#
+    );
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(runtime.join("config.json")).unwrap()).unwrap();
+    // grant {example.com, *.example.org} ∩ task {example.com, docs.example.org}
+    assert_eq!(
+        config["allowed_domains"],
+        serde_json::json!(["docs.example.org", "example.com"])
+    );
+    assert_eq!(
+        config["policy_sha256"],
+        format!("{:x}", Sha256::digest(&policy))
+    );
+    let browsers = sink.browsers.lock().unwrap();
+    let binding = browsers[0].policy.clone().unwrap();
+    assert_eq!(binding.policy_id, "public-read");
+    assert_eq!(binding.revision, 1);
+    assert!(binding.hash.starts_with("sha256:"));
+    assert!(browsers.iter().all(|b| b.policy.as_ref() == Some(&binding)));
+}
+
+/// Tries what page content might ask for: actions and hosts outside the task policy.
+struct HostileHarness;
+#[async_trait::async_trait]
+impl WorkerAdapter for HostileHarness {
+    fn id(&self) -> &str {
+        "acp"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        let cli = &req.context.browser.as_ref().expect("browser").cli;
+        let mut codes = Vec::new();
+        for args in [
+            vec!["click", "@e1"],
+            vec!["download", "@e1"],
+            vec!["open", "https://evil.example/"],
+            vec!["open", "https://example.org/"],
+            vec!["eval", "document.cookie"],
+            vec!["cookies", "get"],
+            vec!["state", "save", "/tmp/x"],
+            vec!["open", "https://example.com/ok"],
+        ] {
+            let output = tokio::process::Command::new("python3")
+                .arg(cli)
+                .args(args)
+                .output()
+                .await?;
+            codes.push(output.status.code().unwrap_or(-1));
+        }
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: format!("{codes:?}"),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+#[tokio::test]
+async fn actions_and_domains_outside_task_policy_are_stopped_before_the_substrate() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    let outcome = run_with_executable(
+        Arc::new(HostileHarness),
+        request(temp.path()),
+        "hostile",
+        limits(),
+        &sink,
+        &executable,
+    )
+    .await
+    .unwrap();
+    let Terminal::Done { summary, .. } = outcome.terminal else {
+        panic!("unexpected terminal");
+    };
+    assert_eq!(summary, "[2, 2, 2, 2, 2, 2, 2, 0]");
+    let calls =
+        std::fs::read_to_string(temp.path().join("runs/hostile/browser/commands.jsonl")).unwrap();
+    // Only the permitted navigation and the supervisor's cleanup reached agent-browser.
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        ["[\"open\", \"https://example.com/ok\"]", "[\"close\"]"]
+    );
+    let blocked = sink
+        .progress
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, f)| f.tool.as_deref() == Some("browser.policy_block"))
+        .count();
+    assert_eq!(blocked, 7);
+}
+
+#[tokio::test]
+async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts() {
+    let temp = tempfile::tempdir().unwrap();
+    let absent = temp.path().join("must-not-launch");
+    let sink = RecordingSink::default();
+    let mut credential = task_policy(&[BrowserAction::Snapshot]);
+    credential.credential_policy_ids = vec!["not-granted".into()];
+    let mut outside = task_policy(&[BrowserAction::Snapshot]);
+    outside.network_domains = vec!["evil.example".into()];
+    for (policy, code) in [
+        (None, "browser_policy_required"),
+        (Some(task_policy(&[])), "empty_browser_actions"),
+        (Some(outside), "empty_browser_domains"),
+        (Some(credential), "credential_policy_not_granted"),
+    ] {
+        let mut req = request(temp.path());
+        req.context.browser_policy = policy;
+        let error = run_with_executable(
+            Arc::new(CliHarness {
+                id: "acp",
+                question: false,
+            }),
+            req,
+            "refused",
+            limits(),
+            &sink,
+            &absent,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains(code), "{error}");
+    }
+    assert!(sink.browsers.lock().unwrap().is_empty());
+    assert!(!temp.path().join("runs/refused").exists());
 }

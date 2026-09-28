@@ -2788,6 +2788,7 @@ mod tests {
                 session_id: "isolated-test".into(),
                 state: task_core::BrowserRunState::Running,
                 live_view_url: None,
+                policy: None,
             },
             cli: dir.path().join("celeris-browser.py"),
         });
@@ -2829,6 +2830,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
                 session_id: "isolated-test".into(),
                 state: task_core::BrowserRunState::Running,
                 live_view_url: None,
+                policy: None,
             },
             cli: dir.path().join("celeris-browser.py"),
         });

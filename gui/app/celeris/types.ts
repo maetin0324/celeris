@@ -896,6 +896,12 @@ export type NotificationKind =
  */
 export type OrgKind = "secretary" | "department" | "section";
 /**
+ * Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:
+ * no aliases, categories or pass-through of upstream names.
+ */
+export type BrowserAction =
+  "navigate" | "click" | "snapshot" | "extract" | "screenshot" | "download" | "scroll" | "credential_use";
+/**
  * ADR-0047 D2: 何をマウントするか。
  */
 export type MountKind = "kb" | "repo" | "dir" | "memory";
@@ -3186,10 +3192,25 @@ export interface EventRow {
 }
 export interface BrowserRun {
   live_view_url?: string | null;
+  /**
+   * The effective policy this run was launched with (ADR-0080 D1).
+   */
+  policy?: BrowserPolicyBinding | null;
   run_id: string;
   session_id: string;
   state: BrowserRunState;
   task_id: TaskId;
+}
+/**
+ * What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).
+ */
+export interface BrowserPolicyBinding {
+  /**
+   * `sha256:<hex>` of the canonical effective policy.
+   */
+  hash: string;
+  policy_id: string;
+  revision: number;
 }
 /**
  * DESIGN §4.1 の `Task`。
@@ -5300,9 +5321,18 @@ export interface Profile {
 }
 export interface BrowserCapability {
   /**
+   * Business actions the administrator grants (ADR-0080 D1). Absent means the Phase 1
+   * set; `credential_use` is never implied.
+   */
+  allowed_actions?: BrowserAction[] | null;
+  /**
    * Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.
    */
   allowed_domains: string[];
+  /**
+   * Credential policies a task may reference. Absent/empty means no credential use.
+   */
+  credential_policy_ids?: string[];
   /**
    * Administrator-operated authenticated HTTPS reverse proxy to the substrate dashboard.
    * This is not a CDP endpoint or a bearer-token URL.

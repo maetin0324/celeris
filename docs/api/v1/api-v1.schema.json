@@ -1241,11 +1241,42 @@
         }
       ]
     },
+    "BrowserAction": {
+      "description": "Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:\nno aliases, categories or pass-through of upstream names.",
+      "enum": [
+        "navigate",
+        "click",
+        "snapshot",
+        "extract",
+        "screenshot",
+        "download",
+        "scroll",
+        "credential_use"
+      ],
+      "type": "string"
+    },
     "BrowserCapability": {
       "additionalProperties": false,
       "properties": {
+        "allowed_actions": {
+          "description": "Business actions the administrator grants (ADR-0080 D1). Absent means the Phase 1\nset; `credential_use` is never implied.",
+          "items": {
+            "$ref": "#/$defs/BrowserAction"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "allowed_domains": {
           "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "credential_policy_ids": {
+          "description": "Credential policies a task may reference. Absent/empty means no credential use.",
           "items": {
             "type": "string"
           },
@@ -1264,6 +1295,30 @@
       ],
       "type": "object"
     },
+    "BrowserPolicyBinding": {
+      "additionalProperties": false,
+      "description": "What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).",
+      "properties": {
+        "hash": {
+          "description": "`sha256:<hex>` of the canonical effective policy.",
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy_id",
+        "revision",
+        "hash"
+      ],
+      "type": "object"
+    },
     "BrowserRun": {
       "additionalProperties": false,
       "properties": {
@@ -1272,6 +1327,17 @@
             "string",
             "null"
           ]
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserPolicyBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The effective policy this run was launched with (ADR-0080 D1)."
         },
         "run_id": {
           "type": "string"

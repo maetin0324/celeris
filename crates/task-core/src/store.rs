@@ -1156,6 +1156,24 @@ pub trait TaskStore:
         events: Vec<Event>,
     ) -> Result<(), StoreError>;
 
+    /// ADR-0079 §7 R1b: 終わっていない kind task の unit（`pending` / `ready` / `running` /
+    /// `needs_continuation` / `blocked`）を持つ task の id（重複なし、昇順）。dispatcher の tick が
+    /// 子 task の生成と状態の写しの照合に使う（木が無ければ空で、何もしない）。
+    fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError>;
+
+    /// ADR-0079 D4 (4)（Phase R1b）: kind task の unit から子 task を作る 1 トランザクション。
+    /// 親が終端でなく、unit の行（`unit.id`）が今も `ready` で `child_task_id` を持たないことを確かめ、
+    /// 子を挿入して `Event::Created{origin: plan_unit}` を積み、unit の行を `unit`（呼び出し側が
+    /// `running`・`child_task_id` を書いたもの）に差し替え、親の events に `parent_events`
+    /// （`WorkUnitTransitioned` と `ChildTaskCreated`）を積む。条件に合わなければ何も書かず `Ok(false)`。
+    fn tree_child_create(
+        &self,
+        parent_id: TaskId,
+        child: &Task,
+        unit: WorkUnitRow,
+        parent_events: Vec<Event>,
+    ) -> Result<bool, StoreError>;
+
     /// ADR-0074 D1.4（Phase F2）: Task の lease（工程の保持者）の期限を `ttl` 先まで延ばす
     /// （短くはしない）。`Running` でなければ `Ok(false)`。統合の間の延長に使う。
     fn extend_task_lease(&self, task_id: TaskId, ttl: StdDuration) -> Result<bool, StoreError>;
@@ -2802,6 +2820,14 @@ impl SqliteStore {
                 Self::transition_if_non_terminal_tx(tx, child, Trigger::Cancel)?;
             }
         }
+        // ADR-0079 §7 R1b（D4・D16）: 木の親が中止・失敗で終わったら、親の計画の unit から作った子 task
+        // （`root_id` を持つ `parent_id = 親` の task）を同じトランザクションで中止する。子の遷移がさらに
+        // 孫へ連鎖する（subtree 全体）。走っている run は dispatcher の `abort_stale_runs` が止める。
+        if unsuccessful {
+            for child in Self::non_terminal_tree_children_tx(tx, task.id)? {
+                Self::transition_if_non_terminal_tx(tx, child, Trigger::ParentCancelled)?;
+            }
+        }
         if unsuccessful {
             for dependent in Self::non_terminal_dependents_tx(tx, task.id)? {
                 // P-78（ADR-0033 D4 / Phase 28）: 対話タスクは `DependencyFailed` の対象から外す
@@ -2853,6 +2879,25 @@ impl SqliteStore {
         );
         let mut stmt = tx.prepare(&sql)?;
         let rows = stmt.query_map(params![parent_id.to_string(), kind.map(kind_str)], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let ids: Vec<String> = rows.collect::<Result<_, _>>()?;
+        ids.iter().map(|s| Self::parse_id(s)).collect()
+    }
+
+    /// ADR-0079（Phase R1b）: `parent_id` の木の子（`root_id` を持つ = 計画の unit から作った子）のうち
+    /// 終端でないもの。
+    fn non_terminal_tree_children_tx(
+        tx: &Connection,
+        parent_id: TaskId,
+    ) -> Result<Vec<TaskId>, StoreError> {
+        let sql = format!(
+            "SELECT id FROM tasks WHERE parent_id = ?1 AND root_id IS NOT NULL AND {} \
+             ORDER BY created_at ASC, rowid ASC",
+            Self::NON_TERMINAL_SQL
+        );
+        let mut stmt = tx.prepare(&sql)?;
+        let rows = stmt.query_map(params![parent_id.to_string()], |row| {
             row.get::<_, String>(0)
         })?;
         let ids: Vec<String> = rows.collect::<Result<_, _>>()?;
@@ -3796,6 +3841,7 @@ impl TaskStore for SqliteStore {
                 child.id,
                 &Event::Created {
                     task: Box::new(child.clone()),
+                    origin: None,
                 },
             )?;
             if accept_children {
@@ -3816,6 +3862,7 @@ impl TaskStore for SqliteStore {
             task.id,
             &Event::Created {
                 task: Box::new(task.clone()),
+                origin: None,
             },
         )?;
         for event in &extra_events {
@@ -3891,6 +3938,7 @@ impl TaskStore for SqliteStore {
             task.id,
             &Event::Created {
                 task: Box::new(task.clone()),
+                origin: None,
             },
         )?;
         for event in &extra_events {
@@ -4029,6 +4077,7 @@ impl TaskStore for SqliteStore {
                 child.id,
                 &Event::Created {
                     task: Box::new(child.clone()),
+                    origin: None,
                 },
             )?;
             if child.status == Status::Draft {
@@ -4068,6 +4117,7 @@ impl TaskStore for SqliteStore {
             new_task.id,
             &Event::Created {
                 task: Box::new(new_task.clone()),
+                origin: None,
             },
         )?;
         Self::append_event_tx(&tx, new_task.id, &Event::Retried { from: original })?;
@@ -5689,6 +5739,7 @@ impl TaskStore for SqliteStore {
                 child.id,
                 &Event::Created {
                     task: Box::new(child.clone()),
+                    origin: None,
                 },
             )?;
             if child.status == Status::Draft {
@@ -5947,6 +5998,71 @@ impl TaskStore for SqliteStore {
         Ok(())
     }
 
+    fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT task_id FROM work_units WHERE kind = 'task' AND status IN \
+                 ('pending', 'ready', 'running', 'needs_continuation', 'blocked') ORDER BY task_id",
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let ids: Vec<String> = rows.collect::<Result<_, _>>()?;
+            ids.iter().map(|s| Self::parse_id(s)).collect()
+        })
+    }
+
+    fn tree_child_create(
+        &self,
+        parent_id: TaskId,
+        child: &Task,
+        unit: WorkUnitRow,
+        parent_events: Vec<Event>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(parent) = Self::get_locked(&tx, parent_id)? else {
+            return Ok(false);
+        };
+        if parent.status.is_terminal() || child.parent_id != Some(parent_id) {
+            return Ok(false);
+        }
+        let current = tx
+            .query_row(
+                "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
+                 depends_on_json, runs, continuations, retries, last_run_id, \
+                 last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
+                 lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
+                 needs_decisions_json FROM work_units WHERE id = ?1 AND task_id = ?2",
+                params![unit.id, parent_id.to_string()],
+                Self::row_to_work_unit,
+            )
+            .optional()?
+            .transpose()?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        if current.status != WorkUnitStatus::Ready
+            || current.child_task_id.is_some()
+            || current.kind != crate::execution_plan::WorkUnitKind::Task
+        {
+            return Ok(false);
+        }
+        Self::insert_tx(&tx, child)?;
+        Self::append_event_tx(
+            &tx,
+            child.id,
+            &Event::Created {
+                task: Box::new(child.clone()),
+                origin: Some(crate::model::CreatedOrigin::PlanUnit),
+            },
+        )?;
+        Self::update_work_unit_tx(&tx, &unit)?;
+        for ev in &parent_events {
+            Self::append_event_tx(&tx, parent_id, ev)?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
     fn extend_task_lease(&self, task_id: TaskId, ttl: StdDuration) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -5984,7 +6100,7 @@ impl TaskStore for SqliteStore {
             let mut stmt = conn.prepare(
                 "SELECT t.json FROM tasks t WHERE t.status = ?1 AND EXISTS ( \
                  SELECT 1 FROM work_units w WHERE w.task_id = t.id AND w.phase IS NOT NULL \
-                 AND w.kind != 'integrate' AND w.status IN ('ready', 'needs_continuation')) \
+                 AND w.kind NOT IN ('integrate', 'task') AND w.status IN ('ready', 'needs_continuation')) \
                  ORDER BY t.created_at ASC LIMIT ?2",
             )?;
             let rows = stmt.query_map(
@@ -7018,7 +7134,7 @@ mod tests {
         assert_eq!(store.get(task.id).unwrap().unwrap(), task);
         let ev = store.events_for(task.id).unwrap();
         assert_eq!(ev.len(), 2);
-        assert!(matches!(&ev[0].1, Event::Created { task: t } if t.id == task.id));
+        assert!(matches!(&ev[0].1, Event::Created { task: t, .. } if t.id == task.id));
         assert_eq!(ev[1].1, Event::ApprovalRequested);
         // 同じ id の再作成は insert で失敗し、イベントも追記されない。
         assert!(
@@ -7384,6 +7500,7 @@ mod tests {
             // events は task をまたいで rowid 順をばらして挿入する（各 task 内の seq 順は保つ）。
             let ev = Event::Created {
                 task: Box::new(a.clone()),
+                origin: None,
             };
             insert_legacy_event(&conn, a.id, 0, &ev);
             expected_a.push((0, ev));
@@ -7391,6 +7508,7 @@ mod tests {
 
             let ev = Event::Created {
                 task: Box::new(b.clone()),
+                origin: None,
             };
             insert_legacy_event(&conn, b.id, 0, &ev);
             expected_b.push((0, ev));
@@ -10209,6 +10327,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();

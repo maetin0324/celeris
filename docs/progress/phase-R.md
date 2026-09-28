@@ -143,3 +143,71 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R1b: 単位からの子 task 生成、状態の反映、段階完了、部分木の cancel（完了 2026-09-28）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R1b、付記「R1b 実装時の逸脱・明確化」（16 項目）。
+- 種類: コード（task-core / task-ops / task-dispatch / task-api）と schema・GUI の型の再生成、GUI のラベル 1 つ。**migration なし（schema 31 のまま）**。
+  `[execution.tree] enabled = false`（既定）では /3 は採用されず、daemon の挙動は変わらない。本番の DB・設定・サービスには触れていない。
+
+### 実装したもの
+
+- **子 task の生成**（`Dispatcher::reconcile_tree_units`、tick ごと、LLM なし）: `ready` の kind task の unit（依存は `newly_ready`、段階は現在の段階、
+  `needs_decisions` が回答済み、`max_parallel_child_tasks` に空き）から `task_ops::tree::build_child_task` で子を組み立て、
+  `TaskStore::tree_child_create` の 1 トランザクションで子の挿入・`Created{origin: plan_unit}`・unit を `running`・`child_task_id`・
+  親の `WorkUnitTransitioned{child_created}` と `ChildTaskCreated{plan_id, unit_key, child_task_id, depth}`。子は `parent_id`・`tree`
+  （root_id / depth + 1 / parent_unit）・`labels: child-<key>`・`status: ready`・親の workspace（ADR-0062 B2 の remote の格下げを通す）・
+  budget・案件、unit の repos（親の部分集合）・skills・genre・features ヒント、objective の末尾に木の位置と回答済みの決定（固定の書式）。
+  担当は matching、`execution_hint` なし（子は自分で gate）。
+- **採用前の検査**（planner の /3）: kind task の unit の `repos` ⊆ 親（R1a から持ち越し）、部をまたぐ子の認可（`cross_department_questions`、
+  `plan_children` から切り出し）。
+- **状態の写し**: 子 done → unit done（`child_done`、依存先を ready に）、子 failed → unit failed（`child_failed`）、子 cancelled → unit **failed**
+  （`child_cancelled`。付記 2.）、非終端（blocked を含む）→ running のまま。
+- **段階の完了**: 子の unit が done で段階が揃う。統合 WU は子のブランチを merge しない（R1c まで。付記 4.）。/3 を dispatcher の工程の scheduler に乗せた
+  （`is_phased_schema`）。`settle_phase` / `reconcile_parallel_tasks` は kind task の unit の running を in-flight に数えない。
+- **`awaiting_children`**: 子だけを待つ親は `Ready`・lease なし・gate `Skip`。`ExecutionPhase::AwaitingChildren` と `awaiting_children`
+  （`GET /tasks/{id}/execution`・タスク詳細の実行節）、`WorkUnitView.child_task_id`。GUI は「子 task の完了待ち」のラベルだけ。
+- **subtree の中止**: `Trigger::ParentCancelled`（reason `parent_cancelled`）。親が cancelled / failed で終わると store が同じトランザクションで木の子を中止し、
+  孫へ連鎖。走っている run は `abort_stale_runs` が止め、親の unit は tick が閉じる。`TransitionResult.cascaded` に出る。
+- **委譲の禁止**: `Task.tree` を持つ task の run に `available_genres` を渡さず、`delegate` も拒む。
+- **`review: human` → 途中確認**: `task_core::resolve_plan_pause_points`（/1・/2 は不変）を採用・replan の `PausePointsResolved` に使う。
+- **replay**: 子の結び付きと unit の状態は events だけから作り直せる（新しい集計は無し。R1a の `ChildTaskCreated` の読みと `WorkUnitTransitioned` で足りる）。
+
+### 受け入れ条件（ADR-0079 §7 R1b と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) 偽の planner の /3（leaf + task）で leaf が走り、task の unit が ready で子（parent_id・depth 2・root_id・`child-<key>`・ready・親の repos / workspace / budget）が 1 トランザクションで作られ、`ChildTaskCreated` と `Created{origin: plan_unit}` が残る。子は自分の gate で atomic → 1 run → done → unit done → 段階 s1 統合 → s2 → 親 done | `cargo test -p task-dispatch --lib -- dispatcher::tests::tree::v3_task_unit_creates_child_when_ready` | ok。unit c の reason は `child_created`→`child_done`、`runs = 0`、`PhaseIntegrated` は s1, s2、s2 の leaf は子の done の後に ready |
+| (b) 依存・`needs_decisions` が満たされるまで子は作られない | `… tree::child_waits_for_dependencies_and_decisions` | ok。a done 後も h1 未回答（`DecisionRequested` だけ）の間は子 0・親 Ready・lease なし。回答で子ができ、objective に `- h1 which backend: manual（推奨と異なる） — trial first` |
+| (c) 子 done → unit done、failed → unit failed、cancelled → unit failed（付記 2.）。段階は完了せず既存の失敗の経路（replan の planner run）へ、panic なし。`max_parallel_child_tasks` | `… tree::unit_mirrors_child_status`、`… tree::child_failure_fails_the_unit_and_the_stage_does_not_complete`、`cargo test -p task-ops --lib tree::` | ok。上限 2 で 3 つ目は待ち、空きで作成。blocked の子は running のまま。`settle_phase` = Failure、gate = `RunPlanner{replan: true}`。実行経路では子の最終レビューが落ちて failed → unit failed・統合なし・親は done にならない |
+| (d) 子だけを待つ親は Ready のまま dispatch されず lease なし、execution の phase が `awaiting_children` | `… tree::parent_waits_without_lease` | ok。gate `Skip`、`awaiting_children = [{unit_key c, task_id, "Child c", running}]`、親の run は planner の 1 本だけ |
+| (e) root の Cancel で子・孫が `cancelled`（`parent_cancelled`）、走っている run が止まる | `… tree::cancel_cascades_to_subtree` | ok。`cascaded` = 子と孫（深さ 3）、子の run の runs 行は `cancelled`、root の unit はすべて cancelled |
+| (f) 木の節点の run の `available_genres` が空 | `… tree::tree_runs_cannot_delegate` | ok（木でない task は従来どおり 1 件） |
+| `review: human` の段階が途中確認で止まる | `… tree::review_human_stage_pauses_after_integration`、`cargo test -p task-core --lib pause::tests::plan_pause_points_include_review_human_stages` | ok。s1 の統合の後に `awaiting_human`・`PausePointsResolved{phases: [s1]}`・`PhaseReported`、「続ける」で done。/2 の解決は従来と同じ |
+| repos ⊆ 親 | `… tree::task_unit_repos_must_be_a_subset_of_the_parents`、`cargo test -p task-ops --lib tree::tests` | ok。外れた計画は不正な試行（進行に理由）、次の計画を採用 |
+| (g) tree 無効で挙動不変 | `… tree::tree_disabled_rejects_v3_and_creates_no_child` と既存の全テスト | ok。/3 は採用されず子 0、`[execution.tree] enabled = true` の文言。既存の /1・/2・plan/2 children のテストは全部通過 |
+| replay | `… tree::replay_rebuilds_child_links_and_unit_statuses`（ほか各テストの末尾の `assert_replay_is_clean`） | ok。status / attempts・`work_units`（`child_task_id`・状態）・`execution_plans`・`decisions` の差分 0。壊した索引は `--check` で検出、`--apply` で復元 |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 88（nextest 78 + doc 10）、**passed 2751 / failed 0 / ignored 7**
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、再実行後も `gui/app/celeris/types.ts` の md5 が同じ（6c7d2447bd379177f13be9c3702ef15f）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 285 files、2 infos）/ `test` → exit 0（Test Files 76 passed、Tests 1175 passed）
+
+### 未解決・R1c 以降へ
+
+- **R1c**: 子の基点（`base_commit`）、統合 WU が `celeris/<child_id>` を親ブランチに merge、子の最終レビューの基点、子の取り込み（配送）と `TaskReady` の抑止。
+  R1b では子の成果は親ブランチに入らない（付記 4.）。
+- **R2a**: 深さの gate の閾値・木では shadow でも採用・unit の gate・木の上限（子の生成は今 `max_parallel_child_tasks` だけを見る）。
+- **R2b**: 子の失敗 → 親の replan の中身（/3 の replan の差分、子の失敗の要約を planner に）、子の基盤の失敗の再試行。今は既存の失敗の経路に入るだけ。
+- **R3a**: 計画の採用時の `DecisionRequested` の発行と回答の入口。R1b では `needs_decisions` の unit は回答の行ができるまで待ち続ける。leaf の `needs_decisions` も R3a。
+- **R4a**: 途中報告に子の要約の行を足す（今は unit の題名だけ）。R4b: 木のタブ。R5a: subtree の一時停止。
+- API の `PUT/POST /tasks/{id}/execution-plan` と `celerisctl execution` は R1a のまま tree 無効で検証する（R5b までに配線）。
+- 既存の差（R1b と無関係）: 偽のアダプタで走らせた /2・/3 の計画で、`replay --check` の `runs` の表に planner run の role と並列 WU の run の
+  `work_unit_id` / `seq` の差が出る（/2 だけの計画でも再現。R1b では直していない）。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

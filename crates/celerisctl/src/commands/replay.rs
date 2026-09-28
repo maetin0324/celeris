@@ -177,6 +177,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .expect("append created");

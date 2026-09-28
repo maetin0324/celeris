@@ -32,6 +32,8 @@ export const EXECUTION_PHASE_LABEL: Record<ExecutionPhase, string> = {
   verifying: "検証中",
   // celeris ADR-0074 D2.2（Phase F3 途中確認）。
   awaiting_human: "確認待ち",
+  // celeris ADR-0079 D5（Phase R1b）: 子 task だけを待つ親（ready のまま、lease なし）。
+  awaiting_children: "子 task の完了待ち",
 };
 
 export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
@@ -40,6 +42,7 @@ export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
   repairing: "warning",
   verifying: "teal",
   awaiting_human: "warning",
+  awaiting_children: "info",
 };
 
 export const WORK_UNIT_STATUS_TONE: Record<WorkUnitStatus, Tone> = {

@@ -408,6 +408,7 @@ async fn integrate(
                                     &child,
                                     vec![task_core::Event::Created {
                                         task: Box::new(child.clone()),
+                                        origin: None,
                                     }],
                                 )
                                 .map_err(store_problem)?;

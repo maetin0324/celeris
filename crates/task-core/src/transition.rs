@@ -56,6 +56,9 @@ pub enum Trigger {
     ProjectCancelled,
     /// ADR-0044 D6（Phase 55）: 途中目標の中止による連鎖。理由は `"milestone_cancelled"`。
     MilestoneCancelled,
+    /// ADR-0079 D4 / §7 R1b: 木の親 task が中止（または失敗）で終わったことによる、子 task（とその
+    /// subtree）の連鎖の中止。遷移は `Cancel` と同じで、理由は `"parent_cancelled"`。
+    ParentCancelled,
     /// ADR-0046 D5（Phase 59）: 担当が決まらない（matching の候補が 1 つも無い）タスク:
     /// `ready → blocked`、attempts 据え置き。人が組織を直すか担当を指定したら `Answer` で再開する
     /// （ADR-0021 の質問経路と同じ出口）。
@@ -114,6 +117,7 @@ impl Trigger {
             Trigger::Rereview => "rereview",
             Trigger::ProjectCancelled => "project_cancelled",
             Trigger::MilestoneCancelled => "milestone_cancelled",
+            Trigger::ParentCancelled => "parent_cancelled",
             Trigger::Unroutable => "unroutable",
             Trigger::InfraRequeue => "infra_requeue",
             Trigger::Continue { why } => why.name(),
@@ -183,7 +187,8 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
         Trigger::Cancel
         | Trigger::DependencyFailed
         | Trigger::ProjectCancelled
-        | Trigger::MilestoneCancelled => {
+        | Trigger::MilestoneCancelled
+        | Trigger::ParentCancelled => {
             if s.status.is_terminal() {
                 Err(invalid(s, t))
             } else {

@@ -111,7 +111,7 @@ pub fn adopt_plan_with_children(
         .unwrap_or_default();
     let pause_points_event = Event::PausePointsResolved {
         plan_id: plan_id.clone(),
-        phases: task_core::resolve_pause_points(&pause_after, &validated.spec.phases),
+        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
         source: pause_after_source,
     };
 
@@ -538,7 +538,7 @@ pub fn replan(
         .unwrap_or_default();
     extra_events.push(Event::PausePointsResolved {
         plan_id: new_plan_id.clone(),
-        phases: task_core::resolve_pause_points(&pause_after, &validated.spec.phases),
+        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
         source: pause_after_source,
     });
     // ADR-0074 D5.3（Phase F1）: 版の差分の件数を `reason` の後ろに決定的な形で足す（E5 の未実装

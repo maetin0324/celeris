@@ -157,6 +157,7 @@ model = "fake"
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();
@@ -478,6 +479,7 @@ fn expired_lease_is_reclaimed_and_task_completes() {
             task.id,
             &Event::Created {
                 task: Box::new(task.clone()),
+                origin: None,
             },
         )
         .unwrap();

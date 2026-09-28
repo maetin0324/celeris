@@ -72,6 +72,28 @@ pub fn resolve_pause_points(
     }
 }
 
+/// ADR-0079 D2 / D5（Phase R1b）: 計画の採用時に停止点を解決する。/1・/2 は [`resolve_pause_points`]
+/// と同じ（1 バイトも変えない）。/3 はそれに加えて `review: human` の段階を停止点にする（ADR-0074 D2 の
+/// `pause_after` をその段階に指定したのと同じ意味）。並びは段階の順、重複なし。
+pub fn resolve_plan_pause_points(
+    policy: &PausePolicy,
+    spec: &crate::execution_plan::ExecutionPlanSpec,
+) -> Vec<String> {
+    if spec.schema != crate::execution_plan::EXECUTION_PLAN_SCHEMA_V3 {
+        return resolve_pause_points(policy, &spec.phases);
+    }
+    let view = crate::execution_plan::internal_view(spec);
+    let from_policy = resolve_pause_points(policy, &view.phases);
+    spec.stages
+        .iter()
+        .filter(|st| {
+            st.review == crate::execution_plan::StageReview::Human
+                || from_policy.iter().any(|k| k == &st.key)
+        })
+        .map(|st| st.key.clone())
+        .collect()
+}
+
 /// D2.2: `Trigger::PhaseResume` の 2 つの選び方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseResumeMode {
@@ -366,6 +388,63 @@ mod tests {
                 title: "verify".into(),
             },
         ]
+    }
+
+    /// ADR-0079 D2 / D5（Phase R1b）: /3 の `review: human` の段階は停止点になり、`pause_after` の解決と
+    /// 和をとる（段階の順・重複なし）。/2 は従来の解決と同じ（`review` を持たない）。
+    #[test]
+    fn plan_pause_points_include_review_human_stages() {
+        let v3: crate::execution_plan::ExecutionPlanSpec =
+            serde_json::from_value(serde_json::json!({
+                "schema": crate::execution_plan::EXECUTION_PLAN_SCHEMA_V3,
+                "rationale": "r",
+                "stages": [
+                    {"key": "p1", "kind": "implement", "title": "Phase 1"},
+                    {"key": "p2", "kind": "design", "title": "Phase 2", "review": "human"},
+                    {"key": "p3", "kind": "implement", "title": "Phase 3"}
+                ],
+                "units": []
+            }))
+            .unwrap();
+        assert_eq!(
+            resolve_plan_pause_points(&PausePolicy::None, &v3),
+            vec!["p2".to_string()]
+        );
+        assert_eq!(
+            resolve_plan_pause_points(
+                &PausePolicy::After {
+                    phases: vec!["p1".into(), "p2".into()]
+                },
+                &v3
+            ),
+            vec!["p1".to_string(), "p2".to_string()]
+        );
+        assert_eq!(
+            resolve_plan_pause_points(&PausePolicy::EachPhase, &v3),
+            vec!["p1".to_string(), "p2".to_string()]
+        );
+        let v2 = crate::execution_plan::ExecutionPlanSpec {
+            schema: crate::execution_plan::EXECUTION_PLAN_SCHEMA_V2.into(),
+            rationale: "r".into(),
+            phases: phases(),
+            work_units: Vec::new(),
+            children: Vec::new(),
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
+        };
+        for policy in [
+            PausePolicy::None,
+            PausePolicy::EachPhase,
+            PausePolicy::After {
+                phases: vec!["build".into()],
+            },
+        ] {
+            assert_eq!(
+                resolve_plan_pause_points(&policy, &v2),
+                resolve_pause_points(&policy, &v2.phases)
+            );
+        }
     }
 
     #[test]

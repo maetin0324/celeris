@@ -326,7 +326,7 @@ mod tests {
             .into_iter()
             .map(|(_, e)| e)
             .collect();
-        assert!(matches!(&events[0], Event::Created { task } if task.id == new_task.id));
+        assert!(matches!(&events[0], Event::Created { task, .. } if task.id == new_task.id));
         assert!(matches!(&events[1], Event::Retried { from } if *from == original.id));
     }
 

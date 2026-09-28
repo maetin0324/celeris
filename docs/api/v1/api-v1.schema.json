@@ -1241,6 +1241,45 @@
         }
       ]
     },
+    "AwaitedChildView": {
+      "description": "ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。",
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Status"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "子の状態（作られていなければ `None`）。"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "子 task（まだ作られていない unit〈`max_parallel_child_tasks` の空き待ち〉は `None`）。"
+        },
+        "title": {
+          "type": "string"
+        },
+        "unit_key": {
+          "description": "親の計画の unit の key。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit_key",
+        "title"
+      ],
+      "type": "object"
+    },
     "BrowserCapability": {
       "additionalProperties": false,
       "properties": {
@@ -3404,6 +3443,16 @@
       ],
       "type": "string"
     },
+    "CreatedOrigin": {
+      "description": "ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。",
+      "oneOf": [
+        {
+          "const": "plan_unit",
+          "description": "親の計画（plan/3）の kind task の unit から daemon が作った子 task。",
+          "type": "string"
+        }
+      ]
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -4990,6 +5039,17 @@
         },
         {
           "properties": {
+            "origin": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CreatedOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から\ndaemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。"
+            },
             "task": {
               "$ref": "#/$defs/Task"
             },
@@ -6884,6 +6944,11 @@
           "const": "awaiting_human",
           "description": "ADR-0074 D2.2（Phase F3 途中確認）: 工程の後の途中確認で止まっている（`blocked` で、直前の\n遷移の reason が `awaiting_human`）。",
           "type": "string"
+        },
+        {
+          "const": "awaiting_children",
+          "description": "ADR-0079 D5（Phase R1b）: `ready` のまま、走れる自分の leaf が無く子 task（計画の kind task の\nunit）だけを待っている（dispatch されず lease も持たない。待っている子は\n`ExecutionView.awaiting_children`）。",
+          "type": "string"
         }
       ]
     },
@@ -7164,6 +7229,13 @@
     "ExecutionView": {
       "description": "D19/D20: タスク詳細の Execution 節そのもの。",
       "properties": {
+        "awaiting_children": {
+          "description": "ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。",
+          "items": {
+            "$ref": "#/$defs/AwaitedChildView"
+          },
+          "type": "array"
+        },
         "gate": {
           "anyOf": [
             {
@@ -7238,6 +7310,13 @@
         },
         "branch": {
           "description": "ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "child_task_id": {
+          "description": "ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。",
           "type": [
             "string",
             "null"
@@ -16309,6 +16388,13 @@
     "TaskExecutionView": {
       "description": "`GET /tasks/{id}/execution`: 計画・WU 一覧・run 一覧（checkpoint 込み）・metrics・\nExecutionPhase を 1 つにまとめた、Execution 節の専用の深掘りビュー\n（`TaskDetail.execution` は要約、こちらは全文）。",
       "properties": {
+        "awaiting_children": {
+          "description": "ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。",
+          "items": {
+            "$ref": "#/$defs/AwaitedChildView"
+          },
+          "type": "array"
+        },
         "gate": {
           "anyOf": [
             {
@@ -17961,6 +18047,13 @@
         },
         "branch": {
           "description": "ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`。WU の worktree を切ったときだけ）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "child_task_id": {
+          "description": "ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。",
           "type": [
             "string",
             "null"

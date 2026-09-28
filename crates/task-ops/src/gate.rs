@@ -30,7 +30,7 @@ pub struct TransitionResult {
 }
 
 /// `since_id`（遷移前の `latest_event_id()`）より後に追記されたイベントのうち、`subject` 以外の
-/// タスクに付いた `Transitioned{to: Cancelled, reason: "cancel" | "dependency_failed"}` を
+/// タスクに付いた `Transitioned{to: Cancelled, reason: "cancel" | "dependency_failed" | "parent_cancelled"}` を
 /// `TaskRef` にして返す（`docs/gui/api.md` §5.7）。
 fn collect_cascaded(
     store: &dyn TaskStore,
@@ -47,7 +47,9 @@ fn collect_cascaded(
         let Event::Transitioned { to, reason, .. } = &row.event else {
             continue;
         };
-        if *to != Status::Cancelled || (reason != "cancel" && reason != "dependency_failed") {
+        if *to != Status::Cancelled
+            || (reason != "cancel" && reason != "dependency_failed" && reason != "parent_cancelled")
+        {
             continue;
         }
         if !seen.insert(row.task_id) {

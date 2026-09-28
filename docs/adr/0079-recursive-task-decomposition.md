@@ -732,3 +732,70 @@ R1a（plan/3 の型と検証、`Task.tree`、migration 0031、Event、`[executio
 8. **daemon の挙動は変えない**: `enabled = false`（既定）では /3 は `TreeDisabled` の 1 件だけで拒否され（planner の出力・人の PUT とも）、他は
    何も変わらない。保険として、scheduler（`runnable_work_units`）は kind task の行を LLM run の候補にしない（子の生成は R1b）。
    `review: human` の段階を途中確認（`pause_after`）に解決するのは R1b 以降（R1a の採用では `PausePointsResolved` は段階を拾わない）。
+
+## 付記: R1b 実装時の逸脱・明確化（2026-09-28）
+
+R1b（kind task の unit からの子 task の生成、状態の写し、段階の完了、`awaiting_children`、subtree の中止の連鎖、木での委譲の禁止、
+`review: human` の段階の途中確認）で決めたこと。migration は足していない（schema 31 のまま）。
+
+1. **照合の場所**: 子の生成と状態の写しは dispatcher の tick の照合 `reconcile_tree_units`（`drain_completions` の後、dispatch の前）で行う。
+   終わっていない kind task の unit を持つ task だけを `TaskStore::tasks_with_open_task_units` で引く（木が無ければ空で何もしない）。
+   子の生成は `TaskStore::tree_child_create` の 1 トランザクション（子の挿入 + `Created{origin: plan_unit}`、unit の行を `running`・
+   `child_task_id` に、親の events に `WorkUnitTransitioned{reason: child_created}` と `ChildTaskCreated`。unit が今も `ready` で子を持たない
+   ことを同じトランザクションで確かめる〈冪等〉）。写しは子の遷移と同じトランザクションではなく次の tick の照合で、unit の遷移 1 件ごとに
+   `WorkUnitTransitioned`（reason `child_done` / `child_failed` / `child_cancelled`）を積む（replay は events だけから同じ行を作る）。
+2. **子の `cancelled` は unit を `failed` にする**（D4 (5)・§7 R1b (c) の「unit `cancelled`」からの逸脱）。`cancelled` の unit は計画の実行から
+   外れる（`WorkUnitStatus::is_active` でない）ので、段階の完了の判定（`settle_phase`）から消え、**段階が黙って完了してしまう**。D4 (5) の
+   「人が子だけを止めたときは親の replan を起こす」を満たすため、unit は `failed`（reason `child_cancelled`）にして既存の失敗の経路
+   （`PhaseSettle::Failure` → replan）に乗せる。親を中止したときの unit は従来どおり `cancelled`（下の 5.）。
+3. **子が `blocked`（質問・決定・人の確認）なら unit は `running` のまま**（D4 (5) のとおり）。その段階は完了しないが、同じ段階の他の unit・
+   兄弟の子は止めない。
+4. **段階の完了と統合 WU（R1c まで）**: 段階は leaf がすべて `done`・kind task の unit がすべて `done`（= 子が `done`）で揃い、統合 WU
+   `integrate-<stage>` が done になったら完了する。R1b の統合 WU は**子のブランチを merge しない**（kind task の unit は WU ブランチを持たないので
+   `phase_leaves` の merge の対象から外れ、検査にも `checks` を足さない）。leaf のブランチの merge と検査の再実行は今どおり。
+   `PhaseIntegrated.merged` に子の key はまだ出ない。子の成果を親ブランチに入れるのは R1c（D5・D6）。
+5. **subtree の中止の連鎖**: 親が `cancelled` **または `failed`** で終端になったら、store の遷移と同じトランザクションで、親の計画の unit から
+   作った子（`parent_id = 親` かつ `root_id` を持つ task）を新しい `Trigger::ParentCancelled`（遷移は `Cancel` と同じ、reason
+   `parent_cancelled`）で中止する。子の遷移がさらに孫へ連鎖する。親の失敗も含めたのは、親が終わった後に子の subtree が誰にも取り込まれずに
+   走り続けないため（D10）。走っている run は既存の `abort_stale_runs` が止める。子だけを待っていた親（run を持たない Ready）の unit は tick の照合が
+   `cancel_open_work_units`（reason `cancel`）で閉じ、`done` / `failed` の親に残った kind task の unit は reason `parent_terminal` で閉じる。
+   `TransitionResult.cascaded` は `parent_cancelled` も拾う。一時停止（subtree の pause）は R5a。
+6. **root の `tree` は書かない**: 子の `tree.root_id` は `task_core::tree::root_id_of(親)`（`tree` の無い root なら親の id）。root 自身は
+   `tree = None`・`tasks.root_id = NULL` のまま（R1a 付記 2. の未決を「書かない」で閉じる。D15「埋め戻さない」と同じ考え方で、既存の root の行を
+   書き換えない）。したがって `tasks.root_id = X` は X の子孫だけを返し、X 自身は含まない。
+7. **子の組み立て**（`task_ops::tree::build_child_task`）: 委譲の子と同じ `task_core::materialize_delegated_logging`（ADR-0062 B2 / D5: 担当が
+   `cluster:<id>` を持たなければ継いだ remote を local に落とす）を 1 件で通し、その上で `status = ready`・`budget = 親`・`labels = [child-<key>]`・
+   `skills`（unit、無ければ親）・`genre`（unit、無ければ親）・`repos`（unit の名前で親の repos を選ぶ。無ければ親と同じ）・`routing.features`
+   （unit の `features` をヒントに）・`tree = {root_id, depth + 1, parent_unit}` を書く。**workspace は親**（案件の workspace で上書きしない。D4 (4)）。
+   `execution_hint` は持たせない（子は最初の dispatch で自分の Complexity Gate を通る。深さの閾値と shadow の採用は R2a）。
+   `objective` の末尾に固定の書式で「## 木の中の位置（ADR-0079 D4）」（深さごとの祖先の題名と段階、この task の unit）と、回答済みの決定が
+   あれば「## 人の決定（ADR-0079 D7）」（`- <key> <question>: <label>（推奨どおり | 推奨と異なる） — <note>`）を足す。委譲の上限
+   （ADR-0016 D2 の `max_tree_depth` / `max_tree_runs`）は木の子には当てない（木の上限は R2a）。
+8. **採用前の検査**（planner の /3、`tree_plan_checks`）: kind task の unit の `repos` ⊆ 親の repos（親が持たなければ案件の primary）を検証し、
+   外れれば不正な試行（理由は進行に残り、planner の再試行へ）。部をまたぐ子は、組み立てた子で matching を引いて ADR-0074 F4b と同じ
+   `cross_department_questions`（`plan_children` から切り出した共通の関数）に通し、未認可なら計画を採用せず approvals で聞く（U-R2 のまま）。
+   子の生成の時点でも repos を見直し、外れていれば unit を `failed`（reason `child_create_failed`）にして理由を進行に残す。
+9. **`needs_decisions` の待ち**: unit の `needs_decisions` の決定が、親の節点が出した `decisions` の行（`task_id = 親`、`key`）で `answered` に
+   なるまで子を作らない（兄弟は止めない）。**計画の採用時に `DecisionRequested` を出すのは R3a**（R1b では出さない）ので、R1b の時点で
+   `needs_decisions` を持つ unit は R3a の回答の入口ができるまで待ち続ける。leaf の `needs_decisions` の待ちも R3a。
+10. **`max_parallel_child_tasks`**: 同じ親で `running` の kind task の unit の数が上限に達していれば、`ready` の unit は子を作らずに待つ
+    （`seq` 順に空いた分だけ作る）。
+11. **子だけを待つ親**: `settle_phase` と `reconcile_parallel_tasks` は kind task の unit の `running` を in-flight に数えない（子の写しであって
+    親の run ではない）。親の leaf の run が終わって残りが子だけなら `Continue{advance}` で `ready` に戻り、gate は `Skip`（lease なし）。
+    表示用の導出値 `ExecutionPhase::AwaitingChildren`（`ready` で、leaf に走れる・走っているものが無く、`ready` / `running` の kind task の
+    unit がある）と `ExecutionView.awaiting_children` / `TaskExecutionView.awaiting_children`（unit の key・子の id・題名・状態）を足した。
+    `WorkUnitView` / `ExecutionWorkUnitView` に `child_task_id`。GUI は `EXECUTION_PHASE_LABEL` に「子 task の完了待ち」を足しただけ（木のタブは R4b）。
+12. **/3 の scheduler**: dispatcher の `wu_dispatch_gate` と `parallel_mode` の「/2 か」の判定を `is_phased_schema`（/2・/3）に広げた
+    （/3 の段階は `internal_view` で /2 の工程と同じ行）。`running_tasks_with_runnable_work_units` は kind task の行を拾わない。/1・/2 は変わらない。
+13. **`review: human` の段階**: 採用（新規・replan）で `task_core::resolve_plan_pause_points`（/1・/2 は `resolve_pause_points` と同じ結果。/3 は
+    `pause_after` の解決に `review: human` の段階を足す）で `PausePointsResolved` に解決し、ADR-0074 D2.2 の `PhaseGate` にそのまま乗る。
+    **最後の段階の `review: human` は止めない**（統合の後は最終レビュー。ADR-0074 D1.6 の表と同じ）。途中報告の工程の題名は `internal_view` で
+    段階の題名を引く（子の要約の行は R4a）。
+14. **木での委譲の禁止**: `Task.tree` を持つ task の run には `available_genres` を渡さず、`delegate` の受け口も「木の節点では委譲できない」で拒む。
+    root（`tree` を持たない）の WU の run は ADR-0072 D22 のまま元から委譲できない。
+15. **`Event::Created.origin`**（`CreatedOrigin::PlanUnit`）を足した（省略可、`None` は出力しない。既存の JSON は 1 バイトも変わらない）。
+    `event.schema.json` / `api-v1.schema.json` / `gui/app/celeris/types.ts` を再生成。
+16. **replay**: 子の結び付き（`ChildTaskCreated` → `work_units.child_task_id`、R1a）と unit の写し（`WorkUnitTransitioned`）は events だけから
+    作り直せる（`celerisctl replay --check` の `work_units` 差分 0。壊した索引は `--apply` で戻る）。ただし `runs` の表は、偽のアダプタで走らせた
+    /2・/3 の計画で planner run の role と並列 WU の run の `work_unit_id` / `seq` が events から復元しきれない差が **R1b 以前から**ある
+    （木と無関係。R1b では直していない）。

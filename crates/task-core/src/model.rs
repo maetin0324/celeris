@@ -898,6 +898,14 @@ pub fn truncate_detail(detail: &str) -> (String, bool) {
     (detail[..end].to_string(), true)
 }
 
+/// ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CreatedOrigin {
+    /// 親の計画（plan/3）の kind task の unit から daemon が作った子 task。
+    PlanUnit,
+}
+
 /// DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の
 /// *結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。
 /// `JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。
@@ -910,6 +918,10 @@ pub enum Event {
     },
     Created {
         task: Box<Task>,
+        /// ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から
+        /// daemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<CreatedOrigin>,
     },
     Transitioned {
         from: Status,

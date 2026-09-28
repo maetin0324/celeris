@@ -365,12 +365,29 @@ pub fn plan_children(
     }
 
     // 部をまたぐか（担当は matching が決めるので、決まるはずのノードで判定する）。
+    let pending = cross_department_questions(store, parent, &tasks)?;
+    if pending.is_empty() {
+        Ok(ChildrenPlan::Ready(tasks))
+    } else {
+        Ok(ChildrenPlan::NeedsAuthorization(pending))
+    }
+}
+
+/// ADR-0074 F4b / ADR-0079 D4 (4): 子になる task（担当は matching が決める）のうち、親の担当と別の部署に
+/// 当たるものの認可を見る（SPEC §3.1 / ADR-0033 D4・D5）。まだ認可されていないものの秘書への質問文
+/// （重複なし）を返す。人が認めなかったものがあれば `Err`。親に担当が無い・部署が引けないなら空。
+/// ストアの読み取りだけ（LLM なし）。
+pub fn cross_department_questions(
+    store: &dyn TaskStore,
+    parent: &Task,
+    tasks: &[Task],
+) -> Result<Vec<String>, String> {
     let org = store.org_list().map_err(|e| e.to_string())?;
     let Some(from) = parent.assignee.as_deref() else {
-        return Ok(ChildrenPlan::Ready(tasks));
+        return Ok(Vec::new());
     };
     let Some(from_dept) = task_core::department_of(&org, from) else {
-        return Ok(ChildrenPlan::Ready(tasks));
+        return Ok(Vec::new());
     };
     let rules = store
         .standing_rule_list(Some(from))
@@ -379,7 +396,7 @@ pub fn plan_children(
         .approval_list(None, None, Some(from))
         .map_err(|e| e.to_string())?;
     let mut pending: Vec<String> = Vec::new();
-    for task in &tasks {
+    for task in tasks {
         let crate::matching::Assignment::Assigned { node, .. } =
             crate::matching::decide(&org, task)
         else {
@@ -415,11 +432,7 @@ pub fn plan_children(
             }
         }
     }
-    if pending.is_empty() {
-        Ok(ChildrenPlan::Ready(tasks))
-    } else {
-        Ok(ChildrenPlan::NeedsAuthorization(pending))
-    }
+    Ok(pending)
 }
 
 #[cfg(test)]

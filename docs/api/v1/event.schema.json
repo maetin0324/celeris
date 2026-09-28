@@ -441,6 +441,16 @@
       ],
       "type": "string"
     },
+    "CreatedOrigin": {
+      "description": "ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。",
+      "oneOf": [
+        {
+          "const": "plan_unit",
+          "description": "親の計画（plan/3）の kind task の unit から daemon が作った子 task。",
+          "type": "string"
+        }
+      ]
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -769,6 +779,17 @@
         },
         {
           "properties": {
+            "origin": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CreatedOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から\ndaemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。"
+            },
             "task": {
               "$ref": "#/$defs/Task"
             },

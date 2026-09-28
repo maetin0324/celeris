@@ -305,7 +305,7 @@ mod tests {
         let events = store.events_for(task.id).expect("events_for");
         assert_eq!(events.len(), 1);
         match &events[0].1 {
-            Event::Created { task: created } => assert_eq!(created.id, task.id),
+            Event::Created { task: created, .. } => assert_eq!(created.id, task.id),
             other => panic!("expected Created event, got {other:?}"),
         }
     }

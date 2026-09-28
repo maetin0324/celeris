@@ -478,6 +478,7 @@ pub fn create_support_task(
     task.status = Status::Ready;
     let extra_events = vec![task_core::Event::Created {
         task: Box::new(task.clone()),
+        origin: None,
     }];
     insert_task(store, task, extra_events)
 }
@@ -867,7 +868,7 @@ mod tests {
         let events = store.events_for(task.id).expect("events_for");
         assert_eq!(events.len(), 1);
         match &events[0].1 {
-            Event::Created { task: created } => assert_eq!(created.id, task.id),
+            Event::Created { task: created, .. } => assert_eq!(created.id, task.id),
             other => panic!("expected Created event, got {other:?}"),
         }
     }

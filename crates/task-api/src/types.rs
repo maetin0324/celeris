@@ -1314,6 +1314,9 @@ pub struct WorkUnitView {
     /// ADR-0074 D1.5: 今この WU を実行している run（WU の lease の保持者）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running_run_id: Option<String>,
+    /// ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_task_id: Option<String>,
 }
 
 impl From<task_core::WorkUnitRow> for WorkUnitView {
@@ -1345,6 +1348,7 @@ impl From<task_core::WorkUnitRow> for WorkUnitView {
             } else {
                 None
             },
+            child_task_id: row.child_task_id,
         }
     }
 }
@@ -1911,6 +1915,9 @@ pub struct TaskExecutionView {
     /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認で止まっているときだけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_checkpoint: Option<task_ops::view::PhaseCheckpointView>,
+    /// ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaiting_children: Vec<task_ops::view::AwaitedChildView>,
 }
 
 /// `GET /metrics/execution` の 1 グループ（`group_by` の値ごと）。

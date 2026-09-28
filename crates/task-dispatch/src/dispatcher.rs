@@ -1655,6 +1655,13 @@ impl StoreSink {
         if task_core::is_conversation(&parent) {
             return Err("対話では委譲できない。返事に『次にやりたいこと』として書け".to_string());
         }
+        // ADR-0079 D4 (4)（Phase R1b）: 木の節点（計画の unit から作った子 task）は委譲を使わない。
+        if parent.tree.is_some() {
+            return Err(
+                "木の節点（ADR-0079）では委譲できない。子 task は計画の kind task の unit から作る"
+                    .to_string(),
+            );
+        }
         // ADR-0033 D4 / D5 / SPEC §3.1: 部をまたぐ連携は秘書が認める。別の部の課を `assignee` にした提案は
         // **子を作らずに**質問（`approvals` の 1 行になる固定の形）を残し、run の終わりに `Question` 終端へ
         // 回す。既に人が答えていれば（`once` / `standing`）その場で通す。判定は組織図と `approvals` /
@@ -3198,6 +3205,8 @@ impl Dispatcher {
         report.finished = finished;
         report.reviewed = reviewed;
         self.settle_awaiting_children()?;
+        // ADR-0079 §7 R1b: 木の照合（子の状態の写しと、ready の kind task の unit からの子 task の生成）。
+        self.reconcile_tree_units()?;
         // ADR-0077 D2: `auto_advance` の案件で、`done` になったマイルストーン Task の途中目標を `reached` に。
         match task_ops::project_plan::auto_reach_done_milestones(self.store.as_ref()) {
             Ok(reached) => {
@@ -6023,6 +6032,22 @@ impl Dispatcher {
                         now,
                     )
                 };
+                // ADR-0079 D2 / D4 (4)（Phase R1b）: /3 の kind task の unit は、repos が親の部分集合で
+                // あること、部をまたぐ子の認可（ADR-0074 F4b と同じ規則）を採用の前に確かめる。
+                let children = match children {
+                    Ok(task_ops::delegate::ChildrenPlan::Ready(c))
+                        if validated.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3 =>
+                    {
+                        self.tree_plan_checks(task, &validated.spec, now)
+                            .map(|plan| match plan {
+                                task_ops::delegate::ChildrenPlan::Ready(_) => {
+                                    task_ops::delegate::ChildrenPlan::Ready(c)
+                                }
+                                other => other,
+                            })
+                    }
+                    other => other,
+                };
                 let children = match children {
                     Ok(task_ops::delegate::ChildrenPlan::Ready(children)) => children,
                     Ok(task_ops::delegate::ChildrenPlan::NeedsAuthorization(questions)) => {
@@ -8427,7 +8452,8 @@ impl Dispatcher {
         }
         // ADR-0074 D1.3（Phase F2b）: v2 の計画は工程ごとの scheduler（`settle_phase` /
         // `runnable_work_units`）で決める。v1 は従来どおり（`next_work_unit`）。
-        let v2 = active_plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
+        // ADR-0079（Phase R1b）: /3 も段階ごとの scheduler（`internal_view` で /2 の工程と同じ行）。
+        let v2 = task_core::is_phased_schema(&active_plan.spec.schema);
         let mut units = self.store.work_units_for(task_id)?;
         // ADR-0074 D3.7（Phase F4b (f)）: `child:<key>` の依存を子 Task の状態で決定的に解く。
         let (changed, waiting_on_children) = self.resolve_child_dependencies(task_id, &units)?;
@@ -8690,7 +8716,7 @@ impl Dispatcher {
         let Some(plan) = self.store.execution_plan_active(task.id)? else {
             return Ok(serial(None));
         };
-        if plan.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V2 {
+        if !task_core::is_phased_schema(&plan.spec.schema) {
             return Ok(serial(None));
         }
         match &task.workspace {
@@ -9935,16 +9961,16 @@ impl Dispatcher {
         run: &IntegrationRun,
         events: &[(u64, Event)],
     ) -> task_core::PhaseReport {
+        // ADR-0079（Phase R1b）: /3 の段階は `internal_view` で /2 の工程に写して読む。
+        let view = task_core::internal_view(&active.spec);
         let phase_title_of = |key: &str| -> String {
-            active
-                .spec
-                .phases
+            view.phases
                 .iter()
                 .find(|p| p.key == key)
                 .map(|p| p.title.clone())
                 .unwrap_or_else(|| key.to_string())
         };
-        let phase_order: Vec<&str> = active.spec.phases.iter().map(|p| p.key.as_str()).collect();
+        let phase_order: Vec<&str> = view.phases.iter().map(|p| p.key.as_str()).collect();
         let current_idx = phase_order.iter().position(|k| *k == phase).unwrap_or(0);
 
         // 済んだ工程の一覧（現在の工程より前の工程だけ。工程の障壁により、それらは既に統合済み）。
@@ -10271,10 +10297,11 @@ impl Dispatcher {
                 continue;
             }
             let units = self.store.work_units_for(task.id)?;
-            if units
-                .iter()
-                .any(|u| u.status == task_core::WorkUnitStatus::Running)
-            {
+            // ADR-0079 D5（Phase R1b）: kind task の unit の `running` は子 task の写し（この Task の run ではない）。
+            if units.iter().any(|u| {
+                u.status == task_core::WorkUnitStatus::Running
+                    && u.kind != task_core::WorkUnitKind::Task
+            }) {
                 continue;
             }
             tracing::warn!(task_id = %task.id, "running v2 task has no work unit or integration in flight; returning it to ready (ADR-0074 D1.7)");
@@ -10335,6 +10362,291 @@ impl Dispatcher {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// ADR-0079 D2 / D4 (4)（Phase R1b）: /3 の計画の採用前の検査。kind task の unit の `repos` が親の
+    /// repos の部分集合か（外れれば `Err` = 不正な試行）、部をまたぐ子が認可済みか（未認可なら
+    /// `NeedsAuthorization`、人が認めなかったなら `Err`）。子はまだ作らない（unit が ready になったとき）。
+    fn tree_plan_checks(
+        &self,
+        task: &Task,
+        spec: &task_core::ExecutionPlanSpec,
+        now: OffsetDateTime,
+    ) -> Result<task_ops::delegate::ChildrenPlan, String> {
+        task_ops::tree::check_task_unit_repos(self.store.as_ref(), task, spec)?;
+        let mut tentative = Vec::new();
+        for unit in spec.units.iter().filter(|u| u.is_task()) {
+            let (child, _) = task_ops::tree::build_child_task(
+                self.store.as_ref(),
+                task,
+                "",
+                unit,
+                &[],
+                &self.config.roles,
+                &self.config.genres,
+                now,
+            )?;
+            tentative.push(child);
+        }
+        let pending =
+            task_ops::delegate::cross_department_questions(self.store.as_ref(), task, &tentative)?;
+        if pending.is_empty() {
+            Ok(task_ops::delegate::ChildrenPlan::Ready(Vec::new()))
+        } else {
+            Ok(task_ops::delegate::ChildrenPlan::NeedsAuthorization(
+                pending,
+            ))
+        }
+    }
+
+    /// ADR-0079 D4 (4)・(5) / D5（Phase R1b）: 木の照合（tick ごと。決定的、LLM なし）。終わっていない
+    /// kind task の unit を持つ Task ごとに:
+    /// 1. 子の状態を unit に写す（子 done → unit done、子 failed / cancelled → unit failed。非終端は running の
+    ///    まま）。unit が done になったら、それを待っていた unit を ready にする。
+    /// 2. ready の kind task の unit（依存は `newly_ready` が満たした、段階は現在の段階）で、`needs_decisions`
+    ///    がすべて回答済みで、`max_parallel_child_tasks` に空きがあるものから子 task を 1 トランザクションで作る。
+    ///
+    /// 親の状態は変えない（子だけを待つ親は `Ready` のまま `WuDispatchGate::Skip`、段階が揃えば次の
+    /// dispatch で統合）。親が終端なら何もしない（中止の連鎖は store が子へ伝える）。
+    fn reconcile_tree_units(&mut self) -> Result<(), DispatchError> {
+        let now = OffsetDateTime::now_utc();
+        for task_id in self.store.tasks_with_open_task_units()? {
+            let Some(parent) = self.store.get(task_id)? else {
+                continue;
+            };
+            if parent.status.is_terminal() {
+                // 子だけを待っていた（run の無い）親の中止: 未完了の unit を cancelled にする（子は store の
+                // 連鎖で既に中止済み）。done / failed の親の残りの kind task の unit も閉じる（照合の対象から外す）。
+                if parent.status == Status::Cancelled {
+                    self.cancel_open_work_units(&parent)?;
+                } else {
+                    self.close_open_task_units(&parent)?;
+                }
+                continue;
+            }
+            let Some(plan) = self.store.execution_plan_active(task_id)? else {
+                continue;
+            };
+            if plan.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3 {
+                continue;
+            }
+            // 1. 子の状態の写し。
+            let units = self.store.work_units_for(task_id)?;
+            let mut changed = false;
+            for u in units.iter().filter(|u| {
+                u.kind == task_core::WorkUnitKind::Task
+                    && u.status == task_core::WorkUnitStatus::Running
+            }) {
+                let Some(child_id) = u
+                    .child_task_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<TaskId>().ok())
+                else {
+                    continue;
+                };
+                let Some(child) = self.store.get(child_id)? else {
+                    continue;
+                };
+                let Some((to, reason)) = task_ops::tree::unit_mirror(child.status) else {
+                    continue;
+                };
+                let mut row = u.clone();
+                row.status = to;
+                row.blocked_reason = None;
+                row.clear_lease();
+                row.updated_at = rfc3339(now);
+                self.store.work_unit_transition(
+                    task_id,
+                    row,
+                    Event::WorkUnitTransitioned {
+                        work_unit_id: u.id.clone(),
+                        key: u.key.clone(),
+                        from: u.status,
+                        to,
+                        reason: reason.to_string(),
+                        run_id: None,
+                    },
+                )?;
+                tracing::info!(%task_id, work_unit = %u.key, %child_id, child_status = ?child.status, to = ?to, "task unit mirrors its child task (ADR-0079 D4 (5))");
+                changed = true;
+            }
+            let units = if changed {
+                let units = self.store.work_units_for(task_id)?;
+                // 子の done で依存が満たされた unit を ready に（段階の障壁は `newly_ready` が見る）。
+                for id in task_core::newly_ready(&units) {
+                    let Some(u) = units.iter().find(|u| u.id == id) else {
+                        continue;
+                    };
+                    let mut row = u.clone();
+                    row.status = task_core::WorkUnitStatus::Ready;
+                    row.updated_at = rfc3339(now);
+                    self.store.work_unit_transition(
+                        task_id,
+                        row,
+                        Event::WorkUnitTransitioned {
+                            work_unit_id: u.id.clone(),
+                            key: u.key.clone(),
+                            from: task_core::WorkUnitStatus::Pending,
+                            to: task_core::WorkUnitStatus::Ready,
+                            reason: "dependency_ready".to_string(),
+                            run_id: None,
+                        },
+                    )?;
+                }
+                self.store.work_units_for(task_id)?
+            } else {
+                units
+            };
+            // 2. 子 task の生成。
+            let limit = self
+                .config
+                .execution
+                .limits
+                .tree
+                .max_parallel_child_tasks
+                .max(1);
+            let mut open_children = units
+                .iter()
+                .filter(|u| {
+                    u.kind == task_core::WorkUnitKind::Task
+                        && u.status == task_core::WorkUnitStatus::Running
+                })
+                .count();
+            // 現在の段階（終端でない行のうち seq 最小の行の段階。`runnable_work_units` と同じ）。
+            let current_stage = units
+                .iter()
+                .filter(|u| !u.status.is_terminal())
+                .min_by_key(|u| u.seq)
+                .and_then(|u| u.phase.clone());
+            let mut ready: Vec<&task_core::WorkUnitRow> = units
+                .iter()
+                .filter(|u| {
+                    u.kind == task_core::WorkUnitKind::Task
+                        && u.status == task_core::WorkUnitStatus::Ready
+                        && u.child_task_id.is_none()
+                        && u.phase == current_stage
+                })
+                .collect();
+            ready.sort_by_key(|u| u.seq);
+            for u in ready {
+                if open_children >= limit {
+                    break;
+                }
+                let Some(unit_spec) = plan.spec.units.iter().find(|s| s.key == u.key) else {
+                    continue;
+                };
+                let Some(decisions) = task_ops::tree::answered_decisions(
+                    self.store.as_ref(),
+                    task_id,
+                    &u.needs_decisions,
+                )
+                .map_err(ops_to_store)?
+                else {
+                    // 答えの無い決定を待つ（この unit だけ。兄弟は止めない。ADR-0079 D7）。
+                    continue;
+                };
+                match task_ops::tree::build_child_task(
+                    self.store.as_ref(),
+                    &parent,
+                    &plan.id,
+                    unit_spec,
+                    &decisions,
+                    &self.config.roles,
+                    &self.config.genres,
+                    now,
+                ) {
+                    Ok((child, downgrades)) => {
+                        for reason in &downgrades {
+                            tracing::info!(%task_id, child_id = %child.id, %reason, "workspace downgraded to local (ADR-0062 B2)");
+                        }
+                        let depth = task_core::tree::depth_of(&child);
+                        let mut row = u.clone();
+                        row.status = task_core::WorkUnitStatus::Running;
+                        row.blocked_reason = None;
+                        row.child_task_id = Some(child.id.to_string());
+                        row.updated_at = rfc3339(now);
+                        let events = vec![
+                            Event::WorkUnitTransitioned {
+                                work_unit_id: u.id.clone(),
+                                key: u.key.clone(),
+                                from: task_core::WorkUnitStatus::Ready,
+                                to: task_core::WorkUnitStatus::Running,
+                                reason: "child_created".to_string(),
+                                run_id: None,
+                            },
+                            Event::ChildTaskCreated {
+                                plan_id: plan.id.clone(),
+                                unit_key: u.key.clone(),
+                                child_task_id: child.id,
+                                depth,
+                            },
+                        ];
+                        if self.store.tree_child_create(task_id, &child, row, events)? {
+                            tracing::info!(%task_id, work_unit = %u.key, child_id = %child.id, depth, "child task created from a task unit (ADR-0079 D4 (4))");
+                            open_children += 1;
+                        }
+                    }
+                    Err(reason) => {
+                        tracing::warn!(%task_id, work_unit = %u.key, %reason, "could not create the child task; the unit fails (ADR-0079 D4 (4))");
+                        let mut row = u.clone();
+                        row.status = task_core::WorkUnitStatus::Failed;
+                        row.updated_at = rfc3339(now);
+                        self.store.work_unit_transition(
+                            task_id,
+                            row,
+                            Event::WorkUnitTransitioned {
+                                work_unit_id: u.id.clone(),
+                                key: u.key.clone(),
+                                from: task_core::WorkUnitStatus::Ready,
+                                to: task_core::WorkUnitStatus::Failed,
+                                reason: "child_create_failed".to_string(),
+                                run_id: None,
+                            },
+                        )?;
+                        self.store.append_event(
+                            task_id,
+                            &Event::worker_progress(
+                                String::new(),
+                                format!("子 task「{}」を作れませんでした: {reason}", u.spec.title),
+                            ),
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// ADR-0079（Phase R1b）: 終端（done / failed）になった親に残った kind task の unit を cancelled にする
+    /// （`parent_terminal`。子は store の連鎖で中止済みか終端）。
+    fn close_open_task_units(&self, task: &Task) -> Result<(), DispatchError> {
+        let units = self.store.work_units_for(task.id)?;
+        let mut rows = Vec::new();
+        let mut events = Vec::new();
+        for u in units
+            .iter()
+            .filter(|u| u.kind == task_core::WorkUnitKind::Task && !u.status.is_terminal())
+        {
+            let mut row = u.clone();
+            row.status = task_core::WorkUnitStatus::Cancelled;
+            row.blocked_reason = None;
+            row.clear_lease();
+            row.updated_at = rfc3339(OffsetDateTime::now_utc());
+            events.push(Event::WorkUnitTransitioned {
+                work_unit_id: u.id.clone(),
+                key: u.key.clone(),
+                from: u.status,
+                to: task_core::WorkUnitStatus::Cancelled,
+                reason: "parent_terminal".to_string(),
+                run_id: None,
+            });
+            rows.push(row);
+        }
+        if !rows.is_empty() {
+            self.store
+                .work_units_apply(task.id, Vec::new(), rows, events)?;
         }
         Ok(())
     }
@@ -11625,7 +11937,10 @@ impl Dispatcher {
         // （プロンプト側の条件と同じ。`claude_code::build_prompt` 参照）。
         // ADR-0033 D4 / Phase 28: 対話 run は委譲できないので渡さない（`delegate.json` を書かせない）。
         let is_conv = task_core::is_conversation(task);
+        // ADR-0079 D4 (4)（Phase R1b）: 木の節点（計画の unit から作った子 task）の run は委譲できない
+        // （子を作る入口は計画の kind task の unit だけ）。
         let available_genres = if !is_conv
+            && task.tree.is_none()
             && matches!(
                 task.kind,
                 TaskKind::Execute | TaskKind::Approval | TaskKind::Plan
@@ -17098,7 +17413,9 @@ mod tests {
         assert_eq!(children.len(), 3);
         for c in &children {
             let ev = store.events_for(c.id).unwrap();
-            assert!(matches!(&ev[0].1, Event::Created { task } if task.status == Status::Draft));
+            assert!(
+                matches!(&ev[0].1, Event::Created { task, .. } if task.status == Status::Draft)
+            );
             assert!(
                 matches!(&ev[1].1, Event::Transitioned { from: Status::Draft, to: Status::Ready, reason } if reason == "accept")
             );
@@ -31050,6 +31367,7 @@ mod tests {
                 task_id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();
@@ -31118,6 +31436,7 @@ mod tests {
                 task_id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();
@@ -34556,6 +34875,10 @@ mod tests {
     /// Phase F5-fix7: 依存 WU のブランチが無いときの基点と、準備の失敗で黙って止まらないこと
     /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。
     mod work_unit_dependency_base;
+
+    /// ADR-0079 §7 R1b: plan/3 の kind task の unit から子 task を作り、状態を写し、段階の完了・
+    /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。
+    mod tree;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

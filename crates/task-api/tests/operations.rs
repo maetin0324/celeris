@@ -439,7 +439,7 @@ async fn retry_duplicates_a_failed_task_and_rewires_dependents() {
         .into_iter()
         .map(|(_, e)| e)
         .collect();
-    assert!(matches!(&events[0], Event::Created { task } if task.id == new_id));
+    assert!(matches!(&events[0], Event::Created { task, .. } if task.id == new_id));
     assert!(matches!(&events[1], Event::Retried { from } if *from == original.id));
 
     let draft_after = env

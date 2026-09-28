@@ -314,7 +314,12 @@ pub enum PhaseSettle {
 ///   統合の順に見る。人の入力（question）を先にするのは、replan で質問を捨てないため。
 pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
     let active: Vec<&WorkUnitRow> = units.iter().filter(|u| u.status.is_active()).collect();
-    if active.iter().any(|u| u.status == WorkUnitStatus::Running) {
+    // ADR-0079 D5（Phase R1b）: kind task の unit の `running` は子 task が走っていることの写しで、この
+    // Task の run ではない（親は lease を持たずに待つ）。in-flight には数えない。
+    if active
+        .iter()
+        .any(|u| u.status == WorkUnitStatus::Running && u.kind != task_core::WorkUnitKind::Task)
+    {
         return PhaseSettle::Wait;
     }
     let in_play: Vec<&WorkUnitRow> = active

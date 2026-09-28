@@ -262,6 +262,11 @@ export type Event =
       type: "browser_updated";
     }
   | {
+      /**
+       * ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から
+       * daemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。
+       */
+      origin?: CreatedOrigin | null;
       task: Task;
       type: "created";
     }
@@ -659,6 +664,10 @@ export type Event =
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
 /**
+ * ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。
+ */
+export type CreatedOrigin = "plan_unit";
+/**
  * DESIGN §5.3/§5.7 の `Check` 種別。
  */
 export type Check =
@@ -1044,7 +1053,8 @@ export type RepoRun = "auto" | "host" | "container";
  * （`kind = repair`）か `executing`、無ければ（計画はあるのに走っている WU が無い）planner run が
  * 動いていると見なして `planning`。それ以外（計画が無い・終端）は `None`。
  */
-export type ExecutionPhase = ("planning" | "executing" | "repairing" | "verifying") | "awaiting_human";
+export type ExecutionPhase =
+  ("planning" | "executing" | "repairing" | "verifying") | "awaiting_human" | "awaiting_children";
 /**
  * ADR-0070 D1（Phase 116）: `failed` の分類。`infra` はレース・切替・供給側都合、`work` はレビュー
  * 不合格やワーカー自身の明示的な失敗（人が中身を見て判断すべきもの）。
@@ -4457,6 +4467,10 @@ export interface WorkUnitView {
    * ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`。WU の worktree を切ったときだけ）。
    */
   branch?: string | null;
+  /**
+   * ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
+   */
+  child_task_id?: string | null;
   continuations: number;
   created_at: string;
   depends_on: string[];
@@ -7151,6 +7165,10 @@ export interface DelegatedView {
  */
 export interface ExecutionView {
   /**
+   * ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。
+   */
+  awaiting_children?: AwaitedChildView[];
+  /**
    * D13: Complexity Gate の判定（gate が判定していない Task には無い）。
    */
   gate?: ExecutionGateDecision | null;
@@ -7164,6 +7182,24 @@ export interface ExecutionView {
    * 計画が無い Task（D20:「直接実行」の 1 行）は `None`。
    */
   plan?: ExecutionPlanOverview | null;
+}
+/**
+ * ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
+ */
+export interface AwaitedChildView {
+  /**
+   * 子の状態（作られていなければ `None`）。
+   */
+  status?: Status | null;
+  /**
+   * 子 task（まだ作られていない unit〈`max_parallel_child_tasks` の空き待ち〉は `None`）。
+   */
+  task_id?: TaskId | null;
+  title: string;
+  /**
+   * 親の計画の unit の key。
+   */
+  unit_key: string;
 }
 /**
  * D19: Task 単位の実行メトリクス（`GET /tasks/{id}/execution` と `GET /metrics/execution` の材料）。
@@ -7331,6 +7367,10 @@ export interface ExecutionWorkUnitView {
    * ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`）。
    */
   branch?: string | null;
+  /**
+   * ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
+   */
+  child_task_id?: string | null;
   continuations: number;
   created_at: string;
   depends_on: string[];
@@ -7522,6 +7562,10 @@ export interface EditResult {
  * ADR-0072 D19（Phase E5）: `GET /tasks/{id}/execution` と `GET /metrics/execution`。
  */
 export interface TaskExecutionView {
+  /**
+   * ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。
+   */
+  awaiting_children?: AwaitedChildView[];
   /**
    * D13: Complexity Gate の判定（無ければ gate 対象外か、まだ判定していない）。
    */

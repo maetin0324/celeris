@@ -44,7 +44,7 @@ fn replay_status_and_attempts(events: &[(u64, Event)]) -> Option<(Status, u32)> 
     let mut state: Option<(Status, u32)> = None;
     for (_, event) in events {
         match event {
-            Event::Created { task } => {
+            Event::Created { task, .. } => {
                 state = Some((task.status, task.attempts));
             }
             Event::Transitioned { to, reason, .. } => {
@@ -1038,6 +1038,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .expect("append created");
@@ -1060,6 +1061,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .expect("append created");
@@ -1094,6 +1096,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .expect("append created");
@@ -1135,6 +1138,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .expect("append created");
@@ -1167,6 +1171,7 @@ mod tests {
                     task.id,
                     &Event::Created {
                         task: Box::new(task.clone()),
+                        origin: None,
                     },
                 )
                 .expect("append created");
@@ -1208,6 +1213,7 @@ mod tests {
                 &task,
                 vec![Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 }],
             )
             .expect("create");
@@ -2054,6 +2060,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();

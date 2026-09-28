@@ -1656,3 +1656,7 @@ run の壁時計合計 401 分。lane: cheap/gpt-6-luna 10、standard/claude-opu
   `replay --check` の修復か一回限りの UPDATE を人が選ぶ。
 - P-F5-1-4c: task が failed になったとき、成果 branch がゲートを通っていれば「人が統合できる」状態を GUI に出す（今回は人が git で判断した）。
 - P-F5-1-4d: Sonnet が制限中でも cheap lane に振られて 55 秒で失敗した。quota の `resets_at` を見て provider を避ける（F1 の quota-aware 規則の拡張）。
+
+**配送**: release `57efebe4fb7d`（main 57efebe = G3-fix1 95c7267 + dogfood 成果の統合 ebe7008 + この記録）。ゲート: fmt / test / clippy 0、
+GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48Z）。verify ok=true live_ok=true schema 28。2026-09-28 11:02:23Z にライブ昇格
+（backup 20260928-110212-pre-57efebe4fb7d）。これで本番は F5-fix2 / fix3 / fix4 / G3-fix1 と dogfood 4 回目の 3 成果を含む。

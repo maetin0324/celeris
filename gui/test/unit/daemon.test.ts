@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
 import { runReplay } from "~/celeris/route-actions.server";
 import type { ConfigView, DaemonView, ReplayReport } from "~/celeris/types";
-import { loadDaemon } from "~/routes/daemon";
+import { loadDaemon, scratchLine } from "~/routes/daemon";
 import { type MockCeleris, sendJson, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;
@@ -137,5 +137,48 @@ describe("runReplay", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) throw new Error("expected ok:false");
     expect(outcome.error.code).toBe("unavailable");
+  });
+});
+
+describe("scratchLine", () => {
+  const G = 1024 ** 3;
+  const base = {
+    schema: "celeris.scratch-status/1",
+    enabled: true,
+    disabled_reason: null,
+    dir: "/var/lib/celeris/scratch",
+    observed_at: "2026-09-28T00:00:00Z",
+    fs_total_bytes: 252 * G,
+    fs_free_bytes: 91 * G,
+    targets_bytes: 62 * G,
+    pinned_bytes: 18 * G,
+    targets_max_bytes: 100 * G,
+    total_max_bytes: 150 * G,
+    effective_max_bytes: 150 * G,
+    high_watermark: 0.9,
+    low_watermark: 0.7,
+    pressure: "none",
+    owners: [],
+    legacy: [],
+    last_gc: null,
+  };
+
+  it("summarises usage, pinned and the effective limit in one line", () => {
+    expect(scratchLine(base)).toEqual({
+      text: "scratch 62 GB / 100 GB（pinned 18 GB、実効上限 150 GB）",
+      warn: false,
+    });
+  });
+
+  it("warns when the watermark is reached or the effective limit shrank", () => {
+    expect(scratchLine({ ...base, pressure: "high_watermark", targets_bytes: 95 * G }).warn).toBe(true);
+    expect(scratchLine({ ...base, pressure: "high_watermark" }).text).toContain("high_watermark");
+    expect(scratchLine({ ...base, effective_max_bytes: 106 * G }).warn).toBe(true);
+  });
+
+  it("shows why scratch is disabled", () => {
+    const line = scratchLine({ ...base, enabled: false, disabled_reason: "scratch dir /x is on NFS" });
+    expect(line.text).toBe("scratch 無効（scratch dir /x is on NFS）");
+    expect(line.warn).toBe(true);
   });
 });

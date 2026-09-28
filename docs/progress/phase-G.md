@@ -125,3 +125,15 @@ ADR-0075 の状態を Accepted にした。作業は git worktree の中（main 
   disabled_scratch_makes_lease_fail_so_release_sh_falls_back}` → 4 passed。`bash scripts/selfdeploy/tests/release_uses_scratch_lease.sh` →
   `release_uses_scratch_lease: ok`（偽の celerisctl / cargo / pnpm。lease → touch → release の順、gate の `CARGO_TARGET_DIR` が scratch、
   lease 失敗で `$SD_RELEASES/.cargo-target`）。
+
+### G1 checkpoint 4: metrics / API / GUI の 1 行、schema と生成型（完了 2026-09-28）
+
+- `task_ops::daemon::{ScratchStatus, ScratchOwnerView, ScratchLegacyView, ScratchGcView, ScratchGcRemovedView}`（`celeris.scratch-status/1`）と
+  `DaemonSnapshot.scratch`（`#[serde(default)]`）。`GET /api/v1/metrics/scratch` はスナップショットの `scratch` を返す（無ければ 404
+  `scratch_unavailable`）。`celerisctl scratch status --json` は同じ型を出す（daemon の直近の GC は持たないので `last_gc` は null）。
+- `docs/api/v1/api-v1.schema.json`（`metrics_scratch` と `DaemonSnapshot.scratch`）と `gui/app/celeris/types.ts` を再生成して commit。
+- GUI: `gui/app/routes/daemon.tsx` に `scratchLine`（「scratch 62 GB / 100 GB（pinned 18 GB、実効上限 150 GB）」。pressure が none 以外・実効上限の
+  縮小・NFS で無効のときだけ注意色）を 1 行。
+- テスト: `task_api::handlers::tests::metrics_scratch_matches_the_status_schema`（応答が `ScratchStatus` そのもの、キーが committed schema の
+  properties と一致、スナップショット無しで 404）、`gui/test/unit/daemon.test.ts` の `scratchLine` 3 件。
+- `cd gui && corepack pnpm@11.27.0 typecheck && lint && test && build` → exit 0、Test Files 73 passed / Tests 1116 passed。

@@ -1061,6 +1061,7 @@ export interface ApiV1Schema {
   message_accepted: MessageAccepted;
   message_list: MessageList;
   message_post: MessagePostBody;
+  metrics_scratch: ScratchStatus1;
   milestone_create: MilestoneCreateBody;
   milestone_decide: MilestoneDecideBody;
   milestone_decided: MilestoneDecided;
@@ -2327,6 +2328,11 @@ export interface DaemonSnapshot {
    * ディスパッチャは知らない）。ディスパッチャが送るスナップショットでは常に `None`。
    */
   reports?: ReportsLive | null;
+  /**
+   * ADR-0075 D6（Phase G1）: scratch pool の観測値（`GET /api/v1/metrics/scratch` と `celerisctl scratch status --json`
+   * と同じ `celeris.scratch-status/1`）。古いスナップショットと scratch を持たない構成では `None`。
+   */
+  scratch?: ScratchStatus | null;
   started_at: string;
   tick_ms: number;
   ticks: number;
@@ -2584,6 +2590,154 @@ export interface ReportsLive {
    * 秘書レベル（`level = 0`）の未読の件数。
    */
   unread_secretary: number;
+}
+/**
+ * ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。
+ * 容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。
+ */
+export interface ScratchStatus {
+  /**
+   * `[scratch] dir`。
+   */
+  dir: string;
+  /**
+   * 無効化した理由（NFS 上など）。
+   */
+  disabled_reason?: string | null;
+  /**
+   * 実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。
+   */
+  effective_max_bytes: number;
+  /**
+   * scratch が有効か（`[scratch] enabled = false`、または NFS 上で無効化したら `false`）。
+   */
+  enabled: boolean;
+  fs_free_bytes?: number | null;
+  /**
+   * `dir` の filesystem の容量と空き（statvfs。読めなければ `None`）。
+   */
+  fs_total_bytes?: number | null;
+  high_watermark: number;
+  /**
+   * 直近の GC（rename したものがあった回）。
+   */
+  last_gc?: ScratchGcView | null;
+  /**
+   * pool の外の旧い target（`build_cache_dir/cargo/*`、`release-build/.cargo-target`）の残り。
+   */
+  legacy: ScratchLegacyView[];
+  low_watermark: number;
+  /**
+   * この状態を組んだ時刻（RFC 3339）。
+   */
+  observed_at: string;
+  /**
+   * owner ごとの行（owner の文字列順）。
+   */
+  owners: ScratchOwnerView[];
+  pinned_bytes: number;
+  /**
+   * `none` | `high_watermark` | `low_disk` | `emergency`。
+   */
+  pressure: string;
+  /**
+   * 常に `celeris.scratch-status/1`。
+   */
+  schema: string;
+  /**
+   * `targets/` の推定使用量と、そのうち P0（絶対に消さない）の量。
+   */
+  targets_bytes: number;
+  targets_max_bytes: number;
+  total_max_bytes: number;
+}
+/**
+ * 直近の GC 1 回。
+ */
+export interface ScratchGcView {
+  at: string;
+  /**
+   * 空き < `min_free_disk_mb` の緊急 GC か。
+   */
+  emergency: boolean;
+  /**
+   * その回の `pressure`。
+   */
+  pressure: string;
+  reclaimed_bytes: number;
+  removed: ScratchGcRemovedView[];
+}
+/**
+ * GC が rename した 1 つ。
+ */
+export interface ScratchGcRemovedView {
+  /**
+   * `legacy` | `stray` | `p1` | `p2` | `p3` | `seed`。
+   */
+  class: string;
+  estimated_bytes: number;
+  id: string;
+  /**
+   * `immediate`（watermark に関係なく回収）| `pressure`（目標に届くまで）。
+   */
+  why: string;
+}
+/**
+ * pool の外の旧い target 1 つ。
+ */
+export interface ScratchLegacyView {
+  /**
+   * `legacy`（1 時間以上更新が無く回収できる）| `p0`（未測定・1 時間以内に更新あり）。
+   */
+  class: string;
+  last_write?: string | null;
+  path: string;
+  size_bytes?: number | null;
+}
+/**
+ * scratch pool の owner 1 つ（`targets/<owner>/`）。
+ */
+export interface ScratchOwnerView {
+  /**
+   * adopt で引き継いだ元の owner。
+   */
+  adopted_from?: string | null;
+  /**
+   * base commit の先頭 12 桁。
+   */
+  base_commit?: string | null;
+  /**
+   * `p0` | `p1` | `p2` | `p3` | `seed` | `stray`。
+   */
+  class: string;
+  estimated_bytes: number;
+  /**
+   * `target/` があるか（GC が刈った後は lease だけが残る）。
+   */
+  has_target: boolean;
+  /**
+   * `task` | `work_unit` | `release` | `agent` | `stray`。
+   */
+  kind: string;
+  /**
+   * `lease.json` の mtime（生存の合図）。
+   */
+  lease_mtime?: string | null;
+  measured_at?: string | null;
+  /**
+   * `task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>`（owner として読めない野良はパス）。
+   */
+  owner: string;
+  /**
+   * 分類の理由（`task running`、`lease expired` など）。
+   */
+  reason: string;
+  repo_key?: string | null;
+  /**
+   * 測定したサイズ（未測定は `None`）と、GC が使う推定値。
+   */
+  size_bytes?: number | null;
+  work_unit_key?: string | null;
 }
 /**
  * `POST /tasks/{id}/approve`、`POST /tasks/{id}/reject` の本文。
@@ -4407,6 +4561,66 @@ export interface MessagePostBody {
    * 本文（空白だけは 422）。
    */
   text: string;
+}
+/**
+ * ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。
+ * 容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。
+ */
+export interface ScratchStatus1 {
+  /**
+   * `[scratch] dir`。
+   */
+  dir: string;
+  /**
+   * 無効化した理由（NFS 上など）。
+   */
+  disabled_reason?: string | null;
+  /**
+   * 実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。
+   */
+  effective_max_bytes: number;
+  /**
+   * scratch が有効か（`[scratch] enabled = false`、または NFS 上で無効化したら `false`）。
+   */
+  enabled: boolean;
+  fs_free_bytes?: number | null;
+  /**
+   * `dir` の filesystem の容量と空き（statvfs。読めなければ `None`）。
+   */
+  fs_total_bytes?: number | null;
+  high_watermark: number;
+  /**
+   * 直近の GC（rename したものがあった回）。
+   */
+  last_gc?: ScratchGcView | null;
+  /**
+   * pool の外の旧い target（`build_cache_dir/cargo/*`、`release-build/.cargo-target`）の残り。
+   */
+  legacy: ScratchLegacyView[];
+  low_watermark: number;
+  /**
+   * この状態を組んだ時刻（RFC 3339）。
+   */
+  observed_at: string;
+  /**
+   * owner ごとの行（owner の文字列順）。
+   */
+  owners: ScratchOwnerView[];
+  pinned_bytes: number;
+  /**
+   * `none` | `high_watermark` | `low_disk` | `emergency`。
+   */
+  pressure: string;
+  /**
+   * 常に `celeris.scratch-status/1`。
+   */
+  schema: string;
+  /**
+   * `targets/` の推定使用量と、そのうち P0（絶対に消さない）の量。
+   */
+  targets_bytes: number;
+  targets_max_bytes: number;
+  total_max_bytes: number;
 }
 /**
  * `POST /projects/{id}/milestones` の要求本文。`seq` はストアが採番する。

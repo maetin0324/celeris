@@ -4,7 +4,7 @@ import type { ReplayOutcome } from "~/celeris/action-types";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import { runReplay } from "~/celeris/route-actions.server";
-import type { ConfigView, DaemonView } from "~/celeris/types";
+import type { ConfigView, DaemonView, ScratchStatus } from "~/celeris/types";
 import { ErrorFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { RouteRecovery } from "~/components/RouteRecovery";
@@ -37,6 +37,28 @@ export async function loadDaemon(client: CelerisClient, request: Request): Promi
     client.get<ConfigView>("/config", { signal: request.signal }),
   ]);
   return { daemon, config };
+}
+
+const GIB = 1024 ** 3;
+const gb = (bytes: number) => `${(bytes / GIB).toFixed(bytes >= 10 * GIB ? 0 : 1)} GB`;
+
+/**
+ * ADR-0075 D6（Phase G1）: デーモン画面の scratch pool の 1 行。
+ * 「scratch 62 / 100 GB（pinned 18 GB、実効上限 150 GB）」。watermark 超過（pressure が none 以外）・実効上限の縮小の
+ * ときだけ注意色（warning）。無効なら理由。L1 / L2 の hit 率・flush 遅延は G2 / G3 で足す。
+ */
+export function scratchLine(status: ScratchStatus): { text: string; warn: boolean } {
+  if (!status.enabled) {
+    return {
+      text: `scratch 無効${status.disabled_reason ? `（${status.disabled_reason}）` : ""}`,
+      warn: status.disabled_reason != null,
+    };
+  }
+  const shrunk = status.effective_max_bytes < status.total_max_bytes;
+  const pressure = status.pressure !== "none";
+  let text = `scratch ${gb(status.targets_bytes)} / ${gb(status.targets_max_bytes)}（pinned ${gb(status.pinned_bytes)}、実効上限 ${gb(status.effective_max_bytes)}）`;
+  if (pressure) text += ` · ${status.pressure}`;
+  return { text, warn: pressure || shrunk };
 }
 
 // 409 / 422 の action 後も再検証する（docs/adr/0005 D2）。
@@ -137,6 +159,20 @@ export default function DaemonPage({ loaderData }: Route.ComponentProps) {
                 tone={snapshot.unroutable.length > 0 ? "danger" : "neutral"}
               />
             </div>
+
+            {snapshot.scratch &&
+              (() => {
+                const line = scratchLine(snapshot.scratch);
+                return (
+                  <p
+                    data-testid="daemon-scratch"
+                    data-warn={line.warn ? "true" : "false"}
+                    className={line.warn ? "text-sm font-medium text-warning-soft-fg" : "text-sm text-fg-muted"}
+                  >
+                    {line.text}
+                  </p>
+                );
+              })()}
 
             <Card>
               <CardHeader icon="server" title="インスタンス" description="このデーモンプロセスの識別情報" />

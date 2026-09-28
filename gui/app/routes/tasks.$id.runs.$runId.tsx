@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { isRouteErrorResponse, Link } from "react-router";
 import { loadBrowserRuns } from "~/celeris/browser";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import type { BrowserRun, RunList, RunSummary, TaskDetail } from "~/celeris/types";
-import { BrowserRunsPanel } from "~/components/BrowserRunsPanel";
 import { CodeViewer } from "~/components/CodeViewer";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { Badge } from "~/components/ui/badge";
@@ -17,6 +16,10 @@ import { isTransientStatus } from "~/lib/recovery";
 import { classifyStreamJsonLine, type FormattedLine } from "~/lib/stream-json";
 import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/tasks.$id.runs.$runId";
+
+const BrowserRunsPanel = lazy(() =>
+  import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
+);
 
 /**
  * `/tasks/:id/runs/:runId`（生ログ、docs/DESIGN.md §4.3「生ログ」、§6.2、docs/adr/0006-g3-decisions.md D4）。
@@ -170,7 +173,11 @@ export default function RunDetailPage({ loaderData }: Route.ComponentProps) {
         </p>
       </section>
 
-      <BrowserRunsPanel runs={browserRuns} activeRunIds={loaderData.activeBrowserRunIds} />
+      {browserRuns.length > 0 && (
+        <Suspense fallback={null}>
+          <BrowserRunsPanel runs={browserRuns} activeRunIds={loaderData.activeBrowserRunIds} />
+        </Suspense>
+      )}
 
       <section aria-labelledby="stdout-heading" data-testid="stdout-section">
         <Card>

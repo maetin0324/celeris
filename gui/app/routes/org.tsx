@@ -1264,6 +1264,8 @@ function ProfileEditForm({
       <input type="hidden" name="id" value={node.id} />
       {/* 丸ごと差し替え（§3.44）の印。これが無ければ `profile` は本文に入らず、今の値のまま。 */}
       <input type="hidden" name="profile_present" value="1" />
+      {/* Preserve this node's administrator-configured grant while editing other profile fields. */}
+      <input type="hidden" name="profile_browser" value={JSON.stringify(profile.browser ?? null)} />
 
       <div>
         <label className={labelClass} htmlFor={uid("skills")}>

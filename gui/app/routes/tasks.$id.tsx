@@ -58,7 +58,6 @@ import type {
   Timeline,
   TimelineItem,
 } from "~/celeris/types";
-import { BrowserRunsPanel } from "~/components/BrowserRunsPanel";
 import { CodeViewer } from "~/components/CodeViewer";
 /* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
 import { ReplyStepRow } from "~/components/ConsoleBlockItem";
@@ -146,6 +145,10 @@ import {
 import { cn } from "~/lib/utils";
 import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/tasks.$id";
+
+const BrowserRunsPanel = lazy(() =>
+  import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
+);
 
 // Phase 77（ADR-0055 性能予算）: 「変更」「ファイル」タブの本体（`~/components/task-changes.tsx`・
 // `~/components/task-files.tsx`）は、5 つあるタブのうち一度に 1 つしか出ない（`?tab=` で切り替え）のに
@@ -1169,7 +1172,11 @@ function OverviewTab({
       {/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（計画・WU の表・replan の履歴）。
           計画も gate の判定も無い古いタスクは execution が無いので何も出ない（D23 の後方互換）。 */}
       <ExecutionSection execution={detail.execution} taskId={task.id} />
-      <BrowserRunsPanel runs={browserRuns} activeRunIds={activeBrowserRunIds(detail.runs, task.status)} />
+      {browserRuns.length > 0 && (
+        <Suspense fallback={null}>
+          <BrowserRunsPanel runs={browserRuns} activeRunIds={activeBrowserRunIds(detail.runs, task.status)} />
+        </Suspense>
+      )}
 
       <section aria-labelledby="runs-heading" data-testid="runs-section">
         <Card>

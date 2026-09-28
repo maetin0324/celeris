@@ -20,3 +20,6 @@ Rust は routing・profile・実APIのfilter/page・supervisor・raw log非露�
 
 Phase 1 は公開・未認証ページ向け。同一 UID の任意 shell を隔離するものでも、任意 Web content/最終 summary の秘密を自動検出するものでもない。
 機密業務への適用前に ADR の後続 policy/broker/隔離タスクと人間 decision を完了する。
+
+既存の組織プロフィール編集は grant を保持する。初回 release の mobile audit で task タブの初期 JS が 533.1KB となり
+532KB の既存予算を超えたため、browser panel は session がある場合だけ遅延ロードする。予算値は変更しない。

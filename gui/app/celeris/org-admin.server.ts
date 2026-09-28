@@ -118,6 +118,19 @@ function readKnowledge(form: FormData): KnowledgeMount[] {
 export function buildProfileInput(form: FormData): Profile {
   const profile: Profile = {};
 
+  // The form edits a complete own profile. Preserve the browser grant without adding a grant editor.
+  // The authenticated org API remains responsible for validating its schema and policy.
+  const browserJson = formString(form, "profile_browser");
+  if (browserJson !== null) {
+    let browser: Profile["browser"];
+    try {
+      browser = JSON.parse(browserJson);
+    } catch {
+      throw new Response("Invalid browser profile JSON", { status: 400 });
+    }
+    if (browser != null) profile.browser = browser;
+  }
+
   // 能力タグは開いた語彙（celeris の設定に無い）なので、道具の `_extra` 欄と同じ空白/カンマ区切りの
   // 自由記述の 1 本の欄で受ける（チェックボックスにできる固定の選択肢が無いため）。
   const skills = readWords(form, "profile_skills");

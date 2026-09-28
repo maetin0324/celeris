@@ -2943,6 +2943,13 @@ impl Dispatcher {
             }
             Err(e) => tracing::warn!(error = %e, "failed to auto-reach milestones"),
         }
+        // Phase F7: 認可元のタスクが終端のまま未決で残った認可の要求を閉じる（照合。通常は遷移が閉じる）。
+        if let Err(e) = crate::approvals::withdraw_stale_approvals(
+            self.store.as_ref(),
+            OffsetDateTime::now_utc(),
+        ) {
+            tracing::warn!(error = %e, "failed to withdraw stale approvals");
+        }
         report.reclaimed = self.reclaim_expired_leases()?;
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
         self.reconcile_parallel_tasks()?;
@@ -15101,9 +15108,15 @@ mod tests {
             .count();
         assert_eq!(child_failed_transitions, 1, "{parent_events:?}");
 
-        // approvals も 1 件のまま（Phase 44）。
-        let approvals = store.approval_list(Some(true), None, None).unwrap();
+        // approvals も 1 件のまま（Phase 44）。Phase F7: 親が `done` になったので、その 1 件は
+        // `withdrawn` で閉じている（この試験は答えを `apply_transition` で直接渡すので `once` にはならない）。
+        let approvals = store.approval_list(None, None, None).unwrap();
         assert_eq!(approvals.len(), 1, "{approvals:?}");
+        assert_eq!(
+            approvals[0].decision,
+            Some(task_core::approval::Decision::Withdrawn),
+            "{approvals:?}"
+        );
     }
 
     #[tokio::test]

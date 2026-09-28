@@ -1781,3 +1781,59 @@ GUI install / typecheck / lint / test 0、gen:types 差分ゼロ（10:43〜10:48
 **人の決定（2026-09-28 15:2xZ）**: P-F-1 は「`[execution] parallel = true` にして実態に合わせる」。本番 `~/.config/celeris/config.toml` の `[execution]` に
 `parallel = true` を足し、idle のときに `systemctl --user restart celeris@<current>` で反映する（config の reload 機構は無い。`parallel` は F2b 以降の全 release が
 知っている key なので N-1 は壊れない）。費用指標（決定 4: quota 消費）は、codex の quota が measured で取れるようになりデータが揃ってから改めて判断する。
+
+## F7: 認可要求の自動クローズ（2026-09-28）
+
+**人の報告**: 「認可待ちのところに dogfood 時のすでに不要な認可待ちが溜まっている。消すのと、認可元のタスクを手動でキャンセルした
+場合に自動で消えるように修正して。」
+
+**事実（本番、読み取りのみ）**: `GET /approvals?pending=true` に 1 件（01M3HVC62B3WQGF8CKKACAR627）。認可元のタスク
+01M3HS2E19BRC021ZXMDZANP5B（dogfood 3 回目）は 2026-09-27 に人が取り消し済み。ナビのバッジ（`DaemonSnapshot.approvals_pending`）は 1。
+`POST /approvals/{id}/decide {decision:"denied"}` は **409 invalid_transition**（「status=Cancelled … only blocked tasks accept an answer」）を
+返したが、決定は書かれて一覧とバッジからは消えた（半端な副作用）。本番の残りはこの手動の決定で既に 0 件。
+
+**原因**:
+- `approvals` 行は run が `Question` で終わったときに追記するだけ（`crates/task-dispatch/src/approvals.rs` `record_question_approval`）で、
+  タスクが終端になっても閉じる処理がどこにも無かった（終端化の伝播は `crates/task-core/src/store.rs:2645`〈変更前〉の
+  `cascade_after_transition_tx` だけで、`approvals` を見ない）。
+- `crates/task-ops/src/approval.rs:64`（変更前）で `approval_decide`（決定を書く）→ `:76` で `gate::answer`（タスクに答える）の順。
+  後者が `InvalidState` で失敗しても前者は戻らない。
+
+**修正**（ADR-0033 追記 2026-09-28）:
+- `Decision::Withdrawn`（`"withdrawn"`）を追加。celeris だけが書く（人が送ると 422）。DB は既存の TEXT 列（**migration 無し**）。
+- `SqliteStore::apply_transition_tx`: 非終端 → 終端（done / failed / cancelled）の遷移と同じトランザクションで、そのタスクの未決の行を
+  `withdrawn`（`answer = "task <status>: 認可元のタスクが終わったため、celeris が自動で取り下げました"`）にし、
+  `Event::ApprovalsWithdrawn {approval_ids, task_status, reason:"task_terminal"}` を追記（`crates/task-core/src/approval.rs`
+  `withdraw_pending_for_task_tx`）。連鎖（子・後続・案件/途中目標の中止）も同じ関数を通るので同じく閉じる。
+- 照合: `ApprovalStore::approval_withdraw_stale`（未決で、タスクが既に終端の行を閉じる。`reason:"reconcile"`）をディスパッチャの tick で呼ぶ
+  （`dispatcher.rs` の `tick` に 1 呼び出しだけ）。`record_question_approval` は追記の直前にタスクを読み直し、終端なら追記しない。
+- `task_ops::approval::decide`: **書く前に**タスクの状態で分ける。`blocked`（途中確認ではない）→ 従来どおり答える。終端・タスク無し →
+  決定だけ記録して 200 + `note`（`transition` 無し）。それ以外 → 409、何も書かない。
+- 部をまたぐ委譲の判定（`conversation::cross_authorization`）は `withdrawn` を「未決」と読む（`denied` の「もう聞かない」にしない）。
+- 他の表面の確認: 質問（`blocked` の worker_question）・途中確認（`blocked` + `awaiting_human`）・`DaemonSnapshot.awaiting_human`
+  （メモリ上の集合、`recover_reviews` が reviewing 以外を落とす）・受信箱の `approvals`（`kind=approval` かつ `ready`）はどれも生きている
+  タスクの状態から毎回導くので、終端のタスクについて残る永続の表現は `approvals` 行だけ。本番の 30 件の `awaiting_human` の遷移イベントは
+  履歴で、どの画面の件数にも入らない。
+- GUI: `withdrawn` のラベル「取り下げ（元のタスクが終了）」（`~/lib/labels.ts`）、決めたものの履歴で `warning` の色
+  （`decidedApprovalBadgeTone`）、Console の認可ブロックもラベルで表示、決定の結果の `note` を Flash に出す。
+- API 文書 `docs/gui/api.md` §3.56 / §3.57 / events の `types` 語彙（→ `scripts/sync-gui-docs.sh` で `gui/docs/celeris-api-v1.md` に反映）。
+  スキーマ `docs/api/v1/{api-v1,event}.schema.json`、`gui/app/celeris/types.ts` を再生成。
+
+**証拠**:
+- 試験（新規）: task-core `approval::tests`（取り消しで閉じる + イベント 1 件・人の決定は触らない・他タスクは残る / 閉じるものが無ければイベント無し /
+  後続〈dependency_failed〉と `kind=approval` の子の連鎖 / running→failed で閉じ blocked→ready では閉じない / 照合は終端のタスクだけ・冪等）、
+  task-dispatch `approvals::tests`（終端のタスクの質問は追記しない / 照合が残りを閉じる）、task-api `tests/approvals.rs`
+  （`POST /tasks/{id}/cancel` の後に `pending=true`・`approvals_pending`・受信箱の questions から消え `pending=false` に `withdrawn` で残る、
+  `types=approvals_withdrawn` / 終端のタスクの認可に `denied` → 200 + note・`Answered` 無し / `ready` のタスクの認可 → 409 で未決のまま・
+  `withdrawn` を送ると 422）、task-ops `conversation`（`withdrawn` は pending と読む）、GUI `test/unit/approvals.test.ts`（3 件）。
+  既存の `dispatcher::tests::child_failure_question_is_not_repeated_…` は「未決 1 件」→「全 1 件で `withdrawn`」に直した（親が done になるため）。
+- `cargo fmt --all -- --check` → 0。`scripts/dev/test-parallel.sh` → 0（passed 2630 / failed 0 / ignored 7、87 binaries）。
+  `cargo clippy --workspace --all-targets -- -D warnings` → 0。GUI `typecheck` 0 / `lint` 0 / `test` 0（74 files, 1131 tests）/
+  `gen:types` の再生成で差分ゼロ（コミットした types.ts と一致）/ `scripts/sync-gui-docs.sh --check` 0。
+- 1 回目の test-parallel（load 17）で `e2e::api_scenarios::api_enforces_token_host_and_workspace_boundaries_…` が replay の MISMATCH
+  （status replayed=Running stored=Ready）で落ちた。単独 1 回・`--stress-count 8` で全部通り、2 回目の全体実行でも通った。replay は `Created` /
+  `Transitioned` しか読まず、F7 の変更は遷移のイベントの並びを変えないので、高負荷時のタイミング依存（既知の型）と判断した。
+
+**未解決・提案**:
+- 既存の install の残りは次の tick で `reconcile` として閉じる（本番は既に 0 件なので、昇格しても何も起きない想定）。
+- 取り下げた行を一覧から消す（隠す）かは GUI 側の判断。今は「決めたものの履歴」に `取り下げ` として残る。

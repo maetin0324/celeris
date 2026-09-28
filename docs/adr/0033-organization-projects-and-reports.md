@@ -208,3 +208,42 @@ SPEC §4 の 6 画面。既存の「タスク」画面は残すが、ナビの�
 
 各 Phase の受け入れ条件はその Phase の実装依頼に書く。共通条件は従来どおり
 （`cargo test --workspace` / clippy / GUI 一式 / PROGRESS / commit）。
+
+## 追記 2026-09-28: 認可元 task の終了で認可要求を閉じる（Phase F7）
+
+**起きたこと**: 人が dogfood 3 回目のタスク（01M3HS2E19BRC021ZXMDZANP5B）を 2026-09-27 に取り消した後も、
+そのタスクが出した認可の要求（01M3HVC62B3WQGF8CKKACAR627）が未決のまま「認可」の一覧とナビのバッジ
+（`DaemonSnapshot.approvals_pending`）に残った。消そうとして `denied` で決めると 409 `invalid_transition`
+（「cancelled のタスクには答えられない」）が返ったのに、決定は書かれて一覧からは消えた（半端な副作用）。
+原因は 2 つ: (1) D5 の `approvals` 行は「タスクが `Question` で止まったとき 1 件追記するだけ」で、タスクが
+終端になっても誰も閉じなかった。(2) `task_ops::approval::decide` が `approval_decide`（決定を書く）→
+`gate::answer`（タスクに答える）の順で呼び、後者が失敗しても前者を戻さなかった。
+
+**決定**:
+
+1. **新しい決定 `withdrawn`**（`Decision::Withdrawn`、DB は既存の `approvals.decision` TEXT 列にそのまま入る。
+   migration 無し）。人の `denied` とは分ける: `denied` は「人が認めなかった」なので部をまたぐ委譲の判定
+   （`cross_authorization`）が「もう聞かない」と読むが、`withdrawn` は人の決定ではないので「まだ決まって
+   いない」と読む（やり直した run・再開したタスクがもう一度聞ける）。`withdrawn` は **celeris だけが書く**
+   （`POST /approvals/{id}/decide` で人が送ると 422）。
+2. **閉じる場所はストアの遷移の中**（`SqliteStore::apply_transition_tx`）。非終端 → 終端（`done` /
+   `failed` / `cancelled`）の遷移と**同じトランザクション**で、そのタスクの未決の行をすべて `withdrawn`
+   （`answer = "task <status>: 認可元のタスクが終わったため、celeris が自動で取り下げました"`）にし、
+   `Event::ApprovalsWithdrawn {approval_ids, task_status, reason: "task_terminal"}` を 1 件追記する。
+   人の取り消し・子や後続への連鎖（`cascade_after_transition_tx` も同じ関数を通る）・案件や途中目標の中止の
+   連鎖・run の失敗・完了のどれでも同じに閉じる。ディスパッチャには手を入れない（LLM も呼ばない。決定的な
+   SQL だけ）。
+3. **照合**: ディスパッチャの tick ごとに `approval_withdraw_stale`（未決のまま、タスクが既に終端の行を同じ形で
+   閉じる。`reason: "reconcile"`）。F7 より前に残った行と、「`blocked` への遷移」と「行の追記」の間に人が
+   取り消した競合の取りこぼし用。あわせて、行を追記する直前にタスクを読み直し、終端なら追記しない。
+4. **`decide` は書く前に判定する**: タスクが `blocked`（途中確認ではない）なら従来どおり答える。**終端または
+   タスクが無い**なら決定だけ記録して 200（`note` 付き、`transition` 無し。人は一覧から片付けたいだけ）。
+   それ以外（`ready` / `running` / `reviewing` / `draft`、途中確認）は 409 で**何も書かない**。
+5. 質問（`blocked` の `worker_question`）・途中確認（`blocked` + 直近の遷移理由 `awaiting_human`）・
+   `DaemonSnapshot.awaiting_human`（reviewing のタスクのうち人の承認待ちの子を待つもの。ディスパッチャの
+   メモリ上の集合で `recover_reviews` が reviewing 以外を落とす）・受信箱の `approvals`（`kind = approval`
+   かつ `ready` のタスク）は、どれも**生きているタスクの状態から毎回導く**ので、終端のタスクについて残る
+   永続の表現は無い。終端のタスクについて残りうる永続の表現は `approvals` 行だけで、それを上で閉じる。
+
+**採らない**: `denied` + 固定の答えで閉じる（部またぎの判定が「人が断った」と誤読する）。閉じずに一覧側で
+終端のタスクの行を隠す（件数・通知・受信箱の `approval_id` がそれぞれ別に同じ絞り込みを持つことになる）。

@@ -24,9 +24,11 @@ import {
   approvalNodeName,
   approvalProjectName,
   approvalsPendingCount,
+  decidedApprovalBadgeTone,
   groupApprovals,
   standingRuleTargetName,
 } from "~/lib/approvals";
+import { decisionLabel } from "~/lib/labels";
 import { loadApprovals } from "~/routes/approvals";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
@@ -241,6 +243,20 @@ describe("decideApproval (docs/celeris-api-v1.md §3.57. POST /approvals/{id}/de
     expect(outcome).toEqual({ ok: true, op: "decide", id: "a1", result });
   });
 
+  it("Phase F7: 認可元のタスクが既に終わっていれば、決定だけ記録され note が載る（transition は無い）", async () => {
+    const result: ApprovalDecideResult = {
+      approval: approval("a1", { decision: "denied", answer: "不要になった", task_id: "t1" }),
+      note: "task t1 is already cancelled; decision recorded without resuming the task",
+    };
+    mock.on("POST", "/api/v1/approvals/a1/decide", (_req, res) => sendJson(res, 200, result));
+    const outcome = await decideApproval(client, "a1", { decision: "denied", answer: "不要になった" });
+    expect(outcome).toEqual({ ok: true, op: "decide", id: "a1", result });
+    if (outcome.ok) {
+      expect(outcome.result.transition).toBeUndefined();
+      expect(outcome.result.note).toContain("already cancelled");
+    }
+  });
+
   it("404 approval_not_found", async () => {
     mock.on("POST", "/api/v1/approvals/missing/decide", (_req, res) =>
       sendProblem(res, { status: 404, code: "approval_not_found", detail: "no such approval" }),
@@ -278,6 +294,38 @@ describe("decideApproval (docs/celeris-api-v1.md §3.57. POST /approvals/{id}/de
     const outcome = await decideApproval(client, "a1", { decision: "once", answer: "   " });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error.fields.answer).toEqual(["must not be blank"]);
+  });
+});
+
+describe("取り下げ（withdrawn、Phase F7。docs/celeris-api-v1.md §3.56）", () => {
+  it("withdrawn は人の決定と見分けられる色・文言で出す", () => {
+    expect(decidedApprovalBadgeTone({ decision: "withdrawn" })).toBe("warning");
+    expect(decidedApprovalBadgeTone({ decision: "denied" })).toBe("neutral");
+    expect(decidedApprovalBadgeTone({ decision: "once" })).toBe("neutral");
+    expect(decisionLabel("withdrawn")).toBe("取り下げ（元のタスクが終了）");
+    expect(decisionLabel("denied")).toBe("認めない");
+  });
+
+  it("取り下げた行は pending=false（決めたものの履歴）に来て、未決の一覧には出ない", async () => {
+    const withdrawn = approval("a2", {
+      task_id: "t1",
+      decision: "withdrawn",
+      answer: "task cancelled: 認可元のタスクが終わったため、celeris が自動で取り下げました",
+      decided_at: "2026-09-28T00:00:00Z",
+    });
+    mock.on("GET", "/api/v1/approvals", (req, res) => {
+      const pending = new URL(req.url ?? "/", "http://x").searchParams.get("pending");
+      const list: ApprovalList = { items: pending === "true" ? [] : [withdrawn] };
+      sendJson(res, 200, list);
+    });
+    mock.on("GET", "/api/v1/standing-rules", (_req, res) =>
+      sendJson(res, 200, { items: [] } satisfies StandingRuleList),
+    );
+    mock.on("GET", "/api/v1/org", (_req, res) => sendJson(res, 200, { items: [] } satisfies OrgList));
+    mock.on("GET", "/api/v1/projects", (_req, res) => sendJson(res, 200, { items: [] } satisfies ProjectList));
+    const loaded = await loadApprovals(client, new Request("http://gui.invalid/approvals"));
+    expect(loaded.pending).toEqual([]);
+    expect(loaded.decided).toEqual([withdrawn]);
   });
 });
 

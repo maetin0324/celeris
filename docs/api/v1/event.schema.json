@@ -1,5 +1,9 @@
 {
   "$defs": {
+    "ApprovalId": {
+      "description": "認可 1 件の識別子（ULID）。",
+      "type": "string"
+    },
     "ArtifactRef": {
       "description": "DESIGN §4.4 の `ArtifactRef`。実体は `workspace/<task_id>/artifacts/` 配下。",
       "properties": {
@@ -705,6 +709,34 @@
             "type",
             "by",
             "approved"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Phase F7（ADR-0033 D5 追記 2026-09-28）: このタスクが終端（`done` / `failed` / `cancelled`）に\nなったので、未決の認可の要求（`approvals` 表の行）を celeris が `withdrawn` で閉じた。\n`reason` は `\"task_terminal\"`（終端への遷移と同じトランザクション）か `\"reconcile\"`\n（tick の照合）。状態は変えない（`replay` は無視する）。`ApprovalDecided`（`kind = approval`\nタスクの承認・却下）とは別物。",
+          "properties": {
+            "approval_ids": {
+              "items": {
+                "$ref": "#/$defs/ApprovalId"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "task_status": {
+              "$ref": "#/$defs/Status"
+            },
+            "type": {
+              "const": "approvals_withdrawn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "approval_ids",
+            "task_status",
+            "reason"
           ],
           "type": "object"
         },

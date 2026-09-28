@@ -15,7 +15,7 @@ export type Status = "draft" | "ready" | "running" | "blocked" | "reviewing" | "
 /**
  * 人の決定（SPEC §3.6）。
  */
-export type Decision = "once" | "standing" | "denied";
+export type Decision = "once" | "standing" | "denied" | "withdrawn";
 /**
  * 認可 1 件の識別子（ULID）。
  */
@@ -342,6 +342,12 @@ export type Event =
       by: string;
       note?: string | null;
       type: "approval_decided";
+    }
+  | {
+      approval_ids: ApprovalId[];
+      reason: string;
+      task_status: Status;
+      type: "approvals_withdrawn";
     }
   | {
       answer: string;
@@ -1304,6 +1310,11 @@ export interface ApprovalDecideBody {
  */
 export interface ApprovalDecideResult {
   approval: Approval;
+  /**
+   * Phase F7: 認可元のタスクが既に終端（または無い）ため、決定だけ記録してタスクには答えなかった
+   * ときの説明。タスクに答えたとき・タスクの無い approval では出ない。
+   */
+  note?: string | null;
   /**
    * `decision = "standing"` のときだけ `Some`。
    */

@@ -2642,6 +2642,19 @@ impl SqliteStore {
             next_seq += 1;
         }
 
+        // Phase F7（ADR-0033 D5 追記 2026-09-28）: 終端になったら、このタスクの未決の認可の要求を
+        // 同じトランザクションで `withdrawn` に閉じる（答える相手がいない要求を一覧・バッジに残さない）。
+        // 伝播（子・後続の cancel）もこの関数を通るので、子の分も同じく閉じる。
+        if !view.status.is_terminal() && outcome.next.is_terminal() {
+            crate::approval::withdraw_pending_for_task_tx(
+                tx,
+                task_id,
+                outcome.next,
+                crate::approval::WITHDRAWN_BY_TRANSITION,
+                now,
+            )?;
+        }
+
         Self::cascade_after_transition_tx(tx, &task, view.status, outcome.next)?;
 
         Ok(outcome)
@@ -3109,7 +3122,7 @@ impl SqliteStore {
         })())
     }
 
-    fn append_event_tx(
+    pub(crate) fn append_event_tx(
         conn: &Connection,
         task_id: TaskId,
         event: &Event,

@@ -36,6 +36,7 @@ import {
   approvalGroupNodeNames,
   approvalNodeName,
   approvalProjectName,
+  decidedApprovalBadgeTone,
   groupApprovals,
   standingRuleTargetName,
 } from "~/lib/approvals";
@@ -450,7 +451,11 @@ function DecidedApprovalRow({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-subtle lg:text-xs">
         <span className="font-medium text-fg">{approvalNodeName(approval, org)}</span>
         <span>{approvalProjectName(approval, projects)}</span>
-        {approval.decision && <Badge tone="neutral">{decisionLabel(approval.decision)}</Badge>}
+        {approval.decision && (
+          <Badge tone={decidedApprovalBadgeTone(approval)} data-testid="approval-decision">
+            {decisionLabel(approval.decision)}
+          </Badge>
+        )}
         <span className="ml-auto flex items-center gap-3">
           {approval.task_id && (
             <Link

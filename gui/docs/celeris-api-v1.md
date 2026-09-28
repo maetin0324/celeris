@@ -1,20 +1,8 @@
 # celeris HTTP API v1 仕様
 
+実行・計画・再実行の追加エンドポイントは [`docs/celeris-api-v1.md`](../celeris-api-v1.md) を参照。
+
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
-- 改訂: 2026-09-22 Phase 105（ADR-0060 D1 追記。本番の観測、2026-09-22 21:55 UTC）— **追加のみ。v1 のまま**。
-  `POST /releases/{sha12}/promote`（§3.67）が `promote.sh` を起こす手段が `setsid` から
-  `systemd-run --user --scope`（無ければ `setsid` にフォールバック）に変わった（celeris の unit の
-  drain が `promote.sh` を cgroup ごと巻き添えにして途中で殺していたため）。`GET /releases` の
-  `items[]` に `promote_stale` / `promote_last_line` を追加（§3.66）。DB マイグレーションは無い。
-- 改訂: 2026-09-22 Phase 99（ADR-0059、コマンド実行だけのオペレーションを worktree 無しでクラスタで動かす）
-  — **追加のみ。v1 のまま**。`WorkspaceSpec::Remote` に任意の `mode`（`"worktree"` | `"shared"`、既定
-  `"worktree"`）と省略可の `path` を追加（§3.46）。エンドポイント 107: `PUT /clusters/{id}/settings`
-  （クラスタの実効の作業ディレクトリの DB 上書き、**管理系**。§3.107）。`GET /clusters` の
-  `items[].work_dir` / `items[].work_dir_source` を追加（§3.23）。DB のスキーマ版数は **25**
-  （migration 0025: `cluster_settings`）。
-- 改訂: 2026-09-22 Phase 94（ADR-0058、P-G38-1）— **追加のみ。v1 のまま**。`GET /releases` の
-  `items[].verify.checks[]`（検査ごとの合否・詳細。§3.66）と `items[].gate`（ゲート各段の内訳。§3.66）を追加。
-  既存の `gate_ok`・`verify.ok`/`live_ok`/`at` は変えていない。
 - 改訂: 2026-09-21 Phase 82（ADR-0056 D3 続き、skills を GUI から見る・作る・mount する）
   — **追加のみ。v1 のまま**。エンドポイント 101〜106: `GET /skills`・`GET /skills/{name}`・
   `PUT /skills/{name}`・`DELETE /skills/{name}`・`POST /org/{id}/skills`・
@@ -377,7 +365,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 104 | DELETE | `/skills/{name}` | skill を消す（mount されていれば 409 `skill_mounted`。**管理系**） | 204 | ファイル + コミット |
 | 105 | POST | `/org/{id}/skills` | ノードに skill を mount する（**管理系**） | 200 `OrgNode` | store |
 | 106 | DELETE | `/org/{id}/skills/{skill}` | ノードから skill を unmount する（**管理系**） | 200 `OrgNode` | store |
-| 107 | PUT | `/clusters/{id}/settings` | クラスタの実効の作業ディレクトリを DB で上書きする（ADR-0059 D6、Phase 99。**管理系**） | 200 `ClusterSettingsView` | store `cluster_settings_set` |
+| 107 | GET | `/tasks/{id}/routing` | なぜその担当・harness・lane・model になったか（run ごとの監査と routing の出自。ADR-0069 D5） | `TaskRoutingView` | `task_ops::routing_audit` |
 
 ---
 
@@ -587,7 +575,10 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 Console（§3.98）はこの形だけを見る。
 
 `types` の語彙（`Event` の `type`、17 種）: `created`、`transitioned`、`worker_started`、`worker_progress`、`artifact_produced`、
-`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`answered`、`provider_throttled`、
+`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、
+`approvals_withdrawn`（Phase F7。`{approval_ids, task_status, reason}`。タスクが終端になり、未決の認可の要求
+〈§3.56〉を celeris が `withdrawn` で閉じた。`reason` は `task_terminal` か `reconcile`。状態は変えない）、
+`answered`、`provider_throttled`、
 `cluster_unavailable`（Phase 12。`{cluster, host, reason}`）、
 `delegated`（Phase 10。`{run_id, task_ids}`。状態は変えないので `replay` は無視する）、
 `question_raised`（ADR-0021。`{run_id, text}`。ディスパッチャが人に出した質問。同じトランザクションの
@@ -797,10 +788,6 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
   **鍵認証を試しても**繋がらなかった状態（人の TOTP 入力が要る）。`GET /clusters` にはこれだけが出る
   （プロンプト文字列やコードは `POST /clusters/{id}/connect`/`connect/code` の応答にだけ載る。§3.39〜3.41
   と同じ経路で接続する）。この状態は Discord にも `cluster_login_needed`（§5.1）で 1 回だけ知らせる。
-- `work_dir` / `work_dir_source`（ADR-0059 D6、Phase 99）: 実効の作業ディレクトリ（DB の上書き
-  `cluster_settings` があればそれ、無ければ設定ファイルの `[[clusters]] work_dir`）と、その出どころ
-  （`"settings"` / `"config"`）。どちらも無ければ両方 `null`。`WorkspaceSpec::Remote.path` の省略・相対
-  パスはここから解決される（§3.46、§3.107）。
 
 ```json
 {"items": [
@@ -1096,26 +1083,6 @@ task-api 自身は ssh を起動しない（DESIGN §5.10 の境界）。未知�
 進行中の接続セッションを取り消す（ssh の子プロセスをプロセスグループごと落とす）、または既に張った接続を切る
 （`ssh -O exit <host>` を `BatchMode=yes` で呼ぶ）。無ければ何もしない。
 
-#### 3.107 `PUT /clusters/{id}/settings` → 200 `ClusterSettingsView`（ADR-0059 D6、Phase 99。**管理系**）
-
-クラスタの**実効の作業ディレクトリ**を DB（`cluster_settings`）で上書きする。`WorkspaceSpec::Remote.path`
-が省略・相対のタスクは、実効の作業ディレクトリ（DB の上書き > 設定ファイルの `[[clusters]] work_dir`）
-からの相対として解決される（§3.46 の `WorkspaceSpec` の節、Phase 99 追記）。
-
-```json
-{"work_dir": "/work/NBB/rmaeda"}
-```
-
-```json
-{"cluster_id": "pegasus", "work_dir": "/work/NBB/rmaeda", "updated_at": "2026-09-22T12:00:00Z"}
-```
-
-- `work_dir` は絶対パスか `~`/`~/…` だけ許す（それ以外・空文字は 422 `validation`、
-  `errors[0].field = "work_dir"`）。`null`（または省略）で DB の上書きを消し、設定ファイルの値に戻す。
-- 未知の cluster id（`[[clusters]]` に無い）は 404 `cluster_not_found`。
-- `GET /clusters`（§3.23）の `items[].work_dir` / `work_dir_source`（`"settings"` = この API で上書き
-  済み、`"config"` = 設定ファイルの値、`work_dir` が `null` ならどちらも `null`）にそのまま反映される。
-
 ### 3.42〜3.49 組織・案件・途中目標（ADR-0033 D1/D2、Phase 23）
 
 SPEC §3.2〜§3.3 の「組織（一つ、役割の木）」と「案件・仕事の木」を第一級のエンティティにしたもの。
@@ -1256,30 +1223,11 @@ Phase 55 から**管理系**（§1.3）。また **`PATCH` では `paused` / `ca
 `GET /projects/{id}` の応答には `repos[]`（primary が先頭）が増えた。
 
 **Phase 49（ADR-0041 D1）**: `kind = "local"` は任意で `mode` を持てる（`"worktree"` | `"shared"`、**既定
-`"worktree"`**）。知らない値は 400 `bad_request`（本文の解析で落ちる）。
+`"worktree"`**）。知らない値は 400 `bad_request`（本文の解析で落ちる）。`remote` にこのキーは無い。
 
 ```json
 {"workspace":{"kind":"local","path":"~/workspace/agent-platform","mode":"worktree"}}
 ```
-
-**Phase 99（ADR-0059 D1）**: `kind = "remote"` も任意で `mode` を持てる（同じ語彙 `"worktree"` |
-`"shared"`、**既定 `"worktree"`**。軸は別で、こちらは「クラスタ側の同期方針」を決める）。省略したものは
-Phase 98 までの `{"kind":"remote","cluster":"…","path":"…"}` と 1 バイトも変わらない。
-
-```json
-{"workspace":{"kind":"remote","cluster":"pegasus","path":"~","mode":"shared"}}
-```
-
-- `"worktree"`（既定）: 従来どおりそのクラスタの `[[clusters]] sync` 設定に従う（`worktree` / `rsync` /
-  `none`。ADR-0018 D4 / ADR-0019 D1）。
-- `"shared"`: **同期も worktree も行わない**（クラスタの `sync` 設定に関わらず何もしない）。`path` を
-  そのままクラスタ側の作業ディレクトリとして使う。コマンドを実行するだけでコードの diff を作らない
-  仕事向け（実機の障害 2026-09-22: `~` をホームとして worktree を切ろうとして失敗した）。
-- `path` は省略できる（省略すると空文字列として保存される）。絶対パス・`~`/`~/…` はそのまま使う。
-  それ以外（省略・相対パス）は、そのクラスタの実効の作業ディレクトリ（`GET /clusters` の `work_dir`。
-  §3.100 参照）からの相対として解決する。実効の作業ディレクトリが無ければ、その run は「クラスタ
-  `<id>` の作業ディレクトリが未登録です。`PUT /clusters/{id}/settings` かクラスタ画面で登録してください」
-  で失敗する。
 
 - `"worktree"`（既定）: `path` が git リポジトリなら、celeris は**タスクごとに `git worktree` を切る**。
   ワーカーのカレントディレクトリは `<workspace_root>/<task_id>/tree`、ブランチは `celeris/<task_id>`
@@ -1460,7 +1408,18 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
   「決めたものの履歴」）、省略すると全件（GUI からの依頼 R5。Phase 27 で `false` が絞り込むようになった）。
   `project` / `node` と AND で効く。
 - `Approval`: `{id, project_id?, node_id, task_id?, question, decision?, answer?, created_at, decided_at?}`。
-  `decision` は `once` / `standing` / `denied`（未決定は無い）。
+  `decision` は `once` / `standing` / `denied` / `withdrawn`（未決定は無い）。
+- **`withdrawn`（Phase F7、ADR-0033 D5 追記 2026-09-28）**: 認可元のタスク（`task_id`）が終端
+  （`done` / `failed` / `cancelled`）になったので、**celeris が自動で閉じた**（人の決定ではない）。
+  人が中止した・子として連鎖で中止された・依存先の失敗で `dependency_failed` になった・run が失敗した・
+  完了した、のどれでも、その終端への遷移と**同じトランザクション**で、そのタスクの未決の行がすべて
+  `decision = "withdrawn"`、`answer = "task <status>: 認可元のタスクが終わったため、celeris が自動で取り下げました"`、
+  `decided_at` = 遷移の時刻になり、タスクに `Event::ApprovalsWithdrawn {approval_ids, task_status,
+  reason: "task_terminal"}`（`type = "approvals_withdrawn"`）が 1 件つく。F7 より前に残った行や遷移との
+  競合で取りこぼした行は、ディスパッチャの tick の照合が同じ形で閉じる（`reason: "reconcile"`）。
+  閉じた行は `pending=true`・`DaemonSnapshot.approvals_pending`・受信箱の `questions[].approval_id`・
+  通知から消え、`pending=false`（決めたものの履歴）に残る。部をまたぐ委譲の判定では `withdrawn` を
+  「まだ決まっていない」と読む（`denied` のように「もう聞かない」にはしない）。
 - **部をまたぐ委譲の認可**（SPEC §3.1 / Phase 27）は `question` が
   **`"cross-department: <委譲元> -> <委譲先>: <理由>"`** の固定の形で来る（`node_id` = 委譲元、
   `task_id` = 委譲しようとした親タスク）。`once` ならそのタスクの次の run で委譲が通り、`standing` なら
@@ -1478,8 +1437,19 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 - `standing` → 同じことをして、さらに `standing_rules` に 1 行追加する（`scope = "node"` ならそのノード宛て、
   `"all"` なら全員）。
 - `denied` → 答えを `"認めない: <answer>"` にして再開する（ワーカーが自分で判断できるように）。
-- 応答は `{approval, standing_rule?, transition?}`。`standing_rule` は `decision = "standing"` のときだけ、
-  `transition`（`TransitionResult`。3.12 `POST /tasks/{id}/answer` と同じ形）は `approval.task_id` があるときだけ載る。
+- 応答は `{approval, standing_rule?, transition?, note?}`。`standing_rule` は `decision = "standing"` のときだけ、
+  `transition`（`TransitionResult`。3.12 `POST /tasks/{id}/answer` と同じ形）は `approval.task_id` のタスクに
+  答えて再開したときだけ載る。
+- **認可元のタスクの状態で分かれる（Phase F7）**。どれも**書く前に**判定する（半端に書かない）:
+  - `blocked`（途中確認 `awaiting_human` ではない）: 上のとおり答えて再開する。
+  - **終端（`done` / `failed` / `cancelled`）またはタスクが無い**: 答える相手がいないので、**決定だけ記録して
+    200**（`once` / `standing` / `denied` のどれでも。`standing` なら規則も足す）。`transition` は載らず、
+    `note`（例 `"task … is already cancelled; decision recorded without resuming the task"`）が載る。
+    取り下げ済み（`withdrawn`）の行に人が答え直すのもこれ。
+  - それ以外（`ready` / `running` / `reviewing` / `draft`、途中確認の `blocked`）: 409 `invalid_transition`、
+    **何も書かない**（行は未決のまま）。
+  以前は決定を書いてから答えに行き、終端のタスクでは 409 を返しつつ決定だけ残っていた（2026-09-28 に本番で確認）。
+- `decision = "withdrawn"` は celeris だけが書く。人が送ると 422 `validation`。
 - `answer` が空白だけは 422 `validation`。無い id・ULID でない id は 404 `approval_not_found`。
   `scope` が `"node"`/`"all"` 以外は 400。
 
@@ -1580,16 +1550,15 @@ Go か再設計」を**人の 3 つの答え**にしたもの（ADR-0038 D2）�
 無く、「古い draft を取り消して秘書に分解し直させる」という遠回りをした。SPEC §7 のアジャイル（途中目標
 ごとに判定してやり直す）には、失敗した仕事を人が一手でやり直せることが要る。
 
-要求本文 `{"accept": false}`（省略可。既定 `false`）。
+要求本文 `RetryBody`（省略可。`accept` の既定は `true`）。`workspace` を指定すると複製先の作業場所を差し替える。
 
 - `failed` または `cancelled` のタスクを**複製して新しいタスクを作る**（`Failed`/`Cancelled` を非終端に
   戻す状態機械の遷移は**足していない**。DESIGN の状態機械を壊さないため）。それ以外の状態は 409
   `invalid_transition`（`trigger: "retry"`）。無いタスクは 404 `task_not_found`。
 - 複製するもの: `title` / `objective` / `acceptance` / `inputs` / `worker_hint` / `budget` / `role` /
   `genre` / `project_id` / `milestone_id` / `assignee` / `parent_id` / `workspace`。`depends_on` は
-  **元と同じ**。`attempts` は 0 から。新しいタスクは既定で `draft`（人が Go を出す。§3.10 の
-  `POST /tasks/{id}/approve` で `draft → ready`）。`accept: true` を本文に付ければ、作成の時点で
-  `ready` から始まる（別の遷移は経由しない。`task_ops::add::create_support_task` と同じ「その場で
+  **元と同じ**。`attempts` は 0 から。新しいタスクは既定で `ready` から始まる。`accept: false`
+  を本文に付けたときだけ `draft` にする（別の遷移は経由しない。`task_ops::add::create_support_task` と同じ「その場で
   `ready` を書く」流儀）。新しいタスクに `Event::Created` + `Event::Retried{from: <元の id>}` を記録する。
 - **元のタスクに依存していた未終端のタスク**（`draft` / `ready` / `blocked`。対話タスクは
   `DependencyFailed` の対象外なので `draft`/`ready` のまま残っていることがある。P-78）と、**その依存の
@@ -1599,19 +1568,10 @@ Go か再設計」を**人の 3 つの答え**にしたもの（ADR-0038 D2）�
   reason: "retried"}` を記録）、前者は状態を変えずに `depends_on` だけ書き換える。
 - 応答は `201 {"task_id": "01J…", "rewired": ["01J…", …]}`（`Location: /api/v1/tasks/{task_id}`）。
   `rewired` は張り替えたタスクの id（順不同）。
-- `token_file` があれば通常どおりトークン必須、無ければ他の変更系と同じ（**管理系ではない**。
-  §3.10〜3.13 と同じ扱い）。
+- 管理系。`token_file` が無くてもトークン無しの操作は 401（Phase 116）。
 - `task_ops::actions(task)`（§5.4）は `failed` / `cancelled` のタスクに `Action::Retry`（`"retry"`）を足す。
   受信箱の `failed` 項目、`GET /tasks/{id}` の `failed`/`cancelled` 表示、案件の仕事の木の失敗ノードは、
   みな `actions` にこれが立つのでボタンの表示に迷わない。
-
-**Phase 108 追記（2026-09-23、ADR-0062）**: 本番で、remote な作業場所のまま `failed` になった仕事
-（クラスタの準備失敗など）を retry しても `workspace` がそのまま複製され、担当に `cluster:<id>` が無ければ
-また `blocked` になる、という手詰まりが起きた。本文に **`workspace`（省略可）** を足した:
-`{"accept": false, "workspace": {"kind": "local", "path": "…"}}`。与えると複製先の `workspace` を
-差し替える（省略時は従来どおり元のタスクの `workspace` を複製する）。検証は §3.74 の `PATCH` の
-`workspace` と同じ規則（`Remote.cluster` が設定に無ければ 422 `validation`、`Local.path` が空でも 422、
-明示の `Remote` で元の担当が `cluster:<id>` を持たなければ 422）。検証に落ちれば複製は作られない。
 
 ### 3.64〜3.65 通知（Discord）（ADR-0037、Phase 39 / Phase 40）
 
@@ -1725,20 +1685,7 @@ webhook の URL は**秘密**で、`[secrets]`（§3.36〜3.38 / ADR-0030）に 
       "built_at": "2026-09-19T08:00:00Z",
       "schema_version": 11,
       "gate_ok": true,                // gate.json の ok（cargo test / clippy / build / pnpm … が全部 exit 0）
-      "gate": {                       // gate.json の内訳（ADR-0058、Phase 94）。gate.json が読めなければ null
-        "ok": true,                   // gate_ok と同じ値
-        "failed_step": null,          // 最初に非 0 で終わった段。全段成功なら null
-        "steps": [                    // run_step が呼ばれた順（GATE_OK が偽になった後の段は含まれない）
-          { "step": "cargo-test", "exit": 0, "secs": 42.5 }
-        ]
-      },
-      "verify": {                     // null = 未検証
-        "ok": true, "live_ok": true, "at": "2026-09-19T08:30:00Z",
-        "checks": [                   // verify.json の checks[]（ADR-0058、Phase 94）。無ければ空配列
-          { "id": "1", "name": "boot", "ok": true, "detail": "started", "elapsed_s": 0.4 },
-          { "id": "6", "name": "smoke", "ok": true, "detail": "done in 3.2s", "elapsed_s": 3.2 }
-        ]
-      },
+      "verify": { "ok": true, "live_ok": true, "at": "2026-09-19T08:30:00Z" },  // null = 未検証
       "promoted_at": null,            // promoted.json（昇格に成功したときだけ）。null = 一度も昇格していない
       "on_main": false,               // git merge-base --is-ancestor <sha> main。null = 分からない
       "changes": {                    // changes.json（ADR-0041 D4）。null = Phase 48 以前のリリース
@@ -1753,8 +1700,6 @@ webhook の URL は**秘密**で、`[secrets]`（§3.36〜3.38 / ADR-0030）に 
       "is_previous": false,
       "promoting": false,             // promote.lock の pid がまだ生きている
       "promote_failed": null,         // promote_failed.json（直近の昇格の試みが失敗したときだけ）。§3.67 の後注
-      "promote_stale": false,         // Phase 105。pid 死亡・promoted.json 無し・log が「promoted」まで進んでいない
-      "promote_last_line": null,      // promote.log の最後の（空でない）行。無ければ null
       "problem": null                 // manifest/gate が読めなかったときだけ一行（普段は省略）
     }
   ]
@@ -1785,45 +1730,11 @@ webhook の URL は**秘密**で、`[secrets]`（§3.36〜3.38 / ADR-0030）に 
   `docs/adr/0041-`）に**前方一致**したファイル。**判定は `release.sh` の側で済んでいて、API も GUI も
   その結果を運ぶだけ**（パターンを 2 か所に置かない）。`changes.json` が無いリリース（Phase 48 以前）は `null`。
 
-**ADR-0058（Phase 94）で増えた 2 つ:**
-
-- **`verify.checks`**: `verify.json` の `checks[]`（`scripts/selfdeploy/verify.sh` の
-  `record <id> <name> <ok> <detail> [task_id] [elapsed_s]` がそのまま書いたもの）をそのまま運ぶ。
-  `id` は `"1"`〜`"6"`、`"4b"`（文字列。数値専用にはできない）。`task_id`（検査 6 の煙試験タスク id）は
-  運ばない — GUI に使い道が無い判断（ADR-0058 D1）。`verify.json` にこのキーが無い（Phase 94 より前に
-  作られたリリース）ときは空配列。個別の検査の合否は**celeris がすでに `verify.json` に書いた値を
-  そのまま出すだけ**で、`ok`（集計値）との整合はここでは検査しない（celeris 側の record の責任）。
-- **`gate`**: `gate.json` をほぼそのまま運ぶ（`ok` は既存の `gate_ok` と同じ値、`failed_step`、`steps[]`）。
-  `steps[]` の各段は `{step, exit, secs}`（`gate.json` にある `log`＝ログのファイル名は運ばない。
-  本番ホストのローカルパスで GUI からは読めないため）。`gate.json` が読めない・壊れているときは
-  `gate: null`（そのときも `gate_ok` は従来どおり `false` のまま出る。一覧は落ちない）。
-  `gate.failed_step` は**成功時は `null`**（`release.sh` が書く `gate.json` の `failed_step: ""` は
-  celeris がトリムして空なら `None` に正規化してから運ぶ。Phase 97、P-94-1）。
-
-**Phase 105（ADR-0060 D1 追記）で増えた 2 つ**（本番の観測、2026-09-22 21:55 UTC。§3.67 も見よ）:
-
-- **`promote_stale`**: `promote.lock` の pid が死んでいて、`promoted.json` も無く、`promote.log` の
-  最後の行が `promote.sh` 成功時の一行（`sd_log "promoted $SHA12 (mode=$MODE)…"`）まで進んでいない
-  とき `true`。旧デーモンの drain が `promote.sh` を cgroup ごと巻き添えにした等、**途中で止まった
-  まま**を人が見分けるための材料。`promoting` が偽で `promote_failed` も無いのに一覧の見た目が
-  昇格前後で変わらない（`current` が古いまま）ときの手がかりになる。GUI 表示はこの Phase では作らない
-  （契約だけ。次の GUI Phase の対象）。
-- **`promote_last_line`**: `promote.log` の最後の（空でない）行。無ければ `null`。
-  `promote_stale` の根拠をそのまま見せるためのもの。
-
 #### 3.67 `POST /releases/{sha12}/promote` → 202 `ReleasePromoteAccepted`（**管理系: `token_file` 未設定でも 401**）
 
-要求本文は無し（`{}` でよい）。`promote.sh <sha12>` を **detached**（既定 `systemd-run --user --scope`。
-`systemd-run` か `XDG_RUNTIME_DIR` が無い環境では `setsid` にフォールバック。ADR-0060 D1、Phase 105）、
-stdin は `/dev/null`、stdout/err は `<release>/promote.log` で起こし、`promote.lock` に pid を書いて
-すぐ返す。**昇格の完了は待たない。**
-
-以前は `setsid` で新しいセッションに切り離すだけだったが、それでも celeris の unit
-（`celeris@<sha12>`、`KillMode=control-group`）の cgroup には残るため、昇格の途中で旧デーモンが
-drain を終えて止まると `promote.sh` も cgroup ごと巻き添えで殺されていた（本番 2026-09-22 21:55 UTC
-の観測。ADR-0060 の ssh master と同じ原因）。`systemd-run --user --scope` は指定したコマンドを
-exec するだけなので `promote.lock` に書く pid は変わらない（そのまま `sh` の pid）が、cgroup だけが
-celeris の外の一時 scope に移り、旧デーモンの終了に巻き込まれなくなった。
+要求本文は無し（`{}` でよい）。`promote.sh <sha12>` を **detached**（`setsid`、stdin は `/dev/null`、
+stdout/err は `<release>/promote.log`）で起こし、`promote.lock` に pid を書いてすぐ返す。
+**昇格の完了は待たない。**
 
 **どちらの `promote.sh` を起こすか**（ADR-0041 D4。Phase 50 で変わった）:
 **いま動いている版**のもの（`<releases_dir>/<current>/scripts/promote.sh`）を使う。昇格は「動いている
@@ -2010,27 +1921,6 @@ celeris の外の一時 scope に移り、旧デーモンの終了に巻き込�
   （継承〈親 → primary〉は作成時だけの規則なので、`[]` を書けば「リポジトリを使わない」になる）。
   知らない名前・リモートと他のリポジトリの混在・案件に属さないタスクの空でない `repos` は 422 `validation`。
   **走っている run には効かない**（次の run の worktree から。`PATCH` は run を止めない）。
-
-**Phase 108 追記（2026-09-23、ADR-0062）**: 本番で、案件から継承した remote な作業場所（担当に
-`cluster:<id>` が無い）で `blocked` になった調査タスクを、作業場所を直して進める手段が API に無い事故が
-あった。本文に **`workspace`（`WorkspaceSpec`。`{"kind":"local","path":"…"}` か
-`{"kind":"remote","cluster":"…","path":"…"}`）** を足した:
-
-- **この項目だけは、他の項目と違う状態のガードを持つ**: `draft` / `ready` / `blocked` / `failed` を
-  受け付け、`running` / `reviewing` / `done` / `cancelled` は 409 `invalid_transition`
-  （`failed` は他の項目の `PATCH` では 409 だが、`workspace` を書けば受け付ける）。
-- 検証は `POST /tasks` と同じ規則: `Remote.cluster` が設定に無ければ 422 `validation`
-  （`PATCH /projects/{id}` と同じ `validated_workspace` の層で見る。`~` はそこで `$HOME` に展開する）。
-  `Local.path` が空文字列なら 422。明示の `Remote` で、その時点の担当（同じ本文で `assignee` も
-  変えるならその新しい担当）が `cluster:<id>` を持たなければ 422（§4.6 の B3 と同じ規則。候補ノードを
-  列挙する）。`assignee` だけを変えて `workspace` を変えない場合も、既存の `workspace` が `Remote` なら
-  同じ検証を行う（`cluster:<id>` を持たない担当には付け替えられない）。
-- **`blocked`（ADR-0062 B1 の「担当に `cluster:<id>` が無い」による質問待ち）だったタスクは、この
-  `workspace` または `assignee` の変更で経路が通れば、検証を通過した時点でその場で `ready` に戻す**
-  （`gate::answer` と同じ `Trigger::Answer` に相乗りし、`Event::Answered{answer: "解決済み（作業場所/
-  担当の変更）"}` を記録、未決の `approvals` も同じ答えで決まる。GUI の受信箱からその質問は消える）。
-  worker が聞いた質問による `blocked` はここでは触らない（対象は B1 由来の `blocked` だけ）。
-- 応答の `fields` に `workspace` が加わる。
 
 #### 3.75 `GET /tasks/{id}/comments` → 200 `CommentList`
 
@@ -2879,6 +2769,12 @@ data: {"reason":"cursor_too_old","cursor":20000}
 
 ## 6. 型
 
+ADR-0067（Phase 111）: `Check` に `KnowledgePage { path: String }` を追加、`ArtifactRef` に `declared: bool`
+（既定 `true`。dispatcher が作業場所の走査で見つけた未申告の成果物だけ `false`）を追加、`ApprovalItem.artifacts`
+の要素型が `ArtifactRef` → `ApprovalArtifact { idx: usize, #[serde(flatten)] artifact: ArtifactRef }` に変わった
+（§6.2 参照）。この節の表は主要な型の出所を書いた 9b 時点のもので、以降の個々のフィールド追加は網羅的には
+追記していない（`docs/api/v1/api-v1.schema.json` が正）。
+
 ### 6.1 型の出所
 
 | 出所 | 型 | 備考 |
@@ -3075,8 +2971,11 @@ pub struct Inbox { pub approvals: Vec<ApprovalItem>, pub questions: Vec<Question
 pub struct InboxCounts { pub approvals: u32, pub questions: u32, pub drafts: u32, pub attention: u32, pub by_status: BTreeMap<Status, u64> }
 pub struct ApprovalItem { pub approval: TaskRef, pub parent: Option<TaskRef>, pub criterion_text: String,
     pub criterion_idx: Option<usize>, pub attempt: Option<u32>, pub requested_at: String, pub last_run: Option<RunSummary>,
-    pub evidence: Vec<EvidenceView>, pub other_verdicts: Vec<VerdictView>, pub artifacts: Vec<ArtifactRef>,
+    pub evidence: Vec<EvidenceView>, pub other_verdicts: Vec<VerdictView>, pub artifacts: Vec<ApprovalArtifact>,
     pub previous_decisions: Vec<ApprovalDecisionView> }
+// ADR-0067 D4（Phase 111）: `idx` は `GET /tasks/{parent_id}/artifacts/{idx}` と同じ添字（全 run を通じた出現順）。
+// `#[serde(flatten)]` で ArtifactRef のフィールド（name/path/sha256/kind/declared）はトップレベルに並ぶ。
+pub struct ApprovalArtifact { pub idx: usize, /* flatten */ ArtifactRef }
 pub struct EvidenceView { pub criterion: usize, pub command: Option<String>, pub exit: Option<i32>, pub stdout_tail: Option<String> }  // task_worker::Evidence と同形
 pub struct QuestionItem { pub task: TaskRef, pub question: String, pub asked_at: Option<String>, pub run_id: Option<String>, pub previous: Vec<AnswerNote> }
 pub struct DraftGroup { pub parent: Option<TaskRef>, pub plan_summary: Option<String>, pub drafts: Vec<TaskSummary> }
@@ -3601,3 +3500,13 @@ review_run, worker_run, criterion_idx, decision, detail, release, prepare_pid, n
 管理系 `POST /tasks/{id}/rereview` は `ReopenBody {expected_status?: "done"}` を受け取り、
 Reviewer条件がある通常のdone仕事をreviewingへ戻す。返却は `TransitionResult`。
 実装runは再実行せず、既存成果のレビューを再実行する。認証、404、409、422は他の管理操作と同じ。
+
+### タスクの routing の監査（ADR-0069 D5）
+
+`GET /tasks/{id}/routing` → 200 `TaskRoutingView {task_id, assignee?, routing?, runs[]}`（読み取り。認証は他の
+読み取りと同じ）。`routing` は `Task.routing`（`tier_source`・`assignee_explicit`・CoS/計画/委譲が書いたが
+捨てた担当 `dropped_assignee`・`features` の上書き）。`runs[]` はワーカー run ごとの `RoutingAudit`（古い順:
+`org_node, harness, adapter, provider, account, lane, model, reasoning_effort, features, rule_id,
+policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tokens, wall_ms, retries, review`）。
+各 run の `escalation` がエスカレーションの履歴。run が無いタスクは `runs: []`、知らないタスクは 404、
+クエリパラメータは 400。

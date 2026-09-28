@@ -110,6 +110,8 @@ const DECISION_LABEL: Record<Decision, string> = {
   once: "今回だけ",
   standing: "今後ずっと",
   denied: "認めない",
+  // Phase F7: 認可元のタスクが終わったので celeris が自動で閉じた（人の決定ではない）。
+  withdrawn: "取り下げ（元のタスクが終了）",
 };
 
 export function decisionLabel(decision: Decision | string): string {

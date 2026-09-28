@@ -44,14 +44,24 @@ if [ -n "$(id -nG "$RDC_USER" | tr ' ' '\n' | grep -vx "$RDC_USER" || true)" ]; 
   echo "user $RDC_USER: removed supplementary groups"
 fi
 HOME_DIR=$(getent passwd "$RDC_USER" | cut -d: -f6)
+# NFS の home（root squash）だと root の `install` は $HOME 配下を読めない。実行ユーザーとしてローカルディスクに
+# 写してから root で入れる（staging は 700、終了時に消す）。
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/setup-chatgpt-rdc.XXXXXX")
+trap 'rm -rf "$STAGE"' EXIT
+chmod 755 "$STAGE"
+install -m 755 "$CELERIS_HOME/current/bin/celerisctl" "$STAGE/celerisctl"
+install -m 755 "$REPO/scripts/rdc/celeris-chat" "$STAGE/celeris-chat"
+if [ -n "$TOKEN_SRC" ]; then
+  install -m 644 "$TOKEN_SRC" "$STAGE/mcp-token"
+fi
 sudo -n chmod 700 "$HOME_DIR"
 sudo -n install -d -m 700 -o "$RDC_USER" -g "$RDC_USER" "$HOME_DIR/.config" "$HOME_DIR/.config/celeris"
 sudo -n install -d -m 755 -o "$RDC_USER" -g "$RDC_USER" "$HOME_DIR/.local" "$HOME_DIR/.local/bin"
-sudo -n install -m 755 -o "$RDC_USER" -g "$RDC_USER" "$CELERIS_HOME/current/bin/celerisctl" "$HOME_DIR/.local/bin/celerisctl"
-sudo -n install -m 755 -o "$RDC_USER" -g "$RDC_USER" "$REPO/scripts/rdc/celeris-chat" "$HOME_DIR/.local/bin/celeris-chat"
+sudo -n install -m 755 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/celerisctl" "$HOME_DIR/.local/bin/celerisctl"
+sudo -n install -m 755 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/celeris-chat" "$HOME_DIR/.local/bin/celeris-chat"
 echo "installed: $HOME_DIR/.local/bin/{celerisctl,celeris-chat} (from $(readlink -f "$CELERIS_HOME/current"))"
 if [ -n "$TOKEN_SRC" ]; then
-  sudo -n install -m 600 -o "$RDC_USER" -g "$RDC_USER" "$TOKEN_SRC" "$HOME_DIR/.config/celeris/mcp-token"
+  sudo -n install -m 600 -o "$RDC_USER" -g "$RDC_USER" "$STAGE/mcp-token" "$HOME_DIR/.config/celeris/mcp-token"
   echo "installed: $HOME_DIR/.config/celeris/mcp-token (600; value not shown)"
 fi
 # PATH に ~/.local/bin を足す（bash のログインシェル）。

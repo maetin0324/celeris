@@ -2021,3 +2021,14 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
 **未解決・提案**:
 - 既存の install の残りは次の tick で `reconcile` として閉じる（本番は既に 0 件なので、昇格しても何も起きない想定）。
 - 取り下げた行を一覧から消す（隠す）かは GUI 側の判断。今は「決めたものの履歴」に `取り下げ` として残る。
+
+## release 6fe28711bab6 の昇格（2026-09-28 19:18:07Z）と browser task の詰まり
+
+- release `6fe28711bab6`（main 6fe2871 = F5-fix6 742f977 + F6 f066c84 + F7 35992b5 + run ログ表示 task の配送 3c08f81 + F6-fix 8e9aee5 + EVENT_TYPES の要素数修正）。
+  ゲート: cargo-test 82 s（nextest）、GUI audit 0 件。verify ok / live_ok、schema 29。ライブ昇格（backup 20260928-191751-pre-6fe28711bab6）。
+- 最初のゲートは `pnpm-mobile-audit` で 7 件（F6 の tap-target 2 + 初期 JS 予算超過 5）→ F6-fix。2 回目は F6 と F7 の統合で `EVENT_TYPES: [&str; 32]` に
+  33 要素（`execution_hint_set` と `approvals_withdrawn`）が入りコンパイル失敗 → 1 行修正。
+- browser task 01M3MFS5T52FXA63W4V10XGC4S（gate=on で retry した compound の本番確認）: plan v1 の 7 WU が done → review で基準 0（task 直下の report.md 無し）
+  不合格 → replan v2（remerge / reship 追加）→ remerge が task ブランチに直接 commit（7725ed6）したため `celeris-wu/<task>/remerge` が無く、
+  reship の worktree 準備が「dependency branch of remerge does not exist yet」で 2 秒ごとに失敗し続け、event も無く task が `ready` に見えた（18:58〜19:19Z）。
+  人が branch を作って解消。修正は F5-fix7 として委譲（依存 WU のブランチ解決の規則と、準備失敗を blocked + event で見せる）。

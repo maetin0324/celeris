@@ -768,6 +768,10 @@ pub struct ExecutionConfig {
     /// ADR-0074 D1.3/§4（Phase F2b）: `[execution] max_parallel_work_units`。Task ごとの同時 WU 数の
     /// 上限（既定 3、上限 6）。
     pub max_parallel_work_units: usize,
+    /// Phase F5-fix3: planner の計画の検証・採用に使う上限（ADR-0072 D18 / ADR-0074 §4）。planner の
+    /// プロンプトにもこの値をそのまま出す（検証と文面の出どころを 1 つにする）。config.toml の欄は無く、
+    /// 常に `ExecutionLimits::default()`（テストが既定と違う値を挿す）。
+    pub limits: task_core::ExecutionLimits,
 }
 
 /// ADR-0074 §4: `max_parallel_work_units` の上限。
@@ -787,6 +791,7 @@ impl Default for ExecutionConfig {
             work_unit_lane_cap: task_core::WorkUnitLaneCap::default(),
             parallel: false,
             max_parallel_work_units: 3,
+            limits: task_core::ExecutionLimits::default(),
         }
     }
 }
@@ -985,6 +990,56 @@ fn describe_run_end(end: task_core::RunEnd) -> String {
         task_core::RunEnd::HarnessError { class } => format!("harness_error({class:?})"),
         task_core::RunEnd::Cancelled => "cancelled".to_string(),
     }
+}
+
+/// Phase F5-fix3: 拒否した planner の計画の移し先（`artifacts/` の中）。
+const REJECTED_PLAN_FILE: &str = "execution-plan.rejected.json";
+/// Phase F5-fix3: `give_up_or_retry_planner` の進捗・質問の文面（`planner_rejections_since_last_plan` が
+/// 同じ定数で理由を取り出す。文面は F5-fix2 までと 1 バイトも変えない）。
+const PLANNER_RETRY_PREFIX: &str = "計画を採用できませんでした（";
+const PLANNER_RETRY_SUFFIX: &str = "）。もう一度だけ試します。";
+const PLANNER_BLOCKED_PREFIX: &str = "計画を直せませんでした（";
+const PLANNER_BLOCKED_SUFFIX: &str = "）。予算を増やして続ける／人が計画を書き直す\n（PUT /tasks/{id}/execution-plan）／中止のいずれかを選んでください。";
+
+fn planner_retry_message(reason: &str) -> String {
+    format!("{PLANNER_RETRY_PREFIX}{reason}{PLANNER_RETRY_SUFFIX}")
+}
+
+fn planner_blocked_question(reason: &str) -> String {
+    format!("{PLANNER_BLOCKED_PREFIX}{reason}{PLANNER_BLOCKED_SUFFIX}")
+}
+
+/// Phase F5-fix3: 直近の `ExecutionPlanned`（無ければ最初）より後で、daemon が planner の計画を拒否した
+/// 理由（`planner_retry_message` / `planner_blocked_question` の進捗から、古い順・重複なし）。次の
+/// planner run のプロンプトに「前の計画はこの理由で拒否された」として渡す（純粋関数）。
+fn planner_rejections_since_last_plan(events: &[(u64, Event)]) -> Vec<String> {
+    let since = events
+        .iter()
+        .rposition(|(_, e)| matches!(e, Event::ExecutionPlanned { .. }))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let mut out: Vec<String> = Vec::new();
+    for (_, e) in &events[since..] {
+        let Event::WorkerProgress {
+            msg, kind: None, ..
+        } = e
+        else {
+            continue;
+        };
+        let reason = msg
+            .strip_prefix(PLANNER_RETRY_PREFIX)
+            .and_then(|r| r.strip_suffix(PLANNER_RETRY_SUFFIX))
+            .or_else(|| {
+                msg.strip_prefix(PLANNER_BLOCKED_PREFIX)
+                    .and_then(|r| r.strip_suffix(PLANNER_BLOCKED_SUFFIX))
+            });
+        if let Some(reason) = reason
+            && !out.iter().any(|r| r == reason)
+        {
+            out.push(reason.to_string());
+        }
+    }
+    out
 }
 
 /// ADR-0072 D5（E2b の指摘、Phase E3 で配線）: reviewer run の `runs` 索引の finish。`completed_review_run`
@@ -2303,11 +2358,20 @@ impl Dispatcher {
             entry.handle.abort();
             aborted += 1;
         }
-        for (task_id, entry) in self.reviewing.drain() {
+        let reviewing: Vec<(TaskId, ReviewEntry)> = self.reviewing.drain().collect();
+        for (task_id, entry) in reviewing {
             tracing::warn!(task_id = %task_id, "drain timeout; aborting the review");
             task_worker::kill_tree(&entry.run_id, kill_grace);
             if let Some(review_run_id) = &entry.review_run_id {
                 task_worker::kill_tree(review_run_id, kill_grace);
+                // Phase F5-fix3: Reviewer run は lease を持たない（新しい active は review をやり直すだけで
+                // この run を閉じない）ので、ここで `runs` 行ごと閉じる。Task の状態は変えない。
+                self.close_aborted_run(
+                    task_id,
+                    review_run_id,
+                    Some(RunRole::Reviewer),
+                    "review aborted (drain timeout)",
+                );
             }
             entry.handle.abort();
             aborted += 1;
@@ -5336,7 +5400,7 @@ impl Dispatcher {
                         Err(e) => Err(e),
                         Ok(()) => task_core::execution_plan::validate(
                             &spec,
-                            task_core::ExecutionLimits::default(),
+                            self.config.execution.limits,
                             &done_work_units,
                         )
                         .map_err(|errors| task_ops::execution::describe_validation_errors(&errors)),
@@ -5454,7 +5518,7 @@ impl Dispatcher {
                         "replan (planner run)".to_string(),
                         task_core::PlanOrigin::Planner,
                         Some(run_id.clone()),
-                        task_core::ExecutionLimits::default(),
+                        self.config.execution.limits,
                         now,
                     )
                     .map(|(plan, _diff)| plan)
@@ -5465,7 +5529,7 @@ impl Dispatcher {
                         validated.spec,
                         task_core::PlanOrigin::Planner,
                         Some(run_id.clone()),
-                        task_core::ExecutionLimits::default(),
+                        self.config.execution.limits,
                         now,
                         children,
                     )
@@ -5664,6 +5728,25 @@ impl Dispatcher {
     /// 諦めたときの振る舞いは呼び出し時点の状態で決める: 既に `active` な計画が無ければ fresh
     /// planning の give up（atomic に倒す。D14）、既に `active` な計画があれば replan の give up
     /// （`blocked`。D12「失敗にしないもの」、D17/D18）。Task を `failed` にはしない。
+    /// Phase F5-fix3: 拒否した planner の計画（`artifacts/execution-plan.json`）を
+    /// `artifacts/execution-plan.rejected.json` に移す（上書き）。無ければ何もしない。失敗しても警告だけ。
+    fn set_aside_rejected_plan(&self, task: &Task) {
+        let Some(dir) = self
+            .task_dir(task)
+            .map(|d| self.artifacts_dir(task, d.as_path()))
+        else {
+            return;
+        };
+        let from = dir.join("execution-plan.json");
+        if !from.exists() {
+            return;
+        }
+        let to = dir.join(REJECTED_PLAN_FILE);
+        if let Err(e) = std::fs::rename(&from, &to) {
+            tracing::warn!(task_id = %task.id, error = %e, "failed to set the rejected execution plan aside");
+        }
+    }
+
     fn give_up_or_retry_planner(
         &self,
         task_id: TaskId,
@@ -5673,6 +5756,9 @@ impl Dispatcher {
         reason: String,
         now: OffsetDateTime,
     ) -> Result<(), DispatchError> {
+        // Phase F5-fix3: 拒否した計画のファイルを残すと、次の planner run はそれを見つけて「検証済み」と
+        // 思い込みそのまま再提出する（dogfood 4 回目の 2 回目の試行）。`execution-plan.rejected.json` に移す。
+        self.set_aside_rejected_plan(task);
         let events = self.store.events_for(task_id)?;
         let since_idx = events
             .iter()
@@ -5693,10 +5779,7 @@ impl Dispatcher {
             .count();
         const MAX_PLANNER_ATTEMPTS: usize = 2;
         if attempts_so_far < MAX_PLANNER_ATTEMPTS {
-            let progress = Event::worker_progress(
-                run_id,
-                format!("計画を採用できませんでした（{reason}）。もう一度だけ試します。"),
-            );
+            let progress = Event::worker_progress(run_id, planner_retry_message(&reason));
             self.store.apply_transition_with_events(
                 task_id,
                 Trigger::Continue {
@@ -5709,10 +5792,7 @@ impl Dispatcher {
             // 2 回とも不正だったので、直せないまま突き進まず人に聞く（`blocked`。D12「失敗にしない
             // もの」の一つ。atomic への書き換えはしない — 既に WU の履歴がある計画を捨てるのは
             // 安全ではない）。
-            let question = format!(
-                "計画を直せませんでした（{reason}）。予算を増やして続ける／人が計画を書き直す
-（PUT /tasks/{{id}}/execution-plan）／中止のいずれかを選んでください。"
-            );
+            let question = planner_blocked_question(&reason);
             let progress = Event::worker_progress(run_id, question.clone());
             self.store.apply_transition_with_events(
                 task_id,
@@ -7094,6 +7174,35 @@ impl Dispatcher {
         entry.handle.abort();
     }
 
+    /// Phase F5-fix3: 止めた run に `WorkerFinished` がまだ無ければ、`interrupted: <why>`（`end =
+    /// cancelled`。GUI では割り込みと同じ「失敗ではない」扱い、コメントの割り込みも消費しない）を追記する。
+    /// ストアが同じトランザクションで `runs` 行を `cancelled` にする。失敗しても警告だけ。
+    fn close_aborted_run(&self, task_id: TaskId, run_id: &str, role: Option<RunRole>, why: &str) {
+        let already = match self.store.events_for(task_id) {
+            Ok(events) => events
+                .iter()
+                .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id)),
+            Err(e) => {
+                tracing::warn!(%task_id, %run_id, error = %e, "failed to read events before closing an aborted run");
+                return;
+            }
+        };
+        if already {
+            return;
+        }
+        let finished = Event::WorkerFinished {
+            run_id: run_id.to_string(),
+            outcome: format!("interrupted: {why}"),
+            usage: None,
+            role,
+            metrics: None,
+            end: Some(task_core::RunEnd::Cancelled),
+        };
+        if let Err(e) = self.store.append_event(task_id, &finished) {
+            tracing::warn!(%task_id, %run_id, error = %e, "failed to close an aborted run");
+        }
+    }
+
     /// ADR-0002 D9: ストア上で `running` でなくなった（cancel / ADR-0044 D2 の割り込み等）run を
     /// 強制終了する。打ち切ったタスクは `just_aborted` に入れ、**この tick では dispatch し直さない**。
     fn abort_stale_runs(&mut self) -> Result<(), DispatchError> {
@@ -7109,7 +7218,16 @@ impl Dispatcher {
             if !still_ours && let Some(entry) = self.running.remove(&key) {
                 tracing::warn!(task_id = %id, run_id = %entry.run_id, "aborting run (task no longer running under this lease)");
                 // ADR-0044 Phase 53 追記: プロセスグループごと止める（孫まで。コンテナならその中も）。
+                let run_id = entry.run_id.clone();
                 self.stop_run(&entry.run_id, entry.handle, entry.container);
+                // Phase F5-fix3: cancel 等で止めた run は誰も `WorkerFinished` を書かない（割り込み・lease の
+                // 回収なら書いてある）。書かれていなければ閉じる（`runs` 行も終端になる）。
+                self.close_aborted_run(
+                    id,
+                    &run_id,
+                    None,
+                    "aborted (task no longer running under this lease)",
+                );
                 self.just_aborted.insert(id);
                 // ADR-0074 D1.6/D1.7（Phase F2）: v2 の WU の run を止めたなら、WU を `running` の
                 // まま残さない（割り込み・lease 喪失なら checkpoint の有無で needs_continuation /
@@ -7166,6 +7284,14 @@ impl Dispatcher {
                 matches!(self.store.get(id)?, Some(t) if t.status == Status::Reviewing);
             if !still_reviewing && let Some(entry) = self.reviewing.remove(&id) {
                 tracing::warn!(task_id = %id, "aborting review (task no longer reviewing)");
+                if let Some(review_run_id) = entry.review_run_id.clone() {
+                    self.close_aborted_run(
+                        id,
+                        &review_run_id,
+                        Some(RunRole::Reviewer),
+                        "review aborted (task no longer reviewing)",
+                    );
+                }
                 self.stop_review(entry);
                 self.pending_subjects.remove(&id);
             }
@@ -9594,7 +9720,10 @@ impl Dispatcher {
         replan: bool,
     ) -> Result<task_worker::protocol::ExecutionPlannerContext, DispatchError> {
         let decision = task.routing.as_ref().and_then(|r| r.execution.clone());
-        let limits = task_core::ExecutionLimits::default();
+        let limits = self.config.execution.limits;
+        // Phase F5-fix3: 同じ計画の回で前の planner run の計画が拒否されていれば、その理由を渡す。
+        let previous_attempt_errors =
+            planner_rejections_since_last_plan(&self.store.events_for(task.id)?);
         let (replan_reason, current_plan_version, work_unit_summaries, preserve_done_keys) =
             if replan {
                 let version = self
@@ -9655,6 +9784,15 @@ impl Dispatcher {
             } else {
                 0
             },
+            max_title_chars: limits.max_title_chars,
+            max_objective_chars: limits.max_objective_chars,
+            max_done_when_items: limits.max_done_when_items,
+            max_done_when_chars: limits.max_done_when_chars,
+            max_checks: limits.max_checks,
+            max_rationale_chars: limits.max_rationale_chars,
+            max_plan_json_bytes: limits.max_plan_json_bytes,
+            max_children: limits.max_children,
+            previous_attempt_errors,
         })
     }
 
@@ -27477,6 +27615,127 @@ mod tests {
         );
     }
 
+    /// Phase F5-fix3（dogfood 4 回目の不具合 1）: planner は検証と同じ `ExecutionLimits`（config の値）を
+    /// プロンプトで受け取り、計画が拒否されたら次の試行はその検証エラーを受け取る。拒否された計画の
+    /// ファイルは `execution-plan.rejected.json` に移る（次の試行が「検証済み」と思い込んで再提出しない）。
+    #[tokio::test]
+    async fn the_retry_planner_run_receives_the_previous_validation_error_and_config_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = compound_task(dir.path());
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+
+        let mut wu = wu_spec("sync-main", &[]);
+        wu.checks = (0..4)
+            .map(|i| task_core::WorkUnitCheck {
+                cmd: format!("true {i}"),
+                expect_exit: 0,
+            })
+            .collect();
+        let adapter = Arc::new(PlannerScriptAdapter::new(
+            vec![Some(plan_json(vec![wu])), None],
+            HashMap::new(),
+        ));
+        let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+        d.config.execution.gate = task_core::GateMode::On;
+        d.config.execution.planner.adapter = "instant".to_string();
+        // 既定（6）と違う上限。検証とプロンプトの両方がこの値を使う。
+        d.config.execution.limits.max_checks = 3;
+        d.config.execution.limits.max_title_chars = 77;
+        let report = run_until_idle(&mut d, 400).await;
+        assert!(report.idle, "{report:?}");
+
+        let planner_contexts: Vec<task_worker::protocol::ExecutionPlannerContext> = adapter
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.execution_planner.clone())
+            .collect();
+        assert_eq!(planner_contexts.len(), 2, "{planner_contexts:?}");
+        assert_eq!(planner_contexts[0].max_checks, 3);
+        assert_eq!(planner_contexts[0].max_title_chars, 77);
+        assert!(planner_contexts[0].previous_attempt_errors.is_empty());
+        assert_eq!(
+            planner_contexts[1].previous_attempt_errors,
+            vec!["work unit sync-main: too many checks: 4 > 3".to_string()],
+        );
+        let events = store.events_for(task_id).unwrap();
+        assert!(events.iter().any(|(_, e)| matches!(
+            e,
+            Event::WorkerFinished { outcome, .. }
+                if outcome == "error(retryable=true): invalid execution plan: work unit sync-main: too many checks: 4 > 3"
+        )));
+        // 拒否された計画は移され、2 回目（ファイルを書かない）は古い計画を読まずに「見つからない」になる。
+        let stored = store.get(task_id).unwrap().unwrap();
+        let artifacts = d
+            .task_dir(&stored)
+            .map(|w| d.artifacts_dir(&stored, &w))
+            .expect("artifacts dir");
+        assert!(artifacts.join(REJECTED_PLAN_FILE).exists());
+        assert!(!artifacts.join("execution-plan.json").exists());
+        assert!(events.iter().any(|(_, e)| matches!(
+            e,
+            Event::WorkerProgress { msg, .. } if msg.contains("execution-plan.json が見つからない")
+        )));
+    }
+
+    /// Phase F5-fix3: `planner_rejections_since_last_plan` は直近の `ExecutionPlanned` より後の拒否だけを
+    /// 古い順・重複なしで返す（再試行の進捗と、2 回とも拒否されたときの質問の両方）。
+    #[test]
+    fn planner_rejections_are_collected_since_the_last_adopted_plan() {
+        let progress = |msg: String| Event::worker_progress("run-p", msg);
+        let events: Vec<(u64, Event)> = vec![
+            (0, progress(planner_retry_message("old reason"))),
+            (
+                1,
+                Event::ExecutionPlanned {
+                    plan_id: "p1".into(),
+                    version: 1,
+                    origin: task_core::PlanOrigin::Planner,
+                    supersedes: None,
+                    reason: None,
+                    plan: Box::new(task_core::ExecutionPlanSpec {
+                        schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
+                        rationale: String::new(),
+                        work_units: Vec::new(),
+                        phases: Vec::new(),
+                        children: Vec::new(),
+                    }),
+                },
+            ),
+            (
+                2,
+                progress(planner_retry_message("work unit x: too many checks: 8 > 6")),
+            ),
+            (
+                3,
+                progress("計画を採用できませんでした（unrelated".to_string()),
+            ),
+            (
+                4,
+                progress(planner_blocked_question(
+                    "work unit x: too many checks: 8 > 6",
+                )),
+            ),
+            (
+                5,
+                progress(planner_blocked_question(
+                    "rationale is too long: 2000 > 1500 characters",
+                )),
+            ),
+        ];
+        assert_eq!(
+            planner_rejections_since_last_plan(&events),
+            vec![
+                "work unit x: too many checks: 8 > 6".to_string(),
+                "rationale is too long: 2000 > 1500 characters".to_string(),
+            ]
+        );
+        assert!(planner_rejections_since_last_plan(&events[..2]).is_empty());
+    }
+
     /// ADR-0074 §6 F1 (b): WU の `features` が `TaskFeatureHints` として読めない計画（未知の欄
     /// `"lane"` を書いた）は検証エラーになり、1 回だけ再試行してそれでも駄目なら atomic に倒れる
     /// （`invalid_planner_output_retries_once_then_falls_back_to_atomic` と同じ経路）。
@@ -28864,6 +29123,164 @@ mod tests {
             a.status,
             task_core::WorkUnitStatus::Ready,
             "checkpoint が無いので ready に戻る: {a:?}"
+        );
+    }
+
+    /// Phase F5-fix3（dogfood 4 回目の不具合 2）: lease 失効で requeue した run の `runs` 行は `running`
+    /// のまま残らず、`harness_error`・`finished_at` つきで閉じる（本番の 01M3K0X49JB5JP5TQH304ZTRW2 と
+    /// 01M3K7WNJGYAPNBPMBVJXZ96CC は `worker_finished{lease_expired}` があるのに `running` のままだった）。
+    #[tokio::test]
+    async fn a_lease_expiry_requeue_closes_the_runs_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        task.status = Status::Running;
+        let run_id = "run-lease-lost".to_string();
+        task.lease = Some(task_core::Lease {
+            worker_run_id: run_id.clone(),
+            expires_at: OffsetDateTime::now_utc() - Duration::from_secs(60),
+        });
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        store
+            .append_event(
+                task_id,
+                &Event::Created {
+                    task: Box::new(task.clone()),
+                },
+            )
+            .unwrap();
+        adopt_three_step_plan(&store, task_id);
+        let a = store
+            .work_units_for(task_id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+        let mut running_a = a.clone();
+        running_a.status = task_core::WorkUnitStatus::Running;
+        running_a.runs = 1;
+        running_a.last_run_id = Some(run_id.clone());
+        store
+            .work_unit_transition(
+                task_id,
+                running_a,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: a.id.clone(),
+                    key: a.key.clone(),
+                    from: task_core::WorkUnitStatus::Ready,
+                    to: task_core::WorkUnitStatus::Running,
+                    reason: "dispatch".into(),
+                    run_id: Some(run_id.clone()),
+                },
+            )
+            .unwrap();
+        store
+            .run_index_start(task_core::RunRow {
+                run_id: run_id.clone(),
+                task_id: task_id.to_string(),
+                work_unit_id: Some(a.id.clone()),
+                role: task_core::RunIndexRole::Worker,
+                seq: 1,
+                status: task_core::RunIndexStatus::Running,
+                adapter: Some("instant".into()),
+                model: Some("m".into()),
+                account: None,
+                session_id: None,
+                checkpoint: None,
+                usage: None,
+                metrics: None,
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+                finished_at: None,
+            })
+            .unwrap();
+
+        let adapter = Arc::new(WuScriptAdapter::new(HashMap::new()));
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        d.tick().unwrap();
+
+        let events = store.events_for(task_id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::WorkerFinished { run_id: r, outcome, .. }
+                    if r == &run_id && outcome.starts_with("infra_requeue: lease expired")
+            )),
+            "{events:?}"
+        );
+        let row = store.run_index_get(&run_id).unwrap().expect("runs row");
+        assert_eq!(
+            row.status,
+            task_core::RunIndexStatus::HarnessError,
+            "{row:?}"
+        );
+        assert!(row.finished_at.is_some(), "{row:?}");
+    }
+
+    /// Phase F5-fix3: cancel で止めた run（誰も `WorkerFinished` を書かない）も `runs` 行を閉じる
+    /// （`interrupted: …`、`cancelled`）。
+    #[tokio::test]
+    async fn a_run_aborted_by_cancel_closes_its_runs_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            1,
+        );
+        let task_id = task.id;
+        store.insert(&task).unwrap();
+        let adapter = Arc::new(InstantAdapter {
+            terminal: Terminal::Done {
+                summary: "never".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            delay: Duration::from_secs(600),
+        });
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        d.tick().unwrap();
+        let run_id = store
+            .get(task_id)
+            .unwrap()
+            .unwrap()
+            .lease
+            .expect("leased")
+            .worker_run_id;
+        assert_eq!(
+            store.run_index_get(&run_id).unwrap().map(|r| r.status),
+            Some(task_core::RunIndexStatus::Running)
+        );
+        store
+            .apply_transition(task_id, Trigger::Cancel, None)
+            .unwrap();
+        d.tick().unwrap();
+        let row = store.run_index_get(&run_id).unwrap().expect("runs row");
+        assert_eq!(row.status, task_core::RunIndexStatus::Cancelled, "{row:?}");
+        assert!(row.finished_at.is_some());
+        let events = store.events_for(task_id).unwrap();
+        let finished: Vec<&str> = events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::WorkerFinished {
+                    run_id: r, outcome, ..
+                } if r == &run_id => Some(outcome.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finished,
+            vec!["interrupted: aborted (task no longer running under this lease)"]
         );
     }
 

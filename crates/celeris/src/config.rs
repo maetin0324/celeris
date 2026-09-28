@@ -3395,6 +3395,8 @@ impl Config {
                 .unwrap_or_default(),
                 parallel: self.execution.parallel,
                 max_parallel_work_units: self.execution.max_parallel_work_units,
+                // Phase F5-fix3: config.toml に欄は無い（ADR-0072 D18 / ADR-0074 §4 の既定のまま）。
+                limits: task_core::ExecutionLimits::default(),
             },
         }
     }

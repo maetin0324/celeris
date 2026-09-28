@@ -73,3 +73,23 @@ release.sh / verify.sh の結果と検証済み SHA は WorkUnit の `artifacts/
 
 - Phase 2 は P2-A（policy 契約）を単独 task として先に起票し、backend 決定を待たずに進める。
 - agent-browser の版上げ時は `scripts/browser-smoke.py` の fail-open 負例（policy 欠落・破損・空 allow）を必ず再実行する。
+
+## 2026-09-28 追記: 最新 main の再統合と再検証
+
+`7725ed6` による再統合後に main が `6fe2871`、さらに `06e9a03`（F5-fix7）へ進んだため、main を再度 merge した。
+`EVENT_TYPES` は `browser_updated` と main の認可イベントをともに保持し、task 画面は Browser Live View と実行の形の操作をともに保持した。
+GUI lint で検出した lazy import の重複を解消してから、以下を sandbox 外で再検証した。
+
+| 検査 | コマンド | 結果 |
+| --- | --- | --- |
+| Rust format | `cargo fmt --all -- --check` | exit 0 |
+| Rust tests | `cargo test --workspace` | `06e9a03` の取り込み前は 2673 passed、取り込み後は exit 0、2678 passed / 0 failed / 7 ignored |
+| Rust lint | `cargo clippy --workspace -- -D warnings` | exit 0 |
+| GUI lint | `cd gui && pnpm lint` | 初回は重複定義 2 件で exit 1、修正後 exit 0 |
+| GUI types | `cd gui && pnpm typecheck` | exit 0 |
+| GUI tests | `cd gui && pnpm test` | exit 0、1173 passed / 0 failed |
+| GUI build | `cd gui && pnpm build` | exit 0 |
+| Mobile audit | `cd gui && pnpm mobile-audit` | exit 0、27 routes × 2 schemes、0 violations |
+
+検証に使った依存関係は `cd gui && pnpm install --frozen-lockfile` で導入した。
+release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/release.md` に記録する。本番昇格は人が GUI で行う。

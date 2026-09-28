@@ -62,6 +62,7 @@ import type {
 import { CodeViewer } from "~/components/CodeViewer";
 /* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
 import { ReplyStepRow } from "~/components/ConsoleBlockItem";
+/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（Execution 節・ExecutionPhase）。 */
 import { ExecutionSection } from "~/components/ExecutionSection";
 import {
   ErrorFlash,
@@ -150,12 +151,6 @@ import type { Route } from "./+types/tasks.$id";
 const BrowserRunsPanel = lazy(() =>
   import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
 );
-const ExecutionModeControl = lazy(() =>
-  import("~/components/ExecutionModeControl").then((m) => ({ default: m.ExecutionModeControl })),
-);
-const HumanReviewPanel = lazy(() =>
-  import("~/components/HumanReviewPanel").then((m) => ({ default: m.HumanReviewPanel })),
-);
 
 // Phase 77（ADR-0055 性能予算）: 「変更」「ファイル」タブの本体（`~/components/task-changes.tsx`・
 // `~/components/task-files.tsx`）は、5 つあるタブのうち一度に 1 つしか出ない（`?tab=` で切り替え）のに
@@ -165,6 +160,17 @@ const HumanReviewPanel = lazy(() =>
 // そのまま残すので、そちらの動作・バンドルは変えない）。
 const TaskChanges = lazy(() => import("~/components/task-changes").then((m) => ({ default: m.TaskChanges })));
 const TaskFiles = lazy(() => import("~/components/task-files").then((m) => ({ default: m.TaskFiles })));
+// Phase F6-fix（ADR-0055 性能予算）: 「実行の形」カード（`~/components/ExecutionModeControl`・
+// `~/lib/execution-mode.ts`・確認文言）は gate の対象になるタスクでしか出ない補助の操作なので、初回の JS に載せず
+// 別チャンクにする（F6 で task 系ルートの初回 JS が 532KB の予算を 5KB 超えた）。
+const ExecutionModeControl = lazy(() =>
+  import("~/components/ExecutionModeControl").then((m) => ({ default: m.ExecutionModeControl })),
+);
+// 同じく F6-fix: 人の判断待ちの確認パネル（`~/components/HumanReviewPanel`）は review タスクで判断待ちが
+// あるときだけ出るので、それ以外のタスクの初回 JS から外す（予算に余裕を残すため）。
+const HumanReviewPanel = lazy(() =>
+  import("~/components/HumanReviewPanel").then((m) => ({ default: m.HumanReviewPanel })),
+);
 
 /**
  * タブの中身の読み込み中プレースホルダ（Phase 77、ADR-0055 D3「体感速度」）。チャンク待ち（`Suspense`）と
@@ -1023,8 +1029,9 @@ function OverviewTab({
   const { task } = detail;
   return (
     <>
+      {/* Phase F6-fix: `React.lazy`（このファイル冒頭）なので `Suspense` で包む。 */}
       {humanReview.length > 0 && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<Skeleton className="h-32 w-full" />}>
           <HumanReviewPanel
             items={humanReview}
             criteria={detail.criteria}

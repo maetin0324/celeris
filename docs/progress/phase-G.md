@@ -835,3 +835,57 @@ ADR-0075 に「Phase G3 実装時の逸脱・明確化」1〜17 を追記し、�
 
 **昇格**: release `181939898ec3`（main 1819398 = SD-2 93d4e59 + PROGRESS.md 重複解消）。release.sh のゲート（nextest）: cargo-test 116.8 s / clippy 17.5 s / build 43.5 s、verify 27.3 s（ok / live_ok）。2026-09-28 14:33:36Z にライブ昇格（backup 20260928-143328-pre-181939898ec3）。release 開始から昇格完了まで 8 分 49 秒（14:24:55→14:33:44Z、SD-1 前は約 18〜21 分）。
 
+
+## SD-3: truncate_phase_report の最適化（挙動不変）（2026-09-28、完了・worktree、main 未 merge）
+
+依頼: 人の判断（2026-09-28「本番実装を直す部分は挙動が変わらなければ最適化してください」、SD-2 の P-SD2-1）。
+`task_core::pause::truncate_phase_report`（ADR-0074 D2.3）が 1 要素 pop するごとに報告全体を JSON に直列化し直していた
+（O(S · n)、実質 O(n²)）ため、`truncate_shrinks_to_the_overall_byte_cap_and_keeps_the_headline`（1 万要素）だけで約 46 s かかり、
+並列 gate の下限になっていた。規則は変えていない（ADR の変更なし）。
+
+### 変えたこと（`crates/task-core/src/pause.rs` のみ）
+
+- 規則（旧実装と同じ）: 優先順 `diff_stat` → `integration` → `phases_done` → `work_units` → `next_phase_work_units` →
+  `artifact_paths` で「先頭の空でない `Vec` の末尾を 1 つ落とす」操作の列に沿って、実際の JSON 直列化が上限以下になる**最小の**
+  回数 `k` だけ落とす。0 回で収まれば何もしない。全部落としても超えるなら全部落として終わる（見出し・`quota_summary`・
+  `next_phase` は残す）。
+- 不変条件: 1 回落とすたびに直列化は狭義に短くなる（要素と `,` が消え、空になればキーごと消える）ので「上限以下」は `k` に
+  ついて単調。最小の `k` を二分探索で求める。各候補の長さは `PhaseReportView`（先頭の要素だけを借用で見せる同形の
+  構造体。`PhaseReport` を網羅的に分解するので、フィールドを足すとコンパイルが止まる）をバイト数だけ数える writer に
+  直列化して測る（判定は旧実装と同じく実際の直列化の長さ）。計算量 O(S · log n)。doc comment に規則・不変条件・計算量を書いた。
+- 公開 API は同じ（`truncate_phase_report(&mut PhaseReport)`）。本体は上限を引数に取る非公開の `truncate_phase_report_to`。
+- テスト: 旧実装をテストモジュールに `truncate_phase_report_reference`（上限を引数にしただけ）として残し、次の 2 本を足した。
+  既存のテストは変えていない（全部通る）。
+  - `truncate_matches_the_reference_implementation_on_generated_inputs`: 固定 seed の splitmix64 で報告を生成（Vec ごとに
+    0 / 少数 / 多数の要素、JSON エスケープされる文字・多バイト文字・サロゲートペアの文字・空文字列、`next_phase` の有無）。
+    上限は 16 KiB とその ±1、0、1、見出しだけの長さ ±1、全体の長さ ±1、`usize::MAX`、pop 列の途中の長さちょうど・±1（6 点）、
+    範囲内の任意の値。さらに公開関数を 16 KiB 上限で大きな入力に 40 件（うち 27 件が上限超え）、見出しだけで上限を超える
+    退化入力、空の報告。**合計 21745 件で直列化のバイト列と値が旧実装と一致**。pop するたびに長さが狭義に減ることも
+    全入力で確認。境界の判定を `<` に変える変異を入れると最初のケース（cap 199: fast 187 bytes / reference 199 bytes）で落ちる
+    ことを確かめてから戻した。
+  - `truncate_stops_at_the_first_pop_that_fits_on_the_large_input`: 遅かったテストと同じ 1 万要素の入力で、`diff_stat` が
+    全部落ち、`integration` は先頭の要素が順に残り、1 つ戻すと上限を超える（＝旧実装と同じ停止点）ことを確かめる。
+
+### 計測（このホスト、`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-truncate/target`、build 済みで計測）
+
+| | 前 | 後 |
+|---|---|---|
+| `cargo test -p task-core truncate_shrinks -- --nocapture` | テスト 45.90 s / wall 47 s | テスト 0.02 s / wall 0.15 s |
+| `scripts/dev/test-parallel.sh`（wall） | 69 s（nextest 63.2 s + doc 5.4 s） | 58 s（nextest 52.2 s + doc 5.3 s） |
+
+後の nextest の最長は `e2e::scenarios expired_lease_is_reclaimed_and_task_completes` 30.3 s と
+`task-ops changes::tests::a_command_that_never_finishes_is_killed` 30.0 s（どちらも待ち時間の長さで決まる）。52 s は 8 並列の
+総量で決まっている。足した等価性テストは 8.2 s（旧実装の O(n²) を回すため。下限の 30 s より短い）。
+
+### ゲート（このブランチ）
+
+- `cargo fmt --all -- --check` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`Starting 2617 tests across 77 binaries (6 tests skipped)`、
+  `Summary [52.164s] 2617 tests run: 2617 passed, 6 skipped`、doc-test 10 crate → 合計 87 バイナリ、2617 passed / 0 failed / 7 ignored
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- スキーマ・GUI の変更なし。本番には触れていない。
+
+### 未解決・提案
+
+- なし（P-SD2-1 は解消）。gate の下限は 30 s の 2 本（待ち時間で決まるテスト）。縮めるならそれらのタイムアウトを
+  テスト用に短くする別 Phase（P-SD3-1、製品の既定値は変えずにテストからだけ注入できるかを先に確かめる）。

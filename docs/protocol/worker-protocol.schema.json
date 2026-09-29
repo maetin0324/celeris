@@ -100,11 +100,42 @@
       ],
       "type": "object"
     },
+    "BrowserAction": {
+      "description": "Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:\nno aliases, categories or pass-through of upstream names.",
+      "enum": [
+        "navigate",
+        "click",
+        "snapshot",
+        "extract",
+        "screenshot",
+        "download",
+        "scroll",
+        "credential_use"
+      ],
+      "type": "string"
+    },
     "BrowserCapability": {
       "additionalProperties": false,
       "properties": {
+        "allowed_actions": {
+          "description": "Business actions the administrator grants (ADR-0080 D1). Absent means the Phase 1\nset; `credential_use` is never implied.",
+          "items": {
+            "$ref": "#/$defs/BrowserAction"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "allowed_domains": {
           "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "credential_policy_ids": {
+          "description": "Credential policies a task may reference. Absent/empty means no credential use.",
           "items": {
             "type": "string"
           },
@@ -128,6 +159,11 @@
         "cli": {
           "type": "string"
         },
+        "credential_used": {
+          "default": false,
+          "description": "Celeris already logged in with an approved credential in this session. Observation\nactions are off until the session ends.",
+          "type": "boolean"
+        },
         "run": {
           "$ref": "#/$defs/BrowserRun"
         }
@@ -135,6 +171,37 @@
       "required": [
         "run",
         "cli"
+      ],
+      "type": "object"
+    },
+    "BrowserDomainMode": {
+      "enum": [
+        "common_hosts",
+        "separate_origins"
+      ],
+      "type": "string"
+    },
+    "BrowserPolicyBinding": {
+      "additionalProperties": false,
+      "description": "What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).",
+      "properties": {
+        "hash": {
+          "description": "`sha256:<hex>` of the canonical effective policy.",
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy_id",
+        "revision",
+        "hash"
       ],
       "type": "object"
     },
@@ -146,6 +213,17 @@
             "string",
             "null"
           ]
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserPolicyBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The effective policy this run was launched with (ADR-0080 D1)."
         },
         "run_id": {
           "type": "string"
@@ -178,6 +256,70 @@
         "FAILED"
       ],
       "type": "string"
+    },
+    "BrowserTaskPolicy": {
+      "additionalProperties": false,
+      "description": "Per-task browser restriction (ADR-0080 D1). It can only narrow the administrator grant.",
+      "properties": {
+        "allowed_actions": {
+          "items": {
+            "$ref": "#/$defs/BrowserAction"
+          },
+          "type": "array"
+        },
+        "approval_actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BrowserAction"
+          },
+          "type": "array"
+        },
+        "artifact_policy_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credential_policy_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "domain_mode": {
+          "$ref": "#/$defs/BrowserDomainMode"
+        },
+        "navigation_origins": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "network_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy_id",
+        "revision",
+        "domain_mode",
+        "network_domains",
+        "allowed_actions"
+      ],
+      "type": "object"
     },
     "Budget": {
       "description": "DESIGN §4.1 の `Budget`。",
@@ -1899,6 +2041,17 @@
             }
           ],
           "description": "A supervisor-provisioned CLI; absent on ordinary, planner and reviewer runs."
+        },
+        "browser_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserTaskPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0080 D1: the task's browser restriction, supplied by dispatch from the task.\nBrowser-enabled runs without it are refused (`browser_policy_required`)."
         },
         "children": {
           "description": "集約 run（`aggregate = true` の親の、子が全て終端になった後の run）でのみ非空（ADR-0016 D3）。",

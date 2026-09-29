@@ -406,7 +406,7 @@ run_cargo_test_step() {
 }
 run_cargo_test_step
 run_step cargo-clippy "$BUILD" -- cargo clippy --workspace -- -D warnings
-run_step cargo-build "$BUILD" -- cargo build --release -p celeris -p celerisctl
+run_step cargo-build "$BUILD" -- cargo build --release -p celeris -p celerisctl -p celeris-credentiald
 run_step pnpm-install "$BUILD/gui" -- pnpm install --frozen-lockfile
 run_step pnpm-typecheck "$BUILD/gui" -- pnpm typecheck
 gui_step pnpm-test "$BUILD/gui" -- pnpm test
@@ -436,7 +436,7 @@ STAGE="$REL.partial"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/gui"
 
-for b in celeris celerisctl; do
+for b in celeris celerisctl celeris-credentiald; do
   [ -x "$SD_CARGO_TARGET/release/$b" ] || sd_die "built binary missing: $SD_CARGO_TARGET/release/$b"
   cp -p "$SD_CARGO_TARGET/release/$b" "$STAGE/bin/$b"
 done

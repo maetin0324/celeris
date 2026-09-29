@@ -3120,12 +3120,14 @@ mod tests {
         ));
         let mut req = sample_req(dir.path().to_path_buf());
         req.context.browser = Some(crate::browser::BrowserContext {
+            credential_used: false,
             run: task_core::BrowserRun {
                 task_id: req.task.id,
                 run_id: "browser-error-test".into(),
                 session_id: "isolated-test".into(),
                 state: task_core::BrowserRunState::Running,
                 live_view_url: None,
+                policy: None,
             },
             cli: dir.path().join("celeris-browser.py"),
         });
@@ -3161,12 +3163,14 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         let adapter = ClaudeCodeAdapter::new(config);
         let mut req = sample_req(dir.path().to_path_buf());
         req.context.browser = Some(crate::browser::BrowserContext {
+            credential_used: false,
             run: task_core::BrowserRun {
                 task_id: req.task.id,
                 run_id: "browser-log-test".into(),
                 session_id: "isolated-test".into(),
                 state: task_core::BrowserRunState::Running,
                 live_view_url: None,
+                policy: None,
             },
             cli: dir.path().join("celeris-browser.py"),
         });

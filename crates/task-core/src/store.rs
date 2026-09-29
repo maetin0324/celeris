@@ -88,10 +88,13 @@ const MIGRATION_0030: &str = include_str!("../migrations/0030_cluster_connection
 /// ADR-0079 D4 / D7 / D15（Phase R1a）: `tasks.root_id`・`work_units.child_task_id` /
 /// `needs_decisions_json`・`decisions`（再帰的な task の木。既存の行は書き換えない）。
 const MIGRATION_0031: &str = include_str!("../migrations/0031_task_tree.sql");
+/// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）と credential 台帳（秘密なし）。
+const MIGRATION_0032: &str = include_str!("../migrations/0032_browser_waits.sql");
+const MIGRATION_0033: &str = include_str!("../migrations/0033_browser_task_policies.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 31;
+pub const SCHEMA_VERSION: u32 = 33;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -620,6 +623,7 @@ pub trait TaskStore:
     + crate::node_session::NodeSessionStore
     + crate::mcp::McpClientStore
     + crate::mcp::McpCallStore
+    + crate::browser_wait::BrowserWaitStore
 {
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
@@ -1810,6 +1814,8 @@ impl SqliteStore {
             29 => Ok(MIGRATION_0029),
             30 => Ok(MIGRATION_0030),
             31 => Ok(MIGRATION_0031),
+            32 => Ok(MIGRATION_0032),
+            33 => Ok(MIGRATION_0033),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -2507,7 +2513,7 @@ impl SqliteStore {
 
     /// 既にロック済みの connection を使ってタスクを取得する内部ヘルパー。
     /// `get()` が再度 Mutex をロックしないようにするために分離してある。
-    fn get_locked(conn: &Connection, id: TaskId) -> Result<Option<Task>, StoreError> {
+    pub(crate) fn get_locked(conn: &Connection, id: TaskId) -> Result<Option<Task>, StoreError> {
         let json: Option<String> = conn
             .query_row(
                 "SELECT json FROM tasks WHERE id = ?1",
@@ -2698,7 +2704,7 @@ impl SqliteStore {
 
     /// `apply_transition_with_events` の本体（ADR-0004 D1 / ADR-0005 D4）。`tx` 内で任意のトリガーを
     /// 検証し、tasks の更新と Event::Transitioned (+ extra_events) の追記を行う。commit は呼び出し側。
-    fn apply_transition_tx(
+    pub(crate) fn apply_transition_tx(
         tx: &Connection,
         task_id: TaskId,
         trigger: Trigger,
@@ -2727,6 +2733,19 @@ impl SqliteStore {
             max_retries: task.budget.max_retries,
         };
         let outcome = transition(&view, &trigger)?;
+        // ADR-0080 D4: browser の wait が未解決の間は、一般の回答・途中確認の再開で `ready` に戻さない
+        // （解除は専用の browser 操作〈`BrowserResume` / `BrowserFail`〉だけ）。
+        if matches!(trigger, Trigger::Answer | Trigger::PhaseResume { .. })
+            && crate::browser_wait::has_pending_wait_tx(tx, task_id)?
+        {
+            return Err(StoreError::InvalidTransition(
+                crate::transition::InvalidTransition {
+                    status: view.status,
+                    kind: view.kind,
+                    trigger: "browser_wait_pending",
+                },
+            ));
+        }
 
         let now = OffsetDateTime::now_utc();
         // ADR-0002 D1: running から出る全遷移でリースを解放する。
@@ -2809,6 +2828,11 @@ impl SqliteStore {
                 crate::approval::WITHDRAWN_BY_TRANSITION,
                 now,
             )?;
+        }
+        // ADR-0080 D4: 終端（cancel・連鎖の中止を含む）になったら、未解決の browser wait を
+        // `cancelled` に閉じる（未消費の承認も同時に失効する）。
+        if !view.status.is_terminal() && outcome.next.is_terminal() {
+            crate::browser_wait::cancel_open_for_task_tx(tx, task_id, now)?;
         }
 
         Self::cascade_after_transition_tx(tx, &task, view.status, outcome.next)?;
@@ -8725,7 +8749,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -9274,7 +9298,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -9765,7 +9789,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -9831,7 +9855,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -9924,7 +9948,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -10383,7 +10407,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -10629,7 +10653,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         let conn = Connection::open(&path).unwrap();
         // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -10687,14 +10711,14 @@ mod tests {
                 "idx_work_units_child_task"
             ]
         );
-        // 旧いバイナリ（版数 30）は版数 31 の DB を開けない（昇格は stop → start）。
+        // 旧いバイナリ（版数 30）は版数 31 以降の DB を開けない（昇格は stop → start）。
         drop(store);
         let max: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(max, 31);
+        assert_eq!(max, i64::from(SCHEMA_VERSION));
     }
 
     /// ADR-0079 D4 (4) / D7（Phase R1a）: `Task.tree` は `tasks.root_id` に写り（挿入・更新）、木の Event は
@@ -10880,7 +10904,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 31);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();

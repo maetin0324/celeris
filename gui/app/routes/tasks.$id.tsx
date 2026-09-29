@@ -9,6 +9,7 @@ import {
   useNavigation,
   useSearchParams,
 } from "react-router";
+import { browserOwnerView } from "~/browser-owner.server";
 import type {
   ActionError,
   DocsOpOutcome,
@@ -20,7 +21,8 @@ import type {
   TransitionOutcome,
 } from "~/celeris/action-types";
 import { retryData, transitionData } from "~/celeris/actions.server";
-import { loadBrowserRuns } from "~/celeris/browser";
+import { loadBrowserRuns, loadTaskBrowserWaits } from "~/celeris/browser";
+import { liveViewRelayAvailable } from "~/celeris/browser-live.server";
 import type { CelerisClient } from "~/celeris/client.server";
 import { getCelerisClient } from "~/celeris/client.server";
 import { planGateTask } from "~/celeris/decisions-admin.server";
@@ -44,6 +46,7 @@ import type {
   ArtifactList,
   ArtifactView,
   BrowserRun,
+  BrowserWait,
   CommentList,
   ConfigView,
   Event,
@@ -61,6 +64,7 @@ import type {
   Timeline,
   TimelineItem,
 } from "~/celeris/types";
+import type { LiveViewState } from "~/components/BrowserRunsPanel";
 import { CodeViewer } from "~/components/CodeViewer";
 /* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
 import { ReplyStepRow } from "~/components/ConsoleBlockItem";
@@ -106,7 +110,14 @@ import { Skeleton } from "~/components/ui/skeleton";
 import type { Tone } from "~/components/ui/tone";
 import { artifactStatusMessage, isJson, pickViewer } from "~/lib/artifact-view";
 import { isValidLabel, MAX_LABELS, PRIORITY_LABELS } from "~/lib/board";
-import { activeBrowserRunIds } from "~/lib/browser";
+import {
+  activeBrowserRunIds,
+  type BrowserOwnerView,
+  liveViewLinkFor,
+  liveViewPath,
+  NO_BROWSER_OWNER,
+  redactLiveViewUrls,
+} from "~/lib/browser";
 import { defaultPromotePath, docsHref, isMarkdownName } from "~/lib/docs";
 /* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（Execution 節・ExecutionPhase）。 */
 import { isGateCandidate } from "~/lib/execution-mode";
@@ -150,6 +161,9 @@ import { cn } from "~/lib/utils";
 import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/tasks.$id";
 
+const BrowserWaitsPanel = lazy(() =>
+  import("~/components/BrowserWaitsPanel").then((m) => ({ default: m.BrowserWaitsPanel })),
+);
 const BrowserRunsPanel = lazy(() =>
   import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
 );
@@ -272,7 +286,14 @@ const TIMELINE_TONE: Record<string, Tone> = {
 
 export interface TaskDetailData {
   detail: TaskDetail;
+  /** `live_view_url` は消してある（ADR-0080 D6）。 */
   browserRuns: BrowserRun[];
+  /** ADR-0080 D5: browser の人待ち（非秘密）。この API を持たない celeris では空。 */
+  browserWaits: BrowserWait[];
+  /** ADR-0080 D6: この session が本人か（CSRF token は本人のときだけ）。 */
+  browserOwner: BrowserOwnerView;
+  /** run ごとの Live View の導線（URL は同一 origin の `/browser/live/...` だけ）。 */
+  liveViews: Record<string, LiveViewState>;
   events: EventsPage;
   artifacts: ArtifactList;
   /** ADR-0044 D5: `GET /tasks/{id}/timeline`（時刻の昇順で 1 本）。 */
@@ -351,13 +372,22 @@ export interface TaskDetailData {
  * `GET /org` と案件の詳細は**編集フォームの選択肢**（ADR-0044 D1: 担当・途中目標のプルダウン）にも使うので、
  * 担当や案件が未設定でも常に引く（落ちたら選択肢が空になるだけ。画面は出す）。
  */
-export async function loadTaskDetail(client: CelerisClient, taskId: string, request: Request): Promise<TaskDetailData> {
+export async function loadTaskDetail(
+  client: CelerisClient,
+  taskId: string,
+  request: Request,
+  /** ADR-0080 D6: 本人状態は loader が `browserOwnerView(request)` で求めて渡す（既定は「本人を識別できない」）。 */
+  browserOwner: BrowserOwnerView = NO_BROWSER_OWNER,
+  /** Live View の relay が設定されているか（loader が `liveViewRelayAvailable()` で求めて渡す）。 */
+  liveViewRelay = false,
+): Promise<TaskDetailData> {
   const url = new URL(request.url);
   // フォームは `types` チェックボックスごとに 1 つずつ付ける（`?types=a&types=b`）。
   // celeris 側はカンマ区切りの単一パラメータを期待する（docs/celeris-api-v1.md §3.6）ので、ここで結合する。
   const types = url.searchParams.getAll("types");
-  const [browserRuns, detail, events, artifacts, timeline, comments] = await Promise.all([
+  const [browserRuns, browserWaits, detail, events, artifacts, timeline, comments] = await Promise.all([
     loadBrowserRuns(client, taskId, request.signal).catch(() => []),
+    loadTaskBrowserWaits(client, taskId, request.signal).catch(() => []),
     client.get<TaskDetail>(`/tasks/${taskId}`, { signal: request.signal }),
     client.get<EventsPage>(`/tasks/${taskId}/events`, {
       query: { types: types.length > 0 ? types.join(",") : undefined },
@@ -430,12 +460,28 @@ export async function loadTaskDetail(client: CelerisClient, taskId: string, requ
     const inbox = await client.get<Inbox>("/inbox", { signal: request.signal }).catch(() => null);
     humanReview = (inbox?.approvals ?? []).filter((a) => a.approval.id === taskId || a.parent?.id === taskId);
   }
+  // ADR-0080 D6: 導線は本人・実行中・認証区間外のときだけ。dashboard URL は loader data に載せない。
+  const activeRuns = activeBrowserRunIds(detail.runs, detail.task.status);
+  const liveViews: Record<string, LiveViewState> = {};
+  for (const run of browserRuns) {
+    liveViews[run.run_id] = liveViewLinkFor(run, {
+      isOwner: browserOwner.isOwner,
+      ownerAvailable: browserOwner.available,
+      active: activeRuns.includes(run.run_id),
+      waits: browserWaits,
+      relayAvailable: liveViewRelay,
+      href: liveViewPath(taskId, run.run_id),
+    });
+  }
   return {
     detail,
-    browserRuns,
-    events,
+    browserRuns: redactLiveViewUrls(browserRuns),
+    browserWaits,
+    browserOwner,
+    liveViews,
+    events: redactLiveViewUrls(events),
     artifacts,
-    timeline,
+    timeline: redactLiveViewUrls(timeline),
     comments,
     fetchedAt: new Date().toISOString(),
     org: org?.items ?? [],
@@ -468,7 +514,13 @@ export const shouldRevalidate = revalidateAfterActionErrors;
 
 export async function loader({ params, request }: Route.LoaderArgs): Promise<TaskDetailData> {
   try {
-    return await loadTaskDetail(getCelerisClient(), params.id, request);
+    return await loadTaskDetail(
+      getCelerisClient(),
+      params.id,
+      request,
+      await browserOwnerView(request),
+      liveViewRelayAvailable(),
+    );
   } catch (e) {
     throw celerisErrorResponse(e);
   }
@@ -533,6 +585,9 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
   const {
     detail,
     browserRuns,
+    browserWaits,
+    browserOwner,
+    liveViews,
     events,
     artifacts,
     timeline,
@@ -774,6 +829,12 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
         counts={{ timeline: timeline.items.length, artifacts: artifacts.items.length }}
       />
 
+      {browserWaits.length > 0 && (
+        <Suspense fallback={null}>
+          <BrowserWaitsPanel waits={browserWaits} owner={browserOwner} />
+        </Suspense>
+      )}
+
       {tabNavigationPending ? (
         <TaskTabSkeleton />
       ) : (
@@ -781,6 +842,7 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
           {tab === "overview" && (
             <OverviewTab
               browserRuns={browserRuns}
+              liveViews={liveViews}
               detail={detail}
               artifactCount={artifacts.items.length}
               org={org}
@@ -1078,6 +1140,7 @@ function FailureBanner({
 /** 概要タブ（ADR-0044 D5）: 従来の詳細一式に、人が直接直せる編集フォーム（D1）を足したもの。 */
 function OverviewTab({
   browserRuns,
+  liveViews,
   detail,
   artifactCount,
   org,
@@ -1093,6 +1156,7 @@ function OverviewTab({
   humanReview: ApprovalItem[];
   detail: TaskDetail;
   browserRuns: BrowserRun[];
+  liveViews: Record<string, LiveViewState>;
   artifactCount: number;
   org: OrgNode[];
   milestones: MilestoneView[];
@@ -1278,7 +1342,7 @@ function OverviewTab({
       )}
       {browserRuns.length > 0 && (
         <Suspense fallback={null}>
-          <BrowserRunsPanel runs={browserRuns} activeRunIds={activeBrowserRunIds(detail.runs, task.status)} />
+          <BrowserRunsPanel runs={browserRuns} liveViews={liveViews} />
         </Suspense>
       )}
 

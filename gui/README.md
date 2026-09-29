@@ -47,6 +47,7 @@ BFF（Backend for Frontend）として celeris の HTTP API v1（`docs/celeris-a
 | `CELERIS_GUI_PASSWORD_FILE` | （無し） | 非 loopback バインド時は必須（無いと起動時に `exit 2`）。ファイルの内容（trim した 1 行）がログインパスワードになる。loopback バインドでも、このファイルを明示すれば認証を要求する（opt-in） |
 | `CELERIS_GUI_SESSION_SECRET_FILE` | （無し） | セッションクッキーの署名鍵。任意。無いとプロセス起動時にランダムな鍵を生成する（= サーバ再起動でログアウトされる） |
 | `CELERIS_GUI_ALLOWED_HOSTS` | （無し） | GUI 自身の `Host` 検査で許可する追加のホスト名（カンマ区切り）。バインドしているホスト・ポートは常に許可される |
+| `CELERIS_GUI_LIVE_VIEW_UPSTREAM` | （無し） | Browser Live View の読み取り専用 relay の upstream（agent-browser 0.38.1 の `dashboard start --port` が loopback に bind した dashboard）。`127.0.0.1:<port>` / `[::1]:<port>` / `localhost:<port>` だけを受け付け、それ以外は起動時に `exit 2`。未設定なら relay は開かず、本人にも `/browser/live/...` は `503 live_view_relay_unavailable`（リンクも出さない）。本人（パスワード認証 + `CELERIS_GUI_OWNER_SOCKET` で確定した owner session）だけが使える。詳細は ADR-0080 D6 と `docs/progress/phase-browser-2.md` |
 
 ## SSH ポートフォワードでの利用（推奨）
 

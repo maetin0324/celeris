@@ -35,7 +35,7 @@ export default defineConfig({
   webServer: {
     command: "pnpm build && node server.js",
     url: `http://${GUI_BIND}/healthz`,
-    reuseExistingServer: false,
+    reuseExistingServer: process.env.CELERIS_E2E_EXTERNAL_GUI === "1", // scripts/browser-live-e2e.sh starts its own GUI
     timeout: 120_000,
     env: {
       CELERIS_API_URL,

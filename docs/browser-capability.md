@@ -47,6 +47,8 @@ capability の実行には通常の dispatcher 経路を使う。
 
 ## Live View
 
+以下は Phase 1 の導入記録。Phase 2 の GUI では [本人専用の読み取り専用 relay](browser-live-relay.md) を使い、dashboard の公開 proxy や token fragment URL は使わない。
+
 同じ OS ユーザー・runtime 環境で operator が dashboard を起動する。
 
 ```sh

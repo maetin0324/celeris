@@ -2661,6 +2661,39 @@ frontmatter に `name` / `description` 必須）と `Profile.skills_mounts` を�
 
 ---
 
+### 3.118〜3.124 browser の人待ち: 登録依頼・承認（ADR-0080 D4/D5）
+
+task は `blocked` のまま、wait の `reason`（`waiting_for_auth` / `waiting_for_approval`）が `BrowserRunState`
+の `WAITING_FOR_AUTH` / `WAITING_FOR_APPROVAL` を運ぶ。wait の保存と同じトランザクションで task が
+`running → blocked`（worker の lease を解放）になり、`browser_wait_opened` を追記する。解決・終端化は
+`browser_wait_resolved`（固定の `code`）。**秘密は wait・event・応答のどこにも無い**。全応答
+`Cache-Control: no-store`、エラーは固定コードだけ（要求の値を反射しない）。
+
+| # | 接点 | 認可 | 本文 → 応答 |
+| --- | --- | --- | --- |
+| 3.118 | `POST /tasks/{id}/browser/requests` | 管理系（supervisor） | `NewBrowserWait` → 201 / 200（同じ `resume_key` の再送）`BrowserRequestResult` |
+| 3.119 | `GET /tasks/{id}/browser/waits` | 読み取り | → `BrowserWaitList` |
+| 3.120 | `GET /browser/waits` | 読み取り | 人の対応待ち（`pending`）→ `BrowserPendingList`（inbox の `browser_waits` と同じ形） |
+| 3.121 | `POST /tasks/{id}/browser/waits/{wait_id}/credential` | 管理系 + attestation（`register`） | `BrowserCredentialBody`（username/password は broker の control IPC にだけ渡す）→ `BrowserWaitResult` |
+| 3.122 | `POST /tasks/{id}/browser/waits/{wait_id}/registered` | 管理系 + attestation（`register`） | `BrowserRegisteredBody`（broker の receipt を照合）→ `BrowserWaitResult` |
+| 3.123 | `POST /tasks/{id}/browser/waits/{wait_id}/decision` | 管理系 + attestation（`approve_once` / `deny`） | `BrowserDecisionBody` → `BrowserWaitResult` |
+| 3.124 | `POST /tasks/{id}/browser/waits/{wait_id}/revoke` | 管理系 + attestation（`revoke`） | `BrowserRevokeBody`（未消費の承認を失効）→ `BrowserWaitResult` |
+
+- human attestation: `{payload, signature}`。`payload` は `AttestationClaims` の JSON（actor・owner session
+  hash・task/wait・`expected_version`・decision・policy hash・nonce・30 秒以内の `expires_at`）で、GUI 専用鍵の
+  Ed25519 署名（hex）を付ける。daemon は公開鍵だけを持つ。bearer token だけでは登録・承認・拒否できない。
+- 状態: 登録待ちは `registered`（task → `ready`。使用承認は兼ねない）か拒否・期限切れで `failed`。承認待ちは
+  `approved`（task → `ready`、worker が同じ run/session で一度だけ消費）か `deny` / 期限切れで `failed`
+  （`approval_denied` / `browser_wait_expired`、自動 retry なし）。cancel は wait を `cancelled` に閉じる。
+- 期限: 登録待ちは既定・上限 24 時間、承認待ちは既定・上限 5 分。期限切れはディスパッチャの tick（起動直後を
+  含む）が一度だけ終端化する。
+- 未解決の wait がある間、一般の `answer` / 途中確認の再開では `ready` に戻せない（409 `invalid_transition`）。
+  inbox の `questions` には出さず `browser_waits`（`counts.browser_waits`）に出す。
+- エラー: 401 bearer なし、403 `attestation_invalid` / `attestation_replayed`、404 `browser_wait_not_found`、
+  409 `browser_wait_version_conflict` / `browser_wait_state` / `task_not_running`、410 `browser_wait_expired`、
+  422 `browser_body_invalid` / `browser_wait_invalid`（`field` だけ）/ `credential_receipt_invalid` /
+  `credential_rejected`、503 `browser_unavailable`（attestation 鍵・broker が未設定）。
+
 ## 4. SSE `GET /stream`
 
 ```

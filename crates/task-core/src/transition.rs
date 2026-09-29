@@ -89,6 +89,19 @@ pub enum Trigger {
     PhaseResume {
         mode: crate::pause::PhaseResumeMode,
     },
+    /// ADR-0080 D4: browser の人待ち（登録・承認）を保存した。`Running → Blocked`、attempts 不変。
+    /// `reason` は `"waiting_for_auth"` / `"waiting_for_approval"`（`approval` で分ける）。
+    BrowserWait {
+        approval: bool,
+    },
+    /// ADR-0080 D4: 専用の browser 操作（登録完了・承認）で wait を一度だけ解決した。
+    /// `Blocked → Ready`、attempts 不変、`reason = "browser_resume"`。
+    BrowserResume,
+    /// ADR-0080 D4: 拒否・wait の期限切れ。`Blocked → Failed`（自動 retry なし）、attempts 不変。
+    /// `reason` は固定の `"browser_wait_expired"` / `"approval_denied"`。
+    BrowserFail {
+        expired: bool,
+    },
     /// ADR-0079 D8（Phase R3b）: root の /3 の計画が人の承認を要する（決定を含む / `review: human` の段階 /
     /// 上限に近い）。計画の採用の直後に `Running → Blocked`、`reason = "awaiting_plan_approval"`、attempts 不変
     /// （`PhaseGate` と同じ形）。再開は `PhaseResume{PlanApprove | PlanReplan}`、取り下げは `Cancel`。
@@ -135,6 +148,11 @@ impl Trigger {
             Trigger::ReviewRepair => "review_repair",
             Trigger::PhaseGate { .. } => "awaiting_human",
             Trigger::PhaseResume { mode } => mode.name(),
+            Trigger::BrowserWait { approval: false } => "waiting_for_auth",
+            Trigger::BrowserWait { approval: true } => "waiting_for_approval",
+            Trigger::BrowserResume => "browser_resume",
+            Trigger::BrowserFail { expired: true } => "browser_wait_expired",
+            Trigger::BrowserFail { expired: false } => "approval_denied",
             Trigger::PlanGate { .. } => "awaiting_plan_approval",
             Trigger::PlanComplete => "plan_complete",
         }
@@ -543,6 +561,41 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
                 Err(invalid(s, t))
             }
         }
+
+        // ADR-0080 D4: browser の人待ち。Status の variant は増やさず `Blocked` を使う。
+        Trigger::BrowserWait { .. } => {
+            if s.status == Status::Running {
+                Ok(Outcome {
+                    next: Status::Blocked,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+        Trigger::BrowserResume => {
+            if s.status == Status::Blocked {
+                Ok(Outcome {
+                    next: Status::Ready,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+        Trigger::BrowserFail { .. } => {
+            if s.status == Status::Blocked {
+                Ok(Outcome {
+                    next: Status::Failed,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
     }
 }
 
@@ -721,6 +774,28 @@ mod tests {
                     expect_err()
                 }
             }
+            // ADR-0080 D4: browser の人待ちは `Running → Blocked`、解決は `Blocked → Ready` / `Blocked → Failed`。
+            Trigger::BrowserWait { .. } => {
+                if status == Status::Running {
+                    expect_ok(Status::Blocked)
+                } else {
+                    expect_err()
+                }
+            }
+            Trigger::BrowserResume => {
+                if status == Status::Blocked {
+                    expect_ok(Status::Ready)
+                } else {
+                    expect_err()
+                }
+            }
+            Trigger::BrowserFail { .. } => {
+                if status == Status::Blocked {
+                    expect_ok(Status::Failed)
+                } else {
+                    expect_err()
+                }
+            }
             _ => unreachable!("handled by retry-aware helper"),
         }
     }
@@ -767,6 +842,12 @@ mod tests {
             },
             // ADR-0074「F5-fix8 実装時の明確化」: 完了済みの計画の最終レビュー（attempts 据え置き）。
             Trigger::PlanComplete,
+            // ADR-0080 D4（ブラウザ capability Phase 2）: browser の人待ち・解決（attempts 据え置き）。
+            Trigger::BrowserWait { approval: false },
+            Trigger::BrowserWait { approval: true },
+            Trigger::BrowserResume,
+            Trigger::BrowserFail { expired: true },
+            Trigger::BrowserFail { expired: false },
         ];
 
         let mut count = 0usize;
@@ -813,8 +894,9 @@ mod tests {
         // 4 kinds * 8 statuses * 20 triggers（Phase 53 で Interrupt / Reopen、Phase 59 で Unroutable、
         // Phase 116（ADR-0070 D3）で InfraRequeue、Phase E1（ADR-0072）で Continue、
         // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume、Phase R3b（ADR-0079 D8）で PlanGate、
-        // F5-fix8（ADR-0074 付記）で PlanComplete を追加）
-        assert_eq!(count, 4 * 8 * 22);
+        // F5-fix8（ADR-0074 付記）で PlanComplete、ブラウザ capability Phase 2（ADR-0080 D4）で
+        // BrowserWait×2 / BrowserResume / BrowserFail×2 を追加）
+        assert_eq!(count, 4 * 8 * 27);
     }
 
     /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる
@@ -1266,5 +1348,63 @@ mod tests {
         assert!(msg.contains("Done"));
         assert!(msg.contains("Plan"));
         assert!(msg.contains("accept"));
+    }
+
+    /// ADR-0080 D4: browser の人待ちは `Running → Blocked`、解決は `Blocked → Ready` / `Blocked → Failed`
+    /// だけ。他の状態からは無効。reason は固定の語。
+    #[test]
+    fn browser_wait_triggers_only_from_expected_states() {
+        for kind in ALL_KINDS {
+            for status in ALL_STATUSES {
+                let view = StateView {
+                    kind,
+                    status,
+                    attempts: 1,
+                    max_retries: 3,
+                };
+                for (trigger, from, to, reason) in [
+                    (
+                        Trigger::BrowserWait { approval: false },
+                        Status::Running,
+                        Status::Blocked,
+                        "waiting_for_auth",
+                    ),
+                    (
+                        Trigger::BrowserWait { approval: true },
+                        Status::Running,
+                        Status::Blocked,
+                        "waiting_for_approval",
+                    ),
+                    (
+                        Trigger::BrowserResume,
+                        Status::Blocked,
+                        Status::Ready,
+                        "browser_resume",
+                    ),
+                    (
+                        Trigger::BrowserFail { expired: true },
+                        Status::Blocked,
+                        Status::Failed,
+                        "browser_wait_expired",
+                    ),
+                    (
+                        Trigger::BrowserFail { expired: false },
+                        Status::Blocked,
+                        Status::Failed,
+                        "approval_denied",
+                    ),
+                ] {
+                    let got = transition(&view, &trigger);
+                    if status == from {
+                        let outcome = got.expect("valid browser transition");
+                        assert_eq!(outcome.next, to);
+                        assert_eq!(outcome.attempts, 1);
+                        assert_eq!(outcome.reason, reason);
+                    } else {
+                        assert!(got.is_err(), "{status:?} {trigger:?}");
+                    }
+                }
+            }
+        }
     }
 }

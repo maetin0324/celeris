@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/celeris-credentiald",
     "crates/task-core",
     "crates/task-ops",
     "crates/task-api",

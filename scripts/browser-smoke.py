@@ -6,6 +6,7 @@ python3 scripts/browser-smoke.py --agent-browser /absolute/bin/agent-browser
 """
 import argparse
 import functools
+import hashlib
 import http.server
 import json
 from pathlib import Path
@@ -57,12 +58,14 @@ def main():
     # Fixture-only diagnostic capture. Never enable raw response capture in production.
     cli.write_text(cli.read_text().replace('        if len(result.stdout)',
         '        (ROOT / ("fixture-" + operation + ".response")).write_bytes(result.stdout)\n        if len(result.stdout)'))
+    policy_bytes = json.dumps({"default": "deny", "allow": ["launch", "navigate", "click", "snapshot", "gettext", "screenshot", "download", "scroll", "close"]}).encode()
     config = {"executable": args.agent_browser, "session_id": "celeris-smoke-" + uuid.uuid4().hex,
-              "allowed_domains": ["127.0.0.1"], "output": str(output)}
+              "allowed_domains": ["127.0.0.1"], "output": str(output),
+              "policy_sha256": hashlib.sha256(policy_bytes).hexdigest()}
     (runtime / "config.json").write_text(json.dumps(config))
     # A test-only browser executable; production uses agent-browser's installed browser.
     (runtime / "upstream.json").write_text(json.dumps({"executablePath": args.chromium, "args": "--no-sandbox"}))
-    (runtime / "policy.json").write_text(json.dumps({"default": "deny", "allow": ["launch", "navigate", "click", "snapshot", "gettext", "screenshot", "download", "scroll", "close"]}))
+    (runtime / "policy.json").write_bytes(policy_bytes)
     results = []
 
     second_cli = None

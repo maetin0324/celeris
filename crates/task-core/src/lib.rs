@@ -6,7 +6,13 @@ pub use delivery::{Delivery, DeliveryState, DeliveryStore};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
-pub use browser::{BrowserCapability, BrowserRun, BrowserRunState};
+/// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の耐久記録。
+pub mod browser_wait;
+pub use browser::{
+    AgentBrowserActionPolicy, BrowserAction, BrowserCapability, BrowserDomainMode,
+    BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,
+    EffectiveBrowserPolicy,
+};
 pub mod artifacts;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;

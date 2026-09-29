@@ -1188,6 +1188,8 @@ pub fn api_settings(
     llm_proxy_state: Option<Arc<llm_proxy::ProxyState>>,
 ) -> ApiSettings {
     ApiSettings {
+        // ADR-0080 D5: human attestation の鍵と broker の結線は e2e の WU（既定は 503）。
+        browser: Default::default(),
         listen,
         token,
         allowed_hosts: config.api.allowed_hosts.clone(),
@@ -1477,7 +1479,7 @@ async fn start_api(
         }
         false => (None, None),
     };
-    let settings = api_settings(
+    let mut settings = api_settings(
         config,
         listen,
         token,
@@ -1489,6 +1491,47 @@ async fn start_api(
         role,
         llm_proxy_state,
     );
+    match (
+        &config.api.browser_attestation_public_key_file,
+        &config.api.browser_credentiald_control_socket,
+    ) {
+        (Some(key_path), Some(socket)) => {
+            let key = task_api::browser::BrowserApiConfig::read_public_key(key_path)
+                .map_err(|e| ApiError::Startup(format!("browser attestation key: {e}")))?;
+            settings.browser = task_api::browser::BrowserApiConfig {
+                attestation_public_key: Some(key),
+                broker: Some(Arc::new(task_api::browser::UnixCredentialBrokerControl {
+                    socket: socket.clone(),
+                })),
+            };
+            // ADR-0080 D2: the browser supervisor asks the same broker for one-use leases and
+            // runs the release's own `celeris-credentiald bridge` as the fixed plugin.
+            let bridge = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.join("celeris-credentiald")))
+                .unwrap_or_else(|| PathBuf::from("celeris-credentiald"));
+            task_worker::browser_credential::configure(
+                task_worker::browser_credential::CredentialSupervisor {
+                    broker: Arc::new(task_worker::browser_credential::UnixLeaseBroker {
+                        control_socket: socket.clone(),
+                    }),
+                    bridge,
+                    // `<runtime>/celeris-credentiald/control.sock`
+                    runtime_dir: socket
+                        .parent()
+                        .and_then(|dir| dir.parent())
+                        .map(PathBuf::from),
+                },
+            );
+        }
+        (None, None) => {}
+        _ => {
+            return Err(ApiError::Startup(
+                "browser attestation key and credentiald socket must both be configured".into(),
+            )
+            .into());
+        }
+    }
     let state = tokio::task::spawn_blocking(move || ApiState::new(settings, rx))
         .await
         .map_err(|e| ApiError::Startup(e.to_string()))??;

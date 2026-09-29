@@ -149,8 +149,11 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 42] = [
+pub(crate) const EVENT_TYPES: [&str; 44] = [
     "browser_updated",
+    // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
+    "browser_wait_opened",
+    "browser_wait_resolved",
     "created",
     "transitioned",
     "worker_started",
@@ -216,6 +219,8 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
     match event {
         Event::Created { .. } => "created",
         Event::BrowserUpdated { .. } => "browser_updated",
+        Event::BrowserWaitOpened { .. } => "browser_wait_opened",
+        Event::BrowserWaitResolved { .. } => "browser_wait_resolved",
         Event::Transitioned { .. } => "transitioned",
         Event::WorkerStarted { .. } => "worker_started",
         Event::WorkerProgress { .. } => "worker_progress",

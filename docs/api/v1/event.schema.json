@@ -33,6 +33,30 @@
       ],
       "type": "object"
     },
+    "BrowserPolicyBinding": {
+      "additionalProperties": false,
+      "description": "What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).",
+      "properties": {
+        "hash": {
+          "description": "`sha256:<hex>` of the canonical effective policy.",
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "policy_id",
+        "revision",
+        "hash"
+      ],
+      "type": "object"
+    },
     "BrowserRun": {
       "additionalProperties": false,
       "properties": {
@@ -41,6 +65,17 @@
             "string",
             "null"
           ]
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserPolicyBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The effective policy this run was launched with (ADR-0080 D1)."
         },
         "run_id": {
           "type": "string"
@@ -73,6 +108,173 @@
         "FAILED"
       ],
       "type": "string"
+    },
+    "BrowserWait": {
+      "additionalProperties": false,
+      "description": "耐久の wait 1 件（ADR-0080 D4 `BrowserWait`）。**秘密を持たない**。",
+      "properties": {
+        "approval_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "登録済み（または使用する）credential の参照。"
+        },
+        "credential_policy_id": {
+          "description": "登録待ちが要求する credential policy、または承認待ちが使う credential の policy。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadline": {
+          "type": "string"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationIntent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "description": "trusted exact HTTPS origin。",
+          "type": "string"
+        },
+        "owner_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_hash": {
+          "type": "string"
+        },
+        "policy_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "purpose": {
+          "description": "何のためか（untrusted な plain text として表示する）。",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/BrowserWaitReason"
+        },
+        "resolution_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resolved_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume_key": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/BrowserWaitState"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wait_id": {
+          "type": "string"
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "wait_id",
+        "task_id",
+        "run_id",
+        "session_id",
+        "reason",
+        "origin",
+        "purpose",
+        "policy_revision",
+        "policy_hash",
+        "deadline",
+        "resume_key",
+        "version",
+        "state",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "BrowserWaitReason": {
+      "enum": [
+        "waiting_for_auth",
+        "waiting_for_approval"
+      ],
+      "type": "string"
+    },
+    "BrowserWaitState": {
+      "description": "wait の状態。`pending` と `approved`（未消費）が「開いている」。",
+      "oneOf": [
+        {
+          "enum": [
+            "pending",
+            "denied",
+            "expired",
+            "cancelled",
+            "revoked",
+            "invalidated"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "registered",
+          "description": "登録依頼に人が credential を登録した（使用承認は兼ねない）。",
+          "type": "string"
+        },
+        {
+          "const": "approved",
+          "description": "人が一回だけの実行を承認した（未消費）。",
+          "type": "string"
+        },
+        {
+          "const": "resumed",
+          "description": "承認の一回の実行権を worker が消費した。",
+          "type": "string"
+        }
+      ]
     },
     "Budget": {
       "description": "DESIGN §4.1 の `Budget`。",
@@ -451,6 +653,27 @@
         }
       ]
     },
+    "CredentialRef": {
+      "additionalProperties": false,
+      "description": "credential の参照（ADR-0080 D2 `CredentialRef`）。秘密ではない。",
+      "properties": {
+        "credential_id": {
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_id",
+        "provider",
+        "policy_id"
+      ],
+      "type": "object"
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -774,6 +997,76 @@
           "required": [
             "type",
             "browser"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた。wait は参照と固定の値だけで、秘密を持たない。",
+          "properties": {
+            "type": {
+              "const": "browser_wait_opened",
+              "type": "string"
+            },
+            "wait": {
+              "$ref": "#/$defs/BrowserWait"
+            }
+          },
+          "required": [
+            "type",
+            "wait"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0080 D4: browser の wait が解決・終端化した（`code` は固定の語だけ）。",
+          "properties": {
+            "actor_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "approval_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "code": {
+              "type": "string"
+            },
+            "credential_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/BrowserWaitReason"
+            },
+            "state": {
+              "$ref": "#/$defs/BrowserWaitState"
+            },
+            "type": {
+              "const": "browser_wait_resolved",
+              "type": "string"
+            },
+            "version": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "wait_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "wait_id",
+            "reason",
+            "state",
+            "code",
+            "version"
           ],
           "type": "object"
         },
@@ -2758,6 +3051,30 @@
         "title",
         "objective",
         "reach_criteria"
+      ],
+      "type": "object"
+    },
+    "OperationIntent": {
+      "additionalProperties": false,
+      "description": "承認を求める操作 intent（内部 action 名と、非秘密の引数 digest）。",
+      "properties": {
+        "action": {
+          "description": "agent-browser の内部 action 名（例: `click`・`download`・`credential_use`）。",
+          "type": "string"
+        },
+        "args_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "action"
       ],
       "type": "object"
     },

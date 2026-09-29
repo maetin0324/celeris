@@ -795,6 +795,8 @@ mod tests {
         let grant = crate::BrowserCapability {
             allowed_domains: vec!["example.com".into()],
             live_view_url: Some("https://browser.example.com/live".into()),
+            allowed_actions: None,
+            credential_policy_ids: vec![],
         };
         org[1].profile.browser = Some(grant.clone());
         let effective = resolve(&org, "software-engineering");

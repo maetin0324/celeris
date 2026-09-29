@@ -214,6 +214,21 @@ pub struct ApiV1Schema {
     pub execution_metrics: crate::types::ExecutionMetricsSummary,
     /// ADR-0075 D6（Phase G1）: `GET /metrics/scratch`（`celerisctl scratch status --json` と同じ `celeris.scratch-status/1`）。
     pub metrics_scratch: task_ops::daemon::ScratchStatus,
+    // ---- ADR-0080 D5: browser の人待ち（登録依頼・承認）。秘密は応答に現れない ----
+    /// `POST /tasks/{id}/browser/requests` の本文と応答。
+    pub browser_request: task_core::browser_wait::NewBrowserWait,
+    pub browser_request_result: crate::browser::BrowserRequestResult,
+    /// `GET /tasks/{id}/browser/waits` と `GET /browser/waits`。
+    pub browser_wait_list: crate::browser::BrowserWaitList,
+    pub browser_pending_list: crate::browser::BrowserPendingList,
+    /// `POST .../credential`（秘密は broker にだけ渡す）・`.../registered`・`.../decision`・`.../revoke`。
+    pub browser_credential: crate::browser::BrowserCredentialBody,
+    pub browser_registered: crate::browser::BrowserRegisteredBody,
+    pub browser_decision: crate::browser::BrowserDecisionBody,
+    pub browser_revoke: crate::browser::BrowserRevokeBody,
+    pub browser_wait_result: crate::browser::BrowserWaitResult,
+    /// human attestation の `payload`（署名対象の JSON）。
+    pub browser_attestation_claims: crate::browser::AttestationClaims,
     /// ADR-0079 D7（Phase R3a）: `GET /decisions`・`GET /tasks/{id}/decisions` の応答、
     /// `POST /decisions/{id}/answer`・`revise` の本文、`withdraw` の本文、3 つの操作の応答。
     pub decision_list: task_ops::decision::DecisionList,

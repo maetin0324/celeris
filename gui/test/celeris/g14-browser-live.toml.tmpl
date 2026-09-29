@@ -1,0 +1,39 @@
+# gui/scripts/browser-live-e2e.sh 用（gui/e2e/g14-browser-live.spec.ts）: token 認証の API + browser の人待ち
+# （human attestation の公開鍵 + scratch の celeris-credentiald control socket）+ 長く眠る fake ワーカー。
+# LLM は呼ばない。相対パスは設定ファイルのあるディレクトリ（.run/g14/）基準。@RUN_DIR@ / @API_LISTEN@ /
+# @CREDENTIALD_SOCKET@ はスクリプトが置換する。
+db = "celeris.sqlite3"
+workspace_root = "workspaces"
+tick_ms = 200
+max_concurrency = 4
+lease_grace_secs = 60
+# fake ワーカーは wait を開けるよう長く Running に留まる（5 秒ごとに progress を出すが、余裕を持たせる）。
+idle_timeout_secs = 600
+kill_grace_secs = 1
+review_timeout_secs = 30
+error_cooldown_secs = 300
+retry_backoff_base_secs = 0
+retry_backoff_max_secs = 0
+max_requeues = 5
+
+[plan]
+auto_accept = false
+
+[reviewer]
+tier = "standard"
+
+[api]
+listen = "@API_LISTEN@"
+token_file = "api.token"
+browser_attestation_public_key_file = "attestation.pub"
+browser_credentiald_control_socket = "@CREDENTIALD_SOCKET@"
+
+[adapters.fake]
+command = ["sh", "@RUN_DIR@/g14-worker.sh"]
+
+[[providers]]
+id = "fake-local"
+adapter = "fake"
+tiers = ["frontier", "standard", "cheap"]
+concurrency = 4
+model = "fake"

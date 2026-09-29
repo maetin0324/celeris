@@ -3,7 +3,7 @@
         {
             "approval": {
                 "id": "01M2KQJJBBG83DWH7Y8AWNMK0K",
-                "title": "Approval needed: Human-B \u2014 criterion 0 (attempt 1)",
+                "title": "Approval needed: Human-B — criterion 0 (attempt 1)",
                 "kind": "approval",
                 "status": "ready",
                 "actions": [
@@ -170,6 +170,8 @@
             "failed": 1,
             "ready": 1,
             "reviewing": 1
-        }
-    }
+        },
+        "browser_waits": 0
+    },
+    "browser_waits": []
 }

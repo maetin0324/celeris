@@ -1900,6 +1900,32 @@ impl StoreSink {
 }
 
 impl EventSink for StoreSink {
+    fn browser_wait_open(
+        &self,
+        request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        self.store
+            .browser_wait_open(self.task_id, request, OffsetDateTime::now_utc())
+            .map(|_| ())
+            .map_err(|e| e.code().into())
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        self.store
+            .browser_waits_for_task(self.task_id)
+            .map_err(|_| "browser wait store unavailable".into())
+    }
+    fn browser_approval_consume(
+        &self,
+        wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        task_core::browser_wait::consume_credential_approval(
+            self.store.as_ref(),
+            self.task_id,
+            wait,
+            OffsetDateTime::now_utc(),
+        )
+        .map_err(String::from)
+    }
     fn browser_updated(&self, browser: &task_core::BrowserRun) {
         if let Err(e) = self.store.append_event(
             self.task_id,
@@ -3365,6 +3391,21 @@ impl Dispatcher {
             OffsetDateTime::now_utc(),
         ) {
             tracing::warn!(error = %e, "failed to withdraw stale approvals");
+        }
+        // ADR-0080 D4: 期限の過ぎた browser の wait を一度だけ終端化する（起動直後の最初の tick が
+        // 再起動時の照合を兼ねる）。人待ちの task は lease を持たないので worker slot は使っていない。
+        match task_ops::browser::expire_due(self.store.as_ref(), OffsetDateTime::now_utc()) {
+            Ok(expired) => {
+                for w in expired {
+                    tracing::info!(
+                        task_id = %w.task_id,
+                        wait_id = %w.wait_id,
+                        reason = w.reason.as_str(),
+                        "browser wait expired"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to expire browser waits"),
         }
         report.reclaimed = self.reclaim_expired_leases()?;
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
@@ -17101,6 +17142,9 @@ async fn run_worker(
         artifacts_dir,
         context: RunContext {
             browser: None,
+            browser_policy: store
+                .browser_task_policy_get(task.id)
+                .map_err(|e| AdapterError::Other(format!("browser policy: {e}")))?,
             prior_review,
             inputs: task.inputs.clone(),
             answers: to_answers(answers_from_events(&events)),

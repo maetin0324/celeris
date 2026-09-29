@@ -66,6 +66,13 @@ pub const SYNC_PULL_PROTECTED: [&str; 1] = ["artifacts/"];
 /// （push が落ちたら pull しない = 手元の編集を消さない）。
 pub const PUSH_PENDING_MARKER: &str = ".celeris/push-pending";
 
+/// ADR-0019 付記（Phase R6-3）: worktree 準備のスクリプトが、submodule を初期化したときに標準出力へ出す行の頭
+/// （続けて初期化後の submodule の数）。初期化が要らなかった（`.gitmodules` が無い・全部済み）ときは出さない。
+const SUBMODULES_INITIALISED_PREFIX: &str = "celeris-submodules-initialised ";
+
+/// ADR-0019 付記（Phase R6-3）: submodule の初期化に失敗したときの exit（65 / 66 と区別する）。
+const SUBMODULE_INIT_FAILED_EXIT: i32 = 67;
+
 /// 1 タスク分のリモート実行の設定。
 #[derive(Debug, Clone)]
 pub struct SshSettings {
@@ -196,6 +203,9 @@ pub fn remote_dir_is_resolved(path: &Path) -> bool {
 pub struct SshWorkspace {
     local: LocalWorkspace,
     settings: SshSettings,
+    /// Phase R6-3: 準備の途中で人に見せたい進行の行（submodule の初期化など）。呼び出し側が
+    /// `take_progress_notes` で取り出して `WorkerProgress` に積む（clone は同じ入れ物を共有する）。
+    notes: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl SshWorkspace {
@@ -203,7 +213,20 @@ impl SshWorkspace {
         Self {
             local: LocalWorkspace::new(dir),
             settings,
+            notes: std::sync::Arc::default(),
         }
+    }
+
+    /// Phase R6-3: 準備（`prepare` / `push` / `pull` / `exec`）の途中で溜まった進行の行を取り出す
+    /// （例: `initialised 3 submodules in <worktree> on cluster sirius`）。取り出した行は消える。
+    pub fn take_progress_notes(&self) -> Vec<String> {
+        let mut guard = self.notes.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *guard)
+    }
+
+    fn push_progress_note(&self, line: String) {
+        let mut guard = self.notes.lock().unwrap_or_else(|e| e.into_inner());
+        guard.push(line);
     }
 
     pub fn dir(&self) -> &Path {
@@ -260,6 +283,25 @@ impl SshWorkspace {
                 paths = paths.join(" ")
             ));
         }
+        // Phase R6-3: submodule を使うリポジトリ（BenchFS の lib/locusta など）は、`git worktree add` の直後は
+        // submodule のディレクトリが空で、Cargo の path 依存が解決できない。`.gitmodules` があり、未初期化
+        // （`git submodule status` の行頭が `-`）のものが 1 つでもあれば `submodule update --init --recursive`
+        // する（再利用のときは初期化済みなら何もしない = 冪等）。worktree ごとの `modules/` に clone するので
+        // 共有の錠は先に外す（大きな submodule の clone で他のタスクの worktree 作成を待たせない）。
+        inner.push_str(&format!(
+            "exec 9>&-\n\
+             if [ -f {wt}/.gitmodules ]; then\n\
+               sm_status=$(git -C {wt} submodule status --recursive 2>&1) || {{ printf '%s\\n' \"git submodule status failed: $sm_status\" >&2; exit {code}; }}\n\
+               if printf '%s\\n' \"$sm_status\" | grep -q '^-'; then\n\
+                 git -C {wt} submodule update --init --recursive >/dev/null || {{ echo \"git submodule update --init --recursive failed\" >&2; exit {code}; }}\n\
+                 sm_count=$(git -C {wt} submodule status --recursive | grep -c . || true)\n\
+                 echo \"{prefix}$sm_count\"\n\
+               fi\n\
+             fi\n",
+            wt = shell_remote_path(&wt),
+            code = SUBMODULE_INIT_FAILED_EXIT,
+            prefix = SUBMODULES_INITIALISED_PREFIX,
+        ));
         // 同じリポジトリに対して複数のタスクが同時に worktree を作ることがある（クラスタの並列度 > 1）。
         // git の worktree 管理は共有なので、あれば `flock` で直列化する（無ければそのまま実行する）。
         let script = format!(
@@ -277,7 +319,27 @@ impl SshWorkspace {
         );
         let out = self.run_ssh(&script, Duration::from_secs(600)).await?;
         match out.exit {
-            Some(0) => Ok(()),
+            Some(0) => {
+                if let Some(count) = out
+                    .stdout_tail
+                    .lines()
+                    .find_map(|l| l.trim().strip_prefix(SUBMODULES_INITIALISED_PREFIX))
+                {
+                    let line = format!(
+                        "initialised {} submodules in {wt} on cluster {}",
+                        count.trim(),
+                        self.settings.cluster
+                    );
+                    tracing::info!(cluster = %self.settings.cluster, worktree = %wt, submodules = %count.trim(), "initialised git submodules in the cluster worktree (R6-3)");
+                    self.push_progress_note(line);
+                }
+                Ok(())
+            }
+            Some(SUBMODULE_INIT_FAILED_EXIT) => Err(WorkspaceError::Remote(format!(
+                "cannot initialise the git submodules of the worktree {wt} on {} (exit {SUBMODULE_INIT_FAILED_EXIT}): {}",
+                self.settings.cluster,
+                out.stderr_tail.trim()
+            ))),
             // ADR-0059 D3: 専用のバリアントにする（呼び出し側が「格下げしてよいか」を型で判定できるように。
             // 文字列のパースはしない）。
             Some(65) => Err(WorkspaceError::NotAGitRepository(format!(
@@ -1252,5 +1314,156 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         panic!("hanging ssh process {pid} was not killed");
+    }
+
+    // ---- Phase R6-3: クラスタの worktree は git submodule を初期化する ----
+
+    /// テスト用の git（人の設定・対話的な認証に引きずられない。ローカルパスの submodule を許す）。
+    fn test_git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "protocol.file.allow=always",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// `sub`（1 ファイル）を submodule `lib/sub` に持つ `proj` を作る。`with_submodule = false` なら submodule 無し。
+    fn project_repo(root: &Path, with_submodule: bool) -> PathBuf {
+        let sub = root.join("sub");
+        let proj = root.join("proj");
+        for dir in [&sub, &proj] {
+            std::fs::create_dir_all(dir).unwrap();
+            test_git(dir, &["init", "-q", "-b", "main"]);
+        }
+        std::fs::write(sub.join("lib.rs"), "pub fn sub() {}\n").unwrap();
+        test_git(&sub, &["add", "-A"]);
+        test_git(&sub, &["commit", "-q", "-m", "sub"]);
+        std::fs::write(proj.join("README.md"), "proj\n").unwrap();
+        test_git(&proj, &["add", "-A"]);
+        if with_submodule {
+            let url = sub.to_string_lossy().into_owned();
+            test_git(&proj, &["submodule", "add", "-q", &url, "lib/sub"]);
+        }
+        test_git(&proj, &["commit", "-q", "-m", "proj"]);
+        proj
+    }
+
+    /// `local_ssh` と同じ偽 ssh だが、ローカルパスの submodule の clone を許す（git ≥ 2.38.1 の既定は拒否）。
+    fn local_ssh_allowing_file_protocol(dir: &Path) -> Vec<String> {
+        let path = dir.join("fake-ssh-git");
+        crate::test_support::write_executable(
+            &path,
+            "#!/bin/sh\nwhile [ \"$1\" = \"-o\" ]; do shift 2; done\nshift\n\
+             export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=protocol.file.allow GIT_CONFIG_VALUE_0=always GIT_TERMINAL_PROMPT=0\n\
+             exec sh -c \"$*\"\n",
+        );
+        vec![path.to_string_lossy().into_owned()]
+    }
+
+    fn worktree_workspace(tmp: &Path, proj: &Path, ssh: Vec<String>) -> SshWorkspace {
+        let mut settings = SshSettings::new("sirius", "h", proj);
+        settings.sync = SyncMode::Worktree;
+        settings.task_id = "01R63TASK".into();
+        settings.ssh_command = ssh;
+        SshWorkspace::new(tmp.join("mirror"), settings)
+    }
+
+    /// 本番 2026-09-29（task 01M3Q25DSD895DGMGPWD752G3G、sirius の BenchFS）: `git worktree add` の直後は
+    /// submodule のディレクトリが空だった。準備で `submodule update --init --recursive` し、進行を 1 行残す。
+    /// 2 回目（再利用）は落ちず、初期化済みなので何もしない（行も増えない）。
+    #[tokio::test]
+    async fn ensure_worktree_initialises_submodules_and_is_idempotent_on_reuse() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = project_repo(tmp.path(), true);
+        let ws = worktree_workspace(
+            tmp.path(),
+            &proj,
+            local_ssh_allowing_file_protocol(tmp.path()),
+        );
+        let wt = ws.effective_remote_dir();
+
+        ws.ensure_worktree().await.expect("first prepare");
+        assert_eq!(
+            std::fs::read_to_string(wt.join("lib/sub/lib.rs")).unwrap(),
+            "pub fn sub() {}\n",
+            "the submodule is populated in the fresh worktree"
+        );
+        let notes = ws.take_progress_notes();
+        assert_eq!(
+            notes,
+            vec![format!(
+                "initialised 1 submodules in {} on cluster sirius",
+                wt.display()
+            )]
+        );
+
+        ws.ensure_worktree().await.expect("reuse does not fail");
+        assert!(wt.join("lib/sub/lib.rs").is_file());
+        assert!(
+            ws.take_progress_notes().is_empty(),
+            "already initialised: nothing to do on reuse"
+        );
+
+        // 人が submodule を deinit しても（空のディレクトリに戻る）、次の準備で戻る。
+        test_git(&wt, &["submodule", "deinit", "-q", "--all", "--force"]);
+        assert!(!wt.join("lib/sub/lib.rs").exists());
+        ws.ensure_worktree().await.expect("re-init on reuse");
+        assert!(wt.join("lib/sub/lib.rs").is_file());
+        assert_eq!(ws.take_progress_notes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_worktree_skips_the_submodule_step_without_gitmodules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = project_repo(tmp.path(), false);
+        let ws = worktree_workspace(tmp.path(), &proj, local_ssh(tmp.path()));
+        ws.ensure_worktree().await.expect("prepare");
+        let wt = ws.effective_remote_dir();
+        assert!(wt.join("README.md").is_file());
+        assert!(!wt.join(".gitmodules").exists());
+        assert!(ws.take_progress_notes().is_empty());
+    }
+
+    /// submodule の初期化に失敗したら（ここでは submodule の元を消した）、クラスタと worktree を名指しした
+    /// 準備のエラーになる（黙って空のディレクトリのまま進まない）。
+    #[tokio::test]
+    async fn a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = project_repo(tmp.path(), true);
+        std::fs::remove_dir_all(tmp.path().join("sub")).unwrap();
+        let ws = worktree_workspace(
+            tmp.path(),
+            &proj,
+            local_ssh_allowing_file_protocol(tmp.path()),
+        );
+        let err = ws
+            .ensure_worktree()
+            .await
+            .expect_err("the submodule source is gone");
+        let msg = err.to_string();
+        let wt = ws.effective_remote_dir();
+        assert!(matches!(err, WorkspaceError::Remote(_)), "{err:?}");
+        assert!(msg.contains("submodules"), "{msg}");
+        assert!(msg.contains("sirius"), "{msg}");
+        assert!(msg.contains(&wt.to_string_lossy().into_owned()), "{msg}");
+        assert!(ws.take_progress_notes().is_empty());
     }
 }

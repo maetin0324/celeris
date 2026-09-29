@@ -1194,3 +1194,34 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 23:0xZ 人「CoS のチャット task が枠で待たされるのは不便。CoS に割り当てられる run だけ max_concurrency から除外して」→ **R6-5**（Opus）: CoS の対話 run は
   `max_concurrency` とプールの `concurrency` を数えない・超えてよい、アカウントは最も空いているものに +1 の許容、安全上限 `max_cos_runs`（既定 2）、
   `GET /providers` に `in_use_cos`。ADR を新設。
+
+
+
+## R6-3: クラスタの worktree は git submodule を初期化する（2026-09-29）
+
+本番の BenchFS の子 01M3Q25DSD895DGMGPWD752G3G（sirius）の決定 `provision-submodules` の回収（上の 17:34Z の回収項目）。判断は ADR-0019 付記
+「Phase R6-3」。本番には触れていない。migration なし。
+
+### 実装したもの
+
+- `task-worker/src/ssh.rs`: `ensure_worktree` のスクリプトに submodule のステップ（`.gitmodules` があり `submodule status --recursive` に `-` が
+  あれば `submodule update --init --recursive`、その前に flock を外す）。失敗は exit 67 → `WorkspaceError::Remote`（クラスタと worktree を名指し）。
+  初期化したら `initialised N submodules in <wt> on cluster <c>` を tracing と `SshWorkspace::take_progress_notes()` に。
+- `task-worker/src/local_worktree.rs`: `pub fn init_submodules(dir)` を足し、`LocalWorktree::ensure_blocking`（新規・再利用とも）の後に呼ぶ。
+
+### 逸脱・未解決
+
+- 進行の 1 行を `WorkerProgress` に積むのは task-dispatch（R5b-fix2 の `push_remote_after_run` と同じく `crates/task-dispatch/src/dispatcher.rs`
+  の remote の prepare の直後）で、今回は編集範囲外。`ws.take_progress_notes()` を `sink.progress` に流す配線が後続の作業。今は tracing の info のみ。
+- ローカルの worktree は ADR-0041 のとおり task-worker にあるので同じステップを足した（task-dispatch には `worktree add` は無い。task-ops の
+  `docs.rs:719` / `changes.rs:676` は `--detach` の一時 worktree で、ビルドしないので対象外）。
+- ローカルの submodule の URL がネットワーク上なら、worktree の初回準備で clone が走る（従来は空のまま）。
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `cargo test -p task-worker -- --test-threads=8` → exit 0（lib 606 passed / 1 ignored、ssh_localhost 9 passed、reap_finished_children 1 passed）。
+  新しいテスト: `ssh::tests::{ensure_worktree_initialises_submodules_and_is_idempotent_on_reuse, ensure_worktree_skips_the_submodule_step_without_gitmodules,
+  a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree}`（偽 ssh = 手元の `sh`、ローカルパスの submodule）、
+  `local_worktree::tests::the_worktree_initialises_submodules_and_reuse_is_idempotent`。

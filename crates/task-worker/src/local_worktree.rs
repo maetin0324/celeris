@@ -99,7 +99,16 @@ impl LocalWorktree {
     }
 
     /// `ensure` の同期版（ADR-0074 D1.2: daemon が WU の worktree を dispatch の時点で切るのに使う）。
+    ///
+    /// Phase R6-3: 作業ツリーを作った後（使い回すときも）、`.gitmodules` があり未初期化の submodule が
+    /// あれば `git submodule update --init --recursive` する（`init_submodules`）。
     pub fn ensure_blocking(&self) -> Result<(), WorkspaceError> {
+        self.ensure_tree_blocking()?;
+        init_submodules(&self.dir)?;
+        Ok(())
+    }
+
+    fn ensure_tree_blocking(&self) -> Result<(), WorkspaceError> {
         std::fs::create_dir_all(&self.task_dir)?;
         if self.dir.join(".git").exists() {
             return Ok(());
@@ -186,6 +195,51 @@ impl LocalWorktree {
             CleanupOutcome::AlreadyGone
         }
     }
+}
+
+/// Phase R6-3（ADR-0019 付記）: 作業ツリー `dir` に `.gitmodules` があり、未初期化の submodule
+/// （`git submodule status --recursive` の行頭が `-`）があれば `git submodule update --init --recursive`
+/// する。初期化したら初期化後の submodule の数を `Some(n)` で返す（進行の行
+/// `initialised N submodules in <dir>` を tracing に出す）。`.gitmodules` が無い・全部初期化済みなら `None`
+/// （冪等。何度呼んでも同じ）。失敗は黙らずに `WorkspaceError::Remote` にする。
+pub fn init_submodules(dir: &Path) -> Result<Option<usize>, WorkspaceError> {
+    init_submodules_with(dir, &[])
+}
+
+/// `init_submodules` の本体。`git_config` は `git -c` の前置き（テストでローカルパスの submodule を許すのに使う）。
+fn init_submodules_with(dir: &Path, git_config: &[&str]) -> Result<Option<usize>, WorkspaceError> {
+    if !dir.join(".gitmodules").is_file() {
+        return Ok(None);
+    }
+    let fail = |what: &str, o: Option<GitOutput>| {
+        let detail = match o {
+            Some(o) => format!("exit {:?}: {}", o.code, o.stderr.trim()),
+            None => "cannot run git".to_string(),
+        };
+        WorkspaceError::Remote(format!(
+            "cannot initialise the git submodules of the worktree {} ({what}, {detail})",
+            dir.display()
+        ))
+    };
+    let status = match git(dir, &["submodule", "status", "--recursive"]) {
+        Some(o) if o.ok => o,
+        other => return Err(fail("git submodule status", other)),
+    };
+    if !status.stdout.lines().any(|l| l.starts_with('-')) {
+        return Ok(None);
+    }
+    let mut update: Vec<&str> = git_config.to_vec();
+    update.extend(["submodule", "update", "--init", "--recursive"]);
+    match git(dir, &update) {
+        Some(o) if o.ok => {}
+        other => return Err(fail("git submodule update --init --recursive", other)),
+    }
+    let count = git(dir, &["submodule", "status", "--recursive"])
+        .filter(|o| o.ok)
+        .map(|o| o.stdout.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    tracing::info!(worktree = %dir.display(), submodules = count, "initialised {count} submodules in {} (R6-3)", dir.display());
+    Ok(Some(count))
 }
 
 /// `remove_if_clean` の結果。
@@ -504,6 +558,70 @@ mod tests {
             branch: format!("{DEFAULT_BRANCH_PREFIX}{id}"),
             base: resolve_base(repo, None).expect("base"),
         }
+    }
+
+    /// Phase R6-3: submodule を持つリポジトリのタスクの worktree は、submodule まで初期化される
+    /// （再利用でも落ちない。`.gitmodules` が無ければ何もしない）。
+    #[tokio::test]
+    async fn the_worktree_initialises_submodules_and_reuse_is_idempotent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sub = tmp.path().join("sub");
+        init_repo(&sub);
+        let repo = tmp.path().join("repo");
+        init_repo(&repo);
+        let url = sub.to_string_lossy().into_owned();
+        let out = git(
+            &repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &url,
+                "lib/sub",
+            ],
+        )
+        .expect("git");
+        assert!(out.ok, "{}", out.stderr);
+        let out = git(&repo, &["commit", "-q", "-m", "submodule"]).expect("git");
+        assert!(out.ok, "{}", out.stderr);
+
+        let root = tmp.path().join("ws");
+        let wt = worktree_for(&repo, &root, "01R63LOCAL");
+        // 既定の git はローカルパス（file）の submodule の clone を拒む（git >= 2.38.1）。その失敗は黙らず、
+        // worktree を名指しした準備のエラーになる。
+        let err = wt
+            .ensure()
+            .await
+            .expect_err("file transport is refused by default");
+        let msg = err.to_string();
+        assert!(msg.contains("submodules"), "{msg}");
+        assert!(
+            msg.contains(&wt.dir.to_string_lossy().into_owned()),
+            "{msg}"
+        );
+        assert!(!wt.dir.join("lib/sub/README.md").exists());
+        // file を許すと初期化される（本番の submodule は ssh / https なのでこの前置きは要らない）。
+        let count =
+            init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("init");
+        assert_eq!(count, Some(1));
+        assert!(
+            wt.dir.join("lib/sub/README.md").is_file(),
+            "submodule populated"
+        );
+        // 再利用: 初期化済みなので何もしない（落ちない、ネットワークにも出ない）。
+        assert_eq!(
+            init_submodules(&wt.dir).expect("again"),
+            None,
+            "already initialised"
+        );
+        wt.ensure().await.expect("reuse");
+        assert!(wt.dir.join("lib/sub/README.md").is_file());
+
+        let plain = tempfile::tempdir().expect("tempdir");
+        init_repo(plain.path());
+        assert_eq!(init_submodules(plain.path()).expect("no gitmodules"), None);
     }
 
     /// ADR-0041 D1: やり直しの run は worktree を**作り直さない**（未コミットの作業を消さない）。

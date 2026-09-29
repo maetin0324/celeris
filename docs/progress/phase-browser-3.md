@@ -18,7 +18,15 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 - `cargo test -p task-core --lib browser_` → exit 0、42 passed
 - `cargo test -p task-core --lib browser_identity` → exit 0、10 passed
 - `cargo clippy -p task-core --all-targets -- -D warnings` → exit 0
-- `cargo test --workspace` と `cargo clippy --workspace -- -D warnings` は Run #4 では実行していない（壁時計 600 秒の制約）。
+- `cargo test --workspace`（2026-09-29、Run #5、HEAD 454a922 + docs）→ exit 0、2890 passed / 0 failed / 7 ignored（`test result: ok` 95 行）
+- `cargo clippy --workspace -- -D warnings`（同）→ exit 0、warning 0
+
+## 行ごとの判定（2026-09-29）
+
+- P3-A: 「project/origin 単位の暗号化・期限/削除/失効、他 identity 混入拒否」のうち、期限・削除・失効・混入拒否は規則と単体試験まで。**暗号化の実体は未実装**。利用（worker の session への復元）は P4-A の隔離が要るので Phase 4 の後（ADR-0083 D3）。
+- P3-B: 「task/run ACL、他 task 拒否、cookie/token 非記録」は規則と単体試験まで。**WS 接続/再接続と永続 event の保存は未実装**。
+- P3-C: 「pause 収束・lease 排他・takeover/resume/stop、切断・競合・二重 action」は状態機械の単体試験まで。**API・worker・cancel への配線と実際の切断の試験は未実装**。
+- 3 行とも「単独の成果・検査」をまだ満たしていない。配線は子 task に分けて提案した（P3-B → P3-C → P3-A 封緘 → GUI の順）。
 
 ## 未解決
 

@@ -240,11 +240,14 @@ pub fn child_objective(
 ///   採用済みなので draft を挟まない）、`labels = [child-<key>]`。
 /// - `title` / `acceptance` = unit、`objective` = [`child_objective`]。
 /// - `genre` / `skills` = unit（無ければ親）、`repos` = unit（親の部分集合。無ければ親と同じ）、
-///   `budget` = 親、`workspace` = 親（ADR-0062 B2 / D5: 担当が `cluster:<id>` を持たなければ継いだ remote を
-///   local に落とす。`task_core::materialize_delegated_logging` の規則をそのまま通す）。
+///   `budget` = `max(親, 30 turns / 1,800 秒)`（`task_core::tree::tree_child_budget`。R5b-fix3）、
+///   `workspace` = 親（ADR-0062 B2 / D5: 担当が `cluster:<id>` を持たなければ継いだ remote を
+///   local に落とす。`task_core::materialize_delegated_logging` の規則をそのまま通す）。ただし親の `Local` が
+///   親自身の id なら子は自分の id（[`child_own_workspace`]。R5b-fix3）。
 /// - 担当は書かない（matching が決める。ADR-0069 D1）。unit の `features` は `routing.features`（ヒント）。
-/// - `tree = {root_id, depth + 1, parent_unit}`（`base_commit` は R1c）。`execution_hint` は持たない
-///   （子は最初の dispatch で自分の Complexity Gate を通る。ADR-0079 D4 (1)）。
+/// - `tree = {root_id, depth + 1, parent_unit}`（`base_commit` は R1c）。`execution_hint` = `{compound,
+///   explicit: 計画が origin human}`（R5b-fix3。子は最初の dispatch で自分の Complexity Gate を通る。
+///   ADR-0079 D4 (1)。人の計画なら `human/explicit`、planner の計画なら signal `H`）。
 ///
 /// `Err` はこの unit を作れない理由（unit を `failed` にする文言）。
 #[allow(clippy::too_many_arguments)]
@@ -322,7 +325,16 @@ pub fn build_child_task(
         ));
     };
     child.status = Status::Ready;
-    child.budget = parent.budget;
+    // R5b-fix3: 子は自分の作業ディレクトリを持つ（親の `<root>/<parent_id>` を共有しない。R1c 付記 1.）。
+    child.workspace = child_own_workspace(parent, child.id, &child.workspace);
+    // R5b-fix3: 子の予算は `max(親, leaf 1 run の既定 30 turns / 1,800 秒)`（`tree_child_budget`）。
+    child.budget = task_core::tree::tree_child_budget(&parent.budget);
+    // R5b-fix3: kind task の unit は計画の書き手の compound の手掛かり（人の計画なら人の明示）。
+    let human_plan = plan_is_human(store, parent, plan_id);
+    child
+        .routing
+        .get_or_insert_with(Default::default)
+        .execution_hint = Some(task_core::tree::task_unit_execution_hint(human_plan));
     child.labels = vec![task_core::child_label(&unit.key)];
     child.skills = if unit.skills.is_empty() {
         parent.skills.clone()
@@ -357,6 +369,41 @@ pub fn build_child_task(
         None,
     ));
     Ok((child, downgrades))
+}
+
+/// R5b-fix3: 子 task の作業場所。親の `Local` の `path` が親自身の id（= 既定の `<root>/<parent_id>`）なら、
+/// 子は自分の id（`<root>/<child_id>`）にする（`mode` は親のまま）。それ以外（案件のリポジトリを指す
+/// `Local` の絶対パス・`Remote`）は継いだ値をそのまま使う。
+pub fn child_own_workspace(
+    parent: &Task,
+    child_id: task_core::TaskId,
+    inherited: &task_core::WorkspaceSpec,
+) -> task_core::WorkspaceSpec {
+    match inherited {
+        task_core::WorkspaceSpec::Local { path, mode }
+            if path.as_os_str().is_empty()
+                || *path == std::path::Path::new(&parent.id.to_string()) =>
+        {
+            task_core::WorkspaceSpec::Local {
+                path: std::path::PathBuf::from(child_id.to_string()),
+                mode: *mode,
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// R5b-fix3: `plan_id` の計画が人の計画（origin human）か。見つからない（採用前の仮の子 `""` など）・
+/// 読めなければ `false`（planner の計画として扱う）。
+fn plan_is_human(store: &dyn TaskStore, parent: &Task, plan_id: &str) -> bool {
+    if plan_id.is_empty() {
+        return false;
+    }
+    store
+        .execution_plan_list(parent.id)
+        .ok()
+        .and_then(|plans| plans.into_iter().find(|p| p.id == plan_id))
+        .is_some_and(|p| p.origin == task_core::PlanOrigin::Human)
 }
 
 /// ADR-0079 D9（Phase R2b）: 子 task の失敗の要約（親の replan の planner に渡す・基盤の失敗の再試行を決める）。
@@ -742,7 +789,15 @@ mod tests {
         );
         assert_eq!(child.repos[0].repo_id, p.repos[1].repo_id);
         assert_eq!(child.workspace, p.workspace);
-        assert_eq!(child.budget, p.budget);
+        // R5b-fix3: max(親 30 turns / 900 s, leaf 1 run の既定 30 / 1,800)。
+        assert_eq!(
+            child.budget,
+            Budget {
+                max_turns: 30,
+                max_wall_secs: 1800,
+                max_retries: 2,
+            }
+        );
         assert_eq!(child.assignee, None);
         let tree = child.tree.as_ref().unwrap();
         assert_eq!(tree.root_id, p.id);
@@ -777,6 +832,133 @@ mod tests {
         )
         .unwrap();
         assert_eq!(child.repos, p.repos);
+    }
+
+    fn build(store: &SqliteStore, p: &Task, plan_id: &str) -> Task {
+        let spec = v3(serde_json::json!([task_unit(&[])]));
+        build_child_task(
+            store,
+            p,
+            plan_id,
+            &spec.units[0],
+            &[],
+            &[],
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap()
+        .0
+    }
+
+    /// R5b-fix3 (D2): 親の `Local` の path が親自身の id なら、子は自分の id（親のディレクトリを共有しない）。
+    /// mode は親のまま。`Remote` と、リポジトリを指す `Local` の絶対パスはそのまま継ぐ。
+    #[test]
+    fn child_gets_its_own_local_dir_when_the_parent_uses_its_id() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut p = parent(&[]);
+        p.workspace = WorkspaceSpec::Local {
+            path: p.id.to_string().into(),
+            mode: Some(task_core::WorkspaceMode::Worktree),
+        };
+        let child = build(&store, &p, "plan-1");
+        assert_eq!(
+            child.workspace,
+            WorkspaceSpec::Local {
+                path: child.id.to_string().into(),
+                mode: Some(task_core::WorkspaceMode::Worktree),
+            }
+        );
+        assert_ne!(child.workspace, p.workspace);
+
+        let remote = WorkspaceSpec::Remote {
+            cluster: "sirius".into(),
+            path: "/work/NBB/rmaeda/workspace/benchfs".into(),
+            mode: None,
+        };
+        assert_eq!(child_own_workspace(&p, child.id, &remote), remote);
+        let repo_path = WorkspaceSpec::local("/home/u/repo");
+        assert_eq!(child_own_workspace(&p, child.id, &repo_path), repo_path);
+    }
+
+    /// R5b-fix3 (D3a): 既定の予算（10 turns / 600 s）の親でも、子は leaf 1 run の既定（30 / 1,800）を下回らない。
+    /// 親の方が大きければ親のまま。
+    #[test]
+    fn child_budget_is_never_below_one_leaf_run() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut p = parent(&[]);
+        p.budget = Budget {
+            max_turns: 10,
+            max_wall_secs: 600,
+            max_retries: 2,
+        };
+        let child = build(&store, &p, "plan-1");
+        assert_eq!(
+            child.budget,
+            Budget {
+                max_turns: task_core::tree::TREE_CHILD_MIN_MAX_TURNS,
+                max_wall_secs: task_core::tree::TREE_CHILD_MIN_MAX_WALL_SECS,
+                max_retries: 2,
+            }
+        );
+        p.budget = Budget {
+            max_turns: 60,
+            max_wall_secs: 3600,
+            max_retries: 1,
+        };
+        assert_eq!(build(&store, &p, "plan-1").budget, p.budget);
+    }
+
+    /// R5b-fix3 (D3c): 子の `execution_hint` は compound。planner の計画（または見つからない計画）なら
+    /// `explicit = false`（signal H）、人の計画（origin human）なら `explicit = true`（human/explicit）。
+    #[test]
+    fn child_execution_hint_follows_the_plan_origin() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let p = parent(&[]);
+        let hint = |t: &Task| t.routing.as_ref().and_then(|r| r.execution_hint);
+        assert_eq!(
+            hint(&build(&store, &p, "plan-unknown")),
+            Some(task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: false,
+            })
+        );
+        store.insert(&p).unwrap();
+        let spec = v3(serde_json::json!([task_unit(&[])]));
+        let row = task_core::ExecutionPlanRow {
+            id: "plan-h".into(),
+            task_id: p.id.to_string(),
+            version: 1,
+            origin: task_core::PlanOrigin::Human,
+            planner_run_id: None,
+            status: task_core::PlanStatus::Active,
+            spec: spec.clone(),
+            created_at: "2026-09-29T00:00:00Z".into(),
+            superseded_at: None,
+        };
+        store
+            .execution_plan_adopt(
+                p.id,
+                row,
+                Vec::new(),
+                Vec::new(),
+                task_core::Event::ExecutionPlanned {
+                    plan_id: "plan-h".into(),
+                    version: 1,
+                    origin: task_core::PlanOrigin::Human,
+                    supersedes: None,
+                    reason: None,
+                    plan: Box::new(spec),
+                },
+            )
+            .unwrap();
+        let child = build(&store, &p, "plan-h");
+        assert_eq!(
+            hint(&child),
+            Some(task_core::ExecutionHintSpec {
+                mode: task_core::ExecutionMode::Compound,
+                explicit: true,
+            })
+        );
     }
 
     #[test]

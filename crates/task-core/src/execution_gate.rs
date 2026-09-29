@@ -374,7 +374,9 @@ pub fn decide_at(
         };
     }
     // 強制規則: `max_turns <= 10` かつ目的が 400 文字未満なら atomic。
-    if task.budget.max_turns <= 10 && objective_len < 400 {
+    // ADR-0079「R5b-fix3」: 木の子 task（`tree.parent_unit` を持つ）には当てない。親の計画の kind task の
+    // unit は作られた時点で「小さくない」（目的は unit の 1 行と木の中の位置なので短い）。
+    if task.budget.max_turns <= 10 && objective_len < 400 && !crate::tree::is_tree_child(task) {
         return ExecutionGateDecision {
             mode: ExecutionMode::Atomic,
             source,
@@ -643,6 +645,48 @@ mod tests {
         assert_eq!(d.mode, ExecutionMode::Atomic);
         assert_eq!(d.rule_id, "atomic/small");
         assert_eq!(d.score, 0);
+    }
+
+    /// ADR-0079 R5b-fix3: 木の子（`tree.parent_unit` を持つ）には `atomic/small` を当てない。規則表のスコアで
+    /// 決まり、planner の計画の子の手掛かり（H +2）はスコアに入り、人の計画の子は `human/explicit`。
+    #[test]
+    fn the_small_rule_does_not_apply_to_tree_children() {
+        let parent = base_task();
+        let mut task = base_task();
+        task.tree = Some(crate::tree::TreeInfo::child_of(
+            &parent,
+            crate::tree::ParentUnit {
+                task_id: parent.id,
+                plan_id: "plan-1".into(),
+                unit_key: "u".into(),
+                stage: "s".into(),
+                attempt: 1,
+            },
+            None,
+        ));
+        assert!(task.budget.max_turns <= 10);
+        let f = features(|_| {});
+        let at = GateThreshold::at_depth(2, 2);
+        let d = decide_at(&task, &f, None, false, no_inputs(), false, at);
+        assert_eq!(d.rule_id, "atomic/score");
+        let d = decide_at(&task, &f, None, true, no_inputs(), false, at);
+        assert_eq!(d.rule_id, "atomic/score");
+        assert_eq!(d.score, 2);
+        assert_eq!(d.source, GateSource::Hint);
+        let d = decide_at(
+            &task,
+            &f,
+            Some(ExecutionMode::Compound),
+            false,
+            no_inputs(),
+            false,
+            at,
+        );
+        assert_eq!(d.mode, ExecutionMode::Compound);
+        assert_eq!(d.rule_id, "human/explicit");
+        // root（木でない task）は従来どおり。
+        let d = decide(&base_task(), &f, None, true, no_inputs(), false);
+        assert_eq!(d.rule_id, "atomic/small");
     }
 
     #[test]

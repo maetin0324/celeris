@@ -152,6 +152,15 @@ async fn post_execution_plan(
                 OffsetDateTime::now_utc(),
             )
             .map_err(|e| ops_problem(store, e, Some("execution_plan_adopt")))?;
+            // ADR-0079「R5b-fix3」: 人が計画を書いた = 分けて進めると決めた。gate の記録を人の compound にする
+            // （前の `atomic/small` を残さない）。書けなくても採用は済んでいるので失敗にしない。
+            if let Err(e) = task_ops::regate::record_human_plan_gate(
+                store,
+                task_id,
+                OffsetDateTime::now_utc(),
+            ) {
+                tracing::warn!(task_id = %task_id, error = %e, "failed to record the human plan's gate decision");
+            }
             let work_units = store
                 .work_units_for(task_id)
                 .map_err(crate::problem::store_problem)?;

@@ -255,7 +255,11 @@ async fn v3_task_unit_creates_child_when_ready() {
         "the child inherits the workspace"
     );
     assert_eq!(child.repos, root.repos);
-    assert_eq!(child.budget, root.budget, "the child inherits the budget");
+    assert_eq!(
+        child.budget,
+        task_core::tree::tree_child_budget(&root.budget),
+        "R5b-fix3: the child gets max(parent, one leaf run)"
+    );
     assert_eq!(child.project_id, root.project_id);
     assert_eq!(child.assignee, None, "ADR-0069 D1: matching decides");
     let tree = child.tree.as_ref().expect("Task.tree");

@@ -235,10 +235,14 @@ async fn human_put_v3_goes_through_the_tree_path_without_plan_gate() {
     assert!(resp.text().contains("h4 をどうするか"), "{}", resp.text());
 
     let ev = events(&env, root.id);
-    assert!(ev.iter().any(|e| matches!(
-        e,
-        Event::UnitGateOverridden { unit_key, action: task_core::UnitGateAction::KeptTask, .. } if unit_key == "p1"
-    )), "{ev:?}");
+    // R5b-fix3: 人の計画の kind task の unit は `human/explicit` の compound（宣言と一致するので記録なし）。
+    assert!(
+        !ev.iter().any(|e| matches!(
+            e,
+            Event::UnitGateOverridden { unit_key, .. } if unit_key == "p1" || unit_key == "p2"
+        )),
+        "{ev:?}"
+    );
     assert!(ev.iter().any(|e| matches!(
         e,
         Event::ChildAdopted { unit_key, child_task_id, stage, .. }

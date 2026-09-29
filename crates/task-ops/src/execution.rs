@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use task_core::execution_plan::{PlanValidationError, validate};
+use task_core::execution_plan::{PlanContext, PlanValidationError, validate_with};
 use task_core::{
     Event, ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, PlanOrigin, PlanStatus, TaskId,
     TaskStore, WorkUnitRow, WorkUnitStatus, new_id,
@@ -75,7 +75,12 @@ pub fn adopt_plan_with_children(
     let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
     };
-    let validated = validate(&spec, limits, &[])
+    // ADR-0079（Phase R1a）: /3 の `adopt` は origin human だけ、kind task の unit は木の深さで決まる。
+    let ctx = PlanContext {
+        origin,
+        depth: task_core::tree::depth_of(&task),
+    };
+    let validated = validate_with(&spec, limits, &[], ctx)
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
 
     let plan_id = new_id();
@@ -106,7 +111,7 @@ pub fn adopt_plan_with_children(
         .unwrap_or_default();
     let pause_points_event = Event::PausePointsResolved {
         plan_id: plan_id.clone(),
-        phases: task_core::resolve_pause_points(&pause_after, &validated.spec.phases),
+        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
         source: pause_after_source,
     };
 
@@ -220,7 +225,11 @@ pub fn replan(
         .filter(|u| u.status == WorkUnitStatus::Done && !daemon_added(u))
         .map(|u| (u.key.clone(), u.spec.clone()))
         .collect();
-    let validated = validate(&spec, limits, &done_work_units)
+    let ctx = PlanContext {
+        origin,
+        depth: task_core::tree::depth_of(&task),
+    };
+    let validated = validate_with(&spec, limits, &done_work_units, ctx)
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
 
     let current_keys: BTreeSet<&str> = current.iter().map(|u| u.key.as_str()).collect();
@@ -529,7 +538,7 @@ pub fn replan(
         .unwrap_or_default();
     extra_events.push(Event::PausePointsResolved {
         plan_id: new_plan_id.clone(),
-        phases: task_core::resolve_pause_points(&pause_after, &validated.spec.phases),
+        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
         source: pause_after_source,
     });
     // ADR-0074 D5.3（Phase F1）: 版の差分の件数を `reason` の後ろに決定的な形で足す（E5 の未実装
@@ -608,6 +617,9 @@ mod tests {
 
     fn spec() -> ExecutionPlanSpec {
         ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "A -> B -> C".to_string(),
             work_units: vec![wu("a", &[]), wu("b", &["a"]), wu("c", &["b"])],
@@ -619,6 +631,7 @@ mod tests {
     fn sample_task() -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -731,6 +744,9 @@ mod tests {
         let mut b = wu("b", &["a"]);
         b.phase = Some("build".to_string());
         ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "design -> build".to_string(),
             work_units: vec![a, b],

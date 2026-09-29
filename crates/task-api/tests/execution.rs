@@ -147,6 +147,37 @@ async fn a_cyclic_plan_is_rejected_with_422() {
     assert_eq!(resp.status, 422, "{}", resp.text());
 }
 
+/// ADR-0079 D2（Phase R1a）: `[execution.tree] enabled = false`（既定）では、人が書いた
+/// `celeris.execution-plan/3` も 422 で拒否され、理由（有効にする設定）が本文に出る。計画は作られない。
+#[tokio::test]
+async fn a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled() {
+    let env = env();
+    let app = env.router();
+    let task = new_task(TaskKind::Execute, Status::Draft);
+    env.seed(&task);
+    let v3: Value = serde_json::from_str(include_str!(
+        "../../task-core/testdata/execution-plan/v3-browser.json"
+    ))
+    .unwrap_or_default();
+    let resp = send(
+        &app,
+        post_admin(&format!("/api/v1/tasks/{}/execution-plan", task.id), &v3),
+    )
+    .await;
+    assert_eq!(resp.status, 422, "{}", resp.text());
+    assert!(
+        resp.text().contains("[execution.tree] enabled = true"),
+        "{}",
+        resp.text()
+    );
+    let resp = send(
+        &app,
+        g(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
+    )
+    .await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+}
+
 #[tokio::test]
 async fn a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are_rejected() {
     let env = env();

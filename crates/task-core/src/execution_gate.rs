@@ -400,6 +400,7 @@ mod tests {
     fn base_task() -> Task {
         let now = time::OffsetDateTime::UNIX_EPOCH;
         Task {
+            tree: None,
             id: TaskId::new(),
             parent_id: None,
             kind: TaskKind::Execute,

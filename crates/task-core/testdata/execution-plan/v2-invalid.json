@@ -1,0 +1,14 @@
+{
+  "schema": "celeris.execution-plan/2",
+  "rationale": "壊れた v2",
+  "phases": [{"key": "p1", "kind": "implement", "title": "p1"}, {"key": "p1", "kind": "test", "title": "dup"}, {"key": "p3", "kind": "test", "title": "p3"}],
+  "work_units": [
+    {"key": "a", "kind": "implement", "title": "a", "objective": "alpha work", "phase": "p1", "depends_on": ["b"]},
+    {"key": "b", "kind": "implement", "title": "b", "objective": "beta work", "phase": "p3"},
+    {"key": "c", "kind": "implement", "title": "c", "objective": "gamma work"},
+    {"key": "integrate-p1", "kind": "implement", "title": "i", "objective": "reserved", "phase": "nope"},
+    {"key": "e", "kind": "implement", "title": "e", "objective": "epsilon work", "phase": "p3", "depends_on": ["b", "f"]},
+    {"key": "f", "kind": "implement", "title": "f", "objective": "phi work", "phase": "p3"}
+  ],
+  "children": [{"key": "k", "title": "k", "objective": "k", "acceptance": []}, {"key": "k", "title": "k2", "objective": "k2", "acceptance": [{"text": "h", "check": {"type": "human"}}], "depends_on": ["k", "zz"]}]
+}

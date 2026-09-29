@@ -132,8 +132,18 @@ fn seed_git_task(
     env: &TestEnv,
     project_id: Option<task_core::ProjectId>,
 ) -> (TaskId, PathBuf, PathBuf) {
+    seed_git_task_with(env, project_id, |_| {})
+}
+
+/// [`seed_git_task`] の、挿入する前に task を書き換えられる版。
+fn seed_git_task_with(
+    env: &TestEnv,
+    project_id: Option<task_core::ProjectId>,
+    edit: impl FnOnce(&mut task_core::Task),
+) -> (TaskId, PathBuf, PathBuf) {
     let mut task = new_task(TaskKind::Execute, Status::Done);
     task.project_id = project_id;
+    edit(&mut task);
     env.seed(&task);
     let repo = env.dir.path().join(format!("src-{}", task.id));
     std::fs::create_dir_all(&repo).expect("mkdir");
@@ -356,6 +366,56 @@ async fn merging_fast_forwards_the_default_branch_and_records_the_integration() 
     assert_eq!(after["repos"][0]["missing"], true, "{after}");
     assert_eq!(after["repos"][0]["ahead"], 0);
     assert_eq!(after["repos"][0]["integration"]["state"], "done");
+}
+
+/// ADR-0079 D6（Phase R1c）: 木の子 task の成果は親の段階の統合で親のブランチに入る。人の取り込み
+/// （merge / pr / discard）は 409 `tree_child` で、main もブランチも触らず、記録も残さない。
+#[tokio::test]
+async fn a_tree_child_cannot_be_integrated_into_main_by_hand() {
+    let (env, _bin) = env_with_gh();
+    let app = env.router();
+    let parent = TaskId::new();
+    let (task_id, repo, tree) = seed_git_task_with(&env, None, |t| {
+        t.parent_id = Some(parent);
+        t.tree = Some(task_core::TreeInfo {
+            root_id: parent,
+            depth: 2,
+            parent_unit: Some(task_core::ParentUnit {
+                task_id: parent,
+                plan_id: "plan".into(),
+                unit_key: "c".into(),
+                stage: "s1".into(),
+            }),
+            base_commit: None,
+        });
+    });
+    let before = git_out(&repo, &["rev-parse", "refs/heads/main"]);
+    for body in [
+        json!({"method": "merge"}),
+        json!({"method": "pr"}),
+        json!({"method": "discard", "confirm": true}),
+    ] {
+        let resp = send(
+            &app,
+            p(
+                &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
+                &body,
+            ),
+        )
+        .await;
+        let problem = assert_problem(&resp, 409, "tree_child");
+        let detail = problem["detail"].as_str().unwrap_or_default();
+        assert!(detail.contains("成果の取り込み"), "{detail}");
+        assert!(detail.contains(&parent.to_string()), "{detail}");
+        assert!(!detail.contains("配送"), "{detail}");
+    }
+    assert_eq!(git_out(&repo, &["rev-parse", "refs/heads/main"]), before);
+    assert!(tree.join("src.txt").is_file());
+    assert!(branch_exists(&repo, &format!("celeris/{task_id}")));
+    let after = send(&app, g(&format!("/api/v1/tasks/{task_id}/changes")))
+        .await
+        .json();
+    assert!(after["repos"][0]["integration"].is_null(), "{after}");
 }
 
 /// ADR-0043 D5: 人が `main` を編集中なら 409（何も触らない）。

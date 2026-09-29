@@ -1273,6 +1273,7 @@ pub(crate) mod tests {
         use task_core::*;
         let now = time::OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

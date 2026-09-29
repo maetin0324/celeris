@@ -566,6 +566,7 @@ mod tests {
         depends_on: Vec<TaskId>,
     ) -> Task {
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

@@ -570,8 +570,13 @@ fn scan_task_ready(
         TASK_SCAN,
     )?;
     let mut out = Vec::new();
+    // ADR-0079 D6 / D11（Phase R1c）: 木の子 task の done は「親の段階で取り込まれる準備ができた」だけで、
+    // 人に確認を求めない（鳴るのは root の done だけ）。
     for task in tasks.items.into_iter().filter(|t| {
-        t.updated_at >= since && t.milestone_id.is_none() && task_core::support_kind(t).is_none()
+        t.updated_at >= since
+            && t.milestone_id.is_none()
+            && task_core::support_kind(t).is_none()
+            && !task_core::tree::is_tree_child(t)
     }) {
         let events = store.events_for(task.id)?;
         let summary = events
@@ -975,6 +980,7 @@ mod tests {
         fn task(title: &str) -> Task {
             let now = OffsetDateTime::now_utc();
             Task {
+                tree: None,
                 routing: None,
                 mode: Default::default(),
                 skills: Vec::new(),

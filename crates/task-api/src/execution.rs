@@ -160,13 +160,21 @@ async fn get_task_execution(
                 }
                 None => None,
             };
-            let (gate, phase, metrics, phase_checkpoint) = match detail.execution {
-                Some(e) => (e.gate, e.phase, e.metrics, e.phase_checkpoint),
+            let (gate, phase, metrics, phase_checkpoint, awaiting_children) = match detail.execution
+            {
+                Some(e) => (
+                    e.gate,
+                    e.phase,
+                    e.metrics,
+                    e.phase_checkpoint,
+                    e.awaiting_children,
+                ),
                 None => (
                     None,
                     None,
                     task_core::summarize_execution_metrics(&task, &[]),
                     None,
+                    Vec::new(),
                 ),
             };
             Ok(TaskExecutionView {
@@ -176,6 +184,7 @@ async fn get_task_execution(
                 runs: detail.runs,
                 metrics,
                 phase_checkpoint,
+                awaiting_children,
             })
         })
         .await?;

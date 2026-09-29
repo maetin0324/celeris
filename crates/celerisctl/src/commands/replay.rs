@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::Args;
 use task_core::TaskStore;
-use task_ops::replay::{check_and_apply_execution, replay};
+use task_ops::replay::{check_and_apply_decisions, check_and_apply_execution, replay};
 
 use crate::error::CliError;
 use crate::outln;
@@ -75,6 +75,22 @@ pub fn run(store: &dyn TaskStore, args: ReplayArgs) -> Result<ExitCode, CliError
             );
         }
         total_mismatches += wu_mismatches.len() + run_mismatches.len() + plan_mismatches.len();
+        // ADR-0079 D15（Phase R1a）: 決定の要求の表（`decisions`）も events から作り直せる。
+        let (decision_mismatches, decisions_applied) =
+            check_and_apply_decisions(store, args.apply)?;
+        for m in &decision_mismatches {
+            outln!(
+                "DECISION_MISMATCH id={} field={} replayed={} stored={}",
+                m.id,
+                m.field,
+                m.replayed,
+                m.stored
+            );
+        }
+        total_mismatches += decision_mismatches.len();
+        if decisions_applied {
+            outln!("replay: rebuilt the decisions table from events");
+        }
         if args.apply {
             outln!(
                 "replay: applied execution index fixes for {} task(s)",
@@ -113,6 +129,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().expect("open");
         let now = time::OffsetDateTime::now_utc();
         let task = task_core::Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -160,6 +177,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .expect("append created");

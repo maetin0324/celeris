@@ -1588,6 +1588,7 @@ mod tests {
             conversation: None,
             labels: Vec::new(),
             category: Default::default(),
+            tree: None,
         }
     }
 

@@ -229,7 +229,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 - 担当は matching が決める（ADR-0069 D1。unit は担当を書けない）。部署をまたぐ子は ADR-0074 F4b の規則のまま（未認可なら計画を採用せず
   approvals で聞く。SPEC §3.1）。
 - `TaskFeatures` は子の目的・受け入れから `infer_with_hints` で推定し、unit の `features` をヒント（出自 `planner`）として重ねる。
-- `Task.tree = {root_id, depth, parent_unit: {task_id, plan_id, unit_key, stage}, base_commit}`（Task の JSON）と列 `tasks.root_id`（索引。migration 0030）。
+- `Task.tree = {root_id, depth, parent_unit: {task_id, plan_id, unit_key, stage}, base_commit}`（Task の JSON）と列 `tasks.root_id`（索引。migration 0031）。
 - 親の unit の行を `running`、`child_task_id` を書き、親の events に `Event::ChildTaskCreated{unit_key, child_task_id, depth}`、子の `Created` に
   `origin: plan_unit`。
 - 子の中からの委譲（`delegate.json`）は使えない（木の節点の run には `available_genres` を渡さない。子を作る入口は計画の unit だけ）。
@@ -300,7 +300,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
   その unit を `blocked(decision)` にする。それ以外は run の完了を妨げない）、(c) daemon（`leaf_too_large` / `limit` / `plan_invalid`。D3・D4・D9）。
   `path` と `id` は daemon が付ける（LLM に書かせない）。
 - **置き場**: `Event::DecisionRequested{decision}` / `DecisionAnswered{id, option, note, by}` / `DecisionWithdrawn{id, reason}` を出した節点の events に積み、
-  派生の表 `decisions(id, root_id, task_id, key, kind, status, needed_before_json, json, created_at, answered_at)`（migration 0030）に同じトランザクションで書く。
+  派生の表 `decisions(id, root_id, task_id, key, kind, status, needed_before_json, json, created_at, answered_at)`（migration 0031）に同じトランザクションで書く。
   `approvals`（SPEC §3.6 の「今回だけ / 今後ずっと」の認可）とも `QuestionRaised`（task を止める自由文の質問）とも別物にする。
 - **待つもの・待たないもの**: `needs_decisions` を持つ unit と、`needed_before` が指す unit / 段階だけが pending のまま待つ。他の unit・兄弟の subtree は進む。
   `needed_before` に指された子 task はまだ作られない（D4 (4)）。
@@ -422,7 +422,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
   `Event::ChildAdopted` を root に残す。
 - API / GUI は追加（`Task.tree`、`TaskDetail.tree`、`GET /tasks/{id}/tree`、`/decisions`、`plan-gate`）と D13 の削除（410 / 422）。`api-v1.schema.json` /
   `event.schema.json` / `execution-plan.schema.json` を再生成し、`decision.schema.json` を足す。
-- migration 0030（`SCHEMA_VERSION` 29 → 30）: `ALTER TABLE tasks ADD COLUMN root_id TEXT`（+ 索引）、`ALTER TABLE work_units ADD COLUMN child_task_id TEXT`、
+- migration 0031（`SCHEMA_VERSION` 30 → 31）: `ALTER TABLE tasks ADD COLUMN root_id TEXT`（+ 索引）、`ALTER TABLE work_units ADD COLUMN child_task_id TEXT`、
   `ALTER TABLE work_units ADD COLUMN needs_decisions_json TEXT NOT NULL DEFAULT '[]'`、`CREATE TABLE decisions …`。すべて events の派生（replay で作り直せる）。
   `SchemaTooNew` の規則どおり旧いバイナリは 30 を開けない。ロールバックは ADR-0040 D2。
 
@@ -498,7 +498,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 
 | Phase | 範囲 | 大きさ | 依存 |
 |---|---|---|---|
-| R1a | plan/3 の型と検証（純粋関数）、`Task.tree`、migration 0030、新しい Event、`[execution.tree]` の設定 | M | — |
+| R1a | plan/3 の型と検証（純粋関数）、`Task.tree`、migration 0031、新しい Event、`[execution.tree]` の設定 | M | — |
 | R1b | daemon: unit から子 task を作る、子の状態の写し、段階の完了（子を含む）、`awaiting_children`、subtree の中止の連鎖、木での委譲の禁止 | M | R1a |
 | R1c | 親ブランチへの取り込み: 子の基点、統合 WU が子のブランチを merge、子の最終レビューの基点、子の取り込み（配送）の抑止、root だけ main | M | R1b |
 | R2a | 再帰の gate: 深さの閾値、木では shadow でも採用、unit の gate（上げる / 下げる / 決定）と不一致の記録、木の上限と超過の決定の要求 | M | R1b |
@@ -510,21 +510,21 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 | R5a | 案件モデル: project-plan API・GUI・celerisctl の削除（410 / 422）、途中目標の自動作成と Go / ADR-0077 / 判定 run の停止、`is_root_task`、subtree の一時停止、CoS の preamble（D12）と `add_milestone` の廃止 | M | R1b（CoS 文面は R2b の後） |
 | R5b | 本番の移行と dogfood: `tree adopt`、browser の root（Phase 1 = 既存の done task を採用、Phase 2〜4 = 子 task、H1〜H7 = 決定）、BenchFS の root（「国際会議フルペーパー化」、止まっている framing を決定に）、`enabled = true`、Phase 2 の子を 1 本通す | M（実機） | すべて |
 
-### R1a: plan/3 とデータモデル（migration 0030）
+### R1a: plan/3 とデータモデル（migration 0031）
 
 - **範囲**: `task_core::execution_plan` に `celeris.execution-plan/3`（`stages` / `units` / `decisions`、`WorkUnitKind::Task`、leaf の基準の検証、kind task の
   必須欄と禁止欄、`child:` / `children` の拒否、決定の形と上限）。`task_core::tree`（`TreeInfo`、`TreeLimits`、深さの計算）、`task_core::decision`（型と検証）。
   `Task.tree`（serde(default)）。Event: `ChildTaskCreated` / `ChildAdopted` / `UnitGateOverridden` / `DecisionRequested` / `DecisionAnswered` / `DecisionWithdrawn` /
-  `PlanApprovalRequested` / `StallDetected`（型と replay の読みだけ。発行は後の Phase）。migration 0030。`[execution.tree]` の設定（R5b まで `enabled = false`）。
+  `PlanApprovalRequested` / `StallDetected`（型と replay の読みだけ。発行は後の Phase）。migration 0031。`[execution.tree]` の設定（R5b まで `enabled = false`）。
   schema の再生成。
 - **受け入れ条件**:
   - (a) /3 の fixture が通り、/1・/2 の既存 fixture の検証結果と出力 JSON が変わらない（`plan_v1_and_v2_fixtures_are_byte_identical`）。
   - (b) 拒否: leaf に `checks` が無い / `context.repo` が 2 / kind task に `checks` / kind task に `acceptance` 無し / `child:` 依存 / `children` / 循環 / 未知の
     `needed_before` / `needs_decisions` が未知の key / 段階あたり 7 unit / 決定 9 件（`rejects_*` のテスト 10 本）。
   - (c) `enabled = false` で /3 は `TreeDisabled` で拒否される（`v3_is_rejected_when_tree_is_disabled`）。
-  - (d) migration 0030 が 29 の DB に当たり、`rebuild_work_units_and_runs` と `decisions` の再構築で events から同じ行ができる（`replay_rebuilds_decisions_and_child_links`）。
+  - (d) migration 0031 が 30 の DB に当たり、`rebuild_work_units_and_runs` と `decisions` の再構築で events から同じ行ができる（`replay_rebuilds_decisions_and_child_links`）。
   - (e) `event.schema.json` / `execution-plan.schema.json` / `decision.schema.json` の一致テスト。
-- **テスト**: 上記。**触るファイル**: `crates/task-core/src/{execution_plan.rs, tree.rs(新), decision.rs(新), model.rs, event.rs, store.rs}`、`crates/task-core/migrations/0030_task_tree.sql`、
+- **テスト**: 上記。**触るファイル**: `crates/task-core/src/{execution_plan.rs, tree.rs(新), decision.rs(新), model.rs, event.rs, store.rs}`、`crates/task-core/migrations/0031_task_tree.sql`、
   `crates/celeris/src/config.rs`、`docs/protocol/*.schema.json`。
 
 ### R1b: 子 task の生成と段階の完了
@@ -690,3 +690,162 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 - **U-R7**: 子 task ごとの reviewer run は当面許容。ただし review 数が増えすぎる恐れがあるので、**深さ別・部分木別の review run 数と費用を指標として出す**（R4a の集約に含める）。本格的な Prometheus metrics の導入は将来課題として棚上げ。
 - **U-R8**: agent-platform の未終了の途中目標行は凍結し、将来的に GUI から見えないようにする（R5a で凍結 + 既定非表示）。
 - **追加: R6 回収フェーズ**: 仕様変更に伴い、既存の案件・task の中身（案件の方向性文、途中目標、親子関係、知識の置き場）を新モデルの実情に合わせて整える回収フェーズを R5b の後に置く。
+
+## 付記: R1a 実装時の逸脱・明確化（2026-09-28）
+
+R1a（plan/3 の型と検証、`Task.tree`、migration 0031、Event、`[execution.tree]`）で決めたこと。本文の決定は変えていない。
+
+1. **U-R1 の数え方に合わせた式の読み替え**: `max_depth` は task の層数（root 1 / 子 2 / 孫 3）。深さ `d` の task の計画が kind task の unit を
+   持てるのは **`d < max_depth`**（D3 の表の「`d + 1 < max_depth`」を置き換える）。planner に渡す `remaining_depth` は **`max_depth − d`**
+   （D4 (2) の「`max_depth − depth − 1`」を置き換える。1 以上なら kind task を書ける）。gate の閾値 `5 + step × (d − 1)` は変えない。
+   実装は `task_core::tree::{can_have_child_tasks, remaining_depth, gate_threshold}`。検証は `validate_with(.., PlanContext{origin, depth})` の
+   `depth`（`tree::depth_of(task)`、`tree` の無い task は 1）で見る（`ChildTaskTooDeep`）。
+2. **`tasks.root_id` は埋め戻さない**: migration 0031 は列・表・索引を足すだけで既存の行を書き換えない（D13「凍結」、D15「root_id は NULL のまま」）。
+   列は `Task.tree.root_id` の写しで、`tree` を持つ task（R1b で作る子と、その root）にだけ入る。root の `tree` を誰がいつ書くか（root 自身の
+   `root_id = id`）は R1b が子を作るときに決める。
+3. **型**: /3 は `ExecutionPlanSpec` の同じ型に `stages` / `units` / `decisions` を足した（空なら出力しない。/1・/2 の JSON は 1 バイトも変わらない）。
+   `work_units` は `serde(default)` にした（/3 は書かない）。そのため /1・/2 で `work_units` を省いた JSON は、parse の失敗ではなく検証の
+   `NoWorkUnits` で拒否される（拒否されることは変わらない）。/3 を直列化すると空の `phases` / `work_units` / `children` が付く（読み戻しは同じ値）。
+   unit は /2 の `WorkUnitSpec` とは別の型 `PlanUnitSpec`（`stage`・kind task の欄・leaf の欄・`needs_decisions`・`decisions`・`adopt`）で、
+   `internal_view` が /2 の形（`phases` / `work_units`、`work_units.phase` = 段階の key）に写す。統合 WU・工程の障壁・replay はこの写しを使う。
+   leaf の `context.repo` は文字列か配列（`RepoSelector`。2 つ以上なら `LeafMultipleRepos`）。
+4. **検証の細部**: kind task の unit は `checks` / `budget` / `harness` / `context.paths` を拒否（D2 の列挙どおり。`done_when` / `outputs` は拒否しない）。
+   leaf は kind task 専用の欄（`acceptance` / `genre` / `skills` / `repos` / `adopt`）を拒否。/3 の leaf の予算は **丸めずに拒否**（D4 (2) の
+   「上限超過 → 拒否」。/1・/2 は従来どおり丸める）。段階の kind に `task` / `integrate` は使えない。unit の `decisions` は `needed_before` に
+   その unit を足して計画の決定に並べる（`normalized_decisions`）。決定の上限（計画あたり 8）は unit 側を含めた総数で数える。`needed_before` に
+   `self` は計画では書けない（worker 専用。R3a）。`repos` が親の repos の部分集合かは R1b（子の生成で親を知るとき）に検査する。
+5. **`[execution.tree]` の値の持ち方**: `ExecutionLimits.tree: TreeLimits`（/3 の検証だけが見る）。`approval_near_limit_ratio`（設定は 0 < r ≤ 1）は
+   `ExecutionLimits` を `Eq` のまま保つため千分率 `approval_near_limit_permille` で持つ。`max_open_decisions`（木あたり）と
+   `max_open_decisions_per_plan` を別の欄にした（D3 の「12 / 木、8 / 計画」）。`max_depth` は `1..=3` 以外なら設定エラー。
+   daemon（dispatcher の planner 検証）は設定の値を使うが、**API の `PUT/POST /tasks/{id}/execution-plan` と `celerisctl execution` は従来どおり
+   `ExecutionLimits::default()`（tree 無効）**で検証する。R5b で人が /3 を `PUT` する前に、この 2 つの入口へ設定を配線する（R1b〜R5b のどこかで。
+   `enabled = false` の間は挙動が同じなので R1a では変えない）。
+6. **Event の欄**: `ChildTaskCreated` / `ChildAdopted` に `plan_id` を足した（`work_units` の行を events だけから結び付けるため）。
+   `UnitGateOverridden` は `{plan_id, unit_key, declared, gate, action, depth, threshold}`。`DecisionRequest` に `answer` / `withdrawn_reason`
+   （表の `json` に回答・取り下げを残すため。どちらも省略可）と `DecisionOrigin::Human`（人の計画の決定）を足した。`decisions.root_id` は
+   `path` の先頭（空なら出した節点）。`Created{origin: plan_unit}`（D4 (4)）は子の生成と一緒に R1b で足す。
+7. **派生の書き込みの場所**: `work_units.child_task_id` と `decisions` は、store が Event を追記するのと同じトランザクションで書く
+   （`append_event_tx` と遷移の `extra_events` の両方から `apply_tree_event_tx`。F5-fix3 の `close_run_row_for_event_tx` と同じ形）。畳み込みは
+   `task_core::DecisionRow::{from_request, apply_answer, apply_withdrawal}` を store と `task_ops::replay::rebuild_decisions` が共有する。
+   `celerisctl replay --check/--apply` は `decisions` も突き合わせる（`DECISION_MISMATCH`）。`work_units.needs_decisions_json` は採用時に
+   `effective_needs_decisions`（`needs_decisions` と、その unit か `stage:<その段階>` を `needed_before` に持つ決定）で決まる。
+8. **daemon の挙動は変えない**: `enabled = false`（既定）では /3 は `TreeDisabled` の 1 件だけで拒否され（planner の出力・人の PUT とも）、他は
+   何も変わらない。保険として、scheduler（`runnable_work_units`）は kind task の行を LLM run の候補にしない（子の生成は R1b）。
+   `review: human` の段階を途中確認（`pause_after`）に解決するのは R1b 以降（R1a の採用では `PausePointsResolved` は段階を拾わない）。
+
+## 付記: R1b 実装時の逸脱・明確化（2026-09-28）
+
+R1b（kind task の unit からの子 task の生成、状態の写し、段階の完了、`awaiting_children`、subtree の中止の連鎖、木での委譲の禁止、
+`review: human` の段階の途中確認）で決めたこと。migration は足していない（schema 31 のまま）。
+
+1. **照合の場所**: 子の生成と状態の写しは dispatcher の tick の照合 `reconcile_tree_units`（`drain_completions` の後、dispatch の前）で行う。
+   終わっていない kind task の unit を持つ task だけを `TaskStore::tasks_with_open_task_units` で引く（木が無ければ空で何もしない）。
+   子の生成は `TaskStore::tree_child_create` の 1 トランザクション（子の挿入 + `Created{origin: plan_unit}`、unit の行を `running`・
+   `child_task_id` に、親の events に `WorkUnitTransitioned{reason: child_created}` と `ChildTaskCreated`。unit が今も `ready` で子を持たない
+   ことを同じトランザクションで確かめる〈冪等〉）。写しは子の遷移と同じトランザクションではなく次の tick の照合で、unit の遷移 1 件ごとに
+   `WorkUnitTransitioned`（reason `child_done` / `child_failed` / `child_cancelled`）を積む（replay は events だけから同じ行を作る）。
+2. **子の `cancelled` は unit を `failed` にする**（D4 (5)・§7 R1b (c) の「unit `cancelled`」からの逸脱）。`cancelled` の unit は計画の実行から
+   外れる（`WorkUnitStatus::is_active` でない）ので、段階の完了の判定（`settle_phase`）から消え、**段階が黙って完了してしまう**。D4 (5) の
+   「人が子だけを止めたときは親の replan を起こす」を満たすため、unit は `failed`（reason `child_cancelled`）にして既存の失敗の経路
+   （`PhaseSettle::Failure` → replan）に乗せる。親を中止したときの unit は従来どおり `cancelled`（下の 5.）。
+3. **子が `blocked`（質問・決定・人の確認）なら unit は `running` のまま**（D4 (5) のとおり）。その段階は完了しないが、同じ段階の他の unit・
+   兄弟の子は止めない。
+4. **段階の完了と統合 WU（R1c まで）**: 段階は leaf がすべて `done`・kind task の unit がすべて `done`（= 子が `done`）で揃い、統合 WU
+   `integrate-<stage>` が done になったら完了する。R1b の統合 WU は**子のブランチを merge しない**（kind task の unit は WU ブランチを持たないので
+   `phase_leaves` の merge の対象から外れ、検査にも `checks` を足さない）。leaf のブランチの merge と検査の再実行は今どおり。
+   `PhaseIntegrated.merged` に子の key はまだ出ない。子の成果を親ブランチに入れるのは R1c（D5・D6）。
+5. **subtree の中止の連鎖**: 親が `cancelled` **または `failed`** で終端になったら、store の遷移と同じトランザクションで、親の計画の unit から
+   作った子（`parent_id = 親` かつ `root_id` を持つ task）を新しい `Trigger::ParentCancelled`（遷移は `Cancel` と同じ、reason
+   `parent_cancelled`）で中止する。子の遷移がさらに孫へ連鎖する。親の失敗も含めたのは、親が終わった後に子の subtree が誰にも取り込まれずに
+   走り続けないため（D10）。走っている run は既存の `abort_stale_runs` が止める。子だけを待っていた親（run を持たない Ready）の unit は tick の照合が
+   `cancel_open_work_units`（reason `cancel`）で閉じ、`done` / `failed` の親に残った kind task の unit は reason `parent_terminal` で閉じる。
+   `TransitionResult.cascaded` は `parent_cancelled` も拾う。一時停止（subtree の pause）は R5a。
+6. **root の `tree` は書かない**: 子の `tree.root_id` は `task_core::tree::root_id_of(親)`（`tree` の無い root なら親の id）。root 自身は
+   `tree = None`・`tasks.root_id = NULL` のまま（R1a 付記 2. の未決を「書かない」で閉じる。D15「埋め戻さない」と同じ考え方で、既存の root の行を
+   書き換えない）。したがって `tasks.root_id = X` は X の子孫だけを返し、X 自身は含まない。
+7. **子の組み立て**（`task_ops::tree::build_child_task`）: 委譲の子と同じ `task_core::materialize_delegated_logging`（ADR-0062 B2 / D5: 担当が
+   `cluster:<id>` を持たなければ継いだ remote を local に落とす）を 1 件で通し、その上で `status = ready`・`budget = 親`・`labels = [child-<key>]`・
+   `skills`（unit、無ければ親）・`genre`（unit、無ければ親）・`repos`（unit の名前で親の repos を選ぶ。無ければ親と同じ）・`routing.features`
+   （unit の `features` をヒントに）・`tree = {root_id, depth + 1, parent_unit}` を書く。**workspace は親**（案件の workspace で上書きしない。D4 (4)）。
+   `execution_hint` は持たせない（子は最初の dispatch で自分の Complexity Gate を通る。深さの閾値と shadow の採用は R2a）。
+   `objective` の末尾に固定の書式で「## 木の中の位置（ADR-0079 D4）」（深さごとの祖先の題名と段階、この task の unit）と、回答済みの決定が
+   あれば「## 人の決定（ADR-0079 D7）」（`- <key> <question>: <label>（推奨どおり | 推奨と異なる） — <note>`）を足す。委譲の上限
+   （ADR-0016 D2 の `max_tree_depth` / `max_tree_runs`）は木の子には当てない（木の上限は R2a）。
+8. **採用前の検査**（planner の /3、`tree_plan_checks`）: kind task の unit の `repos` ⊆ 親の repos（親が持たなければ案件の primary）を検証し、
+   外れれば不正な試行（理由は進行に残り、planner の再試行へ）。部をまたぐ子は、組み立てた子で matching を引いて ADR-0074 F4b と同じ
+   `cross_department_questions`（`plan_children` から切り出した共通の関数）に通し、未認可なら計画を採用せず approvals で聞く（U-R2 のまま）。
+   子の生成の時点でも repos を見直し、外れていれば unit を `failed`（reason `child_create_failed`）にして理由を進行に残す。
+9. **`needs_decisions` の待ち**: unit の `needs_decisions` の決定が、親の節点が出した `decisions` の行（`task_id = 親`、`key`）で `answered` に
+   なるまで子を作らない（兄弟は止めない）。**計画の採用時に `DecisionRequested` を出すのは R3a**（R1b では出さない）ので、R1b の時点で
+   `needs_decisions` を持つ unit は R3a の回答の入口ができるまで待ち続ける。leaf の `needs_decisions` の待ちも R3a。
+10. **`max_parallel_child_tasks`**: 同じ親で `running` の kind task の unit の数が上限に達していれば、`ready` の unit は子を作らずに待つ
+    （`seq` 順に空いた分だけ作る）。
+11. **子だけを待つ親**: `settle_phase` と `reconcile_parallel_tasks` は kind task の unit の `running` を in-flight に数えない（子の写しであって
+    親の run ではない）。親の leaf の run が終わって残りが子だけなら `Continue{advance}` で `ready` に戻り、gate は `Skip`（lease なし）。
+    表示用の導出値 `ExecutionPhase::AwaitingChildren`（`ready` で、leaf に走れる・走っているものが無く、`ready` / `running` の kind task の
+    unit がある）と `ExecutionView.awaiting_children` / `TaskExecutionView.awaiting_children`（unit の key・子の id・題名・状態）を足した。
+    `WorkUnitView` / `ExecutionWorkUnitView` に `child_task_id`。GUI は `EXECUTION_PHASE_LABEL` に「子 task の完了待ち」を足しただけ（木のタブは R4b）。
+12. **/3 の scheduler**: dispatcher の `wu_dispatch_gate` と `parallel_mode` の「/2 か」の判定を `is_phased_schema`（/2・/3）に広げた
+    （/3 の段階は `internal_view` で /2 の工程と同じ行）。`running_tasks_with_runnable_work_units` は kind task の行を拾わない。/1・/2 は変わらない。
+13. **`review: human` の段階**: 採用（新規・replan）で `task_core::resolve_plan_pause_points`（/1・/2 は `resolve_pause_points` と同じ結果。/3 は
+    `pause_after` の解決に `review: human` の段階を足す）で `PausePointsResolved` に解決し、ADR-0074 D2.2 の `PhaseGate` にそのまま乗る。
+    **最後の段階の `review: human` は止めない**（統合の後は最終レビュー。ADR-0074 D1.6 の表と同じ）。途中報告の工程の題名は `internal_view` で
+    段階の題名を引く（子の要約の行は R4a）。
+14. **木での委譲の禁止**: `Task.tree` を持つ task の run には `available_genres` を渡さず、`delegate` の受け口も「木の節点では委譲できない」で拒む。
+    root（`tree` を持たない）の WU の run は ADR-0072 D22 のまま元から委譲できない。
+15. **`Event::Created.origin`**（`CreatedOrigin::PlanUnit`）を足した（省略可、`None` は出力しない。既存の JSON は 1 バイトも変わらない）。
+    `event.schema.json` / `api-v1.schema.json` / `gui/app/celeris/types.ts` を再生成。
+16. **replay**: 子の結び付き（`ChildTaskCreated` → `work_units.child_task_id`、R1a）と unit の写し（`WorkUnitTransitioned`）は events だけから
+    作り直せる（`celerisctl replay --check` の `work_units` 差分 0。壊した索引は `--apply` で戻る）。ただし `runs` の表は、偽のアダプタで走らせた
+    /2・/3 の計画で planner run の role と並列 WU の run の `work_unit_id` / `seq` が events から復元しきれない差が **R1b 以前から**ある
+    （木と無関係。R1b では直していない）。
+
+## 付記: R1c 実装時の逸脱・明確化（2026-09-28）
+
+R1c（子のブランチの基点、統合 WU での子のブランチの merge、子の最終レビューの基点、子の取り込みの抑止、root だけが main）で決めたこと。
+本文の決定は変えていない。migration は足していない（schema 31 のまま）。
+
+1. **子の作業場所は task の作業場所の規則のまま**: 子は親の作業場所の下に入れ子にせず、普通の task と同じ
+   `<workspace_root>/<child_id>/repos/<name>`（1 リポジトリの旧い形は `<workspace_root>/<child_id>/tree`）に worktree を持ち、ブランチは
+   `celeris/<child_id>`（`worktree_branch_prefix`）。成果物・`runs/`・目印・レビューの錠・中止の後片付け（ADR-0043 D2）・生成物の刈り取り
+   （ADR-0066 D2）など task id で引く経路がすべてそのまま効くため。違うのは worktree の base だけ（下の 2.）。子が compound なら、子の WU は
+   今どおり `<child_dir>/wu/<key>`・`celeris-wu/<child_id>/<key>` で、子のブランチに対して統合される（孫も同じ）。
+2. **base の決め方**（`Dispatcher::worktree_base_for`）: 木の子（`tree.parent_unit` を持つ task）の worktree は `BaseKind::Parent`
+   （前置きの base の出どころは `parent`）で、`tree.base_commit` から切る。`base_commit` は**親の先頭の git リポジトリの sha 1 つ**
+   （`TreeInfo` の形を変えないため）。子の repos の 2 つ目以降のように、その sha がリポジトリで解決できなければ、そのリポジトリの親のブランチ
+   `celeris/<parent_id>` の HEAD（親のブランチは段階の途中では動かない。D6）。どちらも無ければ WARN を出して従来の規則（main）に倒す。
+   木でない task・root は今どおり（1 バイトも変わらない）。
+3. **`base_commit` を決める時点**: 子を作るとき（unit が ready になった tick、`Dispatcher::child_base_commit`）に、葉と同じ規則で決めて子の
+   `tree.base_commit` に書く（`Created` の Task の JSON に入るので replay は同じ値）: 同じ段階の依存先があれば `integration::dependency_base`、
+   無ければ親の task ブランチの HEAD（= 段階の基点。段階の unit が子だけのときは親の worktree を先に用意する）。親が並列 1 に倒れている
+   （remote / `shared` / git でない。`parallel_mode` の fallback）なら `None`（子もブランチを持たず、統合は子を merge しない。D5）。基点が
+   決まらなければ unit を `failed`（reason `child_create_failed`、理由は進行に残す）にし、既存の失敗の経路に乗せる（黙って待たない。D10）。
+4. **`dependency_base` を子に広げた**: 引数に `branch_prefix` を足し、依存先が kind task の unit なら子のブランチ `<prefix><child_id>` の HEAD →
+   記録した `head_commit` → 親の task ブランチの HEAD の順（子がブランチを持たなかったとき）。葉が子に依存しても、子が子に依存しても同じ関数。
+5. **子の done の記録**: 子が `done` になり unit を `done` に写す tick で、daemon が子の worktree に残った変更を決定的に commit し（WU の完了時と
+   同じ `integration::commit_all`、メッセージ `task/<child_id>: <title>`、変更が無ければ commit しない）、unit の行に `head_commit`（子のブランチの
+   HEAD）と `base_commit`（子の基点）を書き、`WorkUnitTransitioned{child_done}` と `Event::WorkUnitCommitted{branch: celeris/<child_id>, base, commit}`
+   を 1 トランザクションで積む（`work_units_apply`）。unit の行の `branch` は書かない（「WU の worktree を持たない」の印のまま）。replay は
+   `WorkUnitCommitted` の `branch` が `celeris-wu/` でなく unit が kind task なら `base_commit` も写す（`head_commit` は従来どおり）。
+6. **統合**: 段階の統合 WU が merge するのは、葉の WU のブランチ（`phase_leaves`、従来どおり）に、その段階の `done` の kind task の unit の子の
+   ブランチを足したもの（**葉かどうかに関わらず**入れる。子に依存する同じ段階の葉があっても子の commit は 1 度だけ入り、`merged` には子と葉の
+   両方が残る）。順は `seq`。子のブランチは `MergeItem::child_task`（**リポジトリに無ければ飛ばす**。子の repos は親の部分集合なので）で、
+   2 つ目以降のリポジトリの `merged` も和を取る。子が `base_commit` を持つ（= ブランチを切った）のにどのリポジトリにもブランチが無ければ
+   統合の失敗（`integration_gives_up`、replan）。既に入っている子は `skipped`（冪等。採用した done の子の成果が既に親ブランチにある場合も同じ）。
+   衝突は既存の `merge-<stage>-<key>` の repair、検査の再実行と失敗は既存の repair / replan のまま。統合が済んだら子の worktree を消す
+   （ブランチは残す）。
+7. **子の最終レビュー**（`review::tree_child_review_view`、レビューに渡す task の view だけを変え、保存した task は変えない）: `Check::Command` の
+   `merge-base --is-ancestor <ref>` の `<ref>` が既定のブランチ（`main` / `master` / `origin/main` / `origin/master` / `refs/heads/main` /
+   `refs/heads/master` / `origin/HEAD`）なら親のブランチに置き換える（条件の数と順は変えない）。したがって merge-base の不成立で daemon が
+   決定的に merge するのも親のブランチになり、main の commit が子に入らない。reviewer run の前置き（目的）の末尾に「## 取り込み先（ADR-0079 D6）」
+   （親のブランチ、差分の基点 `base_commit`、main が進んでいても不合格にしない）を固定の書式で足す。checkpoint の差分の基点も `base_commit`。
+8. **取り込みの抑止**: 子には ADR-0051 の部署の取り込み判定（`task_ops::delivery::begin` が `None`。`deliveries` の行・merge の条件・release を
+   作らない）も、ADR-0043 D5 の人の取り込み（`POST /tasks/{id}/changes/{repo}/integrate` の merge / pr / discard はすべて 409 `tree_child`、
+   文言は「成果の取り込み」）も無い。`celeris` の delivery の tick も木の子の行は進めない（保険）。`TaskReady` は木の子では鳴らさない（root の done
+   だけ）。**子の `TaskFailed` は R3b まで今どおり鳴る**（D11 の「子の失敗は鳴らさない」は R3b の範囲）。
+9. **後片付けの範囲**: 子の worktree は親の統合の後で消す。中止の連鎖で `cancelled` になった子は既存の `cleanup_cancelled_worktrees` が
+   worktree とブランチを消す（ADR-0043 D2 のまま）。**root の取り込み・中止で木の done の子のブランチをまとめて消すのは R1c ではやっていない**
+   （done の子のブランチは root の終端の後も残る。R4b 以降で木の後片付けとして扱う）。
+10. **受け入れ条件 (e)**（採用した done の子の成果が既に main にあるとき統合は飛ばす）は、採用（adopt）が R5b なので、統合の冪等性
+    （`integration::tests::child_task_branches_are_optional_and_idempotent`: 既に入っている子のブランチは `skipped`）で確かめた。採用の入口の
+    試験は R5b。

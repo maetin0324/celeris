@@ -1655,6 +1655,13 @@ impl StoreSink {
         if task_core::is_conversation(&parent) {
             return Err("対話では委譲できない。返事に『次にやりたいこと』として書け".to_string());
         }
+        // ADR-0079 D4 (4)（Phase R1b）: 木の節点（計画の unit から作った子 task）は委譲を使わない。
+        if parent.tree.is_some() {
+            return Err(
+                "木の節点（ADR-0079）では委譲できない。子 task は計画の kind task の unit から作る"
+                    .to_string(),
+            );
+        }
         // ADR-0033 D4 / D5 / SPEC §3.1: 部をまたぐ連携は秘書が認める。別の部の課を `assignee` にした提案は
         // **子を作らずに**質問（`approvals` の 1 行になる固定の形）を残し、run の終わりに `Question` 終端へ
         // 回す。既に人が答えていれば（`once` / `standing`）その場で通す。判定は組織図と `approvals` /
@@ -3224,6 +3231,8 @@ impl Dispatcher {
         report.finished = finished;
         report.reviewed = reviewed;
         self.settle_awaiting_children()?;
+        // ADR-0079 §7 R1b: 木の照合（子の状態の写しと、ready の kind task の unit からの子 task の生成）。
+        self.reconcile_tree_units()?;
         // ADR-0077 D2: `auto_advance` の案件で、`done` になったマイルストーン Task の途中目標を `reached` に。
         match task_ops::project_plan::auto_reach_done_milestones(self.store.as_ref()) {
             Ok(reached) => {
@@ -5985,10 +5994,14 @@ impl Dispatcher {
                     Err(e) => Err(e),
                     Ok(spec) => match validate_plan_harnesses(&spec, &self.config.genres) {
                         Err(e) => Err(e),
-                        Ok(()) => task_core::execution_plan::validate(
+                        Ok(()) => task_core::execution_plan::validate_with(
                             &spec,
                             self.config.execution.limits,
                             &done_work_units,
+                            task_core::PlanContext {
+                                origin: task_core::PlanOrigin::Planner,
+                                depth: task_core::tree::depth_of(task),
+                            },
                         )
                         .map_err(|errors| task_ops::execution::describe_validation_errors(&errors)),
                     },
@@ -6059,6 +6072,22 @@ impl Dispatcher {
                         &self.config.delegation,
                         now,
                     )
+                };
+                // ADR-0079 D2 / D4 (4)（Phase R1b）: /3 の kind task の unit は、repos が親の部分集合で
+                // あること、部をまたぐ子の認可（ADR-0074 F4b と同じ規則）を採用の前に確かめる。
+                let children = match children {
+                    Ok(task_ops::delegate::ChildrenPlan::Ready(c))
+                        if validated.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3 =>
+                    {
+                        self.tree_plan_checks(task, &validated.spec, now)
+                            .map(|plan| match plan {
+                                task_ops::delegate::ChildrenPlan::Ready(_) => {
+                                    task_ops::delegate::ChildrenPlan::Ready(c)
+                                }
+                                other => other,
+                            })
+                    }
+                    other => other,
                 };
                 let children = match children {
                     Ok(task_ops::delegate::ChildrenPlan::Ready(children)) => children,
@@ -7235,6 +7264,9 @@ impl Dispatcher {
                     now.clone(),
                 );
                 let plan_spec = task_core::ExecutionPlanSpec {
+                    stages: Vec::new(),
+                    units: Vec::new(),
+                    decisions: Vec::new(),
                     schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
                     rationale: "reviewer repair: 暗黙の WorkUnit を実体化".to_string(),
                     work_units: vec![main_spec, spec],
@@ -8461,7 +8493,8 @@ impl Dispatcher {
         }
         // ADR-0074 D1.3（Phase F2b）: v2 の計画は工程ごとの scheduler（`settle_phase` /
         // `runnable_work_units`）で決める。v1 は従来どおり（`next_work_unit`）。
-        let v2 = active_plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
+        // ADR-0079（Phase R1b）: /3 も段階ごとの scheduler（`internal_view` で /2 の工程と同じ行）。
+        let v2 = task_core::is_phased_schema(&active_plan.spec.schema);
         let mut units = self.store.work_units_for(task_id)?;
         // ADR-0074 D3.7（Phase F4b (f)）: `child:<key>` の依存を子 Task の状態で決定的に解く。
         let (changed, waiting_on_children) = self.resolve_child_dependencies(task_id, &units)?;
@@ -8724,7 +8757,7 @@ impl Dispatcher {
         let Some(plan) = self.store.execution_plan_active(task.id)? else {
             return Ok(serial(None));
         };
-        if plan.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V2 {
+        if !task_core::is_phased_schema(&plan.spec.schema) {
             return Ok(serial(None));
         }
         match &task.workspace {
@@ -8860,6 +8893,7 @@ impl Dispatcher {
                     &task_id,
                     dep_row,
                     &task_wt.branch,
+                    &self.config.worktree_branch_prefix,
                 )
                 .map_err(WuPrepareError::permanent)?,
                 (None, None) => crate::integration::rev_parse(
@@ -9107,7 +9141,9 @@ impl Dispatcher {
             .and_then(|r| r.branch())
             .unwrap_or_default()
             .to_string();
-        (artifacts_dir, cwd, branch, None)
+        // ADR-0079 D6（Phase R1c）: 木の子の差分の基点は `tree.base_commit`（main との merge-base ではない）。
+        let base = task_core::tree::child_base_commit(task).map(str::to_string);
+        (artifacts_dir, cwd, branch, base)
     }
 
     /// ADR-0074 D1.6（Phase F2b）: 兄弟が走っている間に question / 失敗で止まった WU（`id`）について、
@@ -9236,6 +9272,176 @@ impl Dispatcher {
         self.start_integration(task, &wu.id)
     }
 
+    /// ADR-0079 D6（Phase R1c）: kind task の unit `unit` から作る子 task の worktree の基点（親の先頭の git
+    /// リポジトリの sha）。葉の WU と同じ規則（`prepare_work_unit_workspace`）: 同じ段階の依存先があれば
+    /// `integration::dependency_base`（依存先が子 task ならその子のブランチの HEAD）、無ければ親の task
+    /// ブランチの HEAD（= 段階の基点。親のブランチは段階の途中では動かない）。親が WU の worktree を持たない
+    /// （並列 1 に倒した: remote / shared / git でない）なら `None`（子もブランチを持たず、統合は子を merge しない。D5）。
+    /// `Err` は子を作れない理由（unit を `failed` にする）。
+    fn child_base_commit(
+        &self,
+        parent: &Task,
+        unit: &task_core::WorkUnitRow,
+        units: &[task_core::WorkUnitRow],
+    ) -> Result<Option<String>, String> {
+        let mode = self.parallel_mode(parent).map_err(|e| e.to_string())?;
+        if !mode.worktrees || mode.fallback.is_some() {
+            return Ok(None);
+        }
+        let Some(ws) = self.task_workspaces_for(parent) else {
+            return Ok(None);
+        };
+        let Some((repo, task_wt)) = ws
+            .repos
+            .iter()
+            .find_map(|r| r.worktree.as_ref().map(|wt| (r, wt)))
+        else {
+            return Ok(None);
+        };
+        // 親の task ブランチ（段階の基点）を先に用意する（段階の unit が子だけのときはまだ無い）。
+        task_wt
+            .ensure_blocking()
+            .map_err(|e| format!("cannot prepare the parent's worktree: {e}"))?;
+        let intra_dep = unit.depends_on.iter().find_map(|d| {
+            units
+                .iter()
+                .find(|u| &u.key == d && u.phase.is_some() && u.phase == unit.phase)
+        });
+        let base = match intra_dep {
+            Some(dep) => crate::integration::dependency_base(
+                &repo.source,
+                &parent.id.to_string(),
+                dep,
+                &task_wt.branch,
+                &self.config.worktree_branch_prefix,
+            )?,
+            None => crate::integration::rev_parse(
+                &repo.source,
+                &format!("refs/heads/{}", task_wt.branch),
+            )
+            .ok_or_else(|| format!("the parent's task branch {} does not exist", task_wt.branch))?,
+        };
+        Ok(Some(base))
+    }
+
+    /// ADR-0079 D6（Phase R1c）: done になった子 task の worktree で、残った変更を決定的に commit する
+    /// （WU の完了時と同じ `integration::commit_all`、メッセージ `task/<child_id>: <title>`。変更が無ければ
+    /// commit しない）。戻り値は子のブランチと、先頭の git リポジトリのその HEAD。子の worktree が既に無ければ
+    /// ブランチの HEAD を元のリポジトリで引く。子がブランチを持たない（shared / remote）なら `None`。
+    fn commit_child_branch(&self, child: &Task) -> Option<(String, String)> {
+        let ws = self.task_workspaces_for(child)?;
+        let mut first: Option<(String, String)> = None;
+        for repo in &ws.repos {
+            let Some(wt) = &repo.worktree else {
+                continue;
+            };
+            let head = if wt.dir.is_dir() {
+                match crate::integration::commit_all(
+                    &wt.dir,
+                    &format!("task/{}: {}", child.id, child.title),
+                ) {
+                    Ok((head, _)) => Some(head),
+                    Err(e) => {
+                        tracing::warn!(child_id = %child.id, repo = %repo.name, error = %e, "could not commit the child task's remaining changes (ADR-0079 D6)");
+                        crate::integration::rev_parse(&wt.dir, "HEAD")
+                    }
+                }
+            } else {
+                crate::integration::rev_parse(&wt.repo, &format!("refs/heads/{}", wt.branch))
+            };
+            if let Some(head) = head {
+                first.get_or_insert((wt.branch.clone(), head));
+            }
+        }
+        first
+    }
+
+    /// ADR-0079 D6（Phase R1c）: 段階 `phase` の統合が済んだ子 task の worktree を消す（ブランチは残す）。
+    /// 失敗は警告だけ（取り込みは済んでいる。後片付けで段階を止めない）。
+    fn remove_integrated_child_worktrees(
+        &self,
+        task_id: TaskId,
+        units: &[task_core::WorkUnitRow],
+        phase: &str,
+    ) {
+        for u in units.iter().filter(|u| {
+            u.kind == task_core::WorkUnitKind::Task
+                && u.status == task_core::WorkUnitStatus::Done
+                && u.phase.as_deref() == Some(phase)
+        }) {
+            let Some(child) = u
+                .child_task_id
+                .as_deref()
+                .and_then(|id| id.parse::<TaskId>().ok())
+                .and_then(|id| self.store.get(id).ok().flatten())
+            else {
+                continue;
+            };
+            let Some(ws) = self.task_workspaces_for(&child) else {
+                continue;
+            };
+            for wt in ws.repos.iter().filter_map(|r| r.worktree.as_ref()) {
+                if let Err(e) = crate::integration::remove_wu_worktree(wt) {
+                    tracing::warn!(%task_id, work_unit = %u.key, child_id = %child.id, error = %e, "could not remove the child task's worktree after integration (ADR-0079 D6)");
+                }
+            }
+        }
+    }
+
+    /// ADR-0074 D1.4 / ADR-0079 D5・D6（Phase R1c）: 段階 `phase` の統合で merge するブランチ（`seq` 順）と、
+    /// ブランチが必ずあるはずの子（`(unit key, branch)`。子の worktree を切った = `tree.base_commit` を持つ子）。
+    /// - 葉の WU: `celeris-wu/<task>/<key>`（`phase_leaves`。従来どおり）。
+    /// - done の kind task の unit: 子 task のブランチ `<prefix><child_id>`（`MergeItem::child_task`。
+    ///   葉かどうかに関わらず入れる。子に依存する葉があっても子の commit は 1 度だけ入る）。子が
+    ///   `workspace_mode = shared` か remote でブランチを持たなければ（`base_commit` が無い）、どのリポジトリにも
+    ///   無くて構わない（D5 の「merge しない」）。
+    fn integration_items(
+        &self,
+        units: &[task_core::WorkUnitRow],
+        phase: &str,
+    ) -> (Vec<crate::integration::MergeItem>, Vec<(String, String)>) {
+        let mut ordered: Vec<(u32, crate::integration::MergeItem)> =
+            task_core::phase_leaves(units, phase)
+                .into_iter()
+                .filter_map(|u| {
+                    u.branch.clone().map(|branch| {
+                        (
+                            u.seq,
+                            crate::integration::MergeItem::work_unit(&u.key, branch),
+                        )
+                    })
+                })
+                .collect();
+        let mut expected = Vec::new();
+        for u in units.iter().filter(|u| {
+            u.kind == task_core::WorkUnitKind::Task
+                && u.status == task_core::WorkUnitStatus::Done
+                && u.phase.as_deref() == Some(phase)
+        }) {
+            let Some(child_id) = u.child_task_id.as_deref() else {
+                continue;
+            };
+            let branch = format!("{}{child_id}", self.config.worktree_branch_prefix);
+            let has_branch = child_id
+                .parse::<TaskId>()
+                .ok()
+                .and_then(|id| self.store.get(id).ok().flatten())
+                .is_some_and(|child| task_core::tree::child_base_commit(&child).is_some());
+            if has_branch {
+                expected.push((u.key.clone(), branch.clone()));
+            }
+            ordered.push((
+                u.seq,
+                crate::integration::MergeItem::child_task(&u.key, branch),
+            ));
+        }
+        ordered.sort_by_key(|(seq, _)| *seq);
+        (
+            ordered.into_iter().map(|(_, item)| item).collect(),
+            expected,
+        )
+    }
+
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を始める（統合 WU を running にし、Task の lease を延ばし、
     /// 葉の WU のブランチの merge と検査の再実行を spawn する。git の I/O は tick を止めない）。
     /// 並列 1 に倒した Task（WU の worktree が無い）では no-op（すぐに done）。
@@ -9279,17 +9485,10 @@ impl Dispatcher {
             // 並列 1（WU は Task の worktree を共有した）: merge するブランチは無い（D1.2）。
             return self.on_integration_finished(task.id, &integ.id, Ok(IntegrationRun::default()));
         };
-        let items: Vec<crate::integration::MergeItem> = task_core::phase_leaves(&units, &phase)
-            .into_iter()
-            .filter_map(|u| {
-                u.branch
-                    .clone()
-                    .map(|branch| crate::integration::MergeItem {
-                        key: u.key.clone(),
-                        branch,
-                    })
-            })
-            .collect();
+        // ADR-0079 D5 / D6（Phase R1c）: 葉の WU のブランチに、この段階の done の kind task の unit の
+        // 子 task のブランチ `celeris/<child_id>` を足し、`seq` 順に merge する（子に依存する同じ段階の葉は
+        // 子の HEAD から切られているので、どちらが先でも子の commit は 1 度だけ入る。既に入っていれば飛ばす）。
+        let (items, expected_children) = self.integration_items(&units, &phase);
         let repos: Vec<PathBuf> = ws
             .repos
             .iter()
@@ -9335,11 +9534,29 @@ impl Dispatcher {
                     if i == 0 {
                         run.merged = out.merged.clone();
                         run.head = out.head.clone();
+                    } else {
+                        // ADR-0079 D6: 子のブランチは子の repos（親の部分集合）にだけある。先頭の
+                        // リポジトリに無かった子の merge も `merged` に残す（1 件目の commit）。
+                        for m in &out.merged {
+                            if !run.merged.iter().any(|x| x.key == m.key) {
+                                run.merged.push(m.clone());
+                            }
+                        }
                     }
                     if out.conflict.is_some() {
                         run.conflict = out.conflict;
                         break;
                     }
+                }
+                if run.conflict.is_none()
+                    && let Some((key, branch)) = expected_children
+                        .iter()
+                        .find(|(key, _)| !run.merged.iter().any(|m| &m.key == key))
+                {
+                    return Err(format!(
+                        "child task unit {key}: its branch {branch} exists in none of the task's repositories \
+                         (ADR-0079 D6)"
+                    ));
                 }
                 Ok(run)
             })
@@ -9831,6 +10048,9 @@ impl Dispatcher {
                 }
             }
         }
+        // ADR-0079 D6（Phase R1c）: 取り込んだ子 task の worktree を消す（ブランチ `celeris/<child_id>` は
+        // root の終端まで残す。監査のため）。
+        self.remove_integrated_child_worktrees(task_id, &units, &phase);
         // 次の工程の WU（工程の障壁が外れた）を ready にする。
         for id in task_core::newly_ready(&units) {
             if let Some(u) = units.iter().find(|u| u.id == id) {
@@ -9969,16 +10189,16 @@ impl Dispatcher {
         run: &IntegrationRun,
         events: &[(u64, Event)],
     ) -> task_core::PhaseReport {
+        // ADR-0079（Phase R1b）: /3 の段階は `internal_view` で /2 の工程に写して読む。
+        let view = task_core::internal_view(&active.spec);
         let phase_title_of = |key: &str| -> String {
-            active
-                .spec
-                .phases
+            view.phases
                 .iter()
                 .find(|p| p.key == key)
                 .map(|p| p.title.clone())
                 .unwrap_or_else(|| key.to_string())
         };
-        let phase_order: Vec<&str> = active.spec.phases.iter().map(|p| p.key.as_str()).collect();
+        let phase_order: Vec<&str> = view.phases.iter().map(|p| p.key.as_str()).collect();
         let current_idx = phase_order.iter().position(|k| *k == phase).unwrap_or(0);
 
         // 済んだ工程の一覧（現在の工程より前の工程だけ。工程の障壁により、それらは既に統合済み）。
@@ -10305,10 +10525,11 @@ impl Dispatcher {
                 continue;
             }
             let units = self.store.work_units_for(task.id)?;
-            if units
-                .iter()
-                .any(|u| u.status == task_core::WorkUnitStatus::Running)
-            {
+            // ADR-0079 D5（Phase R1b）: kind task の unit の `running` は子 task の写し（この Task の run ではない）。
+            if units.iter().any(|u| {
+                u.status == task_core::WorkUnitStatus::Running
+                    && u.kind != task_core::WorkUnitKind::Task
+            }) {
                 continue;
             }
             tracing::warn!(task_id = %task.id, "running v2 task has no work unit or integration in flight; returning it to ready (ADR-0074 D1.7)");
@@ -10369,6 +10590,316 @@ impl Dispatcher {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// ADR-0079 D2 / D4 (4)（Phase R1b）: /3 の計画の採用前の検査。kind task の unit の `repos` が親の
+    /// repos の部分集合か（外れれば `Err` = 不正な試行）、部をまたぐ子が認可済みか（未認可なら
+    /// `NeedsAuthorization`、人が認めなかったなら `Err`）。子はまだ作らない（unit が ready になったとき）。
+    fn tree_plan_checks(
+        &self,
+        task: &Task,
+        spec: &task_core::ExecutionPlanSpec,
+        now: OffsetDateTime,
+    ) -> Result<task_ops::delegate::ChildrenPlan, String> {
+        task_ops::tree::check_task_unit_repos(self.store.as_ref(), task, spec)?;
+        let mut tentative = Vec::new();
+        for unit in spec.units.iter().filter(|u| u.is_task()) {
+            let (child, _) = task_ops::tree::build_child_task(
+                self.store.as_ref(),
+                task,
+                "",
+                unit,
+                &[],
+                &self.config.roles,
+                &self.config.genres,
+                now,
+            )?;
+            tentative.push(child);
+        }
+        let pending =
+            task_ops::delegate::cross_department_questions(self.store.as_ref(), task, &tentative)?;
+        if pending.is_empty() {
+            Ok(task_ops::delegate::ChildrenPlan::Ready(Vec::new()))
+        } else {
+            Ok(task_ops::delegate::ChildrenPlan::NeedsAuthorization(
+                pending,
+            ))
+        }
+    }
+
+    /// ADR-0079 D4 (4)・(5) / D5（Phase R1b）: 木の照合（tick ごと。決定的、LLM なし）。終わっていない
+    /// kind task の unit を持つ Task ごとに:
+    /// 1. 子の状態を unit に写す（子 done → unit done、子 failed / cancelled → unit failed。非終端は running の
+    ///    まま）。unit が done になったら、それを待っていた unit を ready にする。
+    /// 2. ready の kind task の unit（依存は `newly_ready` が満たした、段階は現在の段階）で、`needs_decisions`
+    ///    がすべて回答済みで、`max_parallel_child_tasks` に空きがあるものから子 task を 1 トランザクションで作る。
+    ///
+    /// 親の状態は変えない（子だけを待つ親は `Ready` のまま `WuDispatchGate::Skip`、段階が揃えば次の
+    /// dispatch で統合）。親が終端なら何もしない（中止の連鎖は store が子へ伝える）。
+    fn reconcile_tree_units(&mut self) -> Result<(), DispatchError> {
+        let now = OffsetDateTime::now_utc();
+        for task_id in self.store.tasks_with_open_task_units()? {
+            let Some(parent) = self.store.get(task_id)? else {
+                continue;
+            };
+            if parent.status.is_terminal() {
+                // 子だけを待っていた（run の無い）親の中止: 未完了の unit を cancelled にする（子は store の
+                // 連鎖で既に中止済み）。done / failed の親の残りの kind task の unit も閉じる（照合の対象から外す）。
+                if parent.status == Status::Cancelled {
+                    self.cancel_open_work_units(&parent)?;
+                } else {
+                    self.close_open_task_units(&parent)?;
+                }
+                continue;
+            }
+            let Some(plan) = self.store.execution_plan_active(task_id)? else {
+                continue;
+            };
+            if plan.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3 {
+                continue;
+            }
+            // 1. 子の状態の写し。
+            let units = self.store.work_units_for(task_id)?;
+            let mut changed = false;
+            for u in units.iter().filter(|u| {
+                u.kind == task_core::WorkUnitKind::Task
+                    && u.status == task_core::WorkUnitStatus::Running
+            }) {
+                let Some(child_id) = u
+                    .child_task_id
+                    .as_deref()
+                    .and_then(|s| s.parse::<TaskId>().ok())
+                else {
+                    continue;
+                };
+                let Some(child) = self.store.get(child_id)? else {
+                    continue;
+                };
+                let Some((to, reason)) = task_ops::tree::unit_mirror(child.status) else {
+                    continue;
+                };
+                let mut row = u.clone();
+                row.status = to;
+                row.blocked_reason = None;
+                row.clear_lease();
+                row.updated_at = rfc3339(now);
+                let mut events = vec![Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: u.status,
+                    to,
+                    reason: reason.to_string(),
+                    run_id: None,
+                }];
+                // ADR-0079 D6（Phase R1c）: 子の done は「親の段階で取り込まれる準備ができた」。子の worktree に
+                // 残った変更を決定的に commit し（WU の完了時の commit と同じ規則）、子のブランチの HEAD を
+                // unit の `head_commit`、子の基点を `base_commit` に残す（`WorkUnitCommitted`、同じトランザクション）。
+                if to == task_core::WorkUnitStatus::Done
+                    && let Some((branch, head)) = self.commit_child_branch(&child)
+                {
+                    row.head_commit = Some(head.clone());
+                    row.base_commit =
+                        task_core::tree::child_base_commit(&child).map(str::to_string);
+                    events.push(Event::WorkUnitCommitted {
+                        work_unit_id: u.id.clone(),
+                        key: u.key.clone(),
+                        branch,
+                        base: row.base_commit.clone(),
+                        commit: head,
+                    });
+                }
+                self.store
+                    .work_units_apply(task_id, Vec::new(), vec![row], events)?;
+                tracing::info!(%task_id, work_unit = %u.key, %child_id, child_status = ?child.status, to = ?to, "task unit mirrors its child task (ADR-0079 D4 (5))");
+                changed = true;
+            }
+            let units = if changed {
+                let units = self.store.work_units_for(task_id)?;
+                // 子の done で依存が満たされた unit を ready に（段階の障壁は `newly_ready` が見る）。
+                for id in task_core::newly_ready(&units) {
+                    let Some(u) = units.iter().find(|u| u.id == id) else {
+                        continue;
+                    };
+                    let mut row = u.clone();
+                    row.status = task_core::WorkUnitStatus::Ready;
+                    row.updated_at = rfc3339(now);
+                    self.store.work_unit_transition(
+                        task_id,
+                        row,
+                        Event::WorkUnitTransitioned {
+                            work_unit_id: u.id.clone(),
+                            key: u.key.clone(),
+                            from: task_core::WorkUnitStatus::Pending,
+                            to: task_core::WorkUnitStatus::Ready,
+                            reason: "dependency_ready".to_string(),
+                            run_id: None,
+                        },
+                    )?;
+                }
+                self.store.work_units_for(task_id)?
+            } else {
+                units
+            };
+            // 2. 子 task の生成。
+            let limit = self
+                .config
+                .execution
+                .limits
+                .tree
+                .max_parallel_child_tasks
+                .max(1);
+            let mut open_children = units
+                .iter()
+                .filter(|u| {
+                    u.kind == task_core::WorkUnitKind::Task
+                        && u.status == task_core::WorkUnitStatus::Running
+                })
+                .count();
+            // 現在の段階（終端でない行のうち seq 最小の行の段階。`runnable_work_units` と同じ）。
+            let current_stage = units
+                .iter()
+                .filter(|u| !u.status.is_terminal())
+                .min_by_key(|u| u.seq)
+                .and_then(|u| u.phase.clone());
+            let mut ready: Vec<&task_core::WorkUnitRow> = units
+                .iter()
+                .filter(|u| {
+                    u.kind == task_core::WorkUnitKind::Task
+                        && u.status == task_core::WorkUnitStatus::Ready
+                        && u.child_task_id.is_none()
+                        && u.phase == current_stage
+                })
+                .collect();
+            ready.sort_by_key(|u| u.seq);
+            for u in ready {
+                if open_children >= limit {
+                    break;
+                }
+                let Some(unit_spec) = plan.spec.units.iter().find(|s| s.key == u.key) else {
+                    continue;
+                };
+                let Some(decisions) = task_ops::tree::answered_decisions(
+                    self.store.as_ref(),
+                    task_id,
+                    &u.needs_decisions,
+                )
+                .map_err(ops_to_store)?
+                else {
+                    // 答えの無い決定を待つ（この unit だけ。兄弟は止めない。ADR-0079 D7）。
+                    continue;
+                };
+                // ADR-0079 D6（Phase R1c）: 子の worktree の基点（段階の基点か、同じ段階の依存先の HEAD）を
+                // 子の `tree.base_commit` に書く（`Created` の Task の JSON に入るので replay で同じ値になる）。
+                let built = task_ops::tree::build_child_task(
+                    self.store.as_ref(),
+                    &parent,
+                    &plan.id,
+                    unit_spec,
+                    &decisions,
+                    &self.config.roles,
+                    &self.config.genres,
+                    now,
+                )
+                .and_then(|(mut child, downgrades)| {
+                    let base = self.child_base_commit(&parent, u, &units)?;
+                    if let Some(tree) = child.tree.as_mut() {
+                        tree.base_commit = base;
+                    }
+                    Ok((child, downgrades))
+                });
+                match built {
+                    Ok((child, downgrades)) => {
+                        for reason in &downgrades {
+                            tracing::info!(%task_id, child_id = %child.id, %reason, "workspace downgraded to local (ADR-0062 B2)");
+                        }
+                        let depth = task_core::tree::depth_of(&child);
+                        let mut row = u.clone();
+                        row.status = task_core::WorkUnitStatus::Running;
+                        row.blocked_reason = None;
+                        row.child_task_id = Some(child.id.to_string());
+                        row.updated_at = rfc3339(now);
+                        let events = vec![
+                            Event::WorkUnitTransitioned {
+                                work_unit_id: u.id.clone(),
+                                key: u.key.clone(),
+                                from: task_core::WorkUnitStatus::Ready,
+                                to: task_core::WorkUnitStatus::Running,
+                                reason: "child_created".to_string(),
+                                run_id: None,
+                            },
+                            Event::ChildTaskCreated {
+                                plan_id: plan.id.clone(),
+                                unit_key: u.key.clone(),
+                                child_task_id: child.id,
+                                depth,
+                            },
+                        ];
+                        if self.store.tree_child_create(task_id, &child, row, events)? {
+                            tracing::info!(%task_id, work_unit = %u.key, child_id = %child.id, depth, "child task created from a task unit (ADR-0079 D4 (4))");
+                            open_children += 1;
+                        }
+                    }
+                    Err(reason) => {
+                        tracing::warn!(%task_id, work_unit = %u.key, %reason, "could not create the child task; the unit fails (ADR-0079 D4 (4))");
+                        let mut row = u.clone();
+                        row.status = task_core::WorkUnitStatus::Failed;
+                        row.updated_at = rfc3339(now);
+                        self.store.work_unit_transition(
+                            task_id,
+                            row,
+                            Event::WorkUnitTransitioned {
+                                work_unit_id: u.id.clone(),
+                                key: u.key.clone(),
+                                from: task_core::WorkUnitStatus::Ready,
+                                to: task_core::WorkUnitStatus::Failed,
+                                reason: "child_create_failed".to_string(),
+                                run_id: None,
+                            },
+                        )?;
+                        self.store.append_event(
+                            task_id,
+                            &Event::worker_progress(
+                                String::new(),
+                                format!("子 task「{}」を作れませんでした: {reason}", u.spec.title),
+                            ),
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// ADR-0079（Phase R1b）: 終端（done / failed）になった親に残った kind task の unit を cancelled にする
+    /// （`parent_terminal`。子は store の連鎖で中止済みか終端）。
+    fn close_open_task_units(&self, task: &Task) -> Result<(), DispatchError> {
+        let units = self.store.work_units_for(task.id)?;
+        let mut rows = Vec::new();
+        let mut events = Vec::new();
+        for u in units
+            .iter()
+            .filter(|u| u.kind == task_core::WorkUnitKind::Task && !u.status.is_terminal())
+        {
+            let mut row = u.clone();
+            row.status = task_core::WorkUnitStatus::Cancelled;
+            row.blocked_reason = None;
+            row.clear_lease();
+            row.updated_at = rfc3339(OffsetDateTime::now_utc());
+            events.push(Event::WorkUnitTransitioned {
+                work_unit_id: u.id.clone(),
+                key: u.key.clone(),
+                from: u.status,
+                to: task_core::WorkUnitStatus::Cancelled,
+                reason: "parent_terminal".to_string(),
+                run_id: None,
+            });
+            rows.push(row);
+        }
+        if !rows.is_empty() {
+            self.store
+                .work_units_apply(task.id, Vec::new(), rows, events)?;
         }
         Ok(())
     }
@@ -11659,7 +12190,10 @@ impl Dispatcher {
         // （プロンプト側の条件と同じ。`claude_code::build_prompt` 参照）。
         // ADR-0033 D4 / Phase 28: 対話 run は委譲できないので渡さない（`delegate.json` を書かせない）。
         let is_conv = task_core::is_conversation(task);
+        // ADR-0079 D4 (4)（Phase R1b）: 木の節点（計画の unit から作った子 task）の run は委譲できない
+        // （子を作る入口は計画の kind task の unit だけ）。
         let available_genres = if !is_conv
+            && task.tree.is_none()
             && matches!(
                 task.kind,
                 TaskKind::Execute | TaskKind::Approval | TaskKind::Plan
@@ -12867,6 +13401,9 @@ impl Dispatcher {
         // ADR-0046 D4（Phase 59）: `mode = research` は「結果に出典か計測の記録」を暗黙の条件に足す。
         let research = task.mode == task_core::TaskMode::Research;
         let running_review_lock = review_lock.clone();
+        // ADR-0079 D6（Phase R1c）: 木の子の最終レビューは親のブランチと比べる（検査の
+        // `merge-base --is-ancestor main` を親のブランチに置き換え、reviewer の前置きに取り込み先を書く）。
+        let task = crate::review::tree_child_review_view(task, &self.config.worktree_branch_prefix);
         let handle = tokio::spawn(async move {
             let _review_lock = running_review_lock;
             let ws: Box<dyn Workspace> = match remote_review {
@@ -12992,6 +13529,7 @@ impl Dispatcher {
     ) -> Result<Task, DispatchError> {
         let now = OffsetDateTime::now_utc();
         let approval = Task {
+            tree: None,
             routing: None,
             repos: Vec::new(),
             id: TaskId::new(),
@@ -13665,7 +14203,7 @@ impl Dispatcher {
                 && mode.unwrap_or_default() == task_core::WorkspaceMode::Worktree
                 && task_worker::is_git_repo(&source);
             let base = if wants_worktree {
-                self.worktree_base(&source)
+                self.worktree_base_for(task, &source)
             } else {
                 None
             };
@@ -13832,7 +14370,7 @@ impl Dispatcher {
         if !task_worker::is_git_repo(&repo) {
             return None;
         }
-        let base = self.worktree_base(&repo)?;
+        let base = self.worktree_base_for(task, &repo)?;
         Some(task_worker::LocalWorktree {
             dir: task_dir.join(task_worker::WORKTREE_DIR_NAME),
             task_dir: task_dir.to_path_buf(),
@@ -13840,6 +14378,32 @@ impl Dispatcher {
             branch: format!("{}{}", self.config.worktree_branch_prefix, task.id),
             base,
         })
+    }
+
+    /// ADR-0079 D6（Phase R1c）: task の worktree の base。木の子 task は既定ブランチではなく
+    /// `Task.tree.base_commit`（親の段階の基点、または同じ段階の依存先の HEAD。子を作るときに
+    /// [`Self::child_base_commit`] が決めた値）から切る（`BaseKind::Parent`）。この値が `repo` で解決できない
+    /// （子の repos のうち先頭以外のリポジトリ。基点は先頭のリポジトリの sha だけを持つ）ときは、そのリポジトリの
+    /// 親のブランチ `celeris/<parent_id>` の HEAD（親のブランチは段階の途中では動かない。D6）。どちらも
+    /// 無ければ従来の規則（`main`）に倒す。木の子でない task は従来どおり [`Self::worktree_base`]。
+    fn worktree_base_for(&self, task: &Task, repo: &Path) -> Option<task_worker::BaseRef> {
+        if let Some(parent_branch) =
+            task_core::tree::parent_branch(task, &self.config.worktree_branch_prefix)
+        {
+            let sha = task_core::tree::child_base_commit(task)
+                .and_then(|sha| crate::integration::commit_in(repo, sha))
+                .or_else(|| {
+                    crate::integration::rev_parse(repo, &format!("refs/heads/{parent_branch}"))
+                });
+            if let Some(sha) = sha {
+                return Some(task_worker::BaseRef {
+                    kind: task_worker::BaseKind::Parent,
+                    sha,
+                });
+            }
+            tracing::warn!(task_id = %task.id, repo = %repo.display(), %parent_branch, "neither the child's base_commit nor the parent's branch exists in this repository; the child's worktree falls back to the default base (ADR-0079 D6)");
+        }
+        self.worktree_base(repo)
     }
 
     /// ADR-0041 D1 の base の規則（`main` / 本番の `current` / `HEAD`）。
@@ -15368,6 +15932,7 @@ mod tests {
     fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -17133,7 +17698,9 @@ mod tests {
         assert_eq!(children.len(), 3);
         for c in &children {
             let ev = store.events_for(c.id).unwrap();
-            assert!(matches!(&ev[0].1, Event::Created { task } if task.status == Status::Draft));
+            assert!(
+                matches!(&ev[0].1, Event::Created { task, .. } if task.status == Status::Draft)
+            );
             assert!(
                 matches!(&ev[1].1, Event::Transitioned { from: Status::Draft, to: Status::Ready, reason } if reason == "accept")
             );
@@ -28612,6 +29179,9 @@ mod tests {
         task_id: TaskId,
     ) -> task_core::ExecutionPlanRow {
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "A -> B -> C".to_string(),
             work_units: vec![
@@ -28776,6 +29346,9 @@ mod tests {
 
     fn plan_json(work_units: Vec<task_core::WorkUnitSpec>) -> String {
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "test plan".to_string(),
             work_units,
@@ -29167,6 +29740,9 @@ mod tests {
         store.insert(&task).unwrap();
 
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "a child deliverable first".to_string(),
             phases: vec![task_core::PhaseSpec {
@@ -29530,6 +30106,9 @@ mod tests {
                     supersedes: None,
                     reason: None,
                     plan: Box::new(task_core::ExecutionPlanSpec {
+                        stages: Vec::new(),
+                        units: Vec::new(),
+                        decisions: Vec::new(),
                         schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
                         rationale: String::new(),
                         work_units: Vec::new(),
@@ -29942,6 +30521,9 @@ mod tests {
             store.as_ref(),
             task_id,
             task_core::ExecutionPlanSpec {
+                stages: Vec::new(),
+                units: Vec::new(),
+                decisions: Vec::new(),
                 schema: task_core::EXECUTION_PLAN_SCHEMA.into(),
                 rationale: "initial implementation".into(),
                 work_units: vec![main_spec],
@@ -30292,6 +30874,9 @@ mod tests {
             expect_exit: 0,
         }];
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "single WU with a deterministic check".to_string(),
             work_units: vec![a],
@@ -31067,6 +31652,7 @@ mod tests {
                 task_id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();
@@ -31135,6 +31721,7 @@ mod tests {
                 task_id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();
@@ -31450,6 +32037,9 @@ mod tests {
         work_units: Vec<task_core::WorkUnitSpec>,
     ) -> task_core::ExecutionPlanRow {
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "parallel".to_string(),
             work_units,
@@ -31749,6 +32339,9 @@ mod tests {
         let task = parallel_task(repo.path(), "true");
         store.insert(&task).unwrap();
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "v1".into(),
             work_units: vec![wu_spec("a", &[]), wu_spec("b", &[]), wu_spec("c", &[])],
@@ -32655,6 +33248,9 @@ mod tests {
             },
         ];
         let spec = task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
             rationale: "gate".to_string(),
             work_units: vec![gate],
@@ -34564,6 +35160,14 @@ mod tests {
     /// Phase F5-fix7: 依存 WU のブランチが無いときの基点と、準備の失敗で黙って止まらないこと
     /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。
     mod work_unit_dependency_base;
+
+    /// ADR-0079 §7 R1b: plan/3 の kind task の unit から子 task を作り、状態を写し、段階の完了・
+    /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。
+    mod tree;
+
+    /// ADR-0079 §7 R1c: 子のブランチの基点・統合での子のブランチの merge・子の最終レビューの基点・孫 → 子 → root
+    /// （`src/dispatcher/tests/tree_branches.rs`）。
+    mod tree_branches;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========
@@ -34621,6 +35225,7 @@ mod knowledge_fallback_tests {
     fn knowledge_task(dir: &std::path::Path) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

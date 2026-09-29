@@ -169,6 +169,24 @@ pub enum ExecutionPhase {
     /// ADR-0074 D2.2（Phase F3 途中確認）: 工程の後の途中確認で止まっている（`blocked` で、直前の
     /// 遷移の reason が `awaiting_human`）。
     AwaitingHuman,
+    /// ADR-0079 D5（Phase R1b）: `ready` のまま、走れる自分の leaf が無く子 task（計画の kind task の
+    /// unit）だけを待っている（dispatch されず lease も持たない。待っている子は
+    /// `ExecutionView.awaiting_children`）。
+    AwaitingChildren,
+}
+
+/// ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct AwaitedChildView {
+    /// 親の計画の unit の key。
+    pub unit_key: String,
+    /// 子 task（まだ作られていない unit〈`max_parallel_child_tasks` の空き待ち〉は `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<TaskId>,
+    pub title: String,
+    /// 子の状態（作られていなければ `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<Status>,
 }
 
 /// ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と
@@ -196,6 +214,9 @@ pub struct ExecutionView {
     /// ADR-0074 D2.4（Phase F3 途中確認）: `awaiting_human` のときだけ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_checkpoint: Option<PhaseCheckpointView>,
+    /// ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaiting_children: Vec<AwaitedChildView>,
 }
 
 /// D20: 計画の概要（現在アクティブでない Task でも、生涯で作った WU をまとめて見せる。
@@ -257,6 +278,9 @@ pub struct ExecutionWorkUnitView {
     /// ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_task_id: Option<String>,
     /// ADR-0074 D1.2: `WorkUnitCommitted` の commit。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_commit: Option<String>,
@@ -1152,6 +1176,7 @@ fn build_execution_view(
                 updated_at: u.updated_at.clone(),
                 phase: u.phase.clone(),
                 branch: u.branch.clone(),
+                child_task_id: u.child_task_id.clone(),
                 head_commit: u.head_commit.clone(),
                 integrated_commit: u.integrated_commit.clone(),
                 running_run_id: if u.status == task_core::WorkUnitStatus::Running {
@@ -1197,6 +1222,8 @@ fn build_execution_view(
         match active_plan_row {
             Some(row) => {
                 let serialized_reason = serialized_reason_of(&row.id);
+                // ADR-0079（Phase R1b）: /3 の段階は /2 の工程の形で見せる（`internal_view`）。
+                let phases = task_core::internal_view(&row.spec).phases.clone();
                 Some(ExecutionPlanOverview {
                     id: row.id,
                     version: row.version,
@@ -1204,7 +1231,7 @@ fn build_execution_view(
                     rationale: row.spec.rationale,
                     work_units,
                     versions,
-                    phases: row.spec.phases,
+                    phases,
                     serialized_reason,
                 })
             }
@@ -1234,12 +1261,40 @@ fn build_execution_view(
     } else {
         phase
     };
+    // ADR-0079 D5（Phase R1b）: 子 task だけを待っている親の理由（待っている子の題名と状態）。
+    let mut awaiting_children = Vec::new();
+    if phase == Some(ExecutionPhase::AwaitingChildren) {
+        for u in active_units.iter().filter(|u| {
+            u.kind == task_core::WorkUnitKind::Task
+                && !u.status.is_terminal()
+                && u.status != task_core::WorkUnitStatus::Pending
+        }) {
+            let child = match u
+                .child_task_id
+                .as_deref()
+                .and_then(|s| s.parse::<TaskId>().ok())
+            {
+                Some(id) => store.get(id)?,
+                None => None,
+            };
+            awaiting_children.push(AwaitedChildView {
+                unit_key: u.key.clone(),
+                task_id: child.as_ref().map(|c| c.id),
+                title: child
+                    .as_ref()
+                    .map(|c| c.title.clone())
+                    .unwrap_or_else(|| u.spec.title.clone()),
+                status: child.as_ref().map(|c| c.status),
+            });
+        }
+    }
     Ok(Some(ExecutionView {
         gate,
         phase,
         plan,
         metrics,
         phase_checkpoint,
+        awaiting_children,
     }))
 }
 
@@ -1250,6 +1305,10 @@ fn execution_phase(
 ) -> Option<ExecutionPhase> {
     match task.status {
         Status::Reviewing => Some(ExecutionPhase::Verifying),
+        // ADR-0079 D5（Phase R1b）: 走れる自分の leaf が無く、子 task（kind task の unit）だけを待つ。
+        Status::Ready if awaits_only_children(active_units) => {
+            Some(ExecutionPhase::AwaitingChildren)
+        }
         Status::Running => {
             if active_units.is_empty() {
                 None
@@ -1268,6 +1327,30 @@ fn execution_phase(
         }
         _ => None,
     }
+}
+
+/// ADR-0079 D5（Phase R1b）: 非終端の kind task の unit（子を待つ・子の生成を待つ）があり、leaf（統合 WU を
+/// 除く）に走れる・走っているものが無い。
+fn awaits_only_children(active_units: &[&task_core::WorkUnitRow]) -> bool {
+    let waiting_on_child = active_units.iter().any(|u| {
+        u.kind == task_core::WorkUnitKind::Task
+            && matches!(
+                u.status,
+                task_core::WorkUnitStatus::Ready | task_core::WorkUnitStatus::Running
+            )
+    });
+    let leaf_runnable = active_units.iter().any(|u| {
+        !matches!(
+            u.kind,
+            task_core::WorkUnitKind::Task | task_core::WorkUnitKind::Integrate
+        ) && matches!(
+            u.status,
+            task_core::WorkUnitStatus::Ready
+                | task_core::WorkUnitStatus::NeedsContinuation
+                | task_core::WorkUnitStatus::Running
+        )
+    });
+    waiting_on_child && !leaf_runnable
 }
 
 /// `Approval needed: <title> — criterion <idx> (attempt <n>)`（`derive::human_approval_title` の書式）を解析して
@@ -1310,6 +1393,7 @@ mod tests {
     fn sample_task(kind: TaskKind, status: Status) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -2432,6 +2516,9 @@ mod tests {
 
     fn plan_spec(work_units: Vec<task_core::WorkUnitSpec>) -> task_core::ExecutionPlanSpec {
         task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "investigate then implement".to_string(),
             work_units,

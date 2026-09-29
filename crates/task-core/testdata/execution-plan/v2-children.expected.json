@@ -1,0 +1,34 @@
+{
+  "reserialized": "{\"schema\":\"celeris.execution-plan/2\",\"rationale\":\"子 Task に調査を任せ、結果を待って実装する\",\"phases\":[{\"key\":\"build\",\"kind\":\"implement\",\"title\":\"実装\"}],\"work_units\":[{\"key\":\"impl\",\"kind\":\"implement\",\"title\":\"実装\",\"objective\":\"子の調査結果に沿って実装する\",\"depends_on\":[\"child:research\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"build\"}],\"children\":[{\"key\":\"research\",\"title\":\"関連研究の調査\",\"objective\":\"既存手法を 5 件以上まとめる\",\"acceptance\":[{\"text\":\"まとめがある\",\"check\":{\"type\":\"artifact_exists\",\"name\":\"survey.md\"}},{\"text\":\"人が確認\",\"check\":{\"type\":\"human\"}}],\"genre\":\"research\",\"skills\":[\"survey\"],\"features\":{\"judgment\":\"high\"},\"depends_on\":[]},{\"key\":\"extra\",\"title\":\"追加の調査\",\"objective\":\"調査の穴を埋める\",\"acceptance\":[{\"text\":\"reviewer が確認\",\"check\":{\"type\":\"reviewer\"}}],\"skills\":[],\"depends_on\":[\"research\"]}]}",
+  "rounding_notes": [],
+  "rows": [
+    {
+      "depends_on": [
+        "child:research"
+      ],
+      "id": "id-impl",
+      "key": "impl",
+      "kind": "implement",
+      "phase": "build",
+      "seq": 0,
+      "spec": "{\"key\":\"impl\",\"kind\":\"implement\",\"title\":\"実装\",\"objective\":\"子の調査結果に沿って実装する\",\"depends_on\":[\"child:research\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"build\"}",
+      "status": "pending"
+    },
+    {
+      "depends_on": [
+        "impl"
+      ],
+      "id": "id-integrate-build",
+      "key": "integrate-build",
+      "kind": "integrate",
+      "phase": "build",
+      "seq": 1,
+      "spec": "{\"key\":\"integrate-build\",\"kind\":\"integrate\",\"title\":\"工程 実装 の統合\",\"objective\":\"工程 build の WorkUnit のブランチを Task のブランチへ決定的に merge し、検査を再実行する（daemon が行う。LLM run は起こさない）\",\"depends_on\":[\"impl\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"build\"}",
+      "status": "pending"
+    }
+  ],
+  "topological_order": [
+    0
+  ],
+  "validated": "{\"schema\":\"celeris.execution-plan/2\",\"rationale\":\"子 Task に調査を任せ、結果を待って実装する\",\"phases\":[{\"key\":\"build\",\"kind\":\"implement\",\"title\":\"実装\"}],\"work_units\":[{\"key\":\"impl\",\"kind\":\"implement\",\"title\":\"実装\",\"objective\":\"子の調査結果に沿って実装する\",\"depends_on\":[\"child:research\"],\"done_when\":[],\"checks\":[],\"context\":{\"paths\":[],\"from_work_units\":[],\"knowledge\":[]},\"outputs\":[],\"phase\":\"build\"}],\"children\":[{\"key\":\"research\",\"title\":\"関連研究の調査\",\"objective\":\"既存手法を 5 件以上まとめる\",\"acceptance\":[{\"text\":\"まとめがある\",\"check\":{\"type\":\"artifact_exists\",\"name\":\"survey.md\"}},{\"text\":\"人が確認\",\"check\":{\"type\":\"human\"}}],\"genre\":\"research\",\"skills\":[\"survey\"],\"features\":{\"judgment\":\"high\"},\"depends_on\":[]},{\"key\":\"extra\",\"title\":\"追加の調査\",\"objective\":\"調査の穴を埋める\",\"acceptance\":[{\"text\":\"reviewer が確認\",\"check\":{\"type\":\"reviewer\"}}],\"skills\":[],\"depends_on\":[\"research\"]}]}"
+}

@@ -17,6 +17,8 @@ pub mod artifacts;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;
 pub mod console_action;
+/// ADR-0079 D7（Phase R1a）: 人への決定の要求の型と検証（純粋）。
+pub mod decision;
 pub mod delegate;
 /// ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation の純粋な型と関数。
 pub mod execution;
@@ -60,6 +62,8 @@ pub mod report;
 pub mod repos;
 pub mod store;
 pub mod transition;
+/// ADR-0079（Phase R1a）: 再帰的な task 分解の木（`Task.tree`・`[execution.tree]` の上限・深さ）。
+pub mod tree;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
 
@@ -110,13 +114,13 @@ pub use message::{
     is_conversation, is_milestone_review, milestone_review_of,
 };
 pub use model::{
-    ArtifactRef, Budget, Check, Criterion, DEFAULT_PRIORITY, Event, GenreSpec, HARNESS_ADAPTERS,
-    Lease, MAX_LABELS, MAX_SKILLS, PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES, PhaseCheckResult,
-    PhaseMerged, ProgressFields, ProgressKind, ProposedMilestone, RoleSpec, RunMetrics, RunRole,
-    Status, Task, TaskCategory, TaskId, TaskKind, TaskMode, TaskRouting, Tier, TierSource, Usage,
-    WorkerHint, WorkspaceMode, WorkspaceSpec, artifact_entry_description, artifact_entry_name,
-    expand_home, home_dir, is_valid_label, normalize_labels, normalize_skills, priority_from_label,
-    priority_label, validate_human_checks_have_deliverable,
+    ArtifactRef, Budget, Check, CreatedOrigin, Criterion, DEFAULT_PRIORITY, Event, GenreSpec,
+    HARNESS_ADAPTERS, Lease, MAX_LABELS, MAX_SKILLS, PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES,
+    PhaseCheckResult, PhaseMerged, ProgressFields, ProgressKind, ProposedMilestone, RoleSpec,
+    RunMetrics, RunRole, Status, Task, TaskCategory, TaskId, TaskKind, TaskMode, TaskRouting, Tier,
+    TierSource, Usage, WorkerHint, WorkspaceMode, WorkspaceSpec, artifact_entry_description,
+    artifact_entry_name, expand_home, home_dir, is_valid_label, normalize_labels, normalize_skills,
+    priority_from_label, priority_label, validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
 pub mod pricing;
@@ -189,6 +193,18 @@ pub use execution_plan::{
     materialized_order, new_id, newly_ready, newly_ready_with, next_work_unit, phase_leaves,
     phase_ranks, replan_done_work_units, runnable_work_units, validate,
 };
+// ---- ADR-0079（Phase R1a）: plan/3・木・決定の要求 ----
+pub use decision::{
+    CostOfReversal, DecisionAnswer, DecisionKind, DecisionOption, DecisionOrigin,
+    DecisionPathEntry, DecisionRaisedBy, DecisionRequest, DecisionRow, DecisionSpec,
+    DecisionStatus,
+};
+pub use execution_plan::{
+    EXECUTION_PLAN_SCHEMA_V3, PlanContext, PlanUnitSpec, RepoSelector, StageReview, StageSpec,
+    UnitContext, effective_needs_decisions, internal_view, is_phased_schema, normalized_decisions,
+    validate_with,
+};
+pub use tree::{ParentUnit, TreeInfo, TreeLimits, UnitDeclared, UnitGateAction};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use execution_gate::{
     EXECUTION_GATE_POLICY_VERSION, EXECUTION_GATE_SCORE_THRESHOLD, ExecutionGateDecision,
@@ -207,7 +223,7 @@ pub use quota::{
 // ---- ADR-0074 D2（Phase F3 途中確認）: PausePolicy の解決 ----
 pub use pause::{
     PHASE_REPORT_MAX_BYTES, PausePolicy, PauseSource, PhaseReport, PhaseResumeMode, format_wall_ms,
-    quota_summary_line, resolve_pause_points, truncate_phase_report,
+    quota_summary_line, resolve_pause_points, resolve_plan_pause_points, truncate_phase_report,
 };
 
 pub mod model_routing;

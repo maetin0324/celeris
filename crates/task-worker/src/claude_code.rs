@@ -1021,6 +1021,8 @@ fn planner_limits(
         max_work_units_v2: or(planner.max_work_units, d.max_work_units_v2),
         max_phases: or(planner.max_phases, d.max_phases),
         max_children: or(planner.max_children, d.max_children),
+        // ADR-0079（Phase R1a）: /3 の上限は planner の文面にまだ出さない（R2b）。
+        tree: d.tree,
     }
 }
 

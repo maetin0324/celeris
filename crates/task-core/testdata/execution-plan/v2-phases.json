@@ -1,0 +1,19 @@
+{
+  "schema": "celeris.execution-plan/2",
+  "rationale": "調査を並列にし、実装は積み上げる",
+  "phases": [
+    {"key": "survey", "kind": "investigate", "title": "調査"},
+    {"key": "build", "kind": "implement", "title": "実装"}
+  ],
+  "work_units": [
+    {"key": "read-a", "kind": "investigate", "title": "A を読む", "objective": "モジュール A の境界と呼び出し元を列挙する", "phase": "survey",
+     "checks": [{"cmd": "test -s artifacts/a.md", "expect_exit": 0}]},
+    {"key": "read-b", "kind": "investigate", "title": "B を読む", "objective": "モジュール B の永続化の流れを図にする", "phase": "survey",
+     "budget": {"max_turns": 200}},
+    {"key": "core", "kind": "implement", "title": "核を作る", "objective": "型と純粋関数を足しテストで固める", "phase": "build",
+     "depends_on": ["read-a", "read-b"], "features": {"judgment": "high", "context_size": "medium"}},
+    {"key": "wire", "kind": "implement", "title": "配線する", "objective": "daemon から呼び出して結合テストを足す", "phase": "build",
+     "depends_on": ["core"], "budget": {"max_wall_secs": 99999}},
+    {"key": "docs", "kind": "design", "title": "文書", "objective": "ADR に逸脱と明確化を書き足す", "phase": "build"}
+  ]
+}

@@ -486,6 +486,9 @@ mod tests {
     fn work_units_and_replans_are_derived_from_execution_planned_and_transitions() {
         let task = sample_task("x", vec![]);
         let plan1 = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "r".to_string(),
             work_units: vec![
@@ -496,6 +499,9 @@ mod tests {
             children: Vec::new(),
         };
         let plan2 = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "r".to_string(),
             work_units: vec![
@@ -545,6 +551,9 @@ mod tests {
     fn repairs_are_classified_from_the_execution_planned_spec_when_available() {
         let task = sample_task("x", vec![]);
         let plan = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "reviewer repair".to_string(),
             work_units: vec![
@@ -622,6 +631,9 @@ mod tests {
     fn planner_authored_repair_work_units_are_classified_as_planner() {
         let task = sample_task("x", vec![]);
         let plan = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "r".to_string(),
             work_units: vec![wu(

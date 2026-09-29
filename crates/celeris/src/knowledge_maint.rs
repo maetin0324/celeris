@@ -458,6 +458,7 @@ mod tests {
     ) -> task_core::Task {
         let now = OffsetDateTime::now_utc();
         task_core::Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

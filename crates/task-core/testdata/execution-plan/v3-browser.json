@@ -1,0 +1,34 @@
+{
+  "schema": "celeris.execution-plan/3",
+  "rationale": "製品の Phase 1〜3 を段階にし、各 Phase は独立に受け入れられるので子 task にする",
+  "stages": [
+    {"key": "phase-1", "kind": "implement", "title": "Phase 1 MVP"},
+    {"key": "phase-2", "kind": "implement", "title": "Phase 2 policy・credential", "review": "human"},
+    {"key": "phase-3", "kind": "implement", "title": "Phase 3 identity・takeover"}
+  ],
+  "units": [
+    {"key": "p1", "stage": "phase-1", "kind": "task", "title": "Phase 1 MVP を完成させる", "objective": "browser capability の最小の経路を通す",
+     "acceptance": [{"text": "reviewer が受け入れ条件を確認する", "check": {"type": "reviewer"}}],
+     "genre": "coding", "skills": ["rust"], "features": {"judgment": "medium"}, "repos": ["agent-platform"]},
+    {"key": "p1-note", "stage": "phase-1", "kind": "design", "title": "Phase 2 の設計メモ", "objective": "Phase 2 の policy 契約の論点を書き出す",
+     "done_when": ["artifacts/p2-note.md がある"], "checks": [{"cmd": "test -s artifacts/p2-note.md", "expect_exit": 0}],
+     "context": {"paths": ["docs/"], "repo": "agent-platform"}, "budget": {"max_turns": 30}},
+    {"key": "p2-a", "stage": "phase-2", "kind": "task", "title": "policy 契約", "objective": "policy の契約と検証を実装する",
+     "acceptance": [{"text": "cargo test が通る", "check": {"type": "command", "cmd": "cargo test", "expect_exit": 0}}],
+     "depends_on": ["p1"], "needs_decisions": ["h2"]},
+    {"key": "p2-b", "stage": "phase-2", "kind": "task", "title": "credential broker", "objective": "credential broker と provider を 1 種つなぐ",
+     "acceptance": [{"text": "人が確認する", "check": {"type": "human"}}, {"text": "手順書", "check": {"type": "artifact_exists", "name": "broker.md"}}],
+     "depends_on": ["p2-a"],
+     "decisions": [{"key": "h3", "question": "provider を何から始めるか", "options": [{"key": "local", "label": "ローカル"}, {"key": "remote", "label": "リモート"}],
+                    "recommended": "local", "cost_of_reversal": "low"}]},
+    {"key": "p3", "stage": "phase-3", "kind": "implement", "title": "takeover の検査", "objective": "takeover の経路に結合テストを足す",
+     "checks": [{"cmd": "cargo test -p task-dispatch takeover", "expect_exit": 0}], "depends_on": ["p2-b"]}
+  ],
+  "decisions": [
+    {"key": "h1", "question": "credential backend をどれにするか",
+     "options": [{"key": "org-vault", "label": "既存の組織 vault"}, {"key": "1password", "label": "専用 1Password vault", "consequence": "費用が増える"}, {"key": "manual", "label": "専用の手動登録（試験用）"}],
+     "recommended": "org-vault", "cost_of_reversal": "medium", "cost_note": "項目 ID / policy の移行と権限の再承認が要る", "needed_before": ["p2-b"]},
+    {"key": "h2", "question": "policy の既定を deny にするか", "options": [{"key": "deny", "label": "deny"}, {"key": "allow", "label": "allow"}],
+     "recommended": "deny", "cost_of_reversal": "high", "needed_before": ["stage:phase-3"]}
+  ]
+}

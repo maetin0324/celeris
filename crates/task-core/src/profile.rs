@@ -827,6 +827,7 @@ mod tests {
         use crate::model::{Budget, Status, TaskKind, WorkerHint, WorkspaceSpec};
         let now = OffsetDateTime::now_utc();
         crate::model::Task {
+            tree: None,
             routing: None,
             id: crate::model::TaskId::new(),
             parent_id: None,

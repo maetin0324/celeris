@@ -1,0 +1,12 @@
+{
+  "schema": "celeris.execution-plan/1",
+  "rationale": "壊れた計画",
+  "phases": [{"key": "x", "kind": "implement", "title": "x"}],
+  "work_units": [
+    {"key": "A", "kind": "implement", "title": "t", "objective": "o one"},
+    {"key": "b", "kind": "integrate", "title": "t2", "objective": "o two", "depends_on": ["zzz", "child:q"], "phase": "x"},
+    {"key": "c", "kind": "test", "title": "t3", "objective": "o three", "depends_on": ["d"], "features": {"nope": 1}},
+    {"key": "d", "kind": "test", "title": "t4", "objective": "o four", "depends_on": ["c"]}
+  ],
+  "children": [{"key": "q", "title": "q", "objective": "q", "acceptance": [{"text": "x", "check": {"type": "reviewer"}}]}]
+}

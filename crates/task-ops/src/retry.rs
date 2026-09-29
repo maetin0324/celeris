@@ -104,6 +104,7 @@ pub fn retry_task_with_execution(
         r
     });
     let new_task = Task {
+        tree: None,
         routing,
         // ADR-0043 D2: やり直しは元のタスクと同じリポジトリで作業する。
         repos: original.repos.clone(),
@@ -234,6 +235,7 @@ mod tests {
     fn raw_task(status: Status, depends_on: Vec<TaskId>, conversation: Option<MessageId>) -> Task {
         let t = now();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -324,7 +326,7 @@ mod tests {
             .into_iter()
             .map(|(_, e)| e)
             .collect();
-        assert!(matches!(&events[0], Event::Created { task } if task.id == new_task.id));
+        assert!(matches!(&events[0], Event::Created { task, .. } if task.id == new_task.id));
         assert!(matches!(&events[1], Event::Retried { from } if *from == original.id));
     }
 

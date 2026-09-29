@@ -767,6 +767,7 @@ mod tests {
         use crate::model::{Budget, Tier, WorkerHint, WorkspaceSpec};
         let now = OffsetDateTime::now_utc();
         crate::model::Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

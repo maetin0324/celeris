@@ -890,6 +890,7 @@ mod execution_metrics_comparison_tests {
         let id = TaskId::new();
         let now = OffsetDateTime::now_utc() - time::Duration::seconds(age);
         Task {
+            tree: None,
             id,
             parent_id: None,
             kind: TaskKind::Execute,

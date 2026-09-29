@@ -22,8 +22,11 @@ pub fn begin(
     let Some(project_id) = task.project_id else {
         return Ok(None);
     };
+    // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（成果は親の段階末尾の統合で親の
+    // ブランチに入る）。部署の取り込み判定・`deliveries` の行・release は root だけ。
     if !policy.projects.contains(&project_id.to_string())
         || task_core::support_kind(task).is_some()
+        || task_core::tree::is_tree_child(task)
         || task.repos.len() != 1
     {
         return Ok(None);
@@ -204,6 +207,32 @@ mod tests {
             projects: vec![project.id.to_string()],
             repo: p,
         };
+        // ADR-0079 D6（Phase R1c）: 同じ task が木の子なら、取り込みの判定も `deliveries` の行も作らない
+        // （成果は親の段階の統合で親のブランチへ）。root は下のとおり今までと同じ（回帰）。
+        let mut as_child = task.clone();
+        let parent_id = TaskId::new();
+        as_child.tree = Some(TreeInfo {
+            root_id: parent_id,
+            depth: 2,
+            parent_unit: Some(ParentUnit {
+                task_id: parent_id,
+                plan_id: "plan".into(),
+                unit_key: "c".into(),
+                stage: "s1".into(),
+            }),
+            base_commit: None,
+        });
+        assert!(
+            begin(&store, &mut as_child, &root, &policy, "w", "r")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            as_child.acceptance.len(),
+            1,
+            "no merge criterion for a child"
+        );
+        assert!(store.delivery_get(task.id).unwrap().is_none());
         let d = begin(
             &store,
             &mut task,

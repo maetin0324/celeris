@@ -615,6 +615,9 @@ async fn browser_lifecycle_events_filter_and_page_with_task_execution_identity()
     .await;
     assert_eq!(global.status, 200, "{}", global.text());
     let global = global.json();
-    assert_eq!(global["items"].as_array().unwrap(), &[completed.clone()]);
+    assert_eq!(
+        global["items"].as_array().unwrap(),
+        std::slice::from_ref(completed)
+    );
     assert_eq!(global["has_more"], false);
 }

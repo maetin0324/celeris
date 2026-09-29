@@ -85,13 +85,16 @@ const MIGRATION_0028: &str = include_str!("../migrations/0028_project_plan_go.sq
 const MIGRATION_0029: &str = include_str!("../migrations/0029_project_slug.sql");
 /// ADR-0078 D5: `cluster_connection_log`（クラスタの ssh master の接続・切断の記録）。
 const MIGRATION_0030: &str = include_str!("../migrations/0030_cluster_connection_log.sql");
+/// ADR-0079 D4 / D7 / D15（Phase R1a）: `tasks.root_id`・`work_units.child_task_id` /
+/// `needs_decisions_json`・`decisions`（再帰的な task の木。既存の行は書き換えない）。
+const MIGRATION_0031: &str = include_str!("../migrations/0031_task_tree.sql");
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）と credential 台帳（秘密なし）。
-const MIGRATION_0031: &str = include_str!("../migrations/0031_browser_waits.sql");
-const MIGRATION_0032: &str = include_str!("../migrations/0032_browser_task_policies.sql");
+const MIGRATION_0032: &str = include_str!("../migrations/0032_browser_waits.sql");
+const MIGRATION_0033: &str = include_str!("../migrations/0033_browser_task_policies.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 32;
+pub const SCHEMA_VERSION: u32 = 33;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -1107,6 +1110,19 @@ pub trait TaskStore:
     /// 1 件。無ければ `None`。
     fn work_unit_get(&self, id: &str) -> Result<Option<WorkUnitRow>, StoreError>;
 
+    /// ADR-0079 D7（Phase R1a / migration 0031）: 決定の要求の行（`created_at` 昇順、同順位は id）。
+    /// `root_id` を渡せばその木だけ。行は `Event::DecisionRequested` / `DecisionAnswered` /
+    /// `DecisionWithdrawn` の追記と同じトランザクションで store が書く（派生）。
+    fn decisions_list(
+        &self,
+        root_id: Option<TaskId>,
+    ) -> Result<Vec<crate::decision::DecisionRow>, StoreError>;
+    /// ADR-0079 D7: 1 件（無ければ `None`）。
+    fn decision_get(&self, id: &str) -> Result<Option<crate::decision::DecisionRow>, StoreError>;
+    /// ADR-0079 D15: `decisions` の全行を渡した集合でまるごと置き換える（`events` は変えない）。
+    /// replay の再構築（`task_ops::replay::rebuild_decisions`）を書き戻すのに使う。
+    fn decisions_replace(&self, rows: Vec<crate::decision::DecisionRow>) -> Result<(), StoreError>;
+
     /// D6: WorkUnit の行を書き換え、`Event::WorkUnitTransitioned`（`event`）を同じトランザクションで
     /// 追記する。`updated.id` の行を丸ごと差し替える（呼び出し側が新しい状態・カウンタを計算済み）。
     fn work_unit_transition(
@@ -1143,6 +1159,24 @@ pub trait TaskStore:
         updated: Vec<WorkUnitRow>,
         events: Vec<Event>,
     ) -> Result<(), StoreError>;
+
+    /// ADR-0079 §7 R1b: 終わっていない kind task の unit（`pending` / `ready` / `running` /
+    /// `needs_continuation` / `blocked`）を持つ task の id（重複なし、昇順）。dispatcher の tick が
+    /// 子 task の生成と状態の写しの照合に使う（木が無ければ空で、何もしない）。
+    fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError>;
+
+    /// ADR-0079 D4 (4)（Phase R1b）: kind task の unit から子 task を作る 1 トランザクション。
+    /// 親が終端でなく、unit の行（`unit.id`）が今も `ready` で `child_task_id` を持たないことを確かめ、
+    /// 子を挿入して `Event::Created{origin: plan_unit}` を積み、unit の行を `unit`（呼び出し側が
+    /// `running`・`child_task_id` を書いたもの）に差し替え、親の events に `parent_events`
+    /// （`WorkUnitTransitioned` と `ChildTaskCreated`）を積む。条件に合わなければ何も書かず `Ok(false)`。
+    fn tree_child_create(
+        &self,
+        parent_id: TaskId,
+        child: &Task,
+        unit: WorkUnitRow,
+        parent_events: Vec<Event>,
+    ) -> Result<bool, StoreError>;
 
     /// ADR-0074 D1.4（Phase F2）: Task の lease（工程の保持者）の期限を `ttl` 先まで延ばす
     /// （短くはしない）。`Running` でなければ `Ok(false)`。統合の間の延長に使う。
@@ -1760,6 +1794,7 @@ impl SqliteStore {
             30 => Ok(MIGRATION_0030),
             31 => Ok(MIGRATION_0031),
             32 => Ok(MIGRATION_0032),
+            33 => Ok(MIGRATION_0033),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -2492,8 +2527,9 @@ impl SqliteStore {
         conn.execute(
             "INSERT INTO tasks (id, status, kind, parent_id, priority, created_at, \
              lease_worker_run_id, lease_expires_at, json, title, updated_at, objective, genre, \
-             project_id, milestone_id, assignee, repos_json, labels_json, category, skills_json, mode) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+             project_id, milestone_id, assignee, repos_json, labels_json, category, skills_json, mode, \
+             root_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 task.id.to_string(),
                 status_str(task.status),
@@ -2522,6 +2558,8 @@ impl SqliteStore {
                 // `update_task_tx` が同じ 2 列を書き直す。
                 serde_json::to_string(&task.skills)?,
                 task.mode.as_str(),
+                // ADR-0079 D4 (4)（migration 0031）: `Task.tree.root_id` の写し（木に属さない task は NULL）。
+                task.tree.as_ref().map(|t| t.root_id.to_string()),
             ],
         )?;
         Ok(())
@@ -2584,7 +2622,8 @@ impl SqliteStore {
         tx.execute(
             "UPDATE tasks SET json = ?1, title = ?2, updated_at = ?3, objective = ?4, genre = ?5, \
              priority = ?6, parent_id = ?7, project_id = ?8, milestone_id = ?9, assignee = ?10, \
-             labels_json = ?11, category = ?12, skills_json = ?13, mode = ?14 WHERE id = ?15",
+             labels_json = ?11, category = ?12, skills_json = ?13, mode = ?14, root_id = ?16 \
+             WHERE id = ?15",
             params![
                 json,
                 task.title,
@@ -2601,6 +2640,7 @@ impl SqliteStore {
                 serde_json::to_string(&task.skills)?,
                 task.mode.as_str(),
                 task.id.to_string(),
+                task.tree.as_ref().map(|t| t.root_id.to_string()),
             ],
         )?;
         Ok(())
@@ -2752,6 +2792,7 @@ impl SqliteStore {
                 ],
             )?;
             Self::close_run_row_for_event_tx(tx, &event, &ts)?;
+            Self::apply_tree_event_tx(tx, task_id, &event, &ts)?;
             next_seq += 1;
         }
 
@@ -2801,6 +2842,14 @@ impl SqliteStore {
         } else {
             for child in Self::non_terminal_children_tx(tx, task.id, Some(TaskKind::Approval))? {
                 Self::transition_if_non_terminal_tx(tx, child, Trigger::Cancel)?;
+            }
+        }
+        // ADR-0079 §7 R1b（D4・D16）: 木の親が中止・失敗で終わったら、親の計画の unit から作った子 task
+        // （`root_id` を持つ `parent_id = 親` の task）を同じトランザクションで中止する。子の遷移がさらに
+        // 孫へ連鎖する（subtree 全体）。走っている run は dispatcher の `abort_stale_runs` が止める。
+        if unsuccessful {
+            for child in Self::non_terminal_tree_children_tx(tx, task.id)? {
+                Self::transition_if_non_terminal_tx(tx, child, Trigger::ParentCancelled)?;
             }
         }
         if unsuccessful {
@@ -2854,6 +2903,25 @@ impl SqliteStore {
         );
         let mut stmt = tx.prepare(&sql)?;
         let rows = stmt.query_map(params![parent_id.to_string(), kind.map(kind_str)], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let ids: Vec<String> = rows.collect::<Result<_, _>>()?;
+        ids.iter().map(|s| Self::parse_id(s)).collect()
+    }
+
+    /// ADR-0079（Phase R1b）: `parent_id` の木の子（`root_id` を持つ = 計画の unit から作った子）のうち
+    /// 終端でないもの。
+    fn non_terminal_tree_children_tx(
+        tx: &Connection,
+        parent_id: TaskId,
+    ) -> Result<Vec<TaskId>, StoreError> {
+        let sql = format!(
+            "SELECT id FROM tasks WHERE parent_id = ?1 AND root_id IS NOT NULL AND {} \
+             ORDER BY created_at ASC, rowid ASC",
+            Self::NON_TERMINAL_SQL
+        );
+        let mut stmt = tx.prepare(&sql)?;
+        let rows = stmt.query_map(params![parent_id.to_string()], |row| {
             row.get::<_, String>(0)
         })?;
         let ids: Vec<String> = rows.collect::<Result<_, _>>()?;
@@ -2975,9 +3043,10 @@ impl SqliteStore {
             "INSERT INTO work_units (id, task_id, plan_id, key, seq, kind, status, \
              blocked_reason, depends_on_json, runs, continuations, retries, last_run_id, \
              last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
-             lease_expires_at, branch, base_commit, head_commit, integrated_commit) \
+             lease_expires_at, branch, base_commit, head_commit, integrated_commit, \
+             child_task_id, needs_decisions_json) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,\
-             ?21,?22,?23,?24)",
+             ?21,?22,?23,?24,?25,?26)",
             params![
                 wu.id,
                 wu.task_id,
@@ -3003,6 +3072,8 @@ impl SqliteStore {
                 wu.base_commit,
                 wu.head_commit,
                 wu.integrated_commit,
+                wu.child_task_id,
+                serde_json::to_string(&wu.needs_decisions)?,
             ],
         )?;
         Ok(())
@@ -3049,7 +3120,8 @@ impl SqliteStore {
              depends_on_json = ?4, runs = ?5, continuations = ?6, retries = ?7, \
              last_run_id = ?8, last_checkpoint_run_id = ?9, json = ?10, updated_at = ?11, \
              phase = ?13, lease_run_id = ?14, lease_expires_at = ?15, branch = ?16, \
-             base_commit = ?17, head_commit = ?18, integrated_commit = ?19 \
+             base_commit = ?17, head_commit = ?18, integrated_commit = ?19, \
+             child_task_id = ?20, needs_decisions_json = ?21 \
              WHERE id = ?12",
             params![
                 wu.plan_id,
@@ -3071,6 +3143,8 @@ impl SqliteStore {
                 wu.base_commit,
                 wu.head_commit,
                 wu.integrated_commit,
+                wu.child_task_id,
+                serde_json::to_string(&wu.needs_decisions)?,
             ],
         )?;
         Ok(())
@@ -3141,6 +3215,9 @@ impl SqliteStore {
         let base_commit: Option<String> = row.get(21)?;
         let head_commit: Option<String> = row.get(22)?;
         let integrated_commit: Option<String> = row.get(23)?;
+        // ADR-0079（migration 0031）。
+        let child_task_id: Option<String> = row.get(24)?;
+        let needs_decisions_json: String = row.get(25)?;
         Ok((|| -> Result<WorkUnitRow, StoreError> {
             let Some(kind) = WorkUnitKind::parse(&kind_s) else {
                 return Err(StoreError::Invalid(format!(
@@ -3161,6 +3238,7 @@ impl SqliteStore {
                 .transpose()?;
             let depends_on: Vec<String> = serde_json::from_str(&depends_on_json)?;
             let spec: WorkUnitSpec = serde_json::from_str(&json)?;
+            let needs_decisions: Vec<String> = serde_json::from_str(&needs_decisions_json)?;
             Ok(WorkUnitRow {
                 id,
                 task_id,
@@ -3186,6 +3264,8 @@ impl SqliteStore {
                 base_commit,
                 head_commit,
                 integrated_commit,
+                child_task_id,
+                needs_decisions,
             })
         })())
     }
@@ -3257,7 +3337,154 @@ impl SqliteStore {
             params![task_id.to_string(), next_seq, ts, json],
         )?;
         Self::close_run_row_for_event_tx(conn, event, &ts)?;
+        Self::apply_tree_event_tx(conn, task_id, event, &ts)?;
         Ok(next_seq as u64)
+    }
+
+    /// ADR-0079 D4 (4) / D7 / D15（Phase R1a）: 木の Event の派生の書き込み（Event と同じトランザクション）。
+    /// `ChildTaskCreated` / `ChildAdopted` → `work_units.child_task_id`、`DecisionRequested` /
+    /// `DecisionAnswered` / `DecisionWithdrawn` → `decisions`。畳み込みは `task_core::decision::DecisionRow`
+    /// の関数を通すので、`task_ops::replay::rebuild_decisions` の再構築と同じ行になる。
+    fn apply_tree_event_tx(
+        conn: &Connection,
+        task_id: TaskId,
+        event: &Event,
+        ts: &str,
+    ) -> Result<(), StoreError> {
+        match event {
+            Event::ChildTaskCreated {
+                unit_key,
+                child_task_id,
+                ..
+            }
+            | Event::ChildAdopted {
+                unit_key,
+                child_task_id,
+                ..
+            } => {
+                conn.execute(
+                    "UPDATE work_units SET child_task_id = ?1 WHERE task_id = ?2 AND key = ?3",
+                    params![child_task_id.to_string(), task_id.to_string(), unit_key],
+                )?;
+            }
+            Event::DecisionRequested { decision } => {
+                let row = crate::decision::DecisionRow::from_request(task_id, decision, ts);
+                Self::insert_decision_tx(conn, &row)?;
+            }
+            Event::DecisionAnswered {
+                id,
+                option,
+                note,
+                by,
+            } => {
+                if let Some(mut row) = Self::decision_get_tx(conn, id)? {
+                    row.apply_answer(option, note.as_deref(), by, ts);
+                    Self::update_decision_tx(conn, &row)?;
+                }
+            }
+            Event::DecisionWithdrawn { id, reason } => {
+                if let Some(mut row) = Self::decision_get_tx(conn, id)? {
+                    row.apply_withdrawal(reason);
+                    Self::update_decision_tx(conn, &row)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn insert_decision_tx(
+        conn: &Connection,
+        row: &crate::decision::DecisionRow,
+    ) -> Result<(), StoreError> {
+        conn.execute(
+            "INSERT INTO decisions (id, root_id, task_id, key, kind, status, needed_before_json, \
+             json, created_at, answered_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                row.id,
+                row.root_id.to_string(),
+                row.task_id.to_string(),
+                row.key,
+                row.kind.as_str(),
+                row.status.as_str(),
+                serde_json::to_string(&row.needed_before)?,
+                serde_json::to_string(&row.request)?,
+                row.created_at,
+                row.answered_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn update_decision_tx(
+        conn: &Connection,
+        row: &crate::decision::DecisionRow,
+    ) -> Result<(), StoreError> {
+        conn.execute(
+            "UPDATE decisions SET status = ?1, json = ?2, answered_at = ?3 WHERE id = ?4",
+            params![
+                row.status.as_str(),
+                serde_json::to_string(&row.request)?,
+                row.answered_at,
+                row.id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    const DECISION_COLUMNS: &'static str = "id, root_id, task_id, key, kind, status, \
+        needed_before_json, json, created_at, answered_at";
+
+    fn decision_get_tx(
+        conn: &Connection,
+        id: &str,
+    ) -> Result<Option<crate::decision::DecisionRow>, StoreError> {
+        let sql = format!(
+            "SELECT {} FROM decisions WHERE id = ?1",
+            Self::DECISION_COLUMNS
+        );
+        conn.query_row(&sql, params![id], Self::row_to_decision)
+            .optional()?
+            .transpose()
+    }
+
+    fn row_to_decision(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<Result<crate::decision::DecisionRow, StoreError>> {
+        let id: String = row.get(0)?;
+        let root_id: String = row.get(1)?;
+        let task_id: String = row.get(2)?;
+        let key: String = row.get(3)?;
+        let kind_s: String = row.get(4)?;
+        let status_s: String = row.get(5)?;
+        let needed_before_json: String = row.get(6)?;
+        let json: String = row.get(7)?;
+        let created_at: String = row.get(8)?;
+        let answered_at: Option<String> = row.get(9)?;
+        Ok((|| -> Result<crate::decision::DecisionRow, StoreError> {
+            let Some(kind) = crate::decision::DecisionKind::parse(&kind_s) else {
+                return Err(StoreError::Invalid(format!(
+                    "invalid decisions.kind: {kind_s}"
+                )));
+            };
+            let Some(status) = crate::decision::DecisionStatus::parse(&status_s) else {
+                return Err(StoreError::Invalid(format!(
+                    "invalid decisions.status: {status_s}"
+                )));
+            };
+            Ok(crate::decision::DecisionRow {
+                id,
+                root_id: Self::parse_id(&root_id)?,
+                task_id: Self::parse_id(&task_id)?,
+                key,
+                kind,
+                status,
+                needed_before: serde_json::from_str(&needed_before_json)?,
+                request: serde_json::from_str(&json)?,
+                created_at,
+                answered_at,
+            })
+        })())
     }
 
     /// Phase F5-fix3: `WorkerFinished` を書いたら、その run の `runs` 行がまだ `running` なら同じ
@@ -3638,6 +3865,7 @@ impl TaskStore for SqliteStore {
                 child.id,
                 &Event::Created {
                     task: Box::new(child.clone()),
+                    origin: None,
                 },
             )?;
             if accept_children {
@@ -3658,6 +3886,7 @@ impl TaskStore for SqliteStore {
             task.id,
             &Event::Created {
                 task: Box::new(task.clone()),
+                origin: None,
             },
         )?;
         for event in &extra_events {
@@ -3733,6 +3962,7 @@ impl TaskStore for SqliteStore {
             task.id,
             &Event::Created {
                 task: Box::new(task.clone()),
+                origin: None,
             },
         )?;
         for event in &extra_events {
@@ -3871,6 +4101,7 @@ impl TaskStore for SqliteStore {
                 child.id,
                 &Event::Created {
                     task: Box::new(child.clone()),
+                    origin: None,
                 },
             )?;
             if child.status == Status::Draft {
@@ -3910,6 +4141,7 @@ impl TaskStore for SqliteStore {
             new_task.id,
             &Event::Created {
                 task: Box::new(new_task.clone()),
+                origin: None,
             },
         )?;
         Self::append_event_tx(&tx, new_task.id, &Event::Retried { from: original })?;
@@ -5531,6 +5763,7 @@ impl TaskStore for SqliteStore {
                 child.id,
                 &Event::Created {
                     task: Box::new(child.clone()),
+                    origin: None,
                 },
             )?;
             if child.status == Status::Draft {
@@ -5589,7 +5822,8 @@ impl TaskStore for SqliteStore {
                 "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
-                 lease_expires_at, branch, base_commit, head_commit, integrated_commit FROM work_units \
+                 lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
+                 needs_decisions_json FROM work_units \
                  WHERE task_id = ?1 ORDER BY seq ASC",
             )?;
             let rows = stmt.query_map(params![task_id.to_string()], Self::row_to_work_unit)?;
@@ -5601,13 +5835,63 @@ impl TaskStore for SqliteStore {
         })
     }
 
+    fn decisions_list(
+        &self,
+        root_id: Option<TaskId>,
+    ) -> Result<Vec<crate::decision::DecisionRow>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut out = Vec::new();
+            match root_id {
+                Some(root) => {
+                    let sql = format!(
+                        "SELECT {} FROM decisions WHERE root_id = ?1 ORDER BY created_at, id",
+                        Self::DECISION_COLUMNS
+                    );
+                    let mut stmt = conn.prepare(&sql)?;
+                    let rows = stmt.query_map(params![root.to_string()], Self::row_to_decision)?;
+                    for row in rows {
+                        out.push(row??);
+                    }
+                }
+                None => {
+                    let sql = format!(
+                        "SELECT {} FROM decisions ORDER BY created_at, id",
+                        Self::DECISION_COLUMNS
+                    );
+                    let mut stmt = conn.prepare(&sql)?;
+                    let rows = stmt.query_map([], Self::row_to_decision)?;
+                    for row in rows {
+                        out.push(row??);
+                    }
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    fn decision_get(&self, id: &str) -> Result<Option<crate::decision::DecisionRow>, StoreError> {
+        self.with_read_conn(|conn| Self::decision_get_tx(conn, id))
+    }
+
+    fn decisions_replace(&self, rows: Vec<crate::decision::DecisionRow>) -> Result<(), StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM decisions", [])?;
+        for row in &rows {
+            Self::insert_decision_tx(&tx, row)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     fn work_unit_get(&self, id: &str) -> Result<Option<WorkUnitRow>, StoreError> {
         self.with_read_conn(|conn| {
             conn.query_row(
                 "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
-                 lease_expires_at, branch, base_commit, head_commit, integrated_commit FROM work_units WHERE id = ?1",
+                 lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
+                 needs_decisions_json FROM work_units WHERE id = ?1",
                 params![id],
                 Self::row_to_work_unit,
             )
@@ -5652,7 +5936,8 @@ impl TaskStore for SqliteStore {
                 "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
                  depends_on_json, runs, continuations, retries, last_run_id, \
                  last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
-                 lease_expires_at, branch, base_commit, head_commit, integrated_commit \
+                 lease_expires_at, branch, base_commit, head_commit, integrated_commit, \
+                 child_task_id, needs_decisions_json \
                  FROM work_units WHERE id = ?1 AND task_id = ?2",
                 params![work_unit_id, task_id.to_string()],
                 Self::row_to_work_unit,
@@ -5737,6 +6022,71 @@ impl TaskStore for SqliteStore {
         Ok(())
     }
 
+    fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT task_id FROM work_units WHERE kind = 'task' AND status IN \
+                 ('pending', 'ready', 'running', 'needs_continuation', 'blocked') ORDER BY task_id",
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let ids: Vec<String> = rows.collect::<Result<_, _>>()?;
+            ids.iter().map(|s| Self::parse_id(s)).collect()
+        })
+    }
+
+    fn tree_child_create(
+        &self,
+        parent_id: TaskId,
+        child: &Task,
+        unit: WorkUnitRow,
+        parent_events: Vec<Event>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(parent) = Self::get_locked(&tx, parent_id)? else {
+            return Ok(false);
+        };
+        if parent.status.is_terminal() || child.parent_id != Some(parent_id) {
+            return Ok(false);
+        }
+        let current = tx
+            .query_row(
+                "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
+                 depends_on_json, runs, continuations, retries, last_run_id, \
+                 last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
+                 lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
+                 needs_decisions_json FROM work_units WHERE id = ?1 AND task_id = ?2",
+                params![unit.id, parent_id.to_string()],
+                Self::row_to_work_unit,
+            )
+            .optional()?
+            .transpose()?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        if current.status != WorkUnitStatus::Ready
+            || current.child_task_id.is_some()
+            || current.kind != crate::execution_plan::WorkUnitKind::Task
+        {
+            return Ok(false);
+        }
+        Self::insert_tx(&tx, child)?;
+        Self::append_event_tx(
+            &tx,
+            child.id,
+            &Event::Created {
+                task: Box::new(child.clone()),
+                origin: Some(crate::model::CreatedOrigin::PlanUnit),
+            },
+        )?;
+        Self::update_work_unit_tx(&tx, &unit)?;
+        for ev in &parent_events {
+            Self::append_event_tx(&tx, parent_id, ev)?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
     fn extend_task_lease(&self, task_id: TaskId, ttl: StdDuration) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -5774,7 +6124,7 @@ impl TaskStore for SqliteStore {
             let mut stmt = conn.prepare(
                 "SELECT t.json FROM tasks t WHERE t.status = ?1 AND EXISTS ( \
                  SELECT 1 FROM work_units w WHERE w.task_id = t.id AND w.phase IS NOT NULL \
-                 AND w.kind != 'integrate' AND w.status IN ('ready', 'needs_continuation')) \
+                 AND w.kind NOT IN ('integrate', 'task') AND w.status IN ('ready', 'needs_continuation')) \
                  ORDER BY t.created_at ASC LIMIT ?2",
             )?;
             let rows = stmt.query_map(
@@ -6128,6 +6478,7 @@ mod tests {
     fn sample_task(status: Status) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -6807,7 +7158,7 @@ mod tests {
         assert_eq!(store.get(task.id).unwrap().unwrap(), task);
         let ev = store.events_for(task.id).unwrap();
         assert_eq!(ev.len(), 2);
-        assert!(matches!(&ev[0].1, Event::Created { task: t } if t.id == task.id));
+        assert!(matches!(&ev[0].1, Event::Created { task: t, .. } if t.id == task.id));
         assert_eq!(ev[1].1, Event::ApprovalRequested);
         // 同じ id の再作成は insert で失敗し、イベントも追記されない。
         assert!(
@@ -7173,6 +7524,7 @@ mod tests {
             // events は task をまたいで rowid 順をばらして挿入する（各 task 内の seq 順は保つ）。
             let ev = Event::Created {
                 task: Box::new(a.clone()),
+                origin: None,
             };
             insert_legacy_event(&conn, a.id, 0, &ev);
             expected_a.push((0, ev));
@@ -7180,6 +7532,7 @@ mod tests {
 
             let ev = Event::Created {
                 task: Box::new(b.clone()),
+                origin: None,
             };
             insert_legacy_event(&conn, b.id, 0, &ev);
             expected_b.push((0, ev));
@@ -8330,7 +8683,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 32);
+        assert_eq!(SCHEMA_VERSION, 33);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -8879,7 +9232,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 32);
+        assert_eq!(SCHEMA_VERSION, 33);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -9370,7 +9723,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 32);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -9436,7 +9789,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 32);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -9529,7 +9882,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 32);
+        assert_eq!(SCHEMA_VERSION, 33);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -9903,6 +10256,9 @@ mod tests {
 
     fn sample_plan_spec() -> ExecutionPlanSpec {
         ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: crate::execution_plan::EXECUTION_PLAN_SCHEMA.to_string(),
             rationale: "3 段階の直列計画".to_string(),
             work_units: vec![
@@ -9985,7 +10341,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 32);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -9995,6 +10351,7 @@ mod tests {
                 task.id,
                 &Event::Created {
                     task: Box::new(task.clone()),
+                    origin: None,
                 },
             )
             .unwrap();
@@ -10110,7 +10467,7 @@ mod tests {
             }
         }
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 32);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
         let slug_of = |id: &str| {
             store
                 .project_get(id.parse().unwrap())
@@ -10152,6 +10509,304 @@ mod tests {
         assert!(slug_of(&again.id.to_string()).starts_with("celeris-"));
     }
 
+    /// ADR-0079 D15（Phase R1a）: migration 0031 は版数 30 の DB に `tasks.root_id`・
+    /// `work_units.child_task_id` / `needs_decisions_json`・`decisions` を足すだけで、**既存の行は書き換えない**
+    /// （D13「凍結」、D15「root_id は NULL のまま。埋め戻さない」）。旧い task は `tree` を持たず深さ 1 として読め、
+    /// 旧い WU 行は `child_task_id = None`・`needs_decisions = []` で読める。
+    #[test]
+    fn migration_31_adds_tree_columns_without_rewriting_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("schema30.sqlite3");
+        let root = sample_task(Status::Running);
+        let mut child = sample_task(Status::Ready);
+        child.parent_id = Some(root.id);
+        let now = "2026-09-28T00:00:00Z".to_string();
+        let json_before: Vec<(String, String)>;
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            SqliteStore::configure_pragmas(&conn, &StoreOptions::default()).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+            )
+            .unwrap();
+            for version in 1..=30 {
+                SqliteStore::apply_migration_version(&mut conn, version).unwrap();
+            }
+            // 版数 30 の列だけで書く（`root_id` 列はまだ無い）。
+            for t in [&root, &child] {
+                conn.execute(
+                    "INSERT INTO tasks (id, status, kind, parent_id, priority, created_at, json, title, updated_at) \
+                     VALUES (?1, ?2, 'execute', ?3, 0, ?4, ?5, ?6, ?4)",
+                    params![
+                        t.id.to_string(),
+                        status_str(t.status),
+                        t.parent_id.map(|p| p.to_string()),
+                        now,
+                        serde_json::to_string(t).unwrap(),
+                        t.title,
+                    ],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO work_units (id, task_id, plan_id, key, seq, kind, status, \
+                 depends_on_json, runs, continuations, retries, json, created_at, updated_at, phase) \
+                 VALUES ('wu-legacy', ?1, 'plan-legacy', 'a', 0, 'implement', 'ready', '[]', \
+                 0, 0, 0, ?2, ?3, ?3, 'build')",
+                params![
+                    root.id.to_string(),
+                    serde_json::to_string(&crate::execution_plan::WorkUnitSpec {
+                        key: "a".into(),
+                        kind: WorkUnitKind::Implement,
+                        title: "a".into(),
+                        objective: "a".into(),
+                        depends_on: vec![],
+                        done_when: vec![],
+                        checks: vec![],
+                        context: Default::default(),
+                        harness: None,
+                        features: None,
+                        budget: None,
+                        outputs: vec![],
+                        phase: Some("build".into()),
+                    })
+                    .unwrap(),
+                    now
+                ],
+            )
+            .unwrap();
+            let mut stmt = conn
+                .prepare("SELECT id, json FROM tasks ORDER BY id")
+                .unwrap();
+            json_before = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+        }
+
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 33);
+
+        let conn = Connection::open(&path).unwrap();
+        // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
+        let mut stmt = conn
+            .prepare("SELECT id, json, root_id FROM tasks ORDER BY id")
+            .unwrap();
+        let after: Vec<(String, String, Option<String>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(after.len(), 2);
+        for ((id_b, json_b), (id_a, json_a, root_id)) in json_before.iter().zip(&after) {
+            assert_eq!(id_b, id_a);
+            assert_eq!(json_b, json_a);
+            assert_eq!(root_id, &None, "migration 0031 must not backfill root_id");
+        }
+        let reread = store.get(child.id).unwrap().unwrap();
+        assert_eq!(reread.tree, None);
+        assert_eq!(crate::tree::depth_of(&reread), 1);
+        assert_eq!(crate::tree::root_id_of(&reread), child.id);
+
+        // 旧い WU 行は新しい列の既定で読める。
+        let units = store.work_units_for(root.id).unwrap();
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].child_task_id, None);
+        assert!(units[0].needs_decisions.is_empty());
+        let raw: String = conn
+            .query_row(
+                "SELECT needs_decisions_json FROM work_units WHERE id = 'wu-legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(raw, "[]");
+
+        // `decisions` は空の表として在り、索引も付く。
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM decisions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_tasks_root_id', 'idx_decisions_root', 'idx_decisions_task', 'idx_work_units_child_task') ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            indexes,
+            vec![
+                "idx_decisions_root",
+                "idx_decisions_task",
+                "idx_tasks_root_id",
+                "idx_work_units_child_task"
+            ]
+        );
+        // 旧いバイナリ（版数 30）は版数 31 以降の DB を開けない（昇格は stop → start）。
+        drop(store);
+        let max: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(max, i64::from(SCHEMA_VERSION));
+    }
+
+    /// ADR-0079 D4 (4) / D7（Phase R1a）: `Task.tree` は `tasks.root_id` に写り（挿入・更新）、木の Event は
+    /// 同じトランザクションで `work_units.child_task_id` と `decisions` を書く。
+    #[test]
+    fn tree_events_write_root_id_child_links_and_decisions() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut root = sample_task(Status::Running);
+        root.tree = Some(crate::tree::TreeInfo::root(root.id));
+        store.insert(&root).unwrap();
+        let mut child = sample_task(Status::Ready);
+        child.parent_id = Some(root.id);
+        child.tree = Some(crate::tree::TreeInfo::child_of(
+            &root,
+            crate::tree::ParentUnit {
+                task_id: root.id,
+                plan_id: "plan-1".into(),
+                unit_key: "p1".into(),
+                stage: "phase-1".into(),
+            },
+            Some("abc".into()),
+        ));
+        store.insert(&child).unwrap();
+        let root_id_col = |id: TaskId| -> Option<String> {
+            store
+                .with_read_conn(|conn| {
+                    Ok(conn.query_row(
+                        "SELECT root_id FROM tasks WHERE id = ?1",
+                        params![id.to_string()],
+                        |r| r.get::<_, Option<String>>(0),
+                    )?)
+                })
+                .unwrap()
+        };
+        assert_eq!(root_id_col(root.id), Some(root.id.to_string()));
+        assert_eq!(root_id_col(child.id), Some(root.id.to_string()));
+        let reread = store.get(child.id).unwrap().unwrap();
+        assert_eq!(crate::tree::depth_of(&reread), 2);
+        assert_eq!(reread.tree, child.tree);
+
+        // 木に属さない task は NULL のまま。
+        let plain = sample_task(Status::Ready);
+        store.insert(&plain).unwrap();
+        assert_eq!(root_id_col(plain.id), None);
+
+        // work_units の行（kind task の unit の代理）に ChildTaskCreated が結び付く。
+        let mut wu = WorkUnitRow::new(
+            "wu-p1".into(),
+            root.id.to_string(),
+            "plan-1".into(),
+            0,
+            crate::execution_plan::WorkUnitSpec {
+                key: "p1".into(),
+                kind: WorkUnitKind::Task,
+                title: "p1".into(),
+                objective: "p1".into(),
+                depends_on: vec![],
+                done_when: vec![],
+                checks: vec![],
+                context: Default::default(),
+                harness: None,
+                features: None,
+                budget: None,
+                outputs: vec![],
+                phase: Some("phase-1".into()),
+            },
+            WorkUnitStatus::Ready,
+            "T".into(),
+        );
+        wu.needs_decisions = vec!["h1".into()];
+        store.work_units_replace(root.id, vec![wu]).unwrap();
+        store
+            .append_event(
+                root.id,
+                &Event::ChildTaskCreated {
+                    plan_id: "plan-1".into(),
+                    unit_key: "p1".into(),
+                    child_task_id: child.id,
+                    depth: 2,
+                },
+            )
+            .unwrap();
+        let units = store.work_units_for(root.id).unwrap();
+        assert_eq!(units[0].child_task_id, Some(child.id.to_string()));
+        assert_eq!(units[0].needs_decisions, vec!["h1".to_string()]);
+
+        // 決定の要求 → 回答（`decisions` の行）。
+        let request = crate::decision::DecisionRequest {
+            id: "01DEC".into(),
+            key: "h1".into(),
+            kind: crate::decision::DecisionKind::Choice,
+            question: "q".into(),
+            options: vec![
+                crate::decision::DecisionOption {
+                    key: "a".into(),
+                    label: "A".into(),
+                    consequence: None,
+                },
+                crate::decision::DecisionOption {
+                    key: "b".into(),
+                    label: "B".into(),
+                    consequence: None,
+                },
+            ],
+            recommended: "a".into(),
+            cost_of_reversal: crate::decision::CostOfReversal::Medium,
+            cost_note: None,
+            needed_before: vec!["p1".into()],
+            path: vec![crate::decision::DecisionPathEntry {
+                task_id: root.id,
+                title: "root".into(),
+                stage: Some("phase-1".into()),
+                unit: None,
+            }],
+            raised_by: crate::decision::DecisionRaisedBy {
+                task_id: root.id,
+                run_id: None,
+                origin: crate::decision::DecisionOrigin::Planner,
+            },
+            status: crate::decision::DecisionStatus::Open,
+            answer: None,
+            withdrawn_reason: None,
+        };
+        store
+            .append_event(
+                root.id,
+                &Event::DecisionRequested {
+                    decision: Box::new(request.clone()),
+                },
+            )
+            .unwrap();
+        let rows = store.decisions_list(Some(root.id)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, crate::decision::DecisionStatus::Open);
+        assert_eq!(rows[0].request, request);
+        store
+            .append_event(
+                root.id,
+                &Event::DecisionAnswered {
+                    id: "01DEC".into(),
+                    option: "b".into(),
+                    note: Some("n".into()),
+                    by: "human".into(),
+                },
+            )
+            .unwrap();
+        let row = store.decision_get("01DEC").unwrap().unwrap();
+        assert_eq!(row.status, crate::decision::DecisionStatus::Answered);
+        assert!(row.answered_at.is_some());
+        assert_eq!(row.request.answer.as_ref().unwrap().option, "b");
+        assert!(store.decisions_list(Some(child.id)).unwrap().is_empty());
+        assert_eq!(store.decisions_list(None).unwrap().len(), 1);
+    }
+
     #[test]
     fn migration_27_adds_work_unit_lease_columns() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -10182,7 +10837,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 32);
+        assert_eq!(SCHEMA_VERSION, 33);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();
@@ -11032,6 +11687,9 @@ mod tests {
             planner_run_id: None,
             status: PlanStatus::Active,
             spec: ExecutionPlanSpec {
+                stages: Vec::new(),
+                units: Vec::new(),
+                decisions: Vec::new(),
                 schema: crate::execution_plan::EXECUTION_PLAN_SCHEMA.to_string(),
                 rationale: "repair materialization".to_string(),
                 work_units: vec![main_spec, repair_spec(&task)],
@@ -11119,6 +11777,9 @@ mod tests {
         };
         let repair = repair_spec(&task);
         let spec = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
             schema: crate::execution_plan::EXECUTION_PLAN_SCHEMA.into(),
             rationale: "delivery repair".into(),
             work_units: vec![main.clone(), repair.clone()],

@@ -283,6 +283,11 @@ export type Event =
       wait_id: string;
     }
   | {
+      /**
+       * ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から
+       * daemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。
+       */
+      origin?: CreatedOrigin | null;
       task: Task;
       type: "created";
     }
@@ -614,9 +619,75 @@ export type Event =
       project_id: ProjectId;
       type: "project_plan_decided";
       version: number;
+    }
+  | {
+      child_task_id: TaskId;
+      /**
+       * 子の深さ（task の層数。root = 1。ADR-0079 付記 U-R1）。
+       */
+      depth: number;
+      /**
+       * 親の計画の版（`execution_plans.id`）。
+       */
+      plan_id: string;
+      type: "child_task_created";
+      unit_key: string;
+    }
+  | {
+      child_task_id: TaskId;
+      plan_id: string;
+      stage: string;
+      type: "child_adopted";
+      unit_key: string;
+    }
+  | {
+      action: UnitGateAction;
+      declared: UnitDeclared;
+      /**
+       * unit の深さ（= 計画を持つ task の深さ + 1）。
+       */
+      depth: number;
+      gate: ExecutionMode;
+      plan_id: string;
+      /**
+       * その深さの gate の閾値（`task_core::tree::gate_threshold`）。
+       */
+      threshold: number;
+      type: "unit_gate_overridden";
+      unit_key: string;
+    }
+  | {
+      decision: DecisionRequest;
+      type: "decision_requested";
+    }
+  | {
+      by: string;
+      id: string;
+      note?: string | null;
+      option: string;
+      type: "decision_answered";
+    }
+  | {
+      id: string;
+      reason: string;
+      type: "decision_withdrawn";
+    }
+  | {
+      plan_id: string;
+      reasons: string[];
+      type: "plan_approval_requested";
+    }
+  | {
+      detail: string;
+      task_id: TaskId;
+      type: "stall_detected";
     };
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
+/**
+ * ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。
+ */
+export type CreatedOrigin = "plan_unit";
 /**
  * DESIGN §5.3/§5.7 の `Check` 種別。
  */
@@ -743,10 +814,23 @@ export type CheckpointSource = "worker" | "yield" | "mechanical" | "merged";
  */
 export type PlanOrigin = "planner" | "human" | "repair" | "fixture";
 /**
+ * D7: 後戻りの大きさ。
+ */
+export type CostOfReversal = "low" | "medium" | "high";
+/**
  * D14: WorkUnit の種類。
  */
 export type WorkUnitKind =
-  ("investigate" | "design" | "implement" | "test" | "release" | "repair" | "other") | "integrate";
+  ("investigate" | "design" | "implement" | "test" | "release" | "repair" | "other") | "integrate" | "task";
+/**
+ * ADR-0079 D2 / D5: 段階の後の人の確認（`review: human` は ADR-0074 D2 の `pause_after` をその段階に
+ * 指定したのと同じ意味。既定 none）。
+ */
+export type StageReview = "none" | "human";
+/**
+ * ADR-0079 D4 (2): leaf の `context.repo`（1 つの文字列、または配列。leaf は高々 1 つ）。
+ */
+export type RepoSelector = string | string[];
 export type WorkUnitStatus =
   "pending" | "ready" | "needs_continuation" | "running" | "done" | "failed" | "blocked" | "superseded" | "cancelled";
 /**
@@ -778,6 +862,26 @@ export type PausePolicy =
       mode: "after";
       phases?: string[];
     };
+/**
+ * D4 (3): unit の gate が planner の宣言と食い違ったときに daemon が取った行動。
+ */
+export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
+/**
+ * D4 (3): planner が unit に宣言した種類（`Event::UnitGateOverridden.declared`）。
+ */
+export type UnitDeclared = "leaf" | "task";
+/**
+ * D7: 決定の要求の種類。
+ */
+export type DecisionKind = "choice" | "leaf_too_large" | "limit" | "plan_invalid";
+/**
+ * D7: 決定を出した者の種類。
+ */
+export type DecisionOrigin = ("planner" | "worker" | "daemon") | "human";
+/**
+ * D7: 決定の状態。
+ */
+export type DecisionStatus = "open" | "answered" | "withdrawn";
 /**
  * D5: `execution_plans.status`。
  */
@@ -976,7 +1080,8 @@ export type RepoRun = "auto" | "host" | "container";
  * （`kind = repair`）か `executing`、無ければ（計画はあるのに走っている WU が無い）planner run が
  * 動いていると見なして `planning`。それ以外（計画が無い・終端）は `None`。
  */
-export type ExecutionPhase = ("planning" | "executing" | "repairing" | "verifying") | "awaiting_human";
+export type ExecutionPhase =
+  ("planning" | "executing" | "repairing" | "verifying") | "awaiting_human" | "awaiting_children";
 /**
  * ADR-0070 D1（Phase 116）: `failed` の分類。`infra` はレース・切替・供給側都合、`work` はレビュー
  * 不合格やワーカー自身の明示的な失敗（人が中身を見て判断すべきもの）。
@@ -3535,6 +3640,12 @@ export interface Task {
   skills?: string[];
   status: Status;
   title: string;
+  /**
+   * ADR-0079 D4 (4) / D15（Phase R1a）: 再帰的な task の木の中の位置（root・深さ・親の unit・基点）。
+   * 木に属さない従来の task には無い（深さ 1 の節点として扱う。`tasks.root_id` も NULL のまま）。
+   * 子 task の生成（R1b）が書く。
+   */
+  tree?: TreeInfo | null;
   updated_at: string;
   worker_hint: WorkerHint;
   workspace: WorkspaceSpec;
@@ -3675,6 +3786,49 @@ export interface TaskFeatureHints {
   reversibility?: Level | null;
   tool_intensity?: Level | null;
   verifiability?: Level | null;
+}
+/**
+ * D4 (4) / D15: `Task.tree`。木に属する task だけが持つ（`None` は木を持たない従来の task = 深さ 1 の
+ * 節点として扱う。`root_id` 列も NULL のまま埋め戻さない。D15）。
+ */
+export interface TreeInfo {
+  /**
+   * D6: 子の worktree を切る基点（親の段階の基点、または同じ段階の依存先の HEAD。R1c で使う）。
+   */
+  base_commit?: string | null;
+  /**
+   * task の層数で数えた深さ（root = 1、子 = 2、孫 = 3。U-R1）。
+   */
+  depth: number;
+  /**
+   * 子 task なら、作られた元の親の unit（root は `None`）。
+   */
+  parent_unit?: ParentUnit | null;
+  /**
+   * タスクの一意識別子（ULID）。DESIGN §4.1。
+   */
+  root_id: string;
+}
+/**
+ * D4 (4): 子 task が親の計画のどの unit から作られたか（`Task.tree.parent_unit`）。
+ */
+export interface ParentUnit {
+  /**
+   * 親の計画の版（`execution_plans.id`）。
+   */
+  plan_id: string;
+  /**
+   * その unit の段階の key（`work_units.phase`）。
+   */
+  stage: string;
+  /**
+   * タスクの一意識別子（ULID）。DESIGN §4.1。
+   */
+  task_id: string;
+  /**
+   * 親の計画の unit の key（`work_units.key`）。
+   */
+  unit_key: string;
 }
 export interface WorkerHint {
   adapter?: string | null;
@@ -3928,12 +4082,27 @@ export interface ExecutionPlanSpec {
    */
   children?: ExecutionChildSpec[];
   /**
+   * ADR-0079 D2 / D7: /3 の決定（人に選んでもらう点）。
+   */
+  decisions?: DecisionSpec[];
+  /**
    * v2 のみ。v1 では空でなければならない（`validate`）。
    */
   phases?: PhaseSpec[];
   rationale: string;
   schema: string;
-  work_units: WorkUnitSpec[];
+  /**
+   * ADR-0079 D2（Phase R1a）: /3 の段階（/1・/2 では空。空なら出力しない〈/1・/2 の JSON は不変〉）。
+   */
+  stages?: StageSpec[];
+  /**
+   * ADR-0079 D2: /3 の unit（leaf | 子 task）。
+   */
+  units?: PlanUnitSpec[];
+  /**
+   * /1・/2 では 1 件以上。ADR-0079（Phase R1a）: /3 は `units` を使い、ここは空（省略可）。
+   */
+  work_units?: WorkUnitSpec[];
 }
 /**
  * ADR-0074 D3.7（Phase F4b (f)）: planner が提案する子 Task 1 件（`delegate` メッセージと同じ中身。
@@ -3962,6 +4131,42 @@ export interface ExecutionChildSpec {
   title: string;
 }
 /**
+ * D2 / D7: 計画に書く決定の形（`id` / `path` / `raised_by` / `status` は daemon が付ける）。
+ */
+export interface DecisionSpec {
+  cost_note?: string | null;
+  cost_of_reversal: CostOfReversal;
+  /**
+   * `[a-z0-9-]{1,32}`。計画の中で一意。
+   */
+  key: string;
+  /**
+   * 止める unit の key か `stage:<key>`。計画の `decisions` では 1 件以上（何を止めるかを書かせる）。
+   * unit に書いた `decisions` では省略でき、その unit が補われる（D2 の糖衣）。
+   */
+  needed_before?: string[];
+  /**
+   * 2..=5 件。
+   */
+  options: DecisionOption[];
+  question: string;
+  /**
+   * `options` のどれかの key。
+   */
+  recommended: string;
+}
+/**
+ * D7: 選択肢 1 つ。
+ */
+export interface DecisionOption {
+  consequence?: string | null;
+  /**
+   * `[a-z0-9-]{1,32}`。決定の中で一意。
+   */
+  key: string;
+  label: string;
+}
+/**
  * ADR-0074 D1.1（Phase F2）: `celeris.execution-plan/2` の工程。配列の順が実行順（D1.1）。
  */
 export interface PhaseSpec {
@@ -3971,6 +4176,95 @@ export interface PhaseSpec {
   key: string;
   kind: WorkUnitKind;
   title: string;
+}
+/**
+ * ADR-0079 D2: /3 の段階（/2 の `PhaseSpec` に `review` を足した形）。
+ */
+export interface StageSpec {
+  /**
+   * `[a-z0-9-]{1,32}`。計画の中で一意。`work_units.phase` の値になる。
+   */
+  key: string;
+  kind: WorkUnitKind;
+  review?: StageReview;
+  title: string;
+}
+/**
+ * ADR-0079 D2: /3 の unit。`kind = task` なら子 task（`acceptance` 必須、`checks` / `budget` /
+ * `harness` / `context.paths` は持たない）、それ以外は leaf（今の WorkUnit の欄 + `needs_decisions`。
+ * `checks` 1 本以上）。`assignee` / `tier` / `model` / `lane` は持たない（`deny_unknown_fields`）。
+ */
+export interface PlanUnitSpec {
+  acceptance?: Criterion[];
+  /**
+   * D15: 既存の task をこの unit の子として採用する（人の計画〈origin human〉だけ）。
+   */
+  adopt?: TaskId | null;
+  budget?: WorkUnitBudget | null;
+  checks?: WorkUnitCheck[];
+  context?: UnitContext;
+  /**
+   * この unit が持ち込む決定（計画の `decisions` に `needed_before: [<この unit>]` を付けて移した
+   * ものとして読む。D2 の糖衣）。
+   */
+  decisions?: DecisionSpec[];
+  /**
+   * unit の key（leaf・task を問わない）。/2 の `child:<key>` は書けない。
+   */
+  depends_on?: string[];
+  done_when?: string[];
+  /**
+   * ADR-0069 D3: `TaskFeatureHints` の上書きヒント。
+   */
+  features?: {
+    [k: string]: unknown;
+  };
+  genre?: string | null;
+  harness?: string | null;
+  /**
+   * `[a-z0-9-]{1,32}`。計画の中で一意。
+   */
+  key: string;
+  kind: WorkUnitKind;
+  /**
+   * 回答を待つ決定の key（計画の `decisions`・unit の `decisions`）。
+   */
+  needs_decisions?: string[];
+  objective: string;
+  outputs?: string[];
+  /**
+   * 親の repos の部分集合（repo の名前。子の生成〈R1b〉で検証する）。
+   */
+  repos?: string[];
+  skills?: string[];
+  /**
+   * `stages` の key。
+   */
+  stage: string;
+  title: string;
+}
+/**
+ * D14/D18: WU ごとの予算（任意。書かなければ D18 の既定を使う）。
+ */
+export interface WorkUnitBudget {
+  max_turns?: number | null;
+  max_wall_secs?: number | null;
+}
+/**
+ * D14: `checks` は決定的な検査だけ（`Command`。E4 で実行する。E2 は schema と検証のみ）。
+ */
+export interface WorkUnitCheck {
+  cmd: string;
+  expect_exit?: number;
+}
+/**
+ * ADR-0079 D2: /3 の unit の context（/1・/2 の `WorkUnitContext` に `repo` を足した形）。
+ */
+export interface UnitContext {
+  from_work_units?: string[];
+  knowledge?: string[];
+  paths?: string[];
+  repo?: RepoSelector | null;
 }
 /**
  * D14: 計画の中の 1 WorkUnit の spec。**`assignee` / `tier` / `model` の欄は持たない**
@@ -4007,20 +4301,6 @@ export interface WorkUnitSpec {
    */
   phase?: string | null;
   title: string;
-}
-/**
- * D14/D18: WU ごとの予算（任意。書かなければ D18 の既定を使う）。
- */
-export interface WorkUnitBudget {
-  max_turns?: number | null;
-  max_wall_secs?: number | null;
-}
-/**
- * D14: `checks` は決定的な検査だけ（`Command`。E4 で実行する。E2 は schema と検証のみ）。
- */
-export interface WorkUnitCheck {
-  cmd: string;
-  expect_exit?: number;
 }
 /**
  * D14: WU が読むべき context のヒント。
@@ -4221,6 +4501,70 @@ export interface ProjectPlanSpec {
   schema: string;
 }
 /**
+ * D7: 決定の要求（`docs/protocol/decision.schema.json`）。`id` と `path` は daemon が付ける
+ * （LLM に書かせない）。
+ */
+export interface DecisionRequest {
+  /**
+   * 回答（`status = answered` のときだけ）。
+   */
+  answer?: DecisionAnswer | null;
+  cost_note?: string | null;
+  cost_of_reversal: CostOfReversal;
+  /**
+   * daemon が振る ULID（木の中で一意）。
+   */
+  id: string;
+  /**
+   * 出した者が付けた key（計画・run の中で一意）。
+   */
+  key: string;
+  kind: DecisionKind;
+  /**
+   * `<unit key>` | `stage:<key>` | `self`。
+   */
+  needed_before: string[];
+  options: DecisionOption[];
+  /**
+   * root から出した節点まで。
+   */
+  path: DecisionPathEntry[];
+  question: string;
+  raised_by: DecisionRaisedBy;
+  recommended: string;
+  status: DecisionStatus;
+  /**
+   * 取り下げの理由（`status = withdrawn` のときだけ）。
+   */
+  withdrawn_reason?: string | null;
+}
+/**
+ * D7: 回答（`Event::DecisionAnswered` の写し。R1a の明確化: 表の `json` に回答を残すため
+ * `DecisionRequest.answer` に持つ）。
+ */
+export interface DecisionAnswer {
+  by: string;
+  note?: string | null;
+  option: string;
+}
+/**
+ * D7: 木の中の位置の 1 段（root から出した節点まで）。
+ */
+export interface DecisionPathEntry {
+  stage?: string | null;
+  task_id: TaskId;
+  title: string;
+  unit?: string | null;
+}
+/**
+ * D7: 決定を出した節点と run。
+ */
+export interface DecisionRaisedBy {
+  origin: DecisionOrigin;
+  run_id?: string | null;
+  task_id: TaskId;
+}
+/**
  * ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。
  */
 export interface DecomposeRequest {
@@ -4386,6 +4730,10 @@ export interface WorkUnitView {
    * ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`。WU の worktree を切ったときだけ）。
    */
   branch?: string | null;
+  /**
+   * ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
+   */
+  child_task_id?: string | null;
   continuations: number;
   created_at: string;
   depends_on: string[];
@@ -7097,6 +7445,10 @@ export interface DelegatedView {
  */
 export interface ExecutionView {
   /**
+   * ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。
+   */
+  awaiting_children?: AwaitedChildView[];
+  /**
    * D13: Complexity Gate の判定（gate が判定していない Task には無い）。
    */
   gate?: ExecutionGateDecision | null;
@@ -7110,6 +7462,24 @@ export interface ExecutionView {
    * 計画が無い Task（D20:「直接実行」の 1 行）は `None`。
    */
   plan?: ExecutionPlanOverview | null;
+}
+/**
+ * ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
+ */
+export interface AwaitedChildView {
+  /**
+   * 子の状態（作られていなければ `None`）。
+   */
+  status?: Status | null;
+  /**
+   * 子 task（まだ作られていない unit〈`max_parallel_child_tasks` の空き待ち〉は `None`）。
+   */
+  task_id?: TaskId | null;
+  title: string;
+  /**
+   * 親の計画の unit の key。
+   */
+  unit_key: string;
 }
 /**
  * D19: Task 単位の実行メトリクス（`GET /tasks/{id}/execution` と `GET /metrics/execution` の材料）。
@@ -7277,6 +7647,10 @@ export interface ExecutionWorkUnitView {
    * ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`）。
    */
   branch?: string | null;
+  /**
+   * ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
+   */
+  child_task_id?: string | null;
   continuations: number;
   created_at: string;
   depends_on: string[];
@@ -7468,6 +7842,10 @@ export interface EditResult {
  * ADR-0072 D19（Phase E5）: `GET /tasks/{id}/execution` と `GET /metrics/execution`。
  */
 export interface TaskExecutionView {
+  /**
+   * ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。
+   */
+  awaiting_children?: AwaitedChildView[];
   /**
    * D13: Complexity Gate の判定（無ければ gate 対象外か、まだ判定していない）。
    */

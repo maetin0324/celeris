@@ -830,6 +830,7 @@ mod tests {
     fn sample_task(title: &str, attempts: u32) -> Task {
         let now = time::OffsetDateTime::now_utc();
         Task {
+            tree: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

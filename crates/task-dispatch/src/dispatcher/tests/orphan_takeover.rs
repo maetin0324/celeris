@@ -70,6 +70,7 @@ fn running_orphan(
             task_id,
             &Event::Created {
                 task: Box::new(task.clone()),
+                origin: None,
             },
         )
         .unwrap();

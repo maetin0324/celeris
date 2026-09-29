@@ -1291,6 +1291,45 @@
       ],
       "type": "object"
     },
+    "AwaitedChildView": {
+      "description": "ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。",
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Status"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "子の状態（作られていなければ `None`）。"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "子 task（まだ作られていない unit〈`max_parallel_child_tasks` の空き待ち〉は `None`）。"
+        },
+        "title": {
+          "type": "string"
+        },
+        "unit_key": {
+          "description": "親の計画の unit の key。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit_key",
+        "title"
+      ],
+      "type": "object"
+    },
     "BrowserAction": {
       "description": "Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:\nno aliases, categories or pass-through of upstream names.",
       "enum": [
@@ -3877,6 +3916,25 @@
       ],
       "type": "object"
     },
+    "CostOfReversal": {
+      "description": "D7: 後戻りの大きさ。",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "CreatedOrigin": {
+      "description": "ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。",
+      "oneOf": [
+        {
+          "const": "plan_unit",
+          "description": "親の計画（plan/3）の kind task の unit から daemon が作った子 task。",
+          "type": "string"
+        }
+      ]
+    },
     "CredentialRecord": {
       "additionalProperties": false,
       "description": "登録された credential の台帳行（ADR-0080 D3: id・provider・policy・origin だけ）。",
@@ -4421,6 +4479,29 @@
         }
       ]
     },
+    "DecisionAnswer": {
+      "additionalProperties": false,
+      "description": "D7: 回答（`Event::DecisionAnswered` の写し。R1a の明確化: 表の `json` に回答を残すため\n`DecisionRequest.answer` に持つ）。",
+      "properties": {
+        "by": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "option",
+        "by"
+      ],
+      "type": "object"
+    },
     "DecisionBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/approve`、`POST /tasks/{id}/reject` の本文。",
@@ -4445,6 +4526,273 @@
         }
       },
       "type": "object"
+    },
+    "DecisionKind": {
+      "description": "D7: 決定の要求の種類。",
+      "oneOf": [
+        {
+          "const": "choice",
+          "description": "計画・worker が出す選択。",
+          "type": "string"
+        },
+        {
+          "const": "leaf_too_large",
+          "description": "daemon: compound な leaf を子 task にできない深さ（D4 (3)。R2a）。",
+          "type": "string"
+        },
+        {
+          "const": "limit",
+          "description": "daemon: 木の上限の超過（D3。R2a）。",
+          "type": "string"
+        },
+        {
+          "const": "plan_invalid",
+          "description": "daemon: plan/3 の計画が 2 回不正（D9。R2b）。",
+          "type": "string"
+        }
+      ]
+    },
+    "DecisionOption": {
+      "additionalProperties": false,
+      "description": "D7: 選択肢 1 つ。",
+      "properties": {
+        "consequence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。決定の中で一意。",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label"
+      ],
+      "type": "object"
+    },
+    "DecisionOrigin": {
+      "description": "D7: 決定を出した者の種類。",
+      "oneOf": [
+        {
+          "enum": [
+            "planner",
+            "worker",
+            "daemon"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "human",
+          "description": "人が書いた計画（`PUT /tasks/{id}/execution-plan`、origin human）の `decisions`。",
+          "type": "string"
+        }
+      ]
+    },
+    "DecisionPathEntry": {
+      "additionalProperties": false,
+      "description": "D7: 木の中の位置の 1 段（root から出した節点まで）。",
+      "properties": {
+        "stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "title": {
+          "type": "string"
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "DecisionRaisedBy": {
+      "additionalProperties": false,
+      "description": "D7: 決定を出した節点と run。",
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/DecisionOrigin"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "origin"
+      ],
+      "type": "object"
+    },
+    "DecisionRequest": {
+      "additionalProperties": false,
+      "description": "D7: 決定の要求（`docs/protocol/decision.schema.json`）。`id` と `path` は daemon が付ける\n（LLM に書かせない）。",
+      "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionAnswer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "回答（`status = answered` のときだけ）。"
+        },
+        "cost_note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_of_reversal": {
+          "$ref": "#/$defs/CostOfReversal"
+        },
+        "id": {
+          "description": "daemon が振る ULID（木の中で一意）。",
+          "type": "string"
+        },
+        "key": {
+          "description": "出した者が付けた key（計画・run の中で一意）。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DecisionKind"
+        },
+        "needed_before": {
+          "description": "`<unit key>` | `stage:<key>` | `self`。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "root から出した節点まで。",
+          "items": {
+            "$ref": "#/$defs/DecisionPathEntry"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "raised_by": {
+          "$ref": "#/$defs/DecisionRaisedBy"
+        },
+        "recommended": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/DecisionStatus"
+        },
+        "withdrawn_reason": {
+          "description": "取り下げの理由（`status = withdrawn` のときだけ）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "kind",
+        "question",
+        "options",
+        "recommended",
+        "cost_of_reversal",
+        "needed_before",
+        "path",
+        "raised_by",
+        "status"
+      ],
+      "type": "object"
+    },
+    "DecisionSpec": {
+      "additionalProperties": false,
+      "description": "D2 / D7: 計画に書く決定の形（`id` / `path` / `raised_by` / `status` は daemon が付ける）。",
+      "properties": {
+        "cost_note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_of_reversal": {
+          "$ref": "#/$defs/CostOfReversal"
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。",
+          "type": "string"
+        },
+        "needed_before": {
+          "default": [],
+          "description": "止める unit の key か `stage:<key>`。計画の `decisions` では 1 件以上（何を止めるかを書かせる）。\nunit に書いた `decisions` では省略でき、その unit が補われる（D2 の糖衣）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "options": {
+          "description": "2..=5 件。",
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "recommended": {
+          "description": "`options` のどれかの key。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "question",
+        "options",
+        "recommended",
+        "cost_of_reversal"
+      ],
+      "type": "object"
+    },
+    "DecisionStatus": {
+      "description": "D7: 決定の状態。",
+      "enum": [
+        "open",
+        "answered",
+        "withdrawn"
+      ],
+      "type": "string"
     },
     "DecomposeRequest": {
       "additionalProperties": false,
@@ -5300,6 +5648,17 @@
         },
         {
           "properties": {
+            "origin": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CreatedOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から\ndaemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。"
+            },
             "task": {
               "$ref": "#/$defs/Task"
             },
@@ -6431,6 +6790,229 @@
             "approved"
           ],
           "type": "object"
+        },
+        {
+          "description": "ADR-0079 D4 (4): 親の計画の kind task の unit から子 task を作った（親の events に積む）。\n同じトランザクションで `work_units.child_task_id` を書く（store の派生の書き込み）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "child_task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "depth": {
+              "description": "子の深さ（task の層数。root = 1。ADR-0079 付記 U-R1）。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "plan_id": {
+              "description": "親の計画の版（`execution_plans.id`）。",
+              "type": "string"
+            },
+            "type": {
+              "const": "child_task_created",
+              "type": "string"
+            },
+            "unit_key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_id",
+            "unit_key",
+            "child_task_id",
+            "depth"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D15: 既存の task を root の計画の kind task の unit の子として採用した（root の events に\n積む）。同じトランザクションで `work_units.child_task_id` を書く。状態は変えない。",
+          "properties": {
+            "child_task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "stage": {
+              "type": "string"
+            },
+            "type": {
+              "const": "child_adopted",
+              "type": "string"
+            },
+            "unit_key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_id",
+            "unit_key",
+            "stage",
+            "child_task_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D4 (3): unit の gate が planner の宣言と食い違い、daemon が扱いを決めた。\n状態は変えない（発行は R2a）。",
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/UnitGateAction"
+            },
+            "declared": {
+              "$ref": "#/$defs/UnitDeclared"
+            },
+            "depth": {
+              "description": "unit の深さ（= 計画を持つ task の深さ + 1）。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "gate": {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "threshold": {
+              "description": "その深さの gate の閾値（`task_core::tree::gate_threshold`）。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "unit_gate_overridden",
+              "type": "string"
+            },
+            "unit_key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_id",
+            "unit_key",
+            "declared",
+            "gate",
+            "action",
+            "depth",
+            "threshold"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D7: 人への決定の要求（出した節点の events に積む）。同じトランザクションで\n`decisions` の行を書く（store の派生の書き込み）。状態は変えない（発行は R3a 以降）。",
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/DecisionRequest"
+            },
+            "type": {
+              "const": "decision_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D7: 決定への回答（revise も同じ Event。最後の回答が有効）。状態は変えない。",
+          "properties": {
+            "by": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "option": {
+              "type": "string"
+            },
+            "type": {
+              "const": "decision_answered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "option",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D7: 決定の取り下げ（計画の replan・subtree の中止など）。状態は変えない。",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "type": {
+              "const": "decision_withdrawn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D8: root の計画に人の承認が要る（決定を含む / `review: human` / 上限に近い）。\n状態は変えない（同じトランザクションの `Transitioned` が止める。発行は R3b）。",
+          "properties": {
+            "plan_id": {
+              "type": "string"
+            },
+            "reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "plan_approval_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_id",
+            "reasons"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`stall_secs` 続いた。状態は変えない（発行は R3b）。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "type": {
+              "const": "stall_detected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task_id",
+            "detail"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -6971,6 +7553,11 @@
           "const": "awaiting_human",
           "description": "ADR-0074 D2.2（Phase F3 途中確認）: 工程の後の途中確認で止まっている（`blocked` で、直前の\n遷移の reason が `awaiting_human`）。",
           "type": "string"
+        },
+        {
+          "const": "awaiting_children",
+          "description": "ADR-0079 D5（Phase R1b）: `ready` のまま、走れる自分の leaf が無く子 task（計画の kind task の\nunit）だけを待っている（dispatch されず lease も持たない。待っている子は\n`ExecutionView.awaiting_children`）。",
+          "type": "string"
         }
       ]
     },
@@ -7041,6 +7628,13 @@
           },
           "type": "array"
         },
+        "decisions": {
+          "description": "ADR-0079 D2 / D7: /3 の決定（人に選んでもらう点）。",
+          "items": {
+            "$ref": "#/$defs/DecisionSpec"
+          },
+          "type": "array"
+        },
         "phases": {
           "default": [],
           "description": "v2 のみ。v1 では空でなければならない（`validate`）。",
@@ -7055,7 +7649,23 @@
         "schema": {
           "type": "string"
         },
+        "stages": {
+          "description": "ADR-0079 D2（Phase R1a）: /3 の段階（/1・/2 では空。空なら出力しない〈/1・/2 の JSON は不変〉）。",
+          "items": {
+            "$ref": "#/$defs/StageSpec"
+          },
+          "type": "array"
+        },
+        "units": {
+          "description": "ADR-0079 D2: /3 の unit（leaf | 子 task）。",
+          "items": {
+            "$ref": "#/$defs/PlanUnitSpec"
+          },
+          "type": "array"
+        },
         "work_units": {
+          "default": [],
+          "description": "/1・/2 では 1 件以上。ADR-0079（Phase R1a）: /3 は `units` を使い、ここは空（省略可）。",
           "items": {
             "$ref": "#/$defs/WorkUnitSpec"
           },
@@ -7064,8 +7674,7 @@
       },
       "required": [
         "schema",
-        "rationale",
-        "work_units"
+        "rationale"
       ],
       "type": "object"
     },
@@ -7229,6 +7838,13 @@
     "ExecutionView": {
       "description": "D19/D20: タスク詳細の Execution 節そのもの。",
       "properties": {
+        "awaiting_children": {
+          "description": "ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。",
+          "items": {
+            "$ref": "#/$defs/AwaitedChildView"
+          },
+          "type": "array"
+        },
         "gate": {
           "anyOf": [
             {
@@ -7303,6 +7919,13 @@
         },
         "branch": {
           "description": "ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "child_task_id": {
+          "description": "ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。",
           "type": [
             "string",
             "null"
@@ -10690,6 +11313,35 @@
       ],
       "type": "object"
     },
+    "ParentUnit": {
+      "additionalProperties": false,
+      "description": "D4 (4): 子 task が親の計画のどの unit から作られたか（`Task.tree.parent_unit`）。",
+      "properties": {
+        "plan_id": {
+          "description": "親の計画の版（`execution_plans.id`）。",
+          "type": "string"
+        },
+        "stage": {
+          "description": "その unit の段階の key（`work_units.phase`）。",
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "親 task（`Task.parent_id` と同じ値。採用〈adopt、D15〉で `parent_id` を書き換えない子では\nこちらだけが木の親を指す）。"
+        },
+        "unit_key": {
+          "description": "親の計画の unit の key（`work_units.key`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "plan_id",
+        "unit_key",
+        "stage"
+      ],
+      "type": "object"
+    },
     "PausePolicy": {
       "description": "D2.1: `NewTaskSpec.pause_after` / `PATCH` / `PUT /tasks/{id}/execution/pause-after` /\nCoS の `create_task.pause_after` に書ける値。既定は `None`（全工程自動）。\n**planner は書けない**（`ExecutionPlanSpec` に欄が無い。`deny_unknown_fields` で拒否される）。",
       "oneOf": [
@@ -11166,6 +11818,135 @@
           "type": "string"
         }
       ]
+    },
+    "PlanUnitSpec": {
+      "additionalProperties": false,
+      "description": "ADR-0079 D2: /3 の unit。`kind = task` なら子 task（`acceptance` 必須、`checks` / `budget` /\n`harness` / `context.paths` は持たない）、それ以外は leaf（今の WorkUnit の欄 + `needs_decisions`。\n`checks` 1 本以上）。`assignee` / `tier` / `model` / `lane` は持たない（`deny_unknown_fields`）。",
+      "properties": {
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/Criterion"
+          },
+          "type": "array"
+        },
+        "adopt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "D15: 既存の task をこの unit の子として採用する（人の計画〈origin human〉だけ）。"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkUnitBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/WorkUnitCheck"
+          },
+          "type": "array"
+        },
+        "context": {
+          "$ref": "#/$defs/UnitContext"
+        },
+        "decisions": {
+          "description": "この unit が持ち込む決定（計画の `decisions` に `needed_before: [<この unit>]` を付けて移した\nものとして読む。D2 の糖衣）。",
+          "items": {
+            "$ref": "#/$defs/DecisionSpec"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "description": "unit の key（leaf・task を問わない）。/2 の `child:<key>` は書けない。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "done_when": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "features": {
+          "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
+        },
+        "genre": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkUnitKind"
+        },
+        "needs_decisions": {
+          "description": "回答を待つ決定の key（計画の `decisions`・unit の `decisions`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "outputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repos": {
+          "description": "親の repos の部分集合（repo の名前。子の生成〈R1b〉で検証する）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stage": {
+          "description": "`stages` の key。",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "stage",
+        "kind",
+        "title",
+        "objective"
+      ],
+      "type": "object"
     },
     "PriorityInput": {
       "anyOf": [
@@ -13529,6 +14310,20 @@
       ],
       "type": "string"
     },
+    "RepoSelector": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "ADR-0079 D4 (2): leaf の `context.repo`（1 つの文字列、または配列。leaf は高々 1 つ）。"
+    },
     "RepoState": {
       "properties": {
         "base": {
@@ -15535,6 +16330,39 @@
       ],
       "type": "object"
     },
+    "StageReview": {
+      "description": "ADR-0079 D2 / D5: 段階の後の人の確認（`review: human` は ADR-0074 D2 の `pause_after` をその段階に\n指定したのと同じ意味。既定 none）。",
+      "enum": [
+        "none",
+        "human"
+      ],
+      "type": "string"
+    },
+    "StageSpec": {
+      "additionalProperties": false,
+      "description": "ADR-0079 D2: /3 の段階（/2 の `PhaseSpec` に `review` を足した形）。",
+      "properties": {
+        "key": {
+          "description": "`[a-z0-9-]{1,32}`。計画の中で一意。`work_units.phase` の値になる。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkUnitKind"
+        },
+        "review": {
+          "$ref": "#/$defs/StageReview"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "title"
+      ],
+      "type": "object"
+    },
     "StandingRule": {
       "description": "永続の認可 1 行（`standing_rules` テーブル。ADR-0033 D5）。",
       "properties": {
@@ -15845,6 +16673,17 @@
         },
         "title": {
           "type": "string"
+        },
+        "tree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TreeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 D4 (4) / D15（Phase R1a）: 再帰的な task の木の中の位置（root・深さ・親の unit・基点）。\n木に属さない従来の task には無い（深さ 1 の節点として扱う。`tasks.root_id` も NULL のまま）。\n子 task の生成（R1b）が書く。"
         },
         "updated_at": {
           "type": "string"
@@ -16305,6 +17144,13 @@
     "TaskExecutionView": {
       "description": "`GET /tasks/{id}/execution`: 計画・WU 一覧・run 一覧（checkpoint 込み）・metrics・\nExecutionPhase を 1 つにまとめた、Execution 節の専用の深掘りビュー\n（`TaskDetail.execution` は要約、こちらは全文）。",
       "properties": {
+        "awaiting_children": {
+          "description": "ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。",
+          "items": {
+            "$ref": "#/$defs/AwaitedChildView"
+          },
+          "type": "array"
+        },
         "gate": {
           "anyOf": [
             {
@@ -17429,6 +18275,45 @@
       ],
       "type": "object"
     },
+    "TreeInfo": {
+      "additionalProperties": false,
+      "description": "D4 (4) / D15: `Task.tree`。木に属する task だけが持つ（`None` は木を持たない従来の task = 深さ 1 の\n節点として扱う。`root_id` 列も NULL のまま埋め戻さない。D15）。",
+      "properties": {
+        "base_commit": {
+          "description": "D6: 子の worktree を切る基点（親の段階の基点、または同じ段階の依存先の HEAD。R1c で使う）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "depth": {
+          "description": "task の層数で数えた深さ（root = 1、子 = 2、孫 = 3。U-R1）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parent_unit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParentUnit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "子 task なら、作られた元の親の unit（root は `None`）。"
+        },
+        "root_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "木の root task（root 自身なら自分の id）。`tasks.root_id` 列（索引）の正本。"
+        }
+      },
+      "required": [
+        "root_id",
+        "depth"
+      ],
+      "type": "object"
+    },
     "TreeRepoView": {
       "description": "`TreeView.repos[]` の 1 件。",
       "properties": {
@@ -17534,6 +18419,74 @@
         "up"
       ],
       "type": "object"
+    },
+    "UnitContext": {
+      "additionalProperties": false,
+      "description": "ADR-0079 D2: /3 の unit の context（/1・/2 の `WorkUnitContext` に `repo` を足した形）。",
+      "properties": {
+        "from_work_units": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "knowledge": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepoSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UnitDeclared": {
+      "description": "D4 (3): planner が unit に宣言した種類（`Event::UnitGateOverridden.declared`）。",
+      "enum": [
+        "leaf",
+        "task"
+      ],
+      "type": "string"
+    },
+    "UnitGateAction": {
+      "description": "D4 (3): unit の gate が planner の宣言と食い違ったときに daemon が取った行動。",
+      "oneOf": [
+        {
+          "const": "promoted",
+          "description": "leaf と宣言されたが compound、子 task を持てる深さ → task に上げた。",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "leaf と宣言されたが compound、子 task を持てない深さ → 決定の要求（`leaf_too_large`）。",
+          "type": "string"
+        },
+        {
+          "const": "kept_task",
+          "description": "task と宣言され atomic だが、構造上の理由があるので task のまま。",
+          "type": "string"
+        },
+        {
+          "const": "demoted",
+          "description": "task と宣言され atomic、構造上の理由なし・leaf の基準を満たす → leaf に下げた。",
+          "type": "string"
+        }
+      ]
     },
     "Usage": {
       "description": "DESIGN §5.3 の `usage`。取れない項目は省略可。\n\nADR-0061（Phase 104）: harness routing 基盤で `cache_read_tokens` / `cache_creation_tokens` /\n`cost_usd` を追加した（追加のみ。既存の `input_tokens` / `output_tokens` の意味は変えない）。\n`Eq` は落とした（`cost_usd: Option<f64>` は `Eq` を持てない）。",
@@ -17718,6 +18671,11 @@
           "const": "integrate",
           "description": "ADR-0074 D1.4（Phase F2）: 工程末尾の統合 WU（daemon が計画の採用時に足す system WU。\n`runs = 0`、LLM run を起こさない）。planner の出力に書かれていれば検証で拒否する\n（`validate` の `ReservedKind`。system WU 専用の予約語）。",
           "type": "string"
+        },
+        {
+          "const": "task",
+          "description": "ADR-0079 D2（Phase R1a）: 子 task の unit（`celeris.execution-plan/3` だけ。/1・/2 では検証で拒否）。\n`work_units` の行は子 task の代理で、LLM run を起こさない（子 task の生成は R1b）。",
+          "type": "string"
         }
       ]
     },
@@ -17845,6 +18803,13 @@
         },
         "branch": {
           "description": "ADR-0074 D1.2: WU のブランチ（`celeris-wu/<task_id>/<key>`。WU の worktree を切ったときだけ）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "child_task_id": {
+          "description": "ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。",
           "type": [
             "string",
             "null"

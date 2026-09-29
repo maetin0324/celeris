@@ -129,7 +129,7 @@ pub fn rev_parse(dir: &Path, rev: &str) -> Option<String> {
 }
 
 /// `sha` がこのリポジトリの commit として解決できれば、その全長 sha。
-fn commit_in(dir: &Path, sha: &str) -> Option<String> {
+pub fn commit_in(dir: &Path, sha: &str) -> Option<String> {
     if sha.is_empty() {
         return None;
     }
@@ -147,19 +147,41 @@ fn commit_in(dir: &Path, sha: &str) -> Option<String> {
 /// 3. 依存先が WU のブランチを持っていたのに ref が消えている: `head_commit` → `base_commit`
 ///    （commit の無い done は `head_commit == base_commit`）。どちらも解決できなければ `Err`
 ///    （時間では直らない。呼び出し側は WU を blocked にして人に聞く）。
+///
+/// ADR-0079 D6（Phase R1c）: 依存先が kind task の unit（子 task）なら、子のブランチ
+/// `<branch_prefix><child_task_id>`（子の成果の置き場）の HEAD → 記録した `head_commit`（子の done の時点の
+/// HEAD）→ Task ブランチの HEAD（子がブランチを持たなかった: shared / remote）の順。子 task の基点
+/// （`Task.tree.base_commit`）にも同じ関数を使う（葉と同じ規則で決まる）。
 pub fn dependency_base(
     repo: &Path,
     task_id: &str,
     dep: &task_core::WorkUnitRow,
     task_branch: &str,
+    branch_prefix: &str,
 ) -> Result<String, String> {
+    let recorded = |c: &Option<String>| c.as_deref().and_then(|sha| commit_in(repo, sha));
+    if dep.kind == task_core::WorkUnitKind::Task {
+        return dep
+            .child_task_id
+            .as_deref()
+            .and_then(|child| rev_parse(repo, &format!("refs/heads/{branch_prefix}{child}")))
+            .or_else(|| recorded(&dep.head_commit))
+            .or_else(|| rev_parse(repo, &format!("refs/heads/{task_branch}")))
+            .ok_or_else(|| {
+                format!(
+                    "dependency {} is a child task unit but neither its branch, its recorded head_commit \
+                     nor the task branch {task_branch} exist in {}",
+                    dep.key,
+                    repo.display()
+                )
+            });
+    }
     if let Some(sha) = rev_parse(
         repo,
         &format!("refs/heads/{}", wu_branch(task_id, &dep.key)),
     ) {
         return Ok(sha);
     }
-    let recorded = |c: &Option<String>| c.as_deref().and_then(|sha| commit_in(repo, sha));
     if dep.branch.is_none() {
         return recorded(&dep.head_commit)
             .or_else(|| recorded(&dep.integrated_commit))
@@ -215,11 +237,35 @@ pub fn commit_all(dir: &Path, message: &str) -> Result<(String, bool), String> {
     Ok((head, committed))
 }
 
-/// 工程の統合で merge する 1 件（葉の WU）。
+/// 工程の統合で merge する 1 件（葉の WU、または ADR-0079 D5 / D6 の kind task の unit の子 task）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeItem {
     pub key: String,
     pub branch: String,
+    /// ADR-0079 D6（Phase R1c）: このリポジトリにブランチが無ければ飛ばす（`merged` に出さない）。
+    /// 子 task のブランチは子の repos（親の部分集合）にだけあるので `true`。WU のブランチは `false`
+    /// （無ければ `Err`。従来どおり）。
+    pub optional: bool,
+}
+
+impl MergeItem {
+    /// WU のブランチ（無ければ `Err`）。
+    pub fn work_unit(key: impl Into<String>, branch: impl Into<String>) -> Self {
+        MergeItem {
+            key: key.into(),
+            branch: branch.into(),
+            optional: false,
+        }
+    }
+
+    /// ADR-0079 D6: 子 task のブランチ `celeris/<child_id>`（このリポジトリに無ければ飛ばす）。
+    pub fn child_task(key: impl Into<String>, branch: impl Into<String>) -> Self {
+        MergeItem {
+            key: key.into(),
+            branch: branch.into(),
+            optional: true,
+        }
+    }
 }
 
 /// 1 件の merge の結果。
@@ -267,6 +313,9 @@ pub fn integrate(
     let mut merged = Vec::new();
     for item in items {
         let Some(commit) = rev_parse(task_tree, &format!("refs/heads/{}", item.branch)) else {
+            if item.optional {
+                continue;
+            }
             return Err(format!(
                 "work unit branch {} does not exist in {}",
                 item.branch,
@@ -446,10 +495,7 @@ mod tests {
             let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
             std::fs::write(wt.dir.join(format!("{key}.txt")), key).unwrap();
             commit_all(&wt.dir, &commit_message(key, key)).unwrap();
-            items.push(MergeItem {
-                key: key.into(),
-                branch: wu_branch("T1", key),
-            });
+            items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
         }
         let out = integrate(&task_tree, &items, "build").unwrap();
         assert!(out.conflict.is_none());
@@ -481,10 +527,7 @@ mod tests {
             let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
             std::fs::write(wt.dir.join(format!("{key}.txt")), key).unwrap();
             commit_all(&wt.dir, &commit_message(key, key)).unwrap();
-            items.push(MergeItem {
-                key: key.into(),
-                branch: wu_branch("T1", key),
-            });
+            items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
         }
         // 1 件目だけ入った状態で「落ちた」ことにする。さらに 2 件目の merge を途中で止める
         // （`--no-commit` で MERGE_HEAD を残す）。
@@ -524,10 +567,7 @@ mod tests {
             let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
             std::fs::write(wt.dir.join("shared.txt"), text).unwrap();
             commit_all(&wt.dir, &commit_message(key, key)).unwrap();
-            items.push(MergeItem {
-                key: key.into(),
-                branch: wu_branch("T1", key),
-            });
+            items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
         }
         let before = rev_parse(&task_tree, "HEAD").unwrap();
         let out = integrate(&task_tree, &items, "build").unwrap();
@@ -569,10 +609,7 @@ mod tests {
         commit_all(&b.dir, "wu/b: b").unwrap();
         let out = integrate(
             &task_tree,
-            &[MergeItem {
-                key: "b".into(),
-                branch: wu_branch("T1", "b"),
-            }],
+            &[MergeItem::work_unit("b", wu_branch("T1", "b"))],
             "build",
         )
         .unwrap();
@@ -641,7 +678,7 @@ mod tests {
         a.branch = Some(wu_branch("T1", "a"));
         a.head_commit = Some(bogus.clone());
         assert_eq!(
-            dependency_base(&repo, "T1", &a, "celeris/T1").unwrap(),
+            dependency_base(&repo, "T1", &a, "celeris/T1", "celeris/").unwrap(),
             a_head
         );
 
@@ -650,21 +687,21 @@ mod tests {
         let mut remerge = dep_row("remerge", task_core::WorkUnitKind::Repair);
         remerge.head_commit = Some(repair_head.clone());
         assert_eq!(
-            dependency_base(&repo, "T1", &remerge, "celeris/T1").unwrap(),
+            dependency_base(&repo, "T1", &remerge, "celeris/T1", "celeris/").unwrap(),
             repair_head
         );
         // commit しなかった（head も base も無い）repair WU: Task ブランチの HEAD。
         let task_head = commit_file(&task_tree, "later.txt");
         let nothing = dep_row("nothing", task_core::WorkUnitKind::Repair);
         assert_eq!(
-            dependency_base(&repo, "T1", &nothing, "celeris/T1").unwrap(),
+            dependency_base(&repo, "T1", &nothing, "celeris/T1", "celeris/").unwrap(),
             task_head
         );
         // 記録した head がこのリポジトリに無ければ Task ブランチの HEAD。
         let mut stale = dep_row("stale", task_core::WorkUnitKind::Repair);
         stale.head_commit = Some(bogus.clone());
         assert_eq!(
-            dependency_base(&repo, "T1", &stale, "celeris/T1").unwrap(),
+            dependency_base(&repo, "T1", &stale, "celeris/T1", "celeris/").unwrap(),
             task_head
         );
 
@@ -672,7 +709,7 @@ mod tests {
         let mut integ = dep_row("integrate-p", task_core::WorkUnitKind::Integrate);
         integ.integrated_commit = Some(repair_head.clone());
         assert_eq!(
-            dependency_base(&repo, "T1", &integ, "celeris/T1").unwrap(),
+            dependency_base(&repo, "T1", &integ, "celeris/T1", "celeris/").unwrap(),
             repair_head
         );
 
@@ -681,22 +718,94 @@ mod tests {
         gone.branch = Some(wu_branch("T1", "gone"));
         gone.head_commit = Some(repair_head.clone());
         assert_eq!(
-            dependency_base(&repo, "T1", &gone, "celeris/T1").unwrap(),
+            dependency_base(&repo, "T1", &gone, "celeris/T1", "celeris/").unwrap(),
             repair_head
         );
         gone.head_commit = None;
         gone.base_commit = Some(main.clone());
         assert_eq!(
-            dependency_base(&repo, "T1", &gone, "celeris/T1").unwrap(),
+            dependency_base(&repo, "T1", &gone, "celeris/T1", "celeris/").unwrap(),
             main
         );
         // どれも解決できない: Err（呼び出し側は blocked にする）。
         gone.head_commit = Some(bogus.clone());
         gone.base_commit = None;
-        let err = dependency_base(&repo, "T1", &gone, "celeris/T1").unwrap_err();
+        let err = dependency_base(&repo, "T1", &gone, "celeris/T1", "celeris/").unwrap_err();
         assert!(err.contains("dependency branch of gone"), "{err}");
         // Task の worktree で走った WU でも、Task ブランチまで無ければ Err。
-        let err = dependency_base(&repo, "T1", &nothing, "celeris/missing").unwrap_err();
+        let err =
+            dependency_base(&repo, "T1", &nothing, "celeris/missing", "celeris/").unwrap_err();
         assert!(err.contains("ran in the task worktree"), "{err}");
+    }
+
+    /// ADR-0079 D6（Phase R1c）: 子 task のブランチ（`optional`）は、このリポジトリに無ければ飛ばし
+    /// （`merged` に出さない）、既に入っていれば `skipped`（採用した done の子の成果が既に親ブランチに
+    /// ある場合の冪等）。WU のブランチが無ければ従来どおり `Err`。
+    #[test]
+    fn child_task_branches_are_optional_and_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let (repo, _task_dir, task_tree) = setup(root.path());
+        // 子のブランチ（親ブランチの HEAD から切った別の worktree で commit）。
+        let child_dir = root.path().join("ws").join("C1").join("tree");
+        let child = LocalWorktree {
+            repo: repo.clone(),
+            task_dir: root.path().join("ws").join("C1"),
+            dir: child_dir.clone(),
+            branch: "celeris/C1".into(),
+            base: BaseRef {
+                kind: BaseKind::Parent,
+                sha: rev_parse(&task_tree, "HEAD").unwrap(),
+            },
+        };
+        child.ensure_blocking().unwrap();
+        let child_head = commit_file(&child_dir, "c.txt");
+        let items = vec![
+            MergeItem::child_task("missing", "celeris/NOPE"),
+            MergeItem::child_task("c", "celeris/C1"),
+        ];
+        let out = integrate(&task_tree, &items, "s1").unwrap();
+        assert!(out.conflict.is_none());
+        assert_eq!(
+            out.merged,
+            vec![Merged {
+                key: "c".into(),
+                commit: child_head.clone(),
+                skipped: false
+            }]
+        );
+        assert!(task_tree.join("c.txt").is_file());
+        // もう一度: 既に入っているので飛ばす。
+        let again = integrate(&task_tree, &items, "s1").unwrap();
+        assert_eq!(again.merged.len(), 1);
+        assert!(again.merged[0].skipped);
+        // WU のブランチが無ければ Err（従来どおり）。
+        let err = integrate(
+            &task_tree,
+            &[MergeItem::work_unit("x", "celeris-wu/T1/x")],
+            "s1",
+        )
+        .unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+
+        // `dependency_base`: 依存先が kind task の unit なら子のブランチの HEAD → 記録した head → Task ブランチ。
+        let mut dep = dep_row("c", task_core::WorkUnitKind::Task);
+        dep.child_task_id = Some("C1".into());
+        assert_eq!(
+            dependency_base(&repo, "T1", &dep, "celeris/T1", "celeris/").unwrap(),
+            child_head
+        );
+        dep.child_task_id = Some("GONE".into());
+        dep.head_commit = Some(child_head.clone());
+        assert_eq!(
+            dependency_base(&repo, "T1", &dep, "celeris/T1", "celeris/").unwrap(),
+            child_head
+        );
+        dep.head_commit = None;
+        assert_eq!(
+            dependency_base(&repo, "T1", &dep, "celeris/T1", "celeris/").unwrap(),
+            rev_parse(&repo, "refs/heads/celeris/T1").unwrap()
+        );
+        let err = dependency_base(&repo, "T1", &dep, "celeris/missing", "celeris/").unwrap_err();
+        assert!(err.contains("child task unit"), "{err}");
     }
 }

@@ -88,6 +88,11 @@
           "const": "integrate",
           "description": "ADR-0074 D1.4（Phase F2）: 工程末尾の統合 WU（daemon が計画の採用時に足す system WU。\n`runs = 0`、LLM run を起こさない）。planner の出力に書かれていれば検証で拒否する\n（`validate` の `ReservedKind`。system WU 専用の予約語）。",
           "type": "string"
+        },
+        {
+          "const": "task",
+          "description": "ADR-0079 D2（Phase R1a）: 子 task の unit（`celeris.execution-plan/3` だけ。/1・/2 では検証で拒否）。\n`work_units` の行は子 task の代理で、LLM run を起こさない（子 task の生成は R1b）。",
+          "type": "string"
         }
       ]
     },

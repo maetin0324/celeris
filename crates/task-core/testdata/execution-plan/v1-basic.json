@@ -1,0 +1,14 @@
+{
+  "schema": "celeris.execution-plan/1",
+  "rationale": "調査してから実装し、最後に検査する",
+  "work_units": [
+    {"key": "impl", "kind": "implement", "title": "実装する", "objective": "store に列を足して読み書きを通す", "depends_on": ["survey"],
+     "done_when": ["cargo test が通る"], "checks": [{"cmd": "cargo test -p task-core", "expect_exit": 0}],
+     "context": {"paths": ["crates/task-core/src"], "from_work_units": ["survey"], "knowledge": []},
+     "features": {"judgment": "medium"}, "budget": {"max_turns": 120, "max_wall_secs": 7200}, "outputs": ["patch"]},
+    {"key": "survey", "kind": "investigate", "title": "既存の migration を読む", "objective": "0027 から 0029 の書き方を調べてまとめる",
+     "done_when": ["artifacts/survey.md がある"], "checks": [{"cmd": "test -s artifacts/survey.md"}], "harness": "claude-code"},
+    {"key": "verify", "kind": "test", "title": "全体の検査", "objective": "workspace 全体のテストと clippy を通す", "depends_on": ["impl"],
+     "checks": [{"cmd": "cargo clippy --workspace -- -D warnings", "expect_exit": 0}], "budget": {"max_turns": 40}}
+  ]
+}

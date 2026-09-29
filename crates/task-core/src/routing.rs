@@ -282,6 +282,7 @@ mod tests {
 
         let now = OffsetDateTime::now_utc();
         let task = Task {
+            tree: None,
             routing: None,
             mode: TaskMode::default(),
             skills: Vec::new(),

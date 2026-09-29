@@ -17,7 +17,14 @@ use task_core::browser_identity::{
 };
 use task_core::browser_store::{BrowserStoreError, StoredIdentity};
 
+use axum::body::Body;
+use axum::extract::{RawQuery, State};
+use axum::http::HeaderMap;
+
+use crate::handlers::{ApiResult, Params, json_response, no_query, read_body};
+use crate::middleware::require_admin;
 use crate::problem::ApiProblem;
+use crate::state::ApiState;
 
 /// 登録の入力。`state` は取り込む cookie / storage（封緘してから保存し、平文は残さない）。
 #[derive(Deserialize)]
@@ -242,6 +249,187 @@ impl IdentityService<'_> {
         // authorize_use は TrustedLocal を必ず拒否する。ここに来るのは隔離の経路ができた後だけ。
         Err(IdentityApiError::Denied(IdentityDenied::IsolationRequired))
     }
+}
+
+// ---- HTTP（/api/v1/browser/identities）----
+
+const IDENTITY_BODY_MAX_BYTES: usize = 256 * 1024;
+
+fn unavailable() -> ApiProblem {
+    ApiProblem::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "identity_unavailable",
+        "identity sealing is not configured",
+    )
+}
+
+fn body_invalid() -> ApiProblem {
+    // 本文（state の cookie 等）は応答に写さない。
+    ApiProblem::new(
+        StatusCode::BAD_REQUEST,
+        "identity_body_invalid",
+        "identity request body is invalid",
+    )
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// `name=value` の query から 1 つ取り出す（他の鍵は拒否）。
+fn query_param(raw: &Option<String>, name: &str) -> Result<String, ApiProblem> {
+    let bad = || {
+        ApiProblem::new(
+            StatusCode::BAD_REQUEST,
+            "identity_query_invalid",
+            "identity query is invalid",
+        )
+    };
+    let raw = raw.as_deref().ok_or_else(bad)?;
+    let mut found = None;
+    for pair in raw.split('&').filter(|p| !p.is_empty()) {
+        let (k, v) = pair.split_once('=').ok_or_else(bad)?;
+        if k != name || found.is_some() || v.is_empty() {
+            return Err(bad());
+        }
+        found = Some(v.to_owned());
+    }
+    found.ok_or_else(bad)
+}
+
+async fn run<T, F>(state: &ApiState, f: F) -> Result<T, ApiProblem>
+where
+    T: Send + 'static,
+    F: FnOnce(IdentityService<'_>) -> Result<T, IdentityApiError> + Send + 'static,
+{
+    let sealer = state.identity_sealer.clone().ok_or_else(unavailable)?;
+    state
+        .blocking(move |store| {
+            f(IdentityService {
+                store,
+                sealer: &sealer,
+            })
+            .map_err(|e| e.problem())
+        })
+        .await
+}
+
+pub(crate) async fn register_identity(
+    State(state): State<ApiState>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let bytes = read_body(body).await?;
+    if bytes.len() > IDENTITY_BODY_MAX_BYTES {
+        return Err(body_invalid());
+    }
+    let input: IdentityRegisterInput =
+        serde_json::from_slice(&bytes).map_err(|_| body_invalid())?;
+    let now = now_secs();
+    let view = run(&state, move |svc| svc.register(input, now)).await?;
+    Ok(json_response(
+        StatusCode::CREATED,
+        &serde_json::json!({"identity": view}),
+    ))
+}
+
+pub(crate) async fn list_identities(
+    State(state): State<ApiState>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    let project_id = query_param(&raw, "project_id")?;
+    let now = now_secs();
+    let views = run(&state, move |svc| svc.list(&project_id, now)).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &serde_json::json!({"identities": views}),
+    ))
+}
+
+pub(crate) async fn revoke_identity(
+    State(state): State<ApiState>,
+    Params(id): Params<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let view = run(&state, move |svc| svc.revoke(&id)).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &serde_json::json!({"identity": view}),
+    ))
+}
+
+pub(crate) async fn delete_identity(
+    State(state): State<ApiState>,
+    Params(id): Params<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let view = run(&state, move |svc| svc.delete(&id)).await?;
+    Ok(json_response(
+        StatusCode::OK,
+        &serde_json::json!({"identity": view}),
+    ))
+}
+
+#[derive(Deserialize)]
+struct RestoreBody {
+    project_id: String,
+    origin: String,
+}
+
+/// 利用の入口。trusted local では常に 403 `isolation_required`（ADR-0083 D3）。
+pub(crate) async fn restore_identity(
+    State(state): State<ApiState>,
+    Params(id): Params<String>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let bytes = read_body(body).await?;
+    let req: RestoreBody = serde_json::from_slice(&bytes).map_err(|_| body_invalid())?;
+    let now = now_secs();
+    run(&state, move |svc| {
+        svc.restore(&id, &req.project_id, &req.origin, now)
+    })
+    .await?;
+    Ok(json_response(
+        StatusCode::NO_CONTENT,
+        &serde_json::json!({}),
+    ))
+}
+
+pub(crate) fn routes() -> axum::Router<ApiState> {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route(
+            "/api/v1/browser/identities",
+            get(list_identities).post(register_identity),
+        )
+        .route(
+            "/api/v1/browser/identities/{id}",
+            axum::routing::delete(delete_identity),
+        )
+        .route(
+            "/api/v1/browser/identities/{id}/revoke",
+            post(revoke_identity),
+        )
+        .route(
+            "/api/v1/browser/identities/{id}/restore",
+            post(restore_identity),
+        )
 }
 
 /// 保存された封緘 blob を読み戻す（開封は credentiald が行う）。

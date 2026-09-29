@@ -227,6 +227,7 @@ name = "celeris"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "celeris-credentiald",
  "celeris-mcp",
  "clap",
  "llm-proxy",

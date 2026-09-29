@@ -162,10 +162,7 @@ impl SqliteStore {
         let mut stmt = conn.prepare(
             "SELECT event_seq, body_json FROM browser_live_events WHERE task_id=?1 AND run_id=?2 AND session_id=?3 AND event_seq>?4 ORDER BY event_seq LIMIT ?5",
         )?;
-        let after = match i64::try_from(after) {
-            Ok(value) => value,
-            Err(_) => i64::MAX,
-        };
+        let after = i64::try_from(after).unwrap_or(i64::MAX);
         let rows = stmt.query_map(
             params![
                 key.task_id,
@@ -199,10 +196,7 @@ impl SqliteStore {
     ) -> Result<usize, StoreError> {
         nonempty_key(key)?;
         let conn = self.lock()?;
-        let before = match i64::try_from(before) {
-            Ok(value) => value,
-            Err(_) => i64::MAX,
-        };
+        let before = i64::try_from(before).unwrap_or(i64::MAX);
         Ok(conn.execute(
             "DELETE FROM browser_live_events WHERE task_id=?1 AND run_id=?2 AND session_id=?3 AND event_seq<?4 AND event_seq < (SELECT MAX(event_seq) FROM browser_live_events WHERE task_id=?1 AND run_id=?2 AND session_id=?3)",
             params![key.task_id, key.run_id, key.session_id, before],

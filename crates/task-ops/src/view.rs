@@ -173,6 +173,19 @@ pub enum ExecutionPhase {
     /// unit）だけを待っている（dispatch されず lease も持たない。待っている子は
     /// `ExecutionView.awaiting_children`）。
     AwaitingChildren,
+    /// ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked` で、直前の遷移の reason が
+    /// `awaiting_plan_approval`）。理由は `ExecutionView.plan_approval`。
+    AwaitingPlanApproval,
+}
+
+/// ADR-0079 D8（Phase R3b）: 承認を待っている root の計画（Execution 節と GUI の 3 つのボタンの材料）。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct PlanApprovalView {
+    pub plan_id: String,
+    /// `PlanApprovalRequested.reasons`（`decisions:<key>,…` / `review_human:<stage>` / `near_limit:<設定名>:<値>/<上限>`）。
+    pub reasons: Vec<String>,
+    /// 理由の人が読む 1 行。
+    pub summary: String,
 }
 
 /// ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
@@ -217,6 +230,9 @@ pub struct ExecutionView {
     /// ADR-0079 D5（Phase R1b）: `awaiting_children` のときだけ。待っている子（unit の `seq` 順）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub awaiting_children: Vec<AwaitedChildView>,
+    /// ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_approval: Option<PlanApprovalView>,
 }
 
 /// D20: 計画の概要（現在アクティブでない Task でも、生涯で作った WU をまとめて見せる。
@@ -468,6 +484,9 @@ pub enum Action {
     /// phase-gate` の continue / replan / withdraw）。`blocked(awaiting_human)` のときだけで、その間は
     /// `Answer` を出さない（events が要るので `actions_with_events` が足す）。
     PhaseGate,
+    /// ADR-0079 D8（Phase R3b）: root の計画の承認に応える（`POST /tasks/{id}/execution/plan-gate` の
+    /// approve / replan / withdraw）。`blocked(awaiting_plan_approval)` のときだけで、その間は `Answer` を出さない。
+    PlanGate,
 }
 
 pub fn task_ref(task: &Task) -> TaskRef {
@@ -521,6 +540,11 @@ pub fn actions_with_events(task: &Task, events: &[(u64, Event)]) -> Vec<Action> 
     if crate::phase_gate::is_awaiting_human(task, events) {
         out.retain(|a| *a != Action::Answer);
         out.push(Action::PhaseGate);
+    }
+    // ADR-0079 D8（Phase R3b）: root の計画の承認待ちは `plan-gate` の 3 つの操作だけ（`Answer` を出さない）。
+    if crate::plan_gate::is_awaiting_plan_approval(task, events) {
+        out.retain(|a| *a != Action::Answer);
+        out.push(Action::PlanGate);
     }
     out
 }
@@ -1112,6 +1136,8 @@ fn build_execution_view(
                 | Event::WorkUnitTransitioned { .. }
                 // ADR-0074 D2.3（Phase F3 途中確認）
                 | Event::PhaseReported { .. }
+                // ADR-0079 D8（Phase R3b）: root の計画の承認待ち
+                | Event::PlanApprovalRequested { .. }
         )
     });
     if !has_activity {
@@ -1261,6 +1287,18 @@ fn build_execution_view(
     } else {
         phase
     };
+    // ADR-0079 D8（Phase R3b）: root の計画の承認待ち。
+    let plan_approval =
+        crate::plan_gate::latest_plan_approval(task, events).map(|info| PlanApprovalView {
+            summary: crate::plan_gate::describe_reasons(&info.reasons),
+            plan_id: info.plan_id,
+            reasons: info.reasons,
+        });
+    let phase = if plan_approval.is_some() {
+        Some(ExecutionPhase::AwaitingPlanApproval)
+    } else {
+        phase
+    };
     // ADR-0079 D5（Phase R1b）: 子 task だけを待っている親の理由（待っている子の題名と状態）。
     let mut awaiting_children = Vec::new();
     if phase == Some(ExecutionPhase::AwaitingChildren) {
@@ -1295,6 +1333,7 @@ fn build_execution_view(
         metrics,
         phase_checkpoint,
         awaiting_children,
+        plan_approval,
     }))
 }
 

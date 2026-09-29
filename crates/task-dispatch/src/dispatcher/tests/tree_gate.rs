@@ -4,8 +4,8 @@
 //! 外部ネットワークに出ない。
 
 use super::tree::{
-    TreeAdapter, assert_replay_is_clean, leaf, stage, task_unit, tick_until_child_runs,
-    tree_dispatcher, unit, unit_reasons, v3_plan,
+    TreeAdapter, approve_root_plan, assert_replay_is_clean, leaf, stage, task_unit,
+    tick_until_child_runs, tree_dispatcher, unit, unit_reasons, v3_plan,
 };
 use super::*;
 
@@ -32,6 +32,25 @@ async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_tic
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("the dispatcher never settled");
+}
+
+/// Phase R3b（ADR-0079 D8）: 落ち着くまで回し、root の計画が承認を待っていれば承認してもう一度回す（決定を含む・
+/// 上限に近い計画は承認を挟む）。承認の理由（承認を待たなかったなら空）を返す。
+async fn run_until_quiet_approving(
+    d: &mut Dispatcher,
+    store: &Arc<dyn TaskStore>,
+    root_id: TaskId,
+    max_ticks: usize,
+) -> Vec<String> {
+    run_until_quiet(d, store, max_ticks).await;
+    let task = store.get(root_id).unwrap().unwrap();
+    let events = store.events_for(root_id).unwrap();
+    if task_ops::plan_gate::latest_plan_approval(&task, &events).is_none() {
+        return Vec::new();
+    }
+    let reasons = approve_root_plan(store, root_id);
+    run_until_quiet(d, store, max_ticks).await;
+    reasons
 }
 
 /// root（`compound_task`: 人の明示の compound）。子が継ぐ予算を 30 turns にする（`new_task` の 1 turn の
@@ -427,7 +446,8 @@ async fn leaf_too_large_at_max_depth_raises_decision() {
     let adapter = Arc::new(TreeAdapter::new(vec![plan], Duration::ZERO));
     let mut d = tree_dispatcher(&store, adapter);
     d.config.execution.limits.tree.max_depth = 1;
-    run_until_quiet(&mut d, &store, 400).await;
+    let reasons = run_until_quiet_approving(&mut d, &store, root_id, 400).await;
+    assert_eq!(reasons, vec!["decisions:leaf_too_large:big".to_string()]);
     let units = store.work_units_for(root_id).unwrap();
     assert_eq!(unit(&units, "a").status, task_core::WorkUnitStatus::Done);
     assert!(held(&units, "big"), "{units:?}");
@@ -552,7 +572,13 @@ async fn plan_limits_raise_limit_decisions_and_hold_only_the_excess() {
         let adapter = Arc::new(TreeAdapter::new(vec![plan.clone(), plan], Duration::ZERO));
         let mut d = tree_dispatcher(&store, adapter);
         (case.set)(&mut d.config.execution.limits.tree);
-        run_until_quiet(&mut d, &store, 1500).await;
+        // Phase R3b（ADR-0079 D8）: 上限を超える計画は決定を含み上限にも近いので承認を挟む。
+        let reasons = run_until_quiet_approving(&mut d, &store, root_id, 1500).await;
+        assert!(
+            reasons.iter().any(|r| r.starts_with("decisions:")),
+            "{}: {reasons:?}",
+            case.name
+        );
         let planner_runs = store
             .runs_for_task(root_id)
             .unwrap()
@@ -653,7 +679,9 @@ async fn tree_limit_breach_stops_only_that_subtree() {
     let mut d = tree_dispatcher(&store, adapter);
     // root の planner の 1 本 + c1 の 1 本で 2 本。c2 の run は 3 本目になる。
     d.config.execution.limits.tree.max_tree_runs = 2;
-    run_until_quiet(&mut d, &store, 1500).await;
+    // Phase R3b（ADR-0079 D8）: 木の run の見込み（planner 1 + 子 2 × 5）が上限 2 の 0.8 を超えるので承認を挟む。
+    let reasons = run_until_quiet_approving(&mut d, &store, root_id, 1500).await;
+    assert_eq!(reasons, vec!["near_limit:max_tree_runs:11/2".to_string()]);
     for _ in 0..5 {
         d.tick().unwrap();
     }

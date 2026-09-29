@@ -33,7 +33,7 @@ export type TaskId = string;
  */
 export type StandingRuleId = string;
 export type Action =
-  ("approve" | "reject" | "answer" | "cancel") | "retry" | "edit" | "reopen" | "rereview" | "phase_gate";
+  ("approve" | "reject" | "answer" | "cancel") | "retry" | "edit" | "reopen" | "rereview" | "phase_gate" | "plan_gate";
 /**
  * DESIGN §4.1 の `TaskKind`。
  */
@@ -708,6 +708,18 @@ export type Event =
     }
   | {
       detail: string;
+      /**
+       * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
+       */
+      path?: DecisionPathEntry[];
+      /**
+       * Phase R3b: 分類の理由（`task_core::tree::NodeLiveness.reason`。例 `child_missing`）。
+       */
+      reason?: string;
+      /**
+       * Phase R3b: 理由なく止まっていると daemon が最初に見た時刻（RFC 3339）。
+       */
+      since?: string;
       task_id: TaskId;
       type: "stall_detected";
     };
@@ -955,6 +967,29 @@ export type AttentionItem =
       report_idx?: number | null;
       task: TaskRef;
       type: "phase_checkpoint";
+    }
+  | {
+      at: string;
+      /**
+       * この節点の未回答の決定の id（`decisions` の節の同じ id）。
+       */
+      decision_ids: string[];
+      plan_id: string;
+      plan_version: number;
+      /**
+       * `PlanApprovalRequested.reasons`（`decisions:…` / `review_human:…` / `near_limit:<設定名>:<値>/<上限>`）。
+       */
+      reasons: string[];
+      /**
+       * 計画の見取り図（段階ごとの unit）。
+       */
+      stages: PlanApprovalStage[];
+      /**
+       * 理由の人が読む 1 行。
+       */
+      summary: string;
+      task: TaskRef;
+      type: "plan_approval";
     };
 /**
  * ADR-0047 D1 / D4。
@@ -1029,7 +1064,8 @@ export type NotificationKind =
   | "cluster_login_needed"
   | "task_failed"
   | "phase_checkpoint"
-  | "decision_requested";
+  | "decision_requested"
+  | "plan_approval";
 /**
  * 組織のノードの種類（ADR-0033 D1）。`secretary` は根で 1 つだけ。
  */
@@ -1052,6 +1088,10 @@ export type ProfileRun = "host" | "container";
  * D2.4: `POST /tasks/{id}/execution/phase-gate` の `action`。
  */
 export type PhaseGateAction = "continue" | "replan" | "withdraw";
+/**
+ * D8: `POST /tasks/{id}/execution/plan-gate` の `action`。
+ */
+export type PlanGateAction = "approve" | "replan" | "withdraw";
 /**
  * 案件の状態（ADR-0033 D2、ADR-0044 D6）。
  */
@@ -1095,7 +1135,10 @@ export type RepoRun = "auto" | "host" | "container";
  * 動いていると見なして `planning`。それ以外（計画が無い・終端）は `None`。
  */
 export type ExecutionPhase =
-  ("planning" | "executing" | "repairing" | "verifying") | "awaiting_human" | "awaiting_children";
+  | ("planning" | "executing" | "repairing" | "verifying")
+  | "awaiting_human"
+  | "awaiting_children"
+  | "awaiting_plan_approval";
 /**
  * ADR-0070 D1（Phase 116）: `failed` の分類。`infra` はレース・切替・供給側都合、`work` はレビュー
  * 不合格やワーカー自身の明示的な失敗（人が中身を見て判断すべきもの）。
@@ -1268,6 +1311,7 @@ export interface ApiV1Schema {
   org_patch: OrgPatchBody;
   org_skill_mount: OrgSkillMountBody;
   phase_gate: PhaseGateRequest;
+  plan_gate: PlanGateRequest;
   problem: Problem;
   project_create: ProjectCreateBody;
   project_detail: ProjectDetail;
@@ -5095,6 +5139,21 @@ export interface ApprovalDecisionView {
   note?: string | null;
   ts: string;
 }
+/**
+ * `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
+ */
+export interface PlanApprovalStage {
+  key: string;
+  /**
+   * `review: human`（段階の後で人の確認）。
+   */
+  review_human: boolean;
+  title: string;
+  /**
+   * `<key>: <title>（leaf | 子 task）` の 1 行ずつ。
+   */
+  units: string[];
+}
 export interface InboxCounts {
   approvals: number;
   attention: number;
@@ -6346,6 +6405,16 @@ export interface PhaseGateRequest {
   action: PhaseGateAction;
   /**
    * `continue` では任意（次の工程の WU の run に「人の指示」として渡す）。`replan` では必須。
+   */
+  note?: string | null;
+}
+/**
+ * ADR-0079 D8（Phase R3b）: `POST /tasks/{id}/execution/plan-gate` の本文（応答は `transition_result`）。
+ */
+export interface PlanGateRequest {
+  action: PlanGateAction;
+  /**
+   * `approve` では任意（次の run に「計画の承認」として渡す）。`replan` では必須（planner への指示）。
    */
   note?: string | null;
 }
@@ -7617,6 +7686,10 @@ export interface ExecutionView {
    * 計画が無い Task（D20:「直接実行」の 1 行）は `None`。
    */
   plan?: ExecutionPlanOverview | null;
+  /**
+   * ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。
+   */
+  plan_approval?: PlanApprovalView | null;
 }
 /**
  * ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
@@ -7850,6 +7923,20 @@ export interface ExecutionWorkUnitView {
   updated_at: string;
 }
 /**
+ * ADR-0079 D8（Phase R3b）: 承認を待っている root の計画（Execution 節と GUI の 3 つのボタンの材料）。
+ */
+export interface PlanApprovalView {
+  plan_id: string;
+  /**
+   * `PlanApprovalRequested.reasons`（`decisions:<key>,…` / `review_human:<stage>` / `near_limit:<設定名>:<値>/<上限>`）。
+   */
+  reasons: string[];
+  /**
+   * 理由の人が読む 1 行。
+   */
+  summary: string;
+}
+/**
  * ADR-0070 D1（Phase 116）: `TaskDetail.failure` / 受信箱 `AttentionItem::Failed` が共有する形。
  */
 export interface FailureSummary {
@@ -8015,6 +8102,10 @@ export interface TaskExecutionView {
    * 計画の無い Task（暗黙の WorkUnit）は `None`。
    */
   plan?: ExecutionPlanView1 | null;
+  /**
+   * ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。
+   */
+  plan_approval?: PlanApprovalView | null;
   /**
    * checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。
    */

@@ -272,6 +272,14 @@ pub fn answer(
             action: "answered; a phase checkpoint is resumed via execution/phase-gate".to_string(),
         });
     }
+    // ADR-0079 D8（Phase R3b）: root の計画の承認待ちも質問ではない（`execution/plan-gate` を使う）。
+    if crate::plan_gate::is_awaiting_plan_approval(&task, &events) {
+        return Err(OpsError::InvalidState {
+            id,
+            context: format!("status={:?}, reason=awaiting_plan_approval", task.status),
+            action: "answered; a plan approval is resumed via execution/plan-gate".to_string(),
+        });
+    }
     let question = latest_question(&events);
     let from = task.status;
     let since_id = store.latest_event_id()?;

@@ -1220,6 +1220,130 @@ async fn decision_tools_require_tasks_interact_and_record_the_mcp_source() {
     server.stop().await;
 }
 
+/// ADR-0079 D8（Phase R3b）: `task_plan_gate` は `tasks:interact`（scope 無しは -32601）。承認待ちの root の計画に
+/// approve / replan を記録し、主体は `mcp:<client_id>`。承認待ちでなければ invalid_params、無い task は not_found。
+#[tokio::test]
+async fn task_plan_gate_requires_tasks_interact_and_records_the_mcp_source() {
+    let server = spawn_token_server(60).await;
+    create_client(&server.store, "noscope", Some("s0"), vec![]);
+    create_client(
+        &server.store,
+        "chatgpt",
+        Some("secret"),
+        vec![McpScope::TasksInteract],
+    );
+    let awaiting = |store: &SqliteStore| {
+        let id = insert_task(store, TaskKind::Execute, Status::Ready);
+        store
+            .apply_transition(id, task_core::Trigger::Dispatch, None)
+            .expect("dispatch");
+        store
+            .apply_transition_with_events(
+                id,
+                task_core::Trigger::PlanGate {
+                    plan_id: "p1".into(),
+                },
+                vec![Event::PlanApprovalRequested {
+                    plan_id: "p1".into(),
+                    reasons: vec!["decisions:h1".into()],
+                }],
+            )
+            .expect("plan gate");
+        id
+    };
+    let task_id = awaiting(&server.store);
+    let client = reqwest::Client::new();
+
+    let session0 = initialize(&client, &server.base_url, Some("s0")).await;
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("s0"),
+        &session0,
+        "task_plan_gate",
+        json!({"task_id": task_id.to_string(), "action": "approve"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+
+    let session = initialize(&client, &server.base_url, Some("secret")).await;
+    // replan に note が無ければ invalid_params（状態は変えない）。
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "task_plan_gate",
+        json!({"task_id": task_id.to_string(), "action": "replan"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "task_plan_gate",
+        json!({"task_id": task_id.to_string(), "action": "approve"}),
+    )
+    .await;
+    let out = structured(&body);
+    assert_eq!(out["to"], "ready", "{out}");
+    assert_eq!(out["reason"], "plan_approved", "{out}");
+    let events = server.store.events_for(task_id).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerProgress { msg, .. }
+            if msg.contains("承認") && msg.contains("mcp:chatgpt"))),
+        "{events:?}"
+    );
+    // もう承認待ちではない → invalid_params。
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "task_plan_gate",
+        json!({"task_id": task_id.to_string(), "action": "approve"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+
+    // replan は `ExecutionHintSet{replan: true}` を source `mcp:<client> (plan-gate)` で積む。
+    let other = awaiting(&server.store);
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "task_plan_gate",
+        json!({"task_id": other.to_string(), "decision": "replan", "note": "split phase-2"}),
+    )
+    .await;
+    let out = structured(&body);
+    assert_eq!(out["reason"], "plan_replan", "{out}");
+    let events = server.store.events_for(other).unwrap();
+    assert!(events.iter().any(
+        |(_, e)| matches!(e, Event::ExecutionHintSet { source, replan: true, .. }
+        if source == "mcp:chatgpt (plan-gate)")
+    ));
+
+    // 無い task は not_found。
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "task_plan_gate",
+        json!({"task_id": task_core::TaskId::new().to_string(), "action": "approve"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32001, "{body}");
+
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn task_cancel_requires_scope_and_records_an_optional_reason_comment() {
     let server = spawn_token_server(60).await;

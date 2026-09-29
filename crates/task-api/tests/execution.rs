@@ -669,6 +669,195 @@ async fn phase_gate_withdraw_cancels_the_task() {
     assert_eq!(env.status_of(task.id), Status::Cancelled);
 }
 
+// ---- ADR-0079 D8（Phase R3b）: `POST /tasks/{id}/execution/plan-gate` ----
+
+/// root の計画の承認を待つ（`blocked(awaiting_plan_approval)`）Task を作る。
+fn awaiting_plan_task(env: &TestEnv) -> task_core::Task {
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    env.store
+        .apply_transition(task.id, task_core::Trigger::Dispatch, None)
+        .expect("dispatch");
+    env.store
+        .apply_transition_with_events(
+            task.id,
+            task_core::Trigger::PlanGate {
+                plan_id: "plan-1".into(),
+            },
+            vec![Event::PlanApprovalRequested {
+                plan_id: "plan-1".into(),
+                reasons: vec!["decisions:h1".into(), "review_human:phase-2".into()],
+            }],
+        )
+        .expect("plan gate");
+    task
+}
+
+#[tokio::test]
+async fn plan_gate_status_codes_and_inbox() {
+    let env = env();
+    let app = env.router();
+    let task = awaiting_plan_task(&env);
+    let path = format!("/api/v1/tasks/{}/execution/plan-gate", task.id);
+
+    // 401: トークン無し。
+    let resp = send(
+        &app,
+        post_json_with(&path, &json!({"action": "approve"}), &[]),
+    )
+    .await;
+    assert_eq!(resp.status, 401, "{}", resp.text());
+    // 404: 無い task。
+    let resp = send(
+        &app,
+        post_admin(
+            &format!(
+                "/api/v1/tasks/{}/execution/plan-gate",
+                task_core::TaskId::new()
+            ),
+            &json!({"action": "approve"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+    // 409: 質問で止まった Task は計画の承認待ちではない。
+    let asked = new_task(TaskKind::Execute, Status::Blocked);
+    env.seed(&asked);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/plan-gate", asked.id),
+            &json!({"action": "approve"}),
+        ),
+    )
+    .await;
+    assert_problem(&resp, 409, "invalid_transition");
+    // 409: 承認待ちの Task に `Answer` は効かない（plan-gate を使う）。
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/answer", task.id),
+            &json!({"answer": "go"}),
+        ),
+    )
+    .await;
+    assert_problem(&resp, 409, "invalid_transition");
+    // 422: replan に note が無い。
+    let resp = send(
+        &app,
+        post_admin(&path, &json!({"action": "replan", "note": " "})),
+    )
+    .await;
+    let problem = assert_problem(&resp, 422, "validation");
+    assert_eq!(problem["errors"][0]["field"], "note", "{problem}");
+    // 400/422: 知らない action。
+    let resp = send(&app, post_admin(&path, &json!({"action": "continue"}))).await;
+    assert!(
+        resp.status == 400 || resp.status == 422,
+        "{} {}",
+        resp.status,
+        resp.text()
+    );
+    assert_eq!(env.status_of(task.id), Status::Blocked);
+
+    // 受信箱: questions ではなく attention の plan_approval。
+    let inbox = send(&app, g("/api/v1/inbox")).await;
+    assert_eq!(inbox.status, 200, "{}", inbox.text());
+    let inbox = inbox.json();
+    let questions: Vec<&Value> = inbox["questions"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|q| q["task"]["id"] == json!(task.id.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(questions.is_empty(), "{inbox}");
+    let item = inbox["attention"]
+        .as_array()
+        .and_then(|a| a.iter().find(|i| i["type"] == "plan_approval"))
+        .cloned()
+        .expect("plan_approval in attention");
+    assert_eq!(item["plan_id"], "plan-1");
+    assert_eq!(
+        item["reasons"],
+        json!(["decisions:h1", "review_human:phase-2"])
+    );
+    assert!(
+        item["task"]["actions"]
+            .as_array()
+            .is_some_and(|a| a.contains(&json!("plan_gate")) && !a.contains(&json!("answer"))),
+        "{item}"
+    );
+
+    // Execution 節: phase = awaiting_plan_approval、理由つき。
+    let exec = send(&app, g(&format!("/api/v1/tasks/{}/execution", task.id))).await;
+    assert_eq!(exec.status, 200, "{}", exec.text());
+    let exec = exec.json();
+    assert_eq!(exec["phase"], "awaiting_plan_approval", "{exec}");
+    assert_eq!(exec["plan_approval"]["plan_id"], "plan-1");
+
+    // 200: approve（`decision` は `action` の別名）。
+    let resp = send(
+        &app,
+        post_admin(&path, &json!({"decision": "approve", "note": "進めて"})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["to"], "ready");
+    assert_eq!(body["reason"], "plan_approved");
+    assert_eq!(env.status_of(task.id), Status::Ready);
+    let events = env.store.events_for(task.id).expect("events");
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::Answered { question, answer }
+            if question == task_ops::plan_gate::PLAN_APPROVAL_QUESTION && answer == "進めて"
+    )));
+    // もう承認待ちではない → 409。
+    let resp = send(&app, post_admin(&path, &json!({"action": "withdraw"}))).await;
+    assert_problem(&resp, 409, "invalid_transition");
+}
+
+#[tokio::test]
+async fn plan_gate_replan_requests_a_planner_and_withdraw_cancels() {
+    let env = env();
+    let app = env.router();
+    let task = awaiting_plan_task(&env);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/plan-gate", task.id),
+            &json!({"action": "replan", "note": "phase-2 を 2 つに分けて"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["reason"], "plan_replan");
+    let events = env.store.events_for(task.id).expect("events");
+    assert_eq!(
+        task_ops::regate::pending_replan_request(&events).as_deref(),
+        Some("計画の承認で replan: phase-2 を 2 つに分けて")
+    );
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::ExecutionHintSet { source, replan: true, .. } if source == "human (plan-gate)"
+    )));
+
+    let other = awaiting_plan_task(&env);
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/tasks/{}/execution/plan-gate", other.id),
+            &json!({"action": "withdraw"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["to"], "cancelled");
+    assert_eq!(env.status_of(other.id), Status::Cancelled);
+}
+
 // ---- ADR-0072「Phase F6 実装時の決定」: POST /tasks/{id}/execution/decompose と retry の execution ----
 
 fn routed_task(status: Status) -> task_core::Task {

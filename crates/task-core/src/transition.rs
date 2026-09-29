@@ -102,6 +102,17 @@ pub enum Trigger {
     BrowserFail {
         expired: bool,
     },
+    /// ADR-0079 D8（Phase R3b）: root の /3 の計画が人の承認を要する（決定を含む / `review: human` の段階 /
+    /// 上限に近い）。計画の採用の直後に `Running → Blocked`、`reason = "awaiting_plan_approval"`、attempts 不変
+    /// （`PhaseGate` と同じ形）。再開は `PhaseResume{PlanApprove | PlanReplan}`、取り下げは `Cancel`。
+    PlanGate {
+        plan_id: String,
+    },
+    /// ADR-0074「F5-fix8 実装時の明確化」: 計画の unit がすべて終わっている（unit が 1 つも無い場合を含む）
+    /// のに `ready` のままの Task を、run を起こさずに最終レビューへ進める。採用した計画（replan で何も
+    /// 足さなかった版を含む）がまだ最終レビューを受けていないときだけ dispatcher が使う。
+    /// `Ready → Reviewing`（Execute kind のみ）、`reason = "plan_complete"`、attempts 不変。
+    PlanComplete,
 }
 
 impl Trigger {
@@ -142,6 +153,8 @@ impl Trigger {
             Trigger::BrowserResume => "browser_resume",
             Trigger::BrowserFail { expired: true } => "browser_wait_expired",
             Trigger::BrowserFail { expired: false } => "approval_denied",
+            Trigger::PlanGate { .. } => "awaiting_plan_approval",
+            Trigger::PlanComplete => "plan_complete",
         }
     }
 
@@ -510,6 +523,32 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
+        // ADR-0079 D8（Phase R3b）: root の計画の承認待ち。`PhaseGate` と同じ形（attempts 不変）。
+        Trigger::PlanGate { .. } => {
+            if s.status == Status::Running {
+                Ok(Outcome {
+                    next: Status::Blocked,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+
+        // ADR-0074「F5-fix8 実装時の明確化」: 完了済みの計画の最終レビュー（run なし、attempts 不変）。
+        Trigger::PlanComplete => {
+            if s.status == Status::Ready && s.kind == TaskKind::Execute {
+                Ok(Outcome {
+                    next: Status::Reviewing,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+
         // ADR-0074 D2.2/D2.4: 人の「続ける」/「replan」。attempts は変えない。
         Trigger::PhaseResume { .. } => {
             if s.status == Status::Blocked {
@@ -711,10 +750,18 @@ mod tests {
                     expect_err()
                 }
             }
-            // ADR-0074 D2.2（Phase F3 途中確認）: `Running` からだけ `Blocked` へ。
-            Trigger::PhaseGate { .. } => {
+            // ADR-0074 D2.2（Phase F3 途中確認）/ ADR-0079 D8（Phase R3b）: `Running` からだけ `Blocked` へ。
+            Trigger::PhaseGate { .. } | Trigger::PlanGate { .. } => {
                 if status == Status::Running {
                     expect_ok(Status::Blocked)
+                } else {
+                    expect_err()
+                }
+            }
+            // ADR-0074「F5-fix8 実装時の明確化」: Execute の `Ready` からだけ `Reviewing` へ。
+            Trigger::PlanComplete => {
+                if status == Status::Ready && kind == TaskKind::Execute {
+                    expect_ok(Status::Reviewing)
                 } else {
                     expect_err()
                 }
@@ -723,6 +770,28 @@ mod tests {
             Trigger::PhaseResume { .. } => {
                 if status == Status::Blocked {
                     expect_ok(Status::Ready)
+                } else {
+                    expect_err()
+                }
+            }
+            // ADR-0080 D4: browser の人待ちは `Running → Blocked`、解決は `Blocked → Ready` / `Blocked → Failed`。
+            Trigger::BrowserWait { .. } => {
+                if status == Status::Running {
+                    expect_ok(Status::Blocked)
+                } else {
+                    expect_err()
+                }
+            }
+            Trigger::BrowserResume => {
+                if status == Status::Blocked {
+                    expect_ok(Status::Ready)
+                } else {
+                    expect_err()
+                }
+            }
+            Trigger::BrowserFail { .. } => {
+                if status == Status::Blocked {
+                    expect_ok(Status::Failed)
                 } else {
                     expect_err()
                 }
@@ -767,6 +836,18 @@ mod tests {
             Trigger::PhaseResume {
                 mode: crate::pause::PhaseResumeMode::Continue,
             },
+            // ADR-0079 D8（Phase R3b）: root の計画の承認待ち（attempts 据え置き）。
+            Trigger::PlanGate {
+                plan_id: "p".to_string(),
+            },
+            // ADR-0074「F5-fix8 実装時の明確化」: 完了済みの計画の最終レビュー（attempts 据え置き）。
+            Trigger::PlanComplete,
+            // ADR-0080 D4（ブラウザ capability Phase 2）: browser の人待ち・解決（attempts 据え置き）。
+            Trigger::BrowserWait { approval: false },
+            Trigger::BrowserWait { approval: true },
+            Trigger::BrowserResume,
+            Trigger::BrowserFail { expired: true },
+            Trigger::BrowserFail { expired: false },
         ];
 
         let mut count = 0usize;
@@ -812,8 +893,10 @@ mod tests {
         }
         // 4 kinds * 8 statuses * 20 triggers（Phase 53 で Interrupt / Reopen、Phase 59 で Unroutable、
         // Phase 116（ADR-0070 D3）で InfraRequeue、Phase E1（ADR-0072）で Continue、
-        // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume を追加）
-        assert_eq!(count, 4 * 8 * 20);
+        // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume、Phase R3b（ADR-0079 D8）で PlanGate、
+        // F5-fix8（ADR-0074 付記）で PlanComplete、ブラウザ capability Phase 2（ADR-0080 D4）で
+        // BrowserWait×2 / BrowserResume / BrowserFail×2 を追加）
+        assert_eq!(count, 4 * 8 * 27);
     }
 
     /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる
@@ -857,6 +940,8 @@ mod tests {
         for (mode, expected_reason) in [
             (PhaseResumeMode::Continue, "phase_continue"),
             (PhaseResumeMode::Replan, "phase_replan"),
+            (PhaseResumeMode::PlanApprove, "plan_approved"),
+            (PhaseResumeMode::PlanReplan, "plan_replan"),
         ] {
             let s = StateView {
                 kind: TaskKind::Execute,

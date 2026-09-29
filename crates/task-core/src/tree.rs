@@ -198,7 +198,13 @@ pub struct TreeLimits {
     /// D8 の「上限に近い」の比（千分率。既定 800 = 0.8。R3b で使う。`ExecutionLimits` を `Eq` の
     /// まま保つため浮動小数にしない）。
     pub approval_near_limit_permille: u32,
+    /// D10 の生存確認（Phase R3b）: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
+    /// この秒数続いたら `StallDetected` と障害通知（D10 の `stall_secs`。既定 600）。
+    pub liveness_timeout_secs: u64,
 }
+
+/// D10（Phase R3b）: `liveness_timeout_secs` の既定。
+pub const DEFAULT_LIVENESS_TIMEOUT_SECS: u64 = 600;
 
 impl Default for TreeLimits {
     fn default() -> Self {
@@ -217,6 +223,7 @@ impl Default for TreeLimits {
             max_open_decisions_per_plan: 8,
             gate_depth_step: 2,
             approval_near_limit_permille: 800,
+            liveness_timeout_secs: DEFAULT_LIVENESS_TIMEOUT_SECS,
         }
     }
 }
@@ -239,6 +246,7 @@ impl TreeLimits {
             max_open_decisions_per_plan: usize::MAX,
             gate_depth_step: 0,
             approval_near_limit_permille: 1000,
+            liveness_timeout_secs: u64::MAX,
         }
     }
 }
@@ -1353,6 +1361,674 @@ pub fn plan_invalid_decision(
         status: crate::decision::DecisionStatus::Open,
         answer: None,
         withdrawn_reason: None,
+    }
+}
+
+// ---- ADR-0079 D8（Phase R3b）: root の計画の承認の要否 ----
+
+/// D8: 見込みの leaf の数で、子 task 1 つを leaf いくつと見るか（「leaf + 子 task × 既定 4」）。
+pub const CHILD_LEAF_ESTIMATE: u64 = 4;
+
+/// D8（Phase R3b）: root の計画の承認の要否の材料（呼び出し側が store の読み取りで集める。
+/// `task_ops::plan_gate::approval_facts`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanApprovalFacts {
+    /// この節点の未回答の決定の key（計画の決定と、採用時に daemon が出した limit / leaf_too_large）。
+    pub open_decisions: Vec<String>,
+    /// `review: human` で、まだ済んでいない unit を持つ段階の key（replan の版では済んだ段階を数えない）。
+    pub review_human_stages: Vec<String>,
+    /// 計画の段階の数。
+    pub stages: usize,
+    /// 最も多い段階の unit の数（統合 WU・repair を除く）。
+    pub max_units_in_stage: usize,
+    /// 計画の kind task の unit の数。
+    pub child_task_units: usize,
+    /// 木の生涯の leaf の見込み（作った leaf + 決定を待つ leaf + 終わっていない子 task × [`CHILD_LEAF_ESTIMATE`]）。
+    pub estimated_leaves: u64,
+    /// 木の run の見込み（ここまでの run + これから走る leaf + 終わっていない子 task × (planner 1 + leaf の見込み)）。
+    pub estimated_runs: u64,
+}
+
+/// D8: 承認の要否と理由（理由は機械の読める短い文字列。`Event::PlanApprovalRequested.reasons`）:
+/// `decisions:<key>,…` / `review_human:<stage>` / `near_limit:<設定名>:<値>/<上限>`。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanApproval {
+    pub required: bool,
+    pub reasons: Vec<String>,
+}
+
+/// D8: `value` が `max × permille / 1000` 以上か（整数だけで比べる。`max = 0` は「近くない」）。
+pub fn near_limit(value: u64, max: u64, permille: u32) -> bool {
+    max > 0 && value.saturating_mul(1000) >= max.saturating_mul(u64::from(permille))
+}
+
+/// D8（Phase R3b）: `approval_required = has_decisions || has_review_human_stage || near_limits`（純粋関数、
+/// 決定的）。`near_limits` は段階数・段階あたりの unit 数・子 task 数・見込みの leaf 数・木の run の見込みの
+/// どれかが上限 × `approval_near_limit_permille` 以上。
+pub fn plan_approval(facts: &PlanApprovalFacts, limits: &TreeLimits) -> PlanApproval {
+    let mut reasons = Vec::new();
+    if !facts.open_decisions.is_empty() {
+        reasons.push(format!("decisions:{}", facts.open_decisions.join(",")));
+    }
+    for stage in &facts.review_human_stages {
+        reasons.push(format!("review_human:{stage}"));
+    }
+    let permille = limits.approval_near_limit_permille;
+    for (name, value, max) in [
+        ("max_stages", facts.stages as u64, limits.max_stages as u64),
+        (
+            "max_units_per_stage",
+            facts.max_units_in_stage as u64,
+            limits.max_units_per_stage as u64,
+        ),
+        (
+            "max_child_tasks_per_plan",
+            facts.child_task_units as u64,
+            limits.max_child_tasks_per_plan as u64,
+        ),
+        (
+            "max_tree_leaves",
+            facts.estimated_leaves,
+            u64::from(limits.max_tree_leaves),
+        ),
+        (
+            "max_tree_runs",
+            facts.estimated_runs,
+            u64::from(limits.max_tree_runs),
+        ),
+    ] {
+        if near_limit(value, max, permille) {
+            reasons.push(format!("near_limit:{name}:{value}/{max}"));
+        }
+    }
+    PlanApproval {
+        required: !reasons.is_empty(),
+        reasons,
+    }
+}
+
+// ---- ADR-0079 D10（Phase R3b）: 木の生存確認 ----
+
+/// D10: 節点の分類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LivenessClass {
+    /// run・検査・統合・レビューが in-flight（lease を持つ）。
+    Running,
+    /// 次の tick で dispatch される（leaf・planner・子の生成・写し・最終レビュー）。
+    Runnable,
+    /// 名指しの待ち（決定・承認・途中確認・質問・基盤の回復・子 task・依存先）。
+    Waiting,
+    /// どれにも当たらない（理由なく止まっている）。
+    Unexplained,
+}
+
+/// D10: 節点の 1 つの unit の事実。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivenessUnitFacts {
+    pub key: String,
+    pub kind: crate::execution_plan::WorkUnitKind,
+    pub status: crate::execution_plan::WorkUnitStatus,
+    pub blocked_reason: Option<crate::execution_plan::WorkUnitBlockedReason>,
+    /// kind task の unit の子（`Some((id, None))` = `child_task_id` はあるが task が無い）。
+    pub child: Option<(TaskId, Option<crate::model::Status>)>,
+    /// この unit を名指しする（`needed_before` の key / `stage:<段階>`・`needs_decisions`）未回答の決定がある。
+    pub waits_on_open_decision: bool,
+    /// ADR-0074「F5-fix8 実装時の明確化」: `pending` で、`child:<key>` の依存（ADR-0074 D3.7 の子 Task）を
+    /// 待っている（/2 の計画の名指しの待ち。子が終われば dispatcher が決定的に解く）。
+    pub waits_on_child_dep: bool,
+}
+
+/// D10: 木の 1 節点の事実（store の読み取りだけで集める。`task_ops::tree::liveness_snapshot`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeLivenessFacts {
+    pub task_id: TaskId,
+    pub status: crate::model::Status,
+    /// 直前の `Transitioned.reason`。
+    pub last_reason: Option<String>,
+    /// Task が lease を持つ（run が in-flight）。
+    pub leased: bool,
+    /// `ready_tasks` が返す（依存先・一時停止・中止の案件で見送られていない）。
+    pub eligible: bool,
+    /// 有効な計画がある。
+    pub has_plan: bool,
+    /// 次の run が planner（人の replan の依頼・途中確認 / 承認の replan・不正な試行の後の再試行）。
+    pub planner_pending: bool,
+    /// この節点が出した未回答の `needed_before: [self]` の決定がある（種類を問わない）。
+    pub open_self_decision: bool,
+    /// 木全体の run 時の上限（`limit:max_tree_runs` など）の未回答の決定がある（木のどの節点も run を起こさない）。
+    pub tree_limit_decision_open: bool,
+    /// 節点の replan の余地がある（`max_replans` を使い切っていない）。
+    pub replans_left: bool,
+    /// ADR-0074「F5-fix8 実装時の明確化」: 有効な計画が採用の後に最終レビューの判定を既に受けた
+    /// （`!execution_plan::plan_awaits_final_review`）。unit がすべて終わった節点で、`false` なら次の tick で
+    /// 最終レビューに進み、`true` なら不合格の後なので replan（余地が無ければ理由なし）。
+    pub plan_reviewed: bool,
+    pub units: Vec<LivenessUnitFacts>,
+}
+
+/// D10 の入力（ADR の `TreeSnapshot`）: 木の非終端の節点。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TreeSnapshot {
+    pub nodes: Vec<NodeLivenessFacts>,
+}
+
+/// D10: 1 節点の分類の結果。`reason` は短い識別子（`StallDetected.reason`）、`detail` は人が読む 1 行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeLiveness {
+    pub task_id: TaskId,
+    pub class: LivenessClass,
+    pub reason: String,
+    pub detail: String,
+}
+
+/// D10（Phase R3b）: 木の非終端の節点を「走っている / 走れる / 名指しの待ち / 理由なし」に分ける（純粋関数、
+/// 決定的、LLM なし）。優先は 走っている > 走れる > 名指しの待ち > 理由なし（どれか 1 つでも当たれば
+/// 理由なしにはしない）。終端の節点は返さない。
+pub fn liveness(snapshot: &TreeSnapshot) -> Vec<NodeLiveness> {
+    snapshot
+        .nodes
+        .iter()
+        .filter(|n| !n.status.is_terminal())
+        .map(classify_node)
+        .collect()
+}
+
+fn verdict(task_id: TaskId, class: LivenessClass, reason: &str, detail: String) -> NodeLiveness {
+    NodeLiveness {
+        task_id,
+        class,
+        reason: reason.to_string(),
+        detail,
+    }
+}
+
+fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
+    use crate::execution_plan::{WorkUnitBlockedReason, WorkUnitKind, WorkUnitStatus};
+    use crate::model::Status;
+    let id = n.task_id;
+    match n.status {
+        Status::Running | Status::Reviewing => {
+            return verdict(
+                id,
+                LivenessClass::Running,
+                "in_flight",
+                "run・検査・レビューが進行中".to_string(),
+            );
+        }
+        Status::Blocked => {
+            let (reason, detail) = match n.last_reason.as_deref() {
+                Some("awaiting_plan_approval") => ("plan_approval", "root の計画の承認待ち"),
+                Some("awaiting_human") => ("pause_point", "段階の後の人の確認（途中確認）待ち"),
+                _ => ("question", "人への質問・判断待ち"),
+            };
+            return verdict(id, LivenessClass::Waiting, reason, detail.to_string());
+        }
+        Status::Draft => {
+            return verdict(
+                id,
+                LivenessClass::Waiting,
+                "draft",
+                "人の受け入れ（draft）待ち".to_string(),
+            );
+        }
+        _ => {}
+    }
+    if n.leased {
+        return verdict(
+            id,
+            LivenessClass::Running,
+            "lease",
+            "run が lease を持っている".to_string(),
+        );
+    }
+    if !n.eligible {
+        return verdict(
+            id,
+            LivenessClass::Waiting,
+            "dependencies",
+            "依存先の完了・案件の再開を待っている".to_string(),
+        );
+    }
+    if n.open_self_decision || n.tree_limit_decision_open {
+        return verdict(
+            id,
+            LivenessClass::Waiting,
+            "decision",
+            "この節点を止める人の決定を待っている".to_string(),
+        );
+    }
+    if !n.has_plan {
+        return verdict(
+            id,
+            LivenessClass::Runnable,
+            "dispatch",
+            "次の tick で run（gate・planner・atomic）を起こす".to_string(),
+        );
+    }
+    if n.planner_pending {
+        return verdict(
+            id,
+            LivenessClass::Runnable,
+            "planner",
+            "次の tick で planner（replan・再試行）を起こす".to_string(),
+        );
+    }
+    let mut running: Option<String> = None;
+    let mut runnable: Option<(&'static str, String)> = None;
+    let mut waiting: Option<(&'static str, String)> = None;
+    let mut unexplained: Option<(&'static str, String)> = None;
+    let live_child = n.units.iter().any(|u| {
+        u.kind == WorkUnitKind::Task
+            && u.status == WorkUnitStatus::Running
+            && matches!(u.child, Some((_, Some(s))) if !s.is_terminal())
+    });
+    let mut active = 0usize;
+    for u in n.units.iter().filter(|u| !u.status.is_terminal()) {
+        active += 1;
+        let is_task = u.kind == WorkUnitKind::Task;
+        match (u.status, is_task) {
+            (WorkUnitStatus::Running, false) => {
+                running.get_or_insert(format!("unit {} が run 中", u.key));
+            }
+            (WorkUnitStatus::Ready | WorkUnitStatus::NeedsContinuation, false) => {
+                runnable.get_or_insert(("leaf", format!("unit {} が走れる", u.key)));
+            }
+            (WorkUnitStatus::Running, true) => match u.child {
+                Some((child, Some(s))) if !s.is_terminal() => {
+                    waiting.get_or_insert((
+                        "children",
+                        format!("子 task {child}（unit {}）の完了待ち", u.key),
+                    ));
+                }
+                Some((child, Some(_))) => {
+                    runnable.get_or_insert((
+                        "mirror",
+                        format!("子 task {child}（unit {}）の終端を次の tick で写す", u.key),
+                    ));
+                }
+                Some((child, None)) => {
+                    unexplained.get_or_insert((
+                        "child_missing",
+                        format!("unit {} が待つ子 task {child} が見つからない", u.key),
+                    ));
+                }
+                None => {
+                    unexplained.get_or_insert((
+                        "child_missing",
+                        format!("unit {} は running だが子 task が無い", u.key),
+                    ));
+                }
+            },
+            (WorkUnitStatus::Ready, true) => {
+                if u.waits_on_open_decision {
+                    waiting.get_or_insert((
+                        "decision",
+                        format!("unit {} は人の決定を待っている", u.key),
+                    ));
+                } else if live_child {
+                    waiting.get_or_insert((
+                        "children",
+                        format!(
+                            "unit {} は同時の子 task の空きを待っている（max_parallel_child_tasks）",
+                            u.key
+                        ),
+                    ));
+                } else {
+                    runnable.get_or_insert((
+                        "child_creation",
+                        format!("unit {} の子 task を次の tick で作る", u.key),
+                    ));
+                }
+            }
+            (WorkUnitStatus::Blocked, _) => match u.blocked_reason {
+                Some(WorkUnitBlockedReason::Decision) if u.waits_on_open_decision => {
+                    waiting.get_or_insert((
+                        "decision",
+                        format!("unit {} は人の決定を待っている", u.key),
+                    ));
+                }
+                Some(WorkUnitBlockedReason::Decision) => {
+                    unexplained.get_or_insert((
+                        "decision_released",
+                        format!(
+                            "unit {} は blocked(decision) だが、止めている未回答の決定も次の planner も無い",
+                            u.key
+                        ),
+                    ));
+                }
+                Some(WorkUnitBlockedReason::Infra) => {
+                    waiting.get_or_insert((
+                        "infra",
+                        format!("unit {} は基盤の失敗の後の人の再試行を待っている", u.key),
+                    ));
+                }
+                Some(
+                    WorkUnitBlockedReason::DependencyFailed
+                    | WorkUnitBlockedReason::Limit
+                    | WorkUnitBlockedReason::PlanIssue,
+                ) if n.replans_left => {
+                    runnable.get_or_insert((
+                        "replan",
+                        format!("unit {} の失敗を replan で吸収する", u.key),
+                    ));
+                }
+                _ => {
+                    unexplained.get_or_insert((
+                        "blocked_unit",
+                        format!(
+                            "unit {} が blocked（{}）のまま、task は ready で誰も待っていない",
+                            u.key,
+                            u.blocked_reason.map(|r| r.as_str()).unwrap_or("-")
+                        ),
+                    ));
+                }
+            },
+            (WorkUnitStatus::Pending, _) if u.waits_on_child_dep => {
+                waiting.get_or_insert((
+                    "children",
+                    format!(
+                        "unit {} は子 Task（child: の依存）の完了を待っている",
+                        u.key
+                    ),
+                ));
+            }
+            (WorkUnitStatus::Failed, _) if n.replans_left => {
+                runnable.get_or_insert((
+                    "replan",
+                    format!("unit {} の失敗を replan で吸収する", u.key),
+                ));
+            }
+            (WorkUnitStatus::Failed, _) => {
+                unexplained.get_or_insert((
+                    "replans_exhausted",
+                    format!(
+                        "unit {} が failed で、replan の余地も上限の決定も無い",
+                        u.key
+                    ),
+                ));
+            }
+            _ => {}
+        }
+    }
+    if let Some(detail) = running {
+        return verdict(id, LivenessClass::Running, "leaf_run", detail);
+    }
+    if let Some((reason, detail)) = runnable {
+        return verdict(id, LivenessClass::Runnable, reason, detail);
+    }
+    if active == 0 {
+        // ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画は、まだ審査されていなければ次の tick で
+        // 最終レビュー（`Trigger::PlanComplete`）、不合格の後なら replan。どちらも無理なら理由なし。
+        if !n.plan_reviewed {
+            return verdict(
+                id,
+                LivenessClass::Runnable,
+                "completion",
+                "計画の unit がすべて終わり、次の tick で最終レビューに進む".to_string(),
+            );
+        }
+        if n.replans_left {
+            return verdict(
+                id,
+                LivenessClass::Runnable,
+                "replan",
+                "計画の unit はすべて終わったが最終レビューで不合格。次の tick で replan する"
+                    .to_string(),
+            );
+        }
+        return verdict(
+            id,
+            LivenessClass::Unexplained,
+            "replans_exhausted",
+            "計画の unit はすべて終わり最終レビューで不合格だったが、replan の余地も上限の決定も無い"
+                .to_string(),
+        );
+    }
+    if let Some((reason, detail)) = waiting {
+        return verdict(id, LivenessClass::Waiting, reason, detail);
+    }
+    if let Some((reason, detail)) = unexplained {
+        return verdict(id, LivenessClass::Unexplained, reason, detail);
+    }
+    verdict(
+        id,
+        LivenessClass::Unexplained,
+        "nothing_runnable",
+        "task は ready だが、走れる unit も名指しの待ちも無い（pending の unit だけ）".to_string(),
+    )
+}
+
+#[cfg(test)]
+mod r3b_tests {
+    use super::*;
+    use crate::execution_plan::{WorkUnitBlockedReason, WorkUnitKind, WorkUnitStatus};
+    use crate::model::Status;
+
+    fn facts() -> PlanApprovalFacts {
+        PlanApprovalFacts {
+            stages: 2,
+            max_units_in_stage: 2,
+            child_task_units: 1,
+            estimated_leaves: 6,
+            estimated_runs: 8,
+            ..Default::default()
+        }
+    }
+
+    /// D8: 決定も `review: human` も無く 0.8 未満なら承認は要らない。
+    #[test]
+    fn small_plan_needs_no_approval() {
+        let a = plan_approval(&facts(), &TreeLimits::default());
+        assert!(!a.required);
+        assert!(a.reasons.is_empty());
+    }
+
+    /// D8: 3 つの条件はそれぞれ単独で承認を要する（理由の文字列は決定的）。
+    #[test]
+    fn each_trigger_requires_approval() {
+        let limits = TreeLimits::default();
+        let mut f = facts();
+        f.open_decisions = vec!["h1".into(), "h2".into()];
+        assert_eq!(
+            plan_approval(&f, &limits).reasons,
+            vec!["decisions:h1,h2".to_string()]
+        );
+        let mut f = facts();
+        f.review_human_stages = vec!["phase-2".into()];
+        assert_eq!(
+            plan_approval(&f, &limits).reasons,
+            vec!["review_human:phase-2".to_string()]
+        );
+        // 5 段階の上限の 0.8 = 4 段階から。
+        let mut f = facts();
+        f.stages = 4;
+        assert_eq!(
+            plan_approval(&f, &limits).reasons,
+            vec!["near_limit:max_stages:4/5".to_string()]
+        );
+        f.stages = 3;
+        assert!(!plan_approval(&f, &limits).required);
+        // leaf の見込み 32/40、run の見込み 96/120。
+        let mut f = facts();
+        f.estimated_leaves = 32;
+        f.estimated_runs = 96;
+        assert_eq!(
+            plan_approval(&f, &limits).reasons,
+            vec![
+                "near_limit:max_tree_leaves:32/40".to_string(),
+                "near_limit:max_tree_runs:96/120".to_string()
+            ]
+        );
+        assert!(near_limit(5, 6, 800));
+        assert!(!near_limit(4, 6, 800));
+        assert!(!near_limit(3, 0, 800));
+    }
+
+    fn node(units: Vec<LivenessUnitFacts>) -> NodeLivenessFacts {
+        NodeLivenessFacts {
+            task_id: TaskId::new(),
+            status: Status::Ready,
+            last_reason: Some("planned".into()),
+            leased: false,
+            eligible: true,
+            has_plan: true,
+            planner_pending: false,
+            open_self_decision: false,
+            tree_limit_decision_open: false,
+            replans_left: true,
+            plan_reviewed: false,
+            units,
+        }
+    }
+
+    fn leaf(key: &str, status: WorkUnitStatus) -> LivenessUnitFacts {
+        LivenessUnitFacts {
+            key: key.into(),
+            kind: WorkUnitKind::Implement,
+            status,
+            blocked_reason: None,
+            child: None,
+            waits_on_open_decision: false,
+            waits_on_child_dep: false,
+        }
+    }
+
+    fn class(n: NodeLivenessFacts) -> (LivenessClass, String) {
+        let out = liveness(&TreeSnapshot { nodes: vec![n] });
+        (out[0].class, out[0].reason.clone())
+    }
+
+    /// D10: 名指しの待ち（決定・承認・途中確認・基盤・子）は理由なしにしない。
+    #[test]
+    fn named_waits_are_not_stalls() {
+        let mut held = leaf("a", WorkUnitStatus::Blocked);
+        held.blocked_reason = Some(WorkUnitBlockedReason::Decision);
+        held.waits_on_open_decision = true;
+        let pending = leaf("b", WorkUnitStatus::Pending);
+        assert_eq!(
+            class(node(vec![held.clone(), pending.clone()])),
+            (LivenessClass::Waiting, "decision".to_string())
+        );
+        let mut infra = leaf("c", WorkUnitStatus::Blocked);
+        infra.kind = WorkUnitKind::Task;
+        infra.blocked_reason = Some(WorkUnitBlockedReason::Infra);
+        assert_eq!(
+            class(node(vec![infra])),
+            (LivenessClass::Waiting, "infra".to_string())
+        );
+        let child = TaskId::new();
+        let mut waiting_child = leaf("d", WorkUnitStatus::Running);
+        waiting_child.kind = WorkUnitKind::Task;
+        waiting_child.child = Some((child, Some(Status::Running)));
+        assert_eq!(
+            class(node(vec![waiting_child, pending.clone()])),
+            (LivenessClass::Waiting, "children".to_string())
+        );
+        let mut approval = node(vec![pending.clone()]);
+        approval.status = Status::Blocked;
+        approval.last_reason = Some("awaiting_plan_approval".into());
+        assert_eq!(
+            class(approval),
+            (LivenessClass::Waiting, "plan_approval".to_string())
+        );
+        let mut pause = node(vec![pending.clone()]);
+        pause.status = Status::Blocked;
+        pause.last_reason = Some("awaiting_human".into());
+        assert_eq!(
+            class(pause),
+            (LivenessClass::Waiting, "pause_point".to_string())
+        );
+        let mut self_held = node(vec![pending.clone()]);
+        self_held.open_self_decision = true;
+        assert_eq!(class(self_held).0, LivenessClass::Waiting);
+        let mut deps = node(vec![pending]);
+        deps.eligible = false;
+        assert_eq!(
+            class(deps),
+            (LivenessClass::Waiting, "dependencies".to_string())
+        );
+    }
+
+    /// D10: 走っている・走れる節点は理由なしにしない。
+    #[test]
+    fn running_and_runnable_nodes_are_live() {
+        assert_eq!(
+            class(node(vec![leaf("a", WorkUnitStatus::Ready)])).0,
+            LivenessClass::Runnable
+        );
+        assert_eq!(
+            class(node(vec![leaf("a", WorkUnitStatus::Running)])).0,
+            LivenessClass::Running
+        );
+        assert_eq!(
+            class(node(vec![leaf("a", WorkUnitStatus::Done)])),
+            (LivenessClass::Runnable, "completion".to_string())
+        );
+        // ADR-0074「F5-fix8 実装時の明確化」: unit の無い計画も同じ（次の tick で最終レビュー）。
+        assert_eq!(
+            class(node(Vec::new())),
+            (LivenessClass::Runnable, "completion".to_string())
+        );
+        // 審査の後（不合格で ready に戻った）なら replan、余地が無ければ理由なし。
+        let mut reviewed = node(vec![leaf("a", WorkUnitStatus::Done)]);
+        reviewed.plan_reviewed = true;
+        assert_eq!(
+            class(reviewed.clone()),
+            (LivenessClass::Runnable, "replan".to_string())
+        );
+        reviewed.replans_left = false;
+        assert_eq!(
+            class(reviewed),
+            (LivenessClass::Unexplained, "replans_exhausted".to_string())
+        );
+        let mut atomic = node(Vec::new());
+        atomic.has_plan = false;
+        assert_eq!(class(atomic).0, LivenessClass::Runnable);
+        let mut failed = node(vec![leaf("a", WorkUnitStatus::Failed)]);
+        assert_eq!(
+            class(failed.clone()),
+            (LivenessClass::Runnable, "replan".to_string())
+        );
+        failed.replans_left = false;
+        assert_eq!(class(failed).0, LivenessClass::Unexplained);
+        let mut running = node(Vec::new());
+        running.status = Status::Running;
+        assert_eq!(class(running).0, LivenessClass::Running);
+        let mut done = node(Vec::new());
+        done.status = Status::Done;
+        assert!(liveness(&TreeSnapshot { nodes: vec![done] }).is_empty());
+    }
+
+    /// D10 の網: 子の消えた親・pending だけの節点・R3a 付記 15. の「人の replan の 1 回目が不正で 2 回目が
+    /// 起きない」（blocked(decision) の unit を止める決定は replan で回答済み、次の planner も無い）。
+    #[test]
+    fn unexplained_stalls_are_flagged() {
+        let mut orphan = leaf("k", WorkUnitStatus::Running);
+        orphan.kind = WorkUnitKind::Task;
+        orphan.child = Some((TaskId::new(), None));
+        assert_eq!(
+            class(node(vec![orphan])),
+            (LivenessClass::Unexplained, "child_missing".to_string())
+        );
+        assert_eq!(
+            class(node(vec![leaf("p", WorkUnitStatus::Pending)])),
+            (LivenessClass::Unexplained, "nothing_runnable".to_string())
+        );
+        let mut released = leaf("a", WorkUnitStatus::Blocked);
+        released.blocked_reason = Some(WorkUnitBlockedReason::Decision);
+        let lost = node(vec![released]);
+        assert_eq!(
+            class(lost.clone()),
+            (LivenessClass::Unexplained, "decision_released".to_string())
+        );
+        // 再試行が待っていると分かれば（R3b の修正）走れる。
+        let mut fixed = lost;
+        fixed.planner_pending = true;
+        assert_eq!(
+            class(fixed),
+            (LivenessClass::Runnable, "planner".to_string())
+        );
     }
 }
 

@@ -191,7 +191,8 @@ pub use execution_plan::{
     WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus, child_label, dependents_to_block,
     integrate_key, integration_work_unit_specs, is_daemon_added_work_unit, materialize_work_units,
     materialized_order, new_id, newly_ready, newly_ready_with, next_work_unit, phase_leaves,
-    phase_ranks, replan_done_work_units, runnable_work_units, validate,
+    phase_ranks, plan_awaits_final_review, plan_work_finished, replan_done_work_units,
+    runnable_work_units, validate,
 };
 // ---- ADR-0079（Phase R1a）: plan/3・木・決定の要求 ----
 pub use decision::{
@@ -207,9 +208,10 @@ pub use execution_plan::{
     validate_with,
 };
 pub use tree::{
-    DepthCounters, LimitHold, NextRun, ParentUnit, RunLimitBreach, StageHint, TreeCounters,
-    TreeInfo, TreeLimitKind, TreeLimits, TreeNodeFacts, UnitDeclared, UnitGate, UnitGateAction,
-    UnitGateContext, UnitGateReport,
+    DepthCounters, LimitHold, LivenessClass, LivenessUnitFacts, NextRun, NodeLiveness,
+    NodeLivenessFacts, ParentUnit, PlanApproval, PlanApprovalFacts, RunLimitBreach, StageHint,
+    TreeCounters, TreeInfo, TreeLimitKind, TreeLimits, TreeNodeFacts, TreeSnapshot, UnitDeclared,
+    UnitGate, UnitGateAction, UnitGateContext, UnitGateReport,
 };
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use execution_gate::{

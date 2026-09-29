@@ -8,7 +8,8 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use super::tree::{
-    assert_replay_is_clean, leaf, stage, task_unit, tree_dispatcher, unit, unit_reasons, v3_plan,
+    approve_root_plan, assert_replay_is_clean, leaf, stage, task_unit, tree_dispatcher, unit,
+    unit_reasons, v3_plan,
 };
 use super::*;
 
@@ -133,6 +134,20 @@ async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_tic
     panic!("the dispatcher never settled");
 }
 
+/// Phase R3b（ADR-0079 D8）: 落ち着くまで回し、root の計画の承認（決定を含む・上限に近い）を確かめて承認し、
+/// もう一度落ち着くまで回す。承認の理由を返す。
+async fn quiet_then_approve(
+    d: &mut Dispatcher,
+    store: &Arc<dyn TaskStore>,
+    root_id: TaskId,
+    max_ticks: usize,
+) -> Vec<String> {
+    run_until_quiet(d, store, max_ticks).await;
+    let reasons = approve_root_plan(store, root_id);
+    run_until_quiet(d, store, max_ticks).await;
+    reasons
+}
+
 /// root（人の明示の compound）。子が継ぐ予算を 30 turns にする（tree_gate の `gate_root` と同じ）。
 fn root_task(dir: &std::path::Path) -> Task {
     let mut root = compound_task(dir);
@@ -242,7 +257,11 @@ async fn unanswered_decision_blocks_only_dependents_and_answers_flow_into_inputs
     );
     let adapter = Arc::new(DecisionAdapter::new(vec![plan]));
     let mut d = tree_dispatcher(&store, adapter.clone());
-    run_until_quiet(&mut d, &store, 1500).await;
+    // Phase R3b: 決定を含む root の計画は承認を挟む（決定への回答とは別。承認の後も決定に依存しない unit は進む）。
+    assert_eq!(
+        quiet_then_approve(&mut d, &store, root_id, 1500).await,
+        vec!["decisions:h1,h2".to_string()]
+    );
 
     // (a) 決定に依存しない unit は走り、依存する unit だけが待つ。
     let units = store.work_units_for(root_id).unwrap();
@@ -353,7 +372,7 @@ async fn limit_raise_answer_resumes_subtree() {
     let adapter = Arc::new(DecisionAdapter::new(vec![plan]));
     let mut d = tree_dispatcher(&store, adapter);
     d.config.execution.limits.tree.max_tree_leaves = 2;
-    run_until_quiet(&mut d, &store, 1500).await;
+    quiet_then_approve(&mut d, &store, root_id, 1500).await;
     let units = store.work_units_for(root_id).unwrap();
     assert!(blocked_by_decision(&units, "x"));
     let limit = decision(&store, root_id, "limit:max_tree_leaves");
@@ -390,7 +409,7 @@ async fn limit_raise_answer_resumes_subtree() {
     let mut d = tree_dispatcher(&store, adapter);
     // root の planner の 1 本 + 子の 1 本で 2 本。もう一方の子の run は 3 本目になる。
     d.config.execution.limits.tree.max_tree_runs = 2;
-    run_until_quiet(&mut d, &store, 1500).await;
+    quiet_then_approve(&mut d, &store, root_id, 1500).await;
     let limit = decision(&store, root_id, "limit:max_tree_runs");
     assert_eq!(limit.status, task_core::DecisionStatus::Open);
     assert_eq!(limit.needed_before, vec!["self".to_string()]);
@@ -586,7 +605,7 @@ async fn withdraw_cancels_the_held_units() {
     let adapter = Arc::new(DecisionAdapter::new(vec![plan]));
     let mut d = tree_dispatcher(&store, adapter);
     d.config.execution.limits.tree.max_depth = 1;
-    run_until_quiet(&mut d, &store, 800).await;
+    quiet_then_approve(&mut d, &store, root_id, 800).await;
     let dec = decision(&store, root_id, "leaf_too_large:big");
     let outcome = answer(&store, &dec.id, Some("withdraw"), None);
     assert_eq!(outcome.effect, task_core::DecisionEffect::Withdraw);
@@ -621,7 +640,7 @@ async fn withdraw_cancels_the_held_units() {
     );
     let adapter = Arc::new(DecisionAdapter::new(vec![plan]));
     let mut d = tree_dispatcher(&store, adapter);
-    run_until_quiet(&mut d, &store, 800).await;
+    quiet_then_approve(&mut d, &store, root_id, 800).await;
     let units = store.work_units_for(root_id).unwrap();
     assert!(blocked_by_decision(&units, "w"));
     assert_eq!(

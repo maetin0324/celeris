@@ -43,6 +43,8 @@ pub mod milestone_review;
 /// ADR-0074 D2（Phase F3 途中確認）: 工程の後の途中確認（`awaiting_human`）の判定と人の操作。
 pub mod phase_gate;
 pub mod plan;
+/// ADR-0079 D8（Phase R3b）: root の計画の承認（`awaiting_plan_approval`）の判定と人の操作。
+pub mod plan_gate;
 pub mod project_plan;
 /// ADR-0072「Phase F6 実装時の決定」: 起票済みの Task を後から分解の経路に入れる / atomic に戻す。
 pub mod regate;

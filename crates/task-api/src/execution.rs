@@ -39,6 +39,10 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             axum::routing::post(post_phase_gate),
         )
         .route(
+            "/api/v1/tasks/{id}/execution/plan-gate",
+            axum::routing::post(post_plan_gate),
+        )
+        .route(
             "/api/v1/tasks/{id}/execution/decompose",
             axum::routing::post(post_decompose),
         )
@@ -160,23 +164,25 @@ async fn get_task_execution(
                 }
                 None => None,
             };
-            let (gate, phase, metrics, phase_checkpoint, awaiting_children) = match detail.execution
-            {
-                Some(e) => (
-                    e.gate,
-                    e.phase,
-                    e.metrics,
-                    e.phase_checkpoint,
-                    e.awaiting_children,
-                ),
-                None => (
-                    None,
-                    None,
-                    task_core::summarize_execution_metrics(&task, &[]),
-                    None,
-                    Vec::new(),
-                ),
-            };
+            let (gate, phase, metrics, phase_checkpoint, awaiting_children, plan_approval) =
+                match detail.execution {
+                    Some(e) => (
+                        e.gate,
+                        e.phase,
+                        e.metrics,
+                        e.phase_checkpoint,
+                        e.awaiting_children,
+                        e.plan_approval,
+                    ),
+                    None => (
+                        None,
+                        None,
+                        task_core::summarize_execution_metrics(&task, &[]),
+                        None,
+                        Vec::new(),
+                        None,
+                    ),
+                };
             Ok(TaskExecutionView {
                 gate,
                 phase,
@@ -185,6 +191,7 @@ async fn get_task_execution(
                 metrics,
                 phase_checkpoint,
                 awaiting_children,
+                plan_approval,
             })
         })
         .await?;
@@ -222,6 +229,41 @@ async fn post_phase_gate(
         })
         .await?;
     tracing::info!(who = "admin", op = "phase_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: phase gate");
+    Ok(json_response(StatusCode::OK, &result))
+}
+
+/// ADR-0079 D8（Phase R3b）: `POST /tasks/{id}/execution/plan-gate`（管理系 = 人だけ。回答の主体は `human`）。
+/// 本文 `{"action": "approve" | "replan" | "withdraw", "note": "…"}`（`decision` は `action` の別名）。
+/// root の計画の承認待ち（`awaiting_plan_approval`）でなければ 409、`replan` で `note` が空・note が長すぎるなら 422、
+/// 無い task は 404。応答は `TransitionResult`。
+async fn post_plan_gate(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    headers: HeaderMap,
+    Params(id): Params<String>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let task_id = parse_task_id(&id)?;
+    let req: task_ops::plan_gate::PlanGateRequest = read_json(body, false).await?;
+    let action = req.action;
+    let result = state
+        .blocking(move |store| {
+            task_ops::plan_gate::plan_gate(store, task_id, req.action, req.note, "human").map_err(
+                |e| match e {
+                    task_ops::OpsError::Validation(message) => {
+                        ApiProblem::validation(vec![crate::types::ValidationError {
+                            field: Some("note".to_string()),
+                            message,
+                        }])
+                    }
+                    other => ops_problem(store, other, Some("plan_gate")),
+                },
+            )
+        })
+        .await?;
+    tracing::info!(who = "admin", op = "plan_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: plan gate");
     Ok(json_response(StatusCode::OK, &result))
 }
 

@@ -2164,3 +2164,92 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
   `5fcb7eebbe9a`（gate ok: cargo test 2678 / GUI 1173 / mobile-audit 0、verify ok / live_ok）は main 09a6b0c と tree が同一なので、それを 20:13:05Z にライブ昇格
   （backup 20260928-201255-pre-5fcb7eebbe9a）。これで F5-fix7 も本番に入った。
 - 見つかった不具合: F5-fix7（依存 WU のブランチ解決・準備失敗の blocked 化）、retry が gate 判定を複製する（F6 で修正済み）。
+
+## F5-fix9: 空の replan で task が ready のまま止まる（2026-09-29）
+
+（注: 同じ「F5-fix8」の名前は上の「pegasus の ssh master」節〈ADR-0078〉にも使われている。本節は空の replan の修正。）
+
+### 症状（本番 2026-09-29、task 01M3MZKB3DFYJNBH015MJGQ0BT「ブラウザ capability Phase 2」、/2、gate=on、`max_replans = 3`）
+
+- 02:26:45Z 最終レビュー不合格（criterion 3・5・6・7・8。main a525af2 がタスクブランチの祖先でない等）→ `ready`。
+- replan の planner 1 回目（01M3NFSFBGQBQ2RPFQ7PJZ5142）は `too many work_units: 11 > 10` と容量超過で拒否。2 回目
+  （01M3NFWQKAW2PNGQYDHGZ8B98T、02:29:47Z）は「done の WU だけで上限いっぱいなので WU は足せない。指摘はもう解消している（HEAD d5ec0cd）」
+  として空の差分を出し、`execution_planned {version: 4, reason: "replan (planner run) (added=0, changed=0, removed=0)"}` →
+  `running → ready (planned)`。
+- plan v4（01M3NFYBEQ1YQXCVN80VRFWWEH）の `plan_id` の `work_units` 行は 0（done の WU 10 は v1 12 / v2 1 / v3 2 の行のまま持ち越し。
+  これは正常）。有効な WU 15 行（統合 WU を含む）はすべて done。
+- 以後 30 分、Task について event もログも 0 件（02:39Z の停止→起動の昇格を挟んでも同じ）。
+- 03:00:41Z 人が `POST /tasks/{id}/execution/decompose {mode: compound, note}` → `execution_hint_set {replan: true}`。その後（read-only
+  の照会、03:07Z 時点）: **新しい event は 0 件**、Task は `ready` のまま。daemon のログには 03:00:41Z から tick ごと（約 2 s）に
+  WARN `a human replan was requested but max_replans is exhausted; continuing with the current plan`（task_id 同じ、03:07Z までに
+  191 行）が出るだけで、planner も review も起きない。
+
+### 根本原因（修正前の file:line、`crates/task-dispatch/src/dispatcher.rs`、HEAD 74faf16）
+
+- L9019（/2・/3）`PhaseSettle::AllDone | PhaseSettle::Failure(_) => self.replan_gate(task_id)`、L8884（/1）`NextStep::AllDone =>
+  self.replan_gate(task_id)`: 仕事の残っていない計画の `ready` の Task は、**採用の直後でも**必ず replan に回る。コメントの前提
+  （「この状態は review 不合格の後だけ」）が、replan で何も足さなかった版の採用で崩れる。
+- L12258〜12269 `replan_gate`: 版 4 = replan 3 回 ≥ `max_replans` 3 → `raise_node_replan_limit`（L11653。木の節点でなければ L11661 で
+  何もしない）→ `Ok(WuDispatchGate::Skip)`。L13034 `WuDispatchGate::Skip => return Ok(false)`。毎 tick 同じ判定で、event もログも無い。
+- 人の依頼の後は L8764〜8768 で `replan_gate` が同じく `Skip` → WARN を出して「今の計画のまま進む」が、進む先が上の `AllDone →
+  replan_gate → Skip`。
+- /1 で有効な WU が 0 のときは `task_core::next_work_unit`（`crates/task-core/src/execution_plan.rs` L2675）が `Stuck` を返し、L8905 の
+  WARN → `Skip` で同じく止まる。
+- 見逃した理由: R3b の生存確認（L11218 `check_tree_liveness`）は L11220 で木が無効なら何もせず、木の節点しか見ない。さらに
+  `crates/task-core/src/tree.rs` L1748 は unit がすべて終わった節点を常に「走れる: completion（次の tick で最終レビュー）」と分類して
+  いたが、dispatcher は実際には最終レビューに進めていなかった。
+- 仮説との対応: (1) 正（空の差分が採用され、done の持ち越しだけの版になる）。(2) 正（`ready` から進む経路は unit の完了か replan だけで、
+  完了済みの計画を最終レビューに出す経路が無い）。(3) は採らない（下の規則 2.）。
+
+### 規則（ADR-0074 末尾「F5-fix8 実装時の明確化: 空の replan と完了済み計画の進行」）
+
+1. 仕事の残っていない計画（有効な WU がすべて done、または有効な WU が 0）の `ready` の Task は、その版の採用の後に最終レビューの判定が
+   まだ無ければ、次の tick で run を起こさず最終レビューに出す（新 trigger `PlanComplete`: `ready → reviewing`、`reason =
+   "plan_complete"`、attempts 不変）。判定の後なら従来どおり replan。
+2. 空の差分は拒否しない（done の WU が上限を埋めていると planner は WU を足せない。当否は最終レビューが決める。繰り返しは attempts と
+   `max_replans` で有限）。
+3. 生存確認を、有効な計画を持つ `ready` の Task すべて（木が無効でも）に広げる。unit がすべて終わった節点は 未審査 = 走れる / 審査後で
+   replan の余地あり = 走れる / 余地なし = 理由なし `replans_exhausted`。通知 key は木でなければ `stall:<id>:<seq>`。
+
+### 修正（schema・migration の変更なし）
+
+- `crates/task-core/src/transition.rs`: `Trigger::PlanComplete`（表のテストを 4×8×22 に）。
+- `crates/task-core/src/execution_plan.rs`: `plan_work_finished`（有効な WU がすべて done / 0 件）と `plan_awaits_final_review`
+  （採用の後に最終レビューの判定が無いか。純粋関数）。
+- `crates/task-dispatch/src/dispatcher.rs`: `wu_dispatch_gate` の scheduler の前に `plan_work_finished` → `finished_plan_gate`
+  （`FinalReview` か `replan_gate`）。新しい gate `WuDispatchGate::FinalReview` → `start_final_review_from_ready`（`PlanComplete` +
+  `spawn_review`。主題は今の版の `rationale` + 完了した WU の要約）。`check_tree_liveness` は木が無効でも計画を持つ `ready` の Task を見る。
+- `crates/task-core/src/tree.rs` / `crates/task-ops/src/tree.rs`: `NodeLivenessFacts.plan_reviewed`、`LivenessUnitFacts.waits_on_child_dep`
+  （`child:` の依存を待つ pending は名指しの待ち）、`planner_pending` は人・途中確認の replan を `max_replans` の余地があるときだけ数える。
+
+### 証拠
+
+- 新しいテスト（`crates/task-dispatch/src/dispatcher/tests/finished_plan.rs`）:
+  - `empty_replan_after_review_fail_goes_to_final_review`（事故の再現: v1 の 3 WU done → review_fail → planner の空の差分で v2 採用
+    〈`added=0, changed=0, removed=0`〉、`max_replans = 1` で使い切り → `plan_complete` → 2 回目の審査で `done`。worker run 3・planner 1、
+    replay の差分 0）
+  - `a_plan_with_no_work_left_proceeds_to_review_without_a_run`（/2 の計画の WU〈統合 WU 含む〉がすべて done / すべて cancelled → run 0 本で
+    `plan_complete` → `done`、replay の差分 0）
+  - `a_stalled_non_tree_plan_is_detected`（木は無効、全 done・審査の後・`max_replans = 0` → 偽の時計で 599 s までは無し、630 s で
+    `StallDetected{replans_exhausted}` と通知 `stall:<id>:` を 1 回だけ、以後繰り返さない。run 0 本）
+  - `liveness_does_not_flag_runnable_non_tree_plans`、`task_core::tree` の `running_and_runnable_nodes_are_live` に全 done / unit 0 /
+    審査後の 3 ケースを追加。
+- 修正を外して確認: `wu_dispatch_gate` の `plan_work_finished` の分岐を無効にすると、上の 1 本目と 2 本目が FAILED（`ready` のまま）。
+  戻して 4 本とも ok。
+- 既存テストの変更: `tree_approval::tree_disabled_is_unchanged` の `liveness_checked_at.is_none()` の assert を外した（木が無効でも計画を
+  持つ Task の生存確認は走るため。`StallDetected` が出ないことの assert は残した）。
+- 全体ゲート（`CARGO_TARGET_DIR=/var/lib/celeris/scratch/targets/agent-emptyplan/target`、`RUSTC_WRAPPER` 無し）: 完了報告に記載。
+
+### 未解決事項・提案
+
+- 本番の task 01M3MZKB3DFYJNBH015MJGQ0BT は、この修正の昇格後の最初の tick で `plan_complete` → 最終レビューに進むはず（v4 の採用の後に
+  判定が無いため。人の replan の依頼は `max_replans` を使い切っているので WARN のまま、今の計画で進む）。本 fix は本番に触れていない
+  （DB は read-only の照会だけ）。人の note（main の取り込み・release/verify）を反映させたければ、レビューの不合格の後に `max_replans` を
+  上げる（木の節点なら `limit:max_replans` の決定）か、別 task にする必要がある。
+- **done の WU が `max_work_units`（10）に数えられる**ため、done が 10 に達した /2 の計画の replan は WU を 1 つも足せない（1 回目の
+  planner が 11 > 10 で拒否された原因）。done の持ち越しを上限から外すか、replan では上限を「新しく足す WU の数」に数えるかは提案に留める。
+- 人の明示の replan の依頼（`execution_hint_set{replan: true}`）が `max_replans` の使い切りで黙って（WARN だけで）落ちる。依頼を受けた
+  時点で API が 409 を返すか、`worker_progress` を 1 件残すかは次の判断に回す。
+
+**昇格と本番確認**: release `a8ed75460c78`（main a8ed754 = R3b + F5-fix9）を 2026-09-29 03:28:42Z にライブ昇格（backup 20260929-032832-pre-a8ed75460c78、verify ok / live_ok、schema 31）。昇格の 4 秒前まで `ready` で止まっていた Phase 2 task 01M3MZKB3DFYJNBH015MJGQ0BT は 03:28:38Z（新 daemon の最初の tick）に `transitioned ready→reviewing (plan_complete)` で最終 review（reviewer run 01M3NKA4F1P2Z1R51PTJ3NY6A2）に進んだ。
+

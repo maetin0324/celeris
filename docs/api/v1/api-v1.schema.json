@@ -518,6 +518,11 @@
           "const": "phase_gate",
           "description": "ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認に応える（`POST /tasks/{id}/execution/\nphase-gate` の continue / replan / withdraw）。`blocked(awaiting_human)` のときだけで、その間は\n`Answer` を出さない（events が要るので `actions_with_events` が足す）。",
           "type": "string"
+        },
+        {
+          "const": "plan_gate",
+          "description": "ADR-0079 D8（Phase R3b）: root の計画の承認に応える（`POST /tasks/{id}/execution/plan-gate` の\napprove / replan / withdraw）。`blocked(awaiting_plan_approval)` のときだけで、その間は `Answer` を出さない。",
+          "type": "string"
         }
       ]
     },
@@ -1235,6 +1240,66 @@
             "phase_title",
             "phases_done",
             "phases_total",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked(awaiting_plan_approval)`）。\n質問ではない（`questions` には出さない）。操作は `POST /tasks/{id}/execution/plan-gate`\n（approve / replan / withdraw）。計画の決定の要求は受信箱の `decisions` に同じく出る（`decision_ids`）。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "decision_ids": {
+              "description": "この節点の未回答の決定の id（`decisions` の節の同じ id）。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "plan_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reasons": {
+              "description": "`PlanApprovalRequested.reasons`（`decisions:…` / `review_human:…` / `near_limit:<設定名>:<値>/<上限>`）。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "stages": {
+              "description": "計画の見取り図（段階ごとの unit）。",
+              "items": {
+                "$ref": "#/$defs/PlanApprovalStage"
+              },
+              "type": "array"
+            },
+            "summary": {
+              "description": "理由の人が読む 1 行。",
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "plan_approval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "plan_id",
+            "plan_version",
+            "reasons",
+            "summary",
+            "stages",
+            "decision_ids",
             "at"
           ],
           "type": "object"
@@ -7269,9 +7334,24 @@
           "type": "object"
         },
         {
-          "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`stall_secs` 続いた。状態は変えない（発行は R3b）。",
+          "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。",
+              "items": {
+                "$ref": "#/$defs/DecisionPathEntry"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "description": "Phase R3b: 分類の理由（`task_core::tree::NodeLiveness.reason`。例 `child_missing`）。",
+              "type": "string"
+            },
+            "since": {
+              "description": "Phase R3b: 理由なく止まっていると daemon が最初に見た時刻（RFC 3339）。",
               "type": "string"
             },
             "task_id": {
@@ -7842,6 +7922,11 @@
           "const": "awaiting_children",
           "description": "ADR-0079 D5（Phase R1b）: `ready` のまま、走れる自分の leaf が無く子 task（計画の kind task の\nunit）だけを待っている（dispatch されず lease も持たない。待っている子は\n`ExecutionView.awaiting_children`）。",
           "type": "string"
+        },
+        {
+          "const": "awaiting_plan_approval",
+          "description": "ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked` で、直前の遷移の reason が\n`awaiting_plan_approval`）。理由は `ExecutionView.plan_approval`。",
+          "type": "string"
         }
       ]
     },
@@ -8174,6 +8259,17 @@
             }
           ],
           "description": "計画が無い Task（D20:「直接実行」の 1 行）は `None`。"
+        },
+        "plan_approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanApprovalView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。"
         }
       },
       "required": [
@@ -11221,6 +11317,11 @@
           "const": "decision_requested",
           "description": "ADR-0079 D7（Phase R3a）: 人への決定の要求（木の中の位置 path 付き）。同じ run（計画の採用・worker の\nrun）で出た複数は 1 通に束ねる（`key` = `plan:<plan_id>:decisions` / `run:<run_id>:decisions`、1 件なら\n`decision:<id>`）。未回答のまま 24 時間たったら 1 回だけ再通知する（`key` の先頭に `reminder:`）。",
           "type": "string"
+        },
+        {
+          "const": "plan_approval",
+          "description": "ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked(awaiting_plan_approval)`）。\nその計画の決定の要求は同じ 1 通に束ねる（`DecisionRequested` の `plan:<plan_id>:decisions` は鳴らさない）。\n`key` = `plan:<plan_id>:approval`。",
+          "type": "string"
         }
       ]
     },
@@ -11927,6 +12028,60 @@
       ],
       "type": "object"
     },
+    "PlanApprovalStage": {
+      "description": "`AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "review_human": {
+          "description": "`review: human`（段階の後で人の確認）。",
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "units": {
+          "description": "`<key>: <title>（leaf | 子 task）` の 1 行ずつ。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "review_human",
+        "units"
+      ],
+      "type": "object"
+    },
+    "PlanApprovalView": {
+      "description": "ADR-0079 D8（Phase R3b）: 承認を待っている root の計画（Execution 節と GUI の 3 つのボタンの材料）。",
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        },
+        "reasons": {
+          "description": "`PlanApprovalRequested.reasons`（`decisions:<key>,…` / `review_human:<stage>` / `near_limit:<設定名>:<値>/<上限>`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "理由の人が読む 1 行。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "reasons",
+        "summary"
+      ],
+      "type": "object"
+    },
     "PlanDagNode": {
       "description": "DAG の 1 節点（= マイルストーン Task）。",
       "properties": {
@@ -12065,6 +12220,46 @@
         "version",
         "rationale",
         "nodes"
+      ],
+      "type": "object"
+    },
+    "PlanGateAction": {
+      "description": "D8: `POST /tasks/{id}/execution/plan-gate` の `action`。",
+      "oneOf": [
+        {
+          "const": "approve",
+          "description": "計画のとおり進める（`PhaseResume{PlanApprove}`）。",
+          "type": "string"
+        },
+        {
+          "const": "replan",
+          "description": "note の指示で planner に計画を書き直させる（`note` 必須）。",
+          "type": "string"
+        },
+        {
+          "const": "withdraw",
+          "description": "この task（と subtree）を取り下げる（既存の `Cancel`）。",
+          "type": "string"
+        }
+      ]
+    },
+    "PlanGateRequest": {
+      "additionalProperties": false,
+      "description": "D8: `POST /tasks/{id}/execution/plan-gate` の本文（ADR-0074 D2.4 の phase-gate と同じ形。`decision` は\n`action` の別名として受け付ける）。",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/PlanGateAction"
+        },
+        "note": {
+          "description": "`approve` では任意（次の run に「計画の承認」として渡す）。`replan` では必須（planner への指示）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
       ],
       "type": "object"
     },
@@ -17523,6 +17718,17 @@
           ],
           "description": "計画の無い Task（暗黙の WorkUnit）は `None`。"
         },
+        "plan_approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanApprovalView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。"
+        },
         "runs": {
           "description": "checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。",
           "items": {
@@ -19686,6 +19892,10 @@
       "$ref": "#/$defs/PhaseGateRequest",
       "description": "ADR-0074 D2.4（Phase F3 途中確認）: `POST /tasks/{id}/execution/phase-gate` の本文（応答は\n`transition_result`）。"
     },
+    "plan_gate": {
+      "$ref": "#/$defs/PlanGateRequest",
+      "description": "ADR-0079 D8（Phase R3b）: `POST /tasks/{id}/execution/plan-gate` の本文（応答は `transition_result`）。"
+    },
     "problem": {
       "$ref": "#/$defs/Problem"
     },
@@ -19993,6 +20203,7 @@
     "execution_plan_create",
     "task_execution",
     "phase_gate",
+    "plan_gate",
     "execution_metrics",
     "metrics_scratch",
     "browser_request",

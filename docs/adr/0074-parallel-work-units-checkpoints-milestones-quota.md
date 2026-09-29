@@ -1310,3 +1310,33 @@ git 管理領域（`<登録元>/.git/worktrees/<name>/ORIG_HEAD`）を read-only
 `children`** は plan/3 の kind task の unit に置き換わり、/2 の互換としてだけ残る。§4 の「案件計画のマイルストーン数」の行と §6 R15 の
 「大きすぎれば children」も同様。**D1（工程・統合 WU・鍵 (task, WU)）と D2（途中確認）は維持**し、再帰の各段で使う（統合 WU は子 task の
 ブランチも merge する。段階の `review: human` は D2 の停止点と同じ）。本文は書き換えない。
+
+## F5-fix9 実装時の明確化: 空の replan と完了済み計画の進行（2026-09-29）
+
+本番（task 01M3MZKB3DFYJNBH015MJGQ0BT、/2、gate=on、`max_replans = 3`）で、最終レビューの不合格（02:26:45Z）の後の replan の planner が
+「done の WU だけで上限（10）いっぱいなので WU は足せない。指摘はもう解消している」として空の差分（added=0, changed=0, removed=0）を出し、
+plan v4 が採用された（有効な WU 10 がすべて done。行は元の版の `plan_id` のまま持ち越されるので v4 の `plan_id` の行は 0）。採用の時点で
+版は 4 = replan 3 回で `max_replans` を使い切っていた。以後 Task は `ready` のまま 30 分以上、run・event・review が 1 つも起きなかった。
+
+1. **仕事の残っていない計画の次の一手**（ADR-0072 D17 4. の明確化）: 有効な計画の WU がすべて `done`（統合 WU・repair WU を含む）、
+   または有効な WU が 1 つも無い（すべて superseded / cancelled）`ready` の Task は、
+   - その版の採用（`ExecutionPlanned{plan_id}`）の後に最終レビューの判定（`reviewing` を `review_pass` / `review_fail` /
+     `review_repair` で出た遷移）がまだ無ければ、**次の tick で run を起こさずに最終レビューに出す**（新しい trigger
+     `PlanComplete`: `ready → reviewing`、Execute kind のみ、attempts 不変、`reason = "plan_complete"`）。レビューの主題は完了した WU の
+     要約の前に今の版の `rationale`（何も足さなかった理由）を置く。
+   - 判定の後（不合格で `ready` に戻った）なら従来どおり replan（`replan_gate`）。
+   v1 / v2 / v3 に共通（v1 の「有効な WU が無い = `Stuck`」も同じ扱い。黙って `Skip` しない）。人の replan の依頼・途中確認の replan・
+   不正な試行の後の再試行はこれより先に見る（余地があれば planner）。
+2. **空の差分は拒否しない**（採用して 1. で進める）: review_fail の後の空の差分は「審査の指摘に対処していない」とも読めるが、F5-fix3 の
+   ような拒否の往復にはしない。理由: (a) 本件のように done の WU が `max_work_units` を埋めていると、planner は WU を 1 つも足せない
+   （拒否すれば planner の試行を使い切って止まるだけ）。(b) planner が「指摘はもう解消している」と判断したなら、その判断の当否を
+   決めるのは最終レビューであって daemon ではない（DESIGN 原則: 判定はレビュー）。(c) 採用して審査に出せば、不合格なら attempts を
+   1 つ使い（`ReviewFail`）、`max_retries` を使い切れば `failed` になるので、空の replan の繰り返しは有限。
+3. **木でない Task の生存確認**（ADR-0079 D10 の拡張）: 生存確認（30 秒ごと、`liveness_timeout_secs` = 600 秒）の対象を、木の節点に加えて
+   **有効な計画を持つ `ready` の Task すべて**（木が無効でも）に広げる（計画を持たない atomic の Task は対象外）。規則は D10 と同じ
+   （`task_core::tree::liveness`）で、次の 3 点を足す: (i) unit がすべて終わった節点は、未審査なら「走れる: completion」、審査の後で replan
+   の余地があれば「走れる: replan」、無ければ「理由なし: replans_exhausted」（以前は常に「走れる: completion」で、本件を見逃す）。
+   (ii) 人の replan の依頼・途中確認の replan は `max_replans` の余地があるときだけ「走れる: planner」。(iii) `pending` で `child:<key>`
+   の依存（D3.7）を待つ unit は「名指しの待ち: children」。木でない Task の障害通知の key は `stall:<task_id>:<StallDetected の seq>`
+   （木の節点は従来どおり `tree-stall:`）。
+4. schema・migration の変更は無い（`PlanComplete` は `Transitioned.reason` の新しい値だけ。replay は `to` を読むので変わらない）。

@@ -65,6 +65,9 @@ use crate::policy::{
 };
 
 /// これを超えた tick は段階ごとの所要時間を `warn` で出す（ADR-0015 D2）。
+/// ADR-0079 D10（Phase R3b）: 木の生存確認の間隔（秒。tick ごとに全節点の events を読まない）。
+const LIVENESS_CHECK_INTERVAL_SECS: i64 = 30;
+
 /// ADR-0072 D14: planner の試行の上限（「1 回だけ再試行」。窓は直近の `ExecutionPlanned` から）。
 const MAX_PLANNER_ATTEMPTS: usize = 2;
 
@@ -1113,8 +1116,9 @@ fn describe_run_end(end: task_core::RunEnd) -> String {
 const REJECTED_PLAN_FILE: &str = "execution-plan.rejected.json";
 /// Phase F5-fix3: `give_up_or_retry_planner` の進捗・質問の文面（`planner_rejections_since_last_plan` が
 /// 同じ定数で理由を取り出す。文面は F5-fix2 までと 1 バイトも変えない）。
-const PLANNER_RETRY_PREFIX: &str = "計画を採用できませんでした（";
-const PLANNER_RETRY_SUFFIX: &str = "）。もう一度だけ試します。";
+// ADR-0079 D10（Phase R3b）: 生存確認（`task_ops::tree::planner_retry_pending`）が同じ文言を読むので task_ops に置く。
+const PLANNER_RETRY_PREFIX: &str = task_ops::tree::PLANNER_RETRY_PREFIX;
+const PLANNER_RETRY_SUFFIX: &str = task_ops::tree::PLANNER_RETRY_SUFFIX;
 const PLANNER_BLOCKED_PREFIX: &str = "計画を直せませんでした（";
 const PLANNER_BLOCKED_SUFFIX: &str = "）。予算を増やして続ける／人が計画を書き直す\n（PUT /tasks/{id}/execution-plan）／中止のいずれかを選んでください。";
 
@@ -1592,6 +1596,10 @@ enum WuDispatchGate {
     /// ADR-0074 D1.4/D1.7（Phase F2b）: 工程の WU がすべて done で、統合がまだ（再起動の照合で
     /// pending に戻った等）。Task の lease（工程の保持者）を取り、統合を走らせる。
     StartIntegration(Box<task_core::WorkUnitRow>),
+    /// ADR-0074「F5-fix8 実装時の明確化」: 有効な計画に仕事が残っていない（WU がすべて done、または WU が
+    /// 1 つも無い）のに、その版がまだ最終レビューを受けていない（replan で何も足さなかった版など）。run を
+    /// 起こさずに `Trigger::PlanComplete`（`ready → reviewing`）で最終レビューに出す。
+    FinalReview,
     /// この tick では何もしない（`Stuck`（replan の余地なし）／replan の上限に到達）。
     Skip,
 }
@@ -2172,6 +2180,11 @@ pub struct Dispatcher {
     /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
     /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
     wu_prepare_failures: HashMap<String, WuPrepareFailures>,
+    /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の
+    /// 節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
+    stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
+    /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
+    liveness_checked_at: Option<OffsetDateTime>,
     disk_low: bool,
     /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
     removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
@@ -2478,6 +2491,8 @@ impl Dispatcher {
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
             wu_prepare_failures: HashMap::new(),
+            stall_watch: HashMap::new(),
+            liveness_checked_at: None,
             disk_low: false,
             removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scratch: ScratchState::default(),
@@ -3349,6 +3364,10 @@ impl Dispatcher {
         self.settle_awaiting_children()?;
         // ADR-0079 §7 R1b: 木の照合（子の状態の写しと、ready の kind task の unit からの子 task の生成）。
         self.reconcile_tree_units()?;
+        // ADR-0079 D10（Phase R3b）: 木の生存確認（理由なく止まっている節点に `StallDetected` と障害通知を 1 回）。
+        if let Err(e) = self.check_tree_liveness() {
+            tracing::warn!(error = %e, "tree liveness check failed (ADR-0079 D10)");
+        }
         // ADR-0077 D2: `auto_advance` の案件で、`done` になったマイルストーン Task の途中目標を `reached` に。
         match task_ops::project_plan::auto_reach_done_milestones(self.store.as_ref()) {
             Ok(reached) => {
@@ -6387,13 +6406,60 @@ impl Dispatcher {
                         {
                             tracing::warn!(%task_id, %run_id, error = %e, "failed to record the unit gate / tree limit holds of the adopted plan (ADR-0079 R2a)");
                         }
-                        self.store.apply_transition_with_events(
-                            task_id,
-                            Trigger::Continue {
-                                why: task_core::ContinueWhy::Planned,
-                            },
-                            vec![finished, quota_event],
-                        )?;
+                        // ADR-0079 D8（Phase R3b）: root の /3 の計画は、決定を含む・`review: human` の段階・上限に
+                        // 近い、のどれかなら人の承認を待つ（`PlanGate`、unit を 1 つも起こさない）。そうでなければ
+                        // 進め、報告の流れに 1 件だけ残す（Discord は鳴らさない。U-R3）。
+                        let approval = match self.root_plan_approval(task, &plan) {
+                            Ok(a) => a,
+                            Err(e) => {
+                                tracing::warn!(%task_id, %run_id, error = %e, "failed to evaluate the root plan approval; asking a human to be safe (ADR-0079 D8)");
+                                Some(task_core::PlanApproval {
+                                    required: true,
+                                    reasons: vec![format!("evaluation_failed:{e}")],
+                                })
+                            }
+                        };
+                        match approval {
+                            Some(a) if a.required => {
+                                tracing::info!(%task_id, plan_id = %plan.id, reasons = ?a.reasons, "the root plan needs a human approval (ADR-0079 D8)");
+                                self.store.apply_transition_with_events(
+                                    task_id,
+                                    Trigger::PlanGate {
+                                        plan_id: plan.id.clone(),
+                                    },
+                                    vec![
+                                        finished,
+                                        quota_event,
+                                        Event::PlanApprovalRequested {
+                                            plan_id: plan.id.clone(),
+                                            reasons: a.reasons,
+                                        },
+                                    ],
+                                )?;
+                            }
+                            approval => {
+                                self.store.apply_transition_with_events(
+                                    task_id,
+                                    Trigger::Continue {
+                                        why: task_core::ContinueWhy::Planned,
+                                    },
+                                    vec![finished, quota_event],
+                                )?;
+                                if approval.is_some() {
+                                    let (headline, body) =
+                                        task_ops::plan_gate::plan_notice(&plan.spec);
+                                    if let Err(e) = crate::reports::record_plan_notice_report(
+                                        self.store.as_ref(),
+                                        task,
+                                        &headline,
+                                        &body,
+                                        now,
+                                    ) {
+                                        tracing::warn!(%task_id, error = %e, "failed to record the plan notice report (ADR-0079 D8)");
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         // 採用そのものが失敗した（既に有効な計画がある等、通常起きない）: 不正な
@@ -8733,6 +8799,12 @@ impl Dispatcher {
         // replan の planner run（D17 5.。`max_replans` に数える）。依頼はこの dispatch の
         // `Transitioned{to: running}` で消費される（`pending_replan_request`）。
         let events = self.store.events_for(task_id)?;
+        // ADR-0079 D10 / R3a 付記 15.（Phase R3b）: planner の試行が拒否されて「もう一度だけ試します」が約束された
+        // （人の replan の依頼・途中確認 / 承認の replan は 1 回目の `Transitioned{to: running}` で消費済み）。起点を
+        // 問わず 2 回目の試行を起こす（この replan は 1 回目で `replan_gate` を通っている）。
+        if task_ops::tree::planner_retry_pending(&events) {
+            return Ok(WuDispatchGate::RunPlanner { replan: true });
+        }
         if task_ops::regate::pending_replan_request(&events).is_some() {
             let gate = self.replan_gate(task_id)?;
             if matches!(gate, WuDispatchGate::RunPlanner { .. }) {
@@ -8838,6 +8910,13 @@ impl Dispatcher {
                 }
                 units = self.store.work_units_for(task_id)?;
             }
+        }
+        // ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画（WU がすべて done、または有効な WU が
+        // 1 つも無い）。v1 / v2 / v3 共通。採用の後にまだ最終レビューを受けていない版なら最終レビューへ、
+        // 不合格の後なら従来どおり replan（D17 4.）。以前は採用の直後でも replan に回り、`max_replans` を
+        // 使い切っていると `Skip` のまま黙って止まっていた（F5-fix8 の事故）。
+        if task_core::plan_work_finished(&units) {
+            return self.finished_plan_gate(task_id, &active_plan.id, &events);
         }
         if v2 {
             return self.wu_dispatch_gate_v2(task_id, units);
@@ -11181,6 +11260,159 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// ADR-0079 D10（Phase R3b）: 木の生存確認。`ready` の木の節点（木の子・/3 の計画を持つ root）を
+    /// `task_core::tree::liveness` で分け、「走っている / 走れる / 名指しの待ち」のどれでもない（`Unexplained`）まま
+    /// `liveness_timeout_secs` 続いたら、`Event::StallDetected` と障害通知（`TaskFailed`、key
+    /// `tree-stall:<task_id>:<StallDetected の seq>`）を 1 回だけ出す。同じ止まり方の間は繰り返さない（節点の最後の
+    /// event が `StallDetected` の間は見送る）。`running` / `reviewing`（lease・レビュー）と `blocked`（人の質問・
+    /// 途中確認・計画の承認）は常に名指しの状態なので `ready` だけを見る。判定は store の読み取りだけで、LLM なし。
+    /// ADR-0074「F5-fix8 実装時の明確化」: 木が無効でも、また木の節点でなくても、有効な計画を持つ `ready` の
+    /// Task（/1・/2 の計画）を同じ規則で見る（通知の key は `stall:<task_id>:<seq>`。木の節点は従来どおり
+    /// `tree-stall:`）。計画を持たない atomic の Task は対象外。
+    fn check_tree_liveness(&mut self) -> Result<(), DispatchError> {
+        let tree = self.config.execution.limits.tree;
+        let now = self.now_utc();
+        if let Some(last) = self.liveness_checked_at
+            && (now - last).whole_seconds() < LIVENESS_CHECK_INTERVAL_SECS
+        {
+            return Ok(());
+        }
+        self.liveness_checked_at = Some(now);
+        let mut nodes: Vec<Task> = Vec::new();
+        let mut tree_nodes: std::collections::HashSet<TaskId> = std::collections::HashSet::new();
+        for t in self.store.list(Some(Status::Ready))? {
+            if tree.enabled && self.is_tree_node(&t)? {
+                tree_nodes.insert(t.id);
+                nodes.push(t);
+            } else if self.store.execution_plan_active(t.id)?.is_some() {
+                nodes.push(t);
+            }
+        }
+        if nodes.is_empty() {
+            self.stall_watch.clear();
+            return Ok(());
+        }
+        let eligible: std::collections::HashSet<TaskId> = self
+            .store
+            .ready_tasks(100_000)?
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        let mut facts = Vec::with_capacity(nodes.len());
+        for t in &nodes {
+            let replans_so_far = self
+                .store
+                .execution_plan_list(t.id)?
+                .len()
+                .saturating_sub(1) as u32;
+            let replans_left = replans_so_far < self.effective_max_replans(t.id)?;
+            facts.push(
+                task_ops::tree::node_liveness_facts(
+                    self.store.as_ref(),
+                    t,
+                    eligible.contains(&t.id),
+                    replans_left,
+                )
+                .map_err(ops_to_store)?,
+            );
+        }
+        let verdicts = task_core::tree::liveness(&task_core::TreeSnapshot { nodes: facts });
+        let mut watching: std::collections::HashSet<TaskId> = std::collections::HashSet::new();
+        for v in verdicts {
+            if v.class != task_core::LivenessClass::Unexplained {
+                continue;
+            }
+            let events = self.store.events_for(v.task_id)?;
+            let Some((last_seq, last)) = events.last() else {
+                continue;
+            };
+            if matches!(last, Event::StallDetected { .. }) {
+                // 既に知らせた止まり方（何か起きるまで繰り返さない）。
+                continue;
+            }
+            watching.insert(v.task_id);
+            let since = match self.stall_watch.get(&v.task_id) {
+                Some((seq, since)) if seq == last_seq => *since,
+                _ => {
+                    self.stall_watch.insert(v.task_id, (*last_seq, now));
+                    now
+                }
+            };
+            let elapsed = (now - since).whole_seconds();
+            if elapsed < i64::try_from(tree.liveness_timeout_secs).unwrap_or(i64::MAX) {
+                continue;
+            }
+            let Some(task) = nodes.iter().find(|t| t.id == v.task_id) else {
+                continue;
+            };
+            let path =
+                task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
+            let breadcrumb = path
+                .iter()
+                .map(|p| p.title.as_str())
+                .collect::<Vec<_>>()
+                .join(" › ");
+            let seq = self.store.append_event(
+                v.task_id,
+                &Event::StallDetected {
+                    task_id: v.task_id,
+                    detail: v.detail.clone(),
+                    reason: v.reason.clone(),
+                    since: rfc3339(since),
+                    path,
+                },
+            )?;
+            let is_tree_node = tree_nodes.contains(&v.task_id);
+            let body = format!(
+                "障害（stall）: 『{}』が理由なく止まっています（{} 秒以上。{}）: {}。位置: {}（{}）",
+                task.title,
+                elapsed,
+                v.reason,
+                v.detail,
+                breadcrumb,
+                if is_tree_node {
+                    "ADR-0079 D10"
+                } else {
+                    "ADR-0074 F5-fix8"
+                }
+            );
+            tracing::error!(task_id = %v.task_id, reason = %v.reason, detail = %v.detail, elapsed, tree = is_tree_node, "a task with an execution plan is stalled without a named wait (ADR-0079 D10 / ADR-0074 F5-fix8)");
+            let key_prefix = if is_tree_node { "tree-stall" } else { "stall" };
+            if let Err(e) = self.store.notification_upsert_pending(
+                NotificationKind::TaskFailed,
+                &format!("{key_prefix}:{}:{seq}", v.task_id),
+                &body,
+                task.project_id,
+                now,
+            ) {
+                tracing::error!(task_id = %v.task_id, error = %e, "failed to record the stall notification");
+            }
+            self.stall_watch.remove(&v.task_id);
+            watching.remove(&v.task_id);
+        }
+        self.stall_watch.retain(|id, _| watching.contains(id));
+        Ok(())
+    }
+
+    /// ADR-0079 D8（Phase R3b）: 採用した計画が root の /3 の計画なら、承認の要否（`task_core::tree::plan_approval`）。
+    /// 木が無効・/3 でない・木の子（子の計画は承認を求めない）なら `None`（従来どおり進める。報告も残さない）。
+    fn root_plan_approval(
+        &self,
+        task: &Task,
+        plan: &task_core::ExecutionPlanRow,
+    ) -> Result<Option<task_core::PlanApproval>, DispatchError> {
+        if !self.config.execution.limits.tree.enabled
+            || plan.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3
+            || task_core::tree::is_tree_child(task)
+        {
+            return Ok(None);
+        }
+        let facts = task_ops::plan_gate::approval_facts(self.store.as_ref(), task, plan)
+            .map_err(ops_to_store)?;
+        let limits = self.effective_tree_limits(task_core::tree::root_id_of(task))?;
+        Ok(Some(task_core::tree::plan_approval(&facts, &limits)))
+    }
+
     /// ADR-0079 D9（Phase R2b）: この task が出した未回答の `kind: plan_invalid` の決定。
     fn open_plan_invalid(
         &self,
@@ -11560,7 +11792,9 @@ impl Dispatcher {
             WuDispatchGate::RunPlanner { replan } => {
                 task_core::NextRun::Planner { replan: *replan }
             }
-            WuDispatchGate::StartIntegration(_) | WuDispatchGate::Skip => return Ok(false),
+            WuDispatchGate::StartIntegration(_)
+            | WuDispatchGate::FinalReview
+            | WuDispatchGate::Skip => return Ok(false),
         };
         if !self.is_tree_node(task)? {
             return Ok(false);
@@ -11763,7 +11997,16 @@ impl Dispatcher {
             } else {
                 units
             };
-            // 2. 子 task の生成。
+            // 2. 子 task の生成。ADR-0079 D8（Phase R3b）: root の計画が承認を待つ間は子を作らない
+            // （承認までは unit を 1 つも起こさない）。
+            if parent.status == Status::Blocked
+                && task_ops::plan_gate::is_awaiting_plan_approval(
+                    &parent,
+                    &self.store.events_for(task_id)?,
+                )
+            {
+                continue;
+            }
             let limit = self
                 .config
                 .execution
@@ -12074,6 +12317,72 @@ impl Dispatcher {
                 .work_units_apply(task.id, Vec::new(), rows, events)?;
         }
         Ok(())
+    }
+
+    /// ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の次の一手。採用（`ExecutionPlanned`）の後に
+    /// 最終レビューの判定がまだ無ければ `FinalReview`、判定の後（不合格で `ready` に戻った）なら `replan_gate`。
+    fn finished_plan_gate(
+        &self,
+        task_id: TaskId,
+        plan_id: &str,
+        events: &[(u64, Event)],
+    ) -> Result<WuDispatchGate, DispatchError> {
+        if task_core::plan_awaits_final_review(events, plan_id) {
+            return Ok(WuDispatchGate::FinalReview);
+        }
+        self.replan_gate(task_id)
+    }
+
+    /// ADR-0074「F5-fix8 実装時の明確化」: `ready` の Task の、仕事の残っていない計画を最終レビューに出す
+    /// （`Trigger::PlanComplete`。run は起こさない）。レビューの主題は完了した WU の要約（`finish_phase_integration`
+    /// と同じ）の前に、今の版の計画の `rationale`（replan で何も足さなかった理由など）を置く。
+    fn start_final_review_from_ready(&mut self, task: &Task) -> Result<(), DispatchError> {
+        let task_id = task.id;
+        let units = self.store.work_units_for(task_id)?;
+        let mut summary = self.plan_summary(&units);
+        if let Some(active) = self.store.execution_plan_active(task_id)?
+            && !active.spec.rationale.trim().is_empty()
+        {
+            let head = format!(
+                "計画 v{}（仕事の残っていない版）: {}",
+                active.version,
+                active.spec.rationale.trim()
+            );
+            summary = if summary.is_empty() {
+                head
+            } else {
+                format!("{head}\n{summary}")
+            };
+        }
+        let subject = ReviewSubject {
+            summary,
+            evidence: Vec::new(),
+        };
+        let run_id = units
+            .iter()
+            .filter(|u| u.kind != task_core::WorkUnitKind::Integrate)
+            .filter_map(|u| u.last_run_id.clone())
+            .max()
+            .unwrap_or_default();
+        match self
+            .store
+            .apply_transition_with_events(task_id, Trigger::PlanComplete, Vec::new())
+        {
+            Ok(outcome) => {
+                tracing::info!(%task_id, next = ?outcome.next, "the active plan has no work left and has not been reviewed yet; sending it to the final review (ADR-0074 F5-fix8)");
+                if outcome.next == Status::Reviewing
+                    && !self.spawn_review(task_id, run_id, &subject)?
+                {
+                    self.pending_subjects.insert(task_id, subject);
+                }
+                Ok(())
+            }
+            Err(StoreError::InvalidTransition(e)) => {
+                tracing::warn!(%task_id, error = %e, "could not send a finished plan to the final review");
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// ADR-0072 D17/D18（Phase E4）: replan の余地（`max_replans`）があれば `RunPlanner{replan:
@@ -12846,6 +13155,11 @@ impl Dispatcher {
             WuDispatchGate::RunWorkUnit(wu) => Some(*wu),
             WuDispatchGate::StartIntegration(wu) => {
                 self.start_integration_from_ready(&task, &wu)?;
+                return Ok(false);
+            }
+            // ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（run は起こさない）。
+            WuDispatchGate::FinalReview => {
+                self.start_final_review_from_ready(&task)?;
                 return Ok(false);
             }
             // ADR-0072 D17（Phase E4）: replan の planner run。既存の `is_planner_dispatch` の
@@ -36564,6 +36878,14 @@ mod tests {
     /// ADR-0079 §7 R3a: 決定の要求の流れ（計画の決定の要求・依存だけの待ち・回答の注入・limit の raise-once・
     /// plan_invalid の replan / atomic / cancel・取り下げ・worker の決定）（`src/dispatcher/tests/tree_decisions.rs`）。
     mod tree_decisions;
+
+    /// ADR-0079 §7 R3b: root の計画の承認（決定・`review: human`・上限に近い）・承認不要の報告・生存確認
+    /// （`StallDetected`）・人の replan の 2 回目の試行（`src/dispatcher/tests/tree_approval.rs`）。
+    mod tree_approval;
+
+    /// ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（空の replan の事故の再現）と、
+    /// 木でない Task の生存確認（`src/dispatcher/tests/finished_plan.rs`）。
+    mod finished_plan;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

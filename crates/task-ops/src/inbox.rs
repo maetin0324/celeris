@@ -171,6 +171,34 @@ pub enum AttentionItem {
         next_phase: Option<String>,
         at: String,
     },
+    /// ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked(awaiting_plan_approval)`）。
+    /// 質問ではない（`questions` には出さない）。操作は `POST /tasks/{id}/execution/plan-gate`
+    /// （approve / replan / withdraw）。計画の決定の要求は受信箱の `decisions` に同じく出る（`decision_ids`）。
+    PlanApproval {
+        task: TaskRef,
+        plan_id: String,
+        plan_version: u32,
+        /// `PlanApprovalRequested.reasons`（`decisions:…` / `review_human:…` / `near_limit:<設定名>:<値>/<上限>`）。
+        reasons: Vec<String>,
+        /// 理由の人が読む 1 行。
+        summary: String,
+        /// 計画の見取り図（段階ごとの unit）。
+        stages: Vec<PlanApprovalStage>,
+        /// この節点の未回答の決定の id（`decisions` の節の同じ id）。
+        decision_ids: Vec<String>,
+        at: String,
+    },
+}
+
+/// `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct PlanApprovalStage {
+    pub key: String,
+    pub title: String,
+    /// `review: human`（段階の後で人の確認）。
+    pub review_human: bool,
+    /// `<key>: <title>（leaf | 子 task）` の 1 行ずつ。
+    pub units: Vec<String>,
 }
 
 fn attention_at(item: &AttentionItem) -> &str {
@@ -180,6 +208,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::Unroutable { at, .. } => at,
         AttentionItem::ClusterUnavailable { at, .. } => at,
         AttentionItem::PhaseCheckpoint { at, .. } => at,
+        AttentionItem::PlanApproval { at, .. } => at,
     }
 }
 
@@ -351,7 +380,8 @@ fn build_questions(
         let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
         let events = view::seq_pairs(&rows);
         // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認は質問ではない（attention に出す）。
-        if crate::phase_gate::is_awaiting_human(t, &events) {
+        // ADR-0079 D8（Phase R3b）: root の計画の承認待ちも同じ（attention の `plan_approval`）。
+        if crate::plan_gate::is_human_gate(t, &events) {
             continue;
         }
         let question = derive::latest_question(&events);
@@ -694,6 +724,71 @@ fn build_attention(
             phases_total,
             report_idx: info.report_idx,
             next_phase: info.report.next_phase.clone(),
+            at,
+        });
+    }
+
+    // ADR-0079 D8（Phase R3b）: root の計画の承認待ち。期限は設けない（人の判断を待つ）。
+    for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
+        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
+        let events = view::seq_pairs(&rows);
+        let Some(info) = crate::plan_gate::latest_plan_approval(t, &events) else {
+            continue;
+        };
+        let at = rows
+            .iter()
+            .find(|r| r.seq == info.transition_seq)
+            .map(|r| r.ts.clone())
+            .unwrap_or_else(|| view::to_rfc3339(t.updated_at));
+        let plan = store
+            .execution_plan_list(t.id)?
+            .into_iter()
+            .find(|p| p.id == info.plan_id);
+        let stages = plan
+            .as_ref()
+            .map(|p| {
+                p.spec
+                    .stages
+                    .iter()
+                    .map(|s| PlanApprovalStage {
+                        key: s.key.clone(),
+                        title: s.title.clone(),
+                        review_human: s.review == task_core::StageReview::Human,
+                        units: p
+                            .spec
+                            .units
+                            .iter()
+                            .filter(|u| u.stage == s.key)
+                            .map(|u| {
+                                let kind = if u.kind == task_core::WorkUnitKind::Task {
+                                    "子 task"
+                                } else {
+                                    "leaf"
+                                };
+                                format!("{}: {}（{kind}）", u.key, u.title)
+                            })
+                            .collect(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let root_id = task_core::tree::root_id_of(t);
+        let decision_ids = store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .filter(|d| d.task_id == t.id && d.status == task_core::DecisionStatus::Open)
+            .map(|d| d.id)
+            .collect();
+        let mut task_ref = view::task_ref(t);
+        task_ref.actions = view::actions_with_events(t, &events);
+        items.push(AttentionItem::PlanApproval {
+            task: task_ref,
+            plan_id: info.plan_id.clone(),
+            plan_version: plan.as_ref().map(|p| p.version).unwrap_or(0),
+            summary: crate::plan_gate::describe_reasons(&info.reasons),
+            reasons: info.reasons,
+            stages,
+            decision_ids,
             at,
         });
     }

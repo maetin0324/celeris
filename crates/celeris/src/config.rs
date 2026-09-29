@@ -1515,6 +1515,9 @@ pub struct ExecutionTreeTomlConfig {
     /// D8 の「上限に近い」の比（0 < r <= 1、既定 0.8）。
     #[serde(default = "default_tree_approval_near_limit_ratio")]
     pub approval_near_limit_ratio: f64,
+    /// Phase R3b（D10 の生存確認）: 木の節点が理由なく止まっているとみなすまでの秒数（既定 600、60 以上）。
+    #[serde(default = "default_tree_liveness_timeout_secs")]
+    pub liveness_timeout_secs: u64,
 }
 
 impl Default for ExecutionTreeTomlConfig {
@@ -1534,6 +1537,7 @@ impl Default for ExecutionTreeTomlConfig {
             max_open_decisions_per_plan: default_tree_max_open_decisions_per_plan(),
             gate_depth_step: default_tree_gate_depth_step(),
             approval_near_limit_ratio: default_tree_approval_near_limit_ratio(),
+            liveness_timeout_secs: default_tree_liveness_timeout_secs(),
         }
     }
 }
@@ -1556,6 +1560,7 @@ impl ExecutionTreeTomlConfig {
             max_open_decisions_per_plan: self.max_open_decisions_per_plan,
             gate_depth_step: self.gate_depth_step,
             approval_near_limit_permille: (self.approval_near_limit_ratio * 1000.0).round() as u32,
+            liveness_timeout_secs: self.liveness_timeout_secs,
         }
     }
 
@@ -1607,6 +1612,12 @@ impl ExecutionTreeTomlConfig {
                 self.max_open_decisions_per_plan, self.max_open_decisions
             ));
         }
+        if self.liveness_timeout_secs < MIN_TREE_LIVENESS_TIMEOUT_SECS {
+            return Err(format!(
+                "liveness_timeout_secs must be >= {MIN_TREE_LIVENESS_TIMEOUT_SECS} (got {})",
+                self.liveness_timeout_secs
+            ));
+        }
         let r = self.approval_near_limit_ratio;
         if !(r.is_finite() && r > 0.0 && r <= 1.0) {
             return Err(format!(
@@ -1615,6 +1626,13 @@ impl ExecutionTreeTomlConfig {
         }
         Ok(())
     }
+}
+
+/// Phase R3b: `liveness_timeout_secs` の下限（tick の間隔より十分に長く、通知を乱発しない）。
+const MIN_TREE_LIVENESS_TIMEOUT_SECS: u64 = 60;
+
+fn default_tree_liveness_timeout_secs() -> u64 {
+    task_core::tree::DEFAULT_LIVENESS_TIMEOUT_SECS
 }
 
 /// Phase R2a: `gate_depth_step` の上限（深さ 3 で閾値 25。規則表のスコアの最大を十分に超える）。

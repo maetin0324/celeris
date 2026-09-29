@@ -376,6 +376,9 @@ mod tests {
             Event::StallDetected {
                 task_id: child,
                 detail: "x".into(),
+                reason: String::new(),
+                since: String::new(),
+                path: Vec::new(),
             },
         ];
         for e in &events {

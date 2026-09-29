@@ -231,6 +231,39 @@ fn append_with_escalation(
     Ok(report)
 }
 
+/// ADR-0079 D8（Phase R3b）: 承認を挟まずに進める root の計画を報告の流れに 1 件残す（`progress`。複製・通知は
+/// しない）。報告するノードは担当（組織にあるとき）、無ければ秘書。どちらも無い（組織が無い）DB では作らない。
+pub(crate) fn record_plan_notice_report(
+    store: &dyn TaskStore,
+    task: &Task,
+    headline: &str,
+    body: &str,
+    now: OffsetDateTime,
+) -> Result<Option<Report>, StoreError> {
+    let org = store.org_list()?;
+    let node = task
+        .assignee
+        .as_deref()
+        .and_then(|a| org.iter().find(|n| n.id == a))
+        .or_else(|| org.iter().find(|n| n.kind == task_core::OrgKind::Secretary));
+    let Some(node) = node else {
+        tracing::warn!(task_id = %task.id, "reports: no org node to record the plan notice; skipping");
+        return Ok(None);
+    };
+    let level = report::level_of(&org, &node.id);
+    let report = report::report_for_plan_notice(
+        &node.id,
+        level,
+        task.project_id,
+        task.id,
+        headline,
+        body,
+        now,
+    );
+    store.report_append(&report)?;
+    Ok(Some(report))
+}
+
 /// ADR-0033 D3: クラスタに接続できないこと（`Event::ClusterUnavailable`）を `infra` 相当のノードの
 /// `bad_news` として 1 件記録する。案件に紐づかないので `project_id` は「案件なし」。
 pub(crate) fn record_cluster_unavailable_report(

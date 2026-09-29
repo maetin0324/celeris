@@ -1369,6 +1369,216 @@ fn a_tree_child_done_does_not_notify_task_ready_but_the_root_does() {
     assert_eq!(completed, vec![root.id.to_string()]);
 }
 
+/// 木の子（`tree.parent_unit` を持つ task）を作る。
+fn tree_child_of(root: &Task, status: Status) -> Task {
+    let mut child = task(status);
+    child.parent_id = Some(root.id);
+    child.tree = Some(task_core::TreeInfo::child_of(
+        root,
+        task_core::ParentUnit {
+            task_id: root.id,
+            plan_id: "plan".into(),
+            unit_key: "c".into(),
+            stage: "s1".into(),
+            attempt: 1,
+        },
+        None,
+    ));
+    child
+}
+
+/// ADR-0079 D11 / §7 R3b (d) `child_events_do_not_notify`: 木の子の失敗（親が replan / 作り直しで吸収する）は
+/// `task_failed` も子の run の悪い知らせも鳴らさない。root の失敗は今どおり鳴る（key の形は変えない）。
+#[test]
+fn child_events_do_not_notify() {
+    let env = Env::new();
+    let config = NotifyConfig::default();
+    notify::schedule(env.as_store(), &config, at(0), at(10)).unwrap();
+    let mut root = task(Status::Failed);
+    root.updated_at = at(15);
+    env.store.insert(&root).unwrap();
+    let mut child = tree_child_of(&root, Status::Failed);
+    child.updated_at = at(15);
+    env.store.insert(&child).unwrap();
+    let mut done_child = tree_child_of(&root, Status::Done);
+    done_child.updated_at = at(15);
+    env.store.insert(&done_child).unwrap();
+    for (task_id, headline) in [(child.id, "子が失敗"), (root.id, "root が失敗")] {
+        env.store
+            .report_append(&Report {
+                id: ReportId::new(),
+                project_id: None,
+                node_id: "secretary".into(),
+                task_id: Some(task_id),
+                kind: ReportKind::BadNews,
+                level: 0,
+                headline: headline.into(),
+                body: "b".into(),
+                sources: vec![],
+                read_at: None,
+                created_at: at(15),
+            })
+            .unwrap();
+    }
+    let created = notify::schedule(env.as_store(), &config, at(12), at(21)).unwrap();
+    let failed: Vec<String> = created
+        .iter()
+        .filter(|n| n.kind == NotificationKind::TaskFailed)
+        .map(|n| n.key.clone())
+        .collect();
+    assert_eq!(failed, vec![root.id.to_string()], "{created:?}");
+    let bad_news: Vec<&str> = created
+        .iter()
+        .filter(|n| n.kind == NotificationKind::BadNews)
+        .map(|n| n.body.as_str())
+        .collect();
+    assert_eq!(bad_news.len(), 1, "{created:?}");
+    assert!(bad_news[0].contains("root が失敗"), "{bad_news:?}");
+    assert!(
+        created
+            .iter()
+            .all(|n| n.kind != NotificationKind::TaskReady),
+        "the tree child's done does not notify: {created:?}"
+    );
+}
+
+/// ADR-0079 D8（Phase R3b）: root の計画の承認待ちは `plan_approval` の 1 通（key `plan:<plan_id>:approval`）に、
+/// その計画の決定を束ねる（`decision_requested` は鳴らさない）。質問ではない（`question_blocked` も鳴らない）。
+/// 2 回目の tick で増えない。送ると webhook の本文に理由と決定の問いが残る。
+#[tokio::test]
+async fn plan_approval_is_notified_once_with_the_plans_decisions() {
+    let env = Env::new();
+    let real_now = OffsetDateTime::now_utc();
+    let since = real_now - time::Duration::minutes(1);
+    let root = task(Status::Ready);
+    env.store.insert(&root).unwrap();
+    let plan = task_ops::execution::adopt_plan(
+        env.as_store(),
+        root.id,
+        empty_plan_spec(),
+        task_core::PlanOrigin::Planner,
+        Some("run-1".to_string()),
+        task_core::ExecutionLimits::default(),
+        real_now,
+    )
+    .unwrap_or_else(|e| panic!("adopt_plan: {e}"));
+    let path = vec![task_core::DecisionPathEntry {
+        task_id: root.id,
+        title: "browser capability".into(),
+        stage: Some("phase-2".into()),
+        unit: None,
+    }];
+    env.store
+        .append_event(
+            root.id,
+            &task_core::Event::DecisionRequested {
+                decision: Box::new(decision_request(
+                    "dec-backend",
+                    root.id,
+                    Some("run-1"),
+                    "どのバックエンドを使うか",
+                    &[("vault", "組織のvault"), ("manual", "手動設定")],
+                    "vault",
+                    task_core::CostOfReversal::Low,
+                    &["p2-b"],
+                    path,
+                )),
+            },
+        )
+        .unwrap();
+    env.store
+        .apply_transition(root.id, Trigger::Dispatch, None)
+        .unwrap();
+    env.store
+        .apply_transition_with_events(
+            root.id,
+            Trigger::PlanGate {
+                plan_id: plan.id.clone(),
+            },
+            vec![task_core::Event::PlanApprovalRequested {
+                plan_id: plan.id.clone(),
+                reasons: vec!["decisions:dec-backend".into()],
+            }],
+        )
+        .unwrap();
+
+    let created = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    let approvals: Vec<_> = created
+        .iter()
+        .filter(|n| n.kind == NotificationKind::PlanApproval)
+        .collect();
+    assert_eq!(approvals.len(), 1, "{created:?}");
+    assert_eq!(approvals[0].key, format!("plan:{}:approval", plan.id));
+    let body = &approvals[0].body;
+    assert!(body.contains("計画の承認が必要"), "{body}");
+    assert!(body.contains("決定を含む（dec-backend）"), "{body}");
+    assert!(body.contains("どのバックエンドを使うか"), "{body}");
+    assert!(body.contains("推奨: 組織のvault"), "{body}");
+    assert!(
+        created.iter().all(|n| !matches!(
+            n.kind,
+            NotificationKind::DecisionRequested | NotificationKind::QuestionBlocked
+        )),
+        "the plan's decisions are bundled into the approval: {created:?}"
+    );
+    let second = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    assert!(second.is_empty(), "{second:?}");
+
+    let pending = env.store.notification_pending().unwrap();
+    let batch = notify::select_batch(&pending).unwrap_or_else(|| panic!("no batch"));
+    let (url, server) = fake_webhook(1, 204).await;
+    let client = notify::client().unwrap_or_else(|| panic!("client"));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<SendResult>(4);
+    notify::spawn_send(client, url, &batch, tx);
+    let result = rx.recv().await.unwrap_or_else(|| panic!("no result"));
+    assert_eq!(result.outcome, notify::SendOutcome::Sent, "{result:?}");
+    let bodies = server.await.unwrap_or_else(|e| panic!("server: {e}"));
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].contains("計画の承認が必要"), "{}", bodies[0]);
+    assert!(
+        bodies[0].contains("どのバックエンドを使うか"),
+        "{}",
+        bodies[0]
+    );
+}
+
+/// ADR-0079 D8 / U-R3（Phase R3b）: 承認を挟まない root の計画は報告の流れ（`progress`）に 1 件残るだけで、
+/// Discord には何も鳴らさない。
+#[test]
+fn a_root_plan_without_approval_posts_nothing() {
+    let env = Env::new();
+    let real_now = OffsetDateTime::now_utc();
+    let since = real_now - time::Duration::minutes(1);
+    let root = task(Status::Ready);
+    env.store.insert(&root).unwrap();
+    task_ops::execution::adopt_plan(
+        env.as_store(),
+        root.id,
+        empty_plan_spec(),
+        task_core::PlanOrigin::Planner,
+        Some("run-1".to_string()),
+        task_core::ExecutionLimits::default(),
+        real_now,
+    )
+    .unwrap();
+    env.store
+        .report_append(&task_core::report::report_for_plan_notice(
+            "secretary",
+            0,
+            None,
+            root.id,
+            "計画を採用して進めます: 段階 1 → 段階 2",
+            "b",
+            real_now,
+        ))
+        .unwrap();
+    let created = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    assert!(created.is_empty(), "{created:?}");
+}
+
 #[test]
 fn unresolved_approval_and_question_survive_restart_and_decided_approval_does_not_hide_question() {
     let mut env = Env::new();

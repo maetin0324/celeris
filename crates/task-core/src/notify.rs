@@ -92,6 +92,10 @@ pub enum NotificationKind {
     /// run）で出た複数は 1 通に束ねる（`key` = `plan:<plan_id>:decisions` / `run:<run_id>:decisions`、1 件なら
     /// `decision:<id>`）。未回答のまま 24 時間たったら 1 回だけ再通知する（`key` の先頭に `reminder:`）。
     DecisionRequested,
+    /// ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked(awaiting_plan_approval)`）。
+    /// その計画の決定の要求は同じ 1 通に束ねる（`DecisionRequested` の `plan:<plan_id>:decisions` は鳴らさない）。
+    /// `key` = `plan:<plan_id>:approval`。
+    PlanApproval,
 }
 
 impl NotificationKind {
@@ -107,6 +111,7 @@ impl NotificationKind {
             NotificationKind::TaskFailed => "task_failed",
             NotificationKind::PhaseCheckpoint => "phase_checkpoint",
             NotificationKind::DecisionRequested => "decision_requested",
+            NotificationKind::PlanApproval => "plan_approval",
         }
     }
 
@@ -122,12 +127,13 @@ impl NotificationKind {
             "task_failed" => Some(NotificationKind::TaskFailed),
             "phase_checkpoint" => Some(NotificationKind::PhaseCheckpoint),
             "decision_requested" => Some(NotificationKind::DecisionRequested),
+            "plan_approval" => Some(NotificationKind::PlanApproval),
             _ => None,
         }
     }
 
     /// 判定の順（GUI と再送の順を決定的にするため）。
-    pub const ALL: [NotificationKind; 10] = [
+    pub const ALL: [NotificationKind; 11] = [
         NotificationKind::MilestoneReady,
         NotificationKind::ApprovalPending,
         NotificationKind::QuestionBlocked,
@@ -138,6 +144,7 @@ impl NotificationKind {
         NotificationKind::TaskFailed,
         NotificationKind::PhaseCheckpoint,
         NotificationKind::DecisionRequested,
+        NotificationKind::PlanApproval,
     ];
 }
 

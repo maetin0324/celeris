@@ -463,6 +463,136 @@ pub fn child_infra_retries(events: &[(u64, task_core::Event)], work_unit_id: &st
         .count() as u32
 }
 
+/// ADR-0072 D14 の「1 回だけ再試行」の進捗の文言（dispatcher が planner の計画を拒否してもう一度試すときに残す）。
+/// Phase R3b: 生存確認と dispatch の両方が「再試行が約束されている」ことをここから読む。
+pub const PLANNER_RETRY_PREFIX: &str = "計画を採用できませんでした（";
+/// [`PLANNER_RETRY_PREFIX`] の末尾。
+pub const PLANNER_RETRY_SUFFIX: &str = "）。もう一度だけ試します。";
+
+/// ADR-0079 D10 / R3a 付記 15.（Phase R3b）: 直近の計画の採用より後に、planner の試行が拒否されて「もう一度だけ
+/// 試します」が残り、その後に planner run がまだ始まっていない（= 次の run は planner の再試行）。人の replan の
+/// 依頼（`ExecutionHintSet{replan: true}`）は 1 回目の試行の `Transitioned{to: running}` で消費されるので、この印が
+/// 無いと 2 回目の試行が起きない（R3a で見つけた既存の挙動）。
+pub fn planner_retry_pending(events: &[(u64, task_core::Event)]) -> bool {
+    let since = events
+        .iter()
+        .rposition(|(_, e)| matches!(e, task_core::Event::ExecutionPlanned { .. }))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    for (_, e) in events[since..].iter().rev() {
+        match e {
+            task_core::Event::WorkerStarted {
+                role: Some(task_core::RunRole::Planner),
+                ..
+            } => return false,
+            task_core::Event::WorkerProgress {
+                msg, kind: None, ..
+            } if msg.starts_with(PLANNER_RETRY_PREFIX) && msg.ends_with(PLANNER_RETRY_SUFFIX) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// ADR-0079 D10（Phase R3b）: 計画を持つ節点の次の run が planner になるか（人の replan の依頼・途中確認の
+/// replan・不正な試行の後の再試行）。生存確認の「走れる」の 1 つ。
+pub fn planner_pending(events: &[(u64, task_core::Event)]) -> bool {
+    crate::regate::pending_replan_request(events).is_some()
+        || crate::phase_gate::last_transition_reason(events)
+            == Some(task_core::PhaseResumeMode::Replan.name())
+        || planner_retry_pending(events)
+}
+
+/// ADR-0079 D10（Phase R3b）: 木の 1 節点の生存確認の事実を store の読み取りだけで集める（判定は
+/// `task_core::tree::liveness`）。`eligible` は `ready_tasks` が返すか、`replans_left` は節点の replan の余地
+/// （回答の余裕込み。dispatcher が決める）。
+pub fn node_liveness_facts(
+    store: &dyn TaskStore,
+    task: &Task,
+    eligible: bool,
+    replans_left: bool,
+) -> Result<task_core::NodeLivenessFacts, OpsError> {
+    use task_core::decision::{NEEDED_BEFORE_SELF, NEEDED_BEFORE_STAGE_PREFIX};
+    let events = store.events_for(task.id)?;
+    let active_plan = store.execution_plan_active(task.id)?;
+    let has_plan = active_plan.is_some();
+    // ADR-0074「F5-fix8 実装時の明確化」: 有効な計画が採用の後に最終レビューの判定を既に受けたか。
+    let plan_reviewed = active_plan
+        .as_ref()
+        .is_some_and(|p| !task_core::plan_awaits_final_review(&events, &p.id));
+    let root_id = task_core::tree::root_id_of(task);
+    let open: Vec<DecisionRow> = store
+        .decisions_list(Some(root_id))?
+        .into_iter()
+        .filter(|d| d.status == DecisionStatus::Open)
+        .collect();
+    let mine: Vec<&DecisionRow> = open.iter().filter(|d| d.task_id == task.id).collect();
+    let open_self_decision = mine
+        .iter()
+        .any(|d| d.needed_before.iter().any(|n| n == NEEDED_BEFORE_SELF));
+    let tree_limit_decision_open = open.iter().any(|d| {
+        d.kind == task_core::DecisionKind::Limit
+            && task_core::TreeLimitKind::from_decision_key(&d.key)
+                .is_some_and(|k| k.is_tree_wide() && k.is_run_time())
+    });
+    let mut units = Vec::new();
+    for u in store.work_units_for(task.id)? {
+        let child = if u.kind == task_core::WorkUnitKind::Task {
+            match u.child_task_id.as_deref() {
+                Some(raw) => match raw.parse::<TaskId>() {
+                    Ok(id) => Some((id, store.get(id)?.map(|c| c.status))),
+                    Err(_) => None,
+                },
+                None => None,
+            }
+        } else {
+            None
+        };
+        let stage_ref = u
+            .phase
+            .as_deref()
+            .map(|p| format!("{NEEDED_BEFORE_STAGE_PREFIX}{p}"));
+        let waits_on_open_decision = mine.iter().any(|d| {
+            d.needed_before
+                .iter()
+                .any(|n| n == &u.key || stage_ref.as_deref() == Some(n.as_str()))
+                || u.needs_decisions.iter().any(|k| k == &d.key)
+        });
+        units.push(task_core::LivenessUnitFacts {
+            key: u.key.clone(),
+            kind: u.kind,
+            status: u.status,
+            blocked_reason: u.blocked_reason,
+            child,
+            waits_on_open_decision,
+            waits_on_child_dep: u.status == task_core::WorkUnitStatus::Pending
+                && u.depends_on
+                    .iter()
+                    .any(|d| d.starts_with(task_core::CHILD_DEP_PREFIX)),
+        });
+    }
+    Ok(task_core::NodeLivenessFacts {
+        task_id: task.id,
+        status: task.status,
+        last_reason: crate::phase_gate::last_transition_reason(&events).map(str::to_string),
+        leased: task.lease.is_some(),
+        eligible,
+        has_plan,
+        // ADR-0074「F5-fix8 実装時の明確化」: 人の replan の依頼・途中確認の replan は `max_replans` の余地が
+        // あるときだけ planner を起こす（使い切っていれば dispatcher は今の計画のまま進む）。不正な試行の後の
+        // 再試行の約束は余地に関わらず起きる。
+        planner_pending: has_plan
+            && (planner_retry_pending(&events) || (replans_left && planner_pending(&events))),
+        open_self_decision,
+        tree_limit_decision_open,
+        replans_left,
+        plan_reviewed,
+        units,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

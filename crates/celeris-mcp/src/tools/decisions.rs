@@ -148,3 +148,53 @@ pub fn answer_def() -> ToolDef {
         call: answer_call,
     }
 }
+
+// ---- task_plan_gate（ADR-0079 D8、Phase R3b）----
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanGateArgs {
+    /// root の計画の承認を待っている task の id。
+    pub task_id: String,
+    /// `approve` | `replan`（note 必須）| `withdraw`。
+    #[serde(alias = "decision")]
+    pub action: task_ops::plan_gate::PlanGateAction,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+async fn plan_gate_impl(
+    state: &Arc<McpState>,
+    client: &AuthedClient,
+    args: serde_json::Value,
+) -> Result<ToolOutput, ToolError> {
+    let args: PlanGateArgs =
+        serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
+    let task_id = parse_task_id(&args.task_id, "task_id")?;
+    let by = format!("mcp:{}", client.id);
+    let result = state
+        .blocking(move |store| {
+            task_ops::plan_gate::plan_gate(store, task_id, args.action, args.note, &by)
+                .map_err(map_ops_err)
+        })
+        .await?;
+    ToolOutput::from_serialize(&result)
+}
+
+fn plan_gate_call<'a>(
+    state: &'a Arc<McpState>,
+    client: &'a AuthedClient,
+    args: serde_json::Value,
+) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>> {
+    Box::pin(plan_gate_impl(state, client, args))
+}
+
+pub fn plan_gate_def() -> ToolDef {
+    ToolDef {
+        name: "task_plan_gate",
+        description: "Respond to a root plan that is waiting for human approval (same as POST /tasks/{id}/execution/plan-gate; the task's execution phase is awaiting_plan_approval): action approve (run the plan as adopted), replan (note required: the instruction for the planner, which writes a new plan version) or withdraw (cancel the task and its subtree). Recorded with by=mcp:<client_id>. Tasks not awaiting a plan approval are refused. Answering the plan's decisions is separate (decision_answer).",
+        scope: McpScope::TasksInteract,
+        input_schema: schema::<PlanGateArgs>,
+        call: plan_gate_call,
+    }
+}

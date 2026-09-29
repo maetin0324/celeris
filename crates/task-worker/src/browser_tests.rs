@@ -969,3 +969,190 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
     assert!(sink.browsers.lock().unwrap().is_empty());
     assert!(!temp.path().join("runs/refused").exists());
 }
+
+mod live_wiring {
+    use super::*;
+    use crate::browser_live::{
+        CollectingSink, ControlGate, GatedOutcome, InMemoryGate, LiveEmitter,
+    };
+    use task_core::browser_control::{ControlCommand, ControlPhase};
+
+    /// Fake shim: `close` only records that it ran (no agent-browser, no network).
+    fn fake_cli(dir: &Path) -> (PathBuf, PathBuf) {
+        let marker = dir.join("closed");
+        let cli = dir.join("cli.py");
+        std::fs::write(
+            &cli,
+            format!(
+                "import sys\nif sys.argv[1:] == ['close']:\n    open({:?}, 'w').write('closed')\n",
+                marker.display().to_string()
+            ),
+        )
+        .unwrap();
+        (cli, marker)
+    }
+
+    fn wait_for(path: &Path) -> bool {
+        for _ in 0..200 {
+            if path.exists() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    #[test]
+    fn browser_live_pause_converges_after_in_flight_action_and_blocks_new_ones() {
+        let temp = tempfile::tempdir().unwrap();
+        let (cli, _) = fake_cli(temp.path());
+        let gate = InMemoryGate::new();
+        let closer = CliCloser { cli };
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let live = BrowserLive {
+            gate: &gate,
+            closer: &closer,
+            emitter: &emitter,
+        };
+        let out = live.action(|| {
+            gate.command(ControlCommand::Pause, "p", 0).unwrap();
+            assert_eq!(gate.phase(), ControlPhase::Pausing);
+            "clicked"
+        });
+        assert_eq!(out, GatedOutcome::Ran("clicked"));
+        assert_eq!(gate.phase(), ControlPhase::Paused);
+        let mut issued = false;
+        assert_eq!(
+            live.action(|| issued = true),
+            GatedOutcome::Blocked(ControlPhase::Paused)
+        );
+        assert!(!issued);
+    }
+
+    #[test]
+    fn browser_live_human_control_blocks_agent_and_stop_closes_session_like_cancel() {
+        let temp = tempfile::tempdir().unwrap();
+        let (cli, marker) = fake_cli(temp.path());
+        let gate = InMemoryGate::new();
+        let closer = CliCloser { cli };
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let live = BrowserLive {
+            gate: &gate,
+            closer: &closer,
+            emitter: &emitter,
+        };
+        gate.command(ControlCommand::Pause, "p", 0).unwrap();
+        gate.command(
+            ControlCommand::Takeover {
+                holder: "h".into(),
+                ttl_secs: None,
+            },
+            "t",
+            1,
+        )
+        .unwrap();
+        let mut issued = false;
+        assert_eq!(
+            live.action(|| issued = true),
+            GatedOutcome::Blocked(ControlPhase::HumanControl)
+        );
+        // lease expiry / disconnect never resumes the agent
+        gate.expire(10_000);
+        gate.human_disconnected("h");
+        assert_eq!(
+            live.action(|| issued = true),
+            GatedOutcome::Blocked(gate.phase())
+        );
+        assert!(!issued);
+        assert!(!marker.exists());
+        gate.command(ControlCommand::Stop, "s", 10_001).unwrap();
+        assert_eq!(live.action(|| issued = true), GatedOutcome::Closed);
+        assert!(!issued);
+        assert!(wait_for(&marker), "Stopped must run the shim close");
+    }
+
+    #[test]
+    fn browser_live_forwarded_events_are_scrubbed_status_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        let events = temp.path().join("events.jsonl");
+        let secret = "Cookie: session=abc; token=SECRET_TOKEN";
+        let lines = [
+            serde_json::json!({"operation":"navigate","status":"success"}),
+            serde_json::json!({"operation":"click","status":"success","detail":secret}),
+            serde_json::json!({"operation":secret,"status":"success"}),
+        ];
+        std::fs::write(
+            &events,
+            lines
+                .iter()
+                .map(|l| l.to_string() + "\n")
+                .collect::<String>(),
+        )
+        .unwrap();
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let mut offset = 0;
+        forward_events_live(
+            &events,
+            &mut offset,
+            &req,
+            &output,
+            &RecordingSink::default(),
+            Some(&emitter),
+        );
+        let sent = emitter.sink().events();
+        assert_eq!(sent.len(), 1, "untyped lines are dropped before live");
+        let json = serde_json::to_string(&sent).unwrap();
+        for bad in [
+            "frame",
+            "title",
+            "Cookie",
+            "cookie",
+            "SECRET_TOKEN",
+            "token",
+        ] {
+            assert!(!json.contains(bad), "{bad} leaked: {json}");
+        }
+        assert!(json.contains("\"kind\":\"status\""));
+    }
+
+    #[test]
+    fn browser_live_auth_section_stops_forwarded_events() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        let events = temp.path().join("events.jsonl");
+        std::fs::write(
+            &events,
+            "{\"operation\":\"navigate\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let mut offset = 0;
+        {
+            let _auth = emitter.auth_section();
+            forward_events_live(
+                &events,
+                &mut offset,
+                &req,
+                &output,
+                &RecordingSink::default(),
+                Some(&emitter),
+            );
+        }
+        assert!(emitter.sink().events().is_empty(), "no events during auth");
+        // not buffered: leaving the section does not replay them
+        forward_events_live(
+            &events,
+            &mut offset,
+            &req,
+            &output,
+            &RecordingSink::default(),
+            Some(&emitter),
+        );
+        assert!(emitter.sink().events().is_empty());
+    }
+}

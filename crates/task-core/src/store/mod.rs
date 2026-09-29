@@ -11,45 +11,74 @@
 //!
 //! ## module map（audit.md §6.2 案A、責務別の切り出し）
 //! 領域ファイルはどれも `impl SqliteStore` ブロックに `_tx`/`_locked`/行変換の内部 helper と、
-//! `TaskStore` の method 本体（`<method>_impl`）を置く（可視性は `pub(super)`、既存の `pub(crate)` は
-//! そのまま）。`impl TaskStore for SqliteStore` は `task_store_impl.rs` の 1 ブロックだけで、領域へ移した
-//! method は `self.<method>_impl(..)` の 1 行転送（macro は使わない。method 名で grep すれば本体に届く）。依存は 領域 → `mod.rs` 基盤、
-//! `execution`/`tree` → `tasks`/`events`/`transition`、`transition` → `tasks`/`events` の向きだけ。
+//! `TaskStore` の method 本体（`<method>_impl`）を置く（可視性は `pub(super)`、`execution/` 配下は
+//! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。`impl TaskStore for SqliteStore` は
+//! `task_store_impl.rs` の 1 ブロックだけで、全 method が `self.<method>_impl(..)` の 1 行転送
+//! （macro は使わない。method 名で grep すれば本体に届く）。
+//!
+//! 依存の向き: 領域 → `mod.rs` 基盤、`execution/*` → `tasks`/`events`/`transition`、
+//! `approvals`/`messages` → `transition`、`transition` → `tasks`/`events`、`events` → `execution`（行変換）。
 //! 例外は `migrations` → `repos::backfill_project_repos`（v12）・`projects::backfill_project_slugs`（v29）。
+//!
+//! 守る invariant:
+//! - event と投影は同じ tx で書く（`append_event_tx` / `apply_transition_tx` を経由する）。
+//! - 終端遷移の approval・browser wait・cascade は `apply_transition_tx` の同じ tx で行う。
+//! - `Mutex<Connection>` は再入不可。`lock()` を取った後は `_tx`/`_locked` 関数だけを呼ぶ
+//!   （`&self` の method を tx の中から呼ばない）。
+//! - 状態機械が持つ `status`/`attempts`/`lease` は tx の中で読み直した値で書く（`update_task`・木の採用）。
+//!
 //! - `mod.rs`: `SqliteStore` の基盤（`open`/`open_with`/pragma 設定/`ReadPool`/`migrate`/`lock`/
-//!   `parse_id`/`NON_TERMINAL_SQL`）、`StoreError`・`StoreOptions` などの共有型と列値の変換、
+//!   `parse_id`/`NON_TERMINAL_SQL`）、`StoreError`・`StoreOptions` などの共有型と列値の変換
 //!   （`TaskStore` の実装は持たない）。
 //! - `migrations.rs`: `MIGRATION_0001..0033`（`include_str!` で読む SQL 本体）・`SCHEMA_VERSION`・
 //!   `apply_migration_version`/`migration_sql`（版数 → SQL の対応）。
 //! - `query.rs`: `TaskStore::list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
 //!   `CursorPayload`・cursor の符号化・`filter_predicate`・keyset 述語）。
 //! - `task_store.rs`: `trait TaskStore` の宣言。
-//! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック）。`tasks`〜`messages` の method は
-//!   領域の `*_impl` への転送。`update_task`/`comment_*` と `instance_*` 以降は本体をまだここに持つ（後続 unit）。
+//! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック、1 行転送だけ）。
 //! - `tasks.rs`: task 行の読み書き（`get_locked`/`insert_tx`/`update_task_tx`/`rewrite_task_tx`）と、
 //!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`list_page`/`count_by_status`/`children`/
-//!   `create_task`/`delegate_children`/`retry_task`/`acquire_lease`/`renew_lease`/`release_lease`/
-//!   `ready_tasks`/`halted_by_pause`）。
+//!   `create_task`/`delegate_children`/`retry_task`/`update_task`/`acquire_lease`/`renew_lease`/
+//!   `extend_task_lease`/`release_lease`/`ready_tasks`/`halted_by_pause`）。
 //! - `events.rs`: `append_event_tx`（events への追記）と、同じ tx で書く Event 由来の投影
-//!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行）、events を読む/追記する
-//!   `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/`latest_event_id`/`event_rows_for`）。
+//!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行と `decisions` の行変換）、
+//!   events を読む/追記する `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/
+//!   `latest_event_id`/`event_rows_for`）。
 //! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_events`、Plan の承認 `complete_plan`、
 //!   案件計画の Go/No-Go `project_plan_decide_apply`/`project_plan_apply`）。どれも 1 つの IMMEDIATE tx で
 //!   `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の部品、ここは入口）。
 //! - `transition.rs`: `apply_transition_tx`（状態機械の適用と Event の追記を同じ tx で行う）と
 //!   終端遷移の cascade・非終端の子/依存の探索。
-//! - `execution.rs`: `execution_plans`/`work_units`/`runs` の行変換・書き込み、計画の採用（`adopt_plan_tx`）
-//!   と局所修復（`repair_apply`）。
-//! - `tree.rs`: 既存 task の木への採用（ADR-0079 D15）。
 //! - `org.rs`: 組織ノードの行変換・`profile_json`・`celerisctl org migrate-v2` 用の低レベル書き換えと
 //!   `org_*` の本体（ADR-0033 D1）。
 //! - `projects.rs`: 案件・途中目標の行変換、slug の検査/backfill、停止中の祖先の判定と
 //!   `project_*`/`milestone_*` の本体（ADR-0033 D2）。
 //! - `repos.rs`: 案件のリポジトリ（`project_repos`）の行と backfill、`repo_*` の本体（ADR-0043 D1）。
 //! - `integrations.rs`: 変更の取り込み（`task_integrations`）の行と `integration_*` の本体（ADR-0043 D5）。
-//! - `messages.rs`: 対話（`messages`）とコメントの行変換、`message_*` と CoS actions の冪等性
-//!   `console_action_run_claim` の本体（ADR-0033 D4 / ADR-0048）。
+//! - `messages.rs`: 対話（`messages`）とコメント（`task_comments`）の行変換、`message_*`・
+//!   `comment_add`/`comments_for`（ADR-0044 D2、遷移は同じ tx の `apply_transition_tx`）と CoS actions の
+//!   冪等性 `console_action_run_claim` の本体（ADR-0033 D4 / ADR-0048）。
+//! - `instances.rs`: `daemon_instances`（ADR-0040 D4）の `instance_*` の本体。行変換は `crate::instance`。
+//! - `cluster.rs`: `cluster_settings`・`cluster_connection_log`（ADR-0044 の cluster 設定と接続履歴）の
+//!   `cluster_*` の本体。
+//! - `execution/`（ADR-0072 D5 以降の実行分解）:
+//!   - `plans.rs`: `execution_plans` の行変換、計画の採用 `adopt_plan_tx`、`execution_plan_adopt*`/
+//!     `execution_plan_active`/`execution_plan_list`/`execution_plans_replace`。
+//!   - `work_units.rs`: `work_units` の行変換と書き込み（`insert_work_unit_tx`/`update_work_unit_tx`）、
+//!     `work_unit*`/`work_units_*`・WU の lease `acquire_work_unit_lease`・
+//!     `running_tasks_with_runnable_work_units`。
+//!   - `runs.rs`: `runs` の行変換と書き込み（`insert_run_row_tx`）、`run_index_*`/`runs_*` と
+//!     実行 metrics の集計 `execution_metrics_task_rows`（ADR-0072 E6）。
+//!   - `decisions.rs`: 人への決定（ADR-0079 D7）の `decisions_*`/`decision_get`/`decision_resolve_apply`。
+//!   - `tree.rs`: 再帰 task の木（ADR-0079）: `tree_tasks`/`tree_child_create`/`tasks_with_open_task_units`
+//!     と既存 task の木への採用（D15、`execution_plan_adopt_tree`/`tree_adopt_apply`）。
+//!   - `repair.rs`: reviewer repair / delivery repair / replan（ADR-0072 D16/D17）。
 //! - `tests.rs`（既存）: 単体テスト。
+//!
+//! store の外にある領域別の store trait（`NodeSessionStore`（sessions）・`ApprovalStore`・
+//! `NotificationStore`・`McpClientStore`/`McpCallStore`・`BrowserWaitStore`・`DeliveryStore`・
+//! `KnowledgeRunStore`・`ReportStore`）は、各領域 module が自分の表と `impl … for SqliteStore` を持つ。
+//! `TaskStore` の method ではなく公開パスを変えないため、ここへは移さない。
 
 use std::path::Path;
 use std::sync::Mutex;

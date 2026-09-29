@@ -7193,7 +7193,7 @@
           "type": "integer"
         },
         "key": {
-          "description": "`group_by = gate_mode` なら `\"atomic\"`/`\"compound\"`/`\"none\"`、`genre`/`assignee` ならその\n値（無ければ `\"none\"`）、`lane` なら直近の run の lane（`\"frontier\"`/`\"standard\"`/`\"cheap\"`/\n`\"none\"`）。",
+          "description": "`group_by = gate_mode` なら `\"atomic\"`/`\"compound\"`/`\"none\"`、`genre`/`assignee` ならその\n値（無ければ `\"none\"`）、`lane` なら直近の run の lane（`\"frontier\"`/`\"standard\"`/`\"cheap\"`/\n`\"none\"`）、`depth`（ADR-0079 R4a）なら task の層（`\"1\"` / `\"2\"` / `\"3\"`）。",
           "type": "string"
         },
         "max_turn_failures": {
@@ -7225,6 +7225,17 @@
           "minimum": 0,
           "type": "integer"
         },
+        "rollup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RollupMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 D11 / U-R7（Phase R4a）: `group_by = depth` のときだけ。この深さ（task の層。root = 1、木の無い\ntask も 1）のタスクの自分の分の和: role ごとの run（reviewer を含む）・reviewer の run と定価・トークン・\n定価・quota・壁時計（最初の run の開始 → 最後の run の終わり）と実働時間・leaf・未回答の決定。"
+        },
         "tasks": {
           "format": "uint64",
           "minimum": 0,
@@ -7245,7 +7256,7 @@
       "type": "object"
     },
     "ExecutionMetricsSummary": {
-      "description": "`GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane`。",
+      "description": "`GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane|depth`。",
       "properties": {
         "accounts_now": {
           "default": [],
@@ -11188,6 +11199,13 @@
           },
           "type": "array"
         },
+        "child_units": {
+          "description": "ADR-0079 D5 / D11（Phase R4a）: この段階の子 task（計画の kind task の unit）ごとの要約（1 行ずつ:\nunit の key・子の題名・状態・subtree の run と定価・子の最新の報告の見出し）。木でない計画では空。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "diff_stat": {
           "description": "Task ブランチの `git diff --stat` の要約（最大 30 行）。",
           "items": {
@@ -12024,6 +12042,17 @@
           },
           "type": "array"
         },
+        "root_totals": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectRootTotals"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 D11（Phase R4a）: 案件の root task の数（状態ごと）と、その subtree の合計（run・reviewer の run・\nトークン・定価・leaf・未回答の決定・壁時計。quota は含めない）。`tasks` と同じ上限（2,000 件）の範囲。"
+        },
         "tasks": {
           "description": "仕事の木を描くのに必要な最小限だけ（詳細は `GET /tasks/{id}`）。",
           "items": {
@@ -12491,6 +12520,36 @@
         "kind",
         "location",
         "created_at"
+      ],
+      "type": "object"
+    },
+    "ProjectRootTotals": {
+      "description": "D11 / D13: 案件の root task（`parent_id` が無く、対話でも裏方でもない task）の合計。`GET /projects/{id}`。",
+      "properties": {
+        "by_status": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "root task の状態ごとの数（`draft` / `ready` / … / `done` / `failed` / `cancelled`。0 件の状態は出ない）。",
+          "type": "object"
+        },
+        "root_tasks": {
+          "description": "root task の数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totals": {
+          "$ref": "#/$defs/RollupMetrics",
+          "description": "root task の subtree の合計（run・reviewer の run・トークン・定価・leaf・決定・壁時計）。**quota は数えない**\n（events を読まない。quota は `GET /tasks/{id}/task-tree` と `GET /metrics/execution`）。"
+        }
+      },
+      "required": [
+        "root_tasks",
+        "totals"
       ],
       "type": "object"
     },
@@ -14527,6 +14586,158 @@
       "required": [
         "id",
         "has_instructions"
+      ],
+      "type": "object"
+    },
+    "RollupMetrics": {
+      "description": "D11: 1 節点分（または subtree・深さ・案件の合計）の数。",
+      "properties": {
+        "busy_ms": {
+          "description": "実働時間: 終わった run の（開始 → 終わり）の和（ミリ秒）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "child_tasks_done": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "child_tasks_total": {
+          "description": "計画の kind task の unit（superseded / cancelled を除く）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost_usd": {
+          "description": "定価（USD。reviewer を含む）。`cost_usd_complete = false` なら下限。",
+          "format": "double",
+          "type": "number"
+        },
+        "cost_usd_complete": {
+          "description": "token を持つのに定価の無い run（単価表に無いモデル）が 1 件も無い。",
+          "type": "boolean"
+        },
+        "first_run_started_at": {
+          "description": "最初の run の開始（RFC 3339）。run が無ければ無し。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_run_finished_at": {
+          "description": "最後に終わった run の終わり（RFC 3339）。終わった run が無ければ無し。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "leaves_done": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaves_total": {
+          "description": "leaf（統合・repair・kind task を除く `work_units` の行。superseded / cancelled を除く）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "open_decisions": {
+          "description": "未回答の決定（その節点が出したもの）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "quota": {
+          "default": [],
+          "description": "ADR-0074 D4: (source, account, window) ごとの quota（`merge_quota_use` で合計）。",
+          "items": {
+            "$ref": "#/$defs/QuotaUse"
+          },
+          "type": "array"
+        },
+        "reviewer_cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "reviewer_runs": {
+          "description": "U-R7: reviewer の run と、その定価（USD）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "description": "reviewer を除く run（`max_tree_runs` と同じ数え方）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs_by_role": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "role ごとの run（`runs` の索引の role: `worker` / `planner` / `reviewer` / `wrap_up`。reviewer を含む）。",
+          "type": "object"
+        },
+        "runs_in_flight": {
+          "description": "まだ終わっていない run（`runs.status = running`）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tasks": {
+          "description": "数えた task（節点）の数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokens": {
+          "description": "input + output（cache は含めない。`TreeCounters.tokens` と同じ）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wall_ms": {
+          "description": "壁時計: `first_run_started_at` → `last_run_finished_at`（ミリ秒）。どちらかが無ければ無し。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "tasks",
+        "runs",
+        "reviewer_runs",
+        "reviewer_cost_usd",
+        "runs_in_flight",
+        "input_tokens",
+        "output_tokens",
+        "tokens",
+        "cost_usd",
+        "cost_usd_complete",
+        "busy_ms",
+        "leaves_total",
+        "leaves_done",
+        "child_tasks_total",
+        "child_tasks_done",
+        "open_decisions"
       ],
       "type": "object"
     },
@@ -17598,6 +17809,155 @@
       ],
       "type": "object"
     },
+    "TaskTreeNode": {
+      "description": "木の 1 節点。",
+      "properties": {
+        "children": {
+          "default": [],
+          "description": "子の節点（この view に含まれるもの。作られた順）。",
+          "items": {
+            "$ref": "#/$defs/TaskId"
+          },
+          "type": "array"
+        },
+        "depth": {
+          "description": "task の層（root = 1）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "open_decisions": {
+          "description": "この節点が出した未回答の決定の数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "own": {
+          "$ref": "#/$defs/RollupMetrics",
+          "description": "自分の分（run・トークン・定価・quota・壁時計・leaf・決定）。"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "木の親（root は無し）。"
+        },
+        "parent_stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_unit_key": {
+          "description": "この節点を作った親の計画の unit の key と段階。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TreeNodePhase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "表示用の導出値（終端・計画も待ちも無い task は無し）。"
+        },
+        "plan_version": {
+          "description": "今の計画の版（計画の無い task は無し）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "subtree": {
+          "$ref": "#/$defs/RollupMetrics",
+          "description": "自分と子孫の合計。"
+        },
+        "title": {
+          "type": "string"
+        },
+        "units": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TreeUnitView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "depth",
+        "open_decisions",
+        "own",
+        "subtree"
+      ],
+      "type": "object"
+    },
+    "TaskTreeView": {
+      "description": "`GET /tasks/{id}/task-tree` の応答。`nodes` は前順（親が子より先。先頭がこの view の根）。",
+      "properties": {
+        "limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TreeLimitsUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "view が木の root を含むときだけ、木の上限の使用。"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/TaskTreeNode"
+          },
+          "type": "array"
+        },
+        "root_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "木の root（`tree::root_id_of`）。"
+        },
+        "subtree_root": {
+          "$ref": "#/$defs/TaskId",
+          "description": "この view の根（`?root=true` なら `root_id`、そうでなければ問い合わせた task）。"
+        },
+        "totals": {
+          "$ref": "#/$defs/RollupMetrics",
+          "description": "view の根の subtree の合計（`nodes[0].subtree` と同じ）。"
+        },
+        "tree_enabled": {
+          "description": "`[execution.tree] enabled`。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "root_id",
+        "subtree_root",
+        "tree_enabled",
+        "nodes",
+        "totals"
+      ],
+      "type": "object"
+    },
     "Tier": {
       "description": "DESIGN §5.4 の `WorkerHint`。",
       "enum": [
@@ -18097,6 +18457,115 @@
       ],
       "type": "object"
     },
+    "TreeLimitsUsage": {
+      "description": "1 つの木の上限の使用（D3）。`max_*` は回答の余裕（`raise-once` / `replan`）を当てた値。",
+      "properties": {
+        "leaves": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_leaves": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_open_decisions": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_replans": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_runs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "open_decisions": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "replans": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "leaves",
+        "max_leaves",
+        "runs",
+        "max_runs",
+        "replans",
+        "max_replans",
+        "tokens",
+        "open_decisions",
+        "max_open_decisions"
+      ],
+      "type": "object"
+    },
+    "TreeNodePhase": {
+      "description": "木の節点の「今どこか」（ADR-0079 D5 / D10 の名指しの待ちを含む表示用の導出値。状態機械には足さない）。",
+      "oneOf": [
+        {
+          "enum": [
+            "planning",
+            "executing",
+            "repairing",
+            "verifying"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "awaiting_human",
+          "description": "段階の後の途中確認（ADR-0074 D2）。",
+          "type": "string"
+        },
+        {
+          "const": "awaiting_children",
+          "description": "子 task だけを待っている（D5）。",
+          "type": "string"
+        },
+        {
+          "const": "awaiting_plan_approval",
+          "description": "root の計画の承認待ち（D8）。",
+          "type": "string"
+        },
+        {
+          "const": "held_on_decision",
+          "description": "答えの無い決定で止まっている（節点の `self` の決定、または `blocked(decision)` の unit だけが残る）。",
+          "type": "string"
+        },
+        {
+          "const": "blocked_infra",
+          "description": "子の基盤の失敗で unit が `blocked(infra)`（D9。人の再試行を待つ）。",
+          "type": "string"
+        }
+      ]
+    },
     "TreeRepoView": {
       "description": "`TreeView.repos[]` の 1 件。",
       "properties": {
@@ -18128,6 +18597,58 @@
         "name",
         "kind",
         "dir"
+      ],
+      "type": "object"
+    },
+    "TreeUnitView": {
+      "description": "節点の計画の unit 1 件（統合 WU を含む。superseded / cancelled も履歴として出す）。",
+      "properties": {
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkUnitBlockedReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "child_task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "kind task の unit の子 task。"
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkUnitKind"
+        },
+        "stage": {
+          "description": "段階（`work_units.phase`）。/1 の計画は無し。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/WorkUnitStatus"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "title",
+        "status"
       ],
       "type": "object"
     },
@@ -19271,6 +19792,10 @@
       "$ref": "#/$defs/TaskRoutingView",
       "description": "ADR-0069 D5: `GET /tasks/{id}/routing`。"
     },
+    "task_tree": {
+      "$ref": "#/$defs/TaskTreeView",
+      "description": "ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。"
+    },
     "timeline": {
       "$ref": "#/$defs/Timeline",
       "description": "ADR-0044 D5: `GET /tasks/{id}/timeline`。"
@@ -19419,7 +19944,8 @@
     "decision_list",
     "decision_answer",
     "decision_withdraw",
-    "decision_outcome"
+    "decision_outcome",
+    "task_tree"
   ],
   "title": "ApiV1Schema",
   "type": "object"

@@ -220,6 +220,8 @@ pub struct ApiV1Schema {
     pub decision_answer: task_ops::decision::DecisionAnswerBody,
     pub decision_withdraw: task_ops::decision::DecisionWithdrawBody,
     pub decision_outcome: task_ops::decision::DecisionOutcome,
+    /// ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。
+    pub task_tree: task_ops::tree_view::TaskTreeView,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

@@ -1160,3 +1160,75 @@ migration は足していない（schema 31 のまま。`notifications.kind` は
 12. **replay**: 新しい reason（`awaiting_plan_approval` / `plan_approved` / `plan_replan`）は attempts を動かさない。計画の承認の
     replan で /3 の計画を同じ key で書き直した試験で、`work_units` の replay の差（runs / seq / phase / 統合 WU の presence）が出た。
     R2b / R3a 付記 14. と同じ「/3 の replan の行を events だけから作り直しきれない」系統で R3b では直していない（R4a）。
+
+## 付記: R4a 実装時の逸脱・明確化（2026-09-29）
+
+R4a（木と roll-up の API、roll-up の純粋関数、案件の root の合計、`metrics/execution?group_by=depth`、段階の途中報告の子の要約、
+R3a / R3b から持ち越した replay の差）で決めたこと。migration は足していない（schema 31 のまま）。本文の決定は変えていない。
+
+1. **パスは `GET /tasks/{id}/task-tree`**（D11・§7 R4a の `GET /tasks/{id}/tree` からの逸脱）: `GET /tasks/{id}/tree?repo=&path=` は
+   ADR-0043 D6（Phase 52）の作業ツリーの閲覧（`TreeView`）が既に使っていて、GUI のファイルタブが叩いている。同じパスに別の形を返すと
+   既存のクライアントが壊れるので、木は別名にした。クエリは `root`（真偽値。既定 `false` = 問い合わせた task の subtree、`true` = 木の
+   root から）だけ。作業ツリーの閲覧は変えていない（試験 `legacy_task_is_a_single_node_tree` の末尾で 404 のままを確かめた）。
+2. **置き場**: 純粋関数は D11 の名前どおり `task_core::tree_metrics::{rollup, node_metrics, by_depth}`（`RollupMetrics` /
+   `RollupNodeFacts` / `SubtreeMetrics` / `DepthRollup`）。入力は D11 の `&TreeSnapshot`（R3b で生存確認の事実の型として使った名前）では
+   なく節点ごとの `RollupNodeFacts`（`runs` の索引の行・`work_units` の行・`quota`〈events の `QuotaEstimated` を
+   `execution_metrics::summarize` と同じ規則で畳んだもの〉・未回答の決定の数・木の親・深さ）。store から集めるのは
+   `task_ops::tree_view`（§7 R4a の「触るファイル」の `task-api/src/projects.rs`・`task-ops/src/phase_report.rs` は存在しないので、
+   API・案件の合計・深さ別の指標・途中報告が同じモジュールを呼ぶ形にした）。
+3. **数の定義**（D11 の列挙の読み方）:
+   - run は `runs` の索引の role（`worker` / `planner` / `reviewer` / `wrap_up`）で数える。`runs` は reviewer を除く（`max_tree_runs` と
+     同じ）、`reviewer_runs` と `reviewer_cost_usd` は U-R7 の指標。repair の run は worker に入る（R2a の `TreeCounters` と同じ）。
+   - トークンは input + output（cache を含めない。`TreeCounters.tokens` と同じ）。定価は `Usage.cost_usd` の和、token を持つのに定価の無い
+     run が 1 件でもあれば `cost_usd_complete = false`（和では論理積。D11 の「`cost_usd_complete` の伝播」）。
+   - 壁時計は **「最初の run の開始 → 最後に終わった run の終わり」**（D11 の「最初の dispatch から最後の終端まで」を、events に時刻が無い
+     ADR-0072 E5 の逸脱と同じ理由で run の索引の時刻で読んだ）。和では最小の開始と最大の終わり、`wall_ms` はその差。実働時間は `busy_ms`
+     （終わった run の長さの和）。走っている run は `runs_in_flight`。
+   - leaf は `work_units` の行のうち統合・repair・kind task を除き、superseded / cancelled も除いたもの（done / total）。子 task は kind task の
+     unit（同じく superseded / cancelled を除く）。木の上限の `leaves`（生涯で作った数、R2a）とは別の数で、上限の使用率は `limits` に
+     `TreeCounters` の値のまま出す。
+   - 未回答の決定は、その節点が出した `decisions` の行（`status = open`）。
+   - **D11 の「人を待った時間」は出していない**（途中確認・承認・質問で `blocked` だった区間の長さは events の時刻〈`EventRow.ts`〉から
+     作れるが、R4a の範囲の API で使う場面が無いので見送った。R4b で GUI が要るなら同じ `RollupMetrics` に足す）。
+4. **節点の表示用の導出値 `TreeNodePhase`**: Execution 節の `ExecutionPhase`（計画・実行・修復・検証・途中確認・承認待ち）があればそれ、
+   無ければ 節点の `self` の未回答の決定（`held_on_decision`）→ `blocked(infra)` の unit（`blocked_infra`）→ 子待ち（`awaiting_children`）→
+   `blocked(decision)` の unit（`held_on_decision`）の順。終端は無し。状態機械には足さない（R1b の `AwaitingChildren` と同じ扱い）。
+   `ExecutionPhase` を引くために `task_ops::view::execution_phase_of` を足した（Execution 節の組み立てと同じ関数）。
+5. **木の上限の使用**（`limits`）は view の根が木の root のときだけ（`?root=true`、または root を問い合わせたとき）。`max_*` は
+   `raise-once` / `replan` の回答の余裕を当てた値（`limits_with_allowances`）。API は `[execution.tree]` を知らなかったので
+   `ApiSettings.tree_limits`（celeris が設定から渡す。既定は無効）を足した。挙動には効かない（`tree_enabled` と上限の表示だけ）。
+6. **`TaskDetail.tree` は足していない**（§7 R4a の範囲の列挙からの逸脱）: `TaskDetail.task.tree`（`TreeInfo`）は R1a から既に出ていて、
+   木の全体は新しい endpoint で引ける。詳細の応答を重くしないため（節点ごとに `events` を読む）、R4b で GUI が要ると分かってから決める。
+7. **案件の合計**（`GET /projects/{id}` の `root_totals`）: root task = `parent_id` が無く、木の子でも対話でも裏方（`support_kind`）でもない
+   task（R5a の `is_root_task` の読み。R5a で述語を置き換えるときに揃える）。数は `root_tasks` と状態ごとの `by_status`、合計は root task
+   ごとの subtree（`tree_tasks(root)`）の `own` の和。**quota は数えない**（案件のページは頻繁に開かれるので events を読まない。quota は
+   `task-tree` と `metrics/execution` で見る）。範囲は `tasks[]` と同じ上限（2,000 件）。
+8. **`group_by=depth`**: 深さは `tree::depth_of`（木の無い task は 1）。各 group に `rollup`（その深さの task の自分の分の和）を付ける。他の
+   `group_by` には付けない（互換。`api-v1.schema.json` は追加だけ）。索引の集計とイベントからの参照実装の一致の試験
+   （`indexed_summary_matches_event_reference_for_all_groups_and_since`）に `depth` も入る。
+9. **子の要約（D5 / D11「子 task の完了の要約が親の段階の途中報告に入る」）**: `PhaseReport.child_units`（1 行ずつ、固定の書式
+   `<key> <子の題名>: <子の状態> / <n> run（reviewer <m>）/ $<定価>[（不完全）] — <子の最新の報告の見出し | 報告なし>`、未作成の unit は
+   `<key> <unit の題名>: 未作成（<unit の状態>）`）。run と定価は子の subtree（孫を含む）の合計、見出しは報告の流れ（ADR-0034）の子の
+   最新の `headline`（LLM なし）。途中報告（`PhaseReported`）は ADR-0074 D2.3 のとおり**停止点の段階**（`review: human` / `pause_after`）で
+   しか作られないので、子の要約もそこにだけ入る（停止点でない段階の完了に新しい報告は足していない）。16 KiB の切り詰め（SD-3）の
+   落とす順は `diff_stat` → `integration` → `phases_done` → `work_units` → **`child_units`** → `next_phase_work_units` → `artifact_paths`
+   （子の要約は WU の段落より後まで残る）。Markdown の成果物にも「## この段階の子 task」の節を足した。dispatcher の変更は
+   `build_phase_report` で `task_ops::tree_view::stage_child_summaries` を呼ぶ数行と Markdown の節だけ。
+10. **replay の /3 replan の差の修正**（R2b 付記 8.・R3a 付記 14.・R3b 付記 12.）: `rebuild_work_units_and_runs` は最後の版の計画だけから
+    行を作っていたので、replan で計画から消えた unit と統合 WU（superseded の行）が無く、同じ key で書き直した unit の `runs` / `seq` /
+    `phase` が食い違っていた。すべての版を畳み込むようにした: 行はその key が初めて現れた版の形で作り、2 版目以降の `ExecutionPlanned`
+    で `task_ops::execution::replan` と同じ書き換え（`apply_replan_step`: 残る未完了の行の `plan_id` / `depends_on` / spec /
+    `needs_decisions` と `runs` / `continuations` / `retries` / `last_run_id` の 0 戻し、子の結び付きの解除、統合 WU の依存の持ち越し、
+    新しい行の初期状態）を当てる。**`seq` / `kind` / `phase` は書き換えない**: store の `update_work_unit_tx` は `seq` と `kind` の列を書かず、
+    replan は既存の行の `phase` を変えないので、行は最初に作った版の値のまま（R2b の replay は `seq` を新しい版の並びにしていたが、それが
+    一致していたのは試験の並びがたまたま同じだったから）。変更は `task_ops::replay` の中だけ。R3a / R3b が外していた 2 つの試験
+    （`plan_invalid_replan_feeds_the_note_and_adopts_plan_v2`・`approve_replan_and_withdraw_have_their_effects`）は `assert_replay_is_clean`
+    （`work_units` を含む差分 0）にし、/2 の replan で工程と unit が消え、unit が別の工程へ移り、新しい unit が足される純粋な回帰
+    （`replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan`。superseded の行を消した索引が `--apply` で戻る）を足した。
+11. **見つけた既存の不具合（直していない。F5-fix8 が同じファイルを直している最中のため）**: `task_ops::execution::replan` は残る unit の
+    行の `phase` を新しい版の段階に書き換えない。replan で unit が別の段階へ移ると、行の `phase` は古い段階のまま（上の 10. の replay は
+    この実際の値に合わせた）。R3b の試験（`approve_replan_and_withdraw_have_their_effects`: b を s2 → s1 へ移す replan）では、b の行は
+    `phase = s2`・spec の段階は s1 で、`integrate-s1`（依存 [a, b]）は b が done になる前に統合を終え、`integrate-s2` は superseded になった。
+    git の作業場所では **b の WU ブランチがどの統合にも merge されない**（成果が Task ブランチに入らない）形になる。直し方の提案: replan の
+    `Some(existing)` の枝で `row.phase = wu_spec.phase.clone()`（/2・/3）にし、replay の `apply_replan_step` も同じく `phase` を新しい版に
+    する（`seq` は列が書かれないので今のまま）。

@@ -393,16 +393,9 @@ async fn approve_replan_and_withdraw_have_their_effects() {
         "{}",
         notices[0].headline
     );
-    // replay: task・計画・決定は一致する。`work_units` は /3 の replan で同じ key の unit を作り直したときの既存の差
-    // （R2b / R3a 付記 14. の「superseded の unit を最後の版から作り直せない」と同じ系統。R4a）があるので比べない。
-    let report = task_ops::replay::replay(store.as_ref()).unwrap();
-    assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
-    let (_wu, _runs, plans, _) =
-        task_ops::replay::check_and_apply_execution(store.as_ref(), false).unwrap();
-    assert!(plans.is_empty(), "{plans:?}");
-    let (decisions, _) =
-        task_ops::replay::check_and_apply_decisions(store.as_ref(), false).unwrap();
-    assert!(decisions.is_empty(), "{decisions:?}");
+    // replay（ADR-0079 R4a）: /3 の replan で同じ key の unit を別の段階に書き直し、段階 s2 と統合 WU `integrate-s2`
+    // が消えても、`work_units`（runs・seq・phase・superseded の統合 WU の presence を含む）が events から同じに作り直せる。
+    assert_replay_is_clean(&store);
 
     // withdraw。
     let dir = tempfile::tempdir().unwrap();

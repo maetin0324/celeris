@@ -50,6 +50,34 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             "/api/v1/metrics/execution",
             axum::routing::get(get_execution_metrics),
         )
+        // ADR-0079 D11（Phase R4a）: 木と roll-up（`GET /tasks/{id}/tree` は ADR-0043 D6 の作業ツリーの閲覧が
+        // 既に使っているので `task-tree`。ADR-0079 付記「R4a 実装時の逸脱・明確化」）。
+        .route(
+            "/api/v1/tasks/{id}/task-tree",
+            axum::routing::get(get_task_tree),
+        )
+}
+
+/// ADR-0079 D11 / §7 R4a: `GET /tasks/{id}/task-tree?root=true|false`（読み取り。トークンは要らない）。
+/// 既定は問い合わせた task の subtree、`root=true` なら木の root から。節点ごとに段階・unit・自分の分と
+/// subtree の roll-up、view の根が木の root なら木の上限の使用。木の無い task は 1 節点（深さ 1）。
+/// 不明な task は 404 `task_not_found`、知らないクエリ・`root` が真偽値でなければ 400。
+async fn get_task_tree(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    Params(id): Params<String>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+) -> ApiResult {
+    let query = QueryParams::parse(raw.as_deref(), &["root"])?;
+    let from_root = query.bool("root")?.unwrap_or(false);
+    let task_id = parse_task_id(&id)?;
+    let limits = state.inner.tree_limits;
+    let view = state
+        .blocking(move |store| {
+            task_ops::tree_view::task_tree(store, task_id, from_root, &limits)
+                .map_err(|e| ops_problem(store, e, Some("task_tree")))
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &view))
 }
 
 fn no_active_plan(id: &str) -> ApiProblem {

@@ -226,6 +226,9 @@ pub struct ApiSettings {
     /// `llm_proxy_unavailable`。
     pub llm_sources: Option<llm_sources::SharedLlmSourcesReader>,
     // ---- ADR-0053（Phase 65）: ここまで ----
+    /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]` の上限（`GET /tasks/{id}/task-tree` の
+    /// `tree_enabled` と上限の使用率に使う。挙動は変えない）。
+    pub tree_limits: task_core::TreeLimits,
 }
 
 /// ADR-0043 D5（Phase 54）: `[github]` の写し。celeris が設定から渡す（task-api は TOML を読まない）。

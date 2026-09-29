@@ -2913,6 +2913,13 @@
           },
           "type": "array"
         },
+        "child_units": {
+          "description": "ADR-0079 D5 / D11（Phase R4a）: この段階の子 task（計画の kind task の unit）ごとの要約（1 行ずつ:\nunit の key・子の題名・状態・subtree の run と定価・子の最新の報告の見出し）。木でない計画では空。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "diff_stat": {
           "description": "Task ブランチの `git diff --stat` の要約（最大 30 行）。",
           "items": {

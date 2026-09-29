@@ -21,7 +21,7 @@ ADR-0078（`docs/adr/0078-web-spa-frontend.md`）の移行 gate。`gui/app/route
   `index(` + `route(` の数（42）と一致すること。path の集合の一致も確かめる（Phase 0 の証跡は
   run の artifacts の `check-parity-rows.py`）。
 
-### Phase と slice（仮の区分。`docs/web/implementation-plan.md` で確定する）
+### Phase と slice（タスクへの分割は `docs/web/implementation-plan.md`）
 
 | Phase | 内容 | slice |
 |---|---|---|

@@ -915,3 +915,14 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 
 **昇格**: release `9aeb1b721649`（main 9aeb1b7 = R5b-prep）を 2026-09-29 06:55:40Z にライブ昇格（backup 20260929-065531-pre-9aeb1b721649、verify ok / live_ok、schema 33）。R5b の手順 1（`[execution.tree] enabled = true` と再起動）から人の実行に入る。
 
+
+### R5b 実行記録（2026-09-29、人の go の後に Fable が API で実行）
+
+- 手順 1（人）: `[execution.tree] enabled = true` を追記し `celeris@9aeb1b721649` を再起動（10:16:30Z）。`task-tree` の `tree_enabled = true` を確認。
+- 手順 2（browser）: root task **01M3PAX6RVE7AX8Z6118KADME3**「browser capability（Phase 1〜4）」を draft で作成 → /3 計画 v1 を PUT（p1 = 01M3MFS5… adopt done、
+  p2 = 01M3MZKB3D… adopt done、p3 / p4 = 子 task、決定 h4 / h5 / h7、phase-3 の後に review: human）→ accept（10:21:01Z）。events: `child_adopted` ×2、
+  `unit_gate_overridden` ×4（kept_task）、`decision_requested` ×3、Discord `decision_requested`（plan 単位で 1 通、ok）。gate 記録は `atomic/policy`（人の計画は gate に
+  関わらず採用されるため表示上の齟齬。P-R5b-1）。
+- 手順 3（BenchFS）: root task **01M3PAZ4XG4QN1T8S98VNA6ABV**「国際会議フルペーパー化」→ /3 計画 v1（棚卸し段階で done の Phase0 / Phase1 の 6 task を adopt、
+  子 task 4、決定 `framing`）→ accept → 決定 `framing` に人の決定 **A** で回答（10:2xZ）。
+- 手順 2.4（browser の決定 h4 / h5 / h7）は人の回答待ち。

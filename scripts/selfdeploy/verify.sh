@@ -353,7 +353,8 @@ out["latest_project"] = projects[0].get("id") if projects else ""
 
 milestones = 0
 for p in projects:
-    detail = safe(f"/api/v1/projects/{urllib.parse.quote(str(p.get('id')), safe='')}", {}) or {}
+    # ADR-0079 R5a: 途中目標は凍結され既定で隠れる。件数の照合は include_frozen=true で全行を数える。
+    detail = safe(f"/api/v1/projects/{urllib.parse.quote(str(p.get('id')), safe='')}?include_frozen=true", {}) or {}
     milestones += len(detail.get("milestones") or [])
 out["milestones"] = milestones
 

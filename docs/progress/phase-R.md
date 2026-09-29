@@ -935,3 +935,64 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 人の報告: GUI に決定へ回答する場所が見当たらなかった（R4b の inbox「決定」節が本番で見えていない可能性。決定が open のときに確認する。P-R5b-3）。
 - 別件: 人が起票した「web Phase 0: GUI 全面改修…」01M3MS2JRDJ4GM0D9VN9PJCB6B は 09-28 20:50Z から blocked（done WU の check 同士が矛盾し replan では解けない、
   planner が A/B/C を提示）。人の判断待ち。
+
+## R5b-fix1: 人の replan は done WU の spec を上書きできる・planner は done の unit の adopt を写してよい（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) 付記「R5b-fix1」。ADR-0072 の末尾に相互参照の注記（D14 / D17 の done の不変条件の緩和）。
+- 種類: コード（task-core / task-ops / task-api / celerisctl）、schema（`api-v1.schema.json` / `event.schema.json`）と GUI の型の再生成、API 文書。
+  **migration なし**。本番の DB・設定・サービスには触れていない。
+
+### 何を・なぜ
+
+1. **人の replan は done の WU の spec を上書きできる**（本番 01M3MS2JRDJ4GM0D9VN9PJCB6B「web Phase 0」）: done の WU `baseline` の check
+   `git diff --quiet 06e9a03cffe8 -- gui` が後の WU の正当な変更（`gui/docs/adr/0002-frontend-stack.md`）で通らなくなり、人は案 A（check を
+   `… -- gui ":!gui/docs/adr/0002-frontend-stack.md"` に直す）を選んだが、planner の replan は `DoneWorkUnitChanged` で拒否され、人が直す入口も
+   無かった（`PUT` は新規だけ）。
+   - 検証（`validate_with` の `done_carry_over_errors`、/1・/2・/3 共通の 1 か所）: origin human だけ、done の WU の spec の上書きを許す。消すのは
+     `DoneWorkUnitChanged`、`kind` / `phase`（段階）/ `depends_on` を変えるのは新しい `DoneWorkUnitStructureChanged`。planner / repair は従来どおり完全一致。
+   - `task_ops::execution::replan`: 上書きした done の行は `done` のまま `spec` / `updated_at` だけを新しい版に（`plan_id` / 依存 / カウンタは元のまま）。
+     `Event::WorkUnitSpecOverridden { work_unit_id, key, plan_id, plan_version, changed_fields }` と `ReplanDiff.overridden_done`、`ExecutionPlanned.reason`
+     の末尾に ` (overridden_done=<keys>)`（上書きがあるときだけ）。replay は同じ event で done の行の spec を新しい版にする。
+   - 入口: `PUT /tasks/{id}/execution-plan` は有効な計画があれば人の replan（200、応答に `replan` の差分）、無ければ従来の新規採用（201）。`POST` は
+     新規だけのまま（409）。`celerisctl execution plan replan <task> --file <json> [--reason] [--config]` を足した。
+   - `DoneWorkUnitChanged` の文言に「人は `PUT /tasks/{id}/execution-plan` で done の WU の spec を上書きできる」を足した（planner の再試行の入力に入る）。
+2. **planner は done の unit の `adopt` をそのまま写してよい**（本番 01M3PAZ4XG4QN1T8S98VNA6ABV「BenchFS」）: 人の /3 計画の done の unit
+   （phase1-framing など）が `adopt` を持ち、子の失敗で起きた planner の replan が、done の不変条件どおり写した unit ごとに `AdoptNotAllowed` で拒否された。
+   検証は、key が `done_work_units` にあり内部の形が done の spec と一致する unit の `adopt` を planner にも許す。done の写しでない unit の新しい `adopt` は
+   従来どおり拒む。`AdoptNotAllowed` の文言に「(a done unit copied verbatim from the previous version may keep its adopt)」を足した。
+
+### 受け入れ条件（依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| 人の origin は done の spec の変更（check）を通し、変わった欄は `checks` | `cargo nextest run -p task-core -E 'test(human_replan_may_override_a_done_work_unit_spec)'` | ok（全体の実行に含まれる） |
+| planner / repair の origin は従来どおり `DoneWorkUnitChanged`、文言に `PUT /tasks/{id}/execution-plan` | `… -E 'test(planner_replan_still_rejects_a_changed_done_work_unit)'` | ok（全体の実行に含まれる） |
+| 人の origin でも done の WU の削除は `DoneWorkUnitChanged`、`kind` / `depends_on` の変更は `DoneWorkUnitStructureChanged` | `… -E 'test(human_replan_still_rejects_a_removed_or_restructured_done_work_unit)'` | ok（全体の実行に含まれる） |
+| planner の /3 replan は done の写しの `adopt` を通し、写しでない（done 無し・spec 違い）`adopt` は `AdoptNotAllowed`、文言に "copied verbatim" | `… -E 'test(planner_replan_may_keep_adopt_on_a_verbatim_done_carry_over)'` | ok（全体の実行に含まれる） |
+| `replan`（Human）: done の行の spec が更新され `done` のまま・`plan_id` / 依存は元のまま、`WorkUnitSpecOverridden{changed_fields: [checks]}`・`diff.overridden_done = [a]`・reason の `overridden_done=a`、planner は同じ spec を拒否、replay の差分 0 | `cargo nextest run -p task-ops -E 'test(human_replan_overrides_the_spec_of_a_done_work_unit)'` | ok（全体の実行に含まれる） |
+| HTTP: 有効な計画がある `PUT` は 200 の人の replan（`replan.overridden_done = ["a"]`、行は done で新しい check、event あり）、done を消す `PUT` は 422、`POST` は 409 のまま、計画が無ければ `PUT` は 201 | `cargo nextest run -p task-api --test execution -E 'test(put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec)'` | ok（全体の実行に含まれる） |
+| 新しい event の `type` 名が serde・`event_type_name`・`EVENT_TYPES`（44 → 45）で一致 | `cargo nextest run -p task-api -E 'test(tree_event_types_match_their_serde_names)'` | ok（全体の実行に含まれる） |
+| 既存の planner の replan（dispatcher）の done 不変条件の試験が変わらず通る | `scripts/dev/test-parallel.sh`（全体） | ok |
+
+### gate
+
+- `cargo fmt --all -- --check` → `cargo fmt --all` の後の `--check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → 下の「commit の後の gate」
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 6、binaries 95（nextest 84 + doc 11）、**passed 2865 / failed 0 / ignored 7**（R5b-prep の 2859 から +6: task-core 4・task-ops 1・task-api 1）
+- `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema` → exit 0（追加だけ: `work_unit_spec_overridden` の event、
+  `ExecutionPlanView.replan`、`ReplanDiff`）
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0（`gui/app/celeris/types.ts` に 40 行の追加だけ）/ `typecheck` → exit 0 / `lint` → exit 0（Checked 307 files、
+  2 infos は既存）
+
+### 未解決
+
+- 本番の task への適用は人（または Fable）が行う: 01M3MS2JRDJ4GM0D9VN9PJCB6B は有効な計画（`celeris.execution-plan/2`）の全体を `GET` で取り、`baseline` の
+  `checks[].cmd` だけを直して `PUT`。01M3PAZ4XG4QN1T8S98VNA6ABV は次の planner の replan が通る（手当て不要。止まっていれば replan を起こし直す）。
+  どちらもこの変更を含むリリースの昇格が先。
+- 人の `PUT` の replan は /3 の unit の gate・計画の決定・`adopt` の当て込みを通さない（付記「制限」）。/3 の人の replan で新しい kind task の unit や
+  `adopt` を足す使い方は未対応。
+- `celerisctl execution plan put` は `set` の別名（新規だけ）のままで、HTTP の `PUT`（有効な計画があれば replan）と意味がずれる。
+
+### 提案
+
+- なし。

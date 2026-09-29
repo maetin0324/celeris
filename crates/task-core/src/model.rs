@@ -1171,6 +1171,19 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<String>,
     },
+    /// ADR-0079 R5b-fix1: 人の replan（`PlanOrigin::Human`）が done の WorkUnit の spec を上書きした
+    /// （状態は `done` のまま。`work_units.spec` だけを新しい版の spec に置き換える）。`plan_id` / `plan_version` は
+    /// 上書きした新しい版、`changed_fields` は変わった `WorkUnitSpec` の欄の名前（昇順）。replan と同じ
+    /// トランザクションで、その版の `ExecutionPlanned` の前に積む。状態は変えない（`replay` は行の spec の
+    /// 書き換えにだけ使う）。
+    WorkUnitSpecOverridden {
+        work_unit_id: String,
+        key: String,
+        plan_id: String,
+        plan_version: u32,
+        #[serde(default)]
+        changed_fields: Vec<String>,
+    },
     /// ADR-0072 D5/D13（Phase E3）: Complexity Gate の判定（atomic/compound、当たった信号）。
     /// `Task.routing.execution` と同じトランザクションで書く。状態は変えない（`replay` は無視する）。
     ExecutionGated {

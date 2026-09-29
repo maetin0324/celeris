@@ -1659,3 +1659,9 @@ ADR-0079（再帰的な task 分解）が次を置き換える。本文は書き
 **D14 の「不正な計画は atomic に倒す」**は /3 では採らず、決定の要求にする（/1・/2 は維持）。**D22 / D24**（子 Task は Plan / 委譲だけ）は、
 子を作る入口を計画の kind task の unit に一本化し、木の節点では委譲を使わない、に置き換わる。**D12 の「分割し直す / 中止」の自由文の質問**は
 木の節点では構造化した決定の要求になる。**D2（WorkUnit を子 Task にしない）は leaf について維持**する。詳細は ADR-0079 §4。
+
+> **ADR-0079 付記「R5b-fix1」（2026-09-29）による緩和**: D14 / D17 の「replan で done の WU の key と spec は変わらない」は、
+> planner / repair の計画には従来どおり完全一致で当てる。**人の replan（origin human。`PUT /tasks/{id}/execution-plan` に有効な計画が
+> あるとき・`celerisctl execution plan replan`）だけ**は、done の WU を残したまま（同じ key・`kind`・`phase`・`depends_on`）spec の
+> ほかの欄を上書きできる（状態は `done` のまま、`Event::WorkUnitSpecOverridden`）。また planner が done の unit をそのまま写すときは、
+> その unit の `adopt`（/3）を残してよい。詳細は ADR-0079 付記「R5b-fix1」。

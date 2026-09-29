@@ -520,6 +520,14 @@ export type Event =
       work_unit_id: string;
     }
   | {
+      changed_fields?: string[];
+      key: string;
+      plan_id: string;
+      plan_version: number;
+      type: "work_unit_spec_overridden";
+      work_unit_id: string;
+    }
+  | {
       decision: ExecutionGateDecision;
       type: "execution_gated";
     }
@@ -4971,6 +4979,11 @@ export interface ExecutionPlanView {
   plan: ExecutionPlanSpec;
   planner_run_id?: string | null;
   /**
+   * ADR-0079 R5b-fix1: 有効な計画がある task への `PUT /tasks/{id}/execution-plan`（人の replan）の応答だけ:
+   * 版の差分（`added` / `changed` / `removed` と、spec を上書きした done の WU の `overridden_done`）。
+   */
+  replan?: ReplanDiff | null;
+  /**
    * ADR-0074 D1.2（Phase F2b）: v2 の計画を並列 1 に倒した理由（`WorkUnitsSerialized`。無ければ
    * 並列で走る／v1）。
    */
@@ -5010,6 +5023,28 @@ export interface AdoptionOutcome {
    */
   unit_status:
     "pending" | "ready" | "needs_continuation" | "running" | "done" | "failed" | "blocked" | "superseded" | "cancelled";
+}
+/**
+ * ADR-0072 D17（Phase E4）: [`replan`] が計算した差分（監査・GUI 用。版の履歴の「差分の件数」）。
+ */
+export interface ReplanDiff {
+  /**
+   * 新しい key（新規の WorkUnit）。
+   */
+  added: string[];
+  /**
+   * 既存（未完了）の WorkUnit で spec または依存が変わったもの。
+   */
+  changed: string[];
+  /**
+   * ADR-0079 R5b-fix1: 人の replan が spec を上書きした done の WorkUnit（状態は `done` のまま。
+   * `Event::WorkUnitSpecOverridden`）。planner の replan では常に空。
+   */
+  overridden_done?: string[];
+  /**
+   * 新しい版に無くなった未完了の WorkUnit（`superseded` にする）。
+   */
+  removed: string[];
 }
 /**
  * ADR-0072 D17（Phase E4）: `execution_plans` の 1 版（`GET /tasks/{id}/execution-plan` の
@@ -8407,6 +8442,11 @@ export interface ExecutionPlanView1 {
   origin: PlanOrigin;
   plan: ExecutionPlanSpec;
   planner_run_id?: string | null;
+  /**
+   * ADR-0079 R5b-fix1: 有効な計画がある task への `PUT /tasks/{id}/execution-plan`（人の replan）の応答だけ:
+   * 版の差分（`added` / `changed` / `removed` と、spec を上書きした done の WU の `overridden_done`）。
+   */
+  replan?: ReplanDiff | null;
   /**
    * ADR-0074 D1.2（Phase F2b）: v2 の計画を並列 1 に倒した理由（`WorkUnitsSerialized`。無ければ
    * 並列で走る／v1）。

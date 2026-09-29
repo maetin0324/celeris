@@ -1057,3 +1057,91 @@ async fn retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision(
     assert_eq!(resp.status, 422, "{}", resp.text());
     assert_eq!(env.store.list(None).expect("list").len(), before);
 }
+
+/// ADR-0079 付記「R5b-fix1」: 有効な計画がある task への `PUT` は人の replan（200、`replan` の差分付き）。done の WU の
+/// spec（check）は上書きでき（`done` のまま、`work_unit_spec_overridden`）、消すのは 422。`POST` は従来どおり 409。
+#[tokio::test]
+async fn put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec() {
+    let env = env();
+    let app = env.router();
+    let task = new_task(TaskKind::Execute, Status::Draft);
+    env.seed(&task);
+    let path = format!("/api/v1/tasks/{}/execution-plan", task.id);
+    let auth = format!("Bearer {TOKEN}");
+    let put = |body: &Value| put_json_with(&path, body, &[("authorization", auth.as_str())]);
+
+    let mut v1 = plan_body();
+    v1["work_units"][0]["checks"] = json!([{"cmd": "git diff --quiet 06e9a03cffe8 -- gui"}]);
+    let created = send(&app, put(&v1)).await;
+    assert_eq!(created.status, 201, "{}", created.text());
+    assert!(created.json().get("replan").is_none());
+
+    // `a` を done にする（scheduler と同じ書き込み）。
+    let a = env
+        .store
+        .work_units_for(task.id)
+        .expect("units")
+        .into_iter()
+        .find(|u| u.key == "a")
+        .expect("a");
+    let mut done = a.clone();
+    done.status = task_core::WorkUnitStatus::Done;
+    env.store
+        .work_unit_transition(
+            task.id,
+            done,
+            Event::WorkUnitTransitioned {
+                work_unit_id: a.id.clone(),
+                key: "a".into(),
+                from: a.status,
+                to: task_core::WorkUnitStatus::Done,
+                reason: "completed".into(),
+                run_id: None,
+            },
+        )
+        .expect("mark a done");
+
+    // done の `a` を消す人の replan は 422（何も書かない）。
+    let mut removed = v1.clone();
+    removed["work_units"]
+        .as_array_mut()
+        .expect("array")
+        .remove(0);
+    removed["work_units"][0]["depends_on"] = json!([]);
+    let resp = send(&app, put(&removed)).await;
+    assert_eq!(resp.status, 422, "{}", resp.text());
+    assert!(resp.text().contains("done work unit a"), "{}", resp.text());
+
+    // done の `a` の check を直す人の replan は 200。
+    let fixed = r#"git diff --quiet 06e9a03cffe8 -- gui ":!gui/docs/adr/0002-frontend-stack.md""#;
+    let mut v2 = v1.clone();
+    v2["work_units"][0]["checks"][0]["cmd"] = json!(fixed);
+    let resp = send(&app, put(&v2)).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["version"], 2);
+    assert_eq!(body["origin"], "human");
+    assert_eq!(body["replan"]["overridden_done"], json!(["a"]));
+    let a_row = env
+        .store
+        .work_units_for(task.id)
+        .expect("units")
+        .into_iter()
+        .find(|u| u.key == "a")
+        .expect("a");
+    assert_eq!(a_row.status, task_core::WorkUnitStatus::Done);
+    assert_eq!(a_row.spec.checks[0].cmd, fixed);
+    let events = env.store.events_for(task.id).expect("events");
+    assert!(
+        events.iter().any(|(_, e)| matches!(
+            e,
+            Event::WorkUnitSpecOverridden { key, plan_version: 2, changed_fields, .. }
+                if key == "a" && changed_fields == &vec!["checks".to_string()]
+        )),
+        "{events:?}"
+    );
+
+    // `POST` は新規だけ（409）のまま。
+    let second = send(&app, post_admin(&path, &v2)).await;
+    assert_eq!(second.status, 409, "{}", second.text());
+}

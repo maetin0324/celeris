@@ -723,6 +723,12 @@ pub enum PlanValidationError {
     DoneWorkUnitChanged {
         key: String,
     },
+    /// ADR-0079 R5b-fix1: 人の replan（origin human）は done の WU の spec を上書きできるが、構造の欄
+    /// （`kind` / `phase`〈/3 の段階〉/ `depends_on`）は変えられない。`field` は変わった欄の名前。
+    DoneWorkUnitStructureChanged {
+        key: String,
+        field: &'static str,
+    },
     /// ADR-0074 D5.1（Phase F1）: WU の `features` が `TaskFeatureHints` として読めない
     /// （`deny_unknown_fields` を含む型として不正）。
     InvalidFeatures {
@@ -998,7 +1004,13 @@ impl std::fmt::Display for PlanValidationError {
             PlanValidationError::DoneWorkUnitChanged { key } => {
                 write!(
                     f,
-                    "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}）"
+                    "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}。done の WU の spec〈例: check のコマンド〉の誤りを直す必要があるなら、planner は直さずに質問で人に伝える: 人は `PUT /tasks/{{id}}/execution-plan`〈origin human の replan〉で done の WU の spec を上書きできる〈ADR-0079 R5b-fix1〉）"
+                )
+            }
+            PlanValidationError::DoneWorkUnitStructureChanged { key, field } => {
+                write!(
+                    f,
+                    "done work unit {key}: {field} must not change on replan (a human replan may override the spec of a done work unit, but not its kind / phase / stage / depends_on, and may not remove it; ADR-0079 R5b-fix1)"
                 )
             }
             PlanValidationError::InvalidFeatures { key, detail } => {
@@ -1228,7 +1240,7 @@ impl std::fmt::Display for PlanValidationError {
             ),
             PlanValidationError::AdoptNotAllowed { key } => write!(
                 f,
-                "unit {key}: adopt is only allowed in a plan written by a human (origin human)"
+                "unit {key}: adopt is only allowed in a plan written by a human (origin human) (a done unit copied verbatim from the previous version may keep its adopt)"
             ),
             PlanValidationError::InvalidDecision { detail } => write!(f, "{detail}"),
             PlanValidationError::DuplicateDecisionKey { key } => {
@@ -1300,6 +1312,88 @@ pub struct ValidatedPlan {
     pub topological_order: Vec<usize>,
 }
 
+/// ADR-0079 R5b-fix1: /3 の unit が、前の版の done の unit をそのまま写したものか（内部の形
+/// 〈[`PlanUnitSpec::to_work_unit_spec`]〉が done の spec と一致する）。
+fn is_done_carry_over(unit: &PlanUnitSpec, done_work_units: &[(String, WorkUnitSpec)]) -> bool {
+    done_work_units
+        .iter()
+        .any(|(k, s)| *k == unit.key && *s == unit.to_work_unit_spec())
+}
+
+/// replan の done の不変条件（D14 / D17）。done の WU は新しい計画に同じ key で残り、spec も変わらない。
+///
+/// ADR-0079 R5b-fix1: 人の replan（`origin == Human`）だけは done の WU の spec を上書きできる（人がその仕事は
+/// 済んだと言い、記録した spec〈典型的には `checks` のコマンド〉を直す）。ただし消すこと（`DoneWorkUnitChanged`）と、
+/// 構造の欄（`kind` / `phase` = /3 の段階 / `depends_on`）を変えること（`DoneWorkUnitStructureChanged`）は人でも拒む。
+/// planner / repair / fixture の計画は従来どおり完全一致だけ。
+fn done_carry_over_errors(
+    work_units: &[WorkUnitSpec],
+    done_work_units: &[(String, WorkUnitSpec)],
+    origin: PlanOrigin,
+) -> Vec<PlanValidationError> {
+    let by_key: BTreeMap<&str, &WorkUnitSpec> =
+        work_units.iter().map(|w| (w.key.as_str(), w)).collect();
+    let mut errors = Vec::new();
+    for (key, done_spec) in done_work_units {
+        let Some(new_spec) = by_key.get(key.as_str()) else {
+            errors.push(PlanValidationError::DoneWorkUnitChanged { key: key.clone() });
+            continue;
+        };
+        if *new_spec == done_spec {
+            continue;
+        }
+        if origin != PlanOrigin::Human {
+            errors.push(PlanValidationError::DoneWorkUnitChanged { key: key.clone() });
+            continue;
+        }
+        for (field, same) in [
+            ("kind", new_spec.kind == done_spec.kind),
+            ("phase", new_spec.phase == done_spec.phase),
+            ("depends_on", new_spec.depends_on == done_spec.depends_on),
+        ] {
+            if !same {
+                errors.push(PlanValidationError::DoneWorkUnitStructureChanged {
+                    key: key.clone(),
+                    field,
+                });
+            }
+        }
+    }
+    errors
+}
+
+/// ADR-0079 R5b-fix1: 検証を通った計画（`spec`。/3 は内部の形に写して比べる）で、spec が done の spec から
+/// 変わった done の WU（人の replan の上書き）と、変わった欄の名前（`WorkUnitSpec` の JSON の最上位の key、
+/// 昇順）。検証が planner の計画にこれを許さないので、planner の replan では常に空。
+pub fn done_work_unit_overrides(
+    spec: &ExecutionPlanSpec,
+    done_work_units: &[(String, WorkUnitSpec)],
+) -> Vec<(String, WorkUnitSpec, Vec<String>)> {
+    let internal = internal_view(spec);
+    let mut out = Vec::new();
+    for (key, done_spec) in done_work_units {
+        let Some(new_spec) = internal.work_units.iter().find(|w| &w.key == key) else {
+            continue;
+        };
+        if new_spec == done_spec {
+            continue;
+        }
+        let as_map = |w: &WorkUnitSpec| match serde_json::to_value(w) {
+            Ok(serde_json::Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
+        let (old, new) = (as_map(done_spec), as_map(new_spec));
+        let fields: BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+        let changed: Vec<String> = fields
+            .into_iter()
+            .filter(|f| old.get(*f) != new.get(*f))
+            .cloned()
+            .collect();
+        out.push((key.clone(), new_spec.clone(), changed));
+    }
+    out
+}
+
 /// D14: 計画を検証する。`done_work_units`（replan で持ち越す既存の done WU の `(key, spec)`）が
 /// 空でなければ、それらの key と spec が新しい計画でも変わっていないことを確かめる（E2 では常に空。
 /// replan は E4）。
@@ -1329,7 +1423,8 @@ impl Default for PlanContext {
     }
 }
 
-/// [`validate`] に計画の出どころと深さを添えたもの。/1・/2 は `ctx` を見ない（[`validate`] と同じ結果）。
+/// [`validate`] に計画の出どころと深さを添えたもの。/1・/2 は done の不変条件でだけ `ctx.origin` を見る
+/// （ADR-0079 R5b-fix1: 人の replan は done の WU の spec を上書きできる。done が空なら [`validate`] と同じ結果）。
 pub fn validate_with(
     spec: &ExecutionPlanSpec,
     limits: ExecutionLimits,
@@ -1646,18 +1741,13 @@ pub fn validate_with(
         }
     }
 
-    // replan の不変条件: done の WU の key/spec は変わらない。
-    let by_key: BTreeMap<&str, &WorkUnitSpec> = spec
-        .work_units
-        .iter()
-        .map(|w| (w.key.as_str(), w))
-        .collect();
-    for (key, done_spec) in done_work_units {
-        match by_key.get(key.as_str()) {
-            Some(new_spec) if *new_spec == done_spec => {}
-            _ => errors.push(PlanValidationError::DoneWorkUnitChanged { key: key.clone() }),
-        }
-    }
+    // replan の不変条件: done の WU の key/spec は変わらない（ADR-0079 R5b-fix1: 人の replan は spec の
+    // 上書きだけを許す。[`done_carry_over_errors`]）。
+    errors.extend(done_carry_over_errors(
+        &spec.work_units,
+        done_work_units,
+        ctx.origin,
+    ));
 
     if !errors.is_empty() {
         return Err(errors);
@@ -1911,7 +2001,13 @@ fn validate_v3(
                     });
                 }
             }
-            if u.adopt.is_some() && ctx.origin != PlanOrigin::Human {
+            // ADR-0079 R5b-fix1: planner の replan は、前の版から done の unit をそのまま写す（done の不変条件）
+            // ので、その unit が持つ `adopt` も残ってよい（採用は済んでいて、replan は done の行に触れない）。
+            // done の写しでない unit の新しい `adopt` は従来どおり人の計画だけ。
+            if u.adopt.is_some()
+                && ctx.origin != PlanOrigin::Human
+                && !is_done_carry_over(u, done_work_units)
+            {
                 errors.push(PlanValidationError::AdoptNotAllowed { key: key.clone() });
             }
         } else {
@@ -2168,17 +2264,11 @@ fn validate_v3(
         }
     }
 
-    let by_key: BTreeMap<&str, &WorkUnitSpec> = internal
-        .work_units
-        .iter()
-        .map(|w| (w.key.as_str(), w))
-        .collect();
-    for (key, done_spec) in done_work_units {
-        match by_key.get(key.as_str()) {
-            Some(new_spec) if *new_spec == done_spec => {}
-            _ => errors.push(PlanValidationError::DoneWorkUnitChanged { key: key.clone() }),
-        }
-    }
+    errors.extend(done_carry_over_errors(
+        &internal.work_units,
+        done_work_units,
+        ctx.origin,
+    ));
 
     if !errors.is_empty() {
         return Err(errors);
@@ -3320,6 +3410,106 @@ mod tests {
             errs.iter()
                 .any(|e| matches!(e, PlanValidationError::DoneWorkUnitChanged { .. }))
         );
+    }
+
+    fn ctx(origin: PlanOrigin) -> PlanContext {
+        PlanContext { origin, depth: 1 }
+    }
+
+    /// ADR-0079 R5b-fix1: 本番の task の形（done の `baseline` の check を人が直す）。
+    fn baseline_override_fixture() -> (WorkUnitSpec, ExecutionPlanSpec) {
+        let mut done_spec = spec("baseline", &[]);
+        done_spec.checks = vec![WorkUnitCheck {
+            cmd: "git diff --quiet 06e9a03cffe8 -- gui".to_string(),
+            expect_exit: 0,
+        }];
+        let mut fixed = done_spec.clone();
+        fixed.checks[0].cmd =
+            "git diff --quiet 06e9a03cffe8 -- gui \":!gui/docs/adr/0002-frontend-stack.md\""
+                .to_string();
+        (done_spec, plan(vec![fixed, spec("next", &["baseline"])]))
+    }
+
+    /// ADR-0079 R5b-fix1: 人の replan は done の WU の spec（check）を上書きできる。
+    #[test]
+    fn human_replan_may_override_a_done_work_unit_spec() {
+        let (done_spec, p) = baseline_override_fixture();
+        let done = [("baseline".to_string(), done_spec)];
+        validate_with(
+            &p,
+            ExecutionLimits::default(),
+            &done,
+            ctx(PlanOrigin::Human),
+        )
+        .expect("a human may correct the check of a done work unit");
+        let overrides = done_work_unit_overrides(&p, &done);
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].0, "baseline");
+        assert_eq!(overrides[0].1, p.work_units[0]);
+        assert_eq!(overrides[0].2, vec!["checks".to_string()]);
+    }
+
+    /// ADR-0079 R5b-fix1: planner（と repair）の replan は従来どおり done の spec を変えられない。
+    #[test]
+    fn planner_replan_still_rejects_a_changed_done_work_unit() {
+        let (done_spec, p) = baseline_override_fixture();
+        let done = [("baseline".to_string(), done_spec)];
+        for origin in [PlanOrigin::Planner, PlanOrigin::Repair] {
+            let errs =
+                validate_with(&p, ExecutionLimits::default(), &done, ctx(origin)).unwrap_err();
+            assert!(
+                errs.contains(&PlanValidationError::DoneWorkUnitChanged {
+                    key: "baseline".into()
+                }),
+                "{origin:?}: {errs:?}"
+            );
+        }
+        let msg = PlanValidationError::DoneWorkUnitChanged {
+            key: "baseline".into(),
+        }
+        .to_string();
+        assert!(msg.contains("PUT /tasks/{id}/execution-plan"), "{msg}");
+    }
+
+    /// ADR-0079 R5b-fix1: 人でも done の WU は消せない・構造（kind / phase / depends_on）は変えられない。
+    #[test]
+    fn human_replan_still_rejects_a_removed_or_restructured_done_work_unit() {
+        let (done_spec, p) = baseline_override_fixture();
+        let done = [("baseline".to_string(), done_spec)];
+        let mut removed = p.clone();
+        removed.work_units.remove(0);
+        removed.work_units[0].depends_on.clear();
+        let errs = validate_with(
+            &removed,
+            ExecutionLimits::default(),
+            &done,
+            ctx(PlanOrigin::Human),
+        )
+        .unwrap_err();
+        assert!(errs.contains(&PlanValidationError::DoneWorkUnitChanged {
+            key: "baseline".into()
+        }));
+
+        let mut restructured = p.clone();
+        restructured.work_units.push(spec("extra", &[]));
+        restructured.work_units[0].depends_on = vec!["extra".into()];
+        restructured.work_units[0].kind = WorkUnitKind::Test;
+        let errs = validate_with(
+            &restructured,
+            ExecutionLimits::default(),
+            &done,
+            ctx(PlanOrigin::Human),
+        )
+        .unwrap_err();
+        for field in ["kind", "depends_on"] {
+            assert!(
+                errs.contains(&PlanValidationError::DoneWorkUnitStructureChanged {
+                    key: "baseline".into(),
+                    field,
+                }),
+                "{field}: {errs:?}"
+            );
+        }
     }
 
     /// ADR-0074 D5.1（Phase F1）: `features` は `TaskFeatureHints` として読めなければ検証エラー
@@ -4757,6 +4947,29 @@ mod tests {
             },
         )
         .expect("leaves are fine at the bottom level");
+    }
+
+    /// ADR-0079 R5b-fix1（2 つ目の規則）: planner の replan は、前の版の done の unit をそのまま写すなら `adopt` を
+    /// 残してよい（done の不変条件がそれを強いる）。done の写しでない unit の新しい `adopt` は従来どおり拒む。
+    #[test]
+    fn planner_replan_may_keep_adopt_on_a_verbatim_done_carry_over() {
+        let mut p = v3_fixture();
+        p.units[0].adopt = Some(crate::model::TaskId::new());
+        let key = p.units[0].key.clone();
+        let done = [(key.clone(), p.units[0].to_work_unit_spec())];
+        validate_with(&p, tree_on(), &done, ctx(PlanOrigin::Planner))
+            .expect("a verbatim done carry-over may keep its adopt");
+
+        // done の写しでない（done が無い・spec が違う）unit の `adopt` は planner には許さない。
+        let errs = validate_with(&p, tree_on(), &[], ctx(PlanOrigin::Planner)).unwrap_err();
+        assert!(errs.contains(&PlanValidationError::AdoptNotAllowed { key: key.clone() }));
+        let mut changed = p.clone();
+        changed.units[0].title = "a different title for the adopted unit".into();
+        let errs = validate_with(&changed, tree_on(), &done, ctx(PlanOrigin::Planner)).unwrap_err();
+        assert!(errs.contains(&PlanValidationError::AdoptNotAllowed { key: key.clone() }));
+        assert!(errs.contains(&PlanValidationError::DoneWorkUnitChanged { key: key.clone() }));
+        let msg = PlanValidationError::AdoptNotAllowed { key }.to_string();
+        assert!(msg.contains("copied verbatim"), "{msg}");
     }
 
     /// D2 / D15: `adopt` は人の計画（origin human）だけ。leaf には書けない。

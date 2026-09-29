@@ -455,6 +455,12 @@ pub fn orphan_groups(
     out.into_iter().collect()
 }
 
+/// 稼働中の隔離 session（ADR-0087 D5）。呼ぶたびに事実を採り直して検査する。
+/// session が止まっていれば、または隔離に違反していれば attestation を返さない。
+pub trait LiveIsolation {
+    fn current_attestation(&self) -> Result<IsolationAttestation, Vec<IsolationViolation>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -278,6 +278,27 @@ impl IdentityService<'_> {
             .open_state(&stored.identity, &sealed, now)
             .map_err(|_| IdentityApiError::SealFailed)
     }
+
+    /// 稼働中の隔離 session に結合した復元（ADR-0087 D5）。attestation はこの場で
+    /// session から採り直す。session の停止・隔離違反（この host の同一 UID を含む）・
+    /// session id の不一致は `IsolationRequired` で拒否する。
+    pub fn restore_for_session(
+        &self,
+        identity_id: &str,
+        project_id: &str,
+        origin: &str,
+        session_id: &str,
+        live: &dyn task_core::browser_isolation::LiveIsolation,
+        now: u64,
+    ) -> Result<IdentityStatePlain, IdentityApiError> {
+        let attestation = live
+            .current_attestation()
+            .map_err(|_| IdentityApiError::Denied(IdentityDenied::IsolationRequired))?;
+        if attestation.session_id() != session_id {
+            return Err(IdentityApiError::Denied(IdentityDenied::IsolationRequired));
+        }
+        self.restore_isolated(identity_id, project_id, origin, &attestation, now)
+    }
 }
 
 // ---- HTTP（/api/v1/browser/identities）----
@@ -681,6 +702,76 @@ mod tests {
                 "proj",
                 ORIGIN,
                 &att,
+                NOW + IDENTITY_TTL_DEFAULT_SECS + 1
+            )
+            .is_err()
+        );
+    }
+
+    struct FakeLive(Option<task_core::browser_isolation::IsolationAttestation>);
+    impl task_core::browser_isolation::LiveIsolation for FakeLive {
+        fn current_attestation(
+            &self,
+        ) -> Result<
+            task_core::browser_isolation::IsolationAttestation,
+            Vec<task_core::browser_isolation::IsolationViolation>,
+        > {
+            self.0
+                .clone()
+                .ok_or_else(|| vec![task_core::browser_isolation::IsolationViolation::SameUid])
+        }
+    }
+
+    #[test]
+    fn restore_for_session_binds_to_live_isolated_session() {
+        let (store, sealer, _d) = fixture();
+        let svc = IdentityService {
+            store: &store,
+            sealer: &sealer,
+        };
+        svc.register(input("a"), NOW).unwrap();
+        svc.register(input("b"), NOW).unwrap();
+        let live = FakeLive(Some(attestation()));
+        let plain = svc
+            .restore_for_session("a", "proj", ORIGIN, "s1", &live, NOW)
+            .unwrap();
+        assert_eq!(plain.entries[0].value, SECRET);
+        // 隔離でない（停止・同一 UID など attestation が出ない）session
+        let dead = FakeLive(None);
+        assert_eq!(
+            svc.restore_for_session("a", "proj", ORIGIN, "s1", &dead, NOW)
+                .unwrap_err()
+                .code(),
+            "isolation_required"
+        );
+        // 別 session の attestation
+        assert_eq!(
+            svc.restore_for_session("a", "proj", ORIGIN, "s2", &live, NOW)
+                .unwrap_err()
+                .code(),
+            "isolation_required"
+        );
+        // 別 identity（存在しない / 他 project の identity）
+        assert_eq!(
+            svc.restore_for_session("zz", "proj", ORIGIN, "s1", &live, NOW)
+                .unwrap_err()
+                .code(),
+            "identity_not_found"
+        );
+        assert_eq!(
+            svc.restore_for_session("b", "other", ORIGIN, "s1", &live, NOW)
+                .unwrap_err()
+                .code(),
+            "other_project"
+        );
+        // 期限切れ
+        assert!(
+            svc.restore_for_session(
+                "a",
+                "proj",
+                ORIGIN,
+                "s1",
+                &live,
                 NOW + IDENTITY_TTL_DEFAULT_SECS + 1
             )
             .is_err()

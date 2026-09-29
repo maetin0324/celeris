@@ -208,15 +208,38 @@ impl IsolatedRuntime {
         // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は親が spawn まで保持する。
         unsafe {
             cmd.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0
-                    || libc::dup2(info_fd, 5) < 0
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // 元の fd 番号が別の行き先（3〜6）と重なると、先の dup2 が後の元を潰す。
+                // 先に全部を行き先の範囲より上へ退避してから並べる（退避側は CLOEXEC で残らない）。
+                let lift = |fd: RawFd| -> std::io::Result<RawFd> {
+                    let hi = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10);
+                    if hi < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(hi)
+                    }
+                };
+                let info = lift(info_fd)?;
+                let cdp = if pipe_on {
+                    Some((lift(cdp_in)?, lift(cdp_out)?))
+                } else {
+                    None
+                };
+                let chan = match channel_fd {
+                    Some(fd) => Some(lift(fd)?),
+                    None => None,
+                };
+                if libc::dup2(info, 5) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if let Some((i, o)) = cdp
+                    && (libc::dup2(i, 3) < 0 || libc::dup2(o, 4) < 0)
                 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if pipe_on && (libc::dup2(cdp_in, 3) < 0 || libc::dup2(cdp_out, 4) < 0) {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if let Some(fd) = channel_fd
+                if let Some(fd) = chan
                     && libc::dup2(fd, CHANNEL_FD) < 0
                 {
                     return Err(std::io::Error::last_os_error());

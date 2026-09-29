@@ -6,20 +6,12 @@ import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/erro
 import { formString } from "~/celeris/forms";
 import {
   archiveProject,
-  cancelMilestone,
   cancelProject,
-  createMilestone,
-  decideMilestone,
-  decideProjectPlan,
-  patchMilestoneStatus,
   patchProjectStatus,
   patchProjectText,
   patchProjectWorkspace,
-  pauseMilestone,
   pauseProject,
-  resumeMilestone,
   resumeProject,
-  startProjectPlan,
   unarchiveProject,
 } from "~/celeris/projects-admin.server";
 import {
@@ -260,27 +252,9 @@ export async function action({ request, params }: Route.ActionArgs) {
     case "project_edit":
       outcome = await patchProjectText(client, params.id, form, request.signal);
       break;
-    case "milestone_create":
-      outcome = await createMilestone(client, params.id, form, request.signal);
-      break;
-    case "project_plan":
-      outcome = await startProjectPlan(client, params.id, form, request.signal);
-      break;
-    case "milestone_status":
-      outcome = await patchMilestoneStatus(
-        client,
-        formString(form, "milestone_id") ?? "",
-        (formString(form, "status") ?? "proposed") as MilestoneStatus,
-        request.signal,
-      );
-      break;
-    case "milestone_decide":
-      outcome = await decideMilestone(client, formString(form, "milestone_id") ?? "", form, request.signal);
-      break;
-    // ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 提案中の案件計画の承認 / 却下（**管理系**、202）。
-    case "project_plan_decide":
-      outcome = await decideProjectPlan(client, params.id, form, request.signal);
-      break;
+    // celeris ADR-0079 D13（Phase R5a）: 案件計画（`project_plan` / `project_plan_decide`）と途中目標の書き込み
+    // （`milestone_create` / `milestone_status` / `milestone_decide` / `milestone_cancel|pause|resume`）は celeris が
+    // 410 を返すので中継を外した（下の default で 400 になる）。
     // 作業場所の保存・消去（ADR-0039 D1、Phase G13k）。保存は選んだ kind（local/remote）をそのまま送り、
     // 消去は明示的に `workspace: null` を送る（別ボタン。編集フォームで「まだ決めない」は選べない）。
     case "project_workspace_save":
@@ -326,15 +300,6 @@ export async function action({ request, params }: Route.ActionArgs) {
       break;
     case "project_unarchive":
       outcome = await unarchiveProject(client, params.id, request.signal);
-      break;
-    case "milestone_cancel":
-      outcome = await cancelMilestone(client, formString(form, "milestone_id") ?? "", request.signal);
-      break;
-    case "milestone_pause":
-      outcome = await pauseMilestone(client, formString(form, "milestone_id") ?? "", request.signal);
-      break;
-    case "milestone_resume":
-      outcome = await resumeMilestone(client, formString(form, "milestone_id") ?? "", request.signal);
       break;
     default:
       throw data({ error: `unknown intent: ${String(intent)}` }, { status: 400 });

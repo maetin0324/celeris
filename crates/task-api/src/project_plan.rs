@@ -1,20 +1,16 @@
-//! `POST /projects/{id}/plan`（ADR-0033 D4 追記。GUI 監査対応 Phase 29）: 分解を起こす。
-//!
-//! GUI の「この方針で進める」の入口。人が「それで進めて」と言ったときに、案件の依頼・途中目標・
-//! 人の一言・秘書との直近のやり取りをまとめた `kind = plan` のタスクを 1 件作る（`task_ops::project_plan`）。
-//! **管理系**（`token_file` 未設定でも 401）: `POST /projects` や `POST /org/{id}/messages` と同じ規律
-//! （人格を持つノードに仕事を起こす経路）。応答は 202 `{task_id}`（run を待たない）。
+//! 案件計画の入口（ADR-0033 D4 追記 Phase 29 / ADR-0074 D3.3）。**ADR-0079 D13（Phase R5a）で撤去**:
+//! `POST /projects/{id}/plan`（`mode: decompose` / `milestones` とも）と
+//! `POST /projects/{id}/project-plan/{version}/decide` は 410 Gone（`type: urn:celeris:problem:removed_by_adr_0079`）。
+//! 要求・応答の型は `api-v1.schema.json` の互換のためにだけ残す（GUI の生成型。R5b 以降で外す）。
 
-use axum::body::Body;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{MilestoneId, TaskId, TaskStore};
-use time::OffsetDateTime;
+use task_core::{MilestoneId, TaskId};
 
-use crate::handlers::{ApiResult, Params, json_response, no_query, parse_project_id, read_json};
+use crate::handlers::ApiResult;
 use crate::middleware::require_admin;
-use crate::problem::{ApiProblem, ops_problem, store_problem};
+use crate::problem::ApiProblem;
 use crate::state::ApiState;
 
 /// ADR-0074 D3.3（Phase F4a (b)）: `POST /projects/{id}/plan` の `mode`。省略時は従来どおりの分解
@@ -50,66 +46,18 @@ pub struct ProjectPlanAccepted {
     pub task_id: TaskId,
 }
 
+/// ADR-0079 D13（Phase R5a）: 案件は計画を持たない。`POST /projects/{id}/plan`（`decompose` / `milestones` とも）は
+/// 410。本文は読まない（管理系のまま: トークン無しは 401）。
+pub(crate) const PROJECT_PLAN_GONE: &str = "ADR-0079: 案件は計画を持たない。root task を作る";
+
 pub(crate) async fn create_project_plan(
     axum::extract::State(state): axum::extract::State<ApiState>,
     headers: HeaderMap,
-    Params(id): Params<String>,
-    axum::extract::RawQuery(raw): axum::extract::RawQuery,
-    body: Body,
 ) -> ApiResult {
-    no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let project_id = parse_project_id(&id)?;
-    let post: ProjectPlanBody = read_json(body, true).await?;
-    if post.mode == ProjectPlanMode::Milestones && post.milestone_id.is_some() {
-        return Err(ApiProblem::validation(vec![
-            crate::types::ValidationError {
-                field: Some("milestone_id".into()),
-                message: "not used with mode=\"milestones\" (it plans the whole project)".into(),
-            },
-        ]));
-    }
-    let roles = state.inner.roles.clone();
-    let genres = state.inner.genres.clone();
-    let started = state
-        .blocking(move |store| {
-            let Some(project) = store.project_get(project_id).map_err(store_problem)? else {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            };
-            match post.mode {
-                ProjectPlanMode::Decompose => task_ops::project_plan::start(
-                    store,
-                    &project,
-                    post.milestone_id,
-                    post.note.as_deref(),
-                    &roles,
-                    &genres,
-                    OffsetDateTime::now_utc(),
-                ),
-                ProjectPlanMode::Milestones => task_ops::project_plan::start_milestones(
-                    store,
-                    &project,
-                    post.note.as_deref(),
-                    &roles,
-                    &genres,
-                    OffsetDateTime::now_utc(),
-                ),
-            }
-            .map_err(|e| ops_problem(store, e, None))
-        })
-        .await?;
-    tracing::info!(
-        who = "admin",
-        op = "project_plan",
-        project_id = %project_id,
-        task_id = %started.task.id,
-        "admin: decomposition started for a project"
-    );
-    Ok(json_response(
-        StatusCode::ACCEPTED,
-        &ProjectPlanAccepted {
-            task_id: started.task.id,
-        },
+    Err(ApiProblem::gone(
+        PROJECT_PLAN_GONE,
+        "POST /api/v1/tasks with project_id (a root task; name the stages in stages_hint)",
     ))
 }
 
@@ -119,17 +67,6 @@ pub(crate) async fn create_project_plan(
 pub enum ProjectPlanDecisionInput {
     Approve,
     Reject,
-}
-
-impl From<ProjectPlanDecisionInput> for task_ops::project_plan::ProjectPlanDecision {
-    fn from(value: ProjectPlanDecisionInput) -> Self {
-        match value {
-            ProjectPlanDecisionInput::Approve => {
-                task_ops::project_plan::ProjectPlanDecision::Approve
-            }
-            ProjectPlanDecisionInput::Reject => task_ops::project_plan::ProjectPlanDecision::Reject,
-        }
-    }
 }
 
 /// `POST /projects/{id}/project-plan/{version}/decide` の要求本文（ADR-0074 D3.3）。
@@ -153,73 +90,15 @@ pub struct ProjectPlanDecided {
     pub tasks: Vec<TaskId>,
 }
 
-fn parse_version(raw: &str) -> Result<u32, ApiProblem> {
-    raw.parse::<u32>()
-        .map_err(|_| ApiProblem::bad_request(format!("`{raw}` is not a project plan version")))
-}
-
+/// ADR-0079 D13（Phase R5a）: `POST /projects/{id}/project-plan/{version}/decide` も 410（案件計画の提案は作られない）。
 pub(crate) async fn decide_project_plan(
     axum::extract::State(state): axum::extract::State<ApiState>,
     headers: HeaderMap,
-    Params((id, version)): Params<(String, String)>,
-    axum::extract::RawQuery(raw): axum::extract::RawQuery,
-    body: Body,
 ) -> ApiResult {
-    no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let project_id = parse_project_id(&id)?;
-    let version = parse_version(&version)?;
-    let post: ProjectPlanDecideBody = read_json(body, false).await?;
-    if post.decision == ProjectPlanDecisionInput::Reject
-        && post.note.as_deref().map(str::trim).unwrap_or("").is_empty()
-    {
-        return Err(ApiProblem::validation(vec![
-            crate::types::ValidationError {
-                field: Some("note".into()),
-                message: "is required to reject a project plan".into(),
-            },
-        ]));
-    }
-    let roles = state.inner.roles.clone();
-    let genres = state.inner.genres.clone();
-    let conversation_genre = state.inner.conversation_genre.clone();
-    let decided = state
-        .blocking(move |store| {
-            let Some(project) = store.project_get(project_id).map_err(store_problem)? else {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            };
-            task_ops::project_plan::decide(
-                store,
-                &project,
-                version,
-                post.decision.into(),
-                post.note.as_deref(),
-                &roles,
-                &genres,
-                &conversation_genre,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, None))
-        })
-        .await?;
-    tracing::info!(
-        who = "admin",
-        op = "project_plan_decide",
-        project_id = %project_id,
-        version,
-        decision = ?post.decision,
-        milestones = decided.milestones.len(),
-        tasks = decided.tasks.len(),
-        "admin: a project plan proposal was decided"
-    );
-    Ok(json_response(
-        StatusCode::ACCEPTED,
-        &ProjectPlanDecided {
-            decision: post.decision,
-            plan_task_id: decided.plan_task_id,
-            milestones: decided.milestones,
-            tasks: decided.tasks,
-        },
+    Err(ApiProblem::gone(
+        PROJECT_PLAN_GONE,
+        "POST /api/v1/tasks with project_id (a root task); decisions inside a task tree use POST /api/v1/decisions/{id}/answer",
     ))
 }
 

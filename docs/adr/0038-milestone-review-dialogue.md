@@ -5,6 +5,7 @@
   決定に関与する余地を作って下さい。『この方針で進めてもいいですか？ ok or ng』だけではなく『この途中目標まででこのような結果が
   得られました、なので次はこのような方針を考えていますがどうでしょうか？』という聞き方に対して、全く問題が無ければ ok、
   途中結果に対する議論が必要な場合は議論、全くダメな場合は ng」）
+- **Superseded by ADR-0079（Phase R5a, 2026-09-29）**: 途中目標の判定 run・`POST /milestones/{id}/decide`（410）・`milestone_proposal` の取り込み・`milestone_ready` の通知は廃止。途中目標は root task の段階（`review: human`）で表し、既存の行は凍結（`GET /projects/{id}?include_frozen=true` で読むだけ）。
 - 関連: SPEC §7（途中目標ごとに人が判定し、Go か再設計。アジャイル）/ §3.1 / §3.4、ADR-0033 D2（milestones）/ D4（対話）、
   ADR-0037（`milestone_ready` の通知）、ADR-0034 D7（結果ファイルの宣言的フィールド）
 

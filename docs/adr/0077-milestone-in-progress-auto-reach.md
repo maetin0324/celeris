@@ -2,6 +2,7 @@
 
 - 日付: 2026-09-28
 - 状態: Accepted（Phase F5-1 dogfood 4 回目の「途中目標の in_progress」）
+- **Superseded by ADR-0079 D13（Phase R5a, 2026-09-29）**: dispatch での `in_progress` と `auto_advance` の自動 `reached` は廃止（途中目標は凍結）。
 - 関連: ADR-0074 D3.1 / D3.2 / D3.5 / D3.6（案件計画・途中目標の Go・DAG 表示・`ok` の意味）、ADR-0038（途中目標の判定）、
   ADR-0044 D6（一時停止・中止）、`docs/progress/phase-F.md` の F4b 申し送り（dispatch 時の `in_progress` 未実装）
 

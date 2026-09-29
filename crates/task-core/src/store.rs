@@ -655,6 +655,10 @@ pub trait TaskStore:
     /// status=Ready かつ depends_on が全て Done かつ（親が存在し kind=Approval の場合は親が Done）
     /// を満たすタスクを priority DESC, created_at ASC で最大 limit 件返す。
     fn ready_tasks(&self, limit: usize) -> Result<Vec<Task>, StoreError>;
+    /// ADR-0079 D13（Phase R5a）: `task` が subtree の一時停止（自分か祖先の `paused_at`）か、祖先の案件の
+    /// 停止（paused / cancelled / archived）で止まっているか。`ready_tasks` と同じ判定を、既に `running` の
+    /// task の並列 WU の 2 本目以降（`dispatch_parallel_work_units`）にも当てるために出す。対話は常に `false`。
+    fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError>;
     /// `transition::transition()` で検証した任意のトリガーを適用する汎用の書き込み口
     /// （ADR-0004 D1）。タスクの取得・`transition()` の呼び出し・`tasks` 行の更新・
     /// `Event::Transitioned` の追記（と任意の `extra_event`）を単一トランザクションで行う。
@@ -690,19 +694,6 @@ pub trait TaskStore:
 
     /// ADR-0010 D2: `insert` + `Event::Created` + `extra_events` を 1 トランザクションで行う。
     fn create_task(&self, task: &Task, extra_events: Vec<Event>) -> Result<(), StoreError>;
-
-    /// ADR-0074 D3.1 / D3.8（Phase F4a）: `task_ops::add` が、案件直下に `milestone_id` 無しで
-    /// 作られる Task（`task_core::is_milestone_task`）のために、`create_task` と同じことを
-    /// **同じトランザクションで**行い、途中目標の行も 1 件作る（1:1 の不変条件を保つ）。
-    /// `task.milestone_id` は呼び出し側があらかじめ新しい `MilestoneId` を入れて渡すこと（挿入する
-    /// 途中目標の行の `id` に使う）。`task.project_id` が無い／存在しない案件を指すなら
-    /// `StoreError::Invalid`。途中目標は `status = approved`、`seq` は案件の最大 + 1。
-    fn create_task_with_milestone(
-        &self,
-        task: &Task,
-        milestone_title: &str,
-        extra_events: Vec<Event>,
-    ) -> Result<Milestone, StoreError>;
 
     /// ADR-0074 D3.3（Phase F4a (c)）: 案件計画の提案の決定を **1 トランザクションで**適用する。
     /// `milestones` を全て `milestone_status` にし、`tasks` のうちまだ `draft` のもの（`Trigger::Cancel`
@@ -821,12 +812,6 @@ pub trait TaskStore:
         id: ProjectId,
         at: Option<OffsetDateTime>,
     ) -> Result<bool, StoreError>;
-    /// ADR-0074 D3.2（Phase F4b）: `projects.auto_advance` を書く。無い案件は `Ok(false)`。
-    fn project_set_auto_advance(
-        &self,
-        id: ProjectId,
-        auto_advance: bool,
-    ) -> Result<bool, StoreError>;
     /// ADR-0044 D7 追記（Phase K-1）: `projects.slug` を書く。綴りが違えば `StoreError::Invalid`
     /// （API は 422）、他の案件が使っていれば `StoreError::InUse`（409）。無い案件は `Ok(false)`。
     /// **知識ベースのディレクトリは動かさない**（`projects/<旧>/` を `projects/<新>/` へ動かすのは人）。
@@ -912,9 +897,6 @@ pub trait TaskStore:
         from: MilestoneStatus,
         to: MilestoneStatus,
     ) -> Result<bool, StoreError>;
-    /// ADR-0077 D2: `auto_advance = true` の案件で、マイルストーン Task が `done` になった案件計画の途中目標
-    /// （`plan_key` あり、状態が `approved` / `in_progress`）の id。`reached` にしてよい候補。
-    fn milestones_auto_reach_candidates(&self) -> Result<Vec<MilestoneId>, StoreError>;
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
     /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い途中目標は `Ok(false)`。
     fn milestone_set_lifecycle(
@@ -2385,21 +2367,46 @@ impl SqliteStore {
         Ok(out)
     }
 
-    /// ADR-0074 D3.2（Phase F4b (d)）: 依存するマイルストーンの Go がまだ開いていない途中目標の id
-    /// （案件計画のもの〈`plan_key` あり〉で `reached` でなく、案件の `auto_advance` が 0）。
-    fn milestones_awaiting_go_locked(
+    /// ADR-0079 D13（Phase R5a）: `task` が subtree の一時停止で止まっているか。自分か祖先が `paused_at` を
+    /// 持つ、または祖先が `halted_projects`（paused / cancelled / archived の案件）に属するなら `true`。
+    /// 祖先は `parent_id`、無ければ木の親（`tree.parent_unit.task_id`。採用で `parent_id` を書き換えない子）
+    /// を辿る。循環と深すぎる鎖は `MAX_ANCESTRY` で打ち切る（壊れた行で dispatch 全体を止めない）。
+    fn halted_by_ancestry_locked(
         conn: &Connection,
-    ) -> Result<std::collections::HashSet<String>, StoreError> {
-        let mut stmt = conn.prepare(
-            "SELECT m.id FROM milestones m JOIN projects p ON p.id = m.project_id \
-             WHERE m.plan_key IS NOT NULL AND m.status <> 'reached' AND p.auto_advance = 0",
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut out = std::collections::HashSet::new();
-        for row in rows {
-            out.insert(row?);
+        task: &Task,
+        halted_projects: &std::collections::HashSet<String>,
+    ) -> Result<bool, StoreError> {
+        const MAX_ANCESTRY: usize = 32;
+        if task.paused_at.is_some() {
+            return Ok(true);
         }
-        Ok(out)
+        let parent_of = |t: &Task| {
+            t.parent_id.or_else(|| {
+                t.tree
+                    .as_ref()
+                    .and_then(|tree| tree.parent_unit.as_ref())
+                    .map(|u| u.task_id)
+            })
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut next = parent_of(task);
+        while let Some(id) = next {
+            if !seen.insert(id) || seen.len() > MAX_ANCESTRY {
+                break;
+            }
+            let Some(ancestor) = Self::get_locked(conn, id)? else {
+                break;
+            };
+            if ancestor.paused_at.is_some()
+                || ancestor
+                    .project_id
+                    .is_some_and(|p| halted_projects.contains(&p.to_string()))
+            {
+                return Ok(true);
+            }
+            next = parent_of(&ancestor);
+        }
+        Ok(false)
     }
 
     fn milestone_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Milestone, StoreError>> {
@@ -3758,6 +3765,22 @@ impl TaskStore for SqliteStore {
         Ok(())
     }
 
+    fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError> {
+        if is_conversation(task) {
+            return Ok(false);
+        }
+        self.with_read_conn(|conn| {
+            let halted_projects = Self::halted_projects_locked(conn)?;
+            if task
+                .project_id
+                .is_some_and(|p| halted_projects.contains(&p.to_string()))
+            {
+                return Ok(true);
+            }
+            Self::halted_by_ancestry_locked(conn, task, &halted_projects)
+        })
+    }
+
     fn ready_tasks(&self, limit: usize) -> Result<Vec<Task>, StoreError> {
         self.with_read_conn(|conn| {
             // ADR-0044 D6（Phase 55）: **一時停止・中止・アーカイブされた案件／途中目標のタスクは
@@ -3766,10 +3789,10 @@ impl TaskStore for SqliteStore {
             // **対話（`is_conversation`）だけは例外**: 人が「なぜ止めたのか」を秘書と話せなくなるため、
             // 止まっている案件でも対話は起こす（判断は下の Rust 側。`Task` を読まないと見分けられない）。
             let halted_projects = Self::halted_projects_locked(conn)?;
+            // ADR-0079 D13（Phase R5a）: 途中目標は凍結（新しく paused / cancelled にする入口は無い）。既存の
+            // paused / cancelled の途中目標に属する task の抑止だけは残す。
             let halted_milestones = Self::halted_milestones_locked(conn)?;
-            // ADR-0074 D3.2（Phase F4b (d)）: 途中目標の Go がまだ開いていない途中目標（案件計画の
-            // もので `reached` でない。案件の `auto_advance` が立っていれば含めない）。
-            let awaiting_go = Self::milestones_awaiting_go_locked(conn)?;
+            // ADR-0074 D3.2 の途中目標の Go（`milestones_awaiting_go_locked`）は ADR-0079 D13（R5a）で廃止。
 
             // ADR-0010 D2（P-36）: dispatch されない Approval は取得件数を占有しないよう SQL 段階で除外する。
             let mut stmt = conn.prepare(
@@ -3795,6 +3818,11 @@ impl TaskStore for SqliteStore {
                     if halted {
                         continue;
                     }
+                    // ADR-0079 D13（Phase R5a）: subtree の一時停止。自分か祖先（`parent_id` /
+                    // `tree.parent_unit` の鎖）が `paused_at` を持つか、祖先が止まっている案件に属するなら見送る。
+                    if Self::halted_by_ancestry_locked(conn, &task, &halted_projects)? {
+                        continue;
+                    }
                 }
 
                 // P-78（ADR-0033 D4 / Phase 28）: 対話タスクの `depends_on` は返事を送った順に返すための
@@ -3802,24 +3830,8 @@ impl TaskStore for SqliteStore {
                 // （`done` だけでなく `failed` / `cancelled` でも）次の対話タスクへ進めてよい。
                 let is_conv = is_conversation(&task);
                 let mut deps_done = true;
-                let is_milestone = crate::org::is_milestone_task(&task);
                 for dep_id in &task.depends_on {
                     match Self::get_locked(conn, *dep_id)? {
-                        // ADR-0074 D3.2（Phase F4b (d)）: マイルストーン Task 同士の依存は、依存先が `done`
-                        // でも、その途中目標（案件計画のもの）が `reached` になるまで開かない（人の `ok` が
-                        // Go）。案件計画を持たない途中目標（`plan_key` が無い）は旧い意味のまま（D3.8）。
-                        Some(dep)
-                            if dep.status == Status::Done
-                                && is_milestone
-                                && crate::org::is_milestone_task(&dep)
-                                && dep.milestone_id != task.milestone_id
-                                && dep
-                                    .milestone_id
-                                    .is_some_and(|m| awaiting_go.contains(&m.to_string())) =>
-                        {
-                            deps_done = false;
-                            break;
-                        }
                         Some(dep) if dep.status == Status::Done => {}
                         Some(dep) if is_conv && dep.status.is_terminal() => {}
                         _ => {
@@ -3915,82 +3927,6 @@ impl TaskStore for SqliteStore {
         }
         tx.commit()?;
         Ok(())
-    }
-
-    fn create_task_with_milestone(
-        &self,
-        task: &Task,
-        milestone_title: &str,
-        extra_events: Vec<Event>,
-    ) -> Result<Milestone, StoreError> {
-        let Some(milestone_id) = task.milestone_id else {
-            return Err(StoreError::Invalid(
-                "create_task_with_milestone requires task.milestone_id".to_string(),
-            ));
-        };
-        let Some(project_id) = task.project_id else {
-            return Err(StoreError::Invalid(
-                "create_task_with_milestone requires task.project_id".to_string(),
-            ));
-        };
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
-            params![project_id.to_string()],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(StoreError::Invalid(format!(
-                "project not found: {project_id}"
-            )));
-        }
-        let seq: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM milestones WHERE project_id = ?1",
-            params![project_id.to_string()],
-            |row| row.get(0),
-        )?;
-        let now = OffsetDateTime::now_utc();
-        let milestone = Milestone {
-            plan_key: None,
-            id: milestone_id,
-            project_id,
-            seq,
-            title: milestone_title.to_string(),
-            description: String::new(),
-            status: MilestoneStatus::Approved,
-            paused_from: None,
-            created_at: now,
-            updated_at: now,
-        };
-        tx.execute(
-            "INSERT INTO milestones (id, project_id, seq, title, description, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                milestone.id.to_string(),
-                milestone.project_id.to_string(),
-                milestone.seq,
-                milestone.title,
-                milestone.description,
-                milestone.status.as_str(),
-                format_rfc3339(milestone.created_at)?,
-                format_rfc3339(milestone.updated_at)?,
-            ],
-        )?;
-        Self::insert_tx(&tx, task)?;
-        Self::append_event_tx(
-            &tx,
-            task.id,
-            &Event::Created {
-                task: Box::new(task.clone()),
-                origin: None,
-            },
-        )?;
-        for event in &extra_events {
-            Self::append_event_tx(&tx, task.id, event)?;
-        }
-        tx.commit()?;
-        Ok(milestone)
     }
 
     fn project_plan_decide_apply(
@@ -4776,23 +4712,6 @@ impl TaskStore for SqliteStore {
         Ok(affected == 1)
     }
 
-    fn project_set_auto_advance(
-        &self,
-        id: ProjectId,
-        auto_advance: bool,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        let affected = conn.execute(
-            "UPDATE projects SET auto_advance = ?1, updated_at = ?2 WHERE id = ?3",
-            params![
-                i64::from(auto_advance),
-                format_rfc3339(OffsetDateTime::now_utc())?,
-                id.to_string()
-            ],
-        )?;
-        Ok(affected == 1)
-    }
-
     fn project_set_workspace(
         &self,
         id: ProjectId,
@@ -5208,32 +5127,6 @@ impl TaskStore for SqliteStore {
             ],
         )?;
         Ok(affected == 1)
-    }
-
-    fn milestones_auto_reach_candidates(&self) -> Result<Vec<MilestoneId>, StoreError> {
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT m.id FROM milestones m JOIN projects p ON p.id = m.project_id \
-                 WHERE m.plan_key IS NOT NULL AND m.status IN ('approved', 'in_progress') \
-                   AND p.auto_advance = 1 \
-                   AND EXISTS (SELECT 1 FROM tasks t WHERE t.milestone_id = m.id \
-                               AND t.parent_id IS NULL AND t.kind = ?1 AND t.status = ?2) \
-                 ORDER BY m.project_id, m.seq",
-            )?;
-            let rows = stmt.query_map(
-                params![kind_str(TaskKind::Execute), status_str(Status::Done)],
-                |row| row.get::<_, String>(0),
-            )?;
-            let mut out = Vec::new();
-            for row in rows {
-                let id = row?;
-                out.push(
-                    id.parse::<MilestoneId>()
-                        .map_err(|_| StoreError::Invalid(format!("invalid milestone id: {id}")))?,
-                );
-            }
-            Ok(out)
-        })
     }
 
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を 1 回の UPDATE で書く（`project_set_lifecycle` と同じ）。
@@ -6545,6 +6438,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

@@ -10076,7 +10076,7 @@
       "description": "`Message.metadata.actions_executed[]`。",
       "properties": {
         "kind": {
-          "description": "`create_task` / `propose_project` / `add_milestone` / `ask_human`。",
+          "description": "`create_task` / `propose_project` / `ask_human`（旧 `add_milestone` は ADR-0079 D12〈Phase R5a〉で廃止。履歴の行には残る）。",
           "type": "string"
         },
         "milestone_id": {
@@ -10396,7 +10396,7 @@
       "type": "string"
     },
     "MilestoneLifecycle": {
-      "description": "途中目標の状態を変えたときの結果。",
+      "description": "`POST /milestones/{id}/{cancel|pause|resume}` の旧い応答（ADR-0044 D6）。ADR-0079 D13（Phase R5a）で入口は 410 に\nなったが、`api-v1.schema.json` と GUI の生成型の互換のために形だけ残す（R5b 以降で外す）。",
       "properties": {
         "cancelled_tasks": {
           "default": [],
@@ -11193,6 +11193,14 @@
           "description": "ADR-0046 D2（Phase 59）: このタスクに必要な能力タグ（小文字 `[a-z0-9._-]`、最大 12 個）。\n`assignee` を書かなければ、これとノードの実効 `skills` の重なりで担当が決まる（D5 の matching）。",
           "items": {
             "type": "string"
+          },
+          "type": "array"
+        },
+        "stages_hint": {
+          "default": [],
+          "description": "ADR-0079 D12（Phase R5a）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。\n`Task.routing.stages_hint` に写り、root の planner への入力になる（構造の強制ではない）。人（API/CLI）と\nCoS（`create_task.stages_hint`）が書ける。省略時は空。",
+          "items": {
+            "$ref": "#/$defs/StageHint"
           },
           "type": "array"
         },
@@ -12770,11 +12778,18 @@
       "description": "`GET /projects/{id}` の応答。案件 + 途中目標 + その案件のタスクの要約（GUI の「仕事の木」用）。",
       "properties": {
         "milestones": {
-          "description": "ADR-0038 D1 / D4（Phase 41）: 途中目標そのもの（`Milestone` の各フィールドはそのまま）に、\n秘書のレビューの返事と提案された次の途中目標を添えたもの。",
+          "description": "ADR-0038 D1 / D4（Phase 41）: 途中目標そのもの（`Milestone` の各フィールドはそのまま）に、\n秘書のレビューの返事と提案された次の途中目標を添えたもの。\nADR-0079 D13 / U-R8（Phase R5a）: 途中目標は凍結した履歴で、**既定では空**（`?include_frozen=true` の\nときだけ全行を読み取り専用で返す）。",
           "items": {
             "$ref": "#/$defs/MilestoneView"
           },
           "type": "array"
+        },
+        "milestones_frozen": {
+          "default": 0,
+          "description": "ADR-0079 D13（Phase R5a）: この案件の途中目標の行の数（凍結。`milestones` が空でも数える。GUI が\n「以前の途中目標 N 件」を出すため）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "project": {
           "$ref": "#/$defs/Project"
@@ -12788,7 +12803,7 @@
               "type": "null"
             }
           ],
-          "description": "ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の\n提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。"
+          "description": "ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の\n提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。\nADR-0079 D13（Phase R5a）: 凍結した履歴なので `?include_frozen=true` のときだけ出る。"
         },
         "repos": {
           "default": [],
@@ -13357,6 +13372,11 @@
         },
         "id": {
           "$ref": "#/$defs/TaskId"
+        },
+        "is_root_task": {
+          "default": false,
+          "description": "ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`: 案件直下・木の子でない・\n対話でも裏方でもない）。案件ページの「root task の一覧」はこれで絞る。",
+          "type": "boolean"
         },
         "milestone_id": {
           "anyOf": [
@@ -17353,6 +17373,13 @@
             }
           ]
         },
+        "paused_at": {
+          "description": "ADR-0079 D13（Phase R5a）: 人がこの task の subtree を一時停止した時刻（`POST /tasks/{id}/pause`）。\n`Some` の間、この task と子孫（`parent_id` / `tree.parent_unit` の鎖）は dispatch されない\n（`TaskStore::ready_tasks` が祖先を辿って見る。状態機械は触らない）。`resume` で `None` に戻す。\n導入前の task には無い。DB の列は増やさない（`json` 列の中だけ。migration 無し）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "priority": {
           "format": "int32",
           "type": "integer"
@@ -17588,11 +17615,27 @@
             "null"
           ]
         },
+        "is_root_task": {
+          "default": false,
+          "description": "ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。",
+          "type": "boolean"
+        },
         "latest_question": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "paused_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 D13（Phase R5a）: subtree の一時停止でこの task の dispatch を止めている task（自分か、\n`paused_at` を持つ一番近い祖先）。止まっていなければ省略。"
         },
         "prior_review": {
           "items": {
@@ -18248,6 +18291,34 @@
         }
       ]
     },
+    "TaskPauseResult": {
+      "description": "`POST /tasks/{id}/pause|resume` の結果（API がそのまま返す）。",
+      "properties": {
+        "paused_at": {
+          "description": "一時停止の時刻（RFC 3339）。`resume` の後は `None`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subtree": {
+          "default": [],
+          "description": "この操作で dispatch が止まる・戻る子孫（非終端のもの。`parent_id` と木の親の鎖。自分は含まない）。",
+          "items": {
+            "$ref": "#/$defs/TaskRef"
+          },
+          "type": "array"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef",
+          "description": "一時停止・再開した task（更新後）。"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "type": "object"
+    },
     "TaskRef": {
       "properties": {
         "actions": {
@@ -18450,6 +18521,11 @@
         "id": {
           "$ref": "#/$defs/TaskId"
         },
+        "is_root_task": {
+          "default": false,
+          "description": "ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。",
+          "type": "boolean"
+        },
         "kind": {
           "$ref": "#/$defs/TaskKind"
         },
@@ -18491,6 +18567,11 @@
               "type": "null"
             }
           ]
+        },
+        "paused": {
+          "default": false,
+          "description": "ADR-0079 D13（Phase R5a）: この task 自身が subtree の一時停止中か（`Task.paused_at` がある。祖先の\n一時停止で止まっているかは `TaskDetail.paused_by`）。",
+          "type": "boolean"
         },
         "pending_children": {
           "format": "uint32",
@@ -20578,6 +20659,10 @@
     "task_list": {
       "$ref": "#/$defs/TaskList"
     },
+    "task_pause": {
+      "$ref": "#/$defs/TaskPauseResult",
+      "description": "ADR-0079 D13（Phase R5a）: `POST /tasks/{id}/pause|resume` の応答（task の subtree の一時停止）。"
+    },
     "task_routing": {
       "$ref": "#/$defs/TaskRoutingView",
       "description": "ADR-0069 D5: `GET /tasks/{id}/routing`。"
@@ -20651,6 +20736,7 @@
     "milestone_decided",
     "project_lifecycle",
     "milestone_lifecycle",
+    "task_pause",
     "project_plan",
     "project_plan_accepted",
     "project_plan_decide",

@@ -280,7 +280,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 14 | POST | `/tasks/{id}/reject` | `celerisctl reject` | `TransitionResult` | task-ops |
 | 15 | POST | `/tasks/{id}/answer` | `celerisctl answer` | `TransitionResult` | task-ops |
 | 16 | POST | `/tasks/{id}/cancel` | `celerisctl cancel` | `TransitionResult` | task-ops |
-| 17 | POST | `/plans` | `celerisctl plan` 相当 | 201 `Task` | task-ops |
+| 17 | POST | `/plans` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。`docs/celeris-api-v1.md`）**。旧: `celerisctl plan` 相当 | 201 `Task` | task-ops |
 | 18 | POST | `/replay` | `celerisctl replay`（読み取りのみ） | `ReplayReport` | task-ops |
 | 19 | GET | `/graph` | DAG（`depends_on` の辺、`parent_id` の入れ子） | `Graph` | task-ops |
 | 20 | GET | `/events` | 全タスク横断のイベント（`after_id`。ポーリング / `curl` 用） | `EventsPage` | store `events_since` |
@@ -311,13 +311,13 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 45 | POST | `/projects` | 案件を投げる（`status = proposed`。直後に秘書の run が起きるので**管理系**。Phase 27） | 201 `Project`（`Location`） | store `project_create` |
 | 46 | GET | `/projects/{id}` | 案件 + 途中目標 + 仕事の木 | `ProjectDetail` | store（`project_id` で絞った `tasks`） |
 | 47 | PATCH | `/projects/{id}` | 案件の状態を変える | 200 `Project` | store `project_set_status` |
-| 48 | POST | `/projects/{id}/milestones` | 途中目標を足す（`seq` はストアが採番） | 201 `Milestone`（`Location`） | store `milestone_create` |
-| 49 | PATCH | `/milestones/{id}` | 途中目標の状態を変える（SPEC §7 のアジャイル） | 200 `Milestone` | store `milestone_set_status` |
+| 48 | POST | `/projects/{id}/milestones` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。`docs/celeris-api-v1.md`）**。旧: 途中目標を足す（`seq` はストアが採番） | 201 `Milestone`（`Location`） | store `milestone_create` |
+| 49 | PATCH | `/milestones/{id}` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。`docs/celeris-api-v1.md`）**。旧: 途中目標の状態を変える（SPEC §7 のアジャイル） | 200 `Milestone` | store `milestone_set_status` |
 | 50 | GET | `/org/{id}/messages` | そのノードとのやり取り（古い順。ADR-0033 D4、Phase 24） | `MessageList` | store `message_list` |
 | 51 | POST | `/org/{id}/messages` | そのノードに話しかける（**管理系**） | 202 `MessageAccepted` | `task_ops::conversation::start` |
 | 52 | GET | `/notify` | Discord への通知の設定と直近の送信（ADR-0037、Phase 39。URL は出さない） | `NotifyView` | 設定 + store `notification_recent` |
 | 53 | POST | `/notify/test` | テスト送信を 1 回（**管理系: `token_file` 未設定でも 401**） | 200 `NotifyTestResult` | celeris（`[secrets]` の webhook へ POST） |
-| 54 | POST | `/milestones/{id}/decide` | 途中目標の判定（`ok` / `discuss` / `ng`。ADR-0038 D2、Phase 41）（**管理系**） | 202 `MilestoneDecided` | `task_ops::milestone_review::decide` |
+| 54 | POST | `/milestones/{id}/decide` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。`docs/celeris-api-v1.md`）**。旧: 途中目標の判定（`ok` / `discuss` / `ng`。ADR-0038 D2、Phase 41）（**管理系**） | 202 `MilestoneDecided` | `task_ops::milestone_review::decide` |
 | 55 | GET | `/releases` | リリース一覧・検証状態・`current`/`previous`・引き継ぎの進行（ADR-0040 D6、Phase 48） | `Releases` | `[selfdeploy] releases_dir` のファイル + store `instance_list` |
 | 56 | POST | `/releases/{sha12}/promote` | そのリリースへ昇格する（`promote.sh` を起こして 202）（**管理系: `token_file` 未設定でも 401**） | 202 `ReleasePromoteAccepted` | celeris（`<release>/scripts/promote.sh` を detached で起動） |
 | 57 | GET | `/projects/{id}/repos` | その案件のリポジトリ（primary が先頭。ADR-0043 D1、Phase 52） | `RepoList` | store `repo_list` |
@@ -341,9 +341,9 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 75 | POST | `/projects/{id}/resume` | 一時停止を解く（`paused_from` へ戻す。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 76 | POST | `/projects/{id}/archive` | 終端の案件をアーカイブする（一覧から既定で隠れる。**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
 | 77 | POST | `/projects/{id}/unarchive` | アーカイブを解除する（**管理系**） | 200 `ProjectLifecycle` | `task_ops::lifecycle` |
-| 78 | POST | `/milestones/{id}/cancel` | 途中目標を中止し、属する非終端タスクを連鎖で `cancelled` にする（**管理系**） | 200 `MilestoneLifecycle` | `task_ops::lifecycle` |
-| 79 | POST | `/milestones/{id}/pause` | 途中目標を一時停止する（**管理系**） | 200 `MilestoneLifecycle` | `task_ops::lifecycle` |
-| 80 | POST | `/milestones/{id}/resume` | 一時停止を解く（**管理系**） | 200 `MilestoneLifecycle` | `task_ops::lifecycle` |
+| 78 | POST | `/milestones/{id}/cancel` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。`docs/celeris-api-v1.md`）**。旧: 途中目標を中止し、属する非終端タスクを連鎖で `cancelled` にする（**管理系**） | 200 `MilestoneLifecycle` | `task_ops::lifecycle` |
+| 79 | POST | `/milestones/{id}/pause` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。`docs/celeris-api-v1.md`）**。旧: 途中目標を一時停止する（**管理系**） | 200 `MilestoneLifecycle` | `task_ops::lifecycle` |
+| 80 | POST | `/milestones/{id}/resume` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。`docs/celeris-api-v1.md`）**。旧: 一時停止を解く（**管理系**） | 200 `MilestoneLifecycle` | `task_ops::lifecycle` |
 | 81 | GET | `/projects/{id}/docs` | 案件の文書のツリー（`?q=` は `git grep -il`。ADR-0044 D7、Phase 57） | `DocsTree` | `git ls-tree` / `git log` |
 | 82 | GET | `/projects/{id}/docs/page` | ページ 1 枚（raw / html / front matter / 履歴 / etag） | `DocPage` | `git show` / `git log` |
 | 83 | POST | `/projects/{id}/docs/init` | 文書リポジトリを用意する（無い案件だけ。**管理系**） | 200 `DocsInitResult` | `git init` + store |
@@ -2487,7 +2487,7 @@ Console の入力欄の文の入口。`POST /org/{id}/messages`（§3.47）と�
     `acceptance` は 1 件以上必須。
   - `propose_project`: `proposed` の案件を作る。`repos[]` は**絶対パス**（1 件目が primary。名前・種類は
     `POST /projects/{id}/repos` と同じ既定から決める）。
-  - `add_milestone`: 既存の案件の末尾に `proposed` の途中目標を足す。
+  - `add_milestone`: 既存の案件の末尾に `proposed` の途中目標を足す。**ADR-0079 D12（Phase R5a）で廃止**（「途中目標は root task の段階で表す」の理由付きで落ち、人に見える。代わりに `create_task.stages_hint`）。
   - `ask_human`: taskd 側では何も作らない（人への問いかけ自体が返事の本文）。「実行できた」として記録するだけ。
   - 検証に落ちた action（知らない harness / repos / 案件など）は**実行されない**。CoS の返事の Markdown に
     「実行できなかった action: …」の節が付き、`reply` ブロックの `actions_result.actions_failed[]` にも理由が残る。

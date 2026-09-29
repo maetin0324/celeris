@@ -367,13 +367,10 @@ pub struct ProjectRootTotals {
     pub totals: RollupMetrics,
 }
 
-/// 案件の root task か（D13 の `is_root_task` の読み: 案件直下〈`parent_id` なし〉・木の子でない・対話でも
-/// 裏方〈`support_kind`〉でもない）。
+/// 案件の root task か。ADR-0079 D13（Phase R5a）で `task_core::is_root_task` に一本化した（R4a の読みと同じ:
+/// 案件直下〈`parent_id` なし〉・木の子でない・対話でも裏方〈`support_kind`〉でもない）。
 pub fn is_project_root_task(task: &Task) -> bool {
-    task.parent_id.is_none()
-        && tree_parent(task).is_none()
-        && !task_core::is_conversation(task)
-        && task_core::report::support_kind(task).is_none()
+    task_core::is_root_task(task)
 }
 
 /// D11: `GET /projects/{id}` の root task の合計（`tasks` は案件の task。root 以外は無視する）。
@@ -556,6 +553,7 @@ mod tests {
     fn task(title: &str, status: Status, parent: Option<(&Task, &str)>) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            paused_at: None,
             tree: parent.map(|(p, unit)| TreeInfo {
                 root_id: task_core::tree::root_id_of(p),
                 depth: task_core::tree::depth_of(p) + 1,

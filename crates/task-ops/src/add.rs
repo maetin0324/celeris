@@ -176,6 +176,11 @@ pub struct NewTaskSpec {
     /// （`ExecutionPlanSpec` に欄が無い）。
     #[serde(default)]
     pub pause_after: Option<task_core::PausePolicy>,
+    /// ADR-0079 D12（Phase R5a）: 人が名指しした段階（`[{"title": "Phase 1", "scope": "…"}]`）。
+    /// `Task.routing.stages_hint` に写り、root の planner への入力になる（構造の強制ではない）。人（API/CLI）と
+    /// CoS（`create_task.stages_hint`）が書ける。省略時は空。
+    #[serde(default)]
+    pub stages_hint: Vec<task_core::StageHint>,
     /// ADR-0069 D1: この spec の出自。**API の JSON からは入らない**（`serde(skip)`。偽装できない）。
     /// 既定は人（`POST /tasks` / `celerisctl add`）。LLM の経路（CoS の actions）はコードが `Agent` を立てる。
     #[serde(skip)]
@@ -432,22 +437,17 @@ pub fn build_task_with_roles(
     build_task(store, spec, roles, genres, true, now)
 }
 
-/// ADR-0074 D3.1 / D3.8（Phase F4a）: `task` を挿入する。**案件直下**（`task_core::is_milestone_task`）
-/// で `milestone_id` を持たなければ、同じトランザクションで途中目標の行（`approved`、title = Task の
-/// title）を作って結ぶ（1:1 の不変条件を保つ）。既に `milestone_id` があれば（人が明示した／親から
-/// 継いだ／案件計画が結んだ）何もしない — 既存の案件（途中目標が手で作られたもの）の挙動は変わらない。
+/// `task` を挿入する（`Event::Created` + `extra_events` を 1 トランザクションで）。
+///
+/// ADR-0079 D13（Phase R5a）: 案件直下の task（`task_core::is_root_task`）に途中目標の行を自動で作る
+/// 1:1 の規則（ADR-0074 D3.8）は廃止。root task はそのまま案件に並ぶ（`milestone_id` は人が明示した・
+/// 親から継いだときだけ持つ。既存の途中目標の行は凍結）。
 fn insert_task(
     store: &dyn TaskStore,
-    mut task: Task,
+    task: Task,
     extra_events: Vec<task_core::Event>,
 ) -> Result<Task, OpsError> {
-    if task_core::is_milestone_task(&task) && task.milestone_id.is_none() {
-        let title = task.title.clone();
-        task.milestone_id = Some(MilestoneId::new());
-        store.create_task_with_milestone(&task, &title, extra_events)?;
-    } else {
-        store.create_task(&task, extra_events)?;
-    }
+    store.create_task(&task, extra_events)?;
     Ok(task)
 }
 
@@ -485,6 +485,39 @@ pub fn create_support_task(
 
 /// `spec` を検証して `Task` を組み立てる（挿入はしない）。`require_acceptance = false` なら
 /// 受け入れ条件が空でもよい（`create_support_task` 専用）。
+/// ADR-0079 D12（Phase R5a）: `stages_hint` の上限（人が名指しする段階の数。planner の段階の上限より広く取る:
+/// 名指しは入力で、段階の数を決めるのは planner）。
+pub const MAX_STAGES_HINT: usize = 16;
+/// `stages_hint` の 1 件の `title` / `scope` の字数の上限。
+pub const MAX_STAGE_HINT_TITLE_CHARS: usize = 120;
+pub const MAX_STAGE_HINT_SCOPE_CHARS: usize = 2_000;
+
+/// ADR-0079 D12（Phase R5a）: `stages_hint` の形だけを確かめる（中身の解釈はしない。planner への入力）。
+fn validate_stages_hint(hints: &[task_core::StageHint]) -> Result<(), OpsError> {
+    if hints.len() > MAX_STAGES_HINT {
+        return Err(OpsError::Validation(format!(
+            "stages_hint: at most {MAX_STAGES_HINT} stages (got {})",
+            hints.len()
+        )));
+    }
+    for (i, hint) in hints.iter().enumerate() {
+        if hint.title.trim().is_empty() {
+            return Err(OpsError::Validation(format!(
+                "stages_hint[{i}].title must not be blank"
+            )));
+        }
+        if hint.title.chars().count() > MAX_STAGE_HINT_TITLE_CHARS
+            || hint.scope.chars().count() > MAX_STAGE_HINT_SCOPE_CHARS
+        {
+            return Err(OpsError::Validation(format!(
+                "stages_hint[{i}]: title is at most {MAX_STAGE_HINT_TITLE_CHARS} and scope at most \
+                 {MAX_STAGE_HINT_SCOPE_CHARS} characters"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn build_task(
     store: &dyn TaskStore,
     spec: NewTaskSpec,
@@ -493,6 +526,7 @@ fn build_task(
     require_acceptance: bool,
     now: OffsetDateTime,
 ) -> Result<Task, OpsError> {
+    validate_stages_hint(&spec.stages_hint)?;
     let role = spec.role.as_deref().and_then(|r| RoleSpec::find(roles, r));
     if !genres.is_empty()
         && let Some(g) = &spec.genre
@@ -701,11 +735,13 @@ fn build_task(
         } else {
             task_core::PauseSource::Human
         },
-        // ADR-0079 D12: `create_task.stages_hint` の入口は R5a（R2b は planner が読むだけ）。
-        stages_hint: Vec::new(),
+        // ADR-0079 D12（Phase R5a）: 人（`POST /tasks`）と CoS（`create_task.stages_hint`）が名指しした段階。
+        // root の planner だけが読む（R2b）。空なら出力しない。
+        stages_hint: spec.stages_hint.clone(),
     };
     let task = Task {
         tree: None,
+        paused_at: None,
         routing: Some(routing),
         repos,
         id,
@@ -830,6 +866,7 @@ mod tests {
             features: None,
             execution: None,
             pause_after: None,
+            stages_hint: Vec::new(),
             provenance: SpecProvenance::default(),
         }
     }
@@ -1274,37 +1311,48 @@ mod tests {
         project
     }
 
-    /// ADR-0074 D3.1 / D3.8（Phase F4a）: 案件直下（`is_milestone_task`）に `milestone_id` 無しで
-    /// Task を作ると、同じトランザクションで途中目標の行（`approved`、title = Task の title）ができ、
-    /// `milestone_id` で結ばれる（1:1 の不変条件）。
+    /// ADR-0079 D13（Phase R5a）: 案件直下に `milestone_id` 無しで作った root task にも、その子にも途中目標の行は
+    /// できない（ADR-0074 D3.8 の自動作成の廃止）。既存の途中目標の行は状態が変わらない。
     #[test]
-    fn creating_a_top_level_execute_task_without_a_milestone_id_auto_creates_an_approved_milestone()
-    {
+    fn no_milestone_rows_for_new_root_tasks() {
         let store = SqliteStore::open_in_memory().expect("open store");
         let project = a_project(&store);
+        let frozen = store
+            .milestone_create(
+                project.id,
+                "以前の途中目標",
+                "",
+                task_core::MilestoneStatus::InProgress,
+            )
+            .expect("create milestone");
 
         let mut spec = base_spec();
         spec.title = "隣接領域の調査".into();
         spec.project_id = Some(project.id);
-        let task = create_task(&store, spec, now()).expect("create_task");
+        let root = create_task(&store, spec, now()).expect("create_task");
+        assert!(task_core::is_root_task(&root));
+        assert_eq!(root.milestone_id, None, "root task に途中目標を結ばない");
 
-        let milestone_id = task.milestone_id.expect("auto milestone linked");
+        let mut child_spec = base_spec();
+        child_spec.project_id = Some(project.id);
+        child_spec.parent = Some(root.id);
+        let child = create_task(&store, child_spec, now()).expect("create child");
+        assert!(!task_core::is_root_task(&child));
+        assert_eq!(child.milestone_id, None);
+
         let milestones = store.milestone_list(project.id).expect("list");
-        assert_eq!(milestones.len(), 1);
-        assert_eq!(milestones[0].id, milestone_id);
-        assert_eq!(milestones[0].title, "隣接領域の調査");
-        assert_eq!(milestones[0].status, task_core::MilestoneStatus::Approved);
-        assert_eq!(milestones[0].seq, 1);
-
-        // 作った Task 自体もストアに正しく載っている（挿入とマイルストーン作成が同じトランザクション）。
-        let fetched = store.get(task.id).expect("get").expect("some");
-        assert_eq!(fetched.milestone_id, Some(milestone_id));
+        assert_eq!(milestones.len(), 1, "新しい途中目標の行はできない");
+        assert_eq!(milestones[0].id, frozen.id);
+        assert_eq!(
+            milestones[0].status,
+            task_core::MilestoneStatus::InProgress,
+            "既存の行は凍結（状態が変わらない）"
+        );
     }
 
-    /// 既に `milestone_id` が明示されていれば（人が手で作った途中目標に結ぶ既存の使い方）、
-    /// 新しい途中目標は作らない — 既存の案件の挙動は変わらない。
+    /// 人が既存の途中目標を明示したとき（旧い使い方）は結ぶだけで、新しい行は作らない。
     #[test]
-    fn creating_a_top_level_task_with_an_explicit_milestone_id_does_not_auto_create_another() {
+    fn an_explicit_milestone_id_is_kept_without_creating_rows() {
         let store = SqliteStore::open_in_memory().expect("open store");
         let project = a_project(&store);
         let milestone = store
@@ -1326,29 +1374,28 @@ mod tests {
         assert_eq!(milestones.len(), 1, "新しい途中目標を作らない");
     }
 
-    /// 委譲の子（`parent` あり）は案件直下ではないので、`milestone_id` 無しでも自動生成しない。
+    /// ADR-0079 D12（Phase R5a）: `NewTaskSpec.stages_hint` は `Task.routing.stages_hint` にそのまま写る。
     #[test]
-    fn a_child_task_under_a_project_does_not_auto_create_a_milestone() {
+    fn create_task_carries_stages_hint_into_routing() {
         let store = SqliteStore::open_in_memory().expect("open store");
-        let project = a_project(&store);
-
-        let mut parent_spec = base_spec();
-        parent_spec.project_id = Some(project.id);
-        let parent = create_task(&store, parent_spec, now()).expect("create parent");
-        // 親自身がマイルストーンとして自動生成されている前提を確認。
-        assert!(parent.milestone_id.is_some());
-
-        let mut child_spec = base_spec();
-        child_spec.project_id = Some(project.id);
-        child_spec.parent = Some(parent.id);
-        let child = create_task(&store, child_spec, now()).expect("create child");
-        assert_eq!(
-            child.milestone_id, None,
-            "子タスクは案件直下ではないので自動生成しない"
-        );
-
-        let milestones = store.milestone_list(project.id).expect("list");
-        assert_eq!(milestones.len(), 1, "親の分だけ");
+        let mut spec = base_spec();
+        spec.stages_hint = vec![
+            task_core::StageHint {
+                title: "Phase 1".into(),
+                scope: "MVP".into(),
+            },
+            task_core::StageHint {
+                title: "Phase 2".into(),
+                scope: String::new(),
+            },
+        ];
+        let task = create_task(&store, spec, now()).expect("create_task");
+        let stored = store.get(task.id).expect("get").expect("some");
+        let routing = stored.routing.expect("routing");
+        assert_eq!(routing.stages_hint.len(), 2);
+        assert_eq!(routing.stages_hint[0].title, "Phase 1");
+        assert_eq!(routing.stages_hint[0].scope, "MVP");
+        assert_eq!(routing.stages_hint[1].title, "Phase 2");
     }
 
     fn genre(id: &str, default_role: Option<&str>, roles: &[&str]) -> GenreSpec {

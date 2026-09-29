@@ -555,8 +555,9 @@ pub fn organization_section(context: &RunContext) -> String {
     out
 }
 
-/// ADR-0048 D3（Phase 60b）: CoS の対話 run にだけ出す「進行中の案件」の節（id / 題名 / 状態と、
-/// その途中目標）。`actions` の `create_task.project` / `add_milestone.project` を選ぶ材料。
+/// ADR-0048 D3（Phase 60b）: CoS の対話 run にだけ出す「進行中の案件」の節（id / 題名 / 状態と登録済み repos）。
+/// `actions` の `create_task.project` を選ぶ材料。ADR-0079 D12 / D13（Phase R5a）: 途中目標は凍結したので出さない
+/// （CoS は案件〈方向〉だけを選ぶ）。
 fn active_projects_section(context: &RunContext) -> String {
     if context.conversation_addressee != Some(ConversationAddressee::Secretary)
         || context.active_projects.is_empty()
@@ -579,12 +580,6 @@ fn active_projects_section(context: &RunContext) -> String {
                     .collect::<Vec<_>>()
                     .join(", "),
                 project.id
-            ));
-        }
-        for milestone in &project.milestones {
-            out.push_str(&format!(
-                "  - 途中目標 `{}` {}（{}）\n",
-                milestone.id, milestone.title, milestone.status
             ));
         }
     }
@@ -948,12 +943,14 @@ fn conversation_instructions(context: &RunContext) -> String {
             format!(
                 "## CoS の対話と仕事の開始 (conversation and authorized work)\n\
                  質問には簡潔に答え、実行・修正・改善の依頼には下記 actions で実際の仕事を作ってください。\
-                 明示された通常の修正と検証は既に依頼された作業です。方針や途中目標を毎回再承認させないでください。\
+                 明示された通常の修正と検証は既に依頼された作業です。方針を毎回再承認させないでください。\
                  この短い対話 run では大きな調査や実装を直接せず、実行担当へ委譲します。\
-                 元の依頼が修正なら objective と acceptance に実装・検証・成果の引き渡しまで含め、\
+                 **1 つの依頼は 1 つの `create_task`**（root task）です。依頼の大きさや段階の数をあなたが判断して\
+                 分けたり、範囲を狭めたりしないでください（大きさは Complexity Gate、段階への分解は planner が\
+                 決めます。ADR-0079）。元の依頼が修正なら objective と acceptance に実装・検証・成果の引き渡しまで含め、\
                  調査や改善案だけに縮小しないでください。調査はその仕事の途中の手順です。\
-                 調査だけを依頼された場合は調査まで。分割する場合も最終成果までの仕事と依存関係を残し、\
-                 中間報告を依頼全体の完了と呼ばないでください。未完了なら不足と継続中の仕事を示してください。\
+                 調査だけを依頼された場合は調査まで。中間報告を依頼全体の完了と呼ばないでください。\
+                 未完了なら不足と継続中の仕事を示してください。\
                  質問は実行に不可欠な情報の不足、依頼範囲の拡大、未許可の破壊的操作などの場合だけです。\
                  既存の仕事と結果、承認済みの範囲を確認し、同じ調査や承認要求を繰り返さないでください。\
                  クラスタ（pegasus / sirius / fern03 など）でコマンドを実行する・状態を見る・ジョブを流す\
@@ -1000,7 +997,8 @@ fn actions_instructions() -> String {
      作ったり道具を使ったりはしません）。\n\
      - `{\"type\": \"create_task\", \"title\": \"…\", \"objective\": \"…\", \"acceptance\": [\"…\"], \
      \"harness\": \"coding\", \"skills\": [\"rust\"], \"mode\": \"prototype\", \"repos\": [], \
-     \"project\": \"<案件の id か null>\", \"milestone\": \"<途中目標の id か null>\", \
+     \"project\": \"<案件の id か null>\", \
+     \"stages_hint\": [{\"title\": \"Phase 1\", \"scope\": \"…\"}], \
      \"workspace\": {\"kind\":\"remote\",\"cluster\":\"<id>\",\"path\":\"<作業ディレクトリ>\",\
      \"mode\":\"shared\"}}`\
      （`workspace` は省略可。クラスタでの仕事だけ入れる。\
@@ -1009,7 +1007,6 @@ fn actions_instructions() -> String {
      （worktree を切らず、`path` にそのまま cd して実行します。ADR-0059）。コードを直す仕事では付けません\
      （省略時は worktree）。`create_task.mode`（下）とは別のフィールドです。\n\
      - `{\"type\": \"propose_project\", \"title\": \"…\", \"request\": \"…\", \"repos\": [\"/abs/path\"]}`\n\
-     - `{\"type\": \"add_milestone\", \"project\": \"<案件の id>\", \"title\": \"…\", \"description\": \"…\"}`\n\
      - `{\"type\": \"ask_human\", \"text\": \"…\"}`\n\
      **あなた（CoS）は goal / harness / skills / mode / repos / 制約を定義し、担当（`assignee`）とモデル（`tier`）は\
      選びません**（ADR-0069）。担当は celeris が skills と harness から決定的に選び、モデルの lane は仕事の性質から\
@@ -1017,20 +1014,25 @@ fn actions_instructions() -> String {
      （各軸 low / medium / high。judgment, ambiguity, verifiability, reversibility, consequence, context_size, \
      tool_intensity, expected_length, cross_cutting）を書けます。人が発言で `@<担当 id>` や `tier:<lane>` と明示した\
      ときだけ、その値を `assignee` / `tier` に写してください（celeris は人の発言を確かめてから従います）。\n\
-     大きな・工程がいくつもある依頼だと思ったら、任意で `\"execution\": \"compound\"` を付けてよいです\
-     （調査→設計→実装→検証のように複数の作業段階に分かれる依頼が目安）。これはヒントで、実際に分割するか\
-     どうかは Complexity Gate が決定的に判定します（ADR-0072）。\n\
-     工程ごとに人の確認が要りそうなら、任意で `\"pause_after\": {\"mode\": \"each_phase\"}`\
-     （特定の工程だけなら `{\"mode\": \"after\", \"phases\": [\"design\"]}`）を付けてよいです\
-     （その工程の後で止まり、人が続ける / replan / 取り下げを選びます。ADR-0074）。\n\
+     **1 つの依頼は 1 つの `create_task`（root task）**にしてください（ADR-0079）。依頼の大きさ・段階の数は\
+     あなたが判断しません（Complexity Gate と planner の仕事です）。依頼の範囲を狭めないでください: 人が\
+     「Phase 1〜4」と言ったら、`objective` と `acceptance` に Phase 1〜4 のすべてを書きます（「設計と Phase 1」に\
+     縮めない）。人が段階を名指ししたときだけ、その名前と範囲を任意の \
+     `\"stages_hint\": [{\"title\": \"Phase 1\", \"scope\": \"…\"}]` にそのまま写してください（planner への入力で、\
+     構造の強制ではありません）。人が名指ししていない段階を作って書かないでください。\n\
+     互いに独立な依頼（「A を直して、ついでに無関係な B も」）は `create_task` を 2 つにします（task 同士の依存は\
+     書けません）。一方が他方に依存するなら 1 つの `create_task` にまとめます（依存は task の中の段階で表します）。\n\
+     人が段階ごとの確認を頼んだときだけ、任意で `\"pause_after\": {\"mode\": \"each_phase\"}`\
+     （特定の段階だけなら `{\"mode\": \"after\", \"phases\": [\"design\"]}`）を付けてください\
+     （その段階の後で止まり、人が続ける / replan / 取り下げを選びます。ADR-0074）。\n\
      `create_task.mode` は進め方で、prototype / production / research のいずれかです。通常実装は `mode: \"production\"` とし、mode に standard（tier の名前）は書かないでください。\n\
      `create_task.repos` は案件内の登録名です。指定するときは必ず所属する案件の ID を `project` に書き、\
      上の登録済み repos から選んでください。`project: null` と非空の `repos` の組み合わせは禁止です。\
      既存のコードを直す依頼は、そのリポジトリが登録された既存案件に紐づけます。\
      案件に属さない仕事は `project: null, repos: []`。判断できないときは推測せず質問してください。\n\
-     目安: **1 つのタスクで 1 時間以内に終わり、承認が要らない変更**なら `create_task` を 1 つ書けば \
-     十分です。「案件として」「途中目標に」のように人が儀式を求めていれば `propose_project` /\
-     `add_milestone`。判断に必要な情報が欠けるときは `ask_human`。通常の実装判断は担当に任せます。案件が分かっていれば `project` \
+     `project` は既存の案件（仕事の方向）から選んでください。`propose_project` は人が新しい方向（案件）を\
+     名指ししたときだけです。途中目標は作りません（途中目標は root task の段階で表します。ADR-0079）。\
+     判断に必要な情報が欠けるときは `ask_human`。通常の実装判断は担当に任せます。案件が分かっていれば `project` \
      を書いてください（担当は書かなくても celeris が skills と harness から決定的に選びます）。\
      検証に落ちた action（知らない harness / repos / 案件など）は実行されず、理由が人に見えます。\n\
      人の確認が要る `acceptance`（`\"human\"`）を書くときは、必ず `artifact_exists` か\
@@ -1041,8 +1043,9 @@ fn actions_instructions() -> String {
      **`対象: <対象1> / <対象2> / …（観点: <観点1>、<観点2>、…）`** の明示形にしてください \
      （例: `対象: CHFS / FINCHFS / GekkoFS / UnifyFS / BeeOND（観点: server/client 配置、\
      cache/direct I/O、file semantics、replication）`。区切りは `/` でも `、`/`,` でも構いません）。\
-     対象が 5 を超える \
-     場合は対象ごとにタスクを分けてください（ADR-0063 Phase 109c A）。受け入れ条件は、対象ごとに分ける \
+     対象が 5 を超えても \
+     依頼が 1 つなら `create_task` は 1 つのままにし、`objective` に全対象を書いてください（対象ごとの分割は \
+     planner が段階と単位で行います。ADR-0079 D12）。受け入れ条件は、対象ごとに分ける \
      か、レビュアー条件（`acceptance` のうち `check` が reviewer のもの）に「**対象ごとに**、指定の観点 \
      が一次情報（または文献）に基づいて整理されている。確認できない観点は『未確認』と明記されていれば \
      不合格の理由にしない」という一文を含めてください（ADR-0063 D3、Phase 109c D で具体化）。1 件の欠落 \
@@ -1603,11 +1606,13 @@ mod tests {
             out.contains("登録済み repos: `agent-platform`（使用時の project: `01PROJECT`）"),
             "{out}"
         );
-        assert!(out.contains("隣接領域の調査"), "{out}");
+        // ADR-0079 D12 / D13（Phase R5a）: 凍結した途中目標は CoS に見せない。
+        assert!(!out.contains("隣接領域の調査"), "{out}");
+        assert!(!out.contains("01MILESTONE"), "{out}");
         assert!(out.contains("actions"), "{out}");
         assert!(out.contains("create_task"), "{out}");
         assert!(out.contains("propose_project"), "{out}");
-        assert!(out.contains("add_milestone"), "{out}");
+        assert!(!out.contains("add_milestone"), "{out}");
         assert!(out.contains("ask_human"), "{out}");
         assert!(out.contains("mode: \"production\""), "{out}");
         // ADR-0069 D1（Phase 114）: CoS は担当とモデルを選ばない。
@@ -1638,6 +1643,40 @@ mod tests {
             ..RunContext::default()
         };
         assert!(!render(&empty, "artifacts").contains("## 進行中の案件"));
+    }
+
+    /// ADR-0079 D12（Phase R5a）: CoS の前置きの指針。1 依頼 = 1 `create_task`、範囲を狭めない（Phase 1〜4 は全部
+    /// 書く）、人が名指しした段階だけ `stages_hint` に写す、独立な依頼は 2 つ・依存するなら 1 つ、`add_milestone` と
+    /// `execution: compound` のヒントは無い、`pause_after` は人が頼んだときだけ。
+    #[test]
+    fn cos_preamble_carries_the_adr_0079_guidance() {
+        let secretary = RunContext {
+            conversation_addressee: Some(ConversationAddressee::Secretary),
+            ..RunContext::default()
+        };
+        let out = render(&secretary, "artifacts");
+        assert!(out.contains("1 つの依頼は 1 つの `create_task`"), "{out}");
+        assert!(out.contains("範囲を狭めないでください"), "{out}");
+        assert!(out.contains("Phase 1〜4 のすべてを書きます"), "{out}");
+        assert!(
+            out.contains("\"stages_hint\": [{\"title\": \"Phase 1\", \"scope\": \"…\"}]"),
+            "{out}"
+        );
+        assert!(out.contains("人が段階を名指ししたときだけ"), "{out}");
+        assert!(out.contains("`create_task` を 2 つ"), "{out}");
+        assert!(out.contains("1 つの `create_task` にまとめます"), "{out}");
+        assert!(out.contains("人が段階ごとの確認を頼んだときだけ"), "{out}");
+        assert!(
+            out.contains("途中目標は root task の段階で表します"),
+            "{out}"
+        );
+        // 廃止したもの。
+        assert!(!out.contains("add_milestone"), "{out}");
+        assert!(!out.contains("\"execution\": \"compound\""), "{out}");
+        assert!(!out.contains("1 時間以内"), "{out}");
+        assert!(!out.contains("\"milestone\": \"<途中目標の id"), "{out}");
+        assert!(!out.contains("対象ごとにタスクを分けてください"), "{out}");
+        assert!(!out.contains("方針や途中目標を毎回再承認"), "{out}");
     }
 
     /// 記憶が空（ファイルが無い）なら記憶の節は出ないが、書き方の指示は出る（次から覚えられるように）。

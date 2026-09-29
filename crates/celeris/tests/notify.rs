@@ -159,6 +159,7 @@ fn task(status: Status) -> Task {
     let now = at(0);
     Task {
         tree: None,
+        paused_at: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),
@@ -207,11 +208,11 @@ fn task(status: Status) -> Task {
 
 // ---- 1. milestone_ready ----
 
-/// ADR-0037 D1（Phase 40 / 実機 2026-09-18）: `milestone_ready` は「動いているものが無く、
-/// 人の手が要る」ときに鳴る。全部が終端である必要はない — Go 待ちの `draft` が残っていてもよい
-/// （むしろそここそが人の判断が要る瞬間）。
+/// ADR-0079 D13（Phase R5a）: `milestone_ready` は廃止。以前なら鳴った形（動いているものが無く done があり、
+/// 秘書のレビューの返事と次の提案が付いた途中目標）でも候補にならない。秘書の返事は通常の `secretary_reply`
+/// として届く（途中目標のレビューだからと黙らせない）。
 #[test]
-fn milestone_ready_fires_when_nothing_is_active_and_something_is_done() {
+fn milestone_ready_is_retired() {
     let env = Env::new();
     env.seed_org();
     let project = env.seed_project(ProjectStatus::Active);
@@ -224,65 +225,14 @@ fn milestone_ready_fires_when_nothing_is_active_and_something_is_done() {
             MilestoneStatus::InProgress,
         )
         .unwrap_or_else(|e| panic!("milestone: {e}"));
-
-    let mut ready = task(Status::Ready);
-    ready.project_id = Some(project);
-    ready.milestone_id = Some(milestone.id);
-    env.store
-        .insert(&ready)
-        .unwrap_or_else(|e| panic!("insert: {e}"));
-    let mut done_a = task(Status::Done);
-    done_a.project_id = Some(project);
-    done_a.milestone_id = Some(milestone.id);
-    env.store
-        .insert(&done_a)
-        .unwrap_or_else(|e| panic!("insert: {e}"));
-    let mut done_b = task(Status::Done);
-    done_b.project_id = Some(project);
-    done_b.milestone_id = Some(milestone.id);
-    env.store
-        .insert(&done_b)
-        .unwrap_or_else(|e| panic!("insert: {e}"));
-    let mut draft_a = task(Status::Draft);
-    draft_a.assignee = Some("poc".into());
-    draft_a.project_id = Some(project);
-    draft_a.milestone_id = Some(milestone.id);
-    env.store
-        .insert(&draft_a)
-        .unwrap_or_else(|e| panic!("insert: {e}"));
-    let mut draft_b = task(Status::Draft);
-    draft_b.assignee = Some("poc".into());
-    draft_b.project_id = Some(project);
-    draft_b.milestone_id = Some(milestone.id);
-    env.store
-        .insert(&draft_b)
-        .unwrap_or_else(|e| panic!("insert: {e}"));
-
-    // 裏方（レビュー）は数えない。
-    let mut support = task(Status::Running);
-    support.kind = TaskKind::Review;
-    support.project_id = Some(project);
-    support.milestone_id = Some(milestone.id);
-    env.store
-        .insert(&support)
-        .unwrap_or_else(|e| panic!("insert: {e}"));
-
-    // ready が 1 件でも残っていれば鳴らない。
-    assert!(
-        env.scanned(NotificationKind::MilestoneReady).is_empty(),
-        "ready が残っている間は鳴らない"
-    );
-
-    // ready を片付けても、ADR-0038 D4 により**秘書のまとめが付くまでは鳴らない**。
-    env.store
-        .apply_transition(ready.id, Trigger::Cancel, None)
-        .unwrap_or_else(|e| panic!("cancel: {e}"));
-    assert!(
-        env.scanned(NotificationKind::MilestoneReady).is_empty(),
-        "レビューの返事が付くまでは鳴らない（ADR-0038 D4）"
-    );
-
-    // 秘書のレビューの返事と、その返事が提案した次の途中目標。
+    for status in [Status::Done, Status::Done, Status::Draft] {
+        let mut t = task(status);
+        t.project_id = Some(project);
+        t.milestone_id = Some(milestone.id);
+        env.store
+            .insert(&t)
+            .unwrap_or_else(|e| panic!("insert: {e}"));
+    }
     env.seed_review_reply(
         project,
         milestone.id,
@@ -291,72 +241,9 @@ fn milestone_ready_fires_when_nothing_is_active_and_something_is_done() {
     env.store
         .milestone_create(project, "候補の比較実験", "", MilestoneStatus::Proposed)
         .unwrap_or_else(|e| panic!("milestone: {e}"));
-    assert_eq!(env.schedule(NotificationKind::MilestoneReady), 1);
-    // 2 回目の tick では増えない（同じ key）。
+    assert!(env.scanned(NotificationKind::MilestoneReady).is_empty());
+    assert_eq!(env.scanned(NotificationKind::SecretaryReply).len(), 1);
     assert_eq!(env.schedule(NotificationKind::MilestoneReady), 0);
-
-    let rows = env
-        .store
-        .notification_recent(10)
-        .unwrap_or_else(|e| panic!("recent: {e}"));
-    let row = rows
-        .iter()
-        .find(|n| n.kind == NotificationKind::MilestoneReady)
-        .unwrap_or_else(|| panic!("no milestone_ready row"));
-    assert_eq!(
-        row.key,
-        format!("{}:2", milestone.id),
-        "key に done の件数(2)"
-    );
-    assert!(row.body.contains("候補テーマの統合と選定"), "{}", row.body);
-    // ADR-0038 D4: 秘書のまとめの先頭と、次の提案の題名と、3 つの答え。
-    assert!(row.body.contains("候補を 3 本に絞りました"), "{}", row.body);
-    assert!(
-        row.body.contains("次の提案: 『候補の比較実験』"),
-        "{}",
-        row.body
-    );
-    assert!(row.body.contains("ok / 議論 / ng"), "{}", row.body);
-    // GUI 依頼 G13i-P1（ADR-0037 D6）: 途中目標の案件が project_id に載る。
-    assert_eq!(row.project_id, Some(project), "{row:?}");
-
-    // Go: draft_a を最後まで進めて done にする（draft → ready → running → reviewing → done）。
-    for (task_id, trigger) in [
-        (draft_a.id, Trigger::Accept),
-        (draft_a.id, Trigger::Dispatch),
-        (draft_a.id, Trigger::WorkerDone),
-        (draft_a.id, Trigger::ReviewPass),
-    ] {
-        env.store
-            .apply_transition(task_id, trigger, None)
-            .unwrap_or_else(|e| panic!("transition: {e}"));
-    }
-    // done 3 + draft 1（draft_b が残る）で再び鳴る。key は done の件数が変わるので別物。
-    assert_eq!(env.schedule(NotificationKind::MilestoneReady), 1);
-    let rows = env
-        .store
-        .notification_recent(10)
-        .unwrap_or_else(|e| panic!("recent: {e}"));
-    let refired = rows
-        .iter()
-        .find(|n| {
-            n.kind == NotificationKind::MilestoneReady && n.key == format!("{}:3", milestone.id)
-        })
-        .unwrap_or_else(|| panic!("no re-fired row with done=3"));
-    assert!(
-        refired.body.contains("候補を 3 本に絞りました"),
-        "{}",
-        refired.body
-    );
-
-    // 条件が解消（`reached` にした）ら、もう候補に出てこない。
-    env.store
-        .milestone_set_status(milestone.id, MilestoneStatus::Reached)
-        .unwrap_or_else(|e| panic!("set: {e}"));
-    assert!(
-        env.scanned(NotificationKind::MilestoneReady).is_empty(),
-        "reached なら鳴らない"
-    );
 }
 
 #[test]
@@ -866,13 +753,16 @@ fn links_are_added_only_when_a_gui_base_url_is_configured() {
         Some("http://192.168.1.103:7700"),
     )
     .unwrap_or_else(|e| panic!("scan: {e}"));
+    // ADR-0079 D13（Phase R5a）: `milestone_ready` は無いので、秘書の返事（`secretary_reply`）のリンクで見る。
     let body = &with
         .iter()
-        .find(|c| c.kind == NotificationKind::MilestoneReady)
+        .find(|c| c.kind == NotificationKind::SecretaryReply)
         .unwrap_or_else(|| panic!("no candidate"))
         .body;
     assert!(
-        body.contains(&format!("http://192.168.1.103:7700/projects/{project}")),
+        body.contains(&format!(
+            "http://192.168.1.103:7700/?scope=project:{project}"
+        )),
         "{body}"
     );
 }
@@ -2226,7 +2116,7 @@ fn answered_and_withdrawn_decisions_do_not_notify() {
 }
 
 #[test]
-fn milestone_without_cos_reply_eventually_notifies_the_handoff() {
+fn milestone_without_cos_reply_no_longer_notifies() {
     let env = Env::new();
     let project = env.seed_project(ProjectStatus::Active);
     let milestone = env
@@ -2238,6 +2128,6 @@ fn milestone_without_cos_reply_eventually_notifies_the_handoff() {
     done.milestone_id = Some(milestone.id);
     done.updated_at = env.started_at - time::Duration::minutes(6);
     env.store.insert(&done).unwrap();
-    assert_eq!(env.schedule(NotificationKind::MilestoneReady), 1);
+    // ADR-0079 D13（Phase R5a）: 途中目標の通知は廃止（root の完了は `task_ready` で鳴る）。
     assert_eq!(env.schedule(NotificationKind::MilestoneReady), 0);
 }

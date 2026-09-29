@@ -648,3 +648,98 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R5a: 案件計画の撤去、途中目標の凍結、CoS の指針、stages_hint の書き込み口（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R5a・D12・D13・U-R6・U-R8、付記「R5a 実装時の逸脱・明確化」（14 項目）。
+  ADR-0028 / 0038 / 0044 / 0048 / 0074 / 0077 の冒頭に「Superseded (in part) by ADR-0079（Phase R5a）」の 1 行。
+- 種類: コード（task-core / task-ops / task-api / task-dispatch / task-worker / celeris / celerisctl）、schema と GUI の型の再生成、GUI の
+  server 側の中継の削除（画面は変えていない。R4b と並行）。**migration なし（schema 33 のまま。次の空きは 0034）**。行は書き換えない。
+  本番の DB・設定・サービスには触れていない（読み取りの `sqlite3 …?mode=ro` だけ）。
+- **凍結した途中目標の行（本番、読み取りで確認）**: 25 行（agent-platform 21 行: reached 8・redesigned 9・**approved 5・in_progress 1・proposed 1**、
+  pluvio-jp572bat 4 行: reached 3・redesigned 1）。**非終端は 7 行（すべて agent-platform）**。R0 の「21 / 4」は行の総数だった。
+  どの行も R5a 以降は書けず（410）、`GET /projects/{id}` の既定の一覧から消える（`?include_frozen=true` で読める）。
+
+### 実装したもの
+
+- **撤去（410 / 422）**: `POST /projects/{id}/plan`（両 mode）・`POST /projects/{id}/project-plan/{version}/decide`・
+  `POST /projects/{id}/milestones`・`PATCH /milestones/{id}`・`POST /milestones/{id}/{decide,cancel,pause,resume}`・`POST /plans`（U-R6）は
+  410（`type: urn:celeris:problem:removed_by_adr_0079`、`adr`・`instead` 付き、本文も id も読まない、トークン無しは先に 401）。
+  `PATCH /projects/{id}` の `auto_advance` は 422。`celerisctl projects plan approve|reject` を削除。
+  `task_ops::project_plan` は読み取り（`plan_state` / `dag_view`）だけ、`task_ops::milestone_review` は読み取り（`find` / `latest_proposal` /
+  `review_state`）だけを残し、`start` / `start_milestones` / `start_replan` / `propose` / `propose_delta` / `decide` /
+  `validate_delta_against_store` / `record_proposal_failure` / `mark_milestone_dispatched` / `auto_reach_done_milestones` / `start_review` /
+  `record_proposal` / `decide`（途中目標）と、途中目標の lifecycle（`cancel|pause|resume_milestone`）を削除。
+- **daemon**: 途中目標の自動作成（`task_ops::add`・store `create_task_with_milestone`）、Go（`milestones_awaiting_go_locked`）、ADR-0077 の
+  dispatch での `in_progress` と自動 `reached`、案件計画 run の提案の取り込み、判定 run（celeris の `milestone_review` モジュール）、
+  `milestone_proposal` の取り込み、`milestone_ready` の通知を削除。CoS の文脈から途中目標を外した（`active_projects[].milestones` は空）。
+- **`is_root_task`**（`task_core::is_root_task`、旧 `is_milestone_task` の置き換え）: `ProjectTaskView` / `TaskSummary` / `TaskDetail` に出る。
+  R4a の `root_totals` の述語もこれ。
+- **subtree の一時停止**: `POST /tasks/{id}/pause|resume`（管理系、`TaskPauseResult`）。`Task.paused_at` + `Edited{paused_at}`、
+  `ready_tasks` が祖先を辿る（案件の停止も子孫に効く）、並列 WU の 2 本目以降も止める（`TaskStore::halted_by_pause`）、走っている run は
+  終わるまで走る。`TaskSummary.paused`・`TaskDetail.paused_by`。
+- **既定非表示（U-R8）**: `GET /projects/{id}` の `milestones` は既定で空、`milestones_frozen` に件数、`?include_frozen=true` で全行と
+  凍結した `project_plan` の DAG。
+- **CoS（D12）**: 秘書の対話の節と `actions_instructions` を書き換え（1 依頼 = 1 `create_task`・範囲を狭めない・名指しの段階だけ `stages_hint`・
+  独立なら 2 つ / 依存なら 1 つ・`pause_after` は頼まれたときだけ・途中目標は作らない）。`add_milestone` と `create_task.milestone` を
+  型から外し、`add_milestone` は `ADD_MILESTONE_RETIRED` の理由付きで落ちる（人に見える）。`execution: compound` のヒントと
+  「1 時間以内」の目安を消した。
+- **`stages_hint` の書き込み口**: `NewTaskSpec.stages_hint`（`POST /tasks`）と CoS の `create_task.stages_hint` → `Task.routing.stages_hint`
+  （形の検証: 16 件・title 1〜120 文字・scope 2,000 文字）。
+- **GUI**: `projects-admin.server.ts` と `projects.$id.tsx` の action から撤去した API の中継を外した（画面・`/plans/new` はそのまま。付記 14.）。
+
+### 受け入れ条件（ADR-0079 §7 R5a と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) 消した API がすべて 410 / 422、`GET /projects/{id}` は読め、行も task も変わらない（案件計画 3 通りの本文・decide・途中目標の作成 / PATCH / decide / cancel / pause / resume・`POST /plans`・`auto_advance` 単独と他の欄と一緒・トークン無しは 401） | `cargo nextest run -p task-api --test project_plan -E 'test(project_plan_endpoints_are_gone)'` | ok |
+| `POST /plans` は 410 で何も作らない（旧 201 の試験を置き換え）・未知の欄でも 410・e2e の API シナリオ（実バイナリ）で `/plans` が 410 | `… -p task-api --test operations -E 'test(create_plan_is_gone)'`、`… --test auth_and_guards`、`… -p e2e -E 'test(api_mutations_go_through_the_state_machine)'` | ok |
+| 途中目標の lifecycle と PATCH は 410、凍結した行と属する task は変わらない、既存の paused の行の抑止は残る | `… -p task-api --test lifecycle`（7 passed）、`… --test organization` | ok |
+| 途中目標の一覧は既定で隠れ（`milestones: []`・`milestones_frozen: 3`・`project_plan` 無し）、`?include_frozen=true` で全行（状態そのまま）、`include_frozen=maybe` は 400 | `… --test project_plan -E 'test(project_detail_hides_frozen_milestones_by_default)'` | ok |
+| (b) 案件直下の root task にも子にも途中目標の行ができず、既存の行（in_progress）は状態が変わらない | `cargo nextest run -p task-ops -E 'test(no_milestone_rows_for_new_root_tasks)'` | ok |
+| (b) task の完了で途中目標が進まない: `plan_key` 付き・`auto_advance = false` の途中目標に結ばれた root task 同士（poc は survey に依存）でも survey の done で poc が dispatch され、3 本とも done、途中目標の行の状態は前後で同一（`in_progress` にも `reached` にもならない）（旧 案件計画 run・Go・ADR-0077 の 6 試験を置き換え） | `cargo nextest run -p task-dispatch -E 'test(frozen_milestones_do_not_gate_or_advance_root_tasks)'` | ok |
+| `is_root_task`: root = true、子（`parent_id`）・木の子（`parent_unit` のみ）・対話・`kind = plan` / approval / review・裏方 = false、木の root 自身は true | `cargo nextest run -p task-core -E 'test(is_root_task_requires_project_root_position)'` | ok |
+| `is_root_task` が API に出る（案件の `tasks[]`・`GET /tasks?project=`・`GET /tasks/{id}`、root / 子 / 対話）、`root_totals.root_tasks = 1` | `… -p task-api --test project_plan -E 'test(is_root_task_and_stages_hint_are_exposed)'` | ok |
+| (c) root の pause で子・孫・採用の木の子が `ready_tasks` に出ず、兄弟の root は出る、走っている root は running のまま `halted_by_pause`、二重 pause / 子の resume は 409、resume で全部戻る、状態は変わらず replay の差分 0、`Edited{paused_at}` が 2 件 | `cargo nextest run -p task-ops -E 'test(subtree_pause_stops_descendants)'` | ok |
+| 案件の pause が `project_id` を持たない子孫にも効く / 終端・対話は pause できない | `… -E 'test(project_pause_applies_to_root_task_subtrees) \| test(terminal_and_conversation_tasks_cannot_be_paused)'` | ok |
+| API の pause / resume（401・200 と `subtree`・`paused_by`・409・404）と、pause / resume を含む API 操作の後の replay が `mismatches: []` | `… -p task-api -E 'test(task_pause_and_resume_cover_the_subtree) \| test(replay_reports_zero_mismatches_after_api_operations)'` | ok |
+| (d) CoS の preamble: 「1 つの依頼は 1 つの `create_task`」「範囲を狭めないでください」「Phase 1〜4 のすべてを書きます」`stages_hint` の例・「人が段階を名指ししたときだけ」・独立なら 2 つ / 依存なら 1 つ・`pause_after` は頼まれたときだけ・途中目標は段階、**無いこと**: `add_milestone`・`"execution": "compound"`・「1 時間以内」・`"milestone": "<途中目標の id`・「対象ごとにタスクを分けてください」・「方針や途中目標を毎回再承認」。CoS の文脈に凍結した途中目標が出ない | `cargo nextest run -p task-worker -E 'test(cos_preamble_carries_the_adr_0079_guidance) \| test(cos_conversations_show_active_projects_and_the_actions_instructions)'` | ok |
+| (d) `add_milestone_is_retired`: 結果ファイルの `add_milestone` は「add_milestone は廃止（ADR-0079）…」で落ち、同じ結果の `create_task` は `stages_hint` 付きで読める | `… -p task-worker -E 'test(add_milestone_is_retired_with_a_reason_and_stages_hint_parses)'` | ok |
+| (d) CoS の対話 run の結果ファイル（dispatcher の実経路）: `create_task` + `stages_hint` が実行され `Task.routing.stages_hint = [Phase 1 / MVP]`、`add_milestone` は失敗の注記に「add_milestone は廃止（ADR-0079）」「root task の段階」で人に見える、途中目標の行は作られない | `cargo nextest run -p task-dispatch -E 'test(absorb_console_actions_executes_the_declared_actions_for_the_cos_only)'` | ok |
+| `create_task` / `POST /tasks` の `stages_hint` → `Task.routing.stages_hint`、空の title は 422 | `… -p task-ops -E 'test(create_task_carries_stages_hint_into_routing)'`、上の `is_root_task_and_stages_hint_are_exposed` | ok |
+| `milestone_ready` は鳴らない（以前なら鳴った形でも）・秘書の返事は `secretary_reply` で届く | `cargo nextest run -p celeris --test notify` | ok（33 passed） |
+| `celerisctl projects plan` は無い | `cargo nextest run -p celerisctl -E 'test(projects_plan_subcommand_is_removed)'` | ok |
+| (e) 既存の案件の GUI が壊れない（途中目標が空の詳細・凍結した DAG の表示関数・案件ページの loader / action の単体テスト） | `corepack pnpm@11.27.0 -C gui test` | ok（Test Files 78、Tests 1190 passed） |
+| MCP / Console は変わらない | `scripts/dev/test-parallel.sh`（celeris-mcp・task-api の console / console_instruct を含む全体） | ok |
+| 上の新規・置き換えの試験をまとめて | `cargo nextest run --workspace -E 'test(project_plan_endpoints_are_gone) \| … \| test(a_draft_of_a_frozen_project_plan_proposal_can_be_accepted_individually)'`（23 本） | 23 passed |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 94（nextest 83 + doc 11）、
+  **passed 2847 / failed 0 / ignored 7**（削除した機能の試験〈案件計画・途中目標の Go / ADR-0077 / 判定 run / `milestone_ready` /
+  `projects plan` / `POST /plans` の 201 など〉を消し、新しい規則の試験に置き換えた。`crates/task-api/tests/milestone_decide.rs` と
+  `crates/celeris/tests/milestone_review.rs` は削除、`crates/task-api/tests/project_plan.rs` は R5a の試験に書き直し）
+- `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema` で `api-v1.schema.json` / `event.schema.json` /
+  `worker-protocol.schema.json` を再生成（追加: `Task.paused_at`・`NewTaskSpec.stages_hint`・`ProjectDetail.milestones_frozen`・
+  `ProjectTaskView.is_root_task`・`TaskSummary.is_root_task` / `paused`・`TaskDetail.is_root_task` / `paused_by`・`TaskPauseResult`。
+  削除: `ConsoleAction` の `add_milestone` と `create_task.milestone`。撤去した入口の要求・応答の型は互換のため残した〈付記 2.〉）
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、再実行の前後で `gui/app/celeris/types.ts` が同じ（md5 8562abf30fd7f5d292f24adb9af738c4）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 299 files、2 infos〈既存〉）/ `test` → exit 0（Test Files 78、Tests 1190 passed）
+
+### 未解決・R5b 以降へ
+
+- **R4b との併合**: R4b の「以前の途中目標（読み取り専用）」は loader で `GET /projects/{id}?include_frozen=true` を読むこと（既定は空。
+  件数は `milestones_frozen`）。`projects.$id.tsx` の action から外した `intent`（`project_plan` / `project_plan_decide` / `milestone_*`）の
+  ボタンが残っていれば 400 になる（R4b が隠す前提）。`/plans/new` の画面と nav・help のリンクは R5b で外す（今は 410 の文言が出る）。
+- **`celerisctl plan`**（DB に直接 `kind = plan` を作る）は残した。U-R6 の一本化に含めるかは人の判断。
+- 読み取りとして残した旧い経路（凍結した DAG・途中目標のレビューの文脈・worker の案件計画 run のプロンプト・`task_core::project_plan` の型・
+  `NotificationKind::MilestoneReady`・`milestone_proposal` の解析・撤去した入口の schema の型）は R6（回収）で外す。
+- 本番の非終端の途中目標 7 行（agent-platform）を一括で `cancelled` にするかは U-R8 のとおり人の判断（R5b の手順に入れるなら SQL ではなく
+  案件の中止ではない別の入口が要る。今は書く入口が無い）。
+- R4a から持ち越しの「replan が行の `phase` を書き換えない」は未修正のまま（触れていない）。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

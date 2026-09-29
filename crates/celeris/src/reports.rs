@@ -182,6 +182,7 @@ fn compaction_spec(
         features: None,
         execution: None,
         pause_after: None,
+        stages_hint: Vec::new(),
         provenance: task_ops::add::SpecProvenance::system(),
     }
 }

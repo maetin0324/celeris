@@ -529,6 +529,17 @@ pub struct Task {
     /// 子 task の生成（R1b）が書く。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<crate::tree::TreeInfo>,
+    /// ADR-0079 D13（Phase R5a）: 人がこの task の subtree を一時停止した時刻（`POST /tasks/{id}/pause`）。
+    /// `Some` の間、この task と子孫（`parent_id` / `tree.parent_unit` の鎖）は dispatch されない
+    /// （`TaskStore::ready_tasks` が祖先を辿って見る。状態機械は触らない）。`resume` で `None` に戻す。
+    /// 導入前の task には無い。DB の列は増やさない（`json` 列の中だけ。migration 無し）。
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
+    #[schemars(with = "Option<String>")]
+    pub paused_at: Option<OffsetDateTime>,
 }
 
 /// ADR-0069 D1: `worker_hint.tier` を誰が決めたか。

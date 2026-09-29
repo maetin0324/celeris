@@ -211,6 +211,7 @@ mod tests {
             features: None,
             execution: None,
             pause_after: None,
+            stages_hint: Vec::new(),
             provenance: crate::add::SpecProvenance::default(),
         }
     }

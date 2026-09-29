@@ -90,6 +90,13 @@ pub struct TaskSummary {
     /// GUI 監査 H4（Phase 29）: 裏方タスクの印（`"conversation"` | `"compaction"` | `"approval"` |
     /// `"review"` | `null`）。`task_core::support_kind` の決定的な判定。GUI はこれで仕事の木から裏方を外せる。
     pub support: Option<String>,
+    /// ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
+    #[serde(default)]
+    pub is_root_task: bool,
+    /// ADR-0079 D13（Phase R5a）: この task 自身が subtree の一時停止中か（`Task.paused_at` がある。祖先の
+    /// 一時停止で止まっているかは `TaskDetail.paused_by`）。
+    #[serde(default)]
+    pub paused: bool,
     /// 今この状態で許される操作（ADR-0015 D4）。
     pub actions: Vec<Action>,
     // ---- ADR-0044 D3/D4（Phase 53）: ボードのカードが要るもの。ここから ----
@@ -152,6 +159,13 @@ pub struct TaskDetail {
     /// checkpoint・WorkUnit の遷移）が 1 件も無ければ `None`（D23: 既存の古いタスクの詳細を壊さない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ExecutionView>,
+    /// ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
+    #[serde(default)]
+    pub is_root_task: bool,
+    /// ADR-0079 D13（Phase R5a）: subtree の一時停止でこの task の dispatch を止めている task（自分か、
+    /// `paused_at` を持つ一番近い祖先）。止まっていなければ省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_by: Option<TaskId>,
 }
 
 /// ADR-0072 D20（Phase E5）: タスクの状態バッジの横に出す、今どの段階かの導出値（D6 の R3 の代替。
@@ -649,6 +663,8 @@ pub(crate) fn build_task_summary(
         assignee: task.assignee.clone(),
         conversation: task_core::is_conversation(task),
         support: task_core::support_kind(task).map(str::to_string),
+        is_root_task: task_core::is_root_task(task),
+        paused: task.paused_at.is_some(),
         actions: actions(task),
         labels: task.labels.clone(),
         category: task.category,
@@ -1070,8 +1086,12 @@ pub fn task_detail(
     let role = task.role.clone();
     let genre = task.genre.clone();
     let priority_label = task_core::priority_label(task.priority).to_string();
+    let is_root_task = task_core::is_root_task(&task);
+    let paused_by = paused_by(store, &task)?;
 
     Ok(TaskDetail {
+        is_root_task,
+        paused_by,
         task,
         priority_label,
         workspace_dir,
@@ -1095,6 +1115,38 @@ pub fn task_detail(
         failure,
         execution,
     })
+}
+
+/// ADR-0079 D13（Phase R5a）: `task` の dispatch を subtree の一時停止で止めている task（自分か、`paused_at` を持つ
+/// 一番近い祖先。`parent_id`、無ければ `tree.parent_unit` を辿る。`TaskStore::ready_tasks` と同じ鎖）。
+pub fn paused_by(store: &dyn TaskStore, task: &Task) -> Result<Option<TaskId>, OpsError> {
+    const MAX_ANCESTRY: usize = 32;
+    let parent_of = |t: &Task| {
+        t.parent_id.or_else(|| {
+            t.tree
+                .as_ref()
+                .and_then(|tree| tree.parent_unit.as_ref())
+                .map(|u| u.task_id)
+        })
+    };
+    if task.paused_at.is_some() {
+        return Ok(Some(task.id));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut next = parent_of(task);
+    while let Some(id) = next {
+        if !seen.insert(id) || seen.len() > MAX_ANCESTRY {
+            break;
+        }
+        let Some(ancestor) = store.get(id)? else {
+            break;
+        };
+        if ancestor.paused_at.is_some() {
+            return Ok(Some(ancestor.id));
+        }
+        next = parent_of(&ancestor);
+    }
+    Ok(None)
 }
 
 /// ADR-0070 D1（Phase 116）: `task.status == Failed` のときだけ `Some`。分類・理由 1 行・
@@ -1443,6 +1495,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

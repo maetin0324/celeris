@@ -41,12 +41,12 @@ use task_ops::derive::{
     prior_review_from_events, retry_backoff,
 };
 use task_worker::{
-    ActiveMilestoneContext, ActiveProjectContext, AdapterError, Answer, ChildSummary,
-    CommentContext, ConversationAddressee, ConversationTurn, EventSink, GenreContext,
-    LocalWorkspace, MemoryContext, MemoryDir, MilestoneBrief, MilestoneReviewContext,
-    MilestoneTaskResult, NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview, Reachability,
-    RecentWork, RoleContext, RunContext, RunLimits, RunOutcome, RunRequest, SshSettings,
-    SshWorkspace, SyncMode, Terminal, WorkerAdapter, WorkerMessage, Workspace, WorkspaceError,
+    ActiveProjectContext, AdapterError, Answer, ChildSummary, CommentContext,
+    ConversationAddressee, ConversationTurn, EventSink, GenreContext, LocalWorkspace,
+    MemoryContext, MemoryDir, MilestoneBrief, MilestoneReviewContext, MilestoneTaskResult,
+    NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview, Reachability, RecentWork,
+    RoleContext, RunContext, RunLimits, RunOutcome, RunRequest, SshSettings, SshWorkspace,
+    SyncMode, Terminal, WorkerAdapter, WorkerMessage, Workspace, WorkspaceError,
     control_master_alive_blocking, remote_dir_is_resolved, remote_exec_instructions,
     resolve_remote_dir,
 };
@@ -3376,15 +3376,6 @@ impl Dispatcher {
         if let Err(e) = self.check_tree_liveness() {
             tracing::warn!(error = %e, "tree liveness check failed (ADR-0079 D10)");
         }
-        // ADR-0077 D2: `auto_advance` の案件で、`done` になったマイルストーン Task の途中目標を `reached` に。
-        match task_ops::project_plan::auto_reach_done_milestones(self.store.as_ref()) {
-            Ok(reached) => {
-                for mid in reached {
-                    tracing::info!(milestone_id = %mid, "milestone reached (auto_advance)");
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "failed to auto-reach milestones"),
-        }
         // Phase F7: 認可元のタスクが終端のまま未決で残った認可の要求を閉じる（照合。通常は遷移が閉じる）。
         if let Err(e) = crate::approvals::withdraw_stale_approvals(
             self.store.as_ref(),
@@ -6003,11 +5994,7 @@ impl Dispatcher {
                 // 失敗なら理由）をそのノードの返事として `messages` に残す。**「返事できませんでした」は
                 // タスクが `Failed` に落ちたときだけ**（requeue / まだ試行が残る失敗では書かない）。
                 self.record_conversation_reply(&task, &run_id, &outcome_str, outcome.next);
-                // ADR-0038 D1（Phase 41）: 対話 run が結果ファイルで宣言した次の途中目標を
-                // `milestones` に入れる（`done` のときだけ。差し替えは決定的）。
-                if outcome_str.starts_with("done: ") {
-                    self.absorb_milestone_proposal(&task);
-                }
+                // ADR-0038 D1 の `milestone_proposal` の取り込みは ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
                 // ADR-0034 D2（監査 M-1〜M-3）: `question` は run の終端でそのまま届ける。`done` はレビューを
                 // 通って `Status::Done` になってから（`on_review_finished` 側）作るので、ここでは作らない。
                 // Phase 28: 対話 run の `Question` は `Done` 扱い（上の match）なので、ここでは報告しない
@@ -6506,152 +6493,6 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run が review を通った
-    /// （`task_core::is_milestones_plan_task`。0 件の acceptance なので `all_pass` は常に true）ところ。
-    /// `artifacts/project-plan.json` を読み、検証を通れば `task_ops::project_plan::propose` で
-    /// マイルストーンと top-level の draft Task を作ってから `Trigger::ReviewPass`。不正なら
-    /// `Trigger::ReviewFail`（既存の attempts/max_retries が「1 回だけ再試行、それでも駄目なら諦める」を
-    /// 決める。DESIGN §5.6 の Plan kind の規則）。retries が尽きて `failed` になったら、Task は作らず
-    /// 秘書の返事として「計画を作れなかった」を案件の対話に残す（D3.3）。
-    fn finish_project_plan_run(
-        &mut self,
-        task_id: TaskId,
-        task: &Task,
-        run_id: &str,
-        mut events: Vec<Event>,
-    ) -> Result<task_core::Outcome, StoreError> {
-        let Some(project_id) = task.project_id else {
-            tracing::error!(%task_id, "milestones project plan task has no project_id; treating as failure");
-            return self
-                .store
-                .apply_transition_with_events(task_id, Trigger::ReviewFail, events);
-        };
-        let workspace_dir = self.task_dir(task);
-        let artifacts_dir = workspace_dir.as_ref().map(|d| self.artifacts_dir(task, d));
-        let read = artifacts_dir
-            .as_deref()
-            .map(|d| d.join("project-plan.json"))
-            .and_then(|p| std::fs::read_to_string(p).ok());
-
-        // ADR-0074 D3.4（Phase F4b (e)）: replan の run（`is_milestones_replan_task`）は差分
-        // `celeris.project-plan-delta/1` を、初回の run は `celeris.project-plan/1` を書く。
-        enum Proposal {
-            Full(task_core::ValidatedProjectPlan),
-            Delta(Box<task_core::ValidatedProjectPlanDelta>),
-        }
-        let is_replan = task_core::is_milestones_replan_task(task);
-        let validation: Result<Proposal, String> = match read {
-            None => Err("artifacts/project-plan.json が見つからない".to_string()),
-            Some(text) if is_replan => {
-                match serde_json::from_str::<task_core::ProjectPlanDelta>(&text) {
-                    Err(e) => Err(format!(
-                        "project-plan.json の JSON が不正（{} を書くこと）: {e}",
-                        task_core::PROJECT_PLAN_DELTA_SCHEMA
-                    )),
-                    Ok(delta) => task_ops::project_plan::validate_delta_against_store(
-                        self.store.as_ref(),
-                        project_id,
-                        &delta,
-                    )
-                    .map(|v| Proposal::Delta(Box::new(v))),
-                }
-            }
-            Some(text) => match serde_json::from_str::<task_core::ProjectPlanSpec>(&text) {
-                Err(e) => Err(format!("project-plan.json の JSON が不正: {e}")),
-                Ok(spec) => task_core::validate_project_plan(
-                    &spec,
-                    task_core::ProjectPlanLimits::default(),
-                    &std::collections::BTreeSet::new(),
-                )
-                .map(Proposal::Full)
-                .map_err(|errors| {
-                    errors
-                        .iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                }),
-            },
-        };
-
-        match validation {
-            Ok(validated) => {
-                let Some(project) = self.store.project_get(project_id)? else {
-                    tracing::error!(%task_id, %project_id, "project vanished before the plan could be proposed");
-                    return self.store.apply_transition_with_events(
-                        task_id,
-                        Trigger::ReviewFail,
-                        events,
-                    );
-                };
-                let proposed = match &validated {
-                    Proposal::Full(validated) => task_ops::project_plan::propose(
-                        self.store.as_ref(),
-                        task,
-                        &project,
-                        validated,
-                        &self.config.roles,
-                        &self.config.genres,
-                        OffsetDateTime::now_utc(),
-                    ),
-                    Proposal::Delta(validated) => task_ops::project_plan::propose_delta(
-                        self.store.as_ref(),
-                        task,
-                        &project,
-                        validated,
-                        &self.config.roles,
-                        &self.config.genres,
-                        OffsetDateTime::now_utc(),
-                    ),
-                };
-                match proposed {
-                    Ok(proposed) => {
-                        tracing::info!(%task_id, %project_id, milestones = proposed.len(), "project plan proposed");
-                        self.store.apply_transition_with_events(
-                            task_id,
-                            Trigger::ReviewPass,
-                            events,
-                        )
-                    }
-                    Err(e) => {
-                        tracing::warn!(%task_id, %project_id, error = %e, "failed to materialize the proposed project plan; treating as an invalid attempt");
-                        events.push(Event::worker_progress(
-                            run_id.to_string(),
-                            format!("計画の書き込みに失敗しました: {e}"),
-                        ));
-                        self.store.apply_transition_with_events(
-                            task_id,
-                            Trigger::ReviewFail,
-                            events,
-                        )
-                    }
-                }
-            }
-            Err(reason) => {
-                events.push(Event::worker_progress(
-                    run_id.to_string(),
-                    format!("invalid project plan: {reason}"),
-                ));
-                let outcome = self.store.apply_transition_with_events(
-                    task_id,
-                    Trigger::ReviewFail,
-                    events,
-                )?;
-                if outcome.next == Status::Failed
-                    && let Err(e) = task_ops::project_plan::record_proposal_failure(
-                        self.store.as_ref(),
-                        project_id,
-                        &reason,
-                        OffsetDateTime::now_utc(),
-                    )
-                {
-                    tracing::warn!(%task_id, %project_id, error = %e, "failed to record the project plan failure to the secretary conversation");
-                }
-                Ok(outcome)
-            }
-        }
-    }
-
     /// ADR-0072 D14（Phase E3）/ D17（Phase E4）: planner の出力が不正だった（または run が異常終了
     /// した）ときの、「1 回だけ再試行、それでも駄目なら諦める」の判断。**この「試行」の窓は直近の
     /// `Event::ExecutionPlanned`（無ければ Task の最初）から数える**（E4 の注記: 最初の gate 判定の
@@ -6828,52 +6669,6 @@ impl Dispatcher {
         let project = task.project_id.map(|p| p.to_string());
         if let Err(e) = MemoryDir::new(dir).append(node_id, project.as_deref(), &update, &today) {
             tracing::warn!(task_id = %task.id, error = %e, "failed to append to the node's memory");
-        }
-    }
-
-    /// ADR-0038 D1（Phase 41）: 対話 run の結果ファイル（`<artifacts_dir>/result.json`）の
-    /// `milestone_proposal` から、その案件に `status = proposed` の途中目標を 1 件作る
-    /// （古い提案は `redesigned` に差し替える。判定中の途中目標自身は触らない）。
-    /// 対話でない run・案件に属さない run・宣言が無い run では何もしない。失敗しても run は壊さない。
-    fn absorb_milestone_proposal(&self, task: &Task) {
-        if !task_core::is_conversation(task) {
-            return;
-        }
-        let Some(project_id) = task.project_id else {
-            return;
-        };
-        // ADR-0074 D3.6（Phase F4b (d)）: 案件計画の途中目標（DAG の節点）のレビューでは、次の途中目標を
-        // 提案として作らない（次は計画の DAG が決めている。見直しは案件の replan で行う）。
-        if let Some(milestone_id) = task.milestone_id
-            && let Ok(Some(m)) = self.store.milestone_get(milestone_id)
-            && m.plan_key.is_some()
-        {
-            return;
-        }
-        let Some(workspace) = self.task_dir(task) else {
-            return;
-        };
-        let Some(proposal) =
-            task_worker::read_result_milestone_proposal(&self.artifacts_dir(task, &workspace))
-        else {
-            return;
-        };
-        match task_ops::milestone_review::record_proposal(
-            self.store.as_ref(),
-            project_id,
-            task.milestone_id,
-            &proposal.title,
-            &proposal.description,
-        ) {
-            Ok(Some(milestone)) => tracing::info!(
-                task_id = %task.id,
-                milestone_id = %milestone.id,
-                "the reply proposed the next milestone; recorded as proposed"
-            ),
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(task_id = %task.id, error = %e, "failed to record the proposed milestone")
-            }
         }
     }
 
@@ -7355,12 +7150,9 @@ impl Dispatcher {
                 }
                 r
             }
-            // ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run。`plan.json` は
-            // 解析しない（`plan` コンテキストを渡していないので `outcome.plan` は常に `None`）ので、
-            // 通常の Plan kind の失敗（下のアーム）より先に見る。
-            (true, TaskKind::Plan, None) if task_core::is_milestones_plan_task(&task) => {
-                self.finish_project_plan_run(task_id, &task, &run_id, events)
-            }
+            // ADR-0079 D13（Phase R5a）: 案件計画（マイルストーン DAG）の run の提案の取り込み
+            // （`finish_project_plan_run`）は廃止。新しく作る入口が無く（`POST /projects/{id}/plan` は 410）、
+            // 残っていても下の Plan kind の失敗と同じに扱う（提案を作らない）。
             (true, TaskKind::Plan, None) => {
                 // review_task は Plan kind に必ず暗黙の判定を付けるので、ここには来ないはず。
                 tracing::error!(%task_id, "plan review passed without a parsed plan; treating as failure");
@@ -13076,6 +12868,11 @@ impl Dispatcher {
             {
                 continue;
             }
+            // ADR-0079 D13（Phase R5a）: subtree の一時停止・案件の停止の後は、走っている run は終わるまで走らせるが、
+            // 並列 WU の 2 本目以降は新しく起こさない（`ready_tasks` と同じ判定）。
+            if self.store.halted_by_pause(&task)? {
+                continue;
+            }
             let mode = self.parallel_mode(&task)?;
             loop {
                 if self.workers_in_flight() >= self.config.max_concurrency {
@@ -13590,16 +13387,7 @@ impl Dispatcher {
                 task_role: task.role.clone(),
             },
         )?;
-        // ADR-0077 D1: マイルストーン Task の dispatch で途中目標を `approved` → `in_progress`（冪等）。
-        match task_ops::project_plan::mark_milestone_dispatched(self.store.as_ref(), &task) {
-            Ok(true) => {
-                tracing::info!(task_id = %task.id, milestone_id = ?task.milestone_id, "milestone in_progress");
-            }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!(task_id = %task.id, error = %e, "failed to mark the milestone in_progress");
-            }
-        }
+        // ADR-0077 D1 の dispatch での途中目標の `in_progress` は ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
         // ADR-0072 D5（E2b の指摘）: 計画の無い Task（暗黙の WorkUnit）の worker run も `runs`
         // 索引に書く（(g)「全タスクの run について書く」。WU の run は `start_work_unit_run`、
         // planner run はこの少し上で、それぞれ自分で `run_index_start` を呼ぶ）。
@@ -14184,7 +13972,7 @@ impl Dispatcher {
             .unwrap_or_default();
         let (skills, missing_skills) = self.skills_context(&profile_skills_mounts);
         // ADR-0048 D3（Phase 60b）: CoS の対話 run にだけ、進行中の案件とその途中目標を渡す
-        // （`actions` の `create_task.project` / `add_milestone.project` を選ぶ材料。決定的にストアを
+        // （`actions` の `create_task.project` を選ぶ材料。決定的にストアを
         // 読むだけ。CoS 以外の run・継続中の run（ADR-0054 D1: 差分に「新しい案件」が乗る）では常に空）。
         let active_projects = if is_cos_conversation && !continuing {
             self.active_projects_context()?
@@ -14466,16 +14254,15 @@ impl Dispatcher {
             .collect())
     }
 
-    /// ADR-0048 D3（Phase 60b）: CoS の対話 run に渡す「進行中の案件とその途中目標」（`proposed` /
-    /// `active` の案件だけ。決定的にストアを読むだけ。LLM も判断も無い）。
+    /// ADR-0048 D3（Phase 60b）: CoS の対話 run に渡す「進行中の案件」（`proposed` / `active` の案件だけ。
+    /// 決定的にストアを読むだけ。LLM も判断も無い）。ADR-0079 D12 / D13（Phase R5a）: 途中目標は凍結したので
+    /// CoS には渡さない（`milestones` は常に空。CoS は案件〈方向〉だけを選び、段階は `stages_hint` に書く）。
     fn active_projects_context(&self) -> Result<Vec<ActiveProjectContext>, DispatchError> {
         let mut projects = self.store.project_list()?;
         projects.retain(|p| matches!(p.status, ProjectStatus::Proposed | ProjectStatus::Active));
         projects.sort_by_key(|p| p.id);
         let mut out = Vec::new();
         for project in projects.into_iter().take(ACTIVE_PROJECTS_SCAN) {
-            let mut milestones = self.store.milestone_list(project.id)?;
-            milestones.sort_by_key(|m| m.id);
             out.push(ActiveProjectContext {
                 repos: self
                     .store
@@ -14486,14 +14273,7 @@ impl Dispatcher {
                 id: project.id.to_string(),
                 title: project.title.clone(),
                 status: project.status.as_str().to_string(),
-                milestones: milestones
-                    .into_iter()
-                    .map(|m| ActiveMilestoneContext {
-                        id: m.id.to_string(),
-                        title: m.title,
-                        status: m.status.as_str().to_string(),
-                    })
-                    .collect(),
+                milestones: Vec::new(),
             });
         }
         Ok(out)
@@ -15241,6 +15021,7 @@ impl Dispatcher {
         let now = OffsetDateTime::now_utc();
         let approval = Task {
             tree: None,
+            paused_at: None,
             routing: None,
             repos: Vec::new(),
             id: TaskId::new(),
@@ -17645,6 +17426,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -18667,56 +18449,12 @@ mod tests {
         );
     }
 
-    /// ADR-0074 D3.3（Phase F4a (b)）: `artifacts/project-plan.json` を書くテスト用アダプタ
-    /// （案件計画 = マイルストーン DAG の run 専用）。
-    struct ProjectPlanAdapter {
-        project_plan_json: String,
-    }
-
-    #[async_trait]
-    impl WorkerAdapter for ProjectPlanAdapter {
-        fn id(&self) -> &str {
-            "instant"
-        }
-        async fn run(
-            &self,
-            req: RunRequest,
-            _run_id: &str,
-            _limits: RunLimits,
-            sink: &dyn EventSink,
-        ) -> Result<RunOutcome, AdapterError> {
-            std::fs::create_dir_all(&req.artifacts_dir).unwrap();
-            std::fs::write(
-                req.artifacts_dir.join("project-plan.json"),
-                &self.project_plan_json,
-            )
-            .unwrap();
-            sink.progress("working");
-            Ok(RunOutcome {
-                terminal: Terminal::Done {
-                    summary: "planned".into(),
-                    evidence: vec![],
-                    usage: None,
-                },
-                exit_code: Some(0),
-            })
-        }
-    }
-
-    const VALID_PROJECT_PLAN: &str = r#"{"schema":"celeris.project-plan/1","rationale":"2 段階で進める","milestones":[
-        {"key":"survey","title":"調査","objective":"周辺調査","reach_criteria":"候補が出せた",
-         "acceptance":[{"text":"done","check":{"type":"human"}},{"text":"a","check":{"type":"artifact_exists","name":"report.md"}}],
-         "depends_on":[]},
-        {"key":"poc","title":"PoC","objective":"検証","reach_criteria":"動くデモ",
-         "acceptance":[{"text":"done","check":{"type":"human"}},{"text":"a","check":{"type":"artifact_exists","name":"result.md"}}],
-         "depends_on":["survey"]}
-    ]}"#;
-
-    /// ADR-0074 D3.3（Phase F4a (b)）: `POST /projects/{id}/plan {mode: "milestones"}` 相当の run
-    /// （偽アダプタ）が `celeris.project-plan/1` を出し、検証を通ると `ProjectPlanProposed`・途中目標
-    /// （`proposed`）・top-level の draft Task（`depends_on` 付き）ができる。受け入れ条件 (b)。
+    /// ADR-0079 D13（Phase R5a）: 途中目標の Go（ADR-0074 D3.2）・dispatch での `in_progress` / 自動 `reached`（ADR-0077）は
+    /// 廃止。案件計画の途中目標（`plan_key` あり、`auto_advance = false`）に結ばれた既存の root task 同士でも、依存先が
+    /// `done` になれば依存する側はそのまま dispatch され、凍結した途中目標の行の状態は 1 つも変わらない。新しい
+    /// root task の完了で途中目標の行はできない。
     #[tokio::test]
-    async fn milestones_project_plan_task_proposes_milestones_and_top_level_draft_tasks() {
+    async fn frozen_milestones_do_not_gate_or_advance_root_tasks() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let now = OffsetDateTime::now_utc();
@@ -18735,633 +18473,76 @@ mod tests {
             updated_at: now,
         };
         store.project_create(&project).unwrap();
-
-        let mut plan = plan_task(dir.path(), 0);
-        plan.project_id = Some(project.id);
-        plan.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
-        store.insert(&plan).unwrap();
-
-        let adapter = Arc::new(ProjectPlanAdapter {
-            project_plan_json: VALID_PROJECT_PLAN.into(),
-        });
-        let mut d = dispatcher(store.clone(), adapter, 2);
-        let report = run_until_idle(&mut d, 200).await;
-        assert!(report.idle);
-
-        let p = store.get(plan.id).unwrap().unwrap();
-        assert_eq!(
-            p.status,
-            Status::Done,
-            "{:?}",
-            store.events_for(plan.id).unwrap()
-        );
-
-        let milestones = store.milestone_list(project.id).unwrap();
-        assert_eq!(milestones.len(), 2);
-        assert!(
-            milestones
-                .iter()
-                .all(|m| m.status == task_core::MilestoneStatus::Proposed)
-        );
-
-        let drafts: Vec<Task> = store.list(Some(Status::Draft)).unwrap();
-        assert_eq!(drafts.len(), 2, "{drafts:?}");
-        for t in &drafts {
-            assert_eq!(t.parent_id, None, "top-level（案件直下）");
-            assert_eq!(t.project_id, Some(project.id));
-            assert!(t.milestone_id.is_some());
-            assert!(task_core::is_milestone_task(t));
+        let mut milestones = Vec::new();
+        for (key, status) in [
+            ("survey", task_core::MilestoneStatus::Approved),
+            ("poc", task_core::MilestoneStatus::Approved),
+        ] {
+            let m = store.milestone_create(project.id, key, "", status).unwrap();
+            assert!(store.milestone_set_plan_key(m.id, key).unwrap());
+            milestones.push(m);
         }
-        let survey = drafts.iter().find(|t| t.title == "調査").unwrap();
-        let poc = drafts.iter().find(|t| t.title == "PoC").unwrap();
-        assert_eq!(poc.depends_on, vec![survey.id]);
-        assert_eq!(survey.depends_on, Vec::<TaskId>::new());
-
-        let events = store.events_for(plan.id).unwrap();
-        assert!(
-            events.iter().any(|(_, e)| matches!(
-                e,
-                Event::ProjectPlanProposed { version, milestones, .. }
-                    if *version == 1 && milestones.len() == 2
-            )),
-            "{events:?}"
-        );
-    }
-
-    /// ADR-0072「Phase F6 実装時の決定」P2（本番 2026-09-28: `project_plan_proposed` が本番で一度も起きて
-    /// いない）: 仕事が止まった**既存の**案件（案件直下に done / failed の Task がある。BenchFS の形）に、
-    /// 人が `POST /projects/{id}/plan {mode: "milestones"}`（`start_milestones`）で案件計画を起こすと、
-    /// CoS の計画 run（偽アダプタ）の `celeris.project-plan/1` が検証を通り、提案（`pending`、人の承認待ち）に
-    /// なる。`decide approve` で途中目標が `approved`、マイルストーン Task が `ready` になり、既存の Task には
-    /// 触らない。
-    #[tokio::test]
-    async fn milestones_plan_on_an_existing_stalled_project_reaches_the_human_gate_and_is_approved()
-    {
-        let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let now = OffsetDateTime::now_utc();
-        let project = task_core::Project {
-            auto_advance: false,
-            slug: Some("benchfs".into()),
-            id: task_core::ProjectId::new(),
-            title: "BenchFS 国際会議フルペーパー化".into(),
-            request: "既存成果を国際会議フルペーパーにする".into(),
-            status: task_core::ProjectStatus::Active,
-            secretary_summary: None,
-            workspace: None,
-            archived_at: None,
-            paused_from: None,
-            created_at: now,
-            updated_at: now,
+        let ok = || Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
         };
-        store.project_create(&project).unwrap();
-        store
-            .org_upsert(&org_node_of(
-                "secretary",
-                None,
-                OrgKind::Secretary,
-                Some("secretary"),
-            ))
-            .unwrap();
-        // 止まった案件: 案件直下の done（framing の調査）と failed（関連研究の調査）。
-        let mut old_done = new_task(
-            dir.path(),
-            Check::Command {
-                cmd: "true".into(),
-                expect_exit: 0,
-            },
-            0,
-        );
-        old_done.project_id = Some(project.id);
-        old_done.status = Status::Done;
-        old_done.title = "Phase1: framing".into();
-        store.insert(&old_done).unwrap();
-        let mut old_failed = new_task(
-            dir.path(),
-            Check::Command {
-                cmd: "true".into(),
-                expect_exit: 0,
-            },
-            0,
-        );
-        old_failed.project_id = Some(project.id);
-        old_failed.status = Status::Failed;
-        old_failed.title = "Phase1: Related work".into();
-        store.insert(&old_failed).unwrap();
-
-        let started = task_ops::project_plan::start_milestones(
-            store.as_ref(),
-            &project,
-            Some("止まっているので、ここから先を途中目標に分けて"),
-            &[],
-            &[],
-            now,
-        )
-        .unwrap();
-        // テストでは作業場所を一時ディレクトリに置く。
-        let mut plan_task = store.get(started.task.id).unwrap().unwrap();
-        plan_task.workspace = WorkspaceSpec::Local {
-            path: dir.path().to_path_buf(),
-            mode: None,
-        };
-        store
-            .update_task(
-                &plan_task,
-                Event::Edited {
-                    fields: vec!["workspace".into()],
-                    by: "test".into(),
-                },
-            )
-            .unwrap();
-        assert!(task_core::is_milestones_plan_task(&plan_task));
-
-        let adapter = Arc::new(ProjectPlanAdapter {
-            project_plan_json: VALID_PROJECT_PLAN.into(),
-        });
-        let mut d = dispatcher(store.clone(), adapter, 2);
-        assert!(run_until_idle(&mut d, 200).await.idle);
-
-        let events = store.events_for(plan_task.id).unwrap();
-        assert!(
-            events.iter().any(|(_, e)| matches!(
-                e,
-                Event::ProjectPlanProposed { version: 1, milestones, .. } if milestones.len() == 2
-            )),
-            "{events:?}"
-        );
-        // 人の承認待ち（案件ページの `project_plan.pending`）。
-        let view = task_ops::project_plan::dag_view(store.as_ref(), &project)
-            .unwrap()
-            .expect("dag view");
-        assert_eq!(view.current_version, None);
-        let pending = view.pending.expect("a pending proposal awaits the human");
-        assert_eq!(pending.version, 1);
-        assert_eq!(pending.nodes.len(), 2);
-
-        let decided = task_ops::project_plan::decide(
-            store.as_ref(),
-            &project,
-            1,
-            task_ops::project_plan::ProjectPlanDecision::Approve,
-            None,
-            &[],
-            &[],
-            "conversation",
-            now,
-        )
-        .unwrap();
-        assert_eq!(decided.tasks.len(), 2);
-        for id in &decided.tasks {
-            let t = store.get(*id).unwrap().unwrap();
-            assert!(
-                matches!(t.status, Status::Ready | Status::Draft),
-                "{:?}",
-                t.status
-            );
+        let mut survey = new_task(&dir.path().join("survey"), ok(), 0);
+        survey.title = "調査".into();
+        survey.project_id = Some(project.id);
+        survey.milestone_id = Some(milestones[0].id);
+        std::fs::create_dir_all(dir.path().join("survey")).unwrap();
+        let mut poc = new_task(&dir.path().join("poc"), ok(), 0);
+        poc.title = "PoC".into();
+        poc.project_id = Some(project.id);
+        poc.milestone_id = Some(milestones[1].id);
+        poc.depends_on = vec![survey.id];
+        std::fs::create_dir_all(dir.path().join("poc")).unwrap();
+        // 新しい root task（途中目標なし）。
+        let mut fresh = new_task(&dir.path().join("fresh"), ok(), 0);
+        fresh.title = "新しい root".into();
+        fresh.project_id = Some(project.id);
+        std::fs::create_dir_all(dir.path().join("fresh")).unwrap();
+        for t in [&survey, &poc, &fresh] {
+            assert!(task_core::is_root_task(t));
+            store.insert(t).unwrap();
         }
-        let survey = decided
-            .tasks
-            .iter()
-            .map(|id| store.get(*id).unwrap().unwrap())
-            .find(|t| t.title == "調査")
-            .expect("survey");
-        assert_eq!(survey.status, Status::Ready);
-        let milestones = store.milestone_list(project.id).unwrap();
-        assert_eq!(milestones.len(), 2);
-        assert!(
-            milestones
-                .iter()
-                .all(|m| m.status == task_core::MilestoneStatus::Approved)
-        );
-        let view = task_ops::project_plan::dag_view(store.as_ref(), &project)
-            .unwrap()
-            .expect("dag view");
-        assert_eq!(view.current_version, Some(1));
-        assert!(view.pending.is_none());
-        // 既存の Task には触らない。
-        assert_eq!(
-            store.get(old_done.id).unwrap().unwrap().status,
-            Status::Done
-        );
-        assert_eq!(
-            store.get(old_failed.id).unwrap().unwrap().status,
-            Status::Failed
-        );
-    }
-
-    /// 検査が決定的に通る（`command: true`）2 段の案件計画（`poc` は `survey` に依存）。
-    const COMMAND_PROJECT_PLAN: &str = r#"{"schema":"celeris.project-plan/1","rationale":"2 段階","milestones":[
-        {"key":"survey","title":"調査","objective":"周辺調査","reach_criteria":"候補が出せた",
-         "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],"depends_on":[]},
-        {"key":"poc","title":"PoC","objective":"検証","reach_criteria":"動くデモ",
-         "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],"depends_on":["survey"]}
-    ]}"#;
-
-    /// `COMMAND_PROJECT_PLAN` を提案させ（偽アダプタの計画 run）、人の `approve` まで進める。
-    async fn approved_two_step_project_plan(
-        dir: &std::path::Path,
-        auto_advance: bool,
-    ) -> (
-        Arc<dyn TaskStore>,
-        Dispatcher,
-        task_core::Project,
-        Task,
-        Task,
-    ) {
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let now = OffsetDateTime::now_utc();
-        let project = task_core::Project {
-            auto_advance,
-            slug: None,
-            id: task_core::ProjectId::new(),
-            title: "案件".into(),
-            request: "やって".into(),
-            status: task_core::ProjectStatus::Active,
-            secretary_summary: None,
-            workspace: None,
-            archived_at: None,
-            paused_from: None,
-            created_at: now,
-            updated_at: now,
-        };
-        store.project_create(&project).unwrap();
-        let mut plan = plan_task(dir, 0);
-        plan.project_id = Some(project.id);
-        plan.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
-        store.insert(&plan).unwrap();
-        let adapter = Arc::new(ProjectPlanAdapter {
-            project_plan_json: COMMAND_PROJECT_PLAN.into(),
-        });
-        let mut d = dispatcher(store.clone(), adapter, 2);
-        assert!(run_until_idle(&mut d, 200).await.idle);
-        task_ops::project_plan::decide(
-            store.as_ref(),
-            &project,
-            1,
-            task_ops::project_plan::ProjectPlanDecision::Approve,
-            None,
-            &[],
-            &[],
-            "conversation",
-            now,
-        )
-        .unwrap();
-        // テストでは作業場所を一時ディレクトリに置く（既定の相対パスは使わない）。
-        for t in store.list(None).unwrap() {
-            if task_core::is_milestone_task(&t) {
-                let mut t = t.clone();
-                t.workspace = WorkspaceSpec::Local {
-                    path: dir.join(t.id.to_string()),
-                    mode: None,
-                };
-                store
-                    .update_task(
-                        &t,
-                        Event::Edited {
-                            fields: vec!["workspace".into()],
-                            by: "test".into(),
-                        },
-                    )
-                    .unwrap();
-            }
-        }
-        let all = store.list(None).unwrap();
-        let survey = all.iter().find(|t| t.title == "調査").unwrap().clone();
-        let poc = all.iter().find(|t| t.title == "PoC").unwrap().clone();
-        (store, d, project, survey, poc)
-    }
-
-    /// ADR-0074 D3.2 / D3.6（Phase F4b (d)）: 依存先のマイルストーン Task が `done` でも、その途中目標が
-    /// `reached`（人の `ok`）になるまで依存するマイルストーン Task は dispatch されない。`ok` で Go が開く。
-    /// 案件の `auto_advance = true` なら `done` で進む。
-    #[tokio::test]
-    async fn dependent_milestone_waits_for_reached_not_done() {
-        let dir = tempfile::tempdir().unwrap();
-        let (store, mut d, project, survey, poc) =
-            approved_two_step_project_plan(dir.path(), false).await;
-        assert!(run_until_idle(&mut d, 300).await.idle);
-        let survey_now = store.get(survey.id).unwrap().unwrap();
-        assert_eq!(
-            survey_now.status,
-            Status::Done,
-            "{:?}",
-            store.events_for(survey.id).unwrap()
-        );
-        let poc_now = store.get(poc.id).unwrap().unwrap();
-        assert_eq!(
-            poc_now.status,
-            Status::Ready,
-            "reached までは Go が開かない"
-        );
-        assert!(
-            !store
-                .events_for(poc.id)
-                .unwrap()
-                .iter()
-                .any(|(_, e)| matches!(e, Event::WorkerStarted { .. })),
-            "poc must not have been dispatched"
-        );
-        // 途中目標の判定（ADR-0038 の ok）。案件計画の途中目標では `reached` にするだけで、
-        // 次の途中目標の承認・分解の run は起こさない（D3.6）。
-        let survey_milestone = store
-            .milestone_get(survey.milestone_id.unwrap())
-            .unwrap()
-            .unwrap();
-        assert_eq!(survey_milestone.plan_key.as_deref(), Some("survey"));
-        let decided = task_ops::milestone_review::decide(
-            store.as_ref(),
-            &project,
-            &survey_milestone,
-            task_core::MilestoneDecision::Ok,
-            None,
-            &[],
-            &[],
-            "conversation",
-            OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-        assert_eq!(
-            decided.milestone.status,
-            task_core::MilestoneStatus::Reached
-        );
-        assert_eq!(
-            decided.plan_task_id, None,
-            "no decomposition run on a DAG milestone"
-        );
-        assert!(run_until_idle(&mut d, 300).await.idle);
-        assert_eq!(
-            store.get(poc.id).unwrap().unwrap().status,
-            Status::Done,
-            "{:?}",
-            store.events_for(poc.id).unwrap()
-        );
-
-        // auto_advance = true: survey が done になった時点で poc も進む（reached を待たない）。
-        let dir2 = tempfile::tempdir().unwrap();
-        let (store2, mut d2, _project2, survey2, poc2) =
-            approved_two_step_project_plan(dir2.path(), true).await;
-        assert!(run_until_idle(&mut d2, 400).await.idle);
-        assert_eq!(
-            store2.get(survey2.id).unwrap().unwrap().status,
-            Status::Done
-        );
-        assert_eq!(
-            store2.get(poc2.id).unwrap().unwrap().status,
-            Status::Done,
-            "{:?}",
-            store2.events_for(poc2.id).unwrap()
-        );
-        let m = store2
-            .milestone_get(survey2.milestone_id.unwrap())
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            m.status,
-            task_core::MilestoneStatus::Reached,
-            "ADR-0077 D2: auto_advance なら done で reached"
-        );
-    }
-
-    /// ADR-0077 D1 / D2: 承認直後は `approved`、マイルストーン Task の dispatch で `in_progress`（冪等）。
-    /// `auto_advance = false` なら Task が `done` でも `in_progress` のまま（人の `ok` 待ち）、`true` なら
-    /// `done` で `reached`（後続も同じ）。
-    #[tokio::test]
-    async fn planned_milestone_becomes_in_progress_when_dispatched_and_reached_on_auto_advance() {
-        use task_core::MilestoneStatus;
-        let milestone_status = |store: &Arc<dyn TaskStore>, t: &Task| {
-            store
-                .milestone_get(t.milestone_id.unwrap())
-                .unwrap()
-                .unwrap()
-                .status
-        };
-
-        let dir = tempfile::tempdir().unwrap();
-        let (store, mut d, _project, survey, poc) =
-            approved_two_step_project_plan(dir.path(), false).await;
-        assert_eq!(milestone_status(&store, &survey), MilestoneStatus::Approved);
-        assert_eq!(milestone_status(&store, &poc), MilestoneStatus::Approved);
-        d.tick().unwrap();
-        assert!(
-            store
-                .events_for(survey.id)
-                .unwrap()
-                .iter()
-                .any(|(_, e)| matches!(e, Event::WorkerStarted { .. })),
-            "survey dispatched on the first tick"
-        );
-        assert_eq!(
-            milestone_status(&store, &survey),
-            MilestoneStatus::InProgress
-        );
-        assert_eq!(
-            milestone_status(&store, &poc),
-            MilestoneStatus::Approved,
-            "poc はまだ dispatch されない"
-        );
-        // 再 dispatch・2 本目の WU 相当の呼び出しでも変わらない（冪等）。
-        let survey_now = store.get(survey.id).unwrap().unwrap();
-        assert!(
-            !task_ops::project_plan::mark_milestone_dispatched(store.as_ref(), &survey_now)
-                .unwrap()
-        );
-        assert!(run_until_idle(&mut d, 300).await.idle);
-        assert_eq!(store.get(survey.id).unwrap().unwrap().status, Status::Done);
-        assert_eq!(
-            milestone_status(&store, &survey),
-            MilestoneStatus::InProgress,
-            "auto_advance = false: done でも reached 待ち"
-        );
-
-        let dir2 = tempfile::tempdir().unwrap();
-        let (store2, mut d2, _project2, survey2, poc2) =
-            approved_two_step_project_plan(dir2.path(), true).await;
-        assert!(run_until_idle(&mut d2, 400).await.idle);
-        assert_eq!(store2.get(poc2.id).unwrap().unwrap().status, Status::Done);
-        assert_eq!(
-            milestone_status(&store2, &survey2),
-            MilestoneStatus::Reached
-        );
-        assert_eq!(milestone_status(&store2, &poc2), MilestoneStatus::Reached);
-        // 一回限り: 既に reached なら候補にならない。
-        assert!(
-            task_ops::project_plan::auto_reach_done_milestones(store2.as_ref())
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    /// ADR-0074 D3.4（Phase F4b (e)）: replan の計画 run（偽アダプタ）が差分を書くと、検証を通って
-    /// version 2 の提案（`supersedes: 1`、`add` の draft）になる。dispatch 済みの節点を `modify` する
-    /// 差分は計画 run の失敗（retries 0 で failed）になり、何も作らない。
-    #[tokio::test]
-    async fn replan_run_proposes_a_delta_and_rejects_modifying_a_started_milestone() {
-        let dir = tempfile::tempdir().unwrap();
-        let (store, mut d, project, survey, _poc) =
-            approved_two_step_project_plan(dir.path(), false).await;
-        assert!(run_until_idle(&mut d, 300).await.idle);
-        assert_eq!(store.get(survey.id).unwrap().unwrap().status, Status::Done);
-        store
-            .org_upsert(&org_node_of(
-                "secretary",
-                None,
-                OrgKind::Secretary,
-                Some("secretary"),
-            ))
-            .unwrap();
-        let start = |store: &Arc<dyn TaskStore>| {
-            let started = task_ops::project_plan::start_replan(
-                store.as_ref(),
-                &project,
-                Some("見直し"),
-                &[],
-                &[],
-                OffsetDateTime::now_utc(),
-            )
-            .unwrap();
-            let mut t = started.task.clone();
-            t.workspace = WorkspaceSpec::Local {
-                path: dir.path().join(t.id.to_string()),
-                mode: None,
-            };
-            store
-                .update_task(
-                    &t,
-                    Event::Edited {
-                        fields: vec!["workspace".into()],
-                        by: "test".into(),
-                    },
-                )
-                .unwrap();
-            t
-        };
-
-        // dispatch 済み（done）の survey を modify する差分は拒まれる。
-        let bad = start(&store);
-        let adapter = Arc::new(ProjectPlanAdapter {
-            project_plan_json:
-                r#"{"schema":"celeris.project-plan-delta/1","base_version":1,"rationale":"r",
-                "modify":[{"key":"survey","title":"x"}]}"#
-                    .into(),
-        });
-        let mut d2 = dispatcher(store.clone(), adapter, 1);
-        assert!(run_until_idle(&mut d2, 200).await.idle);
-        let bad_now = store.get(bad.id).unwrap().unwrap();
-        assert_eq!(
-            bad_now.status,
-            Status::Failed,
-            "{:?}",
-            store.events_for(bad.id).unwrap()
-        );
-        assert!(
-            store
-                .events_for(bad.id)
-                .unwrap()
-                .iter()
-                .any(|(_, e)| matches!(
-                    e,
-                    Event::WorkerProgress { msg, .. } if msg.contains("already dispatched")
-                ))
-        );
-
-        // add の差分は version 2 の提案になる。
-        let good = start(&store);
-        let adapter = Arc::new(ProjectPlanAdapter {
-            project_plan_json: r#"{"schema":"celeris.project-plan-delta/1","base_version":1,"rationale":"r",
-                "add":[{"key":"paper","title":"論文","objective":"書く","reach_criteria":"草稿",
-                 "acceptance":[{"text":"ok","check":{"type":"command","cmd":"true","expect_exit":0}}],
-                 "depends_on":["poc"]}]}"#
-                .into(),
-        });
-        let mut d3 = dispatcher(store.clone(), adapter, 1);
-        assert!(run_until_idle(&mut d3, 200).await.idle);
-        assert_eq!(store.get(good.id).unwrap().unwrap().status, Status::Done);
-        let events = store.events_for(good.id).unwrap();
-        assert!(
-            events.iter().any(|(_, e)| matches!(
-                e,
-                Event::ProjectPlanProposed { version: 2, supersedes: Some(1), delta: Some(_), milestones, .. }
-                    if milestones.len() == 3
-            )),
-            "{events:?}"
-        );
-        let paper = store
-            .list(Some(Status::Draft))
+        let before: Vec<_> = store
+            .milestone_list(project.id)
             .unwrap()
             .into_iter()
-            .find(|t| t.title == "論文")
-            .expect("paper draft");
-        assert!(task_core::is_milestone_task(&paper));
-    }
+            .map(|m| (m.id, m.status))
+            .collect();
 
-    /// ADR-0074 D3.3（Phase F4a (b)）: 不正な `project-plan.json`（JSON として壊れている）が
-    /// retries を使い切ると、Task を作らず（途中目標も無し）、秘書の返事として「計画を作れなかった」を
-    /// 案件の対話に残す。
-    #[tokio::test]
-    async fn invalid_project_plan_fails_without_creating_anything_and_notifies_the_secretary() {
-        let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-        store
-            .org_upsert(&org_node_of(
-                "secretary",
-                None,
-                OrgKind::Secretary,
-                Some("secretary"),
-            ))
-            .unwrap();
-        let now = OffsetDateTime::now_utc();
-        let project = task_core::Project {
-            auto_advance: false,
-            slug: None,
-            id: task_core::ProjectId::new(),
-            title: "案件".into(),
-            request: "やって".into(),
-            status: task_core::ProjectStatus::Active,
-            secretary_summary: None,
-            workspace: None,
-            archived_at: None,
-            paused_from: None,
-            created_at: now,
-            updated_at: now,
-        };
-        store.project_create(&project).unwrap();
-
-        let mut plan = plan_task(dir.path(), 0);
-        plan.project_id = Some(project.id);
-        plan.labels = vec![task_core::MILESTONES_PLAN_LABEL.to_string()];
-        store.insert(&plan).unwrap();
-
-        let adapter = Arc::new(ProjectPlanAdapter {
-            project_plan_json: "not json".into(),
+        let adapter = Arc::new(InstantAdapter {
+            terminal: Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            delay: Duration::ZERO,
         });
-        let mut d = dispatcher(store.clone(), adapter, 1);
-        let report = run_until_idle(&mut d, 200).await;
-        assert!(report.idle);
-
-        let p = store.get(plan.id).unwrap().unwrap();
+        let mut d = dispatcher(store.clone(), adapter, 2);
+        assert!(run_until_idle(&mut d, 300).await.idle);
+        for t in [&survey, &poc, &fresh] {
+            assert_eq!(
+                store.get(t.id).unwrap().unwrap().status,
+                Status::Done,
+                "{}: {:?}",
+                t.title,
+                store.events_for(t.id).unwrap()
+            );
+        }
+        let after: Vec<_> = store
+            .milestone_list(project.id)
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.id, m.status))
+            .collect();
         assert_eq!(
-            p.status,
-            Status::Failed,
-            "{:?}",
-            store.events_for(plan.id).unwrap()
+            before, after,
+            "凍結: dispatch で in_progress にも、done で reached にもならず、新しい行もできない"
         );
-        assert_eq!(store.milestone_list(project.id).unwrap().len(), 0);
-        assert_eq!(
-            store.list(Some(Status::Draft)).unwrap().len(),
-            0,
-            "no task is created on a failed proposal"
-        );
-
-        let messages = store
-            .message_list("secretary", Some(project.id), 10)
-            .unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].role, MessageRole::Node);
-        assert!(
-            messages[0].text.contains("計画を作れなかった"),
-            "{}",
-            messages[0].text
-        );
+        assert_eq!(store.get(fresh.id).unwrap().unwrap().milestone_id, None);
     }
 
     #[tokio::test]
@@ -26425,7 +25606,7 @@ mod tests {
     /// ADR-0048 D3（Phase 60b）: CoS の対話 run にだけ、進行中の案件（`proposed` / `active`）と
     /// その途中目標を渡す。`done` / `cancelled` の案件は出さない。CoS 以外の対話・通常タスクには付かない。
     #[test]
-    fn cos_conversations_carry_active_projects_and_their_milestones() {
+    fn cos_conversations_carry_active_projects_but_not_frozen_milestones() {
         let dir = tempfile::tempdir().unwrap();
         let workspace_root = dir.path().join("workspaces");
         std::fs::create_dir_all(&workspace_root).unwrap();
@@ -26498,10 +25679,9 @@ mod tests {
         assert_eq!(project.title, "進行中の案件");
         assert_eq!(project.status, "active");
         assert_eq!(project.repos, vec!["agent-platform"]);
-        assert_eq!(project.milestones.len(), 1);
-        assert_eq!(project.milestones[0].id, milestone.id.to_string());
-        assert_eq!(project.milestones[0].title, "最初の途中目標");
-        assert_eq!(project.milestones[0].status, "in_progress");
+        // ADR-0079 D12 / D13（Phase R5a）: 凍結した途中目標は CoS に渡さない。
+        assert!(project.milestones.is_empty(), "{:?}", project.milestones);
+        let _ = &milestone;
 
         // CoS 以外の対話には渡さない。
         let extras = d.run_extras(&to_survey, None, None, "claude-code").unwrap();
@@ -27155,243 +26335,6 @@ mod tests {
 
     // ---- Phase 41（ADR-0038 D1）: 途中目標レビューの対話 run ----
 
-    /// 受け入れ 1: レビューの対話 run（対話の印 + `milestone_id`）には、その途中目標と、
-    /// 属する仕事（裏方は除く）の title / status / 終端の要約 / 成果物の抜粋が渡る。
-    #[test]
-    fn run_extras_fills_the_milestone_review_context_with_results_and_artifact_excerpts() {
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-        seed_conversation_org(store.as_ref());
-        let base = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
-        let project = titled_project("Pluvio");
-        store.project_create(&project).unwrap();
-        let milestone = store
-            .milestone_create(
-                project.id,
-                "隣接領域の動向調査",
-                "近い分野を洗う",
-                MilestoneStatus::InProgress,
-            )
-            .unwrap();
-
-        // 成果物を持つ done の仕事（`answer.md` を書いてある）。
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path().join("survey");
-        std::fs::create_dir_all(ws.join("artifacts")).unwrap();
-        std::fs::write(ws.join("artifacts/answer.md"), "候補 A / 候補 B / 候補 C\n").unwrap();
-        let mut done = work_task(
-            "web 調査",
-            Status::Done,
-            "research-survey",
-            Some(project.id),
-            base,
-        );
-        done.workspace = WorkspaceSpec::Local {
-            path: ws.clone(),
-            mode: None,
-        };
-        done.milestone_id = Some(milestone.id);
-        store.insert(&done).unwrap();
-        store
-            .append_event(
-                done.id,
-                &Event::WorkerFinished {
-                    run_id: "r-1".into(),
-                    outcome: "done: 候補を 3 本に絞った".into(),
-                    usage: None,
-                    role: None,
-                    metrics: None,
-                    end: None,
-                },
-            )
-            .unwrap();
-        // Go 待ちの draft も文脈に入る。
-        let mut draft = work_task(
-            "候補の比較",
-            Status::Draft,
-            "research-survey",
-            Some(project.id),
-            base + time::Duration::seconds(10),
-        );
-        draft.milestone_id = Some(milestone.id);
-        store.insert(&draft).unwrap();
-        // 裏方（承認）は入らない。
-        let mut support = work_task(
-            "approval",
-            Status::Done,
-            "research-survey",
-            Some(project.id),
-            base + time::Duration::seconds(20),
-        );
-        support.kind = TaskKind::Approval;
-        support.milestone_id = Some(milestone.id);
-        store.insert(&support).unwrap();
-
-        let adapter: Arc<dyn WorkerAdapter> = Arc::new(person_adapter(Terminal::Done {
-            summary: "ok".into(),
-            evidence: vec![],
-            usage: None,
-        }));
-        let d = person_dispatcher(store.clone(), adapter, dir.path().to_path_buf(), None);
-
-        let started = task_ops::milestone_review::start_review(
-            store.as_ref(),
-            &project,
-            &milestone,
-            "途中目標『隣接領域の動向調査』の仕事が止まりました。",
-            &[],
-            &d.config.genres.clone(),
-            task_core::CONVERSATION_GENRE,
-            OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-
-        let extras = d
-            .run_extras(&started.task, None, None, "claude-code")
-            .unwrap();
-        let review = extras
-            .milestone_review
-            .expect("the review context is filled");
-        assert_eq!(review.milestone.title, "隣接領域の動向調査");
-        assert_eq!(review.milestone.status, "in_progress");
-        assert_eq!(review.tasks.len(), 2, "裏方は入らない: {:?}", review.tasks);
-        assert_eq!(review.tasks[0].title, "web 調査");
-        assert_eq!(
-            review.tasks[0].outcome.as_deref(),
-            Some("候補を 3 本に絞った")
-        );
-        assert!(
-            review.tasks[0]
-                .artifacts_excerpt
-                .contains("候補 A / 候補 B / 候補 C"),
-            "{:?}",
-            review.tasks[0]
-        );
-        assert!(
-            review.tasks[0].artifacts_excerpt.contains("answer.md"),
-            "{:?}",
-            review.tasks[0]
-        );
-        assert_eq!(review.tasks[1].title, "候補の比較");
-        assert_eq!(review.tasks[1].status, Status::Draft);
-        // 前置きにも出る。
-        let context = RunContext {
-            milestone_review: Some(review),
-            ..RunContext::default()
-        };
-        let preamble = task_worker::preamble::render(&context, "artifacts");
-        assert!(
-            preamble.contains("## 途中目標『隣接領域の動向調査』のここまで"),
-            "{preamble}"
-        );
-        assert!(preamble.contains("候補 A / 候補 B / 候補 C"), "{preamble}");
-
-        // 普通の対話 run（`milestone_id` 無し）には何も渡らない。
-        let plain = task_ops::conversation::start(
-            store.as_ref(),
-            "secretary",
-            Some(project.id),
-            "やあ",
-            &[],
-            &d.config.genres.clone(),
-            task_core::CONVERSATION_GENRE,
-            OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-        assert!(
-            d.run_extras(&plain.task, None, None, "claude-code")
-                .unwrap()
-                .milestone_review
-                .is_none()
-        );
-    }
-
-    /// 受け入れ 1: 対話 run の結果ファイルの `milestone_proposal` から `proposed` の途中目標が 1 件できる
-    /// （無ければ作らない。判定中の途中目標は差し替えの対象にしない）。
-    #[test]
-    fn absorb_milestone_proposal_records_the_next_milestone_from_the_result_file() {
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-        seed_conversation_org(store.as_ref());
-        let project = titled_project("Pluvio");
-        store.project_create(&project).unwrap();
-        let milestone = store
-            .milestone_create(
-                project.id,
-                "隣接領域の動向調査",
-                "",
-                MilestoneStatus::InProgress,
-            )
-            .unwrap();
-
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path().join("review");
-        std::fs::create_dir_all(ws.join("artifacts")).unwrap();
-        let adapter: Arc<dyn WorkerAdapter> = Arc::new(person_adapter(Terminal::Done {
-            summary: "ok".into(),
-            evidence: vec![],
-            usage: None,
-        }));
-        let d = person_dispatcher(store.clone(), adapter, dir.path().to_path_buf(), None);
-
-        let mut task = work_task(
-            "対話",
-            Status::Done,
-            "secretary",
-            Some(project.id),
-            OffsetDateTime::now_utc(),
-        );
-        task.workspace = WorkspaceSpec::Local {
-            path: ws.clone(),
-            mode: None,
-        };
-        task.milestone_id = Some(milestone.id);
-        task.conversation = Some(task_core::MessageId::new());
-        store.insert(&task).unwrap();
-
-        // 結果ファイルが無ければ何も作らない。
-        d.absorb_milestone_proposal(&task);
-        assert_eq!(store.milestone_list(project.id).unwrap().len(), 1);
-
-        std::fs::write(
-            ws.join("artifacts/result.json"),
-            r#"{"summary":"結果","milestone_proposal":{"title":"候補の絞り込み","description":"3 本に"}}"#,
-        )
-        .unwrap();
-        d.absorb_milestone_proposal(&task);
-        let all = store.milestone_list(project.id).unwrap();
-        assert_eq!(all.len(), 2, "{all:?}");
-        let proposal = all
-            .iter()
-            .find(|m| m.title == "候補の絞り込み")
-            .expect("the proposal");
-        assert_eq!(proposal.status, MilestoneStatus::Proposed);
-        assert_eq!(proposal.description, "3 本に");
-        // 判定中の途中目標はそのまま。
-        assert_eq!(
-            all.iter().find(|m| m.id == milestone.id).map(|m| m.status),
-            Some(MilestoneStatus::InProgress)
-        );
-
-        // 2 回目の提案は 1 回目を差し替える（`proposed` は常に 1 件）。
-        std::fs::write(
-            ws.join("artifacts/result.json"),
-            r#"{"summary":"結果","milestone_proposal":{"title":"実験計画","description":""}}"#,
-        )
-        .unwrap();
-        d.absorb_milestone_proposal(&task);
-        let all = store.milestone_list(project.id).unwrap();
-        assert_eq!(
-            all.iter()
-                .filter(|m| m.status == MilestoneStatus::Proposed)
-                .count(),
-            1,
-            "{all:?}"
-        );
-        assert_eq!(
-            all.iter().find(|m| m.id == proposal.id).map(|m| m.status),
-            Some(MilestoneStatus::Redesigned)
-        );
-    }
-
     /// ADR-0048 D3（Phase 60b）: CoS（`secretary` = `OrgKind::Secretary`）の対話 run の結果ファイルの
     /// `actions` から `create_task` が実行され、担当なし・`ready` のタスクができる。実行できなかった
     /// action があれば理由が `failed` に残り、`ActionsOutcome::to_metadata` が `Some` になる。
@@ -27438,8 +26381,9 @@ mod tests {
         std::fs::write(
             ws.join("artifacts/result.json"),
             r#"{"summary":"やります","actions":[
-                {"type":"create_task","title":"直す","objective":"直して","acceptance":["直った"],"harness":"coding"},
-                {"type":"add_milestone","project":"01ZZZZZZZZZZZZZZZZZZZZZZZZ","title":"存在しない案件"}
+                {"type":"create_task","title":"直す","objective":"直して","acceptance":["直った"],"harness":"coding",
+                 "stages_hint":[{"title":"Phase 1","scope":"MVP"}]},
+                {"type":"add_milestone","project":"01ZZZZZZZZZZZZZZZZZZZZZZZZ","title":"廃止された action"}
             ]}"#,
         )
         .unwrap();
@@ -27452,13 +26396,22 @@ mod tests {
         let stored = store.get(created).unwrap().expect("task");
         assert_eq!(stored.status, Status::Ready);
         assert_eq!(stored.assignee, None, "matching は別経路（次 tick）");
+        // ADR-0079 D12（Phase R5a）: CoS の `create_task.stages_hint` は `Task.routing.stages_hint` に入る。
+        let hints = stored
+            .routing
+            .as_ref()
+            .expect("routing")
+            .stages_hint
+            .clone();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].title, "Phase 1");
+        assert_eq!(hints[0].scope, "MVP");
         assert!(outcome.to_metadata().is_some());
-        assert!(
-            outcome
-                .failure_note()
-                .expect("failure note")
-                .contains("実行できなかった action")
-        );
+        let note = outcome.failure_note().expect("failure note");
+        assert!(note.contains("実行できなかった action"));
+        // `add_milestone` は廃止: 理由付きで落ち（人に見える）、途中目標の行は作られない。
+        assert!(note.contains("add_milestone は廃止（ADR-0079）"), "{note}");
+        assert!(note.contains("root task の段階"), "{note}");
 
         // 同じ run の 2 回目は何もしない（冪等）。
         assert!(d.absorb_console_actions(&task, "run-1").is_none());
@@ -29385,6 +28338,7 @@ mod tests {
             features: None,
             execution: None,
             pause_after: None,
+            stages_hint: Vec::new(),
             provenance: Default::default(),
             status: None,
         };
@@ -31505,7 +30459,7 @@ mod tests {
             child.assignee, None,
             "ADR-0069 D1: owner is decided by matching"
         );
-        assert!(!task_core::is_milestone_task(child));
+        assert!(!task_core::is_root_task(child));
         assert_eq!(
             child.status,
             Status::Done,
@@ -36959,6 +35913,7 @@ mod knowledge_fallback_tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

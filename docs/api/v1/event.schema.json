@@ -4188,6 +4188,13 @@
             }
           ]
         },
+        "paused_at": {
+          "description": "ADR-0079 D13（Phase R5a）: 人がこの task の subtree を一時停止した時刻（`POST /tasks/{id}/pause`）。\n`Some` の間、この task と子孫（`parent_id` / `tree.parent_unit` の鎖）は dispatch されない\n（`TaskStore::ready_tasks` が祖先を辿って見る。状態機械は触らない）。`resume` で `None` に戻す。\n導入前の task には無い。DB の列は増やさない（`json` 列の中だけ。migration 無し）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "priority": {
           "format": "int32",
           "type": "integer"

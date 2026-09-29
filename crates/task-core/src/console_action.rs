@@ -8,10 +8,9 @@
 //! {"summary": "…", "actions": [
 //!   {"type": "create_task", "title": "…", "objective": "…", "acceptance": [...], "harness": "coding",
 //!    "skills": ["rust"], "mode": "prototype", "repos": ["agent-platform"], "project": "<id or null>",
-//!    "milestone": "<id or null>", "assignee": null,
+//!    "assignee": null, "stages_hint": [{"title": "Phase 1", "scope": "…"}],
 //!    "workspace": {"kind": "remote", "cluster": "<id>", "path": "<remote dir or ~>"}},
 //!   {"type": "propose_project", "title": "…", "request": "…", "repos": [...]},
-//!   {"type": "add_milestone", "project": "<id>", "title": "…", "description": "…"},
 //!   {"type": "ask_human", "text": "…"}
 //! ]}
 //! ```
@@ -25,6 +24,10 @@
 //! 付ける（`{"mode":"none"}`（既定）/ `{"mode":"each_phase"}` / `{"mode":"after","phases":["design"]}`）。
 //! 出自は `PauseSource::Agent`（人の明示より安全側に倒すので、CoS の値もそのまま採る。ADR-0069 D1 が
 //! `assignee`/`tier` を捨てるのとは扱いが違う）。
+//!
+//! ADR-0079 D12（Phase R5a）: `add_milestone` は廃止（この型から外した。`task_worker::result_report` が
+//! 「途中目標は root task の段階で表す（ADR-0079）」の理由付きで落とし、人に見える）。人が段階を名指ししたときは
+//! `create_task.stages_hint: [{"title": "Phase 1", "scope": "…"}]` に写す（`Task.routing.stages_hint`。planner への入力）。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -50,8 +53,8 @@ pub enum ConsoleAction {
         repos: Vec<String>,
         #[serde(default)]
         project: Option<String>,
-        #[serde(default)]
-        milestone: Option<String>,
+        // ADR-0079 D12 / D13（Phase R5a）: `milestone` は外した（途中目標は凍結。CoS は案件〈方向〉だけを選ぶ）。
+        // 旧い結果ファイルの `"milestone": …` は未知の欄として読み飛ばす（action 全体は落とさない）。
         #[serde(default)]
         assignee: Option<String>,
         /// Phase 98（ADR-0018）: クラスタで動く仕事を指すときの作業場所。`{"kind":"remote",
@@ -76,18 +79,16 @@ pub enum ConsoleAction {
         /// 意味は変わらない。
         #[serde(default)]
         pause_after: Option<Box<crate::pause::PausePolicy>>,
+        /// ADR-0079 D12（Phase R5a）: 人が段階（「Phase 1〜4」など）を名指ししたときだけ、その名前と範囲を
+        /// そのまま写す（`Task.routing.stages_hint`。root の planner への入力で、構造の強制ではない）。
+        #[serde(default)]
+        stages_hint: Vec<crate::tree::StageHint>,
     },
     ProposeProject {
         title: String,
         request: String,
         #[serde(default)]
         repos: Vec<String>,
-    },
-    AddMilestone {
-        project: String,
-        title: String,
-        #[serde(default)]
-        description: String,
     },
     AskHuman {
         text: String,
@@ -100,7 +101,6 @@ impl ConsoleAction {
         match self {
             ConsoleAction::CreateTask { .. } => "create_task",
             ConsoleAction::ProposeProject { .. } => "propose_project",
-            ConsoleAction::AddMilestone { .. } => "add_milestone",
             ConsoleAction::AskHuman { .. } => "ask_human",
         }
     }

@@ -525,17 +525,24 @@ pub struct Milestone {
     pub updated_at: OffsetDateTime,
 }
 
-/// ADR-0074 D3.1（Phase F4a）: マイルストーン Task か。**案件直下という位置**だけで決める
-/// （`milestone: true` のようなフラグは持たない）。
+/// ADR-0079 D13（Phase R5a）: 案件の **root task** か（旧 `is_milestone_task` を置き換えた述語）。
+/// **位置だけ**で決める（フラグは持たない）:
 ///
-/// `project_id.is_some() && parent_id.is_none() && kind == Execute && conversation.is_none()
-/// && support_kind.is_none()`。案件直下にいる対話・`kind = plan` の分解タスク・裏方
-/// （圧縮・知識整理・doc-gardener・承認・合成レビュー）を除く。委譲の子は `parent_id` を持つので
-/// 自動的に除かれる。
-pub fn is_milestone_task(task: &crate::model::Task) -> bool {
+/// `project_id.is_some() && parent_id.is_none() && tree.parent_unit.is_none() && conversation.is_none()
+/// && support_kind.is_none()`。案件直下にいる対話・裏方（圧縮・知識整理・doc-gardener・承認・合成レビュー）と、
+/// 木の子（採用〈adopt〉で `parent_id` を書き換えない子も `tree.parent_unit` で除く）を除く。
+/// 委譲・計画の子は `parent_id` を持つので自動的に除かれる。
+///
+/// `kind = plan`（既存の案件の分解 task）・`approval`・`review` は `support_kind` が裏方として除く（R4a の
+/// `root_totals` と同じ読み。旧述語の `kind == execute` と結果は同じで、木の子の除外だけが増えた）。
+pub fn is_root_task(task: &crate::model::Task) -> bool {
     task.project_id.is_some()
         && task.parent_id.is_none()
-        && task.kind == crate::model::TaskKind::Execute
+        && task
+            .tree
+            .as_ref()
+            .and_then(|t| t.parent_unit.as_ref())
+            .is_none()
         && task.conversation.is_none()
         && crate::report::support_kind(task).is_none()
 }
@@ -746,7 +753,7 @@ mod tests {
         );
     }
 
-    /// ADR-0074 D3.1（Phase F4a）: `is_milestone_task` は「案件直下という位置」だけで決まる。
+    /// ADR-0079 D13（Phase R5a）: `is_root_task` は「案件直下という位置」だけで決まる。
     fn plain_task(kind: crate::model::TaskKind) -> crate::model::Task {
         use crate::model::{
             Budget, Check, Criterion, Status, Task, TaskId, Tier, WorkerHint, WorkspaceSpec,
@@ -754,6 +761,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -801,41 +809,61 @@ mod tests {
     }
 
     #[test]
-    fn is_milestone_task_requires_project_root_execute_position() {
-        // 案件が無ければマイルストーンではない。
+    fn is_root_task_requires_project_root_position() {
+        // 案件が無ければ root task ではない。
         let mut t = plain_task(crate::model::TaskKind::Execute);
-        assert!(!is_milestone_task(&t));
+        assert!(!is_root_task(&t));
 
-        // 案件直下の Execute タスクはマイルストーン。
+        // 案件直下の Execute タスクは root task。
         t.project_id = Some(ProjectId::new());
-        assert!(is_milestone_task(&t));
+        assert!(is_root_task(&t));
 
-        // 親を持つ（委譲の子）ならマイルストーンではない。
+        // 親を持つ（委譲・計画の子）なら root task ではない。
         let mut child = t.clone();
         child.parent_id = Some(crate::model::TaskId::new());
-        assert!(!is_milestone_task(&child));
+        assert!(!is_root_task(&child));
 
-        // 対話（`conversation` あり）はマイルストーンではない。
+        // 木の子（採用で `parent_id` を持たない子も）は root task ではない。
+        let mut tree_child = t.clone();
+        tree_child.tree = Some(crate::tree::TreeInfo {
+            root_id: crate::model::TaskId::new(),
+            depth: 2,
+            parent_unit: Some(crate::tree::ParentUnit {
+                task_id: crate::model::TaskId::new(),
+                plan_id: "p".into(),
+                unit_key: "u".into(),
+                stage: "s".into(),
+                attempt: 1,
+            }),
+            base_commit: None,
+        });
+        assert!(!is_root_task(&tree_child));
+        // 木の root 自身（`parent_unit` なし）は root task。
+        let mut tree_root = t.clone();
+        tree_root.tree = Some(crate::tree::TreeInfo::root(tree_root.id));
+        assert!(is_root_task(&tree_root));
+
+        // 対話（`conversation` あり）は root task ではない。
         let mut conv = t.clone();
         conv.conversation = Some(crate::message::MessageId::new());
-        assert!(!is_milestone_task(&conv));
+        assert!(!is_root_task(&conv));
 
-        // `kind = plan`（分解タスク）はマイルストーンではない。
+        // `kind = plan`（既存の分解タスク）は裏方（`support_kind` = plan）なので root task ではない。
         let mut plan = t.clone();
         plan.kind = crate::model::TaskKind::Plan;
-        assert!(!is_milestone_task(&plan));
+        assert!(!is_root_task(&plan));
 
-        // `kind = approval` / `review` もマイルストーンではない。
+        // `kind = approval` / `review` は裏方なので root task ではない。
         let mut approval = t.clone();
         approval.kind = crate::model::TaskKind::Approval;
-        assert!(!is_milestone_task(&approval));
+        assert!(!is_root_task(&approval));
         let mut review = t.clone();
         review.kind = crate::model::TaskKind::Review;
-        assert!(!is_milestone_task(&review));
+        assert!(!is_root_task(&review));
 
-        // 裏方（圧縮・知識整理）の役割もマイルストーンではない。
+        // 裏方（圧縮・知識整理）の役割も root task ではない。
         let mut compaction = t.clone();
         compaction.role = Some(crate::report::COMPACTION_ROLE.to_string());
-        assert!(!is_milestone_task(&compaction));
+        assert!(!is_root_task(&compaction));
     }
 }

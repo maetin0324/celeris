@@ -5,6 +5,7 @@
   すぐに担当を起こす、期日・見積もり・スプリントは不要、文書の正本は git、GitHub Issues への写しは不要（PR は Celeris からも
   見えると嬉しいが常時同期は不要）、案件を跨ぐ依存は不要、中止したタスクの worktree とブランチは消す、中止・一時停止・
   アーカイブは提案どおり、タスク管理画面で担当エージェントのレベル（frontier / standard / cheap）を指定できること）
+- **Superseded in part by ADR-0079（Phase R5a, 2026-09-29）**: D1 の `milestone_id` の指定と途中目標の書き込み（`POST /projects/{id}/milestones`・`PATCH /milestones/{id}`、410）、D6 の途中目標の中止・一時停止（`POST /milestones/{id}/{cancel,pause,resume}`、410）は廃止。中止・一時停止は task の subtree（`POST /tasks/{id}/pause|resume`）と案件の 2 階層。
 - 関連: SPEC §3（組織・案件・報告）/ §3.6（認可）/ §7（途中目標）、ADR-0021（質問と `answer`）、ADR-0033 D2（tier の優先順位
   task > role > assignee > genre）、ADR-0034（報告）、ADR-0038（途中目標の対話）、ADR-0043（ワークスペース。差分・PR はタスク画面）、
   ADR-0042（パス）

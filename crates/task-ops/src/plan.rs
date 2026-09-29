@@ -88,6 +88,7 @@ pub fn create_plan(
 
     let task = Task {
         tree: None,
+        paused_at: None,
         routing: None,
         repos: Vec::new(),
         id,

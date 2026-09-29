@@ -13,13 +13,11 @@ use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use task_core::{
-    EventRow, ListFilter, ListOrder, Milestone, MilestoneId, MilestoneStatus, NodeSessionStore,
-    OrgNode, Project, ProjectId, ProjectStatus, SqliteStore, Status, StoreError, Task, TaskId,
-    TaskKind, TaskStore,
+    EventRow, ListFilter, ListOrder, MilestoneId, NodeSessionStore, OrgNode, Project, ProjectId,
+    ProjectStatus, SqliteStore, Status, StoreError, Task, TaskId, TaskKind, TaskStore,
 };
 use task_ops::OpsError;
 use task_ops::add::NewTaskSpec;
-use task_ops::plan::NewPlanSpec;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -39,11 +37,10 @@ use crate::types::{
     ClusterConnectCodeBody, ClusterConnectResult, ClusterConnectStart, ClusterForwardView,
     ClusterSettingsPutBody, ClusterSettingsView, ClusterStatsView, ClusterView, Clusters,
     CommentBody, CommentList, DaemonView, DbInfo, DecisionBody, EventsPage, Health,
-    MilestoneCreateBody, MilestonePatchBody, MilestoneReviewView, MilestoneView, OrgCreateBody,
-    OrgList, OrgPatchBody, ProjectCreateBody, ProjectDetail, ProjectList, ProjectPatchBody,
-    ProjectTaskView, ProviderCheckResponse, ProviderConfigView, ProviderView, Providers,
-    ReloadResult, ReopenBody, RetryBody, RunList, SecretList, SecretPutBody, SecretPutResult,
-    SecretView, ValidationError,
+    MilestoneReviewView, MilestoneView, OrgCreateBody, OrgList, OrgPatchBody, ProjectCreateBody,
+    ProjectDetail, ProjectList, ProjectPatchBody, ProjectTaskView, ProviderCheckResponse,
+    ProviderConfigView, ProviderView, Providers, ReloadResult, ReopenBody, RetryBody, RunList,
+    SecretList, SecretPutBody, SecretPutResult, SecretView, ValidationError,
 };
 use crate::{API_VERSION, MAX_BODY_BYTES};
 
@@ -370,11 +367,6 @@ pub(crate) fn parse_project_id(raw: &str) -> Result<ProjectId, ApiProblem> {
         .map_err(|_| ApiProblem::project_not_found(raw))
 }
 
-pub(crate) fn parse_milestone_id(raw: &str) -> Result<MilestoneId, ApiProblem> {
-    raw.parse::<MilestoneId>()
-        .map_err(|_| ApiProblem::milestone_not_found(raw))
-}
-
 /// 監査 L-1: 組織のノードの `genre` は設定の `[[genres]]` にあるものだけ（分野を 1 つも設定していない
 /// 構成では検証しない。`POST /tasks` の `genre` と同じ規律。ADR-0027 D1）。
 fn validate_genre(state: &ApiState, genre: Option<&str>) -> Result<(), ApiProblem> {
@@ -652,12 +644,22 @@ async fn project_detail(
     Params(id): Params<String>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    no_query(&raw)?;
+    // ADR-0079 D13 / U-R8（Phase R5a）: 途中目標（と案件計画の DAG）は凍結した履歴。既定では返さず
+    // （`milestones: []`、件数だけ `milestones_frozen`）、`?include_frozen=true` のときだけ読み取り専用で返す。
+    let query = QueryParams::parse(raw.as_deref(), &["include_frozen"])?;
+    let include_frozen = query.bool("include_frozen")?.unwrap_or(false);
     let project_id = parse_project_id(&id)?;
     let detail = state
         .blocking(move |store| {
             let Some(project) = store.project_get(project_id).map_err(store_problem)? else {
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));
+            };
+            let all_milestones = store.milestone_list(project_id).map_err(store_problem)?;
+            let milestones_frozen = u32::try_from(all_milestones.len()).unwrap_or(u32::MAX);
+            let all_milestones = if include_frozen {
+                all_milestones
+            } else {
+                Vec::new()
             };
             // ADR-0038 D1 / D4（Phase 41）: 途中目標ごとに、秘書のレビューの返事と、提案された次の
             // 途中目標を添える（GUI のカードが「結果 → 提案 → ok / 議論 / ng」を出せるように）。
@@ -665,7 +667,7 @@ async fn project_detail(
                 task_ops::milestone_review::latest_proposal(store, project_id, None)
                     .map_err(|e| ops_problem(store, e, None))?;
             let mut milestones = Vec::new();
-            for milestone in store.milestone_list(project_id).map_err(store_problem)? {
+            for milestone in all_milestones {
                 let review =
                     task_ops::milestone_review::review_state(store, project_id, milestone.id)
                         .map_err(store_problem)?
@@ -701,6 +703,7 @@ async fn project_detail(
                 .items
                 .into_iter()
                 .map(|task| ProjectTaskView {
+                    is_root_task: task_core::is_root_task(&task),
                     conversation: task_core::is_conversation(&task),
                     support: task_core::support_kind(&task).map(str::to_string),
                     id: task.id,
@@ -714,13 +717,19 @@ async fn project_detail(
                 .collect();
             // ADR-0043 D1: この案件のリポジトリ（primary が先頭）。
             let repos = store.repo_list(project_id).map_err(store_problem)?;
-            // ADR-0074 D3.5（Phase F4b (h)）: 案件計画の DAG（無ければ省略）。
-            let project_plan = task_ops::project_plan::dag_view(store, &project)
-                .map_err(|e| ops_problem(store, e, None))?;
+            // ADR-0074 D3.5（Phase F4b (h)）: 案件計画の DAG（無ければ省略）。ADR-0079 D13（Phase R5a）: 凍結した
+            // 履歴なので `include_frozen=true` のときだけ。
+            let project_plan = if include_frozen {
+                task_ops::project_plan::dag_view(store, &project)
+                    .map_err(|e| ops_problem(store, e, None))?
+            } else {
+                None
+            };
             Ok(ProjectDetail {
                 project,
                 repos,
                 milestones,
+                milestones_frozen,
                 tasks,
                 project_plan,
                 root_totals: Some(root_totals),
@@ -741,16 +750,24 @@ async fn patch_project(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let patch: ProjectPatchBody = read_json(body, false).await?;
+    // ADR-0079 D13（Phase R5a）: `auto_advance`（ADR-0074 D3.2 / ADR-0077 の途中目標の自動 reached）は廃止。
+    // 列 `projects.auto_advance` は残すが書かない・読まない。
+    if patch.auto_advance.is_some() {
+        return Err(ApiProblem::validation(vec![ValidationError {
+            field: Some("auto_advance".into()),
+            message: "auto_advance was removed by ADR-0079 (projects have no plan; milestones are frozen)"
+                .into(),
+        }]));
+    }
     if patch.status.is_none()
         && patch.workspace.is_none()
-        && patch.auto_advance.is_none()
         && patch.slug.is_none()
         && patch.title.is_none()
         && patch.request.is_none()
     {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
-            message: "specify at least one of `status`, `workspace`, `auto_advance`, `slug`, `title` or `request`"
+            message: "specify at least one of `status`, `workspace`, `slug`, `title` or `request`"
                 .into(),
         }]));
     }
@@ -836,14 +853,6 @@ async fn patch_project(
             {
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));
             }
-            // ADR-0074 D3.2（Phase F4b (d)）。
-            if let Some(auto_advance) = patch.auto_advance
-                && !store
-                    .project_set_auto_advance(project_id, auto_advance)
-                    .map_err(store_problem)?
-            {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            }
             if let Some(slug) = patch.slug.as_deref()
                 && !store
                     .project_set_slug(project_id, slug)
@@ -910,101 +919,22 @@ pub(crate) fn validated_workspace(
     Ok(spec.with_home_expanded(task_core::home_dir().as_deref()))
 }
 
-async fn create_milestone(
-    State(state): State<ApiState>,
-    Params(id): Params<String>,
-    headers: HeaderMap,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
-    no_query(&raw)?;
+/// ADR-0079 D13（Phase R5a）: 途中目標の作成は 410（途中目標は root task の段階で表す）。
+async fn create_milestone(State(state): State<ApiState>, headers: HeaderMap) -> ApiResult {
     require_admin(&state, &headers)?;
-    let project_id = parse_project_id(&id)?;
-    let create: MilestoneCreateBody = read_json(body, false).await?;
-    if create.title.trim().is_empty() {
-        return Err(ApiProblem::validation(vec![ValidationError {
-            field: Some("title".into()),
-            message: "title must not be blank".into(),
-        }]));
-    }
-    let milestone: Milestone = state
-        .blocking(move |store| {
-            if store
-                .project_get(project_id)
-                .map_err(store_problem)?
-                .is_none()
-            {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            }
-            store
-                .milestone_create(
-                    project_id,
-                    &create.title,
-                    create.description.as_deref().unwrap_or(""),
-                    create.status.unwrap_or(MilestoneStatus::Proposed),
-                )
-                .map_err(store_problem)
-        })
-        .await?;
-    let mut response = json_response(StatusCode::CREATED, &milestone);
-    if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/milestones/{}", milestone.id)) {
-        response.headers_mut().insert(header::LOCATION, location);
-    }
-    Ok(response)
+    Err(ApiProblem::gone(
+        crate::milestones::MILESTONE_GONE,
+        "POST /api/v1/tasks with project_id and stages_hint (the stages of a root task)",
+    ))
 }
 
-async fn patch_milestone(
-    State(state): State<ApiState>,
-    Params(id): Params<String>,
-    headers: HeaderMap,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
-    no_query(&raw)?;
+/// ADR-0079 D13（Phase R5a）: 途中目標の状態の変更は 410（既存の行は凍結）。
+async fn patch_milestone(State(state): State<ApiState>, headers: HeaderMap) -> ApiResult {
     require_admin(&state, &headers)?;
-    let milestone_id = parse_milestone_id(&id)?;
-    let patch: MilestonePatchBody = read_json(body, false).await?;
-    // ADR-0044 D6（Phase 55）: 案件と同じ理由で、`paused` / `cancelled` は `PATCH` では入れない。
-    if matches!(
-        patch.status,
-        MilestoneStatus::Paused | MilestoneStatus::Cancelled
-    ) {
-        return Err(ApiProblem::validation(vec![ValidationError {
-            field: Some("status".into()),
-            message: format!(
-                "use POST /milestones/{{id}}/{} instead of PATCH to set {:?} (it also records paused_from and cascades)",
-                if patch.status == MilestoneStatus::Paused {
-                    "pause"
-                } else {
-                    "cancel"
-                },
-                patch.status.as_str()
-            ),
-        }]));
-    }
-    let milestone = state
-        .blocking(move |store| {
-            if !store
-                .milestone_set_status(milestone_id, patch.status)
-                .map_err(store_problem)?
-            {
-                return Err(ApiProblem::milestone_not_found(&milestone_id.to_string()));
-            }
-            // 更新後の行を返す（案件が分からないと引けないので、状態を変えた後に案件ごと引き直す）。
-            for project in store.project_list().map_err(store_problem)? {
-                if let Some(found) = store
-                    .milestone_list(project.id)
-                    .map_err(store_problem)?
-                    .into_iter()
-                    .find(|m| m.id == milestone_id)
-                {
-                    return Ok(found);
-                }
-            }
-            Err(ApiProblem::milestone_not_found(&milestone_id.to_string()))
-        })
-        .await?;
-    Ok(json_response(StatusCode::OK, &milestone))
+    Err(ApiProblem::gone(
+        crate::milestones::MILESTONE_GONE,
+        "a stage with review: human in the root task's plan",
+    ))
 }
 
 // ---- 1. GET /health ----
@@ -1837,22 +1767,14 @@ async fn rereview(
 
 // ---- 17. POST /plans ----
 
-async fn create_plan(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    RawQuery(raw): RawQuery,
-    body: Body,
-) -> ApiResult {
-    no_query(&raw)?;
+/// ADR-0079 U-R6（Phase R5a）: ADR-0028 の `POST /plans`（Plan kind の分解）は 410。分解は root task の gate と
+/// planner が行う（`POST /tasks` で root task を作る）。既存の `kind = plan` の行と子はそのまま読める。
+async fn create_plan(State(state): State<ApiState>, headers: HeaderMap) -> ApiResult {
     require_admin(&state, &headers)?;
-    let spec: NewPlanSpec = read_json(body, false).await?;
-    let task = state
-        .blocking(move |store| {
-            task_ops::plan::create_plan(store, spec, OffsetDateTime::now_utc())
-                .map_err(|e| ops_problem(store, e, None))
-        })
-        .await?;
-    Ok(created_task(&task))
+    Err(ApiProblem::gone(
+        "ADR-0079: POST /plans は廃止。分解は root task の Complexity Gate と planner が行う",
+        "POST /api/v1/tasks (a root task; name the stages in stages_hint)",
+    ))
 }
 
 // ---- 18. POST /replay ----

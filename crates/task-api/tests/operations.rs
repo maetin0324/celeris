@@ -777,43 +777,20 @@ async fn create_task_validation_errors_insert_nothing() {
     );
 }
 
+/// ADR-0079 U-R6（Phase R5a）: ADR-0028 の `POST /plans` は 410。何も作られない。
 #[tokio::test]
-async fn create_plan_returns_201_and_rejects_blank_goals() {
+async fn create_plan_is_gone() {
     let env = admin_env();
     let app = env.router();
-    let resp = send(
-        &app,
-        post_admin(
-            "/api/v1/plans",
-            &json!({"goal": "build the CLI\nwith tests"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status, 201, "{}", resp.text());
-    let plan = resp.json();
-    let id = plan["id"].as_str().expect("id");
-    assert_eq!(
-        resp.header("location"),
-        Some(format!("/api/v1/tasks/{id}").as_str())
-    );
-    assert_eq!(plan["kind"], "plan");
-    assert_eq!(plan["status"], "draft");
-    assert_eq!(plan["title"], "build the CLI");
-    assert_eq!(plan["acceptance"], json!([]));
-    assert_eq!(plan["parent_id"], Value::Null);
-    assert_eq!(plan["worker_hint"]["tier"], "frontier");
-    assert_eq!(
-        plan["budget"],
-        json!({"max_turns": 30, "max_wall_secs": 900, "max_retries": 1})
-    );
-
-    let blank = send(&app, post_admin("/api/v1/plans", &json!({"goal": "  \n "}))).await;
-    let problem = assert_problem(&blank, 422, "validation");
-    assert_eq!(
-        problem["errors"],
-        json!([{"field": "goal", "message": "goal must not be blank"}])
-    );
-    assert_eq!(env.store.list(None).expect("list").len(), 1);
+    for body in [
+        json!({"goal": "build the CLI\nwith tests"}),
+        json!({"goal": "  \n "}),
+    ] {
+        let resp = send(&app, post_admin("/api/v1/plans", &body)).await;
+        let problem = assert_problem(&resp, 410, "removed_by_adr_0079");
+        assert_eq!(problem["adr"], "ADR-0079");
+    }
+    assert!(env.store.list(None).expect("list").is_empty());
 }
 
 #[tokio::test]
@@ -841,12 +818,26 @@ async fn replay_reports_zero_mismatches_after_api_operations() {
         .status,
         200
     );
-    assert_eq!(
-        send(&app, post_admin("/api/v1/plans", &json!({"goal": "g"})))
-            .await
-            .status,
-        201
-    );
+    // ADR-0079 D13（Phase R5a）: subtree の一時停止・再開も replay の差分を作らない（状態機械は触らない）。
+    let second = send(
+        &app,
+        post_admin(
+            "/api/v1/tasks",
+            &json!({"title": "t2", "objective": "o", "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
+                    "stages_hint": [{"title": "Phase 1"}]}),
+        ),
+    )
+    .await
+    .json();
+    let second = second["id"].as_str().expect("id").to_string();
+    for action in ["pause", "resume"] {
+        let resp = send(
+            &app,
+            post_admin(&format!("/api/v1/tasks/{second}/{action}"), &json!({})),
+        )
+        .await;
+        assert_eq!(resp.status, 200, "{action}: {}", resp.text());
+    }
 
     let resp = send(&app, post_admin("/api/v1/replay", &json!({}))).await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -961,6 +952,8 @@ async fn every_mutating_endpoint_requires_a_bearer_token() {
         // ADR-0070 D2 追記（Phase 116）。
         (format!("/api/v1/tasks/{}/accept", draft.id), json!({})),
         ("/api/v1/plans".to_string(), json!({"goal": "g"})),
+        // ADR-0079 D13（Phase R5a）: subtree の一時停止も管理系。
+        (format!("/api/v1/tasks/{}/pause", ready.id), json!({})),
         ("/api/v1/replay".to_string(), json!({})),
     ];
     for (path, body) in &cases {
@@ -996,16 +989,18 @@ async fn project_and_milestone_mutations_require_a_bearer_token() {
     .await;
     assert_eq!(project.status, 201, "{}", project.text());
     let project_id = project.json()["id"].as_str().expect("id").to_string();
-    let milestone = send(
-        &app,
-        post_admin(
-            &format!("/api/v1/projects/{project_id}/milestones"),
-            &json!({"title": "途中目標"}),
-        ),
-    )
-    .await;
-    assert_eq!(milestone.status, 201, "{}", milestone.text());
-    let milestone_id = milestone.json()["id"].as_str().expect("id").to_string();
+    // ADR-0079 D13（Phase R5a）: 途中目標は作れない（410）ので、凍結した既存の行の代わりに store で作る。
+    let milestone_id = env
+        .store
+        .milestone_create(
+            project_id.parse().expect("project id"),
+            "途中目標",
+            "",
+            task_core::MilestoneStatus::Proposed,
+        )
+        .expect("milestone")
+        .id
+        .to_string();
 
     let posts = [
         format!("/api/v1/projects/{project_id}/milestones"),
@@ -1053,9 +1048,14 @@ async fn project_and_milestone_mutations_require_a_bearer_token() {
     );
 
     // 何も変わっていない。
-    let detail = send(&app, get_admin(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
+    let detail = send(
+        &app,
+        get_admin(&format!(
+            "/api/v1/projects/{project_id}?include_frozen=true"
+        )),
+    )
+    .await
+    .json();
     assert_eq!(detail["project"]["status"], "proposed");
     assert_eq!(detail["milestones"][0]["status"], "proposed");
 }

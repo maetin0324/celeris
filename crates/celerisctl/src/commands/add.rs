@@ -247,6 +247,7 @@ pub fn run(store: &dyn TaskStore, mut args: AddArgs) -> Result<ExitCode, CliErro
         execution: None,
         // ADR-0074 D2.1（Phase F3 途中確認）: GUI・API から（`celerisctl add` は引数を増やさない）。
         pause_after: None,
+        stages_hint: Vec::new(),
         provenance: task_ops::add::SpecProvenance::default(),
     };
 

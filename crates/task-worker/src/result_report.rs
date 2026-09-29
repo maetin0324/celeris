@@ -73,9 +73,8 @@ pub fn read_result_milestone_proposal(artifacts_dir: &Path) -> Option<MilestoneP
 /// {"summary": "…", "actions": [
 ///   {"type": "create_task", "title": "…", "objective": "…", "acceptance": [...], "harness": "coding",
 ///    "skills": ["rust"], "mode": "prototype", "repos": ["agent-platform"], "project": "<id or null>",
-///    "milestone": "<id or null>", "assignee": null},
+///    "assignee": null, "stages_hint": [{"title": "Phase 1", "scope": "…"}]},
 ///   {"type": "propose_project", "title": "…", "request": "…", "repos": [...]},
-///   {"type": "add_milestone", "project": "<id>", "title": "…", "description": "…"},
 ///   {"type": "ask_human", "text": "…"}
 /// ]}
 /// ```
@@ -95,6 +94,10 @@ impl ParsedActions {
         self.valid.is_empty() && self.malformed.is_empty()
     }
 }
+
+/// ADR-0079 D12（Phase R5a）: 廃止した `add_milestone` を落とすときの理由（`ActionsOutcome.failed` に写り、人に見える）。
+pub const ADD_MILESTONE_RETIRED: &str = "add_milestone は廃止（ADR-0079）: 途中目標は root task の段階で表す。\
+依頼は create_task 1 つにし、人が名指しした段階は create_task.stages_hint に書く";
 
 /// 結果ファイル（`<artifacts_dir>/result.json`）の `actions`。
 pub fn read_result_actions(artifacts_dir: &Path) -> ParsedActions {
@@ -116,6 +119,13 @@ pub fn actions_from_result_json(text: &str) -> ParsedActions {
     };
     let mut out = ParsedActions::default();
     for (i, item) in items.iter().enumerate() {
+        // ADR-0079 D12（Phase R5a）: `add_milestone` は廃止。型から外したので「unknown variant」で落ちるが、
+        // 人に見える理由を言い換える（何で表せばよいかを添える）。
+        if item.get("type").and_then(|t| t.as_str()) == Some("add_milestone") {
+            out.malformed
+                .push(format!("action #{}: {ADD_MILESTONE_RETIRED}", i + 1));
+            continue;
+        }
         match serde_json::from_value::<ConsoleAction>(item.clone()) {
             Ok(action) => out.valid.push(action),
             Err(e) => out.malformed.push(format!("action #{}: {e}", i + 1)),
@@ -310,16 +320,14 @@ mod actions_tests {
                  "harness":"coding","skills":["rust"],"mode":"prototype","repos":["agent-platform"],
                  "project":"01P","milestone":"01M","assignee":"engineering"},
                 {"type":"propose_project","title":"新案件","request":"やりたい","repos":["/tmp/x"]},
-                {"type":"add_milestone","project":"01P","title":"次","description":"説明"},
                 {"type":"ask_human","text":"どちらがよいですか"}
             ]}"#,
         );
         assert!(parsed.malformed.is_empty(), "{:?}", parsed.malformed);
-        assert_eq!(parsed.valid.len(), 4);
+        assert_eq!(parsed.valid.len(), 3);
         assert_eq!(parsed.valid[0].kind(), "create_task");
         assert_eq!(parsed.valid[1].kind(), "propose_project");
-        assert_eq!(parsed.valid[2].kind(), "add_milestone");
-        assert_eq!(parsed.valid[3].kind(), "ask_human");
+        assert_eq!(parsed.valid[2].kind(), "ask_human");
         match &parsed.valid[0] {
             ConsoleAction::CreateTask {
                 title,
@@ -330,7 +338,6 @@ mod actions_tests {
                 mode,
                 repos,
                 project,
-                milestone,
                 assignee,
                 ..
             } => {
@@ -342,11 +349,40 @@ mod actions_tests {
                 assert_eq!(mode.as_deref(), Some("prototype"));
                 assert_eq!(repos, &vec!["agent-platform".to_string()]);
                 assert_eq!(project.as_deref(), Some("01P"));
-                assert_eq!(milestone.as_deref(), Some("01M"));
+                // ADR-0079 D13（Phase R5a）: 旧い `"milestone"` は読み飛ばす（action は落とさない）。
                 assert_eq!(assignee.as_deref(), Some("engineering"));
             }
             other => panic!("expected create_task, got {other:?}"),
         }
+    }
+
+    /// ADR-0079 D12（Phase R5a）: `add_milestone` は理由付きで落ち（人に見える）、同じ結果の他の action は生きる。
+    /// `create_task.stages_hint` は人が名指しした段階の名前と範囲をそのまま読む。
+    #[test]
+    fn add_milestone_is_retired_with_a_reason_and_stages_hint_parses() {
+        let parsed = actions_from_result_json(
+            r#"{"summary":"s","actions":[
+                {"type":"add_milestone","project":"01P","title":"次","description":"説明"},
+                {"type":"create_task","title":"browser","objective":"Phase 1〜4","acceptance":["全部"],
+                 "stages_hint":[{"title":"Phase 1","scope":"MVP"},{"title":"Phase 2"}]}
+            ]}"#,
+        );
+        assert_eq!(parsed.malformed.len(), 1);
+        assert!(
+            parsed.malformed[0].starts_with("action #1: add_milestone は廃止（ADR-0079）"),
+            "{:?}",
+            parsed.malformed
+        );
+        assert!(parsed.malformed[0].contains("stages_hint"));
+        assert_eq!(parsed.valid.len(), 1);
+        let ConsoleAction::CreateTask { stages_hint, .. } = &parsed.valid[0] else {
+            panic!("create_task")
+        };
+        assert_eq!(stages_hint.len(), 2);
+        assert_eq!(stages_hint[0].title, "Phase 1");
+        assert_eq!(stages_hint[0].scope, "MVP");
+        assert_eq!(stages_hint[1].title, "Phase 2");
+        assert!(stages_hint[1].scope.is_empty());
     }
 
     /// 省略できるフィールド（`acceptance` / `harness` / `skills` / `mode` / `repos` / `project` /
@@ -365,8 +401,8 @@ mod actions_tests {
                 mode,
                 repos,
                 project,
-                milestone,
                 assignee,
+                stages_hint,
                 ..
             } => {
                 assert!(acceptance.is_empty());
@@ -375,8 +411,8 @@ mod actions_tests {
                 assert!(mode.is_none());
                 assert!(repos.is_empty());
                 assert!(project.is_none());
-                assert!(milestone.is_none());
                 assert!(assignee.is_none());
+                assert!(stages_hint.is_empty());
             }
             other => panic!("expected create_task, got {other:?}"),
         }

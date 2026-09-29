@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CelerisClient } from "~/celeris/client.server";
-import { decideProjectPlan, startProjectPlan } from "~/celeris/projects-admin.server";
+// celeris ADR-0079 D13（Phase R5a）: 案件計画の書き込み（`POST /projects/{id}/plan`・`…/decide`）の中継は外した
+// （celeris が 410）。残るのは凍結した DAG を読むための表示の純粋関数だけ。
+import { describe, expect, it } from "vitest";
 import type { PlanDagNode } from "~/celeris/types";
 import {
   planChangeLabel,
@@ -11,7 +11,6 @@ import {
   planTopologicalOrder,
   projectPlanDecisionValid,
 } from "~/lib/project-plan";
-import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 const node = (key: string, depends_on: string[] = [], over: Partial<PlanDagNode> = {}): PlanDagNode => ({
   key,
@@ -69,66 +68,5 @@ describe("project plan DAG helpers", () => {
     expect(projectPlanDecisionValid("approve", "")).toBe(true);
     expect(projectPlanDecisionValid("reject", "  ")).toBe(false);
     expect(projectPlanDecisionValid("reject", "切り方が違う")).toBe(true);
-  });
-});
-
-let mock: MockCeleris;
-let client: CelerisClient;
-
-beforeEach(async () => {
-  mock = await startMockCeleris();
-  client = new CelerisClient({ baseUrl: mock.baseUrl });
-});
-
-afterEach(async () => {
-  await mock.close();
-});
-
-describe("decideProjectPlan (POST /projects/{id}/project-plan/{version}/decide)", () => {
-  it("approve: version をパスに、decision だけを本文に送る", async () => {
-    mock.on("POST", "/api/v1/projects/p1/project-plan/2/decide", (_req, res, body) => {
-      expect(JSON.parse(body)).toEqual({ decision: "approve" });
-      sendJson(res, 202, { decision: "approve", milestones: ["m1"], plan_task_id: "t-plan", tasks: ["t1"] });
-    });
-    const form = new FormData();
-    form.set("version", "2");
-    form.set("decision", "approve");
-    const result = await decideProjectPlan(client, "p1", form);
-    expect(result).toEqual({
-      ok: true,
-      op: "project_plan_decide",
-      decided: { decision: "approve", milestones: ["m1"], plan_task_id: "t-plan", tasks: ["t1"] },
-    });
-  });
-
-  it("reject: note を送り、422 / 409 はそのまま ActionError にする", async () => {
-    mock.on("POST", "/api/v1/projects/p1/project-plan/1/decide", (_req, res, body) => {
-      expect(JSON.parse(body)).toEqual({ decision: "reject", note: "切り方が違う" });
-      sendProblem(res, { status: 409, code: "project_plan_already_decided", detail: "already decided" });
-    });
-    const form = new FormData();
-    form.set("version", "1");
-    form.set("decision", "reject");
-    form.set("note", "切り方が違う");
-    const result = await decideProjectPlan(client, "p1", form);
-    expect(result).toMatchObject({
-      ok: false,
-      op: "project_plan_decide",
-      error: { status: 409, code: "project_plan_already_decided" },
-    });
-  });
-});
-
-describe("startProjectPlan の mode（案件計画 / 計画の見直し）", () => {
-  it("mode=milestones を送る（replan になるかは celeris が決める）", async () => {
-    mock.on("POST", "/api/v1/projects/p1/plan", (_req, res, body) => {
-      expect(JSON.parse(body)).toEqual({ mode: "milestones", note: "PoC を分けたい" });
-      sendJson(res, 202, { task_id: "01JREPLAN" });
-    });
-    const form = new FormData();
-    form.set("mode", "milestones");
-    form.set("note", "PoC を分けたい");
-    const result = await startProjectPlan(client, "p1", form);
-    expect(result).toEqual({ ok: true, op: "project_plan", accepted: { task_id: "01JREPLAN" } });
   });
 });

@@ -4603,6 +4603,7 @@ tiers = ["cheap", "standard", "frontier"]
         let now = time::OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             id: TaskId::new(),
             parent_id: None,

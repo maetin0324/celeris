@@ -1,7 +1,8 @@
 //! ADR-0044 D6（Phase 55）: 案件・途中目標の **中止・一時停止・アーカイブ**。
 //!
 //! - `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}`
-//! - `POST /milestones/{id}/{cancel|pause|resume}`
+//! - `POST /tasks/{id}/{pause|resume}`（ADR-0079 D13、Phase R5a: task の subtree の一時停止）
+//! - `POST /milestones/{id}/{cancel|pause|resume}` は ADR-0079 D13（Phase R5a）で 410 Gone
 //!
 //! どれも**管理系**（`token_file` 未設定でも 401。ADR-0044 §5 Phase 53 追記「変更を伴う API は
 //! すべて管理系に揃える」）。本文は取らない（`{}` でも空でもよい）。
@@ -17,12 +18,20 @@ use serde::Deserialize;
 use task_ops::lifecycle;
 use time::OffsetDateTime;
 
-use crate::handlers::{
-    ApiResult, Params, json_response, no_query, parse_milestone_id, parse_project_id, read_json,
-};
+use crate::handlers::{ApiResult, Params, json_response, no_query, parse_project_id, read_json};
 use crate::middleware::require_admin;
-use crate::problem::ops_problem;
+use crate::problem::{ApiProblem, ops_problem};
+use crate::query::parse_task_id;
 use crate::state::ApiState;
+
+/// `POST /milestones/{id}/{cancel|pause|resume}` の旧い応答（ADR-0044 D6）。ADR-0079 D13（Phase R5a）で入口は 410 に
+/// なったが、`api-v1.schema.json` と GUI の生成型の互換のために形だけ残す（R5b 以降で外す）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
+pub struct MilestoneLifecycle {
+    pub milestone: task_core::Milestone,
+    #[serde(default)]
+    pub cancelled_tasks: Vec<task_ops::view::TaskRef>,
+}
 
 /// 本文は取らない（`{}` か空）。余計なキーは 422。
 #[derive(Debug, Deserialize)]
@@ -37,14 +46,6 @@ enum ProjectAction {
     Resume,
     Archive,
     Unarchive,
-}
-
-/// 途中目標の 3 つの操作。
-#[derive(Debug, Clone, Copy)]
-enum MilestoneAction {
-    Cancel,
-    Pause,
-    Resume,
 }
 
 async fn project_action(
@@ -84,34 +85,42 @@ async fn project_action(
     Ok(json_response(StatusCode::OK, &result))
 }
 
-async fn milestone_action(
+/// ADR-0079 D13（Phase R5a）: 途中目標の中止・一時停止・再開は 410（中止・一時停止は task の subtree と案件の 2 階層）。
+async fn milestone_action(state: ApiState, headers: HeaderMap) -> ApiResult {
+    require_admin(&state, &headers)?;
+    Err(ApiProblem::gone(
+        crate::milestones::MILESTONE_GONE,
+        "POST /api/v1/tasks/{id}/pause|resume|cancel (the task subtree) or POST /api/v1/projects/{id}/pause|resume|cancel",
+    ))
+}
+
+/// ADR-0079 D13（Phase R5a）: task の subtree の一時停止・再開（`POST /tasks/{id}/pause|resume`）。
+/// 判断は `task_ops::lifecycle::{pause_task, resume_task}`（`ready_tasks` が祖先を辿って止める）。
+async fn task_action(
     state: ApiState,
     headers: HeaderMap,
     raw: Option<String>,
     body: Body,
     id: String,
-    action: MilestoneAction,
+    pause: bool,
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let milestone_id = parse_milestone_id(&id)?;
+    let task_id = parse_task_id(&id)?;
     let EmptyBody {} = read_json(body, true).await?;
-    let trigger = match action {
-        MilestoneAction::Cancel => "milestone_cancel",
-        MilestoneAction::Pause => "milestone_pause",
-        MilestoneAction::Resume => "milestone_resume",
-    };
+    let trigger = if pause { "task_pause" } else { "task_resume" };
     let result = state
         .blocking(move |store| {
-            let outcome = match action {
-                MilestoneAction::Cancel => lifecycle::cancel_milestone(store, milestone_id),
-                MilestoneAction::Pause => lifecycle::pause_milestone(store, milestone_id),
-                MilestoneAction::Resume => lifecycle::resume_milestone(store, milestone_id),
+            let now = OffsetDateTime::now_utc();
+            let outcome = if pause {
+                lifecycle::pause_task(store, task_id, now)
+            } else {
+                lifecycle::resume_task(store, task_id, now)
             };
             outcome.map_err(|e| ops_problem(store, e, Some(trigger)))
         })
         .await?;
-    tracing::info!(who = "admin", op = trigger, milestone_id = %milestone_id, status = %result.milestone.status.as_str(), "admin: milestone lifecycle");
+    tracing::info!(who = "admin", op = trigger, task_id = %task_id, subtree = result.subtree.len(), "admin: task subtree lifecycle");
     Ok(json_response(StatusCode::OK, &result))
 }
 
@@ -130,7 +139,15 @@ macro_rules! project_handler {
 }
 
 macro_rules! milestone_handler {
-    ($name:ident, $action:expr) => {
+    ($name:ident) => {
+        async fn $name(State(state): State<ApiState>, headers: HeaderMap) -> ApiResult {
+            milestone_action(state, headers).await
+        }
+    };
+}
+
+macro_rules! task_handler {
+    ($name:ident, $pause:expr) => {
         async fn $name(
             State(state): State<ApiState>,
             headers: HeaderMap,
@@ -138,7 +155,7 @@ macro_rules! milestone_handler {
             RawQuery(raw): RawQuery,
             body: Body,
         ) -> ApiResult {
-            milestone_action(state, headers, raw, body, id, $action).await
+            task_action(state, headers, raw, body, id, $pause).await
         }
     };
 }
@@ -148,9 +165,11 @@ project_handler!(pause_project, ProjectAction::Pause);
 project_handler!(resume_project, ProjectAction::Resume);
 project_handler!(archive_project, ProjectAction::Archive);
 project_handler!(unarchive_project, ProjectAction::Unarchive);
-milestone_handler!(cancel_milestone, MilestoneAction::Cancel);
-milestone_handler!(pause_milestone, MilestoneAction::Pause);
-milestone_handler!(resume_milestone, MilestoneAction::Resume);
+milestone_handler!(cancel_milestone);
+milestone_handler!(pause_milestone);
+milestone_handler!(resume_milestone);
+task_handler!(pause_task, true);
+task_handler!(resume_task, false);
 
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::post;
@@ -163,4 +182,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route("/api/v1/milestones/{id}/cancel", post(cancel_milestone))
         .route("/api/v1/milestones/{id}/pause", post(pause_milestone))
         .route("/api/v1/milestones/{id}/resume", post(resume_milestone))
+        // ADR-0079 D13（Phase R5a）: task の subtree の一時停止・再開。
+        .route("/api/v1/tasks/{id}/pause", post(pause_task))
+        .route("/api/v1/tasks/{id}/resume", post(resume_task))
 }

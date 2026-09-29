@@ -1589,6 +1589,7 @@ mod tests {
             labels: Vec::new(),
             category: Default::default(),
             tree: None,
+            paused_at: None,
         }
     }
 

@@ -101,7 +101,9 @@ pub struct ApiV1Schema {
     pub milestone_decided: MilestoneDecided,
     /// Phase 55（ADR-0044 D6）: 案件・途中目標の中止・一時停止・アーカイブの応答。
     pub project_lifecycle: task_ops::lifecycle::ProjectLifecycle,
-    pub milestone_lifecycle: task_ops::lifecycle::MilestoneLifecycle,
+    pub milestone_lifecycle: crate::lifecycle::MilestoneLifecycle,
+    /// ADR-0079 D13（Phase R5a）: `POST /tasks/{id}/pause|resume` の応答（task の subtree の一時停止）。
+    pub task_pause: task_ops::lifecycle::TaskPauseResult,
     /// GUI 監査対応 Phase 29（ADR-0033 D4 追記）: 分解を起こす（`POST /projects/{id}/plan`）。
     pub project_plan: ProjectPlanBody,
     pub project_plan_accepted: ProjectPlanAccepted,

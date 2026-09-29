@@ -1371,6 +1371,7 @@ export interface ApiV1Schema {
   task_edit_result: EditResult;
   task_execution: TaskExecutionView;
   task_list: TaskList;
+  task_pause: TaskPauseResult;
   task_routing: TaskRoutingView;
   task_tree: TaskTreeView;
   timeline: Timeline;
@@ -2523,7 +2524,7 @@ export interface MessageMetadata {
  */
 export interface MessageActionResult {
   /**
-   * `create_task` / `propose_project` / `add_milestone` / `ask_human`。
+   * `create_task` / `propose_project` / `ask_human`（旧 `add_milestone` は ADR-0079 D12〈Phase R5a〉で廃止。履歴の行には残る）。
    */
   kind: string;
   milestone_id?: MilestoneId | null;
@@ -3828,6 +3829,13 @@ export interface Task {
   mode?: "prototype" | "production" | "research";
   objective: string;
   parent_id?: TaskId | null;
+  /**
+   * ADR-0079 D13（Phase R5a）: 人がこの task の subtree を一時停止した時刻（`POST /tasks/{id}/pause`）。
+   * `Some` の間、この task と子孫（`parent_id` / `tree.parent_unit` の鎖）は dispatch されない
+   * （`TaskStore::ready_tasks` が祖先を辿って見る。状態機械は触らない）。`resume` で `None` に戻す。
+   * 導入前の task には無い。DB の列は増やさない（`json` 列の中だけ。migration 無し）。
+   */
+  paused_at?: string | null;
   priority: number;
   /**
    * ADR-0033 D2: このタスクが属する案件。導入前のタスク・案件に属さないタスクには無い。
@@ -5340,6 +5348,10 @@ export interface TaskSummary {
    */
   genre?: string | null;
   id: TaskId;
+  /**
+   * ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
+   */
+  is_root_task?: boolean;
   kind: TaskKind;
   /**
    * ADR-0044 D3 の `Task.labels`。
@@ -5352,6 +5364,11 @@ export interface TaskSummary {
    */
   milestone_id?: MilestoneId | null;
   parent_id?: TaskId | null;
+  /**
+   * ADR-0079 D13（Phase R5a）: この task 自身が subtree の一時停止中か（`Task.paused_at` がある。祖先の
+   * 一時停止で止まっているかは `TaskDetail.paused_by`）。
+   */
+  paused?: boolean;
   pending_children: number;
   priority: number;
   /**
@@ -5959,7 +5976,8 @@ export interface Milestone1 {
   updated_at: string;
 }
 /**
- * 途中目標の状態を変えたときの結果。
+ * `POST /milestones/{id}/{cancel|pause|resume}` の旧い応答（ADR-0044 D6）。ADR-0079 D13（Phase R5a）で入口は 410 に
+ * なったが、`api-v1.schema.json` と GUI の生成型の互換のために形だけ残す（R5b 以降で外す）。
  */
 export interface MilestoneLifecycle {
   cancelled_tasks?: TaskRef[];
@@ -6092,6 +6110,12 @@ export interface NewTaskSpec {
    * `assignee` を書かなければ、これとノードの実効 `skills` の重なりで担当が決まる（D5 の matching）。
    */
   skills?: string[];
+  /**
+   * ADR-0079 D12（Phase R5a）: 人が名指しした段階（`[{"title": "Phase 1", "scope": "…"}]`）。
+   * `Task.routing.stages_hint` に写り、root の planner への入力になる（構造の強制ではない）。人（API/CLI）と
+   * CoS（`create_task.stages_hint`）が書ける。省略時は空。
+   */
+  stages_hint?: StageHint[];
   /**
    * ADR-0044 D1: 初期状態。`draft` か `ready` だけ（それ以外は 422）。**省略時は呼び出し側の既定**
    * （`celerisctl add` と委譲・計画の経路は従来どおり `draft`、`POST /tasks` は `ready`。人は Go を出す
@@ -6554,12 +6578,20 @@ export interface ProjectDetail {
   /**
    * ADR-0038 D1 / D4（Phase 41）: 途中目標そのもの（`Milestone` の各フィールドはそのまま）に、
    * 秘書のレビューの返事と提案された次の途中目標を添えたもの。
+   * ADR-0079 D13 / U-R8（Phase R5a）: 途中目標は凍結した履歴で、**既定では空**（`?include_frozen=true` の
+   * ときだけ全行を読み取り専用で返す）。
    */
   milestones: MilestoneView[];
+  /**
+   * ADR-0079 D13（Phase R5a）: この案件の途中目標の行の数（凍結。`milestones` が空でも数える。GUI が
+   * 「以前の途中目標 N 件」を出すため）。
+   */
+  milestones_frozen?: number;
   project: Project;
   /**
    * ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の
    * 提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。
+   * ADR-0079 D13（Phase R5a）: 凍結した履歴なので `?include_frozen=true` のときだけ出る。
    */
   project_plan?: ProjectPlanDagView | null;
   /**
@@ -6882,6 +6914,11 @@ export interface ProjectTaskView {
   conversation: boolean;
   depends_on: TaskId[];
   id: TaskId;
+  /**
+   * ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`: 案件直下・木の子でない・
+   * 対話でも裏方でもない）。案件ページの「root task の一覧」はこれで絞る。
+   */
+  is_root_task?: boolean;
   milestone_id?: MilestoneId | null;
   parent_id?: TaskId | null;
   status: Status;
@@ -7809,7 +7846,16 @@ export interface TaskDetail {
    * ADR-0027 D1: `Task.genre`（`role` と同じ理由で最上位にも出す）。
    */
   genre?: string | null;
+  /**
+   * ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
+   */
+  is_root_task?: boolean;
   latest_question?: string | null;
+  /**
+   * ADR-0079 D13（Phase R5a）: subtree の一時停止でこの task の dispatch を止めている task（自分か、
+   * `paused_at` を持つ一番近い祖先）。止まっていなければ省略。
+   */
+  paused_by?: TaskId | null;
   prior_review: ReviewNote[];
   /**
    * ADR-0044 D3（Phase 53）: `task.priority` を P0〜P3 に丸めたもの（GUI の編集フォーム用）。
@@ -8340,6 +8386,33 @@ export interface TaskList {
   items: TaskSummary[];
   next_cursor?: string | null;
   total: number;
+}
+/**
+ * ADR-0079 D13（Phase R5a）: `POST /tasks/{id}/pause|resume` の応答（task の subtree の一時停止）。
+ */
+export interface TaskPauseResult {
+  /**
+   * 一時停止の時刻（RFC 3339）。`resume` の後は `None`。
+   */
+  paused_at?: string | null;
+  /**
+   * この操作で dispatch が止まる・戻る子孫（非終端のもの。`parent_id` と木の親の鎖。自分は含まない）。
+   */
+  subtree?: TaskRef[];
+  task: TaskRef1;
+}
+/**
+ * 一時停止・再開した task（更新後）。
+ */
+export interface TaskRef1 {
+  /**
+   * 今この状態で許される操作（ADR-0015 D4。GUI は §5.4 の規則を再実装しない）。
+   */
+  actions: Action[];
+  id: TaskId;
+  kind: TaskKind;
+  status: Status;
+  title: string;
 }
 /**
  * ADR-0069 D5: `GET /tasks/{id}/routing`。

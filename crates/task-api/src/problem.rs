@@ -56,6 +56,14 @@ impl ApiProblem {
         self.code
     }
 
+    /// ADR-0079 D13 / U-R6（Phase R5a）: 撤去した入口（案件計画・途中目標の書き込み・`POST /plans`）の 410。
+    /// `type` は `urn:celeris:problem:removed_by_adr_0079`、`adr` と代わりの入口（`instead`）を添える。
+    pub(crate) fn gone(detail: impl Into<String>, instead: &str) -> Self {
+        Self::new(StatusCode::GONE, "removed_by_adr_0079", detail)
+            .with_extra("adr", "ADR-0079")
+            .with_extra("instead", instead)
+    }
+
     pub(crate) fn bad_request(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "bad_request", detail)
     }

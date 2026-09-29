@@ -1232,3 +1232,84 @@ R3a / R3b から持ち越した replay の差）で決めたこと。migration �
     git の作業場所では **b の WU ブランチがどの統合にも merge されない**（成果が Task ブランチに入らない）形になる。直し方の提案: replan の
     `Some(existing)` の枝で `row.phase = wu_spec.phase.clone()`（/2・/3）にし、replay の `apply_replan_step` も同じく `phase` を新しい版に
     する（`seq` は列が書かれないので今のまま）。
+
+## 付記: R5a 実装時の逸脱・明確化（2026-09-29）
+
+R5a（案件計画の撤去、途中目標の凍結、`is_root_task`、subtree の一時停止、CoS の指針、`stages_hint` の書き込み口）で決めたこと。
+**migration は足していない（schema 33 のまま。次の空きは 0034）**。行は 1 つも書き換えない（凍結）。
+
+1. **410 の形**: 撤去した入口は `ApiProblem::gone` の 410（`type: urn:celeris:problem:removed_by_adr_0079`、`code: removed_by_adr_0079`、
+   `adr: "ADR-0079"`、代わりの入口の `instead`）。**本文も id も読まない**（知らない案件・途中目標でも 404 ではなく 410。ULID でない id も 410）。
+   管理系のままなのでトークンが無ければ先に 401。対象: `POST /projects/{id}/plan`（両 mode。detail は D13 の文言）、
+   `POST /projects/{id}/project-plan/{version}/decide`、`POST /projects/{id}/milestones`、`PATCH /milestones/{id}`、
+   `POST /milestones/{id}/{cancel,pause,resume}`、`POST /plans`（U-R6）。**`POST /milestones/{id}/decide`（ADR-0038 の判定）も 410**
+   （D13 の表に無いが、判定 run と `MilestoneReady` をやめるので入口だけ残すと人の `ok` が計画 run〈`kind = plan`〉を起こしてしまう）。
+   `PATCH /projects/{id}` の `auto_advance` は値に関わらず 422（`field: auto_advance`。他の欄と一緒でも全体を拒む）。
+2. **型は schema に残す**: 撤去した入口の要求・応答の型（`ProjectPlanBody` / `ProjectPlanAccepted` / `ProjectPlanDecideBody` /
+   `ProjectPlanDecided` / `MilestoneCreateBody` / `MilestonePatchBody` / `MilestoneDecideBody` / `MilestoneDecided` / `MilestoneLifecycle` /
+   `NewPlanSpec`）は `api-v1.schema.json` から消していない（GUI の生成型と、並行して入る R4b の画面のコードを壊さないため）。
+   `MilestoneLifecycle` は `task_ops::lifecycle` から消したので、同じ形の schema 用の型を `task_api::lifecycle` に置いた。R5b 以降で外す。
+3. **「途中目標の一覧」の既定非表示（U-R8）**: 途中目標を一覧で返す API は `GET /projects/{id}` の `milestones` だけ（`GET /milestones` は
+   存在しない。D13 の「`GET` は履歴として残す」はこれ）。R5a 以降は途中目標の行はどれも書けない（凍結）ので、**凍結 = 全行**とし、
+   `?include_frozen=true` のときだけ全行（と、案件計画の版があれば `project_plan` の DAG）を返す。既定は `milestones: []` と
+   `milestones_frozen`（行の数）。R0 の「21 行が非終端」は本番の読み取りで確かめると**行の総数**で、非終端は agent-platform の 7 行
+   （approved 5・in_progress 1・proposed 1）、pluvio-jp572bat の 4 行はすべて終端（reached 3・redesigned 1）。`GET /tasks?milestone=` と
+   `tasks.milestone_id` はそのまま読める。
+4. **`is_root_task`**: `task_core::is_root_task` = `project_id` あり・`parent_id` なし・木の子でない（`tree.parent_unit` なし。採用で
+   `parent_id` を書き換えない子も除く）・対話でも裏方（`support_kind`）でもない。R4a の `tree_view::is_project_root_task` はこれに一本化した
+   （結果は同じ）。D13 の「execute」は、`kind = plan`（既存の案件の分解 task）・`approval`・`review` を `support_kind` が裏方として除くので
+   別の条件にしていない。`ProjectTaskView` / `TaskSummary` / `TaskDetail` に `is_root_task`。旧 `is_milestone_task` の他の使い道（途中目標の
+   自動作成・Go・inbox の提案の束ね）はこの述語か削除に置き換えた。
+5. **subtree の一時停止の置き場**: `Task.paused_at`（`json` 列の中。migration なし）と `Event::Edited{fields: ["paused_at"], by: "human"}`
+   （新しい Event の型は足していない。replay は状態と attempts しか見ないので差分 0）。**子孫には書かない**: `ready_tasks` が
+   祖先（`parent_id`、無ければ `tree.parent_unit.task_id`。32 段・循環で打ち切り）を辿り、自分か祖先が `paused_at` を持つ、または祖先が
+   止まっている案件（paused / cancelled / archived）に属するなら返さない。一時停止の後に作られた子（計画の unit から daemon が作る子 task・
+   委譲の子）も止まる。`running` の task の並列 WU の 2 本目以降も同じ判定（`TaskStore::halted_by_pause`）で起こさない。
+   **走っている run は終わるまで走る**（ADR-0044 D6 の案件の一時停止と同じ意味。worker を止めたいなら中止）。`reviewing` の最終レビューと人の
+   操作は止めない。対話 task は一時停止できない（409。止まっている案件でも対話を起こす ADR-0044 D6 と同じ理由）。子を個別に `resume` しても
+   祖先が止めていれば止まったまま（子自身は `paused_at` を持たないので 409）。`TaskDetail.paused_by` で止めている task を示す。
+   Action（`Action::Pause` など）は足していない（GUI の押せるかどうかは R4b が `paused` / `paused_by` と 409 で決める）。
+6. **案件の停止は子孫にも効く**: 上の祖先の判定で、`project_id` を持たない子孫も祖先の案件が止まっていれば dispatch されない（以前は
+   `project_id` だけを見ていた）。並列 WU の 2 本目以降も案件の一時停止で起きなくなった（以前は走っている task の 2 本目は起きていた）。
+   案件の中止は従来どおり属する task を `project_cancelled` で中止し、木の子へは R1b の `parent_cancelled` で連鎖する。**案件の中止は
+   非終端の途中目標の行も `cancelled` にする**（凍結の唯一の例外。案件ごと終わるため。本番の非終端 7 行は案件 agent-platform が active の
+   間は動かない）。
+7. **既存の paused / cancelled の途中目標の行**による dispatch の抑止（ADR-0044 D6）は残る（D13。新しく paused にする入口は無い）。
+   Go（`milestones_awaiting_go_locked`）と ADR-0077（`mark_milestone_dispatched` / `auto_reach_done_milestones` と store の
+   `milestones_auto_reach_candidates`）は削除。`task_ops::add` の途中目標の自動作成と store の `create_task_with_milestone`、
+   `project_set_auto_advance` も削除。
+8. **判定 run と通知**: celeris の `milestone_review::schedule`（モジュールごと）・dispatcher の `absorb_milestone_proposal`・
+   `notify::scan_milestone_ready` を削除。`NotificationKind::MilestoneReady` は既存の行を読むためだけに残す。秘書の返事の通知
+   （`secretary_reply`）が「`milestone_id` を持つ task の返事は `milestone_ready` が知らせる」として黙っていたのをやめた（知らせる側が無い）。
+   dispatcher の案件計画 run の取り込み（`finish_project_plan_run`）も削除: 残っていた案件計画 run が review を通っても Plan kind の
+   「計画が読めない」と同じ `ReviewFail` になり、提案は作られない（本番の案件計画 run は 1 件で `failed`）。
+9. **読み取りとして残したもの**（R5b / R6 の回収で外す）: `task_ops::project_plan::{plan_state, dag_view}`（凍結した DAG を
+   `include_frozen=true` で読む）、`task_ops::milestone_review::{find, latest_proposal, review_state}`（案件ページと Console）、既存の
+   レビューの対話 task のための `run_extras` の途中目標の文脈、worker の案件計画 run のプロンプト（`claude_code.rs`。作る入口が無い）、
+   `task_core::project_plan` の型、inbox の未決の提案の束ね（本番は 0 件）。gate の「未決の案件計画の draft は個別に accept させない」は
+   外した（一括の決定が 410 なので、残っていても取り残さない）。
+10. **CoS（D12）**: preamble の `actions_instructions` と秘書の対話の節を書き換えた（1 依頼 = 1 `create_task`、大きさ・段階の数を判断しない、
+    範囲を狭めない〈Phase 1〜4 はすべて書く〉、人が名指しした段階だけ `stages_hint`、独立な依頼は 2 つ・依存するなら 1 つ、`project` は既存の
+    方向から・`propose_project` は新しい方向を名指ししたときだけ、`pause_after` は人が頼んだときだけ、途中目標は作らない）。
+    `execution: compound` のヒントの説明と「1 時間以内なら 1 つ」の目安を消した（`execution` 欄は互換のため読む）。
+    **ADR-0063 Phase 109c A の「調査の対象が 5 を超えたら対象ごとにタスクを分ける」は D12 と矛盾するので**「依頼が 1 つなら `create_task` は
+    1 つのまま、対象ごとの分割は planner」に書き換えた（受け入れ条件の書き方〈対象ごと・「未確認」〉の案内は残す）。
+11. **`add_milestone` と `create_task.milestone`**: `ConsoleAction::AddMilestone` を型から外し、`task_worker::result_report` が
+    `type: "add_milestone"` を `malformed` に「add_milestone は廃止（ADR-0079）: 途中目標は root task の段階で表す。依頼は create_task 1 つにし、
+    人が名指しした段階は create_task.stages_hint に書く」（`ADD_MILESTONE_RETIRED`）で落とす（`ActionsOutcome.failed` の kind は既存の
+    malformed と同じ `unknown`。対話の返事の「実行できなかった action」に出て人に見える。同じ結果の他の action は実行される）。
+    **`create_task.milestone` も外した**（CoS には途中目標を見せないので書けない値。旧い結果ファイルの `"milestone"` は未知の欄として読み飛ばし、
+    action は落とさない。`stages_hint` を足すと `clippy::large_enum_variant` に掛かったのもある）。CoS の文脈 `active_projects[].milestones` は
+    常に空（protocol の欄は互換のため残す）。
+12. **`stages_hint` の書き込み口**: `NewTaskSpec.stages_hint`（`POST /tasks`・`celerisctl add` の JSON）と CoS の `create_task.stages_hint`。
+    `Task.routing.stages_hint` にそのまま写る（人でも CoS でも同じ。出自は `routing` の他の欄が持つ）。形の検証だけ（16 件まで、`title` は
+    空白以外の 1〜120 文字、`scope` は 2,000 文字まで。違反は 422。CoS なら action が理由付きで落ちる）。`retry` の複製は `routing` ごと
+    引き継ぐ既存の規則のままなので、`stages_hint` も引き継ぐ。
+13. **CLI**: `celerisctl projects plan approve|reject` を削除。**`celerisctl plan`（DB に直接 `kind = plan` を作る運用の道具）は残した**
+    （U-R6 は HTTP の `POST /plans`。一本化するかは人の判断。R5b の未解決に書く）。
+14. **GUI（R4b と並行のため最小）**: `projects-admin.server.ts` の撤去した API の中継（`createMilestone` / `patchMilestoneStatus` /
+    `decideMilestone` / `decideProjectPlan` / `startProjectPlan` / `cancelMilestone` / `pauseMilestone` / `resumeMilestone`）と
+    `projects.$id.tsx` の action の対応する `intent` を外した（来れば 400 `unknown intent`）。画面は変えていない（R4b が案件計画の UI を隠す）。
+    案件ページの loader は `include_frozen` を付けないので、凍結した途中目標は既定で出ない（U-R8）。R4b の「以前の途中目標（読み取り専用）」は
+    `?include_frozen=true` で読むこと（件数は `milestones_frozen`）。`/plans/new`（`POST /plans` の画面）は nav・help と並んでいて R4b と
+    衝突しやすいので残した（celeris の 410 の文言がそのまま出る）。R5b で外す。

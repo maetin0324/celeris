@@ -2011,7 +2011,7 @@
       "description": "`run.context`。未知フィールドは無視する（前方互換）。",
       "properties": {
         "active_projects": {
-          "description": "ADR-0048 D3: **CoS の対話 run** にだけ渡す、進行中の案件（`proposed` / `active`）とその\n途中目標の一覧。`actions` の `create_task.project` / `add_milestone.project` を選ぶ材料\n（決定的にストアを読むだけ。CoS 以外の run では常に空）。",
+          "description": "ADR-0048 D3: **CoS の対話 run** にだけ渡す、進行中の案件（`proposed` / `active`）とその\n途中目標の一覧。`actions` の `create_task.project` を選ぶ材料（ADR-0079 D12〈Phase R5a〉: `milestones` は常に空）\n（決定的にストアを読むだけ。CoS 以外の run では常に空）。",
           "items": {
             "$ref": "#/$defs/ActiveProjectContext"
           },
@@ -2511,6 +2511,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "paused_at": {
+          "description": "ADR-0079 D13（Phase R5a）: 人がこの task の subtree を一時停止した時刻（`POST /tasks/{id}/pause`）。\n`Some` の間、この task と子孫（`parent_id` / `tree.parent_unit` の鎖）は dispatch されない\n（`TaskStore::ready_tasks` が祖先を辿って見る。状態機械は触らない）。`resume` で `None` に戻す。\n導入前の task には無い。DB の列は増やさない（`json` 列の中だけ。migration 無し）。",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "priority": {

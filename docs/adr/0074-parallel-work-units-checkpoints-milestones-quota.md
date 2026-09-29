@@ -10,6 +10,7 @@
     repair の分類、成果物の登録）着手・完了、2026-09-26。Phase F3 の quota 側（(g)〜(k)）着手・完了、
     2026-09-26。Phase F2（WU の並列。(a)(b) と (c)〜(l)）着手・完了、2026-09-26（F2b）。F3 の途中確認（(a)〜(f)）
     着手・完了、2026-09-27。F4a / F4b 完了、2026-09-27。F5-1 dogfood 1〜4 回目と F5-fix〜F5-fix5、2026-09-26〜28
+- **Superseded in part by ADR-0079（R0 で決定、Phase R5a で撤去, 2026-09-29）**: D3（案件計画・マイルストーン Task・Go・`auto_advance`・案件 replan・DAG・D3.8 の自動作成）は廃止。`POST /projects/{id}/plan` / `…/project-plan/{version}/decide` は 410、`auto_advance` の書き込みは 422。D1（工程と統合）・D2（途中確認）は再帰の各段で維持。
 - 関連:
   - ADR-0072（Task / ExecutionPlan / WorkUnit / Run。本 ADR はその D6 の直列規則・D13・D14・D16・D17・D18・D19・D21・D22 と §7 U3 / U4 を改める）
   - `docs/execution-decomposition-report-2026-09-25.md`（E6 dogfood の分析。以下「E6 報告」）

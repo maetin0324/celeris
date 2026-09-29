@@ -484,8 +484,8 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     .await;
     assert_problem(&resp, 422, "validation");
 
-    // 途中目標。`seq` は案件ごとの通し番号。
-    let first = send(
+    // ADR-0079 D13（Phase R5a）: 途中目標の作成は 410（途中目標は root task の段階で表す）。
+    let resp = send(
         &app,
         p(
             &format!("/api/v1/projects/{project_id}/milestones"),
@@ -493,22 +493,21 @@ async fn projects_and_milestones_round_trip_through_the_api() {
         ),
     )
     .await;
-    assert_eq!(first.status.as_u16(), 201, "{}", first.text());
-    assert_eq!(first.json()["seq"], 1);
-    assert_eq!(first.json()["status"], "proposed");
-    let second = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/milestones"),
-            &json!({"title": "小さな検証", "description": "1 日で回る規模", "status": "approved"}),
-        ),
-    )
-    .await;
-    assert_eq!(second.json()["seq"], 2);
-    assert_eq!(second.json()["status"], "approved");
-    let milestone_id = second.json()["id"].as_str().expect("id").to_string();
+    assert_problem(&resp, 410, "removed_by_adr_0079");
+    // 凍結した既存の行の代わり（store で作る）。
+    let milestone_id = env
+        .store
+        .milestone_create(
+            project_id.parse().expect("project id"),
+            "小さな検証",
+            "1 日で回る規模",
+            task_core::MilestoneStatus::Approved,
+        )
+        .expect("milestone")
+        .id
+        .to_string();
 
-    // 案件の状態変更と、途中目標の状態変更（SPEC §7 のアジャイル）。
+    // 案件の状態変更。途中目標の状態変更は 410（ADR-0079 D13）。
     let resp = send(
         &app,
         pa(
@@ -527,8 +526,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
         ),
     )
     .await;
-    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
-    assert_eq!(resp.json()["status"], "reached");
+    assert_problem(&resp, 410, "removed_by_adr_0079");
 
     // 未知の状態は 400（本文の解析で落ちる）。
     let resp = send(
@@ -553,6 +551,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
         404,
         "project_not_found",
     );
+    // 途中目標の書き込みは id を見ずに 410。
     assert_problem(
         &send(
             &app,
@@ -562,8 +561,8 @@ async fn projects_and_milestones_round_trip_through_the_api() {
             ),
         )
         .await,
-        404,
-        "project_not_found",
+        410,
+        "removed_by_adr_0079",
     );
     assert_problem(
         &send(
@@ -574,8 +573,8 @@ async fn projects_and_milestones_round_trip_through_the_api() {
             ),
         )
         .await,
-        404,
-        "milestone_not_found",
+        410,
+        "removed_by_adr_0079",
     );
 }
 
@@ -771,16 +770,18 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
     .await
     .json();
     let project_id = project["id"].as_str().expect("id").to_string();
-    let milestone: Value = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/milestones"),
-            &json!({"title": "m1"}),
-        ),
-    )
-    .await
-    .json();
-    let milestone_id = milestone["id"].as_str().expect("id").to_string();
+    // ADR-0079 D13（Phase R5a）: 途中目標は作れない（410）ので、凍結した既存の行の代わりに store で作る。
+    let milestone_id = env
+        .store
+        .milestone_create(
+            project_id.parse().expect("project id"),
+            "m1",
+            "",
+            task_core::MilestoneStatus::Proposed,
+        )
+        .expect("milestone")
+        .id
+        .to_string();
 
     // ADR-0033 D2: `POST /tasks` は project_id / milestone_id / assignee を任意で受ける。
     let parent: Value = send(
@@ -842,7 +843,19 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
         "bad_request",
     );
 
-    let resp = send(&app, g(&format!("/api/v1/projects/{project_id}"))).await;
+    // ADR-0079 D13 / U-R8（Phase R5a）: 途中目標は既定で隠れる（件数は `milestones_frozen`）。
+    let hidden = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    assert_eq!(hidden["milestones"], json!([]));
+    assert_eq!(hidden["milestones_frozen"], 1);
+    let resp = send(
+        &app,
+        g(&format!(
+            "/api/v1/projects/{project_id}?include_frozen=true"
+        )),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let detail = resp.json();
     assert_eq!(detail["project"]["id"], Value::String(project_id));

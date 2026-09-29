@@ -263,6 +263,7 @@ fn conversation_task(
     let id = TaskId::new();
     Task {
         tree: None,
+        paused_at: None,
         routing: None,
         repos: Vec::new(),
         id,

@@ -380,7 +380,8 @@ async fn malformed_and_unknown_fields_are_bad_requests() {
         &json!({"goal": "g", "tier": "cheap", "color": "red"}),
         &headers,
     );
-    assert_problem(&send(&app, plan_unknown).await, 400, "bad_request");
+    // ADR-0079 U-R6（Phase R5a）: `POST /plans` は本文を読まずに 410。
+    assert_problem(&send(&app, plan_unknown).await, 410, "removed_by_adr_0079");
     let replay_unknown = post_json_with("/api/v1/replay", &json!({"dry_run": true}), &headers);
     assert_problem(&send(&app, replay_unknown).await, 400, "bad_request");
     assert!(env.store.list(None).expect("list").is_empty());

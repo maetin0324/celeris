@@ -105,6 +105,7 @@ pub fn retry_task_with_execution(
     });
     let new_task = Task {
         tree: None,
+        paused_at: None,
         routing,
         // ADR-0043 D2: やり直しは元のタスクと同じリポジトリで作業する。
         repos: original.repos.clone(),
@@ -206,6 +207,7 @@ mod tests {
             features: None,
             execution: None,
             pause_after: None,
+            stages_hint: Vec::new(),
             provenance: crate::add::SpecProvenance::default(),
         }
     }
@@ -236,6 +238,7 @@ mod tests {
         let t = now();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

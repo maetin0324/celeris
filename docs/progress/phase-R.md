@@ -1147,3 +1147,10 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   いたため task は **failed**（人に聞かず終端。R6 項目「max_replans 超過時の人の要求」と同根）。ブランチ `celeris/01M3MS2J…` は docs のみ 6 ファイル
   +951（ADR-0081 web SPA frontend、docs/web/feature-parity.md、docs/web/implementation-plan.md、ADR-0002 の supersede 注記、PROGRESS.md）で内容は完成して
   いたので人（Fable）が main に統合（docs 差分のみ、非 docs ファイルなし）。教訓: planner の repair WU の check は自己言及に弱い（否定 grep）。
+- 20:09Z 人「task が ready で止まりまくる」: 原因は枠の取り合い。全体 `max_concurrency = 3`（claude-pool 2 + codex-pool 1）を、18:22 起票の
+  「Celeris コードベースの構造リファクタリング」（compound、WU 24）が `max_parallel_work_units = 3` の並列葉で全部占有し、木の task 4 つが枠待ち。
+  ディスパッチャに task 間の公平性が無い（**R6 項目**: round-robin と task ごとの同時数を全体枠 − 1 以下に）。runs 索引に旧 phase-3 子の reviewer run が
+  `running` のまま残る不整合も（回収）。
+- 20:14Z 人の指示「chatgpt / claude ともアカウントごとに 2 run、全体 6」: config を Fable が変更（backup `config.toml.bak-20260929-2020`）:
+  `max_concurrency = 6`、claude-pool `concurrency = 4`（lab / personal × 2）、codex-pool `concurrency = 2`（chatgpt_plus_personal × 2）、
+  `[accounts] max_runs_per_account` は既定 2 のまま。`POST /reload` でプールは 4 / 2 に反映済み。`max_concurrency` は起動時固定なので再起動が要る（人）。

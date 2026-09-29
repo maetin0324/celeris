@@ -619,6 +619,9 @@ pub struct ExecutionMetricsTaskRow {
     pub has_quota_events: bool,
 }
 
+/// タスクとその `events_for`（`seq`, event）の組。`TaskStore::tasks_with_events` の要素。
+pub type TaskWithEvents = (Task, Vec<(u64, Event)>);
+
 /// ADR-0033 D3: 報告（`reports`）の読み書きは `crate::report::ReportStore` にあり、`TaskStore` はそれを
 /// supertrait として要求する（ディスパッチャの `Arc<dyn TaskStore>` から報告を追記できるようにするため。
 /// 実装は `report.rs` にあり、この表の SQL はここには無い）。
@@ -654,6 +657,18 @@ pub trait TaskStore:
     /// 異なるタスクのイベント同士の前後関係を比較してよい（`events_for` の `seq` はタスクごとにローカルなので
     /// 比較できない）。
     fn events_for_with_global_ids(&self, task_id: TaskId) -> Result<Vec<(u64, Event)>, StoreError>;
+    /// 全タスクとそれぞれの `events_for` を**同じ読み取りスナップショット**で返す（`replay` 用）。
+    /// `list` と `events_for` を別々に呼ぶと、その間に稼働中の daemon が状態遷移（例: Ready→Running の
+    /// lease 取得）を書き込み、「古い tasks 行 × 新しい events」を突き合わせた偽の不一致になる。
+    fn tasks_with_events(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+        let tasks = self.list(None)?;
+        let mut out = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let events = self.events_for(task.id)?;
+            out.push((task, events));
+        }
+        Ok(out)
+    }
     /// 排他的にリースを取得する。成功したら true を返し、task の status を Running にし、
     /// lease = Some{worker_run_id, expires_at: now + ttl} をDBに書く。
     /// 既にリースされている／status != Ready の場合は false を返す（エラーではない）。
@@ -3688,6 +3703,42 @@ impl TaskStore for SqliteStore {
                 events.push((seq as u64, event));
             }
             Ok(events)
+        })
+    }
+
+    fn tasks_with_events(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+        self.with_read_conn(|conn| {
+            // 1 つの読み取りトランザクション（WAL のスナップショット）で tasks と events を読む。
+            let tx = conn.unchecked_transaction()?;
+            let mut tasks = Vec::new();
+            {
+                let mut stmt = tx.prepare("SELECT json FROM tasks")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    tasks.push(Self::row_to_task(row?)?);
+                }
+            }
+            let mut out = Vec::with_capacity(tasks.len());
+            {
+                let mut stmt =
+                    tx.prepare("SELECT seq, json FROM events WHERE task_id = ?1 ORDER BY seq ASC")?;
+                for task in tasks {
+                    let rows = stmt.query_map(params![task.id.to_string()], |row| {
+                        let seq: i64 = row.get(0)?;
+                        let json: String = row.get(1)?;
+                        Ok((seq, json))
+                    })?;
+                    let mut events = Vec::new();
+                    for row in rows {
+                        let (seq, json) = row?;
+                        let event: Event = serde_json::from_str(&json)?;
+                        events.push((seq as u64, event));
+                    }
+                    out.push((task, events));
+                }
+            }
+            tx.finish()?;
+            Ok(out)
         })
     }
 

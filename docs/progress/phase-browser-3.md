@@ -28,3 +28,8 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 - **agent-browser 0.38.1 の `--restore` / `--state` / `--profile` は使わない**。0.38.1 の restore は origin 単位の絞り込みが無いと仮定しており（未検証）、allowlist を解除して対応することはしない。復元は broker が run 開始前に行う別経路とし、配線（P4-A の後）の前に固定 version 上の負例で確かめる（ADR-0083 D4）。
 - `api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values` の replay 不一致が高負荷時に一度出た。単独・再実行では通る。タイミング依存の疑い。
 - GUI の検査（pnpm）は各 WorkUnit（gui-live・gui-ctl）で実行済み。本 WorkUnit では再実行していない。
+
+## fix-replay: e2e `replay` の不一致（Running vs Ready）
+
+- 原因: Phase 3 の状態遷移の退行ではなく、`task_ops::replay` の**非原子的な読み取り**。`store.list(None)` で tasks を読んだ後、タスクごとに別の読み取りで `events_for` を読んでいたため、daemon 稼働中に呼ぶ試験（`api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values`）で、その間に daemon が lease を取る（Ready→Running の `Transitioned` を書く）と「古い tasks 行（Ready）× 新しい events（Running）」を突き合わせて偽の MISMATCH を出した。Phase 3 の e2e 追加で負荷とタスク数が増え、窓に当たりやすくなった。
+- 修正: `TaskStore::tasks_with_events` を追加し、`SqliteStore` では tasks と events を 1 つの読み取りトランザクション（WAL スナップショット）で読む。`replay` はこれを使う。sleep・リトライ・`#[ignore]` は使っていない。

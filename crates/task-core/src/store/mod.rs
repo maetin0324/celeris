@@ -68,8 +68,10 @@ use crate::repos::{RepoError, RepoKind};
 use crate::transition::{InvalidTransition, Trigger};
 
 mod approvals;
+mod cluster;
 mod events;
 mod execution;
+mod instances;
 mod integrations;
 mod messages;
 mod migrations;
@@ -81,7 +83,6 @@ mod task_store;
 mod task_store_impl;
 mod tasks;
 mod transition;
-mod tree;
 
 pub use migrations::SCHEMA_VERSION;
 #[cfg(test)]

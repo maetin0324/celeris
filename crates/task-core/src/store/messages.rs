@@ -1,10 +1,11 @@
-use rusqlite::{params, params_from_iter};
+use rusqlite::{OptionalExtension, TransactionBehavior, params, params_from_iter};
 use time::OffsetDateTime;
 
 use crate::comment::{CommentAuthorKind, TaskComment};
 use crate::message::{Message, MessageId, MessageRole};
-use crate::model::TaskId;
+use crate::model::{Event, TaskId};
 use crate::org::ProjectId;
+use crate::transition::{Outcome, Trigger};
 
 use super::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 
@@ -211,5 +212,70 @@ impl SqliteStore {
             params![run_id, task_id.to_string(), format_rfc3339(now)?],
         )?;
         Ok(affected == 1)
+    }
+
+    pub(super) fn comment_add_impl(
+        &self,
+        comment: &TaskComment,
+        transition: Option<(Trigger, Vec<Event>)>,
+    ) -> Result<Option<Outcome>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT 1 FROM tasks WHERE id = ?1",
+                params![comment.task_id.to_string()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(StoreError::Invalid(format!(
+                "task not found: {}",
+                comment.task_id
+            )));
+        }
+        tx.execute(
+            "INSERT INTO task_comments (id, task_id, author_kind, author, body, run_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                comment.id.to_string(),
+                comment.task_id.to_string(),
+                comment.author_kind.as_str(),
+                comment.author.clone(),
+                comment.body,
+                comment.run_id.clone(),
+                format_rfc3339(comment.created_at)?,
+            ],
+        )?;
+        let outcome = match transition {
+            Some((trigger, extra_events)) => Some(Self::apply_transition_tx(
+                &tx,
+                comment.task_id,
+                trigger,
+                extra_events,
+            )?),
+            None => None,
+        };
+        tx.commit()?;
+        Ok(outcome)
+    }
+
+    pub(super) fn comments_for_impl(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<TaskComment>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, task_id, author_kind, author, body, run_id, created_at FROM task_comments \
+                 WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
+            )?;
+            let rows = stmt.query_map(params![task_id.to_string()], Self::comment_row)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row??);
+            }
+            Ok(out)
+        })
     }
 }

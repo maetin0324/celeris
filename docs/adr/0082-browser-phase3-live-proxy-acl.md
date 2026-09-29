@@ -5,7 +5,7 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 ---
 
 - 日付: 2026-09-29
-- 状態: **Accepted（ACL 判定・再接続計画・記録の規則の純粋関数だけ）。WS の中継・task-api・GUI への配線は未実装**
+- 状態: **Accepted・実装済み（2026-09-29）**。ACL・再接続計画・scrub（task-core）、live event の保存（store）、task/run 単位 grant と event の読み書き（task-api）、worker の live emitter、GUI relay（task-api 経由の認可と永続 event の WS 配信）。e2e `phase3_live_grant_is_task_scoped_scrubbed_and_reconnects_from_last_seen`
 - 関連: [ADR-0078](0078-browser-execution-capability.md) D8 P3-B、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H3・D3・D6、[ADR-0081](0081-browser-phase3-control-lease.md)、人の決定 H4（task 別 ACL の proxy を先行）
 
 ## 範囲
@@ -29,5 +29,5 @@ P3-A（Browser Identity）の契約は含めない。別の ADR で決める。
 
 ## 未実装（後続）
 
-- WS の実際の中継・切断/再接続の試験、task-api の経路、event の store への保存、GUI。
-- 認証 task の表示は P2-C の観測制御の配線が要る。それまでは 4 の拒否が安全側の動作である。
+- 実装済み: WS の中継（GUI relay）、task-api の経路、event の store への保存、`last_seen` からの再接続、他 task の拒否、cookie/token の scrub。
+- 残り: 認証 task の表示は引き続き D2-4 の拒否（観測停止）が安全側の動作。実 browser を相手にした長時間の切断・再接続試験。

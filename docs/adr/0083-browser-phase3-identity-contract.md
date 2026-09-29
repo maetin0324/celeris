@@ -5,7 +5,7 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 ---
 
 - 日付: 2026-09-29
-- 状態: **Accepted（束縛・期限・失効・混入拒否の純粋関数だけ）。封緘（AEAD）・保存・worker への配線は未実装。利用は P4-A の後**
+- 状態: **Accepted・保管側を実装（2026-09-29）**。束縛・期限・失効・混入拒否（task-core）、credentiald の project+origin 鍵による封緘と削除時の鍵消去、store の metadata、登録・一覧・失効・削除の API と GUI。**利用（session への復元）は未実装で P4-A の後**。trusted local の復元は `isolation_required` で拒否（e2e `phase3_identity_register_revoke_delete_and_trusted_local_restore_denied`）
 - 関連: [ADR-0078](0078-browser-execution-capability.md) D8 P3-A、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H1・H3・H6、[ADR-0081](0081-browser-phase3-control-lease.md)、[ADR-0082](0082-browser-phase3-live-proxy-acl.md)、人の決定 H5（需要が確認された project+origin に限り期限付き identity）
 
 ## 範囲
@@ -39,6 +39,7 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 
 ## 未実装（後続）
 
-- 封緘の実体（celeris-credentiald の chacha20poly1305 で `key_label`・`aad` を使う）、保存、削除時の鍵の消去。
-- 登録・失効・削除の API と GUI、期限切れの掃除。
-- worker の browser 実行への配線（P4-A の後）。
+- 実装済み: 封緘の実体（celeris-credentiald、XChaCha20Poly1305、`key_label`・`aad` で project+origin に束縛）、保存、削除時の鍵の消去、登録・失効・削除の API と GUI。
+- 残り（後続 P4-A）: worker の browser 実行への復元の配線。`Isolated` の session は P4-A まで作らない（D3）。
+- 残り: agent-browser 0.38.1 の restore は使わない（D4）。origin 単位の絞り込みが無いという仮定は未検証で、復元を配線する前に固定 version 上の負例で確かめる。allowlist の解除では対応しない。
+- 残り: 期限切れの掃除の定期実行。

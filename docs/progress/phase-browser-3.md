@@ -1,34 +1,30 @@
-# Phase browser-3: Browser Identity・live proxy・takeover（途中）
+# Phase browser-3: Browser Identity・live proxy・takeover
 
 ---
 tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 ---
 
-- 状態: **途中**。3 行とも task-core の純粋関数（規則と判定）と ADR だけ。task-api・worker・store・GUI への配線は無い。
-- 更新: 2026-09-29
+- 状態: **P3-B・P3-C は「単独の成果・検査」を満たした。P3-A は保管・期限・削除・失効・混入拒否まで満たし、利用（session への復元）は P4-A の後**。本番未昇格。
+- 更新: 2026-09-29（HEAD 17e0777 + docs）
+- ADR: [0081](../adr/0081-browser-phase3-control-lease.md)（制御 lease）/ [0082](../adr/0082-browser-phase3-live-proxy-acl.md)（live proxy ACL）/ [0083](../adr/0083-browser-phase3-identity-contract.md)（identity 契約）
 
-| ID | 入ったもの | 無いもの（後続） |
-|---|---|---|
-| P3-A Browser Identity | ADR-0083、`crates/task-core/src/browser_identity.rs`（project+origin の束縛、期限 既定 7 日 / 上限 30 日、失効で世代を上げる、削除、他 identity・他 origin の混入拒否、隔離の無い session への利用拒否）、単体試験 10 件 | 封緘の実体（AEAD）・保存・鍵の消去、API/GUI、0.38.1 の restore の負例。利用は P4-A（隔離）の後 |
-| P3-B live proxy | ADR-0082、`browser_live.rs`（task/run ACL、本人の session だけ、grant 60 秒、認証区間の観測停止、再接続計画、永続 event の scrub）、単体試験 11 件 | WS の中継と接続/再接続の試験、task-api の経路、event の保存、GUI |
-| P3-C takeover | ADR-0081、`browser_control.rs`（pause 収束、controller lease の排他、takeover/resume/stop、切断・競合・二重 action）、単体試験 10 件 | 制御 API、worker・task cancel への配線、状態の永続化、実際の WS 切断の試験、GUI |
+## 行ごとの成果と検査
 
-## 証拠
+| ID | 単独の成果・検査 | 入ったもの | 検査（コマンド → 結果） | 判定 |
+|---|---|---|---|---|
+| P3-A Browser Identity | project/origin 単位の暗号化・期限/削除/失効、他 identity 混入拒否 | task-core `browser_identity.rs`（束縛・期限 既定 7 日/上限 30 日・失効で世代を上げる・混入拒否）、credentiald の project+origin 鍵による XChaCha20Poly1305 封緘（AAD に束縛）と削除時の鍵消去（e168f57）、store の identity metadata（4a53db3、schema 34）、task-api の登録/一覧/失効/削除（5e900e8・40e742f・8940ad3）、GUI の一覧・失効・削除（a45159a） | `cargo test -p e2e --test api_scenarios phase3_` → exit 0、3 passed（`phase3_identity_register_revoke_delete_and_trusted_local_restore_denied` を含む）。`cargo test -p celeris-credentiald identity` → exit 0、8 passed。`cargo test -p task-core --lib browser_identity` → exit 0、10 passed（前回記録） | 保管側は満たす。**利用（復元）は未実装・後続 P4-A**。trusted local での復元は `isolation_required` で拒否することを e2e で確認 |
+| P3-B live proxy | task/run ACL、WS 接続/再接続、frame/status/tabs/url/console と永続 event、他 task 拒否、cookie/token 非記録 | task-core `browser_live.rs`、store の live event（4a53db3）、task-api の task/run 単位 live grant と event 書き込み・`last_seen` からの再接続読み出し（fde7e38）、worker の live emitter・認証区間の送出停止（d5aefa5・96fce7b）、GUI relay の task-api 経由認可と永続 event の WS 配信（b7ec98d・f2d5a1c） | `cargo test -p e2e --test api_scenarios phase3_` → exit 0、3 passed（`phase3_live_grant_is_task_scoped_scrubbed_and_reconnects_from_last_seen`: 他 task の grant 拒否、cookie/token の scrub、last_seen からの再接続）。`cargo test -p task-api browser_` → exit 0、11+1+1 passed | 満たす |
+| P3-C takeover | pause 収束・controller lease 排他・takeover/resume/stop、切断・競合・二重 action 試験 | task-core `browser_control.rs`、store の control 状態と `stop_task`（ec83529）、task-api の pause/takeover/renew/resume/stop と task cancel の同期（6f18bb1・3be95ac）、worker の control gate（human control 中は agent の操作を止める・stop で閉じる、d5aefa5・96fce7b）、GUI の takeover/resume/stop 導線（a45159a） | `cargo test -p e2e --test api_scenarios phase3_` → exit 0、3 passed（`phase3_control_converges_rejects_competition_and_cancel_stops`: pause 収束、他 controller の拒否、古い version の `VersionConflict`、同じ idempotency key の二重 action、task cancel で `Stopped`） | 満たす |
 
-- `cargo test -p task-core --lib browser_` → exit 0、42 passed
-- `cargo test -p task-core --lib browser_identity` → exit 0、10 passed
-- `cargo clippy -p task-core --all-targets -- -D warnings` → exit 0
-- `cargo test --workspace`（2026-09-29、Run #5、HEAD 454a922 + docs）→ exit 0、2890 passed / 0 failed / 7 ignored（`test result: ok` 95 行）
-- `cargo clippy --workspace -- -D warnings`（同）→ exit 0、warning 0
+## ワークスペース全体の検査（2026-09-29）
 
-## 行ごとの判定（2026-09-29）
+- `cargo test --workspace` → 1 回目 exit 101（`api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values` が `celerisctl replay` の `status replayed=Running stored=Ready` で 1 件失敗。Phase 3 の試験ではない）。同じ試験の単独再実行 `cargo test -p e2e --test api_scenarios api_enforces_token` → exit 0、1 passed。
+- `cargo test --workspace --no-fail-fast`（再実行）→ **exit 0、2929 passed / 0 failed / 7 ignored**（`test result` 108 行）。
+- `cargo clippy --workspace -- -D warnings` → **exit 0**、warning 0。
 
-- P3-A: 「project/origin 単位の暗号化・期限/削除/失効、他 identity 混入拒否」のうち、期限・削除・失効・混入拒否は規則と単体試験まで。**暗号化の実体は未実装**。利用（worker の session への復元）は P4-A の隔離が要るので Phase 4 の後（ADR-0083 D3）。
-- P3-B: 「task/run ACL、他 task 拒否、cookie/token 非記録」は規則と単体試験まで。**WS 接続/再接続と永続 event の保存は未実装**。
-- P3-C: 「pause 収束・lease 排他・takeover/resume/stop、切断・競合・二重 action」は状態機械の単体試験まで。**API・worker・cancel への配線と実際の切断の試験は未実装**。
-- 3 行とも「単独の成果・検査」をまだ満たしていない。配線は子 task に分けて提案した（P3-B → P3-C → P3-A 封緘 → GUI の順）。
+## 未解決・後続
 
-## 未解決
-
-- 0.38.1 の restore の挙動は未検証（ADR-0083 D4 の仮定）。
-- browser_identity / browser_live / browser_control を呼ぶ側がまだ無い。
+- **P3-A の利用（browser session への identity の復元）は P4-A（container / 別 UID / egress 制限）の後**。`Isolation::Isolated` を名乗れる経路は P4-A まで作らない（ADR-0083 D3）。Phase 3 の復元 API は常に `isolation_required` を返す。
+- **agent-browser 0.38.1 の `--restore` / `--state` / `--profile` は使わない**。0.38.1 の restore は origin 単位の絞り込みが無いと仮定しており（未検証）、allowlist を解除して対応することはしない。復元は broker が run 開始前に行う別経路とし、配線（P4-A の後）の前に固定 version 上の負例で確かめる（ADR-0083 D4）。
+- `api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values` の replay 不一致が高負荷時に一度出た。単独・再実行では通る。タイミング依存の疑い。
+- GUI の検査（pnpm）は各 WorkUnit（gui-live・gui-ctl）で実行済み。本 WorkUnit では再実行していない。

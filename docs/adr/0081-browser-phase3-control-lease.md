@@ -5,7 +5,7 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 ---
 
 - 日付: 2026-09-29
-- 状態: **Accepted（P3-C の状態機械だけ）。API・worker・GUI への配線は未実装**
+- 状態: **Accepted・実装済み（2026-09-29）**。状態機械（task-core）・store の永続化・task-api の制御 API と task cancel の同期・worker の control gate・GUI の takeover/resume/stop 導線。e2e `phase3_control_converges_rejects_competition_and_cancel_stops`
 - 関連: [ADR-0078](0078-browser-execution-capability.md) D3 補足・D6 補足・D8 P3-C、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H2・H3・D6
 
 ## 範囲
@@ -29,6 +29,5 @@ P3-A（Browser Identity）と P3-B（live proxy）の契約は本 ADR に含め�
 
 ## 未実装（後続）
 
-- 制御 API（task-api）と worker の browser 実行への配線、task cancel との同期、状態の永続化。
-- 実際の WS 切断・再接続を使った試験。本 ADR の試験は状態機械の単体試験だけである。
-- GUI の takeover 導線。P3-B の proxy が先に要る。
+- 実装済み: 状態の永続化（store）、制御 API（task-api）と task cancel の同期、worker の browser 実行への配線（human control 中は agent の操作を止める、stop で session を閉じる）、GUI の導線。
+- 残り: 実 browser（agent-browser）を相手にした WS 切断・再接続の試験。現在の試験は task-api 経由の e2e と worker の fake harness まで。

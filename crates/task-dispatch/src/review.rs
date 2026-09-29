@@ -333,26 +333,65 @@ pub fn rebase_merge_base_ref(cmd: &str, parent_branch: &str) -> Option<String> {
 /// 親のブランチは段階の途中では動かない（動くのは段階末尾の統合だけ）ので、子の最終レビュー中に基点が
 /// ずれない（人の決定 4）。木の子でなければ `task` をそのまま返す（root は今どおり main と比べる）。
 pub fn tree_child_review_view(task: Task, branch_prefix: &str) -> Task {
-    let Some(parent_branch) = task_core::tree::parent_branch(&task, branch_prefix) else {
-        return task;
-    };
-    let base = task_core::tree::child_base_commit(&task)
-        .map(|sha| sha.chars().take(12).collect::<String>())
-        .unwrap_or_else(|| "-".to_string());
-    let mut view = task;
-    for criterion in &mut view.acceptance {
-        if let Check::Command { cmd, .. } = &mut criterion.check
-            && let Some(rewritten) = rebase_merge_base_ref(cmd, &parent_branch)
-        {
-            *cmd = rewritten;
+    review_view(task, branch_prefix, None)
+}
+
+/// ADR-0079 R5b-fix2: remote workspace の木の子の取り込み先の注記（ブランチ統合が無いので親のブランチの
+/// 行は出さない）。
+pub const TREE_CHILD_REMOTE_NOTE: &str =
+    "remote workspace: ブランチ統合なし。検査はクラスタ側の worktree（remote-exec）で行う";
+
+/// 最終レビューに渡す対象の task（[`tree_child_review_view`] に remote の扱いを足したもの）。
+///
+/// - 木の子で local: 従来どおり（`merge-base` の相手を親のブランチに置き換え、取り込み先を足す）。
+/// - 木の子で remote（`remote` が `Some` か、`task.workspace` が `Remote`）: ADR-0079 D5 のとおり
+///   remote は merge しないので、親のブランチ・基点の行は出さず [`TREE_CHILD_REMOTE_NOTE`] を足す
+///   （`merge-base` も書き換えない。クラスタ側に親のブランチは無い）。R5b-fix2。
+/// - `remote` が `Some` なら（木の子かどうかに関わらず）、worker と同じ `.celeris/remote-exec` の
+///   指示を reviewer 向けの文面で足す（`task_worker::remote_exec_reviewer_instructions`）。
+pub fn review_view(
+    task: Task,
+    branch_prefix: &str,
+    remote: Option<&task_worker::SshSettings>,
+) -> Task {
+    let is_remote =
+        remote.is_some() || matches!(task.workspace, task_core::WorkspaceSpec::Remote { .. });
+    let mut view = match task_core::tree::parent_branch(&task, branch_prefix) {
+        None => task,
+        Some(_) if is_remote => {
+            let mut view = task;
+            view.objective.push_str(&format!(
+                "\n\n{TREE_CHILD_REVIEW_HEADING}\n\
+                 この task は親 task の計画の段階の子 task。{TREE_CHILD_REMOTE_NOTE}。\
+                 main や親 task のブランチとの関係は不合格の理由にしない。\n"
+            ));
+            view
         }
+        Some(parent_branch) => {
+            let base = task_core::tree::child_base_commit(&task)
+                .map(|sha| sha.chars().take(12).collect::<String>())
+                .unwrap_or_else(|| "-".to_string());
+            let mut view = task;
+            for criterion in &mut view.acceptance {
+                if let Check::Command { cmd, .. } = &mut criterion.check
+                    && let Some(rewritten) = rebase_merge_base_ref(cmd, &parent_branch)
+                {
+                    *cmd = rewritten;
+                }
+            }
+            view.objective.push_str(&format!(
+                "\n\n{TREE_CHILD_REVIEW_HEADING}\n\
+                 この task は親 task の計画の段階の子 task。成果は親のブランチ `{parent_branch}` に親の段階末尾の統合で\
+                 取り込まれ、main には直接取り込まれない。差分の基点は `{base}`（親の段階の基点）、merge-base / \
+                 fast-forward の相手は `{parent_branch}`。main が進んでいることは不合格の理由にしない。\n"
+            ));
+            view
+        }
+    };
+    if let Some(settings) = remote {
+        view.objective
+            .push_str(&task_worker::remote_exec_reviewer_instructions(settings));
     }
-    view.objective.push_str(&format!(
-        "\n\n{TREE_CHILD_REVIEW_HEADING}\n\
-         この task は親 task の計画の段階の子 task。成果は親のブランチ `{parent_branch}` に親の段階末尾の統合で\
-         取り込まれ、main には直接取り込まれない。差分の基点は `{base}`（親の段階の基点）、merge-base / \
-         fast-forward の相手は `{parent_branch}`。main が進んでいることは不合格の理由にしない。\n"
-    ));
     view
 }
 
@@ -1374,6 +1413,95 @@ mod tests {
             view.objective
         );
         assert!(!view.objective.contains("配送"));
+    }
+
+    /// ADR-0079 R5b-fix2: remote workspace の木の子の reviewer の前置きは、親のブランチの行を出さず
+    /// 「ブランチ統合なし」の注記と `.celeris/remote-exec` の指示を持つ（本番 2026-09-29: reviewer が手元の
+    /// 写しで `git status` して `not a git repository` になった）。
+    #[test]
+    fn remote_tree_child_review_view_has_remote_exec_and_no_parent_branch_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let merge_check = "git merge-base --is-ancestor main HEAD";
+        let mut child = task_with(
+            vec![Check::Command {
+                cmd: merge_check.into(),
+                expect_exit: 0,
+            }],
+            dir.path(),
+        );
+        child.workspace = task_core::WorkspaceSpec::Remote {
+            cluster: "sirius".into(),
+            path: "/work/NBB/rmaeda/workspace/rust/benchfs".into(),
+            mode: None,
+        };
+        let parent_id = TaskId::new();
+        child.tree = Some(task_core::TreeInfo {
+            root_id: parent_id,
+            depth: 2,
+            parent_unit: Some(task_core::ParentUnit {
+                task_id: parent_id,
+                plan_id: "plan".into(),
+                unit_key: "c".into(),
+                stage: "s1".into(),
+                attempt: 1,
+            }),
+            base_commit: None,
+        });
+        let mut settings = task_worker::SshSettings::new(
+            "sirius",
+            "sirius",
+            "/work/NBB/rmaeda/workspace/rust/benchfs",
+        );
+        settings.sync = task_worker::SyncMode::Worktree;
+        settings.task_id = child.id.to_string();
+        let view = review_view(child.clone(), "celeris/", Some(&settings));
+        assert!(view.objective.starts_with(&child.objective));
+        assert!(view.objective.contains(TREE_CHILD_REVIEW_HEADING));
+        assert!(
+            view.objective.contains(TREE_CHILD_REMOTE_NOTE),
+            "{}",
+            view.objective
+        );
+        assert!(
+            view.objective.contains(".celeris/remote-exec"),
+            "{}",
+            view.objective
+        );
+        assert!(
+            view.objective
+                .contains(&task_worker::remote_exec_reviewer_instructions(&settings)),
+            "{}",
+            view.objective
+        );
+        assert!(
+            !view.objective.contains("成果は親のブランチ"),
+            "{}",
+            view.objective
+        );
+        assert!(
+            !view.objective.contains(&format!("celeris/{parent_id}")),
+            "{}",
+            view.objective
+        );
+        assert!(!view.objective.contains("差分の基点"), "{}", view.objective);
+        // クラスタ側に親のブランチは無いので、merge-base の相手も書き換えない。
+        assert_eq!(
+            view.acceptance[0].check,
+            Check::Command {
+                cmd: merge_check.into(),
+                expect_exit: 0,
+            }
+        );
+
+        // 木の子でない remote task も reviewer 向けの remote-exec の指示を持つ（取り込み先の節は無い）。
+        let mut root = child.clone();
+        root.tree = None;
+        let view = review_view(root.clone(), "celeris/", Some(&settings));
+        assert!(!view.objective.contains(TREE_CHILD_REVIEW_HEADING));
+        assert!(view.objective.contains(".celeris/remote-exec"));
+        // local の root は 1 バイトも変わらない。
+        let local = task_with(Vec::new(), dir.path());
+        assert_eq!(review_view(local.clone(), "celeris/", None), local);
     }
 
     /// (h): `merge-base --is-ancestor` が不成立でも、衝突なく merge できれば daemon が決定的に

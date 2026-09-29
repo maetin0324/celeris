@@ -935,3 +935,40 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 人の報告: GUI に決定へ回答する場所が見当たらなかった（R4b の inbox「決定」節が本番で見えていない可能性。決定が open のときに確認する。P-R5b-3）。
 - 別件: 人が起票した「web Phase 0: GUI 全面改修…」01M3MS2JRDJ4GM0D9VN9PJCB6B は 09-28 20:50Z から blocked（done WU の check 同士が矛盾し replan では解けない、
   planner が A/B/C を提示）。人の判断待ち。
+
+
+## R5b-fix2: remote workspace の run 後 push、成果物を pull で消さない、reviewer への remote-exec（2026-09-29）
+
+本番の木の子 01M3PB68JKRED21E3QVG9TE6QZ（remote sirius）で見つかった不具合の修正。判断は ADR-0079 付記「R5b-fix2」。本番には触れていない。
+
+### 実装したもの
+
+- `task-worker/src/ssh.rs`: `SshWorkspace::push_after_run`（印 `.celeris/push-pending` を置いてから push、成功で消す）、`pull` は印があれば
+  先に push し、落ちたら pull しない。`push_args` / `pull_args` に組み立てを分け、pull に `--filter=P artifacts/`（`SYNC_PULL_PROTECTED`）。
+  指示文を `remote_exec_head` / `REMOTE_EXEC_USAGE` / `remote_worktree_note` に分け、reviewer 向けの `remote_exec_reviewer_instructions` を足した。
+- `task-dispatch/src/dispatcher.rs`: `run_worker` が remote の run の後に毎回 `push_remote_after_run`（進行 1 行、失敗は error 付きで run を失敗にする）。
+  最終レビューは `review::review_view` を使い、remote なら reviewer の前にラッパを書き直す。
+- `task-dispatch/src/review.rs`: `review_view`（remote の木の子は `TREE_CHILD_REMOTE_NOTE`、親のブランチの行と `merge-base` の書き換え無し、
+  remote-exec の reviewer 指示）。`tree_child_review_view` は `review_view(.., None)` の薄い包み。
+
+### 逸脱
+
+- 依頼の「`artifacts/` を `SYNC_ALWAYS_EXCLUDED` に足す」は **protect フィルタ**にした（除外だと成果物がクラスタへ行かず、クラスタで作られた成果物も
+  戻らない。P-46 の注記と衝突）。pull が成果物を消さない、という目的は同じ。テストは protect と push で成果物が送られることを確かめる。
+
+### 未解決
+
+- remote の木の子のブランチ・親への統合は未対応（別の決定）。
+- 失われた `artifacts/experiment-plan.md`（task 01M3PAZ89XXEF10B92Y0Z0T8V4）の復旧は人の作業（報告本文に手順）。
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo test --no-fail-fast -p task-worker -p task-dispatch -- --test-threads=8` → exit 0（task-worker lib 598 passed / 1 ignored、ssh_localhost 9 passed、
+  task-dispatch lib 450 passed）。新しいテスト: `ssh::tests::{pull_protects_artifacts_…, push_after_run_runs_once_and_the_next_pull_keeps_edits_and_artifacts,
+  failed_push_is_reported_and_blocks_the_deleting_pull_until_a_push_succeeds, push_after_run_is_a_no_op_under_sync_none,
+  worker_and_reviewer_instructions_share_the_remote_exec_usage}`、`dispatcher::remote_push_after_run_tests::*`（2 件）、
+  `review::tests::remote_tree_child_review_view_has_remote_exec_and_no_parent_branch_line`。
+- 既定の並列度（load 約 60 のホスト）での 1 回目は build cache / scratch 系の 5 件（`the_preamble_notes_the_shared_build_cache_when_enabled` など、
+  `left: Running` で待ち切れず）が落ちたが、単独実行と `--test-threads=8` では通る（高負荷のタイミング依存。今回の変更とは無関係の経路）。

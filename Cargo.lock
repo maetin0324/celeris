@@ -261,6 +261,8 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
+ "task-core",
  "tempfile",
  "zeroize",
 ]

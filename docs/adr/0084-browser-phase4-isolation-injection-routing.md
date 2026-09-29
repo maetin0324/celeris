@@ -58,6 +58,12 @@ P4-A / P4-B / P4-C はそれぞれ単独の成果・検査で受け入れる。�
 
 ## 残り（人の決定を含む）
 
+## D5. 本番 routing の fail-closed 境界（attempt 2）
+
+- worker の browser 起動直前に、実際の effective policy と adapter から P4-C の `route` を呼ぶ。既存 ACP / Claude loop は従来の Phase 1/2 非機密操作だけを候補にする。既存 suite で実行確認済みの操作に対応する fixture だけを登録し、credential 注入・identity 復元は登録しない。
+- 現段階の `route` は非機密操作だけを検査する。旧 plugin bridge の秘密返却経路は Phase 2/3 の結合テストを維持するため残るが、P4-B の実装・適合証拠とは見なさない。P4-A/B の稼働中 runtime と trusted sink が整い次第、機密要求も route の必須能力に加える。選択結果が dispatcher が渡した adapter と異なる場合は暗黙の adapter 変更を行わず拒否する。
+- H7 の browser-specialist は backend の選択と fixture 実行を人が決めるまで候補へ登録しない。既存 loop への fallback は同じ要求能力を満たす場合だけ候補になる。
+
 - H7: browser-specialist の具体的 backend（Browser Use 等）の選定と有効化。比較は `rank_same_task` の同一 fixture で行う。
 - P4-A の実 runtime: runtime 用 UID の払い出し（subuid 範囲）・bwrap の実行と `/proc` からの事実の採取・filtering proxy の常駐・orphan の killpg を worker に配線。
   内部 origin（celeris 自身の API 等）を egress に足す方針は人の決定（既定は足さない＝loopback は拒否のまま）。

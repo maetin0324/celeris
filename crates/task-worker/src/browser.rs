@@ -7,6 +7,11 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use task_core::browser_backend::{
+    self, BackendDescriptor, BackendKind, Capability, ConformanceResult, FixtureCase,
+    RoutingRequest,
+};
 use task_core::browser_wait::{
     BrowserWaitReason, BrowserWaitState, NewBrowserWait, OperationIntent,
 };
@@ -393,6 +398,98 @@ pub async fn run(
 /// (ADR-0080 D3): authenticated pages may reflect secrets.
 const OBSERVATION_UPSTREAM_ACTIONS: [&str; 4] = ["download", "gettext", "screenshot", "snapshot"];
 
+/// Route the effective request before launching any browser process. These fixtures cover
+/// the existing non-secret CLI loop only. Credential injection remains on the Phase 2/3
+/// path until an isolated runtime and trusted injection sink pass their own conformance runs.
+fn route_existing_backend(
+    adapter_id: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+) -> Result<browser_backend::RoutingDecision, AdapterError> {
+    use Capability as C;
+    use FixtureCase as F;
+    let supported: BTreeSet<C> = [
+        C::Navigate,
+        C::Snapshot,
+        C::Click,
+        C::Screenshot,
+        C::Download,
+    ]
+    .into_iter()
+    .collect();
+    let passed: BTreeSet<F> = [
+        F::OpenAllowedOrigin,
+        F::RefuseDeniedOrigin,
+        F::ResumeAfterCrash,
+        F::SnapshotHasRefs,
+        F::ClickByRef,
+        F::ScreenshotArtifact,
+        F::DownloadToArtifacts,
+    ]
+    .into_iter()
+    .collect();
+    let backends: Vec<BackendDescriptor> = ["acp", "claude-code"]
+        .into_iter()
+        .map(|id| BackendDescriptor {
+            id: id.into(),
+            kind: BackendKind::ExistingLoop,
+            version: SUPPORTED_VERSION.into(),
+            declared: supported.clone(),
+            enabled: true,
+        })
+        .collect();
+    let results: BTreeMap<String, ConformanceResult> = backends
+        .iter()
+        .map(|b| {
+            (
+                b.id.clone(),
+                ConformanceResult {
+                    backend_id: b.id.clone(),
+                    version: b.version.clone(),
+                    passed: passed.clone(),
+                },
+            )
+        })
+        .collect();
+    let mut required = BTreeSet::new();
+    for action in &policy.effective.actions {
+        match action {
+            task_core::BrowserAction::Navigate => {
+                required.insert(C::Navigate);
+            }
+            task_core::BrowserAction::Snapshot | task_core::BrowserAction::Extract => {
+                required.insert(C::Snapshot);
+            }
+            task_core::BrowserAction::Click => {
+                required.insert(C::Click);
+            }
+            task_core::BrowserAction::Screenshot => {
+                required.insert(C::Screenshot);
+            }
+            task_core::BrowserAction::Download => {
+                required.insert(C::Download);
+            }
+            task_core::BrowserAction::CredentialUse => {}
+            task_core::BrowserAction::Scroll => {}
+        }
+    }
+    let decision = browser_backend::route(
+        &backends,
+        &results,
+        &RoutingRequest {
+            required,
+            explicit: Some(adapter_id.into()),
+            failed: BTreeSet::new(),
+        },
+    )
+    .map_err(|_| AdapterError::Other("browser backend lacks required conformance".into()))?;
+    if decision.primary != adapter_id {
+        return Err(AdapterError::Other(
+            "browser backend routing mismatch".into(),
+        ));
+    }
+    Ok(decision)
+}
+
 /// `run` with an explicit substrate and credential broker (integration tests use fakes).
 pub async fn run_with_executable(
     adapter: Arc<dyn WorkerAdapter>,
@@ -514,6 +611,7 @@ pub async fn run_with_executable(
             exit_code: None,
         });
     }
+    let _routing = route_existing_backend(adapter.id(), &policy)?;
     let version = tokio::process::Command::new(executable)
         .arg("--version")
         .kill_on_drop(true)

@@ -90,6 +90,67 @@ fn limits() -> RunLimits {
 }
 
 #[test]
+fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capabilities() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut req = request(temp.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let public = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    let routed = route_existing_backend("acp", &public).unwrap();
+    assert_eq!(routed.primary, "acp");
+    assert!(routed.fallbacks.contains(&"claude-code".to_string()));
+
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    req.context.browser_policy.as_mut().unwrap().allowed_actions =
+        vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    req.context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    let sensitive = crate::browser_policy::prepare(
+        req.context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    assert!(route_existing_backend("acp", &sensitive).is_ok());
+    assert!(route_existing_backend("unsupported", &public).is_err());
+}
+
+#[test]
 fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
     let first = TaskId::new();
     let second = TaskId::new();

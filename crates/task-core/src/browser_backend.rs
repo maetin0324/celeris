@@ -358,7 +358,14 @@ mod tests {
                 }]
             ));
             let results = [(b.id.clone(), r)].into_iter().collect();
-            assert!(route(std::slice::from_ref(&b), &results, &req(&[Capability::Navigate])).is_err());
+            assert!(
+                route(
+                    std::slice::from_ref(&b),
+                    &results,
+                    &req(&[Capability::Navigate])
+                )
+                .is_err()
+            );
         }
         let rb = backend(
             "id",

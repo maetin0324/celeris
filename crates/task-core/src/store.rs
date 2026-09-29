@@ -8796,7 +8796,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -9345,7 +9345,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -9836,7 +9836,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -9902,7 +9902,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -9995,7 +9995,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -10454,7 +10454,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -10700,7 +10700,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let conn = Connection::open(&path).unwrap();
         // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -10951,7 +10951,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();

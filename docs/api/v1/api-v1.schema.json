@@ -6784,6 +6784,44 @@
           "type": "object"
         },
         {
+          "description": "ADR-0079 R5b-fix1: 人の replan（`PlanOrigin::Human`）が done の WorkUnit の spec を上書きした\n（状態は `done` のまま。`work_units.spec` だけを新しい版の spec に置き換える）。`plan_id` / `plan_version` は\n上書きした新しい版、`changed_fields` は変わった `WorkUnitSpec` の欄の名前（昇順）。replan と同じ\nトランザクションで、その版の `ExecutionPlanned` の前に積む。状態は変えない（`replay` は行の spec の\n書き換えにだけ使う）。",
+          "properties": {
+            "changed_fields": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "key": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "plan_version": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "work_unit_spec_overridden",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "plan_id",
+            "plan_version"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0072 D5/D13（Phase E3）: Complexity Gate の判定（atomic/compound、当たった信号）。\n`Task.routing.execution` と同じトランザクションで書く。状態は変えない（`replay` は無視する）。",
           "properties": {
             "decision": {
@@ -8244,6 +8282,17 @@
             "string",
             "null"
           ]
+        },
+        "replan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplanDiff"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079 R5b-fix1: 有効な計画がある task への `PUT /tasks/{id}/execution-plan`（人の replan）の応答だけ:\n版の差分（`added` / `changed` / `removed` と、spec を上書きした done の WU の `overridden_done`）。"
         },
         "serialized_reason": {
           "description": "ADR-0074 D1.2（Phase F2b）: v2 の計画を並列 1 に倒した理由（`WorkUnitsSerialized`。無ければ\n並列で走る／v1）。",
@@ -14666,6 +14715,45 @@
           "type": "string"
         }
       ]
+    },
+    "ReplanDiff": {
+      "description": "ADR-0072 D17（Phase E4）: [`replan`] が計算した差分（監査・GUI 用。版の履歴の「差分の件数」）。",
+      "properties": {
+        "added": {
+          "description": "新しい key（新規の WorkUnit）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "changed": {
+          "description": "既存（未完了）の WorkUnit で spec または依存が変わったもの。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "overridden_done": {
+          "description": "ADR-0079 R5b-fix1: 人の replan が spec を上書きした done の WorkUnit（状態は `done` のまま。\n`Event::WorkUnitSpecOverridden`）。planner の replan では常に空。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "removed": {
+          "description": "新しい版に無くなった未完了の WorkUnit（`superseded` にする）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "added",
+        "changed",
+        "removed"
+      ],
+      "type": "object"
     },
     "ReplayMismatch": {
       "description": "`replay` が検出した 1 件の食い違い。",

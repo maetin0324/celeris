@@ -16,7 +16,7 @@ tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ, 01M3JXB3DHVBWKWKPW04DTG6SJ]
 
 ### `POST /tasks/{id}/execution-plan`・`PUT /tasks/{id}/execution-plan` → 201 `ExecutionPlanView`（管理系）
 
-本文は `ExecutionPlanSpec`。`schema`、`rationale`、`work_units` が必須。v2 は `phases` も必要で、`children` は現行では空配列のみ。人が提案した計画（origin `human`）として検証・採用し、応答に `work_units` と `versions` を含む。`PUT` は `POST` と同じ操作（ADR-0079 R5b-prep。どちらも新規だけで、既に有効な計画があれば 409）。クエリは受け付けない。管理トークンが無ければ 401、計画が無効なら 422。
+本文は `ExecutionPlanSpec`。`schema`、`rationale`、`work_units` が必須。v2 は `phases` も必要で、`children` は現行では空配列のみ。人が提案した計画（origin `human`）として検証・採用し、応答に `work_units` と `versions` を含む。`POST` は新規だけで、既に有効な計画があれば 409。`PUT` は有効な計画が無ければ `POST` と同じ（201）、**有効な計画があれば人の replan**（200。ADR-0079 付記「R5b-fix1」）: 本文は新しい版の計画の**全体**（差分の形は受け付けない）で、`task_ops::execution::replan`（origin human）を通す。done の WU は同じ key・`kind`・`phase`（/3 は段階）・`depends_on` で残す必要があり（消す・構造を変えると 422）、spec のほかの欄（`checks` など）は上書きできる（状態は `done` のまま、`work_unit_spec_overridden` の event）。応答には `replan`（`added` / `changed` / `removed` / `overridden_done`）が付く。クエリは受け付けない。管理トークンが無ければ 401、計画が無効なら 422。
 
 `celeris.execution-plan/3`（ADR-0079 D2。`stages` / `units` / `decisions`）は daemon と同じ実効の上限（`[execution.tree]`）で検証する。`[execution.tree] enabled = false`（既定）なら 422（本文に `[execution.tree] enabled = true` を案内する `TreeDisabled`）。有効なら planner の計画と同じ経路を 1 トランザクションで通す（ADR-0079 付記「R5b-prep 実装時の逸脱・明確化」）:
 
@@ -25,7 +25,7 @@ tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ, 01M3JXB3DHVBWKWKPW04DTG6SJ]
 - kind task の unit の `adopt: <task_id>`（D15、人の計画だけ）は同じトランザクションで結ぶ（下の `POST /tasks/{id}/tree/adopt` と同じ条件）。対象が `done` / `failed` なら unit は `done`（`child_adopted`）、まだ終端でなければ unit は結ばれずに待つ（後で `tree/adopt`）。条件に合わない unit があれば計画全体を 409 / 422 で拒否し、何も書かない（`code` は `adopt_*`）。
 - root の計画の承認（D8 の `PlanGate`）は挟まない（書いた人の承認とみなす）。報告の流れに「計画を採用して進めます: …」を 1 件残し、承認が要る形（決定・`review: human`・上限に近い）だったなら理由も本文に書く。部をまたぐ子の認可の質問（ADR-0074 F4b）も出さない。
 
-応答（`PUT` / `POST` のときだけ）には `adoptions[]`（`AdoptionOutcome`: `plan_id`、`unit_key`、`stage`、`task_id`、`adopted`、`task_status`、`unit_status`、`detail`。`adopt` の unit があるときだけ）と `decisions_raised`（出した計画の決定の数。0 なら省略）が付く。`GET` では出ない。`celerisctl execution plan set|put <task> --file <json> [--config <config.toml>]`（`--config` 省略時は `CELERIS_CONFIG`。どちらも無ければ木は無効）は同じ関数を呼ぶ。
+応答（`PUT` / `POST` のときだけ）には `adoptions[]`（`AdoptionOutcome`: `plan_id`、`unit_key`、`stage`、`task_id`、`adopted`、`task_status`、`unit_status`、`detail`。`adopt` の unit があるときだけ）と `decisions_raised`（出した計画の決定の数。0 なら省略）が付く。`GET` では出ない。`celerisctl execution plan set|put <task> --file <json> [--config <config.toml>]`（`--config` 省略時は `CELERIS_CONFIG`。どちらも無ければ木は無効）は同じ関数を呼ぶ。有効な計画の人の replan は `celerisctl execution plan replan <task> --file <json> [--reason <text>] [--config <config.toml>]`（`set|put` は新規だけ）。
 
 ### `POST /tasks/{id}/tree/adopt` → 200 `AdoptionOutcome`（管理系。ADR-0079 D15 / Phase R5b-prep）
 

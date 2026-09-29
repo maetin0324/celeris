@@ -62,6 +62,24 @@ pub enum ExecutionPlanCommand {
     Set(ExecutionPlanSetArgs),
     /// 現在の active な計画と WorkUnit を表示する。
     Show(ExecutionPlanShowArgs),
+    /// ADR-0079 R5b-fix1: active な計画を人が版更新する（origin human の replan。`PUT /tasks/{id}/execution-plan`
+    /// に active な計画があるときと同じ）。計画の全体を渡す。done の WU は同じ key・kind・phase・depends_on で残し、
+    /// spec のほかの欄（checks など）は上書きできる。
+    Replan(ExecutionPlanReplanArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ExecutionPlanReplanArgs {
+    pub task_id: String,
+    /// 新しい版の計画の全体（`celeris.execution-plan/1`〜`/3` の JSON）。`-` で stdin から読む。
+    #[arg(long)]
+    pub file: PathBuf,
+    /// 版の履歴に残す理由。
+    #[arg(long, default_value = "replan (human celerisctl)")]
+    pub reason: String,
+    /// daemon の `config.toml`（`[execution.tree]` を読む）。省略時は `CELERIS_CONFIG`。
+    #[arg(long, env = "CELERIS_CONFIG")]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -160,6 +178,7 @@ pub fn run(store: &dyn TaskStore, command: ExecutionCommand) -> Result<ExitCode,
         ExecutionCommand::Plan { command } => match command {
             ExecutionPlanCommand::Set(args) => run_set(store, args),
             ExecutionPlanCommand::Show(args) => run_show(store, args),
+            ExecutionPlanCommand::Replan(args) => run_replan(store, args),
         },
         ExecutionCommand::PhaseGate(args) => run_phase_gate(store, args),
     }
@@ -241,6 +260,36 @@ fn run_set(store: &dyn TaskStore, args: ExecutionPlanSetArgs) -> Result<ExitCode
             a.detail
         );
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_replan(store: &dyn TaskStore, args: ExecutionPlanReplanArgs) -> Result<ExitCode, CliError> {
+    let task_id = parse_task_id(&args.task_id)?;
+    let text = read_plan_file(&args.file)?;
+    let spec: task_core::ExecutionPlanSpec = serde_json::from_str(&text)
+        .map_err(|e| CliError::msg(format!("invalid execution plan JSON: {e}")))?;
+    let limits = effective_limits(args.config.as_ref())?;
+    let (plan, diff) = task_ops::execution::replan(
+        store,
+        task_id,
+        spec,
+        args.reason,
+        PlanOrigin::Human,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )?;
+    outln!(
+        "{} version={} origin={} status={} added={:?} changed={:?} removed={:?} overridden_done={:?}",
+        plan.id,
+        plan.version,
+        PlanOrigin::Human.as_str(),
+        plan.status.as_str(),
+        diff.added,
+        diff.changed,
+        diff.removed,
+        diff.overridden_done
+    );
     Ok(ExitCode::SUCCESS)
 }
 

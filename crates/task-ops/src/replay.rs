@@ -212,6 +212,18 @@ pub fn rebuild_work_units_and_runs(
             _ => None,
         })
         .collect();
+    // ADR-0079 R5b-fix1: 人の replan が spec を上書きした done の行（`(新しい版の plan_id, 行の id)`）。
+    let overridden: BTreeSet<(String, String)> = events
+        .iter()
+        .filter_map(|er| match &er.event {
+            Event::WorkUnitSpecOverridden {
+                work_unit_id,
+                plan_id,
+                ..
+            } => Some((plan_id.clone(), work_unit_id.clone())),
+            _ => None,
+        })
+        .collect();
     // 行の id → その行を作った版（`plans` の index）。
     let mut introduced: BTreeMap<String, usize> = BTreeMap::new();
     if !plans.is_empty() {
@@ -426,7 +438,15 @@ pub fn rebuild_work_units_and_runs(
                 if k > 0
                     && let Some((_, _, prev)) = plans.get(k - 1)
                 {
-                    apply_replan_step(&mut wu_rows, &introduced, k, prev, plan_id, plan);
+                    apply_replan_step(
+                        &mut wu_rows,
+                        &introduced,
+                        &overridden,
+                        k,
+                        prev,
+                        plan_id,
+                        plan,
+                    );
                 }
             }
             // ADR-0079 D4 (4) / D15（Phase R1a）: kind task の unit の子 task（store が同じトランザクションで
@@ -501,11 +521,14 @@ pub fn rebuild_work_units_and_runs(
 ///   足したもの。カウンタは戻さない。
 /// - この版で初めて現れた行: replan と同じ初期状態（/1: 依存がすべて done なら ready、/2・/3: 工程の障壁
 ///   つきの `newly_ready`）。`seq` は新しい版の並び（行を作った時点で materialize 済み）。
+/// - 人の replan が spec を上書きした done の行（`Event::WorkUnitSpecOverridden`、ADR-0079 R5b-fix1）: spec だけを
+///   新しい版の spec に（`replan` と同じ）。
 /// - 既存の行の状態の遷移（superseded・ready / pending への戻し）は `ExecutionPlanned` の前に積まれた
 ///   `WorkUnitTransitioned` が既に運んでいるので、ここでは既存の行の状態を変えない。
 fn apply_replan_step(
     wu_rows: &mut BTreeMap<String, WorkUnitRow>,
     introduced: &BTreeMap<String, usize>,
+    overridden: &BTreeSet<(String, String)>,
     k: usize,
     prev: &ExecutionPlanSpec,
     new_plan_id: &str,
@@ -551,6 +574,13 @@ fn apply_replan_step(
         };
         if at == k {
             new_ids.push(id.clone());
+            continue;
+        }
+        // ADR-0079 R5b-fix1: 人の replan が上書きした done の行は spec だけを新しい版に（状態・依存・`plan_id` は元のまま）。
+        if row.status == WorkUnitStatus::Done
+            && overridden.contains(&(new_plan_id.to_string(), id.clone()))
+        {
+            row.spec = new_spec.clone();
             continue;
         }
         if row.status == WorkUnitStatus::Done || !row.status.is_active() {

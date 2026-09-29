@@ -330,7 +330,7 @@ pub fn adopt_human_plan(
 }
 
 /// ADR-0072 D17（Phase E4）: [`replan`] が計算した差分（監査・GUI 用。版の履歴の「差分の件数」）。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct ReplanDiff {
     /// 新しい key（新規の WorkUnit）。
     pub added: Vec<String>,
@@ -338,11 +338,18 @@ pub struct ReplanDiff {
     pub changed: Vec<String>,
     /// 新しい版に無くなった未完了の WorkUnit（`superseded` にする）。
     pub removed: Vec<String>,
+    /// ADR-0079 R5b-fix1: 人の replan が spec を上書きした done の WorkUnit（状態は `done` のまま。
+    /// `Event::WorkUnitSpecOverridden`）。planner の replan では常に空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overridden_done: Vec<String>,
 }
 
 /// D17: 計画を版更新する（旧 `active` な計画を `superseded` にし、新しい版を採用する）。
 ///
 /// - `done` の WorkUnit は**保持する**（行に触れない。`validate` が key/spec 不変を検証済み）。
+///   ADR-0079 R5b-fix1: 人の replan（`origin == Human`）だけは done の WU の spec を上書きできる。その行は
+///   `done` のまま `spec` / `updated_at` だけを新しい版の spec に置き換え（`plan_id` / `seq` / 依存は元のまま）、
+///   `Event::WorkUnitSpecOverridden` と `ReplanDiff.overridden_done` に残す。
 /// - 未完了で新しい版にも残る key は、その場で spec・依存・状態（`ready`/`pending`。依存がすべて
 ///   `done` なら `ready`）を更新する。
 /// - 未完了で新しい版に無い key は `superseded`（`WorkUnitTransitioned{reason: "replan v<n>"}`）。
@@ -435,6 +442,27 @@ pub fn replan(
     let mut diff = ReplanDiff::default();
     let mut updated_work_units = Vec::new();
     let mut extra_events = Vec::new();
+
+    // ADR-0079 R5b-fix1: 人の replan が spec を上書きした done の WU（検証が planner の計画には許さない）。
+    for (key, new_spec, changed_fields) in
+        task_core::done_work_unit_overrides(&validated.spec, &done_work_units)
+    {
+        let Some(existing) = current.iter().find(|u| u.key == key) else {
+            continue;
+        };
+        let mut row = existing.clone();
+        row.spec = new_spec;
+        row.updated_at = created_at.clone();
+        extra_events.push(Event::WorkUnitSpecOverridden {
+            work_unit_id: row.id.clone(),
+            key: row.key.clone(),
+            plan_id: new_plan_id.clone(),
+            plan_version: new_version,
+            changed_fields,
+        });
+        diff.overridden_done.push(key);
+        updated_work_units.push(row);
+    }
 
     // 削除: 現在アクティブだが新しい版に無い（done では起き得ない。validate が検証済み）。
     // 統合 WU は下で工程ごとにまとめて扱う。
@@ -741,12 +769,20 @@ pub fn replan(
     });
     // ADR-0074 D5.3（Phase F1）: 版の差分の件数を `reason` の後ろに決定的な形で足す（E5 の未実装
     // 「版の差分の件数」の解消）。
-    let reason_with_diff = format!(
+    let mut reason_with_diff = format!(
         "{reason} (added={}, changed={}, removed={})",
         diff.added.len(),
         diff.changed.len(),
         diff.removed.len()
     );
+    // ADR-0079 R5b-fix1: 上書きした done の WU があるときだけ足す（従来の形を変えない）。
+    if !diff.overridden_done.is_empty() {
+        reason_with_diff = format!(
+            "{} (overridden_done={})",
+            reason_with_diff,
+            diff.overridden_done.join(",")
+        );
+    }
     let plan_event = Event::ExecutionPlanned {
         plan_id: new_plan_id,
         version: new_version,
@@ -1247,6 +1283,115 @@ mod tests {
         assert_eq!(c.status, WorkUnitStatus::Superseded);
     }
 
+    /// ADR-0079 R5b-fix1: 人の replan は done の WU の spec（本番の task では `baseline` の check）を上書きできる。
+    /// 行は `done` のまま（`plan_id` / 依存も元のまま）spec だけが新しい版になり、`WorkUnitSpecOverridden` と
+    /// `ReplanDiff.overridden_done` に残る。events だけから作り直しても同じ行になる（replay）。
+    #[test]
+    fn human_replan_overrides_the_spec_of_a_done_work_unit() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let task = sample_task();
+        store.insert(&task).unwrap();
+        let mut v1_spec = spec_v2_two_phases();
+        v1_spec.work_units[0].checks = vec![task_core::WorkUnitCheck {
+            cmd: "git diff --quiet 06e9a03cffe8 -- gui".to_string(),
+            expect_exit: 0,
+        }];
+        let v1 = adopt_plan(
+            &store,
+            task.id,
+            v1_spec.clone(),
+            PlanOrigin::Human,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        mark_done(&store, task.id, "a");
+        let before = store
+            .work_units_for(task.id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+
+        let mut v2_spec = v1_spec.clone();
+        let fixed_cmd =
+            "git diff --quiet 06e9a03cffe8 -- gui \":!gui/docs/adr/0002-frontend-stack.md\"";
+        v2_spec.work_units[0].checks[0].cmd = fixed_cmd.to_string();
+
+        // planner の replan は従来どおり拒む（何も書かない）。
+        let err = replan(
+            &store,
+            task.id,
+            v2_spec.clone(),
+            "planner".to_string(),
+            PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, OpsError::Validation(m) if m.contains("done work unit a must not change")),
+            "{err:?}"
+        );
+
+        let (new_plan, diff) = replan(
+            &store,
+            task.id,
+            v2_spec,
+            "human: correct the check of a".to_string(),
+            PlanOrigin::Human,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert_eq!(new_plan.version, 2);
+        assert_eq!(diff.overridden_done, vec!["a".to_string()]);
+        assert!(diff.added.is_empty(), "{diff:?}");
+        assert!(diff.removed.is_empty(), "{diff:?}");
+
+        let a = store
+            .work_units_for(task.id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "a")
+            .unwrap();
+        assert_eq!(a.status, WorkUnitStatus::Done, "done のまま");
+        assert_eq!(a.id, before.id);
+        assert_eq!(a.plan_id, v1.id, "plan_id は元のまま");
+        assert_eq!(a.depends_on, before.depends_on);
+        assert_eq!(a.spec.checks[0].cmd, fixed_cmd);
+        assert_eq!(a.phase.as_deref(), Some("design"));
+
+        let events = store.events_for(task.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::WorkUnitSpecOverridden { work_unit_id, key, plan_id, plan_version: 2, changed_fields }
+                    if *work_unit_id == a.id && key == "a" && *plan_id == new_plan.id
+                        && changed_fields == &vec!["checks".to_string()]
+            )),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::ExecutionPlanned { version: 2, reason: Some(r), .. } if r.contains("overridden_done=a")
+            )),
+            "{events:?}"
+        );
+
+        // events だけから作り直しても同じ（spec の上書きを含む）。
+        let (wu_mm, _, plan_mm, _) =
+            crate::replay::check_and_apply_execution(&store, false).unwrap();
+        assert!(wu_mm.is_empty(), "{wu_mm:?}");
+        assert!(plan_mm.is_empty(), "{plan_mm:?}");
+    }
+
+    /// ADR-0079 R5b-fix1: planner の replan は done の WU の spec を変えられない（人の replan は上書きできる。
+    /// `human_replan_overrides_the_spec_of_a_done_work_unit`）。
     #[test]
     fn replan_rejects_a_changed_done_work_unit() {
         let store = SqliteStore::open_in_memory().unwrap();
@@ -1262,7 +1407,7 @@ mod tests {
             task.id,
             v2_spec,
             "test".to_string(),
-            PlanOrigin::Human,
+            PlanOrigin::Planner,
             None,
             ExecutionLimits::default(),
             OffsetDateTime::now_utc(),

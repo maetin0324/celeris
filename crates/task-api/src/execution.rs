@@ -35,7 +35,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
             "/api/v1/tasks/{id}/execution-plan",
             axum::routing::get(get_execution_plan)
                 .post(post_execution_plan)
-                .put(post_execution_plan),
+                .put(put_execution_plan),
         )
         .route(
             "/api/v1/tasks/{id}/tree/adopt",
@@ -175,6 +175,86 @@ async fn post_execution_plan(
         .await?;
     tracing::info!(who = "admin", op = "execution_plan_adopt", task_id = %task_id, plan_id = %view.id, work_units = view.work_units.len(), adoptions = view.adoptions.len(), decisions = view.decisions_raised, "admin: execution plan adopted");
     Ok(json_response(StatusCode::CREATED, &view))
+}
+
+/// ADR-0079 R5b-fix1: `PUT /tasks/{id}/execution-plan`（管理系）。有効な計画が無ければ `POST` と同じ（新規の採用、201）。
+/// 有効な計画があれば人の replan（`task_ops::execution::replan`、origin human。本文は計画の**全体**で、差分の形は
+/// 受け付けない）で 200。done の WU は同じ key・`kind`・`phase`（/3 の段階）・`depends_on` で残す必要があり、spec の
+/// ほかの欄（`checks` など）は上書きできる（`replan.overridden_done`、`Event::WorkUnitSpecOverridden`）。
+async fn put_execution_plan(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    headers: HeaderMap,
+    Params(id): Params<String>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let task_id = parse_task_id(&id)?;
+    let spec: task_core::ExecutionPlanSpec = read_json(body, false).await?;
+    let limits = ExecutionLimits {
+        tree: state.inner.tree_limits,
+        ..ExecutionLimits::default()
+    };
+    let (status, view) = state
+        .blocking(move |store| {
+            let now = OffsetDateTime::now_utc();
+            let has_active = store
+                .execution_plan_active(task_id)
+                .map_err(crate::problem::store_problem)?
+                .is_some();
+            let (status, plan, adoptions, decisions_raised, diff) = if has_active {
+                let (plan, diff) = task_ops::execution::replan(
+                    store,
+                    task_id,
+                    spec,
+                    "replan (human PUT)".to_string(),
+                    task_core::PlanOrigin::Human,
+                    None,
+                    limits,
+                    now,
+                )
+                .map_err(|e| ops_problem(store, e, Some("execution_plan_replan")))?;
+                (StatusCode::OK, plan, Vec::new(), 0, Some(diff))
+            } else {
+                let adopted = task_ops::execution::adopt_human_plan(
+                    store, task_id, spec, limits, "human", now,
+                )
+                .map_err(|e| ops_problem(store, e, Some("execution_plan_adopt")))?;
+                // ADR-0079「R5b-fix3」: POST と同じく、人の計画の採用は gate の記録を人の compound にする。
+                if let Err(e) = task_ops::regate::record_human_plan_gate(store, task_id, now) {
+                    tracing::warn!(task_id = %task_id, error = %e, "failed to record the human plan's gate decision");
+                }
+                (
+                    StatusCode::CREATED,
+                    adopted.plan,
+                    adopted.adoptions,
+                    adopted.decisions_raised,
+                    None,
+                )
+            };
+            let work_units = store
+                .work_units_for(task_id)
+                .map_err(crate::problem::store_problem)?;
+            let versions = store
+                .execution_plan_list(task_id)
+                .map_err(crate::problem::store_problem)?;
+            let mut view = ExecutionPlanView::new(plan, work_units, versions);
+            view.adoptions = adoptions;
+            view.decisions_raised = decisions_raised;
+            view.replan = diff;
+            Ok((status, view))
+        })
+        .await?;
+    match &view.replan {
+        Some(diff) => {
+            tracing::info!(who = "admin", op = "execution_plan_replan", task_id = %task_id, plan_id = %view.id, version = view.version, added = diff.added.len(), changed = diff.changed.len(), removed = diff.removed.len(), overridden_done = ?diff.overridden_done, "admin: execution plan replanned by a human")
+        }
+        None => {
+            tracing::info!(who = "admin", op = "execution_plan_adopt", task_id = %task_id, plan_id = %view.id, work_units = view.work_units.len(), adoptions = view.adoptions.len(), decisions = view.decisions_raised, "admin: execution plan adopted")
+        }
+    }
+    Ok(json_response(status, &view))
 }
 
 /// ADR-0079 D15（Phase R5b-prep）: `POST /tasks/{id}/tree/adopt {task_id, stage, unit_key}`（管理系 = 人だけ）。

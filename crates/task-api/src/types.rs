@@ -1426,6 +1426,10 @@ pub struct ExecutionPlanView {
     /// ADR-0079 D7（Phase R5b-prep）: 人の計画の応答だけ: 計画の決定として出した決定の要求（origin human）の数。
     #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub decisions_raised: usize,
+    /// ADR-0079 R5b-fix1: 有効な計画がある task への `PUT /tasks/{id}/execution-plan`（人の replan）の応答だけ:
+    /// 版の差分（`added` / `changed` / `removed` と、spec を上書きした done の WU の `overridden_done`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replan: Option<task_ops::execution::ReplanDiff>,
 }
 
 fn is_zero_usize(n: &usize) -> bool {
@@ -1456,6 +1460,7 @@ impl ExecutionPlanView {
             serialized_reason: None,
             adoptions: Vec::new(),
             decisions_raised: 0,
+            replan: None,
         }
     }
 

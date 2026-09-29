@@ -1523,3 +1523,70 @@ R5b の dogfood（BenchFS の root 01M3PAZ4XG4QN1T8S98VNA6ABV と子 01M3PAZ89XX
 7. **持ち越し（D4）**: 人の `answer` や workspace の PATCH の後に `attempts` を 0 に戻すことは**しなかった**。`attempts` は event の
    replay で決まり（`transition.rs`: `Answer` は「据え置き」が規則）、戻すと過去の event 列の replay の結果が変わる。基盤の失敗で
    試行を使い切った子の再開は `retry`（attempts 0）で行う。規則を変えるなら別の ADR で。
+
+## 付記: R5b-fix1: 人の replan は done WU の spec を上書きできる（2026-09-29）
+
+replan の done の不変条件（ADR-0072 D14 / D17「replan で done の WU の key と spec は変わらない」。検証は
+`task_core::execution_plan::validate_with` の中の 1 か所、/1・/2 と /3 で同じ関数 `done_carry_over_errors`）について、本番で見つかった 2 つの
+行き詰まりを直す。ADR-0072 の末尾に相互参照の注記を足した（本文は変えていない）。
+
+### 発端（本番の証拠）
+
+- **1 つ目**（task 01M3MS2JRDJ4GM0D9VN9PJCB6B「web Phase 0」、/2）: done の WU `baseline` の check `git diff --quiet 06e9a03cffe8 -- gui` が、後の WU が
+  正当に `gui/docs/adr/0002-frontend-stack.md` を変えたため、もう通らない。人は案 A（done の WU の check を
+  `git diff --quiet 06e9a03cffe8 -- gui ":!gui/docs/adr/0002-frontend-stack.md"` に直す）を選んだが、planner の replan は
+  `DoneWorkUnitChanged`（"done work unit baseline must not change on replan"）で拒否され、**人が done の WU の spec を直す入口がどこにも無かった**
+  （`PUT /tasks/{id}/execution-plan` は R5b-prep の時点で「新規だけ、有効な計画があれば 409」）。task は `blocked`（worker_question）のまま。
+- **2 つ目**（root task 01M3PAZ4XG4QN1T8S98VNA6ABV「BenchFS 国際会議フルペーパー化」、/3）: 人の計画の done の unit が `adopt` を持つ
+  （phase1-framing・phase1-oss・phase1-related-work・phase0-validity など）。子の失敗で planner の replan が起き、planner は done の不変条件に
+  従って done の unit をそのまま写した結果、写した unit ごとに `AdoptNotAllowed`（"adopt is only allowed in a plan written by a human"）で拒否された。
+  **planner は、`adopt` の unit を持つ人の計画を replan できなかった**（不変条件が `adopt` の写しを強い、`adopt` の規則がそれを禁じる）。
+
+### 決定
+
+1. **人の replan は done の WU の spec を上書きできる**（`PlanContext.origin == Human` のときだけ）。
+   - done の WU は新しい版に**同じ key で残す**（消すのは人でも `DoneWorkUnitChanged`）。
+   - 構造の欄 **`kind` / `phase`（/3 は段階 = 内部の `phase`）/ `depends_on`** は変えられない（新しい `DoneWorkUnitStructureChanged { key, field }`）。
+     依存や段階の付け替えは「済んだ仕事」の位置を変え、統合・障壁の前提（どの工程で統合済みか）を崩すため。上書きできるのはそれ以外の欄
+     （`checks`・`title`・`objective`・`done_when`・`context`・`budget`・`outputs`・`features`・`harness`）で、典型は `checks` のコマンドの誤りの訂正。
+   - 行は **`done` のまま**（人が「その仕事は済んだ」と言い、記録した spec を直す）。`work_units.spec` を新しい版の spec に置き換え、`updated_at` を
+     新しくする。`plan_id` / `seq` / `depends_on` / 状態 / カウンタは元のまま（done の行は他の点では従来どおり触れない）。check は再実行しない。
+   - planner / repair / fixture の計画は**従来どおり完全一致**（`DoneWorkUnitChanged`）。緩めるのは検証の 1 か所（`done_carry_over_errors`）の
+     origin の分岐だけで、dispatcher（planner run の検証、`PlanOrigin::Planner`）は何も変えていない。
+2. **planner は done の unit の `adopt` をそのまま写してよい**（2 つ目の規則）: /3 の unit が `adopt` を持っていても、その key が `done_work_units`
+   にあり、内部の形（`PlanUnitSpec::to_work_unit_spec`）が done の spec と一致する（= 前の版からの写し）なら `AdoptNotAllowed` にしない。採用は
+   前の版で済んでいて、replan は done の行に触れず `adopt` を当て直さないので無害。done の写しでない unit の新しい `adopt`（done が無い・spec が
+   違う）は従来どおり planner には拒む。`AdoptNotAllowed` の文言に「(a done unit copied verbatim from the previous version may keep its adopt)」を足した。
+3. **人の replan の入口**: `PUT /tasks/{id}/execution-plan` は、有効な計画が**無ければ**従来どおり新規の採用（201、`POST` と同じ）、**あれば**
+   人の replan（`task_ops::execution::replan`、origin human、200）。本文は計画の**全体**（`ExecutionPlanSpec`。差分の形
+   `execution-plan-delta/1` は planner の出力にしか無く、人の `PUT` では受け付けない）。`POST` は従来どおり新規だけ（有効な計画があれば 409）。
+   `celerisctl execution plan replan <task> --file <json> [--reason] [--config]` も同じ関数を呼ぶ（`set|put` は従来どおり新規だけ。`put` の別名は
+   HTTP の `PUT` と意味がずれるが、CLI の既存の意味を変えないため残した）。
+4. **記録の形**:
+   - `Event::WorkUnitSpecOverridden { work_unit_id, key, plan_id, plan_version, changed_fields }`（`type = "work_unit_spec_overridden"`。`plan_id` /
+     `plan_version` は上書きした新しい版、`changed_fields` は `WorkUnitSpec` の JSON の最上位の欄の名前で変わったもの〈昇順〉）。replan と同じ
+     トランザクションで、その版の `ExecutionPlanned` の前に積む。状態は変えない。`GET /events?types=work_unit_spec_overridden` で引ける。
+   - `ReplanDiff.overridden_done: Vec<String>`（空なら JSON では省く）。`PUT` の replan の応答 `ExecutionPlanView.replan`（`added` / `changed` /
+     `removed` / `overridden_done`）と `celerisctl execution plan replan` の出力に出る。版の履歴の `ExecutionPlanned.reason` は従来の
+     `(added=…, changed=…, removed=…)` の後ろに、上書きがあるときだけ ` (overridden_done=<key,…>)` を足す（従来の形は変えない）。
+   - replay（`rebuild_work_units_and_runs`）は `WorkUnitSpecOverridden` の `(plan_id, work_unit_id)` を見て、その版の `ExecutionPlanned` で done の行の
+     spec だけを新しい版の spec にする（`replan` と同じ）。
+5. **planner の拒否の文言**: `DoneWorkUnitChanged` の説明に「done の WU の spec（例: check のコマンド）の誤りを直す必要があるなら、planner は直さずに
+   質問で人に伝える: 人は `PUT /tasks/{id}/execution-plan`（origin human の replan）で done の WU の spec を上書きできる」を足した（planner の再試行の
+   入力にこの文言が入るので、次の planner run が正しい経路を人に示す）。
+
+### 緩和の置き場所（検証の中か、`replan` で done を絞るか）
+
+検証（`validate_with` の中の `done_carry_over_errors`）に置いた。`task_ops::execution::replan` で origin human のときに `done_work_units` を
+絞る案は採らなかった。理由: (a) 絞ると done の WU の「消してはいけない」「構造を変えてはいけない」の検査まで外れる（人でも消せてしまう）、
+(b) /3 の `adopt` の規則（2 つ目の規則）も同じ `done_work_units` を見る必要があり、不変条件とその例外が 1 か所に揃う、(c) dispatcher
+（planner run）と `replan` と `tree_plan::unit_gate_plan`（done の unit は gate をかけ直さない。`done_work_units` の key だけを見る）は同じ
+`done_work_units` をそのまま渡し続けるので、木の計画の振る舞いは変わらない（人の replan で上書きされた done の unit にも gate はかからない）。
+
+### 制限
+
+- 人の `PUT` の replan は `task_ops::execution::replan` をそのまま通す。/3 の新規の採用（`adopt_human_plan`）にある unit の gate・計画の決定・
+  `adopt` の当て込みは replan の経路には無い（planner の replan と同じ: dispatcher は replan の後に止めを書くが、人の `PUT` の replan は書かない）。
+  本件（/2 の done の check の訂正）には要らない。/3 の人の replan で新しい kind task の unit や `adopt` を足す使い方は未対応として残す。
+- task の状態は変えない（`blocked` の task は `blocked` のまま）。未完了の WU は replan の規則どおり（D17）`ready` / `pending` に戻り窓を作り直す。
+  task を動かすのは人の次の操作（質問への回答・再開）。

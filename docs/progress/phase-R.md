@@ -926,3 +926,12 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 手順 3（BenchFS）: root task **01M3PAZ4XG4QN1T8S98VNA6ABV**「国際会議フルペーパー化」→ /3 計画 v1（棚卸し段階で done の Phase0 / Phase1 の 6 task を adopt、
   子 task 4、決定 `framing`）→ accept → 決定 `framing` に人の決定 **A** で回答（10:2xZ）。
 - 手順 2.4（browser の決定 h4 / h5 / h7）は人の回答待ち。
+- 手順 2.4（10:2xZ、人「推奨どおりで」）: h4 = task-acl-proxy、h5 = project-origin-identity、h7 = keep-acp-claude を API で回答。phase-1 / phase-2 の統合 WU は
+  採用済みとして done、p3 の子 task **01M3PBAVFAYPDWMQMDBXPTE2V8**「Phase 3: Browser Identity・live proxy・takeover」が生成され running（手順 4 の dogfood）。
+- BenchFS の不具合と対処: runbook の root JSON が `workspace` を持たず、root と子が `local` の作業場所になった（案件 BenchFS は `remote sirius
+  /work/NBB/rmaeda/workspace/rust/benchfs`）。子 01M3PB68JKRED21E3QVG9TE6QZ「実験に要る実装」が「BenchFS のソースが無い」と質問 → root と子の `workspace` を
+  PATCH で remote に直し、質問に回答して再開。**P-R5b-2**: root task 作成時に案件の workspace を既定で継ぐべき（子は root を継ぐ）。remote workspace の子の
+  親ブランチ統合が動くかは未確認（R1c はローカル git 前提）。
+- 人の報告: GUI に決定へ回答する場所が見当たらなかった（R4b の inbox「決定」節が本番で見えていない可能性。決定が open のときに確認する。P-R5b-3）。
+- 別件: 人が起票した「web Phase 0: GUI 全面改修…」01M3MS2JRDJ4GM0D9VN9PJCB6B は 09-28 20:50Z から blocked（done WU の check 同士が矛盾し replan では解けない、
+  planner が A/B/C を提示）。人の判断待ち。

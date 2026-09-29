@@ -119,6 +119,81 @@ fn limits() -> RunLimits {
     }
 }
 
+/// Invoked by scripts/browser-conformance.py in a separate process for each backend and
+/// phase. This runs the real adapter protocol against a scripted LLM while the Python
+/// runner provides the real agent-browser executable and loopback site. It is ignored
+/// in the normal workspace gate because those external local executables are optional.
+#[tokio::test]
+#[ignore]
+async fn p4c_conformance_backend_protocol() {
+    let backend = std::env::var("CELERIS_BROWSER_BACKEND").expect("runner backend");
+    let phase = std::env::var("CELERIS_BROWSER_PHASE").expect("runner phase");
+    let runtime =
+        PathBuf::from(std::env::var_os("CELERIS_BROWSER_RUNTIME").expect("runner runtime"));
+    let cli = PathBuf::from(std::env::var_os("CELERIS_BROWSER_CLI").expect("runner cli"));
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/browser-conformance-harness.py");
+    let mut req = request(&runtime);
+    req.context.browser = Some(BrowserContext {
+        run: BrowserRun {
+            task_id: req.task.id,
+            run_id: format!("p4c-{phase}"),
+            session_id: format!("celeris-p4c-{backend}"),
+            state: BrowserRunState::Running,
+            live_view_url: None,
+            policy: None,
+        },
+        cli,
+        credential_used: false,
+    });
+    let command = script.to_string_lossy().into_owned();
+    let adapter: Arc<dyn WorkerAdapter> = match backend.as_str() {
+        "acp" => Arc::new(crate::AcpAdapter::new(crate::AcpConfig {
+            command,
+            args: vec![],
+            startup_timeout: Duration::from_secs(10),
+            ..Default::default()
+        })),
+        "claude-code" => Arc::new(crate::ClaudeCodeAdapter::new(crate::ClaudeCodeConfig {
+            command,
+            ..Default::default()
+        })),
+        "browser-specialist" => Arc::new(crate::BrowserSpecialistAdapter::new(Arc::new(
+            crate::AcpAdapter::new(crate::AcpConfig {
+                command,
+                args: vec![],
+                startup_timeout: Duration::from_secs(10),
+                ..Default::default()
+            }),
+        ))),
+        _ => panic!("unknown backend: {backend}"),
+    };
+    let result = adapter
+        .run(
+            req,
+            &format!("p4c-{phase}"),
+            RunLimits {
+                wall_clock: Duration::from_secs(90),
+                idle_timeout: Duration::from_secs(90),
+                kill_grace: Duration::from_millis(100),
+            },
+            &RecordingSink::default(),
+        )
+        .await;
+    if phase == "resume" {
+        assert!(matches!(result.unwrap().terminal, Terminal::Done { .. }));
+    } else {
+        assert_eq!(phase, "open");
+        assert!(!matches!(
+            result,
+            Ok(RunOutcome {
+                terminal: Terminal::Done { .. },
+                ..
+            })
+        ));
+    }
+}
+
 #[test]
 fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capabilities() {
     let temp = tempfile::tempdir().unwrap();
@@ -410,6 +485,94 @@ async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance()
     .unwrap_err();
     assert!(error.to_string().contains("lacks required conformance"));
     assert!(!empty.path().join("runs/denied-run").exists());
+}
+
+/// The Python conformance runner calls this with its just-produced ledger before
+/// publishing it. Routing and the fallback execution path must consume that same file.
+#[tokio::test]
+#[ignore]
+async fn p4c_runner_record_routes_and_falls_back() {
+    let record = PathBuf::from(
+        std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").expect("runner record path"),
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let req = request(temp.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let policy = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    for backend in ["acp", "claude-code", "browser-specialist"] {
+        assert_eq!(
+            route_existing_backend(backend, &policy, &record)
+                .unwrap()
+                .primary,
+            backend
+        );
+    }
+    let mut sensitive = request(temp.path());
+    let sensitive_grant = sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap();
+    sensitive_grant.allowed_actions =
+        Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    sensitive_grant.credential_policy_ids = vec!["pol-example".into()];
+    let sensitive_policy = sensitive.context.browser_policy.as_mut().unwrap();
+    sensitive_policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    sensitive_policy.credential_policy_ids = vec!["pol-example".into()];
+    let effective = crate::browser_policy::prepare(
+        sensitive
+            .context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        sensitive.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    for backend in ["acp", "claude-code", "browser-specialist"] {
+        assert!(route_existing_backend(backend, &effective, &record).is_err());
+    }
+    let executable = substrate(temp.path());
+    let outcome = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        req,
+        "runner-ledger-fallback",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(
+        temp.path()
+            .join("runs/runner-ledger-fallback/browser-fallback-1/config.json")
+            .exists()
+    );
 }
 
 #[tokio::test]

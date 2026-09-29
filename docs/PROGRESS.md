@@ -10,7 +10,7 @@
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0081（制御 lease）/ 0082（live proxy ACL）/ 0083（identity 契約）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A の後・0.38.1 の restore は使わない。2026-09-29 の検査（Rust 2929 passed / 0 failed、clippy exit 0）。本番未昇格。
 
-- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084〜0087。P4-A/B の実 runtime・sink は未接続。P4-C は実 agent-browser/loopback fixture の scripted 基盤測定、specialist 登録、適合記録読み込み、実行時 fallback まで進行。三 backend の実 harness protocol 適合と実 LLM 比較は未。2026-09-29、本番未昇格。
+- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084〜0087。P4-A/B の実 runtime・sink は未接続。P4-C は実 agent-browser/loopback fixture を ACP RPC・明示 Claude CLI・browser-specialist wrapper の scripted LLM で各7/7 実行し、その ledger を routing/fallback に接続。実 LLM 比較は ACP 認証待ち。2026-09-29、本番未昇格。
 
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)
@@ -48,11 +48,12 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - attempt 3 検査: `cargo test -p task-worker browser --lib` 31 passed、`cargo test -p task-api --test browser_e2e` 4 passed、`cargo test --workspace` exit 0（2957 passed / 0 failed / 既存ignored 7件）、`cargo clippy --workspace -- -D warnings` exit 0。
 - attempt 3: `CredentialUse` を起動前の必須能力へ追加し、承認済みでも未適合なら拒否。`IdentityRestore` 宣言にも P4-B 適合を必須化。API 結合テストは legacy wait の登録・承認・拒否と未消費を確認する4件へ更新。旧認証成功・実注入の証拠ではない。
 - 人の回答反映: ADR-0085 で bubblewrap+subuid/subgid と固定 agent-browser 0.38.1 + 既存 harness の specialist を採用。回答待ちは解消。旧 resolve.sock と plugin bridge の秘密返却を廃止し、有効 lease を持つ同一 UID の別 worker process の実 IPC も拒否。lease 未消費・sentinel 非露出を検査。
-- 未解決: P4-A の実 runtime・namespace と filtering proxy の結合、P4-B の peer role と実 CDP sink、P4-C の実 harness protocol 適合が必要。P4-A/B/C の継続小タスク3件を delegate.json に提案（採用・完了は未確認）。内部 origin の追加なし。
+- 未解決: P4-A の実 runtime・namespace と filtering proxy の結合、P4-B の peer role と実 CDP sink、P4-C の実 LLM 同一 task 比較が必要。P4-A/B/C の継続小タスク3件を delegate.json に提案（採用・完了は未確認）。内部 origin の追加なし。
 
 - run `01M3QCTV524JJ41X9MSFS0756V` 最終検査: `cargo test --workspace` exit 0（2957 passed / 0 failed / 既存 ignored 7件）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all --check` exit 0。旧 IPC の秘密取得拒否・承認後拒否・lease 未消費を含む。P4-A/B/C の実適合は未達。
 
 - run `01M3QDM7H5RYRZF2RNCARHQWX6`: ADR-0086。実Unix/TCP DNSのegress transport（9試験）と独立 `celeris-browser-egress`（6子プロセス試験）を追加。private/IPv6/DNS/proxy/CNAME負例・IP固定・親死亡SIGKILL/waitpid回収が成功。P4-A全体は未達（worker/runtimeとの接続、別UID実証、runtime orphan、identity復元が未）。P4-B/Cの実適合も未達、H3と機密起動拒否は維持。subuid mapping は親user namespaceの範囲外でEPERM、設定変更なし。詳細・証拠は [phase-browser-4](progress/phase-browser-4.md)。
 - run `01M3QGRCA745JCZTKDBDY9R83B`: ADR-0087。P4-C の静的適合登録を削除し、実測 ledger 読み込み・specialist adapter 登録・公開能力の実行時 fallback と無候補拒否を追加。実 agent-browser 0.38.1 と loopback fixture の scripted driver 三件は各7/7 case。driver は同一で ACP/Claude の実 harness protocol を使っていないため、scripted ledger は routing に使えず P4-C 完了とは判定しない。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+- run `01M3QJ5CY8366206MQ20A3RBPB`: `--protocol-scripted` runner が ACP・Claude・specialist の実 adapter を scripted harness process で起動。実 agent-browser 0.38.1 と loopback fixture の同一 task で各7/7。生成 ledger を worker の routing と実行時 fallback 試験に渡して成功。機密要求は未適合として拒否を維持。実 LLM 比較は ACP CLI/認証が無いため未実施。詳細は [phase-browser-4](progress/phase-browser-4.md)。
 
 - このrunの最終検査: `cargo test --workspace` → exit 0（2972 passed / 0 failed / 既存 ignored 7件）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all --check` / `git diff --check` → exit 0。機密機能の実適合・production接続の証拠ではない。

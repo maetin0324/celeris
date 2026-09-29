@@ -92,7 +92,7 @@ def drive():
     return 0 if call(cli, "close")[0] == 0 else 1
 
 
-def backend_run(backend, command, agent_browser, origin, root):
+def backend_run(backend, command, agent_browser, origin, root, protocol_scripted=False):
     first_request = len(Site.requests)
     runtime = root / backend
     runtime.mkdir(mode=0o700)
@@ -113,6 +113,7 @@ def backend_run(backend, command, agent_browser, origin, root):
     }))
     env = os.environ.copy()
     env.update(CELERIS_BROWSER_CLI=str(cli), CELERIS_BROWSER_ORIGIN=origin,
+               CELERIS_BROWSER_BACKEND=backend, CELERIS_BROWSER_RUNTIME=str(runtime),
                HTTP_PROXY="", HTTPS_PROXY="", ALL_PROXY="", NO_PROXY="localhost,127.0.0.1")
     start = time.monotonic()
     process_ok = []
@@ -120,7 +121,8 @@ def backend_run(backend, command, agent_browser, origin, root):
         env["CELERIS_BROWSER_PHASE"] = phase
         result = subprocess.run(command, cwd=runtime, env=env, text=True,
                                 capture_output=True, timeout=180, check=False)
-        process_ok.append(result.returncode == (-signal.SIGKILL if phase == "open" else 0))
+        expected = 0 if protocol_scripted else (-signal.SIGKILL if phase == "open" else 0)
+        process_ok.append(result.returncode == expected)
         (runtime / f"{phase}-driver.json").write_text(json.dumps({
             "exit": result.returncode, "stdout_tail": result.stdout[-2000:],
             "stderr_tail": result.stderr[-2000:],
@@ -170,6 +172,8 @@ def main():
                         help='ID=["command","arg",...] (one per backend)')
     parser.add_argument("--scripted", action="store_true",
                         help="use this file as a scripted LLM driver for all three backends")
+    parser.add_argument("--protocol-scripted", action="store_true",
+                        help="run the Rust ACP, Claude and specialist adapters against a scripted LLM")
     parser.add_argument("--drive", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.drive:
@@ -183,11 +187,18 @@ def main():
         if not isinstance(parsed, list) or not parsed or not all(isinstance(a, str) for a in parsed):
             parser.error("backend command must be a nonempty JSON string array")
         command[backend] = parsed
-    if args.scripted and command:
-        parser.error("choose scripted or explicit backend commands")
+    if (args.scripted or args.protocol_scripted) and command:
+        parser.error("choose a scripted mode or explicit backend commands")
+    if args.scripted and args.protocol_scripted:
+        parser.error("choose only one scripted mode")
     if args.scripted:
         command = {backend: [sys.executable, str(Path(__file__).resolve()),
                              "--drive", "--output-dir", args.output_dir] for backend in BACKENDS}
+    if args.protocol_scripted:
+        manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
+        rust_command = ["cargo", "test", "--manifest-path", str(manifest), "-p", "task-worker",
+                        "--lib", "p4c_conformance_backend_protocol", "--", "--ignored", "--nocapture"]
+        command = {backend: rust_command for backend in BACKENDS}
     if set(command) != set(BACKENDS):
         parser.error("ACP, claude-code and browser-specialist commands are all required")
     executable = shutil.which(args.agent_browser)
@@ -210,15 +221,32 @@ def main():
         origin = f"http://localhost:{server.server_port}/"
         results, comparison = [], []
         for backend in BACKENDS:
-            result, same_task = backend_run(backend, command[backend], executable, origin, output)
+            result, same_task = backend_run(backend, command[backend], executable, origin, output,
+                                            args.protocol_scripted)
             results.append(result)
             comparison.append(same_task)
-        # Scripted mode measures the real substrate but does not exercise ACP/Claude harness
-        # protocols. The worker deliberately refuses this ledger as backend certification.
+        # Legacy direct-scripted mode skips harness protocols. The worker deliberately
+        # refuses its ledger as backend certification.
         source = "celeris-browser-conformance-scripted" if args.scripted else "celeris-browser-conformance"
         ledger = {"schema": 1, "source": source, "results": results}
         temporary = output / "conformance.json.next"
         temporary.write_text(json.dumps(ledger, indent=2) + "\n")
+        if args.protocol_scripted and all(run["accepted"] for run in comparison):
+            env = os.environ.copy()
+            env["CELERIS_BROWSER_CONFORMANCE_FILE"] = str(temporary)
+            route = subprocess.run(
+                ["cargo", "test", "--manifest-path", str(manifest), "-p", "task-worker", "--lib",
+                 "p4c_runner_record_routes_and_falls_back", "--", "--ignored", "--nocapture"],
+                cwd=output, env=env, text=True, capture_output=True, timeout=180, check=False,
+            )
+            (output / "routing-test.json").write_text(json.dumps({
+                "exit": route.returncode, "stdout_tail": route.stdout[-2000:],
+                "stderr_tail": route.stderr[-2000:],
+            }))
+            if route.returncode:
+                temporary.unlink()
+                print("routing test rejected runner ledger", file=sys.stderr)
+                return 1
         temporary.replace(output / "conformance.json")
         (output / "same-task.json").write_text(json.dumps(comparison, indent=2) + "\n")
         print(json.dumps({"record": str(output / "conformance.json"), "comparison": comparison}))

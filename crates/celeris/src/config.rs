@@ -6099,7 +6099,7 @@ max_tree_depth = 2
         let cfg: Config = toml::from_str(&bogus).unwrap();
         assert_eq!(
             cfg.validate().unwrap_err().to_string(),
-            "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, acp, paperqa, local-deep-research, langmem only)"
+            "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
         );
 
         let empty = format!("[[roles]]\nid = \"  \"\n{providers}");

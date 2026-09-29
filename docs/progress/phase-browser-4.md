@@ -4,7 +4,7 @@
 tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 ---
 
-- 状態: **P4-A/B/C の受け入れは未完**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。実 runtime・CDP sink・backend 適合は継続実装が必要。本番未昇格。
+- 状態: **P4-A/B は未完、P4-C の公開能力は scripted LLM による実 backend 適合済み**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。機密能力は実 runtime・CDP sink 適合まで拒否。本番未昇格。
 - 更新: 2026-09-29
 - ADR: [ADR-0084](../adr/0084-browser-phase4-isolation-injection-routing.md) D6、[ADR-0085](../adr/0085-browser-phase4-runtime-selection.md)
 
@@ -16,7 +16,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 | P3-A identity 復元（隔離下のみ） | 未達。API の契約テストだけ | `cargo test -p task-api restore_is` の前回結果は2 passed。`restore_isolated` は稼働中 runtime に未結合。`--restore` / `--state` / `--profile` は利用しない。 |
 | P4-B stronger injection | 未達。攻撃の純関数テストだけ | `cargo test -p celeris-credentiald injection` の前回結果は6 passed。実 CDP sink / IPC peer UID role は未接続。旧 plugin bridge と resolve.sock 自体を固定拒否に変更。有効 lease を持つ別 worker process の実 IPC 拒否を検証。実注入は未達。 |
 | H3 観測停止の維持 | 実装維持。機密起動は拒否 | `cargo test -p task-worker browser --lib` → 31 passed。`browser_auth_section_forward_events_drops_progress_artifact_and_live` と LiveEmitter の抑止試験を含む。API 結合テストの store auth_section / takeover 拒否も成功。実注入中の end-to-end 検証はP4-A/B待ち。 |
-| P4-C backend routing | 一部接続。公開操作の既存 loop 再利用と未適合機密要求の拒否 | worker browser 関連31件と `cargo test -p task-api --test browser_e2e` → 4 passed。`CredentialUse` を `CredentialInjection` 必須能力へ写像し、wait操作・承認消費・起動より前に拒否する。`IdentityRestore` にも `InjectionAttackSuite` を要求。静的 fixture 登録は実 backend の適合証拠ではなく、specialist・実 fixture runner・同一task実評価は未。 |
+| P4-C backend routing | 公開能力を実 backend protocol で適合。機密要求は拒否 | `--protocol-scripted` runner が実 agent-browser 0.38.1 + loopback fixture で ACP RPC・Claude CLI・specialist wrapper を各7/7 実行。runner の ledger を worker routing/fallback 試験に渡して成功。`CredentialUse` は `CredentialInjection`、`IdentityRestore` は `InjectionAttackSuite` を要し、P4-A/B の実適合まで起動前に拒否。実 LLM 比較は未。 |
 
 ## attempt 3 の挙動と検査
 
@@ -41,7 +41,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 
 - P4-A: 実 bwrap/subuid browser 起動・事実採取・broker/CDP/IPC 分離・namespace と新 egress transport の接続・runtime orphan 回収・稼働中隔離 session への identity 復元。subuid mapping はこの run の親 user namespace の範囲外で EPERM。proxy 部分の成功だけで受け入れない。
 - P4-B: P4-A の後、別 injection-only IPC の SO_PEERCRED role/session 認可・実 CDP sink・実攻撃負例・H3 の端から端の検証。旧 endpoint は再開しない。
-- P4-C: 選択済み specialist と既存 loop を実 fixture runner/同一 task 評価へ接続し、能力を失わない fallback を実行経路で検査する。機密機能は P4-A/B の実適合まで拒否する。
+- P4-C: 実 LLM の同一 task 比較は ACP CLI/認証を利用できる環境で行う。scripted LLM による実 backend protocol 適合・能力を失わない実行時 fallback・無候補拒否は実施済み。機密機能は P4-A/B の実適合まで拒否する。
 - 3件の継続小タスクを run の `delegate.json` に提案した。P4-B は P4-A に依存し、公開能力の P4-C は独立。採用・実行・完了はこの run では確認できていない。提案を実装済みとして数えず、親の受け入れ条件0/1/2は未達のままとする。
 - 内部 origin の追加、本番昇格、リモート実行は行っていない。
 
@@ -69,3 +69,13 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 - 実 LLM 比較: この環境は `claude auth status` が loggedIn=true だが `opencode` CLI が PATH に無く、三 backend の同一 task 比較を実施できない。ACP/OpenCode と specialist 用 harness の認証が整った環境で、三つの `--backend-command ID=<JSON argv>` を指定して同じ runner を再実行する。各 command は環境変数 `CELERIS_BROWSER_CLI`・`CELERIS_BROWSER_ORIGIN`・`CELERIS_BROWSER_PHASE` を読み、`open` phase で local origin を開いて denied origin を試した後に SIGKILL、`resume` phase で snapshot refs・click・screenshot・download を同じ session で実行する。`same-task.json` の accepted・違反・復旧・費用・時間を記録し、worker に渡す適合 file には実 harness 実行の `source` を要求する。実 LLM が使える時は費用を各 harness の usage から記録する。これは ADR-0009 P-34 の残課題。
 - 本番昇格・本番設定変更・内部 origin 追加なし。`CELERIS_BROWSER_CONFORMANCE_FILE` は本番に設定していないため、現在の本番 browser 起動は記録不足で拒否される。適合記録の実 harness 生成とその独立試験が残る。
 - 検査: `cargo test --workspace` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all --check` と `git diff --check` → exit 0。workspace gate は実 agent-browser の scripted fixture を自動実行しないため、上記 runner の独立した exit 0 を併記する。`browser_specialist_provider_uses_configured_acp_harness`、`specialist_wraps_existing_harness_and_runs_same_browser_task`、`execution_fallback_uses_fresh_session_and_refuses_without_conformance`、機密承認非消費の API 試験は workspace gate で成功した。
+
+## P4-C backend protocol 適合（run 01M3QJ5CY8366206MQ20A3RBPB）
+
+- ADR-0087 の決定に従い、`scripts/browser-conformance.py --protocol-scripted` を追加した。Rust の `AcpAdapter`、`ClaudeCodeAdapter`、ACP を包む `BrowserSpecialistAdapter` をそれぞれ起動し、`scripts/browser-conformance-harness.py` の scripted LLM が ACP JSON-RPC または Claude stream-json を話す。実 harness protocol を通過した後に同じ browser CLI を操作する。従来の `--scripted` は `source=celeris-browser-conformance-scripted` のままで、routing は引き続き拒否する。
+- 実 agent-browser 0.38.1 と 127.0.0.1 fixture で三 backend 各7/7 case。open 後の harness crash、別 process での session 再開、denied origin、snapshot refs、click、screenshot、download を browser event と server 観測で判定した。`p4c-protocol-v2/same-task.json` は accepted=true、policy_violations=0、recoveries=1、scripted LLM の cost_usd=0 を三件とも記録。出力は run artifacts の機械記録であり、本番設定には投入していない。
+- runner は全件成功後、生成した `conformance.json.next` を **同じ file のまま** `p4c_runner_record_routes_and_falls_back` に渡す。試験は三 backend の production route、同 ledger に対する機密能力拒否、ACP 失敗後に Claude へ新 session で移る実 worker 経路を検査し、成功した場合だけ `conformance.json` に昇格する。`p4c-protocol-v2/routing-test.json` は exit 0。機密拒否 assertion 追加後も同 ledger を使う試験が exit 0。単体テスト内で作った mock ledger をこの結合の証拠には使っていない。fallback 実行には fake substrate を用いるため、実 agent-browser での失敗後再試行は別証拠が必要。
+- 実行コマンド: `python3 scripts/browser-conformance.py --protocol-scripted --agent-browser <0.38.1 binary の絶対パス> --output-dir <run artifacts>/p4c-protocol-v2` → exit 0。外部 network への fixture 要求は無し。loopback socket のため sandbox 外実行が必要だった。
+- 実 LLM 同一 task 比較は未実施。Claude は認証済みだが ACP/OpenCode CLI はこの環境の PATH に無く、三 backend を同じ条件で実行できない。認証が揃った環境で `--backend-command acp=<JSON argv>`、`--backend-command claude-code=<JSON argv>`、`--backend-command browser-specialist=<JSON argv>` を指定し、各 command が runner の `CELERIS_BROWSER_CLI` / `CELERIS_BROWSER_ORIGIN` / `CELERIS_BROWSER_PHASE` を受けて同じ二段階 fixture を実行する。`same-task.json` の成否・違反・復旧・時間・実 usage 由来の費用を比較して PROGRESS に追記する（ADR-0009 P-34）。
+- 機密能力の適合は記録していない。`CredentialInjection`・`IdentityRestore` は P4-A/B の実適合まで拒否し、H3/auth_section の配線は変更していない。本番昇格・本番設定変更・内部 origin 追加なし。
+- 最終検査: `cargo test --workspace` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0。最初の workspace 実行は前 run の specialist 登録に対応する config エラー期待文言が古いため1件失敗し、期待文言を更新して再実行した。`cargo fmt --all --check` と `git diff --check` も exit 0。

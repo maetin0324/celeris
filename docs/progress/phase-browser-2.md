@@ -4,7 +4,7 @@
 tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 ---
 
-完了日: 2026-09-28。契約は [ADR-0080](../adr/0080-browser-phase2-policy-broker-approval.md)（Phase 1 は ADR-0078、[phase-browser.md](phase-browser.md)）。
+完了日: 2026-09-29。契約は [ADR-0080](../adr/0080-browser-phase2-policy-broker-approval.md)（Phase 1 は ADR-0078、[phase-browser.md](phase-browser.md)）。
 本番の昇格は行っていない（人が GUI で行う）。
 
 ## 実装したもの
@@ -13,7 +13,7 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 - **credential broker（D2/D3）**: `crates/celeris-credentiald`。`CredentialProvider` 抽象の上に最初の provider として手動登録を実装した。XChaCha20-Poly1305 で暗号化して保存し、権限を検査する。control IPC と resolve IPC を分ける。lease は task・run・session・origin に束縛した一回限りのもので、監査も付ける。固定版 agent-browser の plugin bridge（`agent-browser.plugin.v1` / `credential.resolve`）を使う。LLM には success/failure だけを返す。秘密値の保存方法は ADR-0080 D3 に書いた。
 - **wait と承認（D4/D5）**: migration 0032（main の 0031_task_tree の後へ振り直した。`browser_waits`・`browser_credentials`・`browser_approvals`。秘密値の列は無い）。task は Blocked のまま、wait の reason として WAITING_FOR_AUTH/APPROVAL を持つ。作成・解決・期限切れ・cancel は task の遷移と同じトランザクションで確定し、version の CAS で重複を防ぐ。人の操作には bearer に加えて GUI 専用鍵の Ed25519 human attestation を要求する。
 - **結線（e2e）**: 承認後の run は承認 wait を一度だけ消費し、credentiald に bind と grant を求める。origin が合わないときや失敗したときは lease を失効させ、再試行しない Error にする。認証後の区間では観測系の action を外し、Live View も止める。
-- **GUI（D5/D6）**: task 画面の「ブラウザの人待ち」に登録フォームと承認・拒否の操作を置いた。本人 session・exact Origin・CSRF・wait の version を検査する。Live View は `/browser/live/:taskId/:runId` の本人 guard を通る経路だけにし、loader data と SSE から raw `live_view_url` を消した。relay が未検証のため、本人にも 503 `live_view_relay_unavailable` を返す（D6 の安全側動作）。詳細は `gui/docs/PROGRESS.md`。
+- **GUI（D5/D6）**: task 画面の「ブラウザの人待ち」に登録フォームと承認・拒否の操作を置いた。本人 session・exact Origin・CSRF・wait の version を検査する。Live View は `/browser/live/:taskId/:runId` の本人 guard を通る経路だけにし、loader data と SSE から raw `live_view_url` を消した。relay を設定した場合は本人だけが閲覧できる。未設定時は 503 `live_view_relay_unavailable` を返す。詳細は `gui/docs/PROGRESS.md`。
 
 ## Live View relay（live-gui WU、2026-09-29、ADR-0080 D6）
 
@@ -39,7 +39,7 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 
 2026-09-29。`scripts/browser-auth-login-check.py`。検証環境に置いた固定版 agent-browser 0.38.1 を使い、`celeris-credentiald` は scratch の HOME と XDG_RUNTIME_DIR に立てた。fixture は 127.0.0.1 の自己署名 HTTPS。ネットワークにも LLM にも出ていない。詳細な記録（手順、各 variant の exit code、生ログ）は WU の artifacts の `auth-login/REPORT.md`。
 
-**判定: 部分的に確認**。実バイナリで次が通った。ただし plugin への binding token の受け渡しは、試験だけの FD 3 の回避策（wrapper が token file から FD 3 を作り直す。または daemon を起動する `open` にも FD 3 を渡す）を使った場合に限る。今の Celeris の結線のままでは動かない（fail closed で止まる）。
+**当時の判定: 部分的に確認**。以下は修正前の調査記録。後続の `4cedc73f75ba` で 5 件を修正し、worker 設定で実 agent-browser 0.38.1 の `auth login` 成功、lease 再使用拒否、sentinel 0 件を確認した（live-gui WU `auth-wiring/production5`）。
 
 - 確認できたこと: bridge が `credential.resolve` を受ける。resolve socket 経由で broker が lease を消費する（journal に `use/consumed`）。`--no-navigate` で origin を照合しフォームを埋めて submit する。fixture が正しい資格情報を受け取り、ログイン後に `LOGIN-OK-<rand>` を `get text body` と `snapshot` の両方で観測した。同じ lease の再使用は拒否された（`deny/used`）。stdout・stderr・journal・scratch 全体に sentinel は 0 hit。
 - 現在の結線との差（5 件）:
@@ -56,7 +56,7 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
   - bridge が失敗したときも stdout に `{"protocol":"agent-browser.plugin.v1","success":false}` を書き、broker に deny を残す。
   - 使用済み lease の `revoke` は成功を返さず `used` と区別する。
 - 注意: 実バイナリは plugin 要求の `url` に `--url` の値をそのまま入れる。ブラウザが観測した URL ではないので、broker の origin 照合は二重の確認にすぎない。注入前の origin 検証は agent-browser 側（`--no-navigate --url`、scheme・host・port）が行う。broker は `https://` の origin しか受け付けず、loopback の http の例外は無い。
-- 未解決（Phase 3、設計判断が必要。ADR-0080 D2 の改訂）: token の受け渡し。(a) segment 専用 session か policy パスで新しい daemon を確実に起動し、その最初の `open` に FD 3 の pipe を渡す（bridge は EOF まで読むので token は一度しか取れない。daemon が起動する Chrome などの子に FD 3 が継承されないかは未確認）。(b) supervisor が 0700 の directory に一回限りの token file（0600）を置き、bridge が読んだ直後に unlink する（daemon の env は起動時に固定される）。(c) bridge が resolve socket の peer（daemon の pid）を supervisor に照会する。
+- token の受け渡しは後続の `4cedc73f75ba` で最初の `open` に FD 3 を渡す方式を採用した。daemon が起動する Chrome などの子への FD 継承は未確認。
 - 限界: sentinel の走査に Chrome の一時 profile は入っていない（scratch の外にあり、close で消える）。
 
 ## 証拠（release WorkUnit、2026-09-28、base 29d933f）
@@ -78,14 +78,28 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 - `SD_REPO=$HOME/workspace/agent-platform scripts/selfdeploy/verify.sh 18ca76d57fce`: exit 0、**ok=true、live_ok=false**。check 1〜4・4b（gui-e2e）・6（smoke）は true。check 5（n-1-compat）だけが false になる。本番の現行 5fcb7eebbe9a は schema 29 までしか扱えず、このリリースは 0030（cluster_connection_log）・0031（browser_waits）・0032（browser_task_policies）を適用して 32 にするため、`SchemaTooNew` で起動しない。これは決定的に起きることで、一過性の失敗ではないので再実行していない。
 - 本番へは昇格していない。昇格すると N-1 の rollback ができない（schema 32 の DB を旧 binary が読めない）ことを、人は昇格前に承知しておく必要がある。
 
+## main 追従後の検査（2026-09-29）
+
+`main` の `bd3b2b3` を競合なく取り込み、`git merge-base --is-ancestor main HEAD` は exit 0。browser migration は 0032/0033、schema version は 33 のままで、今回の merge に migration 番号の衝突は無かった。
+
+| コマンド | 結果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | exit 0 |
+| `cargo test --workspace` | exit 0、2833 passed / 0 failed / 7 ignored |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cd gui && pnpm typecheck` | exit 0 |
+| `cd gui && pnpm test` | exit 0、78 files / 1213 passed |
+
+実 GUI の登録→再開と承認、本人限定 Live View は live-gui WU の `g14-final`（4 passed、スクリーンショットあり）で確認した。実 agent-browser 0.38.1 の worker 設定による `auth login` は同 WU の `auth-wiring/production5`（ログイン成功、lease 再使用拒否、sentinel 0 件）で確認した。
+
 ## 未解決事項
 
-- Phase 3〜4 に回すもの: persistent auth（認証 state の再利用）、GUI への live stream 統合（読み取り専用 relay。現状では Live View は本人にも 503）、container/egress 隔離。
-- `auth login` の lease 参照 flag、plugin 設定の形、daemon 経由の FD 3 継承は、実 agent-browser 0.38.1 で確認した結果、今の結線では動かないことが分かった（2026-09-29。上の「実 agent-browser での auth login 確認」）。配列 plugins、`auth login <name> … --item`、segment policy の `url`、policy パス変更による状態消失の修正と、binding token の受け渡し（FD 3 の (a)/(b)/(c)、ADR-0080 D2 の改訂）の決定が Phase 3 の前提になる。
+- Phase 3〜4 に回すもの: persistent auth（認証 state の再利用）、GUI 本体への live stream 統合、container/egress 隔離。読み取り専用 relay は本 Phase で実装・確認した。
+- 外部 host / 別 network namespace から dashboard に到達できないことは未 probe。同一 UID による loopback 直結と、dashboard が namespace 内の全 session を列挙する限界も残る。
 - g14 e2e の `browser_updated` は scratch DB への seeding である。supervisor が実ブラウザを起動して Live View の event を出す経路は、実 LLM の環境で確かめていない。
 - GUI の control socket は Node から SO_PEERCRED を読めない。file mode（0700/0600）だけで守っており、同一 UID の相手は区別できない。
 
 ## 提案
 
-- Phase 3 の最初に、上の修正（配列 plugins、`--item`、`url`、policy パス、token の受け渡し）を入れたうえで、`scripts/browser-auth-login-check.py` の FD 3 回避策を外して実 agent-browser 0.38.1 で再実行し、fake との差を潰す。fake の parser も実バイナリの契約に合わせる。
+- `4cedc73f75ba` で配列 plugins、`--item`、`url`、policy パス、FD 3 の受け渡し、fake parser を修正し、`scripts/browser-auth-login-check.py` の worker 設定による実 agent-browser 0.38.1 の認証成功を確認した。
 - Live View relay は live-gui WU で実装した（上の節）。残る限界（同一 UID の直接接続、dashboard の namespace 内 session 一覧）は container/egress 隔離の task で扱う。

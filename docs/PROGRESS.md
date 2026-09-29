@@ -30,3 +30,9 @@
 
 worker・review の完了を JoinHandle で明示同期し、実時間の待機回数に依存しない検証へ変更。
 [実装と検証の記録](progress/phase-F.md#f5-1-review-repair)を参照。
+
+## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）
+
+- 認証区間（ADR-0080 H3）を worker → store op（task-api `auth-section` と共通）→ control 状態へ配線、API で takeover/renew を 409 拒否、実 `forward_events` が区間中 progress・artifact・live event を 0 件にする。詳細・証拠は [phase-browser-3](progress/phase-browser-3.md)。
+- 証拠: `cargo test --workspace` exit 0（2931 passed）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo test --workspace auth_section` exit 0。
+- 未解決: identity 復元は P4-A 後。GUI 試験は本 run で再実行していない。

@@ -1352,6 +1352,40 @@ fn phase3_live_grant_is_task_scoped_scrubbed_and_reconnects_from_last_seen() {
     assert_eq!(replay.json()["events"].as_array().unwrap().len(), 1);
 }
 
+/// ADR-0080 H3 / ADR-0081: while the worker's auth section is active the task-api refuses
+/// takeover and renew (not only the GUI), revokes a held lease, and reopens after it ends.
+#[test]
+fn phase3_auth_section_refuses_takeover_and_renew_until_left() {
+    let f = BrowserFixture::new();
+    let path = f.path(f.task_a, &f.run_a, "control");
+    let pause = f.control("owner-a", json!({"kind":"pause"}), 0, "as-pause");
+    assert_eq!(pause.status, 200, "{}", pause.body);
+    let v = pause.json()["version"].as_u64().unwrap();
+    let held = f.control("owner-a", json!({"kind":"takeover"}), v, "as-take-1");
+    assert_eq!(held.status, 200, "{}", held.body);
+    assert_eq!(held.json()["phase"], "human_control");
+    let v = held.json()["version"].as_u64().unwrap();
+    let on = f.env.post(&format!("{path}/auth-section"), json!({"active": true}));
+    assert_eq!(on.status, 200, "{}", on.body);
+    assert_eq!(on.json()["auth_section"], true);
+    assert_eq!(on.json()["phase"], "paused", "held lease is revoked");
+    let status = f.env.get(&path);
+    assert_eq!(status.json()["auth_section"], true, "{}", status.body);
+    let v2 = on.json()["version"].as_u64().unwrap();
+    assert!(v2 > v);
+    f.control("owner-a", json!({"kind":"renew"}), v2, "as-renew")
+        .assert_problem(409, "auth_section_active");
+    f.control("owner-a", json!({"kind":"takeover"}), v2, "as-take-2")
+        .assert_problem(409, "auth_section_active");
+    let off = f.env.post(&format!("{path}/auth-section"), json!({"active": false}));
+    assert_eq!(off.status, 200, "{}", off.body);
+    assert_eq!(off.json()["auth_section"], false);
+    let v3 = off.json()["version"].as_u64().unwrap();
+    let again = f.control("owner-a", json!({"kind":"takeover"}), v3, "as-take-3");
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.json()["phase"], "human_control");
+}
+
 #[test]
 fn phase3_control_converges_rejects_competition_and_cancel_stops() {
     let f = BrowserFixture::new();

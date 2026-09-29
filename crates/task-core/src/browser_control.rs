@@ -206,6 +206,12 @@ impl BrowserControl {
         }
     }
 
+    /// credential 注入（認証区間）が終わった。takeover・renew を再び受け付ける。
+    /// 取り上げた lease は戻さない（人が改めて takeover する）。
+    pub fn leave_auth_section(&mut self) {
+        self.auth_section_active = false;
+    }
+
     /// 人の接続が切れた。lease を失効させ、agent は自動再開しない。
     pub fn human_disconnected(&mut self, holder: &str) {
         let held = self.lease.as_ref().is_some_and(|l| l.holder == holder);

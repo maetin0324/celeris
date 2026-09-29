@@ -124,7 +124,7 @@ pub fn run_gated<T>(
 }
 
 pub trait LiveSink: Send + Sync {
-    fn send(&self, event: &PersistedLiveEvent);
+    fn send(&self, event: &ScrubbedLiveEvent);
 }
 
 #[derive(Default)]
@@ -140,11 +140,11 @@ impl CollectingSink {
     }
 }
 impl LiveSink for CollectingSink {
-    fn send(&self, event: &PersistedLiveEvent) {
+    fn send(&self, event: &ScrubbedLiveEvent) {
         self.events
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(event.clone());
+            .push(event.as_persisted().clone());
     }
 }
 
@@ -186,6 +186,11 @@ impl<S: LiveSink> LiveEmitter<S> {
         AuthSection { emitter: self }
     }
 
+    /// 認証区間の中か。中なら呼び出し側は progress・artifact も流さない。
+    pub fn in_auth_section(&self) -> bool {
+        *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0
+    }
+
     /// scrub して送る。auth section 中・frame は送らない（溜めない）。返り値は送ったか。
     pub fn emit(&self, event: &LiveEvent) -> bool {
         if *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0 {
@@ -193,7 +198,7 @@ impl<S: LiveSink> LiveEmitter<S> {
         }
         match ScrubbedLiveEvent::from_event(event) {
             Some(s) => {
-                self.sink.send(s.as_persisted());
+                self.sink.send(&s);
                 true
             }
             None => false,

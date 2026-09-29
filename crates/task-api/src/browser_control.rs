@@ -246,18 +246,36 @@ async fn agent_end(
     Ok(Json(status))
 }
 
-/// ADR-0080 H3: credential を注入した。takeover・renew を拒否し、既存 lease を取り上げる。
+/// ADR-0080 H3: 認証区間の開始（`active: true`、既定）と終了（`active: false`）。
+/// 区間中は takeover・renew を拒否し、既存 lease を取り上げる。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthSectionBody {
+    #[serde(default = "default_active")]
+    active: bool,
+}
+fn default_active() -> bool {
+    true
+}
+
 async fn auth_section(
     State(state): State<ApiState>,
     Path(path): Path<SessionPath>,
+    body: Option<Json<AuthSectionBody>>,
 ) -> Result<Json<ControlStatus>, ApiProblem> {
     require_daemon(&state)?;
+    let active = body.is_none_or(|Json(b)| b.active);
     let status = state
         .blocking(move |store| {
-            mutate(store, &path, |s| {
-                s.enter_auth_section();
-                Ok(status_of(s))
-            })
+            let key = BrowserSessionKey {
+                task_id: &path.0,
+                run_id: &path.1,
+                session_id: &path.2,
+            };
+            store
+                .browser_control_auth_section(key, active)
+                .map(|s| status_of(&s))
+                .map_err(store_problem)
         })
         .await?;
     Ok(Json(status))

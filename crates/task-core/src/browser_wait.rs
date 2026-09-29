@@ -363,6 +363,18 @@ pub trait BrowserWaitStore: Send + Sync {
         now: OffsetDateTime,
     ) -> Result<BrowserWaitOpen, BrowserWaitError>;
     fn browser_wait_get(&self, wait_id: &str) -> Result<Option<BrowserWait>, StoreError>;
+    /// ADR-0080 H3: 認証区間の開始/終了を control 状態に書く（task-api の `auth-section` と同じ op）。
+    fn browser_session_auth_section(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        active: bool,
+    ) -> Result<(), crate::browser_store::BrowserStoreError>;
+    /// ADR-0082: scrub 済みの live event を 1 件追記する。
+    fn browser_session_live_append(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        event: &crate::browser_live::ScrubbedLiveEvent,
+    ) -> Result<u64, StoreError>;
     /// task の wait（新しい順ではなく作成順）。
     fn browser_waits_for_task(&self, task_id: TaskId) -> Result<Vec<BrowserWait>, StoreError>;
     /// 人の対応を待つ wait（`pending`）の全件。inbox・承認一覧に出す。作成順。
@@ -985,6 +997,20 @@ fn approval_rows(
 }
 
 impl BrowserWaitStore for SqliteStore {
+    fn browser_session_auth_section(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        active: bool,
+    ) -> Result<(), crate::browser_store::BrowserStoreError> {
+        self.browser_control_auth_section(key, active).map(|_| ())
+    }
+    fn browser_session_live_append(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        event: &crate::browser_live::ScrubbedLiveEvent,
+    ) -> Result<u64, StoreError> {
+        self.browser_live_append(key, event)
+    }
     fn browser_task_policy_get(
         &self,
         task_id: TaskId,

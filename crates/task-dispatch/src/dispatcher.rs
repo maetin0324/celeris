@@ -1897,6 +1897,43 @@ impl EventSink for StoreSink {
         )
         .map_err(String::from)
     }
+    fn browser_auth_section(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        active: bool,
+    ) -> Result<(), String> {
+        let task_id = self.task_id.to_string();
+        self.store
+            .browser_session_auth_section(
+                task_core::browser_store::BrowserSessionKey {
+                    task_id: &task_id,
+                    run_id,
+                    session_id,
+                },
+                active,
+            )
+            .map(|_| ())
+            .map_err(|_| "browser control store unavailable".into())
+    }
+    fn browser_live(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+        let task_id = self.task_id.to_string();
+        if let Err(e) = self.store.browser_session_live_append(
+            task_core::browser_store::BrowserSessionKey {
+                task_id: &task_id,
+                run_id,
+                session_id,
+            },
+            event,
+        ) {
+            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record browser live event");
+        }
+    }
     fn browser_updated(&self, browser: &task_core::BrowserRun) {
         if let Err(e) = self.store.append_event(
             self.task_id,

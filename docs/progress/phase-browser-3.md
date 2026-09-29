@@ -33,3 +33,17 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 
 - 原因: Phase 3 の状態遷移の退行ではなく、`task_ops::replay` の**非原子的な読み取り**。`store.list(None)` で tasks を読んだ後、タスクごとに別の読み取りで `events_for` を読んでいたため、daemon 稼働中に呼ぶ試験（`api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values`）で、その間に daemon が lease を取る（Ready→Running の `Transitioned` を書く）と「古い tasks 行（Ready）× 新しい events（Running）」を突き合わせて偽の MISMATCH を出した。Phase 3 の e2e 追加で負荷とタスク数が増え、窓に当たりやすくなった。
 - 修正: `TaskStore::tasks_with_events` を追加し、`SqliteStore` では tasks と events を 1 つの読み取りトランザクション（WAL スナップショット）で読む。`replay` はこれを使う。sleep・リトライ・`#[ignore]` は使っていない。
+
+## 再試行（task 01M3Q2FPRCF34F00PBZSMNSZE8, 2026-09-29）: 認証区間を control・event 経路へ配線
+
+前回ブランチ（65c5ae7）を merge して引き継ぎ、reviewer 指摘の欠落だけを塞いだ。
+
+| 指摘 | 入ったもの | 検査 → 結果 | 判定 |
+|---|---|---|---|
+| (1) worker が認証区間の開始/終了を control 状態へ | `EventSink::browser_auth_section`（supervisor 専用）。browser.rs の credential 注入の前に `true`、注入と policy 切替の後に `false`。記録できなければ fail closed。書き込みは task-api `auth-section` endpoint と同じ唯一の store op `SqliteStore::browser_control_auth_section`（dispatcher の StoreSink は `BrowserWaitStore::browser_session_auth_section` 経由）。`BrowserControl::leave_auth_section` を追加 | `cargo test -p task-api --test browser_e2e auth_section` → exit 0、1 passed（実 substrate shim・credentiald bridge・fake harness。区間中 auth_section=true・takeover は `auth_section_active`、終了後 false、store の control 状態も false） | 満たす |
+| (2) API 側で takeover/renew を拒否 | `auth-section` endpoint が `{"active": bool}` を受ける（既定 true）。拒否は core（`BrowserControl::takeover/renew`）→ HTTP 409 `auth_section_active` | `cargo test -p e2e --test api_scenarios phase3_auth_section` → exit 0、1 passed（保持中 lease の取り上げ、renew/takeover の 409、終了後の takeover 成功）。GUI 側は既存の `browser-control.server.ts` の検査（`auth_section_active`）のまま。本 run では pnpm を再実行していない | API は満たす。GUI 試験の再実行は未 |
+| (3) 実 forward_events の停止 | `forward_events` を 1 本に統一（`forward_events_live` を削除）。`LiveEmitter` が本番の run loop で作られ（`EventSinkLive` → `EventSink::browser_live` → store の live event）、区間中は progress・artifact・live event を出さず行を消費する（溜めない） | `cargo test -p task-worker browser_auth_section` → exit 0（progress 0・artifact 0・live 0、区間後の行だけ転送）。e2e の区間中 worker 出力件数の差 0 | 満たす |
+
+- `cargo test --workspace` → exit 0、2931 passed / 0 failed（test result 92 行、0 件の行を除く）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- 未解決: P3-A の identity 復元は P4-A 後（ADR-0083 D3、`isolation_required` のまま）。`BrowserLive`/`CliCloser`（control gate の run loop 配線）は未配線のまま残る。GUI 試験の再実行。

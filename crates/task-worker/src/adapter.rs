@@ -118,6 +118,27 @@ pub trait EventSink: Send + Sync {
     ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
         Err("browser wait store unavailable".into())
     }
+    /// Trusted browser supervisor only (ADR-0080 H3): the credential-injection section of a
+    /// browser session starts (`true`) / ends (`false`). Implementations record it in the
+    /// session's control state through the same store op as task-api's `auth-section`
+    /// endpoint, so takeover/renew are refused while it is active. Failing closed is the
+    /// caller's job.
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
+    /// Trusted browser supervisor only (ADR-0082): one scrubbed live event for the session.
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+    }
     fn progress(&self, msg: &str);
     /// ADR-0048 D2（Phase 60a）: 構造化した進行（`kind` / `tool` / `summary` / `detail`）。
     /// 既定は `msg` だけを `progress` に流す（この口を実装していないシンクでも従来どおり動く）。

@@ -51,6 +51,23 @@ impl SqliteStore {
         Ok(value)
     }
 
+    /// ADR-0080 H3: 認証区間（credential 注入）の開始/終了。task-api の `auth-section`
+    /// endpoint と worker の supervisor（`EventSink::browser_auth_section`）が共に使う唯一の口。
+    pub fn browser_control_auth_section(
+        &self,
+        key: BrowserSessionKey<'_>,
+        active: bool,
+    ) -> Result<BrowserControl, BrowserStoreError> {
+        self.browser_control_mutate(key, |s| {
+            if active {
+                s.enter_auth_section();
+            } else {
+                s.leave_auth_section();
+            }
+            Ok(s.clone())
+        })
+    }
+
     /// task cancel: その task の全 session を `Stopped` にし、lease を失効させる。
     /// 止めた session の数を返す。
     pub fn browser_control_stop_task(

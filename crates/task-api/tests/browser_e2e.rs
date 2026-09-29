@@ -42,6 +42,8 @@ struct World {
     task: Task,
     /// 全 run の worker 出力（進捗・browser lifecycle・harness が見た shim の出力・最終結果）。
     worker_output: Arc<Mutex<Vec<String>>>,
+    auth_calls: Mutex<Vec<(bool, usize, bool, Option<String>)>>,
+    live: Mutex<Vec<String>>,
 }
 
 fn bridge_binary() -> PathBuf {
@@ -138,6 +140,8 @@ fn world(site: Value) -> World {
         substrate,
         task,
         worker_output: Arc::default(),
+        auth_calls: Mutex::default(),
+        live: Mutex::default(),
     }
 }
 
@@ -201,8 +205,75 @@ struct StoreSink {
     task_id: TaskId,
     output: Arc<Mutex<Vec<String>>>,
     browsers: Mutex<Vec<BrowserRun>>,
+    /// ADR-0080 H3 の記録: (active, その時点の worker 出力件数, 書いた後の control 状態の
+    /// auth_section, 区間中に takeover を試した結果)。
+    auth_calls: Mutex<Vec<(bool, usize, bool, Option<String>)>>,
+    live: Mutex<Vec<String>>,
 }
 impl EventSink for StoreSink {
+    fn browser_auth_section(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        active: bool,
+    ) -> Result<(), String> {
+        let task_id = self.task_id.to_string();
+        let key = || task_core::browser_store::BrowserSessionKey {
+            task_id: &task_id,
+            run_id,
+            session_id,
+        };
+        let state = self
+            .store
+            .browser_control_auth_section(key(), active)
+            .map_err(|e| e.to_string())?;
+        // 区間中に人が takeover しようとした: store の control 遷移（API と同じ）で拒否される。
+        let takeover = active.then(|| {
+            let mut probe = state.clone();
+            if probe.phase() == task_core::browser_control::ControlPhase::AgentRunning {
+                let _ = probe.apply(
+                    &task_core::browser_control::ControlRequest {
+                        command: task_core::browser_control::ControlCommand::Pause,
+                        expected_version: probe.version(),
+                        idempotency_key: "probe-pause".into(),
+                    },
+                    0,
+                );
+            }
+            match probe.apply(
+                &task_core::browser_control::ControlRequest {
+                    command: task_core::browser_control::ControlCommand::Takeover {
+                        holder: "owner".into(),
+                        ttl_secs: None,
+                    },
+                    expected_version: probe.version(),
+                    idempotency_key: "probe-takeover".into(),
+                },
+                0,
+            ) {
+                Ok(_) => "accepted".to_string(),
+                Err(e) => e.to_string(),
+            }
+        });
+        self.auth_calls.lock().unwrap().push((
+            active,
+            self.output.lock().unwrap().len(),
+            state.auth_section_active(),
+            takeover,
+        ));
+        Ok(())
+    }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+        self.live
+            .lock()
+            .unwrap()
+            .push(serde_json::to_string(event.as_persisted()).unwrap());
+    }
     fn browser_wait_open(
         &self,
         request: &task_core::browser_wait::NewBrowserWait,
@@ -324,6 +395,8 @@ impl World {
             task_id: self.task.id,
             output: self.worker_output.clone(),
             browsers: Mutex::default(),
+            auth_calls: Mutex::default(),
+            live: Mutex::default(),
         };
         let outcome = task_worker::browser::run_with_executable(
             Arc::new(Harness {
@@ -346,6 +419,8 @@ impl World {
             .lock()
             .unwrap()
             .push(format!("{:?}", outcome.terminal));
+        *self.auth_calls.lock().unwrap() = sink.auth_calls.into_inner().unwrap();
+        *self.live.lock().unwrap() = sink.live.into_inner().unwrap();
         let browsers = sink.browsers.into_inner().unwrap();
         (outcome, browsers)
     }
@@ -639,5 +714,40 @@ async fn login_page_on_another_origin_is_denied_before_the_plugin_runs() {
     assert!(!actions.contains(&"use".into()), "{actions:?}");
     let progress = w.worker_output.lock().unwrap().join("\n");
     assert!(progress.contains("browser.credential_use: failure"));
+    w.assert_sentinel_absent_everywhere();
+}
+
+/// ADR-0080 H3（実経路）: 承認済みの credential 注入で supervisor が認証区間を開始・終了し、
+/// control 状態の auth_section が区間中 true・終了後 false になる。区間中は takeover が
+/// `auth_section_active` で拒否され、worker 出力（progress・artifact）と live event は 1 件も出ない。
+#[tokio::test]
+async fn auth_section_is_recorded_during_credential_injection_and_nothing_is_forwarded() {
+    let w = world(site());
+    let approval = w.until_approval().await;
+    w.decide(&approval, "approve_once").await;
+    let (outcome, browsers) = w.dispatch("run-login").await;
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }), "{outcome:?}");
+    let calls = w.auth_calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let (on, out_at_on, state_on, takeover) = &calls[0];
+    let (off, out_at_off, state_off, _) = &calls[1];
+    assert!(*on && *state_on, "auth_section true during injection: {calls:?}");
+    assert_eq!(takeover.as_deref(), Some("auth_section_active"));
+    assert!(!*off && !*state_off, "auth_section false after injection: {calls:?}");
+    assert_eq!(out_at_on, out_at_off, "nothing forwarded inside the auth section");
+    let session = &browsers.last().unwrap().session_id;
+    let stored = w
+        .env
+        .store
+        .browser_control_get(task_core::browser_store::BrowserSessionKey {
+            task_id: &w.task.id.to_string(),
+            run_id: "run-login",
+            session_id: session,
+        })
+        .unwrap();
+    assert!(!stored.auth_section_active());
+    // Segment verbs (open/get/auth/get) never became live events.
+    let live = w.live.lock().unwrap().join("\n");
+    assert!(!live.contains("auth"), "{live}");
     w.assert_sentinel_absent_everywhere();
 }

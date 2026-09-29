@@ -171,6 +171,24 @@ fn view_ctx() -> task_ops::view::ViewContext {
 /// `child_task_id` と状態を含む〉、`execution_plans`、`decisions`）。`runs` の表は比べない: 偽のアダプタで
 /// 走らせた /2・/3 の計画では、planner run の role と並列 WU の run の `work_unit_id` / `seq` が
 /// events から復元しきれない（木と無関係に R1b 以前からある差。PROGRESS の未解決に記録）。
+/// ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っていることを確かめて承認する（API / MCP と同じ
+/// `task_ops::plan_gate::plan_gate`）。理由（`PlanApprovalRequested.reasons`）を返す。
+pub(super) fn approve_root_plan(store: &Arc<dyn TaskStore>, root_id: TaskId) -> Vec<String> {
+    let task = store.get(root_id).unwrap().unwrap();
+    let events = store.events_for(root_id).unwrap();
+    let info = task_ops::plan_gate::latest_plan_approval(&task, &events)
+        .unwrap_or_else(|| panic!("the root plan is not awaiting approval: {:?}", task.status));
+    task_ops::plan_gate::plan_gate(
+        store.as_ref(),
+        root_id,
+        task_ops::plan_gate::PlanGateAction::Approve,
+        None,
+        "human",
+    )
+    .unwrap();
+    info.reasons
+}
+
 pub(super) fn assert_replay_is_clean(store: &Arc<dyn TaskStore>) {
     let report = task_ops::replay::replay(store.as_ref()).unwrap();
     assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
@@ -344,6 +362,12 @@ async fn child_waits_for_dependencies_and_decisions() {
     }]);
     let adapter = Arc::new(TreeAdapter::new(vec![plan.to_string()], Duration::ZERO));
     let mut d = tree_dispatcher(&store, adapter);
+    run_until_idle(&mut d, 150).await;
+    // Phase R3b（ADR-0079 D8）: 決定を含む root の計画は承認を待つ。
+    assert_eq!(
+        approve_root_plan(&store, root_id),
+        vec!["decisions:h1".to_string()]
+    );
     run_until_idle(&mut d, 150).await;
 
     let units = store.work_units_for(root_id).unwrap();
@@ -811,6 +835,12 @@ async fn review_human_stage_pauses_after_integration() {
     );
     let adapter = Arc::new(TreeAdapter::new(vec![plan], Duration::ZERO));
     let mut d = tree_dispatcher(&store, adapter);
+    run_until_idle(&mut d, 600).await;
+    // Phase R3b（ADR-0079 D8）: `review: human` の段階を持つ root の計画は承認を待つ。
+    assert_eq!(
+        approve_root_plan(&store, root_id),
+        vec!["review_human:s1".to_string()]
+    );
     let report = run_until_idle(&mut d, 600).await;
     assert!(report.idle, "{report:?}");
     let stored = store.get(root_id).unwrap().unwrap();

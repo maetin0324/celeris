@@ -1349,10 +1349,20 @@ pub enum Event {
         reasons: Vec<String>,
     },
     /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
-    /// `stall_secs` 続いた。状態は変えない（発行は R3b）。
+    /// `liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には
+    /// 1 回だけ）。
     StallDetected {
         task_id: TaskId,
         detail: String,
+        /// Phase R3b: 分類の理由（`task_core::tree::NodeLiveness.reason`。例 `child_missing`）。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        reason: String,
+        /// Phase R3b: 理由なく止まっていると daemon が最初に見た時刻（RFC 3339）。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        since: String,
+        /// Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        path: Vec<crate::decision::DecisionPathEntry>,
     },
 }
 

@@ -35,7 +35,7 @@ export { formString };
  * （`~/celeris/tasks-admin.server.ts::rereviewTask`。ルート側は `intent === "rereview"` を先に見る）。
  */
 // ADR-0074 D2.4（celeris Phase F3 途中確認）: `phase_gate` は専用の `POST /tasks/{id}/execution/phase-gate`（別の action）。
-export type GateAction = Exclude<Action, "retry" | "edit" | "reopen" | "rereview" | "phase_gate">;
+export type GateAction = Exclude<Action, "retry" | "edit" | "reopen" | "rereview" | "phase_gate" | "plan_gate">;
 
 export const ACTIONS: readonly GateAction[] = ["approve", "reject", "answer", "cancel"];
 const STATUSES: readonly Status[] = [

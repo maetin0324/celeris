@@ -34,6 +34,8 @@ export const EXECUTION_PHASE_LABEL: Record<ExecutionPhase, string> = {
   awaiting_human: "確認待ち",
   // celeris ADR-0079 D5（Phase R1b）: 子 task だけを待つ親（ready のまま、lease なし）。
   awaiting_children: "子 task の完了待ち",
+  // celeris ADR-0079 D8（Phase R3b）: root の計画の承認待ち（画面の 3 つの操作は R4b）。
+  awaiting_plan_approval: "計画の承認待ち",
 };
 
 export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
@@ -43,6 +45,7 @@ export const EXECUTION_PHASE_TONE: Record<ExecutionPhase, Tone> = {
   verifying: "teal",
   awaiting_human: "warning",
   awaiting_children: "info",
+  awaiting_plan_approval: "warning",
 };
 
 export const WORK_UNIT_STATUS_TONE: Record<WorkUnitStatus, Tone> = {

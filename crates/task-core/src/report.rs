@@ -389,6 +389,30 @@ pub fn report_for_error(
     )
 }
 
+/// ADR-0079 D8（Phase R3b）: 承認を挟まずに進める root の計画の報告（`kind = progress`。通知はしない。
+/// U-R3「承認不要の計画は報告の流れに残すだけ」）。
+pub fn report_for_plan_notice(
+    node_id: &str,
+    level: u32,
+    project_id: Option<ProjectId>,
+    task_id: TaskId,
+    headline: &str,
+    body: &str,
+    now: OffsetDateTime,
+) -> Report {
+    new_report(
+        node_id,
+        level,
+        project_id,
+        Some(task_id),
+        ReportKind::Progress,
+        truncate_chars(headline, HEADLINE_MAX_CHARS),
+        body.to_string(),
+        Vec::new(),
+        now,
+    )
+}
+
 /// run が `question` で終わったときの報告（`kind = question`。本文はそのまま）。
 pub fn report_for_question(
     node_id: &str,

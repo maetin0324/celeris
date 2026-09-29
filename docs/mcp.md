@@ -86,7 +86,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
 | `knowledge:read` | `knowledge_list` / `knowledge_search` / `knowledge_get` / `resources/read`（`celeris://knowledge/*`） |
 | `knowledge:propose` | `knowledge_propose`（`_inbox` に候補を置く） |
 | `tasks:read` | `tasks_list` / `tasks_get` / `projects_list` / `projects_get` |
-| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）、`task_decompose`（Phase F6。`POST /tasks/{id}/execution/decompose` と同じ）、`decision_list` / `decision_answer`（ADR-0079 R3a。`GET /decisions` / `POST /decisions/{id}/answer` と同じ） |
+| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）、`task_decompose`（Phase F6。`POST /tasks/{id}/execution/decompose` と同じ）、`decision_list` / `decision_answer`（ADR-0079 R3a。`GET /decisions` / `POST /decisions/{id}/answer` と同じ）、`task_plan_gate`（ADR-0079 R3b。`POST /tasks/{id}/execution/plan-gate` と同じ） |
 | `tasks:control`（Phase 101） | `task_retry` / `task_cancel`（`POST /tasks/{id}/retry` / `/cancel` と同じ） |
 | `tasks:decide`（Phase 101） | `task_approve` / `task_reject`（`POST /tasks/{id}/approve` / `/reject` と同じ） |
 | `console:instruct` | `console_instruct` / `console_reply` |
@@ -150,6 +150,12 @@ token: <64+ 文字の値。この 1 回しか出ない>
     `replan`・`withdraw` / plan_invalid の `replan`・`atomic`・`cancel`）。回答済み・取り下げ済み・選択肢の外は
     `-32602`、無い id は `-32001`。取り下げ（`withdraw`）と revise は MCP には出さない（人が GUI / API で行う）。
     例: `{"name":"decision_answer","arguments":{"id":"01M4…","option":"org-vault","note":"まず試験用で"}}`。
+  - `task_plan_gate { task_id, action, note? }`（scope `tasks:interact`。ADR-0079 D8 / Phase R3b。
+    `POST /tasks/{id}/execution/plan-gate` と同じ `task_ops::plan_gate::plan_gate`）。root の計画の承認待ち
+    （`awaiting_plan_approval`）に `approve` / `replan`（`note` 必須。planner への指示）/ `withdraw`（task と subtree の
+    中止）で応える（`decision` は `action` の別名）。記録の主体は `mcp:<client_id>`（replan の `ExecutionHintSet.source` は
+    `mcp:<client_id> (plan-gate)`）。承認待ちでない・note が無い replan は `-32602`、無い task は `-32001`。計画の決定への
+    回答は別（`decision_answer`）。例: `{"name":"task_plan_gate","arguments":{"task_id":"01M4…","action":"approve"}}`。
   - `task_retry { id, execution? }`（scope `tasks:control`。`POST /tasks/{id}/retry`（`accept=false`）と同じ。
     `failed`/`cancelled` のタスクを複製して新しい `draft` を作る。`execution: "compound" | "atomic"` で複製先の
     実行の形を明示できる（`source` は `mcp:<client_id>`）。複製先は元の gate の判定を持たず、今の設定で判定し直す）。

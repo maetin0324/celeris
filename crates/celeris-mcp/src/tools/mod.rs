@@ -126,6 +126,7 @@ pub fn all() -> Vec<ToolDef> {
         tasks::reject_def(),
         decisions::list_def(),
         decisions::answer_def(),
+        decisions::plan_gate_def(),
         projects::list_def(),
         projects::get_def(),
         console::instruct_def(),

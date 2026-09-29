@@ -490,3 +490,80 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R3b: 根の計画承認（PlanGate）、liveness と StallDetected、子の通知抑止（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R3b・D8・D10・D11、付記「R3b 実装時の逸脱・明確化」（12 項目）。
+- 種類: コード（task-core / task-ops / task-api / celeris-mcp / task-dispatch / celeris）、schema・GUI の型の再生成、GUI の語 4 つ。
+  **migration なし（schema 31 のまま）**。`[execution.tree] enabled = false`（既定）では承認・報告・生存確認のどれも動かず
+  （`root_plan_approval` は `None`、`check_tree_liveness` は何もしない）、挙動は変わらない。子の通知の抑止（`scan_task_failed` /
+  `scan_bad_news`）は `tree` を持つ task にだけ効くので、木が無効の本番では対象が 0 件。本番の DB・設定・サービスには触れていない。
+- R4（木と roll-up の API・GUI）には手を付けていない。
+
+### 実装したもの
+
+- **root の計画の承認（D8）**: /3 の root の計画の採用の直後に `task_core::tree::plan_approval`（純粋関数）で要否を決め、要るなら
+  `Trigger::PlanGate`（Running → Blocked、reason `awaiting_plan_approval`、attempts 不変）と `PlanApprovalRequested{plan_id, reasons}` を
+  1 トランザクションで積む。条件は未回答の決定・まだ済んでいない `review: human` の段階・上限の 0.8 以上（段階数・段階あたり・子 task・
+  見込みの leaf・見込みの木の run）。承認までは unit を 1 つも起こさない（dispatch されず、子も作らない）。root の replan の版にも同じ規則。
+- **操作**: `POST /tasks/{id}/execution/plan-gate {action: approve|replan|withdraw, note?}`（`decision` は別名、管理系）と MCP
+  `task_plan_gate`（`tasks:interact`、`mcp:<client>`）。approve → `plan_approved`、replan（note 必須）→ `plan_replan` と
+  `ExecutionHintSet{replan: true}`（R3a の plan_invalid → replan と同じ経路）、withdraw → `Cancel`。承認待ちに `Answer` は 409。
+- **承認の要らない計画**: 進めて、報告の流れに `progress` の「計画を採用して進めます: <段階の一覧>」を 1 件だけ残す（通知なし。U-R3）。
+- **受信箱・表示・通知**: `attention` の `plan_approval`（理由・段階の見取り図・未回答の決定の id）、`ExecutionPhase::AwaitingPlanApproval`
+  と `plan_approval` の節、`Action::PlanGate`。`NotificationKind::PlanApproval`（`plan:<plan_id>:approval`、その計画の決定を 1 通に束ねる）。
+- **生存確認（D10）**: `task_core::tree::liveness`（純粋関数）で ready の木の節点を 走っている / 走れる / 名指しの待ち / 理由なし に分け、
+  理由なしが `liveness_timeout_secs`（新設定、既定 600）続いたら `StallDetected{task_id, detail, reason, since, path}` と障害通知
+  （`TaskFailed`、`tree-stall:<task>:<seq>`）を 1 回だけ。確認は 30 秒ごと、時刻はメモリ（再起動で数え直す）。
+- **R3a 付記 15. の修正**: 「もう一度だけ試します」の後に planner run が始まっていなければ、起点を問わず次の run を planner にする
+  （`task_ops::tree::planner_retry_pending`）。人の replan の 1 回目が不正でも 2 回目が起きる。
+- **子の通知の抑止（D11）**: 木の子の `task_failed` と、子の run の悪い知らせ（秘書への複製）を鳴らさない。root の失敗・決定・承認・
+  障害（`tree-infra:` / `tree-stall:`）は鳴る。key の形は変えていない。
+
+### 受け入れ条件（ADR-0079 §7 R3b と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) 3 つの条件（決定 `decisions:h1` / `review_human:s1` / `near_limit:max_stages:4/5`）がそれぞれ単独で root を `awaiting_plan_approval` で止め、planner の 1 本だけで unit も子も走らない、報告も残らない、`Answer` は拒否、操作は `plan_gate` | `cargo nextest run -p task-dispatch -E 'test(/tree_approval::each_approval_trigger_holds_the_root_plan/)'` | ok。replay 差分 0 |
+| (a) approve で unit が起き、答えの無い決定に依存する unit は回答まで待つ。replan（note 必須、空は Validation）で planner が note を `replan_reason` に受けて v2 を書き、v2 は承認なしで進んで報告 1 件。withdraw で Cancelled | `… tree_approval::approve_replan_and_withdraw_have_their_effects` | ok（replan の場面の `work_units` の replay の差は付記 12. の既存の系統として比べない。task・計画・決定は差分 0） |
+| (b) `small_root_plan_proceeds_with_notice`: 条件の無い root は承認なしで進み、報告（`progress`、「計画を採用して進めます: Stage s1 → Stage s2」）が 1 件、daemon の通知 0 件。子の計画は決定 k1 を含んでも承認を求めず、k1 に依存しない leaf は走る | `… tree_approval::small_root_plan_proceeds_with_notice` | ok |
+| (b) 承認不要の計画では Discord に何も鳴らない（報告は progress） | `cargo nextest run -p celeris -E 'test(/a_root_plan_without_approval_posts_nothing/)'` | ok（候補 0 件） |
+| 承認の通知: `plan_approval` の 1 通（key `plan:<plan_id>:approval`）に決定の行と理由、`decision_requested` と `question_blocked` は鳴らない、2 回目の tick で増えない、偽の webhook への本文に残る | `… -p celeris -E 'test(/plan_approval_is_notified_once/)'` | ok |
+| (c) `liveness_flags_only_unexplained_stalls`（偽の時計）: 決定待ちの節点と承認待ちの root は 0 → 2,000 秒で検出されない。子の消えた親は 599 秒で出ず、600 秒後の最初の確認で `StallDetected{reason: child_missing, since, path}` と `tree-stall:` の障害通知が 1 件、その後 5,000 秒まで増えない | `… tree_approval::liveness_flags_only_unexplained_stalls` | ok |
+| 人の replan の 1 回目が不正で 2 回目が起きない（R3a 付記 15.）の回帰: 1 回目の後に再試行の印があり分類は「走れる: planner」、印を外すと `decision_released`（理由なし）で捕まる。2 回目が走り（planner 3 本目、`replan_reason` に note）v2 が採用され root done、`StallDetected` なし | `… tree_approval::human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt` | ok |
+| 生存確認の分類（純粋関数）: 名指しの待ち 7 種・走っている / 走れる・理由なし 3 形（child_missing / nothing_runnable / decision_released）。承認の要否の 3 条件と境界（4/5・5/6・32/40・96/120） | `cargo nextest run -p task-core -E 'test(/tree::r3b_tests/)'` | ok（5 passed） |
+| 遷移: `PlanGate` は Running → Blocked だけ、`PhaseResume{plan_approve|plan_replan}` の reason | `… -p task-core -E 'test(/transition::tests::(table_simple|phase_resume)/)'` | ok（4 kinds × 8 statuses × 21 triggers） |
+| (d) `child_events_do_not_notify`: 木の子の failed・子の run の悪い知らせ・子の done は鳴らず、root の failed と root の悪い知らせは鳴る | `… -p celeris -E 'test(/child_events_do_not_notify/)'` | ok |
+| API: 401・404・409（質問の blocked・承認待ちへの answer・承認後の 2 回目）・422（replan の空 note）・400/422（知らない action）・200（approve〈`decision` 別名〉/ replan / withdraw）、受信箱の `attention.plan_approval`（`actions` に `plan_gate`、`answer` 無し）、`GET /tasks/{id}/execution` の `phase = awaiting_plan_approval` | `cargo nextest run -p task-api -E 'test(/plan_gate/)'` | ok（2 passed） |
+| MCP: scope 無しは -32601、`tasks:interact` で approve（`mcp:chatgpt` の記録）・replan（`source = mcp:chatgpt (plan-gate)`）、note 無しの replan・承認待ちでない は -32602、無い task は -32001 | `cargo nextest run -p celeris-mcp -E 'test(/task_plan_gate/)'` | ok |
+| 木が無効なら変わらない（承認・報告・`StallDetected` なし、生存確認は動かない） | `… tree_approval::tree_disabled_is_unchanged` | ok |
+| 既存の木の試験（R1b / R2a / R3a）は、決定・`review: human`・上限に近い root の計画で承認を挟むように更新（意図は変えていない） | `cargo nextest run -p task-dispatch -E 'test(/tree/)'` | ok（tree 61 passed = 既存 55 + R3b 6） |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 89（nextest 79 + doc 10）、**passed 2831 / failed 0 / ignored 7**（R3a の 2812 から +19）
+- schema の再生成: `UPDATE_SCHEMA=1 cargo test -p task-core --lib schema`（`docs/api/v1/event.schema.json`: `StallDetected` の `reason` / `since` / `path`）・
+  `-p task-api --lib schema`（`api-v1.schema.json`: `PlanGateRequest`、`AttentionItem::plan_approval`、`ExecutionPhase::awaiting_plan_approval`、
+  `plan_approval`、`Action::plan_gate`、`NotificationKind::plan_approval`）。
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、再実行の前後で `gui/app/celeris/types.ts` の md5 が同じ（c088a7b788db0ab80cb4be4c874285ca）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 285 files、2 infos〈既存〉）/ `test` → exit 0（Tests 1176 passed）。
+  GUI の変更は語（実行の段階「計画の承認待ち」、操作「計画の承認」、通知の種類「計画の承認を待っている」）と `GateAction` から `plan_gate` を外しただけ（画面は R4b）
+
+### 未解決・R4 以降へ
+
+- **R4a**: /3 の replan で同じ key の unit を作り直したときの `work_units` の replay の差（runs / seq / phase / 統合 WU の presence。付記 12.、
+  R3a 付記 14. と同じ系統）。
+- **R4b**: 受信箱の「計画の承認」の 3 つのボタン（approve / replan〈note〉/ withdraw、409 / 422 の文言）、木の節点の「理由なく止まっています」
+  （`StallDetected` の `reason` / `detail`）の表示。
+- 承認の再通知（決定の 24 時間後の再通知に相当するもの）は作っていない。承認待ちの計画の決定の 24 時間後の再通知は `scan_decisions` の束ねの
+  抑止で鳴らない（承認の後は通常どおり鳴る）。
+- 生存確認は「走れる」を信じる（容量・quota 待ちを止まりにしない）。走れると分類されたまま何年も dispatch されない節点は検出しない。
+  時刻はメモリなので daemon の再起動で数え直す。
+- 人の計画（`PUT`、origin human）の承認: `PUT` の入口は R1a 付記 5. のとおりまだ木の設定で検証しないので /3 を受け付けない（R5b で配線するときに
+  同じ `root_plan_approval` を通す）。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

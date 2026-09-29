@@ -1,6 +1,5 @@
 use crate::{
     Binding, Broker, CredentialPolicy, CredentialRef, Error, LeaseRequest, SecretEnvelope,
-    canonical_origin,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -40,15 +39,6 @@ pub enum ControlRequest {
     },
     Grant {
         request: LeaseRequest,
-    },
-}
-#[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ResolveRequest {
-    Resolve {
-        binding_token: String,
-        lease_id: String,
-        observed_origin: String,
     },
 }
 #[derive(Serialize, Deserialize)]
@@ -143,8 +133,8 @@ fn serve_one(mut stream: UnixStream, broker: &Broker, control: bool, control_pid
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .map_err(|_| Error::Io)?;
-        let mut bytes = read_limited(&mut stream)?;
         let (uid, pid) = peer(&stream)?;
+        let mut bytes = read_limited(&mut stream)?;
         if uid != local_uid()
             || (control
                 && !control_pids
@@ -154,72 +144,57 @@ fn serve_one(mut stream: UnixStream, broker: &Broker, control: bool, control_pid
             bytes.zeroize();
             return Err(Error::Permission);
         }
+        // ADR-0085: even an admitted control PID with a valid binding/lease
+        // cannot retrieve secrets over this retired endpoint. Read only the
+        // bounded frame for orderly shutdown; never parse or consume it.
+        if !control {
+            bytes.zeroize();
+            return Err(Error::TrustedInjectionRequired);
+        }
         let response = (|| -> Result<IpcReply, Error> {
-            if control {
-                match serde_json::from_slice::<ControlRequest>(&bytes)
-                    .map_err(|_| Error::Invalid)?
-                {
-                    ControlRequest::InitializeKey => {
-                        broker.provider().initialize_key()?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Register {
-                        reference,
-                        policy,
-                        revision,
-                        secret,
-                    } => {
-                        broker
-                            .provider()
-                            .register(&reference, &policy, revision, &secret)?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Inspect {
-                        reference,
-                        revision,
-                        origin,
-                    } => {
-                        // Verification performs authenticated decryption, but never returns the secret.
-                        let _secret = broker
-                            .provider()
-                            .resolve_registered(&reference, revision, &origin)?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Revoke { lease_id, actor_id } => {
-                        broker.revoke(&lease_id, &actor_id)?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Bind { binding } => {
-                        let token = broker.register_binding(binding)?;
-                        let mut out = IpcReply::ok();
-                        out.binding_token = Some(token);
-                        Ok(out)
-                    }
-                    ControlRequest::Grant { request } => {
-                        let grant = broker.grant(request)?;
-                        let mut out = IpcReply::ok();
-                        out.lease_id = Some(grant.lease_id);
-                        out.expires_at = Some(grant.expires_at);
-                        Ok(out)
-                    }
+            match serde_json::from_slice::<ControlRequest>(&bytes).map_err(|_| Error::Invalid)? {
+                ControlRequest::InitializeKey => {
+                    broker.provider().initialize_key()?;
+                    Ok(IpcReply::ok())
                 }
-            } else {
-                match serde_json::from_slice::<ResolveRequest>(&bytes)
-                    .map_err(|_| Error::Invalid)?
-                {
-                    ResolveRequest::Resolve {
-                        binding_token,
-                        lease_id,
-                        observed_origin,
-                    } => {
-                        let secret = broker.resolve(&binding_token, &lease_id, &observed_origin)?;
-                        let mut out = IpcReply::ok();
-                        out.credential = Some(IpcCredential {
-                            username: secret.username.clone(),
-                            password: secret.password.clone(),
-                        });
-                        Ok(out)
-                    }
+                ControlRequest::Register {
+                    reference,
+                    policy,
+                    revision,
+                    secret,
+                } => {
+                    broker
+                        .provider()
+                        .register(&reference, &policy, revision, &secret)?;
+                    Ok(IpcReply::ok())
+                }
+                ControlRequest::Inspect {
+                    reference,
+                    revision,
+                    origin,
+                } => {
+                    // Verification performs authenticated decryption, but never returns the secret.
+                    let _secret = broker
+                        .provider()
+                        .resolve_registered(&reference, revision, &origin)?;
+                    Ok(IpcReply::ok())
+                }
+                ControlRequest::Revoke { lease_id, actor_id } => {
+                    broker.revoke(&lease_id, &actor_id)?;
+                    Ok(IpcReply::ok())
+                }
+                ControlRequest::Bind { binding } => {
+                    let token = broker.register_binding(binding)?;
+                    let mut out = IpcReply::ok();
+                    out.binding_token = Some(token);
+                    Ok(out)
+                }
+                ControlRequest::Grant { request } => {
+                    let grant = broker.grant(request)?;
+                    let mut out = IpcReply::ok();
+                    out.lease_id = Some(grant.lease_id);
+                    out.expires_at = Some(grant.expires_at);
+                    Ok(out)
                 }
             }
         })();
@@ -309,66 +284,11 @@ pub fn call(socket: &Path, request: &[u8]) -> Result<IpcReply, Error> {
     b.zeroize();
     result
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PluginRequest {
-    protocol: String,
-    #[serde(rename = "type")]
-    kind: String,
-    capability: String,
-    request: PluginArgs,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PluginArgs {
-    profile_name: Option<String>,
-    item_ref: Option<String>,
-    url: Option<String>,
-}
-#[derive(Serialize)]
-struct PluginResponse {
-    protocol: &'static str,
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    credential: Option<IpcCredential>,
-}
-/// The private plugin pipe is the only public function that serializes a secret.
-/// The binding token is supplied out of band by the supervisor, never by plugin JSON.
-pub fn bridge_request(input: &[u8], binding_token: &str, resolve_socket: &Path) -> Vec<u8> {
-    let result = (|| -> Result<IpcCredential, Error> {
-        let req: PluginRequest = serde_json::from_slice(input).map_err(|_| Error::Invalid)?;
-        if req.protocol != "agent-browser.plugin.v1"
-            || req.kind != "credential.resolve"
-            || req.capability != "credential.read"
-        {
-            return Err(Error::Denied);
-        }
-        // profileName identifies the browser profile; it is not broker authority.
-        let _ = req.request.profile_name;
-        let lease_id = req.request.item_ref.ok_or(Error::Invalid)?;
-        let url = req.request.url.ok_or(Error::Invalid)?;
-        let origin = url_origin(&url)?;
-        let ipc = serde_json::json!({"op":"resolve","binding_token":binding_token,"lease_id":lease_id,"observed_origin":origin});
-        let bytes = serde_json::to_vec(&ipc).map_err(|_| Error::Invalid)?;
-        let reply = call(resolve_socket, &bytes)?;
-        if !reply.success {
-            return Err(Error::Denied);
-        }
-        reply.credential.ok_or(Error::Denied)
-    })();
-    match serde_json::to_vec(&PluginResponse {
-        protocol: "agent-browser.plugin.v1",
-        success: result.is_ok(),
-        credential: result.ok(),
-    }) {
-        Ok(bytes) => bytes,
-        Err(_) => b"{\"protocol\":\"agent-browser.plugin.v1\",\"success\":false}".to_vec(),
-    }
-}
-fn url_origin(url: &str) -> Result<String, Error> {
-    let rest = url.strip_prefix("https://").ok_or(Error::Invalid)?;
-    let authority = rest.split(['/', '?', '#']).next().ok_or(Error::Invalid)?;
-    canonical_origin(&format!("https://{authority}"))
+/// Retired agent-browser credential-read protocol (ADR-0085).
+/// Keep the fixed protocol response for old callers, but never contact a socket
+/// or serialize a secret. Trusted injection uses a separate controller endpoint.
+pub fn bridge_request(_input: &[u8], _binding_token: &str, _resolve_socket: &Path) -> Vec<u8> {
+    br#"{"protocol":"agent-browser.plugin.v1","success":false}"#.to_vec()
 }
 pub fn resolve_socket(runtime: &Path) -> PathBuf {
     runtime.join("celeris-credentiald/resolve.sock")

@@ -203,8 +203,21 @@ async fn real_broker_registration_keeps_sentinel_out_of_db_events_artifacts_and_
         &resolve,
     );
     let private = serde_json::from_slice::<Value>(&raw).unwrap();
-    assert_eq!(private["success"], true);
-    assert_eq!(private["credential"]["password"], SENTINEL_PASS);
+    assert_eq!(private["success"], false);
+    assert!(private.get("credential").is_none());
+    // Approval does not make the old worker-facing secret-return protocol trusted.
+    let direct = ipc::call(
+        &resolve,
+        &serde_json::to_vec(&json!({
+            "op":"resolve", "binding_token":binding_token, "lease_id":lease_id,
+            "observed_origin":"https://login.example.com"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!direct.success);
+    assert_eq!(direct.code.as_deref(), Some("trusted_injection_required"));
+    assert!(direct.credential.is_none());
     let replay = ipc::bridge_request(
         &serde_json::to_vec(&plugin("https://login.example.com/login")).unwrap(),
         &binding_token,
@@ -214,7 +227,7 @@ async fn real_broker_registration_keeps_sentinel_out_of_db_events_artifacts_and_
         serde_json::from_slice::<Value>(&replay).unwrap()["success"],
         false
     );
-    // The fake substrate's plugin pipe is private. The worker/model sees only this fixed result.
+    // The legacy protocol returns only a fixed refusal, never a credential.
     let public_result = json!({"success": private["success"]});
     let artifacts = root.join("artifacts");
     std::fs::create_dir(&artifacts).unwrap();

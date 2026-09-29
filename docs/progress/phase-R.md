@@ -347,3 +347,68 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R2b: planner への深さ・葉基準・残り上限、無効計画 → 決定要求、子の失敗 → 親の replan、基盤失敗の再試行（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R2b・D4 (2)・D9・D12、付記「R2b 実装時の逸脱・明確化」（8 項目）。
+- 種類: コード（task-core / task-ops / task-worker / task-dispatch）と schema・GUI の型の再生成。**migration なし（schema 31 のまま）**。
+  `[execution.tree] enabled = false`（既定）では planner の文脈に `tree` が無く（プロンプトは 1 バイトも変わらない）、/3 は採用されず木の子も
+  無いので、plan_invalid・子の replan・子の基盤の失敗の再試行・`limit:max_replans` はどれも働かない。本番の DB・設定・サービスには触れていない。
+- R3（決定の回答・通知・承認・生存確認）には手を付けていない。
+
+### 実装したもの
+
+- **/3 の planner の入力**（`task_worker::protocol::TreePlannerContext`、`Dispatcher::tree_planner_context`）: 深さ・`max_depth`・残りの深さ・
+  計画の上限（段階・段階あたり・子 task・決定）・同時の子・木の残り（leaf・run・replan・節点の replan・トークン・未回答の決定）・祖先（題名・段階・
+  目的の先頭 300 文字）・`stages_hint`（新しい `Task.routing.stages_hint`）。値は検証と同じ `[execution.tree]` と `tree_counters` から。
+- **/3 のプロンプト**（`claude_code::tree_plan_shape_section` / `tree_replan_context_section`）: /3 の形（段階・unit = leaf | 子 task・決定）、
+  木の中の位置、leaf の基準 3 つ（有界の turn・1 つのリポジトリ・command の検査 1 本以上）、子 task にする理由、「収まらない unit は子 task か
+  決定にし、leaf に押し込まない」、決定の書き方と `needs_decisions`、計画と木の上限の残り、`stages_hint`。残りの深さ 0 では「kind task を書くな」。
+  replan は計画の全体（done の unit は daemon が持ち越す）と、失敗した子の unit の扱い（同じ key で次の子・分ける・落とす・決定）。
+- **/3 の 2 回不正 → `kind: plan_invalid`**（`task_core::tree::plan_invalid_decision`）: atomic に倒さず、Task は `ready`、決定が開いている間は
+  run を起こさない（`plan_invalid_hold`）。/3 の replan の 2 回不正も自由文の質問の代わりに同じ決定。/1・/2 は従来どおり（atomic / 質問）。
+- **/3 の replan**: 差分は拒否、done の unit は持ち越し（`carry_done_units_v3`）、`task_ops::execution::replan` を /3 に対応（`internal_view`。
+  R1b〜R2a の /3 の replan は未完了の unit を全部 superseded にして新しい行を作らなかった）。走っている子の unit は `running` のまま持ち越す。
+- **子の work の失敗 → 親の replan**: replan の理由に子の題名・attempt・分類・理由・最後の checkpoint、unit の要約に子の状態と失敗の理由。
+  同じ key を残すと同じ unit から次の子（`Task.tree.parent_unit.attempt`）。元の子とブランチは残る。
+- **節点の replan の上限**（`[execution] max_replans`）を使い切った木の節点は `limit:max_replans` の決定の要求（黙って `Skip` にしない）。
+  木の上限（`max_tree_replans`）は R2a のまま `limit:max_tree_replans`。
+- **子の基盤の失敗**: 同じ unit から 1 回だけ自動で子を作り直し（`child_infra_retry`、replan しない）、それでも失敗なら unit `blocked(infra)`
+  （`child_infra_failed`）と障害通知（`TaskFailed`、key `tree-infra:…`）。決定・質問にはしない。兄弟は続き、段階は完了しない。
+- **replay**: 版ごとに done でない行の `plan_id` / `seq` を新しい版にする（/2 の replan の既存の差も解消）、replan で子の結び付きを外す、
+  `child_infra_failed` → `blocked(infra)`。
+
+### 受け入れ条件（ADR-0079 §7 R2b と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) `planner_prompt_carries_depth_and_leaf_criteria`: /3 のプロンプトに深さ・残りの深さ・leaf の基準・計画と木の残りの上限・`stages_hint`・決定の書き方・「leaf に押し込まない」。残りの深さ 0 で「kind task を書くな」と祖先。replan は全体と失敗した子の扱い。`tree = None` は /2 のまま | `cargo test -p task-worker --lib planner_prompt` | ok（4 passed。既存の上限・再試行・v2 のプロンプトの試験も通る） |
+| (a) 配線: root の planner の `tree`（深さ 1・残り 2・設定の上限・木の残り・`stages_hint`）、子の planner（深さ 2・残り 1・祖先 = root の題名と段階）、木が無効なら `tree` 無し | `cargo test -p task-dispatch --lib tree_replan::tree_planner_context_is_wired_from_limits_and_counters` | ok |
+| (b) `v3_invalid_plan_asks_instead_of_atomic`: 2 回不正な /3 → `plan_invalid` の決定 1 件（選択肢 3、理由つき、`needed_before: [self]`、path = root）、worker の run 0、gate は compound のまま、root `ready`、tick を重ねても planner 2 回・決定 1 件、質問なし。/2（木が無効）は `atomic/planner-invalid` で done | `… tree_replan::v3_invalid_plan_asks_instead_of_atomic` | ok。replay 差分 0 |
+| (c) `child_failure_triggers_parent_replan`（一時 git）: 子 c が work で failed → 親の replan の planner の `replan_reason` に子の題名・attempt 1・(work)・不合格の理由、unit の要約に子の状態。v2 は done の leaf a を省いても持ち越し、同じ key c から attempt 2 の子が done、統合は新しい子を merge、root done、元の子の task とブランチ `celeris/<子>` は残る | `… tree_replan::child_failure_triggers_parent_replan` | ok。計画 2 版、planner 2 回、決定・質問なし、replay 差分 0 |
+| (d) `child_infra_failure_is_not_a_question`: 子 c が基盤の失敗（`infra failure ×1`）→ 1 回だけ作り直し（attempt 2）→ 2 回目も失敗 → unit c `blocked(infra)`、`TaskFailed` の障害通知 1 件（本文に infra と子の題名）、決定・質問・replan なし（planner 1 回）。兄弟の子 s と leaf a は done、段階は完了せず root は `ready` | `… tree_replan::child_infra_failure_is_not_a_question` | ok。unit c の遷移は `child_created → child_infra_retry → child_infra_failed`、replay 差分 0 |
+| replan は木の上限（`max_tree_replans = 1`）で止まり `limit:max_tree_replans`、節点の上限（`max_replans = 1`）で止まり `limit:max_replans`（どちらも planner 2 回・計画 2 版・子 2 つ・決定 1 件・質問なし） | `… tree_replan::child_replans_are_bounded_by_tree_and_node_limits` | ok。replay 差分 0 |
+| 木が無効で挙動不変・既存の木の試験 | 下の gate（全テスト） | ok。`cargo test -p task-dispatch --lib tree` は 48 passed（R1b〜R2a の既存の木の試験は変更なし + R2b の 5 本）、task-ops 373 passed |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 88（nextest 78 + doc 10）、**passed 2780 / failed 0 / ignored 7**（R2a の 2774 から +6）
+- schema の再生成: `UPDATE_SCHEMA=1 cargo test -p task-core --lib schema`・`-p task-api --lib schema`・`-p task-worker --lib schema`（`event.schema.json` /
+  `api-v1.schema.json` / `worker-protocol.schema.json`。`execution-plan.schema.json` / `decision.schema.json` は不変）
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、再実行の前後で `gui/app/celeris/types.ts` の md5 が同じ（ae3ddd7e5a1ecb5c237c9370af02c245）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 285 files、2 infos〈既存〉）/ `test` → exit 0（Test Files 76 passed、Tests 1176 passed）
+
+### 未解決・R3 以降へ
+
+- **R3a**: `plan_invalid` / `limit:max_replans` の回答の効き目（人の計画の `PUT` で決定を閉じる、atomic に切り替える、取り下げ）。`PUT` の入口は
+  まだ tree 無効で検証する（R1a 付記 5.。R5b までに配線）。leaf の失敗で replan を使い切ったときの ADR-0072 D12 の質問は木の節点でも質問のまま。
+- **R3b / R4b**: `blocked(infra)` の unit の人の「再試行」の入口（GUI・API）、子の `TaskFailed`（`scan_task_failed`）の抑止（今は子自身の通知と
+  dispatcher の障害通知の両方が鳴る）、`blocked(infra)` と `plan_invalid` の待ちを生存確認（D10）の「名指しの待ち」に数える。
+- **R5a**: `stages_hint` を書く入口（CoS の `create_task.stages_hint`・API）。
+- 子の作り直しの回数は unit ごとの上限を持たず replan の上限で抑える（付記 5.）。dogfood（R5b）で見直す。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

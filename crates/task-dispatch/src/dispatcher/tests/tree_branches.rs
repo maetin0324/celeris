@@ -683,6 +683,7 @@ fn worktree_base_of_a_tree_child_is_the_parent_base() {
             plan_id: "plan".into(),
             unit_key: "c".into(),
             stage: "s1".into(),
+            attempt: 1,
         },
         Some(main_sha.clone()),
     ));

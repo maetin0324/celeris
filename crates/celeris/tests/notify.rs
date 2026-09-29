@@ -1355,6 +1355,7 @@ fn a_tree_child_done_does_not_notify_task_ready_but_the_root_does() {
             plan_id: "plan".into(),
             unit_key: "c".into(),
             stage: "s1".into(),
+            attempt: 1,
         },
         None,
     ));

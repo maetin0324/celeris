@@ -40,7 +40,34 @@ pub struct ParentUnit {
     pub unit_key: String,
     /// その unit の段階の key（`work_units.phase`）。
     pub stage: String,
+    /// ADR-0079 D9（Phase R2b）: 同じ unit から作った子の何回目か（1 始まり）。子の work の失敗で親の
+    /// replan が同じ key の unit を残したとき・基盤の失敗で自動で 1 回作り直したときに増える。
+    /// 1 は書かない（R2b より前の子の JSON は 1 バイトも変わらない）。
+    #[serde(default = "first_attempt", skip_serializing_if = "is_first_attempt")]
+    pub attempt: u32,
 }
+
+fn first_attempt() -> u32 {
+    1
+}
+
+fn is_first_attempt(n: &u32) -> bool {
+    *n <= 1
+}
+
+/// ADR-0079 D12（Phase R2b）: 人が名指しした段階（`Task.routing.stages_hint`）。planner への入力で、
+/// 構造の強制ではない（段階の数・名前は planner が決める）。CoS の `create_task` から写すのは R5a。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StageHint {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+}
+
+/// ADR-0079 D9（Phase R2b）: 子 task が基盤の分類（`classify_task_failure` の infra）で `failed` になったとき、
+/// 同じ unit から自動で作り直す回数（`max_child_infra_retries`）。超えたら障害通知と unit `blocked(infra)`。
+pub const MAX_CHILD_INFRA_RETRIES: u32 = 1;
 
 /// D4 (4) / D15: `Task.tree`。木に属する task だけが持つ（`None` は木を持たない従来の task = 深さ 1 の
 /// 節点として扱う。`root_id` 列も NULL のまま埋め戻さない。D15）。
@@ -718,6 +745,9 @@ pub enum TreeLimitKind {
     TreeReplans,
     /// 木全体の input + output トークン（`max_tree_tokens`）。
     TreeTokens,
+    /// ADR-0079 D9（Phase R2b）: 節点の replan の版（`[execution] max_replans`。節点ごとの上限）。子の失敗を
+    /// 吸収する replan が節点の上限に達したら、黙って止まらずに決定の要求にする。
+    NodeReplans,
 }
 
 impl TreeLimitKind {
@@ -731,6 +761,7 @@ impl TreeLimitKind {
             TreeLimitKind::TreeRuns => "max_tree_runs",
             TreeLimitKind::TreeReplans => "max_tree_replans",
             TreeLimitKind::TreeTokens => "max_tree_tokens",
+            TreeLimitKind::NodeReplans => "max_replans",
         }
     }
 
@@ -1178,6 +1209,70 @@ pub fn leaf_too_large_decision(
         cost_of_reversal: CostOfReversal::Low,
         cost_note: Some(gate.reason.clone()),
         needed_before: vec![gate.unit_key.clone()],
+        path,
+        raised_by,
+        status: crate::decision::DecisionStatus::Open,
+        answer: None,
+        withdrawn_reason: None,
+    }
+}
+
+/// ADR-0079 D9（Phase R2b）: `kind: plan_invalid` の決定の key（daemon が振る。節点ごとに 1 件だけ開く）。
+pub const PLAN_INVALID_DECISION_KEY: &str = "plan_invalid";
+
+/// ADR-0079 D9（Phase R2b）: /3 の計画が 2 回不正だったときの決定の要求（atomic に倒さない）。選択肢は
+/// 「人が計画を書く（`PUT /tasks/{id}/execution-plan`）/ atomic（1 run）で試す / 取り下げる」、推奨は人が計画を
+/// 書く。`errors` は検証の理由（最後の試行まで、古い順）。`needed_before: ["self"]`（この節点の run を止める）。
+pub fn plan_invalid_decision(
+    task_id: TaskId,
+    replan: bool,
+    errors: &[String],
+    path: Vec<crate::decision::DecisionPathEntry>,
+    raised_by: crate::decision::DecisionRaisedBy,
+) -> crate::decision::DecisionRequest {
+    use crate::decision::{CostOfReversal, DecisionKind, DecisionOption, DecisionRequest};
+    let what = if replan {
+        "計画の見直し（replan）"
+    } else {
+        "計画"
+    };
+    let mut note = errors
+        .iter()
+        .enumerate()
+        .map(|(i, e)| format!("試行 {}: {e}", i + 1))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    if note.chars().count() > 2000 {
+        note = note.chars().take(2000).collect::<String>() + "…";
+    }
+    DecisionRequest {
+        id: ulid::Ulid::new().to_string(),
+        key: PLAN_INVALID_DECISION_KEY.to_string(),
+        kind: DecisionKind::PlanInvalid,
+        question: format!(
+            "planner が出した{what}（celeris.execution-plan/3）が 2 回とも検証に通りませんでした。この task をどう進めますか"
+        ),
+        options: vec![
+            DecisionOption {
+                key: "human-plan".to_string(),
+                label: "人が計画を書く".to_string(),
+                consequence: Some(format!("PUT /tasks/{task_id}/execution-plan で計画を渡す")),
+            },
+            DecisionOption {
+                key: "atomic".to_string(),
+                label: "分けずに 1 run（atomic）で試す".to_string(),
+                consequence: Some("分けると決めた仕事を 1 run に収める".to_string()),
+            },
+            DecisionOption {
+                key: "withdraw".to_string(),
+                label: "この task を取り下げる".to_string(),
+                consequence: None,
+            },
+        ],
+        recommended: "human-plan".to_string(),
+        cost_of_reversal: CostOfReversal::Low,
+        cost_note: if note.is_empty() { None } else { Some(note) },
+        needed_before: vec![crate::decision::NEEDED_BEFORE_SELF.to_string()],
         path,
         raised_by,
         status: crate::decision::DecisionStatus::Open,

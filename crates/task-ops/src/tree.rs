@@ -369,10 +369,115 @@ pub fn build_child_task(
             plan_id: plan_id.to_string(),
             unit_key: unit.key.clone(),
             stage: unit.stage.clone(),
+            attempt: 1,
         },
         None,
     ));
     Ok((child, downgrades))
+}
+
+/// ADR-0079 D9（Phase R2b）: 子 task の失敗の要約（親の replan の planner に渡す・基盤の失敗の再試行を決める）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildFailure {
+    /// `classify_task_failure` の分類（子の `cancelled` は常に work。R1b 付記 2.）。
+    pub class: crate::derive::FailureClass,
+    /// 人が読む 1 行の理由（最終レビューの不合格の理由、worker の失敗の要約、基盤の失敗の文言）。
+    pub reason: String,
+    /// 子の最後の checkpoint の要約（`completed` / `known_failures` / `next_action`。無ければ `None`）。
+    pub checkpoint: Option<String>,
+}
+
+/// 文字数で切る（`…` を足す）。
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect::<String>() + "…"
+    }
+}
+
+/// D9（Phase R2b）: 子 task の失敗を分類し、最後の checkpoint を要約する（store の読み取りだけ）。
+pub fn child_failure(store: &dyn TaskStore, child: &Task) -> Result<ChildFailure, OpsError> {
+    let events = store.events_for(child.id)?;
+    let (class, reason) = if child.status == Status::Cancelled {
+        let why = events
+            .iter()
+            .rev()
+            .find_map(|(_, e)| match e {
+                task_core::Event::Transitioned {
+                    to: Status::Cancelled,
+                    reason,
+                    ..
+                } => Some(reason.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "cancel".to_string());
+        (
+            crate::derive::FailureClass::Work,
+            format!("子 task が中止された（{why}）"),
+        )
+    } else {
+        crate::derive::classify_task_failure(&events)
+    };
+    let checkpoint = store
+        .runs_for_task(child.id)?
+        .into_iter()
+        .rev()
+        .find_map(|r| r.checkpoint)
+        .map(|cp| {
+            let mut parts = Vec::new();
+            if !cp.completed.is_empty() {
+                parts.push(format!("completed: {}", cp.completed.join("; ")));
+            }
+            let failures: Vec<String> = cp.known_failures.iter().map(|f| f.what.clone()).collect();
+            if !failures.is_empty() {
+                parts.push(format!("known failures: {}", failures.join("; ")));
+            }
+            if !cp.next_action.is_empty() {
+                parts.push(format!("next: {}", cp.next_action));
+            }
+            clip(&parts.join(" / "), 600)
+        })
+        .filter(|s| !s.is_empty());
+    Ok(ChildFailure {
+        class,
+        reason: clip(&reason, 400),
+        checkpoint,
+    })
+}
+
+/// D9（Phase R2b）: 親の events で、同じ unit から作った子の数（`ChildTaskCreated{unit_key}`。次の子の attempt は
+/// これ + 1）。replan で key を変えた unit は別に数える。
+pub fn child_attempts(events: &[(u64, task_core::Event)], unit_key: &str) -> u32 {
+    events
+        .iter()
+        .filter(|(_, e)| {
+            matches!(e, task_core::Event::ChildTaskCreated { unit_key: k, .. } if k == unit_key)
+        })
+        .count() as u32
+}
+
+/// D9（Phase R2b）: 子が基盤の失敗で終わり、同じ unit から子を作り直したときの `WorkUnitTransitioned.reason`
+/// （`running → running`）。
+pub const CHILD_INFRA_RETRY_REASON: &str = "child_infra_retry";
+/// D9（Phase R2b）: 基盤の失敗の作り直しも失敗して unit を `blocked(infra)` にしたときの reason。
+pub const CHILD_INFRA_FAILED_REASON: &str = "child_infra_failed";
+
+/// D9（Phase R2b）: 直近の `ExecutionPlanned`（replan の版）より後で、この unit の子を基盤の失敗で作り直した回数
+/// （`WorkUnitTransitioned{reason: child_infra_retry}`）。replan で窓を作り直す（ADR-0072 D17 と同じ考え方）。
+pub fn child_infra_retries(events: &[(u64, task_core::Event)], work_unit_id: &str) -> u32 {
+    let since = events
+        .iter()
+        .rposition(|(_, e)| matches!(e, task_core::Event::ExecutionPlanned { .. }))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    events[since..]
+        .iter()
+        .filter(|(_, e)| {
+            matches!(e, task_core::Event::WorkUnitTransitioned { work_unit_id: id, reason, .. }
+                if id == work_unit_id && reason == CHILD_INFRA_RETRY_REASON)
+        })
+        .count() as u32
 }
 
 #[cfg(test)]
@@ -535,6 +640,7 @@ mod tests {
                 plan_id: "plan-1".into(),
                 unit_key: "p2-b".into(),
                 stage: "phase-2".into(),
+                attempt: 1,
             })
         );
         assert_eq!(

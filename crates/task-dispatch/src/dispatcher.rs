@@ -1200,6 +1200,7 @@ fn set_worker_finished_end(event: &mut Option<Event>, end: task_core::RunEnd) {
 fn parse_planner_output(
     text: &str,
     active: Option<&task_core::ExecutionPlanRow>,
+    done_keys: &std::collections::BTreeSet<String>,
 ) -> Result<task_core::ExecutionPlanSpec, String> {
     let raw: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
@@ -1211,6 +1212,13 @@ fn parse_planner_output(
                     .to_string(),
             );
         };
+        // ADR-0079 D9（Phase R2b）: 差分は /2 の形（`work_units`）しか持たない。/3 の replan は計画の全体を書く。
+        if active.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3 {
+            return Err(format!(
+                "execution-plan-delta/1 は {} の計画の replan には使えない（計画の全体を書くこと。done の unit は省略してよい）",
+                task_core::EXECUTION_PLAN_SCHEMA_V3
+            ));
+        }
         let delta: task_core::execution_plan::ExecutionPlanDelta = serde_json::from_value(raw)
             .map_err(|e| format!("execution-plan-delta.json の形式が不正: {e}"))?;
         if delta.base_version != active.version {
@@ -1221,7 +1229,14 @@ fn parse_planner_output(
         }
         task_core::execution_plan::apply_delta(&active.spec, &delta)
     } else {
-        serde_json::from_value(raw).map_err(|e| format!("execution-plan.json の形式が不正: {e}"))
+        let mut spec: task_core::ExecutionPlanSpec = serde_json::from_value(raw)
+            .map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
+        // ADR-0079 D9（Phase R2b）: /3 の replan では done の unit を今の版の spec のまま持ち越す（planner が
+        // 省いた・書き写し損ねた unit も。unit の gate で上げ下げした spec を planner は知らない）。
+        if let Some(active) = active {
+            task_core::execution_plan::carry_done_units_v3(&active.spec, &mut spec, done_keys);
+        }
+        Ok(spec)
     }
 }
 
@@ -5988,7 +6003,11 @@ impl Dispatcher {
                 .and_then(|p| std::fs::read_to_string(p).ok())
             {
                 None => Err("artifacts/execution-plan.json が見つからない".to_string()),
-                Some(text) => match parse_planner_output(&text, active_plan.as_ref()) {
+                Some(text) => match parse_planner_output(
+                    &text,
+                    active_plan.as_ref(),
+                    &done_work_units.iter().map(|(k, _)| k.clone()).collect(),
+                ) {
                     Err(e) => Err(e),
                     Ok(spec) => match validate_plan_harnesses(&spec, &self.config.genres) {
                         Err(e) => Err(e),
@@ -6424,6 +6443,7 @@ impl Dispatcher {
         // 思い込みそのまま再提出する（dogfood 4 回目の 2 回目の試行）。`execution-plan.rejected.json` に移す。
         self.set_aside_rejected_plan(task);
         let attempts_so_far = self.planner_attempts_in_window(task_id)?;
+        let tree_planner = self.is_tree_planner(task)?;
         if attempts_so_far < MAX_PLANNER_ATTEMPTS {
             let progress = Event::worker_progress(run_id, planner_retry_message(&reason));
             self.store.apply_transition_with_events(
@@ -6432,6 +6452,49 @@ impl Dispatcher {
                     why: task_core::ContinueWhy::Planned,
                 },
                 finished.into_iter().chain([progress]).collect(),
+            )?;
+        } else if tree_planner {
+            // ADR-0079 D9（Phase R2b）: /3 の planner（木の節点）の計画が 2 回とも不正だった。atomic に倒さず
+            // （分けると決めた仕事を黙って 1 run に潰さない）、replan でも自由文の質問にせず、`kind: plan_invalid`
+            // の決定の要求を出す。Task は `ready` に戻し、決定が開いている間は run を起こさない
+            // （`plan_invalid_hold`。R2a の木の上限の止め方と同じ）。回答の入口は R3a。
+            let mut errors = planner_rejections_since_last_plan(&self.store.events_for(task_id)?);
+            if !errors.iter().any(|e| e == &reason) {
+                errors.push(reason.clone());
+            }
+            let replan = self.store.execution_plan_active(task_id)?.is_some();
+            let path =
+                task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
+            let request = task_core::tree::plan_invalid_decision(
+                task_id,
+                replan,
+                &errors,
+                path,
+                task_core::DecisionRaisedBy {
+                    task_id,
+                    run_id: Some(run_id.to_string()),
+                    origin: task_core::DecisionOrigin::Daemon,
+                },
+            );
+            tracing::warn!(%task_id, %run_id, decision = %request.id, replan, "the /3 plan was invalid twice; asking a human (plan_invalid) instead of falling back to atomic (ADR-0079 D9)");
+            let progress = Event::worker_progress(
+                run_id,
+                format!(
+                    "計画（/3）を 2 回とも採用できませんでした（{reason}）。atomic には倒さず、人の決定（plan_invalid）を待ちます（ADR-0079 D9）。"
+                ),
+            );
+            let mut events: Vec<Event> = finished.into_iter().chain([progress]).collect();
+            if self.open_plan_invalid(task)?.is_none() {
+                events.push(Event::DecisionRequested {
+                    decision: Box::new(request),
+                });
+            }
+            self.store.apply_transition_with_events(
+                task_id,
+                Trigger::Continue {
+                    why: task_core::ContinueWhy::Planned,
+                },
+                events,
             )?;
         } else if self.store.execution_plan_active(task_id)?.is_some() {
             // ADR-0072 D17（Phase E4）: これは replan の planner run（既に `active` な計画がある）。
@@ -10855,6 +10918,82 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// ADR-0079 D9（Phase R2b）: この task が出した未回答の `kind: plan_invalid` の決定。
+    fn open_plan_invalid(
+        &self,
+        task: &Task,
+    ) -> Result<Option<task_core::DecisionRow>, DispatchError> {
+        let root_id = task_core::tree::root_id_of(task);
+        Ok(self
+            .store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .find(|d| {
+                d.task_id == task.id
+                    && d.kind == task_core::DecisionKind::PlanInvalid
+                    && d.status == task_core::DecisionStatus::Open
+            }))
+    }
+
+    /// ADR-0079 D9（Phase R2b）: `kind: plan_invalid` の決定が開いている task は run を起こさない（`ready` のまま。
+    /// 名指しの待ち = その決定）。木が無効なら常に `false`（従来と 1 バイトも変わらない）。
+    fn plan_invalid_hold(&self, task: &Task) -> Result<bool, DispatchError> {
+        if !self.config.execution.limits.tree.enabled {
+            return Ok(false);
+        }
+        Ok(self.open_plan_invalid(task)?.is_some())
+    }
+
+    /// ADR-0079 D9（Phase R2b）: 木の節点の replan が節点の上限（`[execution] max_replans`）に達した。黙って
+    /// 止まらず（`Skip` のまま何も起きない、を避ける）`kind: limit`（`limit:max_replans`）の決定の要求を 1 件だけ
+    /// 出す（同じ節点で未回答のものがあれば出さない）。木が無効・木の節点でなければ何もしない。
+    fn raise_node_replan_limit(&self, task_id: TaskId, used: u32) -> Result<(), DispatchError> {
+        if !self.config.execution.limits.tree.enabled {
+            return Ok(());
+        }
+        let Some(task) = self.store.get(task_id)? else {
+            return Ok(());
+        };
+        if !self.is_tree_node(&task)? {
+            return Ok(());
+        }
+        let key = task_core::TreeLimitKind::NodeReplans.decision_key(None);
+        let root_id = task_core::tree::root_id_of(&task);
+        let already = self
+            .store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .any(|d| {
+                d.task_id == task_id && d.key == key && d.status == task_core::DecisionStatus::Open
+            });
+        if already {
+            return Ok(());
+        }
+        let path =
+            task_ops::tree::decision_path(self.store.as_ref(), &task).map_err(ops_to_store)?;
+        let request = task_core::tree::limit_decision(
+            task_core::TreeLimitKind::NodeReplans,
+            None,
+            u64::from(used),
+            u64::from(self.config.execution.max_replans),
+            vec![task_core::decision::NEEDED_BEFORE_SELF.to_string()],
+            path,
+            task_core::DecisionRaisedBy {
+                task_id,
+                run_id: None,
+                origin: task_core::DecisionOrigin::Daemon,
+            },
+        );
+        tracing::warn!(%task_id, used, decision = %request.id, "the node's replans are exhausted; asking a human (ADR-0079 D9)");
+        self.store.append_event(
+            task_id,
+            &Event::DecisionRequested {
+                decision: Box::new(request),
+            },
+        )?;
+        Ok(())
+    }
+
     /// ADR-0079 D3（Phase R2a）: 木の節点か（木の子 task、または /3 の計画を持つ root）。
     fn is_tree_node(&self, task: &Task) -> Result<bool, DispatchError> {
         if task.tree.is_some() {
@@ -11013,6 +11152,17 @@ impl Dispatcher {
                 let Some((to, reason)) = task_ops::tree::unit_mirror(child.status) else {
                     continue;
                 };
+                // ADR-0079 D9（Phase R2b）: 子が基盤の分類（infra）で failed なら、親の replan にはしない:
+                // 同じ unit から 1 回だけ子を作り直し、それでも失敗したら障害通知と unit `blocked(infra)`。
+                if child.status == Status::Failed {
+                    let failure = task_ops::tree::child_failure(self.store.as_ref(), &child)
+                        .map_err(ops_to_store)?;
+                    if failure.class == task_ops::derive::FailureClass::Infra {
+                        self.handle_child_infra_failure(&parent, &plan, u, &child, &failure, now)?;
+                        changed = true;
+                        continue;
+                    }
+                }
                 let mut row = u.clone();
                 row.status = to;
                 row.blocked_reason = None;
@@ -11137,8 +11287,18 @@ impl Dispatcher {
                 )
                 .and_then(|(mut child, downgrades)| {
                     let base = self.child_base_commit(&parent, u, &units)?;
+                    // ADR-0079 D9（Phase R2b）: 同じ unit から作る何回目の子か（replan が失敗した子の unit を
+                    // 同じ key で残したときは attempt + 1）。
+                    let attempt = self
+                        .store
+                        .events_for(task_id)
+                        .map(|events| task_ops::tree::child_attempts(&events, &u.key) + 1)
+                        .unwrap_or(1);
                     if let Some(tree) = child.tree.as_mut() {
                         tree.base_commit = base;
+                        if let Some(pu) = tree.parent_unit.as_mut() {
+                            pu.attempt = attempt;
+                        }
                     }
                     Ok((child, downgrades))
                 });
@@ -11169,7 +11329,10 @@ impl Dispatcher {
                                 depth,
                             },
                         ];
-                        if self.store.tree_child_create(task_id, &child, row, events)? {
+                        if self
+                            .store
+                            .tree_child_create(task_id, &child, row, events, None)?
+                        {
                             tracing::info!(%task_id, work_unit = %u.key, child_id = %child.id, depth, "child task created from a task unit (ADR-0079 D4 (4))");
                             open_children += 1;
                         }
@@ -11201,6 +11364,144 @@ impl Dispatcher {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// ADR-0079 D9（Phase R2b）: kind task の unit の子が基盤の分類（`classify_task_failure` の infra: 基盤の再試行
+    /// 〈`InfraRequeue`〉を使い切った harness_error・lease の失効・準備の失敗、供給側の requeue の上限）で `failed`
+    /// になった。人への質問にはしない:
+    /// - この版で作り直した回数が `MAX_CHILD_INFRA_RETRIES`（1）未満なら、同じ unit から新しい子（attempt + 1、同じ
+    ///   基点）を作る。unit は `running` のまま（`WorkUnitTransitioned{child_infra_retry}` と `ChildTaskCreated`）。
+    /// - 使い切っていれば unit を `blocked(infra)`（`child_infra_failed`）にし、障害通知（`TaskFailed`、基盤の分類）を
+    ///   1 件出す。段階は完了しない（親は `ready` のまま待つ）。同じ段階の他の unit・兄弟の子は止めない。
+    fn handle_child_infra_failure(
+        &self,
+        parent: &Task,
+        plan: &task_core::ExecutionPlanRow,
+        u: &task_core::WorkUnitRow,
+        child: &Task,
+        failure: &task_ops::tree::ChildFailure,
+        now: OffsetDateTime,
+    ) -> Result<(), DispatchError> {
+        let task_id = parent.id;
+        let events = self.store.events_for(task_id)?;
+        let retries = task_ops::tree::child_infra_retries(&events, &u.id);
+        let child_id = child.id.to_string();
+        let mut block_reason = failure.reason.clone();
+        if retries < task_core::tree::MAX_CHILD_INFRA_RETRIES {
+            let decisions = task_ops::tree::answered_decisions(
+                self.store.as_ref(),
+                task_id,
+                &u.needs_decisions,
+            )
+            .map_err(ops_to_store)?
+            .unwrap_or_default();
+            let built = match plan.spec.units.iter().find(|s| s.key == u.key) {
+                None => Err(format!("unit {} is not in the active plan", u.key)),
+                Some(unit_spec) => task_ops::tree::build_child_task(
+                    self.store.as_ref(),
+                    parent,
+                    &plan.id,
+                    unit_spec,
+                    &decisions,
+                    &self.config.roles,
+                    &self.config.genres,
+                    now,
+                ),
+            };
+            match built {
+                Ok((mut next, _downgrades)) => {
+                    let attempt = task_ops::tree::child_attempts(&events, &u.key) + 1;
+                    if let Some(tree) = next.tree.as_mut() {
+                        // 基点は同じ（親のブランチは段階の途中では動かない。ADR-0079 D6）。
+                        tree.base_commit =
+                            task_core::tree::child_base_commit(child).map(str::to_string);
+                        if let Some(pu) = tree.parent_unit.as_mut() {
+                            pu.attempt = attempt;
+                        }
+                    }
+                    let depth = task_core::tree::depth_of(&next);
+                    let mut row = u.clone();
+                    row.child_task_id = Some(next.id.to_string());
+                    row.updated_at = rfc3339(now);
+                    let parent_events = vec![
+                        Event::WorkUnitTransitioned {
+                            work_unit_id: u.id.clone(),
+                            key: u.key.clone(),
+                            from: task_core::WorkUnitStatus::Running,
+                            to: task_core::WorkUnitStatus::Running,
+                            reason: task_ops::tree::CHILD_INFRA_RETRY_REASON.to_string(),
+                            run_id: None,
+                        },
+                        Event::ChildTaskCreated {
+                            plan_id: plan.id.clone(),
+                            unit_key: u.key.clone(),
+                            child_task_id: next.id,
+                            depth,
+                        },
+                        Event::worker_progress(
+                            String::new(),
+                            format!(
+                                "子 task「{}」（{}）が基盤の失敗で終わりました（{}）。質問にはせず、同じ unit {} から子を作り直します（attempt {attempt}。ADR-0079 D9）。",
+                                child.title, child.id, failure.reason, u.key
+                            ),
+                        ),
+                    ];
+                    if self.store.tree_child_create(
+                        task_id,
+                        &next,
+                        row,
+                        parent_events,
+                        Some(&child_id),
+                    )? {
+                        tracing::warn!(%task_id, work_unit = %u.key, failed_child = %child.id, child_id = %next.id, attempt, "the child task failed for an infrastructure reason; recreated it from the same unit (ADR-0079 D9)");
+                    }
+                    return Ok(());
+                }
+                Err(reason) => {
+                    block_reason = format!("{block_reason}（作り直せませんでした: {reason}）");
+                }
+            }
+        }
+        let mut row = u.clone();
+        row.status = task_core::WorkUnitStatus::Blocked;
+        row.blocked_reason = Some(task_core::WorkUnitBlockedReason::Infra);
+        row.clear_lease();
+        row.updated_at = rfc3339(now);
+        let attempts = retries + 1;
+        let body = format!(
+            "障害（infra）: 子 task「{}」が基盤の失敗で終わりました（自動の作り直し {retries} 回の後。計 {attempts} 回）: {block_reason}。unit {} は blocked(infra)、親「{}」の段階 {} は止まり、兄弟は続きます。再試行は人の操作で（ADR-0079 D9）。",
+            child.title,
+            u.key,
+            parent.title,
+            u.phase.as_deref().unwrap_or("-")
+        );
+        self.store.work_units_apply(
+            task_id,
+            Vec::new(),
+            vec![row],
+            vec![
+                Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: u.status,
+                    to: task_core::WorkUnitStatus::Blocked,
+                    reason: task_ops::tree::CHILD_INFRA_FAILED_REASON.to_string(),
+                    run_id: None,
+                },
+                Event::worker_progress(String::new(), body.clone()),
+            ],
+        )?;
+        tracing::error!(%task_id, work_unit = %u.key, %child_id, "the child task failed again for an infrastructure reason; the unit is blocked(infra) and a failure notification is raised (ADR-0079 D9)");
+        if let Err(e) = self.store.notification_upsert_pending(
+            NotificationKind::TaskFailed,
+            &format!("tree-infra:{}:{child_id}", u.id),
+            &body,
+            parent.project_id,
+            now,
+        ) {
+            tracing::error!(%task_id, error = %e, "failed to record the infra failure notification");
         }
         Ok(())
     }
@@ -11249,6 +11550,8 @@ impl Dispatcher {
         if replans_so_far < self.config.execution.max_replans {
             Ok(WuDispatchGate::RunPlanner { replan: true })
         } else {
+            // ADR-0079 D9（Phase R2b）: 木の節点では上限の超過を人への決定の要求にする（黙って止まらない）。
+            self.raise_node_replan_limit(task_id, replans_so_far)?;
             Ok(WuDispatchGate::Skip)
         }
     }
@@ -11567,6 +11870,90 @@ impl Dispatcher {
             max_plan_json_bytes: limits.max_plan_json_bytes,
             max_children: limits.max_children,
             previous_attempt_errors,
+            tree: if self.is_tree_planner(task)? {
+                Some(self.tree_planner_context(task)?)
+            } else {
+                None
+            },
+        })
+    }
+
+    /// ADR-0079 D2 / D4 (2)（Phase R2b）: この task の planner に /3 を書かせるか（`[execution.tree] enabled` で、
+    /// まだ計画が無いか、今の計画が /3）。/1・/2 の計画の replan は従来どおり（/2 の形と差分）。
+    fn is_tree_planner(&self, task: &Task) -> Result<bool, DispatchError> {
+        if !self.config.execution.limits.tree.enabled {
+            return Ok(false);
+        }
+        Ok(match self.store.execution_plan_active(task.id)? {
+            None => true,
+            Some(plan) => plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3,
+        })
+    }
+
+    /// ADR-0079 D4 (2) / D12（Phase R2b）: /3 の planner に渡す木の中の位置（深さ・残りの深さ・祖先）、計画と木の
+    /// 上限の残り（`[execution.tree]` と `task_ops::tree::tree_counters`。検証と同じ値）、人の段階の名指し。
+    fn tree_planner_context(
+        &self,
+        task: &Task,
+    ) -> Result<task_worker::protocol::TreePlannerContext, DispatchError> {
+        let tree = self.config.execution.limits.tree;
+        let depth = task_core::tree::depth_of(task);
+        let root_id = task_core::tree::root_id_of(task);
+        let counters =
+            task_ops::tree::tree_counters(self.store.as_ref(), root_id).map_err(ops_to_store)?;
+        let open_decisions = self
+            .store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .filter(|d| d.status == task_core::DecisionStatus::Open)
+            .count();
+        let node_replans = self
+            .store
+            .execution_plan_list(task.id)?
+            .len()
+            .saturating_sub(1) as u64;
+        let chain =
+            task_ops::tree::ancestors_with_self(self.store.as_ref(), task).map_err(ops_to_store)?;
+        let ancestors = chain
+            .iter()
+            .enumerate()
+            .take(chain.len().saturating_sub(1))
+            .map(|(i, t)| task_worker::protocol::TreeAncestorContext {
+                title: t.title.clone(),
+                stage: chain
+                    .get(i + 1)
+                    .and_then(|next| next.tree.as_ref())
+                    .and_then(|tr| tr.parent_unit.as_ref())
+                    .map(|u| u.stage.clone()),
+                objective_excerpt: t.objective.chars().take(300).collect(),
+            })
+            .collect();
+        Ok(task_worker::protocol::TreePlannerContext {
+            depth,
+            max_depth: tree.max_depth,
+            remaining_depth: task_core::tree::remaining_depth(depth, tree.max_depth),
+            max_stages: tree.max_stages,
+            max_units_per_stage: tree.max_units_per_stage,
+            max_child_tasks_per_plan: tree.max_child_tasks_per_plan,
+            max_decisions_per_plan: tree.max_open_decisions_per_plan,
+            max_parallel_child_tasks: tree.max_parallel_child_tasks,
+            leaves_left: u64::from(tree.max_tree_leaves.saturating_sub(counters.leaves)),
+            runs_left: u64::from(tree.max_tree_runs.saturating_sub(counters.runs)),
+            replans_left: u64::from(tree.max_tree_replans.saturating_sub(counters.replans)),
+            node_replans_left: u64::from(self.config.execution.max_replans)
+                .saturating_sub(node_replans),
+            tokens_left: tree
+                .max_tree_tokens
+                .map(|max| max.saturating_sub(counters.tokens)),
+            open_decisions_left: tree
+                .max_open_decisions_per_tree
+                .saturating_sub(open_decisions) as u64,
+            ancestors,
+            stages_hint: task
+                .routing
+                .as_ref()
+                .map(|r| r.stages_hint.clone())
+                .unwrap_or_default(),
         })
     }
 
@@ -11576,6 +11963,37 @@ impl Dispatcher {
     /// （`runs`/`checkpoint` の欠落は既存の run でも起こりうる。D5/D8 の合成規則と同じく「無ければ
     /// 状態だけ」に倒す）。
     fn work_unit_plan_summary_line(&self, wu: &task_core::WorkUnitRow) -> String {
+        // ADR-0079 D9（Phase R2b）: kind task の unit は子 task の状態と、失敗なら理由と checkpoint の要約。
+        if wu.kind == task_core::WorkUnitKind::Task {
+            let status = match wu.blocked_reason {
+                Some(reason) => format!("{} ({})", wu.status.as_str(), reason.as_str()),
+                None => wu.status.as_str().to_string(),
+            };
+            let child = wu
+                .child_task_id
+                .as_deref()
+                .and_then(|id| id.parse::<TaskId>().ok())
+                .and_then(|id| self.store.get(id).ok().flatten());
+            let Some(child) = child else {
+                return format!("{} (task) status={status}: no child task yet", wu.key);
+            };
+            let mut line = format!(
+                "{} (task) status={status}: child task {} \"{}\" is {}",
+                wu.key,
+                child.id,
+                child.title,
+                format!("{:?}", child.status).to_lowercase()
+            );
+            if matches!(child.status, Status::Failed | Status::Cancelled)
+                && let Ok(f) = task_ops::tree::child_failure(self.store.as_ref(), &child)
+            {
+                line.push_str(&format!(" ({}): {}", f.class.as_str(), f.reason));
+                if let Some(cp) = f.checkpoint {
+                    line.push_str(&format!("; last checkpoint: {cp}"));
+                }
+            }
+            return line;
+        }
         let checkpoint = wu
             .last_run_id
             .as_deref()
@@ -11634,6 +12052,43 @@ impl Dispatcher {
         let events = self.store.events_for(task_id)?;
         for (_, ev) in events.iter().rev() {
             match ev {
+                // ADR-0079 D9（Phase R2b）: 子 task が失敗（work）・中止で終わり、unit が failed になった。理由は
+                // 子の分類と理由（最終レビューの不合格の理由を含む）と最後の checkpoint の要約。
+                Event::WorkUnitTransitioned {
+                    work_unit_id,
+                    key,
+                    reason,
+                    ..
+                } if reason == "child_failed" || reason == "child_cancelled" => {
+                    let child = self
+                        .store
+                        .work_unit_get(work_unit_id)?
+                        .and_then(|u| u.child_task_id)
+                        .and_then(|id| id.parse::<TaskId>().ok())
+                        .and_then(|id| self.store.get(id).ok().flatten());
+                    let Some(child) = child else {
+                        return Ok(format!("child task of unit {key} failed"));
+                    };
+                    let failure = task_ops::tree::child_failure(self.store.as_ref(), &child)
+                        .map_err(ops_to_store)?;
+                    let attempt = child
+                        .tree
+                        .as_ref()
+                        .and_then(|t| t.parent_unit.as_ref())
+                        .map(|u| u.attempt)
+                        .unwrap_or(1);
+                    let mut out = format!(
+                        "child task \"{}\" (unit {key}, attempt {attempt}, {}) failed ({}): {}",
+                        child.title,
+                        child.id,
+                        failure.class.as_str(),
+                        failure.reason
+                    );
+                    if let Some(cp) = failure.checkpoint {
+                        out.push_str(&format!("; the child's last checkpoint: {cp}"));
+                    }
+                    return Ok(out);
+                }
                 // ADR-0072「Phase F6 実装時の決定」: 人が後から依頼した replan（「人の指示: <note>」）。
                 Event::ExecutionHintSet {
                     replan: true,
@@ -11817,6 +12272,10 @@ impl Dispatcher {
             Some(wu) => WuDispatchGate::RunWorkUnit(Box::new(wu)),
             None => self.wu_dispatch_gate(task.id)?,
         };
+        // ADR-0079 D9（Phase R2b）: /3 の計画が 2 回不正で人の決定（plan_invalid）を待つ task は run を起こさない。
+        if !second_pass && self.plan_invalid_hold(&task)? {
+            return Ok(false);
+        }
         // ADR-0079 D3（Phase R2a）: 木の上限（run・トークン・replan）。超えるなら新しい run を起こさず、
         // `kind: limit` の決定の要求を出して（木に 1 件）この節点だけを止める（兄弟の走っている run は続く）。
         if self.tree_run_limit_hold(&task, &gate)? {
@@ -35527,6 +35986,10 @@ mod tests {
     /// ADR-0079 §7 R2a: 深さの閾値・木の子は shadow でも採用・unit の gate（上げる / 下げる / 決定）・木の上限の
     /// 超過は `kind: limit` の決定の要求（`src/dispatcher/tests/tree_gate.rs`）。
     mod tree_gate;
+
+    /// ADR-0079 §7 R2b: /3 の planner の入力・2 回不正な /3 の `plan_invalid`・子の失敗 → 親の replan・子の基盤の
+    /// 失敗の再試行と障害通知・replan の上限（`src/dispatcher/tests/tree_replan.rs`）。
+    mod tree_replan;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

@@ -701,6 +701,8 @@ fn build_task(
         } else {
             task_core::PauseSource::Human
         },
+        // ADR-0079 D12: `create_task.stages_hint` の入口は R5a（R2b は planner が読むだけ）。
+        stages_hint: Vec::new(),
     };
     let task = Task {
         tree: None,

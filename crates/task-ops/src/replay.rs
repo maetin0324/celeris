@@ -274,6 +274,8 @@ pub fn rebuild_work_units_and_runs(
                         "limit" => Some(WorkUnitBlockedReason::Limit),
                         // ADR-0079 Phase R2a: 木の上限・子 task にできない leaf の決定の要求を待つ。
                         "decision" => Some(WorkUnitBlockedReason::Decision),
+                        // ADR-0079 Phase R2b: 子の基盤の失敗が自動の作り直しでも続いた（障害通知済み）。
+                        "child_infra_failed" => Some(WorkUnitBlockedReason::Infra),
                         _ => wu.blocked_reason,
                     }
                 } else {
@@ -281,6 +283,16 @@ pub fn rebuild_work_units_and_runs(
                 };
                 wu.status = *to;
                 wu.blocked_reason = blocked_reason;
+                // ADR-0079 Phase R2b: replan が失敗した子の kind task の unit を新しい版に残したら、子の
+                // 結び付きを外す（次の照合が同じ unit から新しい子を作る。`task_ops::execution::replan` と同じ）。
+                if wu.kind == task_core::WorkUnitKind::Task
+                    && reason.starts_with("replan v")
+                    && matches!(to, WorkUnitStatus::Ready | WorkUnitStatus::Pending)
+                {
+                    wu.child_task_id = None;
+                    wu.head_commit = None;
+                    wu.base_commit = None;
+                }
                 match reason.as_str() {
                     "dispatch" => {
                         wu.runs += 1;
@@ -382,6 +394,26 @@ pub fn rebuild_work_units_and_runs(
                     && !head.is_empty()
                 {
                     wu.integrated_commit = Some(head.clone());
+                }
+            }
+            // ADR-0079 Phase R2b（replan の版）: `task_ops::execution::replan` は done の行に触れず（`plan_id` /
+            // `seq` は元の版のまま）、それ以外の新しい版に残る行を新しい版の `plan_id` / `seq` にする。版ごとに
+            // 同じ規則を畳み込む（1 版だけの task では materialize と同じ値）。
+            Event::ExecutionPlanned { plan_id, plan, .. } => {
+                let order = topological_order(plan);
+                let seqs: BTreeMap<String, u32> = task_core::materialized_order(plan, &order)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, w)| (w.key, i as u32))
+                    .collect();
+                for wu in wu_rows.values_mut() {
+                    if wu.status == WorkUnitStatus::Done {
+                        continue;
+                    }
+                    if let Some(seq) = seqs.get(&wu.key) {
+                        wu.plan_id = plan_id.clone();
+                        wu.seq = *seq;
+                    }
                 }
             }
             // ADR-0079 D4 (4) / D15（Phase R1a）: kind task の unit の子 task（store が同じトランザクションで
@@ -2240,6 +2272,7 @@ mod tests {
                 plan_id: plan.id.clone(),
                 unit_key: "p1".into(),
                 stage: "phase-1".into(),
+                attempt: 1,
             },
             None,
         ));

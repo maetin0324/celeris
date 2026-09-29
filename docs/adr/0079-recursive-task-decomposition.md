@@ -928,3 +928,57 @@ migration は足していない（schema 31 のまま。`work_units.blocked_reas
     残す構造上の理由として fixture に `skills: ["tree-fixture"]`（親に無い skill）を足した（孫の unit は別の skill）。試験の意図は変えていない。
 14. **idle**: 決定を待って止めた仕事を持つ木は `ready` の task を残すので、`--until-idle` の idle にならない（子待ちの親〈R1b〉と同じ扱い。本番の
     daemon は `until_idle` を使わない）。黙って止まっていないことの検出（D10）は R3b。
+
+## 付記: R2b 実装時の逸脱・明確化（2026-09-29）
+
+R2b（planner への深さ・leaf の基準・木の残りの上限、/3 の 2 回不正 → `plan_invalid`、子の失敗 → 親の replan、子の基盤の失敗の
+再試行と障害通知）で決めたこと。migration は足していない（schema 31 のまま。`work_units.blocked_reason` に値 `infra` を足すだけ）。
+
+1. **/3 を書かせる planner**: `[execution.tree] enabled` で、計画が無いか今の計画が /3 の task（`Dispatcher::is_tree_planner`）。
+   root も木の子も同じ（root も /3 を使える）。/1・/2 の計画の replan は木が有効でも従来どおり（/2 の形と差分）。
+   planner の文脈は `ExecutionPlannerContext.tree: Option<TreePlannerContext>`（深さ・`max_depth`・残りの深さ・計画の上限〈段階・
+   段階あたり・子 task・決定〉・同時の子・木の残り〈leaf・run・replan・節点の replan・トークン・未回答の決定〉・祖先の題名と段階と
+   目的の先頭 300 文字・`stages_hint`）。値は検証と同じ `ExecutionLimits.tree` と `task_ops::tree::tree_counters` から埋める
+   （F5-fix3 と同じ「1 か所」。プロンプトの `### Plan limits` も /3 のときは同じ値で段階・unit・決定の上限と「leaf の予算は丸めずに
+   拒否」を出す）。`tree = None` のプロンプトは 1 バイトも変わらない。
+2. **`stages_hint` の置き場**: `Task.routing.stages_hint: [{title, scope}]`（`pause_after` と同じ理由で `TaskRouting` に置く。空なら
+   出力しない）。書く入口（CoS の `create_task.stages_hint`、API）は R5a。planner は root の値だけを受け取る（子は継がない）。
+3. **/3 の 2 回不正の止め方**: `blocked(decision)` を Task の状態には持ち込まず、R2a の木の上限と同じく **Task は `ready` に戻し
+   （`Continue{planned}`）、未回答の `kind: plan_invalid` の決定（key `plan_invalid`、`needed_before: ["self"]`、選択肢
+   「人が計画を書く（推奨）/ atomic で試す / 取り下げる」、`cost_note` に試行ごとの検証の理由）がある間は run を起こさない**
+   （`Dispatcher::plan_invalid_hold`）。`blocked` にしないのは、`blocked` が質問（`QuestionBlocked` の通知・`Answer` で再開）の意味を
+   持つため。「2 回」は /3 を書かせた planner の試行の窓（ADR-0072 D14）で数え、計画を書かなかった・/3 でない形を書いた試行も
+   不正な試行に含む。**replan の planner（/3 の計画を持つ節点）の 2 回不正も、D12 の自由文の質問の代わりに同じ決定**にした
+   （D9「木の節点では構造化した決定の要求に置き換える」）。回答の効き目は R3a。
+4. **/3 の replan は計画の全体**: 差分（`execution-plan-delta/1`）は /2 の形しか持たないので /3 の計画の replan では拒否する（理由は
+   planner に返る）。planner が done の unit を省いた・書き写し損ねたときは、daemon が今の版の（unit の gate を当てた）spec のまま
+   持ち越す（`task_core::execution_plan::carry_done_units_v3`。段階・待つ決定も）。あわせて `task_ops::execution::replan` を /3 に
+   対応させた（**R1b〜R2a では /3 の replan は `validated.spec.work_units` が空のため未完了の unit をすべて superseded にし、新しい行を
+   作らなかった**。`internal_view` で /2 と同じ行に写し、統合 WU・工程の障壁・`needs_decisions` も同じ規則）。
+5. **子の work の失敗 → 親の replan**（D9）: 子の `failed`（work）・`cancelled` は R1b のとおり unit `failed` → 段階の失敗 → replan。
+   replan の planner の `replan_reason` は `child task "<題名>" (unit <key>, attempt n, <id>) failed (<分類>): <理由>; the child's last
+   checkpoint: …`（理由は `classify_task_failure`。最終レビューの不合格の理由を含む）、unit の要約の行は kind task の unit について
+   子の id・題名・状態・分類と理由・checkpoint の要約。**やり直しは同じ key でよい**（D9 の「新しい key の task unit」からの逸脱。
+   新しい key も使える）: 失敗した子の unit を新しい版に残すと、replan が unit の子の結び付き（`child_task_id`）を外し、次の照合で
+   同じ unit から新しい子（`Task.tree.parent_unit.attempt = n + 1`。`attempt` は 1 なら出力しない）を作る。元の子の task とブランチは
+   残る。**子が走っている kind task の unit は replan で `running` のまま持ち越す**（R1b では兄弟の失敗の replan で走っている子の unit が
+   `ready` に戻り、子を持ったまま二度と写されなかった）。やり直しの回数の上限は unit ごとには置かず、replan の上限
+   （節点の `max_replans`、木の `max_tree_replans`、D16）で抑える。
+6. **節点の replan の上限**: 木の節点で replan が要るのに `[execution] max_replans` を使い切っていたら、従来の `Skip`（黙って止まる）の
+   代わりに `kind: limit`（key `limit:max_replans`、`TreeLimitKind::NodeReplans`、節点ごとに 1 件、`needed_before: ["self"]`）の決定の
+   要求を出す。**leaf の失敗で replan を使い切ったときの ADR-0072 D12 の質問（run の終わりの経路）は変えていない**（R3a 以降）。
+7. **子の基盤の失敗**（D9）: 基盤の分類は `classify_task_failure` の infra（`InfraRequeue` を使い切った harness_error・lease の失効〈orphan
+   の引き取りを含む〉・準備の失敗、供給側の requeue の上限。ディスク不足）。`max_child_infra_retries` は設定にせず定数
+   `task_core::tree::MAX_CHILD_INFRA_RETRIES = 1`。作り直しは `task_ops::retry`（失敗した task の複製）ではなく**同じ unit の spec から
+   `build_child_task` で新しい子**（attempt + 1、基点は元の子と同じ `base_commit`）を作る（R1b の子の生成と同じ組み立て・検証を通す）。
+   unit は `running` のまま `WorkUnitTransitioned{running → running, child_infra_retry}` と `ChildTaskCreated` を 1 トランザクション
+   （`tree_child_create(.., replaces: Some(<元の子>))`）。回数の窓は直近の `ExecutionPlanned` から（replan で作り直す）。
+   2 回目も基盤の失敗なら unit を `blocked(infra)`（`WorkUnitBlockedReason::Infra`、reason `child_infra_failed`）にし、
+   **障害通知を dispatcher が `NotificationKind::TaskFailed`（key `tree-infra:<unit id>:<子 id>`、本文に「障害（infra）」・子の題名・
+   理由・止まった段階）で 1 件**出す（決定の要求・質問にはしない）。`blocked(infra)` は `blocked(decision)` と同じく工程の失敗に数えず、
+   同じ段階の他の unit・兄弟の子を止めず、段階は完了しない（親は `ready` のまま待つ）。子自身の `TaskFailed`（`scan_task_failed`）も
+   今どおり鳴る（子の失敗の通知の抑止は R3b）。人の「再試行」の入口（`blocked(infra)` の unit から新しい子）は R3b / R4b。
+8. **replay**: `rebuild_work_units_and_runs` は版ごとの `ExecutionPlanned` で「done でない行を新しい版の `plan_id` / `seq` にする」を
+   畳み込む（`replan` が done の行に触れないのと同じ。**/2 の replan で done の WU があると `plan_id` が食い違っていた既存の差**も
+   これで消える）。`replan v<n>` の遷移で `ready` / `pending` に戻った kind task の unit は子の結び付きを外し、`child_infra_failed` は
+   `blocked(infra)` に写す。

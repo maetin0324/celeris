@@ -385,6 +385,7 @@ async fn a_tree_child_cannot_be_integrated_into_main_by_hand() {
                 plan_id: "plan".into(),
                 unit_key: "c".into(),
                 stage: "s1".into(),
+                attempt: 1,
             }),
             base_commit: None,
         });

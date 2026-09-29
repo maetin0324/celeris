@@ -588,6 +588,11 @@ pub struct TaskRouting {
     /// 人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。
     #[serde(default, skip_serializing_if = "is_default_pause_source")]
     pub pause_after_source: crate::pause::PauseSource,
+    /// ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{"title": "Phase 1", "scope": "…"}]`）。/3 の planner
+    /// run の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の
+    /// `create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages_hint: Vec<crate::tree::StageHint>,
 }
 
 fn is_default_pause_source(source: &crate::pause::PauseSource) -> bool {

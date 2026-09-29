@@ -1171,12 +1171,16 @@ pub trait TaskStore:
     /// 子を挿入して `Event::Created{origin: plan_unit}` を積み、unit の行を `unit`（呼び出し側が
     /// `running`・`child_task_id` を書いたもの）に差し替え、親の events に `parent_events`
     /// （`WorkUnitTransitioned` と `ChildTaskCreated`）を積む。条件に合わなければ何も書かず `Ok(false)`。
+    ///
+    /// ADR-0079 D9（Phase R2b）: `replaces = Some(prev)` は基盤の失敗の作り直し（同じ unit から新しい子）。
+    /// unit の行が `running` で `child_task_id = prev` であることを確かめる（`ready`・子なしの代わりに）。
     fn tree_child_create(
         &self,
         parent_id: TaskId,
         child: &Task,
         unit: WorkUnitRow,
         parent_events: Vec<Event>,
+        replaces: Option<&str>,
     ) -> Result<bool, StoreError>;
 
     /// ADR-0074 D1.4（Phase F2）: Task の lease（工程の保持者）の期限を `ttl` 先まで延ばす
@@ -6037,6 +6041,7 @@ impl TaskStore for SqliteStore {
         child: &Task,
         unit: WorkUnitRow,
         parent_events: Vec<Event>,
+        replaces: Option<&str>,
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -6061,10 +6066,14 @@ impl TaskStore for SqliteStore {
         let Some(current) = current else {
             return Ok(false);
         };
-        if current.status != WorkUnitStatus::Ready
-            || current.child_task_id.is_some()
-            || current.kind != crate::execution_plan::WorkUnitKind::Task
-        {
+        let expected = match replaces {
+            None => current.status == WorkUnitStatus::Ready && current.child_task_id.is_none(),
+            Some(prev) => {
+                current.status == WorkUnitStatus::Running
+                    && current.child_task_id.as_deref() == Some(prev)
+            }
+        };
+        if !expected || current.kind != crate::execution_plan::WorkUnitKind::Task {
             return Ok(false);
         }
         Self::insert_tx(&tx, child)?;
@@ -10669,6 +10678,7 @@ mod tests {
                 plan_id: "plan-1".into(),
                 unit_key: "p1".into(),
                 stage: "phase-1".into(),
+                attempt: 1,
             },
             Some("abc".into()),
         ));

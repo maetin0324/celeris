@@ -910,7 +910,15 @@ fn build_execution_plan_prompt(
         .as_ref()
         .map(|p| p.default_max_wall_secs)
         .unwrap_or(1800);
-    out.push_str(&format!(
+    let tree = context
+        .execution_planner
+        .as_ref()
+        .and_then(|p| p.tree.as_ref());
+    if let (Some(planner), Some(tree)) = (context.execution_planner.as_ref(), tree) {
+        // ADR-0079 D4 (2)（Phase R2b）: 木の節点の planner は /3（段階・unit = leaf | 子 task・決定）を書く。
+        out.push_str(&tree_plan_shape_section(planner, tree, artifacts));
+    } else {
+        out.push_str(&format!(
         "Write your plan to `{artifacts}/execution-plan.json` (create the `{artifacts}/` directory if it \
          does not exist yet) as a single JSON object of exactly this shape:\n\
          ```json\n\
@@ -942,6 +950,7 @@ fn build_execution_plan_prompt(
          omit it, the default is max({default_max_turns}, task budget) turns and \
          max({default_max_wall_secs}, task budget) seconds.\n\n"
     ));
+    }
     // Phase F5-fix3: 検証が使う上限をすべて、計画の形の説明のすぐ後に出す。前の試行が拒否されていれば、
     // その理由も（同じ間違いを繰り返させない。dogfood 4 回目は 2 回とも `too many checks: 8 > 6`）。
     if let Some(planner) = &context.execution_planner {
@@ -956,7 +965,11 @@ fn build_execution_plan_prompt(
     out.push_str(&schema);
     out.push_str("\n```\n\n");
     out.push_str(&work_unit_features_section());
-    if let Some(planner) = context.execution_planner.as_ref().filter(|p| p.parallel) {
+    if let Some(planner) = context
+        .execution_planner
+        .as_ref()
+        .filter(|p| p.parallel && p.tree.is_none())
+    {
         out.push_str(&parallel_phases_section(planner.max_phases));
     }
     if let Some(planner) = &context.execution_planner {
@@ -978,7 +991,10 @@ fn build_execution_plan_prompt(
     // ADR-0072 D17（Phase E4b 項目1）: replan のときだけ、今の計画・WU の状態・起こした理由を足す
     // （`replan = false` の run は 1 バイトも変わらない）。
     if let Some(planner) = context.execution_planner.as_ref().filter(|p| p.replan) {
-        out.push_str(&replan_context_section(planner));
+        match &planner.tree {
+            Some(tree) => out.push_str(&tree_replan_context_section(planner, tree)),
+            None => out.push_str(&replan_context_section(planner)),
+        }
     }
     if !context.available_genres.is_empty() {
         out.push_str("## Available genres (valid values for a WorkUnit's `harness`)\n");
@@ -1021,8 +1037,20 @@ fn planner_limits(
         max_work_units_v2: or(planner.max_work_units, d.max_work_units_v2),
         max_phases: or(planner.max_phases, d.max_phases),
         max_children: or(planner.max_children, d.max_children),
-        // ADR-0079（Phase R1a）: /3 の上限は planner の文面にまだ出さない（R2b）。
-        tree: d.tree,
+        // ADR-0079 D4 (2)（Phase R2b）: /3 の planner には検証と同じ木の上限を渡す（`context.tree`）。
+        tree: match &planner.tree {
+            Some(t) => task_core::TreeLimits {
+                enabled: true,
+                max_depth: t.max_depth,
+                max_units_per_stage: t.max_units_per_stage,
+                max_stages: t.max_stages,
+                max_child_tasks_per_plan: t.max_child_tasks_per_plan,
+                max_parallel_child_tasks: t.max_parallel_child_tasks,
+                max_open_decisions_per_plan: t.max_decisions_per_plan,
+                ..d.tree
+            },
+            None => d.tree,
+        },
     }
 }
 
@@ -1034,11 +1062,24 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
         "### Plan limits (celeris validates the plan against these; a plan that exceeds ANY of them \
          is rejected as a whole)\n",
     );
-    out.push_str(&format!(
-        "- `work_units`: 1 to {} WorkUnits (celeris-added integration steps and repairs do not count).\n",
-        l.max_work_units
-    ));
-    if planner.parallel {
+    if planner.tree.is_some() {
+        // ADR-0079 D3（Phase R2b）: /3 の計画の上限（検証で拒否）。
+        out.push_str(&format!(
+            "- `stages`: 1 to {} stages. At most {} units per stage (leaves + child tasks; celeris-added \
+             integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"`. At most \
+             {} `decisions` (plan-level and unit-level together).\n",
+            l.tree.max_stages,
+            l.tree.max_units_per_stage,
+            l.tree.max_child_tasks_per_plan,
+            l.tree.max_open_decisions_per_plan
+        ));
+    } else {
+        out.push_str(&format!(
+            "- `work_units`: 1 to {} WorkUnits (celeris-added integration steps and repairs do not count).\n",
+            l.max_work_units
+        ));
+    }
+    if planner.parallel && planner.tree.is_none() {
         out.push_str(&format!(
             "- `phases`: 1 to {} phases. `children`: at most {} child tasks.\n",
             l.max_phases, l.max_children
@@ -1059,11 +1100,19 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
         "- `rationale` at most {} characters; the whole plan JSON at most {} bytes.\n",
         l.max_rationale_chars, l.max_plan_json_bytes
     ));
-    out.push_str(&format!(
-        "- A WorkUnit `budget` is not rejected but capped: `max_turns` at {}, `max_wall_secs` at {}.\n",
-        l.work_unit_max_turns, l.work_unit_max_wall_secs
-    ));
-    if planner.replan {
+    if planner.tree.is_some() {
+        out.push_str(&format!(
+            "- A leaf `budget` above `max_turns` {} or `max_wall_secs` {} is **rejected** (not capped): such a \
+             unit does not fit one run, so declare it as a child task or split it.\n",
+            l.work_unit_max_turns, l.work_unit_max_wall_secs
+        ));
+    } else {
+        out.push_str(&format!(
+            "- A WorkUnit `budget` is not rejected but capped: `max_turns` at {}, `max_wall_secs` at {}.\n",
+            l.work_unit_max_turns, l.work_unit_max_wall_secs
+        ));
+    }
+    if planner.replan && planner.tree.is_none() {
         out.push_str(
             "- When replanning with a diff, the limits apply to the resulting plan after the diff is \
              applied (including the WorkUnits that carry over unchanged).\n",
@@ -1098,6 +1147,227 @@ fn previous_attempt_errors_section(
          exactly the problems listed above (keep everything else as it was), check the result against \
          the plan limits above, and write the corrected plan to `{artifacts}/execution-plan.json`.\n\n"
     ));
+    out
+}
+
+/// ADR-0079 D4 (2) / D7 / D12（Phase R2b）: 木の節点の planner の計画の形（`celeris.execution-plan/3`）、木の中の
+/// 位置（深さ・残りの深さ・祖先）、leaf の基準、決定の要求の書き方、木の上限の残り、人の段階の名指し。
+/// `context.execution_planner.tree` があるときだけ、/1・/2 の形の説明の代わりに出す。
+fn tree_plan_shape_section(
+    planner: &crate::protocol::ExecutionPlannerContext,
+    tree: &crate::protocol::TreePlannerContext,
+    artifacts: &str,
+) -> String {
+    let schema = task_core::EXECUTION_PLAN_SCHEMA_V3;
+    let l = planner_limits(planner);
+    let mut out = String::new();
+    out.push_str(&format!(
+        "### Plan shape: `{schema}` (recursive task tree, ADR-0079)\n\
+         Write your plan to `{artifacts}/execution-plan.json` (create the `{artifacts}/` directory if it \
+         does not exist yet) as a single JSON object of exactly this shape:\n\
+         ```json\n\
+         {{\"schema\":\"{schema}\",\"rationale\":\"...\",\
+         \"stages\":[{{\"key\":\"build\",\"kind\":\"investigate\"|\"design\"|\"implement\"|\"test\"|\"release\"|\"other\",\
+         \"title\":\"...\",\"review\":\"none\"|\"human\" (optional)}}],\
+         \"units\":[\
+         {{\"key\":\"api\",\"stage\":\"build\",\"kind\":\"investigate\"|\"design\"|\"implement\"|\"test\"|\"release\"|\"other\",\
+         \"title\":\"...\",\"objective\":\"...\",\"depends_on\":[\"<unit key>\"],\"needs_decisions\":[\"<decision key>\"],\
+         \"done_when\":[\"...\"],\"checks\":[{{\"cmd\":\"...\",\"expect_exit\":0}}],\
+         \"context\":{{\"repo\":\"<one repository>\",\"paths\":[\"...\"],\"from_work_units\":[\"<key>\"],\"knowledge\":[\"...\"]}},\
+         \"harness\":\"<genre id, or omit>\",\"features\":{{...}},\
+         \"budget\":{{\"max_turns\":40,\"max_wall_secs\":1800}} (optional),\"outputs\":[\"...\"]}},\
+         {{\"key\":\"part-b\",\"stage\":\"build\",\"kind\":\"task\",\"title\":\"...\",\"objective\":\"...\",\
+         \"acceptance\":[{{\"text\":\"...\",\"check\":{{\"type\":\"command\",\"cmd\":\"...\",\"expect_exit\":0}}}}],\
+         \"depends_on\":[\"<unit key>\"],\"needs_decisions\":[\"<decision key>\"],\"genre\":\"<optional>\",\
+         \"skills\":[\"<skill tag>\"],\"repos\":[\"<subset of this task's repositories>\"],\"features\":{{...}}}}],\
+         \"decisions\":[{{\"key\":\"h1\",\"question\":\"...\",\
+         \"options\":[{{\"key\":\"a\",\"label\":\"...\",\"consequence\":\"...\"}},{{\"key\":\"b\",\"label\":\"...\"}}],\
+         \"recommended\":\"a\",\"cost_of_reversal\":\"low\"|\"medium\"|\"high\",\"cost_note\":\"...\",\
+         \"needed_before\":[\"<unit key>\"|\"stage:<stage key>\"]}}]}}\n\
+         ```\n\
+         A unit is either a **leaf** (any `kind` except `task`: one WorkUnit, finished by one run) or a \
+         **child task** (`\"kind\":\"task\"`: its own task with its own acceptance, final review, gate and — if \
+         needed — its own plan). Do not write `phases`, `work_units` or `children` (those are the older \
+         shapes), and do not write `assignee`, `tier`, `model`, `lane` or `adopt`. Unknown fields are \
+         rejected. Keys (stages, units, decisions, options) match `[a-z0-9-]{{1,32}}`; unit keys are unique \
+         in the plan and must not start with `integrate-` (celeris adds one integration step per stage and \
+         merges every leaf branch and child-task branch of the stage into this task's branch).\n\
+         Stages run in array order. Units of the same stage may run in parallel; a unit may depend on at \
+         most one unit of its own stage, and `depends_on` may point to the same or an earlier stage only. \
+         `\"review\":\"human\"` pauses after that stage for a human check; use it only when a human really \
+         has to look before the next stage.\n\n"
+    ));
+
+    out.push_str("#### Where this task sits in the tree\n");
+    out.push_str(&format!(
+        "- Depth: {} (task levels; the root task is depth 1). Max depth: {}. **Remaining depth: {}**.\n",
+        tree.depth, tree.max_depth, tree.remaining_depth
+    ));
+    if tree.remaining_depth >= 1 {
+        out.push_str(
+            "- You may declare units with `\"kind\":\"task\"` (child tasks). Each child task runs its own \
+             complexity gate: a small one runs as a single run, a large one plans itself.\n",
+        );
+    } else {
+        out.push_str(
+            "- Remaining depth is 0: **do NOT write any unit with `\"kind\":\"task\"`** (such a plan is \
+             rejected). Every unit must be a leaf. If a piece of work cannot fit in a leaf, raise a decision \
+             for it (see below) instead of forcing it into a leaf.\n",
+        );
+    }
+    if !tree.ancestors.is_empty() {
+        out.push_str("- Ancestors (root first):\n");
+        for (i, a) in tree.ancestors.iter().enumerate() {
+            let stage = a
+                .stage
+                .as_deref()
+                .map(|s| format!(" (stage `{s}`)"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  - depth {}: \"{}\"{stage} — {}\n",
+                i + 1,
+                a.title,
+                a.objective_excerpt.replace('\n', " ")
+            ));
+        }
+    }
+    out.push('\n');
+
+    out.push_str(&format!(
+        "#### Leaf criteria (ADR-0079 D4) — every leaf must meet ALL three\n\
+         (a) **Bounded**: it finishes in one run — `budget.max_turns` ≤ {} and `budget.max_wall_secs` ≤ {} \
+         (a larger budget is rejected, not capped). Continuation is a safety net, not a plan.\n\
+         (b) **One area, one repository**: `context.repo` names at most one repository and `context.paths` \
+         stays within one subtree.\n\
+         (c) **At least one command check**: `checks` has at least one deterministic command \
+         (`{{\"cmd\":\"...\",\"expect_exit\":0}}`) that really verifies the result.\n\
+         Declare a unit as a child task (`\"kind\":\"task\"`) when it fails any of these, when it is a \
+         deliverable that should be accepted and reviewed on its own, when it needs a human acceptance or a \
+         decision (`needs_decisions`), or when it needs another department's skills. A child-task unit needs \
+         `acceptance` (at least one criterion) and must NOT have `checks`, `budget`, `harness` or \
+         `context.paths` (the child decides those itself); its `repos` must be a subset of this task's \
+         repositories.\n\
+         **A unit that cannot fit in a leaf must be declared as a child task{} or raised as a decision — never \
+         squeezed into a leaf.** celeris re-gates every unit when it adopts the plan and records any \
+         disagreement with your declaration.\n\n",
+        l.work_unit_max_turns,
+        l.work_unit_max_wall_secs,
+        if tree.remaining_depth >= 1 {
+            ""
+        } else {
+            " (not possible at this depth)"
+        }
+    ));
+
+    out.push_str(&format!(
+        "#### Decisions for a human (`decisions`, ADR-0079 D7)\n\
+         Raise a decision only when the work needs a choice that you cannot make from the objective, the \
+         acceptance criteria and the repository (for example: which external service to depend on, which of \
+         two incompatible designs the human wants, whether to spend a scarce resource). Do not ask about \
+         things you can decide yourself. Each decision has 2 to 5 `options` (with `key` and `label`, \
+         optionally `consequence`), a `recommended` option key, `cost_of_reversal` (`low` | `medium` | \
+         `high`, how expensive it is to change the answer later) and a non-empty `needed_before`: the unit \
+         keys or `stage:<key>` that must wait for the answer. Units that wait list the decision key in their \
+         `needs_decisions`. Only what waits for an answer stops; every other unit proceeds. At most {} \
+         decisions per plan. You may also write `decisions` inside a unit (the unit is then added to \
+         `needed_before`).\n\n",
+        l.tree.max_open_decisions_per_plan
+    ));
+
+    out.push_str("#### Remaining limits of this tree\n");
+    out.push_str(&format!(
+        "- This plan: at most {} stages, {} units per stage, {} child-task units, {} decisions (a plan \
+         beyond these is rejected).\n",
+        l.tree.max_stages,
+        l.tree.max_units_per_stage,
+        l.tree.max_child_tasks_per_plan,
+        l.tree.max_open_decisions_per_plan
+    ));
+    let tokens = tree
+        .tokens_left
+        .map(|t| format!(", tokens left: {t}"))
+        .unwrap_or_default();
+    out.push_str(&format!(
+        "- Whole tree (all tasks under the root): leaves left: {}, runs left: {}, replans left: {} (this \
+         task: {}){tokens}, open decisions left: {}. Work beyond these limits is stopped and a human is \
+         asked, so plan within them: prefer fewer, well-bounded units.\n",
+        tree.leaves_left,
+        tree.runs_left,
+        tree.replans_left,
+        tree.node_replans_left,
+        tree.open_decisions_left
+    ));
+    out.push_str(&format!(
+        "- At most {} child tasks of this task run at the same time (the rest wait; nothing is dropped).\n\n",
+        tree.max_parallel_child_tasks
+    ));
+
+    if !tree.stages_hint.is_empty() {
+        out.push_str("#### Stages the human named (stages_hint, ADR-0079 D12)\n");
+        for h in &tree.stages_hint {
+            if h.scope.is_empty() {
+                out.push_str(&format!("- \"{}\"\n", h.title));
+            } else {
+                out.push_str(&format!("- \"{}\": {}\n", h.title, h.scope));
+            }
+        }
+        out.push_str(
+            "Use these as the guide for your stages (their names and scope, in this order). They are input, \
+             not a required structure: keep the whole scope the human asked for and do not narrow it.\n\n",
+        );
+    }
+    out
+}
+
+/// ADR-0079 D9（Phase R2b）: /3 の replan の節。差分（`execution-plan-delta/1`）は /2 の形しか持たないので、/3 は
+/// 計画の全体を書かせる（done の unit は daemon が採用した spec のまま持ち越す）。子 task の失敗は理由・checkpoint の
+/// 要約つきで `replan_reason` と unit の要約に入っている。
+fn tree_replan_context_section(
+    planner: &crate::protocol::ExecutionPlannerContext,
+    _tree: &crate::protocol::TreePlannerContext,
+) -> String {
+    let mut out = String::from("## You are REPLANNING an existing execution plan\n");
+    out.push_str(&format!(
+        "This is not the first plan for this task: a previous plan already ran, and something about it \
+         needs to change. Write the whole new plan in the `{}` shape above (the diff schema is not \
+         available for this shape). The plan limits apply to the resulting plan including the units that \
+         carry over.\n\n",
+        task_core::EXECUTION_PLAN_SCHEMA_V3
+    ));
+    if let Some(version) = planner.current_plan_version {
+        out.push_str(&format!("Current (superseded) plan version: v{version}.\n"));
+    }
+    out.push_str(&format!(
+        "Why this replan was triggered: {}\n\n",
+        if planner.replan_reason.is_empty() {
+            "(not recorded)"
+        } else {
+            planner.replan_reason.as_str()
+        }
+    ));
+    if !planner.work_unit_summaries.is_empty() {
+        out.push_str(
+            "### Units in the current plan (status and, for child tasks, the child's outcome)\n",
+        );
+        for line in &planner.work_unit_summaries {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
+    if !planner.preserve_done_keys.is_empty() {
+        out.push_str(&format!(
+            "These units are already done and carry over unchanged (celeris restores their adopted spec; you \
+             may omit them, and you must not change them): {}.\n\n",
+            planner.preserve_done_keys.join(", ")
+        ));
+    }
+    out.push_str(
+        "For a child-task unit whose child **failed** you may: keep the same unit key (celeris then creates a \
+         new child task from that unit — the next attempt; fix its objective or acceptance so the retry can \
+         succeed, using the failure reason above), split it into several units, drop it, or raise a decision \
+         if a human has to choose. The failed child's branch and history are kept. A unit whose child is \
+         still running keeps its child. A key that belonged to a unit you removed earlier cannot be reused.\n\n",
+    );
     out
 }
 
@@ -5247,5 +5517,163 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
             .await;
         let env = std::fs::read_to_string(dir.path().join("env.log")).unwrap();
         assert_eq!(env, "0|600000", "short wall clocks keep the CLI default");
+    }
+
+    /// ADR-0079 §7 R2b (a) `planner_prompt_carries_depth_and_leaf_criteria`: 木の節点の planner（`context.tree`）の
+    /// プロンプトは /3 の形・深さ・残りの深さ・祖先・leaf の基準・決定の書き方・計画と木の上限の残り・人の段階の
+    /// 名指しを出し、「収まらない unit は子 task か決定にし、leaf に押し込まない」と書く。`remaining_depth = 0` では
+    /// kind task を書くなと出る。replan は差分でなく全体を書かせ、失敗した子の扱いを出す。`tree = None` の
+    /// プロンプトには /3 の語が出ない（/1・/2 は従来どおり）。
+    #[test]
+    fn planner_prompt_carries_depth_and_leaf_criteria() {
+        let task = crate::protocol::tests::sample_task();
+        let tree = crate::protocol::TreePlannerContext {
+            depth: 1,
+            max_depth: 3,
+            remaining_depth: 2,
+            max_stages: 4,
+            max_units_per_stage: 5,
+            max_child_tasks_per_plan: 3,
+            max_decisions_per_plan: 7,
+            max_parallel_child_tasks: 2,
+            leaves_left: 37,
+            runs_left: 111,
+            replans_left: 9,
+            node_replans_left: 3,
+            tokens_left: Some(500_000),
+            open_decisions_left: 11,
+            ancestors: Vec::new(),
+            stages_hint: vec![
+                task_core::StageHint {
+                    title: "Phase 1".to_string(),
+                    scope: "MVP of the browser capability".to_string(),
+                },
+                task_core::StageHint {
+                    title: "Phase 2".to_string(),
+                    scope: String::new(),
+                },
+            ],
+        };
+        let planner_ctx = crate::protocol::ExecutionPlannerContext {
+            gate_rule_id: "human/explicit".to_string(),
+            max_work_units: 8,
+            work_unit_max_turns: 80,
+            work_unit_max_wall_secs: 3600,
+            default_max_turns: 30,
+            default_max_wall_secs: 1800,
+            parallel: true,
+            max_phases: 5,
+            tree: Some(tree.clone()),
+            ..Default::default()
+        };
+        let context = RunContext {
+            execution_planner: Some(planner_ctx.clone()),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-planner-tree", "artifacts");
+        for needle in [
+            "\"schema\":\"celeris.execution-plan/3\"",
+            "Depth: 1 (task levels; the root task is depth 1). Max depth: 3. **Remaining depth: 2**.",
+            "You may declare units with `\"kind\":\"task\"`",
+            "Leaf criteria (ADR-0079 D4)",
+            "`budget.max_turns` ≤ 80 and `budget.max_wall_secs` ≤ 3600",
+            "`context.repo` names at most one repository",
+            "`checks` has at least one deterministic command",
+            "must be declared as a child task or raised as a decision — never squeezed into a leaf",
+            "Decisions for a human (`decisions`, ADR-0079 D7)",
+            "`needed_before`",
+            "`needs_decisions`",
+            "At most 7 decisions per plan",
+            "at most 4 stages, 5 units per stage, 3 child-task units, 7 decisions",
+            "leaves left: 37, runs left: 111, replans left: 9 (this task: 3), tokens left: 500000, open decisions left: 11",
+            "At most 2 child tasks of this task run at the same time",
+            "Stages the human named (stages_hint, ADR-0079 D12)",
+            "- \"Phase 1\": MVP of the browser capability",
+            "- \"Phase 2\"\n",
+            "- `stages`: 1 to 4 stages. At most 5 units per stage",
+            "is **rejected** (not capped)",
+        ] {
+            assert!(prompt.contains(needle), "missing {needle:?} in:\n{prompt}");
+        }
+        // /1・/2 の形と /2 の工程の節は出さない（/3 の形だけ）。
+        assert!(!prompt.contains("\"schema\":\"celeris.execution-plan/1\""));
+        assert!(!prompt.contains("Phases and parallel WorkUnits"));
+        assert!(!prompt.contains("- `work_units`: 1 to"));
+
+        // 深さ 3（残り 0）: kind task を書くなと出る。祖先の題名と段階が出る。
+        let deep = crate::protocol::TreePlannerContext {
+            depth: 3,
+            remaining_depth: 0,
+            ancestors: vec![
+                crate::protocol::TreeAncestorContext {
+                    title: "browser capability".to_string(),
+                    stage: Some("phase-2".to_string()),
+                    objective_excerpt: "ship the browser".to_string(),
+                },
+                crate::protocol::TreeAncestorContext {
+                    title: "policy contract".to_string(),
+                    stage: Some("build".to_string()),
+                    objective_excerpt: "define the policy".to_string(),
+                },
+            ],
+            stages_hint: Vec::new(),
+            ..tree.clone()
+        };
+        let context = RunContext {
+            execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+                tree: Some(deep),
+                ..planner_ctx.clone()
+            }),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-planner-deep", "artifacts");
+        assert!(prompt.contains("**Remaining depth: 0**"), "{prompt}");
+        assert!(prompt.contains("**do NOT write any unit with `\"kind\":\"task\"`**"));
+        assert!(!prompt.contains("You may declare units with"));
+        assert!(
+            prompt.contains("depth 1: \"browser capability\" (stage `phase-2`) — ship the browser")
+        );
+        assert!(
+            prompt.contains("depth 2: \"policy contract\" (stage `build`) — define the policy")
+        );
+        assert!(!prompt.contains("stages_hint"));
+
+        // replan: 差分でなく全体、done の unit は持ち越し、失敗した子の扱い。
+        let context = RunContext {
+            execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+                replan: true,
+                replan_reason:
+                    "child task \"Child c\" (unit c, attempt 1) failed (work): tests fail"
+                        .to_string(),
+                current_plan_version: Some(1),
+                work_unit_summaries: vec![
+                    "c (task) status=failed: child task x is failed".to_string(),
+                ],
+                preserve_done_keys: vec!["a".to_string()],
+                ..planner_ctx.clone()
+            }),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-planner-replan", "artifacts");
+        assert!(prompt.contains("REPLANNING an existing execution plan"));
+        assert!(prompt.contains("the diff schema is not available for this shape"));
+        assert!(prompt.contains("Why this replan was triggered: child task \"Child c\""));
+        assert!(prompt.contains("carry over unchanged"));
+        assert!(prompt.contains("keep the same unit key (celeris then creates a new child task"));
+        assert!(!prompt.contains("execution-plan-delta/1"));
+
+        // tree = None: /3 の語は出ない（/2 のプロンプトは従来どおり）。
+        let context = RunContext {
+            execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+                tree: None,
+                ..planner_ctx
+            }),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-planner-v2", "artifacts");
+        assert!(prompt.contains("\"schema\":\"celeris.execution-plan/2\""));
+        assert!(prompt.contains("Phases and parallel WorkUnits"));
+        assert!(!prompt.contains("Leaf criteria"));
+        assert!(!prompt.contains("Remaining depth"));
     }
 }

@@ -745,6 +745,7 @@ async fn cancel_cascades_to_subtree() {
             plan_id: "child-plan".into(),
             unit_key: "g".into(),
             stage: "g1".into(),
+            attempt: 1,
         },
         None,
     ));
@@ -807,6 +808,7 @@ async fn tree_runs_cannot_delegate() {
             plan_id: "p".into(),
             unit_key: "c".into(),
             stage: "s1".into(),
+            attempt: 1,
         },
         None,
     ));

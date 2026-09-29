@@ -199,8 +199,8 @@ pub use execution_plan::{
     validate_with,
 };
 pub use tree::{
-    DepthCounters, LimitHold, NextRun, ParentUnit, RunLimitBreach, TreeCounters, TreeInfo,
-    TreeLimitKind, TreeLimits, TreeNodeFacts, UnitDeclared, UnitGate, UnitGateAction,
+    DepthCounters, LimitHold, NextRun, ParentUnit, RunLimitBreach, StageHint, TreeCounters,
+    TreeInfo, TreeLimitKind, TreeLimits, TreeNodeFacts, UnitDeclared, UnitGate, UnitGateAction,
     UnitGateContext, UnitGateReport,
 };
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----

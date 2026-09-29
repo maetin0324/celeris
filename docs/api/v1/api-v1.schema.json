@@ -10580,6 +10580,12 @@
       "additionalProperties": false,
       "description": "D4 (4): 子 task が親の計画のどの unit から作られたか（`Task.tree.parent_unit`）。",
       "properties": {
+        "attempt": {
+          "description": "ADR-0079 D9（Phase R2b）: 同じ unit から作った子の何回目か（1 始まり）。子の work の失敗で親の\nreplan が同じ key の unit を残したとき・基盤の失敗で自動で 1 回作り直したときに増える。\n1 は書かない（R2b より前の子の JSON は 1 バイトも変わらない）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "plan_id": {
           "description": "親の計画の版（`execution_plans.id`）。",
           "type": "string"
@@ -15593,6 +15599,22 @@
       ],
       "type": "object"
     },
+    "StageHint": {
+      "additionalProperties": false,
+      "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`Task.routing.stages_hint`）。planner への入力で、\n構造の強制ではない（段階の数・名前は planner が決める）。CoS の `create_task` から写すのは R5a。",
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
     "StageReview": {
       "description": "ADR-0079 D2 / D5: 段階の後の人の確認（`review: human` は ADR-0074 D2 の `pause_after` をその段階に\n指定したのと同じ意味。既定 none）。",
       "enum": [
@@ -16854,6 +16876,13 @@
           "$ref": "#/$defs/PauseSource",
           "description": "D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は\n人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。"
         },
+        "stages_hint": {
+          "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。/3 の planner\nrun の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の\n`create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。",
+          "items": {
+            "$ref": "#/$defs/StageHint"
+          },
+          "type": "array"
+        },
         "tier_source": {
           "$ref": "#/$defs/TierSource",
           "default": "default"
@@ -17847,6 +17876,11 @@
         {
           "const": "decision",
           "description": "ADR-0079 D3 / D4 (3)（Phase R2a）: 人への決定の要求（`kind: limit` / `leaf_too_large`）を待つ。\n木の上限を超える unit、子 task にできない深さの compound な leaf。同じ段階の他の unit・兄弟は\n止めない（工程の失敗にも質問にも数えない）。回答で再開するのは R3a。",
+          "type": "string"
+        },
+        {
+          "const": "infra",
+          "description": "ADR-0079 D9（Phase R2b）: kind task の unit の子が基盤の分類で失敗し、自動の作り直し\n（`MAX_CHILD_INFRA_RETRIES`）でも失敗した。障害通知を出し、人の再試行を待つ（質問でも決定でもない）。\n`Decision` と同じく工程の失敗に数えず、同じ段階の他の unit・兄弟は止めない（段階は完了しない）。",
           "type": "string"
         }
       ]

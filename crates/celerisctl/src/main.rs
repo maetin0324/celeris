@@ -18,7 +18,7 @@ use commands::build_cache::{self, BuildCacheCommand};
 use commands::cancel::{self, CancelArgs};
 use commands::config::{self as config_cmd, ConfigCommand};
 use commands::db::{self as db_cmd, DbCommand};
-use commands::execution::{self as execution_cmd, ExecutionCommand};
+use commands::execution::{self as execution_cmd, ExecutionCommand, TreeCommand};
 use commands::gate::{self, AnswerArgs, ApproveArgs, RejectArgs};
 use commands::knowledge::{self, KnowledgeCommand};
 use commands::mcp::{self, McpCommand};
@@ -152,6 +152,11 @@ enum Command {
         #[command(subcommand)]
         command: ExecutionCommand,
     },
+    /// ADR-0079 D15（Phase R5b-prep）: `tree adopt`（既存の task を木の子として採用する）。
+    Tree {
+        #[command(subcommand)]
+        command: TreeCommand,
+    },
 }
 
 fn resolve_db_path(cli_db: Option<PathBuf>) -> PathBuf {
@@ -195,6 +200,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
             WorkerCommand::Run(args) => worker::run_run(store, args),
         },
         Command::Execution { command } => execution_cmd::run(store, command),
+        Command::Tree { command } => execution_cmd::run_tree(store, command),
     }
 }
 

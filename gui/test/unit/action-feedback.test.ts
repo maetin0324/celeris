@@ -23,7 +23,6 @@ const ROUTES_WITH_WRITE_FORMS = [
   "reports.tsx",
   "tasks.$id.tsx",
   "tasks.new.tsx",
-  "plans.new.tsx",
   "daemon.tsx",
   "artifacts.tsx",
   // Phase G14（ADR-0040 D6）: 昇格の 202 / 409 は行に残り続ける必要がある（引き継ぎ中は

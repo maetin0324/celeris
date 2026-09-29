@@ -971,8 +971,11 @@ pub fn plan_limit_holds(
     // 子 task の数と深さ。
     let task_units: Vec<&crate::execution_plan::PlanUnitSpec> =
         spec.units.iter().filter(|u| u.is_task()).collect();
-    if task_units.len() > limits.max_child_tasks_per_plan {
-        let units = task_units
+    // ADR-0079 D15（Phase R5b-prep）: `adopt` の unit は子を作らないので子 task の上限に数えない（検証と同じ）。
+    let new_children: Vec<&&crate::execution_plan::PlanUnitSpec> =
+        task_units.iter().filter(|u| u.creates_child()).collect();
+    if new_children.len() > limits.max_child_tasks_per_plan {
+        let units = new_children
             .iter()
             .skip(limits.max_child_tasks_per_plan)
             .map(|u| u.key.clone())
@@ -983,7 +986,7 @@ pub fn plan_limit_holds(
             TreeLimitKind::ChildTasks,
             None,
             units,
-            task_units.len() as u64,
+            new_children.len() as u64,
             limits.max_child_tasks_per_plan as u64,
         );
     }

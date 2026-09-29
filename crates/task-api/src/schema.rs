@@ -213,6 +213,9 @@ pub struct ApiV1Schema {
     pub phase_gate: task_ops::phase_gate::PhaseGateRequest,
     /// ADR-0079 D8（Phase R3b）: `POST /tasks/{id}/execution/plan-gate` の本文（応答は `transition_result`）。
     pub plan_gate: task_ops::plan_gate::PlanGateRequest,
+    /// ADR-0079 D15（Phase R5b-prep）: `POST /tasks/{id}/tree/adopt` の本文と応答。
+    pub tree_adopt: task_ops::tree_adopt::AdoptRequest,
+    pub tree_adopt_result: task_ops::tree_adopt::AdoptionOutcome,
     pub execution_metrics: crate::types::ExecutionMetricsSummary,
     /// ADR-0075 D6（Phase G1）: `GET /metrics/scratch`（`celerisctl scratch status --json` と同じ `celeris.scratch-status/1`）。
     pub metrics_scratch: task_ops::daemon::ScratchStatus,

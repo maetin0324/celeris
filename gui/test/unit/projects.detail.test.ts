@@ -13,7 +13,7 @@ import type {
   ReportList,
   TaskDetail,
 } from "~/celeris/types";
-import { loadProjectDetail } from "~/routes/projects.$id";
+import { FROZEN_MILESTONES_PARAM, loadProjectDetail, wantsFrozenMilestones } from "~/routes/projects.$id";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;
@@ -471,5 +471,48 @@ describe("patchProjectText (PATCH /projects/{id} の title / request / slug)", (
     form.set("request", "r");
     const result = await patchProjectText(client, "p1", form);
     expect(result).toMatchObject({ ok: false, op: "project_edit", error: { status: 422, code: "validation" } });
+  });
+});
+
+describe("以前の途中目標（読み取り専用）は開いたときだけ include_frozen=true で読む（celeris ADR-0079 R5a / R5b-prep）", () => {
+  const frozen: MilestoneView = {
+    id: "m1",
+    project_id: "p1",
+    seq: 1,
+    title: "調査",
+    description: "",
+    status: "approved",
+    created_at: "…",
+    updated_at: "…",
+  };
+
+  it("既定（閉じている）は include_frozen を付けず、件数 milestones_frozen だけを受け取る", async () => {
+    const detail: ProjectDetail = { project: project(), milestones: [], milestones_frozen: 3, tasks: [] };
+    mock.on("GET", "/api/v1/projects/p1", (_req, res) => sendJson(res, 200, detail));
+    mock.on("GET", "/api/v1/org", (_req, res) => sendJson(res, 200, { items: [] } satisfies OrgList));
+    const result = await loadProjectDetail(client, "p1", new Request("http://gui.invalid/projects/p1"));
+    expect(result.detail.milestones_frozen).toBe(3);
+    expect(result.detail.milestones).toEqual([]);
+    const calls = mock.requests.filter(
+      (r) => r.url.startsWith("/api/v1/projects/p1") && !r.url.includes("/integrations"),
+    );
+    expect(calls.map((r) => r.url)).toEqual(["/api/v1/projects/p1"]);
+    expect(wantsFrozenMilestones(new Request("http://gui.invalid/projects/p1"))).toBe(false);
+  });
+
+  it("人が開く（?frozen=1）と GET /projects/{id}?include_frozen=true で凍結した行を読む", async () => {
+    const detail: ProjectDetail = { project: project(), milestones: [frozen], milestones_frozen: 1, tasks: [] };
+    mock.on("GET", "/api/v1/projects/p1", (_req, res) => sendJson(res, 200, detail));
+    mock.on("GET", "/api/v1/org", (_req, res) => sendJson(res, 200, { items: [] } satisfies OrgList));
+    const request = new Request(`http://gui.invalid/projects/p1?${FROZEN_MILESTONES_PARAM}=1`);
+    expect(wantsFrozenMilestones(request)).toBe(true);
+    const result = await loadProjectDetail(client, "p1", request);
+    expect(result.detail.milestones).toEqual([frozen]);
+    const calls = mock.requests.filter(
+      (r) => r.url.startsWith("/api/v1/projects/p1") && !r.url.includes("/integrations"),
+    );
+    expect(calls.map((r) => r.url)).toEqual(["/api/v1/projects/p1?include_frozen=true"]);
+    // `frozen` 以外の値では開かない。
+    expect(wantsFrozenMilestones(new Request("http://gui.invalid/projects/p1?frozen=0"))).toBe(false);
   });
 });

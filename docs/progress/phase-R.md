@@ -825,3 +825,90 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 
 **昇格**: release `d8bb8069a0b2`（main d8bb806 = R5a + verify.sh の途中目標件数照合を include_frozen=true に）を 2026-09-29 05:53:51Z に昇格（mode=stop-start。live_ok=false は N-1 の旧バイナリが凍結途中目標を数える差分によるもので schema 変更なし。backup 20260929-055325-pre-d8bb8069a0b2）。1 回目の verify は `counts-match: milestones(snapshot=28 staging=0)` で失敗 → verify.sh を修正して再実行。
 
+## R5b-prep: 人の /3 計画の入口と tree adopt（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) D2・D8・D15・§7 R5b、付記「R5b-prep 実装時の逸脱・明確化」（13 項目）。
+- 種類: コード（task-core / task-ops / task-api / task-dispatch / celeris / celerisctl / celeris-mcp）、schema と GUI の型の再生成、GUI の
+  `/plans/new` の撤去と「以前の途中目標」の開き方、手順書 [`docs/ops/adr-0079-r5b-runbook.md`](../ops/adr-0079-r5b-runbook.md)。
+  **migration なし（schema 33 のまま。次の空きは 0034）**。本番の DB・設定・サービスには触れていない（読み取りの `sqlite3 …?mode=ro` と
+  `GET /health` だけ）。
+- **本番の読み取りで分かったこと**: R5b で採用する browser の Phase 2（01M3MZKB3DFYJNBH015MJGQ0BT）は `done` ではなく **`failed`**
+  （`review_fail`: main の祖先の検査だけが不合格。その後に人が main へ取り込んだ = ce5d768）。Phase 1（01M3MFS5…）と Phase 2 の
+  ブランチはどちらも main の祖先。BenchFS の done の Phase0 / Phase1 は 6 件（`parent_id` = `kind = plan` の 01M35X04345ZNDM09VE6FT168Z）。
+  Phase 2 の人の決定 H1 / H2 / H3 / H6 は ADR-0080 に記録済み（手動登録から開始・操作ごとの approve_once と短い lease・認証 session の
+  間の観測の停止・隔離は Phase 4）。
+
+### 実装したもの
+
+- **人の /3 計画の入口**: `PUT /tasks/{id}/execution-plan`（`POST` と同じ）と `celerisctl execution plan set|put --config` が daemon の
+  実効の上限（`[execution.tree]`。API は `ApiSettings.tree_limits`、CLI は `--config` / `CELERIS_CONFIG`）で検証し、/3 は planner と同じ
+  経路（unit の gate・計画の決定〈origin human〉・答えの無い決定を待つ leaf の `blocked(decision)`・木の上限の `kind: limit`）を
+  **1 トランザクション**（`TaskStore::execution_plan_adopt_tree`）で通す（`task_ops::execution::adopt_human_plan`）。unit の gate と止めは
+  dispatcher から `task_ops::tree_plan`（`unit_gate_plan` / `plan_hold_writes`）に移し、planner の経路も同じ関数を呼ぶ。木が無効なら
+  /3 は従来どおり 422 `TreeDisabled`。
+- **PlanGate の扱い（決めたこと）**: 人の計画は書いた人の承認とみなし `PlanGate` を挟まない。報告の流れに「計画を採用して進めます」を
+  1 件（承認が要る形なら理由も）。決定の要求は通知・受信箱に出る（`scan_decisions` が人の計画の決定を `plan:<plan_id>:decisions` の
+  1 通に束ねる）。部をまたぐ子の認可の質問も人の計画には出さない。
+- **採用（D15）**: `POST /tasks/{id}/tree/adopt {task_id, stage, unit_key}`（管理系）・`celerisctl tree adopt`・人の計画の unit の
+  `adopt: <task_id>`（PUT と同じトランザクション）。条件の違反は 422（要求と計画の食い違い）/ 409（状態）で `code` は `adopt_*`。
+  採用できるのは **`done` か `failed`**（決めたこと: 非終端は PUT では unit を待たせ、後からの採用は 409。ブランチの基点を見る例外は
+  実装しない）。採用した unit は `done`（`ChildAdopted`）、対象の `tree` と（無ければ）`parent_id` を書き、状態・履歴・ブランチ・作業場所は
+  変えない。統合は対象のブランチを任意の項目として扱い、既に基点にあれば `skipped`。daemon は `adopt` の unit から新しい子を作らない。
+- **直した既存の穴**: 段階の unit が採用した task だけのとき root の worktree が無く統合が `no HEAD` で失敗していた → `start_integration`
+  が merge の前に worktree を用意する。`adopt` の unit は `max_child_tasks_per_plan` に数えない（BenchFS の採用 6 + 子 4 が上限 6 に収まる）。
+- **後片付け**: GUI の `/plans/new`（画面・ルート・ナビ・使い方のリンク・`createPlan`・単体テスト・e2e の節）を撤去。`celerisctl plan` は
+  残し、ADR-0079 の注記を stderr に出す。案件ページの「以前の途中目標（読み取り専用）」は件数だけを出し、「表示する」（`?frozen=1`）で
+  `GET /projects/{id}?include_frozen=true` を読む。R4b からあった `MilestoneStatus` の未使用 import の lint 違反も消した。
+- **手順書**: `docs/ops/adr-0079-r5b-runbook.md`（0. 変数と前提 → 1. 設定と再起動 → 2. browser の root・/3 計画・受け入れ・決定 →
+  3. BenchFS の root・/3 計画 → 4. dogfood → 5. 受け入れ条件 (a)〜(e) の SQL / curl → 6. 巻き戻し）。手順書の JSON 4 本は試験
+  （`the_r5b_runbook_plans_are_accepted_as_written`）が本番と同じ id・状態の fixture でそのまま通ることを確かめる。
+
+### 受け入れ条件（依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| 人の `PUT` の /3（木が有効）が unit の gate（`UnitGateOverridden{kept_task}`）・計画の決定 2 件（origin human、path は root、`GET /tasks/{id}/decisions` に出る）・答えを待つ leaf の `blocked(decision)`・木の leaf の上限（`limit:max_tree_leaves`）を通り、`adopt` の unit は同じ書き込みで `done`（`ChildAdopted`、対象の `tree` と `parent_id`、`Edited{tree, parent_id}`）、PlanGate は無く root は draft のまま、`adopt` の unit は `max_child_tasks_per_plan = 1` に数えない、replay の差分 0 | `cargo nextest run -p task-api --test tree_adopt -E 'test(human_put_v3_goes_through_the_tree_path_without_plan_gate)'` | ok |
+| 木が無効なら `PUT` の /3 は 422 `TreeDisabled`（何も書かない。`POST` の既存の試験も通る） | `… --test tree_adopt -E 'test(human_put_v3_is_422_while_the_tree_is_disabled)'`、`… -p task-api --test execution -E 'test(a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled)'` | ok |
+| 人の計画の `adopt` の拒否で何も書かない: 別の案件 422 `adopt_other_project`・自分（祖先）422 `adopt_ancestor`・他の木の子 / 木の root 409 `adopt_target_in_tree`・中止済み 409 `adopt_target_cancelled`・無い task 422・重複 422、leaf の `adopt` は 422 | `… --test tree_adopt -E 'test(human_plan_adopt_refusals_write_nothing)'` | ok |
+| `POST /tasks/{id}/tree/adopt`: 対象が非終端なら PUT は unit を待たせ（`adopted: false`、子なし）、採用は 409 `adopt_target_not_terminal`、leaf の unit 422 `adopt_unit_not_task`・id 違い 422 `adopt_id_mismatch`・段階違い 422・無い unit 422・無い task 404・トークン無し 401・未知の欄は拒否、対象が done になれば 200（unit done・`ChildAdopted`・`parent_id`）、二度目は 409、replay の差分 0 | `… --test tree_adopt -E 'test(adopt_endpoint_happy_path_and_refusals)'` | ok |
+| 木が無効なら 422 `tree_disabled`、/3 の計画が無ければ 422 `adopt_no_tree_plan` | `… --test tree_adopt -E 'test(adopt_endpoint_requires_the_tree_and_a_v3_plan)'` | ok |
+| 一時 git: done の task（ブランチは main と同じ commit）を採用した段階の統合が root の worktree を用意して `merged = [p1 skipped]` で通り、子は作られず、次の段階の leaf が merge され root が done、対象は done のまま・ブランチは残り・main は動かない、replay の差分 0 | `cargo nextest run -p task-dispatch -E 'test(adopted_done_task_already_in_base_is_skipped_by_integration)'` | ok |
+| 非終端の対象を待つ `adopt` の unit から daemon は子を作らない（30 tick） | `… -p task-dispatch -E 'test(an_adopt_unit_waiting_for_its_task_never_spawns_a_new_child)'` | ok |
+| 人の計画の決定 2 件が `plan:<plan_id>:decisions` の 1 通に束ねられ、推奨が本文にあり、`plan_approval` の通知は出ない | `cargo nextest run -p celeris --test notify -E 'test(human_plan_decisions_are_bundled_per_plan)'` | ok |
+| `celerisctl execution plan set` は設定無し・木が無効の設定では /3 を `TreeDisabled`、`--config`（`enabled = true`）で採用（`adopt` で done、決定 origin human）、`put` は `set` の別名、`tree adopt` は木が無効なら拒否 | `cargo nextest run -p celerisctl -E 'test(set_adopts_a_v3_plan_with_the_configured_tree_limits) \| test(tree_adopt_needs_the_tree_and_put_is_an_alias_of_set)'` | ok |
+| 手順書の JSON（browser / BenchFS の root と /3 の計画）が本番と同じ id・状態（Phase 2 = failed、BenchFS の `parent_id` は plan の task）でそのまま通る（採用 2 / 6、決定 3 / 1、PlanGate なし）、replay の差分 0 | `… -p task-api --test tree_adopt -E 'test(the_r5b_runbook_plans_are_accepted_as_written)'` | ok |
+| 上の新しい試験をまとめて | `cargo nextest run --workspace -E 'binary(tree_adopt) \| test(adopted_done_task_already_in_base_is_skipped_by_integration) \| …'`（12 本） | 12 passed |
+| planner の経路（R2a / R3a / R3b の unit の gate・止め・決定・承認）が関数の移動の後も同じ | `scripts/dev/test-parallel.sh`（`dispatcher::tests::tree*` を含む全体） | ok |
+| GUI: `/plans/new` がルート・ナビ・使い方・中継に無い | `corepack pnpm@11.27.0 -C gui test`（`test/unit/plans-retired.test.ts`） | ok |
+| GUI: 以前の途中目標は既定で `include_frozen` を付けず件数だけ、`?frozen=1` で `GET /projects/{id}?include_frozen=true` | 同上（`test/unit/projects.detail.test.ts` の 2 本） | ok |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 95（nextest 84 + doc 11）、
+  **passed 2859 / failed 0 / ignored 7**（R5a の記録の 2847 から +12。うち R5b-prep の新しい試験 11 本〈`task-api/tests/tree_adopt.rs` 6・
+  dispatcher 2・notify 1・celerisctl 2〉、残りは main の R4b の併合分）
+- `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema` で `api-v1.schema.json` を再生成（追加だけ:
+  `ExecutionPlanView.adoptions` / `decisions_raised`、`AdoptRequest`、`AdoptionOutcome`）
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、再実行の前後で `gui/app/celeris/types.ts` が同じ（md5 26f0a348adfb302ce963f6262fc6d0d0）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 307 files、2 infos〈既存の `scripts/check-resume-recovery.mjs`〉）/
+  `test` → exit 0（Test Files 81、Tests 1222 passed）/ `build` → exit 0
+- `MOBILE_AUDIT_SKIP_BUILD=1 corepack pnpm@11.27.0 -C gui mobile-audit` → exit 0（`routes=28 schemes=2 violations=0 perf_worst=task-overview 590.1KB`）
+- `E2E_SKIP_BUILD=1 corepack pnpm@11.27.0 -C gui e2e:mock` → exit 0（`failures: []`）
+
+### 未解決・R5b へ
+
+- **R5b の実行は人**（手順書のとおり。設定の変更・再起動・root の作成・計画の PUT・決定への回答）。R5b-prep を含むリリースの昇格が先。
+- 案件ページの「この方針で進める」（`POST /projects/{id}/plan {mode: decompose}`）は R5a で 410 になったが画面に残っている（押すと 410 の
+  文言）。R4b / R5a のどちらも外していない。R6（回収）か次の GUI の手当てで外す。
+- 採用の書き換え（`tree`・`parent_id`）を戻す入口は無い（巻き戻しでも残る。手順書 6.）。要るなら R6。
+- 非終端の task を「ブランチが root の段階の基点の上にあれば」採用する例外は実装していない（付記 5.）。
+- 採用した task の過去の run・leaf・版は木の上限に数える（付記 13.）。browser は run 30 / 120 を最初から使う。
+- BenchFS の案件のリポジトリは sirius の remote で、root は並列 1 に倒れる。子の作業場所（`cluster:sirius` の担当か local への落とし）は
+  子が作られたときに確かめる（手順書 3.）。
+- R4a から持ち越しの「replan が行の `phase` を書き換えない」は未修正のまま（触れていない）。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

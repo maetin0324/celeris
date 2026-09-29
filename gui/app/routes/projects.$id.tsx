@@ -28,7 +28,6 @@ import type {
   ArtifactList,
   Clusters,
   ClusterView,
-  MilestoneStatus,
   OrgList,
   OrgNode,
   Project,
@@ -147,6 +146,18 @@ export interface ProjectDetailData {
   rootTrees: Record<string, TaskTreeView | null>;
 }
 
+/**
+ * celeris ADR-0079 付記 R5a 14. / R5b-prep: 「以前の途中目標（読み取り専用）」を人が開いたときだけ付ける URL の印
+ * （`?frozen=1`）。付いていれば loader は `GET /projects/{id}?include_frozen=true` で凍結した途中目標の行を読む
+ * （既定の `GET /projects/{id}` は `milestones: []` と件数 `milestones_frozen` だけ）。
+ */
+export const FROZEN_MILESTONES_PARAM = "frozen";
+
+/** `request` の URL が「以前の途中目標」を開いているか（`?frozen=1`）。 */
+export function wantsFrozenMilestones(request: Request): boolean {
+  return new URL(request.url).searchParams.get(FROZEN_MILESTONES_PARAM) === "1";
+}
+
 /** 案件ページで木を引く root task の上限（root ごとに節点の events を読むため。超えた分は木のタブで見る）。 */
 const ROOT_TREE_FETCH_LIMIT = 20;
 
@@ -186,7 +197,10 @@ export async function loadProjectDetail(
   request: Request,
 ): Promise<ProjectDetailData> {
   const [detail, org, reports, clusters, integrations] = await Promise.all([
-    client.get<ProjectDetail>(`/projects/${encodeURIComponent(id)}`, { signal: request.signal }),
+    client.get<ProjectDetail>(`/projects/${encodeURIComponent(id)}`, {
+      query: wantsFrozenMilestones(request) ? { include_frozen: "true" } : undefined,
+      signal: request.signal,
+    }),
     client.get<OrgList>("/org", { signal: request.signal }).catch(() => ({ items: [] }) as OrgList),
     client
       .get<ReportList>("/reports", { query: { project: id }, signal: request.signal })
@@ -329,6 +343,9 @@ const PROJECT_STATUS_TONE: Record<ProjectStatus, Tone> = {
 export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) {
   const { detail, org, reports, artifactRows, fetchedAt, clusters, integrations, rootTrees } = loaderData;
   const { project, milestones, tasks } = detail;
+  // celeris ADR-0079（R5a / R5b-prep）: 凍結した途中目標は既定で読まない（件数だけ）。人が開いたら `?frozen=1`。
+  const frozenCount = Math.max(detail.milestones_frozen ?? 0, milestones.length);
+  const frozenOpen = milestones.length > 0;
   // ADR-0043 D1（Phase 52 / G16）: 並びは celeris が決めたもの（primary が先頭）をそのまま使う。
   const repos = detail.repos ?? [];
   const fetcher = useFetcher<ProjectOpOutcome>();
@@ -413,9 +430,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
           { id: "project-workspace-heading", icon: "folder", label: "作業場所" },
           { id: "project-repos-heading", icon: "database", label: "リポジトリ" },
           { id: "project-integrations-heading", icon: "gitBranch", label: "PR と取り込み" },
-          ...(milestones.length > 0
-            ? [{ id: "milestones-heading", icon: "target" as const, label: "以前の途中目標" }]
-            : []),
+          ...(frozenCount > 0 ? [{ id: "milestones-heading", icon: "target" as const, label: "以前の途中目標" }] : []),
           { id: "project-plan-heading", icon: "sparkles", label: "この方針で進める" },
           { id: "work-tree-heading", icon: "gitBranch", label: "仕事の木" },
           { id: "project-reports-heading", icon: "send", label: "報告" },
@@ -563,14 +578,22 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
       {/* celeris ADR-0079 D13 / D14（Phase R4b）: 案件は計画（途中目標の DAG）を持たなくなった。以前の途中目標は
           状態のまま凍結した履歴として読み取り専用で出す（作成・Go / 再設計・一時停止・判定の操作は出さない。
           API の廃止は R5a）。途中目標が 1 件も無い案件では節ごと出さない。 */}
-      {milestones.length > 0 && (
+      {frozenCount > 0 && (
         <section aria-labelledby="milestones-heading" data-testid="milestones-section" className="space-y-4">
-          <SectionTitle icon="target" id="milestones-heading" count={milestones.length}>
+          <SectionTitle icon="target" id="milestones-heading" count={frozenCount}>
             以前の途中目標（読み取り専用）
           </SectionTitle>
           <p className={hintClass} data-testid="milestones-readonly-note">
             途中目標は root task の段階で表すようになりました（ADR-0079）。ここにあるのは以前の記録です。
           </p>
+          <Link
+            to={{ search: frozenOpen ? "" : `?${FROZEN_MILESTONES_PARAM}=1`, hash: "milestones-heading" }}
+            preventScrollReset
+            className={cn(touchLinkClass, "text-sm text-primary underline underline-offset-2")}
+            data-testid="milestones-toggle"
+          >
+            {frozenOpen ? "以前の途中目標を隠す" : `以前の途中目標を表示する（${frozenCount} 件）`}
+          </Link>
           <ul className="space-y-2">
             {milestones
               .slice()

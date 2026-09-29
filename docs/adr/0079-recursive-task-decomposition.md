@@ -1369,3 +1369,82 @@ R5a（案件計画の撤去、途中目標の凍結、`is_root_task`、subtree �
     案件ページの loader は `include_frozen` を付けないので、凍結した途中目標は既定で出ない（U-R8）。R4b の「以前の途中目標（読み取り専用）」は
     `?include_frozen=true` で読むこと（件数は `milestones_frozen`）。`/plans/new`（`POST /plans` の画面）は nav・help と並んでいて R4b と
     衝突しやすいので残した（celeris の 410 の文言がそのまま出る）。R5b で外す。
+
+## 付記: R5b-prep 実装時の逸脱・明確化（2026-09-29）
+
+R5b（本番の移行と dogfood）が要るコードの入口（人の /3 計画の API・CLI、`tree adopt`、R5a の後片付け）で決めたこと。
+**migration は足していない（schema 33 のまま。次の空きは 0034）**。本番の DB・設定・サービスには触れていない。
+
+1. **人の計画の入口**（R1a 付記 5.・R2a 付記 4.・R3a 付記 3. の「R5b で配線するときに決める」を閉じる）:
+   `PUT /tasks/{id}/execution-plan` を足した（`POST` と同じ操作。どちらも新規だけ）。検証の上限は **daemon の実効の上限**
+   （`ExecutionLimits { tree: ApiSettings.tree_limits, ..default }`。celeris の `dispatch_config` も `[execution.tree]` 以外は
+   既定なので同じ値）。`celerisctl execution plan set`（別名 `put`）は `--config`（省略時は `CELERIS_CONFIG`）の
+   `[execution.tree]` を読む。**既定の設定ファイルを暗黙に読まない**（試験や別の DB に対する操作が本番の設定を拾わないため）。
+   設定が無ければ木は無効で、/3 は従来どおり `TreeDisabled`。判断は `task_ops::execution::adopt_human_plan` 1 か所。
+2. **planner の計画と同じ経路**: unit の gate（`task_ops::tree_plan::unit_gate_plan`）と採用の直後の止め
+   （`task_ops::tree_plan::plan_hold_writes`: `UnitGateOverridden`・`leaf_too_large` / `limit` の決定・計画の決定・答えの無い
+   決定を待つ leaf の `blocked(decision)`）は dispatcher から task-ops に移し、**planner の経路（dispatcher）と人の経路が同じ
+   関数を呼ぶ**。R2a 付記 4. の「人の計画には unit の gate をかけない」は改める（人の計画にもかける。`adopt` は構造上の理由なので
+   `adopt` の unit は下げられない）。違いは 3 つだけ:
+   - 計画の決定の出どころは `DecisionOrigin::Human`、`raised_by.run_id` は無し。通知は run を持たないので、`scan_decisions` が
+     決定を持つ人の計画の版を引いて `plan:<plan_id>:decisions` に束ねる（1 件ずつ `decision:<id>` にしない）。
+   - 計画の上限（段階の数・段階あたり・子 task・`max_depth`）の違反は **422**（planner の最後の試行のように緩めて採用し
+     `kind: limit` で止める、はしない。人は計画を直せる）。unit の gate の上げる・下げるで上限を超える分は planner と同じく
+     緩めて採用し止める。
+   - **1 トランザクション**（新しい `TaskStore::execution_plan_adopt_tree`: 計画・行・`ExecutionPlanned` の後に止めと採用の
+     event、採用する task の書き換え）。planner の経路は planner run の lease を持つ間に 2 つの書き込み（採用 → 止め）をするが、
+     人の `PUT` は `ready` の task にも来るので、間に dispatcher が止める前の unit や `adopt` の unit を拾わないようにした。
+3. **PlanGate（D8）を人の計画には当てない**（依頼の「決めること」）: 人が書いて `PUT` した計画は、書いた人がその場で承認した
+   ものとみなす。`PlanApprovalRequested` も `blocked(awaiting_plan_approval)` も作らない。代わりに root の /3 なら報告の流れに
+   「計画を採用して進めます: <段階>」を 1 件残し（`plan_gate::human_plan_notice`。U-R3 と同じく Discord は鳴らさない）、承認が
+   要る形（`plan_approval` の理由: 決定・`review: human`・上限に近い）だったならその理由を本文に書く。**決定への回答は承認と別**
+   なので、決定の要求は通知・受信箱に出る（答えの無い決定に依存する unit だけが待つ）。部をまたぐ子の認可の質問（ADR-0074 F4b /
+   U-R2）も人の計画には出さない（書いた人が認可の主体。SPEC §3.1）。報告の組み立ては `task_ops::plan_gate::record_plan_notice`
+   に移した（dispatcher と共有）。
+4. **採用（adopt、D15）の条件と応答**（`task_ops::tree_adopt`）: 対象は同じ案件の execute の仕事の task（対話・裏方は 422
+   `adopt_target_kind`）、計画を持つ task 自身でも祖先でもない（`tree.parent_unit` と `parent_id` を辿る。422 `adopt_ancestor`）、
+   他の木に属さない（`tree` を持つ、または自分が木の root = `tasks.root_id` が自分の子孫がある。409 `adopt_target_in_tree`）、
+   unit が kind task・同じ段階・`adopt` にこの id（422 `adopt_unit_not_task` / `adopt_stage_mismatch` / `adopt_id_mismatch` /
+   `adopt_unit_not_found`）、unit の行が `pending` / `ready` で子を持たない（409 `adopt_unit_not_open`）。要求と計画の食い違いは
+   422、状態の食い違いは 409（`OpsError::TreeAdopt{conflict, code}`）。
+5. **終端でない task は採用しない**（依頼の「決めること」）: 採用できるのは **`done` か `failed`**（成果を持つ終端）だけ。
+   - `failed` を含めたのは R5b の Phase 2（01M3MZKB3DFYJNBH015MJGQ0BT）が **`failed`（`review_fail`: main の祖先の検査だけが不合格）
+     のまま、人が main に取り込んだ（ce5d768）** ため（本番の読み取りで確かめた。依頼文の「done via human delivery」は状態としては
+     failed）。人が `adopt` を書いたことが「その成果を受け入れる」の意思表示で、unit は `done` になる。
+   - `cancelled` は 409 `adopt_target_cancelled`。終端でない task は、人の計画（`PUT`）では unit を結ばずに待たせ（`adoptions[].adopted
+     = false`。daemon の照合は `adopt` の unit から新しい子を**作らない**）、後からの採用 `POST /tasks/{id}/tree/adopt` は終端になる
+     まで 409 `adopt_target_not_terminal`。**「ブランチが root の段階の基点の上にある非終端の task なら採用する」は実装していない**
+     （API が git を読む必要があり、R5b の対象はすべて終端のため。要るようになったら別に決める）。
+6. **採用した unit と統合**: unit は採用の時点で `done`（`WorkUnitTransitioned{reason: child_adopted}` と `ChildAdopted`。
+   依存が満たされた unit は同じ書き込みで `ready`〈`dependency_ready`〉）。対象の `tree` は `{root_id, depth, parent_unit}` で
+   **`base_commit` を持たない**（木がブランチを切っていない）ので、段階の統合は対象のブランチ `celeris/<id>` を R1c の任意の項目
+   （`MergeItem::child_task`）として扱う: 既に親のブランチ（= main から切った root のブランチ）に入っていれば `skipped`、無ければ
+   飛ばし、あって入っていなければ merge する（採用 = その成果をこの unit の成果として取り込む）。R5b の Phase 1 / 2 のブランチは
+   どちらも main の祖先（読み取りで確かめた）なので `skipped` になる。採用した task の worktree は統合の後も**消さない**（木が作った
+   ものではない。R1c 付記 6. の後片付けから外す）。子の done の写し（R1c 付記 5. の commit）も採用した unit には起きない（`running`
+   を経ない）。
+7. **見つけて直したもの**: 段階の unit が採用した task だけのとき、その段階では leaf も子も走らないので root の worktree がまだ無く、
+   統合が `no HEAD` で失敗して replan に落ちた（`adopted_done_task_already_in_base_is_skipped_by_integration` の最初の実行）。
+   `start_integration` が merge の前に task の worktree を用意する（`ensure_blocking`。既にあれば何もしない。子の生成の前の
+   `child_base_commit` と同じ）。
+8. **`adopt` の unit は `max_child_tasks_per_plan` に数えない**（検証と `plan_limit_holds`。`PlanUnitSpec::creates_child`）: 子を
+   作らず run も費やさないため。段階あたりの unit 数（`max_units_per_stage`）には数える。R5b の BenchFS の計画（採用 6 + 新しい子 4）
+   がこれで上限 6 に収まる。
+9. **採用した task の書き換え**: `tree` と、`parent_id` が無ければ計画を持つ task（あれば書き換えない = BenchFS の `kind = plan` の
+   子）。`Event::Edited{fields: ["tree"(, "parent_id")], by: "human"}` を対象に積む（新しい Event の型は足していない。状態・attempts・
+   lease はトランザクションの中で読み直した値）。これで対象は `is_root_task` でなくなり、案件ページの root の一覧から消えて木の中に
+   出る。`TreeAdoption` を store の型として足した。replay は `WorkUnitTransitioned` / `ChildAdopted` から同じ行を作る（試験で差分 0）。
+10. **`celerisctl tree adopt`**（D15）を足した（API と同じ関数。`--config` の `[execution.tree]`）。MCP には出していない（依頼どおり）。
+11. **後片付け（R5a 付記 13. / 14.）**: GUI の `/plans/new`（画面・ルート・ナビの「新規 Plan」・使い方のリンク・`createPlan` の中継・
+    単体テスト・e2e の該当節）を外した（`/plans/new` は 404）。`celerisctl plan`（DB に直接 `kind = plan` を作る運用の道具）は残し、
+    作るたびに ADR-0079 の注記を stderr に出す（stdout は従来どおり task id だけ）。案件ページの「以前の途中目標（読み取り専用）」は
+    既定では件数（`milestones_frozen`）だけを出し、人が「表示する」を押すと `?frozen=1` の loader が `GET /projects/{id}?include_frozen=true`
+    で行を読む（R5a 付記 14. の「開いたときだけ include_frozen」）。
+12. **task-ops はログを出さない**（`tracing` に依存していない）ので、dispatcher から移した関数の `tracing` の行（unit の gate の
+    上げ下げ・止めの warn）は落とした。判断は events（`UnitGateOverridden` / `DecisionRequested` / `WorkUnitTransitioned`）に残る。
+13. **採用した task の履歴は木の数に入る**: 採用すると対象は `tasks.root_id` を持つので、roll-up（D11）と木の上限（D3 の
+    `max_tree_runs` / `max_tree_leaves` / `max_tree_replans`）の数え上げに対象の過去の run・leaf・計画の版が入る（subtree の事実
+    なので除かない）。R5b の browser では Phase 1（01M3MFS5…: worker 6・planner 2、leaf 5、版 2）と Phase 2（01M3MZKB3…: worker 15・
+    planner 7、leaf 9、版 4）で、run 30 / 120・leaf 14 / 40・replan 4 / 10 を最初から使う（本番の読み取り）。足りなくなれば `kind: limit`
+    の決定（`raise-once`）で人が上げる。
+

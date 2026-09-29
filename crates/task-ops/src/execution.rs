@@ -156,6 +156,179 @@ pub fn adopt_plan_with_children(
     Ok(plan)
 }
 
+/// ADR-0079 D2 / D8 / D15（Phase R5b-prep）: 人の計画（origin human）の採用の結果。
+#[derive(Debug)]
+pub struct HumanPlanAdopted {
+    pub plan: ExecutionPlanRow,
+    /// 計画の unit の `adopt` の結果（/3 で `adopt` を持つ unit ごと）。
+    pub adoptions: Vec<crate::tree_adopt::AdoptionOutcome>,
+    /// 計画の決定として出した決定の要求（`DecisionRequested`、origin human）の数。
+    pub decisions_raised: usize,
+    /// root の /3 の計画について計算した承認の要否（人の計画は承認を挟まない。報告に理由を残すため）。
+    pub approval: Option<task_core::PlanApproval>,
+}
+
+/// ADR-0079 D2 / D8 / D15（Phase R5b-prep）: 人が書いた計画を採用する（`PUT/POST /tasks/{id}/execution-plan`、
+/// `celerisctl execution plan set`）。`limits` は **daemon の実効の上限**（`[execution.tree]` を含む）。
+///
+/// - /1・/2、または木が無効: 従来の [`adopt_plan`]（/3 は `TreeDisabled` で 422）。1 バイトも変えない。
+/// - /3（木が有効）: planner の計画と**同じ経路**を通す: 検証（origin human なので `adopt` を書ける）→ unit の gate
+///   （`tree_plan::unit_gate_plan`、上げる・下げる・`UnitGateOverridden`）→ kind task の unit の repos の検査 →
+///   採用の直後の止め（`tree_plan::plan_hold_writes`: 木の上限・`leaf_too_large`・計画の決定の要求〈origin human〉・
+///   答えの無い決定を待つ leaf の `blocked(decision)`）。unit の `adopt` は同じトランザクションで結ぶ
+///   （`tree_adopt::apply_plan_adoptions`）。計画・止め・採用は 1 トランザクション（`execution_plan_adopt_tree`。
+///   PUT の直後に dispatcher が止める前の unit を拾わない）。
+/// - root の計画の承認（D8 の `PlanGate`）は挟まない（書いた人が承認したものとみなす）。代わりに報告の流れに
+///   1 件残す（承認が要る形なら理由も）。部をまたぐ子の認可の質問（ADR-0074 F4b）も人の計画には出さない
+///   （書いた人が認可の主体。SPEC §3.1）。
+pub fn adopt_human_plan(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    spec: ExecutionPlanSpec,
+    limits: ExecutionLimits,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<HumanPlanAdopted, OpsError> {
+    let Some(task) = store.get(task_id)? else {
+        return Err(OpsError::NotFound(task_id));
+    };
+    if spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3 || !limits.tree.enabled {
+        let plan = adopt_plan(store, task_id, spec, PlanOrigin::Human, None, limits, now)?;
+        return Ok(HumanPlanAdopted {
+            plan,
+            adoptions: Vec::new(),
+            decisions_raised: 0,
+            approval: None,
+        });
+    }
+    let ctx = PlanContext {
+        origin: PlanOrigin::Human,
+        depth: task_core::tree::depth_of(&task),
+    };
+    let validated = validate_with(&spec, limits, &[], ctx)
+        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let mut adopt_limits = limits;
+    let (validated, outcome) = crate::tree_plan::unit_gate_plan(
+        store,
+        &task,
+        validated,
+        &[],
+        limits,
+        &mut adopt_limits,
+        PlanOrigin::Human,
+    );
+    crate::tree::check_task_unit_repos(store, &task, &validated.spec)
+        .map_err(OpsError::Validation)?;
+
+    let plan_id = new_id();
+    let created_at = format_rfc3339(now)?;
+    let mut rows: Vec<WorkUnitRow> = task_core::materialize_work_units(
+        &task_id.to_string(),
+        &plan_id,
+        &validated.spec,
+        &validated.topological_order,
+        &created_at,
+        &mut |_| new_id(),
+    );
+    let pause_after = task
+        .routing
+        .as_ref()
+        .map(|r| r.pause_after.clone())
+        .unwrap_or_default();
+    let pause_after_source = task
+        .routing
+        .as_ref()
+        .map(|r| r.pause_after_source)
+        .unwrap_or_default();
+    let pause_points_event = Event::PausePointsResolved {
+        plan_id: plan_id.clone(),
+        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
+        source: pause_after_source,
+    };
+    let plan = ExecutionPlanRow {
+        id: plan_id.clone(),
+        task_id: task_id.to_string(),
+        version: 1,
+        origin: PlanOrigin::Human,
+        planner_run_id: None,
+        status: PlanStatus::Active,
+        spec: validated.spec.clone(),
+        created_at: created_at.clone(),
+        superseded_at: None,
+    };
+    let planned = Event::ExecutionPlanned {
+        plan_id: plan_id.clone(),
+        version: 1,
+        origin: PlanOrigin::Human,
+        supersedes: None,
+        reason: None,
+        plan: Box::new(validated.spec),
+    };
+    let adoptions =
+        crate::tree_adopt::apply_plan_adoptions(store, &task, &plan, &mut rows, by, now)?;
+    let mut after = adoptions.events;
+    let mut decisions_raised = 0;
+    if let Some(outcome) = outcome {
+        let holds = crate::tree_plan::plan_hold_writes(
+            store,
+            &task,
+            &plan,
+            &rows,
+            None,
+            task_core::DecisionOrigin::Human,
+            outcome,
+            now,
+        )?;
+        for held in holds.rows {
+            if let Some(r) = rows.iter_mut().find(|r| r.id == held.id) {
+                *r = held;
+            }
+        }
+        after.extend(holds.events);
+        decisions_raised = holds.raised;
+    }
+    if !store.execution_plan_adopt_tree(
+        task_id,
+        plan.clone(),
+        rows,
+        vec![pause_points_event],
+        planned,
+        after,
+        adoptions.adoptions,
+    )? {
+        return Err(OpsError::TreeAdopt {
+            conflict: true,
+            code: "adopt_conflict",
+            detail: "an adopted task changed concurrently; read it again and retry".to_string(),
+        });
+    }
+    let approval = if task_core::tree::is_tree_child(&task) {
+        None
+    } else {
+        let facts = crate::plan_gate::approval_facts(store, &task, &plan)?;
+        let root_id = task_core::tree::root_id_of(&task);
+        let allowances = crate::decision::limit_allowances(store, root_id, None)?;
+        let tree = task_core::tree::limits_with_allowances(&limits.tree, &allowances);
+        Some(task_core::tree::plan_approval(&facts, &tree))
+    };
+    if let Some(a) = &approval {
+        let reasons = if a.required {
+            a.reasons.clone()
+        } else {
+            Vec::new()
+        };
+        let (headline, body) = crate::plan_gate::human_plan_notice(&plan.spec, by, &reasons);
+        // 報告は記録のためだけ（採用は済んでいる）。書けなくても採用を失敗にしない。
+        let _ = crate::plan_gate::record_plan_notice(store, &task, &headline, &body, now);
+    }
+    Ok(HumanPlanAdopted {
+        plan,
+        adoptions: adoptions.outcomes,
+        decisions_raised,
+        approval,
+    })
+}
+
 /// ADR-0072 D17（Phase E4）: [`replan`] が計算した差分（監査・GUI 用。版の履歴の「差分の件数」）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplanDiff {

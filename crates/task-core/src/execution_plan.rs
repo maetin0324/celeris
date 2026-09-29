@@ -324,6 +324,12 @@ impl PlanUnitSpec {
         self.kind == WorkUnitKind::Task
     }
 
+    /// ADR-0079 D15（Phase R5b-prep）: 新しい子 task を作る kind task の unit か（`adopt` の unit は既存の task を
+    /// 結ぶだけで子を作らず run も費やさないので、計画あたりの子 task の上限〈`max_child_tasks_per_plan`〉に数えない）。
+    pub fn creates_child(&self) -> bool {
+        self.is_task() && self.adopt.is_none()
+    }
+
     /// `work_units` の行の spec（/2 の `WorkUnitSpec` と同じ形。`phase` = 段階）。
     pub fn to_work_unit_spec(&self) -> WorkUnitSpec {
         WorkUnitSpec {
@@ -1862,7 +1868,8 @@ fn validate_v3(
             });
         }
     }
-    let task_units = spec.units.iter().filter(|u| u.is_task()).count();
+    // ADR-0079 D15（Phase R5b-prep）: `adopt` の unit は子を作らないので数えない。
+    let task_units = spec.units.iter().filter(|u| u.creates_child()).count();
     if task_units > tree.max_child_tasks_per_plan {
         errors.push(PlanValidationError::TooManyChildTasks {
             count: task_units,

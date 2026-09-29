@@ -2,6 +2,10 @@
 //!
 //! 引数解析・`task_ops::plan::create_plan` の呼び出し・出力整形だけをここで行う。判断は
 //! `task_ops::plan`（ADR-0013 D7）に移した。
+//!
+//! ADR-0079（Phase R5b-prep）: HTTP の `POST /plans` は R5a で 410（U-R6）。このコマンドは DB に直接 `kind = plan` の
+//! 分解 task を作る運用の道具として残すが、作るたびに [`ADR_0079_NOTE`] を stderr に出す（新しい仕事は root task と
+//! その計画〈plan/3〉で表す）。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,6 +18,10 @@ use time::OffsetDateTime;
 use crate::commands::add::TierArg;
 use crate::error::CliError;
 use crate::outln;
+
+/// ADR-0079 R5b-prep: `celerisctl plan` が作るたびに出す注記（stderr。stdout は従来どおり task id だけ）。
+pub const ADR_0079_NOTE: &str = "note: ADR-0079 — a kind=plan decomposition task is the legacy path (POST /plans is 410 since R5a). \
+For new work create a root task (POST /tasks) and give it a celeris.execution-plan/3 plan (planner, or PUT /tasks/{id}/execution-plan).";
 
 const DEFAULT_MAX_TURNS: u32 = 30;
 const DEFAULT_MAX_WALL_SECS: u64 = 900;
@@ -56,6 +64,7 @@ pub fn run(store: &dyn TaskStore, args: PlanArgs) -> Result<ExitCode, CliError> 
     };
 
     let task = create_plan(store, spec, OffsetDateTime::now_utc())?;
+    eprintln!("{ADR_0079_NOTE}");
 
     outln!("{}", task.id);
     Ok(ExitCode::SUCCESS)

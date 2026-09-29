@@ -324,6 +324,61 @@ pub fn plan_notice(spec: &task_core::ExecutionPlanSpec) -> (String, String) {
     (headline, body)
 }
 
+/// D8（Phase R3b、R5b-prep で task-dispatch から移した）: 承認を挟まずに進める root の計画の報告（`kind: progress`、
+/// bad_news でないので複製も Discord も無い。U-R3）を 1 件だけ残す。報告するノードは担当（組織にあるとき）、無ければ
+/// 秘書。組織が無い DB では書かない（`None`）。planner の計画（dispatcher）と人の計画（`PUT`）が同じ関数を使う。
+pub fn record_plan_notice(
+    store: &dyn TaskStore,
+    task: &Task,
+    headline: &str,
+    body: &str,
+    now: time::OffsetDateTime,
+) -> Result<Option<task_core::report::Report>, task_core::StoreError> {
+    let org = store.org_list()?;
+    let node = task
+        .assignee
+        .as_deref()
+        .and_then(|a| org.iter().find(|n| n.id == a))
+        .or_else(|| org.iter().find(|n| n.kind == task_core::OrgKind::Secretary));
+    let Some(node) = node else {
+        return Ok(None);
+    };
+    let level = task_core::report::level_of(&org, &node.id);
+    let report = task_core::report::report_for_plan_notice(
+        &node.id,
+        level,
+        task.project_id,
+        task.id,
+        headline,
+        body,
+        now,
+    );
+    store.report_append(&report)?;
+    Ok(Some(report))
+}
+
+/// ADR-0079 D8 / 付記「R5b-prep」: 人が書いた root の計画（origin human、`PUT /tasks/{id}/execution-plan`）の報告の
+/// 見出しと本文。人の計画は、書いた人がその場で承認したものとして `PlanGate` を挟まない。承認が要る形
+/// （決定・`review: human`・上限に近い）だったなら、その理由を本文に残す（決定的）。
+pub fn human_plan_notice(
+    spec: &task_core::ExecutionPlanSpec,
+    by: &str,
+    reasons: &[String],
+) -> (String, String) {
+    let (headline, body) = plan_notice(spec);
+    let rest = body.split_once('\n').map(|(_, r)| r).unwrap_or("");
+    let mut head = format!(
+        "人（{by}）が書いた root の計画（origin human）を採用しました。書いた人の承認とみなし、計画の承認（ADR-0079 D8）は挟みません。\n"
+    );
+    if !reasons.is_empty() {
+        head.push_str(&format!(
+            "planner の計画なら承認を求める条件: {}\n",
+            describe_reasons(reasons)
+        ));
+    }
+    (headline, format!("{head}{rest}"))
+}
+
 /// D8: 承認の理由（`PlanApprovalRequested.reasons`）の人が読む 1 行。
 pub fn describe_reasons(reasons: &[String]) -> String {
     reasons

@@ -309,30 +309,7 @@ test.describe("受け入れ条件 5: 作成フォーム", () => {
   });
 });
 
-test.describe("受け入れ条件 6: Plan フォーム", () => {
-  test("plan.auto_accept = false の説明が出て、作成すると draft の Plan になる", async ({ page }) => {
-    const config = await apiGet<{ plan_auto_accept: boolean }>("/config");
-    expect(config.plan_auto_accept).toBe(false);
-
-    await page.goto("/plans/new");
-    await expect(page.getByTestId("plan-auto-accept")).toContainText("plan.auto_accept = false");
-    await expect(page.getByTestId("plan-auto-accept")).toContainText("draft");
-
-    // 空の goal → 422 文言
-    await page.getByTestId("submit").click();
-    await expect(page.getByTestId("field-error-goal")).toContainText("goal must not be blank");
-
-    await page.locator("#goal").fill("plan from the GUI: build two small things");
-    await page.getByTestId("submit").click();
-    await page.waitForURL(/\/tasks\/[0-9A-HJKMNP-TV-Z]{26}$/);
-    const planId = page.url().split("/").at(-1) ?? "";
-    await expect(page.getByTestId("task-kind")).toHaveText("plan");
-    await expect(page.getByTestId("task-status")).toHaveText("draft");
-    const detail = await apiGet<TaskDetail>(`/tasks/${planId}`);
-    expect(detail.task.kind).toBe("plan");
-    expect(detail.task.status).toBe("draft");
-  });
-});
+// 受け入れ条件 6（Plan フォーム `/plans/new`）は ADR-0079 R5b-prep で画面ごと撤去した（`POST /plans` は R5a で 410）。
 
 test.describe("受け入れ条件 7: CSRF", () => {
   test("Origin: http://evil.example の POST は 403 で、状態は不変", async () => {

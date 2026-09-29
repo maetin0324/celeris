@@ -1124,3 +1124,8 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   欠落だけ塞ぐ、p4 は 1 子 task）→ PlanGate（near_limit `max_tree_leaves 33/40`）。v2 は v1 の phase-3 後の `review: human` を落としていたので、それだけ戻す
   replan を要求（v3 待ち）。
 - 観察: 根 task の `GET /tasks/{id}/timeline` が 1〜5.6 s（人が GUI で閲覧中）。件数由来の疑い、回収で見る。
+- browser 根の続き（時刻は events の値）: 17:11:52Z v2 が PlanGate 待ち → 17:13:04Z 人が `plan-gate {action: replan}`（`review: human` を戻す指示）→
+  **P-R5b-4（欠陥）**: replan の要求と同時に v2 の unit p3 から子 task 01M3Q2FPRCF34F00PBZSMNSZE8 が作られ dispatch された（17:13:07Z。承認されていない v2 の
+  unit を動かした）。planner は 17:13:35Z に v3（`review: human` 復元、p3 は同 key）→ PlanGate（`review_human:phase-3`、near_limit）→ 17:14:20Z 人が approve。
+  子は v3 でも p3 なのでそのまま継続。子の gate は `atomic/score`（score 6 = 特徴 4 + hint 2 / 閾値 7）で atomic、budget 30 turns、workspace は自分の
+  Local（R5b-fix3 D2 の効果）。

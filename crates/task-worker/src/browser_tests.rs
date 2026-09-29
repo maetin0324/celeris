@@ -202,7 +202,8 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
     content.push_str("{\"operation\":\"click\""); // torn writes must wait for a complete line
     std::fs::write(&events, content).unwrap();
     let sink = RecordingSink::default();
-    let live = crate::browser_live::LiveEmitter::new(crate::browser_live::CollectingSink::default());
+    let live =
+        crate::browser_live::LiveEmitter::new(crate::browser_live::CollectingSink::default());
     let mut offset = 0;
     forward_events(&events, &mut offset, &req, &output, &sink, &live);
     assert_eq!(sink.artifacts.lock().unwrap().len(), 1);
@@ -973,104 +974,7 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
 
 mod live_wiring {
     use super::*;
-    use crate::browser_live::{
-        CollectingSink, ControlGate, GatedOutcome, InMemoryGate, LiveEmitter,
-    };
-    use task_core::browser_control::{ControlCommand, ControlPhase};
-
-    /// Fake shim: `close` only records that it ran (no agent-browser, no network).
-    fn fake_cli(dir: &Path) -> (PathBuf, PathBuf) {
-        let marker = dir.join("closed");
-        let cli = dir.join("cli.py");
-        std::fs::write(
-            &cli,
-            format!(
-                "import sys\nif sys.argv[1:] == ['close']:\n    open({:?}, 'w').write('closed')\n",
-                marker.display().to_string()
-            ),
-        )
-        .unwrap();
-        (cli, marker)
-    }
-
-    fn wait_for(path: &Path) -> bool {
-        for _ in 0..200 {
-            if path.exists() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        false
-    }
-
-    #[test]
-    fn browser_live_pause_converges_after_in_flight_action_and_blocks_new_ones() {
-        let temp = tempfile::tempdir().unwrap();
-        let (cli, _) = fake_cli(temp.path());
-        let gate = InMemoryGate::new();
-        let closer = CliCloser { cli };
-        let emitter = LiveEmitter::new(CollectingSink::default());
-        let live = BrowserLive {
-            gate: &gate,
-            closer: &closer,
-            emitter: &emitter,
-        };
-        let out = live.action(|| {
-            gate.command(ControlCommand::Pause, "p", 0).unwrap();
-            assert_eq!(gate.phase(), ControlPhase::Pausing);
-            "clicked"
-        });
-        assert_eq!(out, GatedOutcome::Ran("clicked"));
-        assert_eq!(gate.phase(), ControlPhase::Paused);
-        let mut issued = false;
-        assert_eq!(
-            live.action(|| issued = true),
-            GatedOutcome::Blocked(ControlPhase::Paused)
-        );
-        assert!(!issued);
-    }
-
-    #[test]
-    fn browser_live_human_control_blocks_agent_and_stop_closes_session_like_cancel() {
-        let temp = tempfile::tempdir().unwrap();
-        let (cli, marker) = fake_cli(temp.path());
-        let gate = InMemoryGate::new();
-        let closer = CliCloser { cli };
-        let emitter = LiveEmitter::new(CollectingSink::default());
-        let live = BrowserLive {
-            gate: &gate,
-            closer: &closer,
-            emitter: &emitter,
-        };
-        gate.command(ControlCommand::Pause, "p", 0).unwrap();
-        gate.command(
-            ControlCommand::Takeover {
-                holder: "h".into(),
-                ttl_secs: None,
-            },
-            "t",
-            1,
-        )
-        .unwrap();
-        let mut issued = false;
-        assert_eq!(
-            live.action(|| issued = true),
-            GatedOutcome::Blocked(ControlPhase::HumanControl)
-        );
-        // lease expiry / disconnect never resumes the agent
-        gate.expire(10_000);
-        gate.human_disconnected("h");
-        assert_eq!(
-            live.action(|| issued = true),
-            GatedOutcome::Blocked(gate.phase())
-        );
-        assert!(!issued);
-        assert!(!marker.exists());
-        gate.command(ControlCommand::Stop, "s", 10_001).unwrap();
-        assert_eq!(live.action(|| issued = true), GatedOutcome::Closed);
-        assert!(!issued);
-        assert!(wait_for(&marker), "Stopped must run the shim close");
-    }
+    use crate::browser_live::{CollectingSink, LiveEmitter};
 
     #[test]
     fn browser_live_forwarded_events_are_scrubbed_status_only() {
@@ -1143,16 +1047,32 @@ mod live_wiring {
             let _auth = emitter.auth_section();
             forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
         }
-        assert!(emitter.sink().events().is_empty(), "no live events during auth");
-        assert!(sink.progress.lock().unwrap().is_empty(), "no progress during auth");
-        assert!(sink.artifacts.lock().unwrap().is_empty(), "no artifact during auth");
+        assert!(
+            emitter.sink().events().is_empty(),
+            "no live events during auth"
+        );
+        assert!(
+            sink.progress.lock().unwrap().is_empty(),
+            "no progress during auth"
+        );
+        assert!(
+            sink.artifacts.lock().unwrap().is_empty(),
+            "no artifact during auth"
+        );
         // not buffered: leaving the section does not replay them
         forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
         assert!(emitter.sink().events().is_empty());
         assert!(sink.progress.lock().unwrap().is_empty());
         // lines written after the section are forwarded as usual
-        let mut f = std::fs::OpenOptions::new().append(true).open(&events).unwrap();
-        std::io::Write::write_all(&mut f, b"{\"operation\":\"click\",\"status\":\"success\"}\n").unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&events)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut f,
+            b"{\"operation\":\"click\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
         forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
         assert_eq!(emitter.sink().events().len(), 1);
         assert_eq!(sink.progress.lock().unwrap().len(), 1);

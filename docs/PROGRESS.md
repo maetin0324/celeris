@@ -35,4 +35,6 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 
 - 認証区間（ADR-0080 H3）を worker → store op（task-api `auth-section` と共通）→ control 状態へ配線、API で takeover/renew を 409 拒否、実 `forward_events` が区間中 progress・artifact・live event を 0 件にする。詳細・証拠は [phase-browser-3](progress/phase-browser-3.md)。
 - 証拠: `cargo test --workspace` exit 0（2931 passed）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo test --workspace auth_section` exit 0。
-- 未解決: identity 復元は P4-A 後。GUI 試験は本 run で再実行していない。
+- 追加（同 task の Run #2）: GUI `browser-control.server.ts` の auth_section 拒否の試験（`gui/test/unit/browser-control.test.ts`、4 passed、`pnpm test` 1236 passed）。テスト専用の未配線経路 `BrowserLive`／`CliCloser` を削除。最終証拠: `cargo test --workspace` exit 0（2929 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo test --workspace auth_section` exit 0。
+- 行ごとの判定: P3-A 保管側は満たす・復元は未（P4-A 後、`isolation_required` で拒否）／P3-B 満たす／P3-C 満たす（API・GUI・認証区間）。
+- 未解決: identity 復元は P4-A 後（ADR-0083 D3）。worker 側 control gate（human control 中に agent の操作を止める）の run loop 配線は未。

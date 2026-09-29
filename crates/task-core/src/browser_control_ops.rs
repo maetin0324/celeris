@@ -77,9 +77,8 @@ impl SqliteStore {
     ) -> Result<usize, BrowserStoreError> {
         let sessions: Vec<(String, String)> = {
             let conn = self.lock()?;
-            let mut stmt = conn.prepare(
-                "SELECT run_id, session_id FROM browser_control_state WHERE task_id=?1",
-            )?;
+            let mut stmt = conn
+                .prepare("SELECT run_id, session_id FROM browser_control_state WHERE task_id=?1")?;
             stmt.query_map(params![task_id], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<Result<_, _>>()?
         };
@@ -150,7 +149,8 @@ mod tests {
             e.err().and_then(control_err),
             Some(ControlError::VersionConflict { .. })
         ));
-        let t = store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
+        let t =
+            store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
         assert_eq!(t.lease_expires_at, Some(100 + CONTROL_LEASE_DEFAULT_SECS));
         // 同じ key の再送は前回の結果を返し、lease を延ばさない。
         let again =
@@ -160,16 +160,26 @@ mod tests {
         assert_eq!(store.browser_control_get(KEY)?.version(), t.version);
         // 同じ key を別 command に流用すると拒否。
         let e = store.browser_control_apply(KEY, &req(ControlCommand::Stop, t.version, "t"), 150);
-        assert_eq!(e.err().and_then(control_err), Some(ControlError::IdempotencyConflict));
+        assert_eq!(
+            e.err().and_then(control_err),
+            Some(ControlError::IdempotencyConflict)
+        );
         // 他人は lease を延長・奪取できない。
         let renew = ControlCommand::Renew {
             holder: "other".into(),
             ttl_secs: None,
         };
         let e = store.browser_control_apply(KEY, &req(renew, t.version, "r"), 150);
-        assert_eq!(e.err().and_then(control_err), Some(ControlError::NotLeaseHolder));
-        let e = store.browser_control_apply(KEY, &req(takeover("other", None), t.version, "o"), 150);
-        assert_eq!(e.err().and_then(control_err), Some(ControlError::NotLeaseHolder));
+        assert_eq!(
+            e.err().and_then(control_err),
+            Some(ControlError::NotLeaseHolder)
+        );
+        let e =
+            store.browser_control_apply(KEY, &req(takeover("other", None), t.version, "o"), 150);
+        assert_eq!(
+            e.err().and_then(control_err),
+            Some(ControlError::NotLeaseHolder)
+        );
         Ok(())
     }
 
@@ -179,14 +189,19 @@ mod tests {
         let p = store.browser_control_apply(KEY, &req(ControlCommand::Pause, 0, "p"), 100)?;
         let e = store.browser_control_apply(
             KEY,
-            &req(takeover("me", Some(CONTROL_LEASE_MAX_SECS + 1)), p.version, "long"),
+            &req(
+                takeover("me", Some(CONTROL_LEASE_MAX_SECS + 1)),
+                p.version,
+                "long",
+            ),
             100,
         );
         assert!(matches!(
             e.err().and_then(control_err),
             Some(ControlError::LeaseTooLong { .. })
         ));
-        let t = store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
+        let t =
+            store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
         assert_eq!(t.lease_expires_at, Some(160));
         // 切断相当: lease 切れで Paused に戻り、agent は自動再開しない。
         let expired = store.browser_control_mutate(KEY, |s| Ok(s.expire(161)))?;
@@ -206,7 +221,10 @@ mod tests {
             s.human_disconnected("me");
             Ok(())
         })?;
-        assert_eq!(store.browser_control_get(KEY)?.phase(), ControlPhase::Paused);
+        assert_eq!(
+            store.browser_control_get(KEY)?.phase(),
+            ControlPhase::Paused
+        );
         Ok(())
     }
 
@@ -222,8 +240,12 @@ mod tests {
         let s = store.browser_control_get(KEY)?;
         assert_eq!(s.phase(), ControlPhase::Paused);
         assert!(s.lease().is_none());
-        let e = store.browser_control_apply(KEY, &req(takeover("me", None), s.version(), "t2"), 101);
-        assert_eq!(e.err().and_then(control_err), Some(ControlError::AuthSectionActive));
+        let e =
+            store.browser_control_apply(KEY, &req(takeover("me", None), s.version(), "t2"), 101);
+        assert_eq!(
+            e.err().and_then(control_err),
+            Some(ControlError::AuthSectionActive)
+        );
         Ok(())
     }
 
@@ -242,13 +264,24 @@ mod tests {
             holder: "me".into(),
             ttl_secs: None,
         };
-        assert!(store.browser_control_apply(KEY, &req(renew, s.version(), "r"), 112).is_err());
-        let e = store.browser_control_apply(KEY, &req(takeover("me", None), s.version(), "t9"), 112);
+        assert!(
+            store
+                .browser_control_apply(KEY, &req(renew, s.version(), "r"), 112)
+                .is_err()
+        );
+        let e =
+            store.browser_control_apply(KEY, &req(takeover("me", None), s.version(), "t9"), 112);
         assert!(matches!(
             e.err().and_then(control_err),
-            Some(ControlError::InvalidPhase { phase: ControlPhase::Stopped })
+            Some(ControlError::InvalidPhase {
+                phase: ControlPhase::Stopped
+            })
         ));
-        assert!(store.browser_control_mutate(KEY, |s| s.begin_agent_action()).is_err());
+        assert!(
+            store
+                .browser_control_mutate(KEY, |s| s.begin_agent_action())
+                .is_err()
+        );
         Ok(())
     }
 }

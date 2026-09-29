@@ -120,47 +120,6 @@ fn spawn_close(cli: &Path) {
         });
 }
 
-/// P3-C `Stopped` closes the session through the same shim `close` as task cancel.
-// TODO(integrate-wire): the run loop constructs this once the task-api LiveSink/gate lands.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct CliCloser {
-    pub(crate) cli: PathBuf,
-}
-impl crate::browser_live::SessionCloser for CliCloser {
-    fn close(&self) {
-        spawn_close(&self.cli);
-    }
-}
-
-/// P3-B/C wiring for one browser run: the control gate agent actions pass through, and the
-/// live event exit (status only from the typed lifecycle; never frame/title/page text).
-// TODO(integrate-wire): the run loop constructs this once the task-api LiveSink/gate lands.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct BrowserLive<'a, S: crate::browser_live::LiveSink> {
-    pub(crate) gate: &'a dyn crate::browser_live::ControlGate,
-    pub(crate) closer: &'a dyn crate::browser_live::SessionCloser,
-    pub(crate) emitter: &'a crate::browser_live::LiveEmitter<S>,
-}
-// TODO(integrate-wire): the run loop constructs this once the task-api LiveSink/gate lands.
-#[cfg_attr(not(test), allow(dead_code))]
-impl<S: crate::browser_live::LiveSink> BrowserLive<'_, S> {
-    /// Ask the gate before issuing an agent browser action. Not `AgentRunning` → no action;
-    /// `Stopped` → the session is closed. In-flight completion is reported via `end_action`.
-    pub(crate) fn action<T>(
-        &self,
-        action: impl FnOnce() -> T,
-    ) -> crate::browser_live::GatedOutcome<T> {
-        let out = crate::browser_live::run_gated(self.gate, self.closer, action);
-        if let crate::browser_live::GatedOutcome::Closed = out {
-            self.emitter
-                .emit(&task_core::browser_live::LiveEvent::Status {
-                    state: "stopped".into(),
-                });
-        }
-        out
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ActionEvent {
@@ -279,7 +238,8 @@ pub(crate) struct EventSinkLive<'a> {
 }
 impl crate::browser_live::LiveSink for EventSinkLive<'_> {
     fn send(&self, event: &task_core::browser_live::ScrubbedLiveEvent) {
-        self.sink.browser_live(&self.run_id, &self.session_id, event);
+        self.sink
+            .browser_live(&self.run_id, &self.session_id, event);
     }
 }
 

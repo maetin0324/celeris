@@ -1365,7 +1365,9 @@ fn phase3_auth_section_refuses_takeover_and_renew_until_left() {
     assert_eq!(held.status, 200, "{}", held.body);
     assert_eq!(held.json()["phase"], "human_control");
     let v = held.json()["version"].as_u64().unwrap();
-    let on = f.env.post(&format!("{path}/auth-section"), json!({"active": true}));
+    let on = f
+        .env
+        .post(&format!("{path}/auth-section"), json!({"active": true}));
     assert_eq!(on.status, 200, "{}", on.body);
     assert_eq!(on.json()["auth_section"], true);
     assert_eq!(on.json()["phase"], "paused", "held lease is revoked");
@@ -1377,7 +1379,9 @@ fn phase3_auth_section_refuses_takeover_and_renew_until_left() {
         .assert_problem(409, "auth_section_active");
     f.control("owner-a", json!({"kind":"takeover"}), v2, "as-take-2")
         .assert_problem(409, "auth_section_active");
-    let off = f.env.post(&format!("{path}/auth-section"), json!({"active": false}));
+    let off = f
+        .env
+        .post(&format!("{path}/auth-section"), json!({"active": false}));
     assert_eq!(off.status, 200, "{}", off.body);
     assert_eq!(off.json()["auth_section"], false);
     let v3 = off.json()["version"].as_u64().unwrap();

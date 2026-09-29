@@ -726,15 +726,27 @@ async fn auth_section_is_recorded_during_credential_injection_and_nothing_is_for
     let approval = w.until_approval().await;
     w.decide(&approval, "approve_once").await;
     let (outcome, browsers) = w.dispatch("run-login").await;
-    assert!(matches!(outcome.terminal, Terminal::Done { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome.terminal, Terminal::Done { .. }),
+        "{outcome:?}"
+    );
     let calls = w.auth_calls.lock().unwrap().clone();
     assert_eq!(calls.len(), 2, "{calls:?}");
     let (on, out_at_on, state_on, takeover) = &calls[0];
     let (off, out_at_off, state_off, _) = &calls[1];
-    assert!(*on && *state_on, "auth_section true during injection: {calls:?}");
+    assert!(
+        *on && *state_on,
+        "auth_section true during injection: {calls:?}"
+    );
     assert_eq!(takeover.as_deref(), Some("auth_section_active"));
-    assert!(!*off && !*state_off, "auth_section false after injection: {calls:?}");
-    assert_eq!(out_at_on, out_at_off, "nothing forwarded inside the auth section");
+    assert!(
+        !*off && !*state_off,
+        "auth_section false after injection: {calls:?}"
+    );
+    assert_eq!(
+        out_at_on, out_at_off,
+        "nothing forwarded inside the auth section"
+    );
     let session = &browsers.last().unwrap().session_id;
     let stored = w
         .env

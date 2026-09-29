@@ -22,9 +22,9 @@ mod admin;
 mod approvals;
 /// ADR-0080 D5: browser の人待ち（登録依頼・承認・手動登録の受付）。
 pub mod browser;
+mod browser_control;
 /// ADR-0083 / H5: Browser Identity の登録・一覧・失効・削除（利用は isolation_required）。
 pub mod browser_identity;
-mod browser_control;
 mod browser_live;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）。
 pub mod changes;

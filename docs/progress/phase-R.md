@@ -1166,3 +1166,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   純関数・egress transport の試験は入った）。子の記録: 非特権 LXC では `newuidmap` が EPERM（親 uid_map `0:100000:1001, 1001:1001:1, …`）で
   bwrap + subuid の隔離が実証できない（環境制約）。根の p4 failed → 木の `max_tree_replans`（10）超過で決定 `limit:max_tree_replans`
   01M3QF8TWSTGZDQMM33HF9WXF6 が open。判断は人へ（Phase 4 を compound で分解し直すか、P4-A の subuid 実証を別ホストに切り出すか）。
+- 21:03Z: 人が GUI で `limit:max_tree_replans` に `replan` と回答 → planner v4（p4 を p4a / p4c 並行 + p4b（p4a の後）に分割、前回ブランチを各子が merge、
+  決定 `p4a-uid`〈subuid の実証場所〉）→ PlanGate。人（選択肢 1）に従い、決定は **ns-only** で回答し、PlanGate は `replan`（p4a / p4b / p4c に
+  `gate: compound` を明示）を要求（21:22Z）→ **P-R5b-4 再現**: 未承認 v4 の p4a / p4c から子 task が即座に作られ dispatch され、replan 自体は
+  `max_replans`（3）超過の決定 `limit:max_replans` 01M3QGRC80H4M42V5NAF3P9YQN で止まった。

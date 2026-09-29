@@ -323,6 +323,7 @@ fn non_public_v4(ip: Ipv4Addr) -> bool {
         || o[0] == 0
         || (o[0] == 100 && (o[1] & 0xc0) == 64)
         || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+        || (o[0] == 192 && o[1] == 88 && o[2] == 99)
         || (o[0] == 198 && (o[1] & 0xfe) == 18)
         || o[0] >= 240
 }
@@ -332,7 +333,12 @@ fn non_public_v6(ip: Ipv6Addr) -> bool {
         return non_public_v4(v4);
     }
     let s = ip.segments();
-    ip.is_loopback()
+    // ADR-0086: only ordinary global unicast can be enabled; reject IETF
+    // special assignments conservatively, including their anycast exceptions.
+    (s[0] & 0xe000) != 0x2000
+        || (s[0] == 0x2001 && s[1] < 0x0200)
+        || (s[0] == 0x3fff && s[1] < 0x1000)
+        || ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_multicast()
         || (s[0] & 0xfe00) == 0xfc00
@@ -656,6 +662,7 @@ mod tests {
             "255.255.255.255",
             "198.18.0.1",
             "240.0.0.1",
+            "192.88.99.1",
         ] {
             assert_eq!(
                 check_egress(&policy(), &connect("example.com", &["93.184.216.34", ip])),
@@ -677,6 +684,13 @@ mod tests {
             "2002:a00:1::",
             "::a00:1",
             "2001:db8::1",
+            "100::1",
+            "100:0:0:1::1",
+            "2001:2::1",
+            "2001:20::1",
+            "3fff:fff::1",
+            "5f00::1",
+            "4000::1",
         ] {
             assert_eq!(
                 check_egress(&policy(), &connect("example.com", &[ip])),
@@ -690,6 +704,12 @@ mod tests {
         );
         let mut p = policy();
         p.allow_ipv6 = true;
+        for ip in ["100::1", "2001:2::1", "3fff:fff::1", "5f00::1", "4000::1"] {
+            assert_eq!(
+                check_egress(&p, &connect("example.com", &[ip])),
+                Err(EgressDenied::PrivateAddress)
+            );
+        }
         assert_eq!(
             check_egress(&p, &connect("example.com", &["2606:2800:220:1::1"])),
             Ok(())

@@ -71,7 +71,7 @@ fn status_of(s: &BrowserControl) -> ControlStatus {
         version: s.version(),
         lease_holder: s.lease().map(|l| l.holder.clone()),
         lease_expires_at: s.lease().map(|l| l.expires_at),
-        agent_may_act: s.phase() == ControlPhase::Running,
+        agent_may_act: s.phase() == ControlPhase::AgentRunning,
         in_flight: s.in_flight(),
         auth_section: s.auth_section_active(),
     }

@@ -645,6 +645,8 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - **R4b**: 木のタブ（`task-tree` の節点・段階・unit・roll-up・上限の使用率）、受信箱の「決定」「計画の承認」の操作、案件ページの root の一覧と
   `root_totals`、「理由なく止まっています」、語（配送 → 成果の取り込み）。
 
+**昇格**: release `3a928fd6ebeb`（main 3a928fd = R4b + browser Phase 2 統合）を 2026-09-29 04:58:07Z にライブ昇格（backup 20260929-045751-pre-3a928fd6ebeb、verify ok / live_ok、schema 33）。GUI に木タブ・決定と計画承認の inbox・案件ページの根 task 一覧・「成果の取り込み」の用語が入った（tree 自体は既定 off のまま）。
+
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。

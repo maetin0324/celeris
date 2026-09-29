@@ -70,6 +70,27 @@ pub(crate) fn write_private(path: &Path, content: impl AsRef<[u8]>) -> std::io::
     file.write_all(content.as_ref())
 }
 
+fn replace_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let next = path.with_extension("next");
+    write_private(&next, content)?;
+    if let Err(error) = std::fs::rename(&next, path) {
+        let _ = std::fs::remove_file(&next);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn credential_harness_policy(policy: &[u8]) -> Result<Vec<u8>, AdapterError> {
+    let mut file: task_core::AgentBrowserActionPolicy = serde_json::from_slice(policy)
+        .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    file.allow.retain(|a| {
+        !OBSERVATION_UPSTREAM_ACTIONS.contains(&a.as_str())
+            && a != "auth_login"
+            && a != task_core::browser::CREDENTIAL_PLUGIN_ACTION
+    });
+    serde_json::to_vec(&file).map_err(|_| AdapterError::Other("browser policy rejected".into()))
+}
+
 /// Best-effort cancellation cleanup. It never touches another run's session.
 struct SessionGuard {
     cli: PathBuf,
@@ -272,11 +293,11 @@ fn segment_close_argv(executable: &Path, runtime: &Path, session: &str) -> Vec<s
     let mut argv: Vec<std::ffi::OsString> = vec![executable.into()];
     argv.extend([
         "--config".into(),
-        runtime.join("upstream-credential.json").into_os_string(),
+        runtime.join("upstream.json").into_os_string(),
         "--session".into(),
         session.into(),
         "--action-policy".into(),
-        runtime.join("policy-credential.json").into_os_string(),
+        runtime.join("policy.json").into_os_string(),
         "--json".into(),
         "close".into(),
     ]);
@@ -479,13 +500,7 @@ pub async fn run_with_executable(
         .map(|a| a.wait.session_id.clone())
         .unwrap_or_else(|| session_id(req.task.id, run_id));
     let harness_policy = if approval.is_some() {
-        let mut file: task_core::AgentBrowserActionPolicy =
-            serde_json::from_slice(&policy.action_policy)
-                .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
-        file.allow
-            .retain(|a| !OBSERVATION_UPSTREAM_ACTIONS.contains(&a.as_str()));
-        serde_json::to_vec(&file)
-            .map_err(|_| AdapterError::Other("browser policy rejected".into()))?
+        credential_harness_policy(&policy.action_policy)?
     } else {
         policy.action_policy.clone()
     };
@@ -496,11 +511,18 @@ pub async fn run_with_executable(
     let cli = runtime.join("celeris-browser.py");
     write_private(&cli, CLI)?;
     // Bound orphan lifetime after a supervisor crash; no profile/auth state is restored.
-    write_private(
-        &runtime.join("upstream.json"),
-        br#"{"idleTimeout":"5m","noWebmcp":true}"#,
-    )?;
-    write_private(&runtime.join("policy.json"), &harness_policy)?;
+    let segment_active = approval.is_some();
+    let upstream = match (&approval, credentials) {
+        (Some(_), Some(sup)) => crate::browser_credential::segment_upstream_config(&sup.bridge),
+        _ => br#"{"idleTimeout":"5m","noWebmcp":true}"#.to_vec(),
+    };
+    write_private(&runtime.join("upstream.json"), &upstream)?;
+    let initial_policy = if segment_active {
+        crate::browser_credential::segment_policy()
+    } else {
+        harness_policy.clone()
+    };
+    write_private(&runtime.join("policy.json"), &initial_policy)?;
     write_private(
         &runtime.join("config.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -526,14 +548,6 @@ pub async fn run_with_executable(
     sink.browser_updated(&browser);
     let credential_segment = match (&approval, credentials) {
         (Some(approval), Some(sup)) => {
-            write_private(
-                &runtime.join("policy-credential.json"),
-                crate::browser_credential::segment_policy(),
-            )?;
-            write_private(
-                &runtime.join("upstream-credential.json"),
-                crate::browser_credential::segment_upstream_config(&sup.bridge),
-            )?;
             let segment = crate::browser_credential::Segment {
                 executable,
                 credentiald_runtime: sup.runtime_dir.as_deref(),
@@ -542,13 +556,20 @@ pub async fn run_with_executable(
                 allowed_domains: policy.allowed_domains(),
                 origin: &approval.wait.origin,
             };
-            let result = crate::browser_credential::use_credential(
+            let mut result = crate::browser_credential::use_credential(
                 sup,
                 &segment,
                 approval,
                 &req.task.id.to_string(),
             )
             .await;
+            // 0.38.1 reuses the daemon only while config and policy paths stay
+            // fixed. Rewrite the policy in place before the harness can run.
+            if result.is_ok()
+                && replace_private(&runtime.join("policy.json"), &harness_policy).is_err()
+            {
+                result = Err("policy_transition_failed");
+            }
             let status = if result.is_ok() { "success" } else { "failure" };
             sink.progress_with(
                 &format!("browser.credential_use: {status}"),

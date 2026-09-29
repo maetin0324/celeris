@@ -41,16 +41,11 @@ systemctl --user enable --now celeris-credentiald@<release>
 2. 人が API/GUI で登録すると秘密は control socket 経由で broker にだけ渡り、task は Ready に戻る。次の run は browser を起動せずに `WAITING_FOR_APPROVAL` を作る。session ID はこの時点で予約される。
 3. 拒否すると task は Failed になり、lease は発行されない。
 4. 承認後の run では supervisor が承認を一度だけ消費する（`consume_credential_approval`）。照合には承認 wait を開いた論理 run/session を使う。dispatch ごとの run ID は変わるからである。その後 broker に bind と grant を求める。lease は 60 秒・一回限りで、policy hash は `sha256:` を除いた digest で broker ID に写す。
-5. supervisor だけが credential 区間の policy（`auth_login`・`close`・`launch`・`navigate`・`plugin:celeris-credential:credential.read`）と plugin 設定で substrate を操作する。`open <origin>/` → `get url` で top-level origin を照合 → `auth login --credential-provider celeris-credential --credential-ref <lease> --no-navigate --url <origin>/`（binding token は FD 3 の pipe）→ `get url` で再照合、の順に進む。origin が一致しない、または失敗した場合は lease を失効させ、task を再試行なしの Error にする。
+5. supervisor だけが credential 区間の policy（`auth_login`・`close`・`launch`・`navigate`・`url`・`plugin:celeris-credential:credential.read`）と plugin 設定で substrate を操作する。`open <origin>/` → `get url` で top-level origin を照合 → `auth login celeris-credential --credential-provider celeris-credential --item <lease> --no-navigate --url <origin>/` → `get url` で再照合、の順に進む。binding token は session daemon を起動する `open` の FD 3 に渡し、plugin がそこから読む。login 後は同じ `policy.json` の内容だけを harness policy に置き換える。config と policy のパスは session 中に変えない。origin が一致しない、または失敗した場合は lease を失効させ、task を再試行なしの Error にする。
 6. 成功後の harness は、観測系（snapshot・gettext・screenshot・download）を外した policy で同じ session を続ける。Live View の URL は出さない。モデルには `result: success` だけを伝える。
 
 試験は `crates/task-api/tests/browser_e2e.rs` にある。store・API・broker IPC・`celeris-credentiald bridge` は本物を使い、ブラウザだけを fake substrate（`tests/fixtures/fake-agent-browser.py`）と fixture site に置き換える。扱う場面は「未登録→待ち→登録→再開→success」「承認拒否→failed」「login URL が別 origin へ redirect→deny（auth login は走らない）」の三つで、それぞれ tempdir 全ファイル（DB・WAL・workspace・runs・artifacts・vault・journal）、task の events、worker 出力を sentinel で全走査する。
 
-**fake と実機の区別**: 検証環境に置いた固定版 0.38.1 の実バイナリで auth login を確認した（`scripts/browser-auth-login-check.py`、結果は [phase-browser-2.md](progress/phase-browser-2.md) の「実 agent-browser での auth login 確認」）。bridge・lease 消費・フォーム login・一回限りの lease・sentinel の不在は実バイナリで通ったが、binding token の受け渡しは試験だけの FD 3 の回避策を使っており、今の結線のままでは実機で fail closed になる。fake 試験の success は実ブラウザでの認証成功を意味しない。
+**fake と実機の区別**: API の端から端までの試験は fake substrate を使う。別の `scripts/browser-auth-login-check.py` は、worker が生成した設定・policy・argv と実 agent-browser 0.38.1 / Chromium を使い、scratch broker と loopback HTTPS fixture で login 成功を確認する。`wu/live-gui/artifacts/auth-wiring/production5/` には一回 lease の再使用拒否（broker journal の `used`）と sentinel 0 件も残した。GUI 登録→再開と Live View の実ブラウザ証跡は `wu/live-gui/artifacts/g14-final/` にある。これらは別々の試験であり、LLM harness を含む単一の実環境走行ではない。
 
-**実バイナリとの差分（要修正）**: 上の結線は次の点で実 0.38.1 の契約と合わない。修正は Phase 3。
-- `plugins` は配列 `[{name,command,args,capabilities:["credential.read"]}]`。map は config の読み込みエラーになる。
-- `auth login` は `auth login <name> --credential-provider P --item <lease> --no-navigate --url <origin>/`。`<name>` が必須で、`--credential-ref` は unknown flag。
-- plugin を起動するのはセッションの daemon で、FD 3 は daemon を起動した最初の CLI 呼び出しのものだけが届く。`auth login` の CLI に渡した FD 3 は plugin に無く、bridge は `denied` になる。受け渡し方式は未決（progress の未解決事項）。
-- segment policy の allow に `url` が要る。policy のパスを変えると daemon が再起動してログイン状態が消える。
-- plugin 要求の `url` は `--url` の値の写しで、ブラウザの観測値ではない。注入前の origin 検証は agent-browser 側が行う。
+固定版 0.38.1 では plugin 設定は `plugins` 配列で、`auth login` は positional name と `--item` を使う。plugin は session daemon から起動されるため、binding token を daemon の起点となる `open` の FD 3 に渡す。`get url` は内部 action `url` を要する。plugin 要求の `url` は CLI の `--url` 値なので、supervisor はその前後に top-level URL を別途照合する。

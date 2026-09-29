@@ -108,6 +108,7 @@ pub(crate) fn segment_policy() -> Vec<u8> {
         "close",
         "launch",
         "navigate",
+        "url",
         task_core::browser::CREDENTIAL_PLUGIN_ACTION,
     ];
     allow.sort_unstable();
@@ -124,6 +125,21 @@ fn private_pipe_with(token: &str) -> std::io::Result<OwnedFd> {
     Ok(read)
 }
 
+fn login_argv<'a>(lease_id: &'a str, login_url: &'a str) -> [&'a str; 10] {
+    [
+        "auth",
+        "login",
+        "celeris-credential",
+        "--credential-provider",
+        "celeris-credential",
+        "--item",
+        lease_id,
+        "--no-navigate",
+        "--url",
+        login_url,
+    ]
+}
+
 async fn substrate(
     seg: &Segment<'_>,
     command: &[&str],
@@ -136,11 +152,11 @@ async fn substrate(
         .env("AGENT_BROWSER_NAMESPACE", "celeris")
         .current_dir(seg.runtime)
         .arg("--config")
-        .arg(seg.runtime.join("upstream-credential.json"))
+        .arg(seg.runtime.join("upstream.json"))
         .arg("--session")
         .arg(seg.session_id)
         .arg("--action-policy")
-        .arg(seg.runtime.join("policy-credential.json"))
+        .arg(seg.runtime.join("policy.json"))
         .arg("--allowed-domains")
         .arg(seg.allowed_domains.join(","))
         .args(["--content-boundaries", "--max-output", "16000", "--json"])
@@ -271,23 +287,15 @@ pub(crate) async fn use_credential(
     })?;
     let result = async {
         let login_url = format!("{}/", wait.origin);
-        substrate(seg, &["open", &login_url], None).await?;
+        // The CLI starts a session daemon on `open`. Its plugin host inherits FD 3
+        // from that daemon, not from the later `auth login` CLI process.
+        substrate(seg, &["open", &login_url], Some(token.as_str())).await?;
         if top_level_origin(seg).await? != wait.origin {
             return Err("origin_mismatch");
         }
         substrate(
             seg,
-            &[
-                "auth",
-                "login",
-                "--credential-provider",
-                "celeris-credential",
-                "--credential-ref",
-                &lease_id,
-                "--no-navigate",
-                "--url",
-                &login_url,
-            ],
+            &login_argv(&lease_id, &login_url),
             Some(token.as_str()),
         )
         .await?;
@@ -308,7 +316,114 @@ pub(crate) fn segment_upstream_config(bridge: &Path) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "idleTimeout": "5m",
         "noWebmcp": true,
-        "plugins": {"celeris-credential": {"command": bridge, "args": ["bridge"]}},
+        "plugins": [{"name":"celeris-credential", "command":bridge,
+                     "args":["bridge"], "capabilities":["credential.read"]}],
     }))
     .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_is_an_explicit_credential_read_provider() {
+        let config: serde_json::Value =
+            serde_json::from_slice(&segment_upstream_config(Path::new("/bin/bridge"))).unwrap();
+        assert_eq!(
+            config["plugins"],
+            json!([{
+                "name":"celeris-credential", "command":"/bin/bridge",
+                "args":["bridge"], "capabilities":["credential.read"]
+            }])
+        );
+    }
+
+    #[test]
+    fn auth_login_uses_name_and_item_reference() {
+        assert_eq!(
+            login_argv("lease-1", "https://example.com/"),
+            [
+                "auth",
+                "login",
+                "celeris-credential",
+                "--credential-provider",
+                "celeris-credential",
+                "--item",
+                "lease-1",
+                "--no-navigate",
+                "--url",
+                "https://example.com/",
+            ]
+        );
+    }
+
+    #[test]
+    fn origin_probe_is_explicitly_allowed_but_observation_is_denied() {
+        let value: serde_json::Value = serde_json::from_slice(&segment_policy()).unwrap();
+        assert_eq!(value["default"], "deny");
+        let allow = value["allow"].as_array().unwrap();
+        assert!(allow.contains(&json!("url")));
+        assert!(!allow.contains(&json!("snapshot")));
+        assert!(!allow.contains(&json!("gettext")));
+    }
+
+    #[tokio::test]
+    async fn session_starter_receives_private_fd3_and_uses_stable_paths() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("fake-browser.py");
+        std::fs::write(
+            &executable,
+            concat!(
+                "#!/usr/bin/env python3\n",
+                "import json, os, sys\n",
+                "args = sys.argv[1:]\n",
+                "assert args[args.index('--config') + 1].endswith('/upstream.json')\n",
+                "assert args[args.index('--action-policy') + 1].endswith('/policy.json')\n",
+                "assert os.read(3, 128) == b'binding-token'\n",
+                "print(json.dumps({'success': True, 'data': {'url': 'https://example.com/'}}))\n",
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let domains = vec!["example.com".to_owned()];
+        let segment = Segment {
+            executable: &executable,
+            credentiald_runtime: None,
+            runtime: temp.path(),
+            session_id: "session-test",
+            allowed_domains: &domains,
+            origin: "https://example.com",
+        };
+        assert!(
+            substrate(
+                &segment,
+                &["open", "https://example.com/"],
+                Some("binding-token")
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn export_worker_settings_for_real_browser_check() {
+        let Some(output) = std::env::var_os("BROWSER_WIRING_EXPORT") else {
+            return;
+        };
+        let output = PathBuf::from(output);
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(
+            output.join("upstream.json"),
+            segment_upstream_config(Path::new("/configured/by/check/celeris-credentiald")),
+        )
+        .unwrap();
+        std::fs::write(output.join("policy.json"), segment_policy()).unwrap();
+        std::fs::write(
+            output.join("auth-argv.json"),
+            serde_json::to_vec(&login_argv("LEASE", "ORIGIN/")).unwrap(),
+        )
+        .unwrap();
+    }
 }

@@ -35,10 +35,14 @@ gui/scripts/browser-live-e2e.sh
 
 証跡は `01-waiting-for-auth.png` から `11-task-failed.png`、`live-view-owner.png`、`live-view-non-owner.png`、`live-view-unauthenticated.png`、`live-view-ws.json`、`sentinel-scan.txt`、各ログ。WS の単体負例は `gui/test/unit/browser-live-relay.test.ts` にあり、操作 message 非転送・認証区間での frame 非転送・grant 失効も検査する。
 
+`wu/live-gui/artifacts/g14-final/` の再実行では Playwright 4 件が通り、本人の dashboard・WS frame、他 session 403、未認証 401、logout 後の WS 切断を確認した。`sentinel-scan.txt` は 91 ファイルで 0 hit。登録画面と再開の screenshot も同じ directory にある。
+
 ## 検証の範囲
 
 GUI と daemon、broker、dashboard、Chromium は実物。wait の発行と `browser_updated` event は試験が supervisor の代わりに作るため、この試験は worker の credential plugin 接続の成功を意味しない。
 
-実 agent-browser の auth login は別の `scripts/browser-auth-login-check.py` で診断する。現行 worker の plugin config（map）、argv（`--credential-ref` と positional name の欠落）、FD 3 の渡し方は 0.38.1 と非互換で fail closed になる。さらに segment policy の `url` 欠落と policy パス変更による session 再起動がある。試験専用の修正・token 受け渡しを使ったローカル HTTPS fixture の login と lease 再使用拒否は確認できたが、**worker の結線は未修正であり、Phase 2 全体の実機認証成功とは扱わない**。
+実 agent-browser の auth login は `scripts/browser-auth-login-check.py` で検証する。worker が出力する plugin 設定、segment policy、argv を `BROWSER_WIRING_EXPORT=<証跡>/worker-settings cargo test -p task-worker --lib browser_credential::tests::export_worker_settings_for_real_browser_check -- --exact` で生成し、`--worker-settings <証跡>/worker-settings` を付けて実行する。試験は設定に Chromium の実行パスと自己署名 HTTPS fixture 用の `ignoreHttpsErrors` だけを加える。scratch HOME・XDG_RUNTIME_DIR・socket directory と 27901 番の fixture を使い、本番設定・DB・7700/7710 番は使わない。
+
+`wu/live-gui/artifacts/auth-wiring/production5/` では、worker 生成設定で login 成功、同じ session の再起動後に同じ lease が broker の `used` 判定で拒否、secret sentinel 0 件を確認した。`worker-verification.json`、`broker-journal.jsonl`、`sentinel-scan.json` が証跡である。前の診断の v1/v2/v2b/v3 も同じ script が記録するが、production5 の worker 項目が今回の修正の判定である。
 
 namespace は本人専用にする。同一 UID の直接 loopback 接続に対する隔離はなく、別 network namespace・外部 host からの到達不能はこの試験では未検証。persistent auth、GUI 内の独自 frame 描画、container/egress 隔離は対象外。

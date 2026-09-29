@@ -44,8 +44,8 @@ def reply(ok, **data):
 
 
 verb = command[0]
-action = "geturl" if command[:2] == ["get", "url"] else ACTION.get(verb)
-if action != "geturl" and action not in policy["allow"]:
+action = "url" if command[:2] == ["get", "url"] else ACTION.get(verb)
+if action not in policy["allow"]:
     print(json.dumps({"success": False, "error": "Action denied by policy"}))
     sys.exit(1)
 
@@ -63,17 +63,18 @@ if verb == "open":
         sys.exit(1)
     state["url"] = url
     reply(True)
-if action == "geturl":
+if action == "url":
     reply(True, url=state["url"])
 if verb == "snapshot":
     reply(True, text=site.get("pages", {}).get(state["url"], ""))
 if verb == "auth":
     config = json.loads(pathlib.Path(opt("--config")).read_text())
-    plugin = config["plugins"][command[command.index("--credential-provider") + 1]]
+    provider = command[command.index("--credential-provider") + 1]
+    plugin = next(p for p in config["plugins"] if p["name"] == provider)
     request = {"protocol": "agent-browser.plugin.v1", "type": "credential.resolve",
                "capability": "credential.read",
                "request": {"profileName": "celeris-credential",
-                           "itemRef": command[command.index("--credential-ref") + 1],
+                           "itemRef": command[command.index("--item") + 1],
                            "url": state["url"]}}
     result = subprocess.run([plugin["command"], *plugin["args"]], input=json.dumps(request).encode(),
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, pass_fds=(3,),

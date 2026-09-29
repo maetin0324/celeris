@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
 use task_core::browser_wait::{
     BrowserDecision, BrowserWait, BrowserWaitStore, CredentialRecord, HumanDecision, NewBrowserWait,
@@ -122,6 +123,52 @@ fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
     ] {
         assert!(prompt.contains(expected), "missing {expected}");
     }
+}
+
+#[test]
+fn credential_segment_keeps_paths_when_policy_changes_to_harness() {
+    let temp = tempfile::tempdir().unwrap();
+    let policy = temp.path().join("policy.json");
+    write_private(&policy, crate::browser_credential::segment_policy()).unwrap();
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&policy).unwrap()).unwrap();
+    assert!(
+        before["allow"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("auth_login"))
+    );
+    replace_private(&policy, br#"{"default":"deny","allow":["close","launch"]}"#).unwrap();
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&policy).unwrap()).unwrap();
+    assert!(
+        !after["allow"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("auth_login"))
+    );
+    assert_eq!(
+        std::fs::metadata(&policy).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let close = segment_close_argv(Path::new("/bin/browser"), temp.path(), "session");
+    assert_eq!(close[2], temp.path().join("upstream.json").into_os_string());
+    assert_eq!(close[6], policy.into_os_string());
+}
+
+#[test]
+fn credential_harness_policy_removes_plugin_and_auth_actions() {
+    let policy = serde_json::json!({"default":"deny", "allow":[
+        "launch", "close", "navigate", "snapshot", "gettext", "screenshot",
+        "download", "auth_login", task_core::browser::CREDENTIAL_PLUGIN_ACTION
+    ]});
+    let after = credential_harness_policy(&serde_json::to_vec(&policy).unwrap()).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&after).unwrap();
+    assert_eq!(value["default"], "deny");
+    assert_eq!(
+        value["allow"],
+        serde_json::json!(["launch", "close", "navigate"])
+    );
 }
 
 #[test]

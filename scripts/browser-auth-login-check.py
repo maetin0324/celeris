@@ -4,9 +4,9 @@
 Local-only evidence run (no network, no LLM). It starts a self-signed HTTPS login fixture on
 127.0.0.1, a scratch celeris-credentiald (scratch HOME and XDG_RUNTIME_DIR, never the real
 ~/.config/celeris), registers a sentinel credential, then drives the pinned binary with
-three variants:
+legacy diagnostic variants and, with --worker-settings, the worker-generated wiring:
 
-  1 celeris-shape   argv and upstream config exactly as crates/task-worker/src/browser_credential.rs
+  1 celeris-shape   pre-fix argv and upstream config from browser_credential.rs
   2 corrected-cli   upstream's documented argv/plugin-array shape; FD 3 delivered the Celeris way
                     (pipe on the `auth login` CLI process only). A diagnostic wrapper records
                     whether the plugin process actually sees FD 3.
@@ -93,6 +93,8 @@ def main():
     ap.add_argument("--chromium", required=True)
     ap.add_argument("--credentiald", required=True)
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--worker-settings", type=Path,
+                    help="task-worker test export: upstream.json, policy.json, auth-argv.json")
     args = ap.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -265,7 +267,59 @@ def main():
 
     sessions = []
     try:
-        # Variant 1: exactly what browser_credential.rs generates.
+        if args.worker_settings:
+            settings = args.worker_settings
+            worker_cfg = json.loads((settings / "upstream.json").read_text())
+            worker_cfg["plugins"][0]["command"] = args.credentiald
+            worker_cfg.update(browser_cfg)
+            wc = scratch / "upstream-worker.json"
+            wc.write_text(json.dumps(worker_cfg))
+            wp = scratch / "policy-worker.json"
+            wp.write_bytes((settings / "policy.json").read_bytes())
+            argv = json.loads((settings / "auth-argv.json").read_text())
+            assert argv == ["auth", "login", PLUGIN, "--credential-provider", PLUGIN,
+                            "--item", "LEASE", "--no-navigate", "--url", "ORIGIN/"]
+            ws = "authchk-worker-" + secrets.token_hex(4)
+            sessions.append((ws, "policy-worker.json"))
+            tok, lid = lease("worker", ws)
+            login_argv = [lid if a == "LEASE" else ORIGIN + "/" if a == "ORIGIN/" else a for a in argv]
+            red = [(lid or "-", "<lease>")]
+            opened = ab("worker", ws, wc, "policy-worker.json", ["open", ORIGIN + "/"], token=tok)
+            before = ab("worker", ws, wc, "policy-worker.json", ["get", "url"])
+            logged = ab("worker", ws, wc, "policy-worker.json", login_argv, token=tok, redact=red)
+            after = ab("worker", ws, wc, "policy-worker.json", ["get", "url"])
+            login_ok = fixture_state["login_ok"] == 1
+            # The production worker replaces the policy atomically at this same path.
+            replacement = scratch / "policy-worker.next"
+            replacement.write_text(json.dumps(obs_policy))
+            replacement.replace(wp)
+            body = ab("worker-after-policy", ws, wc, "policy-worker.json", ["get", "text", "body"])
+            marker_ok = marker in body.stdout
+            # Restore the segment policy at the same path; the lease must still reject replay.
+            replacement.write_bytes((settings / "policy.json").read_bytes())
+            replacement.replace(wp)
+            ab("worker-replay", ws, wc, "policy-worker.json", ["close"])
+            time.sleep(0.5)  # 0.38.1 removes the old daemon socket asynchronously.
+            for _ in range(3):
+                reopened = ab("worker-replay", ws, wc, "policy-worker.json",
+                              ["open", ORIGIN + "/"], token=tok)
+                if reopened.returncode == 0:
+                    break
+                time.sleep(0.5)
+            replay_origin = ab("worker-replay", ws, wc, "policy-worker.json", ["get", "url"])
+            replay = ab("worker-replay", ws, wc, "policy-worker.json",
+                        login_argv, token=tok, redact=red)
+            result = {"agent_browser": "0.38.1", "worker_settings": str(settings),
+                      "open_exit": opened.returncode, "origin_before_exit": before.returncode,
+                      "auth_login_exit": logged.returncode, "origin_after_exit": after.returncode,
+                      "fixture_login_ok": login_ok, "marker_verified": marker_ok,
+                      "reopen_exit": reopened.returncode,
+                      "replay_origin_exit": replay_origin.returncode,
+                      "replay_exit": replay.returncode}
+            (out / "worker-verification.json").write_text(json.dumps(result, indent=2))
+            note(step="worker-verification", **result)
+
+        # Variant 1: the pre-fix worker wiring (kept as a negative control).
         s1 = "authchk-v1-" + secrets.token_hex(4); sessions.append((s1, "policy-credential.json"))
         c1 = cfg_file("upstream-credential.v1.json",
                       {PLUGIN: {"command": args.credentiald, "args": ["bridge"]}})
@@ -372,6 +426,21 @@ def main():
                                                             "hits": hits, "scratch_files": files}, indent=1))
         print(json.dumps({"sentinel_hits": hits, "scratch": str(scratch)}))
         shutil.rmtree(scratch, ignore_errors=True)  # scratch key, vault and browser profile
+    if args.worker_settings:
+        journal = out / "broker-journal.jsonl"
+        result["replay_broker_used"] = any(
+            (entry := json.loads(line)).get("action") == "deny"
+            and entry.get("decision_code") == "used"
+            and entry.get("run_id") == "run-worker"
+            for line in journal.read_text().splitlines()
+        ) if journal.exists() else False
+        (out / "worker-verification.json").write_text(json.dumps(result, indent=2))
+        if not (result["open_exit"] == result["origin_before_exit"] == result["auth_login_exit"]
+                == result["origin_after_exit"] == 0 and result["fixture_login_ok"]
+                and result["marker_verified"] and result["reopen_exit"] == 0
+                and result["replay_origin_exit"] == 0
+                and result["replay_exit"] != 0 and result["replay_broker_used"] and not hits):
+            raise SystemExit("worker credential wiring verification failed")
 
 
 if __name__ == "__main__":

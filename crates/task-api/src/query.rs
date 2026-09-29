@@ -351,6 +351,8 @@ mod tests {
                 action: task_core::UnitGateAction::Promoted,
                 depth: 2,
                 threshold: 7,
+                score: 8,
+                reason: "compound/score".into(),
             },
             Event::DecisionAnswered {
                 id: "d".into(),

@@ -272,6 +272,8 @@ pub fn rebuild_work_units_and_runs(
                         "plan_issue" => Some(WorkUnitBlockedReason::PlanIssue),
                         "dependency_failed" => Some(WorkUnitBlockedReason::DependencyFailed),
                         "limit" => Some(WorkUnitBlockedReason::Limit),
+                        // ADR-0079 Phase R2a: 木の上限・子 task にできない leaf の決定の要求を待つ。
+                        "decision" => Some(WorkUnitBlockedReason::Decision),
                         _ => wu.blocked_reason,
                     }
                 } else {

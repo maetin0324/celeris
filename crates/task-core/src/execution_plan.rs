@@ -2338,6 +2338,10 @@ pub enum WorkUnitBlockedReason {
     /// `Trigger::Continue{why: Replan}` で即座に Task を Ready へ戻す（Blocked のままにはしない）ので、
     /// この行が実際に `Task.status == Blocked` と一緒に残るのは replan の上限を使い切ったときだけ。
     PlanIssue,
+    /// ADR-0079 D3 / D4 (3)（Phase R2a）: 人への決定の要求（`kind: limit` / `leaf_too_large`）を待つ。
+    /// 木の上限を超える unit、子 task にできない深さの compound な leaf。同じ段階の他の unit・兄弟は
+    /// 止めない（工程の失敗にも質問にも数えない）。回答で再開するのは R3a。
+    Decision,
 }
 
 impl WorkUnitBlockedReason {
@@ -2347,6 +2351,7 @@ impl WorkUnitBlockedReason {
             WorkUnitBlockedReason::DependencyFailed => "dependency_failed",
             WorkUnitBlockedReason::Limit => "limit",
             WorkUnitBlockedReason::PlanIssue => "plan_issue",
+            WorkUnitBlockedReason::Decision => "decision",
         }
     }
 
@@ -2356,6 +2361,7 @@ impl WorkUnitBlockedReason {
             "dependency_failed" => Some(WorkUnitBlockedReason::DependencyFailed),
             "limit" => Some(WorkUnitBlockedReason::Limit),
             "plan_issue" => Some(WorkUnitBlockedReason::PlanIssue),
+            "decision" => Some(WorkUnitBlockedReason::Decision),
             _ => None,
         }
     }
@@ -2723,9 +2729,13 @@ pub fn runnable_work_units(units: &[WorkUnitRow], in_flight: usize, limit: usize
         .filter(|u| u.kind != WorkUnitKind::Task)
         .collect();
 
-    let has_failed_or_blocked = in_phase
-        .iter()
-        .any(|u| matches!(u.status, WorkUnitStatus::Failed | WorkUnitStatus::Blocked));
+    // ADR-0079 D5（Phase R2a）: 人への決定を待つ unit（`blocked(decision)`）は段階の完了を止めるが、同じ段階の
+    // 他の unit は止めない（/1・/2 にこの理由は無いので従来どおり）。
+    let has_failed_or_blocked = in_phase.iter().any(|u| {
+        u.status == WorkUnitStatus::Failed
+            || (u.status == WorkUnitStatus::Blocked
+                && u.blocked_reason != Some(WorkUnitBlockedReason::Decision))
+    });
 
     let mut candidates: Vec<&WorkUnitRow> = in_phase
         .iter()

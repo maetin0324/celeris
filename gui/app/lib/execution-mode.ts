@@ -13,10 +13,21 @@ export const GATE_SOURCE_LABEL: Record<GateSource, string> = {
   human: "人の明示",
 };
 
+/**
+ * 木の子 task の gate か（celeris ADR-0079 D4 (1)、Phase R2a: `depth` を持つ判定。閾値を深さで上げ、
+ * `[execution] gate = "shadow"` でも採用される）。
+ */
+export function isTreeGate(decision: ExecutionGateDecision | null | undefined): boolean {
+  return decision?.depth != null && decision.depth >= 2;
+}
+
 /** 1 行の説明: `atomic（規則表、shadow）— atomic/score` のように出す。判定が無ければ `null`。 */
 export function gateDecisionLine(decision: ExecutionGateDecision | null | undefined): string | null {
   if (!decision) return null;
   const parts = [GATE_SOURCE_LABEL[decision.source]];
+  if (isTreeGate(decision)) {
+    parts.push(`木の子: 深さ ${decision.depth}・閾値 ${decision.threshold}、常に採用`);
+  }
   if (decision.shadow) parts.push("shadow: 記録だけ");
   return `${decision.mode}（${parts.join("、")}）— ${decision.rule_id}`;
 }

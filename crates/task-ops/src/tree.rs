@@ -7,6 +7,9 @@
 //! - [`unit_mirror`]: 子の状態 → unit の状態（D4 (5)）。
 //! - [`answered_decisions`] / [`child_objective`]: 子の `objective` の末尾に足す固定の書式（D4 (4)・D7）。
 //!
+//! - Phase R2a: [`tree_counters`]（木の上限に照らす数を store から集める。D3）、[`decision_path`]
+//!   （決定の要求の path。D7）、[`open_decision`]（同じ key の未回答の決定が木にあるか）。
+//!
 //! I/O は `TaskStore` の読み取りだけ。
 
 use task_core::{
@@ -41,7 +44,7 @@ pub fn unit_mirror(child_status: Status) -> Option<(WorkUnitStatus, &'static str
 }
 
 /// 親の「実効の」repos（親が持てばそれ、無ければ案件の primary。子の既定と同じ規則。ADR-0043 D2）の名前。
-fn parent_repo_names(store: &dyn TaskStore, parent: &Task) -> Result<Vec<String>, OpsError> {
+pub fn parent_repo_names(store: &dyn TaskStore, parent: &Task) -> Result<Vec<String>, OpsError> {
     if !parent.repos.is_empty() {
         return Ok(parent.repos.iter().map(|r| r.name.clone()).collect());
     }
@@ -122,6 +125,69 @@ pub fn ancestors_with_self(store: &dyn TaskStore, parent: &Task) -> Result<Vec<T
     }
     chain.reverse();
     Ok(chain)
+}
+
+/// ADR-0079 D3（Phase R2a）: 木（`root_id` とその子孫）の上限に照らす数を store の読み取りだけで
+/// 集める（`task_core::tree::tree_counters`。run・トークン・定価は `runs` の索引、leaf は `work_units`、
+/// replan は `execution_plans` の版の数）。
+pub fn tree_counters(
+    store: &dyn TaskStore,
+    root_id: TaskId,
+) -> Result<task_core::TreeCounters, OpsError> {
+    let mut nodes = Vec::new();
+    for task in store.tree_tasks(root_id)? {
+        nodes.push(task_core::TreeNodeFacts {
+            task_id: task.id,
+            depth: task_core::tree::depth_of(&task),
+            runs: store.runs_for_task(task.id)?,
+            work_units: store.work_units_for(task.id)?,
+            plan_versions: u32::try_from(store.execution_plan_list(task.id)?.len())
+                .unwrap_or(u32::MAX),
+        });
+    }
+    Ok(task_core::tree::tree_counters(Some(root_id), &nodes))
+}
+
+/// ADR-0079 D7（Phase R2a）: 決定の要求の `path`（root から `node` まで）。各段は task の id と題名、
+/// 次の節点が属する段階（`stage`）、その節点を作った親の unit（`unit`。root は無し）。
+pub fn decision_path(
+    store: &dyn TaskStore,
+    node: &Task,
+) -> Result<Vec<task_core::DecisionPathEntry>, OpsError> {
+    let chain = ancestors_with_self(store, node)?;
+    let mut out = Vec::with_capacity(chain.len());
+    for (i, t) in chain.iter().enumerate() {
+        let stage = chain
+            .get(i + 1)
+            .and_then(|next| next.tree.as_ref())
+            .and_then(|tr| tr.parent_unit.as_ref())
+            .map(|u| u.stage.clone());
+        let unit = t
+            .tree
+            .as_ref()
+            .and_then(|tr| tr.parent_unit.as_ref())
+            .map(|u| u.unit_key.clone());
+        out.push(task_core::DecisionPathEntry {
+            task_id: t.id,
+            title: t.title.clone(),
+            stage,
+            unit,
+        });
+    }
+    Ok(out)
+}
+
+/// ADR-0079 D3（Phase R2a）: 木（`root_id`）に同じ `key` の未回答の決定があるか（木の上限の決定は木に
+/// 1 件だけ開く。同じ超過で tick ごとに増やさない）。
+pub fn open_decision(
+    store: &dyn TaskStore,
+    root_id: TaskId,
+    key: &str,
+) -> Result<Option<DecisionRow>, OpsError> {
+    Ok(store
+        .decisions_list(Some(root_id))?
+        .into_iter()
+        .find(|r| r.key == key && r.status == DecisionStatus::Open))
 }
 
 /// D4 (4) / D7: 子の `objective`（unit の `objective` の後に、祖先の path と回答済みの決定を固定の書式で）。

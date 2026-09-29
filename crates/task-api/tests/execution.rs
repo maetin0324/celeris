@@ -374,6 +374,7 @@ fn gate_decision(mode: task_core::ExecutionMode) -> task_core::ExecutionGateDeci
         signals: vec![],
         policy_version: task_core::EXECUTION_GATE_POLICY_VERSION.to_string(),
         shadow: false,
+        depth: None,
     }
 }
 
@@ -682,6 +683,7 @@ fn routed_task(status: Status) -> task_core::Task {
             signals: Vec::new(),
             policy_version: "exec-gate/1".to_string(),
             shadow: true,
+            depth: None,
         }),
         execution_hint: Some(task_core::ExecutionHintSpec {
             mode: task_core::ExecutionMode::Compound,

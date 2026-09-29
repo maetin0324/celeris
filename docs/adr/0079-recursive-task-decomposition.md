@@ -849,3 +849,82 @@ R1c（子のブランチの基点、統合 WU での子のブランチの merge�
 10. **受け入れ条件 (e)**（採用した done の子の成果が既に main にあるとき統合は飛ばす）は、採用（adopt）が R5b なので、統合の冪等性
     （`integration::tests::child_task_branches_are_optional_and_idempotent`: 既に入っている子のブランチは `skipped`）で確かめた。採用の入口の
     試験は R5b。
+
+## 付記: R2a 実装時の逸脱・明確化（2026-09-29）
+
+R2a（深さの gate の閾値、木の子は shadow でも採用、計画の採用時の unit の gate、木の上限の数え上げと超過の決定の要求）で決めたこと。
+migration は足していない（schema 31 のまま。`work_units.blocked_reason` は制約の無い TEXT なので新しい値 `decision` を足すだけ）。
+
+1. **閾値と記録**: `task_core::execution_gate::decide_at(.., GateThreshold)`（`decide` は `GateThreshold::ROOT` = 閾値 5・深さなしで呼ぶ同じ関数）。
+   閾値は `task_core::tree::gate_threshold(depth, [execution.tree] gate_depth_step)`（`5 + step × (d − 1)`。設定は 0..=10、既定 2）。
+   `ExecutionGateDecision` に `depth: Option<u32>` を足した（木の子だけ `Some`。root・木でない task は `None` で出力しない = 既存の JSON は 1 バイトも
+   変わらない）。**木の子**は `tree.parent_unit` を持つ task（`task_core::tree::is_tree_child`）。root の gate は `[execution] gate` のまま（U-R5）。
+2. **木の子は shadow でも採用**（D4 (1)）: 木の子の判定は `shadow = false`・`depth = Some(d)` で記録し、compound なら `[execution] gate` に関わらず
+   planner に進む（`dispatch_one` の `tree_child_compound`）。**`gate = "off"` でも木の子は判定して採用する**（D4 の理由〈分けると決めた木を途中で
+   1 run に潰さない〉は off でも同じ。root は off なら従来どおり判定しない）。GUI は `depth` で見分けて「木の子: 深さ d・閾値 t、常に採用」を出す
+   （`~/lib/execution-mode.ts` の `gateDecisionLine` / `~/lib/task-execution.ts` の `gateModeLabel`）。
+3. **unit の view**（D4 (3)、`task_core::tree::unit_view`）: 親の Task を複製し、題名・目的・受け入れ（leaf は `done_when` を reviewer・`checks` を
+   command の条件に写す）・予算（leaf は unit の `budget`、無ければ D18 の既定 `max(親, 30 turns / 1,800 秒)`、kind task は親の予算 = 子が継ぐ予算）・
+   genre（leaf は `harness`、kind task は unit の `genre`、無ければ親）を差し替える。**`routing` は unit の `features` のヒントだけ**（親のヒント・人の
+   明示・CoS のヒントは継がない。継ぐと root の compound の理由がすべての unit に写る）、印（labels）は持たない。判定は深さ `d + 1` の閾値、
+   `shadow = false`。
+4. **表の読み方**（`task_core::tree::unit_gate` / `apply_unit_gates`）:
+   - 構造上の理由（表の 5 行目、`structural_reasons`）= human の acceptance・実効の `needs_decisions`（unit か `stage:<段階>` を `needed_before` に持つ
+     決定を含む）・`adopt`・親と違う `genre`・親の実効の repos と違う `repos` の集合・**親の skills に無い skill（「別の部署の skill が要る」の決定的な
+     代わり。matching を引かない）**。
+   - 下げる（表の 6 行目）の leaf の基準は kind task の unit について (a) 子が継ぐ予算（親の予算）が leaf の 1 run の上限（`work_unit_max_turns` 80 /
+     `work_unit_max_wall_secs` 3,600）以内、(b) `repos` が高々 1、(c) `Check::Command` の acceptance が 1 本以上（gate の atomic は 1 run の見込み）。
+     **基準を満たさなければ task のまま（`kept_task`、理由に「leaf criteria not met」）**。表は「構造上の理由なし・基準を満たす → 下げる」だけを
+     書いているので、満たさないときは宣言どおりにした（黙って leaf に押し込まない）。
+   - 上げた leaf（`promote_to_task`）: `checks` を command の acceptance に、`done_when` と `context.paths` は目的の末尾に固定の書式
+     （`## 完了の条件（計画の leaf から引き継ぎ。ADR-0079 D4 (3)）`・`対象のパス（計画の leaf から引き継ぎ）:`）で移す。**`done_when` を reviewer の
+     acceptance にはしない**（子の最終レビューに reviewer run を足さない。U-R7）。`context.repo` → `repos`。
+   - 下げた task（`demote_to_leaf`）: kind は段階の kind、acceptance の文 → `done_when`、command の条件 → `checks`、`repos`（高々 1）→ `context.repo`。
+   - 上げる・下げるを当てた spec を**採用する計画の spec**にする（`ExecutionPlanned` に入るので replay は同じ行を作る）。当てた spec が上限以外の
+     理由で検証に落ちたら（通常起きない）planner の宣言どおりに採用し、上げる・下げるは当てない（警告）。replan で持ち越す done の unit には
+     gate をかけない（D17 の不変条件）。
+   - **人の計画（`PUT`、origin human）には unit の gate をかけない**（入口の API は R1a 付記 5. のとおりまだ tree 無効で検証する。R5b で配線するとき
+     に決める）。
+5. **`UnitGateOverridden` の欄**: `score`（view の gate のスコア）と `reason`（規則 id・閾値・構造上の理由・基準の不足の 1 行）を足した
+   （`serde(default)`。R1a の Event は本番で未発行）。宣言と食い違った unit（`promoted` / `demoted` / `kept_task` / `decision`）ごとに 1 件、
+   採用の**直後の 1 トランザクション**（`Dispatcher::apply_tree_plan_holds`、`work_units_apply`）で決定の要求・unit の止めと一緒に積む
+   （採用〈`ExecutionPlanned`〉と同じトランザクションではない。子の生成〈R1b 付記 1.〉と同じく tick の中の続きの書き込み）。
+6. **止め方 = `blocked(decision)`**: `WorkUnitBlockedReason::Decision`（`"decision"`）を足した。止めるのは `pending` / `ready` の行だけ
+   （`WorkUnitTransitioned{reason: "decision"}`。replay は reason から同じ値を作る）。scheduler は `blocked(decision)` を**工程の失敗にも質問にも
+   数えず**（`settle_phase`）、**同じ段階の他の unit を止めない**（`runnable_work_units` の「失敗・blocked があれば ready を起こさない」から外した。
+   /1・/2 にこの理由は無いので従来どおり）。段階はその unit が done にならないので完了しない（D5）。親は `ready` のまま run を起こさない
+   （`WuDispatchGate::Skip`、子待ちと同じ）。回答で `ready` に戻すのは R3a。
+7. **計画の上限（段階の数・段階あたりの unit・計画あたりの子 task・`max_depth`）**: D3 の「検証で拒否」と D4 (3) の表の 7 行目「検証で拒否 → 再試行 →
+   それでも同じなら決定の要求」を合わせて、**1 回目の試行は従来どおり不正な試行**（planner に理由を渡して再試行）、**最後の試行**（ADR-0072 D14 の
+   2 回目）で違反がこの 4 つだけなら、その 4 つを外した上限（`relaxed_tree_plan_limits`）で採用し、超えた分の unit を `kind: limit` の決定で止める
+   （atomic に倒さない・黙って切らない。計画の unit は 1 つも消さない）。どれを止めるかは `task_core::tree::plan_limit_holds`（純粋関数、計画の順で
+   上限の内に入るものを残す）: 段階の数 → `max_stages` 番目より後の段階の unit、段階あたり → 段階ごとに先頭から上限個より後、子 task → 先頭から
+   上限個より後、`max_depth` → 子 task を持てない深さの kind task の unit すべて。1 つの unit は 1 件の決定で止まる。unit の gate の上げる
+   （子 task の数を増やしうる）も同じ規則で止める。他の不正（形・依存・予算…）が混じれば従来の経路（/3 の 2 回不正の `plan_invalid` は R2b）。
+8. **木の leaf**（`max_tree_leaves`）: 計画の採用のとき、木（root とその子孫）の生涯の leaf の数（`work_units` の行のうち kind task・統合・repair と
+   `blocked(decision)` を除く）に、この計画で新しく作る leaf（既存の key に無い leaf）を足して超える分を計画の順で止める（`limit:max_tree_leaves`）。
+9. **木の run・トークン・replan**（`max_tree_runs` / `max_tree_tokens` / `max_tree_replans`）: dispatch が run（worker・planner・repair・atomic の
+   子の run。統合と「何もしない」は数えない）を起こす直前に `Dispatcher::tree_run_limit_hold` が木の数（`task_ops::tree::tree_counters`）を
+   `task_core::tree::run_limit_breach` に照らす（runs → tokens → replan の planner run の replans の順。reviewer の run は数えない）。超えるなら
+   **run を起こさず**（Task の状態は変えない。`ready` のまま、並列の 2 本目以降なら走っている兄弟はそのまま）、`kind: limit` の決定を**木に 1 件だけ**
+   出す（同じ key〈`limit:max_tree_runs` など〉の未回答の決定が木にあれば出さない = tick ごとに増やさない）。決定は超えようとした節点の events に
+   積み、`needed_before: ["self"]`（D7 の `self` を daemon の節点の止めにも使う）、`path` は root からその節点まで。木全体の数なので、超えた後は
+   木のどの節点も新しい run を起こさない（走っている run・判定・統合は止めない）。§7 R2a (d) の「兄弟の subtree は走る」は、先に走り出した兄弟と
+   in-flight の仕事が続くことで満たす（受け入れの試験 `tree_limit_breach_stops_only_that_subtree`）。木の節点 = 木の子、または /3 の計画を持つ root。
+   `[execution.tree] enabled = false` なら何もしない。
+10. **`max_parallel_child_tasks` は決定の要求にしない**: D3 の表のとおり「作らずに待つ（pending / ready のまま）」（R1b の実装のまま）。上限は
+    同時の数で、仕事は落ちず、空きができれば作られる（人に聞くことが無い）。依頼の「同時の子も limit の決定」は D3 と食い違うので D3 に従った
+    （`concurrent_children_limit_waits_without_a_decision` で待つだけで決定・質問が出ないことを確かめた）。
+11. **数え上げ**（`task_core::tree::{TreeCounters, DepthCounters, TreeNodeFacts, tree_counters}`、store の読み取りは `task_ops::tree::tree_counters` と
+    新しい `TaskStore::tree_tasks(root_id)`〈`id = root OR root_id = root`〉）: 節点数、leaf、run（reviewer を除く）、reviewer の run、replan（節点ごとの
+    `計画の版 − 1` の和）、トークン（input + output、cache は含めない）、定価（`cost_usd_complete`）と、**深さごとの run（role ごと）・reviewer の run と
+    reviewer の定価・トークン・定価**（U-R7 の指標の元。API に出すのは R4a）。
+12. **決定の形**（`task_core::tree::{limit_decision, leaf_too_large_decision}`）: id は daemon の ULID、key は daemon が振る `limit:<設定名>[:<段階>]` /
+    `leaf_too_large:<unit>`（計画の key の書式 `[a-z0-9-]` とは別。計画の決定と衝突しない）、`origin: daemon`、`raised_by.run_id` は planner run
+    （計画の採用のとき）か無し（dispatch のとき）。選択肢は limit が「今回だけ上限を上げて続ける（`raise-once`）/ この subtree を replan で小さく
+    する（`replan`）/ この subtree を取り下げる（`withdraw`）」、leaf_too_large が「leaf のまま 1 run で試す / replan で小さな leaf に分ける /
+    取り下げる」。推奨はどちらも `replan`。通知・受信箱・回答の API と回答の効き目（止めた unit を `ready` に戻す、`raise-once` で上限を足す）は R3a。
+13. **既存の試験の fixture**: R1b / R1c の試験の kind task の unit は小さく atomic なので、R2a の unit の gate で leaf に下げられる。子 task のまま
+    残す構造上の理由として fixture に `skills: ["tree-fixture"]`（親に無い skill）を足した（孫の unit は別の skill）。試験の意図は変えていない。
+14. **idle**: 決定を待って止めた仕事を持つ木は `ready` の task を残すので、`--until-idle` の idle にならない（子待ちの親〈R1b〉と同じ扱い。本番の
+    daemon は `until_idle` を使わない）。黙って止まっていないことの検出（D10）は R3b。

@@ -6245,7 +6245,7 @@
           "type": "object"
         },
         {
-          "description": "ADR-0079 D4 (3): unit の gate が planner の宣言と食い違い、daemon が扱いを決めた。\n状態は変えない（発行は R2a）。",
+          "description": "ADR-0079 D4 (3): unit の gate が planner の宣言と食い違い、daemon が扱いを決めた。\n状態は変えない（Phase R2a で計画の採用の直後に発行する。上げた・下げた unit の形は採用した\n計画の spec に既に入っている）。",
           "properties": {
             "action": {
               "$ref": "#/$defs/UnitGateAction"
@@ -6264,6 +6264,16 @@
             },
             "plan_id": {
               "type": "string"
+            },
+            "reason": {
+              "description": "Phase R2a: 判断の理由（規則 id・構造上の理由・leaf の基準の不足など。人が読む 1 行）。",
+              "type": "string"
+            },
+            "score": {
+              "default": 0,
+              "description": "Phase R2a: unit の view の gate のスコア（`ExecutionGateDecision.score`）。",
+              "format": "int32",
+              "type": "integer"
             },
             "threshold": {
               "description": "その深さの gate の閾値（`task_core::tree::gate_threshold`）。",
@@ -6557,6 +6567,15 @@
     "ExecutionGateDecision": {
       "description": "D13: `Event::ExecutionGated` の中身、および `Task.routing.execution`。",
       "properties": {
+        "depth": {
+          "description": "ADR-0079 D4 (1)（Phase R2a）: 木の子 task（depth ≥ 2）の判定なら、その深さ（task の層数）。\n閾値は `threshold`（`5 + gate_depth_step × (depth − 1)`）。木の子の判定は `[execution] gate` が\n`shadow` / `off` でも採用される（`shadow = false`）。root・木でない task は `None`（出力しない。\n既存の JSON は 1 バイトも変わらない）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/ExecutionMode"
         },
@@ -6571,7 +6590,7 @@
           "type": "integer"
         },
         "shadow": {
-          "description": "`[execution] gate = \"shadow\"` のときの判定なら `true`（記録だけで実行には使わない。D13）。",
+          "description": "`[execution] gate = \"shadow\"` のときの判定なら `true`（記録だけで実行には使わない。D13）。\nADR-0079 D4 (1)（Phase R2a）: 木の子（`depth` が `Some`）は `shadow` の設定でも判定を採用するので\n常に `false`。",
           "type": "boolean"
         },
         "signals": {
@@ -17823,6 +17842,11 @@
         {
           "const": "plan_issue",
           "description": "ADR-0072 D17 3.（Phase E4b 項目2）: worker の checkpoint/result.json が `plan_issue`\n（計画そのものが誤っているという 1 文の申告）を書いた。replan の余地があれば\n`Trigger::Continue{why: Replan}` で即座に Task を Ready へ戻す（Blocked のままにはしない）ので、\nこの行が実際に `Task.status == Blocked` と一緒に残るのは replan の上限を使い切ったときだけ。",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "ADR-0079 D3 / D4 (3)（Phase R2a）: 人への決定の要求（`kind: limit` / `leaf_too_large`）を待つ。\n木の上限を超える unit、子 task にできない深さの compound な leaf。同じ段階の他の unit・兄弟は\n止めない（工程の失敗にも質問にも数えない）。回答で再開するのは R3a。",
           "type": "string"
         }
       ]

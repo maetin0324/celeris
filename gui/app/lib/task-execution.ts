@@ -217,7 +217,9 @@ export function gateModeLabel(execution: ExecutionView | null | undefined): stri
   const gate = execution?.gate;
   if (!gate) return null;
   const shadow = gate.shadow ? "（shadow）" : "";
-  return `${gate.mode}${shadow} — ${gate.rule_id}`;
+  // celeris ADR-0079 D4 (1)（Phase R2a）: 木の子の gate は深さの閾値で判定し、shadow でも採用する。
+  const tree = gate.depth != null && gate.depth >= 2 ? `（木の子: 深さ ${gate.depth}・閾値 ${gate.threshold}）` : "";
+  return `${gate.mode}${shadow}${tree} — ${gate.rule_id}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -198,12 +198,17 @@ pub use execution_plan::{
     UnitContext, effective_needs_decisions, internal_view, is_phased_schema, normalized_decisions,
     validate_with,
 };
-pub use tree::{ParentUnit, TreeInfo, TreeLimits, UnitDeclared, UnitGateAction};
+pub use tree::{
+    DepthCounters, LimitHold, NextRun, ParentUnit, RunLimitBreach, TreeCounters, TreeInfo,
+    TreeLimitKind, TreeLimits, TreeNodeFacts, UnitDeclared, UnitGate, UnitGateAction,
+    UnitGateContext, UnitGateReport,
+};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use execution_gate::{
     EXECUTION_GATE_POLICY_VERSION, EXECUTION_GATE_SCORE_THRESHOLD, ExecutionGateDecision,
     ExecutionGateInputs, ExecutionHintSpec, ExecutionMode, GateMode, GateSignal, GateSource,
-    PlannerConfig, decide as decide_execution_gate, out_of_scope_rule,
+    GateThreshold, PlannerConfig, decide as decide_execution_gate,
+    decide_at as decide_execution_gate_at, out_of_scope_rule,
 };
 // ---- ADR-0072 D19（Phase E5）: Task 単位の実行メトリクス ----
 pub use execution_metrics::{

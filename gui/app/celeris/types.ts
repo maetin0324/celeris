@@ -629,6 +629,14 @@ export type Event =
       gate: ExecutionMode;
       plan_id: string;
       /**
+       * Phase R2a: 判断の理由（規則 id・構造上の理由・leaf の基準の不足など。人が読む 1 行）。
+       */
+      reason?: string;
+      /**
+       * Phase R2a: unit の view の gate のスコア（`ExecutionGateDecision.score`）。
+       */
+      score?: number;
+      /**
        * その深さの gate の閾値（`task_core::tree::gate_threshold`）。
        */
       threshold: number;
@@ -868,7 +876,7 @@ export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
 /**
  * D6: `work_units.blocked_reason`。
  */
-export type WorkUnitBlockedReason = ("question" | "dependency_failed" | "limit") | "plan_issue";
+export type WorkUnitBlockedReason = ("question" | "dependency_failed" | "limit") | "plan_issue" | "decision";
 export type RunOutcomeKind =
   ("done" | "question" | "error" | "requeue" | "lease_expired") | "interrupted" | "continued";
 export type AttentionItem =
@@ -3478,12 +3486,21 @@ export interface TaskRouting {
  * D13: `Event::ExecutionGated` の中身、および `Task.routing.execution`。
  */
 export interface ExecutionGateDecision {
+  /**
+   * ADR-0079 D4 (1)（Phase R2a）: 木の子 task（depth ≥ 2）の判定なら、その深さ（task の層数）。
+   * 閾値は `threshold`（`5 + gate_depth_step × (depth − 1)`）。木の子の判定は `[execution] gate` が
+   * `shadow` / `off` でも採用される（`shadow = false`）。root・木でない task は `None`（出力しない。
+   * 既存の JSON は 1 バイトも変わらない）。
+   */
+  depth?: number | null;
   mode: ExecutionMode;
   policy_version: string;
   rule_id: string;
   score: number;
   /**
    * `[execution] gate = "shadow"` のときの判定なら `true`（記録だけで実行には使わない。D13）。
+   * ADR-0079 D4 (1)（Phase R2a）: 木の子（`depth` が `Some`）は `shadow` の設定でも判定を採用するので
+   * 常に `false`。
    */
   shadow: boolean;
   signals?: GateSignal[];

@@ -65,6 +65,16 @@ describe("gateDecisionLine", () => {
     ).toBe("compound（人の明示）— human/explicit");
     expect(gateDecisionLine(null)).toBeNull();
   });
+
+  it("木の子の判定（ADR-0079 R2a）は深さと閾値を出し、shadow でも採用されることを示す", () => {
+    expect(gateDecisionLine({ ...shadowHint, source: "policy", score: 6, threshold: 7, shadow: false, depth: 2 })).toBe(
+      "atomic（規則表、木の子: 深さ 2・閾値 7、常に採用）— atomic/score",
+    );
+    // root（深さなし）は従来どおり。
+    expect(gateDecisionLine({ ...shadowHint, depth: null })).toBe(
+      "atomic（CoS のヒント + 規則表、shadow: 記録だけ）— atomic/score",
+    );
+  });
 });
 
 describe("executionModeControls", () => {

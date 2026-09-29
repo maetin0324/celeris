@@ -1300,7 +1300,8 @@ pub enum Event {
         child_task_id: TaskId,
     },
     /// ADR-0079 D4 (3): unit の gate が planner の宣言と食い違い、daemon が扱いを決めた。
-    /// 状態は変えない（発行は R2a）。
+    /// 状態は変えない（Phase R2a で計画の採用の直後に発行する。上げた・下げた unit の形は採用した
+    /// 計画の spec に既に入っている）。
     UnitGateOverridden {
         plan_id: String,
         unit_key: String,
@@ -1311,6 +1312,12 @@ pub enum Event {
         depth: u32,
         /// その深さの gate の閾値（`task_core::tree::gate_threshold`）。
         threshold: u32,
+        /// Phase R2a: unit の view の gate のスコア（`ExecutionGateDecision.score`）。
+        #[serde(default)]
+        score: i32,
+        /// Phase R2a: 判断の理由（規則 id・構造上の理由・leaf の基準の不足など。人が読む 1 行）。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        reason: String,
     },
     /// ADR-0079 D7: 人への決定の要求（出した節点の events に積む）。同じトランザクションで
     /// `decisions` の行を書く（store の派生の書き込み）。状態は変えない（発行は R3a 以降）。

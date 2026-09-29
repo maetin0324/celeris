@@ -783,6 +783,15 @@
     "ExecutionGateDecision": {
       "description": "D13: `Event::ExecutionGated` の中身、および `Task.routing.execution`。",
       "properties": {
+        "depth": {
+          "description": "ADR-0079 D4 (1)（Phase R2a）: 木の子 task（depth ≥ 2）の判定なら、その深さ（task の層数）。\n閾値は `threshold`（`5 + gate_depth_step × (depth − 1)`）。木の子の判定は `[execution] gate` が\n`shadow` / `off` でも採用される（`shadow = false`）。root・木でない task は `None`（出力しない。\n既存の JSON は 1 バイトも変わらない）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/ExecutionMode"
         },
@@ -797,7 +806,7 @@
           "type": "integer"
         },
         "shadow": {
-          "description": "`[execution] gate = \"shadow\"` のときの判定なら `true`（記録だけで実行には使わない。D13）。",
+          "description": "`[execution] gate = \"shadow\"` のときの判定なら `true`（記録だけで実行には使わない。D13）。\nADR-0079 D4 (1)（Phase R2a）: 木の子（`depth` が `Some`）は `shadow` の設定でも判定を採用するので\n常に `false`。",
           "type": "boolean"
         },
         "signals": {

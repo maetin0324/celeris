@@ -1502,6 +1502,8 @@ pub struct ExecutionTreeTomlConfig {
     /// 未回答の決定の上限（計画あたり）。
     #[serde(default = "default_tree_max_open_decisions_per_plan")]
     pub max_open_decisions_per_plan: usize,
+    /// Phase R2a: 深さ d の子 task・unit の gate の閾値 = `5 + gate_depth_step × (d − 1)`（既定 2、0..=10）。
+    /// root（深さ 1）の閾値は 5 のまま、root の gate は `[execution] gate` に従う（U-R5）。
     #[serde(default = "default_tree_gate_depth_step")]
     pub gate_depth_step: u32,
     /// D8 の「上限に近い」の比（0 < r <= 1、既定 0.8）。
@@ -1584,6 +1586,12 @@ impl ExecutionTreeTomlConfig {
                 return Err(format!("{name} must be >= 1"));
             }
         }
+        if self.gate_depth_step > MAX_TREE_GATE_DEPTH_STEP {
+            return Err(format!(
+                "gate_depth_step must be <= {MAX_TREE_GATE_DEPTH_STEP} (got {})",
+                self.gate_depth_step
+            ));
+        }
         if self.max_tree_tokens == Some(0) {
             return Err("max_tree_tokens must be >= 1 when set".to_string());
         }
@@ -1602,6 +1610,9 @@ impl ExecutionTreeTomlConfig {
         Ok(())
     }
 }
+
+/// Phase R2a: `gate_depth_step` の上限（深さ 3 で閾値 25。規則表のスコアの最大を十分に超える）。
+const MAX_TREE_GATE_DEPTH_STEP: u32 = 10;
 
 fn default_tree_max_depth() -> u32 {
     task_core::tree::DEFAULT_MAX_DEPTH
@@ -7152,6 +7163,21 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
         assert_eq!(tree.max_tree_tokens, Some(5_000_000));
         assert_eq!(tree.approval_near_limit_permille, 750);
         assert_eq!(tree.max_tree_runs, 120);
+        assert_eq!(tree.gate_depth_step, 2);
+        // Phase R2a: 深さの閾値の刻みと木の run・replan・leaf の上限も設定から写る。
+        let cfg: Config = toml::from_str(&format!(
+            "{base}[execution.tree]\nenabled = true\ngate_depth_step = 3\nmax_tree_runs = 7\n\
+             max_tree_replans = 1\nmax_tree_leaves = 9\nmax_parallel_child_tasks = 1\n"
+        ))
+        .unwrap();
+        cfg.validate().unwrap();
+        let t = cfg.dispatch_config().execution.limits.tree;
+        assert_eq!(
+            (t.gate_depth_step, t.max_tree_runs, t.max_tree_replans),
+            (3, 7, 1)
+        );
+        assert_eq!((t.max_tree_leaves, t.max_parallel_child_tasks), (9, 1));
+        assert_eq!(task_core::tree::gate_threshold(2, t.gate_depth_step), 8);
         assert_eq!(
             task_core::ExecutionLimits {
                 tree: task_core::TreeLimits::default(),
@@ -7167,6 +7193,12 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
             "max_units_per_stage = 0",
             "max_tree_runs = 0",
             "max_tree_tokens = 0",
+            "gate_depth_step = 11",
+            "max_tree_leaves = 0",
+            "max_tree_replans = 0",
+            "max_child_tasks_per_plan = 0",
+            "max_parallel_child_tasks = 0",
+            "max_stages = 0",
             "approval_near_limit_ratio = 0.0",
             "approval_near_limit_ratio = 1.5",
             "max_open_decisions = 4\nmax_open_decisions_per_plan = 8",

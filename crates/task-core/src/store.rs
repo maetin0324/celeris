@@ -1161,6 +1161,11 @@ pub trait TaskStore:
     /// 子 task の生成と状態の写しの照合に使う（木が無ければ空で、何もしない）。
     fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError>;
 
+    /// ADR-0079 D3（Phase R2a）: 木の節点（`root_id` の task 自身と、`tasks.root_id = root_id` の子孫）。
+    /// `created_at` 昇順（同順位は rowid）。木の上限の数え上げ（`task_ops::tree::tree_counters`）に使う。
+    /// root 自身は `tree` を持たない（`root_id` 列は NULL。R1b 付記 6.）ので id で拾う。
+    fn tree_tasks(&self, root_id: TaskId) -> Result<Vec<Task>, StoreError>;
+
     /// ADR-0079 D4 (4)（Phase R1b）: kind task の unit から子 task を作る 1 トランザクション。
     /// 親が終端でなく、unit の行（`unit.id`）が今も `ready` で `child_task_id` を持たないことを確かめ、
     /// 子を挿入して `Event::Created{origin: plan_unit}` を積み、unit の行を `unit`（呼び出し側が
@@ -5996,6 +6001,22 @@ impl TaskStore for SqliteStore {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    fn tree_tasks(&self, root_id: TaskId) -> Result<Vec<Task>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT json FROM tasks WHERE id = ?1 OR root_id = ?1 ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = stmt.query_map(params![root_id.to_string()], |row| {
+                row.get::<_, String>(0)
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(Self::row_to_task(row?)?);
+            }
+            Ok(out)
+        })
     }
 
     fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError> {

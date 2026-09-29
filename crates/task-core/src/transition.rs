@@ -95,6 +95,11 @@ pub enum Trigger {
     PlanGate {
         plan_id: String,
     },
+    /// ADR-0074「F5-fix8 実装時の明確化」: 計画の unit がすべて終わっている（unit が 1 つも無い場合を含む）
+    /// のに `ready` のままの Task を、run を起こさずに最終レビューへ進める。採用した計画（replan で何も
+    /// 足さなかった版を含む）がまだ最終レビューを受けていないときだけ dispatcher が使う。
+    /// `Ready → Reviewing`（Execute kind のみ）、`reason = "plan_complete"`、attempts 不変。
+    PlanComplete,
 }
 
 impl Trigger {
@@ -131,6 +136,7 @@ impl Trigger {
             Trigger::PhaseGate { .. } => "awaiting_human",
             Trigger::PhaseResume { mode } => mode.name(),
             Trigger::PlanGate { .. } => "awaiting_plan_approval",
+            Trigger::PlanComplete => "plan_complete",
         }
     }
 
@@ -512,6 +518,19 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
+        // ADR-0074「F5-fix8 実装時の明確化」: 完了済みの計画の最終レビュー（run なし、attempts 不変）。
+        Trigger::PlanComplete => {
+            if s.status == Status::Ready && s.kind == TaskKind::Execute {
+                Ok(Outcome {
+                    next: Status::Reviewing,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+
         // ADR-0074 D2.2/D2.4: 人の「続ける」/「replan」。attempts は変えない。
         Trigger::PhaseResume { .. } => {
             if s.status == Status::Blocked {
@@ -686,6 +705,14 @@ mod tests {
                     expect_err()
                 }
             }
+            // ADR-0074「F5-fix8 実装時の明確化」: Execute の `Ready` からだけ `Reviewing` へ。
+            Trigger::PlanComplete => {
+                if status == Status::Ready && kind == TaskKind::Execute {
+                    expect_ok(Status::Reviewing)
+                } else {
+                    expect_err()
+                }
+            }
             // ADR-0074 D2.2/D2.4: `Blocked` からだけ `Ready` へ。
             Trigger::PhaseResume { .. } => {
                 if status == Status::Blocked {
@@ -738,6 +765,8 @@ mod tests {
             Trigger::PlanGate {
                 plan_id: "p".to_string(),
             },
+            // ADR-0074「F5-fix8 実装時の明確化」: 完了済みの計画の最終レビュー（attempts 据え置き）。
+            Trigger::PlanComplete,
         ];
 
         let mut count = 0usize;
@@ -783,8 +812,9 @@ mod tests {
         }
         // 4 kinds * 8 statuses * 20 triggers（Phase 53 で Interrupt / Reopen、Phase 59 で Unroutable、
         // Phase 116（ADR-0070 D3）で InfraRequeue、Phase E1（ADR-0072）で Continue、
-        // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume、Phase R3b（ADR-0079 D8）で PlanGate を追加）
-        assert_eq!(count, 4 * 8 * 21);
+        // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume、Phase R3b（ADR-0079 D8）で PlanGate、
+        // F5-fix8（ADR-0074 付記）で PlanComplete を追加）
+        assert_eq!(count, 4 * 8 * 22);
     }
 
     /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる

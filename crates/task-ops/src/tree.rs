@@ -516,7 +516,12 @@ pub fn node_liveness_facts(
 ) -> Result<task_core::NodeLivenessFacts, OpsError> {
     use task_core::decision::{NEEDED_BEFORE_SELF, NEEDED_BEFORE_STAGE_PREFIX};
     let events = store.events_for(task.id)?;
-    let has_plan = store.execution_plan_active(task.id)?.is_some();
+    let active_plan = store.execution_plan_active(task.id)?;
+    let has_plan = active_plan.is_some();
+    // ADR-0074「F5-fix8 実装時の明確化」: 有効な計画が採用の後に最終レビューの判定を既に受けたか。
+    let plan_reviewed = active_plan
+        .as_ref()
+        .is_some_and(|p| !task_core::plan_awaits_final_review(&events, &p.id));
     let root_id = task_core::tree::root_id_of(task);
     let open: Vec<DecisionRow> = store
         .decisions_list(Some(root_id))?
@@ -562,6 +567,10 @@ pub fn node_liveness_facts(
             blocked_reason: u.blocked_reason,
             child,
             waits_on_open_decision,
+            waits_on_child_dep: u.status == task_core::WorkUnitStatus::Pending
+                && u.depends_on
+                    .iter()
+                    .any(|d| d.starts_with(task_core::CHILD_DEP_PREFIX)),
         });
     }
     Ok(task_core::NodeLivenessFacts {
@@ -571,10 +580,15 @@ pub fn node_liveness_facts(
         leased: task.lease.is_some(),
         eligible,
         has_plan,
-        planner_pending: has_plan && planner_pending(&events),
+        // ADR-0074「F5-fix8 実装時の明確化」: 人の replan の依頼・途中確認の replan は `max_replans` の余地が
+        // あるときだけ planner を起こす（使い切っていれば dispatcher は今の計画のまま進む）。不正な試行の後の
+        // 再試行の約束は余地に関わらず起きる。
+        planner_pending: has_plan
+            && (planner_retry_pending(&events) || (replans_left && planner_pending(&events))),
         open_self_decision,
         tree_limit_decision_open,
         replans_left,
+        plan_reviewed,
         units,
     })
 }

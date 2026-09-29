@@ -1474,6 +1474,9 @@ pub struct LivenessUnitFacts {
     pub child: Option<(TaskId, Option<crate::model::Status>)>,
     /// この unit を名指しする（`needed_before` の key / `stage:<段階>`・`needs_decisions`）未回答の決定がある。
     pub waits_on_open_decision: bool,
+    /// ADR-0074「F5-fix8 実装時の明確化」: `pending` で、`child:<key>` の依存（ADR-0074 D3.7 の子 Task）を
+    /// 待っている（/2 の計画の名指しの待ち。子が終われば dispatcher が決定的に解く）。
+    pub waits_on_child_dep: bool,
 }
 
 /// D10: 木の 1 節点の事実（store の読み取りだけで集める。`task_ops::tree::liveness_snapshot`）。
@@ -1497,6 +1500,10 @@ pub struct NodeLivenessFacts {
     pub tree_limit_decision_open: bool,
     /// 節点の replan の余地がある（`max_replans` を使い切っていない）。
     pub replans_left: bool,
+    /// ADR-0074「F5-fix8 実装時の明確化」: 有効な計画が採用の後に最終レビューの判定を既に受けた
+    /// （`!execution_plan::plan_awaits_final_review`）。unit がすべて終わった節点で、`false` なら次の tick で
+    /// 最終レビューに進み、`true` なら不合格の後なので replan（余地が無ければ理由なし）。
+    pub plan_reviewed: bool,
     pub units: Vec<LivenessUnitFacts>,
 }
 
@@ -1717,6 +1724,15 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
                     ));
                 }
             },
+            (WorkUnitStatus::Pending, _) if u.waits_on_child_dep => {
+                waiting.get_or_insert((
+                    "children",
+                    format!(
+                        "unit {} は子 Task（child: の依存）の完了を待っている",
+                        u.key
+                    ),
+                ));
+            }
             (WorkUnitStatus::Failed, _) if n.replans_left => {
                 runnable.get_or_insert((
                     "replan",
@@ -1742,11 +1758,31 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
         return verdict(id, LivenessClass::Runnable, reason, detail);
     }
     if active == 0 {
+        // ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画は、まだ審査されていなければ次の tick で
+        // 最終レビュー（`Trigger::PlanComplete`）、不合格の後なら replan。どちらも無理なら理由なし。
+        if !n.plan_reviewed {
+            return verdict(
+                id,
+                LivenessClass::Runnable,
+                "completion",
+                "計画の unit がすべて終わり、次の tick で最終レビューに進む".to_string(),
+            );
+        }
+        if n.replans_left {
+            return verdict(
+                id,
+                LivenessClass::Runnable,
+                "replan",
+                "計画の unit はすべて終わったが最終レビューで不合格。次の tick で replan する"
+                    .to_string(),
+            );
+        }
         return verdict(
             id,
-            LivenessClass::Runnable,
-            "completion",
-            "計画の unit がすべて終わり、次の tick で最終レビューに進む".to_string(),
+            LivenessClass::Unexplained,
+            "replans_exhausted",
+            "計画の unit はすべて終わり最終レビューで不合格だったが、replan の余地も上限の決定も無い"
+                .to_string(),
         );
     }
     if let Some((reason, detail)) = waiting {
@@ -1841,6 +1877,7 @@ mod r3b_tests {
             open_self_decision: false,
             tree_limit_decision_open: false,
             replans_left: true,
+            plan_reviewed: false,
             units,
         }
     }
@@ -1853,6 +1890,7 @@ mod r3b_tests {
             blocked_reason: None,
             child: None,
             waits_on_open_decision: false,
+            waits_on_child_dep: false,
         }
     }
 
@@ -1926,6 +1964,23 @@ mod r3b_tests {
         assert_eq!(
             class(node(vec![leaf("a", WorkUnitStatus::Done)])),
             (LivenessClass::Runnable, "completion".to_string())
+        );
+        // ADR-0074「F5-fix8 実装時の明確化」: unit の無い計画も同じ（次の tick で最終レビュー）。
+        assert_eq!(
+            class(node(Vec::new())),
+            (LivenessClass::Runnable, "completion".to_string())
+        );
+        // 審査の後（不合格で ready に戻った）なら replan、余地が無ければ理由なし。
+        let mut reviewed = node(vec![leaf("a", WorkUnitStatus::Done)]);
+        reviewed.plan_reviewed = true;
+        assert_eq!(
+            class(reviewed.clone()),
+            (LivenessClass::Runnable, "replan".to_string())
+        );
+        reviewed.replans_left = false;
+        assert_eq!(
+            class(reviewed),
+            (LivenessClass::Unexplained, "replans_exhausted".to_string())
         );
         let mut atomic = node(Vec::new());
         atomic.has_plan = false;

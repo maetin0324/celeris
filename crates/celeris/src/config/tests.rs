@@ -1,4 +1,5 @@
 use super::*;
+use task_core::{DelegationLimits, Tier, WorkerHint};
 
 /// ADR-0046 D3（Phase 59）: `config/org.example.toml` の `genre` が指す全ての harness を、
 /// 互換の `[[genres]]`（`conversation` / `coding` / `literature` / `web-research` / `data-analysis` /

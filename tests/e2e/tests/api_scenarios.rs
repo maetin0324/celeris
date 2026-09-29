@@ -14,8 +14,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
 use task_core::{ArtifactRef, Event, SCHEMA_VERSION, SqliteStore, Status, Task, TaskId, TaskStore};
+use task_core::{RunIndexRole, RunIndexStatus, RunRow};
 
 fn bin(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();
@@ -1192,4 +1194,295 @@ fn clusters_endpoint_inbox_attention_and_task_detail_show_an_offline_cluster() {
     assert_eq!((t.status, t.attempts), (Status::Ready, 0));
     drop(daemon);
     env.replay_is_consistent();
+}
+
+// Phase 3: real daemon/API, local fake harness and a signed GUI assertion.
+// The socket path is deliberately inert: identity sealing does not contact the broker.
+struct BrowserFixture {
+    env: Env,
+    daemon: Proc,
+    signer: Ed25519KeyPair,
+    task_a: TaskId,
+    task_b: TaskId,
+    run_a: String,
+    run_b: String,
+}
+
+impl BrowserFixture {
+    fn new() -> Self {
+        let mut env = Env::new();
+        let signer = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        std::fs::write(env.root.join("gui.pub"), signer.public_key().as_ref()).unwrap();
+        let script = env.write_script("sleep 30");
+        let api = format!(
+            "{}\nbrowser_attestation_public_key_file = \"gui.pub\"\nbrowser_credentiald_control_socket = \"broker/control.sock\"",
+            env.api_listen_with_token()
+        );
+        let config = env.write_config(&script, &api, "");
+        let seed = env.add(&["--title", "fixture", "--check-cmd", "true"]);
+        let template = env.task(seed);
+        let make_running = |id: TaskId, run: &str| {
+            let mut task = template.clone();
+            task.id = id;
+            task.status = Status::Running;
+            env.store.insert(&task).unwrap();
+            env.store
+                .run_index_start(RunRow {
+                    run_id: run.into(),
+                    task_id: id.to_string(),
+                    work_unit_id: None,
+                    role: RunIndexRole::Worker,
+                    seq: 1,
+                    status: RunIndexStatus::Running,
+                    adapter: Some("fake".into()),
+                    model: None,
+                    account: None,
+                    session_id: None,
+                    checkpoint: None,
+                    usage: None,
+                    metrics: None,
+                    started_at: "2026-09-29T00:00:00Z".into(),
+                    finished_at: None,
+                })
+                .unwrap();
+        };
+        let task_a = TaskId::new();
+        let task_b = TaskId::new();
+        let run_a = "phase3-run-a".to_string();
+        let run_b = "phase3-run-b".to_string();
+        make_running(task_a, &run_a);
+        make_running(task_b, &run_b);
+        let mut daemon = env.start_celeris(&config);
+        env.wait_api(&mut daemon);
+        Self {
+            env,
+            daemon,
+            signer,
+            task_a,
+            task_b,
+            run_a,
+            run_b,
+        }
+    }
+
+    fn path(&self, task: TaskId, run: &str, kind: &str) -> String {
+        format!("/tasks/{task}/browser/{kind}/{run}/browser-session")
+    }
+
+    fn assertion(&self, task: TaskId, run: &str, holder: &str) -> Value {
+        let expires_at = time::OffsetDateTime::now_utc().unix_timestamp() + 20;
+        let payload = json!({
+            "task_id": task.to_string(), "run_id": run,
+            "browser_session_id": "browser-session", "owner_session_id": holder,
+            "owner_session": true, "origin_ok": true, "expires_at": expires_at
+        })
+        .to_string();
+        let signature = self.signer.sign(payload.as_bytes());
+        let hex: String = signature
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        json!({"payload": payload, "signature": hex})
+    }
+
+    fn control(&self, holder: &str, command: Value, version: u64, key: &str) -> Resp {
+        self.env.post(
+            &self.path(self.task_a, &self.run_a, "control"),
+            json!({
+                "assertion": self.assertion(self.task_a, &self.run_a, holder),
+                "command": command, "expected_version": version, "idempotency_key": key
+            }),
+        )
+    }
+}
+
+#[test]
+fn phase3_live_grant_is_task_scoped_scrubbed_and_reconnects_from_last_seen() {
+    let f = BrowserFixture::new();
+    let a = f.path(f.task_a, &f.run_a, "live");
+    let b = f.path(f.task_b, &f.run_b, "live");
+    let assertion = f.assertion(f.task_a, &f.run_a, "owner-a");
+    let grant = f
+        .env
+        .post(&format!("{a}/grant"), json!({"assertion": assertion}));
+    assert_eq!(grant.status, 200, "{} {}", grant.body, f.daemon.log_text());
+    let grant_id = grant.json()["grant_id"].as_str().unwrap().to_string();
+    let request = json!({"assertion": assertion, "grant_id": grant_id});
+    assert_eq!(
+        f.env.post(&format!("{a}/check"), request.clone()).status,
+        200
+    );
+    let cross_task = json!({
+        "assertion": f.assertion(f.task_b, &f.run_b, "owner-a"),
+        "grant_id": grant_id
+    });
+    let other = f.env.post(&format!("{b}/check"), cross_task.clone());
+    assert_ne!(other.status, 200, "cross-task grant accepted");
+    let other = f.env.post(&format!("{b}/read?after=0"), cross_task);
+    assert_ne!(other.status, 200, "cross-task events exposed");
+    let event = f.env.post(
+        &format!("{a}/events"),
+        json!({
+            "kind": "url", "url": "https://example.test/page?token=top-secret&x=1"
+        }),
+    );
+    assert_eq!(event.status, 200, "{}", event.body);
+    let first = event.json()["seq"].as_u64().unwrap();
+    let event = f.env.post(
+        &format!("{a}/events"),
+        json!({
+            "kind": "console", "level": "info", "text": "cookie=top-secret token=top-secret"
+        }),
+    );
+    assert_eq!(event.status, 200, "{}", event.body);
+    let page = f.env.post(&format!("{a}/read?after=0"), request.clone());
+    assert_eq!(page.status, 200, "{}", page.body);
+    assert!(!page.body.contains("top-secret"), "{}", page.body);
+    assert!(!page.body.contains("?token="), "{}", page.body);
+    let persisted = std::fs::read(&f.env.db).unwrap();
+    assert!(
+        !persisted
+            .windows(b"top-secret".len())
+            .any(|w| w == b"top-secret")
+    );
+    let replay = f.env.post(&format!("{a}/read?after={first}"), request);
+    assert_eq!(replay.status, 200, "{}", replay.body);
+    assert_eq!(replay.json()["plan"]["kind"], "replay");
+    assert_eq!(replay.json()["events"].as_array().unwrap().len(), 1);
+}
+
+/// ADR-0080 H3 / ADR-0081: while the worker's auth section is active the task-api refuses
+/// takeover and renew (not only the GUI), revokes a held lease, and reopens after it ends.
+#[test]
+fn phase3_auth_section_refuses_takeover_and_renew_until_left() {
+    let f = BrowserFixture::new();
+    let path = f.path(f.task_a, &f.run_a, "control");
+    let pause = f.control("owner-a", json!({"kind":"pause"}), 0, "as-pause");
+    assert_eq!(pause.status, 200, "{}", pause.body);
+    let v = pause.json()["version"].as_u64().unwrap();
+    let held = f.control("owner-a", json!({"kind":"takeover"}), v, "as-take-1");
+    assert_eq!(held.status, 200, "{}", held.body);
+    assert_eq!(held.json()["phase"], "human_control");
+    let v = held.json()["version"].as_u64().unwrap();
+    let on = f
+        .env
+        .post(&format!("{path}/auth-section"), json!({"active": true}));
+    assert_eq!(on.status, 200, "{}", on.body);
+    assert_eq!(on.json()["auth_section"], true);
+    assert_eq!(on.json()["phase"], "paused", "held lease is revoked");
+    let status = f.env.get(&path);
+    assert_eq!(status.json()["auth_section"], true, "{}", status.body);
+    let v2 = on.json()["version"].as_u64().unwrap();
+    assert!(v2 > v);
+    f.control("owner-a", json!({"kind":"renew"}), v2, "as-renew")
+        .assert_problem(409, "auth_section_active");
+    f.control("owner-a", json!({"kind":"takeover"}), v2, "as-take-2")
+        .assert_problem(409, "auth_section_active");
+    let off = f
+        .env
+        .post(&format!("{path}/auth-section"), json!({"active": false}));
+    assert_eq!(off.status, 200, "{}", off.body);
+    assert_eq!(off.json()["auth_section"], false);
+    let v3 = off.json()["version"].as_u64().unwrap();
+    let again = f.control("owner-a", json!({"kind":"takeover"}), v3, "as-take-3");
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.json()["phase"], "human_control");
+}
+
+#[test]
+fn phase3_control_converges_rejects_competition_and_cancel_stops() {
+    let f = BrowserFixture::new();
+    let path = f.path(f.task_a, &f.run_a, "control");
+    let begin = f.env.post(&format!("{path}/agent/begin"), json!({}));
+    assert_eq!(begin.status, 200, "{}", begin.body);
+    let pause = f.control("owner-a", json!({"kind":"pause"}), 0, "pause-1");
+    assert_eq!(pause.status, 200, "{}", pause.body);
+    assert_eq!(pause.json()["phase"], "pausing");
+    let v = pause.json()["version"].as_u64().unwrap();
+    f.control("owner-a", json!({"kind":"takeover"}), v, "early")
+        .assert_problem(409, "not_converged");
+    let end = f.env.post(&format!("{path}/agent/end"), json!({}));
+    assert_eq!(end.status, 200, "{}", end.body);
+    assert_eq!(end.json()["phase"], "paused");
+    let converged_version = end.json()["version"].as_u64().unwrap();
+    let acquired = f.control(
+        "owner-a",
+        json!({"kind":"takeover", "ttl_secs":1}),
+        converged_version,
+        "take-1",
+    );
+    assert_eq!(acquired.status, 200, "{}", acquired.body);
+    assert_eq!(acquired.json()["phase"], "human_control");
+    let replay = f.control(
+        "owner-a",
+        json!({"kind":"takeover", "ttl_secs":1}),
+        converged_version,
+        "take-1",
+    );
+    assert_eq!(replay.status, 200, "{}", replay.body);
+    assert_eq!(replay.json()["replayed"], true);
+    assert_eq!(replay.json()["version"], acquired.json()["version"]);
+    let version = acquired.json()["version"].as_u64().unwrap();
+    let other = f.control("owner-b", json!({"kind":"takeover"}), version, "take-2");
+    assert_ne!(other.status, 200, "second controller acquired lease");
+    f.control("owner-a", json!({"kind":"stop"}), v, "stale")
+        .assert_problem(409, "version_conflict");
+    std::thread::sleep(Duration::from_secs(2));
+    let expired = f.env.get(&path);
+    assert_eq!(expired.status, 200, "{}", expired.body);
+    assert_eq!(expired.json()["phase"], "paused");
+    assert_eq!(expired.json()["agent_may_act"], false);
+    let cancel = f.env.post(
+        &format!("/tasks/{}/cancel", f.task_a),
+        json!({"expected_status":"running"}),
+    );
+    assert_eq!(cancel.status, 200, "{}", cancel.body);
+    let stopped = f.env.get(&path);
+    assert_eq!(stopped.status, 200, "{}", stopped.body);
+    assert_eq!(stopped.json()["phase"], "stopped");
+}
+
+#[test]
+fn phase3_identity_register_revoke_delete_and_trusted_local_restore_denied() {
+    let f = BrowserFixture::new();
+    let base = "/browser/identities";
+    let secret = "phase3-cookie-secret";
+    let registered = f.env.post(base, json!({
+        "identity_id":"identity-a", "project_id":"project-a", "origin":"https://example.test",
+        "demand_confirmed_by":"human", "ttl_secs":60,
+        "state":{"entries":[{"origin":"https://example.test","kind":"cookie","name":"session","value":secret}]}
+    }));
+    assert_eq!(
+        registered.status,
+        201,
+        "{} {}",
+        registered.body,
+        f.daemon.log_text()
+    );
+    assert!(!registered.body.contains(secret));
+    let listed = f.env.get(&format!("{base}?project_id=project-a"));
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert_eq!(listed.json()["identities"][0]["identity_id"], "identity-a");
+    let restore = f.env.post(
+        &format!("{base}/identity-a/restore"),
+        json!({
+            "project_id":"project-a", "origin":"https://example.test"
+        }),
+    );
+    restore.assert_problem(403, "isolation_required");
+    let revoked = f.env.post(&format!("{base}/identity-a/revoke"), json!({}));
+    assert_eq!(revoked.status, 200, "{}", revoked.body);
+    assert_eq!(revoked.json()["identity"]["state"], "revoked");
+    let deleted = f
+        .env
+        .request("DELETE", &format!("{base}/identity-a"), None, &[]);
+    assert_eq!(deleted.status, 200, "{}", deleted.body);
+    assert_eq!(deleted.json()["identity"]["state"], "deleted");
+    let persisted = std::fs::read(&f.env.db).unwrap();
+    assert!(
+        !persisted
+            .windows(secret.len())
+            .any(|w| w == secret.as_bytes())
+    );
 }

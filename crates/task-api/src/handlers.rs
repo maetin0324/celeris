@@ -179,6 +179,9 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::routing::routes())
         // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
         .merge(crate::browser::routes())
+        .merge(crate::browser_identity::routes())
+        .merge(crate::browser_live::routes())
+        .merge(crate::browser_control::routes())
         // ADR-0048 D1（Phase 60a）: Console の読み取り側。実装は `crate::console`。
         .merge(crate::console::routes())
         // ADR-0053 D4（Phase 65）: LLM source の観測。実装は `crate::llm_sources`。
@@ -1601,8 +1604,11 @@ async fn cancel(
     let CancelBody { expected_status } = read_json(body, true).await?;
     let result = state
         .blocking(move |store| {
-            task_ops::gate::cancel(store, id, expected_status)
-                .map_err(|e| ops_problem(store, e, Some("cancel")))
+            let result = task_ops::gate::cancel(store, id, expected_status)
+                .map_err(|e| ops_problem(store, e, Some("cancel")))?;
+            // ADR-0081: task cancel で browser control を Stopped にし lease を失効させる。
+            crate::browser_control::stop_task(store, &id.to_string())?;
+            Ok(result)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &result))

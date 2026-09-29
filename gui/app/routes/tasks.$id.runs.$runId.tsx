@@ -40,6 +40,7 @@ const BrowserRunsPanel = lazy(() =>
  */
 export interface RunDetailData {
   taskId: string;
+  browserOwner: BrowserOwnerView;
   browserRuns: BrowserRun[];
   /** ADR-0080 D6: run の Live View の導線（本人・実行中だけ。URL は同一 origin の経路）。 */
   liveViews: Record<string, LiveViewState>;
@@ -109,6 +110,7 @@ export async function loadRunDetail(
   }
   return {
     taskId,
+    browserOwner: owner,
     liveViews,
     browserRuns: redactLiveViewUrls(ownRuns),
     run,
@@ -213,7 +215,11 @@ export default function RunDetailPage({ loaderData }: Route.ComponentProps) {
 
       {browserRuns.length > 0 && (
         <Suspense fallback={null}>
-          <BrowserRunsPanel runs={browserRuns} liveViews={loaderData.liveViews} />
+          <BrowserRunsPanel
+            runs={browserRuns}
+            liveViews={loaderData.liveViews}
+            csrfToken={loaderData.browserOwner.csrfToken}
+          />
         </Suspense>
       )}
 

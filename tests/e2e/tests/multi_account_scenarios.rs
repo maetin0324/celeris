@@ -209,7 +209,19 @@ fn second_account_runs_the_overflow_when_the_first_is_at_capacity() {
     let config = env.write_config(
         r#"cat >/dev/null
 printf '%s' "$ACCOUNT" > account.txt
-sleep 1
+# 両アカウントのワーカーが起動するまで、どちらも完了させない。
+barrier=$(dirname "$0")
+touch "$barrier/started-$ACCOUNT"
+remaining=400
+while [ ! -f "$barrier/started-a" ] || [ ! -f "$barrier/started-b" ]; do
+  remaining=$((remaining - 1))
+  if [ "$remaining" -eq 0 ]; then
+    rm -f "$barrier/started-$ACCOUNT"
+    echo 'both accounts did not start concurrently' >&2
+    exit 1
+  fi
+  sleep 0.05
+done
 echo '{"type":"done","summary":"ok","evidence":[]}'"#,
         TWO_ACCOUNTS,
         "",
@@ -233,10 +245,8 @@ echo '{"type":"done","summary":"ok","evidence":[]}'"#,
         &ws2,
     ]);
 
-    let started = Instant::now();
     env.run_celeris(&config, Duration::from_secs(60));
-    // 直列（2 秒以上）ではなく並列に動いたこと。
-    assert!(started.elapsed() < Duration::from_secs(10));
+    // 両ワーカーがバリアを通過して完了すれば、並列に動いたと分かる。
     for id in [t1, t2] {
         assert_eq!(env.task(id).status, Status::Done, "{:?}", env.events(id));
     }

@@ -202,8 +202,10 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
     content.push_str("{\"operation\":\"click\""); // torn writes must wait for a complete line
     std::fs::write(&events, content).unwrap();
     let sink = RecordingSink::default();
+    let live =
+        crate::browser_live::LiveEmitter::new(crate::browser_live::CollectingSink::default());
     let mut offset = 0;
-    forward_events(&events, &mut offset, &req, &output, &sink);
+    forward_events(&events, &mut offset, &req, &output, &sink, &live);
     assert_eq!(sink.artifacts.lock().unwrap().len(), 1);
     assert_eq!(sink.artifacts.lock().unwrap()[0].name, "extract-a.json");
     assert!(
@@ -212,7 +214,7 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
             .contains(secret)
     );
     let count = sink.progress.lock().unwrap().len();
-    forward_events(&events, &mut offset, &req, &output, &sink);
+    forward_events(&events, &mut offset, &req, &output, &sink, &live);
     assert_eq!(
         sink.progress.lock().unwrap().len(),
         count,
@@ -968,4 +970,111 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
     }
     assert!(sink.browsers.lock().unwrap().is_empty());
     assert!(!temp.path().join("runs/refused").exists());
+}
+
+mod live_wiring {
+    use super::*;
+    use crate::browser_live::{CollectingSink, LiveEmitter};
+
+    #[test]
+    fn browser_live_forwarded_events_are_scrubbed_status_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        let events = temp.path().join("events.jsonl");
+        let secret = "Cookie: session=abc; token=SECRET_TOKEN";
+        let lines = [
+            serde_json::json!({"operation":"navigate","status":"success"}),
+            serde_json::json!({"operation":"click","status":"success","detail":secret}),
+            serde_json::json!({"operation":secret,"status":"success"}),
+        ];
+        std::fs::write(
+            &events,
+            lines
+                .iter()
+                .map(|l| l.to_string() + "\n")
+                .collect::<String>(),
+        )
+        .unwrap();
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let mut offset = 0;
+        forward_events(
+            &events,
+            &mut offset,
+            &req,
+            &output,
+            &RecordingSink::default(),
+            &emitter,
+        );
+        let sent = emitter.sink().events();
+        assert_eq!(sent.len(), 1, "untyped lines are dropped before live");
+        let json = serde_json::to_string(&sent).unwrap();
+        for bad in [
+            "frame",
+            "title",
+            "Cookie",
+            "cookie",
+            "SECRET_TOKEN",
+            "token",
+        ] {
+            assert!(!json.contains(bad), "{bad} leaked: {json}");
+        }
+        assert!(json.contains("\"kind\":\"status\""));
+    }
+
+    /// ADR-0080 H3: the production `forward_events` forwards nothing from inside the auth
+    /// section — no progress (LLM-visible / persisted), no artifact, no live event — and
+    /// consumes the lines instead of buffering them.
+    #[test]
+    fn browser_auth_section_forward_events_drops_progress_artifact_and_live() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("extract-a.json"), "{}").unwrap();
+        let events = temp.path().join("events.jsonl");
+        std::fs::write(
+            &events,
+            "{\"operation\":\"navigate\",\"status\":\"success\"}\n\
+             {\"operation\":\"extract\",\"status\":\"success\",\"artifact\":\"extract-a.json\"}\n",
+        )
+        .unwrap();
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let sink = RecordingSink::default();
+        let mut offset = 0;
+        {
+            let _auth = emitter.auth_section();
+            forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        }
+        assert!(
+            emitter.sink().events().is_empty(),
+            "no live events during auth"
+        );
+        assert!(
+            sink.progress.lock().unwrap().is_empty(),
+            "no progress during auth"
+        );
+        assert!(
+            sink.artifacts.lock().unwrap().is_empty(),
+            "no artifact during auth"
+        );
+        // not buffered: leaving the section does not replay them
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert!(emitter.sink().events().is_empty());
+        assert!(sink.progress.lock().unwrap().is_empty());
+        // lines written after the section are forwarded as usual
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&events)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut f,
+            b"{\"operation\":\"click\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert_eq!(emitter.sink().events().len(), 1);
+        assert_eq!(sink.progress.lock().unwrap().len(), 1);
+    }
 }

@@ -99,21 +99,25 @@ struct SessionGuard {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         if self.armed {
-            // The child is independent of the harness process group that dispatch terminates.
-            let _ = std::process::Command::new("python3")
-                .arg(&self.cli)
-                .arg("close")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map(|mut child| {
-                    std::thread::spawn(move || {
-                        let _ = child.wait();
-                    })
-                });
+            spawn_close(&self.cli);
         }
     }
+}
+
+/// The child is independent of the harness process group that dispatch terminates.
+fn spawn_close(cli: &Path) {
+    let _ = std::process::Command::new("python3")
+        .arg(cli)
+        .arg("close")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|mut child| {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            })
+        });
 }
 
 #[derive(Deserialize)]
@@ -190,6 +194,22 @@ impl EventSink for BrowserSink<'_> {
     fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
         self.0.browser_waits()
     }
+    fn browser_auth_section(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        active: bool,
+    ) -> Result<(), String> {
+        self.0.browser_auth_section(run_id, session_id, active)
+    }
+    fn browser_live(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+        self.0.browser_live(run_id, session_id, event);
+    }
     fn progress(&self, _msg: &str) {
         self.0.heartbeat();
     }
@@ -209,13 +229,31 @@ impl EventSink for BrowserSink<'_> {
     }
 }
 
+/// Production live sink: the scrubbed event goes to the session's persisted live log
+/// through the run's `EventSink` (ADR-0082).
+pub(crate) struct EventSinkLive<'a> {
+    pub(crate) sink: &'a dyn EventSink,
+    pub(crate) run_id: String,
+    pub(crate) session_id: String,
+}
+impl crate::browser_live::LiveSink for EventSinkLive<'_> {
+    fn send(&self, event: &task_core::browser_live::ScrubbedLiveEvent) {
+        self.sink
+            .browser_live(&self.run_id, &self.session_id, event);
+    }
+}
+
 /// Never forward arbitrary JSON keys or raw command/page/error text into the event log.
-fn forward_events(
+/// Each typed lifecycle line becomes one progress (and a scrubbed `status` live event).
+/// Inside the emitter's auth section (ADR-0080 H3) nothing is forwarded — no progress,
+/// artifact or live event — and the lines are consumed, not buffered.
+fn forward_events<S: crate::browser_live::LiveSink>(
     path: &Path,
     offset: &mut usize,
     req: &RunRequest,
     output: &Path,
     sink: &dyn EventSink,
+    live: &crate::browser_live::LiveEmitter<S>,
 ) {
     let Ok(bytes) = std::fs::read(path) else {
         return;
@@ -230,6 +268,10 @@ fn forward_events(
     else {
         return;
     };
+    if live.in_auth_section() {
+        *offset = end;
+        return;
+    }
     for line in bytes[*offset..end]
         .split(|c| *c == b'\n')
         .filter(|line| !line.is_empty())
@@ -254,6 +296,7 @@ fn forward_events(
             continue;
         }
         let msg = format!("browser.{}: {}", event.operation, event.status);
+        live.emit(&task_core::browser_live::LiveEvent::Status { state: msg.clone() });
         sink.progress_with(
             &msg,
             &ProgressFields {
@@ -546,8 +589,33 @@ pub async fn run_with_executable(
         policy: Some(policy.binding.clone()),
     };
     sink.browser_updated(&browser);
+    let live = crate::browser_live::LiveEmitter::new(EventSinkLive {
+        sink,
+        run_id: run_id.into(),
+        session_id: browser.session_id.clone(),
+    });
+    let events = runtime.join("events.jsonl");
+    let mut offset = 0;
     let credential_segment = match (&approval, credentials) {
         (Some(approval), Some(sup)) => {
+            // ADR-0080 H3: the credential-injection section. The control state refuses
+            // takeover/renew while it is active; nothing from inside it reaches the LLM,
+            // the persisted events/live log or artifacts. Fail closed if it cannot be marked.
+            if sink
+                .browser_auth_section(run_id, &browser.session_id, true)
+                .is_err()
+            {
+                browser.state = BrowserRunState::Failed;
+                sink.browser_updated(&browser);
+                return Ok(RunOutcome {
+                    terminal: Terminal::Error {
+                        message: "browser auth section could not be recorded".into(),
+                        retryable: true,
+                    },
+                    exit_code: None,
+                });
+            }
+            let auth = live.auth_section();
             let segment = crate::browser_credential::Segment {
                 executable,
                 credentiald_runtime: sup.runtime_dir.as_deref(),
@@ -569,6 +637,15 @@ pub async fn run_with_executable(
                 && replace_private(&runtime.join("policy.json"), &harness_policy).is_err()
             {
                 result = Err("policy_transition_failed");
+            }
+            // Consume (never buffer) whatever the segment wrote, then close the section.
+            forward_events(&events, &mut offset, &req, &output, sink, &live);
+            drop(auth);
+            if sink
+                .browser_auth_section(run_id, &browser.session_id, false)
+                .is_err()
+            {
+                result = Err("auth_section_close_failed");
             }
             let status = if result.is_ok() { "success" } else { "failure" };
             sink.progress_with(
@@ -617,8 +694,6 @@ pub async fn run_with_executable(
         cli: cli.clone(),
         armed: true,
     };
-    let mut offset = 0;
-    let events = runtime.join("events.jsonl");
     let mut outcome = {
         let browser_sink = BrowserSink(sink);
         let future = adapter.run(req, run_id, limits, &browser_sink);
@@ -627,7 +702,7 @@ pub async fn run_with_executable(
         loop {
             tokio::select! {
                 result = &mut future => break result,
-                _ = interval.tick() => forward_events(&events, &mut offset, &monitor_req, &output, sink),
+                _ = interval.tick() => forward_events(&events, &mut offset, &monitor_req, &output, sink, &live),
             }
         }
     };
@@ -687,7 +762,7 @@ pub async fn run_with_executable(
             exit_code: None,
         });
     }
-    forward_events(&events, &mut offset, &monitor_req, &output, sink);
+    forward_events(&events, &mut offset, &monitor_req, &output, sink, &live);
     browser.state = if browser.state == BrowserRunState::WaitingForAuth {
         BrowserRunState::WaitingForAuth
     } else {

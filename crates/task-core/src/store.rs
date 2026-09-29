@@ -91,10 +91,11 @@ const MIGRATION_0031: &str = include_str!("../migrations/0031_task_tree.sql");
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）と credential 台帳（秘密なし）。
 const MIGRATION_0032: &str = include_str!("../migrations/0032_browser_waits.sql");
 const MIGRATION_0033: &str = include_str!("../migrations/0033_browser_task_policies.sql");
+const MIGRATION_0034: &str = include_str!("../migrations/0034_browser_phase3_store.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 33;
+pub const SCHEMA_VERSION: u32 = 34;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -618,6 +619,9 @@ pub struct ExecutionMetricsTaskRow {
     pub has_quota_events: bool,
 }
 
+/// タスクとその `events_for`（`seq`, event）の組。`TaskStore::tasks_with_events` の要素。
+pub type TaskWithEvents = (Task, Vec<(u64, Event)>);
+
 /// ADR-0033 D3: 報告（`reports`）の読み書きは `crate::report::ReportStore` にあり、`TaskStore` はそれを
 /// supertrait として要求する（ディスパッチャの `Arc<dyn TaskStore>` から報告を追記できるようにするため。
 /// 実装は `report.rs` にあり、この表の SQL はここには無い）。
@@ -653,6 +657,18 @@ pub trait TaskStore:
     /// 異なるタスクのイベント同士の前後関係を比較してよい（`events_for` の `seq` はタスクごとにローカルなので
     /// 比較できない）。
     fn events_for_with_global_ids(&self, task_id: TaskId) -> Result<Vec<(u64, Event)>, StoreError>;
+    /// 全タスクとそれぞれの `events_for` を**同じ読み取りスナップショット**で返す（`replay` 用）。
+    /// `list` と `events_for` を別々に呼ぶと、その間に稼働中の daemon が状態遷移（例: Ready→Running の
+    /// lease 取得）を書き込み、「古い tasks 行 × 新しい events」を突き合わせた偽の不一致になる。
+    fn tasks_with_events(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+        let tasks = self.list(None)?;
+        let mut out = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let events = self.events_for(task.id)?;
+            out.push((task, events));
+        }
+        Ok(out)
+    }
     /// 排他的にリースを取得する。成功したら true を返し、task の status を Running にし、
     /// lease = Some{worker_run_id, expires_at: now + ttl} をDBに書く。
     /// 既にリースされている／status != Ready の場合は false を返す（エラーではない）。
@@ -1843,6 +1859,7 @@ impl SqliteStore {
             31 => Ok(MIGRATION_0031),
             32 => Ok(MIGRATION_0032),
             33 => Ok(MIGRATION_0033),
+            34 => Ok(MIGRATION_0034),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -3686,6 +3703,42 @@ impl TaskStore for SqliteStore {
                 events.push((seq as u64, event));
             }
             Ok(events)
+        })
+    }
+
+    fn tasks_with_events(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+        self.with_read_conn(|conn| {
+            // 1 つの読み取りトランザクション（WAL のスナップショット）で tasks と events を読む。
+            let tx = conn.unchecked_transaction()?;
+            let mut tasks = Vec::new();
+            {
+                let mut stmt = tx.prepare("SELECT json FROM tasks")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    tasks.push(Self::row_to_task(row?)?);
+                }
+            }
+            let mut out = Vec::with_capacity(tasks.len());
+            {
+                let mut stmt =
+                    tx.prepare("SELECT seq, json FROM events WHERE task_id = ?1 ORDER BY seq ASC")?;
+                for task in tasks {
+                    let rows = stmt.query_map(params![task.id.to_string()], |row| {
+                        let seq: i64 = row.get(0)?;
+                        let json: String = row.get(1)?;
+                        Ok((seq, json))
+                    })?;
+                    let mut events = Vec::new();
+                    for row in rows {
+                        let (seq, json) = row?;
+                        let event: Event = serde_json::from_str(&json)?;
+                        events.push((seq as u64, event));
+                    }
+                    out.push((task, events));
+                }
+            }
+            tx.finish()?;
+            Ok(out)
         })
     }
 
@@ -8794,7 +8847,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -9343,7 +9396,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -9834,7 +9887,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -9900,7 +9953,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -9993,7 +10046,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -10452,7 +10505,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -10698,7 +10751,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let conn = Connection::open(&path).unwrap();
         // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -10949,7 +11002,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();

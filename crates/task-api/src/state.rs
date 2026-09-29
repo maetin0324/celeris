@@ -47,6 +47,7 @@ pub struct ApiState {
     pub(crate) tuning: StreamTuning,
     /// ADR-0080 D5: browser の人の操作に要る鍵と broker。
     pub(crate) browser: Arc<crate::browser::BrowserApiConfig>,
+    pub(crate) live_grants: Arc<Mutex<HashMap<String, crate::browser_live::LiveGrantRecord>>>,
 }
 
 pub(crate) struct Inner {
@@ -182,6 +183,7 @@ impl ApiState {
             inner: Arc::new(inner),
             tuning: StreamTuning::default(),
             browser,
+            live_grants: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 

@@ -179,6 +179,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::routing::routes())
         // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
         .merge(crate::browser::routes())
+        .merge(crate::browser_live::routes())
         // ADR-0048 D1（Phase 60a）: Console の読み取り側。実装は `crate::console`。
         .merge(crate::console::routes())
         // ADR-0053 D4（Phase 65）: LLM source の観測。実装は `crate::llm_sources`。

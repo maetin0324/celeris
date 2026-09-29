@@ -249,7 +249,7 @@ pub struct AttestationClaims {
     pub expires_at: i64,
 }
 
-fn decode_hex(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_hex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }

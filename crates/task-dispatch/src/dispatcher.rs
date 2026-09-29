@@ -13,6 +13,35 @@
 //! レビューが通れば `TaskStore::complete_plan` で子タスクを挿入する。
 //!
 //! **LLM 呼び出しはここに書かない。** 判断は全て設定・状態機械・ストアのクエリで決まる。
+//!
+//! ## module map（ADR-0082）
+//!
+//! この facade に残すもの: `Dispatcher` struct と private な補助型（`RunEntry`・`ReviewEntry`・
+//! `Completion` など）、公開の設定型、`new` と setter/getter、`tick`（段階の順序。`disk_ready` は drain
+//! より前）・`drain_completions`・`dispatch_ready`・`is_idle`、`StoreSink` / `ReviewerSink`（browser
+//! ブランチの統合まで）、`mod` 宣言と明示した `pub use`。依存の向きは L0（この facade の型と free helper）
+//! ← L1 ← L2 ← L3 ← L4 ← `tick`。横の呼び出しは `worker_finish` → `phase_integration` の 1 本だけ。
+//!
+//! | モジュール | 責務 | 層 |
+//! |---|---|---|
+//! | `cluster` | cluster / tunnel の接続・生存確認・probe | L1 |
+//! | `housekeeping` | disk guard・scratch pool の GC・後片付け | L1 |
+//! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
+//! | `quota_book` | quota の見積りと release | L1 |
+//! | `provider_select` | provider / account の選択と cooldown | L1 |
+//! | `workspaces` | 作業場所・worktree・container の準備 | L1 |
+//! | `run_context` | run の文脈（extras・session・knowledge・skills） | L1 |
+//! | `worker_task` | worker 本体（free fn の `run_worker`。`Dispatcher` に依存しない） | L1 |
+//! | `work_units` | WorkUnit の gate・準備・並列・checks | L2 |
+//! | `tree_units` | 木の子 task の gate・liveness・一括作成 | L2 |
+//! | `child_tasks` | 委譲した子と承認の子 | L2 |
+//! | `review_spawn` | review run の起動（per-task lock は verdict の保存まで） | L2 |
+//! | `worker_finish` | worker run の終了処理 | L3 |
+//! | `planner_flow` | planner の結果の採用と replan | L3 |
+//! | `review_verdict` | review の判定の適用と repair | L3 |
+//! | `phase_integration` | 工程の統合と途中報（phase report） | L3 |
+//! | `leases` | lease の回収・abort・orphan・drain | L3 |
+//! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

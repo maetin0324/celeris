@@ -1,4 +1,4 @@
-//! ADR-0082 の責務分割。
+//! planner run の結果の採用・やり直し・replan と planner の文脈（ADR-0072、ADR-0079）。ADR-0082 の L3。
 
 use super::*;
 

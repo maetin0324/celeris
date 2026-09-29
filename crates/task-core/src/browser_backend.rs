@@ -2,8 +2,8 @@
 //!
 //! I/O を持たない。backend を実際に走らせた結果（[`ConformanceResult`]）を受け取り、
 //! どの能力を名乗ってよいかと、task をどの backend に送るかを決める。
-//! 既定は既存の loop（ACP / 明示の Claude、ADR-0080 H7 の推奨）で、専用 backend
-//! （browser-specialist）の採用は人の決定（H7）まで `enabled = false` の登録に留める。
+//! 既存の loop（ACP / 明示の Claude）と ADR-0085 で採用された browser-specialist
+//! を同じ適合記録で扱う。
 //! 機密の能力（credential 注入・identity 復元）は P4-A / P4-B の適合が無ければ名乗れない。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -109,7 +109,7 @@ pub struct BackendDescriptor {
     pub version: String,
     /// backend が名乗る能力（宣言）。
     pub declared: BTreeSet<Capability>,
-    /// 人の決定（H7）で有効にされたか。既存の loop は既定で有効。
+    /// 管理者設定で有効にされたか。
     pub enabled: bool,
 }
 

@@ -7,6 +7,38 @@ use task_core::{
     EffectiveProfile, SqliteStore, Status, TaskId, TaskStore,
 };
 
+/// Mock ledger for unit tests of routing and the supervisor. These tests do not certify a
+/// production backend; the real conformance runner is responsible for production records.
+pub(super) fn test_record(workspace: &Path) -> PathBuf {
+    let path = workspace.join("browser-conformance-test.json");
+    let cases = [
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "snapshot_has_refs",
+        "click_by_ref",
+        "screenshot_artifact",
+        "download_to_artifacts",
+    ];
+    let results: Vec<_> = ["acp", "claude-code", "browser-specialist"]
+        .into_iter()
+        .map(|backend_id| {
+            serde_json::json!({
+                "backend_id": backend_id, "version": SUPPORTED_VERSION, "passed": cases,
+            })
+        })
+        .collect();
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "source": "celeris-browser-conformance", "results": results,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    path
+}
+
 #[derive(Default)]
 struct RecordingSink {
     browsers: Mutex<Vec<BrowserRun>>,
@@ -105,7 +137,8 @@ fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capa
         SUPPORTED_VERSION,
     )
     .unwrap();
-    let routed = route_existing_backend("acp", &public).unwrap();
+    let record = test_record(temp.path());
+    let routed = route_existing_backend("acp", &public, &record).unwrap();
     assert_eq!(routed.primary, "acp");
     assert!(routed.fallbacks.contains(&"claude-code".to_string()));
 
@@ -145,9 +178,21 @@ fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capa
     )
     .unwrap();
     for backend in ["acp", "claude-code"] {
-        assert!(route_existing_backend(backend, &sensitive).is_err());
+        assert!(route_existing_backend(backend, &sensitive, &record).is_err());
     }
-    assert!(route_existing_backend("unsupported", &public).is_err());
+    assert!(route_existing_backend("unsupported", &public, &record).is_err());
+
+    let scripted = temp.path().join("scripted.json");
+    let bytes = std::fs::read(&record).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    value["source"] = serde_json::json!("celeris-browser-conformance-scripted");
+    std::fs::write(&scripted, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &public, &scripted).is_err());
+
+    value["source"] = serde_json::json!("celeris-browser-conformance");
+    value["results"][0]["version"] = serde_json::json!("0.38.0");
+    std::fs::write(&scripted, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &public, &scripted).is_err());
 }
 
 #[test]
@@ -286,6 +331,111 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
 struct CliHarness {
     id: &'static str,
     question: bool,
+}
+
+struct FailingHarness;
+
+#[async_trait::async_trait]
+impl WorkerAdapter for FailingHarness {
+    fn id(&self) -> &str {
+        "acp"
+    }
+
+    async fn run(
+        &self,
+        req: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        assert!(req.context.browser.is_some());
+        Err(AdapterError::Other("scripted backend failed".into()))
+    }
+}
+
+#[tokio::test]
+async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance() {
+    let temp = tempfile::tempdir().unwrap();
+    let record = test_record(temp.path());
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    let outcome = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        request(temp.path()),
+        "fallback-run",
+        limits(),
+        &sink,
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(
+        temp.path()
+            .join("runs/fallback-run/browser-fallback-1/config.json")
+            .exists()
+    );
+    let browsers = sink.browsers.lock().unwrap();
+    assert_eq!(browsers.len(), 4);
+    assert_ne!(browsers[0].session_id, browsers[2].session_id);
+
+    let denied = temp.path().join("empty-conformance.json");
+    std::fs::write(
+        &denied,
+        br#"{"schema":1,"source":"celeris-browser-conformance","results":[]}"#,
+    )
+    .unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let error = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        request(empty.path()),
+        "denied-run",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &denied,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("lacks required conformance"));
+    assert!(!empty.path().join("runs/denied-run").exists());
+}
+
+#[tokio::test]
+async fn specialist_wraps_existing_harness_and_runs_same_browser_task() {
+    let temp = tempfile::tempdir().unwrap();
+    let record = test_record(temp.path());
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    let specialist = crate::BrowserSpecialistAdapter::new(Arc::new(CliHarness {
+        id: "acp",
+        question: false,
+    }));
+    let outcome = run_with_executable_record(
+        Arc::new(specialist),
+        request(temp.path()),
+        "specialist-run",
+        limits(),
+        &sink,
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert_eq!(sink.artifacts.lock().unwrap().len(), 2);
 }
 #[async_trait::async_trait]
 impl WorkerAdapter for CliHarness {

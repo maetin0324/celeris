@@ -11,6 +11,7 @@ pub mod browser_credential;
 pub mod browser_egress;
 pub mod browser_live;
 pub mod browser_policy;
+pub mod browser_specialist;
 /// ADR-0066 D1（Phase 110b）: 同一リポジトリの worktree 間で cargo のビルドキャッシュを共有する。
 pub mod build_cache;
 pub mod claude_account;
@@ -59,6 +60,7 @@ pub mod workspace_prune;
 pub use acp::{AcpAdapter, AcpConfig, AcpPermission};
 pub use adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
 pub use aider::{AiderAdapter, AiderConfig};
+pub use browser_specialist::BrowserSpecialistAdapter;
 pub use claude_account::{
     AccountCheck, AccountCheckResult, LoginError, LoginOutcome, LoginResult, LoginSession,
     check_account, start_login,

@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use task_core::browser_backend::{
-    self, BackendDescriptor, BackendKind, Capability, ConformanceResult, FixtureCase,
-    RoutingRequest,
+    self, BackendDescriptor, BackendKind, Capability, ConformanceResult, RoutingRequest,
 };
 use task_core::browser_wait::{
     BrowserWaitReason, BrowserWaitState, NewBrowserWait, OperationIntent,
@@ -382,31 +381,111 @@ pub async fn run(
     limits: RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
-    run_with_executable(
+    run_with_candidates(adapter, Vec::new(), req, run_id, limits, sink).await
+}
+
+/// Execute the selected backend and, for public-only browser tasks, try configured alternatives
+/// in fresh sessions. Each candidate is checked against the measured ledger immediately before
+/// launch. A sensitive policy never enters this retry path.
+pub async fn run_with_candidates(
+    adapter: Arc<dyn WorkerAdapter>,
+    alternates: Vec<Arc<dyn WorkerAdapter>>,
+    req: RunRequest,
+    run_id: &str,
+    limits: RunLimits,
+    sink: &dyn EventSink,
+) -> Result<RunOutcome, AdapterError> {
+    if !task_core::browser::requests_browser(&req.task.skills)
+        || req.context.execution_planner.is_some()
+        || req.context.review.is_some()
+        || req.task.kind != task_core::TaskKind::Execute
+    {
+        return adapter.run(req, run_id, limits, sink).await;
+    }
+    let record_path = std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE")
+        .map(PathBuf::from)
+        .ok_or_else(|| AdapterError::Other("browser conformance record unavailable".into()))?;
+    run_with_executable_candidates_record(
         adapter,
+        alternates,
         req,
         run_id,
         limits,
         sink,
         Path::new("agent-browser"),
         crate::browser_credential::configured(),
+        &record_path,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_executable_candidates_record(
+    adapter: Arc<dyn WorkerAdapter>,
+    alternates: Vec<Arc<dyn WorkerAdapter>>,
+    req: RunRequest,
+    run_id: &str,
+    limits: RunLimits,
+    sink: &dyn EventSink,
+    executable: &Path,
+    credentials: Option<&crate::browser_credential::CredentialSupervisor>,
+    record_path: &Path,
+) -> Result<RunOutcome, AdapterError> {
+    // Credential waits and an active auth section must never be replayed through a fallback.
+    let sensitive = req.context.browser_policy.as_ref().is_some_and(|p| {
+        p.allowed_actions
+            .contains(&task_core::BrowserAction::CredentialUse)
+    });
+    let mut candidates = vec![adapter];
+    if !sensitive {
+        candidates.extend(alternates);
+    }
+    let mut attempted = BTreeSet::new();
+    let mut last_error = None;
+    for candidate in candidates {
+        if !attempted.insert(candidate.id().to_string()) {
+            continue;
+        }
+        let attempt = attempted.len() - 1;
+        match run_with_executable_attempt(
+            candidate,
+            req.clone(),
+            run_id,
+            limits,
+            sink,
+            executable,
+            credentials,
+            record_path,
+            attempt,
+        )
+        .await
+        {
+            Ok(outcome) if !matches!(outcome.terminal, Terminal::Error { .. }) => {
+                return Ok(outcome);
+            }
+            Ok(_) => last_error = Some("browser backend failed".to_string()),
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+    Err(AdapterError::Other(format!(
+        "browser backend lacks required conformance or all capable backends failed: {}",
+        last_error.unwrap_or_else(|| "no backend available".into())
+    )))
 }
 
 /// Observation actions stay off for the rest of a session once a credential was injected
 /// (ADR-0080 D3): authenticated pages may reflect secrets.
 const OBSERVATION_UPSTREAM_ACTIONS: [&str; 4] = ["download", "gettext", "screenshot", "snapshot"];
 
-/// Route the effective request before launching any browser process. These fixtures cover
-/// the existing non-secret CLI loop only. Sensitive requests are refused until an isolated
-/// runtime and trusted injection sink pass their own conformance runs.
+/// Load only measured conformance. The path is supplied by the daemon operator; a missing,
+/// corrupt or stale record fails closed. The runner writes the record after invoking the real
+/// substrate against its local fixture. Sensitive capabilities remain undeclared until P4-A/B.
 fn route_existing_backend(
     adapter_id: &str,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
+    record_path: &Path,
 ) -> Result<browser_backend::RoutingDecision, AdapterError> {
     use Capability as C;
-    use FixtureCase as F;
     let supported: BTreeSet<C> = [
         C::Navigate,
         C::Snapshot,
@@ -416,40 +495,21 @@ fn route_existing_backend(
     ]
     .into_iter()
     .collect();
-    let passed: BTreeSet<F> = [
-        F::OpenAllowedOrigin,
-        F::RefuseDeniedOrigin,
-        F::ResumeAfterCrash,
-        F::SnapshotHasRefs,
-        F::ClickByRef,
-        F::ScreenshotArtifact,
-        F::DownloadToArtifacts,
-    ]
-    .into_iter()
-    .collect();
-    let backends: Vec<BackendDescriptor> = ["acp", "claude-code"]
+    let backends: Vec<BackendDescriptor> = ["acp", "claude-code", "browser-specialist"]
         .into_iter()
         .map(|id| BackendDescriptor {
             id: id.into(),
-            kind: BackendKind::ExistingLoop,
+            kind: if id == "browser-specialist" {
+                BackendKind::BrowserSpecialist
+            } else {
+                BackendKind::ExistingLoop
+            },
             version: SUPPORTED_VERSION.into(),
             declared: supported.clone(),
             enabled: true,
         })
         .collect();
-    let results: BTreeMap<String, ConformanceResult> = backends
-        .iter()
-        .map(|b| {
-            (
-                b.id.clone(),
-                ConformanceResult {
-                    backend_id: b.id.clone(),
-                    version: b.version.clone(),
-                    passed: passed.clone(),
-                },
-            )
-        })
-        .collect();
+    let results = load_conformance(record_path)?;
     let mut required = BTreeSet::new();
     for action in &policy.effective.actions {
         match action {
@@ -492,8 +552,114 @@ fn route_existing_backend(
     Ok(decision)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConformanceLedger {
+    schema: u32,
+    source: String,
+    results: Vec<ConformanceResult>,
+}
+
+fn load_conformance(path: &Path) -> Result<BTreeMap<String, ConformanceResult>, AdapterError> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| AdapterError::Other("browser conformance record unavailable".into()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
+        return Err(AdapterError::Other(
+            "browser conformance record invalid".into(),
+        ));
+    }
+    let bytes = std::fs::read(path)?;
+    let ledger: ConformanceLedger = serde_json::from_slice(&bytes)
+        .map_err(|_| AdapterError::Other("browser conformance record invalid".into()))?;
+    if ledger.schema != 1 || ledger.source != "celeris-browser-conformance" {
+        return Err(AdapterError::Other(
+            "browser conformance record invalid".into(),
+        ));
+    }
+    let mut results = BTreeMap::new();
+    for result in ledger.results {
+        if results.insert(result.backend_id.clone(), result).is_some() {
+            return Err(AdapterError::Other(
+                "browser conformance record invalid".into(),
+            ));
+        }
+    }
+    Ok(results)
+}
+
 /// `run` with an explicit substrate and credential broker (integration tests use fakes).
 pub async fn run_with_executable(
+    adapter: Arc<dyn WorkerAdapter>,
+    req: RunRequest,
+    run_id: &str,
+    limits: RunLimits,
+    sink: &dyn EventSink,
+    executable: &Path,
+    credentials: Option<&crate::browser_credential::CredentialSupervisor>,
+) -> Result<RunOutcome, AdapterError> {
+    if !task_core::browser::requests_browser(&req.task.skills)
+        || req.context.execution_planner.is_some()
+        || req.context.review.is_some()
+        || req.task.kind != task_core::TaskKind::Execute
+    {
+        return adapter.run(req, run_id, limits, sink).await;
+    }
+    let record_path = match std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE") {
+        Some(path) => PathBuf::from(path),
+        None => {
+            #[cfg(test)]
+            {
+                tests::test_record(&req.workspace)
+            }
+            #[cfg(not(test))]
+            {
+                return Err(AdapterError::Other(
+                    "browser conformance record unavailable".into(),
+                ));
+            }
+        }
+    };
+    run_with_executable_record(
+        adapter,
+        req,
+        run_id,
+        limits,
+        sink,
+        executable,
+        credentials,
+        &record_path,
+    )
+    .await
+}
+
+/// The explicit record path keeps tests and the administrative runner independent of global env.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_executable_record(
+    adapter: Arc<dyn WorkerAdapter>,
+    req: RunRequest,
+    run_id: &str,
+    limits: RunLimits,
+    sink: &dyn EventSink,
+    executable: &Path,
+    credentials: Option<&crate::browser_credential::CredentialSupervisor>,
+    record_path: &Path,
+) -> Result<RunOutcome, AdapterError> {
+    run_with_executable_attempt(
+        adapter,
+        req,
+        run_id,
+        limits,
+        sink,
+        executable,
+        credentials,
+        record_path,
+        0,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_with_executable_attempt(
     adapter: Arc<dyn WorkerAdapter>,
     mut req: RunRequest,
     run_id: &str,
@@ -501,6 +667,8 @@ pub async fn run_with_executable(
     sink: &dyn EventSink,
     executable: &Path,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
+    record_path: &Path,
+    attempt: usize,
 ) -> Result<RunOutcome, AdapterError> {
     if !task_core::browser::requests_browser(&req.task.skills)
         || req.context.execution_planner.is_some()
@@ -526,7 +694,7 @@ pub async fn run_with_executable(
         SUPPORTED_VERSION,
     )
     .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
-    let _routing = route_existing_backend(adapter.id(), &policy)?;
+    let _routing = route_existing_backend(adapter.id(), &policy, record_path)?;
     let waits = sink
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
@@ -638,16 +806,29 @@ pub async fn run_with_executable(
             })?),
             _ => None,
         };
+    let attempt_session = if attempt == 0 {
+        run_id.to_string()
+    } else {
+        format!("{run_id}/fallback-{attempt}")
+    };
     let session = approval
         .as_ref()
         .map(|a| a.wait.session_id.clone())
-        .unwrap_or_else(|| session_id(req.task.id, run_id));
+        .unwrap_or_else(|| session_id(req.task.id, &attempt_session));
     let harness_policy = if approval.is_some() {
         credential_harness_policy(&policy.action_policy)?
     } else {
         policy.action_policy.clone()
     };
-    let runtime = req.workspace.join("runs").join(run_id).join("browser");
+    let runtime = req
+        .workspace
+        .join("runs")
+        .join(run_id)
+        .join(if attempt == 0 {
+            "browser".to_string()
+        } else {
+            format!("browser-fallback-{attempt}")
+        });
     let output = req.artifacts_dir.join("browser").join(&session);
     std::fs::create_dir_all(&runtime)?;
     std::fs::create_dir_all(&output)?;

@@ -14437,6 +14437,35 @@ impl Dispatcher {
         container: ContainerDecision,
     ) -> JoinHandle<()> {
         let store = self.store.clone();
+        // Only configured, non-pooled local providers can be replayed as browser fallbacks.
+        // Pool accounts require a separate account selection and are excluded here.
+        let mut browser_candidates: Vec<(String, String, Arc<dyn WorkerAdapter>)> = self
+            .adapters
+            .iter()
+            .filter(|(provider, adapter)| {
+                !self.account_pool_providers.contains(*provider)
+                    && matches!(adapter.id(), "acp" | "claude-code" | "browser-specialist")
+            })
+            .map(|(provider, adapter)| {
+                (
+                    adapter.id().to_string(),
+                    provider.clone(),
+                    Arc::clone(adapter),
+                )
+            })
+            .collect();
+        browser_candidates.sort_by(|a, b| {
+            (a.0 != "browser-specialist", &a.0, &a.1).cmp(&(
+                b.0 != "browser-specialist",
+                &b.0,
+                &b.1,
+            ))
+        });
+        browser_candidates.dedup_by(|a, b| a.0 == b.0);
+        let browser_candidates: Vec<Arc<dyn WorkerAdapter>> = browser_candidates
+            .into_iter()
+            .map(|(_, _, adapter)| adapter)
+            .collect();
         let tx = self.tx.clone();
         let lease = LeaseRenewal {
             ttl: self.config.idle_timeout + self.config.lease_grace,
@@ -14462,6 +14491,7 @@ impl Dispatcher {
             let result = run_worker(
                 store,
                 adapter,
+                browser_candidates,
                 task_id,
                 execution_tier,
                 dir,
@@ -16454,6 +16484,7 @@ fn worktree_marker(ws: &task_worker::TaskWorkspaces) -> task_ops::workspace::Wor
 async fn run_worker(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
+    browser_candidates: Vec<Arc<dyn WorkerAdapter>>,
     task_id: TaskId,
     execution_tier: task_core::Tier,
     dir: PathBuf,
@@ -16952,7 +16983,15 @@ async fn run_worker(
             "browser capability currently requires a local host run".into(),
         ))
     } else {
-        task_worker::browser::run(adapter, req, run_id, limits, &sink).await
+        task_worker::browser::run_with_candidates(
+            adapter,
+            browser_candidates,
+            req,
+            run_id,
+            limits,
+            &sink,
+        )
+        .await
     };
     // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）: run が成功したら未申告の成果物を登録する。
     // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
@@ -21865,6 +21904,7 @@ mod tests {
         run_worker(
             store,
             done_adapter(),
+            Vec::new(),
             task_id,
             Tier::Standard,
             dir,
@@ -27398,6 +27438,7 @@ mod tests {
         let outcome = run_worker(
             store.clone(),
             adapter,
+            Vec::new(),
             task.id,
             Tier::Standard,
             tmp.path().join("mirror"),

@@ -1,7 +1,7 @@
 # Phase browser-4: isolated runtime・trusted injection・backend routing（P4-A〜C）
 
 ---
-tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
+tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 ---
 
 - 状態: **P4-A/B/C の受け入れは未完**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。実 runtime・CDP sink・backend 適合は継続実装が必要。本番未昇格。
@@ -59,3 +59,13 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
 - P4-A全体、P3-A復元、P4-B実CDP/IPC、P4-C実fixture/specialistは未達。production workerは新proxyをまだ起動しない。既存browserのネットワークがこのproxyで制限されるとは主張しない。namespace接続・trusted controllerの運用配線と実適合が必要。
 
 - このrunの最終検査: `cargo test --workspace` → exit 0（2972 passed / 0 failed / 既存 ignored 7件）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all --check` / `git diff --check` → exit 0。機密機能の実適合・production接続の証拠ではない。
+
+## P4-C 継続（run 01M3QGRCA745JCZTKDBDY9R83B）
+
+- ADR-0087 を先に追加。worker 内の固定 `ConformanceResult` を削除し、`CELERIS_BROWSER_CONFORMANCE_FILE` の version 一致記録だけで route する。記録無し・破損・旧 version は起動前に拒否。`browser-specialist` を既存 ACP harness の別 ID として設定可能にし、browser 要求専用にした。dispatch は設定済みの非 account-pool adapter を候補として worker に渡し、公開操作で失敗した backend から別 session の候補へ実行時 fallback する。機密能力は宣言せず、CredentialUse の経路を再試行しない。H3/auth_section の配線は変更していない。
+- `scripts/browser-conformance.py` は agent-browser **0.38.1 の実 binary**を起動し、127.0.0.1 の HTML fixture を ACP・Claude・specialist の各 ID で同じ手順で実行した。scripted driver は open 後に SIGKILL され、別 process が同じ browser session を再開する。denied origin は shim で拒否し、snapshot refs、click 後の fixture POST、screenshot、download を event と server 観測から判定する。外部ネットワークへの fixture 要求は無い。
+- 実行: `python3 scripts/browser-conformance.py --scripted --agent-browser <agent-browser-0.38.1 の絶対パス> --output-dir <この run の成果物ディレクトリ>/p4c-conformance-v4` → exit 0。各 ID で 7/7 case、policy violation 0、harness process crash からの recovery 1。機械記録はこの run の `p4c-conformance-v4/conformance.json` / `same-task.json`。初回は snapshot の `ref=e1` 構文を runner が `@e1` と誤読して失敗し、正規表現を修正して再実行した。
+- **この scripted 実行は backend 適合の証拠にしない。** 三つの ID は同じ scripted driver を起動しており、ACP RPC・Claude CLI・specialist wrapper の実 harness protocol はまだ実行していない。runner は scripted 出力の `source` を別値にし、worker はそれを適合記録として読まない。`--backend-command` に実 backend の command を三件渡し、その実行結果で生成した ledger だけが routing に使える。したがって P4-C の受入 0/1 の実 backend 比較は残る。fake substrate を使う worker 試験は fallback の実経路・session 分離・拒否だけの証拠。
+- 実 LLM 比較: この環境は `claude auth status` が loggedIn=true だが `opencode` CLI が PATH に無く、三 backend の同一 task 比較を実施できない。ACP/OpenCode と specialist 用 harness の認証が整った環境で、三つの `--backend-command ID=<JSON argv>` を指定して同じ runner を再実行する。各 command は環境変数 `CELERIS_BROWSER_CLI`・`CELERIS_BROWSER_ORIGIN`・`CELERIS_BROWSER_PHASE` を読み、`open` phase で local origin を開いて denied origin を試した後に SIGKILL、`resume` phase で snapshot refs・click・screenshot・download を同じ session で実行する。`same-task.json` の accepted・違反・復旧・費用・時間を記録し、worker に渡す適合 file には実 harness 実行の `source` を要求する。実 LLM が使える時は費用を各 harness の usage から記録する。これは ADR-0009 P-34 の残課題。
+- 本番昇格・本番設定変更・内部 origin 追加なし。`CELERIS_BROWSER_CONFORMANCE_FILE` は本番に設定していないため、現在の本番 browser 起動は記録不足で拒否される。適合記録の実 harness 生成とその独立試験が残る。
+- 検査: `cargo test --workspace` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all --check` と `git diff --check` → exit 0。workspace gate は実 agent-browser の scripted fixture を自動実行しないため、上記 runner の独立した exit 0 を併記する。`browser_specialist_provider_uses_configured_acp_harness`、`specialist_wraps_existing_harness_and_runs_same_browser_task`、`execution_fallback_uses_fresh_session_and_refuses_without_conformance`、機密承認非消費の API 試験は workspace gate で成功した。

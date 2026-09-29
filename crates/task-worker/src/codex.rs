@@ -489,7 +489,11 @@ async fn run_codex_once(
         }
         command.args(&config.extra_args);
     }
-    command.arg(prompt);
+    // F5-fix10（本番障害 run 01M3Q21Z9JQWWANGHXJPNH1F8X。claude-code と同じ原因）: プロンプトは argv に
+    // 載せず stdin で渡す。位置引数に `-` を置く（codex-cli の `codex exec --help`: "If not provided as an
+    // argument (or if `-` is used), instructions are read from stdin"、`codex exec resume --help`:
+    // "[PROMPT] … If `-` is used, read from stdin"。resume は SESSION_ID の後なので `-` を明示する）。
+    command.arg("-");
     // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
     crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
@@ -497,17 +501,22 @@ async fn run_codex_once(
         .current_dir(req.cwd());
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
     let mut command = crate::container::wrap(command, config.container.as_deref());
+    // F5-fix10: stdin はプロンプトを渡すためだけに開き、書き終えたら閉じる（コンテナは `-i` 付き）。
     command
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
+    crate::subprocess::check_arg_lengths(CodexAdapter::ID, &command)?;
 
     let mut child = command.spawn().map_err(AdapterError::Spawn)?;
     // ADR-0044 §5 Phase 53 追記（Phase 55）: この run のプロセスグループを覚える（`kill_tree` の入口）。
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
+    // F5-fix10: プロンプトを stdin に流して閉じる（別タスク。下の stdout 読み取りと並行に進む）。
+    let stdin_writer =
+        crate::subprocess::feed_stdin(&mut child, prompt.to_string(), CodexAdapter::ID, run_id)?;
 
     let stdout = child
         .stdout
@@ -622,6 +631,8 @@ async fn run_codex_once(
     } else {
         reap_after_terminal(&mut child, limits.kill_grace).await?
     };
+    // F5-fix10: 子は刈り取った。まだ書き込み中なら（読まずに終わった子）打ち切る。
+    stdin_writer.abort();
 
     if let Err(e) = stderr_task.await {
         warn!("run {run_id}: stderr capture task failed: {e}");
@@ -2037,11 +2048,49 @@ echo '{"type":"turn.completed"}'
         assert_eq!(args[7], "--add-dir");
         assert_eq!(args[8], dir.path().join("artifacts").to_str().unwrap());
         assert_eq!(&args[9..11], ["--sandbox", "read-only"]);
-        let prompt = args[11];
+        // F5-fix10: 最終引数は stdin を指す `-`。プロンプト本文はどの引数にも載らない。
+        assert_eq!(args[11], "-", "{args:?}");
         assert!(
-            prompt.contains("# Task:"),
-            "prompt should be the last arg: {prompt}"
+            args.iter().all(|a| !a.contains("# Task:")),
+            "the prompt must not be passed via argv: {args:?}"
         );
+    }
+
+    /// F5-fix10（本番障害 run 01M3Q21Z9JQWWANGHXJPNH1F8X）: MAX_ARG_STRLEN（131072）を超える 200 KiB の
+    /// プロンプトも、stdin から欠けずに届く（fake の codex が stdin をそのままファイルに写す）。
+    #[tokio::test]
+    async fn f5_fix10_a_200_kib_prompt_reaches_codex_intact_through_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = stub_codex(
+            dir.path(),
+            &format!("cat > stdin.log\n{}", args_log_script()),
+        );
+        let mut req = sample_req(dir.path().to_path_buf());
+        let filler = "0123456789abcdef".repeat(200 * 1024 / 16);
+        req.task.objective = format!("BEGIN-OBJECTIVE {filler} END-OBJECTIVE");
+        let outcome = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-f5fix10-codex",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .expect("a 200 KiB prompt must not fail to spawn");
+        assert!(
+            matches!(outcome.terminal, Terminal::Done { .. }),
+            "{:?}",
+            outcome.terminal
+        );
+        let got = std::fs::read_to_string(dir.path().join("stdin.log")).unwrap();
+        let recorded =
+            std::fs::read_to_string(dir.path().join("runs/run-f5fix10-codex/prompt.txt")).unwrap();
+        assert!(got.len() > crate::subprocess::MAX_SINGLE_ARG_BYTES);
+        assert_eq!(got, recorded, "stdin carries exactly the recorded prompt");
+        assert!(got.contains(&filler));
+        let args = captured_args(dir.path());
+        assert_eq!(args.last().map(String::as_str), Some("-"), "{args:?}");
+        assert!(args.iter().all(|a| a.len() < 4096), "{args:?}");
     }
 
     /// ADR-0016 M8: `codex` も run の終わりに `artifacts/delegate.json` があれば `sink.delegate` を 1 回呼ぶ。
@@ -2480,7 +2529,10 @@ printf '%s\n' '{"type":"turn.completed"}'
             ],
             "{args:?}"
         );
-        assert!(args[7].contains("# Task:"), "prompt is last: {args:?}");
+        assert_eq!(
+            args[7], "-",
+            "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
+        );
     }
 
     /// (b) CoS の継続（resume）run: production の再現。`--add-dir` を落とし、`-c sandbox_mode="read-only"`
@@ -2523,7 +2575,10 @@ printf '%s\n' '{"type":"turn.completed"}'
             ],
             "{args:?}"
         );
-        assert!(args[7].contains("# Task:"), "prompt is last: {args:?}");
+        assert_eq!(
+            args[7], "-",
+            "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
+        );
         assert!(
             !args.contains(&"--add-dir".to_string()),
             "exec resume must not receive --add-dir (see usage-line comment above): {args:?}"
@@ -2563,7 +2618,10 @@ printf '%s\n' '{"type":"turn.completed"}'
             ],
             "{args:?}"
         );
-        assert!(args[7].contains("# Task:"), "prompt is last: {args:?}");
+        assert_eq!(
+            args[7], "-",
+            "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
+        );
     }
 
     // ---- ADR-0074 Phase F5-fix4（本番障害 01M3JXB3DHVBWKWKPW04DTG6SJ。`git merge main` が worktree の
@@ -2678,7 +2736,10 @@ printf '%s\n' '{"type":"turn.completed"}'
             "{args:?}"
         );
         assert_eq!(args.len(), 16, "{args:?}");
-        assert!(args[15].contains("# Task:"), "prompt is last: {args:?}");
+        assert_eq!(
+            args[15], "-",
+            "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
+        );
     }
 
     /// git でない cwd（兄弟も git でない）の fresh run は成果物ディレクトリだけ（従来どおり）。
@@ -2847,7 +2908,8 @@ printf '%s\n' '{"type":"turn.completed"}'
         // The whitelist pasted in the module comment above: --json, --skip-git-repo-check,
         // -c/--config (repeatable). Every other token that looks like a flag (starts with '-') is a
         // regression.
-        const WHITELIST: &[&str] = &["--json", "--skip-git-repo-check", "-c"];
+        // F5-fix10: `-` is the stdin prompt positional, not a flag.
+        const WHITELIST: &[&str] = &["--json", "--skip-git-repo-check", "-c", "-"];
         for arg in &args {
             if arg.starts_with('-') {
                 assert!(

@@ -47,6 +47,8 @@ pub struct ApiState {
     pub(crate) tuning: StreamTuning,
     /// ADR-0080 D5: browser の人の操作に要る鍵と broker。
     pub(crate) browser: Arc<crate::browser::BrowserApiConfig>,
+    /// ADR-0083（P3-A）: identity の封緘。`None` なら identity API は 503 `identity_unavailable`。
+    pub(crate) identity_sealer: Option<Arc<celeris_credentiald::identity_seal::IdentitySealer>>,
 }
 
 pub(crate) struct Inner {
@@ -182,12 +184,22 @@ impl ApiState {
             inner: Arc::new(inner),
             tuning: StreamTuning::default(),
             browser,
+            identity_sealer: None,
         })
     }
 
     /// ADR-0080 D5: browser の鍵・broker を差し替える（テストと、起動後に broker を結線する経路）。
     pub fn with_browser(mut self, browser: crate::browser::BrowserApiConfig) -> Self {
         self.browser = Arc::new(browser);
+        self
+    }
+
+    /// ADR-0083（P3-A）: credentiald の identity 封緘を結線する。
+    pub fn with_identity_sealer(
+        mut self,
+        sealer: Arc<celeris_credentiald::identity_seal::IdentitySealer>,
+    ) -> Self {
+        self.identity_sealer = Some(sealer);
         self
     }
 

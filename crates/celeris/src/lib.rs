@@ -1531,9 +1531,27 @@ async fn start_api(
             .into());
         }
     }
+    // ADR-0083（P3-A）: identity の封緘鍵は DB の隣に置く（browser を結線したときだけ）。
+    let identity_sealer = if config.api.browser_credentiald_control_socket.is_some() {
+        let key_dir = config
+            .db
+            .path
+            .parent()
+            .map(|dir| dir.join("browser-identity-keys"))
+            .unwrap_or_else(|| PathBuf::from("browser-identity-keys"));
+        let sealer = celeris_credentiald::identity_seal::IdentitySealer::open(key_dir)
+            .map_err(|e| ApiError::Startup(format!("browser identity keys: {e}")))?;
+        Some(Arc::new(sealer))
+    } else {
+        None
+    };
     let state = tokio::task::spawn_blocking(move || ApiState::new(settings, rx))
         .await
         .map_err(|e| ApiError::Startup(e.to_string()))??;
+    let state = match identity_sealer {
+        Some(sealer) => state.with_identity_sealer(sealer),
+        None => state,
+    };
     let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {
         addr: listen,
         source,

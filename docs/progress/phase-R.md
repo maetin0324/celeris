@@ -1142,3 +1142,8 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   `artifacts/phase-reports/1-phase-3.md`）→ 段階 phase-3 の `review: human` で根が `blocked awaiting_human`。**P-R5b-5（欠陥）**: 同じ tick で p4 が
   `dependency_ready` → 子 task 01M3Q49ZTST3XQ9DGF6AGNR0XG が作られ dispatch された。段階の人の review は次の段階の unit を止めていない（P-R5b-4 と同根:
   人の gate が unit の dispatch を抑止しない）。人の判断は `POST /tasks/{id}/execution/phase-gate {action: continue|replan|withdraw}`。
+- 17:56Z: web Phase 0 01M3MS2JRDJ4GM0D9VN9PJCB6B は planner v4 が足した repair WU `adr-renumber`（新 ADR を 0078 → 0081 に振り直す）が、自分の check
+  `! grep -rn 'ADR-0078' docs/web docs/adr/0081-web-spa-frontend.md` に ADR 本文の「ADR-0078 は既にある」という説明行が当たって不合格 → replans 3/3 を使い切って
+  いたため task は **failed**（人に聞かず終端。R6 項目「max_replans 超過時の人の要求」と同根）。ブランチ `celeris/01M3MS2J…` は docs のみ 6 ファイル
+  +951（ADR-0081 web SPA frontend、docs/web/feature-parity.md、docs/web/implementation-plan.md、ADR-0002 の supersede 注記、PROGRESS.md）で内容は完成して
+  いたので人（Fable）が main に統合（docs 差分のみ、非 docs ファイルなし）。教訓: planner の repair WU の check は自己言及に弱い（否定 grep）。

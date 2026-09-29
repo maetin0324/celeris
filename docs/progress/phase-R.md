@@ -490,3 +490,12 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+### 本番昇格（2026-09-29 02:39:11Z）: release `a525af223783`（main a525af2 = R1a〜R3a + pegasus ssh 修正 + migration 0030/0031）
+
+- ゲート: cargo-test 108 s（nextest）、GUI 0 件。verify ok=true、live_ok=false（schema 29→31 なので N-1 不可、想定どおり）。
+- **停止→起動**で昇格（backup 20260929-023848-pre-a525af223783）。実行中 run は無し（Phase 2 task が `ready` の隙間）。health: active、schema 31。
+- `[execution.tree]` は既定 false のまま。R1a〜R3a は本番の挙動を変えない（/3 計画は 422）。有効化は R5b。
+- 発端: main が schema 31 に進んでいるのに本番が 29 のままだったため、Phase 2 task（01M3MZKB3DFYJNBH015MJGQ0BT）が main を取り込んで作る release が
+  すべて live_ok=false になり、最終 review 不合格 → replan を 3 回繰り返した（planner 7 run、cost_usd 26.41）。**R6 回収フェーズの論点**: task 側の
+  release/verify は本番 schema を基準にすべきか、`live_ok` を受け入れ条件から外すか、main の schema を進めたら速やかに昇格する運用にするか。

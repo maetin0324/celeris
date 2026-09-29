@@ -91,10 +91,11 @@ const MIGRATION_0031: &str = include_str!("../migrations/0031_task_tree.sql");
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）と credential 台帳（秘密なし）。
 const MIGRATION_0032: &str = include_str!("../migrations/0032_browser_waits.sql");
 const MIGRATION_0033: &str = include_str!("../migrations/0033_browser_task_policies.sql");
+const MIGRATION_0034: &str = include_str!("../migrations/0034_browser_phase3_store.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 33;
+pub const SCHEMA_VERSION: u32 = 34;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -1843,6 +1844,7 @@ impl SqliteStore {
             31 => Ok(MIGRATION_0031),
             32 => Ok(MIGRATION_0032),
             33 => Ok(MIGRATION_0033),
+            34 => Ok(MIGRATION_0034),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

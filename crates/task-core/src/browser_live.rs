@@ -222,6 +222,20 @@ pub enum PersistedLiveEvent {
     },
 }
 
+/// Store に渡せる event。構築時に必ず `persistable` を通す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrubbedLiveEvent(PersistedLiveEvent);
+
+impl ScrubbedLiveEvent {
+    pub fn from_event(event: &LiveEvent) -> Option<Self> {
+        persistable(event).map(Self)
+    }
+
+    pub fn as_persisted(&self) -> &PersistedLiveEvent {
+        &self.0
+    }
+}
+
 fn contains_sensitive(text: &str) -> bool {
     let lower = text.to_lowercase();
     if SENSITIVE_MARKERS.iter().any(|m| lower.contains(m)) || text.contains("eyJ") {

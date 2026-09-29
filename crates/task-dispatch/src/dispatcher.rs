@@ -65,6 +65,40 @@ use crate::policy::{
 };
 
 /// これを超えた tick は段階ごとの所要時間を `warn` で出す（ADR-0015 D2）。
+/// ADR-0072 D14: planner の試行の上限（「1 回だけ再試行」。窓は直近の `ExecutionPlanned` から）。
+const MAX_PLANNER_ATTEMPTS: usize = 2;
+
+/// ADR-0079 D3（Phase R2a）: /3 の計画の上限の違反（段階の数・段階あたりの unit・計画あたりの子 task・
+/// 子 task を持てない深さ）。これだけで不正な計画は、最後の試行では採用して超えた分を決定の要求で止める。
+fn is_tree_plan_limit_error(e: &task_core::execution_plan::PlanValidationError) -> bool {
+    use task_core::execution_plan::PlanValidationError as E;
+    matches!(
+        e,
+        E::TooManyStages { .. }
+            | E::TooManyUnitsInStage { .. }
+            | E::TooManyChildTasks { .. }
+            | E::ChildTaskTooDeep { .. }
+    )
+}
+
+/// ADR-0079 D3（Phase R2a）: 計画の上限（[`is_tree_plan_limit_error`] の 4 つ）だけを外した上限。採用に
+/// 使い、超えた分は `task_core::tree::plan_limit_holds` が元の上限で選んで止める。
+fn relaxed_tree_plan_limits(limits: task_core::ExecutionLimits) -> task_core::ExecutionLimits {
+    let mut relaxed = limits;
+    relaxed.tree.max_stages = usize::MAX;
+    relaxed.tree.max_units_per_stage = usize::MAX;
+    relaxed.tree.max_child_tasks_per_plan = usize::MAX;
+    relaxed.tree.max_depth = u32::MAX;
+    relaxed
+}
+
+/// ADR-0079 D4 (3) / D3（Phase R2a）: 採用する /3 の計画の unit の gate の結果と、採用の直後に止める
+/// unit の束（`Dispatcher::apply_tree_plan_holds` が記録する）。
+struct TreePlanOutcome {
+    report: task_core::UnitGateReport,
+    holds: Vec<task_core::LimitHold>,
+}
+
 const SLOW_TICK: Duration = Duration::from_secs(1);
 
 /// tick の中の 1 段階がこれを超えたら `warn`（ADR-0015 D2。遅いのが DB かファイルかを切り分ける）。
@@ -1166,6 +1200,7 @@ fn set_worker_finished_end(event: &mut Option<Event>, end: task_core::RunEnd) {
 fn parse_planner_output(
     text: &str,
     active: Option<&task_core::ExecutionPlanRow>,
+    done_keys: &std::collections::BTreeSet<String>,
 ) -> Result<task_core::ExecutionPlanSpec, String> {
     let raw: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
@@ -1177,6 +1212,13 @@ fn parse_planner_output(
                     .to_string(),
             );
         };
+        // ADR-0079 D9（Phase R2b）: 差分は /2 の形（`work_units`）しか持たない。/3 の replan は計画の全体を書く。
+        if active.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3 {
+            return Err(format!(
+                "execution-plan-delta/1 は {} の計画の replan には使えない（計画の全体を書くこと。done の unit は省略してよい）",
+                task_core::EXECUTION_PLAN_SCHEMA_V3
+            ));
+        }
         let delta: task_core::execution_plan::ExecutionPlanDelta = serde_json::from_value(raw)
             .map_err(|e| format!("execution-plan-delta.json の形式が不正: {e}"))?;
         if delta.base_version != active.version {
@@ -1187,7 +1229,14 @@ fn parse_planner_output(
         }
         task_core::execution_plan::apply_delta(&active.spec, &delta)
     } else {
-        serde_json::from_value(raw).map_err(|e| format!("execution-plan.json の形式が不正: {e}"))
+        let mut spec: task_core::ExecutionPlanSpec = serde_json::from_value(raw)
+            .map_err(|e| format!("execution-plan.json の形式が不正: {e}"))?;
+        // ADR-0079 D9（Phase R2b）: /3 の replan では done の unit を今の版の spec のまま持ち越す（planner が
+        // 省いた・書き写し損ねた unit も。unit の gate で上げ下げした spec を planner は知らない）。
+        if let Some(active) = active {
+            task_core::execution_plan::carry_done_units_v3(&active.spec, &mut spec, done_keys);
+        }
+        Ok(spec)
     }
 }
 
@@ -5975,6 +6024,11 @@ impl Dispatcher {
         };
         // D14: 計画の検証は run が `Terminal::Done` で終わったときだけ試みる（それ以外は無条件に
         // 「不正な試行」として扱う）。
+        // ADR-0079 D3 / D4 (3)（Phase R2a）: /3 の計画が計画の上限（段階の数・段階あたりの unit・子 task・
+        // `max_depth`）だけで不正なら、1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の
+        // 試行では上限を緩めて採用し、超えた分の unit を `kind: limit` の決定の要求で止める（黙って切らない・
+        // atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
+        let mut adopt_limits = self.config.execution.limits;
         let validation: Result<task_core::execution_plan::ValidatedPlan, String> = if matches!(
             result,
             Ok(RunOutcome {
@@ -5990,20 +6044,55 @@ impl Dispatcher {
                 .and_then(|p| std::fs::read_to_string(p).ok())
             {
                 None => Err("artifacts/execution-plan.json が見つからない".to_string()),
-                Some(text) => match parse_planner_output(&text, active_plan.as_ref()) {
+                Some(text) => match parse_planner_output(
+                    &text,
+                    active_plan.as_ref(),
+                    &done_work_units.iter().map(|(k, _)| k.clone()).collect(),
+                ) {
                     Err(e) => Err(e),
                     Ok(spec) => match validate_plan_harnesses(&spec, &self.config.genres) {
                         Err(e) => Err(e),
-                        Ok(()) => task_core::execution_plan::validate_with(
-                            &spec,
-                            self.config.execution.limits,
-                            &done_work_units,
-                            task_core::PlanContext {
+                        Ok(()) => {
+                            let ctx = task_core::PlanContext {
                                 origin: task_core::PlanOrigin::Planner,
                                 depth: task_core::tree::depth_of(task),
-                            },
-                        )
-                        .map_err(|errors| task_ops::execution::describe_validation_errors(&errors)),
+                            };
+                            match task_core::execution_plan::validate_with(
+                                &spec,
+                                self.config.execution.limits,
+                                &done_work_units,
+                                ctx,
+                            ) {
+                                Ok(v) => Ok(v),
+                                Err(errors)
+                                    if spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3
+                                        && errors.iter().all(is_tree_plan_limit_error)
+                                        && self.planner_attempts_in_window(task_id)?
+                                            >= MAX_PLANNER_ATTEMPTS =>
+                                {
+                                    let relaxed =
+                                        relaxed_tree_plan_limits(self.config.execution.limits);
+                                    match task_core::execution_plan::validate_with(
+                                        &spec,
+                                        relaxed,
+                                        &done_work_units,
+                                        ctx,
+                                    ) {
+                                        Ok(v) => {
+                                            tracing::warn!(%task_id, %run_id, errors = %task_ops::execution::describe_validation_errors(&errors), "the /3 plan breaches only the plan limits on the last attempt; adopting it and holding the excess units for a limit decision (ADR-0079 D3)");
+                                            adopt_limits = relaxed;
+                                            Ok(v)
+                                        }
+                                        Err(e) => {
+                                            Err(task_ops::execution::describe_validation_errors(&e))
+                                        }
+                                    }
+                                }
+                                Err(errors) => {
+                                    Err(task_ops::execution::describe_validation_errors(&errors))
+                                }
+                            }
+                        }
                     },
                 },
             }
@@ -6029,6 +6118,11 @@ impl Dispatcher {
 
         match validation {
             Ok(validated) => {
+                // ADR-0079 D4 (3)（Phase R2a）: /3 の各 unit に unit の gate をかけ、leaf を task に上げる・
+                // task を leaf に下げる（採用する計画の spec に当てる）。子 task にできない深さの compound な
+                // leaf と、上限を超える unit は採用の直後に決定の要求で止める（`apply_tree_plan_holds`）。
+                let (validated, tree_plan) =
+                    self.tree_plan_gate(task, validated, &done_work_units, &mut adopt_limits);
                 let outcome_str = format!(
                     "done: {} work unit(s) planned",
                     validated.spec.work_units.len()
@@ -6134,7 +6228,7 @@ impl Dispatcher {
                         "replan (planner run)".to_string(),
                         task_core::PlanOrigin::Planner,
                         Some(run_id.clone()),
-                        self.config.execution.limits,
+                        adopt_limits,
                         now,
                     )
                     .map(|(plan, _diff)| plan)
@@ -6145,13 +6239,19 @@ impl Dispatcher {
                         validated.spec,
                         task_core::PlanOrigin::Planner,
                         Some(run_id.clone()),
-                        self.config.execution.limits,
+                        adopt_limits,
                         now,
                         children,
                     )
                 };
                 match adopted {
-                    Ok(_) => {
+                    Ok(plan) => {
+                        if let Some(tree_plan) = tree_plan
+                            && let Err(e) =
+                                self.apply_tree_plan_holds(task, &plan, &run_id, tree_plan, now)
+                        {
+                            tracing::warn!(%task_id, %run_id, error = %e, "failed to record the unit gate / tree limit holds of the adopted plan (ADR-0079 R2a)");
+                        }
                         self.store.apply_transition_with_events(
                             task_id,
                             Trigger::Continue {
@@ -6383,25 +6483,8 @@ impl Dispatcher {
         // Phase F5-fix3: 拒否した計画のファイルを残すと、次の planner run はそれを見つけて「検証済み」と
         // 思い込みそのまま再提出する（dogfood 4 回目の 2 回目の試行）。`execution-plan.rejected.json` に移す。
         self.set_aside_rejected_plan(task);
-        let events = self.store.events_for(task_id)?;
-        let since_idx = events
-            .iter()
-            .rposition(|(_, e)| matches!(e, Event::ExecutionPlanned { .. }));
-        let attempts_so_far = events
-            .iter()
-            .enumerate()
-            .filter(|(i, (_, e))| {
-                since_idx.is_none_or(|s| *i > s)
-                    && matches!(
-                        e,
-                        Event::WorkerStarted {
-                            role: Some(RunRole::Planner),
-                            ..
-                        }
-                    )
-            })
-            .count();
-        const MAX_PLANNER_ATTEMPTS: usize = 2;
+        let attempts_so_far = self.planner_attempts_in_window(task_id)?;
+        let tree_planner = self.is_tree_planner(task)?;
         if attempts_so_far < MAX_PLANNER_ATTEMPTS {
             let progress = Event::worker_progress(run_id, planner_retry_message(&reason));
             self.store.apply_transition_with_events(
@@ -6410,6 +6493,49 @@ impl Dispatcher {
                     why: task_core::ContinueWhy::Planned,
                 },
                 finished.into_iter().chain([progress]).collect(),
+            )?;
+        } else if tree_planner {
+            // ADR-0079 D9（Phase R2b）: /3 の planner（木の節点）の計画が 2 回とも不正だった。atomic に倒さず
+            // （分けると決めた仕事を黙って 1 run に潰さない）、replan でも自由文の質問にせず、`kind: plan_invalid`
+            // の決定の要求を出す。Task は `ready` に戻し、決定が開いている間は run を起こさない
+            // （`plan_invalid_hold`。R2a の木の上限の止め方と同じ）。回答の入口は R3a。
+            let mut errors = planner_rejections_since_last_plan(&self.store.events_for(task_id)?);
+            if !errors.iter().any(|e| e == &reason) {
+                errors.push(reason.clone());
+            }
+            let replan = self.store.execution_plan_active(task_id)?.is_some();
+            let path =
+                task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
+            let request = task_core::tree::plan_invalid_decision(
+                task_id,
+                replan,
+                &errors,
+                path,
+                task_core::DecisionRaisedBy {
+                    task_id,
+                    run_id: Some(run_id.to_string()),
+                    origin: task_core::DecisionOrigin::Daemon,
+                },
+            );
+            tracing::warn!(%task_id, %run_id, decision = %request.id, replan, "the /3 plan was invalid twice; asking a human (plan_invalid) instead of falling back to atomic (ADR-0079 D9)");
+            let progress = Event::worker_progress(
+                run_id,
+                format!(
+                    "計画（/3）を 2 回とも採用できませんでした（{reason}）。atomic には倒さず、人の決定（plan_invalid）を待ちます（ADR-0079 D9）。"
+                ),
+            );
+            let mut events: Vec<Event> = finished.into_iter().chain([progress]).collect();
+            if self.open_plan_invalid(task)?.is_none() {
+                events.push(Event::DecisionRequested {
+                    decision: Box::new(request),
+                });
+            }
+            self.store.apply_transition_with_events(
+                task_id,
+                Trigger::Continue {
+                    why: task_core::ContinueWhy::Planned,
+                },
+                events,
             )?;
         } else if self.store.execution_plan_active(task_id)?.is_some() {
             // ADR-0072 D17（Phase E4）: これは replan の planner run（既に `active` な計画がある）。
@@ -10594,6 +10720,393 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// ADR-0072 D14: 直近の `ExecutionPlanned`（無ければ Task の最初）から数えた planner run の試行
+    /// （`WorkerStarted{role: Planner}` の件数。この run 自身を含む）。
+    fn planner_attempts_in_window(&self, task_id: TaskId) -> Result<usize, DispatchError> {
+        let events = self.store.events_for(task_id)?;
+        let since_idx = events
+            .iter()
+            .rposition(|(_, e)| matches!(e, Event::ExecutionPlanned { .. }));
+        Ok(events
+            .iter()
+            .enumerate()
+            .filter(|(i, (_, e))| {
+                since_idx.is_none_or(|s| *i > s)
+                    && matches!(
+                        e,
+                        Event::WorkerStarted {
+                            role: Some(RunRole::Planner),
+                            ..
+                        }
+                    )
+            })
+            .count())
+    }
+
+    /// ADR-0079 D4 (3) / D3（Phase R2a）: 採用する /3 の計画に unit の gate をかけ（上げる・下げるを spec に
+    /// 当てる）、採用の直後に止める unit（子 task にできない compound な leaf、上限を超える unit）を決める。
+    /// /3 でない・木が無効なら何もしない（`None`）。上げる・下げるで計画の上限を超えうるので、spec を変えた
+    /// ときは `adopt_limits` を計画の上限を外したものにする（超えた分は `holds` が止める）。変えた spec が
+    /// 他の理由で検証に落ちれば（通常起きない）、元の spec のまま採用し、上げる・下げるは当てない（警告）。
+    fn tree_plan_gate(
+        &self,
+        task: &Task,
+        validated: task_core::execution_plan::ValidatedPlan,
+        done_work_units: &[(String, task_core::WorkUnitSpec)],
+        adopt_limits: &mut task_core::ExecutionLimits,
+    ) -> (
+        task_core::execution_plan::ValidatedPlan,
+        Option<TreePlanOutcome>,
+    ) {
+        let limits = self.config.execution.limits;
+        let tree = limits.tree;
+        if validated.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3 || !tree.enabled {
+            return (validated, None);
+        }
+        let names =
+            task_ops::tree::parent_repo_names(self.store.as_ref(), task).unwrap_or_default();
+        let depth = task_core::tree::depth_of(task);
+        let ctx = task_core::UnitGateContext {
+            parent: task,
+            parent_depth: depth,
+            parent_repo_names: &names,
+            limits: &tree,
+            work_unit_max_turns: limits.work_unit_max_turns,
+            work_unit_max_wall_secs: limits.work_unit_max_wall_secs,
+        };
+        // replan で持ち越す done の unit は gate をかけ直さない（spec を変えない。D17 の不変条件）。
+        let done_keys: std::collections::BTreeSet<String> =
+            done_work_units.iter().map(|(k, _)| k.clone()).collect();
+        let mut report = task_core::tree::apply_unit_gates(&ctx, &validated.spec, &done_keys);
+        let changed = report.gates.iter().any(|g| {
+            matches!(
+                g.action,
+                Some(task_core::UnitGateAction::Promoted | task_core::UnitGateAction::Demoted)
+            )
+        });
+        let validated = if changed {
+            let relaxed = relaxed_tree_plan_limits(*adopt_limits);
+            match task_core::execution_plan::validate_with(
+                &report.spec,
+                relaxed,
+                done_work_units,
+                task_core::PlanContext {
+                    origin: task_core::PlanOrigin::Planner,
+                    depth,
+                },
+            ) {
+                Ok(v) => {
+                    *adopt_limits = relaxed;
+                    v
+                }
+                Err(errors) => {
+                    let detail = task_ops::execution::describe_validation_errors(&errors);
+                    tracing::warn!(task_id = %task.id, %detail, "the unit gate's promotions / demotions do not validate; adopting the planner's plan as declared (ADR-0079 D4 (3))");
+                    for g in &mut report.gates {
+                        if matches!(
+                            g.action,
+                            Some(
+                                task_core::UnitGateAction::Promoted
+                                    | task_core::UnitGateAction::Demoted
+                            )
+                        ) {
+                            g.action = None;
+                        }
+                    }
+                    report.spec = validated.spec.clone();
+                    validated
+                }
+            }
+        } else {
+            validated
+        };
+        let tree_leaves =
+            task_ops::tree::tree_counters(self.store.as_ref(), task_core::tree::root_id_of(task))
+                .map(|c| c.leaves)
+                .unwrap_or(0);
+        let existing_keys: std::collections::BTreeSet<String> = self
+            .store
+            .work_units_for(task.id)
+            .map(|rows| rows.into_iter().map(|r| r.key).collect())
+            .unwrap_or_default();
+        let extra_held: std::collections::BTreeSet<String> =
+            report.leaf_too_large.iter().cloned().collect();
+        let holds = task_core::tree::plan_limit_holds(
+            &validated.spec,
+            &tree,
+            depth,
+            tree_leaves,
+            &existing_keys,
+            &extra_held,
+        );
+        (validated, Some(TreePlanOutcome { report, holds }))
+    }
+
+    /// ADR-0079 D4 (3) / D3（Phase R2a）: 採用した /3 の計画について、unit の gate の不一致
+    /// （`UnitGateOverridden`）と、決定の要求（`leaf_too_large` / `limit`。D7 の形、path 付き、`decisions` の行）
+    /// と、止める unit の `blocked(decision)` を 1 トランザクションで残す。止めるのは `pending` / `ready` の行
+    /// だけ（replan で持ち越した走っている・終わった行は止めない）。同じ段階の他の unit・兄弟は止めない。
+    fn apply_tree_plan_holds(
+        &self,
+        task: &Task,
+        plan: &task_core::ExecutionPlanRow,
+        run_id: &str,
+        outcome: TreePlanOutcome,
+        now: OffsetDateTime,
+    ) -> Result<(), DispatchError> {
+        let TreePlanOutcome { report, holds } = outcome;
+        let units = self.store.work_units_for(task.id)?;
+        let path =
+            task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
+        let raised_by = task_core::DecisionRaisedBy {
+            task_id: task.id,
+            run_id: Some(run_id.to_string()),
+            origin: task_core::DecisionOrigin::Daemon,
+        };
+        let mut events: Vec<Event> = Vec::new();
+        let mut rows: Vec<task_core::WorkUnitRow> = Vec::new();
+        for g in report.overridden() {
+            let Some(action) = g.action else { continue };
+            events.push(Event::UnitGateOverridden {
+                plan_id: plan.id.clone(),
+                unit_key: g.unit_key.clone(),
+                declared: g.declared,
+                gate: g.decision.mode,
+                action,
+                depth: g.depth,
+                threshold: g.threshold,
+                score: g.decision.score,
+                reason: g.reason.clone(),
+            });
+            tracing::info!(task_id = %task.id, work_unit = %g.unit_key, declared = ?g.declared, action = ?action, reason = %g.reason, "unit gate overrode the planner's declaration (ADR-0079 D4 (3))");
+        }
+        // 止められる行（`pending` / `ready`）だけを選ぶ。
+        let holdable = |key: &str| -> Option<task_core::WorkUnitRow> {
+            units
+                .iter()
+                .find(|u| {
+                    u.key == key
+                        && matches!(
+                            u.status,
+                            task_core::WorkUnitStatus::Pending | task_core::WorkUnitStatus::Ready
+                        )
+                })
+                .cloned()
+        };
+        let hold = |row: task_core::WorkUnitRow,
+                    rows: &mut Vec<task_core::WorkUnitRow>,
+                    events: &mut Vec<Event>| {
+            let mut updated = row.clone();
+            updated.status = task_core::WorkUnitStatus::Blocked;
+            updated.blocked_reason = Some(task_core::WorkUnitBlockedReason::Decision);
+            updated.updated_at = rfc3339(now);
+            events.push(Event::WorkUnitTransitioned {
+                work_unit_id: row.id.clone(),
+                key: row.key.clone(),
+                from: row.status,
+                to: task_core::WorkUnitStatus::Blocked,
+                reason: "decision".to_string(),
+                run_id: None,
+            });
+            rows.push(updated);
+        };
+        for key in &report.leaf_too_large {
+            let (Some(g), Some(row)) = (
+                report.gates.iter().find(|g| &g.unit_key == key),
+                holdable(key),
+            ) else {
+                continue;
+            };
+            let request = task_core::tree::leaf_too_large_decision(
+                g,
+                &row.spec.title,
+                path.clone(),
+                raised_by.clone(),
+            );
+            tracing::warn!(task_id = %task.id, work_unit = %key, decision = %request.id, "a compound leaf cannot become a child task at this depth; asking a human (ADR-0079 D4 (3))");
+            events.push(Event::DecisionRequested {
+                decision: Box::new(request),
+            });
+            hold(row, &mut rows, &mut events);
+        }
+        for h in holds {
+            let held: Vec<task_core::WorkUnitRow> =
+                h.units.iter().filter_map(|k| holdable(k)).collect();
+            if held.is_empty() {
+                continue;
+            }
+            let request = task_core::tree::limit_decision(
+                h.limit,
+                h.scope.as_deref(),
+                h.count,
+                h.max,
+                held.iter().map(|r| r.key.clone()).collect(),
+                path.clone(),
+                raised_by.clone(),
+            );
+            tracing::warn!(task_id = %task.id, limit = h.limit.as_str(), count = h.count, max = h.max, units = ?request.needed_before, decision = %request.id, "a tree limit is exceeded; holding the excess units for a limit decision (ADR-0079 D3)");
+            events.push(Event::DecisionRequested {
+                decision: Box::new(request),
+            });
+            for row in held {
+                hold(row, &mut rows, &mut events);
+            }
+        }
+        if !events.is_empty() {
+            self.store
+                .work_units_apply(task.id, Vec::new(), rows, events)?;
+        }
+        Ok(())
+    }
+
+    /// ADR-0079 D9（Phase R2b）: この task が出した未回答の `kind: plan_invalid` の決定。
+    fn open_plan_invalid(
+        &self,
+        task: &Task,
+    ) -> Result<Option<task_core::DecisionRow>, DispatchError> {
+        let root_id = task_core::tree::root_id_of(task);
+        Ok(self
+            .store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .find(|d| {
+                d.task_id == task.id
+                    && d.kind == task_core::DecisionKind::PlanInvalid
+                    && d.status == task_core::DecisionStatus::Open
+            }))
+    }
+
+    /// ADR-0079 D9（Phase R2b）: `kind: plan_invalid` の決定が開いている task は run を起こさない（`ready` のまま。
+    /// 名指しの待ち = その決定）。木が無効なら常に `false`（従来と 1 バイトも変わらない）。
+    fn plan_invalid_hold(&self, task: &Task) -> Result<bool, DispatchError> {
+        if !self.config.execution.limits.tree.enabled {
+            return Ok(false);
+        }
+        Ok(self.open_plan_invalid(task)?.is_some())
+    }
+
+    /// ADR-0079 D9（Phase R2b）: 木の節点の replan が節点の上限（`[execution] max_replans`）に達した。黙って
+    /// 止まらず（`Skip` のまま何も起きない、を避ける）`kind: limit`（`limit:max_replans`）の決定の要求を 1 件だけ
+    /// 出す（同じ節点で未回答のものがあれば出さない）。木が無効・木の節点でなければ何もしない。
+    fn raise_node_replan_limit(&self, task_id: TaskId, used: u32) -> Result<(), DispatchError> {
+        if !self.config.execution.limits.tree.enabled {
+            return Ok(());
+        }
+        let Some(task) = self.store.get(task_id)? else {
+            return Ok(());
+        };
+        if !self.is_tree_node(&task)? {
+            return Ok(());
+        }
+        let key = task_core::TreeLimitKind::NodeReplans.decision_key(None);
+        let root_id = task_core::tree::root_id_of(&task);
+        let already = self
+            .store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .any(|d| {
+                d.task_id == task_id && d.key == key && d.status == task_core::DecisionStatus::Open
+            });
+        if already {
+            return Ok(());
+        }
+        let path =
+            task_ops::tree::decision_path(self.store.as_ref(), &task).map_err(ops_to_store)?;
+        let request = task_core::tree::limit_decision(
+            task_core::TreeLimitKind::NodeReplans,
+            None,
+            u64::from(used),
+            u64::from(self.config.execution.max_replans),
+            vec![task_core::decision::NEEDED_BEFORE_SELF.to_string()],
+            path,
+            task_core::DecisionRaisedBy {
+                task_id,
+                run_id: None,
+                origin: task_core::DecisionOrigin::Daemon,
+            },
+        );
+        tracing::warn!(%task_id, used, decision = %request.id, "the node's replans are exhausted; asking a human (ADR-0079 D9)");
+        self.store.append_event(
+            task_id,
+            &Event::DecisionRequested {
+                decision: Box::new(request),
+            },
+        )?;
+        Ok(())
+    }
+
+    /// ADR-0079 D3（Phase R2a）: 木の節点か（木の子 task、または /3 の計画を持つ root）。
+    fn is_tree_node(&self, task: &Task) -> Result<bool, DispatchError> {
+        if task.tree.is_some() {
+            return Ok(true);
+        }
+        Ok(self
+            .store
+            .execution_plan_active(task.id)?
+            .is_some_and(|p| p.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3))
+    }
+
+    /// ADR-0079 D3（Phase R2a）: この dispatch が起こす run（worker / planner / repair。統合と「何もしない」は
+    /// 数えない）が木の上限（`max_tree_runs` / `max_tree_tokens` / replan なら `max_tree_replans`）を超えるなら
+    /// `true`（呼び出し側は run を起こさない。Task は今の状態のまま待つ）。超えたときは `kind: limit` の決定の
+    /// 要求を**木に 1 件だけ**出す（同じ key の未回答の決定が木にあれば出さない。tick ごとに増やさない）。
+    /// 木が無効・木の節点でなければ常に `false`（従来と 1 バイトも変わらない）。
+    fn tree_run_limit_hold(
+        &self,
+        task: &Task,
+        gate: &WuDispatchGate,
+    ) -> Result<bool, DispatchError> {
+        let tree = self.config.execution.limits.tree;
+        if !tree.enabled {
+            return Ok(false);
+        }
+        let next = match gate {
+            WuDispatchGate::Atomic | WuDispatchGate::RunWorkUnit(_) => task_core::NextRun::Worker,
+            WuDispatchGate::RunPlanner { replan } => {
+                task_core::NextRun::Planner { replan: *replan }
+            }
+            WuDispatchGate::StartIntegration(_) | WuDispatchGate::Skip => return Ok(false),
+        };
+        if !self.is_tree_node(task)? {
+            return Ok(false);
+        }
+        let root_id = task_core::tree::root_id_of(task);
+        let counters =
+            task_ops::tree::tree_counters(self.store.as_ref(), root_id).map_err(ops_to_store)?;
+        let Some(breach) = task_core::tree::run_limit_breach(&tree, &counters, next) else {
+            return Ok(false);
+        };
+        let key = breach.limit.decision_key(None);
+        if task_ops::tree::open_decision(self.store.as_ref(), root_id, &key)
+            .map_err(ops_to_store)?
+            .is_none()
+        {
+            let path =
+                task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
+            let request = task_core::tree::limit_decision(
+                breach.limit,
+                None,
+                breach.count,
+                breach.max,
+                vec![task_core::decision::NEEDED_BEFORE_SELF.to_string()],
+                path,
+                task_core::DecisionRaisedBy {
+                    task_id: task.id,
+                    run_id: None,
+                    origin: task_core::DecisionOrigin::Daemon,
+                },
+            );
+            tracing::warn!(task_id = %task.id, %root_id, limit = breach.limit.as_str(), count = breach.count, max = breach.max, decision = %request.id, "a tree limit is exceeded; this node starts no new run until a human decides (ADR-0079 D3)");
+            self.store.append_event(
+                task.id,
+                &Event::DecisionRequested {
+                    decision: Box::new(request),
+                },
+            )?;
+        }
+        Ok(true)
+    }
+
     /// ADR-0079 D2 / D4 (4)（Phase R1b）: /3 の計画の採用前の検査。kind task の unit の `repos` が親の
     /// repos の部分集合か（外れれば `Err` = 不正な試行）、部をまたぐ子が認可済みか（未認可なら
     /// `NeedsAuthorization`、人が認めなかったなら `Err`）。子はまだ作らない（unit が ready になったとき）。
@@ -10680,6 +11193,17 @@ impl Dispatcher {
                 let Some((to, reason)) = task_ops::tree::unit_mirror(child.status) else {
                     continue;
                 };
+                // ADR-0079 D9（Phase R2b）: 子が基盤の分類（infra）で failed なら、親の replan にはしない:
+                // 同じ unit から 1 回だけ子を作り直し、それでも失敗したら障害通知と unit `blocked(infra)`。
+                if child.status == Status::Failed {
+                    let failure = task_ops::tree::child_failure(self.store.as_ref(), &child)
+                        .map_err(ops_to_store)?;
+                    if failure.class == task_ops::derive::FailureClass::Infra {
+                        self.handle_child_infra_failure(&parent, &plan, u, &child, &failure, now)?;
+                        changed = true;
+                        continue;
+                    }
+                }
                 let mut row = u.clone();
                 row.status = to;
                 row.blocked_reason = None;
@@ -10804,8 +11328,18 @@ impl Dispatcher {
                 )
                 .and_then(|(mut child, downgrades)| {
                     let base = self.child_base_commit(&parent, u, &units)?;
+                    // ADR-0079 D9（Phase R2b）: 同じ unit から作る何回目の子か（replan が失敗した子の unit を
+                    // 同じ key で残したときは attempt + 1）。
+                    let attempt = self
+                        .store
+                        .events_for(task_id)
+                        .map(|events| task_ops::tree::child_attempts(&events, &u.key) + 1)
+                        .unwrap_or(1);
                     if let Some(tree) = child.tree.as_mut() {
                         tree.base_commit = base;
+                        if let Some(pu) = tree.parent_unit.as_mut() {
+                            pu.attempt = attempt;
+                        }
                     }
                     Ok((child, downgrades))
                 });
@@ -10836,7 +11370,10 @@ impl Dispatcher {
                                 depth,
                             },
                         ];
-                        if self.store.tree_child_create(task_id, &child, row, events)? {
+                        if self
+                            .store
+                            .tree_child_create(task_id, &child, row, events, None)?
+                        {
                             tracing::info!(%task_id, work_unit = %u.key, child_id = %child.id, depth, "child task created from a task unit (ADR-0079 D4 (4))");
                             open_children += 1;
                         }
@@ -10868,6 +11405,144 @@ impl Dispatcher {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// ADR-0079 D9（Phase R2b）: kind task の unit の子が基盤の分類（`classify_task_failure` の infra: 基盤の再試行
+    /// 〈`InfraRequeue`〉を使い切った harness_error・lease の失効・準備の失敗、供給側の requeue の上限）で `failed`
+    /// になった。人への質問にはしない:
+    /// - この版で作り直した回数が `MAX_CHILD_INFRA_RETRIES`（1）未満なら、同じ unit から新しい子（attempt + 1、同じ
+    ///   基点）を作る。unit は `running` のまま（`WorkUnitTransitioned{child_infra_retry}` と `ChildTaskCreated`）。
+    /// - 使い切っていれば unit を `blocked(infra)`（`child_infra_failed`）にし、障害通知（`TaskFailed`、基盤の分類）を
+    ///   1 件出す。段階は完了しない（親は `ready` のまま待つ）。同じ段階の他の unit・兄弟の子は止めない。
+    fn handle_child_infra_failure(
+        &self,
+        parent: &Task,
+        plan: &task_core::ExecutionPlanRow,
+        u: &task_core::WorkUnitRow,
+        child: &Task,
+        failure: &task_ops::tree::ChildFailure,
+        now: OffsetDateTime,
+    ) -> Result<(), DispatchError> {
+        let task_id = parent.id;
+        let events = self.store.events_for(task_id)?;
+        let retries = task_ops::tree::child_infra_retries(&events, &u.id);
+        let child_id = child.id.to_string();
+        let mut block_reason = failure.reason.clone();
+        if retries < task_core::tree::MAX_CHILD_INFRA_RETRIES {
+            let decisions = task_ops::tree::answered_decisions(
+                self.store.as_ref(),
+                task_id,
+                &u.needs_decisions,
+            )
+            .map_err(ops_to_store)?
+            .unwrap_or_default();
+            let built = match plan.spec.units.iter().find(|s| s.key == u.key) {
+                None => Err(format!("unit {} is not in the active plan", u.key)),
+                Some(unit_spec) => task_ops::tree::build_child_task(
+                    self.store.as_ref(),
+                    parent,
+                    &plan.id,
+                    unit_spec,
+                    &decisions,
+                    &self.config.roles,
+                    &self.config.genres,
+                    now,
+                ),
+            };
+            match built {
+                Ok((mut next, _downgrades)) => {
+                    let attempt = task_ops::tree::child_attempts(&events, &u.key) + 1;
+                    if let Some(tree) = next.tree.as_mut() {
+                        // 基点は同じ（親のブランチは段階の途中では動かない。ADR-0079 D6）。
+                        tree.base_commit =
+                            task_core::tree::child_base_commit(child).map(str::to_string);
+                        if let Some(pu) = tree.parent_unit.as_mut() {
+                            pu.attempt = attempt;
+                        }
+                    }
+                    let depth = task_core::tree::depth_of(&next);
+                    let mut row = u.clone();
+                    row.child_task_id = Some(next.id.to_string());
+                    row.updated_at = rfc3339(now);
+                    let parent_events = vec![
+                        Event::WorkUnitTransitioned {
+                            work_unit_id: u.id.clone(),
+                            key: u.key.clone(),
+                            from: task_core::WorkUnitStatus::Running,
+                            to: task_core::WorkUnitStatus::Running,
+                            reason: task_ops::tree::CHILD_INFRA_RETRY_REASON.to_string(),
+                            run_id: None,
+                        },
+                        Event::ChildTaskCreated {
+                            plan_id: plan.id.clone(),
+                            unit_key: u.key.clone(),
+                            child_task_id: next.id,
+                            depth,
+                        },
+                        Event::worker_progress(
+                            String::new(),
+                            format!(
+                                "子 task「{}」（{}）が基盤の失敗で終わりました（{}）。質問にはせず、同じ unit {} から子を作り直します（attempt {attempt}。ADR-0079 D9）。",
+                                child.title, child.id, failure.reason, u.key
+                            ),
+                        ),
+                    ];
+                    if self.store.tree_child_create(
+                        task_id,
+                        &next,
+                        row,
+                        parent_events,
+                        Some(&child_id),
+                    )? {
+                        tracing::warn!(%task_id, work_unit = %u.key, failed_child = %child.id, child_id = %next.id, attempt, "the child task failed for an infrastructure reason; recreated it from the same unit (ADR-0079 D9)");
+                    }
+                    return Ok(());
+                }
+                Err(reason) => {
+                    block_reason = format!("{block_reason}（作り直せませんでした: {reason}）");
+                }
+            }
+        }
+        let mut row = u.clone();
+        row.status = task_core::WorkUnitStatus::Blocked;
+        row.blocked_reason = Some(task_core::WorkUnitBlockedReason::Infra);
+        row.clear_lease();
+        row.updated_at = rfc3339(now);
+        let attempts = retries + 1;
+        let body = format!(
+            "障害（infra）: 子 task「{}」が基盤の失敗で終わりました（自動の作り直し {retries} 回の後。計 {attempts} 回）: {block_reason}。unit {} は blocked(infra)、親「{}」の段階 {} は止まり、兄弟は続きます。再試行は人の操作で（ADR-0079 D9）。",
+            child.title,
+            u.key,
+            parent.title,
+            u.phase.as_deref().unwrap_or("-")
+        );
+        self.store.work_units_apply(
+            task_id,
+            Vec::new(),
+            vec![row],
+            vec![
+                Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: u.status,
+                    to: task_core::WorkUnitStatus::Blocked,
+                    reason: task_ops::tree::CHILD_INFRA_FAILED_REASON.to_string(),
+                    run_id: None,
+                },
+                Event::worker_progress(String::new(), body.clone()),
+            ],
+        )?;
+        tracing::error!(%task_id, work_unit = %u.key, %child_id, "the child task failed again for an infrastructure reason; the unit is blocked(infra) and a failure notification is raised (ADR-0079 D9)");
+        if let Err(e) = self.store.notification_upsert_pending(
+            NotificationKind::TaskFailed,
+            &format!("tree-infra:{}:{child_id}", u.id),
+            &body,
+            parent.project_id,
+            now,
+        ) {
+            tracing::error!(%task_id, error = %e, "failed to record the infra failure notification");
         }
         Ok(())
     }
@@ -10916,6 +11591,8 @@ impl Dispatcher {
         if replans_so_far < self.config.execution.max_replans {
             Ok(WuDispatchGate::RunPlanner { replan: true })
         } else {
+            // ADR-0079 D9（Phase R2b）: 木の節点では上限の超過を人への決定の要求にする（黙って止まらない）。
+            self.raise_node_replan_limit(task_id, replans_so_far)?;
             Ok(WuDispatchGate::Skip)
         }
     }
@@ -11082,8 +11759,13 @@ impl Dispatcher {
     /// 無し）は呼び出し側で既に除いてある（D13「いつ」節）ので、ここでは残りの対象外
     /// （固定パイプラインの harness・`workspace_mode = Shared`）を `execution_gate::decide` の中で
     /// 判定する。すでに判定済みの Task（`routing.execution` が `Some`）には触らない。
+    ///
+    /// ADR-0079 D4 (1)（Phase R2a）: 木の子 task（`tree.parent_unit` を持つ。深さ ≥ 2）は、閾値を深さで
+    /// 上げ（`5 + gate_depth_step × (depth − 1)`）、`[execution] gate` が `shadow` / `off` でも判定し採用する
+    /// （`shadow = false`、`depth` を記録）。root・木でない task は従来どおり（1 バイトも変えない。U-R5）。
     fn execution_gate_if_needed(&self, task: Task) -> Result<Task, DispatchError> {
-        if self.config.execution.gate == task_core::GateMode::Off {
+        let tree_child = task_core::tree::is_tree_child(&task);
+        if self.config.execution.gate == task_core::GateMode::Off && !tree_child {
             return Ok(task);
         }
         if task.kind != task_core::TaskKind::Execute || task.routing.is_none() {
@@ -11105,16 +11787,26 @@ impl Dispatcher {
         let cos_hint_compound = routing
             .execution_hint
             .is_some_and(|h| !h.explicit && h.mode == task_core::ExecutionMode::Compound);
-        let shadow = self.config.execution.gate == task_core::GateMode::Shadow;
+        // ADR-0079 D4 (1)（Phase R2a）: 木の子は shadow でも採用する（記録は `shadow = false`）。
+        let shadow = self.config.execution.gate == task_core::GateMode::Shadow && !tree_child;
+        let at = if tree_child {
+            task_core::GateThreshold::at_depth(
+                task_core::tree::depth_of(&task),
+                self.config.execution.limits.tree.gate_depth_step,
+            )
+        } else {
+            task_core::GateThreshold::ROOT
+        };
         // S4/S6: E3 では決定的な既定値（`false`/`None`）で運用する（U10 と同じく、閾値・重みは
         // shadow の記録を見て後で調整する。ADR-0072「Phase E3 実装時の逸脱・明確化」参照）。
-        let decision = task_core::decide_execution_gate(
+        let decision = task_core::decide_execution_gate_at(
             &task,
             &features,
             human_execution,
             cos_hint_compound,
             task_core::ExecutionGateInputs::default(),
             shadow,
+            at,
         );
         let mut fresh = task.clone();
         let mut new_routing = routing;
@@ -11219,6 +11911,90 @@ impl Dispatcher {
             max_plan_json_bytes: limits.max_plan_json_bytes,
             max_children: limits.max_children,
             previous_attempt_errors,
+            tree: if self.is_tree_planner(task)? {
+                Some(self.tree_planner_context(task)?)
+            } else {
+                None
+            },
+        })
+    }
+
+    /// ADR-0079 D2 / D4 (2)（Phase R2b）: この task の planner に /3 を書かせるか（`[execution.tree] enabled` で、
+    /// まだ計画が無いか、今の計画が /3）。/1・/2 の計画の replan は従来どおり（/2 の形と差分）。
+    fn is_tree_planner(&self, task: &Task) -> Result<bool, DispatchError> {
+        if !self.config.execution.limits.tree.enabled {
+            return Ok(false);
+        }
+        Ok(match self.store.execution_plan_active(task.id)? {
+            None => true,
+            Some(plan) => plan.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3,
+        })
+    }
+
+    /// ADR-0079 D4 (2) / D12（Phase R2b）: /3 の planner に渡す木の中の位置（深さ・残りの深さ・祖先）、計画と木の
+    /// 上限の残り（`[execution.tree]` と `task_ops::tree::tree_counters`。検証と同じ値）、人の段階の名指し。
+    fn tree_planner_context(
+        &self,
+        task: &Task,
+    ) -> Result<task_worker::protocol::TreePlannerContext, DispatchError> {
+        let tree = self.config.execution.limits.tree;
+        let depth = task_core::tree::depth_of(task);
+        let root_id = task_core::tree::root_id_of(task);
+        let counters =
+            task_ops::tree::tree_counters(self.store.as_ref(), root_id).map_err(ops_to_store)?;
+        let open_decisions = self
+            .store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .filter(|d| d.status == task_core::DecisionStatus::Open)
+            .count();
+        let node_replans = self
+            .store
+            .execution_plan_list(task.id)?
+            .len()
+            .saturating_sub(1) as u64;
+        let chain =
+            task_ops::tree::ancestors_with_self(self.store.as_ref(), task).map_err(ops_to_store)?;
+        let ancestors = chain
+            .iter()
+            .enumerate()
+            .take(chain.len().saturating_sub(1))
+            .map(|(i, t)| task_worker::protocol::TreeAncestorContext {
+                title: t.title.clone(),
+                stage: chain
+                    .get(i + 1)
+                    .and_then(|next| next.tree.as_ref())
+                    .and_then(|tr| tr.parent_unit.as_ref())
+                    .map(|u| u.stage.clone()),
+                objective_excerpt: t.objective.chars().take(300).collect(),
+            })
+            .collect();
+        Ok(task_worker::protocol::TreePlannerContext {
+            depth,
+            max_depth: tree.max_depth,
+            remaining_depth: task_core::tree::remaining_depth(depth, tree.max_depth),
+            max_stages: tree.max_stages,
+            max_units_per_stage: tree.max_units_per_stage,
+            max_child_tasks_per_plan: tree.max_child_tasks_per_plan,
+            max_decisions_per_plan: tree.max_open_decisions_per_plan,
+            max_parallel_child_tasks: tree.max_parallel_child_tasks,
+            leaves_left: u64::from(tree.max_tree_leaves.saturating_sub(counters.leaves)),
+            runs_left: u64::from(tree.max_tree_runs.saturating_sub(counters.runs)),
+            replans_left: u64::from(tree.max_tree_replans.saturating_sub(counters.replans)),
+            node_replans_left: u64::from(self.config.execution.max_replans)
+                .saturating_sub(node_replans),
+            tokens_left: tree
+                .max_tree_tokens
+                .map(|max| max.saturating_sub(counters.tokens)),
+            open_decisions_left: tree
+                .max_open_decisions_per_tree
+                .saturating_sub(open_decisions) as u64,
+            ancestors,
+            stages_hint: task
+                .routing
+                .as_ref()
+                .map(|r| r.stages_hint.clone())
+                .unwrap_or_default(),
         })
     }
 
@@ -11228,6 +12004,37 @@ impl Dispatcher {
     /// （`runs`/`checkpoint` の欠落は既存の run でも起こりうる。D5/D8 の合成規則と同じく「無ければ
     /// 状態だけ」に倒す）。
     fn work_unit_plan_summary_line(&self, wu: &task_core::WorkUnitRow) -> String {
+        // ADR-0079 D9（Phase R2b）: kind task の unit は子 task の状態と、失敗なら理由と checkpoint の要約。
+        if wu.kind == task_core::WorkUnitKind::Task {
+            let status = match wu.blocked_reason {
+                Some(reason) => format!("{} ({})", wu.status.as_str(), reason.as_str()),
+                None => wu.status.as_str().to_string(),
+            };
+            let child = wu
+                .child_task_id
+                .as_deref()
+                .and_then(|id| id.parse::<TaskId>().ok())
+                .and_then(|id| self.store.get(id).ok().flatten());
+            let Some(child) = child else {
+                return format!("{} (task) status={status}: no child task yet", wu.key);
+            };
+            let mut line = format!(
+                "{} (task) status={status}: child task {} \"{}\" is {}",
+                wu.key,
+                child.id,
+                child.title,
+                format!("{:?}", child.status).to_lowercase()
+            );
+            if matches!(child.status, Status::Failed | Status::Cancelled)
+                && let Ok(f) = task_ops::tree::child_failure(self.store.as_ref(), &child)
+            {
+                line.push_str(&format!(" ({}): {}", f.class.as_str(), f.reason));
+                if let Some(cp) = f.checkpoint {
+                    line.push_str(&format!("; last checkpoint: {cp}"));
+                }
+            }
+            return line;
+        }
         let checkpoint = wu
             .last_run_id
             .as_deref()
@@ -11286,6 +12093,43 @@ impl Dispatcher {
         let events = self.store.events_for(task_id)?;
         for (_, ev) in events.iter().rev() {
             match ev {
+                // ADR-0079 D9（Phase R2b）: 子 task が失敗（work）・中止で終わり、unit が failed になった。理由は
+                // 子の分類と理由（最終レビューの不合格の理由を含む）と最後の checkpoint の要約。
+                Event::WorkUnitTransitioned {
+                    work_unit_id,
+                    key,
+                    reason,
+                    ..
+                } if reason == "child_failed" || reason == "child_cancelled" => {
+                    let child = self
+                        .store
+                        .work_unit_get(work_unit_id)?
+                        .and_then(|u| u.child_task_id)
+                        .and_then(|id| id.parse::<TaskId>().ok())
+                        .and_then(|id| self.store.get(id).ok().flatten());
+                    let Some(child) = child else {
+                        return Ok(format!("child task of unit {key} failed"));
+                    };
+                    let failure = task_ops::tree::child_failure(self.store.as_ref(), &child)
+                        .map_err(ops_to_store)?;
+                    let attempt = child
+                        .tree
+                        .as_ref()
+                        .and_then(|t| t.parent_unit.as_ref())
+                        .map(|u| u.attempt)
+                        .unwrap_or(1);
+                    let mut out = format!(
+                        "child task \"{}\" (unit {key}, attempt {attempt}, {}) failed ({}): {}",
+                        child.title,
+                        child.id,
+                        failure.class.as_str(),
+                        failure.reason
+                    );
+                    if let Some(cp) = failure.checkpoint {
+                        out.push_str(&format!("; the child's last checkpoint: {cp}"));
+                    }
+                    return Ok(out);
+                }
                 // ADR-0072「Phase F6 実装時の決定」: 人が後から依頼した replan（「人の指示: <note>」）。
                 Event::ExecutionHintSet {
                     replan: true,
@@ -11469,6 +12313,15 @@ impl Dispatcher {
             Some(wu) => WuDispatchGate::RunWorkUnit(Box::new(wu)),
             None => self.wu_dispatch_gate(task.id)?,
         };
+        // ADR-0079 D9（Phase R2b）: /3 の計画が 2 回不正で人の決定（plan_invalid）を待つ task は run を起こさない。
+        if !second_pass && self.plan_invalid_hold(&task)? {
+            return Ok(false);
+        }
+        // ADR-0079 D3（Phase R2a）: 木の上限（run・トークン・replan）。超えるなら新しい run を起こさず、
+        // `kind: limit` の決定の要求を出して（木に 1 件）この節点だけを止める（兄弟の走っている run は続く）。
+        if self.tree_run_limit_hold(&task, &gate)? {
+            return Ok(false);
+        }
         let current_wu = match gate {
             WuDispatchGate::Atomic => None,
             WuDispatchGate::RunWorkUnit(wu) => Some(*wu),
@@ -11501,11 +12354,15 @@ impl Dispatcher {
             == task_core::GateMode::Shadow
             && decision_is_compound
             && gate_decision.map(|d| d.source) == Some(task_core::GateSource::Human);
+        // ADR-0079 D4 (1)（Phase R2a）: 木の子 task の compound は `[execution] gate` に関わらず採用する
+        // （root が compound で分けると決めた木を途中で 1 run に潰さない）。root は従来どおり（U-R5）。
+        let tree_child_compound = decision_is_compound && task_core::tree::is_tree_child(&task);
         let is_planner_dispatch = replan_dispatch
             || (current_wu.is_none()
                 && decision_is_compound
                 && (self.config.execution.gate == task_core::GateMode::On
-                    || shadow_human_explicit_compound));
+                    || shadow_human_explicit_compound
+                    || tree_child_compound));
         // D18/D14: 上書きする前の Task の予算（WU/planner の既定の計算に使う。ADR-0072 D14）。
         let original_task_budget = task.budget;
         // ADR-0074 D5.3（Phase F1）: planner run は `[execution.planner] tier`（既定 standard）で
@@ -29506,6 +30363,7 @@ mod tests {
                 signals: Vec::new(),
                 policy_version: "exec-gate/1".to_string(),
                 shadow: true,
+                depth: None,
             }),
             ..Default::default()
         });
@@ -35168,6 +36026,14 @@ mod tests {
     /// ADR-0079 §7 R1c: 子のブランチの基点・統合での子のブランチの merge・子の最終レビューの基点・孫 → 子 → root
     /// （`src/dispatcher/tests/tree_branches.rs`）。
     mod tree_branches;
+
+    /// ADR-0079 §7 R2a: 深さの閾値・木の子は shadow でも採用・unit の gate（上げる / 下げる / 決定）・木の上限の
+    /// 超過は `kind: limit` の決定の要求（`src/dispatcher/tests/tree_gate.rs`）。
+    mod tree_gate;
+
+    /// ADR-0079 §7 R2b: /3 の planner の入力・2 回不正な /3 の `plan_invalid`・子の失敗 → 親の replan・子の基盤の
+    /// 失敗の再試行と障害通知・replan の上限（`src/dispatcher/tests/tree_replan.rs`）。
+    mod tree_replan;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

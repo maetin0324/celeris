@@ -997,6 +997,7 @@ async fn task_decompose_requires_tasks_interact_and_records_the_mcp_source() {
             signals: Vec::new(),
             policy_version: "exec-gate/1".to_string(),
             shadow: true,
+            depth: None,
         }),
         ..Default::default()
     });

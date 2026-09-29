@@ -607,6 +607,58 @@ pub struct ExecutionPlannerContext {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub previous_attempt_errors: Vec<String>,
     // ---- ここまで ----
+    /// ADR-0079 D4 (2) / D12（Phase R2b）: `[execution.tree] enabled` で、この task が /3 の計画を書くとき
+    /// （計画が無い・今の計画が /3）だけ `Some`。planner は `celeris.execution-plan/3` を書く。`None` なら
+    /// プロンプトは R2b より前と 1 バイトも変わらない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<TreePlannerContext>,
+}
+
+/// `context.execution_planner.tree`（ADR-0079 D4 (2) / D12。Phase R2b）: /3 の planner に渡す木の中の位置・
+/// 上限の残り・人の段階の名指し。値は dispatcher が `[execution.tree]` と木の数え上げ（`tree_counters`）から
+/// 決定的に埋める（検証と同じ `TreeLimits`。F5-fix3 と同じく 1 か所から）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TreePlannerContext {
+    /// この task の深さ（task の層数。root = 1）。
+    pub depth: u32,
+    pub max_depth: u32,
+    /// `max_depth − depth`。1 以上なら kind task の unit（子 task）を書ける。0 なら leaf だけ。
+    pub remaining_depth: u32,
+    /// 計画の上限（検証で拒否）。
+    pub max_stages: usize,
+    pub max_units_per_stage: usize,
+    pub max_child_tasks_per_plan: usize,
+    pub max_decisions_per_plan: usize,
+    /// 同時に走る子 task の数（超えた分は待つだけ。拒否はしない）。
+    pub max_parallel_child_tasks: usize,
+    /// 木の残り（上限 − 木の今の数。0 で止まり、人への決定の要求になる）。
+    pub leaves_left: u64,
+    pub runs_left: u64,
+    pub replans_left: u64,
+    /// この節点の replan の残り（`[execution] max_replans` − この task の replan の数）。
+    pub node_replans_left: u64,
+    /// `max_tree_tokens` を設定したときだけ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_left: Option<u64>,
+    /// 木の未回答の決定の残り（`max_open_decisions_per_tree` − 未回答の数）。
+    pub open_decisions_left: u64,
+    /// root からこの task の親まで（root が先頭）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<TreeAncestorContext>,
+    /// 人が名指しした段階（ADR-0079 D12。構造の強制ではない）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages_hint: Vec<task_core::StageHint>,
+}
+
+/// `context.execution_planner.tree.ancestors[]`（ADR-0079 D4 (2)）: 祖先 1 つ。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TreeAncestorContext {
+    pub title: String,
+    /// この祖先の計画の中で、次の節点（無ければこの task）が属する段階。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    /// 目的の先頭 300 文字。
+    pub objective_excerpt: String,
 }
 
 fn is_zero_usize(n: &usize) -> bool {

@@ -208,13 +208,21 @@ pub fn replan(
         .collect();
     // ADR-0074 D1.4（Phase F2b）: daemon が足した WU（統合 WU、統合の repair WU）は計画の spec に
     // 無いので、done の不変条件（`validate`）の対象にしない（行はそのまま持ち越す）。
-    let plan_keys: BTreeSet<&str> = active
-        .spec
+    // ADR-0079 D9（Phase R2b）: /3 は段階を工程として /2 と同じ行に写す（`internal_view`）。統合 WU・工程の
+    // 障壁・daemon が足した WU の扱いは /2 と同じ。
+    let active_internal = task_core::internal_view(&active.spec);
+    let plan_keys: BTreeSet<&str> = active_internal
         .work_units
         .iter()
         .map(|w| w.key.as_str())
         .collect();
-    let v2 = spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V2;
+    let v2 = task_core::is_phased_schema(&spec.schema);
+    let v3 = spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3;
+    let new_phases: BTreeSet<String> = task_core::internal_view(&spec)
+        .phases
+        .iter()
+        .map(|p| p.key.clone())
+        .collect();
     // ADR-0074 F5-fix: dispatcher（planner run の検証）と同じ規則を task-core の関数で共有する。
     let daemon_added = |u: &WorkUnitRow| -> bool {
         task_core::is_daemon_added_work_unit(&active.spec, u)
@@ -232,13 +240,9 @@ pub fn replan(
     let validated = validate_with(&spec, limits, &done_work_units, ctx)
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
 
+    let internal = task_core::internal_view(&validated.spec).into_owned();
     let current_keys: BTreeSet<&str> = current.iter().map(|u| u.key.as_str()).collect();
-    let new_keys: BTreeSet<&str> = validated
-        .spec
-        .work_units
-        .iter()
-        .map(|w| w.key.as_str())
-        .collect();
+    let new_keys: BTreeSet<&str> = internal.work_units.iter().map(|w| w.key.as_str()).collect();
     // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を
     // 「新しい」key として再利用しようとしたら拒否する（D5）。
     let all_keys_ever: BTreeSet<&str> = all_units.iter().map(|u| u.key.as_str()).collect();
@@ -269,11 +273,7 @@ pub fn replan(
         if u.kind == task_core::WorkUnitKind::Integrate {
             continue;
         }
-        if daemon_added(u)
-            && u.phase
-                .as_deref()
-                .is_some_and(|p| spec.phases.iter().any(|ph| ph.key == p))
-        {
+        if daemon_added(u) && u.phase.as_deref().is_some_and(|p| new_phases.contains(p)) {
             continue;
         }
         if u.status != WorkUnitStatus::Done && !new_keys.contains(u.key.as_str()) {
@@ -297,7 +297,7 @@ pub fn replan(
 
     let mut new_work_units = Vec::new();
     for (seq, &idx) in validated.topological_order.iter().enumerate() {
-        let wu_spec = validated.spec.work_units[idx].clone();
+        let wu_spec = internal.work_units[idx].clone();
         if done_keys.contains(wu_spec.key.as_str()) {
             // done は不変。行には触れない（`plan_id`/`seq` も元のまま）。
             continue;
@@ -311,8 +311,25 @@ pub fn replan(
         } else {
             WorkUnitStatus::Pending
         };
+        let needs_decisions = if v3 {
+            task_core::effective_needs_decisions(&validated.spec, &wu_spec.key)
+        } else {
+            Vec::new()
+        };
         match current.iter().find(|u| u.key == wu_spec.key) {
             Some(existing) => {
+                // ADR-0079 D9（Phase R2b）: kind task の unit の子がまだ走っている（unit `running`）なら、行は
+                // `running` のまま持ち越す（子を捨てない。子の終わりは次の照合で写す）。子が failed / cancelled
+                // だった unit を新しい版に残したら、子の結び付きを外して新しい子を作らせる（同じ unit から
+                // attempt + 1。元の子の task とブランチは残る）。
+                let child_alive = existing.kind == task_core::WorkUnitKind::Task
+                    && existing.status == WorkUnitStatus::Running
+                    && existing.child_task_id.is_some();
+                let status = if child_alive {
+                    WorkUnitStatus::Running
+                } else {
+                    status
+                };
                 let from = existing.status;
                 let spec_changed = existing.spec != wu_spec;
                 if spec_changed || from != status {
@@ -334,6 +351,14 @@ pub fn replan(
                 row.retries = 0;
                 row.last_run_id = None;
                 row.last_checkpoint_run_id = None;
+                if v3 {
+                    row.needs_decisions = needs_decisions;
+                }
+                if row.kind == task_core::WorkUnitKind::Task && !child_alive {
+                    row.child_task_id = None;
+                    row.head_commit = None;
+                    row.base_commit = None;
+                }
                 if from != status {
                     extra_events.push(Event::WorkUnitTransitioned {
                         work_unit_id: row.id.clone(),
@@ -349,7 +374,7 @@ pub fn replan(
             None => {
                 diff.added.push(wu_spec.key.clone());
                 let is_repair = wu_spec.kind == task_core::WorkUnitKind::Repair;
-                let row = WorkUnitRow::new(
+                let mut row = WorkUnitRow::new(
                     new_id(),
                     task_id.to_string(),
                     new_plan_id.clone(),
@@ -358,6 +383,7 @@ pub fn replan(
                     status,
                     created_at.clone(),
                 );
+                row.needs_decisions = needs_decisions;
                 // ADR-0074 D6.2（Phase F1）: replan（LLM/人）が自ら `kind = repair` の WU を書いたら、
                 // class を `"planner"` として残す（`execution_metrics` の `unknown` を無くす）。
                 // daemon の決定的な repair（`try_review_repair`）はこの経路を通らない
@@ -427,8 +453,7 @@ pub fn replan(
                 }
             }
         }
-        let new_phase_keys: BTreeSet<String> = validated
-            .spec
+        let new_phase_keys: BTreeSet<String> = internal
             .phases
             .iter()
             .map(|p| task_core::integrate_key(&p.key))

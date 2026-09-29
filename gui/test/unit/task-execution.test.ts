@@ -179,6 +179,13 @@ describe("task-execution", () => {
     expect(directExecutionSummary(NO_PLAN.metrics)).toBe("直接実行（Run 2 回、continuation 1 回）");
     expect(NO_PLAN.plan).toBeNull();
     expect(gateModeLabel(NO_PLAN)).toBe("atomic — atomic/score");
+    // celeris ADR-0079 R2a: 木の子の gate は深さと閾値を添える。
+    const gate = NO_PLAN.gate;
+    if (gate) {
+      expect(gateModeLabel({ ...NO_PLAN, gate: { ...gate, mode: "compound", depth: 2, threshold: 7 } })).toBe(
+        "compound（木の子: 深さ 2・閾値 7） — atomic/score",
+      );
+    }
   });
 
   it("計画あり: 現在の WU は running が優先、見出しに Run 番号・model・harness・status が並ぶ", () => {

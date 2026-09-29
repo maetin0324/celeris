@@ -1165,17 +1165,26 @@ pub trait TaskStore:
     /// 子 task の生成と状態の写しの照合に使う（木が無ければ空で、何もしない）。
     fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError>;
 
+    /// ADR-0079 D3（Phase R2a）: 木の節点（`root_id` の task 自身と、`tasks.root_id = root_id` の子孫）。
+    /// `created_at` 昇順（同順位は rowid）。木の上限の数え上げ（`task_ops::tree::tree_counters`）に使う。
+    /// root 自身は `tree` を持たない（`root_id` 列は NULL。R1b 付記 6.）ので id で拾う。
+    fn tree_tasks(&self, root_id: TaskId) -> Result<Vec<Task>, StoreError>;
+
     /// ADR-0079 D4 (4)（Phase R1b）: kind task の unit から子 task を作る 1 トランザクション。
     /// 親が終端でなく、unit の行（`unit.id`）が今も `ready` で `child_task_id` を持たないことを確かめ、
     /// 子を挿入して `Event::Created{origin: plan_unit}` を積み、unit の行を `unit`（呼び出し側が
     /// `running`・`child_task_id` を書いたもの）に差し替え、親の events に `parent_events`
     /// （`WorkUnitTransitioned` と `ChildTaskCreated`）を積む。条件に合わなければ何も書かず `Ok(false)`。
+    ///
+    /// ADR-0079 D9（Phase R2b）: `replaces = Some(prev)` は基盤の失敗の作り直し（同じ unit から新しい子）。
+    /// unit の行が `running` で `child_task_id = prev` であることを確かめる（`ready`・子なしの代わりに）。
     fn tree_child_create(
         &self,
         parent_id: TaskId,
         child: &Task,
         unit: WorkUnitRow,
         parent_events: Vec<Event>,
+        replaces: Option<&str>,
     ) -> Result<bool, StoreError>;
 
     /// ADR-0074 D1.4（Phase F2）: Task の lease（工程の保持者）の期限を `ttl` 先まで延ばす
@@ -6022,6 +6031,22 @@ impl TaskStore for SqliteStore {
         Ok(())
     }
 
+    fn tree_tasks(&self, root_id: TaskId) -> Result<Vec<Task>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT json FROM tasks WHERE id = ?1 OR root_id = ?1 ORDER BY created_at ASC, rowid ASC",
+            )?;
+            let rows = stmt.query_map(params![root_id.to_string()], |row| {
+                row.get::<_, String>(0)
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(Self::row_to_task(row?)?);
+            }
+            Ok(out)
+        })
+    }
+
     fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
@@ -6040,6 +6065,7 @@ impl TaskStore for SqliteStore {
         child: &Task,
         unit: WorkUnitRow,
         parent_events: Vec<Event>,
+        replaces: Option<&str>,
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -6064,10 +6090,14 @@ impl TaskStore for SqliteStore {
         let Some(current) = current else {
             return Ok(false);
         };
-        if current.status != WorkUnitStatus::Ready
-            || current.child_task_id.is_some()
-            || current.kind != crate::execution_plan::WorkUnitKind::Task
-        {
+        let expected = match replaces {
+            None => current.status == WorkUnitStatus::Ready && current.child_task_id.is_none(),
+            Some(prev) => {
+                current.status == WorkUnitStatus::Running
+                    && current.child_task_id.as_deref() == Some(prev)
+            }
+        };
+        if !expected || current.kind != crate::execution_plan::WorkUnitKind::Task {
             return Ok(false);
         }
         Self::insert_tx(&tx, child)?;
@@ -10672,6 +10702,7 @@ mod tests {
                 plan_id: "plan-1".into(),
                 unit_key: "p1".into(),
                 stage: "phase-1".into(),
+                attempt: 1,
             },
             Some("abc".into()),
         ));

@@ -7,14 +7,14 @@ use super::*;
 
 /// planner run には計画の列を順に書き、それ以外の run は `Done` で終わる。子 task の run
 /// （計画を持たない task の run = `work_unit` が無い run）は `child_delay` だけ待ってから終わる。
-struct TreeAdapter {
+pub(super) struct TreeAdapter {
     plans: StdMutex<std::collections::VecDeque<String>>,
     child_delay: Duration,
     seen: Arc<StdMutex<Vec<task_worker::RunContext>>>,
 }
 
 impl TreeAdapter {
-    fn new(plans: Vec<String>, child_delay: Duration) -> Self {
+    pub(super) fn new(plans: Vec<String>, child_delay: Duration) -> Self {
         TreeAdapter {
             plans: StdMutex::new(plans.into_iter().collect()),
             child_delay,
@@ -56,7 +56,7 @@ impl WorkerAdapter for TreeAdapter {
     }
 }
 
-fn command_criterion(cmd: &str) -> serde_json::Value {
+pub(super) fn command_criterion(cmd: &str) -> serde_json::Value {
     serde_json::to_value(task_core::Criterion {
         text: format!("{cmd} passes"),
         check: Check::Command {
@@ -67,7 +67,7 @@ fn command_criterion(cmd: &str) -> serde_json::Value {
     .unwrap()
 }
 
-fn leaf(key: &str, stage: &str, deps: &[&str]) -> serde_json::Value {
+pub(super) fn leaf(key: &str, stage: &str, deps: &[&str]) -> serde_json::Value {
     serde_json::json!({
         "key": key,
         "stage": stage,
@@ -80,11 +80,20 @@ fn leaf(key: &str, stage: &str, deps: &[&str]) -> serde_json::Value {
     })
 }
 
-fn task_unit(key: &str, stage: &str, deps: &[&str], acceptance_cmd: &str) -> serde_json::Value {
+pub(super) fn task_unit(
+    key: &str,
+    stage: &str,
+    deps: &[&str],
+    acceptance_cmd: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "key": key,
         "stage": stage,
         "kind": "task",
+        // ADR-0079 D4 (3)（Phase R2a）: 小さな kind task の unit は unit の gate で atomic になり、構造上の
+        // 理由が無ければ leaf に下げられる。ここでは子 task のまま残す理由として「親に無い skill（別の部署）」を
+        // 持たせる（担当の無い試験の組織では matching に影響しない）。
+        "skills": ["tree-fixture"],
         "title": format!("Child {key}"),
         "objective": format!("Deliver the {key} part as its own reviewed task"),
         "depends_on": deps,
@@ -92,7 +101,7 @@ fn task_unit(key: &str, stage: &str, deps: &[&str], acceptance_cmd: &str) -> ser
     })
 }
 
-fn stage(key: &str, review_human: bool) -> serde_json::Value {
+pub(super) fn stage(key: &str, review_human: bool) -> serde_json::Value {
     let mut s =
         serde_json::json!({"key": key, "kind": "implement", "title": format!("Stage {key}")});
     if review_human {
@@ -101,7 +110,7 @@ fn stage(key: &str, review_human: bool) -> serde_json::Value {
     s
 }
 
-fn v3_plan(stages: Vec<serde_json::Value>, units: Vec<serde_json::Value>) -> String {
+pub(super) fn v3_plan(stages: Vec<serde_json::Value>, units: Vec<serde_json::Value>) -> String {
     serde_json::json!({
         "schema": task_core::EXECUTION_PLAN_SCHEMA_V3,
         "rationale": "the child part is reviewed on its own",
@@ -111,13 +120,16 @@ fn v3_plan(stages: Vec<serde_json::Value>, units: Vec<serde_json::Value>) -> Str
     .to_string()
 }
 
-fn tree_limits() -> task_core::ExecutionLimits {
+pub(super) fn tree_limits() -> task_core::ExecutionLimits {
     let mut limits = task_core::ExecutionLimits::default();
     limits.tree.enabled = true;
     limits
 }
 
-fn tree_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<dyn WorkerAdapter>) -> Dispatcher {
+pub(super) fn tree_dispatcher(
+    store: &Arc<dyn TaskStore>,
+    adapter: Arc<dyn WorkerAdapter>,
+) -> Dispatcher {
     let mut d = dispatcher(store.clone(), adapter, 3);
     d.config.execution.gate = task_core::GateMode::On;
     d.config.execution.planner.adapter = "instant".to_string();
@@ -125,14 +137,17 @@ fn tree_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<dyn WorkerAdapter>) 
     d
 }
 
-fn unit<'a>(units: &'a [task_core::WorkUnitRow], key: &str) -> &'a task_core::WorkUnitRow {
+pub(super) fn unit<'a>(
+    units: &'a [task_core::WorkUnitRow],
+    key: &str,
+) -> &'a task_core::WorkUnitRow {
     units
         .iter()
         .find(|u| u.key == key)
         .unwrap_or_else(|| panic!("no unit {key}: {units:?}"))
 }
 
-fn unit_reasons(events: &[(u64, Event)], key: &str) -> Vec<String> {
+pub(super) fn unit_reasons(events: &[(u64, Event)], key: &str) -> Vec<String> {
     events
         .iter()
         .filter_map(|(_, e)| match e {
@@ -156,7 +171,7 @@ fn view_ctx() -> task_ops::view::ViewContext {
 /// `child_task_id` と状態を含む〉、`execution_plans`、`decisions`）。`runs` の表は比べない: 偽のアダプタで
 /// 走らせた /2・/3 の計画では、planner run の role と並列 WU の run の `work_unit_id` / `seq` が
 /// events から復元しきれない（木と無関係に R1b 以前からある差。PROGRESS の未解決に記録）。
-fn assert_replay_is_clean(store: &Arc<dyn TaskStore>) {
+pub(super) fn assert_replay_is_clean(store: &Arc<dyn TaskStore>) {
     let report = task_ops::replay::replay(store.as_ref()).unwrap();
     assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
     let (wu, _runs, plans, _) =
@@ -436,7 +451,7 @@ async fn child_waits_for_dependencies_and_decisions() {
 }
 
 /// 子を dispatch → running → 指定の終端へ（store の遷移だけ。LLM も adapter も使わない）。
-fn drive_child(store: &Arc<dyn TaskStore>, id: TaskId, to: Status) {
+pub(super) fn drive_child(store: &Arc<dyn TaskStore>, id: TaskId, to: Status) {
     match to {
         Status::Cancelled => {
             store.apply_transition(id, Trigger::Cancel, None).unwrap();
@@ -461,7 +476,7 @@ fn drive_child(store: &Arc<dyn TaskStore>, id: TaskId, to: Status) {
     assert_eq!(store.get(id).unwrap().unwrap().status, to);
 }
 
-fn child_of(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> TaskId {
+pub(super) fn child_of(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> TaskId {
     let units = store.work_units_for(root).unwrap();
     unit(&units, key)
         .child_task_id
@@ -624,7 +639,7 @@ async fn child_failure_fails_the_unit_and_the_stage_does_not_complete() {
 }
 
 /// 子の run が走っている（`child_delay` の間）まで tick する。子の id を返す。
-async fn tick_until_child_runs(
+pub(super) async fn tick_until_child_runs(
     d: &mut Dispatcher,
     store: &Arc<dyn TaskStore>,
     root: TaskId,
@@ -730,6 +745,7 @@ async fn cancel_cascades_to_subtree() {
             plan_id: "child-plan".into(),
             unit_key: "g".into(),
             stage: "g1".into(),
+            attempt: 1,
         },
         None,
     ));
@@ -792,6 +808,7 @@ async fn tree_runs_cannot_delegate() {
             plan_id: "p".into(),
             unit_key: "c".into(),
             stage: "s1".into(),
+            attempt: 1,
         },
         None,
     ));

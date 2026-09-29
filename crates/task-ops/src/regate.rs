@@ -236,6 +236,7 @@ mod tests {
             signals: Vec::new(),
             policy_version: "exec-gate/1".to_string(),
             shadow: true,
+            depth: None,
         });
         t.routing = Some(routing.clone());
         store

@@ -2596,6 +2596,7 @@ mod tests {
                 signals: vec![],
                 policy_version: task_core::EXECUTION_GATE_POLICY_VERSION.to_string(),
                 shadow: false,
+                depth: None,
             }),
             ..task_core::TaskRouting::default()
         });

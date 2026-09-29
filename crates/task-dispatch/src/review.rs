@@ -1351,6 +1351,7 @@ mod tests {
                 plan_id: "plan".into(),
                 unit_key: "c".into(),
                 stage: "s1".into(),
+                attempt: 1,
             }),
             base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
         });

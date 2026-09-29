@@ -2338,6 +2338,14 @@ pub enum WorkUnitBlockedReason {
     /// `Trigger::Continue{why: Replan}` で即座に Task を Ready へ戻す（Blocked のままにはしない）ので、
     /// この行が実際に `Task.status == Blocked` と一緒に残るのは replan の上限を使い切ったときだけ。
     PlanIssue,
+    /// ADR-0079 D3 / D4 (3)（Phase R2a）: 人への決定の要求（`kind: limit` / `leaf_too_large`）を待つ。
+    /// 木の上限を超える unit、子 task にできない深さの compound な leaf。同じ段階の他の unit・兄弟は
+    /// 止めない（工程の失敗にも質問にも数えない）。回答で再開するのは R3a。
+    Decision,
+    /// ADR-0079 D9（Phase R2b）: kind task の unit の子が基盤の分類で失敗し、自動の作り直し
+    /// （`MAX_CHILD_INFRA_RETRIES`）でも失敗した。障害通知を出し、人の再試行を待つ（質問でも決定でもない）。
+    /// `Decision` と同じく工程の失敗に数えず、同じ段階の他の unit・兄弟は止めない（段階は完了しない）。
+    Infra,
 }
 
 impl WorkUnitBlockedReason {
@@ -2347,6 +2355,8 @@ impl WorkUnitBlockedReason {
             WorkUnitBlockedReason::DependencyFailed => "dependency_failed",
             WorkUnitBlockedReason::Limit => "limit",
             WorkUnitBlockedReason::PlanIssue => "plan_issue",
+            WorkUnitBlockedReason::Decision => "decision",
+            WorkUnitBlockedReason::Infra => "infra",
         }
     }
 
@@ -2356,6 +2366,8 @@ impl WorkUnitBlockedReason {
             "dependency_failed" => Some(WorkUnitBlockedReason::DependencyFailed),
             "limit" => Some(WorkUnitBlockedReason::Limit),
             "plan_issue" => Some(WorkUnitBlockedReason::PlanIssue),
+            "decision" => Some(WorkUnitBlockedReason::Decision),
+            "infra" => Some(WorkUnitBlockedReason::Infra),
             _ => None,
         }
     }
@@ -2723,9 +2735,16 @@ pub fn runnable_work_units(units: &[WorkUnitRow], in_flight: usize, limit: usize
         .filter(|u| u.kind != WorkUnitKind::Task)
         .collect();
 
-    let has_failed_or_blocked = in_phase
-        .iter()
-        .any(|u| matches!(u.status, WorkUnitStatus::Failed | WorkUnitStatus::Blocked));
+    // ADR-0079 D5（Phase R2a）: 人への決定を待つ unit（`blocked(decision)`）は段階の完了を止めるが、同じ段階の
+    // 他の unit は止めない（/1・/2 にこの理由は無いので従来どおり）。
+    let has_failed_or_blocked = in_phase.iter().any(|u| {
+        u.status == WorkUnitStatus::Failed
+            || (u.status == WorkUnitStatus::Blocked
+                && !matches!(
+                    u.blocked_reason,
+                    Some(WorkUnitBlockedReason::Decision | WorkUnitBlockedReason::Infra)
+                ))
+    });
 
     let mut candidates: Vec<&WorkUnitRow> = in_phase
         .iter()
@@ -2882,6 +2901,61 @@ pub fn replan_done_work_units(
         .filter(|u| u.status == WorkUnitStatus::Done && !is_daemon_added_work_unit(active, u))
         .map(|u| (u.key.clone(), u.spec.clone()))
         .collect()
+}
+
+/// ADR-0079 D9（Phase R2b）: /3 の replan（差分 `execution-plan-delta/1` は /2 の形しか持たないので /3 は計画の全体を
+/// 書く）で、`done` の unit を今の版（`active`）から持ち越す（純粋関数）。planner が done の unit を書かなかった・
+/// 書き写し損ねた（unit の gate で上げ下げされた spec を知らない）ときも、採用した spec のまま新しい版に入る:
+/// - `done_keys` の unit は `active` の spec で置き換える（無ければ足す。並びは新しい計画の段階の中の先頭）。
+/// - その段階が新しい計画に無ければ、`active` の段階の順を保って挿入する。
+/// - その unit が待つ決定（`needs_decisions`）が新しい計画に無ければ、`active` の決定を足す。
+///
+/// `active` か `new` が /3 でなければ何もしない。
+pub fn carry_done_units_v3(
+    active: &ExecutionPlanSpec,
+    new: &mut ExecutionPlanSpec,
+    done_keys: &BTreeSet<String>,
+) {
+    if active.schema != EXECUTION_PLAN_SCHEMA_V3 || new.schema != EXECUTION_PLAN_SCHEMA_V3 {
+        return;
+    }
+    for done in active.units.iter().filter(|u| done_keys.contains(&u.key)) {
+        // 段階（無ければ active の順を保って挿入）。
+        if !new.stages.iter().any(|s| s.key == done.stage)
+            && let Some(stage) = active.stages.iter().find(|s| s.key == done.stage)
+        {
+            let active_pos = |key: &str| active.stages.iter().position(|s| s.key == key);
+            let own = active_pos(&stage.key).unwrap_or(0);
+            let at = new
+                .stages
+                .iter()
+                .position(|s| active_pos(&s.key).is_some_and(|p| p > own))
+                .unwrap_or(new.stages.len());
+            new.stages.insert(at, stage.clone());
+        }
+        match new.units.iter_mut().find(|u| u.key == done.key) {
+            Some(existing) => *existing = done.clone(),
+            None => {
+                let at = new
+                    .units
+                    .iter()
+                    .position(|u| u.stage == done.stage)
+                    .unwrap_or(new.units.len());
+                new.units.insert(at, done.clone());
+            }
+        }
+        for d in &done.needs_decisions {
+            if !new.decisions.iter().any(|x| &x.key == d)
+                && !new
+                    .units
+                    .iter()
+                    .any(|u| u.decisions.iter().any(|x| &x.key == d))
+                && let Some(spec) = active.decisions.iter().find(|x| &x.key == d)
+            {
+                new.decisions.push(spec.clone());
+            }
+        }
+    }
 }
 
 /// ADR-0074 D1.1/D1.4（Phase F2b）: 採用する計画の WU の並び（`seq` の順）。v1 はトポロジカル順

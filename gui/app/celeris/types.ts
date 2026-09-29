@@ -650,6 +650,14 @@ export type Event =
       gate: ExecutionMode;
       plan_id: string;
       /**
+       * Phase R2a: 判断の理由（規則 id・構造上の理由・leaf の基準の不足など。人が読む 1 行）。
+       */
+      reason?: string;
+      /**
+       * Phase R2a: unit の view の gate のスコア（`ExecutionGateDecision.score`）。
+       */
+      score?: number;
+      /**
        * その深さの gate の閾値（`task_core::tree::gate_threshold`）。
        */
       threshold: number;
@@ -889,7 +897,7 @@ export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
 /**
  * D6: `work_units.blocked_reason`。
  */
-export type WorkUnitBlockedReason = ("question" | "dependency_failed" | "limit") | "plan_issue";
+export type WorkUnitBlockedReason = ("question" | "dependency_failed" | "limit") | "plan_issue" | "decision" | "infra";
 export type RunOutcomeKind =
   ("done" | "question" | "error" | "requeue" | "lease_expired") | "interrupted" | "continued";
 export type AttentionItem =
@@ -3733,6 +3741,12 @@ export interface TaskRouting {
    */
   pause_after_source?: "human" | "agent";
   /**
+   * ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{"title": "Phase 1", "scope": "…"}]`）。/3 の planner
+   * run の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の
+   * `create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。
+   */
+  stages_hint?: StageHint[];
+  /**
    * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
    */
   tier_source?: "human" | "system" | "hint" | "default";
@@ -3741,12 +3755,21 @@ export interface TaskRouting {
  * D13: `Event::ExecutionGated` の中身、および `Task.routing.execution`。
  */
 export interface ExecutionGateDecision {
+  /**
+   * ADR-0079 D4 (1)（Phase R2a）: 木の子 task（depth ≥ 2）の判定なら、その深さ（task の層数）。
+   * 閾値は `threshold`（`5 + gate_depth_step × (depth − 1)`）。木の子の判定は `[execution] gate` が
+   * `shadow` / `off` でも採用される（`shadow = false`）。root・木でない task は `None`（出力しない。
+   * 既存の JSON は 1 バイトも変わらない）。
+   */
+  depth?: number | null;
   mode: ExecutionMode;
   policy_version: string;
   rule_id: string;
   score: number;
   /**
    * `[execution] gate = "shadow"` のときの判定なら `true`（記録だけで実行には使わない。D13）。
+   * ADR-0079 D4 (1)（Phase R2a）: 木の子（`depth` が `Some`）は `shadow` の設定でも判定を採用するので
+   * 常に `false`。
    */
   shadow: boolean;
   signals?: GateSignal[];
@@ -3788,6 +3811,14 @@ export interface TaskFeatureHints {
   verifiability?: Level | null;
 }
 /**
+ * ADR-0079 D12（Phase R2b）: 人が名指しした段階（`Task.routing.stages_hint`）。planner への入力で、
+ * 構造の強制ではない（段階の数・名前は planner が決める）。CoS の `create_task` から写すのは R5a。
+ */
+export interface StageHint {
+  scope?: string;
+  title: string;
+}
+/**
  * D4 (4) / D15: `Task.tree`。木に属する task だけが持つ（`None` は木を持たない従来の task = 深さ 1 の
  * 節点として扱う。`root_id` 列も NULL のまま埋め戻さない。D15）。
  */
@@ -3813,6 +3844,12 @@ export interface TreeInfo {
  * D4 (4): 子 task が親の計画のどの unit から作られたか（`Task.tree.parent_unit`）。
  */
 export interface ParentUnit {
+  /**
+   * ADR-0079 D9（Phase R2b）: 同じ unit から作った子の何回目か（1 始まり）。子の work の失敗で親の
+   * replan が同じ key の unit を残したとき・基盤の失敗で自動で 1 回作り直したときに増える。
+   * 1 は書かない（R2b より前の子の JSON は 1 バイトも変わらない）。
+   */
+  attempt?: number;
   /**
    * 親の計画の版（`execution_plans.id`）。
    */

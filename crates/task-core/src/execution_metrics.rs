@@ -427,6 +427,7 @@ mod tests {
                 signals: vec![],
                 policy_version: "exec-gate/1".to_string(),
                 shadow: true,
+                depth: None,
             }),
             ..TaskRouting::default()
         });

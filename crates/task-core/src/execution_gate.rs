@@ -76,7 +76,47 @@ pub struct ExecutionGateDecision {
     pub signals: Vec<GateSignal>,
     pub policy_version: String,
     /// `[execution] gate = "shadow"` のときの判定なら `true`（記録だけで実行には使わない。D13）。
+    /// ADR-0079 D4 (1)（Phase R2a）: 木の子（`depth` が `Some`）は `shadow` の設定でも判定を採用するので
+    /// 常に `false`。
     pub shadow: bool,
+    /// ADR-0079 D4 (1)（Phase R2a）: 木の子 task（depth ≥ 2）の判定なら、その深さ（task の層数）。
+    /// 閾値は `threshold`（`5 + gate_depth_step × (depth − 1)`）。木の子の判定は `[execution] gate` が
+    /// `shadow` / `off` でも採用される（`shadow = false`）。root・木でない task は `None`（出力しない。
+    /// 既存の JSON は 1 バイトも変わらない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
+}
+
+/// ADR-0079 D3 / D4 (1)（Phase R2a）: gate の閾値と、木の子なら深さ。root・木でない task は
+/// [`GateThreshold::ROOT`]（ADR-0072 D13 の 5、深さは記録しない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateThreshold {
+    pub threshold: i32,
+    pub depth: Option<u32>,
+}
+
+impl GateThreshold {
+    /// root（深さ 1）・木でない task: 閾値 5、深さは記録しない。
+    pub const ROOT: GateThreshold = GateThreshold {
+        threshold: EXECUTION_GATE_SCORE_THRESHOLD,
+        depth: None,
+    };
+
+    /// 深さ `depth`（task の層数）の閾値（`task_core::tree::gate_threshold`）。`depth <= 1` は
+    /// [`GateThreshold::ROOT`] と同じ閾値だが、深さを記録する。
+    pub fn at_depth(depth: u32, step: u32) -> Self {
+        let t = crate::tree::gate_threshold(depth, step);
+        GateThreshold {
+            threshold: i32::try_from(t).unwrap_or(i32::MAX),
+            depth: Some(depth),
+        }
+    }
+}
+
+impl Default for GateThreshold {
+    fn default() -> Self {
+        GateThreshold::ROOT
+    }
 }
 
 /// `NewTaskSpec.execution` / CoS の `create_task.execution` から `Task.routing.execution_hint` に運ぶ値。
@@ -184,16 +224,41 @@ pub fn decide(
     inputs: ExecutionGateInputs,
     shadow: bool,
 ) -> ExecutionGateDecision {
+    decide_at(
+        task,
+        features,
+        human_execution,
+        cos_hint_compound,
+        inputs,
+        shadow,
+        GateThreshold::ROOT,
+    )
+}
+
+/// ADR-0079 D3 / D4 (1)（Phase R2a）: [`decide`] の閾値を深さで上げた版（規則表・強制規則・対象外規則は
+/// 同じ。`score >= at.threshold` なら compound）。`at.depth` は `ExecutionGateDecision.depth` に写す。
+pub fn decide_at(
+    task: &Task,
+    features: &TaskFeatures,
+    human_execution: Option<ExecutionMode>,
+    cos_hint_compound: bool,
+    inputs: ExecutionGateInputs,
+    shadow: bool,
+    at: GateThreshold,
+) -> ExecutionGateDecision {
+    let threshold = at.threshold;
+    let depth = at.depth;
     if let Some(rule_id) = out_of_scope_rule(task) {
         return ExecutionGateDecision {
             mode: ExecutionMode::Atomic,
             source: GateSource::Policy,
             score: 0,
-            threshold: EXECUTION_GATE_SCORE_THRESHOLD,
+            threshold,
             rule_id: rule_id.to_string(),
             signals: Vec::new(),
             policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
             shadow,
+            depth,
         };
     }
     if let Some(mode) = human_execution {
@@ -201,11 +266,12 @@ pub fn decide(
             mode,
             source: GateSource::Human,
             score: 0,
-            threshold: EXECUTION_GATE_SCORE_THRESHOLD,
+            threshold,
             rule_id: "human/explicit".to_string(),
             signals: Vec::new(),
             policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
             shadow,
+            depth,
         };
     }
 
@@ -299,11 +365,12 @@ pub fn decide(
             mode: ExecutionMode::Compound,
             source,
             score: s.score,
-            threshold: EXECUTION_GATE_SCORE_THRESHOLD,
+            threshold,
             rule_id: "compound/long-and-broad".to_string(),
             signals: s.signals,
             policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
             shadow,
+            depth,
         };
     }
     // 強制規則: `max_turns <= 10` かつ目的が 400 文字未満なら atomic。
@@ -312,15 +379,16 @@ pub fn decide(
             mode: ExecutionMode::Atomic,
             source,
             score: s.score,
-            threshold: EXECUTION_GATE_SCORE_THRESHOLD,
+            threshold,
             rule_id: "atomic/small".to_string(),
             signals: s.signals,
             policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
             shadow,
+            depth,
         };
     }
 
-    let (mode, rule_id) = if s.score >= EXECUTION_GATE_SCORE_THRESHOLD {
+    let (mode, rule_id) = if s.score >= threshold {
         (ExecutionMode::Compound, "compound/score")
     } else {
         (ExecutionMode::Atomic, "atomic/score")
@@ -329,11 +397,12 @@ pub fn decide(
         mode,
         source,
         score: s.score,
-        threshold: EXECUTION_GATE_SCORE_THRESHOLD,
+        threshold,
         rule_id: rule_id.to_string(),
         signals: s.signals,
         policy_version: EXECUTION_GATE_POLICY_VERSION.to_string(),
         shadow,
+        depth,
     }
 }
 
@@ -465,6 +534,104 @@ mod tests {
 
     fn no_inputs() -> ExecutionGateInputs {
         ExecutionGateInputs::default()
+    }
+
+    /// ADR-0079 §7 R2a (a) `gate_threshold_rises_with_depth`: 深さ 2 の閾値は 7（`5 + 2 × (2 − 1)`）。
+    /// score 6 の task は root（深さ 1、閾値 5）では compound、深さ 2 では atomic。score 7 は深さ 2 でも
+    /// compound、深さ 3（閾値 9）では atomic。root の判定は深さを記録しない（JSON は従来と同じ）。
+    #[test]
+    fn gate_threshold_rises_with_depth() {
+        let mut task = base_task();
+        task.budget.max_turns = 50; // 強制規則 atomic/small に当てない
+        // F1 high(2) + F2 high(2) + F3 high(1) + F4 medium(1) = 6（long-and-broad の強制規則には当たらない）。
+        let six = features(|f| {
+            f.context_size = Level::High;
+            f.expected_length = Level::High;
+            f.tool_intensity = Level::High;
+            f.cross_cutting = Level::Medium;
+        });
+        let root = decide(&task, &six, None, false, no_inputs(), true);
+        assert_eq!((root.score, root.threshold), (6, 5));
+        assert_eq!(root.mode, ExecutionMode::Compound);
+        assert_eq!(root.depth, None);
+        assert!(
+            !serde_json::to_string(&root).unwrap().contains("depth"),
+            "the root's decision JSON is unchanged"
+        );
+        let at_root_depth = decide_at(
+            &task,
+            &six,
+            None,
+            false,
+            no_inputs(),
+            true,
+            GateThreshold::ROOT,
+        );
+        assert_eq!(at_root_depth, root, "decide == decide_at(ROOT)");
+
+        let child = decide_at(
+            &task,
+            &six,
+            None,
+            false,
+            no_inputs(),
+            false,
+            GateThreshold::at_depth(2, 2),
+        );
+        assert_eq!((child.score, child.threshold), (6, 7));
+        assert_eq!(child.mode, ExecutionMode::Atomic);
+        assert_eq!(child.rule_id, "atomic/score");
+        assert_eq!(child.depth, Some(2));
+        assert!(!child.shadow);
+
+        // F5（judgment high かつ tool_intensity ≥ medium）で +1 → 7。
+        let seven = features(|f| {
+            f.context_size = Level::High;
+            f.expected_length = Level::High;
+            f.tool_intensity = Level::High;
+            f.cross_cutting = Level::Medium;
+            f.judgment = Level::High;
+        });
+        let child7 = decide_at(
+            &task,
+            &seven,
+            None,
+            false,
+            no_inputs(),
+            false,
+            GateThreshold::at_depth(2, 2),
+        );
+        assert_eq!((child7.score, child7.threshold), (7, 7));
+        assert_eq!(child7.mode, ExecutionMode::Compound);
+        assert_eq!(child7.rule_id, "compound/score");
+        let grandchild7 = decide_at(
+            &task,
+            &seven,
+            None,
+            false,
+            no_inputs(),
+            false,
+            GateThreshold::at_depth(3, 2),
+        );
+        assert_eq!(grandchild7.threshold, 9);
+        assert_eq!(grandchild7.mode, ExecutionMode::Atomic);
+        // 強制規則（long-and-broad）は深さに関わらず compound。
+        let broad = features(|f| {
+            f.expected_length = Level::High;
+            f.cross_cutting = Level::High;
+        });
+        let d = decide_at(
+            &task,
+            &broad,
+            None,
+            false,
+            no_inputs(),
+            false,
+            GateThreshold::at_depth(3, 2),
+        );
+        assert_eq!(d.mode, ExecutionMode::Compound);
+        assert_eq!(d.rule_id, "compound/long-and-broad");
+        assert_eq!(d.threshold, 9);
     }
 
     #[test]

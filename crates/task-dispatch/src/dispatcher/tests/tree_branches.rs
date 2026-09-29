@@ -112,6 +112,10 @@ fn task_unit(key: &str, stage: &str, deps: &[&str], acceptance_cmd: &str) -> ser
         "key": key,
         "stage": stage,
         "kind": "task",
+        // ADR-0079 D4 (3)（Phase R2a）: 小さな kind task の unit は unit の gate で atomic になり、構造上の
+        // 理由が無ければ leaf に下げられる。ここでは子 task のまま残す理由として「親に無い skill（別の部署）」を
+        // 持たせる（担当の無い試験の組織では matching に影響しない）。
+        "skills": ["tree-fixture"],
         "title": format!("Child {key}"),
         "objective": format!("Deliver the {key} part as its own reviewed task"),
         "depends_on": deps,
@@ -514,13 +518,10 @@ async fn grandchild_integrates_into_child_which_integrates_into_root() {
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
     let root_plan = v3_plan(vec![stage("s1")], vec![compound_task_unit("c", "s1")]);
-    let child_plan = v3_plan(
-        vec![stage("t1")],
-        vec![
-            leaf("l", "t1", &[]),
-            task_unit("g", "t1", &[], "test -f g.txt"),
-        ],
-    );
+    // 孫の unit も子 task のまま残す（子は `tree-fixture` を継ぐので、それとは別の skill。R2a の unit の gate）。
+    let mut g = task_unit("g", "t1", &[], "test -f g.txt");
+    g["skills"] = serde_json::json!(["tree-fixture-g"]);
+    let child_plan = v3_plan(vec![stage("t1")], vec![leaf("l", "t1", &[]), g]);
     let adapter = Arc::new(GitTreeAdapter::new(vec![root_plan, child_plan]));
     let mut d = git_tree_dispatcher(&store, adapter, ws.path());
     let report = run_until_idle(&mut d, 3000).await;
@@ -592,6 +593,51 @@ async fn grandchild_integrates_into_child_which_integrates_into_root() {
         main_sha,
         "only the human / ADR-0051 moves main"
     );
+    // ADR-0079 D3 / U-R7（Phase R2a）: 3 段の木の数（store の `runs` 索引・`work_units`・計画の版から）が
+    // 節点ごとの手計算と一致する。
+    let counters = task_ops::tree::tree_counters(store.as_ref(), root_id).unwrap();
+    assert_eq!(counters.nodes, 3);
+    let mut expected_runs = 0u32;
+    let mut expected_reviewers = 0u32;
+    let mut expected_leaves = 0u32;
+    for (node, depth) in [(root_id, 1u32), (child.id, 2), (grandchild.id, 3)] {
+        let runs = store.runs_for_task(node).unwrap();
+        let reviewers = runs
+            .iter()
+            .filter(|r| r.role == task_core::RunIndexRole::Reviewer)
+            .count() as u32;
+        let others = runs.len() as u32 - reviewers;
+        expected_runs += others;
+        expected_reviewers += reviewers;
+        expected_leaves += store
+            .work_units_for(node)
+            .unwrap()
+            .iter()
+            .filter(|u| {
+                !matches!(
+                    u.kind,
+                    task_core::WorkUnitKind::Task
+                        | task_core::WorkUnitKind::Integrate
+                        | task_core::WorkUnitKind::Repair
+                )
+            })
+            .count() as u32;
+        let at = counters
+            .by_depth
+            .iter()
+            .find(|d| d.depth == depth)
+            .unwrap_or_else(|| panic!("depth {depth}: {counters:?}"));
+        assert_eq!(
+            (at.nodes, at.runs, at.reviewer_runs),
+            (1, others, reviewers)
+        );
+    }
+    assert_eq!(counters.runs, expected_runs);
+    assert_eq!(counters.reviewer_runs, expected_reviewers);
+    assert_eq!(counters.leaves, expected_leaves);
+    assert_eq!(counters.leaves, 1, "the child's leaf l (g is a task unit)");
+    assert_eq!(counters.replans, 0);
+    assert!(counters.runs >= 3, "root planner + child planner + runs");
     assert_replay_is_clean(&store);
 }
 
@@ -637,6 +683,7 @@ fn worktree_base_of_a_tree_child_is_the_parent_base() {
             plan_id: "plan".into(),
             unit_key: "c".into(),
             stage: "s1".into(),
+            attempt: 1,
         },
         Some(main_sha.clone()),
     ));

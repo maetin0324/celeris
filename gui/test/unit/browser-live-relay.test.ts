@@ -206,7 +206,11 @@ beforeEach(async () => {
       if (claims.task_id !== "T1" || claims.run_id !== "R1" || claims.browser_session_id !== "S1") {
         sendProblem(res, { status: 403, code: "other_task", detail: "denied" });
       } else if (liveDenied) {
-        sendProblem(res, { status: liveDenied === "grant_expired" ? 410 : 409, code: liveDenied, detail: "denied" });
+        sendProblem(res, {
+          status: liveDenied === "grant_expired" ? 410 : liveDenied === "other_task" ? 403 : 409,
+          code: liveDenied,
+          detail: "denied",
+        });
       } else if (suffix === "read") sendJson(res, 200, { plan: readPlan, events: liveEvents });
       else sendJson(res, 200, { connected: true });
     });
@@ -576,6 +580,15 @@ describe("task-api live grant and reconnect", () => {
     expect(upstream.requests).toEqual([]);
   });
 
+  it("rejects another task at WS connect even after a dashboard was bound", async () => {
+    const owner = await loginCookie();
+    await makeOwner(owner);
+    expect((await get("/browser/live/T1/R1", owner)).status).toBe(200);
+    liveDenied = "other_task";
+    await expect(openWs("/api/session/9222/stream", owner)).rejects.toThrow("ws_http_403");
+    expect(upstream.wsSockets).toHaveLength(0);
+  });
+
   it.each(["grant_expired", "run_ended", "observation_stopped"])(
     "closes an existing stream when %s is denied",
     async (reason) => {
@@ -610,6 +623,21 @@ describe("task-api live grant and reconnect", () => {
     await until(() => secondClient.messages.some((m) => m.payload.includes('"live_reset"')));
     expect(secondClient.messages.some((m) => m.payload.includes('"latest_seq":9'))).toBe(true);
     second.socket.destroy();
+  });
+
+  it("delivers newly persisted events on an existing stream without duplicating replay", async () => {
+    setLiveViewRevalidateMsForTest(50);
+    const owner = await loginCookie();
+    await makeOwner(owner);
+    await get("/browser/live/T1/R1?port=9222", owner);
+    liveEvents = [{ seq: 5, body: { kind: "status", state: "running" } }];
+    const conn = await openWs("/api/session/9222/stream?last_seen=4", owner);
+    const client = collect(conn);
+    await until(() => client.messages.some((m) => m.payload.includes('"seq":5')));
+    liveEvents = [{ seq: 6, body: { kind: "tabs", tabs: [] } }];
+    await until(() => client.messages.some((m) => m.payload.includes('"seq":6')));
+    expect(client.messages.filter((m) => m.payload.includes('"seq":5'))).toHaveLength(1);
+    conn.socket.destroy();
   });
 });
 

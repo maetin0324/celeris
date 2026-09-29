@@ -284,6 +284,8 @@ class RelayConnection {
   });
   #closed = false;
   #timer: NodeJS.Timeout | null = null;
+  #lastSeen = 0;
+  #polling = false;
   /** 捨てた client→upstream の message の数。 */
   dropped = 0;
 
@@ -316,7 +318,7 @@ class RelayConnection {
     this.#upstream.on("close", () => this.close(1001, true));
     this.#client.on("end", () => this.close(1000, true));
     this.#upstream.on("end", () => this.close(1001, true));
-    this.#timer = setInterval(() => void this.#revalidate(), revalidateMs);
+    this.#timer = setInterval(() => void this.pollEvents(), revalidateMs);
     this.#timer.unref();
     if (clientHead.length > 0) void this.#onClientData(clientHead);
     if (upstreamLeftover.length > 0) {
@@ -326,6 +328,58 @@ class RelayConnection {
 
   get closed(): boolean {
     return this.#closed;
+  }
+
+  /** The task API is the source of live events, including those emitted after the WS opened. */
+  async pollEvents(): Promise<void> {
+    if (this.#closed || this.#polling) return;
+    this.#polling = true;
+    try {
+      await this.#revalidate();
+      if (this.#closed) return;
+      const binding = liveViewBinding(this.sessionHash);
+      if (!binding) {
+        this.close(1008);
+        return;
+      }
+      const page = await readLiveEvents(binding, this.sessionHash, this.#lastSeen);
+      if (!page) {
+        this.close(1008);
+        return;
+      }
+      // A read may finish after owner revocation or a newer binding has replaced this one.
+      if (this.#closed || liveViewBinding(this.sessionHash) !== binding) return;
+      await this.#revalidate();
+      if (this.#closed) return;
+      if (page.plan.kind === "reset") {
+        this.#lastSeen = page.plan.latest_seq;
+        this.#client.write(
+          encodeWsFrame(WS_OP.TEXT, Buffer.from(JSON.stringify({ type: "live_reset", latest_seq: this.#lastSeen }))),
+        );
+      } else {
+        for (const event of page.events) {
+          if (this.#closed || event.seq <= this.#lastSeen) continue;
+          this.#lastSeen = event.seq;
+          this.#client.write(
+            encodeWsFrame(
+              WS_OP.TEXT,
+              Buffer.from(JSON.stringify({ type: "live_event", seq: event.seq, body: event.body })),
+            ),
+          );
+        }
+      }
+    } finally {
+      this.#polling = false;
+    }
+  }
+
+  setLastSeen(seq: number): void {
+    this.#lastSeen = seq;
+  }
+
+  async validate(): Promise<boolean> {
+    await this.#revalidate();
+    return !this.#closed;
   }
 
   async #revalidate(): Promise<void> {
@@ -669,8 +723,10 @@ async function openRelay(
   });
   register(conn);
   logDecision("ws_opened");
-  conn.start(head, up.leftover);
+  conn.setLastSeen(lastSeen);
+  if (!(await conn.validate())) return;
   if (page.plan.kind === "reset") {
+    conn.setLastSeen(page.plan.latest_seq);
     socket.write(
       encodeWsFrame(WS_OP.TEXT, Buffer.from(JSON.stringify({ type: "live_reset", latest_seq: page.plan.latest_seq }))),
     );
@@ -678,7 +734,12 @@ async function openRelay(
     for (const path of [`/api/session/${port}/status`, `/api/session/${port}/tabs`]) {
       try {
         const snapshot = await upstreamGet(upstream, path);
-        if (snapshot.status === 200)
+        const current = liveViewBinding(decision.sessionHash);
+        if (!current || current !== binding || !(await conn.validate())) {
+          conn.close(1008);
+          return;
+        }
+        if (snapshot.status === 200 && !conn.closed)
           socket.write(
             encodeWsFrame(
               WS_OP.TEXT,
@@ -696,14 +757,18 @@ async function openRelay(
       }
     }
   } else {
-    for (const event of page.events)
+    for (const event of page.events) {
+      if (conn.closed || event.seq <= lastSeen) continue;
+      conn.setLastSeen(event.seq);
       socket.write(
         encodeWsFrame(
           WS_OP.TEXT,
           Buffer.from(JSON.stringify({ type: "live_event", seq: event.seq, body: event.body })),
         ),
       );
+    }
   }
+  if (!conn.closed) conn.start(head, up.leftover);
 }
 
 /** http.Server の `upgrade` に relay を付ける（`server.js` が呼ぶ）。 */

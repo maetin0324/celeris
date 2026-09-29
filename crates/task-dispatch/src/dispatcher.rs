@@ -14661,11 +14661,25 @@ impl Dispatcher {
         let running_review_lock = review_lock.clone();
         // ADR-0079 D6（Phase R1c）: 木の子の最終レビューは親のブランチと比べる（検査の
         // `merge-base --is-ancestor main` を親のブランチに置き換え、reviewer の前置きに取り込み先を書く）。
-        let task = crate::review::tree_child_review_view(task, &self.config.worktree_branch_prefix);
+        // ADR-0079 R5b-fix2: remote workspace の reviewer には worker と同じ `.celeris/remote-exec` の
+        // 指示を足し、木の子なら「ブランチ統合なし」の注記にする（親のブランチの行は出さない）。
+        let task = crate::review::review_view(
+            task,
+            &self.config.worktree_branch_prefix,
+            remote_review.as_ref(),
+        );
         let handle = tokio::spawn(async move {
             let _review_lock = running_review_lock;
             let ws: Box<dyn Workspace> = match remote_review {
-                Some(settings) => Box::new(SshWorkspace::new(&dir, settings)),
+                Some(settings) => {
+                    let ssh = SshWorkspace::new(&dir, settings);
+                    // R5b-fix2: reviewer が使うラッパを置く（worker の run が置いたものを最新の設定で
+                    // 書き直すだけ。置けなくても判定そのものは続ける）。
+                    if let Err(e) = ssh.write_remote_exec_helper().await {
+                        tracing::warn!(%task_id, error = %e, "could not write the remote-exec helper for the reviewer (R5b-fix2)");
+                    }
+                    Box::new(ssh)
+                }
                 None => Box::new(
                     match review_work_dir {
                         Some(work) if work.is_dir() => {
@@ -16457,6 +16471,8 @@ async fn run_worker(
     // （DB のタスクは変えない。ワーカーに渡す写しだけ）。ADR-0059 D6: `path` が実効 `work_dir` から解決
     // できなかった（`cluster_of` が絶対・`~` 始まりに直せなかった）ら、worktree 準備を試す前にここで
     // 明確なエラーにする。
+    // ADR-0079 R5b-fix2: remote なら run の後に push するため、用意した `SshWorkspace` を控える。
+    let mut remote_ws: Option<SshWorkspace> = None;
     let workspace = match &remote {
         Some(settings) => {
             if !remote_dir_is_resolved(&settings.remote_dir) {
@@ -16511,6 +16527,7 @@ async fn run_worker(
                 .map_err(|e| workspace_error_to_adapter(e, "remote-exec helper"))?;
             task.objective
                 .push_str(&remote_exec_instructions(&effective_settings));
+            remote_ws = Some(ws);
             prepared
         }
         // ADR-0041 D1 / ADR-0043 D2: ローカルの作業場所（1 つ以上のリポジトリ）を用意し、その
@@ -16917,6 +16934,13 @@ async fn run_worker(
     } else {
         task_worker::browser::run(adapter, req, run_id, limits, &sink).await
     };
+    // ADR-0079 R5b-fix2: remote workspace は run が終わるたびに（成否に関わらず）手元の写しをクラスタへ
+    // push する（review と次の run の prepare〈`--delete` 付きの pull〉の前）。push が落ちたら印が残り、
+    // 次の pull は先に push をやり直すので手元の編集は消えない。
+    let outcome = match &remote_ws {
+        Some(ws) => push_remote_after_run(ws, &sink, outcome).await,
+        None => outcome,
+    };
     // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）: run が成功したら未申告の成果物を登録する。
     // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
     //   （`artifacts_dir` の外を含む）から `*.md` を拾う（従来どおり。取りこぼし防止）。
@@ -16955,6 +16979,50 @@ async fn run_worker(
         }
     }
     outcome
+}
+
+/// ADR-0079 R5b-fix2: ワーカー run の後の push（1 run につき 1 回）。結果は進行（`WorkerProgress`）に
+/// 1 行残す。push が落ちたら error 付きの進行を残し、run が成功していても失敗として返す（黙って
+/// review に進まない。`Unreachable` は供給側失敗 = attempts を消費しない requeue）。run 自体が既に
+/// 失敗していればその失敗をそのまま返す。
+async fn push_remote_after_run(
+    ws: &SshWorkspace,
+    sink: &dyn task_worker::EventSink,
+    outcome: Result<RunOutcome, AdapterError>,
+) -> Result<RunOutcome, AdapterError> {
+    if ws.settings().sync == SyncMode::None {
+        return outcome;
+    }
+    let target = format!(
+        "{}:{}",
+        ws.settings().cluster,
+        ws.effective_remote_dir().to_string_lossy()
+    );
+    match ws.push_after_run().await {
+        Ok(()) => {
+            sink.progress(&format!(
+                "pushed the workspace to cluster {target} after the run"
+            ));
+            outcome
+        }
+        Err(e) => {
+            let msg = format!(
+                "push to cluster {target} after the run failed: {e} (local edits are kept; the next sync pushes before pulling)"
+            );
+            sink.progress_with(
+                &msg,
+                &task_core::ProgressFields {
+                    error: true,
+                    ..Default::default()
+                },
+            );
+            tracing::warn!(cluster = %ws.settings().cluster, error = %e, "push after the run failed (R5b-fix2)");
+            match outcome {
+                Ok(_) => Err(workspace_error_to_adapter(e, "workspace push after run")),
+                Err(original) => Err(original),
+            }
+        }
+    }
 }
 
 /// ワーカー run 中のリース延長パラメータ（ADR-0010 D7）。
@@ -36022,5 +36090,90 @@ mod knowledge_fallback_tests {
         run_until_idle(&mut d, 100).await;
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(started_adapter(&store, task.id).as_deref(), Some("fake"));
+    }
+}
+
+// ========== ADR-0079 R5b-fix2: remote workspace の run 後の push ==========
+#[cfg(test)]
+mod remote_push_after_run_tests {
+    use super::*;
+    use std::sync::Mutex as SyncMutex;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        lines: SyncMutex<Vec<(String, bool)>>,
+    }
+
+    impl task_worker::EventSink for RecordingSink {
+        fn progress(&self, msg: &str) {
+            if let Ok(mut lines) = self.lines.lock() {
+                lines.push((msg.to_string(), false));
+            }
+        }
+        fn progress_with(&self, msg: &str, fields: &task_core::ProgressFields) {
+            if let Ok(mut lines) = self.lines.lock() {
+                lines.push((msg.to_string(), fields.error));
+            }
+        }
+        fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+    }
+
+    fn done() -> Result<RunOutcome, AdapterError> {
+        Ok(RunOutcome {
+            terminal: Terminal::Question { text: "q".into() },
+            exit_code: Some(0),
+        })
+    }
+
+    fn ws_with(dir: &std::path::Path, program: &str) -> SshWorkspace {
+        let mut settings = SshSettings::new("sirius", "sirius", "/work/x");
+        settings.ssh_command = vec![program.to_string()];
+        settings.rsync_command = vec![program.to_string()];
+        SshWorkspace::new(dir, settings)
+    }
+
+    /// 1 run につき push は 1 回で、成功すれば進行を 1 行残し、run の結果はそのまま返る。
+    #[tokio::test]
+    async fn a_finished_run_pushes_once_and_logs_one_progress_line() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ws = ws_with(dir.path(), "true");
+        let sink = RecordingSink::default();
+        let out = push_remote_after_run(&ws, &sink, done()).await;
+        assert!(out.is_ok(), "{out:?}");
+        let lines = sink.lines.lock().expect("lock").clone();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0]
+                .0
+                .starts_with("pushed the workspace to cluster sirius:/work/x")
+        );
+        assert!(!lines[0].1);
+        assert!(!ws.push_pending());
+    }
+
+    /// push が落ちたら error 付きの進行を残し、成功した run でも失敗として返す（黙って review に進まない）。
+    /// 印は残る（次の pull は `--delete` の前に push をやり直す）。
+    #[tokio::test]
+    async fn a_failed_push_is_reported_and_fails_the_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ws = ws_with(dir.path(), "false");
+        let sink = RecordingSink::default();
+        let out = push_remote_after_run(&ws, &sink, done()).await;
+        assert!(out.is_err(), "{out:?}");
+        let lines = sink.lines.lock().expect("lock").clone();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0]
+                .0
+                .contains("push to cluster sirius:/work/x after the run failed")
+        );
+        assert!(lines[0].1, "error flag");
+        assert!(ws.push_pending());
+        // run 自体が失敗していれば、その失敗をそのまま返す。
+        let out = push_remote_after_run(&ws, &sink, Err(AdapterError::Other("boom".into()))).await;
+        assert!(
+            matches!(out, Err(AdapterError::Other(ref m)) if m == "boom"),
+            "{out:?}"
+        );
     }
 }

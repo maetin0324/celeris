@@ -1448,3 +1448,37 @@ R5b（本番の移行と dogfood）が要るコードの入口（人の /3 計�
     planner 7、leaf 9、版 4）で、run 30 / 120・leaf 14 / 40・replan 4 / 10 を最初から使う（本番の読み取り）。足りなくなれば `kind: limit`
     の決定（`raise-once`）で人が上げる。
 
+
+## 付記: R5b-fix2: remote workspace の run 後 push と reviewer への remote-exec 指示（2026-09-29）
+
+本番の木の子 task 01M3PB68JKRED21E3QVG9TE6QZ（workspace `{"kind":"remote","cluster":"sirius","path":"/work/NBB/rmaeda/workspace/rust/benchfs"}`）で
+見つかった 2 つの不具合への手当て。migration は足していない（schema 33 のまま）。
+
+1. **run 後の push（D1、データ消失）**: `SshWorkspace::prepare` は毎回 `--delete` 付きで pull するが、手元 → クラスタの push は
+   `exec`（`Check::Command` の判定）の前にしかなかった。reviewer の検査しか無い task は push されないまま次の run の prepare に進み、
+   worker の編集が消えた。worker への指示文の「run の後にクラスタへ同期され」も守られていなかった。
+   - 決定: `run_worker`（task-dispatch）が remote workspace の run の**後に毎回**（成否に関わらず、review と次の prepare の前に）
+     `SshWorkspace::push_after_run` を呼ぶ（1 run につき 1 回）。結果は `WorkerProgress` に 1 行（成功 `pushed the workspace to cluster …`、
+     失敗は `error: true` 付き）。push は rsync -a（`--delete` 無し。`delete_on_push` の既定）なので何度呼んでも同じ結果。
+   - 失敗の扱い: push の前に手元の写しに印 `.celeris/push-pending` を置き、成功で消す。**印がある間の pull は `--delete` の前に push を
+     やり直し、それも落ちたら pull しない**（prepare・collect・exec の後の pull のどれでも。手元の編集を消さない）。run が成功していても
+     push が落ちたら run を失敗として返す（`Unreachable` は供給側失敗 = attempts を消費しない requeue。黙って review に進まない）。
+   - 成果物: `artifacts/` は pull の `--delete` から **protect フィルタ（`--filter=P artifacts/`、`SYNC_PULL_PROTECTED`）** で守る。
+     依頼は「`SYNC_ALWAYS_EXCLUDED` に `artifacts/` を足す」だったが、除外にすると成果物がクラスタへ送られず、クラスタで作られた成果物も
+     手元に戻らない（P-46 の注記「成果物はクラスタで作られることがあり、受け入れ条件の照合に要る」と衝突し、`Check::Command` が
+     `artifacts/` を見る task が落ちる）。protect は「受け取る・送るが、クラスタに無いことを理由に手元から消さない」で、依頼の目的
+     （pull が成果物を消さない）をそのまま満たす。`.taskd/` は既に常時除外にある。
+   - 他は変えない: ソースファイルの正はクラスタ側の worktree で、pull の `--delete` は残す（run 後の push で手元の編集は先にクラスタへ届く）。
+2. **reviewer への remote-exec 指示（D2）**: 木の子の最終レビューの前置き（`review::tree_child_review_view`）は remote でも
+   「成果は親のブランチ `celeris/<parent>` に…基点 `-`」を出し、reviewer run には `.celeris/remote-exec` の指示が無かった
+   （worker の経路だけが足していた）。reviewer は手元の写し（`.git` はクラスタ側を指す gitfile）で `git status` し、
+   `not a git repository` と報告した。
+   - 決定: `review::review_view(task, prefix, remote)` を足し、dispatcher の最終レビューはこれを使う。remote（`SshSettings` がある
+     か `workspace` が `Remote`）の木の子は、親のブランチ・基点の行の代わりに
+     「remote workspace: ブランチ統合なし。検査はクラスタ側の worktree（remote-exec）で行う」を出し、`merge-base` の相手も書き換えない
+     （クラスタ側に親のブランチは無い）。remote の task（木の子に限らない）の reviewer には
+     `task_worker::remote_exec_reviewer_instructions` を足す。worker の `remote_exec_instructions` と頭（正はクラスタ…）・使い方の一文・
+     worktree の注記を共有する関数に分けた（worker の文面はバイト単位で従来どおり）。reviewer の run の前にラッパも書き直す。
+3. **残ること**: remote workspace の木の子の**ブランチ・親への統合は未対応のまま**（D5 の「remote はブランチを持たず merge しない」の
+   とおり。子の成果はクラスタの同じ worktree に積まれる）。remote で親子のブランチを切って統合するかは別の決定にする。
+   `exec_check_with_repair_retries` の `git merge --no-edit <ref>` の自動修復は remote でもクラスタ側で走りうるが、今回は触れていない。

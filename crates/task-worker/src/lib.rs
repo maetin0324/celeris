@@ -102,9 +102,9 @@ pub use result_report::{
     read_result_report_kind, report_kind_from_result_json,
 };
 pub use ssh::{
-    SYNC_ALWAYS_EXCLUDED, SshSettings, SshWorkspace, SyncMode, WorktreeSettings,
-    control_master_alive_blocking, remote_dir_is_resolved, remote_exec_instructions,
-    resolve_remote_dir,
+    PUSH_PENDING_MARKER, SYNC_ALWAYS_EXCLUDED, SYNC_PULL_PROTECTED, SshSettings, SshWorkspace,
+    SyncMode, WorktreeSettings, control_master_alive_blocking, remote_dir_is_resolved,
+    remote_exec_instructions, remote_exec_reviewer_instructions, resolve_remote_dir,
 };
 pub use subprocess::{SubprocessSpec, run_subprocess};
 pub use task_repos::{

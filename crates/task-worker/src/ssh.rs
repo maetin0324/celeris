@@ -55,6 +55,17 @@ impl Default for WorktreeSettings {
 /// 後方互換のため両方を除外に残す（古い写し・クラスタ側の残骸を同期に巻き込まない）。
 pub const SYNC_ALWAYS_EXCLUDED: [&str; 4] = [".taskd/", ".celeris/", "runs/", "inputs/"];
 
+/// ADR-0079 R5b-fix2: `--delete` 付きの pull で**手元から消さない**もの（rsync の protect フィルタ
+/// `P`）。転送は両方向とも行う（成果物はクラスタで作られることがあり、クラスタ側の判定コマンドが
+/// 見ることもあるので除外はしない）。クラスタ側に無いからといって手元の成果物を消すと、申告済みの
+/// 成果物（兄弟 task の `artifacts/experiment-plan.md` など）が次の pull で失われる（本番 2026-09-29）。
+pub const SYNC_PULL_PROTECTED: [&str; 1] = ["artifacts/"];
+
+/// ADR-0079 R5b-fix2: 手元の写しの「まだクラスタへ push できていない」印。`.celeris/` の下なので
+/// 同期の対象外（pull の `--delete` でも消えない）。これがある間の pull は、先に push を済ませる
+/// （push が落ちたら pull しない = 手元の編集を消さない）。
+pub const PUSH_PENDING_MARKER: &str = ".celeris/push-pending";
+
 /// 1 タスク分のリモート実行の設定。
 #[derive(Debug, Clone)]
 pub struct SshSettings {
@@ -371,13 +382,9 @@ impl SshWorkspace {
         Ok(result)
     }
 
-    /// 手元の写し → クラスタ（作業のあと、判定の前。ADR-0018 D4）。
-    /// 既定では `--delete` を付けない（既存プロジェクトのファイルを消さない）。
-    pub async fn push(&self) -> Result<(), WorkspaceError> {
-        if self.settings.sync == SyncMode::None {
-            return Ok(());
-        }
-        self.ensure_remote_dir().await?;
+    /// push（手元 → クラスタ）の rsync 引数。既定では `--delete` を付けない（既存プロジェクトの
+    /// ファイルを消さない）。副作用の無い組み立てだけ（テストで除外・保護の並びを確かめる）。
+    pub fn push_args(&self) -> Vec<String> {
         let mut args = self.settings.rsync_command.clone();
         args.push("-a".into());
         if self.settings.delete_on_push {
@@ -400,16 +407,12 @@ impl SshWorkspace {
             self.settings.host,
             self.effective_remote_dir().to_string_lossy()
         ));
-        self.run_rsync(&args, "push").await
+        args
     }
 
-    /// クラスタ → 手元の写し（run の前と、判定の後。ADR-0018 D4）。
-    /// 写しは celeris が作り直してよいので、こちらは `--delete` してよい。
-    pub async fn pull(&self) -> Result<(), WorkspaceError> {
-        if self.settings.sync == SyncMode::None {
-            return Ok(());
-        }
-        self.ensure_remote_dir().await?;
+    /// pull（クラスタ → 手元）の rsync 引数。写しは celeris が作り直してよいので `--delete` を付けるが、
+    /// 管理用ディレクトリは除外し、成果物（`SYNC_PULL_PROTECTED`）は消さない（R5b-fix2）。
+    pub fn pull_args(&self) -> Vec<String> {
         let mut args = self.settings.rsync_command.clone();
         args.extend(["-a".into(), "--delete".into()]);
         args.push("-e".into());
@@ -418,6 +421,10 @@ impl SshWorkspace {
         for pattern in SYNC_ALWAYS_EXCLUDED {
             args.push("--exclude".into());
             args.push(pattern.into());
+        }
+        // R5b-fix2: 成果物は受け取るが、クラスタに無いことを理由に手元から消さない。
+        for pattern in SYNC_PULL_PROTECTED {
+            args.push(format!("--filter=P {pattern}"));
         }
         for pattern in &self.settings.rsync_excludes {
             args.push("--exclude".into());
@@ -429,7 +436,63 @@ impl SshWorkspace {
             self.effective_remote_dir().to_string_lossy()
         ));
         args.push(format!("{}/", self.local.dir().to_string_lossy()));
-        self.run_rsync(&args, "pull").await
+        args
+    }
+
+    fn push_pending_path(&self) -> PathBuf {
+        self.local.dir().join(PUSH_PENDING_MARKER)
+    }
+
+    /// 手元に「まだ push できていない編集」があるか（R5b-fix2 の印があるか）。
+    pub fn push_pending(&self) -> bool {
+        self.push_pending_path().exists()
+    }
+
+    /// 手元の写し → クラスタ（作業のあと、判定の前。ADR-0018 D4）。
+    /// 既定では `--delete` を付けない（既存プロジェクトのファイルを消さない）。
+    /// 成功したら R5b-fix2 の印（`PUSH_PENDING_MARKER`）を消す（手元の内容はクラスタに届いた）。
+    pub async fn push(&self) -> Result<(), WorkspaceError> {
+        if self.settings.sync == SyncMode::None {
+            return Ok(());
+        }
+        self.ensure_remote_dir().await?;
+        self.run_rsync(&self.push_args(), "push").await?;
+        match tokio::fs::remove_file(self.push_pending_path()).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// ADR-0079 R5b-fix2: ワーカー run が終わるたびに呼ぶ push。先に印を置いてから push するので、
+    /// push が落ちても（接続断・途中で daemon が止まっても）印が残り、次の pull は `--delete` の前に
+    /// push をやり直す（手元の編集を消さない）。rsync -a（`--delete` 無し）なので何度呼んでも同じ結果。
+    /// `SyncMode::None`（共有ファイルシステム）では何もしない。
+    pub async fn push_after_run(&self) -> Result<(), WorkspaceError> {
+        if self.settings.sync == SyncMode::None {
+            return Ok(());
+        }
+        let marker = self.push_pending_path();
+        if let Some(parent) = marker.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&marker, b"push pending (ADR-0079 R5b-fix2)\n").await?;
+        self.push().await
+    }
+
+    /// クラスタ → 手元の写し（run の前と、判定の後。ADR-0018 D4）。
+    /// 写しは celeris が作り直してよいので、こちらは `--delete` してよい。
+    /// ADR-0079 R5b-fix2: 手元に push できていない編集（印）があれば、先に push する。push が落ちたら
+    /// pull はしない（`--delete` で手元の編集を消さない）。
+    pub async fn pull(&self) -> Result<(), WorkspaceError> {
+        if self.settings.sync == SyncMode::None {
+            return Ok(());
+        }
+        if self.push_pending() {
+            self.push().await?;
+        }
+        self.ensure_remote_dir().await?;
+        self.run_rsync(&self.pull_args(), "pull").await
     }
 
     async fn run_rsync(&self, args: &[String], direction: &str) -> Result<(), WorkspaceError> {
@@ -506,30 +569,63 @@ impl SshWorkspace {
     }
 }
 
-/// ワーカーへ渡す指示文（ADR-0018 D3）。`RunRequest.task.objective` の末尾に足し、`.celeris/remote-exec`
-/// の存在と使い方を伝える（ADR-0059 D5 で `.taskd/remote-exec` から改名）。
-/// ワーカーが従うかは保証しない（受け入れ条件はクラスタ側で判定されるので、手元だけで済ませた仕事は条件で落ちる）。
-pub fn remote_exec_instructions(settings: &SshSettings) -> String {
-    let base = format!(
-        "\n\n[celeris] このタスクの正はクラスタ `{cluster}`（ssh host `{host}`）の `{dir}` です。手元の作業ディレクトリはその写しで、\
-         run の後にクラスタへ同期され、受け入れ条件のコマンドはクラスタ側で実行されます。\
-         重い処理・クラスタ上のデータやモジュールを使う処理は `.celeris/remote-exec <コマンド ...>` で実行してください\
-         （クラスタの作業ディレクトリで実行され、終了コードと出力がそのまま返ります）。",
+/// `.celeris/remote-exec` の指示文の共通の頭（worker と reviewer で共有する。ADR-0079 R5b-fix2）。
+fn remote_exec_head(settings: &SshSettings) -> String {
+    format!(
+        "\n\n[celeris] このタスクの正はクラスタ `{cluster}`（ssh host `{host}`）の `{dir}` です。手元の作業ディレクトリはその写しで、",
         cluster = settings.cluster,
         host = settings.host,
         dir = settings.effective_remote_dir().to_string_lossy(),
-    );
-    // ADR-0019 D1/D3: worktree では、手元に来ているのは追跡ファイルだけで、元のリポジトリは触らない。
-    if settings.sync != SyncMode::Worktree {
-        return base;
-    }
-    format!(
-        "{base}\n\
-         これは `{project}` から切り出した git worktree（ブランチ `{branch}`）です。追跡ファイルだけが入っているので、\
-         手元に見えないファイル（未追跡の巨大データなど）はクラスタ側にあります。元のリポジトリの作業ツリーは触らないでください。",
-        project = settings.remote_dir.to_string_lossy(),
-        branch = settings.worktree_branch(),
     )
+}
+
+/// `.celeris/remote-exec` の使い方の一文（worker と reviewer で共有する）。
+const REMOTE_EXEC_USAGE: &str = "`.celeris/remote-exec <コマンド ...>` で実行してください\
+     （クラスタの作業ディレクトリで実行され、終了コードと出力がそのまま返ります）。";
+
+/// ADR-0019 D1/D3: worktree のときに足す一文（worker と reviewer で共有する）。worktree でなければ `None`。
+fn remote_worktree_note(settings: &SshSettings) -> Option<String> {
+    (settings.sync == SyncMode::Worktree).then(|| {
+        format!(
+            "これは `{project}` から切り出した git worktree（ブランチ `{branch}`）です。追跡ファイルだけが入っているので、\
+             手元に見えないファイル（未追跡の巨大データなど）はクラスタ側にあります。",
+            project = settings.remote_dir.to_string_lossy(),
+            branch = settings.worktree_branch(),
+        )
+    })
+}
+
+/// ワーカーへ渡す指示文（ADR-0018 D3）。`RunRequest.task.objective` の末尾に足し、`.celeris/remote-exec`
+/// の存在と使い方を伝える（ADR-0059 D5 で `.taskd/remote-exec` から改名）。
+/// ワーカーが従うかは保証しない（受け入れ条件はクラスタ側で判定されるので、手元だけで済ませた仕事は条件で落ちる）。
+/// ADR-0079 R5b-fix2: 「run の後にクラスタへ同期され」は `SshWorkspace::push_after_run` が守る。
+pub fn remote_exec_instructions(settings: &SshSettings) -> String {
+    let base = format!(
+        "{head}run の後にクラスタへ同期され、受け入れ条件のコマンドはクラスタ側で実行されます。\
+         重い処理・クラスタ上のデータやモジュールを使う処理は {REMOTE_EXEC_USAGE}",
+        head = remote_exec_head(settings),
+    );
+    match remote_worktree_note(settings) {
+        None => base,
+        Some(note) => format!("{base}\n{note}元のリポジトリの作業ツリーは触らないでください。"),
+    }
+}
+
+/// ADR-0079 R5b-fix2: reviewer run（最終レビュー）へ渡す指示文。worker と同じ頭・使い方の一文を使い、
+/// 検査（git の状態・ビルド・テスト）をクラスタ側で行うよう伝える。手元の写しの `.git` はクラスタ側を
+/// 指す gitfile なので、手元で `git status` すると `not a git repository` になる（本番 2026-09-29）。
+pub fn remote_exec_reviewer_instructions(settings: &SshSettings) -> String {
+    let base = format!(
+        "{head}ワーカーの run の後にクラスタへ同期済みです。\
+         `git status` / `git diff` / `git log` などの git の確認と、ビルド・テストなどの検査は手元ではなく \
+         {REMOTE_EXEC_USAGE}\
+         手元の写しで git を実行しても、クラスタ側の状態は分かりません（`not a git repository` になることがあります）。",
+        head = remote_exec_head(settings),
+    );
+    match remote_worktree_note(settings) {
+        None => base,
+        Some(note) => format!("{base}\n{note}"),
+    }
 }
 
 /// tick（同期の文脈）から呼ぶ、多重接続の有無の確認（ADR-0018 D2）。`ssh -O check` は unix ソケットを見るだけで即座に返る。
@@ -879,6 +975,218 @@ mod tests {
     fn sync_always_excluded_keeps_the_legacy_taskd_alongside_celeris() {
         assert!(SYNC_ALWAYS_EXCLUDED.contains(&".taskd/"));
         assert!(SYNC_ALWAYS_EXCLUDED.contains(&".celeris/"));
+    }
+
+    // ---- ADR-0079 R5b-fix2: run 後の push・成果物を pull で消さない・reviewer への指示 ----
+
+    #[test]
+    fn pull_protects_artifacts_and_excludes_the_admin_dirs_while_push_still_sends_artifacts() {
+        assert!(SYNC_PULL_PROTECTED.contains(&"artifacts/"));
+        assert!(SYNC_ALWAYS_EXCLUDED.contains(&".taskd/"));
+        let ws = SshWorkspace::new("/tmp/mirror", SshSettings::new("c", "h", "/work/x"));
+        let pull = ws.pull_args();
+        assert!(pull.contains(&"--delete".to_string()), "{pull:?}");
+        assert!(
+            pull.contains(&"--filter=P artifacts/".to_string()),
+            "{pull:?}"
+        );
+        for dir in [".taskd/", ".celeris/", "runs/", "inputs/"] {
+            assert!(
+                pull.windows(2).any(|w| w[0] == "--exclude" && w[1] == dir),
+                "pull must exclude {dir}: {pull:?}"
+            );
+        }
+        let push = ws.push_args();
+        assert!(!push.contains(&"--delete".to_string()), "{push:?}");
+        assert!(
+            !push
+                .windows(2)
+                .any(|w| w[0] == "--exclude" && w[1] == "artifacts/"),
+            "artifacts are pushed (cluster-side checks may read them): {push:?}"
+        );
+        // push は手元 → クラスタ、pull はクラスタ → 手元。
+        assert_eq!(push.last().map(String::as_str), Some("h:/work/x/"));
+        assert_eq!(pull.last().map(String::as_str), Some("/tmp/mirror/"));
+    }
+
+    /// ssh の代わりに、受け取ったリモートコマンドを手元の `sh` で実行するだけの偽物（外部に出ない）。
+    /// `ssh -o BatchMode=yes <host> <cmd...>` の形で呼ばれる（rsync の `-e` からも、`run_ssh` からも）。
+    fn local_ssh(dir: &Path) -> Vec<String> {
+        let path = dir.join("fake-ssh");
+        crate::test_support::write_executable(
+            &path,
+            "#!/bin/sh\nwhile [ \"$1\" = \"-o\" ]; do shift 2; done\nshift\nexec sh -c \"$*\"\n",
+        );
+        vec![path.to_string_lossy().into_owned()]
+    }
+
+    /// 本物の rsync を包み、呼ばれた向き（最後の引数が手元なら pull）を記録する。`fail` なら rsync を呼ばずに 23 で落ちる。
+    fn logging_rsync(dir: &Path, name: &str, local: &Path, log: &Path, fail: bool) -> Vec<String> {
+        let path = dir.join(name);
+        let run = if fail {
+            "exit 23".to_string()
+        } else {
+            "exec rsync \"$@\"".to_string()
+        };
+        crate::test_support::write_executable(
+            &path,
+            &format!(
+                "#!/bin/sh\nfor a; do last=$a; done\nif [ \"$last\" = {local:?} ]; then echo pull >> {log:?}; else echo push >> {log:?}; fi\n{run}\n",
+                local = format!("{}/", local.display()),
+            ),
+        );
+        vec![path.to_string_lossy().into_owned()]
+    }
+
+    fn log_lines(log: &Path) -> Vec<String> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn rsync_available() -> bool {
+        std::process::Command::new("rsync")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// 本番 2026-09-29 の再現: reviewer の検査しか無い task は `exec` で push しないので、次の run の
+    /// prepare（`--delete` 付きの pull）が worker の編集と成果物を消していた。run 後の push（1 回）で
+    /// 編集はクラスタに届き、成果物は pull でも消えない。
+    #[tokio::test]
+    async fn push_after_run_runs_once_and_the_next_pull_keeps_edits_and_artifacts() {
+        if !rsync_available() {
+            eprintln!("rsync is not installed; skipping");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let local = tmp.path().join("mirror");
+        std::fs::create_dir_all(remote.join("src")).unwrap();
+        std::fs::write(remote.join("src/lib.rs"), "old\n").unwrap();
+        let log = tmp.path().join("rsync.log");
+        let mut settings = SshSettings::new("c", "h", &remote);
+        settings.ssh_command = local_ssh(tmp.path());
+        settings.rsync_command = logging_rsync(tmp.path(), "rsync-ok", &local, &log, false);
+        let ws = SshWorkspace::new(&local, settings);
+
+        // run の前（prepare）: クラスタの内容を取り込む。
+        ws.pull().await.expect("initial pull");
+        assert_eq!(
+            std::fs::read_to_string(local.join("src/lib.rs")).unwrap(),
+            "old\n"
+        );
+        // worker の run: ソースを直し、成果物を書く（クラスタ側には無い）。
+        std::fs::write(local.join("src/lib.rs"), "edited\n").unwrap();
+        std::fs::create_dir_all(local.join("artifacts")).unwrap();
+        std::fs::write(local.join("artifacts/experiment-plan.md"), "plan\n").unwrap();
+        // run の後: push はちょうど 1 回。
+        ws.push_after_run().await.expect("push after run");
+        assert_eq!(log_lines(&log), vec!["pull", "push"]);
+        assert!(!ws.push_pending(), "a successful push clears the marker");
+        assert_eq!(
+            std::fs::read_to_string(remote.join("src/lib.rs")).unwrap(),
+            "edited\n"
+        );
+
+        // クラスタ側から成果物が消えても（人が片付けた等）、次の pull は手元の成果物を消さない。
+        std::fs::remove_dir_all(remote.join("artifacts")).unwrap();
+        ws.pull().await.expect("next prepare pull");
+        assert_eq!(log_lines(&log), vec!["pull", "push", "pull"]);
+        assert_eq!(
+            std::fs::read_to_string(local.join("src/lib.rs")).unwrap(),
+            "edited\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(local.join("artifacts/experiment-plan.md")).unwrap(),
+            "plan\n"
+        );
+    }
+
+    /// push が落ちたら印が残り、エラーとして返る（黙らない）。印がある間の pull は `--delete` の前に push を
+    /// やり直し、それも落ちたら pull しない（手元の編集を消さない）。繋がれば push → pull の順で進む。
+    #[tokio::test]
+    async fn failed_push_is_reported_and_blocks_the_deleting_pull_until_a_push_succeeds() {
+        if !rsync_available() {
+            eprintln!("rsync is not installed; skipping");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote");
+        let local = tmp.path().join("mirror");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(local.join("new.rs"), "worker edit\n").unwrap();
+        let log = tmp.path().join("rsync.log");
+        let mut failing = SshSettings::new("c", "h", &remote);
+        failing.ssh_command = local_ssh(tmp.path());
+        failing.rsync_command = logging_rsync(tmp.path(), "rsync-fail", &local, &log, true);
+        let ws = SshWorkspace::new(&local, failing.clone());
+
+        let err = ws.push_after_run().await.expect_err("push fails");
+        assert!(matches!(err, WorkspaceError::Remote(_)), "{err:?}");
+        assert!(ws.push_pending());
+        ws.pull()
+            .await
+            .expect_err("pull must not run while the push is pending");
+        assert_eq!(
+            log_lines(&log),
+            vec!["push", "push"],
+            "no pull was attempted"
+        );
+        assert!(local.join("new.rs").is_file(), "the local edit survives");
+
+        let mut ok = failing;
+        ok.rsync_command = logging_rsync(tmp.path(), "rsync-ok", &local, &log, false);
+        let ws = SshWorkspace::new(&local, ok);
+        ws.pull().await.expect("push then pull");
+        assert_eq!(log_lines(&log), vec!["push", "push", "push", "pull"]);
+        assert!(!ws.push_pending());
+        assert_eq!(
+            std::fs::read_to_string(remote.join("new.rs")).unwrap(),
+            "worker edit\n"
+        );
+        assert!(local.join("new.rs").is_file());
+    }
+
+    #[tokio::test]
+    async fn push_after_run_is_a_no_op_under_sync_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut settings = SshSettings::new("c", "h", PathBuf::from("/work/x"));
+        settings.sync = SyncMode::None;
+        settings.ssh_command = vec!["/nonexistent/ssh-should-not-run".into()];
+        settings.rsync_command = vec!["/nonexistent/rsync-should-not-run".into()];
+        let ws = SshWorkspace::new(dir.path(), settings);
+        ws.push_after_run().await.expect("no-op");
+        assert!(!ws.push_pending());
+    }
+
+    #[test]
+    fn worker_and_reviewer_instructions_share_the_remote_exec_usage() {
+        let mut settings = SshSettings::new(
+            "sirius",
+            "sirius",
+            "/work/NBB/rmaeda/workspace/rust/benchfs",
+        );
+        settings.sync = SyncMode::Worktree;
+        settings.task_id = "01TASK".into();
+        let worker = remote_exec_instructions(&settings);
+        let reviewer = remote_exec_reviewer_instructions(&settings);
+        for text in [&worker, &reviewer] {
+            assert!(text.contains(REMOTE_EXEC_USAGE), "{text}");
+            assert!(text.contains(&remote_exec_head(&settings)), "{text}");
+            assert!(text.contains("ブランチ `celeris/01TASK`"), "{text}");
+        }
+        assert!(worker.contains("run の後にクラスタへ同期され"));
+        assert!(worker.ends_with("元のリポジトリの作業ツリーは触らないでください。"));
+        assert!(reviewer.contains("`git status`"));
+        assert!(!reviewer.contains("元のリポジトリの作業ツリーは触らないでください"));
     }
 
     // ---- ADR-0062 A（Phase 107）: 実通信 probe（`ssh -o BatchMode=yes <host> -- true`） ----

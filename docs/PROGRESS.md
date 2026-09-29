@@ -10,6 +10,8 @@
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0081（制御 lease）/ 0082（live proxy ACL）/ 0083（identity 契約）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A の後・0.38.1 の restore は使わない。2026-09-29 の検査（Rust 2929 passed / 0 failed、clippy exit 0）。本番未昇格。
 
+- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084。P4-A 隔離 runtime の検査・egress 負例・orphan 回収、identity 復元は attestation 下のみ。P4-B trusted injection（TOCTOU/redirect/iframe/DOM 再表示、worker 拒否）。P4-C backend 適合 fixture・routing・fallback・同一 task 評価。2026-09-29、本番未昇格。
+
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)
 - [Phase 101–150](progress/phase-101-150.md)
@@ -38,3 +40,9 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - 追加（同 task の Run #2）: GUI `browser-control.server.ts` の auth_section 拒否の試験（`gui/test/unit/browser-control.test.ts`、4 passed、`pnpm test` 1236 passed）。テスト専用の未配線経路 `BrowserLive`／`CliCloser` を削除。最終証拠: `cargo test --workspace` exit 0（2929 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo test --workspace auth_section` exit 0。
 - 行ごとの判定: P3-A 保管側は満たす・復元は未（P4-A 後、`isolation_required` で拒否）／P3-B 満たす／P3-C 満たす（API・GUI・認証区間）。
 - 未解決: identity 復元は P4-A 後（ADR-0083 D3）。worker 側 control gate（human control 中に agent の操作を止める）の run loop 配線は未。
+
+## Phase browser-4（2026-09-29, task 01M3Q49ZTST3XQ9DGF6AGNR0XG）
+
+- ADR-0084。行ごとの判定: P4-A 満たす（契約・検査。実 runtime 起動は未）／P3-A 復元は隔離下でのみ許可（`restore_isolated`）／P4-B 満たす（実 CDP sink は未）／H3 維持／P4-C 満たす（specialist 選定は H7 待ち）。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+- 証拠: `cargo test -p task-core browser_isolation` 14 passed、`cargo test -p task-core browser_backend` 7 passed、`cargo test -p celeris-credentiald injection` 6 passed、`cargo test -p task-api restore_is` 2 passed、`cargo test --workspace` exit 0（2957 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0。
+- 未解決: H7 の backend 選定（人）、実 runtime・filtering proxy・peer UID → role の配線、内部 origin の egress 方針（人）。

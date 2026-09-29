@@ -15,6 +15,7 @@ use task_core::browser_identity::{
     self as bi, IDENTITY_TTL_DEFAULT_SECS, IdentityDenied, IdentityRegistration, IdentityState,
     IdentityUse, Isolation,
 };
+use task_core::browser_isolation::IsolationAttestation;
 use task_core::browser_store::{BrowserStoreError, StoredIdentity};
 
 use axum::body::Body;
@@ -248,6 +249,34 @@ impl IdentityService<'_> {
         bi::authorize_use(&stored.identity, &request, now)?;
         // authorize_use は TrustedLocal を必ず拒否する。ここに来るのは隔離の経路ができた後だけ。
         Err(IdentityApiError::Denied(IdentityDenied::IsolationRequired))
+    }
+
+    /// 隔離下の復元（ADR-0084 D4）。[`IsolationAttestation`] は P4-A の検査
+    /// （`verify_isolation`）からしか作れないので、HTTP からは呼べない。開いた state は
+    /// runtime の controller に渡すだけで、agent・応答には出さない。
+    pub fn restore_isolated(
+        &self,
+        identity_id: &str,
+        project_id: &str,
+        origin: &str,
+        attestation: &IsolationAttestation,
+        now: u64,
+    ) -> Result<IdentityStatePlain, IdentityApiError> {
+        self.sweep_expired(project_id, now)?;
+        let stored = self
+            .store
+            .browser_identity_get(identity_id)?
+            .ok_or(IdentityApiError::NotFound)?;
+        let request = IdentityUse {
+            project_id: project_id.to_owned(),
+            origin: origin.to_owned(),
+            isolation: attestation.isolation(),
+        };
+        bi::authorize_use(&stored.identity, &request, now)?;
+        let sealed = sealed_of(&stored).ok_or(IdentityApiError::SealFailed)?;
+        self.sealer
+            .open_state(&stored.identity, &sealed, now)
+            .map_err(|_| IdentityApiError::SealFailed)
     }
 }
 
@@ -593,6 +622,69 @@ mod tests {
         assert!(matches!(err, SealError::KeyErased | SealError::Tampered));
         let err = sealer.open_state(&tomb.identity, &sealed, NOW).unwrap_err();
         assert!(matches!(err, SealError::Denied(IdentityDenied::Deleted)));
+    }
+
+    fn attestation() -> task_core::browser_isolation::IsolationAttestation {
+        use task_core::browser_isolation::{
+            CdpEndpoint, REQUIRED_NAMESPACES, RuntimeFacts, verify_isolation,
+        };
+        verify_isolation(&RuntimeFacts {
+            session_id: "s1".into(),
+            host_uid: 1000,
+            runtime_uid: 200_001,
+            namespaces: REQUIRED_NAMESPACES.into_iter().collect(),
+            root_readonly: true,
+            writable_mounts: vec!["/session/profile".into()],
+            visible_paths: vec!["/usr".into()],
+            cdp: CdpEndpoint::Pipe,
+            no_new_privs: true,
+            capabilities_dropped: true,
+            pgid: 4242,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn restore_is_allowed_only_under_verified_isolation() {
+        let (store, sealer, _d) = fixture();
+        let svc = IdentityService {
+            store: &store,
+            sealer: &sealer,
+        };
+        svc.register(input("a"), NOW).unwrap();
+        // trusted local は拒否のまま
+        assert_eq!(
+            svc.restore("a", "proj", ORIGIN, NOW).unwrap_err().code(),
+            "isolation_required"
+        );
+        let att = attestation();
+        let plain = svc
+            .restore_isolated("a", "proj", ORIGIN, &att, NOW)
+            .unwrap();
+        assert_eq!(plain.entries[0].value, SECRET);
+        // 隔離下でも他 project / 他 origin / 期限切れは拒否
+        assert_eq!(
+            svc.restore_isolated("a", "other", ORIGIN, &att, NOW)
+                .unwrap_err()
+                .code(),
+            "other_project"
+        );
+        assert_eq!(
+            svc.restore_isolated("a", "proj", "https://other.example", &att, NOW)
+                .unwrap_err()
+                .code(),
+            "other_origin"
+        );
+        assert!(
+            svc.restore_isolated(
+                "a",
+                "proj",
+                ORIGIN,
+                &att,
+                NOW + IDENTITY_TTL_DEFAULT_SECS + 1
+            )
+            .is_err()
+        );
     }
 
     #[test]

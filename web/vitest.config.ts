@@ -4,7 +4,13 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["test/**/*.test.ts", "test/**/*.test.tsx", "lib/**/*.test.ts", "server/**/*.test.ts"],
-    exclude: ["e2e/**", "node_modules/**", "dist/**"],
+    include: [
+      "test/**/*.test.ts",
+      "test/**/*.test.tsx",
+      "lib/**/*.test.ts",
+      "server/**/*.test.ts",
+      "e2e/support/**/*.test.ts",
+    ],
+    exclude: ["node_modules/**", "dist/**"],
   },
 });

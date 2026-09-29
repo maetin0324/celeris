@@ -1170,3 +1170,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   決定 `p4a-uid`〈subuid の実証場所〉）→ PlanGate。人（選択肢 1）に従い、決定は **ns-only** で回答し、PlanGate は `replan`（p4a / p4b / p4c に
   `gate: compound` を明示）を要求（21:22Z）→ **P-R5b-4 再現**: 未承認 v4 の p4a / p4c から子 task が即座に作られ dispatch され、replan 自体は
   `max_replans`（3）超過の決定 `limit:max_replans` 01M3QGRC80H4M42V5NAF3P9YQN で止まった。
+- 21:25Z: planner v5 = v4 + p4a / p4b / p4c の `features` を compound 寄りに（plan/3 の unit に `gate` 欄は無く deny_unknown_fields で拒否されるため。
+  「unit の gate 上書き」は daemon 側の `unit_gate_overridden` だけ）→ 人が approve。既に動いている p4a / p4c の子（atomic、score 6 / 7）は run が切れた
+  瞬間に人の `decompose {compound}` を当てる（scratchpad `force_compound.sh`、1 秒 poll）。**R6 候補**: plan/3 の unit に `gate: compound|atomic` を
+  planner / 人が書ける欄を足す（ADR-0079 D6 の per-node gate に対する明示の手掛かり）。

@@ -1106,3 +1106,21 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   再 replan は fix1 未昇格のため同じ理由で失敗し、決定 01M3PT3132DPB84TDY669VDFSZ が open（昇格後に replan + note で回答）。
 - bf-plan の成果 `artifacts/experiment-plan.md`（sha256 b0a56e29…、175 行）は run 01M3PAZ8AFZQDD31BDX43FDYS0 の stdout.jsonl の Write から復元し、
   sha 一致を確認（scratchpad）。昇格後に root の作業場所へ戻す（人）。
+
+### 昇格後の dogfood（2026-09-29 16:3xZ〜17:3xZ、release 1ab74fae921c）
+
+- 人が `promote.sh 1ab74fae921c`（live）と `experiment-plan.md` の復元を実行（sha256 一致を確認）。
+- **web Phase 0**: 人の PUT replan（v3）で baseline の check を A 案に差し替え → 200、`replan.overridden_done = ["baseline"]`（R5b-fix1 の本番動作）。質問に回答して ready
+  → planner run が `failed to spawn worker: Argument list too long (os error 7)` で失敗（prompt 135,644 B を `-p` の argv 1 要素で渡していた。
+  Linux MAX_ARG_STRLEN 128 KiB 超）→ blocked。**F5-fix10**（prompt を stdin で渡す）を Opus に委譲。昇格後に回答して再開する。
+- **BenchFS**: 決定 `plan_invalid`（2 件目、人が GUI で回答した 1 件目は昇格前で同じ失敗）に replan + note で回答 → planner v2（adopt 済み unit は復元、bf-impl は
+  superseded → bf-impl2 を再発行、bf-exp / bf-write は reviewer + artifact_exists）→ PlanGate（`review_human:experiments`、near_limit ×3。
+  `max_child_tasks_per_plan 10/6` は adopt 済み unit を数えている表示の齟齬）→ 人が approve → 子 01M3Q25DSD895DGMGPWD752G3G が running。
+  R5b-fix3 の効果: 子の workspace は remote sirius を継承、budget 30 turns / 1800 s、`execution_hint = compound (explicit: false)`。gate は
+  `atomic/out-of-scope`（remote は木の対象外 = D7）。
+- **browser phase-3 子**: 全 16 WU done → 最終 review の `cargo test --workspace` が e2e 1 件（replay MISMATCH status）で失敗 → `limit:max_replans`（3）の決定に
+  `raise-once` + note で回答 → 修理 `fix-replay`（同 test 5 回連続 pass）→ 機械検査は通過、reviewer（codex）が P3-B/C の未配線・認証区間の未接続で
+  criterion 0/1 不合格 → **failed**（17:05Z）。根の unit p3 が `child_failed` → 根の planner replan v2（17:10Z、同 key p3 で再試行・前回ブランチを merge して
+  欠落だけ塞ぐ、p4 は 1 子 task）→ PlanGate（near_limit `max_tree_leaves 33/40`）。v2 は v1 の phase-3 後の `review: human` を落としていたので、それだけ戻す
+  replan を要求（v3 待ち）。
+- 観察: 根 task の `GET /tasks/{id}/timeline` が 1〜5.6 s（人が GUI で閲覧中）。件数由来の疑い、回収で見る。

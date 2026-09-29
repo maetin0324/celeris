@@ -1174,3 +1174,16 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   「unit の gate 上書き」は daemon 側の `unit_gate_overridden` だけ）→ 人が approve。既に動いている p4a / p4c の子（atomic、score 6 / 7）は run が切れた
   瞬間に人の `decompose {compound}` を当てる（scratchpad `force_compound.sh`、1 秒 poll）。**R6 候補**: plan/3 の unit に `gate: compound|atomic` を
   planner / 人が書ける欄を足す（ADR-0079 D6 の per-node gate に対する明示の手掛かり）。
+
+## R6: 回収（2026-09-29 22:3xZ 着手、人「背後で監視しつつ R6 と不具合の修正に取り掛かって」）
+
+分担（Opus、worktree、ファイル境界で並列）:
+- **R6-1**（task-dispatch / plan_gate / regate）: P-R5b-4（PlanGate の replan 要求で未承認版の unit を dispatch しない）、P-R5b-5（段階の `review: human` 待ちで
+  次段階の unit を止める）、非 tree の task も max_replans 超過で人に聞く・人の replan は上限に数えない、終端 task の runs 索引を閉じる、near_limit の数え方。
+- **R6-2**（task-core / task-ops tree / config 既定）: plan/3 unit の `gate: compound|atomic` 欄、`kind: task` の子は既定で explicit compound（全 origin）、
+  planner prompt に gate と否定 grep の注意、木の上限の既定値（leaves 40→120、runs 120→400、replans 3→5、tree_replans 10→30）。
+- **R6-3**（task-worker ssh）: クラスタ worktree の submodule 展開。
+- **R6-4**（task-ops execution/replay、task-api、gui）: replan で unit の phase を書き換える、「この方針で進める」撤去、timeline API の遅延、凍結途中目標の注記。
+- 後続 **R6-5**（R6-1 の後、dispatcher）: task 間の公平性（round-robin、task ごとの同時数 ≤ 全体枠 − 1）。
+- **人の判断待ち**: D7（remote workspace の木: 子ブランチ/統合をクラスタ側で実装するか、remote の親では葉だけに制限するか）、D4（人の answer で attempts を
+  reset するか。ADR 要）。

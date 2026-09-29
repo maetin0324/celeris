@@ -19,7 +19,7 @@ import {
   revokeOwnerSession,
   startOwnerControlSocket,
 } from "~/browser-owner.server";
-import { runLiveViewRoute } from "~/celeris/browser-live.server";
+import { liveViewRelayAvailable, runLiveViewRoute, setLiveViewRelayForTest } from "~/celeris/browser-live.server";
 import { runCredentialAction, runDecisionAction, runOwnerChallengeAction } from "~/celeris/browser-waits.server";
 import { CelerisClient } from "~/celeris/client.server";
 import type { BrowserRun, BrowserWait, EventsPage, TaskDetail } from "~/celeris/types";
@@ -399,7 +399,7 @@ describe("Live View is only reachable from the owner's authenticated session", (
       expect(text).not.toContain("dashboard.internal");
       expect(res.headers.get("location")).toBeNull();
     }
-    // 本人は guard を通るが、読み取り専用 relay が未検証の間は開かない（URL も Location も出さない）
+    // 本人は guard を通るが、relay（CELERIS_GUI_LIVE_VIEW_UPSTREAM）が未設定なら開かない（URL も Location も出さない）
     const res = await runLiveViewRoute(
       client,
       new Request(`${ORIGIN}/browser/live/T1/R1`, { headers: { cookie: owner } }),
@@ -437,6 +437,26 @@ describe("Live View is only reachable from the owner's authenticated session", (
     const ownerDataReq = new Request(`${ORIGIN}/tasks/T1`, { headers: { cookie: owner } });
     const ownerData = await loadTaskDetail(client, "T1", ownerDataReq, await browserOwnerView(ownerDataReq));
     expect(ownerData.liveViews.R1).toEqual({ state: "disabled", reason: "relay_unavailable" });
+    // relay（CELERIS_GUI_LIVE_VIEW_UPSTREAM）が設定されていれば本人には同一 origin の経路だけを出す
+    setLiveViewRelayForTest({ upstream: "127.0.0.1:27849" });
+    try {
+      const configured = await loadTaskDetail(
+        client,
+        "T1",
+        ownerDataReq,
+        await browserOwnerView(ownerDataReq),
+        liveViewRelayAvailable(),
+      );
+      expect(configured.liveViews.R1).toEqual({ state: "link", href: "/browser/live/T1/R1" });
+      expect(JSON.stringify(configured)).not.toContain("dashboard.internal");
+      expect(JSON.stringify(configured)).not.toContain("27849");
+      // 他 session には relay が設定されていても出さない
+      const otherReq = new Request(`${ORIGIN}/tasks/T1`, { headers: { cookie: other } });
+      const otherConfigured = await loadTaskDetail(client, "T1", otherReq, await browserOwnerView(otherReq), true);
+      expect(otherConfigured.liveViews.R1).toEqual({ state: "disabled", reason: "not_owner" });
+    } finally {
+      setLiveViewRelayForTest(undefined);
+    }
     const otherDataReq = new Request(`${ORIGIN}/tasks/T1`, { headers: { cookie: other } });
     const otherData = await loadTaskDetail(client, "T1", otherDataReq, await browserOwnerView(otherDataReq));
     expect(otherData.liveViews.R1).toEqual({ state: "disabled", reason: "not_owner" });

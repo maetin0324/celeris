@@ -1,34 +1,285 @@
-import { checkOwner } from "~/browser-owner.server";
+import { request as httpRequest } from "node:http";
+import { checkOwner, onOwnerRevoked } from "~/browser-owner.server";
 import { activeBrowserRunIds, inAuthInterval, safeBrowserLiveUrl } from "~/lib/browser";
 import { loadBrowserRuns, loadTaskBrowserWaits } from "./browser";
-import type { CelerisClient } from "./client.server";
+import { type CelerisClient, getCelerisClient } from "./client.server";
 import type { BrowserRun, BrowserWait, TaskDetail } from "./types";
 
 /**
  * ADR-0080 D6: `/browser/live/:taskId/:runId`。毎回 owner grant・task/run 対応・active・RUNNING・
- * 認証区間外を照合する。upstream の dashboard URL は応答・Location・ログに出さない。
- *
- * 固定版 dashboard の HTTP/WS/assets を読み取り専用で relay し、guard を通らない絶対 URL・token bootstrap・
- * 直接 WS 参照が残らないことはまだ確かめていない。ADR の「満たせない場合の安全な動作」に従い、guard を
- * 通った本人にも relay は開かず `live_view_relay_unavailable` を返す（リンク非表示だけで達成扱いにしない）。
+ * 認証区間外を照合し、通った本人の session にだけ固定版 dashboard（agent-browser 0.38.1）を同一 origin で
+ * 読み取り専用に relay する。
+ * - upstream は起動時に固定した loopback の `CELERIS_GUI_LIVE_VIEW_UPSTREAM`（`host:port`）だけ。
+ *   client からの URL/port は upstream の宛先にならない。run の `live_view_url` は「設定済みか」の gate にだけ使い、
+ *   宛先にも応答にも使わない
+ * - 未設定なら relay は開かず、guard を通った本人にも `503 live_view_relay_unavailable`
+ * - HTML を開いた本人の session に「見ている run」を束縛する（メモリだけ）。dashboard が絶対 URL で取りに来る
+ *   `/_next/*`・読み取り API・stream は、その束縛の run が今も guard を通るときだけ relay する
+ *   （`browser-live-relay.server.ts`）
+ * - upstream の URL・token・cookie・session ID は応答・Location・ログに出さない
  */
-export { LIVE_VIEW_RELAY_AVAILABLE } from "~/lib/browser";
 
 const ID_RE = /^[0-9A-Za-z_-]{1,64}$/;
 
-function plain(status: number, code: string): Response {
+export const LIVE_VIEW_UPSTREAM_ENV = "CELERIS_GUI_LIVE_VIEW_UPSTREAM";
+
+export interface LiveViewUpstream {
+  /** 接続先（`127.0.0.1` / `::1` / `localhost`）。 */
+  host: string;
+  port: number;
+  /** `Host` / `Origin` に使う authority（`127.0.0.1:27849` / `[::1]:27849`）。 */
+  authority: string;
+}
+
+/** `host:port`（host は loopback だけ）を読む。不正なら null。 */
+export function parseLiveViewUpstream(value: string): LiveViewUpstream | null {
+  const m = /^(?:\[(::1)\]|(127\.0\.0\.1|localhost)):(\d{1,5})$/.exec(value.trim());
+  if (!m) return null;
+  const port = Number(m[3]);
+  if (!(port > 0 && port < 65536)) return null;
+  if (m[1]) return { host: "::1", port, authority: `[::1]:${port}` };
+  const host = m[2] ?? "127.0.0.1";
+  return { host, port, authority: `${host}:${port}` };
+}
+
+let upstreamOverride: { value: LiveViewUpstream | null } | null = null;
+let clientOverride: CelerisClient | null = null;
+let upstreamFromEnv: { raw: string | undefined; value: LiveViewUpstream | null } | null = null;
+
+/** 設定された upstream（未設定・不正なら null。不正な値は server.js が起動時に exit 2 で止める）。 */
+export function liveViewUpstream(): LiveViewUpstream | null {
+  if (upstreamOverride) return upstreamOverride.value;
+  const raw = process.env[LIVE_VIEW_UPSTREAM_ENV];
+  if (!upstreamFromEnv || upstreamFromEnv.raw !== raw) {
+    upstreamFromEnv = { raw, value: raw ? parseLiveViewUpstream(raw) : null };
+  }
+  return upstreamFromEnv.value;
+}
+
+/** Live View の relay が使える構成か（画面の導線の表示に使う）。 */
+export function liveViewRelayAvailable(): boolean {
+  return liveViewUpstream() !== null;
+}
+
+/** relay が daemon に照会するときの client。 */
+export function liveViewClient(): CelerisClient {
+  return clientOverride ?? getCelerisClient();
+}
+
+/** テスト用: upstream（`host:port`、null で未設定）と daemon client を差し替える。undefined で元に戻す。 */
+export function setLiveViewRelayForTest(opts: { upstream?: string | null; client?: CelerisClient | null } | undefined) {
+  if (!opts) {
+    upstreamOverride = null;
+    clientOverride = null;
+    resetLiveViewStateForTest();
+    return;
+  }
+  if (opts.upstream !== undefined) {
+    upstreamOverride = { value: opts.upstream === null ? null : parseLiveViewUpstream(opts.upstream) };
+  }
+  if (opts.client !== undefined) clientOverride = opts.client;
+}
+
+// ---- 応答 ----
+
+const BASE_HEADERS: Record<string, string> = {
+  "Cache-Control": "no-store",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+};
+
+/** relay した dashboard の CSP（同一 origin で動くのに必要な分だけ。inline script は dashboard の export が使う）。 */
+export const LIVE_VIEW_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+/** 拒否・失敗の応答（固定コードだけ）。 */
+export function liveViewPlain(status: number, code: string): Response {
   return new Response(`${code}\n`, {
     status,
     headers: {
+      ...BASE_HEADERS,
       "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store",
-      "Referrer-Policy": "no-referrer",
-      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      ...(status === 401 ? { "WWW-Authenticate": "Cookie" } : {}),
     },
   });
 }
 
-/** `GET /browser/live/:taskId/:runId`（他の method も同じ guard を通して拒否する）。 */
+// ---- run の guard ----
+
+export type LiveViewGuard = { ok: true; run: BrowserRun } | { ok: false; status: number; code: string };
+
+/** task/run 対応・active controller・RUNNING・設定済み・認証区間外（owner の照合は呼び出し側）。 */
+export async function checkLiveViewRun(
+  client: CelerisClient,
+  taskId: string,
+  runId: string,
+  signal: AbortSignal,
+): Promise<LiveViewGuard> {
+  if (!ID_RE.test(taskId) || !ID_RE.test(runId)) return { ok: false, status: 404, code: "not_found" };
+  let detail: TaskDetail;
+  let runs: BrowserRun[];
+  let waits: BrowserWait[];
+  try {
+    [detail, runs, waits] = await Promise.all([
+      client.get<TaskDetail>(`/tasks/${encodeURIComponent(taskId)}`, { signal }),
+      loadBrowserRuns(client, taskId, signal),
+      loadTaskBrowserWaits(client, taskId, signal),
+    ]);
+  } catch {
+    return { ok: false, status: 404, code: "not_found" };
+  }
+  const run = runs.find((r) => r.run_id === runId && r.task_id === taskId);
+  if (!run) return { ok: false, status: 404, code: "not_found" };
+  const active = activeBrowserRunIds(detail.runs, detail.task.status).includes(runId);
+  if (run.state !== "RUNNING" || !active) return { ok: false, status: 409, code: "not_running" };
+  if (!safeBrowserLiveUrl(run.live_view_url)) return { ok: false, status: 404, code: "not_configured" };
+  if (inAuthInterval(waits, runId)) return { ok: false, status: 409, code: "auth_interval" };
+  return { ok: true, run };
+}
+
+/** run の guard の結果を短く（≤3 秒）使い回す。assets の連続取得で daemon を叩きすぎない。 */
+export const LIVE_VIEW_GUARD_TTL_MS = 3_000;
+const guardCache = new Map<string, { atMs: number; result: Promise<LiveViewGuard> }>();
+
+export function cachedLiveViewGuard(taskId: string, runId: string, now = Date.now()): Promise<LiveViewGuard> {
+  const key = `${taskId}\0${runId}`;
+  const hit = guardCache.get(key);
+  if (hit && now - hit.atMs < LIVE_VIEW_GUARD_TTL_MS && now >= hit.atMs) return hit.result;
+  for (const [k, v] of guardCache) if (now - v.atMs >= LIVE_VIEW_GUARD_TTL_MS) guardCache.delete(k);
+  const result = checkLiveViewRun(liveViewClient(), taskId, runId, AbortSignal.timeout(10_000));
+  guardCache.set(key, { atMs: now, result });
+  return result;
+}
+
+// ---- session と run の束縛 ----
+
+export interface LiveViewBinding {
+  taskId: string;
+  runId: string;
+  boundAtMs: number;
+}
+
+const bindings = new Map<string, LiveViewBinding>();
+
+function clearBindingsOnRevoke(): void {
+  bindings.clear();
+  guardCache.clear();
+}
+
+/** owner grant の失効（logout・期限・再登録）で束縛を全て捨てる。購読は冪等（同じ関数）。 */
+function ensureRevokeSubscription(): void {
+  onOwnerRevoked(clearBindingsOnRevoke);
+}
+
+export function bindLiveView(sessionHash: string, taskId: string, runId: string, now = Date.now()): void {
+  ensureRevokeSubscription();
+  bindings.set(sessionHash, { taskId, runId, boundAtMs: now });
+}
+
+export function liveViewBinding(sessionHash: string): LiveViewBinding | null {
+  return bindings.get(sessionHash) ?? null;
+}
+
+export function unbindLiveView(sessionHash: string): void {
+  bindings.delete(sessionHash);
+}
+
+/** guard の cache を捨てる（テスト用。次の照合で daemon に問い合わせ直す）。 */
+export function clearLiveViewGuardCache(): void {
+  guardCache.clear();
+}
+
+/** テスト用: 束縛と guard の cache を空にする。 */
+export function resetLiveViewStateForTest(): void {
+  bindings.clear();
+  guardCache.clear();
+}
+
+// ---- upstream の HTTP ----
+
+const UPSTREAM_MAX_BYTES = 32 * 1024 * 1024;
+
+export interface UpstreamResult {
+  status: number;
+  contentType: string | null;
+  body: Buffer;
+}
+
+/** 固定の upstream に GET する（`path` は relay が組み立てた検証済みのものだけ）。 */
+export function upstreamGet(upstream: LiveViewUpstream, path: string, timeoutMs = 15_000): Promise<UpstreamResult> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: upstream.host,
+        port: upstream.port,
+        method: "GET",
+        path,
+        headers: {
+          Host: upstream.authority,
+          // dashboard の `/api/*` は同一 origin の Origin を要求する（loopback の Host + loopback の Origin なら token 不要）
+          Origin: `http://${upstream.authority}`,
+          Accept: "*/*",
+          Connection: "close",
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let total = 0;
+        res.on("data", (chunk: Buffer) => {
+          total += chunk.length;
+          if (total > UPSTREAM_MAX_BYTES) {
+            req.destroy(new Error("upstream_too_large"));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => {
+          const ct = res.headers["content-type"];
+          resolve({
+            status: res.statusCode ?? 502,
+            contentType: typeof ct === "string" ? ct : null,
+            body: Buffer.concat(chunks),
+          });
+        });
+        res.on("error", () => reject(new Error("upstream_error")));
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("upstream_timeout")));
+    req.on("error", () => reject(new Error("upstream_unavailable")));
+    req.end();
+  });
+}
+
+/**
+ * upstream の応答を relay の応答にする。持ち越すのは status と Content-Type だけ
+ * （Set-Cookie・Location・token を運びうるヘッダは全て捨てる）。
+ */
+export function relayResponse(result: UpstreamResult, opts: { html?: boolean } = {}): Response {
+  if (result.status >= 500) return liveViewPlain(502, "live_view_upstream_error");
+  if (result.status >= 300 && result.status < 400) return liveViewPlain(502, "live_view_upstream_error");
+  const contentType = result.contentType ?? "application/octet-stream";
+  if (opts.html && result.status === 200 && !/^text\/html\b/i.test(contentType)) {
+    return liveViewPlain(502, "live_view_upstream_error");
+  }
+  return new Response(new Uint8Array(result.body), {
+    status: result.status,
+    headers: { ...BASE_HEADERS, "Content-Type": contentType, "Content-Security-Policy": LIVE_VIEW_CSP },
+  });
+}
+
+/** `GET /browser/live/:taskId/:runId` の `?port=` だけを 1〜5 桁のときに引き継ぐ（それ以外の query は捨てる）。 */
+function entryUpstreamPath(search: string): string {
+  const port = new URLSearchParams(search).get("port");
+  return port && /^\d{1,5}$/.test(port) ? `/?port=${port}` : "/";
+}
+
+/**
+ * `/browser/live/:taskId/:runId`（他の method・upgrade も同じ guard を通して拒否する）。
+ * express の relay と React Router の route の両方がこれを使う。
+ */
 export async function runLiveViewRoute(
   client: CelerisClient,
   request: Request,
@@ -36,29 +287,22 @@ export async function runLiveViewRoute(
   runId: string | undefined,
 ): Promise<Response> {
   const owner = await checkOwner(request);
-  if (!owner.ok) return plain(owner.status, owner.code);
-  if (request.method.toUpperCase() !== "GET") return plain(405, "method_not_allowed");
-  // WebSocket upgrade も同じ guard の後で拒否する（読み取り専用 relay が未対応）。
-  if (request.headers.get("upgrade")) return plain(501, "live_view_relay_unavailable");
-  if (!taskId || !runId || !ID_RE.test(taskId) || !ID_RE.test(runId)) return plain(404, "not_found");
-  let detail: TaskDetail;
-  let runs: BrowserRun[];
-  let waits: BrowserWait[];
+  if (!owner.ok) return liveViewPlain(owner.status, owner.code);
+  if (request.method.toUpperCase() !== "GET") return liveViewPlain(405, "method_not_allowed");
+  // WebSocket は `/api/session/:port/stream` の upgrade だけ（browser-live-relay.server.ts）。ここへは来させない。
+  if (request.headers.get("upgrade")) return liveViewPlain(400, "live_view_upgrade_not_here");
+  if (!taskId || !runId || !ID_RE.test(taskId) || !ID_RE.test(runId)) return liveViewPlain(404, "not_found");
+  const guard = await checkLiveViewRun(client, taskId, runId, request.signal);
+  if (!guard.ok) return liveViewPlain(guard.status, guard.code);
+  const upstream = liveViewUpstream();
+  // 未設定なら、guard を通った本人にも relay を開かない。
+  if (!upstream) return liveViewPlain(503, "live_view_relay_unavailable");
+  bindLiveView(owner.sessionHash, taskId, runId);
+  let result: UpstreamResult;
   try {
-    [detail, runs, waits] = await Promise.all([
-      client.get<TaskDetail>(`/tasks/${encodeURIComponent(taskId)}`, { signal: request.signal }),
-      loadBrowserRuns(client, taskId, request.signal),
-      loadTaskBrowserWaits(client, taskId, request.signal),
-    ]);
+    result = await upstreamGet(upstream, entryUpstreamPath(new URL(request.url).search));
   } catch {
-    return plain(404, "not_found");
+    return liveViewPlain(502, "live_view_upstream_unavailable");
   }
-  const run = runs.find((r) => r.run_id === runId && r.task_id === taskId);
-  if (!run) return plain(404, "not_found");
-  const active = activeBrowserRunIds(detail.runs, detail.task.status).includes(runId);
-  if (run.state !== "RUNNING" || !active) return plain(409, "not_running");
-  if (!safeBrowserLiveUrl(run.live_view_url)) return plain(404, "not_configured");
-  if (inAuthInterval(waits, runId)) return plain(409, "auth_interval");
-  // LIVE_VIEW_RELAY_AVAILABLE が false の間は、guard を通った本人にも relay を開かない。
-  return plain(503, "live_view_relay_unavailable");
+  return relayResponse(result, { html: true });
 }

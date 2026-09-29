@@ -63,6 +63,18 @@ try {
   fatal(`CELERIS_API_URL is not a URL: ${celerisApiUrl}`);
 }
 if (process.env.CELERIS_API_TOKEN_FILE) readSecretFile(process.env.CELERIS_API_TOKEN_FILE, "CELERIS_API_TOKEN_FILE");
+// ADR-0080 D6: Live View の読み取り専用 relay の upstream（agent-browser dashboard）。loopback の `host:port` だけ。
+// 未設定なら relay は開かない（503 live_view_relay_unavailable）。値は app/celeris/browser-live.server.ts が同じ規則で読む。
+const liveViewUpstream = process.env.CELERIS_GUI_LIVE_VIEW_UPSTREAM;
+if (liveViewUpstream !== undefined && liveViewUpstream !== "") {
+  const m = /^(?:\[(::1)\]|(127\.0\.0\.1|localhost)):(\d{1,5})$/.exec(liveViewUpstream.trim());
+  const port = m ? Number(m[3]) : 0;
+  if (!m || !(port > 0 && port < 65536)) {
+    fatal(
+      "CELERIS_GUI_LIVE_VIEW_UPSTREAM must be a loopback host:port (127.0.0.1:<port>, [::1]:<port> or localhost:<port>)",
+    );
+  }
+}
 
 const app = express();
 app.disable("x-powered-by");
@@ -120,6 +132,11 @@ app.use((req, res, next) => {
   next();
 });
 
+/** Live View の WebSocket relay（`upgrade`）。開発時は要求ごとに server/app.ts を読む。 @type {(server: import("node:http").Server) => void} */
+let attachUpgrade;
+/** @param {string} h */
+const upgradeHostAllowed = (h) => allowedHosts.has(hostWithoutPort(h));
+
 if (DEVELOPMENT) {
   const viteDevServer = await import("vite").then((vite) => vite.createServer({ server: { middlewareMode: true } }));
   app.use(viteDevServer.middlewares);
@@ -132,19 +149,30 @@ if (DEVELOPMENT) {
       next(error);
     }
   });
+  attachUpgrade = (server) => {
+    server.on("upgrade", (req, socket, head) => {
+      viteDevServer
+        .ssrLoadModule("./server/app.ts")
+        .then((source) => source.handleLiveViewUpgrade(req, socket, head, { hostAllowed: upgradeHostAllowed }))
+        .catch(() => socket.destroy());
+    });
+  };
 } else {
   app.use("/assets", express.static("build/client/assets", { immutable: true, maxAge: "1y" }));
   app.use(express.static("build/client", { maxAge: "1h" }));
-  app.use(await import(BUILD_PATH).then((mod) => mod.app));
+  const mod = await import(BUILD_PATH);
+  app.use(mod.app);
+  attachUpgrade = (server) => mod.attachLiveViewUpgrade(server, { hostAllowed: upgradeHostAllowed });
 }
 
 // ADR-0040 D4: 昇格のライブ引き継ぎのため `reusePort`（Node 24）。新旧の GUI が同じポートに同時に
 // bind でき、カーネルが振り分ける。旧は `/healthz` が新しい release を返したら止める。
 const server = app.listen({ port: bind.port, host: bind.host, reusePort: true }, () => {
   process.stderr.write(
-    `celeris-gui: listening on http://${bind.host}:${bind.port} (release ${process.env.CELERIS_GUI_RELEASE ?? "dev"}, celeris API ${celerisApiUrl}, auth ${passwordFile ? "password" : "none (loopback)"}, token ${process.env.CELERIS_API_TOKEN_FILE ? "yes" : "no"})\n`,
+    `celeris-gui: listening on http://${bind.host}:${bind.port} (release ${process.env.CELERIS_GUI_RELEASE ?? "dev"}, celeris API ${celerisApiUrl}, auth ${passwordFile ? "password" : "none (loopback)"}, token ${process.env.CELERIS_API_TOKEN_FILE ? "yes" : "no"}, live view relay ${liveViewUpstream ? "on" : "off"})\n`,
   );
 });
+attachUpgrade(server);
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     server.close(() => process.exit(0));

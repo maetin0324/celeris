@@ -22,6 +22,7 @@ import type {
 } from "~/celeris/action-types";
 import { retryData, transitionData } from "~/celeris/actions.server";
 import { loadBrowserRuns, loadTaskBrowserWaits } from "~/celeris/browser";
+import { liveViewRelayAvailable } from "~/celeris/browser-live.server";
 import type { CelerisClient } from "~/celeris/client.server";
 import { getCelerisClient } from "~/celeris/client.server";
 import { promoteArtifact, readArtifactPromoteBody } from "~/celeris/docs-admin.server";
@@ -363,6 +364,8 @@ export async function loadTaskDetail(
   request: Request,
   /** ADR-0080 D6: 本人状態は loader が `browserOwnerView(request)` で求めて渡す（既定は「本人を識別できない」）。 */
   browserOwner: BrowserOwnerView = NO_BROWSER_OWNER,
+  /** Live View の relay が設定されているか（loader が `liveViewRelayAvailable()` で求めて渡す）。 */
+  liveViewRelay = false,
 ): Promise<TaskDetailData> {
   const url = new URL(request.url);
   // フォームは `types` チェックボックスごとに 1 つずつ付ける（`?types=a&types=b`）。
@@ -437,6 +440,7 @@ export async function loadTaskDetail(
       ownerAvailable: browserOwner.available,
       active: activeRuns.includes(run.run_id),
       waits: browserWaits,
+      relayAvailable: liveViewRelay,
       href: liveViewPath(taskId, run.run_id),
     });
   }
@@ -480,7 +484,13 @@ export const shouldRevalidate = revalidateAfterActionErrors;
 
 export async function loader({ params, request }: Route.LoaderArgs): Promise<TaskDetailData> {
   try {
-    return await loadTaskDetail(getCelerisClient(), params.id, request, await browserOwnerView(request));
+    return await loadTaskDetail(
+      getCelerisClient(),
+      params.id,
+      request,
+      await browserOwnerView(request),
+      liveViewRelayAvailable(),
+    );
   } catch (e) {
     throw celerisErrorResponse(e);
   }

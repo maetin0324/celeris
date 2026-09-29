@@ -46,4 +46,11 @@ systemctl --user enable --now celeris-credentiald@<release>
 
 試験は `crates/task-api/tests/browser_e2e.rs` にある。store・API・broker IPC・`celeris-credentiald bridge` は本物を使い、ブラウザだけを fake substrate（`tests/fixtures/fake-agent-browser.py`）と fixture site に置き換える。扱う場面は「未登録→待ち→登録→再開→success」「承認拒否→failed」「login URL が別 origin へ redirect→deny（auth login は走らない）」の三つで、それぞれ tempdir 全ファイル（DB・WAL・workspace・runs・artifacts・vault・journal）、task の events、worker 出力を sentinel で全走査する。
 
-**fake と実機の区別**: この環境に agent-browser の実バイナリは無く、実機では確かめていない。上の `auth login` の flag 名（`--credential-ref`）と、`upstream-credential.json` の `plugins` 設定の形は ADR-0080 の source 読み取りに基づく想定である。fake substrate はこの想定どおりに plugin を起動するだけだ。実 agent-browser 0.38.1 の daemon が plugin を起動する場合、FD 3 が plugin に届くかも未確認である。したがって fake 試験の success は実ブラウザでの認証成功を意味しない。実機で確かめるまでは、実運用の credential 使用は plugin 起動の失敗として fail closed になる見込みである。
+**fake と実機の区別**: 検証環境に置いた固定版 0.38.1 の実バイナリで auth login を確認した（`scripts/browser-auth-login-check.py`、結果は [phase-browser-2.md](progress/phase-browser-2.md) の「実 agent-browser での auth login 確認」）。bridge・lease 消費・フォーム login・一回限りの lease・sentinel の不在は実バイナリで通ったが、binding token の受け渡しは試験だけの FD 3 の回避策を使っており、今の結線のままでは実機で fail closed になる。fake 試験の success は実ブラウザでの認証成功を意味しない。
+
+**実バイナリとの差分（要修正）**: 上の結線は次の点で実 0.38.1 の契約と合わない。修正は Phase 3。
+- `plugins` は配列 `[{name,command,args,capabilities:["credential.read"]}]`。map は config の読み込みエラーになる。
+- `auth login` は `auth login <name> --credential-provider P --item <lease> --no-navigate --url <origin>/`。`<name>` が必須で、`--credential-ref` は unknown flag。
+- plugin を起動するのはセッションの daemon で、FD 3 は daemon を起動した最初の CLI 呼び出しのものだけが届く。`auth login` の CLI に渡した FD 3 は plugin に無く、bridge は `denied` になる。受け渡し方式は未決（progress の未解決事項）。
+- segment policy の allow に `url` が要る。policy のパスを変えると daemon が再起動してログイン状態が消える。
+- plugin 要求の `url` は `--url` の値の写しで、ブラウザの観測値ではない。注入前の origin 検証は agent-browser 側が行う。

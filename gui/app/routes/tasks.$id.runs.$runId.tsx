@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { isRouteErrorResponse, Link } from "react-router";
 import { browserOwnerView } from "~/browser-owner.server";
 import { loadBrowserRuns, loadTaskBrowserWaits } from "~/celeris/browser";
+import { liveViewRelayAvailable } from "~/celeris/browser-live.server";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import type { BrowserRun, RunList, RunSummary, TaskDetail } from "~/celeris/types";
@@ -67,6 +68,8 @@ export async function loadRunDetail(
   runId: string,
   request: Request,
   owner: BrowserOwnerView = NO_BROWSER_OWNER,
+  /** Live View の relay が設定されているか（loader が `liveViewRelayAvailable()` で求めて渡す）。 */
+  liveViewRelay = false,
 ): Promise<RunDetailData> {
   const runs = await client.get<RunList>(`/tasks/${taskId}/runs`, { signal: request.signal });
   const run = runs.runs.find((r) => r.run_id === runId);
@@ -100,6 +103,7 @@ export async function loadRunDetail(
       ownerAvailable: owner.available,
       active: active.includes(b.run_id),
       waits: browserWaits,
+      relayAvailable: liveViewRelay,
       href: liveViewPath(taskId, b.run_id),
     });
   }
@@ -122,7 +126,14 @@ export function meta(_: Route.MetaArgs) {
 
 export async function loader({ params, request }: Route.LoaderArgs): Promise<RunDetailData> {
   try {
-    return await loadRunDetail(getCelerisClient(), params.id, params.runId, request, await browserOwnerView(request));
+    return await loadRunDetail(
+      getCelerisClient(),
+      params.id,
+      params.runId,
+      request,
+      await browserOwnerView(request),
+      liveViewRelayAvailable(),
+    );
   } catch (e) {
     throw celerisErrorResponse(e);
   }

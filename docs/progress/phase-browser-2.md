@@ -15,6 +15,50 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 - **結線（e2e）**: 承認後の run は承認 wait を一度だけ消費し、credentiald に bind と grant を求める。origin が合わないときや失敗したときは lease を失効させ、再試行しない Error にする。認証後の区間では観測系の action を外し、Live View も止める。
 - **GUI（D5/D6）**: task 画面の「ブラウザの人待ち」に登録フォームと承認・拒否の操作を置いた。本人 session・exact Origin・CSRF・wait の version を検査する。Live View は `/browser/live/:taskId/:runId` の本人 guard を通る経路だけにし、loader data と SSE から raw `live_view_url` を消した。relay が未検証のため、本人にも 503 `live_view_relay_unavailable` を返す（D6 の安全側動作）。詳細は `gui/docs/PROGRESS.md`。
 
+## Live View relay（live-gui WU、2026-09-29、ADR-0080 D6）
+
+- **設定**: `CELERIS_GUI_LIVE_VIEW_UPSTREAM=<loopback host:port>`（`127.0.0.1` / `[::1]` / `localhost` 以外は起動時に exit 2）。起動時に固定した宛先だけを使う。client からの URL・port は upstream の宛先にならない。run の `live_view_url` は「設定済みか」の gate にだけ使い、宛先にも応答にも使わない。未設定なら従来どおり本人にも 503 `live_view_relay_unavailable` を返し、リンクも出さない。
+- **入口**: `GET /browser/live/:taskId/:runId` は owner grant と run の guard（task/run の対応、active、RUNNING、設定済み、認証区間外）を通したうえで、upstream `GET /`（`?port=` は 1〜5 桁のときだけ）を relay する。ヘッダは relay 側で決める（no-store、no-referrer、nosniff、X-Frame-Options DENY、`script-src 'self' 'unsafe-inline'` と `connect-src 'self'` の CSP）。upstream の Set-Cookie・Location などは捨てる。React Router の nonce CSP を避けるため、express の middleware（`gui/server/app.ts`）で React Router より前に処理する。
+- **束縛**: 入口を開いた本人の session（cookie ID のハッシュ）に、見ている task/run をメモリ上で束縛する。dashboard は絶対 URL を使うので、GUI の origin の root で次のものを受ける。`GET /_next/static/*`、`GET /api/sessions`、`GET /api/chat/status`、`GET /api/session/:port/{tabs,status}`、WebSocket `/api/session/:port/stream`。同じものを `/browser/live/:taskId/:runId/...` の下でも受け、その場合 prefix の run は束縛と一致しなければならない。これらを relay する条件は「owner で、束縛があり、束縛した run が今も guard を通る（結果は 3 秒 cache）」ことである。未認証は 401、他の session と認証無効は 403、束縛なしと他 run は 404。
+- **拒否**: 既定で拒否する allow list にしてある。上記以外の `/api/*` と `/_next/*`、および GET 以外のすべては `403 live_view_action_denied` になる（`/api/exec`、`/api/kill`、`POST /api/sessions`、`/api/chat`、`/api/models` を含む）。stream で client から upstream へ転送するのは `ack` と `config`（`maxFps` と `pacing` だけ。client ごとの frame 配信の設定）の JSON だけである。`input_mouse`・`input_keyboard`・`input_touch`、binary、その他は捨てて数だけ記録し、接続は切らない。WebSocket は Origin の完全一致も要求する。
+- **失効**: logout、grant の期限切れ、再登録（`onOwnerRevoked`）で束縛をすべて捨て、既存の WebSocket を close 1001 で切る。接続中も 5 秒ごとに owner と run を照合し、RUNNING/active でなくなるか認証区間に入ったら 1008 で切る。ログに出すのは判断コードと捨てた message の数だけで、URL・token・cookie・session ID は出さない。
+- **実装**: `gui/app/celeris/browser-live.server.ts`（guard、設定、束縛、入口）、`browser-live-relay.server.ts`（express middleware と `upgrade`）、`ws-codec.server.ts`（RFC 6455 の最小実装。依存は追加していない）。`server.js` が `attachLiveViewUpgrade` を http.Server に付ける。
+- **確認**: 単体テストは `gui/test/unit/browser-live-relay.test.ts`（偽 upstream の HTTP/WS を使う 15 件）。実機では、`/tmp` の使い捨てスクリプトで実 agent-browser 0.38.1 の dashboard（loopback）、`pnpm build` した `server.js`、Playwright の chromium を使い、次を確かめた。本人 A では HTML、13 個の `/_next/static` asset、`/api/sessions`、`/api/chat/status`、`/api/session/<port>/tabs` が 200 で、stream の WS が開き frame が届いた（dashboard は「Live」表示）。dashboard 上で click と key 入力をすると `input_mouse` と `input_keyboard` が送られたが、fixture のクリック数は 0 のまま、title も変わらなかった。`POST /api/exec` と `/api/models` は 403。別ログイン B では HTML、asset、API が 403 で WS は失敗。未認証では HTML、asset、API が 401 で WS は失敗。他 run は 404。A の logout で既存 WS が閉じた。GUI のログに upstream の port、URL、token は出なかった。dashboard は外部画像（svgl.app、google favicon）を読もうとするが、CSP の `img-src` で止まる。
+- **残る限界**: (1) dashboard と GUI は同じ UID で動く。同一 UID の相手が loopback の dashboard へ直接接続することは防げない（loopback の Host/Origin なら upstream は token を要求しない）。(2) dashboard は namespace 内の全 session を表示する。本人の session だけを namespace に置く運用が前提である。束縛は run 単位の認可であり、dashboard 内の session 選択までは絞れない。(3) 別 network namespace や外部 host からの到達不能の probe はしていない（未検証）。(4) `/favicon.ico` は relay しない（404）。
+
+## 実 daemon・実 GUI・実ブラウザの Live/認証確認（g14、live-gui WU、2026-09-29）
+
+- **何を確かめるか**: 使い捨ての daemon と GUI（`server.js`）を立て、Playwright の chromium で人の操作を通す。(a) WAITING_FOR_AUTH → owner 登録 → GUI の資格情報フォーム → Ready → 新しい run。(b) 承認 → resume、拒否 → failed（`approval_denied`）。(c) Live View は owner が dashboard を見られ、ログイン済みの非 owner は 403、未認証は 401、`POST /api/exec` は 403。(d) password の sentinel が DB・WAL・events API・daemon と GUI のログ・artifacts に無いこと。
+- **コマンド**: `gui/scripts/browser-live-e2e.sh`（spec は `gui/e2e/g14-browser-live.spec.ts`、fixture は `gui/test/celeris/`）。
+- **結果**: 4/4 passed（2026-09-29）。(d) は 90 ファイルを走査して 0 hit。
+- **証跡**: スクリーンショットとログは WU の artifacts（リポジトリの外）の `g14/` に置いた。
+- **seeding の注意**: `browser_updated` の RUNNING event は、dispatcher の browser supervisor だけが出す（acp/claude-code と LLM が要る）。この e2e では scratch の SQLite に 1 件だけ直接入れている。同じ理由で、試験用の task には browser 用 skill を付けていない。したがって supervisor が実際にブラウザを起動して event を出す経路は、この試験の対象外である。
+- **環境**: scratch の port は 27700（daemon）、27710（upstream の dashboard）、27848（GUI）。本番には触れていない。
+
+## 実 agent-browser での auth login 確認（live-gui WU）
+
+2026-09-29。`scripts/browser-auth-login-check.py`。検証環境に置いた固定版 agent-browser 0.38.1 を使い、`celeris-credentiald` は scratch の HOME と XDG_RUNTIME_DIR に立てた。fixture は 127.0.0.1 の自己署名 HTTPS。ネットワークにも LLM にも出ていない。詳細な記録（手順、各 variant の exit code、生ログ）は WU の artifacts の `auth-login/REPORT.md`。
+
+**判定: 部分的に確認**。実バイナリで次が通った。ただし plugin への binding token の受け渡しは、試験だけの FD 3 の回避策（wrapper が token file から FD 3 を作り直す。または daemon を起動する `open` にも FD 3 を渡す）を使った場合に限る。今の Celeris の結線のままでは動かない（fail closed で止まる）。
+
+- 確認できたこと: bridge が `credential.resolve` を受ける。resolve socket 経由で broker が lease を消費する（journal に `use/consumed`）。`--no-navigate` で origin を照合しフォームを埋めて submit する。fixture が正しい資格情報を受け取り、ログイン後に `LOGIN-OK-<rand>` を `get text body` と `snapshot` の両方で観測した。同じ lease の再使用は拒否された（`deny/used`）。stdout・stderr・journal・scratch 全体に sentinel は 0 hit。
+- 現在の結線との差（5 件）:
+  1. upstream config の `plugins` は map ではなく配列 `[{name,command,args,capabilities:["credential.read"]}]`。map だと config の読み込みで全コマンドが exit 1 になる。
+  2. `auth login` の argv は `auth login <name> --credential-provider P --item L …`。Celeris の `<name>` 省略と `--credential-ref` は不正（`unknown flag`）。
+  3. binding token の FD 3 が plugin に届かない。plugin を起動するのは CLI ではなくセッションの daemon で、daemon は自分を起動した CLI（最初の `open`）の FD 3 だけを継承して保持する。`auth login` の CLI にだけ渡した FD 3 は無い（bridge は `denied`）。
+  4. segment policy の allow に `url` が無く、`get url` が `Action 'url' denied by policy` になる。
+  5. `--action-policy` のパスを変えると daemon が再起動し（`restartedBackground:true`）、ログインした状態が消える。harness は segment と別の policy パスを使うので、ログイン状態が harness に残らない。同じパスで中身だけ書き換えた場合は維持された。
+- 推奨する修正（未実装。`crates/` は変更していない）:
+  - `segment_upstream_config` の `plugins` を配列にする。
+  - `use_credential` の argv を `auth login celeris-credential --credential-provider celeris-credential --item <lease> --no-navigate --url <origin>/` にする。`fake-agent-browser.py` も実バイナリの契約（配列 plugins、`--item`、positional name）に合わせて拒否させ、契約試験を足す。
+  - `segment_policy` の allow に `url` を加える。
+  - policy のパスを segment と harness で同一にして、segment 後に中身を atomic に書き換える（または daemon の再起動を避ける別の方法）。ADR にする。
+  - bridge が失敗したときも stdout に `{"protocol":"agent-browser.plugin.v1","success":false}` を書き、broker に deny を残す。
+  - 使用済み lease の `revoke` は成功を返さず `used` と区別する。
+- 注意: 実バイナリは plugin 要求の `url` に `--url` の値をそのまま入れる。ブラウザが観測した URL ではないので、broker の origin 照合は二重の確認にすぎない。注入前の origin 検証は agent-browser 側（`--no-navigate --url`、scheme・host・port）が行う。broker は `https://` の origin しか受け付けず、loopback の http の例外は無い。
+- 未解決（Phase 3、設計判断が必要。ADR-0080 D2 の改訂）: token の受け渡し。(a) segment 専用 session か policy パスで新しい daemon を確実に起動し、その最初の `open` に FD 3 の pipe を渡す（bridge は EOF まで読むので token は一度しか取れない。daemon が起動する Chrome などの子に FD 3 が継承されないかは未確認）。(b) supervisor が 0700 の directory に一回限りの token file（0600）を置き、bridge が読んだ直後に unlink する（daemon の env は起動時に固定される）。(c) bridge が resolve socket の peer（daemon の pid）を supervisor に照会する。
+- 限界: sentinel の走査に Chrome の一時 profile は入っていない（scratch の外にあり、close で消える）。
+
 ## 証拠（release WorkUnit、2026-09-28、base 29d933f）
 
 | 検査 | コマンド | 結果 |
@@ -37,10 +81,11 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 ## 未解決事項
 
 - Phase 3〜4 に回すもの: persistent auth（認証 state の再利用）、GUI への live stream 統合（読み取り専用 relay。現状では Live View は本人にも 503）、container/egress 隔離。
-- `auth login` の lease 参照 flag、plugin 設定の形、daemon 経由の FD 3 継承は fake substrate でしか確かめていない。実 agent-browser での確認が必要である。
+- `auth login` の lease 参照 flag、plugin 設定の形、daemon 経由の FD 3 継承は、実 agent-browser 0.38.1 で確認した結果、今の結線では動かないことが分かった（2026-09-29。上の「実 agent-browser での auth login 確認」）。配列 plugins、`auth login <name> … --item`、segment policy の `url`、policy パス変更による状態消失の修正と、binding token の受け渡し（FD 3 の (a)/(b)/(c)、ADR-0080 D2 の改訂）の決定が Phase 3 の前提になる。
+- g14 e2e の `browser_updated` は scratch DB への seeding である。supervisor が実ブラウザを起動して Live View の event を出す経路は、実 LLM の環境で確かめていない。
 - GUI の control socket は Node から SO_PEERCRED を読めない。file mode（0700/0600）だけで守っており、同一 UID の相手は区別できない。
 
 ## 提案
 
-- Phase 3 の最初に、実 agent-browser 0.38.1 で手動登録から auth login までを 1 回通す smoke を行い、fake との差を潰す。
-- Live View relay（HTTP/WS/asset の guard と token bootstrap の除去）は、persistent auth より先に単独の task として起票する。
+- Phase 3 の最初に、上の修正（配列 plugins、`--item`、`url`、policy パス、token の受け渡し）を入れたうえで、`scripts/browser-auth-login-check.py` の FD 3 回避策を外して実 agent-browser 0.38.1 で再実行し、fake との差を潰す。fake の parser も実バイナリの契約に合わせる。
+- Live View relay は live-gui WU で実装した（上の節）。残る限界（同一 UID の直接接続、dashboard の namespace 内 session 一覧）は container/egress 隔離の task で扱う。

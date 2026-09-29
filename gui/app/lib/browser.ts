@@ -48,12 +48,6 @@ export function liveViewPath(taskId: string, runId: string): string {
   return `/browser/live/${encodeURIComponent(taskId)}/${encodeURIComponent(runId)}`;
 }
 
-/**
- * ADR-0080 D6: 固定版 dashboard の読み取り専用 relay（HTTP/WS/assets の全入口の guard と token bootstrap の除去）は
- * まだ確かめていない。false の間は本人にも relay を開かない（「満たせない場合の安全な動作」）。
- */
-export const LIVE_VIEW_RELAY_AVAILABLE = false;
-
 /** 認証要求の区間（credential を扱う session）にある run か。区間中は Live View を開かない。 */
 export function inAuthInterval(waits: BrowserWait[], runId: string): boolean {
   return waits.some(
@@ -80,7 +74,8 @@ export function liveViewLinkFor(
   if (run.state !== "RUNNING" || !opts.active) return { state: "disabled", reason: "not_running" };
   if (!safeBrowserLiveUrl(run.live_view_url)) return { state: "disabled", reason: "not_configured" };
   if (inAuthInterval(opts.waits, run.run_id)) return { state: "disabled", reason: "auth_interval" };
-  if (!(opts.relayAvailable ?? LIVE_VIEW_RELAY_AVAILABLE)) return { state: "disabled", reason: "relay_unavailable" };
+  // relay（`CELERIS_GUI_LIVE_VIEW_UPSTREAM`）が未設定なら本人にも開かない。呼び出し側がサーバで判定して渡す。
+  if (!opts.relayAvailable) return { state: "disabled", reason: "relay_unavailable" };
   return { state: "link", href: opts.href };
 }
 

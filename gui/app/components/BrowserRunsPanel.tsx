@@ -27,7 +27,7 @@ const DISABLED_TEXT: Record<Extract<LiveViewState, { state: "disabled" }>["reaso
   not_running: "Live View はブラウザ実行中のみ利用できます。",
   not_configured: "Live View は未設定です。",
   auth_interval: "認証を扱う区間のため Live View は止めています。",
-  relay_unavailable: "Live View は利用できません（本人専用の読み取り中継が未検証のため）。",
+  relay_unavailable: "Live View は利用できません（本人専用の読み取り中継が設定されていません）。",
 };
 
 /** `/browser/live/...` の同一 origin の相対パスだけを href として受け付ける。 */

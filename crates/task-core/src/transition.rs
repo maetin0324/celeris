@@ -89,6 +89,12 @@ pub enum Trigger {
     PhaseResume {
         mode: crate::pause::PhaseResumeMode,
     },
+    /// ADR-0079 D8（Phase R3b）: root の /3 の計画が人の承認を要する（決定を含む / `review: human` の段階 /
+    /// 上限に近い）。計画の採用の直後に `Running → Blocked`、`reason = "awaiting_plan_approval"`、attempts 不変
+    /// （`PhaseGate` と同じ形）。再開は `PhaseResume{PlanApprove | PlanReplan}`、取り下げは `Cancel`。
+    PlanGate {
+        plan_id: String,
+    },
 }
 
 impl Trigger {
@@ -124,6 +130,7 @@ impl Trigger {
             Trigger::ReviewRepair => "review_repair",
             Trigger::PhaseGate { .. } => "awaiting_human",
             Trigger::PhaseResume { mode } => mode.name(),
+            Trigger::PlanGate { .. } => "awaiting_plan_approval",
         }
     }
 
@@ -492,6 +499,19 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
+        // ADR-0079 D8（Phase R3b）: root の計画の承認待ち。`PhaseGate` と同じ形（attempts 不変）。
+        Trigger::PlanGate { .. } => {
+            if s.status == Status::Running {
+                Ok(Outcome {
+                    next: Status::Blocked,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+
         // ADR-0074 D2.2/D2.4: 人の「続ける」/「replan」。attempts は変えない。
         Trigger::PhaseResume { .. } => {
             if s.status == Status::Blocked {
@@ -658,8 +678,8 @@ mod tests {
                     expect_err()
                 }
             }
-            // ADR-0074 D2.2（Phase F3 途中確認）: `Running` からだけ `Blocked` へ。
-            Trigger::PhaseGate { .. } => {
+            // ADR-0074 D2.2（Phase F3 途中確認）/ ADR-0079 D8（Phase R3b）: `Running` からだけ `Blocked` へ。
+            Trigger::PhaseGate { .. } | Trigger::PlanGate { .. } => {
                 if status == Status::Running {
                     expect_ok(Status::Blocked)
                 } else {
@@ -714,6 +734,10 @@ mod tests {
             Trigger::PhaseResume {
                 mode: crate::pause::PhaseResumeMode::Continue,
             },
+            // ADR-0079 D8（Phase R3b）: root の計画の承認待ち（attempts 据え置き）。
+            Trigger::PlanGate {
+                plan_id: "p".to_string(),
+            },
         ];
 
         let mut count = 0usize;
@@ -759,8 +783,8 @@ mod tests {
         }
         // 4 kinds * 8 statuses * 20 triggers（Phase 53 で Interrupt / Reopen、Phase 59 で Unroutable、
         // Phase 116（ADR-0070 D3）で InfraRequeue、Phase E1（ADR-0072）で Continue、
-        // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume を追加）
-        assert_eq!(count, 4 * 8 * 20);
+        // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume、Phase R3b（ADR-0079 D8）で PlanGate を追加）
+        assert_eq!(count, 4 * 8 * 21);
     }
 
     /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる
@@ -804,6 +828,8 @@ mod tests {
         for (mode, expected_reason) in [
             (PhaseResumeMode::Continue, "phase_continue"),
             (PhaseResumeMode::Replan, "phase_replan"),
+            (PhaseResumeMode::PlanApprove, "plan_approved"),
+            (PhaseResumeMode::PlanReplan, "plan_replan"),
         ] {
             let s = StateView {
                 kind: TaskKind::Execute,

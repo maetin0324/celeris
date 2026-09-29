@@ -223,6 +223,8 @@ const ACTION_LABELS: Record<Action, string> = {
   rereview: "再レビュー",
   // celeris ADR-0074 D2.4（Phase F3 途中確認）。実行節の途中報告に 3 つのボタンを置く。
   phase_gate: "途中確認",
+  // celeris ADR-0079 D8（Phase R3b）。承認 / replan / 取り下げの画面は R4b。
+  plan_gate: "計画の承認",
 };
 
 /**

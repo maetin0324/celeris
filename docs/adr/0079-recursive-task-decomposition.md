@@ -1078,3 +1078,85 @@ Event の形も変えていない（`DecisionRequested` / `DecisionAnswered` / `
 15. **R3a の試験で見つけた既存の挙動**（直していない）: 人の replan の依頼（`ExecutionHintSet{replan: true}`）で起きた replan の planner run が
     1 回目に不正だと、依頼は `Transitioned{to: running}` で消費済みなので 2 回目の試行が起きない（失敗が起点の replan は起点が残るので
     再試行される）。R3b 以降の生存確認（D10）で「理由なく止まっている」として見つかる形。
+
+## 付記: R3b 実装時の逸脱・明確化（2026-09-29）
+
+R3b（root の計画の承認〈`PlanGate`〉、木の生存確認〈`StallDetected`〉、子の通知の抑止、R3a 付記 15. の修正）で決めたこと。
+migration は足していない（schema 31 のまま。`notifications.kind` は制約の無い TEXT なので新しい値 `plan_approval` を足すだけ）。
+
+1. **入口の形**: D8 の `POST /tasks/{id}/execution/plan-gate {action: approve | replan | withdraw, note}`（ADR-0074 D2.4 の phase-gate と
+   同じ形、管理系、主体 `human`）。依頼文の `{decision: …}` は `action` の別名として受け付ける（`#[serde(alias)]`）。MCP は
+   `task_plan_gate {task_id, action, note?}`（scope `tasks:interact`、主体 `mcp:<client_id>`）。R3a 付記 1. は「節点の中止を伴いうる
+   取り下げは MCP に出さない」としたが、計画の承認の `withdraw` は承認待ちの root の上でしか効かない人の判断なので、依頼どおり
+   3 つとも `tasks:interact` に置いた。判断と書き込みは `task_ops::plan_gate`（API と MCP が同じ関数を呼ぶ）。
+2. **遷移**: `Trigger::PlanGate{plan_id}`（Running → Blocked、reason `awaiting_plan_approval`、attempts 不変）。再開は D8 の
+   「`PhaseResume` の再利用」を `PhaseResumeMode` の値を 2 つ足す形にした: `PlanApprove`（reason `plan_approved`）・`PlanReplan`
+   （reason `plan_replan`）。途中確認の `phase_continue` / `phase_replan` と reason を分け、途中確認の replan の経路
+   （`phase_replan_instruction`）に紛れないようにした。replan は R3a の `plan_invalid` → replan と同じ
+   `ExecutionHintSet{replan: true, source: "<by> (plan-gate)", note: "計画の承認で replan: <note>"}` を同じトランザクションで積み、
+   次の dispatch が replan の planner run（`max_replans` に数える。note は `replan_reason` に入る）。withdraw は既存の `Cancel`
+   （subtree に連鎖）。approve の note は `Answered{question: "計画の承認（ADR-0079 D8）"}` で次の run に渡る。どの操作も
+   `worker_progress` に主体と計画 id を 1 行残す。承認待ちの task への `Answer`（`POST /tasks/{id}/answer`・approvals の decide）は 409。
+3. **判定の時点**: D8 は「採用と同じトランザクション」だが、R2a / R3a の止め（`apply_tree_plan_holds`）が採用の直後の書き込みなので、
+   承認の要否はその後で計算し、`PlanGate` の遷移と `PlanApprovalRequested{plan_id, reasons}` を 1 トランザクションで積む
+   （`Continue{planned}` の代わり）。計算に失敗したら安全側に倒して承認を求める（reason `evaluation_failed:…`）。
+4. **条件の読み方**（`task_core::tree::plan_approval`、純粋関数。材料は `task_ops::plan_gate::approval_facts` が store から集める）:
+   - `has_decisions` = 採用の後にこの節点が出した**未回答の**決定（計画の決定と、採用時の `limit` / `leaf_too_large`）。replan の版では
+     回答済みで持ち越した決定は数えない（D8「replan で決定が生じたら」）。
+   - `has_review_human_stage` = `review: human` の段階のうち、まだ done でない unit を持つもの（最後の段階の `review: human` は
+     途中確認では止まらない〈R1b 付記 13.〉が、D8 の字面どおり承認の条件には数える）。
+   - `near_limits` = 段階数・最も多い段階の unit 数・計画の子 task 数・見込みの leaf（木で作った leaf + 決定を待つ leaf + 終わって
+     いない子 task × 4）・見込みの木の run（ここまでの run + 終わっていない leaf + 終わっていない子 task × 5〈planner 1 + leaf 4〉）の
+     どれかが上限 × `approval_near_limit_ratio` 以上（整数の千分率で比べる。上限は回答の余裕を当てた木の上限）。
+   - 理由の文字列は `decisions:<key>,…` / `review_human:<stage>` / `near_limit:<設定名>:<値>/<上限>`（機械が読める。人の文は
+     `plan_gate::describe_reasons`）。
+   - 対象は `[execution.tree] enabled` で、/3 の計画を採用した root（`tree.parent_unit` を持たない task）だけ。子の計画・/1・/2・
+     木が無効なら今までどおり（報告も残さない）。
+5. **承認まで何も起こさない**: task は `blocked` なので dispatch されず、`reconcile_tree_units` は承認待ちの親の kind task の unit から
+   子を作らない。replan の版で持ち越した走っている子はそのまま走る（止めない。写しは続く）。
+6. **承認の要らない計画**: 進めたうえで報告の流れに `kind: progress` の「計画を採用して進めます: <段階の題名を → でつないだもの>」
+   （本文は段階ごとの unit）を 1 件だけ書く（`task_core::report::report_for_plan_notice`、報告するノードは担当〈組織にあるとき〉、
+   無ければ秘書。組織が無い DB では書かない）。bad_news でないので複製も Discord も無い（U-R3）。
+7. **受信箱と表示**: D8 の `AttentionItem::PlanApproval` をそのまま `attention` に足した（`counts.attention` に数える。R3a の
+   `decisions` の節とは別。承認は task に紐づく「注意」で、決定は path と選択肢を持つ別の形のため）。要素は `task`・`plan_id`・
+   `plan_version`・`reasons`・`summary`・`stages[]`（`key`・`title`・`review_human`・`units[]`）・`decision_ids[]`（同じ節点の未回答の
+   決定。`decisions` の節にも出る）・`at`。`ExecutionPhase::AwaitingPlanApproval`、`ExecutionView.plan_approval` /
+   `TaskExecutionView.plan_approval`（`plan_id`・`reasons`・`summary`）、`Action::PlanGate`（`Answer` を出さない）。
+   GUI は語（「計画の承認待ち」「計画の承認」、通知の種類「計画の承認を待っている」）だけを足した（3 つのボタンは R4b）。
+8. **通知**: `NotificationKind::PlanApproval`（`celeris::notify::scan_plan_approvals`、key `plan:<plan_id>:approval`。状態で判定
+   するので backfill の下限は使わない）。本文は段階の一覧・理由・その節点の未回答の決定の 1 行ずつ（R3a の `decision_line`）。
+   承認待ちの計画の `plan:<plan_id>:decisions` の束は `scan_decisions` が鳴らさない（承認の 1 通に束ねる）。承認の再通知は
+   作っていない。承認待ちは質問ではない（`scan_question_blocked` は `task_ops::plan_gate::is_human_gate` で外す）。
+9. **生存確認**（D10、`task_core::tree::liveness`）: 見るのは `ready` の木の節点（木の子と /3 の計画を持つ root）だけ。`running` /
+   `reviewing` は in-flight、`blocked` は人の質問・途中確認・計画の承認、`draft` は人の受け入れで、いずれも名指しの状態だから。
+   `ready` の節点の分類（優先は 走っている > 走れる > 名指しの待ち > 理由なし）:
+   - 名指しの待ち: `ready_tasks` に返らない（依存先・一時停止・中止の案件）、この節点の未回答の `self` の決定（種類を問わない）、
+     木全体の run 時の上限の決定、答えの無い決定を待つ unit、`blocked(infra)`、非終端の子を待つ unit、同時の子の空き待ち。
+   - 走れる: 計画が無い（gate・planner・atomic）、planner が次に走る（人の replan の依頼・途中確認の replan・下の 11. の再試行）、
+     leaf が `ready` / `needs_continuation`、子の終端の写し待ち、子の生成待ち、replan の余地のある失敗、unit がすべて終わった。
+     「走れる」は信じる（容量・quota 待ちは止まりではない）。準備の失敗の繰り返しは F5-fix7 が task を blocked にする。
+   - 理由なし: 子の無い / 見つからない子を待つ unit（`child_missing`）、止めている決定も次の planner も無い `blocked(decision)`
+     （`decision_released`。R3a 付記 15. の形）、task が ready なのに `blocked(question)` 等の unit、replan の余地の無い失敗、
+     pending の unit だけ（`nothing_runnable`）。
+   - 時間の数え方: daemon のメモリに「理由なしと最初に見た時刻」と節点の最後の event の seq を持ち、seq が変われば数え直す
+     （再起動でも数え直す = 安全側）。確認は 30 秒ごと（`LIVENESS_CHECK_INTERVAL_SECS`）なので、検出は `liveness_timeout_secs`
+     の後の最初の確認（600〜630 秒）。
+   - 1 回だけ: `Event::StallDetected` を節点に積み、節点の最後の event が `StallDetected` の間は繰り返さない（何か起きて理由なしに
+     戻ったら、また数える）。障害通知は R2b の `tree-infra:` と同じ経路（dispatcher が `NotificationKind::TaskFailed` を key
+     `tree-stall:<task_id>:<StallDetected の seq>` で 1 件、本文「障害（stall）: …」と path）。D10 の「`BadNews`」の報告は作らない
+     （R2b と同じ。人に届く経路は 1 つにする）。
+   - `Event::StallDetected` に `reason`・`since`（RFC 3339）・`path` を足した（`serde(default)`。R1a の Event は本番で未発行）。
+     D10 の `stall_secs` は設定名 `[execution.tree] liveness_timeout_secs`（既定 600、60 以上）。GUI の「理由なく止まっています」は R4b。
+10. **子の通知の抑止**（D11）: `scan_task_failed` は木の子を鳴らさない（work の失敗は親の replan、基盤の失敗は作り直しと `tree-infra:`
+    の障害通知が引き受ける）。子の run の悪い知らせ（`record_run_report` の bad_news の秘書への複製）も `scan_bad_news` が鳴らさない
+    （報告の流れには残る）。子の `TaskReady`（R1c）・取り込み（R1c）は元から無い。子の質問・途中確認・決定は人が要るので鳴る。
+    key の形はどれも変えていない。
+11. **R3a 付記 15. の修正**: planner の試行が拒否されて「もう一度だけ試します」（`task_ops::tree::PLANNER_RETRY_PREFIX`）が残り、
+    その後に planner run が始まっていなければ（`task_ops::tree::planner_retry_pending`）、`wu_dispatch_gate` は起点を問わず
+    `RunPlanner{replan: true}` を返す（1 回目で `replan_gate` を通っている replan の続きなので上限は見直さない）。人の依頼
+    （`ExecutionHintSet`）・途中確認の replan・計画の承認の replan は 1 回目の `Transitioned{to: running}` で消費されるので、以前は
+    2 回目が起きず、`blocked(decision)` の unit が回答済みの決定の後ろで理由なく止まった。生存確認はこの印を「走れる: planner」と読み、
+    印の無い同じ形を `decision_released` として捕まえる（回帰の試験で両方を確かめた）。
+12. **replay**: 新しい reason（`awaiting_plan_approval` / `plan_approved` / `plan_replan`）は attempts を動かさない。計画の承認の
+    replan で /3 の計画を同じ key で書き直した試験で、`work_units` の replay の差（runs / seq / phase / 統合 WU の presence）が出た。
+    R2b / R3a 付記 14. と同じ「/3 の replan の行を events だけから作り直しきれない」系統で R3b では直していない（R4a）。

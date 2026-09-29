@@ -24,6 +24,8 @@ export const NOTIFY_KIND_LABEL: Record<NotificationKind, string> = {
   phase_checkpoint: "工程の後で確認を待っている",
   // celeris ADR-0079 D7（Phase R3a）: 人への決定の要求（計画・run ごとに束ねる、24 時間後に 1 回だけ再通知）。
   decision_requested: "人の決定を待っている",
+  // celeris ADR-0079 D8（Phase R3b）: root の計画の承認待ち（その計画の決定を束ねる）。
+  plan_approval: "計画の承認を待っている",
 };
 
 export function notifyKindLabel(kind: NotificationKind): string {

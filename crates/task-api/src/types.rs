@@ -1918,6 +1918,9 @@ pub struct TaskExecutionView {
     /// ADR-0079 D5（Phase R1b）: `phase = awaiting_children` のときだけ。待っている子 task。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub awaiting_children: Vec<task_ops::view::AwaitedChildView>,
+    /// ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_approval: Option<task_ops::view::PlanApprovalView>,
 }
 
 /// `GET /metrics/execution` の 1 グループ（`group_by` の値ごと）。

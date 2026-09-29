@@ -207,6 +207,7 @@ fn scan_at(
     out.extend(scan_phase_checkpoint(store, base_url)?);
     out.extend(scan_cluster_login_needed(store, started_at, base_url)?);
     out.extend(scan_decisions(store, started_at, base_url, now)?);
+    out.extend(scan_plan_approvals(store, base_url)?);
     // リリースの引き渡しは最新の対話・途中目標・走査時刻に隠されない。
     for delivery in store.delivery_list()? {
         if let Some(id) = delivery.notification {
@@ -365,7 +366,8 @@ fn scan_question_blocked(
         let events = store.events_for(task.id)?;
         // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認は質問ではない
         // （`scan_phase_checkpoint` が鳴らす。二重に鳴らさない）。
-        if task_ops::phase_gate::is_awaiting_human(&task, &events) {
+        // ADR-0079 D8（Phase R3b）: root の計画の承認待ちも質問ではない（`scan_plan_approvals` が鳴らす）。
+        if task_ops::plan_gate::is_human_gate(&task, &events) {
             continue;
         }
         let who = task
@@ -425,6 +427,19 @@ fn scan_bad_news(
         })
         .collect();
     reports.sort_by_key(|a| a.id);
+    // ADR-0079 D11（Phase R3b）: 木の子 task の run の悪い知らせ（run の失敗）は親が吸収するので鳴らさない
+    // （報告の流れには残る）。基盤の障害は `tree-infra:` / `tree-stall:` の `TaskFailed` が知らせる。
+    let mut tree_child: HashSet<task_core::TaskId> = HashSet::new();
+    for id in reports.iter().filter_map(|r| r.task_id) {
+        if !tree_child.contains(&id)
+            && store
+                .get(id)?
+                .is_some_and(|t| task_core::tree::is_tree_child(&t))
+        {
+            tree_child.insert(id);
+        }
+    }
+    reports.retain(|r| r.task_id.is_none_or(|id| !tree_child.contains(&id)));
     Ok(reports
         .into_iter()
         .map(|report| Candidate {
@@ -633,11 +648,13 @@ fn scan_task_failed(
         TASK_SCAN,
     )?;
     let mut out = Vec::new();
-    for task in tasks
-        .items
-        .into_iter()
-        .filter(|t| t.updated_at >= since && task_core::support_kind(t).is_none())
-    {
+    // ADR-0079 D11（Phase R3b）: 木の子 task の失敗は親が吸収する（work の失敗は親の replan、基盤の失敗は作り直しと
+    // `tree-infra:` の障害通知）ので鳴らさない。鳴るのは root の失敗だけ（key の形は変えない）。
+    for task in tasks.items.into_iter().filter(|t| {
+        t.updated_at >= since
+            && task_core::support_kind(t).is_none()
+            && !task_core::tree::is_tree_child(t)
+    }) {
         let events = store.events_for(task.id)?;
         let (class, reason) = task_ops::derive::classify_task_failure(&events);
         let delivered_release = store.delivery_get(task.id)?.and_then(|d| d.release);
@@ -770,6 +787,16 @@ fn scan_decisions(
         let Some(first) = rows.first() else {
             continue;
         };
+        // ADR-0079 D8（Phase R3b）: 承認を待つ root の計画の決定は、計画の承認の通知（`scan_plan_approvals`）に束ねる。
+        if let Some(plan_id) = key
+            .strip_prefix("plan:")
+            .and_then(|k| k.strip_suffix(":decisions"))
+            && let Some(Some(node)) = terminal.get(&first.task_id)
+            && task_ops::plan_gate::latest_plan_approval(node, &store.events_for(node.id)?)
+                .is_some_and(|a| a.plan_id == plan_id)
+        {
+            continue;
+        }
         let created =
             |r: &task_core::DecisionRow| OffsetDateTime::parse(&r.created_at, &Rfc3339).ok();
         let oldest = rows.iter().filter_map(created).min();
@@ -817,6 +844,69 @@ fn scan_decisions(
                 project_id,
             });
         }
+    }
+    out.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(out)
+}
+
+/// ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っている（`blocked(awaiting_plan_approval)`）。`key` =
+/// `plan:<plan_id>:approval`（同じ task の replan の版がまた承認を待てば新しい key）。本文に段階の一覧・承認の理由と、
+/// その計画の未回答の決定（`decision_line`、パンくずと推奨）を 1 行ずつ束ねる（決定は別に鳴らさない。`scan_decisions`）。
+/// 状態で判定するので backfill の下限は使わない（`scan_phase_checkpoint` と同じ。重複排除で 1 回だけ鳴る）。
+fn scan_plan_approvals(
+    store: &dyn TaskStore,
+    base_url: Option<&str>,
+) -> Result<Vec<Candidate>, StoreError> {
+    let filter = ListFilter {
+        statuses: vec![Status::Blocked],
+        ..ListFilter::default()
+    };
+    let page = store.list_page(&filter, ListOrder::CreatedDesc, None, TASK_SCAN)?;
+    let mut out = Vec::new();
+    for task in page.items {
+        let events = store.events_for(task.id)?;
+        let Some(info) = task_ops::plan_gate::latest_plan_approval(&task, &events) else {
+            continue;
+        };
+        let stages = store
+            .execution_plan_list(task.id)?
+            .into_iter()
+            .find(|p| p.id == info.plan_id)
+            .map(|p| {
+                p.spec
+                    .stages
+                    .iter()
+                    .map(|s| excerpt(&s.title, EXCERPT_CHARS))
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            })
+            .unwrap_or_default();
+        let root_id = task_core::tree::root_id_of(&task);
+        let decisions: Vec<String> = store
+            .decisions_list(Some(root_id))?
+            .into_iter()
+            .filter(|d| d.task_id == task.id && d.status == task_core::DecisionStatus::Open)
+            .map(|d| decision_line(&d))
+            .collect();
+        let mut body = format!(
+            "計画の承認が必要: 『{}』（{}）。理由: {}。承認 / replan / 取り下げ",
+            excerpt(&task.title, EXCERPT_CHARS),
+            stages,
+            task_ops::plan_gate::describe_reasons(&info.reasons)
+        );
+        if !decisions.is_empty() {
+            body.push_str(&format!("\n人の決定 {} 件:", decisions.len()));
+            for (i, line) in decisions.iter().enumerate() {
+                body.push_str(&format!("\n{}) {line}", i + 1));
+            }
+        }
+        body.push_str(&link(base_url, &format!("/tasks/{}", task.id)));
+        out.push(Candidate {
+            kind: NotificationKind::PlanApproval,
+            key: format!("plan:{}:approval", info.plan_id),
+            body: clamp_content(&body),
+            project_id: task.project_id,
+        });
     }
     out.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(out)

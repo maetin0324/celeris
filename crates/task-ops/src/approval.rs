@@ -96,6 +96,14 @@ pub fn decide(
                             .to_string(),
                     });
                 }
+                if crate::plan_gate::is_awaiting_plan_approval(&task, &events) {
+                    return Err(OpsError::InvalidState {
+                        id: task_id,
+                        context: format!("status={:?}, reason=awaiting_plan_approval", task.status),
+                        action: "answered; a plan approval is resumed via execution/plan-gate"
+                            .to_string(),
+                    });
+                }
                 Target::Answer(task_id)
             }
             Some(task) => {

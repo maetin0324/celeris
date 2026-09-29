@@ -101,6 +101,10 @@ pub enum PhaseResumeMode {
     Continue,
     /// replan の planner run を起こす。
     Replan,
+    /// ADR-0079 D8（Phase R3b）: root の計画を人が承認した（`awaiting_plan_approval` → ready）。
+    PlanApprove,
+    /// ADR-0079 D8（Phase R3b）: root の計画を人が note 付きで差し戻した（次の run は replan の planner）。
+    PlanReplan,
 }
 
 impl PhaseResumeMode {
@@ -108,6 +112,8 @@ impl PhaseResumeMode {
         match self {
             PhaseResumeMode::Continue => "phase_continue",
             PhaseResumeMode::Replan => "phase_replan",
+            PhaseResumeMode::PlanApprove => "plan_approved",
+            PhaseResumeMode::PlanReplan => "plan_replan",
         }
     }
 }

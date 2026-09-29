@@ -23,7 +23,7 @@ use crate::OpsError;
 /// 子の `objective` の末尾に足す「木の中の位置」の見出し（固定）。
 pub const TREE_PATH_HEADING: &str = "## 木の中の位置（ADR-0079 D4）";
 /// 子の `objective` の末尾に足す「人の決定」の見出し（固定。ADR-0079 D7）。
-pub const DECISIONS_HEADING: &str = "## 人の決定（ADR-0079 D7）";
+pub const DECISIONS_HEADING: &str = task_core::decision::DECISIONS_HEADING;
 
 /// D4 (5): 子 task の状態から決まる unit の状態と `WorkUnitTransitioned.reason`。子が非終端（走っている・
 /// 待っている・人の入力を待つ `blocked` を含む）なら `None`（unit は `running` のまま。子の質問・決定は
@@ -223,28 +223,11 @@ pub fn child_objective(
     if !decisions.is_empty() {
         out.push_str("\n\n");
         out.push_str(DECISIONS_HEADING);
+        // ADR-0079 D7（Phase R3a）: leaf の前置きの「人の決定」節と同じ 1 行（`task_core::decision::answer_line`）。
         for d in decisions {
-            let Some(answer) = d.request.answer.as_ref() else {
-                continue;
-            };
-            let label = d
-                .request
-                .options
-                .iter()
-                .find(|o| o.key == answer.option)
-                .map(|o| o.label.clone())
-                .unwrap_or_else(|| answer.option.clone());
-            let agreement = if answer.option == d.request.recommended {
-                "推奨どおり"
-            } else {
-                "推奨と異なる"
-            };
-            out.push_str(&format!(
-                "\n- {} {}: {label}（{agreement}）",
-                d.key, d.request.question
-            ));
-            if let Some(note) = answer.note.as_deref().filter(|n| !n.trim().is_empty()) {
-                out.push_str(&format!(" — {note}"));
+            if let Some(line) = task_core::decision::answer_line(&d.request) {
+                out.push('\n');
+                out.push_str(&line);
             }
         }
     }

@@ -372,6 +372,398 @@ impl DecisionRow {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ADR-0079 D7（Phase R3a）: 回答の検証・回答の効き目（選択肢 → 効き目の表）・注入の固定の書式・
+// worker が出す決定の検証と束ね。すべて純粋関数（LLM なし）。
+// ---------------------------------------------------------------------------
+
+/// D7: 回答を入力に入れる節の見出し（子 task の `objective` の末尾と leaf の前置きで同じ）。
+pub const DECISIONS_HEADING: &str = "## 人の決定（ADR-0079 D7）";
+
+/// R3a: 自由記述の回答（`choice` の決定で `option` を省いたとき）の `DecisionAnswer.option`。
+pub const FREE_TEXT_OPTION: &str = "other";
+/// R3a: 回答の `note` の上限（文字数。`task_ops::regate::NOTE_MAX_CHARS` と同じ）。
+pub const ANSWER_NOTE_MAX_CHARS: usize = 2000;
+/// R3a: worker の決定を束ねた決定の key（衝突すれば `bundle-2`, `bundle-3`, …）。
+pub const BUNDLE_KEY: &str = "bundle";
+/// R3a: 束ねた決定の選択肢。
+pub const BUNDLE_OPTION_RECOMMENDED: &str = "all-recommended";
+pub const BUNDLE_OPTION_NOTE: &str = "see-note";
+
+/// R3a: 回答（または人の取り下げ）が daemon に対して持つ効き目。**決定の種類と選択肢の key だけから決まる**
+/// （[`answer_effect`]。ADR-0079 付記「R3a 実装時の逸脱・明確化」の表）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionEffect {
+    /// 待っていた unit（`needs_decisions` / `needed_before`）を再評価して進める。`self` の決定なら節点の
+    /// 止めが外れる。
+    Resume,
+    /// 止めた unit を進める。run 時の木の上限（`needed_before: [self]` の `limit:*`）なら、その上限に
+    /// 1 回分の余裕を足す（`task_core::tree::limit_allowance_step`）。
+    RaiseOnce,
+    /// 決定を出した節点の replan を依頼する（止めた unit は replan が置き換えるまで止めたまま）。
+    /// `plan_invalid` では planner をもう一度起こし、人の note を planner に渡す。
+    Replan,
+    /// `plan_invalid`: 分けずに 1 run（atomic）で試す。
+    Atomic,
+    /// 止めた unit を取り下げる（`cancelled`）。`needed_before: [self]` なら決定を出した節点を中止する。
+    Withdraw,
+}
+
+impl DecisionEffect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DecisionEffect::Resume => "resume",
+            DecisionEffect::RaiseOnce => "raise_once",
+            DecisionEffect::Replan => "replan",
+            DecisionEffect::Atomic => "atomic",
+            DecisionEffect::Withdraw => "withdraw",
+        }
+    }
+}
+
+/// R3a: 選択肢 → 効き目の表（決定的）。`choice`（計画・worker・束ね）はどの選択肢でも `Resume`
+/// （答えが何であれ、待っていた unit に答えを渡して進める）。daemon の決定は選択肢の key で決まる:
+///
+/// | kind | option | effect |
+/// |---|---|---|
+/// | choice | （すべて・自由記述） | Resume |
+/// | leaf_too_large | run-as-leaf | Resume |
+/// | leaf_too_large / limit | replan | Replan |
+/// | leaf_too_large / limit | withdraw | Withdraw |
+/// | limit | raise-once | RaiseOnce |
+/// | plan_invalid | replan（R2b の human-plan も同じ） | Replan |
+/// | plan_invalid | atomic | Atomic |
+/// | plan_invalid | cancel（withdraw も同じ） | Withdraw |
+pub fn answer_effect(kind: DecisionKind, option: &str) -> DecisionEffect {
+    match (kind, option) {
+        (DecisionKind::Choice, _) => DecisionEffect::Resume,
+        (DecisionKind::Limit, "raise-once") => DecisionEffect::RaiseOnce,
+        (
+            DecisionKind::LeafTooLarge | DecisionKind::Limit | DecisionKind::PlanInvalid,
+            "replan",
+        )
+        | (DecisionKind::PlanInvalid, "human-plan") => DecisionEffect::Replan,
+        (DecisionKind::PlanInvalid, "atomic") => DecisionEffect::Atomic,
+        (
+            DecisionKind::LeafTooLarge | DecisionKind::Limit | DecisionKind::PlanInvalid,
+            "withdraw" | "cancel",
+        ) => DecisionEffect::Withdraw,
+        // run-as-leaf と、表に無い key（検証で入らない）は待っていたものを進めるだけ。
+        _ => DecisionEffect::Resume,
+    }
+}
+
+/// R3a: 回答の検証の失敗（API は 422）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnswerError {
+    UnknownOption {
+        option: String,
+        allowed: Vec<String>,
+    },
+    OptionRequired {
+        allowed: Vec<String>,
+    },
+    NoteTooLong {
+        max: usize,
+    },
+}
+
+impl std::fmt::Display for AnswerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnswerError::UnknownOption { option, allowed } => write!(
+                f,
+                "option: {option:?} is not one of the decision's options ({})",
+                allowed.join(", ")
+            ),
+            AnswerError::OptionRequired { allowed } => write!(
+                f,
+                "option: required (one of {}); a free-text answer (note only) is accepted for kind=choice only",
+                allowed.join(", ")
+            ),
+            AnswerError::NoteTooLong { max } => {
+                write!(f, "note: must be at most {max} characters")
+            }
+        }
+    }
+}
+
+/// R3a: 回答を検証し、記録する `option` を返す。`option` は決定の `options` のどれか。省いたときは
+/// **`kind = choice` で `note` が空でないときだけ**自由記述の回答（[`FREE_TEXT_OPTION`]）として受け付ける
+/// （daemon の決定は効き目が選択肢で決まるので省けない）。`note` は 2,000 文字まで。
+pub fn validate_answer(
+    request: &DecisionRequest,
+    option: Option<&str>,
+    note: Option<&str>,
+) -> Result<String, AnswerError> {
+    let allowed: Vec<String> = request.options.iter().map(|o| o.key.clone()).collect();
+    if let Some(n) = note
+        && n.trim().chars().count() > ANSWER_NOTE_MAX_CHARS
+    {
+        return Err(AnswerError::NoteTooLong {
+            max: ANSWER_NOTE_MAX_CHARS,
+        });
+    }
+    match option.map(str::trim).filter(|o| !o.is_empty()) {
+        Some(o) => {
+            if allowed.iter().any(|a| a == o) {
+                Ok(o.to_string())
+            } else {
+                Err(AnswerError::UnknownOption {
+                    option: o.to_string(),
+                    allowed,
+                })
+            }
+        }
+        None => {
+            let has_note = note.is_some_and(|n| !n.trim().is_empty());
+            if request.kind == DecisionKind::Choice && has_note {
+                Ok(FREE_TEXT_OPTION.to_string())
+            } else {
+                Err(AnswerError::OptionRequired { allowed })
+            }
+        }
+    }
+}
+
+/// R3a: 回答を依存する仕事の入力に入れる固定の書式（D7）。子 task の `objective` の末尾と leaf の前置きの
+/// 「人の決定」節の両方がこの 1 行を使う: `- <key> <question>: <label>（推奨どおり | 推奨と異なる） — <note>`。
+/// 回答が無ければ `None`。
+pub fn answer_line(request: &DecisionRequest) -> Option<String> {
+    let answer = request.answer.as_ref()?;
+    let label = if answer.option == FREE_TEXT_OPTION
+        && !request.options.iter().any(|o| o.key == FREE_TEXT_OPTION)
+    {
+        "自由記述".to_string()
+    } else {
+        request
+            .options
+            .iter()
+            .find(|o| o.key == answer.option)
+            .map(|o| o.label.clone())
+            .unwrap_or_else(|| answer.option.clone())
+    };
+    let agreement = if answer.option == request.recommended {
+        "推奨どおり"
+    } else {
+        "推奨と異なる"
+    };
+    let mut out = format!(
+        "- {} {}: {label}（{agreement}）",
+        request.key, request.question
+    );
+    if let Some(note) = answer.note.as_deref().filter(|n| !n.trim().is_empty()) {
+        out.push_str(&format!(" — {}", note.trim()));
+    }
+    Some(out)
+}
+
+/// R3a: worker（`result.json` の `decisions`）が出した決定を検証した結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkerDecisionBatch {
+    /// 記録する決定（`needed_before` の `self` は、leaf の run なら leaf の key に書き換え済み）。上限を
+    /// 超えた分は最後の 1 件（key [`BUNDLE_KEY`]）に束ねてある。
+    pub accepted: Vec<DecisionSpec>,
+    /// 捨てた要素と理由（人に見える進行の 1 行にする）。
+    pub rejected: Vec<String>,
+    /// 束ねた決定の元の key（束ねなければ空）。
+    pub bundled: Vec<String>,
+}
+
+/// R3a: worker の決定を検証する（形・`needed_before` の指す先・key の重複）。`self_key` は leaf（WU）の run
+/// ならその key（`self` をこれに書き換える）、atomic の run なら `None`（`self` のまま = 節点を止める）。
+/// `units` / `stages` は計画の unit と段階の key（atomic なら空: `self` 以外は指せない）。`taken` は
+/// この節点で既に使われている決定の key。`cap` は新しく開ける決定の数（D3 の `max_open_decisions`
+/// の残り）: 超えれば先頭 `cap − 1` 件を残し、残りを 1 件の決定に束ねる（`cap = 0` でも 1 件には束ねる）。
+pub fn prepare_worker_decisions(
+    raw: &[serde_json::Value],
+    self_key: Option<&str>,
+    units: &BTreeSet<String>,
+    stages: &BTreeSet<String>,
+    taken: &BTreeSet<String>,
+    cap: usize,
+) -> WorkerDecisionBatch {
+    let mut out = WorkerDecisionBatch::default();
+    let mut used: BTreeSet<String> = taken.clone();
+    for (i, item) in raw.iter().enumerate() {
+        let mut spec: DecisionSpec = match serde_json::from_value(item.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                out.rejected.push(format!("decision #{}: {e}", i + 1));
+                continue;
+            }
+        };
+        let errors = validate_shape(&spec);
+        if !errors.is_empty() {
+            out.rejected.push(
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
+            continue;
+        }
+        if used.contains(&spec.key) {
+            out.rejected.push(format!(
+                "decision {}: the key is already used on this node",
+                spec.key
+            ));
+            continue;
+        }
+        let mut targets: Vec<String> = Vec::new();
+        let mut bad: Option<String> = None;
+        for n in &spec.needed_before {
+            let resolved = if n == NEEDED_BEFORE_SELF {
+                self_key.unwrap_or(NEEDED_BEFORE_SELF).to_string()
+            } else if let Some(stage) = n.strip_prefix(NEEDED_BEFORE_STAGE_PREFIX) {
+                if !stages.contains(stage) {
+                    bad = Some(format!("unknown stage {stage:?}"));
+                    break;
+                }
+                n.clone()
+            } else {
+                if !units.contains(n) {
+                    bad = Some(format!("unknown unit {n:?}"));
+                    break;
+                }
+                n.clone()
+            };
+            if !targets.contains(&resolved) {
+                targets.push(resolved);
+            }
+        }
+        if let Some(why) = bad {
+            out.rejected.push(format!(
+                "decision {}: needed_before names an {why} (use self, a unit key of the plan or stage:<key>)",
+                spec.key
+            ));
+            continue;
+        }
+        spec.needed_before = targets;
+        used.insert(spec.key.clone());
+        out.accepted.push(spec);
+    }
+    if out.accepted.len() > cap {
+        let keep = cap.saturating_sub(1);
+        let rest: Vec<DecisionSpec> = out.accepted.split_off(keep);
+        if rest.len() == 1 {
+            out.accepted.extend(rest);
+        } else {
+            let mut key = BUNDLE_KEY.to_string();
+            let mut n = 2;
+            while used.contains(&key) {
+                key = format!("{BUNDLE_KEY}-{n}");
+                n += 1;
+            }
+            out.bundled = rest.iter().map(|d| d.key.clone()).collect();
+            out.accepted.push(bundle_decisions(&key, &rest, cap));
+        }
+    }
+    out
+}
+
+/// R3a: 上限を超えた worker の決定を 1 件（`choice`）に束ねる。問いに元の問い・選択肢・推奨を列挙し、
+/// `needed_before` は元の和（順を保つ）、後戻りの大きさは最大のもの。
+fn bundle_decisions(key: &str, rest: &[DecisionSpec], cap: usize) -> DecisionSpec {
+    let mut question = format!(
+        "worker が出した決定が多すぎるため（未回答の上限の残り {cap} 件）、次の {} 件を 1 件にまとめました。note に各問いへの答えを書くか、推奨どおりに進めてください:",
+        rest.len()
+    );
+    let mut needed_before: Vec<String> = Vec::new();
+    let mut cost = CostOfReversal::Low;
+    for (i, d) in rest.iter().enumerate() {
+        let recommended = d
+            .options
+            .iter()
+            .find(|o| o.key == d.recommended)
+            .map(|o| o.label.as_str())
+            .unwrap_or(d.recommended.as_str());
+        let options = d
+            .options
+            .iter()
+            .map(|o| format!("{}={}", o.key, o.label))
+            .collect::<Vec<_>>()
+            .join(" / ");
+        question.push_str(&format!(
+            "\n{}) {} {}（選択肢: {options}。推奨: {recommended}）",
+            i + 1,
+            d.key,
+            d.question
+        ));
+        for n in &d.needed_before {
+            if !needed_before.contains(n) {
+                needed_before.push(n.clone());
+            }
+        }
+        cost = match (cost, d.cost_of_reversal) {
+            (_, CostOfReversal::High) | (CostOfReversal::High, _) => CostOfReversal::High,
+            (_, CostOfReversal::Medium) | (CostOfReversal::Medium, _) => CostOfReversal::Medium,
+            _ => CostOfReversal::Low,
+        };
+    }
+    DecisionSpec {
+        key: key.to_string(),
+        question,
+        options: vec![
+            DecisionOption {
+                key: BUNDLE_OPTION_RECOMMENDED.to_string(),
+                label: "すべて推奨どおりに進める".to_string(),
+                consequence: None,
+            },
+            DecisionOption {
+                key: BUNDLE_OPTION_NOTE.to_string(),
+                label: "note に書いた答えで進める".to_string(),
+                consequence: None,
+            },
+        ],
+        recommended: BUNDLE_OPTION_RECOMMENDED.to_string(),
+        cost_of_reversal: cost,
+        cost_note: Some(format!(
+            "束ねた決定: {}",
+            rest.iter()
+                .map(|d| d.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        needed_before,
+    }
+}
+
+/// R3a: worker の `result.json` の本文から `decisions` の配列を取り出す（無い・配列でない・JSON でない
+/// ときは空。形の検証は [`prepare_worker_decisions`]）。
+pub fn worker_decisions_from_json(text: &str) -> Vec<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("decisions").and_then(|d| d.as_array()).cloned())
+        .unwrap_or_default()
+}
+
+/// R3a: 計画・worker の決定の spec から、daemon が id と path を付けた要求を作る。
+pub fn request_from_spec(
+    spec: &DecisionSpec,
+    path: Vec<DecisionPathEntry>,
+    raised_by: DecisionRaisedBy,
+) -> DecisionRequest {
+    DecisionRequest {
+        id: ulid::Ulid::new().to_string(),
+        key: spec.key.clone(),
+        kind: DecisionKind::Choice,
+        question: spec.question.clone(),
+        options: spec.options.clone(),
+        recommended: spec.recommended.clone(),
+        cost_of_reversal: spec.cost_of_reversal,
+        cost_note: spec.cost_note.clone(),
+        needed_before: spec.needed_before.clone(),
+        path,
+        raised_by,
+        status: DecisionStatus::Open,
+        answer: None,
+        withdrawn_reason: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,6 +874,224 @@ mod tests {
         row.apply_withdrawal("superseded");
         assert_eq!(row.status, DecisionStatus::Withdrawn);
         assert_eq!(row.request.withdrawn_reason.as_deref(), Some("superseded"));
+    }
+
+    fn request(kind: DecisionKind, options: &[&str], recommended: &str) -> DecisionRequest {
+        DecisionRequest {
+            id: "01D".into(),
+            key: "h1".into(),
+            kind,
+            question: "which backend".into(),
+            options: options.iter().map(|k| opt(k)).collect(),
+            recommended: recommended.into(),
+            cost_of_reversal: CostOfReversal::Low,
+            cost_note: None,
+            needed_before: vec!["p2".into()],
+            path: Vec::new(),
+            raised_by: DecisionRaisedBy {
+                task_id: TaskId::new(),
+                run_id: None,
+                origin: DecisionOrigin::Planner,
+            },
+            status: DecisionStatus::Open,
+            answer: None,
+            withdrawn_reason: None,
+        }
+    }
+
+    /// R3a: 選択肢 → 効き目の表（ADR-0079 付記 R3a の表と同じ）。
+    #[test]
+    fn answer_effect_table() {
+        use DecisionEffect::*;
+        use DecisionKind::*;
+        let table = [
+            (Choice, "anything", Resume),
+            (Choice, FREE_TEXT_OPTION, Resume),
+            (Choice, "replan", Resume),
+            (LeafTooLarge, "run-as-leaf", Resume),
+            (LeafTooLarge, "replan", Replan),
+            (LeafTooLarge, "withdraw", Withdraw),
+            (Limit, "raise-once", RaiseOnce),
+            (Limit, "replan", Replan),
+            (Limit, "withdraw", Withdraw),
+            (PlanInvalid, "replan", Replan),
+            (PlanInvalid, "human-plan", Replan),
+            (PlanInvalid, "atomic", Atomic),
+            (PlanInvalid, "cancel", Withdraw),
+            (PlanInvalid, "withdraw", Withdraw),
+        ];
+        for (kind, option, effect) in table {
+            assert_eq!(answer_effect(kind, option), effect, "{kind:?} {option}");
+        }
+    }
+
+    /// R3a: 回答の検証（選択肢の中・自由記述は choice で note があるときだけ・note の長さ）。
+    #[test]
+    fn validate_answer_checks_options_free_text_and_note() {
+        let choice = request(DecisionKind::Choice, &["a", "b"], "a");
+        assert_eq!(validate_answer(&choice, Some("b"), None).unwrap(), "b");
+        assert!(matches!(
+            validate_answer(&choice, Some("zzz"), None),
+            Err(AnswerError::UnknownOption { .. })
+        ));
+        assert_eq!(
+            validate_answer(&choice, None, Some("use the org vault")).unwrap(),
+            FREE_TEXT_OPTION
+        );
+        assert!(matches!(
+            validate_answer(&choice, None, Some("  ")),
+            Err(AnswerError::OptionRequired { .. })
+        ));
+        let limit = request(DecisionKind::Limit, &["raise-once", "replan"], "replan");
+        assert!(matches!(
+            validate_answer(&limit, None, Some("free text")),
+            Err(AnswerError::OptionRequired { .. })
+        ));
+        let long = "x".repeat(ANSWER_NOTE_MAX_CHARS + 1);
+        assert!(matches!(
+            validate_answer(&choice, Some("a"), Some(&long)),
+            Err(AnswerError::NoteTooLong { .. })
+        ));
+    }
+
+    /// R3a: 注入の固定の書式（子の objective と leaf の前置きが共有する 1 行）。
+    #[test]
+    fn answer_line_is_the_fixed_format() {
+        let mut r = request(DecisionKind::Choice, &["a", "b"], "a");
+        assert_eq!(answer_line(&r), None);
+        r.answer = Some(DecisionAnswer {
+            option: "b".into(),
+            note: Some(" trial first ".into()),
+            by: "human".into(),
+        });
+        assert_eq!(
+            answer_line(&r).unwrap(),
+            "- h1 which backend: label b（推奨と異なる） — trial first"
+        );
+        r.answer = Some(DecisionAnswer {
+            option: "a".into(),
+            note: None,
+            by: "human".into(),
+        });
+        assert_eq!(
+            answer_line(&r).unwrap(),
+            "- h1 which backend: label a（推奨どおり）"
+        );
+        r.answer = Some(DecisionAnswer {
+            option: FREE_TEXT_OPTION.into(),
+            note: Some("neither".into()),
+            by: "human".into(),
+        });
+        assert_eq!(
+            answer_line(&r).unwrap(),
+            "- h1 which backend: 自由記述（推奨と異なる） — neither"
+        );
+    }
+
+    fn raw(key: &str, needed_before: &[&str]) -> serde_json::Value {
+        serde_json::to_value(spec(key, needed_before)).unwrap()
+    }
+
+    /// R3a: worker の決定の検証（形・指す先・key の重複・`self` の書き換え）。
+    #[test]
+    fn worker_decisions_are_validated_and_self_is_resolved() {
+        let units: BTreeSet<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+        let stages: BTreeSet<String> = ["s1"].iter().map(|s| s.to_string()).collect();
+        let taken: BTreeSet<String> = ["h0"].iter().map(|s| s.to_string()).collect();
+        let items = vec![
+            raw("w1", &["self"]),
+            raw("w2", &["b", "stage:s1"]),
+            raw("w3", &["nope"]),
+            raw("h0", &["b"]),
+            serde_json::json!({"key": "w5", "question": "q"}),
+            raw("w1", &["b"]),
+        ];
+        let batch = prepare_worker_decisions(&items, Some("a"), &units, &stages, &taken, 8);
+        assert_eq!(
+            batch
+                .accepted
+                .iter()
+                .map(|d| (d.key.as_str(), d.needed_before.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("w1", vec!["a".to_string()]),
+                ("w2", vec!["b".to_string(), "stage:s1".to_string()]),
+            ]
+        );
+        assert_eq!(batch.rejected.len(), 4, "{:?}", batch.rejected);
+        assert!(batch.bundled.is_empty());
+        // atomic の run: `self` のまま。unit は指せない。
+        let atomic = prepare_worker_decisions(
+            &[raw("w1", &["self"]), raw("w2", &["a"])],
+            None,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            8,
+        );
+        assert_eq!(atomic.accepted.len(), 1);
+        assert_eq!(atomic.accepted[0].needed_before, vec!["self".to_string()]);
+        assert_eq!(worker_decisions_from_json(r#"{"summary":"s"}"#).len(), 0);
+        assert_eq!(
+            worker_decisions_from_json(r#"{"decisions":[{"key":"x"}]}"#).len(),
+            1
+        );
+    }
+
+    /// R3a: 上限を超えた worker の決定は 1 件に束ねる（先頭 cap − 1 件は残す）。
+    #[test]
+    fn worker_decisions_beyond_the_cap_are_bundled() {
+        let units: BTreeSet<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let taken: BTreeSet<String> = [BUNDLE_KEY].iter().map(|s| s.to_string()).collect();
+        let mut high = spec("w3", &["c"]);
+        high.cost_of_reversal = CostOfReversal::High;
+        let items = vec![
+            raw("w1", &["a"]),
+            raw("w2", &["b"]),
+            serde_json::to_value(high).unwrap(),
+            raw("w4", &["a"]),
+        ];
+        let batch = prepare_worker_decisions(&items, None, &units, &BTreeSet::new(), &taken, 2);
+        assert_eq!(batch.accepted.len(), 2);
+        assert_eq!(batch.accepted[0].key, "w1");
+        let bundle = &batch.accepted[1];
+        assert_eq!(bundle.key, "bundle-2", "the plain key is taken");
+        assert_eq!(batch.bundled, vec!["w2", "w3", "w4"]);
+        assert_eq!(bundle.needed_before, vec!["b", "c", "a"]);
+        assert_eq!(bundle.cost_of_reversal, CostOfReversal::High);
+        assert!(
+            bundle.question.contains("question w3?"),
+            "{}",
+            bundle.question
+        );
+        assert!(validate_shape(bundle).is_empty());
+        // cap 0 でも 1 件には束ねる。cap 1 なら全部が 1 件の束になる。
+        let zero = prepare_worker_decisions(
+            &items[..2],
+            None,
+            &units,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            0,
+        );
+        assert_eq!(zero.accepted.len(), 1);
+        assert_eq!(zero.accepted[0].key, BUNDLE_KEY);
+        let one_over = prepare_worker_decisions(
+            &items[..2],
+            None,
+            &units,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1,
+        );
+        assert_eq!(
+            one_over
+                .accepted
+                .iter()
+                .map(|d| d.key.as_str())
+                .collect::<Vec<_>>(),
+            vec![BUNDLE_KEY]
+        );
     }
 
     /// D7 / R1a (e): `decision.schema.json` の生成スキーマとコミット済みファイルの一致。

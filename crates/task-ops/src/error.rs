@@ -74,6 +74,19 @@ pub enum OpsError {
         detail: String,
     },
 
+    /// ADR-0079 D7（Phase R3a）: その id の決定の要求が無い（API は 404）。
+    #[error("decision not found: {0}")]
+    DecisionNotFound(String),
+
+    /// ADR-0079 D7（Phase R3a）: 決定が今の状態ではその操作を受け付けない（回答済み・取り下げ済みへの回答、
+    /// 未回答への revise、決定を出した節点が終端。API は 409）。
+    #[error("decision {id} ({status}) cannot be {action}")]
+    DecisionNotOpen {
+        id: String,
+        status: String,
+        action: String,
+    },
+
     #[error(transparent)]
     Store(#[from] StoreError),
 }

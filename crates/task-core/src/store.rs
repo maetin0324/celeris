@@ -1122,6 +1122,18 @@ pub trait TaskStore:
     /// ADR-0079 D15: `decisions` の全行を渡した集合でまるごと置き換える（`events` は変えない）。
     /// replay の再構築（`task_ops::replay::rebuild_decisions`）を書き戻すのに使う。
     fn decisions_replace(&self, rows: Vec<crate::decision::DecisionRow>) -> Result<(), StoreError>;
+    /// ADR-0079 D7（Phase R3a）: 決定への回答・取り下げ・revise の 1 トランザクション。`decisions` の行
+    /// `decision_id` の状態が今も `expect` であることを同じトランザクションで確かめ（違えば何も書かず
+    /// `Ok(false)` = API の 409）、`task_id`（決定を出した節点）の WU の行 `updated` を書き換え、`events`
+    /// （`DecisionAnswered` / `DecisionWithdrawn`・`WorkUnitTransitioned` など）を積む。
+    fn decision_resolve_apply(
+        &self,
+        task_id: TaskId,
+        decision_id: &str,
+        expect: crate::decision::DecisionStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+    ) -> Result<bool, StoreError>;
 
     /// D6: WorkUnit の行を書き換え、`Event::WorkUnitTransitioned`（`event`）を同じトランザクションで
     /// 追記する。`updated.id` の行を丸ごと差し替える（呼び出し側が新しい状態・カウンタを計算済み）。
@@ -5891,6 +5903,30 @@ impl TaskStore for SqliteStore {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    fn decision_resolve_apply(
+        &self,
+        task_id: TaskId,
+        decision_id: &str,
+        expect: crate::decision::DecisionStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match Self::decision_get_tx(&tx, decision_id)? {
+            Some(row) if row.status == expect && row.task_id == task_id => {}
+            _ => return Ok(false),
+        }
+        for wu in &updated {
+            Self::update_work_unit_tx(&tx, wu)?;
+        }
+        for ev in &events {
+            Self::append_event_tx(&tx, task_id, ev)?;
+        }
+        tx.commit()?;
+        Ok(true)
     }
 
     fn work_unit_get(&self, id: &str) -> Result<Option<WorkUnitRow>, StoreError> {

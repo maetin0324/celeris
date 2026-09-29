@@ -408,6 +408,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         unroutable: vec![],
         reports: None,
         approvals_pending: 0,
+        decisions_open: 0,
         accounts_root: None,
         max_runs_per_account: None,
         accounts_roots: std::collections::HashMap::new(),

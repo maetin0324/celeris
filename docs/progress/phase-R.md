@@ -412,3 +412,81 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R3a: 決定の要求の回答 API / MCP、回答の注入、inbox、Discord 通知（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R3a・D7・D3・D9、付記「R3a 実装時の逸脱・明確化」（15 項目。選択肢 → 効き目の表は 5.）。
+- 種類: コード（task-core / task-ops / task-api / celeris-mcp / task-dispatch / task-worker / celeris）、schema・GUI の型の再生成、GUI の通知の語 1 つ。
+  **migration なし（schema 31 のまま）**。Event の形は R1a のまま。`[execution.tree] enabled = false`（既定）では決定は作られず（計画の決定の発行・
+  worker の `decisions` の読み取り・`decision_self_hold`・余裕の計算はすべて木が有効なときだけ）、新しい API は空の一覧（404 ではない）を返し、
+  受信箱の `decisions` は空、プロンプトは 1 バイトも変わらない。本番の DB・設定・サービスには触れていない。
+- R3b（root 計画の承認・生存確認・子の通知の抑止）には手を付けていない。
+
+### 実装したもの
+
+- **回答の API / MCP**（`task_ops::decision`、`crates/task-api/src/decisions.rs`、`crates/celeris-mcp/src/tools/decisions.rs`）:
+  `GET /decisions?open=&root_id=`、`GET /tasks/{id}/decisions?open=`（subtree）、`POST /decisions/{id}/answer {option?, note?}`・`withdraw {reason?}`・
+  `revise {option?, note?}`（管理系）。MCP `decision_list` / `decision_answer`（scope `tasks:interact`、`by = mcp:<client_id>`）。
+  404 `decision_not_found` / 409 `decision_not_open` / 422（選択肢の外・daemon の決定で option 無し）/ 401。
+- **1 トランザクション**: `TaskStore::decision_resolve_apply`（決定が今も open であることを確かめてから `DecisionAnswered` / `DecisionWithdrawn`・
+  unit の遷移・効き目の event を積む）。
+- **計画の決定の発行**: /3 の採用の直後に計画の `decisions` を path 付きの `DecisionRequested`（origin planner、raised_by = planner run）にし、
+  答えの無い決定を待つ leaf を `blocked(decision)`。replan で消えた未回答の決定は取り下げ。
+- **回答の効き目**（決定的、表は付記 5.）: 待つ unit の再評価（`decision_answered`）、limit の `raise-once`（計画の採用時の上限は止めた unit を
+  戻す、run 時の上限は余裕を足す `limits_with_allowances` / `effective_max_replans`）、`replan`（`ExecutionHintSet{replan: true}`）、`withdraw`
+  （止めた unit と依存を `cancelled`、`self` なら節点を中止）、`plan_invalid` の `replan`（試行の窓を開け直し、note を planner へ）/ `atomic`
+  （gate を `atomic/decision` に）/ `cancel`。`plan_invalid` の選択肢を replan / atomic（初回だけ）/ cancel に改めた。
+- **注入**: 子の objective の末尾（R1b）と leaf の前置きの「人の決定」節（`WorkUnitPromptContext.human_decisions`）が同じ `answer_line`。
+  atomic の run の `self` への答えは `answers`。
+- **worker の決定**: 木の節点の worker の run の `result.json` の `decisions`（`RunContext.decision_requests` のとき前置きに書き方）を検証して
+  path 付きで記録。leaf の `self` はその leaf を `blocked(decision)`、他の unit を指せばその unit だけを止める。atomic の `self` は節点を止める。
+  上限（計画 8 / 木 12 の残り）を超えた分は 1 件の `choice`（key `bundle`）に束ねる。
+- **受信箱と件数**: `GET /inbox` の `decisions[]`（path・問い・選択肢・推奨・後戻り・止めている unit・経過秒）と `counts.decisions`、
+  `DaemonSnapshot.decisions_open`（`GET /daemon`）。
+- **通知**: `NotificationKind::DecisionRequested`（`scan_decisions`）。同じ run（計画の採用 = `plan:<plan_id>:decisions`、worker の run =
+  `run:<run_id>:decisions`）の決定は 1 通、run を持たない daemon の決定は `decision:<id>`。24 時間未回答で `reminder:<key>` を 1 回だけ。
+  回答・取り下げ・終端の節点の決定は鳴らさない。既存の webhook・重複排除（`notifications (kind, key)`）をそのまま使う。
+
+### 受け入れ条件（ADR-0079 §7 R3a と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) `unanswered_decision_blocks_only_dependents` と (b) `answer_flows_into_child_objective`: 決定 2 件（h1 → 子 task の unit p2-b、h2 → `stage:phase-2`）が採用で planner の path 付きの決定になり、phase-1 は走り、phase-2 の leaf は `blocked(decision)`、p2-b は子を作らずに待つ。h2 の回答で leaf が進み前置きに `- h2 …（推奨どおり）`、h1 の note 付きの回答で子ができ objective の末尾が固定の書式（h1・h2）。root done | `cargo test -p task-dispatch --lib tree_decisions::unanswered_decision_blocks_only_dependents_and_answers_flow_into_inputs` | ok。受信箱 2 件 → 0 件、replay 差分 0 |
+| `limit_raise_answer_resumes_subtree`（§7 R2a (e)）: `limit:max_tree_leaves` の止めた leaf が `raise-once` で走る。`limit:max_tree_runs`（self）の止めた子が `raise-once` の余裕で走り、新しい決定は出ない | `… tree_decisions::limit_raise_answer_resumes_subtree` | ok。どちらも root done、replay 差分 0 |
+| `plan_invalid` → `replan`: replan の planner が 2 回不正（選択肢 replan / cancel）→ note 付きの回答 → planner の 4 本目の入力（`previous_attempt_errors` と `replan_reason`）に note、計画の版 2、root done | `… tree_decisions::plan_invalid_replan_feeds_the_note_and_adopts_plan_v2` | ok（replay は付記 14. の既存の差〈superseded の unit〉だけを許す） |
+| `atomic` は節点を 1 run で走らせ（gate `atomic/decision`、worker run 1）、`cancel` は節点を中止 | `… tree_decisions::plan_invalid_atomic_runs_the_node_once_and_cancel_cancels_it` | ok。replay 差分 0 |
+| withdraw は止めた unit を取り下げる（`leaf_too_large` の withdraw、人の取り下げで待っていた leaf とその依存） | `… tree_decisions::withdraw_cancels_the_held_units` | ok。どちらも root done |
+| (c) `worker_declared_decisions`: leaf a の `result.json` の決定 2 件が path（root › s1 › a）付き・origin worker・raised_by = その run で記録、a は `blocked(decision)`、次の段階の c も止まり、同じ段階の b は done、形の壊れた 1 件は理由付きで捨てる。回答で a が再実行（前置きに自由記述の答え）、atomic の子 k の `self` は子を止め答えは `answers` に入る | `… tree_decisions::worker_declared_decisions` | ok。replay 差分 0 |
+| 木が無効なら何も変わらない（worker の `decisions` を読まない・前置きに節が出ない） | `… tree_decisions::tree_disabled_ignores_worker_decisions` | ok |
+| R1b の `child_waits_for_dependencies_and_decisions` を採用で出た決定への回答（`task_ops::decision::answer`）に書き換え | `… tree::child_waits_for_dependencies_and_decisions` | ok（`cargo test -p task-dispatch --lib tree` 55 passed = 既存 48 + R3a 7） |
+| (e) API: 一覧（open / root_id / subtree / 空は `[]`）、回答 200・再回答 409・未知の option 422・無い id 404・トークン無し 401（両方）・壊れた JSON 400・自由記述・limit の option 無し 422・withdraw・revise 409/200/409・受信箱の節と件数・`snapshot.decisions_open` | `cargo test -p task-api --test decisions` | ok（13 passed） |
+| (e) MCP: scope 無しは `decision_list` / `decision_answer` とも `-32601`、`tasks:interact` で一覧と回答、`by = mcp:<client>`、再回答 `-32602`、無い id `-32001` | `cargo test -p celeris-mcp --test mcp_integration decision_tools` | ok（mcp_integration 18 passed） |
+| (d) `decisions_are_notified_once_per_plan`: 同じ planner run の 3 件が `plan:<plan_id>:decisions` の 1 通、本文に path と推奨、偽の webhook への POST 本文にも残る。1 件の daemon の決定は `decision:<id>`、24 時間後の再通知は 1 回だけ（偽の時計 +23h なし / +25h 1 件 / +49h 増えない）、回答済み・取り下げ・終端の節点は鳴らない | `cargo test -p celeris --test notify` | ok（30 passed = 既存 26 + 4） |
+| 純粋関数: 選択肢 → 効き目の表・回答の検証（自由記述・note の長さ）・注入の書式・worker の決定の検証と束ね・limit の key と余裕・`plan_invalid` の選択肢 | `cargo test -p task-core --lib decision` / `… tree::tests::limit_keys` | ok |
+| leaf の前置き（「人の決定」節・決定の要求の書き方の節、無ければ変わらない） | `cargo test -p task-worker --lib leaf_prompt_carries_human_decisions` | ok |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 89（nextest 79 + doc 10）、**passed 2812 / failed 0 / ignored 7**（R2b の 2780 から +32）
+- schema の再生成: `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema`（`api-v1.schema.json`）・`-p task-worker --lib schema`（`worker-protocol.schema.json`）。
+  `event.schema.json` / `decision.schema.json` / `execution-plan.schema.json` は不変
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、再実行の前後で `gui/app/celeris/types.ts` の md5 が同じ（5761108730e99f2452310f60777c16a6）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 285 files、2 infos〈既存〉）/ `test` → exit 0（Tests 1176 passed）。
+  GUI の変更は通知の種類の語（`decision_requested`）と、受信箱の型に足した `decisions` / `counts.decisions` を試験の fixture に足しただけ（画面は R4b）
+
+### 未解決・R3b 以降へ
+
+- **R3b**: 生存確認（D10）で `blocked(infra)` / 決定の待ちを名指しの待ちに数える。人の replan の依頼で起きた replan の planner が 1 回目に不正だと
+  2 回目の試行が起きない既存の挙動（付記 15.）は生存確認で見つかる形。子の `TaskFailed` の抑止。
+- **R4a**: /3 の replan で計画から消えた unit（superseded）を replay が作り直せない既存の差（付記 14.）。
+- **R4b**: GUI の受信箱の「決定」の節（その場で答える・409 / 422 の文言）、決定の path のパンくず。
+- **R5b**: 人の計画（`PUT`、origin human）の決定の発行と、`PUT` の入口の木の設定の配線（付記 3.）。
+- 節点が中止されたときに未回答の決定を自動で取り下げることはしていない（受信箱・通知・件数から外すだけ。付記 12.）。
+- worker の `checkpoint.json` の `decisions` は読まない（付記 11.）。
+- `raise-once` の余裕（設定の上限の半分）は推測の初期値。dogfood（R5b）で見直す。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

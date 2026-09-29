@@ -783,6 +783,74 @@ impl TreeLimitKind {
                 | TreeLimitKind::TreeTokens
         )
     }
+
+    /// ADR-0079 D7（Phase R3a）: `kind: limit` の決定の key（`limit:<設定名>[:<段階>]`）から種類を引く。
+    pub fn from_decision_key(key: &str) -> Option<Self> {
+        let name = key.strip_prefix("limit:")?;
+        let name = name.split(':').next().unwrap_or(name);
+        [
+            TreeLimitKind::Stages,
+            TreeLimitKind::UnitsPerStage,
+            TreeLimitKind::ChildTasks,
+            TreeLimitKind::MaxDepth,
+            TreeLimitKind::TreeLeaves,
+            TreeLimitKind::TreeRuns,
+            TreeLimitKind::TreeReplans,
+            TreeLimitKind::TreeTokens,
+            TreeLimitKind::NodeReplans,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == name)
+    }
+
+    /// ADR-0079 D7（Phase R3a）: run を起こす時に数える上限（`tree_run_limit_hold` / 節点の replan）。
+    /// これらの `raise-once` / `replan` の回答は、上限に余裕を足す（[`limit_allowance_step`]）。計画の採用時の
+    /// 上限（段階・段階あたり・子 task・深さ・木の leaf）は止めた unit を進めるだけ。
+    pub fn is_run_time(self) -> bool {
+        matches!(
+            self,
+            TreeLimitKind::TreeRuns
+                | TreeLimitKind::TreeReplans
+                | TreeLimitKind::TreeTokens
+                | TreeLimitKind::NodeReplans
+        )
+    }
+}
+
+/// ADR-0079 D7（Phase R3a）: run 時の上限に対する `raise-once`（と `replan`）の回答 1 件が足す余裕。
+/// 設定の上限の半分（切り上げ、最低 1）。節点の replan（`max_replans`）は 1 回ずつ。
+pub fn limit_allowance_step(limit: TreeLimitKind, configured_max: u64) -> u64 {
+    if limit == TreeLimitKind::NodeReplans {
+        return 1;
+    }
+    configured_max.div_ceil(2).max(1)
+}
+
+/// ADR-0079 D7（Phase R3a）: 回答で足した余裕を当てた木の上限（run 時の上限だけ。`allowances` は種類ごとの
+/// 回答の件数）。
+pub fn limits_with_allowances(
+    limits: &TreeLimits,
+    allowances: &std::collections::BTreeMap<TreeLimitKind, u32>,
+) -> TreeLimits {
+    let mut out = *limits;
+    let grant = |kind: TreeLimitKind, max: u64| -> u64 {
+        let n = u64::from(allowances.get(&kind).copied().unwrap_or(0));
+        max.saturating_add(n.saturating_mul(limit_allowance_step(kind, max)))
+    };
+    out.max_tree_runs = u32::try_from(grant(
+        TreeLimitKind::TreeRuns,
+        u64::from(limits.max_tree_runs),
+    ))
+    .unwrap_or(u32::MAX);
+    out.max_tree_replans = u32::try_from(grant(
+        TreeLimitKind::TreeReplans,
+        u64::from(limits.max_tree_replans),
+    ))
+    .unwrap_or(u32::MAX);
+    out.max_tree_tokens = limits
+        .max_tree_tokens
+        .map(|max| grant(TreeLimitKind::TreeTokens, max));
+    out
 }
 
 /// D3: 計画の採用のときに止める unit の束（1 束 = 1 件の `kind: limit` の決定）。
@@ -1220,9 +1288,8 @@ pub fn leaf_too_large_decision(
 /// ADR-0079 D9（Phase R2b）: `kind: plan_invalid` の決定の key（daemon が振る。節点ごとに 1 件だけ開く）。
 pub const PLAN_INVALID_DECISION_KEY: &str = "plan_invalid";
 
-/// ADR-0079 D9（Phase R2b）: /3 の計画が 2 回不正だったときの決定の要求（atomic に倒さない）。選択肢は
-/// 「人が計画を書く（`PUT /tasks/{id}/execution-plan`）/ atomic（1 run）で試す / 取り下げる」、推奨は人が計画を
-/// 書く。`errors` は検証の理由（最後の試行まで、古い順）。`needed_before: ["self"]`（この節点の run を止める）。
+/// ADR-0079 D9（Phase R2b / R3a）: /3 の計画が 2 回不正だったときの決定の要求（atomic に倒さない）。選択肢は
+/// 「note を添えて replan / atomic（1 run、初回の計画のときだけ）で試す / 取り下げる（cancel）」、推奨は replan。`errors` は検証の理由（最後の試行まで、古い順）。`needed_before: ["self"]`（この節点の run を止める）。
 pub fn plan_invalid_decision(
     task_id: TaskId,
     replan: bool,
@@ -1252,24 +1319,32 @@ pub fn plan_invalid_decision(
         question: format!(
             "planner が出した{what}（celeris.execution-plan/3）が 2 回とも検証に通りませんでした。この task をどう進めますか"
         ),
-        options: vec![
-            DecisionOption {
-                key: "human-plan".to_string(),
-                label: "人が計画を書く".to_string(),
-                consequence: Some(format!("PUT /tasks/{task_id}/execution-plan で計画を渡す")),
-            },
-            DecisionOption {
-                key: "atomic".to_string(),
-                label: "分けずに 1 run（atomic）で試す".to_string(),
-                consequence: Some("分けると決めた仕事を 1 run に収める".to_string()),
-            },
-            DecisionOption {
-                key: "withdraw".to_string(),
+        // Phase R3a: 選択肢は「note を添えて planner にもう一度計画させる（replan）/ atomic / 取り下げる（cancel）」。
+        // atomic は計画がまだ無いとき（初回の計画）だけ（採用済みの計画の WU を宙に浮かせない。
+        // `task_ops::regate` の「計画を持つ Task を atomic に戻さない」と同じ規則）。
+        options: {
+            let mut options = vec![DecisionOption {
+                key: "replan".to_string(),
+                label: "note の指示を添えて planner にもう一度計画させる".to_string(),
+                consequence: Some(format!(
+                    "人の note が planner に渡る（人が計画を書くなら PUT /tasks/{task_id}/execution-plan）"
+                )),
+            }];
+            if !replan {
+                options.push(DecisionOption {
+                    key: "atomic".to_string(),
+                    label: "分けずに 1 run（atomic）で試す".to_string(),
+                    consequence: Some("分けると決めた仕事を 1 run に収める".to_string()),
+                });
+            }
+            options.push(DecisionOption {
+                key: "cancel".to_string(),
                 label: "この task を取り下げる".to_string(),
                 consequence: None,
-            },
-        ],
-        recommended: "human-plan".to_string(),
+            });
+            options
+        },
+        recommended: "replan".to_string(),
         cost_of_reversal: CostOfReversal::Low,
         cost_note: if note.is_empty() { None } else { Some(note) },
         needed_before: vec![crate::decision::NEEDED_BEFORE_SELF.to_string()],
@@ -1971,6 +2046,56 @@ mod tests {
             d.question.contains("compound/long-and-broad"),
             "{}",
             d.question
+        );
+    }
+
+    /// R3a: limit の key の読み戻し、run 時の上限、`raise-once` の余裕、plan_invalid の選択肢。
+    #[test]
+    fn limit_keys_allowances_and_plan_invalid_options() {
+        assert_eq!(
+            TreeLimitKind::from_decision_key("limit:max_tree_runs"),
+            Some(TreeLimitKind::TreeRuns)
+        );
+        assert_eq!(
+            TreeLimitKind::from_decision_key("limit:max_units_per_stage:s1"),
+            Some(TreeLimitKind::UnitsPerStage)
+        );
+        assert_eq!(TreeLimitKind::from_decision_key("h1"), None);
+        assert!(TreeLimitKind::TreeRuns.is_run_time());
+        assert!(TreeLimitKind::NodeReplans.is_run_time());
+        assert!(!TreeLimitKind::TreeLeaves.is_run_time());
+        assert_eq!(limit_allowance_step(TreeLimitKind::TreeRuns, 120), 60);
+        assert_eq!(limit_allowance_step(TreeLimitKind::TreeRuns, 1), 1);
+        assert_eq!(limit_allowance_step(TreeLimitKind::NodeReplans, 3), 1);
+        let mut allowances = std::collections::BTreeMap::new();
+        allowances.insert(TreeLimitKind::TreeRuns, 2);
+        allowances.insert(TreeLimitKind::TreeTokens, 1);
+        let base = TreeLimits {
+            max_tree_tokens: Some(1000),
+            ..TreeLimits::default()
+        };
+        let raised = limits_with_allowances(&base, &allowances);
+        assert_eq!(raised.max_tree_runs, 240);
+        assert_eq!(raised.max_tree_tokens, Some(1500));
+        assert_eq!(raised.max_tree_replans, base.max_tree_replans);
+
+        let raised_by = crate::decision::DecisionRaisedBy {
+            task_id: TaskId::new(),
+            run_id: None,
+            origin: crate::decision::DecisionOrigin::Daemon,
+        };
+        let keys = |replan: bool| -> Vec<String> {
+            plan_invalid_decision(TaskId::new(), replan, &[], vec![], raised_by.clone())
+                .options
+                .into_iter()
+                .map(|o| o.key)
+                .collect()
+        };
+        assert_eq!(keys(false), vec!["replan", "atomic", "cancel"]);
+        assert_eq!(
+            keys(true),
+            vec!["replan", "cancel"],
+            "no atomic once a plan exists"
         );
     }
 }

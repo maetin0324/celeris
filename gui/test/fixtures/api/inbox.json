@@ -156,11 +156,13 @@
             "class": "work"
         }
     ],
+    "decisions": [],
     "counts": {
         "approvals": 1,
         "questions": 1,
         "drafts": 2,
         "attention": 1,
+        "decisions": 0,
         "by_status": {
             "blocked": 1,
             "done": 5,

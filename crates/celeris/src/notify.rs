@@ -206,6 +206,7 @@ fn scan_at(
     out.extend(scan_task_failed(store, started_at, base_url)?);
     out.extend(scan_phase_checkpoint(store, base_url)?);
     out.extend(scan_cluster_login_needed(store, started_at, base_url)?);
+    out.extend(scan_decisions(store, started_at, base_url, now)?);
     // リリースの引き渡しは最新の対話・途中目標・走査時刻に隠されない。
     for delivery in store.delivery_list()? {
         if let Some(id) = delivery.notification {
@@ -657,6 +658,165 @@ fn scan_task_failed(
             body,
             project_id: task.project_id,
         });
+    }
+    out.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(out)
+}
+
+/// ADR-0079 D7（Phase R3a）: 未回答の決定の要求が 24 時間たったら 1 回だけ再通知する。
+pub const DECISION_REMINDER_AFTER: time::Duration = time::Duration::hours(24);
+
+/// ADR-0079 D7: 決定の path のパンくず（「『root』› 段階 › 子 › …」。`stage` は次の段が属する段階）。
+pub fn decision_breadcrumb(path: &[task_core::DecisionPathEntry]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for (i, p) in path.iter().enumerate() {
+        if i == 0 {
+            parts.push(format!("『{}』", excerpt(&p.title, EXCERPT_CHARS)));
+        } else {
+            parts.push(excerpt(&p.title, EXCERPT_CHARS));
+        }
+        if let Some(stage) = &p.stage {
+            parts.push(stage.clone());
+        }
+    }
+    parts.join(" › ")
+}
+
+fn cost_label(cost: task_core::CostOfReversal) -> &'static str {
+    match cost {
+        task_core::CostOfReversal::Low => "小",
+        task_core::CostOfReversal::Medium => "中",
+        task_core::CostOfReversal::High => "大",
+    }
+}
+
+/// ADR-0079 D7: 決定 1 件の文面の 1 行（「<path>: <question>（推奨: <label>、後戻り: 中）」）。
+fn decision_line(row: &task_core::DecisionRow) -> String {
+    let r = &row.request;
+    let recommended = r
+        .options
+        .iter()
+        .find(|o| o.key == r.recommended)
+        .map(|o| o.label.as_str())
+        .unwrap_or(r.recommended.as_str());
+    format!(
+        "{}: {}（推奨: {}、後戻り: {}）",
+        decision_breadcrumb(&r.path),
+        excerpt(&r.question, REVIEW_EXCERPT_CHARS),
+        excerpt(recommended, EXCERPT_CHARS),
+        cost_label(r.cost_of_reversal)
+    )
+}
+
+/// ADR-0079 D7（Phase R3a）: 人への決定の要求（`NotificationKind::DecisionRequested`）。
+///
+/// - **束ね**: 同じ run（計画の採用の planner run・worker の run）で出た決定は 1 通にする（`key` =
+///   `plan:<plan_id>:decisions`〈その run が採用した計画〉/ `run:<run_id>:decisions`）。run を持たない daemon の決定
+///   （木の run の上限など）は `decision:<id>` の 1 通。
+/// - 初回は `started_at`（走査の下限。backfill 禁止）より後に出た決定だけ。**未回答のまま 24 時間たったら** 同じ束で
+///   1 回だけ再通知（`key` の先頭に `reminder:`。状態で判定するので下限は使わない）。回答・取り下げ・節点が終端の
+///   決定は鳴らさない。
+fn scan_decisions(
+    store: &dyn TaskStore,
+    started_at: OffsetDateTime,
+    base_url: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<Vec<Candidate>, StoreError> {
+    use std::collections::BTreeMap;
+    use time::format_description::well_known::Rfc3339;
+    let mut groups: BTreeMap<String, Vec<task_core::DecisionRow>> = BTreeMap::new();
+    let mut terminal: BTreeMap<task_core::TaskId, Option<task_core::Task>> = BTreeMap::new();
+    let mut plan_of_run: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for row in store.decisions_list(None)? {
+        if row.status != task_core::DecisionStatus::Open {
+            continue;
+        }
+        let node = match terminal.get(&row.task_id) {
+            Some(n) => n.clone(),
+            None => {
+                let n = store.get(row.task_id)?;
+                terminal.insert(row.task_id, n.clone());
+                n
+            }
+        };
+        if node.as_ref().is_none_or(|t| t.status.is_terminal()) {
+            continue;
+        }
+        let key = match row.request.raised_by.run_id.as_deref() {
+            Some(run) => {
+                let plan = match plan_of_run.get(run) {
+                    Some(p) => p.clone(),
+                    None => {
+                        let p = store
+                            .execution_plan_list(row.task_id)?
+                            .into_iter()
+                            .find(|p| p.planner_run_id.as_deref() == Some(run))
+                            .map(|p| p.id);
+                        plan_of_run.insert(run.to_string(), p.clone());
+                        p
+                    }
+                };
+                match plan {
+                    Some(plan_id) => format!("plan:{plan_id}:decisions"),
+                    None => format!("run:{run}:decisions"),
+                }
+            }
+            None => format!("decision:{}", row.id),
+        };
+        groups.entry(key).or_default().push(row);
+    }
+    let mut out = Vec::new();
+    for (key, rows) in groups {
+        let Some(first) = rows.first() else {
+            continue;
+        };
+        let created =
+            |r: &task_core::DecisionRow| OffsetDateTime::parse(&r.created_at, &Rfc3339).ok();
+        let oldest = rows.iter().filter_map(created).min();
+        let project_id = terminal
+            .get(&first.task_id)
+            .and_then(|t| t.as_ref())
+            .and_then(|t| t.project_id);
+        let link_path = format!("/tasks/{}", first.root_id);
+        let body = |prefix: &str| -> String {
+            if rows.len() == 1 {
+                format!(
+                    "{prefix}人の決定が必要: {}{}",
+                    decision_line(first),
+                    link(base_url, &link_path)
+                )
+            } else {
+                let lines = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| format!("{}) {}", i + 1, decision_line(r)))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!(
+                    "{prefix}人の決定が {} 件必要:\n{lines}{}",
+                    rows.len(),
+                    link(base_url, &link_path)
+                )
+            }
+        };
+        // 初回（backfill 禁止: この走査の下限より後に出たものが 1 件でもある束）。
+        if rows.iter().filter_map(created).any(|t| t >= started_at) {
+            out.push(Candidate {
+                kind: NotificationKind::DecisionRequested,
+                key: key.clone(),
+                body: clamp_content(&body("")),
+                project_id,
+            });
+        }
+        // 24 時間後の再通知（1 回だけ: `reminder:<key>` の重複排除）。
+        if oldest.is_some_and(|t| now - t >= DECISION_REMINDER_AFTER) {
+            out.push(Candidate {
+                kind: NotificationKind::DecisionRequested,
+                key: format!("reminder:{key}"),
+                body: clamp_content(&body("（24 時間未回答）")),
+                project_id,
+            });
+        }
     }
     out.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(out)

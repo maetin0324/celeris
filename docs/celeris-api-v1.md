@@ -53,3 +53,31 @@ tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ, 01M3JXB3DHVBWKWKPW04DTG6SJ]
 ### `POST /tasks/{id}/execution/phase-gate` → 200 `TransitionResult`（管理系）
 
 途中確認中の Task を判定する。本文は `PhaseGateRequest` で、`action`（`PhaseGateAction`: `continue`、`replan`、`withdraw`）が必須。`note` は `continue` では任意の次工程への指示、`replan` では空白以外の文字が必要。応答の `id`、`from`、`to`、`reason` は必須で、`cascaded[]` は既定で空配列。管理トークンが無ければ 401、JSON の構文・型が不正なら 400、空の replan note は 422、不明な Task は 404、Task が `awaiting_human` でなければ 409 `invalid_transition`。クエリは受け付けない。
+
+### 決定の要求（ADR-0079 D7 / Phase R3a）
+
+人への決定の要求（`DecisionRequest`。計画の `decisions`・worker の `result.json` の `decisions`・daemon の `leaf_too_large` / `limit` / `plan_invalid`）の一覧と回答。`[execution.tree] enabled = false`（既定）では決定が作られないので、一覧は空（404 ではない）、回答は 404 になる。効き目（選択肢 → 効き目の表）は ADR-0079 付記「R3a 実装時の逸脱・明確化」。MCP では `decision_list` / `decision_answer`（scope `tasks:interact`、`docs/mcp.md`）。
+
+### `GET /decisions?open=&root_id=` → 200 `DecisionList`
+
+`items[]` は `DecisionView`（`decision`: `DecisionRequest`、`task_id` = 決定を出した節点、`root_id`、`created_at`、`answered_at?`、`effect?` = 回答済みならその効き目 `DecisionEffect`: `resume` / `raise_once` / `replan` / `atomic` / `withdraw`）。`created_at` 昇順。`open=true` は未回答だけ、`false` は回答済み・取り下げ済みだけ、省略は全件。`root_id` で 1 つの木（root task の id）に絞る。不正な `open` / `root_id` は 400。
+
+### `GET /tasks/{id}/decisions?open=` → 200 `DecisionList`
+
+その task の subtree（その task が出した決定と、`path` にその task を含む子孫の決定）。不明な Task は 404 `task_not_found`。
+
+### `POST /decisions/{id}/answer` → 200 `DecisionOutcome`（管理系）
+
+本文は `DecisionAnswerBody`: `option?`（決定の `options[].key` のどれか）、`note?`（2,000 文字まで。依存する仕事の入力に固定の書式で入る）。`kind = choice` の決定だけ `option` を省いて `note` に自由記述で答えられる（記録される `option` は `other`）。1 トランザクションで `DecisionAnswered{by: "human"}`、表の更新、待っていた unit の再評価（`blocked(decision)` → `pending` / `ready`、取り下げなら `cancelled`）、効き目の event（replan の依頼 = `ExecutionHintSet{replan: true}`、atomic の run の `self` への答え = `Answered`）を書く。`needed_before: [self]` の取り下げは続けて節点を中止する。応答は `decision`（回答後の `DecisionView`）、`effect`、`resumed[]`、`cancelled[]`（unit の key）、`replan_requested`、`cancelled_task?`。管理トークンが無ければ 401、JSON が不正なら 400、無い id は 404 `decision_not_found`、`open` でない・決定を出した節点が終端なら 409 `decision_not_open`（`decision_status` を添える）、選択肢の外・daemon の決定で `option` 無し・note が長すぎるなら 422。
+
+### `POST /decisions/{id}/withdraw` → 200 `DecisionOutcome`（管理系）
+
+人が決定を取り下げる（`DecisionWithdrawn`）。本文は省略可能な `DecisionWithdrawBody`（`reason?`）。効き目は選択肢の `withdraw` と同じ（止めていた unit〈`needed_before` の unit・`stage:<key>` の unit・その決定を `needs_decisions` に持つ unit〉と、それに依存する未着手の unit を `cancelled`。`needed_before: [self]` なら節点を中止）。`open` でなければ 409、無い id は 404。
+
+### `POST /decisions/{id}/revise` → 200 `DecisionOutcome`（管理系）
+
+回答済みの `choice` の決定の答えを変える（新しい `DecisionAnswered`。最後の回答が有効）。本文は `DecisionAnswerBody`。これから作られる子・これから走る leaf は新しい答えを読む。既に作られた非終端の子は作り直さず、node のコメント（人を起こさない）で新しい答えを届け、応答の `notified_children[]` に並ぶ。未回答・取り下げ済み・daemon の決定（回答の時点で効き目を当てたもの）は 409。
+
+### `GET /inbox` の `decisions` と `counts.decisions`
+
+受信箱に `decisions[]`（`DecisionInboxItem`: `id`、`key`、`kind`、`task_id`、`root_id`、`path`〈パンくず〉、`question`、`options`、`recommended`、`cost_of_reversal`、`cost_note?`、`needed_before`、`origin`、`created_at`、`age_secs`）と `counts.decisions` が付く。未回答で、決定を出した節点が終端でないものだけ（古い順）。`GET /daemon` の `snapshot.decisions_open` は同じ件数（API が応答を組むときに埋める）。

@@ -227,6 +227,12 @@ pub struct ApiV1Schema {
     pub browser_wait_result: crate::browser::BrowserWaitResult,
     /// human attestation の `payload`（署名対象の JSON）。
     pub browser_attestation_claims: crate::browser::AttestationClaims,
+    /// ADR-0079 D7（Phase R3a）: `GET /decisions`・`GET /tasks/{id}/decisions` の応答、
+    /// `POST /decisions/{id}/answer`・`revise` の本文、`withdraw` の本文、3 つの操作の応答。
+    pub decision_list: task_ops::decision::DecisionList,
+    pub decision_answer: task_ops::decision::DecisionAnswerBody,
+    pub decision_withdraw: task_ops::decision::DecisionWithdrawBody,
+    pub decision_outcome: task_ops::decision::DecisionOutcome,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

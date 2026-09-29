@@ -258,6 +258,27 @@ export type ReportId = string;
 export type ReportKind = "progress" | "result" | "bad_news" | "proposal" | "question";
 export type InFlightKind = "worker" | "reviewer";
 /**
+ * D7: 後戻りの大きさ。
+ */
+export type CostOfReversal = "low" | "medium" | "high";
+/**
+ * D7: 決定の要求の種類。
+ */
+export type DecisionKind = "choice" | "leaf_too_large" | "limit" | "plan_invalid";
+/**
+ * D7: 決定を出した者の種類。
+ */
+export type DecisionOrigin = ("planner" | "worker" | "daemon") | "human";
+/**
+ * D7: 決定の状態。
+ */
+export type DecisionStatus = "open" | "answered" | "withdrawn";
+/**
+ * R3a: 回答（または人の取り下げ）が daemon に対して持つ効き目。**決定の種類と選択肢の key だけから決まる**
+ * （[`answer_effect`]。ADR-0079 付記「R3a 実装時の逸脱・明確化」の表）。
+ */
+export type DecisionEffect = "resume" | "raise_once" | "replan" | "atomic" | "withdraw";
+/**
  * DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の
  * *結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。
  * `JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。
@@ -822,10 +843,6 @@ export type CheckpointSource = "worker" | "yield" | "mechanical" | "merged";
  */
 export type PlanOrigin = "planner" | "human" | "repair" | "fixture";
 /**
- * D7: 後戻りの大きさ。
- */
-export type CostOfReversal = "low" | "medium" | "high";
-/**
  * D14: WorkUnit の種類。
  */
 export type WorkUnitKind =
@@ -878,18 +895,6 @@ export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
  * D4 (3): planner が unit に宣言した種類（`Event::UnitGateOverridden.declared`）。
  */
 export type UnitDeclared = "leaf" | "task";
-/**
- * D7: 決定の要求の種類。
- */
-export type DecisionKind = "choice" | "leaf_too_large" | "limit" | "plan_invalid";
-/**
- * D7: 決定を出した者の種類。
- */
-export type DecisionOrigin = ("planner" | "worker" | "daemon") | "human";
-/**
- * D7: 決定の状態。
- */
-export type DecisionStatus = "open" | "answered" | "withdrawn";
 /**
  * D5: `execution_plans.status`。
  */
@@ -1023,7 +1028,8 @@ export type NotificationKind =
   | "task_ready"
   | "cluster_login_needed"
   | "task_failed"
-  | "phase_checkpoint";
+  | "phase_checkpoint"
+  | "decision_requested";
 /**
  * 組織のノードの種類（ADR-0033 D1）。`secretary` は根で 1 つだけ。
  */
@@ -1213,6 +1219,10 @@ export interface ApiV1Schema {
   console_instruct_accepted: ConsoleInstructAccepted;
   daemon: DaemonView;
   decision: DecisionBody;
+  decision_answer: DecisionAnswerBody;
+  decision_list: DecisionList;
+  decision_outcome: DecisionOutcome;
+  decision_withdraw: DecisionWithdrawBody;
   doc_page: DocPage;
   doc_page_put: DocPagePutBody;
   doc_page_result: DocPageResult;
@@ -2741,6 +2751,11 @@ export interface DaemonSnapshot {
    */
   containers?: ContainersLive | null;
   cooldowns: CooldownView[];
+  /**
+   * ADR-0079 D7（Phase R3a）: 未回答の決定の要求の件数（決定を出した節点が終端でないもの）。
+   * `approvals_pending` と同じく **API が応答を組むときに埋める**（ディスパッチャが送るスナップショットでは常に 0）。
+   */
+  decisions_open?: number;
   hostname: string;
   in_flight: InFlight[];
   /**
@@ -3384,6 +3399,146 @@ export interface ScratchSccacheStats {
 export interface DecisionBody {
   expected_status?: Status | null;
   note?: string | null;
+}
+/**
+ * `POST /decisions/{id}/answer`・`revise` の本文（`option` は決定の選択肢の key。`choice` の決定だけ、
+ * `option` を省いて `note` に自由記述で答えられる）。
+ */
+export interface DecisionAnswerBody {
+  note?: string | null;
+  option?: string | null;
+}
+/**
+ * ADR-0079 D7（Phase R3a）: `GET /decisions`・`GET /tasks/{id}/decisions` の応答、
+ * `POST /decisions/{id}/answer`・`revise` の本文、`withdraw` の本文、3 つの操作の応答。
+ */
+export interface DecisionList {
+  items: DecisionView[];
+}
+/**
+ * `GET /decisions` / `GET /tasks/{id}/decisions` の 1 件。
+ */
+export interface DecisionView {
+  answered_at?: string | null;
+  created_at: string;
+  decision: DecisionRequest;
+  /**
+   * 回答済みなら、その回答の効き目（`answer_effect`）。
+   */
+  effect?: DecisionEffect | null;
+  root_id: TaskId;
+  /**
+   * タスクの一意識別子（ULID）。DESIGN §4.1。
+   */
+  task_id: string;
+}
+/**
+ * D7: 決定の要求（`docs/protocol/decision.schema.json`）。`id` と `path` は daemon が付ける
+ * （LLM に書かせない）。
+ */
+export interface DecisionRequest {
+  /**
+   * 回答（`status = answered` のときだけ）。
+   */
+  answer?: DecisionAnswer | null;
+  cost_note?: string | null;
+  cost_of_reversal: CostOfReversal;
+  /**
+   * daemon が振る ULID（木の中で一意）。
+   */
+  id: string;
+  /**
+   * 出した者が付けた key（計画・run の中で一意）。
+   */
+  key: string;
+  kind: DecisionKind;
+  /**
+   * `<unit key>` | `stage:<key>` | `self`。
+   */
+  needed_before: string[];
+  options: DecisionOption[];
+  /**
+   * root から出した節点まで。
+   */
+  path: DecisionPathEntry[];
+  question: string;
+  raised_by: DecisionRaisedBy;
+  recommended: string;
+  status: DecisionStatus;
+  /**
+   * 取り下げの理由（`status = withdrawn` のときだけ）。
+   */
+  withdrawn_reason?: string | null;
+}
+/**
+ * D7: 回答（`Event::DecisionAnswered` の写し。R1a の明確化: 表の `json` に回答を残すため
+ * `DecisionRequest.answer` に持つ）。
+ */
+export interface DecisionAnswer {
+  by: string;
+  note?: string | null;
+  option: string;
+}
+/**
+ * D7: 選択肢 1 つ。
+ */
+export interface DecisionOption {
+  consequence?: string | null;
+  /**
+   * `[a-z0-9-]{1,32}`。決定の中で一意。
+   */
+  key: string;
+  label: string;
+}
+/**
+ * D7: 木の中の位置の 1 段（root から出した節点まで）。
+ */
+export interface DecisionPathEntry {
+  stage?: string | null;
+  task_id: TaskId;
+  title: string;
+  unit?: string | null;
+}
+/**
+ * D7: 決定を出した節点と run。
+ */
+export interface DecisionRaisedBy {
+  origin: DecisionOrigin;
+  run_id?: string | null;
+  task_id: TaskId;
+}
+/**
+ * 回答・取り下げ・revise の結果。
+ */
+export interface DecisionOutcome {
+  /**
+   * 取り下げた（`cancelled` にした）unit の key。
+   */
+  cancelled: string[];
+  /**
+   * 中止した節点（`needed_before: [self]` の取り下げ）。
+   */
+  cancelled_task?: TaskId | null;
+  decision: DecisionView;
+  effect: DecisionEffect;
+  /**
+   * revise で、既に作られた子 task にコメントとして届けた先。
+   */
+  notified_children?: TaskId[];
+  /**
+   * 決定を出した節点の replan を依頼した（`ExecutionHintSet{replan: true}`）。
+   */
+  replan_requested: boolean;
+  /**
+   * `blocked(decision)` から戻した unit（`pending` / `ready`）の key。
+   */
+  resumed: string[];
+}
+/**
+ * `POST /decisions/{id}/withdraw` の本文（省略可）。
+ */
+export interface DecisionWithdrawBody {
+  reason?: string | null;
 }
 /**
  * `GET /projects/{id}/docs/page`。
@@ -4193,17 +4348,6 @@ export interface DecisionSpec {
   recommended: string;
 }
 /**
- * D7: 選択肢 1 つ。
- */
-export interface DecisionOption {
-  consequence?: string | null;
-  /**
-   * `[a-z0-9-]{1,32}`。決定の中で一意。
-   */
-  key: string;
-  label: string;
-}
-/**
  * ADR-0074 D1.1（Phase F2）: `celeris.execution-plan/2` の工程。配列の順が実行順（D1.1）。
  */
 export interface PhaseSpec {
@@ -4538,70 +4682,6 @@ export interface ProjectPlanSpec {
   schema: string;
 }
 /**
- * D7: 決定の要求（`docs/protocol/decision.schema.json`）。`id` と `path` は daemon が付ける
- * （LLM に書かせない）。
- */
-export interface DecisionRequest {
-  /**
-   * 回答（`status = answered` のときだけ）。
-   */
-  answer?: DecisionAnswer | null;
-  cost_note?: string | null;
-  cost_of_reversal: CostOfReversal;
-  /**
-   * daemon が振る ULID（木の中で一意）。
-   */
-  id: string;
-  /**
-   * 出した者が付けた key（計画・run の中で一意）。
-   */
-  key: string;
-  kind: DecisionKind;
-  /**
-   * `<unit key>` | `stage:<key>` | `self`。
-   */
-  needed_before: string[];
-  options: DecisionOption[];
-  /**
-   * root から出した節点まで。
-   */
-  path: DecisionPathEntry[];
-  question: string;
-  raised_by: DecisionRaisedBy;
-  recommended: string;
-  status: DecisionStatus;
-  /**
-   * 取り下げの理由（`status = withdrawn` のときだけ）。
-   */
-  withdrawn_reason?: string | null;
-}
-/**
- * D7: 回答（`Event::DecisionAnswered` の写し。R1a の明確化: 表の `json` に回答を残すため
- * `DecisionRequest.answer` に持つ）。
- */
-export interface DecisionAnswer {
-  by: string;
-  note?: string | null;
-  option: string;
-}
-/**
- * D7: 木の中の位置の 1 段（root から出した節点まで）。
- */
-export interface DecisionPathEntry {
-  stage?: string | null;
-  task_id: TaskId;
-  title: string;
-  unit?: string | null;
-}
-/**
- * D7: 決定を出した節点と run。
- */
-export interface DecisionRaisedBy {
-  origin: DecisionOrigin;
-  run_id?: string | null;
-  task_id: TaskId;
-}
-/**
  * ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。
  */
 export interface DecomposeRequest {
@@ -4893,6 +4973,11 @@ export interface Inbox {
    */
   browser_waits: BrowserWaitItem[];
   counts: InboxCounts;
+  /**
+   * ADR-0079 D7（Phase R3a）: 未回答の決定の要求（path・問い・推奨・止めている unit・経過時間）。
+   * 回答は `POST /decisions/{id}/answer`。
+   */
+  decisions: DecisionInboxItem[];
   drafts: DraftGroup[];
   questions: QuestionItem[];
 }
@@ -5023,8 +5108,41 @@ export interface InboxCounts {
   by_status: {
     [k: string]: number;
   };
+  /**
+   * ADR-0079 D7（Phase R3a）: 未回答の決定の要求の件数。
+   */
+  decisions: number;
   drafts: number;
   questions: number;
+}
+/**
+ * 受信箱の「決定」の 1 件（ADR-0079 D7 の `AttentionItem::Decision` の形。受信箱では独立の節 `decisions`）。
+ */
+export interface DecisionInboxItem {
+  /**
+   * 経過秒（`now − created_at`。読めなければ 0）。
+   */
+  age_secs: number;
+  cost_note?: string | null;
+  cost_of_reversal: CostOfReversal;
+  created_at: string;
+  id: string;
+  key: string;
+  kind: DecisionKind;
+  needed_before: string[];
+  options: DecisionOption[];
+  origin: DecisionOrigin;
+  /**
+   * root から出した節点まで（パンくず）。
+   */
+  path: DecisionPathEntry[];
+  question: string;
+  recommended: string;
+  root_id: TaskId;
+  /**
+   * タスクの一意識別子（ULID）。DESIGN §4.1。
+   */
+  task_id: string;
 }
 export interface DraftGroup {
   drafts: TaskSummary[];

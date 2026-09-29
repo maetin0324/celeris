@@ -26,7 +26,7 @@ use crate::state::McpState;
 /// `OpsError` → `ToolError`（Phase 101。`NotFound`/`*NotFound` は not_found、状態や検証の不整合は
 /// invalid_params、それ以外（`Store`）は internal。`docs/gui/api.md` の `ops_problem` と同じ分類を
 /// JSON-RPC のエラーコードに写しただけ）。
-fn map_ops_err(e: OpsError) -> ToolError {
+pub(crate) fn map_ops_err(e: OpsError) -> ToolError {
     match e {
         OpsError::NotFound(id) => ToolError::not_found(format!("task {id} was not found")),
         OpsError::ProjectNotFound(id) => {
@@ -37,7 +37,10 @@ fn map_ops_err(e: OpsError) -> ToolError {
         }
         // ADR-0074 D3.3（Phase F4a (c)）: 案件計画の decide は MCP からは呼べない（celerisctl / API だけ）
         // が、`OpsError` は共有なので網羅性のために分類だけ足す。
-        OpsError::ProjectPlanProposalNotFound { .. } => ToolError::not_found(e.to_string()),
+        OpsError::ProjectPlanProposalNotFound { .. } | OpsError::DecisionNotFound(_) => {
+            ToolError::not_found(e.to_string())
+        }
+        OpsError::DecisionNotOpen { .. } => ToolError::invalid_params(e.to_string()),
         OpsError::ProjectPlanAlreadyDecided { .. }
         | OpsError::ProjectPlanInFlight { .. }
         | OpsError::ProjectPlanStale { .. } => ToolError::invalid_params(e.to_string()),

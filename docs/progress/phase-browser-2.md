@@ -80,12 +80,12 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 
 ## main 追従後の検査（2026-09-29）
 
-`main` の `bd3b2b3` を競合なく取り込み、`git merge-base --is-ancestor main HEAD` は exit 0。browser migration は 0032/0033、schema version は 33 のままで、今回の merge に migration 番号の衝突は無かった。
+`main` の `bd3b2b3` を取り込み、さらに `a525af2` を統合した。後者では decision API と browser API の schema / Inbox 項目を併存させ、API schema と GUI types を再生成した。`git merge-base --is-ancestor main HEAD` は exit 0。browser migration は 0032/0033、schema version は 33 のままで、migration 番号の衝突は無かった。
 
 | コマンド | 結果 |
 | --- | --- |
 | `cargo fmt --all -- --check` | exit 0 |
-| `cargo test --workspace` | exit 0、2833 passed / 0 failed / 7 ignored |
+| `cargo test --workspace` | exit 0、2865 passed / 0 failed / 7 ignored |
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `cd gui && pnpm typecheck` | exit 0 |
 | `cd gui && pnpm test` | exit 0、78 files / 1213 passed |

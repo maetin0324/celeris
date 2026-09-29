@@ -192,6 +192,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::skills::routes())
         // ADR-0072 D14（Phase E2）: ExecutionPlan の採用。実装は `crate::execution`。
         .merge(crate::execution::routes())
+        // ADR-0079 D7（Phase R3a）: 決定の要求の一覧・回答・取り下げ・revise。実装は `crate::decisions`。
+        .merge(crate::decisions::routes())
         .route("/api/v1/daemon", get(daemon))
         // ADR-0075 D6（Phase G1）: scratch pool の観測値（`celerisctl scratch status --json` と同じ schema）。
         .route("/api/v1/metrics/scratch", get(metrics_scratch))
@@ -3130,6 +3132,8 @@ fn daemon_snapshot_with_reports(state: &ApiState) -> Option<task_ops::daemon::Da
     snapshot.reports =
         crate::reports::reports_live(&state.inner.store, crate::reports::last_notified_at(state));
     snapshot.approvals_pending = crate::approvals::approvals_pending(&state.inner.store);
+    snapshot.decisions_open =
+        task_ops::decision::open_count(state.inner.store.as_ref()).unwrap_or(0);
     Some(snapshot)
 }
 

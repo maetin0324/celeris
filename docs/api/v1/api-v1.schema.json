@@ -4271,6 +4271,13 @@
           },
           "type": "array"
         },
+        "decisions_open": {
+          "default": 0,
+          "description": "ADR-0079 D7（Phase R3a）: 未回答の決定の要求の件数（決定を出した節点が終端でないもの）。\n`approvals_pending` と同じく **API が応答を組むときに埋める**（ディスパッチャが送るスナップショットでは常に 0）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "hostname": {
           "type": "string"
         },
@@ -4502,6 +4509,25 @@
       ],
       "type": "object"
     },
+    "DecisionAnswerBody": {
+      "additionalProperties": false,
+      "description": "`POST /decisions/{id}/answer`・`revise` の本文（`option` は決定の選択肢の key。`choice` の決定だけ、\n`option` を省いて `note` に自由記述で答えられる）。",
+      "properties": {
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "DecisionBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/approve`、`POST /tasks/{id}/reject` の本文。",
@@ -4525,6 +4551,120 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "DecisionEffect": {
+      "description": "R3a: 回答（または人の取り下げ）が daemon に対して持つ効き目。**決定の種類と選択肢の key だけから決まる**\n（[`answer_effect`]。ADR-0079 付記「R3a 実装時の逸脱・明確化」の表）。",
+      "oneOf": [
+        {
+          "const": "resume",
+          "description": "待っていた unit（`needs_decisions` / `needed_before`）を再評価して進める。`self` の決定なら節点の\n止めが外れる。",
+          "type": "string"
+        },
+        {
+          "const": "raise_once",
+          "description": "止めた unit を進める。run 時の木の上限（`needed_before: [self]` の `limit:*`）なら、その上限に\n1 回分の余裕を足す（`task_core::tree::limit_allowance_step`）。",
+          "type": "string"
+        },
+        {
+          "const": "replan",
+          "description": "決定を出した節点の replan を依頼する（止めた unit は replan が置き換えるまで止めたまま）。\n`plan_invalid` では planner をもう一度起こし、人の note を planner に渡す。",
+          "type": "string"
+        },
+        {
+          "const": "atomic",
+          "description": "`plan_invalid`: 分けずに 1 run（atomic）で試す。",
+          "type": "string"
+        },
+        {
+          "const": "withdraw",
+          "description": "止めた unit を取り下げる（`cancelled`）。`needed_before: [self]` なら決定を出した節点を中止する。",
+          "type": "string"
+        }
+      ]
+    },
+    "DecisionInboxItem": {
+      "description": "受信箱の「決定」の 1 件（ADR-0079 D7 の `AttentionItem::Decision` の形。受信箱では独立の節 `decisions`）。",
+      "properties": {
+        "age_secs": {
+          "description": "経過秒（`now − created_at`。読めなければ 0）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cost_note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost_of_reversal": {
+          "$ref": "#/$defs/CostOfReversal"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DecisionKind"
+        },
+        "needed_before": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": "array"
+        },
+        "origin": {
+          "$ref": "#/$defs/DecisionOrigin"
+        },
+        "path": {
+          "description": "root から出した節点まで（パンくず）。",
+          "items": {
+            "$ref": "#/$defs/DecisionPathEntry"
+          },
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "recommended": {
+          "type": "string"
+        },
+        "root_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "決定を出した節点。"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "kind",
+        "task_id",
+        "root_id",
+        "path",
+        "question",
+        "options",
+        "recommended",
+        "cost_of_reversal",
+        "needed_before",
+        "origin",
+        "created_at",
+        "age_secs"
+      ],
       "type": "object"
     },
     "DecisionKind": {
@@ -4551,6 +4691,21 @@
           "type": "string"
         }
       ]
+    },
+    "DecisionList": {
+      "description": "`GET /decisions` の応答。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DecisionView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
     },
     "DecisionOption": {
       "additionalProperties": false,
@@ -4593,6 +4748,61 @@
           "type": "string"
         }
       ]
+    },
+    "DecisionOutcome": {
+      "description": "回答・取り下げ・revise の結果。",
+      "properties": {
+        "cancelled": {
+          "description": "取り下げた（`cancelled` にした）unit の key。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cancelled_task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "中止した節点（`needed_before: [self]` の取り下げ）。"
+        },
+        "decision": {
+          "$ref": "#/$defs/DecisionView"
+        },
+        "effect": {
+          "$ref": "#/$defs/DecisionEffect"
+        },
+        "notified_children": {
+          "description": "revise で、既に作られた子 task にコメントとして届けた先。",
+          "items": {
+            "$ref": "#/$defs/TaskId"
+          },
+          "type": "array"
+        },
+        "replan_requested": {
+          "description": "決定を出した節点の replan を依頼した（`ExecutionHintSet{replan: true}`）。",
+          "type": "boolean"
+        },
+        "resumed": {
+          "description": "`blocked(decision)` から戻した unit（`pending` / `ready`）の key。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision",
+        "effect",
+        "resumed",
+        "cancelled",
+        "replan_requested"
+      ],
+      "type": "object"
     },
     "DecisionPathEntry": {
       "additionalProperties": false,
@@ -4793,6 +5003,61 @@
         "withdrawn"
       ],
       "type": "string"
+    },
+    "DecisionView": {
+      "description": "`GET /decisions` / `GET /tasks/{id}/decisions` の 1 件。",
+      "properties": {
+        "answered_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/DecisionRequest"
+        },
+        "effect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionEffect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "回答済みなら、その回答の効き目（`answer_effect`）。"
+        },
+        "root_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "決定を出した節点（`Event::DecisionRequested` を積んだ task）。"
+        }
+      },
+      "required": [
+        "decision",
+        "task_id",
+        "root_id",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "DecisionWithdrawBody": {
+      "additionalProperties": false,
+      "description": "`POST /decisions/{id}/withdraw` の本文（省略可）。",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "DecomposeRequest": {
       "additionalProperties": false,
@@ -8440,6 +8705,13 @@
         "counts": {
           "$ref": "#/$defs/InboxCounts"
         },
+        "decisions": {
+          "description": "ADR-0079 D7（Phase R3a）: 未回答の決定の要求（path・問い・推奨・止めている unit・経過時間）。\n回答は `POST /decisions/{id}/answer`。",
+          "items": {
+            "$ref": "#/$defs/DecisionInboxItem"
+          },
+          "type": "array"
+        },
         "drafts": {
           "items": {
             "$ref": "#/$defs/DraftGroup"
@@ -8459,6 +8731,7 @@
         "drafts",
         "attention",
         "browser_waits",
+        "decisions",
         "counts"
       ],
       "type": "object"
@@ -8490,6 +8763,12 @@
           "description": "status 名 → 件数（DB 全体）。",
           "type": "object"
         },
+        "decisions": {
+          "description": "ADR-0079 D7（Phase R3a）: 未回答の決定の要求の件数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "drafts": {
           "format": "uint32",
           "minimum": 0,
@@ -8507,6 +8786,7 @@
         "drafts",
         "attention",
         "browser_waits",
+        "decisions",
         "by_status"
       ],
       "type": "object"
@@ -10935,6 +11215,11 @@
         {
           "const": "phase_checkpoint",
           "description": "ADR-0074 D2.4（Phase F3 途中確認）: Task が工程の後の途中確認で止まった（`blocked(awaiting_human)`）。\n質問ではない（`QuestionBlocked` は鳴らさない）。`key` = task id:遷移番号。",
+          "type": "string"
+        },
+        {
+          "const": "decision_requested",
+          "description": "ADR-0079 D7（Phase R3a）: 人への決定の要求（木の中の位置 path 付き）。同じ run（計画の採用・worker の\nrun）で出た複数は 1 通に束ねる（`key` = `plan:<plan_id>:decisions` / `run:<run_id>:decisions`、1 件なら\n`decision:<id>`）。未回答のまま 24 時間たったら 1 回だけ再通知する（`key` の先頭に `reminder:`）。",
           "type": "string"
         }
       ]
@@ -19240,6 +19525,19 @@
     "decision": {
       "$ref": "#/$defs/DecisionBody"
     },
+    "decision_answer": {
+      "$ref": "#/$defs/DecisionAnswerBody"
+    },
+    "decision_list": {
+      "$ref": "#/$defs/DecisionList",
+      "description": "ADR-0079 D7（Phase R3a）: `GET /decisions`・`GET /tasks/{id}/decisions` の応答、\n`POST /decisions/{id}/answer`・`revise` の本文、`withdraw` の本文、3 つの操作の応答。"
+    },
+    "decision_outcome": {
+      "$ref": "#/$defs/DecisionOutcome"
+    },
+    "decision_withdraw": {
+      "$ref": "#/$defs/DecisionWithdrawBody"
+    },
     "doc_page": {
       "$ref": "#/$defs/DocPage"
     },
@@ -19706,7 +20004,11 @@
     "browser_decision",
     "browser_revoke",
     "browser_wait_result",
-    "browser_attestation_claims"
+    "browser_attestation_claims",
+    "decision_list",
+    "decision_answer",
+    "decision_withdraw",
+    "decision_outcome"
   ],
   "title": "ApiV1Schema",
   "type": "object"

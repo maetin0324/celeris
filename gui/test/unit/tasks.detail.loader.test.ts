@@ -216,7 +216,8 @@ describe("loadTaskDetail", () => {
         questions: [],
         drafts: [],
         attention: [],
-        counts: { approvals: 2, attention: 0, by_status: {}, drafts: 0, questions: 0 },
+        decisions: [],
+        counts: { approvals: 2, attention: 0, by_status: {}, decisions: 0, drafts: 0, questions: 0 },
       }),
     );
 

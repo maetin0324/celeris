@@ -2107,6 +2107,10 @@
           ],
           "description": "ADR-0033 D4（Phase 28）: 対話用タスクの run にだけ `Some`。委譲・`Question` を使わせず、\n返事だけを求める前置き（`preamble::conversation_instructions`）を出すための印。"
         },
+        "decision_requests": {
+          "description": "ADR-0079 D7（Phase R3a）: 木の節点（`[execution.tree] enabled` の子 task・/3 の root）の worker の run だけ\n`true`。前置きに「`result.json` の `decisions` で人への決定の要求を出せる」節が出る。`false` なら\nプロンプトは変わらない。",
+          "type": "boolean"
+        },
         "execution_planner": {
           "anyOf": [
             {
@@ -3094,6 +3098,13 @@
         },
         "done_when": {
           "description": "D14 の `done_when`（この WU の完了の目安。`## Acceptance criteria` に載る）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "human_decisions": {
+          "description": "ADR-0079 D7（Phase R3a）: この leaf が待っていた決定（`needs_decisions` と、この leaf を名指しした決定）の\n人の回答（固定の書式 `- <key> <question>: <label>（推奨どおり | 推奨と異なる） — <note>`。前置きの\n「人の決定」節に出す）。無ければ空でプロンプトは変わらない。",
           "items": {
             "type": "string"
           },

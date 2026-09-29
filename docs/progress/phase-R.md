@@ -1158,3 +1158,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   **01M3QE4D330YESFT6FY8G50R12**「web: 新 Web GUI（ADR-0081、TanStack SPA + 薄い gateway）の実装 — Phase 1〜6」を案件 agent-platform に作成
   （stages_hint 5: Phase 1 / 2 / 3 / 4 / 5〜6、objective は docs/web/implementation-plan.md を正本に、H1〜H10 は「決まるまでの扱い」、Phase 7 は範囲外、
   P6-04 は H6/H7 の後）→ `decompose {compound}`（人の explicit）→ accept → ready。planner の /3 計画は PlanGate で人が確認する。
+- 20:38Z: 人が再起動（`max_concurrency = 6` 有効）。web root の planner が /3 計画 v1（5 段階 p1〜p56、各 Phase 1 子 task、p56 に `review: human`、
+  決定なし。木全体の葉 40 の制約から P*-NN 55 件を Phase ごとの葉上限 6/5/10/10/6 にまとめる方針）→ PlanGate（`review_human:p56`、near_limit
+  max_stages 5/5、max_child_tasks 5/6）→ 20:4xZ 人（Fable）が approve。葉の上限 `[execution.tree] max_tree_leaves = 40` は web のような大きい木には
+  小さい（回収で見直し候補）。

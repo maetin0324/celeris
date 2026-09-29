@@ -91,7 +91,7 @@ fn invalid() -> ApiProblem {
         "live access denied",
     )
 }
-fn parse_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiProblem> {
+pub(crate) fn parse_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiProblem> {
     body.map(|Json(value)| value).map_err(|_| {
         ApiProblem::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -103,11 +103,11 @@ fn parse_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiProblem> 
 fn internal() -> ApiProblem {
     ApiProblem::internal("browser live store unavailable")
 }
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0)
 }
 
-fn verify(
+pub(crate) fn verify(
     state: &ApiState,
     assertion: &HumanAttestation,
     path: &(String, String, String),

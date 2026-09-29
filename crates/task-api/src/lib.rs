@@ -22,6 +22,7 @@ mod admin;
 mod approvals;
 /// ADR-0080 D5: browser の人待ち（登録依頼・承認・手動登録の受付）。
 pub mod browser;
+mod browser_control;
 mod browser_live;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）。
 pub mod changes;

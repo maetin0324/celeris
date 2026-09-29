@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use crate::model::{TaskId, WorkspaceSpec};
@@ -216,5 +216,124 @@ impl SqliteStore {
             Self::repo_write_tx(conn, &repo)?;
         }
         Ok(())
+    }
+
+    pub(super) fn repo_create_impl(&self, repo: &ProjectRepo) -> Result<(), StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
+            params![repo.project_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::Invalid(format!(
+                "project not found: {}",
+                repo.project_id
+            )));
+        }
+        let existing = Self::repo_list_tx(&tx, repo.project_id)?;
+        crate::repos::validate_upsert(&existing, repo)?;
+        // 最初の 1 件は自動的に primary（案件に「主なリポジトリ」が無い状態を作らない）。
+        let mut repo = repo.clone();
+        if existing.is_empty() {
+            repo.is_primary = true;
+        }
+        Self::repo_write_tx(&tx, &repo)?;
+        if repo.is_primary {
+            Self::repo_clear_other_primaries_tx(&tx, repo.project_id, repo.id)?;
+        }
+        Self::sync_project_workspace_tx(&tx, repo.project_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn repo_get_impl(&self, id: RepoId) -> Result<Option<ProjectRepo>, StoreError> {
+        self.with_read_conn(|conn| Self::repo_get_tx(conn, id))
+    }
+
+    pub(super) fn repo_list_impl(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<ProjectRepo>, StoreError> {
+        self.with_read_conn(|conn| Self::repo_list_tx(conn, project_id))
+    }
+
+    pub(super) fn repo_update_impl(&self, repo: &ProjectRepo) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(current) = Self::repo_get_tx(&tx, repo.id)? else {
+            return Ok(false);
+        };
+        // `project_id` と `created_at` は動かさない（付け替えは作り直し）。
+        let repo = ProjectRepo {
+            project_id: current.project_id,
+            created_at: current.created_at,
+            ..repo.clone()
+        };
+        let others: Vec<ProjectRepo> = Self::repo_list_tx(&tx, repo.project_id)?
+            .into_iter()
+            .filter(|r| r.id != repo.id)
+            .collect();
+        crate::repos::validate_upsert(&others, &repo)?;
+        Self::repo_write_tx(&tx, &repo)?;
+        if repo.is_primary {
+            Self::repo_clear_other_primaries_tx(&tx, repo.project_id, repo.id)?;
+        }
+        Self::sync_project_workspace_tx(&tx, repo.project_id)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub(super) fn repo_delete_impl(&self, id: RepoId) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(repo) = Self::repo_get_tx(&tx, id)? else {
+            return Ok(false);
+        };
+        let open = Self::repo_active_tasks_tx(&tx, id)?;
+        if !open.is_empty() {
+            return Err(StoreError::InUse {
+                kind: "project repo",
+                id: id.to_string(),
+                detail: format!("{} task(s) using it have not finished", open.len()),
+            });
+        }
+        tx.execute(
+            "DELETE FROM project_repos WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        // primary を消したら、残りのうち一番古いものを primary にする（案件に主なリポジトリを残す）。
+        if repo.is_primary
+            && let Some(next) = Self::repo_list_tx(&tx, repo.project_id)?.first()
+        {
+            tx.execute(
+                "UPDATE project_repos SET is_primary = 1 WHERE id = ?1",
+                params![next.id.to_string()],
+            )?;
+        }
+        Self::sync_project_workspace_tx(&tx, repo.project_id)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub(super) fn repo_set_primary_impl(&self, id: RepoId) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(repo) = Self::repo_get_tx(&tx, id)? else {
+            return Ok(false);
+        };
+        tx.execute(
+            "UPDATE project_repos SET is_primary = 1 WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        Self::repo_clear_other_primaries_tx(&tx, repo.project_id, id)?;
+        Self::sync_project_workspace_tx(&tx, repo.project_id)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub(super) fn repo_active_tasks_impl(&self, id: RepoId) -> Result<Vec<TaskId>, StoreError> {
+        self.with_read_conn(|conn| Self::repo_active_tasks_tx(conn, id))
     }
 }

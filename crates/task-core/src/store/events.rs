@@ -1,10 +1,11 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use crate::execution_plan::RunIndexStatus;
 use crate::model::{Event, TaskId};
 
-use super::{SqliteStore, StoreError, format_rfc3339};
+use super::query::{u64_to_i64, usize_to_i64};
+use super::{EventRow, SqliteStore, StoreError, format_rfc3339};
 
 impl SqliteStore {
     pub(crate) fn append_event_tx(
@@ -211,5 +212,143 @@ impl SqliteStore {
             ],
         )?;
         Ok(())
+    }
+
+    pub(super) fn append_event_impl(
+        &self,
+        task_id: TaskId,
+        event: &Event,
+    ) -> Result<u64, StoreError> {
+        let mut conn = self.lock()?;
+        // seq の採番（SELECT）と INSERT を 1 つの IMMEDIATE トランザクションにする。別接続（celerisctl / API）が同じタスクに
+        // 追記しても seq が衝突せず、書き込みロックは busy_timeout で待つ（Phase 9 監査）。
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let seq = Self::append_event_tx(&tx, task_id, event)?;
+        tx.commit()?;
+        Ok(seq)
+    }
+
+    pub(super) fn events_for_impl(&self, task_id: TaskId) -> Result<Vec<(u64, Event)>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT seq, json FROM events WHERE task_id = ?1 ORDER BY seq ASC")?;
+            let rows = stmt.query_map(params![task_id.to_string()], |row| {
+                let seq: i64 = row.get(0)?;
+                let json: String = row.get(1)?;
+                Ok((seq, json))
+            })?;
+            let mut events = Vec::new();
+            for row in rows {
+                let (seq, json) = row?;
+                let event: Event = serde_json::from_str(&json)?;
+                events.push((seq as u64, event));
+            }
+            Ok(events)
+        })
+    }
+
+    pub(super) fn events_for_with_global_ids_impl(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<(u64, Event)>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id, json FROM events WHERE task_id = ?1 ORDER BY id ASC")?;
+            let rows = stmt.query_map(params![task_id.to_string()], |row| {
+                let id: i64 = row.get(0)?;
+                let json: String = row.get(1)?;
+                Ok((id, json))
+            })?;
+            let mut events = Vec::new();
+            for row in rows {
+                let (id, json) = row?;
+                let event: Event = serde_json::from_str(&json)?;
+                events.push((id as u64, event));
+            }
+            Ok(events)
+        })
+    }
+
+    pub(super) fn events_since_impl(
+        &self,
+        after_id: u64,
+        limit: usize,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, task_id, seq, ts, json FROM events WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
+            )?;
+            let rows =
+                stmt.query_map(params![u64_to_i64(after_id), usize_to_i64(limit)], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, task_id, seq, ts, json) = row?;
+                let task_id = Self::parse_id(&task_id)?;
+                let event: Event = serde_json::from_str(&json)?;
+                out.push(EventRow {
+                    id: id as u64,
+                    task_id,
+                    seq: seq as u64,
+                    ts,
+                    event,
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    pub(super) fn latest_event_id_impl(&self) -> Result<u64, StoreError> {
+        self.with_read_conn(|conn| {
+            let id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |row| {
+                row.get(0)
+            })?;
+            Ok(id as u64)
+        })
+    }
+
+    pub(super) fn event_rows_for_impl(
+        &self,
+        task_id: TaskId,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, task_id, seq, ts, json FROM events WHERE task_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
+            )?;
+            let after: i64 = after_seq.map(u64_to_i64).unwrap_or(-1);
+            let rows = stmt.query_map(
+                params![task_id.to_string(), after, usize_to_i64(limit)],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, seq, ts, json) = row?;
+                let event: Event = serde_json::from_str(&json)?;
+                out.push(EventRow {
+                    id: id as u64,
+                    task_id,
+                    seq: seq as u64,
+                    ts,
+                    event,
+                });
+            }
+            Ok(out)
+        })
     }
 }

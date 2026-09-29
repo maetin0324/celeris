@@ -854,6 +854,7 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
               retrying={retrying}
               fetchedAt={fetchedAt}
               humanReview={humanReview}
+              browserOwner={browserOwner}
             />
           )}
 
@@ -1140,6 +1141,7 @@ function FailureBanner({
 /** 概要タブ（ADR-0044 D5）: 従来の詳細一式に、人が直接直せる編集フォーム（D1）を足したもの。 */
 function OverviewTab({
   browserRuns,
+  browserOwner,
   liveViews,
   detail,
   artifactCount,
@@ -1156,6 +1158,7 @@ function OverviewTab({
   humanReview: ApprovalItem[];
   detail: TaskDetail;
   browserRuns: BrowserRun[];
+  browserOwner: BrowserOwnerView;
   liveViews: Record<string, LiveViewState>;
   artifactCount: number;
   org: OrgNode[];
@@ -1342,7 +1345,7 @@ function OverviewTab({
       )}
       {browserRuns.length > 0 && (
         <Suspense fallback={null}>
-          <BrowserRunsPanel runs={browserRuns} liveViews={liveViews} />
+          <BrowserRunsPanel runs={browserRuns} liveViews={liveViews} csrfToken={browserOwner.csrfToken} />
         </Suspense>
       )}
 

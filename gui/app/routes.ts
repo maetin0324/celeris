@@ -64,6 +64,8 @@ export default [
   route("files/tasks/:id/artifacts/:idx", "routes/files.artifacts.ts"),
   // browser の本人専用経路（ADR-0080 D5/D6）。未認証は 401（`auth.server.ts` の RESOURCE_PREFIXES）
   route("browser/owner-session", "routes/browser.owner-session.ts"),
+  route("browser/control/:taskId/:runId/:sessionId", "routes/browser.control.ts"),
+  route("browser/identities/:projectId", "routes/browser.identities.$projectId.tsx"),
   route("browser/waits/:waitId/credential", "routes/browser.waits.$waitId.credential.ts"),
   route("browser/waits/:waitId/decision", "routes/browser.waits.$waitId.decision.ts"),
   route("browser/live/:taskId/:runId", "routes/browser.live.ts", { id: "browser-live" }),

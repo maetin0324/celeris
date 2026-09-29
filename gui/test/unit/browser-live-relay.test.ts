@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthConfig, issueSessionCookie, readValidSession, setAuthConfigForTest } from "~/auth.server";
 import {
   approveOwnerChallenge,
@@ -182,6 +182,7 @@ let runState: BrowserRun["state"];
 beforeEach(async () => {
   runState = "RUNNING";
   mock = await startMockCeleris();
+  mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [{ id: "T1", status: "running" }] }));
   mock.on("GET", "/api/v1/tasks/T1", (_req, res) => sendJson(res, 200, runningTask));
   mock.on("GET", "/api/v1/tasks/T1/events", (_req, res) => sendJson(res, 200, browserEvents(runState)));
   mock.on("GET", "/api/v1/tasks/T1/browser/waits", (_req, res) => sendJson(res, 200, { items: [] }));
@@ -197,6 +198,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetLiveViewRelayConnectionsForTest();
   setLiveViewRevalidateMsForTest(undefined);
   setLiveViewRelayForTest(undefined);
@@ -468,6 +470,20 @@ describe("Live View relay (owner)", () => {
     expect(client.messages.some((m) => m.opcode === WS_OP.CLOSE)).toBe(true);
   });
 
+  it("an expired owner grant closes a stream even while the cookie is still valid", async () => {
+    setLiveViewRevalidateMsForTest(50);
+    const owner = await loginCookie();
+    await makeOwner(owner);
+    await get("/browser/live/T1/R1", owner);
+    const conn = await openWs("/api/session/9222/stream", owner);
+    const client = collect(conn);
+    await until(() => client.messages.length > 0);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_001);
+    await client.ended;
+    expect(openLiveViewConnections()).toBe(0);
+    expect((await get("/api/sessions", owner)).status).toBe(403);
+  });
+
   it("closes the stream when the run leaves RUNNING (periodic re-validation)", async () => {
     setLiveViewRevalidateMsForTest(50);
     const owner = await loginCookie();
@@ -483,6 +499,41 @@ describe("Live View relay (owner)", () => {
     expect(close && wsCloseCode(close.payload)).toBe(1008);
     // 以後は asset も拒否（409 not_running）
     expect((await get("/_next/static/x.js", owner)).status).toBe(409);
+  });
+
+  it("another task's auth interval closes the entire dashboard, including an existing stream", async () => {
+    // Disable the short polling path: an incoming frame must trigger its own authorization check.
+    setLiveViewRevalidateMsForTest(60_000);
+    const owner = await loginCookie();
+    await makeOwner(owner);
+    expect((await get("/browser/live/T1/R1", owner)).status).toBe(200);
+    const conn = await openWs("/api/session/9222/stream", owner);
+    const client = collect(conn);
+    await until(() => client.messages.length > 0);
+    mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [{ id: "T2", status: "running" }] }));
+    mock.on("GET", "/api/v1/tasks/T2/browser/waits", (_req, res) =>
+      sendJson(res, 200, { items: [{ run_id: "R2", reason: "waiting_for_auth", state: "registered" }] }),
+    );
+    upstream.wsSockets[0]?.write(encodeWsFrame(WS_OP.TEXT, Buffer.from("private auth frame")));
+    for (const path of ["/browser/live/T1/R1", "/_next/static/x.js", "/api/sessions"]) {
+      expect((await get(path, owner)).status).toBe(409);
+    }
+    await expect(openWs("/api/session/9222/stream", owner)).rejects.toThrow("ws_http_409");
+    await client.ended;
+    expect(client.messages.some((m) => m.opcode === WS_OP.CLOSE)).toBe(true);
+    expect(client.messages.some((m) => m.payload.includes("private auth frame"))).toBe(false);
+  });
+
+  it("fails closed if namespace safety cannot be established", async () => {
+    const owner = await loginCookie();
+    await makeOwner(owner);
+    mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 500, {}));
+    expect((await get("/browser/live/T1/R1", owner)).status).toBe(503);
+    mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [], next_cursor: "stuck" }));
+    expect((await get("/browser/live/T1/R1", owner)).status).toBe(503);
+    mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [{ id: "T2", status: "running" }] }));
+    mock.on("GET", "/api/v1/tasks/T2/browser/waits", (_req, res) => sendJson(res, 404, {}));
+    expect((await get("/browser/live/T1/R1", owner)).status).toBe(503);
   });
 });
 

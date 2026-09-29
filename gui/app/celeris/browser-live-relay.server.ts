@@ -31,7 +31,7 @@ import {
  *
  * dashboard（Next.js の static export）は絶対 URL（`/_next/...`、`fetch("/api/...")`、
  * `ws://<location.host>/api/session/<port>/stream`）を使うので、GUI の origin の root で受ける。
- * どの入口も「cookie → owner grant → HTML を開いたときの束縛 → 束縛した run の guard（≤3 秒 cache）」を通す。
+ * どの入口も「cookie → owner grant → HTML を開いたときの束縛 → run と namespace の guard」を通す。
  *
  * - relay する（GET だけ）: `/_next/static/*`、`/api/sessions`、`/api/chat/status`、
  *   `/api/session/:port/tabs`、`/api/session/:port/status`、WebSocket `/api/session/:port/stream`
@@ -301,7 +301,9 @@ class RelayConnection {
 
   start(clientHead: Buffer, upstreamLeftover: Buffer): void {
     this.#client.on("data", (chunk: Buffer) => this.#onClientData(chunk));
-    this.#upstream.on("data", (chunk: Buffer) => this.#onUpstreamData(chunk));
+    this.#upstream.on("data", (chunk: Buffer) => {
+      void this.#onUpstreamData(chunk).catch(() => this.close(1011));
+    });
     this.#client.on("error", () => this.close(1011, true));
     this.#upstream.on("error", () => this.close(1011, true));
     this.#client.on("close", () => this.close(1001, true));
@@ -311,7 +313,9 @@ class RelayConnection {
     this.#timer = setInterval(() => void this.#revalidate(), revalidateMs);
     this.#timer.unref();
     if (clientHead.length > 0) this.#onClientData(clientHead);
-    if (upstreamLeftover.length > 0) this.#onUpstreamData(upstreamLeftover);
+    if (upstreamLeftover.length > 0) {
+      void this.#onUpstreamData(upstreamLeftover).catch(() => this.close(1011));
+    }
   }
 
   get closed(): boolean {
@@ -328,7 +332,7 @@ class RelayConnection {
       return;
     }
     const binding = liveViewBinding(this.sessionHash);
-    if (!binding) {
+    if (!binding || binding.taskId !== this.taskId || binding.runId !== this.runId) {
       logDecision("ws_closed_unbound");
       this.close(1008);
       return;
@@ -377,7 +381,12 @@ class RelayConnection {
     }
   }
 
-  #onUpstreamData(chunk: Buffer): void {
+  async #onUpstreamData(chunk: Buffer): Promise<void> {
+    if (this.#closed) return;
+    // Do not forward a frame captured after another task entered an auth interval. The timer
+    // also closes idle streams, but periodic checks alone could expose frames in between checks.
+    this.#upstream.pause();
+    await this.#revalidate();
     if (this.#closed) return;
     let messages: WsMessage[];
     try {
@@ -391,10 +400,7 @@ class RelayConnection {
       switch (msg.opcode) {
         case WS_OP.TEXT:
         case WS_OP.BINARY:
-          if (!this.#client.write(encodeWsFrame(msg.opcode, msg.payload, false))) {
-            this.#upstream.pause();
-            this.#client.once("drain", () => this.#upstream.resume());
-          }
+          this.#client.write(encodeWsFrame(msg.opcode, msg.payload, false));
           break;
         case WS_OP.PING:
           this.#upstream.write(encodeWsFrame(WS_OP.PONG, msg.payload, true));
@@ -406,6 +412,8 @@ class RelayConnection {
           return;
       }
     }
+    if (this.#client.writableNeedDrain) this.#client.once("drain", () => this.#upstream.resume());
+    else this.#upstream.resume();
   }
 
   /** 両側に close frame を送り、少し待って破棄する。 */
@@ -588,6 +596,12 @@ async function openRelay(
     });
   } catch {
     rejectUpgrade(socket, 502, "live_view_upstream_unavailable");
+    return;
+  }
+  const owner = await checkOwner(request);
+  if (!owner.ok || owner.sessionHash !== decision.sessionHash) {
+    up.socket.destroy();
+    rejectUpgrade(socket, owner.ok ? 403 : owner.status, "owner_revoked");
     return;
   }
   // handshake の間に失効していないか（失効の通知で束縛は消える）

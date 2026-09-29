@@ -3,7 +3,7 @@ import { checkOwner, onOwnerRevoked } from "~/browser-owner.server";
 import { activeBrowserRunIds, inAuthInterval, safeBrowserLiveUrl } from "~/lib/browser";
 import { loadBrowserRuns, loadTaskBrowserWaits } from "./browser";
 import { type CelerisClient, getCelerisClient } from "./client.server";
-import type { BrowserRun, BrowserWait, TaskDetail } from "./types";
+import type { BrowserRun, BrowserWait, BrowserWaitList, TaskDetail, TaskList } from "./types";
 
 /**
  * ADR-0080 D6: `/browser/live/:taskId/:runId`。毎回 owner grant・task/run 対応・active・RUNNING・
@@ -110,6 +110,39 @@ export function liveViewPlain(status: number, code: string): Response {
 
 export type LiveViewGuard = { ok: true; run: BrowserRun } | { ok: false; status: number; code: string };
 
+/** The dashboard lists the entire namespace. A public run cannot bypass another task's auth interval.
+ * Conservatively keep the relay closed until every task that used credentials is terminal. Read the
+ * strict wait endpoint here: missing/partial history must never mean that the namespace is safe.
+ */
+async function namespaceInAuthInterval(client: CelerisClient, signal: AbortSignal): Promise<boolean> {
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  for (let page = 0; page < 20; page++) {
+    const tasks = await client.get<TaskList>("/tasks", {
+      query: {
+        limit: 200,
+        status: "draft,ready,running,blocked,reviewing",
+        archived: true,
+        order: "created_desc",
+        ...(cursor ? { cursor } : {}),
+      },
+      signal,
+    });
+    for (const task of tasks.items) {
+      if (["done", "failed", "cancelled"].includes(task.status)) continue;
+      const waits = await client.get<BrowserWaitList>(`/tasks/${encodeURIComponent(task.id)}/browser/waits`, {
+        signal,
+      });
+      if (waits.items.some((w) => inAuthInterval([w], w.run_id))) return true;
+    }
+    if (!tasks.next_cursor) return false;
+    if (seen.has(tasks.next_cursor)) throw new Error("Incomplete task history");
+    cursor = tasks.next_cursor;
+    seen.add(cursor);
+  }
+  throw new Error("Task history exceeds page limit");
+}
+
 /** task/run 対応・active controller・RUNNING・設定済み・認証区間外（owner の照合は呼び出し側）。 */
 export async function checkLiveViewRun(
   client: CelerisClient,
@@ -136,20 +169,25 @@ export async function checkLiveViewRun(
   if (run.state !== "RUNNING" || !active) return { ok: false, status: 409, code: "not_running" };
   if (!safeBrowserLiveUrl(run.live_view_url)) return { ok: false, status: 404, code: "not_configured" };
   if (inAuthInterval(waits, runId)) return { ok: false, status: 409, code: "auth_interval" };
+  try {
+    if (await namespaceInAuthInterval(client, signal)) return { ok: false, status: 409, code: "auth_interval" };
+  } catch {
+    return { ok: false, status: 503, code: "live_view_guard_unavailable" };
+  }
   return { ok: true, run };
 }
 
-/** run の guard の結果を短く（≤3 秒）使い回す。assets の連続取得で daemon を叩きすぎない。 */
-export const LIVE_VIEW_GUARD_TTL_MS = 3_000;
-const guardCache = new Map<string, { atMs: number; result: Promise<LiveViewGuard> }>();
+/** Coalesce concurrent checks only. Never reuse a completed authorization decision. */
+const guardCache = new Map<string, Promise<LiveViewGuard>>();
 
-export function cachedLiveViewGuard(taskId: string, runId: string, now = Date.now()): Promise<LiveViewGuard> {
+export function cachedLiveViewGuard(taskId: string, runId: string): Promise<LiveViewGuard> {
   const key = `${taskId}\0${runId}`;
   const hit = guardCache.get(key);
-  if (hit && now - hit.atMs < LIVE_VIEW_GUARD_TTL_MS && now >= hit.atMs) return hit.result;
-  for (const [k, v] of guardCache) if (now - v.atMs >= LIVE_VIEW_GUARD_TTL_MS) guardCache.delete(k);
-  const result = checkLiveViewRun(liveViewClient(), taskId, runId, AbortSignal.timeout(10_000));
-  guardCache.set(key, { atMs: now, result });
+  if (hit) return hit;
+  const result = checkLiveViewRun(liveViewClient(), taskId, runId, AbortSignal.timeout(10_000)).finally(() => {
+    if (guardCache.get(key) === result) guardCache.delete(key);
+  });
+  guardCache.set(key, result);
   return result;
 }
 

@@ -6,9 +6,9 @@
 #
 # やること:
 #   1. cargo build -p celeris -p celerisctl -p celeris-credentiald、pnpm build（G14_SKIP_BUILD=1 / G14_SKIP_GUI_BUILD=1 で省略）
-#   2. .run/g14 を作り直す（config・DB・workspaces・token・GUI パスワード・human attestation の鍵・credentiald の scratch HOME）
+#   2. 一意な scratch directory を作る（config・DB・workspaces・token・GUI パスワード・human attestation の鍵・credentiald の scratch HOME）
 #   3. celeris daemon（token 認証、fake ワーカー = test/celeris/fixtures/g14-worker.sh）→ scratch の celeris-credentiald
-#      （daemon の PID だけを control に admit）→ agent-browser dashboard（+ 可能なら loopback の fixture ページを開いた
+#      （daemon の PID だけを control に admit）→ agent-browser dashboard（+ loopback の fixture ページを開いた
 #      session 1 つ）→ GUI（パスワード認証 + owner socket + CELERIS_GUI_LIVE_VIEW_UPSTREAM）を起動
 #   4. pnpm exec playwright test e2e/g14-browser-live.spec.ts（スクリーンショット・events の dump は $E2E_ARTIFACTS_DIR）
 #   5. 全部止め（trap EXIT）、ログを $E2E_ARTIFACTS_DIR に写し、停止後にもう一度 sentinel（credential フォームに入れた
@@ -24,14 +24,13 @@
 #     supervisor の代わりをする（sqlite3 CLI。store の append_event_tx と同じ列: task_id, seq = MAX(seq)+1, ts, json）。
 #
 # 環境変数（全て任意）:
-#   E2E_ARTIFACTS_DIR   スクリーンショット・ログの置き場（既定 gui/.run/g14/artifacts）
+#   E2E_ARTIFACTS_DIR   スクリーンショット・ログの置き場（既定 scratch directory の artifacts。空の directory を指定する）
 #   G14_API_LISTEN      daemon の API（既定 127.0.0.1:27710）
 #   G14_GUI_BIND        GUI（既定 127.0.0.1:27700）
 #   G14_DASHBOARD_PORT  agent-browser dashboard（既定 27848）
 #   G14_FIXTURE_PORT    dashboard の session が開く loopback の静的ページ（既定 27861）
 #   G14_AGENT_BROWSER   agent-browser の実行ファイル
 #   G14_CHROME          Chromium の実行ファイル（agent-browser の session 用）
-#   G14_NO_SESSION=1    dashboard に session を開かない（0 session の dashboard）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,8 +39,8 @@ API_LISTEN="${G14_API_LISTEN:-127.0.0.1:27710}"
 GUI_BIND="${G14_GUI_BIND:-127.0.0.1:27700}"
 DASH_PORT="${G14_DASHBOARD_PORT:-27848}"
 FIXTURE_PORT="${G14_FIXTURE_PORT:-27861}"
-AGENT_BROWSER="${G14_AGENT_BROWSER:-/var/lib/celeris/workspaces/01M3MBV3AKXZGEG5RXR60XC62J/artifacts/browser-runtime/node_modules/agent-browser/bin/agent-browser-linux-x64}"
-CHROME="${G14_CHROME:-$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome}"
+AGENT_BROWSER="${G14_AGENT_BROWSER:-$(command -v agent-browser || true)}"
+CHROME="${G14_CHROME:-$(cd "$ROOT" && node --input-type=module -e 'import { chromium } from "@playwright/test"; process.stdout.write(chromium.executablePath());')}"
 
 die() { echo "browser-live-e2e: $*" >&2; exit 2; }
 log() { echo "browser-live-e2e: $*" >&2; }
@@ -52,17 +51,17 @@ for p in "${API_LISTEN##*:}" "${GUI_BIND##*:}" "$DASH_PORT" "$FIXTURE_PORT"; do
 done
 command -v sqlite3 >/dev/null || die "sqlite3 is required (browser_updated seeding)"
 command -v python3 >/dev/null || die "python3 is required (fixture page)"
-[ -x "$AGENT_BROWSER" ] || die "agent-browser not found: $AGENT_BROWSER"
+[ -x "$AGENT_BROWSER" ] || die "set G14_AGENT_BROWSER to agent-browser 0.38.1"
+[ "$("$AGENT_BROWSER" --version)" = "agent-browser 0.38.1" ] || die "agent-browser must be pinned to 0.38.1"
+[ -x "$CHROME" ] || die "Chromium not found (install Playwright Chromium or set G14_CHROME)"
 
-# .run の実体（scripts/celeris.sh と同じ規則: ローカルディスク上。Unix socket のパス長にも効く）。
-RUN_LINK="$ROOT/.run"
-if [ ! -e "$RUN_LINK" ]; then
-  RUN_ROOT="${CELERIS_RUN_ROOT:-${TMPDIR:-/tmp}/celeris-gui-run-$(id -un)}"
-  mkdir -p "$RUN_ROOT"
-  ln -s "$RUN_ROOT" "$RUN_LINK"
-fi
-RUN_DIR="$(readlink -f "$RUN_LINK")/g14"
+# Each invocation owns its scratch directory; never delete another worktree's run.
+RUN_ROOT="${CELERIS_RUN_ROOT:-${TMPDIR:-/tmp}/celeris-gui-run-$(id -un)}"
+mkdir -p "$RUN_ROOT"
+RUN_DIR="$(mktemp -d "$RUN_ROOT/g14.XXXXXXXX")"
 ARTIFACTS="${E2E_ARTIFACTS_DIR:-$RUN_DIR/artifacts}"
+mkdir -p "$ARTIFACTS"
+[ -z "$(find "$ARTIFACTS" -mindepth 1 -maxdepth 1 -print -quit)" ] || die "use an empty E2E_ARTIFACTS_DIR (previous evidence is preserved)"
 
 # ---- build ----
 BIN_DIR="${CARGO_TARGET_DIR:-$REPO/target}/debug"
@@ -80,10 +79,7 @@ fi
 for addr in "$API_LISTEN" "$GUI_BIND" "127.0.0.1:$DASH_PORT" "127.0.0.1:$FIXTURE_PORT"; do
   if (exec 3<>"/dev/tcp/${addr%:*}/${addr##*:}") 2>/dev/null; then die "something already listens on $addr; stop it first"; fi
 done
-rm -rf "$RUN_DIR"
 mkdir -p "$RUN_DIR/workspaces" "$RUN_DIR/markers" "$ARTIFACTS"
-# 前回の成果物（スクリーンショット・ログ）は消してから回す（取り違え防止）。
-find "$ARTIFACTS" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 chmod 700 "$RUN_DIR"
 cp "$ROOT/test/celeris/fixtures/g14-worker.sh" "$RUN_DIR/g14-worker.sh"
 cp "$ROOT/test/celeris/fixtures/read-run-request.mjs" "$RUN_DIR/read-run-request.mjs"
@@ -182,18 +178,12 @@ printf '<!doctype html><title>g14 Live View fixture</title><h1>g14 Live View fix
   > "$RUN_DIR/fixture-site/index.html"
 ( cd "$RUN_DIR/fixture-site" && exec python3 -m http.server "$FIXTURE_PORT" --bind 127.0.0.1 >> "$RUN_DIR/fixture-http.log" 2>&1 ) &
 FIXTURE_PID=$!
-DASH_SESSIONS=0
-if [ "${G14_NO_SESSION:-}" != "1" ]; then
-  AB_SESSION="g14-live-$(rand 4)"
-  sleep 0.5
-  if ab --config "$RUN_DIR/ab-config.json" --session "$AB_SESSION" --allowed-domains 127.0.0.1 --json \
-    open "http://127.0.0.1:$FIXTURE_PORT/" >> "$RUN_DIR/dashboard.log" 2>&1; then
-    DASH_SESSIONS=1
-  else
-    log "warning: could not open an agent-browser session; the dashboard will have 0 sessions (see dashboard.log)"
-    AB_SESSION=""
-  fi
-fi
+DASH_SESSIONS=1
+AB_SESSION="g14-live-$(rand 4)"
+sleep 0.5
+ab --config "$RUN_DIR/ab-config.json" --session "$AB_SESSION" --allowed-domains 127.0.0.1 --json \
+  open "http://127.0.0.1:$FIXTURE_PORT/" >> "$RUN_DIR/dashboard.log" 2>&1 \
+  || die "could not open an agent-browser session (see dashboard.log)"
 log "starting agent-browser dashboard on 127.0.0.1:$DASH_PORT ($DASH_SESSIONS session)"
 # stdout は捨てる（dashboard の bootstrap token を記録しない）。
 ab --config "$RUN_DIR/ab-config.json" dashboard start --port "$DASH_PORT" > /dev/null 2>> "$RUN_DIR/dashboard.log"

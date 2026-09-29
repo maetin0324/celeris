@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { Browser, BrowserContext, Page } from "@playwright/test";
+import type { Browser, BrowserContext, Page, WebSocket } from "@playwright/test";
 import { expect, test } from "./test";
 
 // ADR-0080 D4〜D6 の端から端（実 celeris daemon・実 GUI（パスワード認証）・実 agent-browser dashboard・実ブラウザ。LLM なし）。
@@ -208,6 +208,8 @@ let credentialRef: BrowserWait["credential"];
 // serial にしない: (c)（relay が無い間は 503 で落ちる）が落ちても (d) を必ず回す。worker は 1 つなので順序は保たれる
 // （失敗の後は新しい worker で beforeAll からやり直すので、(d) は task を markers と API の一覧から集める）。
 test.setTimeout(180_000);
+// Credential input must never enter traces, HAR or videos, including failed runs.
+test.use({ trace: "off", video: "off", screenshot: "off" });
 
 test.beforeAll(async ({ browser: b }) => {
   env("G14_RUN_DIR");
@@ -429,6 +431,11 @@ test("(c) Live View: 本人は dashboard、本人でないログイン済みは 
   expect(activeRun(await detail(c.id))).toBe(c.runId);
 
   const livePath = `/browser/live/${c.id}/${c.runId}`;
+  // The dashboard lists all sessions: another task's credential interval must close the entire relay.
+  expect((await page.request.get(`${GUI}${livePath}`)).status()).toBe(409);
+  const cancelled = await api("POST", `/tasks/${taskA}/cancel`, {});
+  expect(cancelled.status, cancelled.text).toBe(200);
+  await expectStatus(taskA, /^cancelled$/);
   await page.goto(`${GUI}/tasks/${c.id}`);
   const runs = page.locator('[data-testid="browser-runs"]');
   await expect(runs).toBeVisible({ timeout: 15_000 });
@@ -441,6 +448,15 @@ test("(c) Live View: 本人は dashboard、本人でないログイン済みは 
 
   // 本人: dashboard の HTML が GUI の origin で開く
   const livePage = await owner.newPage();
+  const streams: WebSocket[] = [];
+  let frames = 0;
+  livePage.on("websocket", (ws) => {
+    streams.push(ws);
+    ws.on("framereceived", ({ payload }) => {
+      if (typeof payload === "string" && payload.includes('"type":"frame"')) frames++;
+      if (Buffer.isBuffer(payload) && payload.length > 1024) frames++;
+    });
+  });
   const ownerRes = await livePage.goto(`${GUI}${livePath}`);
   const ownerStatus = ownerRes?.status();
   const ownerBody = ((await ownerRes?.text()) ?? "").slice(0, 200).replace(/\s+/g, " ");
@@ -456,6 +472,8 @@ test("(c) Live View: 本人は dashboard、本人でないログイン済みは 
     expect.soft(html, "dashboard URL must not leak").not.toContain(`127.0.0.1:${process.env.G14_DASHBOARD_PORT}`);
     if (sessions > 0) {
       await expect.soft(livePage.getByText(/g14-live-/).first()).toBeVisible({ timeout: 20_000 });
+      await expect.poll(() => frames, { timeout: 20_000 }).toBeGreaterThan(0);
+      expect(streams.every((ws) => new URL(ws.url()).host === new URL(GUI).host)).toBe(true);
       await livePage.screenshot({ path: path.join(ARTIFACTS, "live-view-owner.png"), fullPage: true });
     }
   }
@@ -468,7 +486,6 @@ test("(c) Live View: 本人は dashboard、本人でないログイン済みは 
     maxRedirects: 0,
   });
   expect.soft(exec.status(), `owner POST /api/exec (body: ${(await exec.text()).slice(0, 120)})`).toBe(403);
-  await livePage.close();
 
   // 本人でないログイン済みの context: 403
   const other = await browser.newContext();
@@ -495,6 +512,17 @@ test("(c) Live View: 本人は dashboard、本人でないログイン済みは 
   } finally {
     await anon.close();
   }
+  const activeStreams = streams.filter((ws) => !ws.isClosed());
+  expect(activeStreams.length).toBeGreaterThan(0);
+  const logout = await page.request.post(`${GUI}/logout`, { headers: { Origin: GUI }, maxRedirects: 0 });
+  expect(logout.status()).toBe(302);
+  await expect.poll(() => activeStreams.every((ws) => ws.isClosed())).toBe(true);
+  expect((await page.request.get(`${GUI}${livePath}`, { maxRedirects: 0 })).status()).toBe(401);
+  fs.writeFileSync(
+    path.join(ARTIFACTS, "live-view-ws.json"),
+    JSON.stringify({ frames, streams: streams.length, closedAfterLogout: true }),
+  );
+  await livePage.close();
 });
 
 test("(d) sentinel は DB・WAL・events API・daemon / GUI のログ・artifacts に無い", async () => {

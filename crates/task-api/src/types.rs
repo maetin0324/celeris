@@ -1004,6 +1004,10 @@ pub struct ProjectDetail {
     /// 提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_plan: Option<task_ops::project_plan::ProjectPlanDagView>,
+    /// ADR-0079 D11（Phase R4a）: 案件の root task の数（状態ごと）と、その subtree の合計（run・reviewer の run・
+    /// トークン・定価・leaf・未回答の決定・壁時計。quota は含めない）。`tasks` と同じ上限（2,000 件）の範囲。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_totals: Option<task_ops::tree_view::ProjectRootTotals>,
 }
 
 /// 途中目標 1 件のビュー（ADR-0038 D1 / D4。Phase 41）。`Milestone` のフィールドは**平らに**出るので、
@@ -1928,7 +1932,7 @@ pub struct TaskExecutionView {
 pub struct ExecutionMetricsGroup {
     /// `group_by = gate_mode` なら `"atomic"`/`"compound"`/`"none"`、`genre`/`assignee` ならその
     /// 値（無ければ `"none"`）、`lane` なら直近の run の lane（`"frontier"`/`"standard"`/`"cheap"`/
-    /// `"none"`）。
+    /// `"none"`）、`depth`（ADR-0079 R4a）なら task の層（`"1"` / `"2"` / `"3"`）。
     pub key: String,
     pub tasks: u64,
     pub done: u64,
@@ -1949,6 +1953,11 @@ pub struct ExecutionMetricsGroup {
     /// 1 件でもあれば `false`）。
     #[serde(default = "default_true")]
     pub cost_usd_complete: bool,
+    /// ADR-0079 D11 / U-R7（Phase R4a）: `group_by = depth` のときだけ。この深さ（task の層。root = 1、木の無い
+    /// task も 1）のタスクの自分の分の和: role ごとの run（reviewer を含む）・reviewer の run と定価・トークン・
+    /// 定価・quota・壁時計（最初の run の開始 → 最後の run の終わり）と実働時間・leaf・未回答の決定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollup: Option<task_core::RollupMetrics>,
 }
 
 fn default_true() -> bool {
@@ -1970,7 +1979,7 @@ pub struct AccountNowView {
     pub cooldown_until: Option<i64>,
 }
 
-/// `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane`。
+/// `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane|depth`。
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ExecutionMetricsSummary {
     pub group_by: String,

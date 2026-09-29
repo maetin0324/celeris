@@ -297,7 +297,8 @@ impl AccountStatsState {
 // ============================================================================
 
 /// `group_by` の許される値（`GET /metrics/execution` のクエリ検証にも使う）。
-pub(crate) const EXECUTION_METRICS_GROUP_BY: &[&str] = &["gate_mode", "genre", "assignee", "lane"];
+pub(crate) const EXECUTION_METRICS_GROUP_BY: &[&str] =
+    &["gate_mode", "genre", "assignee", "lane", "depth"];
 
 #[derive(Debug, Default, Clone)]
 struct ExecutionGroupAcc {
@@ -315,6 +316,9 @@ struct ExecutionGroupAcc {
     quota_rows: Vec<task_core::QuotaUse>,
     /// このグループの全タスクで `cost_usd_complete` だった（1 件でも不完全なタスクがあれば `false`）。
     cost_usd_complete: bool,
+    /// ADR-0079 D11 / U-R7（Phase R4a）: `group_by = depth` のときだけ、各タスクの自分の分の roll-up の和
+    /// （role ごとの run・reviewer の run と定価・定価・quota・壁時計）。
+    rollup: Option<task_core::RollupMetrics>,
 }
 
 impl ExecutionGroupAcc {
@@ -323,6 +327,14 @@ impl ExecutionGroupAcc {
             cost_usd_complete: true,
             ..Self::default()
         }
+    }
+}
+
+/// `task_ops` のエラーを集計の `StoreError` に写す（集計は読み取りだけ）。
+fn ops_to_store(e: task_ops::OpsError) -> StoreError {
+    match e {
+        task_ops::OpsError::Store(e) => e,
+        other => StoreError::Invalid(other.to_string()),
     }
 }
 
@@ -345,6 +357,7 @@ fn execution_group_key(
     match group_by {
         "genre" => task.genre.clone().unwrap_or_else(|| "none".to_string()),
         "assignee" => task.assignee.clone().unwrap_or_else(|| "none".to_string()),
+        "depth" => task_core::tree::depth_of(task).to_string(),
         _ => metrics
             .gate_mode
             .map(|m| m.as_str().to_string())
@@ -361,6 +374,11 @@ pub(crate) fn execution_metrics_summary(
     group_by: &str,
 ) -> Result<ExecutionMetricsSummary, StoreError> {
     let rows = store.execution_metrics_task_rows(since)?;
+    let open_counts = if group_by == "depth" {
+        task_ops::tree_view::open_decision_counts(store).map_err(ops_to_store)?
+    } else {
+        BTreeMap::new()
+    };
     let mut groups: BTreeMap<String, ExecutionGroupAcc> = BTreeMap::new();
     for row in &rows {
         let routing: Option<task_core::TaskRouting> = row
@@ -404,9 +422,28 @@ pub(crate) fn execution_metrics_summary(
         } else {
             None
         };
+        // ADR-0079 U-R7（Phase R4a）: 深さ（task の層。木の無い task は 1）と、そのタスクの自分の分の roll-up。
+        let depth_rollup = if group_by == "depth" {
+            let task = match &fallback {
+                Some((_, task)) => task.clone(),
+                None => store
+                    .get(row.task_id)?
+                    .ok_or_else(|| StoreError::Invalid(format!("missing task {}", row.task_id)))?,
+            };
+            let open = open_counts.get(&row.task_id).copied().unwrap_or(0);
+            let own = task_ops::tree_view::own_metrics(store, &task, open, row.has_quota_events)
+                .map_err(ops_to_store)?;
+            Some((task_core::tree::depth_of(&task), own))
+        } else {
+            None
+        };
         let key = match group_by {
             "genre" => row.genre.clone().unwrap_or_else(|| "none".to_string()),
             "assignee" => row.assignee.clone().unwrap_or_else(|| "none".to_string()),
+            "depth" => depth_rollup
+                .as_ref()
+                .map(|(d, _)| d.to_string())
+                .unwrap_or_else(|| "1".to_string()),
             "lane" => fallback
                 .as_ref()
                 .and_then(|(_, task)| {
@@ -449,6 +486,9 @@ pub(crate) fn execution_metrics_summary(
             acc.quota_rows.extend(m.quota.iter().cloned());
             acc.cost_usd_complete = acc.cost_usd_complete && m.cost_usd_complete;
         }
+        if let Some((_, own)) = &depth_rollup {
+            acc.rollup.get_or_insert_with(Default::default).absorb(own);
+        }
     }
     Ok(execution_metrics_from_groups(
         group_by,
@@ -469,6 +509,7 @@ pub(crate) fn execution_metrics_summary_from_events(
     group_by: &str,
 ) -> Result<ExecutionMetricsSummary, StoreError> {
     let tasks = store.list(None)?;
+    let open_counts = task_ops::tree_view::open_decision_counts(store).map_err(ops_to_store)?;
     let mut groups: BTreeMap<String, ExecutionGroupAcc> = BTreeMap::new();
     let mut total_tasks: u64 = 0;
     for task in &tasks {
@@ -509,6 +550,12 @@ pub(crate) fn execution_metrics_summary_from_events(
         acc.replans += u64::from(metrics.replans);
         acc.quota_rows.extend(metrics.quota.iter().cloned());
         acc.cost_usd_complete = acc.cost_usd_complete && metrics.cost_usd_complete;
+        if group_by == "depth" {
+            let open = open_counts.get(&task.id).copied().unwrap_or(0);
+            let own =
+                task_ops::tree_view::own_metrics(store, task, open, true).map_err(ops_to_store)?;
+            acc.rollup.get_or_insert_with(Default::default).absorb(&own);
+        }
     }
 
     Ok(execution_metrics_from_groups(
@@ -548,6 +595,7 @@ fn execution_metrics_from_groups(
                 // (source, account, window) ごとに合計する。
                 quota: task_core::merge_quota_use(acc.quota_rows),
                 cost_usd_complete: acc.cost_usd_complete,
+                rollup: acc.rollup,
             }
         })
         .collect();

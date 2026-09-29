@@ -1145,6 +1145,16 @@ export type ExecutionPhase =
  */
 export type FailureClass = "infra" | "work";
 /**
+ * 木の節点の「今どこか」（ADR-0079 D5 / D10 の名指しの待ちを含む表示用の導出値。状態機械には足さない）。
+ */
+export type TreeNodePhase =
+  | ("planning" | "executing" | "repairing" | "verifying")
+  | "awaiting_human"
+  | "awaiting_children"
+  | "awaiting_plan_approval"
+  | "held_on_decision"
+  | "blocked_infra";
+/**
  * タイムラインの 1 件（ADR-0044 D5）。`at` は RFC 3339。
  */
 export type TimelineItem =
@@ -1362,6 +1372,7 @@ export interface ApiV1Schema {
   task_execution: TaskExecutionView;
   task_list: TaskList;
   task_routing: TaskRoutingView;
+  task_tree: TaskTreeView;
   timeline: Timeline;
   transition_result: TransitionResult;
   tree: TreeView;
@@ -4595,6 +4606,11 @@ export interface PhaseReport {
    */
   artifact_paths?: string[];
   /**
+   * ADR-0079 D5 / D11（Phase R4a）: この段階の子 task（計画の kind task の unit）ごとの要約（1 行ずつ:
+   * unit の key・子の題名・状態・subtree の run と定価・子の最新の報告の見出し）。木でない計画では空。
+   */
+  child_units?: string[];
+  /**
    * Task ブランチの `git diff --stat` の要約（最大 30 行）。
    */
   diff_stat?: string[];
@@ -4754,7 +4770,7 @@ export interface DecomposeResult {
   task: Task;
 }
 /**
- * `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane`。
+ * `GET /metrics/execution?since=&group_by=gate_mode|genre|assignee|lane|depth`。
  */
 export interface ExecutionMetricsSummary {
   /**
@@ -4801,7 +4817,7 @@ export interface ExecutionMetricsGroup {
   /**
    * `group_by = gate_mode` なら `"atomic"`/`"compound"`/`"none"`、`genre`/`assignee` ならその
    * 値（無ければ `"none"`）、`lane` なら直近の run の lane（`"frontier"`/`"standard"`/`"cheap"`/
-   * `"none"`）。
+   * `"none"`）、`depth`（ADR-0079 R4a）なら task の層（`"1"` / `"2"` / `"3"`）。
    */
   key: string;
   max_turn_failures: number;
@@ -4815,6 +4831,12 @@ export interface ExecutionMetricsGroup {
   quota?: QuotaUse[];
   repairs: number;
   replans: number;
+  /**
+   * ADR-0079 D11 / U-R7（Phase R4a）: `group_by = depth` のときだけ。この深さ（task の層。root = 1、木の無い
+   * task も 1）のタスクの自分の分の和: role ごとの run（reviewer を含む）・reviewer の run と定価・トークン・
+   * 定価・quota・壁時計（最初の run の開始 → 最後の run の終わり）と実働時間・leaf・未回答の決定。
+   */
+  rollup?: RollupMetrics | null;
   tasks: number;
 }
 /**
@@ -4843,6 +4865,82 @@ export interface QuotaUse {
    */
   used_pct?: number | null;
   window: QuotaWindow;
+}
+/**
+ * D11: 1 節点分（または subtree・深さ・案件の合計）の数。
+ */
+export interface RollupMetrics {
+  /**
+   * 実働時間: 終わった run の（開始 → 終わり）の和（ミリ秒）。
+   */
+  busy_ms: number;
+  child_tasks_done: number;
+  /**
+   * 計画の kind task の unit（superseded / cancelled を除く）。
+   */
+  child_tasks_total: number;
+  /**
+   * 定価（USD。reviewer を含む）。`cost_usd_complete = false` なら下限。
+   */
+  cost_usd: number;
+  /**
+   * token を持つのに定価の無い run（単価表に無いモデル）が 1 件も無い。
+   */
+  cost_usd_complete: boolean;
+  /**
+   * 最初の run の開始（RFC 3339）。run が無ければ無し。
+   */
+  first_run_started_at?: string | null;
+  input_tokens: number;
+  /**
+   * 最後に終わった run の終わり（RFC 3339）。終わった run が無ければ無し。
+   */
+  last_run_finished_at?: string | null;
+  leaves_done: number;
+  /**
+   * leaf（統合・repair・kind task を除く `work_units` の行。superseded / cancelled を除く）。
+   */
+  leaves_total: number;
+  /**
+   * 未回答の決定（その節点が出したもの）。
+   */
+  open_decisions: number;
+  output_tokens: number;
+  /**
+   * ADR-0074 D4: (source, account, window) ごとの quota（`merge_quota_use` で合計）。
+   */
+  quota?: QuotaUse[];
+  reviewer_cost_usd: number;
+  /**
+   * U-R7: reviewer の run と、その定価（USD）。
+   */
+  reviewer_runs: number;
+  /**
+   * reviewer を除く run（`max_tree_runs` と同じ数え方）。
+   */
+  runs: number;
+  /**
+   * role ごとの run（`runs` の索引の role: `worker` / `planner` / `reviewer` / `wrap_up`。reviewer を含む）。
+   */
+  runs_by_role?: {
+    [k: string]: number;
+  };
+  /**
+   * まだ終わっていない run（`runs.status = running`）。
+   */
+  runs_in_flight: number;
+  /**
+   * 数えた task（節点）の数。
+   */
+  tasks: number;
+  /**
+   * input + output（cache は含めない。`TreeCounters.tokens` と同じ）。
+   */
+  tokens: number;
+  /**
+   * 壁時計: `first_run_started_at` → `last_run_finished_at`（ミリ秒）。どちらかが無ければ無し。
+   */
+  wall_ms?: number | null;
 }
 /**
  * `POST`/`GET /tasks/{id}/execution-plan` の応答。
@@ -6470,6 +6568,11 @@ export interface ProjectDetail {
    */
   repos?: ProjectRepo[];
   /**
+   * ADR-0079 D11（Phase R4a）: 案件の root task の数（状態ごと）と、その subtree の合計（run・reviewer の run・
+   * トークン・定価・leaf・未回答の決定・壁時計。quota は含めない）。`tasks` と同じ上限（2,000 件）の範囲。
+   */
+  root_totals?: ProjectRootTotals | null;
+  /**
    * 仕事の木を描くのに必要な最小限だけ（詳細は `GET /tasks/{id}`）。
    */
   tasks: ProjectTaskView[];
@@ -6675,6 +6778,98 @@ export interface ProjectRepo {
    * remote のみ。省略は既定の `worktree`（ADR-0019 の (a)）。
    */
   sync?: RepoSync | null;
+}
+/**
+ * D11 / D13: 案件の root task（`parent_id` が無く、対話でも裏方でもない task）の合計。`GET /projects/{id}`。
+ */
+export interface ProjectRootTotals {
+  /**
+   * root task の状態ごとの数（`draft` / `ready` / … / `done` / `failed` / `cancelled`。0 件の状態は出ない）。
+   */
+  by_status?: {
+    [k: string]: number;
+  };
+  /**
+   * root task の数。
+   */
+  root_tasks: number;
+  totals: RollupMetrics1;
+}
+/**
+ * D11: 1 節点分（または subtree・深さ・案件の合計）の数。
+ */
+export interface RollupMetrics1 {
+  /**
+   * 実働時間: 終わった run の（開始 → 終わり）の和（ミリ秒）。
+   */
+  busy_ms: number;
+  child_tasks_done: number;
+  /**
+   * 計画の kind task の unit（superseded / cancelled を除く）。
+   */
+  child_tasks_total: number;
+  /**
+   * 定価（USD。reviewer を含む）。`cost_usd_complete = false` なら下限。
+   */
+  cost_usd: number;
+  /**
+   * token を持つのに定価の無い run（単価表に無いモデル）が 1 件も無い。
+   */
+  cost_usd_complete: boolean;
+  /**
+   * 最初の run の開始（RFC 3339）。run が無ければ無し。
+   */
+  first_run_started_at?: string | null;
+  input_tokens: number;
+  /**
+   * 最後に終わった run の終わり（RFC 3339）。終わった run が無ければ無し。
+   */
+  last_run_finished_at?: string | null;
+  leaves_done: number;
+  /**
+   * leaf（統合・repair・kind task を除く `work_units` の行。superseded / cancelled を除く）。
+   */
+  leaves_total: number;
+  /**
+   * 未回答の決定（その節点が出したもの）。
+   */
+  open_decisions: number;
+  output_tokens: number;
+  /**
+   * ADR-0074 D4: (source, account, window) ごとの quota（`merge_quota_use` で合計）。
+   */
+  quota?: QuotaUse[];
+  reviewer_cost_usd: number;
+  /**
+   * U-R7: reviewer の run と、その定価（USD）。
+   */
+  reviewer_runs: number;
+  /**
+   * reviewer を除く run（`max_tree_runs` と同じ数え方）。
+   */
+  runs: number;
+  /**
+   * role ごとの run（`runs` の索引の role: `worker` / `planner` / `reviewer` / `wrap_up`。reviewer を含む）。
+   */
+  runs_by_role?: {
+    [k: string]: number;
+  };
+  /**
+   * まだ終わっていない run（`runs.status = running`）。
+   */
+  runs_in_flight: number;
+  /**
+   * 数えた task（節点）の数。
+   */
+  tasks: number;
+  /**
+   * input + output（cache は含めない。`TreeCounters.tokens` と同じ）。
+   */
+  tokens: number;
+  /**
+   * 壁時計: `first_run_started_at` → `last_run_finished_at`（ミリ秒）。どちらかが無ければ無し。
+   */
+  wall_ms?: number | null;
 }
 /**
  * 仕事の木の 1 ノード（ADR-0033 D2: DAG は既存の `parent_id` / `depends_on` がそのまま）。
@@ -8197,6 +8392,330 @@ export interface ReviewResult {
    */
   failed_criteria?: number[];
   passed: boolean;
+}
+/**
+ * ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。
+ */
+export interface TaskTreeView {
+  /**
+   * view が木の root を含むときだけ、木の上限の使用。
+   */
+  limits?: TreeLimitsUsage | null;
+  nodes: TaskTreeNode[];
+  /**
+   * タスクの一意識別子（ULID）。DESIGN §4.1。
+   */
+  root_id: string;
+  /**
+   * タスクの一意識別子（ULID）。DESIGN §4.1。
+   */
+  subtree_root: string;
+  totals: RollupMetrics4;
+  /**
+   * `[execution.tree] enabled`。
+   */
+  tree_enabled: boolean;
+}
+/**
+ * 1 つの木の上限の使用（D3）。`max_*` は回答の余裕（`raise-once` / `replan`）を当てた値。
+ */
+export interface TreeLimitsUsage {
+  leaves: number;
+  max_leaves: number;
+  max_open_decisions: number;
+  max_replans: number;
+  max_runs: number;
+  max_tokens?: number | null;
+  open_decisions: number;
+  replans: number;
+  runs: number;
+  tokens: number;
+}
+/**
+ * 木の 1 節点。
+ */
+export interface TaskTreeNode {
+  /**
+   * 子の節点（この view に含まれるもの。作られた順）。
+   */
+  children?: TaskId[];
+  /**
+   * task の層（root = 1）。
+   */
+  depth: number;
+  id: TaskId;
+  /**
+   * この節点が出した未回答の決定の数。
+   */
+  open_decisions: number;
+  own: RollupMetrics2;
+  /**
+   * 木の親（root は無し）。
+   */
+  parent_id?: TaskId | null;
+  parent_stage?: string | null;
+  /**
+   * この節点を作った親の計画の unit の key と段階。
+   */
+  parent_unit_key?: string | null;
+  /**
+   * 表示用の導出値（終端・計画も待ちも無い task は無し）。
+   */
+  phase?: TreeNodePhase | null;
+  /**
+   * 今の計画の版（計画の無い task は無し）。
+   */
+  plan_version?: number | null;
+  status: Status;
+  subtree: RollupMetrics3;
+  title: string;
+  units?: TreeUnitView[];
+}
+/**
+ * D11: 1 節点分（または subtree・深さ・案件の合計）の数。
+ */
+export interface RollupMetrics2 {
+  /**
+   * 実働時間: 終わった run の（開始 → 終わり）の和（ミリ秒）。
+   */
+  busy_ms: number;
+  child_tasks_done: number;
+  /**
+   * 計画の kind task の unit（superseded / cancelled を除く）。
+   */
+  child_tasks_total: number;
+  /**
+   * 定価（USD。reviewer を含む）。`cost_usd_complete = false` なら下限。
+   */
+  cost_usd: number;
+  /**
+   * token を持つのに定価の無い run（単価表に無いモデル）が 1 件も無い。
+   */
+  cost_usd_complete: boolean;
+  /**
+   * 最初の run の開始（RFC 3339）。run が無ければ無し。
+   */
+  first_run_started_at?: string | null;
+  input_tokens: number;
+  /**
+   * 最後に終わった run の終わり（RFC 3339）。終わった run が無ければ無し。
+   */
+  last_run_finished_at?: string | null;
+  leaves_done: number;
+  /**
+   * leaf（統合・repair・kind task を除く `work_units` の行。superseded / cancelled を除く）。
+   */
+  leaves_total: number;
+  /**
+   * 未回答の決定（その節点が出したもの）。
+   */
+  open_decisions: number;
+  output_tokens: number;
+  /**
+   * ADR-0074 D4: (source, account, window) ごとの quota（`merge_quota_use` で合計）。
+   */
+  quota?: QuotaUse[];
+  reviewer_cost_usd: number;
+  /**
+   * U-R7: reviewer の run と、その定価（USD）。
+   */
+  reviewer_runs: number;
+  /**
+   * reviewer を除く run（`max_tree_runs` と同じ数え方）。
+   */
+  runs: number;
+  /**
+   * role ごとの run（`runs` の索引の role: `worker` / `planner` / `reviewer` / `wrap_up`。reviewer を含む）。
+   */
+  runs_by_role?: {
+    [k: string]: number;
+  };
+  /**
+   * まだ終わっていない run（`runs.status = running`）。
+   */
+  runs_in_flight: number;
+  /**
+   * 数えた task（節点）の数。
+   */
+  tasks: number;
+  /**
+   * input + output（cache は含めない。`TreeCounters.tokens` と同じ）。
+   */
+  tokens: number;
+  /**
+   * 壁時計: `first_run_started_at` → `last_run_finished_at`（ミリ秒）。どちらかが無ければ無し。
+   */
+  wall_ms?: number | null;
+}
+/**
+ * D11: 1 節点分（または subtree・深さ・案件の合計）の数。
+ */
+export interface RollupMetrics3 {
+  /**
+   * 実働時間: 終わった run の（開始 → 終わり）の和（ミリ秒）。
+   */
+  busy_ms: number;
+  child_tasks_done: number;
+  /**
+   * 計画の kind task の unit（superseded / cancelled を除く）。
+   */
+  child_tasks_total: number;
+  /**
+   * 定価（USD。reviewer を含む）。`cost_usd_complete = false` なら下限。
+   */
+  cost_usd: number;
+  /**
+   * token を持つのに定価の無い run（単価表に無いモデル）が 1 件も無い。
+   */
+  cost_usd_complete: boolean;
+  /**
+   * 最初の run の開始（RFC 3339）。run が無ければ無し。
+   */
+  first_run_started_at?: string | null;
+  input_tokens: number;
+  /**
+   * 最後に終わった run の終わり（RFC 3339）。終わった run が無ければ無し。
+   */
+  last_run_finished_at?: string | null;
+  leaves_done: number;
+  /**
+   * leaf（統合・repair・kind task を除く `work_units` の行。superseded / cancelled を除く）。
+   */
+  leaves_total: number;
+  /**
+   * 未回答の決定（その節点が出したもの）。
+   */
+  open_decisions: number;
+  output_tokens: number;
+  /**
+   * ADR-0074 D4: (source, account, window) ごとの quota（`merge_quota_use` で合計）。
+   */
+  quota?: QuotaUse[];
+  reviewer_cost_usd: number;
+  /**
+   * U-R7: reviewer の run と、その定価（USD）。
+   */
+  reviewer_runs: number;
+  /**
+   * reviewer を除く run（`max_tree_runs` と同じ数え方）。
+   */
+  runs: number;
+  /**
+   * role ごとの run（`runs` の索引の role: `worker` / `planner` / `reviewer` / `wrap_up`。reviewer を含む）。
+   */
+  runs_by_role?: {
+    [k: string]: number;
+  };
+  /**
+   * まだ終わっていない run（`runs.status = running`）。
+   */
+  runs_in_flight: number;
+  /**
+   * 数えた task（節点）の数。
+   */
+  tasks: number;
+  /**
+   * input + output（cache は含めない。`TreeCounters.tokens` と同じ）。
+   */
+  tokens: number;
+  /**
+   * 壁時計: `first_run_started_at` → `last_run_finished_at`（ミリ秒）。どちらかが無ければ無し。
+   */
+  wall_ms?: number | null;
+}
+/**
+ * 節点の計画の unit 1 件（統合 WU を含む。superseded / cancelled も履歴として出す）。
+ */
+export interface TreeUnitView {
+  blocked_reason?: WorkUnitBlockedReason | null;
+  /**
+   * kind task の unit の子 task。
+   */
+  child_task_id?: TaskId | null;
+  key: string;
+  kind: WorkUnitKind;
+  /**
+   * 段階（`work_units.phase`）。/1 の計画は無し。
+   */
+  stage?: string | null;
+  status: WorkUnitStatus;
+  title: string;
+}
+/**
+ * D11: 1 節点分（または subtree・深さ・案件の合計）の数。
+ */
+export interface RollupMetrics4 {
+  /**
+   * 実働時間: 終わった run の（開始 → 終わり）の和（ミリ秒）。
+   */
+  busy_ms: number;
+  child_tasks_done: number;
+  /**
+   * 計画の kind task の unit（superseded / cancelled を除く）。
+   */
+  child_tasks_total: number;
+  /**
+   * 定価（USD。reviewer を含む）。`cost_usd_complete = false` なら下限。
+   */
+  cost_usd: number;
+  /**
+   * token を持つのに定価の無い run（単価表に無いモデル）が 1 件も無い。
+   */
+  cost_usd_complete: boolean;
+  /**
+   * 最初の run の開始（RFC 3339）。run が無ければ無し。
+   */
+  first_run_started_at?: string | null;
+  input_tokens: number;
+  /**
+   * 最後に終わった run の終わり（RFC 3339）。終わった run が無ければ無し。
+   */
+  last_run_finished_at?: string | null;
+  leaves_done: number;
+  /**
+   * leaf（統合・repair・kind task を除く `work_units` の行。superseded / cancelled を除く）。
+   */
+  leaves_total: number;
+  /**
+   * 未回答の決定（その節点が出したもの）。
+   */
+  open_decisions: number;
+  output_tokens: number;
+  /**
+   * ADR-0074 D4: (source, account, window) ごとの quota（`merge_quota_use` で合計）。
+   */
+  quota?: QuotaUse[];
+  reviewer_cost_usd: number;
+  /**
+   * U-R7: reviewer の run と、その定価（USD）。
+   */
+  reviewer_runs: number;
+  /**
+   * reviewer を除く run（`max_tree_runs` と同じ数え方）。
+   */
+  runs: number;
+  /**
+   * role ごとの run（`runs` の索引の role: `worker` / `planner` / `reviewer` / `wrap_up`。reviewer を含む）。
+   */
+  runs_by_role?: {
+    [k: string]: number;
+  };
+  /**
+   * まだ終わっていない run（`runs.status = running`）。
+   */
+  runs_in_flight: number;
+  /**
+   * 数えた task（節点）の数。
+   */
+  tasks: number;
+  /**
+   * input + output（cache は含めない。`TreeCounters.tokens` と同じ）。
+   */
+  tokens: number;
+  /**
+   * 壁時計: `first_run_started_at` → `last_run_finished_at`（ミリ秒）。どちらかが無ければ無し。
+   */
+  wall_ms?: number | null;
 }
 /**
  * ADR-0044 D5: `GET /tasks/{id}/timeline`。

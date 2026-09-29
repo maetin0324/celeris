@@ -575,3 +575,76 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R4a: GET /tasks/{id}/tree、集約、深さ別指標、段階報告の子要約、replay の /3 replan gap 修正（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R4a・D5・D11・U-R7、付記「R4a 実装時の逸脱・明確化」（11 項目）。
+- 種類: コード（task-core / task-ops / task-api / task-dispatch / celeris）、schema・GUI の型の再生成（GUI の画面は変えていない。R4b）。
+  **migration なし（schema 31 のまま）**。新しい endpoint・欄はすべて読み取りの追加で、`[execution.tree] enabled = false`（既定）では
+  木が無いので 1 節点の木・深さ 1 の group になるだけ。daemon の挙動の変化は途中報告に `child_units` が付くことだけ（子 task を持つ段階の
+  停止点のみ。木が無効なら空で出力もされない）。本番の DB・設定・サービスには触れていない。
+- **パスの逸脱**: ADR の `GET /tasks/{id}/tree` は ADR-0043 D6 の作業ツリーの閲覧が既に使っているため `GET /tasks/{id}/task-tree`（付記 1.）。
+- R4b（GUI）には手を付けていない。
+
+### 実装したもの
+
+- **roll-up の純粋関数**（`task_core::tree_metrics`）: `node_metrics`（1 節点の自分の分）・`rollup`（入力の順に own と subtree。親を辿って
+  足す、64 段で打ち切り）・`by_depth`（U-R7）・`RollupMetrics::{absorb, sum}`。数は role ごとの run（reviewer を含む）・reviewer を除く run・
+  reviewer の run と定価・走っている run・トークン（in / out / 計）・定価と `cost_usd_complete`・quota（(source, account, window) ごと）・壁時計
+  （最初の run の開始 → 最後の run の終わり）と実働時間・leaf と子 task の done / total・未回答の決定。和は件数が和・完全性が論理積・壁時計が
+  最小と最大なので、root の `subtree` = 各節点の `own` の和。
+- **`GET /tasks/{id}/task-tree?root=`**（`task_ops::tree_view::task_tree`）: 節点ごとに id・題名・状態・導出値 `phase`
+  （`TreeNodePhase`: Execution 節の段階 + `awaiting_children` / `awaiting_plan_approval` / `held_on_decision` / `blocked_infra`）・深さ・親・
+  親の unit の key と段階・計画の版・未回答の決定・子・unit の一覧・`own` / `subtree`。view の根が木の root なら木の上限の使用
+  （leaf / run / replan / トークン / 未回答の決定と、回答の余裕を当てた上限）。木の無い task は 1 節点（深さ 1）。
+- **案件の合計**: `GET /projects/{id}` に `root_totals`（root task の数・状態ごとの数・subtree の roll-up の和。quota は数えない）。
+- **`GET /metrics/execution?group_by=depth`**: 深さ（task の層）ごとの group に `rollup`（その深さの task の自分の分の和。U-R7 の
+  「子ごとの reviewer run は高すぎるか」を後で決める指標）。他の `group_by` は変えない。
+- **段階の途中報告の子の要約**: `PhaseReport.child_units`（子ごとに状態・subtree の run〈reviewer〉・定価・子の最新の報告の見出し）。
+  16 KiB の切り詰めは `work_units` の後に落とす。Markdown の成果物に「## この段階の子 task」。
+- **replay の /3 replan の差**: `task_ops::replay::rebuild_work_units_and_runs` がすべての計画の版を畳み込み（`apply_replan_step`）、replan で
+  消えた unit・統合 WU（superseded）と、同じ key で書き直した unit の `runs` / `seq` / `phase` を events だけから同じに作り直す。
+- **配線**: `ApiSettings.tree_limits`（`[execution.tree]` の写し。表示だけ）、`task_ops::view::execution_phase_of`。
+
+### 受け入れ条件（ADR-0079 §7 R4a と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) `rollup_matches_hand_computed_fixture`: root → 子 → 孫の 3 段で、各節点の subtree の run（role ごと・reviewer）・トークン・定価（単価不明の run で `cost_usd_complete = false` が root まで伝わる）・quota（runs 4 / 6.5pt）・壁時計（09:50 → 12:05 = 135 分）と実働時間・leaf 2/3・子 task 1/2・未回答の決定 3 が手計算と一致、root の合計 = 3 節点の `own` の和、深さ別（reviewer 深さ 1: 1 本 $0.50、深さ 3: 1 本 $0.05） | `cargo nextest run -p task-core -E 'test(/tree_metrics/)'` | ok（2 passed） |
+| 木の endpoint（3 段、API）: 前順の節点、孫 / 子 / root の `own` と `subtree`（root: run 3・reviewer 1・トークン 1,595・$1.40・leaf 2/2・子 task 1/2・決定 2・壁時計 65 分・quota 2 run 4.0pt）、`phase`（root `awaiting_children`・子 `held_on_decision`・done の孫は無し）、unit の一覧、上限の使用（leaf 2/40・run 3/120・replan 0/10・決定 2/12）、子の subtree（2 節点・上限なし）、`?root=true` で孫から root の木 | `cargo nextest run -p task-api --test task_tree -E 'test(task_tree_rolls_up_a_three_level_tree_by_hand)'` | ok |
+| (b) `legacy_task_is_a_single_node_tree`: 木が無効・木の無い task は 1 節点（深さ 1・親なし・`own` = `subtree`・run 1 + reviewer 1・$0.22・壁時計 12 分）、`?root=true` も同じ、404 `task_not_found`、`root=maybe`・知らないクエリは 400、作業ツリーの `GET /tasks/{id}/tree` は従来どおり | `… --test task_tree -E 'test(legacy_task_is_a_single_node_tree)'` | ok |
+| 案件の合計: root task 2（`ready` 1・`done` 1。対話 task は数えない）、subtree の和（task 4・run 4・reviewer 1・$1.90・トークン 1,606・決定 2・壁時計 08:00 → 11:05）、quota は空、`tasks[]` は従来どおり 5 件 | `… --test task_tree -E 'test(project_detail_sums_the_root_task_subtrees)'` | ok |
+| `group_by=depth`（U-R7）: group `1` / `2` / `3`、深さ 1 は root 2 件（planner 1・worker 1・$0.60・壁時計 2 時間 1 分）、深さ 2 は run 1・$1.00・quota 3.0pt、深さ 3 は reviewer 1 本 $0.05・計 $0.30。他の `group_by` に `rollup` は出ない、知らない `group_by` の 400 の文言に `depth` | `… --test task_tree -E 'test(execution_metrics_group_by_depth_counts_reviewer_runs_per_depth)'` | ok |
+| 索引の集計とイベントからの参照実装が `depth` を含むすべての `group_by` で一致 | `cargo nextest run -p task-api -E 'test(indexed_summary_matches_event_reference_for_all_groups_and_since)'` | ok |
+| (c) 途中報告に子の要約: `review: human` の段階 s1（leaf a + 子 c）の `PhaseReported.child_units` = `c Child c: done / 1 run（reviewer 0）/ $0.00 — 報告なし`、Markdown の成果物 `1-s1.md` に「## この段階の子 task」、続けると done、replay 差分 0 | `cargo nextest run -p task-dispatch -E 'test(stage_report_lists_child_summaries)'` | ok |
+| 子の要約の組み立て（純粋に近い store の読み取り）: 子の subtree（孫を含む）の run 2（reviewer 1）・$0.50（不完全）・最新の報告の見出し、未作成の unit は「未作成（pending）」、別の段階・superseded は出ない | `cargo nextest run -p task-ops -E 'test(stage_child_summaries_sum_the_child_subtree_and_quote_its_latest_report)'` | ok |
+| (c) 16 KiB の切り詰め: 400 行の `work_units` と `child_units` で `work_units` が先に全部落ち、子の要約は先頭から残り、旧実装（参照）と同じ切り口 | `cargo nextest run -p task-core -E 'test(/pause::tests::(child_unit_summaries_are_truncated_after_work_units|truncate)/)'` | ok |
+| replay の回帰（R3a で外していた）: `plan_invalid` の replan（superseded の a を含む）で `assert_replay_is_clean`（task・`work_units`・計画・決定の差分 0） | `cargo nextest run -p task-dispatch -E 'test(plan_invalid_replan_feeds_the_note_and_adopts_plan_v2)'` | ok |
+| replay の回帰（R3b で外していた）: 計画の承認の replan（b を s2 → s1 へ書き直し、s2 と `integrate-s2` が消える）で `assert_replay_is_clean` | `… -E 'test(approve_replan_and_withdraw_have_their_effects)'` | ok |
+| replay の純粋な回帰: /2 の replan で消えた unit x・`integrate-p2`（superseded）、別の工程へ移した b、新しい c が `--check` で差分 0、superseded の行を消した索引が `--apply` で戻る | `cargo nextest run -p task-ops -E 'test(replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan)'` | ok（replay 12 passed） |
+| 既存の木の試験は変わらず通る | `cargo nextest run -p task-dispatch -E 'test(/tree/)'` | ok（62 passed = R3b の 61 + 1） |
+| (d) `api-v1.schema.json` の差分が追加だけ | `UPDATE_SCHEMA=1 cargo nextest run --workspace -E 'test(/schema/)'` → `git diff docs/api/v1/` | `api-v1.schema.json` は追加 529 行・削除 3 行（削除は `group_by` の説明文 2 つと `required` の末尾の `"decision_outcome"` の行〈`"task_tree"` を足した際のカンマ〉だけ）。`event.schema.json` は `PhaseReport.child_units` の追加 7 行 |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 90（nextest 80 + doc 10）、**passed 2841 / failed 0 / ignored 7**
+  （R3b の 2831 から +10: tree_metrics 2、pause 1、tree_view 1、replay 1、task_tree 4、stage_report 1。R3a / R3b の 2 試験は置き換え）
+- `corepack pnpm@11.27.0 -C gui gen:types` → exit 0、再実行の前後で `gui/app/celeris/types.ts` が同じ（md5 45f66fe0a73d1a23f194e127cde7c8d3）
+- `corepack pnpm@11.27.0 -C gui typecheck` → exit 0 / `lint` → exit 0（Checked 285 files、2 infos〈既存〉）/ `test` → exit 0（Test Files 76、Tests 1176 passed）
+
+### 未解決・R4b 以降へ
+
+- **replan が行の `phase` を書き換えない**（付記 11.、`task_ops::execution::replan`。F5-fix8 が同じファイルを直している最中なので触れていない）:
+  replan で unit が別の段階へ移ると、行は古い段階のままで、その段階の統合 WU に merge されない（git の作業場所では成果が Task ブランチに
+  入らない）。直すときは replay の `apply_replan_step` も同じく `phase` を新しい版にする。
+- D11 の「人を待った時間」は roll-up に入れていない（付記 3.）。`TaskDetail.tree` の要約も足していない（付記 6.）。R4b の GUI で要るなら足す。
+- 途中報告は停止点の段階にしか無いので、停止点でない段階の完了では子の要約がどこにも残らない（付記 9.。D11 の報告の圧縮の全体は R4b / R5 で）。
+- 案件の合計は quota を数えない・`tasks[]` と同じ 2,000 件の範囲（付記 7.）。
+- **R4b**: 木のタブ（`task-tree` の節点・段階・unit・roll-up・上限の使用率）、受信箱の「決定」「計画の承認」の操作、案件ページの root の一覧と
+  `root_totals`、「理由なく止まっています」、語（配送 → 成果の取り込み）。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

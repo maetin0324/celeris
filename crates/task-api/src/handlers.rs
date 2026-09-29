@@ -694,6 +694,9 @@ async fn project_detail(
             let page = store
                 .list_page(&filter, ListOrder::CreatedDesc, None, PROJECT_TASKS_LIMIT)
                 .map_err(store_problem)?;
+            // ADR-0079 D11（Phase R4a）: root task の合計（subtree の roll-up の和）。
+            let root_totals = task_ops::tree_view::project_root_totals(store, &page.items)
+                .map_err(|e| ops_problem(store, e, None))?;
             let tasks = page
                 .items
                 .into_iter()
@@ -720,6 +723,7 @@ async fn project_detail(
                 milestones,
                 tasks,
                 project_plan,
+                root_totals: Some(root_totals),
             })
         })
         .await?;
@@ -3289,6 +3293,7 @@ mod tests {
             knowledge_root: None,
             docs_repo_root: Some(dir.join("workspace")),
             llm_sources: None,
+            tree_limits: task_core::TreeLimits::default(),
         };
         ApiState::new(settings, rx).unwrap_or_else(|e| panic!("{e}"))
     }

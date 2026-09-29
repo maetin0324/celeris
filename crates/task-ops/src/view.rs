@@ -1117,6 +1117,16 @@ fn task_failure(
     }))
 }
 
+/// ADR-0079 D11（Phase R4a）: Execution 節の段階（[`ExecutionPhase`]）だけ（木の節点の表示用。
+/// `GET /tasks/{id}/task-tree`）。Execution 節を持たない task は `None`。
+pub fn execution_phase_of(
+    store: &dyn TaskStore,
+    task: &Task,
+    events: &[(u64, Event)],
+) -> Result<Option<ExecutionPhase>, OpsError> {
+    Ok(build_execution_view(store, task, events)?.and_then(|v| v.phase))
+}
+
 /// ADR-0072 D19/D20（Phase E5）: Execution 節の組み立て。events に E-phase 由来の活動が 1 件も
 /// 無ければ `None`（D23 の後方互換。既存の古いタスクの詳細を壊さない）。
 fn build_execution_view(

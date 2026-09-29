@@ -681,6 +681,14 @@ fn render_phase_report_markdown(report: &task_core::PhaseReport) -> String {
         }
         out.push('\n');
     }
+    // ADR-0079 D11（Phase R4a）: 子 task の要約。
+    if !report.child_units.is_empty() {
+        out.push_str("## この段階の子 task\n\n");
+        for line in &report.child_units {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
     if !report.integration.is_empty() {
         out.push_str("## 統合\n\n");
         for line in &report.integration {
@@ -10678,11 +10686,18 @@ impl Dispatcher {
         artifact_paths.sort();
         artifact_paths.dedup();
 
+        // ADR-0079 D5 / D11（Phase R4a）: この段階の子 task ごとの要約の行（状態・subtree の run と定価・子の報告の見出し）。
+        let child_units = task_ops::tree_view::stage_child_summaries(self.store.as_ref(), units, phase)
+            .unwrap_or_else(|e| {
+                tracing::warn!(task_id = %task.id, %phase, error = %e, "could not summarise the stage's child tasks");
+                Vec::new()
+            });
         let mut report = task_core::PhaseReport {
             phase: phase.to_string(),
             phase_title: phase_title_of(phase),
             phases_done,
             work_units,
+            child_units,
             integration,
             diff_stat,
             next_phase: next_key.map(|k| k.to_string()),

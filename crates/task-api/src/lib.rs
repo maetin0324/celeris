@@ -231,6 +231,9 @@ pub struct ApiSettings {
     /// ADR-0080 D5: human attestation の公開鍵と credential broker の control IPC。既定（どちらも無し）では
     /// 人の登録・決定は 503 `browser_unavailable`。
     pub browser: browser::BrowserApiConfig,
+    /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]` の上限（`GET /tasks/{id}/task-tree` の
+    /// `tree_enabled` と上限の使用率に使う。挙動は変えない）。
+    pub tree_limits: task_core::TreeLimits,
 }
 
 /// ADR-0043 D5（Phase 54）: `[github]` の写し。celeris が設定から渡す（task-api は TOML を読まない）。

@@ -1187,3 +1187,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 後続 **R6-5**（R6-1 の後、dispatcher）: task 間の公平性（round-robin、task ごとの同時数 ≤ 全体枠 − 1）。
 - **人の判断待ち**: D7（remote workspace の木: 子ブランチ/統合をクラスタ側で実装するか、remote の親では葉だけに制限するか）、D4（人の answer で attempts を
   reset するか。ADR 要）。
+- 22:44Z: P4-A の子 01M3QGRC542ZC23996DNCTHZF5 に `stall_detected {nothing_runnable}`（人に障害通知）。原因は既知バグ「replan で unit の phase が
+  更新されない」の実害: planner v2 が `restore-binding` を段階 relay → verify（dep prod-launch）に移したが行は `phase = relay` のまま →
+  `integrate-relay` が永遠に待ち、verify 側の依存も満たせない膠着。R6-4 で修正中（再現条件を伝達）。当面の解消は人の replan（unit を
+  `restore-binding-2` に付け替え、内容同じ）。Fable の PUT は classifier に拒否されたため body を用意して人に依頼（scratchpad `p4a-plan-put.json`）。

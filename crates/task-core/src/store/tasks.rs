@@ -711,4 +711,59 @@ impl SqliteStore {
             Ok(out)
         })
     }
+
+    pub(super) fn update_task_impl(&self, task: &Task, event: Event) -> Result<Task, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(current) = Self::get_locked(&tx, task.id)? else {
+            return Err(StoreError::Invalid(format!("task not found: {}", task.id)));
+        };
+        // 状態機械が持つ 3 つ（`status` / `attempts` / `lease`）だけは**この tx の中で読んだ行**の値を使う。
+        // 編集を組み立てている間にディスパッチャが `acquire_lease` を通していたら、渡された `task` は
+        // 古い `ready` / `lease: None` を持っている。そのまま書くと `json` と `status` 列が食い違い、
+        // そのタスクは二度と dispatch されず run の結果も捨てられる（Phase 53 の監査で発見）。
+        let merged = Task {
+            status: current.status,
+            attempts: current.attempts,
+            lease: current.lease.clone(),
+            ..task.clone()
+        };
+        Self::update_task_tx(&tx, &merged)?;
+        Self::append_event_tx(&tx, task.id, &event)?;
+        tx.commit()?;
+        Ok(merged)
+    }
+
+    pub(super) fn extend_task_lease_impl(
+        &self,
+        task_id: TaskId,
+        ttl: StdDuration,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(mut task) = Self::get_locked(&tx, task_id)? else {
+            return Ok(false);
+        };
+        if task.status != Status::Running {
+            return Ok(false);
+        }
+        let expires_at = OffsetDateTime::now_utc()
+            + time::Duration::new(ttl.as_secs() as i64, ttl.subsec_nanos() as i32);
+        let Some(lease) = task.lease.as_mut() else {
+            return Ok(false);
+        };
+        if lease.expires_at < expires_at {
+            lease.expires_at = expires_at;
+            tx.execute(
+                "UPDATE tasks SET lease_expires_at = ?1, json = ?2 WHERE id = ?3",
+                params![
+                    format_rfc3339(expires_at)?,
+                    serde_json::to_string(&task)?,
+                    task_id.to_string(),
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
 }

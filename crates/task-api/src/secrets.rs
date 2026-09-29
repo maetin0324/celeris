@@ -173,5 +173,5 @@ pub fn list_secret_files(dir: &Path) -> Result<Vec<SecretMeta>, SecretFileError>
 }
 
 #[cfg(test)]
-#[path = "secrets/tests.rs"]
+#[path = "secrets_tests.rs"]
 mod tests;

@@ -912,3 +912,6 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+**昇格**: release `9aeb1b721649`（main 9aeb1b7 = R5b-prep）を 2026-09-29 06:55:40Z にライブ昇格（backup 20260929-065531-pre-9aeb1b721649、verify ok / live_ok、schema 33）。R5b の手順 1（`[execution.tree] enabled = true` と再起動）から人の実行に入る。
+

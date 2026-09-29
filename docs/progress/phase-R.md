@@ -1154,3 +1154,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 20:14Z 人の指示「chatgpt / claude ともアカウントごとに 2 run、全体 6」: config を Fable が変更（backup `config.toml.bak-20260929-2020`）:
   `max_concurrency = 6`、claude-pool `concurrency = 4`（lab / personal × 2）、codex-pool `concurrency = 2`（chatgpt_plus_personal × 2）、
   `[accounts] max_runs_per_account` は既定 2 のまま。`POST /reload` でプールは 4 / 2 に反映済み。`max_concurrency` は起動時固定なので再起動が要る（人）。
+- 20:3xZ 人「TanStack で web 画面を作る task が無くなった。動かして」: web Phase 0（failed、成果は main 884606d）の後続として root task
+  **01M3QE4D330YESFT6FY8G50R12**「web: 新 Web GUI（ADR-0081、TanStack SPA + 薄い gateway）の実装 — Phase 1〜6」を案件 agent-platform に作成
+  （stages_hint 5: Phase 1 / 2 / 3 / 4 / 5〜6、objective は docs/web/implementation-plan.md を正本に、H1〜H10 は「決まるまでの扱い」、Phase 7 は範囲外、
+  P6-04 は H6/H7 の後）→ `decompose {compound}`（人の explicit）→ accept → ready。planner の /3 計画は PlanGate で人が確認する。

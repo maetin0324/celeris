@@ -72,3 +72,18 @@ ADR-0018 D4 は「クラスタのディレクトリを丸ごと手元へ pull �
 - `SshWorkspace` に worktree の準備（`git worktree add` と sparse-checkout）を足し、以降の同期・コマンド実行の対象を worktree にする。
 - `TaskDetail` / `GET /tasks/{id}` に `worktree`（パスとブランチ）を出す。
 - テストは localhost の git リポジトリで行う（外部ネットワークに出ない）。実クラスタでの確認は人の操作を伴う。
+
+## 付記: Phase R6-3: クラスタの worktree は git submodule を初期化する（2026-09-29）
+
+本番の task 01M3Q25DSD895DGMGPWD752G3G（sirius の BenchFS。submodule `lib/locusta` / `lib/pluvio` / `ior_integration/ior`）で、
+`git worktree add` の直後の worktree は submodule のディレクトリが空で Cargo の path 依存が解決できず、worker が決定
+`provision-submodules` を上げた（人が remote-exec の一度きりの `git submodule update --init --recursive` を許可した）。
+
+- 決定: `SshWorkspace::ensure_worktree` は worktree を作った後・使い回すときも、同じ ssh のスクリプトの中で、`<worktree>/.gitmodules` が
+  あり `git -C <worktree> submodule status --recursive` に行頭 `-`（未初期化）が 1 つでもあれば `git -C <worktree> submodule update --init --recursive`
+  する。全部初期化済み・`.gitmodules` 無しなら何もしない（冪等、再利用で落ちない）。submodule は worktree ごとの `modules/` に clone されるので、
+  このステップの前に worktree 作成の `flock` を外す（大きな submodule の clone で他のタスクの worktree 作成を待たせない）。
+- 失敗（exit 67）は黙らず `WorkspaceError::Remote("cannot initialise the git submodules of the worktree <wt> on <cluster> …")`（= prepare の失敗）。
+- 進行: 初期化したら `initialised N submodules in <worktree> on cluster <cluster>`（N は初期化後の `submodule status --recursive` の行数）を
+  tracing に出し、`SshWorkspace::take_progress_notes()` で取り出せるようにした。`WorkerProgress` に積む配線は task-dispatch 側（未実装）。
+- ローカル（ADR-0041 の `LocalWorktree::ensure_blocking`、task-worker/src/local_worktree.rs）にも同じステップ（`init_submodules`）を足した。

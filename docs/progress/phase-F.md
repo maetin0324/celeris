@@ -2250,3 +2250,6 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
   planner が 11 > 10 で拒否された原因）。done の持ち越しを上限から外すか、replan では上限を「新しく足す WU の数」に数えるかは提案に留める。
 - 人の明示の replan の依頼（`execution_hint_set{replan: true}`）が `max_replans` の使い切りで黙って（WARN だけで）落ちる。依頼を受けた
   時点で API が 409 を返すか、`worker_progress` を 1 件残すかは次の判断に回す。
+
+**昇格と本番確認**: release `a8ed75460c78`（main a8ed754 = R3b + F5-fix9）を 2026-09-29 03:28:42Z にライブ昇格（backup 20260929-032832-pre-a8ed75460c78、verify ok / live_ok、schema 31）。昇格の 4 秒前まで `ready` で止まっていた Phase 2 task 01M3MZKB3DFYJNBH015MJGQ0BT は 03:28:38Z（新 daemon の最初の tick）に `transitioned ready→reviewing (plan_complete)` で最終 review（reviewer run 01M3NKA4F1P2Z1R51PTJ3NY6A2）に進んだ。
+

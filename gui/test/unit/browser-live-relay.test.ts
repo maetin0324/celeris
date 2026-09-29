@@ -1,8 +1,10 @@
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthConfig, issueSessionCookie, readValidSession, setAuthConfigForTest } from "~/auth.server";
+import { setAttestationKeyForTest } from "~/browser-attestation.server";
 import {
   approveOwnerChallenge,
   issueOwnerChallenge,
@@ -39,7 +41,7 @@ import {
 } from "~/celeris/ws-codec.server";
 import { action as logoutAction } from "~/routes/logout";
 import { app } from "../../server/app";
-import { type MockCeleris, sendJson, startMockCeleris } from "../mock-celeris/server";
+import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 // ADR-0080 D6: 固定版 dashboard の同一 origin・読み取り専用 relay。偽の upstream（dashboard 相当の HTTP + WS）を
 // loopback の ephemeral port に立て、server/app.ts の express app と `upgrade` の relay を通して確かめる。
@@ -178,10 +180,36 @@ let gui: Server;
 let base: string;
 let guiPort: number;
 let runState: BrowserRun["state"];
+let liveDenied: string | null;
+let readPlan: { kind: "replay"; after_seq: number } | { kind: "reset"; latest_seq: number };
+let liveEvents: Array<{ seq: number; body: Record<string, unknown> }>;
 
 beforeEach(async () => {
   runState = "RUNNING";
+  liveDenied = null;
+  readPlan = { kind: "replay", after_seq: 0 };
+  liveEvents = [];
   mock = await startMockCeleris();
+  setAttestationKeyForTest(generateKeyPairSync("ed25519").privateKey);
+  const livePath = "/api/v1/tasks/T1/browser/live/R1/S1";
+  mock.on("POST", `${livePath}/grant`, (_req, res, body) => {
+    const claims = JSON.parse(JSON.parse(body).assertion.payload);
+    if (claims.task_id !== "T1" || claims.run_id !== "R1" || claims.browser_session_id !== "S1") {
+      sendProblem(res, { status: 403, code: "other_task", detail: "denied" });
+    } else if (liveDenied) {
+      sendProblem(res, { status: 403, code: liveDenied, detail: "denied" });
+    } else sendJson(res, 200, { grant_id: "G1", expires_at: 4_000_000_000 });
+  });
+  for (const suffix of ["check", "read"])
+    mock.on("POST", `${livePath}/${suffix}`, (_req, res, body) => {
+      const claims = JSON.parse(JSON.parse(body).assertion.payload);
+      if (claims.task_id !== "T1" || claims.run_id !== "R1" || claims.browser_session_id !== "S1") {
+        sendProblem(res, { status: 403, code: "other_task", detail: "denied" });
+      } else if (liveDenied) {
+        sendProblem(res, { status: liveDenied === "grant_expired" ? 410 : 409, code: liveDenied, detail: "denied" });
+      } else if (suffix === "read") sendJson(res, 200, { plan: readPlan, events: liveEvents });
+      else sendJson(res, 200, { connected: true });
+    });
   mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [{ id: "T1", status: "running" }] }));
   mock.on("GET", "/api/v1/tasks/T1", (_req, res) => sendJson(res, 200, runningTask));
   mock.on("GET", "/api/v1/tasks/T1/events", (_req, res) => sendJson(res, 200, browserEvents(runState)));
@@ -202,6 +230,7 @@ afterEach(async () => {
   resetLiveViewRelayConnectionsForTest();
   setLiveViewRevalidateMsForTest(undefined);
   setLiveViewRelayForTest(undefined);
+  setAttestationKeyForTest(undefined);
   setAuthConfigForTest(undefined);
   resetOwnerStoreForTest();
   gui.closeAllConnections();
@@ -335,7 +364,8 @@ describe("Live View relay (owner)", () => {
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("x-upstream-secret")).toBeNull();
     const body = await res.text();
-    expect(body).toBe(UPSTREAM_HTML);
+    expect(body).toContain(UPSTREAM_HTML.slice(0, 40));
+    expect(body).toContain('id="celeris-live-events"');
     expect(body).not.toContain(DASHBOARD);
     const seen = upstream.requests.find((r) => r.url.startsWith("/?") || r.url === "/");
     expect(seen).toMatchObject({
@@ -534,6 +564,52 @@ describe("Live View relay (owner)", () => {
     mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [{ id: "T2", status: "running" }] }));
     mock.on("GET", "/api/v1/tasks/T2/browser/waits", (_req, res) => sendJson(res, 404, {}));
     expect((await get("/browser/live/T1/R1", owner)).status).toBe(503);
+  });
+});
+
+describe("task-api live grant and reconnect", () => {
+  it("rejects another task's grant before opening the dashboard", async () => {
+    const owner = await loginCookie();
+    await makeOwner(owner);
+    liveDenied = "other_task";
+    expect((await get("/browser/live/T1/R1", owner)).status).toBe(403);
+    expect(upstream.requests).toEqual([]);
+  });
+
+  it.each(["grant_expired", "run_ended", "observation_stopped"])(
+    "closes an existing stream when %s is denied",
+    async (reason) => {
+      setLiveViewRevalidateMsForTest(50);
+      const owner = await loginCookie();
+      await makeOwner(owner);
+      expect((await get("/browser/live/T1/R1?port=9222", owner)).status).toBe(200);
+      const conn = await openWs("/api/session/9222/stream", owner);
+      const client = collect(conn);
+      await until(() => client.messages.some((m) => m.opcode === WS_OP.TEXT));
+      liveDenied = reason;
+      await client.ended;
+      expect(client.messages.some((m) => m.opcode === WS_OP.CLOSE)).toBe(true);
+    },
+  );
+
+  it("replays only events after last_seen and resets an out-of-range cursor", async () => {
+    const owner = await loginCookie();
+    await makeOwner(owner);
+    await get("/browser/live/T1/R1?port=9222", owner);
+    readPlan = { kind: "replay", after_seq: 4 };
+    liveEvents = [{ seq: 5, body: { kind: "status", state: "running" } }];
+    const first = await openWs("/api/session/9222/stream?last_seen=4", owner);
+    const firstClient = collect(first);
+    await until(() => firstClient.messages.some((m) => m.payload.includes('"seq":5')));
+    expect(firstClient.messages.some((m) => m.payload.includes('"seq":4'))).toBe(false);
+    first.socket.destroy();
+    readPlan = { kind: "reset", latest_seq: 9 };
+    liveEvents = [];
+    const second = await openWs("/api/session/9222/stream?last_seen=1", owner);
+    const secondClient = collect(second);
+    await until(() => secondClient.messages.some((m) => m.payload.includes('"live_reset"')));
+    expect(secondClient.messages.some((m) => m.payload.includes('"latest_seq":9'))).toBe(true);
+    second.socket.destroy();
   });
 });
 

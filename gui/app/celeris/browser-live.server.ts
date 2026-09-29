@@ -1,8 +1,10 @@
 import { request as httpRequest } from "node:http";
+import { signLiveAssertion } from "~/browser-attestation.server";
 import { checkOwner, onOwnerRevoked } from "~/browser-owner.server";
 import { activeBrowserRunIds, inAuthInterval, safeBrowserLiveUrl } from "~/lib/browser";
 import { loadBrowserRuns, loadTaskBrowserWaits } from "./browser";
 import { type CelerisClient, getCelerisClient } from "./client.server";
+import { CelerisError } from "./errors";
 import type { BrowserRun, BrowserWait, BrowserWaitList, TaskDetail, TaskList } from "./types";
 
 /**
@@ -196,6 +198,8 @@ export function cachedLiveViewGuard(taskId: string, runId: string): Promise<Live
 export interface LiveViewBinding {
   taskId: string;
   runId: string;
+  browserSessionId: string;
+  grantId: string;
   boundAtMs: number;
 }
 
@@ -211,9 +215,98 @@ function ensureRevokeSubscription(): void {
   onOwnerRevoked(clearBindingsOnRevoke);
 }
 
-export function bindLiveView(sessionHash: string, taskId: string, runId: string, now = Date.now()): void {
+export function bindLiveView(
+  sessionHash: string,
+  taskId: string,
+  runId: string,
+  browserSessionId: string,
+  grantId: string,
+  now = Date.now(),
+): void {
   ensureRevokeSubscription();
-  bindings.set(sessionHash, { taskId, runId, boundAtMs: now });
+  bindings.set(sessionHash, { taskId, runId, browserSessionId, grantId, boundAtMs: now });
+}
+
+export type LiveApiResult = { ok: true } | { ok: false; status: number; code: string };
+
+function liveApiPath(binding: Pick<LiveViewBinding, "taskId" | "runId" | "browserSessionId">): string {
+  return `/tasks/${encodeURIComponent(binding.taskId)}/browser/live/${encodeURIComponent(binding.runId)}/${encodeURIComponent(binding.browserSessionId)}`;
+}
+
+function liveApiFailure(error: unknown): LiveApiResult {
+  if (error instanceof CelerisError) {
+    const allowed = new Set([
+      "other_task",
+      "grant_expired",
+      "run_ended",
+      "observation_stopped",
+      "not_owner_session",
+      "origin_mismatch",
+      "live_view_disabled",
+    ]);
+    return { ok: false, status: error.status, code: allowed.has(error.code) ? error.code : "live_view_denied" };
+  }
+  return { ok: false, status: 503, code: "live_view_guard_unavailable" };
+}
+
+function liveAssertion(binding: Pick<LiveViewBinding, "taskId" | "runId" | "browserSessionId">, sessionHash: string) {
+  return signLiveAssertion({
+    taskId: binding.taskId,
+    runId: binding.runId,
+    browserSessionId: binding.browserSessionId,
+    ownerSessionId: sessionHash,
+    originOk: true,
+  });
+}
+
+export async function grantLiveView(
+  client: CelerisClient,
+  run: BrowserRun,
+  sessionHash: string,
+): Promise<{ ok: true; grantId: string } | Exclude<LiveApiResult, { ok: true }>> {
+  const binding = { taskId: run.task_id, runId: run.run_id, browserSessionId: run.session_id };
+  const assertion = liveAssertion(binding, sessionHash);
+  if (!assertion) return { ok: false, status: 503, code: "attestation_unavailable" };
+  try {
+    const result = await client.post<{ grant_id: string }>(`${liveApiPath(binding)}/grant`, { assertion });
+    return { ok: true, grantId: result.grant_id };
+  } catch (error) {
+    return liveApiFailure(error) as Exclude<LiveApiResult, { ok: true }>;
+  }
+}
+
+export async function checkLiveGrant(binding: LiveViewBinding, sessionHash: string): Promise<LiveApiResult> {
+  const assertion = liveAssertion(binding, sessionHash);
+  if (!assertion) return { ok: false, status: 503, code: "attestation_unavailable" };
+  try {
+    await liveViewClient().post(`${liveApiPath(binding)}/check`, { assertion, grant_id: binding.grantId });
+    return { ok: true };
+  } catch (error) {
+    return liveApiFailure(error);
+  }
+}
+
+export interface LiveReadPage {
+  plan: { kind: "replay"; after_seq: number } | { kind: "reset"; latest_seq: number };
+  events: Array<{ seq: number; body: Record<string, unknown> }>;
+}
+
+export async function readLiveEvents(
+  binding: LiveViewBinding,
+  sessionHash: string,
+  after: number,
+): Promise<LiveReadPage | null> {
+  const assertion = liveAssertion(binding, sessionHash);
+  if (!assertion) return null;
+  try {
+    return await liveViewClient().post<LiveReadPage>(
+      `${liveApiPath(binding)}/read`,
+      { assertion, grant_id: binding.grantId },
+      { query: { after } },
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function liveViewBinding(sessionHash: string): LiveViewBinding | null {
@@ -314,6 +407,17 @@ function entryUpstreamPath(search: string): string {
   return port && /^\d{1,5}$/.test(port) ? `/?port=${port}` : "/";
 }
 
+/** The dashboard remains read-only; this small companion presents persisted live events beside it. */
+function withLiveEvents(result: UpstreamResult, taskId: string, runId: string, search: string): UpstreamResult {
+  if (result.status !== 200 || !/^text\/html\b/i.test(result.contentType ?? "")) return result;
+  const port = new URLSearchParams(search).get("port");
+  if (!port || !/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) return result;
+  const html = result.body.toString("utf8");
+  if (!/<\/body>/i.test(html)) return result;
+  const script = `<aside id="celeris-live-events" aria-label="Live events" style="position:fixed;right:0;top:0;z-index:2147483647;width:240px;max-height:45vh;overflow:auto;background:#111;color:#eee;font:12px sans-serif;padding:8px"><strong>Live events</strong><div id="celeris-live-status"></div><div id="celeris-live-tabs"></div><div id="celeris-live-url"></div><div id="celeris-live-console"></div></aside><script>(()=>{const base="/browser/live/${taskId}/${runId}/api/session/${port}/stream";const key="celeris-live:${taskId}:${runId}";let seen=Number(sessionStorage.getItem(key)||0);let delay=250;function put(id,value){document.getElementById("celeris-live-"+id).textContent=String(value??"")}function connect(){const ws=new WebSocket(base+"?last_seen="+seen);ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch{return}if(m.type==="live_reset"){seen=m.latest_seq;sessionStorage.setItem(key,String(seen));put("status","Reset: current state")}if(m.type==="live_snapshot"){put(m.path,JSON.stringify(m.value))}if(m.type==="live_event"&&m.seq>seen){seen=m.seq;sessionStorage.setItem(key,String(seen));const b=m.body||{};if(b.kind==="status")put("status",b.state);if(b.kind==="tabs")put("tabs",b.count+" tabs: "+(b.origins||[]).join(", "));if(b.kind==="url")put("url",b.url);if(b.kind==="console")put("console",b.level+": "+b.text)}};ws.onopen=()=>{delay=250};ws.onclose=()=>{setTimeout(connect,delay);delay=Math.min(delay*2,5000)}}connect()})()</script>`;
+  return { ...result, body: Buffer.from(html.replace(/<\/body>/i, `${script}</body>`), "utf8") };
+}
+
 /**
  * `/browser/live/:taskId/:runId`（他の method・upgrade も同じ guard を通して拒否する）。
  * express の relay と React Router の route の両方がこれを使う。
@@ -332,15 +436,17 @@ export async function runLiveViewRoute(
   if (!taskId || !runId || !ID_RE.test(taskId) || !ID_RE.test(runId)) return liveViewPlain(404, "not_found");
   const guard = await checkLiveViewRun(client, taskId, runId, request.signal);
   if (!guard.ok) return liveViewPlain(guard.status, guard.code);
+  const grant = await grantLiveView(client, guard.run, owner.sessionHash);
+  if (!grant.ok) return liveViewPlain(grant.status, grant.code);
   const upstream = liveViewUpstream();
   // 未設定なら、guard を通った本人にも relay を開かない。
   if (!upstream) return liveViewPlain(503, "live_view_relay_unavailable");
-  bindLiveView(owner.sessionHash, taskId, runId);
+  bindLiveView(owner.sessionHash, taskId, runId, guard.run.session_id, grant.grantId);
   let result: UpstreamResult;
   try {
     result = await upstreamGet(upstream, entryUpstreamPath(new URL(request.url).search));
   } catch {
     return liveViewPlain(502, "live_view_upstream_unavailable");
   }
-  return relayResponse(result, { html: true });
+  return relayResponse(withLiveEvents(result, taskId, runId, new URL(request.url).search), { html: true });
 }

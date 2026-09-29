@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+//! `[memory]`（ADR-0033 D6）と `[knowledge]`（ADR-0047）: 長期記憶と知識ベースの置き場。
+
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -136,5 +138,35 @@ impl Config {
             path: memory.dir.clone(),
             source,
         })
+    }
+}
+
+impl MemoryConfig {
+    /// ADR-0033 D6 / ADR-0045 D2: `[memory] dir` は `~` を展開し、相対なら設定ファイルのディレクトリ基準。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        self.dir = task_core::expand_home(&self.dir, task_core::home_dir().as_deref());
+        if self.dir.is_relative() {
+            self.dir = base.join(&self.dir);
+        }
+    }
+}
+
+impl KnowledgeConfig {
+    /// ADR-0047 D1（Phase 61）: `[knowledge] root` も同じ扱い（既定の `~/.local/share/celeris/knowledge` もここで絶対パスになる）。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        self.root = task_core::expand_home(&self.root, task_core::home_dir().as_deref());
+        if self.root.is_relative() {
+            self.root = base.join(&self.root);
+        }
+    }
+
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        // ADR-0047 D2（Phase 61）: `[knowledge] default_mounts` の綴り（間違いで黙って無視しない）。
+        if let Err(why) = self.mounts() {
+            return Err(ConfigError::Invalid(format!(
+                "[knowledge] default_mounts: {why}"
+            )));
+        }
+        Ok(())
     }
 }

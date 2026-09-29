@@ -1,11 +1,13 @@
+//! `[[providers]]` と `providers_include`（ADR-0012 / ADR-0017 M1）。
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use task_core::Tier;
+use task_core::{AccountAdapter, Tier};
 use task_dispatch::ProviderSpec;
 
-use super::{Config, ConfigError};
+use super::{AccountsConfig, Config, ConfigError};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -123,4 +125,115 @@ impl Config {
             })
             .collect()
     }
+}
+
+/// ADR-0027 D3: 行ごとの `settings` の上書きも `[adapters.paperqa]` と同じ基準（設定ファイルのディレクトリ）で絶対化する。
+pub(super) fn resolve_provider_settings(providers: &mut [ProviderConfig], base: &Path) {
+    for p in providers {
+        if let Some(settings) = &p.settings
+            && Path::new(settings).is_relative()
+        {
+            p.settings = Some(base.join(settings).to_string_lossy().into_owned());
+        }
+    }
+}
+
+/// `[[providers]]` の検証。`account_pool = true` の行は `[accounts]` の根ディレクトリも見る。
+pub(super) fn validate_providers(
+    providers: &[ProviderConfig],
+    accounts: Option<&AccountsConfig>,
+) -> Result<(), ConfigError> {
+    if providers.is_empty() {
+        return Err(ConfigError::Invalid(
+            "at least one [[providers]] entry is required".into(),
+        ));
+    }
+    let mut seen_ids = std::collections::HashSet::new();
+    for p in providers {
+        if p.account_id.is_some() && !p.account_pool {
+            return Err(ConfigError::Invalid(format!(
+                "provider {}: account_id requires account_pool",
+                p.id
+            )));
+        }
+        if !p.tier_models.is_empty() && !matches!(p.adapter.as_str(), "claude-code" | "codex") {
+            return Err(ConfigError::Invalid(format!(
+                "provider {}: tier_models supported only for Claude/GPT",
+                p.id
+            )));
+        }
+
+        // ADR-0012 D1: アダプタのインスタンスはプロバイダ ID で引くので重複は許さない。
+        if !seen_ids.insert(p.id.as_str()) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate provider id {:?}",
+                p.id
+            )));
+        }
+        if p.adapter != task_worker::FakeAdapter::ID
+            && p.adapter != task_worker::ClaudeCodeAdapter::ID
+            && p.adapter != task_worker::CodexAdapter::ID
+            && p.adapter != task_worker::AiderAdapter::ID
+            && p.adapter != task_worker::AcpAdapter::ID
+            && p.adapter != task_worker::PaperQaAdapter::ID
+            && p.adapter != task_worker::LdrAdapter::ID
+            && p.adapter != task_worker::LangMemAdapter::ID
+        {
+            return Err(ConfigError::Invalid(format!(
+                "provider {}: adapter {:?} is not available in this build (fake, claude-code, codex, aider, acp, paperqa, local-deep-research, langmem only)",
+                p.id, p.adapter
+            )));
+        }
+        if p.concurrency == 0 {
+            return Err(ConfigError::Invalid(format!(
+                "provider {}: concurrency must be >= 1",
+                p.id
+            )));
+        }
+        // ADR-0026 D2: `command`/`args` は `adapter = "acp"` の行だけで意味を持つ。他のアダプタに書いたら
+        // 静かに無視せず設定エラーにする（書いた本人の勘違いを早く見つけるため）。
+        if p.adapter != task_worker::AcpAdapter::ID && (p.command.is_some() || p.args.is_some()) {
+            return Err(ConfigError::Invalid(format!(
+                "provider {}: command/args are only allowed when adapter = \"acp\" (ADR-0026 D2)",
+                p.id
+            )));
+        }
+        // ADR-0027 D3: `settings` は `adapter = "paperqa"` の行だけで意味を持つ（acp の `command`/`args` と同じ考え方）。
+        if p.adapter != task_worker::PaperQaAdapter::ID && p.settings.is_some() {
+            return Err(ConfigError::Invalid(format!(
+                "provider {}: settings is only allowed when adapter = \"paperqa\" (ADR-0027 D3)",
+                p.id
+            )));
+        }
+        // ADR-0024 D2 / ADR-0025 D1: `account_pool = true` は claude-code か codex だけ、かつ `[accounts]` に
+        // そのアダプタの根ディレクトリが設定されている必要がある。
+        if p.account_pool {
+            let Some(account_adapter) = AccountAdapter::parse(&p.adapter) else {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: account_pool = true requires adapter = \"claude-code\" or \"codex\"",
+                    p.id
+                )));
+            };
+            match accounts {
+                Some(accounts) if accounts.root_for(account_adapter).is_some() => {}
+                Some(_) => {
+                    return Err(ConfigError::Invalid(format!(
+                        "provider {}: account_pool = true requires [accounts] {} to be set",
+                        p.id,
+                        match account_adapter {
+                            AccountAdapter::ClaudeCode => "claude_dir",
+                            AccountAdapter::Codex => "codex_dir",
+                        }
+                    )));
+                }
+                None => {
+                    return Err(ConfigError::Invalid(format!(
+                        "provider {}: account_pool = true requires an [accounts] section",
+                        p.id
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }

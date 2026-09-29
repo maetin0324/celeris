@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+//! `[api]`（ADR-0013 D3 / D11）: HTTP API の待ち受けとトークン。
+
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -45,5 +47,39 @@ impl ApiConfig {
             )));
         }
         Ok(Some(token.to_string()))
+    }
+}
+
+impl ApiConfig {
+    /// `token_file` と browser 系のパスは、相対なら設定ファイルのディレクトリ基準（`~` は展開しない）。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        if let Some(token_file) = &self.token_file
+            && token_file.is_relative()
+        {
+            self.token_file = Some(base.join(token_file));
+        }
+        for slot in [
+            &mut self.browser_attestation_public_key_file,
+            &mut self.browser_credentiald_control_socket,
+        ] {
+            if let Some(path) = slot.as_ref()
+                && path.is_relative()
+            {
+                *slot = Some(base.join(path));
+            }
+        }
+    }
+
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        // ADR-0013 D11: loopback 以外で API をリッスンするならトークンを必須にする。
+        if let Some(listen) = self.listen
+            && !listen.ip().is_loopback()
+            && self.token_file.is_none()
+        {
+            return Err(ConfigError::Invalid(format!(
+                "[api] listen = {listen} is not a loopback address; token_file is required"
+            )));
+        }
+        Ok(())
     }
 }

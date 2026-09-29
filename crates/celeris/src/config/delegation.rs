@@ -1,7 +1,9 @@
+//! `[delegation]`（ADR-0016 D2 / ADR-0021 D4）: 実行中の委譲の上限。
+
 use serde::Deserialize;
 use task_core::DelegationLimits;
 
-use super::Config;
+use super::{Config, ConfigError};
 
 /// `[delegation]`（ADR-0016 D2 / M6）: 実行中の委譲の上限。既定は `task_core::DelegationLimits::default()` と同じ。
 #[derive(Debug, Clone, Deserialize)]
@@ -59,5 +61,34 @@ impl Config {
                 _ => task_core::OnChildFailure::RetryThenAsk,
             },
         }
+    }
+}
+
+impl DelegationConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        // ADR-0016 D2 / M6: 0 の上限は「委譲を止める」ではなく設定ミス（拒否理由が毎回出るだけ）なので拒否する。
+        // ADR-0021 D4: 知らない値は設定エラー（黙って既定に落とさない）。
+        if !matches!(self.on_child_failure.as_str(), "retry_then_ask" | "ignore") {
+            return Err(ConfigError::Invalid(format!(
+                "[delegation] on_child_failure must be \"retry_then_ask\" or \"ignore\" (got {:?})",
+                self.on_child_failure
+            )));
+        }
+        if self.max_delegate_per_run == 0 {
+            return Err(ConfigError::Invalid(
+                "[delegation] max_delegate_per_run must be >= 1".to_string(),
+            ));
+        }
+        if self.max_tree_depth == 0 {
+            return Err(ConfigError::Invalid(
+                "[delegation] max_tree_depth must be >= 1".to_string(),
+            ));
+        }
+        if self.max_tree_runs == 0 {
+            return Err(ConfigError::Invalid(
+                "[delegation] max_tree_runs must be >= 1".to_string(),
+            ));
+        }
+        Ok(())
     }
 }

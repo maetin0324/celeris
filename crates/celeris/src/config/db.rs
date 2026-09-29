@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+//! `db`（ADR-0064 D1）: 文字列でも `[db]` テーブルでも書ける DB の設定。
+
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -110,5 +112,25 @@ impl<'de> Deserialize<'de> for DbConfig {
                 backup_keep: t.backup_keep,
             },
         })
+    }
+}
+
+impl DbConfig {
+    /// ADR-0045 D2 / ADR-0064 D1: `db` の既定は `~/.local/celeris/celeris.sqlite3`。`~` を展開して
+    /// から、それでも相対なら従来どおり設定ファイルのディレクトリ基準にする。`[db] backup_dir` も
+    /// 同じ規則（省略時は触らない）。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        self.path = task_core::expand_home(&self.path, task_core::home_dir().as_deref());
+        if self.path.is_relative() {
+            self.path = base.join(&self.path);
+        }
+        if let Some(backup_dir) = &self.backup_dir {
+            let expanded = task_core::expand_home(backup_dir, task_core::home_dir().as_deref());
+            self.backup_dir = Some(if expanded.is_relative() {
+                base.join(&expanded)
+            } else {
+                expanded
+            });
+        }
     }
 }

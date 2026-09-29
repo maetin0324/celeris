@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+//! `[[harnesses]]`（ADR-0046 D3）と互換の `[[roles]]`・`[[genres]]`・`[conversation]`、検証の煙試験（ADR-0041 D5）。
+
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 use task_core::{CONVERSATION_GENRE, HarnessBudget, HarnessRegistry, HarnessSpec, RoleSpec, Tier};
 
-use super::{Config, ProviderConfig};
+use super::{Config, ConfigError, ProviderConfig};
 
 /// ADR-0041 D5（Phase 51）: 検証（`--mode verify`）の煙試験が使う組み込みの id。
 /// 役割・分野・プロバイダで同じ名前を使う（`Config::apply_verify_smoke` が足す）。
@@ -521,4 +523,176 @@ genre = {}
             .map(|c| c.genre.as_str())
             .unwrap_or(CONVERSATION_GENRE)
     }
+}
+
+impl Config {
+    /// ADR-0046 D3（Phase 59）: `[[harnesses]]` があれば `genres` / `roles` に射影してから検証する
+    /// （既存の経路は `genre` / `role` のまま動く）。無ければ旧い形のまま検証し、warn を 1 行出す。
+    pub(super) fn merge_harnesses(&mut self) {
+        if self.harnesses.is_empty() {
+            if !self.genres.is_empty() || !self.roles.is_empty() {
+                tracing::warn!(
+                    genres = self.genres.len(),
+                    roles = self.roles.len(),
+                    "config: [[genres]] + [[roles]] は ADR-0046 D3 で [[harnesses]] に置き換わった。                     互換で読み込んだ。`celerisctl config to-harnesses --config <this file>` で新しい形を書き出せる"
+                );
+            }
+        } else {
+            self.project_harnesses();
+        }
+    }
+}
+
+/// ADR-0046 D3（Phase 59）: ハーネスの id は重複させない。adapter は providers と同じ判定。
+pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), ConfigError> {
+    let mut harness_ids = std::collections::HashSet::new();
+    for h in harnesses {
+        if h.id.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[[harnesses]] id must not be empty".to_string(),
+            ));
+        }
+        if !harness_ids.insert(&h.id) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate harness id: {}",
+                h.id
+            )));
+        }
+        if let Some(adapter) = &h.adapter
+            && adapter != task_worker::FakeAdapter::ID
+            && adapter != task_worker::ClaudeCodeAdapter::ID
+            && adapter != task_worker::CodexAdapter::ID
+            && adapter != task_worker::AcpAdapter::ID
+            && adapter != task_worker::PaperQaAdapter::ID
+            && adapter != task_worker::LdrAdapter::ID
+            && adapter != task_worker::LangMemAdapter::ID
+        {
+            return Err(ConfigError::Invalid(format!(
+                "[[harnesses]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, paperqa, local-deep-research, langmem only)",
+                h.id
+            )));
+        }
+        if h.budget.max_turns == Some(0) {
+            return Err(ConfigError::Invalid(format!(
+                "[[harnesses]] {}: max_turns must be >= 1",
+                h.id
+            )));
+        }
+        if h.budget.max_wall_secs == Some(0) {
+            return Err(ConfigError::Invalid(format!(
+                "[[harnesses]] {}: max_wall_secs must be >= 1",
+                h.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// ADR-0016 D1: 役割の id は重複させない。adapter は providers と同じ判定。上限は 1 以上。
+/// 返り値は定義された役割の id（`[[genres]]` の検証が使う）。
+pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, ConfigError> {
+    let mut role_ids = std::collections::HashSet::new();
+    for r in roles {
+        if r.id.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[[roles]] id must not be empty".to_string(),
+            ));
+        }
+        if !role_ids.insert(&r.id) {
+            return Err(ConfigError::Invalid(format!("duplicate role id: {}", r.id)));
+        }
+        if let Some(adapter) = &r.adapter
+            && adapter != task_worker::FakeAdapter::ID
+            && adapter != task_worker::ClaudeCodeAdapter::ID
+            && adapter != task_worker::CodexAdapter::ID
+            && adapter != task_worker::AcpAdapter::ID
+            && adapter != task_worker::PaperQaAdapter::ID
+            && adapter != task_worker::LdrAdapter::ID
+            && adapter != task_worker::LangMemAdapter::ID
+        {
+            return Err(ConfigError::Invalid(format!(
+                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, paperqa, local-deep-research, langmem only)",
+                r.id
+            )));
+        }
+        if r.max_turns == Some(0) {
+            return Err(ConfigError::Invalid(format!(
+                "[[roles]] {}: max_turns must be >= 1",
+                r.id
+            )));
+        }
+        if r.max_wall_secs == Some(0) {
+            return Err(ConfigError::Invalid(format!(
+                "[[roles]] {}: max_wall_secs must be >= 1",
+                r.id
+            )));
+        }
+    }
+    Ok(role_ids)
+}
+
+/// ADR-0027 D1: 分野の id は重複させない。`default_role` と `roles` の各要素は `[[roles]]` に存在すること、
+/// `default_role`（あれば）は `roles` に含まれること。
+/// 返り値は定義された分野の id（`[conversation]` と `[[org]]` の検証が使う）。
+pub(super) fn validate_genres<'a>(
+    genres: &'a [GenreConfig],
+    role_ids: &HashSet<&String>,
+) -> Result<HashSet<&'a String>, ConfigError> {
+    let mut genre_ids = std::collections::HashSet::new();
+    for g in genres {
+        if g.id.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[[genres]] id must not be empty".to_string(),
+            ));
+        }
+        if !genre_ids.insert(&g.id) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate genre id: {}",
+                g.id
+            )));
+        }
+        for role_id in &g.roles {
+            if !role_ids.contains(role_id) {
+                return Err(ConfigError::Invalid(format!(
+                    "[[genres]] {}: role {role_id:?} in roles is not defined in [[roles]]",
+                    g.id
+                )));
+            }
+        }
+        if let Some(default_role) = &g.default_role {
+            if !role_ids.contains(default_role) {
+                return Err(ConfigError::Invalid(format!(
+                    "[[genres]] {}: default_role {default_role:?} is not defined in [[roles]]",
+                    g.id
+                )));
+            }
+            if !g.roles.iter().any(|r| r == default_role) {
+                return Err(ConfigError::Invalid(format!(
+                    "[[genres]] {}: default_role {default_role:?} must be included in roles",
+                    g.id
+                )));
+            }
+        }
+    }
+    Ok(genre_ids)
+}
+
+/// Phase 30（ADR-0033 D4 追記）: `[conversation]` を明示したのに、その分野が `[[genres]]` に
+/// 無ければ設定エラー（対話用の分野が無い）。省略時の既定（`CONVERSATION_GENRE`）は、
+/// `[[genres]]` を使わない最小構成を壊さないよう、ここでは検証しない
+/// （`conversation_genre_id()` の呼び出し側が `GenreSpec::find` で見つからなければ既定の
+/// 役割で走るだけで、実害は無い）。
+pub(super) fn validate_conversation(
+    conversation: Option<&ConversationConfig>,
+    genre_ids: &HashSet<&String>,
+) -> Result<(), ConfigError> {
+    if let Some(conversation) = conversation
+        && !genre_ids.contains(&conversation.genre)
+    {
+        return Err(ConfigError::Invalid(format!(
+            "[conversation]: genre {:?} is not defined in [[genres]] (対話用の分野が無い)",
+            conversation.genre
+        )));
+    }
+    Ok(())
 }

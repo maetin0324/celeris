@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+//! `[scratch]`（ADR-0075）: ローカルの scratch pool・L2・cache server・sccache・cargo の既定。
+
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -379,5 +381,28 @@ impl Config {
             self.scratch_settings_unchecked(),
             task_worker::scratch::is_on_nfs,
         )
+    }
+}
+
+impl ScratchConfig {
+    /// ADR-0075 D7: `[scratch] dir`（書いたときだけ。既定は `scratch_dir()` が build_cache_dir の親から組む）。
+    /// ADR-0075 D4（Phase G2）: `[scratch.sccache] binary`（書いたときだけ）。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        if let Some(dir) = &self.dir {
+            let expanded = task_core::expand_home(dir, task_core::home_dir().as_deref());
+            self.dir = Some(if expanded.is_relative() {
+                base.join(&expanded)
+            } else {
+                expanded
+            });
+        }
+        if let Some(bin) = &self.sccache.binary {
+            let expanded = task_core::expand_home(bin, task_core::home_dir().as_deref());
+            self.sccache.binary = Some(if expanded.is_relative() {
+                base.join(&expanded)
+            } else {
+                expanded
+            });
+        }
     }
 }

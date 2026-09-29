@@ -1,5 +1,9 @@
+//! `[execution]`（ADR-0072 D18）・`[execution.tree]`（ADR-0079 D3）・`[execution.planner]`（ADR-0072 D14）。
+
 use serde::Deserialize;
 use task_core::Tier;
+
+use super::ConfigError;
 
 /// `[execution]`（ADR-0072 D18, Phase E1）: continuation（予算切れ・yield の続き）の可否と上限。
 #[derive(Debug, Clone, Deserialize)]
@@ -136,7 +140,7 @@ impl ExecutionTreeTomlConfig {
     }
 
     /// 設定の綴り・範囲（`Config::validate` から呼ぶ）。
-    pub(super) fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         if !(1..=task_core::tree::MAX_DEPTH_CAP).contains(&self.max_depth) {
             return Err(format!(
                 "max_depth must be between 1 and {} task levels (root = 1, child = 2, grandchild = 3; got {})",
@@ -346,4 +350,38 @@ fn default_planner_max_turns() -> u32 {
 /// ADR-0074 D5.3（Phase F1）: 1,200 -> 900 秒（既定）。
 fn default_planner_max_wall_secs() -> u64 {
     900
+}
+
+impl ExecutionTomlConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        // ADR-0072 D13（Phase E3）: gate は 3 つだけ（綴り間違いで黙って shadow/off に倒れないように）。
+        if task_core::GateMode::parse(&self.gate).is_none() {
+            return Err(ConfigError::Invalid(format!(
+                "[execution] gate must be one of [\"off\", \"shadow\", \"on\"] (got {:?})",
+                self.gate
+            )));
+        }
+        // ADR-0074 D5.2（Phase F1）: work_unit_lane_cap は 2 つだけ。
+        if task_core::WorkUnitLaneCap::parse(&self.work_unit_lane_cap).is_none() {
+            return Err(ConfigError::Invalid(format!(
+                "[execution] work_unit_lane_cap must be one of [\"task\", \"none\"] (got {:?})",
+                self.work_unit_lane_cap
+            )));
+        }
+        // ADR-0074 §4（Phase F2b）: max_parallel_work_units は 1..=6。
+        if !(1..=task_dispatch::dispatcher::MAX_PARALLEL_WORK_UNITS_CAP)
+            .contains(&self.max_parallel_work_units)
+        {
+            return Err(ConfigError::Invalid(format!(
+                "[execution] max_parallel_work_units must be between 1 and {} (got {})",
+                task_dispatch::dispatcher::MAX_PARALLEL_WORK_UNITS_CAP,
+                self.max_parallel_work_units
+            )));
+        }
+        // ADR-0079 D3（Phase R1a）: `[execution.tree]` の範囲（max_depth は task の層数で 1..=3）。
+        if let Err(why) = self.tree.validate() {
+            return Err(ConfigError::Invalid(format!("[execution.tree] {why}")));
+        }
+        Ok(())
+    }
 }

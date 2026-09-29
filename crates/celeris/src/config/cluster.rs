@@ -1,10 +1,12 @@
+//! `[[clusters]]`（ADR-0018 / ADR-0032 / ADR-0053 / ADR-0060）: ssh で使うクラスタと port forward。
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 use task_dispatch::ClusterSpec;
 
-use super::Config;
+use super::{Config, ConfigError};
 
 /// `[[clusters]]`（ADR-0018）: ssh でコマンドを実行するクラスタ。接続は人が張った ControlMaster を借りる。
 #[derive(Debug, Clone, Deserialize)]
@@ -208,4 +210,82 @@ impl Config {
             })
             .collect()
     }
+}
+
+/// ADR-0018: クラスタの id は重複させない。sync は rsync / none のみ。並列度は 1 以上。
+pub(super) fn validate_clusters(clusters: &[ClusterConfig]) -> Result<(), ConfigError> {
+    let mut cluster_ids = std::collections::HashSet::new();
+    for c in clusters {
+        if c.id.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[[clusters]] id must not be empty".to_string(),
+            ));
+        }
+        if !cluster_ids.insert(&c.id) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate cluster id: {}",
+                c.id
+            )));
+        }
+        if c.host.trim().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: host must not be empty",
+                c.id
+            )));
+        }
+        if !matches!(c.sync.as_str(), "rsync" | "none" | "worktree") {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: sync must be \"worktree\", \"rsync\" or \"none\" (got {:?})",
+                c.id, c.sync
+            )));
+        }
+        // ADR-0032 D1: 認証方式は 3 つだけ。既定は "manual"（celeris は接続を張らない）。
+        if !matches!(c.auth.as_str(), "manual" | "publickey" | "totp") {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: auth must be \"manual\", \"publickey\" or \"totp\" (got {:?})",
+                c.id, c.auth
+            )));
+        }
+        // ADR-0060（Phase 103）: master の起こし方も 3 つだけ。既定は "auto"。
+        if !matches!(
+            c.master_launcher.as_str(),
+            "auto" | "systemd-run" | "inline"
+        ) {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: master_launcher must be \"auto\", \"systemd-run\" or \"inline\" (got {:?})",
+                c.id, c.master_launcher
+            )));
+        }
+        // ADR-0078 D1: `control_persist` は "yes" か正の秒数だけ（"no"・"0"・空・"10m" は不可）。
+        let persist_ok = c.control_persist == "yes"
+            || (!c.control_persist.is_empty()
+                && c.control_persist.bytes().all(|b| b.is_ascii_digit())
+                && c.control_persist.parse::<u64>().is_ok_and(|n| n > 0));
+        if !persist_ok {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: control_persist must be \"yes\" or a positive number of seconds (got {:?})",
+                c.id, c.control_persist
+            )));
+        }
+        // ADR-0019 D2: 自動削除は実装しない（実行結果を消してしまわないため）。
+        if c.remove_worktree_when != "never" {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: remove_worktree_when must be \"never\" (got {:?}); remove the worktree by hand",
+                c.id, c.remove_worktree_when
+            )));
+        }
+        if c.worktree_base.trim().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: worktree_base must not be empty",
+                c.id
+            )));
+        }
+        if c.concurrency == 0 {
+            return Err(ConfigError::Invalid(format!(
+                "[[clusters]] {}: concurrency must be >= 1",
+                c.id
+            )));
+        }
+    }
+    Ok(())
 }

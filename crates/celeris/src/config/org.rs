@@ -1,7 +1,12 @@
-use serde::Deserialize;
-use task_core::{OrgKind, OrgNode, Profile};
+//! `org_include` が指す組織図の種（`[[org]]`、ADR-0033 D1）。
 
-use super::Config;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+use task_core::{OrgKind, OrgNode, Profile, valid_org_id};
+
+use super::{Config, ConfigError};
 
 /// `org_include` の指すファイルの中身（ADR-0033 D1）。`[[org]]` の 1 行 = 組織の 1 ノード。
 #[derive(Debug, Clone, Deserialize)]
@@ -66,5 +71,104 @@ impl Config {
             OrgKind::Section => 2,
         });
         nodes
+    }
+}
+
+/// ADR-0033 D1: 組織図の種。ファイルが無ければ設定エラー（書いたのに読めないのは事故なので黙らない）。
+pub(super) fn load_org_seed(
+    org_include: &str,
+    base: &Path,
+) -> Result<Vec<OrgSeedConfig>, ConfigError> {
+    let path = {
+        let p = PathBuf::from(org_include);
+        if p.is_relative() { base.join(p) } else { p }
+    };
+    let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let file: OrgSeedFile = toml::from_str(&text)?;
+    Ok(file.org)
+}
+
+impl Config {
+    /// ADR-0033 D1: 組織図の種。id は重複させず英小文字ケバブ、`secretary` はちょうど 1 つ、
+    /// それ以外の親は同じファイル内に居ること、`genre` は `[[genres]]` にあること。
+    /// 木としての整合（循環・種類の順序）はストアの `org_upsert` が最終的に見る。
+    pub(super) fn validate_org_seed(
+        &self,
+        genre_ids: &HashSet<&String>,
+    ) -> Result<(), ConfigError> {
+        let mut org_ids = std::collections::HashSet::new();
+        let mut secretaries = 0usize;
+        for node in &self.org {
+            if !valid_org_id(&node.id) {
+                return Err(ConfigError::Invalid(format!(
+                    "[[org]] id {:?} must be lowercase kebab-case",
+                    node.id
+                )));
+            }
+            if !org_ids.insert(node.id.as_str()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate org id: {}",
+                    node.id
+                )));
+            }
+            if node.name.trim().is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "[[org]] {}: name must not be empty",
+                    node.id
+                )));
+            }
+            if node.kind == OrgKind::Secretary {
+                secretaries += 1;
+            }
+            if let Some(genre) = &node.genre
+                && !genre_ids.contains(genre)
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "[[org]] {}: genre {genre:?} is not defined in [[genres]]",
+                    node.id
+                )));
+            }
+        }
+        if !self.org.is_empty() && secretaries != 1 {
+            return Err(ConfigError::Invalid(format!(
+                "[[org]] must contain exactly one node with kind = \"secretary\" (found {secretaries})"
+            )));
+        }
+        for node in &self.org {
+            match (&node.parent_id, node.kind) {
+                (Some(parent), _) if !org_ids.contains(parent.as_str()) => {
+                    return Err(ConfigError::Invalid(format!(
+                        "[[org]] {}: parent_id {parent:?} is not one of the [[org]] entries",
+                        node.id
+                    )));
+                }
+                (Some(_), OrgKind::Secretary) => {
+                    return Err(ConfigError::Invalid(format!(
+                        "[[org]] {}: the secretary is the root and must not have a parent_id",
+                        node.id
+                    )));
+                }
+                (None, OrgKind::Secretary) => {}
+                (None, _) => {
+                    return Err(ConfigError::Invalid(format!(
+                        "[[org]] {}: parent_id is required (only the secretary is a root)",
+                        node.id
+                    )));
+                }
+                _ => {}
+            }
+            // ADR-0046 D1（Phase 59）: 種の profile も起動時に検証する（知らない道具・知らない
+            // ハーネス・skill の綴り）。ハーネスの集合は射影後の `[[genres]]` ＋ 組み込み。
+            if let Some(profile) = &node.profile {
+                let known = task_core::known_harness_ids(&self.genre_specs());
+                task_core::validate_profile(profile, &known).map_err(|e| {
+                    ConfigError::Invalid(format!("[[org]] {}: profile: {e}", node.id))
+                })?;
+            }
+        }
+        Ok(())
     }
 }

@@ -1,10 +1,12 @@
+//! dispatcher に渡す設定: `[reviewer]`・`[review]`・`[dispatch]`・`[plan]`・`[sessions]` と `Config::dispatch_config`。
+
 use std::time::Duration;
 
 use serde::Deserialize;
 use task_core::{Tier, WorkerHint};
 use task_dispatch::{AccountsRuntimeConfig, DispatchConfig};
 
-use super::Config;
+use super::{Config, ConfigError, ProviderConfig};
 
 /// `[sessions]`（ADR-0054 D1。Phase 67）: CoS の対話・部門長のレビュー run の継続セッション
 /// （`node_sessions`）の逼迫判定。`approx_tokens`（run の usage の累計）がこれを超えたら、次の run は
@@ -224,5 +226,40 @@ impl Config {
                 },
             },
         }
+    }
+}
+
+impl ReviewerConfig {
+    /// ADR-0010 D9: Reviewer run を満たせるプロバイダが無い設定は、Reviewer 条件のタスクが無音で待ち続ける原因になる。
+    /// ADR-0069 Phase 118 D4: `[reviewer] tier` が未設定なら lane はタスクごとに動的に決まる
+    /// （worker run の lane に一致・組織の天井で丸め）ので、特定の 1 tier だけを検査する意味が無い。
+    /// その場合は「（`adapter` 制約を満たす）プロバイダが 1 つ以上の tier を提供しているか」に緩める。
+    pub(super) fn validate(&self, providers: &[ProviderConfig]) -> Result<(), ConfigError> {
+        let reviewer = self;
+        let reviewer_ok = match reviewer.tier {
+            Some(explicit) => providers.iter().any(|p| {
+                p.tiers.contains(&explicit)
+                    && reviewer.adapter.as_deref().is_none_or(|a| p.adapter == a)
+            }),
+            None => providers.iter().any(|p| {
+                !p.tiers.is_empty() && reviewer.adapter.as_deref().is_none_or(|a| p.adapter == a)
+            }),
+        };
+        if !reviewer_ok {
+            let adapter_suffix = reviewer
+                .adapter
+                .as_deref()
+                .map(|a| format!(" with adapter {a:?}"))
+                .unwrap_or_default();
+            return Err(ConfigError::Invalid(match reviewer.tier {
+                Some(t) => format!(
+                    "[reviewer] no provider offers tier {t:?}{adapter_suffix} for reviewer runs"
+                ),
+                None => format!(
+                    "[reviewer] no provider offers any tier{adapter_suffix} for reviewer runs"
+                ),
+            }));
+        }
+        Ok(())
     }
 }

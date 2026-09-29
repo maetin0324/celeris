@@ -1,6 +1,10 @@
-use std::path::PathBuf;
+//! `[handoff]`（ADR-0040 D4）と `[selfdeploy]`（ADR-0040 D6 / ADR-0045 D2）: 昇格とリリースの置き場。
+
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use super::ConfigError;
 
 /// `[handoff]`（ADR-0040 D4）: 昇格のライブ引き継ぎ。`active` が `draining` になったあと、手元の run が
 /// 終わるのをここまで待つ。超えたら残りを abort し（リースが切れて新しい active が従来の「リース切れ」の
@@ -89,4 +93,42 @@ fn default_releases_dir() -> PathBuf {
 
 fn default_selfdeploy_repo() -> PathBuf {
     PathBuf::from("~/workspace/agent-platform")
+}
+
+impl SelfdeployConfig {
+    /// ADR-0040 D6 / ADR-0045 D2: `[selfdeploy] releases_dir` は `~` を展開し、相対なら設定ファイルの
+    /// ディレクトリ基準（既定の `~/.local/celeris/releases` もここで絶対パスになる）。
+    /// ADR-0041 D3: `[selfdeploy] repo` は**人のチェックアウト**なので `~` を展開する
+    /// （既定の `~/workspace/agent-platform` もここで絶対パスになる）。`$HOME` が無い環境や
+    /// 相対で書かれたときは、他のパス設定と同じく設定ファイルのディレクトリ基準。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        self.releases_dir =
+            task_core::expand_home(&self.releases_dir, task_core::home_dir().as_deref());
+        if self.releases_dir.is_relative() {
+            self.releases_dir = base.join(&self.releases_dir);
+        }
+        self.repo = task_core::expand_home(&self.repo, task_core::home_dir().as_deref());
+        if self.repo.is_relative() {
+            self.repo = base.join(&self.repo);
+        }
+    }
+
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if !self.delivery_projects.is_empty()
+            && (self
+                .delivery_projects
+                .iter()
+                .any(|p| p.parse::<task_core::ProjectId>().is_err())
+                || self.releases_dir.file_name().and_then(|v| v.to_str()) != Some("releases"))
+        {
+            return Err(ConfigError::Invalid("delivery_projects requires project IDs and the standard <state>/releases directory".into()));
+        }
+        // ADR-0051 Phase 106追記: 空のリモート名でpushしようとして分かりにくいgitエラーになるのを防ぐ。
+        if self.push_remote.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[selfdeploy] push_remote must not be blank".into(),
+            ));
+        }
+        Ok(())
+    }
 }

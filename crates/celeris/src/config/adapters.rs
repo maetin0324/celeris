@@ -1,5 +1,7 @@
+//! `[adapters.*]`: アダプタごとの既定（claude-code・codex・aider・acp・paperqa・local-deep-research・langmem・fake）。
+
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -458,4 +460,26 @@ impl Default for LdrAdapterConfig {
 
 fn default_ldr_command() -> String {
     "python3".to_string()
+}
+
+impl PaperQaAdapterConfig {
+    /// ADR-0027 D3: `[adapters.paperqa]` のパス設定は、他のパス設定と同じく設定ファイルのディレクトリ基準で
+    /// 絶対化する。`settings` は `pqa -s` に渡す文字列（拡張子無し）だが、パスの形をしているので同様に扱う。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        if let Some(dir) = &self.paper_directory
+            && dir.is_relative()
+        {
+            self.paper_directory = Some(base.join(dir));
+        }
+        if let Some(dir) = &self.index_directory
+            && dir.is_relative()
+        {
+            self.index_directory = Some(base.join(dir));
+        }
+        if let Some(settings) = &self.settings
+            && Path::new(settings).is_relative()
+        {
+            self.settings = Some(base.join(settings).to_string_lossy().into_owned());
+        }
+    }
 }

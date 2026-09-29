@@ -1,6 +1,10 @@
-use std::path::PathBuf;
+//! `[workspace]`（ADR-0041 D1 / ADR-0066）と `[containers]`（ADR-0043 D3）: タスクの作業場所と実行環境。
+
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use super::ConfigError;
 
 /// `[workspace]`（ADR-0041 D1 / ADR-0043 D2）: 案件のリポジトリが `kind = local` の git リポジトリで
 /// `mode = "worktree"`（既定）のとき、celeris はタスクごと・リポジトリごとに `git worktree` を切る。
@@ -103,4 +107,57 @@ fn default_container_build_dir() -> PathBuf {
 
 fn default_container_build_timeout_secs() -> u64 {
     task_worker::container::DEFAULT_BUILD_TIMEOUT_SECS
+}
+
+impl WorkspaceConfig {
+    /// ADR-0066 D1: `[workspace] build_cache_dir` の既定は `~/.local/celeris/build-cache`。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        self.build_cache_dir =
+            task_core::expand_home(&self.build_cache_dir, task_core::home_dir().as_deref());
+        if self.build_cache_dir.is_relative() {
+            self.build_cache_dir = base.join(&self.build_cache_dir);
+        }
+    }
+
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        // ADR-0041 D1: ローカルの worktree のブランチ名は `<接頭辞><task_id>`。接頭辞が空だと
+        // タスク id そのものがブランチ名になり、人のブランチと見分けが付かない。
+        if self.worktree_branch_prefix.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[workspace] worktree_branch_prefix must not be empty".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ContainersConfig {
+    /// ADR-0043 D3 / ADR-0042 D3: `[containers] build_dir` の既定は `~/.local/celeris/containers`。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        self.build_dir = task_core::expand_home(&self.build_dir, task_core::home_dir().as_deref());
+        if self.build_dir.is_relative() {
+            self.build_dir = base.join(&self.build_dir);
+        }
+    }
+
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        // ADR-0043 D3: runtime は 3 つだけ（綴り間違いで黙ってホスト実行に倒れないように）。
+        if task_worker::RuntimePreference::parse(&self.runtime).is_none() {
+            return Err(ConfigError::Invalid(format!(
+                "[containers] runtime must be one of [\"auto\", \"podman\", \"docker\"] (got {:?})",
+                self.runtime
+            )));
+        }
+        if self.image_default.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "[containers] image_default must not be blank".into(),
+            ));
+        }
+        if self.build_timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "[containers] build_timeout_secs must be >= 1".into(),
+            ));
+        }
+        Ok(())
+    }
 }

@@ -1,4 +1,8 @@
+//! `[github]`（ADR-0043 D5）: PR での取り込みに使う `gh` と merge の方法。
+
 use serde::Deserialize;
+
+use super::ConfigError;
 
 /// `[github]`（ADR-0043 D5。Phase 54）: 変更の取り込みを PR でやるときの設定。
 ///
@@ -32,3 +36,19 @@ fn default_merge_method() -> String {
 
 /// `gh pr merge` に渡してよい方法（それ以外は設定エラー）。
 pub const MERGE_METHODS: [&str; 3] = ["merge", "squash", "rebase"];
+
+impl GithubConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        // ADR-0043 D5: `gh pr merge` に渡す方法は 3 つだけ。
+        if !MERGE_METHODS.contains(&self.merge_method.as_str()) {
+            return Err(ConfigError::Invalid(format!(
+                "[github] merge_method must be one of {MERGE_METHODS:?} (got {:?})",
+                self.merge_method
+            )));
+        }
+        if self.gh.trim().is_empty() {
+            return Err(ConfigError::Invalid("[github] gh must not be blank".into()));
+        }
+        Ok(())
+    }
+}

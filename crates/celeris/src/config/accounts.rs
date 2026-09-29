@@ -1,5 +1,7 @@
+//! `[accounts]`（ADR-0024 / ADR-0025）と `[secrets]`（ADR-0030）: アカウントの根ディレクトリと秘密の置き場。
+
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use task_core::AccountAdapter;
@@ -120,6 +122,48 @@ impl Config {
                 path: secrets.dir.clone(),
                 source,
             })?;
+        }
+        Ok(())
+    }
+}
+
+impl SecretsConfig {
+    /// ADR-0030 D1 / ADR-0045 D2: `[secrets] dir` は `~` を展開し、相対なら設定ファイルのディレクトリ基準。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        self.dir = task_core::expand_home(&self.dir, task_core::home_dir().as_deref());
+        if self.dir.is_relative() {
+            self.dir = base.join(&self.dir);
+        }
+    }
+}
+
+impl AccountsConfig {
+    /// ADR-0045 D2: `[accounts]` の既定は `~/.local/celeris/{claude,codex}-accounts`。
+    /// `~` を展開してから、それでも相対なら従来どおり設定ファイルのディレクトリ基準。
+    pub(super) fn resolve_paths(&mut self, base: &Path) {
+        let home = task_core::home_dir();
+        for slot in [&mut self.claude_dir, &mut self.codex_dir] {
+            if let Some(dir) = slot {
+                let expanded = task_core::expand_home(dir, home.as_deref());
+                *slot = Some(if expanded.is_relative() {
+                    base.join(expanded)
+                } else {
+                    expanded
+                });
+            }
+        }
+    }
+
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self.claude_dir.is_none() && self.codex_dir.is_none() {
+            return Err(ConfigError::Invalid(
+                "[accounts] requires at least one of claude_dir / codex_dir".into(),
+            ));
+        }
+        if self.max_runs_per_account == 0 {
+            return Err(ConfigError::Invalid(
+                "[accounts] max_runs_per_account must be >= 1".into(),
+            ));
         }
         Ok(())
     }

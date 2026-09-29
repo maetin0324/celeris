@@ -63,9 +63,11 @@ const VIEWPORTS = [
   { name: "desktop", context: { viewport: { width: 1280, height: 800 } } },
 ];
 
-// タブ → そのタブで出るはずの節の data-testid（`app/routes/tasks.$id.tsx` の `TASK_TABS` と同じ 5 つ）。
+// タブ → そのタブで出るはずの節の data-testid（`app/routes/tasks.$id.tsx` の `TASK_TABS` と同じ 6 つ。
+// 「木」は celeris ADR-0079 D14〈Phase R4b〉）。
 const TASK_TAB_SECTIONS = {
   overview: "info-section",
+  tree: "tree-section",
   timeline: "timeline-section",
   changes: "changes-section",
   files: "files-section",

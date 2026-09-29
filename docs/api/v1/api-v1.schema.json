@@ -17883,6 +17883,17 @@
             "null"
           ]
         },
+        "stall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TreeNodeStall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase R4b（D10 の GUI「理由なく止まっています」）: 節点の最後の event が `StallDetected` で、終端でない。"
+        },
         "status": {
           "$ref": "#/$defs/Status"
         },
@@ -18565,6 +18576,30 @@
           "type": "string"
         }
       ]
+    },
+    "TreeNodeStall": {
+      "description": "D10: 理由なく止まっている節点（`Event::StallDetected` の写し）。",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "reason": {
+          "description": "分類の理由（`task_core::tree::NodeLiveness.reason`。例 `child_missing`。旧い event は空）。",
+          "type": "string"
+        },
+        "since": {
+          "description": "理由なく止まっていると daemon が最初に見た時刻（RFC 3339。旧い event は無し）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "reason",
+        "detail"
+      ],
+      "type": "object"
     },
     "TreeRepoView": {
       "description": "`TreeView.repos[]` の 1 件。",

@@ -830,7 +830,7 @@ fn task_failed_notes_when_the_task_was_already_delivered() {
         .unwrap_or_else(|| panic!("no task_failed row"));
     assert!(
         row.body
-            .contains("成果は配送済み（release 51d24a61c2ba）だがレビューで不合格"),
+            .contains("成果は main に取り込み済み（release 51d24a61c2ba）だがレビューで不合格"),
         "{}",
         row.body
     );

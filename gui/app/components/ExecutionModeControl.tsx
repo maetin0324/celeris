@@ -1,7 +1,8 @@
 import { type MouseEvent, useEffect } from "react";
 import { useFetcher, useNavigate } from "react-router";
 import type { RetryOutcome, TaskDecomposeOutcome } from "~/celeris/action-types";
-import type { ExecutionView, Task } from "~/celeris/types";
+import type { Action, ExecutionView, Task } from "~/celeris/types";
+import { PlanGateForm } from "~/components/DecisionControls";
 import { ErrorFlash, FieldErrors } from "~/components/Flash";
 import { Button } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
@@ -16,6 +17,7 @@ import {
   gateDecisionLine,
   isGateCandidate,
 } from "~/lib/execution-mode";
+import { planApprovalReasonLines } from "~/lib/tree";
 
 /**
  * タスク詳細の「実行の形」（celeris ADR-0072「Phase F6 実装時の決定」）。gate の判定の出どころ（規則表 / CoS の
@@ -23,14 +25,25 @@ import {
  * 終端のタスクは「計画を作らせてやり直す」（`retry` + `execution: "compound"`。新しいタスクへ移る）。
  * どの操作を出すかは `executionModeControls` が決め、押せるかどうかの最終判断は celeris（409 / 422 の文言を出す）。
  */
-export function ExecutionModeControl({ task, execution }: { task: Task; execution: ExecutionView | null | undefined }) {
+export function ExecutionModeControl({
+  task,
+  execution,
+  actions = [],
+}: {
+  task: Task;
+  execution: ExecutionView | null | undefined;
+  /** celeris ADR-0079 D8（Phase R4b）: `TaskDetail.actions`（`plan_gate` があれば計画の承認の 3 つのボタンを出す）。 */
+  actions?: readonly Action[];
+}) {
   const fetcher = useFetcher<TaskDecomposeOutcome>({ key: `task-decompose-${task.id}` });
   const retryFetcher = useFetcher<RetryOutcome>({ key: `task-retry-compound-${task.id}` });
   const navigate = useNavigate();
   useEffect(() => {
     if (retryFetcher.data?.ok) navigate(`/tasks/${retryFetcher.data.result.task_id}`);
   }, [retryFetcher.data, navigate]);
-  if (!isGateCandidate(task)) return null;
+  // celeris ADR-0079 D8（Phase R4b）: root の計画の承認待ち。gate の対象外の形でも承認の操作は出す。
+  const planApproval = execution?.plan_approval ?? null;
+  if (!isGateCandidate(task) && !planApproval) return null;
 
   const hasPlan = execution?.plan != null;
   const controls = executionModeControls(task, hasPlan);
@@ -45,7 +58,7 @@ export function ExecutionModeControl({ task, execution }: { task: Task; executio
   };
 
   return (
-    <section aria-labelledby="execution-mode-heading" data-testid="execution-mode">
+    <section id="execution-mode" aria-labelledby="execution-mode-heading" data-testid="execution-mode">
       <Card>
         <CardHeader
           icon="gitBranch"
@@ -61,6 +74,22 @@ export function ExecutionModeControl({ task, execution }: { task: Task; executio
             gate の判定:{" "}
             {decisionLine ?? (controls.regatePending ? "次の run で判定し直します" : "まだ判定していません")}
           </p>
+          {planApproval && (
+            <div
+              className="space-y-2 rounded-lg border border-warning-border bg-warning-soft p-3"
+              data-testid="execution-mode-plan-approval"
+            >
+              <p className="font-semibold text-warning-soft-fg">計画の承認待ち: {planApproval.summary}</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-fg">
+                {planApprovalReasonLines(planApproval.reasons).map((line) => (
+                  <li key={line} className="break-words">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+              <PlanGateForm taskId={task.id} actions={actions} />
+            </div>
+          )}
           {hintLine && (
             <p className="text-fg-muted" data-testid="execution-mode-hint">
               {hintLine}
@@ -77,7 +106,7 @@ export function ExecutionModeControl({ task, execution }: { task: Task; executio
             </p>
           )}
           <TaskDecomposeFlash outcome={fetcher.data} />
-          {decomposeActions.length > 0 && (
+          {decomposeActions.length > 0 && !planApproval && (
             <fetcher.Form
               method="post"
               action={`/tasks/${task.id}`}

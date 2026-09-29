@@ -128,6 +128,32 @@ describe("loadProjectDetail", () => {
     expect(result.detail.milestones[0].proposal).toEqual(milestone.proposal);
   });
 
+  it("celeris ADR-0079 D14（Phase R4b）: root task だけ木（task-tree）を引き、失敗した root は null", async () => {
+    const detail: ProjectDetail = {
+      project: project(),
+      milestones: [],
+      tasks: [
+        { id: "r1", title: "root 1", status: "ready", depends_on: [], conversation: false },
+        { id: "r2", title: "root 2", status: "done", depends_on: [], conversation: false },
+        { id: "c1", title: "child", status: "ready", depends_on: [], conversation: false, parent_id: "r1" },
+        { id: "talk", title: "対話", status: "running", depends_on: [], conversation: true },
+      ],
+    };
+    mock.on("GET", "/api/v1/projects/p1", (_req, res) => sendJson(res, 200, detail));
+    mock.on("GET", "/api/v1/org", (_req, res) => sendJson(res, 200, { items: [] } satisfies OrgList));
+    const tree = { root_id: "r1", subtree_root: "r1", tree_enabled: true, nodes: [], totals: {} };
+    mock.on("GET", "/api/v1/tasks/r1/task-tree", (_req, res) => sendJson(res, 200, tree));
+    mock.on("GET", "/api/v1/tasks/r2/task-tree", (_req, res) =>
+      sendProblem(res, { status: 404, code: "task_not_found", detail: "gone" }),
+    );
+
+    const result = await loadProjectDetail(client, "p1", new Request("http://gui.invalid/projects/p1"));
+
+    expect(result.rootTrees).toEqual({ r1: tree, r2: null });
+    const treeCalls = mock.requests.filter((r) => r.url.includes("/task-tree")).map((r) => r.url);
+    expect(treeCalls.sort()).toEqual(["/api/v1/tasks/r1/task-tree", "/api/v1/tasks/r2/task-tree"]);
+  });
+
   it("GET /org が失敗しても案件の詳細は返す（組織は空扱い）", async () => {
     const detail: ProjectDetail = { project: project(), milestones: [], tasks: [] };
     mock.on("GET", "/api/v1/projects/p1", (_req, res) => sendJson(res, 200, detail));

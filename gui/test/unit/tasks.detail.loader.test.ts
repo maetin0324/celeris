@@ -153,6 +153,8 @@ describe("loadTaskDetail", () => {
       files: null,
       // マージ（Phase 54）: 「変更」タブを見ていないので引かない（`?tab=changes` のときだけ）。
       changes: null,
+      // celeris ADR-0079 D14（Phase R4b）: 「木」タブを見ていないので木を引かない（`?tab=tree` のときだけ）。
+      taskTree: null,
       // running のタスクは人のレビュー待ちではないので `GET /inbox` を引かない。
       humanReview: [],
       place: {

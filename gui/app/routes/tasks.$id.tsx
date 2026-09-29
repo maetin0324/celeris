@@ -23,6 +23,7 @@ import { retryData, transitionData } from "~/celeris/actions.server";
 import { loadBrowserRuns } from "~/celeris/browser";
 import type { CelerisClient } from "~/celeris/client.server";
 import { getCelerisClient } from "~/celeris/client.server";
+import { planGateTask } from "~/celeris/decisions-admin.server";
 import { promoteArtifact, readArtifactPromoteBody } from "~/celeris/docs-admin.server";
 import { type CelerisRouteErrorData, celerisErrorResponse, toActionError } from "~/celeris/errors";
 import { runRetryAction, runTaskAction } from "~/celeris/route-actions.server";
@@ -56,6 +57,7 @@ import type {
   TaskDetail,
   TaskRef,
   TaskRoutingView,
+  TaskTreeView,
   Timeline,
   TimelineItem,
 } from "~/celeris/types";
@@ -172,6 +174,11 @@ const HumanReviewPanel = lazy(() =>
   import("~/components/HumanReviewPanel").then((m) => ({ default: m.HumanReviewPanel })),
 );
 
+// celeris ADR-0079 D14（Phase R4b、ADR-0055 性能予算）: 「木」タブの本体・止まっている理由の帯は、
+// 開いたとき・止まっているときだけ要るので初回の JS に載せない（task 系ルートの初回 JS は予算まで 3KB しか無い）。
+const TaskTreeTab = lazy(() => import("~/components/TaskTreeTab").then((m) => ({ default: m.TaskTreeTab })));
+const TaskHoldBanner = lazy(() => import("~/components/TaskHoldBanner").then((m) => ({ default: m.TaskHoldBanner })));
+
 /**
  * タブの中身の読み込み中プレースホルダ（Phase 77、ADR-0055 D3「体感速度」）。チャンク待ち（`Suspense`）と
  * タブ切り替えのナビゲーション待ち（`useNavigation`）の両方で使う。高さは実際のタブの中身（見出し 1 行 +
@@ -223,7 +230,7 @@ const ACTION_LABELS: Record<Action, string> = {
   rereview: "再レビュー",
   // celeris ADR-0074 D2.4（Phase F3 途中確認）。実行節の途中報告に 3 つのボタンを置く。
   phase_gate: "途中確認",
-  // celeris ADR-0079 D8（Phase R3b）。承認 / replan / 取り下げの画面は R4b。
+  // celeris ADR-0079 D8（Phase R3b / R4b）。承認 / replan / 取り下げは「実行の形」カードと受信箱に置く。
   plan_gate: "計画の承認",
 };
 
@@ -313,6 +320,11 @@ export interface TaskDetailData {
    */
   changes: { data: TaskChangesData; error: null } | { data: null; error: ActionError } | null;
   /**
+   * celeris ADR-0079 D14（Phase R4b）: 「木」タブの中身（`GET /tasks/{id}/task-tree?root=true`）。
+   * **`?tab=tree` のときだけ**引く（節点ごとに events を読むので、他のタブでは叩かない）。失敗はタブの中に出す。
+   */
+  taskTree: { data: TaskTreeView; error: null } | { data: null; error: ActionError } | null;
+  /**
    * 人のレビュー待ち（`reviewing` のタスク、または `kind = approval` のタスク）の判断材料。
    * `GET /inbox` の未決の承認のうち、このタスクが承認タスク自身か、その親のもの。落ちても画面は出す（空）。
    */
@@ -397,6 +409,21 @@ export async function loadTaskDetail(client: CelerisClient, taskId: string, requ
       changes = { data: null, error: toActionError(e) };
     }
   }
+  // celeris ADR-0079 D14（Phase R4b）:「木」タブを見ているときだけ木を引く（root から。この task は印を付ける）。
+  let taskTree: TaskDetailData["taskTree"] = null;
+  if (parseTaskTab(url.searchParams.get("tab")) === "tree") {
+    try {
+      taskTree = {
+        data: await client.get<TaskTreeView>(`/tasks/${taskId}/task-tree`, {
+          query: { root: "true" },
+          signal: request.signal,
+        }),
+        error: null,
+      };
+    } catch (e) {
+      taskTree = { data: null, error: toActionError(e) };
+    }
+  }
   // 人のレビュー待ちの判断材料（`GET /inbox` の承認）。reviewing の親か承認タスク自身のときだけ引く。
   let humanReview: ApprovalItem[] = [];
   if (detail.task.status === "reviewing" || detail.task.kind === "approval") {
@@ -420,6 +447,7 @@ export async function loadTaskDetail(client: CelerisClient, taskId: string, requ
     routing,
     files,
     changes,
+    taskTree,
     humanReview,
     place: {
       projectId,
@@ -485,6 +513,12 @@ export async function action({ request, params }: Route.ActionArgs) {
     const outcome = await phaseGateTask(client, params.id, form, request.signal);
     return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
   }
+  // celeris ADR-0079 D8（Phase R4b）: root の計画の承認（`POST /tasks/{id}/execution/plan-gate`）。
+  // 受信箱の「計画の承認」の 3 つのボタンもここへ送る。
+  if (intent === "plan_gate") {
+    const outcome = await planGateTask(client, params.id, form, request.signal);
+    return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
+  }
   // celeris ADR-0072「Phase F6 実装時の決定」: 起票済みのタスクの実行の形を決め直す
   // （`POST /tasks/{id}/execution/decompose`）。終端のタスクの「計画を作らせてやり直す」は `retry` の `execution`。
   if (intent === "execution_decompose") {
@@ -511,6 +545,7 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
     routing,
     files,
     changes,
+    taskTree,
     humanReview,
     place,
   } = loaderData;
@@ -719,7 +754,20 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
         />
       )}
 
-      {/* ADR-0044 D5: 概要 / タイムライン / 変更 / ファイル / 成果物。`?tab=` が状態なのでリンクできる。 */}
+      {/* celeris ADR-0079 D10 / D14（Phase R4b）: 止まっている理由（理由なし・決定・基盤・承認）。
+          候補のときだけ lazy の帯を読み、判定と文言は帯の側（`~/lib/tree.ts`）で行う。 */}
+      {mayBeHeld(task.status, detail.execution, timeline.items) && (
+        <Suspense fallback={null}>
+          <TaskHoldBanner
+            taskId={task.id}
+            status={task.status}
+            execution={detail.execution}
+            timeline={timeline.items}
+          />
+        </Suspense>
+      )}
+
+      {/* ADR-0044 D5: 概要 / 木 / タイムライン / 変更 / ファイル / 成果物。`?tab=` が状態なのでリンクできる。 */}
       <TaskTabs
         current={tab}
         searchParams={searchParams}
@@ -745,6 +793,19 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
               fetchedAt={fetchedAt}
               humanReview={humanReview}
             />
+          )}
+
+          {tab === "tree" && (
+            <section aria-label="木" data-testid="tree-section" className="space-y-4">
+              <Suspense fallback={<TaskTabSkeleton />}>
+                <TaskTreeTab
+                  view={taskTree?.data ?? null}
+                  error={taskTree?.error ?? null}
+                  currentId={task.id}
+                  tree={task.tree}
+                />
+              </Suspense>
+            </section>
           )}
 
           {tab === "timeline" && (
@@ -849,6 +910,19 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
 }
 
 /** タブの見出し（ADR-0044 D5）。`?tab=` だけを差し替え、他の検索パラメータ（`types` 等）は残す。 */
+/**
+ * celeris ADR-0079 D10（Phase R4b）: 止まっている理由の帯を読むかどうかの安い下見（終端でなく、承認待ち・
+ * blocked の unit・`stall_detected` のどれかがある）。本当に出すかと文言は lazy の `TaskHoldBanner` が決める。
+ */
+function mayBeHeld(status: TaskDetail["task"]["status"], execution: TaskDetail["execution"], items: TimelineItem[]) {
+  if (status === "done" || status === "failed" || status === "cancelled") return false;
+  return (
+    execution?.plan_approval != null ||
+    (execution?.plan?.work_units ?? []).some((u) => u.status === "blocked") ||
+    items.some((i) => i.kind === "event" && i.event.type === "stall_detected")
+  );
+}
+
 function TaskTabs({
   current,
   searchParams,
@@ -886,7 +960,8 @@ function TaskTabs({
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   // ADR-0055 D1-2: タップ領域 44×44 以上。
-                  "-mb-px inline-flex min-h-11 items-center gap-1.5 rounded-t-lg border-b-2 px-3.5 py-2 text-sm font-medium no-underline transition-colors",
+                  // celeris ADR-0079 D14（Phase R4b）: 1 文字の「木」でも幅 44 を満たすよう min-w-11 と中央寄せ。
+                  "-mb-px inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-t-lg border-b-2 px-3.5 py-2 text-sm font-medium no-underline transition-colors",
                   active
                     ? "border-primary text-primary"
                     : "border-transparent text-fg-muted hover:border-border-strong hover:text-fg",
@@ -917,7 +992,7 @@ const FAILURE_CLASS_LABEL: Record<"infra" | "work", string> = {
 
 /**
  * ADR-0070 D1/D2（Phase 116）: failed のタスク詳細に出す赤いバナー。「失敗: <分類> — <理由>」に、
- * 配送済みなら一言添え、「やり直す」（常に。`retry`）「再レビュー」（`actions` に `rereview` が
+ * 成果が main に取り込み済みなら一言添え、「やり直す」（常に。`retry`）「再レビュー」（`actions` に `rereview` が
  * あるときだけ）「取り下げ」（状態は変えず、対応不要と記録するコメントを残すだけ。ADR-0070 D2）を出す。
  * `docs/gui/help`（`/help`）の「失敗したタスクの直し方」と同じ言葉づかい。
  */
@@ -950,7 +1025,7 @@ function FailureBanner({
         </p>
         {failure.delivered_release && (
           <p data-testid="failure-banner-delivered">
-            成果は配送済み（release {failure.delivered_release}）だがレビューで不合格。
+            成果は main に取り込み済み（release {failure.delivered_release}）だがレビューで不合格。
           </p>
         )}
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -1196,9 +1271,9 @@ function OverviewTab({
       {/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（計画・WU の表・replan の履歴）。
           計画も gate の判定も無い古いタスクは execution が無いので何も出ない（D23 の後方互換）。 */}
       <ExecutionSection execution={detail.execution} taskId={task.id} />
-      {isGateCandidate(task) && (
+      {(isGateCandidate(task) || detail.execution?.plan_approval) && (
         <Suspense fallback={null}>
-          <ExecutionModeControl task={task} execution={detail.execution} />
+          <ExecutionModeControl task={task} execution={detail.execution} actions={detail.actions} />
         </Suspense>
       )}
       {browserRuns.length > 0 && (

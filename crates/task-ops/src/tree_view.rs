@@ -92,6 +92,9 @@ pub struct TaskTreeNode {
     pub plan_version: Option<u32>,
     /// この節点が出した未回答の決定の数。
     pub open_decisions: u32,
+    /// Phase R4b（D10 の GUI「理由なく止まっています」）: 節点の最後の event が `StallDetected` で、終端でない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall: Option<TreeNodeStall>,
     /// 子の節点（この view に含まれるもの。作られた順）。
     #[serde(default)]
     pub children: Vec<TaskId>,
@@ -101,6 +104,38 @@ pub struct TaskTreeNode {
     pub own: RollupMetrics,
     /// 自分と子孫の合計。
     pub subtree: RollupMetrics,
+}
+
+/// D10: 理由なく止まっている節点（`Event::StallDetected` の写し）。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct TreeNodeStall {
+    /// 分類の理由（`task_core::tree::NodeLiveness.reason`。例 `child_missing`。旧い event は空）。
+    pub reason: String,
+    /// 理由なく止まっていると daemon が最初に見た時刻（RFC 3339。旧い event は無し）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    pub detail: String,
+}
+
+/// R3b 付記 9.: 生存確認は節点の最後の event が `StallDetected` の間は繰り返さない（何か起きれば数え直す）。
+/// 同じ読みで「今も理由なく止まっている」を決める（終端なら無し）。純粋関数。
+pub fn current_stall(task: &Task, events: &[Event]) -> Option<TreeNodeStall> {
+    if task.status.is_terminal() {
+        return None;
+    }
+    match events.last()? {
+        Event::StallDetected {
+            detail,
+            reason,
+            since,
+            ..
+        } => Some(TreeNodeStall {
+            reason: reason.clone(),
+            since: (!since.is_empty()).then(|| since.clone()),
+            detail: detail.clone(),
+        }),
+        _ => None,
+    }
 }
 
 /// 1 つの木の上限の使用（D3）。`max_*` は回答の余裕（`raise-once` / `replan`）を当てた値。
@@ -301,6 +336,7 @@ pub fn task_tree(
             parent_stage: parent_unit.map(|u| u.stage.clone()),
             plan_version,
             open_decisions: open,
+            stall: current_stall(t, &plain),
             children: children_of
                 .get(&t.id)
                 .map(|k| k.iter().filter(|c| seen.contains(c)).copied().collect())
@@ -670,6 +706,37 @@ mod tests {
 
     /// D11 / §7 R4a (c): 段階の子の要約は、子の subtree（孫を含む）の run・reviewer の run・定価（不完全の印）と、
     /// 子の最新の報告の見出しを 1 行にする。まだ作られていない unit は「未作成」。別の段階・superseded の unit は出さない。
+    #[test]
+    fn current_stall_is_the_last_event_of_a_live_node() {
+        let t = task("n", Status::Ready, None);
+        let stall = Event::StallDetected {
+            task_id: t.id,
+            detail: "子 task が見つからない".into(),
+            reason: "child_missing".into(),
+            since: "2026-09-29T00:00:00Z".into(),
+            path: Vec::new(),
+        };
+        let got = current_stall(&t, std::slice::from_ref(&stall));
+        assert_eq!(
+            got,
+            Some(TreeNodeStall {
+                reason: "child_missing".into(),
+                since: Some("2026-09-29T00:00:00Z".into()),
+                detail: "子 task が見つからない".into(),
+            })
+        );
+        // 何か起きたら（最後の event が別物なら）止まりではない。
+        let later = Event::Answered {
+            question: "q".into(),
+            answer: "a".into(),
+        };
+        assert_eq!(current_stall(&t, &[stall.clone(), later]), None);
+        // 終端の節点は出さない。
+        let done = task("n", Status::Done, None);
+        assert_eq!(current_stall(&done, &[stall]), None);
+        assert_eq!(current_stall(&t, &[]), None);
+    }
+
     #[test]
     fn stage_child_summaries_sum_the_child_subtree_and_quote_its_latest_report() {
         let store = SqliteStore::open_in_memory().unwrap();

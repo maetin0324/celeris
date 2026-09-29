@@ -7,6 +7,7 @@
 //
 // ここを変えると mobile-audit.mjs と e2e-check.mjs の両方に効く。1 か所にまとめたのは、同じ画面一覧・同じ
 // 偽データを 2 度書くと片方だけ更新し忘れる事故が起きるため（Phase 83 で e2e-check.mjs を足すときに発見）。
+import fs from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 import net from "node:net";
@@ -102,7 +103,8 @@ export function buildRoutes({
     );
   }
   if (taskId) {
-    for (const tab of ["overview", "timeline", "changes", "files", "artifacts"]) {
+    // celeris ADR-0079 D14（Phase R4b）: 「木」タブも監査・e2e の対象にする。
+    for (const tab of ["overview", "tree", "timeline", "changes", "files", "artifacts"]) {
       routes.push({ route: `task-${tab}`, path: `/tasks/${taskId}?tab=${tab}` });
     }
   }
@@ -456,6 +458,15 @@ export async function setupMockCeleris() {
     }),
   );
 
+  // celeris ADR-0079 D14（Phase R4b）: 「木」タブ（`test/fixtures/api/task-tree.json` の 4 節点の木。root をこの
+  // fixture のタスクに差し替える）と、案件ページの root task の roll-up。
+  const taskTree = JSON.parse(
+    fs
+      .readFileSync(path.join(GUI_DIR, "test/fixtures/api/task-tree.json"), "utf8")
+      .replaceAll("01R4BROOT0000000000000001", TASK_ID),
+  );
+  mock.on("GET", `/api/v1/tasks/${TASK_ID}/task-tree`, (_req, res) => sendJson(res, 200, taskTree));
+
   mock.on(`GET`, `/api/v1/tasks/${TASK_ID}`, (_req, res) =>
     sendJson(res, 200, {
       // ADR-0070 D1/D2（Phase 116）: `failure`（失敗バナー）と「やり直す」「再レビュー」を
@@ -741,6 +752,8 @@ export async function setupMockCeleris() {
     sendJson(res, 200, {
       project: fx.project({ id: PROJECT_ID }),
       milestones: [fx.milestone({ project_id: PROJECT_ID })],
+      // celeris ADR-0079 D11（Phase R4a）/ D14（R4b）: root task の合計。
+      root_totals: { root_tasks: 1, by_status: { running: 1 }, totals: taskTree.totals },
       tasks: [
         {
           id: TASK_ID,
@@ -1019,8 +1032,60 @@ export async function setupMockCeleris() {
           },
           type: "phase_checkpoint",
         },
+        // celeris ADR-0079 D8（Phase R4b）: root の計画の承認（3 つのボタンと計画の見取り図）。
+        {
+          at: "2026-09-20T20:00:00Z",
+          decision_ids: ["01INBOXDECISION0000000001"],
+          plan_id: "01INBOXPLAN00000000000001",
+          plan_version: 1,
+          reasons: ["decisions:h1", "near_limit:max_tree_leaves:40/48"],
+          stages: [
+            {
+              key: "phase-1",
+              title: "Phase 1: broker と provider 1 種（長い段階名でも折り返しが崩れないことを確かめる）",
+              review_human: false,
+              units: ["p1-a: credential backend の下調べ（leaf）", "p1-b: broker / provider 1 種（子 task）"],
+            },
+            { key: "phase-2", title: "Phase 2: Live View", review_human: true, units: ["p2-a: viewer（子 task）"] },
+          ],
+          summary: "人の決定 1 件を含み、leaf の見込みが上限の 8 割を超えます",
+          task: {
+            actions: ["cancel", "edit", "plan_gate"],
+            id: "01INBOXPLANAPPROVAL000001",
+            kind: "execute",
+            status: "blocked",
+            title: "browser capability",
+          },
+          type: "plan_approval",
+        },
       ],
-      counts: { approvals: 1, attention: 2, by_status: {}, drafts: 2, questions: 1 },
+      counts: { approvals: 1, attention: 3, by_status: {}, decisions: 1, drafts: 2, questions: 1 },
+      // celeris ADR-0079 D7（Phase R4b）: 未回答の決定 1 件（パンくず・選択肢〈推奨〉・後戻り・待つもの）。
+      decisions: [
+        {
+          age_secs: 5400,
+          cost_note: "項目 ID / policy の移行と権限の再承認",
+          cost_of_reversal: "medium",
+          created_at: "2026-09-20T22:30:00Z",
+          id: "01INBOXDECISION0000000001",
+          key: "h1",
+          kind: "choice",
+          needed_before: ["p1-b", "stage:phase-2"],
+          options: [
+            { key: "org-vault", label: "既存の組織 vault", consequence: "既存の権限の流れに乗る" },
+            { key: "local-file", label: "ローカルの暗号化ファイル", consequence: "移行が要る" },
+          ],
+          origin: "planner",
+          path: [
+            { task_id: "01INBOXPLANAPPROVAL000001", title: "browser capability", stage: "phase-1" },
+            { task_id: "01INBOXPLANAPPROVAL000001", title: "browser capability", unit: "p1-b" },
+          ],
+          question: "credential backend をどれにするか",
+          recommended: "org-vault",
+          root_id: "01INBOXPLANAPPROVAL000001",
+          task_id: "01INBOXPLANAPPROVAL000001",
+        },
+      ],
       // Phase 88（P-G39-1）: `draft-group`（`DraftGroupRow`、`draft-item` 2 件）を機械検査対象にする。
       drafts: [
         {

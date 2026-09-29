@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { data, isRouteErrorResponse, Link, useFetcher, useNavigate } from "react-router";
 import type { ProjectOpOutcome, RetryOutcome, TransitionOutcome } from "~/celeris/action-types";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
@@ -36,9 +36,7 @@ import type {
   ArtifactList,
   Clusters,
   ClusterView,
-  MilestoneDecideBody,
   MilestoneStatus,
-  MilestoneView,
   OrgList,
   OrgNode,
   Project,
@@ -50,14 +48,14 @@ import type {
   ReportList,
   TaskDetail,
   TaskId,
+  TaskTreeView,
 } from "~/celeris/types";
 import { ArtifactsList } from "~/components/ArtifactsList";
 import { ErrorFlash, FieldErrors, ProjectActionFlash, RetryFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
-import { MarkdownViewer } from "~/components/MarkdownViewer";
 import { ProjectIntegrations } from "~/components/ProjectIntegrations";
-import { ProjectPlanDag } from "~/components/ProjectPlanDag";
 import { ProjectRepos } from "~/components/ProjectRepos";
+import { ProjectRootTasks } from "~/components/ProjectRootTasks";
 import { ReportsList } from "~/components/ReportsList";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { Badge } from "~/components/ui/badge";
@@ -65,7 +63,6 @@ import { Button, buttonClass } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
 import {
   checkboxClass,
-  chipLabelClass,
   hintClass,
   inputClass,
   labelClass,
@@ -95,8 +92,6 @@ import {
   CANCEL_STOP_LABEL,
   DOCS_SECTION_DESCRIPTION,
   DOCS_TAB_LABEL,
-  MILESTONE_PAUSED_BANNER,
-  milestoneCancelConfirmText,
   milestoneStatusLabel,
   milestoneStatusTone,
   PAUSE_LABEL,
@@ -115,16 +110,10 @@ import {
   tierLabel,
   UNARCHIVE_LABEL,
 } from "~/lib/labels";
-import {
-  milestoneIsPaused,
-  milestoneLifecycleButtons,
-  projectIsArchived,
-  projectIsPaused,
-  projectLifecycleButtons,
-} from "~/lib/lifecycle";
-import { milestoneDecisionValid, milestoneIsStalled } from "~/lib/milestone-review";
+import { projectIsArchived, projectIsPaused, projectLifecycleButtons } from "~/lib/lifecycle";
 import { isTransientStatus } from "~/lib/recovery";
 import { revalidateAfterActionErrors } from "~/lib/revalidate";
+import { projectRootTasks } from "~/lib/tree";
 import { cn } from "~/lib/utils";
 import { projectTasksToGraph, visibleWorkTasks } from "~/lib/work-tree";
 import { readWorkspaceFromForm, workspaceKindOf, workspaceSummaryText } from "~/lib/workspace-form";
@@ -159,7 +148,15 @@ export interface ProjectDetailData {
    * タスク × リポジトリごとに最新の 1 件を celeris が新しい順で返す。落ちても案件の詳細自体は出す。
    */
   integrations: ProjectIntegrationItem[];
+  /**
+   * celeris ADR-0079 D14（Phase R4b）: root task ごとの木（`GET /tasks/{root}/task-tree`。subtree の roll-up・導出値）。
+   * 引けなかった root と、`ROOT_TREE_FETCH_LIMIT` を超えた分は `null`（一覧には状態だけ出す）。
+   */
+  rootTrees: Record<string, TaskTreeView | null>;
 }
+
+/** 案件ページで木を引く root task の上限（root ごとに節点の events を読むため。超えた分は木のタブで見る）。 */
+const ROOT_TREE_FETCH_LIMIT = 20;
 
 /**
  * 1 タスクぶんの成果物 + 置き場所を束ねる（N+1。`GET /tasks/{id}` と `GET /tasks/{id}/artifacts`）。
@@ -216,6 +213,15 @@ export async function loadProjectDetail(
     request.signal,
   );
   const artifactRows = buildProjectArtifactRows(detail.tasks, bundles, orgById);
+  const rootTrees: Record<string, TaskTreeView | null> = {};
+  const roots = projectRootTasks(detail.tasks);
+  await Promise.all(
+    roots.slice(0, ROOT_TREE_FETCH_LIMIT).map(async (t) => {
+      rootTrees[t.id] = await client
+        .get<TaskTreeView>(`/tasks/${encodeURIComponent(t.id)}/task-tree`, { signal: request.signal })
+        .catch(() => null);
+    }),
+  );
   return {
     detail,
     org,
@@ -224,6 +230,7 @@ export async function loadProjectDetail(
     fetchedAt: new Date().toISOString(),
     clusters: clusters.items,
     integrations: integrations.items,
+    rootTrees,
   };
 }
 
@@ -345,7 +352,6 @@ export async function action({ request, params }: Route.ActionArgs) {
 // 「状態を直接変える」プルダウンの選択肢。`paused` / `cancelled` は専用のボタン（ADR-0044 D6）で
 // 行う（`PATCH` では連鎖も `paused_from` も起きないので、ここには並べない）。
 const PROJECT_STATUSES: ProjectStatus[] = ["proposed", "active", "done"];
-const MILESTONE_STATUSES: MilestoneStatus[] = ["proposed", "approved", "in_progress", "reached", "redesigned"];
 
 const PROJECT_STATUS_TONE: Record<ProjectStatus, Tone> = {
   proposed: "info",
@@ -356,7 +362,7 @@ const PROJECT_STATUS_TONE: Record<ProjectStatus, Tone> = {
 };
 
 export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) {
-  const { detail, org, reports, artifactRows, fetchedAt, clusters, integrations } = loaderData;
+  const { detail, org, reports, artifactRows, fetchedAt, clusters, integrations, rootTrees } = loaderData;
   const { project, milestones, tasks } = detail;
   // ADR-0043 D1（Phase 52 / G16）: 並びは celeris が決めたもの（primary が先頭）をそのまま使う。
   const repos = detail.repos ?? [];
@@ -370,10 +376,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
   // 同じ判断に揃えるため、ここで 1 度だけ絞る。
   const workTasks = useMemo(() => visibleWorkTasks(tasks), [tasks]);
   const graph = useMemo(() => projectTasksToGraph(tasks, orgById), [tasks, orgById]);
-  // ADR-0074 D3.5 / D3.8（Phase F4b (h)）: 案件計画の途中目標（`plan_key` あり）は DAG の節点で判定する
-  // ので、下の「途中目標」の一覧には案件計画を持たない途中目標（旧い意味のもの）だけを出す。
-  const projectPlan = detail.project_plan ?? null;
-  const listedMilestones = projectPlan ? milestones.filter((m) => !m.plan_key) : milestones;
+  const roots = useMemo(() => projectRootTasks(tasks), [tasks]);
 
   return (
     <div className="space-y-8">
@@ -441,11 +444,13 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
         label="案件詳細の目次"
         items={[
           { id: "project-detail-heading", icon: "file", label: "依頼" },
+          { id: "root-tasks-heading", icon: "gitBranch", label: "root task" },
           { id: "project-workspace-heading", icon: "folder", label: "作業場所" },
           { id: "project-repos-heading", icon: "database", label: "リポジトリ" },
           { id: "project-integrations-heading", icon: "gitBranch", label: "PR と取り込み" },
-          ...(projectPlan ? [{ id: "project-plan-dag-heading", icon: "gitBranch" as const, label: "案件計画" }] : []),
-          { id: "milestones-heading", icon: "target", label: "途中目標" },
+          ...(milestones.length > 0
+            ? [{ id: "milestones-heading", icon: "target" as const, label: "以前の途中目標" }]
+            : []),
           { id: "project-plan-heading", icon: "sparkles", label: "この方針で進める" },
           { id: "work-tree-heading", icon: "gitBranch", label: "仕事の木" },
           { id: "project-reports-heading", icon: "send", label: "報告" },
@@ -508,6 +513,9 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
       {/* 案件の作業場所（ADR-0039 D1、Phase G13k）。コードを扱う仕事の子タスクが継ぐ場所
           （明示 > 案件 > 親。ADR-0039 D2）で、未設定だと空の作業ディレクトリで走ってしまう
           （実機の事故 2026-09-18）。 */}
+      {/* celeris ADR-0079 D13 / D14（Phase R4b）: root task の一覧（並列、subtree の roll-up 付き）。 */}
+      <ProjectRootTasks roots={roots} trees={rootTrees ?? {}} totals={detail.root_totals} />
+
       <section aria-labelledby="project-workspace-heading" data-testid="project-workspace" className="space-y-4">
         <SectionTitle icon="folder" id="project-workspace-heading">
           作業場所
@@ -587,59 +595,28 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
         <ProjectIntegrations items={integrations} />
       </section>
 
-      {/* ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。節点を選ぶと ADR-0038 の
-          判定をその場で出し、提案中の計画は破線で重ねて承認 / 却下を置く。案件計画の無い案件では出さない。 */}
-      {projectPlan && (
-        <section aria-labelledby="project-plan-dag-heading" data-testid="project-plan-section" className="space-y-4">
-          <SectionTitle icon="gitBranch" id="project-plan-dag-heading" count={projectPlan.nodes.length}>
-            案件計画
+      {/* celeris ADR-0079 D13 / D14（Phase R4b）: 案件は計画（途中目標の DAG）を持たなくなった。以前の途中目標は
+          状態のまま凍結した履歴として読み取り専用で出す（作成・Go / 再設計・一時停止・判定の操作は出さない。
+          API の廃止は R5a）。途中目標が 1 件も無い案件では節ごと出さない。 */}
+      {milestones.length > 0 && (
+        <section aria-labelledby="milestones-heading" data-testid="milestones-section" className="space-y-4">
+          <SectionTitle icon="target" id="milestones-heading" count={milestones.length}>
+            以前の途中目標（読み取り専用）
           </SectionTitle>
-          <ProjectPlanDag
-            plan={projectPlan}
-            milestones={milestones}
-            renderReview={(m) => <MilestoneReviewPanel milestone={m} projectId={project.id} />}
-          />
-          {projectPlan.current_version != null && !projectPlan.pending && (
-            <fetcher.Form method="post" className="space-y-2" data-testid="project-replan-form">
-              <input type="hidden" name="intent" value="project_plan" />
-              <input type="hidden" name="mode" value="milestones" />
-              <label htmlFor="project-replan-note" className={labelClass}>
-                計画を見直す（理由を CoS に伝えます。承認するまで今の計画のまま動きます）
-              </label>
-              <textarea id="project-replan-note" name="note" rows={2} className={`${textareaClass} w-full`} />
-              <Button
-                type="submit"
-                variant="secondary"
-                size="sm"
-                disabled={submitting}
-                data-testid="project-replan-submit"
-              >
-                <Icon name="sparkles" />
-                計画を見直す
-              </Button>
-            </fetcher.Form>
-          )}
-        </section>
-      )}
-
-      <section aria-labelledby="milestones-heading" data-testid="milestones-section" className="space-y-4">
-        <SectionTitle icon="target" id="milestones-heading" count={listedMilestones.length}>
-          途中目標
-        </SectionTitle>
-        {listedMilestones.length === 0 ? (
-          <EmptyState icon="target" title="途中目標がありません" />
-        ) : (
+          <p className={hintClass} data-testid="milestones-readonly-note">
+            途中目標は root task の段階で表すようになりました（ADR-0079）。ここにあるのは以前の記録です。
+          </p>
           <ul className="space-y-2">
-            {listedMilestones
+            {milestones
               .slice()
               .sort((a, b) => a.seq - b.seq)
               .map((m) => (
                 <li key={m.id} data-testid="milestone-row" data-milestone-id={m.id}>
                   <Card>
-                    <CardBody className="space-y-3">
+                    <CardBody className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-xs text-fg-subtle">#{m.seq}</span>
-                        <span className="font-medium">{m.title}</span>
+                        <span className="break-words font-medium">{m.title}</span>
                         <Badge
                           tone={milestoneStatusTone(m.status)}
                           data-testid="milestone-status"
@@ -648,112 +625,14 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
                           {milestoneStatusLabel(m.status)}
                         </Badge>
                       </div>
-                      {m.description && <p className="text-sm text-fg-muted">{m.description}</p>}
-
-                      {/* ADR-0044 D6（Phase 55 / G19）: 一時停止・再開・中止（確認付き）。 */}
-                      <MilestoneLifecycleActions milestone={m} />
-
-                      {/* ADR-0038 D3（Phase 41 / G13j）: 秘書のレビューの返事が付いたら、まとめ・提案・
-                          ok / 議論 / ng のカードを出す。`reached` / `redesigned` は判定済みなので
-                          バッジだけ（`review` が付いたままでもボタンは出さない。誤って ok/議論/ng を
-                          もう一度押せてしまわないように）。 */}
-                      {m.status === "reached" || m.status === "redesigned" ? null : m.review ? (
-                        <MilestoneReviewPanel milestone={m} projectId={project.id} />
-                      ) : (
-                        milestoneIsStalled(tasks, m.id) && (
-                          <Alert tone="info" data-testid="milestone-review-pending">
-                            CoS が結果をまとめています…
-                          </Alert>
-                        )
-                      )}
-
-                      {/* ADR-0044 D1（Phase 53）: この途中目標に属するタスクを人が直接足せる。 */}
-                      <AddTaskForm
-                        projectId={project.id}
-                        milestoneId={m.id}
-                        org={org.items}
-                        testId={`milestone-add-task-${m.id}`}
-                      />
-
-                      {/* 既存の直接変更は裏方の詳細に畳む（誤って押さないように。SPEC §7 のアジャイル判定は
-                          本来「ok / 議論 / ng」の対話で行う。ADR-0038 D3 の依頼）。 */}
-                      {/* ADR-0055 D1-4: モバイルは text-sm、デスクトップは lg: で元の text-xs のまま。 */}
-                      <details className="text-sm text-fg-subtle lg:text-xs" data-testid="milestone-status-details">
-                        <summary className="min-h-11 cursor-pointer select-none">状態を直接変える（裏方）</summary>
-                        <fetcher.Form method="post" className="mt-2 flex flex-wrap items-end gap-2">
-                          <input type="hidden" name="intent" value="milestone_status" />
-                          <input type="hidden" name="milestone_id" value={m.id} />
-                          <select
-                            name="status"
-                            defaultValue={m.status}
-                            aria-label={`途中目標 ${m.title} の状態`}
-                            className={cn(selectClass, "h-11 text-sm lg:h-8 lg:text-xs")}
-                          >
-                            {MILESTONE_STATUSES.map((s) => (
-                              <option key={s} value={s}>
-                                {milestoneStatusLabel(s)}
-                              </option>
-                            ))}
-                          </select>
-                          <Button
-                            type="submit"
-                            variant="ghost"
-                            size="xs"
-                            disabled={submitting}
-                            data-testid="milestone-status-submit"
-                          >
-                            <Icon name="check" />
-                            Go / 再設計
-                          </Button>
-                        </fetcher.Form>
-                      </details>
+                      {m.description && <p className="break-words text-sm text-fg-muted">{m.description}</p>}
                     </CardBody>
                   </Card>
                 </li>
               ))}
           </ul>
-        )}
-
-        <Card>
-          <CardHeader
-            icon="plus"
-            title="途中目標を足す"
-            description="途中目標は予め大まかに決めておいて、達成のたびに Go を出すか、再設計します。"
-          />
-          <CardBody>
-            <fetcher.Form method="post" data-testid="milestone-new-form" className="space-y-3">
-              <input type="hidden" name="intent" value="milestone_create" />
-              <div>
-                <label htmlFor="milestone-title" className={labelClass}>
-                  題名
-                </label>
-                <input id="milestone-title" name="title" type="text" className={`${inputClass} mt-1.5 w-full`} />
-              </div>
-              <div>
-                <label htmlFor="milestone-description" className={labelClass}>
-                  説明
-                </label>
-                <textarea
-                  id="milestone-description"
-                  name="description"
-                  rows={2}
-                  className={`${textareaClass} mt-1.5 w-full`}
-                />
-              </div>
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                disabled={submitting}
-                data-testid="milestone-new-submit"
-              >
-                <Icon name="plus" />
-                追加
-              </Button>
-            </fetcher.Form>
-          </CardBody>
-        </Card>
-      </section>
+        </section>
+      )}
 
       {/* 「この方針で進める」（監査 H3、docs/celeris-api-v1.md §3.61）。押すと秘書に分解の仕事が 1 件立ち、
           仕事の木が増えていく。案件が「提案中」でも押せる（celeris が「進行中」にする）。 */}
@@ -765,66 +644,14 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
           <CardHeader
             icon="sparkles"
             title="分解を CoS に頼む"
-            description="CoS が、依頼文・途中目標・ここまでのやり取りとあなたの一言をまとめて、仕事に分解します。返事は待ちません（仕事の木が増えていきます）。"
+            description="CoS が、依頼文・ここまでのやり取りとあなたの一言をまとめて、仕事に分解します。返事は待ちません（仕事の木が増えていきます）。"
           />
           <CardBody>
             <fetcher.Form method="post" data-testid="project-plan-form" className="space-y-3">
               <input type="hidden" name="intent" value="project_plan" />
-              {/* celeris ADR-0072「Phase F6 実装時の決定」: 案件計画を持たない既存の案件（仕事が止まった案件）でも、
-                  ここから案件計画（途中目標の DAG の提案 → 人の承認）を起こせる。 */}
-              {/* ADR-0055 D1-2: 押せる範囲は包む `<label>`（`chipLabelClass` の `min-h-11`）で 44×44 を満たす（F6-fix）。 */}
-              <fieldset className="space-y-1.5" data-testid="project-plan-mode">
-                <legend className={labelClass}>進め方</legend>
-                <label className={`${chipLabelClass} w-full`}>
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="decompose"
-                    defaultChecked
-                    className="shrink-0"
-                    data-testid="project-plan-mode-decompose"
-                  />
-                  <span>仕事に分解する（従来どおり。CoS が仕事を作り、すぐ動き始めます）</span>
-                </label>
-                <label className={`${chipLabelClass} w-full`}>
-                  <input
-                    type="radio"
-                    name="mode"
-                    value="milestones"
-                    className="shrink-0"
-                    data-testid="project-plan-mode-milestones"
-                  />
-                  <span>
-                    案件計画を提案させる（CoS が途中目標の DAG
-                    を提案し、あなたが承認するまで動きません。承認済みの計画が あれば見直しになります）
-                  </span>
-                </label>
-              </fieldset>
-              <div>
-                <label htmlFor="project-plan-milestone" className={labelClass}>
-                  どの途中目標まで進めるか
-                </label>
-                <select
-                  id="project-plan-milestone"
-                  name="milestone_id"
-                  data-testid="project-plan-milestone"
-                  defaultValue=""
-                  className={`${selectClass} mt-1.5 w-full max-w-md`}
-                >
-                  <option value="">指定しない（今ある途中目標を文脈として渡す）</option>
-                  {milestones
-                    .filter((m) => m.status === "approved" || m.status === "in_progress")
-                    .sort((a, b) => a.seq - b.seq)
-                    .map((m) => (
-                      <option key={m.id} value={m.id}>
-                        #{m.seq} {m.title}
-                      </option>
-                    ))}
-                </select>
-                <p className={hintClass}>
-                  選べるのは承認済み・進行中の途中目標だけです（提案のままのものは出ません）。案件計画を提案させるときは使いません。
-                </p>
-              </div>
+              {/* celeris ADR-0079 D13（Phase R4b）: 「案件計画を提案させる」（`mode: milestones`）と途中目標の指定は
+                  出さない（案件は計画を持たない。API の廃止は R5a）。進め方は従来どおりの分解だけ。 */}
+              <input type="hidden" name="mode" value="decompose" />
               <div>
                 <label htmlFor="project-plan-note" className={labelClass}>
                   ひとこと（任意）
@@ -1103,111 +930,6 @@ function ProjectLifecycleActions({ project }: { project: ProjectDetail["project"
 }
 
 /**
- * 途中目標のカードの「一時停止／再開」「中止（確認付き）」（ADR-0044 D6、§3.89〜3.91。Phase 55 / G19）。
- * 案件の状態は変わらない（途中目標だけ）。中止すると、この途中目標に属する非終端タスクが連鎖で中止される。
- *
- * フェーズ 72（ADR-0055 D2 ラウンド 4、U11）: 「一時停止／再開」は途中目標カードの主役の操作として
- * 常に出すが、頻度が低く確認も要る「中止」は `<details>` に畳む（Project 画面のアーカイブと同じ規律。
- * Phase 71 の「その他の操作」に揃えた）。中止だけを畳んでも中止・一時停止・再開は同じ 1 つの
- * `fetcher`（`milestone-lifecycle-${id}`）を共有したまま。
- */
-function MilestoneLifecycleActions({ milestone }: { milestone: MilestoneView }) {
-  const fetcher = useFetcher<ProjectOpOutcome>({ key: `milestone-lifecycle-${milestone.id}` });
-  const busy = fetcher.state !== "idle";
-  const [confirming, setConfirming] = useState(false);
-  const buttons = milestoneLifecycleButtons(milestone);
-
-  return (
-    <div className="space-y-2" data-testid="milestone-lifecycle" data-milestone-id={milestone.id}>
-      {milestoneIsPaused(milestone) && (
-        <Alert tone="warning" data-testid="milestone-paused-banner">
-          {MILESTONE_PAUSED_BANNER}
-        </Alert>
-      )}
-      {/* フェーズ 71: モバイルは縦積み・全幅、`sm:` から元どおりの横並び（xs サイズのまま）。 */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        {buttons.pause && (
-          <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="milestone_pause" />
-            <input type="hidden" name="milestone_id" value={milestone.id} />
-            <Button
-              type="submit"
-              variant="ghost"
-              size="xs"
-              disabled={busy}
-              data-testid="milestone-pause"
-              className="w-full sm:w-auto"
-            >
-              <Icon name="clock" />
-              {PAUSE_LABEL}
-            </Button>
-          </fetcher.Form>
-        )}
-        {buttons.resume && (
-          <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="milestone_resume" />
-            <input type="hidden" name="milestone_id" value={milestone.id} />
-            <Button
-              type="submit"
-              variant="soft"
-              size="xs"
-              disabled={busy}
-              data-testid="milestone-resume"
-              className="w-full sm:w-auto"
-            >
-              <Icon name="play" />
-              {RESUME_LABEL}
-            </Button>
-          </fetcher.Form>
-        )}
-      </div>
-      {buttons.cancel && (
-        <details data-testid="milestone-cancel-details" className="text-sm text-fg-subtle lg:text-xs">
-          <summary className="min-h-11 cursor-pointer select-none">その他の操作（中止）</summary>
-          <div className="mt-2 space-y-2">
-            <Button
-              type="button"
-              variant="danger"
-              size="xs"
-              disabled={busy}
-              onClick={() => setConfirming(true)}
-              data-testid="milestone-cancel"
-              className="w-full sm:w-auto"
-            >
-              <Icon name="ban" />
-              {CANCEL_LABEL}
-            </Button>
-            {confirming && (
-              <Alert tone="danger" data-testid="milestone-cancel-confirm">
-                <p>{milestoneCancelConfirmText(milestone.title)}</p>
-                <fetcher.Form method="post" className="flex flex-wrap items-center gap-2 pt-1">
-                  <input type="hidden" name="intent" value="milestone_cancel" />
-                  <input type="hidden" name="milestone_id" value={milestone.id} />
-                  <Button
-                    type="submit"
-                    variant="danger"
-                    size="xs"
-                    disabled={busy}
-                    data-testid="milestone-cancel-submit"
-                  >
-                    <Icon name="ban" />
-                    {CANCEL_CONFIRM_LABEL}
-                  </Button>
-                  <Button type="button" variant="ghost" size="xs" onClick={() => setConfirming(false)}>
-                    {CANCEL_STOP_LABEL}
-                  </Button>
-                </fetcher.Form>
-              </Alert>
-            )}
-          </div>
-        </details>
-      )}
-      <ProjectActionFlash outcome={fetcher.data} />
-    </div>
-  );
-}
-
-/**
  * 「タスクを追加」（ADR-0044 D1、Phase 53）。案件のヘッダと途中目標のカードの両方から同じ形で開く
  * （`milestoneId` を渡すとその途中目標に属するタスクになる）。
  *
@@ -1360,129 +1082,6 @@ function AddTaskForm({
         </fetcher.Form>
       </div>
     </details>
-  );
-}
-
-/**
- * 途中目標のレビューカード（ADR-0038 D3、Phase 41 / G13j）。CoS のまとめ（Markdown）と提案された次の
- * 途中目標を出し、「ok」「議論」「ng」の 3 ボタン＋自由記述欄を持つ。この画面全体の `fetcher`
- * （project 単位の intent）とは別に、途中目標ごとの専用 `fetcher`（`WorkTreeTaskRow` と同じ考え方）を持つ。
- * `discuss` が通ったら Console（`/?scope=project:<id>`、ADR-0048 D4）へ遷移する（この案件の流れに CoS の
- * 返事も含めて出る。Console は SSE で自動更新するので、旧来の「考え中」ポーリングは不要）。
- */
-function MilestoneReviewPanel({ milestone, projectId }: { milestone: MilestoneView; projectId: string }) {
-  const fetcher = useFetcher<ProjectOpOutcome>({ key: `milestone-decide-${milestone.id}` });
-  const busy = fetcher.state !== "idle";
-  const [note, setNote] = useState("");
-  const [invalid, setInvalid] = useState(false);
-  const navigate = useNavigate();
-  const review = milestone.review;
-
-  useEffect(() => {
-    if (fetcher.data?.ok && fetcher.data.op === "milestone_decide" && fetcher.data.decided.decision === "discuss") {
-      navigate(`/?scope=${encodeURIComponent(`project:${projectId}`)}`);
-    }
-  }, [fetcher.data, navigate, projectId]);
-
-  if (!review) return null;
-
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
-    const decision = (submitter?.value ?? "ok") as MilestoneDecideBody["decision"];
-    if (!milestoneDecisionValid(decision, note)) {
-      e.preventDefault();
-      setInvalid(true);
-      return;
-    }
-    setInvalid(false);
-  }
-
-  return (
-    <div className="space-y-3" data-testid="milestone-review">
-      <Alert tone="info" title="CoS のまとめ">
-        <div data-testid="milestone-review-text">
-          <MarkdownViewer content={review.text} />
-        </div>
-      </Alert>
-      {milestone.proposal && (
-        <div className="rounded-lg border border-border bg-surface-2/50 p-3 text-sm" data-testid="milestone-proposal">
-          <p className="font-medium">次の途中目標の提案: {milestone.proposal.title}</p>
-          {milestone.proposal.description && (
-            <p className="mt-1 whitespace-pre-wrap text-fg-muted">{milestone.proposal.description}</p>
-          )}
-        </div>
-      )}
-      <fetcher.Form method="post" onSubmit={handleSubmit} className="space-y-2">
-        <input type="hidden" name="intent" value="milestone_decide" />
-        <input type="hidden" name="milestone_id" value={milestone.id} />
-        <div>
-          <label htmlFor={`milestone-decide-note-${milestone.id}`} className={labelClass}>
-            一言（議論・ng は必須）
-          </label>
-          <textarea
-            id={`milestone-decide-note-${milestone.id}`}
-            name="note"
-            rows={2}
-            value={note}
-            onChange={(e) => {
-              setNote(e.target.value);
-              if (invalid) setInvalid(false);
-            }}
-            aria-invalid={invalid ? true : undefined}
-            data-testid="milestone-decide-note"
-            className={`${textareaClass} mt-1.5 w-full`}
-          />
-          {invalid && (
-            <p
-              role="alert"
-              className="mt-1 text-sm text-danger lg:text-xs"
-              data-testid="milestone-decide-note-required"
-            >
-              議論・ng には一言が要ります。
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="submit"
-            name="decision"
-            value="ok"
-            variant="success"
-            size="sm"
-            disabled={busy}
-            data-testid="milestone-decide-ok"
-          >
-            <Icon name="check" />
-            ok
-          </Button>
-          <Button
-            type="submit"
-            name="decision"
-            value="discuss"
-            variant="secondary"
-            size="sm"
-            disabled={busy}
-            data-testid="milestone-decide-discuss"
-          >
-            <Icon name="message" />
-            議論
-          </Button>
-          <Button
-            type="submit"
-            name="decision"
-            value="ng"
-            variant="danger"
-            size="sm"
-            disabled={busy}
-            data-testid="milestone-decide-ng"
-          >
-            <Icon name="x" />
-            ng
-          </Button>
-        </div>
-      </fetcher.Form>
-      <ProjectActionFlash outcome={fetcher.data} />
-    </div>
   );
 }
 

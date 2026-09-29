@@ -1,7 +1,8 @@
-import type { EventsPage, Inbox, TaskDetail, TaskList } from "~/celeris/types";
+import type { EventsPage, Inbox, TaskDetail, TaskList, TaskTreeView } from "~/celeris/types";
 import inboxFixture from "./api/inbox.json";
 import taskDetailFixture from "./api/task-detail.json";
 import taskEventsFixture from "./api/task-events.json";
+import taskTreeFixture from "./api/task-tree.json";
 import tasksFixture from "./api/tasks.json";
 
 /**
@@ -24,3 +25,5 @@ export const _inboxFixture: Widen<Inbox> = inboxFixture;
 export const _tasksFixture: Widen<TaskList> = tasksFixture;
 export const _taskDetailFixture: Widen<TaskDetail> = taskDetailFixture;
 export const _taskEventsFixture: Widen<EventsPage> = taskEventsFixture;
+// celeris ADR-0079 D11 / D14（Phase R4a / R4b）: 「木」タブの fixture（R4a の API の形。手で組んだ 4 節点の木）。
+export const _taskTreeFixture: Widen<TaskTreeView> = taskTreeFixture;

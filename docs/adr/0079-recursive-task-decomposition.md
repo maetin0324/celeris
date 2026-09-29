@@ -1232,3 +1232,60 @@ R3a / R3b から持ち越した replay の差）で決めたこと。migration �
     git の作業場所では **b の WU ブランチがどの統合にも merge されない**（成果が Task ブランチに入らない）形になる。直し方の提案: replan の
     `Some(existing)` の枝で `row.phase = wu_spec.phase.clone()`（/2・/3）にし、replay の `apply_replan_step` も同じく `phase` を新しい版に
     する（`seq` は列が書かれないので今のまま）。
+
+## 付記: R4b 実装時の逸脱・明確化（2026-09-29）
+
+R4b（GUI: 「木」タブ、受信箱の「決定」「計画の承認」、タスク詳細の止まっている理由と計画の承認、案件ページの root task の一覧、
+語の変更）で決めたこと。migration なし（schema 31 のまま）。本文の決定は変えていない。
+
+1. **API の追加（1 欄だけ）**: `TaskTreeNode.stall?`（`TreeNodeStall`: `reason`・`since?`・`detail`）。R4a の木の節点には D10 の
+   「理由なく止まっている」を知る欄が無く、GUI が節点ごとに events を引き直すことになるため、`task_ops::tree_view` が既に読んでいる
+   節点の events から決める純粋関数 `tree_view::current_stall`（R3b 付記 9. と同じ読み: 最後の event が `StallDetected` で終端でない間。
+   何か event が積まれれば消える）を足した。`api-v1.schema.json` は追加だけ（35 行）。タスク詳細（木を引かない）は同じ読みを
+   `GET /tasks/{id}/timeline`（既に引いている）の最後の event で行う（`~/lib/tree.ts::currentStallFromTimeline`）。
+2. **「木」タブ**（D14）: タブ名は「木」。**木の無い task でも出す**（隠さない）: R4a の API は 1 節点の木を返し、自分の run・reviewer・
+   定価・壁時計の roll-up はどの task にも意味があるため。タブを開いたときだけ `GET /tasks/{id}/task-tree?root=true` を引き（節点ごとに
+   events を読むので他のタブでは叩かない）、root から木全体を出して今の task に印を付ける（子から開いても文脈が見える。上限の使用は
+   root を含む view にだけ出る）。節点は前順の縦の一覧を深さで字下げ（モバイルでも同じ。字下げは 3 段で止める）、leaf は段階ごとに
+   `<details>` へ折りたたむ（統合 unit は出さない）。子は `/tasks/<id>?tab=tree` へのリンク。**本体は `React.lazy`**（ADR-0055 の
+   task 系ルートの初回 JS 532 KB の予算。R4b の前 528.6 KB → 後 528.9 KB）。`TaskDetail.tree` の要約（R4a 付記 6.）は足していない。
+   §7 R4b の「root の概要の木の要約」は、概要に木を引かせない（重い）ため、止まっている理由の帯（下の 4.）と案件ページの root の
+   roll-up（5.）で代える。D11 の「人を待った時間」は API に無いので出していない。
+3. **受信箱**: 「決定」（`decisions[]`）と「計画の承認」（`attention[]` の `plan_approval`）を独立の節にした（承認は `counts.attention`
+   に数えられたまま「注意」の節からは外す。3 つのボタンと計画の見取り図を持つため）。決定は パンくず（`decisionBreadcrumb`: root の
+   題名から各段の段階・子の題名・unit を `›` でつなぐ）・問い・選択肢（推奨に印を付け、既定で推奨を選択）・後戻り・待っているもの・
+   経過時間と、その場で「答える」（`option` + 任意の `note`）/「取り下げる」（`note` を `reason` に）。**自由記述は `kind = choice` だけ**
+   選べる（daemon の決定は `option` 必須。R3a 付記 8.）。`revise` の入口は GUI に出していない（回答済みは受信箱から消えるため。
+   必要なら R5）。計画の承認は「この計画で進める / 計画を立て直す（指示が必須）/ 取り下げる」で、送り先はタスク詳細と同じ
+   `/tasks/:id` の action（`intent=plan_gate`）。ボタンは celeris が `actions` に `plan_gate` を入れたときだけ出す。409 / 422 は
+   celeris の文言をそのまま出す（`ErrorFlash`。422 の欄の誤りは欄の下）。
+4. **タスク詳細**: どのタブからも見える位置に「止まっている理由」の帯（`TaskHoldBanner`、lazy）: 理由なし（stall。daemon の分類の語と
+   `detail`）→ 計画の承認待ち → `blocked(infra)` の unit → `blocked(decision)` の unit の順（R4a 付記 4. の `node_phase` と同じ優先）。
+   決定は受信箱へ、承認は「実行の形」へ、どれも「木で見る」へのリンク。F6 の「実行の形」カードは `plan_approval` があれば
+   gate の対象外の形でも出し、承認の理由と同じ 3 つのボタンを出す（その間は分解の操作を隠す）。`blocked(infra)` の unit の人の
+   「再試行」の入口は API が無いので出していない（R5 以降。R2b / R3b の未解決のまま）。
+5. **案件ページ**（D13 / D14）: root task（`parent_id` が無く、対話でも裏方〈`support`〉でもない。R4a 付記 7. と同じ読み）の一覧を
+   依頼の直後に置き、状態・導出値・止まっている理由・未回答の決定と、root ごとの `GET /tasks/{root}/task-tree` の subtree の roll-up
+   （先頭 20 件まで。超えた分・失敗した分は状態だけ）、見出しの下に `root_totals`。「root task を作る」は既存の「タスクを足す」
+   （`POST /tasks` + `project_id`。親の無い task = root task）をそのまま使う。**案件計画の DAG・「計画を見直す」・「案件計画を
+   提案させる」・途中目標の指定は出さない**（「この方針で進める」は `mode = decompose` 固定）。途中目標は「以前の途中目標
+   （読み取り専用）」として題名・状態・説明だけを出す（作成・Go / 再設計・一時停止 / 再開 / 中止・判定・途中目標へのタスクの追加を
+   外した。途中目標が 0 件の案件では節ごと出さない）。action の milestone 系の intent と `projects-admin.server.ts` は残した（API の
+   410 化と一緒に R5a で外す）。
+6. **語**（D6）: 画面の「配送」をすべて改めた（対応は下表）。`gui/app/celeris/types.ts` は celeris の doc コメントから生成した注釈で
+   画面に出ないので対象外（API の欄名 `delivered_release` も互換のため変えない）。試験 `gui/test/unit/wording.test.ts` が `app/`
+   （`help.tsx` を含む）と画面用の fixture を grep して 0 件を確かめる。
+
+   | 以前 | R4b |
+   |---|---|
+   | 成果は配送済み（release …）だがレビューで不合格 | 成果は main に取り込み済み（release …）だがレビューで不合格 |
+   | 配送済み（release に昇格済み） | main に取り込み済み（release に昇格済み） |
+   | （無し） | 成果の取り込み（main へ）/ 成果の取り込み（親『<題名>』の段階『<段階>』へ）（「木」タブの見出しの下） |
+
+   Discord の失敗通知の本文（`crates/celeris/src/notify.rs` の `task_failed` の文面）も同じ語に改めた（試験 `crates/celeris/tests/notify.rs`
+   の期待も）。ADR-0051 の部署レビューの取り込み（`crates/celeris/src/delivery.rs`）が作る repair task の題名「配送の局所修復」は
+   task のデータで GUI の語ではなく、repair の照合にも使われうるので変えていない（R5 で ADR-0051 の語と一緒に見直す）。
+7. **mobile-audit の検査の直し**: タスク詳細のタブが 6 つになって 393px で横にはみ出すようになり、`touch-scroll` の検査が「Tab 歩行で
+   末尾のタブへフォーカス → ブラウザがタブの行を右端までスクロールしたまま → 右→左のスワイプではもう動かない」を違反にした。
+   検査は文書全体を先頭へ戻してから払う作りなので、同じ理由でコンテナ自身も `scrollLeft = 0` に戻してから払い、判定後に元へ戻す
+   ようにした（タブの行そのものは指で両方向に払える）。1 文字の「木」のタブは幅 44 を満たすよう `min-w-11` を足した。

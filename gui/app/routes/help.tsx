@@ -89,6 +89,27 @@ const GLOSSARY: { term: string; text: string }[] = [
     text: "複数の子タスクをまとめる親タスク（kind=plan）。子タスクは draft で作られ、人間が受け入れて進める。",
   },
   { term: "Approval", text: "人間の承認を待つための子タスク（kind=approval）。承認／却下で親の判定が決まる。" },
+  // celeris ADR-0079 D6 / D7 / D8 / D14（Phase R4b）。
+  {
+    term: "木（root task と子 task）",
+    text: "大きな依頼は 1 つの root task になり、計画の段階ごとの unit が leaf（1 run の仕事）か子 task に分かれる（深さ 3 まで）。タスク詳細の「木」タブで、節点ごとの状態・待っているもの・run（reviewer を含む）・定価・壁時計・leaf の done / total と、root の木の上限の使用が見られる。案件ページは root task を並べる。",
+  },
+  {
+    term: "成果の取り込み",
+    text: "子 task の成果は親のブランチ（親の段階の統合）へ、root task の成果は main へ取り込まれる。API の欄名（delivered_release など）は以前のまま。",
+  },
+  {
+    term: "決定（人の決定の要求）",
+    text: "計画や作業の途中で人の判断が要るとき、受信箱の「決定」に問い・選択肢（推奨に印）・後戻りの大きさ・待っている unit が出る。その場で選んで答える（自由記述も可）か取り下げる。答えを待つ unit だけが止まり、他は進む。",
+  },
+  {
+    term: "計画の承認",
+    text: "root task の計画が人の決定を含む・人の確認を挟む段階がある・上限に近いときは、承認するまで unit を 1 つも起こさない。受信箱の「計画の承認」かタスク詳細の「実行の形」で、この計画で進める / 指示を添えて立て直す / 取り下げる、を選ぶ。",
+  },
+  {
+    term: "理由なく止まっています",
+    text: "木の節点が走ってもおらず、決定・承認・子 task などの名指しの待ちも無いまま 10 分続いたとき celeris が付ける印。タスク詳細の上部と「木」タブに分類（例: 待っている子 task が見つからない）が出る。",
+  },
   {
     term: "成果物",
     text: "ワーカーが celeris に明示的に登録したファイル（ディスクを自動スキャンして拾うことはしない）。SPEC §2.2「調査の案件を投げる — 終わったとき、GUI から調査結果の文書と見るべき関連研究へのリンクがまとまって読める」。/artifacts で案件を横断して一覧でき、Markdown（report.md 等）はその場で描画、sources.json はリンク集（url・title・引用の有無）として、その他の JSON は整形表示する。コードの置き場所（タスクの workspace）は SPEC §3.7「コードは ~/workspace/… のリポジトリ」どおり、リンクではなくコピー用のパス表示（ローカルなら vscode で開くリンクも添える）。",
@@ -467,8 +488,8 @@ export default function HelpPage() {
           <strong className="font-semibold text-fg">インフラ</strong>
           =lease 失効・切替による中断・result.json 不在・セッション再開拒否・レート制限・DB busy・ディスク不足など
           celeris やプロバイダの都合、<strong className="font-semibold text-fg">作業内容</strong>
-          =レビュー不合格・max_turns 超過・ワーカー自身の明示的な error）と理由 1 行が出ます（ADR-0070）。
-          成果が既に配送済み（release に昇格済み）だったタスクの失敗には「成果は配送済み（release
+          =レビュー不合格・max_turns 超過・ワーカー自身の明示的な error）と理由 1 行が出ます（ADR-0070）。 成果が既に
+          main に取り込み済み（release に昇格済み）だったタスクの失敗には「成果は main に取り込み済み（release
           &lt;sha12&gt;）だがレビューで不合格」と明記されます。操作は次の 3 つで、意味は決まっています:
         </p>
         <dl className="divide-y divide-border text-sm">

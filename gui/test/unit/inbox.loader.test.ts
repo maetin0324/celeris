@@ -105,7 +105,7 @@ describe("loadInbox", () => {
           type: "failed",
           task: {
             id: "01M39FAILEDTASK00000000001",
-            title: "配送済みタスク",
+            title: "main に取り込み済みのタスク",
             kind: "execute",
             status: "failed",
             actions: ["cancel", "retry", "rereview"],

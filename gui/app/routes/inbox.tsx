@@ -3,10 +3,12 @@ import { data, type FetcherWithComponents, Link, useFetcher, useNavigate } from 
 import type { RetryOutcome, TransitionOutcome } from "~/celeris/action-types";
 import type { CelerisClient } from "~/celeris/client.server";
 import { getCelerisClient } from "~/celeris/client.server";
+import { answerDecision, withdrawDecision } from "~/celeris/decisions-admin.server";
 import { celerisErrorResponse, isCelerisUnavailable } from "~/celeris/errors";
 import { runInboxAction } from "~/celeris/route-actions.server";
 import type { ApprovalItem, AttentionItem, DraftGroup, Inbox, QuestionItem } from "~/celeris/types";
 import { ApprovalArtifactPreview } from "~/components/ApprovalArtifactPreview";
+import { DecisionItemCard, PlanApprovalCard } from "~/components/DecisionControls";
 import { RetryFlash, TransitionFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { LocalTime } from "~/components/LocalTime";
@@ -65,6 +67,18 @@ export async function loader({ request }: Route.LoaderArgs): Promise<InboxLoader
 
 export async function action({ request }: Route.ActionArgs) {
   const form = await request.formData();
+  // celeris ADR-0079 D7（Phase R4b）: 「決定」の節の回答・取り下げ（`POST /decisions/{id}/answer|withdraw`）。
+  // 応答の形（`DecisionActionOutcome`）が `TransitionOutcome[]` と違うので先に分ける。計画の承認は
+  // `/tasks/:id` の action（`intent=plan_gate`）へ直接送る（タスク詳細と同じ入口）。
+  const intent = form.get("intent");
+  if (intent === "decision_answer" || intent === "decision_withdraw") {
+    const client = getCelerisClient();
+    const outcome =
+      intent === "decision_answer"
+        ? await answerDecision(client, form, request.signal)
+        : await withdrawDecision(client, form, request.signal);
+    return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
+  }
   const outcomes = await runInboxAction(getCelerisClient(), form, request.signal);
   const status = outcomes.every((o) => o.ok) ? 200 : (outcomes.find((o) => !o.ok)?.error.status ?? 500);
   return data(outcomes, { status });
@@ -103,7 +117,15 @@ export default function InboxPage({ loaderData }: Route.ComponentProps) {
     inbox.counts.approvals === 0 &&
     inbox.counts.questions === 0 &&
     inbox.counts.drafts === 0 &&
-    inbox.counts.attention === 0;
+    inbox.counts.attention === 0 &&
+    (inbox.counts.decisions ?? 0) === 0;
+  // celeris ADR-0079 D8（Phase R4b）: 計画の承認は `attention[]` の 1 種だが、3 つのボタンと見取り図を持つので
+  // 「決定」と並べて独立の節に出す（`counts.attention` には celeris が数えたまま含まれる）。
+  const planApprovals = inbox.attention.filter(
+    (a): a is Extract<AttentionItem, { type: "plan_approval" }> => a.type === "plan_approval",
+  );
+  const otherAttention = inbox.attention.filter((a) => a.type !== "plan_approval");
+  const decisions = inbox.decisions ?? [];
 
   return (
     <div className="space-y-8">
@@ -116,10 +138,10 @@ export default function InboxPage({ loaderData }: Route.ComponentProps) {
             <HelpLink anchor="screens" label="画面ごとの説明" />
           </>
         }
-        description="裏方の画面です。人間の対応が要る項目（承認待ち・質問・受け入れ待ちの draft・注意）だけを集めています。普段は「Console」から始めてください。"
+        description="裏方の画面です。人間の対応が要る項目（承認待ち・質問・計画の承認・決定・受け入れ待ちの draft・注意）だけを集めています。普段は「Console」から始めてください。"
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <StatCard label="承認待ち" value={inbox.counts.approvals} icon="checkCircle" tone="warning" />
         <StatCard label="質問" value={inbox.counts.questions} icon="message" tone="info" />
         {/* P-G46-4（Phase 96）: フルの「受け入れ待ちの draft」だとこのタイルだけラベルが 2 行になり、
@@ -127,6 +149,8 @@ export default function InboxPage({ loaderData }: Route.ComponentProps) {
             「draft」であることは下の見出し（180 行目）で分かるので落としても意味は失わない。 */}
         <StatCard label="受け入れ待ち" value={inbox.counts.drafts} icon="file" tone="neutral" />
         <StatCard label="注意" value={inbox.counts.attention} icon="alert" tone="danger" />
+        {/* celeris ADR-0079 D7（Phase R4b）: 人の決定を待つ件数。 */}
+        <StatCard label="決定" value={inbox.counts.decisions ?? 0} icon="target" tone="warning" />
       </div>
 
       {isEmpty && (
@@ -179,6 +203,42 @@ export default function InboxPage({ loaderData }: Route.ComponentProps) {
         )}
       </SectionCard>
 
+      {/* celeris ADR-0079 D8（Phase R4b）: root の計画の承認（承認 / 立て直す〈指示必須〉/ 取り下げる）。 */}
+      {planApprovals.length > 0 && (
+        <SectionCard
+          sectionTestId="plan-approvals-section"
+          headingId="plan-approvals-heading"
+          icon="checkCircle"
+          tone="warning"
+          heading={`計画の承認（${planApprovals.length}）`}
+        >
+          <ul className="space-y-3">
+            {planApprovals.map((item) => (
+              <PlanApprovalCard key={`${item.task.id}-${item.plan_id}`} item={item} />
+            ))}
+          </ul>
+        </SectionCard>
+      )}
+
+      {/* celeris ADR-0079 D7 / D14（Phase R4b）: 人の決定（パンくず・問い・選択肢〈推奨に印〉・後戻り・待つもの・経過）。 */}
+      <SectionCard
+        sectionTestId="decisions-section"
+        headingId="decisions-heading"
+        icon="target"
+        tone="warning"
+        heading={`決定（${inbox.counts.decisions ?? decisions.length}）`}
+      >
+        {decisions.length === 0 ? (
+          <EmptyState title="ありません。" />
+        ) : (
+          <ul className="space-y-3">
+            {decisions.map((item) => (
+              <DecisionItemCard key={item.id} item={item} fetchedAt={fetchedAt} />
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
       <SectionCard
         sectionTestId="drafts-section"
         headingId="drafts-heading"
@@ -204,11 +264,11 @@ export default function InboxPage({ loaderData }: Route.ComponentProps) {
         tone="danger"
         heading={`注意（${inbox.counts.attention}）`}
       >
-        {inbox.attention.length === 0 ? (
-          <EmptyState title="ありません。" />
+        {otherAttention.length === 0 ? (
+          <EmptyState title={planApprovals.length > 0 ? "計画の承認のほかはありません。" : "ありません。"} />
         ) : (
           <ul className="space-y-3">
-            {inbox.attention.map((item) =>
+            {otherAttention.map((item) =>
               item.type === "cluster_unavailable" ? (
                 // `AttentionItem` の他のバリアントと違い `task` を持たない（クラスタ単位の集約）ので別枝のまま
                 // にする（ADR-0009 D5）。押すと `/clusters` に遷移する（Phase G7、ADR-0010 D7）。
@@ -537,7 +597,11 @@ function DraftGroupRow({ group }: { group: DraftGroup }) {
   );
 }
 
-function AttentionRow({ item }: { item: Exclude<AttentionItem, { type: "cluster_unavailable" }> }) {
+function AttentionRow({
+  item,
+}: {
+  item: Exclude<AttentionItem, { type: "cluster_unavailable" } | { type: "plan_approval" }>;
+}) {
   const fetcher = useFetcher<TransitionOutcome[]>({ key: `inbox-attention-${item.task.id}` });
   const submitting = fetcher.state !== "idle";
   // Phase 31: 「やり直す」は新しいタスクを作る（`TransitionOutcome[]` とは形が違う）ので別の fetcher にし、
@@ -659,6 +723,9 @@ function attentionText(item: AttentionItem): string {
     // celeris ADR-0074 D2.4（Phase F3 途中確認）: 質問ではなく進捗の確認（questions には出ない）。
     case "phase_checkpoint":
       return phaseCheckpointAttentionText(item);
+    // celeris ADR-0079 D8（Phase R4b）: 独立の節（`PlanApprovalCard`）に出すのでここには来ない。
+    case "plan_approval":
+      return `計画の承認待ち: ${item.summary}`;
     default:
       return "";
   }

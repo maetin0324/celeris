@@ -150,8 +150,10 @@ describe("タスク管理の言葉（ADR-0044）", () => {
   });
 
   it("タスク画面のタブ（D5）は概要が既定で、知らない値も概要にする", () => {
-    expect(TASK_TABS).toEqual(["overview", "timeline", "changes", "files", "artifacts"]);
-    expect(TASK_TABS.map(taskTabLabel)).toEqual(["概要", "タイムライン", "変更", "ファイル", "成果物"]);
+    // celeris ADR-0079 D14（Phase R4b）: 「木」タブ。
+    expect(TASK_TABS).toEqual(["overview", "tree", "timeline", "changes", "files", "artifacts"]);
+    expect(TASK_TABS.map(taskTabLabel)).toEqual(["概要", "木", "タイムライン", "変更", "ファイル", "成果物"]);
+    expect(parseTaskTab("tree")).toBe("tree");
     expect(parseTaskTab(null)).toBe("overview");
     expect(parseTaskTab("")).toBe("overview");
     expect(parseTaskTab("timeline")).toBe("timeline");

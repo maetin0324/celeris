@@ -629,8 +629,8 @@ fn scan_task_ready(
 }
 
 /// ADR-0070 D1（Phase 116）: タスクが `failed` になった。**celeris の起動時刻より後**（backfill 禁止。
-/// ADR-0037 D5 と同じ規律）。分類（`infra`/`work`）と理由 1 行、配送済み（`deliveries` に `release` が
-/// 付いた記録がある）なら「成果は配送済み（release <sha12>）だがレビューで不合格」を文面に組み立てる
+/// ADR-0037 D5 と同じ規律）。分類（`infra`/`work`）と理由 1 行、main に取り込み済み（`deliveries` に `release` が
+/// 付いた記録がある）なら「成果は main に取り込み済み（release <sha12>）だがレビューで不合格」を文面に組み立てる
 /// （判定は task_ops の純粋関数、文面の組み立てだけをここで行う）。`key` は `transition_key`（同じ
 /// タスクが後で再び failed になれば新しい key になる）。
 fn scan_task_failed(
@@ -659,7 +659,9 @@ fn scan_task_failed(
         let (class, reason) = task_ops::derive::classify_task_failure(&events);
         let delivered_release = store.delivery_get(task.id)?.and_then(|d| d.release);
         let delivered_note = match &delivered_release {
-            Some(sha12) => format!("成果は配送済み（release {sha12}）だがレビューで不合格。"),
+            Some(sha12) => {
+                format!("成果は main に取り込み済み（release {sha12}）だがレビューで不合格。")
+            }
             None => String::new(),
         };
         let body = format!(

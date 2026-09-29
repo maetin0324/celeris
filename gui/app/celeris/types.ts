@@ -8186,6 +8186,10 @@ export interface TaskTreeNode {
    * 今の計画の版（計画の無い task は無し）。
    */
   plan_version?: number | null;
+  /**
+   * Phase R4b（D10 の GUI「理由なく止まっています」）: 節点の最後の event が `StallDetected` で、終端でない。
+   */
+  stall?: TreeNodeStall | null;
   status: Status;
   subtree: RollupMetrics3;
   title: string;
@@ -8266,6 +8270,20 @@ export interface RollupMetrics2 {
    * 壁時計: `first_run_started_at` → `last_run_finished_at`（ミリ秒）。どちらかが無ければ無し。
    */
   wall_ms?: number | null;
+}
+/**
+ * D10: 理由なく止まっている節点（`Event::StallDetected` の写し）。
+ */
+export interface TreeNodeStall {
+  detail: string;
+  /**
+   * 分類の理由（`task_core::tree::NodeLiveness.reason`。例 `child_missing`。旧い event は空）。
+   */
+  reason: string;
+  /**
+   * 理由なく止まっていると daemon が最初に見た時刻（RFC 3339。旧い event は無し）。
+   */
+  since?: string | null;
 }
 /**
  * D11: 1 節点分（または subtree・深さ・案件の合計）の数。

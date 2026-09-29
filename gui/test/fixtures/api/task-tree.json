@@ -1,0 +1,380 @@
+{
+  "root_id": "01R4BROOT0000000000000001",
+  "subtree_root": "01R4BROOT0000000000000001",
+  "tree_enabled": true,
+  "limits": {
+    "leaves": 4,
+    "max_leaves": 5,
+    "runs": 6,
+    "max_runs": 40,
+    "replans": 0,
+    "max_replans": 4,
+    "tokens": 7200,
+    "open_decisions": 1,
+    "max_open_decisions": 12
+  },
+  "totals": {
+    "busy_ms": 3000000,
+    "child_tasks_done": 0,
+    "child_tasks_total": 3,
+    "cost_usd": 1.0,
+    "cost_usd_complete": false,
+    "input_tokens": 6000,
+    "output_tokens": 1200,
+    "leaves_done": 2,
+    "leaves_total": 4,
+    "open_decisions": 1,
+    "quota": [],
+    "reviewer_cost_usd": 0.1,
+    "reviewer_runs": 1,
+    "runs": 6,
+    "runs_by_role": {
+      "planner": 2,
+      "worker": 3,
+      "reviewer": 1,
+      "wrap_up": 0
+    },
+    "runs_in_flight": 0,
+    "tasks": 4,
+    "tokens": 7200,
+    "wall_ms": 4200000,
+    "first_run_started_at": "2026-09-29T00:00:00Z",
+    "last_run_finished_at": "2026-09-29T01:10:00Z"
+  },
+  "nodes": [
+    {
+      "id": "01R4BROOT0000000000000001",
+      "title": "browser capability",
+      "status": "ready",
+      "phase": "awaiting_children",
+      "depth": 1,
+      "plan_version": 1,
+      "open_decisions": 0,
+      "children": [
+        "01R4BCHILD000000000000001",
+        "01R4BCHILD000000000000002"
+      ],
+      "units": [
+        {
+          "key": "p1-a",
+          "stage": "phase-1",
+          "kind": "implement",
+          "title": "下調べ",
+          "status": "done"
+        },
+        {
+          "key": "p2-b",
+          "stage": "phase-2",
+          "kind": "task",
+          "title": "broker / provider 1 種",
+          "status": "running",
+          "child_task_id": "01R4BCHILD000000000000001"
+        },
+        {
+          "key": "p2-c",
+          "stage": "phase-2",
+          "kind": "task",
+          "title": "Live View",
+          "status": "running",
+          "child_task_id": "01R4BCHILD000000000000002"
+        },
+        {
+          "key": "integrate-phase-2",
+          "stage": "phase-2",
+          "kind": "integrate",
+          "title": "統合",
+          "status": "pending"
+        }
+      ],
+      "own": {
+        "busy_ms": 1800000,
+        "child_tasks_done": 0,
+        "child_tasks_total": 2,
+        "cost_usd": 0.5,
+        "cost_usd_complete": true,
+        "input_tokens": 3000,
+        "output_tokens": 600,
+        "leaves_done": 1,
+        "leaves_total": 1,
+        "open_decisions": 0,
+        "quota": [],
+        "reviewer_cost_usd": 0.1,
+        "reviewer_runs": 1,
+        "runs": 3,
+        "runs_by_role": {
+          "planner": 1,
+          "worker": 1,
+          "reviewer": 1,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 1,
+        "tokens": 3600,
+        "wall_ms": 3600000,
+        "first_run_started_at": "2026-09-29T00:00:00Z",
+        "last_run_finished_at": "2026-09-29T01:00:00Z"
+      },
+      "subtree": {
+        "busy_ms": 3000000,
+        "child_tasks_done": 0,
+        "child_tasks_total": 3,
+        "cost_usd": 1.0,
+        "cost_usd_complete": false,
+        "input_tokens": 6000,
+        "output_tokens": 1200,
+        "leaves_done": 2,
+        "leaves_total": 4,
+        "open_decisions": 1,
+        "quota": [],
+        "reviewer_cost_usd": 0.1,
+        "reviewer_runs": 1,
+        "runs": 6,
+        "runs_by_role": {
+          "planner": 2,
+          "worker": 3,
+          "reviewer": 1,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 4,
+        "tokens": 7200,
+        "wall_ms": 4200000,
+        "first_run_started_at": "2026-09-29T00:00:00Z",
+        "last_run_finished_at": "2026-09-29T01:10:00Z"
+      }
+    },
+    {
+      "id": "01R4BCHILD000000000000001",
+      "title": "broker / provider 1 種",
+      "status": "ready",
+      "phase": "held_on_decision",
+      "depth": 2,
+      "parent_id": "01R4BROOT0000000000000001",
+      "parent_unit_key": "p2-b",
+      "parent_stage": "phase-2",
+      "plan_version": 1,
+      "open_decisions": 1,
+      "children": [
+        "01R4BGRAND000000000000001"
+      ],
+      "units": [
+        {
+          "key": "b1",
+          "stage": "s1",
+          "kind": "design",
+          "title": "credential backend を決める",
+          "status": "blocked",
+          "blocked_reason": "decision"
+        },
+        {
+          "key": "b2",
+          "stage": "s1",
+          "kind": "task",
+          "title": "provider 実装",
+          "status": "running",
+          "child_task_id": "01R4BGRAND000000000000001"
+        }
+      ],
+      "own": {
+        "busy_ms": 600000,
+        "child_tasks_done": 0,
+        "child_tasks_total": 1,
+        "cost_usd": 0.3,
+        "cost_usd_complete": false,
+        "input_tokens": 2000,
+        "output_tokens": 400,
+        "leaves_done": 0,
+        "leaves_total": 1,
+        "open_decisions": 1,
+        "quota": [],
+        "reviewer_cost_usd": 0.0,
+        "reviewer_runs": 0,
+        "runs": 2,
+        "runs_by_role": {
+          "planner": 1,
+          "worker": 1,
+          "reviewer": 0,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 1,
+        "tokens": 2400,
+        "wall_ms": 1200000,
+        "first_run_started_at": "2026-09-29T00:00:00Z",
+        "last_run_finished_at": "2026-09-29T01:00:00Z"
+      },
+      "subtree": {
+        "busy_ms": 1200000,
+        "child_tasks_done": 0,
+        "child_tasks_total": 1,
+        "cost_usd": 0.5,
+        "cost_usd_complete": false,
+        "input_tokens": 3000,
+        "output_tokens": 600,
+        "leaves_done": 1,
+        "leaves_total": 2,
+        "open_decisions": 1,
+        "quota": [],
+        "reviewer_cost_usd": 0.0,
+        "reviewer_runs": 0,
+        "runs": 3,
+        "runs_by_role": {
+          "planner": 1,
+          "worker": 2,
+          "reviewer": 0,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 2,
+        "tokens": 3600,
+        "wall_ms": 3600000,
+        "first_run_started_at": "2026-09-29T00:10:00Z",
+        "last_run_finished_at": "2026-09-29T01:10:00Z"
+      }
+    },
+    {
+      "id": "01R4BGRAND000000000000001",
+      "title": "provider 実装",
+      "status": "running",
+      "phase": "executing",
+      "depth": 3,
+      "parent_id": "01R4BCHILD000000000000001",
+      "parent_unit_key": "b2",
+      "parent_stage": "s1",
+      "open_decisions": 0,
+      "children": [],
+      "units": [],
+      "own": {
+        "busy_ms": 600000,
+        "child_tasks_done": 0,
+        "child_tasks_total": 0,
+        "cost_usd": 0.2,
+        "cost_usd_complete": true,
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "leaves_done": 1,
+        "leaves_total": 1,
+        "open_decisions": 0,
+        "quota": [],
+        "reviewer_cost_usd": 0.0,
+        "reviewer_runs": 0,
+        "runs": 1,
+        "runs_by_role": {
+          "planner": 0,
+          "worker": 1,
+          "reviewer": 0,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 1,
+        "tokens": 1200,
+        "wall_ms": 600000,
+        "first_run_started_at": "2026-09-29T00:00:00Z",
+        "last_run_finished_at": "2026-09-29T01:00:00Z"
+      },
+      "subtree": {
+        "busy_ms": 600000,
+        "child_tasks_done": 0,
+        "child_tasks_total": 0,
+        "cost_usd": 0.2,
+        "cost_usd_complete": true,
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "leaves_done": 1,
+        "leaves_total": 1,
+        "open_decisions": 0,
+        "quota": [],
+        "reviewer_cost_usd": 0.0,
+        "reviewer_runs": 0,
+        "runs": 1,
+        "runs_by_role": {
+          "planner": 0,
+          "worker": 1,
+          "reviewer": 0,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 1,
+        "tokens": 1200,
+        "wall_ms": 600000,
+        "first_run_started_at": "2026-09-29T00:00:00Z",
+        "last_run_finished_at": "2026-09-29T01:00:00Z"
+      }
+    },
+    {
+      "id": "01R4BCHILD000000000000002",
+      "title": "Live View",
+      "status": "ready",
+      "depth": 2,
+      "parent_id": "01R4BROOT0000000000000001",
+      "parent_unit_key": "p2-c",
+      "parent_stage": "phase-2",
+      "open_decisions": 0,
+      "stall": {
+        "reason": "child_missing",
+        "since": "2026-09-29T02:00:00Z",
+        "detail": "unit v1 が子 task を待っているが、子が見つからない"
+      },
+      "children": [],
+      "units": [
+        {
+          "key": "v1",
+          "stage": "s1",
+          "kind": "task",
+          "title": "viewer",
+          "status": "ready"
+        }
+      ],
+      "own": {
+        "busy_ms": 0,
+        "child_tasks_done": 0,
+        "child_tasks_total": 0,
+        "cost_usd": 0.0,
+        "cost_usd_complete": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "leaves_done": 0,
+        "leaves_total": 1,
+        "open_decisions": 0,
+        "quota": [],
+        "reviewer_cost_usd": 0.0,
+        "reviewer_runs": 0,
+        "runs": 0,
+        "runs_by_role": {
+          "planner": 0,
+          "worker": 0,
+          "reviewer": 0,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 1,
+        "tokens": 0
+      },
+      "subtree": {
+        "busy_ms": 0,
+        "child_tasks_done": 0,
+        "child_tasks_total": 0,
+        "cost_usd": 0.0,
+        "cost_usd_complete": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "leaves_done": 0,
+        "leaves_total": 1,
+        "open_decisions": 0,
+        "quota": [],
+        "reviewer_cost_usd": 0.0,
+        "reviewer_runs": 0,
+        "runs": 0,
+        "runs_by_role": {
+          "planner": 0,
+          "worker": 0,
+          "reviewer": 0,
+          "wrap_up": 0
+        },
+        "runs_in_flight": 0,
+        "tasks": 1,
+        "tokens": 0
+      }
+    }
+  ]
+}

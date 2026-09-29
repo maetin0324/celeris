@@ -10,6 +10,7 @@ import type {
   ClusterSettingsView,
   CommentResult,
   ConsoleInstructAccepted,
+  DecisionOutcome,
   DecomposeResult,
   DocPageResult,
   DocsInitResult,
@@ -127,6 +128,22 @@ export type TaskDecomposeOutcome =
 export type TaskPhaseGateOutcome =
   | { ok: true; op: "phase_gate"; taskId: string; result: TransitionResult }
   | { ok: false; op: "phase_gate"; taskId: string; error: ActionError };
+
+/**
+ * celeris ADR-0079 D8（Phase R4b）: root の計画の承認への応答（`POST /tasks/{id}/execution/plan-gate`。**管理系**）。
+ * 承認待ちでなければ 409、`replan` で `note` が空・長すぎるなら 422（どちらも celeris の判断。GUI は検証しない）。
+ */
+export type TaskPlanGateOutcome =
+  | { ok: true; op: "plan_gate"; taskId: string; result: TransitionResult }
+  | { ok: false; op: "plan_gate"; taskId: string; error: ActionError };
+
+/**
+ * celeris ADR-0079 D7（Phase R4b）: 決定の要求への回答・取り下げ（`POST /decisions/{id}/answer|withdraw`。**管理系**）。
+ * `open` でなければ 409 `decision_not_open`、選択肢の外・daemon の決定で option 無し・note が長すぎるなら 422。
+ */
+export type DecisionActionOutcome =
+  | { ok: true; op: "decision_answer" | "decision_withdraw"; decisionId: string; result: DecisionOutcome }
+  | { ok: false; op: "decision_answer" | "decision_withdraw"; decisionId: string; error: ActionError };
 
 /** 作成（`POST /tasks` / `POST /plans`）の失敗。成功は詳細へ redirect するので data にならない。 */
 export interface CreateFailure {

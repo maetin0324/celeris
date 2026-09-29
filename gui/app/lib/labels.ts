@@ -372,11 +372,13 @@ export function taskFieldLabel(field: string): string {
 }
 
 /** タスク画面のタブ（ADR-0044 D5）。URL の `?tab=` の値 → 見出し。 */
-export const TASK_TABS = ["overview", "timeline", "changes", "files", "artifacts"] as const;
+// celeris ADR-0079 D14（Phase R4b）: 「木」（`GET /tasks/{id}/task-tree`）。木の無い task でも 1 節点の木を出す。
+export const TASK_TABS = ["overview", "tree", "timeline", "changes", "files", "artifacts"] as const;
 export type TaskTab = (typeof TASK_TABS)[number];
 
 const TASK_TAB_LABEL: Record<TaskTab, string> = {
   overview: "概要",
+  tree: "木",
   timeline: "タイムライン",
   changes: "変更",
   files: "ファイル",

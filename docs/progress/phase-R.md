@@ -648,3 +648,80 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+## R4b: GUI の木タブ、決定・承認の inbox、案件ページの根 task 一覧、用語の変更（完了 2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) §7 R4b・D6・D10・D13・D14、付記「R4b 実装時の逸脱・明確化」（7 項目）。
+- 種類: GUI（`gui/`）が主。celeris 側は **1 欄の追加**（`TaskTreeNode.stall?`、`task_ops::tree_view::current_stall`。付記 1.）と、Discord の
+  失敗通知の文面の語（「配送済み」→「main に取り込み済み」）だけ。**migration なし（schema 31 のまま）**、`api-v1.schema.json` は追加だけ。
+  本番の DB・設定・サービスには触れていない（systemctl / promote / release.sh は使っていない）。
+- R5（案件の API の 410 化・CoS の指針・本番の移行）には手を付けていない。
+
+### 実装したもの
+
+- **`~/lib/tree.ts`**（表示の判定の純粋関数。D14）: 節点の導出値の語と色、止まっている理由（`treeNodeHold` / `taskHold`。stall →
+  承認 → 基盤 → 決定の順）と「理由なく止まっています（<分類>）」、timeline からの stall（`currentStallFromTimeline`）、決定のパンくず
+  （`decisionBreadcrumb`）・選択肢（推奨に印・自由記述は `choice` だけ）・待っているもの・経過、計画の承認の 3 操作（`actions` に
+  `plan_gate` があるときだけ）と理由の文、roll-up の文（role ごとの run〈reviewer を含む〉・定価〈不完全の明示〉・壁時計と実働・leaf /
+  子 task の done / total）、上限の使用（0.8 以上に印）、前順の字下げ、段階ごとの unit、D6 の取り込み先の文、案件の root task の読み。
+- **タスク詳細の「木」タブ**（`~/components/TaskTreeTab.tsx`、lazy）: `?tab=tree` のときだけ `GET /tasks/{id}/task-tree?root=true`。
+  木の合計（roll-up・取り込み先・上限の使用）と、節点ごとのカード（状態・導出値・未回答の決定・深さ・親の段階と unit・止まっている
+  理由と受信箱へのリンク・roll-up・段階ごとの unit〈折りたたみ〉・子へのリンク）。木の無い task は 1 節点。
+- **止まっている理由の帯**（`~/components/TaskHoldBanner.tsx`、lazy。どのタブでも上部）と、**「実行の形」カードの計画の承認**
+  （`ExecutionModeControl` に承認の理由と 3 つのボタン。承認待ちの間は分解の操作を隠す）。action は `intent=plan_gate` →
+  `~/celeris/decisions-admin.server.ts::planGateTask`（`POST /tasks/{id}/execution/plan-gate`）。
+- **受信箱**: 「計画の承認」（`~/components/DecisionControls.tsx::PlanApprovalCard`: 理由・段階ごとの unit・同じ節点の決定へのリンク・
+  3 つのボタン）と「決定」（`DecisionItemCard`: パンくず・問い・種類・後戻り・経過・待っているもの・選択肢〈推奨を既定で選択〉・note・
+  答える / 取り下げる）の 2 節、タイル「決定」。action は `intent=decision_answer|decision_withdraw` → `answerDecision` /
+  `withdrawDecision`（`POST /decisions/{id}/answer|withdraw`）。結果は `DecisionFlash` / `PlanGateFlash`、409 / 422 は `ErrorFlash`。
+- **案件ページ**（`~/components/ProjectRootTasks.tsx`）: root task の一覧（状態・導出値・止まっている理由・未回答の決定・subtree の
+  roll-up〈root ごとの `task-tree`、先頭 20 件〉）と `root_totals` の 1 行。案件計画の DAG・「計画を見直す」・「案件計画を提案させる」・
+  途中目標の指定を外し、途中目標は「以前の途中目標（読み取り専用）」（題名・状態・説明だけ）。
+- **語**: 「配送」を GUI から無くした（付記 6. の対応表）。`help.tsx` の失敗の直し方と用語集（木・成果の取り込み・決定・計画の承認・
+  理由なく止まっています）を更新。
+- **fixture と監査**: `gui/test/fixtures/api/task-tree.json`（R4a の API の形の 4 節点の木: root〈子待ち〉→ 子〈決定待ち〉→ 孫〈実行中〉と
+  子〈理由なしの停止〉。`api-types.check.ts` で生成型と照合）。偽の celeris（`scripts/lib/celeris-fixture.mjs`）に木・受信箱の決定 1 件と
+  計画の承認 1 件・案件の `root_totals` を足し、監査と e2e の route に `task-tree` を足した。mobile-audit の `touch-scroll` はコンテナを
+  先頭に戻してから払う（付記 7.）。
+
+### 受け入れ条件（ADR-0079 §7 R4b と依頼の項目）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| (a) `tree.ts` の単体テスト: 止まっている理由の文言（stall の分類語・名指しの待ち・優先順・終端は出さない・timeline の最後の event だけ）、パンくず、押せるボタンの出し分け（自由記述は `choice` だけ・`plan_gate` の有無）、承認の理由の文、roll-up / 上限の使用、D6 の取り込み先 | `corepack pnpm@11.27.0 -C gui test`（`test/unit/tree.test.tsx`） | ok（19 tests） |
+| 木タブの描画（R4a の形の fixture）: 4 節点・深さ 3・今の task の印・子待ち / 決定待ちの語・未回答の決定 1・stall の帯と分類・子へのリンク・reviewer を含む run・取り込み先・上限の使用（leaf 4/5 に 8 割の印）・統合 unit を出さない。1 節点の木と取得失敗 | 同上 | ok |
+| 止まっている理由の帯（stall・決定 → 受信箱・承認 → 実行の形）と、案件の root task 一覧（root の読み・状態・導出値・決定・節点数・roll-up・`root_totals`） | 同上 | ok |
+| (b) 決定に答えると API に `option` と `note` が送られる（自由記述は `note` だけ、空白の note は送らない）、取り下げは `reason`、409 `decision_not_open` と 422（選択肢の外）の文言が出る、id の無いフォームは送らない | 同上（`test/unit/decisions.action.test.tsx`） | ok（13 tests） |
+| (b) 計画の承認の 3 ボタン: approve / replan（note）/ withdraw がそれぞれ `{action, note?}` を送り、422（空の replan）・409（承認待ちでない）の文言、知らない操作は送らない。受信箱のカードと「実行の形」カードの 3 ボタン（`plan_gate` が無ければ出さない） | 同上 | ok |
+| 案件ページの loader: root task（親なし・対話でない）だけ `task-tree` を引き、失敗した root は null | 同上（`test/unit/projects.detail.test.ts`） | ok（32 tests） |
+| (d) GUI に「配送」が残らない（`help.tsx` を含む `app/` と画面用の fixture を grep。生成型の注釈は除く） | 同上（`test/unit/wording.test.ts`） | ok |
+| GUI の全体 | `corepack pnpm@11.27.0 -C gui typecheck` / `lint` / `test` | exit 0 / exit 0（Checked 294 files、2 infos〈既存の `scripts/check-resume-recovery.mjs`〉）/ exit 0（Test Files 79、Tests 1210 passed。R4a の 76 / 1176 から +3 / +34） |
+| (c) `gen:types` の差分ゼロ（2 回） | `corepack pnpm@11.27.0 -C gui gen:types` を 2 回 → `md5sum gui/app/celeris/types.ts` | 2 回とも `2307aaff2e3957734b2a8819ddd45bfc`（R4a からの差分は `TaskTreeNode.stall` と `TreeNodeStall` の追加 18 行だけ） |
+| `api-v1.schema.json` は追加だけ | `UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema` → `git diff --stat docs/api` | 35 行追加・削除 0 |
+| (c) `pnpm build` | `corepack pnpm@11.27.0 -C gui build` | exit 0（✓ built） |
+| (c) モバイル監査 違反 0（全 route） | `MOBILE_AUDIT_SKIP_BUILD=1 node scripts/mobile-audit.mjs`（`gui/`） | exit 0、`routes=28 schemes=2 violations=0`（R4a の 27 route に `task-tree` を足した） |
+| task 系ルートの初回 JS（予算 532 KB） | 同上の perf 表（`js_kb`） | **前 528.6 KB → 後 528.9 KB**（task-overview / tree / timeline / changes / files / artifacts とも同じ。木タブ・止まっている理由の帯・承認の部品は lazy）。project-detail 503.6 KB、inbox 479.5 KB |
+| e2e（偽の celeris、読み取りだけ。6 つのタブの切り替えに「木」を含む） | `E2E_SKIP_BUILD=1 node scripts/e2e-check.mjs`（`gui/`） | exit 0、`"ok": true`、`failures: []` |
+| 節点の stall の欄（celeris 側） | `cargo test -p task-ops --lib current_stall` | ok（`current_stall_is_the_last_event_of_a_live_node`） |
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0（notify.rs の 1 行を `cargo fmt` で整形した後）
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 8、binaries 90（nextest 80 + doc 10）、
+  **passed 2846 / failed 0 / ignored 7**（新しい試験は `tree_view::tests::current_stall_is_the_last_event_of_a_live_node`。
+  `crates/celeris/tests/notify.rs` の失敗通知の文面の期待を新しい語に）
+- GUI: 上の表（typecheck / lint / test / gen:types ×2 / build / mobile-audit / e2e:mock）
+
+### 未解決・R5 以降へ
+
+- `blocked(infra)` の unit の人の「再試行」の入口（API も GUI も無い。R2b / R3b からの持ち越し）。
+- 決定の `revise`（回答済みの choice の答えを変える）の GUI の入口（受信箱からは消えるため出していない）。
+- D11 の「人を待った時間」は API に無いので出していない。`TaskDetail.tree` の要約も足していない（概要では木を引かない。付記 2.）。
+- 案件ページの milestone 系の action（`projects-admin.server.ts` の関数と route の intent）は残した。R5a で API の 410 化と一緒に外す。
+- ADR-0051 の部署レビューの取り込みが作る repair task の題名「配送の局所修復」（task のデータ）は変えていない（付記 6.）。
+- replan が行の `phase` を書き換えない不具合（R4a 付記 11.）は R4b では触れていない。
+
+### 提案
+
+- なし（DESIGN / SPEC への提案は R0 のまま）。

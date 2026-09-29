@@ -855,6 +855,16 @@ async function checkTouchScroll(page, cdpSession, route) {
     await page.waitForTimeout(50); // スクロールが実際に落ち着くのを待つ（座標を取る前に）。
     const box = await handle.boundingBox();
     if (!box) continue;
+    // Phase R4b: 文書全体を先頭に戻すのと同じ理由で、コンテナ自身も先頭（scrollLeft 0）から指で右→左に払う。
+    // `checkFocusOrder` の Tab 歩行が末尾の子へフォーカスすると、ブラウザがそのコンテナを右端までネイティブに
+    // スクロールしたまま残し、右→左のスワイプではもう動けない（タスク詳細のタブが 6 つになって初めて横に
+    // はみ出し、この経路で見つかった）。元の位置は判定後に戻す。
+    const original = await handle.evaluate((el) => {
+      const v = el.scrollLeft;
+      el.scrollLeft = 0;
+      return v;
+    });
+    await page.waitForTimeout(50);
     const before = await handle.evaluate((el) => el.scrollLeft);
     const y = Math.round(box.y + Math.min(box.height / 2, Math.max(box.height - 1, 0)));
     const startX = Math.round(box.x + Math.max(box.width - 8, box.width / 2));
@@ -871,7 +881,7 @@ async function checkTouchScroll(page, cdpSession, route) {
     const after = await handle.evaluate((el) => el.scrollLeft);
     await handle.evaluate((el, v) => {
       el.scrollLeft = v;
-    }, before);
+    }, original);
     if (after <= before + 1) {
       violations.push({
         rule: "touch-scroll",

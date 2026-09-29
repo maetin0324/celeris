@@ -977,7 +977,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### gate
 
 - `cargo fmt --all -- --check` → `cargo fmt --all` の後の `--check` → exit 0
-- `cargo clippy --workspace --all-targets -- -D warnings` → 下の「commit の後の gate」
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（commit 7cf3c5d の後に実行）
 - `scripts/dev/test-parallel.sh` → exit 0、`CELERIS_TEST_SUMMARY`: nextest 0.9.146、jobs 6、binaries 95（nextest 84 + doc 11）、**passed 2865 / failed 0 / ignored 7**（R5b-prep の 2859 から +6: task-core 4・task-ops 1・task-api 1）
 - `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema` → exit 0（追加だけ: `work_unit_spec_overridden` の event、
   `ExecutionPlanView.replan`、`ReplanDiff`）

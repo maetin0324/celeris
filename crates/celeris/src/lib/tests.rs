@@ -1,4 +1,12 @@
 use super::*;
+use crate::daemon::{admin::*, bootstrap::*, secrets::*};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use task_api::types::GenreConfigView;
+use task_core::{DaemonMode, InstanceRole, SharedRole, SqliteStore, TaskStore};
+use time::OffsetDateTime;
 
 // ---- ADR-0033 D1（Phase 23）: 組織図の種蒔き ----
 

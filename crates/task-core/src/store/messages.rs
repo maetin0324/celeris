@@ -1,9 +1,12 @@
+use rusqlite::{params, params_from_iter};
+use time::OffsetDateTime;
+
 use crate::comment::{CommentAuthorKind, TaskComment};
 use crate::message::{Message, MessageId, MessageRole};
 use crate::model::TaskId;
 use crate::org::ProjectId;
 
-use super::{SqliteStore, StoreError, parse_rfc3339};
+use super::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 
 impl SqliteStore {
     /// ADR-0033 D4（Phase 24）: `messages` の 1 行。
@@ -91,5 +94,122 @@ impl SqliteStore {
                 created_at: parse_rfc3339(&created_at)?,
             })
         })())
+    }
+
+    pub(super) fn message_append_impl(&self, message: &Message) -> Result<(), StoreError> {
+        let conn = self.lock()?;
+        let metadata_json = message
+            .metadata
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        conn.execute(
+            "INSERT INTO messages (id, node_id, project_id, role, text, run_id, created_at, task_id, metadata_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                message.id.to_string(),
+                message.node_id,
+                message.project_id.map(|p| p.to_string()),
+                message.role.as_str(),
+                message.text,
+                message.run_id,
+                format_rfc3339(message.created_at)?,
+                message.task_id.map(|t| t.to_string()),
+                metadata_json,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn message_list_impl(
+        &self,
+        node_id: &str,
+        project_id: Option<ProjectId>,
+        limit: usize,
+    ) -> Result<Vec<Message>, StoreError> {
+        self.with_read_conn(|conn| {
+            // 新しい順に `limit` 件取ってから古い順に戻す（直近のやり取りを時系列で渡すため）。
+            let sql = match project_id {
+                Some(_) => {
+                    "SELECT id, node_id, project_id, role, text, run_id, created_at, task_id, metadata_json FROM messages \
+                     WHERE node_id = ?1 AND project_id = ?2 ORDER BY created_at DESC, id DESC LIMIT ?3"
+                }
+                None => {
+                    "SELECT id, node_id, project_id, role, text, run_id, created_at, task_id, metadata_json FROM messages \
+                     WHERE node_id = ?1 AND project_id IS NULL ORDER BY created_at DESC, id DESC LIMIT ?3"
+                }
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let project = project_id.map(|p| p.to_string()).unwrap_or_default();
+            let rows =
+                stmt.query_map(params![node_id, project, limit as i64], Self::message_row)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row??);
+            }
+            out.reverse();
+            Ok(out)
+        })
+    }
+
+    /// ADR-0048 D1（Phase 60a）: Console の一本の流れ用（絞り込みは任意、`after` は閉区間）。
+    pub(super) fn message_page_impl(
+        &self,
+        node_id: Option<&str>,
+        project_id: Option<ProjectId>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Message>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut where_sql = String::from("1 = 1");
+            let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            if let Some(node_id) = node_id {
+                where_sql.push_str(" AND node_id = ?");
+                args.push(Box::new(node_id.to_string()));
+            }
+            if let Some(project_id) = project_id {
+                where_sql.push_str(" AND project_id = ?");
+                args.push(Box::new(project_id.to_string()));
+            }
+            if let Some(after) = after {
+                where_sql.push_str(" AND created_at >= ?");
+                args.push(Box::new(after.to_string()));
+            }
+            // `after` 有り = 古い順にその先から、無し = 新しい順に `limit` 件取って戻す。
+            let order = if after.is_some() { "ASC" } else { "DESC" };
+            let sql = format!(
+                "SELECT id, node_id, project_id, role, text, run_id, created_at, task_id, metadata_json FROM messages \
+                 WHERE {where_sql} ORDER BY created_at {order}, id {order} LIMIT ?"
+            );
+            args.push(Box::new(limit as i64));
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                params_from_iter(args.iter().map(|a| a.as_ref())),
+                Self::message_row,
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row??);
+            }
+            if after.is_none() {
+                out.reverse();
+            }
+            Ok(out)
+        })
+    }
+
+    pub(super) fn console_action_run_claim_impl(
+        &self,
+        run_id: &str,
+        task_id: TaskId,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        let affected = conn.execute(
+            "INSERT OR IGNORE INTO console_action_runs (run_id, task_id, executed_at) \
+             VALUES (?1, ?2, ?3)",
+            params![run_id, task_id.to_string(), format_rfc3339(now)?],
+        )?;
+        Ok(affected == 1)
     }
 }

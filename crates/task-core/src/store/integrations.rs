@@ -2,6 +2,7 @@ use rusqlite::{Connection, params};
 
 use crate::integrations::{IntegrationId, IntegrationMethod, IntegrationState, TaskIntegration};
 use crate::model::TaskId;
+use crate::org::ProjectId;
 use crate::repos::RepoId;
 
 use super::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
@@ -104,5 +105,89 @@ impl SqliteStore {
             out.push(row??);
         }
         Ok(out)
+    }
+
+    pub(super) fn integration_put_impl(
+        &self,
+        integration: &TaskIntegration,
+    ) -> Result<(), StoreError> {
+        let conn = self.lock()?;
+        Self::integration_put_tx(&conn, integration)
+    }
+
+    pub(super) fn integration_get_impl(
+        &self,
+        id: IntegrationId,
+    ) -> Result<Option<TaskIntegration>, StoreError> {
+        self.with_read_conn(|conn| {
+            Ok(
+                Self::integration_query_tx(conn, "id = ?1", params![id.to_string()])?
+                    .into_iter()
+                    .next(),
+            )
+        })
+    }
+
+    pub(super) fn integration_list_for_task_impl(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<TaskIntegration>, StoreError> {
+        self.with_read_conn(|conn| {
+            Self::integration_query_tx(conn, "task_id = ?1", params![task_id.to_string()])
+        })
+    }
+
+    pub(super) fn integration_latest_impl(
+        &self,
+        task_id: TaskId,
+        repo: &str,
+    ) -> Result<Option<TaskIntegration>, StoreError> {
+        self.with_read_conn(|conn| {
+            Ok(Self::integration_query_tx(
+                conn,
+                "task_id = ?1 AND repo_name = ?2",
+                params![task_id.to_string(), repo],
+            )?
+            .into_iter()
+            .next())
+        })
+    }
+
+    pub(super) fn integration_list_for_project_impl(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> Result<Vec<TaskIntegration>, StoreError> {
+        self.with_read_conn(|conn| {
+            // タスク × リポジトリごとに最新の 1 件（`created_at` が同じなら `id`〈ULID〉で決める）。
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {cols} FROM task_integrations i \
+                 JOIN tasks t ON t.id = i.task_id \
+                 WHERE t.project_id = ?1 \
+                   AND NOT EXISTS ( \
+                     SELECT 1 FROM task_integrations n \
+                     WHERE n.task_id = i.task_id AND n.repo_name = i.repo_name \
+                       AND (n.created_at > i.created_at OR (n.created_at = i.created_at AND n.id > i.id)) \
+                   ) \
+                 ORDER BY i.created_at DESC, i.id DESC LIMIT ?2",
+                cols = Self::INTEGRATION_COLUMNS
+                    .split(", ")
+                    .map(|c| format!("i.{c}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))?;
+            let rows = stmt.query_map(
+                params![
+                    project_id.to_string(),
+                    i64::try_from(limit).unwrap_or(i64::MAX)
+                ],
+                Self::integration_row,
+            )?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row??);
+            }
+            Ok(out)
+        })
     }
 }

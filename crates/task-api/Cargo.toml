@@ -8,7 +8,7 @@ task-core = { path = "../task-core" }
 task-ops = { path = "../task-ops" }
 celeris-credentiald = { path = "../celeris-credentiald" }
 async-trait = "0.1"
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "query"] }
 tokio = { version = "1.53.1", features = ["sync", "time", "net", "rt", "macros", "fs", "io-util"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 form_urlencoded = "1"

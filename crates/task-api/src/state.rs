@@ -49,6 +49,7 @@ pub struct ApiState {
     pub(crate) browser: Arc<crate::browser::BrowserApiConfig>,
     /// ADR-0083（P3-A）: identity の封緘。`None` なら identity API は 503 `identity_unavailable`。
     pub(crate) identity_sealer: Option<Arc<celeris_credentiald::identity_seal::IdentitySealer>>,
+    pub(crate) live_grants: Arc<Mutex<HashMap<String, crate::browser_live::LiveGrantRecord>>>,
 }
 
 pub(crate) struct Inner {
@@ -185,6 +186,7 @@ impl ApiState {
             tuning: StreamTuning::default(),
             browser,
             identity_sealer: None,
+            live_grants: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 

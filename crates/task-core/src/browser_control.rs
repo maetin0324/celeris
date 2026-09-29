@@ -165,6 +165,11 @@ impl BrowserControl {
         self.lease.as_ref()
     }
 
+    /// 実行中の agent 操作の数（in-flight 完了報告の待ち）。
+    pub fn in_flight(&self) -> u32 {
+        self.in_flight
+    }
+
     pub fn auth_section_active(&self) -> bool {
         self.auth_section_active
     }

@@ -86,7 +86,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
 | `knowledge:read` | `knowledge_list` / `knowledge_search` / `knowledge_get` / `resources/read`（`celeris://knowledge/*`） |
 | `knowledge:propose` | `knowledge_propose`（`_inbox` に候補を置く） |
 | `tasks:read` | `tasks_list` / `tasks_get` / `projects_list` / `projects_get` |
-| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）、`task_decompose`（Phase F6。`POST /tasks/{id}/execution/decompose` と同じ） |
+| `tasks:interact`（Phase 101） | `task_comment` / `task_answer`（`POST /tasks/{id}/comments` / `/answer` と同じ）、`task_decompose`（Phase F6。`POST /tasks/{id}/execution/decompose` と同じ）、`decision_list` / `decision_answer`（ADR-0079 R3a。`GET /decisions` / `POST /decisions/{id}/answer` と同じ） |
 | `tasks:control`（Phase 101） | `task_retry` / `task_cancel`（`POST /tasks/{id}/retry` / `/cancel` と同じ） |
 | `tasks:decide`（Phase 101） | `task_approve` / `task_reject`（`POST /tasks/{id}/approve` / `/reject` と同じ） |
 | `console:instruct` | `console_instruct` / `console_reply` |
@@ -137,6 +137,19 @@ token: <64+ 文字の値。この 1 回しか出ない>
     終端・gate の対象外は `-32602`（終端は `task_retry` の `execution` を使う）。run を止めない・複製しない・
     承認しない操作なので、`task_answer` と同じ `tasks:interact` に置いた（§8.2 の推奨 scope のまま使える）。
     例: `{"name":"task_decompose","arguments":{"id":"01M3…","mode":"compound","note":"工程に分けて"}}`）。
+  - `decision_list { open?, root_id?, task_id? }`（scope `tasks:interact`。ADR-0079 D7 / Phase R3a。
+    `GET /decisions` / `GET /tasks/{id}/decisions` と同じ `task_ops::decision`。既定は未回答だけ（`open` 省略 =
+    `true`）。`root_id` で 1 つの木、`task_id` でその task の subtree に絞る（同時には使えない）。各要素は
+    `DecisionView`（`decision.id`・`path`〈root › 段階 › unit のパンくず〉・`question`・`options`・`recommended`・
+    `cost_of_reversal`・`needed_before`〈止めている unit / `stage:<key>` / `self`〉・`kind`）。
+  - `decision_answer { id, option?, note? }`（scope `tasks:interact`。`POST /decisions/{id}/answer` と同じ。
+    `task_answer` と同じ重さ: 待っている仕事を進めるだけで、run を止めない・複製しない）。`option` は決定の
+    `options[].key` のどれか。`kind = choice` の決定だけ `option` を省いて `note` に自由記述で答えられる
+    （記録される `option` は `other`）。`DecisionAnswered.by` は `mcp:<client_id>`。効き目は決定の種類と選択肢で
+    決まる（ADR-0079 付記「R3a 実装時の逸脱・明確化」の表: 待っていた unit を進める / limit の `raise-once`・
+    `replan`・`withdraw` / plan_invalid の `replan`・`atomic`・`cancel`）。回答済み・取り下げ済み・選択肢の外は
+    `-32602`、無い id は `-32001`。取り下げ（`withdraw`）と revise は MCP には出さない（人が GUI / API で行う）。
+    例: `{"name":"decision_answer","arguments":{"id":"01M4…","option":"org-vault","note":"まず試験用で"}}`。
   - `task_retry { id, execution? }`（scope `tasks:control`。`POST /tasks/{id}/retry`（`accept=false`）と同じ。
     `failed`/`cancelled` のタスクを複製して新しい `draft` を作る。`execution: "compound" | "atomic"` で複製先の
     実行の形を明示できる（`source` は `mcp:<client_id>`）。複製先は元の gate の判定を持たず、今の設定で判定し直す）。

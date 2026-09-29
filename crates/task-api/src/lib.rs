@@ -25,6 +25,7 @@ pub mod changes;
 /// ADR-0048 D1（Phase 60a）: Console の読み取り側（一本の流れと SSE）。
 pub mod console;
 pub mod conversation;
+pub mod decisions;
 /// ADR-0044 D7（Phase 57）: 案件の文書（git が正本）。ツリー・ページ・編集・昇格。
 pub mod docs;
 /// ADR-0072（Phase E2）: `POST`/`GET /tasks/{id}/execution-plan`。

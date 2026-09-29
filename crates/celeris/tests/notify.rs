@@ -1463,6 +1463,558 @@ fn active_and_global_conversations_notify_each_new_reply_but_not_answered_replie
     assert!(env.scanned(NotificationKind::SecretaryReply).is_empty());
 }
 
+// ---- 7. decision_requested（ADR-0079 D7 / Phase R3a: 人への決定の要求）----
+
+fn decision_option(key: &str, label: &str) -> task_core::DecisionOption {
+    task_core::DecisionOption {
+        key: key.into(),
+        label: label.into(),
+        consequence: None,
+    }
+}
+
+/// 決定 1 件を組み立てる（`run_id` が `Some` なら `Planner`、`None` なら `Daemon` が出したことにする）。
+#[allow(clippy::too_many_arguments)]
+fn decision_request(
+    id: &str,
+    task_id: TaskId,
+    run_id: Option<&str>,
+    question: &str,
+    options: &[(&str, &str)],
+    recommended: &str,
+    cost: task_core::CostOfReversal,
+    needed_before: &[&str],
+    path: Vec<task_core::DecisionPathEntry>,
+) -> task_core::DecisionRequest {
+    let origin = if run_id.is_some() {
+        task_core::DecisionOrigin::Planner
+    } else {
+        task_core::DecisionOrigin::Daemon
+    };
+    task_core::DecisionRequest {
+        id: id.into(),
+        key: id.into(),
+        kind: task_core::DecisionKind::Choice,
+        question: question.into(),
+        options: options.iter().map(|(k, l)| decision_option(k, l)).collect(),
+        recommended: recommended.into(),
+        cost_of_reversal: cost,
+        cost_note: None,
+        needed_before: needed_before.iter().map(|s| s.to_string()).collect(),
+        path,
+        raised_by: task_core::DecisionRaisedBy {
+            task_id,
+            run_id: run_id.map(str::to_string),
+            origin,
+        },
+        status: task_core::DecisionStatus::Open,
+        answer: None,
+        withdrawn_reason: None,
+    }
+}
+
+fn empty_plan_spec() -> task_core::ExecutionPlanSpec {
+    task_core::ExecutionPlanSpec {
+        stages: Vec::new(),
+        units: Vec::new(),
+        decisions: Vec::new(),
+        schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
+        rationale: "A".into(),
+        work_units: vec![task_core::WorkUnitSpec {
+            key: "a".into(),
+            kind: task_core::WorkUnitKind::Implement,
+            title: "title a".into(),
+            objective: "objective for the a step, spelled out plainly".into(),
+            depends_on: Vec::new(),
+            done_when: Vec::new(),
+            checks: Vec::new(),
+            context: task_core::WorkUnitContext::default(),
+            harness: None,
+            features: None,
+            budget: None,
+            outputs: Vec::new(),
+            phase: None,
+        }],
+        phases: Vec::new(),
+        children: Vec::new(),
+    }
+}
+
+/// ADR-0079 D7: 同じ run（計画の採用の planner run）で出た決定は `plan:<plan_id>:decisions` に束ねる。
+/// 文面は「人の決定が N 件必要」+ 各行（パンくず・問い・推奨・後戻り）。2 回目の tick では増えない。
+/// 送信すると POST の本文にパンくずと推奨が UTF-8 のまま（JSON エスケープを経ても）残る。
+#[tokio::test]
+async fn decisions_are_notified_once_per_plan() {
+    let env = Env::new();
+    // `append_event` は実時計で `created_at` を刻む（`Event::DecisionRequested`）ので、判定の
+    // `since`/`now` も実時計の周りで組み立てる（backfill 禁止の下限が実時計より後だと、まだ
+    // 起きていない出来事として扱われて 1 件目が鳴らない）。
+    let real_now = OffsetDateTime::now_utc();
+    let since = real_now - time::Duration::minutes(1);
+    let root = task(Status::Ready);
+    env.store
+        .insert(&root)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let plan = task_ops::execution::adopt_plan(
+        env.as_store(),
+        root.id,
+        empty_plan_spec(),
+        task_core::PlanOrigin::Planner,
+        Some("run-1".to_string()),
+        task_core::ExecutionLimits::default(),
+        real_now,
+    )
+    .unwrap_or_else(|e| panic!("adopt_plan: {e}"));
+
+    let path = vec![task_core::DecisionPathEntry {
+        task_id: root.id,
+        title: "browser capability".into(),
+        stage: Some("phase-2".into()),
+        unit: None,
+    }];
+    let decisions = [
+        decision_request(
+            "dec-backend",
+            root.id,
+            Some("run-1"),
+            "どのバックエンドを使うか",
+            &[("vault", "組織のvault"), ("manual", "手動設定")],
+            "vault",
+            task_core::CostOfReversal::Low,
+            &["p2-b"],
+            path.clone(),
+        ),
+        decision_request(
+            "dec-cache",
+            root.id,
+            Some("run-1"),
+            "キャッシュ戦略をどうするか",
+            &[("redis", "Redis"), ("memory", "インメモリ")],
+            "redis",
+            task_core::CostOfReversal::Medium,
+            &["stage:phase-2"],
+            path.clone(),
+        ),
+        decision_request(
+            "dec-auth",
+            root.id,
+            Some("run-1"),
+            "認証方式をどうするか",
+            &[("oauth", "OAuth"), ("apikey", "APIキー")],
+            "apikey",
+            task_core::CostOfReversal::High,
+            &["p2-b"],
+            path.clone(),
+        ),
+    ];
+    for d in &decisions {
+        env.store
+            .append_event(
+                root.id,
+                &task_core::Event::DecisionRequested {
+                    decision: Box::new(d.clone()),
+                },
+            )
+            .unwrap_or_else(|e| panic!("event: {e}"));
+    }
+
+    let created = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    let rows: Vec<_> = created
+        .iter()
+        .filter(|n| n.kind == NotificationKind::DecisionRequested)
+        .collect();
+    assert_eq!(rows.len(), 1, "3 件の決定は 1 通に束ねる: {created:?}");
+    let key = format!("plan:{}:decisions", plan.id);
+    assert_eq!(rows[0].key, key);
+    assert!(
+        rows[0].body.contains("人の決定が 3 件必要"),
+        "{}",
+        rows[0].body
+    );
+    assert!(
+        rows[0].body.contains("『browser capability』 › phase-2"),
+        "{}",
+        rows[0].body
+    );
+    assert!(
+        rows[0].body.contains("どのバックエンドを使うか"),
+        "{}",
+        rows[0].body
+    );
+    assert!(
+        rows[0].body.contains("キャッシュ戦略をどうするか"),
+        "{}",
+        rows[0].body
+    );
+    assert!(
+        rows[0].body.contains("認証方式をどうするか"),
+        "{}",
+        rows[0].body
+    );
+    assert!(
+        rows[0].body.contains("推奨: 組織のvault"),
+        "{}",
+        rows[0].body
+    );
+    assert!(rows[0].body.contains("推奨: Redis"), "{}", rows[0].body);
+    assert!(rows[0].body.contains("推奨: APIキー"), "{}", rows[0].body);
+    assert!(rows[0].body.contains("小"), "{}", rows[0].body);
+    assert!(rows[0].body.contains("中"), "{}", rows[0].body);
+    assert!(rows[0].body.contains("大"), "{}", rows[0].body);
+
+    // 2 回目の tick では増えない（同じ key）。
+    let second = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    assert!(
+        second
+            .iter()
+            .all(|n| n.kind != NotificationKind::DecisionRequested),
+        "{second:?}"
+    );
+
+    // 送信: 偽の webhook へ POST し、本文にパンくずと推奨が UTF-8 のまま残る（serde_json は非 ASCII を
+    // エスケープしないので、JSON にしても plain contains で見える）。
+    let pending = env
+        .store
+        .notification_pending()
+        .unwrap_or_else(|e| panic!("pending: {e}"));
+    let batch = notify::select_batch(&pending).unwrap_or_else(|| panic!("no batch"));
+    let (url, server) = fake_webhook(1, 204).await;
+    let client = notify::client().unwrap_or_else(|| panic!("client"));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<SendResult>(4);
+    notify::spawn_send(client, url, &batch, tx);
+    let result = rx.recv().await.unwrap_or_else(|| panic!("no result"));
+    assert_eq!(result.outcome, notify::SendOutcome::Sent, "{result:?}");
+    let bodies = server.await.unwrap_or_else(|e| panic!("server: {e}"));
+    assert_eq!(bodies.len(), 1);
+    assert!(
+        bodies[0].contains("browser capability"),
+        "path が本文に残る: {}",
+        bodies[0]
+    );
+    assert!(bodies[0].contains("推奨"), "{}", bodies[0]);
+    assert!(bodies[0].contains("組織のvault"), "{}", bodies[0]);
+}
+
+/// `raised_by.run_id` が無い決定（daemon 発）は `decision:<id>` の 1 通になる。
+#[test]
+fn a_single_daemon_decision_uses_the_decision_key() {
+    let env = Env::new();
+    let real_now = OffsetDateTime::now_utc();
+    let since = real_now - time::Duration::minutes(1);
+    let solo = task(Status::Ready);
+    env.store
+        .insert(&solo)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let request = decision_request(
+        "dec-limit",
+        solo.id,
+        None,
+        "上限を超えました。どうしますか",
+        &[("stop", "止める"), ("raise", "上限を上げる")],
+        "stop",
+        task_core::CostOfReversal::Medium,
+        &["stage:x"],
+        vec![task_core::DecisionPathEntry {
+            task_id: solo.id,
+            title: solo.title.clone(),
+            stage: None,
+            unit: None,
+        }],
+    );
+    env.store
+        .append_event(
+            solo.id,
+            &task_core::Event::DecisionRequested {
+                decision: Box::new(request),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+
+    let created = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    let rows: Vec<_> = created
+        .iter()
+        .filter(|n| n.kind == NotificationKind::DecisionRequested)
+        .collect();
+    assert_eq!(rows.len(), 1, "{created:?}");
+    assert_eq!(rows[0].key, "decision:dec-limit");
+    let second = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    assert!(
+        second
+            .iter()
+            .all(|n| n.kind != NotificationKind::DecisionRequested),
+        "{second:?}"
+    );
+}
+
+/// ADR-0079 D7: 未回答のまま 24 時間たったら、その束につき 1 回だけ再通知する。回答済み・取り下げ済み・
+/// 節点が終端の決定は（24 時間たっても）鳴らない。`created_at` は `append_event` が刻む実時計なので、
+/// `now` を実時刻から相対的にずらして判定する。
+#[test]
+fn open_decisions_are_reminded_once_after_24h() {
+    let env = Env::new();
+    let real_now = OffsetDateTime::now_utc();
+    let started = real_now - time::Duration::minutes(1);
+
+    // A: 単発の daemon 決定（開いたまま）。
+    let a = task(Status::Ready);
+    env.store
+        .insert(&a)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let req_a = decision_request(
+        "dec-a",
+        a.id,
+        None,
+        "問いA",
+        &[("x", "選択X"), ("y", "選択Y")],
+        "x",
+        task_core::CostOfReversal::Low,
+        &["stage:x"],
+        vec![task_core::DecisionPathEntry {
+            task_id: a.id,
+            title: a.title.clone(),
+            stage: None,
+            unit: None,
+        }],
+    );
+    env.store
+        .append_event(
+            a.id,
+            &task_core::Event::DecisionRequested {
+                decision: Box::new(req_a),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+
+    // B: 回答済み（鳴らない）。
+    let b = task(Status::Ready);
+    env.store
+        .insert(&b)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let req_b = decision_request(
+        "dec-b",
+        b.id,
+        None,
+        "問いB",
+        &[("x", "選択X"), ("y", "選択Y")],
+        "x",
+        task_core::CostOfReversal::Low,
+        &["stage:x"],
+        vec![task_core::DecisionPathEntry {
+            task_id: b.id,
+            title: b.title.clone(),
+            stage: None,
+            unit: None,
+        }],
+    );
+    env.store
+        .append_event(
+            b.id,
+            &task_core::Event::DecisionRequested {
+                decision: Box::new(req_b),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+    env.store
+        .append_event(
+            b.id,
+            &task_core::Event::DecisionAnswered {
+                id: "dec-b".into(),
+                option: "x".into(),
+                note: None,
+                by: "human".into(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+
+    // C: 節点が終端（cancelled。鳴らない）。
+    let c = task(Status::Cancelled);
+    env.store
+        .insert(&c)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let req_c = decision_request(
+        "dec-c",
+        c.id,
+        None,
+        "問いC",
+        &[("x", "選択X"), ("y", "選択Y")],
+        "x",
+        task_core::CostOfReversal::Low,
+        &["stage:x"],
+        vec![task_core::DecisionPathEntry {
+            task_id: c.id,
+            title: c.title.clone(),
+            stage: None,
+            unit: None,
+        }],
+    );
+    env.store
+        .append_event(
+            c.id,
+            &task_core::Event::DecisionRequested {
+                decision: Box::new(req_c),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+
+    // 初回（+0h）: A だけが候補（B は回答済み、C は終端の節点）。
+    let created0 = notify::schedule(env.as_store(), &NotifyConfig::default(), started, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    let decisions0: Vec<_> = created0
+        .iter()
+        .filter(|n| n.kind == NotificationKind::DecisionRequested)
+        .collect();
+    assert_eq!(decisions0.len(), 1, "{created0:?}");
+    assert_eq!(decisions0[0].key, "decision:dec-a");
+
+    // +23h: まだ 24 時間たっていないのでリマインダーは無い。
+    let created23 = notify::schedule(
+        env.as_store(),
+        &NotifyConfig::default(),
+        started,
+        real_now + time::Duration::hours(23),
+    )
+    .unwrap_or_else(|e| panic!("schedule: {e}"));
+    assert!(
+        created23
+            .iter()
+            .all(|n| n.kind != NotificationKind::DecisionRequested),
+        "{created23:?}"
+    );
+
+    // +25h: A のリマインダーが 1 件だけ（B は回答済み、C は終端なので鳴らない）。
+    let created25 = notify::schedule(
+        env.as_store(),
+        &NotifyConfig::default(),
+        started,
+        real_now + time::Duration::hours(25),
+    )
+    .unwrap_or_else(|e| panic!("schedule: {e}"));
+    let reminders25: Vec<_> = created25
+        .iter()
+        .filter(|n| n.kind == NotificationKind::DecisionRequested)
+        .collect();
+    assert_eq!(reminders25.len(), 1, "{created25:?}");
+    assert_eq!(reminders25[0].key, "reminder:decision:dec-a");
+
+    // +49h: 同じ束は既に鳴らしたので増えない。
+    let created49 = notify::schedule(
+        env.as_store(),
+        &NotifyConfig::default(),
+        started,
+        real_now + time::Duration::hours(49),
+    )
+    .unwrap_or_else(|e| panic!("schedule: {e}"));
+    assert!(
+        created49
+            .iter()
+            .all(|n| n.kind != NotificationKind::DecisionRequested),
+        "{created49:?}"
+    );
+}
+
+/// 回答済み・取り下げ済みの決定は、最初の走査でも一切通知を作らない。
+#[test]
+fn answered_and_withdrawn_decisions_do_not_notify() {
+    let env = Env::new();
+
+    let answered_task = task(Status::Ready);
+    env.store
+        .insert(&answered_task)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let req1 = decision_request(
+        "dec-answered",
+        answered_task.id,
+        None,
+        "問い1",
+        &[("a", "A"), ("b", "B")],
+        "a",
+        task_core::CostOfReversal::Low,
+        &["stage:x"],
+        vec![task_core::DecisionPathEntry {
+            task_id: answered_task.id,
+            title: answered_task.title.clone(),
+            stage: None,
+            unit: None,
+        }],
+    );
+    env.store
+        .append_event(
+            answered_task.id,
+            &task_core::Event::DecisionRequested {
+                decision: Box::new(req1),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+    env.store
+        .append_event(
+            answered_task.id,
+            &task_core::Event::DecisionAnswered {
+                id: "dec-answered".into(),
+                option: "a".into(),
+                note: None,
+                by: "human".into(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+
+    let withdrawn_task = task(Status::Ready);
+    env.store
+        .insert(&withdrawn_task)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let req2 = decision_request(
+        "dec-withdrawn",
+        withdrawn_task.id,
+        None,
+        "問い2",
+        &[("a", "A"), ("b", "B")],
+        "a",
+        task_core::CostOfReversal::Low,
+        &["stage:x"],
+        vec![task_core::DecisionPathEntry {
+            task_id: withdrawn_task.id,
+            title: withdrawn_task.title.clone(),
+            stage: None,
+            unit: None,
+        }],
+    );
+    env.store
+        .append_event(
+            withdrawn_task.id,
+            &task_core::Event::DecisionRequested {
+                decision: Box::new(req2),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+    env.store
+        .append_event(
+            withdrawn_task.id,
+            &task_core::Event::DecisionWithdrawn {
+                id: "dec-withdrawn".into(),
+                reason: "もう不要".into(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("event: {e}"));
+
+    let created = notify::schedule(
+        env.as_store(),
+        &NotifyConfig::default(),
+        env.started_at,
+        env.started_at,
+    )
+    .unwrap_or_else(|e| panic!("schedule: {e}"));
+    assert!(
+        created
+            .iter()
+            .all(|n| n.kind != NotificationKind::DecisionRequested),
+        "{created:?}"
+    );
+    assert!(env.scanned(NotificationKind::DecisionRequested).is_empty());
+}
+
 #[test]
 fn milestone_without_cos_reply_eventually_notifies_the_handoff() {
     let env = Env::new();

@@ -35,6 +35,23 @@ use task_core::MessageRole;
 
 use crate::protocol::{ConversationAddressee, MilestoneReviewContext, RunContext};
 
+/// ADR-0079 D7（Phase R3a）: leaf の前置きの「人の決定」節の見出し（子 task の objective の末尾と同じ）。
+pub const HUMAN_DECISIONS_HEADING: &str = task_core::decision::DECISIONS_HEADING;
+
+/// ADR-0079 D7（Phase R3a）: 木の節点の worker の run（`context.decision_requests`）にだけ出す、
+/// `result.json` の `decisions` で人への決定の要求を出す方法。
+pub fn decision_requests_section(artifacts: &str) -> String {
+    format!(
+        "## 人への決定の要求（ADR-0079 D7）\n\
+         人が選ぶべき点（方式・範囲・後戻りしにくい選択）に行き当たったら、自由文の質問（`question`）で止まる代わりに、\
+         `{artifacts}/result.json` に `decisions` の配列を書けます（1 件 = \
+         `{{\"key\": \"<a-z0-9->\", \"question\": \"…\", \"options\": [{{\"key\": \"…\", \"label\": \"…\"}}, …], \
+         \"recommended\": \"<option key>\", \"cost_of_reversal\": \"low|medium|high\", \"needed_before\": [\"self\" | \"<unit key>\" | \"stage:<key>\"]}}`、\
+         選択肢は 2〜5 件）。`needed_before: [\"self\"]` はこの仕事を人の答えが出るまで止めます（答えは次の run の前置きに入ります）。\
+         他の unit を指せばその unit だけが待ち、この run の完了は妨げません。数が多すぎると 1 件に束ねられます。\n\n"
+    )
+}
+
 /// 前置き（役割の指示文を含む）。`claude-code` / `codex` / `acp` / `paperqa` が使う。
 /// `artifacts` は成果物ディレクトリの workspace 相対表記（`RunRequest::artifacts_rel`。ADR-0036 D3。
 /// 単独タスクでは `artifacts` なので出力は Phase 34 までとバイト単位で同じ）。

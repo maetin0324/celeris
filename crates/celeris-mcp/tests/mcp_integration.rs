@@ -9,10 +9,14 @@ use std::sync::Arc;
 use celeris_mcp::config::ListenerAuth;
 use celeris_mcp::state::McpState;
 use serde_json::{Value, json};
+use task_core::decision::{
+    CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
+    DecisionRaisedBy, DecisionRequest, DecisionStatus,
+};
 use task_core::{
-    ArtifactRef, Budget, Check, Criterion, GenreSpec, McpClient, McpClientStore, McpScope, OrgKind,
-    OrgNode, RoleSpec, SqliteStore, Status, Task, TaskKind, TaskStore, Tier, WorkerHint,
-    WorkspaceSpec,
+    ArtifactRef, Budget, Check, Criterion, Event, GenreSpec, McpClient, McpClientStore, McpScope,
+    OrgKind, OrgNode, RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
+    WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -1062,6 +1066,156 @@ async fn task_decompose_requires_tasks_interact_and_records_the_mcp_source() {
     )
     .await;
     assert_eq!(body["error"]["code"], -32602, "{body}");
+
+    server.stop().await;
+}
+
+fn decision_opt(key: &str, label: &str) -> DecisionOption {
+    DecisionOption {
+        key: key.into(),
+        label: label.into(),
+        consequence: None,
+    }
+}
+
+/// `kind = choice` の決定要求（`task_id` = 出した節点、単独の task なので root も同じ id）。
+fn decision_request(id: &str, key: &str, task_id: TaskId) -> DecisionRequest {
+    DecisionRequest {
+        id: id.into(),
+        key: key.into(),
+        kind: DecisionKind::Choice,
+        question: format!("question {key}?"),
+        options: vec![
+            decision_opt("vault", "org vault"),
+            decision_opt("manual", "manual"),
+        ],
+        recommended: "vault".into(),
+        cost_of_reversal: CostOfReversal::Low,
+        cost_note: None,
+        needed_before: vec!["c".into()],
+        path: vec![DecisionPathEntry {
+            task_id,
+            title: "root".into(),
+            stage: Some("s1".into()),
+            unit: None,
+        }],
+        raised_by: DecisionRaisedBy {
+            task_id,
+            run_id: None,
+            origin: DecisionOrigin::Planner,
+        },
+        status: DecisionStatus::Open,
+        answer: None,
+        withdrawn_reason: None,
+    }
+}
+
+/// ADR-0079 D7（Phase R3a）: `decision_list` / `decision_answer` は scope `tasks:interact`（`task_answer` と
+/// 同じ重さ）。回答の主体は `mcp:<client_id>`、二回目の回答は invalid_params、無い id は not_found。
+#[tokio::test]
+async fn decision_tools_require_tasks_interact_and_record_the_mcp_source() {
+    let server = spawn_token_server(60).await;
+    create_client(&server.store, "noscope", Some("s0"), vec![]);
+    create_client(
+        &server.store,
+        "chatgpt",
+        Some("secret"),
+        vec![McpScope::TasksInteract],
+    );
+    let task_id = insert_task(&server.store, TaskKind::Execute, Status::Ready);
+    server
+        .store
+        .append_event(
+            task_id,
+            &Event::DecisionRequested {
+                decision: Box::new(decision_request("dec-1", "h1", task_id)),
+            },
+        )
+        .expect("append decision");
+    let client = reqwest::Client::new();
+
+    // scope 無しは decision_list / decision_answer どちらも -32601（tools/list に出ない）。
+    let session0 = initialize(&client, &server.base_url, Some("s0")).await;
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("s0"),
+        &session0,
+        "decision_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("s0"),
+        &session0,
+        "decision_answer",
+        json!({"id": "dec-1", "option": "vault"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+
+    // `tasks:interact` を持つクライアントは一覧・回答ができる。
+    let session = initialize(&client, &server.base_url, Some("secret")).await;
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "decision_list",
+        json!({}),
+    )
+    .await;
+    let out = structured(&body);
+    let items = out["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{out}");
+    assert_eq!(items[0]["decision"]["id"], "dec-1");
+
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "decision_answer",
+        json!({"id": "dec-1", "option": "vault"}),
+    )
+    .await;
+    let out = structured(&body);
+    assert_eq!(out["effect"], "resume", "{out}");
+    assert_eq!(out["decision"]["decision"]["status"], "answered", "{out}");
+
+    let events = server.store.events_for(task_id).unwrap();
+    let answered = events.iter().any(|(_, e)| {
+        matches!(e, task_core::Event::DecisionAnswered { id, by, .. }
+            if id == "dec-1" && by == "mcp:chatgpt")
+    });
+    assert!(answered, "{events:?}");
+
+    // 二回目の回答は invalid_params（open でない）。
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "decision_answer",
+        json!({"id": "dec-1", "option": "manual"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32602, "{body}");
+
+    // 無い id は not_found。
+    let body = call_tool(
+        &client,
+        &server.base_url,
+        Some("secret"),
+        &session,
+        "decision_answer",
+        json!({"id": "no-such-decision", "option": "vault"}),
+    )
+    .await;
+    assert_eq!(body["error"]["code"], -32001, "{body}");
 
     server.stop().await;
 }

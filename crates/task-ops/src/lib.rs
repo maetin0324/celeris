@@ -16,6 +16,7 @@ pub mod comment;
 pub mod console;
 pub mod conversation;
 pub mod daemon;
+pub mod decision;
 pub mod delegate;
 pub mod delivery;
 pub mod derive;

@@ -23,6 +23,9 @@ pub struct Inbox {
     pub questions: Vec<QuestionItem>,
     pub drafts: Vec<DraftGroup>,
     pub attention: Vec<AttentionItem>,
+    /// ADR-0079 D7（Phase R3a）: 未回答の決定の要求（path・問い・推奨・止めている unit・経過時間）。
+    /// 回答は `POST /decisions/{id}/answer`。
+    pub decisions: Vec<crate::decision::DecisionInboxItem>,
     pub counts: InboxCounts,
 }
 
@@ -32,6 +35,8 @@ pub struct InboxCounts {
     pub questions: u32,
     pub drafts: u32,
     pub attention: u32,
+    /// ADR-0079 D7（Phase R3a）: 未回答の決定の要求の件数。
+    pub decisions: u32,
     /// status 名 → 件数（DB 全体）。
     pub by_status: std::collections::BTreeMap<String, u64>,
 }
@@ -803,12 +808,16 @@ pub fn inbox(
         .map(|(s, n)| (view::status_key(s).to_string(), n))
         .collect();
 
+    // ADR-0079 D7（Phase R3a）: 未回答の決定の要求（決定を出した節点が終端でないもの。古い順）。
+    let decisions = crate::decision::inbox_items(store, now)?;
+
     let counts = InboxCounts {
         approvals: approvals.len() as u32,
         questions: questions.len() as u32,
         // グループ数ではなく draft タスクの件数（バッジ表示用。Phase 9 監査）。
         drafts: drafts.iter().map(|g| g.drafts.len() as u32).sum(),
         attention: attention.len() as u32,
+        decisions: decisions.len() as u32,
         by_status,
     };
 
@@ -817,6 +826,7 @@ pub fn inbox(
         questions,
         drafts,
         attention,
+        decisions,
         counts,
     })
 }
@@ -1650,6 +1660,7 @@ mod tests {
             unroutable: vec![stuck.id],
             reports: None,
             approvals_pending: 0,
+            decisions_open: 0,
             clusters: vec![],
             providers: vec![],
             accounts_root: None,
@@ -1924,6 +1935,7 @@ mod tests {
             unroutable: vec![],
             reports: None,
             approvals_pending: 0,
+            decisions_open: 0,
             clusters: vec![crate::daemon::ClusterLive {
                 id: "pegasus".into(),
                 host: "pegasus".into(),

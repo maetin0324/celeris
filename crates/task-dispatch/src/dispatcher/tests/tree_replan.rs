@@ -319,7 +319,7 @@ async fn v3_invalid_plan_asks_instead_of_atomic() {
     assert!(dr.request.raised_by.run_id.is_some());
     assert_eq!(dr.request.path.first().map(|p| p.task_id), Some(root_id));
     let keys: Vec<&str> = dr.request.options.iter().map(|o| o.key.as_str()).collect();
-    assert_eq!(keys, vec!["human-plan", "atomic", "withdraw"]);
+    assert_eq!(keys, vec!["replan", "atomic", "cancel"]);
     let note = dr.request.cost_note.clone().unwrap_or_default();
     assert!(note.contains("checks"), "{note}");
     // 2 回目の planner には 1 回目の拒否の理由が渡った（F5-fix3 のまま）。

@@ -88,6 +88,10 @@ pub enum NotificationKind {
     /// ADR-0074 D2.4（Phase F3 途中確認）: Task が工程の後の途中確認で止まった（`blocked(awaiting_human)`）。
     /// 質問ではない（`QuestionBlocked` は鳴らさない）。`key` = task id:遷移番号。
     PhaseCheckpoint,
+    /// ADR-0079 D7（Phase R3a）: 人への決定の要求（木の中の位置 path 付き）。同じ run（計画の採用・worker の
+    /// run）で出た複数は 1 通に束ねる（`key` = `plan:<plan_id>:decisions` / `run:<run_id>:decisions`、1 件なら
+    /// `decision:<id>`）。未回答のまま 24 時間たったら 1 回だけ再通知する（`key` の先頭に `reminder:`）。
+    DecisionRequested,
 }
 
 impl NotificationKind {
@@ -102,6 +106,7 @@ impl NotificationKind {
             NotificationKind::ClusterLoginNeeded => "cluster_login_needed",
             NotificationKind::TaskFailed => "task_failed",
             NotificationKind::PhaseCheckpoint => "phase_checkpoint",
+            NotificationKind::DecisionRequested => "decision_requested",
         }
     }
 
@@ -116,12 +121,13 @@ impl NotificationKind {
             "cluster_login_needed" => Some(NotificationKind::ClusterLoginNeeded),
             "task_failed" => Some(NotificationKind::TaskFailed),
             "phase_checkpoint" => Some(NotificationKind::PhaseCheckpoint),
+            "decision_requested" => Some(NotificationKind::DecisionRequested),
             _ => None,
         }
     }
 
     /// 判定の順（GUI と再送の順を決定的にするため）。
-    pub const ALL: [NotificationKind; 9] = [
+    pub const ALL: [NotificationKind; 10] = [
         NotificationKind::MilestoneReady,
         NotificationKind::ApprovalPending,
         NotificationKind::QuestionBlocked,
@@ -131,6 +137,7 @@ impl NotificationKind {
         NotificationKind::ClusterLoginNeeded,
         NotificationKind::TaskFailed,
         NotificationKind::PhaseCheckpoint,
+        NotificationKind::DecisionRequested,
     ];
 }
 

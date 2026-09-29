@@ -193,6 +193,8 @@ pub use decision::{
     DecisionPathEntry, DecisionRaisedBy, DecisionRequest, DecisionRow, DecisionSpec,
     DecisionStatus,
 };
+// ---- ADR-0079（Phase R3a）: 決定の回答・効き目・worker の決定 ----
+pub use decision::{AnswerError, DecisionEffect, WorkerDecisionBatch, answer_effect};
 pub use execution_plan::{
     EXECUTION_PLAN_SCHEMA_V3, PlanContext, PlanUnitSpec, RepoSelector, StageReview, StageSpec,
     UnitContext, effective_needs_decisions, internal_view, is_phased_schema, normalized_decisions,

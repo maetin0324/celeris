@@ -520,6 +520,11 @@ pub struct RunContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_planner: Option<ExecutionPlannerContext>,
     // ---- ADR-0072 D13/D14（Phase E3）: ここまで ----
+    /// ADR-0079 D7（Phase R3a）: 木の節点（`[execution.tree] enabled` の子 task・/3 の root）の worker の run だけ
+    /// `true`。前置きに「`result.json` の `decisions` で人への決定の要求を出せる」節が出る。`false` なら
+    /// プロンプトは変わらない。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub decision_requests: bool,
 }
 
 /// `context.execution_planner`（ADR-0072 D13/D14。Phase E3）: 計画を作らせる run に渡す、
@@ -687,6 +692,11 @@ pub struct WorkUnitPromptContext {
     /// ADR-0074 D1.2: 同じ工程で並行しうる他の WU（`"<key>: <title>"`）。`branch` があるときだけ。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parallel_siblings: Vec<String>,
+    /// ADR-0079 D7（Phase R3a）: この leaf が待っていた決定（`needs_decisions` と、この leaf を名指しした決定）の
+    /// 人の回答（固定の書式 `- <key> <question>: <label>（推奨どおり | 推奨と異なる） — <note>`。前置きの
+    /// 「人の決定」節に出す）。無ければ空でプロンプトは変わらない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub human_decisions: Vec<String>,
 }
 
 /// ADR-0072 D9（Phase E1）: 続きの実行に渡す最小限の文脈。前の run の会話・出力の全文は載せない

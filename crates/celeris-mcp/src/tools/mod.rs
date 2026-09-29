@@ -4,6 +4,7 @@
 //! の形（非同期）。判断・検証は道具の中に閉じ、JSON-RPC の形への変換は `crate::rpc` が行う。
 
 pub mod console;
+pub mod decisions;
 pub mod knowledge;
 pub mod org;
 pub mod projects;
@@ -123,6 +124,8 @@ pub fn all() -> Vec<ToolDef> {
         tasks::cancel_def(),
         tasks::approve_def(),
         tasks::reject_def(),
+        decisions::list_def(),
+        decisions::answer_def(),
         projects::list_def(),
         projects::get_def(),
         console::instruct_def(),

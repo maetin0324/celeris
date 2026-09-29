@@ -982,3 +982,99 @@ R2b（planner への深さ・leaf の基準・木の残りの上限、/3 の 2 �
    畳み込む（`replan` が done の行に触れないのと同じ。**/2 の replan で done の WU があると `plan_id` が食い違っていた既存の差**も
    これで消える）。`replan v<n>` の遷移で `ready` / `pending` に戻った kind task の unit は子の結び付きを外し、`child_infra_failed` は
    `blocked(infra)` に写す。
+
+## 付記: R3a 実装時の逸脱・明確化（2026-09-29）
+
+R3a（決定の要求の回答 API / MCP、回答の効き目と入力への注入、worker の `decisions`、受信箱、Discord 通知）で決めたこと。
+migration は足していない（schema 31 のまま。`decisions` の表・`work_units.blocked_reason` の値 `decision` は R1a / R2a のまま）。
+Event の形も変えていない（`DecisionRequested` / `DecisionAnswered` / `DecisionWithdrawn` は R1a の定義のまま発行する）。
+
+1. **置き場**: 判断と書き込みは `task_ops::decision`（`list` / `for_subtree` / `answer` / `withdraw` / `revise` / `inbox_items` /
+   `open_count` / `leaf_decision_lines` / `limit_allowances`）。API（`crates/task-api/src/decisions.rs`）と MCP（`decision_list` /
+   `decision_answer`、scope `tasks:interact`）は同じ関数を呼ぶ。回答の主体（`DecisionAnswered.by`）は API が `human`、MCP が
+   `mcp:<client_id>`。純粋な部分（回答の検証 `validate_answer`、選択肢 → 効き目 `answer_effect`、注入の書式 `answer_line`、worker の
+   決定の検証と束ね `prepare_worker_decisions`）は `task_core::decision`。
+2. **1 トランザクション**: 新しい `TaskStore::decision_resolve_apply(task_id, decision_id, expect, rows, events)` が、決定の行が今も
+   `expect`（回答・取り下げは `open`、revise は `answered`）であることを同じトランザクションで確かめてから、`DecisionAnswered` /
+   `DecisionWithdrawn`・unit の遷移・効き目の event を積む（競合した 2 つ目の回答は何も書かず 409）。**節点の中止**（下の表の
+   `self` の取り下げ）だけは続けて既存の `gate::cancel`（別の書き込み）。決定を出した節点が終端なら回答は 409。
+3. **計画の決定の発行**（R1b 付記 9. の「R3a で出す」）: /3 の採用（新規・replan）の直後の書き込み（`apply_tree_plan_holds`、R2a の
+   止めと同じトランザクション）で、`normalized_decisions` のうちこの節点にまだ同じ key の行（取り下げ済みを除く）が無いものを
+   `DecisionRequested`（origin `planner`、`raised_by.run_id` = planner run、path = root からこの節点まで）にする。replan で計画から
+   消えた planner / human の未回答の決定は `DecisionWithdrawn`（reason `replan v<n>: …`）。**人の計画（`PUT`）の決定はまだ発行しない**
+   （その入口は R1a 付記 5. のとおり tree 無効で検証する。R5b で配線するときに同じ関数を通す）。
+4. **待ち方**: 答えの無い決定を待つ leaf（実効の `needs_decisions` = `needs_decisions` と `needed_before` の unit / `stage:<段階>`）は
+   採用の直後に `blocked(decision)`（R2a の止め方。同じ段階の他の unit・兄弟を止めない）。kind task の unit は R1b のまま `ready` で
+   子を作らずに待つ（照合 `reconcile_tree_units` が `answered_decisions` を見る）。回答の再評価（`release_rows`）: `blocked(decision)` の
+   unit を、(a) それを名指しする決定（`needed_before` に key か `stage:<段階>`）が「まだ止めている」ものが無く、(b) `needs_decisions` が
+   すべて回答済みなら `pending` に戻し、依存と段階の障壁が満たされていれば同じ書き込みで `ready`（reason `decision_answered`）。
+   「まだ止めている」= 未回答、または `replan` と答えて、その回答の後に計画がまだ採用されていないもの。`needed_before: [self]` の
+   決定のうち `plan_invalid` と atomic の run の worker の `self` は、R2b の `plan_invalid_hold` を一般化した `decision_self_hold`（その節点が
+   出した未回答の `self` の決定がある間は run を起こさない）で待つ。`kind: limit` の `self`（run 時の木の上限・節点の replan の上限）は
+   従来どおり run を起こすときに `tree_run_limit_hold` / `replan_gate` が回答の余裕込みで見直す（R2a 付記 9. の「走っている run・判定・
+   統合は止めない」を保つ）。
+5. **選択肢 → 効き目の表**（`task_core::decision::answer_effect`。決定の種類と選択肢の key だけで決まる。決定的、LLM なし）:
+
+   | kind | option | 効き目 | 具体的に起きること |
+   |---|---|---|---|
+   | choice（計画・worker・束ね） | どれでも（自由記述 `other` を含む） | resume | 待っていた unit を 4. の規則で戻す。子は生成時の objective の末尾、leaf は前置きの「人の決定」節に答えが入る。atomic の run の `self` なら節点の止めが外れ、答えは次の run の `answers` に入る（`Event::Answered`、問いの接頭辞 `人の決定（ADR-0079 D7）: `） |
+   | leaf_too_large | `run-as-leaf` | resume | 止めた leaf を戻す（leaf のまま 1 run で走る） |
+   | leaf_too_large / limit | `replan` | replan | 節点が計画を持てば `ExecutionHintSet{replan: true, source: "<by> (decision <id>)", note}` を積む（次の dispatch で replan の planner run。`replan_reason` に「決定 <key>「…」への回答で replan: <note>」）。止めた unit は replan が置き換えるまで止めたまま。run 時の上限なら余裕も 1 回分足す（下の 6.） |
+   | leaf_too_large / limit | `withdraw` | withdraw | 止めた unit と、それに（推移的に）依存する未着手の unit を `cancelled`（reason `decision_withdrawn`。段階はそれ抜きで完了する）。`needed_before: [self]` なら節点を中止 |
+   | limit | `raise-once` | raise_once | 計画の採用時の上限（段階の数・段階あたり・子 task・`max_depth`・木の leaf）は止めた unit を戻すだけ。run 時の上限（`max_tree_runs` / `max_tree_tokens` / `max_tree_replans` / 節点の `max_replans`）は上限に余裕を足す（6.） |
+   | plan_invalid | `replan`（R2b の `human-plan` も同じ） | replan | 止めが外れ、planner の試行の窓（`planner_attempts_in_window`）を回答の位置から数え直す（もう 2 回試せる）。人の note は planner の `previous_attempt_errors` の末尾に「人の指示（…）」の 1 行で渡る。計画を持つ節点（replan の 2 回不正）なら `ExecutionHintSet{replan: true}` も積み、`replan_reason` にも note が入る |
+   | plan_invalid | `atomic`（初回の計画のときだけ選択肢に出る） | atomic | 次の dispatch で daemon が gate の判定を `atomic`（規則 id `atomic/decision`、信号 `plan_invalid_answered_atomic`）に書き換え（`ExecutionGated`）、計画を作らずに 1 run で走らせる |
+   | plan_invalid | `cancel`（R2b の `withdraw` も同じ） | withdraw | 節点を中止 |
+
+   人の取り下げ（`POST /decisions/{id}/withdraw`、`DecisionWithdrawn`）の効き目は `withdraw` と同じ。**節点の中止**は、木の子なら先に
+   親の unit を `cancelled`（reason `decision_withdrawn`）にしてから子を `Cancel` する（子の中止を R1b 付記 2. の「子の cancelled → unit
+   failed → 親の replan」に乗せない。取り下げは「その仕事をしない」）。root なら root の `Cancel`（subtree に連鎖）。
+6. **`raise-once` の余裕**（run 時の上限）: 木の上限は、木の中の回答済みの `limit:<名前>` の決定のうち `raise-once` / `replan` の件数 ×
+   `task_core::tree::limit_allowance_step`（設定の上限の半分、切り上げ・最低 1）を上限に足す（`limits_with_allowances`。`tree_run_limit_hold` と
+   planner の「木の残り」が同じ値を使う）。節点の `max_replans` は、その節点の `limit:max_replans` への回答 1 件ごとに +1（`effective_max_replans`。
+   replan の要否・`replan_gate`・統合の失敗の replan の判定で同じ値）。run 時の上限の `replan` にも余裕を足すのは、replan 自体が run を要するため
+   （余裕が無いと replan の planner run がまた上限で止まる）。計画を持たない節点（atomic の子）への `replan` は余裕を足すだけ（replan する計画が無い）。
+   「今回だけ」は回答 1 件 = 1 回分で、使い切ればまた `kind: limit` の決定が出る。
+7. **`plan_invalid` の選択肢を改めた**（R2b の「人が計画を書く / atomic / 取り下げる」→「note を添えて replan（推奨）/ atomic / cancel」）。
+   人が計画を書く道（`PUT`）は `replan` の選択肢の説明に残す。atomic は計画がまだ無いときだけ出す（採用済みの計画の WU を宙に浮かせない。
+   `task_ops::regate` の「計画を持つ Task を atomic に戻さない」と同じ）。本番の DB に `plan_invalid` の行は無い（木が無効）。
+8. **自由記述**: `option` を省いた回答は `kind = choice` で `note` が空でないときだけ受け付け、`option = "other"` と記録する（注入の書式の
+   ラベルは「自由記述」、推奨と異なる扱い）。daemon の決定は効き目が選択肢で決まるので `option` 必須（422）。`note` は 2,000 文字まで。
+9. **revise**（`POST /decisions/{id}/revise`）: 回答済みの `choice` だけ（daemon の決定は回答の時点で効き目を当てたので 409）。新しい
+   `DecisionAnswered` を積むだけで unit の状態は変えない。これから作る子・これから走る leaf は最後の回答を読む。既に作られた非終端の子には
+   node のコメント（人を起こさない。見出し「人の決定（ADR-0079 D7）」と新しい 1 行）で届け、作り直さない（D7 のとおり）。
+10. **注入の書式**: 子の objective の末尾（R1b）と leaf の前置きは同じ `task_core::decision::answer_line`（`- <key> <question>: <label>（推奨どおり |
+    推奨と異なる） — <note>`）と同じ見出し `## 人の決定（ADR-0079 D7）`。leaf は `WorkUnitPromptContext.human_decisions`（その leaf の
+    `needs_decisions` と、その leaf を名指しした決定〈worker の `self` を含む〉の回答）。
+11. **worker の決定**（D7 (b)）: 読むのは `result.json` の `decisions` だけ（**`checkpoint.json` は読まない**。yield の続きの checkpoint に決定を
+    書く経路は使われていないため。必要になれば同じ関数を足す）。木が有効で木の節点の worker の run だけ（`RunContext.decision_requests = true`
+    のとき前置きに書き方の節が出る。無効なら 1 バイトも変わらない）。検証（`prepare_worker_decisions`）: D7 の形、`needed_before` は `self`・
+    計画の unit の key・`stage:<key>` だけ（atomic の run は `self` だけ）、この節点で使われている key は捨てる（同じ `result.json` を読み直しても
+    二重に出ない）。捨てた要素は進行の 1 行に理由を残し、run は失敗させない。
+    - leaf の run: `self` はその leaf の key に書き換える。`self` の決定があれば leaf を done にせず `blocked(decision)`（reason `decision`。
+      WU の commit はしない。worktree は残るので答えの後の run が続きをする）、それを待つ unit を ready にしない。他の unit を指した決定は
+      その unit（`pending` / `ready`）を `blocked(decision)` にし、この run の完了は妨げない（§7 R3a (c)）。path は節点の path の最後の段に
+      leaf の段階を書き、leaf の段（題名・unit key）を足す（パンくず「root › 段階 › leaf」）。
+    - atomic の run（木の子）: `self` のまま節点の止めになり、run の完了を最終レビューに進めず `advance` で `ready` に戻す（答えの後の run で
+      続きをする。答えは `answers`）。
+    - **上限と束ね**: 新しく開ける数 = min(`max_open_decisions_per_plan` − この節点の未回答, `max_open_decisions_per_tree` − 木の未回答)。
+      超えれば先頭 `残り − 1` 件を残し、残りを 1 件の `choice`（key `bundle`〈衝突すれば `bundle-2` …〉、選択肢「すべて推奨どおりに進める
+      〈`all-recommended`、推奨〉/ note に書いた答えで進める〈`see-note`〉」、問いに元の問い・選択肢・推奨を列挙、`needed_before` は和、
+      後戻りは最大）に束ねる。**新しい kind は足さない**（`bundle` は choice。残りが 0 でも 1 件には束ねる）。
+12. **受信箱**: D7 の `AttentionItem::Decision` の代わりに、受信箱に独立の節 `decisions: DecisionInboxItem[]` と `counts.decisions` を足した
+    （`attention` は task に紐づく「注意」の節で、決定は path・選択肢・推奨を持つ別の形のため。D14 の GUI の「決定」の節にそのまま対応する）。
+    未回答で、決定を出した節点が終端でないものだけ（節点の中止で決定を自動で取り下げることはまだしない。終端の節点の決定は受信箱・通知・
+    `DaemonSnapshot.decisions_open` から外すだけ）。
+13. **通知**（`NotificationKind::DecisionRequested`、`celeris::notify::scan_decisions`）: 同じ run で出た決定を 1 通に束ねる。key は
+    `plan:<plan_id>:decisions`（その run が planner run として採用した計画）/ `run:<run_id>:decisions`（worker の run・採用に至らなかった
+    run）/ `decision:<id>`（run を持たない daemon の決定）。本文は 1 件なら「人の決定が必要: 『<root>』› <段階> › … : <question>（推奨: <label>、
+    後戻り: 小|中|大）→ <link>」、複数なら件数と 1 行ずつ。初回は走査の下限（backfill 禁止）より後に出た決定を含む束だけ。束の最古の決定が
+    24 時間未回答なら `reminder:<key>` で 1 回だけ再通知（重複排除は `notifications` の `(kind, key)`）。回答・取り下げ・終端の節点の決定は
+    鳴らさない。GUI の通知の種類の語は「人の決定を待っている」。
+14. **replay**: 回答・取り下げ・revise は既存の `DecisionRow::{apply_answer, apply_withdrawal}` の畳み込みのまま（revise は最後の回答で上書き）。
+    unit の戻し（`decision_answered`）・取り下げ（`decision_withdrawn`）は普通の `WorkUnitTransitioned` なので replay は同じ行を作る。
+    **R3a より前からある replay の差**: /3 の replan で計画から消えた unit（superseded の行）は最後の版の計画から作り直せない（`work_units` の
+    presence の差。R3a の試験 `plan_invalid_replan_feeds_the_note_and_adopts_plan_v2` で見つけた。直していない）。
+15. **R3a の試験で見つけた既存の挙動**（直していない）: 人の replan の依頼（`ExecutionHintSet{replan: true}`）で起きた replan の planner run が
+    1 回目に不正だと、依頼は `Transitioned{to: running}` で消費済みなので 2 回目の試行が起きない（失敗が起点の replan は起点が残るので
+    再試行される）。R3b 以降の生存確認（D10）で「理由なく止まっている」として見つかる形。

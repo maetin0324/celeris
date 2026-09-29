@@ -37,6 +37,10 @@ pub struct DaemonSnapshot {
     /// **API が応答を組むときに埋める**（ディスパッチャが送るスナップショットでは常に 0）。
     #[serde(default)]
     pub approvals_pending: u32,
+    /// ADR-0079 D7（Phase R3a）: 未回答の決定の要求の件数（決定を出した節点が終端でないもの）。
+    /// `approvals_pending` と同じく **API が応答を組むときに埋める**（ディスパッチャが送るスナップショットでは常に 0）。
+    #[serde(default)]
+    pub decisions_open: u32,
     pub providers: Vec<ProviderLive>,
     /// ADR-0018: `[[clusters]]` の稼働状況（`id` 昇順）。第 2 段階で追加したので、古いスナップショットには無い。
     #[serde(default)]

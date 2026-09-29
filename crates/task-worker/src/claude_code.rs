@@ -234,12 +234,26 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
                 }
                 out.push('\n');
             }
+            // ADR-0079 D7（Phase R3a）: この leaf が待っていた人の決定（固定の書式の行。無ければ出さない）。
+            if !wu.human_decisions.is_empty() {
+                out.push_str(crate::preamble::HUMAN_DECISIONS_HEADING);
+                out.push('\n');
+                for line in &wu.human_decisions {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                out.push('\n');
+            }
             // ADR-0074 D1.2（Phase F2b）: WU ごとの worktree で走る run だけ（無ければ空）。
             out.push_str(&crate::preamble::work_unit_branch_section(wu));
         }
         None => {
             out.push_str(&format!("## Objective\n{}\n\n", task.objective));
         }
+    }
+    // ADR-0079 D7（Phase R3a）: 木の節点の worker の run だけ（`false` ならプロンプトは変わらない）。
+    if context.decision_requests {
+        out.push_str(&crate::preamble::decision_requests_section(artifacts));
     }
     out
 }
@@ -2682,6 +2696,57 @@ mod tests {
         assert!(prompt.contains("store: store layer"));
     }
 
+    /// ADR-0079 D7（Phase R3a）: leaf の前置きの「人の決定」節（回答があるときだけ、固定の書式の行）と、木の節点の
+    /// worker の run の「人への決定の要求」節（`decision_requests` のときだけ）。どちらも無ければプロンプトは変わらない。
+    #[test]
+    fn leaf_prompt_carries_human_decisions_and_the_decision_request_contract() {
+        let task = crate::protocol::tests::sample_task();
+        let wu = crate::protocol::WorkUnitPromptContext {
+            key: "api".into(),
+            title: "api".into(),
+            objective: "add the api".into(),
+            ..Default::default()
+        };
+        let plain = build_prompt(
+            &task,
+            &RunContext {
+                work_unit: Some(wu.clone()),
+                ..RunContext::default()
+            },
+            "run-1",
+            "artifacts",
+        );
+        assert!(!plain.contains(crate::preamble::HUMAN_DECISIONS_HEADING));
+        assert!(!plain.contains("人への決定の要求"));
+        let with = build_prompt(
+            &task,
+            &RunContext {
+                work_unit: Some(crate::protocol::WorkUnitPromptContext {
+                    human_decisions: vec![
+                        "- h1 which backend: manual（推奨と異なる） — trial first".into(),
+                    ],
+                    ..wu
+                }),
+                decision_requests: true,
+                ..RunContext::default()
+            },
+            "run-1",
+            "artifacts",
+        );
+        assert!(
+            with.contains(&format!(
+                "{}\n- h1 which backend: manual（推奨と異なる） — trial first\n",
+                crate::preamble::HUMAN_DECISIONS_HEADING
+            )),
+            "{with}"
+        );
+        assert!(with.contains("## 人への決定の要求（ADR-0079 D7）"));
+        assert!(
+            with.contains("`artifacts/result.json` に `decisions`"),
+            "{with}"
+        );
+    }
+
     /// ADR-0074 D1.1（Phase F2b）: `parallel = true` の planner run だけ v2 の書き方（工程・同じ工程 =
     /// 並列可・工程内の依存は 1 つまで）を出す。`false` は従来のプロンプトのまま。
     #[test]
@@ -2740,6 +2805,7 @@ mod tests {
                 plan_overview: vec!["survey done, core-model running, tests pending".into()],
                 branch: None,
                 parallel_siblings: Vec::new(),
+                human_decisions: Vec::new(),
             }),
             ..RunContext::default()
         };

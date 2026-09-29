@@ -584,6 +584,14 @@ pub(crate) fn ops_problem(
         OpsError::ProjectPlanStale { .. } => {
             ApiProblem::new(StatusCode::CONFLICT, "project_plan_stale", detail)
         }
+        // ADR-0079 D7（Phase R3a）: 決定の要求への回答・取り下げ・revise。
+        OpsError::DecisionNotFound(_) => {
+            ApiProblem::new(StatusCode::NOT_FOUND, "decision_not_found", detail)
+        }
+        OpsError::DecisionNotOpen { status, .. } => {
+            ApiProblem::new(StatusCode::CONFLICT, "decision_not_open", detail)
+                .with_extra("decision_status", status)
+        }
         OpsError::Store(err) => store_problem(err),
     }
 }

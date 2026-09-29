@@ -212,6 +212,12 @@ pub struct ApiV1Schema {
     pub execution_metrics: crate::types::ExecutionMetricsSummary,
     /// ADR-0075 D6（Phase G1）: `GET /metrics/scratch`（`celerisctl scratch status --json` と同じ `celeris.scratch-status/1`）。
     pub metrics_scratch: task_ops::daemon::ScratchStatus,
+    /// ADR-0079 D7（Phase R3a）: `GET /decisions`・`GET /tasks/{id}/decisions` の応答、
+    /// `POST /decisions/{id}/answer`・`revise` の本文、`withdraw` の本文、3 つの操作の応答。
+    pub decision_list: task_ops::decision::DecisionList,
+    pub decision_answer: task_ops::decision::DecisionAnswerBody,
+    pub decision_withdraw: task_ops::decision::DecisionWithdrawBody,
+    pub decision_outcome: task_ops::decision::DecisionOutcome,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

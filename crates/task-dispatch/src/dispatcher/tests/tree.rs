@@ -361,67 +361,31 @@ async fn child_waits_for_dependencies_and_decisions() {
     assert_eq!(stored_root.status, Status::Ready);
     assert!(stored_root.lease.is_none());
 
-    // 人が h1 に答える（R3a の API の代わりに Event を直接積む。store が decisions の行を書く）。
-    let request = task_core::DecisionRequest {
-        id: "dec-h1".into(),
-        key: "h1".into(),
-        kind: task_core::DecisionKind::Choice,
-        question: "which backend".into(),
-        options: vec![
-            task_core::DecisionOption {
-                key: "vault".into(),
-                label: "org vault".into(),
-                consequence: None,
-            },
-            task_core::DecisionOption {
-                key: "manual".into(),
-                label: "manual".into(),
-                consequence: None,
-            },
-        ],
-        recommended: "vault".into(),
-        cost_of_reversal: task_core::CostOfReversal::Low,
-        cost_note: None,
-        needed_before: vec!["c".into()],
-        path: vec![task_core::DecisionPathEntry {
-            task_id: root_id,
-            title: root.title.clone(),
-            stage: Some("s1".into()),
-            unit: None,
-        }],
-        raised_by: task_core::DecisionRaisedBy {
-            task_id: root_id,
-            run_id: None,
-            origin: task_core::DecisionOrigin::Planner,
-        },
-        status: task_core::DecisionStatus::Open,
-        answer: None,
-        withdrawn_reason: None,
-    };
-    store
-        .append_event(
-            root_id,
-            &Event::DecisionRequested {
-                decision: Box::new(request),
-            },
-        )
-        .unwrap();
+    // Phase R3a: 計画の採用で h1 が決定の要求になっている（planner の path 付き）。答えるまで子は作られない。
+    let decisions = store.decisions_list(Some(root_id)).unwrap();
+    assert_eq!(decisions.len(), 1, "{decisions:?}");
+    let h1 = &decisions[0];
+    assert_eq!(h1.key, "h1");
+    assert_eq!(h1.status, task_core::DecisionStatus::Open);
+    assert_eq!(
+        h1.request.raised_by.origin,
+        task_core::DecisionOrigin::Planner
+    );
     d.tick().unwrap();
     assert!(
         store.children(root_id).unwrap().is_empty(),
         "an open decision still holds the unit"
     );
-    store
-        .append_event(
-            root_id,
-            &Event::DecisionAnswered {
-                id: "dec-h1".into(),
-                option: "manual".into(),
-                note: Some("trial first".into()),
-                by: "human".into(),
-            },
-        )
-        .unwrap();
+    // 人が h1 に答える（API / MCP と同じ `task_ops::decision::answer`）。
+    task_ops::decision::answer(
+        store.as_ref(),
+        &h1.id,
+        Some("manual"),
+        Some("trial first"),
+        "human",
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
     let report = run_until_idle(&mut d, 800).await;
     assert!(report.idle, "{report:?}");
     let children = store.children(root_id).unwrap();

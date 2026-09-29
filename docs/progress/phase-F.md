@@ -2253,3 +2253,14 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
 
 **昇格と本番確認**: release `a8ed75460c78`（main a8ed754 = R3b + F5-fix9）を 2026-09-29 03:28:42Z にライブ昇格（backup 20260929-032832-pre-a8ed75460c78、verify ok / live_ok、schema 31）。昇格の 4 秒前まで `ready` で止まっていた Phase 2 task 01M3MZKB3DFYJNBH015MJGQ0BT は 03:28:38Z（新 daemon の最初の tick）に `transitioned ready→reviewing (plan_complete)` で最終 review（reviewer run 01M3NKA4F1P2Z1R51PTJ3NY6A2）に進んだ。
 
+
+## browser capability Phase 2 task（01M3MZKB3DFYJNBH015MJGQ0BT、人が GUI で起票、2026-09-28 21:46〜09-29 03:34Z）: 内容合格・祖先条件だけ不合格 → 人が統合
+
+- compound（gate=on、hint）で plan v1〜v4、WU 15/15 done、run 24（planner 7 / worker 15 / reviewer 2）、replan 3、cost_usd 26.4。
+- replan 連鎖の原因: (1) main の schema が 31 に進んでいるのに本番が 29 のままで task の release が live_ok=false（02:39Z に本番を 31 へ昇格して解消）、
+  (2) 私が R2a〜R4a を main に統合し続けたため「main が task ブランチの祖先」の基準（8）が毎回崩れた、(3) `max_replans` 超過後に `ready` で無音停止（F5-fix9）。
+- 最終 review（03:34Z）は基準 0〜7 合格、基準 8 のみ不合格 → failed。成果ブランチ d5ec0cd に main（85cd482 → 6a976d2）を取り込み、
+  `transition.rs` の衝突（BrowserWait/Resume/Fail と PlanGate/PlanComplete）を解消して ce5d768 とし、人（Fable）が main に fast-forward で統合。
+  migration 0032（browser_waits）/ 0033（browser_task_policies）で schema 33 → 昇格は停止→起動。ゲート: 2898 passed、GUI 1213、mobile-audit 0。
+- 教訓（ADR-0079 が構造的に解決する点）: 根 task の review 中に main を動かすと祖先条件で落ちる。R1c で子 task は親ブランチ基準になったが、根は main 基準のまま。
+  運用上は「根 task の最終 review 中は main への統合を控える」か、review 基準を「fast-forward 可能」から「衝突なく merge 可能」に緩める（提案 P-R-1）。

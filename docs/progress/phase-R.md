@@ -935,3 +935,38 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 人の報告: GUI に決定へ回答する場所が見当たらなかった（R4b の inbox「決定」節が本番で見えていない可能性。決定が open のときに確認する。P-R5b-3）。
 - 別件: 人が起票した「web Phase 0: GUI 全面改修…」01M3MS2JRDJ4GM0D9VN9PJCB6B は 09-28 20:50Z から blocked（done WU の check 同士が矛盾し replan では解けない、
   planner が A/B/C を提示）。人の判断待ち。
+- web Phase 0 task（10:37Z、人「A で進めて良い」）: 質問に A で回答 → planner は baseline の check だけ差し替えた全体計画を出したが、検証器が
+  `done work unit baseline must not change on replan` で拒否し再び blocked（10:38Z）。ADR-0074 の done 不変条件は planner には正しいが、人が done WU の spec を
+  直す入口が無い → **R5b-fix1**（人の replan は done WU の spec を上書きできる。事象と diff に記録）を Opus に委譲。
+
+### 手順 4 dogfood の観察（2026-09-29 10:25Z〜10:56Z）
+
+- **browser phase-3 子 01M3PBAVFAYPDWMQMDBXPTE2V8**: gate は `atomic/score`（score 2 / 閾値 7、深さ 2）。atomic の run が yield → 続き run を 3 回繰り返し
+  （P3-C 制御 lease の状態機械 + 単体 10、P3-B ACL / 再接続 / scrub の純関数 + 単体 11、P3-A identity の純関数 + 単体 10、ADR-0081〜0083、
+  `cargo test --workspace` 2890 passed）、continuation 上限 3 で「予算を増やす／分割し直す／中止」の質問（10:55Z、blocked）。
+  → `POST /tasks/{id}/execution/decompose {mode: compound}` で人の compound を設定し、質問に「分割し直す」で回答（10:58Z、ready）。次の dispatch で
+  ExecutionPlan の経路に入るかを見る。
+- **BenchFS 子 01M3PB68JKRED21E3QVG9TE6QZ「実験に要る実装」**: gate `atomic/small`（score 0）。run 1〜2 は root の local 作業場所（ソース無し）で空回り、
+  workspace を remote に直した後の run 3〜4 は `.celeris/remote-exec` で sirius の worktree を使ったが、run 間で編集が消えて（下記 D1）復元に費やし、
+  review 不合格 ×2 で **failed**（10:39Z）→ root の unit bf-impl failed → root の planner replan ×2 とも検証に落ち、決定 `plan_invalid`
+  01M3PC2C6NAPJPM055B2Q70WH7（推奨 replan）が open。回答は修正の昇格後。
+- **/inbox の「決定」節（P-R5b-3）**: `GET /inbox` は `counts.decisions = 1` と該当の決定を返し、GUI `inbox.tsx` に節（`decisions-section`）がある。
+  描画は要ログインのため未目視（人に確認を依頼）。
+- **読み取り専用の調査（Opus）で判明した欠陥**（root と子の events・作業場所・コードから）:
+  - **D1 remote workspace の編集消失（重大）**: `SshWorkspace::prepare` は毎 run `--delete` 付きで pull するが、push は `Check::Command` の `exec()` だけ。
+    reviewer check しか持たない task は一度も push されず、次の run の pull で local の編集と `artifacts/`（除外に無い）が消える。root が remote に
+    切り替わった planner run の pull で bf-plan の成果 `artifacts/experiment-plan.md` も消えた（`runs/<run>/stdout.jsonl` から復元可）。→ **R5b-fix2**。
+  - **D2 remote の子の reviewer**: プロンプトに remote-exec の指示が無く「取り込み先: 親のブランチ」と書かれる（remote は merge 無し）。reviewer が
+    rsync 複製で `git status` を打ち `fatal: not a git repository`。→ **R5b-fix2**。
+  - **D3 root の workspace**: `POST /tasks` は案件の workspace を継がず `Local{path: id}`、repo だけ remote を継ぐ（P-R5b-2 の原因）。→ **R5b-fix3**。
+  - **D4 子の workspace**: `build_child_task` が親の `Local{path: <parent_id>}` をそのまま写し、子が親のディレクトリを共有（R1c 注 1 に反する）。→ **R5b-fix3**。
+  - **D5 子の予算と gate**: 子は親の budget（10 turns / 600 s）を継ぎ、全 run が予算切れ（root planner も `error_max_turns`）。gate の強制規則 `atomic/small`
+    （`max_turns <= 10 && objective < 400`）が木の子に必ず当たり、`kind: task` の unit が全部 atomic 判定。→ **R5b-fix3**（子の予算は葉の予算以上、
+    木の子には atomic/small を当てない、`kind: task` は compound の手掛かり）。
+  - **D6 replan と adopt**: 人の /3 計画の adopt 済み done unit を planner が写す（または daemon が復元する）と `adopt is only allowed … origin human` で拒否 →
+    adopt 済みの計画は planner が replan できない。→ **R5b-fix1** に追加。
+  - **D7 木の remote 未対応（設計の穴）**: remote では子ブランチ・基点・統合が全部 no-op（`parallel_mode = serial` → `child_base_commit = None`、
+    `phase_integrated.merged = []`）。子ごとにクラスタ側 worktree（基点は cluster の `worktree.base`、親ブランチではない）が作られ、celeris は commit しない。
+    remote の親に `kind: task` の unit を許すか、クラスタ側でのブランチ/commit/merge を実装するかは人の判断（R6 か別 ADR）。
+  - 小: 基盤障害（作業場所無し）の review 不合格が attempts を消費し、人の回答 / PATCH で reset されない。root の gate 記録が人の /3 計画採用後も
+    `atomic/small`（P-R5b-1 と同根）。

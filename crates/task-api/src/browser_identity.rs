@@ -620,6 +620,66 @@ mod tests {
     }
 
     #[test]
+    fn sealed_state_cannot_cross_project_or_identity() {
+        let (store, sealer, _d) = fixture();
+        let svc = IdentityService {
+            store: &store,
+            sealer: &sealer,
+        };
+        svc.register(input("a"), NOW).unwrap();
+        let source = store.browser_identity_get("a").unwrap().unwrap();
+        let sealed = sealed_of(&source).unwrap();
+
+        let mut other_project = input("b");
+        other_project.project_id = "other".into();
+        svc.register(other_project, NOW).unwrap();
+        let target = store.browser_identity_get("b").unwrap().unwrap();
+        assert_eq!(
+            sealer.open_state(&target.identity, &sealed, NOW),
+            Err(SealError::Denied(IdentityDenied::OtherIdentity))
+        );
+        // Even if the outer envelope is forged, AEAD binds the original project and identity.
+        let mut forged = sealed.clone();
+        forged.envelope = bi::envelope_for(&target.identity);
+        assert_eq!(
+            sealer.open_state(&target.identity, &forged, NOW),
+            Err(SealError::Tampered)
+        );
+        let mut same_id_other_project = target.identity.clone();
+        same_id_other_project.identity_id = "a".into();
+        assert_eq!(
+            sealer.open_state(&same_id_other_project, &sealed, NOW),
+            Err(SealError::Denied(IdentityDenied::OtherProject))
+        );
+    }
+
+    #[test]
+    fn public_output_and_debug_never_include_sealed_state_or_cookie() {
+        let (store, sealer, _d) = fixture();
+        let svc = IdentityService {
+            store: &store,
+            sealer: &sealer,
+        };
+        let view = svc.register(input("a"), NOW).unwrap();
+        let stored = store.browser_identity_get("a").unwrap().unwrap();
+        let sealed = sealed_of(&stored).unwrap();
+        let response = serde_json::to_string(&serde_json::json!({"identity": view})).unwrap();
+        let log = format!(
+            "{:?} {:?} {:?}",
+            input("a").state,
+            view,
+            IdentityApiError::SealFailed.problem()
+        );
+        for output in [&response, &log] {
+            assert!(!output.contains(SECRET));
+            assert!(!output.contains(&sealed.ciphertext));
+            assert!(!output.contains(&sealed.envelope.key_label));
+        }
+        assert!(!response.contains("sealed_blob"));
+        assert!(!response.contains("key_label"));
+    }
+
+    #[test]
     fn expired_identities_are_revoked_on_read() {
         let (store, sealer, _d) = fixture();
         let svc = IdentityService {

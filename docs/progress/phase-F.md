@@ -2264,3 +2264,6 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
   migration 0032（browser_waits）/ 0033（browser_task_policies）で schema 33 → 昇格は停止→起動。ゲート: 2898 passed、GUI 1213、mobile-audit 0。
 - 教訓（ADR-0079 が構造的に解決する点）: 根 task の review 中に main を動かすと祖先条件で落ちる。R1c で子 task は親ブランチ基準になったが、根は main 基準のまま。
   運用上は「根 task の最終 review 中は main への統合を控える」か、review 基準を「fast-forward 可能」から「衝突なく merge 可能」に緩める（提案 P-R-1）。
+
+**昇格**: release `ce5d768e373c`（main ce5d768）を 2026-09-29 04:08:27Z に**停止→起動**で昇格（schema 31→33、backup 20260929-040804-pre-ce5d768e373c）。ゲート cargo-test 115 s、verify ok / live_ok=false（N-1 不可は想定どおり）。health: active、schema 33。これで browser capability は Phase 1 + Phase 2（task policy からの制限生成、手動登録の credential broker、人間承認、durable wait）が本番。
+

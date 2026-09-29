@@ -399,8 +399,8 @@ pub async fn run(
 const OBSERVATION_UPSTREAM_ACTIONS: [&str; 4] = ["download", "gettext", "screenshot", "snapshot"];
 
 /// Route the effective request before launching any browser process. These fixtures cover
-/// the existing non-secret CLI loop only. Credential injection remains on the Phase 2/3
-/// path until an isolated runtime and trusted injection sink pass their own conformance runs.
+/// the existing non-secret CLI loop only. Sensitive requests are refused until an isolated
+/// runtime and trusted injection sink pass their own conformance runs.
 fn route_existing_backend(
     adapter_id: &str,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
@@ -468,7 +468,9 @@ fn route_existing_backend(
             task_core::BrowserAction::Download => {
                 required.insert(C::Download);
             }
-            task_core::BrowserAction::CredentialUse => {}
+            task_core::BrowserAction::CredentialUse => {
+                required.insert(C::CredentialInjection);
+            }
             task_core::BrowserAction::Scroll => {}
         }
     }
@@ -524,6 +526,7 @@ pub async fn run_with_executable(
         SUPPORTED_VERSION,
     )
     .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
+    let _routing = route_existing_backend(adapter.id(), &policy)?;
     let waits = sink
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
@@ -611,7 +614,6 @@ pub async fn run_with_executable(
             exit_code: None,
         });
     }
-    let _routing = route_existing_backend(adapter.id(), &policy)?;
     let version = tokio::process::Command::new(executable)
         .arg("--version")
         .kill_on_drop(true)

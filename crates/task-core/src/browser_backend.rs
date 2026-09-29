@@ -88,6 +88,7 @@ pub fn required_cases(cap: Capability) -> &'static [FixtureCase] {
         Capability::IdentityRestore => &[
             F::IsolationSuite,
             F::EgressNegativeSuite,
+            F::InjectionAttackSuite,
             F::AuthSectionObservationStop,
         ],
     }
@@ -372,9 +373,25 @@ mod tests {
             BackendKind::BrowserSpecialist,
             &[Capability::IdentityRestore],
         );
-        let mut r = passing(&rb);
-        r.passed.remove(&FixtureCase::IsolationSuite);
-        assert!(certify(&rb, Some(&r)).is_err());
+        for missing in [
+            FixtureCase::IsolationSuite,
+            FixtureCase::EgressNegativeSuite,
+            FixtureCase::InjectionAttackSuite,
+            FixtureCase::AuthSectionObservationStop,
+        ] {
+            let mut r = passing(&rb);
+            r.passed.remove(&missing);
+            assert!(certify(&rb, Some(&r)).is_err(), "missing {missing:?}");
+            let results = [(rb.id.clone(), r)].into_iter().collect();
+            assert!(
+                route(
+                    std::slice::from_ref(&rb),
+                    &results,
+                    &req(&[Capability::IdentityRestore])
+                )
+                .is_err()
+            );
+        }
     }
 
     fn fleet() -> (Vec<BackendDescriptor>, BTreeMap<String, ConformanceResult>) {

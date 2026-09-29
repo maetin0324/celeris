@@ -10,7 +10,7 @@
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0081（制御 lease）/ 0082（live proxy ACL）/ 0083（identity 契約）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A の後・0.38.1 の restore は使わない。2026-09-29 の検査（Rust 2929 passed / 0 failed、clippy exit 0）。本番未昇格。
 
-- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084。P4-A/B の判定関数はあるが実 runtime・sink は未接続。P4-C は worker 起動前の非機密 `route` を接続。機密判定・specialist・実 fixture 実行は未。2026-09-29、本番未昇格。
+- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084。P4-A/B の判定関数はあるが実 runtime・sink は未接続。P4-C は worker 起動前の `route` を接続し、未適合の機密要求を拒否。specialist・実 fixture 実行は未。2026-09-29、本番未昇格。
 
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)
@@ -43,6 +43,8 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 
 ## Phase browser-4（2026-09-29, task 01M3Q49ZTST3XQ9DGF6AGNR0XG）
 
-- ADR-0084。行ごとの判定: P4-A 未達（実隔離・出口制御・orphan 回収未接続）／P3-A 復元未達（稼働中隔離 session に未結合）／P4-B 未達（実 sink・peer role 未接続）／H3 維持／P4-C 一部接続（既存 loop の非機密起動前判定。機密判定・specialist・実 fixture 実行は未）。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+- ADR-0084。行ごとの判定: P4-A 未達（実隔離・出口制御・orphan 回収未接続）／P3-A 復元未達（稼働中隔離 session に未結合）／P4-B 未達（実 sink・peer role 未接続）／H3 の実装維持（機密起動は停止）／P4-C 一部接続（既存 loop の公開操作と未適合機密要求の拒否。specialist・実 fixture 実行は未）。詳細は [phase-browser-4](progress/phase-browser-4.md)。
 - 証拠: `cargo test -p task-core browser_isolation` 14 passed、`cargo test -p task-core browser_backend` 7 passed、`cargo test -p celeris-credentiald injection` 6 passed、`cargo test -p task-api restore_is` 2 passed、`cargo test -p task-api --test browser_e2e` 4 passed、`cargo test -p task-worker production_backend_route --lib` 1 passed、`cargo test --workspace` exit 0、`cargo clippy --workspace -- -D warnings` exit 0。
-- 未解決: H7 の backend 選定（人）、実 runtime・filtering proxy・peer UID → role の配線、内部 origin の egress 方針（人）。
+- attempt 3 検査: `cargo test -p task-worker browser --lib` 31 passed、`cargo test -p task-api --test browser_e2e` 4 passed、`cargo test --workspace` exit 0（2957 passed / 0 failed / 既存ignored 7件）、`cargo clippy --workspace -- -D warnings` exit 0。
+- attempt 3: `CredentialUse` を起動前の必須能力へ追加し、承認済みでも未適合なら拒否。`IdentityRestore` 宣言にも P4-B 適合を必須化。API 結合テストは legacy wait の登録・承認・拒否と未消費を確認する4件へ更新。旧認証成功・実注入の証拠ではない。
+- 未解決: runtime方式・UID運用とH7評価候補を run の `result.json` の decisions に記録。P4-A と、その依存先P4-B、H7依存のP4-C採用は回答待ち。内部 origin は追加せず、実 runtime・filtering proxy・peer UID → role・実 CDP sink・fixture runner は未実装。

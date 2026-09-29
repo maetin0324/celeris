@@ -1,9 +1,7 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
-use task_core::browser_wait::{
-    BrowserDecision, BrowserWait, BrowserWaitStore, CredentialRecord, HumanDecision, NewBrowserWait,
-};
+use task_core::browser_wait::{BrowserWait, BrowserWaitStore, NewBrowserWait};
 use task_core::{
     ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserTaskPolicy,
     EffectiveProfile, SqliteStore, Status, TaskId, TaskStore,
@@ -146,7 +144,9 @@ fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capa
         SUPPORTED_VERSION,
     )
     .unwrap();
-    assert!(route_existing_backend("acp", &sensitive).is_ok());
+    for backend in ["acp", "claude-code"] {
+        assert!(route_existing_backend(backend, &sensitive).is_err());
+    }
     assert!(route_existing_backend("unsupported", &public).is_err());
 }
 
@@ -401,308 +401,89 @@ impl EventSink for WaitSink {
     }
 }
 
-struct CredentialHarness {
-    origin: &'static str,
-    expect_success: bool,
-}
-#[async_trait::async_trait]
-impl WorkerAdapter for CredentialHarness {
-    fn id(&self) -> &str {
-        "acp"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _: &str,
-        _: RunLimits,
-        _: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        let cli = &req.context.browser.as_ref().unwrap().cli;
-        let output = tokio::process::Command::new("python3")
-            .arg(cli)
-            .args([
-                "request-credential",
-                "pol-example",
-                self.origin,
-                "Read dashboard",
-            ])
-            .output()
-            .await?;
-        assert_eq!(
-            output.status.success(),
-            self.expect_success,
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-        Ok(RunOutcome {
-            terminal: Terminal::Done {
-                summary: "ignored request".into(),
-                evidence: vec![],
-                usage: None,
-            },
-            exit_code: Some(0),
-        })
-    }
-}
-
 #[tokio::test]
-async fn worker_credential_request_opens_durable_auth_wait_and_discards_done() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut req = request(temp.path());
-    req.task.status = Status::Ready;
-    req.context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap()
-        .allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
-    req.context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap()
-        .credential_policy_ids = vec!["pol-example".into()];
-    req.context.browser_policy.as_mut().unwrap().allowed_actions =
-        vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
-    req.context
-        .browser_policy
-        .as_mut()
-        .unwrap()
-        .credential_policy_ids = vec!["pol-example".into()];
-    let task_id = req.task.id;
-    let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
-    store.insert(&req.task).unwrap();
-    assert!(
-        store
-            .acquire_lease(task_id, "auth-run", Duration::from_secs(60))
+async fn sensitive_backend_is_refused_before_substrate_harness_and_wait_creation() {
+    for id in ["acp", "claude-code"] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut req = request(temp.path());
+        req.task.status = Status::Ready;
+        let grant = req
+            .context
+            .profile
+            .as_mut()
             .unwrap()
-    );
-    let sink = WaitSink {
-        store,
-        task_id,
-        browsers: Mutex::new(Vec::new()),
-    };
-    let result = run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://example.com",
-            expect_success: true,
-        }),
-        req,
-        "auth-run",
-        limits(),
-        &sink,
-        &substrate(temp.path()),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(result.terminal, Terminal::Question { .. }));
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Blocked
-    );
-    let waits = sink.store.browser_waits_for_task(task_id).unwrap();
-    assert_eq!(waits.len(), 1);
-    assert_eq!(
-        waits[0].reason,
-        task_core::browser_wait::BrowserWaitReason::WaitingForAuth
-    );
-    assert_eq!(waits[0].origin, "https://example.com");
-    assert_eq!(
-        sink.browsers.lock().unwrap().last().unwrap().state,
-        BrowserRunState::WaitingForAuth
-    );
-}
-
-#[tokio::test]
-async fn registered_credential_requires_approval_and_denial_fails_task() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut req = request(temp.path());
-    req.task.status = Status::Ready;
-    let grant = req
-        .context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap();
-    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
-    grant.credential_policy_ids = vec!["pol-example".into()];
-    let policy = req.context.browser_policy.as_mut().unwrap();
-    policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
-    policy.credential_policy_ids = vec!["pol-example".into()];
-    let task_id = req.task.id;
-    let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
-    store.insert(&req.task).unwrap();
-    assert!(
-        store
-            .acquire_lease(task_id, "auth-run", Duration::from_secs(60))
-            .unwrap()
-    );
-    let sink = WaitSink {
-        store,
-        task_id,
-        browsers: Mutex::new(Vec::new()),
-    };
-    run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://example.com",
-            expect_success: true,
-        }),
-        req.clone(),
-        "auth-run",
-        limits(),
-        &sink,
-        &substrate(temp.path()),
-        None,
-    )
-    .await
-    .unwrap();
-    let auth = sink
-        .store
-        .browser_waits_for_task(task_id)
-        .unwrap()
-        .pop()
-        .unwrap();
-    let record = CredentialRecord {
-        credential_id: "cred-test".into(),
-        provider: "manual".into(),
-        policy_id: "pol-example".into(),
-        credential_revision: 1,
-        origin: auth.origin.clone(),
-        receipt_id: "receipt-test".into(),
-    };
-    sink.store
-        .browser_wait_register(
-            task_id,
-            &auth.wait_id,
-            auth.version,
-            &record,
-            "owner",
-            time::OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Ready
-    );
-    assert!(
-        sink.store
-            .acquire_lease(task_id, "approval-run", Duration::from_secs(60))
-            .unwrap()
-    );
-    let outcome = run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://example.com",
-            expect_success: true,
-        }),
-        req,
-        "approval-run",
-        limits(),
-        &sink,
-        &temp.path().join("must-not-launch"),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(outcome.terminal, Terminal::Question { .. }));
-    let approval = sink
-        .store
-        .browser_waits_for_task(task_id)
-        .unwrap()
-        .pop()
-        .unwrap();
-    assert_eq!(
-        approval.reason,
-        task_core::browser_wait::BrowserWaitReason::WaitingForApproval
-    );
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Blocked
-    );
-    sink.store
-        .browser_wait_decide(
-            task_id,
-            &approval.wait_id,
-            &HumanDecision {
-                decision: BrowserDecision::Deny,
-                expected_version: approval.version,
-                actor_id: "owner".into(),
-                owner_session_hash: "session-hash".into(),
-                policy_hash: approval.policy_hash.clone(),
-                nonce: "nonce-deny".into(),
-                idempotency_key: "deny-once".into(),
-            },
-            time::OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Failed
-    );
-}
-
-#[tokio::test]
-async fn credential_origin_outside_effective_domain_is_denied_before_substrate() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut req = request(temp.path());
-    req.task.status = Status::Ready;
-    let grant = req
-        .context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap();
-    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
-    grant.credential_policy_ids = vec!["pol-example".into()];
-    let policy = req.context.browser_policy.as_mut().unwrap();
-    policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
-    policy.credential_policy_ids = vec!["pol-example".into()];
-    let task_id = req.task.id;
-    let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
-    store.insert(&req.task).unwrap();
-    assert!(
-        store
-            .acquire_lease(task_id, "wrong-origin", Duration::from_secs(60))
-            .unwrap()
-    );
-    let sink = WaitSink {
-        store,
-        task_id,
-        browsers: Mutex::new(Vec::new()),
-    };
-    let outcome = run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://other.example.com",
-            expect_success: false,
-        }),
-        req,
-        "wrong-origin",
-        limits(),
-        &sink,
-        &substrate(temp.path()),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
-    assert!(
-        sink.store
-            .browser_waits_for_task(task_id)
-            .unwrap()
-            .is_empty()
-    );
-    let commands =
-        std::fs::read_to_string(temp.path().join("runs/wrong-origin/browser/commands.jsonl"))
+            .browser
+            .as_mut()
             .unwrap();
-    assert_eq!(commands.lines().collect::<Vec<_>>(), ["[\"close\"]"]);
+        grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+        grant.credential_policy_ids = vec!["pol-example".into()];
+        let policy = req.context.browser_policy.as_mut().unwrap();
+        policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+        policy.credential_policy_ids = vec!["pol-example".into()];
+        let task_id = req.task.id;
+        let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
+        store.insert(&req.task).unwrap();
+        let sink = WaitSink {
+            store,
+            task_id,
+            browsers: Mutex::default(),
+        };
+        let error = run_with_executable(
+            Arc::new(CliHarness {
+                id,
+                question: false,
+            }),
+            req,
+            "denied-run",
+            limits(),
+            &sink,
+            &temp.path().join("must-not-launch"),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("browser backend lacks required conformance")
+        );
+        assert!(
+            sink.store
+                .browser_waits_for_task(task_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(sink.browsers.lock().unwrap().is_empty());
+        assert!(!temp.path().join("runs").exists());
+    }
+}
+
+#[test]
+fn credential_request_origin_outside_effective_domain_is_denied() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut req = request(temp.path());
+    let grant = req
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap();
+    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    grant.credential_policy_ids = vec!["pol-example".into()];
+    let policy = req.context.browser_policy.as_mut().unwrap();
+    policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    policy.credential_policy_ids = vec!["pol-example".into()];
+    let prepared = crate::browser_policy::prepare(grant, Some(policy), SUPPORTED_VERSION).unwrap();
+    let path = temp.path().join("credential-request.json");
+    for (origin, accepted) in [
+        ("https://example.com", true),
+        ("https://other.example.com", false),
+    ] {
+        std::fs::write(&path, serde_json::json!({"policy_id":"pol-example", "origin":origin, "purpose":"Read dashboard"}).to_string()).unwrap();
+        assert_eq!(read_credential_request(&path, &prepared).is_ok(), accepted);
+    }
 }
 
 #[tokio::test]

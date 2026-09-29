@@ -5,7 +5,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
 ---
 
 - 日付: 2026-09-29
-- 状態: **Accepted・契約と検査を実装（2026-09-29）**。実 runtime の起動（bwrap の実行・UID の払い出し・filtering proxy の常駐）と本番の配線は未（下記「残り」）
+- 状態: **契約・拒否境界は Accepted（2026-09-29）、runtime 方式・H7 backend は決定待ち**。実 runtime の起動（bwrap の実行・UID の払い出し・filtering proxy の常駐）と本番の配線は未（下記「残り」）
 - 関連: [ADR-0078](0078-browser-execution-capability.md) D8、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H3・H6・H7、[ADR-0083](0083-browser-phase3-identity-contract.md) D3・D4
 
 ## 範囲
@@ -58,13 +58,21 @@ P4-A / P4-B / P4-C はそれぞれ単独の成果・検査で受け入れる。�
 
 ## 残り（人の決定を含む）
 
-## D5. 本番 routing の fail-closed 境界（attempt 2）
+## D5. 本番 routing の暫定境界（attempt 2、機密要求の扱いは D6 で訂正）
 
 - worker の browser 起動直前に、実際の effective policy と adapter から P4-C の `route` を呼ぶ。既存 ACP / Claude loop は従来の Phase 1/2 非機密操作だけを候補にする。既存 suite で実行確認済みの操作に対応する fixture だけを登録し、credential 注入・identity 復元は登録しない。
-- 現段階の `route` は非機密操作だけを検査する。旧 plugin bridge の秘密返却経路は Phase 2/3 の結合テストを維持するため残るが、P4-B の実装・適合証拠とは見なさない。P4-A/B の稼働中 runtime と trusted sink が整い次第、機密要求も route の必須能力に加える。選択結果が dispatcher が渡した adapter と異なる場合は暗黙の adapter 変更を行わず拒否する。
+- attempt 2 では非機密操作だけを検査し、旧 plugin bridge の秘密返却経路を Phase 2/3 結合テストのため残した。これは未適合 backend への機密要求を許すため、D6 で廃止する。選択結果が dispatcher が渡した adapter と異なる場合は暗黙の adapter 変更を行わず拒否する。
 - H7 の browser-specialist は backend の選択と fixture 実行を人が決めるまで候補へ登録しない。既存 loop への fallback は同じ要求能力を満たす場合だけ候補になる。
 
 - H7: browser-specialist の具体的 backend（Browser Use 等）の選定と有効化。比較は `rank_same_task` の同一 fixture で行う。
 - P4-A の実 runtime: runtime 用 UID の払い出し（subuid 範囲）・bwrap の実行と `/proc` からの事実の採取・filtering proxy の常駐・orphan の killpg を worker に配線。
   内部 origin（celeris 自身の API 等）を egress に足す方針は人の決定（既定は足さない＝loopback は拒否のまま）。
 - P4-B の実 sink（CDP `Input.insertText`）と broker IPC の peer UID → `PeerRole` の割り当て。
+
+## D6. 未適合の機密要求は起動前に拒否する（attempt 3）
+
+- D5 の「非機密のみの暫定 routing」を訂正する。effective policy の `CredentialUse` は必須能力 `CredentialInjection` に写像する。P4-A/B の適合がない既存 loop は、承認の有無にかかわらずその要求を受け付けない。古い Phase 2 の成功テストを維持する目的でこの判定を迂回しない。
+- 判定は policy の確定直後、wait の読取り・承認要求作成・承認消費・substrate 起動より前に置く。拒否で一回承認を消費せず、broker lease を発行しない。公開操作だけの policy は既存 loop を継続利用できる。
+- H3 の `auth_section` と Phase 3 の観測停止の実装は維持する。既存の trusted-local 認証成功を期待した結合テストは未適合拒否の負例に更新する。これを P4-B の実 injection 攻撃試験の代用にはしない。
+- `IdentityRestore` を宣言する backend にも `InjectionAttackSuite` を要求する。identity だけを宣言して P4-B の適合を回避することはできない。
+- 実 runtime 方式と UID の運用、H7 の backend 選択は未決。D1 の bubblewrap は候補であり採用済みではない。決定要求を run の `result.json` に記録し、P4-A の実配線とそれに依存する P4-B、H7 に依存する P4-C の backend 採用はその回答まで進めない。内部 origin は追加しない。

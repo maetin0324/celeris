@@ -2267,3 +2267,52 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
 
 **昇格**: release `ce5d768e373c`（main ce5d768）を 2026-09-29 04:08:27Z に**停止→起動**で昇格（schema 31→33、backup 20260929-040804-pre-ce5d768e373c）。ゲート cargo-test 115 s、verify ok / live_ok=false（N-1 不可は想定どおり）。health: active、schema 33。これで browser capability は Phase 1 + Phase 2（task policy からの制限生成、手動登録の credential broker、人間承認、durable wait）が本番。
 
+
+## F5-fix10: 長いプロンプトは argv でなく stdin で渡す（2026-09-29）
+
+### 症状（本番 2026-09-29 17:05Z、task 01M3MS2JRDJ4GM0D9VN9PJCB6B、planner run 01M3Q21Z9JQWWANGHXJPNH1F8X）
+
+- replan の planner プロンプト（前の計画・回答・note を含む。`runs/<run>/prompt.txt`）が 135,644 バイト。
+- spawn が `failed to spawn worker: Argument list too long (os error 7)` で失敗し、task は worker_question で blocked。
+
+### 根本原因
+
+- `crates/task-worker/src/claude_code.rs`（修正前 ~1847 行）が `.arg("-p").arg(&prompt)` とプロンプト全体を 1 つの argv 要素で渡していた。
+  Linux の `MAX_ARG_STRLEN`（1 引数あたり 32 ページ = 131072 バイト、終端 NUL 込み）を超えると `execve` は `E2BIG` を返す。長いプロンプト
+  （replan は前の計画・回答・note を持つ）なら必ず再発する。codex（`codex exec … <prompt>`）と aider（`--message <prompt>`）も同じ形だった。
+
+### 修正（ADR-0072 付記「Phase F5-fix10 実装時の明確化」）
+
+- **claude-code**: `claude -p --output-format stream-json --verbose --permission-mode … --max-turns … --append-system-prompt <HEADLESS_RUN_NOTE> …`
+  （位置引数の prompt 無し）。stdin は `Stdio::piped()`、spawn 直後に `subprocess::feed_stdin` が別タスクでプロンプトを書いて `shutdown` → drop
+  （EOF）。stdout の読み取りと並行なので数百 KB でもデッドロックしない。子の刈り取り後に writer を `abort`。根拠: Claude Code CLI 2.1.284 の
+  `claude --help`（`Usage: claude [options] [command] [prompt]`、`-p, --print` は値を取らない、`--input-format` 既定 `"text"`）。
+- **codex**: 最後の位置引数を `-` にし、同じく stdin で渡す。根拠: `codex exec --help`「If not provided as an argument (or if `-` is used),
+  instructions are read from stdin」、`codex exec resume --help`「[PROMPT] … If `-` is used, read from stdin」。
+- **aider**: stdin から読む形が無いので、`runs/<run>/aider-message.txt` に書いて `--message-file <path>`（run dir はタスクのディレクトリの下なので
+  コンテナでも同じパスでマウントされる）。書けなければ run を始めない。
+- **歯止め**: `subprocess::check_arg_lengths(adapter, &command)` を 3 アダプタの spawn 直前（`container::wrap` の後）で呼び、1 引数・1 環境変数が
+  `MAX_SINGLE_ARG_BYTES`（128 KiB）以上なら `"<adapter>: argument #N is X bytes, at or above the 131072-byte per-argument limit (Linux
+  MAX_ARG_STRLEN) …"` で spawn せずに落ちる。
+- コンテナ実行: `container::argv` は既に `run --rm -i` なので stdin はそのまま中へ届く。
+- `prompt.txt` の記録は不変。`claude_account` の疎通確認（固定の短いプロンプト、stdin null）は変えていない。
+
+### 証拠
+
+- 新しいテスト:
+  - `claude_code::tests::f5_fix10_a_200_kib_prompt_reaches_claude_intact_through_stdin`（fake の claude が `cat > stdin.log`。200 KiB 超のプロンプトが
+    `prompt.txt` とバイト単位で一致して届き、argv のどの要素にもプロンプトが無い）
+  - `claude_code::tests::f5_fix10_an_oversized_single_argument_fails_with_a_readable_error`（128 KiB の `--model` 値 → spawn されず、エラーに
+    `claude-code`・`131072`・`MAX_ARG_STRLEN`）
+  - `codex::tests::f5_fix10_a_200_kib_prompt_reaches_codex_intact_through_stdin`（同上、最後の引数が `-`、Done）
+  - `aider::tests::f5_fix10_a_200_kib_prompt_is_passed_via_message_file`（`--message` が無く、`--message-file` のファイルが `prompt.txt` と一致）
+- 既存テストの変更: `f5_fix5_every_run_gets_the_headless_system_prompt_and_background_off` に「`args[0] == "-p"`、`args[1] == "--output-format"`、
+  プロンプトが argv に無い」を追加。codex の argv を見る 6 本（`command_line_has_exec_json_model_then_prompt_as_last_arg`・phase_68b ×3・
+  `f5_fix4_worktree_cwd_adds_gitdir_and_common_dir`・`phase_112_resume_…`）は最後の引数の期待を `-` に変えた（resume の whitelist に位置引数 `-` を追加）。
+- `cargo test -p task-worker`: 602 passed / 0 failed / 1 ignored。`cargo clippy --workspace -- -D warnings`: exit 0。
+
+### 未解決事項・提案
+
+- 実 CLI での stdin 受け渡し（LLM 呼び出しを伴う）は本 fix では走らせていない。昇格後の最初の claude-code / codex run の `stdout.jsonl` に
+  `system/init` と `result` が出ること、および task 01M3MS2JRDJ4GM0D9VN9PJCB6B の planner の再実行が spawn を通ることで確認する。
+- aider の `--message-file` は実バイナリ未導入のため `--help` で確認できていない（aider の公開 CLI の `-f/--message-file`）。

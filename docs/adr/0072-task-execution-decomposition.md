@@ -1665,3 +1665,14 @@ ADR-0079（再帰的な task 分解）が次を置き換える。本文は書き
 > あるとき・`celerisctl execution plan replan`）だけ**は、done の WU を残したまま（同じ key・`kind`・`phase`・`depends_on`）spec の
 > ほかの欄を上書きできる（状態は `done` のまま、`Event::WorkUnitSpecOverridden`）。また planner が done の unit をそのまま写すときは、
 > その unit の `adopt`（/3）を残してよい。詳細は ADR-0079 付記「R5b-fix1」。
+
+## Phase F5-fix10 実装時の明確化: プロンプトは argv でなく stdin で渡す（2026-09-29）
+
+本番の planner run 01M3Q21Z9JQWWANGHXJPNH1F8X（task 01M3MS2JRDJ4GM0D9VN9PJCB6B、replan）のプロンプトが 135,644 バイトになり、
+`claude -p <prompt>` の 1 つの argv 要素が Linux の `MAX_ARG_STRLEN`（131072 バイト）を超えて spawn が `Argument list too long (os error 7)`
+で失敗した。D10 の「harness ごとの可否」の各行に次を足す: **アダプタはプロンプト本文を argv に載せない**。claude-code は `-p`（値を取らない
+フラグ）の後に位置引数を置かず、stdin にプロンプトを書いて閉じる（`--append-system-prompt` ほかのフラグは不変）。codex は `codex exec … -`
+（resume は `codex exec resume … <SESSION_ID> -`）で stdin から読ませる。aider は stdin から読めないので run dir の `aider-message.txt` を
+`--message-file` で渡す。どのアダプタも spawn の前に `subprocess::check_arg_lengths` で 1 引数・1 環境変数が 128 KiB 未満であることを確かめ、
+超えればアダプタ名と大きさを名指しした `AdapterError::Other` で落ちる。`prompt.txt` の記録は変えない。詳細は `docs/progress/phase-F.md`
+「F5-fix10」。

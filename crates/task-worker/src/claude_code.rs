@@ -1843,9 +1843,13 @@ async fn run_claude_code(
     }
 
     let mut command = Command::new(&config.command);
+    // F5-fix10（本番障害 run 01M3Q21Z9JQWWANGHXJPNH1F8X）: プロンプトは argv に載せず stdin で渡す
+    // （`-p/--print` は値を取らない真偽フラグで、位置引数の prompt が無ければ stdin を読む。Claude Code
+    // CLI 2.1.284 の `--help`: `Usage: claude [options] [command] [prompt]`・`--input-format` 既定 "text"）。
+    // 135,644 バイトの replan プロンプトが Linux の MAX_ARG_STRLEN（131072）を超えて spawn が E2BIG で
+    // 落ちたため。書き込みは spawn 直後に `feed_stdin`（別タスク）で行う。
     command
         .arg("-p")
-        .arg(&prompt)
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
@@ -1934,17 +1938,23 @@ async fn run_claude_code(
         .current_dir(req.cwd());
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
     let mut command = crate::container::wrap(command, config.container.as_deref());
+    // F5-fix10: stdin はプロンプトを渡すためだけに開く（書き終えたら閉じるので、対話の入力待ちにはならない。
+    // コンテナ実行は `container::argv` が `-i` を付けているので stdin がそのまま中に届く）。
     command
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
+    crate::subprocess::check_arg_lengths(ClaudeCodeAdapter::ID, &command)?;
 
     let mut child = command.spawn().map_err(AdapterError::Spawn)?;
     // ADR-0044 §5 Phase 53 追記（Phase 55）: この run のプロセスグループを覚える（`kill_tree` の入口）。
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
+    // F5-fix10: プロンプトを stdin に流して閉じる（別タスク。下の stdout 読み取りと並行に進む）。
+    let stdin_writer =
+        crate::subprocess::feed_stdin(&mut child, prompt, ClaudeCodeAdapter::ID, run_id)?;
     // ADR-0054 D1（Phase 67）: 起動できたら、このアダプタ宛ての継続セッションの id をそのまま報告する
     // （claude-code は id を`自分で`固定するので、成功した spawn の直後に確定する）。
     if let Some(session) = req
@@ -2051,6 +2061,8 @@ async fn run_claude_code(
     } else {
         reap_after_terminal(&mut child, limits.kill_grace).await?
     };
+    // F5-fix10: 子は刈り取った。まだ書き込み中なら（読まずに終わった子）打ち切る。
+    stdin_writer.abort();
 
     if let Err(e) = stderr_task.await {
         warn!("run {run_id}: stderr capture task failed: {e}");
@@ -5567,6 +5579,13 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
             .position(|a| a == "--append-system-prompt")
             .expect("--append-system-prompt present");
         assert_eq!(args[i + 1], crate::preamble::HEADLESS_RUN_NOTE);
+        // F5-fix10: `-p` は値を取らないフラグのまま、プロンプト本文はどの引数にも載らない（stdin で渡す）。
+        assert_eq!(args[0], "-p", "{args:?}");
+        assert_eq!(args[1], "--output-format", "{args:?}");
+        assert!(
+            args.iter().all(|a| !a.contains("# Task:")),
+            "the prompt must not be passed via argv: {args:?}"
+        );
         let env = std::fs::read_to_string(dir.path().join("env.log")).unwrap();
         assert_eq!(env, "1|3600000");
 
@@ -5587,6 +5606,68 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
             .await;
         let env = std::fs::read_to_string(dir.path().join("env.log")).unwrap();
         assert_eq!(env, "0|600000", "short wall clocks keep the CLI default");
+    }
+
+    /// F5-fix10（本番障害: task 01M3MS2JRDJ4GM0D9VN9PJCB6B の planner run 01M3Q21Z9JQWWANGHXJPNH1F8X。
+    /// 135,644 バイトの replan プロンプトが `-p <prompt>` で MAX_ARG_STRLEN を超え E2BIG）: 200 KiB の
+    /// プロンプトでも spawn は失敗せず、stdin から欠けずに届く（fake の claude が stdin をファイルに写す）。
+    #[tokio::test]
+    async fn f5_fix10_a_200_kib_prompt_reaches_claude_intact_through_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = format!("cat > stdin.log\n{}", args_log_script());
+        let config = stub_claude(dir.path(), &script);
+        let mut req = sample_req(dir.path().to_path_buf());
+        let filler = "0123456789abcdef".repeat(200 * 1024 / 16);
+        req.task.objective = format!("BEGIN-OBJECTIVE {filler} END-OBJECTIVE");
+        ClaudeCodeAdapter::new(config)
+            .run(
+                req,
+                "run-f5fix10",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .expect("a 200 KiB prompt must not fail to spawn");
+        let got = std::fs::read_to_string(dir.path().join("stdin.log")).unwrap();
+        let recorded =
+            std::fs::read_to_string(dir.path().join("runs/run-f5fix10/prompt.txt")).unwrap();
+        assert!(got.len() > crate::subprocess::MAX_SINGLE_ARG_BYTES);
+        assert_eq!(got, recorded, "stdin carries exactly the recorded prompt");
+        assert!(got.contains(&filler));
+        let args = captured_args(dir.path());
+        assert_eq!(args[0], "-p", "{args:?}");
+        assert!(
+            args.iter()
+                .all(|a| a.len() < crate::subprocess::MAX_SINGLE_ARG_BYTES
+                    && !a.contains("BEGIN-OBJECTIVE")),
+            "no argv element carries the prompt"
+        );
+    }
+
+    /// F5-fix10: 回帰の歯止め。それでも 1 つの引数が 128 KiB 以上になれば、spawn せず（`os error 7` ではなく）
+    /// アダプタ名と大きさを名指しした読めるエラーで落ちる。
+    #[tokio::test]
+    async fn f5_fix10_an_oversized_single_argument_fails_with_a_readable_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = stub_claude(dir.path(), "touch spawned.marker");
+        config.model = Some("m".repeat(crate::subprocess::MAX_SINGLE_ARG_BYTES));
+        let err = ClaudeCodeAdapter::new(config)
+            .run(
+                sample_req(dir.path().to_path_buf()),
+                "run-f5fix10-guard",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .expect_err("an oversized argument must be refused before spawning");
+        let message = err.to_string();
+        assert!(message.contains("claude-code"), "{message}");
+        assert!(
+            message.contains(&crate::subprocess::MAX_SINGLE_ARG_BYTES.to_string()),
+            "{message}"
+        );
+        assert!(message.contains("MAX_ARG_STRLEN"), "{message}");
+        assert!(!dir.path().join("spawned.marker").exists());
     }
 
     /// ADR-0079 §7 R2b (a) `planner_prompt_carries_depth_and_leaf_criteria`: 木の節点の planner（`context.tree`）の

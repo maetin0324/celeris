@@ -181,7 +181,14 @@ async fn run_aider(
         command.arg("--model").arg(model);
     }
     command.args(&config.extra_args);
-    command.arg("--message").arg(&prompt);
+    // F5-fix10（claude-code / codex と同じ MAX_ARG_STRLEN 対策）: aider には stdin からメッセージを読む
+    // 形が無いので、run dir の中のファイルに書いて `--message-file` で渡す（`-f/--message-file`: そのファイルの
+    // 中身を 1 回送って終わる。`--message` と同じ非対話実行）。run dir はタスクのディレクトリの下なので、
+    // コンテナ実行でも同じパスでマウントされている（`container::argv`）。`prompt.txt`（記録）とは別に、
+    // 書けなければ run を始めない（best-effort ではない）。
+    let message_path = run_dir.join("aider-message.txt");
+    tokio::fs::write(&message_path, &prompt).await?;
+    command.arg("--message-file").arg(&message_path);
     // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
     crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
@@ -196,6 +203,7 @@ async fn run_aider(
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
+    crate::subprocess::check_arg_lengths(AiderAdapter::ID, &command)?;
 
     let mut child = command.spawn().map_err(AdapterError::Spawn)?;
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
@@ -506,6 +514,50 @@ mod tests {
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(200),
         }
+    }
+
+    /// F5-fix10: 200 KiB のプロンプトも argv ではなく `--message-file <run dir のファイル>` で渡り、spawn は
+    /// E2BIG で落ちない。fake の aider がそのファイルを写し、`prompt.txt` と一致することを見る。
+    #[tokio::test]
+    async fn f5_fix10_a_200_kib_prompt_is_passed_via_message_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = stub_aider(
+            dir.path(),
+            r#"for a in "$@"; do printf '%s\0' "$a" >> args.log; done
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--message-file" ]; then cp "$2" message.copy; fi
+  shift
+done
+mkdir -p artifacts
+printf '%s' '{"summary": "ok", "evidence": []}' > artifacts/result.json
+"#,
+        );
+        let mut req = sample_req(dir.path().to_path_buf());
+        let filler = "0123456789abcdef".repeat(200 * 1024 / 16);
+        req.task.objective = format!("BEGIN-OBJECTIVE {filler} END-OBJECTIVE");
+        let outcome = AiderAdapter::new(config)
+            .run(
+                req,
+                "run-f5fix10",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .expect("a 200 KiB prompt must not fail to spawn");
+        assert!(
+            matches!(outcome.terminal, Terminal::Done { .. }),
+            "{:?}",
+            outcome.terminal
+        );
+        let got = std::fs::read_to_string(dir.path().join("message.copy")).unwrap();
+        let recorded =
+            std::fs::read_to_string(dir.path().join("runs/run-f5fix10/prompt.txt")).unwrap();
+        assert!(got.len() > crate::subprocess::MAX_SINGLE_ARG_BYTES);
+        assert_eq!(got, recorded);
+        let args_log = std::fs::read_to_string(dir.path().join("args.log")).unwrap();
+        let args: Vec<&str> = args_log.split('\0').filter(|s| !s.is_empty()).collect();
+        assert!(!args.contains(&"--message"), "{args:?}");
+        assert!(args.iter().all(|a| !a.contains("BEGIN-OBJECTIVE")));
     }
 
     #[tokio::test]

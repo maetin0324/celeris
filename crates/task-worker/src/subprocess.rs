@@ -52,6 +52,71 @@ pub(crate) async fn write_run_prompt(run_dir: &Path, prompt: &str, run_id: &str)
     }
 }
 
+/// F5-fix10（本番障害: task 01M3MS2JRDJ4GM0D9VN9PJCB6B の planner run 01M3Q21Z9JQWWANGHXJPNH1F8X）:
+/// Linux の `MAX_ARG_STRLEN`（1 つの argv 要素・環境変数文字列あたり 32 ページ = 131072 バイト、終端 NUL を
+/// 含む）。これ以上の引数は `execve` が `E2BIG`（"Argument list too long (os error 7)"）で拒否する。
+/// 135,644 バイトの replan プロンプトを `claude -p <prompt>` で渡してこれを踏んだ。
+pub(crate) const MAX_SINGLE_ARG_BYTES: usize = 128 * 1024;
+
+/// F5-fix10: spawn の前に、`command` のどの引数・明示した環境変数も `MAX_SINGLE_ARG_BYTES` 未満であることを
+/// 確かめる。超えていれば、アダプタ名・何番目の引数か・大きさを名指しした読める `AdapterError` を返す
+/// （将来の回帰が `os error 7` でなくこの文面で落ちるように）。プロンプトは stdin かファイルで渡すこと。
+/// コンテナ実行では `container::wrap` の**後**に呼ぶ（`--env K=V` も 1 引数になるため）。
+pub(crate) fn check_arg_lengths(adapter: &str, command: &Command) -> Result<(), AdapterError> {
+    let std_command = command.as_std();
+    for (index, arg) in std_command.get_args().enumerate() {
+        let len = arg.len();
+        if len >= MAX_SINGLE_ARG_BYTES {
+            return Err(AdapterError::Other(format!(
+                "{adapter}: argument #{index} is {len} bytes, at or above the \
+                 {MAX_SINGLE_ARG_BYTES}-byte per-argument limit (Linux MAX_ARG_STRLEN); long \
+                 prompts must be passed via stdin or a file, not argv (F5-fix10)"
+            )));
+        }
+    }
+    for (key, value) in std_command.get_envs() {
+        let len = key.len() + 1 + value.map_or(0, std::ffi::OsStr::len);
+        if len >= MAX_SINGLE_ARG_BYTES {
+            return Err(AdapterError::Other(format!(
+                "{adapter}: environment variable {} is {len} bytes, at or above the \
+                 {MAX_SINGLE_ARG_BYTES}-byte per-string limit (Linux MAX_ARG_STRLEN) (F5-fix10)",
+                key.to_string_lossy()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// F5-fix10: spawn 済みの `child`（stdin を `Stdio::piped()` で起こしたもの）の stdin に `input` を書き、
+/// 書き終えたら閉じる（EOF。CLI がそれ以上の入力を待たないように）。書き込みは別タスクで行うので、
+/// 呼び出し側はすぐ stdout の読み取りに入ってよい（数百 KB の入力でも、子が stdout を書き詰まって stdin を
+/// 読まなくなるデッドロックにならない）。子が先に終わった・読まずに閉じた場合の `BrokenPipe` は警告に留める
+/// （run の成否は stdout と終了コードで決まる）。返した `JoinHandle` は子を刈り取った後に `abort` してよい。
+pub(crate) fn feed_stdin(
+    child: &mut Child,
+    input: String,
+    adapter: &'static str,
+    run_id: &str,
+) -> Result<tokio::task::JoinHandle<()>, AdapterError> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AdapterError::Other(format!("{adapter}: worker stdin was not piped")))?;
+    let run_id = run_id.to_string();
+    Ok(tokio::spawn(async move {
+        let result = async {
+            stdin.write_all(input.as_bytes()).await?;
+            stdin.flush().await?;
+            stdin.shutdown().await
+        }
+        .await;
+        if let Err(e) = result {
+            warn!(%run_id, error = %e, "{adapter}: failed to write the prompt to the worker's stdin");
+        }
+        // `stdin` はここで drop され、パイプの書き込み側が閉じる（子は EOF を読む）。
+    }))
+}
+
 pub async fn run_subprocess(
     spec: &SubprocessSpec,
     req: &RunRequest,

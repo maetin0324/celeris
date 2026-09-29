@@ -1129,3 +1129,10 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   unit を動かした）。planner は 17:13:35Z に v3（`review: human` 復元、p3 は同 key）→ PlanGate（`review_human:phase-3`、near_limit）→ 17:14:20Z 人が approve。
   子は v3 でも p3 なのでそのまま継続。子の gate は `atomic/score`（score 6 = 特徴 4 + hint 2 / 閾値 7）で atomic、budget 30 turns、workspace は自分の
   Local（R5b-fix3 D2 の効果）。
+- 17:40Z: browser phase-3 の再試行の子 01M3Q2FPRCF34F00PBZSMNSZE8 が **done**（6 条件すべて pass。auth-section の配線、takeover/renew の 409、実経路の
+  forward_events、e2e、workspace test/clippy）→ 根の p3 done（`work_unit_committed` branch `celeris/01M3Q2FP…` base 30ade54 → f24932c）→ `integrate-phase-3` running。
+  深さ 2 の子（atomic 再試行）→ 親ブランチ統合の経路が本番で通った。次は phase-3 の `review: human`。
+- 17:34Z: BenchFS の子 01M3Q25DSD895DGMGPWD752G3G が決定 `provision-submodules`（sirius の専用 worktree に submodule が無い。推奨 celeris-sync）。
+  celeris-sync は Celeris の修正が要り task を長く止めるので、**allow-init**（この worktree に限り remote-exec で `git submodule update --init --recursive`）で回答。
+  **回収項目**: `ensure_worktree`（task-worker/src/ssh.rs）が worktree 作成時に submodule を展開する（F5-fix11 候補）。
+- F5-fix10（prompt を stdin / message-file で渡す、Opus f08d443）を main に統合（475be20）→ gate ok → verify ok / live_ok（17:30Z）。昇格は人。

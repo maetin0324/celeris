@@ -12,6 +12,7 @@ pub mod browser_control;
 pub mod browser_identity;
 /// ADR-0082 D2: browser の live proxy（P3-B）の ACL と記録の規則。
 pub mod browser_live;
+pub mod browser_store;
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の耐久記録。
 pub mod browser_wait;
 pub use browser::{

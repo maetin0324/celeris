@@ -1311,7 +1311,7 @@ git 管理領域（`<登録元>/.git/worktrees/<name>/ORIG_HEAD`）を read-only
 「大きすぎれば children」も同様。**D1（工程・統合 WU・鍵 (task, WU)）と D2（途中確認）は維持**し、再帰の各段で使う（統合 WU は子 task の
 ブランチも merge する。段階の `review: human` は D2 の停止点と同じ）。本文は書き換えない。
 
-## F5-fix8 実装時の明確化: 空の replan と完了済み計画の進行（2026-09-29）
+## F5-fix9 実装時の明確化: 空の replan と完了済み計画の進行（2026-09-29）
 
 本番（task 01M3MZKB3DFYJNBH015MJGQ0BT、/2、gate=on、`max_replans = 3`）で、最終レビューの不合格（02:26:45Z）の後の replan の planner が
 「done の WU だけで上限（10）いっぱいなので WU は足せない。指摘はもう解消している」として空の差分（added=0, changed=0, removed=0）を出し、

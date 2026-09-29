@@ -2165,7 +2165,7 @@ main f066c84 の release gate が `pnpm-mobile-audit` で落ちた（`routes=27 
   （backup 20260928-201255-pre-5fcb7eebbe9a）。これで F5-fix7 も本番に入った。
 - 見つかった不具合: F5-fix7（依存 WU のブランチ解決・準備失敗の blocked 化）、retry が gate 判定を複製する（F6 で修正済み）。
 
-## F5-fix8: 空の replan で task が ready のまま止まる（2026-09-29）
+## F5-fix9: 空の replan で task が ready のまま止まる（2026-09-29）
 
 （注: 同じ「F5-fix8」の名前は上の「pegasus の ssh master」節〈ADR-0078〉にも使われている。本節は空の replan の修正。）
 

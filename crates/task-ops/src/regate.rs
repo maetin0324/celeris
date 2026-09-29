@@ -147,6 +147,67 @@ pub fn set_execution_mode(
     })
 }
 
+/// ADR-0079「R5b-fix3」(D3 (d)): 人が計画を採用した（`PUT/POST /tasks/{id}/execution-plan`、`celerisctl
+/// execution plan set`）Task の gate の記録を「人の compound」にする。人が計画を書いた = 分けて進めると
+/// 決めたので、前の `atomic/small` などの判定を `routing.execution` に残さない（GUI と監査が誤解する）。
+///
+/// - 書くのは `routing.execution_hint = {compound, explicit: true}` と `routing.execution` = `{mode: compound,
+///   source: human, rule_id: "human/plan"}`（閾値・深さは前の判定、無ければ root の値）。`Event::ExecutionGated`
+///   を同じトランザクションに積む（`execution_gate_if_needed` の記録と同じ形。`task_ops::regate` の再 gate と
+///   `decide_at` の `human/explicit` と整合する: 次に gate をかけ直しても人の明示の compound になる）。
+/// - 既に人の compound なら何もしない（`Ok(None)`）。gate の対象外（`routing` の無い旧タスクなど）も何もしない。
+/// - 採用そのもの（`task_ops::execution::adopt_human_plan`）とは別のトランザクション。書けなくても採用は
+///   失敗にしない（呼び出し側が警告を出す）。
+pub fn record_human_plan_gate(
+    store: &dyn TaskStore,
+    id: TaskId,
+    now: OffsetDateTime,
+) -> Result<Option<Task>, OpsError> {
+    let mut task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+    if task_core::execution_gate::out_of_scope_rule(&task).is_some() {
+        return Ok(None);
+    }
+    let mut routing = task.routing.clone().unwrap_or_default();
+    if routing.execution.as_ref().is_some_and(|d| {
+        d.mode == ExecutionMode::Compound && d.source == task_core::GateSource::Human
+    }) {
+        return Ok(None);
+    }
+    let (threshold, depth) = routing
+        .execution
+        .as_ref()
+        .map(|d| (d.threshold, d.depth))
+        .unwrap_or((task_core::EXECUTION_GATE_SCORE_THRESHOLD, None));
+    let decision = task_core::ExecutionGateDecision {
+        mode: ExecutionMode::Compound,
+        source: task_core::GateSource::Human,
+        score: 0,
+        threshold,
+        rule_id: HUMAN_PLAN_RULE_ID.to_string(),
+        signals: Vec::new(),
+        policy_version: task_core::EXECUTION_GATE_POLICY_VERSION.to_string(),
+        shadow: false,
+        depth,
+    };
+    routing.execution_hint = Some(ExecutionHintSpec {
+        mode: ExecutionMode::Compound,
+        explicit: true,
+    });
+    routing.execution = Some(decision.clone());
+    task.routing = Some(routing);
+    task.updated_at = now;
+    let task = store.update_task(
+        &task,
+        Event::ExecutionGated {
+            decision: Box::new(decision),
+        },
+    )?;
+    Ok(Some(task))
+}
+
+/// R5b-fix3: 人が計画を採用した Task の gate の `rule_id`。
+pub const HUMAN_PLAN_RULE_ID: &str = "human/plan";
+
 /// ADR-0072「Phase F6 実装時の決定」: 計画を持つ Task に、まだ消費されていない人の replan の依頼
 /// （`ExecutionHintSet{replan: true}`）があれば、その `note`（無ければ空文字列）を返す。
 /// 依頼の後に計画が採用された（`ExecutionPlanned`）か、run が始まった（`Transitioned{to: running}`）
@@ -248,6 +309,61 @@ mod tests {
                 },
             )
             .expect("gate")
+    }
+
+    /// R5b-fix3 (D3 d): 人の計画の採用の後、前の `atomic/small` の判定は人の compound（`human/plan`）に
+    /// 置き換わり、`ExecutionGated` が残る。2 回目は何もしない。
+    #[test]
+    fn human_plan_replaces_an_atomic_gate_record_with_human_compound() {
+        let store = store();
+        let task = gated_atomic(&store);
+        let mut t = store.get(task.id).expect("get").expect("some");
+        let mut routing = t.routing.clone().expect("routing");
+        if let Some(d) = routing.execution.as_mut() {
+            d.mode = ExecutionMode::Atomic;
+            d.rule_id = "atomic/small".to_string();
+            d.source = task_core::GateSource::Policy;
+        }
+        t.routing = Some(routing);
+        let t = store
+            .update_task(
+                &t,
+                Event::ExecutionGated {
+                    decision: Box::new(
+                        t.routing
+                            .as_ref()
+                            .and_then(|r| r.execution.clone())
+                            .expect("decision"),
+                    ),
+                },
+            )
+            .expect("regate");
+        let updated = record_human_plan_gate(&store, t.id, OffsetDateTime::now_utc())
+            .expect("record")
+            .expect("changed");
+        let routing = updated.routing.expect("routing");
+        let d = routing.execution.expect("decision");
+        assert_eq!(d.mode, ExecutionMode::Compound);
+        assert_eq!(d.source, task_core::GateSource::Human);
+        assert_eq!(d.rule_id, HUMAN_PLAN_RULE_ID);
+        assert!(!d.shadow);
+        assert_eq!(
+            routing.execution_hint,
+            Some(ExecutionHintSpec {
+                mode: ExecutionMode::Compound,
+                explicit: true
+            })
+        );
+        let events = store.events_for(t.id).expect("events");
+        assert!(matches!(
+            events.last().map(|(_, e)| e),
+            Some(Event::ExecutionGated { decision }) if decision.rule_id == HUMAN_PLAN_RULE_ID
+        ));
+        assert!(
+            record_human_plan_gate(&store, t.id, OffsetDateTime::now_utc())
+                .expect("again")
+                .is_none()
+        );
     }
 
     #[test]

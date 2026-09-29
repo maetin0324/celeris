@@ -69,6 +69,24 @@ pub struct StageHint {
 /// 同じ unit から自動で作り直す回数（`max_child_infra_retries`）。超えたら障害通知と unit `blocked(infra)`。
 pub const MAX_CHILD_INFRA_RETRIES: u32 = 1;
 
+/// ADR-0079「R5b-fix3」: 木の子 task の予算の下限（1 run の turns）。ADR-0072 D18 の WU の既定
+/// （planner が `budget` を書かなかった leaf の run）と同じ値。子 task は「leaf 1 本より少ない予算」で
+/// 走らない。
+pub const TREE_CHILD_MIN_MAX_TURNS: u32 = 30;
+/// ADR-0079「R5b-fix3」: 木の子 task の予算の下限（1 run の壁時計秒）。ADR-0072 D18 の WU の既定と同じ。
+pub const TREE_CHILD_MIN_MAX_WALL_SECS: u64 = 1800;
+
+/// ADR-0079「R5b-fix3」: 木の子 task（と、その unit の view）の予算 = `max(親の予算, leaf 1 run の既定
+/// 30 turns / 1,800 秒)`。`max_retries` は親のまま。人が案件の下に直接作った root task の予算は変えない
+/// （これは `build_child_task` と `unit_view` だけが使う）。
+pub fn tree_child_budget(parent: &crate::model::Budget) -> crate::model::Budget {
+    crate::model::Budget {
+        max_turns: parent.max_turns.max(TREE_CHILD_MIN_MAX_TURNS),
+        max_wall_secs: parent.max_wall_secs.max(TREE_CHILD_MIN_MAX_WALL_SECS),
+        max_retries: parent.max_retries,
+    }
+}
+
 /// D4 (4) / D15: `Task.tree`。木に属する task だけが持つ（`None` は木を持たない従来の task = 深さ 1 の
 /// 節点として扱う。`root_id` 列も NULL のまま埋め戻さない。D15）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -290,6 +308,9 @@ pub struct UnitGateContext<'a> {
     /// leaf の 1 run の上限（`ExecutionLimits.work_unit_max_turns` / `work_unit_max_wall_secs`）。
     pub work_unit_max_turns: u32,
     pub work_unit_max_wall_secs: u64,
+    /// R5b-fix3: 人の計画（origin human）か。kind task の unit は計画の書き手の手掛かり: 人の計画なら
+    /// `human/explicit` の compound（規則表を評価しない）、planner の計画なら signal `H`（+2）。
+    pub human_plan: bool,
 }
 
 /// D4 (3): 1 つの unit の gate の結果。
@@ -313,8 +334,8 @@ pub struct UnitGate {
 ///
 /// - leaf: 受け入れは `done_when`（reviewer）と `checks`（command）、予算は unit の `budget`（無ければ
 ///   ADR-0072 D18 の既定 `max(親, 30 turns / 1,800 秒)`）、genre は `harness`（無ければ親）。
-/// - kind task: 受け入れは unit の `acceptance`、予算は親（子 task は親の予算を継ぐ。D4 (4)）、genre は unit
-///   （無ければ親）。
+/// - kind task: 受け入れは unit の `acceptance`、予算は子 task が受け取る予算（[`tree_child_budget`] =
+///   `max(親, 30 turns / 1,800 秒)`。R5b-fix3）、genre は unit（無ければ親）。
 /// - `routing` は unit の `features` のヒントだけ（親のヒント・人の明示・CoS のヒントは継がない）。
 ///   印（labels）は持たない（対話・support-task の判定に当たらないように）。
 pub fn unit_view(parent: &Task, unit: &crate::execution_plan::PlanUnitSpec) -> Task {
@@ -337,6 +358,8 @@ pub fn unit_view(parent: &Task, unit: &crate::execution_plan::PlanUnitSpec) -> T
     if unit.is_task() {
         view.acceptance = unit.acceptance.clone();
         view.genre = unit.genre.clone().or_else(|| parent.genre.clone());
+        // R5b-fix3: 子 task が実際に受け取る予算（`tree_child_budget`）で見る。
+        view.budget = tree_child_budget(&parent.budget);
     } else {
         let mut acceptance: Vec<Criterion> = unit
             .done_when
@@ -435,12 +458,13 @@ pub fn task_unit_leaf_shortfalls(
     work_unit_max_wall_secs: u64,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    if parent.budget.max_turns > work_unit_max_turns
-        || parent.budget.max_wall_secs > work_unit_max_wall_secs
+    let inherited = tree_child_budget(&parent.budget);
+    if inherited.max_turns > work_unit_max_turns
+        || inherited.max_wall_secs > work_unit_max_wall_secs
     {
         out.push(format!(
             "the inherited budget ({} turns / {} s) exceeds one run ({work_unit_max_turns} / {work_unit_max_wall_secs})",
-            parent.budget.max_turns, parent.budget.max_wall_secs
+            inherited.max_turns, inherited.max_wall_secs
         ));
     }
     if unit.repos.len() > 1 {
@@ -454,6 +478,17 @@ pub fn task_unit_leaf_shortfalls(
         out.push("no command check".to_string());
     }
     out
+}
+
+/// ADR-0079「R5b-fix3」: kind task の unit から作る子 task の `routing.execution_hint`（unit の gate も同じ値を
+/// 使う）。`mode = compound`、`explicit` は計画が人の計画（origin human）のとき `true`（gate は
+/// `human/explicit`）、planner の計画なら `false`（signal `H` の +2 だけ。規則表のスコアが閾値より
+/// 十分低ければ atomic のまま）。
+pub fn task_unit_execution_hint(human_plan: bool) -> crate::execution_gate::ExecutionHintSpec {
+    crate::execution_gate::ExecutionHintSpec {
+        mode: crate::execution_gate::ExecutionMode::Compound,
+        explicit: human_plan,
+    }
 }
 
 /// D4 (3): unit の gate（純粋関数）。view に深さ `parent_depth + 1` の閾値で gate をかけ、planner の
@@ -471,11 +506,16 @@ pub fn unit_gate(
     let view = unit_view(ctx.parent, unit);
     let hints = view.routing.as_ref().and_then(|r| r.features);
     let (features, _) = crate::model_policy::TaskFeatures::infer_with_hints(&view, hints.as_ref());
+    // R5b-fix3: kind task の unit は計画の書き手の「compound」の手掛かり（子 task の
+    // `routing.execution_hint` と同じ。`task_unit_execution_hint`）。leaf の unit には何も足さない。
+    let hint = unit
+        .is_task()
+        .then(|| task_unit_execution_hint(ctx.human_plan));
     let decision = crate::execution_gate::decide_at(
         &view,
         &features,
-        None,
-        false,
+        hint.filter(|h| h.explicit).map(|h| h.mode),
+        hint.is_some_and(|h| !h.explicit && h.mode == ExecutionMode::Compound),
         crate::execution_gate::ExecutionGateInputs::default(),
         false,
         at,
@@ -2216,6 +2256,7 @@ mod tests {
             limits: &limits,
             work_unit_max_turns: 80,
             work_unit_max_wall_secs: 3600,
+            human_plan: false,
         };
         unit_gate(&ctx, unit, needs)
     }
@@ -2225,6 +2266,47 @@ mod tests {
             tree: enabled(),
             ..ExecutionLimits::default()
         }
+    }
+
+    /// R5b-fix3: kind task の unit は計画の書き手の compound の手掛かり。planner の計画なら signal H（+2、
+    /// source hint）、人の計画なら `human/explicit` の compound（下げない）。view の予算は子 task の予算。
+    #[test]
+    fn task_units_carry_the_compound_hint_of_the_plan_author() {
+        let mut parent = parent_task(30);
+        parent.budget.max_turns = 10;
+        parent.budget.max_wall_secs = 600;
+        let unit = task_spec("c", "s1", false);
+        let view = unit_view(&parent, &unit);
+        assert_eq!(view.budget.max_turns, TREE_CHILD_MIN_MAX_TURNS);
+        assert_eq!(view.budget.max_wall_secs, TREE_CHILD_MIN_MAX_WALL_SECS);
+        let g = gate_of(&parent, 1, &unit, &[]);
+        assert!(
+            g.decision
+                .signals
+                .iter()
+                .any(|s| s.name == "H" && s.weight == 2),
+            "{:?}",
+            g.decision
+        );
+        assert_eq!(g.decision.source, crate::execution_gate::GateSource::Hint);
+        let limits = enabled();
+        let names = vec!["app".to_string()];
+        let ctx = UnitGateContext {
+            parent: &parent,
+            parent_depth: 1,
+            parent_repo_names: &names,
+            limits: &limits,
+            work_unit_max_turns: 80,
+            work_unit_max_wall_secs: 3600,
+            human_plan: true,
+        };
+        let g = unit_gate(&ctx, &unit, &[]);
+        assert_eq!(g.decision.mode, ExecutionMode::Compound);
+        assert_eq!(g.decision.rule_id, "human/explicit");
+        assert_eq!(g.action, None);
+        // leaf の unit には手掛かりを足さない。
+        let g = gate_of(&parent, 1, &leaf_spec("a", "s1", false), &[]);
+        assert!(!g.decision.signals.iter().any(|s| s.name == "H"));
     }
 
     /// ADR-0079 §7 R2a (c) `unit_gate_table`: D4 (3) の表の 7 行。
@@ -2342,6 +2424,7 @@ mod tests {
             limits: &limits,
             work_unit_max_turns: 80,
             work_unit_max_wall_secs: 3600,
+            human_plan: false,
         };
         let report = apply_unit_gates(&ctx, &p, &Default::default());
         let actions: Vec<(String, Option<UnitGateAction>)> = report

@@ -1482,3 +1482,44 @@ R5b（本番の移行と dogfood）が要るコードの入口（人の /3 計�
 3. **残ること**: remote workspace の木の子の**ブランチ・親への統合は未対応のまま**（D5 の「remote はブランチを持たず merge しない」の
    とおり。子の成果はクラスタの同じ worktree に積まれる）。remote で親子のブランチを切って統合するかは別の決定にする。
    `exec_check_with_repair_retries` の `git merge --no-edit <ref>` の自動修復は remote でもクラスタ側で走りうるが、今回は触れていない。
+
+## 付記: R5b-fix3: 子 task の workspace 継承・予算・gate（kind: task は compound の手掛かり）（2026-09-29）
+
+R5b の dogfood（BenchFS の root 01M3PAZ4XG4QN1T8S98VNA6ABV と子 01M3PAZ89XXEF10B92Y0Z0T8V4 / 01M3PB68JKRED21E3QVG9TE6QZ、browser の子
+01M3PBAVFAYPDWMQMDBXPTE2V8）で見つかった不具合の修正で決めたこと。**migration なし**。本番には触れていない。
+
+1. **root の作業場所（P-R5b-2）**: `POST /tasks`（`task_ops::add::create_task_with_roles`）で案件に属し `cluster` も `workspace` も無い
+   task は、選んだリポジトリ（明示 > 親 > 案件の primary）が**リモートにあれば、その置き場を継ぐ**（primary なら案件の workspace =
+   `projects.workspace`、そうでなければそのリポジトリの `location`。`workspace_mode` を渡せば `Remote.mode` の上書き）。
+   ローカルのリポジトリだけの案件は従来どおり `Local{<id>}`（リポジトリは `<root>/<id>/repos/<name>` に並ぶので、案件のパスを
+   task の `Local.path` にすると `task_workspaces_for` が失敗したときに `runs/` をリポジトリに書いてしまう。ADR-0039 D2 の委譲の子
+   〈案件の workspace を継ぐ〉とは違うが、ローカルでは結果の作業場所が同じなので既存の出力を変えない方を選んだ）。
+   **明示の `Local` の作業場所とリモートのリポジトリの組み合わせは 422**（worker は手元に何も用意できず空のディレクトリで走っていた）。
+2. **子の作業場所（R1c 付記 1. との食い違い）**: `task_ops::tree::build_child_task` は、継いだ `Local` の `path` が親自身の id
+   （= 既定の `<root>/<parent_id>`）なら子の id に置き換える（`mode` は親のまま。`child_own_workspace`）。`Remote` と、リポジトリを
+   指す `Local` の絶対パスはそのまま継ぐ（R1c の子の worktree は `<root>/<child_id>/…` に切られ、親のディレクトリを共有しない）。
+3. **子の予算（決めた規則）**: 木の子 task の予算は **`max_turns = max(親, 30)`、`max_wall_secs = max(親, 1,800)`、`max_retries = 親`**
+   （`task_core::tree::tree_child_budget`、`TREE_CHILD_MIN_MAX_TURNS` / `TREE_CHILD_MIN_MAX_WALL_SECS`）。30 / 1,800 は ADR-0072 D18 の
+   **leaf（WU）1 run の既定**（planner が `budget` を書かなかった WU が受け取る値、`max(task, 30 / 1,800)`）と同じで、「子 task は leaf
+   1 本より少ない予算では走らない」。`[execution] work_unit_max_turns` / `work_unit_max_wall_secs`（既定 80 / 3,600）は上限であって
+   既定ではないので下限には使わない。`[execution.planner]` の予算（24 / 900）は planner run にだけ上書きで当たるので子の予算には
+   関係しない。unit の gate の view（`unit_view` の kind task）と leaf に下げる基準（`task_unit_leaf_shortfalls` の「1 run」）も
+   同じ値で見る。**人が案件の下に直接作った root task の予算は変えない**（`POST /tasks` の既定 10 / 600 のまま）。
+4. **`atomic/small` は木の子に当てない**: `execution_gate::decide_at` の強制規則 `max_turns <= 10 && objective < 400` は
+   `tree::is_tree_child`（`tree.parent_unit` を持つ）の task には当てない。子の目的は unit の 1 行と「木の中の位置」なので短く、
+   kind task の unit は作られた時点で「小さくない」。規則表のスコアはそのまま評価する（`exec-gate/1` の版は変えない。root・木で
+   ない task の判定は 1 バイトも変わらない）。
+5. **kind task は compound の手掛かり**: `build_child_task` は子の `routing.execution_hint = {mode: compound, explicit: <計画が origin
+   human>}` を書く（`tree::task_unit_execution_hint`）。人の計画の子は `human/explicit` の compound（規則表を評価しない）、planner の
+   計画の子は signal `H`（+2、`source = hint`）が足されるだけで、スコアが閾値（深さ 2 なら 7）より十分低ければ atomic のまま。
+   計画の版は `plan_id` で引く（見つからない採用前の仮の子は planner 扱い）。**unit の gate（`unit_gate`）も同じ値**を使う
+   （`UnitGateContext.human_plan`。人の計画の kind task の unit は下げられない = 子の gate と食い違わない）。`regate`（人の
+   decompose / retry）は `execution_hint` を明示で上書きするので従来どおり。
+6. **人の計画の採用の gate 記録（P-R5b-1）**: `PUT/POST /tasks/{id}/execution-plan` と `celerisctl execution plan set` は採用の後に
+   `task_ops::regate::record_human_plan_gate` を呼び、`routing.execution` を `{compound, source: human, rule_id: "human/plan"}`
+   （閾値・深さは前の判定のまま）、`execution_hint = {compound, explicit: true}` にし `ExecutionGated` を残す（前の `atomic/small` を
+   残さない）。`adopt_human_plan`（`task_ops::execution`）の中ではなく呼び出し側の別トランザクションにした（同時に編集中の
+   ファイルを避けたため。書けなくても採用は失敗にしない）。
+7. **持ち越し（D4）**: 人の `answer` や workspace の PATCH の後に `attempts` を 0 に戻すことは**しなかった**。`attempts` は event の
+   replay で決まり（`transition.rs`: `Answer` は「据え置き」が規則）、戻すと過去の event 列の replay の結果が変わる。基盤の失敗で
+   試行を使い切った子の再開は `retry`（attempts 0）で行う。規則を変えるなら別の ADR で。

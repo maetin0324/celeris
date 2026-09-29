@@ -214,6 +214,12 @@ fn run_set(store: &dyn TaskStore, args: ExecutionPlanSetArgs) -> Result<ExitCode
         "human",
         OffsetDateTime::now_utc(),
     )?;
+    // ADR-0079「R5b-fix3」: gate の記録を人の compound にする（`POST /tasks/{id}/execution-plan` と同じ）。
+    if let Err(e) =
+        task_ops::regate::record_human_plan_gate(store, task_id, OffsetDateTime::now_utc())
+    {
+        eprintln!("warning: failed to record the human plan's gate decision: {e}");
+    }
     let plan = adopted.plan;
     let units = store.work_units_for(task_id)?.len();
     outln!(

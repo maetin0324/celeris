@@ -318,6 +318,52 @@ fn resolve_repos(
         .map(|r| vec![task_core::RepoRef::of(r)])
         .unwrap_or_default())
 }
+/// R5b-fix3 (D1): 選んだリポジトリのうちリモートにあるもの（`MixedLocalAndRemote` で高々 1 つ）の行。
+fn remote_repo_row(
+    store: &dyn TaskStore,
+    project_id: Option<ProjectId>,
+    repos: &[task_core::RepoRef],
+) -> Result<Option<task_core::ProjectRepo>, OpsError> {
+    let Some(project_id) = project_id else {
+        return Ok(None);
+    };
+    if repos.is_empty() {
+        return Ok(None);
+    }
+    Ok(store.repo_list(project_id)?.into_iter().find(|row| {
+        matches!(row.location, WorkspaceSpec::Remote { .. })
+            && repos.iter().any(|r| r.repo_id == row.id)
+    }))
+}
+
+/// R5b-fix3 (D1): 選んだリポジトリがリモートなら、タスクの作業場所に使う置き場。primary なら案件の
+/// workspace（`projects.workspace` = primary の写し。`delegate::project_workspace` と同じ値）を優先する。
+fn remote_repo_workspace(
+    store: &dyn TaskStore,
+    project_id: Option<ProjectId>,
+    repos: &[task_core::RepoRef],
+) -> Result<Option<WorkspaceSpec>, OpsError> {
+    let Some(row) = remote_repo_row(store, project_id, repos)? else {
+        return Ok(None);
+    };
+    if row.is_primary
+        && let Some(pid) = project_id
+        && let Some(ws @ WorkspaceSpec::Remote { .. }) =
+            store.project_get(pid)?.and_then(|p| p.workspace)
+    {
+        return Ok(Some(ws));
+    }
+    Ok(Some(row.location))
+}
+
+fn remote_repo_name(
+    store: &dyn TaskStore,
+    project_id: Option<ProjectId>,
+    repos: &[task_core::RepoRef],
+) -> Result<Option<String>, OpsError> {
+    Ok(remote_repo_row(store, project_id, repos)?.map(|r| r.name))
+}
+
 /// 全体の既定（`celerisctl add` と API で共通）。
 pub const DEFAULT_TIER: Tier = Tier::Standard;
 pub const DEFAULT_MAX_TURNS: u32 = 10;
@@ -688,11 +734,35 @@ fn build_task(
             path,
             mode: spec.workspace_mode,
         },
-        (None, None) => WorkspaceSpec::Local {
-            path: PathBuf::from(id.to_string()),
-            mode: spec.workspace_mode,
+        // ADR-0079「R5b-fix3」(D1): 案件に属し、`cluster` も `workspace` も無いタスクは、選んだリポジトリが
+        // リモートにあればその置き場（primary なら案件の workspace と同じ値。`project_workspace`）を継ぐ。
+        // ローカルのリポジトリだけなら従来どおり `Local{<id>}`（リポジトリは `<id>/repos/<name>` に並ぶ）。
+        (None, None) => match remote_repo_workspace(store, spec.project_id, &repos)? {
+            Some(WorkspaceSpec::Remote {
+                cluster,
+                path,
+                mode,
+            }) => WorkspaceSpec::Remote {
+                cluster,
+                path,
+                mode: spec.workspace_mode.or(mode),
+            },
+            _ => WorkspaceSpec::Local {
+                path: PathBuf::from(id.to_string()),
+                mode: spec.workspace_mode,
+            },
         },
     };
+    // R5b-fix3 (D1): 手元（`Local`）の作業場所とリモートのリポジトリは組み合わせられない（worker は手元に
+    // 何も用意できず、空のディレクトリで走る）。
+    if matches!(workspace, WorkspaceSpec::Local { .. })
+        && let Some(name) = remote_repo_name(store, spec.project_id, &repos)?
+    {
+        return Err(OpsError::Validation(format!(
+            "a local workspace cannot be combined with the remote repo {name:?}; omit `workspace` \
+             to inherit the repo's location, or pass `cluster`"
+        )));
+    }
 
     // ADR-0033 D2（監査 D-2）: tier / adapter / budget = タスクの値 > 役割の既定（`role` を明示） >
     // `assignee` 由来の既定（ノードの分野の `default_role`）> 分野の既定（`genre` から引いた `default_role`）>
@@ -1309,6 +1379,95 @@ mod tests {
         };
         store.project_create(&project).unwrap();
         project
+    }
+
+    fn a_project_with_workspace(
+        store: &dyn task_core::TaskStore,
+        workspace: WorkspaceSpec,
+    ) -> task_core::Project {
+        let now_ts = OffsetDateTime::now_utc();
+        let project = task_core::Project {
+            auto_advance: false,
+            slug: None,
+            archived_at: None,
+            paused_from: None,
+            id: task_core::ProjectId::new(),
+            title: "benchfs".into(),
+            request: "r".into(),
+            status: task_core::ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: Some(workspace),
+            created_at: now_ts,
+            updated_at: now_ts,
+        };
+        store.project_create(&project).unwrap();
+        project
+    }
+
+    /// R5b-fix3 (D1): 案件の primary がリモート（sirius）なら、`workspace` / `cluster` を省いた root task は
+    /// 案件の workspace を継ぐ（手元の空のディレクトリで走らない）。`workspace_mode` は上書きとして効く。
+    #[test]
+    fn project_task_inherits_a_remote_project_workspace() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let remote = WorkspaceSpec::Remote {
+            cluster: "sirius".into(),
+            path: "/work/NBB/rmaeda/workspace/rust/benchfs".into(),
+            mode: None,
+        };
+        let project = a_project_with_workspace(&store, remote.clone());
+        let mut spec = base_spec();
+        spec.project_id = Some(project.id);
+        spec.workspace = None;
+        let task = create_task(&store, spec, now()).expect("create");
+        assert_eq!(task.workspace, remote);
+        assert_eq!(task.repos.len(), 1, "the primary repo is inherited");
+
+        let mut spec = base_spec();
+        spec.project_id = Some(project.id);
+        spec.workspace = None;
+        spec.workspace_mode = Some(task_core::WorkspaceMode::Worktree);
+        let task = create_task(&store, spec, now()).expect("create");
+        assert_eq!(
+            task.workspace,
+            WorkspaceSpec::Remote {
+                cluster: "sirius".into(),
+                path: "/work/NBB/rmaeda/workspace/rust/benchfs".into(),
+                mode: Some(task_core::WorkspaceMode::Worktree),
+            }
+        );
+    }
+
+    /// R5b-fix3 (D1): 明示の `Local` の作業場所とリモートの primary の組み合わせは 422（Validation）。
+    #[test]
+    fn explicit_local_workspace_with_a_remote_repo_is_rejected() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let project = a_project_with_workspace(
+            &store,
+            WorkspaceSpec::Remote {
+                cluster: "sirius".into(),
+                path: "/work/NBB/rmaeda/workspace/rust/benchfs".into(),
+                mode: None,
+            },
+        );
+        let mut spec = base_spec();
+        spec.project_id = Some(project.id);
+        spec.workspace = Some("/tmp/somewhere".into());
+        let err = create_task(&store, spec, now()).unwrap_err();
+        assert!(matches!(err, OpsError::Validation(_)), "{err:?}");
+        assert!(err.to_string().contains("remote repo"), "{err}");
+    }
+
+    /// R5b-fix3 (D1): ローカルの案件は従来どおり `Local{<id>}`（リポジトリは `<id>/repos/<name>` に並ぶ）。
+    #[test]
+    fn project_task_with_a_local_primary_keeps_its_own_dir() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+        let project = a_project_with_workspace(&store, WorkspaceSpec::local("/home/u/repo"));
+        let mut spec = base_spec();
+        spec.project_id = Some(project.id);
+        spec.workspace = None;
+        let task = create_task(&store, spec, now()).expect("create");
+        assert_eq!(task.workspace, WorkspaceSpec::local(task.id.to_string()));
+        assert_eq!(task.repos.len(), 1);
     }
 
     /// ADR-0079 D13（Phase R5a）: 案件直下に `milestone_id` 無しで作った root task にも、その子にも途中目標の行は

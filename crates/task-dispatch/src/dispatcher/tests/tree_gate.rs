@@ -66,11 +66,12 @@ fn broad() -> serde_json::Value {
     serde_json::json!({"expected_length": "high", "cross_cutting": "high"})
 }
 
-/// F1 high(2) + F2 high(2) + F3 high(1) + F4 medium(1) = score 6（F5 は judgment low で当てない）。
+/// F1 high(2) + F2 high(2) = 4、kind task の unit の手掛かり H(+2。R5b-fix3) を足して score 6
+/// （F3 は tool_intensity medium、F4 は cross_cutting low、F5 は judgment low で当てない）。
 fn score_six() -> serde_json::Value {
     serde_json::json!({
-        "context_size": "high", "expected_length": "high", "tool_intensity": "high",
-        "cross_cutting": "medium", "judgment": "low",
+        "context_size": "high", "expected_length": "high", "tool_intensity": "medium",
+        "cross_cutting": "low", "judgment": "low",
     })
 }
 

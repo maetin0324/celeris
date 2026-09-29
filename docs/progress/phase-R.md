@@ -1008,3 +1008,27 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   `review::tests::remote_tree_child_review_view_has_remote_exec_and_no_parent_branch_line`。
 - 既定の並列度（load 約 60 のホスト）での 1 回目は build cache / scratch 系の 5 件（`the_preamble_notes_the_shared_build_cache_when_enabled` など、
   `left: Running` で待ち切れず）が落ちたが、単独実行と `--test-threads=8` では通る（高負荷のタイミング依存。今回の変更とは無関係の経路）。
+
+
+## R5b-fix3: 子 task の workspace 継承・予算・gate（2026-09-29）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) 付記「R5b-fix3: 子 task の workspace 継承・予算・gate（kind: task は compound の手掛かり）」（7 項目）。
+- 種類: コード（task-core / task-ops / task-api / celerisctl）。**migration なし**。本番には触れていない。
+- 直したもの:
+  - **D1（P-R5b-2）**: 案件に属し `cluster` / `workspace` の無い `POST /tasks` は、リモートのリポジトリ（primary なら案件の workspace）を継ぐ。
+    明示の `Local` とリモートのリポジトリの組み合わせは 422。
+  - **D2**: 木の子は親の `Local{<parent_id>}` を共有せず `Local{<child_id>}`（remote / 絶対パスはそのまま）。
+  - **D3 (a)**: 木の子の予算 = `max(親, 30 turns / 1,800 秒)`、`max_retries` は親（ADR-0072 D18 の leaf 1 run の既定と同じ下限）。
+    unit の gate の view と leaf に下げる基準も同じ値。root の予算は変えない。
+  - **D3 (b)**: `atomic/small` は木の子に当てない。
+  - **D3 (c)**: 子の `execution_hint = {compound, explicit: 人の計画か}`、unit の gate も同じ（`UnitGateContext.human_plan`）。
+  - **D3 (d)（P-R5b-1）**: 人の計画の採用（API の PUT/POST・CLI の `plan set`）の後に gate の記録を `{compound, human, human/plan}` にする
+    （`task_ops::regate::record_human_plan_gate`）。
+- 持ち越し: **D4**（answer / PATCH での attempts の巻き戻し）は replay の規則を変えるので実装しない（付記 7.）。本番の既存の子
+  （01M3PAZ89… / 01M3PB68… / 01M3PBAV…）の予算・作業場所・gate 記録は直していない（人が PATCH / retry する）。
+- gate: `cargo fmt --all -- --check` exit 0 / `cargo clippy --workspace --all-targets -- -D warnings` exit 0 /
+  `cargo nextest run -p task-core -p task-ops -p task-api -p celerisctl` 1380 passed / 0 failed / 1 skipped /
+  `cargo nextest run -p task-dispatch` 451 passed / 0 failed。（`task-api::browser_e2e` の 3 本は 1 回目に高負荷で `celeris-credentiald` の
+  入れ子の `cargo build` が失敗したが、再実行で通った。変更とは無関係）
+- 変えた既存の試験: `task-api/tests/tree_adopt.rs`（人の計画の kind task の unit は `kept_task` ではなく記録なし）、
+  `dispatcher/tests/tree_gate.rs`（score 6 の子は features 4 + H 2 で作る）、`dispatcher/tests/tree.rs`（子の予算は `tree_child_budget`）。

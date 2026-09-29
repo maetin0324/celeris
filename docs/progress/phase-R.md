@@ -1094,3 +1094,15 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし。
+
+### R5b-fix1〜3 の統合と release（2026-09-29 15:1xZ）
+
+- main 1ab74fa = fix2（b30b7a8）+ fix3（d12a745）+ fix1（7cf3c5d / e12ba20）。fix1 の PUT 新規採用側にも fix3 の `record_human_plan_gate` を移植（統合時）。
+- release chain: 3d7f44f（fix2+3）は gate ok、verify の gui-e2e が staging の task ページ（phase-3 の子）503 で失敗（負荷 60 超、本番 API は同 task の
+  全 GET が 0.13 s 以下 → SSR の 15 s 超過と判断）。1ab74fa の 1 回目は mobile-audit の `home` LCP 4852 ms（CPU ×4）1 件で gate 失敗（GUI 差分は
+  `types.ts` 40 行のみ）。負荷 6 で再実行 → gate ok（cargo-test 2865 相当、clippy 0、mobile-audit 0）、push、**verify ok / live_ok**（schema 33、41.8 s）。
+- 昇格は chain が「Production Deploy」で拒否されたため人が `promote.sh 1ab74fae921c` を実行する。
+- P-R5b-3 は解消: BenchFS root の決定 `plan_invalid` 01M3PC2C… が 14:40:35Z に `by: human`（GUI）で `replan` と回答された（Fable は回答していない）。
+  再 replan は fix1 未昇格のため同じ理由で失敗し、決定 01M3PT3132DPB84TDY669VDFSZ が open（昇格後に replan + note で回答）。
+- bf-plan の成果 `artifacts/experiment-plan.md`（sha256 b0a56e29…、175 行）は run 01M3PAZ8AFZQDD31BDX43FDYS0 の stdout.jsonl の Write から復元し、
+  sha 一致を確認（scratchpad）。昇格後に root の作業場所へ戻す（人）。

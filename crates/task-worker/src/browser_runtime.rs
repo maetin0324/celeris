@@ -12,7 +12,10 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
+
+use crate::browser_relay::{self, CHANNEL_FD, CONNECT, GRANT, READY, REFUSE};
 
 use nix::libc;
 use task_core::browser_isolation::{
@@ -31,6 +34,30 @@ pub enum RuntimeError {
     NoChildPid,
     #[error("runtime is not running")]
     NotRunning,
+    #[error("runtime relay did not become ready")]
+    RelayNotReady,
+}
+
+/// ADR-0088 D1: sandbox の proxy listener から来た接続ごとに起動する celeris-browser-egress。
+#[derive(Debug, Clone)]
+pub struct EgressRelay {
+    /// host の celeris-browser-egress（sandbox には入れない）。
+    pub proxy: PathBuf,
+    /// proxy の stdin に渡す `EgressPolicy` の JSON（ADR-0086 D7）。
+    pub policy: Vec<u8>,
+    /// 同時 egress 数の上限（ADR-0086 D4 の呼出し側の制限）。超過分は fd を返さず閉じる。
+    pub max_concurrent: usize,
+}
+
+/// 同時 egress 数の既定（ADR-0088 D1）。
+pub const DEFAULT_MAX_EGRESS: usize = 32;
+
+/// 起動した egress の観測（pid は起動順）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EgressStats {
+    pub spawned: Vec<i32>,
+    pub exited: Vec<i32>,
+    pub refused: usize,
 }
 
 /// 起動の指定。`argv` は sandbox の中で実行する（browser 本体、または試験の probe）。
@@ -45,6 +72,8 @@ pub struct RuntimeSpec {
     pub argv: Vec<OsString>,
     /// true なら fd 3/4 を CDP pipe として渡す（`--remote-debugging-pipe`）。
     pub cdp_pipe: bool,
+    /// `Some` なら argv の先頭は celeris-browser-sandboxd で、FD 6 に request channel を渡す。
+    pub egress: Option<EgressRelay>,
 }
 
 /// `/etc` は丸ごと bind しない（`/etc/celeris` を含むので broker path の検査に掛かる）。
@@ -142,6 +171,7 @@ pub struct IsolatedRuntime {
     /// controller が持つ CDP pipe（書き側 = browser の fd 3、読み側 = fd 4）。
     pub cdp_write: Option<File>,
     pub cdp_read: Option<File>,
+    egress_stats: Option<Arc<Mutex<EgressStats>>>,
 }
 
 fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
@@ -163,6 +193,12 @@ impl IsolatedRuntime {
         let info_fd = info_w.as_raw_fd();
         let (cdp_in, cdp_out) = (to_browser_r.as_raw_fd(), from_browser_w.as_raw_fd());
         let pipe_on = spec.cdp_pipe;
+        let channel = spec
+            .egress
+            .as_ref()
+            .map(|_| browser_relay::seqpacket_pair())
+            .transpose()?;
+        let channel_fd = channel.as_ref().map(|(_, s)| s.as_raw_fd());
         let mut cmd = Command::new(&spec.bwrap);
         cmd.arg("--info-fd").arg("5").args(bwrap_args(spec));
         cmd.stdin(Stdio::null())
@@ -172,12 +208,40 @@ impl IsolatedRuntime {
         // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は親が spawn まで保持する。
         unsafe {
             cmd.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0
-                    || libc::dup2(info_fd, 5) < 0
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // 元の fd 番号が別の行き先（3〜6）と重なると、先の dup2 が後の元を潰す。
+                // 先に全部を行き先の範囲より上へ退避してから並べる（退避側は CLOEXEC で残らない）。
+                let lift = |fd: RawFd| -> std::io::Result<RawFd> {
+                    let hi = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10);
+                    if hi < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(hi)
+                    }
+                };
+                let info = lift(info_fd)?;
+                let cdp = if pipe_on {
+                    Some((lift(cdp_in)?, lift(cdp_out)?))
+                } else {
+                    None
+                };
+                let chan = match channel_fd {
+                    Some(fd) => Some(lift(fd)?),
+                    None => None,
+                };
+                if libc::dup2(info, 5) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if let Some((i, o)) = cdp
+                    && (libc::dup2(i, 3) < 0 || libc::dup2(o, 4) < 0)
                 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if pipe_on && (libc::dup2(cdp_in, 3) < 0 || libc::dup2(cdp_out, 4) < 0) {
+                if let Some(fd) = chan
+                    && libc::dup2(fd, CHANNEL_FD) < 0
+                {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
@@ -187,14 +251,31 @@ impl IsolatedRuntime {
         drop((info_w, to_browser_r, from_browser_w));
         let mut info = String::new();
         File::from(info_r).take(4096).read_to_string(&mut info)?;
-        let inner_pid = parse_child_pid(&info).ok_or(RuntimeError::NoChildPid)?;
-        Ok(Self {
+        let pgid = child.id() as i32;
+        let mut rt = Self {
             child,
             session_id: spec.session_id.clone(),
-            inner_pid,
+            inner_pid: 0,
             cdp_write: spec.cdp_pipe.then(|| File::from(to_browser_w)),
             cdp_read: spec.cdp_pipe.then(|| File::from(from_browser_r)),
-        })
+            egress_stats: None,
+        };
+        rt.inner_pid = parse_child_pid(&info).ok_or(RuntimeError::NoChildPid)?;
+        if let (Some(cfg), Some((ctrl, sandbox_end))) = (spec.egress.clone(), channel) {
+            drop(sandbox_end);
+            let stats = Arc::new(Mutex::new(EgressStats::default()));
+            rt.egress_stats = Some(stats.clone());
+            let (ready_tx, ready_rx) = mpsc::channel();
+            // 長寿命の専用 thread（egress の PDEATHSIG は親 thread の終了で発火する。ADR-0088 D2）。
+            std::thread::Builder::new()
+                .name(format!("celeris-browser-rt-{}", spec.session_id))
+                .spawn(move || relay_loop(ctrl, cfg, pgid, stats, ready_tx))?;
+            // listener が立つまで browser は起動しない（sandboxd が READY の後に起動する）。
+            if ready_rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                return Err(RuntimeError::RelayNotReady);
+            }
+        }
+        Ok(rt)
     }
 
     pub fn bwrap_pid(&self) -> i32 {
@@ -205,6 +286,13 @@ impl IsolatedRuntime {
     }
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// egress の起動・終了の観測（relay の無い runtime では `None`）。
+    pub fn egress_stats(&self) -> Option<EgressStats> {
+        self.egress_stats
+            .as_ref()
+            .and_then(|s| s.lock().ok().map(|s| s.clone()))
     }
 
     pub fn is_running(&mut self) -> bool {
@@ -265,6 +353,105 @@ impl task_core::browser_isolation::LiveIsolation for LiveSession {
             Err(_) => Err(vec![IsolationViolation::NoProcessGroup]),
         }
     }
+}
+
+/// sandboxd の要求ごとに egress を 1 本起動し、相手側の unix stream を返す（ADR-0088 D1）。
+/// channel の EOF で終わる。
+fn relay_loop(
+    ctrl: OwnedFd,
+    cfg: EgressRelay,
+    pgid: i32,
+    stats: Arc<Mutex<EgressStats>>,
+    ready: mpsc::Sender<()>,
+) {
+    let active = Arc::new(Mutex::new(0usize));
+    while let Ok(Some((msg, fd))) = browser_relay::recv(ctrl.as_raw_fd()) {
+        drop(fd);
+        match msg {
+            READY => {
+                let _ = ready.send(());
+            }
+            CONNECT => {
+                let busy = active
+                    .lock()
+                    .map(|a| *a >= cfg.max_concurrent)
+                    .unwrap_or(true);
+                let granted = if busy {
+                    None
+                } else {
+                    spawn_egress(&cfg, pgid, &stats, &active)
+                };
+                let sent = match &granted {
+                    Some(end) => {
+                        browser_relay::send(ctrl.as_raw_fd(), GRANT, Some(end.as_raw_fd()))
+                    }
+                    None => {
+                        if let Ok(mut s) = stats.lock() {
+                            s.refused += 1;
+                        }
+                        browser_relay::send(ctrl.as_raw_fd(), REFUSE, None)
+                    }
+                };
+                if sent.is_err() {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
+fn spawn_egress(
+    cfg: &EgressRelay,
+    pgid: i32,
+    stats: &Arc<Mutex<EgressStats>>,
+    active: &Arc<Mutex<usize>>,
+) -> Option<std::os::unix::net::UnixStream> {
+    use std::io::Write;
+    let (proxy_end, sandbox_end) = std::os::unix::net::UnixStream::pair().ok()?;
+    let fd = proxy_end.as_raw_fd();
+    let mut cmd = Command::new(&cfg.proxy);
+    cmd.env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は spawn まで親が保持する。
+    unsafe {
+        cmd.pre_exec(move || {
+            // runtime の process group に入れて一緒に回収する（ADR-0088 D2）。
+            if libc::dup2(fd, 3) < 0 || libc::setpgid(0, pgid) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().ok()?;
+    drop(proxy_end);
+    let pid = child.id() as i32;
+    let wrote = child
+        .stdin
+        .take()
+        .map(|mut i| i.write_all(&cfg.policy).is_ok())
+        .unwrap_or(false);
+    if let Ok(mut s) = stats.lock() {
+        s.spawned.push(pid);
+    }
+    if let Ok(mut a) = active.lock() {
+        *a += 1;
+    }
+    let (stats, active) = (stats.clone(), active.clone());
+    let waiter = std::thread::Builder::new()
+        .name("celeris-browser-egress-wait".into())
+        .spawn(move || {
+            let _ = child.wait();
+            if let Ok(mut s) = stats.lock() {
+                s.exited.push(pid);
+            }
+            if let Ok(mut a) = active.lock() {
+                *a = a.saturating_sub(1);
+            }
+        });
+    (wrote && waiter.is_ok()).then_some(sandbox_end)
 }
 
 fn parse_child_pid(info: &str) -> Option<i32> {

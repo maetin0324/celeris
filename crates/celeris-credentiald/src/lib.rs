@@ -882,6 +882,7 @@ impl Broker {
         &self.manual
     }
 }
+pub mod identity_seal;
 pub mod ipc;
 #[derive(Debug, Serialize)]
 pub struct CredentialUseResult {

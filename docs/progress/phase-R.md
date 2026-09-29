@@ -822,3 +822,6 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 提案
 
 - なし（DESIGN / SPEC への提案は R0 のまま）。
+
+**昇格**: release `d8bb8069a0b2`（main d8bb806 = R5a + verify.sh の途中目標件数照合を include_frozen=true に）を 2026-09-29 05:53:51Z に昇格（mode=stop-start。live_ok=false は N-1 の旧バイナリが凍結途中目標を数える差分によるもので schema 変更なし。backup 20260929-055325-pre-d8bb8069a0b2）。1 回目の verify は `counts-match: milestones(snapshot=28 staging=0)` で失敗 → verify.sh を修正して再実行。
+

@@ -528,20 +528,9 @@ async fn plan_invalid_replan_feeds_the_note_and_adopts_plan_v2() {
     );
     assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
     no_questions(&store, root_id);
-    // replay: task・計画・決定は一致する。`work_units` は、replan で計画から消えた unit（superseded の a）を最後の
-    // 版の計画からは作り直せない（R3a より前からある replay の差。PROGRESS の未解決に記録）ので、それだけを許す。
-    let report = task_ops::replay::replay(store.as_ref()).unwrap();
-    assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
-    let (wu, _runs, plans, _) =
-        task_ops::replay::check_and_apply_execution(store.as_ref(), false).unwrap();
-    assert!(plans.is_empty(), "{plans:?}");
-    assert!(
-        wu.iter().all(|m| m.key == "a" && m.field == "presence"),
-        "{wu:?}"
-    );
-    let (decisions, _) =
-        task_ops::replay::check_and_apply_decisions(store.as_ref(), false).unwrap();
-    assert!(decisions.is_empty(), "{decisions:?}");
+    // replay（ADR-0079 R4a）: replan で計画から消えた unit（superseded の a）も含めて `work_units` を events から
+    // 同じに作り直せる（R3a では presence の差を許していた）。
+    assert_replay_is_clean(&store);
 }
 
 /// ADR-0079 R3a: 初回の計画の `plan_invalid` に atomic と答えると、節点は計画を作らずに 1 run で走る（gate の判定は

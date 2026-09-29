@@ -58,6 +58,8 @@ pub mod store;
 pub mod transition;
 /// ADR-0079（Phase R1a）: 再帰的な task 分解の木（`Task.tree`・`[execution.tree]` の上限・深さ）。
 pub mod tree;
+/// ADR-0079 D11（Phase R4a）: 木の roll-up（純粋関数）。
+pub mod tree_metrics;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
 
@@ -207,6 +209,7 @@ pub use tree::{
     TreeCounters, TreeInfo, TreeLimitKind, TreeLimits, TreeNodeFacts, TreeSnapshot, UnitDeclared,
     UnitGate, UnitGateAction, UnitGateContext, UnitGateReport,
 };
+pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use execution_gate::{
     EXECUTION_GATE_POLICY_VERSION, EXECUTION_GATE_SCORE_THRESHOLD, ExecutionGateDecision,

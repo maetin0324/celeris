@@ -136,6 +136,10 @@ pub struct PhaseReport {
     /// この工程の WU ごとの要約（1 段落ずつ）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub work_units: Vec<String>,
+    /// ADR-0079 D5 / D11（Phase R4a）: この段階の子 task（計画の kind task の unit）ごとの要約（1 行ずつ:
+    /// unit の key・子の題名・状態・subtree の run と定価・子の最新の報告の見出し）。木でない計画では空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_units: Vec<String>,
     /// 統合の結果（merge・衝突・検査。1 行ずつ）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub integration: Vec<String>,
@@ -167,6 +171,8 @@ struct PhaseReportView<'a> {
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     work_units: &'a [String],
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    child_units: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
     integration: &'a [String],
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     diff_stat: &'a [String],
@@ -186,6 +192,7 @@ struct KeepCounts {
     integration: usize,
     phases_done: usize,
     work_units: usize,
+    child_units: usize,
     next_phase_work_units: usize,
     artifact_paths: usize,
 }
@@ -197,6 +204,7 @@ impl KeepCounts {
             integration: r.integration.len(),
             phases_done: r.phases_done.len(),
             work_units: r.work_units.len(),
+            child_units: r.child_units.len(),
             next_phase_work_units: r.next_phase_work_units.len(),
             artifact_paths: r.artifact_paths.len(),
         }
@@ -207,6 +215,7 @@ impl KeepCounts {
             + self.integration
             + self.phases_done
             + self.work_units
+            + self.child_units
             + self.next_phase_work_units
             + self.artifact_paths
     }
@@ -224,6 +233,7 @@ impl KeepCounts {
             integration: take(self.integration),
             phases_done: take(self.phases_done),
             work_units: take(self.work_units),
+            child_units: take(self.child_units),
             next_phase_work_units: take(self.next_phase_work_units),
             artifact_paths: take(self.artifact_paths),
         }
@@ -237,6 +247,7 @@ impl<'a> PhaseReportView<'a> {
             phase_title,
             phases_done,
             work_units,
+            child_units,
             integration,
             diff_stat,
             next_phase,
@@ -249,6 +260,7 @@ impl<'a> PhaseReportView<'a> {
             phase_title,
             phases_done: &phases_done[..k.phases_done],
             work_units: &work_units[..k.work_units],
+            child_units: &child_units[..k.child_units],
             integration: &integration[..k.integration],
             diff_stat: &diff_stat[..k.diff_stat],
             next_phase,
@@ -284,7 +296,8 @@ fn byte_len_after_pops(r: &PhaseReport, full: KeepCounts, pops: usize) -> usize 
 
 /// D2.3: `PhaseReport` を [`PHASE_REPORT_MAX_BYTES`] に収まるまで決定的に縮める（`task_core::execution::
 /// truncate_checkpoint` と同じ考え方）。落とす優先順は `diff_stat` → `integration` → `phases_done` →
-/// `work_units` → `next_phase_work_units` → `artifact_paths`（見出し・`quota_summary`・`next_phase` は残す）。
+/// `work_units` → `child_units`（ADR-0079 R4a）→ `next_phase_work_units` → `artifact_paths`（見出し・`quota_summary`・
+/// `next_phase` は残す）。
 ///
 /// 規則（ADR-0074 D2.3。Phase SD-3 で挙動を変えずに最適化、P-SD2-1）: 上の優先順で「先頭の空でない `Vec`
 /// の末尾を 1 つ落とす」操作を並べた列を考え、実際の JSON 直列化のバイト数が上限以下になる**最小の**
@@ -325,6 +338,7 @@ fn truncate_phase_report_to(report: &mut PhaseReport, cap: usize) {
     report.integration.truncate(keep.integration);
     report.phases_done.truncate(keep.phases_done);
     report.work_units.truncate(keep.work_units);
+    report.child_units.truncate(keep.child_units);
     report
         .next_phase_work_units
         .truncate(keep.next_phase_work_units);
@@ -528,6 +542,7 @@ mod tests {
             phase_title: "build".into(),
             phases_done: vec!["design: 2 WU / 3 run / 12m".to_string()],
             work_units: vec!["wu-a: did the thing".to_string()],
+            child_units: vec!["p1 Phase 1: done / 3 run / $0.40 — 完了しました".to_string()],
             integration: vec!["merged wu-a @ abc123".to_string()],
             diff_stat: vec!["src/main.rs | 3 +++".to_string()],
             next_phase: Some("verify".to_string()),
@@ -557,6 +572,7 @@ mod tests {
                 || pop_one(&mut report.integration)
                 || pop_one(&mut report.phases_done)
                 || pop_one(&mut report.work_units)
+                || pop_one(&mut report.child_units)
                 || pop_one(&mut report.next_phase_work_units)
                 || pop_one(&mut report.artifact_paths);
             if !shrank {
@@ -573,6 +589,7 @@ mod tests {
             || pop_one(&mut r.integration)
             || pop_one(&mut r.phases_done)
             || pop_one(&mut r.work_units)
+            || pop_one(&mut r.child_units)
             || pop_one(&mut r.next_phase_work_units)
             || pop_one(&mut r.artifact_paths)
     }
@@ -627,6 +644,7 @@ mod tests {
             count(rng),
             count(rng),
             count(rng),
+            count(rng),
         ];
         PhaseReport {
             phase: rng.string(12),
@@ -643,6 +661,7 @@ mod tests {
             next_phase_work_units: rng.strings(c[4], max_len),
             quota_summary: rng.string(60),
             artifact_paths: rng.strings(c[5], max_len),
+            child_units: rng.strings(c[6], max_len),
         }
     }
 
@@ -752,6 +771,30 @@ mod tests {
             over_cap >= 10,
             "too few large reports over the cap: {over_cap}"
         );
+    }
+
+    /// ADR-0079 §7 R4a (c): 子の要約の行（`child_units`）も 16 KiB の切り詰めを通る。落とす順は `work_units` の後
+    /// （子の要約は WU の段落より後まで残る）で、見出しと `quota_summary` は残る。
+    #[test]
+    fn child_unit_summaries_are_truncated_after_work_units() {
+        let mut r = sample_report();
+        for i in 0..400 {
+            r.work_units.push(format!("wu-{i}: {}", "x".repeat(40)));
+            r.child_units.push(format!(
+                "c{i} child {i}: done / 2 run / $0.10 — {}",
+                "y".repeat(40)
+            ));
+        }
+        let child_before = r.child_units.clone();
+        let mut expected = r.clone();
+        truncate_phase_report(&mut r);
+        assert!(report_byte_len(&r) <= PHASE_REPORT_MAX_BYTES);
+        assert!(r.work_units.is_empty(), "work units go first");
+        assert!(!r.child_units.is_empty(), "child summaries survive longer");
+        assert_eq!(r.child_units[..], child_before[..r.child_units.len()]);
+        assert_eq!(r.quota_summary, sample_report().quota_summary);
+        truncate_phase_report_reference(&mut expected, PHASE_REPORT_MAX_BYTES);
+        assert_eq!(r, expected, "same cut as the reference implementation");
     }
 
     /// 遅かったテストと同じ 1 万要素の入力で、旧実装と同じ点（上限以下になる最小の pop 回数）で止まることを

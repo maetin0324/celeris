@@ -198,12 +198,23 @@ pub fn rebuild_work_units_and_runs(
 ) -> (Vec<WorkUnitRow>, Vec<RunRow>) {
     let mut wu_rows: BTreeMap<String, WorkUnitRow> = BTreeMap::new();
 
-    if let Some((plan_ts, plan_id, spec)) = events.iter().rev().find_map(|er| match &er.event {
-        Event::ExecutionPlanned { plan_id, plan, .. } => {
-            Some((er.ts.clone(), plan_id.clone(), (**plan).clone()))
-        }
-        _ => None,
-    }) {
+    // ADR-0079 R4a（/3 の replan の gap）: 計画の版を**すべて**畳み込む。行はその key が初めて現れた版の
+    // 形で作り（`phase` はその版のまま。`task_ops::execution::replan` は既存の行の `phase` を書き換えない）、
+    // 2 版目以降の `ExecutionPlanned` で replan と同じ規則（[`apply_replan_step`]）を当てる。最後の版だけ
+    // から作ると、replan で計画から消えた unit・統合 WU（superseded の行）が無く、同じ key で書き直した
+    // unit の `runs` / `seq` / `phase` も食い違っていた（ADR-0079 R3a 付記 14.・R3b 付記 12.）。
+    let plans: Vec<(String, String, ExecutionPlanSpec)> = events
+        .iter()
+        .filter_map(|er| match &er.event {
+            Event::ExecutionPlanned { plan_id, plan, .. } => {
+                Some((er.ts.clone(), plan_id.clone(), (**plan).clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    // 行の id → その行を作った版（`plans` の index）。
+    let mut introduced: BTreeMap<String, usize> = BTreeMap::new();
+    if !plans.is_empty() {
         let mut key_to_id: BTreeMap<String, String> = BTreeMap::new();
         for er in events {
             if let Event::WorkUnitTransitioned {
@@ -217,23 +228,33 @@ pub fn rebuild_work_units_and_runs(
         }
         // ADR-0074 D1.4（Phase F2b）: v2 は採用時と同じ規則（`materialize_work_units`）で統合 WU を
         // 足し、工程の障壁つきで初期状態を決める（v1 は従来と同じ結果）。
-        let order = topological_order(&spec);
-        for row in task_core::materialize_work_units(
-            &task_id.to_string(),
-            &plan_id,
-            &spec,
-            &order,
-            &plan_ts,
-            &mut |w| {
-                key_to_id
-                    .get(&w.key)
-                    .cloned()
-                    .unwrap_or_else(|| format!("rebuilt-{task_id}-{}", w.key))
-            },
-        ) {
-            wu_rows.insert(row.id.clone(), row);
+        for (k, (plan_ts, plan_id, spec)) in plans.iter().enumerate() {
+            let order = topological_order(spec);
+            let rows = task_core::materialize_work_units(
+                &task_id.to_string(),
+                plan_id,
+                spec,
+                &order,
+                plan_ts,
+                &mut |w| {
+                    key_to_id
+                        .get(&w.key)
+                        .cloned()
+                        .unwrap_or_else(|| format!("rebuilt-{task_id}-{}", w.key))
+                },
+            );
+            for row in rows {
+                // `work_units.key` は task の生涯で一意（replan は superseded の key の再利用を拒む）ので、
+                // 既にある key の行は最初の版の形のまま（後の版の書き換えは `apply_replan_step`）。
+                if wu_rows.values().any(|w| w.key == row.key) {
+                    continue;
+                }
+                introduced.insert(row.id.clone(), k);
+                wu_rows.insert(row.id.clone(), row);
+            }
         }
     }
+    let mut plan_step = 0usize;
     // ADR-0074 D1.4: 統合の repair（`RepairScheduled{origin: integration}`）の直前に統合 WU が
     // pending に戻った（`merge_conflict` / `integration_check_failed`）なら、その統合 WU は repair に依存する。
     let mut pending_integration: Option<String> = None;
@@ -396,24 +417,16 @@ pub fn rebuild_work_units_and_runs(
                     wu.integrated_commit = Some(head.clone());
                 }
             }
-            // ADR-0079 Phase R2b（replan の版）: `task_ops::execution::replan` は done の行に触れず（`plan_id` /
-            // `seq` は元の版のまま）、それ以外の新しい版に残る行を新しい版の `plan_id` / `seq` にする。版ごとに
-            // 同じ規則を畳み込む（1 版だけの task では materialize と同じ値）。
+            // ADR-0079 Phase R2b / R4a（replan の版）: 2 版目以降の `ExecutionPlanned` で `task_ops::execution::replan`
+            // と同じ書き換えを行に当てる（done の行には触れない。状態の遷移は同じトランザクションで先に積まれた
+            // `WorkUnitTransitioned` が運ぶ）。1 版だけの task では何もしない（materialize と同じ値）。
             Event::ExecutionPlanned { plan_id, plan, .. } => {
-                let order = topological_order(plan);
-                let seqs: BTreeMap<String, u32> = task_core::materialized_order(plan, &order)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, w)| (w.key, i as u32))
-                    .collect();
-                for wu in wu_rows.values_mut() {
-                    if wu.status == WorkUnitStatus::Done {
-                        continue;
-                    }
-                    if let Some(seq) = seqs.get(&wu.key) {
-                        wu.plan_id = plan_id.clone();
-                        wu.seq = *seq;
-                    }
+                let k = plan_step;
+                plan_step += 1;
+                if k > 0
+                    && let Some((_, _, prev)) = plans.get(k - 1)
+                {
+                    apply_replan_step(&mut wu_rows, &introduced, k, prev, plan_id, plan);
                 }
             }
             // ADR-0079 D4 (4) / D15（Phase R1a）: kind task の unit の子 task（store が同じトランザクションで
@@ -473,6 +486,153 @@ pub fn rebuild_work_units_and_runs(
         .filter_map(|id| runs.remove(&id))
         .collect();
     (wu_out, run_out)
+}
+
+/// ADR-0079 R4a: replan の版（`plans[k]`、`k >= 1`）の採用を、再構築中の行に当てる（純粋関数）。
+/// `task_ops::execution::replan` の書き換えをそのまま写す:
+///
+/// - 前の版にあり新しい版にも残る未完了の行（統合 WU・daemon が足した行を除く）: `plan_id` /
+///   `depends_on` / spec / `needs_decisions`（/3）を新しい版に、`runs` / `continuations` / `retries` /
+///   `last_run_id` を 0 / 無しに戻す（replan のたびに窓を作り直す。ADR-0072 D17）。kind task の unit は子が
+///   走っていなければ子の結び付き・commit を外す。**`seq` / `kind` / `phase` は書き換えない**（store の
+///   `update_work_unit_tx` は `seq` / `kind` の列を書かず、replan は行の `phase` を変えない。R2b の replay は
+///   `seq` を新しい版の並びにしていたが、行の実際の値は最初に作った版の並びのまま）。
+/// - 未完了の統合 WU（/2・/3）: 新しい版の統合 WU の依存に、前の版の計画に無い依存（統合の repair）を
+///   足したもの。カウンタは戻さない。
+/// - この版で初めて現れた行: replan と同じ初期状態（/1: 依存がすべて done なら ready、/2・/3: 工程の障壁
+///   つきの `newly_ready`）。`seq` は新しい版の並び（行を作った時点で materialize 済み）。
+/// - 既存の行の状態の遷移（superseded・ready / pending への戻し）は `ExecutionPlanned` の前に積まれた
+///   `WorkUnitTransitioned` が既に運んでいるので、ここでは既存の行の状態を変えない。
+fn apply_replan_step(
+    wu_rows: &mut BTreeMap<String, WorkUnitRow>,
+    introduced: &BTreeMap<String, usize>,
+    k: usize,
+    prev: &ExecutionPlanSpec,
+    new_plan_id: &str,
+    spec: &ExecutionPlanSpec,
+) {
+    let prev_keys: BTreeSet<String> = task_core::internal_view(prev)
+        .work_units
+        .iter()
+        .map(|w| w.key.clone())
+        .collect();
+    let prev_phased = task_core::is_phased_schema(&prev.schema);
+    let v2 = task_core::is_phased_schema(&spec.schema);
+    let v3 = spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3;
+    let order = topological_order(spec);
+    let materialized = task_core::materialized_order(spec, &order);
+    let spec_of: BTreeMap<String, task_core::WorkUnitSpec> = materialized
+        .into_iter()
+        .map(|w| (w.key.clone(), w))
+        .collect();
+    // `replan` の `daemon_added`（前の版から見て daemon が足した行: 統合 WU と、工程を持つが前の版の計画に無い行）。
+    let daemon_added = |u: &WorkUnitRow| -> bool {
+        task_core::is_daemon_added_work_unit(prev, u)
+            || (prev_phased && u.phase.is_some() && !prev_keys.contains(&u.key))
+    };
+    let introduced_before = |id: &str| introduced.get(id).is_some_and(|v| *v < k);
+    let done_keys: BTreeSet<String> = wu_rows
+        .values()
+        .filter(|u| introduced_before(&u.id))
+        .filter(|u| u.status == WorkUnitStatus::Done && !daemon_added(u))
+        .map(|u| u.key.clone())
+        .collect();
+
+    let mut new_ids: Vec<String> = Vec::new();
+    for (id, row) in wu_rows.iter_mut() {
+        let Some(&at) = introduced.get(id) else {
+            continue;
+        };
+        if at > k {
+            continue;
+        }
+        let Some(new_spec) = spec_of.get(&row.key) else {
+            continue;
+        };
+        if at == k {
+            new_ids.push(id.clone());
+            continue;
+        }
+        if row.status == WorkUnitStatus::Done || !row.status.is_active() {
+            continue;
+        }
+        if row.kind == task_core::WorkUnitKind::Integrate {
+            let mut deps = new_spec.depends_on.clone();
+            for d in &row.depends_on {
+                if !deps.contains(d) && !prev_keys.contains(d) {
+                    deps.push(d.clone());
+                }
+            }
+            row.plan_id = new_plan_id.to_string();
+            row.depends_on = deps.clone();
+            row.spec = new_spec.clone();
+            row.spec.depends_on = deps;
+            row.blocked_reason = None;
+            continue;
+        }
+        if daemon_added(row) {
+            continue;
+        }
+        let child_alive = row.kind == task_core::WorkUnitKind::Task
+            && row.status == WorkUnitStatus::Running
+            && row.child_task_id.is_some();
+        row.plan_id = new_plan_id.to_string();
+        row.depends_on = new_spec.depends_on.clone();
+        row.spec = new_spec.clone();
+        row.blocked_reason = None;
+        row.runs = 0;
+        row.continuations = 0;
+        row.retries = 0;
+        row.last_run_id = None;
+        row.last_checkpoint_run_id = None;
+        if v3 {
+            row.needs_decisions = task_core::effective_needs_decisions(spec, &row.key);
+        }
+        if row.kind == task_core::WorkUnitKind::Task && !child_alive {
+            row.child_task_id = None;
+            row.head_commit = None;
+            row.base_commit = None;
+        }
+    }
+    // この版で現れた行の初期状態（`replan` の新しい行と、/2・/3 の工程の障壁つきの決め直しと同じ）。
+    for id in &new_ids {
+        if let Some(row) = wu_rows.get_mut(id) {
+            let all_deps_done = row.depends_on.iter().all(|d| done_keys.contains(d));
+            row.status = if v2 && row.kind == task_core::WorkUnitKind::Integrate {
+                WorkUnitStatus::Pending
+            } else if all_deps_done {
+                WorkUnitStatus::Ready
+            } else {
+                WorkUnitStatus::Pending
+            };
+            row.blocked_reason = None;
+        }
+    }
+    if v2 {
+        let projected: Vec<WorkUnitRow> = wu_rows
+            .values()
+            .filter(|u| introduced.get(&u.id).is_some_and(|v| *v <= k))
+            .map(|u| {
+                let mut u = u.clone();
+                if u.status == WorkUnitStatus::Ready {
+                    u.status = WorkUnitStatus::Pending;
+                }
+                u
+            })
+            .collect();
+        let ready: BTreeSet<String> = task_core::newly_ready(&projected).into_iter().collect();
+        for id in &new_ids {
+            if let Some(row) = wu_rows.get_mut(id)
+                && matches!(row.status, WorkUnitStatus::Ready | WorkUnitStatus::Pending)
+            {
+                row.status = if ready.contains(id) {
+                    WorkUnitStatus::Ready
+                } else {
+                    WorkUnitStatus::Pending
+                };
+            }
+        }
+    }
 }
 
 /// ADR-0072 D5/D17（Phase E4b 項目5、E2b からの持ち越し）: `execution_plans`（版の履歴）を
@@ -2084,6 +2244,115 @@ mod tests {
         assert_eq!(run_mm, Vec::new());
         assert_eq!(plan_mm, Vec::new());
         assert_eq!(applied, 0);
+    }
+
+    /// ADR-0079 R4a（R3a 付記 14.・R3b 付記 12. の gap）: 工程を持つ計画の replan で、(a) 計画から消えた unit
+    /// と工程（superseded の `x` と `integrate-p2`）、(b) 同じ key のまま別の工程へ書き直した unit（`b`。行の
+    /// `seq` / `phase` は最初の版のまま）、(c) 新しい unit（`c`）があっても、`work_units` を events だけから同じに
+    /// 作り直せる。superseded の行を消した索引も `--apply` で戻る。
+    #[test]
+    fn replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        let task = sample_task(Status::Running);
+        store.insert(&task).expect("insert");
+        let now = OffsetDateTime::now_utc();
+        let phase = |key: &str| task_core::PhaseSpec {
+            key: key.to_string(),
+            kind: task_core::WorkUnitKind::Implement,
+            title: format!("phase {key}"),
+        };
+        let in_phase = |key: &str, p: &str, deps: &[&str]| {
+            let mut w = wu_spec(key, deps);
+            w.phase = Some(p.to_string());
+            w
+        };
+        let v1_spec = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
+            schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+            rationale: "v1".to_string(),
+            work_units: vec![
+                in_phase("a", "p1", &[]),
+                in_phase("b", "p2", &[]),
+                in_phase("x", "p2", &[]),
+            ],
+            phases: vec![phase("p1"), phase("p2")],
+            children: Vec::new(),
+        };
+        crate::execution::adopt_plan(
+            &store,
+            task.id,
+            v1_spec,
+            task_core::PlanOrigin::Fixture,
+            None,
+            ExecutionLimits::default(),
+            now,
+        )
+        .expect("adopt v1");
+        let v2_spec = ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
+            schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+            rationale: "v2".to_string(),
+            work_units: vec![
+                in_phase("a", "p1", &[]),
+                in_phase("b", "p1", &["a"]),
+                in_phase("c", "p1", &[]),
+            ],
+            phases: vec![phase("p1")],
+            children: Vec::new(),
+        };
+        crate::execution::replan(
+            &store,
+            task.id,
+            v2_spec,
+            "merge the phases".to_string(),
+            task_core::PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            now,
+        )
+        .expect("replan to v2");
+        let stored = store.work_units_for(task.id).expect("units");
+        let status_of = |key: &str| {
+            stored
+                .iter()
+                .find(|u| u.key == key)
+                .map(|u| u.status)
+                .expect(key)
+        };
+        assert_eq!(status_of("x"), WorkUnitStatus::Superseded);
+        assert_eq!(status_of("integrate-p2"), WorkUnitStatus::Superseded);
+
+        let (wu_mm, run_mm, plan_mm, applied) =
+            check_and_apply_execution(&store, false).expect("check");
+        assert!(wu_mm.is_empty(), "{wu_mm:?}");
+        assert!(run_mm.is_empty(), "{run_mm:?}");
+        assert!(plan_mm.is_empty(), "{plan_mm:?}");
+        assert_eq!(applied, 0);
+
+        // superseded の行を索引から消しても、events から戻る。
+        let kept: Vec<WorkUnitRow> = stored
+            .iter()
+            .filter(|u| u.status != WorkUnitStatus::Superseded)
+            .cloned()
+            .collect();
+        store
+            .work_units_replace(task.id, kept)
+            .expect("corrupt work_units");
+        let (wu_mm, _, _, _) = check_and_apply_execution(&store, false).expect("check corrupted");
+        assert!(
+            wu_mm.iter().any(|m| m.key == "x" && m.field == "presence"),
+            "{wu_mm:?}"
+        );
+        check_and_apply_execution(&store, true).expect("apply");
+        let (wu_mm, _, _, applied) = check_and_apply_execution(&store, false).expect("recheck");
+        assert!(wu_mm.is_empty(), "{wu_mm:?}");
+        assert_eq!(applied, 0);
+        let restored = store.work_units_for(task.id).expect("units");
+        assert_eq!(restored.len(), stored.len());
     }
 
     /// (3) 計画の無い Task（暗黙の WorkUnit）では `work_units` は空、`runs` は worker/reviewer

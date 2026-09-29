@@ -874,6 +874,88 @@ async fn review_human_stage_pauses_after_integration() {
     assert_replay_is_clean(&store);
 }
 
+/// ADR-0079 §7 R4a (c)（D5 / D11）: `review: human` の段階が完了したときの途中報告（`PhaseReported`）に、その段階の
+/// 子 task ごとの要約の行（unit の key・子の題名・状態・subtree の run と定価・子の報告の見出し）が入る。leaf の
+/// 段落（`work_units`）は従来どおり。子の無い段階・/1・/2 の途中報告には `child_units` が出ない。
+#[tokio::test]
+async fn stage_report_lists_child_summaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = compound_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", true), stage("s2", false)],
+        vec![
+            leaf("a", "s1", &[]),
+            task_unit("c", "s1", &[], "true"),
+            leaf("b", "s2", &[]),
+        ],
+    );
+    let adapter = Arc::new(TreeAdapter::new(vec![plan], Duration::ZERO));
+    let mut d = tree_dispatcher(&store, adapter);
+    run_until_idle(&mut d, 600).await;
+    approve_root_plan(&store, root_id);
+    let report = run_until_idle(&mut d, 800).await;
+    assert!(report.idle, "{report:?}");
+    let events = store.events_for(root_id).unwrap();
+    let stored = store.get(root_id).unwrap().unwrap();
+    assert!(
+        task_ops::phase_gate::is_awaiting_human(&stored, &events),
+        "{events:?}"
+    );
+    let phase_report = events
+        .iter()
+        .find_map(|(_, e)| match e {
+            Event::PhaseReported { phase, report } if phase == "s1" => Some(report.clone()),
+            _ => None,
+        })
+        .expect("PhaseReported for s1");
+    let child = store.children(root_id).unwrap().pop().expect("child");
+    assert_eq!(child.status, Status::Done);
+    assert_eq!(phase_report.child_units.len(), 1, "{phase_report:?}");
+    let line = &phase_report.child_units[0];
+    assert!(
+        line.starts_with("c Child c: done / 1 run（reviewer 0）/ $0.00 — "),
+        "{line}"
+    );
+    // 子は報告の流れに何も書いていない（組織の無い DB）ので見出しは「報告なし」。
+    assert!(line.ends_with("報告なし"), "{line}");
+    assert!(
+        phase_report.work_units.iter().any(|w| w.starts_with("a: ")),
+        "{phase_report:?}"
+    );
+    // 途中報告の Markdown（成果物 `phase-reports/1-s1.md`）にも子の節が出る。
+    fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path, name) {
+                    return Some(found);
+                }
+            } else if path.file_name().is_some_and(|n| n == name) {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let md = find(dir.path(), "1-s1.md").expect("phase report artifact");
+    let text = std::fs::read_to_string(md).unwrap();
+    assert!(text.contains("## この段階の子 task"), "{text}");
+    assert!(text.contains("- c Child c: done"), "{text}");
+    task_ops::phase_gate::phase_gate(
+        store.as_ref(),
+        root_id,
+        task_ops::phase_gate::PhaseGateAction::Continue,
+        None,
+    )
+    .unwrap();
+    let report = run_until_idle(&mut d, 600).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(&store);
+}
+
 /// R1a から持ち越し（ADR-0079 D2）: kind task の unit の `repos` は親の repos の部分集合でなければならない。
 /// 外れた計画は不正な試行として拒否され（理由が進行に残る）、次の正しい計画が採用される。
 #[tokio::test]

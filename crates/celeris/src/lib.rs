@@ -1249,6 +1249,8 @@ pub fn api_settings(
         knowledge_root: Some(config.knowledge.root.clone()),
         llm_sources: llm_proxy_state
             .map(|s| Arc::new(LlmSourcesAdapter(s)) as task_api::SharedLlmSourcesReader),
+        // ADR-0079 R4a: 木の view の上限の使用率（`GET /tasks/{id}/task-tree`）。
+        tree_limits: config.execution.tree.limits(),
     }
 }
 

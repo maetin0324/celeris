@@ -60,6 +60,7 @@ fn spec(session: &Path, id: &str, ro: Vec<PathBuf>, argv: &[&str], cdp: bool) ->
         ro_dirs: ro,
         argv: argv.iter().map(OsString::from).collect(),
         cdp_pipe: cdp,
+        egress: None,
     }
 }
 

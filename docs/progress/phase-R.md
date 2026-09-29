@@ -1191,3 +1191,6 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   更新されない」の実害: planner v2 が `restore-binding` を段階 relay → verify（dep prod-launch）に移したが行は `phase = relay` のまま →
   `integrate-relay` が永遠に待ち、verify 側の依存も満たせない膠着。R6-4 で修正中（再現条件を伝達）。当面の解消は人の replan（unit を
   `restore-binding-2` に付け替え、内容同じ）。Fable の PUT は classifier に拒否されたため body を用意して人に依頼（scratchpad `p4a-plan-put.json`）。
+- 23:0xZ 人「CoS のチャット task が枠で待たされるのは不便。CoS に割り当てられる run だけ max_concurrency から除外して」→ **R6-5**（Opus）: CoS の対話 run は
+  `max_concurrency` とプールの `concurrency` を数えない・超えてよい、アカウントは最も空いているものに +1 の許容、安全上限 `max_cos_runs`（既定 2）、
+  `GET /providers` に `in_use_cos`。ADR を新設。

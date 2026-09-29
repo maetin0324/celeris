@@ -99,20 +99,65 @@ struct SessionGuard {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         if self.armed {
-            // The child is independent of the harness process group that dispatch terminates.
-            let _ = std::process::Command::new("python3")
-                .arg(&self.cli)
-                .arg("close")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map(|mut child| {
-                    std::thread::spawn(move || {
-                        let _ = child.wait();
-                    })
+            spawn_close(&self.cli);
+        }
+    }
+}
+
+/// The child is independent of the harness process group that dispatch terminates.
+fn spawn_close(cli: &Path) {
+    let _ = std::process::Command::new("python3")
+        .arg(cli)
+        .arg("close")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|mut child| {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            })
+        });
+}
+
+/// P3-C `Stopped` closes the session through the same shim `close` as task cancel.
+// TODO(integrate-wire): the run loop constructs this once the task-api LiveSink/gate lands.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct CliCloser {
+    pub(crate) cli: PathBuf,
+}
+impl crate::browser_live::SessionCloser for CliCloser {
+    fn close(&self) {
+        spawn_close(&self.cli);
+    }
+}
+
+/// P3-B/C wiring for one browser run: the control gate agent actions pass through, and the
+/// live event exit (status only from the typed lifecycle; never frame/title/page text).
+// TODO(integrate-wire): the run loop constructs this once the task-api LiveSink/gate lands.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct BrowserLive<'a, S: crate::browser_live::LiveSink> {
+    pub(crate) gate: &'a dyn crate::browser_live::ControlGate,
+    pub(crate) closer: &'a dyn crate::browser_live::SessionCloser,
+    pub(crate) emitter: &'a crate::browser_live::LiveEmitter<S>,
+}
+// TODO(integrate-wire): the run loop constructs this once the task-api LiveSink/gate lands.
+#[cfg_attr(not(test), allow(dead_code))]
+impl<S: crate::browser_live::LiveSink> BrowserLive<'_, S> {
+    /// Ask the gate before issuing an agent browser action. Not `AgentRunning` → no action;
+    /// `Stopped` → the session is closed. In-flight completion is reported via `end_action`.
+    pub(crate) fn action<T>(
+        &self,
+        action: impl FnOnce() -> T,
+    ) -> crate::browser_live::GatedOutcome<T> {
+        let out = crate::browser_live::run_gated(self.gate, self.closer, action);
+        if let crate::browser_live::GatedOutcome::Closed = out {
+            self.emitter
+                .emit(&task_core::browser_live::LiveEvent::Status {
+                    state: "stopped".into(),
                 });
         }
+        out
     }
 }
 
@@ -217,6 +262,21 @@ fn forward_events(
     output: &Path,
     sink: &dyn EventSink,
 ) {
+    forward_events_live::<crate::browser_live::CollectingSink>(
+        path, offset, req, output, sink, None,
+    );
+}
+
+/// `forward_events` that also emits a scrubbed `status` live event per typed lifecycle line.
+/// Inside an auth section the emitter drops them (ADR-0080 H3).
+fn forward_events_live<S: crate::browser_live::LiveSink>(
+    path: &Path,
+    offset: &mut usize,
+    req: &RunRequest,
+    output: &Path,
+    sink: &dyn EventSink,
+    live: Option<&crate::browser_live::LiveEmitter<S>>,
+) {
     let Ok(bytes) = std::fs::read(path) else {
         return;
     };
@@ -254,6 +314,9 @@ fn forward_events(
             continue;
         }
         let msg = format!("browser.{}: {}", event.operation, event.status);
+        if let Some(live) = live {
+            live.emit(&task_core::browser_live::LiveEvent::Status { state: msg.clone() });
+        }
         sink.progress_with(
             &msg,
             &ProgressFields {

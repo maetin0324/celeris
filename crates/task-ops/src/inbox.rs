@@ -428,7 +428,7 @@ fn build_questions(
 ///
 /// ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の提案で作られた draft Task は
 /// **案件直下**（`parent_id == None`）なので、通常の「親でまとめる」規則には乗らない。それらは
-/// `is_milestone_task` かつ紐づく途中目標が `proposed`（=このタスク自身が手で作った・承認済みの
+/// `is_root_task`（旧 `is_milestone_task`）かつ紐づく途中目標が `proposed`（=このタスク自身が手で作った・承認済みの
 /// 途中目標ではなく、まだ人が決めていない提案の一部）で見分け、案件ごとに 1 つの `DraftGroup` に
 /// まとめる（1 まとまり）。`plan_summary` は `Event::ProjectPlanProposed` の rationale と、
 /// マイルストーンの DAG の 1 行ずつ。
@@ -470,7 +470,7 @@ fn build_drafts(
     let mut groups: HashMap<TaskId, Vec<Task>> = HashMap::new();
     let mut root_drafts: Vec<Task> = Vec::new();
     for t in all_drafts {
-        let in_proposal = proposal_task_ids.contains(&t.id) && task_core::is_milestone_task(t);
+        let in_proposal = proposal_task_ids.contains(&t.id) && task_core::is_root_task(t);
         if let (true, Some(project_id)) = (in_proposal, t.project_id) {
             project_plan_drafts
                 .entry(project_id)
@@ -966,6 +966,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -1367,190 +1368,6 @@ mod tests {
         assert_eq!(item.5.as_deref(), Some("build"));
         assert!(item.0.actions.contains(&view::Action::PhaseGate));
         assert!(!item.0.actions.contains(&view::Action::Answer));
-    }
-
-    /// ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の提案で作られた top-level の
-    /// draft Task は、`parent_id` を持たないが（それぞれが「案件直下」）1 つの `DraftGroup` にまとまり、
-    /// `plan_summary` に rationale と DAG が入る。無関係の root draft とは混ざらず、root は最後のまま。
-    #[test]
-    fn inbox_drafts_group_a_project_plan_proposal_as_one_unit_and_keep_root_last() {
-        let store = SqliteStore::open_in_memory().expect("open store");
-        let now = OffsetDateTime::now_utc();
-        store
-            .org_upsert(&task_core::OrgNode {
-                profile: Default::default(),
-                id: "secretary".into(),
-                parent_id: None,
-                name: "秘書".into(),
-                kind: task_core::OrgKind::Secretary,
-                genre: None,
-                brief: String::new(),
-                position: 0,
-                created_at: now,
-                updated_at: now,
-            })
-            .expect("secretary");
-        let project = task_core::Project {
-            auto_advance: false,
-            slug: None,
-            id: task_core::ProjectId::new(),
-            title: "t".into(),
-            request: "r".into(),
-            status: task_core::ProjectStatus::Active,
-            secretary_summary: None,
-            workspace: None,
-            archived_at: None,
-            paused_from: None,
-            created_at: now,
-            updated_at: now,
-        };
-        store.project_create(&project).expect("create project");
-
-        let started = crate::project_plan::start_milestones(&store, &project, None, &[], &[], now)
-            .expect("start");
-
-        fn acceptance() -> Vec<Criterion> {
-            vec![
-                Criterion {
-                    text: "d".into(),
-                    check: Check::Human,
-                },
-                Criterion {
-                    text: "a".into(),
-                    check: Check::ArtifactExists {
-                        name: "r.md".into(),
-                    },
-                },
-            ]
-        }
-        let plan_spec = task_core::ProjectPlanSpec {
-            schema: task_core::PROJECT_PLAN_SCHEMA.into(),
-            rationale: "2段階で進める".into(),
-            milestones: vec![
-                task_core::MilestoneSpec {
-                    pause_after: None,
-                    key: "survey".into(),
-                    title: "調査".into(),
-                    objective: "周辺調査".into(),
-                    reach_criteria: "候補が出せた".into(),
-                    acceptance: acceptance(),
-                    depends_on: vec![],
-                    genre: None,
-                    skills: vec![],
-                    repos: vec![],
-                    features: None,
-                    execution: None,
-                },
-                task_core::MilestoneSpec {
-                    pause_after: None,
-                    key: "poc".into(),
-                    title: "PoC".into(),
-                    objective: "検証".into(),
-                    reach_criteria: "動くデモ".into(),
-                    acceptance: acceptance(),
-                    depends_on: vec!["survey".into()],
-                    genre: None,
-                    skills: vec![],
-                    repos: vec![],
-                    features: None,
-                    execution: None,
-                },
-            ],
-        };
-        let validated = task_core::validate_project_plan(
-            &plan_spec,
-            task_core::ProjectPlanLimits::default(),
-            &std::collections::BTreeSet::new(),
-        )
-        .expect("valid plan");
-        crate::project_plan::propose(&store, &started.task, &project, &validated, &[], &[], now)
-            .expect("propose");
-
-        let root_draft = sample_task(TaskKind::Execute, Status::Draft);
-        store.insert(&root_draft).expect("insert root draft");
-
-        let ctx = view_ctx();
-        let result = inbox(&store, None, &ctx, now, &no_evidence).expect("inbox");
-
-        assert_eq!(result.drafts.len(), 2, "{:?}", result.drafts);
-        let proposal_group = &result.drafts[0];
-        assert!(proposal_group.parent.is_none());
-        assert_eq!(proposal_group.drafts.len(), 2);
-        let summary = proposal_group
-            .plan_summary
-            .as_deref()
-            .expect("plan_summary");
-        assert!(summary.contains("2段階で進める"), "{summary}");
-        assert!(summary.contains("survey: 調査"), "{summary}");
-        assert!(
-            summary.contains("poc: PoC (depends on: survey)"),
-            "{summary}"
-        );
-
-        let root_group = &result.drafts[1];
-        assert!(root_group.parent.is_none(), "root group must be last");
-        assert_eq!(root_group.drafts.len(), 1);
-        assert_eq!(root_group.drafts[0].id, root_draft.id);
-        assert_eq!(result.counts.drafts, 3);
-        assert_eq!(
-            proposal_group.project_plan.as_ref().map(|p| p.version),
-            Some(1)
-        );
-
-        // ADR-0074 D3.4（Phase F4b）: 承認後の replan の差分（modify だけで draft が無い）も、
-        // 未決の提案として 1 まとまりで出る。
-        crate::project_plan::decide(
-            &store,
-            &project,
-            1,
-            crate::project_plan::ProjectPlanDecision::Approve,
-            None,
-            &[],
-            &[],
-            task_core::CONVERSATION_GENRE,
-            now,
-        )
-        .expect("approve");
-        let replan = crate::project_plan::start_replan(&store, &project, None, &[], &[], now)
-            .expect("replan");
-        let delta = task_core::ProjectPlanDelta {
-            schema: task_core::PROJECT_PLAN_DELTA_SCHEMA.into(),
-            base_version: 1,
-            rationale: "PoC を絞る".into(),
-            add: vec![],
-            modify: vec![task_core::MilestoneModify {
-                key: "poc".into(),
-                title: Some("PoC（小）".into()),
-                ..task_core::MilestoneModify::default()
-            }],
-            remove: vec![],
-            cancel: vec![],
-        };
-        let validated =
-            crate::project_plan::validate_delta_against_store(&store, project.id, &delta)
-                .expect("valid delta");
-        crate::project_plan::propose_delta(
-            &store,
-            &replan.task,
-            &project,
-            &validated,
-            &[],
-            &[],
-            now,
-        )
-        .expect("propose delta");
-        let result = inbox(&store, None, &ctx, now, &no_evidence).expect("inbox");
-        let group = result
-            .drafts
-            .iter()
-            .find(|g| g.project_plan.is_some())
-            .expect("pending replan group");
-        let plan_ref = group.project_plan.as_ref().expect("ref");
-        assert_eq!((plan_ref.version, plan_ref.supersedes), (2, Some(1)));
-        assert!(group.drafts.is_empty());
-        let summary = group.plan_summary.as_deref().expect("summary");
-        assert!(summary.contains("modify: poc"), "{summary}");
-        assert!(summary.contains("PoC（小）"), "{summary}");
     }
 
     #[test]

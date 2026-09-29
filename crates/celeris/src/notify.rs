@@ -23,6 +23,8 @@
 //! 「結果 → 次の提案」の要約（返事の先頭 300 字と提案の題名）を載せる（状態だけを知らせても、人は
 //! GUI で成果物を読んで自分で次を考えなければならなかった）。条件の判定そのものは
 //! `crate::milestone_review::ready_milestones` に移した（レビューの run を起こす側と同じ 1 か所）。
+//! **ADR-0079 D13（Phase R5a）: `milestone_ready` と途中目標の判定 run は廃止**（途中目標は凍結。root の完了は
+//! `task_ready`、人の判断は決定の要求・計画の承認で鳴る）。`NotificationKind::MilestoneReady` は既存の行を読むためだけに残る。
 //!
 //! (2) `bad_news`/`approval_pending`/`question_blocked`/`secretary_reply` は celeris の起動時刻より
 //! 後にできたものだけを対象にする（backfill 禁止）。(3) 送信は 1 tick に最大 1 通、`bad_news` は
@@ -197,7 +199,7 @@ fn scan_at(
 ) -> Result<Vec<Candidate>, StoreError> {
     let org = store.org_list()?;
     let mut out = Vec::new();
-    out.extend(scan_milestone_ready(store, &org, base_url, now)?);
+    // ADR-0079 D13（Phase R5a）: `milestone_ready`（途中目標の判定の通知）は廃止。root の完了は `task_ready` で鳴る。
     out.extend(scan_approval_pending(store, &org, started_at, base_url)?);
     out.extend(scan_question_blocked(store, &org, started_at, base_url)?);
     out.extend(scan_bad_news(store, started_at, base_url)?);
@@ -241,70 +243,6 @@ fn scan_at(
                 project_id: Some(delivery.project_id),
             });
         }
-    }
-    Ok(out)
-}
-
-/// 途中目標が「動いているものが無く、人の手が要る」状態になり、**秘書のレビューの返事が付いた**
-/// （ADR-0037 D1 / 実機 2026-09-18、ADR-0038 D4）。
-///
-/// 条件（`crate::milestone_review::ready_milestones`）: 途中目標が `reached` でなく、属する仕事
-/// （裏方を除く）が 1 件以上あり、その中に ready / running / reviewing / blocked が **0 件**、
-/// done が **1 件以上**。そのうえで ADR-0038 D4 により、**秘書のレビューの返事が `messages` に入ってから**
-/// 送る（状態だけの通知では「何が分かったか」も「次に何をするつもりか」も人に届かないため）。
-///
-/// 重複排除の `key` は `<milestone_id>:<done の件数>`。Go を出して仕事が進み、また止まれば
-/// done の件数が変わるので再び鳴る。
-fn scan_milestone_ready(
-    store: &dyn TaskStore,
-    _org: &[task_core::OrgNode],
-    base_url: Option<&str>,
-    now: OffsetDateTime,
-) -> Result<Vec<Candidate>, StoreError> {
-    let mut out = Vec::new();
-    for ready in crate::milestone_review::ready_milestones(store)? {
-        let state =
-            task_ops::milestone_review::review_state(store, ready.project.id, ready.milestone.id)?;
-        // ADR-0050: まとめは最大5分待つ。失敗や供給停止で永久に無通知にしない。
-        let reply = state
-            .reply
-            .filter(|reply| ready.last_done_at.is_none_or(|at| reply.created_at >= at));
-        if reply.is_none()
-            && ready
-                .last_done_at
-                .is_some_and(|at| now - at < time::Duration::minutes(5))
-        {
-            continue;
-        }
-        let proposal = task_ops::milestone_review::latest_proposal(
-            store,
-            ready.project.id,
-            Some(ready.milestone.id),
-        )
-        .ok()
-        .flatten();
-        let next = match &proposal {
-            Some(m) => format!("次の提案: 『{}』。", m.title),
-            None => String::new(),
-        };
-        let body = format!(
-            "途中目標『{}』の仕事が止まりました。秘書のまとめ: {} {next}→ 案件で ok / 議論 / ng を選んでください。{}",
-            ready.milestone.title,
-            reply
-                .as_ref()
-                .map(|r| excerpt(&r.text, REVIEW_EXCERPT_CHARS))
-                .unwrap_or_else(|| {
-                    "仕事の成果が揃いました。CoS のまとめは未着です。案件で結果を確認してください。"
-                        .into()
-                }),
-            link(base_url, &format!("/projects/{}", ready.project.id))
-        );
-        out.push(Candidate {
-            kind: NotificationKind::MilestoneReady,
-            key: format!("{}:{}", ready.milestone.id, ready.done),
-            body,
-            project_id: Some(ready.project.id),
-        });
     }
     Ok(out)
 }
@@ -528,12 +466,6 @@ fn scan_secretary_reply(
                 && let Some(delivery) = store.delivery_get(id)?
                 && (delivery.notification == Some(reply.id)
                     || reply.run_id.as_deref() == Some(delivery.review_run.as_str()))
-            {
-                continue;
-            }
-            // 途中目標レビューは milestone_ready が内容付きで通知する。
-            if let Some(id) = reply.task_id
-                && store.get(id)?.is_some_and(|t| t.milestone_id.is_some())
             {
                 continue;
             }
@@ -1233,6 +1165,7 @@ mod tests {
             let now = OffsetDateTime::now_utc();
             Task {
                 tree: None,
+                paused_at: None,
                 routing: None,
                 mode: Default::default(),
                 skills: Vec::new(),

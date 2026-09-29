@@ -66,6 +66,7 @@ fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
         tree: None,
+        paused_at: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),

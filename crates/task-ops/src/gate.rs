@@ -6,7 +6,7 @@
 //! 違えば、遷移を試みずに `OpsError::Conflict` を返す。
 
 use task_core::approval::Decision;
-use task_core::{Event, MilestoneStatus, Status, Task, TaskId, TaskKind, TaskStore, Trigger};
+use task_core::{Event, Status, TaskId, TaskKind, TaskStore, Trigger};
 use time::OffsetDateTime;
 
 use crate::derive::latest_question;
@@ -72,33 +72,6 @@ fn check_expected(actual: Status, expected: Option<Status>) -> Result<(), OpsErr
     }
 }
 
-/// ADR-0074 D3.3（Phase F4a (c)）: `task` が、まだ決定されていない案件計画（マイルストーン DAG）の
-/// 提案の一部の draft か（`task_core::is_milestone_task` かつ紐づく途中目標が `proposed`）。
-/// そうなら個別の `accept`/`approve` を拒む（「個々の draft を 1 件ずつ Accept する既存の操作は、
-/// 案件計画の draft には使わせない（まとまりで承認する）」）。
-fn reject_if_pending_project_plan_draft(
-    store: &dyn TaskStore,
-    task: &Task,
-) -> Result<(), OpsError> {
-    if task.status != Status::Draft || !task_core::is_milestone_task(task) {
-        return Ok(());
-    }
-    let Some(milestone_id) = task.milestone_id else {
-        return Ok(());
-    };
-    let is_pending = store
-        .milestone_get(milestone_id)?
-        .is_some_and(|m| m.status == MilestoneStatus::Proposed);
-    if is_pending {
-        return Err(OpsError::Validation(
-            "this draft is part of an undecided project plan proposal; use \
-             POST /projects/{id}/project-plan/{version}/decide to approve or reject the whole plan"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
 /// `status == Draft`（kind 不問）は `Trigger::Accept`、`kind == Approval && status == Ready` は
 /// `Trigger::Approve` で `Event::ApprovalDecided` を同一トランザクションに追記する。
 pub fn approve(
@@ -122,7 +95,6 @@ pub fn approve_as(
 ) -> Result<TransitionResult, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
-    reject_if_pending_project_plan_draft(store, &task)?;
 
     let (trigger, extra_event) = if task.status == Status::Draft {
         (Trigger::Accept, None)
@@ -175,7 +147,6 @@ pub fn accept(
             action: "accepted".to_string(),
         });
     }
-    reject_if_pending_project_plan_draft(store, &task)?;
     let from = task.status;
     let since_id = store.latest_event_id()?;
     let outcome = store.apply_transition(id, Trigger::Accept, None)?;
@@ -365,6 +336,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -827,11 +799,10 @@ mod tests {
         assert!(result.cascaded.is_empty());
     }
 
-    /// ADR-0074 D3.3（Phase F4a (c)）: 案件計画（マイルストーン DAG）の提案が未決（途中目標が
-    /// `proposed`）の間は、その draft を個別に `accept`/`approve` できない（まとまりで承認する）。
-    /// 途中目標が `approved`（＝案件計画の決定を経た、または人が手で作った）なら通常どおり通る。
+    /// ADR-0079 D13（Phase R5a）: 案件計画の提案の一括決定（`POST /projects/{id}/project-plan/{version}/decide`）は
+    /// 410 になったので、未決の提案（途中目標が `proposed`）に属する draft も個別に `accept` できる（取り残さない）。
     #[test]
-    fn accept_and_approve_refuse_a_draft_that_belongs_to_an_undecided_project_plan_proposal() {
+    fn a_draft_of_a_frozen_project_plan_proposal_can_be_accepted_individually() {
         let store = SqliteStore::open_in_memory().expect("open store");
         let now = OffsetDateTime::now_utc();
         let project = task_core::Project {
@@ -863,20 +834,6 @@ mod tests {
         task.milestone_id = Some(milestone.id);
         store.insert(&task).expect("insert");
 
-        let err = accept(&store, task.id, None).unwrap_err();
-        assert!(err.to_string().contains("project plan proposal"), "{err}");
-        let err = approve(&store, task.id, None, None).unwrap_err();
-        assert!(err.to_string().contains("project plan proposal"), "{err}");
-        assert_eq!(
-            store.get(task.id).expect("get").expect("some").status,
-            Status::Draft,
-            "the guard must not have transitioned anything"
-        );
-
-        // 途中目標が approved になれば（案件計画の decide を経た、または手で作られたもの）通常どおり。
-        store
-            .milestone_set_status(milestone.id, task_core::MilestoneStatus::Approved)
-            .expect("approve milestone");
         let result = accept(&store, task.id, None).expect("accept");
         assert_eq!(result.to, Status::Ready);
     }

@@ -471,7 +471,7 @@ pub struct RunContext {
     // ---- ADR-0047 D2（Phase 61）: ここまで ----
     // ---- ADR-0048 D3（Phase 60b）: CoS の対話に渡す進行中の案件。ここから ----
     /// ADR-0048 D3: **CoS の対話 run** にだけ渡す、進行中の案件（`proposed` / `active`）とその
-    /// 途中目標の一覧。`actions` の `create_task.project` / `add_milestone.project` を選ぶ材料
+    /// 途中目標の一覧。`actions` の `create_task.project` を選ぶ材料（ADR-0079 D12〈Phase R5a〉: `milestones` は常に空）
     /// （決定的にストアを読むだけ。CoS 以外の run では常に空）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_projects: Vec<ActiveProjectContext>,
@@ -1336,6 +1336,7 @@ pub(crate) mod tests {
         let now = time::OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

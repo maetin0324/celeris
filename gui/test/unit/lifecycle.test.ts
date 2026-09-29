@@ -2,11 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
 import {
   archiveProject,
-  cancelMilestone,
   cancelProject,
-  pauseMilestone,
   pauseProject,
-  resumeMilestone,
   resumeProject,
   unarchiveProject,
 } from "~/celeris/projects-admin.server";
@@ -262,48 +259,5 @@ describe("案件の中止・一時停止・アーカイブ（POST /projects/{id}
   });
 });
 
-describe("途中目標の中止・一時停止（POST /milestones/{id}/…）", () => {
-  it("cancel: 連鎖で中止されたタスクをそのまま返す（案件の状態は変えない）", async () => {
-    serveLifecycle(mock);
-    const result = await cancelMilestone(client, "m1");
-    if (!result.ok || result.op !== "milestone_cancel") throw new Error(`unexpected: ${JSON.stringify(result)}`);
-    expect(result.lifecycle.milestone.status).toBe("cancelled");
-    expect(result.lifecycle.cancelled_tasks).toHaveLength(1);
-    expect(mock.requests.find((r) => r.url === "/api/v1/milestones/m1/cancel")?.body).toBe("{}");
-  });
-
-  it("pause / resume: paused_from をそのまま返す", async () => {
-    serveLifecycle(mock);
-    const paused = await pauseMilestone(client, "m1");
-    if (!paused.ok || paused.op !== "milestone_pause") throw new Error("unexpected");
-    expect(paused.lifecycle.milestone.status).toBe("paused");
-    expect(paused.lifecycle.milestone.paused_from).toBe("in_progress");
-
-    const resumed = await resumeMilestone(client, "m1");
-    if (!resumed.ok || resumed.op !== "milestone_resume") throw new Error("unexpected");
-    expect(resumed.lifecycle.milestone.status).toBe("in_progress");
-  });
-
-  it("404 milestone_not_found / 409 invalid_transition をそのまま返す", async () => {
-    mock.on("POST", "/api/v1/milestones/missing/resume", (_req, res) =>
-      sendProblem(res, { status: 404, code: "milestone_not_found", detail: "no such milestone" }),
-    );
-    mock.on("POST", "/api/v1/milestones/m1/resume", (_req, res) =>
-      sendProblem(res, {
-        status: 409,
-        code: "invalid_transition",
-        detail: "milestone m1 (status=in_progress) cannot be resumed",
-      }),
-    );
-    expect(await resumeMilestone(client, "missing")).toMatchObject({
-      ok: false,
-      op: "milestone_resume",
-      error: { status: 404, code: "milestone_not_found" },
-    });
-    expect(await resumeMilestone(client, "m1")).toMatchObject({
-      ok: false,
-      op: "milestone_resume",
-      error: { status: 409, code: "invalid_transition" },
-    });
-  });
-});
+// celeris ADR-0079 D13（Phase R5a）: 途中目標の中止・一時停止・再開（`POST /milestones/{id}/…`）は 410 になり、
+// 中継（`cancelMilestone` / `pauseMilestone` / `resumeMilestone`）は外した。

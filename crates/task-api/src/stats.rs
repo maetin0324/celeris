@@ -939,6 +939,7 @@ mod execution_metrics_comparison_tests {
         let now = OffsetDateTime::now_utc() - time::Duration::seconds(age);
         Task {
             tree: None,
+            paused_at: None,
             id,
             parent_id: None,
             kind: TaskKind::Execute,

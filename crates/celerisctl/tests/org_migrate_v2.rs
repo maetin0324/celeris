@@ -141,6 +141,7 @@ fn seed(env: &Env) -> (Vec<OrgNode>, TaskId) {
     let id = TaskId::new();
     let task = Task {
         tree: None,
+        paused_at: None,
         routing: None,
         id,
         parent_id: None,

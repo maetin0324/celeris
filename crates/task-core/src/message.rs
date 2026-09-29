@@ -128,7 +128,7 @@ impl MessageMetadata {
 /// `Message.metadata.actions_executed[]`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MessageActionResult {
-    /// `create_task` / `propose_project` / `add_milestone` / `ask_human`。
+    /// `create_task` / `propose_project` / `ask_human`（旧 `add_milestone` は ADR-0079 D12〈Phase R5a〉で廃止。履歴の行には残る）。
     pub kind: String,
     /// 人が読む 1 行（「タスクを作りました: 〜」）。
     pub summary: String,
@@ -202,6 +202,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

@@ -6,8 +6,8 @@
 //! これを呼ぶ（`TaskStore::console_action_run_claim` で冪等性を取る。同じ `run_id` の 2 回目は `Ok(None)`）。
 
 use task_core::{
-    ConsoleAction, Milestone, MilestoneId, MilestoneStatus, OrgNode, Project, ProjectId,
-    ProjectRepo, ProjectStatus, RepoId, RepoRun, Status, Task, TaskId, TaskStore, WorkspaceSpec,
+    ConsoleAction, MilestoneId, OrgNode, Project, ProjectId, ProjectRepo, ProjectStatus, RepoId,
+    RepoRun, Status, Task, TaskId, TaskStore, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -202,11 +202,11 @@ fn execute_one(
             mode,
             repos,
             project,
-            milestone,
             assignee,
             workspace,
             execution,
             pause_after,
+            stages_hint,
         } => create_task_action(
             store,
             org,
@@ -221,13 +221,13 @@ fn execute_one(
             mode,
             repos,
             project,
-            milestone,
             assignee,
             workspace,
             *tier,
             *features,
             *execution,
             pause_after.as_deref().cloned(),
+            stages_hint,
             human_text,
             now,
         ),
@@ -236,11 +236,6 @@ fn execute_one(
             request,
             repos,
         } => propose_project_action(store, title, request, repos, now),
-        ConsoleAction::AddMilestone {
-            project,
-            title,
-            description,
-        } => add_milestone_action(store, project, title, description),
         ConsoleAction::AskHuman { text } => ask_human_action(text),
         // 明示の `assignee` を持たない場合の担当決定（D5 の matching）は `assignee` 省略時に
         // ディスパッチャの `assign_if_needed` が別途走る。`org` はここでは ADR-0062 B1/B3 の
@@ -265,13 +260,13 @@ fn create_task_action(
     mode: &Option<String>,
     repos: &[String],
     project: &Option<String>,
-    milestone: &Option<String>,
     assignee: &Option<String>,
     workspace: &Option<Box<WorkspaceSpec>>,
     tier: Option<task_core::Tier>,
     features: Option<task_core::TaskFeatureHints>,
     execution: Option<task_core::ExecutionMode>,
     pause_after: Option<task_core::PausePolicy>,
+    stages_hint: &[task_core::StageHint],
     human_text: &str,
     now: OffsetDateTime,
 ) -> Result<ExecutedAction, String> {
@@ -296,13 +291,6 @@ fn create_task_action(
         Some(raw) if !raw.trim().is_empty() => Some(
             raw.parse::<ProjectId>()
                 .map_err(|_| format!("project {raw:?} is not a valid id"))?,
-        ),
-        _ => None,
-    };
-    let milestone_id = match milestone {
-        Some(raw) if !raw.trim().is_empty() => Some(
-            raw.parse::<MilestoneId>()
-                .map_err(|_| format!("milestone {raw:?} is not a valid id"))?,
         ),
         _ => None,
     };
@@ -379,7 +367,8 @@ fn create_task_action(
         genre: harness.clone(),
         aggregate: false,
         project_id,
-        milestone_id,
+        // ADR-0079 D13（Phase R5a）: CoS の仕事は途中目標に結ばない（凍結）。
+        milestone_id: None,
         assignee: assignee.clone(),
         workspace: ws_path,
         cluster: ws_cluster,
@@ -395,6 +384,8 @@ fn create_task_action(
         features,
         execution,
         pause_after,
+        // ADR-0079 D12（Phase R5a）: 人が名指しした段階をそのまま `Task.routing.stages_hint` へ。
+        stages_hint: stages_hint.to_vec(),
         provenance: crate::add::SpecProvenance {
             origin: crate::add::SpecOrigin::Agent,
             human_explicit_tier,
@@ -534,44 +525,6 @@ fn propose_project_action(
     })
 }
 
-/// ADR-0048 D3: `add_milestone` は既存の案件に `proposed` の途中目標を末尾に足す
-/// （`store.milestone_create` が `seq` を自動で末尾にする）。
-fn add_milestone_action(
-    store: &dyn TaskStore,
-    project: &str,
-    title: &str,
-    description: &str,
-) -> Result<ExecutedAction, String> {
-    if title.trim().is_empty() {
-        return Err("title must not be blank".to_string());
-    }
-    let project_id = project
-        .parse::<ProjectId>()
-        .map_err(|_| format!("project {project:?} is not a valid id"))?;
-    if store
-        .project_get(project_id)
-        .map_err(|e| e.to_string())?
-        .is_none()
-    {
-        return Err(format!("project {project_id} does not exist"));
-    }
-    let milestone: Milestone = store
-        .milestone_create(
-            project_id,
-            title.trim(),
-            description.trim(),
-            MilestoneStatus::Proposed,
-        )
-        .map_err(|e| format!("could not create the milestone: {e}"))?;
-    Ok(ExecutedAction {
-        kind: "add_milestone",
-        summary: format!("→ 途中目標を追加しました: {}", milestone.title),
-        task_id: None,
-        project_id: Some(project_id),
-        milestone_id: Some(milestone.id),
-    })
-}
-
 /// ADR-0048 D3: `ask_human` は taskd の側では何も作らない（CoS の返事そのものが人への問いかけ）。
 /// 「実行できた」扱いにして、人に見える形（Console の `reply` の `actions_result`）に残すだけ。
 fn ask_human_action(text: &str) -> Result<ExecutedAction, String> {
@@ -601,6 +554,7 @@ mod tests {
         let t = now();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -1136,10 +1090,10 @@ mod tests {
         assert!(store.list(None).unwrap().is_empty(), "何も作らない");
     }
 
-    /// 知らない harness（`genres` が設定されていれば検証される）や存在しない project / milestone も
+    /// 知らない harness（`genres` が設定されていれば検証される）や存在しない project も
     /// 実行されない。
     #[test]
-    fn unknown_project_or_milestone_is_rejected() {
+    fn unknown_project_is_rejected() {
         let store = SqliteStore::open_in_memory().unwrap();
         seed_engineering(&store);
         let task = cos_task();
@@ -1226,72 +1180,6 @@ mod tests {
         assert!(outcome.executed.is_empty());
         assert_eq!(outcome.failed.len(), 1);
         assert!(store.project_list().unwrap().is_empty());
-    }
-
-    /// `add_milestone`: 既存案件の末尾に `proposed` の途中目標を足す。知らない案件は失敗。
-    #[test]
-    fn add_milestone_appends_a_proposed_milestone() {
-        let store = SqliteStore::open_in_memory().unwrap();
-        let t = now();
-        let project = Project {
-            auto_advance: false,
-            slug: None,
-            archived_at: None,
-            paused_from: None,
-            id: ProjectId::new(),
-            title: "既存案件".into(),
-            request: "r".into(),
-            status: ProjectStatus::Active,
-            secretary_summary: None,
-            workspace: None,
-            created_at: t,
-            updated_at: t,
-        };
-        store.project_create(&project).unwrap();
-        let task = cos_task();
-        let parsed = parse(&format!(
-            r#"{{"actions":[{{"type":"add_milestone","project":"{}","title":"次","description":"d"}}]}}"#,
-            project.id
-        ));
-        let outcome = execute(
-            &store,
-            &[],
-            &[],
-            &[],
-            &[],
-            &task,
-            "run-1",
-            &parsed.0,
-            &parsed.1,
-            now(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(outcome.executed.len(), 1);
-        let milestones = store.milestone_list(project.id).unwrap();
-        assert_eq!(milestones.len(), 1);
-        assert_eq!(milestones[0].title, "次");
-        assert_eq!(milestones[0].status, MilestoneStatus::Proposed);
-
-        let bad = parse(
-            r#"{"actions":[{"type":"add_milestone","project":"01ZZZZZZZZZZZZZZZZZZZZZZZZ","title":"t"}]}"#,
-        );
-        let outcome = execute(
-            &store,
-            &[],
-            &[],
-            &[],
-            &[],
-            &task,
-            "run-2",
-            &bad.0,
-            &bad.1,
-            now(),
-        )
-        .unwrap()
-        .unwrap();
-        assert!(outcome.executed.is_empty());
-        assert!(outcome.failed[0].reason.contains("does not exist"));
     }
 
     /// `ask_human`: 実行済みとして記録するだけ（何も作らない）。

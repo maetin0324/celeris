@@ -1,7 +1,9 @@
-//! ADR-0044 D6（Phase 55）: 案件・途中目標の **中止・一時停止・アーカイブ**。
+//! ADR-0044 D6（Phase 55）: 案件の **中止・一時停止・アーカイブ**と、ADR-0079 D13（Phase R5a）の task の
+//! **subtree の一時停止**（`pause_task` / `resume_task`）。
 //!
-//! 3 階層（タスク・途中目標・案件）のうち、タスクの中止は従来どおり `crate::gate::cancel`。
-//! ここは「上の 2 階層」を扱い、連鎖は**決定的・同期**に行う（ADR-0044 D6）:
+//! ADR-0079 D13: 階層は task の subtree と案件の 2 つ（途中目標の中止・一時停止〈`POST /milestones/{id}/…`〉は
+//! 410 にして外した。既存の paused / cancelled の途中目標の行による dispatch の抑止だけは `ready_tasks` に残る）。
+//! タスクの中止は従来どおり `crate::gate::cancel`（木の子へは `parent_cancelled` で連鎖）。連鎖は**決定的・同期**:
 //!
 //! | 操作 | 何が起きる |
 //! |---|---|
@@ -24,8 +26,7 @@
 //! LLM も I/O も使わない（DESIGN 原則 1）。
 
 use task_core::{
-    Milestone, MilestoneId, MilestoneStatus, Project, ProjectId, ProjectStatus, Status, TaskStore,
-    Trigger,
+    MilestoneId, MilestoneStatus, Project, ProjectId, ProjectStatus, Status, TaskStore, Trigger,
 };
 use time::OffsetDateTime;
 
@@ -42,14 +43,6 @@ pub struct ProjectLifecycle {
     /// この操作の連鎖で `cancelled` になった途中目標の id（`cancel` 以外では空）。
     #[serde(default)]
     pub cancelled_milestones: Vec<MilestoneId>,
-}
-
-/// 途中目標の状態を変えたときの結果。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
-pub struct MilestoneLifecycle {
-    pub milestone: Milestone,
-    #[serde(default)]
-    pub cancelled_tasks: Vec<TaskRef>,
 }
 
 /// 中止の連鎖で 1 回に見るタスクの上限。案件のタスクは実機で数十〜数百件なので、
@@ -78,20 +71,6 @@ fn project_tasks(store: &dyn TaskStore, id: ProjectId) -> Result<Vec<task_core::
         store,
         task_core::ListFilter {
             project_id: Some(id),
-            ..task_core::ListFilter::default()
-        },
-    )
-}
-
-/// その途中目標のタスク。
-fn milestone_tasks(
-    store: &dyn TaskStore,
-    id: MilestoneId,
-) -> Result<Vec<task_core::Task>, OpsError> {
-    tasks_matching(
-        store,
-        task_core::ListFilter {
-            milestone_id: Some(id),
             ..task_core::ListFilter::default()
         },
     )
@@ -129,24 +108,10 @@ fn project_or_404(store: &dyn TaskStore, id: ProjectId) -> Result<Project, OpsEr
     store.project_get(id)?.ok_or(OpsError::ProjectNotFound(id))
 }
 
-fn milestone_or_404(store: &dyn TaskStore, id: MilestoneId) -> Result<Milestone, OpsError> {
-    store
-        .milestone_get(id)?
-        .ok_or(OpsError::MilestoneNotFound(id))
-}
-
 fn project_conflict(project: &Project, action: &str) -> OpsError {
     OpsError::InvalidLifecycle {
         subject: format!("project {}", project.id),
         context: format!("status={}", project.status.as_str()),
-        action: action.to_string(),
-    }
-}
-
-fn milestone_conflict(milestone: &Milestone, action: &str) -> OpsError {
-    OpsError::InvalidLifecycle {
-        subject: format!("milestone {}", milestone.id),
-        context: format!("status={}", milestone.status.as_str()),
         action: action.to_string(),
     }
 }
@@ -248,61 +213,136 @@ pub fn unarchive_project(
     })
 }
 
-// ---- 途中目標 ----
+// ---- task の subtree（ADR-0079 D13、Phase R5a）----
 
-/// `POST /milestones/{id}/cancel`。既に `cancelled` なら 409。
-pub fn cancel_milestone(
+/// `POST /tasks/{id}/pause|resume` の結果（API がそのまま返す）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
+pub struct TaskPauseResult {
+    /// 一時停止・再開した task（更新後）。
+    pub task: TaskRef,
+    /// 一時停止の時刻（RFC 3339）。`resume` の後は `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_at: Option<String>,
+    /// この操作で dispatch が止まる・戻る子孫（非終端のもの。`parent_id` と木の親の鎖。自分は含まない）。
+    #[serde(default)]
+    pub subtree: Vec<TaskRef>,
+}
+
+/// subtree を辿る上限（壊れた行で無限に辿らない。木は `max_depth = 3`、委譲は 5 段なので十分広い）。
+const SUBTREE_LIMIT: usize = 5_000;
+
+/// `root` の子孫（`parent_id` の鎖と、採用で `parent_id` を書き換えない木の子〈`tree.parent_unit`〉）。
+/// 自分は含まない。幅優先で、同じ task は 1 回だけ。
+fn descendants(
     store: &dyn TaskStore,
-    id: MilestoneId,
-) -> Result<MilestoneLifecycle, OpsError> {
-    let milestone = milestone_or_404(store, id)?;
-    if !milestone_is_cancellable(milestone.status) {
-        return Err(milestone_conflict(&milestone, "cancelled"));
+    root: &task_core::Task,
+) -> Result<Vec<task_core::Task>, OpsError> {
+    let tree_members = match root.tree.as_ref() {
+        Some(tree) => store.tree_tasks(tree.root_id)?,
+        None => Vec::new(),
+    };
+    let mut seen = std::collections::HashSet::from([root.id]);
+    let mut queue = std::collections::VecDeque::from([root.id]);
+    let mut out = Vec::new();
+    while let Some(id) = queue.pop_front() {
+        let mut next = store.children(id)?;
+        next.extend(
+            tree_members
+                .iter()
+                .filter(|t| {
+                    t.tree
+                        .as_ref()
+                        .and_then(|tree| tree.parent_unit.as_ref())
+                        .is_some_and(|u| u.task_id == id)
+                })
+                .cloned(),
+        );
+        for child in next {
+            if out.len() >= SUBTREE_LIMIT || !seen.insert(child.id) {
+                continue;
+            }
+            queue.push_back(child.id);
+            out.push(child);
+        }
     }
-    let cancelled_tasks = cancel_tasks(
-        store,
-        milestone_tasks(store, id)?,
-        Trigger::MilestoneCancelled,
+    Ok(out)
+}
+
+fn task_conflict(task: &task_core::Task, action: &str) -> OpsError {
+    OpsError::InvalidLifecycle {
+        subject: format!("task {}", task.id),
+        context: format!(
+            "status={} paused={}",
+            crate::view::status_key(task.status),
+            task.paused_at.is_some()
+        ),
+        action: action.to_string(),
+    }
+}
+
+fn set_paused(
+    store: &dyn TaskStore,
+    task: &task_core::Task,
+    paused_at: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+) -> Result<TaskPauseResult, OpsError> {
+    let mut next = task.clone();
+    next.paused_at = paused_at;
+    next.updated_at = now;
+    // `status` / `attempts` / `lease` はストアがトランザクションの中で読み直した値で上書きする（編集と同じ。
+    // 走っている run のリースを壊さない）。
+    let updated = store.update_task(
+        &next,
+        task_core::Event::Edited {
+            fields: vec!["paused_at".to_string()],
+            by: "human".to_string(),
+        },
     )?;
-    store.milestone_set_lifecycle(id, MilestoneStatus::Cancelled, Some(None))?;
-    Ok(MilestoneLifecycle {
-        milestone: milestone_or_404(store, id)?,
-        cancelled_tasks,
+    let subtree = descendants(store, &updated)?
+        .iter()
+        .filter(|t| !t.status.is_terminal())
+        .map(task_ref)
+        .collect();
+    Ok(TaskPauseResult {
+        task: task_ref(&updated),
+        paused_at: updated.paused_at.map(crate::view::to_rfc3339),
+        subtree,
     })
 }
 
-/// `POST /milestones/{id}/pause`。`cancelled` と既に `paused` は 409。
-pub fn pause_milestone(
+/// `POST /tasks/{id}/pause`（ADR-0079 D13、Phase R5a）: task の **subtree を一時停止**する。
+///
+/// - 自分に `paused_at` を入れ、`Event::Edited{fields: ["paused_at"], by: "human"}` を残す（状態機械は触らない。
+///   replay の状態・attempts は変わらない）。子孫には書かない: `TaskStore::ready_tasks` が祖先を辿って見るので、
+///   一時停止の後に作られた子（計画の unit から daemon が作る子 task、委譲の子）も止まる。
+/// - **走っている run は終わるまで走る**（案件の一時停止〈ADR-0044 D6〉と同じ意味）。その後 task が `ready` に戻っても
+///   dispatch されず、`running` の task の並列 WU の 2 本目以降も起きない（`TaskStore::halted_by_pause`）。
+///   `reviewing` の最終レビューと人の操作（回答・承認・中止）は止めない。
+/// - 終端の task・既に一時停止中・対話（止めると人が秘書と話せなくなる）は 409。
+pub fn pause_task(
     store: &dyn TaskStore,
-    id: MilestoneId,
-) -> Result<MilestoneLifecycle, OpsError> {
-    let milestone = milestone_or_404(store, id)?;
-    if milestone.status == MilestoneStatus::Paused || milestone.status.is_terminal() {
-        return Err(milestone_conflict(&milestone, "paused"));
+    id: task_core::TaskId,
+    now: OffsetDateTime,
+) -> Result<TaskPauseResult, OpsError> {
+    let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+    if task.status.is_terminal() || task.paused_at.is_some() || task_core::is_conversation(&task) {
+        return Err(task_conflict(&task, "paused"));
     }
-    store.milestone_set_lifecycle(id, MilestoneStatus::Paused, Some(Some(milestone.status)))?;
-    Ok(MilestoneLifecycle {
-        milestone: milestone_or_404(store, id)?,
-        cancelled_tasks: Vec::new(),
-    })
+    set_paused(store, &task, Some(now), now)
 }
 
-/// `POST /milestones/{id}/resume`。`paused` でなければ 409。戻り先は `paused_from`
-/// （無ければ `in_progress`）。
-pub fn resume_milestone(
+/// `POST /tasks/{id}/resume`（ADR-0079 D13、Phase R5a）: `pause_task` を戻す（`paused_at` を消す）。
+/// 一時停止中でなければ 409（終端でも、一時停止中なら消せる）。祖先がまだ一時停止中なら子孫は止まったまま。
+pub fn resume_task(
     store: &dyn TaskStore,
-    id: MilestoneId,
-) -> Result<MilestoneLifecycle, OpsError> {
-    let milestone = milestone_or_404(store, id)?;
-    if milestone.status != MilestoneStatus::Paused {
-        return Err(milestone_conflict(&milestone, "resumed"));
+    id: task_core::TaskId,
+    now: OffsetDateTime,
+) -> Result<TaskPauseResult, OpsError> {
+    let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+    if task.paused_at.is_none() {
+        return Err(task_conflict(&task, "resumed"));
     }
-    let back = milestone.paused_from.unwrap_or(MilestoneStatus::InProgress);
-    store.milestone_set_lifecycle(id, back, Some(None))?;
-    Ok(MilestoneLifecycle {
-        milestone: milestone_or_404(store, id)?,
-        cancelled_tasks: Vec::new(),
-    })
+    set_paused(store, &task, None, now)
 }
 
 #[cfg(test)]
@@ -348,6 +388,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let task = Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),
@@ -443,31 +484,23 @@ mod tests {
     }
 
     #[test]
-    fn the_cascade_reason_says_which_level_cancelled_the_task() {
+    fn the_cascade_reason_says_the_project_cancelled_the_task() {
         let store = store();
         let project = a_project(&store, ProjectStatus::Active);
-        let milestone = store
-            .milestone_create(project.id, "途中", "", MilestoneStatus::InProgress)
-            .unwrap_or_else(|e| panic!("{e}"));
         let by_project = a_task(&store, Some(project.id), None, Status::Ready);
-        let by_milestone = a_task(&store, Some(project.id), Some(milestone.id), Status::Ready);
 
-        cancel_milestone(&store, milestone.id).unwrap_or_else(|e| panic!("{e}"));
         cancel_project(&store, project.id).unwrap_or_else(|e| panic!("{e}"));
 
-        let reasons = |id| {
-            store
-                .events_for(id)
-                .unwrap_or_else(|e| panic!("{e}"))
-                .into_iter()
-                .filter_map(|(_, e)| match e {
-                    task_core::Event::Transitioned { reason, .. } => Some(reason),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        };
-        assert!(reasons(by_milestone.id).contains(&"milestone_cancelled".to_string()));
-        assert!(reasons(by_project.id).contains(&"project_cancelled".to_string()));
+        let reasons = store
+            .events_for(by_project.id)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .into_iter()
+            .filter_map(|(_, e)| match e {
+                task_core::Event::Transitioned { reason, .. } => Some(reason),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(reasons.contains(&"project_cancelled".to_string()));
     }
 
     #[test]
@@ -491,24 +524,6 @@ mod tests {
             resume_project(&store, project.id),
             Err(OpsError::InvalidLifecycle { .. })
         ));
-    }
-
-    #[test]
-    fn milestone_pause_and_resume_round_trip() {
-        let store = store();
-        let project = a_project(&store, ProjectStatus::Active);
-        let milestone = store
-            .milestone_create(project.id, "途中", "", MilestoneStatus::InProgress)
-            .unwrap_or_else(|e| panic!("{e}"));
-        let paused = pause_milestone(&store, milestone.id).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(paused.milestone.status, MilestoneStatus::Paused);
-        assert_eq!(
-            paused.milestone.paused_from,
-            Some(MilestoneStatus::InProgress)
-        );
-        let resumed = resume_milestone(&store, milestone.id).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(resumed.milestone.status, MilestoneStatus::InProgress);
-        assert_eq!(resumed.milestone.paused_from, None);
     }
 
     #[test]
@@ -593,7 +608,14 @@ mod tests {
         let inside = a_task(&store, Some(project.id), Some(milestone.id), Status::Ready);
         let outside = a_task(&store, Some(project.id), None, Status::Ready);
 
-        pause_milestone(&store, milestone.id).unwrap_or_else(|e| panic!("{e}"));
+        // ADR-0079 D13（Phase R5a）: 新しく paused にする入口は無いが、既存の paused の行の抑止は残る。
+        store
+            .milestone_set_lifecycle(
+                milestone.id,
+                MilestoneStatus::Paused,
+                Some(Some(MilestoneStatus::InProgress)),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
         let ready: Vec<_> = store
             .ready_tasks(100)
             .unwrap_or_else(|e| panic!("{e}"))
@@ -604,37 +626,6 @@ mod tests {
         assert!(ready.contains(&outside.id));
     }
 
-    /// 終端の途中目標（達成・再設計・中止済み）は `cancel` も `pause` もできない（409）。
-    /// GUI はこの規則でボタンを出し分ける（`gui/app/lib/lifecycle.ts`）。
-    #[test]
-    fn terminal_milestones_reject_cancel_and_pause() {
-        let store = store();
-        let project = a_project(&store, ProjectStatus::Active);
-        for status in [
-            MilestoneStatus::Reached,
-            MilestoneStatus::Redesigned,
-            MilestoneStatus::Cancelled,
-        ] {
-            let milestone = store
-                .milestone_create(project.id, "終わった", "", status)
-                .unwrap_or_else(|e| panic!("{e}"));
-            assert!(
-                matches!(
-                    cancel_milestone(&store, milestone.id),
-                    Err(OpsError::InvalidLifecycle { .. })
-                ),
-                "cancel {status:?}"
-            );
-            assert!(
-                matches!(
-                    pause_milestone(&store, milestone.id),
-                    Err(OpsError::InvalidLifecycle { .. })
-                ),
-                "pause {status:?}"
-            );
-        }
-    }
-
     #[test]
     fn unknown_ids_are_not_found() {
         let store = store();
@@ -643,8 +634,177 @@ mod tests {
             Err(OpsError::ProjectNotFound(_))
         ));
         assert!(matches!(
-            pause_milestone(&store, MilestoneId::new()),
-            Err(OpsError::MilestoneNotFound(_))
+            pause_task(&store, task_core::TaskId::new(), OffsetDateTime::now_utc()),
+            Err(OpsError::NotFound(_))
+        ));
+    }
+
+    fn ready_ids(s: &SqliteStore) -> Vec<task_core::TaskId> {
+        s.ready_tasks(100)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
+    }
+
+    fn rewrite(store: &dyn TaskStore, task: &Task, field: &str) -> Task {
+        store
+            .update_task(
+                task,
+                task_core::Event::Edited {
+                    fields: vec![field.into()],
+                    by: "test".into(),
+                },
+            )
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    fn child_of(store: &dyn TaskStore, parent: &Task, status: Status) -> Task {
+        let mut child = a_task(store, parent.project_id, None, status);
+        child.parent_id = Some(parent.id);
+        rewrite(store, &child, "parent_id")
+    }
+
+    /// ADR-0079 D13（Phase R5a）: root の pause で子孫（子・孫・採用で `parent_id` の無い木の子）が dispatch されず、
+    /// resume で戻る。状態機械は触らない（`ready` のまま、replay の差分 0）。兄弟の root は止まらない。
+    #[test]
+    fn subtree_pause_stops_descendants() {
+        let store = store();
+        let project = a_project(&store, ProjectStatus::Active);
+        let root = a_task(&store, Some(project.id), None, Status::Running);
+        let child = child_of(&store, &root, Status::Ready);
+        let grandchild = child_of(&store, &child, Status::Ready);
+        // 木の子（採用: `parent_id` は無く、`tree.parent_unit` だけが root を指す）。
+        let mut adopted = a_task(&store, Some(project.id), None, Status::Ready);
+        adopted.tree = Some(task_core::TreeInfo {
+            root_id: root.id,
+            depth: 2,
+            parent_unit: Some(task_core::ParentUnit {
+                task_id: root.id,
+                plan_id: "p".into(),
+                unit_key: "u".into(),
+                stage: "s".into(),
+                attempt: 1,
+            }),
+            base_commit: None,
+        });
+        let adopted = rewrite(&store, &adopted, "tree");
+        let sibling = a_task(&store, Some(project.id), None, Status::Ready);
+        let before = ready_ids(&store);
+        for t in [&child, &grandchild, &adopted, &sibling] {
+            assert!(before.contains(&t.id));
+        }
+
+        let now = OffsetDateTime::now_utc();
+        let paused = pause_task(&store, root.id, now).unwrap_or_else(|e| panic!("{e}"));
+        assert!(paused.paused_at.is_some());
+        let subtree: Vec<_> = paused.subtree.iter().map(|t| t.id).collect();
+        assert!(subtree.contains(&child.id), "{subtree:?}");
+        assert!(subtree.contains(&grandchild.id), "{subtree:?}");
+        let ready = ready_ids(&store);
+        assert!(!ready.contains(&child.id), "child must not dispatch");
+        assert!(
+            !ready.contains(&grandchild.id),
+            "grandchild must not dispatch"
+        );
+        assert!(!ready.contains(&adopted.id), "tree child via parent_unit");
+        assert!(
+            ready.contains(&sibling.id),
+            "an independent root keeps running"
+        );
+        // 走っている root は running のまま（run は終わるまで走る）。並列 WU の 2 本目以降の判定は止まっている。
+        let root_now = store
+            .get(root.id)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("root"));
+        assert_eq!(root_now.status, Status::Running);
+        assert!(
+            store
+                .halted_by_pause(&root_now)
+                .unwrap_or_else(|e| panic!("{e}"))
+        );
+        assert!(
+            !store
+                .halted_by_pause(&sibling)
+                .unwrap_or_else(|e| panic!("{e}"))
+        );
+
+        // 二重の一時停止は 409。子は自分では一時停止していないので resume は 409（祖先が止めている）。
+        assert!(matches!(
+            pause_task(&store, root.id, now),
+            Err(OpsError::InvalidLifecycle { .. })
+        ));
+        assert!(matches!(
+            resume_task(&store, child.id, now),
+            Err(OpsError::InvalidLifecycle { .. })
+        ));
+
+        let resumed = resume_task(&store, root.id, now).unwrap_or_else(|e| panic!("{e}"));
+        assert!(resumed.paused_at.is_none());
+        let ready = ready_ids(&store);
+        for t in [&child, &grandchild, &adopted, &sibling] {
+            assert!(ready.contains(&t.id));
+        }
+        assert!(matches!(
+            resume_task(&store, root.id, now),
+            Err(OpsError::InvalidLifecycle { .. })
+        ));
+
+        // events が正本: pause / resume は状態・attempts を変えない（replay の差分は 0。`a_task` は `insert` で
+        // 作るので `Created` の無い行の差分は試験の組み立ての都合として除く）。
+        let report = crate::replay::replay(&store).unwrap_or_else(|e| panic!("{e}"));
+        let real: Vec<_> = report
+            .mismatches
+            .iter()
+            .filter(|m| m.replayed != "<no Created event>")
+            .collect();
+        assert!(real.is_empty(), "{real:?}");
+        let edited = store
+            .events_for(root.id)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .into_iter()
+            .filter(|(_, e)| {
+                matches!(e, task_core::Event::Edited { fields, by } if fields == &["paused_at".to_string()] && by == "human")
+            })
+            .count();
+        assert_eq!(
+            edited, 2,
+            "pause と resume が Edited{{paused_at}} を 1 件ずつ残す"
+        );
+    }
+
+    /// 案件の pause は root task の子孫にも効く（子が `project_id` を持たなくても祖先の案件で止まる）。
+    #[test]
+    fn project_pause_applies_to_root_task_subtrees() {
+        let store = store();
+        let project = a_project(&store, ProjectStatus::Active);
+        let root = a_task(&store, Some(project.id), None, Status::Running);
+        let mut orphan_child = a_task(&store, None, None, Status::Ready);
+        orphan_child.parent_id = Some(root.id);
+        let orphan_child = rewrite(&store, &orphan_child, "parent_id");
+        assert!(ready_ids(&store).contains(&orphan_child.id));
+        pause_project(&store, project.id).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!ready_ids(&store).contains(&orphan_child.id));
+        resume_project(&store, project.id).unwrap_or_else(|e| panic!("{e}"));
+        assert!(ready_ids(&store).contains(&orphan_child.id));
+    }
+
+    /// 終端・対話の task は一時停止できない（409）。
+    #[test]
+    fn terminal_and_conversation_tasks_cannot_be_paused() {
+        let store = store();
+        let now = OffsetDateTime::now_utc();
+        let done = a_task(&store, None, None, Status::Done);
+        assert!(matches!(
+            pause_task(&store, done.id, now),
+            Err(OpsError::InvalidLifecycle { .. })
+        ));
+        let mut conv = a_task(&store, None, None, Status::Ready);
+        conv.conversation = Some(task_core::MessageId::new());
+        let conv = rewrite(&store, &conv, "conversation");
+        assert!(matches!(
+            pause_task(&store, conv.id, now),
+            Err(OpsError::InvalidLifecycle { .. })
         ));
     }
 }

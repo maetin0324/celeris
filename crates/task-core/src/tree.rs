@@ -2112,6 +2112,7 @@ mod tests {
         let now = time::OffsetDateTime::UNIX_EPOCH;
         Task {
             tree: None,
+            paused_at: None,
             id: TaskId::new(),
             parent_id: None,
             kind: TaskKind::Execute,

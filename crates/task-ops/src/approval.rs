@@ -221,6 +221,7 @@ mod tests {
         let id = TaskId::new();
         let task = Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

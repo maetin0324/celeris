@@ -1,9 +1,11 @@
-//! GUI 監査対応 Phase 29: `POST /projects/{id}/plan`（ADR-0033 D4 追記「分解は人が
-//! `POST /projects/{id}/plan` で起こす」）。
+//! ADR-0079 D13 / D12 / U-R6 / U-R8（Phase R5a）: 案件モデルの変更の API。
 //!
-//! 見るもの: 正しい `goal` / `project_id` / `assignee` で plan タスクが作られること、案件・途中目標の
-//! 状態遷移、管理系の 401（トークンあり構成と `token_file` 未設定構成の両方）、404（案件が無い）、
-//! 422（案件に属さない途中目標）。
+//! 見るもの:
+//! - 案件計画・途中目標の書き込み・`POST /plans` が 410（`urn:celeris:problem:removed_by_adr_0079`）、`auto_advance` の
+//!   書き込みが 422、読み取り（`GET /projects/{id}`）は動く（`project_plan_endpoints_are_gone`）。
+//! - 途中目標は既定で隠れ、`?include_frozen=true` で読み取り専用で返る。状態は変わらない。
+//! - `is_root_task` が案件の task・一覧・詳細に出る（root / 子 / 対話）。
+//! - `POST /tasks/{id}/pause|resume`（subtree の一時停止）と、`POST /tasks` の `stages_hint`。
 
 mod common;
 
@@ -20,6 +22,14 @@ fn g(path: &str) -> axum::http::Request<axum::body::Body> {
 
 fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
     post_json_with(
+        path,
+        body,
+        &[("authorization", format!("Bearer {TOKEN}").as_str())],
+    )
+}
+
+fn pa(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
+    patch_json_with(
         path,
         body,
         &[("authorization", format!("Bearer {TOKEN}").as_str())],
@@ -55,735 +65,380 @@ async fn create_project(app: &axum::Router, title: &str, request: &str) -> Strin
     resp.json()["id"].as_str().expect("id").to_string()
 }
 
+fn assert_gone(resp: &Resp) {
+    let body = assert_problem(resp, 410, "removed_by_adr_0079");
+    assert_eq!(body["type"], "urn:celeris:problem:removed_by_adr_0079");
+    assert_eq!(body["adr"], "ADR-0079");
+    assert!(
+        body["instead"].as_str().is_some_and(|s| !s.is_empty()),
+        "{body}"
+    );
+}
+
+/// 受け入れ (a): 消した API がすべて 410 / 422 を返し、`GET /projects/{id}` は読める。行は消えず状態も変わらない。
 #[tokio::test]
-async fn plan_creates_a_ready_plan_task_with_the_goal_project_and_secretary_assignee() {
+async fn project_plan_endpoints_are_gone() {
     let env = env_with_token();
     let app = env.router();
     seed_secretary(&app).await;
     let project_id = create_project(&app, "Pluvio 新テーマ", "隣接分野を探して欲しい").await;
-
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/plan"),
-            &json!({"note": "急がなくてよい"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
-    let task_id = resp.json()["task_id"]
-        .as_str()
-        .expect("task_id")
-        .to_string();
-
-    let task = env
+    let pid: task_core::ProjectId = project_id.parse().expect("project id");
+    // 凍結する既存の途中目標（本番の 25 行の代わり）。
+    let frozen = env
         .store
-        .get(task_id.parse().expect("task id"))
-        .expect("get")
-        .expect("some");
-    assert_eq!(task.kind, TaskKind::Plan);
-    assert_eq!(task.status, Status::Ready, "その場で走らせる");
-    assert_eq!(
-        task.project_id.map(|p| p.to_string()),
-        Some(project_id.clone())
-    );
-    assert_eq!(task.assignee.as_deref(), Some("secretary"));
-    assert!(task.objective.contains("隣接分野を探して欲しい"));
-    assert!(task.objective.contains("急がなくてよい"));
+        .milestone_create(pid, "隣接領域の調査", "", MilestoneStatus::InProgress)
+        .expect("milestone");
+    let mid = frozen.id.to_string();
+    let tasks_before = env.store.list(None).expect("list").len();
 
-    // proposed だった案件が active になる。
-    let project = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    assert_eq!(project["project"]["status"], "active");
-}
-
-#[tokio::test]
-async fn plan_with_a_milestone_marks_it_in_progress_and_carries_it_on_the_task() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-    let milestone: Value = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/milestones"),
-            &json!({"title": "隣接領域の調査", "status": "approved"}),
-        ),
-    )
-    .await
-    .json();
-    let milestone_id = milestone["id"].as_str().expect("id").to_string();
-
+    // 案件計画（両 mode）と提案の決定。
+    for body in [
+        json!({}),
+        json!({"mode": "decompose", "note": "急がなくてよい"}),
+        json!({"mode": "milestones"}),
+    ] {
+        let resp = send(
+            &app,
+            p(&format!("/api/v1/projects/{project_id}/plan"), &body),
+        )
+        .await;
+        assert_gone(&resp);
+        assert!(
+            resp.json()["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("案件は計画を持たない"))
+        );
+    }
     let resp = send(
         &app,
         p(
-            &format!("/api/v1/projects/{project_id}/plan"),
-            &json!({"milestone_id": milestone_id}),
+            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
+            &json!({"decision": "approve"}),
         ),
     )
     .await;
-    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
-    let task_id: task_core::TaskId = resp.json()["task_id"]
-        .as_str()
-        .expect("task_id")
-        .parse()
-        .expect("id");
-    let task = env.store.get(task_id).expect("get").expect("some");
-    assert_eq!(
-        task.milestone_id.map(|m| m.to_string()),
-        Some(milestone_id.clone())
-    );
-    assert!(task.objective.contains("隣接領域の調査"));
+    assert_gone(&resp);
 
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    let updated = detail["milestones"]
-        .as_array()
-        .expect("milestones")
-        .iter()
-        .find(|m| m["id"] == milestone_id)
-        .expect("milestone");
-    assert_eq!(updated["status"], "in_progress");
-}
-
-/// 偽プランナーの出力から作られる子は、親（plan タスク）と同じ案件に属する（`materialize` が
-/// `project_id` / `milestone_id` を継ぐ。ADR-0033 D2 の監査 D-3、Phase 23 で確定済み）。
-#[tokio::test]
-async fn children_materialized_from_the_plan_output_stay_in_the_same_project() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-    let plan_id: task_core::TaskId = send(
-        &app,
-        p(&format!("/api/v1/projects/{project_id}/plan"), &json!({})),
-    )
-    .await
-    .json()["task_id"]
-        .as_str()
-        .expect("task_id")
-        .parse()
-        .expect("id");
-    let plan_task = env.store.get(plan_id).expect("get").expect("some");
-
-    let plan_output = task_core::PlanOutput {
-        tasks: vec![task_core::NewTask {
-            harness: None,
-            mode: Default::default(),
-            skills: Vec::new(),
-            repos: Vec::new(),
-            title: "a".into(),
-            objective: "b".into(),
-            acceptance: vec![task_core::Criterion {
-                text: "c".into(),
-                check: task_core::Check::Human,
-            }],
-            depends_on: vec![],
-            kind: task_core::NewTaskKind::Execute,
-            tier: None,
-            role: None,
-            genre: None,
-            assignee: None,
-            workspace: None,
-            category: None,
-            labels: Vec::new(),
-            partial_ok: None,
-        }],
-    };
-    let children = task_core::plan::materialize(
-        &plan_task,
-        &plan_output,
-        &[],
-        &[],
-        &[],
-        task_core::WorkspaceContext::default(),
-        time::OffsetDateTime::now_utc(),
-    );
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].project_id, plan_task.project_id);
-    assert_eq!(
-        children[0].project_id.map(|p| p.to_string()),
-        Some(project_id)
-    );
-}
-
-/// ADR-0074 D3.3（Phase F4a (b)）: `mode = "milestones"` は `MILESTONES_PLAN_LABEL` の印が付いた
-/// Plan タスクを作る（従来の分解タスクとは別物。既存の途中目標の文脈は goal に含めない）。
-#[tokio::test]
-async fn milestones_mode_labels_the_plan_task_and_ignores_existing_milestones() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "Pluvio 新テーマ", "案件全体の計画を作って欲しい").await;
-    let milestone: Value = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/milestones"),
-            &json!({"title": "旧い途中目標", "status": "approved"}),
-        ),
-    )
-    .await
-    .json();
-
+    // 途中目標の書き込み（作成・状態・判定・中止・一時停止・再開）。
     let resp = send(
         &app,
         p(
-            &format!("/api/v1/projects/{project_id}/plan"),
-            &json!({"mode": "milestones", "note": "急ぎで"}),
+            &format!("/api/v1/projects/{project_id}/milestones"),
+            &json!({"title": "新しい途中目標"}),
         ),
     )
     .await;
-    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
-    let task_id: task_core::TaskId = resp.json()["task_id"]
-        .as_str()
-        .expect("task_id")
-        .parse()
-        .expect("id");
-    let task = env.store.get(task_id).expect("get").expect("some");
-    assert_eq!(task.kind, TaskKind::Plan);
-    assert_eq!(task.status, Status::Ready);
-    assert_eq!(
-        task.labels,
-        vec![task_core::MILESTONES_PLAN_LABEL.to_string()]
-    );
-    assert!(task_core::is_milestones_plan_task(&task));
-    assert!(task.objective.contains("急ぎで"));
-    assert!(
-        !task.objective.contains("旧い途中目標"),
-        "{}",
-        task.objective
-    );
-    assert_eq!(task.milestone_id, None);
-
-    // 旧い途中目標は変わらない（milestones モードは案件全体を一から設計する）。
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    let unchanged = detail["milestones"]
-        .as_array()
-        .expect("milestones")
-        .iter()
-        .find(|m| m["id"] == milestone["id"])
-        .expect("milestone");
-    assert_eq!(unchanged["status"], "approved");
-}
-
-/// ADR-0074 D3.4（Phase F4b (e)）: 同じ案件に案件計画 run が動いている間の二重の
-/// `POST /plan {mode: milestones}` は 409 `project_plan_in_flight`。`PATCH /projects/{id}` の
-/// `auto_advance` は往復する。
-#[tokio::test]
-async fn a_second_milestones_plan_request_is_409_and_auto_advance_round_trips() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "二重", "案件全体の計画を作って欲しい").await;
-    let first = send(
+    assert_gone(&resp);
+    let resp = send(
+        &app,
+        pa(
+            &format!("/api/v1/milestones/{mid}"),
+            &json!({"status": "reached"}),
+        ),
+    )
+    .await;
+    assert_gone(&resp);
+    let resp = send(
         &app,
         p(
-            &format!("/api/v1/projects/{project_id}/plan"),
-            &json!({"mode": "milestones"}),
+            &format!("/api/v1/milestones/{mid}/decide"),
+            &json!({"decision": "ok"}),
         ),
     )
     .await;
-    assert_eq!(first.status.as_u16(), 202, "{}", first.text());
-    let second = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/plan"),
-            &json!({"mode": "milestones"}),
-        ),
-    )
-    .await;
-    assert_eq!(second.status.as_u16(), 409, "{}", second.text());
-    assert!(
-        second.text().contains("project_plan_in_flight"),
-        "{}",
-        second.text()
-    );
+    assert_gone(&resp);
+    for action in ["cancel", "pause", "resume"] {
+        let resp = send(
+            &app,
+            p(&format!("/api/v1/milestones/{mid}/{action}"), &json!({})),
+        )
+        .await;
+        assert_gone(&resp);
+    }
 
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    assert_eq!(detail["project"]["auto_advance"], false);
-    let patched = send(
+    // ADR-0028 の `POST /plans`（U-R6）。
+    let resp = send(&app, p("/api/v1/plans", &json!({"goal": "分解して"}))).await;
+    assert_gone(&resp);
+
+    // `auto_advance` の書き込みは 422（他の欄と一緒でも）。
+    let resp = send(
         &app,
-        patch_json_with(
+        pa(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"auto_advance": true}),
-            &[("authorization", format!("Bearer {TOKEN}").as_str())],
         ),
     )
     .await;
-    assert_eq!(patched.status.as_u16(), 200, "{}", patched.text());
-    assert_eq!(patched.json()["auto_advance"], true);
-}
-
-/// `mode = "milestones"` に `milestone_id` を添えるのは 422（案件全体を計画する run に、単一の
-/// 途中目標を紐づける意味が無い）。
-#[tokio::test]
-async fn milestones_mode_with_a_milestone_id_is_422() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-    let milestone: Value = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/milestones"),
-            &json!({"title": "m"}),
-        ),
-    )
-    .await
-    .json();
-
+    let body = assert_problem(&resp, 422, "validation");
+    assert!(body.to_string().contains("auto_advance"), "{body}");
     let resp = send(
         &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/plan"),
-            &json!({"mode": "milestones", "milestone_id": milestone["id"]}),
+        pa(
+            &format!("/api/v1/projects/{project_id}"),
+            &json!({"auto_advance": false, "title": "変えない"}),
         ),
     )
     .await;
-    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
-}
+    assert_problem(&resp, 422, "validation");
 
-#[tokio::test]
-async fn plan_on_an_unknown_project_is_404_and_a_foreign_milestone_is_422() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-
-    let resp = send(
-        &app,
-        p(
-            "/api/v1/projects/01ARZ3NDEKTSV4RRFFQ69G5FAV/plan",
-            &json!({}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
-
-    let project_id = create_project(&app, "t", "r").await;
-    let other_id = create_project(&app, "u", "s").await;
-    let other_milestone: Value = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{other_id}/milestones"),
-            &json!({"title": "別案件の目標"}),
-        ),
-    )
-    .await
-    .json();
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/plan"),
-            &json!({"milestone_id": other_milestone["id"]}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
-}
-
-fn plan_spec_with_one_milestone() -> task_core::ProjectPlanSpec {
-    task_core::ProjectPlanSpec {
-        schema: task_core::PROJECT_PLAN_SCHEMA.into(),
-        rationale: "1 段階で進める".into(),
-        milestones: vec![task_core::MilestoneSpec {
-            pause_after: None,
-            key: "survey".into(),
-            title: "調査".into(),
-            objective: "周辺調査".into(),
-            reach_criteria: "候補が出せた".into(),
-            acceptance: vec![
-                task_core::Criterion {
-                    text: "done".into(),
-                    check: task_core::Check::Human,
-                },
-                task_core::Criterion {
-                    text: "a".into(),
-                    check: task_core::Check::ArtifactExists {
-                        name: "report.md".into(),
-                    },
-                },
-            ],
-            depends_on: vec![],
-            genre: None,
-            skills: vec![],
-            repos: vec![],
-            features: None,
-            execution: None,
-        }],
-    }
-}
-
-/// ADR-0074 D3.5（Phase F4b (h)）: `GET /projects/{id}` の `project_plan` は、提案中は `pending`（節点・
-/// rationale・版）、承認後は `current_version` と節点（途中目標・Task の状態・進み・止まっている理由）。
-/// 案件計画の無い案件では省略。
-#[tokio::test]
-async fn project_detail_carries_the_plan_dag_and_the_pending_proposal() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    assert!(detail.get("project_plan").is_none(), "{detail}");
-
-    let pid: task_core::ProjectId = project_id.parse().expect("project id");
-    let project = env.store.project_get(pid).expect("get").expect("some");
-    let started = task_ops::project_plan::start_milestones(
-        &env.store,
-        &project,
-        None,
-        &[],
-        &[],
-        time::OffsetDateTime::now_utc(),
-    )
-    .expect("start_milestones");
-    let validated = task_core::validate_project_plan(
-        &plan_spec_with_one_milestone(),
-        task_core::ProjectPlanLimits::default(),
-        &std::collections::BTreeSet::new(),
-    )
-    .expect("valid plan");
-    task_ops::project_plan::propose(
-        &env.store,
-        &started.task,
-        &project,
-        &validated,
-        &[],
-        &[],
-        time::OffsetDateTime::now_utc(),
-    )
-    .expect("propose");
-
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    let plan = &detail["project_plan"];
-    assert!(plan.get("current_version").is_none(), "{plan}");
-    assert_eq!(plan["nodes"].as_array().map(Vec::len), Some(0));
-    assert_eq!(plan["pending"]["version"], 1);
-    assert_eq!(plan["pending"]["rationale"], "1 段階で進める");
-    assert_eq!(plan["pending"]["nodes"][0]["key"], "survey");
-    assert_eq!(plan["pending"]["nodes"][0]["task_status"], "draft");
-    assert_eq!(plan["pending"]["nodes"][0]["milestone_status"], "proposed");
-
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
-            &json!({"decision": "approve"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    let plan = &detail["project_plan"];
-    assert_eq!(plan["current_version"], 1);
-    assert!(plan.get("pending").is_none(), "{plan}");
-    let node = &plan["nodes"][0];
-    assert_eq!(node["title"], "調査");
-    assert_eq!(node["task_status"], "ready");
-    assert_eq!(node["milestone_status"], "approved");
-    assert_eq!(node["work_units_total"], 0);
-    assert_eq!(node["children_total"], 0);
-}
-
-/// ADR-0074 D3.3（Phase F4a (c)）: `decide approve` は提案の途中目標を `approved`、Task を `ready`
-/// にする。`reject` に `note` が無ければ 422。未知の版は 404、決定済みの版へもう一度は 409。
-#[tokio::test]
-async fn decide_approve_readies_the_dag_reject_needs_a_note_and_replays_are_rejected() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-    let pid: task_core::ProjectId = project_id.parse().expect("project id");
-    let project = env.store.project_get(pid).expect("get").expect("some");
-
-    let started = task_ops::project_plan::start_milestones(
-        &env.store,
-        &project,
-        None,
-        &[],
-        &[],
-        time::OffsetDateTime::now_utc(),
-    )
-    .expect("start_milestones");
-    let validated = task_core::validate_project_plan(
-        &plan_spec_with_one_milestone(),
-        task_core::ProjectPlanLimits::default(),
-        &std::collections::BTreeSet::new(),
-    )
-    .expect("valid plan");
-    task_ops::project_plan::propose(
-        &env.store,
-        &started.task,
-        &project,
-        &validated,
-        &[],
-        &[],
-        time::OffsetDateTime::now_utc(),
-    )
-    .expect("propose");
-
-    // reject に note が無ければ 422。
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
-            &json!({"decision": "reject"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
-
-    // 未知の版は 404。
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/project-plan/2/decide"),
-            &json!({"decision": "approve"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
-
-    // approve は 202 で、途中目標が approved・Task が ready になる。
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
-            &json!({"decision": "approve"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
-    let body = resp.json();
-    assert_eq!(body["milestones"].as_array().expect("milestones").len(), 1);
-    let task_id: task_core::TaskId = body["tasks"][0]
-        .as_str()
-        .expect("task id")
-        .parse()
-        .expect("id");
-    let task = env.store.get(task_id).expect("get").expect("some");
-    assert_eq!(task.status, Status::Ready);
-    let milestones = env.store.milestone_list(pid).expect("list");
-    assert_eq!(milestones[0].status, MilestoneStatus::Approved);
-
-    // 決定済みの版へもう一度は 409。
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
-            &json!({"decision": "approve"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
-}
-
-/// `reject` は途中目標を `redesigned`、Task を `cancelled` にする。
-#[tokio::test]
-async fn decide_reject_redesigns_the_milestone_and_cancels_the_task() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-    let pid: task_core::ProjectId = project_id.parse().expect("project id");
-    let project = env.store.project_get(pid).expect("get").expect("some");
-
-    let started = task_ops::project_plan::start_milestones(
-        &env.store,
-        &project,
-        None,
-        &[],
-        &[],
-        time::OffsetDateTime::now_utc(),
-    )
-    .expect("start_milestones");
-    let validated = task_core::validate_project_plan(
-        &plan_spec_with_one_milestone(),
-        task_core::ProjectPlanLimits::default(),
-        &std::collections::BTreeSet::new(),
-    )
-    .expect("valid plan");
-    task_ops::project_plan::propose(
-        &env.store,
-        &started.task,
-        &project,
-        &validated,
-        &[],
-        &[],
-        time::OffsetDateTime::now_utc(),
-    )
-    .expect("propose");
-
-    let resp = send(
-        &app,
-        p(
-            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
-            &json!({"decision": "reject", "note": "スコープが違う"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
-    let body = resp.json();
-    let task_id: task_core::TaskId = body["tasks"][0]
-        .as_str()
-        .expect("task id")
-        .parse()
-        .expect("id");
-    let task = env.store.get(task_id).expect("get").expect("some");
-    assert_eq!(task.status, Status::Cancelled);
-    let milestones = env.store.milestone_list(pid).expect("list");
-    assert_eq!(milestones[0].status, MilestoneStatus::Redesigned);
-}
-
-#[tokio::test]
-async fn decide_endpoint_requires_a_token() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-
-    let resp = send(
-        &app,
-        post_json(
-            &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
-            &json!({"decision": "approve"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 401);
-}
-
-#[tokio::test]
-async fn admin_endpoints_require_a_token() {
-    let env = env_with_token();
-    let app = env.router();
-    seed_secretary(&app).await;
-    let project_id = create_project(&app, "t", "r").await;
-
+    // トークン無しは 410 ではなく 401（管理系のまま）。
     let resp = send(
         &app,
         post_json(&format!("/api/v1/projects/{project_id}/plan"), &json!({})),
     )
     .await;
-    assert_eq!(resp.status.as_u16(), 401);
+    assert_eq!(resp.status.as_u16(), 401, "{}", resp.text());
+
+    // 読み取りは動き、何も作られず、凍結した行の状態は変わらない。
+    let resp = send(&app, g(&format!("/api/v1/projects/{project_id}"))).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["project"]["title"], "Pluvio 新テーマ");
+    assert_eq!(resp.json()["project"]["auto_advance"], false);
+    let milestones = env.store.milestone_list(pid).expect("list");
+    assert_eq!(milestones.len(), 1);
+    assert_eq!(milestones[0].status, MilestoneStatus::InProgress);
+    assert_eq!(env.store.list(None).expect("list").len(), tasks_before);
 }
 
+/// U-R8: 途中目標の行は既定で隠れ（`milestones: []`、`milestones_frozen` は件数）、`?include_frozen=true` で返る。
 #[tokio::test]
-async fn admin_endpoints_are_401_even_without_a_configured_token() {
-    let env = TestEnv::new();
-    let app = env.router();
-
-    let resp = send(
-        &app,
-        post_json(
-            "/api/v1/projects/01ARZ3NDEKTSV4RRFFQ69G5FAV/plan",
-            &json!({}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 401);
-}
-
-// ---- ADR-0072「Phase F6 実装時の決定」P3: 案件の名前・説明（依頼文）を後から変える ----
-
-fn patch(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    patch_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-#[tokio::test]
-async fn patch_project_edits_title_and_request_and_validates_them() {
+async fn project_detail_hides_frozen_milestones_by_default() {
     let env = env_with_token();
     let app = env.router();
-    let project_id = create_project(&app, "BenchFS", "古い依頼文").await;
-
-    let resp = send(
-        &app,
-        patch(
-            &format!("/api/v1/projects/{project_id}"),
-            &json!({"title": "  BenchFS 国際会議フルペーパー化  ", "request": "新しい説明"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
-    let body = resp.json();
-    assert_eq!(body["title"], "BenchFS 国際会議フルペーパー化", "trimmed");
-    assert_eq!(body["request"], "新しい説明");
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    assert_eq!(detail["project"]["title"], "BenchFS 国際会議フルペーパー化");
-    assert_eq!(detail["project"]["request"], "新しい説明");
-
-    // 題名だけ（説明は変えない）。slug も同じ PATCH で変えられる（K-1）。
-    let resp = send(
-        &app,
-        patch(
-            &format!("/api/v1/projects/{project_id}"),
-            &json!({"title": "BenchFS paper", "slug": "benchfs-paper"}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
-    let body = resp.json();
-    assert_eq!(body["title"], "BenchFS paper");
-    assert_eq!(body["request"], "新しい説明");
-    assert_eq!(body["slug"], "benchfs-paper");
-
-    // 空（空白だけ）と長すぎるものは 422 で、何も変えない。
-    for bad in [
-        json!({"title": "   "}),
-        json!({"request": ""}),
-        json!({"title": "x".repeat(201)}),
-        json!({"request": "y".repeat(20_001)}),
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+    let pid: task_core::ProjectId = project_id.parse().expect("project id");
+    for (title, status) in [
+        ("済", MilestoneStatus::Reached),
+        ("途中", MilestoneStatus::InProgress),
+        ("承認済み", MilestoneStatus::Approved),
     ] {
-        let resp = send(&app, patch(&format!("/api/v1/projects/{project_id}"), &bad)).await;
-        assert_eq!(resp.status.as_u16(), 422, "{bad}: {}", resp.text());
+        env.store
+            .milestone_create(pid, title, "", status)
+            .expect("milestone");
     }
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
-        .await
-        .json();
-    assert_eq!(detail["project"]["title"], "BenchFS paper");
 
-    // 知らない欄は 400（`deny_unknown_fields`）、トークン無しは 401、無い案件は 404。
+    let hidden = send(&app, g(&format!("/api/v1/projects/{project_id}"))).await;
+    assert_eq!(hidden.status.as_u16(), 200, "{}", hidden.text());
+    let hidden = hidden.json();
+    assert_eq!(hidden["milestones"], json!([]));
+    assert_eq!(hidden["milestones_frozen"], 3);
+    assert!(hidden.get("project_plan").is_none());
+
+    let shown = send(
+        &app,
+        g(&format!(
+            "/api/v1/projects/{project_id}?include_frozen=true"
+        )),
+    )
+    .await
+    .json();
+    let titles: Vec<&str> = shown["milestones"]
+        .as_array()
+        .expect("milestones")
+        .iter()
+        .filter_map(|m| m["title"].as_str())
+        .collect();
+    assert_eq!(titles, vec!["済", "途中", "承認済み"]);
+    assert_eq!(shown["milestones_frozen"], 3);
+    assert_eq!(shown["milestones"][1]["status"], "in_progress");
+
+    // 明示の false も既定と同じ。知らない値は 400 系。
+    let explicit = send(
+        &app,
+        g(&format!(
+            "/api/v1/projects/{project_id}?include_frozen=false"
+        )),
+    )
+    .await
+    .json();
+    assert_eq!(explicit["milestones"], json!([]));
+    let bad = send(
+        &app,
+        g(&format!(
+            "/api/v1/projects/{project_id}?include_frozen=maybe"
+        )),
+    )
+    .await;
+    assert!(bad.status.is_client_error(), "{}", bad.text());
+}
+
+/// D13: `is_root_task` は案件直下の task だけ（子・対話は false）。案件の task・一覧・詳細に同じ値が出る。
+/// `POST /tasks` の `stages_hint` は `Task.routing.stages_hint` に入る。案件直下に作っても途中目標の行はできない。
+#[tokio::test]
+async fn is_root_task_and_stages_hint_are_exposed() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_secretary(&app).await;
+    let project_id = create_project(&app, "t", "r").await;
+    let pid: task_core::ProjectId = project_id.parse().expect("project id");
+
     let resp = send(
         &app,
-        patch(
-            &format!("/api/v1/projects/{project_id}"),
-            &json!({"description": "x"}),
+        p(
+            "/api/v1/tasks",
+            &json!({
+                "title": "browser capability（Phase 1〜4）",
+                "objective": "Phase 1〜4 のすべて",
+                "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
+                "project_id": project_id,
+                "stages_hint": [{"title": "Phase 1", "scope": "MVP"}, {"title": "Phase 2"}],
+            }),
         ),
     )
     .await;
-    assert_eq!(resp.status.as_u16(), 400, "{}", resp.text());
+    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+    let root_id = resp.json()["id"].as_str().expect("id").to_string();
+    let root = env
+        .store
+        .get(root_id.parse().expect("task id"))
+        .expect("get")
+        .expect("some");
+    let hints = root.routing.as_ref().expect("routing").stages_hint.clone();
+    assert_eq!(hints.len(), 2);
+    assert_eq!(hints[0].title, "Phase 1");
+    assert_eq!(hints[0].scope, "MVP");
+    assert_eq!(root.milestone_id, None);
+    assert!(env.store.milestone_list(pid).expect("list").is_empty());
+
+    // 形の検証（空の title）は 422。
     let resp = send(
         &app,
-        patch_json_with(
-            &format!("/api/v1/projects/{project_id}"),
-            &json!({"title": "t"}),
-            &[],
+        p(
+            "/api/v1/tasks",
+            &json!({
+                "title": "t",
+                "objective": "o",
+                "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
+                "stages_hint": [{"title": "  "}],
+            }),
         ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 422, "{}", resp.text());
+
+    // 子（委譲・計画の子の形: parent_id あり）と対話。
+    let mut child = new_task(TaskKind::Execute, Status::Ready);
+    child.project_id = Some(pid);
+    child.parent_id = Some(root.id);
+    env.seed(&child);
+    let mut conv = new_task(TaskKind::Execute, Status::Ready);
+    conv.project_id = Some(pid);
+    conv.conversation = Some(task_core::MessageId::new());
+    env.seed(&conv);
+
+    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+        .await
+        .json();
+    let flag = |id: &str| {
+        detail["tasks"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .find(|t| t["id"] == id)
+            .map(|t| t["is_root_task"].clone())
+    };
+    assert_eq!(flag(&root_id), Some(json!(true)));
+    assert_eq!(flag(&child.id.to_string()), Some(json!(false)));
+    assert_eq!(flag(&conv.id.to_string()), Some(json!(false)));
+    assert_eq!(detail["root_totals"]["root_tasks"], 1);
+
+    let list = send(&app, g(&format!("/api/v1/tasks?project={project_id}")))
+        .await
+        .json();
+    for item in list["items"].as_array().expect("items") {
+        let expected = item["id"] == root_id.as_str();
+        assert_eq!(item["is_root_task"], json!(expected), "{item}");
+        assert_eq!(item["paused"], json!(false));
+    }
+    let task_detail = send(&app, g(&format!("/api/v1/tasks/{root_id}")))
+        .await
+        .json();
+    assert_eq!(task_detail["is_root_task"], true);
+    let child_detail = send(&app, g(&format!("/api/v1/tasks/{}", child.id)))
+        .await
+        .json();
+    assert_eq!(child_detail["is_root_task"], false);
+}
+
+/// D13（R5a）: `POST /tasks/{id}/pause|resume` は subtree を止め・戻す（管理系、409 の規則、詳細の `paused_by`）。
+#[tokio::test]
+async fn task_pause_and_resume_cover_the_subtree() {
+    let env = env_with_token();
+    let app = env.router();
+    let root = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&root);
+    let mut child = new_task(TaskKind::Execute, Status::Ready);
+    child.parent_id = Some(root.id);
+    env.seed(&child);
+
+    // トークン無しは 401。
+    let resp = send(
+        &app,
+        post_json(&format!("/api/v1/tasks/{}/pause", root.id), &json!({})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 401, "{}", resp.text());
+
     let resp = send(
         &app,
-        patch(
-            &format!("/api/v1/projects/{}", task_core::ProjectId::new()),
-            &json!({"title": "t"}),
+        p(&format!("/api/v1/tasks/{}/pause", root.id), &json!({})),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let body = resp.json();
+    assert!(body["paused_at"].as_str().is_some());
+    assert_eq!(body["subtree"][0]["id"], child.id.to_string());
+    let ready: Vec<_> = env
+        .store
+        .ready_tasks(10)
+        .expect("ready")
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert!(!ready.contains(&root.id) && !ready.contains(&child.id));
+    let child_detail = send(&app, g(&format!("/api/v1/tasks/{}", child.id)))
+        .await
+        .json();
+    assert_eq!(child_detail["paused_by"], root.id.to_string());
+    assert_eq!(
+        child_detail["task"]["status"], "ready",
+        "状態機械は触らない"
+    );
+
+    let resp = send(
+        &app,
+        p(&format!("/api/v1/tasks/{}/pause", root.id), &json!({})),
+    )
+    .await;
+    assert_problem(&resp, 409, "invalid_transition");
+
+    let resp = send(
+        &app,
+        p(&format!("/api/v1/tasks/{}/resume", root.id), &json!({})),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert!(resp.json().get("paused_at").is_none());
+    let ready: Vec<_> = env
+        .store
+        .ready_tasks(10)
+        .expect("ready")
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert!(ready.contains(&root.id) && ready.contains(&child.id));
+    let child_detail = send(&app, g(&format!("/api/v1/tasks/{}", child.id)))
+        .await
+        .json();
+    assert!(child_detail.get("paused_by").is_none());
+
+    // 知らない task は 404。
+    let resp = send(
+        &app,
+        p(
+            &format!("/api/v1/tasks/{}/pause", task_core::TaskId::new()),
+            &json!({}),
         ),
     )
     .await;

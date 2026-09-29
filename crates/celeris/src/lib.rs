@@ -16,7 +16,6 @@ pub mod knowledge_gc;
 /// ADR-0047 D4（Phase 62）: 知識の自動メンテナンス（決定的なトリガと適用。LLM は `langmem` アダプタの中）。
 pub mod knowledge_maint;
 /// ADR-0037（Phase 39）: 人の判断が要るときだけ Discord に知らせる（判定は決定的、送信は spawn）。
-pub mod milestone_review;
 pub mod notify;
 /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む／`promote.sh` を起こす。
 pub mod releases;
@@ -1920,27 +1919,7 @@ async fn tick_loop(
                     tracing::warn!(error=%e, "delivery tick failed");
                 }
             }
-            // ADR-0038 D1 / B1（Phase 41）: 途中目標の仕事が止まったら、秘書の「途中目標レビュー」の対話を
-            // 1 回だけ起こす（**通知の前に**）。ここも判断は決定的で、ストアを見て対話用タスクを 1 件作るだけ
-            // （LLM もワーカーも起動しない。起動するのは次の tick の dispatch）。
-            {
-                let store = dispatcher.store();
-                match milestone_review::schedule(
-                    store.as_ref(),
-                    &config.role_specs(),
-                    &config.genre_specs(),
-                    config.conversation_genre_id(),
-                    OffsetDateTime::now_utc(),
-                ) {
-                    Ok(started) if !started.is_empty() => {
-                        tracing::info!(count = started.len(), "milestone review: runs scheduled");
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, "milestone review: could not evaluate the milestones")
-                    }
-                }
-            }
+            // ADR-0038 D1 の途中目標の判定 run（`milestone_review::schedule`）は ADR-0079 D13（Phase R5a）で廃止。
             // ADR-0047 D4 / B1（Phase 62）: 知識の自動メンテナンス。判断は決定的（ストアと KB のファイルを
             // 見るだけ）で、LLM が動くのは `langmem` アダプタが起こす python プロセスの中だけ。
             // 1. まだ知識整理 run を持たない終端タスクから、1 tick に最大 1 件の支援タスクを作る。
@@ -2494,6 +2473,7 @@ async fn check_provider(
     let now = OffsetDateTime::now_utc();
     let task = task_core::Task {
         tree: None,
+        paused_at: None,
         routing: None,
         repos: Vec::new(),
         id: task_core::TaskId::new(),
@@ -3726,6 +3706,7 @@ auth = "publickey"
         let now = OffsetDateTime::now_utc();
         let task = task_core::Task {
             tree: None,
+            paused_at: None,
             routing: None,
             repos: Vec::new(),
             id: task_core::TaskId::new(),

@@ -40,21 +40,45 @@ tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ, 01M3JXB3DHVBWKWKPW04DTG6SJ]
 
 ADR-0079 D11（Phase R4a）: 再帰的な task の木と roll-up（読み取り。トークン不要）。ADR の `GET /tasks/{id}/tree` は ADR-0043 D6 の作業ツリーの閲覧（`TreeView`）が既に使っているため、パスは `task-tree`（ADR-0079 付記「R4a 実装時の逸脱・明確化」）。既定は問い合わせた task を根にした subtree、`root=true` なら木の root から。応答は `root_id`（木の root）、`subtree_root`（この view の根）、`tree_enabled`（`[execution.tree] enabled`）、`nodes[]`（`TaskTreeNode`。前順 = 親が子より先、先頭が view の根）、`totals`（view の根の subtree の合計。`nodes[0].subtree` と同じ）が必須で、`limits`（`TreeLimitsUsage`: `leaves` / `max_leaves`、`runs` / `max_runs`〈reviewer を除く〉、`replans` / `max_replans`、`tokens` / `max_tokens?`、`open_decisions` / `max_open_decisions`。`max_*` は `raise-once` / `replan` の回答の余裕を当てた値）は view の根が木の root のときだけ。各節点は `id`、`title`、`status`、`phase?`（`TreeNodePhase`: `planning` / `executing` / `repairing` / `verifying` / `awaiting_human` / `awaiting_children` / `awaiting_plan_approval` / `held_on_decision`〈節点の `self` の決定、または答えを待つ `blocked(decision)` の unit〉/ `blocked_infra`〈子の基盤の失敗の unit〉。終端・待ちの無い task は省略）、`depth`（root = 1）、`parent_id?`（view の根では省略）、`parent_unit_key?` / `parent_stage?`（この節点を作った親の unit）、`plan_version?`、`open_decisions`（この節点が出した未回答の決定）、`stall?`（Phase R4b。`TreeNodeStall`: `reason`、`since?`、`detail`。節点の最後の event が `StallDetected` で終端でないときだけ = D10 の「理由なく止まっています」。何か event が積まれれば消える）、`children[]`（作られた順）、`units[]`（`TreeUnitView`: `key`、`stage?`、`kind`、`title`、`status`、`blocked_reason?`、`child_task_id?`。統合 WU と superseded を含む履歴）、`own`（自分の分）、`subtree`（自分と子孫の合計）。`own` / `subtree` は `RollupMetrics`（上の `group_by=depth` と同じ形）で、件数・トークン・定価・quota は和、`cost_usd_complete` は論理積、壁時計は最小の開始と最大の終わりなので、root の `subtree` は各節点の `own` の和と一致する。木の無い task（`[execution.tree] enabled = false` の旧い task を含む）は 1 節点（深さ 1）の木。不明な task は 404 `task_not_found`、知らないクエリ・真偽値でない `root` は 400。`GET /tasks/{id}/execution` の `metrics` は自分の分のまま（互換）。
 
-### `GET /projects/{id}` → 200 `ProjectDetail`
+### `GET /projects/{id}?include_frozen=` → 200 `ProjectDetail`
 
-案件詳細。`project`（`Project`）、`milestones[]`（`MilestoneView`）、`tasks[]`（`ProjectTaskView`）は必須で、`repos[]`（`ProjectRepo`）は既定で空配列。`project_plan` は案件計画がある場合だけ返す `ProjectPlanDagView` で、`nodes[]`（`PlanDagNode`）が必須、`current_version` と `pending`（`PlanDagProposal`）は省略可能。承認済みの版がまだ無ければ `current_version` は省略され、未決の提案があれば `pending` に入る。`root_totals`（`ProjectRootTotals`。ADR-0079 D11 / Phase R4a）は案件の root task（`parent_id` が無く、木の子でも対話でも裏方でもない task）の `root_tasks`（数）、`by_status`（状態ごとの数。0 件の状態は出ない）、`totals`（root task ごとの subtree の roll-up の和。`RollupMetrics`。run・reviewer の run・トークン・定価・leaf・未回答の決定・壁時計。**quota は数えない**〈events を読まない。quota は `task-tree` と `metrics/execution` で見る〉）。範囲は `tasks[]` と同じ上限（2,000 件）。`project.auto_advance` は `boolean`、既定は `false`。`project.slug` は知識ベースでのこの案件の置き場 `projects/<slug>/`（Phase K-1。作るときに題名 → primary リポジトリの名前 → id の末尾から決まり、案件の間で一意）。管理トークンは不要。不明な案件は 404。クエリは受け付けない。
+案件詳細。`project`（`Project`）、`milestones[]`（`MilestoneView`）、`tasks[]`（`ProjectTaskView`）は必須で、`repos[]`（`ProjectRepo`）は既定で空配列。
+
+**ADR-0079 D13 / U-R8（Phase R5a）: 途中目標は凍結した履歴**。既定（`include_frozen` 省略・`false`）では `milestones` は空配列で、`project_plan` も出ない。`milestones_frozen`（`u32`、既定 0）はこの案件の途中目標の行の数（隠していても数える。GUI の「以前の途中目標 N 件」用）。`?include_frozen=true` のときだけ全行を読み取り専用で返し（`MilestoneView`: 秘書のレビューの返事と提案を添えたもの）、案件計画の版があれば `project_plan`（`ProjectPlanDagView`: `nodes[]`〈`PlanDagNode`〉が必須、`current_version` と `pending`〈`PlanDagProposal`〉は省略可能）も返す。行は消さず状態も変えない（書き込みの入口は下の 410）。真偽値でない `include_frozen` と知らないクエリは 400。
+
+`tasks[]` の各行には `is_root_task`（`boolean`、既定 `false`。`task_core::is_root_task`: 案件直下〈`parent_id` なし〉・木の子〈`tree.parent_unit`〉でない・対話でも裏方〈`support_kind`〉でもない）が付く。案件ページの root task の一覧はこれで絞る。`root_totals`（`ProjectRootTotals`。ADR-0079 D11 / Phase R4a）は同じ述語の root task の `root_tasks`（数）、`by_status`（状態ごとの数。0 件の状態は出ない）、`totals`（root task ごとの subtree の roll-up の和。`RollupMetrics`。run・reviewer の run・トークン・定価・leaf・未回答の決定・壁時計。**quota は数えない**〈events を読まない。quota は `task-tree` と `metrics/execution` で見る〉）。範囲は `tasks[]` と同じ上限（2,000 件）。`project.auto_advance` は `boolean` で常に読める（R5a からは書けず、読まない列）。`project.slug` は知識ベースでのこの案件の置き場 `projects/<slug>/`（Phase K-1。作るときに題名 → primary リポジトリの名前 → id の末尾から決まり、案件の間で一意）。管理トークンは不要。不明な案件は 404。
 
 ### `PATCH /projects/{id}` → 200 `Project`（管理系）
 
-本文は `ProjectPatchBody`。`auto_advance?: boolean | null` は、案件計画のマイルストーン Task を依存先 Task の `done` で進めるかを指定する。`true` なら進め、`false`（既定）なら途中目標の `reached` を待つ。省略または `null` は変更しない（`null` だけの本文は変更項目が無いため 422）。同じ本文には `status` と `workspace` も指定できる。`slug?: string` は知識ベースの置き場 `projects/<slug>/` の slug を変える（小文字の `[a-z0-9-]`、1〜64 文字、先頭・末尾・連続の `-` と案件 ID の形は不可 → 422。他の案件が使っていれば 409 `project_slug_in_use`）。**KB のディレクトリは動かさない**（`projects/<旧>/` は人が動かす）。`title?: string` は案件の名前、`request?: string` は案件の説明（依頼文。GUI の「依頼文」）を変える（ADR-0072「Phase F6 実装時の決定」P3。前後の空白を除いて保存し、空は 422、`title` は 200 文字・`request` は 20,000 文字まで）。値が変わった欄だけを書き、管理系のログに `op = "project_updated"` と変えた欄の名前を残す（案件には events の列が無い）。説明を変えても CoS への再依頼にはならない。管理トークンが無ければ 401、JSON の構文・型が不正なら 400、空の変更指定や許されない状態変更は 422、不明な案件は 404。クエリは受け付けない。
+本文は `ProjectPatchBody`。`auto_advance` は **ADR-0079 D13（Phase R5a）で廃止**: 値が `true` でも `false` でも（他の欄と一緒でも）422 `validation`（`field: "auto_advance"`。列 `projects.auto_advance` は残すが書かない・読まない）。同じ本文には `status` と `workspace` も指定できる。`slug?: string` は知識ベースの置き場 `projects/<slug>/` の slug を変える（小文字の `[a-z0-9-]`、1〜64 文字、先頭・末尾・連続の `-` と案件 ID の形は不可 → 422。他の案件が使っていれば 409 `project_slug_in_use`）。**KB のディレクトリは動かさない**（`projects/<旧>/` は人が動かす）。`title?: string` は案件の名前、`request?: string` は案件の説明（依頼文。GUI の「依頼文」）を変える（ADR-0072「Phase F6 実装時の決定」P3。前後の空白を除いて保存し、空は 422、`title` は 200 文字・`request` は 20,000 文字まで）。値が変わった欄だけを書き、管理系のログに `op = "project_updated"` と変えた欄の名前を残す（案件には events の列が無い）。説明を変えても CoS への再依頼にはならない。管理トークンが無ければ 401、JSON の構文・型が不正なら 400、空の変更指定や許されない状態変更は 422、不明な案件は 404。クエリは受け付けない。
 
-### `POST /projects/{id}/plan` → 202 `ProjectPlanAccepted`（管理系）
+### 撤去した入口 → 410 `removed_by_adr_0079`（ADR-0079 D13 / U-R6、Phase R5a）
 
-案件の計画タスクを作り、`task_id` を返す。本文は `ProjectPlanBody`（空本文も可）。仕事が止まった既存の案件（案件直下に done / failed のタスクがある）にも使える: `mode = "milestones"` は案件計画の版がまだ無ければ初回の提案（`project_plan.pending` → `decide`）、承認済みの版があれば replan になる。`mode` は `ProjectPlanMode` の `decompose`（既定）または `milestones`、`milestone_id` と `note` は省略可能。`milestones` は案件全体の DAG を提案するモードで、`milestone_id` を併用できない。管理トークンが無ければ 401、JSON の構文・型が不正なら 400、併用時は 422、不明な案件は 404、計画依頼が進行中なら 409 `project_plan_in_flight`。クエリは受け付けない。
+案件は計画を持たず、途中目標は root task の段階で表す（既存の途中目標の行は凍結）。次の入口は**本文も id も読まずに** 410 Gone を返す（管理系のまま: トークンが無ければ先に 401）。problem は `type: "urn:celeris:problem:removed_by_adr_0079"`、`code: "removed_by_adr_0079"`、`detail`（例 `ADR-0079: 案件は計画を持たない。root task を作る`）に、`adr: "ADR-0079"` と `instead`（代わりの入口の短い説明）を添える。要求・応答の型（`ProjectPlanBody` / `ProjectPlanDecided` / `MilestoneCreateBody` / `MilestonePatchBody` / `MilestoneDecideBody` / `MilestoneLifecycle` / `NewPlanSpec` など）は `api-v1.schema.json` の互換のためにだけ残す。
 
-### `POST /projects/{id}/project-plan/{version}/decide` → 202 `ProjectPlanDecided`（管理系）
+| 入口 | 以前 | 代わり |
+|---|---|---|
+| `POST /projects/{id}/plan`（`mode: decompose` / `milestones` とも） | 202 `ProjectPlanAccepted`（案件の分解 task / 案件計画 run） | `POST /tasks` に `project_id`（root task）。段階の名指しは `stages_hint` |
+| `POST /projects/{id}/project-plan/{version}/decide` | 202 `ProjectPlanDecided` | 木の中の決定は `POST /decisions/{id}/answer`、root 計画の承認は `POST /tasks/{id}/execution/plan-gate` |
+| `POST /projects/{id}/milestones` | 201 `Milestone` | root task の段階（`stages_hint`、計画の `review: human`） |
+| `PATCH /milestones/{id}` | 200 `Milestone` | 同上 |
+| `POST /milestones/{id}/decide` | 202 `MilestoneDecided`（ADR-0038 の判定） | 段階の `review: human`（`POST /tasks/{id}/execution/phase-gate`） |
+| `POST /milestones/{id}/{cancel,pause,resume}` | 200 `MilestoneLifecycle` | `POST /tasks/{id}/{cancel,pause,resume}`（subtree）・`POST /projects/{id}/{cancel,pause,resume}` |
+| `POST /plans`（ADR-0028 の Plan kind） | 201 `Task`（`kind = plan`） | `POST /tasks`（root task。分解は gate と planner） |
 
-案件計画の提案を判定する。本文は `ProjectPlanDecideBody` で、`decision`（`ProjectPlanDecisionInput`: `approve` または `reject`）が必須。`note` は `approve` では任意、`reject` では空白以外の文字が必要。応答の `decision`、`plan_task_id`、`milestones[]`（`MilestoneId`）、`tasks[]`（`TaskId`）は必須。`approve` は途中目標を `approved`、Task を `ready` にし、`reject` はそれぞれ `redesigned`、`cancelled` にする。管理トークンが無ければ 401、不正な版番号または JSON は 400、空の reject note は 422、不明な案件・提案は 404、既決または古くなった提案は 409。クエリは受け付けない。
+既存の `kind = plan` の行とその子、途中目標の行、`tasks.milestone_id` はそのまま読める（`GET /projects/{id}?include_frozen=true`、`GET /tasks?milestone=`）。`celerisctl projects plan approve|reject` は削除した。
+
+### `POST /tasks` の `stages_hint`（ADR-0079 D12、Phase R5a）
+
+`NewTaskSpec.stages_hint?: StageHint[]`（`{title: string, scope?: string}`。未知の欄は 400）。人（API・CLI）と CoS（`create_task.stages_hint`）が名指しした段階の名前と範囲で、そのまま `Task.routing.stages_hint` に入り、root の planner への入力になる（構造の強制ではない。子は継がない）。16 件まで、`title` は空白以外の 1〜120 文字、`scope` は 2,000 文字まで（違反は 422）。省略時は空で、`routing` の JSON にも出ない。
+
+### `POST /tasks/{id}/pause` / `POST /tasks/{id}/resume` → 200 `TaskPauseResult`（管理系。ADR-0079 D13、Phase R5a）
+
+task の **subtree の一時停止**。本文は `{}` か空（未知の欄は 400）。`pause` は task に `paused_at` を入れ `Event::Edited{fields: ["paused_at"], by: "human"}` を残す（状態機械は触らない。replay の状態・attempts は変わらない）。以後、その task と子孫（`parent_id` の鎖と、採用で `parent_id` を書き換えない木の子〈`tree.parent_unit`〉）は `ready_tasks` に返らず dispatch されない（一時停止の後に作られた子も止まる）。**走っている run は終わるまで走る**（案件の一時停止と同じ意味）: その後 `ready` に戻っても起きず、`running` の task の並列 WU の 2 本目以降も起きない。最終レビュー（`reviewing`）と人の操作（回答・承認・中止）は止めない。`resume` は `paused_at` を消す（祖先がまだ一時停止中なら子孫は止まったまま）。応答は `task`（`TaskRef`）、`paused_at?`（RFC 3339。`resume` の後は省略）、`subtree[]`（非終端の子孫の `TaskRef`。自分は含まない）。終端の task・既に一時停止中・対話 task の `pause` と、一時停止中でない task の `resume` は 409 `invalid_transition`、不明な task は 404、トークンが無ければ 401。
+
+案件の `POST /projects/{id}/pause|cancel` も root task の subtree に効く: 案件が paused / cancelled / archived なら、`project_id` を持たない子孫も祖先の案件で止まる（`ready_tasks` と並列 WU の判定）。案件の中止は属する task を `project_cancelled` で中止し、木の子へは `parent_cancelled` で連鎖する（ADR-0079 R1b）。
+
+`TaskSummary`（`GET /tasks` の `items[]`）には `is_root_task` と `paused`（この task 自身の `paused_at` の有無）、`TaskDetail`（`GET /tasks/{id}`）には `is_root_task` と `paused_by?`（dispatch を止めている task: 自分か `paused_at` を持つ一番近い祖先）が付く。`Task.paused_at` は `Task` の JSON にも出る（無ければ省略）。
 
 ### `POST /tasks/{id}/execution/phase-gate` → 200 `TransitionResult`（管理系）
 

@@ -143,7 +143,7 @@ pub use notify::{
 };
 pub use org::{
     Milestone, MilestoneDecision, MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode,
-    Project, ProjectId, ProjectStatus, assignee_defaults, department_of, is_milestone_task,
+    Project, ProjectId, ProjectStatus, assignee_defaults, department_of, is_root_task,
     valid_org_id, validate_upsert,
 };
 pub use plan::{

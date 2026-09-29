@@ -997,11 +997,18 @@ pub struct ProjectDetail {
     pub repos: Vec<task_core::ProjectRepo>,
     /// ADR-0038 D1 / D4（Phase 41）: 途中目標そのもの（`Milestone` の各フィールドはそのまま）に、
     /// 秘書のレビューの返事と提案された次の途中目標を添えたもの。
+    /// ADR-0079 D13 / U-R8（Phase R5a）: 途中目標は凍結した履歴で、**既定では空**（`?include_frozen=true` の
+    /// ときだけ全行を読み取り専用で返す）。
     pub milestones: Vec<MilestoneView>,
+    /// ADR-0079 D13（Phase R5a）: この案件の途中目標の行の数（凍結。`milestones` が空でも数える。GUI が
+    /// 「以前の途中目標 N 件」を出すため）。
+    #[serde(default)]
+    pub milestones_frozen: u32,
     /// 仕事の木を描くのに必要な最小限だけ（詳細は `GET /tasks/{id}`）。
     pub tasks: Vec<ProjectTaskView>,
     /// ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の
     /// 提案（あれば）。案件計画を持たない案件では省略（GUI は今の途中目標の一覧だけを出す。D3.8）。
+    /// ADR-0079 D13（Phase R5a）: 凍結した履歴なので `?include_frozen=true` のときだけ出る。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_plan: Option<task_ops::project_plan::ProjectPlanDagView>,
     /// ADR-0079 D11（Phase R4a）: 案件の root task の数（状態ごと）と、その subtree の合計（run・reviewer の run・
@@ -1045,6 +1052,10 @@ pub struct ProjectTaskView {
     pub depends_on: Vec<TaskId>,
     pub assignee: Option<String>,
     pub milestone_id: Option<MilestoneId>,
+    /// ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`: 案件直下・木の子でない・
+    /// 対話でも裏方でもない）。案件ページの「root task の一覧」はこれで絞る。
+    #[serde(default)]
+    pub is_root_task: bool,
     /// 対話用タスク（人への返事のための run）か。GUI は仕事の木から隠せる（GUI-R3）。
     pub conversation: bool,
     /// GUI 監査 H4（Phase 29）: 裏方タスクの印（`TaskSummary.support` と同じ規則）。

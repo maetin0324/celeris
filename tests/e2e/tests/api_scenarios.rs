@@ -626,20 +626,11 @@ esac"#,
     env.post(&format!("/tasks/{}/cancel", TaskId::new()), json!({}))
         .assert_problem(404, "task_not_found");
 
-    // plan（celerisctl plan 相当）。
-    let plan = env.post("/plans", json!({"goal": "split the work\nsecond line"}));
-    assert_eq!(plan.status, 201, "{}", plan.body);
-    let plan = plan.json();
-    assert_eq!(
-        (
-            plan["kind"].clone(),
-            plan["status"].clone(),
-            plan["title"].clone()
-        ),
-        (json!("plan"), json!("draft"), json!("split the work"))
-    );
+    // ADR-0079 U-R6（Phase R5a）: `POST /plans` は 410（分解は root task の gate と planner）。
+    env.post("/plans", json!({"goal": "split the work\nsecond line"}))
+        .assert_problem(410, "removed_by_adr_0079");
     env.post("/plans", json!({"goal": "  "}))
-        .assert_problem(422, "validation");
+        .assert_problem(410, "removed_by_adr_0079");
 
     // 変更系の前提（Content-Type と Origin）。
     let r = env.request(

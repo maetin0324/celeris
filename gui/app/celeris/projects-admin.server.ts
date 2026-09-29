@@ -4,21 +4,10 @@ import { toActionError } from "./actions.server";
 import type { CelerisClient } from "./client.server";
 import { formString } from "./forms";
 import type {
-  Milestone,
-  MilestoneCreateBody,
-  MilestoneDecideBody,
-  MilestoneDecided,
-  MilestoneLifecycle,
-  MilestonePatchBody,
-  MilestoneStatus,
   Project,
   ProjectCreateBody,
   ProjectLifecycle,
   ProjectPatchBody,
-  ProjectPlanAccepted,
-  ProjectPlanBody,
-  ProjectPlanDecideBody,
-  ProjectPlanDecided,
   ProjectStatus,
   WorkspaceSpec,
 } from "./types";
@@ -29,6 +18,8 @@ import type {
  * v1 の破壊的変更、docs/gui/api.md 冒頭の変更点一覧）。Phase 55（ADR-0044 D6）で
  * `PATCH /projects/{id}` / `POST /projects/{id}/milestones` / `PATCH /milestones/{id}` も管理系になり、
  * 中止・一時停止・アーカイブ（§3.84〜3.91）も最初から管理系。`GET /projects` だけが通常の要求。
+ * celeris ADR-0079 D13（Phase R5a）: 案件計画（`POST /projects/{id}/plan`・`…/project-plan/{version}/decide`）と
+ * 途中目標の書き込み（作成・状態・判定・中止・一時停止・再開）は 410 になったので、その中継は外した。
  * 管理系かどうかで GUI 側の中継コードは変わらない（`CelerisClient` はどちらも同じ `Authorization` ヘッダを
  * 付けるだけ。401 の案内文も `Flash.tsx` の `error.code === "unauthorized"` の 1 か所に集約されている）。
  * GUI 側では検証しない: celeris が 401 / 404 / 409 / 422 / 400 を返したらその文言をそのまま画面に出す。
@@ -126,135 +117,6 @@ export async function patchProjectText(
   }
 }
 
-/** `POST /projects/{id}/milestones`（途中目標を足す。`seq` はストアが採番する）。 */
-export async function createMilestone(
-  client: CelerisClient,
-  projectId: string,
-  form: FormData,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  try {
-    const body: MilestoneCreateBody = { title: formString(form, "title") ?? "" };
-    const description = formString(form, "description");
-    if (description) body.description = description;
-    const status = formString(form, "status");
-    if (status) body.status = status as MilestoneStatus;
-    const milestone = await client.post<Milestone>(`/projects/${encodeURIComponent(projectId)}/milestones`, body, {
-      signal,
-    });
-    return { ok: true, op: "milestone_create", milestone };
-  } catch (e) {
-    return { ok: false, op: "milestone_create", error: toActionError(e) };
-  }
-}
-
-/** `PATCH /milestones/{id}`（SPEC §7 のアジャイル: 達成ごとに Go か再設計かを人が判定する）。 */
-export async function patchMilestoneStatus(
-  client: CelerisClient,
-  milestoneId: string,
-  status: MilestoneStatus,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  try {
-    const body: MilestonePatchBody = { status };
-    const milestone = await client.patch<Milestone>(`/milestones/${encodeURIComponent(milestoneId)}`, body, {
-      signal,
-    });
-    return { ok: true, op: "milestone_status", milestone };
-  } catch (e) {
-    return { ok: false, op: "milestone_status", error: toActionError(e) };
-  }
-}
-
-/**
- * `POST /milestones/{id}/decide`（**管理系**、202 `MilestoneDecided`。ADR-0038 D2、
- * docs/celeris-api-v1.md §3.63、Phase 41 / G13j）。人の 3 つの答え（`ok`/`discuss`/`ng`）をそのまま送るだけ
- * （GUI 側では自由記述の必須チェックを画面の入力の時点で行うが、ここでは検証しない。空でも celeris に送って
- * celeris の 422 文言をそのまま出す。SPEC の「秘書は達成と言えるかを提案するにとどまる」の裏付けとして、
- * 3 値を GUI が解釈することもしない）。
- */
-export async function decideMilestone(
-  client: CelerisClient,
-  milestoneId: string,
-  form: FormData,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  try {
-    const decision = (formString(form, "decision") ?? "ok") as MilestoneDecideBody["decision"];
-    const body: MilestoneDecideBody = { decision };
-    const note = formString(form, "note");
-    if (note) body.note = note;
-    const decided = await client.post<MilestoneDecided>(`/milestones/${encodeURIComponent(milestoneId)}/decide`, body, {
-      signal,
-    });
-    return { ok: true, op: "milestone_decide", decided };
-  } catch (e) {
-    return { ok: false, op: "milestone_decide", error: toActionError(e) };
-  }
-}
-
-/**
- * `POST /projects/{id}/project-plan/{version}/decide`（**管理系**、202。ADR-0074 D3.3 / D3.4、Phase F4b (h)）。
- * 提案中の案件計画（初回の DAG か replan の差分）の承認 / 却下。フォームの `version` / `decision` / `note` を
- * そのまま送る（却下の理由が要るかは celeris が 422 で言う。画面は押す前にも言う）。
- */
-export async function decideProjectPlan(
-  client: CelerisClient,
-  projectId: string,
-  form: FormData,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  try {
-    const version = formString(form, "version") ?? "";
-    const decision = (formString(form, "decision") ?? "approve") as ProjectPlanDecideBody["decision"];
-    const body: ProjectPlanDecideBody = { decision };
-    const note = formString(form, "note");
-    if (note) body.note = note;
-    const decided = await client.post<ProjectPlanDecided>(
-      `/projects/${encodeURIComponent(projectId)}/project-plan/${encodeURIComponent(version)}/decide`,
-      body,
-      { signal },
-    );
-    return { ok: true, op: "project_plan_decide", decided };
-  } catch (e) {
-    return { ok: false, op: "project_plan_decide", error: toActionError(e) };
-  }
-}
-
-/**
- * `POST /projects/{id}/plan`（**管理系**、202 `{task_id}`。docs/celeris-api-v1.md §3.61、Phase 29）。
- * 案件の「この方針で進める」。案件の依頼文・途中目標・人の一言・秘書との直近のやり取りを celeris が 1 つの
- * `goal` にまとめ、秘書に `kind = "plan"` の仕事を 1 件作る（分解の起点）。GUI は待たない（202）ので、
- * 仕事の木が増えていくのは SSE の再検証で追う。
- * `milestone_id` / `note` は空なら送らない（celeris 側でどちらも省略可）。
- */
-export async function startProjectPlan(
-  client: CelerisClient,
-  projectId: string,
-  form: FormData,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  try {
-    const body: ProjectPlanBody = {};
-    const milestones = formString(form, "mode") === "milestones";
-    const milestoneId = formString(form, "milestone_id");
-    // `mode = "milestones"` は案件全体を計画するので途中目標は送らない（送ると celeris が 422 を返す）。
-    if (milestoneId && !milestones) body.milestone_id = milestoneId;
-    const note = formString(form, "note");
-    if (note) body.note = note;
-    // ADR-0074 D3.3 / D3.4（Phase F4b (h)）: 案件計画（`milestones`）。承認済みの計画がある案件では replan になる
-    // （どちらになるかは celeris が決める）。ADR-0072「Phase F6 実装時の決定」: 案件計画を持たない既存の案件も
-    // 「この方針で進める」の選択で初回の案件計画を起こせる。
-    if (milestones) body.mode = "milestones";
-    const accepted = await client.post<ProjectPlanAccepted>(`/projects/${encodeURIComponent(projectId)}/plan`, body, {
-      signal,
-    });
-    return { ok: true, op: "project_plan", accepted };
-  } catch (e) {
-    return { ok: false, op: "project_plan", error: toActionError(e) };
-  }
-}
-
 /**
  * 中止・一時停止・アーカイブ（ADR-0044 D6、docs/celeris-api-v1.md §3.84〜3.91。Phase 55 / G19。
  * **管理系**: `token_file` 未設定でも 401）。要求本文は `{}`（空の本体）で、応答はどれも 200。
@@ -330,51 +192,4 @@ export function unarchiveProject(
   signal?: AbortSignal,
 ): Promise<ProjectOpOutcome> {
   return projectLifecycle(client, "project_unarchive", "unarchive", projectId, signal);
-}
-
-/** 途中目標の操作 1 つを中継する（`cancel` / `pause` / `resume`）。案件の状態は変わらない（§3.89〜3.91）。 */
-async function milestoneLifecycle(
-  client: CelerisClient,
-  op: "milestone_cancel" | "milestone_pause" | "milestone_resume",
-  path: string,
-  milestoneId: string,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  try {
-    const lifecycle = await client.post<MilestoneLifecycle>(
-      `/milestones/${encodeURIComponent(milestoneId)}/${path}`,
-      {},
-      { signal },
-    );
-    return { ok: true, op, lifecycle };
-  } catch (e) {
-    return { ok: false, op, error: toActionError(e) };
-  }
-}
-
-/** `POST /milestones/{id}/cancel`（§3.89）。属する非終端タスクが連鎖で `cancelled` になる。 */
-export function cancelMilestone(
-  client: CelerisClient,
-  milestoneId: string,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  return milestoneLifecycle(client, "milestone_cancel", "cancel", milestoneId, signal);
-}
-
-/** `POST /milestones/{id}/pause`（§3.90）。 */
-export function pauseMilestone(
-  client: CelerisClient,
-  milestoneId: string,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  return milestoneLifecycle(client, "milestone_pause", "pause", milestoneId, signal);
-}
-
-/** `POST /milestones/{id}/resume`（§3.91）。 */
-export function resumeMilestone(
-  client: CelerisClient,
-  milestoneId: string,
-  signal?: AbortSignal,
-): Promise<ProjectOpOutcome> {
-  return milestoneLifecycle(client, "milestone_resume", "resume", milestoneId, signal);
 }

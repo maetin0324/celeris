@@ -296,6 +296,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         task_core::Task {
             tree: None,
+            paused_at: None,
             routing: None,
             repos: Vec::new(),
             id: task_core::TaskId::new(),

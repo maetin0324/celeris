@@ -81,6 +81,7 @@ fn blocked_task_with_approval(
     let id = TaskId::new();
     let task = Task {
         tree: None,
+        paused_at: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),

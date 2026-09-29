@@ -4,6 +4,7 @@
 - 状態: **Accepted**（人間の依頼「manifest 化を先に終わらせてください」。人間の提案:
   「genre を固定 enum にせず `name / harness command / capabilities / input artifact types / output artifact types` の manifest にしておき、
   Planner には分野の一覧だけ渡して選ばせる」）
+- **Superseded in part by ADR-0079（Phase R5a, 2026-09-29）**: Plan kind の分解を新しく起こす入口 `POST /plans` は 410（U-R6）。分解は root task の Complexity Gate と planner が行う。Planner の分野選択（D2）と既存の `kind = plan` の行・子はそのまま。
 - 関連: ADR-0027（分野の導入。本 ADR はその拡張）、ADR-0016（役割と委譲）、ADR-0007（Planner）、ADR-0026 / ADR-0027 D3（アダプタ）
 
 ## 1. 文脈

@@ -66,6 +66,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
     let now = OffsetDateTime::now_utc();
     let task = Task {
         tree: None,
+        paused_at: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),

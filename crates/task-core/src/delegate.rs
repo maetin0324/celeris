@@ -531,6 +531,7 @@ pub fn materialize_delegated_logging(
             budget.max_wall_secs = defaults.max_wall_secs;
             Task {
                 tree: None,
+                paused_at: None,
                 id: ids[&i],
                 parent_id: Some(parent.id),
                 kind: TaskKind::Execute,
@@ -624,6 +625,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

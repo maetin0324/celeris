@@ -619,6 +619,7 @@ mod tests {
         let t = now();
         Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

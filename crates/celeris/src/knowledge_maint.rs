@@ -289,6 +289,7 @@ fn build_run_spec(
             features: None,
             execution: None,
             pause_after: None,
+            stages_hint: Vec::new(),
             provenance: task_ops::add::SpecProvenance::system(),
         };
         Ok(Some(spec))
@@ -459,6 +460,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         task_core::Task {
             tree: None,
+            paused_at: None,
             routing: None,
             mode: Default::default(),
             skills: Vec::new(),

@@ -1,8 +1,9 @@
 //! ADR-0044 D6（Phase 55）: 案件・途中目標の **中止・一時停止・アーカイブ** の API。
 //!
-//! `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}` と
-//! `POST /milestones/{id}/{cancel|pause|resume}`。どれも管理系（bearer 必須。401 は
+//! `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}`。どれも管理系（bearer 必須。401 は
 //! `operations.rs` の `project_and_milestone_mutations_require_a_bearer_token` が見る）。
+//! ADR-0079 D13（Phase R5a）: `POST /milestones/{id}/{cancel|pause|resume}` と `PATCH /milestones/{id}` は 410
+//! （途中目標は凍結）。既存の途中目標の行は store で直接作る（凍結した本番の行の代わり）。
 
 mod common;
 
@@ -24,17 +25,18 @@ async fn a_project(app: &axum::Router, title: &str) -> String {
     resp.json()["id"].as_str().expect("id").to_string()
 }
 
-async fn a_milestone(app: &axum::Router, project_id: &str, title: &str) -> String {
-    let resp = send(
-        app,
-        post_admin(
-            &format!("/api/v1/projects/{project_id}/milestones"),
-            &json!({"title": title}),
-        ),
-    )
-    .await;
-    assert_eq!(resp.status, 201, "{}", resp.text());
-    resp.json()["id"].as_str().expect("id").to_string()
+/// 凍結した既存の途中目標の行（`POST /projects/{id}/milestones` は 410 なので store で作る）。
+fn a_milestone(env: &TestEnv, project_id: &str, title: &str) -> String {
+    env.store
+        .milestone_create(
+            project_id.parse().expect("project id"),
+            title,
+            "",
+            task_core::MilestoneStatus::Proposed,
+        )
+        .expect("milestone")
+        .id
+        .to_string()
 }
 
 /// その案件（と任意で途中目標）に属するタスクを 1 件仕込む。
@@ -65,7 +67,7 @@ async fn cancelling_a_project_cascades_to_its_tasks_and_milestones() {
     let env = admin_env();
     let app = env.router();
     let project = a_project(&app, "止める案件").await;
-    let milestone = a_milestone(&app, &project, "途中目標").await;
+    let milestone = a_milestone(&env, &project, "途中目標");
     let running = seed_task(&env, &project, Some(&milestone), Status::Running);
     let ready = seed_task(&env, &project, None, Status::Ready);
     let done = seed_task(&env, &project, None, Status::Done);
@@ -103,31 +105,27 @@ async fn cancelling_a_project_cascades_to_its_tasks_and_milestones() {
     assert_problem(&again, 409, "invalid_transition");
 }
 
-/// 途中目標の中止はその途中目標のタスクだけを `cancelled` にし、理由は `milestone_cancelled`。
-/// 案件の状態は変わらない。
+/// ADR-0079 D13（Phase R5a）: 途中目標の中止・一時停止・再開は 410。凍結した行も属するタスクも変わらない。
 #[tokio::test]
-async fn cancelling_a_milestone_only_touches_its_own_tasks() {
+async fn milestone_lifecycle_endpoints_are_gone() {
     let env = admin_env();
     let app = env.router();
     let project = a_project(&app, "案件").await;
-    let milestone = a_milestone(&app, &project, "途中目標").await;
+    let milestone = a_milestone(&env, &project, "途中目標");
     let inside = seed_task(&env, &project, Some(&milestone), Status::Ready);
-    let outside = seed_task(&env, &project, None, Status::Ready);
 
-    let resp = act(&app, &format!("/api/v1/milestones/{milestone}/cancel")).await;
-    assert_eq!(resp.status, 200, "{}", resp.text());
-    assert_eq!(resp.json()["milestone"]["status"], "cancelled");
-    assert_eq!(env.status_of(inside.id), Status::Cancelled);
-    assert_eq!(env.status_of(outside.id), Status::Ready);
-    assert_eq!(
-        transition_reason(&env, inside.id),
-        Some("milestone_cancelled".to_string())
-    );
-
-    let detail = send(&app, get_admin(&format!("/api/v1/projects/{project}")))
-        .await
-        .json();
-    assert_eq!(detail["project"]["status"], "proposed");
+    for action in ["cancel", "pause", "resume"] {
+        let resp = act(&app, &format!("/api/v1/milestones/{milestone}/{action}")).await;
+        assert_problem(&resp, 410, "removed_by_adr_0079");
+    }
+    assert_eq!(env.status_of(inside.id), Status::Ready);
+    let detail = send(
+        &app,
+        get_admin(&format!("/api/v1/projects/{project}?include_frozen=true")),
+    )
+    .await
+    .json();
+    assert_eq!(detail["milestones"][0]["status"], "proposed");
 }
 
 fn transition_reason(env: &TestEnv, id: task_core::TaskId) -> Option<String> {
@@ -181,28 +179,26 @@ async fn pausing_a_project_stops_dispatch_and_resume_restores_the_previous_statu
     );
 }
 
-/// 途中目標の `pause` はその途中目標のタスクだけを dispatch から外す。
+/// ADR-0079 D13（Phase R5a）: 新しく paused にする入口は無いが、既存の paused の途中目標の行はそのタスクを
+/// dispatch から外したまま（ADR-0044 D6 の抑止は既存の行に対してだけ残る）。
 #[tokio::test]
-async fn pausing_a_milestone_stops_only_its_own_tasks() {
+async fn an_existing_paused_milestone_still_stops_only_its_own_tasks() {
     let env = admin_env();
     let app = env.router();
     let project = a_project(&app, "案件").await;
-    let milestone = a_milestone(&app, &project, "途中目標").await;
+    let milestone = a_milestone(&env, &project, "途中目標");
     let inside = seed_task(&env, &project, Some(&milestone), Status::Ready);
     let outside = seed_task(&env, &project, None, Status::Ready);
-
-    let paused = act(&app, &format!("/api/v1/milestones/{milestone}/pause")).await;
-    assert_eq!(paused.status, 200, "{}", paused.text());
-    assert_eq!(paused.json()["milestone"]["status"], "paused");
-    assert_eq!(paused.json()["milestone"]["paused_from"], "proposed");
+    env.store
+        .milestone_set_lifecycle(
+            milestone.parse().expect("milestone id"),
+            task_core::MilestoneStatus::Paused,
+            Some(Some(task_core::MilestoneStatus::Proposed)),
+        )
+        .expect("pause row");
     let ready = ready_ids(&env);
     assert!(!ready.contains(&inside.id.to_string()));
     assert!(ready.contains(&outside.id.to_string()));
-
-    let resumed = act(&app, &format!("/api/v1/milestones/{milestone}/resume")).await;
-    assert_eq!(resumed.status, 200, "{}", resumed.text());
-    assert_eq!(resumed.json()["milestone"]["status"], "proposed");
-    assert!(ready_ids(&env).contains(&inside.id.to_string()));
 }
 
 fn ready_ids(env: &TestEnv) -> Vec<String> {
@@ -301,11 +297,11 @@ fn task_ids(list: &Value) -> Vec<String> {
 /// `PATCH` で入れると `paused_from`（`resume` の戻り先）が空のままになり、中止の連鎖も起きないので 422。
 /// GUI の「状態を直接変える」プルダウンからもこの 2 つは外してある（`gui/app/routes/projects.$id.tsx`）。
 #[tokio::test]
-async fn patch_cannot_set_paused_or_cancelled_on_a_project_or_a_milestone() {
+async fn patch_cannot_set_paused_or_cancelled_on_a_project_and_milestones_are_gone() {
     let env = admin_env();
     let app = env.router();
     let project = a_project(&app, "案件").await;
-    let milestone = a_milestone(&app, &project, "途中目標").await;
+    let milestone = a_milestone(&env, &project, "途中目標");
 
     for status in ["paused", "cancelled"] {
         let resp = send(
@@ -319,6 +315,7 @@ async fn patch_cannot_set_paused_or_cancelled_on_a_project_or_a_milestone() {
         let problem = assert_problem(&resp, 422, "validation");
         assert_eq!(problem["errors"][0]["field"], "status", "{problem}");
 
+        // ADR-0079 D13（Phase R5a）: 途中目標の PATCH は状態を問わず 410。
         let resp = send(
             &app,
             patch_admin(
@@ -327,8 +324,7 @@ async fn patch_cannot_set_paused_or_cancelled_on_a_project_or_a_milestone() {
             ),
         )
         .await;
-        let problem = assert_problem(&resp, 422, "validation");
-        assert_eq!(problem["errors"][0]["field"], "status", "{problem}");
+        assert_problem(&resp, 410, "removed_by_adr_0079");
     }
 
     // 何も変わっていない。他の状態は従来どおり `PATCH` で入る。
@@ -358,7 +354,7 @@ async fn patch_cannot_set_paused_or_cancelled_on_a_project_or_a_milestone() {
         )
         .await
         .status,
-        200
+        410
     );
 }
 
@@ -376,10 +372,11 @@ async fn unknown_and_malformed_ids_are_404() {
         404,
         "project_not_found",
     );
+    // ADR-0079 D13（Phase R5a）: 途中目標の入口は id を見ずに 410。
     assert_problem(
         &act(&app, &format!("/api/v1/milestones/{milestone}/cancel")).await,
-        404,
-        "milestone_not_found",
+        410,
+        "removed_by_adr_0079",
     );
     assert_problem(
         &act(&app, "/api/v1/projects/not-a-ulid/cancel").await,
@@ -388,8 +385,15 @@ async fn unknown_and_malformed_ids_are_404() {
     );
     assert_problem(
         &act(&app, "/api/v1/milestones/not-a-ulid/pause").await,
-        404,
-        "milestone_not_found",
+        410,
+        "removed_by_adr_0079",
     );
+    // task の pause は 404（知らない task）。
+    let resp = act(
+        &app,
+        &format!("/api/v1/tasks/{}/pause", task_core::TaskId::new()),
+    )
+    .await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
     let _ = (ListFilter::default(), ListOrder::CreatedDesc, &env);
 }

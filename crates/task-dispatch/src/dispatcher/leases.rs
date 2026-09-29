@@ -1,4 +1,4 @@
-//! ADR-0082 の責務分割。
+//! lease の回収・abort・orphan の引き取り・drain の打ち切り。`run_holds_lease` を確かめてから結果を適用し、`stop_run` は kill_tree → abort の順。ADR-0082 の L3。
 
 use super::*;
 

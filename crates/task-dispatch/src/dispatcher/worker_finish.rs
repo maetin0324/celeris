@@ -1,4 +1,4 @@
-//! ADR-0082 の責務分割。
+//! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
 

@@ -2704,6 +2704,44 @@ pub fn next_work_unit(units: &[WorkUnitRow]) -> NextStep {
     )
 }
 
+/// ADR-0074「F5-fix8 実装時の明確化」: 計画に残っている仕事が無い（有効な WorkUnit がすべて `done`、または
+/// 有効な WorkUnit が 1 つも無い）か。統合 WU・repair WU も含めて見る（統合が済んでいない工程は `false`）。
+pub fn plan_work_finished(units: &[WorkUnitRow]) -> bool {
+    units
+        .iter()
+        .filter(|u| u.status.is_active())
+        .all(|u| u.status == WorkUnitStatus::Done)
+}
+
+/// ADR-0074「F5-fix8 実装時の明確化」: `active` な計画（`plan_id`）が採用されてから、最終レビューの判定
+/// （`review_pass` / `review_fail` / `review_repair` で `reviewing` を出た遷移）がまだ 1 度も無いか。
+///
+/// 仕事の残っていない計画について dispatcher が「最終レビューへ進める（`Trigger::PlanComplete`）」か
+/// 「replan を試す（D17 4.）」かを分ける。採用の後に判定が無い = この版はまだ審査されていない（replan で
+/// 何も足さなかった版を含む）ので、審査に出す。判定の後（不合格で `ready` に戻った）なら従来どおり replan。
+/// 採用の event（`ExecutionPlanned{plan_id}`）が見つからなければ `false`（従来どおり）。純粋関数（LLM なし）。
+pub fn plan_awaits_final_review(events: &[(u64, crate::model::Event)], plan_id: &str) -> bool {
+    use crate::model::{Event, Status};
+    for (_, event) in events.iter().rev() {
+        match event {
+            Event::ExecutionPlanned { plan_id: id, .. } if id == plan_id => return true,
+            Event::Transitioned {
+                from: Status::Reviewing,
+                reason,
+                ..
+            } if matches!(
+                reason.as_str(),
+                "review_pass" | "review_fail" | "review_repair"
+            ) =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// ADR-0074 D1.3（Phase F2）: `next_work_unit` の一般化。工程の中で並列に何本まで起こせるかを
 /// 決める（純粋関数。実際に走らせる・lease を取るのは呼び出し側の責務）。
 ///

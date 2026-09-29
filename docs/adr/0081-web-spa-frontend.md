@@ -1,4 +1,4 @@
-# ADR-0078: Web GUI の遷移を daemon の遅延から切り離す SPA と薄い gateway
+# ADR-0081: Web GUI の遷移を daemon の遅延から切り離す SPA と薄い gateway
 
 ---
 tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
@@ -170,6 +170,8 @@ Phase 0 は本 ADR、全 route の parity matrix、遅延 baseline と実装計�
 ## 前提の訂正
 
 照合基点は `06e9a03cffe8`。元計画の `0658547a1f9d0997c2a6a7707507543029a17a84` から `gui/` と `docs/api/` に差分はない。ただし計画に書かれた採用方針と、実際に導入済みの状態を区別する。
+
+**ADR 番号の前提を訂正**: premise-check の時点の記述（ルートの ADR は 0077 まで）は誤りで、main `36ea922` では 0080 まであり、ADR-0078 は browser execution capability と SSH master persist の 2 本がある。新しい Web GUI ADR は空き番号 0081 とする。
 
 | 前提・補足 | 現行コードでの確認と本 ADR への反映 |
 |---|---|

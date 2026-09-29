@@ -4,9 +4,9 @@
 tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
 ---
 
-[ADR-0078](../adr/0078-web-spa-frontend.md) を実装するための計画。Phase 0（ADR、[feature parity matrix](feature-parity.md)、
+[ADR-0081](../adr/0081-web-spa-frontend.md) を実装するための計画。Phase 0（ADR、[feature parity matrix](feature-parity.md)、
 遅延 baseline）の次に行う仕事を、**1 セッションで終わり、1 commit で戻せるタスク**に分けて並べる。
-設計の正本は ADR-0078、移行の gate は parity matrix で、この計画はその順番と検査を決める。
+設計の正本は ADR-0081、移行の gate は parity matrix で、この計画はその順番と検査を決める。
 
 - 照合基点: main `06e9a03cffe8`。現行 GUI の遅延 baseline（2026-09-28 計測）は、遷移が「遅延 × 3」
   （5 s で約 15 s、10 s で約 30 s）、SSE のどのイベントでも表示中の全 loader を再実行、遅延 5 s + tick 2 s で
@@ -22,7 +22,7 @@ tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
 | 変更の範囲 | Phase 1〜5 は `web/` と `docs/web/` だけを変える（Phase の完了記録の `docs/PROGRESS.md` とその分割ファイルを除く）。`gui/`、`crates/`、`docs/api/`、`deploy/`、`scripts/selfdeploy/` は変えない。Phase 6 だけが `deploy/` と `scripts/selfdeploy/` に触れる |
 | rollback | そのタスクの commit を `git revert` する。Phase 5 まで web/ は利用者に配信していないので、revert で利用者の画面は変わらない。Phase 6 のタスクは個別の戻し方を書く |
 | 依存の追加 | `web/` は独立した pnpm の workspace と lockfile を持つ（`gui/pnpm-workspace.yaml` と同じ方針: 公開から 7 日未満の版を使わない、install スクリプトは許可リストだけ）。版は導入するタスクで確かめて lockfile で固定する |
-| 設計判断 | ADR-0078 に無い判断が要るときは、先に `docs/adr/NNNN-*.md` を足してから実装する |
+| 設計判断 | ADR-0081 に無い判断が要るときは、先に `docs/adr/NNNN-*.md` を足してから実装する |
 | 名前 | 世代名（`v2`、`next` など）を directory・package・route・script・環境変数に使わない。既存の API 契約 `docs/api/v1/` と、現行の URL の search param `/login?next=` は別 |
 | テスト | 外部ネットワークに出ない。本番の celeris（`:7710`）と GUI（`:7700`）、staging（`:7701` `:7711` `:7712`）に接続しない。偽 daemon と gateway は空き port を取る |
 | commit | 題は `web phase <N> <タスク ID>: <要約>`。本文に理由を書く |
@@ -77,8 +77,8 @@ pnpm -C web screenshots --only "<path>" --out "$ARTIFACTS/shots"   # S7
   遷移先の見出し・枠の表示まで 300 ms 以内。10 s のときと 0 s のときの差は 100 ms 以内。データ待ちの間も
   ナビ・戻る・進む・タブ切替が使える。
 - **S2 再取得の範囲**: その画面を開いたまま SSE の `daemon` を 2 s 周期で 10 回、無関係な task の
-  `worker_progress` を 20 件流しても、その画面の Query の再取得は 0 本（ADR-0078 D5 の `daemon/rest` の 5 s、
-  `inbox` の 15 s の補完取得は数えない）。関係するイベントでは ADR-0078 D6 の表の key だけを取り直す。
+  `worker_progress` を 20 件流しても、その画面の Query の再取得は 0 本（ADR-0081 D5 の `daemon/rest` の 5 s、
+  `inbox` の 15 s の補完取得は数えない）。関係するイベントでは ADR-0081 D6 の表の key だけを取り直す。
   遅延 5 s + tick 2 s でも進行中の取得を打ち切り続けず、daemon への要求が増え続けない。
 - **S3 mobile**: 幅 360 / 390 / 412 / 1440 px でページ全体の横溢れ 0、タップ領域 44×44 px 以上。長い表・ログ・
   DAG・差分の横スクロールは枠の中に閉じる。
@@ -98,16 +98,16 @@ pnpm -C web screenshots --only "<path>" --out "$ARTIFACTS/shots"   # S7
 選択肢と推奨は Phase 0 の run の成果物 `web-decisions.md`（リポジトリの外）にある。ここには、決まるまで
 この計画がどう進めるかだけを書く。人が別の決定をしたら、下の「待つタスク」を書き直す。
 
-| # | 決めること | 決まるまでの扱い（ADR-0078 の範囲内） | 待つタスク |
+| # | 決めること | 決まるまでの扱い（ADR-0081 の範囲内） | 待つタスク |
 |---|---|---|---|
-| H1 | SSE の event payload の拡張（`EventRow.project_id` など）の要否 | API を変えない。project は Query cache から解決し、分からなければ project の集計 key を stale にする（ADR-0078 D6） | P2-05。P5-01 で fallback の回数を測って報告する |
+| H1 | SSE の event payload の拡張（`EventRow.project_id` など）の要否 | API を変えない。project は Query cache から解決し、分からなければ project の集計 key を stale にする（ADR-0081 D6） | P2-05。P5-01 で fallback の回数を測って報告する |
 | H2 | 並行運用の port | 開発と検査は `127.0.0.1:7720`。本番の port は決めない | P6-02 |
 | H3 | 並行運用での認証・session の共有方法 | web/ は自分の cookie 名と署名鍵を持ち、gui/ の cookie を読まない | P1-05、P6-02 |
-| H4 | 取得済みデータの永続化の可否 | 永続化しない（ADR-0078 D2）。保存するのは表示の好みだけ | P2-01、P2-06 |
+| H4 | 取得済みデータの永続化の可否 | 永続化しない（ADR-0081 D2）。保存するのは表示の好みだけ | P2-01、P2-06 |
 | H5 | 遅延 gate の閾値 | S1 の 300 ms / 100 ms | P2-07、P5-01 |
 | H6 | dogfood の期間と cutover の合格条件 | 決まるまで cutover を始めない | P6-03、P6-04、P6-05 |
 | H7 | release と selfdeploy に web/ を入れる時期 | Phase 5 まで入れない。selfdeploy の gate は gui/ のまま | P6-01、P6-02 |
-| H8 | HTML の成果物の見せ方 | 同一オリジンでは実行させず、download にする（ADR-0078 D3） | P1-08、P3-11 |
+| H8 | HTML の成果物の見せ方 | 同一オリジンでは実行させず、download にする（ADR-0081 D3） | P1-08、P3-11 |
 | H9 | 並行運用中のブラウザ通知 | web/ の通知は利用者が web/ の origin で許可したときだけ出す | P3-15、P6-03 |
 | H10 | 実 celeris に対する結合検査を必須にする時期 | Phase 1〜5 は偽 daemon で検査し、P6-02 の staging で実 celeris に対して確かめる | P6-02 |
 
@@ -184,7 +184,7 @@ Phase の目的: daemon が止まっていても HTML と login が返り、toke
 
 ### P1-01 web/ の scaffold
 - 作るもの: `web/` の package（React、TypeScript、Vite、TanStack Router の file-based routing、Tailwind CSS 4、
-  vitest、Playwright、biome）、独立した `pnpm-workspace.yaml` と lockfile、ADR-0078 D8 の directory、
+  vitest、Playwright、biome）、独立した `pnpm-workspace.yaml` と lockfile、ADR-0081 D8 の directory、
   `index.html` と `main.tsx`、`__root` と `/login` の空の枠。script は `typecheck` `lint` `test` `build` `e2e`。
 - 受け入れ条件: C1、C4。`pnpm -C web build` が fingerprint 付きの asset を出す。directory と package 名に世代名が無い。
   リポジトリ直下と gui/ の設定ファイルを変えない。
@@ -266,7 +266,7 @@ Phase の目的: daemon の状態で mount が変わらない shell と、イベ
 
 ### P2-01 API client・QueryClient・key factory
 - 作るもの: `web/api/client.ts`（same-origin の fetch、timeout 15 s、AbortSignal、エラーの種類）、session に 1 つの
-  QueryClient、`web/api/queries/` の domain 別 key factory と staleTime（ADR-0078 D5 の表の全 domain）。
+  QueryClient、`web/api/queries/` の domain 別 key factory と staleTime（ADR-0081 D5 の表の全 domain）。
 - 受け入れ条件: C1〜C4。GET だけ上限付きで再試行し、401 / 403 / 検証エラーは再試行しない。変更系を自動で再送しない。
   logout と session 失効で query と mutation の cache を捨て、進行中の fetch を止める。Query の persist を入れない。
   key は ID と正規化した search / filter を含み、同じ API 応答をバッジ用と画面用に二重に持たない。
@@ -301,7 +301,7 @@ Phase の目的: daemon の状態で mount が変わらない shell と、イベ
 
 ### P2-05 SSE → invalidate の対応表
 - 作るもの: `web/api/realtime/invalidation-map.ts`（フレーム 5 種と `task.event` の 36 種 → key の集合。
-  ADR-0078 D6 の表のとおり）、key ごとの 250 ms の束ね、project の解決と fallback、`reset` の再同期。
+  ADR-0081 D6 の表のとおり）、key ごとの 250 ms の束ね、project の解決と fallback、`reset` の再同期。
 - 受け入れ条件: C1〜C4。schema の event の種類が対応表に 1 つでも無ければテストが落ちる。36 種すべてに fixture の
   テストがある。`worker_progress` で project・設定・一覧を取り直さない。重複と逆順のイベントで二重に取り直さない。
   1 s に 20 件の burst と遅延 10 s を重ねても、key ごとの進行中の取得は 1 本で、要求が増え続けない。

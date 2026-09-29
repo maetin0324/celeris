@@ -1,6 +1,6 @@
 # ADR-GUI-0002: フロントエンドスタック — React + Remix（React Router framework mode）
 
-> 2026-09-28: [ADR-0078](../../adr/0078-web-spa-frontend.md) が、新設 `web/` について D1〜D3（SSR・loader/action・TanStack 不採用）、D5/D6 の SSR 依存部分、§6 の SPA 不採用判断を supersede する。既存 `gui/` と本 ADR の本文は移行期間中も保持する。
+> 2026-09-28: [ADR-0081](../../adr/0081-web-spa-frontend.md) が、新設 `web/` について D1〜D3（SSR・loader/action・TanStack 不採用）、D5/D6 の SSR 依存部分、§6 の SPA 不採用判断を supersede する。既存 `gui/` と本 ADR の本文は移行期間中も保持する。
 
 - 日付: 2026-09-14（初版 Proposed → 同日 人間の決定で改訂。一次情報の確認日も 2026-09-14）
 - 状態: **Accepted**（人間の決定 H2「React を使い、Remix を採用する」。§4 の確認事項は 2026-09-14 に全て本 ADR の案どおり確定。DESIGN-GUI §11 の H11）

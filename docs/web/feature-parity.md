@@ -3,10 +3,10 @@ tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
 ---
 # web/ の feature parity matrix（gui/ の全 route）
 
-ADR-0078（`docs/adr/0078-web-spa-frontend.md`）の移行 gate。`gui/app/routes.ts`（main `06e9a03cffe8`）の
+ADR-0081（`docs/adr/0081-web-spa-frontend.md`）の移行 gate。`gui/app/routes.ts`（main `06e9a03cffe8`）の
 **全 42 route を 1 行ずつ**並べ、その route の主要操作・認証・通知・SSE・file viewer・mobile 要件・既存の検査と、
 新 `web/` でそれを閉じる Phase・slice・確認方法・状態を書く。**すべての行が「完了」になるまで gui/ から web/ への
-配信切替をしない**（ADR-0078 D8）。gui/ の削除は別タスクで人の承認が要る。
+配信切替をしない**（ADR-0081 D8）。gui/ の削除は別タスクで人の承認が要る。
 
 ## 使い方
 
@@ -15,7 +15,7 @@ ADR-0078（`docs/adr/0078-web-spa-frontend.md`）の移行 gate。`gui/app/route
 - 「確認方法」のテスト名は **これから web/ に作るテストの名前を先に決めたもの**。ファイルは
   `web/e2e/parity/<slice>.spec.ts`、テストの題は `parity: <route>` で始める。実行は
   `pnpm -C web e2e parity/<slice>.spec.ts -g "parity: <route>"`。mobile の行は、これに加えて
-  `pnpm -C web mobile-audit`（幅 360/390/412 と 1440、ADR-0078 D7）の対象一覧にその path が入っていること。
+  `pnpm -C web mobile-audit`（幅 360/390/412 と 1440、ADR-0081 D7）の対象一覧にその path が入っていること。
 - search param で切り替わる画面（tab など）は、その route の行の「主要操作」に書き、確認方法で全値を開く。
 - 表の行数の検査: `grep -c '^| R[0-9][0-9] |' docs/web/feature-parity.md` が `gui/app/routes.ts` の
   `index(` + `route(` の数（42）と一致すること。path の集合の一致も確かめる（Phase 0 の証跡は
@@ -36,7 +36,7 @@ ADR-0078（`docs/adr/0078-web-spa-frontend.md`）の移行 gate。`gui/app/route
 凡例: **認証** = `要`（未認証は画面なら 302 `/login?next=`、resource なら 401。`gui/app/auth.server.ts:157-203`）/
 `不要`（`PUBLIC_PATHS` = `/login` `/logout` `/healthz`）。**SSE** = `全再検証` は root の `useCelerisStream`
 （`task.event`/`daemon`/`reset` のどれでも表示中の全 loader を 250 ms スロットルで再実行）に依存するという意味。
-web/ ではこれを「その行の domain の key だけ invalidate」に置き換える（ADR-0078 D6）。**mobile** の `audit` は
+web/ ではこれを「その行の domain の key だけ invalidate」に置き換える（ADR-0081 D6）。**mobile** の `audit` は
 現行 `pnpm mobile-audit`（393×851 のみ、`gui/scripts/lib/celeris-fixture.mjs:56-110`）の対象、`未 audit` は対象外
 （11 本。web/ では mobile-gate で必ず対象に入れる）。全画面に共通の要件（44×44 のタップ領域、ページ全体の横溢れ
 なし、360〜412 と 1440 の幅）は横断要件 X10 に書き、行には画面固有のものだけ書く。
@@ -54,14 +54,14 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 | R07 | `/org` | 画面 | 課・部の `org_create` / `org_patch` / `org_delete`、`skill_mount` / `skill_unmount`。`?selected=` で右の詳細 | 要 | 共通（X9） | 全再検証 | profile・skill の Markdown | audit（`org`、`org?selected=`）。木と詳細が縦積みになる | unit `org.test` `org-tree.test` `skills.test`、e2e `g13`、mobile-audit `org` `org-detail` | 4 / `org` | `parity: /org 木・選択・作成・変更・削除・skill` | 未着手 |
 | R08 | `/org/:id` | 画面 | その人の Console（R01 と同じ部品。`id=cos` もここ） | 要 | 共通（X9） | 全再検証 + `/console/stream` | なし | audit（`org-node`）。**fixed composer**（R01 と同じ） | unit `console*.test`、mobile-audit `org-node` | 3 / `console` | `parity: /org/:id Console の送信と宛先` | 未着手 |
 | R09 | `/projects` | 画面 | 案件の作成（成功は `/projects/:id` へ redirect、失敗は fetcher）、一覧の絞り込み | 要 | 共通（X9） | 全再検証 | なし | audit | unit `projects.test` `project-index.test` `workspace-form.test`、e2e `g13`、mobile-audit `projects` | 4 / `projects` | `parity: /projects 一覧・作成・422 表示` | 未着手 |
-| R10 | `/projects/:id` | 画面 | `project_edit` `project_status` `project_pause` `project_resume` `project_cancel` `project_archive` `project_unarchive` `project_plan` `project_plan_decide` `project_workspace_save` `project_workspace_clear`、`milestone_create` `milestone_status` `milestone_pause` `milestone_resume` `milestone_cancel` `milestone_decide`、`repo_create` `repo_patch` `repo_delete` `repo_primary`、`task_create` | 要 | 共通（X9） | 全再検証（project に属する task の event。`project_id` はイベントに無いことが多い → ADR-0078 D6 の解決表） | 成果物一覧（`ArtifactsList` → R41）、Markdown、仕事の木（`WorkTree`） | audit（`project-detail`）。計画 DAG と仕事の木が横溢れしない | unit `projects.detail.test` `projects.repos.test` `repos-admin.test` `project-plan*.test` `milestone-review.test` `work-tree.test`、e2e `g13`、mobile-audit `project-detail` | 4 / `projects` | `parity: /projects/:id 全 intent・計画・木` | 未着手 |
+| R10 | `/projects/:id` | 画面 | `project_edit` `project_status` `project_pause` `project_resume` `project_cancel` `project_archive` `project_unarchive` `project_plan` `project_plan_decide` `project_workspace_save` `project_workspace_clear`、`milestone_create` `milestone_status` `milestone_pause` `milestone_resume` `milestone_cancel` `milestone_decide`、`repo_create` `repo_patch` `repo_delete` `repo_primary`、`task_create` | 要 | 共通（X9） | 全再検証（project に属する task の event。`project_id` はイベントに無いことが多い → ADR-0081 D6 の解決表） | 成果物一覧（`ArtifactsList` → R41）、Markdown、仕事の木（`WorkTree`） | audit（`project-detail`）。計画 DAG と仕事の木が横溢れしない | unit `projects.detail.test` `projects.repos.test` `repos-admin.test` `project-plan*.test` `milestone-review.test` `work-tree.test`、e2e `g13`、mobile-audit `project-detail` | 4 / `projects` | `parity: /projects/:id 全 intent・計画・木` | 未着手 |
 | R11 | `/projects/:id/docs` | 画面 | 文書の `init` / `save` / `delete` | 要 | なし | 全再検証（route は既定の判断） | 文書の Markdown 表示と編集 | audit（`project-docs`）。編集欄が幅に収まる | unit `docs.test`、mobile-audit `project-docs` | 4 / `projects` | `parity: /projects/:id/docs 初期化・保存・削除` | 未着手 |
 | R12 | `/projects/:id/docs/maintenance` | 画面 | 文書保守の起動（`POST /projects/:id/docs/maintenance`） | 要 | なし | 全再検証 | なし | audit（`project-docs-maintenance`） | unit `docs-maintenance.test`、mobile-audit `project-docs-maintenance` | 4 / `projects` | `parity: /projects/:id/docs/maintenance 起動と結果` | 未着手 |
 | R13 | `/board` | 画面 | 案件を選んで 6 列表示。絞り込みは URL（search param）。カードの `edit` | 要 | 共通（X9） | 全再検証 | なし | audit。6 列は横スクロールを列の枠内に閉じる（ページは横溢れしない） | unit `board.test` `board.loader.test`、`check-resume-recovery.mjs`、mobile-audit `board` | 4 / `projects` | `parity: /board 列・URL 絞り込み・編集・復帰` | 未着手 |
 | R14 | `/knowledge` | 画面 | 知識の検索・閲覧（URL）と `save` | 要 | なし | 全再検証 | Markdown 表示 | audit | unit `knowledge.test`、mobile-audit `knowledge` | 4 / `knowledge` | `parity: /knowledge 検索・閲覧・保存` | 未着手 |
 | R15 | `/knowledge/inbox` | 画面 | 候補の `accept` / `reject` | 要 | なし | 全再検証 | 候補の Markdown | audit（`knowledge-inbox`） | unit `knowledge.test`、mobile-audit `knowledge-inbox` | 4 / `knowledge` | `parity: /knowledge/inbox 採用・却下` | 未着手 |
 | R16 | `/knowledge/skills` | 画面 | `skill_put` / `skill_delete`。`?create=1`（作成フォーム）、`?name=`（詳細）、`&edit=1`（編集） | 要 | なし | 全再検証 | skill 本文の Markdown・雛形 | audit（`knowledge-skills` `knowledge-skill-create` `-detail` `-edit`）。files 入力・インラインの検証エラー | unit `skills.test`、mobile-audit 4 本 | 4 / `knowledge` | `parity: /knowledge/skills 一覧・create・name・edit・削除` | 未着手 |
-| R17 | `/reports` | 画面 | `reports_read`（既読）、`reports_notified`、`notify_test`（通知の試験）。`?filter=` `?level=`。ブラウザ通知の許可（`NotificationsEnable`） | 要 | **通知の中心**: 報告の到着 → Notification API（X9）、未読バッジ | 全再検証（`daemon` の reports は SSE の生 snapshot では空 → `GET /daemon` を取り直す、ADR-0078 D5） | なし | audit。展開行（R18）が縦に伸びる | unit `reports.test` `notify.test`、e2e `g13`、mobile-audit `reports` | 3 / `reports` | `parity: /reports 絞り込み・既読・通知試験・展開` | 未着手 |
+| R17 | `/reports` | 画面 | `reports_read`（既読）、`reports_notified`、`notify_test`（通知の試験）。`?filter=` `?level=`。ブラウザ通知の許可（`NotificationsEnable`） | 要 | **通知の中心**: 報告の到着 → Notification API（X9）、未読バッジ | 全再検証（`daemon` の reports は SSE の生 snapshot では空 → `GET /daemon` を取り直す、ADR-0081 D5） | なし | audit。展開行（R18）が縦に伸びる | unit `reports.test` `notify.test`、e2e `g13`、mobile-audit `reports` | 3 / `reports` | `parity: /reports 絞り込み・既読・通知試験・展開` | 未着手 |
 | R18 | `/reports/:id` | resource | GET: 行の展開、`sources_expanded` の追い掛け | 要（現行は 302、web は 401 → X1） | なし | なし | なし | — | unit `reports.test` | 3 / `reports` | `parity: /reports/:id 展開の取得` | 未着手 |
 | R19 | `/approvals` | 画面 | `approval_decide`、常設ルールの `standing_rule_create` / `standing_rule_delete` | 要 | 共通（X9）、root の承認待ちバッジ（`approvals_pending`） | 全再検証（バッジは `GET /daemon` の値。SSE の生 snapshot は 0） | 成果物の Markdown | audit | unit `approvals.test`、e2e `g13`、mobile-audit `approvals` | 3 / `inbox` | `parity: /approvals 判定・常設ルール・バッジ` | 未着手 |
 | R20 | `/artifacts` | 画面 | 絞り込み（`?project=` 等、GET の Form）だけ | 要 | なし | 全再検証 | 成果物一覧（`ArtifactsList` → R41） | **未 audit** | unit `artifacts.test` `artifacts.route.test` `artifact-view.test`、e2e `g13` | 3 / `runs-files` | `parity: /artifacts 絞り込みと開く` | 未着手 |
@@ -73,7 +73,7 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 | R26 | `/tasks/:id/runs/:runId` | 画面 | run ログの閲覧（会話形式、`/files/.../stdout?offset=` の追記を追う） | 要 | なし | 全再検証（実行中 run は offset の追い掛け） | **stdout.jsonl・result.json の viewer**（R40） | **未 audit**。`check-run-log.mjs` は 360/390/412/1440 | unit `run-log.test`、e2e `g3`（行数が `wc -l` と一致）、`check-run-log.mjs` | 3 / `runs-files` | `parity: /tasks/:id/runs/:runId 会話表示と追記` | 未着手 |
 | R27 | `/tasks/:id/runs/:runId/events` | resource | GET: Console の progress の「すべて見る」 | 要 | なし | なし | なし | — | unit `tasks.runs.events.route.test` | 3 / `console` | `parity: runs/:runId/events 全行の取得` | 未着手 |
 | R28 | `/plans/new` | 画面 | 計画の作成（`POST /plans`、成功は `/tasks/:id` へ） | 要 | なし | 全再検証 | なし | **未 audit** | unit `plans.new.test`、e2e `g2` | 3 / `tasks` | `parity: /plans/new 作成と失敗表示` | 未着手 |
-| R29 | `/daemon` | 画面 | `replay`（結果は fetcher） | 要 | なし | 全再検証（SSE `daemon` の生 snapshot と `GET /daemon` の差 → ADR-0078 D5） | なし | **未 audit** | unit `daemon.test`、e2e `g2`（replay 0 mismatch）`g4`、e2e `g5-a11y` | 4 / `ops` | `parity: /daemon 状態・replay` | 未着手 |
+| R29 | `/daemon` | 画面 | `replay`（結果は fetcher） | 要 | なし | 全再検証（SSE `daemon` の生 snapshot と `GET /daemon` の差 → ADR-0081 D5） | なし | **未 audit** | unit `daemon.test`、e2e `g2`（replay 0 mismatch）`g4`、e2e `g5-a11y` | 4 / `ops` | `parity: /daemon 状態・replay` | 未着手 |
 | R30 | `/providers` | 画面 | provider の `create` / `patch` / `delete` / `check` | 要 | なし | 全再検証（dispatcher tick ごとの snapshot） | なし | **未 audit** | unit `providers.test` `providers-admin.test`、e2e `g4` `g8` `g9`、e2e `g5-a11y` | 4 / `ops` | `parity: /providers 追加・変更・削除・確認` | 未着手 |
 | R31 | `/accounts` | 画面 | account の `create` / `delete` / `check`、ログイン `login_start` / `login_code` / `login_cancel`（デバイス認証）、`secret_put` / `secret_delete`。LLM source・MCP クライアントの表示（R32 を開く） | 要 | なし | 全再検証 | なし | audit。**秘密値の入力欄**（表示しない・自動補完しない） | unit `accounts*.test` `secrets-admin.test` `llm-sources.test` `mcp.test`、e2e `g8` `g9`、mobile-audit `accounts` | 4 / `ops` | `parity: /accounts 追加・ログイン・secret・削除` | 未着手 |
 | R32 | `/mcp/clients/:id/calls` | resource | GET: MCP クライアントの直近の呼び出し（カードを開いたとき） | 要 | なし | なし | なし | — | unit `mcp.test` | 4 / `ops` | `parity: mcp/clients/:id/calls 取得` | 未着手 |
@@ -89,7 +89,7 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 | R42 | `*` | 画面（404） | 未定義パスも middleware（Host・認証・CSRF・header）を通して 404 | 要 | なし | なし | なし | 404 画面からナビへ戻れる | e2e `g5`（`/no-such-page`） | 2 / `shell` | `parity: * 未定義パスの 404 と header` | 未着手 |
 
 補足:
-- 行ごとの SSE の invalidate 範囲（どのイベントでどの key を捨てるか）は ADR-0078 D6 の表が正。parity の確認では、
+- 行ごとの SSE の invalidate 範囲（どのイベントでどの key を捨てるか）は ADR-0081 D6 の表が正。parity の確認では、
   その行の画面を開いたまま無関係な task の `worker_progress` を流しても、その画面の key が再取得されないことも見る。
 - root が持つもの（ナビのバッジ counts・`reportsLive`・`approvalsPending`、celeris 断のバナーと 5 秒ごとの再確認、
   復帰時の再同期）は route ではないので横断要件 X9・X12・X13 に置く。
@@ -108,7 +108,7 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 | X8 | 秘密・機密を永続化しない | SSR なので client の保存は無い | TanStack Query の persist を使わない。localStorage / IndexedDB に server state・secret・token・報告本文を書かない（UI の好みだけ可） | 2 / `shell` | `parity-x: storage に機密が無い`（全画面を開いた後の storage を検査） | 未着手 |
 | X9 | ブラウザ通知 | `components/NotificationsWatcher.tsx`（root loader の `reportsLive` → Notification API、判定 `lib/reports.ts`）、`NotificationsEnable`、R17 の `notify_test`。unit `notify.test` `reports.test` | 報告の到着を shell で見張る。値の元は `GET /daemon`（補完済み）で、SSE の生 snapshot の `reports: None` で「無い」と判断しない。同じ報告を二度通知しない（タブ間も含む） | 3 / `reports` | `parity-x: 通知 1 回だけ・生 snapshot で消えない` | 未着手 |
 | X10 | mobile・a11y | mobile-audit（393×851、ADR-0055 D1 の規則: 44×44、横溢れ、`a11y-name`、`a11y-structure`、`focus-order`）、e2e `g5-a11y`（axe の critical/serious 0）、`check-*.mjs` の 360/390/412/1440 撮影 | 全 42 行の画面（resource を除く）を 360/390/412/1440 で監査（未 audit の 11 本も含む）。タップ領域 44×44、ページの横溢れなし、axe critical/serious 0、ダイアログの focus trap、遷移時の見出し focus | 5 / `mobile-gate` | `pnpm -C web mobile-audit`（全画面・4 幅）と `parity-x: axe 全画面` | 未着手 |
-| X11 | 遅延の表示と遷移の独立 | loader は全部 blocking、root は `/health` → `/inbox` → `/daemon` を直列、client の timeout 15 s | 遷移（URL と枠）は daemon を待たない。1 s 超で待機表示、5 s 超で「時間がかかっています」と再試行、失敗を 0 件に置き換えない（ADR-0078 D7）。daemon に 5/10 s の遅延を入れて測る | 5 / `latency-gate` | `parity-x: 遅延 10 s で遷移が止まらない`（baseline と同じ手順） | 未着手 |
+| X11 | 遅延の表示と遷移の独立 | loader は全部 blocking、root は `/health` → `/inbox` → `/daemon` を直列、client の timeout 15 s | 遷移（URL と枠）は daemon を待たない。1 s 超で待機表示、5 s 超で「時間がかかっています」と再試行、失敗を 0 件に置き換えない（ADR-0081 D7）。daemon に 5/10 s の遅延を入れて測る | 5 / `latency-gate` | `parity-x: 遅延 10 s で遷移が止まらない`（baseline と同じ手順） | 未着手 |
 | X12 | SSE の再接続・再同期 | `useCelerisStream`（CLOSED なら 5 s 後に張り直し）、`useResumeRevalidate`・`recovery.ts`（visibilitychange / pageshow / online / focus）。`check-resume-recovery.mjs` | `Last-Event-ID` で続きから、`reset` で全 invalidate、復帰時は表示中の key だけ再取得。イベントの burst で request が増え続けない | 2 / `realtime` | `parity-x: SSE 再接続・reset・復帰・burst` | 未着手 |
 | X13 | celeris 断の表示 | root の `health`・`unavailable` バナー、5 s ごとに root だけ再確認。e2e `g0`（停止中のバナーと復旧） | shell にバナー。daemon 断でも shell・ナビ・login は出る。復旧したら表示中の key を取り直す | 2 / `shell` | `parity-x: daemon 停止中のバナーと復旧` | 未着手 |
 | X14 | 409 / 422 の扱い | `revalidateAfterActionErrors`（4xx の後も再検証）、操作の結果は fetcher に載せて SSE の再検証で消さない（監査 H1） | mutation の 409 は該当 key を invalidate して「状態が変わりました」、422 は celeris の文言を欄の横に。結果の表示は再取得で消えない。確定まで同じ操作を二重送信しない | 3 / `inbox`（共通部品） | `parity-x: 409 再取得・422 表示・二重送信なし` | 未着手 |

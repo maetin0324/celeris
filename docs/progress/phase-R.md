@@ -1136,3 +1136,9 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   celeris-sync は Celeris の修正が要り task を長く止めるので、**allow-init**（この worktree に限り remote-exec で `git submodule update --init --recursive`）で回答。
   **回収項目**: `ensure_worktree`（task-worker/src/ssh.rs）が worktree 作成時に submodule を展開する（F5-fix11 候補）。
 - F5-fix10（prompt を stdin / message-file で渡す、Opus f08d443）を main に統合（475be20）→ gate ok → verify ok / live_ok（17:30Z）。昇格は人。
+- 17:4xZ: 人が release 475be20d7d1e（F5-fix10）を昇格。web Phase 0 の質問に回答 → planner run 01M3Q4JE4FYW4SVR4K8QENNGAQ が prompt 136,003 B を stdin で
+  受け取って起動（stdout.jsonl に system/init、progress 12 件）。F5-fix10 の本番動作を確認。
+- 17:44:54Z: browser 根の `integrate-phase-3` done（p3 @ f24932c を親ブランチへ merge、head be7c251、workspace の test/clippy pass、途中報告
+  `artifacts/phase-reports/1-phase-3.md`）→ 段階 phase-3 の `review: human` で根が `blocked awaiting_human`。**P-R5b-5（欠陥）**: 同じ tick で p4 が
+  `dependency_ready` → 子 task 01M3Q49ZTST3XQ9DGF6AGNR0XG が作られ dispatch された。段階の人の review は次の段階の unit を止めていない（P-R5b-4 と同根:
+  人の gate が unit の dispatch を抑止しない）。人の判断は `POST /tasks/{id}/execution/phase-gate {action: continue|replan|withdraw}`。

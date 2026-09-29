@@ -1,4 +1,4 @@
-//! Local credential broker. Secrets are only serialized on the private browser plugin pipe.
+//! Local credential broker. Legacy plugin secret retrieval is disabled (ADR-0085).
 #![cfg(unix)]
 
 use chacha20poly1305::{
@@ -21,6 +21,7 @@ use zeroize::Zeroize;
 pub enum Error {
     Invalid,
     Permission,
+    TrustedInjectionRequired,
     VaultLocked,
     NotFound,
     Denied,
@@ -35,6 +36,7 @@ impl Error {
         match self {
             Self::Invalid => "invalid_request",
             Self::Permission => "permission_denied",
+            Self::TrustedInjectionRequired => "trusted_injection_required",
             Self::VaultLocked => "vault_locked",
             Self::NotFound => "not_found",
             Self::Denied => "denied",

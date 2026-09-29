@@ -5,7 +5,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
 ---
 
 - 日付: 2026-09-29
-- 状態: **契約・拒否境界は Accepted（2026-09-29）、runtime 方式・H7 backend は決定待ち**。実 runtime の起動（bwrap の実行・UID の払い出し・filtering proxy の常駐）と本番の配線は未（下記「残り」）
+- 状態: **契約・拒否境界は Accepted（2026-09-29）**。runtime 方式・H7 は [ADR-0085](0085-browser-phase4-runtime-selection.md) で人の回答を採用済み。実 runtime・CDP sink・backend 実適合の配線は未。以下 D1〜D6 の決定待ち記述は当時の記録であり、ADR-0085 が更新する。
 - 関連: [ADR-0078](0078-browser-execution-capability.md) D8、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H3・H6・H7、[ADR-0083](0083-browser-phase3-identity-contract.md) D3・D4
 
 ## 範囲

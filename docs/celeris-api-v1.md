@@ -14,9 +14,22 @@ tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ, 01M3JXB3DHVBWKWKPW04DTG6SJ]
 
 有効な計画と `work_units[]` を返す。`versions[]` は `ExecutionPlanVersionView` の版履歴（`version` 昇順、superseded を含む）。有効な計画が無ければ 404 `execution_plan_not_found`。`ExecutionPlanView` は `id`、`task_id`、`version`、`origin`、`status`、`plan`、`created_at`、`work_units` が必須で、`versions` は既定 `[]`。`plan.schema` は `celeris.execution-plan/1` または `/2`（v2 は `phases` を持つ）。クエリは受け付けない。
 
-### `POST /tasks/{id}/execution-plan` → 201 `ExecutionPlanView`（管理系）
+### `POST /tasks/{id}/execution-plan`・`PUT /tasks/{id}/execution-plan` → 201 `ExecutionPlanView`（管理系）
 
-本文は `ExecutionPlanSpec`。`schema`、`rationale`、`work_units` が必須。v2 は `phases` も必要で、`children` は現行では空配列のみ。人が提案した計画として検証・採用し、応答に `work_units` と `versions` を含む。クエリは受け付けない。管理トークンが無ければ 401、計画が無効なら検証エラー。
+本文は `ExecutionPlanSpec`。`schema`、`rationale`、`work_units` が必須。v2 は `phases` も必要で、`children` は現行では空配列のみ。人が提案した計画（origin `human`）として検証・採用し、応答に `work_units` と `versions` を含む。`PUT` は `POST` と同じ操作（ADR-0079 R5b-prep。どちらも新規だけで、既に有効な計画があれば 409）。クエリは受け付けない。管理トークンが無ければ 401、計画が無効なら 422。
+
+`celeris.execution-plan/3`（ADR-0079 D2。`stages` / `units` / `decisions`）は daemon と同じ実効の上限（`[execution.tree]`）で検証する。`[execution.tree] enabled = false`（既定）なら 422（本文に `[execution.tree] enabled = true` を案内する `TreeDisabled`）。有効なら planner の計画と同じ経路を 1 トランザクションで通す（ADR-0079 付記「R5b-prep 実装時の逸脱・明確化」）:
+
+- unit の gate（D4 (3)）: leaf ↔ kind task の上げ下げを採用する spec に当て、食い違いは `unit_gate_overridden` に残す（`adopt` の unit は構造上の理由で `kept_task`）。
+- 採用の直後の止め: 計画の決定（計画と unit の `decisions`）は決定の要求（origin `human`、`raised_by.run_id` なし、path は root から）になり、`GET /decisions`・受信箱・Discord（人の計画の版ごとに `plan:<plan_id>:decisions` の 1 通）に出る。答えの無い決定を待つ leaf は `blocked(decision)`、kind task の unit は子を作らずに待つ。木の上限（`max_tree_leaves` など）を超える unit は `kind: limit` の決定で止まる。計画の上限（段階の数・段階あたりの unit・子 task・`max_depth`）の違反は人の計画では 422（planner の最後の試行のように緩めて採用しない）。**`adopt` の unit は `max_child_tasks_per_plan` に数えない**（子を作らない）。
+- kind task の unit の `adopt: <task_id>`（D15、人の計画だけ）は同じトランザクションで結ぶ（下の `POST /tasks/{id}/tree/adopt` と同じ条件）。対象が `done` / `failed` なら unit は `done`（`child_adopted`）、まだ終端でなければ unit は結ばれずに待つ（後で `tree/adopt`）。条件に合わない unit があれば計画全体を 409 / 422 で拒否し、何も書かない（`code` は `adopt_*`）。
+- root の計画の承認（D8 の `PlanGate`）は挟まない（書いた人の承認とみなす）。報告の流れに「計画を採用して進めます: …」を 1 件残し、承認が要る形（決定・`review: human`・上限に近い）だったなら理由も本文に書く。部をまたぐ子の認可の質問（ADR-0074 F4b）も出さない。
+
+応答（`PUT` / `POST` のときだけ）には `adoptions[]`（`AdoptionOutcome`: `plan_id`、`unit_key`、`stage`、`task_id`、`adopted`、`task_status`、`unit_status`、`detail`。`adopt` の unit があるときだけ）と `decisions_raised`（出した計画の決定の数。0 なら省略）が付く。`GET` では出ない。`celerisctl execution plan set|put <task> --file <json> [--config <config.toml>]`（`--config` 省略時は `CELERIS_CONFIG`。どちらも無ければ木は無効）は同じ関数を呼ぶ。
+
+### `POST /tasks/{id}/tree/adopt` → 200 `AdoptionOutcome`（管理系。ADR-0079 D15 / Phase R5b-prep）
+
+採用済みの /3 の計画の kind task の unit に、既存の task を木の子として後から結ぶ（人の計画の `adopt` の対象がその時点で終端でなかったとき）。本文は `AdoptRequest`: `task_id`（採用する task）、`stage`（unit の段階）、`unit_key`（unit の key）がすべて必須、知らない欄は拒否。条件: `[execution.tree] enabled`（無ければ 422 `tree_disabled`）、`{id}` が有効な /3 の計画を持つ（422 `adopt_no_tree_plan`）、unit があり（422 `adopt_unit_not_found`）kind task で（422 `adopt_unit_not_task`）同じ段階で（422 `adopt_stage_mismatch`）`adopt` にこの `task_id` が書かれている（422 `adopt_id_mismatch`）、対象は同じ案件（422 `adopt_other_project`）、`{id}` 自身でも祖先でもない（422 `adopt_ancestor`）、execute の仕事の task（対話・裏方でない。422 `adopt_target_kind`）、他の木に属さず自分も木の root でない（409 `adopt_target_in_tree`）、`done` か `failed`（`cancelled` は 409 `adopt_target_cancelled`、終端でなければ 409 `adopt_target_not_terminal`）、unit の行が `pending` / `ready` で子を持たない（409 `adopt_unit_not_open`）、`{id}` が終端でない（409 `adopt_owner_terminal`）。結ぶと 1 トランザクションで unit を `done`（`child_task_id` = 対象、`work_unit_transitioned{reason: child_adopted}` と `child_adopted{plan_id, unit_key, stage, child_task_id}` を `{id}` に）、依存が満たされた unit を `ready` に、対象の `tree` = `{root_id, depth, parent_unit}`（`base_commit` なし）と、`parent_id` が無ければ `{id}`（あれば書き換えない）を書き、対象に `edited{fields: ["tree", ("parent_id")], by: "human"}` を積む。対象の状態・履歴・ブランチ・作業場所は変えない。段階の統合は対象のブランチ `celeris/<task_id>` を任意の項目として扱い、既に main か親のブランチに入っていれば `skipped`（R5b の Phase 1 / 2 はこれ）、無ければ飛ばす。競合（同時の変更）は 409 `adopt_conflict`、無い task は 404、トークン無しは 401。`celerisctl tree adopt <root> --task <id> --stage <s> --unit <key> [--config <config.toml>]` も同じ。MCP には出していない。
 
 ### `GET /metrics/execution?since=&group_by=` → 200 `ExecutionMetricsSummary`
 

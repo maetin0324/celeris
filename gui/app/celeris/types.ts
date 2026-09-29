@@ -1377,6 +1377,8 @@ export interface ApiV1Schema {
   timeline: Timeline;
   transition_result: TransitionResult;
   tree: TreeView;
+  tree_adopt: AdoptRequest;
+  tree_adopt_result: AdoptionOutcome;
   tree_file: TreeFileView;
 }
 /**
@@ -4954,7 +4956,16 @@ export interface RollupMetrics {
  * `POST`/`GET /tasks/{id}/execution-plan` の応答。
  */
 export interface ExecutionPlanView {
+  /**
+   * ADR-0079 D15（Phase R5b-prep）: 人の計画（`PUT/POST /tasks/{id}/execution-plan`）の応答だけ: unit の
+   * `adopt` の結果（結んだ / 対象が終端でないので待つ）。`GET` では空。
+   */
+  adoptions?: AdoptionOutcome[];
   created_at: string;
+  /**
+   * ADR-0079 D7（Phase R5b-prep）: 人の計画の応答だけ: 計画の決定として出した決定の要求（origin human）の数。
+   */
+  decisions_raised?: number;
   id: string;
   origin: PlanOrigin;
   plan: ExecutionPlanSpec;
@@ -4973,6 +4984,32 @@ export interface ExecutionPlanView {
    */
   versions?: ExecutionPlanVersionView[];
   work_units: WorkUnitView[];
+}
+/**
+ * 採用の結果（1 unit 分）。`PUT /tasks/{id}/execution-plan` の `adoptions[]` と `POST /tasks/{id}/tree/adopt` の応答。
+ */
+export interface AdoptionOutcome {
+  /**
+   * 結んだ（unit は `done`）。`false` は対象がまだ終端でないので unit が採用を待っている（人の計画だけ）。
+   */
+  adopted: boolean;
+  /**
+   * 人が読む 1 行。
+   */
+  detail: string;
+  plan_id: string;
+  stage: string;
+  task_id: TaskId;
+  /**
+   * 対象の状態（採用しても変えない）。
+   */
+  task_status: "draft" | "ready" | "running" | "blocked" | "reviewing" | "done" | "failed" | "cancelled";
+  unit_key: string;
+  /**
+   * unit の行の状態（結んだ後）。
+   */
+  unit_status:
+    "pending" | "ready" | "needs_continuation" | "running" | "done" | "failed" | "blocked" | "superseded" | "cancelled";
 }
 /**
  * ADR-0072 D17（Phase E4）: `execution_plans` の 1 版（`GET /tasks/{id}/execution-plan` の
@@ -8356,7 +8393,16 @@ export interface TaskExecutionView {
  * `POST`/`GET /tasks/{id}/execution-plan` の応答。
  */
 export interface ExecutionPlanView1 {
+  /**
+   * ADR-0079 D15（Phase R5b-prep）: 人の計画（`PUT/POST /tasks/{id}/execution-plan`）の応答だけ: unit の
+   * `adopt` の結果（結んだ / 対象が終端でないので待つ）。`GET` では空。
+   */
+  adoptions?: AdoptionOutcome[];
   created_at: string;
+  /**
+   * ADR-0079 D7（Phase R5b-prep）: 人の計画の応答だけ: 計画の決定として出した決定の要求（origin human）の数。
+   */
+  decisions_raised?: number;
   id: string;
   origin: PlanOrigin;
   plan: ExecutionPlanSpec;
@@ -8869,6 +8915,23 @@ export interface TreeRepoView {
    */
   kind: string;
   name: string;
+}
+/**
+ * ADR-0079 D15（Phase R5b-prep）: `POST /tasks/{id}/tree/adopt` の本文と応答。
+ */
+export interface AdoptRequest {
+  /**
+   * unit の段階の key（計画の unit の `stage` と一致すること）。
+   */
+  stage: string;
+  /**
+   * 採用する既存の task。
+   */
+  task_id: string;
+  /**
+   * 計画の kind task の unit の key（`adopt: <task_id>` を持つこと）。
+   */
+  unit_key: string;
 }
 /**
  * `GET /tasks/{id}/tree/file` の応答（ADR-0043 D6）。

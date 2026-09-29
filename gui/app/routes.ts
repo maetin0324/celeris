@@ -43,7 +43,8 @@ export default [
   // run の全行（ADR-0048 D1、GUI Phase G22）。Console の progress ブロックの「すべて見る」が
   // 開いたときだけ取りに行く（`tasks/:id/runs/:runId` の兄弟の resource route）
   route("tasks/:id/runs/:runId/events", "routes/tasks.$id.runs.$runId.events.ts"),
-  route("plans/new", "routes/plans.new.tsx"),
+  // `/plans/new`（`POST /plans` の画面）は ADR-0079 R5b-prep で撤去（`POST /plans` は R5a で 410。新しい仕事は
+  // root task〈`/tasks/new`〉とその計画で表す）。
   route("daemon", "routes/daemon.tsx"),
   route("providers", "routes/providers.tsx"),
   route("accounts", "routes/accounts.tsx"),

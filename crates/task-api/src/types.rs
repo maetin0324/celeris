@@ -1419,6 +1419,17 @@ pub struct ExecutionPlanView {
     /// 並列で走る／v1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serialized_reason: Option<String>,
+    /// ADR-0079 D15（Phase R5b-prep）: 人の計画（`PUT/POST /tasks/{id}/execution-plan`）の応答だけ: unit の
+    /// `adopt` の結果（結んだ / 対象が終端でないので待つ）。`GET` では空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adoptions: Vec<task_ops::tree_adopt::AdoptionOutcome>,
+    /// ADR-0079 D7（Phase R5b-prep）: 人の計画の応答だけ: 計画の決定として出した決定の要求（origin human）の数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub decisions_raised: usize,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 impl ExecutionPlanView {
@@ -1443,6 +1454,8 @@ impl ExecutionPlanView {
                 .map(ExecutionPlanVersionView::from)
                 .collect(),
             serialized_reason: None,
+            adoptions: Vec::new(),
+            decisions_raised: 0,
         }
     }
 

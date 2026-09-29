@@ -701,3 +701,230 @@ fn worktree_base_of_a_tree_child_is_the_parent_base() {
         (task_worker::BaseKind::Parent, parent_head.as_str())
     );
 }
+
+/// ADR-0079 D15（Phase R5b-prep）: 人の /3 の計画の unit の `adopt` で done の既存の task を採用すると、unit は `done`
+/// （`ChildAdopted`）で子は作られず、段階の統合 WU は採用した task のブランチ（既に main にある = 親ブランチの
+/// 基点に入っている）を `skipped` で通し、失敗しない。採用した task の状態・ブランチは変わらない。
+#[tokio::test]
+async fn adopted_done_task_already_in_base_is_skipped_by_integration() {
+    let repo = tempfile::tempdir().unwrap();
+    let main_sha = init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let now = OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        auto_advance: false,
+        slug: None,
+        id: task_core::ProjectId::new(),
+        title: "browser".to_string(),
+        request: "do it".into(),
+        status: task_core::ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).unwrap();
+    // 採用する task: done。成果（ブランチ `celeris/<id>`）は既に main に入っている（main と同じ commit）。
+    let mut adopted = git_task(
+        repo.path(),
+        None,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+    );
+    adopted.status = Status::Done;
+    adopted.title = "Phase 1 (already delivered)".into();
+    adopted.project_id = Some(project.id);
+    store.create_task(&adopted, vec![]).unwrap();
+    assert!(git_ok(
+        repo.path(),
+        &["branch", &format!("celeris/{}", adopted.id), "main"]
+    ));
+    let mut root = git_task(
+        repo.path(),
+        None,
+        Check::Command {
+            cmd: "test -f b.txt".into(),
+            expect_exit: 0,
+        },
+    );
+    root.project_id = Some(project.id);
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let mut p1 = task_unit("p1", "s1", &[], "true");
+    p1["adopt"] = serde_json::json!(adopted.id.to_string());
+    let plan = v3_plan(
+        vec![stage("s1"), stage("s2")],
+        vec![p1, leaf("b", "s2", &[])],
+    );
+    let spec: task_core::ExecutionPlanSpec = serde_json::from_str(&plan).unwrap();
+    let mut limits = task_core::ExecutionLimits::default();
+    limits.tree.enabled = true;
+    let outcome =
+        task_ops::execution::adopt_human_plan(store.as_ref(), root_id, spec, limits, "human", now)
+            .unwrap();
+    assert_eq!(outcome.adoptions.len(), 1);
+    assert!(outcome.adoptions[0].adopted);
+
+    let adapter = Arc::new(GitTreeAdapter::new(vec![]));
+    let mut d = git_tree_dispatcher(&store, adapter.clone(), ws.path());
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    let stored = store.get(root_id).unwrap().unwrap();
+    assert_eq!(
+        stored.status,
+        Status::Done,
+        "{:?}",
+        store.events_for(root_id).unwrap()
+    );
+    let units = store.work_units_for(root_id).unwrap();
+    let p1 = unit(&units, "p1");
+    assert_eq!(p1.status, task_core::WorkUnitStatus::Done);
+    assert_eq!(
+        p1.child_task_id.as_deref(),
+        Some(adopted.id.to_string().as_str())
+    );
+    // 子は作られていない（木の子は採用した 1 件だけ）。
+    let mut ids: Vec<TaskId> = store
+        .tree_tasks(root_id)
+        .unwrap()
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    ids.sort();
+    let mut expected = vec![adopted.id, root_id];
+    expected.sort();
+    assert_eq!(ids, expected);
+    // 統合は採用した task のブランチを飛ばし（既に基点に入っている）、s2 で b を merge した。
+    let merged = merged_of(&store, root_id, "s1");
+    assert_eq!(
+        merged
+            .iter()
+            .map(|(k, c, skipped)| (k.as_str(), c.as_str(), *skipped))
+            .collect::<Vec<_>>(),
+        vec![("p1", main_sha.as_str(), true)],
+        "{merged:?}"
+    );
+    let merged = merged_of(&store, root_id, "s2");
+    assert_eq!(merged.len(), 1, "{merged:?}");
+    // 採用した task は done のまま、木の子として親を持つ（`parent_id` は無かったので root）。
+    let after = store.get(adopted.id).unwrap().unwrap();
+    assert_eq!(after.status, Status::Done);
+    assert_eq!(after.parent_id, Some(root_id));
+    let t = after.tree.as_ref().expect("tree");
+    assert_eq!(t.depth, 2);
+    assert_eq!(t.base_commit, None);
+    assert_eq!(
+        t.parent_unit.as_ref().map(|u| u.unit_key.as_str()),
+        Some("p1")
+    );
+    assert!(
+        store
+            .events_for(root_id)
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(
+                e,
+                Event::ChildAdopted { unit_key, child_task_id, .. }
+                    if unit_key == "p1" && *child_task_id == adopted.id
+            ))
+    );
+    // 採用した task のブランチは残り、main は動かない。
+    assert_eq!(
+        branch_head(repo.path(), &format!("celeris/{}", adopted.id)),
+        main_sha
+    );
+    assert_eq!(branch_head(repo.path(), "main"), main_sha);
+    assert_replay_is_clean(&store);
+}
+
+/// ADR-0079 D15（Phase R5b-prep）: 人の計画の `adopt` の対象がまだ終端でない（ここでは draft）と unit は結ばれずに
+/// `ready` のまま待ち、daemon の照合（`reconcile_tree_units`）はその unit から新しい子 task を作らない（採用の入口
+/// 〈`POST /tasks/{id}/tree/adopt`〉が結ぶまで待つ）。
+#[tokio::test]
+async fn an_adopt_unit_waiting_for_its_task_never_spawns_a_new_child() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let now = OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        auto_advance: false,
+        slug: None,
+        id: task_core::ProjectId::new(),
+        title: "browser".to_string(),
+        request: "do it".into(),
+        status: task_core::ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).unwrap();
+    let mut pending = git_task(
+        repo.path(),
+        None,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+    );
+    pending.status = Status::Draft;
+    pending.project_id = Some(project.id);
+    store.create_task(&pending, vec![]).unwrap();
+    let mut root = git_task(
+        repo.path(),
+        None,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+    );
+    root.project_id = Some(project.id);
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let mut p1 = task_unit("p1", "s1", &[], "true");
+    p1["adopt"] = serde_json::json!(pending.id.to_string());
+    let spec: task_core::ExecutionPlanSpec =
+        serde_json::from_str(&v3_plan(vec![stage("s1")], vec![p1])).unwrap();
+    let mut limits = task_core::ExecutionLimits::default();
+    limits.tree.enabled = true;
+    let outcome =
+        task_ops::execution::adopt_human_plan(store.as_ref(), root_id, spec, limits, "human", now)
+            .unwrap();
+    assert!(!outcome.adoptions[0].adopted);
+    let adapter = Arc::new(GitTreeAdapter::new(vec![]));
+    let mut d = git_tree_dispatcher(&store, adapter.clone(), ws.path());
+    let _ = run_until_idle(&mut d, 30).await;
+    let units = store.work_units_for(root_id).unwrap();
+    let p1 = unit(&units, "p1");
+    assert_eq!(p1.status, task_core::WorkUnitStatus::Ready);
+    assert_eq!(p1.child_task_id, None);
+    assert_eq!(
+        store
+            .tree_tasks(root_id)
+            .unwrap()
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>(),
+        vec![root_id],
+        "no child task was created for the adopt unit"
+    );
+    assert!(
+        !store
+            .events_for(root_id)
+            .unwrap()
+            .iter()
+            .any(|(_, e)| matches!(e, Event::ChildTaskCreated { .. }))
+    );
+    assert_eq!(
+        store.get(pending.id).unwrap().unwrap().status,
+        Status::Draft
+    );
+}

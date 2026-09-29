@@ -47,7 +47,8 @@ pub(crate) fn map_ops_err(e: OpsError) -> ToolError {
         OpsError::InvalidState { .. }
         | OpsError::Validation(_)
         | OpsError::Conflict { .. }
-        | OpsError::InvalidLifecycle { .. } => ToolError::invalid_params(e.to_string()),
+        | OpsError::InvalidLifecycle { .. }
+        | OpsError::TreeAdopt { .. } => ToolError::invalid_params(e.to_string()),
         OpsError::Store(_) => ToolError::internal(e.to_string()),
     }
 }

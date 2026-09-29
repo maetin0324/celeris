@@ -71,36 +71,7 @@ const LIVENESS_CHECK_INTERVAL_SECS: i64 = 30;
 /// ADR-0072 D14: planner の試行の上限（「1 回だけ再試行」。窓は直近の `ExecutionPlanned` から）。
 const MAX_PLANNER_ATTEMPTS: usize = 2;
 
-/// ADR-0079 D3（Phase R2a）: /3 の計画の上限の違反（段階の数・段階あたりの unit・計画あたりの子 task・
-/// 子 task を持てない深さ）。これだけで不正な計画は、最後の試行では採用して超えた分を決定の要求で止める。
-fn is_tree_plan_limit_error(e: &task_core::execution_plan::PlanValidationError) -> bool {
-    use task_core::execution_plan::PlanValidationError as E;
-    matches!(
-        e,
-        E::TooManyStages { .. }
-            | E::TooManyUnitsInStage { .. }
-            | E::TooManyChildTasks { .. }
-            | E::ChildTaskTooDeep { .. }
-    )
-}
-
-/// ADR-0079 D3（Phase R2a）: 計画の上限（[`is_tree_plan_limit_error`] の 4 つ）だけを外した上限。採用に
-/// 使い、超えた分は `task_core::tree::plan_limit_holds` が元の上限で選んで止める。
-fn relaxed_tree_plan_limits(limits: task_core::ExecutionLimits) -> task_core::ExecutionLimits {
-    let mut relaxed = limits;
-    relaxed.tree.max_stages = usize::MAX;
-    relaxed.tree.max_units_per_stage = usize::MAX;
-    relaxed.tree.max_child_tasks_per_plan = usize::MAX;
-    relaxed.tree.max_depth = u32::MAX;
-    relaxed
-}
-
-/// ADR-0079 D4 (3) / D3（Phase R2a）: 採用する /3 の計画の unit の gate の結果と、採用の直後に止める
-/// unit の束（`Dispatcher::apply_tree_plan_holds` が記録する）。
-struct TreePlanOutcome {
-    report: task_core::UnitGateReport,
-    holds: Vec<task_core::LimitHold>,
-}
+use task_ops::tree_plan::{TreePlanOutcome, is_tree_plan_limit_error, relaxed_tree_plan_limits};
 
 /// ADR-0079 D7（Phase R3a）: worker が `result.json` の `decisions` で出した決定の要求を記録する材料
 /// （`Dispatcher::worker_decisions`）。
@@ -6443,7 +6414,7 @@ impl Dispatcher {
                                 if approval.is_some() {
                                     let (headline, body) =
                                         task_ops::plan_gate::plan_notice(&plan.spec);
-                                    if let Err(e) = crate::reports::record_plan_notice_report(
+                                    if let Err(e) = task_ops::plan_gate::record_plan_notice(
                                         self.store.as_ref(),
                                         task,
                                         &headline,
@@ -9504,10 +9475,27 @@ impl Dispatcher {
         units: &[task_core::WorkUnitRow],
         phase: &str,
     ) {
+        // ADR-0079 D15（Phase R5b-prep）: 採用（`adopt`）した task の worktree は木が作ったものではないので消さない
+        // （採用しても対象の履歴・作業場所は変えない）。
+        let adopted: std::collections::BTreeSet<String> = self
+            .store
+            .execution_plan_active(task_id)
+            .ok()
+            .flatten()
+            .map(|p| {
+                p.spec
+                    .units
+                    .iter()
+                    .filter(|u| u.adopt.is_some())
+                    .map(|u| u.key.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         for u in units.iter().filter(|u| {
             u.kind == task_core::WorkUnitKind::Task
                 && u.status == task_core::WorkUnitStatus::Done
                 && u.phase.as_deref() == Some(phase)
+                && !adopted.contains(&u.key)
         }) {
             let Some(child) = u
                 .child_task_id
@@ -9625,6 +9613,20 @@ impl Dispatcher {
             // 並列 1（WU は Task の worktree を共有した）: merge するブランチは無い（D1.2）。
             return self.on_integration_finished(task.id, &integ.id, Ok(IntegrationRun::default()));
         };
+        // ADR-0079 D15（Phase R5b-prep）: 段階の unit が採用（adopt）した task だけのとき、この段階では leaf も子も
+        // 走っていないので Task の worktree（段階の基点のブランチ）がまだ無い。統合の前に用意する（子の生成の前に
+        // 親の worktree を用意する `child_base_commit` と同じ。既にあれば何もしない）。
+        for wt in ws.repos.iter().filter_map(|r| r.worktree.as_ref()) {
+            if let Err(e) = wt.ensure_blocking() {
+                return self.on_integration_finished(
+                    task.id,
+                    &integ.id,
+                    Err(format!(
+                        "cannot prepare the task's worktree for the integration: {e}"
+                    )),
+                );
+            }
+        }
         // ADR-0079 D5 / D6（Phase R1c）: 葉の WU のブランチに、この段階の done の kind task の unit の
         // 子 task のブランチ `celeris/<child_id>` を足し、`seq` 順に merge する（子に依存する同じ段階の葉は
         // 子の HEAD から切られているので、どちらが先でも子の commit は 1 度だけ入る。既に入っていれば飛ばす）。
@@ -10782,88 +10784,16 @@ impl Dispatcher {
         task_core::execution_plan::ValidatedPlan,
         Option<TreePlanOutcome>,
     ) {
-        let limits = self.config.execution.limits;
-        let tree = limits.tree;
-        if validated.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3 || !tree.enabled {
-            return (validated, None);
-        }
-        let names =
-            task_ops::tree::parent_repo_names(self.store.as_ref(), task).unwrap_or_default();
-        let depth = task_core::tree::depth_of(task);
-        let ctx = task_core::UnitGateContext {
-            parent: task,
-            parent_depth: depth,
-            parent_repo_names: &names,
-            limits: &tree,
-            work_unit_max_turns: limits.work_unit_max_turns,
-            work_unit_max_wall_secs: limits.work_unit_max_wall_secs,
-        };
-        // replan で持ち越す done の unit は gate をかけ直さない（spec を変えない。D17 の不変条件）。
-        let done_keys: std::collections::BTreeSet<String> =
-            done_work_units.iter().map(|(k, _)| k.clone()).collect();
-        let mut report = task_core::tree::apply_unit_gates(&ctx, &validated.spec, &done_keys);
-        let changed = report.gates.iter().any(|g| {
-            matches!(
-                g.action,
-                Some(task_core::UnitGateAction::Promoted | task_core::UnitGateAction::Demoted)
-            )
-        });
-        let validated = if changed {
-            let relaxed = relaxed_tree_plan_limits(*adopt_limits);
-            match task_core::execution_plan::validate_with(
-                &report.spec,
-                relaxed,
-                done_work_units,
-                task_core::PlanContext {
-                    origin: task_core::PlanOrigin::Planner,
-                    depth,
-                },
-            ) {
-                Ok(v) => {
-                    *adopt_limits = relaxed;
-                    v
-                }
-                Err(errors) => {
-                    let detail = task_ops::execution::describe_validation_errors(&errors);
-                    tracing::warn!(task_id = %task.id, %detail, "the unit gate's promotions / demotions do not validate; adopting the planner's plan as declared (ADR-0079 D4 (3))");
-                    for g in &mut report.gates {
-                        if matches!(
-                            g.action,
-                            Some(
-                                task_core::UnitGateAction::Promoted
-                                    | task_core::UnitGateAction::Demoted
-                            )
-                        ) {
-                            g.action = None;
-                        }
-                    }
-                    report.spec = validated.spec.clone();
-                    validated
-                }
-            }
-        } else {
-            validated
-        };
-        let tree_leaves =
-            task_ops::tree::tree_counters(self.store.as_ref(), task_core::tree::root_id_of(task))
-                .map(|c| c.leaves)
-                .unwrap_or(0);
-        let existing_keys: std::collections::BTreeSet<String> = self
-            .store
-            .work_units_for(task.id)
-            .map(|rows| rows.into_iter().map(|r| r.key).collect())
-            .unwrap_or_default();
-        let extra_held: std::collections::BTreeSet<String> =
-            report.leaf_too_large.iter().cloned().collect();
-        let holds = task_core::tree::plan_limit_holds(
-            &validated.spec,
-            &tree,
-            depth,
-            tree_leaves,
-            &existing_keys,
-            &extra_held,
-        );
-        (validated, Some(TreePlanOutcome { report, holds }))
+        // ADR-0079 R5b-prep: 人の計画（`PUT`）と同じ関数（`task_ops::tree_plan::unit_gate_plan`）。
+        task_ops::tree_plan::unit_gate_plan(
+            self.store.as_ref(),
+            task,
+            validated,
+            done_work_units,
+            self.config.execution.limits,
+            adopt_limits,
+            task_core::PlanOrigin::Planner,
+        )
     }
 
     /// ADR-0079 D4 (3) / D3（Phase R2a）: 採用した /3 の計画について、unit の gate の不一致
@@ -10878,191 +10808,23 @@ impl Dispatcher {
         outcome: TreePlanOutcome,
         now: OffsetDateTime,
     ) -> Result<(), DispatchError> {
-        let TreePlanOutcome { report, holds } = outcome;
+        // ADR-0079 R5b-prep: 人の計画（`PUT`）と同じ関数（`task_ops::tree_plan::plan_hold_writes`）。planner の経路は
+        // 採用の後の行を store から読み、止めを続きの 1 トランザクションで書く（R2a / R3a のまま）。
         let units = self.store.work_units_for(task.id)?;
-        let path =
-            task_ops::tree::decision_path(self.store.as_ref(), task).map_err(ops_to_store)?;
-        let raised_by = task_core::DecisionRaisedBy {
-            task_id: task.id,
-            run_id: Some(run_id.to_string()),
-            origin: task_core::DecisionOrigin::Daemon,
-        };
-        let mut events: Vec<Event> = Vec::new();
-        let mut rows: Vec<task_core::WorkUnitRow> = Vec::new();
-        for g in report.overridden() {
-            let Some(action) = g.action else { continue };
-            events.push(Event::UnitGateOverridden {
-                plan_id: plan.id.clone(),
-                unit_key: g.unit_key.clone(),
-                declared: g.declared,
-                gate: g.decision.mode,
-                action,
-                depth: g.depth,
-                threshold: g.threshold,
-                score: g.decision.score,
-                reason: g.reason.clone(),
-            });
-            tracing::info!(task_id = %task.id, work_unit = %g.unit_key, declared = ?g.declared, action = ?action, reason = %g.reason, "unit gate overrode the planner's declaration (ADR-0079 D4 (3))");
-        }
-        // 止められる行（`pending` / `ready`）だけを選ぶ。
-        let holdable = |key: &str| -> Option<task_core::WorkUnitRow> {
-            units
-                .iter()
-                .find(|u| {
-                    u.key == key
-                        && matches!(
-                            u.status,
-                            task_core::WorkUnitStatus::Pending | task_core::WorkUnitStatus::Ready
-                        )
-                })
-                .cloned()
-        };
-        let hold = |row: task_core::WorkUnitRow,
-                    rows: &mut Vec<task_core::WorkUnitRow>,
-                    events: &mut Vec<Event>| {
-            let mut updated = row.clone();
-            updated.status = task_core::WorkUnitStatus::Blocked;
-            updated.blocked_reason = Some(task_core::WorkUnitBlockedReason::Decision);
-            updated.updated_at = rfc3339(now);
-            events.push(Event::WorkUnitTransitioned {
-                work_unit_id: row.id.clone(),
-                key: row.key.clone(),
-                from: row.status,
-                to: task_core::WorkUnitStatus::Blocked,
-                reason: "decision".to_string(),
-                run_id: None,
-            });
-            rows.push(updated);
-        };
-        for key in &report.leaf_too_large {
-            let (Some(g), Some(row)) = (
-                report.gates.iter().find(|g| &g.unit_key == key),
-                holdable(key),
-            ) else {
-                continue;
-            };
-            let request = task_core::tree::leaf_too_large_decision(
-                g,
-                &row.spec.title,
-                path.clone(),
-                raised_by.clone(),
-            );
-            tracing::warn!(task_id = %task.id, work_unit = %key, decision = %request.id, "a compound leaf cannot become a child task at this depth; asking a human (ADR-0079 D4 (3))");
-            events.push(Event::DecisionRequested {
-                decision: Box::new(request),
-            });
-            hold(row, &mut rows, &mut events);
-        }
-        for h in holds {
-            let held: Vec<task_core::WorkUnitRow> =
-                h.units.iter().filter_map(|k| holdable(k)).collect();
-            if held.is_empty() {
-                continue;
-            }
-            let request = task_core::tree::limit_decision(
-                h.limit,
-                h.scope.as_deref(),
-                h.count,
-                h.max,
-                held.iter().map(|r| r.key.clone()).collect(),
-                path.clone(),
-                raised_by.clone(),
-            );
-            tracing::warn!(task_id = %task.id, limit = h.limit.as_str(), count = h.count, max = h.max, units = ?request.needed_before, decision = %request.id, "a tree limit is exceeded; holding the excess units for a limit decision (ADR-0079 D3)");
-            events.push(Event::DecisionRequested {
-                decision: Box::new(request),
-            });
-            for row in held {
-                hold(row, &mut rows, &mut events);
-            }
-        }
-        // ADR-0079 D7（Phase R3a）: 計画の決定（計画の `decisions` と unit の `decisions`）を path 付きの決定の要求に
-        // する（同じ key の行がこの節点に既にあれば出さない = replan で持ち越した決定は開き直さない）。replan で
-        // 計画から消えた planner の未回答の決定は取り下げる。答えの無い決定を待つ leaf（実効の `needs_decisions`）は
-        // `blocked(decision)` にする（kind task の unit は R1b のとおり `ready` のまま子を作らずに待つ）。
-        let root_id = task_core::tree::root_id_of(task);
-        let mine: Vec<task_core::DecisionRow> = self
-            .store
-            .decisions_list(Some(root_id))?
-            .into_iter()
-            .filter(|r| r.task_id == task.id)
-            .collect();
-        let plan_decisions = task_core::normalized_decisions(&plan.spec);
-        let plan_keys: std::collections::BTreeSet<&str> =
-            plan_decisions.iter().map(|d| d.key.as_str()).collect();
-        for r in mine.iter().filter(|r| {
-            r.status == task_core::DecisionStatus::Open
-                && r.kind == task_core::DecisionKind::Choice
-                && matches!(
-                    r.request.raised_by.origin,
-                    task_core::DecisionOrigin::Planner | task_core::DecisionOrigin::Human
-                )
-                && !plan_keys.contains(r.key.as_str())
-        }) {
-            events.push(Event::DecisionWithdrawn {
-                id: r.id.clone(),
-                reason: format!(
-                    "replan v{}: the plan no longer asks this decision",
-                    plan.version
-                ),
-            });
-        }
-        let existing: std::collections::BTreeSet<&str> = mine
-            .iter()
-            .filter(|r| r.status != task_core::DecisionStatus::Withdrawn)
-            .map(|r| r.key.as_str())
-            .collect();
-        let answered: std::collections::BTreeSet<&str> = mine
-            .iter()
-            .filter(|r| r.status == task_core::DecisionStatus::Answered)
-            .map(|r| r.key.as_str())
-            .collect();
-        let mut raised = 0usize;
-        for d in &plan_decisions {
-            if existing.contains(d.key.as_str()) {
-                continue;
-            }
-            let request = task_core::decision::request_from_spec(
-                d,
-                path.clone(),
-                task_core::DecisionRaisedBy {
-                    task_id: task.id,
-                    run_id: Some(run_id.to_string()),
-                    origin: task_core::DecisionOrigin::Planner,
-                },
-            );
-            events.push(Event::DecisionRequested {
-                decision: Box::new(request),
-            });
-            raised += 1;
-        }
-        let held_keys: std::collections::BTreeSet<String> =
-            rows.iter().map(|r| r.key.clone()).collect();
-        let waiting: Vec<task_core::WorkUnitRow> = units
-            .iter()
-            .filter(|u| {
-                !matches!(
-                    u.kind,
-                    task_core::WorkUnitKind::Task | task_core::WorkUnitKind::Integrate
-                ) && matches!(
-                    u.status,
-                    task_core::WorkUnitStatus::Pending | task_core::WorkUnitStatus::Ready
-                ) && !held_keys.contains(&u.key)
-                    && u.needs_decisions
-                        .iter()
-                        .any(|k| !answered.contains(k.as_str()))
-            })
-            .cloned()
-            .collect();
-        for row in waiting {
-            hold(row, &mut rows, &mut events);
-        }
-        if raised > 0 {
-            tracing::info!(task_id = %task.id, plan_id = %plan.id, raised, "the adopted plan asks humans for decisions (ADR-0079 D7)");
-        }
-        if !events.is_empty() {
+        let writes = task_ops::tree_plan::plan_hold_writes(
+            self.store.as_ref(),
+            task,
+            plan,
+            &units,
+            Some(run_id),
+            task_core::DecisionOrigin::Planner,
+            outcome,
+            now,
+        )
+        .map_err(ops_to_store)?;
+        if !writes.events.is_empty() {
             self.store
-                .work_units_apply(task.id, Vec::new(), rows, events)?;
+                .work_units_apply(task.id, Vec::new(), writes.rows, writes.events)?;
         }
         Ok(())
     }
@@ -11851,6 +11613,11 @@ impl Dispatcher {
                 let Some(unit_spec) = plan.spec.units.iter().find(|s| s.key == u.key) else {
                     continue;
                 };
+                // ADR-0079 D15（Phase R5b-prep）: `adopt` の unit は新しい子を作らない（既存の task を採用の入口
+                // 〈人の計画の採用・`POST /tasks/{id}/tree/adopt`〉が結ぶまで待つ）。
+                if unit_spec.adopt.is_some() {
+                    continue;
+                }
                 let Some(decisions) = task_ops::tree::answered_decisions(
                     self.store.as_ref(),
                     task_id,

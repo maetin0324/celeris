@@ -53,6 +53,8 @@ pub mod retry;
 /// ADR-0069 D5（Phase 114）: run ごとの routing の監査（担当・harness・lane・model・メトリクス・レビュー）。
 pub mod routing_audit;
 pub mod tree;
+pub mod tree_adopt;
+pub mod tree_plan;
 /// ADR-0079 D11（Phase R4a）: 木の閲覧・roll-up の材料・案件の root の合計・段階の子の要約。
 pub mod tree_view;
 pub mod view;

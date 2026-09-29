@@ -320,7 +320,6 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { href: "/tasks", label: "一覧", icon: "list" },
       { href: "/graph", label: "DAG", icon: "network" },
       { href: "/tasks/new", label: "新規タスク", icon: "plus" },
-      { href: "/plans/new", label: "新規 Plan", icon: "sparkles" },
       { href: "/daemon", label: "デーモン", icon: "activity" },
       { href: "/providers", label: "プロバイダ", icon: "cpu" },
       { href: "/accounts", label: "アカウント", icon: "users" },

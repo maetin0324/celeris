@@ -87,6 +87,15 @@ pub enum OpsError {
         action: String,
     },
 
+    /// ADR-0079 D15（Phase R5b-prep）: 既存の task の採用（adopt）を拒否した。`conflict` なら状態の食い違い
+    /// （API は 409）、そうでなければ要求と計画の食い違い（API は 422）。`code` は API の problem の `code`。
+    #[error("{detail}")]
+    TreeAdopt {
+        conflict: bool,
+        code: &'static str,
+        detail: String,
+    },
+
     #[error(transparent)]
     Store(#[from] StoreError),
 }

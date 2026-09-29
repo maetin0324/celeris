@@ -2131,3 +2131,72 @@ fn milestone_without_cos_reply_no_longer_notifies() {
     // ADR-0079 D13（Phase R5a）: 途中目標の通知は廃止（root の完了は `task_ready` で鳴る）。
     assert_eq!(env.schedule(NotificationKind::MilestoneReady), 0);
 }
+
+/// ADR-0079 R5b-prep: 人の計画（origin human、`PUT /tasks/{id}/execution-plan`）の決定は run を持たないが、決定を
+/// 持つ人の計画の版に束ねて `plan:<plan_id>:decisions` の 1 通になる（1 件ずつ `decision:<id>` にしない）。
+#[test]
+fn human_plan_decisions_are_bundled_per_plan() {
+    let env = Env::new();
+    let real_now = OffsetDateTime::now_utc();
+    let since = real_now - time::Duration::minutes(1);
+    let root = task(Status::Draft);
+    env.store
+        .insert(&root)
+        .unwrap_or_else(|e| panic!("insert: {e}"));
+    let spec: task_core::ExecutionPlanSpec = serde_json::from_value(serde_json::json!({
+        "schema": "celeris.execution-plan/3",
+        "rationale": "Phase 3 と 4 は子 task、決定は人が答える",
+        "stages": [{"key": "phase-3", "kind": "implement", "title": "Phase 3"}],
+        "units": [{
+            "key": "p3", "stage": "phase-3", "kind": "task", "title": "Phase 3",
+            "objective": "identity と live proxy と takeover",
+            "acceptance": [{"text": "reviewer が確認する", "check": {"type": "reviewer"}}]
+        }],
+        "decisions": [
+            {"key": "h4", "question": "dashboard をどこまで公開するか",
+             "options": [{"key": "operator", "label": "operator 専用"}, {"key": "acl", "label": "task 別 ACL proxy"}],
+             "recommended": "acl", "cost_of_reversal": "medium", "needed_before": ["p3"]},
+            {"key": "h5", "question": "persistent auth をどうするか",
+             "options": [{"key": "isolated", "label": "毎 run 隔離"}, {"key": "identity", "label": "project+origin 別 identity"}],
+             "recommended": "isolated", "cost_of_reversal": "high", "needed_before": ["p3"]}
+        ]
+    }))
+    .unwrap_or_else(|e| panic!("spec: {e}"));
+    let mut limits = task_core::ExecutionLimits::default();
+    limits.tree.enabled = true;
+    let adopted = task_ops::execution::adopt_human_plan(
+        env.as_store(),
+        root.id,
+        spec,
+        limits,
+        "human",
+        real_now,
+    )
+    .unwrap_or_else(|e| panic!("adopt_human_plan: {e}"));
+    assert_eq!(adopted.decisions_raised, 2);
+    let created = notify::schedule(env.as_store(), &NotifyConfig::default(), since, real_now)
+        .unwrap_or_else(|e| panic!("schedule: {e}"));
+    let rows: Vec<_> = created
+        .iter()
+        .filter(|n| n.kind == NotificationKind::DecisionRequested)
+        .collect();
+    assert_eq!(rows.len(), 1, "{created:?}");
+    assert_eq!(rows[0].key, format!("plan:{}:decisions", adopted.plan.id));
+    assert!(
+        rows[0].body.contains("人の決定が 2 件必要"),
+        "{}",
+        rows[0].body
+    );
+    assert!(
+        rows[0].body.contains("推奨: task 別 ACL proxy"),
+        "{}",
+        rows[0].body
+    );
+    // 人の計画は承認を待たないので、計画の承認の通知は出ない。
+    assert!(
+        created
+            .iter()
+            .all(|n| n.kind != NotificationKind::PlanApproval),
+        "{created:?}"
+    );
+}

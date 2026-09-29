@@ -712,6 +712,25 @@ fn scan_decisions(
                     None => format!("run:{run}:decisions"),
                 }
             }
+            // ADR-0079 R5b-prep: 人の計画（origin human、run を持たない）の決定は、その決定を持つ人の計画の版に
+            // 束ねる（planner の計画と同じ `plan:<plan_id>:decisions`。PUT で出た h4 / h5 / h7 が 1 通になる）。
+            None if row.request.raised_by.origin == task_core::DecisionOrigin::Human => {
+                let plan = store
+                    .execution_plan_list(row.task_id)?
+                    .into_iter()
+                    .rev()
+                    .find(|p| {
+                        p.origin == task_core::PlanOrigin::Human
+                            && task_core::normalized_decisions(&p.spec)
+                                .iter()
+                                .any(|d| d.key == row.key)
+                    })
+                    .map(|p| p.id);
+                match plan {
+                    Some(plan_id) => format!("plan:{plan_id}:decisions"),
+                    None => format!("decision:{}", row.id),
+                }
+            }
             None => format!("decision:{}", row.id),
         };
         groups.entry(key).or_default().push(row);

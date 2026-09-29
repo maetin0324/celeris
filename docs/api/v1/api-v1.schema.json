@@ -526,6 +526,74 @@
         }
       ]
     },
+    "AdoptRequest": {
+      "additionalProperties": false,
+      "description": "`POST /tasks/{id}/tree/adopt` の本文。",
+      "properties": {
+        "stage": {
+          "description": "unit の段階の key（計画の unit の `stage` と一致すること）。",
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "採用する既存の task。"
+        },
+        "unit_key": {
+          "description": "計画の kind task の unit の key（`adopt: <task_id>` を持つこと）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "stage",
+        "unit_key"
+      ],
+      "type": "object"
+    },
+    "AdoptionOutcome": {
+      "description": "採用の結果（1 unit 分）。`PUT /tasks/{id}/execution-plan` の `adoptions[]` と `POST /tasks/{id}/tree/adopt` の応答。",
+      "properties": {
+        "adopted": {
+          "description": "結んだ（unit は `done`）。`false` は対象がまだ終端でないので unit が採用を待っている（人の計画だけ）。",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "人が読む 1 行。",
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "task_status": {
+          "$ref": "#/$defs/Status",
+          "description": "対象の状態（採用しても変えない）。"
+        },
+        "unit_key": {
+          "type": "string"
+        },
+        "unit_status": {
+          "$ref": "#/$defs/WorkUnitStatus",
+          "description": "unit の行の状態（結んだ後）。"
+        }
+      },
+      "required": [
+        "plan_id",
+        "unit_key",
+        "stage",
+        "task_id",
+        "adopted",
+        "task_status",
+        "unit_status",
+        "detail"
+      ],
+      "type": "object"
+    },
     "AnswerBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/answer` の本文。",
@@ -8146,8 +8214,21 @@
     "ExecutionPlanView": {
       "description": "`POST`/`GET /tasks/{id}/execution-plan` の応答。",
       "properties": {
+        "adoptions": {
+          "description": "ADR-0079 D15（Phase R5b-prep）: 人の計画（`PUT/POST /tasks/{id}/execution-plan`）の応答だけ: unit の\n`adopt` の結果（結んだ / 対象が終端でないので待つ）。`GET` では空。",
+          "items": {
+            "$ref": "#/$defs/AdoptionOutcome"
+          },
+          "type": "array"
+        },
         "created_at": {
           "type": "string"
+        },
+        "decisions_raised": {
+          "description": "ADR-0079 D7（Phase R5b-prep）: 人の計画の応答だけ: 計画の決定として出した決定の要求（origin human）の数。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
         "id": {
           "type": "string"
@@ -20716,6 +20797,13 @@
     "tree": {
       "$ref": "#/$defs/TreeView"
     },
+    "tree_adopt": {
+      "$ref": "#/$defs/AdoptRequest",
+      "description": "ADR-0079 D15（Phase R5b-prep）: `POST /tasks/{id}/tree/adopt` の本文と応答。"
+    },
+    "tree_adopt_result": {
+      "$ref": "#/$defs/AdoptionOutcome"
+    },
     "tree_file": {
       "$ref": "#/$defs/TreeFileView"
     }
@@ -20850,6 +20938,8 @@
     "task_execution",
     "phase_gate",
     "plan_gate",
+    "tree_adopt",
+    "tree_adopt_result",
     "execution_metrics",
     "metrics_scratch",
     "browser_request",

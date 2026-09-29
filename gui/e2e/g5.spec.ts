@@ -134,7 +134,7 @@ test.describe("受け入れ条件 3: Host 検査と CSP ヘッダ", () => {
     expect(notFound?.headers()["content-security-policy"] ?? "").toContain("nonce-");
     expect(notFound?.headers()["x-content-type-options"]).toBe("nosniff");
     await expect(page.locator("main")).toContainText("404");
-    for (const p of ["/", "/tasks", "/tasks/new", "/plans/new", "/daemon", "/providers", "/graph", "/healthz"]) {
+    for (const p of ["/", "/tasks", "/tasks/new", "/daemon", "/providers", "/graph", "/healthz"]) {
       const res = await page.goto(p);
       expect(res, p).not.toBeNull();
       const csp = res?.headers()["content-security-policy"] ?? "";

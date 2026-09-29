@@ -600,6 +600,16 @@ pub(crate) fn ops_problem(
             ApiProblem::new(StatusCode::CONFLICT, "decision_not_open", detail)
                 .with_extra("decision_status", status)
         }
+        // ADR-0079 D15（Phase R5b-prep）: 採用（adopt）の拒否。
+        OpsError::TreeAdopt { conflict, code, .. } => ApiProblem::new(
+            if conflict {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            },
+            code,
+            detail,
+        ),
         OpsError::Store(err) => store_problem(err),
     }
 }

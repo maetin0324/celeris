@@ -332,17 +332,7 @@ export default function HelpPage() {
             >
               タスクを作る
             </Link>
-            （または{" "}
-            <Link
-              to="/plans/new"
-              className={cn(
-                touchLinkClass,
-                "text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary",
-              )}
-            >
-              Plan を作る
-            </Link>
-            ）
+            （大きな依頼も 1 つの root task にする。段階への分け方は celeris の計画が決める。ADR-0079）
           </li>
           <li>人間が承認する（draft を受け入れる。kind=approval のタスクは承認／却下で判定する）</li>
           <li>celeris がワーカーを起動する（人間は何もしない。順番・タイミングは celeris が決める）</li>

@@ -117,6 +117,18 @@ pub struct ProjectPlanMilestoneChange {
     pub description: Option<String>,
 }
 
+/// ADR-0079 D15（Phase R5b-prep）: 既存の task を木の子として採用する書き換え（`TaskStore::execution_plan_adopt_tree`
+/// / `TaskStore::tree_adopt_apply` の入力）。`task` は `tree`（と、`parent_id` が無かったなら `parent_id`）を書いた後の
+/// 値。状態・attempts・lease はトランザクションの中で読み直した値を使う（`update_task` と同じ規律）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeAdoption {
+    pub task: Task,
+    /// 採用を判断したときの対象の状態（トランザクションの中で変わっていれば何も書かない）。
+    pub expect_status: Status,
+    /// 対象の events に積む 1 件（`Event::Edited{fields: ["tree", ...], by}`）。
+    pub event: Event,
+}
+
 /// `SqliteStore::open_with` に渡す接続オプション（ADR-0013 D5、ADR-0064 D1/D4/D5）。
 #[derive(Debug, Clone, Copy)]
 pub struct StoreOptions {
@@ -1179,6 +1191,39 @@ pub trait TaskStore:
         unit: WorkUnitRow,
         parent_events: Vec<Event>,
         replaces: Option<&str>,
+    ) -> Result<bool, StoreError>;
+
+    /// ADR-0079 D15（Phase R5b-prep）: 人の計画（origin human）の採用と、その計画の unit の `adopt` による既存の
+    /// task の採用を 1 トランザクションで書く。`execution_plan_adopt` と同じことをした後に `after_events`
+    /// （`WorkUnitTransitioned`・`ChildAdopted`・`UnitGateOverridden`・`DecisionRequested` など。`work_units` の行は
+    /// 呼び出し側がこれらを当てた後の値で渡す）を積み、`adoptions` の各 task を書き換える。採用する task が今も
+    /// `expect_status` で木に属していない（`tree` が無い）ことを確かめ、違えば何も書かずに `Ok(false)`。
+    #[allow(clippy::too_many_arguments)]
+    fn execution_plan_adopt_tree(
+        &self,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        after_events: Vec<Event>,
+        adoptions: Vec<TreeAdoption>,
+    ) -> Result<bool, StoreError>;
+
+    /// ADR-0079 D15（Phase R5b-prep）: 採用済みの計画の kind task の unit（`unit_id`）に既存の task を後から採用する
+    /// 1 トランザクション（`POST /tasks/{id}/tree/adopt`）。計画を持つ task が終端でなく、unit の行が今も
+    /// `expect_unit_status` の kind task で `child_task_id` を持たず、採用する task が `expect_status` で `tree` を
+    /// 持たないことを確かめる。`updated` の行を書き換え、計画を持つ task に `events` を積み、採用する task を書き換える。
+    /// 条件に合わなければ何も書かず `Ok(false)`。
+    #[allow(clippy::too_many_arguments)]
+    fn tree_adopt_apply(
+        &self,
+        owner_id: TaskId,
+        unit_id: &str,
+        expect_unit_status: WorkUnitStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+        adoption: TreeAdoption,
     ) -> Result<bool, StoreError>;
 
     /// ADR-0074 D1.4（Phase F2）: Task の lease（工程の保持者）の期限を `ttl` 先まで延ばす
@@ -2641,6 +2686,32 @@ impl SqliteStore {
             Self::append_event_tx(tx, task_id, ev)?;
         }
         Self::append_event_tx(tx, task_id, &event)?;
+        Ok(())
+    }
+
+    /// ADR-0079 D15（Phase R5b-prep）: 採用する task が今も `expect_status` で、木に属していない（`tree` が無い）か。
+    fn tree_adoption_ok_tx(tx: &Connection, a: &TreeAdoption) -> Result<bool, StoreError> {
+        Ok(Self::get_locked(tx, a.task.id)?
+            .is_some_and(|current| current.status == a.expect_status && current.tree.is_none()))
+    }
+
+    /// ADR-0079 D15: 採用する task の `json` と絞り込みの列（`root_id`・`parent_id`）を書き、その task に event を積む。
+    /// 状態・attempts・lease は読み直した値のまま（状態機械は通らない）。
+    fn apply_tree_adoption_tx(tx: &Connection, a: &TreeAdoption) -> Result<(), StoreError> {
+        let Some(current) = Self::get_locked(tx, a.task.id)? else {
+            return Err(StoreError::Invalid(format!(
+                "task not found: {}",
+                a.task.id
+            )));
+        };
+        let merged = Task {
+            status: current.status,
+            attempts: current.attempts,
+            lease: current.lease.clone(),
+            ..a.task.clone()
+        };
+        Self::update_task_tx(tx, &merged)?;
+        Self::append_event_tx(tx, a.task.id, &a.event)?;
         Ok(())
     }
 
@@ -6042,6 +6113,86 @@ impl TaskStore for SqliteStore {
         for ev in &parent_events {
             Self::append_event_tx(&tx, parent_id, ev)?;
         }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn execution_plan_adopt_tree(
+        &self,
+        task_id: TaskId,
+        plan: ExecutionPlanRow,
+        work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        event: Event,
+        after_events: Vec<Event>,
+        adoptions: Vec<TreeAdoption>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for a in &adoptions {
+            if !Self::tree_adoption_ok_tx(&tx, a)? {
+                return Ok(false);
+            }
+        }
+        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
+        for ev in &after_events {
+            Self::append_event_tx(&tx, task_id, ev)?;
+        }
+        for a in &adoptions {
+            Self::apply_tree_adoption_tx(&tx, a)?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn tree_adopt_apply(
+        &self,
+        owner_id: TaskId,
+        unit_id: &str,
+        expect_unit_status: WorkUnitStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+        adoption: TreeAdoption,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(owner) = Self::get_locked(&tx, owner_id)? else {
+            return Ok(false);
+        };
+        if owner.status.is_terminal() {
+            return Ok(false);
+        }
+        let current = tx
+            .query_row(
+                "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
+                 depends_on_json, runs, continuations, retries, last_run_id, \
+                 last_checkpoint_run_id, json, created_at, updated_at, phase, lease_run_id, \
+                 lease_expires_at, branch, base_commit, head_commit, integrated_commit, child_task_id, \
+                 needs_decisions_json FROM work_units WHERE id = ?1 AND task_id = ?2",
+                params![unit_id, owner_id.to_string()],
+                Self::row_to_work_unit,
+            )
+            .optional()?
+            .transpose()?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        if current.status != expect_unit_status
+            || current.child_task_id.is_some()
+            || current.kind != crate::execution_plan::WorkUnitKind::Task
+        {
+            return Ok(false);
+        }
+        if !Self::tree_adoption_ok_tx(&tx, &adoption)? {
+            return Ok(false);
+        }
+        for wu in &updated {
+            Self::update_work_unit_tx(&tx, wu)?;
+        }
+        for ev in &events {
+            Self::append_event_tx(&tx, owner_id, ev)?;
+        }
+        Self::apply_tree_adoption_tx(&tx, &adoption)?;
         tx.commit()?;
         Ok(true)
     }

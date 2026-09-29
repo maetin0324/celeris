@@ -7,6 +7,11 @@
 //! - 404（タスクが無い）、422（D14 の検証エラー）、409（既に `active` な計画がある。E2 は新規のみ、
 //!   replan は E4）。
 //!
+//! ADR-0079 R5b-prep: `PUT` も `POST` と同じ（人の計画の採用）。検証の上限は daemon の実効の上限
+//! （`[execution.tree]` は `ApiSettings.tree_limits`）で、/3 は planner の計画と同じ経路（unit の gate・決定の要求・
+//! 木の上限・unit の `adopt`）を 1 トランザクションで通す（`task_ops::execution::adopt_human_plan`。承認〈PlanGate〉は
+//! 挟まない）。`POST /tasks/{id}/tree/adopt`（管理系）は採用済みの計画への後からの採用（ADR-0079 D15）。
+//!
 //! ADR-0072 D19（Phase E5）: `GET /tasks/{id}/execution`（計画・WU 一覧・run 一覧・metrics・
 //! ExecutionPhase を 1 つにまとめた深掘りビュー）と `GET /metrics/execution`（期間で集計した gate の
 //! 判定分布・completion rate・continuation/repair/replan 頻度。集計そのものは `crate::stats`）。
@@ -28,7 +33,13 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
     axum::Router::new()
         .route(
             "/api/v1/tasks/{id}/execution-plan",
-            axum::routing::get(get_execution_plan).post(post_execution_plan),
+            axum::routing::get(get_execution_plan)
+                .post(post_execution_plan)
+                .put(post_execution_plan),
+        )
+        .route(
+            "/api/v1/tasks/{id}/tree/adopt",
+            axum::routing::post(post_tree_adopt),
         )
         .route(
             "/api/v1/tasks/{id}/execution",
@@ -125,15 +136,19 @@ async fn post_execution_plan(
     require_admin(&state, &headers)?;
     let task_id = parse_task_id(&id)?;
     let spec: task_core::ExecutionPlanSpec = read_json(body, false).await?;
+    // ADR-0079 R5b-prep: daemon と同じ実効の上限（`[execution.tree]` 以外は既定。celeris の `dispatch_config` と同じ）。
+    let limits = ExecutionLimits {
+        tree: state.inner.tree_limits,
+        ..ExecutionLimits::default()
+    };
     let view = state
         .blocking(move |store| {
-            let plan = task_ops::execution::adopt_plan(
+            let adopted = task_ops::execution::adopt_human_plan(
                 store,
                 task_id,
                 spec,
-                task_core::PlanOrigin::Human,
-                None,
-                ExecutionLimits::default(),
+                limits,
+                "human",
                 OffsetDateTime::now_utc(),
             )
             .map_err(|e| ops_problem(store, e, Some("execution_plan_adopt")))?;
@@ -143,11 +158,48 @@ async fn post_execution_plan(
             let versions = store
                 .execution_plan_list(task_id)
                 .map_err(crate::problem::store_problem)?;
-            Ok(ExecutionPlanView::new(plan, work_units, versions))
+            let mut view = ExecutionPlanView::new(adopted.plan, work_units, versions);
+            view.adoptions = adopted.adoptions;
+            view.decisions_raised = adopted.decisions_raised;
+            Ok(view)
         })
         .await?;
-    tracing::info!(who = "admin", op = "execution_plan_adopt", task_id = %task_id, plan_id = %view.id, work_units = view.work_units.len(), "admin: execution plan adopted");
+    tracing::info!(who = "admin", op = "execution_plan_adopt", task_id = %task_id, plan_id = %view.id, work_units = view.work_units.len(), adoptions = view.adoptions.len(), decisions = view.decisions_raised, "admin: execution plan adopted");
     Ok(json_response(StatusCode::CREATED, &view))
+}
+
+/// ADR-0079 D15（Phase R5b-prep）: `POST /tasks/{id}/tree/adopt {task_id, stage, unit_key}`（管理系 = 人だけ）。
+/// 採用済みの /3 の計画の kind task の unit（`adopt: <task_id>` を持つ）に既存の task を結ぶ（`task_ops::tree_adopt::adopt`）。
+/// 200 は `AdoptionOutcome`。404: task が無い。422: 木が無効・計画が /3 でない・unit が無い / kind task でない /
+/// 段階が違う / `adopt` の id が違う・別の案件・祖先・対象の種類。409: 対象が終端でない / 中止済み / 他の木に属する・
+/// unit が既に子を持つか pending / ready でない・計画を持つ task が終端・競合。
+async fn post_tree_adopt(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    headers: HeaderMap,
+    Params(id): Params<String>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let task_id = parse_task_id(&id)?;
+    let req: task_ops::tree_adopt::AdoptRequest = read_json(body, false).await?;
+    let limits = state.inner.tree_limits;
+    let outcome = state
+        .blocking(move |store| {
+            task_ops::tree_adopt::adopt(
+                store,
+                task_id,
+                &req,
+                &limits,
+                "human",
+                OffsetDateTime::now_utc(),
+            )
+            .map_err(|e| ops_problem(store, e, Some("tree_adopt")))
+        })
+        .await?;
+    tracing::info!(who = "admin", op = "tree_adopt", task_id = %task_id, unit = %outcome.unit_key, adopted = %outcome.task_id, "admin: task adopted into the tree");
+    Ok(json_response(StatusCode::OK, &outcome))
 }
 
 /// ADR-0072 D19（Phase E5）: `GET /tasks/{id}/execution`。`TaskDetail.execution`（D20 の要約）と

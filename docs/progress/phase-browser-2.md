@@ -92,6 +92,13 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 
 実 GUI の登録→再開と承認、本人限定 Live View は live-gui WU の `g14-final`（4 passed、スクリーンショットあり）で確認した。実 agent-browser 0.38.1 の worker 設定による `auth login` は同 WU の `auth-wiring/production5`（ログイン成功、lease 再使用拒否、sentinel 0 件）で確認した。
 
+### release2 gate / staging verify（2026-09-29）
+
+- 検証 SHA は `9737e97081244ac14f5d1e16f29cfb81b2f22788`（`main` の `a525af2` を含む。以下の記録は docs だけを追加する後続コミット）。
+- `scripts/selfdeploy/release.sh 9737e97081244ac14f5d1e16f29cfb81b2f22788`: exit 0、`gate.json` の `ok=true`、schema version 33。cargo fmt・並列 workspace tests・clippy・release build と GUI の typecheck/test/build/mobile-audit/e2e-mock がすべて成功。
+- `SD_REPO=$HOME/workspace/agent-platform scripts/selfdeploy/verify.sh 9737e9708124`: exit 0、`verify.json` の `ok=true`、`live_ok=false`。start-and-migrate、件数一致、主要 GET、GUI、GUI E2E、smoke は true。N-1 互換だけ false: 現行 `5fcb7eebbe9a` は schema 29 までしか扱えず、schema 33 の staging DB で `SchemaTooNew`。既知の migration 差であり、再実行しても変わらない。
+- ログと `gate.json` / `verify.json` は WU の `release2/artifacts/` に保存。本番 `current` は `5fcb7eebbe9a` のまま。昇格は行っていない。
+
 ## 未解決事項
 
 - Phase 3〜4 に回すもの: persistent auth（認証 state の再利用）、GUI 本体への live stream 統合、container/egress 隔離。読み取り専用 relay は本 Phase で実装・確認した。

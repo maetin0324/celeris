@@ -27,7 +27,12 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 | GUI lint | `cd gui && pnpm lint` | exit 0（295 files、info 2） |
 | 端から端 | `cargo test -p task-api --test browser_e2e`（e2e WU） | 3 passed（成功、拒否から failed、origin 不一致から deny。sentinel は全走査） |
 
-release.sh / verify.sh の結果と検証済み SHA は、次の追記に書く。
+### release.sh / verify.sh（ADR-0040 D5、2026-09-29）
+
+- 検証した SHA は `18ca76d57fce26d965349e49835d84813fb41459`（全体検査結果を記録したコミット。この節の追記は docs だけを変える）。
+- `scripts/selfdeploy/release.sh 18ca76d57fce26d965349e49835d84813fb41459`: exit 0、gate.json は ok=true、schema_version=32（5m43s。GUI の typecheck/test/build/mobile-audit/e2e-mock を含む）。
+- `SD_REPO=$HOME/workspace/agent-platform scripts/selfdeploy/verify.sh 18ca76d57fce`: exit 0、**ok=true、live_ok=false**。check 1〜4・4b（gui-e2e）・6（smoke）は true。check 5（n-1-compat）だけが false になる。本番の現行 5fcb7eebbe9a は schema 29 までしか扱えず、このリリースは 0030（cluster_connection_log）・0031（browser_waits）・0032（browser_task_policies）を適用して 32 にするため、`SchemaTooNew` で起動しない。これは決定的に起きることで、一過性の失敗ではないので再実行していない。
+- 本番へは昇格していない。昇格すると N-1 の rollback ができない（schema 32 の DB を旧 binary が読めない）ことを、人は昇格前に承知しておく必要がある。
 
 ## 未解決事項
 

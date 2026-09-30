@@ -326,3 +326,51 @@ test.describe("P4-06 docs", () => {
   });
 });
 
+test.describe("P4-07 board", () => {
+  test("parity: /board 列・URL 絞り込み・編集・復帰", async ({ page }) => {
+    const calls: string[] = [];
+    const items = ["ready", "running", "blocked", "done", "failed", "cancelled"].map((status, i) => ({
+      ...task(`T${i + 1}`, `カード ${i + 1}`),
+      actions: ["edit"],
+      status,
+      project_id: "P1",
+    }));
+    const h = harness({
+      "/api/v1/projects": { items: [project("P1", "一件目")] },
+      "/api/v1/tasks": (url: URL) => {
+        calls.push(url.search);
+        return { items, total: 6, next_cursor: null, counts_by_status: {} };
+      },
+    });
+    const gateway = await h.start();
+    let editBody: unknown = null;
+    await page.route("**/api/tasks/T1", async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      editBody = route.request().postDataJSON();
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ task: items[0], fields: ["priority"] }),
+      });
+    });
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${gateway.base}/board?project=P1`);
+      await expect(page.locator("[data-board-column]")).toHaveCount(6);
+      await expect(page.locator("[data-task-id]")).toHaveCount(6);
+      expect(await page.getByTestId("board-scroll-frame").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.getByLabel("検索").fill("カード");
+      await page.getByRole("button", { name: "絞り込む" }).click();
+      await expect(page).toHaveURL(/project=P1.*q=/);
+      expect(calls.some((q) => q.includes("project=P1") && q.includes("q="))).toBe(true);
+      await page.locator("[data-task-id='T1']").getByLabel("優先度").selectOption("P0");
+      await page.locator("[data-task-id='T1'] button").click();
+      await expect(page.locator("[data-task-id='T1'] [role=status]")).toBeVisible();
+      expect(editBody).toMatchObject({ priority: "P0", expected_status: "ready" });
+      await page.goBack();
+      await expect(page).toHaveURL(/project=P1/);
+    } finally {
+      await h.close(gateway);
+    }
+  });
+});

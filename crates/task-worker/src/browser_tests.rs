@@ -319,6 +319,155 @@ fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capa
     assert!(route_existing_backend("acp", &public, &scripted).is_err());
 }
 
+/// ADR-0093: the P4-B ledger with per-test evidence, as `scripts/browser-conformance.py
+/// --p4b-evidence` writes it, for `backends` only.
+fn p4b_record(dir: &Path, backends: &[&str], evidence: bool) -> PathBuf {
+    use task_core::browser_backend::{
+        ConformanceEvidence, EvidenceOutcome, FixtureCase, required_evidence,
+    };
+    let mut passed: Vec<serde_json::Value> = [
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "snapshot_has_refs",
+        "click_by_ref",
+        "screenshot_artifact",
+        "download_to_artifacts",
+        "isolation_suite",
+        "egress_negative_suite",
+        "injection_attack_suite",
+        "auth_section_observation_stop",
+    ]
+    .into_iter()
+    .map(serde_json::Value::from)
+    .collect();
+    passed.sort_by_key(|v| v.to_string());
+    let proof: Vec<ConformanceEvidence> = if evidence {
+        [
+            FixtureCase::InjectionAttackSuite,
+            FixtureCase::AuthSectionObservationStop,
+        ]
+        .into_iter()
+        .flat_map(|case| {
+            required_evidence(case)
+                .into_iter()
+                .map(move |test| ConformanceEvidence {
+                    case,
+                    test,
+                    outcome: EvidenceOutcome::Passed,
+                })
+        })
+        .collect()
+    } else {
+        Vec::new()
+    };
+    let results: Vec<_> = backends
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "backend_id": id, "version": SUPPORTED_VERSION,
+                "passed": passed, "evidence": proof,
+            })
+        })
+        .collect();
+    let path = dir.join(format!("p4b-{}-{evidence}.json", backends.join("-")));
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "source": "celeris-browser-conformance", "results": results,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    path
+}
+
+fn credential_policy(workspace: &Path) -> crate::browser_policy::PreparedBrowserPolicy {
+    let mut req = request(workspace);
+    let grant = req
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap();
+    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    grant.credential_policy_ids = vec!["pol-example".into()];
+    let task_policy = req.context.browser_policy.as_mut().unwrap();
+    task_policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    task_policy.credential_policy_ids = vec!["pol-example".into()];
+    crate::browser_policy::prepare(
+        req.context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap()
+}
+
+/// ADR-0093 D1/D2: CredentialUse is released only by a ledger carrying the P4-B measured
+/// evidence; the same case names without evidence stay refused.
+#[test]
+fn credential_use_is_released_only_by_p4b_evidence_in_the_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    let policy = credential_policy(temp.path());
+    let bare = p4b_record(temp.path(), &["acp"], false);
+    let error = route_existing_backend("acp", &policy, &bare).unwrap_err();
+    assert!(error.to_string().contains("lacks required conformance"));
+    let released = p4b_record(temp.path(), &["acp"], true);
+    assert_eq!(
+        route_existing_backend("acp", &policy, &released)
+            .unwrap()
+            .primary,
+        "acp"
+    );
+    // one failed attack mark closes it again
+    let bytes = std::fs::read(&released).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    value["results"][0]["evidence"][8]["outcome"] = serde_json::json!("failed");
+    let failed = temp.path().join("p4b-failed.json");
+    std::fs::write(&failed, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &policy, &failed).is_err());
+}
+
+/// ADR-0093 D3: after the release, a backend without its own P4-B record and a runtime that is
+/// not isolated are still refused.
+#[test]
+fn released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime() {
+    let temp = tempfile::tempdir().unwrap();
+    let policy = credential_policy(temp.path());
+    let released = p4b_record(temp.path(), &["acp"], true);
+    assert!(route_existing_backend("acp", &policy, &released).is_ok());
+    for backend in ["claude-code", "browser-specialist", "unsupported"] {
+        assert!(route_existing_backend(backend, &policy, &released).is_err());
+    }
+    let unisolated = |bwrap: &str| IsolatedBrowserConfig {
+        live_sessions: None,
+        resolver: Some("127.0.0.1".parse().unwrap()),
+        record_dir: temp.path().join("records"),
+        bwrap: bwrap.into(),
+        sandboxd: temp.path().join("missing-sandboxd"),
+        egress: temp.path().join("missing-egress"),
+    };
+    let unavailable = |r: Result<&IsolatedBrowserConfig, AdapterError>| {
+        r.err()
+            .is_some_and(|e| e.to_string().contains("isolated_runtime_unavailable"))
+    };
+    assert!(unavailable(isolated_runtime_ready(None)));
+    assert!(unavailable(isolated_runtime_ready(Some(&unisolated(
+        "/nonexistent/bwrap"
+    )))));
+    let mut no_resolver = unisolated("/usr/bin/bwrap");
+    no_resolver.resolver = None;
+    assert!(unavailable(isolated_runtime_ready(Some(&no_resolver))));
+}
+
 #[test]
 fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
     let first = TaskId::new();

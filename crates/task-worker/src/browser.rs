@@ -858,6 +858,22 @@ fn route_existing_backend(
     Ok(decision)
 }
 
+/// ADR-0093 D3: even with a ledger that certifies the sensitive capabilities, a launch needs
+/// the configured isolated runtime (bwrap, sandboxd, egress and a resolver). The ledger never
+/// substitutes for it.
+fn isolated_runtime_ready(
+    config: Option<&IsolatedBrowserConfig>,
+) -> Result<&IsolatedBrowserConfig, AdapterError> {
+    config
+        .filter(|cfg| {
+            cfg.resolver.is_some()
+                && cfg.bwrap.is_file()
+                && cfg.sandboxd.is_file()
+                && cfg.egress.is_file()
+        })
+        .ok_or_else(|| AdapterError::Other("isolated_runtime_unavailable".into()))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConformanceLedger {
@@ -1001,15 +1017,7 @@ async fn run_with_executable_attempt(
     )
     .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
     let _routing = route_existing_backend(adapter.id(), &policy, record_path)?;
-    let isolation = ISOLATED
-        .get()
-        .filter(|cfg| {
-            cfg.resolver.is_some()
-                && cfg.bwrap.is_file()
-                && cfg.sandboxd.is_file()
-                && cfg.egress.is_file()
-        })
-        .ok_or_else(|| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let isolation = isolated_runtime_ready(ISOLATED.get())?;
     let waits = sink
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;

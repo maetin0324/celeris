@@ -17,6 +17,7 @@ use task_core::browser_isolation::{IsolationViolation, RuntimeFacts, verify_isol
 use zeroize::Zeroize;
 
 pub use crate::injection::PeerRole;
+use crate::injection::{RedisplayGuard, RedisplayGuardWire};
 
 /// 要求 frame の上限（ADR-0089 D1）。
 pub const MAX_REQUEST: usize = 16 * 1024;
@@ -146,6 +147,10 @@ pub struct InjectionReply {
     pub receipt: Option<InjectionReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+    /// ADR-0092: 注入した値の再表示 guard（salt・digest・長さだけ）。receipt の外に置き、
+    /// controller は保持するだけで agent・worker へは渡さない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redisplay_guard: Option<RedisplayGuardWire>,
 }
 
 impl InjectionReply {
@@ -156,6 +161,7 @@ impl InjectionReply {
             ok: false,
             receipt: None,
             code: Some(code.code().into()),
+            redisplay_guard: None,
         }
     }
 }
@@ -596,12 +602,13 @@ impl InjectionService {
             .unwrap_or_else(|| self.role(peer, None));
         self.audit(peer, Some(&req), code, Some(role));
         match result {
-            Ok(receipt) => InjectionReply {
+            Ok((receipt, guard)) => InjectionReply {
                 v: 1,
                 request_id: req.request_id,
                 ok: true,
                 receipt: Some(receipt),
                 code: None,
+                redisplay_guard: Some(guard),
             },
             Err(c) => InjectionReply::denied(&req.request_id, c),
         }
@@ -612,7 +619,7 @@ impl InjectionService {
         peer: PeerCred,
         req: &InjectionRequest,
         sink: &mut dyn CdpSink,
-    ) -> Result<InjectionReceipt, InjectCode> {
+    ) -> Result<(InjectionReceipt, RedisplayGuardWire), InjectCode> {
         // 0. 形
         if req.v != 1 {
             return Err(InjectCode::UnsupportedVersion);
@@ -708,6 +715,7 @@ impl InjectionService {
             Field::Username => &secret.username,
             Field::Password => &secret.password,
         };
+        let guard = RedisplayGuard::new(value).to_wire();
         let mut frame = cdp_frame(req, origin, value)?;
         drop(secret);
         let reply = sink.exchange(&frame);
@@ -716,16 +724,19 @@ impl InjectionService {
         let verdict = sink_verdict(req.cdp_command_id, &reply);
         reply.zeroize();
         verdict?;
-        Ok(InjectionReceipt {
-            lease_id: req.lease_id.clone(),
-            auth_section_id: req.auth_section_id.clone(),
-            session_id: req.session_id.clone(),
-            cdp_target_id: req.cdp_target_id.clone(),
-            frame_id: req.frame_id.clone(),
-            loader_id: req.loader_id.clone(),
-            field: req.field,
-            injected_at: now(),
-        })
+        Ok((
+            InjectionReceipt {
+                lease_id: req.lease_id.clone(),
+                auth_section_id: req.auth_section_id.clone(),
+                session_id: req.session_id.clone(),
+                cdp_target_id: req.cdp_target_id.clone(),
+                frame_id: req.frame_id.clone(),
+                loader_id: req.loader_id.clone(),
+                field: req.field,
+                injected_at: now(),
+            },
+            guard,
+        ))
     }
 
     fn audit(

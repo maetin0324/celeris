@@ -20,6 +20,10 @@ const PUSH_TIMEOUT: Duration = Duration::from_secs(120);
 /// （[`push_error_display`]）。この目印が付いていたら以後は触らない。
 const PUSH_RETRIED_PREFIX: &str = "[retried] ";
 const MERGE_BASE_FAILURE: &str = "[merge-base] ";
+/// 承認 SHA の早送り（`git merge --ff-only`）の待ち時間。差分の全ファイルを作業ツリーに書くので、
+/// NFS 上の自己リポジトリで数百ファイルの差分だと 20 秒では足りない（2026-09-30: 406 ファイルの
+/// 配送が途中で kill され、`index.lock` と書きかけの作業ツリーが残った）。
+const MERGE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// 配送で局所修復できる失敗だけを分類する。gate の他の step は従来の Reopen に残す。
 fn classify_delivery_failure(
@@ -40,9 +44,18 @@ fn classify_delivery_failure(
 }
 
 fn git_text(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let out = git(repo, args, Duration::from_secs(20)).ok_or("git を起動できません")?;
+    git_text_within(repo, args, Duration::from_secs(20))
+}
+fn git_text_within(repo: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let out = git(repo, args, timeout).ok_or("git を起動できません")?;
     if out.ok {
         Ok(out.stdout.trim().into())
+    } else if out.timed_out {
+        Err(format!(
+            "git {} timed out after {}s (killed)",
+            args.join(" "),
+            timeout.as_secs()
+        ))
     } else {
         Err(out.stderr.chars().take(1000).collect())
     }
@@ -186,7 +199,8 @@ fn merge_reviewed(repo: &Path, d: &Delivery) -> Result<(), String> {
     if task_ops::changes::current_branch(repo).as_deref() != Some(d.default_branch.as_str()) {
         return Err("自己リポジトリが既定ブランチをチェックアウトしていません".into());
     }
-    git_text(
+    // `--no-progress`: 進捗行（"Updating files: ..."）が stderr を埋めて本当の失敗理由を隠すのを防ぐ。
+    git_text_within(
         repo,
         &[
             "-c",
@@ -194,8 +208,10 @@ fn merge_reviewed(repo: &Path, d: &Delivery) -> Result<(), String> {
             "merge",
             "--ff-only",
             "--no-autostash",
+            "--no-progress",
             &d.head,
         ],
+        MERGE_TIMEOUT,
     )?;
     if sha(repo, "HEAD")? != d.head {
         return Err("取り込み後のSHAが一致しません".into());

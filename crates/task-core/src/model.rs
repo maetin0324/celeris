@@ -922,6 +922,15 @@ pub enum CreatedOrigin {
     PlanUnit,
 }
 
+/// ADR-0079 付記 R7-5 D1: `Event::WorkUnitChecksFailed` の不合格の検査 1 件。`detail` は判定文そのもの
+/// （`cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FailedWorkUnitCheck {
+    pub cmd: String,
+    pub expect_exit: i32,
+    pub detail: String,
+}
+
 /// DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の
 /// *結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。
 /// `JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。
@@ -1189,6 +1198,16 @@ pub enum Event {
         reason: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<String>,
+    },
+    /// ADR-0079 付記 R7-5 D1: WU の run が `done` を返したが、その WU の `checks` が不合格だった（daemon が run を
+    /// retry / failed にすり替えた理由）。`cwd` は check を実際に走らせた所。その run の `WorkerFinished` と同じ
+    /// トランザクションで積む。状態は変えない（`replay` は無視する）。
+    WorkUnitChecksFailed {
+        run_id: String,
+        work_unit_id: String,
+        key: String,
+        cwd: String,
+        failed: Vec<FailedWorkUnitCheck>,
     },
     /// ADR-0079 R5b-fix1: 人の replan（`PlanOrigin::Human`）が done の WorkUnit の spec を上書きした
     /// （状態は `done` のまま。`work_units.spec` だけを新しい版の spec に置き換える）。`plan_id` / `plan_version` は

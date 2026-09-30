@@ -993,6 +993,133 @@ pub enum DispatchError {
     Store(#[from] StoreError),
 }
 
+/// ADR-0079 付記 R7-5 D3: WU `wu_id` の直前の run（`current_run_id` を除く最後の run）の checks の不合格を、
+/// プロンプトの行（先頭が `cwd: <所>`、続いて不合格の検査ごとの判定文）にする。events を新しい方から見て、
+/// その WU の `WorkUnitChecksFailed` が、別の run の `running` への遷移より先に見つかったときだけ返す
+/// （直前の run が checks で落ちていない・continuation の続き・初回の run は空）。
+fn previous_check_failure_lines(
+    events: &[(u64, Event)],
+    wu_id: &str,
+    current_run_id: &str,
+) -> Vec<String> {
+    for (_, ev) in events.iter().rev() {
+        match ev {
+            Event::WorkUnitChecksFailed {
+                work_unit_id,
+                run_id,
+                cwd,
+                failed,
+                ..
+            } if work_unit_id == wu_id && run_id != current_run_id => {
+                let mut lines = vec![format!("cwd: {cwd}")];
+                lines.extend(failed.iter().map(|f| {
+                    if f.detail.contains(&f.cmd) {
+                        f.detail.clone()
+                    } else {
+                        format!("cmd={:?} expected={}: {}", f.cmd, f.expect_exit, f.detail)
+                    }
+                }));
+                return lines;
+            }
+            Event::WorkUnitTransitioned {
+                work_unit_id,
+                to: task_core::WorkUnitStatus::Running,
+                run_id: Some(r),
+                ..
+            } if work_unit_id == wu_id && r != current_run_id => return Vec::new(),
+            _ => {}
+        }
+    }
+    Vec::new()
+}
+
+/// ADR-0079 付記 R7-5 D2: outcome に足す checks の不合格の要約の上限（文字数）。
+const CHECK_FAILURE_SUMMARY_MAX_CHARS: usize = 1500;
+
+/// ADR-0079 付記 R7-5 D1: WU の checks を走らせた結果（`Completion::WorkUnitChecks` の中身）。
+struct WorkUnitCheckRun {
+    /// 走らせた checks（`results` と同じ順）。
+    checks: Vec<task_core::WorkUnitCheck>,
+    /// `(pass, reason)` の 1 件ずつ（`review::run_work_unit_checks` の結果そのまま）。
+    results: Vec<(bool, String)>,
+    /// check を実際に走らせた所。
+    cwd: PathBuf,
+}
+
+impl WorkUnitCheckRun {
+    /// 1 つでも不合格があれば、その記録（worker が `Done` で返した usage も持つ）。全部合格なら `None`。
+    fn failure(&self, result: &Result<RunOutcome, AdapterError>) -> Option<WorkUnitCheckFailure> {
+        let failed: Vec<task_core::FailedWorkUnitCheck> = self
+            .results
+            .iter()
+            .enumerate()
+            .filter(|(_, (pass, _))| !pass)
+            .map(|(i, (_, detail))| {
+                let (cmd, expect_exit) = self
+                    .checks
+                    .get(i)
+                    .map(|c| (c.cmd.clone(), c.expect_exit))
+                    .unwrap_or_default();
+                task_core::FailedWorkUnitCheck {
+                    cmd,
+                    expect_exit,
+                    detail: detail.clone(),
+                }
+            })
+            .collect();
+        if failed.is_empty() {
+            return None;
+        }
+        let usage = match result {
+            Ok(RunOutcome {
+                terminal: Terminal::Done { usage, .. },
+                ..
+            }) => *usage,
+            _ => None,
+        };
+        Some(WorkUnitCheckFailure {
+            cwd: self.cwd.clone(),
+            failed,
+            usage,
+        })
+    }
+}
+
+/// ADR-0079 付記 R7-5: WU の checks が不合格で、run を retry / failed にすり替えたときの記録。
+struct WorkUnitCheckFailure {
+    cwd: PathBuf,
+    failed: Vec<task_core::FailedWorkUnitCheck>,
+    /// worker が `Terminal::Done` で返した usage（D4: すり替えても落とさない）。
+    usage: Option<task_core::Usage>,
+}
+
+impl WorkUnitCheckFailure {
+    /// D2: `checks failed in <cwd>: <判定文>; <判定文>…`（全体を [`CHECK_FAILURE_SUMMARY_MAX_CHARS`] で切る）。
+    fn summary(&self) -> String {
+        let joined = self
+            .failed
+            .iter()
+            .map(|f| f.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        task_core::report::truncate_chars(
+            &format!("checks failed in {}: {joined}", self.cwd.display()),
+            CHECK_FAILURE_SUMMARY_MAX_CHARS,
+        )
+    }
+
+    /// D1: `Event::WorkUnitChecksFailed`。
+    fn event(&self, run_id: &str, wu: &task_core::WorkUnitRow) -> Event {
+        Event::WorkUnitChecksFailed {
+            run_id: run_id.to_string(),
+            work_unit_id: wu.id.clone(),
+            key: wu.key.clone(),
+            cwd: self.cwd.to_string_lossy().into_owned(),
+            failed: self.failed.clone(),
+        }
+    }
+}
+
 enum Completion {
     Worker {
         task_id: TaskId,
@@ -1018,6 +1145,9 @@ enum Completion {
         result: Box<Result<RunOutcome, AdapterError>>,
         /// `(pass, reason)` の 1 件ずつ（`review::run_work_unit_checks` の結果そのまま）。
         check_results: Vec<(bool, String)>,
+        /// ADR-0079 付記 R7-5 D1: 走らせた checks（`check_results` と同じ順）と、走らせた所。
+        checks: Vec<task_core::WorkUnitCheck>,
+        check_cwd: PathBuf,
     },
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合（葉の merge と検査の再実行）が終わった。
     Integration {
@@ -4552,6 +4682,8 @@ impl Dispatcher {
                     provider,
                     result,
                     check_results,
+                    checks,
+                    check_cwd,
                 } => {
                     self.checking.remove(&run_id);
                     if let Err(e) = self.on_work_unit_checks_finished(
@@ -4562,7 +4694,11 @@ impl Dispatcher {
                         run_since,
                         provider,
                         *result,
-                        check_results,
+                        WorkUnitCheckRun {
+                            checks,
+                            results: check_results,
+                            cwd: check_cwd,
+                        },
                     ) {
                         self.record_finalisation_failure(task_id, &run_id, &e);
                     }
@@ -5079,6 +5215,8 @@ impl Dispatcher {
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
         let checking_run_id = run_id.clone();
+        // ADR-0079 付記 R7-5 D1: 不合格の記録に残す、check を実際に走らせる所。
+        let check_cwd = ws.work_dir().to_path_buf();
         let handle = tokio::spawn(async move {
             let check_results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
             let _ = tx.send(Completion::WorkUnitChecks {
@@ -5090,6 +5228,8 @@ impl Dispatcher {
                 provider,
                 result: Box::new(result),
                 check_results,
+                checks,
+                check_cwd,
             });
         });
         // Phase F5-fix2: 検査の間も「手元の仕事」として数える（`in_flight`・lease の照合）。
@@ -5112,7 +5252,7 @@ impl Dispatcher {
         run_since: Option<OffsetDateTime>,
         provider: ProviderId,
         result: Result<RunOutcome, AdapterError>,
-        check_results: Vec<(bool, String)>,
+        check_run: WorkUnitCheckRun,
     ) -> Result<(), DispatchError> {
         let Some(task) = self.store.get(task_id)? else {
             tracing::warn!(%task_id, %run_id, "work unit checks finished for unknown task");
@@ -5129,23 +5269,19 @@ impl Dispatcher {
             u.status == task_core::WorkUnitStatus::Running
                 && u.last_run_id.as_deref() == Some(run_id.as_str())
         });
-        let failed: Vec<&str> = check_results
-            .iter()
-            .filter(|(pass, _)| !pass)
-            .map(|(_, reason)| reason.as_str())
-            .collect();
-        let result = if failed.is_empty() {
-            result
-        } else {
-            Ok(RunOutcome {
+        // ADR-0079 付記 R7-5: 不合格の検査（cmd・期待する exit・判定文）と走らせた所を残し、run の usage を落とさない。
+        let failure = check_run.failure(&result);
+        let result = match &failure {
+            None => result,
+            Some(f) => Ok(RunOutcome {
                 terminal: Terminal::Error {
-                    message: format!("work unit checks failed: {}", failed.join("; ")),
+                    message: format!("work unit {}", f.summary()),
                     retryable: true,
                 },
                 exit_code: None,
-            })
+            }),
         };
-        self.finish_worker_result(
+        self.finish_worker_result_with(
             task,
             current_wu,
             run_id,
@@ -5154,6 +5290,7 @@ impl Dispatcher {
             run_since,
             provider,
             result,
+            failure,
         )
     }
 
@@ -5170,6 +5307,34 @@ impl Dispatcher {
         run_since: Option<OffsetDateTime>,
         provider: ProviderId,
         result: Result<RunOutcome, AdapterError>,
+    ) -> Result<(), DispatchError> {
+        self.finish_worker_result_with(
+            task,
+            current_wu,
+            run_id,
+            account,
+            account_adapter,
+            run_since,
+            provider,
+            result,
+            None,
+        )
+    }
+
+    /// `finish_worker_result` の本体。`check_failure` は WU の checks が不合格で `Terminal::Done` を
+    /// `Terminal::Error` にすり替えた run だけ `Some`（ADR-0079 付記 R7-5: 記録・outcome の要約・usage）。
+    #[allow(clippy::too_many_arguments)]
+    fn finish_worker_result_with(
+        &mut self,
+        task: Task,
+        current_wu: Option<task_core::WorkUnitRow>,
+        run_id: String,
+        account: Option<String>,
+        account_adapter: Option<AccountAdapter>,
+        run_since: Option<OffsetDateTime>,
+        provider: ProviderId,
+        result: Result<RunOutcome, AdapterError>,
+        check_failure: Option<WorkUnitCheckFailure>,
     ) -> Result<(), DispatchError> {
         let task_id = task.id;
         let mut subject = ReviewSubject::default();
@@ -5389,6 +5554,13 @@ impl Dispatcher {
                 }
             },
         };
+        // ADR-0079 付記 R7-5 D4: checks の不合格で `Terminal::Error` にすり替えた run も、worker が返した usage を残す。
+        let usage = usage.or_else(|| check_failure.as_ref().and_then(|f| f.usage));
+        // ADR-0079 付記 R7-5 D2: outcome の文に足す不合格の要約（無ければ空）。
+        let check_failure_suffix = check_failure
+            .as_ref()
+            .map(|f| format!(": {}", f.summary()))
+            .unwrap_or_default();
         // ADR-0072 D7/D8/D9/D11/D18（Phase E1/E2）: 予算切れ・yield の続き（continuation）。
         // checkpoint は常に合成して残す（(b)）。continuation そのものの可否・上限到達の扱いは
         // `[execution]` で決める。無効化・上限到達のときは trigger/outcome_str を従来の形に戻す。
@@ -5543,7 +5715,7 @@ impl Dispatcher {
                         }
                         "retry" => {
                             outcome_str = format!(
-                                "work_unit_retry: WorkUnit {} を最初からやり直します（{}/{}）",
+                                "work_unit_retry: WorkUnit {} を最初からやり直します（{}/{}）{check_failure_suffix}",
                                 wu.key, decision.updated.retries, limits.max_retries
                             );
                         }
@@ -5579,7 +5751,9 @@ impl Dispatcher {
                         let replans_so_far = self.counted_replans(task_id)?;
                         if replans_so_far < self.effective_max_replans(task_id)? {
                             let why = match decision.reason {
-                                "failed" => format!("work unit {} failed", wu.key),
+                                "failed" => {
+                                    format!("work unit {} failed{check_failure_suffix}", wu.key)
+                                }
                                 "limit" => format!("work unit {} made no progress", wu.key),
                                 _ => {
                                     let text = checkpoint_opt
@@ -5993,6 +6167,10 @@ impl Dispatcher {
             end: run_end,
         };
         let mut events = vec![finished];
+        // ADR-0079 付記 R7-5 D1: WU の checks の不合格（どの check が・どこで・どう落ちたか）を同じトランザクションで残す。
+        if let (Some(f), Some(wu)) = (&check_failure, &current_wu) {
+            events.push(f.event(&run_id, wu));
+        }
         // ADR-0072 D5/D8（Phase E1）: `CheckpointSaved` は `WorkerFinished` と同じトランザクションで残す。
         if let Some(checkpoint_event) = checkpoint_event {
             events.push(checkpoint_event);
@@ -12373,7 +12551,7 @@ impl Dispatcher {
             finished_at: None,
         })?;
         let units = self.store.work_units_for(task_id)?;
-        extras.work_unit = Some(self.work_unit_prompt_context(task_id, &units, wu)?);
+        extras.work_unit = Some(self.work_unit_prompt_context(task_id, &units, wu, run_id)?);
         Ok(())
     }
 
@@ -12384,6 +12562,7 @@ impl Dispatcher {
         task_id: TaskId,
         units: &[task_core::WorkUnitRow],
         wu: &task_core::WorkUnitRow,
+        run_id: &str,
     ) -> Result<task_worker::protocol::WorkUnitPromptContext, DispatchError> {
         let task_objective_excerpt = self
             .store
@@ -12442,6 +12621,9 @@ impl Dispatcher {
             }
             _ => Vec::new(),
         };
+        // ADR-0079 付記 R7-5 D3: 直前の run が done を返したのに checks が落ちていれば、その記録を次の run に渡す。
+        let previous_check_failures =
+            previous_check_failure_lines(&self.store.events_for(task_id)?, &wu.id, run_id);
         Ok(task_worker::protocol::WorkUnitPromptContext {
             key: wu.key.clone(),
             title: wu.spec.title.clone(),
@@ -12453,6 +12635,7 @@ impl Dispatcher {
             branch,
             parallel_siblings,
             human_decisions,
+            previous_check_failures,
         })
     }
 
@@ -36511,6 +36694,10 @@ mod tests {
     /// ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（空の replan の事故の再現）と、
     /// 木でない Task の生存確認（`src/dispatcher/tests/finished_plan.rs`）。
     mod finished_plan;
+
+    /// ADR-0079 付記 R7-5: WU の checks の不合格の記録・次の run と replan への伝達・usage
+    /// （`src/dispatcher/tests/work_unit_check_failures.rs`）。
+    mod work_unit_check_failures;
 }
 
 // ========== ADR-0052（Phase 64）: 知識整理 run のフォールバック ==========

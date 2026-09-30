@@ -1764,3 +1764,79 @@ task-ops / task-dispatch / task-core には触れていない（R7-3 と並行�
   `overridden_done=merge-store`）→ `integrate-merge` running → **11:48:40 done（integrated）**。merge-store は再実行していない（D1・D2 とも本番で確認）。
   v10 で出た `leaf_too_large:verify-merge-1` の文言は「score 6 は閾値 11 未満だが、この規則は score によらず compound と判定する（expected_length=high かつ
   cross_cutting=high）」（D4 の直りを確認）→ run-as-leaf で回答、verify-merge-1 が再開。
+
+## R7-5: WU の check の不合格を記録し、次の run と replan に渡す、check の不合格で usage を落とさない（2026-09-30）
+
+[ADR-0079 付記 R7-5](../adr/0079-recursive-task-decomposition.md)。発端は本番 2026-09-30 14:14Z〜14:26Z、task 01M3SAHFRK8HA2AM7NYHKF1PD0
+（h-life ミラーを同一LANの別デバイスから閲覧可能にする。作業場所は git でない `Local{path: <task_id>}`）: lan-verify が 3 run とも `done` を
+返したのに daemon が retry → failed → replan にし、**なぜ落としたかがどの event にも無く**、`usage: null`。**migration なし（schema 34 のまま）**。
+Event を 1 つ足した（events は JSON の列）。本番（systemctl・/var/lib/celeris・7700/7710・設定）には読み取り（GET・sqlite `mode=ro`・workspace の
+閲覧）以外で触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a67474ceae6cfec8c`。
+
+### 原因（本番の読み取りとコード）
+
+- **A（run を落とした理由）**: cwd ではない。worktree の無い task では `task_workspaces_for` = `None`（`legacy_worktree_for` が git でない path で
+  `None`）→ `spawn_work_unit_checks` の `work_dir_for` = `None` → check は **task のディレクトリ**（worker の cwd = `artifacts/` の親）で走る。
+  lan-bind の `test -s artifacts/lan-bind.md` はそこで通り、lan-verify の `grep -q '192.168.1.103:8000' artifacts/report.md` も task の
+  ディレクトリからは exit 0（`/home/rmaeda/sites/h-life` からは exit 2）。落ちたのは v1 の check
+  `bash /home/rmaeda/sites/h-life/check_lan.sh http://192.168.1.103:8000/` で、unit 自身が run 1 で作ったスクリプトの引数は `[LAN_IP] [PORT]`
+  （`IP=http://…` になり `ss`・`ip addr` の照合と LAN crawl が必ず FAIL → exit 1。スクリプトは `lan_check.tsv` を書き docker も起動するので本番では
+  走らせず、静的に確認）。worker は引数なしで走らせて exit 0 を見ていた。v2 の planner の rationale も同じ結論。
+- **欠陥**: `on_work_unit_checks_finished` は理由を `Terminal::Error{message: "work unit checks failed: cmd=… exit=…"}` に入れるが、
+  `finish_worker_result` が outcome を `work_unit_retry: …（n/m）` / `replan: work unit lan-verify failed` に上書きして消した。retry の run の
+  プロンプト（runs/01M3SAVEX…/prompt.txt・01M3SAWQ…/prompt.txt）にも replan の planner（「Why this replan was triggered: work unit lan-verify
+  failed」）にも理由が無い。`Terminal::Done` → `Error` のすり替えで usage も落ちた（`quota_estimated.weighted_tokens` 0）。
+- **B（replan 後に planner が起きない）**: 前提が誤り。planner run 01M3SBAJ7CZAYZSYNWQ733FYGA は 14:26:02Z に dispatch された。14:19:13Z の
+  replan の時点で `max_concurrency = 6`（`~/.config/celeris/config.toml:4`）が 6 run（01M3SAN66P…・01M3SAMZG… の WU 3 本・langmem 01M3SASRRG…・
+  01M3SAY0ZW…）で埋まっていて、langmem の run が 14:26:01.985Z に終わった 0.1 s 後に dispatch（枠待ち。dispatcher の欠陥ではないので直していない）。
+  その後 v2（check を `check_lan.sh 192.168.1.103 8000` に直した版）→ lan-verify done 14:28:36Z → 統合 → review_pass → **task done 14:29:18Z**。
+
+### 実装したもの
+
+- **D1** `task_core::Event::WorkUnitChecksFailed { run_id, work_unit_id, key, cwd, failed: [FailedWorkUnitCheck{cmd, expect_exit, detail}] }`
+  （`detail` は review.rs の判定文 = `cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`）。`Completion::WorkUnitChecks` に走らせた checks と
+  cwd（`LocalWorkspace::work_dir()`）を足し、`WorkUnitCheckRun::failure` が不合格の記録（worker の usage 付き）を作る。`finish_worker_result_with`
+  が `WorkerFinished` と同じトランザクションで積む。replay は無視。task-api の型名 `work_unit_checks_failed`（`EVENT_TYPES` 49）。
+- **D2** outcome の要約: `work_unit_retry: WorkUnit <key> を最初からやり直します（n/m）: checks failed in <cwd>: <detail>; …`、
+  `replan: work unit <key> failed: checks failed in <cwd>: …`（1,500 文字で切る）。replan の `replan_reason` は `replan: ` の outcome から取るので
+  planner にも届く。replan を使い切った後の質問も同じ要約を持つ（`Terminal::Error` の文が `work unit checks failed in <cwd>: …`）。
+- **D3** `WorkUnitPromptContext.previous_check_failures`（`previous_check_failure_lines`: events を新しい方から見て、その WU の
+  `WorkUnitChecksFailed` が別の run の `running` 遷移より先にあるときだけ `cwd: …` + 判定文）。プロンプトの節「## 前回の run の check の不合格」
+  （原因を先に確かめる、同じ cwd で check を自分で走らせてから done、check が誤りなら `{"yield": {"plan_issue": "…"}}` で申告 = replan）。空なら
+  プロンプトは不変。
+- **D4** check の不合格で `Error` にすり替えても worker の usage を `WorkerFinished.usage` と quota の見積もりに使う。
+- **D5** `PLANNER_CHECK_GUIDANCE`: check の走る所（unit の worktree、git の worktree が無い task は task のディレクトリ）と、「unit 自身が作る
+  スクリプトを check が走らせるなら呼び出し方（引数）を objective に書く」を 1 行ずつ。
+- schema: `docs/api/v1/event.schema.json`・`docs/api/v1/api-v1.schema.json`・`docs/protocol/worker-protocol.schema.json` を `UPDATE_SCHEMA=1` で再生成。
+
+### 試験
+
+- task-dispatch（新しい `dispatcher/tests/work_unit_check_failures.rs`）:
+  - `a_failed_work_unit_check_is_recorded_and_handed_to_the_next_run`（git でない tempdir の task、check `test -s artifacts/report.md` と
+    `test -f .fixed`）: `WorkUnitChecksFailed` は 1 件・cwd = task のディレクトリ・落ちたのは `.fixed` だけ（相対の artifacts の check は通る）・
+    `exit=Some(1)`、その run の `WorkerFinished` は `work_unit_retry: …（1/2）: checks failed in …` で usage を保つ、2 回目の run の文脈に
+    `cwd: …` と判定文 → 直して done、replay は clean。
+  - `a_work_unit_whose_check_keeps_failing_replans_with_the_failed_check_as_the_reason`（本番の形: `[LAN_IP] [PORT]` のスクリプトに URL を渡す
+    check）: 2 run とも記録、`replan: work unit b failed: checks failed in …FAIL not listening…`、planner の `replan_reason` に落ちた check の
+    cmd、retry の run の文脈に 1 回目の不合格、replan 後に done。
+  - `previous_check_failure_lines_only_describe_the_immediately_preceding_run`（初回・直前の run が checks で落ちていない・別 WU は空、
+    判定文に cmd が無い exec 失敗は `cmd=… expected=…:` を前置）。
+- task-worker: `claude_code::tests::leaf_prompt_carries_the_previous_runs_failed_checks`、`planner_prompt_has_the_check_writing_section` に
+  R7-5 の 2 行。
+- task-api: `query::tests::*event_types*` に `WorkUnitChecksFailed`（49 種）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 548 passed。`-p task-worker` → 624 passed, 4 skipped。`-p task-api` → 395 passed, 2 skipped。
+  `-p task-ops` → 371 passed。`-p task-dispatch` → 482 passed。
+- `cargo nextest run --workspace` → **2956 passed, 7 skipped（exit 0）**。
+
+### 未解決・提案
+
+- 同じ check が同じ判定文で続けて落ちても retry は `max_retries` まで回す（次の run は理由を読めるので直すか `plan_issue` で申告できる）。
+  決定的な不合格の早期打ち切り（同じ `detail` が 2 回続いたら retry せず replan）は要るなら別 Phase で。
+- `WorkUnitChecksFailed` の GUI の専用表示は無い（timeline は型名と JSON）。
+- 本番 task 01M3SAHFRK8HA2AM7NYHKF1PD0 は 14:29:18Z に done（人の操作は不要）。昇格後に同じ形が起きたら、events の
+  `work_unit_checks_failed` と retry の run の prompt.txt の「前回の run の check の不合格」節で確かめる。

@@ -244,6 +244,8 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
                 }
                 out.push('\n');
             }
+            // ADR-0079 付記 R7-5 D3: 直前の run が done を返したのに daemon の check が落ちたときだけ（無ければ空）。
+            out.push_str(&previous_check_failures_section(wu, artifacts));
             // ADR-0074 D1.2（Phase F2b）: WU ごとの worktree で走る run だけ（無ければ空）。
             out.push_str(&crate::preamble::work_unit_branch_section(wu));
         }
@@ -255,6 +257,32 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
     if context.decision_requests {
         out.push_str(&crate::preamble::decision_requests_section(artifacts));
     }
+    out
+}
+
+/// ADR-0079 付記 R7-5 D3: 「前回の run の check の不合格」節。`previous_check_failures` が空なら空文字列
+/// （プロンプトは 1 バイトも変わらない）。
+fn previous_check_failures_section(
+    wu: &crate::protocol::WorkUnitPromptContext,
+    artifacts: &str,
+) -> String {
+    if wu.previous_check_failures.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## 前回の run の check の不合格\n\
+         この WorkUnit の前回の run は done を返したが、celeris が run の後に走らせた次の check が不合格だった\
+         （check は計画のもので、この run では変えられない）。作業をやり直す前に、まずこの不合格の原因を確かめよ。\
+         成果を直し、同じ場所（下の `cwd`）から同じ check を自分で走らせて期待どおりの exit になるのを確かめてから done を返すこと。\n",
+    );
+    for line in &wu.previous_check_failures {
+        out.push_str(&format!("- {line}\n"));
+    }
+    out.push_str(&format!(
+        "check そのものが誤っていて成果をどう直しても通らない（引数の形が違う、存在しない場所を見ている等）なら、done を返さず \
+         `{artifacts}/result.json` に `{{\"yield\": {{\"plan_issue\": \"<どの check がなぜ通らないか、どう直すべきか>\"}}}}` を書いて終えよ\
+         （計画の問題の申告として replan になる）。\n\n"
+    ));
     out
 }
 
@@ -1667,8 +1695,12 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      <paths>`) or the unit's recorded base, never a hard-coded main sha, because main moves during the task.\n\
      - A negated grep (`! grep ...`) must not match text the unit itself writes (its own ADR, notes or \
      comments explaining the rule); this self-reference has failed real checks.\n\
-     - A check runs inside its own unit's worktree, so it may only use files that exist there: a check \
-     that runs a script another unit creates belongs to a unit that `depends_on` the creating unit.\n\n";
+     - A check runs where the unit's worker starts: its own unit's worktree, or the task's directory \
+     (where `artifacts/` is) when the task has no git worktree. It may only use files that exist there: a check \
+     that runs a script another unit creates belongs to a unit that `depends_on` the creating unit.\n\
+     - When a check runs a script the unit itself creates, write the exact invocation (the arguments the check \
+     passes) in the unit's objective so the unit writes the script to accept that form (a check passed a URL to \
+     a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\n";
 
 /// ADR-0090 D5: planner の leaf の基準に足す 1 段落（数時間かかるクラスタ job の扱い）。
 pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm, ADR-0090)**: a unit that \
@@ -2818,6 +2850,56 @@ mod tests {
         );
     }
 
+    /// ADR-0079 付記 R7-5 D3: 前の run の check の不合格は次の run の前置きに出る（cwd・判定文・`plan_issue` の申告の仕方）。
+    /// 空ならプロンプトは変わらない。
+    #[test]
+    fn leaf_prompt_carries_the_previous_runs_failed_checks() {
+        let task = crate::protocol::tests::sample_task();
+        let wu = crate::protocol::WorkUnitPromptContext {
+            key: "lan-verify".into(),
+            title: "lan-verify".into(),
+            objective: "verify over the LAN".into(),
+            ..Default::default()
+        };
+        let plain = build_prompt(
+            &task,
+            &RunContext {
+                work_unit: Some(wu.clone()),
+                ..RunContext::default()
+            },
+            "run-1",
+            "artifacts",
+        );
+        assert!(
+            !plain.contains("## 前回の run の check の不合格"),
+            "{plain}"
+        );
+        let detail = "cmd=\"bash check_lan.sh http://192.168.1.103:8000/\" exit=Some(1) expected=0 stdout_tail=\"FAIL not listening\" stderr_tail=\"\"";
+        let with = build_prompt(
+            &task,
+            &RunContext {
+                work_unit: Some(crate::protocol::WorkUnitPromptContext {
+                    previous_check_failures: vec!["cwd: /ws/01TASK".into(), detail.into()],
+                    ..wu
+                }),
+                ..RunContext::default()
+            },
+            "run-1",
+            "artifacts",
+        );
+        assert!(with.contains("## 前回の run の check の不合格\n"), "{with}");
+        assert!(with.contains("- cwd: /ws/01TASK\n"), "{with}");
+        assert!(with.contains(&format!("- {detail}\n")), "{with}");
+        assert!(
+            with.contains(r#"`artifacts/result.json` に `{"yield": {"plan_issue": "#),
+            "{with}"
+        );
+        // 節は WU の objective の後（目的を読んでから前回の不合格を読む）。
+        let objective_at = with.find("verify over the LAN").unwrap_or(usize::MAX);
+        let section_at = with.find("## 前回の run の check の不合格").unwrap_or(0);
+        assert!(objective_at < section_at, "{with}");
+    }
+
     /// ADR-0074 D1.1（Phase F2b）: `parallel = true` の planner run だけ v2 の書き方（工程・同じ工程 =
     /// 並列可・工程内の依存は 1 つまで）を出す。`false` は従来のプロンプトのまま。
     #[test]
@@ -2877,6 +2959,7 @@ mod tests {
                 branch: None,
                 parallel_siblings: Vec::new(),
                 human_decisions: Vec::new(),
+                previous_check_failures: Vec::new(),
             }),
             ..RunContext::default()
         };
@@ -5966,7 +6049,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
         assert!(!prompt.contains("Remaining depth"));
     }
 
-    /// ADR-0079 R7-2: /2 と /3 の planner のプロンプトに「check の書き方」の節（6 規則）が出る。/3 は子を作る unit
+    /// ADR-0079 R7-2: /2 と /3 の planner のプロンプトに「check の書き方」の節（R7-5 で 7 規則）が出る。/3 は子を作る unit
     /// だけを数える上限の説明と、dispatcher が渡す /3 の JSON の大きさの上限を出す。
     #[test]
     fn planner_prompt_has_the_check_writing_section() {
@@ -5979,6 +6062,9 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
             "git diff --quiet $(git merge-base HEAD main) --",
             "A negated grep (`! grep ...`) must not match text the unit itself writes",
             "a check that runs a script another unit creates belongs to a unit that `depends_on` the creating unit",
+            // ADR-0079 付記 R7-5 D5: check の走る所（git の worktree が無い task）と、unit 自身が作るスクリプトの呼び出し方。
+            "or the task's directory (where `artifacts/` is) when the task has no git worktree",
+            "write the exact invocation (the arguments the check passes) in the unit's objective",
         ];
         let v2 = crate::protocol::ExecutionPlannerContext {
             gate_rule_id: "human/explicit".to_string(),

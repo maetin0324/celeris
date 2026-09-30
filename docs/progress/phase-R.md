@@ -1637,3 +1637,8 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
 - 08:11Z: **欠陥（R7 候補）**: 統合失敗の質問に回答すると、人が `decompose {compound}`（replan 要求）を先に入れていても、dispatcher は統合 WU を同じ check で
   再実行してから（再び失敗して）次の質問で初めて planner を回す。web Phase 1（05:00Z → 05:09Z）とリファクタ retry の子（08:0xZ → 08:11Z）で再現。
   人の replan 要求が pending のときは統合の再実行より planner を優先すべき。
+- 08:15Z: リファクタ retry の子の replan が 2 回とも失敗: (1) planner の JSON 形式（acceptance の要素が文字列）、(2) **`UNIQUE constraint failed: work_units.task_id, key`
+  で採用が DB 制約エラーに落ちる**（superseded の key を planner が再利用。検証で「key の再利用」として弾くべき事象が sqlite のエラーで出ている。R7 候補: 検証に
+  昇格させて planner へ理由を返す）。plan_invalid に replan + note（形式、新 key、衝突解消の葉、内容の検査）で回答。
+- 08:15Z: BenchFS の Sirius 実験(2) の子が決定 `e3-e4-scope`（E3/E4 の有効測定 0 件、CHFS runner 未整備、GekkoFS 未導入、8 ノード job が予算不足で動かない。
+  full / chfs-4node（推奨）/ drop-c3）。論文の主張範囲（C3）に関わる研究判断なので人へ。

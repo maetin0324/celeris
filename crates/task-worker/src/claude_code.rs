@@ -129,21 +129,13 @@ impl WorkerAdapter for ClaudeCodeAdapter {
 // プロンプト文面と子プロセスの実行・結果処理は別の変更境界。
 mod prompt;
 pub use prompt::build_prompt;
+pub use prompt::CLUSTER_JOB_PLANNER_GUIDANCE;
 pub(crate) use prompt::work_dir_note;
 #[cfg(test)]
 use prompt::{
     delegate_workspace_instruction, harness_artifacts_section_for_plan,
     harness_artifacts_section_for_review, workspace_section_for_plan,
 };
-
-/// ADR-0090 D5: planner の leaf の基準に足す 1 段落（数時間かかるクラスタ job の扱い）。
-pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm, ADR-0090)**: a unit that \
-     submits jobs that run for hours is still one unit — its run submits the jobs and ends with a `wait` \
-     (`{\"type\":\"wait\",\"kind\":\"cluster_job\",...}` in result.json); celeris polls the scheduler and resumes \
-     the same unit as a continuation run when the jobs finish, and that run collects the results. Do not \
-     split \"submit\" and \"collect\" into separate units and do not budget the unit for the job's wall time. \
-     An acceptance check may require the jobs to have finished successfully (for example \"all PBS jobs are \
-     F with Exit_status 0\" verified from the scheduler or the job logs).";
 
 /// `artifacts/result.json`（ADR-0006 D3）。
 #[derive(Debug, Deserialize)]

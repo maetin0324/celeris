@@ -100,6 +100,7 @@ impl LiveSessionEntry for SupervisedEntry {
 /// 稼働中 runtime の handle。drop でも停止する。
 pub struct Supervisor {
     session_id: String,
+    runtime_pid: i32,
     tx: mpsc::Sender<Cmd>,
     thread: Option<std::thread::JoinHandle<()>>,
     procs: Arc<Mutex<Vec<RecordedProcess>>>,
@@ -111,6 +112,7 @@ pub struct Supervisor {
 }
 
 struct Started {
+    runtime_pid: i32,
     cdp_write: Option<File>,
     cdp_read: Option<File>,
 }
@@ -139,6 +141,7 @@ impl Supervisor {
                 }
                 Ok(Self {
                     session_id,
+                    runtime_pid: started.runtime_pid,
                     tx,
                     thread: Some(thread),
                     procs,
@@ -161,6 +164,11 @@ impl Supervisor {
 
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// The namespace child used for broker-side isolation fact collection.
+    pub fn runtime_pid(&self) -> i32 {
+        self.runtime_pid
     }
 
     pub fn record_path(&self) -> &Path {
@@ -221,6 +229,7 @@ fn runtime_thread(
         return;
     }
     let started = Started {
+        runtime_pid: rt.inner_pid(),
         cdp_write: rt.cdp_write.take(),
         cdp_read: rt.cdp_read.take(),
     };
@@ -283,6 +292,18 @@ fn stop_runtime(
             }
             _ => break,
         }
+    }
+    // bwrap の子（pid namespace の init = bwrap-init）とその下は bwrap の回収後に PDEATHSIG と
+    // pid namespace の後始末で非同期に消える。高負荷ではここで戻るとまだ生きて見えるので、
+    // 記録した本人（pid+starttime）が全て消えるまで待つ。signal は追加で送らない。
+    let recorded: Vec<RecordedProcess> = procs.lock().map(|p| p.clone()).unwrap_or_default();
+    let deadline = Instant::now() + STOP_GRACE;
+    while Instant::now() < deadline
+        && recorded
+            .iter()
+            .any(|p| same_process_alive(p.pid, p.starttime))
+    {
+        std::thread::sleep(Duration::from_millis(20));
     }
     let _ = std::fs::remove_file(dir.join(format!("{session}.pid")));
     if let Ok(mut p) = procs.lock() {

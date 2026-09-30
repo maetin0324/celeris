@@ -73,9 +73,13 @@ def execute(request):
         argv = [CONFIG['executable'], '--version']
     else:
         action = command(request)
+        endpoint = CONFIG.get('cdp_endpoint')
+        if (not isinstance(endpoint, str) or
+                not re.fullmatch(r'ws://127\.0\.0\.1:9223/[a-f0-9]{64}', endpoint)):
+            return {'status': 1, 'stdout': ''}
         argv = [CONFIG['executable'], '--config', '/session/upstream.json',
                 '--session', CONFIG['session_id'], '--action-policy', '/session/policy.json',
-                '--allowed-domains', ','.join(CONFIG['allowed_domains']),
+                '--cdp', endpoint,
                 '--content-boundaries', '--max-output', '16000', '--json'] + action
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/session/home', 'TMPDIR': '/session/tmp',
            'XDG_RUNTIME_DIR': '/session/run',

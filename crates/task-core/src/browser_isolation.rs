@@ -528,6 +528,97 @@ impl LiveSessionRegistry for LiveSessions {
     }
 }
 
+// ---- 事実採取（ADR-0089 D2: broker と worker で共有）----
+
+const FACT_NAMESPACES: [(Namespace, &str); 6] = [
+    (Namespace::User, "user"),
+    (Namespace::Pid, "pid"),
+    (Namespace::Net, "net"),
+    (Namespace::Mount, "mnt"),
+    (Namespace::Ipc, "ipc"),
+    (Namespace::Uts, "uts"),
+];
+
+fn proc_status_field(status: &str, key: &str) -> Option<String> {
+    status.lines().find_map(|l| {
+        l.strip_prefix(key)?
+            .strip_prefix(':')
+            .map(|v| v.trim().to_owned())
+    })
+}
+
+fn proc_real_uid(status: &str) -> Option<u32> {
+    proc_status_field(status, "Uid")?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// `/proc/<pid>` から runtime の事実を採る（呼び出し側 process を host とみなす）。
+/// 読めない値は隔離を否定する側（uid 0・namespace 無し・書込み可）に倒す。
+pub fn collect_runtime_facts(
+    session_id: &str,
+    pid: i32,
+    pgid: i32,
+) -> std::io::Result<RuntimeFacts> {
+    use std::io::BufRead;
+    let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let mut namespaces = BTreeSet::new();
+    for (ns, name) in FACT_NAMESPACES {
+        let mine = std::fs::read_link(format!("/proc/self/ns/{name}"))?;
+        let theirs = std::fs::read_link(proc_dir.join("ns").join(name))?;
+        if mine != theirs {
+            namespaces.insert(ns);
+        }
+    }
+    let host_status = std::fs::read_to_string("/proc/self/status")?;
+    let host_uid =
+        proc_real_uid(&host_status).ok_or_else(|| std::io::Error::other("host uid unavailable"))?;
+    let status = std::fs::read_to_string(proc_dir.join("status"))?;
+    let runtime_uid = proc_real_uid(&status).unwrap_or(0);
+    let no_new_privs = proc_status_field(&status, "NoNewPrivs").as_deref() == Some("1");
+    let zero = |k: &str| proc_status_field(&status, k).is_some_and(|v| v.chars().all(|c| c == '0'));
+    let capabilities_dropped = zero("CapEff") && zero("CapPrm");
+    let mut root_readonly = false;
+    let mut writable_mounts = Vec::new();
+    let mut visible_paths = Vec::new();
+    let mountinfo = std::fs::File::open(proc_dir.join("mountinfo"))?;
+    for line in std::io::BufReader::new(mountinfo).lines() {
+        let line = line?;
+        let Some((pre, post)) = line.split_once(" - ") else {
+            continue;
+        };
+        let f: Vec<&str> = pre.split_whitespace().collect();
+        let fstype = post.split_whitespace().next().unwrap_or("");
+        let (Some(mp), Some(opts)) = (f.get(4), f.get(5)) else {
+            continue;
+        };
+        let ro = opts.split(',').any(|o| o == "ro");
+        visible_paths.push((*mp).to_owned());
+        if *mp == "/" {
+            root_readonly = ro;
+        }
+        let pseudo = fstype == "proc" || *mp == "/dev" || mp.starts_with("/dev/");
+        if !ro && !pseudo {
+            writable_mounts.push((*mp).to_owned());
+        }
+    }
+    Ok(RuntimeFacts {
+        session_id: session_id.to_owned(),
+        host_uid,
+        runtime_uid,
+        namespaces,
+        root_readonly,
+        writable_mounts,
+        visible_paths,
+        cdp: CdpEndpoint::Pipe,
+        no_new_privs,
+        capabilities_dropped,
+        pgid,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

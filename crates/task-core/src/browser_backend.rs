@@ -94,12 +94,81 @@ pub fn required_cases(cap: Capability) -> &'static [FixtureCase] {
     }
 }
 
+/// 実測試験 1 件の結果（ADR-0093）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceOutcome {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+/// 適合記録に入る実測証拠: どの fixture 件を、どの試験が、どう示したか。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConformanceEvidence {
+    pub case: FixtureCase,
+    pub test: String,
+    pub outcome: EvidenceOutcome,
+}
+
 /// backend を fixture で走らせた結果。`version` が変われば取り直す。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConformanceResult {
     pub backend_id: String,
     pub version: String,
     pub passed: BTreeSet<FixtureCase>,
+    /// ADR-0093: P4-B の件は `passed` に載るだけでは足りず、ここに要る試験が全て
+    /// `passed` で並んでいなければ通ったと数えない。
+    #[serde(default)]
+    pub evidence: Vec<ConformanceEvidence>,
+}
+
+/// ADR-0093: P4-B trusted injection の実攻撃行列（`browser_injection_attacks`）の印。
+pub const P4B_ATTACK_MARKS: [&str; 22] = [
+    "A0", "A1", "A2", "A3", "A3b", "A4", "A5", "A6", "A7", "A7a", "A8", "A8n", "A9", "A9a", "A10",
+    "A11", "A12", "A13", "A14", "A15", "A16", "A17",
+];
+
+/// ADR-0093: 本番 H3 経路の端から端（`browser_h3_injection`）と再表示防御の試験。
+pub const P4B_H3_TESTS: [&str; 2] = [
+    "browser_h3_injection::production_h3_injects_once_without_exposure",
+    "browser_h3_injection::injected_leak_is_caught_by_the_same_scanner",
+];
+
+/// 実測証拠の試験名。攻撃行列は 1 本の試験の印ごとに 1 件。
+pub fn attack_evidence_name(mark: &str) -> String {
+    format!("browser_injection_attacks::real_browser_injection_attack_matrix#{mark}")
+}
+
+/// 件を通ったと数えるのに要る実測証拠の試験名（P4-B の件だけ。他は空）。
+pub fn required_evidence(case: FixtureCase) -> Vec<String> {
+    match case {
+        FixtureCase::InjectionAttackSuite => P4B_ATTACK_MARKS
+            .iter()
+            .map(|m| attack_evidence_name(m))
+            .collect(),
+        FixtureCase::AuthSectionObservationStop => {
+            P4B_H3_TESTS.iter().map(|t| (*t).to_string()).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+impl ConformanceResult {
+    /// `passed` に載り、要る実測証拠が全て `passed` で、同じ件に失敗・未実施の証拠が無い。
+    pub fn case_passed(&self, case: FixtureCase) -> bool {
+        if !self.passed.contains(&case) {
+            return false;
+        }
+        let of_case = || self.evidence.iter().filter(move |e| e.case == case);
+        if of_case().any(|e| e.outcome != EvidenceOutcome::Passed) {
+            return false;
+        }
+        required_evidence(case)
+            .iter()
+            .all(|name| of_case().any(|e| &e.test == name))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,7 +215,7 @@ pub fn certify(
         let missing: Vec<FixtureCase> = required_cases(*cap)
             .iter()
             .copied()
-            .filter(|c| !r.passed.contains(c))
+            .filter(|c| !r.case_passed(*c))
             .collect();
         if missing.is_empty() {
             ok.insert(*cap);
@@ -303,7 +372,76 @@ mod tests {
                 .iter()
                 .flat_map(|c| required_cases(*c).iter().copied())
                 .collect(),
+            evidence: full_evidence(),
         }
+    }
+
+    fn full_evidence() -> Vec<ConformanceEvidence> {
+        [
+            FixtureCase::InjectionAttackSuite,
+            FixtureCase::AuthSectionObservationStop,
+        ]
+        .into_iter()
+        .flat_map(|case| {
+            required_evidence(case)
+                .into_iter()
+                .map(move |test| ConformanceEvidence {
+                    case,
+                    test,
+                    outcome: EvidenceOutcome::Passed,
+                })
+        })
+        .collect()
+    }
+
+    /// ADR-0093: P4-B の件は試験名つきの実測証拠からしか通らない。
+    #[test]
+    fn p4b_cases_count_only_with_measured_evidence() {
+        let b = backend(
+            "acp",
+            BackendKind::ExistingLoop,
+            &[Capability::Navigate, Capability::CredentialInjection],
+        );
+        assert!(
+            certify(&b, Some(&passing(&b)))
+                .unwrap()
+                .contains(&Capability::CredentialInjection)
+        );
+        let gap = |r: &ConformanceResult| {
+            matches!(
+                &certify(&b, Some(r)).unwrap_err()[..],
+                [ConformanceGap::Missing {
+                    capability: Capability::CredentialInjection,
+                    ..
+                }]
+            )
+        };
+        // 件名だけ（旧形式の ledger）は通らない
+        let mut bare = passing(&b);
+        bare.evidence.clear();
+        assert!(gap(&bare));
+        // 攻撃の印が 1 つ欠けても通らない
+        let mut short = passing(&b);
+        short
+            .evidence
+            .retain(|e| e.test != attack_evidence_name("A8"));
+        assert!(gap(&short));
+        // 失敗・未実施の証拠が 1 件あれば通らない
+        for outcome in [EvidenceOutcome::Failed, EvidenceOutcome::NotRun] {
+            let mut bad = passing(&b);
+            bad.evidence.push(ConformanceEvidence {
+                case: FixtureCase::AuthSectionObservationStop,
+                test: P4B_H3_TESTS[0].into(),
+                outcome,
+            });
+            assert!(gap(&bad));
+        }
+        // 別の件の証拠で代えられない
+        let mut swapped = passing(&b);
+        for e in &mut swapped.evidence {
+            e.case = FixtureCase::IsolationSuite;
+        }
+        assert!(gap(&swapped));
     }
 
     fn req(caps: &[Capability]) -> RoutingRequest {

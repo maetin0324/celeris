@@ -24208,8 +24208,10 @@ mod tests {
             task_worker::browser::IsolatedBrowserConfig {
                 live_sessions: None,
                 resolver: Some("127.0.0.1".parse().unwrap()),
-                record_dir: std::env::temp_dir()
-                    .join(format!("celeris-browser-dispatch-unit-{}", std::process::id())),
+                record_dir: std::env::temp_dir().join(format!(
+                    "celeris-browser-dispatch-unit-{}",
+                    std::process::id()
+                )),
                 bwrap: "/usr/bin/bwrap".into(),
                 sandboxd: bin.join("celeris-browser-sandboxd"),
                 egress: bin.join("celeris-browser-egress"),

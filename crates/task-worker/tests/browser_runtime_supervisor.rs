@@ -469,6 +469,29 @@ fn wait_gone(procs: &[RecordedProcess], within: Duration) -> Vec<RecordedProcess
     }
 }
 
+/// 記録が「4 役が揃い、載っている process が全て生きている」状態になるまで読み直す。
+/// 記録は supervisor が 100ms ごとに採り直すので、browser の fixture 取得に使った接続ごとの
+/// egress が READY の直後に終わると、書き直し前の記録に死んだ egress が一時的に残る。
+/// 時計ではなくこの条件を待ち、上限を過ぎたら最後に読んだ記録で `assert_full_runtime` を判定する。
+fn read_full_runtime(path: &Path) -> Vec<RecordedProcess> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let procs = read_record(path);
+        let r = roles(&procs);
+        let full = ["browser", "bwrap", "egress", "sandboxd"]
+            .iter()
+            .all(|w| r.iter().any(|x| x == w));
+        if full && procs.iter().all(|p| same_process_alive(p.pid, p.starttime)) {
+            return procs;
+        }
+        if Instant::now() >= deadline {
+            assert_full_runtime(&procs);
+            return procs;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn assert_full_runtime(procs: &[RecordedProcess]) {
     let r = roles(procs);
     for want in ["browser", "bwrap", "egress", "sandboxd"] {
@@ -540,9 +563,8 @@ fn inner_supervisor_in_test_netns() {
     let mut ca = controller("a", &rec_a, &base.path().join("sess-a"));
     expect_line(&ca, "CTRL POSITIVE");
     let path = PathBuf::from(expect_line(&ca, "CTRL READY"));
-    let procs = read_record(&path);
+    let procs = read_full_runtime(&path);
     eprintln!("SUPERVISOR-EVIDENCE (a) recorded {procs:?}");
-    assert_full_runtime(&procs);
     let held = open.load(Ordering::SeqCst);
     assert!(held >= 1 && closed.load(Ordering::SeqCst) < held);
     sigkill(&mut ca);
@@ -563,9 +585,8 @@ fn inner_supervisor_in_test_netns() {
     let rec_b = base.path().join("rec-b");
     let mut cb = controller("b", &rec_b, &base.path().join("sess-b"));
     let path = PathBuf::from(expect_line(&cb, "CTRL READY"));
-    let procs = read_record(&path);
+    let procs = read_full_runtime(&path);
     eprintln!("SUPERVISOR-EVIDENCE (b) recorded {procs:?}");
-    assert_full_runtime(&procs);
     sigkill(&mut cb);
     std::thread::sleep(Duration::from_secs(1));
     let orphans: Vec<_> = procs
@@ -597,9 +618,8 @@ fn inner_supervisor_in_test_netns() {
     let mut cc = controller("c", &rec_c, &base.path().join("sess-c"));
     expect_line(&cc, "CTRL POSITIVE");
     let path = PathBuf::from(expect_line(&cc, "CTRL READY"));
-    let procs = read_record(&path);
+    let procs = read_full_runtime(&path);
     eprintln!("SUPERVISOR-EVIDENCE (c) recorded {procs:?}");
-    assert_full_runtime(&procs);
     writeln!(cc.stdin.as_mut().unwrap(), "stop").unwrap();
     let stopped = expect_line(&cc, "CTRL STOPPED");
     assert_eq!(stopped, "left=[]");

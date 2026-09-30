@@ -90,6 +90,7 @@ async fn real_broker_registration_keeps_sentinel_out_of_db_events_artifacts_and_
         attestation_public_key: Some(key.public_key().as_ref().to_vec()),
         broker: Some(Arc::new(task_api::browser::UnixCredentialBrokerControl {
             socket: socket.clone(),
+            site_policies: Vec::new(),
         })),
     }));
     let task_id = running_task(&env);

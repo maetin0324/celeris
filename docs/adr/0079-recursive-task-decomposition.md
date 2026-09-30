@@ -1636,3 +1636,20 @@ R6（回収）の 2 つ目。**migration なし**（plan/3 の JSON に任意の
 
 - 人の `regate`（`decompose` / retry）は従来どおり `execution_hint` を明示で上書きする。
 - 本番の既存の子の `execution_hint`（`explicit: false`）は直さない（新しく作る子から効く）。
+
+## 付記: R6-4: replan は持ち越す unit の段階（`phase`）と並び（`seq`）を書き換える（2026-09-29）
+
+- **規則**: `task_ops::execution::replan` は、新しい版にも残る未完了の unit（done でない行）の `work_units.phase` を新しい版の段階（/3 は
+  `internal_view` の `phase` = 段階の key）に、`work_units.seq` を新しい版の並び（`materialized_order`: 段階ごとに unit → `integrate-<段階>`）に
+  書き換える。未完了の統合 WU の `seq` も同じ並びに直す。done の行（R5b-fix1 の上書きを含む）と daemon が足した行は元のまま。
+  store の `update_work_unit_tx` は `seq` の列も書く（他の書き手は読んだ行の値をそのまま渡すので変わらない）。
+- **なぜ**: R4a から「replan は行の `phase` を書き換えない」が既知だった。本番 01M3QGRC542ZC23996DNCTHZF5（/3 の木の子）で planner の
+  replan v2 が unit `restore-binding` を段階 `relay` から `verify` へ移し `prod-launch` に依存させた。行が `phase = relay`（と v1 の `seq`）の
+  ままだったので、scheduler（`settle_phase`・`newly_ready` の障壁、今の段階 = seq 最小の未終端の行の段階）は `relay` を未完了と見て
+  `integrate-relay` を走らせず、`restore-binding` は後の段階を待つ → `stall_detected{nothing_runnable}`。
+- **記録**: `ReplanDiff.moved`（`<key>(<前>→<後>)`。空なら JSON では省く）。`ExecutionPlanned.reason` の後ろに、移動があるときだけ
+  ` (phase: <key>(<前>→<後>),…)` を足す（タイムラインで見える）。新しい event は足していない。
+- **replay**: `apply_replan_step` も同じ規則（持ち越す未完了の行の `phase` / `seq`、統合 WU の `seq`）を当てる。diff は 0
+  （`replan_rewrites_the_phase_of_a_unit_moved_to_another_phase`、`replan_moving_a_unit_to_a_later_stage_does_not_strand_the_earlier_stage`）。
+- **既存の DB**: R6-4 より前の replan で食い違った行は、`celerisctl replay --apply`（または `POST /replay`）が events から直す
+  （replay は新しい規則で行を作り直すので、行の `phase` / `seq` の食い違いとして出る）。

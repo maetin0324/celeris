@@ -199,7 +199,7 @@ pub fn rebuild_work_units_and_runs(
     let mut wu_rows: BTreeMap<String, WorkUnitRow> = BTreeMap::new();
 
     // ADR-0079 R4a（/3 の replan の gap）: 計画の版を**すべて**畳み込む。行はその key が初めて現れた版の
-    // 形で作り（`phase` はその版のまま。`task_ops::execution::replan` は既存の行の `phase` を書き換えない）、
+    // 形で作り（`phase` / `seq` は replan で持ち越した未完了の行だけ新しい版の値に書き換わる。R6-4）、
     // 2 版目以降の `ExecutionPlanned` で replan と同じ規則（[`apply_replan_step`]）を当てる。最後の版だけ
     // から作ると、replan で計画から消えた unit・統合 WU（superseded の行）が無く、同じ key で書き直した
     // unit の `runs` / `seq` / `phase` も食い違っていた（ADR-0079 R3a 付記 14.・R3b 付記 12.）。
@@ -514,8 +514,9 @@ pub fn rebuild_work_units_and_runs(
 /// - 前の版にあり新しい版にも残る未完了の行（統合 WU・daemon が足した行を除く）: `plan_id` /
 ///   `depends_on` / spec / `needs_decisions`（/3）を新しい版に、`runs` / `continuations` / `retries` /
 ///   `last_run_id` を 0 / 無しに戻す（replan のたびに窓を作り直す。ADR-0072 D17）。kind task の unit は子が
-///   走っていなければ子の結び付き・commit を外す。**`seq` / `kind` / `phase` は書き換えない**（store の
-///   `update_work_unit_tx` は `seq` / `kind` の列を書かず、replan は行の `phase` を変えない。R2b の replay は
+///   走っていなければ子の結び付き・commit を外す。`phase` は新しい版の段階に、`seq` は新しい版の並びに
+///   書き換える（R6-4。store の `update_work_unit_tx` は R6-4 から `seq` も書く）。**`kind` は書き換えない**。
+///   （R6-4 より前: store は `seq` の列を書かず、R2b の replay は
 ///   `seq` を新しい版の並びにしていたが、行の実際の値は最初に作った版の並びのまま）。
 /// - 未完了の統合 WU（/2・/3）: 新しい版の統合 WU の依存に、前の版の計画に無い依存（統合の repair）を
 ///   足したもの。カウンタは戻さない。
@@ -544,6 +545,12 @@ fn apply_replan_step(
     let v3 = spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3;
     let order = topological_order(spec);
     let materialized = task_core::materialized_order(spec, &order);
+    // ADR-0079 R6-4: 未完了で持ち越す行の `seq` は新しい版の並び（`replan` と同じ。store も `seq` を書く）。
+    let seq_of: BTreeMap<String, u32> = materialized
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (w.key.clone(), i as u32))
+        .collect();
     let spec_of: BTreeMap<String, task_core::WorkUnitSpec> = materialized
         .into_iter()
         .map(|w| (w.key.clone(), w))
@@ -598,6 +605,9 @@ fn apply_replan_step(
             row.spec = new_spec.clone();
             row.spec.depends_on = deps;
             row.blocked_reason = None;
+            if v2 && let Some(seq) = seq_of.get(&row.key) {
+                row.seq = *seq;
+            }
             continue;
         }
         if daemon_added(row) {
@@ -608,6 +618,12 @@ fn apply_replan_step(
             && row.child_task_id.is_some();
         row.plan_id = new_plan_id.to_string();
         row.depends_on = new_spec.depends_on.clone();
+        // ADR-0079 R6-4: replan は段階を移した未完了の行の `phase` を新しい版の段階に、`seq` を新しい版の
+        // 並びに書き換える（store の `update_work_unit_tx` が `seq` も書く）。
+        row.phase = new_spec.phase.clone();
+        if let Some(seq) = seq_of.get(&row.key) {
+            row.seq = *seq;
+        }
         row.spec = new_spec.clone();
         row.blocked_reason = None;
         row.runs = 0;
@@ -2279,7 +2295,7 @@ mod tests {
 
     /// ADR-0079 R4a（R3a 付記 14.・R3b 付記 12. の gap）: 工程を持つ計画の replan で、(a) 計画から消えた unit
     /// と工程（superseded の `x` と `integrate-p2`）、(b) 同じ key のまま別の工程へ書き直した unit（`b`。行の
-    /// `seq` / `phase` は最初の版のまま）、(c) 新しい unit（`c`）があっても、`work_units` を events だけから同じに
+    /// `seq` は最初の版のまま、`phase` は新しい版の工程。R6-4）、(c) 新しい unit（`c`）があっても、`work_units` を events だけから同じに
     /// 作り直せる。superseded の行を消した索引も `--apply` で戻る。
     #[test]
     fn replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan() {
@@ -2356,6 +2372,15 @@ mod tests {
         };
         assert_eq!(status_of("x"), WorkUnitStatus::Superseded);
         assert_eq!(status_of("integrate-p2"), WorkUnitStatus::Superseded);
+        // ADR-0079 R6-4: p2 → p1 へ移した未完了の `b` は行の `phase` も p1 になる。
+        let phase_of = |key: &str| {
+            stored
+                .iter()
+                .find(|u| u.key == key)
+                .and_then(|u| u.phase.clone())
+        };
+        assert_eq!(phase_of("b").as_deref(), Some("p1"));
+        assert_eq!(phase_of("a").as_deref(), Some("p1"));
 
         let (wu_mm, run_mm, plan_mm, applied) =
             check_and_apply_execution(&store, false).expect("check");

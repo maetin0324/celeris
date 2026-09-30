@@ -28,6 +28,7 @@ import type {
   ArtifactList,
   Clusters,
   ClusterView,
+  MilestoneStatus,
   OrgList,
   OrgNode,
   Project,
@@ -51,7 +52,7 @@ import { ReportsList } from "~/components/ReportsList";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { Badge } from "~/components/ui/badge";
 import { Button, buttonClass } from "~/components/ui/button";
-import { Card, CardBody, CardHeader } from "~/components/ui/card";
+import { Card, CardBody } from "~/components/ui/card";
 import {
   checkboxClass,
   hintClass,
@@ -160,6 +161,23 @@ export function wantsFrozenMilestones(request: Request): boolean {
 
 /** 案件ページで木を引く root task の上限（root ごとに節点の events を読むため。超えた分は木のタブで見る）。 */
 const ROOT_TREE_FETCH_LIMIT = 20;
+
+/** 途中目標の終端（celeris `MilestoneStatus::is_terminal`: 達成・再設計・中止）。 */
+const MILESTONE_TERMINAL: ReadonlySet<MilestoneStatus> = new Set<MilestoneStatus>([
+  "reached",
+  "redesigned",
+  "cancelled",
+]);
+
+/**
+ * celeris ADR-0079 R6-4: 凍結した途中目標のうち、終端（達成・再設計・中止）でないまま凍結したものの数
+ * （`milestones_frozen_open`）。欄の無い古い celeris では、読めている行（`?frozen=1` のとき）から数える。
+ */
+export function frozenMilestonesOpenCount(
+  detail: Pick<ProjectDetail, "milestones" | "milestones_frozen_open">,
+): number {
+  return detail.milestones_frozen_open ?? detail.milestones.filter((m) => !MILESTONE_TERMINAL.has(m.status)).length;
+}
 
 /**
  * 1 タスクぶんの成果物 + 置き場所を束ねる（N+1。`GET /tasks/{id}` と `GET /tasks/{id}/artifacts`）。
@@ -345,6 +363,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
   const { project, milestones, tasks } = detail;
   // celeris ADR-0079（R5a / R5b-prep）: 凍結した途中目標は既定で読まない（件数だけ）。人が開いたら `?frozen=1`。
   const frozenCount = Math.max(detail.milestones_frozen ?? 0, milestones.length);
+  const frozenOpenCount = frozenMilestonesOpenCount(detail);
   const frozenOpen = milestones.length > 0;
   // ADR-0043 D1（Phase 52 / G16）: 並びは celeris が決めたもの（primary が先頭）をそのまま使う。
   const repos = detail.repos ?? [];
@@ -419,7 +438,7 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
       <ProjectActionFlash outcome={fetcher.data} />
 
       {/* Phase 95（ADR-0055 ラウンド 19、所見 P-project-detail、重さ「高」）: このページは性質の違う
-          9 節（依頼・作業場所・リポジトリ・PR と取り込み・途中目標・この方針で進める・仕事の木・報告・
+          9 節（依頼・作業場所・リポジトリ・PR と取り込み・途中目標・仕事の木・報告・
           成果物・文書）が縦に並ぶ、スマホでは 6 画面分を超える長い 1 ページ。`/help` と同じ「目次から
           飛ぶ」パターン（`PageToc`）を足し、節そのもの（`SectionTitle` の id）には触れない。 */}
       <PageToc
@@ -431,7 +450,6 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
           { id: "project-repos-heading", icon: "database", label: "リポジトリ" },
           { id: "project-integrations-heading", icon: "gitBranch", label: "PR と取り込み" },
           ...(frozenCount > 0 ? [{ id: "milestones-heading", icon: "target" as const, label: "以前の途中目標" }] : []),
-          { id: "project-plan-heading", icon: "sparkles", label: "この方針で進める" },
           { id: "work-tree-heading", icon: "gitBranch", label: "仕事の木" },
           { id: "project-reports-heading", icon: "send", label: "報告" },
           { id: "project-artifacts-heading", icon: "file", label: "成果物" },
@@ -586,6 +604,11 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
           <p className={hintClass} data-testid="milestones-readonly-note">
             途中目標は root task の段階で表すようになりました（ADR-0079）。ここにあるのは以前の記録です。
           </p>
+          {frozenOpenCount > 0 && (
+            <p className={hintClass} data-testid="milestones-open-note">
+              うち {frozenOpenCount} 件は終わらないまま（達成・再設計・中止のどれでもない状態で）凍結されています。
+            </p>
+          )}
           <Link
             to={{ search: frozenOpen ? "" : `?${FROZEN_MILESTONES_PARAM}=1`, hash: "milestones-heading" }}
             preventScrollReset
@@ -621,46 +644,6 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
           </ul>
         </section>
       )}
-
-      {/* 「この方針で進める」（監査 H3、docs/celeris-api-v1.md §3.61）。押すと秘書に分解の仕事が 1 件立ち、
-          仕事の木が増えていく。案件が「提案中」でも押せる（celeris が「進行中」にする）。 */}
-      <section aria-labelledby="project-plan-heading" className="space-y-4">
-        <SectionTitle icon="sparkles" id="project-plan-heading">
-          この方針で進める
-        </SectionTitle>
-        <Card>
-          <CardHeader
-            icon="sparkles"
-            title="分解を CoS に頼む"
-            description="CoS が、依頼文・ここまでのやり取りとあなたの一言をまとめて、仕事に分解します。返事は待ちません（仕事の木が増えていきます）。"
-          />
-          <CardBody>
-            <fetcher.Form method="post" data-testid="project-plan-form" className="space-y-3">
-              <input type="hidden" name="intent" value="project_plan" />
-              {/* celeris ADR-0079 D13（Phase R4b）: 「案件計画を提案させる」（`mode: milestones`）と途中目標の指定は
-                  出さない（案件は計画を持たない。API の廃止は R5a）。進め方は従来どおりの分解だけ。 */}
-              <input type="hidden" name="mode" value="decompose" />
-              <div>
-                <label htmlFor="project-plan-note" className={labelClass}>
-                  ひとこと（任意）
-                </label>
-                <textarea
-                  id="project-plan-note"
-                  name="note"
-                  rows={2}
-                  data-testid="project-plan-note"
-                  placeholder="例: 急がなくてよい。まず関連研究から。"
-                  className={`${textareaClass} mt-1.5 w-full`}
-                />
-              </div>
-              <Button type="submit" variant="primary" size="sm" disabled={submitting} data-testid="project-plan-submit">
-                <Icon name="sparkles" />
-                この方針で進める
-              </Button>
-            </fetcher.Form>
-          </CardBody>
-        </Card>
-      </section>
 
       <section aria-labelledby="work-tree-heading" className="space-y-4">
         <SectionTitle icon="gitBranch" id="work-tree-heading" count={workTasks.length}>

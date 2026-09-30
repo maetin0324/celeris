@@ -5044,6 +5044,11 @@ export interface ReplanDiff {
    */
   changed: string[];
   /**
+   * ADR-0079 R6-4: 別の段階（工程）へ移した未完了の WorkUnit（`<key>(<前の段階>→<新しい段階>)`）。行の
+   * `work_units.phase` も新しい段階に書き換える。`ExecutionPlanned.reason` にも `phase: …` として残す。
+   */
+  moved?: string[];
+  /**
    * ADR-0079 R5b-fix1: 人の replan が spec を上書きした done の WorkUnit（状態は `done` のまま。
    * `Event::WorkUnitSpecOverridden`）。planner の replan では常に空。
    */
@@ -6666,6 +6671,11 @@ export interface ProjectDetail {
    * 「以前の途中目標 N 件」を出すため）。
    */
   milestones_frozen?: number;
+  /**
+   * ADR-0079 R6-4: 上の `milestones_frozen` のうち、終端（達成・再設計・中止）でないまま凍結した行の数
+   * （R5a は未終了の途中目標も状態のまま凍結した。GUI が「うち N 件は未終了のまま凍結」を出すため）。
+   */
+  milestones_frozen_open?: number;
   project: Project;
   /**
    * ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の

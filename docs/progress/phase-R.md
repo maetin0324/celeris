@@ -1312,3 +1312,103 @@ config の編集なし）。migration なし。
   cos_run_bypasses_pool_concurrency_on_the_least_loaded_account_up_to_max_cos_runs, max_cos_runs_zero_disables_the_exemption}`、
   `capacity::tests::*`（4 件）、`accounts::cos_account_tests::least_loaded_picks_the_account_with_fewest_runs_even_at_max_plus_one`、
   `config::tests::execution_max_cos_runs_default_and_validation`、`daemon_providers_config`（`in_use_cos` の null / 1 / 0）。
+
+
+## R6-4: 回収（replan の段階の書き換え、死んだ「この方針で進める」、timeline の遅さ、凍結した未終了の途中目標）（2026-09-30）
+
+### 1. replan が持ち越す unit の `phase` / `seq` を書き換える（R4a から既知 → 本番の stall）
+
+- **症状**（本番 01M3QGRC542ZC23996DNCTHZF5、/3 の木の子）: planner の replan v2 が unit `restore-binding` を段階 `relay` → `verify` へ移し `prod-launch`
+  に依存させた。行は `phase = relay`・v1 の `seq` のまま → scheduler（`settle_phase` の「今の段階 = seq 最小の未終端の行の段階」、`newly_ready` の障壁）が
+  `relay` を未完了と見て `integrate-relay` が走れず、`restore-binding` は後の段階待ち → `stall_detected{nothing_runnable}`。
+- **直したこと**: `task_ops::execution::replan` の持ち越し（`Some(existing)`）で `row.phase = 新しい版の phase`。**`seq` も**: replan は元から新しい版の並び
+  （`materialized_order`）を行に入れていたが、store の `update_work_unit_tx` が `seq` の列を書いていなかった → `seq = ?22` を足した
+  （crates/task-core/src/store.rs。他の書き手は読んだ行の値をそのまま渡すので影響なし）。done の行（R5b-fix1 の上書き）は `seq` を変えない。
+  replay の `apply_replan_step` も同じ（持ち越す未完了の行の `phase` / `seq`、未完了の統合 WU の `seq`）。
+- **見える記録**: `ReplanDiff.moved`（`x(relay→verify)`）、`ExecutionPlanned.reason` の後ろに ` (phase: x(relay→verify))`（移動があるときだけ）。
+- **テスト**: `replan_rewrites_the_phase_of_a_unit_moved_to_another_phase`（/2）、`replan_moving_a_unit_to_a_later_stage_does_not_strand_the_earlier_stage`
+  （/3、本番の形: v1 `relay{r1,x}`・`verify{p}` → v2 `x` を `verify` へ・`p` に依存。行の並びが `r1, integrate-relay, p, x, integrate-verify`、`r1` done で今の
+  段階は `relay`・`relay` の unit はすべて done・`integrate-relay` 待ち・verify はまだ上がらない、reason に `phase: x(relay→verify)`、replay diff 0）、
+  既存の `replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan` に `b` の phase = p1 の assert を足した。ADR-0079 付記 R6-4。
+- **既存の本番の行**: R6-4 の前の replan で食い違った行は `celerisctl replay`（check）で `phase` / `seq` の食い違いとして出る。`--apply` で events から直る
+  （本番への適用は人の判断。本 Phase では本番に触れていない）。
+
+### 2. 案件ページの死んだ「この方針で進める」を外した
+
+- `POST /projects/{id}/plan {mode: decompose}` は R5a から 410。ボタン・フォーム（`project-plan-form`）・目次の項目、`ProjectOpOutcome` の `project_plan`
+  （成功・失敗の op）、Flash の `project_plan` の枝と文言を消した。action の `project_plan` の中継は R5a で既に外れていた。e2e `g13.spec.ts` の
+  「この方針で進める」の test を消した。`/help` の 2 か所の説明を root task の説明に直した。root task の一覧と「以前の途中目標（読み取り専用）」はそのまま。
+  task の「実行の形」の `execution_decompose`（`POST /tasks/{id}/execution/decompose`）は別物なので残した。
+
+### 3. `GET /tasks/{id}/timeline` の遅さ
+
+- **計測**（本番 DB の写し: `sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" ".backup <scratch>/prod-copy.sqlite3"`、task 01M3PAX6RVE7AX8Z6118KADME3
+  = browser の根）: 根の events は **184 件**（1366 件ではない。子を含めても木の分は読まない）。ストアの部分（`store_items`: events・コメント・認可・報告・
+  取り込み）は下の表のとおり小さい。遅さは**ストアではなく、ハンドラが起こす git**（ホームは NFS。冷えていると 1 回が秒単位）:
+  - 文書の逆リンク（`docs::backlinks`）: `git grep -l <id> main -- docs` が `docs/progress/phase-R.md` に当たる（本文に task id が出るだけで front matter の
+    `tasks:` には無い）→ それでも先に `git log --no-merges --name-only main -- docs`（文書の根の全履歴）を起こしていた。**冷 19.0 s / 温 51 ms**。
+  - リリース（`release_items`）: `rev-list base..branch`（温 6 ms）の後、`ReleaseSource::list()` が `git rev-parse main` + リリースごとの
+    `git merge-base --is-ancestor`（`on_main`。タイムラインは使わない）。5 リリースで **冷 7.6 s / 温 54 ms**。
+  - events の索引: `events` は `UNIQUE(task_id, seq)` の自動索引を使う（`EXPLAIN QUERY PLAN`: `SEARCH events USING INDEX sqlite_autoindex_events_1 (task_id=?)`）。
+    索引の追加は不要。`worker_progress` の本体は 69 件 94 KB で、decode は支配的でない。
+- **直したこと**: (a) 逆リンクは front matter で先に絞り、紐付いたページがあるときだけ `git log` を起こす（crates/task-api/src/docs.rs）。
+  (b) `ReleaseSource::list_for_timeline()`（既定は `list()`）を足し、celeris の `FsReleases` は `scan(root, None)`（`on_main` を求めない = git を起こさない）で
+  返す（crates/task-api/src/releases.rs・timeline.rs、crates/celeris/src/releases.rs）。タイムラインの応答の形は変えていない。
+- **before / after**: 下の「計測」節。
+
+### 4. 凍結した未終了の途中目標の件数
+
+- `GET /projects/{id}` に `milestones_frozen_open`（`u32`、既定 0）を足した（`milestones_frozen` のうち `reached` / `redesigned` / `cancelled` でない行の数。
+  既定の応答では行が空なので GUI が数えられなかった）。案件ページの「以前の途中目標（読み取り専用）」に「うち N 件は終わらないまま（達成・再設計・中止の
+  どれでもない状態で）凍結されています。」の 1 行（`milestones-open-note`、0 件なら出さない）。欄の無い古い celeris では読めた行から数える
+  （`frozenMilestonesOpenCount`）。API 文書（celeris-api-v1.md）・schema・GUI の生成型を更新。
+- 追記（(c)）: 逆リンクの結果を memo する（鍵 = 文書リポジトリ・default_branch の commit・文書の根・task id。上限 512 件で溢れたら捨てる）。GUI は SSE の
+  再検証で同じ task のタイムラインを数秒おきに引き直す（本番の journal: 17:08:20〜17:08:45Z に同じ根へ 5 回）ので、2 回目以降は `git rev-parse` 1 回と
+  `docs_target` の分だけになる。
+
+### 計測（before / after）
+
+| 経路 | before | after |
+| --- | --- | --- |
+| 本番の journal（`slow api request … /timeline`、根 01M3PAX6…） | 1,058〜5,622 ms（他の task の GET は < 150 ms） | 未計測（本番に出していない） |
+| `store_items`（写しの DB、in-process） | 5.6〜10.2 ms | 同じ（変えていない） |
+| sort + JSON（237,301 B） | 11.7〜17.9 ms | 同じ |
+| 逆リンク（`doc_items`、`~/workspace` を根に、in-process 3 回） | grep + **`git log` 全履歴（冷 19.0 s / 温 51 ms）** + show | 1 回目 903.6 ms（冷えた grep/show）、2・3 回目 51.5 / 71.8 ms（memo、`rev-parse` と `docs_target` の git だけ） |
+| リリースの照合（`release_items`） | `rev-list` + `rev-parse main` + `merge-base` × 5（**冷 7.6 s / 温 54 ms**） | `rev-list` だけ（温 6 ms）。`scan(root, None)` は git を起こさない |
+
+- 計測の手順: `sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" ".backup <scratch>/prod-copy.sqlite3"` → `CELERIS_TIMELINE_PROFILE_DB=<copy>
+  CELERIS_TIMELINE_PROFILE_TASK=01M3PAX6RVE7AX8Z6118KADME3 cargo test -p task-api --lib profile_timeline -- --ignored --nocapture`（`timeline.rs` の
+  `#[ignore]` のテスト。ストアと逆リンクを分けて測る）。git 単体の冷 / 温は同じ引数の `git` を Python の `subprocess` で 3 回ずつ（ホームは NFS、
+  計測時の host は load 60〜170・I/O 待ちが高い）。冷えた値は host の負荷で大きく振れる（同じ `git log` が 19 s → 51 ms）。
+- 結論: タイムラインの遅さは events の件数・JSON の decode・索引ではなく、1 回の GET ごとに NFS 上のリポジトリへ最大 9 回 git を起こしていたこと
+  （うち 2 つは全履歴 / 全リリースを歩く）。memo 後の定常は 1 回の GET あたり概ね store 10 ms + git 数回（温 50〜70 ms）。
+
+### gate（2026-09-30。build は `CARGO_TARGET_DIR=<scratch>/target`〈tmpfs〉。NFS 上の worktree の `target/` は消した）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test -p task-ops` → 366 passed / 0 failed
+- `cargo test -p task-core --lib` → 528 passed / 0 failed（store の `seq` の書き込み）
+- `cargo test -p task-api --no-fail-fast`（先に `cargo build -p celeris-credentiald`）→ 42 binaries、394 passed / 0 failed / 2 ignored
+  （`UPDATE_SCHEMA=1` で `docs/api/v1/api-v1.schema.json` を再生成）
+- `cargo test -p celeris --lib releases` → 22 passed / 0 failed
+- `cargo test -p task-dispatch --no-fail-fast` → 3 binaries、454 passed / 0 failed（scheduler は行の `seq` を読むので回した）
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- GUI: `pnpm gen:types`（`ReplanDiff.moved`・`ProjectDetail.milestones_frozen_open`）、`pnpm typecheck` → exit 0、`pnpm test` → 81 files / 1223 passed、
+  `pnpm lint` → error 0（既存の info 2 件は scripts/check-resume-recovery.mjs）、`E2E_SKIP_BUILD=1 pnpm e2e:mock` → `failures: []`、
+  `pnpm mobile-audit` → routes=28 schemes=2 violations=0（1 回目は host の I/O 負荷で GUI の `/healthz` 20 s 待ちが切れた。2 回目で通過）
+
+### 逸脱
+
+- `crates/task-core/src/store.rs`（`update_work_unit_tx` に `seq = ?22`）と `crates/celeris/src/releases.rs`（`list_for_timeline` の実装）は依頼の
+  「触るファイル」の外。前者は本番の stall の再現で「`seq` も直す」ことが必要だったため（scheduler の今の段階は `seq` で決まる。`phase` だけでは
+  同じ stall が残る）、後者はタイムラインから git を外す最小の口（trait の既定は従来の `list()`）。
+- 項目 4 は API に欄を 1 つ足した（`milestones_frozen_open`）。既定の応答では凍結した行を返さないので、GUI だけでは数えられなかった。
+- 項目 3 の索引の migration は足していない（`events` は `UNIQUE(task_id, seq)` の索引で引けている）。
+
+### 未解決
+
+- 本番の既存の行（R6-4 の前の replan で `phase` / `seq` が食い違った unit。01M3QGRC542ZC23996DNCTHZF5 の `restore-binding` など）は、release 後に
+  `celerisctl replay`（check）で確かめ、`--apply` するかは人が決める。
+- 逆リンクの 1 回目（冷えた `git grep` / `git show`）は NFS の負荷しだいで 1 s 近い。常時速くするなら、文書の front matter の `tasks:` の索引を
+  書き込み時に作る（task-ops/docs の範囲。本 Phase ではしない）。
+- タイムラインは root の子の events を読まない（木の分は `GET /tasks/{id}/task-tree`）。「1366+ events」は根ではなく木の合計と思われる（根は 184 件）。

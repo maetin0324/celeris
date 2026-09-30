@@ -775,30 +775,102 @@ pub(crate) fn backlinks(
         return Vec::new();
     };
     let id = task.id.to_string();
-    let paths = ops_docs::grep(&target.path, &target.default_branch, &target.root, &id);
+    // ADR-0079 R6-4: 同じ default_branch の commit・同じ task なら結果は同じ。GUI はタイムラインを数秒おきに
+    // 引き直す（SSE の再検証）ので、`git grep`（木の全ページを読む）と `git show` を毎回起こさない。
+    let head = ops_changes::git(
+        &target.path,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{}^{{commit}}", target.default_branch),
+        ],
+        ops_changes::GIT_TIMEOUT,
+    )
+    .filter(|o| o.ok)
+    .map(|o| o.stdout.trim().to_string())
+    .filter(|sha| !sha.is_empty());
+    let key = head.map(|sha| BacklinkKey {
+        repo: target.path.clone(),
+        commit: sha,
+        root: target.root.clone(),
+        task: id.clone(),
+    });
+    if let Some(key) = &key
+        && let Some(hit) = backlink_cache_get(key)
+    {
+        return hit;
+    }
+    let out = backlinks_uncached(&target, &id, project_id);
+    if let Some(key) = key {
+        backlink_cache_put(key, out.clone());
+    }
+    out
+}
+
+/// 逆リンクの memo の鍵（文書リポジトリ・default_branch の commit・文書の根・task id）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BacklinkKey {
+    repo: PathBuf,
+    commit: String,
+    root: String,
+    task: String,
+}
+
+type Backlinks = Vec<(String, String, String, ProjectId)>;
+
+/// memo の上限（超えたら全部捨てる。1 件は数ページ分の小さな値）。
+const BACKLINK_CACHE_MAX: usize = 512;
+
+static BACKLINK_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<BacklinkKey, Backlinks>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn backlink_cache_get(key: &BacklinkKey) -> Option<Backlinks> {
+    BACKLINK_CACHE.lock().ok()?.get(key).cloned()
+}
+
+fn backlink_cache_put(key: BacklinkKey, value: Backlinks) {
+    if let Ok(mut cache) = BACKLINK_CACHE.lock() {
+        if cache.len() >= BACKLINK_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(key, value);
+    }
+}
+
+fn backlinks_uncached(target: &DocsTarget, id: &str, project_id: ProjectId) -> Backlinks {
+    let paths = ops_docs::grep(&target.path, &target.default_branch, &target.root, id);
     if paths.is_empty() {
         return Vec::new();
     }
-    let last = ops_docs::last_commits(&target.path, &target.default_branch, &target.root);
-    let mut out = Vec::new();
+    // 本文にたまたま id が出ただけのページは載せない（front matter の `tasks:` が紐付け）。
+    // ADR-0079 R6-4: 先に front matter で絞り、紐付いたページがあるときだけ `git log`（文書の根の全履歴を
+    // 歩く。NFS 上のリポジトリでは冷えていると秒単位）を起こす。進捗の文書の本文に task id が出るだけの
+    // 本番の root task では、これがタイムラインの遅さ（1〜5.6 秒）の大半だった。
+    let mut linked = Vec::new();
     for path in paths {
         let Some(raw) = ops_docs::read_page(&target.path, &target.default_branch, &path) else {
             continue;
         };
         let (front, _) = ops_docs::front_matter(&raw);
-        // 本文にたまたま id が出ただけのページは載せない（front matter の `tasks:` が紐付け）。
         if !front.tasks.iter().any(|t| t.trim() == id) {
             continue;
         }
-        let at = last.get(&path).map(|c| c.at.clone()).unwrap_or_default();
-        out.push((
-            at,
-            path.clone(),
-            ops_docs::title_of(&raw, &path),
-            project_id,
-        ));
+        let title = ops_docs::title_of(&raw, &path);
+        linked.push((path, title));
     }
-    out
+    if linked.is_empty() {
+        return Vec::new();
+    }
+    let last = ops_docs::last_commits(&target.path, &target.default_branch, &target.root);
+    linked
+        .into_iter()
+        .map(|(path, title)| {
+            let at = last.get(&path).map(|c| c.at.clone()).unwrap_or_default();
+            (at, path, title, project_id)
+        })
+        .collect()
 }
 
 #[cfg(test)]

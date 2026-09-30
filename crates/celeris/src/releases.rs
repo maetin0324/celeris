@@ -71,6 +71,11 @@ impl ReleaseSource for FsReleases {
         scan(&self.root, Some(&self.repo))
     }
 
+    /// ADR-0079 R6-4: タイムラインは `on_main` を使わないので git を起こさずに読む（`scan(root, None)`）。
+    fn list_for_timeline(&self) -> ReleasesFs {
+        scan(&self.root, None)
+    }
+
     fn promote(&self, sha12: &str) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
         start_promote(&self.root, sha12)
     }

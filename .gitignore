@@ -28,3 +28,7 @@ config/secrets/
 
 # Celeris が各 worktree に注入する実行時指示。repository の成果物ではない。
 /AGENTS.md
+
+# scripts/dev/worktree-target-dir.sh が worktree ごとに生成する（ローカル target-dir）
+/.cargo/config.toml
+!.claude/settings.json

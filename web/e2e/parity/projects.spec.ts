@@ -292,3 +292,57 @@ test("parity: /projects/:id 案件の操作", async ({ page }) => {
     await h.close(gateway);
   }
 });
+
+test("parity: /projects/:id 計画と途中目標", async ({ page }) => {
+  const { h, gateway, sent } = await openDetail(page);
+  const count = () => h.daemon.requests.filter((r) => r.path === "/api/v1/projects/P1").length;
+  try {
+    const ops = page.getByTestId("project-plan-ops");
+    await ops.getByLabel("計画の目標").fill("計画の目標文");
+    await ops.getByLabel("段階（1 行に 1 つ、任意）").fill("調べる\n作る");
+    await ops.getByRole("button", { name: "計画を立てる" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({
+        path: "/api/tasks",
+        body: { project_id: "P1", stages_hint: [{ title: "調べる" }, { title: "作る" }] },
+      });
+    await ops.getByLabel("途中目標").fill("中間の目標");
+    await ops.getByRole("button", { name: "途中目標を足す" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ body: { stages_hint: [{ title: "中間の目標" }] } });
+    const row = ops.locator("[data-root-task='T1']");
+    await row.getByRole("button", { name: "計画を承認" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ path: "/api/tasks/T1/execution/plan-gate", body: { action: "approve" } });
+    await row.getByRole("button", { name: "段階を通す" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ path: "/api/tasks/T1/execution/phase-gate", body: { action: "continue" } });
+    await row.getByRole("button", { name: "段階を取り下げる" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ body: { action: "withdraw" } });
+    for (const [label, action] of [
+      ["止める", "pause"],
+      ["再開", "resume"],
+      ["取り消す", "cancel"],
+    ] as const) {
+      await row.getByRole("button", { name: label, exact: true }).click();
+      await expect.poll(() => last(sent)?.path).toBe(`/api/tasks/T1/${action}`);
+    }
+    // project_plan_proposed / decided でその project の detail を取り直す。
+    await expect.poll(() => h.daemon.streamClients).toBeGreaterThan(0);
+    for (const [i, kind] of (["project_plan_proposed", "project_plan_decided"] as const).entries()) {
+      const before = count();
+      h.daemon.sendEvent("task.event", {
+        id: 100 + i,
+        seq: 100 + i,
+        task_id: "T1",
+        ts: "2026-09-30T00:00:00Z",
+        event: { type: kind, project_id: "P1", version: 2 },
+      });
+      await expect.poll(count).toBeGreaterThan(before);
+    }
+  } finally {
+    await h.close(gateway);
+  }
+});

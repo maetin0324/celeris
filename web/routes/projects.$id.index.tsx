@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ProjectDetailScreen } from "../features/projects/project-detail-view";
-import { ProjectOps } from "../features/projects/project-ops";
+import { PlanOps, ProjectOps } from "../features/projects/project-ops";
 
 // R10 /projects/:id（P4-02 は表示、P4-03〜P4-05 は操作）。
 export const Route = createFileRoute("/projects/$id/")({
@@ -15,6 +15,7 @@ function Screen() {
       ops={(detail) => (
         <>
           <ProjectOps detail={detail} />
+          <PlanOps detail={detail} />
         </>
       )}
     />

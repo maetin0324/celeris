@@ -246,3 +246,149 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
     </ProjectSection>
   );
 }
+
+// P4-04: 計画と途中目標（ADR-0083）。
+export function PlanOps({ detail }: { detail: ProjectDetail }) {
+  const id = detail.project.id;
+  const { run, pending, results } = useProjectActions(id);
+  const [goal, setGoal] = useState("");
+  const [stages, setStages] = useState("");
+  const [milestone, setMilestone] = useState("");
+  const roots = detail.tasks.filter((task) => task.is_root_task || !task.parent_id);
+  const busy = pending;
+  const act = (target: ActionTarget) => void run([target]);
+  const gate = (taskId: string, kind: "plan-gate" | "phase-gate", action: string, intent: string) =>
+    act({ id: `${intent}:${taskId}`, path: `/api/tasks/${enc(taskId)}/execution/${kind}`, body: { action } });
+  const ids = ["project_plan", "milestone_create"];
+  return (
+    <ProjectSection title="計画と途中目標" testId="project-plan-ops">
+      <form
+        className="space-y-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const hints = stages
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => ({ title: line }));
+          act({
+            id: "project_plan",
+            path: "/api/tasks",
+            body: { title: goal, objective: goal, acceptance: [], project_id: id, stages_hint: hints },
+          });
+        }}
+      >
+        <label className="block">
+          計画の目標
+          <input className={inputClass} value={goal} onChange={(e) => setGoal(e.target.value)} />
+        </label>
+        <label className="block">
+          段階（1 行に 1 つ、任意）
+          <textarea className={inputClass} value={stages} onChange={(e) => setStages(e.target.value)} />
+        </label>
+        <button type="submit" className={buttonClass} disabled={busy}>
+          計画を立てる
+        </button>
+      </form>
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          act({
+            id: "milestone_create",
+            path: "/api/tasks",
+            body: {
+              title: milestone,
+              objective: milestone,
+              acceptance: [],
+              project_id: id,
+              stages_hint: [{ title: milestone }],
+            },
+          });
+        }}
+      >
+        <label className="min-w-0 flex-1">
+          途中目標
+          <input className={inputClass} value={milestone} onChange={(e) => setMilestone(e.target.value)} />
+        </label>
+        <button type="submit" className={buttonClass} disabled={busy}>
+          途中目標を足す
+        </button>
+      </form>
+      <Results results={results} ids={ids} />
+      {roots.length > 0 && (
+        <ul className="space-y-2" data-testid="project-root-ops">
+          {roots.map((task) => {
+            const rowIds = [
+              "project_plan_decide",
+              "milestone_decide",
+              "milestone_status",
+              "milestone_pause",
+              "milestone_resume",
+              "milestone_cancel",
+            ].map((intent) => `${intent}:${task.id}`);
+            return (
+              <li key={task.id} className="min-w-0 space-y-1 rounded border p-2" data-root-task={task.id}>
+                <p className="break-words">
+                  {task.title} <span className="text-sm">{task.status}</span>
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className={buttonClass}
+                    disabled={busy}
+                    onClick={() => gate(task.id, "plan-gate", "approve", "project_plan_decide")}
+                  >
+                    計画を承認
+                  </button>
+                  <button
+                    type="button"
+                    className={buttonClass}
+                    disabled={busy}
+                    onClick={() => gate(task.id, "phase-gate", "continue", "milestone_decide")}
+                  >
+                    段階を通す
+                  </button>
+                  <button
+                    type="button"
+                    className={buttonClass}
+                    disabled={busy}
+                    onClick={() => gate(task.id, "phase-gate", "withdraw", "milestone_status")}
+                  >
+                    段階を取り下げる
+                  </button>
+                  {(["pause", "resume", "cancel"] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      className={buttonClass}
+                      disabled={busy}
+                      onClick={() =>
+                        act({ id: `milestone_${k}:${task.id}`, path: `/api/tasks/${enc(task.id)}/${k}`, body: {} })
+                      }
+                    >
+                      {k === "pause" ? "止める" : k === "resume" ? "再開" : "取り消す"}
+                    </button>
+                  ))}
+                </div>
+                <Results results={results} ids={rowIds} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {(detail.milestones_frozen ?? 0) > 0 && (
+        <details>
+          <summary className="min-h-11 py-2">以前の途中目標 {detail.milestones_frozen} 件（読み取り専用）</summary>
+          <ul className="space-y-1">
+            {detail.milestones.map((m) => (
+              <li key={m.id} className="break-words">
+                {m.seq}. {m.title} <span className="text-sm">{m.status}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </ProjectSection>
+  );
+}

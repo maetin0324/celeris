@@ -372,11 +372,19 @@ fn build_questions(
         .into_iter()
         .map(|w| w.task_id)
         .collect();
+    // ADR-0090 D4: クラスタ job を待っている（`waiting` の wait）task も質問ではない（daemon が poll して再開する。
+    // 上限を過ぎた wait は `timed_out` になり、その質問〈`QuestionRaised`〉はここに出る）。
+    let cluster_waiting: std::collections::HashSet<TaskId> = store
+        .cluster_job_waits_waiting()?
+        .into_iter()
+        .map(|w| w.task_id)
+        .collect();
     let mut items = Vec::new();
-    for t in all_tasks
-        .iter()
-        .filter(|t| t.status == Status::Blocked && !browser_waiting.contains(&t.id))
-    {
+    for t in all_tasks.iter().filter(|t| {
+        t.status == Status::Blocked
+            && !browser_waiting.contains(&t.id)
+            && !cluster_waiting.contains(&t.id)
+    }) {
         let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
         let events = view::seq_pairs(&rows);
         // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認は質問ではない（attention に出す）。

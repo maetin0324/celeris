@@ -988,6 +988,20 @@ async fn run_reviewer_inner(
                 message: format!("{tag}: reviewer run yielded instead of judging"),
             });
         }
+        // ADR-0090: reviewer run は job を待たない（wait を書いても判定の代わりにはならない）。やり直しに任せる。
+        Terminal::Waiting { usage, .. } => {
+            run.sink
+                .progress("asked for a cluster job wait instead of judging");
+            record.outcome =
+                "requeue: reviewer run asked for a cluster job wait instead of judging".to_string();
+            record.usage = usage;
+            return Err(ReviewerProviderFailure {
+                outcome: None,
+                message: format!(
+                    "{tag}: reviewer run asked for a cluster job wait instead of judging"
+                ),
+            });
+        }
     }
     let text = match std::fs::read_to_string(&review_path) {
         Ok(t) => t,

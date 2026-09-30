@@ -144,7 +144,40 @@ pub fn continuation_section(context: &RunContext) -> String {
             out.push_str(&format!("- {line}\n"));
         }
     }
+    if let Some(jobs) = &cont.cluster_jobs {
+        out.push_str(&cluster_jobs_section(jobs));
+    }
     out.push('\n');
+    out
+}
+
+/// ADR-0090 D2: 前の run が待ったクラスタ job の最終状態の節（continuation の前置きの中）。
+fn cluster_jobs_section(jobs: &crate::protocol::ClusterJobsContinuation) -> String {
+    let outcome = match jobs.state.as_str() {
+        "satisfied" => "すべての job が終わりました",
+        "timed_out" => {
+            "待ちの上限に達しました（まだ終わっていない job があります。人の回答が下にあればそれに従うこと）"
+        }
+        "cancelled" => "待ちは取り消されました（job 自体は取り消していません）",
+        other => other,
+    };
+    let mut out = format!(
+        "### クラスタ job の結果（前の Run が待った job）\n\
+         前の Run はクラスタ `{cluster}` の {scheduler} job の終了を待ちました。結果: {outcome}。\n",
+        cluster = jobs.cluster,
+        scheduler = jobs.scheduler.to_uppercase(),
+    );
+    if !jobs.summary.is_empty() {
+        out.push_str(&format!("前の Run の要約: {}\n", jobs.summary));
+    }
+    for line in &jobs.jobs {
+        out.push_str(&format!("- {line}\n"));
+    }
+    out.push_str(
+        "この Run で結果（出力ファイル・ログ）を回収し、受け入れ条件を確かめてから完了を申告すること。\
+         Exit_status が 0 でない job があれば、ログで原因を確かめてから直す・投げ直す（投げ直したら再び \
+         `wait` で終える）こと。\n",
+    );
     out
 }
 
@@ -2023,6 +2056,58 @@ mod tests {
         }
     }
 
+    /// ADR-0090 D2: クラスタ job を待った続きの run の前置きは、job の最終状態と終了コード・回収の指示を含む
+    /// （`cluster_jobs` が無ければ節は出ない）。
+    #[test]
+    fn continuation_section_carries_the_cluster_job_results() {
+        use crate::protocol::{ClusterJobsContinuation, ContinuationContext};
+        let mut cont = ContinuationContext {
+            run_seq: 2,
+            previous_end: "waiting(cluster_jobs)".into(),
+            checkpoint: serde_json::json!({"completed": ["E1 v2 を投入した"], "next_action": "結果を回収する"}),
+            prior_runs: vec!["Run #1 waiting".into()],
+            cluster_jobs: None,
+        };
+        let without = continuation_section(&RunContext {
+            continuation: Some(cont.clone()),
+            ..RunContext::default()
+        });
+        assert!(!without.contains("クラスタ job の結果"), "{without}");
+        cont.cluster_jobs = Some(ClusterJobsContinuation {
+            cluster: "sirius".into(),
+            scheduler: "pbs".into(),
+            state: "satisfied".into(),
+            jobs: vec![
+                "42634: finished (Exit_status 0 / scheduler: F)".into(),
+                "42635: finished (Exit_status 271 / scheduler: F)".into(),
+            ],
+            summary: "E1 v2 の 2 job を投入".into(),
+        });
+        let out = continuation_section(&RunContext {
+            continuation: Some(cont),
+            ..RunContext::default()
+        });
+        assert!(
+            out.contains("### クラスタ job の結果（前の Run が待った job）"),
+            "{out}"
+        );
+        assert!(out.contains("クラスタ `sirius` の PBS job"), "{out}");
+        assert!(out.contains("すべての job が終わりました"), "{out}");
+        assert!(
+            out.contains("- 42634: finished (Exit_status 0 / scheduler: F)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("- 42635: finished (Exit_status 271 / scheduler: F)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("前の Run の要約: E1 v2 の 2 job を投入"),
+            "{out}"
+        );
+        assert!(out.contains("結果（出力ファイル・ログ）を回収し"), "{out}");
+    }
+
     /// ADR-0072 D9（Phase E1）: `context.continuation` が無ければ、この節は 1 バイトも出ない。
     #[test]
     fn continuation_section_is_empty_without_continuation_context() {
@@ -2051,6 +2136,7 @@ mod tests {
                     "Run #1 budget_exhausted(turns)".into(),
                     "Run #2 budget_exhausted(turns)".into(),
                 ],
+                cluster_jobs: None,
             }),
             ..RunContext::default()
         };
@@ -2088,6 +2174,7 @@ mod tests {
                 previous_end: "yielded".into(),
                 checkpoint: serde_json::json!({"completed": "not-an-array"}),
                 prior_runs: vec![],
+                cluster_jobs: None,
             }),
             ..RunContext::default()
         };

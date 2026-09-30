@@ -718,6 +718,26 @@ pub struct ContinuationContext {
     /// これまでの run の 1 行要約（新しい順、最大 10 件。例: `"Run #2 budget_exhausted(turns)"`）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prior_runs: Vec<String>,
+    /// ADR-0090 D2: 直前の run が `wait` でクラスタ job を待った続きのときだけ `Some`（job の最終状態と終了コード）。
+    /// 前置きの「クラスタ job の結果」節になる。`None` の run のプロンプトは従来どおり。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_jobs: Option<ClusterJobsContinuation>,
+}
+
+/// ADR-0090 D2: continuation の前置きに渡す、待っていたクラスタ job の結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterJobsContinuation {
+    /// `[[clusters]] id`。
+    pub cluster: String,
+    /// `pbs` | `slurm`。
+    pub scheduler: String,
+    /// wait の終わり方（`satisfied` | `timed_out` | `cancelled`）。
+    pub state: String,
+    /// job ごとの 1 行（`42634: finished (Exit_status 0 / scheduler: F)` の形。申告の順）。
+    pub jobs: Vec<String>,
+    /// 待つ前の run の要約（`result.json` の `summary`）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
 }
 
 /// `context.skills[]`（ADR-0056 D3。Phase 79）: mount された skill 1 件。ディスパッチャが KB から
@@ -991,6 +1011,30 @@ pub enum WorkerMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
     },
+    /// ADR-0090 D1: クラスタ job の終了待ち（`result.json` と同じ形
+    /// `{"type": "wait", "kind": "cluster_job", "cluster": .., "jobs": [..], "scheduler": "pbs", ...}`）。
+    /// `yield` と同じく checkpoint を添えるが、continuation の回数・進捗なしの窓・attempts には数えない。
+    /// 追加のみ（`PROTOCOL_VERSION` は変えない）。
+    Wait {
+        /// 常に `"cluster_job"`。
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cluster: Option<String>,
+        /// 省略時は `pbs`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheduler: Option<task_core::cluster_job::ClusterScheduler>,
+        jobs: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        poll_secs: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_secs: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
 }
 
 impl WorkerMessage {
@@ -1003,6 +1047,7 @@ impl WorkerMessage {
                 | WorkerMessage::Error { .. }
                 | WorkerMessage::Yielded { .. }
                 | WorkerMessage::BudgetExhausted { .. }
+                | WorkerMessage::Wait { .. }
         )
     }
 

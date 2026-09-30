@@ -91,10 +91,12 @@ const MIGRATION_0031: &str = include_str!("../migrations/0031_task_tree.sql");
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）と credential 台帳（秘密なし）。
 const MIGRATION_0032: &str = include_str!("../migrations/0032_browser_waits.sql");
 const MIGRATION_0033: &str = include_str!("../migrations/0033_browser_task_policies.sql");
+/// ADR-0090 D2: `cluster_job_waits`（クラスタ job の durable wait。events が正本の派生の索引）。
+const MIGRATION_0034: &str = include_str!("../migrations/0034_cluster_job_waits.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 33;
+pub const SCHEMA_VERSION: u32 = 34;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
 #[derive(Debug, Clone, PartialEq)]
@@ -636,6 +638,7 @@ pub trait TaskStore:
     + crate::mcp::McpClientStore
     + crate::mcp::McpCallStore
     + crate::browser_wait::BrowserWaitStore
+    + crate::cluster_job::ClusterJobWaitStore
 {
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
@@ -1848,6 +1851,7 @@ impl SqliteStore {
             31 => Ok(MIGRATION_0031),
             32 => Ok(MIGRATION_0032),
             33 => Ok(MIGRATION_0033),
+            34 => Ok(MIGRATION_0034),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),
@@ -2829,6 +2833,20 @@ impl SqliteStore {
                 },
             ));
         }
+        // ADR-0090 D2: クラスタ job の wait が `waiting` の間は、一般の回答・途中確認の再開で `ready` に戻さない
+        // （再開は daemon の poll〈`ClusterJobResume`〉、上限切れの後は人の回答）。
+        if matches!(trigger, Trigger::Answer | Trigger::PhaseResume { .. })
+            && view.status == Status::Blocked
+            && crate::cluster_job::has_waiting_tx(tx, task_id)?
+        {
+            return Err(StoreError::InvalidTransition(
+                crate::transition::InvalidTransition {
+                    status: view.status,
+                    kind: view.kind,
+                    trigger: "cluster_job_wait_pending",
+                },
+            ));
+        }
 
         let now = OffsetDateTime::now_utc();
         // ADR-0002 D1: running から出る全遷移でリースを解放する。
@@ -2897,6 +2915,7 @@ impl SqliteStore {
             )?;
             Self::close_run_row_for_event_tx(tx, &event, &ts)?;
             Self::apply_tree_event_tx(tx, task_id, &event, &ts)?;
+            crate::cluster_job::apply_event_tx(tx, task_id, &event, &ts)?;
             next_seq += 1;
         }
 
@@ -2916,6 +2935,8 @@ impl SqliteStore {
         // `cancelled` に閉じる（未消費の承認も同時に失効する）。
         if !view.status.is_terminal() && outcome.next.is_terminal() {
             crate::browser_wait::cancel_open_for_task_tx(tx, task_id, now)?;
+            // ADR-0090 D6: クラスタ job の wait も `cancelled` に閉じる（job は qdel しない）。
+            crate::cluster_job::cancel_open_for_task_tx(tx, task_id)?;
         }
         // ADR-0079 付記「R6-1」D4: 終端になったら、この task の `runs` 索引の `running` の行を同じトランザクションで
         // 閉じる（本番: 失敗した task 01M3PBAVFAYPDWMQMDBXPTE2V8 の reviewer run が `running` のまま残った）。
@@ -3450,6 +3471,7 @@ impl SqliteStore {
         )?;
         Self::close_run_row_for_event_tx(conn, event, &ts)?;
         Self::apply_tree_event_tx(conn, task_id, event, &ts)?;
+        crate::cluster_job::apply_event_tx(conn, task_id, event, &ts)?;
         Ok(next_seq as u64)
     }
 
@@ -8883,7 +8905,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
         assert!(
             store
@@ -9432,7 +9454,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         // 導入前の案件は「作業場所なし」= 従来どおり。
         assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
         let spec = WorkspaceSpec::Local {
@@ -9923,7 +9945,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let project = store.project_get(project_id).unwrap().expect("project");
         assert_eq!(project.status, ProjectStatus::Active);
@@ -9989,7 +10011,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         // 導入前の行は `metadata = None` として読める。
         let messages = store.message_list("secretary", None, 10).unwrap();
@@ -10082,7 +10104,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
         {
             let conn = store.lock().unwrap();
             let (labels, category): (String, String) = conn
@@ -10541,7 +10563,7 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         // 新しい表が使える（round trip）。
         let task = sample_task(Status::Draft);
@@ -10787,7 +10809,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let conn = Connection::open(&path).unwrap();
         // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -11038,7 +11060,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 33);
+        assert_eq!(SCHEMA_VERSION, 34);
 
         let conn = Connection::open(&path).unwrap();
         let mut columns: Vec<String> = Vec::new();

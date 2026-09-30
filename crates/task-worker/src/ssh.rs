@@ -667,10 +667,26 @@ pub fn remote_exec_instructions(settings: &SshSettings) -> String {
          重い処理・クラスタ上のデータやモジュールを使う処理は {REMOTE_EXEC_USAGE}",
         head = remote_exec_head(settings),
     );
-    match remote_worktree_note(settings) {
+    let base = match remote_worktree_note(settings) {
         None => base,
         Some(note) => format!("{base}\n{note}元のリポジトリの作業ツリーは触らないでください。"),
-    }
+    };
+    format!("{base}\n{}", cluster_job_wait_instructions(settings))
+}
+
+/// ADR-0090 D5: 長いクラスタ job（PBS / Slurm）の扱い（worker の remote-exec の前置きの 1 段落）。
+pub fn cluster_job_wait_instructions(settings: &SshSettings) -> String {
+    format!(
+        "長く走るクラスタ job（qsub / sbatch）は、投入したら job id を控えて、この run を \
+         `artifacts/result.json` に `{{\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": \"{cluster}\", \
+         \"scheduler\": \"pbs\", \"jobs\": [\"<job id>\", ...], \"checkpoint\": {{\"completed\": [...], \
+         \"remaining\": [...], \"next_action\": \"...\"}}, \"summary\": \"...\"}}` を書いて終えてください\
+         （`scheduler` は `pbs` か `slurm`、`poll_secs` / `timeout_secs` は任意）。celeris が job の終了を待ち、\
+         終わったら job の最終状態と終了コードを前置きに入れた続きの run を起こします。job が Q / R の間に完了を申告しない\
+         こと（`summary` だけの result.json は完了の申告です）。結果の回収・受け入れ条件の確認は続きの run で行います。\
+         job の終了を poll して run を引き延ばさないこと。",
+        cluster = settings.cluster,
+    )
 }
 
 /// ADR-0079 R5b-fix2: reviewer run（最終レビュー）へ渡す指示文。worker と同じ頭・使い方の一文を使い、
@@ -745,6 +761,95 @@ pub fn control_master_command_probe_blocking(
             Err(_) => return false,
         }
     }
+}
+
+/// ADR-0090 D2: master 越しに 1 つのコマンドを流した結果（stdout / stderr は先頭から最大
+/// [`REMOTE_COMMAND_OUTPUT_MAX`] バイト。qstat の出力を丸ごと読むため末尾ではなく先頭を残す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteCommandOutput {
+    pub exit: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// [`run_remote_command_blocking`] が残す出力の上限（バイト）。
+pub const REMOTE_COMMAND_OUTPUT_MAX: usize = 1024 * 1024;
+
+/// ADR-0090 D2: tick から OS スレッドに逃がして呼ぶ、master 越しの 1 コマンド（`ssh -o BatchMode=yes <host> -- <script>`）。
+/// `timeout` を超えたら子を kill して `Err`。ssh 自身の失敗（exit 255）も `Err`（接続の問題。poll の失敗として扱う）。
+/// 対話的な認証はしない（`BatchMode=yes`。人が張った ControlMaster を借りるだけ）。
+pub fn run_remote_command_blocking(
+    ssh_command: &[String],
+    host: &str,
+    script: &str,
+    timeout: Duration,
+) -> Result<RemoteCommandOutput, String> {
+    use std::io::Read;
+    let Some((program, rest)) = ssh_command.split_first() else {
+        return Err("empty ssh command".to_string());
+    };
+    let mut child = std::process::Command::new(program)
+        .args(rest)
+        .args(["-o", "BatchMode=yes", host, "--", script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot start ssh: {e}"))?;
+    fn drain(mut r: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                match r.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let room = REMOTE_COMMAND_OUTPUT_MAX.saturating_sub(kept.len());
+                        kept.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                }
+            }
+            kept
+        })
+    }
+    let out = child.stdout.take().map(drain);
+    let err = child.stderr.take().map(drain);
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "ssh to {host} timed out after {}s",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("cannot wait for ssh: {e}")),
+        }
+    };
+    let collect = |h: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        h.and_then(|h| h.join().ok())
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    };
+    let stdout = collect(out);
+    let stderr = collect(err);
+    if status.code() == Some(255) {
+        return Err(format!(
+            "ssh to {host} failed (exit 255): {}",
+            stderr.trim()
+        ));
+    }
+    Ok(RemoteCommandOutput {
+        exit: status.code(),
+        stdout,
+        stderr,
+    })
 }
 
 /// 外部コマンドを 1 つ動かし、末尾の出力と終了コードを返す（`LocalWorkspace::exec` と同じ流儀）。
@@ -1246,9 +1351,45 @@ mod tests {
             assert!(text.contains("ブランチ `celeris/01TASK`"), "{text}");
         }
         assert!(worker.contains("run の後にクラスタへ同期され"));
-        assert!(worker.ends_with("元のリポジトリの作業ツリーは触らないでください。"));
+        // ADR-0090 D5: worker の指示文の最後はクラスタ job の wait の段落（reviewer には無い）。
+        assert!(
+            worker
+                .contains("元のリポジトリの作業ツリーは触らないでください。\n長く走るクラスタ job")
+        );
+        assert!(worker.ends_with(&cluster_job_wait_instructions(&settings)));
+        assert!(
+            worker
+                .contains("\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": \"sirius\"")
+        );
+        assert!(worker.contains("job が Q / R の間に完了を申告しない"));
+        assert!(!reviewer.contains("長く走るクラスタ job"));
         assert!(reviewer.contains("`git status`"));
         assert!(!reviewer.contains("元のリポジトリの作業ツリーは触らないでください"));
+    }
+
+    /// ADR-0090 D2: master 越しの 1 コマンドは stdout / stderr を先頭から丸ごと返し、exit 255 は接続の失敗。
+    #[test]
+    fn remote_command_returns_the_whole_output_and_treats_255_as_a_connection_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = fake_ssh_probe(
+            dir.path(),
+            "#!/bin/sh\nprintf 'Job Id: 1.pbs\\n    job_state = F\\n'\necho 'qstat: Unknown Job Id 2.pbs' >&2\nexit 153\n",
+        );
+        let out =
+            run_remote_command_blocking(&ok, "sirius", "qstat -xf 1 2", Duration::from_secs(10))
+                .expect("ran");
+        assert_eq!(out.exit, Some(153));
+        assert!(out.stdout.contains("job_state = F"), "{out:?}");
+        assert!(out.stderr.contains("Unknown Job Id 2.pbs"), "{out:?}");
+        let dir = tempfile::tempdir().unwrap();
+        let down = fake_ssh_probe(
+            dir.path(),
+            "#!/bin/sh\necho 'mux_client: no master' >&2\nexit 255\n",
+        );
+        let err =
+            run_remote_command_blocking(&down, "sirius", "qstat -xf 1", Duration::from_secs(10))
+                .expect_err("255 is a connection failure");
+        assert!(err.contains("exit 255"), "{err}");
     }
 
     // ---- ADR-0062 A（Phase 107）: 実通信 probe（`ssh -o BatchMode=yes <host> -- true`） ----

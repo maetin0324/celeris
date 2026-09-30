@@ -309,6 +309,9 @@ pub fn rebuild_work_units_and_runs(
                         "decision" => Some(WorkUnitBlockedReason::Decision),
                         // ADR-0079 Phase R2b: 子の基盤の失敗が自動の作り直しでも続いた（障害通知済み）。
                         "child_infra_failed" => Some(WorkUnitBlockedReason::Infra),
+                        // ADR-0090 D2: unit の run がクラスタ job を待つ（v1 の上限切れは人への質問）。
+                        "cluster_jobs" => Some(WorkUnitBlockedReason::ClusterJobs),
+                        "cluster_jobs_timed_out" => Some(WorkUnitBlockedReason::Question),
                         _ => wu.blocked_reason,
                     }
                 } else {

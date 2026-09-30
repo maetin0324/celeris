@@ -1271,14 +1271,16 @@ fn tree_plan_shape_section(
          accepted on its own but small enough for one run. celeris does not override an explicit gate.\n\
          **A unit that cannot fit in a leaf must be declared as a child task{} or raised as a decision — never \
          squeezed into a leaf.** celeris re-gates every leaf when it adopts the plan (a leaf that is too \
-         large becomes a child task) and records any disagreement with your declaration.\n\n",
+         large becomes a child task) and records any disagreement with your declaration.\n\
+         {}\n\n",
         l.work_unit_max_turns,
         l.work_unit_max_wall_secs,
         if tree.remaining_depth >= 1 {
             ""
         } else {
             " (not possible at this depth)"
-        }
+        },
+        CLUSTER_JOB_PLANNER_GUIDANCE,
     ));
 
     out.push_str(&format!(
@@ -1633,6 +1635,15 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push_str(&result_json_instructions(artifacts));
     out
 }
+
+/// ADR-0090 D5: planner の leaf の基準に足す 1 段落（数時間かかるクラスタ job の扱い）。
+pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm, ADR-0090)**: a unit that \
+     submits jobs that run for hours is still one unit — its run submits the jobs and ends with a `wait` \
+     (`{\"type\":\"wait\",\"kind\":\"cluster_job\",...}` in result.json); celeris polls the scheduler and resumes \
+     the same unit as a continuation run when the jobs finish, and that run collects the results. Do not \
+     split \"submit\" and \"collect\" into separate units and do not budget the unit for the job's wall time. \
+     An acceptance check may require the jobs to have finished successfully (for example \"all PBS jobs are \
+     F with Exit_status 0\" verified from the scheduler or the job logs).";
 
 /// `artifacts/result.json`（ADR-0006 D3）。
 #[derive(Debug, Deserialize)]
@@ -2530,9 +2541,15 @@ async fn terminal_from_result(
         }
     };
 
+    // ADR-0090 D1: クラスタ job の終了待ち（`question` が無ければ `summary` より優先）。
+    if let Some(terminal) =
+        crate::adapter::result_file_wait(&text, usage_with_cost(last_result.usage, model))
+    {
+        return (terminal, None);
+    }
     let terminal = match serde_json::from_str::<ResultFile>(&text) {
         Ok(rf) => {
-            // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。
+            // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`（ADR-0090: `wait` は `summary` の前）。
             if let Some(question) = rf.question {
                 Terminal::Question { text: question }
             } else if let Some(summary) = rf.summary {
@@ -2874,6 +2891,7 @@ mod tests {
                     "next_action": "do B",
                 }),
                 prior_runs: vec!["Run #1 budget_exhausted(turns)".into()],
+                cluster_jobs: None,
             }),
             ..RunContext::default()
         };
@@ -3558,6 +3576,79 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
                 assert_eq!(usage.input_tokens, Some(10));
             }
             other => panic!("expected yielded, got {other:?}"),
+        }
+    }
+
+    /// ADR-0090 D1: `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` が `Terminal::Waiting` になり、
+    /// 生の JSONL の `result.json`（run ディレクトリ）にも `{"type":"wait",...}` の 1 行が残る。不正な wait は
+    /// `Error{retryable: true}`、`question` は wait より優先する。
+    #[tokio::test]
+    async fn result_wait_becomes_terminal_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = stub_claude(
+            dir.path(),
+            r#"mkdir -p artifacts
+printf '%s' '{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634","42635"],"scheduler":"pbs","poll_secs":300,"timeout_secs":43200,"checkpoint":{"completed":["submitted"],"next_action":"collect"},"summary":"submitted 2 jobs"}' > artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
+"#,
+        );
+        let adapter = ClaudeCodeAdapter::new(config);
+        let req = sample_req(dir.path().to_path_buf());
+        let sink = RecordingSink::default();
+        let outcome = adapter
+            .run(req, "run-wait", default_limits(), &sink)
+            .await
+            .unwrap();
+        match outcome.terminal {
+            Terminal::Waiting {
+                request,
+                checkpoint,
+                usage,
+            } => {
+                assert_eq!(request.cluster.as_deref(), Some("sirius"));
+                assert_eq!(request.jobs, vec!["42634".to_string(), "42635".to_string()]);
+                assert_eq!(
+                    request.scheduler,
+                    task_core::cluster_job::ClusterScheduler::Pbs
+                );
+                assert_eq!(request.poll_secs, Some(300));
+                assert_eq!(request.timeout_secs, Some(43200));
+                assert_eq!(request.summary, "submitted 2 jobs");
+                assert_eq!(checkpoint.expect("checkpoint")["next_action"], "collect");
+                assert_eq!(usage.expect("usage").input_tokens, Some(10));
+            }
+            other => panic!("expected waiting, got {other:?}"),
+        }
+        let raw = std::fs::read_to_string(dir.path().join("runs/run-wait/result.json")).unwrap();
+        let line: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(line["type"], "wait");
+        assert_eq!(line["jobs"][1], "42635");
+
+        // 不正な wait（job id にシェルの文字）は retryable な error。
+        let dir = tempfile::tempdir().unwrap();
+        let config = stub_claude(
+            dir.path(),
+            r#"mkdir -p artifacts
+printf '%s' '{"type":"wait","kind":"cluster_job","jobs":["1;rm"]}' > artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false}'
+"#,
+        );
+        let adapter = ClaudeCodeAdapter::new(config);
+        let outcome = adapter
+            .run(
+                sample_req(dir.path().to_path_buf()),
+                "run-bad-wait",
+                default_limits(),
+                &sink,
+            )
+            .await
+            .unwrap();
+        match outcome.terminal {
+            Terminal::Error { message, retryable } => {
+                assert!(retryable);
+                assert!(message.contains("invalid cluster job wait"), "{message}");
+            }
+            other => panic!("expected error, got {other:?}"),
         }
     }
 

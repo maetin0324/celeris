@@ -162,12 +162,36 @@ pub fn consecutive_continuations(events: &[(u64, Event)]) -> u32 {
         if let Event::Transitioned { reason, .. } = ev {
             match reason.as_str() {
                 "continue" => n += 1,
-                "dispatch" => {}
+                // ADR-0090 D1: クラスタ job の wait とその再開は数えず、窓も切らない（`dispatch` と同じ）。
+                "dispatch"
+                | task_core::cluster_job::REASON_WAITING
+                | task_core::cluster_job::REASON_RESUME => {}
                 _ => break,
             }
         }
     }
     n
+}
+
+/// ADR-0090 D1: 進捗の比較に使う直近の checkpoint（[`latest_checkpoint`] から、クラスタ job の wait で止めた run の
+/// checkpoint〈`end = waiting`〉を除いたもの）。wait の checkpoint は job を投げただけの時点なので、続きの run の
+/// 進捗の基準にしない。
+pub fn latest_progress_checkpoint(
+    events: &[(u64, Event)],
+    work_unit_id: Option<&str>,
+) -> Option<task_core::Checkpoint> {
+    events.iter().rev().find_map(|(_, ev)| match ev {
+        Event::CheckpointSaved {
+            work_unit_id: wu,
+            checkpoint,
+            ..
+        } if wu.as_deref() == work_unit_id
+            && checkpoint.end != task_core::CheckpointEnd::Waiting =>
+        {
+            Some((**checkpoint).clone())
+        }
+        _ => None,
+    })
 }
 
 /// ADR-0072 D5/D8（Phase E1/E2）: 直近の `Event::CheckpointSaved` の checkpoint（無ければ `None`）。
@@ -211,6 +235,8 @@ pub fn no_progress_streak(events: &[(u64, Event)], work_unit_id: Option<&str>) -
             ..
         } = ev
             && wu.as_deref() == work_unit_id
+            // ADR-0090 D1: クラスタ job の wait で止めた run の checkpoint は数えない（基準にもしない）。
+            && checkpoint.end != task_core::CheckpointEnd::Waiting
         {
             let in_window = *seq >= window_start_seq;
             if in_window && !baseline_reset {
@@ -952,6 +978,36 @@ mod tests {
             consecutive_continuations(&with_answer),
             1,
             "answer 以降だけを数える"
+        );
+    }
+
+    /// ADR-0090 D1: クラスタ job の wait とその再開は continuation に数えず、窓も切らない。wait の checkpoint は
+    /// 進捗なしの窓・進捗の基準から外す。
+    #[test]
+    fn cluster_job_waits_do_not_count_as_continuations_or_progress_checkpoints() {
+        let events: Vec<(u64, Event)> = vec![
+            (0, transitioned("continue")),
+            (1, transitioned("dispatch")),
+            (2, transitioned(task_core::cluster_job::REASON_WAITING)),
+            (3, transitioned(task_core::cluster_job::REASON_RESUME)),
+            (4, transitioned("dispatch")),
+        ];
+        assert_eq!(consecutive_continuations(&events), 1);
+
+        let mut waiting = checkpoint_saved("r2", 1, 1, "h");
+        if let Event::CheckpointSaved { checkpoint, .. } = &mut waiting {
+            checkpoint.end = task_core::CheckpointEnd::Waiting;
+        }
+        let events: Vec<(u64, Event)> = vec![(0, checkpoint_saved("r1", 1, 1, "h")), (1, waiting)];
+        // 同じ中身の checkpoint が続いても、wait の checkpoint は「進捗なし」に数えない。
+        assert_eq!(no_progress_streak(&events, None), 0);
+        assert_eq!(
+            latest_progress_checkpoint(&events, None).map(|c| c.run_id),
+            Some("r1".to_string())
+        );
+        assert_eq!(
+            latest_checkpoint(&events, None).map(|c| c.run_id),
+            Some("r2".to_string())
         );
     }
 

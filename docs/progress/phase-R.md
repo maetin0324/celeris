@@ -1490,3 +1490,83 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 - `pending` の版の間に持ち越しの leaf が終わって段階の統合の条件を満たす形（起きない見込み）と、人の gate の間の子の基盤の失敗の作り直しは
   止めていない（付記の「残したもの」）。
 - 木の上限（`max_tree_replans`）は人の replan の依頼にも効く（D3 は節点の `max_replans` だけ）。
+
+## R7-1: クラスタ job（PBS / Slurm）の durable wait（2026-09-30）
+
+[ADR-0090](../adr/0090-durable-wait-for-cluster-jobs.md)。発端は上の 05:16Z / 05:38Z（BenchFS の実験の子が PBS の job が Q / R のまま review で
+2 回落ち、根の replan で作り直される churn）。**migration 0034 = schema 34（昇格は stop → start）**。本番（systemctl・/var/lib/celeris・
+7700/7710・設定・クラスタへの ssh）には触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-aedd855ab98306cc9`。
+
+### 実装したもの
+
+- **D1 protocol**: `result.json` の `{"type": "wait", "kind": "cluster_job", "cluster", "jobs", "scheduler": "pbs"|"slurm", "poll_secs",
+  "timeout_secs", "checkpoint", "summary"}`（入れ子の `{"wait": {...}}` も）。`task_core::cluster_job::parse_wait_request`（job id は
+  `[A-Za-z0-9._-[]]`、1〜64 件）、`Terminal::Waiting`（claude-code / codex / acp / aider / subprocess の直接プロトコル `WorkerMessage::Wait`）、
+  優先順位 `question` > `wait` > `summary` > `yield`、不正な wait は `error(retryable)`。`RunEnd::Waiting` / `RunIndexStatus::Waiting` /
+  `CheckpointEnd::Waiting`。continuation の回数・進捗なし・attempts に数えない（`consecutive_continuations` は `waiting_for_cluster_jobs` /
+  `cluster_job_resume` を読み飛ばす、`no_progress_streak` と `latest_progress_checkpoint` は wait の checkpoint を除く）。
+- **D2 daemon**: `cluster_job_waits`（events が正本、`cluster_job::apply_event_tx` で event と同じトランザクション）。atomic の run は
+  `Trigger::ClusterJobWait`（`running → blocked`、lease 解放）、v2 / v3 の unit は `blocked(cluster_jobs)`（兄弟は止めない:
+  `runnable_work_units` / `settle_phase` / liveness は `decision` と同じ扱い）、v1 の unit は task ごと待つ。tick の `poll_cluster_job_waits` が
+  `poll_secs` に高々 1 回 `setup` の後に `qstat -xf`（Slurm は `sacct -n -P -X`）を `ssh -o BatchMode=yes <host> -- …` で OS スレッドに流し
+  （`task_worker::run_remote_command_blocking`、フック `ClusterJobPoller`、本番は `wire_cluster_liveness_hooks` が挿す）、状態が変わったら
+  `ClusterJobWaitPolled`、すべて F（または scheduler が `Unknown Job Id`）で `satisfied` と `cluster_job_resume` / unit `needs_continuation`。
+  続きの run の前置きに「クラスタ job の結果」節（job ごとの最終状態と Exit_status・回収の指示。`ContinuationContext.cluster_jobs`）。
+  上限で `timed_out`: atomic は `blocked` のまま人への質問（延長／job の取り消し／取り下げ）、v2 / v3 の unit は続きの run に回して前置きで人に
+  聞かせる。task の終端で `cancelled`（qdel しない）。`waiting` の間は一般の回答で戻せない（`cluster_job_wait_pending`）、受信箱の質問にも出ない。
+- **D3 events**: `ClusterJobWaitStarted` / `ClusterJobWaitPolled` / `ClusterJobWaitFinished{state}`。`EVENT_TYPES` 45 → 48。replay の
+  `cluster_jobs` / `cluster_jobs_timed_out` の blocked 理由。
+- **D4**: 生存確認は `cluster_jobs`（名指しの待ち）。run は `runs.status = waiting` で閉じる（R6-1 の照合の対象外）。reviewer は続きの run の後。
+- **D5**: `ssh::remote_exec_instructions` の末尾と /3 planner の leaf の基準に 1 段落。`TaskDetail.cluster_job_wait`（`ClusterJobWaitView`）と
+  GUI の task のページの 1 行「クラスタ job を待っています: 42634 (R) 42635 (Q)」（`ClusterJobWaitBanner`）、`RUN_END_LABEL.waiting`。
+- **D7**: `[[clusters]] job_wait = { poll_secs = 300, max_wait_secs = 86400 }`（`poll_secs >= 30`、`poll_secs <= max_wait_secs <= 14 日`）。
+  `config/celeris.clusters.example.toml`、`docs/celeris-api-v1.md`。
+
+### 試験（すべて偽のアダプタ・偽の poll・一時ディレクトリ。外部ネットワーク・ssh に出ない）
+
+- `task_core::cluster_job::tests`: `pbs_qstat_xf_is_parsed_per_job`（Q / R / F・Exit_status 0 / 271・`Unknown Job Id` → gone、折り返しのある
+  実際の形）、`pbs_job_missing_from_the_output_is_unknown_not_finished`、`slurm_sacct_is_parsed`、`poll_commands_only_carry_valid_ids`、
+  `wait_requests_are_parsed_in_both_shapes`、`limits_clamp_and_validate`、`events_project_into_the_table_and_terminal_transitions_cancel`、
+  `a_satisfied_wait_resumes_the_task`、`migration_0034_adds_cluster_job_waits_to_a_schema_33_db`。
+- `task_worker`: `claude_code::tests::result_wait_becomes_terminal_waiting`（result.json の `wait` の解析・不正な wait）、
+  `preamble::tests::continuation_section_carries_the_cluster_job_results`、`ssh::tests::remote_command_returns_the_whole_output_and_treats_255_as_a_connection_failure`、
+  `worker_and_reviewer_instructions_share_the_remote_exec_usage`（段落）。
+- `task_dispatch::dispatcher::tests::cluster_job_wait`: `a_wait_parks_the_task_polls_and_resumes_as_a_continuation`（開く → poll の状態の変化だけ
+  event → `poll_secs` に高々 1 回 → satisfied → continuation の前置きに job の結果 → done、attempts 0、replay 差分 0）、
+  `a_timed_out_wait_asks_a_human_and_the_answer_resumes`、`cancelling_a_waiting_task_cancels_the_wait_without_qdel`、
+  `a_wait_on_an_unknown_cluster_is_a_retryable_failure`、`a_leaf_unit_waits_alone_and_liveness_names_the_wait`（v3 の leaf、兄弟は走る、
+  600 秒を超えても StallDetected なし、satisfied → 続きの run → 統合 → done、replay 差分 0）。`execution_scheduler::tests::a_waiting_run_blocks_the_unit_on_cluster_jobs`。
+- `task_core::tree::tests::cluster_job_waits_are_named_waits`、`task_ops::derive::tests::cluster_job_waits_do_not_count_as_continuations_or_progress_checkpoints`、
+  `task_api::query::tests::cluster_job_wait_event_types_match_their_serde_names`（48 語）、`celeris::config::tests::cluster_job_wait_defaults_and_validation`、
+  GUI `test/unit/cluster-job-wait.test.tsx`。
+
+### gate（2026-09-30）
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告 0）。
+- `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema` → `docs/api/v1/{api-v1,event}.schema.json`・
+  `docs/protocol/{worker-protocol,checkpoint}.schema.json` を更新（その後の通常の試験で drift なし）。
+- `cargo nextest run -p task-core -p task-ops -p task-dispatch -j 6` → 1385 passed / 0 failed。
+- `cargo nextest run -p task-api -p task-worker -j 6` → 1014 passed / 0 failed（6 skipped）。
+- `cargo nextest run -p celeris -p celerisctl -p celeris-mcp -p celeris-credentiald -p llm-proxy -p scratch-cache -j 4` → 496 passed / 0 failed（1 skipped）。
+- GUI: `corepack pnpm@11.27.0 -C gui gen:types` → `app/celeris/types.ts` 更新、`typecheck` → exit 0、`test` → 82 files / 1225 tests passed、`lint` → 0 error。
+
+### 逸脱
+
+- v2 / v3 の unit の wait が上限を過ぎたときは、木の決定・task の `blocked` にせず、unit を続きの run に戻して前置きで人に聞かせる（task を
+  `blocked` にすると兄弟の run の後段が壊れる。木でない /2 にも同じ規則で効かせるため）。atomic と v1 は依頼どおり worker_question。
+- local の task も、wait のクラスタを明示すれば待てる（手元から ssh で投げた job。試験もこの形で daemon の全経路を通す）。remote の task は自分の
+  クラスタだけ。
+- Slurm は stub ではなく `sacct` の解析まで実装した（実機の Slurm クラスタでは未確認）。
+- ビルドの途中で共有 LVM が 100% になり（他の worktree の target 30 GB と自分の 44 GB）、`celeris` の試験 4 件が dispatcher の disk gate で
+  落ちた（task が dispatch されない）。自分の target を消して作り直し、再実行で 0 failed。他の worktree の target には触っていない。
+
+### 未解決・昇格後に人がすること
+
+- **schema 34**: 昇格は stop → start（旧いバイナリは `SchemaTooNew` で開けない。verify の N-1 は `live_ok = false` になる）。rollback は
+  `--restore-db`（`scripts/selfdeploy/rollback.sh`）。
+- `job_wait` を本番の設定に書くのは昇格の後（既定のままなら書かなくてよい: 300 秒 / 24 時間）。
+- 実機確認（人か、sirius の master がある環境）: BenchFS の実験の子で worker が `wait` を書き、`GET /tasks/{id}` の `cluster_job_wait` と
+  GUI の 1 行が出ること、`journalctl` に `cluster job states changed` / `cluster jobs finished; resuming` が出て続きの run が回収すること。
+- PBS の job history（`qstat -x`）が無効なクラスタでは終わった job の終了コードが取れない（`gone`）。sirius の設定を実機で確かめる。
+- v1 の unit の上限切れの回答の後の run には job の結果の節が出ない（ADR-0090「残したもの」）。

@@ -81,7 +81,8 @@ pub(crate) fn terminal_report(result: &Result<RunOutcome, AdapterError>) -> Opti
         // ADR-0072 D9/D11（Phase E1）: yield / 予算切れは `Continue` で続くので、この時点では
         // 「タスクの終端状態」に至っていない（bad_news/result の材料にしない）。
         Ok(RunOutcome {
-            terminal: Terminal::Yielded { .. } | Terminal::BudgetExhausted { .. },
+            terminal:
+                Terminal::Yielded { .. } | Terminal::BudgetExhausted { .. } | Terminal::Waiting { .. },
             ..
         }) => None,
         Err(_) => None,

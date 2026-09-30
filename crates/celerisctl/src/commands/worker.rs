@@ -715,6 +715,25 @@ fn normalize_outcome(result: Result<RunOutcome, AdapterError>) -> (WorkerMessage
                 },
                 4,
             ),
+            // ADR-0090 D1: 単発の CLI 呼び出しは job を待たない（daemon の仕組み）。wait の行を出して exit 0。
+            Terminal::Waiting {
+                request,
+                checkpoint,
+                usage,
+            } => (
+                WorkerMessage::Wait {
+                    kind: task_core::cluster_job::WAIT_KIND_CLUSTER_JOB.to_string(),
+                    cluster: request.cluster,
+                    scheduler: Some(request.scheduler),
+                    jobs: request.jobs,
+                    poll_secs: request.poll_secs,
+                    timeout_secs: request.timeout_secs,
+                    checkpoint,
+                    summary: request.summary,
+                    usage,
+                },
+                0,
+            ),
         },
         Err(e) => {
             let provider_failure = match &e {
@@ -928,6 +947,7 @@ mod tests {
             master_launcher: "auto".into(),
             keepalive_secs: 0,
             liveness_probe_secs: 0,
+            job_wait: Default::default(),
             control_persist: "yes".into(),
         }
     }

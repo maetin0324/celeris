@@ -1,11 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
+import { ProjectsListScreen } from "../features/projects/project-list-screen";
+import { optionalBoolean } from "../lib/search";
 
-// R09 /projects（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
+// R09 /projects（P4-01）。
 export const Route = createFileRoute("/projects/")({
+  validateSearch: (search: Record<string, unknown>): { archived?: boolean } => ({
+    archived: optionalBoolean(search.archived),
+  }),
   component: Screen,
 });
 
 function Screen() {
-  return <ScreenFrame title="案件" route="/projects" />;
+  const search = Route.useSearch();
+  return <ProjectsListScreen archived={search.archived === true} />;
 }

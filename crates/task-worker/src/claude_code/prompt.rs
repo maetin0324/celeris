@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// ADR-0090 D5: planner の leaf の基準に足す 1 段落（数時間かかるクラスタ job の扱い）。
+pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm, ADR-0090)**: a unit that \
+     submits jobs that run for hours is still one unit — its run submits the jobs and ends with a `wait` \
+     (`{\"type\":\"wait\",\"kind\":\"cluster_job\",...}` in result.json); celeris polls the scheduler and resumes \
+     the same unit as a continuation run when the jobs finish, and that run collects the results. Do not \
+     split \"submit\" and \"collect\" into separate units and do not budget the unit for the job's wall time. \
+     An acceptance check may require the jobs to have finished successfully (for example \"all PBS jobs are \
+     F with Exit_status 0\" verified from the scheduler or the job logs).";
+
 /// ADR-0006 Phase 115 D1（本番障害 01M3915FARENW8M0JM11XVF6W0 / 01M38T8N17MEWPTJQXGX1TNYJD）:
 /// `work_dir`（実際の cwd）が `workspace` と異なる run（部署のリポジトリの git worktree で走るタスク）
 /// だけ、プロンプトの先頭に「cwd と成果物ディレクトリは別」の注意を 2 行足す。`result_json_instructions`

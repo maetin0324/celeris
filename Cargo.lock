@@ -2142,6 +2142,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "task-api",
  "task-core",
  "task-worker",
  "tempfile",

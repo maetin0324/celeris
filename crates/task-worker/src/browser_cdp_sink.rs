@@ -245,6 +245,10 @@ pub struct CdpController {
     redirect_seen: bool,
     /// ADR-0092: one guard per injected value, kept for the controller's (= session's) lifetime.
     guards: Vec<RedisplayGuard>,
+    /// Test-only (ADR-0089 A1): navigate the page after all checks and before the
+    /// broker's `Runtime.callFunctionOn` frame is written. Absent from production builds.
+    #[cfg(feature = "attack-test-hooks")]
+    retarget_before_sink: Option<String>,
 }
 
 impl CdpController {
@@ -259,7 +263,37 @@ impl CdpController {
             events: Vec::new(),
             redirect_seen: false,
             guards: Vec::new(),
+            #[cfg(feature = "attack-test-hooks")]
+            retarget_before_sink: None,
         }
+    }
+
+    /// Test-only (ADR-0089 A1): the next injection navigates its page session to `url`
+    /// after the controller's checks and before the broker's command reaches CDP.
+    #[cfg(feature = "attack-test-hooks")]
+    pub fn retarget_before_sink_for_test(&mut self, url: String) {
+        self.retarget_before_sink = Some(url);
+    }
+
+    #[cfg(feature = "attack-test-hooks")]
+    fn retarget_for_test(&mut self, url: &str, session: &str) -> Result<(), InjectionError> {
+        self.call("Page.navigate", json!({"url":url}), Some(session))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            let tree = self.call("Page.getFrameTree", json!({}), Some(session))?;
+            let ready = self.call(
+                "Runtime.evaluate",
+                json!({"expression":"document.readyState","returnByValue":true}),
+                Some(session),
+            );
+            if tree["result"]["frameTree"]["frame"]["url"] == url
+                && ready.is_ok_and(|r| r["result"]["result"]["value"] == "complete")
+            {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Err(InjectionError::SinkFailed)
     }
 
     pub fn open_auth_section(&mut self, id: String) {
@@ -499,6 +533,13 @@ impl CdpController {
             command.zeroize();
             return Err(InjectionError::SinkFailed);
         }
+        #[cfg(feature = "attack-test-hooks")]
+        if let Some(url) = self.retarget_before_sink.take()
+            && let Err(e) = self.retarget_for_test(&url, cdp_session)
+        {
+            command.zeroize();
+            return Err(e);
+        }
         self.write
             .write_all(&command)
             .map_err(|_| InjectionError::SinkFailed)?;
@@ -512,7 +553,15 @@ impl CdpController {
         let mut raw = serde_json::to_vec(&reply).map_err(|_| InjectionError::SinkFailed)?;
         send_packet(&controller_fd, &raw)?;
         raw.zeroize();
-        status?;
+        if status.is_err() {
+            // The broker has already consumed the lease; report its own verdict.
+            let receipt = pending.finish()?;
+            return Err(if receipt["ok"] == false {
+                broker_denial(&receipt)
+            } else {
+                InjectionError::TargetChanged
+            });
+        }
         let receipt = pending.finish()?;
         let typed: InjectionReply =
             serde_json::from_value(receipt.clone()).map_err(|_| InjectionError::SinkFailed)?;

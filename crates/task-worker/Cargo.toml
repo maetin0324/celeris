@@ -6,6 +6,9 @@ edition.workspace = true
 [features]
 # Test fixture only: permit a self-signed HTTPS certificate inside a private netns.
 h3-e2e-insecure-cert = []
+# Test fixture only: ADR-0089 A1 hook that retargets the page between the controller's
+# checks and the broker's CDP command. Enabled by this crate's own dev-dependency.
+attack-test-hooks = []
 
 [dependencies]
 task-core = { path = "../task-core" }
@@ -27,4 +30,5 @@ time = { version = "0.3", features = ["serde", "formatting"] }
 
 [dev-dependencies]
 tempfile = "3"
+task-worker = { path = ".", features = ["attack-test-hooks"] }
 celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }

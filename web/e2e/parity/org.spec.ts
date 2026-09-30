@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -82,6 +82,11 @@ test("parity: /org 木・選択・作成・変更・削除・skill", async ({ pa
     .toBe(true);
   await page.getByRole("button", { name: "review を表示" }).click();
   await expect(page.getByText("確認")).toBeVisible();
+  const beforeSkillChange = {
+    org: daemon.requests.filter((request) => request.path === "/api/v1/org").length,
+    skills: daemon.requests.filter((request) => request.path === "/api/v1/skills").length,
+    tasks: daemon.requests.filter((request) => request.path === "/api/v1/tasks").length,
+  };
   await page.getByRole("button", { name: "外す" }).click();
   await expect
     .poll(() => actions.some((item) => item.method === "DELETE" && item.url.endsWith("/api/org/cos/skills/review")))
@@ -92,10 +97,34 @@ test("parity: /org 木・選択・作成・変更・削除・skill", async ({ pa
     .poll(() => actions.some((item) => item.method === "POST" && item.url.endsWith("/api/org/cos/skills")))
     .toBe(true);
   expect(actions.find((item) => item.url.endsWith("/api/org/cos/skills"))?.body).toEqual({ skill: "hpc" });
+  await expect
+    .poll(() => daemon.requests.filter((request) => request.path === "/api/v1/org").length)
+    .toBeGreaterThan(beforeSkillChange.org);
+  await expect
+    .poll(() => daemon.requests.filter((request) => request.path === "/api/v1/skills").length)
+    .toBeGreaterThan(beforeSkillChange.skills);
+  expect(daemon.requests.filter((request) => request.path === "/api/v1/tasks").length).toBe(beforeSkillChange.tasks);
   await page.getByRole("button", { name: "部 · 運用部" }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("region", { name: "担当の編集" }).getByRole("button", { name: "削除" }).click();
   await expect
     .poll(() => actions.some((item) => item.method === "DELETE" && item.url.endsWith("/api/org/ops")))
     .toBe(true);
+});
+
+test("/org fixture screenshots", async ({ page }) => {
+  const out = process.env.WEB_SHOTS_OUT;
+  test.skip(!out, "WEB_SHOTS_OUT is required");
+  mkdirSync(out as string, { recursive: true });
+  for (const [name, route] of [
+    ["org", "/org"],
+    ["org-selected", "/org?selected=cos"],
+  ] as const) {
+    for (const width of [360, 390, 412, 1440]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(`${gateway.base}${route}`);
+      await expect(page.getByRole("heading", { level: 2, name: "組織の木" })).toBeVisible();
+      await page.screenshot({ path: path.join(out as string, `${name}-fixture-${width}.png`), fullPage: true });
+    }
+  }
 });

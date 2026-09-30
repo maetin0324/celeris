@@ -191,7 +191,7 @@ export function OrgScreen() {
                   {selected.brief && <p>{selected.brief}</p>}
                   {selected.genre && <p>分野: {selected.genre}</p>}
                   <a
-                    className="inline-flex min-h-11 items-center underline"
+                    className="inline-flex min-h-11 min-w-11 items-center underline"
                     href={`/org/${encodeURIComponent(selected.id)}`}
                   >
                     話す

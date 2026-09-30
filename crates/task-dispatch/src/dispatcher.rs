@@ -14419,6 +14419,128 @@ impl Dispatcher {
         Ok(out)
     }
 
+    /// ADR-0088 D2: browser fallback candidates for one run. Only providers that are enabled
+    /// (configured in the policy table with a non-zero concurrency, not an account pool), healthy
+    /// (not in cooldown) and whose adapter id is conformant in the runner-recorded ledger are
+    /// offered, ordered specialist first and one per adapter id. A `CredentialUse` policy never
+    /// falls back (credential waits and auth sections must not be replayed). When a browser task
+    /// ends up without any candidate the refusal is recorded as a progress event.
+    fn browser_fallback_candidates(
+        &self,
+        task_id: TaskId,
+        run_id: &str,
+        primary_provider: &ProviderId,
+        primary_adapter: &str,
+        record: Option<&std::path::Path>,
+    ) -> Vec<Arc<dyn WorkerAdapter>> {
+        let task = match self.store.get(task_id) {
+            Ok(Some(task)) => task,
+            _ => return Vec::new(),
+        };
+        if !task_core::browser::requests_browser(&task.skills) {
+            return Vec::new();
+        }
+        let credential_use = self
+            .store
+            .browser_task_policy_get(task_id)
+            .ok()
+            .flatten()
+            .is_some_and(|p| {
+                p.allowed_actions
+                    .contains(&task_core::BrowserAction::CredentialUse)
+            });
+        if credential_use {
+            self.record_browser_fallback_refusal(
+                task_id,
+                run_id,
+                "browser fallback refused: CredentialUse policy is never replayed on another backend",
+            );
+            return Vec::new();
+        }
+        let conformant = match record.map(task_worker::browser::conformant_backend_ids) {
+            Some(Ok(ids)) => Some(ids),
+            Some(Err(_)) | None => None,
+        };
+        let cooling: std::collections::HashSet<ProviderId> = self
+            .policy
+            .cooldowns(Instant::now())
+            .into_iter()
+            .map(|c| c.provider)
+            .collect();
+        let mut excluded: Vec<String> = Vec::new();
+        let mut candidates: Vec<(String, ProviderId, Arc<dyn WorkerAdapter>)> = Vec::new();
+        let mut providers: Vec<(&ProviderId, &Arc<dyn WorkerAdapter>)> =
+            self.adapters.iter().collect();
+        providers.sort_by(|a, b| a.0.cmp(b.0));
+        for (provider, adapter) in providers {
+            let id = adapter.id();
+            if provider == primary_provider
+                || id == primary_adapter
+                || !task_worker::browser::BROWSER_BACKEND_IDS.contains(&id)
+            {
+                continue;
+            }
+            let reason = if self.account_pool_providers.contains(provider)
+                || self.policy.concurrency_limit(provider.clone()) == 0
+            {
+                Some("disabled")
+            } else if cooling.contains(provider) {
+                Some("unhealthy")
+            } else if !conformant.as_ref().is_some_and(|ids| ids.contains(id)) {
+                Some("not_conformant")
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => excluded.push(format!("{provider}={reason}")),
+                None => candidates.push((id.to_string(), provider.clone(), Arc::clone(adapter))),
+            }
+        }
+        candidates.sort_by(|a, b| {
+            (a.0 != "browser-specialist", &a.0, &a.1).cmp(&(
+                b.0 != "browser-specialist",
+                &b.0,
+                &b.1,
+            ))
+        });
+        candidates.dedup_by(|a, b| a.0 == b.0);
+        if candidates.is_empty() {
+            let ledger = if conformant.is_some() {
+                "ledger loaded"
+            } else {
+                "ledger unavailable"
+            };
+            self.record_browser_fallback_refusal(
+                task_id,
+                run_id,
+                &format!(
+                    "browser fallback refused: no enabled, healthy, conformant alternate backend ({ledger}; excluded: [{}])",
+                    excluded.join(", ")
+                ),
+            );
+        }
+        candidates
+            .into_iter()
+            .map(|(_, _, adapter)| adapter)
+            .collect()
+    }
+
+    fn record_browser_fallback_refusal(&self, task_id: TaskId, run_id: &str, msg: &str) {
+        let ev = Event::WorkerProgress {
+            run_id: run_id.to_string(),
+            msg: msg.to_string(),
+            kind: None,
+            tool: None,
+            summary: None,
+            detail: None,
+            truncated: false,
+            error: false,
+        };
+        if let Err(e) = self.store.append_event(task_id, &ev) {
+            tracing::warn!(task_id = %task_id, error = %e, "failed to record the browser fallback refusal (ADR-0088 D2)");
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn spawn_worker(
         &self,
@@ -14437,6 +14559,15 @@ impl Dispatcher {
         container: ContainerDecision,
     ) -> JoinHandle<()> {
         let store = self.store.clone();
+        // ADR-0088 D2: the dispatcher builds the browser fallback list from provider state and
+        // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0088).
+        let browser_candidates = self.browser_fallback_candidates(
+            task_id,
+            &run_id,
+            &provider,
+            adapter.id(),
+            task_worker::browser::conformance_record_path().as_deref(),
+        );
         let tx = self.tx.clone();
         let lease = LeaseRenewal {
             ttl: self.config.idle_timeout + self.config.lease_grace,
@@ -14462,6 +14593,7 @@ impl Dispatcher {
             let result = run_worker(
                 store,
                 adapter,
+                browser_candidates,
                 task_id,
                 execution_tier,
                 dir,
@@ -16450,10 +16582,90 @@ fn worktree_marker(ws: &task_worker::TaskWorkspaces) -> task_ops::workspace::Wor
     }
 }
 
+/// `run_worker` が run ごとに adapter へ施す包み（ADR-0088 D1）。主 adapter と browser fallback
+/// 候補の両方に同じ値を使う。
+#[derive(Clone, Default)]
+struct RunAdapterPrep {
+    /// ADR-0075 D4 / G3-fix1: 外す env（継いだ sccache の族）と与える env（`CARGO_TARGET_DIR` など）。
+    /// `None` は `CARGO_TARGET_DIR` を与えない run（コンテナ・Remote・共有キャッシュ無効）。
+    env: Option<task_worker::scratch::CargoEnv>,
+    /// ADR-0043 D3: コンテナで走らせる run のプラン。
+    container: Option<task_worker::SharedPlan>,
+    /// ADR-0072 D14: planner run の `[execution.planner].permission_mode`。
+    permission_mode: Option<String>,
+}
+
+/// ADR-0088（docs/adr/0088-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
+/// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 除去 → env 設定 →
+/// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。tier ごとのモデルは
+/// 各 adapter（`TieredAdapter`）が同じ `req.task.worker_hint.tier` から run 時に解決する。
+/// 戻り値の `bool` は env（`CARGO_TARGET_DIR`）が実際に適用されたかどうか。
+fn prepare_run_adapter(
+    adapter: Arc<dyn WorkerAdapter>,
+    prep: &RunAdapterPrep,
+    task_id: TaskId,
+) -> (Arc<dyn WorkerAdapter>, bool) {
+    let (adapter, env_applied) = match &prep.env {
+        Some(env) => {
+            // ADR-0075 G3-fix1: 与えない sccache の族（daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*`）を先に外す。
+            // `env_remove` を持たないアダプタには `RUSTC_WRAPPER` などを空の値で上書きして代える（cargo は空を未設定と扱う）。
+            let (adapter, set) = if env.remove.is_empty() {
+                (adapter, env.set.clone())
+            } else {
+                match adapter.with_env_removed(&env.remove) {
+                    Some(wrapped) => (wrapped, env.set.clone()),
+                    None => {
+                        tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env_removed; overriding RUSTC_WRAPPER with an empty value (ADR-0075 G3-fix1)");
+                        let set = env.set_with_empty_wrappers();
+                        (adapter, set)
+                    }
+                }
+            };
+            match adapter.with_env(&set) {
+                Some(wrapped) => (wrapped, true),
+                None => {
+                    tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
+                    (adapter, false)
+                }
+            }
+        }
+        None => (adapter, false),
+    };
+    // ADR-0043 D3（Phase 56）: コンテナで走らせる run は、ここでアダプタを包んだ複製に差し替える
+    // （差し込み点はアダプタ側の `container::wrap` 1 か所）。この経路を持たないアダプタ
+    // （`with_container` が `None`）はホストのまま走る。
+    let adapter = match &prep.container {
+        Some(plan) => match adapter.with_container(Arc::clone(plan)) {
+            Some(wrapped) => wrapped,
+            None => {
+                tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support containers; running on the host");
+                adapter
+            }
+        },
+        None => adapter,
+    };
+    // ADR-0072 D14（Phase E4b 項目3）: planner run（`permission_mode` が `Some`）は
+    // `[execution.planner].permission_mode` を実際の CLI 引数として反映する。対応しないアダプタ
+    // （`with_permission_mode` が `None` を返す）はアダプタ既定の permission-mode のまま走る
+    // （E3 実装時の既定の動作と同じ。実害は無い）。
+    let adapter = match &prep.permission_mode {
+        Some(mode) if !mode.is_empty() => match adapter.with_permission_mode(mode) {
+            Some(wrapped) => wrapped,
+            None => {
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), %mode, "adapter does not support with_permission_mode; planner permission_mode was not applied (ADR-0072 D14)");
+                adapter
+            }
+        },
+        _ => adapter,
+    };
+    (adapter, env_applied)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_worker(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
+    browser_candidates: Vec<Arc<dyn WorkerAdapter>>,
     task_id: TaskId,
     execution_tier: task_core::Tier,
     dir: PathBuf,
@@ -16862,62 +17074,22 @@ async fn run_worker(
             Some((dir, env))
         }
     };
-    let adapter = if let Some((target, env)) = target {
-        // ADR-0075 G3-fix1: 与えない sccache の族（daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*`）を先に外す。
-        // `env_remove` を持たないアダプタには `RUSTC_WRAPPER` などを空の値で上書きして代える（cargo は空を未設定と扱う）。
-        let (adapter, set) = if env.remove.is_empty() {
-            (adapter, env.set)
-        } else {
-            match adapter.with_env_removed(&env.remove) {
-                Some(wrapped) => (wrapped, env.set),
-                None => {
-                    tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env_removed; overriding RUSTC_WRAPPER with an empty value (ADR-0075 G3-fix1)");
-                    let set = env.set_with_empty_wrappers();
-                    (adapter, set)
-                }
-            }
-        };
-        match adapter.with_env(&set) {
-            Some(wrapped) => {
-                // request.json（監査）に実際に与えた値を残す。
-                req.cargo_target_dir = Some(target);
-                wrapped
-            }
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
-                adapter
-            }
-        }
-    } else {
-        adapter
+    // ADR-0088 D1: 主 adapter と browser fallback 候補は同じ `prepare_run_adapter` で包む
+    // （`self.adapters` の生の entry を `run_with_candidates` に渡さない）。
+    let prep = RunAdapterPrep {
+        env: target.as_ref().map(|(_, env)| env.clone()),
+        container: container_plan.clone(),
+        permission_mode: planner_permission_mode.clone(),
     };
-    // ADR-0043 D3（Phase 56）: コンテナで走らせる run は、ここでアダプタを包んだ複製に差し替える
-    // （差し込み点はアダプタ側の `container::wrap` 1 か所）。この経路を持たないアダプタ
-    // （`with_container` が `None`）はホストのまま走る。
-    let adapter = match &container_plan {
-        Some(plan) => match adapter.with_container(Arc::clone(plan)) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support containers; running on the host");
-                adapter
-            }
-        },
-        None => adapter,
-    };
-    // ADR-0072 D14（Phase E4b 項目3）: planner run（`extras.planner_permission_mode` が `Some`）は
-    // `[execution.planner].permission_mode` を実際の CLI 引数として反映する。対応しないアダプタ
-    // （`with_permission_mode` が `None` を返す）はアダプタ既定の permission-mode のまま走る
-    // （E3 実装時の既定の動作と同じ。実害は無い）。
-    let adapter = match &planner_permission_mode {
-        Some(mode) if !mode.is_empty() => match adapter.with_permission_mode(mode) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), %mode, "adapter does not support with_permission_mode; planner permission_mode was not applied (ADR-0072 D14)");
-                adapter
-            }
-        },
-        _ => adapter,
-    };
+    let (adapter, env_applied) = prepare_run_adapter(adapter, &prep, task_id);
+    if env_applied {
+        // request.json（監査）に実際に与えた値を残す。
+        req.cargo_target_dir = target.map(|(dir, _)| dir);
+    }
+    let browser_candidates: Vec<Arc<dyn WorkerAdapter>> = browser_candidates
+        .into_iter()
+        .map(|candidate| prepare_run_adapter(candidate, &prep, task_id).0)
+        .collect();
     // ADR-0054 D1（Phase 67）: `run_worker` を通る run で継続セッションを持てるのは CoS の対話 run
     // だけ（部門長のレビュー run は `review.rs` の別経路。`run_extras` の `is_cos_conversation` と同じ
     // 判定で `extras.session` が埋まるので、ここでは `req.context.session` の有無だけを見ればよい）。
@@ -16952,7 +17124,15 @@ async fn run_worker(
             "browser capability currently requires a local host run".into(),
         ))
     } else {
-        task_worker::browser::run(adapter, req, run_id, limits, &sink).await
+        task_worker::browser::run_with_candidates(
+            adapter,
+            browser_candidates,
+            req,
+            run_id,
+            limits,
+            &sink,
+        )
+        .await
     };
     // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）: run が成功したら未申告の成果物を登録する。
     // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
@@ -21865,6 +22045,7 @@ mod tests {
         run_worker(
             store,
             done_adapter(),
+            Vec::new(),
             task_id,
             Tier::Standard,
             dir,
@@ -23682,6 +23863,515 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("approval child was not created for task {task_id}");
+    }
+
+    // ---- ADR-0088: browser fallback 候補の run ごとの準備 ----
+
+    /// `prepare_run_adapter` が施した包みを run 時に記録するテスト用アダプタ。
+    #[derive(Clone)]
+    struct PrepRecorder {
+        id: &'static str,
+        env: Vec<(String, String)>,
+        removed: Vec<String>,
+        mode: Option<String>,
+        model: Option<String>,
+        seen: Arc<StdMutex<Vec<PrepSeen>>>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct PrepSeen {
+        env: Vec<(String, String)>,
+        removed: Vec<String>,
+        mode: Option<String>,
+        model: Option<String>,
+        tier: Tier,
+    }
+
+    #[async_trait]
+    impl WorkerAdapter for PrepRecorder {
+        fn id(&self) -> &str {
+            self.id
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            _run_id: &str,
+            _limits: RunLimits,
+            _sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            self.seen.lock().unwrap().push(PrepSeen {
+                env: self.env.clone(),
+                removed: self.removed.clone(),
+                mode: self.mode.clone(),
+                model: self.model.clone(),
+                tier: req.task.worker_hint.tier,
+            });
+            Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "ok".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            })
+        }
+        fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+            Some(Arc::new(Self {
+                model: Some(model.into()),
+                ..self.clone()
+            }))
+        }
+        fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
+            Some(Arc::new(Self {
+                mode: Some(mode.into()),
+                ..self.clone()
+            }))
+        }
+        fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+            let mut env = self.env.clone();
+            env.extend(extra.iter().cloned());
+            Some(Arc::new(Self {
+                env,
+                ..self.clone()
+            }))
+        }
+        fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
+            let mut removed = self.removed.clone();
+            removed.extend(keys.iter().cloned());
+            Some(Arc::new(Self {
+                removed,
+                ..self.clone()
+            }))
+        }
+    }
+
+    struct PrepNullSink;
+    impl EventSink for PrepNullSink {
+        fn progress(&self, _msg: &str) {}
+        fn artifact(&self, _artifact: &ArtifactRef) {}
+    }
+
+    /// `self.adapters` の entry と同じく `TieredAdapter` で包んだ記録アダプタ。
+    fn prep_tiered(
+        id: &'static str,
+        seen: &Arc<StdMutex<Vec<PrepSeen>>>,
+    ) -> Arc<dyn WorkerAdapter> {
+        use task_core::model_routing::ModelBinding;
+        Arc::new(task_worker::tiered::TieredAdapter {
+            base: Arc::new(PrepRecorder {
+                id,
+                env: Vec::new(),
+                removed: Vec::new(),
+                mode: None,
+                model: None,
+                seen: Arc::clone(seen),
+            }),
+            models: [
+                (Tier::Frontier, "frontier-id"),
+                (Tier::Standard, "standard-id"),
+            ]
+            .into_iter()
+            .map(|(tier, id)| {
+                (
+                    tier,
+                    ModelBinding {
+                        name: id.into(),
+                        model_id: Some(id.into()),
+                        unavailable_reason: None,
+                        reasoning_effort: None,
+                    },
+                )
+            })
+            .collect(),
+            account_id: None,
+            credential_error: None,
+        })
+    }
+
+    async fn prep_run_both(prep: &RunAdapterPrep, tier: Tier) -> (bool, bool, Vec<PrepSeen>) {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let task_id = TaskId::new();
+        let (primary, primary_env) =
+            prepare_run_adapter(prep_tiered("claude-code", &seen), prep, task_id);
+        let (candidate, candidate_env) =
+            prepare_run_adapter(prep_tiered("acp", &seen), prep, task_id);
+        let mut task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: ":".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        task.worker_hint.tier = tier;
+        let req = RunRequest {
+            cargo_target_dir: None,
+            protocol: PROTOCOL_VERSION,
+            task,
+            workspace: dir.path().to_path_buf(),
+            work_dir: None,
+            artifacts_dir: dir.path().join("artifacts"),
+            context: RunContext::default(),
+        };
+        let limits = RunLimits {
+            wall_clock: Duration::from_secs(5),
+            idle_timeout: Duration::from_secs(5),
+            kill_grace: Duration::from_millis(10),
+        };
+        for adapter in [primary, candidate] {
+            adapter
+                .run(req.clone(), "run1", limits, &PrepNullSink)
+                .await
+                .unwrap();
+        }
+        let seen = seen.lock().unwrap().clone();
+        (primary_env, candidate_env, seen)
+    }
+
+    // ADR-0088 D2: these tests start with the dispatcher's candidate selection, then exercise the
+    // worker supervisor with exactly that list. The ledger is a test fixture, not certification.
+    fn browser_fallback_test_ledger(dir: &Path, ids: &[&str]) -> PathBuf {
+        let path = dir.join("conformance.json");
+        let cases = [
+            "open_allowed_origin",
+            "refuse_denied_origin",
+            "resume_after_crash",
+            "snapshot_has_refs",
+            "click_by_ref",
+            "screenshot_artifact",
+            "download_to_artifacts",
+        ];
+        let results: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "backend_id": id, "version": "0.38.1", "passed": cases,
+                })
+            })
+            .collect();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "schema": 1, "source": "celeris-browser-conformance", "results": results,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[derive(Clone)]
+    struct BrowserFallbackHarness {
+        adapter_id: &'static str,
+        fails: bool,
+        sessions: Arc<StdMutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl WorkerAdapter for BrowserFallbackHarness {
+        fn id(&self) -> &str {
+            self.adapter_id
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            _: &str,
+            _: RunLimits,
+            _: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            let browser = req.context.browser.as_ref().expect("browser context");
+            self.sessions
+                .lock()
+                .unwrap()
+                .push((self.adapter_id.into(), browser.run.session_id.clone()));
+            if self.fails {
+                Err(AdapterError::Other("primary failed".into()))
+            } else {
+                Ok(RunOutcome {
+                    terminal: Terminal::Done {
+                        summary: "fallback completed".into(),
+                        evidence: vec![],
+                        usage: None,
+                    },
+                    exit_code: Some(0),
+                })
+            }
+        }
+    }
+
+    fn browser_fallback_dispatcher(
+        dir: &Path,
+        secondary_concurrency: usize,
+    ) -> (
+        Dispatcher,
+        Arc<dyn TaskStore>,
+        Task,
+        Arc<StdMutex<Vec<(String, String)>>>,
+    ) {
+        use crate::policy::{ProviderSpec, StaticPolicy};
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = new_task(
+            dir,
+            Check::Command {
+                cmd: ":".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+        store.insert(&task).unwrap();
+        let sessions = Arc::new(StdMutex::new(Vec::new()));
+        let primary: Arc<dyn WorkerAdapter> = Arc::new(BrowserFallbackHarness {
+            adapter_id: "acp",
+            fails: true,
+            sessions: sessions.clone(),
+        });
+        let secondary: Arc<dyn WorkerAdapter> = Arc::new(BrowserFallbackHarness {
+            adapter_id: "claude-code",
+            fails: false,
+            sessions: sessions.clone(),
+        });
+        let mut d = dispatcher(store.clone(), primary.clone(), 1);
+        d.adapters = HashMap::from([("p1".into(), primary), ("p2".into(), secondary)]);
+        d.policy = Box::new(StaticPolicy::new(
+            vec![
+                ProviderSpec {
+                    id: "p1".into(),
+                    adapter: "acp".into(),
+                    tiers: vec![Tier::Standard],
+                    concurrency: 1,
+                    model: "m".into(),
+                },
+                ProviderSpec {
+                    id: "p2".into(),
+                    adapter: "claude-code".into(),
+                    tiers: vec![Tier::Standard],
+                    concurrency: secondary_concurrency,
+                    model: "m".into(),
+                },
+            ],
+            Duration::from_secs(60),
+        ));
+        (d, store, task, sessions)
+    }
+
+    fn browser_fallback_request(task: Task, dir: &Path) -> RunRequest {
+        use task_core::{
+            BrowserAction, BrowserCapability, BrowserDomainMode, BrowserTaskPolicy,
+            EffectiveProfile,
+        };
+        RunRequest {
+            protocol: PROTOCOL_VERSION,
+            task,
+            workspace: dir.to_path_buf(),
+            work_dir: None,
+            artifacts_dir: dir.join("artifacts"),
+            cargo_target_dir: None,
+            context: RunContext {
+                profile: Some(EffectiveProfile {
+                    browser: Some(BrowserCapability {
+                        allowed_domains: vec!["example.com".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                browser_policy: Some(BrowserTaskPolicy {
+                    policy_id: "public".into(),
+                    revision: 1,
+                    domain_mode: BrowserDomainMode::CommonHosts,
+                    navigation_origins: vec![],
+                    network_domains: vec!["example.com".into()],
+                    allowed_actions: vec![BrowserAction::Navigate],
+                    approval_actions: vec![],
+                    credential_policy_ids: vec![],
+                    artifact_policy_id: None,
+                }),
+                ..Default::default()
+            },
+        }
+    }
+
+    struct BrowserFallbackSink;
+    impl EventSink for BrowserFallbackSink {
+        fn progress(&self, _: &str) {}
+        fn artifact(&self, _: &ArtifactRef) {}
+    }
+
+    #[tokio::test]
+    async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, _, task, sessions) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        let candidates = d.browser_fallback_candidates(
+            task.id,
+            "fallback-run",
+            &"p1".into(),
+            "acp",
+            Some(&record),
+        );
+        assert_eq!(
+            candidates.iter().map(|a| a.id()).collect::<Vec<_>>(),
+            vec!["claude-code"]
+        );
+        let executable = dir.path().join("fake-agent-browser");
+        std::fs::write(&executable, "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo 'agent-browser 0.38.1'; exit 0; fi\necho '{\"success\":true}'\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        let outcome = task_worker::browser::run_with_executable_candidates_record(
+            d.adapters.get("p1").unwrap().clone(),
+            candidates,
+            browser_fallback_request(task, dir.path()),
+            "fallback-run",
+            RunLimits {
+                wall_clock: Duration::from_secs(10),
+                idle_timeout: Duration::from_secs(5),
+                kill_grace: Duration::from_millis(100),
+            },
+            &BrowserFallbackSink,
+            &executable,
+            None,
+            &record,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+        let seen = sessions.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].1, seen[1].1);
+        assert!(
+            dir.path()
+                .join("runs/fallback-run/browser-fallback-1/config.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_disabled_provider_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, _, task, sessions) = browser_fallback_dispatcher(dir.path(), 0);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+        assert!(sessions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_unhealthy_provider_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut d, _, task, _) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        d.policy.report("p2".into(), &ProviderOutcome::AuthFailed);
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_no_conformant_candidate_records_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, store, task, _) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp"]);
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+        assert!(store.events_for(task.id).unwrap().iter().any(|(_, e)| matches!(e,
+            Event::WorkerProgress { msg, .. } if msg.contains("browser fallback refused: no enabled, healthy, conformant alternate backend")
+        )));
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_credential_use_never_replays() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, store, task, _) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        let mut policy = browser_fallback_request(task.clone(), dir.path())
+            .context
+            .browser_policy
+            .unwrap();
+        policy
+            .allowed_actions
+            .push(task_core::BrowserAction::CredentialUse);
+        store.browser_task_policy_set(task.id, &policy).unwrap();
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+        assert!(
+            store
+                .events_for(task.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(e,
+                    Event::WorkerProgress { msg, .. } if msg.contains("CredentialUse policy")
+                ))
+        );
+    }
+
+    /// ADR-0088 D1: 候補は主 adapter と同じ除去 env・`CARGO_TARGET_DIR`・scratch env を受ける。
+    #[tokio::test]
+    async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() {
+        let prep = RunAdapterPrep {
+            env: Some(task_worker::scratch::CargoEnv {
+                set: vec![
+                    (
+                        task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+                        "/scratch/targets/task-x/target".into(),
+                    ),
+                    ("CARGO_INCREMENTAL".into(), "0".into()),
+                ],
+                remove: vec!["RUSTC_WRAPPER".into(), "SCCACHE_DIR".into()],
+            }),
+            container: None,
+            permission_mode: None,
+        };
+        let (primary_env, candidate_env, seen) = prep_run_both(&prep, Tier::Standard).await;
+        assert!(primary_env && candidate_env);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(
+            seen[1].removed,
+            vec!["RUSTC_WRAPPER".to_string(), "SCCACHE_DIR".to_string()]
+        );
+        assert!(seen[1].env.contains(&(
+            task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+            "/scratch/targets/task-x/target".to_string()
+        )));
+    }
+
+    /// ADR-0088 D1: 候補は主 adapter と同じ実行 tier のモデルと planner の permission mode で走る。
+    #[tokio::test]
+    async fn dispatch_browser_fallback_prep_candidate_gets_primary_model_and_permission_mode() {
+        let prep = RunAdapterPrep {
+            env: None,
+            container: None,
+            permission_mode: Some("plan".into()),
+        };
+        let (primary_env, candidate_env, seen) = prep_run_both(&prep, Tier::Frontier).await;
+        assert!(!primary_env && !candidate_env);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[1].model.as_deref(), Some("frontier-id"));
+        assert_eq!(seen[1].mode.as_deref(), Some("plan"));
+        assert_eq!(seen[1].tier, Tier::Frontier);
+        assert!(seen[1].removed.is_empty() && seen[1].env.is_empty());
+    }
+
+    /// ADR-0088 D1: 準備が無い run（env・コンテナ・permission mode 無し）は包まずに素通しする。
+    #[tokio::test]
+    async fn dispatch_browser_fallback_prep_empty_prep_leaves_candidate_unwrapped() {
+        let (primary_env, candidate_env, seen) =
+            prep_run_both(&RunAdapterPrep::default(), Tier::Standard).await;
+        assert!(!primary_env && !candidate_env);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[1].mode, None);
+        assert_eq!(seen[1].model.as_deref(), Some("standard-id"));
     }
 
     // ---- ADR-0024: account pool ----
@@ -27398,6 +28088,7 @@ mod tests {
         let outcome = run_worker(
             store.clone(),
             adapter,
+            Vec::new(),
             task.id,
             Tier::Standard,
             tmp.path().join("mirror"),

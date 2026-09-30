@@ -11,6 +11,7 @@
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0081（制御 lease）/ 0082（live proxy ACL）/ 0083（identity 契約）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A の後・0.38.1 の restore は使わない。2026-09-29 の検査（Rust 2929 passed / 0 failed、clippy exit 0）。本番未昇格。
 
 - [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084。P4-A の実 runtime と production 起動経路は D3/D4 まで接続済み。P4-B の実 sink は未接続。P4-C は worker 起動前の `route` を接続し、未適合の機密要求を拒否。specialist・実 fixture 実行は未。2026-09-29、本番未昇格。 2026-09-29 run 01M3QGRCAHDK1AB4R9WBHJ9XHZ: ADR-0087 で同一 host UID の実 bwrap runtime（実 chrome-headless-shell・CDP pipe・6 namespace・ro root・socket 不可視・netns 遮断・controller kill/再起動回収）と稼働中 session への復元結合を実装（`browser_runtime_isolated` 4 passed、workspace 2977 passed、clippy exit 0）。その後の D3/D4 配線で egress proxy 結合と production 起動経路を実装。別 UID 実証は未。
+- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084〜0088。P4-A/B の実 runtime・sink は未接続。P4-C は実 agent-browser/loopback fixture を ACP RPC・明示 Claude CLI・browser-specialist wrapper の scripted LLM で各7/7 実行し、その ledger を routing と実 browser fallback に接続。実 LLM 比較は ACP CLI/認証待ち。2026-09-30、本番未昇格。
 
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)
@@ -43,18 +44,21 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 
 ## Phase browser-4（2026-09-29, task 01M3Q49ZTST3XQ9DGF6AGNR0XG）
 
-- ADR-0084。行ごとの判定: P4-A 未達（実隔離・出口制御・orphan 回収未接続）／P3-A 復元未達（稼働中隔離 session に未結合）／P4-B 未達（実 sink・peer role 未接続）／H3 の実装維持（機密起動は停止）／P4-C 一部接続（既存 loop の公開操作と未適合機密要求の拒否。specialist・実 fixture 実行は未）。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+- ADR-0084 時点の判定: P4-A 未達（実隔離・出口制御・orphan 回収未接続）／P3-A 復元未達（稼働中隔離 session に未結合）／P4-B 未達（実 sink・peer role 未接続）／H3 の実装維持（機密起動は停止）／P4-C 一部接続。後続の ADR-0087 で P4-C を進めた。詳細は [phase-browser-4](progress/phase-browser-4.md)。
 - 証拠: `cargo test -p task-core browser_isolation` 14 passed、`cargo test -p task-core browser_backend` 7 passed、`cargo test -p celeris-credentiald injection` 6 passed、`cargo test -p task-api restore_is` 2 passed、`cargo test -p task-api --test browser_e2e` 4 passed、`cargo test -p task-worker production_backend_route --lib` 1 passed、`cargo test --workspace` exit 0、`cargo clippy --workspace -- -D warnings` exit 0。
 - attempt 3 検査: `cargo test -p task-worker browser --lib` 31 passed、`cargo test -p task-api --test browser_e2e` 4 passed、`cargo test --workspace` exit 0（2957 passed / 0 failed / 既存ignored 7件）、`cargo clippy --workspace -- -D warnings` exit 0。
 - attempt 3: `CredentialUse` を起動前の必須能力へ追加し、承認済みでも未適合なら拒否。`IdentityRestore` 宣言にも P4-B 適合を必須化。API 結合テストは legacy wait の登録・承認・拒否と未消費を確認する4件へ更新。旧認証成功・実注入の証拠ではない。
 - 人の回答反映: ADR-0085 で bubblewrap+subuid/subgid と固定 agent-browser 0.38.1 + 既存 harness の specialist を採用。回答待ちは解消。旧 resolve.sock と plugin bridge の秘密返却を廃止し、有効 lease を持つ同一 UID の別 worker process の実 IPC も拒否。lease 未消費・sentinel 非露出を検査。
-- 未解決: 実 runtime・namespaceからfiltering proxyへの結合・peer UID → controller role・実 CDP sink・fixture runner は未実装。P4-A/B/C の継続小タスク3件を delegate.json に提案（採用・完了は未確認）。内部 origin の追加なし。条件0/1/2の未達を維持し、旧IPC拒否だけで Phase 4 完了とはしない。
+- 未解決: P4-A の実 runtime・namespace と filtering proxy の結合、P4-B の peer role と実 CDP sink、P4-C の実 LLM 同一 task 比較が必要。P4-A/B/C の継続小タスク3件を delegate.json に提案（採用・完了は未確認）。内部 origin の追加なし。
 
 - run `01M3QCTV524JJ41X9MSFS0756V` 最終検査: `cargo test --workspace` exit 0（2957 passed / 0 failed / 既存 ignored 7件）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all --check` exit 0。旧 IPC の秘密取得拒否・承認後拒否・lease 未消費を含む。P4-A/B/C の実適合は未達。
 
 - run `01M3QGRCAHDK1AB4R9WBHJ9XHZ`: ADR-0087。P4-A 行を「一部達成」に更新。証拠: `cargo test -p task-worker --test browser_runtime_isolated` → 4 passed（実 bwrap + 実 browser、controller SIGKILL 後に process 残らず、starttime 一致の再起動回収）、`cargo test --workspace` → exit 0（2977 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` → exit 0。環境制約: subuid が親 uid_map 外（決定 p4a-uid で同一 UID）、agent-browser 本体は host に無く同梱 browser で代替。未解決: egress 中継（netns listener → celeris-browser-egress）、production 経路切替、別 UID 実証（docs/ops 手順書）。restore は `SameUid` で拒否のまま。
 
 - run `01M3QDM7H5RYRZF2RNCARHQWX6`: ADR-0086。実Unix/TCP DNSのegress transport（9試験）と独立 `celeris-browser-egress`（6子プロセス試験）を追加。private/IPv6/DNS/proxy/CNAME負例・IP固定・親死亡SIGKILL/waitpid回収が成功。P4-A全体は未達（worker/runtimeとの接続、別UID実証、runtime orphan、identity復元が未）。P4-B/Cの実適合も未達、H3と機密起動拒否は維持。subuid mapping は親user namespaceの範囲外でEPERM、設定変更なし。詳細・証拠は [phase-browser-4](progress/phase-browser-4.md)。
+- run `01M3QGRCA745JCZTKDBDY9R83B`: ADR-0087。P4-C の静的適合登録を削除し、実測 ledger 読み込み・specialist adapter 登録・公開能力の実行時 fallback と無候補拒否を追加。実 agent-browser 0.38.1 と loopback fixture の scripted driver 三件は各7/7 case。driver は同一で ACP/Claude の実 harness protocol を使っていないため、scripted ledger は routing に使えず P4-C 完了とは判定しない。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+- run `01M3QJ5CY8366206MQ20A3RBPB`: `--protocol-scripted` runner が ACP・Claude・specialist の実 adapter を scripted harness process で起動。実 agent-browser 0.38.1 と loopback fixture の同一 task で各7/7。生成 ledger を worker の routing と実行時 fallback 試験に渡して成功。機密要求は未適合として拒否を維持。実 LLM 比較は ACP CLI/認証が無いため未実施。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+- run `01M3R8T40E9CFNGZG9WHEKMZXH` attempt 2: `python3 scripts/browser-conformance.py --protocol-scripted --fallback-scenario --agent-browser /tmp/p4c-agent-browser/package/bin/agent-browser-linux-x64 --output-dir /var/lib/celeris/workspaces/01M3QGRC6AQ81PWM1XP4C7BH45/wu/real-fallback/artifacts/p4c-real-fallback-final-v3` → exit 0。実固定版 0.38.1 + loopback fixture で三 backend 各7/7。worker の公開 `run_with_candidates` で主 ACP harness を SIGKILL し、Claude が別 session で完了。server は fallback 区間の `POST /clicked` と download を観測。代替適合なし・`CredentialUse` は明示拒否（`fallback-test.json` exit 0）。初回冷間起動の ACP navigation 失敗で runner exit 1 があり、その後の再実行は成功。`cargo test --workspace` と `cargo clippy --workspace -- -D warnings` は exit 0。実 LLM 比較は Claude 認証済みだが ACP/OpenCode CLI がないため未実施し、ADR-0009 P-34 の手順を [phase-browser-4](progress/phase-browser-4.md) に維持。`CredentialInjection`・`IdentityRestore` は拒否を維持、本番未昇格。
 
 - このrunの最終検査: `cargo test --workspace` → exit 0（2972 passed / 0 failed / 既存 ignored 7件）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all --check` / `git diff --check` → exit 0。機密機能の実適合・production接続の証拠ではない。
 

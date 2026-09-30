@@ -96,8 +96,8 @@ pub fn requests_browser(skills: &[String]) -> bool {
 pub fn browser_adapter(explicit: Option<&str>) -> Result<&str, String> {
     match explicit {
         None => Ok("acp"),
-        Some(adapter @ ("acp" | "claude-code")) => Ok(adapter),
-        Some(_) => Err("browser capability requires acp (OpenCode) or claude-code".into()),
+        Some(adapter @ ("acp" | "claude-code" | "browser-specialist")) => Ok(adapter),
+        Some(_) => Err("browser capability requires acp, claude-code or browser-specialist".into()),
     }
 }
 

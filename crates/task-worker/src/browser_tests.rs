@@ -7,6 +7,38 @@ use task_core::{
     EffectiveProfile, SqliteStore, Status, TaskId, TaskStore,
 };
 
+/// Mock ledger for unit tests of routing and the supervisor. These tests do not certify a
+/// production backend; the real conformance runner is responsible for production records.
+pub(super) fn test_record(workspace: &Path) -> PathBuf {
+    let path = workspace.join("browser-conformance-test.json");
+    let cases = [
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "snapshot_has_refs",
+        "click_by_ref",
+        "screenshot_artifact",
+        "download_to_artifacts",
+    ];
+    let results: Vec<_> = ["acp", "claude-code", "browser-specialist"]
+        .into_iter()
+        .map(|backend_id| {
+            serde_json::json!({
+                "backend_id": backend_id, "version": SUPPORTED_VERSION, "passed": cases,
+            })
+        })
+        .collect();
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "source": "celeris-browser-conformance", "results": results,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    path
+}
+
 #[derive(Default)]
 struct RecordingSink {
     browsers: Mutex<Vec<BrowserRun>>,
@@ -90,11 +122,124 @@ fn task_policy(actions: &[BrowserAction]) -> BrowserTaskPolicy {
     }
 }
 
+#[test]
+fn p4c_fallback_ledger_parsing_and_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = test_record(dir.path());
+    let ids = conformant_backend_ids(&record).unwrap();
+    assert!(ids.contains("acp") && ids.contains("claude-code"));
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    ledger["results"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["backend_id"] == "acp");
+    std::fs::write(&record, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    let ids = conformant_backend_ids(&record).unwrap();
+    assert_eq!(ids, ["acp".to_string()].into());
+    let req = request(dir.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let policy = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    let route = route_existing_backend("acp", &policy, &record).unwrap();
+    assert!(route.fallbacks.is_empty());
+    assert!(route_existing_backend("claude-code", &policy, &record).is_err());
+    ledger["source"] = serde_json::json!("celeris-browser-conformance-scripted");
+    std::fs::write(&record, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    assert!(conformant_backend_ids(&record).is_err());
+}
+
 fn limits() -> RunLimits {
     RunLimits {
         wall_clock: Duration::from_secs(10),
         idle_timeout: Duration::from_secs(5),
         kill_grace: Duration::from_millis(100),
+    }
+}
+
+/// Invoked by scripts/browser-conformance.py in a separate process for each backend and
+/// phase. This runs the real adapter protocol against a scripted LLM while the Python
+/// runner provides the real agent-browser executable and loopback site. It is ignored
+/// in the normal workspace gate because those external local executables are optional.
+#[tokio::test]
+#[ignore]
+async fn p4c_conformance_backend_protocol() {
+    let backend = std::env::var("CELERIS_BROWSER_BACKEND").expect("runner backend");
+    let phase = std::env::var("CELERIS_BROWSER_PHASE").expect("runner phase");
+    let runtime =
+        PathBuf::from(std::env::var_os("CELERIS_BROWSER_RUNTIME").expect("runner runtime"));
+    let cli = PathBuf::from(std::env::var_os("CELERIS_BROWSER_CLI").expect("runner cli"));
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/browser-conformance-harness.py");
+    let mut req = request(&runtime);
+    req.context.browser = Some(BrowserContext {
+        run: BrowserRun {
+            task_id: req.task.id,
+            run_id: format!("p4c-{phase}"),
+            session_id: format!("celeris-p4c-{backend}"),
+            state: BrowserRunState::Running,
+            live_view_url: None,
+            policy: None,
+        },
+        cli,
+        credential_used: false,
+    });
+    let command = script.to_string_lossy().into_owned();
+    let adapter: Arc<dyn WorkerAdapter> = match backend.as_str() {
+        "acp" => Arc::new(crate::AcpAdapter::new(crate::AcpConfig {
+            command,
+            args: vec![],
+            startup_timeout: Duration::from_secs(10),
+            ..Default::default()
+        })),
+        "claude-code" => Arc::new(crate::ClaudeCodeAdapter::new(crate::ClaudeCodeConfig {
+            command,
+            ..Default::default()
+        })),
+        "browser-specialist" => Arc::new(crate::BrowserSpecialistAdapter::new(Arc::new(
+            crate::AcpAdapter::new(crate::AcpConfig {
+                command,
+                args: vec![],
+                startup_timeout: Duration::from_secs(10),
+                ..Default::default()
+            }),
+        ))),
+        _ => panic!("unknown backend: {backend}"),
+    };
+    let result = adapter
+        .run(
+            req,
+            &format!("p4c-{phase}"),
+            RunLimits {
+                wall_clock: Duration::from_secs(90),
+                idle_timeout: Duration::from_secs(90),
+                kill_grace: Duration::from_millis(100),
+            },
+            &RecordingSink::default(),
+        )
+        .await;
+    if phase == "resume" {
+        assert!(matches!(result.unwrap().terminal, Terminal::Done { .. }));
+    } else {
+        assert_eq!(phase, "open");
+        assert!(!matches!(
+            result,
+            Ok(RunOutcome {
+                terminal: Terminal::Done { .. },
+                ..
+            })
+        ));
     }
 }
 
@@ -116,7 +261,8 @@ fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capa
         SUPPORTED_VERSION,
     )
     .unwrap();
-    let routed = route_existing_backend("acp", &public).unwrap();
+    let record = test_record(temp.path());
+    let routed = route_existing_backend("acp", &public, &record).unwrap();
     assert_eq!(routed.primary, "acp");
     assert!(routed.fallbacks.contains(&"claude-code".to_string()));
 
@@ -156,9 +302,21 @@ fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capa
     )
     .unwrap();
     for backend in ["acp", "claude-code"] {
-        assert!(route_existing_backend(backend, &sensitive).is_err());
+        assert!(route_existing_backend(backend, &sensitive, &record).is_err());
     }
-    assert!(route_existing_backend("unsupported", &public).is_err());
+    assert!(route_existing_backend("unsupported", &public, &record).is_err());
+
+    let scripted = temp.path().join("scripted.json");
+    let bytes = std::fs::read(&record).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    value["source"] = serde_json::json!("celeris-browser-conformance-scripted");
+    std::fs::write(&scripted, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &public, &scripted).is_err());
+
+    value["source"] = serde_json::json!("celeris-browser-conformance");
+    value["results"][0]["version"] = serde_json::json!("0.38.0");
+    std::fs::write(&scripted, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &public, &scripted).is_err());
 }
 
 #[test]
@@ -297,6 +455,415 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
 struct CliHarness {
     id: &'static str,
     question: bool,
+}
+
+struct FailingHarness;
+
+#[async_trait::async_trait]
+impl WorkerAdapter for FailingHarness {
+    fn id(&self) -> &str {
+        "acp"
+    }
+
+    async fn run(
+        &self,
+        req: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        assert!(req.context.browser.is_some());
+        Err(AdapterError::Other("scripted backend failed".into()))
+    }
+}
+
+#[tokio::test]
+async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance() {
+    let temp = tempfile::tempdir().unwrap();
+    let record = test_record(temp.path());
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    let outcome = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        request(temp.path()),
+        "fallback-run",
+        limits(),
+        &sink,
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(
+        temp.path()
+            .join("runs/fallback-run/browser-fallback-1/config.json")
+            .exists()
+    );
+    let browsers = sink.browsers.lock().unwrap();
+    assert_eq!(browsers.len(), 4);
+    assert_ne!(browsers[0].session_id, browsers[2].session_id);
+
+    let denied = temp.path().join("empty-conformance.json");
+    std::fs::write(
+        &denied,
+        br#"{"schema":1,"source":"celeris-browser-conformance","results":[]}"#,
+    )
+    .unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let error = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        request(empty.path()),
+        "denied-run",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &denied,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("lacks required conformance"));
+    assert!(!empty.path().join("runs/denied-run").exists());
+}
+
+/// The Python conformance runner calls this with its just-produced ledger before
+/// publishing it. Routing and the fallback execution path must consume that same file.
+#[tokio::test]
+#[ignore]
+async fn p4c_runner_record_routes_and_falls_back() {
+    let record = PathBuf::from(
+        std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").expect("runner record path"),
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let req = request(temp.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let policy = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    for backend in ["acp", "claude-code", "browser-specialist"] {
+        assert_eq!(
+            route_existing_backend(backend, &policy, &record)
+                .unwrap()
+                .primary,
+            backend
+        );
+    }
+    let mut sensitive = request(temp.path());
+    let sensitive_grant = sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap();
+    sensitive_grant.allowed_actions =
+        Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    sensitive_grant.credential_policy_ids = vec!["pol-example".into()];
+    let sensitive_policy = sensitive.context.browser_policy.as_mut().unwrap();
+    sensitive_policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    sensitive_policy.credential_policy_ids = vec!["pol-example".into()];
+    let effective = crate::browser_policy::prepare(
+        sensitive
+            .context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        sensitive.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    for backend in ["acp", "claude-code", "browser-specialist"] {
+        assert!(route_existing_backend(backend, &effective, &record).is_err());
+    }
+    let executable = substrate(temp.path());
+    let outcome = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        req,
+        "runner-ledger-fallback",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(
+        temp.path()
+            .join("runs/runner-ledger-fallback/browser-fallback-1/config.json")
+            .exists()
+    );
+}
+
+/// The conformance runner supplies its measured ledger, real 0.38.1 executable and
+/// loopback origin. The primary ACP harness is SIGKILLed after navigation; the worker
+/// then starts Claude in a fresh browser session and completes the same fixture.
+#[tokio::test]
+#[ignore]
+async fn p4c_fallback_real_harness_scenario() {
+    let root = PathBuf::from(std::env::var_os("CELERIS_BROWSER_FALLBACK_ROOT").unwrap());
+    let record = PathBuf::from(std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").unwrap());
+    let executable = PathBuf::from(std::env::var_os("CELERIS_BROWSER_EXECUTABLE").unwrap());
+    let origin = std::env::var("CELERIS_BROWSER_ORIGIN").unwrap();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/browser-conformance-harness.py");
+    let command = script.to_string_lossy().into_owned();
+    let primary: Arc<dyn WorkerAdapter> = Arc::new(crate::AcpAdapter::new(crate::AcpConfig {
+        command: command.clone(),
+        startup_timeout: Duration::from_secs(10),
+        ..Default::default()
+    }));
+    let alternate: Arc<dyn WorkerAdapter> =
+        Arc::new(crate::ClaudeCodeAdapter::new(crate::ClaudeCodeConfig {
+            command,
+            ..Default::default()
+        }));
+    let env = |phase: &str, runtime: &Path| {
+        vec![
+            ("CELERIS_BROWSER_PHASE".into(), phase.into()),
+            (
+                "CELERIS_BROWSER_BACKEND".into(),
+                if phase == "open" {
+                    "acp"
+                } else {
+                    "claude-code"
+                }
+                .into(),
+            ),
+            (
+                "CELERIS_BROWSER_RUNTIME".into(),
+                runtime.to_string_lossy().into_owned(),
+            ),
+            ("CELERIS_BROWSER_ORIGIN".into(), origin.clone()),
+            (
+                "CELERIS_BROWSER_KILL_HARNESS".into(),
+                if phase == "open" { "1" } else { "0" }.into(),
+            ),
+        ]
+    };
+    let primary_dir = root.join("primary");
+    let alternate_dir = root.join("alternate");
+    std::fs::create_dir_all(&primary_dir).unwrap();
+    std::fs::create_dir_all(&alternate_dir).unwrap();
+    let primary = primary.with_env(&env("open", &primary_dir)).unwrap();
+    let alternate = alternate
+        .with_env(&env("fallback", &alternate_dir))
+        .unwrap();
+    let primary = primary
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-real-fallback/browser/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let alternate = alternate
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-real-fallback/browser-fallback-1/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let mut req = request(&root);
+    let host = "localhost".to_string();
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_domains = vec![host.clone()];
+    let policy = req.context.browser_policy.as_mut().unwrap();
+    policy.network_domains = vec![host];
+    policy.allowed_actions = vec![
+        BrowserAction::Navigate,
+        BrowserAction::Snapshot,
+        BrowserAction::Click,
+        BrowserAction::Screenshot,
+        BrowserAction::Download,
+    ];
+    let sink = RecordingSink::default();
+    let outcome = run_with_candidates(
+        primary.clone(),
+        vec![alternate.clone()],
+        req.clone(),
+        "p4c-real-fallback",
+        RunLimits {
+            wall_clock: Duration::from_secs(120),
+            idle_timeout: Duration::from_secs(120),
+            kill_grace: Duration::from_millis(100),
+        },
+        &sink,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(primary_dir.join("harness-killed.pid").exists());
+    let sessions = sink.browsers.lock().unwrap();
+    assert!(sessions.len() >= 4);
+    assert_eq!(sessions[1].state, BrowserRunState::Failed);
+    assert_ne!(sessions[0].session_id, sessions[2].session_id);
+    drop(sessions);
+    let no_alternate_record = root.join("no-alternate-conformance.json");
+    let mut no_alternate_ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    no_alternate_ledger["results"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["backend_id"] == "acp");
+    std::fs::write(
+        &no_alternate_record,
+        serde_json::to_vec(&no_alternate_ledger).unwrap(),
+    )
+    .unwrap();
+    let no_candidate_primary = primary
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-no-candidate/browser/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let no_candidate = run_with_executable_candidates_record(
+        no_candidate_primary,
+        vec![alternate.clone()],
+        req.clone(),
+        "p4c-no-candidate",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &no_alternate_record,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        no_candidate
+            .to_string()
+            .contains("all capable backends failed")
+    );
+    assert!(
+        !root
+            .join("runs/p4c-no-candidate/browser-fallback-1")
+            .exists()
+    );
+    let mut sensitive = req;
+    sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    sensitive
+        .context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    sensitive
+        .context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    let credential = run_with_executable_candidates_record(
+        primary,
+        vec![alternate],
+        sensitive,
+        "p4c-credential",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        credential
+            .to_string()
+            .contains("lacks required conformance")
+    );
+    assert!(!root.join("runs/p4c-credential").exists());
+    std::fs::write(
+        root.join("fallback-outcome.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "primary_harness_killed": true, "alternate_completed": true,
+            "fresh_session": true, "no_candidate_refused": no_candidate.to_string(),
+            "credential_refused": credential.to_string(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn specialist_wraps_existing_harness_and_runs_same_browser_task() {
+    let temp = tempfile::tempdir().unwrap();
+    let record = test_record(temp.path());
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    let specialist = crate::BrowserSpecialistAdapter::new(Arc::new(CliHarness {
+        id: "acp",
+        question: false,
+    }));
+    let outcome = run_with_executable_record(
+        Arc::new(specialist),
+        request(temp.path()),
+        "specialist-run",
+        limits(),
+        &sink,
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert_eq!(sink.artifacts.lock().unwrap().len(), 2);
 }
 #[async_trait::async_trait]
 impl WorkerAdapter for CliHarness {

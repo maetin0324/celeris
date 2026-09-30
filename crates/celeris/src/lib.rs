@@ -42,9 +42,9 @@ use task_dispatch::{
 use task_ops::daemon::{ProviderCheckView, ProviderLive};
 use task_ops::view::ViewContext;
 use task_worker::{
-    AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, ClaudeCodeAdapter, ClaudeCodeConfig,
-    CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig, LdrAdapter, LdrConfig,
-    PaperQaAdapter, PaperQaConfig, WorkerAdapter, Workspace,
+    AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, BrowserSpecialistAdapter, ClaudeCodeAdapter,
+    ClaudeCodeConfig, CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig,
+    LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig, WorkerAdapter, Workspace,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -288,9 +288,9 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     container: None,
                 }))
             }
-            AcpAdapter::ID => {
+            AcpAdapter::ID | BrowserSpecialistAdapter::ID => {
                 let base = &config.adapters.acp;
-                Arc::new(AcpAdapter::new(AcpConfig {
+                let inner: Arc<dyn WorkerAdapter> = Arc::new(AcpAdapter::new(AcpConfig {
                     // ADR-0026 D2: `command`/`args` は行ごとに上書きできる（別の ACP エージェントを同居させる
                     // ため）。`Config::validate` が acp 以外の行での指定を拒否している。
                     command: p.command.clone().unwrap_or_else(|| base.command.clone()),
@@ -312,7 +312,12 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
                     env_remove: Vec::new(),
                     container: None,
-                }))
+                }));
+                if p.adapter == BrowserSpecialistAdapter::ID {
+                    Arc::new(BrowserSpecialistAdapter::new(inner))
+                } else {
+                    inner
+                }
             }
             PaperQaAdapter::ID => {
                 let base = &config.adapters.paperqa;
@@ -3129,6 +3134,27 @@ args = ["acp"]
         assert_eq!(
             cfg.providers[1].args.as_deref(),
             Some(&["acp".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn browser_specialist_provider_uses_configured_acp_harness() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[providers]]
+id = "browser-specialist-test"
+adapter = "browser-specialist"
+tiers = ["standard"]
+command = "scripted-acp"
+args = ["acp"]
+"#,
+        )
+        .unwrap();
+        cfg.validate().unwrap();
+        let adapters = build_adapters(&cfg);
+        assert_eq!(
+            adapters["browser-specialist-test"].id(),
+            "browser-specialist"
         );
     }
 

@@ -354,7 +354,13 @@ impl World {
             auth_calls: Mutex::default(),
             live: Mutex::default(),
         };
-        let outcome = task_worker::browser::run_with_executable(
+        let record = self.env.dir.path().join("empty-browser-conformance.json");
+        std::fs::write(
+            &record,
+            br#"{"schema":1,"source":"celeris-browser-conformance","results":[]}"#,
+        )
+        .unwrap();
+        let outcome = task_worker::browser::run_with_executable_record(
             Arc::new(Harness),
             run_request(self),
             run_id,
@@ -366,6 +372,7 @@ impl World {
             &sink,
             &self.substrate,
             Some(&self.supervisor),
+            &record,
         )
         .await;
         self.worker_output

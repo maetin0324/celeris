@@ -16480,6 +16480,85 @@ fn worktree_marker(ws: &task_worker::TaskWorkspaces) -> task_ops::workspace::Wor
     }
 }
 
+/// `run_worker` が run ごとに adapter へ施す包み（ADR-0088 D1）。主 adapter と browser fallback
+/// 候補の両方に同じ値を使う。
+#[derive(Clone, Default)]
+struct RunAdapterPrep {
+    /// ADR-0075 D4 / G3-fix1: 外す env（継いだ sccache の族）と与える env（`CARGO_TARGET_DIR` など）。
+    /// `None` は `CARGO_TARGET_DIR` を与えない run（コンテナ・Remote・共有キャッシュ無効）。
+    env: Option<task_worker::scratch::CargoEnv>,
+    /// ADR-0043 D3: コンテナで走らせる run のプラン。
+    container: Option<task_worker::SharedPlan>,
+    /// ADR-0072 D14: planner run の `[execution.planner].permission_mode`。
+    permission_mode: Option<String>,
+}
+
+/// ADR-0088（docs/adr/0088-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
+/// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 除去 → env 設定 →
+/// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。tier ごとのモデルは
+/// 各 adapter（`TieredAdapter`）が同じ `req.task.worker_hint.tier` から run 時に解決する。
+/// 戻り値の `bool` は env（`CARGO_TARGET_DIR`）が実際に適用されたかどうか。
+fn prepare_run_adapter(
+    adapter: Arc<dyn WorkerAdapter>,
+    prep: &RunAdapterPrep,
+    task_id: TaskId,
+) -> (Arc<dyn WorkerAdapter>, bool) {
+    let (adapter, env_applied) = match &prep.env {
+        Some(env) => {
+            // ADR-0075 G3-fix1: 与えない sccache の族（daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*`）を先に外す。
+            // `env_remove` を持たないアダプタには `RUSTC_WRAPPER` などを空の値で上書きして代える（cargo は空を未設定と扱う）。
+            let (adapter, set) = if env.remove.is_empty() {
+                (adapter, env.set.clone())
+            } else {
+                match adapter.with_env_removed(&env.remove) {
+                    Some(wrapped) => (wrapped, env.set.clone()),
+                    None => {
+                        tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env_removed; overriding RUSTC_WRAPPER with an empty value (ADR-0075 G3-fix1)");
+                        let set = env.set_with_empty_wrappers();
+                        (adapter, set)
+                    }
+                }
+            };
+            match adapter.with_env(&set) {
+                Some(wrapped) => (wrapped, true),
+                None => {
+                    tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
+                    (adapter, false)
+                }
+            }
+        }
+        None => (adapter, false),
+    };
+    // ADR-0043 D3（Phase 56）: コンテナで走らせる run は、ここでアダプタを包んだ複製に差し替える
+    // （差し込み点はアダプタ側の `container::wrap` 1 か所）。この経路を持たないアダプタ
+    // （`with_container` が `None`）はホストのまま走る。
+    let adapter = match &prep.container {
+        Some(plan) => match adapter.with_container(Arc::clone(plan)) {
+            Some(wrapped) => wrapped,
+            None => {
+                tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support containers; running on the host");
+                adapter
+            }
+        },
+        None => adapter,
+    };
+    // ADR-0072 D14（Phase E4b 項目3）: planner run（`permission_mode` が `Some`）は
+    // `[execution.planner].permission_mode` を実際の CLI 引数として反映する。対応しないアダプタ
+    // （`with_permission_mode` が `None` を返す）はアダプタ既定の permission-mode のまま走る
+    // （E3 実装時の既定の動作と同じ。実害は無い）。
+    let adapter = match &prep.permission_mode {
+        Some(mode) if !mode.is_empty() => match adapter.with_permission_mode(mode) {
+            Some(wrapped) => wrapped,
+            None => {
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), %mode, "adapter does not support with_permission_mode; planner permission_mode was not applied (ADR-0072 D14)");
+                adapter
+            }
+        },
+        _ => adapter,
+    };
+    (adapter, env_applied)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_worker(
     store: Arc<dyn TaskStore>,
@@ -16893,62 +16972,22 @@ async fn run_worker(
             Some((dir, env))
         }
     };
-    let adapter = if let Some((target, env)) = target {
-        // ADR-0075 G3-fix1: 与えない sccache の族（daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*`）を先に外す。
-        // `env_remove` を持たないアダプタには `RUSTC_WRAPPER` などを空の値で上書きして代える（cargo は空を未設定と扱う）。
-        let (adapter, set) = if env.remove.is_empty() {
-            (adapter, env.set)
-        } else {
-            match adapter.with_env_removed(&env.remove) {
-                Some(wrapped) => (wrapped, env.set),
-                None => {
-                    tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env_removed; overriding RUSTC_WRAPPER with an empty value (ADR-0075 G3-fix1)");
-                    let set = env.set_with_empty_wrappers();
-                    (adapter, set)
-                }
-            }
-        };
-        match adapter.with_env(&set) {
-            Some(wrapped) => {
-                // request.json（監査）に実際に与えた値を残す。
-                req.cargo_target_dir = Some(target);
-                wrapped
-            }
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
-                adapter
-            }
-        }
-    } else {
-        adapter
+    // ADR-0088 D1: 主 adapter と browser fallback 候補は同じ `prepare_run_adapter` で包む
+    // （`self.adapters` の生の entry を `run_with_candidates` に渡さない）。
+    let prep = RunAdapterPrep {
+        env: target.as_ref().map(|(_, env)| env.clone()),
+        container: container_plan.clone(),
+        permission_mode: planner_permission_mode.clone(),
     };
-    // ADR-0043 D3（Phase 56）: コンテナで走らせる run は、ここでアダプタを包んだ複製に差し替える
-    // （差し込み点はアダプタ側の `container::wrap` 1 か所）。この経路を持たないアダプタ
-    // （`with_container` が `None`）はホストのまま走る。
-    let adapter = match &container_plan {
-        Some(plan) => match adapter.with_container(Arc::clone(plan)) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support containers; running on the host");
-                adapter
-            }
-        },
-        None => adapter,
-    };
-    // ADR-0072 D14（Phase E4b 項目3）: planner run（`extras.planner_permission_mode` が `Some`）は
-    // `[execution.planner].permission_mode` を実際の CLI 引数として反映する。対応しないアダプタ
-    // （`with_permission_mode` が `None` を返す）はアダプタ既定の permission-mode のまま走る
-    // （E3 実装時の既定の動作と同じ。実害は無い）。
-    let adapter = match &planner_permission_mode {
-        Some(mode) if !mode.is_empty() => match adapter.with_permission_mode(mode) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), %mode, "adapter does not support with_permission_mode; planner permission_mode was not applied (ADR-0072 D14)");
-                adapter
-            }
-        },
-        _ => adapter,
-    };
+    let (adapter, env_applied) = prepare_run_adapter(adapter, &prep, task_id);
+    if env_applied {
+        // request.json（監査）に実際に与えた値を残す。
+        req.cargo_target_dir = target.map(|(dir, _)| dir);
+    }
+    let browser_candidates: Vec<Arc<dyn WorkerAdapter>> = browser_candidates
+        .into_iter()
+        .map(|candidate| prepare_run_adapter(candidate, &prep, task_id).0)
+        .collect();
     // ADR-0054 D1（Phase 67）: `run_worker` を通る run で継続セッションを持てるのは CoS の対話 run
     // だけ（部門長のレビュー run は `review.rs` の別経路。`run_extras` の `is_cos_conversation` と同じ
     // 判定で `extras.session` が埋まるので、ここでは `req.context.session` の有無だけを見ればよい）。
@@ -23722,6 +23761,230 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("approval child was not created for task {task_id}");
+    }
+
+    // ---- ADR-0088: browser fallback 候補の run ごとの準備 ----
+
+    /// `prepare_run_adapter` が施した包みを run 時に記録するテスト用アダプタ。
+    #[derive(Clone)]
+    struct PrepRecorder {
+        id: &'static str,
+        env: Vec<(String, String)>,
+        removed: Vec<String>,
+        mode: Option<String>,
+        model: Option<String>,
+        seen: Arc<StdMutex<Vec<PrepSeen>>>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct PrepSeen {
+        env: Vec<(String, String)>,
+        removed: Vec<String>,
+        mode: Option<String>,
+        model: Option<String>,
+        tier: Tier,
+    }
+
+    #[async_trait]
+    impl WorkerAdapter for PrepRecorder {
+        fn id(&self) -> &str {
+            self.id
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            _run_id: &str,
+            _limits: RunLimits,
+            _sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            self.seen.lock().unwrap().push(PrepSeen {
+                env: self.env.clone(),
+                removed: self.removed.clone(),
+                mode: self.mode.clone(),
+                model: self.model.clone(),
+                tier: req.task.worker_hint.tier,
+            });
+            Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "ok".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            })
+        }
+        fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+            Some(Arc::new(Self {
+                model: Some(model.into()),
+                ..self.clone()
+            }))
+        }
+        fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
+            Some(Arc::new(Self {
+                mode: Some(mode.into()),
+                ..self.clone()
+            }))
+        }
+        fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+            let mut env = self.env.clone();
+            env.extend(extra.iter().cloned());
+            Some(Arc::new(Self {
+                env,
+                ..self.clone()
+            }))
+        }
+        fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
+            let mut removed = self.removed.clone();
+            removed.extend(keys.iter().cloned());
+            Some(Arc::new(Self {
+                removed,
+                ..self.clone()
+            }))
+        }
+    }
+
+    struct PrepNullSink;
+    impl EventSink for PrepNullSink {
+        fn progress(&self, _msg: &str) {}
+        fn artifact(&self, _artifact: &ArtifactRef) {}
+    }
+
+    /// `self.adapters` の entry と同じく `TieredAdapter` で包んだ記録アダプタ。
+    fn prep_tiered(
+        id: &'static str,
+        seen: &Arc<StdMutex<Vec<PrepSeen>>>,
+    ) -> Arc<dyn WorkerAdapter> {
+        use task_core::model_routing::ModelBinding;
+        Arc::new(task_worker::tiered::TieredAdapter {
+            base: Arc::new(PrepRecorder {
+                id,
+                env: Vec::new(),
+                removed: Vec::new(),
+                mode: None,
+                model: None,
+                seen: Arc::clone(seen),
+            }),
+            models: [
+                (Tier::Frontier, "frontier-id"),
+                (Tier::Standard, "standard-id"),
+            ]
+            .into_iter()
+            .map(|(tier, id)| {
+                (
+                    tier,
+                    ModelBinding {
+                        name: id.into(),
+                        model_id: Some(id.into()),
+                        unavailable_reason: None,
+                        reasoning_effort: None,
+                    },
+                )
+            })
+            .collect(),
+            account_id: None,
+            credential_error: None,
+        })
+    }
+
+    async fn prep_run_both(prep: &RunAdapterPrep, tier: Tier) -> (bool, bool, Vec<PrepSeen>) {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let task_id = TaskId::new();
+        let (primary, primary_env) =
+            prepare_run_adapter(prep_tiered("claude-code", &seen), prep, task_id);
+        let (candidate, candidate_env) =
+            prepare_run_adapter(prep_tiered("acp", &seen), prep, task_id);
+        let mut task = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: ":".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        task.worker_hint.tier = tier;
+        let req = RunRequest {
+            cargo_target_dir: None,
+            protocol: PROTOCOL_VERSION,
+            task,
+            workspace: dir.path().to_path_buf(),
+            work_dir: None,
+            artifacts_dir: dir.path().join("artifacts"),
+            context: RunContext::default(),
+        };
+        let limits = RunLimits {
+            wall_clock: Duration::from_secs(5),
+            idle_timeout: Duration::from_secs(5),
+            kill_grace: Duration::from_millis(10),
+        };
+        for adapter in [primary, candidate] {
+            adapter
+                .run(req.clone(), "run1", limits, &PrepNullSink)
+                .await
+                .unwrap();
+        }
+        let seen = seen.lock().unwrap().clone();
+        (primary_env, candidate_env, seen)
+    }
+
+    /// ADR-0088 D1: 候補は主 adapter と同じ除去 env・`CARGO_TARGET_DIR`・scratch env を受ける。
+    #[tokio::test]
+    async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() {
+        let prep = RunAdapterPrep {
+            env: Some(task_worker::scratch::CargoEnv {
+                set: vec![
+                    (
+                        task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+                        "/scratch/targets/task-x/target".into(),
+                    ),
+                    ("CARGO_INCREMENTAL".into(), "0".into()),
+                ],
+                remove: vec!["RUSTC_WRAPPER".into(), "SCCACHE_DIR".into()],
+            }),
+            container: None,
+            permission_mode: None,
+        };
+        let (primary_env, candidate_env, seen) = prep_run_both(&prep, Tier::Standard).await;
+        assert!(primary_env && candidate_env);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(
+            seen[1].removed,
+            vec!["RUSTC_WRAPPER".to_string(), "SCCACHE_DIR".to_string()]
+        );
+        assert!(seen[1].env.contains(&(
+            task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
+            "/scratch/targets/task-x/target".to_string()
+        )));
+    }
+
+    /// ADR-0088 D1: 候補は主 adapter と同じ実行 tier のモデルと planner の permission mode で走る。
+    #[tokio::test]
+    async fn dispatch_browser_fallback_prep_candidate_gets_primary_model_and_permission_mode() {
+        let prep = RunAdapterPrep {
+            env: None,
+            container: None,
+            permission_mode: Some("plan".into()),
+        };
+        let (primary_env, candidate_env, seen) = prep_run_both(&prep, Tier::Frontier).await;
+        assert!(!primary_env && !candidate_env);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[1].model.as_deref(), Some("frontier-id"));
+        assert_eq!(seen[1].mode.as_deref(), Some("plan"));
+        assert_eq!(seen[1].tier, Tier::Frontier);
+        assert!(seen[1].removed.is_empty() && seen[1].env.is_empty());
+    }
+
+    /// ADR-0088 D1: 準備が無い run（env・コンテナ・permission mode 無し）は包まずに素通しする。
+    #[tokio::test]
+    async fn dispatch_browser_fallback_prep_empty_prep_leaves_candidate_unwrapped() {
+        let (primary_env, candidate_env, seen) =
+            prep_run_both(&RunAdapterPrep::default(), Tier::Standard).await;
+        assert!(!primary_env && !candidate_env);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[1].mode, None);
+        assert_eq!(seen[1].model.as_deref(), Some("standard-id"));
     }
 
     // ---- ADR-0024: account pool ----

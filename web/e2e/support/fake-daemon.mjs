@@ -93,7 +93,14 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
-export function createFakeDaemon({ host = "127.0.0.1", port = 0, delayMs = 0, fixtures = defaultFixtures } = {}) {
+// token を与えると、`Authorization: Bearer <token>` の無い要求に 401 を返す（P1-07 の中継の検査）。
+export function createFakeDaemon({
+  host = "127.0.0.1",
+  port = 0,
+  delayMs = 0,
+  fixtures = defaultFixtures,
+  token = null,
+} = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
     throw new Error("fake daemon refuses reserved port");
@@ -104,7 +111,14 @@ export function createFakeDaemon({ host = "127.0.0.1", port = 0, delayMs = 0, fi
   let timer;
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
-    const record = { path: pathname, at: Date.now(), aborted: false };
+    const record = {
+      path: pathname,
+      method: req.method,
+      at: Date.now(),
+      aborted: false,
+      authorization: req.headers.authorization ?? null,
+      cookie: req.headers.cookie ?? null,
+    };
     requests.push(record);
     let finished = false;
     res.on("finish", () => {
@@ -114,6 +128,11 @@ export function createFakeDaemon({ host = "127.0.0.1", port = 0, delayMs = 0, fi
       if (!finished) record.aborted = true;
       clients.delete(res);
     });
+    if (token !== null && req.headers.authorization !== `Bearer ${token}`) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
     if (pathname === "/events" || pathname === "/api/v1/events") {
       res.writeHead(200, {
         "content-type": "text/event-stream",

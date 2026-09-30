@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
-// @ts-expect-error Local .mjs test support has no declaration.
 import { createFakeDaemon, defaultFixtures, validateFixture } from "./fake-daemon.mjs";
 
 let daemon: ReturnType<typeof createFakeDaemon> | undefined;

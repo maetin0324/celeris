@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
+import { createRelay } from "./relay.js";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -63,10 +64,17 @@ export function createApp({
   log = (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`),
   secretFile = process.env.CELERIS_WEB_SESSION_SECRET_FILE,
   failedLoginDelayMs,
+  daemonUrl,
+  daemonTokenFile,
+  relayTimeoutMs,
   registerRoutes = () => {},
 } = {}) {
   validateConfig({ bind, passwordFile });
   const auth = createAuth({ passwordFile, secretFile, failedDelayMs: failedLoginDelayMs });
+  // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
+  const relay = daemonUrl
+    ? createRelay({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs })
+    : null;
   const allowed = new Set(["localhost", "127.0.0.1", "::1", bind.host.toLowerCase()]);
   for (const value of allowedHosts.split(",")) {
     const host = hostName(value.trim());
@@ -123,6 +131,7 @@ export function createApp({
   );
   auth.register(app);
   registerRoutes(app);
+  relay?.register(app);
   app.use((req, res, next) => {
     if (
       req.path.startsWith("/api/") ||

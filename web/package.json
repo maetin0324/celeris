@@ -20,6 +20,7 @@
     "gen:types": "node scripts/gen-types.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:parity": "node scripts/check-parity.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
     "mobile-audit": "node scripts/mobile-audit.mjs"
   },
   "dependencies": {

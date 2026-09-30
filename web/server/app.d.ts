@@ -13,6 +13,9 @@ export function createApp(options?: {
   release?: string;
   secretFile?: string;
   failedLoginDelayMs?: number;
+  daemonUrl?: string;
+  daemonTokenFile?: string;
+  relayTimeoutMs?: number;
   log?: (entry: { path: string; status: number; ms: number }) => void;
   registerRoutes?: (app: Express) => void;
 }): Express;

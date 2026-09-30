@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
+import { createConsole } from "./console.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
 import { createRelay } from "./relay.js";
@@ -81,6 +82,7 @@ export function createApp({
         createRelay({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
         createFiles({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
         createEvents({ upstream: daemonUrl, tokenFile: daemonTokenFile }),
+        createConsole({ upstream: daemonUrl, tokenFile: daemonTokenFile }),
       ]
     : [];
   const allowed = new Set(["localhost", "127.0.0.1", "::1", bind.host.toLowerCase()]);
@@ -148,6 +150,8 @@ export function createApp({
       req.path === "/files" ||
       req.path.startsWith("/events/") ||
       req.path === "/events" ||
+      req.path.startsWith("/console/") ||
+      req.path === "/console" ||
       path.extname(req.path)
     )
       return res.status(404).type("text/plain").send("not found");

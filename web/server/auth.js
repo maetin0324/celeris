@@ -58,7 +58,9 @@ function isProtected(path) {
     path === "/files" ||
     path.startsWith("/files/") ||
     path === "/events" ||
-    path.startsWith("/events/")
+    path.startsWith("/events/") ||
+    path === "/console" ||
+    path.startsWith("/console/")
   );
 }
 

@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
+import { ArtifactsScreen } from "../features/artifacts/artifacts-view";
 import { optionalString } from "../lib/search";
 
-// R20 /artifacts（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
+// R20 /artifacts（P3-11）。画面は features/artifacts に置き、ここは配置だけ。loader は置かず fetch を待たない。
 export const Route = createFileRoute("/artifacts")({
   validateSearch: (search: Record<string, unknown>): { project?: string } => ({
     project: optionalString(search.project),
@@ -11,5 +11,6 @@ export const Route = createFileRoute("/artifacts")({
 });
 
 function Screen() {
-  return <ScreenFrame title="成果物" route="/artifacts" />;
+  const search = Route.useSearch();
+  return <ArtifactsScreen project={search.project} />;
 }

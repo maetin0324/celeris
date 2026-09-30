@@ -13,7 +13,12 @@ import type {
   ReportList,
   TaskDetail,
 } from "~/celeris/types";
-import { FROZEN_MILESTONES_PARAM, loadProjectDetail, wantsFrozenMilestones } from "~/routes/projects.$id";
+import {
+  FROZEN_MILESTONES_PARAM,
+  frozenMilestonesOpenCount,
+  loadProjectDetail,
+  wantsFrozenMilestones,
+} from "~/routes/projects.$id";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;
@@ -514,5 +519,15 @@ describe("以前の途中目標（読み取り専用）は開いたときだけ 
     expect(calls.map((r) => r.url)).toEqual(["/api/v1/projects/p1?include_frozen=true"]);
     // `frozen` 以外の値では開かない。
     expect(wantsFrozenMilestones(new Request("http://gui.invalid/projects/p1?frozen=0"))).toBe(false);
+  });
+
+  it("celeris ADR-0079 R6-4: 終わらないまま凍結した件数は milestones_frozen_open、欄が無ければ読めた行から数える", () => {
+    expect(frozenMilestonesOpenCount({ milestones: [], milestones_frozen_open: 7 })).toBe(7);
+    expect(
+      frozenMilestonesOpenCount({
+        milestones: [frozen, { ...frozen, id: "m2", status: "reached" }, { ...frozen, id: "m3", status: "paused" }],
+      }),
+    ).toBe(2);
+    expect(frozenMilestonesOpenCount({ milestones: [] })).toBe(0);
   });
 });

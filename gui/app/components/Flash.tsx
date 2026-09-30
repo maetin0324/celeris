@@ -394,7 +394,6 @@ const PROJECT_OP_LABEL: Record<string, string> = {
   project_edit: "案件の名前・説明を変更しました",
   milestone_create: "途中目標を追加",
   milestone_status: "途中目標の状態を変更",
-  project_plan: "分解を CoS に頼みました",
   // 案件のリポジトリ（ADR-0043 D1、Phase 52 / G16）。
   repo_create: "リポジトリを追加",
   repo_patch: "リポジトリを変更",
@@ -434,8 +433,6 @@ const MILESTONE_DECIDE_LABEL: Record<string, string> = {
 
 /**
  * 「案件」画面の action の結果（ADR-0033 D2）。案件・途中目標の操作は管理系ではない（3.42〜3.49 の前書き）。
- * 「この方針で進める」（`project_plan`、§3.61）は 202 なので、待たずに「頼みました」と出し、
- * その裏方のタスクへのリンクを添える（仕事の木は SSE の再検証で増えていく）。
  * 途中目標の判定（`milestone_decide`、§3.63）も同じく 202 で、`decided.decision` ごとの文言と、
  * `ok` で分解が起きたときは `plan_task_id` へのリンクを出す（`discuss` は呼び出し側が秘書の対話画面へ
  * 遷移するので、ここは遷移するまでの一瞬だけ見える）。
@@ -529,19 +526,6 @@ export function ProjectActionFlash({ outcome }: { outcome: ProjectOpOutcome | un
               {outcome.task.title}
             </Link>
             ）
-          </>
-        )}
-        {outcome.op === "project_plan" && (
-          <>
-            （
-            <Link
-              to={`/tasks/${outcome.accepted.task_id}`}
-              data-testid="flash-project-plan-task"
-              className="underline underline-offset-2"
-            >
-              裏方のタスク
-            </Link>
-            ）。仕事の木がこれから増えていきます。
           </>
         )}
       </p>

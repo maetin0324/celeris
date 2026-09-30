@@ -3220,7 +3220,7 @@ impl SqliteStore {
              last_run_id = ?8, last_checkpoint_run_id = ?9, json = ?10, updated_at = ?11, \
              phase = ?13, lease_run_id = ?14, lease_expires_at = ?15, branch = ?16, \
              base_commit = ?17, head_commit = ?18, integrated_commit = ?19, \
-             child_task_id = ?20, needs_decisions_json = ?21 \
+             child_task_id = ?20, needs_decisions_json = ?21, seq = ?22 \
              WHERE id = ?12",
             params![
                 wu.plan_id,
@@ -3244,6 +3244,9 @@ impl SqliteStore {
                 wu.integrated_commit,
                 wu.child_task_id,
                 serde_json::to_string(&wu.needs_decisions)?,
+                // ADR-0079 R6-4: replan は未完了の行の並び（`seq`）を新しい版の並びに直す（工程の障壁と
+                // scheduler の「今の工程 = seq 最小の行の工程」が読む）。他の書き手は読んだ行の値のまま渡す。
+                wu.seq,
             ],
         )?;
         Ok(())

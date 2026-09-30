@@ -12921,6 +12921,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "milestones_frozen_open": {
+          "default": 0,
+          "description": "ADR-0079 R6-4: 上の `milestones_frozen` のうち、終端（達成・再設計・中止）でないまま凍結した行の数\n（R5a は未終了の途中目標も状態のまま凍結した。GUI が「うち N 件は未終了のまま凍結」を出すため）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "project": {
           "$ref": "#/$defs/Project"
         },
@@ -14728,6 +14735,13 @@
         },
         "changed": {
           "description": "既存（未完了）の WorkUnit で spec または依存が変わったもの。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "moved": {
+          "description": "ADR-0079 R6-4: 別の段階（工程）へ移した未完了の WorkUnit（`<key>(<前の段階>→<新しい段階>)`）。行の\n`work_units.phase` も新しい段階に書き換える。`ExecutionPlanned.reason` にも `phase: …` として残す。",
           "items": {
             "type": "string"
           },

@@ -1629,3 +1629,8 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
 - 08:0xZ: **R7-2**（planner の「check の書き方」指針、`max_child_tasks_per_plan` は子を作る unit だけ（done / adopt を除く）、plan/3 の JSON 上限 64 KiB と
   削り方の案内、config 例の注記。Opus 4b28613）を main に統合 → release chain 実行中。残: failed のまま残した task unit は数える、`max_units_per_stage` は done も数える。
 - 08:00Z: release **fc60977fd142**（main = R7-2 まで、schema 34）: gate ok、verify ok / live_ok。昇格は人（live）。
+- 08:09Z: リファクタ retry の子 01M3RMEW5X86JBSKH4PH7J4RVP（旧 tip の merge）が段階 merge の統合検査で失敗 → 質問（R6-1 D7 の効果で失敗した check が質問文に
+  出る）。原因 3 つ: planner の check が git の形（`HEAD^2` = 旧 tip、merge commit）を前提にしている（統合は WU ブランチの取り込みで merge commit にならない）、
+  commit message の grep を受け入れ条件にしている、そして **葉が conflict marker を含んだまま commit**（task-ops / task-worker がコンパイル不能）。
+  compound の note で「内容の検査に置き換え、衝突解消の葉を足す」を渡して replan（2 回目の note は planner run 中で 409、次の失敗時に再送）。
+  **R7 候補**: 旧ブランチを merge する葉の check に「conflict marker 無し + cargo build」を planner 指針として足す。

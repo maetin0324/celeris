@@ -191,6 +191,76 @@ export function createFakeDaemon({
       res.end(JSON.stringify({ error: "too_many_streams" }));
       return;
     }
+    // ops: daemon/providers (P4-12)
+    if (pathname === "/api/v1/replay" || pathname.startsWith("/api/v1/providers") || pathname === "/api/v1/reload") {
+      if (!server.opsProviders)
+        server.opsProviders = {
+          items: [
+            {
+              id: "claude-main",
+              adapter: "claude-code",
+              concurrency: 2,
+              env_keys: [],
+              tiers: ["standard"],
+              model: "sonnet",
+              stats: {
+                by_day: [],
+                done: 0,
+                error: 0,
+                input_tokens: 0,
+                lease_expired: 0,
+                output_tokens: 0,
+                question: 0,
+                requeue: 0,
+                runs: 0,
+              },
+            },
+          ],
+        };
+      const ops = server.opsProviders;
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        record.body = text;
+        const json = (status, body) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+        };
+        let input = {};
+        try {
+          input = text ? JSON.parse(text) : {};
+        } catch {
+          return json(400, { error: "bad json" });
+        }
+        const parts = pathname.replace("/api/v1/", "").split("/");
+        if (pathname === "/api/v1/replay" && req.method === "POST") return json(200, { mismatches: [], tasks: 3 });
+        if (pathname === "/api/v1/reload" && req.method === "POST") return json(200, { reloaded: true });
+        if (parts[0] !== "providers") return json(404, { error: "not found" });
+        const found = ops.items.find((item) => item.id === parts[1]);
+        if (parts.length === 1 && req.method === "GET") return json(200, { items: ops.items });
+        if (parts.length === 1 && req.method === "POST") {
+          if (!input.id || ops.items.some((item) => item.id === input.id))
+            return json(422, { detail: "id が不正か重複しています" });
+          const created = { concurrency: 1, env_keys: [], tiers: [], stats: ops.items[0]?.stats, ...input };
+          ops.items.push(created);
+          return json(200, created);
+        }
+        if (!found) return json(404, { error: "not found" });
+        if (parts.length === 2 && req.method === "PATCH") return json(200, Object.assign(found, input));
+        if (parts.length === 2 && req.method === "DELETE") {
+          ops.items.splice(ops.items.indexOf(found), 1);
+          return json(200, {});
+        }
+        if (parts[2] === "check" && req.method === "POST") {
+          found.last_check = { at: "2026-09-30T00:00:00Z", result: "ok", detail: null };
+          return json(200, { checked_at: "2026-09-30T00:00:00Z", result: "ok", detail: null });
+        }
+        return json(404, { error: "not found" });
+      });
+      return;
+    }
+    // end ops: daemon/providers (P4-12)
     if (pathname === "/events" || pathname === "/api/v1/events" || pathname === "/api/v1/stream") {
       record.query = new URL(req.url ?? "/", "http://x").search;
       record.lastEventId = req.headers["last-event-id"] ?? null;
@@ -235,6 +305,76 @@ export function createFakeDaemon({
         else respond();
       });
       return;
+    }
+    // ops: releases (P4-16)
+    // GET /api/v1/releases は状態を持つ。POST /api/v1/releases/{sha12}/promote は 202 で昇格を起こし、
+    // `pendingMs` の間は promoting、その後 `mode`（succeed | fail）の結果を行に書く。
+    // 制御: POST /__fake/releases `{ mode?, pendingMs? }`。
+    if (pathname === "/__fake/releases" || pathname.startsWith("/api/v1/releases")) {
+      if (!server.fakeReleases) {
+        server.fakeReleases = {
+          mode: "succeed",
+          pendingMs: 0,
+          current: "aaaaaaaaaaaa",
+          promotedAt: { aaaaaaaaaaaa: "2026-09-29T00:00:00Z", bbbbbbbbbbbb: null },
+          promoting: null,
+          failed: null,
+        };
+      }
+      const rel = server.fakeReleases;
+      const json = (status, value) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(value));
+      };
+      if (req.method === "POST") {
+        const chunks = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          const promote = /^\/api\/v1\/releases\/([0-9a-f]{12})\/promote$/.exec(pathname);
+          if (pathname === "/__fake/releases") {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+            if (body.mode) rel.mode = body.mode;
+            if (typeof body.pendingMs === "number") rel.pendingMs = body.pendingMs;
+            return json(200, { mode: rel.mode, pendingMs: rel.pendingMs });
+          }
+          if (!promote || !(promote[1] in rel.promotedAt)) return json(404, { error: "not found" });
+          const sha = promote[1];
+          if (rel.promoting) return json(409, { error: "別の昇格が走っています" });
+          const startedAt = new Date().toISOString();
+          rel.promoting = sha;
+          rel.failed = null;
+          setTimeout(() => {
+            if (rel.mode === "fail")
+              rel.failed = { sha, failed_at: new Date().toISOString(), error: "promote.sh が exit 1 で終わりました" };
+            else {
+              rel.current = sha;
+              rel.promotedAt[sha] = new Date().toISOString();
+            }
+            rel.promoting = null;
+          }, rel.pendingMs);
+          return json(202, { sha12: sha, log: `${sha}/promote.log`, started_at: startedAt, script_from: "current" });
+        });
+        return;
+      }
+      const item = (sha) => ({
+        sha12: sha,
+        gate_ok: true,
+        is_current: rel.current === sha,
+        is_previous: rel.current !== sha && rel.promotedAt[sha] !== null,
+        promoting: rel.promoting === sha,
+        promoted_at: rel.promotedAt[sha],
+        promote_failed:
+          rel.failed && rel.failed.sha === sha ? { failed_at: rel.failed.failed_at, error: rel.failed.error } : null,
+        built_at: "2026-09-28T00:00:00Z",
+        ref: "main",
+      });
+      return json(200, {
+        current: rel.current,
+        previous: null,
+        running: { release: rel.current, role: "active", instance_id: "I1" },
+        instances: [],
+        items: ["bbbbbbbbbbbb", "aaaaaaaaaaaa"].map(item),
+      });
     }
     const file = files[pathname];
     if (file) {

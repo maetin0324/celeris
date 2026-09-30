@@ -10,6 +10,10 @@ it("requires completed rows to have a matching parity title and phase completion
   try {
     mkdirSync(path.join(root, "docs/web"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/parity"), { recursive: true });
+    mkdirSync(path.join(root, "web/e2e/support"), { recursive: true });
+    mkdirSync(path.join(root, "web/server"), { recursive: true });
+    writeFileSync(path.join(root, "web/server/spa-routes.js"), 'export const spaRoutePatterns = ["/tasks"];');
+    writeFileSync(path.join(root, "web/e2e/support/screens.ts"), 'export const screens = [{ path: "/tasks" }];');
     const routes = Array.from(
       { length: 42 },
       (_, index) =>
@@ -21,6 +25,9 @@ it("requires completed rows to have a matching parity title and phase completion
     );
     writeFileSync(path.join(root, "web/e2e/parity/gateway.spec.ts"), 'test("parity-x: 型検査", () => {});');
     expect(checkParity(root)).toEqual([]);
+    writeFileSync(path.join(root, "web/server/spa-routes.js"), 'export const spaRoutePatterns = ["/tasks", "/inbox"];');
+    expect(checkParity(root)).toContain("/inbox: missing V3 screen");
+    writeFileSync(path.join(root, "web/server/spa-routes.js"), 'export const spaRoutePatterns = ["/tasks"];');
     expect(checkParity(root, 1)).toContain("R01: phase 1 requires completion");
     writeFileSync(path.join(root, "web/e2e/parity/gateway.spec.ts"), "");
     expect(checkParity(root)).toContain("X16: missing parity test title");

@@ -12,6 +12,15 @@ export function checkParity(root = defaultRoot, requirePhase = null) {
     .map((name) => readFileSync(path.join(specDir, name), "utf8"))
     .join("\n");
   const errors = [];
+  // V3 台帳は gateway の全画面を列挙する。片方だけ増やしたときは検査を落とす。
+  const routeSource = readFileSync(path.join(root, "web/server/spa-routes.js"), "utf8");
+  const screenSource = readFileSync(path.join(root, "web/e2e/support/screens.ts"), "utf8");
+  const routeBlock = routeSource.match(/spaRoutePatterns\s*=\s*\[([\s\S]*?)\]/)?.[1] ?? "";
+  const routes = [...routeBlock.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  const screens = [...screenSource.matchAll(/\{\s*path:\s*"([^"]+)"/g)].map((match) => match[1]);
+  for (const route of routes) if (!screens.includes(route)) errors.push(`${route}: missing V3 screen`);
+  for (const screen of screens) if (!routes.includes(screen)) errors.push(`${screen}: undeclared V3 screen`);
+  if (new Set(screens).size !== screens.length) errors.push("duplicate V3 screen");
   const rows = matrix.split("\n").filter((line) => /^\| (?:R\d\d|X\d+) \|/.test(line));
   if (rows.filter((line) => line.startsWith("| R")).length !== 42) errors.push("expected 42 route rows");
   for (const row of rows) {

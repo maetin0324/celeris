@@ -25,14 +25,16 @@ const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const SECRET: &str = "shared-cdp-secret-sentinel";
 const TCP_PROBE: &str = r#"import json, socket, time
 from pathlib import Path
-for attempt in range(200):
+deadline = time.monotonic() + 60
+while True:
     try:
         sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
         break
     except OSError:
+        if time.monotonic() > deadline:
+            raise RuntimeError('CDP forwarding port unavailable')
         time.sleep(.02)
-else:
-    raise RuntimeError('CDP forwarding port unavailable')
+sock.settimeout(30)
 sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
 head = b''
 while not head.endswith(b'\r\n\r\n'):
@@ -205,7 +207,7 @@ fn fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .expect("TLS fixture");
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + Duration::from_secs(30);
     while TcpStream::connect((IP, 443)).is_err() {
         assert!(Instant::now() < until, "TLS fixture never listened");
         thread::sleep(Duration::from_millis(50));
@@ -339,7 +341,8 @@ fn inner() {
         vec!["fixture.example.com".into()],
     )
     .expect("relay");
-    let until = Instant::now() + Duration::from_secs(10);
+    // 高負荷時（workspace 全体の test と並走）は sandbox 内の browser 起動が 10 秒を超えるので長めに待つ。
+    let until = Instant::now() + Duration::from_secs(60);
     while !session.path().join("tcp-probe.ok").exists() {
         assert!(
             Instant::now() < until,

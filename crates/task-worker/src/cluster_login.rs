@@ -851,12 +851,14 @@ mod tests {
     }
 
     /// `SSH_ASKPASS` を呼び、返ってきたコードが `{expected_code}` と一致すれば以後 `-O check` が通る偽 ssh
-    /// （`auth = \"totp\"` を模す）。
+    /// （`auth = \"totp\"` を模す）。askpass は `sh` で読ませる: 直前に同じプロセスで書いた実行ファイルを
+    /// exec すると、並行テストの fork が書き込み fd を exec 前まで握っていて ETXTBSY で黙って失敗し、
+    /// プロンプトが来ないまま prompt_timeout に落ちることがある（高負荷の評価器で観測）。
     fn askpass_script(state: &Path, prompt: &str, expected_code: &str) -> String {
         format!(
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"{expected_code}\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -1021,7 +1023,7 @@ mod tests {
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                echo $$ > \"$STATE/masterpid\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"{expected_code}\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                exit 0\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -1578,7 +1580,7 @@ mod tests {
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                printf '%s\\n' \"$@\" > \"$STATE/argv\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"123456\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -1806,7 +1808,7 @@ mod tests {
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                printf '%s\\n' \"$@\" > \"$STATE/argv\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"123456\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \

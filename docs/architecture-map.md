@@ -7,7 +7,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 1 つの変更で読むべき範囲（semantic context）を素早く絞るための索引。subsystem → 所有する crate/module →
 最初に開く entry point → 関連する ADR/設計節、の対応だけを持つ。設計判断そのものは書かない
 （`docs/DESIGN.md` と `docs/adr/` にリンクするだけで、内容はコピーしない）。実体は
-`scripts/dev/check-architecture-map-paths.py` が表内のソースパスと文書リンクの実在を検査する。
+`scripts/dev/check-architecture-map.py` が表内のソースパスと文書リンクの実在を検査する。
 
 分割の詳細は entry point の module doc と各工程の記録を参照する。
 
@@ -114,4 +114,4 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 - 行が増えすぎたら「主要 subsystem」の粒度を保つために統合する（1 crate 1 行までは削らない）。200 行を超えたら周辺 crate の表から削るのではなく、
   変更頻度の低い行をまとめる。
 - 新しい crate や大きな module 分割をしたら、この表の対応行を 1 行更新する（新しい ADR/設計文書があればリンクを足す。内容はコピーしない）。
-- パスの実在は `scripts/dev/check-architecture-map-paths.py` で機械的に検査する（このファイルを手で直したら実行すること）。
+- パスの実在は `scripts/dev/check-architecture-map.py` で機械的に検査する（このファイルを手で直したら実行すること）。

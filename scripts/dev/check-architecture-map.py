@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check-architecture-map-paths.py — docs/architecture-map.md が指す全パスの実在を検査する。
+"""check-architecture-map.py — docs/architecture-map.md が指す全パスの実在を検査する。
 
 対象は表の行（`|` で始まる行）にある backtick 区切りのパスと、Markdown リンク `[text](path)`
 の相対パス。表の外の説明文にある backtick は検査しない（`crates/*/src/` のような一般的な

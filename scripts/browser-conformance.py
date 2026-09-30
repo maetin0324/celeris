@@ -169,8 +169,75 @@ def backend_run(backend, command, agent_browser, origin, root, protocol_scripted
     }
 
 
+# ADR-0093: P4-B trusted injection evidence. Mirrors task_core::browser_backend.
+P4B_ATTACK_MARKS = (
+    "A0", "A1", "A2", "A3", "A3b", "A4", "A5", "A6", "A7", "A7a", "A8", "A8n", "A9", "A9a",
+    "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17",
+)
+P4B_H3_TESTS = (
+    "production_h3_injects_once_without_exposure",
+    "injected_leak_is_caught_by_the_same_scanner",
+)
+
+
+def p4b_evidence(ledger_path, backends, output):
+    """Run the real attack matrix and H3 e2e, then add their per-test results to a measured
+    ledger. The P4-B cases enter `passed` only when every required test passed; otherwise the
+    evidence is kept with its failed/not_run outcome and the cases stay out (fail closed)."""
+    manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
+    ledger = json.loads(Path(ledger_path).read_text())
+    if ledger.get("schema") != 1 or ledger.get("source") != "celeris-browser-conformance":
+        print("ledger is not a measured celeris-browser-conformance record", file=sys.stderr)
+        return 1
+    runs = {}
+    for name, cmd in (
+        ("attacks", ["-p", "task-worker", "--test", "browser_injection_attacks",
+                     "real_browser_injection_attack_matrix", "--", "--exact", "--nocapture"]),
+        ("h3", ["-p", "task-api", "--test", "browser_h3_injection", "--", "--nocapture"]),
+    ):
+        done = subprocess.run(["cargo", "test", "--manifest-path", str(manifest), *cmd],
+                              text=True, capture_output=True, timeout=1800, check=False)
+        runs[name] = done
+        (output / f"p4b-{name}.log").write_text(done.stdout + "\n" + done.stderr)
+    attacks = runs["attacks"]
+    evidence = []
+    for mark in P4B_ATTACK_MARKS:
+        ok = attacks.returncode == 0 and f"ATTACK-{mark}-OK" in attacks.stderr
+        evidence.append({
+            "case": "injection_attack_suite",
+            "test": f"browser_injection_attacks::real_browser_injection_attack_matrix#{mark}",
+            "outcome": "passed" if ok else ("failed" if attacks.returncode else "not_run"),
+        })
+    h3 = runs["h3"]
+    for test in P4B_H3_TESTS:
+        line = re.search(rf"^test {re.escape(test)} \.\.\. (ok|FAILED|ignored)$",
+                         h3.stdout, re.MULTILINE)
+        outcome = {"ok": "passed", "FAILED": "failed"}.get(line.group(1) if line else "", "not_run")
+        evidence.append({"case": "auth_section_observation_stop",
+                         "test": f"browser_h3_injection::{test}", "outcome": outcome})
+    complete = all(e["outcome"] == "passed" for e in evidence)
+    for result in ledger["results"]:
+        if result["backend_id"] not in backends:
+            continue
+        result["evidence"] = evidence
+        passed = set(result["passed"]) - {"injection_attack_suite", "auth_section_observation_stop"}
+        if complete:
+            passed |= {"injection_attack_suite", "auth_section_observation_stop"}
+        result["passed"] = sorted(passed)
+    temporary = output / "conformance.json.tmp"
+    temporary.write_text(json.dumps(ledger, indent=2) + "\n")
+    temporary.replace(output / "conformance.json")
+    print(json.dumps({"record": str(output / "conformance.json"), "p4b_complete": complete,
+                      "evidence": evidence}))
+    return 0 if complete else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--p4b-evidence", metavar="LEDGER",
+                        help="add P4-B attack/H3 test evidence to this measured ledger (ADR-0093)")
+    parser.add_argument("--p4b-backend", action="append", default=[],
+                        help="backend id that receives the P4-B evidence (repeatable)")
     parser.add_argument("--agent-browser", default="agent-browser")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--backend-command", action="append", default=[],
@@ -185,6 +252,12 @@ def main():
     args = parser.parse_args()
     if args.drive:
         return drive()
+    if args.p4b_evidence:
+        if not args.p4b_backend or not set(args.p4b_backend) <= set(BACKENDS):
+            parser.error("--p4b-evidence needs one or more known --p4b-backend ids")
+        output = Path(args.output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        return p4b_evidence(args.p4b_evidence, set(args.p4b_backend), output)
     command = {}
     for item in args.backend_command:
         backend, sep, argv = item.partition("=")

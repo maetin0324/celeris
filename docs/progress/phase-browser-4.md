@@ -4,7 +4,7 @@
 tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM1XP4C7BH45]
 ---
 
-- 状態: **P4-A/B の受け入れは未完、P4-C の公開能力は scripted LLM による実 backend 適合済み**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。機密能力は実 runtime・CDP sink・injection-only IPC 適合まで拒否。本番 H3 経路（controller 所有 Chromium/CDP 共有・trusted selector・`browser.rs` 結線・実 e2e 注入検証）は ADR-0091 の unit 群（selector/shared-cdp/h3-wire/e2e）で実装済みだが、本番 broker の admission は `Attested` のみで、この host は同一 UID（`SameUid`）のため機密起動（実注入）は本番経路で拒否のまま。本番未昇格。
+- 状態: **P4-B は局所 fixture で合格し、機密能力は P4-B 実測証拠つき適合記録からだけ解放可能（ADR-0093、2026-09-30）。本番 admission は同一 UID で拒否のまま。P4-A の受け入れは未完、P4-C の公開能力は scripted LLM による実 backend 適合済み**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。機密能力は実 runtime・CDP sink・injection-only IPC 適合まで拒否。本番 H3 経路（controller 所有 Chromium/CDP 共有・trusted selector・`browser.rs` 結線・実 e2e 注入検証）は ADR-0091 の unit 群（selector/shared-cdp/h3-wire/e2e）で実装済みだが、本番 broker の admission は `Attested` のみで、この host は同一 UID（`SameUid`）のため機密起動（実注入）は本番経路で拒否のまま。本番未昇格。
 - 更新: 2026-09-30（run 01M3S43TR5TQJ4PQ40VVTR6VY0、WorkUnit closeout: ADR-0091 の後続 unit（selector・shared-cdp・h3-wire・e2e）を workspace に統合済みであることを確認し、workspace 検査を実行。`cargo test --workspace` exit 0（3041 passed / 0 failed / 11 ignored）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all --check` は本 unit 外の既存フォーマット崩れ 2 箇所を `cargo fmt --all` で解消し再検査 exit 0）
 - ADR-0091: [H3 shared CDP and trusted selector](../adr/0091-browser-p4b-h3-shared-cdp-trusted-selector.md)（controller 所有 1 Chromium/CDP の共有・認証区間中の全面遮断、管理者 site policy 由来の trusted selector の固定・照合、`browser.rs` H3 の D3 照合順、e2e の 6 面 sentinel 非露出検証と負の対照）
 - ADR-0087: [same-uid bwrap runtime](../adr/0087-browser-p4a-same-uid-bwrap-runtime.md)、[conformance dispatch](../adr/0087-browser-phase4-conformance-dispatch.md)（P4-A と P4-C が同番号で別 file を追加。ADR-0088 も同様）
@@ -176,3 +176,25 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
   - `cargo clippy --workspace -- -D warnings` → exit 0。
   - `cargo fmt --all --check` → exit 0。
 - 未解決: A8（RedisplayGuard 未配線）・A1 の stale-id 競合再現・A4 の OOPIF・A13 の別 UID 実証は上の節のまま未達。次段は `redisplay` WorkUnit（RedisplayGuard を controller の agent 観測経路へ配線）。
+
+## P4-B 判定と適合記録による機密能力の条件付き解放（2026-09-30、WorkUnit unlock、ADR-0093）
+
+- 判定: **P4-B trusted injection は局所 fixture 上で合格**。attacks（A0〜A17、全 22 印 OK、A8 は ADR-0092 の RedisplayGuard 配線で合格・`A8-GAP` 無し）、h3-prod（`production_h3_injects_once_without_exposure`・負の対照 `injected_leak_is_caught_by_the_same_scanner`）、redisplay（A8）が同一 workspace で全て通ったため、P4-C 適合記録に P4-B の実測証拠を載せる経路を作った。
+- 実装: `ConformanceResult.evidence`（試験名・`passed|failed|not_run`）。`injection_attack_suite`・`auth_section_observation_stop` は要る試験名が全て `passed` の証拠があるときだけ通る。`scripts/browser-conformance.py --p4b-evidence` が実試験を走らせて証拠を書き、1 件でも不合格なら件を外す。静的な適合登録は無し。`isolated_runtime_ready` を routing と別に判定。
+- 本番: ADR-0091 のとおり本番 broker の admission は `Attested` のみで、この host は同一 UID（`SameUid`）のため機密起動は本番経路で拒否のまま（変更なし）。本番未昇格。この run では本番 ledger を生成・配置していない。
+- 試験:
+  - `browser_backend::tests::p4b_cases_count_only_with_measured_evidence`（件名だけ・印 1 つ欠け・failed/not_run 混入・別件の証拠では `CredentialInjection` が Missing）
+  - `browser::tests::credential_use_is_released_only_by_p4b_evidence_in_the_ledger`（証拠なし ledger で CredentialUse の routing 拒否、証拠つきで acp のみ解放、1 印 failed で再び拒否）
+  - `browser::tests::released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime`（解放後も記録の無い claude-code・browser-specialist・未知 backend は拒否、隔離 runtime 未設定・bwrap 不在・resolver 無しは `isolated_runtime_unavailable`）
+  - `browser_h3_injection` の ledger fixture を証拠つきに更新（証拠なしなら routing で落ちる）
+- 証拠コマンドと結果:
+  - `cargo test --workspace --no-fail-fast` → exit 0、3047 passed / 0 failed / 11 ignored。`real_browser_injection_attack_matrix ... ok`、`production_h3_injects_once_without_exposure ... ok`、`injected_leak_is_caught_by_the_same_scanner ... ok`、上記新規 3 試験 ok。
+    - 直前の 1 回目（fail-fast）は `celeris --test instance_handoff` の 3 件（release handoff のタイミング試験、本変更と無関係）が高負荷で落ちて exit 101。再実行で通過。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all --check` → exit 0。
+- 未解決:
+  - A1: controller 照合後・`Runtime.callFunctionOn` 前の競合（broker の `target_changed`）は実 browser で未再現。
+  - A4: fixture の 2 host が同一 site のため OOPIF にならず、OOPIF の `target_mismatch` は未再現。
+  - A13: 別 host UID の実 process からの呼び出しは未試験（`PeerCred` を与えた関数単位のみ）。
+  - 本番 admission は `Attested` 必須、同一 UID host では拒否のまま（ADR-0091）。別 UID/attested runtime が要る。
+  - P4-A の `isolation_suite`・`egress_negative_suite` は件名のみで証拠化していない。runner の `--p4b-evidence` を実 ledger に対して走らせた記録はまだ無い（運用者が本番 ledger を作るときに実行する）。
+  - `IdentityRestore` は `certify` 上は同じ証拠要件だが、worker の routing が要求する起動前能力は `CredentialUse`→`CredentialInjection` のみ。

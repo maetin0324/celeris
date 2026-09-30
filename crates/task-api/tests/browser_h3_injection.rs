@@ -402,9 +402,38 @@ impl World {
             live: Mutex::default(),
         };
         let record = self.env.dir.path().join("empty-browser-conformance.json");
+        // ADR-0093: the P4-B cases count only with per-test evidence in the ledger.
+        let evidence: Vec<_> = [
+            task_core::browser_backend::FixtureCase::InjectionAttackSuite,
+            task_core::browser_backend::FixtureCase::AuthSectionObservationStop,
+        ]
+        .into_iter()
+        .flat_map(|case| {
+            task_core::browser_backend::required_evidence(case)
+                .into_iter()
+                .map(
+                    move |test| task_core::browser_backend::ConformanceEvidence {
+                        case,
+                        test,
+                        outcome: task_core::browser_backend::EvidenceOutcome::Passed,
+                    },
+                )
+        })
+        .collect();
         std::fs::write(
             &record,
-            br#"{"schema":1,"source":"celeris-browser-conformance","results":[{"backend_id":"acp","version":"0.38.1","passed":["open_allowed_origin","refuse_denied_origin","resume_after_crash","snapshot_has_refs","click_by_ref","screenshot_artifact","download_to_artifacts","isolation_suite","egress_negative_suite","injection_attack_suite","auth_section_observation_stop"]}]}"#,
+            serde_json::to_vec(&serde_json::json!({
+                "schema": 1, "source": "celeris-browser-conformance",
+                "results": [{
+                    "backend_id": "acp", "version": "0.38.1",
+                    "passed": ["open_allowed_origin", "refuse_denied_origin", "resume_after_crash",
+                        "snapshot_has_refs", "click_by_ref", "screenshot_artifact",
+                        "download_to_artifacts", "isolation_suite", "egress_negative_suite",
+                        "injection_attack_suite", "auth_section_observation_stop"],
+                    "evidence": evidence,
+                }],
+            }))
+            .expect("test fixture"),
         )
         .expect("test fixture");
         let outcome = task_worker::browser::run_with_executable_record(

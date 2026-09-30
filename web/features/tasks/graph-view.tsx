@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import type { FormEvent } from "react";
+import { type FormEvent, useEffect, useRef } from "react";
 import { apiGet } from "../../api/client";
 import type { Graph } from "../../api/generated/types";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
@@ -9,6 +9,15 @@ import { layoutGraph } from "./graph-layout";
 
 export function GraphScreen({ root, depth }: { root?: string; depth?: number }) {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form) return;
+    const rootInput = form.elements.namedItem("root");
+    const depthInput = form.elements.namedItem("depth");
+    if (rootInput instanceof HTMLInputElement) rootInput.value = root ?? "";
+    if (depthInput instanceof HTMLInputElement) depthInput.value = depth === undefined ? "" : String(depth);
+  }, [root, depth]);
   const params = new URLSearchParams();
   if (root) params.set("root", root);
   if (depth !== undefined) params.set("depth", String(depth));
@@ -36,7 +45,13 @@ export function GraphScreen({ root, depth }: { root?: string; depth?: number }) 
       <h1 tabIndex={-1} className="text-xl font-semibold focus:outline-none">
         依存グラフ
       </h1>
-      <form method="get" onSubmit={submit} data-testid="graph-filter-form" className="flex flex-wrap items-end gap-3">
+      <form
+        ref={formRef}
+        method="get"
+        onSubmit={submit}
+        data-testid="graph-filter-form"
+        className="flex flex-wrap items-end gap-3"
+      >
         <label className="flex flex-col gap-1">
           root
           <input name="root" defaultValue={root ?? ""} className="min-h-11 w-56 max-w-full rounded border px-3" />

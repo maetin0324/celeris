@@ -83,6 +83,10 @@ test("parity: /tasks 絞り込み・検索・続き", async ({ page }) => {
     await expect(page.getByRole("searchbox", { name: "検索" })).toHaveValue("計算");
     await expect(page.getByRole("checkbox", { name: "ready" })).toBeChecked();
     await expect(page).toHaveURL(/status=ready/);
+    await page.getByRole("searchbox", { name: "検索" }).fill("別条件");
+    await page.getByRole("searchbox", { name: "検索" }).press("Enter");
+    await page.goBack();
+    await expect(page.getByRole("searchbox", { name: "検索" })).toHaveValue("計算");
     expect(calls.some((query) => query.includes("cursor=next"))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
       0,
@@ -116,6 +120,10 @@ test("parity: /graph root・depth", async ({ page }) => {
     await page.getByRole("button", { name: "絞り込み" }).click();
     await expect(page).toHaveURL(/root=T1&depth=2/);
     await expect.poll(() => calls.some((query) => query.includes("root=T1") && query.includes("depth=2"))).toBe(true);
+    await page.getByLabel("root").fill("T2");
+    await page.getByRole("button", { name: "絞り込み" }).click();
+    await page.goBack();
+    await expect(page.getByLabel("root")).toHaveValue("T1");
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
       0,
     );

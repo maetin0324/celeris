@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type { TaskList, TaskSummary } from "../../api/generated/types";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
@@ -41,6 +41,22 @@ export function TasksListScreen({
   limit: string | undefined;
 }) {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
+  // History navigation changes the URL without remounting the form. Update its
+  // controls in place so the focused search input stays focused on submit.
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form) return;
+    const search = form.elements.namedItem("q");
+    const sort = form.elements.namedItem("order");
+    const pageSize = form.elements.namedItem("limit");
+    if (search instanceof HTMLInputElement) search.value = q ?? "";
+    if (sort instanceof HTMLSelectElement) sort.value = order ?? "updated_desc";
+    if (pageSize instanceof HTMLSelectElement) pageSize.value = limit ?? "";
+    for (const checkbox of form.querySelectorAll<HTMLInputElement>('input[name="status"]')) {
+      checkbox.checked = status.includes(checkbox.value);
+    }
+  }, [q, status, order, limit]);
   const filters: TaskListFilters = { q, status, order, limit };
   const key = filterKey(filters);
   const base = useQuery({ ...taskListQuery(filters) });
@@ -94,7 +110,12 @@ export function TasksListScreen({
         タスク
       </h1>
 
-      <form className="flex flex-wrap items-center gap-3" onSubmit={applyFilters} data-testid="tasks-filter">
+      <form
+        ref={formRef}
+        className="flex flex-wrap items-center gap-3"
+        onSubmit={applyFilters}
+        data-testid="tasks-filter"
+      >
         <label className="flex items-center gap-2 text-sm">
           <span id="tasks-q">検索</span>
           <input

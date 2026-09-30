@@ -9,6 +9,7 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Button } from "../../components/ui/button";
 import { Route } from "../../routes/org.index";
+import { OrgProfile, OrgSkills } from "./org-skills";
 import { buildOrgTree, type TreeNode } from "./org-tree";
 
 const kindLabel: Record<OrgKind, string> = { secretary: "CoS", department: "部", section: "課" };
@@ -195,6 +196,14 @@ export function OrgScreen() {
                   >
                     話す
                   </a>
+                  <OrgProfile
+                    node={selected}
+                    profile={query.data.effective_profiles?.find((profile) => profile.node_id === selected.id)}
+                  />
+                  <OrgSkills
+                    node={selected}
+                    profile={query.data.effective_profiles?.find((profile) => profile.node_id === selected.id)}
+                  />
                   <NodeForm node={selected} items={query.data.items} />
                 </div>
               ) : (

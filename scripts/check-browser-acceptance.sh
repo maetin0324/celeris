@@ -119,7 +119,8 @@ done < <(grep -oE 'cmd: `[^`]+`' "$DOC" | sed -E 's/cmd: `(.*)`/\1/' | sort -u)
 [[ $fail -eq 0 ]] || exit 1
 
 log="$(mktemp)"
-trap 'rm -f "$log"' EXIT
+errlog="$(mktemp)"
+trap 'rm -f "$log" "$errlog"' EXIT
 mapfile -t keys < <(printf '%s\n' "${!filters[@]}" | sort)
 for key in "${keys[@]}"; do
   read -r -a kw <<<"$key"
@@ -129,11 +130,14 @@ for key in "${keys[@]}"; do
     mapfile -t args < <(printf '%s\n' "${fs[@]}" | sort -u)
   fi
   echo "==> cargo test -p ${kw[*]} -- ${args[*]}"
-  out="$(cargo test -p "${kw[@]}" -- "${args[@]}" 2>&1)"
+  # `test <名前> ... ok` の判定は stdout だけで行う。test の eprintln!（stderr）が同じ行に割り込むと
+  # `... ok` が行頭から切れて偽の不合格になるため、stderr は別に取って失敗時だけ出す。
+  out="$(cargo test -p "${kw[@]}" -- "${args[@]}" 2>"$errlog")"
   code=$?
   printf '%s\n' "$out" >>"$log"
   printf '%s\n' "$out" | grep -E '^test result:' || true
   [[ $code -eq 0 ]] || {
+    tail -40 "$errlog" >&2
     printf '%s\n' "$out" | tail -40 >&2
     err "cargo test -p ${kw[*]} が exit $code"
   }

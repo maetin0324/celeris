@@ -232,6 +232,13 @@ struct StoreSink {
     live: Mutex<Vec<String>>,
 }
 impl EventSink for StoreSink {
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn task_worker::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(task_worker::browser_live::InMemoryGate::new()))
+    }
     fn browser_auth_section(
         &self,
         run_id: &str,

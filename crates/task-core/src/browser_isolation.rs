@@ -479,6 +479,11 @@ pub trait LiveSessionEntry: LiveIsolation + Send + Sync {
     fn accepts_state(&self) -> bool;
     /// 開封済み state を controller にだけ渡す。agent・HTTP 応答には出さない。
     fn deliver_state(&self, state: &[u8]) -> Result<(), StateRejected>;
+    /// Live View の鍵（task_id, run_id）。復元は投入の前にこの鍵で session を観測停止として
+    /// 記録する（ADR-0080 H3 / ADR-0083 D4）。無ければ記録できないので開封しない。
+    fn live_key(&self) -> Option<(String, String)> {
+        None
+    }
 }
 
 /// 稼働中 session の索引（ADR-0088 D5）。登録・削除は runtime の supervisor だけが行う。

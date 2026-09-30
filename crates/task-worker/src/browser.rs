@@ -468,6 +468,13 @@ impl EventSink for BrowserSink<'_> {
     ) -> Result<(), String> {
         self.0.browser_auth_section(run_id, session_id, active)
     }
+    fn browser_control_gate(
+        &self,
+        run_id: &str,
+        session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        self.0.browser_control_gate(run_id, session_id)
+    }
     fn browser_live(
         &self,
         run_id: &str,
@@ -1190,11 +1197,16 @@ async fn run_with_executable_attempt(
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
         .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    // ADR-0094: every shim-issued agent action passes the store-backed control gate.
+    let control_gate = sink
+        .browser_control_gate(run_id, &session)
+        .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
     let action_server = crate::browser_action::ActionServer::start(
         &action_socket,
         &runtime,
         policy.allowed_domains().to_vec(),
         allowed.allow,
+        control_gate,
     )
     .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let egress_policy = task_core::browser_isolation::EgressPolicy {
@@ -1233,6 +1245,9 @@ async fn run_with_executable_attempt(
     let mut supervisor_opts =
         crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir);
     supervisor_opts.registry = isolation.live_sessions.clone();
+    supervisor_opts.live_key = Some((req.task.id.to_string(), run_id.to_owned()));
+    // ADR-0080 H3 / ADR-0083 D4: 復元を受けたら session の終わりまで LiveEmitter も止まる。
+    let observation_stop = supervisor_opts.observation_stop.clone();
     let mut supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let (Some(cdp_write), Some(cdp_read)) =
@@ -1253,6 +1268,8 @@ async fn run_with_executable_attempt(
             return Err(AdapterError::Other("isolated_runtime_unavailable".into()));
         }
     };
+    // ADR-0094 D1: identity 復元の state は controller の CDP にだけ投入する。
+    supervisor.attach_controller(shared_cdp.controller());
     let broker_session = match (&approved, credentials) {
         (Some(_), Some(sup)) => Some(
             register_broker_session(sup, &supervisor, &session)
@@ -1309,11 +1326,14 @@ async fn run_with_executable_attempt(
         policy: Some(policy.binding.clone()),
     };
     sink.browser_updated(&browser);
-    let live = crate::browser_live::LiveEmitter::new(EventSinkLive {
-        sink,
-        run_id: run_id.into(),
-        session_id: browser.session_id.clone(),
-    });
+    let live = crate::browser_live::LiveEmitter::with_observation_stop(
+        EventSinkLive {
+            sink,
+            run_id: run_id.into(),
+            session_id: browser.session_id.clone(),
+        },
+        observation_stop,
+    );
     let events = runtime.join("events.jsonl");
     let mut offset = 0;
     let credential_segment = match (&approval, credentials) {

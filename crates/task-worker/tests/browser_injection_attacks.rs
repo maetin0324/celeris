@@ -25,7 +25,9 @@ const INNER: &str = "CELERIS_INJECTION_ATTACKS_INNER";
 const FIXTURE_IP: &str = "93.184.216.34";
 const ORIGIN: &str = "https://fixture.example.com";
 const SECRET: &str = "sentinel-38fc8240a717425e9c27d1cc90116a0d";
-const POLICY: &str = r#"{"allow":["fixture.example.com:443","other.example.com:443"],"resolver":"127.0.0.1","allow_ipv6":false}"#;
+/// A4 OOPIF: a host whose registrable domain differs from ORIGIN's (another site).
+const CROSS_SITE: &str = "https://login.example.net";
+const POLICY: &str = r#"{"allow":["fixture.example.com:443","other.example.com:443","login.example.net:443"],"resolver":"127.0.0.1","allow_ipv6":false}"#;
 
 fn tool(name: &str) -> PathBuf {
     let p = PathBuf::from("/usr/bin").join(name);
@@ -92,7 +94,7 @@ fn dns_server(listener: TcpListener) {
         let qtype = u16::from_be_bytes([q[pos + 1], q[pos + 2]]);
         let answer = if matches!(
             labels.join(".").as_str(),
-            "fixture.example.com" | "other.example.com"
+            "fixture.example.com" | "other.example.com" | "login.example.net"
         ) && qtype == 1
         {
             Some([93u8, 184, 216, 34])
@@ -137,6 +139,11 @@ fn fixture(dir: &Path) -> Child {
         &format!(
             "<html><body><input id=\"pass\" type=\"password\" oninput=\"h(this)\"><iframe src=\"https://other.example.com/other.html\"></iframe><script>{record}}}</script></body></html>"
         ),
+    );
+    // A4 OOPIF: cross-site child frame; site-per-process puts it in its own renderer.
+    page(
+        "oopif.html",
+        "<html><body><iframe src=\"https://login.example.net/login.html\"></iframe></body></html>",
     );
     page(
         "other.html",
@@ -728,6 +735,7 @@ fn inner() {
             "--disable-dev-shm-usage",
             "--disable-background-networking",
             "--ignore-certificate-errors",
+            "--site-per-process",
             "--remote-debugging-pipe",
             "--user-data-dir=/session/profile",
             "--proxy-server=http://127.0.0.1:3128",
@@ -810,6 +818,8 @@ fn inner() {
     a7_a8_a9_a10_observation(&mut ctx);
     a12_browser_reach(&mut ctx);
     a13_other_uid(&ctx);
+    a1_target_changed_hook(&mut ctx);
+    a4_oopif(&mut ctx);
     a8_guard_negative_control();
 
     ctx.check_journal("all attacks");
@@ -945,6 +955,184 @@ fn a1_a2_stale_document(ctx: &mut Ctx) {
     mark(
         "A2",
         &format!("same-origin replacement rejected: {code}; new document input empty"),
+    );
+}
+
+/// A1 (deterministic): the controller's checks pass, then the test hook moves the page
+/// to another origin before the broker's `Runtime.callFunctionOn` reaches CDP.
+fn a1_target_changed_hook(ctx: &mut Ctx) {
+    let ids = ctx.goto(
+        &format!("{ORIGIN}/login.html"),
+        &format!("{ORIGIN}/login.html"),
+        None,
+    );
+    let before = ctx.journal().matches("target_changed").count();
+    let (lease, auth) = ctx.begin();
+    let req = ctx.req(&ids, &lease, &auth);
+    ctx.cdp
+        .retarget_before_sink_for_test("https://other.example.com/other.html".into());
+    let code = ctx
+        .inject(&req)
+        .expect_err("target changed after the checks");
+    assert_eq!(code, "target_changed", "A1 hook code");
+    ctx.end(&auth);
+    let after = ctx.journal().matches("target_changed").count();
+    assert!(after > before, "broker did not record target_changed");
+    assert_eq!(
+        ctx.eval("location.origin"),
+        "https://other.example.com",
+        "hook did not move the page"
+    );
+    assert_eq!(ctx.eval("document.querySelector('#other').value"), "");
+    // The broker consumed the lease before the sink: it cannot be replayed.
+    let ids = ctx.goto(
+        &format!("{ORIGIN}/login.html"),
+        &format!("{ORIGIN}/login.html"),
+        None,
+    );
+    ctx.n += 1;
+    let auth2 = format!("auth-a{}", ctx.n);
+    ctx.broker
+        .open_auth_section(AuthSectionRegistration {
+            session_id: "wire-sink".into(),
+            auth_section_id: auth2.clone(),
+            lease_id: lease.clone(),
+            exact_origin: ORIGIN.into(),
+            cdp_target_id: ctx.target.clone(),
+        })
+        .expect("reopen with the used lease");
+    ctx.cdp.open_auth_section(auth2.clone());
+    let req = ctx.req(&ids, &lease, &auth2);
+    assert_eq!(ctx.inject(&req), Err("lease_used"));
+    ctx.end(&auth2);
+    assert_eq!(ctx.eval("document.querySelector('#pass').value"), "");
+    assert_eq!(
+        ctx.eval("String(document.body.dataset.injected)"),
+        "undefined"
+    );
+    ctx.check_journal("A1 hook");
+    mark(
+        "A1-TARGET-CHANGED",
+        "target moved after controller checks, before callFunctionOn: broker target_changed; lease_used on replay; other-origin input empty",
+    );
+}
+
+/// A4 (OOPIF): a cross-site child frame is its own CDP target (type iframe). Injection
+/// aimed at that frame is refused as target_mismatch by the controller and the broker.
+fn a4_oopif(ctx: &mut Ctx) {
+    let sid = ctx.sid.clone();
+    ctx.cdp
+        .agent_command(
+            "Target.setAutoAttach",
+            json!({"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":true}),
+            Some(&sid),
+        )
+        .expect("auto-attach");
+    let ids = ctx.goto(
+        &format!("{ORIGIN}/oopif.html"),
+        &format!("{ORIGIN}/oopif.html"),
+        None,
+    );
+    let login = format!("{CROSS_SITE}/login.html");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (child, oopif_sid) = loop {
+        assert!(Instant::now() < deadline, "OOPIF target did not attach");
+        let found = ctx.cdp.take_agent_events().into_iter().find_map(|e| {
+            let info = &e["params"]["targetInfo"];
+            (e["method"] == "Target.attachedToTarget" && info["type"] == "iframe")
+                .then(|| {
+                    Some((
+                        info["targetId"].as_str()?.to_owned(),
+                        e["params"]["sessionId"].as_str()?.to_owned(),
+                    ))
+                })
+                .flatten()
+        });
+        if let Some(found) = found {
+            break found;
+        }
+        ctx.agent("Runtime.evaluate", json!({"expression":"1"}))
+            .expect("pump events");
+        thread::sleep(Duration::from_millis(100));
+    };
+    let info = ctx
+        .agent("Target.getTargetInfo", json!({"targetId":child}))
+        .expect("OOPIF target info");
+    assert_eq!(
+        info["result"]["targetInfo"]["type"], "iframe",
+        "child frame is not out-of-process: {info}"
+    );
+    let oopif = |ctx: &mut Ctx, method: &str, params: Value| {
+        let r = ctx
+            .cdp
+            .agent_command(method, params, Some(&oopif_sid))
+            .expect("OOPIF command");
+        assert_no_sentinel(&format!("OOPIF reply {method}"), r.to_string().as_bytes());
+        r
+    };
+    let tree = oopif(ctx, "Page.getFrameTree", json!({}));
+    let frame = &tree["result"]["frameTree"]["frame"];
+    assert_eq!(frame["id"], child.as_str());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while oopif(ctx, "Page.getFrameTree", json!({}))["result"]["frameTree"]["frame"]["url"]
+        != login.as_str()
+    {
+        assert!(Instant::now() < deadline, "OOPIF login page did not load");
+        thread::sleep(Duration::from_millis(100));
+    }
+    let tree = oopif(ctx, "Page.getFrameTree", json!({}));
+    let frame = &tree["result"]["frameTree"]["frame"];
+    let loader = frame["loaderId"].as_str().expect("OOPIF loader").to_owned();
+
+    let (lease, auth) = ctx.begin();
+    let mut codes = Vec::new();
+    for exact in [CROSS_SITE, ORIGIN] {
+        let mut req = ctx.req(&ids, &lease, &auth);
+        req.cdp_target_id = child.clone();
+        req.frame_id = child.clone();
+        req.loader_id = loader.clone();
+        req.exact_origin = exact.into();
+        req.redirect_chain = vec![exact.into()];
+        let code = match ctx.cdp.inject(&req, &oopif_sid, &mut ctx.broker) {
+            Ok(v) => panic!("OOPIF injection succeeded: {v}"),
+            Err(e) => e.code(),
+        };
+        assert_eq!(code, "target_mismatch", "OOPIF controller code ({exact})");
+        codes.push(code);
+    }
+    // broker: the real OOPIF target and session instead of the registered page target
+    let mut body = ctx.wire(&lease, &auth);
+    body["cdp_target_id"] = json!(child);
+    body["cdp_session_id"] = json!(oopif_sid);
+    body["frame_id"] = json!(child);
+    body["loader_id"] = json!(loader);
+    assert_eq!(ctx.raw(&body, true).as_deref(), Some("target_mismatch"));
+    ctx.end(&auth);
+    let value = oopif(
+        ctx,
+        "Runtime.evaluate",
+        json!({"expression":"document.querySelector('#pass').value+'|'+String(document.body.dataset.injected)","returnByValue":true}),
+    );
+    assert_eq!(value["result"]["result"]["value"], "|undefined");
+    ctx.cdp
+        .agent_command(
+            "Target.setAutoAttach",
+            json!({"autoAttach":false,"waitForDebuggerOnStart":false,"flatten":true}),
+            Some(&sid),
+        )
+        .expect("auto-attach off");
+    let _ = ctx.cdp.agent_command(
+        "Target.detachFromTarget",
+        json!({"sessionId":oopif_sid}),
+        None,
+    );
+    ctx.cdp.take_agent_events();
+    ctx.check_journal("A4 OOPIF");
+    mark(
+        "A4-OOPIF",
+        &format!(
+            "cross-site OOPIF target {child}: controller {codes:?}, broker target_mismatch; OOPIF input empty"
+        ),
     );
 }
 
@@ -1445,8 +1633,30 @@ fn real_browser_injection_attack_matrix() {
         "attack matrix failed: {stdout}\n{stderr}"
     );
     for m in [
-        "A0", "A1", "A2", "A3", "A3b", "A4", "A5", "A6", "A7", "A7a", "A8", "A8n", "A9", "A9a",
-        "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17",
+        "A0",
+        "A1",
+        "A2",
+        "A3",
+        "A3b",
+        "A4",
+        "A5",
+        "A6",
+        "A7",
+        "A7a",
+        "A8",
+        "A8n",
+        "A9",
+        "A9a",
+        "A10",
+        "A11",
+        "A12",
+        "A13",
+        "A14",
+        "A15",
+        "A16",
+        "A17",
+        "A1-TARGET-CHANGED",
+        "A4-OOPIF",
     ] {
         assert!(
             stderr.contains(&format!("ATTACK-{m}-OK")),
@@ -1459,6 +1669,11 @@ fn real_browser_injection_attack_matrix() {
         "A8 not passed\n{stderr}"
     );
     assert!(stderr.contains("ATTACKS-ALL-DONE"));
+    for line in stderr.lines().filter(|l| {
+        l.starts_with("ATTACK-A1-TARGET-CHANGED-OK") || l.starts_with("ATTACK-A4-OOPIF-OK")
+    }) {
+        println!("{line}");
+    }
     // whatever the child printed is itself a surface
     assert_no_sentinel("inner stdout", stdout.as_bytes());
     assert_no_sentinel("inner stderr", stderr.as_bytes());

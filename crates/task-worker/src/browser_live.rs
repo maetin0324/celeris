@@ -9,6 +9,7 @@
 //!
 //! TODO: 実 `LiveSink`（task-api への POST）は未配線。ここでは trait と、テスト用の in-memory 実装まで。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use task_core::browser_control::{
@@ -94,6 +95,68 @@ impl ControlGate for InMemoryGate {
     }
 }
 
+/// ADR-0094 D2: store の control 状態を正とする gate（task-api の `agent/begin`・`agent/end` と同じ op）。
+/// store の読み書きに失敗したら操作を出さない側に倒す。
+pub struct StoreGate {
+    store: Arc<dyn task_core::browser_wait::BrowserWaitStore + Send + Sync>,
+    task_id: String,
+    run_id: String,
+    session_id: String,
+}
+
+impl StoreGate {
+    pub fn new(
+        store: Arc<dyn task_core::browser_wait::BrowserWaitStore + Send + Sync>,
+        task_id: &str,
+        run_id: &str,
+        session_id: &str,
+    ) -> Self {
+        Self {
+            store,
+            task_id: task_id.into(),
+            run_id: run_id.into(),
+            session_id: session_id.into(),
+        }
+    }
+
+    fn call(
+        &self,
+        op: task_core::browser_control_ops::AgentActionOp,
+    ) -> Result<BrowserControl, task_core::browser_store::BrowserStoreError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        self.store.browser_session_agent_action(
+            task_core::browser_store::BrowserSessionKey {
+                task_id: &self.task_id,
+                run_id: &self.run_id,
+                session_id: &self.session_id,
+            },
+            op,
+            now,
+        )
+    }
+}
+
+impl ControlGate for StoreGate {
+    fn phase(&self) -> ControlPhase {
+        self.call(task_core::browser_control_ops::AgentActionOp::Read)
+            .map_or(ControlPhase::Paused, |s| s.phase())
+    }
+    fn begin_action(&self) -> Result<(), ControlError> {
+        match self.call(task_core::browser_control_ops::AgentActionOp::Begin) {
+            Ok(_) => Ok(()),
+            Err(task_core::browser_store::BrowserStoreError::Control(e)) => Err(e),
+            Err(_) => Err(ControlError::InvalidPhase {
+                phase: ControlPhase::Paused,
+            }),
+        }
+    }
+    fn end_action(&self) {
+        let _ = self.call(task_core::browser_control_ops::AgentActionOp::End);
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum GatedOutcome<T> {
     Ran(T),
@@ -151,6 +214,9 @@ impl LiveSink for CollectingSink {
 pub struct LiveEmitter<S: LiveSink> {
     sink: S,
     auth_depth: Mutex<u32>,
+    /// ADR-0080 H3 / ADR-0083 D4: identity の復元を受けた session。立ったら session の終わりまで
+    /// 認証区間と同じく event・progress・artifact を捨てる（戻す口は無い）。
+    restored: Arc<AtomicBool>,
 }
 
 /// auth section の RAII。生きている間 event は捨てられる。
@@ -170,9 +236,15 @@ impl<S: LiveSink> Drop for AuthSection<'_, S> {
 
 impl<S: LiveSink> LiveEmitter<S> {
     pub fn new(sink: S) -> Self {
+        Self::with_observation_stop(sink, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// 復元の投入口（supervisor の entry）と共有する観測停止の旗を持たせる。
+    pub fn with_observation_stop(sink: S, restored: Arc<AtomicBool>) -> Self {
         Self {
             sink,
             auth_depth: Mutex::new(0),
+            restored,
         }
     }
 
@@ -188,12 +260,13 @@ impl<S: LiveSink> LiveEmitter<S> {
 
     /// 認証区間の中か。中なら呼び出し側は progress・artifact も流さない。
     pub fn in_auth_section(&self) -> bool {
-        *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0
+        self.restored.load(Ordering::SeqCst)
+            || *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0
     }
 
     /// scrub して送る。auth section 中・frame は送らない（溜めない）。返り値は送ったか。
     pub fn emit(&self, event: &LiveEvent) -> bool {
-        if *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0 {
+        if self.in_auth_section() {
             return false;
         }
         match ScrubbedLiveEvent::from_event(event) {

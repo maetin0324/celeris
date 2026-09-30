@@ -131,6 +131,16 @@ pub trait EventSink: Send + Sync {
     ) -> Result<(), String> {
         Err("browser control store unavailable".into())
     }
+    /// Trusted browser supervisor only (ADR-0094 D3): the control gate every shim-issued agent
+    /// browser action passes before it reaches the browser. `None` (the default) makes the
+    /// browser run refuse to start (fail closed).
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        None
+    }
     /// Trusted browser supervisor only (ADR-0082): one scrubbed live event for the session.
     fn browser_live(
         &self,

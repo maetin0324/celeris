@@ -27,7 +27,7 @@ ring = "0.17"
 zeroize = "1"
 
 [dev-dependencies]
-task-worker = { path = "../task-worker", features = ["h3-e2e-insecure-cert"] }
+task-worker = { path = "../task-worker", features = ["h3-e2e-insecure-cert", "same-uid-harness"] }
 celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }
 async-trait = "0.1"
 tempfile = "3"

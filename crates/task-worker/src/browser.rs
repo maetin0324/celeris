@@ -61,6 +61,29 @@ fn browser_install_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
+fn resolve_executable(executable: &Path) -> std::io::Result<PathBuf> {
+    if executable.components().count() > 1 || executable.is_absolute() {
+        return executable.canonicalize();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "browser executable",
+        ));
+    };
+    for dir in std::env::split_paths(&paths) {
+        if let Ok(path) = dir.join(executable).canonicalize() {
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "browser executable",
+    ))
+}
+
 fn action_request(
     socket: &Path,
     verb: &str,
@@ -699,6 +722,8 @@ pub async fn run_with_executable(
     let output = runtime.join("output");
     std::fs::create_dir_all(&runtime)?;
     std::fs::create_dir_all(&output)?;
+    std::fs::create_dir_all(runtime.join("home"))?;
+    std::fs::create_dir_all(runtime.join("run"))?;
     let cli = runtime.join("celeris-browser.py");
     let action_socket = runtime.with_extension("action.sock");
     write_private(&cli, CLI)?;
@@ -720,21 +745,23 @@ pub async fn run_with_executable(
     write_private(
         &runtime.join("config.json"),
         serde_json::to_vec(&serde_json::json!({
-            "session_id":session, "action_socket":action_socket,
+            "session_id":session,
             "allowed_domains":policy.allowed_domains(), "output":output,
             "policy_sha256":format!("{:x}", Sha256::digest(&harness_policy)),
             "credential_policy_ids":policy.effective.credential_policy_ids,
             "credential_use":policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),
         }))?,
     )?;
-    let real_executable = executable
-        .canonicalize()
+    let real_executable = resolve_executable(executable)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let browser_dirs = browser_install_dirs();
+    let browser_cache = browser_dirs.first().and_then(|p| p.parent());
     write_private(
         &runtime.join("action-config.json"),
         serde_json::to_vec(&serde_json::json!({
             "executable":real_executable, "session_id":session,
             "allowed_domains":policy.allowed_domains(),
+            "browser_cache":browser_cache,
         }))?,
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
@@ -759,7 +786,7 @@ pub async fn run_with_executable(
         real_executable.parent().unwrap().to_path_buf(),
         isolation.sandboxd.parent().unwrap().to_path_buf(),
     ];
-    ro_dirs.extend(browser_install_dirs());
+    ro_dirs.extend(browser_dirs);
     let spec = crate::browser_runtime::RuntimeSpec {
         bwrap: isolation.bwrap.clone(),
         session_id: session.clone(),

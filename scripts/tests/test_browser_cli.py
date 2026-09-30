@@ -52,7 +52,6 @@ class BrowserCliTest(unittest.TestCase):
         self.executable.write_text(FAKE)
         self.executable.chmod(0o700)
         self.config = {'executable': str(self.executable), 'output': str(self.output),
-                       'action_socket': str(self.root / 'action.sock'),
                        'session_id': 'celeris-test-session', 'allowed_domains': ['example.com', '*.example.org']}
         (self.root / 'upstream.json').write_text('{}')
         self.policy(['click', 'close', 'download', 'gettext', 'launch', 'navigate', 'screenshot', 'scroll', 'snapshot'])
@@ -62,7 +61,7 @@ class BrowserCliTest(unittest.TestCase):
         self.addCleanup(root_patch.stop)
         self.stop_server = threading.Event()
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.bind(self.config['action_socket'])
+        self.listener.bind(str(self.root.with_suffix('.action.sock')))
         self.listener.listen(4)
         self.listener.settimeout(0.1)
         self.server = threading.Thread(target=self.serve_actions, daemon=True)
@@ -73,6 +72,7 @@ class BrowserCliTest(unittest.TestCase):
         self.stop_server.set()
         self.server.join(timeout=3)
         self.listener.close()
+        self.root.with_suffix('.action.sock').unlink(missing_ok=True)
 
     def serve_actions(self):
         while not self.stop_server.is_set():
@@ -80,8 +80,7 @@ class BrowserCliTest(unittest.TestCase):
                 connection, _ = self.listener.accept()
             except socket.timeout:
                 continue
-            except OSError as error:
-                self.accept_error = repr(error)
+            except OSError:
                 return
             with connection:
                 data = bytearray()
@@ -112,10 +111,8 @@ class BrowserCliTest(unittest.TestCase):
                     result = cli.subprocess.run(argv, cwd=self.root, env=env, stdout=cli.subprocess.PIPE,
                                                 stderr=cli.subprocess.DEVNULL, timeout=45, check=False)
                     response = {'status': result.returncode, 'stdout': result.stdout.decode()}
-                except Exception as error:
-                    self.last_error = repr(error)
+                except (OSError, cli.subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
                     response = {'status': 1, 'stdout': ''}
-                self.last_response = response
                 connection.sendall(json.dumps(response).encode())
 
     def policy(self, allow):

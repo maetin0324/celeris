@@ -77,10 +77,13 @@ def execute(request):
                 '--session', CONFIG['session_id'], '--action-policy', '/session/policy.json',
                 '--allowed-domains', ','.join(CONFIG['allowed_domains']),
                 '--content-boundaries', '--max-output', '16000', '--json'] + action
-    env = {'PATH': '/usr/bin:/bin', 'HOME': '/session', 'TMPDIR': '/session/tmp',
+    env = {'PATH': '/usr/bin:/bin', 'HOME': '/session/home', 'TMPDIR': '/session/tmp',
+           'XDG_RUNTIME_DIR': '/session/run',
            'AGENT_BROWSER_NAMESPACE': 'celeris', 'HTTP_PROXY': 'http://127.0.0.1:3128',
            'HTTPS_PROXY': 'http://127.0.0.1:3128', 'ALL_PROXY': 'http://127.0.0.1:3128',
            'NO_PROXY': ''}
+    if CONFIG.get('browser_cache'):
+        env['PLAYWRIGHT_BROWSERS_PATH'] = CONFIG['browser_cache']
     try:
         result = subprocess.run(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, timeout=45, check=False)

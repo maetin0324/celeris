@@ -48,7 +48,7 @@ case "$1" in
     ;;
   build)
     mkdir -p "$CARGO_TARGET_DIR/release"
-    for b in celeris celerisctl; do printf '#!/bin/sh\nexit 0\n' >"$CARGO_TARGET_DIR/release/$b"; chmod +x "$CARGO_TARGET_DIR/release/$b"; done
+    for b in celeris celerisctl celeris-credentiald; do printf '#!/bin/sh\nexit 0\n' >"$CARGO_TARGET_DIR/release/$b"; chmod +x "$CARGO_TARGET_DIR/release/$b"; done
     ;;
 esac
 exit 0
@@ -97,6 +97,7 @@ cp "$here"/*.sh "$repo/scripts/selfdeploy/"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
+cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 git init -q "$repo"
 gitc() { git -C "$repo" -c user.email=t@example.invalid -c user.name=t "$@"; }

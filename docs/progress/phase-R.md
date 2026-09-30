@@ -1754,3 +1754,7 @@ task-ops / task-dispatch / task-core には触れていない（R7-3 と並行�
 - D2 は本番の event を直接見ていない（本番 DB に触れない）。昇格後に同じ形（統合失敗 → decompose → 回答）が起きたら event の列で planner が先に走ることを確かめる。
 - done の unit の新しい `checks` は unit の worktree では走らせず、段階の統合でだけ走る。
 - 保留中のリファクタ retry の子（blocked）は、R7-3 の昇格後に replan + note（`HEAD^2` の check を内容の検査に置き換える）で進められる見込み。
+- 10:12Z: **R7-3** を main に統合（7b2cd54c）→ release **7b2cd54c1914**（schema 34）: gate（fmt / cargo-test 128 s / clippy / build / pnpm）全 exit 0 → `verify.sh` ok=true /
+  live_ok=true → `promote.sh` live で昇格（引き継ぎ 2 s、backup `20260930-100939-pre-7b2cd54c1914.sqlite3`）。旧 fc60977fd142 / 7c10d528ad2a は
+  in-flight の run（web Phase 2 の codex WU run 等）を drain 中（正常。`--stop-stale` は使っていない）。リファクタ retry の子 01M3RMEW… は、replan の note で
+  done の葉の `HEAD^2` check を内容の検査に置き換えれば進める（R7-3 D1）。次の「統合失敗 → decompose → 回答」で planner が先に回ることを events で確かめる。

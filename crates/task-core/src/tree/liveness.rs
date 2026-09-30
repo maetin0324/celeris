@@ -115,6 +115,11 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
             let (reason, detail) = match n.last_reason.as_deref() {
                 Some("awaiting_plan_approval") => ("plan_approval", "root の計画の承認待ち"),
                 Some("awaiting_human") => ("pause_point", "段階の後の人の確認（途中確認）待ち"),
+                // ADR-0090 D4: クラスタ job の durable wait（daemon が poll し、終われば continuation に戻す）。
+                Some(crate::cluster_job::REASON_WAITING) => (
+                    "cluster_jobs",
+                    "クラスタ job の終了待ち（daemon が poll している）",
+                ),
                 _ => ("question", "人への質問・判断待ち"),
             };
             return verdict(id, LivenessClass::Waiting, reason, detail.to_string());
@@ -256,6 +261,13 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
                     waiting.get_or_insert((
                         "infra",
                         format!("unit {} は基盤の失敗の後の人の再試行を待っている", u.key),
+                    ));
+                }
+                // ADR-0090 D4: unit の run がクラスタ job の終了を待っている（名指しの待ち。StallDetected にしない）。
+                Some(WorkUnitBlockedReason::ClusterJobs) => {
+                    waiting.get_or_insert((
+                        "cluster_jobs",
+                        format!("unit {} はクラスタ job の終了を待っている", u.key),
                     ));
                 }
                 Some(

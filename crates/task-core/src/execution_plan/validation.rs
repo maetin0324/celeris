@@ -318,7 +318,7 @@ pub enum PlanValidationError {
         key: String,
         field: &'static str,
     },
-    /// leaf に kind task 専用の欄（`acceptance` / `genre` / `skills` / `repos` / `adopt`）が書かれている。
+    /// leaf に kind task 専用の欄（`acceptance` / `genre` / `skills` / `repos` / `adopt` / `gate`）が書かれている。
     LeafFieldNotAllowed {
         key: String,
         field: &'static str,
@@ -1412,6 +1412,7 @@ fn validate_v3(
                 ("skills", !u.skills.is_empty()),
                 ("repos", !u.repos.is_empty()),
                 ("adopt", u.adopt.is_some()),
+                ("gate", u.gate.is_some()),
             ] {
                 if present {
                     errors.push(PlanValidationError::LeafFieldNotAllowed {

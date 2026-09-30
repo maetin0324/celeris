@@ -103,6 +103,10 @@ pub enum WorkUnitBlockedReason {
     /// （`MAX_CHILD_INFRA_RETRIES`）でも失敗した。障害通知を出し、人の再試行を待つ（質問でも決定でもない）。
     /// `Decision` と同じく工程の失敗に数えず、同じ段階の他の unit・兄弟は止めない（段階は完了しない）。
     Infra,
+    /// ADR-0090 D2: この unit の run が `result.json` の `wait` でクラスタ job の終了を待っている。daemon の poll が
+    /// すべての job の終了を見たら `needs_continuation` に戻す。`Decision` と同じく工程の失敗にも質問にも数えず、
+    /// 同じ段階の他の unit・兄弟は止めない（段階は完了しない）。
+    ClusterJobs,
 }
 
 impl WorkUnitBlockedReason {
@@ -114,6 +118,7 @@ impl WorkUnitBlockedReason {
             WorkUnitBlockedReason::PlanIssue => "plan_issue",
             WorkUnitBlockedReason::Decision => "decision",
             WorkUnitBlockedReason::Infra => "infra",
+            WorkUnitBlockedReason::ClusterJobs => "cluster_jobs",
         }
     }
 
@@ -125,6 +130,7 @@ impl WorkUnitBlockedReason {
             "plan_issue" => Some(WorkUnitBlockedReason::PlanIssue),
             "decision" => Some(WorkUnitBlockedReason::Decision),
             "infra" => Some(WorkUnitBlockedReason::Infra),
+            "cluster_jobs" => Some(WorkUnitBlockedReason::ClusterJobs),
             _ => None,
         }
     }
@@ -235,6 +241,8 @@ pub enum RunIndexStatus {
     Failed,
     HarnessError,
     Cancelled,
+    /// ADR-0090 D4: クラスタ job の wait で閉じた run（`running` ではないので R6-1 の照合は閉じ直さない）。
+    Waiting,
 }
 
 impl RunIndexStatus {
@@ -248,6 +256,7 @@ impl RunIndexStatus {
             RunIndexStatus::Failed => "failed",
             RunIndexStatus::HarnessError => "harness_error",
             RunIndexStatus::Cancelled => "cancelled",
+            RunIndexStatus::Waiting => "waiting",
         }
     }
 
@@ -261,6 +270,7 @@ impl RunIndexStatus {
             "failed" => Some(RunIndexStatus::Failed),
             "harness_error" => Some(RunIndexStatus::HarnessError),
             "cancelled" => Some(RunIndexStatus::Cancelled),
+            "waiting" => Some(RunIndexStatus::Waiting),
             _ => None,
         }
     }
@@ -276,6 +286,7 @@ impl RunIndexStatus {
             RunEnd::Failed { .. } => RunIndexStatus::Failed,
             RunEnd::HarnessError { .. } => RunIndexStatus::HarnessError,
             RunEnd::Cancelled => RunIndexStatus::Cancelled,
+            RunEnd::Waiting => RunIndexStatus::Waiting,
         }
     }
 }
@@ -531,13 +542,18 @@ pub fn runnable_work_units(units: &[WorkUnitRow], in_flight: usize, limit: usize
         .collect();
 
     // ADR-0079 D5（Phase R2a）: 人への決定を待つ unit（`blocked(decision)`）は段階の完了を止めるが、同じ段階の
-    // 他の unit は止めない（/1・/2 にこの理由は無いので従来どおり）。
+    // 他の unit は止めない（/1・/2 にこの理由は無いので従来どおり）。ADR-0090 D2: クラスタ job を待つ unit
+    // （`blocked(cluster_jobs)`）も同じ段階の兄弟を止めない。
     let has_failed_or_blocked = in_phase.iter().any(|u| {
         u.status == WorkUnitStatus::Failed
             || (u.status == WorkUnitStatus::Blocked
                 && !matches!(
                     u.blocked_reason,
-                    Some(WorkUnitBlockedReason::Decision | WorkUnitBlockedReason::Infra)
+                    Some(
+                        WorkUnitBlockedReason::Decision
+                            | WorkUnitBlockedReason::Infra
+                            | WorkUnitBlockedReason::ClusterJobs
+                    )
                 ))
     });
 

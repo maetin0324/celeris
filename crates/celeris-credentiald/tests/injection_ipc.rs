@@ -283,7 +283,8 @@ fn mux(end: OwnedFd, verdict: &'static str) -> thread::JoinHandle<Option<Vec<u8>
             return None;
         }
         buf.truncate(n as usize);
-        let frame: serde_json::Value = serde_json::from_slice(&buf).expect("frame json");
+        let frame: serde_json::Value =
+            serde_json::from_slice(buf.strip_suffix(&[0]).unwrap_or(&buf)).expect("frame json");
         let id = frame["id"].as_u64().expect("id");
         let reply = serde_json::json!({"id": id, "result": {"result": {"type": "string", "value": verdict}}})
             .to_string();
@@ -352,7 +353,8 @@ fn success_reply_is_receipt_only_and_secret_reaches_only_the_sink() {
     // 秘密は sink の 1 frame にだけ乗る（Runtime.callFunctionOn、予約 id、flatten session）。
     let frame = frame.expect("frame");
     assert!(contains(&frame, SENTINEL));
-    let f: serde_json::Value = serde_json::from_slice(&frame).expect("frame");
+    let f: serde_json::Value =
+        serde_json::from_slice(frame.strip_suffix(&[0]).unwrap_or(&frame)).expect("frame");
     assert_eq!(f["id"], 900_001);
     assert_eq!(f["method"], "Runtime.callFunctionOn");
     assert_eq!(f["sessionId"], "CDPSESSION1");

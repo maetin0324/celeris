@@ -22,3 +22,4 @@ time = { version = "0.3", features = ["serde", "formatting"] }
 
 [dev-dependencies]
 tempfile = "3"
+celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }

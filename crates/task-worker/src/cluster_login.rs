@@ -770,6 +770,10 @@ mod tests {
     use super::*;
     use crate::test_support::write_executable;
 
+    /// 成功経路のテストで使う待ち時間。偽 ssh は即座に応答するので、成功時は
+    /// この値まで待たない。高負荷の評価器で 5 秒の timeout を踏んだため長めに取る。
+    const LOAD_TOLERANT_WAIT: Duration = Duration::from_secs(30);
+
     async fn wait_until_process_gone(pid: u32) {
         for _ in 0..150 {
             if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
@@ -906,7 +910,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -986,8 +990,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1050,8 +1054,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1060,7 +1064,7 @@ mod tests {
         let ClusterConnectStart::NeedsCode { session, .. } = result else {
             panic!("expected NeedsCode");
         };
-        match session.submit_code("123456", Duration::from_secs(5)).await {
+        match session.submit_code("123456", LOAD_TOLERANT_WAIT).await {
             // 保持する子は無い（ssh が切り離した）が、**接続は成功している**。
             Ok(master) => assert!(
                 master.is_none(),
@@ -1087,8 +1091,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1121,8 +1125,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1131,7 +1135,7 @@ mod tests {
         let ClusterConnectStart::NeedsCode { session, .. } = result else {
             panic!("expected NeedsCode");
         };
-        let master = session.submit_code("123456", Duration::from_secs(5)).await;
+        let master = session.submit_code("123456", LOAD_TOLERANT_WAIT).await;
         match master {
             Ok(_master) => {}
             Err(e) => panic!("expected Ok(ClusterMaster), got {e:?}"),
@@ -1158,8 +1162,8 @@ mod tests {
                 "c1",
                 &MasterLauncher::Inline,
                 true,
-                Duration::from_secs(5),
-                Duration::from_secs(5),
+                LOAD_TOLERANT_WAIT,
+                LOAD_TOLERANT_WAIT,
                 0,
                 "yes",
             )
@@ -1196,8 +1200,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1230,7 +1234,7 @@ mod tests {
             &MasterLauncher::Inline,
             true,
             Duration::from_millis(300),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1437,8 +1441,8 @@ mod tests {
             "c1",
             &launcher,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1447,7 +1451,7 @@ mod tests {
         let ClusterConnectStart::NeedsCode { session, .. } = result else {
             panic!("expected NeedsCode");
         };
-        let master = session.submit_code("123456", Duration::from_secs(5)).await;
+        let master = session.submit_code("123456", LOAD_TOLERANT_WAIT).await;
         match master {
             Ok(_master) => {}
             Err(e) => {
@@ -1474,7 +1478,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1590,8 +1594,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             20,
             "yes",
         )
@@ -1601,7 +1605,7 @@ mod tests {
             panic!("expected NeedsCode");
         };
         let master = session
-            .submit_code("123456", Duration::from_secs(5))
+            .submit_code("123456", LOAD_TOLERANT_WAIT)
             .await
             .unwrap();
         let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();
@@ -1692,7 +1696,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             30,
             "yes",
         )
@@ -1712,7 +1716,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             30,
             "yes",
         )
@@ -1745,7 +1749,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             30,
             "",
         )
@@ -1818,8 +1822,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1829,7 +1833,7 @@ mod tests {
             panic!("expected NeedsCode");
         };
         let master = session
-            .submit_code("123456", Duration::from_secs(5))
+            .submit_code("123456", LOAD_TOLERANT_WAIT)
             .await
             .unwrap();
         let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();

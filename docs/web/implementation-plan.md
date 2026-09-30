@@ -55,6 +55,8 @@ pnpm -C web check:parity             # 「完了」の行の確認方法のテ�
 
 **V3（画面の共通検査。画面を作るタスク。P2-07 で揃う）** — `<path>` はその画面の URL
 
+画面の実装時に `web/e2e/support/screens.ts` の該当行へ `v3: true` を付ける。S1・S2・S4 はその行の path・fixture・見出しを使って自動的に対象へ加える。
+
 ```sh
 pnpm -C web e2e latency/transition.spec.ts -g "<path>"      # S1
 pnpm -C web e2e realtime/refetch-scope.spec.ts -g "<path>"  # S2

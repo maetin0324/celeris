@@ -3,6 +3,7 @@
 
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,10 @@ def act():
         [sys.executable, str(runner), "--drive", "--output-dir", os.environ["CELERIS_BROWSER_RUNTIME"]],
         check=False,
     )
+    if (os.environ.get("CELERIS_BROWSER_KILL_HARNESS") == "1"
+            and os.environ.get("CELERIS_BROWSER_PHASE") == "open"):
+        Path(os.environ["CELERIS_BROWSER_RUNTIME"]).joinpath("harness-killed.pid").write_text(str(os.getpid()))
+        os.kill(os.getpid(), signal.SIGKILL)
     return result.returncode == 0
 
 

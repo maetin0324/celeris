@@ -111,6 +111,44 @@ fn task_policy(actions: &[BrowserAction]) -> BrowserTaskPolicy {
     }
 }
 
+#[test]
+fn p4c_fallback_ledger_parsing_and_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = test_record(dir.path());
+    let ids = conformant_backend_ids(&record).unwrap();
+    assert!(ids.contains("acp") && ids.contains("claude-code"));
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    ledger["results"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["backend_id"] == "acp");
+    std::fs::write(&record, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    let ids = conformant_backend_ids(&record).unwrap();
+    assert_eq!(ids, ["acp".to_string()].into());
+    let req = request(dir.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let policy = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    let route = route_existing_backend("acp", &policy, &record).unwrap();
+    assert!(route.fallbacks.is_empty());
+    assert!(route_existing_backend("claude-code", &policy, &record).is_err());
+    ledger["source"] = serde_json::json!("celeris-browser-conformance-scripted");
+    std::fs::write(&record, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    assert!(conformant_backend_ids(&record).is_err());
+}
+
 fn limits() -> RunLimits {
     RunLimits {
         wall_clock: Duration::from_secs(10),
@@ -573,6 +611,222 @@ async fn p4c_runner_record_routes_and_falls_back() {
             .join("runs/runner-ledger-fallback/browser-fallback-1/config.json")
             .exists()
     );
+}
+
+/// The conformance runner supplies its measured ledger, real 0.38.1 executable and
+/// loopback origin. The primary ACP harness is SIGKILLed after navigation; the worker
+/// then starts Claude in a fresh browser session and completes the same fixture.
+#[tokio::test]
+#[ignore]
+async fn p4c_fallback_real_harness_scenario() {
+    let root = PathBuf::from(std::env::var_os("CELERIS_BROWSER_FALLBACK_ROOT").unwrap());
+    let record = PathBuf::from(std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").unwrap());
+    let executable = PathBuf::from(std::env::var_os("CELERIS_BROWSER_EXECUTABLE").unwrap());
+    let origin = std::env::var("CELERIS_BROWSER_ORIGIN").unwrap();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/browser-conformance-harness.py");
+    let command = script.to_string_lossy().into_owned();
+    let primary: Arc<dyn WorkerAdapter> = Arc::new(crate::AcpAdapter::new(crate::AcpConfig {
+        command: command.clone(),
+        startup_timeout: Duration::from_secs(10),
+        ..Default::default()
+    }));
+    let alternate: Arc<dyn WorkerAdapter> =
+        Arc::new(crate::ClaudeCodeAdapter::new(crate::ClaudeCodeConfig {
+            command,
+            ..Default::default()
+        }));
+    let env = |phase: &str, runtime: &Path| {
+        vec![
+            ("CELERIS_BROWSER_PHASE".into(), phase.into()),
+            (
+                "CELERIS_BROWSER_BACKEND".into(),
+                if phase == "open" {
+                    "acp"
+                } else {
+                    "claude-code"
+                }
+                .into(),
+            ),
+            (
+                "CELERIS_BROWSER_RUNTIME".into(),
+                runtime.to_string_lossy().into_owned(),
+            ),
+            ("CELERIS_BROWSER_ORIGIN".into(), origin.clone()),
+            (
+                "CELERIS_BROWSER_KILL_HARNESS".into(),
+                if phase == "open" { "1" } else { "0" }.into(),
+            ),
+        ]
+    };
+    let primary_dir = root.join("primary");
+    let alternate_dir = root.join("alternate");
+    std::fs::create_dir_all(&primary_dir).unwrap();
+    std::fs::create_dir_all(&alternate_dir).unwrap();
+    let primary = primary.with_env(&env("open", &primary_dir)).unwrap();
+    let alternate = alternate
+        .with_env(&env("fallback", &alternate_dir))
+        .unwrap();
+    let primary = primary
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-real-fallback/browser/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let alternate = alternate
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-real-fallback/browser-fallback-1/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let mut req = request(&root);
+    let host = "localhost".to_string();
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_domains = vec![host.clone()];
+    let policy = req.context.browser_policy.as_mut().unwrap();
+    policy.network_domains = vec![host];
+    policy.allowed_actions = vec![
+        BrowserAction::Navigate,
+        BrowserAction::Snapshot,
+        BrowserAction::Click,
+        BrowserAction::Screenshot,
+        BrowserAction::Download,
+    ];
+    let sink = RecordingSink::default();
+    let outcome = run_with_candidates(
+        primary.clone(),
+        vec![alternate.clone()],
+        req.clone(),
+        "p4c-real-fallback",
+        RunLimits {
+            wall_clock: Duration::from_secs(120),
+            idle_timeout: Duration::from_secs(120),
+            kill_grace: Duration::from_millis(100),
+        },
+        &sink,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(primary_dir.join("harness-killed.pid").exists());
+    let sessions = sink.browsers.lock().unwrap();
+    assert!(sessions.len() >= 4);
+    assert_eq!(sessions[1].state, BrowserRunState::Failed);
+    assert_ne!(sessions[0].session_id, sessions[2].session_id);
+    drop(sessions);
+    let no_alternate_record = root.join("no-alternate-conformance.json");
+    let mut no_alternate_ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    no_alternate_ledger["results"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["backend_id"] == "acp");
+    std::fs::write(
+        &no_alternate_record,
+        serde_json::to_vec(&no_alternate_ledger).unwrap(),
+    )
+    .unwrap();
+    let no_candidate_primary = primary
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-no-candidate/browser/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let no_candidate = run_with_executable_candidates_record(
+        no_candidate_primary,
+        vec![alternate.clone()],
+        req.clone(),
+        "p4c-no-candidate",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &no_alternate_record,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        no_candidate
+            .to_string()
+            .contains("all capable backends failed")
+    );
+    assert!(
+        !root
+            .join("runs/p4c-no-candidate/browser-fallback-1")
+            .exists()
+    );
+    let mut sensitive = req;
+    sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    sensitive
+        .context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    sensitive
+        .context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    let credential = run_with_executable_candidates_record(
+        primary,
+        vec![alternate],
+        sensitive,
+        "p4c-credential",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        credential
+            .to_string()
+            .contains("lacks required conformance")
+    );
+    assert!(!root.join("runs/p4c-credential").exists());
+    std::fs::write(
+        root.join("fallback-outcome.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "primary_harness_killed": true, "alternate_completed": true,
+            "fresh_session": true, "no_candidate_refused": no_candidate.to_string(),
+            "credential_refused": credential.to_string(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 #[tokio::test]

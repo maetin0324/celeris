@@ -16,7 +16,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 | P3-A identity 復元（隔離下のみ） | 未達。API の契約テストだけ | `cargo test -p task-api restore_is` の前回結果は2 passed。`restore_isolated` は稼働中 runtime に未結合。`--restore` / `--state` / `--profile` は利用しない。 |
 | P4-B stronger injection | 未達。攻撃の純関数テストだけ | `cargo test -p celeris-credentiald injection` の前回結果は6 passed。実 CDP sink / IPC peer UID role は未接続。旧 plugin bridge と resolve.sock 自体を固定拒否に変更。有効 lease を持つ別 worker process の実 IPC 拒否を検証。実注入は未達。 |
 | H3 観測停止の維持 | 実装維持。機密起動は拒否 | `cargo test -p task-worker browser --lib` → 31 passed。`browser_auth_section_forward_events_drops_progress_artifact_and_live` と LiveEmitter の抑止試験を含む。API 結合テストの store auth_section / takeover 拒否も成功。実注入中の end-to-end 検証はP4-A/B待ち。 |
-| P4-C backend routing | 公開能力を実 backend protocol で適合。機密要求は拒否 | `--protocol-scripted` runner が実 agent-browser 0.38.1 + loopback fixture で ACP RPC・Claude CLI・specialist wrapper を各7/7 実行。runner の ledger を worker routing/fallback 試験に渡して成功。`CredentialUse` は `CredentialInjection`、`IdentityRestore` は `InjectionAttackSuite` を要し、P4-A/B の実適合まで起動前に拒否。実 LLM 比較は未。 |
+| P4-C backend routing | 公開能力を実 backend protocol で適合。機密要求は拒否 | `--protocol-scripted --fallback-scenario` runner が実 agent-browser 0.38.1 + loopback fixture で ACP RPC・Claude CLI・specialist wrapper を各7/7 実行。runner の ledger を worker routing と実 browser fallback に渡して成功。主 ACP harness を SIGKILL し、別 session の Claude が click/download を完了。無候補と `CredentialUse` は明示拒否。`CredentialInjection`・`IdentityRestore` は P4-A/B の実適合まで拒否。実 LLM 比較は未。 |
 
 ## attempt 3 の挙動と検査
 
@@ -41,7 +41,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 
 - P4-A: 実 bwrap/subuid browser 起動・事実採取・broker/CDP/IPC 分離・namespace と新 egress transport の接続・runtime orphan 回収・稼働中隔離 session への identity 復元。subuid mapping はこの run の親 user namespace の範囲外で EPERM。proxy 部分の成功だけで受け入れない。
 - P4-B: P4-A の後、別 injection-only IPC の SO_PEERCRED role/session 認可・実 CDP sink・実攻撃負例・H3 の端から端の検証。旧 endpoint は再開しない。
-- P4-C: 実 LLM の同一 task 比較は ACP CLI/認証を利用できる環境で行う。scripted LLM による実 backend protocol 適合・能力を失わない実行時 fallback・無候補拒否は実施済み。機密機能は P4-A/B の実適合まで拒否する。
+- P4-C: 実 LLM の同一 task 比較は ACP CLI/認証を利用できる環境で行う。scripted LLM による実 backend protocol 適合・実 agent-browser での能力を失わない worker fallback・無候補拒否は実施済み。機密機能は P4-A/B の実適合まで拒否する。
 - 3件の継続小タスクを run の `delegate.json` に提案した。P4-B は P4-A に依存し、公開能力の P4-C は独立。採用・実行・完了はこの run では確認できていない。提案を実装済みとして数えず、親の受け入れ条件0/1/2は未達のままとする。
 - 内部 origin の追加、本番昇格、リモート実行は行っていない。
 
@@ -79,3 +79,13 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC6AQ81PWM1XP4C7BH45]
 - 実 LLM 同一 task 比較は未実施。Claude は認証済みだが ACP/OpenCode CLI はこの環境の PATH に無く、三 backend を同じ条件で実行できない。認証が揃った環境で `--backend-command acp=<JSON argv>`、`--backend-command claude-code=<JSON argv>`、`--backend-command browser-specialist=<JSON argv>` を指定し、各 command が runner の `CELERIS_BROWSER_CLI` / `CELERIS_BROWSER_ORIGIN` / `CELERIS_BROWSER_PHASE` を受けて同じ二段階 fixture を実行する。`same-task.json` の成否・違反・復旧・時間・実 usage 由来の費用を比較して PROGRESS に追記する（ADR-0009 P-34）。
 - 機密能力の適合は記録していない。`CredentialInjection`・`IdentityRestore` は P4-A/B の実適合まで拒否し、H3/auth_section の配線は変更していない。本番昇格・本番設定変更・内部 origin 追加なし。
 - 最終検査: `cargo test --workspace` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0。最初の workspace 実行は前 run の specialist 登録に対応する config エラー期待文言が古いため1件失敗し、期待文言を更新して再実行した。`cargo fmt --all --check` と `git diff --check` も exit 0。
+
+## P4-C 実 browser fallback（run 01M3R8T40E9CFNGZG9WHEKMZXH、attempt 2）
+
+- 固定版 `agent-browser 0.38.1` はローカル npm cache の tarball（SHA-512 integrity を検証）から `/tmp/p4c-agent-browser/package/bin/agent-browser-linux-x64` へ展開した。外部通信、本番設定の変更、内部 origin の追加はない。
+- 実行: `python3 scripts/browser-conformance.py --protocol-scripted --fallback-scenario --agent-browser /tmp/p4c-agent-browser/package/bin/agent-browser-linux-x64 --output-dir /var/lib/celeris/workspaces/01M3QGRC6AQ81PWM1XP4C7BH45/wu/real-fallback/artifacts/p4c-real-fallback-final-v3` → **exit 0**。ACP、明示 Claude、browser-specialist は同一 `p4c-local-v1` fixture で各 **7/7**、policy violation 0、復旧 1。runner が生成した ledger を worker route が受理した（`routing-test.json` exit 0）。
+- 同 runner の `p4c_fallback_real_harness_scenario` は worker の公開入口 `run_with_candidates` と実 ACP/Claude adapter を使い、主 ACP harness process を browser の最初の navigation 後に SIGKILL した。代替 Claude は新しい session で同じ fixture を開き、snapshot refs、click、screenshot、download を完了。fixture server は fallback 区間で navigation 3件（主、代替、無候補試験の主）、`POST /clicked` 1件、download 1件を観測。`fallback-test.json` exit 0、`fallback-fixture.json` に要求列、`fallback/fallback-outcome.json` に session 分離と拒否を記録した。
+- 無候補では runner ledger から Claude/specialist の適合結果を除いた記録を使い、主 harness 失敗後に `all capable backends failed` を返す。候補の browser session は起動しない。`CredentialUse` は ledger に機密能力の適合がないため起動前に `lacks required conformance` を返した。`p4c_fallback_ledger_parsing_and_refusal` は runner 形式の欠落・scripted source を決定的に拒否する（限定試験 exit 0）。`CredentialInjection`・`IdentityRestore` の拒否および H3/auth_section を維持した。
+- 最初の実 runner は ACP の初回 navigation が失敗し exit 1（ACP 1/7、残り二 backend は7/7）。同一固定版を再実行すると三 backend 7/7・fallback exit 0、最終実行も exit 0。初回失敗の原因は特定できていないため、冷間起動の安定性は残課題。適合 ledger は成功した最終実行のものだけを採用した。
+- 実 LLM 比較: `claude auth status` exit 0 だが ACP/OpenCode CLI は PATH にないため三 backend 比較は未実施。ADR-0009 P-34 の手順は上の「P4-C backend protocol 適合」節に記載した三つの `--backend-command`、同一二段階 fixture、`same-task.json` の accepted・違反・復旧・費用・時間の比較を使う。P4-A/B の機密実適合と本番昇格は未実施。
+- gate: `cargo test --workspace` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0。`cargo test -p task-worker --lib p4c_fallback_ -- --nocapture` → exit 0（決定的試験1件成功、実 browser 試験1件は通常 gate では ignored）。

@@ -15,6 +15,7 @@ pub mod browser_live;
 pub mod browser_policy;
 pub mod browser_relay;
 pub mod browser_runtime;
+pub mod browser_shared_cdp;
 pub mod browser_specialist;
 pub mod browser_supervisor;
 /// ADR-0066 D1（Phase 110b）: 同一リポジトリの worktree 間で cargo のビルドキャッシュを共有する。

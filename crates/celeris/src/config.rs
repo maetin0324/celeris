@@ -965,6 +965,10 @@ pub struct ApiConfig {
     /// Private local credentiald control socket. The daemon PID must be admitted by credentiald.
     #[serde(default)]
     pub browser_credentiald_control_socket: Option<PathBuf>,
+    /// ADR-0091 D2: 管理者の site policy（`[[api.browser_site_policies]]`）。ログイン URL と
+    /// top-level selector の唯一の出所。手動登録の policy_id と origin が一致したときだけ broker へ渡る。
+    #[serde(default)]
+    pub browser_site_policies: Vec<task_api::browser::TrustedSitePolicy>,
 }
 
 impl ApiConfig {
@@ -4679,6 +4683,42 @@ adapter = "fake"
         assert!(cfg.plan.auto_accept);
         assert!(cfg.dispatch_config().plan_auto_accept);
         assert!(toml::from_str::<Config>("[plan]\nbogus = 1\n").is_err());
+    }
+
+    /// ADR-0091 D2: 管理者の site policy は `[[api.browser_site_policies]]` だけから来る。未知の欄は拒否。
+    #[test]
+    fn api_browser_site_policies_parse_and_validate() {
+        let cfg: Config = toml::from_str(
+            r##"
+[[api.browser_site_policies]]
+policy_id = "pol-login"
+exact_origin = "https://login.example.com"
+login_url = "https://login.example.com/login"
+password_selector = "#password"
+submit_selector = "#submit"
+"##,
+        )
+        .unwrap();
+        let policy = &cfg.api.browser_site_policies[0];
+        assert_eq!(policy.password_selector, "#password");
+        assert!(policy.validate().is_ok());
+        let bad: Config = toml::from_str(
+            r##"
+[[api.browser_site_policies]]
+policy_id = "pol-login"
+exact_origin = "https://login.example.com"
+login_url = "https://evil.example.com/login"
+password_selector = "input:not(.x)"
+"##,
+        )
+        .unwrap();
+        assert!(bad.api.browser_site_policies[0].validate().is_err());
+        assert!(
+            toml::from_str::<Config>(
+                "[[api.browser_site_policies]]\npolicy_id = \"p\"\nexact_origin = \"https://a.example\"\nlogin_url = \"https://a.example/\"\npassword_selector = \"#p\"\nbogus = 1\n"
+            )
+            .is_err()
+        );
     }
 
     /// ADR-0056 D1（Phase 78）: `[[mcp.listeners]]` は `Config::validate` が検査する（`auth = "none"`

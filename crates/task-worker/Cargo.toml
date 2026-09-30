@@ -3,6 +3,10 @@ name = "task-worker"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+# Test fixture only: permit a self-signed HTTPS certificate inside a private netns.
+h3-e2e-insecure-cert = []
+
 [dependencies]
 task-core = { path = "../task-core" }
 celeris-credentiald = { path = "../celeris-credentiald" }
@@ -16,6 +20,7 @@ schemars = "1"
 thiserror = "2"
 tracing = "0.1"
 sha2 = "0.10"
+base64 = "0.22"
 # `fs` は ADR-0032 の TOTP 中継で使う `mkfifo` と `OFlag::O_NONBLOCK` のため。
 nix = { version = "0.30", features = ["signal", "process", "fs", "user"] }
 time = { version = "0.3", features = ["serde", "formatting"] }

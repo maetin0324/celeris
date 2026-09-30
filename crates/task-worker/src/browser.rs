@@ -25,6 +25,161 @@ const CLI: &str = include_str!("browser_cli.py");
 pub const SUPPORTED_VERSION: &str = "0.38.1";
 const ACTION_RUNNER: &str = include_str!("browser_action.py");
 
+struct BrokerLiveSession {
+    client: crate::browser_cdp_sink::UnixInjectionClient,
+    session_id: String,
+}
+
+impl Drop for BrokerLiveSession {
+    fn drop(&mut self) {
+        let _ = self.client.unregister_live_session(&self.session_id);
+    }
+}
+
+fn broker_client(
+    sup: &crate::browser_credential::CredentialSupervisor,
+) -> Result<crate::browser_cdp_sink::UnixInjectionClient, &'static str> {
+    let runtime = sup
+        .runtime_dir
+        .clone()
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+        .ok_or("broker_unavailable")?;
+    Ok(crate::browser_cdp_sink::UnixInjectionClient::new(
+        celeris_credentiald::injection_ipc::injection_socket(&runtime),
+    ))
+}
+
+fn register_broker_session(
+    sup: &crate::browser_credential::CredentialSupervisor,
+    supervisor: &crate::browser_supervisor::Supervisor,
+    session_id: &str,
+) -> Result<BrokerLiveSession, &'static str> {
+    let client = broker_client(sup)?;
+    let controller_pid = std::process::id();
+    let controller_start = crate::browser_runtime::process_starttime(controller_pid as i32)
+        .ok_or("isolated_runtime_unavailable")?;
+    let runtime_pid =
+        u32::try_from(supervisor.runtime_pid()).map_err(|_| "isolated_runtime_unavailable")?;
+    let runtime_start = crate::browser_runtime::process_starttime(supervisor.runtime_pid())
+        .ok_or("isolated_runtime_unavailable")?;
+    client
+        .register_live_session(
+            celeris_credentiald::injection_ipc::LiveSessionRegistration {
+                session_id: session_id.into(),
+                controller_pid,
+                controller_start,
+                runtime_pid,
+                runtime_start,
+            },
+        )
+        .map_err(|_| "isolated_runtime_unavailable")?;
+    Ok(BrokerLiveSession {
+        client,
+        session_id: session_id.into(),
+    })
+}
+
+async fn inject_h3(
+    relay: &crate::browser_shared_cdp::SharedCdp,
+    broker: &mut crate::browser_cdp_sink::UnixInjectionClient,
+    session_id: &str,
+    auth_id: &str,
+    lease_id: &str,
+    origin: &str,
+    trusted: &task_core::browser_wait::TrustedLogin,
+) -> Result<(), &'static str> {
+    use serde_json::json;
+    let controller = relay.controller();
+    let target = {
+        let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
+        c.controller_command("Target.createTarget", json!({"url":"about:blank"}), None)
+            .map_err(|_| "cdp_unavailable")?["result"]["targetId"]
+            .as_str()
+            .ok_or("cdp_unavailable")?
+            .to_owned()
+    };
+    broker
+        .open_auth_section(
+            celeris_credentiald::injection_ipc::AuthSectionRegistration {
+                session_id: session_id.into(),
+                auth_section_id: auth_id.into(),
+                lease_id: lease_id.into(),
+                exact_origin: origin.into(),
+                cdp_target_id: target.clone(),
+            },
+        )
+        .map_err(|_| "auth_section_open_failed")?;
+    async {
+        let own = {
+            let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
+            c.controller_command("Target.attachToTarget", json!({"targetId":target,"flatten":true}), None)
+                .map_err(|_| "cdp_unavailable")?["result"]["sessionId"]
+                .as_str().ok_or("cdp_unavailable")?.to_owned()
+        };
+        {
+            let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
+            c.controller_command("Network.enable", json!({}), Some(&own))
+                .map_err(|_| "navigation_failed")?;
+            let nav = c.controller_command("Page.navigate", json!({"url":trusted.login_url}), Some(&own))
+                .map_err(|_| "navigation_failed")?;
+            if !nav["error"].is_null() || nav["result"]["errorText"].is_string() {
+                return Err("navigation_failed");
+            }
+        }
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        let (frame_id, loader_id) = loop {
+            let tree = controller.lock().map_err(|_| "cdp_unavailable")?
+                .controller_command("Page.getFrameTree", json!({}), Some(&own))
+                .map_err(|_| "cdp_unavailable")?;
+            if controller.lock().map_err(|_| "cdp_unavailable")?.redirect_seen() {
+                return Err("redirected");
+            }
+            let frame = &tree["result"]["frameTree"]["frame"];
+            let url = frame["url"].as_str().unwrap_or("");
+            if url::Url::parse(url)
+                .is_ok_and(|parsed| parsed.origin().ascii_serialization() == origin)
+                && let (Some(id), Some(loader)) = (frame["id"].as_str(), frame["loaderId"].as_str()) {
+                break (id.to_owned(), loader.to_owned());
+            }
+            if std::time::Instant::now() >= until { return Err("navigation_failed"); }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let request = crate::browser_cdp_sink::InjectionRequest {
+            request_id: format!("inject-{auth_id}"), session_id: session_id.into(),
+            cdp_target_id: target, frame_id, loader_id: loader_id.clone(), exact_origin: origin.into(),
+            redirect_chain: vec![origin.into()], selector: trusted.password_selector.clone(),
+            field: "password".into(), auth_section_id: auth_id.into(), lease_id: lease_id.into(),
+        };
+        {
+            let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
+            c.inject(&request, &own, broker).map_err(|e| e.code())?;
+        }
+        if let Some(selector) = &trusted.submit_selector {
+            let expr = format!(
+                "(()=>{{let e=document.querySelector({});if(!e)return 'missing';if(e.form)e.form.requestSubmit();else e.click();return 'ok'}})()",
+                serde_json::to_string(selector).map_err(|_| "submit_failed")?
+            );
+            let submitted = controller.lock().map_err(|_| "cdp_unavailable")?
+                .controller_command("Runtime.evaluate", json!({"expression":expr,"returnByValue":true}), Some(&own))
+                .map_err(|_| "submit_failed")?;
+            if submitted["result"]["result"]["value"] != "ok" { return Err("submit_failed"); }
+            // requestSubmit starts navigation asynchronously. Keep H3 closed to
+            // observation until the old document is gone, then field cleanup
+            // can safely skip its now-invalid CDP object ID.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                let tree = controller.lock().map_err(|_| "cdp_unavailable")?
+                    .controller_command("Page.getFrameTree", json!({}), Some(&own));
+                if tree.is_ok_and(|tree| tree["result"]["frameTree"]["frame"]["loaderId"] != loader_id) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+        Ok(())
+    }.await
+}
+
 #[derive(Clone)]
 pub struct IsolatedBrowserConfig {
     pub resolver: Option<IpAddr>,
@@ -60,6 +215,25 @@ fn browser_install_dirs() -> Vec<PathBuf> {
             })
         })
         .collect()
+}
+
+/// The Playwright chrome-headless-shell that the sandbox starts for the controller.
+fn shared_browser_executable(dirs: &[PathBuf]) -> Option<PathBuf> {
+    let mut found: Vec<_> = dirs
+        .iter()
+        .map(|d| d.join("chrome-headless-shell-linux64/chrome-headless-shell"))
+        .filter(|p| p.is_file())
+        .collect();
+    found.sort();
+    found.pop()
+}
+
+/// 256-bit capability for the sandbox's CDP endpoint (never logged).
+fn relay_token() -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn resolve_executable(executable: &Path) -> std::io::Result<PathBuf> {
@@ -630,7 +804,16 @@ fn route_existing_backend(
     record_path: &Path,
 ) -> Result<browser_backend::RoutingDecision, AdapterError> {
     use Capability as C;
-    let supported = public_capabilities();
+    let mut supported = public_capabilities();
+    // H3 is routed only when the operator ledger attests the sensitive fixture
+    // suite. A credential task cannot reach the isolated runtime otherwise.
+    if policy
+        .effective
+        .actions
+        .contains(&task_core::BrowserAction::CredentialUse)
+    {
+        supported.insert(C::CredentialInjection);
+    }
     let backends = existing_backends(&supported);
     let results = load_conformance(record_path)?;
     let mut required = BTreeSet::new();
@@ -877,6 +1060,15 @@ async fn run_with_executable_attempt(
                 "registered browser credential reference missing".into(),
             ));
         };
+        let trusted_login = credentials
+            .ok_or_else(|| AdapterError::Other("policy_changed".into()))
+            .and_then(|sup| {
+                crate::browser_credential::describe_policy(sup, &credential, &registered.origin)
+                    .map_err(|_| AdapterError::Other("policy_changed".into()))
+            })?;
+        if trusted_login.policy_id != credential.policy_id {
+            return Err(AdapterError::Other("policy_changed".into()));
+        }
         let wait = NewBrowserWait {
             work_unit_id: registered.work_unit_id.clone(),
             run_id: run_id.into(),
@@ -891,6 +1083,7 @@ async fn run_with_executable_attempt(
                 action: "credential_use".into(),
                 args_digest: None,
             }),
+            trusted_login: Some(trusted_login),
             policy_revision: policy.binding.revision,
             policy_hash: policy.binding.hash.clone(),
             owner_id: registered.owner_id.clone(),
@@ -949,10 +1142,7 @@ async fn run_with_executable_attempt(
     std::fs::create_dir_all(runtime.join("actions"))?;
     // Bound orphan lifetime after a supervisor crash; no profile/auth state is restored.
     let segment_active = approved.is_some();
-    let upstream = match (&approved, credentials) {
-        (Some(_), Some(sup)) => crate::browser_credential::segment_upstream_config(&sup.bridge),
-        _ => br#"{"idleTimeout":"5m","noWebmcp":true}"#.to_vec(),
-    };
+    let upstream = br#"{"idleTimeout":"5m","noWebmcp":true}"#.to_vec();
     write_private(&runtime.join("upstream.json"), &upstream)?;
     let initial_policy = if segment_active {
         crate::browser_credential::segment_policy()
@@ -974,12 +1164,20 @@ async fn run_with_executable_attempt(
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let browser_dirs = browser_install_dirs();
     let browser_cache = browser_dirs.first().and_then(|p| p.parent());
+    // The controller owns the only Chromium; agent-browser attaches to it via the relay.
+    let chrome = shared_browser_executable(&browser_dirs)
+        .ok_or_else(|| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let relay_token = relay_token()?;
     write_private(
         &runtime.join("action-config.json"),
         serde_json::to_vec(&serde_json::json!({
             "executable":real_executable, "session_id":session,
             "allowed_domains":policy.allowed_domains(),
             "browser_cache":browser_cache,
+            "cdp_endpoint":format!(
+                "ws://127.0.0.1:{}/{relay_token}",
+                crate::browser_shared_cdp::RELAY_PORT
+            ),
         }))?,
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
@@ -1012,10 +1210,12 @@ async fn run_with_executable_attempt(
         ro_dirs,
         argv: vec![
             isolation.sandboxd.clone().into_os_string(),
+            "--shared-cdp".into(),
+            chrome.into_os_string(),
             "python3".into(),
             "/session/browser_action.py".into(),
         ],
-        cdp_pipe: false,
+        cdp_pipe: true,
         egress: Some(crate::browser_runtime::EgressRelay {
             proxy: isolation.egress.clone(),
             policy: serde_json::to_vec(&egress_policy)?,
@@ -1025,8 +1225,33 @@ async fn run_with_executable_attempt(
     let mut supervisor_opts =
         crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir);
     supervisor_opts.registry = isolation.live_sessions.clone();
-    let supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
+    let mut supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let (Some(cdp_write), Some(cdp_read)) =
+        (supervisor.cdp_write.take(), supervisor.cdp_read.take())
+    else {
+        supervisor.stop();
+        return Err(AdapterError::Other("isolated_runtime_unavailable".into()));
+    };
+    let shared_cdp = match crate::browser_shared_cdp::SharedCdp::start(
+        crate::browser_cdp_sink::CdpController::new(cdp_write, cdp_read),
+        &runtime.join("cdp-relay.sock"),
+        relay_token,
+        policy.allowed_domains().to_vec(),
+    ) {
+        Ok(shared) => shared,
+        Err(_) => {
+            supervisor.stop();
+            return Err(AdapterError::Other("isolated_runtime_unavailable".into()));
+        }
+    };
+    let broker_session = match (&approved, credentials) {
+        (Some(_), Some(sup)) => Some(
+            register_broker_session(sup, &supervisor, &session)
+                .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?,
+        ),
+        _ => None,
+    };
     let version = action_request(&action_socket, "__version__", &[], None)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     if version.0 != 0 || version.1.trim() != format!("agent-browser {SUPPORTED_VERSION}") {
@@ -1035,13 +1260,37 @@ async fn run_with_executable_attempt(
         )));
     }
     // A failed sandbox version check does not consume the one-time approval.
-    let approval =
-        match (&approved, credentials) {
-            (Some(wait), Some(_)) => Some(sink.browser_approval_consume(wait).map_err(|_| {
+    let approval = match (&approved, credentials) {
+        (Some(wait), Some(_)) => {
+            // A missing or changed trusted selector is rejected before consuming the approval.
+            let pinned = wait
+                .trusted_login
+                .as_ref()
+                .ok_or_else(|| AdapterError::Other("policy_changed".into()))?;
+            task_core::browser_wait::validate_trusted_login(
+                &pinned.login_url,
+                &wait.origin,
+                &pinned.password_selector,
+                pinned.submit_selector.as_deref(),
+            )
+            .map_err(|_| AdapterError::Other("policy_changed".into()))?;
+            let current = crate::browser_credential::describe_policy(
+                credentials.ok_or_else(|| AdapterError::Other("policy_changed".into()))?,
+                wait.credential
+                    .as_ref()
+                    .ok_or_else(|| AdapterError::Other("policy_changed".into()))?,
+                &wait.origin,
+            )
+            .map_err(|_| AdapterError::Other("policy_changed".into()))?;
+            if &current != pinned {
+                return Err(AdapterError::Other("policy_changed".into()));
+            }
+            Some(sink.browser_approval_consume(wait).map_err(|_| {
                 AdapterError::Other("browser approval could not be consumed".into())
-            })?),
-            _ => None,
-        };
+            })?)
+        }
+        _ => None,
+    };
     let mut browser = BrowserRun {
         task_id: req.task.id,
         run_id: run_id.into(),
@@ -1061,13 +1310,30 @@ async fn run_with_executable_attempt(
     let mut offset = 0;
     let credential_segment = match (&approval, credentials) {
         (Some(approval), Some(sup)) => {
-            // ADR-0080 H3: the credential-injection section. The control state refuses
-            // takeover/renew while it is active; nothing from inside it reaches the LLM,
-            // the persisted events/live log or artifacts. Fail closed if it cannot be marked.
+            let trusted = approval
+                .trusted_login
+                .as_ref()
+                .ok_or_else(|| AdapterError::Other("trusted_selector_missing".into()))?;
+            let lease_id =
+                crate::browser_credential::grant_h3_lease(sup, approval, &req.task.id.to_string())
+                    .map_err(|code| AdapterError::Other(code.into()))?;
+            let auth_id = format!("auth-{}", approval.wait.wait_id);
+            let mut broker = broker_client(sup).map_err(|code| AdapterError::Other(code.into()))?;
+            // Stop every agent CDP command/event before opening broker H3.
+            shared_cdp
+                .controller()
+                .lock()
+                .map_err(|_| AdapterError::Other("cdp_unavailable".into()))?
+                .open_auth_section(auth_id.clone());
             if sink
                 .browser_auth_section(run_id, &browser.session_id, true)
                 .is_err()
             {
+                let _ = shared_cdp
+                    .controller()
+                    .lock()
+                    .map(|mut c| c.close_auth_section());
+                sup.broker.revoke(&lease_id, "supervisor");
                 browser.state = BrowserRunState::Failed;
                 sink.browser_updated(&browser);
                 return Ok(RunOutcome {
@@ -1079,21 +1345,35 @@ async fn run_with_executable_attempt(
                 });
             }
             let auth = live.auth_section();
-            let segment = crate::browser_credential::Segment {
-                executable,
-                credentiald_runtime: sup.runtime_dir.as_deref(),
-                runtime: &runtime,
-                session_id: &browser.session_id,
-                allowed_domains: policy.allowed_domains(),
-                origin: &approval.wait.origin,
-            };
-            let mut result = crate::browser_credential::use_credential(
-                sup,
-                &segment,
-                approval,
-                &req.task.id.to_string(),
+            let mut result = inject_h3(
+                &shared_cdp,
+                &mut broker,
+                &browser.session_id,
+                &auth_id,
+                &lease_id,
+                &approval.wait.origin,
+                trusted,
             )
             .await;
+            // Clear the field before closing broker H3 or resuming agent observation.
+            let cleared = shared_cdp
+                .controller()
+                .lock()
+                .map_err(|_| "auth_section_close_failed")
+                .and_then(|mut c| {
+                    c.clear_injected_values()
+                        .map_err(|_| "auth_section_close_failed")
+                });
+            let broker_closed = cleared.is_ok()
+                && broker
+                    .close_auth_section(&browser.session_id, &auth_id)
+                    .is_ok();
+            if !broker_closed {
+                result = Err("auth_section_close_failed");
+            }
+            if result.is_err() {
+                sup.broker.revoke(&lease_id, "supervisor");
+            }
             // 0.38.1 reuses the daemon only while config and policy paths stay
             // fixed. Rewrite the policy in place before the harness can run.
             if result.is_ok()
@@ -1101,12 +1381,26 @@ async fn run_with_executable_attempt(
             {
                 result = Err("policy_transition_failed");
             }
-            // Consume (never buffer) whatever the segment wrote, then close the section.
+            // Consume (never buffer) whatever H3 wrote before lifting the event guard.
             forward_events(&events, &mut offset, &req, &output, sink, &live);
+            if broker_closed
+                && sink
+                    .browser_auth_section(run_id, &browser.session_id, false)
+                    .is_err()
+            {
+                result = Err("auth_section_close_failed");
+            }
             drop(auth);
-            if sink
-                .browser_auth_section(run_id, &browser.session_id, false)
-                .is_err()
+            if result != Err("auth_section_close_failed")
+                && shared_cdp
+                    .controller()
+                    .lock()
+                    .map_err(|_| "auth_section_close_failed")
+                    .and_then(|mut c| {
+                        c.close_auth_section()
+                            .map_err(|_| "auth_section_close_failed")
+                    })
+                    .is_err()
             {
                 result = Err("auth_section_close_failed");
             }
@@ -1182,6 +1476,7 @@ async fn run_with_executable_attempt(
                     credential_policy_id: Some(intent.policy_id),
                     credential: None,
                     operation: None,
+                    trusted_login: None,
                     policy_revision: policy.binding.revision,
                     policy_hash: policy.binding.hash.clone(),
                     owner_id: None,
@@ -1243,6 +1538,8 @@ async fn run_with_executable_attempt(
     };
     sink.browser_updated(&browser);
     drop(action_server);
+    drop(shared_cdp);
+    drop(broker_session);
     supervisor.stop();
     outcome
 }

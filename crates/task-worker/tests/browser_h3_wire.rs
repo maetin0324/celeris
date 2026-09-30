@@ -1,5 +1,6 @@
-//! ADR-0089 D1-D4: real broker and browser CDP injection against a fixture in a
-//! network namespace with no external route. Missing prerequisites fail.
+//! H3 wire: real broker, isolated Chromium and receipt-only CDP injection.
+//! The wrong administrator selector is refused before lease use; closing H3
+//! then prevents a retry until a fresh section is opened.
 use celeris_credentiald::injection_ipc::{
     Admission, AuthSectionRegistration, LiveSessionRegistration, process_start,
 };
@@ -19,7 +20,7 @@ use serde_json::{Value, json};
 use task_worker::browser_cdp_sink::{CdpController, InjectionRequest, UnixInjectionClient};
 use task_worker::browser_runtime::{DEFAULT_MAX_EGRESS, EgressRelay, IsolatedRuntime, RuntimeSpec};
 
-const INNER: &str = "CELERIS_INJECTION_WIRE_INNER";
+const INNER: &str = "CELERIS_H3_WIRE_INNER";
 const FIXTURE_IP: &str = "93.184.216.34";
 const ORIGIN: &str = "https://fixture.example.com";
 const SECRET: &str = "sentinel-38fc8240a717425e9c27d1cc90116a0d";
@@ -113,7 +114,7 @@ fn dns_server(listener: TcpListener) {
 
 fn fixture(dir: &Path) -> Child {
     std::fs::write(dir.join("index.html"), format!(
-        "<html><body><input id=\"pass\" type=\"password\" oninput='if(this.value==={:?})document.body.dataset.injected=\"yes\"'><iframe src=\"https://other.example.com/other.html\"></iframe></body></html>", SECRET
+        "<html><body><input id=\"pass\" type=\"password\" oninput='if(this.value==={:?})document.body.dataset.injected=\"yes\"'><input id=\"decoy\" type=\"password\"><iframe src=\"https://other.example.com/other.html\"></iframe></body></html>", SECRET
     )).expect("fixture html");
     std::fs::write(
         dir.join("other.html"),
@@ -223,6 +224,16 @@ fn grant(root: &tempfile::TempDir) -> String {
         json!({"op":"register","reference":reference,"policy":policy,"revision":1,
         "secret":{"username":"user","password":SECRET}}),
     );
+    let described = ipc::call(
+        &sock,
+        json!({"op":"describe_policy","reference":reference,"origin":ORIGIN})
+            .to_string()
+            .as_bytes(),
+    )
+    .expect("describe administrator policy");
+    let trusted = described.trusted_login.expect("trusted login metadata");
+    assert_eq!(trusted.password_selector, "#pass");
+    assert_eq!(trusted.login_url, format!("{ORIGIN}/login"));
     let request = LeaseRequest {
         reference,
         policy,
@@ -419,6 +430,16 @@ fn inner() {
             .code(),
         "cross_origin_frame"
     );
+    let mut wrong_selector = base.clone();
+    wrong_selector.selector = "#decoy".into();
+    assert_eq!(
+        cdp.inject(&wrong_selector, &session_id, &mut broker)
+            .expect_err("administrator selector mismatch must not use lease")
+            .code(),
+        "selector_mismatch"
+    );
+    // A successful request with the same lease proves the rejected selector did
+    // not consume it. The broker emits only a receipt, never the sentinel.
     let receipt = cdp
         .inject(&base, &session_id, &mut broker)
         .unwrap_or_else(|error| {
@@ -438,11 +459,12 @@ fn inner() {
         !receipt.to_string().contains("#pass"),
         "selector in receipt"
     );
-    cdp.close_auth_section()
-        .expect("clear before observation resumes");
+    cdp.clear_injected_values()
+        .expect("clear while observation remains blocked");
     broker
         .close_auth_section("wire-sink", "auth-1")
         .expect("close auth section");
+    cdp.close_auth_section().expect("resume after broker close");
     cdp.open_auth_section("auth-2".into());
     let mut outside = base.clone();
     outside.auth_section_id = "auth-2".into();
@@ -476,7 +498,7 @@ fn inner() {
         std::fs::read_to_string(broker_dir.path().join("data/audit/journal.jsonl")).expect("audit");
     assert!(!audit.contains(SECRET), "secret in broker audit");
     eprintln!(
-        "INJECTION-WIRE-EVIDENCE real browser injection, receipt only, origin and iframe rejected"
+        "H3-WIRE-EVIDENCE real browser injection, receipt only, selector mismatch left lease unused, H3 closed"
     );
     rt.kill();
     let _ = tls.kill();
@@ -508,7 +530,7 @@ fn real_broker_browser_injection_receipt_and_origin_guards() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("INJECTION-WIRE-EVIDENCE"),
+        String::from_utf8_lossy(&out.stderr).contains("H3-WIRE-EVIDENCE"),
         "inner test did not execute: {}\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)

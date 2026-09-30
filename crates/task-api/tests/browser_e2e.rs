@@ -109,6 +109,7 @@ fn world(site: Value) -> World {
         attestation_public_key: Some(key.public_key().as_ref().to_vec()),
         broker: Some(Arc::new(UnixCredentialBrokerControl {
             socket: control.clone(),
+            site_policies: Vec::new(),
         })),
     }));
     let fixture = root.join("browser-fixture");
@@ -503,6 +504,7 @@ impl World {
                         action: "credential_use".into(),
                         args_digest: None,
                     }),
+                    trusted_login: None,
                     policy_revision: policy.binding.revision,
                     policy_hash: policy.binding.hash,
                     owner_id: Some("owner".into()),

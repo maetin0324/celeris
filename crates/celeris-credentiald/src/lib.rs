@@ -123,9 +123,35 @@ pub struct CredentialPolicy {
     pub max_ttl_seconds: u64,
     pub require_approval: bool,
     pub allow_persistence: bool,
+    /// ADR-0091 D2: 管理者が設定するログイン URL（`exact_origin` 直下）。モデル・worker は指定できない。
+    /// 旧い policy は欄が無くても読めるが、trusted selector が無いので注入は拒否される。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_url: Option<String>,
+    /// 管理者が設定する top-level の password 欄 selector（ADR-0091 D2 の文法）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_selector: Option<String>,
+    /// 管理者が設定する任意の submit selector（同じ文法）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_selector: Option<String>,
 }
 impl CredentialPolicy {
+    /// 注入に使える管理者の password selector（`login_url` と揃っているときだけ）。
+    pub fn trusted_password_selector(&self) -> Option<&str> {
+        self.login_url.as_ref()?;
+        self.password_selector.as_deref()
+    }
     pub fn validate(&self) -> Result<(), Error> {
+        match (&self.login_url, &self.password_selector) {
+            (None, None) if self.submit_selector.is_none() => {}
+            (Some(url), Some(password)) => task_core::browser_wait::validate_trusted_login(
+                url,
+                &self.exact_origin,
+                password,
+                self.submit_selector.as_deref(),
+            )
+            .map_err(|_| Error::Invalid)?,
+            _ => return Err(Error::Invalid),
+        }
         if !valid_id(&self.policy_id)
             || !valid_id(&self.task_id)
             || self.revision == 0
@@ -278,6 +304,14 @@ struct Stored {
     revision: u64,
     exact_origin: String,
     policy_id: String,
+    #[serde(default)]
+    policy_revision: u64,
+    #[serde(default)]
+    login_url: Option<String>,
+    #[serde(default)]
+    password_selector: Option<String>,
+    #[serde(default)]
+    submit_selector: Option<String>,
     nonce: String,
     ciphertext: String,
     tag: String,
@@ -369,6 +403,10 @@ impl ManualProvider {
             revision,
             exact_origin: policy.exact_origin.clone(),
             policy_id: policy.policy_id.clone(),
+            policy_revision: policy.revision,
+            login_url: policy.login_url.clone(),
+            password_selector: policy.password_selector.clone(),
+            submit_selector: policy.submit_selector.clone(),
             nonce: String::new(),
             ciphertext: String::new(),
             tag: String::new(),
@@ -409,6 +447,52 @@ impl ManualProvider {
         output.zeroize();
         let bytes = serde_json::to_vec(&s).map_err(|_| Error::Io)?;
         write_atomic(&self.vault_dir, &path, &bytes)
+    }
+    /// Return only the administrator's non-secret login metadata for approval pinning.
+    pub fn describe_registered(
+        &self,
+        reference: &CredentialRef,
+        origin: &str,
+        credential_revision: Option<u64>,
+    ) -> Result<task_core::browser_wait::TrustedLogin, Error> {
+        if reference.provider != "manual"
+            || !valid_id(&reference.credential_id)
+            || !valid_id(&reference.policy_id)
+            || canonical_origin(origin)? != origin
+        {
+            return Err(Error::Invalid);
+        }
+        let bytes = read_private(
+            &self
+                .vault_dir
+                .join(format!("{}.json", reference.credential_id)),
+        )?;
+        let s: Stored = serde_json::from_slice(&bytes).map_err(|_| Error::VaultLocked)?;
+        if s.format_version != 1
+            || s.credential_id != reference.credential_id
+            || s.provider != reference.provider
+            || s.policy_id != reference.policy_id
+            || s.exact_origin != origin
+            || credential_revision.is_some_and(|revision| s.revision != revision)
+        {
+            return Err(Error::Denied);
+        }
+        let login_url = s.login_url.ok_or(Error::Denied)?;
+        let password_selector = s.password_selector.ok_or(Error::Denied)?;
+        task_core::browser_wait::validate_trusted_login(
+            &login_url,
+            origin,
+            &password_selector,
+            s.submit_selector.as_deref(),
+        )
+        .map_err(|_| Error::Invalid)?;
+        Ok(task_core::browser_wait::TrustedLogin {
+            policy_id: s.policy_id,
+            revision: s.policy_revision,
+            login_url,
+            password_selector,
+            submit_selector: s.submit_selector,
+        })
     }
     pub fn resolve_registered(
         &self,
@@ -678,6 +762,23 @@ impl Broker {
     }
     pub fn grant(&self, req: LeaseRequest) -> Result<LeaseGrant, Error> {
         req.policy.validate()?;
+        // A caller cannot replace the administrator's registered site selector
+        // in a freshly issued lease. Legacy leases without H3 metadata retain
+        // their existing validation path.
+        if req.reference.provider == "manual" && req.policy.login_url.is_some() {
+            let stored = self.manual.describe_registered(
+                &req.reference,
+                &req.policy.exact_origin,
+                Some(req.credential_revision),
+            )?;
+            if stored.revision != req.policy.revision
+                || Some(&stored.login_url) != req.policy.login_url.as_ref()
+                || Some(&stored.password_selector) != req.policy.password_selector.as_ref()
+                || stored.submit_selector != req.policy.submit_selector
+            {
+                return Err(Error::Denied);
+            }
+        }
         let t = now()?;
         if req.policy.task_id != req.task_id
             || req.reference.policy_id != req.policy.policy_id
@@ -882,6 +983,19 @@ impl Broker {
     }
     pub fn provider(&self) -> &ManualProvider {
         &self.manual
+    }
+    /// ADR-0091 D2 照合 3: lease が保持する policy 断面の trusted password selector を消費せずに読む。
+    /// lease が無ければ `None`（その拒否は消費の段で出す）。
+    pub(crate) fn lease_trusted_selector(&self, lease_id: &str) -> Option<Option<String>> {
+        let s = self.state.lock().ok()?;
+        let lease = s.leases.get(lease_id)?;
+        Some(
+            lease
+                .request
+                .policy
+                .trusted_password_selector()
+                .map(str::to_owned),
+        )
     }
     /// ADR-0089 D3 step 5: the trusted-injection path consumes a lease without a
     /// plugin binding. Same lease checks as [`Broker::resolve`]; the durable

@@ -237,6 +237,8 @@ pub struct CdpController {
     next_id: u64,
     auth_section: Option<String>,
     injected: Vec<(String, String, String, String)>,
+    events: Vec<Value>,
+    redirect_seen: bool,
 }
 
 impl CdpController {
@@ -248,14 +250,24 @@ impl CdpController {
             next_id: 1,
             auth_section: None,
             injected: Vec::new(),
+            events: Vec::new(),
+            redirect_seen: false,
         }
     }
 
     pub fn open_auth_section(&mut self, id: String) {
+        self.events.clear();
+        self.redirect_seen = false;
         self.auth_section = Some(id);
     }
 
-    pub fn close_auth_section(&mut self) -> Result<(), InjectionError> {
+    /// Only a non-secret redirect bit survives H3 event suppression.
+    pub fn redirect_seen(&self) -> bool {
+        self.redirect_seen
+    }
+
+    /// Remove injected values while the agent relay remains blocked.
+    pub fn clear_injected_values(&mut self) -> Result<(), InjectionError> {
         // Clear on the same document before observations become available.
         for (object_id, session, frame_id, loader_id) in self.injected.clone() {
             let tree = self.call("Page.getFrameTree", json!({}), Some(&session))?;
@@ -270,6 +282,11 @@ impl CdpController {
             }
         }
         self.injected.clear();
+        Ok(())
+    }
+
+    pub fn close_auth_section(&mut self) -> Result<(), InjectionError> {
+        self.clear_injected_values()?;
         self.auth_section = None;
         Ok(())
     }
@@ -286,6 +303,32 @@ impl CdpController {
             return Err(InjectionError::AuthSectionRequired);
         }
         self.call(method, params, session)
+    }
+
+    /// Trusted controller operations needed to prepare and finish H3. The
+    /// caller must hold the controller handle, never an agent connection.
+    pub fn controller_command(
+        &mut self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value, InjectionError> {
+        self.call(method, params, session)
+    }
+
+    /// Events collected while a command was in flight. An auth section discards
+    /// them before the relay can expose them to an agent connection.
+    pub fn take_agent_events(&mut self) -> Vec<Value> {
+        if self.auth_section.is_some() {
+            self.events.clear();
+            Vec::new()
+        } else {
+            std::mem::take(&mut self.events)
+        }
+    }
+
+    pub fn auth_section_active(&self) -> bool {
+        self.auth_section.is_some()
     }
 
     pub fn inject(
@@ -350,14 +393,20 @@ impl CdpController {
             .as_i64()
             .ok_or(InjectionError::TargetChanged)?;
         let queried = self.call(
-            "DOM.querySelector",
+            "DOM.querySelectorAll",
             json!({"nodeId":root_id,"selector":request.selector}),
             Some(cdp_session),
         )?;
-        let node_id = queried["result"]["nodeId"]
+        let nodes = queried["result"]["nodeIds"]
+            .as_array()
+            .ok_or(InjectionError::TargetMismatch)?;
+        if nodes.len() != 1 {
+            return Err(InjectionError::TargetMismatch);
+        }
+        let node_id = nodes[0]
             .as_i64()
             .filter(|id| *id > 0)
-            .ok_or(InjectionError::TargetChanged)?;
+            .ok_or(InjectionError::TargetMismatch)?;
         let resolved = self.call(
             "DOM.resolveNode",
             json!({"nodeId":node_id,"executionContextId":context}),
@@ -519,7 +568,16 @@ impl CdpController {
                 if value["id"] == id {
                     return Ok(value);
                 }
-                // Unsolicited events must not reach worker, including console/URL.
+                if value.get("method").is_some() {
+                    if self.auth_section.is_some()
+                        && value["method"] == "Network.requestWillBeSent"
+                        && value["params"]["redirectResponse"].is_object()
+                    {
+                        self.redirect_seen = true;
+                    } else if self.auth_section.is_none() {
+                        self.events.push(value);
+                    }
+                }
                 continue;
             }
             if self.buffered.len() >= MAX_FRAME {
@@ -564,6 +622,7 @@ fn broker_denial(reply: &Value) -> InjectionError {
         Some("redisplay_field") => "redisplay_field",
         Some("auth_section_required") => "auth_section_required",
         Some("auth_section_mismatch") => "auth_section_mismatch",
+        Some("selector_mismatch") => "selector_mismatch",
         Some("lease_expired") => "lease_expired",
         Some("lease_used") => "lease_used",
         Some("other_session") => "other_session",

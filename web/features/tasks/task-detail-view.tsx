@@ -2,6 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
+import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
+import { TaskChangesPanel } from "../changes/changes-view";
+import { TaskFilesPanel } from "../files/task-files-view";
 import { DecisionPanel } from "./decision-panel";
 import { ExecutionPanel } from "./execution-panel";
 import { OverviewView } from "./overview-view";
@@ -10,7 +13,8 @@ import { TASK_DETAIL_TABS, type TaskDetailTab } from "./task-detail-tabs";
 import { TimelineView } from "./timeline-view";
 
 // /tasks/:id の枠（P3-08、R23）。見出しと tab は取得を待たずに出し、中身だけが FetchFrame で待つ（S1）。
-// tab は ?tab= の search param。判断パネル（P3-09）と実行・routing（P3-10）は overview の上。残りの tab（P3-13）はこの枠に足す。
+// tab は ?tab= の search param。判断パネル（P3-09）と実行・routing（P3-10）は overview の上。
+// changes・files・artifacts（P3-13）は /tasks/:id/changes・/tasks/:id/files・/artifacts と同じ部品を置く。
 export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDetailTab }) {
   return (
     <ScreenFrame title={`タスクの詳細 ${taskId}`} route="/tasks/:id">
@@ -34,9 +38,24 @@ export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDet
           ))}
         </ul>
       </nav>
-      {tab === "timeline" ? <TimelineTab taskId={taskId} /> : <OverviewTab taskId={taskId} />}
+      <TabBody taskId={taskId} tab={tab} />
     </ScreenFrame>
   );
+}
+
+function TabBody({ taskId, tab }: { taskId: string; tab: TaskDetailTab }) {
+  switch (tab) {
+    case "timeline":
+      return <TimelineTab taskId={taskId} />;
+    case "changes":
+      return <TaskChangesPanel taskId={taskId} />;
+    case "files":
+      return <TaskFilesPanel taskId={taskId} search={{}} />;
+    case "artifacts":
+      return <TaskArtifactsPanel taskId={taskId} />;
+    default:
+      return <OverviewTab taskId={taskId} />;
+  }
 }
 
 function OverviewTab({ taskId }: { taskId: string }) {

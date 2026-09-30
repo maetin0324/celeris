@@ -21,7 +21,8 @@ function argValue(name) {
 const only = argValue("--only");
 const screenshots = argValue("--screenshots");
 const paths = only ? [only] : DEFAULT_PATHS;
-if (only && !screens.some((screen) => screen.fixture === only)) throw new Error(`unknown screen: ${only}`);
+if (only && !screens.some((screen) => screen.fixture === only.split("?")[0]))
+  throw new Error(`unknown screen: ${only}`);
 
 if (!existsSync(path.join(webRoot, "dist/index.html"))) {
   const built = spawnSync(path.join(webRoot, "node_modules/.bin/vite"), ["build"], { cwd: webRoot, stdio: "inherit" });

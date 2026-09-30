@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
+import { TaskChangesScreen } from "../features/changes/changes-view";
 
-// R25 /tasks/:id/changes（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
+// R25 /tasks/:id/changes（P3-13）。画面は features/changes に置き、ここは配置だけ。loader は置かず fetch を待たない。
 export const Route = createFileRoute("/tasks/$id/changes")({
   component: Screen,
 });
 
 function Screen() {
   const params = Route.useParams();
-  return <ScreenFrame title={`変更 ${params.id}`} route="/tasks/:id/changes" />;
+  return <TaskChangesScreen taskId={params.id} />;
 }

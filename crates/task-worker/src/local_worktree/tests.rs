@@ -127,22 +127,29 @@ async fn the_worktree_initialises_submodules_and_reuse_is_idempotent() {
 
     let root = tmp.path().join("ws");
     let wt = worktree_for(&repo, &root, "01R63LOCAL");
-    // 既定の git はローカルパス（file）の submodule の clone を拒む（git >= 2.38.1）。その失敗は黙らず、
-    // worktree を名指しした準備のエラーになる。
-    let err = wt
-        .ensure()
+    // 既定の git はローカルパス（file）の submodule の clone を拒む（git >= 2.38.1）。R7-4 から、その失敗は
+    // 準備を止めない（警告）。worktree はでき、submodule は空のまま。
+    wt.ensure()
         .await
-        .expect_err("file transport is refused by default");
-    let msg = err.to_string();
-    assert!(msg.contains("submodules"), "{msg}");
-    assert!(
-        msg.contains(&wt.dir.to_string_lossy().into_owned()),
-        "{msg}"
-    );
+        .expect("a failed submodule is a warning, not a prepare error");
+    assert!(wt.dir.join("README.md").is_file());
     assert!(!wt.dir.join("lib/sub/README.md").exists());
+    let report = init_submodules(&wt.dir)
+        .expect("warning only")
+        .expect("still uninitialised");
+    assert_eq!(report.initialised, 0);
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert_eq!(report.failed[0].0, "lib/sub");
+    assert!(!report.failed[0].1.is_empty());
     // file を許すと初期化される（本番の submodule は ssh / https なのでこの前置きは要らない）。
     let count = init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("init");
-    assert_eq!(count, Some(1));
+    assert_eq!(
+        count,
+        Some(SubmoduleInit {
+            initialised: 1,
+            failed: Vec::new()
+        })
+    );
     assert!(
         wt.dir.join("lib/sub/README.md").is_file(),
         "submodule populated"
@@ -159,6 +166,71 @@ async fn the_worktree_initialises_submodules_and_reuse_is_idempotent() {
     let plain = tempfile::tempdir().expect("tempdir");
     init_repo(plain.path());
     assert_eq!(init_submodules(plain.path()).expect("no gitmodules"), None);
+}
+
+/// Phase R7-4（本番 2026-09-30、sirius の BenchFS）: 固定した commit が remote に無い submodule
+/// （`ior_integration/ior` の push していない commit）が 1 つあっても、ほかの submodule は初期化され、
+/// 準備は通る。失敗した submodule は path と `fatal:` の行で報告される。
+#[tokio::test]
+async fn one_unfetchable_submodule_does_not_stop_the_others() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let good = tmp.path().join("good");
+    let bad = tmp.path().join("bad");
+    init_repo(&good);
+    init_repo(&bad);
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    for (url, path) in [(&bad, "ior"), (&good, "lib/good")] {
+        let url = url.to_string_lossy().into_owned();
+        let out = git(
+            &repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &url,
+                path,
+            ],
+        )
+        .expect("git");
+        assert!(out.ok, "{}", out.stderr);
+    }
+    // `ior` の中で remote に無い commit を作り、上位はそれを固定する。
+    let ior = repo.join("ior");
+    for args in [
+        vec!["config", "user.email", "t@example.com"],
+        vec!["config", "user.name", "t"],
+    ] {
+        assert!(git(&ior, &args).expect("git").ok);
+    }
+    commit(&ior, "local-only");
+    let out = git(&repo, &["add", "-A"]).expect("git");
+    assert!(out.ok, "{}", out.stderr);
+    let out = git(&repo, &["commit", "-q", "-m", "submodules"]).expect("git");
+    assert!(out.ok, "{}", out.stderr);
+
+    let root = tmp.path().join("ws");
+    let wt = worktree_for(&repo, &root, "01R74LOCAL");
+    wt.ensure_tree_blocking().expect("worktree");
+    let report = init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"])
+        .expect("best-effort: not an error")
+        .expect("something to do");
+    assert_eq!(report.initialised, 1, "{report:?}");
+    assert!(
+        wt.dir.join("lib/good/README.md").is_file(),
+        "good one populated"
+    );
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert_eq!(report.failed[0].0, "ior");
+    assert!(report.failed[0].1.starts_with("fatal:"), "{report:?}");
+    // 再実行しても落ちない。失敗した ior は clone までは済んで行頭が `-` でなくなるので、試し直さない（None）。
+    assert_eq!(
+        init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("again"),
+        None
+    );
+    wt.ensure().await.expect("ensure is not a prepare error");
 }
 
 /// ADR-0041 D1: やり直しの run は worktree を**作り直さない**（未コミットの作業を消さない）。

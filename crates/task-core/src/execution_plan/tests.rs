@@ -219,12 +219,26 @@ fn human_replan_may_override_a_done_work_unit_spec() {
 }
 
 /// ADR-0079 R5b-fix1: planner（と repair）の replan は従来どおり done の spec を変えられない。
+/// ADR-0079 付記「R7-3」D1: ただし planner は `checks` だけなら変えられる（この fixture の check だけの変更は
+/// planner には通る。`objective` も変えれば拒否）。repair は `checks` だけでも拒否。
 #[test]
 fn planner_replan_still_rejects_a_changed_done_work_unit() {
     let (done_spec, p) = baseline_override_fixture();
     let done = [("baseline".to_string(), done_spec)];
-    for origin in [PlanOrigin::Planner, PlanOrigin::Repair] {
-        let errs = validate_with(&p, ExecutionLimits::default(), &done, ctx(origin)).unwrap_err();
+    validate_with(
+        &p,
+        ExecutionLimits::default(),
+        &done,
+        ctx(PlanOrigin::Planner),
+    )
+    .expect("R7-3 D1: a planner may change only the checks of a done work unit");
+    let mut beyond_checks = p.clone();
+    beyond_checks.work_units[0].objective = "a rewritten objective for baseline".into();
+    for (origin, p) in [
+        (PlanOrigin::Planner, &beyond_checks),
+        (PlanOrigin::Repair, &p),
+    ] {
+        let errs = validate_with(p, ExecutionLimits::default(), &done, ctx(origin)).unwrap_err();
         assert!(
             errs.contains(&PlanValidationError::DoneWorkUnitChanged {
                 key: "baseline".into()
@@ -1904,6 +1918,340 @@ fn rejects_too_many_child_task_units() {
         p.units.push(task_unit(&format!("more-{i}"), "phase-3"));
     }
     assert!(v3_errors(&p).contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 }));
+}
+
+/// ADR-0079 R7-2: `max_child_tasks_per_plan` は子を作る unit だけを数える。replan で持ち越す done の kind task の
+/// unit は数えない（done 3 + 生きた 4、done 3 + 生きた 6 は上限 6 の内）。生きた 7 は拒否。
+#[test]
+fn child_task_limit_counts_only_units_that_are_not_done() {
+    let stage = |key: &str| StageSpec {
+        key: key.into(),
+        kind: WorkUnitKind::Implement,
+        title: key.into(),
+        review: StageReview::None,
+    };
+    let v3 = |live: usize| {
+        // 段階あたりの上限（6）に当たらないよう、done は s1、生きた unit は s2 / s3 に置く。
+        let mut units: Vec<PlanUnitSpec> = (0..3)
+            .map(|i| task_unit(&format!("done-{i}"), "s1"))
+            .collect();
+        units.extend(
+            (0..live).map(|i| task_unit(&format!("live-{i}"), if i < 4 { "s2" } else { "s3" })),
+        );
+        ExecutionPlanSpec {
+            schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+            rationale: "r".into(),
+            stages: vec![stage("s1"), stage("s2"), stage("s3")],
+            units,
+            ..plan(vec![])
+        }
+    };
+    let done_of = |p: &ExecutionPlanSpec| -> Vec<(String, WorkUnitSpec)> {
+        p.units
+            .iter()
+            .filter(|u| u.key.starts_with("done-"))
+            .map(|u| (u.key.clone(), u.to_work_unit_spec()))
+            .collect()
+    };
+    for live in [4, 6] {
+        let p = v3(live);
+        validate(&p, tree_on(), &done_of(&p))
+            .unwrap_or_else(|e| panic!("3 done + {live} live must pass: {e:?}"));
+    }
+    // 3 done + 7 live: 生きた 7 だけを数える。
+    let p = v3(7);
+    let errs = validate(&p, tree_on(), &done_of(&p)).unwrap_err();
+    assert!(
+        errs.contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 }),
+        "{errs:?}"
+    );
+    // 最初の計画（done なし）は従来どおり全部を数える: 3 + 4 = 7。
+    let p = v3(4);
+    let errs = validate(&p, tree_on(), &[]).unwrap_err();
+    assert!(
+        errs.contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 }),
+        "{errs:?}"
+    );
+}
+
+/// ADR-0079 付記「R7-3」D1（リファクタ retry の子の `HEAD^2`）: planner の replan は done の WU の `checks` だけを
+/// 書き換えられる（段階の統合で再実行される check）。他の欄の変更・repair の計画の `checks` の変更は従来どおり拒否。
+#[test]
+fn planner_replan_may_change_only_the_checks_of_a_done_unit() {
+    let mut done = spec("a", &[]);
+    done.checks = vec![WorkUnitCheck {
+        cmd: "git rev-parse HEAD^2".into(),
+        expect_exit: 0,
+    }];
+    let done_units = vec![("a".to_string(), done.clone())];
+    let mut fixed = done.clone();
+    fixed.checks = vec![WorkUnitCheck {
+        cmd: "! git grep -n '<<<<<<<'".into(),
+        expect_exit: 0,
+    }];
+    let planner = PlanContext::default();
+    let v = validate_with(
+        &plan(vec![fixed.clone(), spec("b", &["a"])]),
+        ExecutionLimits::default(),
+        &done_units,
+        planner,
+    )
+    .expect("the planner may rewrite the checks of a done unit");
+    assert_eq!(
+        done_work_unit_overrides(&v.spec, &done_units),
+        vec![("a".to_string(), fixed.clone(), vec!["checks".to_string()])]
+    );
+    let mut objective_changed = fixed.clone();
+    objective_changed.objective = "a different objective for a".into();
+    let errs = validate_with(
+        &plan(vec![objective_changed, spec("b", &["a"])]),
+        ExecutionLimits::default(),
+        &done_units,
+        planner,
+    )
+    .unwrap_err();
+    assert!(
+        errs.contains(&PlanValidationError::DoneWorkUnitChanged { key: "a".into() }),
+        "{errs:?}"
+    );
+    let repair = PlanContext {
+        origin: PlanOrigin::Repair,
+        depth: 1,
+    };
+    let errs = validate_with(
+        &plan(vec![fixed, spec("b", &["a"])]),
+        ExecutionLimits::default(),
+        &done_units,
+        repair,
+    )
+    .unwrap_err();
+    assert!(
+        errs.contains(&PlanValidationError::DoneWorkUnitChanged { key: "a".into() }),
+        "{errs:?}"
+    );
+    assert!(
+        PlanValidationError::DoneWorkUnitChanged { key: "a".into() }
+            .to_string()
+            .contains("`checks` だけ"),
+        "the rejection tells the planner what it may change"
+    );
+}
+
+/// ADR-0079 付記「R7-3」D1: /3 の replan で planner が done の unit に空でない `checks` を書けばそれを残し（他の欄は
+/// 採用した spec に戻す）、書かなければ（省く・空）採用した spec のまま。検証も通る。
+#[test]
+fn carry_done_units_v3_keeps_the_planners_non_empty_checks() {
+    let stage = |key: &str| StageSpec {
+        key: key.into(),
+        kind: WorkUnitKind::Implement,
+        title: key.into(),
+        review: StageReview::None,
+    };
+    let mut merged = leaf("merge-old-tip", "s1");
+    merged.checks = vec![WorkUnitCheck {
+        cmd: "git rev-parse HEAD^2".into(),
+        expect_exit: 0,
+    }];
+    let active = ExecutionPlanSpec {
+        schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+        rationale: "v1".into(),
+        stages: vec![stage("s1")],
+        units: vec![merged.clone(), leaf("other", "s1")],
+        ..plan(vec![])
+    };
+    let done_keys: BTreeSet<String> = ["merge-old-tip".to_string(), "other".to_string()]
+        .into_iter()
+        .collect();
+    let mut rewritten = merged.clone();
+    rewritten.objective = "the planner paraphrased the objective".into();
+    rewritten.checks = vec![WorkUnitCheck {
+        cmd: "! git grep -n '<<<<<<<'".into(),
+        expect_exit: 0,
+    }];
+    let mut terse = leaf("other", "s1");
+    terse.checks = vec![];
+    let mut new = ExecutionPlanSpec {
+        rationale: "v2".into(),
+        units: vec![rewritten.clone(), terse, leaf("resolve-conflicts", "s1")],
+        ..active.clone()
+    };
+    carry_done_units_v3(&active, &mut new, &done_keys);
+    let get = |k: &str| new.units.iter().find(|u| u.key == k).unwrap().clone();
+    assert_eq!(get("merge-old-tip").objective, merged.objective, "restored");
+    assert_eq!(
+        get("merge-old-tip").checks,
+        rewritten.checks,
+        "the new checks stay"
+    );
+    assert_eq!(
+        get("other").checks,
+        leaf("other", "s1").checks,
+        "an empty copy does not drop the checks"
+    );
+    let done_units: Vec<(String, WorkUnitSpec)> = active
+        .units
+        .iter()
+        .map(|u| (u.key.clone(), u.to_work_unit_spec()))
+        .collect();
+    let v = validate_with(&new, tree_on(), &done_units, PlanContext::default())
+        .expect("a checks-only change of a done unit is valid");
+    let overrides = done_work_unit_overrides(&v.spec, &done_units);
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(overrides[0].0, "merge-old-tip");
+    assert_eq!(overrides[0].2, vec!["checks".to_string()]);
+}
+
+/// ADR-0079 付記「R7-3」D3（08:15Z の `UNIQUE constraint failed: work_units.task_id, key`）: 退役した行の key の
+/// 再利用を検証の理由にする。unit の key と、前の版で消した段階の統合 WU の key（`integrate-<stage>`）の両方。
+/// 生きた行の key（持ち越し）は当たらない。
+#[test]
+fn retired_key_errors_catch_unit_keys_and_removed_stage_keys() {
+    let row = |key: &str, phase: &str, kind: WorkUnitKind, status: WorkUnitStatus| {
+        let mut s = spec_v2(key, phase, &[]);
+        s.kind = kind;
+        WorkUnitRow::new(
+            crate::new_id(),
+            "t".into(),
+            "p1".into(),
+            0,
+            s,
+            status,
+            "2026-09-30T00:00:00Z".into(),
+        )
+    };
+    let rows = vec![
+        row("a", "build", WorkUnitKind::Implement, WorkUnitStatus::Done),
+        row(
+            "old",
+            "build",
+            WorkUnitKind::Implement,
+            WorkUnitStatus::Superseded,
+        ),
+        row(
+            "integrate-build",
+            "build",
+            WorkUnitKind::Integrate,
+            WorkUnitStatus::Pending,
+        ),
+        row(
+            "integrate-extra",
+            "extra",
+            WorkUnitKind::Integrate,
+            WorkUnitStatus::Superseded,
+        ),
+    ];
+    let ok = plan_v2(
+        vec![phase("build")],
+        vec![spec_v2("a", "build", &[]), spec_v2("new", "build", &[])],
+    );
+    assert!(retired_key_errors(&ok, &rows).is_empty());
+    let reuse = plan_v2(
+        vec![phase("build"), phase("extra")],
+        vec![
+            spec_v2("a", "build", &[]),
+            spec_v2("old", "build", &[]),
+            spec_v2("e", "extra", &[]),
+        ],
+    );
+    let errs = retired_key_errors(&reuse, &rows);
+    assert_eq!(
+        errs,
+        vec![
+            PlanValidationError::RetiredKeyReused {
+                key: "old".into(),
+                stage: None
+            },
+            PlanValidationError::RetiredKeyReused {
+                key: "integrate-extra".into(),
+                stage: Some("extra".into())
+            },
+        ]
+    );
+    assert!(errs[0].to_string().contains("choose a new key"));
+    assert!(errs[1].to_string().contains("choose a new stage key"));
+}
+
+/// ADR-0079 付記「R7-3」D5: `max_units_per_stage` は生きた unit だけを数える（持ち越す done の unit と `adopt` の
+/// unit は数えない）。最初の計画（done なし）は従来どおり。
+#[test]
+fn units_per_stage_limit_counts_only_live_units() {
+    let stage = |key: &str| StageSpec {
+        key: key.into(),
+        kind: WorkUnitKind::Implement,
+        title: key.into(),
+        review: StageReview::None,
+    };
+    let v3 = |live: usize| {
+        let mut units: Vec<PlanUnitSpec> =
+            (0..3).map(|i| leaf(&format!("done-{i}"), "s1")).collect();
+        units.extend((0..live).map(|i| leaf(&format!("live-{i}"), "s1")));
+        ExecutionPlanSpec {
+            schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+            rationale: "r".into(),
+            stages: vec![stage("s1")],
+            units,
+            ..plan(vec![])
+        }
+    };
+    let done_of = |p: &ExecutionPlanSpec| -> Vec<(String, WorkUnitSpec)> {
+        p.units
+            .iter()
+            .filter(|u| u.key.starts_with("done-"))
+            .map(|u| (u.key.clone(), u.to_work_unit_spec()))
+            .collect()
+    };
+    let p = v3(6);
+    validate(&p, tree_on(), &done_of(&p)).expect("3 done + 6 live in one stage passes");
+    let p = v3(7);
+    let errs = validate(&p, tree_on(), &done_of(&p)).unwrap_err();
+    assert!(
+        errs.contains(&PlanValidationError::TooManyUnitsInStage {
+            stage: "s1".into(),
+            count: 7,
+            max: 6
+        }),
+        "{errs:?}"
+    );
+    let p = v3(4);
+    let errs = validate(&p, tree_on(), &[]).unwrap_err();
+    assert!(
+        errs.contains(&PlanValidationError::TooManyUnitsInStage {
+            stage: "s1".into(),
+            count: 7,
+            max: 6
+        }),
+        "the first plan counts every unit: {errs:?}"
+    );
+}
+
+/// ADR-0079 R7-2: /3 の JSON の大きさは `max_plan_json_bytes_v3`（既定 64 KiB）で測る（/1・/2 の 24 KiB は
+/// 見ない）。拒否の文は planner に何を削るかを伝える。
+#[test]
+fn v3_plan_json_size_uses_its_own_limit_and_says_what_to_trim() {
+    assert_eq!(ExecutionLimits::default().max_plan_json_bytes, 24 * 1024);
+    assert_eq!(ExecutionLimits::default().max_plan_json_bytes_v3, 64 * 1024);
+    let spec = v3_fixture();
+    let small_v1 = ExecutionLimits {
+        max_plan_json_bytes: 10,
+        ..tree_on()
+    };
+    validate(&spec, small_v1, &[]).expect("/3 ignores the /1・/2 size limit");
+    let small_v3 = ExecutionLimits {
+        max_plan_json_bytes_v3: 10,
+        ..tree_on()
+    };
+    let errs = validate(&spec, small_v3, &[]).unwrap_err();
+    let too_large = errs
+        .iter()
+        .find(|e| matches!(e, PlanValidationError::PlanTooLarge { max: 10, .. }))
+        .expect("PlanTooLarge");
+    let text = too_large.to_string();
+    assert!(text.contains("> 10 bytes"), "{text}");
+    assert!(text.contains("objective は要点だけにし"), "{text}");
+    assert!(
+        text.contains("artifacts / 知識ベースのパスで参照"),
+        "{text}"
+    );
 }
 
 /// /1・/2 に /3 の欄・語彙を書けば拒否（`kind = task`・`stages` / `units` / `decisions`）。

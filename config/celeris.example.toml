@@ -384,9 +384,11 @@ on_child_failure = "retry_then_ask"
 # [execution.tree]
 # enabled = false             # true で celeris.execution-plan/3（kind task の unit = 子 task）を有効にする
 # max_depth = 3               # task の層数（root 1 / 子 2 / 孫 3）
-# max_units_per_stage = 6
+# max_units_per_stage = 6     # 1 段階の生きた unit（leaf + kind task。replan で持ち越す done の unit・adopt・celeris が足す統合・repair は数えない。R7-3）
 # max_stages = 5
-# max_child_tasks_per_plan = 6
+# max_child_tasks_per_plan = 6 # 1 計画で子を作る kind task の unit（adopt と replan で持ち越す done の unit は数えない。R7-2）
+#                              # 上の 2 つとも、failed / cancelled / running の子の unit を新しい版に残せば数える（failed を残すと replan が
+#                              # 新しい子を作る）。数えたくなければ計画から外す（superseded になり、その key は再利用できない）。R7-3
 # max_parallel_child_tasks = 2
 # max_tree_leaves = 120       # 木の生涯の leaf（R6-2 で 40 から）
 # max_tree_runs = 400         # 木全体の worker / planner / repair の run（R6-2 で 120 から）

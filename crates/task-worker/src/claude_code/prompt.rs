@@ -129,6 +129,8 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
                 }
                 out.push('\n');
             }
+            // ADR-0079 付記 R7-5 D3: 直前の run が done を返したのに daemon の check が落ちたときだけ（無ければ空）。
+            out.push_str(&previous_check_failures_section(wu, artifacts));
             // ADR-0074 D1.2（Phase F2b）: WU ごとの worktree で走る run だけ（無ければ空）。
             out.push_str(&crate::preamble::work_unit_branch_section(wu));
         }
@@ -140,6 +142,32 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
     if context.decision_requests {
         out.push_str(&crate::preamble::decision_requests_section(artifacts));
     }
+    out
+}
+
+/// ADR-0079 付記 R7-5 D3: 「前回の run の check の不合格」節。`previous_check_failures` が空なら空文字列
+/// （プロンプトは 1 バイトも変わらない）。
+fn previous_check_failures_section(
+    wu: &crate::protocol::WorkUnitPromptContext,
+    artifacts: &str,
+) -> String {
+    if wu.previous_check_failures.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "## 前回の run の check の不合格\n\
+         この WorkUnit の前回の run は done を返したが、celeris が run の後に走らせた次の check が不合格だった\
+         （check は計画のもので、この run では変えられない）。作業をやり直す前に、まずこの不合格の原因を確かめよ。\
+         成果を直し、同じ場所（下の `cwd`）から同じ check を自分で走らせて期待どおりの exit になるのを確かめてから done を返すこと。\n",
+    );
+    for line in &wu.previous_check_failures {
+        out.push_str(&format!("- {line}\n"));
+    }
+    out.push_str(&format!(
+        "check そのものが誤っていて成果をどう直しても通らない（引数の形が違う、存在しない場所を見ている等）なら、done を返さず \
+         `{artifacts}/result.json` に `{{\"yield\": {{\"plan_issue\": \"<どの check がなぜ通らないか、どう直すべきか>\"}}}}` を書いて終えよ\
+         （計画の問題の申告として replan になる）。\n\n"
+    ));
     out
 }
 
@@ -854,6 +882,8 @@ fn build_execution_plan_prompt(
     // その理由も（同じ間違いを繰り返させない。dogfood 4 回目は 2 回とも `too many checks: 8 > 6`）。
     if let Some(planner) = &context.execution_planner {
         out.push_str(&plan_limits_section(planner));
+        // ADR-0079 R7-2: check の書き方（本番で check 自体が誤って落ちた 6 つの形）。
+        out.push_str(PLANNER_CHECK_GUIDANCE);
         out.push_str(&previous_attempt_errors_section(planner, artifacts));
     }
     let schema = serde_json::to_string(&task_core::execution_plan::schema_value())
@@ -932,6 +962,8 @@ fn planner_limits(
         max_done_when_chars: or(planner.max_done_when_chars, d.max_done_when_chars),
         max_checks: or(planner.max_checks, d.max_checks),
         max_plan_json_bytes: or(planner.max_plan_json_bytes, d.max_plan_json_bytes),
+        // ADR-0079 R7-2: /3 の planner の `max_plan_json_bytes` は dispatcher が /3 の上限で埋める。
+        max_plan_json_bytes_v3: or(planner.max_plan_json_bytes, d.max_plan_json_bytes_v3),
         // `max_work_units` は dispatcher が v1/v2 に応じて選んだ値（`max_work_units_v2` を含む）。
         max_work_units_v2: or(planner.max_work_units, d.max_work_units_v2),
         max_phases: or(planner.max_phases, d.max_phases),
@@ -964,9 +996,10 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
     if planner.tree.is_some() {
         // ADR-0079 D3（Phase R2b）: /3 の計画の上限（検証で拒否）。
         out.push_str(&format!(
-            "- `stages`: 1 to {} stages. At most {} units per stage (leaves + child tasks; celeris-added \
-             integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"`. At most \
-             {} `decisions` (plan-level and unit-level together).\n",
+            "- `stages`: 1 to {} stages. At most {} units per stage (leaves + child tasks; units already done, \
+             `adopt` units, and celeris-added integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"` that will \
+             create a child (units already done and `adopt` units do not count). At most {} `decisions` \
+             (plan-level and unit-level together).\n",
             l.tree.max_stages,
             l.tree.max_units_per_stage,
             l.tree.max_child_tasks_per_plan,
@@ -997,7 +1030,12 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
     ));
     out.push_str(&format!(
         "- `rationale` at most {} characters; the whole plan JSON at most {} bytes.\n",
-        l.max_rationale_chars, l.max_plan_json_bytes
+        l.max_rationale_chars,
+        if planner.tree.is_some() {
+            l.max_plan_json_bytes_v3
+        } else {
+            l.max_plan_json_bytes
+        }
     ));
     if planner.tree.is_some() {
         out.push_str(&format!(
@@ -1266,7 +1304,10 @@ fn tree_replan_context_section(
     if !planner.preserve_done_keys.is_empty() {
         out.push_str(&format!(
             "These units are already done and carry over unchanged (celeris restores their adopted spec; you \
-             may omit them, and you must not change them): {}.\n\n",
+             may omit them): {}. The only thing you may change in a done unit is its `checks`: write the unit \
+             with a new non-empty `checks` list to replace a check that cannot hold after the stage \
+             integration (e.g. one that assumes a merge commit). The done unit is not re-run; its checks are \
+             re-run at the stage integration. Every other field is restored.\n\n",
             planner.preserve_done_keys.join(", ")
         ));
     }
@@ -1380,7 +1421,7 @@ fn replan_context_section(planner: &crate::protocol::ExecutionPlannerContext) ->
          \"modify\":[{{\"key\":\"<existing key>\", ...only the fields you are changing...}}],\
          \"remove\":[\"<key>\", ...]}}` to `{{artifacts}}/execution-plan.json`. Do NOT restate \
          WorkUnits you are not changing — they carry over automatically, including every WorkUnit \
-         that is already done (you cannot touch a done WorkUnit's spec anyway; see below). If a \
+         that is already done (you cannot change a done WorkUnit's spec except its `checks`; see below). If a \
          diff genuinely cannot express what you need, you may instead write the full \
          `\"schema\":\"{}\"` plan shape shown above (still subject to the done-WorkUnit rule).\n\n",
         task_core::EXECUTION_PLAN_SCHEMA
@@ -1410,9 +1451,13 @@ fn replan_context_section(planner: &crate::protocol::ExecutionPlannerContext) ->
     } else {
         out.push_str(&format!(
             "IMPORTANT: these WorkUnit keys are already done and MUST appear unchanged (same \
-             `key`, same spec — objective, depends_on, done_when, checks, context, harness, \
-             budget, outputs) in your new plan; do not edit, rename, remove, or reorder them. A \
-             plan that changes a done WorkUnit will be rejected: {}.\n\n",
+             `key`, same spec — objective, depends_on, done_when, context, harness, budget, \
+             outputs) in your new plan; do not edit, rename, remove, or reorder them. A plan that \
+             changes a done WorkUnit will be rejected: {}. The one exception is `checks`: you may \
+             replace a done WorkUnit's `checks` (in a diff: `\"modify\":[{{\"key\":\"<done key>\",\
+             \"checks\":[...]}}]`) when a check cannot hold after the phase integration (e.g. one \
+             that assumes a merge commit). The done WorkUnit is not re-run; its checks are re-run \
+             at the phase integration.\n\n",
             planner.preserve_done_keys.join(", ")
         ));
     }
@@ -1520,3 +1565,24 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push_str(&result_json_instructions(artifacts));
     out
 }
+
+/// ADR-0079 R7-2: planner の「check の書き方」。本番（2026-09-29/30）で unit の成果ではなく check そのものが
+/// 誤って落ちた形を 1 規則 1 文で並べる（/1・/2・/3 の planner に共通。上限の節の直後）。
+pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `checks` and command acceptance)\n\
+     - A \"no out-of-scope diff\" check must exclude the paths the unit is allowed to write as records: \
+     `docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write.\n\
+     - Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test` unless the package \
+     script accepts them (`pnpm -C web test scripts/ e2e/support/` handed directories to `node --test` and \
+     failed).\n\
+     - Pin the package manager: write `corepack pnpm@<version from package.json packageManager> -C <dir> ...` \
+     instead of bare `pnpm` (the host pnpm may differ and fail with ERR_PNPM_BAD_PM_VERSION).\n\
+     - Compare against `$(git merge-base HEAD main)` (e.g. `git diff --quiet $(git merge-base HEAD main) -- \
+     <paths>`) or the unit's recorded base, never a hard-coded main sha, because main moves during the task.\n\
+     - A negated grep (`! grep ...`) must not match text the unit itself writes (its own ADR, notes or \
+     comments explaining the rule); this self-reference has failed real checks.\n\
+     - A check runs where the unit's worker starts: its own unit's worktree, or the task's directory \
+     (where `artifacts/` is) when the task has no git worktree. It may only use files that exist there: a check \
+     that runs a script another unit creates belongs to a unit that `depends_on` the creating unit.\n\
+     - When a check runs a script the unit itself creates, write the exact invocation (the arguments the check \
+     passes) in the unit's objective so the unit writes the script to accept that form (a check passed a URL to \
+     a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\n";

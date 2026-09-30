@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
+import { createAuth } from "./auth.js";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -60,9 +61,12 @@ export function createApp({
   distDir = path.join(webRoot, "dist"),
   release = process.env.CELERIS_WEB_RELEASE ?? "dev",
   log = (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`),
+  secretFile = process.env.CELERIS_WEB_SESSION_SECRET_FILE,
+  failedLoginDelayMs,
   registerRoutes = () => {},
 } = {}) {
   validateConfig({ bind, passwordFile });
+  const auth = createAuth({ passwordFile, secretFile, failedDelayMs: failedLoginDelayMs });
   const allowed = new Set(["localhost", "127.0.0.1", "::1", bind.host.toLowerCase()]);
   for (const value of allowedHosts.split(",")) {
     const host = hostName(value.trim());
@@ -117,6 +121,7 @@ export function createApp({
       },
     }),
   );
+  auth.register(app);
   registerRoutes(app);
   app.use((req, res, next) => {
     if (

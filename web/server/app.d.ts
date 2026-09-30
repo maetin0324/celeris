@@ -11,6 +11,8 @@ export function createApp(options?: {
   allowedHosts?: string;
   distDir?: string;
   release?: string;
+  secretFile?: string;
+  failedLoginDelayMs?: number;
   log?: (entry: { path: string; status: number; ms: number }) => void;
   registerRoutes?: (app: Express) => void;
 }): Express;

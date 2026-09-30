@@ -1428,3 +1428,9 @@ config の編集なし）。migration なし。
   `corepack pnpm@11.27.0` で版固定 = pnpm 版合わせの別 task は不要）を planner に渡し ready に。前日の決定「gui の pnpm を 12.6.0 に上げる別 task」は
   corepack 明示で満たすため不要（task も作られていない）。**R6 候補**: planner prompt に統合 check の書き方（PROGRESS 除外、`pnpm test` に引数を付けない、
   corepack で版固定、base は固定 sha より merge-base）を足す。
+- 2026-09-30 05:16Z / 05:38Z: BenchFS の実験子 01M3R8BWFYT81RKEWZCEW5S3HK が 2 回続けて review 不合格 → failed → 根の replan（上限 5 に到達、人が raise-once）。
+  不合格理由は「PBS の job（E1 v2 42634〜42636 が Q、A0 v2 が R）がまだ終わっていないので完了を確認できない」。**設計の穴**: 数時間かかるクラスタ job を、
+  1 run（≤ 1800 s）→ review の cadence で扱えない。worker は job を投げて done と申告し、reviewer が未完了で落とし、根が replan して子を作り直す churn。
+  **提案（R7 候補）**: browser_waits と同型の durable wait を cluster job に足す（`result.json {type: "wait", kind: "pbs_job", cluster, job_ids, poll_secs}`
+  → daemon が remote-exec で qstat を poll し、終了で続き run を起こす。continuation・idle timeout に数えない）。それまでは計画側で「投入」と「回収」を
+  分け、回収の葉は job 終了を人が確認してから ready にする運用。

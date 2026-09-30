@@ -95,14 +95,8 @@ async fn ensure_worktree_maps_exit_65_to_not_a_git_repository_and_exit_66_to_rem
     let dir = tempfile::tempdir().unwrap();
     for (exit_code, matches_not_a_git_repo) in [(65, true), (66, false), (1, false)] {
         let stub = dir.path().join(format!("stub-{exit_code}.sh"));
-        std::fs::write(&stub, format!("#!/bin/sh\nexit {exit_code}\n")).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&stub).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&stub, perms).unwrap();
-        }
+        // ETXTBSY 対策（ADR-0010 D10）: テストプロセス自身が書き込み fd を持たないよう別プロセスで書く。
+        crate::test_support::write_executable(&stub, &format!("#!/bin/sh\nexit {exit_code}\n"));
         let mut settings = SshSettings::new("c", "h", PathBuf::from("/work/proj"));
         settings.sync = SyncMode::Worktree;
         settings.task_id = "01TESTTASK".into();

@@ -104,8 +104,8 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 ## 決定適合
 
-2026-09-30 に各決定の実装をコードで読み、矛盾の有無を確かめた（WorkUnit conformance）。file:line は base `dea8dc31` の行。
-矛盾は 1 件（H3: 復元 identity の session が観測停止に入らない）で、本番では SameUid 拒否により到達しないため後続 task で閉じる。
+2026-09-30 に各決定の実装をコードで読み、矛盾の有無を確かめた（WorkUnit conformance）。file:line は base `fa801f18` の行。
+矛盾 1 件（H3: 復元 identity の session が観測停止に入らない）を修正済み（WorkUnit restore-obs-stop）。
 
 ### H4
 
@@ -113,7 +113,7 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 - 実装: `crates/task-core/src/browser_live.rs:119`（`authorize_live`: auth 無効・共有 instance は `live_view_disabled`、本人 session のみ、`task_id`/`run_id` 不一致は `other_task`）
 - 実装: `crates/task-core/src/browser_live.rs:151`（`check_connection`: 中継ごとに task/run/session/期限を再判定）、`crates/task-core/src/browser_live.rs:10`（grant 60 秒）
-- 実装: `crates/task-worker/src/browser.rs:1115`・`crates/task-worker/src/browser.rs:1322`（worker は `live_view_url` を常に `None` にし、共有 dashboard への導線を作らない。dashboard/stream は起動しない）
+- 実装: `crates/task-worker/src/browser.rs:1115`・`crates/task-worker/src/browser.rs:1325`（worker は `live_view_url` を常に `None` にし、共有 dashboard への導線を作らない。dashboard/stream は起動しない）
 - test: `other_task_and_other_run_are_denied` cmd: `cargo test -p task-core --lib other_task_and_other_run_are_denied`
 - test: `viewer_checks_follow_adr_0080_d6` cmd: `cargo test -p task-core --lib viewer_checks_follow_adr_0080_d6`
 - test: `grant_check_and_replay_are_bound_and_scrubbed` cmd: `cargo test -p task-api --test browser_live grant_check_and_replay_are_bound_and_scrubbed`
@@ -137,7 +137,7 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 決定: 固定 agent-browser 0.38.1 + 既存 harness の browser-specialist（ADR-0085 決定 2）。
 
-- 実装: `crates/task-worker/src/browser.rs:25`（`SUPPORTED_VERSION = "0.38.1"`）、`crates/task-worker/src/browser.rs:1279`（sandbox 内の `--version` が一致しなければ承認消費前に起動拒否）
+- 実装: `crates/task-worker/src/browser.rs:25`（`SUPPORTED_VERSION = "0.38.1"`）、`crates/task-worker/src/browser.rs:1282`（sandbox 内の `--version` が一致しなければ承認消費前に起動拒否）
 - 実装: `crates/task-worker/src/browser_specialist.rs:14`（`browser-specialist` adapter）、`crates/task-core/src/browser_backend.rs:265`（routing: 明示 → browser-specialist → 既存 loop）
 - test: `routing_prefers_specialist_then_existing_loops_and_fallback_keeps_capabilities` cmd: `cargo test -p task-core --lib routing_prefers_specialist_then_existing_loops_and_fallback_keeps_capabilities`
 - test: `adapter_selection_is_explicit_and_does_not_drop_browser_capability` cmd: `cargo test -p task-core --lib adapter_selection_is_explicit_and_does_not_drop_browser_capability`
@@ -167,14 +167,16 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 決定（ADR-0080）: credential を注入した session の終わりまで LLM の観測（snapshot・console・event）と Live View を止める。ADR-0083 D4 は identity を復元した session も同じ扱いにする。
 
-- 実装: `crates/task-worker/src/browser.rs:544`（`forward_events` は認証区間中に progress・artifact・live event を捨て、溜めない）、`crates/task-worker/src/browser_live.rs:245`（`LiveEmitter::auth_section`）
+- 実装: `crates/task-worker/src/browser.rs:544`（`forward_events` は認証区間中に progress・artifact・live event を捨て、溜めない）、`crates/task-worker/src/browser_live.rs:255`（`LiveEmitter::auth_section`）
 - 実装: `crates/task-core/src/browser_live.rs:112`（認証区間の session は新規・既存接続とも `observation_stopped`）、`crates/task-api/src/browser_live.rs:164`（`credential_interval` を store と event から判定）
 - test: `browser_auth_section_forward_events_drops_progress_artifact_and_live` cmd: `cargo test -p task-worker --lib browser_auth_section_forward_events_drops_progress_artifact_and_live`
 - test: `browser_live_auth_section_drops_events_without_buffering` cmd: `cargo test -p task-worker --lib browser_live_auth_section_drops_events_without_buffering`
 - test: `credential_interval_stops_new_and_existing_connections` cmd: `cargo test -p task-core --lib credential_interval_stops_new_and_existing_connections`
-- 矛盾（後続）: `crates/task-api/src/browser_identity.rs:307`（`restore_in_session`）は state を controller に投入するが、観測停止（auth section・relay 遮断・`observation_stopped`）に入らない。本番 admission は SameUid で復元を拒否する（`identity_restore_sameuid_rejected_in_production`）ため現在は到達しない。別 UID 解放の前に直す。task: `01M3SRZ4X8NHRE0BB1QXMBTPKJ`（depends_on `01M3SPN8H05EJ3DHPVEGEYTMEH`）
+- 実装: `crates/task-api/src/browser_identity.rs:307`（`restore_in_session`: controller への投入の前に `observation_stopped` を store へ記録し、投入が失敗しても停止は残る。解除経路は session の終了のみ）
+- test: `restore_enters_observation_stop_until_session_end` cmd: `cargo test -p task-api --test browser_restore_deliver restore_enters_observation_stop_until_session_end`
+- test: `restored_session_refuses_agent_observation` cmd: `cargo test -p task-worker --test browser_restore_deliver restored_session_refuses_agent_observation`
 - test: `identity_restore_sameuid_rejected_in_production` cmd: `cargo test -p task-worker --test browser_restore_deliver identity_restore_sameuid_rejected_in_production`
-- 判定: 注入経路は適合。復元経路は後続 `01M3SRZ4X8NHRE0BB1QXMBTPKJ`。
+- 判定: 適合。
 
 ### H6
 

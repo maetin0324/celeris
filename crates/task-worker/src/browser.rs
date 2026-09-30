@@ -1245,6 +1245,9 @@ async fn run_with_executable_attempt(
     let mut supervisor_opts =
         crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir);
     supervisor_opts.registry = isolation.live_sessions.clone();
+    supervisor_opts.live_key = Some((req.task.id.to_string(), run_id.to_owned()));
+    // ADR-0080 H3 / ADR-0083 D4: 復元を受けたら session の終わりまで LiveEmitter も止まる。
+    let observation_stop = supervisor_opts.observation_stop.clone();
     let mut supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let (Some(cdp_write), Some(cdp_read)) =
@@ -1323,11 +1326,14 @@ async fn run_with_executable_attempt(
         policy: Some(policy.binding.clone()),
     };
     sink.browser_updated(&browser);
-    let live = crate::browser_live::LiveEmitter::new(EventSinkLive {
-        sink,
-        run_id: run_id.into(),
-        session_id: browser.session_id.clone(),
-    });
+    let live = crate::browser_live::LiveEmitter::with_observation_stop(
+        EventSinkLive {
+            sink,
+            run_id: run_id.into(),
+            session_id: browser.session_id.clone(),
+        },
+        observation_stop,
+    );
     let events = runtime.join("events.jsonl");
     let mut offset = 0;
     let credential_segment = match (&approval, credentials) {

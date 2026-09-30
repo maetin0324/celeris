@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -43,6 +44,11 @@ pub struct SupervisorOptions {
     pub registry: Option<Arc<LiveSessions>>,
     /// identity 復元の隔離 admission（ADR-0094 D2）。本番は `Attested` のまま。
     pub admission: RestoreAdmission,
+    /// Live View の鍵（task_id, run_id）。無ければ API は復元を開封前に拒否する（観測停止を記録できない）。
+    pub live_key: Option<(String, String)>,
+    /// ADR-0080 H3 / ADR-0083 D4: 復元の投入前に立てる旗。worker の `LiveEmitter` と共有し、
+    /// session の終わりまで progress・artifact・live event を捨てさせる。
+    pub observation_stop: Arc<AtomicBool>,
 }
 
 impl SupervisorOptions {
@@ -52,6 +58,8 @@ impl SupervisorOptions {
             arm_parent_death: true,
             registry: None,
             admission: RestoreAdmission::Attested,
+            live_key: None,
+            observation_stop: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -70,6 +78,8 @@ type ControllerSlot = Arc<Mutex<Option<Arc<Mutex<CdpController>>>>>;
 struct SupervisedEntry {
     tx: Mutex<mpsc::Sender<Cmd>>,
     controller: ControllerSlot,
+    live_key: Option<(String, String)>,
+    observation_stop: Arc<AtomicBool>,
 }
 
 impl LiveIsolation for SupervisedEntry {
@@ -104,12 +114,19 @@ impl LiveSessionEntry for SupervisedEntry {
             .ok()
             .and_then(|c| c.clone())
             .ok_or(StateRejected)?;
+        // 投入の前に観測停止へ入る（ADR-0080 H3 / ADR-0083 D4）。投入に失敗しても戻さない。
+        self.observation_stop.store(true, Ordering::SeqCst);
         let mut controller = controller.lock().map_err(|_| StateRejected)?;
+        controller.enter_restored_observation_stop();
         crate::browser_runtime::deliver_state_via(state, |method, params| {
             controller
                 .controller_command(method, params, None)
                 .map_err(|_| StateRejected)
         })
+    }
+
+    fn live_key(&self) -> Option<(String, String)> {
+        self.live_key.clone()
     }
 }
 
@@ -145,6 +162,8 @@ impl Supervisor {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Started, RuntimeError>>();
         let thread_procs = procs.clone();
         let registry = opts.registry.clone();
+        let live_key = opts.live_key.clone();
+        let observation_stop = opts.observation_stop.clone();
         let thread = std::thread::Builder::new()
             .name(format!("celeris-browser-rt-{session_id}"))
             .spawn(move || runtime_thread(spec, opts, thread_procs, rx, ready_tx))?;
@@ -155,6 +174,8 @@ impl Supervisor {
                     let entry = SupervisedEntry {
                         tx: Mutex::new(tx.clone()),
                         controller: controller.clone(),
+                        live_key: live_key.clone(),
+                        observation_stop: observation_stop.clone(),
                     };
                     reg.insert(&session_id, Arc::new(entry));
                 }

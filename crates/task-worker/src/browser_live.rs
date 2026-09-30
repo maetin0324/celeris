@@ -9,6 +9,7 @@
 //!
 //! TODO: 実 `LiveSink`（task-api への POST）は未配線。ここでは trait と、テスト用の in-memory 実装まで。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use task_core::browser_control::{
@@ -213,6 +214,9 @@ impl LiveSink for CollectingSink {
 pub struct LiveEmitter<S: LiveSink> {
     sink: S,
     auth_depth: Mutex<u32>,
+    /// ADR-0080 H3 / ADR-0083 D4: identity の復元を受けた session。立ったら session の終わりまで
+    /// 認証区間と同じく event・progress・artifact を捨てる（戻す口は無い）。
+    restored: Arc<AtomicBool>,
 }
 
 /// auth section の RAII。生きている間 event は捨てられる。
@@ -232,9 +236,15 @@ impl<S: LiveSink> Drop for AuthSection<'_, S> {
 
 impl<S: LiveSink> LiveEmitter<S> {
     pub fn new(sink: S) -> Self {
+        Self::with_observation_stop(sink, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// 復元の投入口（supervisor の entry）と共有する観測停止の旗を持たせる。
+    pub fn with_observation_stop(sink: S, restored: Arc<AtomicBool>) -> Self {
         Self {
             sink,
             auth_depth: Mutex::new(0),
+            restored,
         }
     }
 
@@ -250,12 +260,13 @@ impl<S: LiveSink> LiveEmitter<S> {
 
     /// 認証区間の中か。中なら呼び出し側は progress・artifact も流さない。
     pub fn in_auth_section(&self) -> bool {
-        *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0
+        self.restored.load(Ordering::SeqCst)
+            || *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0
     }
 
     /// scrub して送る。auth section 中・frame は送らない（溜めない）。返り値は送ったか。
     pub fn emit(&self, event: &LiveEvent) -> bool {
-        if *self.auth_depth.lock().unwrap_or_else(|e| e.into_inner()) > 0 {
+        if self.in_auth_section() {
             return false;
         }
         match ScrubbedLiveEvent::from_event(event) {

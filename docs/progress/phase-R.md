@@ -1434,3 +1434,5 @@ config の編集なし）。migration なし。
   **提案（R7 候補）**: browser_waits と同型の durable wait を cluster job に足す（`result.json {type: "wait", kind: "pbs_job", cluster, job_ids, poll_secs}`
   → daemon が remote-exec で qstat を poll し、終了で続き run を起こす。continuation・idle timeout に数えない）。それまでは計画側で「投入」と「回収」を
   分け、回収の葉は job 終了を人が確認してから ready にする運用。
+- 05:40Z: release **f8a199978065**（main = R6-2/3/4/5 + dev の target-dir 固定）: gate ok（fmt / test / clippy / build / GUI）、push、verify ok / live_ok（schema 33）。
+  昇格は人。昇格後: `celerisctl replay` で既存行の phase/seq 不一致を確認して `--apply`（R6-4）、木の上限の既定値（R6-2）と CoS 枠除外（R6-5）が有効になる。

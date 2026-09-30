@@ -1,14 +1,22 @@
 import { Link, useRouter } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useState } from "react";
+import { badgeView } from "../../api/queries/badges";
 import { buttonClassName } from "../ui/button";
 import { navItems } from "./nav-items";
 import { installScrollMemory } from "./scroll-memory";
+import { useShellServerState } from "./use-server-state";
 
 // root の shell（P2-02）。ナビ・ヘッダ・Console の置き場・接続状態・outlet を持つ。
 // daemon の状態では mount を変えない（server state を待つ Suspense や条件付きの描画を置かない）。
 export function Shell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  // shell は root の認証 gate を通ったときだけ mount される。
+  const server = useShellServerState(true);
+  const badges: Record<string, ReturnType<typeof badgeView>> = {
+    "/inbox": badgeView(server.inboxBadge, "受信箱"),
+    "/approvals": badgeView(server.approvalsBadge, "承認待ち"),
+  };
 
   useEffect(() => installScrollMemory(router), [router]);
 
@@ -56,6 +64,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   className="flex min-h-11 items-center rounded px-3 hover:bg-neutral-100"
                 >
                   {item.label}
+                  <NavBadge badge={badges[item.to]} />
                 </Link>
               </li>
             ))}
@@ -66,11 +75,29 @@ export function Shell({ children }: { children: ReactNode }) {
         </p>
       </header>
       <div className="flex min-w-0 flex-1 flex-col">
+        {server.down && (
+          <p
+            role="alert"
+            data-celeris-down
+            className="border-b border-red-300 bg-red-50 px-4 py-2 text-sm text-red-900"
+          >
+            celeris に接続できません。復旧すると自動で再取得します。
+          </p>
+        )}
         <main id="main" className="min-w-0 flex-1 p-4">
           {children}
         </main>
         <aside data-console-slot aria-label="Console" className="border-t border-neutral-300" />
       </div>
     </div>
+  );
+}
+
+function NavBadge({ badge }: { badge: ReturnType<typeof badgeView> | undefined }) {
+  if (!badge) return null;
+  return (
+    <span data-badge className="ml-2 rounded bg-neutral-200 px-1.5 text-xs" role="img" aria-label={badge.label}>
+      {badge.text}
+    </span>
   );
 }

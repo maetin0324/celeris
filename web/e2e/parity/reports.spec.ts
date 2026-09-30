@@ -82,3 +82,67 @@ test("/reports fixture screenshots", async ({ page }) => {
     await page.screenshot({ path: path.join(out as string, `reports-fixture-${width}.png`), fullPage: true });
   }
 });
+
+test("parity-x: 通知 1 回だけ・生 snapshot で消えない", async ({ page, context }) => {
+  const live = { notify_now: true, unread_bad_news: 1, unread_secretary: 2 };
+  await context.addInitScript(() => {
+    (window as Window & { __notifications?: string[] }).__notifications = [];
+    Object.defineProperty(window, "Notification", {
+      configurable: true,
+      value: class {
+        static permission = "granted";
+        constructor(title: string, options?: { body?: string }) {
+          (window as Window & { __notifications?: string[] }).__notifications?.push(`${title}: ${options?.body ?? ""}`);
+        }
+      },
+    });
+  });
+  await page.route("**/api/daemon", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ...(defaultFixtures["/api/v1/daemon"] as object), reports: live }),
+    }),
+  );
+  await page.route("**/api/reports/notified", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ last_notified_at: "2026-09-30T00:00:00Z" }),
+    }),
+  );
+  await page.goto(`${gateway.base}/reports`);
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length))
+    .toBe(1);
+  const second = await context.newPage();
+  try {
+    await second.route("**/api/daemon", async (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...(defaultFixtures["/api/v1/daemon"] as object), reports: live }),
+      }),
+    );
+    await second.goto(`${gateway.base}/reports`);
+    await expect(second.getByLabel("未読の報告 2 件")).toBeVisible();
+    await page.waitForTimeout(500);
+    expect(
+      await second.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length),
+    ).toBe(0);
+    daemon.sendEvent("daemon", { snapshot: { reports: null } });
+    await expect(page.getByLabel("未読の報告 2 件")).toBeVisible();
+    expect(await page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length)).toBe(
+      1,
+    );
+    expect(
+      await page.evaluate(() =>
+        Object.keys(localStorage).every(
+          (key) => key !== "celeris-web-reports-notification-key" || !localStorage.getItem(key)?.includes("実行結果"),
+        ),
+      ),
+    ).toBe(true);
+  } finally {
+    await second.close();
+  }
+});

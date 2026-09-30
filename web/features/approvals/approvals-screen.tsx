@@ -47,6 +47,7 @@ function ApprovalRow({ approval }: { approval: Approval }) {
       <label className="block">
         回答
         <textarea
+          aria-label="回答"
           className="block w-full min-h-11 rounded border p-2"
           value={answer}
           onChange={(event) => setAnswer(event.target.value)}
@@ -126,6 +127,7 @@ function Rules() {
         <label className="block">
           規則文
           <textarea
+            aria-label="規則文"
             className="block w-full min-h-11 rounded border p-2"
             value={rule}
             onChange={(event) => setRule(event.target.value)}

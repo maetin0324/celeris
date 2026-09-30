@@ -143,6 +143,76 @@ export function createFakeDaemon({
       res.end(JSON.stringify({ error: "too_many_streams" }));
       return;
     }
+    // ops: daemon/providers (P4-12)
+    if (pathname === "/api/v1/replay" || pathname.startsWith("/api/v1/providers") || pathname === "/api/v1/reload") {
+      if (!server.opsProviders)
+        server.opsProviders = {
+          items: [
+            {
+              id: "claude-main",
+              adapter: "claude-code",
+              concurrency: 2,
+              env_keys: [],
+              tiers: ["standard"],
+              model: "sonnet",
+              stats: {
+                by_day: [],
+                done: 0,
+                error: 0,
+                input_tokens: 0,
+                lease_expired: 0,
+                output_tokens: 0,
+                question: 0,
+                requeue: 0,
+                runs: 0,
+              },
+            },
+          ],
+        };
+      const ops = server.opsProviders;
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        record.body = text;
+        const json = (status, body) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+        };
+        let input = {};
+        try {
+          input = text ? JSON.parse(text) : {};
+        } catch {
+          return json(400, { error: "bad json" });
+        }
+        const parts = pathname.replace("/api/v1/", "").split("/");
+        if (pathname === "/api/v1/replay" && req.method === "POST") return json(200, { mismatches: [], tasks: 3 });
+        if (pathname === "/api/v1/reload" && req.method === "POST") return json(200, { reloaded: true });
+        if (parts[0] !== "providers") return json(404, { error: "not found" });
+        const found = ops.items.find((item) => item.id === parts[1]);
+        if (parts.length === 1 && req.method === "GET") return json(200, { items: ops.items });
+        if (parts.length === 1 && req.method === "POST") {
+          if (!input.id || ops.items.some((item) => item.id === input.id))
+            return json(422, { detail: "id が不正か重複しています" });
+          const created = { concurrency: 1, env_keys: [], tiers: [], stats: ops.items[0]?.stats, ...input };
+          ops.items.push(created);
+          return json(200, created);
+        }
+        if (!found) return json(404, { error: "not found" });
+        if (parts.length === 2 && req.method === "PATCH") return json(200, Object.assign(found, input));
+        if (parts.length === 2 && req.method === "DELETE") {
+          ops.items.splice(ops.items.indexOf(found), 1);
+          return json(200, {});
+        }
+        if (parts[2] === "check" && req.method === "POST") {
+          found.last_check = { at: "2026-09-30T00:00:00Z", result: "ok", detail: null };
+          return json(200, { checked_at: "2026-09-30T00:00:00Z", result: "ok", detail: null });
+        }
+        return json(404, { error: "not found" });
+      });
+      return;
+    }
+    // end ops: daemon/providers (P4-12)
     if (pathname === "/events" || pathname === "/api/v1/events" || pathname === "/api/v1/stream") {
       record.query = new URL(req.url ?? "/", "http://x").search;
       record.lastEventId = req.headers["last-event-id"] ?? null;

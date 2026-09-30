@@ -4,8 +4,8 @@ export const screens = [
   { path: "/", fixture: "/", heading: "ホーム", v3: true },
   { path: "/inbox", fixture: "/inbox", heading: "受信箱", v3: true },
   { path: "/login", fixture: "/login", heading: "Celeris にログイン" },
-  { path: "/org", fixture: "/org", heading: "組織" },
-  { path: "/org/secretary", fixture: "/org/cos", heading: "組織の人 cos" },
+  { path: "/org", fixture: "/org", heading: "組織", v3: true },
+  { path: "/org/secretary", fixture: "/org/cos", heading: "組織の人 cos", v3: true },
   { path: "/org/$id", fixture: "/org/cos", heading: "組織の人 cos", v3: true },
   { path: "/projects", fixture: "/projects", heading: "案件", v3: true },
   { path: "/projects/$id", fixture: "/projects/P1", heading: "案件の詳細 P1", v3: true },
@@ -31,7 +31,7 @@ export const screens = [
   { path: "/clusters", fixture: "/clusters", heading: "クラスタ" },
   { path: "/releases", fixture: "/releases", heading: "リリース" },
   { path: "/graph", fixture: "/graph", heading: "依存グラフ", v3: true },
-  { path: "/help", fixture: "/help", heading: "ヘルプ" },
+  { path: "/help", fixture: "/help", heading: "ヘルプ", v3: true },
 ] as const satisfies readonly Screen[];
 
 export type Screen = { path: string; fixture: string; heading: string; v3?: boolean };

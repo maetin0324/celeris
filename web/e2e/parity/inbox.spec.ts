@@ -110,3 +110,80 @@ test("/inbox fixture screenshots", async ({ page }) => {
     await page.screenshot({ path: path.join(out as string, `inbox-fixture-${width}.png`), fullPage: true });
   }
 });
+
+const approvalFixture = {
+  id: "A1",
+  node_id: "cos",
+  question: "**実行**を許可しますか",
+  created_at: "2026-09-30T00:00:00Z",
+  task_id: "T1",
+};
+test("parity: /approvals 判定・常設ルール・バッジ", async ({ page }) => {
+  const requests: { path: string; method: string; body?: string }[] = [];
+  await page.route("**/api/approvals?**", async (route) => {
+    const pending = new URL(route.request().url()).searchParams.get("pending") === "true";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: pending ? [approvalFixture] : [] }),
+    });
+  });
+  await page.route("**/api/approvals/A1/decide", async (route) => {
+    requests.push({ path: "decide", method: route.request().method(), body: route.request().postData() ?? undefined });
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/api/standing-rules**", async (route) => {
+    requests.push({ path: "rules", method: route.request().method(), body: route.request().postData() ?? undefined });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [{ id: "S1", rule: "既定の規則", created_at: "2026-09-30T00:00:00Z" }] }),
+    });
+  });
+  await page.route("**/api/daemon", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ...(defaultFixtures["/api/v1/daemon"] as object), approvals_pending: 3 }),
+    }),
+  );
+  await page.goto(`${gateway.base}/approvals`);
+  await expect(page.getByRole("heading", { name: "認可待ち" })).toBeVisible();
+  await expect(page.getByLabel("承認待ち 3 件")).toBeVisible();
+  await page.getByLabel("回答").fill("許可します");
+  await page.getByRole("button", { name: "今回だけ認める" }).click();
+  await expect(page.getByText("操作が完了しました").first()).toBeVisible();
+  expect(JSON.parse(requests.find((request) => request.path === "decide")?.body ?? "null")).toEqual({
+    answer: "許可します",
+    decision: "once",
+  });
+  await page.getByLabel("規則文").fill("新しい規則");
+  await page.getByRole("button", { name: "追加" }).click();
+  await expect
+    .poll(() => requests.filter((request) => request.path === "rules" && request.method === "POST").length)
+    .toBe(1);
+  await page.getByRole("button", { name: "削除" }).click();
+  await expect
+    .poll(() => requests.filter((request) => request.path === "rules" && request.method === "DELETE").length)
+    .toBe(1);
+  daemon.sendEvent("daemon", { snapshot: { approvals_pending: 0 } });
+  await expect(page.getByLabel("承認待ち 3 件")).toBeVisible();
+});
+
+test("/approvals fixture screenshots", async ({ page }) => {
+  const out = process.env.WEB_SHOTS_OUT;
+  test.skip(!out, "WEB_SHOTS_OUT is required");
+  mkdirSync(out as string, { recursive: true });
+  await page.route("**/api/approvals?**", async (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [approvalFixture] }) }),
+  );
+  await page.route("**/api/standing-rules", async (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) }),
+  );
+  for (const width of [360, 390, 412, 1440]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto(`${gateway.base}/approvals`);
+    await expect(page.getByRole("heading", { name: "認可待ち" })).toBeVisible();
+    await page.screenshot({ path: path.join(out as string, `approvals-fixture-${width}.png`), fullPage: true });
+  }
+});

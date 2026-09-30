@@ -19,9 +19,8 @@ pub struct UnitGateContext<'a> {
     /// leaf の 1 run の上限（`ExecutionLimits.work_unit_max_turns` / `work_unit_max_wall_secs`）。
     pub work_unit_max_turns: u32,
     pub work_unit_max_wall_secs: u64,
-    /// R5b-fix3: 人の計画（origin human）か。kind task の unit は計画の書き手の手掛かり: 人の計画なら
-    /// `human/explicit` の compound（規則表を評価しない）、planner の計画なら signal `H`（+2）。
-    pub human_plan: bool,
+    // R6-2: R5b-fix3 の `human_plan`（人の計画か）は消した。kind task の unit の手掛かりは計画の書き手に
+    // よらず明示（`task_unit_execution_hint`）。
 }
 
 /// D4 (3): 1 つの unit の gate の結果。
@@ -47,7 +46,9 @@ pub struct UnitGate {
 ///   ADR-0072 D18 の既定 `max(親, 30 turns / 1,800 秒)`）、genre は `harness`（無ければ親）。
 /// - kind task: 受け入れは unit の `acceptance`、予算は子 task が受け取る予算（[`tree_child_budget`] =
 ///   `max(親, 30 turns / 1,800 秒)`。R5b-fix3）、genre は unit（無ければ親）。
-/// - `routing` は unit の `features` のヒントだけ（親のヒント・人の明示・CoS のヒントは継がない）。
+/// - `routing` は unit の `features` のヒントだけ（親のヒント・人の明示・CoS のヒントは継がない）。ただし
+///   kind task の unit は子 task が受け取る `execution_hint`（[`task_unit_execution_hint`]。unit の `gate`、
+///   無ければ明示の compound。R6-2）を持つ（[`unit_gate`] はこの値を人の明示として判定に渡す）。
 ///   印（labels）は持たない（対話・support-task の判定に当たらないように）。
 pub fn unit_view(parent: &Task, unit: &crate::execution_plan::PlanUnitSpec) -> Task {
     use crate::model::{Check, Criterion};
@@ -64,6 +65,7 @@ pub fn unit_view(parent: &Task, unit: &crate::execution_plan::PlanUnitSpec) -> T
         .filter(|h| !h.is_empty());
     view.routing = Some(crate::model::TaskRouting {
         features: hints,
+        execution_hint: unit.is_task().then(|| task_unit_execution_hint(unit.gate)),
         ..Default::default()
     });
     if unit.is_task() {
@@ -191,14 +193,16 @@ pub fn task_unit_leaf_shortfalls(
     out
 }
 
-/// ADR-0079「R5b-fix3」: kind task の unit から作る子 task の `routing.execution_hint`（unit の gate も同じ値を
-/// 使う）。`mode = compound`、`explicit` は計画が人の計画（origin human）のとき `true`（gate は
-/// `human/explicit`）、planner の計画なら `false`（signal `H` の +2 だけ。規則表のスコアが閾値より
-/// 十分低ければ atomic のまま）。
-pub fn task_unit_execution_hint(human_plan: bool) -> crate::execution_gate::ExecutionHintSpec {
+/// ADR-0079「R6-2」（R5b-fix3 を改める）: kind task の unit から作る子 task の `routing.execution_hint`（unit の
+/// gate も同じ値を使う）。**計画の書き手（人・planner）によらず明示**（`explicit = true`、gate は
+/// `human/explicit`）で、`mode` は unit の `gate`（無ければ `compound`: kind task を選んだこと自体が「自分の計画が
+/// 要る」の意味）。1 run で済む子を望む書き手は `gate: atomic` を書く。
+pub fn task_unit_execution_hint(
+    gate: Option<crate::execution_gate::ExecutionMode>,
+) -> crate::execution_gate::ExecutionHintSpec {
     crate::execution_gate::ExecutionHintSpec {
-        mode: crate::execution_gate::ExecutionMode::Compound,
-        explicit: human_plan,
+        mode: gate.unwrap_or(crate::execution_gate::ExecutionMode::Compound),
+        explicit: true,
     }
 }
 
@@ -208,7 +212,9 @@ pub fn task_unit_execution_hint(human_plan: bool) -> crate::execution_gate::Exec
 pub fn unit_gate(
     ctx: &UnitGateContext<'_>,
     unit: &crate::execution_plan::PlanUnitSpec,
-    needs_decisions: &[String],
+    // R6-2: kind task の unit を task のまま残す構造上の理由（`structural_reasons`）は、kind task の gate が明示に
+    // なったので見なくなった（引数は呼び出し側の形のために残す）。
+    _needs_decisions: &[String],
 ) -> UnitGate {
     use crate::execution_gate::{ExecutionMode, GateThreshold};
     let depth = ctx.parent_depth.saturating_add(1);
@@ -217,11 +223,9 @@ pub fn unit_gate(
     let view = unit_view(ctx.parent, unit);
     let hints = view.routing.as_ref().and_then(|r| r.features);
     let (features, _) = crate::model_policy::TaskFeatures::infer_with_hints(&view, hints.as_ref());
-    // R5b-fix3: kind task の unit は計画の書き手の「compound」の手掛かり（子 task の
-    // `routing.execution_hint` と同じ。`task_unit_execution_hint`）。leaf の unit には何も足さない。
-    let hint = unit
-        .is_task()
-        .then(|| task_unit_execution_hint(ctx.human_plan));
+    // R6-2: kind task の unit は計画の書き手の明示（unit の `gate`、無ければ compound。子 task の
+    // `routing.execution_hint` と同じ値で、`unit_view` が持つ）。leaf の unit には何も足さない。
+    let hint = view.routing.as_ref().and_then(|r| r.execution_hint);
     let decision = crate::execution_gate::decide_at(
         &view,
         &features,
@@ -236,43 +240,12 @@ pub fn unit_gate(
         decision.rule_id, decision.score
     );
     let (declared, action, reason) = if unit.is_task() {
-        match decision.mode {
-            ExecutionMode::Compound => (UnitDeclared::Task, None, gate_note),
-            ExecutionMode::Atomic => {
-                let reasons =
-                    structural_reasons(ctx.parent, ctx.parent_repo_names, unit, needs_decisions);
-                if !reasons.is_empty() {
-                    (
-                        UnitDeclared::Task,
-                        Some(UnitGateAction::KeptTask),
-                        format!("{gate_note}; kept as a task: {}", reasons.join("; ")),
-                    )
-                } else {
-                    let shortfalls = task_unit_leaf_shortfalls(
-                        ctx.parent,
-                        unit,
-                        ctx.work_unit_max_turns,
-                        ctx.work_unit_max_wall_secs,
-                    );
-                    if shortfalls.is_empty() {
-                        (
-                            UnitDeclared::Task,
-                            Some(UnitGateAction::Demoted),
-                            format!("{gate_note}; meets the leaf criteria: demoted to a leaf"),
-                        )
-                    } else {
-                        (
-                            UnitDeclared::Task,
-                            Some(UnitGateAction::KeptTask),
-                            format!(
-                                "{gate_note}; kept as a task: leaf criteria not met ({})",
-                                shortfalls.join("; ")
-                            ),
-                        )
-                    }
-                }
-            }
-        }
+        // R6-2: kind task の unit の gate は書き手の明示（`gate`、無ければ compound）なので上書きしない
+        // （`gate: atomic` の子は計画を持たない 1 つの節点として走る。task のまま残す）。下げる〈`Demoted`〉・
+        // task のまま残す〈`KeptTask`〉の記録は出ない（`UnitGateOverridden` は leaf の暗黙の判定だけ）。
+        // 固定パイプラインの genre（`out_of_scope_rule`）の atomic も同じく子 task のまま（子の dispatch の
+        // gate が同じ規則で atomic にする）。
+        (UnitDeclared::Task, None, gate_note)
     } else {
         match decision.mode {
             ExecutionMode::Atomic => (UnitDeclared::Leaf, None, gate_note),
@@ -386,7 +359,7 @@ pub const PROMOTED_PATHS_HEADING: &str = "対象のパス（計画の leaf か�
 
 /// D4 (3) の「leaf に下げる」: kind task の spec を leaf の spec（kind = 段階の kind）にする。acceptance の
 /// 文は `done_when`、command の検査は `checks`、`repos`（高々 1）は `context.repo`。kind task 専用の欄
-/// （`acceptance` / `genre` / `skills` / `repos` / `adopt`）は消す（構造上の理由が無いことを確かめてから
+/// （`acceptance` / `genre` / `skills` / `repos` / `adopt` / `gate`）は消す（構造上の理由が無いことを確かめてから
 /// 呼ぶので、genre は親と同じか無く、skills は親の部分集合）。
 pub fn demote_to_leaf(
     unit: &crate::execution_plan::PlanUnitSpec,
@@ -415,6 +388,7 @@ pub fn demote_to_leaf(
     out.skills = Vec::new();
     out.repos = Vec::new();
     out.adopt = None;
+    out.gate = None;
     out
 }
 

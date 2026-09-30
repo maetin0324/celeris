@@ -24,7 +24,12 @@ fn small_plan_needs_no_approval() {
 /// D8: 3 つの条件はそれぞれ単独で承認を要する（理由の文字列は決定的）。
 #[test]
 fn each_trigger_requires_approval() {
-    let limits = TreeLimits::default();
+    // R6-2: 既定の木の上限は leaf 120 / run 400。この表は R3b のときの 40 / 120 で書いてある。
+    let limits = TreeLimits {
+        max_tree_leaves: 40,
+        max_tree_runs: 120,
+        ..TreeLimits::default()
+    };
     let mut f = facts();
     f.open_decisions = vec!["h1".into(), "h2".into()];
     assert_eq!(
@@ -144,6 +149,27 @@ fn named_waits_are_not_stalls() {
     assert_eq!(
         class(deps),
         (LivenessClass::Waiting, "dependencies".to_string())
+    );
+}
+
+/// ADR-0090 D4: クラスタ job の wait は名指しの待ち（unit の `blocked(cluster_jobs)` も、wait で止めた atomic の
+/// 節点〈`blocked`、直前の理由 `waiting_for_cluster_jobs`〉も StallDetected にしない）。
+#[test]
+fn cluster_job_waits_are_named_waits() {
+    let mut waiting = leaf("a", WorkUnitStatus::Blocked);
+    waiting.blocked_reason = Some(WorkUnitBlockedReason::ClusterJobs);
+    let done = leaf("b", WorkUnitStatus::Done);
+    assert_eq!(
+        class(node(vec![waiting, done])),
+        (LivenessClass::Waiting, "cluster_jobs".to_string())
+    );
+    let mut atomic = node(vec![]);
+    atomic.has_plan = false;
+    atomic.status = Status::Blocked;
+    atomic.last_reason = Some(crate::cluster_job::REASON_WAITING.into());
+    assert_eq!(
+        class(atomic),
+        (LivenessClass::Waiting, "cluster_jobs".to_string())
     );
 }
 

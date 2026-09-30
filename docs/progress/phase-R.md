@@ -1652,3 +1652,5 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
 - 08:44Z: **R7-1 の本番初回**: BenchFS「Sirius 実験(2)」の子 01M3RM9HP2P6MABRNSB1N1CEHJ が `wait`（sirius、PBS job 42660〜42662、poll 300 s、timeout 24 h、
   E3 CHFS W1）を書き、daemon が `cluster_job_wait_started` → 2 秒後に `cluster_job_wait_polled`（3 job とも R）を記録。run は枠を離し、task は待ちで止まる。
   終了時の `cluster_job_wait_finished` と続き run の preamble（job の終了状態）を次に確認する。
+- 08:49Z: **R7-1 の一周を本番で確認**: `cluster_job_wait_finished {satisfied}`（42660〜42662 とも F、exit 0）→ `transitioned blocked→ready reason=cluster_job_resume`
+  → 21 秒後に続き run が dispatch（同じ子 task、job の終了状態を preamble で受け取る）。待ち 5 分間は枠を使っていない。

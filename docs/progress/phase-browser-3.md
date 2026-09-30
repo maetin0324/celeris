@@ -1,11 +1,11 @@
 # Phase browser-3: Browser Identity・live proxy・takeover
 
 ---
-tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8, 01M3Q2FPRCF34F00PBZSMNSZE8]
+tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8, 01M3Q2FPRCF34F00PBZSMNSZE8, 01M3SM0WN346ABGF42QV02RZTP]
 ---
 
-- 状態: **P3-B・P3-C は「単独の成果・検査」を満たした。P3-A は保管・期限・削除・失効・混入拒否まで満たし、利用（session への復元）は P4-A の後**。本番未昇格。
-- 更新: 2026-09-29（HEAD 17e0777 + docs）
+- 状態: **P3-B・P3-C は「単独の成果・検査」を満たし、P3-C は worker 側 control gate の run loop 配線（ADR-0094）も完了した。P3-A は保管・期限・削除・失効・混入拒否まで満たし、利用（session への復元）は P4-A/P4-B（deliver_state）側で実装済み**。本番未昇格。
+- 更新: 2026-09-30（control gate 配線の統合を反映、task 01M3SM0WN346ABGF42QV02RZTP）。前回更新: 2026-09-29（HEAD 17e0777 + docs）
 - ADR: [0081](../adr/0081-browser-phase3-control-lease.md)（制御 lease）/ [0082](../adr/0082-browser-phase3-live-proxy-acl.md)（live proxy ACL）/ [0083](../adr/0083-browser-phase3-identity-contract.md)（identity 契約）
 
 ## 行ごとの成果と検査
@@ -14,7 +14,7 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8, 01M3Q2FPRCF34F00PBZSMNSZE8]
 |---|---|---|---|---|
 | P3-A Browser Identity | project/origin 単位の暗号化・期限/削除/失効、他 identity 混入拒否 | task-core `browser_identity.rs`（束縛・期限 既定 7 日/上限 30 日・失効で世代を上げる・混入拒否）、credentiald の project+origin 鍵による XChaCha20Poly1305 封緘（AAD に束縛）と削除時の鍵消去（e168f57）、store の identity metadata（4a53db3、schema 34）、task-api の登録/一覧/失効/削除（5e900e8・40e742f・8940ad3）、GUI の一覧・失効・削除（a45159a） | `cargo test -p e2e --test api_scenarios phase3_` → exit 0、3 passed（`phase3_identity_register_revoke_delete_and_trusted_local_restore_denied` を含む）。`cargo test -p celeris-credentiald identity` → exit 0、8 passed。`cargo test -p task-core --lib browser_identity` → exit 0、10 passed（前回記録） | 保管側は満たす。**利用（復元）は未実装・後続 P4-A**。trusted local での復元は `isolation_required` で拒否することを e2e で確認 |
 | P3-B live proxy | task/run ACL、WS 接続/再接続、frame/status/tabs/url/console と永続 event、他 task 拒否、cookie/token 非記録 | task-core `browser_live.rs`、store の live event（4a53db3）、task-api の task/run 単位 live grant と event 書き込み・`last_seen` からの再接続読み出し（fde7e38）、worker の live emitter・認証区間の送出停止（d5aefa5・96fce7b）、GUI relay の task-api 経由認可と永続 event の WS 配信（b7ec98d・f2d5a1c） | `cargo test -p e2e --test api_scenarios phase3_` → exit 0、3 passed（`phase3_live_grant_is_task_scoped_scrubbed_and_reconnects_from_last_seen`: 他 task の grant 拒否、cookie/token の scrub、last_seen からの再接続）。`cargo test -p task-api browser_` → exit 0、11+1+1 passed | 満たす |
-| P3-C takeover | pause 収束・controller lease 排他・takeover/resume/stop、切断・競合・二重 action 試験 | task-core `browser_control.rs`、store の control 状態と `stop_task`（ec83529）、task-api の pause/takeover/renew/resume/stop と task cancel の同期（6f18bb1・3be95ac）、worker の control gate のモデル（`browser_live::run_gated`／`InMemoryGate`、d5aefa5・96fce7b。run loop への配線は未、下記「再試行」参照）、GUI の takeover/resume/stop 導線（a45159a） | `cargo test -p e2e --test api_scenarios phase3_` → exit 0、3 passed（`phase3_control_converges_rejects_competition_and_cancel_stops`: pause 収束、他 controller の拒否、古い version の `VersionConflict`、同じ idempotency key の二重 action、task cancel で `Stopped`） | 満たす |
+| P3-C takeover | pause 収束・controller lease 排他・takeover/resume/stop、切断・競合・二重 action 試験 | task-core `browser_control.rs`、store の control 状態と `stop_task`（ec83529）、task-api の pause/takeover/renew/resume/stop と task cancel の同期（6f18bb1・3be95ac）、worker の control gate のモデル（`browser_live::run_gated`／`InMemoryGate`、d5aefa5・96fce7b）に加え、**run loop への配線を完了**（ADR-0094、2026-09-30）。gate の位置は worker `ActionServer::serve`（shim の private action socket の受け口）で、検証済み要求を `/session/actions` に書く直前に `run_gated` を通す。gate の状態は store が正で、`EventSink::browser_control_gate(run_id, session_id)` 経由で `StoreGate`（`BrowserWaitStore::browser_session_agent_action` の begin/end）を取得する。既定 `None` は fail closed（substrate 起動前拒否）。`Stopped` 観測時は `SessionCloser` として action child へ 1 度だけ close。GUI の takeover/resume/stop 導線（a45159a） | `cargo test -p e2e --test api_scenarios phase3_` → exit 0、3 passed（`phase3_control_converges_rejects_competition_and_cancel_stops`: pause 収束、他 controller の拒否、古い version の `VersionConflict`、同じ idempotency key の二重 action、task cancel で `Stopped`）。`cargo test -p task-worker --test browser_control_gate_wire -- --nocapture`（実 SQLite store + 実 shim）→ exit 0、**5 passed**（`gate_wire_human_control_blocks_agent_until_resume`・`gate_wire_auth_section_blocks_agent_until_left`・`gate_wire_pause_converges_after_in_flight_then_blocks`・`gate_wire_stopped_closes_session_once_and_never_runs_actions`・`gate_wire_running_actions_reach_the_browser`、2026-09-30 再検査） | 満たす（run loop 配線を含めて満たす） |
 
 ## ワークスペース全体の検査（2026-09-29）
 
@@ -48,4 +48,11 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8, 01M3Q2FPRCF34F00PBZSMNSZE8]
 - 最終（本 run の 2 回目、`cargo fmt` 後）: `cargo test --workspace` → exit 0、2929 passed / 0 failed。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo test --workspace auth_section` → exit 0（e2e 1・browser_e2e 1・task-core 2・task-worker 2 passed）。
 - 1 回目（前の commit 時点）: `cargo test --workspace` → exit 0、2931 passed / 0 failed（test result 92 行、0 件の行を除く）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
-- 未解決: P3-A の identity 復元は P4-A 後（ADR-0083 D3、`isolation_required` のまま）。worker 側の control gate（human control／pause 中に agent の browser 操作を止める）の run loop への配線は未（agent の操作は harness 子プロセスの shim から出るため、store の control 状態を shim が読む経路が要る）。削除した `BrowserLive`／`CliCloser` はこの配線の代わりにならない。
+- 未解決（2026-09-29 時点）: P3-A の identity 復元は P4-A 後（ADR-0083 D3、`isolation_required` のまま）。worker 側の control gate（human control／pause 中に agent の browser 操作を止める）の run loop への配線は未（agent の操作は harness 子プロセスの shim から出るため、store の control 状態を shim が読む経路が要る）。削除した `BrowserLive`／`CliCloser` はこの配線の代わりにならない。
+
+## control gate 配線の解消（2026-09-30、ADR-0094、task 01M3SM0WN346ABGF42QV02RZTP）
+
+- 上記の未解決（worker 側 control gate の run loop 配線）を解消した。gate は worker `ActionServer::serve`（ADR-0088 D4 の shim → action socket の受け口）に置き、shim は同 UID で改ざんできるため shim 内検査には頼らない。検証済み要求を `/session/actions` に書く直前に `run_gated` を通す（supervisor 自身の `__version__` は gate しない）。
+- gate の状態は store が正。`StoreGate` は `BrowserWaitStore::browser_session_agent_action`（task-api の `agent/begin`・`agent/end` と同じ遷移を 1 IMMEDIATE トランザクションで行う）を呼ぶ。`Begin` は lease 期限切れを先に失効させ、`AgentRunning` 以外または auth_section 中は拒否。`End` で pause が収束する。gate の入手は `EventSink::browser_control_gate(run_id, session_id)` で、既定 `None` のときは fail closed（substrate 起動前拒否）。`Stopped` 観測時は `SessionCloser` として action child へ close を 1 度だけ書く。詳細は [ADR-0094](../adr/0094-browser-p3c-control-gate-action-server.md)。
+- P3-A の identity 復元（`isolation_required` 拒否と、その後の成功経路）は別 WorkUnit（deliver-state）が P4-A/P4-B で扱う。phase-browser-4.md 側の該当行を参照。
+- 検査（2026-09-30、ワークスペース全体への統合後）: `cargo test --workspace` → exit 0、**3055 passed / 0 failed / 11 ignored**（114 test binary）。`cargo clippy --workspace -- -D warnings` → exit 0、警告 0。`cargo test -p task-worker --test browser_control_gate_wire -- --nocapture`（実 SQLite store + 実 shim）→ exit 0、5 passed（human control／pause／auth_section 中に agent 操作が実行前に止まり、解除後に再開することを確認。テスト専用の未配線経路ではなく `ActionServer::serve` の本番経路を通す）。

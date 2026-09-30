@@ -3,6 +3,10 @@ name = "task-worker"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+# Test fixture only: permit a self-signed HTTPS certificate inside a private netns.
+h3-e2e-insecure-cert = []
+
 [dependencies]
 task-core = { path = "../task-core" }
 celeris-credentiald = { path = "../celeris-credentiald" }

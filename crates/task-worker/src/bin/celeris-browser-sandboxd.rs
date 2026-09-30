@@ -101,8 +101,10 @@ fn main() -> ExitCode {
             "--remote-debugging-pipe",
             "--proxy-server=http://127.0.0.1:3128",
             "--proxy-bypass-list=<-loopback>",
-            "about:blank",
         ]);
+        #[cfg(feature = "h3-e2e-insecure-cert")]
+        command.arg("--ignore-certificate-errors");
+        command.arg("about:blank");
         // SAFETY: fcntl is async-signal-safe and only changes inherited CDP fds.
         unsafe {
             command.pre_exec(|| {

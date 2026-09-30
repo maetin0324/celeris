@@ -1549,10 +1549,16 @@ async fn start_api(
         (Some(key_path), Some(socket)) => {
             let key = task_api::browser::BrowserApiConfig::read_public_key(key_path)
                 .map_err(|e| ApiError::Startup(format!("browser attestation key: {e}")))?;
+            for policy in &config.api.browser_site_policies {
+                policy.validate().map_err(|code| {
+                    ApiError::Startup(format!("browser site policy {}: {code}", policy.policy_id))
+                })?;
+            }
             settings.browser = task_api::browser::BrowserApiConfig {
                 attestation_public_key: Some(key),
                 broker: Some(Arc::new(task_api::browser::UnixCredentialBrokerControl {
                     socket: socket.clone(),
+                    site_policies: config.api.browser_site_policies.clone(),
                 })),
             };
             // ADR-0080 D2: the browser supervisor asks the same broker for one-use leases and

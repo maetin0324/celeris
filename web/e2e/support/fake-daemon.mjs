@@ -191,7 +191,8 @@ export function createFakeDaemon({
     const file = files[pathname];
     if (file) {
       // run のファイル・成果物（P1-08）。単一の `bytes=a-b` の Range だけを扱う。
-      const body = Buffer.from(file.body);
+      // body は関数でもよい（実行中の run の追記を試す。P3-12）。
+      const body = Buffer.from(typeof file.body === "function" ? file.body() : file.body);
       const headers = { "content-type": file.type ?? "text/plain", "accept-ranges": "bytes" };
       if (file.disposition) headers["content-disposition"] = file.disposition;
       const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? "");
@@ -204,6 +205,17 @@ export function createFakeDaemon({
         }
         res.writeHead(206, { ...headers, "content-range": `bytes ${start}-${end}/${body.length}` });
         return res.end(body.subarray(start, end + 1));
+      }
+      // `offset`（P3-12 の追い掛け）: offset == size は空本体、offset > size は 416。
+      const offsetParam = new URL(req.url ?? "/", "http://x").searchParams.get("offset");
+      if (offsetParam !== null) {
+        const offset = Number(offsetParam);
+        if (offset > body.length) {
+          res.writeHead(416, { "content-range": `bytes */${body.length}` });
+          return res.end();
+        }
+        res.writeHead(200, headers);
+        return res.end(body.subarray(offset));
       }
       res.writeHead(200, headers);
       return res.end(body);

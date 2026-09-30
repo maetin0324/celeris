@@ -11,6 +11,74 @@ const runsSchema = JSON.parse(
   readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api/generated/schema.json"), "utf8"),
 );
 
+test.describe("P3-12", () => {
+  const line = (text: string) =>
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+
+  function runDetail(finished: boolean) {
+    const value = fixtureFor(runsSchema.$defs.TaskDetail) as { task: Record<string, unknown>; runs: unknown[] };
+    value.task = { ...value.task, id: "T1" };
+    const run = fixtureFor(runsSchema.$defs.RunSummary) as Record<string, unknown>;
+    value.runs = [
+      { ...run, run_id: "R1", adapter: "claude-code", finished_at: finished ? "2026-09-30T00:00:00Z" : null },
+    ];
+    return value;
+  }
+
+  test("parity: /tasks/:id/runs/:runId 会話表示と追記", async ({ page }) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-run-log-"));
+    const tokenFile = path.join(dir, "token");
+    writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
+    const stdoutPath = "/api/v1/tasks/T1/runs/R1/stdout.jsonl";
+    const lines = Array.from({ length: 40 }, (_, i) => line(`行 ${i + 1}`));
+    lines.push("not json");
+    let body = `${lines.join("\n")}\n`;
+    let finished = false;
+    const daemon = createFakeDaemon({
+      token: FIXTURE_TOKEN,
+      fixtures: { ...defaultFixtures, "/api/v1/tasks/T1": () => runDetail(finished) },
+      files: { [stdoutPath]: { body: () => body, type: "text/plain; charset=utf-8" } },
+    });
+    const gateway = await startGateway({ daemonUrl: await daemon.start(), daemonTokenFile: tokenFile });
+    const reads = () => daemon.requests.filter((request) => request.path === stdoutPath).length;
+    try {
+      await page.setViewportSize({ width: 390, height: 600 });
+      await page.goto(`${gateway.base}/tasks/T1/runs/R1`);
+      await expect(page.getByRole("heading", { level: 1, name: "run ログ T1 / R1" })).toBeVisible();
+      // 表示の行数が fixture の行数（wc -l）と一致する。
+      const count = page.getByTestId("run-log-line-count");
+      await expect(count).toHaveAttribute("data-count", String(body.split("\n").length - 1));
+      await expect(page.getByTestId("run-log")).toContainText("行 1");
+
+      // 読んでいる位置を途中に置き、追記を追っても位置が動かない。
+      await page.evaluate(() => window.scrollTo(0, 200));
+      const before = await page.evaluate(() => window.scrollY);
+      body += `${line("追記 1")}\n${line("追記 2")}\n`;
+      await expect(count).toHaveAttribute("data-count", "43");
+      await expect(page.getByTestId("run-log")).toContainText("追記 2");
+      expect(await page.evaluate(() => window.scrollY)).toBe(before);
+
+      // run が終わったら追い掛けをやめ、取り直さない。
+      finished = true;
+      daemon.sendEvent("task.event", {
+        id: 1,
+        seq: 1,
+        task_id: "T1",
+        ts: "2026-09-30T00:00:00Z",
+        event: { type: "transitioned", from: "running", to: "done" },
+      });
+      await expect(page.getByTestId("run-log")).not.toContainText("実行中", { timeout: 10_000 });
+      const settled = reads();
+      await page.waitForTimeout(2500);
+      expect(reads()).toBe(settled);
+    } finally {
+      await gateway.close();
+      await daemon.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 test.describe("P3-11", () => {
   const longName = `${"very-long-directory-name-".repeat(6)}file.txt`;
   const longLine = `${"x".repeat(4000)}\n`;

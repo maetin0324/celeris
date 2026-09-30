@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -175,11 +176,20 @@ class BrowserCliTest(unittest.TestCase):
     def test_timed_out_process_is_reaped_and_partial_artifact_removed(self):
         self.mode({'sleep': 10, 'stderr': SECRET})
         original_run = cli.subprocess.run
+        pid_file = self.root / 'child.pid'
+        class StartedPopen(cli.subprocess.Popen):
+            # Start the timeout only after the child has recorded its pid, so a slow
+            # Python start under workspace-test load cannot outlast the timeout.
+            def communicate(self, *args, **kwargs):
+                deadline = time.monotonic() + 60
+                while not pid_file.exists() and self.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                return super().communicate(*args, **kwargs)
         def short_timeout(*args, **kwargs):
-            # Leave enough time for the Python child to start under workspace-test load.
             kwargs['timeout'] = 2
             return original_run(*args, **kwargs)
-        with patch.object(cli.subprocess, 'run', side_effect=short_timeout):
+        with patch.object(cli.subprocess, 'run', side_effect=short_timeout), \
+                patch.object(cli.subprocess, 'Popen', StartedPopen):
             code, stdout = self.run_cli('screenshot')
         self.assertEqual(code, 1)
         self.assertEqual(list(self.output.iterdir()), [])

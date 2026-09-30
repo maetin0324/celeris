@@ -1,5 +1,9 @@
 use crate::{
     Binding, Broker, CredentialPolicy, CredentialRef, Error, LeaseRequest, SecretEnvelope,
+    injection_ipc::{
+        Admission, AuthSectionRegistration, InjectCode, InjectionReply, InjectionService,
+        LiveRegistry, LiveSessionRegistration, PeerCred, SeqpacketSink,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -40,6 +44,16 @@ pub enum ControlRequest {
     Grant {
         request: LeaseRequest,
     },
+    // ADR-0089 D2: live isolated sessions and H3 auth sections (memory only).
+    RegisterLiveSession(LiveSessionRegistration),
+    UnregisterLiveSession {
+        session_id: String,
+    },
+    OpenAuthSection(AuthSectionRegistration),
+    CloseAuthSection {
+        session_id: String,
+        auth_section_id: String,
+    },
 }
 #[derive(Serialize, Deserialize)]
 pub struct IpcReply {
@@ -71,6 +85,16 @@ impl IpcReply {
         Self {
             success: true,
             code: None,
+            binding_token: None,
+            lease_id: None,
+            expires_at: None,
+            credential: None,
+        }
+    }
+    fn code(code: InjectCode) -> Self {
+        Self {
+            success: false,
+            code: Some(code.code().into()),
             binding_token: None,
             lease_id: None,
             expires_at: None,
@@ -128,7 +152,13 @@ fn read_limited<R: Read>(r: R) -> Result<Vec<u8>, Error> {
     }
     Ok(bytes)
 }
-fn serve_one(mut stream: UnixStream, broker: &Broker, control: bool, control_pids: &[(u32, u64)]) {
+fn serve_one(
+    mut stream: UnixStream,
+    broker: &Broker,
+    registry: &LiveRegistry,
+    control: bool,
+    control_pids: &[(u32, u64)],
+) {
     let reply = match (|| -> Result<IpcReply, Error> {
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -196,6 +226,21 @@ fn serve_one(mut stream: UnixStream, broker: &Broker, control: bool, control_pid
                     out.expires_at = Some(grant.expires_at);
                     Ok(out)
                 }
+                ControlRequest::RegisterLiveSession(r) => Ok(registry
+                    .register(r)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
+                ControlRequest::UnregisterLiveSession { session_id } => Ok(registry
+                    .unregister(&session_id)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
+                ControlRequest::OpenAuthSection(a) => Ok(registry
+                    .open_section(a)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
+                ControlRequest::CloseAuthSection {
+                    session_id,
+                    auth_section_id,
+                } => Ok(registry
+                    .close_section(&session_id, &auth_section_id)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
             }
         })();
         bytes.zeroize();
@@ -228,7 +273,53 @@ fn socket(path: &Path) -> Result<UnixListener, Error> {
     }
     Ok(listener)
 }
+/// One `injection.sock` connection (ADR-0089 D1): one request, one reply.
+fn serve_injection(mut stream: UnixStream, service: &InjectionService) {
+    let denied = |c: InjectCode| InjectionReply {
+        v: 1,
+        request_id: String::new(),
+        ok: false,
+        receipt: None,
+        code: Some(c.code().into()),
+    };
+    let reply = (|| -> InjectionReply {
+        if stream
+            .set_read_timeout(Some(crate::injection_ipc::IO_TIMEOUT))
+            .is_err()
+        {
+            return denied(InjectCode::InvalidRequest);
+        }
+        let Ok((uid, pid)) = peer(&stream) else {
+            return denied(InjectCode::PeerUidMismatch);
+        };
+        let (mut body, mut fds) = match crate::injection_ipc::read_request(stream.as_raw_fd()) {
+            Ok(v) => v,
+            Err(c) => return denied(c),
+        };
+        let sink = match (fds.pop(), fds.is_empty()) {
+            (Some(fd), true) => SeqpacketSink::new(fd),
+            _ => Err(InjectCode::InvalidRequest),
+        };
+        let reply = match sink {
+            Ok(mut sink) => service.handle(PeerCred { uid, pid }, &body, &mut sink),
+            Err(c) => denied(c),
+        };
+        body.zeroize();
+        reply
+    })();
+    crate::injection_ipc::write_reply(&mut stream, &reply);
+}
 pub fn serve(broker: Arc<Broker>, runtime: &Path, control_pids: Vec<u32>) -> Result<(), Error> {
+    serve_with(broker, runtime, control_pids, Admission::Attested)
+}
+/// [`serve`] with an explicit admission. Production (`main`) always uses `Attested`;
+/// other admissions exist only under the `same-uid-harness` test feature.
+pub fn serve_with(
+    broker: Arc<Broker>,
+    runtime: &Path,
+    control_pids: Vec<u32>,
+    admission: Admission,
+) -> Result<(), Error> {
     let control_pids: Vec<(u32, u64)> = control_pids
         .into_iter()
         .map(|pid| {
@@ -262,14 +353,23 @@ pub fn serve(broker: Arc<Broker>, runtime: &Path, control_pids: Vec<u32>) -> Res
     }
     let control = socket(&dir.join("control.sock"))?;
     let resolve = socket(&dir.join("resolve.sock"))?;
+    let injection = socket(&dir.join("injection.sock"))?;
+    let registry = Arc::new(LiveRegistry::default());
     let b = Arc::clone(&broker);
+    let r = Arc::clone(&registry);
     thread::spawn(move || {
         for s in control.incoming().flatten() {
-            serve_one(s, &b, true, &control_pids)
+            serve_one(s, &b, &r, true, &control_pids)
+        }
+    });
+    let service = InjectionService::new(Arc::clone(&broker), Arc::clone(&registry), admission);
+    thread::spawn(move || {
+        for s in injection.incoming().flatten() {
+            serve_injection(s, &service)
         }
     });
     for s in resolve.incoming().flatten() {
-        serve_one(s, &broker, false, &[])
+        serve_one(s, &broker, &registry, false, &[])
     }
     Ok(())
 }

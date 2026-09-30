@@ -258,6 +258,7 @@ dependencies = [
 name = "celeris-credentiald"
 version = "0.1.0"
 dependencies = [
+ "celeris-credentiald",
  "chacha20poly1305",
  "getrandom 0.2.17",
  "hex",

@@ -142,3 +142,109 @@ test.describe("P4-12 daemon/providers", () => {
     expect(seen.filter((r) => r.path === "/api/v1/reload").length).toBeGreaterThanOrEqual(3);
   });
 });
+
+// P4-13..15: accounts / secrets / mcp / clusters（自己完結の describe）。
+test.describe("P4-13..15 accounts/clusters", () => {
+  type Stop = () => Promise<void>;
+  let base = "";
+  let stop: Stop = async () => {};
+  let seen: Array<{ path: string; method?: string; body?: string }> = [];
+  test.beforeAll(async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const nodePath = await import("node:path");
+    const { FIXTURE_TOKEN } = await import("../../scripts/check-secrets.mjs");
+    const { createFakeDaemon } = await import("../support/fake-daemon.mjs");
+    const { startGateway } = await import("../support/gateway");
+    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "celeris-ops-ac-"));
+    const tokenFile = nodePath.join(dir, "token");
+    fs.writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
+    const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+    const gateway = await startGateway({ daemonUrl: await daemon.start(), daemonTokenFile: tokenFile });
+    base = gateway.base;
+    seen = daemon.requests;
+    stop = async () => {
+      await gateway.close();
+      await daemon.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    };
+  });
+  test.afterAll(async () => {
+    await stop();
+  });
+
+  test("parity: /accounts 追加・ログイン・secret・削除", async ({ page }) => {
+    page.on("dialog", (dialog) => void dialog.accept());
+    await page.goto(`${base}/accounts`);
+    await expect(page.getByRole("heading", { level: 1, name: "アカウント" })).toBeVisible();
+    await page.getByLabel("アカウント id").fill("sub");
+    await page.getByRole("button", { name: "アカウントを追加" }).click();
+    const card = page.getByRole("listitem", { name: "アカウント sub" });
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "確認" }).click();
+    await expect(card.getByText("確認結果: ok")).toBeVisible();
+    await card.getByRole("button", { name: "ログイン開始" }).click();
+    await expect(card.getByText("user code: ABCD-1234")).toBeVisible();
+    // 取り直しでコード入力欄が消えない（サーバの login_pending と手元の state の両方）。
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.reload();
+    const again = page.getByRole("listitem", { name: "アカウント sub" });
+    await expect(again.getByRole("status").filter({ hasText: "ログイン待ち" })).toBeVisible();
+    await again.getByLabel("認証コード").fill("code-xyz");
+    await again.getByRole("button", { name: "コードを送る" }).click();
+    await expect(again.getByText("ログイン済み")).toBeVisible();
+    // secret: 値は password 入力で、送信後に空になり、URL・storage に残らない。
+    const secretInput = page.getByLabel("secret 値");
+    await expect(secretInput).toHaveAttribute("type", "password");
+    await expect(secretInput).toHaveAttribute("autocomplete", "new-password");
+    await page.getByLabel("secret id").fill("OPENAI_KEY");
+    await secretInput.fill("s3cr3t-value-123");
+    await page.getByRole("button", { name: "secret を保存" }).click();
+    await expect(page.getByRole("listitem", { name: "secret OPENAI_KEY" })).toBeVisible();
+    await expect(secretInput).toHaveValue("");
+    expect(page.url()).not.toContain("s3cr3t");
+    const stored = await page.evaluate(() => JSON.stringify([{ ...localStorage }, { ...sessionStorage }]));
+    expect(stored).not.toContain("s3cr3t");
+    await expect(page.getByText("s3cr3t-value-123")).toHaveCount(0);
+    await expect(page.getByText("claude-oauth")).toBeVisible();
+    await page
+      .getByRole("listitem", { name: "secret OPENAI_KEY" })
+      .getByRole("button", { name: "secret を削除" })
+      .click();
+    await expect(page.getByRole("listitem", { name: "secret OPENAI_KEY" })).toHaveCount(0);
+    await card.getByRole("button", { name: "削除" }).click();
+    await expect(page.getByRole("listitem", { name: "アカウント sub" })).toHaveCount(0);
+    expect(seen.some((r) => r.path.startsWith("/api/v1/accounts/sub/login/code") && r.method === "POST")).toBe(true);
+  });
+
+  test("parity: mcp/clients/:id/calls 取得", async ({ page }) => {
+    await page.goto(`${base}/accounts`);
+    const card = page.getByRole("listitem", { name: "MCP クライアント editor" });
+    await expect(card).toBeVisible();
+    const before = seen.filter((r) => r.path.includes("/mcp/clients/c1/calls")).length;
+    expect(before).toBe(0);
+    await card.getByText("editor（有効）").click();
+    await expect(card.getByText(/tasks_list ok/)).toBeVisible();
+    expect(seen.some((r) => r.path === "/api/v1/mcp/clients/c1/calls" && r.method === "GET")).toBe(true);
+  });
+
+  test("parity: /clusters 接続・作業ディレクトリ", async ({ page }) => {
+    await page.goto(`${base}/clusters`);
+    await expect(page.getByRole("heading", { level: 1, name: "クラスタ" })).toBeVisible();
+    const card = page.getByRole("listitem", { name: "クラスタ pegasus" });
+    await card.getByRole("button", { name: "接続" }).click();
+    await expect(card.getByText("コード待ち: Verification code:")).toBeVisible();
+    await page.reload();
+    const again = page.getByRole("listitem", { name: "クラスタ pegasus" });
+    await expect(again.getByText("コード待ち")).toBeVisible();
+    await again.getByLabel("接続コード", { exact: true }).fill("123456");
+    await again.getByRole("button", { name: "コードを送る" }).click();
+    await expect(again.getByText("接続中")).toBeVisible();
+    await again.getByLabel("作業ディレクトリ").fill("/work/me");
+    await again.getByRole("button", { name: "作業ディレクトリを保存" }).click();
+    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toBeVisible();
+    await again.getByRole("button", { name: "上書きを消す" }).click();
+    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toHaveCount(0);
+    expect(seen.some((r) => r.path === "/api/v1/clusters/pegasus/settings" && r.method === "PUT")).toBe(true);
+  });
+});

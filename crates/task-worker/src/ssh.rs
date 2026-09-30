@@ -70,7 +70,13 @@ pub const PUSH_PENDING_MARKER: &str = ".celeris/push-pending";
 /// （続けて初期化後の submodule の数）。初期化が要らなかった（`.gitmodules` が無い・全部済み）ときは出さない。
 const SUBMODULES_INITIALISED_PREFIX: &str = "celeris-submodules-initialised ";
 
-/// ADR-0019 付記（Phase R6-3）: submodule の初期化に失敗したときの exit（65 / 66 と区別する）。
+/// ADR-0019 付記（Phase R7-4）: submodule を 1 つずつ初期化して、失敗したものごとに標準出力へ出す行の頭
+/// （続けて `<path>\t<stderr の要点の 1 行>`）。失敗は準備を止めない（警告の進行の行になる）。
+const SUBMODULE_FAILED_PREFIX: &str = "celeris-submodule-failed ";
+
+/// ADR-0019 付記（Phase R6-3 / R7-4）: submodule の段が使えないときの exit（65 / 66 と区別する）。
+/// R7-4 から個々の submodule の初期化の失敗では使わない（警告にする）。`git submodule status` 自体が
+/// 動かない（git に submodule が無い・worktree が壊れている）ときだけ。
 const SUBMODULE_INIT_FAILED_EXIT: i32 = 67;
 
 /// 1 タスク分のリモート実行の設定。
@@ -288,19 +294,33 @@ impl SshWorkspace {
         // （`git submodule status` の行頭が `-`）のものが 1 つでもあれば `submodule update --init --recursive`
         // する（再利用のときは初期化済みなら何もしない = 冪等）。worktree ごとの `modules/` に clone するので
         // 共有の錠は先に外す（大きな submodule の clone で他のタスクの worktree 作成を待たせない）。
+        // Phase R7-4: submodule は `.gitmodules` の path ごとに 1 つずつ初期化し、失敗しても続ける（本番
+        // 2026-09-30: `ior_integration/ior` の固定 commit が remote に無く、1 つの失敗で準備ごと落ちた）。
+        // 失敗は `<SUBMODULE_FAILED_PREFIX><path>\t<要点>` の行で返し、Rust 側で警告の進行の行にする。
         inner.push_str(&format!(
             "exec 9>&-\n\
              if [ -f {wt}/.gitmodules ]; then\n\
                sm_status=$(git -C {wt} submodule status --recursive 2>&1) || {{ printf '%s\\n' \"git submodule status failed: $sm_status\" >&2; exit {code}; }}\n\
                if printf '%s\\n' \"$sm_status\" | grep -q '^-'; then\n\
-                 git -C {wt} submodule update --init --recursive >/dev/null || {{ echo \"git submodule update --init --recursive failed\" >&2; exit {code}; }}\n\
-                 sm_count=$(git -C {wt} submodule status --recursive | grep -c . || true)\n\
+                 sm_paths=$(git -C {wt} config -f .gitmodules --get-regexp '^submodule\\..*\\.path$' 2>/dev/null | sed 's/^[^ ]* //' || true)\n\
+                 sm_report=$(printf '%s\\n' \"$sm_paths\" | while IFS= read -r sm_path; do\n\
+                   [ -n \"$sm_path\" ] || continue\n\
+                   if sm_err=$(git -C {wt} submodule update --init --recursive -- \"$sm_path\" 2>&1 >/dev/null); then :; else\n\
+                     sm_why=$(printf '%s\\n' \"$sm_err\" | grep -E '^(fatal|error):' | head -n 1 || true)\n\
+                     [ -n \"$sm_why\" ] || sm_why=$(printf '%s\\n' \"$sm_err\" | grep -v '^[[:space:]]*$' | head -n 1 || true)\n\
+                     printf '%s%s\\t%s\\n' '{failed}' \"$sm_path\" \"$sm_why\"\n\
+                   fi\n\
+                 done)\n\
+                 [ -z \"$sm_report\" ] || printf '%s\\n' \"$sm_report\"\n\
+                 sm_failed=$(printf '%s\\n' \"$sm_report\" | grep '^{failed}' | cut -f1 | sed 's/^{failed}//' || true)\n\
+                 sm_count=$(git -C {wt} submodule status --recursive 2>/dev/null | sm_failed=\"$sm_failed\" awk 'BEGIN {{ n = split(ENVIRON[\"sm_failed\"], f, \"\\n\") }} /^-/ {{ next }} {{ p = substr($0, 2); sub(/^[^ ]* /, \"\", p); for (i = 1; i <= n; i++) if (f[i] != \"\" && (p == f[i] || index(p, f[i] \" \") == 1 || index(p, f[i] \"/\") == 1)) next; c++ }} END {{ print c + 0 }}' || true)\n\
                  echo \"{prefix}$sm_count\"\n\
                fi\n\
              fi\n",
             wt = shell_remote_path(&wt),
             code = SUBMODULE_INIT_FAILED_EXIT,
             prefix = SUBMODULES_INITIALISED_PREFIX,
+            failed = SUBMODULE_FAILED_PREFIX,
         ));
         // 同じリポジトリに対して複数のタスクが同時に worktree を作ることがある（クラスタの並列度 > 1）。
         // git の worktree 管理は共有なので、あれば `flock` で直列化する（無ければそのまま実行する）。
@@ -324,19 +344,35 @@ impl SshWorkspace {
                     .stdout_tail
                     .lines()
                     .find_map(|l| l.trim().strip_prefix(SUBMODULES_INITIALISED_PREFIX))
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty() && *c != "0")
                 {
                     let line = format!(
-                        "initialised {} submodules in {wt} on cluster {}",
-                        count.trim(),
+                        "initialised {count} submodules in {wt} on cluster {}",
                         self.settings.cluster
                     );
-                    tracing::info!(cluster = %self.settings.cluster, worktree = %wt, submodules = %count.trim(), "initialised git submodules in the cluster worktree (R6-3)");
+                    tracing::info!(cluster = %self.settings.cluster, worktree = %wt, submodules = %count, "initialised git submodules in the cluster worktree (R6-3)");
                     self.push_progress_note(line);
+                }
+                // Phase R7-4: 初期化できなかった submodule は準備を止めず、1 つずつ警告の進行の行にする。
+                for rest in out
+                    .stdout_tail
+                    .lines()
+                    .filter_map(|l| l.strip_prefix(SUBMODULE_FAILED_PREFIX))
+                {
+                    let (path, why) = rest.split_once('\t').unwrap_or((rest, ""));
+                    let why = why.trim();
+                    let why = if why.is_empty() { "unknown error" } else { why };
+                    tracing::warn!(cluster = %self.settings.cluster, worktree = %wt, submodule = %path, error = %why, "a git submodule could not be initialised in the cluster worktree (R7-4, best-effort)");
+                    self.push_progress_note(format!(
+                        "submodule {path} could not be initialised: {why} (worktree {wt} on cluster {})",
+                        self.settings.cluster
+                    ));
                 }
                 Ok(())
             }
             Some(SUBMODULE_INIT_FAILED_EXIT) => Err(WorkspaceError::Remote(format!(
-                "cannot initialise the git submodules of the worktree {wt} on {} (exit {SUBMODULE_INIT_FAILED_EXIT}): {}",
+                "cannot run the git submodule step in the worktree {wt} on {} (exit {SUBMODULE_INIT_FAILED_EXIT}): {}",
                 self.settings.cluster,
                 out.stderr_tail.trim()
             ))),
@@ -1583,10 +1619,10 @@ mod tests {
         assert!(ws.take_progress_notes().is_empty());
     }
 
-    /// submodule の初期化に失敗したら（ここでは submodule の元を消した）、クラスタと worktree を名指しした
-    /// 準備のエラーになる（黙って空のディレクトリのまま進まない）。
+    /// Phase R7-4: submodule の初期化に失敗しても（ここでは submodule の元を消した）、準備は通る。
+    /// 失敗は submodule の path とクラスタ・worktree を名指しした警告の進行の行になる（黙らない）。
     #[tokio::test]
-    async fn a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree() {
+    async fn a_failed_submodule_init_is_a_warning_note_not_a_prepare_error() {
         let tmp = tempfile::tempdir().unwrap();
         let proj = project_repo(tmp.path(), true);
         std::fs::remove_dir_all(tmp.path().join("sub")).unwrap();
@@ -1595,16 +1631,83 @@ mod tests {
             &proj,
             local_ssh_allowing_file_protocol(tmp.path()),
         );
-        let err = ws
-            .ensure_worktree()
+        ws.ensure_worktree()
             .await
-            .expect_err("the submodule source is gone");
-        let msg = err.to_string();
+            .expect("a broken submodule does not stop the prepare");
         let wt = ws.effective_remote_dir();
-        assert!(matches!(err, WorkspaceError::Remote(_)), "{err:?}");
-        assert!(msg.contains("submodules"), "{msg}");
-        assert!(msg.contains("sirius"), "{msg}");
-        assert!(msg.contains(&wt.to_string_lossy().into_owned()), "{msg}");
+        assert!(
+            wt.join("README.md").is_file(),
+            "the worktree itself is fine"
+        );
+        let notes = ws.take_progress_notes();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        let note = &notes[0];
+        assert!(
+            note.starts_with("submodule lib/sub could not be initialised: "),
+            "{note}"
+        );
+        assert!(note.contains("sirius"), "{note}");
+        assert!(note.contains(&wt.to_string_lossy().into_owned()), "{note}");
+    }
+
+    /// 本番 2026-09-30（task 01M3PAZ4XG4QN1T8S98VNA6ABV、sirius の BenchFS）: `ior_integration/ior` の固定 commit が
+    /// remote に無く（`not our ref`）、`submodule update --init --recursive` 1 回の失敗で準備ごと落ちた。
+    /// R7-4: submodule は 1 つずつ初期化する。良い方は入り、悪い方は `fatal:` の行つきの警告になる。
+    #[tokio::test]
+    async fn one_unfetchable_submodule_does_not_stop_the_other_or_the_prepare() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = project_repo(tmp.path(), true);
+        // 2 つ目の submodule `ior`: remote に無い commit（submodule の中だけの commit）を固定する。
+        let bad = tmp.path().join("bad");
+        std::fs::create_dir_all(&bad).unwrap();
+        test_git(&bad, &["init", "-q", "-b", "main"]);
+        std::fs::write(bad.join("ior.c"), "int main(){}\n").unwrap();
+        test_git(&bad, &["add", "-A"]);
+        test_git(&bad, &["commit", "-q", "-m", "ior"]);
+        let url = bad.to_string_lossy().into_owned();
+        test_git(&proj, &["submodule", "add", "-q", &url, "ior"]);
+        std::fs::write(proj.join("ior/local.c"), "// unpushed\n").unwrap();
+        test_git(&proj.join("ior"), &["add", "-A"]);
+        test_git(&proj.join("ior"), &["commit", "-q", "-m", "local only"]);
+        test_git(&proj, &["add", "-A"]);
+        test_git(&proj, &["commit", "-q", "-m", "pin an unpushed ior commit"]);
+
+        let ws = worktree_workspace(
+            tmp.path(),
+            &proj,
+            local_ssh_allowing_file_protocol(tmp.path()),
+        );
+        let wt = ws.effective_remote_dir();
+        ws.ensure_worktree()
+            .await
+            .expect("one broken submodule does not stop the prepare");
+        assert_eq!(
+            std::fs::read_to_string(wt.join("lib/sub/lib.rs")).unwrap(),
+            "pub fn sub() {}\n",
+            "the good submodule is populated"
+        );
+        assert!(!wt.join("ior/local.c").exists());
+        let notes = ws.take_progress_notes();
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert_eq!(
+            notes[0],
+            format!(
+                "initialised 1 submodules in {} on cluster sirius",
+                wt.display()
+            )
+        );
+        assert!(
+            notes[1].starts_with("submodule ior could not be initialised: fatal:"),
+            "{}",
+            notes[1]
+        );
+        assert!(notes[1].contains("sirius"), "{}", notes[1]);
+
+        // 再利用でも落ちない。失敗した ior は clone までは済んで `submodule status` の行頭が `-` でなくなるので、
+        // 再利用では試し直さない（R6-3 と同じく、`-` の無い worktree には触らない = 人・agent の submodule の
+        // commit を巻き戻さない）。警告は最初の準備の 1 回だけ。
+        ws.ensure_worktree().await.expect("reuse");
+        assert!(wt.join("lib/sub/lib.rs").is_file());
         assert!(ws.take_progress_notes().is_empty());
     }
 }

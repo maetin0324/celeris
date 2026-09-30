@@ -12,6 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use celeris_credentiald::injection::RedisplayGuard;
 use celeris_credentiald::injection_ipc::{
     AuthSectionRegistration, Field, InjectionReply, InjectionRequest as WireRequest,
     LiveSessionRegistration,
@@ -35,6 +36,8 @@ pub enum InjectionError {
     RedisplayField,
     TargetChanged,
     SinkFailed,
+    /// ADR-0092: an agent observation re-displayed an injected value; it was discarded.
+    RedisplayDetected,
     BrokerRejected(&'static str),
 }
 
@@ -48,6 +51,7 @@ impl InjectionError {
             Self::RedisplayField => "redisplay_field",
             Self::TargetChanged => "target_changed",
             Self::SinkFailed => "sink_failed",
+            Self::RedisplayDetected => "redisplay_detected",
             Self::BrokerRejected(code) => code,
         }
     }
@@ -239,6 +243,8 @@ pub struct CdpController {
     injected: Vec<(String, String, String, String)>,
     events: Vec<Value>,
     redirect_seen: bool,
+    /// ADR-0092: one guard per injected value, kept for the controller's (= session's) lifetime.
+    guards: Vec<RedisplayGuard>,
 }
 
 impl CdpController {
@@ -252,6 +258,7 @@ impl CdpController {
             injected: Vec::new(),
             events: Vec::new(),
             redirect_seen: false,
+            guards: Vec::new(),
         }
     }
 
@@ -302,7 +309,24 @@ impl CdpController {
         if self.auth_section.is_some() {
             return Err(InjectionError::AuthSectionRequired);
         }
-        self.call(method, params, session)
+        let reply = self.call(method, params, session)?;
+        if self.redisplayed(&reply) {
+            // The whole observation is dropped; only the fixed reason crosses.
+            drop(reply);
+            return Err(InjectionError::RedisplayDetected);
+        }
+        Ok(reply)
+    }
+
+    /// ADR-0092: whether an observation carries an injected value in any
+    /// representation the guard decodes (raw, percent, UTF-16LE, base64, JSON escape).
+    fn redisplayed(&self, observation: &Value) -> bool {
+        self.guards.iter().any(|g| g.exposes_json(observation))
+    }
+
+    /// Number of redisplay guards received from the broker for this session.
+    pub fn redisplay_guards(&self) -> usize {
+        self.guards.len()
     }
 
     /// Trusted controller operations needed to prepare and finish H3. The
@@ -323,7 +347,9 @@ impl CdpController {
             self.events.clear();
             Vec::new()
         } else {
-            std::mem::take(&mut self.events)
+            let mut events = std::mem::take(&mut self.events);
+            events.retain(|e| !self.redisplayed(e));
+            events
         }
     }
 
@@ -513,6 +539,13 @@ impl CdpController {
         let injected_at = receipt["receipt"]["injected_at"]
             .as_u64()
             .ok_or(InjectionError::SinkFailed)?;
+        // A receipt without a well-formed guard is a failed injection (fail closed).
+        let guard = typed
+            .redisplay_guard
+            .as_ref()
+            .and_then(RedisplayGuard::from_wire)
+            .ok_or(InjectionError::SinkFailed)?;
+        self.guards.push(guard);
         self.injected.push((
             object_id.to_owned(),
             cdp_session.to_owned(),

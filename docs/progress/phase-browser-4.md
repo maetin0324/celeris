@@ -147,7 +147,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
 | A5 | 逆向き iframe → `target_mismatch` / `cross_origin_frame` |
 | A6 | `type=text`・script で type 書換え → `redisplay_field`、DOM 値は空 |
 | A7 | 区間中の `Runtime.evaluate`・`DOM.getOuterHTML`・`DOM.getAttributes`・`DOM.getDocument`・`Accessibility.getFullAXTree`・`Runtime.callFunctionOn` → `auth_section_required`、区間後の値は空 |
-| A8 | **未達（所見）**: page が input 時に値を可視 div に複製すると、区間後に agent の `Runtime.evaluate`/`DOM.getDocument` 応答に sentinel が現れる。試験は `FINDING-A8` を出して記録している（合格扱いにしない） |
+| A8 | **合格（2026-09-30、ADR-0092）**: broker の `redisplay_guard`（salt・digest・len）を controller が保持し、区間後の agent 観測 8 経路（innerText・outerHTML・base64・percent・二重 JSON escape・UTF-16・`DOM.getDocument`・AX tree）は全て破棄され `redisplay_detected` が返る。screenshot に sentinel 無し。負の対照: guard を通らない `controller_command` では同じ経路の 6 件で sentinel が見える／別値の guard は検出しない（A8n）。`cargo test -p task-worker --test browser_injection_attacks -- --nocapture` → 2 passed、`ATTACK-A8-OK`・`ATTACK-A8n-OK`。未解決: 画素上の再表示（OCR）・大小文字変換/圧縮等の表現は検出しない（ADR-0092 決定 5） |
 | A9 | 区間中の `Page.captureScreenshot`・`Page.startScreencast` は拒否、区間後の screenshot（7103 bytes）に sentinel 文字列無し（OCR はしない） |
 | A10 | page の `console.log(value)`・値入り例外は実行済み、`CdpController` は event を外へ出さず応答にも sentinel 無し |
 | A11 | 実 python3 子 process が有効 lease・section つき要求 → `injection_worker_not_allowed`（SO_PEERCRED pid 不一致）、sink FD に frame 無し。`resolve.sock` → `trusted_injection_required`、bridge は固定拒否 |
@@ -159,7 +159,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
 | A17 | `value`/`length` field を含む要求 → `invalid_request` |
 
 - 未解決:
-  - A8: `RedisplayGuard`（`celeris-credentiald/src/injection.rs`）が controller の観測経路に配線されていない。ADR-0089 D4-7 の「broker が区間ごとに guard を作り controller に salt と hash を渡す」の IPC・controller 側実装が必要。これが入るまで D5 行列は全部期待どおりではない。
+  - A8: ADR-0092 で解消（`redisplay` WorkUnit）。guard は `InjectionReply.redisplay_guard` で controller に渡り、`agent_command`・relay・event を検査する。
   - A1: 「controller の照合後・`Runtime.callFunctionOn` 前」の競合を決定的に作れず、broker の `target_changed`（lease 消費後の拒否）経路は実 browser で未再現（stale id は controller 側で止まる）。
   - A4: fixture の 2 host が同一 site のため OOPIF にならず、OOPIF の `target_mismatch` は未再現。
   - A13: 別 host UID の実 process による試験は、別 UID が使える host が必要。

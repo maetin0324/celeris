@@ -103,7 +103,7 @@ impl BrokerClient for FakeBroker {
                     "session_id":request["session_id"],"cdp_target_id":request["cdp_target_id"],
                     "frame_id":request["frame_id"],"loader_id":request["loader_id"],
                     "field":request["field"],"injected_at":1
-                }}),
+                },"redisplay_guard":celeris_credentiald::injection::RedisplayGuard::new(SECRET).to_wire()}),
             )
         }))))
     }

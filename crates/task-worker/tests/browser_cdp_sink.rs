@@ -198,7 +198,7 @@ impl BrokerClient for FakeBroker {
                 return Err(InjectionError::TargetChanged);
             }
             Ok(
-                json!({"v":1,"request_id":request["request_id"],"ok":true,"receipt":{"lease_id":request["lease_id"],"auth_section_id":request["auth_section_id"],"session_id":request["session_id"],"cdp_target_id":request["cdp_target_id"],"frame_id":request["frame_id"],"loader_id":request["loader_id"],"field":request["field"],"injected_at":1}}),
+                json!({"v":1,"request_id":request["request_id"],"ok":true,"receipt":{"lease_id":request["lease_id"],"auth_section_id":request["auth_section_id"],"session_id":request["session_id"],"cdp_target_id":request["cdp_target_id"],"frame_id":request["frame_id"],"loader_id":request["loader_id"],"field":request["field"],"injected_at":1},"redisplay_guard":celeris_credentiald::injection::RedisplayGuard::new(&value).to_wire()}),
             )
         }))))
     }

@@ -810,6 +810,7 @@ fn inner() {
     a7_a8_a9_a10_observation(&mut ctx);
     a12_browser_reach(&mut ctx);
     a13_other_uid(&ctx);
+    a8_guard_negative_control();
 
     ctx.check_journal("all attacks");
     let journal = ctx.journal();
@@ -1240,37 +1241,113 @@ fn a7_a8_a9_a10_observation(ctx: &mut Ctx) {
         &format!("screenshot {} bytes free of sentinel text", png.len()),
     );
     // A8: page copied the value to a visible div. Observe exactly what the agent can see.
-    let sid = ctx.sid.clone();
-    let seen = ctx
-        .cdp
-        .agent_command(
-            "Runtime.evaluate",
-            json!({"expression":"document.body.innerText","returnByValue":true}),
-            Some(&sid),
-        )
-        .expect("body text");
-    let html = ctx
-        .cdp
-        .agent_command(
-            "Runtime.evaluate",
-            json!({"expression":"document.documentElement.outerHTML","returnByValue":true}),
-            Some(&sid),
-        )
-        .expect("outerHTML");
-    if contains(seen.to_string().as_bytes(), SECRET.as_bytes())
-        || contains(html.to_string().as_bytes(), SECRET.as_bytes())
-    {
-        eprintln!(
-            "FINDING-A8 page-copied secret is visible to the agent via Runtime.evaluate after the \
-             section: RedisplayGuard exists in celeris-credentiald (injection.rs) but is NOT wired \
-             into CdpController/agent_command in this path"
-        );
-        // Known gap (ADR-0089 D4-7 not wired): reported, never counted as OK.
-        eprintln!("ATTACK-A8-GAP no RedisplayGuard in the agent observation path");
-    } else {
-        mark("A8", "page-copied value not visible to the agent");
-    }
+    a8_redisplay(ctx);
     ctx.check_journal("A7-A10");
+}
+
+/// A8 observation paths (ADR-0092): snapshot text, full HTML, DOM tree and
+/// accessibility tree. Each must be discarded with `redisplay_detected`.
+const A8_PATHS: &[(&str, &str)] = &[
+    (
+        "Runtime.evaluate",
+        r#"{"expression":"document.body.innerText","returnByValue":true}"#,
+    ),
+    (
+        "Runtime.evaluate",
+        r#"{"expression":"document.documentElement.outerHTML","returnByValue":true}"#,
+    ),
+    (
+        "Runtime.evaluate",
+        r#"{"expression":"btoa(document.body.innerText)","returnByValue":true}"#,
+    ),
+    (
+        "Runtime.evaluate",
+        r#"{"expression":"encodeURIComponent(document.body.innerText)","returnByValue":true}"#,
+    ),
+    (
+        "Runtime.evaluate",
+        r#"{"expression":"JSON.stringify(JSON.stringify(document.body.innerText))","returnByValue":true}"#,
+    ),
+    (
+        "Runtime.evaluate",
+        r#"{"expression":"Array.from(document.body.innerText).map(c=>c+'\u0000').join('')","returnByValue":true}"#,
+    ),
+    ("DOM.getDocument", r#"{"depth":-1,"pierce":true}"#),
+    ("Accessibility.getFullAXTree", r#"{}"#),
+];
+
+fn a8_redisplay(ctx: &mut Ctx) {
+    let sid = ctx.sid.clone();
+    assert!(
+        ctx.cdp.redisplay_guards() >= 1,
+        "controller holds no redisplay guard from the broker"
+    );
+    // Negative control: the same observations through the unguarded trusted
+    // controller path (agent_command minus the guard) do carry the sentinel,
+    // so the attack is real and the guard is what stops it.
+    let mut leaked = 0;
+    for (method, params) in A8_PATHS {
+        let params: Value = serde_json::from_str(params).expect("params");
+        let raw = ctx
+            .cdp
+            .controller_command(method, params, Some(&sid))
+            .expect("unguarded observation");
+        if contains(raw.to_string().as_bytes(), SECRET.as_bytes()) {
+            leaked += 1;
+        }
+    }
+    assert!(
+        leaked >= 2,
+        "negative control: page copy of the value not visible unguarded"
+    );
+    for (method, params) in A8_PATHS {
+        let params: Value = serde_json::from_str(params).expect("params");
+        match ctx.cdp.agent_command(method, params, Some(&sid)) {
+            Err(e) => assert_eq!(e.code(), "redisplay_detected", "{method}"),
+            Ok(reply) => {
+                assert_no_sentinel(method, reply.to_string().as_bytes());
+                panic!("{method}: observation was not discarded");
+            }
+        }
+    }
+    // Screenshot path: pixels are not text; the reply is guarded and sentinel free.
+    match ctx.cdp.agent_command(
+        "Page.captureScreenshot",
+        json!({"format":"png"}),
+        Some(&sid),
+    ) {
+        Ok(shot) => assert_no_sentinel("A8 screenshot", shot.to_string().as_bytes()),
+        Err(e) => assert_eq!(e.code(), "redisplay_detected"),
+    }
+    // Events after the section pass the guard too.
+    for e in ctx.cdp.take_agent_events() {
+        assert_no_sentinel("A8 event", e.to_string().as_bytes());
+    }
+    mark(
+        "A8",
+        &format!(
+            "page-copied value discarded with redisplay_detected on {} agent paths (unguarded control leaked on {leaked})",
+            A8_PATHS.len()
+        ),
+    );
+}
+
+/// Negative control for the guard itself: an observation that is only
+/// guarded by a guard for a different value is let through.
+fn a8_guard_negative_control() {
+    use celeris_credentiald::injection::RedisplayGuard;
+    let right = RedisplayGuard::new(SECRET);
+    let wrong = RedisplayGuard::new("some-other-value-entirely");
+    let obs = json!({"result":{"result":{"value":format!("<div>{SECRET}</div>")}}});
+    assert!(right.exposes_json(&obs));
+    assert!(
+        !wrong.exposes_json(&obs),
+        "a mismatched guard must not detect"
+    );
+    mark(
+        "A8n",
+        "guard for another value does not detect (guard is load-bearing)",
+    );
 }
 
 fn a12_browser_reach(ctx: &mut Ctx) {
@@ -1368,18 +1445,18 @@ fn real_browser_injection_attack_matrix() {
         "attack matrix failed: {stdout}\n{stderr}"
     );
     for m in [
-        "A0", "A1", "A2", "A3", "A3b", "A4", "A5", "A6", "A7", "A7a", "A9", "A9a", "A10", "A11",
-        "A12", "A13", "A14", "A15", "A16", "A17",
+        "A0", "A1", "A2", "A3", "A3b", "A4", "A5", "A6", "A7", "A7a", "A8", "A8n", "A9", "A9a",
+        "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17",
     ] {
         assert!(
             stderr.contains(&format!("ATTACK-{m}-OK")),
             "missing ATTACK-{m}-OK\n{stderr}"
         );
     }
-    // A8 must either pass or be reported as the known RedisplayGuard gap.
+    // A8 (ADR-0092): a pass, never a reported gap.
     assert!(
-        stderr.contains("ATTACK-A8-OK") || stderr.contains("ATTACK-A8-GAP"),
-        "missing A8 outcome\n{stderr}"
+        stderr.contains("ATTACK-A8-OK") && !stderr.contains("ATTACK-A8-GAP"),
+        "A8 not passed\n{stderr}"
     );
     assert!(stderr.contains("ATTACKS-ALL-DONE"));
     // whatever the child printed is itself a surface

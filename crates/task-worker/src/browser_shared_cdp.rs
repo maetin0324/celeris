@@ -13,7 +13,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use url::Url;
 
-use crate::browser_cdp_sink::CdpController;
+use crate::browser_cdp_sink::{CdpController, InjectionError};
 
 const MAX_MESSAGE: usize = 1 << 20;
 pub const RELAY_PORT: u16 = 9223;
@@ -160,6 +160,7 @@ fn serve(
                         reply["id"] = id.clone();
                         reply
                     }
+                    Err(e @ InjectionError::RedisplayDetected) => error(id, e.code()),
                     Err(_) => error(id, "cdp_command_failed"),
                 };
                 (reply, events)

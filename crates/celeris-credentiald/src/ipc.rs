@@ -298,6 +298,7 @@ fn serve_injection(mut stream: UnixStream, service: &InjectionService) {
         ok: false,
         receipt: None,
         code: Some(c.code().into()),
+        redisplay_guard: None,
     };
     let reply = (|| -> InjectionReply {
         if stream

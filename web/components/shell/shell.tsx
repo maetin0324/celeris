@@ -1,6 +1,8 @@
 import { Link, useRouter } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useState } from "react";
 import { badgeView } from "../../api/queries/badges";
+import { useRealtimeSubscription } from "../../api/realtime/use-realtime";
+import { formatAbsolute, formatRelative, useLastHello } from "../../lib/time";
 import { buttonClassName } from "../ui/button";
 import { navItems } from "./nav-items";
 import { installScrollMemory } from "./scroll-memory";
@@ -17,6 +19,14 @@ export function Shell({ children }: { children: ReactNode }) {
     "/inbox": badgeView(server.inboxBadge, "受信箱"),
     "/approvals": badgeView(server.approvalsBadge, "承認待ち"),
   };
+
+  useRealtimeSubscription();
+  const lastHello = useLastHello();
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => installScrollMemory(router), [router]);
 
@@ -73,6 +83,15 @@ export function Shell({ children }: { children: ReactNode }) {
         <p data-connection role="status" className="hidden text-xs text-neutral-600 md:block">
           接続状態: 未確認
         </p>
+        {lastHello && (
+          <p data-server-time className="hidden text-xs text-neutral-600 md:block">
+            最終受信{" "}
+            <time dateTime={lastHello} data-absolute>
+              {formatAbsolute(lastHello)}
+            </time>{" "}
+            (<span data-relative>{formatRelative(lastHello)}</span>)
+          </p>
+        )}
       </header>
       <div className="flex min-w-0 flex-1 flex-col">
         {server.down && (

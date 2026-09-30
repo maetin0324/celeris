@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
-import { createFakeDaemon } from "../support/fake-daemon.mjs";
+import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 
 // shell の parity（P2-02）。gateway は空き port の loopback で、daemon には接続しない。
@@ -94,4 +94,112 @@ test("parity-x: daemon 停止中のバナーと復旧", async ({ page }) => {
     await daemon.close().catch(() => {});
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// shell の時刻表示（P2-06・X7）。ブラウザの時刻帯で絶対時刻を出し、相対時刻は hello.now のずれで補正する。
+async function withDaemon<T>(run: (ctx: { base: string; daemon: ReturnType<typeof createFakeDaemon> }) => Promise<T>) {
+  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-shell-"));
+  const tokenFile = path.join(dir, "token");
+  writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
+  const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+  const daemonUrl = await daemon.start();
+  const local = await startGateway({ daemonUrl, daemonTokenFile: tokenFile });
+  try {
+    return await run({ base: local.base, daemon });
+  } finally {
+    await local.close();
+    await daemon.close().catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+for (const timeZone of ["Asia/Tokyo", "America/New_York"]) {
+  test.describe(`timezone ${timeZone}`, () => {
+    test.use({ timezoneId: timeZone });
+    test("parity-x: timezone 表示と相対時刻", async ({ page }) => {
+      test.setTimeout(60_000);
+      await withDaemon(async ({ base, daemon }) => {
+        await page.goto(`${base}/`);
+        await expect(page.getByRole("heading", { level: 1, name: "ホーム" })).toBeVisible();
+        await expect.poll(() => daemon.streamClients).toBeGreaterThan(0);
+        // server の時計が 1 時間進んでいる。補正しなければ「1 時間後」になる。
+        const helloDate = new Date(Math.floor(Date.now() / 1000) * 1000 + 3_600_000);
+        daemon.sendEvent("hello", { cursor: 0, now: helloDate.toISOString(), daemon: null });
+        const block = page.locator("[data-server-time]");
+        await expect(block).toBeAttached();
+        const expected = new Intl.DateTimeFormat("ja-JP", {
+          dateStyle: "medium",
+          timeStyle: "medium",
+          timeZone,
+        }).format(helloDate);
+        await expect(block.locator("time[data-absolute]")).toHaveText(expected);
+        await expect(block.locator("time[data-absolute]")).toHaveAttribute("datetime", helloDate.toISOString());
+        const relative = await block.locator("[data-relative]").textContent();
+        expect(relative).toMatch(/^(今|\d+ 秒前)$/);
+      });
+    });
+  });
+}
+
+// 画面の一覧は routes/ のファイルから作る。画面が増えても検査が自動で対象にする。
+function routePaths(): string[] {
+  const dir = path.join(import.meta.dirname, "..", "..", "routes");
+  const fixtureIds: Record<string, string> = { id: "T1", runId: "R1" };
+  const paths = readdirSync(dir)
+    .filter((f) => f.endsWith(".tsx") && !f.startsWith("__"))
+    .map((f) => {
+      const segments = f
+        .replace(/\.tsx$/, "")
+        .split(".")
+        .filter((seg) => seg !== "index")
+        .map((seg) => (seg.startsWith("$") ? (fixtureIds[seg.slice(1)] ?? "X1") : seg));
+      return `/${segments.join("/")}`;
+    })
+    .filter((p) => p !== "/login");
+  return [...new Set(paths)];
+}
+
+test("parity-x: storage に機密が無い", async ({ page }) => {
+  test.setTimeout(180_000);
+  const routes = routePaths();
+  expect(routes.length).toBeGreaterThanOrEqual(30);
+  await withDaemon(async ({ base, daemon }) => {
+    await page.goto(`${base}/`);
+    await expect.poll(() => daemon.streamClients).toBeGreaterThan(0);
+    daemon.sendEvent("hello", { cursor: 0, now: new Date().toISOString(), daemon: null });
+    for (const route of routes) {
+      await page.goto(`${base}${route}`);
+      await expect(page.locator("[data-shell] main h1").first(), route).toBeVisible();
+    }
+    await expect.poll(() => daemon.requests.some((r) => r.path === "/api/v1/inbox")).toBe(true);
+
+    const snapshot = await page.evaluate(async () => {
+      const dump = (s: Storage) => Object.fromEntries(Object.keys(s).map((k) => [k, s.getItem(k)]));
+      return {
+        local: dump(localStorage),
+        session: dump(sessionStorage),
+        idb: ((await indexedDB.databases?.()) ?? []).map((d) => d.name),
+        caches: await caches.keys(),
+        workers: (await navigator.serviceWorker.getRegistrations()).length,
+      };
+    });
+    // localStorage: 表示の好みの key だけ（何も設定していなければ空）。
+    for (const [key, value] of Object.entries(snapshot.local)) {
+      expect(key).toBe("celeris.web.display");
+      const parsed = JSON.parse(value ?? "{}") as Record<string, unknown>;
+      expect(Object.keys(parsed).every((k) => k === "timeZone" || k === "theme")).toBe(true);
+    }
+    // sessionStorage: 使わない（scroll 位置は memory）。
+    expect(snapshot.session).toEqual({});
+    expect(snapshot.idb).toEqual([]);
+    expect(snapshot.caches).toEqual([]);
+    expect(snapshot.workers).toBe(0);
+    // token と API 応答の本文がどの storage にも無い。
+    const all = JSON.stringify([snapshot.local, snapshot.session]);
+    expect(all).not.toContain(FIXTURE_TOKEN);
+    for (const fixture of Object.values(defaultFixtures)) {
+      const body = JSON.stringify(fixture);
+      if (body.length > 20) expect(all).not.toContain(body);
+    }
+  });
 });

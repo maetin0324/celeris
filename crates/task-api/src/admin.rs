@@ -232,7 +232,7 @@ pub struct ProviderConfigFile {
     pub account_pool: bool,
     /// ADR-0026 D7: `adapter = "acp"` のときだけ意味を持つ、ACP エージェントの実行ファイルの上書き。
     /// **管理 API はこのフィールドを読み書きしない**（`create`/`patch` の本文に来たら 422 で拒否する。
-    /// `handlers::reject_command_and_args` を参照）。人が直接編集した `providers.d/<id>.toml` の値を
+    /// `handlers::providers::reject_provider_command_and_args` を参照）。人が直接編集した `providers.d/<id>.toml` の値を
     /// `read_provider_file` → `write_provider_file` の往復（PATCH）で消さないための素通り用フィールド。
     #[serde(default)]
     pub command: Option<String>,

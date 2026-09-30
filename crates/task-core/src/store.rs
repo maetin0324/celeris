@@ -1256,6 +1256,11 @@ pub trait TaskStore:
     fn runs_for_task(&self, task_id: TaskId) -> Result<Vec<RunRow>, StoreError>;
     /// その WorkUnit の run（`started_at` 昇順）。
     fn runs_for_work_unit(&self, work_unit_id: &str) -> Result<Vec<RunRow>, StoreError>;
+    /// ADR-0079 付記「R6-1」D4: task が終端（done / failed / cancelled）なのに `runs` 索引で `running` のままの行を、
+    /// task ごとに 1 トランザクションで閉じる（`WorkerFinished{end: Cancelled, outcome: "interrupted: …"}` を積む）。
+    /// 終端への遷移は同じトランザクションで閉じるので、ここで見つかるのは R6-1 より前に残った行だけ。閉じた
+    /// `(task, run_id)` を返す（dispatcher の起動時と定期の照合が 1 行ずつログに残す）。
+    fn close_runs_of_terminal_tasks(&self) -> Result<Vec<(TaskId, String)>, StoreError>;
 
     /// `updated_at >= since` のタスク別実行集計を派生索引から 1 回の SQL で読む。
     ///
@@ -2912,6 +2917,11 @@ impl SqliteStore {
         if !view.status.is_terminal() && outcome.next.is_terminal() {
             crate::browser_wait::cancel_open_for_task_tx(tx, task_id, now)?;
         }
+        // ADR-0079 付記「R6-1」D4: 終端になったら、この task の `runs` 索引の `running` の行を同じトランザクションで
+        // 閉じる（本番: 失敗した task 01M3PBAVFAYPDWMQMDBXPTE2V8 の reviewer run が `running` のまま残った）。
+        if !view.status.is_terminal() && outcome.next.is_terminal() {
+            Self::close_open_runs_tx(tx, task_id, outcome.next)?;
+        }
 
         Self::cascade_after_transition_tx(tx, &task, view.status, outcome.next)?;
 
@@ -3595,6 +3605,54 @@ impl SqliteStore {
     /// 食い違わない。既に `run_index_finish` で閉じた行（checkpoint 等を持つ）には触れない。
     /// dogfood 4 回目、lease 失効の requeue（`reclaim_expired_leases`）は `WorkerFinished` だけを書き、
     /// `runs` 行は `running` のまま残っていた。どの経路で run を終えても行が閉じるよう、ここで保証する。
+    /// ADR-0079 付記「R6-1」D4: `task_id` の `runs` 索引の `running` の行を、`WorkerFinished{end: Cancelled,
+    /// outcome: "interrupted: …"}` を積んで閉じる（索引は events の派生なので、replay が同じ行を作れるよう行の
+    /// 書き換えではなく event で閉じる。`append_event_tx` が `close_run_row_for_event_tx` で行を更新する）。
+    /// 閉じた run の id を返す。終端への遷移（`apply_transition_tx`）と、終端の task の行の照合
+    /// （[`TaskStore::close_runs_of_terminal_tasks`]）が使う。
+    fn close_open_runs_tx(
+        conn: &Connection,
+        task_id: TaskId,
+        status: Status,
+    ) -> Result<Vec<String>, StoreError> {
+        let open: Vec<(String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT run_id, role FROM runs WHERE task_id = ?1 AND status = 'running' \
+                 ORDER BY started_at ASC",
+            )?;
+            let rows = stmt.query_map(params![task_id.to_string()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+        let mut closed = Vec::new();
+        for (run_id, role) in open {
+            let role = match RunIndexRole::parse(&role) {
+                Some(RunIndexRole::Reviewer) => Some(crate::model::RunRole::Reviewer),
+                Some(RunIndexRole::Planner) => Some(crate::model::RunRole::Planner),
+                _ => None,
+            };
+            let finished = Event::WorkerFinished {
+                run_id: run_id.clone(),
+                outcome: format!(
+                    "interrupted: the task reached {} while this run was still open (runs index closed, ADR-0079 R6-1)",
+                    status_str(status)
+                ),
+                usage: None,
+                role,
+                metrics: None,
+                end: Some(crate::execution::RunEnd::Cancelled),
+            };
+            Self::append_event_tx(conn, task_id, &finished)?;
+            closed.push(run_id);
+        }
+        Ok(closed)
+    }
+
     fn close_run_row_for_event_tx(
         conn: &Connection,
         event: &Event,
@@ -6310,6 +6368,34 @@ impl TaskStore for SqliteStore {
             }
             Ok(out)
         })
+    }
+
+    fn close_runs_of_terminal_tasks(&self) -> Result<Vec<(TaskId, String)>, StoreError> {
+        let mut conn = self.lock()?;
+        let stale: Vec<(String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT t.id, t.status FROM runs r JOIN tasks t ON t.id = r.task_id \
+                 WHERE r.status = 'running' AND t.status IN ('done', 'failed', 'cancelled')",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+        let mut closed = Vec::new();
+        for (id, status) in stale {
+            let task_id = Self::parse_id(&id)?;
+            let status = parse_status(&status)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let runs = Self::close_open_runs_tx(&tx, task_id, status)?;
+            tx.commit()?;
+            closed.extend(runs.into_iter().map(|r| (task_id, r)));
+        }
+        Ok(closed)
     }
 
     fn runs_for_work_unit(&self, work_unit_id: &str) -> Result<Vec<RunRow>, StoreError> {

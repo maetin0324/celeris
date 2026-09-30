@@ -1653,3 +1653,73 @@ R6（回収）の 2 つ目。**migration なし**（plan/3 の JSON に任意の
   （`replan_rewrites_the_phase_of_a_unit_moved_to_another_phase`、`replan_moving_a_unit_to_a_later_stage_does_not_strand_the_earlier_stage`）。
 - **既存の DB**: R6-4 より前の replan で食い違った行は、`celerisctl replay --apply`（または `POST /replay`）が events から直す
   （replay は新しい規則で行を作り直すので、行の `phase` / `seq` の食い違いとして出る）。
+
+## 付記: R6-1: 人の gate は unit を止める（PlanGate 未承認・段階 review）、上限超過は人に聞く、索引の回収（2026-09-30）
+
+R6（回収）の 1 つ目。**migration なし**（schema 33 のまま）。新しい Event の型も足していない。本番には触れていない。
+
+### 発端（本番の証拠。docs/progress/phase-R.md「昇格後の dogfood」「R6 統合の記録」）
+
+- **P-R5b-4**: 承認待ちの v2 に人が `plan-gate {action: replan}` を送ると task は `ready` に戻り、同じ tick で**承認されていない** v2 の unit
+  p3 から子 task ができた（17:13:04Z → 17:13:07Z）。21:22Z にも再現し、その replan 自体は `max_replans` 超過で黙って捨てられ（`limit:max_replans`）、
+  未承認の v4 の p4a / p4c から子ができた。原因: 木の照合（`reconcile_tree_units`）の止めが「`blocked` かつ `awaiting_plan_approval`」だけで、
+  `wu_dispatch_gate` は承認の状態を見ていなかった。
+- **P-R5b-5**: 段階 phase-3 の `review: human` で root が `blocked(awaiting_human)` になった同じ tick に、次の段階の p4 が `dependency_ready` →
+  子ができた（17:44:54Z）。原因: `finish_phase_integration` が途中確認で止める**前に**次の工程の unit を `ready` にし（ADR-0074 D2.2 の
+  「ready にする前に適用する」と逆）、照合は `awaiting_human` の親を止めていなかった。
+- web Phase 0（木でない /2）: `max_replans` を使い切った後の repair WU の失敗で、人に聞かずに `failed`（worker_error, retryable=false）（17:56Z）。
+- failed の task 01M3PBAVFAYPDWMQMDBXPTE2V8 の reviewer run 01M3Q01QC6DQTG8XX62WJDC0M7 が `runs` 索引で `running` のまま。
+- `plan_approval_requested.reasons` の `near_limit:max_child_tasks_per_plan:10/6` が採用済み（`adopt`）・done の unit を数えた（R6-2 付記 5.）。
+- 統合の失敗の後の `worker_question` の本文が空（web Phase 1 の子、2026-09-30 04:57Z）。
+
+### 決定
+
+1. **D1 計画の版の承認の状態**（`task_ops::plan_gate::PlanGateState { Pending | Approved | Skipped }`、`plan_gate_state(plan, events)`）:
+   events から決定的に導く（列は足さない）。origin human の版（人の `PUT`）は `skipped`（R5b-prep 付記 3.）、`PlanApprovalRequested{plan_id}` の
+   無い planner の版（承認の理由が無い・子の計画・/1・/2・木が無効）は `approved`、要求の後に `plan_approved` の遷移が無ければ `pending`。
+   承認待ちの版に人が `replan` を求めても、その版は `pending` のまま（次の版が採用され、その版の状態で決まる）。
+   - **dispatcher は `pending` の版の unit を起こさない**: `wu_dispatch_gate` は人の replan の依頼（planner の run）を先に見て、その後
+     `human_gate_hold` が `Some` なら `Skip`（leaf の run・段階の統合を起こさない）。`reconcile_tree_units` は子の終端の写しだけ行い、
+     unit の `ready` への引き上げと子の生成をしない。走っている run・子（前の版から持ち越したもの）は止めない。
+   - API の欄には出していない（`GET /tasks/{id}/execution` の `phase = awaiting_plan_approval` と `plan_approval` は従来どおり）。値は
+     `plan_gate_state` で誰でも導ける。
+2. **D2 段階の人の review は次の段階の unit を止める**: `finish_phase_integration` は途中確認（`PausePointsResolved` の工程 = `review: human` /
+   `pause_after`）で止めるときは次の工程の unit を `pending` のまま残す（ADR-0074 D2.2 の字面どおり）。止めないときだけ `ready` に上げる。
+   `human_gate_hold` は task が人の gate（`awaiting_human` / `awaiting_plan_approval`。`plan_gate::is_human_gate`）で止まっている間も `Some`
+   を返すので、既に `ready` の unit も照合が子を作らない。「続ける」（`phase_continue`）の後の最初の dispatch で、`wu_dispatch_gate`（/2・/3）が
+   依存と工程の障壁が満たされた `pending` の unit を `ready` に上げる（`promote_newly_ready`、reason `dependency_ready`）。
+3. **D3 上限超過は人に聞く・人の replan は上限に数えない**:
+   - replan を使い切った後に WU が `failed`（`on_worker_finished` と、兄弟を待った後の `deferred_work_unit_trigger`）は task を `failed` に
+     しない（`replan_exhausted_ask`）。木の節点（木が有効）は `limit:max_replans` の決定（D9 / R2b の `raise_node_replan_limit`、`needed_before:
+     self`）を出して `Continue{advance}`（`ready` に戻り `replan_gate` が決定を待つ `Skip`）。木でない task は `WorkerQuestion`（`blocked`、
+     組織があれば承認の行）で、質問は `plan_gate::REPLAN_EXHAUSTED_QUESTION_PREFIX`「replan の上限を使い切りました」で始まる。**回答は人の
+     replan の依頼**として次の dispatch で planner を起こす（`answered_replan_exhausted`。raise-once と同じ効き目）。やめるなら人が取り下げる
+     （cancel）。進捗なし・continuation 上限・plan_issue の使い切りは元から質問なので変えない。
+   - **`max_replans` に数える replan**（`plan_gate::counted_replans`、以前は版の数 − 1）: 2 版目以降の `ExecutionPlanned` のうち、origin human の
+     版と、人の依頼（`ExecutionHintSet{replan: true}` = decompose・計画の承認の replan・決定への replan の回答、途中確認の `phase_replan`・
+     計画の承認の `plan_replan` の遷移、上限を使い切った後の質問への回答）の後に採用された版を**数えない**。
+   - **人の replan の依頼は常に受ける**: `wu_dispatch_gate` は人の依頼を見たら `replan_gate` を通さず `RunPlanner{replan: true}`（以前は上限を
+     使い切っていると warn だけ残して今の版の unit を進めた）。ADR-0074 D2.4 の「途中確認の replan は `max_replans` に数える」はこれで改める。
+     木の上限（`max_tree_replans` / `max_tree_runs`）は dispatch の `tree_run_limit_hold` が従来どおり見る（人の依頼でも超えれば `kind: limit`）。
+4. **D4 `runs` 索引の回収**: 終端への遷移（`apply_transition_tx`。連鎖の中止も通る）は、その task の `runs` の `running` の行を**同じトランザクション**
+   で閉じる。行を書き換えるのではなく `WorkerFinished{end: Cancelled, outcome: "interrupted: the task reached <status> while this run was still open
+   (runs index closed, ADR-0079 R6-1)", role}` を積む（索引は events の派生。`append_event_tx` の `close_run_row_for_event_tx` が行を閉じ、
+   replay も同じ行を作る）。dispatcher の打ち切り（`close_aborted_run`）は既に `WorkerFinished` のある run には書き足さないので、中止の run の
+   outcome はこの文になる。R6-1 より前に残った行は `TaskStore::close_runs_of_terminal_tasks`（終端の task の `running` の行を task ごとに 1
+   トランザクションで同じ形で閉じる）を dispatcher が起動後の最初の tick と 600 秒ごと（`RUNS_RECONCILE_INTERVAL_SECS`）に呼び、閉じた行を
+   1 行ずつ warn に残す（閉じた行は二度と見つからない = 1 回だけ）。
+5. **D5 承認の材料の子 task の数**（`approval_facts.child_task_units`）: `creates_child()`（`adopt` の unit を除く。検証の
+   `max_child_tasks_per_plan` と同じ）で、かつ done の行を持たない unit だけを数える。
+6. **D6 remote の準備の進行**: `SshWorkspace::take_progress_notes()`（R6-3 の「initialised N submodules in <wt> on cluster <c>」など）を、
+   `run_worker` が sink を作った直後（run の前）に `WorkerProgress` に 1 行ずつ残す（`drain_remote_progress_notes`）。
+7. **D7 統合の失敗の質問の本文**: `integration_gives_up` が replan の余地なしで `WorkerQuestion` にするとき、`QuestionRaised{text: <why>}`
+   （`worker_progress` と同じ「phase <p> の統合後の検査が失敗しました: <失敗した検査の要約>」）を同じトランザクションで積む。受信箱の質問は
+   `WorkerFinished` / `QuestionRaised` から読まれ、統合の失敗は run の終わりではないので空文だった。
+
+### 残したもの
+
+- 前の版から持ち越して**走っている** leaf が、`pending` の版の間に終わって段階の統合の条件を満たした場合、`on_worker_finished` の
+  `PhaseSettle::Integrate` はそのまま統合を始める（planner の run は in-flight の leaf と重ならないので、この形は起きないと見て止めていない）。
+- `pending` の版で `ready` の木の節点（人が replan を求めた後、planner の run の前）は、生存確認（D10）では「走れる」に読まれる。planner の run が
+  すぐ起きるか、2 回不正なら `plan_invalid` の決定（名指しの待ち）になるので、理由なしの止まりは作らない。
+- 子の基盤の失敗の作り直し（`handle_child_infra_failure`）は人の gate の間も起きる（走っていた子の写しの一部として扱った）。

@@ -1,6 +1,6 @@
 # PROGRESS — taskd
 
-現在地: **Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中**。以後の追記は `docs/progress/phase-F.md` へ。
+現在地: **Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続**。以後の追記は `docs/progress/phase-F.md` へ。
 
 詳細な履歴と証跡は下記の分割ファイルを参照。既存の `docs/PROGRESS.md` 参照はこの目次を入口として維持する。
 

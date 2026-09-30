@@ -250,3 +250,17 @@ final review が挙げた 3 件の未達（P3-C の run loop 配線、P3-A/P4-A 
   - P4-B A1/A4: `cargo test -p task-worker --test browser_injection_attacks -- --nocapture`（実 chrome-headless-shell、cross-site OOPIF fixture）→ exit 0、2 passed。出力に `ATTACK-A1-TARGET-CHANGED-OK`（試験 hook で controller 照合後・`Runtime.callFunctionOn` 前の遷移を決定的に発生させ、broker `target_changed`・lease 消費済み・他 origin input 空を確認）と `ATTACK-A4-OOPIF-OK`（実 cross-site OOPIF target で controller・broker 双方 `target_mismatch`、OOPIF input 空）を確認。既存 A0〜A17 の判定は変更なし（`ATTACKS-ALL-DONE`）。
 - A13（別 UID の実 process による `peer_uid_mismatch` 試験）は本 run でも未解決のまま残す。この host は同一 UID のため `unshare -r` の子も host からは同 UID に見え、別 UID の実 process を作れない（別 UID が使える host が必要）。本番 admission（`Attested`、同一 UID host では `SameUid` 拒否）も変更していない。
 - コード変更なし。H3 観測停止・approve_once・短い lease・ADR-0084 D6 の起動前拒否は変更していない。本番昇格・本番設定変更・内部 origin 追加はしていない。
+
+## 統合記録（2026-09-30、task 01M3PAX6RVE7AX8Z6118KADME3、WorkUnit land2）
+
+`land` branch の統合 commit `4d65de6e` をこの worktree に fast-forward で取り込んだ。p4a・p4c・p4b・gaps・closeout の統合 commit は次のとおり。各 SHA と `celeris/01M3SPF94RDWTPWHNDEQD68VB9`、`celeris/01M3SHZGWGKG2VPP0G5DHG92C4`、`4d65de6e` について `git merge-base --is-ancestor <sha> HEAD` を実行し、すべて exit 0 を確認した。
+
+| 子 WorkUnit | 統合 commit | メッセージ |
+| --- | --- | --- |
+| p4a（isolated runtime） | `08022768` | integrate wu/p4a (phase phase-4) |
+| p4c（backend 適合 runner・fallback） | `44eab893` | integrate wu/p4c: resolve merge conflicts (browser.rs attempt-aware session on isolated runtime, docs union) |
+| p4b（stronger injection） | `99d5d0bf` | integrate wu/p4b (phase phase-4-inject) |
+| gaps（celeris/01M3SPF94RDWTPWHNDEQD68VB9） | `ac65208f` | integrate wu/h3-doc-sync (phase h3fix) |
+| closeout（celeris/01M3SHZGWGKG2VPP0G5DHG92C4） | `92126674` | integrate wu/record (phase record) |
+
+追跡表 `phase-browser-acceptance.md` と合わせ、P4-A/B/C は一部達成、別 host UID 実証と本番機密能力解放は名前付き後続 task とする。本番 admission は `Attested` 必須であり、この host の SameUid は引き続き拒否する。P4-A/B/C の行別判定と制約は上記追跡表を正とする。

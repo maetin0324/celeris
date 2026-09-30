@@ -41,14 +41,4 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 
 ## Web GUI Phase 1（完了 2026-09-30、scaffold と gateway）
 
-P1-01〜P1-09 の実装を完了。React SPA の scaffold、型生成・偽 daemon、Express gateway、独立 session と login、JSON・file・SSE 中継を追加した。parity の R40・R41・X6 を完了、R37 は中継まで実装済みで、再接続と invalidate は Phase 2 に残る。auth の改竄 mac テスト（末尾が偶然 'A' だと改竄にならない 1/64 の flaky）を固定文字置換から「元と必ず異なる 1 文字」に直した（`web/server/auth.test.mjs`）。
-
-- 証拠: `node --test web/server/auth.test.mjs` を 20 回連続 → 全 exit 0（flaky 修正の確認）。
-- 証拠: `git diff --quiet ecbd5be19f76 -- . ':!web' ':!docs/web' ':!docs/PROGRESS.md' ':!docs/progress'` → exit 0。
-- 証拠: `corepack pnpm@11.27.0 -C gui test && corepack pnpm@11.27.0 -C gui typecheck && corepack pnpm@11.27.0 -C gui build` → exit 0（vitest 81 ファイル 1222 件 pass、typecheck・build とも成功）。host の pnpm は 12.6.0 だが `corepack pnpm@11.27.0` で `gui/package.json` の固定版のまま実行でき、版合わせの別 task は不要だった。
-- 証拠: `pnpm -C web install --frozen-lockfile && pnpm -C web typecheck && pnpm -C web lint && pnpm -C web test && pnpm -C web build` → exit 0（vitest 5 ファイル 14 件、`node --test server/*.test.mjs` 36 件、すべて pass）。
-- 証拠: `pnpm -C web gen:types --check && pnpm -C web check:boundaries && pnpm -C web check:secrets && pnpm -C web check:parity` → exit 0。
-- 証拠: `pnpm -C web e2e parity/gateway.spec.ts parity/gateway-auth.spec.ts parity/gateway-relay.spec.ts` → 14 件 pass。偽 daemon と gateway は loopback の空き port を使用し、SSE が 60 秒を超えて流れ続け、切断で upstream が abort されることを確認。
-- 証拠: `cargo test --workspace && cargo clippy --workspace -- -D warnings` → exit 0。
-- 未解決: R37 の SSE 再接続・invalidate 表は中継のみで Phase 2 に残る。
-- 提案: Phase 2 で R37 の再接続・invalidate 実装と、V3（画面の共通検査）を揃える。
+P1-01〜P1-09 完了。以後の Web GUI の記録は [progress/phase-web.md](progress/phase-web.md) へ（Phase 1 の証拠・未解決・提案もそこ）。

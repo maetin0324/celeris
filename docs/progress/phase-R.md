@@ -1428,3 +1428,56 @@ config の編集なし）。migration なし。
   `corepack pnpm@11.27.0` で版固定 = pnpm 版合わせの別 task は不要）を planner に渡し ready に。前日の決定「gui の pnpm を 12.6.0 に上げる別 task」は
   corepack 明示で満たすため不要（task も作られていない）。**R6 候補**: planner prompt に統合 check の書き方（PROGRESS 除外、`pnpm test` に引数を付けない、
   corepack で版固定、base は固定 sha より merge-base）を足す。
+
+## R6-1: 人の gate は unit を止める、上限超過は人に聞く、runs 索引の回収（2026-09-30）
+
+ADR-0079 付記「R6-1」。migration なし・新しい Event の型なし。本番（systemctl・/var/lib/celeris・7700/7710・設定）には触れていない。
+build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a50d9a36ba24ad7aa`（ローカル LVM）。
+
+### 実装したもの（欠陥ごと）
+
+- **D1（P-R5b-4）** `task_ops::plan_gate::{PlanGateState, plan_gate_state}`（pending / approved / skipped を events から導く）と dispatcher の
+  `human_gate_hold`: `pending` の版の unit は `wu_dispatch_gate`（leaf・統合）でも `reconcile_tree_units`（`ready` への引き上げ・子の生成）でも
+  起こさない。承認待ちの版に `replan` を求めた後も次の版が承認されるまで止まる。
+  試験: `human_gates::plan_gate_replan_does_not_dispatch_the_unapproved_version`、`an_unapproved_version_stays_parked_while_the_replan_is_pending`、
+  `plan_gate::tests::plan_gate_state_is_derived_from_events`。
+- **D2（P-R5b-5）** `finish_phase_integration` は途中確認で止めるとき次の工程を `pending` のまま残し、人の gate の間は照合が子を作らない。
+  「続ける」の後の dispatch が `promote_newly_ready` で上げる。試験: `human_gates::review_human_stage_holds_the_next_stage_child`
+  （旧試験 `tree::review_human_stage_pauses_after_integration` の `b` の期待を `Ready` → `Pending` に、付記名つきの注記で直した）。
+- **D3** `replan_exhausted_ask`: 木の節点は `limit:max_replans` の決定、木でない task は「replan の上限を使い切りました…」の質問（回答 = 人の
+  replan）。`plan_gate::counted_replans`（人の replan は数えない）を 6 か所の「版の数 − 1」と置き換え、人の replan の依頼は常に planner を起こす。
+  試験: `replan_exhaustion_on_a_non_tree_task_asks_a_human_and_the_answer_replans`、
+  `human_gates::a_tree_node_leaf_failure_after_replans_are_exhausted_raises_the_limit_decision`、`plan_gate::tests::human_origin_replans_are_not_counted`
+  （旧試験 `a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_dependents` は `Failed` → `Blocked` と質問の頭に、注記つきで直した）。
+- **D4** `SqliteStore::apply_transition_tx` が終端への遷移で `running` の runs 行を `WorkerFinished{end: Cancelled}` で閉じる（同じ
+  トランザクション）、`TaskStore::close_runs_of_terminal_tasks` と dispatcher の `reconcile_terminal_runs`（起動後の最初の tick と 600 秒ごと）。
+  試験: `human_gates::runs_index_rows_of_terminal_tasks_are_closed`（旧試験 `a_run_aborted_by_cancel_closes_its_runs_row` の outcome の文を注記つきで更新）。
+- **D5** `approval_facts.child_task_units` は `creates_child()` かつ done でない unit だけ。試験: `human_gates::approval_facts_count_only_units_that_will_create_children`。
+- **D6** `drain_remote_progress_notes`（`take_progress_notes()` を run の前に `WorkerProgress` へ）。試験: `remote_prepare_notes_are_drained_into_worker_progress`。
+- **D7** `integration_gives_up` が質問にするとき `QuestionRaised{text: "phase <p> の統合後の検査が失敗しました: …"}` を積む。
+  試験: `integration_check_failure_without_replans_asks_with_the_failed_checks`（受信箱の `questions[].question` が同じ文）。
+
+### gate（2026-09-30）
+
+- `cargo fmt --all` → 差分なし（実行後）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告 0）。
+- `cargo nextest run -p task-dispatch -p task-ops -p task-core -j 6` → 1368 passed / 0 failed。
+- `cargo nextest run -p task-api -j 6` → 394 passed / 0 failed（2 skipped）。
+- `cargo nextest run -p celeris -p celeris-mcp -p celerisctl -p task-worker -p celeris-credentiald -p llm-proxy -p scratch-cache -j 6` → 1111 passed / 0 failed（5 skipped）。
+- `cargo test --doc --workspace` → すべて ok。
+
+### 逸脱
+
+- `crates/task-core/src/store.rs` を触った（依頼の「task-core は新しい Event の型が要るときだけ」の外）: D4 の「終端の遷移と同じトランザクションで
+  閉じる」は store の `apply_transition_tx` の中でしか満たせないため。Event の型は足さず、既存の `WorkerFinished` で閉じる（replay と整合）。
+  `TaskStore` に `close_runs_of_terminal_tasks` を 1 つ足した（実装は SqliteStore だけ）。
+- ADR-0074 D2.4 の「途中確認の replan は `max_replans` に数える」を D3 で改めた（人の replan は数えない）。ADR-0074 の本文は変えていない
+  （ADR-0079 付記に書いた）。
+- 承認の状態は API の欄に出していない（`plan_gate_state` で導く。GUI / API の表示は従来の `awaiting_plan_approval` のまま）。
+
+### 未解決
+
+- 本番の既存の `running` の行（01M3Q01QC6DQTG8XX62WJDC0M7 など）は、release 後の最初の tick で `reconcile_terminal_runs` が閉じる（warn が 1 行ずつ出る）。
+- `pending` の版の間に持ち越しの leaf が終わって段階の統合の条件を満たす形（起きない見込み）と、人の gate の間の子の基盤の失敗の作り直しは
+  止めていない（付記の「残したもの」）。
+- 木の上限（`max_tree_replans`）は人の replan の依頼にも効く（D3 は節点の `max_replans` だけ）。

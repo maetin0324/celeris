@@ -866,7 +866,9 @@ async fn review_human_stage_pauses_after_integration() {
             .any(|(_, e)| matches!(e, Event::PhaseReported { phase, .. } if phase == "s1"))
     );
     let units = store.work_units_for(root_id).unwrap();
-    assert_eq!(unit(&units, "b").status, task_core::WorkUnitStatus::Ready);
+    // ADR-0079 付記「R6-1」D2: 途中確認の間は次の段階の unit を `ready` に上げない（以前は `ready` にしてから
+    // 止めていた。kind task の unit ならそこから子が作られた: P-R5b-5）。「続ける」の後の dispatch で上げる。
+    assert_eq!(unit(&units, "b").status, task_core::WorkUnitStatus::Pending);
     assert_eq!(unit(&units, "b").runs, 0, "s2 waits for the human");
 
     task_ops::phase_gate::phase_gate(

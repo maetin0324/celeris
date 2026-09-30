@@ -1649,3 +1649,6 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
   corepack 経由で起動した pnpm は既定 12.6.0、gui は 11.27.0 固定）。原因は check の書き方（`corepack pnpm@11.27.0 -C gui …` なら通る。R7-2 の指針、未昇格）。
   根の unit phase-1 failed → 根が replan 中。次の子は前の子のブランチ celeris/01M3QEA4… を merge して引き継ぐこと。R6-1 D4 の効果で、failed と同時に
   stale な reviewer run 3 件が索引で閉じられた。
+- 08:44Z: **R7-1 の本番初回**: BenchFS「Sirius 実験(2)」の子 01M3RM9HP2P6MABRNSB1N1CEHJ が `wait`（sirius、PBS job 42660〜42662、poll 300 s、timeout 24 h、
+  E3 CHFS W1）を書き、daemon が `cluster_job_wait_started` → 2 秒後に `cluster_job_wait_polled`（3 job とも R）を記録。run は枠を離し、task は待ちで止まる。
+  終了時の `cluster_job_wait_finished` と続き run の preamble（job の終了状態）を次に確認する。

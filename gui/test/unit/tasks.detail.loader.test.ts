@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
 import { CelerisError } from "~/celeris/errors";
+import { loadTaskDetail } from "~/celeris/task-detail.server";
 import type {
   ArtifactList,
   CommentList,
@@ -10,7 +11,6 @@ import type {
   Timeline,
   TreeView,
 } from "~/celeris/types";
-import { loadTaskDetail } from "~/routes/tasks.$id";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;

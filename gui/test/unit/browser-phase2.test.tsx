@@ -22,11 +22,11 @@ import {
 import { liveViewRelayAvailable, runLiveViewRoute, setLiveViewRelayForTest } from "~/celeris/browser-live.server";
 import { runCredentialAction, runDecisionAction, runOwnerChallengeAction } from "~/celeris/browser-waits.server";
 import { CelerisClient } from "~/celeris/client.server";
+import { loadTaskDetail } from "~/celeris/task-detail.server";
 import type { BrowserRun, BrowserWait, EventsPage, TaskDetail } from "~/celeris/types";
 import { BrowserWaitsPanel } from "~/components/BrowserWaitsPanel";
 import { redactLiveViewUrls } from "~/lib/browser";
 import { redactLiveViewStream } from "~/routes/events";
-import { loadTaskDetail } from "~/routes/tasks.$id";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 // ADR-0080 D5（登録依頼・承認）/ D6（Live View は本人の session だけ）。

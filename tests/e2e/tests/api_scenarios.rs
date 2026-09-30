@@ -992,6 +992,8 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
     assert_eq!(list["items"][1]["forbidden"], true, "{list}");
     env.get(&format!("/tasks/{id}/runs/not-a-ulid/stdout"))
         .assert_problem(403, "path_forbidden");
+    // replay は tasks と events を別々に読むので、dispatch 中の celeris と競合しないよう止めてから比べる。
+    drop(daemon);
     env.replay_is_consistent();
 }
 

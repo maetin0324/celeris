@@ -33,13 +33,31 @@ struct Env {
     db: PathBuf,
 }
 
+/// 既定の `lease_grace_secs`（heartbeat の新しさの窓は `3 × tick + lease_grace` = 4.3 秒）。
+const DEFAULT_LEASE_GRACE_SECS: u64 = 4;
+/// 種として手で置いた `active` 行（heartbeat を打たない）を、新しいインスタンスの起動中ずっと
+/// 「新しい」とみなすための `lease_grace_secs`。既定の 4 秒だと `cargo test --workspace` の負荷下で
+/// celeris の起動（コンテナ runtime 検出など）が 10 秒を超えることがあり、種の行が「死んだ」と
+/// 判定されて二重起動検出（exit 3）や standby の経路を通らなかった。早く進めば早く抜けるので
+/// 通常の所要時間は変わらない（(e) だけは種の行が古くなるまでこの秒数を待つ）。
+const SEEDED_LEASE_GRACE_SECS: u64 = 60;
+
 impl Env {
     fn new() -> Self {
         Self::with_extra("")
     }
 
     fn with_extra(extra: &str) -> Self {
-        Self::with_body(&format!(
+        Self::with_body(&Self::fake_body(extra))
+    }
+
+    /// 偽のアダプタ 1 つの土台に、`lease_grace_secs` だけ既定より広い値を入れた環境。
+    fn with_lease_grace(lease_grace_secs: u64) -> Self {
+        Self::with_body_and_grace(&Self::fake_body(""), lease_grace_secs)
+    }
+
+    fn fake_body(extra: &str) -> String {
+        format!(
             r#"
 [adapters.fake]
 command = ["sh", "-c", '{SLOW_FAKE}']
@@ -49,12 +67,16 @@ id = "p1"
 adapter = "fake"
 {extra}
 "#
-        ))
+        )
     }
 
     /// 共通の土台（`db` / `workspace_root` / tick など）に `body` を足した設定で環境を作る。
     /// `body` にプロバイダを書かなければ「偽のアダプタが 1 つも無い設定」になる（ADR-0041 D5 のテスト用）。
     fn with_body(body: &str) -> Self {
+        Self::with_body_and_grace(body, DEFAULT_LEASE_GRACE_SECS)
+    }
+
+    fn with_body_and_grace(body: &str, lease_grace_secs: u64) -> Self {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let root = dir.path().to_path_buf();
         std::fs::create_dir_all(root.join("ws")).unwrap_or_else(|e| panic!("ws: {e}"));
@@ -67,7 +89,7 @@ db = "celeris.sqlite3"
 workspace_root = "ws"
 tick_ms = 100
 max_concurrency = 2
-lease_grace_secs = 4
+lease_grace_secs = {lease_grace_secs}
 idle_timeout_secs = 30
 kill_grace_secs = 1
 
@@ -547,7 +569,7 @@ tiers = ["standard"]
 /// (e) `active` の heartbeat が止まれば `standby` が `active` になる（旧の行も消える）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stale_heartbeat_promotes_the_standby() {
-    let env = Env::new();
+    let env = Env::with_lease_grace(SEEDED_LEASE_GRACE_SECS);
     let store = env.store();
     // 「生きているが heartbeat を打たない active」を手で置く（pid はこのテストプロセス自身なので
     // `pid_alive` は真になり、standby になる経路を通る）。
@@ -565,11 +587,15 @@ async fn a_stale_heartbeat_promotes_the_standby() {
         })
         .unwrap_or_else(|e| panic!("register: {e}"));
 
-    let new = tokio::spawn(celeris::run(env.config(), options("fresh", 200, false)));
+    // `ghost` が古くなる（SEEDED_LEASE_GRACE_SECS 秒）まで tick を続けられる回数にする（最後に abort する）。
+    let new = tokio::spawn(celeris::run(env.config(), options("fresh", 4000, false)));
     // 最初は standby（`ghost` の heartbeat がまだ新しい）。
     assert!(
-        wait_until(Duration::from_secs(5), || role_of(&store, "fresh")
-            == Some(InstanceRole::Standby))
+        wait_until(Duration::from_secs(SEEDED_LEASE_GRACE_SECS), || role_of(
+            &store, "fresh"
+        ) == Some(
+            InstanceRole::Standby
+        ))
         .await,
         "新しいインスタンスが standby にならない"
     );
@@ -583,10 +609,12 @@ async fn a_stale_heartbeat_promotes_the_standby() {
             .is_some(),
         "standby は active に引き継ぎを要求する"
     );
-    // `ghost` は heartbeat を打たないので、3 × tick + lease_grace（= 4.3 秒）で古くなる。
+    // `ghost` は heartbeat を打たないので、3 × tick + lease_grace（≈ SEEDED_LEASE_GRACE_SECS 秒）で古くなる。
     assert!(
-        wait_until(Duration::from_secs(15), || role_of(&store, "fresh")
-            == Some(InstanceRole::Active))
+        wait_until(
+            Duration::from_secs(SEEDED_LEASE_GRACE_SECS + 60),
+            || role_of(&store, "fresh") == Some(InstanceRole::Active)
+        )
         .await,
         "heartbeat が止まった active を置き換えられない"
     );
@@ -604,7 +632,8 @@ async fn a_stale_heartbeat_promotes_the_standby() {
 /// (d) 同じ `release` の二重起動は exit 3（バイナリで確かめる）。違う `release` なら standby として上がる。
 #[test]
 fn starting_the_same_release_twice_exits_three() {
-    let env = Env::new();
+    // 種の `active` 行は heartbeat を打たないので、バイナリの起動が終わるまで新しいままにする。
+    let env = Env::with_lease_grace(SEEDED_LEASE_GRACE_SECS);
     let store = env.store();
     let now = OffsetDateTime::now_utc();
     store

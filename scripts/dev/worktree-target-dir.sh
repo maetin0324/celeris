@@ -5,7 +5,7 @@
 #   コマンドのときだけ同じことをする。常に exit 0（ブロックしない）。
 # 家訓: ~/.cargo/config.toml「ビルドごとに CARGO_TARGET_DIR を明示（ローカル LVM）」。CARGO_TARGET_DIR 環境変数があればそれが優先される。
 set -u
-BASE_DIR="${CELERIS_BUILD_CACHE:-/var/lib/celeris/build-cache/cargo}"
+BASE_DIR="${CELERIS_BUILD_CACHE:-/var/tmp/agent-platform-build}"
 log(){ [ -n "${WORKTREE_TARGET_DIR_QUIET:-}" ] || echo "[worktree-target-dir] $*" >&2; }
 
 dir="${PWD}"

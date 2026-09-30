@@ -385,3 +385,177 @@ test("parity: /projects/:id 全 intent・計画・木", async ({ page }) => {
     await h.close(gateway);
   }
 });
+
+// P4-06: document fixtures and mutations stay in this describe to avoid parallel fixture edits.
+test.describe("P4-06 docs", () => {
+  const tree = {
+    project_id: "P1",
+    repo: "demo",
+    root: "docs",
+    default_branch: "main",
+    truncated: false,
+    items: [{ path: "docs/readme.md", title: "案内" }],
+  };
+  const pageFixture = {
+    project_id: "P1",
+    repo: "demo",
+    root: "docs",
+    default_branch: "main",
+    path: "docs/readme.md",
+    title: "案内",
+    raw: "# 案内\n\n元の文章",
+    html: "",
+    history: [],
+    too_large: false,
+    etag: "v1",
+  };
+  test("parity: /projects/:id/docs 初期化・保存・削除", async ({ page }) => {
+    const h = harness({ "/api/v1/projects/P1/docs": tree, "/api/v1/projects/P1/docs/page": pageFixture });
+    const gateway = await h.start();
+    const methods: string[] = [];
+    await page.route("**/api/projects/P1/docs/**", async (route) => {
+      if (route.request().method() === "GET") return route.fallback();
+      methods.push(route.request().method());
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          path: "docs/readme.md",
+          deleted: route.request().method() === "DELETE",
+          unchanged: false,
+          project_id: "P1",
+          repo: "demo",
+          sha: "v2",
+        }),
+      });
+    });
+    try {
+      await page.goto(`${gateway.base}/projects/P1/docs?path=docs%2Freadme.md&edit=1`);
+      const editor = page.getByTestId("docs-editor");
+      await expect(editor).toBeVisible();
+      await expect(editor.getByLabel("Markdown")).toHaveValue("# 案内\n\n元の文章");
+      await editor.getByLabel("Markdown").fill("# 案内\n\n編集中の文");
+      h.daemon.sendEvent("project.event", { project_id: "P1", event: { type: "project_updated" } });
+      await page.waitForTimeout(300);
+      await expect(editor.getByLabel("Markdown")).toHaveValue("# 案内\n\n編集中の文");
+      expect(await editor.getByLabel("Markdown").evaluate((el) => el.getBoundingClientRect().right <= innerWidth)).toBe(
+        true,
+      );
+      await editor.getByRole("button", { name: "保存" }).click();
+      await expect(editor.getByRole("status").filter({ hasText: "操作が完了しました" })).toBeVisible();
+      await page.getByRole("link", { name: "案内" }).click();
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.getByRole("button", { name: "削除" }).click();
+      expect(methods).toEqual(["PUT", "DELETE"]);
+    } finally {
+      await h.close(gateway);
+    }
+  });
+  test("docs_unavailable から初期化する", async ({ page }) => {
+    const h = harness({});
+    const gateway = await h.start();
+    let initialized = false;
+    await page.route("**/api/projects/P1/docs", async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "docs_unavailable" }),
+      });
+    });
+    await page.route("**/api/projects/P1/docs/init", async (route) => {
+      initialized = true;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          project_id: "P1",
+          repo: "demo",
+          root: "docs",
+          default_branch: "main",
+          path: "/tmp/demo",
+          created: true,
+        }),
+      });
+    });
+    try {
+      await page.goto(`${gateway.base}/projects/P1/docs`);
+      await page.getByRole("button", { name: "文書を用意する" }).click();
+      await expect(page.getByRole("status").filter({ hasText: "操作が完了しました" })).toBeVisible();
+      expect(initialized).toBe(true);
+    } finally {
+      await h.close(gateway);
+    }
+  });
+  test("parity: /projects/:id/docs/maintenance 起動と結果", async ({ page }) => {
+    const h = harness({
+      "/api/v1/projects/P1/docs/maintenance": {
+        audit: { count: 1 },
+        proposal: { actions: [] },
+        policy: { mode: "observe" },
+      },
+    });
+    const gateway = await h.start();
+    await page.route("**/api/projects/P1/docs/maintenance", async (route) => {
+      if (route.request().method() === "GET") return route.fallback();
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ task_id: "T1", op: route.request().postDataJSON()?.op }),
+      });
+    });
+    try {
+      await page.goto(`${gateway.base}/projects/P1/docs/maintenance`);
+      await expect(page.getByTestId("docs-maintenance")).toBeVisible();
+      await page.getByRole("button", { name: "監査結果を保存" }).click();
+      await expect(page.getByRole("link", { name: "結果のタスクを開く" })).toHaveAttribute("href", "/tasks/T1");
+    } finally {
+      await h.close(gateway);
+    }
+  });
+});
+
+test.describe("P4-07 board", () => {
+  test("parity: /board 列・URL 絞り込み・編集・復帰", async ({ page }) => {
+    const calls: string[] = [];
+    const items = ["ready", "running", "blocked", "done", "failed", "cancelled"].map((status, i) => ({
+      ...task(`T${i + 1}`, `カード ${i + 1}`),
+      actions: ["edit"],
+      status,
+      project_id: "P1",
+    }));
+    const h = harness({
+      "/api/v1/projects": { items: [project("P1", "一件目")] },
+      "/api/v1/tasks": (url: URL) => {
+        calls.push(url.search);
+        return { items, total: 6, next_cursor: null, counts_by_status: {} };
+      },
+    });
+    const gateway = await h.start();
+    let editBody: unknown = null;
+    await page.route("**/api/tasks/T1", async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      editBody = route.request().postDataJSON();
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ task: items[0], fields: ["priority"] }),
+      });
+    });
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${gateway.base}/board?project=P1`);
+      await expect(page.locator("[data-board-column]")).toHaveCount(6);
+      await expect(page.locator("[data-task-id]")).toHaveCount(6);
+      expect(await page.getByTestId("board-scroll-frame").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.getByLabel("検索").fill("カード");
+      await page.getByRole("button", { name: "絞り込む" }).click();
+      await expect(page).toHaveURL(/project=P1.*q=/);
+      expect(calls.some((q) => q.includes("project=P1") && q.includes("q="))).toBe(true);
+      await page.locator("[data-task-id='T1']").getByLabel("優先度").selectOption("P0");
+      await page.locator("[data-task-id='T1'] button").click();
+      await expect(page.locator("[data-task-id='T1'] [role=status]")).toBeVisible();
+      expect(editBody).toMatchObject({ priority: "P0", expected_status: "ready" });
+      await page.goBack();
+      await expect(page).toHaveURL(/project=P1/);
+    } finally {
+      await h.close(gateway);
+    }
+  });
+});

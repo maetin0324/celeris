@@ -9,6 +9,7 @@
     "api/**/*",
     "lib/**/*",
     "e2e/parity/realtime.spec.ts",
+    "e2e/parity/console.spec.ts",
     "e2e/support/node-event-source.ts"
   ],
   "compilerOptions": {

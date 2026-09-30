@@ -8,6 +8,8 @@ export default defineConfig({
       "test/**/*.test.ts",
       "test/**/*.test.tsx",
       "lib/**/*.test.ts",
+      "features/**/*.test.ts",
+      "features/**/*.test.tsx",
       "api/**/*.test.ts",
       "components/**/*.test.ts",
       "components/**/*.test.tsx",

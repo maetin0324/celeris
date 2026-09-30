@@ -1644,3 +1644,8 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
   full / chfs-4node（推奨）/ drop-c3）。論文の主張範囲（C3）に関わる研究判断なので人へ。
 - 08:18Z: リファクタ retry の子の replan v9 で `leaf_too_large` 決定 ×2（resolve-conflicts-1、verify-merge-1。深さ上限で子 task にできない）→ run-as-leaf で回答。
   **表示の欠陥**: 決定文が「score 7 ≥ 閾値 11」（7 は 11 以上ではない）と出る。leaf_too_large の文言が gate の score / threshold の意味を取り違えている（R7 候補）。
+- 08:20Z: web Phase 1 の子 01M3QEA4HC12TFCNDG5A7WT722 が最終 review で **failed**。web/ の検証は全部 pass（test 36/36、e2e parity、build、boundaries / secrets / parity
+  check、workspace test / clippy）。落ちたのは task 受け入れ条件 0 の `pnpm -C gui test`（root planner が書いた）が `ERR_PNPM_BAD_PM_VERSION`（repo 直下から
+  corepack 経由で起動した pnpm は既定 12.6.0、gui は 11.27.0 固定）。原因は check の書き方（`corepack pnpm@11.27.0 -C gui …` なら通る。R7-2 の指針、未昇格）。
+  根の unit phase-1 failed → 根が replan 中。次の子は前の子のブランチ celeris/01M3QEA4… を merge して引き継ぐこと。R6-1 D4 の効果で、failed と同時に
+  stale な reviewer run 3 件が索引で閉じられた。

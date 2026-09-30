@@ -62,6 +62,25 @@ fn browser_install_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
+/// The Playwright chrome-headless-shell that the sandbox starts for the controller.
+fn shared_browser_executable(dirs: &[PathBuf]) -> Option<PathBuf> {
+    let mut found: Vec<_> = dirs
+        .iter()
+        .map(|d| d.join("chrome-headless-shell-linux64/chrome-headless-shell"))
+        .filter(|p| p.is_file())
+        .collect();
+    found.sort();
+    found.pop()
+}
+
+/// 256-bit capability for the sandbox's CDP endpoint (never logged).
+fn relay_token() -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 fn resolve_executable(executable: &Path) -> std::io::Result<PathBuf> {
     if executable.components().count() > 1 || executable.is_absolute() {
         return executable.canonicalize();
@@ -974,12 +993,20 @@ async fn run_with_executable_attempt(
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let browser_dirs = browser_install_dirs();
     let browser_cache = browser_dirs.first().and_then(|p| p.parent());
+    // The controller owns the only Chromium; agent-browser attaches to it via the relay.
+    let chrome = shared_browser_executable(&browser_dirs)
+        .ok_or_else(|| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let relay_token = relay_token()?;
     write_private(
         &runtime.join("action-config.json"),
         serde_json::to_vec(&serde_json::json!({
             "executable":real_executable, "session_id":session,
             "allowed_domains":policy.allowed_domains(),
             "browser_cache":browser_cache,
+            "cdp_endpoint":format!(
+                "ws://127.0.0.1:{}/{relay_token}",
+                crate::browser_shared_cdp::RELAY_PORT
+            ),
         }))?,
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
@@ -1012,10 +1039,12 @@ async fn run_with_executable_attempt(
         ro_dirs,
         argv: vec![
             isolation.sandboxd.clone().into_os_string(),
+            "--shared-cdp".into(),
+            chrome.into_os_string(),
             "python3".into(),
             "/session/browser_action.py".into(),
         ],
-        cdp_pipe: false,
+        cdp_pipe: true,
         egress: Some(crate::browser_runtime::EgressRelay {
             proxy: isolation.egress.clone(),
             policy: serde_json::to_vec(&egress_policy)?,
@@ -1025,8 +1054,26 @@ async fn run_with_executable_attempt(
     let mut supervisor_opts =
         crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir);
     supervisor_opts.registry = isolation.live_sessions.clone();
-    let supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
+    let mut supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let (Some(cdp_write), Some(cdp_read)) =
+        (supervisor.cdp_write.take(), supervisor.cdp_read.take())
+    else {
+        supervisor.stop();
+        return Err(AdapterError::Other("isolated_runtime_unavailable".into()));
+    };
+    let shared_cdp = match crate::browser_shared_cdp::SharedCdp::start(
+        crate::browser_cdp_sink::CdpController::new(cdp_write, cdp_read),
+        &runtime.join("cdp-relay.sock"),
+        relay_token,
+        policy.allowed_domains().to_vec(),
+    ) {
+        Ok(shared) => shared,
+        Err(_) => {
+            supervisor.stop();
+            return Err(AdapterError::Other("isolated_runtime_unavailable".into()));
+        }
+    };
     let version = action_request(&action_socket, "__version__", &[], None)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     if version.0 != 0 || version.1.trim() != format!("agent-browser {SUPPORTED_VERSION}") {
@@ -1243,6 +1290,7 @@ async fn run_with_executable_attempt(
     };
     sink.browser_updated(&browser);
     drop(action_server);
+    drop(shared_cdp);
     supervisor.stop();
     outcome
 }

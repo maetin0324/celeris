@@ -1648,7 +1648,7 @@ if action[0] == 'open':
         '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking',
         '--disable-component-update', '--no-first-run', '--ignore-certificate-errors',
         '--proxy-server=http://127.0.0.1:3128', '--proxy-bypass-list=<-loopback>',
-        '--user-data-dir=/session/profile', '--dump-dom', action[1]],
+        '--user-data-dir=/session/fixture-profile', '--dump-dom', action[1]],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=35)
     ok = b'celeris-action-fixture-9581' in browser.stdout
     if ok:

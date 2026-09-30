@@ -9,7 +9,8 @@ for (const screen of v3Screens()) {
   test(`S4 ${screen.path}: axe serious/critical, name, structure and focus`, async ({ page }) => {
     const gateway = await startGateway();
     try {
-      await page.goto(gateway.base);
+      // 現在地と同じ link は遷移しないので、"/" は別の画面から始める。
+      await page.goto(screen.path === "/" ? `${gateway.base}/help` : gateway.base);
       const nav = page.getByRole("navigation", { name: "主要" });
       await expect(nav).toBeAttached();
       const link = nav.getByRole("link", { name: screen.heading });

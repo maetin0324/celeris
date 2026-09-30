@@ -326,6 +326,14 @@ fn same_uid_only(facts: &RuntimeFacts) -> Result<(), InjectCode> {
     match verify_isolation(facts) {
         Ok(_) => Ok(()),
         Err(v) if v == [IsolationViolation::SameUid] => Ok(()),
+        // Some CI workers run the entire nested user namespace as host root.
+        // This exception exists only in the test feature; Attested is unchanged.
+        Err(v)
+            if unsafe { libc::geteuid() } == 0
+                && v == [IsolationViolation::RootUid, IsolationViolation::SameUid] =>
+        {
+            Ok(())
+        }
         Err(_) => Err(InjectCode::IsolationRequired),
     }
 }
@@ -454,7 +462,13 @@ fn cdp_frame(req: &InjectionRequest, origin: &str, value: &str) -> Result<Vec<u8
     if let (Some(sid), Some(o)) = (&req.cdp_session_id, frame.as_object_mut()) {
         o.insert("sessionId".into(), sid.clone().into());
     }
-    let bytes = serde_json::to_vec(&frame).map_err(|_| InjectCode::SinkFailed);
+    let bytes = serde_json::to_vec(&frame)
+        .map(|mut bytes| {
+            // Chrome's remote-debugging-pipe uses NUL-delimited JSON messages.
+            bytes.push(0);
+            bytes
+        })
+        .map_err(|_| InjectCode::SinkFailed);
     // serde_json::Value の中の秘密の写しを消す。
     if let Some(args) = frame
         .pointer_mut("/params/arguments/3/value")

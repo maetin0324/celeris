@@ -12,6 +12,11 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use celeris_credentiald::injection_ipc::{
+    AuthSectionRegistration, Field, InjectionReply, InjectionRequest as WireRequest,
+    LiveSessionRegistration,
+};
+use celeris_credentiald::ipc;
 use serde_json::{Value, json};
 use url::Url;
 use zeroize::Zeroize;
@@ -30,6 +35,7 @@ pub enum InjectionError {
     RedisplayField,
     TargetChanged,
     SinkFailed,
+    BrokerRejected(&'static str),
 }
 
 impl InjectionError {
@@ -42,10 +48,13 @@ impl InjectionError {
             Self::RedisplayField => "redisplay_field",
             Self::TargetChanged => "target_changed",
             Self::SinkFailed => "sink_failed",
+            Self::BrokerRejected(code) => code,
         }
     }
 }
 
+/// Controller-side target intent. This is resolved against live CDP state;
+/// the serialized IPC request uses credentiald's shared `WireRequest` type.
 #[derive(Debug, Clone)]
 pub struct InjectionRequest {
     pub request_id: String,
@@ -87,6 +96,59 @@ impl UnixInjectionClient {
     pub fn new(socket: PathBuf) -> Self {
         Self { socket }
     }
+
+    fn control(&self, request: Value) -> Result<(), InjectionError> {
+        self.check_socket()?;
+        let path = self.socket.with_file_name("control.sock");
+        let bytes = serde_json::to_vec(&request).map_err(|_| InjectionError::SinkFailed)?;
+        let reply = ipc::call(&path, &bytes).map_err(|_| InjectionError::SinkFailed)?;
+        if reply.success {
+            Ok(())
+        } else {
+            let code = json!({"code":reply.code});
+            Err(broker_denial(&code))
+        }
+    }
+
+    fn check_socket(&self) -> Result<(), InjectionError> {
+        if self.socket.file_name().is_some_and(|name| name == "injection.sock") {
+            Ok(())
+        } else {
+            Err(InjectionError::SinkFailed)
+        }
+    }
+
+    pub fn register_live_session(
+        &self,
+        registration: LiveSessionRegistration,
+    ) -> Result<(), InjectionError> {
+        self.control(json!({"op":"register_live_session","session_id":registration.session_id,
+            "controller_pid":registration.controller_pid,"controller_start":registration.controller_start,
+            "runtime_pid":registration.runtime_pid,"runtime_start":registration.runtime_start}))
+    }
+
+    pub fn open_auth_section(
+        &self,
+        section: AuthSectionRegistration,
+    ) -> Result<(), InjectionError> {
+        self.control(
+            json!({"op":"open_auth_section","session_id":section.session_id,
+            "auth_section_id":section.auth_section_id,"lease_id":section.lease_id,
+            "exact_origin":section.exact_origin,"cdp_target_id":section.cdp_target_id}),
+        )
+    }
+
+    pub fn close_auth_section(
+        &self,
+        session_id: &str,
+        auth_section_id: &str,
+    ) -> Result<(), InjectionError> {
+        self.control(json!({"op":"close_auth_section","session_id":session_id,"auth_section_id":auth_section_id}))
+    }
+
+    pub fn unregister_live_session(&self, session_id: &str) -> Result<(), InjectionError> {
+        self.control(json!({"op":"unregister_live_session","session_id":session_id}))
+    }
 }
 
 struct UnixPending(UnixStream);
@@ -117,6 +179,7 @@ impl BrokerClient for UnixInjectionClient {
         request: Value,
         sink: OwnedFd,
     ) -> Result<Box<dyn PendingInjection>, InjectionError> {
+        self.check_socket()?;
         let stream = UnixStream::connect(&self.socket).map_err(|_| InjectionError::SinkFailed)?;
         stream
             .set_read_timeout(Some(TIMEOUT))
@@ -318,19 +381,41 @@ impl CdpController {
             .ok_or(InjectionError::SinkFailed)?;
         let (controller_fd, broker_fd) =
             browser_relay::seqpacket_pair().map_err(|_| InjectionError::SinkFailed)?;
-        let wire = json!({
-            "v":1,"request_id":request.request_id,"session_id":request.session_id,
-            "cdp_target_id":request.cdp_target_id,"frame_id":request.frame_id,
-            "cdp_session_id":cdp_session,
-            "loader_id":request.loader_id,
-            "frame_chain":chain.iter().filter_map(|f| origin(f["url"].as_str())).collect::<Vec<_>>(),
-            "redirect_chain":request.redirect_chain,"selector":request.selector,
-            "object_id":object_id,"field":request.field,"input_type":input_type,
-            "auth_section_id":request.auth_section_id,"lease_id":request.lease_id,
-            "cdp_command_id":command_id
-        });
+        let field = match request.field.as_str() {
+            "password" => Field::Password,
+            "username" => Field::Username,
+            _ => return Err(InjectionError::RedisplayField),
+        };
+        let wire = serde_json::to_value(WireRequest {
+            v: 1,
+            request_id: request.request_id.clone(),
+            session_id: request.session_id.clone(),
+            cdp_target_id: request.cdp_target_id.clone(),
+            cdp_session_id: Some(cdp_session.to_owned()),
+            frame_id: request.frame_id.clone(),
+            loader_id: request.loader_id.clone(),
+            frame_chain: chain
+                .iter()
+                .filter_map(|f| origin(f["url"].as_str()))
+                .collect(),
+            redirect_chain: request.redirect_chain.clone(),
+            selector: request.selector.clone(),
+            object_id: object_id.to_owned(),
+            field,
+            input_type: input_type.to_owned(),
+            auth_section_id: request.auth_section_id.clone(),
+            lease_id: request.lease_id.clone(),
+            cdp_command_id: command_id,
+        })
+        .map_err(|_| InjectionError::SinkFailed)?;
         let pending = broker.start(wire, broker_fd)?;
-        let mut command = recv_packet(&controller_fd)?;
+        let mut command = match recv_packet(&controller_fd) {
+            Ok(command) => command,
+            Err(_) => {
+                let reply = pending.finish()?;
+                return Err(broker_denial(&reply));
+            }
+        };
         if command.last() != Some(&0) || command.len() > MAX_FRAME {
             command.zeroize();
             return Err(InjectionError::SinkFailed);
@@ -350,7 +435,17 @@ impl CdpController {
         raw.zeroize();
         status?;
         let receipt = pending.finish()?;
-        if receipt["ok"] != true
+        let typed: InjectionReply =
+            serde_json::from_value(receipt.clone()).map_err(|_| InjectionError::SinkFailed)?;
+        if typed.v != 1 {
+            return Err(InjectionError::SinkFailed);
+        }
+        if !typed.ok {
+            return Err(broker_denial(&receipt));
+        }
+        if typed.code.is_some()
+            || typed.receipt.is_none()
+            || receipt["ok"] != true
             || receipt["request_id"] != request.request_id
             || receipt["receipt"]["lease_id"] != request.lease_id
             || receipt["receipt"]["auth_section_id"] != request.auth_section_id
@@ -447,6 +542,35 @@ impl CdpController {
             chunk.zeroize();
         }
     }
+}
+
+fn broker_denial(reply: &Value) -> InjectionError {
+    // Only the broker's fixed ADR-0089 vocabulary may cross this boundary.
+    let code = match reply["code"].as_str() {
+        Some("invalid_request") => "invalid_request",
+        Some("unsupported_version") => "unsupported_version",
+        Some("peer_uid_mismatch") => "peer_uid_mismatch",
+        Some("injection_worker_not_allowed") => "injection_worker_not_allowed",
+        Some("session_not_live") => "session_not_live",
+        Some("isolation_required") => "isolation_required",
+        Some("target_mismatch") => "target_mismatch",
+        Some("empty_frame_chain") => "empty_frame_chain",
+        Some("cross_origin_frame") => "cross_origin_frame",
+        Some("redirected") => "redirected",
+        Some("redisplay_field") => "redisplay_field",
+        Some("auth_section_required") => "auth_section_required",
+        Some("auth_section_mismatch") => "auth_section_mismatch",
+        Some("lease_expired") => "lease_expired",
+        Some("lease_used") => "lease_used",
+        Some("other_session") => "other_session",
+        Some("lease_invalid") => "lease_invalid",
+        Some("audit_unavailable") => "audit_unavailable",
+        Some("provider_failed") => "provider_failed",
+        Some("target_changed") => "target_changed",
+        Some("sink_failed") => "sink_failed",
+        _ => return InjectionError::SinkFailed,
+    };
+    InjectionError::BrokerRejected(code)
 }
 
 fn origin(url: Option<&str>) -> Option<String> {

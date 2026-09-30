@@ -25,6 +25,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | ワークスペース（案件×リポジトリ） | task-core::repos | `crates/task-core/src/repos.rs`, `crates/task-core/src/store/repos.rs` | [ADR-0043](adr/0043-workspaces.md) |
 | モデル/供給層ルーティング・quota | task-core | `crates/task-core/src/{routing,model_routing,model_policy,quota}.rs` | [ADR-0069](adr/0069-routing-four-layers.md) |
 | 知識ベースの置き場 | task-core::knowledge | `crates/task-core/src/knowledge.rs`（`knowledge/layout.rs`） | [ADR-0068](adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
+| クラスタ job の durable wait（PBS/Slurm の状態解釈） | task-core::cluster_job | `crates/task-core/src/cluster_job.rs`, `crates/task-core/migrations/0034_cluster_job_waits.sql`（schema 34）, `crates/task-core/src/store/{events,transition,task_store}.rs` | [ADR-0090](adr/0090-durable-wait-for-cluster-jobs.md) |
 
 ## task-dispatch — Dispatcher（facade + 責務別子モジュール、LLM 呼び出しなし）
 
@@ -38,6 +39,9 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | worker 起動・完了処理 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{worker_task,worker_finish}.rs` | [DESIGN §5.3](DESIGN.md#53-worker-protocol-task-worker) |
 | planner/reviewer の起動・判定 | task-dispatch | `crates/task-dispatch/src/{dispatcher/planner_flow.rs,dispatcher/review_spawn.rs,dispatcher/review_verdict.rs,review.rs}` | [ADR-0076](adr/0076-planner-reviewer-quota-roles.md) |
 | cluster/ssh master・接続監視 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/cluster.rs` | [ADR-0018](adr/0018-remote-clusters-over-ssh.md) |
+| クラスタ job の poll・再開（`qstat -xf`/`sacct`） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/cluster_job_wait.rs` | [ADR-0090](adr/0090-durable-wait-for-cluster-jobs.md) |
+| CoS run の並列度の例外（`is_cos_run`） | task-dispatch::capacity | `crates/task-dispatch/src/capacity.rs` | [ADR-0089](adr/0089-cos-runs-bypass-concurrency.md) |
+| run 途中のイベントの sink（worker/Reviewer） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/sinks.rs` | [ADR-0082](adr/0082-dispatcher-module-split.md) |
 | scratch/disk guard の後片付け | task-dispatch | `crates/task-dispatch/src/{dispatcher/housekeeping.rs,scratch_gc.rs}` | [ADR-0075](adr/0075-tiered-build-cache.md) |
 | 工程統合・途中報告 | task-dispatch | `crates/task-dispatch/src/{dispatcher/phase_integration.rs,checkpoint.rs,reports.rs}` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
 | 孤児run の回収・承認・policy | task-dispatch | `crates/task-dispatch/src/{orphan,approvals,policy,sessions,undeclared_artifacts}.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |
@@ -50,7 +54,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | Adapter 選択 | task-worker::adapter | `crates/task-worker/src/adapter.rs` | [DESIGN §5.4](DESIGN.md#54-adapters) |
 | Claude Code adapter（CLI起動 + prompt） | task-worker::claude_code | `crates/task-worker/src/claude_code.rs`（`claude_code/prompt.rs`） | [DESIGN §5.4](DESIGN.md#54-adapters) |
 | Codex / ACP adapter | task-worker | `crates/task-worker/src/{codex,acp}.rs` | [DESIGN §5.4](DESIGN.md#54-adapters), [Phase 6 記録](progress/phase-001-050.md) |
-| PaperQA2 / Local Deep Research adapter | task-worker | `crates/task-worker/src/{paperqa,local_deep_research}.rs` | [DESIGN §5.4](DESIGN.md#54-adapters) |
+| PaperQA2 / Local Deep Research adapter | task-worker | `crates/task-worker/src/{paperqa,local_deep_research}.rs`（`paperqa/render.rs`） | [DESIGN §5.4](DESIGN.md#54-adapters) |
 | Browser capability（policy/credential 越境） | task-worker::browser | `crates/task-worker/src/browser{,_credential,_policy}.rs` | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
 | scratch/build cache（GC は別責務） | task-worker | `crates/task-worker/src/{scratch.rs,scratch/gc.rs,build_cache.rs,tiered.rs}` | [ADR-0075](adr/0075-tiered-build-cache.md) |
 | ワークスペース/worktree 準備 | task-worker | `crates/task-worker/src/{workspace.rs,local_worktree.rs}` | [ADR-0043](adr/0043-workspaces.md) |

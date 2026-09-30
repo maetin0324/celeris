@@ -128,8 +128,8 @@ impl WorkerAdapter for ClaudeCodeAdapter {
 
 // プロンプト文面と子プロセスの実行・結果処理は別の変更境界。
 mod prompt;
-pub use prompt::build_prompt;
 pub use prompt::CLUSTER_JOB_PLANNER_GUIDANCE;
+pub use prompt::build_prompt;
 pub(crate) use prompt::work_dir_note;
 #[cfg(test)]
 use prompt::{

@@ -993,78 +993,78 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
     }
 }
 
-    /// ADR-0090 D1: `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` が `Terminal::Waiting` になり、
-    /// 生の JSONL の `result.json`（run ディレクトリ）にも `{"type":"wait",...}` の 1 行が残る。不正な wait は
-    /// `Error{retryable: true}`、`question` は wait より優先する。
-    #[tokio::test]
-    async fn result_wait_becomes_terminal_waiting() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = stub_claude(
-            dir.path(),
-            r#"mkdir -p artifacts
+/// ADR-0090 D1: `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` が `Terminal::Waiting` になり、
+/// 生の JSONL の `result.json`（run ディレクトリ）にも `{"type":"wait",...}` の 1 行が残る。不正な wait は
+/// `Error{retryable: true}`、`question` は wait より優先する。
+#[tokio::test]
+async fn result_wait_becomes_terminal_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"mkdir -p artifacts
 printf '%s' '{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634","42635"],"scheduler":"pbs","poll_secs":300,"timeout_secs":43200,"checkpoint":{"completed":["submitted"],"next_action":"collect"},"summary":"submitted 2 jobs"}' > artifacts/result.json
 echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
 "#,
-        );
-        let adapter = ClaudeCodeAdapter::new(config);
-        let req = sample_req(dir.path().to_path_buf());
-        let sink = RecordingSink::default();
-        let outcome = adapter
-            .run(req, "run-wait", default_limits(), &sink)
-            .await
-            .unwrap();
-        match outcome.terminal {
-            Terminal::Waiting {
-                request,
-                checkpoint,
-                usage,
-            } => {
-                assert_eq!(request.cluster.as_deref(), Some("sirius"));
-                assert_eq!(request.jobs, vec!["42634".to_string(), "42635".to_string()]);
-                assert_eq!(
-                    request.scheduler,
-                    task_core::cluster_job::ClusterScheduler::Pbs
-                );
-                assert_eq!(request.poll_secs, Some(300));
-                assert_eq!(request.timeout_secs, Some(43200));
-                assert_eq!(request.summary, "submitted 2 jobs");
-                assert_eq!(checkpoint.expect("checkpoint")["next_action"], "collect");
-                assert_eq!(usage.expect("usage").input_tokens, Some(10));
-            }
-            other => panic!("expected waiting, got {other:?}"),
+    );
+    let adapter = ClaudeCodeAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-wait", default_limits(), &sink)
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Waiting {
+            request,
+            checkpoint,
+            usage,
+        } => {
+            assert_eq!(request.cluster.as_deref(), Some("sirius"));
+            assert_eq!(request.jobs, vec!["42634".to_string(), "42635".to_string()]);
+            assert_eq!(
+                request.scheduler,
+                task_core::cluster_job::ClusterScheduler::Pbs
+            );
+            assert_eq!(request.poll_secs, Some(300));
+            assert_eq!(request.timeout_secs, Some(43200));
+            assert_eq!(request.summary, "submitted 2 jobs");
+            assert_eq!(checkpoint.expect("checkpoint")["next_action"], "collect");
+            assert_eq!(usage.expect("usage").input_tokens, Some(10));
         }
-        let raw = std::fs::read_to_string(dir.path().join("runs/run-wait/result.json")).unwrap();
-        let line: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
-        assert_eq!(line["type"], "wait");
-        assert_eq!(line["jobs"][1], "42635");
+        other => panic!("expected waiting, got {other:?}"),
+    }
+    let raw = std::fs::read_to_string(dir.path().join("runs/run-wait/result.json")).unwrap();
+    let line: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+    assert_eq!(line["type"], "wait");
+    assert_eq!(line["jobs"][1], "42635");
 
-        // 不正な wait（job id にシェルの文字）は retryable な error。
-        let dir = tempfile::tempdir().unwrap();
-        let config = stub_claude(
-            dir.path(),
-            r#"mkdir -p artifacts
+    // 不正な wait（job id にシェルの文字）は retryable な error。
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"mkdir -p artifacts
 printf '%s' '{"type":"wait","kind":"cluster_job","jobs":["1;rm"]}' > artifacts/result.json
 echo '{"type":"result","subtype":"success","is_error":false}'
 "#,
-        );
-        let adapter = ClaudeCodeAdapter::new(config);
-        let outcome = adapter
-            .run(
-                sample_req(dir.path().to_path_buf()),
-                "run-bad-wait",
-                default_limits(),
-                &sink,
-            )
-            .await
-            .unwrap();
-        match outcome.terminal {
-            Terminal::Error { message, retryable } => {
-                assert!(retryable);
-                assert!(message.contains("invalid cluster job wait"), "{message}");
-            }
-            other => panic!("expected error, got {other:?}"),
+    );
+    let adapter = ClaudeCodeAdapter::new(config);
+    let outcome = adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "run-bad-wait",
+            default_limits(),
+            &sink,
+        )
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Error { message, retryable } => {
+            assert!(retryable);
+            assert!(message.contains("invalid cluster job wait"), "{message}");
         }
+        other => panic!("expected error, got {other:?}"),
     }
+}
 
 /// `result.is_error`（or `subtype != "success"`) のとき `result` テキストを分類する（ADR-0010 D5）。
 /// `Throttled` が当たれば `AdapterError::Throttled` として返り、result.json は書かれる。

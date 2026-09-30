@@ -429,13 +429,11 @@ fn worker_and_reviewer_instructions_share_the_remote_exec_usage() {
     assert!(worker.contains("run の後にクラスタへ同期され"));
     // ADR-0090 D5: worker の指示文の最後はクラスタ job の wait の段落（reviewer には無い）。
     assert!(
-        worker
-            .contains("元のリポジトリの作業ツリーは触らないでください。\n長く走るクラスタ job")
+        worker.contains("元のリポジトリの作業ツリーは触らないでください。\n長く走るクラスタ job")
     );
     assert!(worker.ends_with(&cluster_job_wait_instructions(&settings)));
     assert!(
-        worker
-            .contains("\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": \"sirius\"")
+        worker.contains("\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": \"sirius\"")
     );
     assert!(worker.contains("job が Q / R の間に完了を申告しない"));
     assert!(!reviewer.contains("長く走るクラスタ job"));
@@ -451,9 +449,8 @@ fn remote_command_returns_the_whole_output_and_treats_255_as_a_connection_failur
         dir.path(),
         "#!/bin/sh\nprintf 'Job Id: 1.pbs\\n    job_state = F\\n'\necho 'qstat: Unknown Job Id 2.pbs' >&2\nexit 153\n",
     );
-    let out =
-        run_remote_command_blocking(&ok, "sirius", "qstat -xf 1 2", Duration::from_secs(10))
-            .expect("ran");
+    let out = run_remote_command_blocking(&ok, "sirius", "qstat -xf 1 2", Duration::from_secs(10))
+        .expect("ran");
     assert_eq!(out.exit, Some(153));
     assert!(out.stdout.contains("job_state = F"), "{out:?}");
     assert!(out.stderr.contains("Unknown Job Id 2.pbs"), "{out:?}");
@@ -462,9 +459,8 @@ fn remote_command_returns_the_whole_output_and_treats_255_as_a_connection_failur
         dir.path(),
         "#!/bin/sh\necho 'mux_client: no master' >&2\nexit 255\n",
     );
-    let err =
-        run_remote_command_blocking(&down, "sirius", "qstat -xf 1", Duration::from_secs(10))
-            .expect_err("255 is a connection failure");
+    let err = run_remote_command_blocking(&down, "sirius", "qstat -xf 1", Duration::from_secs(10))
+        .expect_err("255 is a connection failure");
     assert!(err.contains("exit 255"), "{err}");
 }
 

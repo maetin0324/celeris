@@ -136,7 +136,8 @@ async fn inject_h3(
             }
             let frame = &tree["result"]["frameTree"]["frame"];
             let url = frame["url"].as_str().unwrap_or("");
-            if celeris_credentiald::canonical_origin(url).as_deref() == Ok(origin)
+            if url::Url::parse(url)
+                .is_ok_and(|parsed| parsed.origin().ascii_serialization() == origin)
                 && let (Some(id), Some(loader)) = (frame["id"].as_str(), frame["loaderId"].as_str()) {
                 break (id.to_owned(), loader.to_owned());
             }
@@ -145,7 +146,7 @@ async fn inject_h3(
         };
         let request = crate::browser_cdp_sink::InjectionRequest {
             request_id: format!("inject-{auth_id}"), session_id: session_id.into(),
-            cdp_target_id: target, frame_id, loader_id, exact_origin: origin.into(),
+            cdp_target_id: target, frame_id, loader_id: loader_id.clone(), exact_origin: origin.into(),
             redirect_chain: vec![origin.into()], selector: trusted.password_selector.clone(),
             field: "password".into(), auth_section_id: auth_id.into(), lease_id: lease_id.into(),
         };
@@ -162,6 +163,18 @@ async fn inject_h3(
                 .controller_command("Runtime.evaluate", json!({"expression":expr,"returnByValue":true}), Some(&own))
                 .map_err(|_| "submit_failed")?;
             if submitted["result"]["result"]["value"] != "ok" { return Err("submit_failed"); }
+            // requestSubmit starts navigation asynchronously. Keep H3 closed to
+            // observation until the old document is gone, then field cleanup
+            // can safely skip its now-invalid CDP object ID.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                let tree = controller.lock().map_err(|_| "cdp_unavailable")?
+                    .controller_command("Page.getFrameTree", json!({}), Some(&own));
+                if tree.is_ok_and(|tree| tree["result"]["frameTree"]["frame"]["loaderId"] != loader_id) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
         Ok(())
     }.await
@@ -791,7 +804,16 @@ fn route_existing_backend(
     record_path: &Path,
 ) -> Result<browser_backend::RoutingDecision, AdapterError> {
     use Capability as C;
-    let supported = public_capabilities();
+    let mut supported = public_capabilities();
+    // H3 is routed only when the operator ledger attests the sensitive fixture
+    // suite. A credential task cannot reach the isolated runtime otherwise.
+    if policy
+        .effective
+        .actions
+        .contains(&task_core::BrowserAction::CredentialUse)
+    {
+        supported.insert(C::CredentialInjection);
+    }
     let backends = existing_backends(&supported);
     let results = load_conformance(record_path)?;
     let mut required = BTreeSet::new();

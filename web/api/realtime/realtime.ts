@@ -1,6 +1,7 @@
 // shell が 1 度だけ呼ぶ購読の組み立て。transport・resume・frame の反映をつなぐ。
 
 import type { QueryClient } from "@tanstack/react-query";
+import { recordHello } from "../../lib/time";
 import { daemonKeys } from "../queries/keys";
 import type { ConnectionStore } from "./connection-state";
 import { connectionStore } from "./connection-state";
@@ -29,6 +30,7 @@ export function applyFrame(
 ) {
   switch (frame.type) {
     case "hello":
+      recordHello(frame.data.now); // 相対時刻の補正（P2-06）
       if (frame.data.daemon) queryClient.setQueryData(daemonKeys.stream(), frame.data.daemon);
       return;
     case "heartbeat":

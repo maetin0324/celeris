@@ -51,11 +51,12 @@ test("parity: /healthz 未認証 200 と版", async () => {
 });
 
 test("parity-x: CSRF 別 origin の変更は 403", async () => {
-  for (const headers of [
+  const cases: Record<string, string>[] = [
     { Origin: "http://evil.example" },
     { Origin: "http://127.0.0.1:9999" },
     { "Sec-Fetch-Site": "same-site" },
-  ])
+  ];
+  for (const headers of cases)
     expect((await fetch(`${base}/api/unknown`, { method: "POST", headers })).status).toBe(403);
   expect((await fetch(`${base}/api/unknown`, { method: "POST" })).status).toBe(404);
 });

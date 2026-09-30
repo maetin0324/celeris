@@ -13,6 +13,10 @@ export async function startGateway(options: Parameters<typeof createApp>[0] = {}
   return {
     base: `http://127.0.0.1:${address.port}`,
     port: address.port,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections(); // SSE の接続を待たない
+      }),
   };
 }

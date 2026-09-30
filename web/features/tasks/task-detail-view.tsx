@@ -3,13 +3,14 @@ import { Link } from "@tanstack/react-router";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { DecisionPanel } from "./decision-panel";
+import { ExecutionPanel } from "./execution-panel";
 import { OverviewView } from "./overview-view";
 import { taskDetailQuery, taskTimelineQuery } from "./task-detail-query";
 import { TASK_DETAIL_TABS, type TaskDetailTab } from "./task-detail-tabs";
 import { TimelineView } from "./timeline-view";
 
 // /tasks/:id の枠（P3-08、R23）。見出しと tab は取得を待たずに出し、中身だけが FetchFrame で待つ（S1）。
-// tab は ?tab= の search param。判断パネル（P3-09）は overview の上。残りの tab（P3-13）はこの枠に足す。
+// tab は ?tab= の search param。判断パネル（P3-09）と実行・routing（P3-10）は overview の上。残りの tab（P3-13）はこの枠に足す。
 export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDetailTab }) {
   return (
     <ScreenFrame title={`タスクの詳細 ${taskId}`} route="/tasks/:id">
@@ -45,6 +46,7 @@ function OverviewTab({ taskId }: { taskId: string }) {
       {detail.data ? (
         <div className="min-w-0 space-y-4">
           <DecisionPanel key={detail.data.task.id} detail={detail.data} />
+          <ExecutionPanel key={`execution-${detail.data.task.id}`} detail={detail.data} />
           <OverviewView detail={detail.data} />
         </div>
       ) : null}

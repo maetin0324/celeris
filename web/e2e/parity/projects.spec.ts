@@ -200,3 +200,95 @@ const task = (id: string, title: string) => ({
   priority_label: "normal",
   updated_at: "2026-09-30T00:00:00Z",
 });
+
+// P4-03〜P4-05: 案件詳細の操作。書き込みは page.route で受け、送った method・path・本文を確かめる。
+type Sent = { method: string; path: string; body: unknown };
+async function captureWrites(page: import("@playwright/test").Page) {
+  const sent: Sent[] = [];
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") return route.fallback();
+    sent.push({ method: request.method(), path: new URL(request.url()).pathname, body: request.postDataJSON() });
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  return sent;
+}
+
+const opsDetail = {
+  ...detail,
+  milestones: [],
+  milestones_frozen: 0,
+  repos: [
+    {
+      id: "R1",
+      name: "main-repo",
+      kind: "git",
+      project_id: "P1",
+      is_primary: true,
+      location: { kind: "local", path: "/work/p1" },
+      created_at: "2026-09-30T00:00:00Z",
+    },
+    {
+      id: "R2",
+      name: "sub-repo",
+      kind: "git",
+      project_id: "P1",
+      location: { kind: "local", path: "/work/p1-sub" },
+      created_at: "2026-09-30T00:00:00Z",
+    },
+  ],
+};
+
+async function openDetail(page: import("@playwright/test").Page, fixtures: Record<string, unknown> = {}) {
+  const h = harness({ "/api/v1/projects/P1": opsDetail, "/api/v1/tasks/T1/artifacts": { items: [] }, ...fixtures });
+  const gateway = await h.start();
+  const sent = await captureWrites(page);
+  await page.goto(`${gateway.base}/projects/P1`);
+  await expect(page.getByRole("heading", { level: 1, name: "案件の詳細 P1" })).toBeVisible();
+  return { h, gateway, sent };
+}
+
+const last = (sent: Sent[]) => sent.at(-1);
+
+test("parity: /projects/:id 案件の操作", async ({ page }) => {
+  const { h, gateway, sent } = await openDetail(page);
+  try {
+    const ops = page.getByTestId("project-ops");
+    await ops.getByLabel("案件名").fill("改名した案件");
+    await ops.getByRole("button", { name: "名前と依頼を保存" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", path: "/api/projects/P1", body: { title: "改名した案件" } });
+    await ops.getByLabel("状態").selectOption("done");
+    await ops.getByRole("button", { name: "状態を変える" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ method: "PATCH", body: { status: "done" } });
+    await ops.getByRole("button", { name: "一時停止" }).click();
+    await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/pause");
+    // 中止とアーカイブは確認のダイアログを通す。やめれば送らない。
+    const before = sent.length;
+    await ops.getByRole("button", { name: "中止", exact: true }).click();
+    await page.getByRole("dialog", { name: "中止" }).getByRole("button", { name: "やめる" }).click();
+    expect(sent.length).toBe(before);
+    await ops.getByRole("button", { name: "中止", exact: true }).click();
+    await page.getByRole("dialog", { name: "中止" }).getByRole("button", { name: "中止する" }).click();
+    await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/cancel");
+    await ops.getByRole("button", { name: "アーカイブ", exact: true }).click();
+    await page.getByRole("dialog", { name: "アーカイブ" }).getByRole("button", { name: "アーカイブする" }).click();
+    await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/archive");
+    await ops.getByLabel("作業場所の path").fill("/work/new");
+    await ops.getByRole("button", { name: "作業場所を保存" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", body: { workspace: { kind: "local", path: "/work/new" } } });
+    await ops.getByRole("button", { name: "作業場所を消す" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ method: "PATCH", body: { workspace: null } });
+    await ops.getByLabel("仕事の題").fill("足す仕事");
+    await ops.getByRole("button", { name: "仕事を足す" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "POST", path: "/api/tasks", body: { title: "足す仕事", project_id: "P1" } });
+    await expect(ops.getByRole("status").first()).toHaveText("操作が完了しました");
+  } finally {
+    await h.close(gateway);
+  }
+});

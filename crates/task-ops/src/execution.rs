@@ -425,17 +425,13 @@ pub fn replan(
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
 
     let internal = task_core::internal_view(&validated.spec).into_owned();
-    let current_keys: BTreeSet<&str> = current.iter().map(|u| u.key.as_str()).collect();
     let new_keys: BTreeSet<&str> = internal.work_units.iter().map(|w| w.key.as_str()).collect();
     // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を
-    // 「新しい」key として再利用しようとしたら拒否する（D5）。
-    let all_keys_ever: BTreeSet<&str> = all_units.iter().map(|u| u.key.as_str()).collect();
-    for key in new_keys.difference(&current_keys) {
-        if all_keys_ever.contains(key) {
-            return Err(OpsError::Validation(format!(
-                "work unit key {key:?} was used by a superseded work unit and cannot be reused"
-            )));
-        }
+    // 「新しい」key として再利用しようとしたら拒否する（D5）。ADR-0079 付記「R7-3」D3: 段階の統合 WU の key
+    // （前の版で消した段階の key を戻した）も同じく検証の理由にする（以前は sqlite の UNIQUE 制約のエラーだった）。
+    let retired = task_core::execution_plan::retired_key_errors(&validated.spec, &all_units);
+    if !retired.is_empty() {
+        return Err(OpsError::Validation(describe_validation_errors(&retired)));
     }
 
     let new_plan_id = new_id();
@@ -1344,13 +1340,14 @@ mod tests {
             "git diff --quiet 06e9a03cffe8 -- gui \":!gui/docs/adr/0002-frontend-stack.md\"";
         v2_spec.work_units[0].checks[0].cmd = fixed_cmd.to_string();
 
-        // planner の replan は従来どおり拒む（何も書かない）。
+        // repair の計画は従来どおり拒む（何も書かない）。planner は ADR-0079 R7-3 D1 から `checks` だけなら書き換え
+        // られる（`planner_replan_rewrites_the_checks_of_a_done_unit`）。
         let err = replan(
             &store,
             task.id,
             v2_spec.clone(),
-            "planner".to_string(),
-            PlanOrigin::Planner,
+            "repair".to_string(),
+            PlanOrigin::Repair,
             None,
             ExecutionLimits::default(),
             OffsetDateTime::now_utc(),
@@ -1752,6 +1749,139 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, OpsError::Validation(_)), "{err:?}");
+    }
+
+    /// ADR-0079 付記「R7-3」D1（リファクタ retry の子の `HEAD^2`）: planner の replan は done の WU の `checks` だけを
+    /// 書き換えられる。行は done のまま（`plan_id` も元のまま）spec の `checks` だけが新しい版のものになり、
+    /// `WorkUnitSpecOverridden{changed_fields: ["checks"]}` が残る（段階の統合はこの行の check を走らせる）。replay も一致。
+    #[test]
+    fn planner_replan_rewrites_the_checks_of_a_done_unit() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let task = sample_task();
+        store.insert(&task).unwrap();
+        let mut v1_spec = spec_v2_two_phases();
+        v1_spec.work_units[0].checks = vec![task_core::WorkUnitCheck {
+            cmd: "git rev-parse HEAD^2".to_string(),
+            expect_exit: 0,
+        }];
+        let v1 = adopt_plan(
+            &store,
+            task.id,
+            v1_spec.clone(),
+            PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        mark_done(&store, task.id, "a");
+
+        let mut v2_spec = v1_spec;
+        let fixed = vec![task_core::WorkUnitCheck {
+            cmd: "! git grep -n '<<<<<<<'".to_string(),
+            expect_exit: 0,
+        }];
+        v2_spec.work_units[0].checks = fixed.clone();
+        let (v2, diff) = replan(
+            &store,
+            task.id,
+            v2_spec,
+            "the HEAD^2 check cannot hold after the integration".to_string(),
+            PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("a planner may rewrite the checks of a done unit");
+        assert_eq!(diff.overridden_done, vec!["a".to_string()]);
+        let units = store.work_units_for(task.id).unwrap();
+        let a = units.iter().find(|u| u.key == "a").unwrap();
+        assert_eq!(a.status, WorkUnitStatus::Done);
+        assert_eq!(a.plan_id, v1.id, "the done row keeps its plan");
+        assert_eq!(a.spec.checks, fixed);
+        let events = store.events_for(task.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::WorkUnitSpecOverridden { key, plan_id, changed_fields, .. }
+                    if key == "a" && *plan_id == v2.id && changed_fields == &vec!["checks".to_string()]
+            )),
+            "{events:?}"
+        );
+        let (wu_mm, run_mm, plan_mm, applied) =
+            crate::replay::check_and_apply_execution(&store, false).unwrap();
+        assert!(wu_mm.is_empty(), "{wu_mm:?}");
+        assert!(run_mm.is_empty(), "{run_mm:?}");
+        assert!(plan_mm.is_empty(), "{plan_mm:?}");
+        assert_eq!(applied, 0);
+    }
+
+    /// ADR-0079 付記「R7-3」D3（08:15Z の `UNIQUE constraint failed: work_units.task_id, key`）: 前の版で消した段階の key
+    /// を戻すと、その段階の統合 WU の key `integrate-<stage>` が退役した行と重なる。sqlite のエラーではなく検証の理由
+    /// （新しい段階の key を選ぶ）で拒否し、何も書かない。
+    #[test]
+    fn replan_rejects_a_removed_stage_key_as_a_validation_error() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let task = sample_task();
+        store.insert(&task).unwrap();
+        adopt_plan(
+            &store,
+            task.id,
+            spec_v2_two_phases(),
+            PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        mark_done(&store, task.id, "a");
+        // v2: build の段階を消す（b と integrate-build は superseded）。
+        let mut design_only = spec_v2_two_phases();
+        design_only.work_units.truncate(1);
+        design_only.phases.truncate(1);
+        replan(
+            &store,
+            task.id,
+            design_only,
+            "drop build".to_string(),
+            PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert_eq!(
+            store
+                .work_units_for(task.id)
+                .unwrap()
+                .iter()
+                .find(|u| u.key == "integrate-build")
+                .map(|u| u.status),
+            Some(WorkUnitStatus::Superseded)
+        );
+        let before = store.work_units_for(task.id).unwrap().len();
+        // v3: build の段階を新しい unit の key（b2）で戻す。
+        let mut back = spec_v2_two_phases();
+        back.work_units[1].key = "b2".to_string();
+        let err = replan(
+            &store,
+            task.id,
+            back,
+            "bring build back".to_string(),
+            PlanOrigin::Planner,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap_err();
+        match &err {
+            OpsError::Validation(msg) => {
+                assert!(msg.contains("stage key \"build\""), "{msg}");
+                assert!(msg.contains("choose a new stage key"), "{msg}");
+            }
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+        assert_eq!(store.work_units_for(task.id).unwrap().len(), before);
     }
 
     /// ADR-0074 D6.2/§6 F1 (i)（Phase F1）: replan（planner）が新しい `kind = repair` の WU を書いたら

@@ -1703,3 +1703,54 @@ task-ops / task-dispatch / task-core には触れていない（R7-3 と並行�
 - 09:52Z: release **7c10d528ad2a**（main = R7-4 まで、schema 34）: `release.sh main` exit 0（13 commits / 4 files / sensitive 0）→ `verify.sh` ok=true / live_ok=true（checks 1〜6、smoke 7.4 s）
   → `promote.sh 7c10d528ad2a` live で昇格（引き継ぎ 2 s、backup `20260930-095156-pre-7c10d528ad2a.sqlite3`）。`/health` release=7c10d528ad2a role=active。
   BenchFS 根の planner の submodule 展開は次の準備から best-effort になる（ior の pin は人が push するまで警告のまま）。
+
+## R7-3: 段階の統合の check は採用した版に従う、人の replan は統合の再実行より先、退役 key の検証、段階の上限は生きた unit だけ（2026-09-30）
+
+[ADR-0079 付記 R7-3](../adr/0079-recursive-task-decomposition.md)。発端は上の 08:09Z〜09:00Z（リファクタ retry の子の `HEAD^2` の統合 check が replan 後も残る、
+人の decompose 後の回答で統合が同じ check で再実行、`UNIQUE constraint failed: work_units.task_id, key`、`leaf_too_large` の「score 7 ≥ 閾値 11」）と R7-2 の残
+（`max_units_per_stage` は done も数える、failed の数え方）。**migration なし（schema 34 のまま）**。本番（systemctl・/var/lib/celeris・7700/7710・設定）には
+触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a142b6f989b6148df`。
+
+### 実装したもの
+
+- **D1 done の unit の `checks` は planner の replan でも書き換えられる**: 原因は統合 WU の行ではなく、段階の統合が集める**done の葉の行の `spec.checks`**
+  （done 不変で planner は直せず、/3 は `carry_done_units_v3` が planner の書いた check を黙って採用した spec に戻していた）。
+  `done_carry_over_errors` は `PlanOrigin::Planner` の `checks` だけの差を許す（`same_except_checks`）。`carry_done_units_v3` は planner が書いた空でない
+  `checks` を残す。採用は R5b-fix1 の経路で done の行の spec を置き換え `WorkUnitSpecOverridden{changed_fields: ["checks"]}`（replay も一致）。unit は再実行
+  しない。/2・/3 の planner プロンプトと `DoneWorkUnitChanged` の文に「done の unit で直せるのは `checks` だけ（統合で再実行）」。
+- **D2 人の replan は統合の再実行より先**: `wu_dispatch_gate` は既に人の依頼を回答による再開より先に見ていた（順序は変えていない）。回帰試験で、planner が先に
+  走り、直した check で統合が 1 回で通ることを確かめた。本番の「同じ check で再実行」は D1（replan 採用後の統合が done の葉の古い check を走らせた）と読む。
+  作業開始時に残っていた `eprintln!("DBG …")` 2 行は削除。
+- **D3 退役 key の再利用は検証の理由**: `task_core::execution_plan::retired_key_errors`（`PlanValidationError::RetiredKeyReused{key, stage}`）が unit の key と、
+  前の版で消した段階の `integrate-<stage>` の重なりを拒否（後者が sqlite の UNIQUE エラーの原因だった）。dispatcher は planner の計画の検証の直後（採用の前）に
+  当て `invalid execution plan: …`（再試行・`plan_invalid` の経路）、`task_ops::execution::replan` も同じ関数を使う（人の PUT も 400）。
+- **D4 `leaf_too_large` の文**: `tree::gate_basis_text`。`compound/score` だけ「score S ≥ 閾値 T」、強制規則（`compound/long-and-broad`）は「score S は閾値 T 未満
+  だが、この規則は score によらず compound と判定する（expected_length=high かつ cross_cutting=high）」。
+- **D5 `max_units_per_stage` は生きた unit だけ**: 検証（`TooManyUnitsInStage`）と `plan_limit_holds`（`UnitsPerStage`）は持ち越す done と `adopt` を数えない。
+  プロンプトの上限の行・拒否文・config 例を直した。
+- **D6 failed の数え方の明文化**: failed / cancelled / running の子の unit を新しい版に残せば両上限に数える（ADR の D3 の表と config 例の注釈）。挙動は不変。
+
+### 試験
+
+- task-core: `execution_plan::tests::planner_replan_may_change_only_the_checks_of_a_done_unit`、`carry_done_units_v3_keeps_the_planners_non_empty_checks`、
+  `retired_key_errors_catch_unit_keys_and_removed_stage_keys`、`units_per_stage_limit_counts_only_live_units`、`tree::tests::plan_limit_holds_count_only_live_units_per_stage`、
+  `leaf_too_large_text_states_the_real_gate_basis`。既存の `planner_replan_still_rejects_a_changed_done_work_unit`（R5b-fix1）は D1 に合わせ、planner は
+  check だけなら通る・objective も変えれば拒否・repair は拒否、に直した。
+- task-ops: `execution::tests::planner_replan_rewrites_the_checks_of_a_done_unit`（行・event・replay 一致）、`replan_rejects_a_removed_stage_key_as_a_validation_error`。
+  既存の `human_replan_overrides_the_spec_of_a_done_work_unit` の「planner は拒む」段は repair の計画に置き換えた。
+- task-dispatch: `a_pending_human_replan_runs_the_planner_before_retrying_the_integration`（統合失敗 → 質問 → 人の decompose → 回答 → planner が先、差分で
+  done の `b` の check を直す → 統合は 1 回で done、`b` は再実行しない）、`a_replan_reusing_a_removed_stage_key_is_rejected_as_an_invalid_plan`。
+- task-worker: `claude_code::tests::replan_prompt_allows_rewriting_only_the_checks_of_done_units`。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 548 passed。`-p task-ops` → 371 passed。`-p task-worker` → 621 passed, 4 skipped。`-p task-dispatch` → 479 passed。
+  `cargo nextest run --workspace` → 2950 passed, 7 skipped（exit 0）。
+
+### 未解決・提案
+
+- D2 は本番の event を直接見ていない（本番 DB に触れない）。昇格後に同じ形（統合失敗 → decompose → 回答）が起きたら event の列で planner が先に走ることを確かめる。
+- done の unit の新しい `checks` は unit の worktree では走らせず、段階の統合でだけ走る。
+- 保留中のリファクタ retry の子（blocked）は、R7-3 の昇格後に replan + note（`HEAD^2` の check を内容の検査に置き換える）で進められる見込み。

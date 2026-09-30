@@ -32,7 +32,7 @@ pub struct ExecutionTomlConfig {
     /// ADR-0072 D16/D18（Phase E4）: 同じ class の repair の上限（既定 2）。
     #[serde(default = "default_max_repairs_per_class")]
     pub max_repairs_per_class: u32,
-    /// ADR-0072 D17/D18（Phase E4）: Task ごとの replan（計画の版の更新）の上限（既定 3）。
+    /// ADR-0072 D17/D18（Phase E4）: Task ごとの replan（計画の版の更新）の上限（既定 5。ADR-0079「R6-2」で 3 から）。
     #[serde(default = "default_max_replans")]
     pub max_replans: u32,
     /// ADR-0074 D5.2（Phase F1）: WU の lane の上限を Task の lane に合わせるか
@@ -45,6 +45,11 @@ pub struct ExecutionTomlConfig {
     /// ADR-0074 D1.3/§4（Phase F2b）: Task ごとの同時 WU 数の上限（既定 3、1..=6）。
     #[serde(default = "default_max_parallel_work_units")]
     pub max_parallel_work_units: usize,
+    /// ADR-0089（Phase R6-5）: CoS の対話 run（Console の一言）の同時数の絶対上限（既定 2、0..=8）。
+    /// CoS の対話 run は `max_concurrency` とアカウントプールのプロバイダの `concurrency` に数えず、
+    /// この上限だけで待つ。`0` で例外を無効にする（通常の run と同じ規則に戻る）。
+    #[serde(default = "default_max_cos_runs")]
+    pub max_cos_runs: usize,
     /// ADR-0079 D3（Phase R1a）: `[execution.tree]`（再帰的な task 分解の上限。既定 `enabled = false`）。
     #[serde(default)]
     pub tree: ExecutionTreeTomlConfig,
@@ -264,6 +269,7 @@ impl Default for ExecutionTomlConfig {
             work_unit_lane_cap: default_work_unit_lane_cap(),
             parallel: false,
             max_parallel_work_units: default_max_parallel_work_units(),
+            max_cos_runs: default_max_cos_runs(),
             tree: ExecutionTreeTomlConfig::default(),
         }
     }
@@ -288,7 +294,8 @@ fn default_max_repairs_per_class() -> u32 {
     2
 }
 fn default_max_replans() -> u32 {
-    3
+    // ADR-0079「R6-2」: 木の節点ごとの replan の余地を 3 → 5（子の失敗の replan で使い切っていた）。
+    5
 }
 fn default_work_unit_lane_cap() -> String {
     "task".to_string()
@@ -296,6 +303,11 @@ fn default_work_unit_lane_cap() -> String {
 fn default_max_parallel_work_units() -> usize {
     3
 }
+fn default_max_cos_runs() -> usize {
+    task_dispatch::capacity::DEFAULT_MAX_COS_RUNS
+}
+/// ADR-0089: `[execution] max_cos_runs` の上限（CoS の対話 run が積み上がらないための設定値の天井）。
+const MAX_COS_RUNS_CAP: usize = 8;
 
 /// `[execution.planner]`（ADR-0072 D14, Phase E3; ADR-0074 D5.3, Phase F1）: task-local な計画 run の
 /// harness と上限。
@@ -376,6 +388,13 @@ impl ExecutionTomlConfig {
                 "[execution] max_parallel_work_units must be between 1 and {} (got {})",
                 task_dispatch::dispatcher::MAX_PARALLEL_WORK_UNITS_CAP,
                 self.max_parallel_work_units
+            )));
+        }
+        // ADR-0089（Phase R6-5）: max_cos_runs は 0..=8。
+        if self.max_cos_runs > MAX_COS_RUNS_CAP {
+            return Err(ConfigError::Invalid(format!(
+                "[execution] max_cos_runs must be between 0 and {MAX_COS_RUNS_CAP} (got {})",
+                self.max_cos_runs
             )));
         }
         // ADR-0079 D3（Phase R1a）: `[execution.tree]` の範囲（max_depth は task の層数で 1..=3）。

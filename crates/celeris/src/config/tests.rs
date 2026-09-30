@@ -777,6 +777,58 @@ host = "h"
     }
 }
 
+/// ADR-0090 D7: `job_wait` の既定は `{poll_secs = 300, max_wait_secs = 86400}`。`poll_secs >= 30`、
+/// `poll_secs <= max_wait_secs <= 14 日` を検証し、`ClusterSpec.job_wait` に写す。未知の欄は拒む。
+#[test]
+fn cluster_job_wait_defaults_and_validation() {
+    let base = |extra: &str| {
+        format!(
+            r#"[[providers]]
+id = "x"
+adapter = "fake"
+[[clusters]]
+id = "sirius"
+host = "sirius"
+{extra}
+"#
+        )
+    };
+    let cfg: Config = toml::from_str(&base("")).unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.clusters[0].job_wait.poll_secs, 300);
+    assert_eq!(cfg.clusters[0].job_wait.max_wait_secs, 86_400);
+    let cfg: Config = toml::from_str(&base(
+        "job_wait = { poll_secs = 600, max_wait_secs = 43200 }",
+    ))
+    .unwrap();
+    cfg.validate().unwrap();
+    let spec = cfg.cluster_specs();
+    assert_eq!(
+        spec["sirius"].job_wait,
+        task_core::cluster_job::ClusterJobWaitLimits {
+            poll_secs: 600,
+            max_wait_secs: 43_200
+        }
+    );
+    for (bad, needle) in [
+        ("job_wait = { poll_secs = 5 }", "poll_secs must be >= 30"),
+        (
+            "job_wait = { poll_secs = 600, max_wait_secs = 60 }",
+            "must be >= job_wait.poll_secs",
+        ),
+        (
+            "job_wait = { max_wait_secs = 99999999 }",
+            "max_wait_secs must be <=",
+        ),
+    ] {
+        let cfg: Config = toml::from_str(&base(bad)).unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains(needle), "{bad}: {err}");
+        assert!(err.contains("[[clusters]] sirius"), "{err}");
+    }
+    assert!(toml::from_str::<Config>(&base("job_wait = { every = 5 }")).is_err());
+}
+
 #[test]
 fn loads_claude_code_dogfood_example_config() {
     let path = Path::new(concat!(
@@ -3051,6 +3103,25 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
     }
 }
 
+/// ADR-0089（Phase R6-5）: `[execution] max_cos_runs` の既定（2）・写し・範囲（0..=8）。
+#[test]
+fn execution_max_cos_runs_default_and_validation() {
+    let base = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
+    let cfg: Config = toml::from_str(base).unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.execution.max_cos_runs, 2);
+    assert_eq!(cfg.dispatch_config().execution.max_cos_runs, 2);
+    for ok in [0, 1, 8] {
+        let cfg: Config =
+            toml::from_str(&format!("{base}[execution]\nmax_cos_runs = {ok}\n")).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.dispatch_config().execution.max_cos_runs, ok);
+    }
+    let cfg: Config = toml::from_str(&format!("{base}[execution]\nmax_cos_runs = 9\n")).unwrap();
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("max_cos_runs"), "{err}");
+}
+
 /// ADR-0079 D3（Phase R1a）: `[execution.tree]` の既定（`enabled = false`・`max_depth = 3` 層・D3 / U-R4 の
 /// 上限）と範囲の検査（`max_depth` は task の層数で 1..=3）。値は `ExecutionLimits.tree` に写る。
 #[test]
@@ -3079,7 +3150,15 @@ fn execution_tree_defaults_and_validation() {
     assert_eq!(tree.max_units_per_stage, 4);
     assert_eq!(tree.max_tree_tokens, Some(5_000_000));
     assert_eq!(tree.approval_near_limit_permille, 750);
-    assert_eq!(tree.max_tree_runs, 120);
+    assert_eq!(
+        (
+            tree.max_tree_leaves,
+            tree.max_tree_runs,
+            tree.max_tree_replans
+        ),
+        (120, 400, 30)
+    );
+    assert_eq!(cfg.execution.max_replans, 5);
     assert_eq!(tree.gate_depth_step, 2);
     // Phase R2a: 深さの閾値の刻みと木の run・replan・leaf の上限も設定から写る。
     let cfg: Config = toml::from_str(&format!(

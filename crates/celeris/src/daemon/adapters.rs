@@ -344,6 +344,7 @@ pub fn provider_lives(config: &Config) -> Vec<ProviderLive> {
                 model: models.get(&p.id).filter(|m| !m.is_empty()).cloned(),
                 env_keys,
                 in_use: 0,
+                in_use_cos: 0,
                 // ADR-0022 D2: 確認の記録は Dispatcher 側（SnapshotPublisher.provider_checks）が持つ。
                 last_check: None,
                 account_pool: p.account_pool,

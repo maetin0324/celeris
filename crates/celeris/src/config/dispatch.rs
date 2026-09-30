@@ -218,6 +218,7 @@ impl Config {
                 .unwrap_or_default(),
                 parallel: self.execution.parallel,
                 max_parallel_work_units: self.execution.max_parallel_work_units,
+                max_cos_runs: self.execution.max_cos_runs,
                 // Phase F5-fix3: config.toml に欄は無い（ADR-0072 D18 / ADR-0074 §4 の既定のまま）。
                 // ADR-0079 D3（Phase R1a）: `[execution.tree]` は plan/3 の検証だけに効く。
                 limits: task_core::ExecutionLimits {

@@ -188,6 +188,7 @@ pub fn wire_cluster_liveness_hooks(dispatcher: &mut Dispatcher, masters: Cluster
         },
     ));
     dispatcher.set_cluster_master_watcher(cluster_master_watcher(masters));
+    dispatcher.set_cluster_job_poller(task_dispatch::dispatcher::ssh_cluster_job_poller());
 }
 
 /// ADR-0062 A（Phase 107）: `ClusterMasters` から、明示的な切断を経ずに終了した master を集める

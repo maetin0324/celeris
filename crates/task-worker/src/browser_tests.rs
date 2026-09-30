@@ -827,11 +827,60 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
 // Re-exec this unit test in a private network namespace. Its public-looking fixture address
 // has no route to the outside world; only the host-side egress process can reach it.
 #[test]
-fn production_action_path_reaches_fixture_through_real_browser_and_egress() {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
+fn missing_egress_resolver_refuses_before_browser_start() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "browser::tests::missing_egress_resolver_inner",
+            "--nocapture",
+        ])
+        .env("CELERIS_MISSING_EGRESS_INNER", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[tokio::test]
+async fn missing_egress_resolver_inner() {
+    if std::env::var("CELERIS_MISSING_EGRESS_INNER").is_err() {
         return;
     }
+    let temp = tempfile::tempdir().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.parent().unwrap().parent().unwrap();
+    configure_isolated_runtime(IsolatedBrowserConfig {
+        resolver: None,
+        record_dir: temp.path().join("records"),
+        bwrap: "/usr/bin/bwrap".into(),
+        sandboxd: bin.join("celeris-browser-sandboxd"),
+        egress: bin.join("celeris-browser-egress"),
+    });
+    let req = request(temp.path());
+    let error = run_with_executable(
+        Arc::new(CliHarness {
+            id: "acp",
+            question: false,
+        }),
+        req,
+        "no-egress",
+        limits(),
+        &RecordingSink::default(),
+        &temp.path().join("must-not-start"),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("isolated_runtime_unavailable"));
+    assert!(!temp.path().join("runs").exists());
+}
+
+#[test]
+fn production_action_path_reaches_fixture_through_real_browser_and_egress() {
     if std::env::var("CELERIS_BROWSER_ACTION_INNER").is_ok() {
         return;
     }

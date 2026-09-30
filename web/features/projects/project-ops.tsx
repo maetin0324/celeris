@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { ProjectDetail, WorkspaceSpec } from "../../api/generated/types";
+import type { ProjectDetail, ProjectRepo, WorkspaceSpec } from "../../api/generated/types";
 import { projectKeys } from "../../api/queries/keys";
 import {
   type ActionResult,
@@ -389,6 +389,113 @@ export function PlanOps({ detail }: { detail: ProjectDetail }) {
           </ul>
         </details>
       )}
+    </ProjectSection>
+  );
+}
+
+function RepoRow({ repo, projectId }: { repo: ProjectRepo; projectId: string }) {
+  const { run, pending, results } = useProjectActions(projectId);
+  const [name, setName] = useState(repo.name);
+  const [branch, setBranch] = useState(repo.default_branch ?? "");
+  const path = `/api/repos/${enc(repo.id)}`;
+  return (
+    <li className="min-w-0 space-y-1 rounded border p-2" data-repo={repo.id}>
+      <p className="break-words">
+        {repo.name}
+        {repo.is_primary ? "（主）" : ""} <span className="text-sm">{repo.location.path ?? ""}</span>
+      </p>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="min-w-0">
+          名前 {repo.id}
+          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label className="min-w-0">
+          既定ブランチ {repo.id}
+          <input className={inputClass} value={branch} onChange={(e) => setBranch(e.target.value)} />
+        </label>
+        <button
+          type="button"
+          className={buttonClass}
+          disabled={pending}
+          onClick={() =>
+            void run([
+              {
+                id: "repo_patch",
+                method: "PATCH",
+                path,
+                body: { name, default_branch: branch || null },
+              },
+            ])
+          }
+        >
+          保存
+        </button>
+        {!repo.is_primary && (
+          <button
+            type="button"
+            className={buttonClass}
+            disabled={pending}
+            onClick={() => void run([{ id: "repo_primary", method: "PATCH", path, body: { is_primary: true } }])}
+          >
+            主にする
+          </button>
+        )}
+        <ConfirmButton
+          label="削除"
+          question={`リポジトリ ${repo.name} を案件から外します。`}
+          disabled={pending}
+          onConfirm={() => void run([{ id: "repo_delete", method: "DELETE", path }])}
+        />
+      </div>
+      <Results results={results} ids={["repo_patch", "repo_primary", "repo_delete"]} />
+    </li>
+  );
+}
+
+// P4-05: リポジトリ。
+export function RepoOps({ detail }: { detail: ProjectDetail }) {
+  const id = detail.project.id;
+  const { run, pending, results } = useProjectActions(id);
+  const [name, setName] = useState("");
+  const [location, setLocation] = useState("");
+  const repos = detail.repos ?? [];
+  return (
+    <ProjectSection title="リポジトリ" testId="project-repos">
+      {repos.length === 0 ? (
+        <p>リポジトリはまだありません。</p>
+      ) : (
+        <ul className="space-y-2">
+          {repos.map((repo) => (
+            <RepoRow key={repo.id} repo={repo} projectId={id} />
+          ))}
+        </ul>
+      )}
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void run([
+            {
+              id: "repo_create",
+              path: `/api/projects/${enc(id)}/repos`,
+              body: { name: name || null, location: { kind: "local", path: location } },
+            },
+          ]);
+        }}
+      >
+        <label className="min-w-0">
+          リポジトリ名
+          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label className="min-w-0">
+          リポジトリの path
+          <input className={inputClass} value={location} onChange={(e) => setLocation(e.target.value)} />
+        </label>
+        <button type="submit" className={buttonClass} disabled={pending}>
+          リポジトリを足す
+        </button>
+      </form>
+      <Results results={results} ids={["repo_create"]} />
     </ProjectSection>
   );
 }

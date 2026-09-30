@@ -346,3 +346,42 @@ test("parity: /projects/:id 計画と途中目標", async ({ page }) => {
     await h.close(gateway);
   }
 });
+
+test("parity: /projects/:id 全 intent・計画・木", async ({ page }) => {
+  const { h, gateway, sent } = await openDetail(page);
+  try {
+    const repos = page.getByTestId("project-repos");
+    await expect(repos.locator("[data-repo]")).toHaveCount(2);
+    await repos.getByLabel("リポジトリ名").fill("new-repo");
+    await repos.getByLabel("リポジトリの path").fill("/work/new-repo");
+    await repos.getByRole("button", { name: "リポジトリを足す" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({
+        method: "POST",
+        path: "/api/projects/P1/repos",
+        body: { name: "new-repo", location: { kind: "local", path: "/work/new-repo" } },
+      });
+    const r2 = repos.locator("[data-repo='R2']");
+    await r2.getByLabel("既定ブランチ R2").fill("develop");
+    await r2.getByRole("button", { name: "保存" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", path: "/api/repos/R2", body: { default_branch: "develop" } });
+    await r2.getByRole("button", { name: "主にする" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", path: "/api/repos/R2", body: { is_primary: true } });
+    await r2.getByRole("button", { name: "削除", exact: true }).click();
+    await page.getByRole("dialog", { name: "削除" }).getByRole("button", { name: "削除する" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ method: "DELETE", path: "/api/repos/R2" });
+    // 案件・計画の intent も同じ画面にあり、計画の DAG と仕事の木も出ている。
+    await expect(page.getByTestId("project-ops")).toBeVisible();
+    await expect(page.getByTestId("project-plan-ops")).toBeVisible();
+    await expect(page.locator("[data-dag-node]")).toHaveCount(6);
+    await expect(page.locator("[data-tree-task='T9']")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally {
+    await h.close(gateway);
+  }
+});

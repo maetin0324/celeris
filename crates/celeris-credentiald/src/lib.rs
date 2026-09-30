@@ -883,9 +883,131 @@ impl Broker {
     pub fn provider(&self) -> &ManualProvider {
         &self.manual
     }
+    /// ADR-0089 D3 step 5: the trusted-injection path consumes a lease without a
+    /// plugin binding. Same lease checks as [`Broker::resolve`]; the durable
+    /// consume is committed before the provider is contacted.
+    pub(crate) fn consume_for_injection(
+        &self,
+        lease_id: &str,
+        session_id: &str,
+        origin: &str,
+    ) -> Result<
+        (
+            CredentialRef,
+            AuthorizedLeaseContext,
+            Arc<dyn CredentialProvider>,
+        ),
+        LeaseDenied,
+    > {
+        let t = now().map_err(|_| LeaseDenied::Invalid)?;
+        let mut s = self.state.lock().map_err(|_| LeaseDenied::Invalid)?;
+        let (req, grant, used, revoked) = {
+            let lease = s.leases.get(lease_id).ok_or(LeaseDenied::Invalid)?;
+            (
+                lease.request.clone(),
+                lease.grant.clone(),
+                lease.used,
+                lease.revoked,
+            )
+        };
+        let decision = if grant.expires_at <= t {
+            Some(LeaseDenied::Expired)
+        } else if used {
+            Some(LeaseDenied::Used)
+        } else if req.session_id != session_id {
+            Some(LeaseDenied::OtherSession)
+        } else if revoked || req.policy.exact_origin != origin {
+            Some(LeaseDenied::Invalid)
+        } else {
+            None
+        };
+        if let Some(d) = decision {
+            let action = if d == LeaseDenied::Expired {
+                "expire"
+            } else {
+                "deny"
+            };
+            self.audit(&mut s, action, d.code(), "injector", &req, lease_id)
+                .map_err(|_| LeaseDenied::Audit)?;
+            return Err(d);
+        }
+        self.audit(&mut s, "use", "consumed", "injector", &req, lease_id)
+            .map_err(|_| LeaseDenied::Audit)?;
+        if let Some(lease) = s.leases.get_mut(lease_id) {
+            lease.used = true;
+        }
+        drop(s);
+        let provider = self
+            .providers
+            .get(&req.reference.provider)
+            .cloned()
+            .ok_or(LeaseDenied::Invalid)?;
+        let context = AuthorizedLeaseContext {
+            lease_id: lease_id.into(),
+            task_id: req.task_id,
+            run_id: req.run_id,
+            session_id: req.session_id,
+            exact_origin: origin.into(),
+            expires_at: grant.expires_at,
+            credential_revision: req.credential_revision,
+        };
+        Ok((req.reference, context, provider))
+    }
+    /// Non-secret injection decision record (ADR-0089 D1 audit).
+    pub(crate) fn audit_injection(&self, record: &serde_json::Value) -> Result<(), Error> {
+        let mut s = self.state.lock().map_err(|_| Error::AuditUnavailable)?;
+        check_dir(&self.audit_dir).map_err(|_| Error::AuditUnavailable)?;
+        let p = self.audit_dir.join("journal.jsonl");
+        if p.exists() {
+            check_file(&p).map_err(|_| Error::AuditUnavailable)?
+        }
+        let mut record = record.clone();
+        if let Some(o) = record.as_object_mut() {
+            o.insert("sequence".into(), (s.sequence + 1).into());
+            o.insert(
+                "timestamp".into(),
+                now().map_err(|_| Error::AuditUnavailable)?.into(),
+            );
+        }
+        let mut bytes = serde_json::to_vec(&record).map_err(|_| Error::AuditUnavailable)?;
+        bytes.push(b'\n');
+        let mut f = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&p)
+            .map_err(|_| Error::AuditUnavailable)?;
+        f.write_all(&bytes)
+            .and_then(|_| f.sync_all())
+            .map_err(|_| Error::AuditUnavailable)?;
+        s.sequence += 1;
+        Ok(())
+    }
+}
+/// Lease-stage refusals of the injection path (ADR-0089 D3 step 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeaseDenied {
+    Expired,
+    Used,
+    OtherSession,
+    Invalid,
+    Audit,
+}
+impl LeaseDenied {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Expired => "lease_expired",
+            Self::Used => "lease_used",
+            Self::OtherSession => "other_session",
+            Self::Invalid => "lease_invalid",
+            Self::Audit => "audit_unavailable",
+        }
+    }
 }
 pub mod identity_seal;
 pub mod injection;
+pub mod injection_ipc;
 pub mod ipc;
 #[derive(Debug, Serialize)]
 pub struct CredentialUseResult {

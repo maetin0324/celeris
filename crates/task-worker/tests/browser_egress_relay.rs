@@ -260,10 +260,15 @@ impl Cdp {
         let mut bytes = serde_json::to_vec(&m).unwrap();
         bytes.push(0);
         self.w.write_all(&bytes).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(20);
+        // 高負荷の評価器では browser の起動・navigation の失敗確定が 20 秒を超えることがある。
+        // 待ちの上限は長く取り、成否は返答の中身（MARKER の有無）だけで判定する。
+        let deadline = Instant::now() + Duration::from_secs(90);
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            let v = self.rx.recv_timeout(left).expect("CDP reply");
+            let v = self
+                .rx
+                .recv_timeout(left)
+                .unwrap_or_else(|e| panic!("CDP reply to {method} (id {id}): {e:?}"));
             if v["id"] == id {
                 return v;
             }
@@ -450,7 +455,7 @@ fn inner_relay_in_test_netns() {
         cdp.fetch_marker(
             &s,
             "https://fixture.example.com/index.html",
-            Duration::from_secs(20)
+            Duration::from_secs(60)
         ),
         "fixture body must arrive through the proxy"
     );

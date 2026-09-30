@@ -1,6 +1,15 @@
 # PROGRESS — taskd
 
-現在地: **Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中**。以後の追記は `docs/progress/phase-F.md` へ。
+現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中**。以後の追記は `docs/progress/phase-F.md` へ。
+
+## 構造リファクタリング完了（2026-09-30、ADR-0079 / ADR-0082 / ADR-0083）
+
+inline test の外出しと責務分割を完了した（worktree、main 未 merge）。前後 LOC 表と 2,000 行超ファイルの分類は [phase-structure-refactor.md](progress/phase-structure-refactor.md)。
+
+- 証拠（最終 HEAD aaa6a1ca）: `cargo test --workspace` → exit 0、2,935 passed / 0 failed / 8 ignored、4 分 57 秒。`cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` → exit 0。test 属性数（`git grep -hE '#\[(tokio::)?test'`）は f34f060 = 2,907 → HEAD = 2,907。`git diff --quiet f34f060 HEAD -- crates/task-core/migrations docs/api/v1 docs/protocol config` → exit 0（互換性差分ゼロ）。`source-size-report.py --strict` → 0 active warning / 1 excepted。
+- 結果: Rust inline test 100,831 → 6,160 行。2,000 行超の production は 10 本 → 1 本（`task-api/src/types.rs`、理由付き例外）。
+- 未解決: main への取り込みと本番昇格は人。`paperqa.rs`（1,948）・`dispatcher.rs` facade（1,868）・`execution_plan/validation.rs`（1,739）が閾値に近い。
+- 提案: 新しい責務は分割後の子 module に置き、facade に戻さない。`release.sh` の source-size-report 表示段で閾値接近を毎回確認し、2,000 行を超えたら同じ手順（test 外出し → 責務移動）で割る。
 
 詳細な履歴と証跡は下記の分割ファイルを参照。既存の `docs/PROGRESS.md` 参照はこの目次を入口として維持する。
 

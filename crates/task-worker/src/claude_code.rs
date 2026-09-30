@@ -969,6 +969,8 @@ fn build_execution_plan_prompt(
     // その理由も（同じ間違いを繰り返させない。dogfood 4 回目は 2 回とも `too many checks: 8 > 6`）。
     if let Some(planner) = &context.execution_planner {
         out.push_str(&plan_limits_section(planner));
+        // ADR-0079 R7-2: check の書き方（本番で check 自体が誤って落ちた 6 つの形）。
+        out.push_str(PLANNER_CHECK_GUIDANCE);
         out.push_str(&previous_attempt_errors_section(planner, artifacts));
     }
     let schema = serde_json::to_string(&task_core::execution_plan::schema_value())
@@ -1047,6 +1049,8 @@ fn planner_limits(
         max_done_when_chars: or(planner.max_done_when_chars, d.max_done_when_chars),
         max_checks: or(planner.max_checks, d.max_checks),
         max_plan_json_bytes: or(planner.max_plan_json_bytes, d.max_plan_json_bytes),
+        // ADR-0079 R7-2: /3 の planner の `max_plan_json_bytes` は dispatcher が /3 の上限で埋める。
+        max_plan_json_bytes_v3: or(planner.max_plan_json_bytes, d.max_plan_json_bytes_v3),
         // `max_work_units` は dispatcher が v1/v2 に応じて選んだ値（`max_work_units_v2` を含む）。
         max_work_units_v2: or(planner.max_work_units, d.max_work_units_v2),
         max_phases: or(planner.max_phases, d.max_phases),
@@ -1080,8 +1084,9 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
         // ADR-0079 D3（Phase R2b）: /3 の計画の上限（検証で拒否）。
         out.push_str(&format!(
             "- `stages`: 1 to {} stages. At most {} units per stage (leaves + child tasks; celeris-added \
-             integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"`. At most \
-             {} `decisions` (plan-level and unit-level together).\n",
+             integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"` that will \
+             create a child (units already done and `adopt` units do not count). At most {} `decisions` \
+             (plan-level and unit-level together).\n",
             l.tree.max_stages,
             l.tree.max_units_per_stage,
             l.tree.max_child_tasks_per_plan,
@@ -1112,7 +1117,12 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
     ));
     out.push_str(&format!(
         "- `rationale` at most {} characters; the whole plan JSON at most {} bytes.\n",
-        l.max_rationale_chars, l.max_plan_json_bytes
+        l.max_rationale_chars,
+        if planner.tree.is_some() {
+            l.max_plan_json_bytes_v3
+        } else {
+            l.max_plan_json_bytes
+        }
     ));
     if planner.tree.is_some() {
         out.push_str(&format!(
@@ -1635,6 +1645,23 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push_str(&result_json_instructions(artifacts));
     out
 }
+
+/// ADR-0079 R7-2: planner の「check の書き方」。本番（2026-09-29/30）で unit の成果ではなく check そのものが
+/// 誤って落ちた形を 1 規則 1 文で並べる（/1・/2・/3 の planner に共通。上限の節の直後）。
+pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `checks` and command acceptance)\n\
+     - A \"no out-of-scope diff\" check must exclude the paths the unit is allowed to write as records: \
+     `docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write.\n\
+     - Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test` unless the package \
+     script accepts them (`pnpm -C web test scripts/ e2e/support/` handed directories to `node --test` and \
+     failed).\n\
+     - Pin the package manager: write `corepack pnpm@<version from package.json packageManager> -C <dir> ...` \
+     instead of bare `pnpm` (the host pnpm may differ and fail with ERR_PNPM_BAD_PM_VERSION).\n\
+     - Compare against `$(git merge-base HEAD main)` (e.g. `git diff --quiet $(git merge-base HEAD main) -- \
+     <paths>`) or the unit's recorded base, never a hard-coded main sha, because main moves during the task.\n\
+     - A negated grep (`! grep ...`) must not match text the unit itself writes (its own ADR, notes or \
+     comments explaining the rule); this self-reference has failed real checks.\n\
+     - A check runs inside its own unit's worktree, so it may only use files that exist there: a check \
+     that runs a script another unit creates belongs to a unit that `depends_on` the creating unit.\n\n";
 
 /// ADR-0090 D5: planner の leaf の基準に足す 1 段落（数時間かかるクラスタ job の扱い）。
 pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm, ADR-0090)**: a unit that \
@@ -5930,5 +5957,63 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
         assert!(prompt.contains("Phases and parallel WorkUnits"));
         assert!(!prompt.contains("Leaf criteria"));
         assert!(!prompt.contains("Remaining depth"));
+    }
+
+    /// ADR-0079 R7-2: /2 と /3 の planner のプロンプトに「check の書き方」の節（6 規則）が出る。/3 は子を作る unit
+    /// だけを数える上限の説明と、dispatcher が渡す /3 の JSON の大きさの上限を出す。
+    #[test]
+    fn planner_prompt_has_the_check_writing_section() {
+        let task = crate::protocol::tests::sample_task();
+        let needles = [
+            "### check の書き方",
+            "`docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write",
+            "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
+            "corepack pnpm@<version from package.json packageManager> -C <dir>",
+            "git diff --quiet $(git merge-base HEAD main) --",
+            "A negated grep (`! grep ...`) must not match text the unit itself writes",
+            "a check that runs a script another unit creates belongs to a unit that `depends_on` the creating unit",
+        ];
+        let v2 = crate::protocol::ExecutionPlannerContext {
+            gate_rule_id: "human/explicit".to_string(),
+            max_work_units: 8,
+            parallel: true,
+            max_phases: 5,
+            max_plan_json_bytes: 24 * 1024,
+            ..Default::default()
+        };
+        let v3 = crate::protocol::ExecutionPlannerContext {
+            max_plan_json_bytes: 64 * 1024,
+            tree: Some(crate::protocol::TreePlannerContext {
+                depth: 1,
+                max_depth: 3,
+                remaining_depth: 2,
+                max_stages: 5,
+                max_units_per_stage: 6,
+                max_child_tasks_per_plan: 6,
+                ..Default::default()
+            }),
+            ..v2.clone()
+        };
+        for (name, planner) in [("v2", v2), ("v3", v3)] {
+            let context = RunContext {
+                execution_planner: Some(planner.clone()),
+                ..RunContext::default()
+            };
+            let prompt = build_prompt(&task, &context, "run-planner-checks", "artifacts");
+            for needle in needles {
+                assert!(prompt.contains(needle), "{name}: missing {needle:?}");
+            }
+            assert_eq!(prompt.matches("### check の書き方").count(), 1, "{name}");
+            let bytes = if planner.tree.is_some() { 65536 } else { 24576 };
+            assert!(
+                prompt.contains(&format!("the whole plan JSON at most {bytes} bytes")),
+                "{name}"
+            );
+            if planner.tree.is_some() {
+                assert!(prompt.contains(
+                    "that will create a child (units already done and `adopt` units do not count)"
+                ));
+            }
+        }
     }
 }

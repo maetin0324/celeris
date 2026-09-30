@@ -636,8 +636,11 @@ pub struct ExecutionLimits {
     pub max_done_when_chars: usize,
     /// WU の `checks` の件数上限（既定 6）。
     pub max_checks: usize,
-    /// 計画の JSON 全体の大きさの上限（バイト、既定 24 KiB）。
+    /// 計画の JSON 全体の大きさの上限（バイト、既定 24 KiB）。/1・/2 の検証が見る。
     pub max_plan_json_bytes: usize,
+    /// ADR-0079 R7-2: `celeris.execution-plan/3` の JSON 全体の大きさの上限（バイト、既定 64 KiB）。/3 は段階・
+    /// 決定・done の unit の持ち越しを 1 つの JSON に書くので /1・/2 の 24 KiB では足りない（本番 24815 > 24576）。
+    pub max_plan_json_bytes_v3: usize,
     /// ADR-0074 §4（Phase F2）: `celeris.execution-plan/2` の `work_units` の件数上限（既定 10。
     /// 統合 WU・repair は数えない）。`max_work_units` は v1 専用のまま（既定 8。§4 の表）。
     pub max_work_units_v2: usize,
@@ -665,6 +668,7 @@ impl ExecutionLimits {
             max_done_when_chars: usize::MAX,
             max_checks: usize::MAX,
             max_plan_json_bytes: usize::MAX,
+            max_plan_json_bytes_v3: usize::MAX,
             max_work_units_v2: usize::MAX,
             max_phases: usize::MAX,
             tree: crate::tree::TreeLimits::permissive(),
@@ -685,6 +689,7 @@ impl Default for ExecutionLimits {
             max_done_when_chars: 300,
             max_checks: 6,
             max_plan_json_bytes: 24 * 1024,
+            max_plan_json_bytes_v3: 64 * 1024,
             max_work_units_v2: 10,
             max_phases: 5,
             max_children: 8,
@@ -1061,7 +1066,12 @@ impl std::fmt::Display for PlanValidationError {
                 write!(f, "work unit {key}: too many checks: {count} > {max}")
             }
             PlanValidationError::PlanTooLarge { bytes, max } => {
-                write!(f, "execution plan JSON is too large: {bytes} > {max} bytes")
+                // ADR-0079 R7-2: planner が何を削ればよいかを添える（拒否の文は次の試行の planner に渡る）。
+                write!(
+                    f,
+                    "execution plan JSON is too large: {bytes} > {max} bytes \
+                     (objective は要点だけにし、詳細は artifacts / 知識ベースのパスで参照してください)"
+                )
             }
             PlanValidationError::PhasesNotAllowedInV1 => {
                 write!(f, "phases must be empty in {EXECUTION_PLAN_SCHEMA}")
@@ -1965,7 +1975,15 @@ fn validate_v3(
         }
     }
     // ADR-0079 D15（Phase R5b-prep）: `adopt` の unit は子を作らないので数えない。
-    let task_units = spec.units.iter().filter(|u| u.creates_child()).count();
+    // ADR-0079 R7-2: replan で持ち越す done の unit（`done_work_units`）も数えない（子はもう終わっていて新しい子を
+    // 作らない。R6-1 D5 の承認の材料と同じ数え方）。長く走る root が done の kind task を溜めると新しい unit を
+    // 足せなくなっていた（本番「7 > 6」）。done でない行を持ち越す unit（failed の子を作り直す・走っている子）は数える。
+    let done_keys: BTreeSet<&str> = done_work_units.iter().map(|(k, _)| k.as_str()).collect();
+    let task_units = spec
+        .units
+        .iter()
+        .filter(|u| u.creates_child() && !done_keys.contains(u.key.as_str()))
+        .count();
     if task_units > tree.max_child_tasks_per_plan {
         errors.push(PlanValidationError::TooManyChildTasks {
             count: task_units,
@@ -2232,11 +2250,12 @@ fn validate_v3(
             });
         }
     }
+    // ADR-0079 R7-2: /3 は `max_plan_json_bytes_v3`（既定 64 KiB）で測る。
     let plan_bytes = serde_json::to_vec(spec).map(|v| v.len()).unwrap_or(0);
-    if plan_bytes > limits.max_plan_json_bytes {
+    if plan_bytes > limits.max_plan_json_bytes_v3 {
         errors.push(PlanValidationError::PlanTooLarge {
             bytes: plan_bytes,
-            max: limits.max_plan_json_bytes,
+            max: limits.max_plan_json_bytes_v3,
         });
     }
 
@@ -5166,6 +5185,90 @@ mod tests {
         }
         assert!(
             v3_errors(&p).contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 })
+        );
+    }
+
+    /// ADR-0079 R7-2: `max_child_tasks_per_plan` は子を作る unit だけを数える。replan で持ち越す done の kind task の
+    /// unit は数えない（done 3 + 生きた 4、done 3 + 生きた 6 は上限 6 の内）。生きた 7 は拒否。
+    #[test]
+    fn child_task_limit_counts_only_units_that_are_not_done() {
+        let stage = |key: &str| StageSpec {
+            key: key.into(),
+            kind: WorkUnitKind::Implement,
+            title: key.into(),
+            review: StageReview::None,
+        };
+        let v3 = |live: usize| {
+            // 段階あたりの上限（6）に当たらないよう、done は s1、生きた unit は s2 / s3 に置く。
+            let mut units: Vec<PlanUnitSpec> = (0..3)
+                .map(|i| task_unit(&format!("done-{i}"), "s1"))
+                .collect();
+            units.extend(
+                (0..live).map(|i| task_unit(&format!("live-{i}"), if i < 4 { "s2" } else { "s3" })),
+            );
+            ExecutionPlanSpec {
+                schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+                rationale: "r".into(),
+                stages: vec![stage("s1"), stage("s2"), stage("s3")],
+                units,
+                ..plan(vec![])
+            }
+        };
+        let done_of = |p: &ExecutionPlanSpec| -> Vec<(String, WorkUnitSpec)> {
+            p.units
+                .iter()
+                .filter(|u| u.key.starts_with("done-"))
+                .map(|u| (u.key.clone(), u.to_work_unit_spec()))
+                .collect()
+        };
+        for live in [4, 6] {
+            let p = v3(live);
+            validate(&p, tree_on(), &done_of(&p))
+                .unwrap_or_else(|e| panic!("3 done + {live} live must pass: {e:?}"));
+        }
+        // 3 done + 7 live: 生きた 7 だけを数える。
+        let p = v3(7);
+        let errs = validate(&p, tree_on(), &done_of(&p)).unwrap_err();
+        assert!(
+            errs.contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 }),
+            "{errs:?}"
+        );
+        // 最初の計画（done なし）は従来どおり全部を数える: 3 + 4 = 7。
+        let p = v3(4);
+        let errs = validate(&p, tree_on(), &[]).unwrap_err();
+        assert!(
+            errs.contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 }),
+            "{errs:?}"
+        );
+    }
+
+    /// ADR-0079 R7-2: /3 の JSON の大きさは `max_plan_json_bytes_v3`（既定 64 KiB）で測る（/1・/2 の 24 KiB は
+    /// 見ない）。拒否の文は planner に何を削るかを伝える。
+    #[test]
+    fn v3_plan_json_size_uses_its_own_limit_and_says_what_to_trim() {
+        assert_eq!(ExecutionLimits::default().max_plan_json_bytes, 24 * 1024);
+        assert_eq!(ExecutionLimits::default().max_plan_json_bytes_v3, 64 * 1024);
+        let spec = v3_fixture();
+        let small_v1 = ExecutionLimits {
+            max_plan_json_bytes: 10,
+            ..tree_on()
+        };
+        validate(&spec, small_v1, &[]).expect("/3 ignores the /1・/2 size limit");
+        let small_v3 = ExecutionLimits {
+            max_plan_json_bytes_v3: 10,
+            ..tree_on()
+        };
+        let errs = validate(&spec, small_v3, &[]).unwrap_err();
+        let too_large = errs
+            .iter()
+            .find(|e| matches!(e, PlanValidationError::PlanTooLarge { max: 10, .. }))
+            .expect("PlanTooLarge");
+        let text = too_large.to_string();
+        assert!(text.contains("> 10 bytes"), "{text}");
+        assert!(text.contains("objective は要点だけにし"), "{text}");
+        assert!(
+            text.contains("artifacts / 知識ベースのパスで参照"),
+            "{text}"
         );
     }
 

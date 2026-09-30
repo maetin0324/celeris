@@ -897,13 +897,15 @@ pub struct LimitHold {
 ///
 /// - 段階の数: `max_stages` 番目より後の段階の unit すべて。
 /// - 段階あたり: 段階ごとに、先頭から `max_units_per_stage` 個より後の unit。
-/// - 子 task: kind task の unit の先頭から `max_child_tasks_per_plan` 個より後。
+/// - 子 task: 子を作る kind task の unit（`adopt` と `done_keys` の unit を除く。R7-2）の先頭から
+///   `max_child_tasks_per_plan` 個より後。
 /// - `max_depth`: `depth` の task が子 task を持てなければ、kind task の unit すべて。
 /// - 木の leaf: この計画で新しく作る leaf（`existing_keys` に無い leaf）のうち、木の残り
 ///   （`max_tree_leaves − tree_leaves`）より後。
 ///
 /// 前の束で止めた unit は後の束に入れない（1 つの unit は 1 件の決定で止まる）。`extra_held` は unit の
-/// gate が既に止めた unit（`leaf_too_large`。数えるが止める束には入れない）。
+/// gate が既に止めた unit（`leaf_too_large`。数えるが止める束には入れない）。`done_keys` は replan で持ち越す
+/// done の unit（子 task の数に入れない。検証と同じ。ADR-0079 R7-2）。
 pub fn plan_limit_holds(
     spec: &crate::execution_plan::ExecutionPlanSpec,
     limits: &TreeLimits,
@@ -911,6 +913,7 @@ pub fn plan_limit_holds(
     tree_leaves: u32,
     existing_keys: &std::collections::BTreeSet<String>,
     extra_held: &std::collections::BTreeSet<String>,
+    done_keys: &std::collections::BTreeSet<String>,
 ) -> Vec<LimitHold> {
     let mut holds: Vec<LimitHold> = Vec::new();
     if spec.schema != crate::execution_plan::EXECUTION_PLAN_SCHEMA_V3 {
@@ -989,8 +992,11 @@ pub fn plan_limit_holds(
     let task_units: Vec<&crate::execution_plan::PlanUnitSpec> =
         spec.units.iter().filter(|u| u.is_task()).collect();
     // ADR-0079 D15（Phase R5b-prep）: `adopt` の unit は子を作らないので子 task の上限に数えない（検証と同じ）。
-    let new_children: Vec<&&crate::execution_plan::PlanUnitSpec> =
-        task_units.iter().filter(|u| u.creates_child()).collect();
+    // ADR-0079 R7-2: 持ち越す done の unit も数えない（検証の `TooManyChildTasks` と同じ）。
+    let new_children: Vec<&&crate::execution_plan::PlanUnitSpec> = task_units
+        .iter()
+        .filter(|u| u.creates_child() && !done_keys.contains(&u.key))
+        .collect();
     if new_children.len() > limits.max_child_tasks_per_plan {
         let units = new_children
             .iter()
@@ -2518,7 +2524,7 @@ mod tests {
         let none = std::collections::BTreeSet::new();
         // 段階あたり 7 → 7 つ目だけ。
         let p = plan(&[("s1", "implement")], many_leaves("s1", 7));
-        let holds = plan_limit_holds(&p, &limits, 1, 0, &none, &none);
+        let holds = plan_limit_holds(&p, &limits, 1, 0, &none, &none, &none);
         assert_eq!(
             holds,
             vec![LimitHold {
@@ -2539,7 +2545,15 @@ mod tests {
         let units: Vec<PlanUnitSpec> = (1..=6)
             .map(|i| leaf_spec(&format!("u{i}"), &format!("s{i}"), false))
             .collect();
-        let holds = plan_limit_holds(&plan(&stage_refs, units), &limits, 1, 0, &none, &none);
+        let holds = plan_limit_holds(
+            &plan(&stage_refs, units),
+            &limits,
+            1,
+            0,
+            &none,
+            &none,
+            &none,
+        );
         assert_eq!(holds.len(), 1);
         assert_eq!(holds[0].limit, TreeLimitKind::Stages);
         assert_eq!(holds[0].units, vec!["u6".to_string()]);
@@ -2550,7 +2564,7 @@ mod tests {
             .collect();
         units.extend((4..7).map(|i| task_spec(&format!("c{i}"), "s2", false)));
         let p = plan(&[("s1", "implement"), ("s2", "implement")], units);
-        let holds = plan_limit_holds(&p, &limits, 1, 0, &none, &none);
+        let holds = plan_limit_holds(&p, &limits, 1, 0, &none, &none, &none);
         assert_eq!(holds.len(), 1);
         assert_eq!(holds[0].limit, TreeLimitKind::ChildTasks);
         assert_eq!(holds[0].units, vec!["c6".to_string()]);
@@ -2559,27 +2573,27 @@ mod tests {
             &[("s1", "implement")],
             vec![leaf_spec("a", "s1", false), task_spec("c", "s1", false)],
         );
-        let holds = plan_limit_holds(&p, &limits, 3, 0, &none, &none);
+        let holds = plan_limit_holds(&p, &limits, 3, 0, &none, &none, &none);
         assert_eq!(holds.len(), 1);
         assert_eq!(holds[0].limit, TreeLimitKind::MaxDepth);
         assert_eq!(holds[0].units, vec!["c".to_string()]);
-        assert!(plan_limit_holds(&p, &limits, 2, 0, &none, &none).is_empty());
+        assert!(plan_limit_holds(&p, &limits, 2, 0, &none, &none, &none).is_empty());
         // 木の leaf: 既に 38、この計画の新しい leaf 3 つ（うち 1 つは既存の key）→ 残り 2 に収まる。
         let p = plan(&[("s1", "implement")], many_leaves("s1", 3));
         let existing: std::collections::BTreeSet<String> = ["s1-l0".to_string()].into();
-        assert!(plan_limit_holds(&p, &limits, 1, 38, &existing, &none).is_empty());
+        assert!(plan_limit_holds(&p, &limits, 1, 38, &existing, &none, &none).is_empty());
         // 既に 39 なら 1 つ目の新しい leaf だけ、残りを止める。
-        let holds = plan_limit_holds(&p, &limits, 1, 39, &existing, &none);
+        let holds = plan_limit_holds(&p, &limits, 1, 39, &existing, &none, &none);
         assert_eq!(holds.len(), 1);
         assert_eq!(holds[0].limit, TreeLimitKind::TreeLeaves);
         assert_eq!(holds[0].units, vec!["s1-l2".to_string()]);
         assert_eq!((holds[0].count, holds[0].max), (41, 40));
         // unit の gate が止めた leaf（extra_held）は束に入れず、leaf の数にも数えない。
         let extra: std::collections::BTreeSet<String> = ["s1-l1".to_string()].into();
-        assert!(plan_limit_holds(&p, &limits, 1, 39, &existing, &extra).is_empty());
+        assert!(plan_limit_holds(&p, &limits, 1, 39, &existing, &extra, &none).is_empty());
         // 上限の内なら何も止めない・/2 は対象外。
         let p = plan(&[("s1", "implement")], many_leaves("s1", 6));
-        assert!(plan_limit_holds(&p, &limits, 1, 0, &none, &none).is_empty());
+        assert!(plan_limit_holds(&p, &limits, 1, 0, &none, &none, &none).is_empty());
         let mut v2 = p.clone();
         v2.schema = crate::execution_plan::EXECUTION_PLAN_SCHEMA_V2.to_string();
         assert!(
@@ -2592,10 +2606,31 @@ mod tests {
                 1,
                 0,
                 &none,
+                &none,
                 &none
             )
             .is_empty()
         );
+    }
+
+    /// ADR-0079 R7-2: 持ち越す done の kind task の unit は子 task の数に入れない（検証と同じ）。done 3 + 生きた 4
+    /// は上限 6 の内、生きた 7 なら 7 つ目を止める。
+    #[test]
+    fn plan_limit_holds_do_not_count_done_task_units() {
+        let limits = enabled();
+        let none = std::collections::BTreeSet::new();
+        // 段階あたり 6 の上限に当たらないよう 2 つの段階に分ける。
+        let units: Vec<PlanUnitSpec> = (0..7)
+            .map(|i| task_spec(&format!("c{i}"), if i < 4 { "s1" } else { "s2" }, false))
+            .collect();
+        let p = plan(&[("s1", "implement"), ("s2", "implement")], units);
+        let done: std::collections::BTreeSet<String> =
+            ["c0".to_string(), "c1".to_string(), "c2".to_string()].into();
+        assert!(plan_limit_holds(&p, &limits, 1, 0, &none, &none, &done).is_empty());
+        let holds = plan_limit_holds(&p, &limits, 1, 0, &none, &none, &none);
+        assert_eq!(holds.len(), 1);
+        assert_eq!(holds[0].limit, TreeLimitKind::ChildTasks);
+        assert_eq!(holds[0].units, vec!["c6".to_string()]);
     }
 
     fn run(task: TaskId, role: RunIndexRole, tokens: (u64, u64), cost: Option<f64>) -> RunRow {

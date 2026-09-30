@@ -24201,6 +24201,20 @@ mod tests {
     #[tokio::test]
     async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session() {
         let dir = tempfile::tempdir().unwrap();
+        // The browser run path refuses to start without the isolated runtime (P4-A).
+        let exe = std::env::current_exe().unwrap();
+        let bin = exe.parent().unwrap().parent().unwrap();
+        task_worker::browser::configure_isolated_runtime(
+            task_worker::browser::IsolatedBrowserConfig {
+                live_sessions: None,
+                resolver: Some("127.0.0.1".parse().unwrap()),
+                record_dir: std::env::temp_dir()
+                    .join(format!("celeris-browser-dispatch-unit-{}", std::process::id())),
+                bwrap: "/usr/bin/bwrap".into(),
+                sandboxd: bin.join("celeris-browser-sandboxd"),
+                egress: bin.join("celeris-browser-egress"),
+            },
+        );
         let (d, _, task, sessions) = browser_fallback_dispatcher(dir.path(), 1);
         let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
         let candidates = d.browser_fallback_candidates(

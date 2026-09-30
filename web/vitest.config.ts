@@ -8,6 +8,7 @@ export default defineConfig({
       "test/**/*.test.ts",
       "test/**/*.test.tsx",
       "lib/**/*.test.ts",
+      "api/**/*.test.ts",
       "server/**/*.test.ts",
       "e2e/support/**/*.test.ts",
     ],

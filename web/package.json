@@ -24,6 +24,7 @@
     "mobile-audit": "node scripts/mobile-audit.mjs"
   },
   "dependencies": {
+    "@tanstack/react-query": "5.103.2",
     "@tanstack/react-router": "1.170.38",
     "express": "5.2.1",
     "react": "19.2.8",

@@ -8,6 +8,7 @@ import { createAuth } from "./auth.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
 import { createRelay } from "./relay.js";
+import { isSpaRoute } from "./spa-routes.js";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -153,6 +154,8 @@ export function createApp({
     if (req.method !== "GET" && req.method !== "HEAD") return res.status(404).type("text/plain").send("not found");
     res.set("Content-Security-Policy", htmlCsp);
     res.set("Cache-Control", "no-store");
+    // 未定義の path も同じ middleware を通したうえで 404。本文は SPA で、shell の中の 404 を出す（R42）。
+    if (!isSpaRoute(req.path)) res.status(404);
     res.sendFile(path.join(distDir, "index.html"), (error) => {
       if (error && !res.headersSent) next(error);
     });

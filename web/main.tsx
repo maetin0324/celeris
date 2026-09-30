@@ -8,6 +8,7 @@ import { onUnauthenticated } from "./lib/session";
 import { routeTree } from "./routeTree.gen";
 import "./styles.css";
 
+// 戻る・進むの scroll 位置は shell（components/shell/scroll-memory.ts）が戻す。
 const router = createRouter({ routeTree });
 
 declare module "@tanstack/react-router" {

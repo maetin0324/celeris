@@ -200,3 +200,188 @@ const task = (id: string, title: string) => ({
   priority_label: "normal",
   updated_at: "2026-09-30T00:00:00Z",
 });
+
+// P4-03〜P4-05: 案件詳細の操作。書き込みは page.route で受け、送った method・path・本文を確かめる。
+type Sent = { method: string; path: string; body: unknown };
+async function captureWrites(page: import("@playwright/test").Page) {
+  const sent: Sent[] = [];
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") return route.fallback();
+    sent.push({ method: request.method(), path: new URL(request.url()).pathname, body: request.postDataJSON() });
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  return sent;
+}
+
+const opsDetail = {
+  ...detail,
+  milestones: [],
+  milestones_frozen: 0,
+  repos: [
+    {
+      id: "R1",
+      name: "main-repo",
+      kind: "git",
+      project_id: "P1",
+      is_primary: true,
+      location: { kind: "local", path: "/work/p1" },
+      created_at: "2026-09-30T00:00:00Z",
+    },
+    {
+      id: "R2",
+      name: "sub-repo",
+      kind: "git",
+      project_id: "P1",
+      location: { kind: "local", path: "/work/p1-sub" },
+      created_at: "2026-09-30T00:00:00Z",
+    },
+  ],
+};
+
+async function openDetail(page: import("@playwright/test").Page, fixtures: Record<string, unknown> = {}) {
+  const h = harness({ "/api/v1/projects/P1": opsDetail, "/api/v1/tasks/T1/artifacts": { items: [] }, ...fixtures });
+  const gateway = await h.start();
+  const sent = await captureWrites(page);
+  await page.goto(`${gateway.base}/projects/P1`);
+  await expect(page.getByRole("heading", { level: 1, name: "案件の詳細 P1" })).toBeVisible();
+  return { h, gateway, sent };
+}
+
+const last = (sent: Sent[]) => sent.at(-1);
+
+test("parity: /projects/:id 案件の操作", async ({ page }) => {
+  const { h, gateway, sent } = await openDetail(page);
+  try {
+    const ops = page.getByTestId("project-ops");
+    await ops.getByLabel("案件名").fill("改名した案件");
+    await ops.getByRole("button", { name: "名前と依頼を保存" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", path: "/api/projects/P1", body: { title: "改名した案件" } });
+    await ops.getByLabel("状態").selectOption("done");
+    await ops.getByRole("button", { name: "状態を変える" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ method: "PATCH", body: { status: "done" } });
+    await ops.getByRole("button", { name: "一時停止" }).click();
+    await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/pause");
+    // 中止とアーカイブは確認のダイアログを通す。やめれば送らない。
+    const before = sent.length;
+    await ops.getByRole("button", { name: "中止", exact: true }).click();
+    await page.getByRole("dialog", { name: "中止" }).getByRole("button", { name: "やめる" }).click();
+    expect(sent.length).toBe(before);
+    await ops.getByRole("button", { name: "中止", exact: true }).click();
+    await page.getByRole("dialog", { name: "中止" }).getByRole("button", { name: "中止する" }).click();
+    await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/cancel");
+    await ops.getByRole("button", { name: "アーカイブ", exact: true }).click();
+    await page.getByRole("dialog", { name: "アーカイブ" }).getByRole("button", { name: "アーカイブする" }).click();
+    await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/archive");
+    await ops.getByLabel("作業場所の path").fill("/work/new");
+    await ops.getByRole("button", { name: "作業場所を保存" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", body: { workspace: { kind: "local", path: "/work/new" } } });
+    await ops.getByRole("button", { name: "作業場所を消す" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ method: "PATCH", body: { workspace: null } });
+    await ops.getByLabel("仕事の題").fill("足す仕事");
+    await ops.getByRole("button", { name: "仕事を足す" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "POST", path: "/api/tasks", body: { title: "足す仕事", project_id: "P1" } });
+    await expect(ops.getByRole("status").first()).toHaveText("操作が完了しました");
+  } finally {
+    await h.close(gateway);
+  }
+});
+
+test("parity: /projects/:id 計画と途中目標", async ({ page }) => {
+  const { h, gateway, sent } = await openDetail(page);
+  const count = () => h.daemon.requests.filter((r) => r.path === "/api/v1/projects/P1").length;
+  try {
+    const ops = page.getByTestId("project-plan-ops");
+    await ops.getByLabel("計画の目標").fill("計画の目標文");
+    await ops.getByLabel("段階（1 行に 1 つ、任意）").fill("調べる\n作る");
+    await ops.getByRole("button", { name: "計画を立てる" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({
+        path: "/api/tasks",
+        body: { project_id: "P1", stages_hint: [{ title: "調べる" }, { title: "作る" }] },
+      });
+    await ops.getByLabel("途中目標").fill("中間の目標");
+    await ops.getByRole("button", { name: "途中目標を足す" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ body: { stages_hint: [{ title: "中間の目標" }] } });
+    const row = ops.locator("[data-root-task='T1']");
+    await row.getByRole("button", { name: "計画を承認" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ path: "/api/tasks/T1/execution/plan-gate", body: { action: "approve" } });
+    await row.getByRole("button", { name: "段階を通す" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ path: "/api/tasks/T1/execution/phase-gate", body: { action: "continue" } });
+    await row.getByRole("button", { name: "段階を取り下げる" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ body: { action: "withdraw" } });
+    for (const [label, action] of [
+      ["止める", "pause"],
+      ["再開", "resume"],
+      ["取り消す", "cancel"],
+    ] as const) {
+      await row.getByRole("button", { name: label, exact: true }).click();
+      await expect.poll(() => last(sent)?.path).toBe(`/api/tasks/T1/${action}`);
+    }
+    // project_plan_proposed / decided でその project の detail を取り直す。
+    await expect.poll(() => h.daemon.streamClients).toBeGreaterThan(0);
+    for (const [i, kind] of (["project_plan_proposed", "project_plan_decided"] as const).entries()) {
+      const before = count();
+      h.daemon.sendEvent("task.event", {
+        id: 100 + i,
+        seq: 100 + i,
+        task_id: "T1",
+        ts: "2026-09-30T00:00:00Z",
+        event: { type: kind, project_id: "P1", version: 2 },
+      });
+      await expect.poll(count).toBeGreaterThan(before);
+    }
+  } finally {
+    await h.close(gateway);
+  }
+});
+
+test("parity: /projects/:id 全 intent・計画・木", async ({ page }) => {
+  const { h, gateway, sent } = await openDetail(page);
+  try {
+    const repos = page.getByTestId("project-repos");
+    await expect(repos.locator("[data-repo]")).toHaveCount(2);
+    await repos.getByLabel("リポジトリ名").fill("new-repo");
+    await repos.getByLabel("リポジトリの path").fill("/work/new-repo");
+    await repos.getByRole("button", { name: "リポジトリを足す" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({
+        method: "POST",
+        path: "/api/projects/P1/repos",
+        body: { name: "new-repo", location: { kind: "local", path: "/work/new-repo" } },
+      });
+    const r2 = repos.locator("[data-repo='R2']");
+    await r2.getByLabel("既定ブランチ R2").fill("develop");
+    await r2.getByRole("button", { name: "保存" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", path: "/api/repos/R2", body: { default_branch: "develop" } });
+    await r2.getByRole("button", { name: "主にする" }).click();
+    await expect
+      .poll(() => last(sent))
+      .toMatchObject({ method: "PATCH", path: "/api/repos/R2", body: { is_primary: true } });
+    await r2.getByRole("button", { name: "削除", exact: true }).click();
+    await page.getByRole("dialog", { name: "削除" }).getByRole("button", { name: "削除する" }).click();
+    await expect.poll(() => last(sent)).toMatchObject({ method: "DELETE", path: "/api/repos/R2" });
+    // 案件・計画の intent も同じ画面にあり、計画の DAG と仕事の木も出ている。
+    await expect(page.getByTestId("project-ops")).toBeVisible();
+    await expect(page.getByTestId("project-plan-ops")).toBeVisible();
+    await expect(page.locator("[data-dag-node]")).toHaveCount(6);
+    await expect(page.locator("[data-tree-task='T9']")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally {
+    await h.close(gateway);
+  }
+});

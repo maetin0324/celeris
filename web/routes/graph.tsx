@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
+import { createFileRoute, useRouterState } from "@tanstack/react-router";
+import { GraphScreen } from "../features/tasks/graph-view";
 import { optionalBoolean, optionalNumber, optionalString } from "../lib/search";
 
 // R35 /graph（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
@@ -13,5 +13,14 @@ export const Route = createFileRoute("/graph")({
 });
 
 function Screen() {
-  return <ScreenFrame title="依存グラフ" route="/graph" />;
+  const search = useRouterState({ select: (state) => state.location.searchStr });
+  const params = new URLSearchParams(search);
+  const rawDepth = params.get("depth");
+  const depth = rawDepth === null || rawDepth === "" ? undefined : Number(rawDepth);
+  return (
+    <GraphScreen
+      root={params.get("root") ?? undefined}
+      depth={depth !== undefined && Number.isInteger(depth) && depth >= 0 ? depth : undefined}
+    />
+  );
 }

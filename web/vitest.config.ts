@@ -13,6 +13,8 @@ export default defineConfig({
       "api/**/*.test.ts",
       "components/**/*.test.ts",
       "components/**/*.test.tsx",
+      "features/**/*.test.ts",
+      "features/**/*.test.tsx",
       "server/**/*.test.ts",
       "e2e/support/**/*.test.ts",
     ],

@@ -30,7 +30,7 @@ export const screens = [
   { path: "/accounts", fixture: "/accounts", heading: "アカウント" },
   { path: "/clusters", fixture: "/clusters", heading: "クラスタ" },
   { path: "/releases", fixture: "/releases", heading: "リリース" },
-  { path: "/graph", fixture: "/graph", heading: "依存グラフ" },
+  { path: "/graph", fixture: "/graph", heading: "依存グラフ", v3: true },
   { path: "/help", fixture: "/help", heading: "ヘルプ" },
 ] as const satisfies readonly Screen[];
 

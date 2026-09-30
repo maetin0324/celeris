@@ -186,6 +186,12 @@ fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
 
 impl IsolatedRuntime {
     pub fn launch(spec: &RuntimeSpec) -> Result<Self, RuntimeError> {
+        Self::launch_with(spec, true)
+    }
+
+    /// `arm_parent_death` が false なら bwrap に `PR_SET_PDEATHSIG` を掛けない。ADR-0088 D2 の
+    /// 「発火を取りこぼした」場合（prctl 前の競合）を実プロセスで再現する試験のためだけに使う。
+    pub fn launch_with(spec: &RuntimeSpec, arm_parent_death: bool) -> Result<Self, RuntimeError> {
         std::fs::create_dir_all(spec.session_dir.join("tmp"))?;
         let (info_r, info_w) = pipe()?;
         let (to_browser_r, to_browser_w) = pipe()?;
@@ -199,8 +205,15 @@ impl IsolatedRuntime {
             .map(|_| browser_relay::seqpacket_pair())
             .transpose()?;
         let channel_fd = channel.as_ref().map(|(_, s)| s.as_raw_fd());
+        // SAFETY: getpid は常に成功する。
+        let parent = unsafe { libc::getpid() };
         let mut cmd = Command::new(&spec.bwrap);
-        cmd.arg("--info-fd").arg("5").args(bwrap_args(spec));
+        let mut args = bwrap_args(spec);
+        if !arm_parent_death {
+            // 取りこぼしの再現では bwrap 自身の PDEATHSIG（--die-with-parent）も掛けない。
+            args.retain(|a| a != "--die-with-parent");
+        }
+        cmd.arg("--info-fd").arg("5").args(args);
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -208,8 +221,12 @@ impl IsolatedRuntime {
         // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は親が spawn まで保持する。
         unsafe {
             cmd.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
+                if arm_parent_death && libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
                     return Err(std::io::Error::last_os_error());
+                }
+                // prctl の前に親が死んでいれば PDEATHSIG は発火しない。ここで気付いて終わる（ADR-0088 D2）。
+                if libc::getppid() != parent {
+                    libc::_exit(127);
                 }
                 // 元の fd 番号が別の行き先（3〜6）と重なると、先の dup2 が後の元を潰す。
                 // 先に全部を行き先の範囲より上へ退避してから並べる（退避側は CLOEXEC で残らない）。
@@ -328,6 +345,32 @@ impl IsolatedRuntime {
         s
     }
 
+    /// bwrap が終わったか（zombie を回収しない。回収前は pgid が再利用されないので signal を送れる）。
+    pub(crate) fn exited_nowait(&self) -> bool {
+        // SAFETY: siginfo は零初期化した出力領域。WNOWAIT なので子は zombie のまま残る。
+        unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            let r = libc::waitid(
+                libc::P_PID,
+                self.child.id(),
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            );
+            r < 0 || info.si_pid() != 0
+        }
+    }
+
+    /// 未回収の bwrap の process group に signal を送る（呼出し側は回収前であることを保証する）。
+    pub(crate) fn signal_group(&self, sig: i32) {
+        // SAFETY: bwrap を wait する前（zombie でも pgid は保持される）だけ呼ばれる。
+        unsafe { libc::kill(-self.bwrap_pid(), sig) };
+    }
+
+    /// bwrap を回収する。以後この runtime の pid・pgid に signal を送らない。
+    pub(crate) fn reap(&mut self) {
+        let _ = self.child.wait();
+    }
+
     pub fn kill(&mut self) {
         // SAFETY: 自分が起こした process group。wait 前なので pgid は再利用されていない。
         unsafe { libc::kill(-self.bwrap_pid(), libc::SIGKILL) };
@@ -419,7 +462,13 @@ fn spawn_egress(
     unsafe {
         cmd.pre_exec(move || {
             // runtime の process group に入れて一緒に回収する（ADR-0088 D2）。
-            if libc::dup2(fd, 3) < 0 || libc::setpgid(0, pgid) < 0 {
+            // 元がすでに fd 3 なら dup2 は何もせず CLOEXEC が残る（exec で閉じる）。その時は外す。
+            let placed = if fd == 3 {
+                libc::fcntl(3, libc::F_SETFD, 0)
+            } else {
+                libc::dup2(fd, 3)
+            };
+            if placed < 0 || libc::setpgid(0, pgid) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -557,18 +606,89 @@ fn starttime(pid: i32) -> Option<u64> {
     rest.split_whitespace().nth(19)?.parse().ok()
 }
 
-/// runtime を `dir/<session>.pid` に記録する。
+/// 記録の 1 行（ADR-0088 D2）。`role` は診断用（bwrap / sandboxd / browser / egress / child）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedProcess {
+    pub pid: i32,
+    pub starttime: u64,
+    pub role: String,
+}
+
+/// `pid` の process が記録した本人（starttime 一致）で、まだ終わっていない（zombie でない）か。
+pub fn same_process_alive(pid: i32, starttime_expected: u64) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some(rest) = stat.rfind(')').map(|i| &stat[i + 1..]) else {
+        return false;
+    };
+    let mut f = rest.split_whitespace();
+    let state = f.next();
+    let st: Option<u64> = f.nth(18).and_then(|v| v.parse().ok());
+    st == Some(starttime_expected) && !matches!(state, Some("Z") | Some("X"))
+}
+
+/// `pid` の starttime（`/proc/<pid>/stat` の field 22）。
+pub fn process_starttime(pid: i32) -> Option<u64> {
+    starttime(pid)
+}
+
+/// runtime の process を `dir/<session>.pid` に tmp+rename で書く（1 行目が bwrap = pgid）。
+pub fn write_record(
+    dir: &Path,
+    session_id: &str,
+    procs: &[RecordedProcess],
+) -> std::io::Result<()> {
+    let body: String = procs
+        .iter()
+        .map(|p| format!("{} {} {}\n", p.pid, p.starttime, p.role))
+        .collect();
+    let path = dir.join(format!("{session_id}.pid"));
+    let tmp = dir.join(format!(".{session_id}.pid.tmp"));
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(tmp, path)
+}
+
+/// 記録を読む。壊れた行は捨てる。
+pub fn read_record(path: &Path) -> Vec<RecordedProcess> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    text.lines()
+        .enumerate()
+        .filter_map(|(i, l)| {
+            let mut it = l.split_whitespace();
+            let pid = it.next()?.parse().ok()?;
+            let starttime = it.next()?.parse().ok()?;
+            let role = it
+                .next()
+                .map(str::to_owned)
+                .unwrap_or_else(|| if i == 0 { "bwrap" } else { "child" }.to_owned());
+            Some(RecordedProcess {
+                pid,
+                starttime,
+                role,
+            })
+        })
+        .collect()
+}
+
+/// runtime を `dir/<session>.pid` に記録する（bwrap だけ）。
 pub fn record(dir: &Path, rt: &IsolatedRuntime) -> std::io::Result<()> {
     let pid = rt.bwrap_pid();
     let st = starttime(pid).ok_or_else(|| std::io::Error::other("no starttime"))?;
-    std::fs::write(
-        dir.join(format!("{}.pid", rt.session_id)),
-        format!("{pid} {st}\n"),
+    write_record(
+        dir,
+        &rt.session_id,
+        &[RecordedProcess {
+            pid,
+            starttime: st,
+            role: "bwrap".into(),
+        }],
     )
 }
 
-/// 記録された runtime のうち、pid と starttime が一致する process group を SIGKILL する。
-/// 戻り値は殺した pgid。記録は全部消す。
+/// 記録された process のうち pid と starttime が一致するものだけを SIGKILL する（bwrap は
+/// process group ごと）。starttime が違う pid（再利用）・終わった pid には何も送らない。
+/// 戻り値は signal を送った pid。記録は全部消す。
 pub fn reap_recorded(dir: &Path) -> std::io::Result<Vec<i32>> {
     let mut killed = Vec::new();
     for e in std::fs::read_dir(dir)? {
@@ -576,17 +696,13 @@ pub fn reap_recorded(dir: &Path) -> std::io::Result<Vec<i32>> {
         if path.extension().and_then(|x| x.to_str()) != Some("pid") {
             continue;
         }
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let mut it = text.split_whitespace();
-        let pid: Option<i32> = it.next().and_then(|p| p.parse().ok());
-        let st: Option<u64> = it.next().and_then(|p| p.parse().ok());
-        if let (Some(pid), Some(st)) = (pid, st)
-            && pid > 1
-            && starttime(pid) == Some(st)
-        {
-            // SAFETY: 記録と starttime が一致した runtime の process group だけ。
-            unsafe { libc::kill(-pid, libc::SIGKILL) };
-            killed.push(pid);
+        for p in read_record(&path) {
+            if p.pid > 1 && same_process_alive(p.pid, p.starttime) {
+                let target = if p.role == "bwrap" { -p.pid } else { p.pid };
+                // SAFETY: 直前に starttime が記録と一致した本人（bwrap は自分の pgid の leader）。
+                unsafe { libc::kill(target, libc::SIGKILL) };
+                killed.push(p.pid);
+            }
         }
         std::fs::remove_file(&path)?;
     }

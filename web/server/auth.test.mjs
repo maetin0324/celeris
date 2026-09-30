@@ -136,7 +136,8 @@ test("expired, tampered and gui/ cookies are unauthenticated", async () => {
   const [payload, mac] = token.split(".");
   const forged = Buffer.from(JSON.stringify({ iat: Math.floor(clock / 1000) + 10, id: "x" })).toString("base64url");
   assert.equal(auth.isValid(`${forged}.${mac}`), false, "tampered payload");
-  assert.equal(auth.isValid(`${payload}.${mac.slice(0, -1)}A`), false, "tampered mac");
+  const tamperedLastChar = mac.at(-1) === "A" ? "B" : "A";
+  assert.equal(auth.isValid(`${payload}.${mac.slice(0, -1)}${tamperedLastChar}`), false, "tampered mac");
   const future = Buffer.from(JSON.stringify({ iat: Math.floor(clock / 1000) + 3600, id: "x" })).toString("base64url");
   const futureMac = createHmac("sha256", "web-secret").update(future).digest("base64url");
   assert.equal(auth.isValid(`${future}.${futureMac}`), false, "issued in the future");

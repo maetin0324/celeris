@@ -15,7 +15,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
 |---|---|---|
 | P4-A isolated runtime | 一部達成（決定 p4a-uid: 同一 host UID）。実 bwrap runtime・事実採取・分離・daemon 起動時 orphan 回収・production worker の egress 接続は実装済み。復元結合は別 WorkUnit が担当 | `cargo test -p task-worker --test browser_runtime_isolated` → 4 passed / 1 ignored（helper）。実 chrome-headless-shell（agent-browser の browser、playwright 1243）を bwrap で起動し CDP pipe で `Browser.getVersion` 応答、host 側 `/proc` で 6 namespace 別・root ro・書ける mount は `/session` だけ・NoNewPrivs=1・CapEff/CapPrm=0・uid_map `1000 1001 1`・netns TCP LISTEN 0 件。同 spec の probe で broker/control socket・`/run/user`・host tmp 不可視、`/usr`・`/etc` 書込不可、host loopback fixture・10.0.0.1・::1・192.0.2.53:53 へ接続不可。controller SIGKILL 後に bwrap・sandbox 内 process が消える（実 process）。記録からの再起動回収は starttime 一致だけを殺す。`verify_isolation` は弱めず、違反は `SameUid` だけ → attestation 無し → 復元拒否。D3 の実 daemon 起動試験 1 passed、D4 の run_with_executable 実 chrome/egress/fixture 試験 1 passed（下記）。 |
 | P3-A identity 復元（隔離下のみ） | 結合済み・この host では拒否（決定 p4a-uid: 同一 host UID → `SameUid`）。成功経路は別 UID の実 runtime が無いので実証できていない | ADR-0088 D5。`POST /api/v1/browser/identities/{id}/restore` に `session_id` を追加し、supervisor が登録する registry 経由で稼働中 session に結合。`cargo test -p task-api --test browser_restore_live_session` → 1 passed（実 bwrap + 実 chrome-headless-shell の session に対して拒否 7 経路・`open_attempts()==0`）。`cargo test -p task-api --lib restore_` → 4 passed。`--restore` / `--state` / `--profile` は利用しない。 |
-| P4-B stronger injection | 部分達成（2026-09-30。broker IPC と controller CDP sink の harness 結線を実 bwrap + 実 browser + loopback fixture で確認）。注入成功時は receipt のみ返り、origin 不一致と cross-origin iframe は拒否。 | 【unit ipc】ADR-0089 D1〜D3 の broker injection-only IPC 証拠・制約は上記のとおり。 【unit wire-harness】commit `35ab5564`（cherry-pick `71640d79`）で `tests/browser_injection_wire.rs` を追加し、実 broker の `injection.sock` と実隔離 browser の CDP sink を結線。`cargo test -p task-worker --test browser_injection_wire` → **2 passed / 0 failed / 0 ignored**（`real_broker_browser_injection_receipt_and_origin_guards` は skip 無し、receipt-only 注入・origin ガードを確認）。`cargo test -p celeris-credentiald` → injection_ipc 12、broker 12、lib 14 passed。`cargo clippy --workspace -- -D warnings` → exit 0。実 chrome での攻撃行列 A1〜A17（TOCTOU・redirect・DOM 再表示・worker/browser 取得等）は WorkUnit attacks 待ち。本番 H3 の同一 browser controller 配線と端から端の実注入・event/artifact/LLM/DB/WAL 非露出は h3-prod 待ちで未実施。機密能力は未解放・本番未昇格。 |
+| P4-B stronger injection | 部分達成（2026-09-30。broker IPC と controller CDP sink の harness 結線を実 bwrap + 実 browser + loopback fixture で確認）。注入成功時は receipt のみ返り、origin 不一致と cross-origin iframe は拒否。 | 【unit ipc】ADR-0089 D1〜D3 の broker injection-only IPC 証拠・制約は上記のとおり。 【unit wire-harness】commit `35ab5564`（cherry-pick `71640d79`）で `tests/browser_injection_wire.rs` を追加し、実 broker の `injection.sock` と実隔離 browser の CDP sink を結線。`cargo test -p task-worker --test browser_injection_wire` → **2 passed / 0 failed / 0 ignored**（`real_broker_browser_injection_receipt_and_origin_guards` は skip 無し、receipt-only 注入・origin ガードを確認）。`cargo test -p celeris-credentiald` → injection_ipc 12、broker 12、lib 14 passed。`cargo clippy --workspace -- -D warnings` → exit 0。【unit attacks】`tests/browser_injection_attacks.rs` で実 chrome・実 broker・loopback fixture 上の A1〜A17 を実行。`cargo test -p task-worker --test browser_injection_attacks -- --nocapture` → **2 passed / 0 failed**（skip 無し、全 `ATTACK-Ax-OK` 出力）。A8（page script が値を可視 div に写す）は **未達の所見**: 区間後に agent の `Runtime.evaluate`/`DOM.getDocument` で sentinel が読める（`RedisplayGuard` が `CdpController::agent_command` に未配線）。詳細は下の「P4-B 実攻撃試験」節。本番 H3 の同一 browser controller 配線と端から端の実注入・event/artifact/LLM/DB/WAL 非露出は h3-prod 待ちで未実施。機密能力は未解放・本番未昇格。 |
 | H3 観測停止の維持 | 実装維持。機密起動は拒否 | `cargo test -p task-worker browser --lib` → 31 passed。`browser_auth_section_forward_events_drops_progress_artifact_and_live` と LiveEmitter の抑止試験を含む。API 結合テストの store auth_section / takeover 拒否も成功。実注入中の end-to-end 検証はP4-A/B待ち。 |
 | P4-C backend routing | 公開能力を実 backend protocol で適合。機密要求は拒否 | `--protocol-scripted --fallback-scenario` runner が実 agent-browser 0.38.1 + loopback fixture で ACP RPC・Claude CLI・specialist wrapper を各7/7 実行。runner の ledger を worker routing と実 browser fallback に渡して成功。主 ACP harness を SIGKILL し、別 session の Claude が click/download を完了。無候補と `CredentialUse` は明示拒否。`CredentialInjection`・`IdentityRestore` は P4-A/B の実適合まで拒否。実 LLM 比較は未。 |
 
@@ -129,3 +129,37 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
 - `cargo test --workspace` → **exit 0、3006 passed / 0 failed / 11 ignored**（既存の ignored 合計、この unit で新規追加なし）。
 - injection-only IPC（SO_PEERCRED role/session/lease 照合）と controller への実結線は並行 WorkUnit（ipc・後続 wire）の担当で、この unit では変更していない。攻撃試験行列（TOCTOU・redirect・cross-origin iframe・DOM 再表示・worker/browser からの取得）と H3 端から端の実注入検証は後続 WorkUnit（attacks・h3e2e）の担当。
 - 本番昇格・本番設定変更・内部 origin 追加はしていない。新しい設計は足していない（ADR-0089 の範囲内）。unwrap 不使用。
+
+## P4-B 実攻撃試験（2026-09-30、WorkUnit attacks）
+
+- 試験: `crates/task-worker/tests/browser_injection_attacks.rs`（外側 1 本が `unshare --user --map-root-user --net` で内側を起動し、実 chrome-headless-shell を bwrap 隔離 runtime で 1 回起動、実 broker `injection.sock`（`Admission::SameUidHarness`）と自己署名 HTTPS fixture・試験用 DNS で A1〜A17 を順に実行）。外部ネットワークに出ない。
+- 検査面: 各攻撃で sentinel とその percent・hex・UTF-16LE・base64（3 offset）を、agent への CDP 応答・receipt・broker IPC 応答・`journal.jsonl`・子 worker process の stdout/stderr・screenshot の PNG bytes と base64・内側 process の出力で検索。
+- 証拠コマンド: `cargo test -p task-worker --test browser_injection_attacks -- --nocapture` → exit 0、2 passed / 0 failed。`cargo test -p task-worker --test browser_injection_wire` → 2 passed。`cargo clippy --workspace -- -D warnings` → exit 0。
+
+| # | 観測 |
+|---|---|
+| A0 正例 | 注入成功、fixture input が sentinel を受け取り（長さ・文字コード和で照合）、区間終わりで空 |
+| A1 | 照合用 id 取得後に別 origin へ遷移 → `target_mismatch`、別 origin の input は空、lease 未消費 |
+| A2 | 同 origin の新 document → `target_changed`、新 document の input は空。`document.open()` は loader が変わらず同 origin・同 document への注入として成功（契約違反ではない） |
+| A3 | 実 meta refresh redirect（other → fixture）→ controller・broker とも `redirected`、同じ lease で後に成功（未消費） |
+| A4 | iframe 指定 → `cross_origin_frame`（controller・broker raw 要求とも）、別 target → `target_mismatch`、空 frame_chain → `empty_frame_chain` |
+| A5 | 逆向き iframe → `target_mismatch` / `cross_origin_frame` |
+| A6 | `type=text`・script で type 書換え → `redisplay_field`、DOM 値は空 |
+| A7 | 区間中の `Runtime.evaluate`・`DOM.getOuterHTML`・`DOM.getAttributes`・`DOM.getDocument`・`Accessibility.getFullAXTree`・`Runtime.callFunctionOn` → `auth_section_required`、区間後の値は空 |
+| A8 | **未達（所見）**: page が input 時に値を可視 div に複製すると、区間後に agent の `Runtime.evaluate`/`DOM.getDocument` 応答に sentinel が現れる。試験は `FINDING-A8` を出して記録している（合格扱いにしない） |
+| A9 | 区間中の `Page.captureScreenshot`・`Page.startScreencast` は拒否、区間後の screenshot（7103 bytes）に sentinel 文字列無し（OCR はしない） |
+| A10 | page の `console.log(value)`・値入り例外は実行済み、`CdpController` は event を外へ出さず応答にも sentinel 無し |
+| A11 | 実 python3 子 process が有効 lease・section つき要求 → `injection_worker_not_allowed`（SO_PEERCRED pid 不一致）、sink FD に frame 無し。`resolve.sock` → `trusted_injection_required`、bridge は固定拒否 |
+| A12 | page から `fetch('file://…injection.sock'/'…resolve.sock')` は blocked、`/proc/<runtime pid>/root` に broker run dir・socket が無い（対照 `/session` は有る） |
+| A13 | `InjectionService::handle` に別 UID の `PeerCred` → `peer_uid_mismatch`（関数単位。`unshare -r` の子は host で同 UID なので実 process 試験は未） |
+| A14 | 別 session として登録した controller 子 process が session A の lease で要求 → `injection_worker_not_allowed`、未登録 session → `session_not_live` |
+| A15 | 区間を開く前・閉じた後 → `auth_section_required`（controller・broker とも）、lease 未消費 |
+| A16 | 成功後の再要求 → `lease_used`、sink FD に 2 本目の frame 無し |
+| A17 | `value`/`length` field を含む要求 → `invalid_request` |
+
+- 未解決:
+  - A8: `RedisplayGuard`（`celeris-credentiald/src/injection.rs`）が controller の観測経路に配線されていない。ADR-0089 D4-7 の「broker が区間ごとに guard を作り controller に salt と hash を渡す」の IPC・controller 側実装が必要。これが入るまで D5 行列は全部期待どおりではない。
+  - A1: 「controller の照合後・`Runtime.callFunctionOn` 前」の競合を決定的に作れず、broker の `target_changed`（lease 消費後の拒否）経路は実 browser で未再現（stale id は controller 側で止まる）。
+  - A4: fixture の 2 host が同一 site のため OOPIF にならず、OOPIF の `target_mismatch` は未再現。
+  - A13: 別 host UID の実 process による試験は、別 UID が使える host が必要。
+  - `cargo clippy --workspace --all-targets -- -D warnings` は既存の `task-worker/src/browser_tests.rs`（`await_holding_lock`）と `task-dispatch`（`type_complexity`）で exit 101（この unit の変更と無関係）。

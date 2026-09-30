@@ -1422,3 +1422,9 @@ config の編集なし）。migration なし。
   `/var/lib/celeris/scratch/targets` 93 GB と `/var/lib/celeris/workspaces` 70 GB（回収候補: 終端 task の scratch target と workspace の GC）。
 - main の `gui/node_modules` が壊れていた（rolldown/parseAst 欠落、途中で止まった install の痕跡）→ 作り直し中。release gate は自前の node_modules
   cache を使うので影響なし。
+- 2026-09-30 04:57Z: web Phase 1 の子 01M3QEA4HC12TFCNDG5A7WT722 が統合検査失敗 → 空文の worker_question で blocked（**欠陥**: 質問文が空）。原因は
+  planner の check の書き方 2 件: (a) 範囲外差分の check が `docs/PROGRESS.md`（計画 §1 が許す完了記録）を除外していない、(b) `pnpm -C web test scripts/ e2e/support/`
+  が引数をディレクトリとして node --test に渡し 2 件 fail（実 test は 36/38 pass）。人の回答で check の直し方（PROGRESS の除外、引数なし、gui は
+  `corepack pnpm@11.27.0` で版固定 = pnpm 版合わせの別 task は不要）を planner に渡し ready に。前日の決定「gui の pnpm を 12.6.0 に上げる別 task」は
+  corepack 明示で満たすため不要（task も作られていない）。**R6 候補**: planner prompt に統合 check の書き方（PROGRESS 除外、`pnpm test` に引数を付けない、
+  corepack で版固定、base は固定 sha より merge-base）を足す。

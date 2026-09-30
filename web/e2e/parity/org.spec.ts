@@ -81,7 +81,7 @@ test("parity: /org 木・選択・作成・変更・削除・skill", async ({ pa
     .poll(() => actions.some((item) => item.method === "PATCH" && item.url.endsWith("/api/org/cos")))
     .toBe(true);
   await page.getByRole("button", { name: "review を表示" }).click();
-  await expect(page.getByText("確認")).toBeVisible();
+  await expect(page.getByText("確認", { exact: true })).toBeVisible();
   const beforeSkillChange = {
     org: daemon.requests.filter((request) => request.path === "/api/v1/org").length,
     skills: daemon.requests.filter((request) => request.path === "/api/v1/skills").length,

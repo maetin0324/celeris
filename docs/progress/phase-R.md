@@ -1662,3 +1662,41 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
   = 未 push の commit。`not our ref`）→ prepare 全体が失敗し planner が回れない。**R7-4**（submodule 展開を submodule ごとの best-effort にし、失敗は進捗行の
   警告に）を Opus に委譲。人への依頼: ior fork の commit 7054224d を remote に push するか、superproject の pin を存在する commit に更新する。
 - 09:11Z: BenchFS 実験(2) の子は review 不合格 → failed（`full` を選んだため E3/E4・GekkoFS 導入・等予算 grid が要件だが未実施。子は子作業を提案）→ 根が replan。
+
+
+## R7-4: submodule の初期化は submodule ごとの best-effort（2026-09-30）
+
+[ADR-0019 付記 R6-3 の R7-4](../adr/0019-worktree-sync-for-large-repositories.md)。発端は本番 2026-09-30 09:11Z、task 01M3PAZ4XG4QN1T8S98VNA6ABV（sirius の BenchFS）:
+上位が固定した `ior_integration/ior` の commit（push していない）が remote に無く、`git submodule update --init --recursive` が exit 67 → workspace の
+準備ごと失敗 → 根の planner の run が infra の失敗で進まない。**migration なし**。本番（systemctl・/var/lib/celeris・7700/7710・設定・ssh）には触れていない。
+task-ops / task-dispatch / task-core には触れていない（R7-3 と並行）。
+
+### 実装したもの
+
+- `task_worker::ssh::SshWorkspace::ensure_worktree`: 行頭 `-` があれば `.gitmodules` の path ごとに `submodule update --init --recursive -- <path>`、
+  失敗は `celeris-submodule-failed <path>\t<要点>` の行で返して続ける。Rust 側で `submodule <path> could not be initialised: <要点> (worktree <wt> on cluster <c>)`
+  の進行の行と `tracing::warn!`。要点は stderr の最初の `fatal:` / `error:` の行（`Cloning into ...` を避ける）、無ければ最初の空でない行。成功の行
+  `initialised N submodules ...` の N は失敗した path とその下を除いた初期化済みの数（0 なら出さない）。exit 67 は `git submodule status` が動かないときだけ。
+- `task_worker::local_worktree::init_submodules`: 同じ手順。戻り値を `Result<Option<SubmoduleInit { initialised, failed: Vec<(path, 要点)> }>>` にした
+  （`Err` は `submodule status` が動かないときだけ）。呼び出し側は `ensure_blocking` だけ（戻り値は捨てる。失敗は tracing の warn）。
+- 再利用: 失敗した submodule は clone まで済んで行頭 `-` でなくなることがあり、試し直さない（R6-3 の「`-` が無ければ触らない」をそのまま）。警告は最初の準備の 1 回。
+
+### 試験
+
+- `ssh::tests::one_unfetchable_submodule_does_not_stop_the_other_or_the_prepare`（偽 ssh。`lib/sub` と、remote に無い commit を固定した `ior`）: 準備は成功、
+  `lib/sub/lib.rs` が入る、進行の行は `initialised 1 submodules ...` と `submodule ior could not be initialised: fatal: ...`、再利用も成功で行は増えない。
+- `ssh::tests::a_failed_submodule_init_is_a_warning_note_not_a_prepare_error`（旧 `a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree`。
+  submodule の元を消す）: 準備は成功、警告の行 1 つ（path・クラスタ・worktree を名指し）。
+- `local_worktree::tests::one_unfetchable_submodule_does_not_stop_the_others`（同じ構成、`initialised = 1`、`failed = [("ior", "fatal: ...")]`）、
+  `the_worktree_initialises_submodules_and_reuse_is_idempotent`（既定の git の file 拒否は `ensure` のエラーでなく警告になった）。
+
+### 証拠
+
+- `cargo fmt --all` → 整形のみ、`cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo test -p task-worker` → exit 0（lib 612 passed / 0 failed / 1 ignored、ほかの test バイナリも 0 failed）。
+
+### 未解決・提案
+
+- 失敗した submodule を再利用で試し直す手段は無い（人が `git submodule deinit -f <path>` すれば次の準備で試し直す）。remote に commit が
+  push されたら直る種類の失敗なので、要るなら「警告の出た path を覚えて再試行する」を別 Phase で。

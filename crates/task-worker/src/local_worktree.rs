@@ -197,49 +197,119 @@ impl LocalWorktree {
     }
 }
 
-/// Phase R6-3（ADR-0019 付記）: 作業ツリー `dir` に `.gitmodules` があり、未初期化の submodule
-/// （`git submodule status --recursive` の行頭が `-`）があれば `git submodule update --init --recursive`
-/// する。初期化したら初期化後の submodule の数を `Some(n)` で返す（進行の行
-/// `initialised N submodules in <dir>` を tracing に出す）。`.gitmodules` が無い・全部初期化済みなら `None`
-/// （冪等。何度呼んでも同じ）。失敗は黙らずに `WorkspaceError::Remote` にする。
-pub fn init_submodules(dir: &Path) -> Result<Option<usize>, WorkspaceError> {
+/// Phase R7-4: `init_submodules` の結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubmoduleInit {
+    /// 初期化後に初期化済みの submodule の数（`submodule status --recursive` の行頭が `-` でない行）。
+    pub initialised: usize,
+    /// 初期化できなかった submodule（`.gitmodules` の path と、stderr の要点の 1 行）。準備は止めない。
+    pub failed: Vec<(String, String)>,
+}
+
+/// Phase R6-3 / R7-4（ADR-0019 付記）: 作業ツリー `dir` に `.gitmodules` があり、未初期化の submodule
+/// （`git submodule status --recursive` の行頭が `-`）があれば、`.gitmodules` の path ごとに
+/// `git submodule update --init --recursive -- <path>` する（**1 つずつ・best-effort**。1 つの失敗で
+/// 残りを止めない）。初期化したら `Some(SubmoduleInit)` を返す（成功の数を tracing の info、失敗を
+/// 1 つずつ tracing の warn に出す）。`.gitmodules` が無い・全部初期化済みなら `None`（冪等）。
+/// `Err` は `git submodule status` 自体が動かない（git が無い・worktree が使えない）ときだけ。
+pub fn init_submodules(dir: &Path) -> Result<Option<SubmoduleInit>, WorkspaceError> {
     init_submodules_with(dir, &[])
 }
 
 /// `init_submodules` の本体。`git_config` は `git -c` の前置き（テストでローカルパスの submodule を許すのに使う）。
-fn init_submodules_with(dir: &Path, git_config: &[&str]) -> Result<Option<usize>, WorkspaceError> {
+fn init_submodules_with(
+    dir: &Path,
+    git_config: &[&str],
+) -> Result<Option<SubmoduleInit>, WorkspaceError> {
     if !dir.join(".gitmodules").is_file() {
         return Ok(None);
     }
-    let fail = |what: &str, o: Option<GitOutput>| {
-        let detail = match o {
-            Some(o) => format!("exit {:?}: {}", o.code, o.stderr.trim()),
-            None => "cannot run git".to_string(),
-        };
-        WorkspaceError::Remote(format!(
-            "cannot initialise the git submodules of the worktree {} ({what}, {detail})",
-            dir.display()
-        ))
-    };
     let status = match git(dir, &["submodule", "status", "--recursive"]) {
         Some(o) if o.ok => o,
-        other => return Err(fail("git submodule status", other)),
+        other => {
+            let detail = match other {
+                Some(o) => format!("exit {:?}: {}", o.code, o.stderr.trim()),
+                None => "cannot run git".to_string(),
+            };
+            return Err(WorkspaceError::Remote(format!(
+                "cannot run the git submodule step in the worktree {} (git submodule status, {detail})",
+                dir.display()
+            )));
+        }
     };
     if !status.stdout.lines().any(|l| l.starts_with('-')) {
         return Ok(None);
     }
-    let mut update: Vec<&str> = git_config.to_vec();
-    update.extend(["submodule", "update", "--init", "--recursive"]);
-    match git(dir, &update) {
-        Some(o) if o.ok => {}
-        other => return Err(fail("git submodule update --init --recursive", other)),
+    let paths: Vec<String> = git(
+        dir,
+        &[
+            "config",
+            "-f",
+            ".gitmodules",
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ],
+    )
+    .filter(|o| o.ok)
+    .map(|o| {
+        o.stdout
+            .lines()
+            .filter_map(|l| l.split_once(' ').map(|(_, p)| p.to_string()))
+            .filter(|p| !p.is_empty())
+            .collect()
+    })
+    .unwrap_or_default();
+    let mut failed = Vec::new();
+    for path in &paths {
+        let mut update: Vec<&str> = git_config.to_vec();
+        update.extend(["submodule", "update", "--init", "--recursive", "--", path]);
+        match git(dir, &update) {
+            Some(o) if o.ok => {}
+            other => {
+                let why = match other {
+                    Some(o) => first_error_line(&o.stderr),
+                    None => "cannot run git".to_string(),
+                };
+                tracing::warn!(worktree = %dir.display(), submodule = %path, error = %why, "a git submodule could not be initialised (R7-4, best-effort)");
+                failed.push((path.clone(), why));
+            }
+        }
     }
-    let count = git(dir, &["submodule", "status", "--recursive"])
+    let initialised = git(dir, &["submodule", "status", "--recursive"])
         .filter(|o| o.ok)
-        .map(|o| o.stdout.lines().filter(|l| !l.trim().is_empty()).count())
+        .map(|o| {
+            o.stdout
+                .lines()
+                .filter(|l| !l.trim().is_empty() && !l.starts_with('-'))
+                // 失敗した submodule は clone だけ済んで `-` でない行になることがあるので数えない。
+                .filter(|l| {
+                    let p = l
+                        .get(1..)
+                        .and_then(|r| r.split_once(' '))
+                        .map_or("", |(_, p)| p);
+                    !failed.iter().any(|(f, _)| {
+                        p == f || p.starts_with(&format!("{f} ")) || p.starts_with(&format!("{f}/"))
+                    })
+                })
+                .count()
+        })
         .unwrap_or(0);
-    tracing::info!(worktree = %dir.display(), submodules = count, "initialised {count} submodules in {} (R6-3)", dir.display());
-    Ok(Some(count))
+    tracing::info!(worktree = %dir.display(), submodules = initialised, "initialised {initialised} submodules in {} (R6-3)", dir.display());
+    Ok(Some(SubmoduleInit {
+        initialised,
+        failed,
+    }))
+}
+
+/// git の stderr の要点の 1 行（`fatal:` / `error:` の最初の行。無ければ最初の空でない行）。
+/// `Cloning into ...` は要点ではないので、`fatal:` を優先する。
+fn first_error_line(stderr: &str) -> String {
+    let lines = || stderr.lines().map(str::trim).filter(|l| !l.is_empty());
+    lines()
+        .find(|l| l.starts_with("fatal:") || l.starts_with("error:"))
+        .or_else(|| lines().next())
+        .unwrap_or("unknown error")
+        .to_string()
 }
 
 /// `remove_if_clean` の結果。
@@ -589,23 +659,30 @@ mod tests {
 
         let root = tmp.path().join("ws");
         let wt = worktree_for(&repo, &root, "01R63LOCAL");
-        // 既定の git はローカルパス（file）の submodule の clone を拒む（git >= 2.38.1）。その失敗は黙らず、
-        // worktree を名指しした準備のエラーになる。
-        let err = wt
-            .ensure()
+        // 既定の git はローカルパス（file）の submodule の clone を拒む（git >= 2.38.1）。R7-4 から、その失敗は
+        // 準備を止めない（警告）。worktree はでき、submodule は空のまま。
+        wt.ensure()
             .await
-            .expect_err("file transport is refused by default");
-        let msg = err.to_string();
-        assert!(msg.contains("submodules"), "{msg}");
-        assert!(
-            msg.contains(&wt.dir.to_string_lossy().into_owned()),
-            "{msg}"
-        );
+            .expect("a failed submodule is a warning, not a prepare error");
+        assert!(wt.dir.join("README.md").is_file());
         assert!(!wt.dir.join("lib/sub/README.md").exists());
+        let report = init_submodules(&wt.dir)
+            .expect("warning only")
+            .expect("still uninitialised");
+        assert_eq!(report.initialised, 0);
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.failed[0].0, "lib/sub");
+        assert!(!report.failed[0].1.is_empty());
         // file を許すと初期化される（本番の submodule は ssh / https なのでこの前置きは要らない）。
         let count =
             init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("init");
-        assert_eq!(count, Some(1));
+        assert_eq!(
+            count,
+            Some(SubmoduleInit {
+                initialised: 1,
+                failed: Vec::new()
+            })
+        );
         assert!(
             wt.dir.join("lib/sub/README.md").is_file(),
             "submodule populated"
@@ -622,6 +699,71 @@ mod tests {
         let plain = tempfile::tempdir().expect("tempdir");
         init_repo(plain.path());
         assert_eq!(init_submodules(plain.path()).expect("no gitmodules"), None);
+    }
+
+    /// Phase R7-4（本番 2026-09-30、sirius の BenchFS）: 固定した commit が remote に無い submodule
+    /// （`ior_integration/ior` の push していない commit）が 1 つあっても、ほかの submodule は初期化され、
+    /// 準備は通る。失敗した submodule は path と `fatal:` の行で報告される。
+    #[tokio::test]
+    async fn one_unfetchable_submodule_does_not_stop_the_others() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let good = tmp.path().join("good");
+        let bad = tmp.path().join("bad");
+        init_repo(&good);
+        init_repo(&bad);
+        let repo = tmp.path().join("repo");
+        init_repo(&repo);
+        for (url, path) in [(&bad, "ior"), (&good, "lib/good")] {
+            let url = url.to_string_lossy().into_owned();
+            let out = git(
+                &repo,
+                &[
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "add",
+                    "-q",
+                    &url,
+                    path,
+                ],
+            )
+            .expect("git");
+            assert!(out.ok, "{}", out.stderr);
+        }
+        // `ior` の中で remote に無い commit を作り、上位はそれを固定する。
+        let ior = repo.join("ior");
+        for args in [
+            vec!["config", "user.email", "t@example.com"],
+            vec!["config", "user.name", "t"],
+        ] {
+            assert!(git(&ior, &args).expect("git").ok);
+        }
+        commit(&ior, "local-only");
+        let out = git(&repo, &["add", "-A"]).expect("git");
+        assert!(out.ok, "{}", out.stderr);
+        let out = git(&repo, &["commit", "-q", "-m", "submodules"]).expect("git");
+        assert!(out.ok, "{}", out.stderr);
+
+        let root = tmp.path().join("ws");
+        let wt = worktree_for(&repo, &root, "01R74LOCAL");
+        wt.ensure_tree_blocking().expect("worktree");
+        let report = init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"])
+            .expect("best-effort: not an error")
+            .expect("something to do");
+        assert_eq!(report.initialised, 1, "{report:?}");
+        assert!(
+            wt.dir.join("lib/good/README.md").is_file(),
+            "good one populated"
+        );
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.failed[0].0, "ior");
+        assert!(report.failed[0].1.starts_with("fatal:"), "{report:?}");
+        // 再実行しても落ちない。失敗した ior は clone までは済んで行頭が `-` でなくなるので、試し直さない（None）。
+        assert_eq!(
+            init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("again"),
+            None
+        );
+        wt.ensure().await.expect("ensure is not a prepare error");
     }
 
     /// ADR-0041 D1: やり直しの run は worktree を**作り直さない**（未コミットの作業を消さない）。

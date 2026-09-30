@@ -2,7 +2,14 @@ import { type QueryKey, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { ApiError, type ApiMethod, apiMutate } from "../../api/client";
 
-export type ActionResult = { id: string; ok: boolean; message: string; status?: number; uncertain?: boolean };
+export type ActionResult = {
+  id: string;
+  ok: boolean;
+  message: string;
+  status?: number;
+  uncertain?: boolean;
+  response?: unknown;
+};
 export type ActionTarget = { id: string; path: string; body?: unknown; method?: Exclude<ApiMethod, "GET"> };
 
 function errorMessage(error: unknown): Pick<ActionResult, "message" | "status" | "uncertain"> {
@@ -39,8 +46,8 @@ export function useActionResult(key: QueryKey) {
       for (const target of targets) {
         let result: ActionResult;
         try {
-          await apiMutate(target.method ?? "POST", target.path, target.body);
-          result = { id: target.id, ok: true, message: "操作が完了しました" };
+          const response = await apiMutate(target.method ?? "POST", target.path, target.body);
+          result = { id: target.id, ok: true, message: "操作が完了しました", response };
         } catch (error) {
           result = { id: target.id, ok: false, ...errorMessage(error) };
         }

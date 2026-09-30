@@ -134,3 +134,100 @@ test("parity: /graph root・depth", async ({ page }) => {
     await h.close(gateway);
   }
 });
+
+test("parity: /tasks/new 作成・条件 4 型・422", async ({ page }) => {
+  const h = harness({});
+  const gateway = await h.start();
+  let requests = 0;
+  let submitted: Record<string, unknown> | null = null;
+  await page.route("**/api/tasks", async (route) => {
+    requests += 1;
+    submitted = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: requests === 1 ? 422 : 200,
+      contentType: "application/json",
+      body: JSON.stringify(requests === 1 ? { error: "名前を確認してください" } : { id: "T42" }),
+    });
+  });
+  try {
+    await page.goto(`${gateway.base}/tasks/new`);
+    await page.getByLabel("名前").fill("新しいタスク");
+    await page.getByLabel("目的").fill("目的の本文");
+    const rows = page.locator("[data-testid='criterion-row']");
+    await rows.nth(0).getByRole("combobox").selectOption("command");
+    await rows.nth(0).getByRole("textbox").fill("cargo test");
+    for (const [type, value] of [
+      ["artifact_exists", "result.txt"],
+      ["reviewer", "reviewer check"],
+      ["human", "human check"],
+    ]) {
+      await page.getByRole("button", { name: "条件を追加" }).click();
+      const row = rows.last();
+      await row.getByRole("combobox").selectOption(type);
+      await row.getByRole("textbox").fill(value);
+    }
+    const create = page.getByRole("button", { name: "タスクを作成" });
+    await create.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect.poll(() => requests).toBe(1);
+    await expect(page.getByRole("alert")).toHaveText("名前を確認してください");
+    expect(requests).toBe(1);
+    await expect(page.getByLabel("名前")).toHaveValue("新しいタスク");
+    expect(submitted).toEqual({
+      title: "新しいタスク",
+      objective: "目的の本文",
+      acceptance: [
+        { type: "command", cmd: "cargo test", expect_exit: 0 },
+        { type: "artifact_exists", name: "result.txt" },
+        { type: "reviewer", text: "reviewer check" },
+        { type: "human", text: "human check" },
+      ],
+    });
+    await rows.nth(3).getByRole("button", { name: "条件を削除" }).click();
+    await expect(rows).toHaveCount(3);
+    await page.getByRole("button", { name: "条件を追加" }).click();
+    await create.click();
+    await expect(page).toHaveURL(`${gateway.base}/tasks/T42`);
+    expect(requests).toBe(2);
+    expect(await rows.count()).toBe(0);
+  } finally {
+    await h.close(gateway);
+  }
+});
+
+test("parity: /plans/new 作成と失敗表示", async ({ page }) => {
+  const h = harness({});
+  const gateway = await h.start();
+  let requests = 0;
+  let submitted: unknown;
+  await page.route("**/api/plans", async (route) => {
+    requests += 1;
+    submitted = route.request().postDataJSON();
+    await route.fulfill({
+      status: requests === 1 ? 422 : 200,
+      contentType: "application/json",
+      body: JSON.stringify(requests === 1 ? { error: "目標を確認してください" } : { id: "T43" }),
+    });
+  });
+  try {
+    await page.goto(`${gateway.base}/plans/new`);
+    await page.getByLabel("目標").fill("大きな目標");
+    const create = page.getByRole("button", { name: "計画を作成" });
+    await create.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect.poll(() => requests).toBe(1);
+    await expect(page.getByRole("alert")).toHaveText("目標を確認してください");
+    await expect(page.getByLabel("目標")).toHaveValue("大きな目標");
+    expect(requests).toBe(1);
+    expect(submitted).toEqual({ goal: "大きな目標" });
+    await create.click();
+    await expect(page).toHaveURL(`${gateway.base}/tasks/T43`);
+    expect(requests).toBe(2);
+  } finally {
+    await h.close(gateway);
+  }
+});

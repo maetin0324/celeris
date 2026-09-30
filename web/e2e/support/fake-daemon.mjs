@@ -328,6 +328,188 @@ export function createFakeDaemon({
         items: ["bbbbbbbbbbbb", "aaaaaaaaaaaa"].map(item),
       });
     }
+    // accounts/clusters (P4-13..15)
+    // accounts・secrets・llm sources・mcp clients・clusters を状態付きで返す。ログイン・接続の途中状態（login_pending /
+    // connect_pending）はサーバが持ち、GET で返す。secret の値は保存せず fingerprint だけ持つ。
+    if (/^\/api\/v1\/(accounts|secrets|llm\/sources|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
+      if (!server.fakeAc) {
+        server.fakeAc = {
+          accounts: [{ id: "main", adapter: "claude-code", logged_in: true, login_pending: false }],
+          secrets: [],
+          clusters: [
+            {
+              id: "pegasus",
+              host: "pegasus.example",
+              auth: "totp",
+              connected: false,
+              connect_pending: false,
+              work_dir: null,
+            },
+          ],
+        };
+      }
+      const ac = server.fakeAc;
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        const json = (status, value) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(value));
+        };
+        let input = {};
+        try {
+          input = text ? JSON.parse(text) : {};
+        } catch {
+          return json(400, { error: "bad json" });
+        }
+        const parts = pathname.replace("/api/v1/", "").split("/");
+        const view = (a) => ({
+          dir: `/accounts/${a.id}`,
+          in_use: 0,
+          stats: {
+            done: 0,
+            error: 0,
+            input_tokens: 0,
+            lease_expired: 0,
+            output_tokens: 0,
+            question: 0,
+            requeue: 0,
+            runs: 0,
+            by_day: [],
+          },
+          ...a,
+        });
+        if (parts[0] === "accounts") {
+          const acc = ac.accounts.find((a) => a.id === parts[1]);
+          if (parts.length === 1 && req.method === "GET")
+            return json(200, { items: ac.accounts.map(view), max_runs_per_account: 1 });
+          if (parts.length === 1 && req.method === "POST") {
+            if (!input.id || ac.accounts.some((a) => a.id === input.id))
+              return json(422, { detail: "id が不正か重複しています" });
+            const created = {
+              id: input.id,
+              adapter: input.adapter ?? "claude-code",
+              logged_in: false,
+              login_pending: false,
+            };
+            ac.accounts.push(created);
+            return json(200, view(created));
+          }
+          if (!acc) return json(404, { error: "not found" });
+          if (parts.length === 2 && req.method === "DELETE") {
+            ac.accounts.splice(ac.accounts.indexOf(acc), 1);
+            return json(200, {});
+          }
+          if (parts[2] === "check" && req.method === "POST")
+            return json(200, { checked_at: "2026-09-30T00:00:00Z", result: "ok" });
+          if (parts[2] === "login" && parts.length === 3 && req.method === "POST") {
+            acc.login_pending = true;
+            return json(200, {
+              kind: "paste_code",
+              url: "https://login.example/auth",
+              expires_at: "2026-09-30T01:00:00Z",
+              user_code: "ABCD-1234",
+            });
+          }
+          if (parts[2] === "login" && parts.length === 3 && req.method === "DELETE") {
+            acc.login_pending = false;
+            return json(200, {});
+          }
+          if (parts[2] === "login" && parts[3] === "code" && req.method === "POST") {
+            if (!input.code) return json(422, { detail: "code が空です" });
+            acc.login_pending = false;
+            acc.logged_in = true;
+            return json(200, { result: "ok" });
+          }
+        }
+        if (parts[0] === "secrets") {
+          if (parts.length === 1 && req.method === "GET") return json(200, { items: ac.secrets });
+          if (parts.length === 2 && req.method === "PUT") {
+            if (!input.value) return json(422, { detail: "値が空です" });
+            ac.secrets = ac.secrets.filter((s) => s.id !== parts[1]);
+            const secret = {
+              id: parts[1],
+              fingerprint: `fp-${input.value.length}`,
+              updated_at: "2026-09-30T00:00:00Z",
+              used_by: [],
+            };
+            ac.secrets.push(secret);
+            return json(200, { id: secret.id, fingerprint: secret.fingerprint, updated_at: secret.updated_at });
+          }
+          if (parts.length === 2 && req.method === "DELETE") {
+            ac.secrets = ac.secrets.filter((s) => s.id !== parts[1]);
+            return json(200, {});
+          }
+        }
+        if (parts[0] === "llm" && req.method === "GET")
+          return json(200, {
+            sources: [
+              {
+                id: "claude-oauth",
+                kind: "oauth",
+                enabled: true,
+                last_hour_completion_tokens: 0,
+                last_hour_prompt_tokens: 0,
+                last_hour_requests: 3,
+                accounts: [{ id: "main", logged_in: true }],
+              },
+            ],
+          });
+        if (parts[0] === "mcp" && parts.length === 2 && req.method === "GET")
+          return json(200, {
+            items: [{ id: "c1", name: "editor", created_at: "2026-09-01T00:00:00Z", scopes: ["tasks:read"] }],
+          });
+        if (parts[0] === "mcp" && parts[3] === "calls" && req.method === "GET")
+          return json(200, {
+            items: [
+              {
+                id: "k1",
+                client_id: parts[2],
+                at: "2026-09-30T00:00:00Z",
+                tool: "tasks_list",
+                ok: true,
+                latency_ms: 12,
+              },
+            ],
+          });
+        if (parts[0] === "clusters") {
+          const cl = ac.clusters.find((c) => c.id === parts[1]);
+          const row = (c) => ({
+            concurrency: 1,
+            delete_on_push: false,
+            env_keys: [],
+            has_setup: false,
+            rsync_excludes: [],
+            sync: "rsync",
+            ...c,
+          });
+          if (parts.length === 1 && req.method === "GET") return json(200, { items: ac.clusters.map(row) });
+          if (!cl) return json(404, { error: "not found" });
+          if (parts[2] === "connect" && parts.length === 3 && req.method === "POST") {
+            cl.connect_pending = true;
+            return json(200, { kind: "needs_code", prompt: "Verification code:", expires_at: "2026-09-30T01:00:00Z" });
+          }
+          if (parts[2] === "connect" && parts.length === 3 && req.method === "DELETE") {
+            cl.connect_pending = false;
+            return json(200, {});
+          }
+          if (parts[2] === "connect" && parts[3] === "code" && req.method === "POST") {
+            if (!input.code) return json(422, { detail: "code が空です" });
+            cl.connect_pending = false;
+            cl.connected = true;
+            return json(200, { ok: true });
+          }
+          if (parts[2] === "settings" && req.method === "PUT") {
+            cl.work_dir = input.work_dir ?? null;
+            cl.work_dir_source = input.work_dir ? "db" : null;
+            return json(200, { cluster_id: cl.id, updated_at: "2026-09-30T00:00:00Z", work_dir: cl.work_dir });
+          }
+        }
+        return json(404, { error: "not found" });
+      });
+      return;
+    }
     const file = files[pathname];
     if (file) {
       // run のファイル・成果物（P1-08）。単一の `bytes=a-b` の Range だけを扱う。

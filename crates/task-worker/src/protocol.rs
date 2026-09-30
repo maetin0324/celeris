@@ -701,6 +701,11 @@ pub struct WorkUnitPromptContext {
     /// 「人の決定」節に出す）。無ければ空でプロンプトは変わらない。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub human_decisions: Vec<String>,
+    /// ADR-0079 付記 R7-5 D3: この WU の直前の run が `done` を返したのに daemon の `checks` が不合格だったときだけ、
+    /// その記録（先頭の行が `cwd: <走らせた所>`、続いて不合格の検査ごとに判定文 1 行）。前置きの
+    /// 「前回の run の check の不合格」節に出す。無ければ空でプロンプトは変わらない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_check_failures: Vec<String>,
 }
 
 /// ADR-0072 D9（Phase E1）: 続きの実行に渡す最小限の文脈。前の run の会話・出力の全文は載せない

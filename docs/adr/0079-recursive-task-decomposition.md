@@ -1823,3 +1823,52 @@ R7（回収の続き）の 3 つ目。**migration なし**（schema 34 のまま
 
 - done の unit の `checks` を書き換えても、その unit の worktree で check を走らせ直すことはしない（統合の check として走る）。
 - D2 は本番の event を直接見ていない（本番 DB には触れない）。試験で順序を確かめ、症状は D1 で説明した。再発したら event の列で確かめる。
+
+## 付記: R7-5: WU の check の不合格を記録し、次の run と replan に渡す、check の不合格で usage を落とさない（2026-09-30）
+
+R7 の 5 つ目。**migration なし**（schema 34 のまま。Event を 1 つ足すが events は JSON の列）。設定キーは足していない。本番には触れていない
+（読み取りだけ）。WU の checks の実行そのもの（ADR-0072 D14 / E4 (g)、作業場所は ADR-0074 D1.2）の規則は変えない。記録と伝達の欠けを
+ここで直すので、付記は木の回収（R6〜R7）の続きとして ADR-0079 に置く。
+
+### 発端（本番の証拠。2026-09-30 14:14Z〜14:26Z、task 01M3SAHFRK8HA2AM7NYHKF1PD0「h-life ミラーを同一LANの別デバイスから閲覧可能にする」）
+
+- 作業場所は `Local{path: <task_id>}`（git でない）。`parallel_mode` は `no git worktree for this task` で並列 1、WU の worktree も
+  task の worktree も無い（`task_workspaces_for` = `None`）。WU の checks は **task のディレクトリ**（`<workspace_root>/<task_id>`。worker の
+  cwd、`artifacts/` のある所）で走った。lan-bind の `test -s artifacts/lan-bind.md` はここで通っている。**cwd は原因ではない。**
+- v1 の lan-verify の check `bash /home/rmaeda/sites/h-life/check_lan.sh http://192.168.1.103:8000/` は、unit 自身が run 1 で作った
+  スクリプト（引数は `[LAN_IP] [PORT]`）に URL を渡すので必ず exit 1（`ss` の LISTEN 照合・`ip addr` の照合・LAN crawl が
+  `http://http://…:8000/:8000/` になる）。worker は引数なしで実行して exit 0 を見て `done` を 3 回返し、daemon は 3 回とも check で不合格にした。
+- daemon は不合格の理由（`work unit checks failed: cmd=… exit=… stdout_tail=… stderr_tail=…`）を `Terminal::Error` の文に入れたが、
+  `finish_worker_result` が outcome を `work_unit_retry: WorkUnit lan-verify を最初からやり直します（1/2）` / `replan: work unit lan-verify failed`
+  に**上書き**し、どの event にも残らなかった。次の run（retry）のプロンプトにも、replan の planner の「Why this replan was triggered」にも
+  理由は無かった（planner は自分で原因を推理した）。retry の 2 run は「前回ほぼ完了」と読んで同じ `done` を返し、同じ check で落ちた。
+- `Terminal::Done` を `Terminal::Error` にすり替えるので、run の `usage` が `null`、`quota_estimated.weighted_tokens` が 0 になった。
+- 「replan 後に planner が起きない」は誤り: 14:19:13Z の replan の時点で `max_concurrency = 6` の枠が 6 run で埋まっていて、14:26:01.985Z に
+  別 task の run が終わった 0.1 s 後に planner が dispatch された（dispatcher の欠陥ではない。直していない）。
+
+### 決定
+
+1. **D1 check の不合格は event に残す**: 新しい `Event::WorkUnitChecksFailed { run_id, work_unit_id, key, cwd, failed: [{cmd, expect_exit,
+   detail}] }` を、その run の `WorkerFinished` と同じトランザクションで積む（`detail` は review.rs の判定文そのもの = `cmd=… exit=…
+   expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。`cwd` は check を実際に走らせた所（WU の worktree / task の
+   worktree / task のディレクトリ）。状態は変えない（`replay` は無視）。`GET /events` の型名は `work_unit_checks_failed`。
+2. **D2 outcome にも理由を残す**（R6-1 D7 と同じく人が読む文に要約を入れる）: `work_unit_retry: … （n/m）: checks failed in <cwd>: <要約>`、
+   `replan: work unit <key> failed: checks failed in <cwd>: <要約>`、replan を使い切った後の質問の文も同じ要約を持つ。要約は不合格の検査ごとに
+   `detail` を `; ` で繋ぎ、全体を 1,500 文字で切る。replan の planner の `replan_reason` は従来どおり `replan: ` の outcome から取るので、
+   planner にも同じ要約が渡る。
+3. **D3 次の run に前の run の不合格を渡す**: `WorkUnitPromptContext.previous_check_failures`（`detail` の行。`cwd` を先頭の行に）を、
+   その WU の直前の run（`wu.last_run_id`）に `WorkUnitChecksFailed` があるときだけ埋める。プロンプトの節「## 前回の run の check の不合格」は
+   「前の run は done を返したが daemon の check が落ちた。check は変えられない。成果を直して check を自分で同じ cwd から走らせてから done を
+   返す。check そのものが誤っていて成果では通せないなら、`result.json` に `{"yield": {"plan_issue": "<どの check がなぜ>"}}` を書いて終える
+   （計画の問題の申告 = replan）」と書く。空ならプロンプトは 1 バイトも変わらない。
+4. **D4 usage を落とさない**: check の不合格で `Terminal::Done` を `Terminal::Error{retryable: true}` にすり替えるとき、worker が返した
+   `usage` を `finish_worker_result` に渡し、`WorkerFinished.usage` と quota の見積もりに使う。
+5. **D5 planner の check の書き方に 1 行**（R7-2 の `PLANNER_CHECK_GUIDANCE`）: 「check が unit 自身の作るスクリプトを実行するなら、その
+   呼び出し方（引数）を objective に書き、unit がその形を受けるスクリプトを書くようにする」「check は worker が始まる所（unit の worktree、
+   git の worktree が無い task では task のディレクトリ = `artifacts/` のある所）で走る」。
+
+### 残したもの
+
+- 同じ check が同じ `detail` で続けて落ちても、retry は `max_retries` まで回す（D3 で次の run が理由を知るので、直すか `plan_issue` を
+  申告できる。決定的な不合格の早期打ち切りは入れていない）。
+- `WorkUnitChecksFailed` の GUI の専用表示は無い（timeline は型名と JSON をそのまま出す）。

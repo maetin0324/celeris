@@ -1634,3 +1634,6 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
   commit message の grep を受け入れ条件にしている、そして **葉が conflict marker を含んだまま commit**（task-ops / task-worker がコンパイル不能）。
   compound の note で「内容の検査に置き換え、衝突解消の葉を足す」を渡して replan（2 回目の note は planner run 中で 409、次の失敗時に再送）。
   **R7 候補**: 旧ブランチを merge する葉の check に「conflict marker 無し + cargo build」を planner 指針として足す。
+- 08:11Z: **欠陥（R7 候補）**: 統合失敗の質問に回答すると、人が `decompose {compound}`（replan 要求）を先に入れていても、dispatcher は統合 WU を同じ check で
+  再実行してから（再び失敗して）次の質問で初めて planner を回す。web Phase 1（05:00Z → 05:09Z）とリファクタ retry の子（08:0xZ → 08:11Z）で再現。
+  人の replan 要求が pending のときは統合の再実行より planner を優先すべき。

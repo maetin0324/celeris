@@ -649,10 +649,10 @@ async fn ensure_worktree_skips_the_submodule_step_without_gitmodules() {
     assert!(ws.take_progress_notes().is_empty());
 }
 
-/// submodule の初期化に失敗したら（ここでは submodule の元を消した）、クラスタと worktree を名指しした
-/// 準備のエラーになる（黙って空のディレクトリのまま進まない）。
+/// Phase R7-4: submodule の初期化に失敗しても（ここでは submodule の元を消した）、準備は通る。
+/// 失敗は submodule の path とクラスタ・worktree を名指しした警告の進行の行になる（黙らない）。
 #[tokio::test]
-async fn a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree() {
+async fn a_failed_submodule_init_is_a_warning_note_not_a_prepare_error() {
     let tmp = tempfile::tempdir().unwrap();
     let proj = project_repo(tmp.path(), true);
     std::fs::remove_dir_all(tmp.path().join("sub")).unwrap();
@@ -661,15 +661,82 @@ async fn a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_workt
         &proj,
         local_ssh_allowing_file_protocol(tmp.path()),
     );
-    let err = ws
-        .ensure_worktree()
+    ws.ensure_worktree()
         .await
-        .expect_err("the submodule source is gone");
-    let msg = err.to_string();
+        .expect("a broken submodule does not stop the prepare");
     let wt = ws.effective_remote_dir();
-    assert!(matches!(err, WorkspaceError::Remote(_)), "{err:?}");
-    assert!(msg.contains("submodules"), "{msg}");
-    assert!(msg.contains("sirius"), "{msg}");
-    assert!(msg.contains(&wt.to_string_lossy().into_owned()), "{msg}");
+    assert!(
+        wt.join("README.md").is_file(),
+        "the worktree itself is fine"
+    );
+    let notes = ws.take_progress_notes();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let note = &notes[0];
+    assert!(
+        note.starts_with("submodule lib/sub could not be initialised: "),
+        "{note}"
+    );
+    assert!(note.contains("sirius"), "{note}");
+    assert!(note.contains(&wt.to_string_lossy().into_owned()), "{note}");
+}
+
+/// 本番 2026-09-30（task 01M3PAZ4XG4QN1T8S98VNA6ABV、sirius の BenchFS）: `ior_integration/ior` の固定 commit が
+/// remote に無く（`not our ref`）、`submodule update --init --recursive` 1 回の失敗で準備ごと落ちた。
+/// R7-4: submodule は 1 つずつ初期化する。良い方は入り、悪い方は `fatal:` の行つきの警告になる。
+#[tokio::test]
+async fn one_unfetchable_submodule_does_not_stop_the_other_or_the_prepare() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = project_repo(tmp.path(), true);
+    // 2 つ目の submodule `ior`: remote に無い commit（submodule の中だけの commit）を固定する。
+    let bad = tmp.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    test_git(&bad, &["init", "-q", "-b", "main"]);
+    std::fs::write(bad.join("ior.c"), "int main(){}\n").unwrap();
+    test_git(&bad, &["add", "-A"]);
+    test_git(&bad, &["commit", "-q", "-m", "ior"]);
+    let url = bad.to_string_lossy().into_owned();
+    test_git(&proj, &["submodule", "add", "-q", &url, "ior"]);
+    std::fs::write(proj.join("ior/local.c"), "// unpushed\n").unwrap();
+    test_git(&proj.join("ior"), &["add", "-A"]);
+    test_git(&proj.join("ior"), &["commit", "-q", "-m", "local only"]);
+    test_git(&proj, &["add", "-A"]);
+    test_git(&proj, &["commit", "-q", "-m", "pin an unpushed ior commit"]);
+
+    let ws = worktree_workspace(
+        tmp.path(),
+        &proj,
+        local_ssh_allowing_file_protocol(tmp.path()),
+    );
+    let wt = ws.effective_remote_dir();
+    ws.ensure_worktree()
+        .await
+        .expect("one broken submodule does not stop the prepare");
+    assert_eq!(
+        std::fs::read_to_string(wt.join("lib/sub/lib.rs")).unwrap(),
+        "pub fn sub() {}\n",
+        "the good submodule is populated"
+    );
+    assert!(!wt.join("ior/local.c").exists());
+    let notes = ws.take_progress_notes();
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert_eq!(
+        notes[0],
+        format!(
+            "initialised 1 submodules in {} on cluster sirius",
+            wt.display()
+        )
+    );
+    assert!(
+        notes[1].starts_with("submodule ior could not be initialised: fatal:"),
+        "{}",
+        notes[1]
+    );
+    assert!(notes[1].contains("sirius"), "{}", notes[1]);
+
+    // 再利用でも落ちない。失敗した ior は clone までは済んで `submodule status` の行頭が `-` でなくなるので、
+    // 再利用では試し直さない（R6-3 と同じく、`-` の無い worktree には触らない = 人・agent の submodule の
+    // commit を巻き戻さない）。警告は最初の準備の 1 回だけ。
+    ws.ensure_worktree().await.expect("reuse");
+    assert!(wt.join("lib/sub/lib.rs").is_file());
     assert!(ws.take_progress_notes().is_empty());
 }

@@ -6,6 +6,9 @@ edition.workspace = true
 [features]
 # Test fixture only: permit a self-signed HTTPS certificate inside a private netns.
 h3-e2e-insecure-cert = []
+# ADR-0094 D2: test-only restore admission (runtime facts whose only violation
+# is SameUid). Never enabled by default or in release builds.
+same-uid-harness = []
 
 [dependencies]
 task-core = { path = "../task-core" }
@@ -28,3 +31,5 @@ time = { version = "0.3", features = ["serde", "formatting"] }
 [dev-dependencies]
 tempfile = "3"
 celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }
+task-worker = { path = ".", features = ["same-uid-harness"] }
+task-api = { path = "../task-api" }

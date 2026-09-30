@@ -1253,6 +1253,8 @@ async fn run_with_executable_attempt(
             return Err(AdapterError::Other("isolated_runtime_unavailable".into()));
         }
     };
+    // ADR-0094 D1: identity 復元の state は controller の CDP にだけ投入する。
+    supervisor.attach_controller(shared_cdp.controller());
     let broker_session = match (&approved, credentials) {
         (Some(_), Some(sup)) => Some(
             register_broker_session(sup, &supervisor, &session)

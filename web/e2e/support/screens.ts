@@ -7,7 +7,7 @@ export const screens = [
   { path: "/org", fixture: "/org", heading: "組織" },
   { path: "/org/secretary", fixture: "/org/cos", heading: "組織の人 cos" },
   { path: "/org/$id", fixture: "/org/cos", heading: "組織の人 cos", v3: true },
-  { path: "/projects", fixture: "/projects", heading: "案件" },
+  { path: "/projects", fixture: "/projects", heading: "案件", v3: true },
   { path: "/projects/$id", fixture: "/projects/P1", heading: "案件の詳細 P1" },
   { path: "/projects/$id/docs", fixture: "/projects/P1/docs", heading: "案件の文書 P1" },
   { path: "/projects/$id/docs/maintenance", fixture: "/projects/P1/docs/maintenance", heading: "文書の保守 P1" },

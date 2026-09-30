@@ -50,8 +50,8 @@ type Token =
 export type EventContext = {
   taskId: string;
   event: EventRow["event"];
-  /** event の明示値または Query cache から解決した所属。null は不明。 */
-  projectId: string | null;
+  /** event の明示値または Query cache から解決した所属。null は不明、false は案件に属さない。 */
+  projectId: string | false | null;
 };
 
 type KindSpec = {
@@ -152,7 +152,8 @@ export function projectFallbackKeys(): QueryKey[] {
   return [projectKeys.lists(), ["projects", "detail"], ["projects", "tasks"], ["projects", "plan"]];
 }
 
-function projectKeysFor(projectId: string | null): QueryKey[] {
+function projectKeysFor(projectId: string | null | false): QueryKey[] {
+  if (projectId === false) return [];
   if (projectId === null) return projectFallbackKeys();
   return [
     projectKeys.lists(),
@@ -228,12 +229,24 @@ function rowsOf(data: unknown): unknown[] {
   return [];
 }
 
-function projectOfTask(data: unknown, taskId: string): string | null {
+/** task の所属。project id、属さないと分かれば false、cache に無ければ null。 */
+function projectOfTask(data: unknown, taskId: string): string | false | null {
+  if (typeof data === "object" && data !== null) {
+    // ProjectDetail（P4-02）: 案件の task 一覧に含まれていればその案件。
+    const detail = data as { project?: { id?: unknown }; tasks?: unknown };
+    if (typeof detail.project?.id === "string" && Array.isArray(detail.tasks)) {
+      const owner = detail.project.id;
+      if (detail.tasks.some((row) => (row as { id?: unknown } | null)?.id === taskId)) return owner;
+    }
+  }
   const candidates = [data, ...rowsOf(data)];
   for (const row of candidates) {
     if (typeof row !== "object" || row === null) continue;
-    const r = row as { id?: unknown; project_id?: unknown };
-    if (r.id === taskId && typeof r.project_id === "string") return r.project_id;
+    const r = row as { id?: unknown; project_id?: unknown; title?: unknown };
+    if (r.id !== taskId) continue;
+    if (typeof r.project_id === "string") return r.project_id;
+    // task の行（title を持つ）で project_id が無い → どの案件にも属さない。
+    if (typeof r.title === "string") return false;
   }
   return null;
 }
@@ -242,16 +255,22 @@ function projectOfTask(data: unknown, taskId: string): string | null {
  * H1: project の解決。event の明示値 → Query cache の task detail / 一覧 / project の task 一覧。
  * 別の永続対応表は作らない。分からなければ null（呼び出し側が集計 key の fallback を使う）。
  */
-export function resolveProjectId(queryClient: QueryClient, taskId: string, event: EventRow["event"]): string | null {
+export function resolveProjectId(
+  queryClient: QueryClient,
+  taskId: string,
+  event: EventRow["event"],
+): string | false | null {
   const explicit = explicitProjectId(event);
   if (explicit !== null) return explicit;
   const fromDetail = projectOfTask(queryClient.getQueryData(taskKeys.detail(taskId)), taskId);
   if (fromDetail !== null) return fromDetail;
-  for (const root of [taskKeys.lists(), projectKeys.all]) {
+  let none = false;
+  for (const root of [projectKeys.all, taskKeys.lists()]) {
     for (const [, data] of queryClient.getQueriesData({ queryKey: root })) {
       const found = projectOfTask(data, taskId);
-      if (found !== null) return found;
+      if (typeof found === "string") return found;
+      if (found === false) none = true;
     }
   }
-  return null;
+  return none ? false : null;
 }

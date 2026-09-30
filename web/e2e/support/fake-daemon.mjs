@@ -93,6 +93,42 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
+// P4-10: knowledge domain fixtures. Keep this block together for parallel merge.
+export const knowledgeFixtures = {
+  "/api/v1/knowledge/tree": {
+    initialized: true,
+    root: "/fake/knowledge",
+    items: [{ path: "projects/demo.md", title: "Demo knowledge" }],
+    inbox_count: 1,
+    truncated: false,
+  },
+  "/api/v1/knowledge/page": {
+    path: "projects/demo.md",
+    title: "Demo knowledge",
+    raw: "# Demo knowledge\n\nKnowledge body",
+    html: "",
+    root: "/fake/knowledge",
+    history: [],
+    etag: "etag-1",
+    too_large: false,
+  },
+  "/api/v1/knowledge/inbox": {
+    initialized: true,
+    root: "/fake/knowledge",
+    items: [
+      {
+        id: "K1",
+        path: "_inbox/K1.md",
+        target: "projects/new.md",
+        title: "New knowledge",
+        body: "# New knowledge",
+        html: "",
+        target_exists: false,
+      },
+    ],
+  },
+};
+
 // files は daemon の path（`/api/v1/tasks/...`）→ `{ body, type?, disposition? }`。
 // token を与えると、`Authorization: Bearer <token>` の無い要求に 401 を返す（P1-07 の中継の検査）。
 export function createFakeDaemon({
@@ -107,6 +143,7 @@ export function createFakeDaemon({
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
     throw new Error("fake daemon refuses reserved port");
   if (!delayValues.has(delayMs)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
+  fixtures = { ...knowledgeFixtures, ...fixtures };
   const requests = [];
   const clients = new Set();
   const consoleClients = new Set();
@@ -219,6 +256,19 @@ export function createFakeDaemon({
       }
       res.writeHead(200, headers);
       return res.end(body);
+    }
+    // Knowledge mutations use the same fake daemon and record the submitted body.
+    if (/^\/api\/v1\/(knowledge\/(page|inbox\/[^/]+\/(accept|reject)))$/.test(pathname) && req.method !== "GET") {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        record.body = Buffer.concat(chunks).toString("utf8");
+        res.writeHead(req.method === "DELETE" ? 204 : 200, { "content-type": "application/json" });
+        res.end(
+          req.method === "DELETE" ? undefined : JSON.stringify({ path: pathname, sha: "fake-sha", unchanged: false }),
+        );
+      });
+      return;
     }
     const raw = fixtures[pathname] ?? fixtures[pathname.replace(/^\/api\/v1/, "")];
     const value = typeof raw === "function" ? raw(new URL(req.url ?? "/", "http://x")) : raw;

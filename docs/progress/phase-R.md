@@ -1700,3 +1700,6 @@ task-ops / task-dispatch / task-core には触れていない（R7-3 と並行�
 
 - 失敗した submodule を再利用で試し直す手段は無い（人が `git submodule deinit -f <path>` すれば次の準備で試し直す）。remote に commit が
   push されたら直る種類の失敗なので、要るなら「警告の出た path を覚えて再試行する」を別 Phase で。
+- 09:52Z: release **7c10d528ad2a**（main = R7-4 まで、schema 34）: `release.sh main` exit 0（13 commits / 4 files / sensitive 0）→ `verify.sh` ok=true / live_ok=true（checks 1〜6、smoke 7.4 s）
+  → `promote.sh 7c10d528ad2a` live で昇格（引き継ぎ 2 s、backup `20260930-095156-pre-7c10d528ad2a.sqlite3`）。`/health` release=7c10d528ad2a role=active。
+  BenchFS 根の planner の submodule 展開は次の準備から best-effort になる（ior の pin は人が push するまで警告のまま）。

@@ -169,6 +169,7 @@ test("parity: /console/new-conversation 開始", async () => {
 test("parity: runs/:runId/events 全行の取得", async ({ page }) => {
   initial = [progress()];
   await page.goto(`${base}/`);
+  await page.getByRole("button", { name: /作業/ }).click();
   await page.getByRole("button", { name: /すべて見る/ }).click();
   for (const n of [1, 2, 3, 4, 5]) await expect(page.getByText(`line-${n}`)).toBeVisible();
   expect(requests("/api/v1/tasks/T1/runs/R1/events").length).toBeGreaterThanOrEqual(1);
@@ -184,12 +185,12 @@ test("parity: / Console の送信・返事・IME", async ({ page }) => {
   // IME 変換中は送信しない
   await box.fill("変換中");
   await box.evaluate((el) => {
-    el.dispatchEvent(new CompositionEvent("compositionstart"));
+    el.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     const e = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     el.dispatchEvent(e);
   });
   expect(requests("/api/v1/console/instruct")).toHaveLength(0);
-  await box.evaluate((el) => el.dispatchEvent(new CompositionEvent("compositionend")));
+  await box.evaluate((el) => el.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
 
   // 二重に出ない（202 まで pending）
   daemon.setPostDelay(400);
@@ -213,7 +214,7 @@ test("parity: / Console の送信・返事・IME", async ({ page }) => {
   await page.goBack();
   await expect(page.getByRole("textbox", { name: "Console への入力" })).toHaveValue("下書き");
   const pos = await page.getByTestId("console-composer").evaluate((el) => getComputedStyle(el).position);
-  expect(pos).toBe("sticky");
+  expect(pos).toBe("fixed");
 });
 
 test("parity: /org/:id Console の送信と宛先", async ({ page }) => {

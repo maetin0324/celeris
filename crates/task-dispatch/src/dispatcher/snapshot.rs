@@ -80,6 +80,7 @@ impl Dispatcher {
             .iter()
             .map(|p| ProviderLive {
                 in_use: self.provider_in_use(&p.id) as u32,
+                in_use_cos: self.provider_in_use_cos(&p.id) as u32,
                 last_check: publisher.provider_checks.get(&p.id).cloned(),
                 ..p.clone()
             })

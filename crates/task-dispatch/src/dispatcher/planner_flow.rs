@@ -72,6 +72,16 @@ impl Dispatcher {
                     .to_string(),
                 *usage,
             ),
+            // ADR-0090: planner run は job を待たない（不正な試行として扱う）。
+            Ok(RunOutcome {
+                terminal: Terminal::Waiting { usage, .. },
+                ..
+            }) => (
+                Some(task_core::RunEnd::Failed { retryable: true }),
+                "error(retryable=true): planner runs cannot wait for cluster jobs; treated as an invalid attempt"
+                    .to_string(),
+                *usage,
+            ),
             Ok(RunOutcome {
                 terminal:
                     Terminal::BudgetExhausted {
@@ -797,11 +807,7 @@ impl Dispatcher {
             .into_iter()
             .filter(|d| d.status == task_core::DecisionStatus::Open)
             .count();
-        let node_replans = self
-            .store
-            .execution_plan_list(task.id)?
-            .len()
-            .saturating_sub(1) as u64;
+        let node_replans = u64::from(self.counted_replans(task.id)?);
         let chain =
             task_ops::tree::ancestors_with_self(self.store.as_ref(), task).map_err(ops_to_store)?;
         let ancestors = chain

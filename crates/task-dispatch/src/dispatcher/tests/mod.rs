@@ -904,6 +904,7 @@ fn cluster_spec_with_auth(id: &str, host: &str, auth: &str) -> ClusterSpec {
         work_dir: None,
         keepalive_secs: 0,
         liveness_probe_secs: 0,
+        job_wait: Default::default(),
     }
 }
 
@@ -3141,3 +3142,7 @@ mod knowledge_fallback;
 
 /// ADR-0079 R5b-fix2: remote workspace の run 後の push（`src/dispatcher/tests/remote_push_after_run.rs`）。
 mod remote_push_after_run;
+
+mod cluster_job_wait;
+mod cos_capacity;
+mod human_gates;

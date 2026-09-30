@@ -33,6 +33,8 @@ pub struct ClusterSpec {
     /// ServerAliveCountMax=3 -o TCPKeepAlive=yes`（`0` なら keepalive を付けない）。既定 30 秒。
     /// コマンドラインの `-o` は `~/.ssh/config` より優先されるので、人の設定を変えずに効く。
     pub keepalive_secs: u64,
+    /// ADR-0090 D7: クラスタ job の durable wait の poll 間隔と上限（`[[clusters]] job_wait`）。
+    pub job_wait: task_core::cluster_job::ClusterJobWaitLimits,
     /// ADR-0062 A: master 越しの実通信（`ssh -o BatchMode=yes <host> -- true`）による生存確認を
     /// この秒数ごとに行う（`0` で無効）。既定 300 秒。NAT / ファイアウォールの idle timeout で
     /// TCP が黙って死んでも、`-O check`（unix socket を見るだけ）は気づかないので、実通信で確定させる。

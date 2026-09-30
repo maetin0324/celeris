@@ -598,9 +598,9 @@ async fn exceeding_the_replan_limit_blocks_with_a_question_that_a_human_can_answ
     );
 }
 
-/// ADR-0072 §6 E2 (d): WU の失敗 → retry → 上限で `failed`。依存先は `blocked(dependency_failed)`。
+/// ADR-0072 §6 E2 (d): WU の失敗 → retry → 上限で WU は `failed`。依存先は `blocked(dependency_failed)`。
 /// ADR-0072 D12 3.（Phase E4 で明確化）: replan の余地が無ければ（ここでは `max_replans = 0` で
-/// 明示的に閉じる）Task は `failed`。replan できる場合の振る舞いは
+/// 明示的に閉じる）Task は `blocked` で人へ質問する。replan できる場合の振る舞いは
 /// `a_failed_work_unit_triggers_a_replan_instead_of_failing_the_task` を見る。
 #[tokio::test]
 async fn a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_dependents() {
@@ -642,7 +642,7 @@ async fn a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_depend
     assert!(report.idle, "{report:?}");
 
     let stored = store.get(task_id).unwrap().unwrap();
-    assert_eq!(stored.status, Status::Failed, "{stored:?}");
+    assert_eq!(stored.status, Status::Blocked, "{stored:?}");
 
     let units = store.work_units_for(task_id).unwrap();
     let a = units.iter().find(|u| u.key == "a").unwrap();
@@ -667,6 +667,13 @@ async fn a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_depend
         .unwrap();
     assert!(
         last_outcome.contains("work unit b failed"),
+        "{last_outcome}"
+    );
+    assert!(
+        last_outcome.starts_with(&format!(
+            "question: {}",
+            task_ops::plan_gate::REPLAN_EXHAUSTED_QUESTION_PREFIX
+        )),
         "{last_outcome}"
     );
 }
@@ -1033,7 +1040,9 @@ async fn a_run_aborted_by_cancel_closes_its_runs_row() {
         .collect();
     assert_eq!(
         finished,
-        vec!["interrupted: aborted (task no longer running under this lease)"]
+        vec![
+            "interrupted: the task reached cancelled while this run was still open (runs index closed, ADR-0079 R6-1)"
+        ]
     );
 }
 
@@ -2706,4 +2715,155 @@ async fn remote_workspace_falls_back_to_serial() {
             fallback: None
         }
     );
+}
+
+/// ADR-0079 付記「R6-1」D3（web Phase 0、2026-09-29 17:56Z）: 木でない task（/1 の計画）で replan を使い切った後に
+/// WU が失敗しても `failed` にしない。`blocked` の質問（`REPLAN_EXHAUSTED_QUESTION_PREFIX`。組織のある DB なら承認の行も）で人に
+/// 聞き、回答は人の replan の依頼として planner を起こす（`max_replans = 0` のままでも。人の replan は上限に数えない）。
+#[tokio::test]
+async fn replan_exhaustion_on_a_non_tree_task_asks_a_human_and_the_answer_replans() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        1,
+    );
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    adopt_three_step_plan(&store, task_id);
+    let mut wu_script = HashMap::new();
+    wu_script.insert(
+        "b".to_string(),
+        vec![
+            Terminal::Error {
+                message: "boom".into(),
+                retryable: true,
+            },
+            Terminal::Error {
+                message: "boom again".into(),
+                retryable: true,
+            },
+            Terminal::Done {
+                summary: "b fixed".into(),
+                evidence: vec![],
+                usage: None,
+            },
+        ],
+    );
+    let replanned = plan_json(vec![
+        wu_spec("a", &[]),
+        wu_spec("b", &["a"]),
+        wu_spec("c", &["b"]),
+    ]);
+    let adapter = Arc::new(PlannerScriptAdapter::new(vec![Some(replanned)], wu_script));
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    d.config.execution.planner.adapter = "instant".to_string();
+    d.config.execution.max_replans = 0;
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+
+    let stored = store.get(task_id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Blocked, "not failed: {stored:?}");
+    let events = store.events_for(task_id).unwrap();
+    let question = task_ops::derive::latest_question(&events);
+    assert!(
+        question.starts_with(task_ops::plan_gate::REPLAN_EXHAUSTED_QUESTION_PREFIX),
+        "{question}"
+    );
+    assert!(question.contains("work unit b failed"), "{question}");
+    assert!(
+        store.decisions_list(None).unwrap().is_empty(),
+        "a non-tree task asks a question, not a decision"
+    );
+
+    task_ops::gate::answer(
+        store.as_ref(),
+        task_id,
+        "b の失敗は環境の問題。同じ計画でやり直して".to_string(),
+        None,
+    )
+    .unwrap();
+    let events = store.events_for(task_id).unwrap();
+    assert!(task_ops::plan_gate::answered_replan_exhausted(&events));
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    let stored = store.get(task_id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Done, "{stored:?}");
+    let plans = store.execution_plan_list(task_id).unwrap();
+    assert_eq!(plans.len(), 2, "the answer started one replan: {plans:?}");
+    let events = store.events_for(task_id).unwrap();
+    assert_eq!(
+        task_ops::plan_gate::counted_replans(&events),
+        0,
+        "a replan a human asked for does not count toward max_replans"
+    );
+}
+
+/// ADR-0079 付記「R6-1」D7（web Phase 1 の子、2026-09-30 04:57Z）: replan の余地が無いときの統合後の検査の失敗は
+/// `blocked(worker_question)` で人に聞く。受信箱の質問の本文は失敗した検査の要約（`worker_progress` と同じ
+/// 「統合後の検査が失敗しました: …」）で、空ではない（以前は `QuestionRaised` を積まず空文だった）。
+#[tokio::test]
+async fn integration_check_failure_without_replans_asks_with_the_failed_checks() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    store.insert(&task).unwrap();
+    let mut b = v2_wu("b", "build", &[]);
+    b.checks = vec![task_core::WorkUnitCheck {
+        cmd: "test ! -f bad.txt".into(),
+        expect_exit: 0,
+    }];
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("a", "build", &[]), b],
+    );
+    let adapter =
+        Arc::new(ParallelWuAdapter::new(Duration::from_millis(20)).with_file("a", "bad.txt", "x"));
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    d.config.execution.max_replans = 0;
+    let s = store.clone();
+    let id = task.id;
+    assert!(
+        run_until(&mut d, 400, || s
+            .get(id)
+            .unwrap()
+            .is_some_and(|t| t.status == Status::Blocked))
+        .await,
+        "the task asks a human"
+    );
+    let events = store.events_for(task.id).unwrap();
+    let question = task_ops::derive::latest_question(&events);
+    assert!(
+        question.starts_with("phase build の統合後の検査が失敗しました: "),
+        "{question:?}"
+    );
+    let ctx = task_ops::view::ViewContext {
+        workspace_root: PathBuf::from("/nonexistent"),
+        retry_backoff_base: Duration::ZERO,
+        retry_backoff_max: Duration::ZERO,
+        max_requeues: 5,
+        clusters: Default::default(),
+    };
+    let inbox = task_ops::inbox::inbox(
+        store.as_ref(),
+        None,
+        &ctx,
+        OffsetDateTime::now_utc(),
+        &|_, _| Vec::new(),
+    )
+    .unwrap();
+    let item = inbox
+        .questions
+        .iter()
+        .find(|q| q.task.id == task.id)
+        .expect("the question is in the inbox");
+    assert_eq!(item.question, question);
 }

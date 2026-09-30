@@ -162,24 +162,25 @@ impl Dispatcher {
         if task_ops::tree::planner_retry_pending(&events) {
             return Ok(WuDispatchGate::RunPlanner { replan: true });
         }
-        if task_ops::regate::pending_replan_request(&events).is_some() {
-            let gate = self.replan_gate(task_id)?;
-            if matches!(gate, WuDispatchGate::RunPlanner { .. }) {
-                return Ok(gate);
-            }
-            tracing::warn!(%task_id, "a human replan was requested but max_replans is exhausted; continuing with the current plan");
-        }
-        // ADR-0074 D2.4（Phase F3 途中確認）: 人が途中確認で「replan」を選んだ（直前の遷移が
-        // `phase_replan`）なら、次の run は replan の planner run（`max_replans` に数える）。
-        // 上限を使い切っていれば人の指示は `answers` に残したまま次の工程へ進める（警告を残す）。
-        if task_ops::phase_gate::last_transition_reason(&events)
-            == Some(task_core::PhaseResumeMode::Replan.name())
+        // ADR-0079 付記「R6-1」D3: 人が起こした replan（decompose・計画の承認の replan・決定への replan の回答・
+        // 途中確認の replan・replan の上限を使い切った後の質問への回答）は `max_replans` に数えず、常に受ける
+        // （以前は上限を使い切っていると黙って捨て、今の版の unit を進めていた。21:22Z の P-R5b-4 の再現では
+        // 承認されていない版の unit がそのまま子を作った）。木の上限（`max_tree_replans`）は dispatch の
+        // `tree_run_limit_hold` が今どおり見る。
+        if task_ops::regate::pending_replan_request(&events).is_some()
+            || task_ops::phase_gate::last_transition_reason(&events)
+                == Some(task_core::PhaseResumeMode::Replan.name())
+            || task_ops::plan_gate::answered_replan_exhausted(&events)
         {
-            let gate = self.replan_gate(task_id)?;
-            if matches!(gate, WuDispatchGate::RunPlanner { .. }) {
-                return Ok(gate);
-            }
-            tracing::warn!(%task_id, "phase replan requested but max_replans is exhausted; continuing with the next phase");
+            return Ok(WuDispatchGate::RunPlanner { replan: true });
+        }
+        // ADR-0079 付記「R6-1」D1: PlanGate を通っていない版の unit は起こさない（承認待ちのまま人が replan を
+        // 求めた後、planner の run が済んで次の版が採用・承認されるまで）。
+        if let Some(task) = self.store.get(task_id)?
+            && let Some(why) = self.human_gate_hold(&task, &active_plan, &events)
+        {
+            tracing::debug!(%task_id, hold = why, "a human gate holds the plan's units; not dispatching (ADR-0079 R6-1)");
+            return Ok(WuDispatchGate::Skip);
         }
         // ADR-0074 D1.3（Phase F2b）: v2 の計画は工程ごとの scheduler（`settle_phase` /
         // `runnable_work_units`）で決める。v1 は従来どおり（`next_work_unit`）。
@@ -189,6 +190,11 @@ impl Dispatcher {
         // ADR-0074 D3.7（Phase F4b (f)）: `child:<key>` の依存を子 Task の状態で決定的に解く。
         let (changed, waiting_on_children) = self.resolve_child_dependencies(task_id, &units)?;
         if changed {
+            units = self.store.work_units_for(task_id)?;
+        }
+        // ADR-0079 付記「R6-1」D2: 人の gate の間に上げなかった unit（段階の `review: human` の後の次の段階、
+        // 止めている間に子が終わって依存が満たされた unit）を、gate が解けた今 `ready` に上げる。
+        if v2 && self.promote_newly_ready(task_id, &units)? {
             units = self.store.work_units_for(task_id)?;
         }
         if waiting_on_children
@@ -316,6 +322,38 @@ impl Dispatcher {
                 }
             }
         }
+    }
+
+    /// ADR-0079 付記「R6-1」D2: 依存と工程の障壁が満たされた `pending` の unit を `ready` に上げる
+    /// （`WorkUnitTransitioned{dependency_ready}`。`finish_phase_integration` と同じ）。人の gate の間は上げずに
+    /// おくので、gate が解けた後の最初の dispatch で上げる。上げたら `true`。
+    pub(super) fn promote_newly_ready(
+        &self,
+        task_id: TaskId,
+        units: &[task_core::WorkUnitRow],
+    ) -> Result<bool, DispatchError> {
+        let ids = task_core::newly_ready(units);
+        for id in &ids {
+            let Some(u) = units.iter().find(|u| &u.id == id) else {
+                continue;
+            };
+            let mut row = u.clone();
+            row.status = task_core::WorkUnitStatus::Ready;
+            row.updated_at = rfc3339(OffsetDateTime::now_utc());
+            self.store.work_unit_transition(
+                task_id,
+                row,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: u.id.clone(),
+                    key: u.key.clone(),
+                    from: task_core::WorkUnitStatus::Pending,
+                    to: task_core::WorkUnitStatus::Ready,
+                    reason: "dependency_ready".to_string(),
+                    run_id: None,
+                },
+            )?;
+        }
+        Ok(!ids.is_empty())
     }
 
     /// ADR-0074 D3.7（Phase F4b (f)）: `depends_on: ["child:<key>"]` の WU を、子 Task（`child-<key>` の
@@ -891,11 +929,7 @@ impl Dispatcher {
                 vec![text],
             ));
         }
-        let replans_so_far = self
-            .store
-            .execution_plan_list(task_id)?
-            .len()
-            .saturating_sub(1) as u32;
+        let replans_so_far = self.counted_replans(task_id)?;
         if replans_so_far < self.effective_max_replans(task_id)? {
             let why = match (wu.status, wu.blocked_reason) {
                 (task_core::WorkUnitStatus::Failed, _) => format!("work unit {} failed", wu.key),
@@ -918,11 +952,35 @@ impl Dispatcher {
         if matches!(wu.status, task_core::WorkUnitStatus::Failed)
             || wu.blocked_reason == Some(task_core::WorkUnitBlockedReason::DependencyFailed)
         {
-            return Ok((
-                Trigger::WorkerError { retryable: false },
-                format!("error(retryable=false): work unit {} failed", wu.key),
-                Vec::new(),
-            ));
+            // ADR-0079 付記「R6-1」D3: replan を使い切っても `failed` にせず人に聞く（木の節点は決定の要求）。
+            let Some(task) = self.store.get(task_id)? else {
+                return Ok((
+                    Trigger::WorkerError { retryable: false },
+                    format!("error(retryable=false): work unit {} failed", wu.key),
+                    Vec::new(),
+                ));
+            };
+            let (trigger, outcome) = self.replan_exhausted_ask(
+                &task,
+                &format!("work unit {} failed", wu.key),
+                replans_so_far,
+            )?;
+            let questions = match outcome.strip_prefix("question: ") {
+                Some(q) => {
+                    // この run の `WorkerFinished` は兄弟の run の終わり方なので、質問の本文は別に残す
+                    // （受信箱の質問文と、回答を人の replan と読む `answered_replan_exhausted` のため）。
+                    self.store.append_event(
+                        task_id,
+                        &Event::QuestionRaised {
+                            run_id: last_run_id(&events).unwrap_or_default(),
+                            text: q.to_string(),
+                        },
+                    )?;
+                    vec![q.to_string()]
+                }
+                None => Vec::new(),
+            };
+            return Ok((trigger, outcome, questions));
         }
         let text = if question_text.is_empty() {
             format!(
@@ -1101,11 +1159,7 @@ impl Dispatcher {
     /// true}`、無ければ `Skip`（進められる WU が無いまま何もしない。呼び出し元が既に上限を見て
     /// `Continue{why: Replan}` を避けていれば通常ここには来ない防御的フォールバック）。
     pub(super) fn replan_gate(&self, task_id: TaskId) -> Result<WuDispatchGate, DispatchError> {
-        let replans_so_far = self
-            .store
-            .execution_plan_list(task_id)?
-            .len()
-            .saturating_sub(1) as u32;
+        let replans_so_far = self.counted_replans(task_id)?;
         if replans_so_far < self.effective_max_replans(task_id)? {
             Ok(WuDispatchGate::RunPlanner { replan: true })
         } else {
@@ -1262,16 +1316,26 @@ impl Dispatcher {
         &self,
         wu: &task_core::WorkUnitRow,
     ) -> Option<task_worker::ContinuationContext> {
-        if wu.continuations == 0 {
-            return None;
-        }
         let runs = self.store.runs_for_work_unit(&wu.id).ok()?;
         let last = runs.last()?;
+        let after_wait = last.status == task_core::RunIndexStatus::Waiting;
+        if wu.continuations == 0 && !after_wait {
+            return None;
+        }
         let checkpoint = last.checkpoint.clone()?;
         let checkpoint_json = serde_json::to_value(&checkpoint).ok()?;
         let previous_end = match last.status {
             task_core::RunIndexStatus::Yielded => "yielded".to_string(),
+            task_core::RunIndexStatus::Waiting => "waiting(cluster_jobs)".to_string(),
             other => other.as_str().to_string(),
+        };
+        let cluster_jobs = if after_wait {
+            wu.task_id
+                .parse::<TaskId>()
+                .ok()
+                .and_then(|task_id| self.work_unit_cluster_jobs(task_id, &wu.id, &last.run_id))
+        } else {
+            None
         };
         let prior_runs: Vec<String> = runs
             .iter()
@@ -1282,6 +1346,7 @@ impl Dispatcher {
             previous_end,
             checkpoint: checkpoint_json,
             prior_runs,
+            cluster_jobs,
         })
     }
 

@@ -809,11 +809,7 @@ impl Dispatcher {
         integ: &task_core::WorkUnitRow,
         why: &str,
     ) -> Result<(), DispatchError> {
-        let replans_so_far = self
-            .store
-            .execution_plan_list(task.id)?
-            .len()
-            .saturating_sub(1) as u32;
+        let replans_so_far = self.counted_replans(task.id)?;
         let can_replan = replans_so_far < self.effective_max_replans(task.id)?;
         let mut row = integ.clone();
         row.clear_lease();
@@ -837,10 +833,9 @@ impl Dispatcher {
                 run_id: None,
             },
         )?;
-        let progress = Event::worker_progress(
-            last_run_id(&self.store.events_for(task.id)?).unwrap_or_default(),
-            why.to_string(),
-        );
+        let run_id = last_run_id(&self.store.events_for(task.id)?).unwrap_or_default();
+        let progress = Event::worker_progress(run_id.clone(), why.to_string());
+        let mut events = vec![progress];
         let trigger = if can_replan {
             Trigger::Continue {
                 why: task_core::ContinueWhy::Replan,
@@ -854,11 +849,18 @@ impl Dispatcher {
             ) {
                 tracing::warn!(task_id = %task.id, error = %e, "failed to record the approval for the integration failure");
             }
+            // ADR-0079 付記「R6-1」D7: 質問の本文（受信箱の `question`）は `WorkerFinished` / `QuestionRaised` から
+            // 読まれる。統合の失敗は run の終わりではないので `QuestionRaised` に失敗の要約（`worker_progress` と
+            // 同じ文）を残す。以前は残さず、受信箱の質問が空文だった（web Phase 1 の子、2026-09-30 04:57Z）。
+            events.push(Event::QuestionRaised {
+                run_id,
+                text: why.to_string(),
+            });
             Trigger::WorkerQuestion
         };
         match self
             .store
-            .apply_transition_with_events(task.id, trigger, vec![progress])
+            .apply_transition_with_events(task.id, trigger, events)
         {
             Ok(_) | Err(StoreError::InvalidTransition(_)) => Ok(()),
             Err(e) => Err(e.into()),
@@ -920,26 +922,10 @@ impl Dispatcher {
         // ADR-0079 D6（Phase R1c）: 取り込んだ子 task の worktree を消す（ブランチ `celeris/<child_id>` は
         // root の終端まで残す。監査のため）。
         self.remove_integrated_child_worktrees(task_id, &units, &phase);
-        // 次の工程の WU（工程の障壁が外れた）を ready にする。
-        for id in task_core::newly_ready(&units) {
-            if let Some(u) = units.iter().find(|u| u.id == id) {
-                let mut row = u.clone();
-                row.status = task_core::WorkUnitStatus::Ready;
-                self.store.work_unit_transition(
-                    task_id,
-                    row,
-                    Event::WorkUnitTransitioned {
-                        work_unit_id: u.id.clone(),
-                        key: u.key.clone(),
-                        from: task_core::WorkUnitStatus::Pending,
-                        to: task_core::WorkUnitStatus::Ready,
-                        reason: "dependency_ready".to_string(),
-                        run_id: None,
-                    },
-                )?;
-            }
-        }
-        let units = self.store.work_units_for(task_id)?;
+        // 次の工程の WU（工程の障壁が外れた）を ready にするのは、途中確認で止めるかを決めた後（下）。
+        // ADR-0079 付記「R6-1」D2: 途中確認（`review: human`・`pause_after`）で止めるなら次の工程は `pending` の
+        // まま残す（ADR-0074 D2.2「次の工程の WU を ready にする前に適用する」。以前は先に `ready` にしていたので、
+        // task が `blocked(awaiting_human)` でも木の照合が次の段階の kind task の unit から子を作った: P-R5b-5）。
         let phase_event = Event::PhaseIntegrated {
             phase: phase.clone(),
             work_unit_id: integ.id.clone(),
@@ -1016,6 +1002,10 @@ impl Dispatcher {
                 };
             }
         }
+        if !matches!(trigger, Trigger::PhaseGate { .. }) {
+            self.promote_newly_ready(task_id, &units)?;
+        }
+        let units = self.store.work_units_for(task_id)?;
         match self
             .store
             .apply_transition_with_events(task_id, trigger, extra_events)

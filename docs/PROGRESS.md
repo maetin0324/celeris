@@ -12,6 +12,7 @@
 
 - [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084。P4-A の実 runtime と production 起動経路は D3/D4 まで接続済み。P4-B の実 sink は未接続。P4-C は worker 起動前の `route` を接続し、未適合の機密要求を拒否。specialist・実 fixture 実行は未。2026-09-29、本番未昇格。 2026-09-29 run 01M3QGRCAHDK1AB4R9WBHJ9XHZ: ADR-0087 で同一 host UID の実 bwrap runtime（実 chrome-headless-shell・CDP pipe・6 namespace・ro root・socket 不可視・netns 遮断・controller kill/再起動回収）と稼働中 session への復元結合を実装（`browser_runtime_isolated` 4 passed、workspace 2977 passed、clippy exit 0）。その後の D3/D4 配線で egress proxy 結合と production 起動経路を実装。別 UID 実証は未。
 - [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084〜0088。P4-A/B の実 runtime・sink は未接続。P4-C は実 agent-browser/loopback fixture を ACP RPC・明示 Claude CLI・browser-specialist wrapper の scripted LLM で各7/7 実行し、その ledger を routing と実 browser fallback に接続。実 LLM 比較は ACP CLI/認証待ち。2026-09-30、本番未昇格。
+- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0089。P4-B: run 01M3RPPYTPT43N8ZHXFDDWESX0（WorkUnit sink-retry）で実 CDP sink（`task_worker::browser_cdp_sink`、前回 commit `968110ae`）を cherry-pick で取り込み。`cargo test -p task-worker --test browser_cdp_sink` 2 passed（実 bwrap + 実 browser + loopback fixture、receipt のみ返る注入・origin 不一致拒否・cross-origin iframe 拒否）、`cargo test --workspace` 3006 passed / 0 failed、`cargo clippy --workspace -- -D warnings` exit 0。injection-only IPC の実結線・攻撃試験行列・H3 実注入検証は後続 WorkUnit（ipc/wire/attacks/h3e2e）待ち。2026-09-30、本番未昇格。
 
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)

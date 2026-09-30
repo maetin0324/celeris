@@ -4,8 +4,8 @@
 tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM1XP4C7BH45]
 ---
 
-- 状態: **P4-A/B の受け入れは未完、P4-C の公開能力は scripted LLM による実 backend 適合済み**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。機密能力は実 runtime・CDP sink 適合まで拒否。実 runtime・CDP sink は継続実装が必要。本番未昇格。
-- 更新: 2026-09-30（run 01M3RCSFK5ZTC4JV0YJF17DV7C: P4-A D3/D4 配線、P4-C 実 browser fallback を統合）
+- 状態: **P4-A/B の受け入れは未完、P4-C の公開能力は scripted LLM による実 backend 適合済み**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。機密能力は実 runtime・CDP sink・injection-only IPC 適合まで拒否。P4-B は実 CDP sink 単体（受け取り・receipt・origin/iframe 拒否）まで達成、injection-only IPC の実結線と攻撃試験行列・H3 実注入検証が継続実装課題。本番未昇格。
+- 更新: 2026-09-30（run 01M3RPPYTPT43N8ZHXFDDWESX0、WorkUnit sink-retry: P4-B 実 CDP sink（`browser_cdp_sink`）を `968110ae` から cherry-pick で取り込み、`cargo test -p task-worker --test browser_cdp_sink` 2 passed・`cargo test --workspace` 3006 passed / 0 failed・`cargo clippy --workspace -- -D warnings` exit 0 を確認）
 - ADR-0087: [same-uid bwrap runtime](../adr/0087-browser-p4a-same-uid-bwrap-runtime.md)、[conformance dispatch](../adr/0087-browser-phase4-conformance-dispatch.md)（P4-A と P4-C が同番号で別 file を追加。ADR-0088 も同様）
 - ADR: [ADR-0084](../adr/0084-browser-phase4-isolation-injection-routing.md) D6、[ADR-0085](../adr/0085-browser-phase4-runtime-selection.md)
 
@@ -15,7 +15,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
 |---|---|---|
 | P4-A isolated runtime | 一部達成（決定 p4a-uid: 同一 host UID）。実 bwrap runtime・事実採取・分離・daemon 起動時 orphan 回収・production worker の egress 接続は実装済み。復元結合は別 WorkUnit が担当 | `cargo test -p task-worker --test browser_runtime_isolated` → 4 passed / 1 ignored（helper）。実 chrome-headless-shell（agent-browser の browser、playwright 1243）を bwrap で起動し CDP pipe で `Browser.getVersion` 応答、host 側 `/proc` で 6 namespace 別・root ro・書ける mount は `/session` だけ・NoNewPrivs=1・CapEff/CapPrm=0・uid_map `1000 1001 1`・netns TCP LISTEN 0 件。同 spec の probe で broker/control socket・`/run/user`・host tmp 不可視、`/usr`・`/etc` 書込不可、host loopback fixture・10.0.0.1・::1・192.0.2.53:53 へ接続不可。controller SIGKILL 後に bwrap・sandbox 内 process が消える（実 process）。記録からの再起動回収は starttime 一致だけを殺す。`verify_isolation` は弱めず、違反は `SameUid` だけ → attestation 無し → 復元拒否。D3 の実 daemon 起動試験 1 passed、D4 の run_with_executable 実 chrome/egress/fixture 試験 1 passed（下記）。 |
 | P3-A identity 復元（隔離下のみ） | 結合済み・この host では拒否（決定 p4a-uid: 同一 host UID → `SameUid`）。成功経路は別 UID の実 runtime が無いので実証できていない | ADR-0088 D5。`POST /api/v1/browser/identities/{id}/restore` に `session_id` を追加し、supervisor が登録する registry 経由で稼働中 session に結合。`cargo test -p task-api --test browser_restore_live_session` → 1 passed（実 bwrap + 実 chrome-headless-shell の session に対して拒否 7 経路・`open_attempts()==0`）。`cargo test -p task-api --lib restore_` → 4 passed。`--restore` / `--state` / `--profile` は利用しない。 |
-| P4-B stronger injection | 未達。攻撃の純関数テストだけ | `cargo test -p celeris-credentiald injection` の前回結果は6 passed。実 CDP sink / IPC peer UID role は未接続。旧 plugin bridge と resolve.sock 自体を固定拒否に変更。有効 lease を持つ別 worker process の実 IPC 拒否を検証。実注入は未達。 |
+| P4-B stronger injection | 一部達成。実 CDP sink（`task_worker::browser_cdp_sink`）を取り込み、実 bwrap + 実 browser + loopback fixture で receipt-only 注入・origin 不一致拒否・cross-origin iframe 拒否を検証。injection-only IPC（SO_PEERCRED role/session/lease 照合）と controller への結線は別 WorkUnit（ipc・wire）待ち | `cargo test -p task-worker --test browser_cdp_sink` → 2 passed（実 browser、skip 無し）。`cargo test --workspace` → 3006 passed / 0 failed / 11 ignored（既存 ignored の合計）。`cargo clippy --workspace -- -D warnings` → exit 0。詳細は下の「P4-B 実 CDP sink 取り込み」節。 |
 | H3 観測停止の維持 | 実装維持。機密起動は拒否 | `cargo test -p task-worker browser --lib` → 31 passed。`browser_auth_section_forward_events_drops_progress_artifact_and_live` と LiveEmitter の抑止試験を含む。API 結合テストの store auth_section / takeover 拒否も成功。実注入中の end-to-end 検証はP4-A/B待ち。 |
 | P4-C backend routing | 公開能力を実 backend protocol で適合。機密要求は拒否 | `--protocol-scripted --fallback-scenario` runner が実 agent-browser 0.38.1 + loopback fixture で ACP RPC・Claude CLI・specialist wrapper を各7/7 実行。runner の ledger を worker routing と実 browser fallback に渡して成功。主 ACP harness を SIGKILL し、別 session の Claude が click/download を完了。無候補と `CredentialUse` は明示拒否。`CredentialInjection`・`IdentityRestore` は P4-A/B の実適合まで拒否。実 LLM 比較は未。 |
 
@@ -45,7 +45,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
 - 注意: `PR_SET_PDEATHSIG` は起動した thread の終了でも発火する。tokio の blocking thread から起動すると thread 終了で runtime が殺される。production 配線では専用の長寿命 thread から起動すること。
 
 - P4-A: 同一 host UID の残存リスク、D4 action の channel message と実装の差、実 agent-browser 0.38.1 本体での検証、稼働中隔離 session への identity 復元の成功経路（D5 で結合したが、同一 UID のため `SameUid` で拒否され、開封から controller への受け渡しまでを実 runtime で確かめられていない）。subuid mapping はこの run の親 user namespace の範囲外で EPERM。
-- P4-B: P4-A の後、別 injection-only IPC の SO_PEERCRED role/session 認可・実 CDP sink・実攻撃負例・H3 の端から端の検証。旧 endpoint は再開しない。
+- P4-B: 実 CDP sink（受け取り・receipt-only・origin/iframe 拒否）は取り込み済み（run 01M3RPPYTPT43N8ZHXFDDWESX0）。残るのは injection-only IPC の SO_PEERCRED role/session/lease 照合と controller への実結線（並行 WorkUnit ipc・後続 wire）、ローカル fixture での TOCTOU・redirect・DOM 再表示を含む実攻撃負例（WorkUnit attacks）、H3 の端から端の実注入検証（WorkUnit h3e2e）。旧 endpoint は再開しない。
 - P4-C: 実 LLM の同一 task 比較は ACP CLI/認証を利用できる環境で行う。scripted LLM による実 backend protocol 適合・実 agent-browser での能力を失わない worker fallback・無候補拒否は実施済み。機密機能は P4-A/B の実適合まで拒否する。
 - 3件の継続小タスクを run の `delegate.json` に提案した。P4-B は P4-A に依存し、公開能力の P4-C は独立。採用・実行・完了はこの run では確認できていない。提案を実装済みとして数えず、親の受け入れ条件0/1/2は未達のままとする。
 - 内部 origin の追加、本番昇格、リモート実行は行っていない。
@@ -120,3 +120,12 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
 - 最初の実 runner は ACP の初回 navigation が失敗し exit 1（ACP 1/7、残り二 backend は7/7）。同一固定版を再実行すると三 backend 7/7・fallback exit 0、最終実行も exit 0。初回失敗の原因は特定できていないため、冷間起動の安定性は残課題。適合 ledger は成功した最終実行のものだけを採用した。
 - 実 LLM 比較: `claude auth status` exit 0 だが ACP/OpenCode CLI は PATH にないため三 backend 比較は未実施。ADR-0009 P-34 の手順は上の「P4-C backend protocol 適合」節に記載した三つの `--backend-command`、同一二段階 fixture、`same-task.json` の accepted・違反・復旧・費用・時間の比較を使う。P4-A/B の機密実適合と本番昇格は未実施。
 - gate: `cargo test --workspace` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0。`cargo test -p task-worker --lib p4c_fallback_ -- --nocapture` → exit 0（決定的試験1件成功、実 browser 試験1件は通常 gate では ignored）。
+
+## P4-B 実 CDP sink 取り込み（run 01M3RPPYTPT43N8ZHXFDDWESX0、WorkUnit sink-retry）
+
+- 前回 unit（WorkUnit sink、commit `968110ae`）は `task_worker::browser_cdp_sink`（`CdpController`・`BrokerClient`・`InjectionRequest`・`PendingInjection`・`InjectionError`）と `tests/browser_cdp_sink.rs` を実装・試験とも成功していたが、`cargo clippy -p task-worker --all-targets` が既存 `browser_tests.rs` の `await_holding_lock` で落ちて unit 全体が失敗扱いになった。この unit は `git cherry-pick 968110ae` でその成果をこの WU ブランチ（base `c8cd45f3`）に取り込んだ。衝突は無かった。
+- `cargo test -p task-worker --test browser_cdp_sink` → **exit 0、2 passed**（`inner_cdp_sink`・`real_browser_injection_receipt_and_origin_guards`、skip 無し）。実 bwrap + 実 chrome-headless-shell（playwright 1243）+ loopback DNS/HTTPS fixture で receipt のみ返る注入、origin 不一致拒否、cross-origin iframe 拒否を確認。外部ネットワークへは接続していない。
+- `cargo clippy --workspace -- -D warnings`（`--all-targets` は付けない、Objective の指示どおり）→ **exit 0**。既存 `browser_tests.rs` の `--all-targets` clippy 違反はこの unit の範囲外として触っていない。
+- `cargo test --workspace` → **exit 0、3006 passed / 0 failed / 11 ignored**（既存の ignored 合計、この unit で新規追加なし）。
+- injection-only IPC（SO_PEERCRED role/session/lease 照合）と controller への実結線は並行 WorkUnit（ipc・後続 wire）の担当で、この unit では変更していない。攻撃試験行列（TOCTOU・redirect・cross-origin iframe・DOM 再表示・worker/browser からの取得）と H3 端から端の実注入検証は後続 WorkUnit（attacks・h3e2e）の担当。
+- 本番昇格・本番設定変更・内部 origin 追加はしていない。新しい設計は足していない（ADR-0089 の範囲内）。unwrap 不使用。

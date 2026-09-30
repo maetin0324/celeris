@@ -101,3 +101,89 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 | A15 | 区間を開く前・閉じた後 → auth_section_required、lease 未消費 | 合格 | cmd: `cargo test -p task-worker --test browser_injection_attacks real_browser_injection_attack_matrix` test: `real_browser_injection_attack_matrix`<br>cmd: `cargo test -p celeris-credentiald --test injection_ipc auth_section_is_required_and_bound_to_its_lease` test: `auth_section_is_required_and_bound_to_its_lease`<br>cmd: `cargo test -p celeris-credentiald --lib auth_section_is_required_for_both_steps` test: `auth_section_is_required_for_both_steps` |
 | A16 | 成功後の再要求 → lease_used、sink に 2 本目の frame 無し | 合格 | cmd: `cargo test -p task-worker --test browser_injection_attacks real_browser_injection_attack_matrix` test: `real_browser_injection_attack_matrix`<br>cmd: `cargo test -p celeris-credentiald --test injection_ipc expired_revoked_and_foreign_leases_are_rejected` test: `expired_revoked_and_foreign_leases_are_rejected` |
 | A17 | value/length field を含む要求 → invalid_request | 合格 | cmd: `cargo test -p task-worker --test browser_injection_attacks real_browser_injection_attack_matrix` test: `real_browser_injection_attack_matrix`<br>cmd: `cargo test -p celeris-credentiald --test injection_ipc malformed_requests_and_missing_sink_are_rejected` test: `malformed_requests_and_missing_sink_are_rejected` |
+
+## 決定適合
+
+2026-09-30 に各決定の実装をコードで読み、矛盾の有無を確かめた（WorkUnit conformance）。file:line は base `dea8dc31` の行。
+矛盾は 1 件（H3: 復元 identity の session が観測停止に入らない）で、本番では SameUid 拒否により到達しないため後続 task で閉じる。
+
+### H4
+
+決定: live proxy は task 単位の ACL（task-acl-proxy）。agent-browser の共有 dashboard namespace は一般公開しない。
+
+- 実装: `crates/task-core/src/browser_live.rs:119`（`authorize_live`: auth 無効・共有 instance は `live_view_disabled`、本人 session のみ、`task_id`/`run_id` 不一致は `other_task`）
+- 実装: `crates/task-core/src/browser_live.rs:151`（`check_connection`: 中継ごとに task/run/session/期限を再判定）、`crates/task-core/src/browser_live.rs:10`（grant 60 秒）
+- 実装: `crates/task-worker/src/browser.rs:1115`・`crates/task-worker/src/browser.rs:1322`（worker は `live_view_url` を常に `None` にし、共有 dashboard への導線を作らない。dashboard/stream は起動しない）
+- test: `other_task_and_other_run_are_denied` cmd: `cargo test -p task-core --lib other_task_and_other_run_are_denied`
+- test: `viewer_checks_follow_adr_0080_d6` cmd: `cargo test -p task-core --lib viewer_checks_follow_adr_0080_d6`
+- test: `grant_check_and_replay_are_bound_and_scrubbed` cmd: `cargo test -p task-api --test browser_live grant_check_and_replay_are_bound_and_scrubbed`
+- 判定: 適合。
+
+### H5
+
+決定: project+origin に限る期限付き identity（project-origin-identity）。個人 Chrome profile は共有しない。
+
+- 実装: `crates/task-core/src/browser_identity.rs:157`（`register`: 人の確認必須・https origin・project+origin 束縛）、`crates/task-core/src/browser_identity.rs:13`・`crates/task-core/src/browser_identity.rs:166`（既定 7 日、上限 30 日を超えれば `ttl_too_long`）
+- 実装: `crates/task-core/src/browser_identity.rs:272`（失効で世代更新）、`crates/task-core/src/browser_identity.rs:282`（削除は tombstone のみ）、`crates/task-core/src/browser_identity.rs:255`（他 origin の state は全体拒否）
+- 実装: `crates/task-worker/src/bin/celeris-browser-sandboxd.rs:100`（Chromium の profile は session 内の `/session/profile` だけ。host の個人 profile を mount・指定しない）
+- test: `register_requires_confirmed_demand_and_https_origin` cmd: `cargo test -p task-core --lib register_requires_confirmed_demand_and_https_origin`
+- test: `register_bounds_the_ttl` cmd: `cargo test -p task-core --lib register_bounds_the_ttl`
+- test: `expiry_revocation_and_deletion_stop_use` cmd: `cargo test -p task-core --lib expiry_revocation_and_deletion_stop_use`
+- test: `deleted_leaves_tombstone_and_seal_cannot_be_opened` cmd: `cargo test -p task-api --lib deleted_leaves_tombstone_and_seal_cannot_be_opened`
+- test: `task_and_execution_isolate_sessions_and_prompt_describes_capability` cmd: `cargo test -p task-worker --lib task_and_execution_isolate_sessions_and_prompt_describes_capability`
+- 判定: 適合。
+
+### H7
+
+決定: 固定 agent-browser 0.38.1 + 既存 harness の browser-specialist（ADR-0085 決定 2）。
+
+- 実装: `crates/task-worker/src/browser.rs:25`（`SUPPORTED_VERSION = "0.38.1"`）、`crates/task-worker/src/browser.rs:1279`（sandbox 内の `--version` が一致しなければ承認消費前に起動拒否）
+- 実装: `crates/task-worker/src/browser_specialist.rs:14`（`browser-specialist` adapter）、`crates/task-core/src/browser_backend.rs:265`（routing: 明示 → browser-specialist → 既存 loop）
+- test: `routing_prefers_specialist_then_existing_loops_and_fallback_keeps_capabilities` cmd: `cargo test -p task-core --lib routing_prefers_specialist_then_existing_loops_and_fallback_keeps_capabilities`
+- test: `adapter_selection_is_explicit_and_does_not_drop_browser_capability` cmd: `cargo test -p task-core --lib adapter_selection_is_explicit_and_does_not_drop_browser_capability`
+- 判定: 適合。
+
+### H1
+
+決定（ADR-0080）: credential は手動登録（provider=`manual`）から始める。
+
+- 実装: `crates/celeris-credentiald/src/lib.rs:388`（`register` は `manual` 以外を拒否）、`crates/celeris-credentiald/src/lib.rs:159`（policy は毎回承認必須・永続化不可）
+- test: `manual_roundtrip_permissions_and_revoke` cmd: `cargo test -p celeris-credentiald --test broker manual_roundtrip_permissions_and_revoke`
+- test: `register_resolves_once_and_does_not_approve_use` cmd: `cargo test -p task-core --lib register_resolves_once_and_does_not_approve_use`
+- 判定: 適合。
+
+### H2
+
+決定（ADR-0080）: 操作ごとの `approve_once`、lease は既定 60 秒・上限 300 秒・`max_uses = 1`。
+
+- 実装: `crates/task-core/src/browser_wait.rs:407`（`ApproveOnce`）、`crates/task-core/src/browser_wait.rs:647`（`consume_credential_approval`: 承認は一度だけ消費）
+- 実装: `crates/celeris-credentiald/src/lib.rs:804`（TTL は policy・300 秒・承認と session の残期限の最小値）、`crates/celeris-credentiald/src/lib.rs:813`（`max_uses: 1`）、`crates/task-worker/src/browser_credential.rs:20`（worker が要求する lease は 60 秒）
+- test: `approve_once_consumes_once_and_deny_fails_task` cmd: `cargo test -p task-core --lib approve_once_consumes_once_and_deny_fails_task`
+- test: `lease_binding_origin_one_use_revoke_and_sentinel` cmd: `cargo test -p celeris-credentiald --test broker lease_binding_origin_one_use_revoke_and_sentinel`
+- test: `expiry_audit_failure_and_restart_reject` cmd: `cargo test -p celeris-credentiald --test broker expiry_audit_failure_and_restart_reject`
+- 判定: 適合。
+
+### H3
+
+決定（ADR-0080）: credential を注入した session の終わりまで LLM の観測（snapshot・console・event）と Live View を止める。ADR-0083 D4 は identity を復元した session も同じ扱いにする。
+
+- 実装: `crates/task-worker/src/browser.rs:544`（`forward_events` は認証区間中に progress・artifact・live event を捨て、溜めない）、`crates/task-worker/src/browser_live.rs:245`（`LiveEmitter::auth_section`）
+- 実装: `crates/task-core/src/browser_live.rs:112`（認証区間の session は新規・既存接続とも `observation_stopped`）、`crates/task-api/src/browser_live.rs:164`（`credential_interval` を store と event から判定）
+- test: `browser_auth_section_forward_events_drops_progress_artifact_and_live` cmd: `cargo test -p task-worker --lib browser_auth_section_forward_events_drops_progress_artifact_and_live`
+- test: `browser_live_auth_section_drops_events_without_buffering` cmd: `cargo test -p task-worker --lib browser_live_auth_section_drops_events_without_buffering`
+- test: `credential_interval_stops_new_and_existing_connections` cmd: `cargo test -p task-core --lib credential_interval_stops_new_and_existing_connections`
+- 矛盾（後続）: `crates/task-api/src/browser_identity.rs:307`（`restore_in_session`）は state を controller に投入するが、観測停止（auth section・relay 遮断・`observation_stopped`）に入らない。本番 admission は SameUid で復元を拒否する（`identity_restore_sameuid_rejected_in_production`）ため現在は到達しない。別 UID 解放の前に直す。task: `01M3SRZ4X8NHRE0BB1QXMBTPKJ`（depends_on `01M3SPN8H05EJ3DHPVEGEYTMEH`）
+- test: `identity_restore_sameuid_rejected_in_production` cmd: `cargo test -p task-worker --test browser_restore_deliver identity_restore_sameuid_rejected_in_production`
+- 判定: 注入経路は適合。復元経路は後続 `01M3SRZ4X8NHRE0BB1QXMBTPKJ`。
+
+### H6
+
+決定（ADR-0080）: Phase 2 は trusted local。container / 別 UID / egress の隔離は Phase 4。
+
+- 実装: `crates/task-core/src/browser_identity.rs:222`（`Isolated` 以外の identity 利用は `isolation_required`）、`crates/task-core/src/browser_isolation.rs:145`（`verify_isolation` だけが `Isolated` を作る。SameUid・root は拒否）
+- 実装: `crates/task-api/src/browser_identity.rs:307`（復元は稼働中の隔離 session の attestation を採り直してから）
+- test: `use_is_denied_without_isolation` cmd: `cargo test -p task-core --lib use_is_denied_without_isolation`
+- test: `same_uid_and_root_are_rejected` cmd: `cargo test -p task-core --lib same_uid_and_root_are_rejected`
+- test: `restore_is_isolation_required_on_trusted_local` cmd: `cargo test -p task-api --lib restore_is_isolation_required_on_trusted_local`
+- test: `credential_injection_sameuid_rejected_in_production` cmd: `cargo test -p celeris-credentiald --test injection_ipc credential_injection_sameuid_rejected_in_production`
+- 判定: 適合（別 UID の実証は後続 `01M3SPN8H05EJ3DHPVEGEYTMEH`）。

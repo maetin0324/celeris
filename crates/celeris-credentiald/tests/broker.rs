@@ -51,6 +51,9 @@ impl Fixture {
             max_ttl_seconds: 60,
             require_approval: true,
             allow_persistence: false,
+            login_url: None,
+            password_selector: None,
+            submit_selector: None,
         };
         Self {
             root,

@@ -139,6 +139,173 @@ pub struct OperationIntent {
     pub args_digest: Option<String>,
 }
 
+/// ADR-0091 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を
+/// 承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedLogin {
+    pub policy_id: String,
+    pub revision: u64,
+    pub login_url: String,
+    pub password_selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_selector: Option<String>,
+}
+
+/// trusted selector の上限（ADR-0091 D2）。
+pub const TRUSTED_SELECTOR_MAX_LEN: usize = 256;
+/// trusted selector の compound 数の上限。
+pub const TRUSTED_SELECTOR_MAX_COMPOUNDS: usize = 8;
+/// ログイン URL の上限。
+pub const TRUSTED_LOGIN_URL_MAX_LEN: usize = 2048;
+
+fn ident_len(b: &[u8]) -> usize {
+    match b.first() {
+        Some(c) if c.is_ascii_alphabetic() || *c == b'_' => {}
+        _ => return 0,
+    }
+    b.iter()
+        .take_while(|c| c.is_ascii_alphanumeric() || **c == b'_' || **c == b'-')
+        .count()
+}
+
+/// `[attr]`・`[attr=ident]`・`[attr="…"]` を 1 つ読み、読んだ byte 数を返す。
+fn attr_len(b: &[u8]) -> Option<usize> {
+    let mut i = 1;
+    let name = b
+        .get(i..)?
+        .iter()
+        .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || **c == b'-' || **c == b'_')
+        .count();
+    if name == 0 || !b.get(i)?.is_ascii_lowercase() {
+        return None;
+    }
+    i += name;
+    match *b.get(i)? {
+        b']' => return Some(i + 1),
+        b'=' => i += 1,
+        _ => return None,
+    }
+    if *b.get(i)? == b'"' {
+        i += 1;
+        let v = b.get(i..)?.iter().position(|c| *c == b'"')?;
+        i += v + 1;
+    } else {
+        let v = ident_len(b.get(i..)?);
+        if v == 0 {
+            return None;
+        }
+        i += v;
+    }
+    (*b.get(i)? == b']').then_some(i + 1)
+}
+
+/// ADR-0091 D2 の selector 文法: `type`・`#ident`・`.ident`・`[attr]`・`[attr=ident]`・`[attr="…"]` と、
+/// 結合子の空白・`>` だけ。selector list・pseudo・`*`・`+`・`~`・escape・engine 接頭辞・shadow 貫通は拒否する。
+pub fn validate_trusted_selector(selector: &str) -> Result<(), &'static str> {
+    let b = selector.as_bytes();
+    if b.is_empty() || b.len() > TRUSTED_SELECTOR_MAX_LEN {
+        return Err("selector_length");
+    }
+    if !b.iter().all(|c| (0x20..0x7f).contains(c)) || b.contains(&b'\\') {
+        return Err("selector_charset");
+    }
+    let mut i = 0;
+    let mut compounds = 0;
+    loop {
+        // compound 1 つ
+        let start = i;
+        if b.get(i).is_some_and(|c| c.is_ascii_lowercase()) {
+            i += b[i..]
+                .iter()
+                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || **c == b'-')
+                .count();
+        }
+        loop {
+            match b.get(i) {
+                Some(b'#') | Some(b'.') => {
+                    let n = ident_len(b.get(i + 1..).unwrap_or_default());
+                    if n == 0 {
+                        return Err("selector_grammar");
+                    }
+                    i += 1 + n;
+                }
+                Some(b'[') => i += attr_len(&b[i..]).ok_or("selector_grammar")?,
+                _ => break,
+            }
+        }
+        if i == start {
+            return Err("selector_grammar");
+        }
+        compounds += 1;
+        if compounds > TRUSTED_SELECTOR_MAX_COMPOUNDS {
+            return Err("selector_too_complex");
+        }
+        if i == b.len() {
+            return Ok(());
+        }
+        // 結合子（空白の並び、または前後に空白を許す `>` 1 つ）
+        let ws = b[i..].iter().take_while(|c| **c == b' ').count();
+        i += ws;
+        if b.get(i) == Some(&b'>') {
+            i += 1;
+            i += b[i..].iter().take_while(|c| **c == b' ').count();
+        } else if ws == 0 {
+            return Err("selector_grammar");
+        }
+        if i == b.len() {
+            return Err("selector_grammar");
+        }
+    }
+}
+
+/// ログイン URL は policy の exact origin（`https://host[:port]`、正規形）直下の path で、
+/// userinfo・fragment・空白・制御文字・非 ASCII・`\\` を含まない。
+pub fn validate_trusted_login_url(login_url: &str, exact_origin: &str) -> Result<(), &'static str> {
+    if login_url.len() > TRUSTED_LOGIN_URL_MAX_LEN
+        || !login_url.bytes().all(|c| (0x21..0x7f).contains(&c))
+        || login_url.contains(['#', '\\'])
+    {
+        return Err("login_url_charset");
+    }
+    if !exact_origin.starts_with("https://") || exact_origin.len() <= "https://".len() {
+        return Err("login_url_origin");
+    }
+    match login_url.strip_prefix(exact_origin) {
+        Some(rest) if rest.starts_with('/') => Ok(()),
+        _ => Err("login_url_origin"),
+    }
+}
+
+/// ADR-0091 D2 の形式検証（broker の `CredentialPolicy::validate` と Celeris の pin 時の両方で使う）。
+pub fn validate_trusted_login(
+    login_url: &str,
+    exact_origin: &str,
+    password_selector: &str,
+    submit_selector: Option<&str>,
+) -> Result<(), &'static str> {
+    validate_trusted_login_url(login_url, exact_origin)?;
+    validate_trusted_selector(password_selector)?;
+    if let Some(s) = submit_selector {
+        validate_trusted_selector(s)?;
+    }
+    Ok(())
+}
+
+impl TrustedLogin {
+    pub fn validate(&self, exact_origin: &str) -> Result<(), &'static str> {
+        if !valid_token(&self.policy_id) || self.revision == 0 {
+            return Err("trusted_login_invalid");
+        }
+        validate_trusted_login(
+            &self.login_url,
+            exact_origin,
+            &self.password_selector,
+            self.submit_selector.as_deref(),
+        )
+    }
+}
+
 /// 耐久の wait 1 件（ADR-0080 D4 `BrowserWait`）。**秘密を持たない**。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -162,6 +329,9 @@ pub struct BrowserWait {
     pub credential: Option<CredentialRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIntent>,
+    /// ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_login: Option<TrustedLogin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<String>,
     pub policy_revision: u64,
@@ -205,6 +375,9 @@ pub struct NewBrowserWait {
     pub credential: Option<CredentialRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIntent>,
+    /// ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_login: Option<TrustedLogin>,
     pub policy_revision: u64,
     pub policy_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -428,6 +601,37 @@ pub struct ConsumedBrowserApproval {
     pub wait: BrowserWait,
     pub credential: CredentialRecord,
     pub approved_by: String,
+    /// ADR-0091 D2: 承認時に wait へ固定した管理者のログイン URL・selector。store の wait から移すだけで、
+    /// 呼出し側の値は受け取らない。固定の無い（旧い）承認は `None` で、注入には使えない。
+    pub trusted_login: Option<TrustedLogin>,
+}
+
+impl ConsumedBrowserApproval {
+    /// 注入に使う password selector（ADR-0091 D2 照合 3）。固定値だけが出所で、要求側が selector を
+    /// 持ってきた場合は固定値と byte 一致しなければ拒否する。固定が無ければ注入しない。
+    pub fn injection_selector(&self, requested: Option<&str>) -> Result<&str, &'static str> {
+        let pinned = self
+            .trusted_login
+            .as_ref()
+            .ok_or("trusted_selector_missing")?;
+        if pinned.policy_id != self.credential.policy_id
+            || validate_trusted_login(
+                &pinned.login_url,
+                &self.wait.origin,
+                &pinned.password_selector,
+                pinned.submit_selector.as_deref(),
+            )
+            .is_err()
+        {
+            return Err("trusted_selector_missing");
+        }
+        match requested {
+            Some(r) if r.as_bytes() != pinned.password_selector.as_bytes() => {
+                Err("selector_mismatch")
+            }
+            _ => Ok(&pinned.password_selector),
+        }
+    }
 }
 
 /// 承認済みの credential 使用 wait を、それを開いた論理 run/session の continuation として一度だけ消費する。
@@ -446,6 +650,15 @@ pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
             .is_none_or(|o| o.action != "credential_use")
     {
         return Err("browser approval is not a credential use");
+    }
+    // ADR-0091 D2: 呼出し側が渡した wait の固定値は信じない。store の wait と食い違えば一回承認を
+    // 消費せずに拒否する（差し替え）。
+    let stored = store
+        .browser_wait_get(&wait.wait_id)
+        .map_err(|_| "browser approval store unavailable")?
+        .ok_or("browser approval missing")?;
+    if stored.trusted_login != wait.trusted_login {
+        return Err("selector_mismatch");
     }
     let consumed = store
         .browser_wait_consume(
@@ -485,10 +698,12 @@ pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
         })
         .map(|a| a.actor_id)
         .ok_or("approval record missing")?;
+    let trusted_login = consumed.trusted_login.clone();
     Ok(ConsumedBrowserApproval {
         wait: consumed,
         credential,
         approved_by,
+        trusted_login,
     })
 }
 
@@ -578,6 +793,25 @@ impl NewBrowserWait {
         if !valid_purpose(&self.purpose) {
             return Err(BrowserWaitError::Invalid { field: "purpose" });
         }
+        if let Some(t) = &self.trusted_login {
+            let credential_use = self.reason == BrowserWaitReason::WaitingForApproval
+                && self
+                    .operation
+                    .as_ref()
+                    .is_some_and(|o| o.action == "credential_use");
+            if !credential_use
+                || t.validate(&self.origin).is_err()
+                || t.revision != self.policy_revision
+                || self
+                    .credential
+                    .as_ref()
+                    .is_none_or(|c| c.policy_id != t.policy_id)
+            {
+                return Err(BrowserWaitError::Invalid {
+                    field: "trusted_login",
+                });
+            }
+        }
         if let Some(p) = &self.credential_policy_id {
             check_token(p, "credential_policy_id")?;
         }
@@ -632,13 +866,14 @@ impl NewBrowserWait {
 const SELECT_WAIT: &str = "SELECT wait_id, task_id, work_unit_id, run_id, session_id, reason, origin, \
      purpose, credential_id, credential_provider, credential_policy_id, operation_intent_id, action, \
      args_digest, approval_id, policy_revision, policy_hash, owner_id, deadline, resume_key, version, \
-     state, resolution_code, created_at, resolved_at FROM browser_waits";
+     state, resolution_code, created_at, resolved_at, trusted_login_json FROM browser_waits";
 
 type RawWait = (
     [String; 7],
     [Option<String>; 8],
     (i64, String, Option<String>, String, String, i64, String),
     (Option<String>, String, Option<String>),
+    Option<String>,
 );
 
 fn raw_wait(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawWait> {
@@ -672,6 +907,7 @@ fn raw_wait(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawWait> {
             row.get(21)?,
         ),
         (row.get(22)?, row.get(23)?, row.get(24)?),
+        row.get(25)?,
     ))
 }
 
@@ -689,6 +925,7 @@ fn wait_from_raw(raw: RawWait) -> Result<BrowserWait, StoreError> {
         opt,
         mid,
         tail,
+        trusted_login_json,
     ) = raw;
     let [
         work_unit_id,
@@ -721,6 +958,11 @@ fn wait_from_raw(raw: RawWait) -> Result<BrowserWait, StoreError> {
         }),
         _ => None,
     };
+    let trusted_login = trusted_login_json
+        .as_deref()
+        .map(serde_json::from_str::<TrustedLogin>)
+        .transpose()
+        .map_err(|e| StoreError::Invalid(format!("invalid browser wait trusted login: {e}")))?;
     let operation = match (intent_id, action) {
         (Some(intent_id), Some(action)) => Some(OperationIntent {
             intent_id,
@@ -741,6 +983,7 @@ fn wait_from_raw(raw: RawWait) -> Result<BrowserWait, StoreError> {
         credential_policy_id,
         credential,
         operation,
+        trusted_login,
         approval_id,
         policy_revision: u64::try_from(policy_revision).unwrap_or(0),
         policy_hash,
@@ -1112,6 +1355,7 @@ impl BrowserWaitStore for SqliteStore {
                     .or_else(|| new.credential.as_ref().map(|c| c.policy_id.clone())),
                 credential: new.credential.clone(),
                 operation: new.operation.clone(),
+                trusted_login: new.trusted_login.clone(),
                 approval_id: None,
                 policy_revision: new.policy_revision,
                 policy_hash: new.policy_hash.clone(),
@@ -1124,13 +1368,21 @@ impl BrowserWaitStore for SqliteStore {
                 created_at: now,
                 resolved_at: None,
             };
+            let trusted_login_json = wait
+                .trusted_login
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| BrowserWaitError::Invalid {
+                    field: "trusted_login",
+                })?;
             tx.execute(
                 "INSERT INTO browser_waits (wait_id, task_id, work_unit_id, run_id, session_id, reason, \
                  origin, purpose, credential_id, credential_provider, credential_policy_id, \
                  operation_intent_id, action, args_digest, approval_id, policy_revision, policy_hash, \
                  owner_id, deadline, resume_key, version, state, resolution_code, created_at, \
-                 resolved_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
-                 NULL, ?15, ?16, ?17, ?18, ?19, ?20, ?21, NULL, ?22, NULL)",
+                 resolved_at, trusted_login_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
+                 ?11, ?12, ?13, ?14, NULL, ?15, ?16, ?17, ?18, ?19, ?20, ?21, NULL, ?22, NULL, ?23)",
                 params![
                     wait.wait_id,
                     task_id.to_string(),
@@ -1154,6 +1406,7 @@ impl BrowserWaitStore for SqliteStore {
                     to_i64(wait.version),
                     wait.state.as_str(),
                     format_rfc3339(now)?,
+                    trusted_login_json,
                 ],
             )
             .map_err(|e| match e {
@@ -1641,6 +1894,7 @@ mod tests {
             credential_policy_id: Some("pol-example".into()),
             credential: None,
             operation: None,
+            trusted_login: None,
             policy_revision: 3,
             policy_hash: "sha256-abc".into(),
             owner_id: Some("owner".into()),
@@ -2125,5 +2379,278 @@ mod tests {
         let raw = std::fs::read(&path).expect("db");
         let hay = String::from_utf8_lossy(&raw);
         assert!(!hay.contains(SENTINEL));
+    }
+
+    // ---- ADR-0091 D2: trusted login の形式検証・固定・照合 ----
+
+    const LOGIN_ORIGIN: &str = "https://login.example.com";
+
+    fn trusted() -> TrustedLogin {
+        TrustedLogin {
+            policy_id: "pol-example".into(),
+            revision: 3,
+            login_url: format!("{LOGIN_ORIGIN}/signin?next=%2F"),
+            password_selector: "form#login > input[name=\"password\"]".into(),
+            submit_selector: Some("button[type=submit]".into()),
+        }
+    }
+
+    #[test]
+    fn trusted_selector_grammar_accepts_only_the_adr_subset() {
+        for ok in [
+            "input",
+            "#pass",
+            ".login-form input[type=password]",
+            "form#login>input[name=\"pass word\"]",
+            "div.a.b > form > input[autocomplete=current-password]",
+            "input[data-x]",
+        ] {
+            assert_eq!(validate_trusted_selector(ok), Ok(()), "{ok}");
+        }
+        for bad in [
+            "",
+            "input, #other",
+            "input:not([type=text])",
+            "input::after",
+            "*",
+            "a + input",
+            "a ~ input",
+            "iframe >>> input",
+            "iframe /deep/ input",
+            "#pa\\ss",
+            "css=input",
+            "xpath=//input",
+            "text=Password",
+            "internal:role=textbox",
+            "frame=login >> input",
+            "@e12",
+            "input[name='p']",
+            "input[name=\"p]",
+            "input >",
+            "> input",
+            "input\n#p",
+            "ｉnput",
+            "INPUT",
+            "#1abc",
+        ] {
+            assert!(validate_trusted_selector(bad).is_err(), "{bad:?}");
+        }
+        let long = format!("#{}", "a".repeat(TRUSTED_SELECTOR_MAX_LEN));
+        assert_eq!(validate_trusted_selector(&long), Err("selector_length"));
+        let deep = vec!["div"; TRUSTED_SELECTOR_MAX_COMPOUNDS + 1].join(" ");
+        assert_eq!(
+            validate_trusted_selector(&deep),
+            Err("selector_too_complex")
+        );
+        let max = vec!["div"; TRUSTED_SELECTOR_MAX_COMPOUNDS].join(" > ");
+        assert_eq!(validate_trusted_selector(&max), Ok(()));
+    }
+
+    #[test]
+    fn trusted_login_url_must_stay_on_the_exact_origin() {
+        let o = LOGIN_ORIGIN;
+        assert_eq!(validate_trusted_login_url(&format!("{o}/login"), o), Ok(()));
+        for bad in [
+            format!("{o}"),
+            format!("{o}.evil.test/login"),
+            format!("{o}@evil.test/login"),
+            format!("{o}:444/login"),
+            format!("{o}/login#frag"),
+            format!("{o}/lo gin"),
+            format!("{o}/lo\\gin"),
+            "http://login.example.com/login".to_string(),
+            "https://other.example.com/login".to_string(),
+            format!("{o}/{}", "a".repeat(TRUSTED_LOGIN_URL_MAX_LEN)),
+        ] {
+            assert!(validate_trusted_login_url(&bad, o).is_err(), "{bad}");
+        }
+        assert!(validate_trusted_login_url("http://x/login", "http://x").is_err());
+    }
+
+    #[test]
+    fn trusted_login_is_pinned_only_on_valid_credential_use_approvals() {
+        let mut req = approval_request("rk-t");
+        req.trusted_login = Some(trusted());
+        assert!(req.validate().is_ok());
+        let invalid = |t: TrustedLogin| {
+            let mut r = approval_request("rk-t");
+            r.trusted_login = Some(t);
+            matches!(
+                r.validate(),
+                Err(BrowserWaitError::Invalid {
+                    field: "trusted_login"
+                })
+            )
+        };
+        assert!(invalid(TrustedLogin {
+            password_selector: "input, #x".into(),
+            ..trusted()
+        }));
+        assert!(invalid(TrustedLogin {
+            submit_selector: Some("button:hover".into()),
+            ..trusted()
+        }));
+        assert!(invalid(TrustedLogin {
+            login_url: "https://evil.example.com/login".into(),
+            ..trusted()
+        }));
+        assert!(invalid(TrustedLogin {
+            policy_id: "pol-other".into(),
+            ..trusted()
+        }));
+        assert!(invalid(TrustedLogin {
+            revision: 4,
+            ..trusted()
+        }));
+        // 登録依頼には固定しない。
+        let mut auth = auth_request("rk-u");
+        auth.trusted_login = Some(trusted());
+        assert!(auth.validate().is_err());
+    }
+
+    #[test]
+    fn model_requests_cannot_carry_selectors() {
+        // モデル・worker が組む操作 intent に selector・URL を混ぜても読まない（deny_unknown_fields）。
+        for extra in [
+            r##""selector":"#evil""##,
+            r#""password_selector":"input""#,
+            r#""login_url":"https://evil.example.com/""#,
+            r#""trusted_login":{}"#,
+        ] {
+            let raw = format!(r#"{{"intent_id":"i-1","action":"credential_use",{extra}}}"#);
+            assert!(
+                serde_json::from_str::<OperationIntent>(&raw).is_err(),
+                "{raw}"
+            );
+        }
+        let raw = r##"{"credential_id":"c","provider":"manual","policy_id":"p","selector":"#x"}"##;
+        assert!(serde_json::from_str::<CredentialRef>(raw).is_err());
+    }
+
+    /// 登録済み credential と承認済みの credential 使用 wait を用意する。
+    fn approved_credential_use(
+        store: &SqliteStore,
+        pinned: Option<TrustedLogin>,
+    ) -> (TaskId, BrowserWait) {
+        let now = OffsetDateTime::now_utc();
+        let id = running(store);
+        let auth = store
+            .browser_wait_open(id, &auth_request("rk-reg"), now)
+            .expect("open auth")
+            .wait;
+        store
+            .browser_wait_register(
+                id,
+                &auth.wait_id,
+                auth.version,
+                &CredentialRecord {
+                    credential_id: "cred-1".into(),
+                    provider: "manual".into(),
+                    policy_id: "pol-example".into(),
+                    credential_revision: 1,
+                    origin: LOGIN_ORIGIN.into(),
+                    receipt_id: "rcpt-1".into(),
+                },
+                "human-1",
+                now,
+            )
+            .expect("register");
+        assert!(
+            store
+                .acquire_lease(id, "run-1", std::time::Duration::from_secs(60))
+                .expect("lease")
+        );
+        let mut req = approval_request("rk-use");
+        req.trusted_login = pinned;
+        let wait = store.browser_wait_open(id, &req, now).expect("open").wait;
+        let d = decision(BrowserDecision::ApproveOnce, wait.version, "n-use");
+        let wait = store
+            .browser_wait_decide(id, &wait.wait_id, &d, now)
+            .expect("approve")
+            .wait;
+        (id, wait)
+    }
+
+    #[test]
+    fn consumed_approval_carries_the_pinned_selector_and_rejects_request_selectors() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        let now = OffsetDateTime::now_utc();
+        let (id, wait) = approved_credential_use(&store, Some(trusted()));
+        // 耐久化した固定値は読み戻しても同じ。
+        let stored = store
+            .browser_wait_get(&wait.wait_id)
+            .expect("get")
+            .expect("wait");
+        assert_eq!(stored.trusted_login, Some(trusted()));
+
+        // 差し替え: 呼出し側の wait の selector を書き換えても採用せず、一回承認も消費しない。
+        let mut swapped = wait.clone();
+        swapped.trusted_login = Some(TrustedLogin {
+            password_selector: "#attacker".into(),
+            ..trusted()
+        });
+        assert_eq!(
+            consume_credential_approval(&store, id, &swapped, now),
+            Err("selector_mismatch")
+        );
+        let mut dropped = wait.clone();
+        dropped.trusted_login = None;
+        assert_eq!(
+            consume_credential_approval(&store, id, &dropped, now),
+            Err("selector_mismatch")
+        );
+        let still = store
+            .browser_wait_get(&wait.wait_id)
+            .expect("get")
+            .expect("wait");
+        assert_eq!(still.state, BrowserWaitState::Approved);
+
+        let consumed = consume_credential_approval(&store, id, &wait, now).expect("consume");
+        assert_eq!(consumed.trusted_login, Some(trusted()));
+        let pinned = trusted().password_selector;
+        assert_eq!(consumed.injection_selector(None), Ok(pinned.as_str()));
+        assert_eq!(
+            consumed.injection_selector(Some(&pinned)),
+            Ok(pinned.as_str())
+        );
+        // 要求側の selector の不一致（1 byte 違い・空・別要素）は拒否。
+        for other in [
+            "#attacker",
+            "",
+            "form#login > input[name=\"password\"] ",
+            "input",
+        ] {
+            assert_eq!(
+                consumed.injection_selector(Some(other)),
+                Err("selector_mismatch"),
+                "{other:?}"
+            );
+        }
+        // 固定後に値を書き換えた ConsumedBrowserApproval（出所が壊れている）も注入に使えない。
+        let mut tampered = consumed.clone();
+        if let Some(t) = tampered.trusted_login.as_mut() {
+            t.password_selector = "input:not([x])".into();
+        }
+        assert_eq!(
+            tampered.injection_selector(None),
+            Err("trusted_selector_missing")
+        );
+    }
+
+    #[test]
+    fn approval_without_pinned_selector_cannot_inject() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        let now = OffsetDateTime::now_utc();
+        let (id, wait) = approved_credential_use(&store, None);
+        let consumed = consume_credential_approval(&store, id, &wait, now).expect("consume");
+        assert_eq!(consumed.trusted_login, None);
+        assert_eq!(
+            consumed.injection_selector(None),
+            Err("trusted_selector_missing")
+        );
+        assert_eq!(
+            consumed.injection_selector(Some("#pass")),
+            Err("trusted_selector_missing")
+        );
     }
 }

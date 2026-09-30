@@ -714,6 +714,47 @@ pub fn replan_done_work_units(
         .collect()
 }
 
+/// ADR-0079 付記「R7-3」D3: 新しい計画 `spec` が退役した（superseded / cancelled の）行の key を再利用していないか
+/// （`work_units` は `UNIQUE(task_id, key)`。採用の前に検証の理由として planner に返す）。`rows` はその task のすべての
+/// 行（退役したものを含む）。
+/// - 生きた行に無く退役した行が持つ key を、新しい計画の unit が使う（D5 の「superseded の key は再利用できない」）。
+/// - 新しい計画の段階の統合 WU の key（`integrate-<stage>`）が、生きた行に無く退役した統合 WU の行と重なる（前の版で消した
+///   段階の key を戻した）。以前はこれを調べず、採用が sqlite の `UNIQUE constraint failed` に落ちていた。
+pub fn retired_key_errors(
+    spec: &ExecutionPlanSpec,
+    rows: &[WorkUnitRow],
+) -> Vec<PlanValidationError> {
+    let live: BTreeSet<&str> = rows
+        .iter()
+        .filter(|u| u.status.is_active())
+        .map(|u| u.key.as_str())
+        .collect();
+    let retired: BTreeSet<&str> = rows
+        .iter()
+        .filter(|u| !u.status.is_active())
+        .map(|u| u.key.as_str())
+        .filter(|k| !live.contains(k))
+        .collect();
+    let mut errors = Vec::new();
+    for w in &internal_view(spec).work_units {
+        if retired.contains(w.key.as_str()) {
+            errors.push(PlanValidationError::RetiredKeyReused {
+                key: w.key.clone(),
+                stage: None,
+            });
+        }
+    }
+    for integ in integration_work_unit_specs(spec) {
+        if retired.contains(integ.key.as_str()) {
+            errors.push(PlanValidationError::RetiredKeyReused {
+                key: integ.key.clone(),
+                stage: integ.phase.clone(),
+            });
+        }
+    }
+    errors
+}
+
 /// ADR-0079 D9（Phase R2b）: /3 の replan（差分 `execution-plan-delta/1` は /2 の形しか持たないので /3 は計画の全体を
 /// 書く）で、`done` の unit を今の版（`active`）から持ち越す（純粋関数）。planner が done の unit を書かなかった・
 /// 書き写し損ねた（unit の gate で上げ下げされた spec を知らない）ときも、採用した spec のまま新しい版に入る:
@@ -745,7 +786,16 @@ pub fn carry_done_units_v3(
             new.stages.insert(at, stage.clone());
         }
         match new.units.iter_mut().find(|u| u.key == done.key) {
-            Some(existing) => *existing = done.clone(),
+            // ADR-0079 付記「R7-3」D1: planner が done の unit に空でない `checks` を書いていれば残す（段階の統合の
+            // check を直せる）。他の欄は採用した spec に戻す。`checks` を書かなかった（空の）写しは従来どおり採用した
+            // spec のまま（簡略に写した done の unit で check を黙って消さない）。
+            Some(existing) => {
+                let checks = std::mem::take(&mut existing.checks);
+                *existing = done.clone();
+                if !checks.is_empty() {
+                    existing.checks = checks;
+                }
+            }
             None => {
                 let at = new
                     .units

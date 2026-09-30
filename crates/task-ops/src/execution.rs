@@ -425,17 +425,13 @@ pub fn replan(
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
 
     let internal = task_core::internal_view(&validated.spec).into_owned();
-    let current_keys: BTreeSet<&str> = current.iter().map(|u| u.key.as_str()).collect();
     let new_keys: BTreeSet<&str> = internal.work_units.iter().map(|w| w.key.as_str()).collect();
     // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を
-    // 「新しい」key として再利用しようとしたら拒否する（D5）。
-    let all_keys_ever: BTreeSet<&str> = all_units.iter().map(|u| u.key.as_str()).collect();
-    for key in new_keys.difference(&current_keys) {
-        if all_keys_ever.contains(key) {
-            return Err(OpsError::Validation(format!(
-                "work unit key {key:?} was used by a superseded work unit and cannot be reused"
-            )));
-        }
+    // 「新しい」key として再利用しようとしたら拒否する（D5）。ADR-0079 付記「R7-3」D3: 段階の統合 WU の key
+    // （前の版で消した段階の key を戻した）も同じく検証の理由にする（以前は sqlite の UNIQUE 制約のエラーだった）。
+    let retired = task_core::execution_plan::retired_key_errors(&validated.spec, &all_units);
+    if !retired.is_empty() {
+        return Err(OpsError::Validation(describe_validation_errors(&retired)));
     }
 
     let new_plan_id = new_id();

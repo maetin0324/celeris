@@ -200,6 +200,56 @@ fn leaf_prompt_carries_human_decisions_and_the_decision_request_contract() {
     );
 }
 
+/// ADR-0079 付記 R7-5 D3: 前の run の check の不合格は次の run の前置きに出る（cwd・判定文・`plan_issue` の申告の仕方）。
+/// 空ならプロンプトは変わらない。
+#[test]
+fn leaf_prompt_carries_the_previous_runs_failed_checks() {
+    let task = crate::protocol::tests::sample_task();
+    let wu = crate::protocol::WorkUnitPromptContext {
+        key: "lan-verify".into(),
+        title: "lan-verify".into(),
+        objective: "verify over the LAN".into(),
+        ..Default::default()
+    };
+    let plain = build_prompt(
+        &task,
+        &RunContext {
+            work_unit: Some(wu.clone()),
+            ..RunContext::default()
+        },
+        "run-1",
+        "artifacts",
+    );
+    assert!(
+        !plain.contains("## 前回の run の check の不合格"),
+        "{plain}"
+    );
+    let detail = "cmd=\"bash check_lan.sh http://192.168.1.103:8000/\" exit=Some(1) expected=0 stdout_tail=\"FAIL not listening\" stderr_tail=\"\"";
+    let with = build_prompt(
+        &task,
+        &RunContext {
+            work_unit: Some(crate::protocol::WorkUnitPromptContext {
+                previous_check_failures: vec!["cwd: /ws/01TASK".into(), detail.into()],
+                ..wu
+            }),
+            ..RunContext::default()
+        },
+        "run-1",
+        "artifacts",
+    );
+    assert!(with.contains("## 前回の run の check の不合格\n"), "{with}");
+    assert!(with.contains("- cwd: /ws/01TASK\n"), "{with}");
+    assert!(with.contains(&format!("- {detail}\n")), "{with}");
+    assert!(
+        with.contains(r#"`artifacts/result.json` に `{"yield": {"plan_issue": "#),
+        "{with}"
+    );
+    // 節は WU の objective の後（目的を読んでから前回の不合格を読む）。
+    let objective_at = with.find("verify over the LAN").unwrap_or(usize::MAX);
+    let section_at = with.find("## 前回の run の check の不合格").unwrap_or(0);
+    assert!(objective_at < section_at, "{with}");
+}
+
 /// ADR-0074 D1.1（Phase F2b）: `parallel = true` の planner run だけ v2 の書き方（工程・同じ工程 =
 /// 並列可・工程内の依存は 1 つまで）を出す。`false` は従来のプロンプトのまま。
 #[test]
@@ -259,6 +309,7 @@ fn build_prompt_replaces_the_objective_and_acceptance_with_the_work_unit_when_pr
             branch: None,
             parallel_siblings: Vec::new(),
             human_decisions: Vec::new(),
+            previous_check_failures: Vec::new(),
         }),
         ..RunContext::default()
     };
@@ -3332,4 +3383,126 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
     assert!(prompt.contains("Phases and parallel WorkUnits"));
     assert!(!prompt.contains("Leaf criteria"));
     assert!(!prompt.contains("Remaining depth"));
+}
+
+/// ADR-0079 R7-2: /2 と /3 の planner のプロンプトに「check の書き方」の節（R7-5 で 7 規則）が出る。/3 は子を作る unit
+/// だけを数える上限の説明と、dispatcher が渡す /3 の JSON の大きさの上限を出す。
+#[test]
+fn planner_prompt_has_the_check_writing_section() {
+    let task = crate::protocol::tests::sample_task();
+    let needles = [
+        "### check の書き方",
+        "`docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write",
+        "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
+        "corepack pnpm@<version from package.json packageManager> -C <dir>",
+        "git diff --quiet $(git merge-base HEAD main) --",
+        "A negated grep (`! grep ...`) must not match text the unit itself writes",
+        "a check that runs a script another unit creates belongs to a unit that `depends_on` the creating unit",
+        // ADR-0079 付記 R7-5 D5: check の走る所（git の worktree が無い task）と、unit 自身が作るスクリプトの呼び出し方。
+        "or the task's directory (where `artifacts/` is) when the task has no git worktree",
+        "write the exact invocation (the arguments the check passes) in the unit's objective",
+    ];
+    let v2 = crate::protocol::ExecutionPlannerContext {
+        gate_rule_id: "human/explicit".to_string(),
+        max_work_units: 8,
+        parallel: true,
+        max_phases: 5,
+        max_plan_json_bytes: 24 * 1024,
+        ..Default::default()
+    };
+    let v3 = crate::protocol::ExecutionPlannerContext {
+        max_plan_json_bytes: 64 * 1024,
+        tree: Some(crate::protocol::TreePlannerContext {
+            depth: 1,
+            max_depth: 3,
+            remaining_depth: 2,
+            max_stages: 5,
+            max_units_per_stage: 6,
+            max_child_tasks_per_plan: 6,
+            ..Default::default()
+        }),
+        ..v2.clone()
+    };
+    for (name, planner) in [("v2", v2), ("v3", v3)] {
+        let context = RunContext {
+            execution_planner: Some(planner.clone()),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-planner-checks", "artifacts");
+        for needle in needles {
+            assert!(prompt.contains(needle), "{name}: missing {needle:?}");
+        }
+        assert_eq!(prompt.matches("### check の書き方").count(), 1, "{name}");
+        let bytes = if planner.tree.is_some() { 65536 } else { 24576 };
+        assert!(
+            prompt.contains(&format!("the whole plan JSON at most {bytes} bytes")),
+            "{name}"
+        );
+        if planner.tree.is_some() {
+            assert!(prompt.contains(
+                "that will create a child (units already done and `adopt` units do not count)"
+            ));
+        }
+    }
+}
+
+/// ADR-0079 付記「R7-3」D1 / D5: replan の planner（/2・/3）に「done の unit で直せるのは `checks` だけ（統合で再実行）」
+/// を伝え、/3 の段階あたりの上限の行は done と `adopt` を数えないと書く。
+#[test]
+fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
+    let task = crate::protocol::tests::sample_task();
+    let v2 = crate::protocol::ExecutionPlannerContext {
+        gate_rule_id: "human/explicit".to_string(),
+        max_work_units: 8,
+        parallel: true,
+        max_phases: 5,
+        max_plan_json_bytes: 24 * 1024,
+        replan: true,
+        current_plan_version: Some(1),
+        preserve_done_keys: vec!["merge-old-tip".to_string()],
+        ..Default::default()
+    };
+    let v3 = crate::protocol::ExecutionPlannerContext {
+        max_plan_json_bytes: 64 * 1024,
+        tree: Some(crate::protocol::TreePlannerContext {
+            depth: 2,
+            max_depth: 3,
+            remaining_depth: 1,
+            max_stages: 5,
+            max_units_per_stage: 6,
+            max_child_tasks_per_plan: 6,
+            ..Default::default()
+        }),
+        ..v2.clone()
+    };
+    for (name, planner, needles) in [
+        (
+            "v2",
+            v2,
+            vec![
+                "The one exception is `checks`: you may replace a done WorkUnit's `checks`",
+                "The done WorkUnit is not re-run; its checks are re-run at the phase integration.",
+            ],
+        ),
+        (
+            "v3",
+            v3,
+            vec![
+                "The only thing you may change in a done unit is its `checks`",
+                "The done unit is not re-run; its checks are re-run at the stage integration.",
+                "At most 6 units per stage (leaves + child tasks; units already done, `adopt` units, and \
+                     celeris-added integration steps and repairs do not count)",
+            ],
+        ),
+    ] {
+        let context = RunContext {
+            execution_planner: Some(planner),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-planner-replan", "artifacts");
+        assert!(prompt.contains("merge-old-tip"), "{name}");
+        for needle in needles {
+            assert!(prompt.contains(needle), "{name}: missing {needle:?}");
+        }
+    }
 }

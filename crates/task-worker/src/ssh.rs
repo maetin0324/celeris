@@ -70,7 +70,13 @@ pub const PUSH_PENDING_MARKER: &str = ".celeris/push-pending";
 /// （続けて初期化後の submodule の数）。初期化が要らなかった（`.gitmodules` が無い・全部済み）ときは出さない。
 const SUBMODULES_INITIALISED_PREFIX: &str = "celeris-submodules-initialised ";
 
-/// ADR-0019 付記（Phase R6-3）: submodule の初期化に失敗したときの exit（65 / 66 と区別する）。
+/// ADR-0019 付記（Phase R7-4）: submodule を 1 つずつ初期化して、失敗したものごとに標準出力へ出す行の頭
+/// （続けて `<path>\t<stderr の要点の 1 行>`）。失敗は準備を止めない（警告の進行の行になる）。
+const SUBMODULE_FAILED_PREFIX: &str = "celeris-submodule-failed ";
+
+/// ADR-0019 付記（Phase R6-3 / R7-4）: submodule の段が使えないときの exit（65 / 66 と区別する）。
+/// R7-4 から個々の submodule の初期化の失敗では使わない（警告にする）。`git submodule status` 自体が
+/// 動かない（git に submodule が無い・worktree が壊れている）ときだけ。
 const SUBMODULE_INIT_FAILED_EXIT: i32 = 67;
 
 /// 1 タスク分のリモート実行の設定。
@@ -288,19 +294,33 @@ impl SshWorkspace {
         // （`git submodule status` の行頭が `-`）のものが 1 つでもあれば `submodule update --init --recursive`
         // する（再利用のときは初期化済みなら何もしない = 冪等）。worktree ごとの `modules/` に clone するので
         // 共有の錠は先に外す（大きな submodule の clone で他のタスクの worktree 作成を待たせない）。
+        // Phase R7-4: submodule は `.gitmodules` の path ごとに 1 つずつ初期化し、失敗しても続ける（本番
+        // 2026-09-30: `ior_integration/ior` の固定 commit が remote に無く、1 つの失敗で準備ごと落ちた）。
+        // 失敗は `<SUBMODULE_FAILED_PREFIX><path>\t<要点>` の行で返し、Rust 側で警告の進行の行にする。
         inner.push_str(&format!(
             "exec 9>&-\n\
              if [ -f {wt}/.gitmodules ]; then\n\
                sm_status=$(git -C {wt} submodule status --recursive 2>&1) || {{ printf '%s\\n' \"git submodule status failed: $sm_status\" >&2; exit {code}; }}\n\
                if printf '%s\\n' \"$sm_status\" | grep -q '^-'; then\n\
-                 git -C {wt} submodule update --init --recursive >/dev/null || {{ echo \"git submodule update --init --recursive failed\" >&2; exit {code}; }}\n\
-                 sm_count=$(git -C {wt} submodule status --recursive | grep -c . || true)\n\
+                 sm_paths=$(git -C {wt} config -f .gitmodules --get-regexp '^submodule\\..*\\.path$' 2>/dev/null | sed 's/^[^ ]* //' || true)\n\
+                 sm_report=$(printf '%s\\n' \"$sm_paths\" | while IFS= read -r sm_path; do\n\
+                   [ -n \"$sm_path\" ] || continue\n\
+                   if sm_err=$(git -C {wt} submodule update --init --recursive -- \"$sm_path\" 2>&1 >/dev/null); then :; else\n\
+                     sm_why=$(printf '%s\\n' \"$sm_err\" | grep -E '^(fatal|error):' | head -n 1 || true)\n\
+                     [ -n \"$sm_why\" ] || sm_why=$(printf '%s\\n' \"$sm_err\" | grep -v '^[[:space:]]*$' | head -n 1 || true)\n\
+                     printf '%s%s\\t%s\\n' '{failed}' \"$sm_path\" \"$sm_why\"\n\
+                   fi\n\
+                 done)\n\
+                 [ -z \"$sm_report\" ] || printf '%s\\n' \"$sm_report\"\n\
+                 sm_failed=$(printf '%s\\n' \"$sm_report\" | grep '^{failed}' | cut -f1 | sed 's/^{failed}//' || true)\n\
+                 sm_count=$(git -C {wt} submodule status --recursive 2>/dev/null | sm_failed=\"$sm_failed\" awk 'BEGIN {{ n = split(ENVIRON[\"sm_failed\"], f, \"\\n\") }} /^-/ {{ next }} {{ p = substr($0, 2); sub(/^[^ ]* /, \"\", p); for (i = 1; i <= n; i++) if (f[i] != \"\" && (p == f[i] || index(p, f[i] \" \") == 1 || index(p, f[i] \"/\") == 1)) next; c++ }} END {{ print c + 0 }}' || true)\n\
                  echo \"{prefix}$sm_count\"\n\
                fi\n\
              fi\n",
             wt = shell_remote_path(&wt),
             code = SUBMODULE_INIT_FAILED_EXIT,
             prefix = SUBMODULES_INITIALISED_PREFIX,
+            failed = SUBMODULE_FAILED_PREFIX,
         ));
         // 同じリポジトリに対して複数のタスクが同時に worktree を作ることがある（クラスタの並列度 > 1）。
         // git の worktree 管理は共有なので、あれば `flock` で直列化する（無ければそのまま実行する）。
@@ -324,19 +344,35 @@ impl SshWorkspace {
                     .stdout_tail
                     .lines()
                     .find_map(|l| l.trim().strip_prefix(SUBMODULES_INITIALISED_PREFIX))
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty() && *c != "0")
                 {
                     let line = format!(
-                        "initialised {} submodules in {wt} on cluster {}",
-                        count.trim(),
+                        "initialised {count} submodules in {wt} on cluster {}",
                         self.settings.cluster
                     );
-                    tracing::info!(cluster = %self.settings.cluster, worktree = %wt, submodules = %count.trim(), "initialised git submodules in the cluster worktree (R6-3)");
+                    tracing::info!(cluster = %self.settings.cluster, worktree = %wt, submodules = %count, "initialised git submodules in the cluster worktree (R6-3)");
                     self.push_progress_note(line);
+                }
+                // Phase R7-4: 初期化できなかった submodule は準備を止めず、1 つずつ警告の進行の行にする。
+                for rest in out
+                    .stdout_tail
+                    .lines()
+                    .filter_map(|l| l.strip_prefix(SUBMODULE_FAILED_PREFIX))
+                {
+                    let (path, why) = rest.split_once('\t').unwrap_or((rest, ""));
+                    let why = why.trim();
+                    let why = if why.is_empty() { "unknown error" } else { why };
+                    tracing::warn!(cluster = %self.settings.cluster, worktree = %wt, submodule = %path, error = %why, "a git submodule could not be initialised in the cluster worktree (R7-4, best-effort)");
+                    self.push_progress_note(format!(
+                        "submodule {path} could not be initialised: {why} (worktree {wt} on cluster {})",
+                        self.settings.cluster
+                    ));
                 }
                 Ok(())
             }
             Some(SUBMODULE_INIT_FAILED_EXIT) => Err(WorkspaceError::Remote(format!(
-                "cannot initialise the git submodules of the worktree {wt} on {} (exit {SUBMODULE_INIT_FAILED_EXIT}): {}",
+                "cannot run the git submodule step in the worktree {wt} on {} (exit {SUBMODULE_INIT_FAILED_EXIT}): {}",
                 self.settings.cluster,
                 out.stderr_tail.trim()
             ))),

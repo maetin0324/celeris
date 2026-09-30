@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 use nix::libc;
 
 use crate::browser_runtime::{
-    IsolatedRuntime, RecordedProcess, RuntimeError, RuntimeSpec, process_starttime, reap_recorded,
-    read_record, same_process_alive, write_record,
+    IsolatedRuntime, RecordedProcess, RuntimeError, RuntimeSpec, process_starttime, read_record,
+    reap_recorded, same_process_alive, write_record,
 };
 
 /// 停止時の SIGTERM から SIGKILL までの猶予（ADR-0088 D2）。
@@ -337,7 +337,9 @@ pub fn reap_on_start(dir: &Path, timeout: Duration) -> std::io::Result<Vec<i32>>
         .any(|p| same_process_alive(p.pid, p.starttime))
     {
         if Instant::now() >= deadline {
-            return Err(std::io::Error::other("recorded runtime processes survived reap"));
+            return Err(std::io::Error::other(
+                "recorded runtime processes survived reap",
+            ));
         }
         std::thread::sleep(Duration::from_millis(20));
     }

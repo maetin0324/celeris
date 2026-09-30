@@ -31,10 +31,7 @@ const MARKER: &str = "celeris-supervisor-fixture-body-7c2e";
 const POLICY: &str = r#"{"allow":["fixture.example.com:443","fixture.example.com:8443"],"resolver":"127.0.0.1","allow_ipv6":false}"#;
 const HOLD: &str = r#"#!/bin/bash
 ( exec 3<>/dev/tcp/127.0.0.1/3128
-  printf 'CONNECT fixture.example.com:8443 HTTP/1.1
-Host: fixture.example.com:8443
-
-' >&3
+  printf 'CONNECT fixture.example.com:8443 HTTP/1.1\r\nHost: fixture.example.com:8443\r\n\r\n' >&3
   head -c 12 <&3 > /session/tunnel.txt
   exec cat <&3 >/dev/null ) &
 exec "$@"
@@ -230,8 +227,10 @@ impl Cdp {
 
     /// `url` を開き、`wait` の間に本文へ MARKER が現れたかを返す。
     fn fetch_marker(&mut self, s: &str, url: &str, wait: Duration) -> bool {
-        self.call("Page.navigate", serde_json::json!({"url": url}), Some(s));
+        let nav = self.call("Page.navigate", serde_json::json!({"url": url}), Some(s));
+        println!("CTRL NAV {nav}");
         let deadline = Instant::now() + wait;
+        let mut last = serde_json::Value::Null;
         while Instant::now() < deadline {
             let v = self.call(
                 "Runtime.evaluate",
@@ -244,12 +243,13 @@ impl Cdp {
             {
                 return true;
             }
+            last = v;
             std::thread::sleep(Duration::from_millis(200));
         }
+        println!("CTRL LAST {last}");
         false
     }
 }
-
 
 /// proxy 経由の tunnel の相手（開いた数と閉じた数を数える）。
 fn hold_server(listener: TcpListener, open: Arc<AtomicUsize>, closed: Arc<AtomicUsize>) {
@@ -402,7 +402,12 @@ struct Ctrl {
 
 fn controller(mode: &str, record: &Path, session: &Path) -> Ctrl {
     let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "controller_main", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            "controller_main",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(MODE, mode)
         .env(DIRS, format!("{}:{}", record.display(), session.display()))
         .env_remove(INNER)
@@ -436,8 +441,9 @@ fn expect_line(c: &Ctrl, prefix: &str) -> String {
             .lines
             .recv_timeout(left)
             .unwrap_or_else(|e| panic!("controller never printed {prefix}: {e:?}"));
-        if let Some(rest) = l.strip_prefix(prefix) {
-            return rest.trim().to_owned();
+        // libtest の `test controller_main ... ` が同じ行の前に付くことがある。
+        if let Some(i) = l.find(prefix) {
+            return l[i + prefix.len()..].trim().to_owned();
         }
     }
 }
@@ -466,7 +472,10 @@ fn wait_gone(procs: &[RecordedProcess], within: Duration) -> Vec<RecordedProcess
 fn assert_full_runtime(procs: &[RecordedProcess]) {
     let r = roles(procs);
     for want in ["browser", "bwrap", "egress", "sandboxd"] {
-        assert!(r.iter().any(|x| x == want), "{want} not recorded: {procs:?}");
+        assert!(
+            r.iter().any(|x| x == want),
+            "{want} not recorded: {procs:?}"
+        );
     }
     for p in procs {
         assert!(same_process_alive(p.pid, p.starttime), "not alive: {p:?}");
@@ -544,7 +553,10 @@ fn inner_supervisor_in_test_netns() {
         assert!(Instant::now() < deadline, "(a) proxy tunnel still open");
         std::thread::sleep(Duration::from_millis(50));
     }
-    eprintln!("SUPERVISOR-EVIDENCE (a) ok: 0 of {} remain, tunnel closed", procs.len());
+    eprintln!(
+        "SUPERVISOR-EVIDENCE (a) ok: 0 of {} remain, tunnel closed",
+        procs.len()
+    );
 
     // (b) PDEATHSIG を取りこぼした runtime: controller の SIGKILL 後も残る → 新しい controller の
     //     起動時回収（記録の pid+starttime 照合）で残存 0。
@@ -623,7 +635,10 @@ fn reap_does_not_signal_a_reused_pid() {
         assert!(reap_recorded(dir.path()).unwrap().is_empty());
         assert!(!dir.path().join("reused.pid").exists());
         std::thread::sleep(Duration::from_millis(200));
-        assert!(other.try_wait().unwrap().is_none(), "reused pid was signalled");
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "reused pid was signalled"
+        );
     }
     // 回収済みの pid（zombie も含めて本人が居ない）にも送らない。
     // 対照: starttime が一致すれば本人として回収する。

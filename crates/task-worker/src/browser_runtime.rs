@@ -208,7 +208,12 @@ impl IsolatedRuntime {
         // SAFETY: getpid は常に成功する。
         let parent = unsafe { libc::getpid() };
         let mut cmd = Command::new(&spec.bwrap);
-        cmd.arg("--info-fd").arg("5").args(bwrap_args(spec));
+        let mut args = bwrap_args(spec);
+        if !arm_parent_death {
+            // 取りこぼしの再現では bwrap 自身の PDEATHSIG（--die-with-parent）も掛けない。
+            args.retain(|a| a != "--die-with-parent");
+        }
+        cmd.arg("--info-fd").arg("5").args(args);
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -457,7 +462,13 @@ fn spawn_egress(
     unsafe {
         cmd.pre_exec(move || {
             // runtime の process group に入れて一緒に回収する（ADR-0088 D2）。
-            if libc::dup2(fd, 3) < 0 || libc::setpgid(0, pgid) < 0 {
+            // 元がすでに fd 3 なら dup2 は何もせず CLOEXEC が残る（exec で閉じる）。その時は外す。
+            let placed = if fd == 3 {
+                libc::fcntl(3, libc::F_SETFD, 0)
+            } else {
+                libc::dup2(fd, 3)
+            };
+            if placed < 0 || libc::setpgid(0, pgid) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -623,7 +634,11 @@ pub fn process_starttime(pid: i32) -> Option<u64> {
 }
 
 /// runtime の process を `dir/<session>.pid` に tmp+rename で書く（1 行目が bwrap = pgid）。
-pub fn write_record(dir: &Path, session_id: &str, procs: &[RecordedProcess]) -> std::io::Result<()> {
+pub fn write_record(
+    dir: &Path,
+    session_id: &str,
+    procs: &[RecordedProcess],
+) -> std::io::Result<()> {
     let body: String = procs
         .iter()
         .map(|p| format!("{} {} {}\n", p.pid, p.starttime, p.role))

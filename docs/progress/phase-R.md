@@ -1490,3 +1490,6 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 - `pending` の版の間に持ち越しの leaf が終わって段階の統合の条件を満たす形（起きない見込み）と、人の gate の間の子の基盤の失敗の作り直しは
   止めていない（付記の「残したもの」）。
 - 木の上限（`max_tree_replans`）は人の replan の依頼にも効く（D3 は節点の `max_replans` だけ）。
+- 05:49Z: release **1753ccc641e4**（main = R6-1〜R6-5）: gate ok、push、verify ok / live_ok（schema 33）。f8a199978065 を置き換える昇格候補（人）。
+- 06:1xZ: **R7-1**（cluster job の durable wait、PBS）を Opus に委譲。1 回目は Opus の session 上限（429、06:10Z reset）で即失敗 → 再起動。
+- 05:44Z: BenchFS 根の v7（bf-exp を superseded、bf-exp2 を再発行。受け入れ条件に「PBS job が全部 F」）を人が承認。

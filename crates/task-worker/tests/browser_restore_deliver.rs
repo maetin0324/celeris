@@ -320,7 +320,7 @@ fn supervisor_entry_delivers_restored_state_to_controller_cdp_under_harness_admi
 }
 
 #[test]
-fn attested_admission_refuses_same_uid_before_opening() {
+fn identity_restore_sameuid_rejected_in_production() {
     if skip() {
         return;
     }

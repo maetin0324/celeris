@@ -93,7 +93,7 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
-// P4-10: knowledge domain fixtures. Keep this block together for parallel merge.
+// P4-10/P4-11: knowledge domain fixtures. Keep this block together for parallel merge.
 export const knowledgeFixtures = {
   "/api/v1/knowledge/tree": {
     initialized: true,
@@ -126,6 +126,17 @@ export const knowledgeFixtures = {
         target_exists: false,
       },
     ],
+  },
+  "/api/v1/skills": {
+    initialized: true,
+    root: "/fake/knowledge",
+    items: [{ name: "demo", description: "Demo skill", mounted_by: [] }],
+  },
+  "/api/v1/skills/demo": {
+    name: "demo",
+    skill_md: "# Demo skill\n\nDescription",
+    files: ["references/guide.md"],
+    mounted_by: [],
   },
 };
 
@@ -258,7 +269,10 @@ export function createFakeDaemon({
       return res.end(body);
     }
     // Knowledge mutations use the same fake daemon and record the submitted body.
-    if (/^\/api\/v1\/(knowledge\/(page|inbox\/[^/]+\/(accept|reject)))$/.test(pathname) && req.method !== "GET") {
+    if (
+      /^\/api\/v1\/(knowledge\/(page|inbox\/[^/]+\/(accept|reject))|skills\/[^/]+)$/.test(pathname) &&
+      req.method !== "GET"
+    ) {
       const chunks = [];
       req.on("data", (chunk) => chunks.push(chunk));
       req.on("end", () => {

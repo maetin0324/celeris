@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
-
-// R16 /knowledge/skills（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
+import { SkillsScreen } from "../features/knowledge/skills-screen";
+import { optionalString } from "../lib/search";
 export const Route = createFileRoute("/knowledge/skills")({
-  component: Screen,
+  validateSearch: (search: Record<string, unknown>): { create?: string; name?: string; edit?: string } => ({
+    create: optionalString(search.create),
+    name: optionalString(search.name),
+    edit: optionalString(search.edit),
+  }),
+  component: SkillsScreen,
 });
-
-function Screen() {
-  return <ScreenFrame title="skills" route="/knowledge/skills" />;
-}

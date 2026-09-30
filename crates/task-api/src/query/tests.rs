@@ -110,6 +110,17 @@ fn tree_event_types_match_their_serde_names() {
             plan_version: 2,
             changed_fields: vec!["checks".into()],
         },
+        Event::WorkUnitChecksFailed {
+            run_id: "r".into(),
+            work_unit_id: "w".into(),
+            key: "verify".into(),
+            cwd: "/ws/t".into(),
+            failed: vec![task_core::FailedWorkUnitCheck {
+                cmd: "false".into(),
+                expect_exit: 0,
+                detail: "cmd=\"false\" exit=Some(1) expected=0".into(),
+            }],
+        },
         Event::StallDetected {
             task_id: child,
             detail: "x".into(),
@@ -182,5 +193,5 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 48);
+    assert_eq!(EVENT_TYPES.len(), 49);
 }

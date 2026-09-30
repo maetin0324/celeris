@@ -29,7 +29,7 @@ export const screens = [
   { path: "/providers", fixture: "/providers", heading: "プロバイダ", v3: true },
   { path: "/accounts", fixture: "/accounts", heading: "アカウント" },
   { path: "/clusters", fixture: "/clusters", heading: "クラスタ" },
-  { path: "/releases", fixture: "/releases", heading: "リリース" },
+  { path: "/releases", fixture: "/releases", heading: "リリース", v3: true },
   { path: "/graph", fixture: "/graph", heading: "依存グラフ", v3: true },
   { path: "/help", fixture: "/help", heading: "ヘルプ" },
 ] as const satisfies readonly Screen[];

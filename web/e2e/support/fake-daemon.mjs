@@ -258,6 +258,76 @@ export function createFakeDaemon({
       });
       return;
     }
+    // ops: releases (P4-16)
+    // GET /api/v1/releases は状態を持つ。POST /api/v1/releases/{sha12}/promote は 202 で昇格を起こし、
+    // `pendingMs` の間は promoting、その後 `mode`（succeed | fail）の結果を行に書く。
+    // 制御: POST /__fake/releases `{ mode?, pendingMs? }`。
+    if (pathname === "/__fake/releases" || pathname.startsWith("/api/v1/releases")) {
+      if (!server.fakeReleases) {
+        server.fakeReleases = {
+          mode: "succeed",
+          pendingMs: 0,
+          current: "aaaaaaaaaaaa",
+          promotedAt: { aaaaaaaaaaaa: "2026-09-29T00:00:00Z", bbbbbbbbbbbb: null },
+          promoting: null,
+          failed: null,
+        };
+      }
+      const rel = server.fakeReleases;
+      const json = (status, value) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(value));
+      };
+      if (req.method === "POST") {
+        const chunks = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          const promote = /^\/api\/v1\/releases\/([0-9a-f]{12})\/promote$/.exec(pathname);
+          if (pathname === "/__fake/releases") {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+            if (body.mode) rel.mode = body.mode;
+            if (typeof body.pendingMs === "number") rel.pendingMs = body.pendingMs;
+            return json(200, { mode: rel.mode, pendingMs: rel.pendingMs });
+          }
+          if (!promote || !(promote[1] in rel.promotedAt)) return json(404, { error: "not found" });
+          const sha = promote[1];
+          if (rel.promoting) return json(409, { error: "別の昇格が走っています" });
+          const startedAt = new Date().toISOString();
+          rel.promoting = sha;
+          rel.failed = null;
+          setTimeout(() => {
+            if (rel.mode === "fail")
+              rel.failed = { sha, failed_at: new Date().toISOString(), error: "promote.sh が exit 1 で終わりました" };
+            else {
+              rel.current = sha;
+              rel.promotedAt[sha] = new Date().toISOString();
+            }
+            rel.promoting = null;
+          }, rel.pendingMs);
+          return json(202, { sha12: sha, log: `${sha}/promote.log`, started_at: startedAt, script_from: "current" });
+        });
+        return;
+      }
+      const item = (sha) => ({
+        sha12: sha,
+        gate_ok: true,
+        is_current: rel.current === sha,
+        is_previous: rel.current !== sha && rel.promotedAt[sha] !== null,
+        promoting: rel.promoting === sha,
+        promoted_at: rel.promotedAt[sha],
+        promote_failed:
+          rel.failed && rel.failed.sha === sha ? { failed_at: rel.failed.failed_at, error: rel.failed.error } : null,
+        built_at: "2026-09-28T00:00:00Z",
+        ref: "main",
+      });
+      return json(200, {
+        current: rel.current,
+        previous: null,
+        running: { release: rel.current, role: "active", instance_id: "I1" },
+        instances: [],
+        items: ["bbbbbbbbbbbb", "aaaaaaaaaaaa"].map(item),
+      });
+    }
     const file = files[pathname];
     if (file) {
       // run のファイル・成果物（P1-08）。単一の `bytes=a-b` の Range だけを扱う。

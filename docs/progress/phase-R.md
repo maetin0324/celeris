@@ -1658,3 +1658,7 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
   再失敗 → 質問。**統合 WU の check は replan で更新されない**（daemon が旧版から統合 WU 行を持ち越す）欠陥として **R7-3** に委譲（あわせて: 人の replan 要求を
   統合再実行より優先、superseded key 再利用の検証、leaf_too_large の文言、段階上限は走る unit だけ、failed unit の数え方の明文化）。この子は R7-3 昇格まで
   blocked のまま置く（回答すると同じ check で再実行されるだけ）。
+- 09:11Z: BenchFS 根の planner run が infra error: R6-3 の submodule 展開が sirius の worktree で失敗（`ior_integration/ior` の pin 7054224d が remote に無い
+  = 未 push の commit。`not our ref`）→ prepare 全体が失敗し planner が回れない。**R7-4**（submodule 展開を submodule ごとの best-effort にし、失敗は進捗行の
+  警告に）を Opus に委譲。人への依頼: ior fork の commit 7054224d を remote に push するか、superproject の pin を存在する commit に更新する。
+- 09:11Z: BenchFS 実験(2) の子は review 不合格 → failed（`full` を選んだため E3/E4・GekkoFS 導入・等予算 grid が要件だが未実施。子は子作業を提案）→ 根が replan。

@@ -1628,3 +1628,4 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
 - check の指針はプロンプトだけ（機械的な検査はしない）。効き目は次の web / refactor の計画の check で確かめる。
 - 08:0xZ: **R7-2**（planner の「check の書き方」指針、`max_child_tasks_per_plan` は子を作る unit だけ（done / adopt を除く）、plan/3 の JSON 上限 64 KiB と
   削り方の案内、config 例の注記。Opus 4b28613）を main に統合 → release chain 実行中。残: failed のまま残した task unit は数える、`max_units_per_stage` は done も数える。
+- 08:00Z: release **fc60977fd142**（main = R7-2 まで、schema 34）: gate ok、verify ok / live_ok。昇格は人（live）。

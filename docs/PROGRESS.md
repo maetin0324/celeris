@@ -42,3 +42,7 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 ## Web GUI Phase 1（完了 2026-09-30、scaffold と gateway）
 
 P1-01〜P1-09 完了。以後の Web GUI の記録は [progress/phase-web.md](progress/phase-web.md) へ（Phase 1 の証拠・未解決・提案もそこ）。
+
+## Web GUI Phase 3（完了 2026-09-30、中核の画面 P3-01〜P3-15）
+
+P3-01〜P3-15 完了。証拠・未解決・提案は [progress/phase-web.md の Phase 3 節](progress/phase-web.md#phase-3完了-2026-09-30中核の画面-p3-01p3-15)。

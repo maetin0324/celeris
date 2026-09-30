@@ -141,8 +141,7 @@ async fn the_worktree_initialises_submodules_and_reuse_is_idempotent() {
     );
     assert!(!wt.dir.join("lib/sub/README.md").exists());
     // file を許すと初期化される（本番の submodule は ssh / https なのでこの前置きは要らない）。
-    let count =
-        init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("init");
+    let count = init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("init");
     assert_eq!(count, Some(1));
     assert!(
         wt.dir.join("lib/sub/README.md").is_file(),

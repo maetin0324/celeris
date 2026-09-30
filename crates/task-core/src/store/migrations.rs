@@ -69,8 +69,7 @@ pub(crate) const MIGRATION_0032: &str = include_str!("../../migrations/0032_brow
 pub(crate) const MIGRATION_0033: &str =
     include_str!("../../migrations/0033_browser_task_policies.sql");
 /// ADR-0090 D2: `cluster_job_waits`（クラスタ job の durable wait。events が正本の派生の索引）。
-pub(crate) const MIGRATION_0034: &str =
-    include_str!("../../migrations/0034_cluster_job_waits.sql");
+pub(crate) const MIGRATION_0034: &str = include_str!("../../migrations/0034_cluster_job_waits.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。

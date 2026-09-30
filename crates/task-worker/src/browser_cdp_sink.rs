@@ -111,7 +111,11 @@ impl UnixInjectionClient {
     }
 
     fn check_socket(&self) -> Result<(), InjectionError> {
-        if self.socket.file_name().is_some_and(|name| name == "injection.sock") {
+        if self
+            .socket
+            .file_name()
+            .is_some_and(|name| name == "injection.sock")
+        {
             Ok(())
         } else {
             Err(InjectionError::SinkFailed)
@@ -233,6 +237,7 @@ pub struct CdpController {
     next_id: u64,
     auth_section: Option<String>,
     injected: Vec<(String, String, String, String)>,
+    events: Vec<Value>,
 }
 
 impl CdpController {
@@ -244,10 +249,12 @@ impl CdpController {
             next_id: 1,
             auth_section: None,
             injected: Vec::new(),
+            events: Vec::new(),
         }
     }
 
     pub fn open_auth_section(&mut self, id: String) {
+        self.events.clear();
         self.auth_section = Some(id);
     }
 
@@ -282,6 +289,32 @@ impl CdpController {
             return Err(InjectionError::AuthSectionRequired);
         }
         self.call(method, params, session)
+    }
+
+    /// Trusted controller operations needed to prepare and finish H3. The
+    /// caller must hold the controller handle, never an agent connection.
+    pub fn controller_command(
+        &mut self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<Value, InjectionError> {
+        self.call(method, params, session)
+    }
+
+    /// Events collected while a command was in flight. An auth section discards
+    /// them before the relay can expose them to an agent connection.
+    pub fn take_agent_events(&mut self) -> Vec<Value> {
+        if self.auth_section.is_some() {
+            self.events.clear();
+            Vec::new()
+        } else {
+            std::mem::take(&mut self.events)
+        }
+    }
+
+    pub fn auth_section_active(&self) -> bool {
+        self.auth_section.is_some()
     }
 
     pub fn inject(
@@ -515,7 +548,9 @@ impl CdpController {
                 if value["id"] == id {
                     return Ok(value);
                 }
-                // Unsolicited events must not reach worker, including console/URL.
+                if value.get("method").is_some() && self.auth_section.is_none() {
+                    self.events.push(value);
+                }
                 continue;
             }
             if self.buffered.len() >= MAX_FRAME {

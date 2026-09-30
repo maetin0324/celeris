@@ -5,12 +5,14 @@
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
 
 use nix::libc;
 use task_worker::browser_relay::{
     CHANNEL_FD, CONNECT, GRANT, LISTEN_PORT, READY, check_channel, recv, send,
 };
+use task_worker::browser_shared_cdp::RELAY_PORT;
 
 /// listen 失敗・channel 不正（browser を起動しない）。
 const EXIT_SETUP: u8 = 70;
@@ -53,7 +55,15 @@ fn main() -> ExitCode {
         return ExitCode::from(EXIT_SETUP);
     }
     let argv: Vec<_> = std::env::args_os().skip(1).collect();
-    let Some((program, args)) = argv.split_first() else {
+    let (chrome, action) = if argv.first().is_some_and(|a| a == "--shared-cdp") {
+        if argv.len() < 3 {
+            return ExitCode::from(EXIT_SETUP);
+        }
+        (Some(argv[1].clone()), &argv[2..])
+    } else {
+        (None, argv.as_slice())
+    };
+    let Some((program, args)) = action.split_first() else {
         return ExitCode::from(EXIT_SETUP);
     };
     let Ok(listener) = TcpListener::bind(("127.0.0.1", LISTEN_PORT)) else {
@@ -62,6 +72,62 @@ fn main() -> ExitCode {
     };
     if send(CHANNEL_FD, READY, None).is_err() {
         return ExitCode::from(EXIT_SETUP);
+    }
+    if let Some(chrome) = chrome {
+        let Ok(cdp_listener) = TcpListener::bind(("127.0.0.1", RELAY_PORT)) else {
+            return ExitCode::from(EXIT_SETUP);
+        };
+        std::thread::spawn(move || {
+            for connection in cdp_listener.incoming() {
+                let Ok(tcp) = connection else { continue };
+                std::thread::spawn(move || {
+                    if let Ok(unix) = UnixStream::connect("/session/cdp-relay.sock") {
+                        relay(tcp, unix);
+                    }
+                });
+            }
+        });
+        let mut command = Command::new(chrome);
+        command.args([
+            "--headless",
+            "--no-sandbox",
+            "--no-zygote",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--no-first-run",
+            "--user-data-dir=/session/profile",
+            "--remote-debugging-pipe",
+            "--proxy-server=http://127.0.0.1:3128",
+            "--proxy-bypass-list=<-loopback>",
+            "about:blank",
+        ]);
+        // SAFETY: fcntl is async-signal-safe and only changes inherited CDP fds.
+        unsafe {
+            command.pre_exec(|| {
+                for fd in [3, 4] {
+                    if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        let Ok(mut browser) = command.spawn() else {
+            return ExitCode::from(EXIT_SETUP);
+        };
+        std::thread::spawn(move || {
+            let _ = browser.wait();
+            std::process::exit(i32::from(EXIT_SETUP));
+        });
+        // The action process must never inherit Chromium's pipe endpoints.
+        for fd in [3, 4] {
+            // SAFETY: these are the inherited CDP fds, held by sandboxd.
+            if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                return ExitCode::from(EXIT_SETUP);
+            }
+        }
     }
     let mut child = match Command::new(program).args(args).spawn() {
         Ok(c) => c,

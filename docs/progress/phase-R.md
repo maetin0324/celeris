@@ -1579,3 +1579,4 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
   本番 config に `job_wait` は足さない（既定 300 s / 24 h）。昇格後に BenchFS の子で wait → poll → 続き run を実機確認、sirius の PBS job history が
   有効かを確認する。
 - 07:14Z: browser 根の repair-phase-4-1 が continuation 上限 → 「予算を増やして続ける」で回答。
+- 07:26Z: release **b4521dd9d3ad**（main = R6 + R7-1、schema 34）: gate ok、push、verify ok（n-1-compat は想定どおり SchemaTooNew で live_ok=false → 昇格は停止→起動）。

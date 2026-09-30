@@ -89,7 +89,11 @@ impl Fixture {
                     let Ok(bytes) = std::fs::read(&path) else {
                         continue;
                     };
-                    let req: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    // The server creates the request file before writing it; retry a
+                    // half-written request on the next poll instead of panicking.
+                    let Ok(req) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                        continue;
+                    };
                     let verb = req["verb"].as_str().unwrap().to_string();
                     let _ = std::fs::remove_file(&path);
                     seen2.lock().unwrap().push(verb.clone());
@@ -99,11 +103,15 @@ impl Fixture {
                         let _ = rx.recv_timeout(Duration::from_secs(30));
                     }
                     let stdout = r#"{"success":true,"data":{"ok":true}}"#;
+                    // Publish the result atomically: the server polls for the file and
+                    // would otherwise read it half-written under load.
+                    let tmp = path.with_extension("result.tmp");
                     std::fs::write(
-                        path.with_extension("result"),
+                        &tmp,
                         serde_json::json!({"status":0,"stdout":stdout}).to_string(),
                     )
                     .unwrap();
+                    std::fs::rename(&tmp, path.with_extension("result")).unwrap();
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }

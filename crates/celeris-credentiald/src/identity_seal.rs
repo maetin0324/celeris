@@ -126,6 +126,8 @@ impl std::fmt::Debug for SealedIdentityState {
 /// project+origin 鍵の保管と AEAD。鍵素材はメモリに持ち続けない（使うたびに読む）。
 pub struct IdentitySealer {
     key_dir: PathBuf,
+    /// `open_state` が呼ばれた回数（ADR-0088 D5: 拒否経路で開封しないことの観測用。秘密は含まない）。
+    open_attempts: std::sync::atomic::AtomicU64,
 }
 impl std::fmt::Debug for IdentitySealer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -157,7 +159,10 @@ fn derive(material: &[u8], label: &str) -> Zeroizing<[u8; 32]> {
 impl IdentitySealer {
     pub fn open(key_dir: PathBuf) -> Result<Self, Error> {
         ensure_dir(&key_dir)?;
-        Ok(Self { key_dir })
+        Ok(Self {
+            key_dir,
+            open_attempts: std::sync::atomic::AtomicU64::new(0),
+        })
     }
 
     fn key(&self, label: &str, create: bool) -> Result<Zeroizing<[u8; 32]>, SealError> {
@@ -208,6 +213,11 @@ impl IdentitySealer {
         })
     }
 
+    /// `open_state` が呼ばれた回数（成否を問わない）。
+    pub fn open_attempts(&self) -> u64 {
+        self.open_attempts.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// 封緘を開く。envelope の束縛・AEAD・state の origin の全てを通ったときだけ返す。
     pub fn open_state(
         &self,
@@ -215,6 +225,8 @@ impl IdentitySealer {
         sealed: &SealedIdentityState,
         now: u64,
     ) -> Result<IdentityStatePlain, SealError> {
+        self.open_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         bi::check_envelope(identity, &sealed.envelope, now)?;
         let key = self.key(&sealed.envelope.key_label, false)?;
         let nonce = hex::decode(&sealed.nonce).map_err(|_| SealError::Tampered)?;

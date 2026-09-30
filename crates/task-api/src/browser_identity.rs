@@ -15,11 +15,13 @@ use task_core::browser_identity::{
     self as bi, IDENTITY_TTL_DEFAULT_SECS, IdentityDenied, IdentityRegistration, IdentityState,
     IdentityUse, Isolation,
 };
+use task_core::browser_isolation::IsolationAttestation;
 use task_core::browser_store::{BrowserStoreError, StoredIdentity};
 
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::HeaderMap;
+use axum::response::IntoResponse;
 
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_body};
 use crate::middleware::require_admin;
@@ -249,6 +251,108 @@ impl IdentityService<'_> {
         // authorize_use は TrustedLocal を必ず拒否する。ここに来るのは隔離の経路ができた後だけ。
         Err(IdentityApiError::Denied(IdentityDenied::IsolationRequired))
     }
+
+    /// 隔離下の復元（ADR-0084 D4）。[`IsolationAttestation`] は P4-A の検査
+    /// （`verify_isolation`）からしか作れないので、HTTP からは呼べない。開いた state は
+    /// runtime の controller に渡すだけで、agent・応答には出さない。
+    pub fn restore_isolated(
+        &self,
+        identity_id: &str,
+        project_id: &str,
+        origin: &str,
+        attestation: &IsolationAttestation,
+        now: u64,
+    ) -> Result<IdentityStatePlain, IdentityApiError> {
+        self.sweep_expired(project_id, now)?;
+        let stored = self
+            .store
+            .browser_identity_get(identity_id)?
+            .ok_or(IdentityApiError::NotFound)?;
+        let request = IdentityUse {
+            project_id: project_id.to_owned(),
+            origin: origin.to_owned(),
+            isolation: attestation.isolation(),
+        };
+        bi::authorize_use(&stored.identity, &request, now)?;
+        let sealed = sealed_of(&stored).ok_or(IdentityApiError::SealFailed)?;
+        self.sealer
+            .open_state(&stored.identity, &sealed, now)
+            .map_err(|_| IdentityApiError::SealFailed)
+    }
+
+    /// 稼働中の隔離 session に結合した復元（ADR-0087 D5）。attestation はこの場で
+    /// session から採り直す。session の停止・隔離違反（この host の同一 UID を含む）・
+    /// session id の不一致は `IsolationRequired` で拒否する。
+    pub fn restore_for_session(
+        &self,
+        identity_id: &str,
+        project_id: &str,
+        origin: &str,
+        session_id: &str,
+        live: &dyn task_core::browser_isolation::LiveIsolation,
+        now: u64,
+    ) -> Result<IdentityStatePlain, IdentityApiError> {
+        let attestation = live
+            .current_attestation()
+            .map_err(|_| IdentityApiError::Denied(IdentityDenied::IsolationRequired))?;
+        if attestation.session_id() != session_id {
+            return Err(IdentityApiError::Denied(IdentityDenied::IsolationRequired));
+        }
+        self.restore_isolated(identity_id, project_id, origin, &attestation, now)
+    }
+
+    /// HTTP の復元（ADR-0088 D5）。外側の条件 → registry の登録と種別 → attestation の採り直しと
+    /// session id → controller の投入口、の順に判定し、全部通ったときだけ開封して controller に渡す。
+    /// 開いた state は返さない。
+    pub fn restore_in_session(
+        &self,
+        identity_id: &str,
+        project_id: &str,
+        origin: &str,
+        session_id: &str,
+        registry: Option<&dyn task_core::browser_isolation::LiveSessionRegistry>,
+        now: u64,
+    ) -> Result<(), IdentityApiError> {
+        use task_core::browser_isolation::RuntimeKind;
+        let denied = || IdentityApiError::Denied(IdentityDenied::IsolationRequired);
+        // 1. 期限・存在・project・origin（authorize_use の非隔離部分。TrustedLocal は最後に必ず落ちる）。
+        self.sweep_expired(project_id, now)?;
+        let stored = self
+            .store
+            .browser_identity_get(identity_id)?
+            .ok_or(IdentityApiError::NotFound)?;
+        let outer = IdentityUse {
+            project_id: project_id.to_owned(),
+            origin: origin.to_owned(),
+            isolation: Isolation::TrustedLocal,
+        };
+        match bi::authorize_use(&stored.identity, &outer, now) {
+            Err(IdentityDenied::IsolationRequired) => {}
+            Err(d) => return Err(d.into()),
+            Ok(()) => return Err(denied()),
+        }
+        // 2. 稼働中の隔離 session か。
+        let entry = registry
+            .and_then(|r| r.get(session_id))
+            .ok_or_else(denied)?;
+        if entry.kind() != RuntimeKind::Isolated {
+            return Err(denied());
+        }
+        // 3. attestation を採り直し、session id を照合する（この host では SameUid で落ちる）。
+        let attestation = entry.current_attestation().map_err(|_| denied())?;
+        if attestation.session_id() != session_id {
+            return Err(denied());
+        }
+        // 4. controller に投入口が無ければ開封しない。
+        if !entry.accepts_state() {
+            return Err(denied());
+        }
+        let plain = self.restore_isolated(identity_id, project_id, origin, &attestation, now)?;
+        let bytes = zeroize::Zeroizing::new(
+            serde_json::to_vec(&plain).map_err(|_| IdentityApiError::SealFailed)?,
+        );
+        entry.deliver_state(&bytes).map_err(|_| denied())
+    }
 }
 
 // ---- HTTP（/api/v1/browser/identities）----
@@ -386,9 +490,13 @@ pub(crate) async fn delete_identity(
 struct RestoreBody {
     project_id: String,
     origin: String,
+    /// ADR-0088 D5: 復元先の稼働中 session。無ければ従来どおり `isolation_required`。
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
-/// 利用の入口。trusted local では常に 403 `isolation_required`（ADR-0083 D3）。
+/// 利用の入口（ADR-0083 D3 / ADR-0088 D5）。`session_id` が稼働中の隔離 session を指し、その場の
+/// attestation が通ったときだけ開封して controller に渡し、204（本文なし）を返す。
 pub(crate) async fn restore_identity(
     State(state): State<ApiState>,
     Params(id): Params<String>,
@@ -401,14 +509,20 @@ pub(crate) async fn restore_identity(
     let bytes = read_body(body).await?;
     let req: RestoreBody = serde_json::from_slice(&bytes).map_err(|_| body_invalid())?;
     let now = now_secs();
-    run(&state, move |svc| {
-        svc.restore(&id, &req.project_id, &req.origin, now)
+    let registry = state.live_sessions.clone();
+    run(&state, move |svc| match &req.session_id {
+        None => svc.restore(&id, &req.project_id, &req.origin, now),
+        Some(session) => svc.restore_in_session(
+            &id,
+            &req.project_id,
+            &req.origin,
+            session,
+            registry.as_deref(),
+            now,
+        ),
     })
     .await?;
-    Ok(json_response(
-        StatusCode::NO_CONTENT,
-        &serde_json::json!({}),
-    ))
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub(crate) fn routes() -> axum::Router<ApiState> {
@@ -593,6 +707,228 @@ mod tests {
         assert!(matches!(err, SealError::KeyErased | SealError::Tampered));
         let err = sealer.open_state(&tomb.identity, &sealed, NOW).unwrap_err();
         assert!(matches!(err, SealError::Denied(IdentityDenied::Deleted)));
+    }
+
+    fn attestation() -> task_core::browser_isolation::IsolationAttestation {
+        use task_core::browser_isolation::{
+            CdpEndpoint, REQUIRED_NAMESPACES, RuntimeFacts, verify_isolation,
+        };
+        verify_isolation(&RuntimeFacts {
+            session_id: "s1".into(),
+            host_uid: 1000,
+            runtime_uid: 200_001,
+            namespaces: REQUIRED_NAMESPACES.into_iter().collect(),
+            root_readonly: true,
+            writable_mounts: vec!["/session/profile".into()],
+            visible_paths: vec!["/usr".into()],
+            cdp: CdpEndpoint::Pipe,
+            no_new_privs: true,
+            capabilities_dropped: true,
+            pgid: 4242,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn restore_is_allowed_only_under_verified_isolation() {
+        let (store, sealer, _d) = fixture();
+        let svc = IdentityService {
+            store: &store,
+            sealer: &sealer,
+        };
+        svc.register(input("a"), NOW).unwrap();
+        // trusted local は拒否のまま
+        assert_eq!(
+            svc.restore("a", "proj", ORIGIN, NOW).unwrap_err().code(),
+            "isolation_required"
+        );
+        let att = attestation();
+        let plain = svc
+            .restore_isolated("a", "proj", ORIGIN, &att, NOW)
+            .unwrap();
+        assert_eq!(plain.entries[0].value, SECRET);
+        // 隔離下でも他 project / 他 origin / 期限切れは拒否
+        assert_eq!(
+            svc.restore_isolated("a", "other", ORIGIN, &att, NOW)
+                .unwrap_err()
+                .code(),
+            "other_project"
+        );
+        assert_eq!(
+            svc.restore_isolated("a", "proj", "https://other.example", &att, NOW)
+                .unwrap_err()
+                .code(),
+            "other_origin"
+        );
+        assert!(
+            svc.restore_isolated(
+                "a",
+                "proj",
+                ORIGIN,
+                &att,
+                NOW + IDENTITY_TTL_DEFAULT_SECS + 1
+            )
+            .is_err()
+        );
+    }
+
+    struct FakeLive(Option<task_core::browser_isolation::IsolationAttestation>);
+    impl task_core::browser_isolation::LiveIsolation for FakeLive {
+        fn current_attestation(
+            &self,
+        ) -> Result<
+            task_core::browser_isolation::IsolationAttestation,
+            Vec<task_core::browser_isolation::IsolationViolation>,
+        > {
+            self.0
+                .clone()
+                .ok_or_else(|| vec![task_core::browser_isolation::IsolationViolation::SameUid])
+        }
+    }
+
+    #[test]
+    fn restore_for_session_binds_to_live_isolated_session() {
+        let (store, sealer, _d) = fixture();
+        let svc = IdentityService {
+            store: &store,
+            sealer: &sealer,
+        };
+        svc.register(input("a"), NOW).unwrap();
+        svc.register(input("b"), NOW).unwrap();
+        let live = FakeLive(Some(attestation()));
+        let plain = svc
+            .restore_for_session("a", "proj", ORIGIN, "s1", &live, NOW)
+            .unwrap();
+        assert_eq!(plain.entries[0].value, SECRET);
+        // 隔離でない（停止・同一 UID など attestation が出ない）session
+        let dead = FakeLive(None);
+        assert_eq!(
+            svc.restore_for_session("a", "proj", ORIGIN, "s1", &dead, NOW)
+                .unwrap_err()
+                .code(),
+            "isolation_required"
+        );
+        // 別 session の attestation
+        assert_eq!(
+            svc.restore_for_session("a", "proj", ORIGIN, "s2", &live, NOW)
+                .unwrap_err()
+                .code(),
+            "isolation_required"
+        );
+        // 別 identity（存在しない / 他 project の identity）
+        assert_eq!(
+            svc.restore_for_session("zz", "proj", ORIGIN, "s1", &live, NOW)
+                .unwrap_err()
+                .code(),
+            "identity_not_found"
+        );
+        assert_eq!(
+            svc.restore_for_session("b", "other", ORIGIN, "s1", &live, NOW)
+                .unwrap_err()
+                .code(),
+            "other_project"
+        );
+        // 期限切れ
+        assert!(
+            svc.restore_for_session(
+                "a",
+                "proj",
+                ORIGIN,
+                "s1",
+                &live,
+                NOW + IDENTITY_TTL_DEFAULT_SECS + 1
+            )
+            .is_err()
+        );
+    }
+
+    /// registry の entry（controller の投入口つき）。渡された state を記録する。
+    struct FakeEntry {
+        live: FakeLive,
+        kind: task_core::browser_isolation::RuntimeKind,
+        accepts: bool,
+        delivered: std::sync::Mutex<Vec<Vec<u8>>>,
+    }
+    impl task_core::browser_isolation::LiveIsolation for FakeEntry {
+        fn current_attestation(
+            &self,
+        ) -> Result<
+            task_core::browser_isolation::IsolationAttestation,
+            Vec<task_core::browser_isolation::IsolationViolation>,
+        > {
+            self.live.current_attestation()
+        }
+    }
+    impl task_core::browser_isolation::LiveSessionEntry for FakeEntry {
+        fn kind(&self) -> task_core::browser_isolation::RuntimeKind {
+            self.kind
+        }
+        fn accepts_state(&self) -> bool {
+            self.accepts
+        }
+        fn deliver_state(
+            &self,
+            state: &[u8],
+        ) -> Result<(), task_core::browser_isolation::StateRejected> {
+            self.delivered.lock().unwrap().push(state.to_vec());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn restore_in_session_delivers_only_to_controller_after_all_checks() {
+        use task_core::browser_isolation::{LiveSessions, RuntimeKind};
+        let (store, sealer, _d) = fixture();
+        let svc = IdentityService {
+            store: &store,
+            sealer: &sealer,
+        };
+        svc.register(input("a"), NOW).unwrap();
+        let reg = LiveSessions::default();
+        let entry = |kind, accepts, att: bool| {
+            std::sync::Arc::new(FakeEntry {
+                live: FakeLive(att.then(attestation)),
+                kind,
+                accepts,
+                delivered: std::sync::Mutex::new(Vec::new()),
+            })
+        };
+        let ok = entry(RuntimeKind::Isolated, true, true);
+        let plain = entry(RuntimeKind::NotIsolated, true, true);
+        let no_inlet = entry(RuntimeKind::Isolated, false, true);
+        let same_uid = entry(RuntimeKind::Isolated, true, false);
+        reg.insert("s1", ok.clone());
+        reg.insert("plain", plain.clone());
+        reg.insert("same-uid", same_uid.clone());
+        let denied =
+            |session: &str, r: Option<&dyn task_core::browser_isolation::LiveSessionRegistry>| {
+                svc.restore_in_session("a", "proj", ORIGIN, session, r, NOW)
+                    .unwrap_err()
+                    .code()
+            };
+        assert_eq!(denied("s1", None), "isolation_required");
+        assert_eq!(denied("nope", Some(&reg)), "isolation_required");
+        assert_eq!(denied("plain", Some(&reg)), "isolation_required");
+        assert_eq!(denied("same-uid", Some(&reg)), "isolation_required");
+        // attestation の session id（s1）と要求の session が違う
+        reg.insert("s2", ok.clone());
+        assert_eq!(denied("s2", Some(&reg)), "isolation_required");
+        reg.remove("s2");
+        // controller に投入口が無い
+        let reg2 = LiveSessions::default();
+        reg2.insert("s1", no_inlet.clone());
+        assert_eq!(denied("s1", Some(&reg2)), "isolation_required");
+        assert_eq!(sealer.open_attempts(), 0, "no refusal may open the seal");
+        assert!(plain.delivered.lock().unwrap().is_empty());
+        assert!(same_uid.delivered.lock().unwrap().is_empty());
+        // 全部通ったときだけ開封し、controller にだけ渡す（戻り値に state は無い）。
+        let () = svc
+            .restore_in_session("a", "proj", ORIGIN, "s1", Some(&reg), NOW)
+            .unwrap();
+        assert_eq!(sealer.open_attempts(), 1);
+        let got = ok.delivered.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(String::from_utf8_lossy(&got[0]).contains(SECRET));
     }
 
     #[test]

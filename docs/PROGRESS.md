@@ -10,6 +10,8 @@
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0081（制御 lease）/ 0082（live proxy ACL）/ 0083（identity 契約）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A の後・0.38.1 の restore は使わない。2026-09-29 の検査（Rust 2929 passed / 0 failed、clippy exit 0）。本番未昇格。
 
+- [Browser capability Phase 4](progress/phase-browser-4.md) — ADR-0084。P4-A の実 runtime と production 起動経路は D3/D4 まで接続済み。P4-B の実 sink は未接続。P4-C は worker 起動前の `route` を接続し、未適合の機密要求を拒否。specialist・実 fixture 実行は未。2026-09-29、本番未昇格。 2026-09-29 run 01M3QGRCAHDK1AB4R9WBHJ9XHZ: ADR-0087 で同一 host UID の実 bwrap runtime（実 chrome-headless-shell・CDP pipe・6 namespace・ro root・socket 不可視・netns 遮断・controller kill/再起動回収）と稼働中 session への復元結合を実装（`browser_runtime_isolated` 4 passed、workspace 2977 passed、clippy exit 0）。その後の D3/D4 配線で egress proxy 結合と production 起動経路を実装。別 UID 実証は未。
+
 - [Phase 1–50（Phase 0 の初期記録を含む）](progress/phase-001-050.md)
 - [Phase 51–100](progress/phase-051-100.md)
 - [Phase 101–150](progress/phase-101-150.md)
@@ -38,3 +40,24 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - 追加（同 task の Run #2）: GUI `browser-control.server.ts` の auth_section 拒否の試験（`gui/test/unit/browser-control.test.ts`、4 passed、`pnpm test` 1236 passed）。テスト専用の未配線経路 `BrowserLive`／`CliCloser` を削除。最終証拠: `cargo test --workspace` exit 0（2929 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo test --workspace auth_section` exit 0。
 - 行ごとの判定: P3-A 保管側は満たす・復元は未（P4-A 後、`isolation_required` で拒否）／P3-B 満たす／P3-C 満たす（API・GUI・認証区間）。
 - 未解決: identity 復元は P4-A 後（ADR-0083 D3）。worker 側 control gate（human control 中に agent の操作を止める）の run loop 配線は未。
+
+## Phase browser-4（2026-09-29, task 01M3Q49ZTST3XQ9DGF6AGNR0XG）
+
+- ADR-0084。行ごとの判定: P4-A 未達（実隔離・出口制御・orphan 回収未接続）／P3-A 復元未達（稼働中隔離 session に未結合）／P4-B 未達（実 sink・peer role 未接続）／H3 の実装維持（機密起動は停止）／P4-C 一部接続（既存 loop の公開操作と未適合機密要求の拒否。specialist・実 fixture 実行は未）。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+- 証拠: `cargo test -p task-core browser_isolation` 14 passed、`cargo test -p task-core browser_backend` 7 passed、`cargo test -p celeris-credentiald injection` 6 passed、`cargo test -p task-api restore_is` 2 passed、`cargo test -p task-api --test browser_e2e` 4 passed、`cargo test -p task-worker production_backend_route --lib` 1 passed、`cargo test --workspace` exit 0、`cargo clippy --workspace -- -D warnings` exit 0。
+- attempt 3 検査: `cargo test -p task-worker browser --lib` 31 passed、`cargo test -p task-api --test browser_e2e` 4 passed、`cargo test --workspace` exit 0（2957 passed / 0 failed / 既存ignored 7件）、`cargo clippy --workspace -- -D warnings` exit 0。
+- attempt 3: `CredentialUse` を起動前の必須能力へ追加し、承認済みでも未適合なら拒否。`IdentityRestore` 宣言にも P4-B 適合を必須化。API 結合テストは legacy wait の登録・承認・拒否と未消費を確認する4件へ更新。旧認証成功・実注入の証拠ではない。
+- 人の回答反映: ADR-0085 で bubblewrap+subuid/subgid と固定 agent-browser 0.38.1 + 既存 harness の specialist を採用。回答待ちは解消。旧 resolve.sock と plugin bridge の秘密返却を廃止し、有効 lease を持つ同一 UID の別 worker process の実 IPC も拒否。lease 未消費・sentinel 非露出を検査。
+- 未解決: 実 runtime・namespaceからfiltering proxyへの結合・peer UID → controller role・実 CDP sink・fixture runner は未実装。P4-A/B/C の継続小タスク3件を delegate.json に提案（採用・完了は未確認）。内部 origin の追加なし。条件0/1/2の未達を維持し、旧IPC拒否だけで Phase 4 完了とはしない。
+
+- run `01M3QCTV524JJ41X9MSFS0756V` 最終検査: `cargo test --workspace` exit 0（2957 passed / 0 failed / 既存 ignored 7件）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all --check` exit 0。旧 IPC の秘密取得拒否・承認後拒否・lease 未消費を含む。P4-A/B/C の実適合は未達。
+
+- run `01M3QGRCAHDK1AB4R9WBHJ9XHZ`: ADR-0087。P4-A 行を「一部達成」に更新。証拠: `cargo test -p task-worker --test browser_runtime_isolated` → 4 passed（実 bwrap + 実 browser、controller SIGKILL 後に process 残らず、starttime 一致の再起動回収）、`cargo test --workspace` → exit 0（2977 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` → exit 0。環境制約: subuid が親 uid_map 外（決定 p4a-uid で同一 UID）、agent-browser 本体は host に無く同梱 browser で代替。未解決: egress 中継（netns listener → celeris-browser-egress）、production 経路切替、別 UID 実証（docs/ops 手順書）。restore は `SameUid` で拒否のまま。
+
+- run `01M3QDM7H5RYRZF2RNCARHQWX6`: ADR-0086。実Unix/TCP DNSのegress transport（9試験）と独立 `celeris-browser-egress`（6子プロセス試験）を追加。private/IPv6/DNS/proxy/CNAME負例・IP固定・親死亡SIGKILL/waitpid回収が成功。P4-A全体は未達（worker/runtimeとの接続、別UID実証、runtime orphan、identity復元が未）。P4-B/Cの実適合も未達、H3と機密起動拒否は維持。subuid mapping は親user namespaceの範囲外でEPERM、設定変更なし。詳細・証拠は [phase-browser-4](progress/phase-browser-4.md)。
+
+- このrunの最終検査: `cargo test --workspace` → exit 0（2972 passed / 0 failed / 既存 ignored 7件）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all --check` / `git diff --check` → exit 0。機密機能の実適合・production接続の証拠ではない。
+
+- run `01M3RCSFK5ZTC4JV0YJF17DV7C`（P4-A D3/D4）: daemon の `Started::Running` 直後に instance 別 starttime 照合付き orphan 回収を配線（`browser_startup_reap` 1 passed）。browser 起動を Supervisor/bwrap/sandboxd と egress proxy に切替。`run_with_executable` の実 chrome-headless-shell 試験で、shim → action.sock → sandboxd → proxy → ローカル HTTPS fixture 到達と禁止 flag 拒否を確認（1 passed）。resolver 未設定の起動前固定コード拒否も 1 passed。同一 host UID、agent-browser 0.38.1 本体不在、ADR-0088 D4 の channel message に対して現在の action 配送は `/session/actions` キュー。`cargo test --workspace` / `cargo clippy --workspace -- -D warnings` とも exit 0。D5 復元結合は別 WorkUnit。本番昇格・本番設定変更・内部 origin 追加なし。詳細は [phase-browser-4](progress/phase-browser-4.md)。
+
+- run `01M3REKJA5PF78ZTD0XT42VA0N`（P4-A D5 restore 結合）: `LiveSessionRegistry` を追加し daemon で 1 つ作って supervisor（登録・削除）と API に配線。restore の HTTP に `session_id` を追加し ADR-0088 D5 の順に判定、成功時は controller にだけ渡して 204。`cargo test -p task-api --test browser_restore_live_session` → 1 passed（実 bwrap + 実 chrome-headless-shell の session に `restore_for_session` と HTTP 7 拒否経路、`open_attempts()==0`）。`cargo test --workspace` exit 0（2992 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0。別 UID 実証は引き続き未解決（同一 UID のため `SameUid` で拒否、成功経路は実 runtime で未実証）。本番昇格・本番設定変更・内部 origin 追加なし。詳細は [phase-browser-4](progress/phase-browser-4.md)。

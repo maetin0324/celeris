@@ -1,12 +1,20 @@
 //! Supervise an existing harness + agent-browser CLI. No DOM or agent loop lives here.
+use std::io::{Read, Write};
+use std::net::IpAddr;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use task_core::browser_backend::{
+    self, BackendDescriptor, BackendKind, Capability, ConformanceResult, FixtureCase,
+    RoutingRequest,
+};
 use task_core::browser_wait::{
     BrowserWaitReason, BrowserWaitState, NewBrowserWait, OperationIntent,
 };
@@ -16,6 +24,91 @@ use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, Terminal
 
 const CLI: &str = include_str!("browser_cli.py");
 pub const SUPPORTED_VERSION: &str = "0.38.1";
+const ACTION_RUNNER: &str = include_str!("browser_action.py");
+
+#[derive(Clone)]
+pub struct IsolatedBrowserConfig {
+    pub resolver: Option<IpAddr>,
+    pub record_dir: PathBuf,
+    pub bwrap: PathBuf,
+    pub sandboxd: PathBuf,
+    pub egress: PathBuf,
+    /// ADR-0088 D5: daemon が 1 つ作る稼働中 session の registry（API と共有）。
+    pub live_sessions: Option<std::sync::Arc<task_core::browser_isolation::LiveSessions>>,
+}
+
+static ISOLATED: OnceLock<IsolatedBrowserConfig> = OnceLock::new();
+
+pub fn configure_isolated_runtime(config: IsolatedBrowserConfig) {
+    let _ = ISOLATED.set(config);
+}
+
+fn browser_install_dirs() -> Vec<PathBuf> {
+    let Some(cache) = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|p| p.join(".cache/ms-playwright"))
+    else {
+        return Vec::new();
+    };
+    std::fs::read_dir(cache)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with("chromium-") || n.starts_with("chromium_headless_shell-")
+            })
+        })
+        .collect()
+}
+
+fn resolve_executable(executable: &Path) -> std::io::Result<PathBuf> {
+    if executable.components().count() > 1 || executable.is_absolute() {
+        return executable.canonicalize();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "browser executable",
+        ));
+    };
+    for dir in std::env::split_paths(&paths) {
+        if let Ok(path) = dir.join(executable).canonicalize()
+            && path.is_file()
+        {
+            return Ok(path);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "browser executable",
+    ))
+}
+
+fn action_request(
+    socket: &Path,
+    verb: &str,
+    args: &[&str],
+    artifact: Option<&str>,
+) -> std::io::Result<(i32, String)> {
+    let mut stream = UnixStream::connect(socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(55)))?;
+    stream.write_all(
+        serde_json::json!({"verb":verb,"args":args,"artifact":artifact})
+            .to_string()
+            .as_bytes(),
+    )?;
+    stream.shutdown(std::net::Shutdown::Write)?;
+    let mut bytes = Vec::new();
+    stream.take(1_048_576 + 4096).read_to_end(&mut bytes)?;
+    let response: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+    Ok((
+        response["status"].as_i64().unwrap_or(1) as i32,
+        response["stdout"].as_str().unwrap_or("").to_owned(),
+    ))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserContext {
@@ -393,6 +486,100 @@ pub async fn run(
 /// (ADR-0080 D3): authenticated pages may reflect secrets.
 const OBSERVATION_UPSTREAM_ACTIONS: [&str; 4] = ["download", "gettext", "screenshot", "snapshot"];
 
+/// Route the effective request before launching any browser process. These fixtures cover
+/// the existing non-secret CLI loop only. Sensitive requests are refused until an isolated
+/// runtime and trusted injection sink pass their own conformance runs.
+fn route_existing_backend(
+    adapter_id: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+) -> Result<browser_backend::RoutingDecision, AdapterError> {
+    use Capability as C;
+    use FixtureCase as F;
+    let supported: BTreeSet<C> = [
+        C::Navigate,
+        C::Snapshot,
+        C::Click,
+        C::Screenshot,
+        C::Download,
+    ]
+    .into_iter()
+    .collect();
+    let passed: BTreeSet<F> = [
+        F::OpenAllowedOrigin,
+        F::RefuseDeniedOrigin,
+        F::ResumeAfterCrash,
+        F::SnapshotHasRefs,
+        F::ClickByRef,
+        F::ScreenshotArtifact,
+        F::DownloadToArtifacts,
+    ]
+    .into_iter()
+    .collect();
+    let backends: Vec<BackendDescriptor> = ["acp", "claude-code"]
+        .into_iter()
+        .map(|id| BackendDescriptor {
+            id: id.into(),
+            kind: BackendKind::ExistingLoop,
+            version: SUPPORTED_VERSION.into(),
+            declared: supported.clone(),
+            enabled: true,
+        })
+        .collect();
+    let results: BTreeMap<String, ConformanceResult> = backends
+        .iter()
+        .map(|b| {
+            (
+                b.id.clone(),
+                ConformanceResult {
+                    backend_id: b.id.clone(),
+                    version: b.version.clone(),
+                    passed: passed.clone(),
+                },
+            )
+        })
+        .collect();
+    let mut required = BTreeSet::new();
+    for action in &policy.effective.actions {
+        match action {
+            task_core::BrowserAction::Navigate => {
+                required.insert(C::Navigate);
+            }
+            task_core::BrowserAction::Snapshot | task_core::BrowserAction::Extract => {
+                required.insert(C::Snapshot);
+            }
+            task_core::BrowserAction::Click => {
+                required.insert(C::Click);
+            }
+            task_core::BrowserAction::Screenshot => {
+                required.insert(C::Screenshot);
+            }
+            task_core::BrowserAction::Download => {
+                required.insert(C::Download);
+            }
+            task_core::BrowserAction::CredentialUse => {
+                required.insert(C::CredentialInjection);
+            }
+            task_core::BrowserAction::Scroll => {}
+        }
+    }
+    let decision = browser_backend::route(
+        &backends,
+        &results,
+        &RoutingRequest {
+            required,
+            explicit: Some(adapter_id.into()),
+            failed: BTreeSet::new(),
+        },
+    )
+    .map_err(|_| AdapterError::Other("browser backend lacks required conformance".into()))?;
+    if decision.primary != adapter_id {
+        return Err(AdapterError::Other(
+            "browser backend routing mismatch".into(),
+        ));
+    }
+    Ok(decision)
+}
+
 /// `run` with an explicit substrate and credential broker (integration tests use fakes).
 pub async fn run_with_executable(
     adapter: Arc<dyn WorkerAdapter>,
@@ -427,6 +614,16 @@ pub async fn run_with_executable(
         SUPPORTED_VERSION,
     )
     .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
+    let _routing = route_existing_backend(adapter.id(), &policy)?;
+    let isolation = ISOLATED
+        .get()
+        .filter(|cfg| {
+            cfg.resolver.is_some()
+                && cfg.bwrap.is_file()
+                && cfg.sandboxd.is_file()
+                && cfg.egress.is_file()
+        })
+        .ok_or_else(|| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let waits = sink
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
@@ -514,48 +711,29 @@ pub async fn run_with_executable(
             exit_code: None,
         });
     }
-    let version = tokio::process::Command::new(executable)
-        .arg("--version")
-        .kill_on_drop(true)
-        .output();
-    let version = tokio::time::timeout(Duration::from_secs(10), version)
-        .await
-        .map_err(|_| AdapterError::Other("agent-browser version check timed out".into()))??;
-    if !version.status.success()
-        || String::from_utf8_lossy(&version.stdout).trim()
-            != format!("agent-browser {SUPPORTED_VERSION}")
-    {
-        return Err(AdapterError::Other(format!(
-            "browser capability requires agent-browser {SUPPORTED_VERSION}"
-        )));
-    }
-    // Consume only after the substrate is known to be usable: a failed version check must not
-    // burn the one-time approval. The continuation keeps the approved session.
-    let approval =
-        match (&approved, credentials) {
-            (Some(wait), Some(_)) => Some(sink.browser_approval_consume(wait).map_err(|_| {
-                AdapterError::Other("browser approval could not be consumed".into())
-            })?),
-            _ => None,
-        };
-    let session = approval
+    let session = approved
         .as_ref()
-        .map(|a| a.wait.session_id.clone())
+        .map(|a| a.session_id.clone())
         .unwrap_or_else(|| session_id(req.task.id, run_id));
-    let harness_policy = if approval.is_some() {
+    let harness_policy = if approved.is_some() {
         credential_harness_policy(&policy.action_policy)?
     } else {
         policy.action_policy.clone()
     };
     let runtime = req.workspace.join("runs").join(run_id).join("browser");
-    let output = req.artifacts_dir.join("browser").join(&session);
+    let output = runtime.join("output");
     std::fs::create_dir_all(&runtime)?;
     std::fs::create_dir_all(&output)?;
+    std::fs::create_dir_all(runtime.join("home"))?;
+    std::fs::create_dir_all(runtime.join("run"))?;
     let cli = runtime.join("celeris-browser.py");
+    let action_socket = runtime.with_extension("action.sock");
     write_private(&cli, CLI)?;
+    write_private(&runtime.join("browser_action.py"), ACTION_RUNNER)?;
+    std::fs::create_dir_all(runtime.join("actions"))?;
     // Bound orphan lifetime after a supervisor crash; no profile/auth state is restored.
-    let segment_active = approval.is_some();
-    let upstream = match (&approval, credentials) {
+    let segment_active = approved.is_some();
+    let upstream = match (&approved, credentials) {
         (Some(_), Some(sup)) => crate::browser_credential::segment_upstream_config(&sup.bridge),
         _ => br#"{"idleTimeout":"5m","noWebmcp":true}"#.to_vec(),
     };
@@ -569,23 +747,92 @@ pub async fn run_with_executable(
     write_private(
         &runtime.join("config.json"),
         serde_json::to_vec(&serde_json::json!({
-            "executable":executable, "session_id":session,
+            "session_id":session,
             "allowed_domains":policy.allowed_domains(), "output":output,
             "policy_sha256":format!("{:x}", Sha256::digest(&harness_policy)),
             "credential_policy_ids":policy.effective.credential_policy_ids,
             "credential_use":policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),
         }))?,
     )?;
+    let real_executable = resolve_executable(executable)
+        .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let browser_dirs = browser_install_dirs();
+    let browser_cache = browser_dirs.first().and_then(|p| p.parent());
+    write_private(
+        &runtime.join("action-config.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "executable":real_executable, "session_id":session,
+            "allowed_domains":policy.allowed_domains(),
+            "browser_cache":browser_cache,
+        }))?,
+    )?;
+    let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
+        .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    let action_server = crate::browser_action::ActionServer::start(
+        &action_socket,
+        &runtime,
+        policy.allowed_domains().to_vec(),
+        allowed.allow,
+    )
+    .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let egress_policy = task_core::browser_isolation::EgressPolicy {
+        allow: policy
+            .allowed_domains()
+            .iter()
+            .map(|d| format!("{d}:443"))
+            .collect(),
+        resolver: isolation.resolver.unwrap(),
+        allow_ipv6: false,
+    };
+    let mut ro_dirs = vec![
+        real_executable.parent().unwrap().to_path_buf(),
+        isolation.sandboxd.parent().unwrap().to_path_buf(),
+    ];
+    ro_dirs.extend(browser_dirs);
+    let spec = crate::browser_runtime::RuntimeSpec {
+        bwrap: isolation.bwrap.clone(),
+        session_id: session.clone(),
+        session_dir: runtime.clone(),
+        ro_dirs,
+        argv: vec![
+            isolation.sandboxd.clone().into_os_string(),
+            "python3".into(),
+            "/session/browser_action.py".into(),
+        ],
+        cdp_pipe: false,
+        egress: Some(crate::browser_runtime::EgressRelay {
+            proxy: isolation.egress.clone(),
+            policy: serde_json::to_vec(&egress_policy)?,
+            max_concurrent: crate::browser_runtime::DEFAULT_MAX_EGRESS,
+        }),
+    };
+    let mut supervisor_opts =
+        crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir);
+    supervisor_opts.registry = isolation.live_sessions.clone();
+    let supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
+        .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let version = action_request(&action_socket, "__version__", &[], None)
+        .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    if version.0 != 0 || version.1.trim() != format!("agent-browser {SUPPORTED_VERSION}") {
+        return Err(AdapterError::Other(format!(
+            "browser capability requires agent-browser {SUPPORTED_VERSION}"
+        )));
+    }
+    // A failed sandbox version check does not consume the one-time approval.
+    let approval =
+        match (&approved, credentials) {
+            (Some(wait), Some(_)) => Some(sink.browser_approval_consume(wait).map_err(|_| {
+                AdapterError::Other("browser approval could not be consumed".into())
+            })?),
+            _ => None,
+        };
     let mut browser = BrowserRun {
         task_id: req.task.id,
         run_id: run_id.into(),
         session_id: session,
         state: BrowserRunState::Running,
         // Live View stops with credential use (ADR-0080 D3).
-        live_view_url: capability
-            .live_view_url
-            .clone()
-            .filter(|_| approval.is_none()),
+        live_view_url: None,
         policy: Some(policy.binding.clone()),
     };
     sink.browser_updated(&browser);
@@ -779,6 +1026,8 @@ pub async fn run_with_executable(
         }
     };
     sink.browser_updated(&browser);
+    drop(action_server);
+    supervisor.stop();
     outcome
 }
 

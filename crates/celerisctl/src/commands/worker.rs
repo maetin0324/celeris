@@ -855,6 +855,7 @@ mod tests {
     /// `Config` を toml を経由せず直接組み立てる（celerisctl は `toml` crate に依存していないため）。
     fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         Config {
+            browser: Default::default(),
             harnesses: Vec::new(),
             db: celeris::config::DbConfig {
                 path: PathBuf::from("celeris.sqlite3"),

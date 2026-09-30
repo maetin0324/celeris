@@ -7,9 +7,14 @@ pub mod adapter;
 pub mod aider;
 pub mod artifact;
 pub mod browser;
+pub mod browser_action;
 pub mod browser_credential;
+pub mod browser_egress;
 pub mod browser_live;
 pub mod browser_policy;
+pub mod browser_relay;
+pub mod browser_runtime;
+pub mod browser_supervisor;
 /// ADR-0066 D1（Phase 110b）: 同一リポジトリの worktree 間で cargo のビルドキャッシュを共有する。
 pub mod build_cache;
 pub mod claude_account;

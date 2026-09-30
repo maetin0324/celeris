@@ -1,5 +1,5 @@
-//! ADR-0080 Phase 2 の端から端: worker → WAITING_FOR_AUTH → API 手動登録 → 再開 →
-//! WAITING_FOR_APPROVAL → API 承認/拒否 → broker lease → plugin bridge → 成功/失敗。
+//! ADR-0084 D6: 旧 Phase 2 の durable wait を再現し、API 登録・承認後も
+//! 未適合 backend を worker が拒否して lease 発行と承認消費を防ぐ結合試験。
 //!
 //! broker（celeris-credentiald の IPC と `bridge` 実行ファイル）・store・API は本物。
 //! ブラウザだけが fake substrate（`tests/fixtures/fake-agent-browser.py`）と localhost fixture
@@ -18,14 +18,12 @@ use serde_json::{Value, json};
 use task_api::browser::{BrowserApiConfig, UnixCredentialBrokerControl};
 use task_core::browser_wait::{BrowserWait, BrowserWaitStore, ConsumedBrowserApproval};
 use task_core::{
-    ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserRun, BrowserRunState,
+    ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserRun,
     BrowserTaskPolicy, EffectiveProfile, ProgressFields, SqliteStore, Status, Task, TaskId,
     TaskKind, TaskStore,
 };
 use task_worker::browser_credential::{CredentialSupervisor, UnixLeaseBroker};
-use task_worker::{
-    AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, Terminal, WorkerAdapter,
-};
+use task_worker::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
 use time::OffsetDateTime;
 
 const SENTINEL_USER: &str = "SENTINEL-e2e-user-51f0";
@@ -321,10 +319,8 @@ impl EventSink for StoreSink {
     }
 }
 
-/// モデルの代わり。credential が要ると登録依頼を出して止まり、ログイン後は認証済みページを開く。
-struct Harness {
-    output: Arc<Mutex<Vec<String>>>,
-}
+/// Routing refusal must happen before the harness runs.
+struct Harness;
 #[async_trait::async_trait]
 impl WorkerAdapter for Harness {
     fn id(&self) -> &str {
@@ -332,58 +328,18 @@ impl WorkerAdapter for Harness {
     }
     async fn run(
         &self,
-        req: RunRequest,
+        _: RunRequest,
         _: &str,
         _: RunLimits,
         _: &dyn EventSink,
     ) -> Result<RunOutcome, AdapterError> {
-        let browser = req.context.browser.as_ref().expect("browser context");
-        let shim = |args: &[&str]| {
-            let out = std::process::Command::new("python3")
-                .arg(&browser.cli)
-                .args(args)
-                .output()
-                .unwrap();
-            let text = String::from_utf8_lossy(&out.stdout).to_string();
-            self.output.lock().unwrap().push(text.clone());
-            (out.status.success(), text)
-        };
-        self.output
-            .lock()
-            .unwrap()
-            .push(task_worker::browser::prompt(browser));
-        let summary = if browser.credential_used {
-            assert!(task_worker::browser::prompt(browser).contains("result: success"));
-            let (ok, _) = shim(&["open", "https://login.example.com/dashboard"]);
-            assert!(ok, "navigation after login");
-            // 認証後の観測（snapshot）は session の終わりまで止まる（ADR-0080 D3）。
-            let (ok, text) = shim(&["snapshot"]);
-            assert!(!ok, "snapshot must be blocked after credential use: {text}");
-            "dashboard reached"
-        } else {
-            let (ok, text) = shim(&[
-                "request-credential",
-                "pol-login",
-                ORIGIN,
-                "Sign in to read the build dashboard",
-            ]);
-            assert!(ok, "{text}");
-            "stopped for credential"
-        };
-        Ok(RunOutcome {
-            terminal: Terminal::Done {
-                summary: summary.into(),
-                evidence: vec![],
-                usage: None,
-            },
-            exit_code: Some(0),
-        })
+        panic!("uncertified credential backend must never reach the harness");
     }
 }
 
 impl World {
     /// dispatcher の一回分: lease を取り（Ready → Running）、browser supervisor を通して harness を走らせる。
-    async fn dispatch(&self, run_id: &str) -> (RunOutcome, Vec<BrowserRun>) {
+    async fn dispatch(&self, run_id: &str) -> (Result<RunOutcome, AdapterError>, Vec<BrowserRun>) {
         assert!(
             self.env
                 .store
@@ -399,9 +355,7 @@ impl World {
             live: Mutex::default(),
         };
         let outcome = task_worker::browser::run_with_executable(
-            Arc::new(Harness {
-                output: self.worker_output.clone(),
-            }),
+            Arc::new(Harness),
             run_request(self),
             run_id,
             RunLimits {
@@ -413,12 +367,11 @@ impl World {
             &self.substrate,
             Some(&self.supervisor),
         )
-        .await
-        .unwrap();
+        .await;
         self.worker_output
             .lock()
             .unwrap()
-            .push(format!("{:?}", outcome.terminal));
+            .push(format!("{outcome:?}"));
         *self.auth_calls.lock().unwrap() = sink.auth_calls.into_inner().unwrap();
         *self.live.lock().unwrap() = sink.live.into_inner().unwrap();
         let browsers = sink.browsers.into_inner().unwrap();
@@ -491,33 +444,101 @@ impl World {
         assert_eq!(resp.status, 200, "{}", resp.text());
     }
 
-    /// 未登録 → WAITING_FOR_AUTH → 登録 → WAITING_FOR_APPROVAL まで進め、承認待ちの wait を返す。
-    async fn until_approval(&self) -> Value {
-        let (outcome, browsers) = self.dispatch("run-auth").await;
-        assert!(matches!(outcome.terminal, Terminal::Question { .. }));
-        assert_eq!(
-            browsers.last().unwrap().state,
-            BrowserRunState::WaitingForAuth
+    /// Seed a durable wait left by Phase 2; this does not claim a browser ran.
+    fn seed_wait(&self, approval: bool) {
+        use task_core::browser_wait::{BrowserWaitReason, NewBrowserWait, OperationIntent};
+        let req = run_request(self);
+        let policy = task_worker::browser_policy::prepare(
+            req.context
+                .profile
+                .as_ref()
+                .unwrap()
+                .browser
+                .as_ref()
+                .unwrap(),
+            req.context.browser_policy.as_ref(),
+            task_worker::browser::SUPPORTED_VERSION,
+        )
+        .unwrap();
+        let credential = self
+            .env
+            .store
+            .browser_waits_for_task(self.task.id)
+            .unwrap()
+            .last()
+            .and_then(|w| w.credential.clone());
+        let run_id = if approval { "run-approval" } else { "run-auth" };
+        assert!(
+            self.env
+                .store
+                .acquire_lease(self.task.id, run_id, Duration::from_secs(60))
+                .unwrap()
         );
-        assert_eq!(self.env.status_of(self.task.id), Status::Blocked);
+        self.env
+            .store
+            .browser_wait_open(
+                self.task.id,
+                &NewBrowserWait {
+                    work_unit_id: None,
+                    run_id: run_id.into(),
+                    session_id: "legacy-session".into(),
+                    reason: if approval {
+                        BrowserWaitReason::WaitingForApproval
+                    } else {
+                        BrowserWaitReason::WaitingForAuth
+                    },
+                    origin: ORIGIN.into(),
+                    purpose: "Sign in to read the build dashboard".into(),
+                    credential_policy_id: Some("pol-login".into()),
+                    credential,
+                    operation: approval.then(|| OperationIntent {
+                        intent_id: "legacy-intent".into(),
+                        action: "credential_use".into(),
+                        args_digest: None,
+                    }),
+                    policy_revision: policy.binding.revision,
+                    policy_hash: policy.binding.hash,
+                    owner_id: Some("owner".into()),
+                    ttl_secs: None,
+                    resume_key: run_id.into(),
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+    }
+
+    async fn until_registered(&self) {
+        self.seed_wait(false);
         let auth = self.pending().await;
-        assert_eq!(auth["reason"], "waiting_for_auth");
-        assert_eq!(auth["origin"], ORIGIN);
-        assert_eq!(auth["purpose"], "Sign in to read the build dashboard");
         self.register(&auth).await;
         assert_eq!(self.env.status_of(self.task.id), Status::Ready);
+    }
 
-        let (outcome, browsers) = self.dispatch("run-approval").await;
-        assert!(matches!(outcome.terminal, Terminal::Question { .. }));
-        assert_eq!(
-            browsers.last().unwrap().state,
-            BrowserRunState::WaitingForApproval
-        );
-        assert_eq!(self.env.status_of(self.task.id), Status::Blocked);
+    async fn until_approval(&self) -> Value {
+        self.until_registered().await;
+        self.seed_wait(true);
         let approval = self.pending().await;
         assert_eq!(approval["reason"], "waiting_for_approval");
-        assert_eq!(approval["operation"]["action"], "credential_use");
         approval
+    }
+
+    fn assert_no_credential_execution(&self, run_id: &str) {
+        assert!(self.commands(run_id).is_empty());
+        assert!(
+            !self
+                .env
+                .workspace(&self.task)
+                .join("runs")
+                .join(run_id)
+                .exists()
+        );
+        assert!(
+            self.journal()
+                .iter()
+                .all(|r| !["grant", "use"].contains(&r["action"].as_str().unwrap()))
+        );
+        assert!(self.auth_calls.lock().unwrap().is_empty());
+        assert!(self.live.lock().unwrap().is_empty());
     }
 
     fn journal(&self) -> Vec<Value> {
@@ -574,10 +595,7 @@ impl World {
                 .any(|p| p.parent().is_some_and(|d| d.ends_with("vault"))),
             "scan must cover the vault"
         );
-        assert!(
-            files.iter().any(|p| p.to_string_lossy().contains("/runs/")),
-            "scan must cover run directories"
-        );
+        // Routing denial must not create run directories; any existing files are still scanned.
         for path in &files {
             let bytes = std::fs::read(path).unwrap();
             for needle in [SENTINEL_USER, SENTINEL_PASS] {
@@ -599,66 +617,57 @@ impl World {
 }
 
 #[tokio::test]
-async fn unregistered_credential_waits_registers_resumes_and_succeeds() {
+async fn approved_credential_requires_conformance_and_does_not_consume_approval() {
     let w = world(site());
     let approval = w.until_approval().await;
     w.decide(&approval, "approve_once").await;
-    assert_eq!(w.env.status_of(w.task.id), Status::Ready);
-
     let (outcome, browsers) = w.dispatch("run-login").await;
-    match &outcome.terminal {
-        Terminal::Done { summary, .. } => assert_eq!(summary, "dashboard reached"),
-        other => panic!("expected success, got {other:?}"),
-    }
-    let last = browsers.last().unwrap();
-    assert_eq!(last.state, BrowserRunState::Completed);
-    // The approved session continues; Live View is off once a credential is used.
-    assert_eq!(last.session_id, approval["session_id"].as_str().unwrap());
-    assert!(browsers.iter().all(|b| b.live_view_url.is_none()));
-    let waits = w.env.store.browser_waits_for_task(w.task.id).unwrap();
-    assert_eq!(waits.last().unwrap().state.as_str(), "resumed");
-    // Supervisor-built segment: exact origin checked before and after `auth login`.
-    let commands = w.commands("run-login");
-    let verbs: Vec<&str> = commands.iter().map(|c| c[0].as_str()).collect();
-    assert_eq!(&verbs[..4], ["open", "get", "auth", "get"], "{commands:?}");
-    let state = std::fs::read_to_string(
-        w.env
-            .workspace(&w.task)
-            .join("runs/run-login/browser")
-            .join(format!("state-{}.json", last.session_id)),
-    )
-    .unwrap();
-    let state: Value = serde_json::from_str(&state).unwrap();
-    assert_eq!(state["plugin"], "success");
-    let digest = {
-        use sha2::Digest;
-        format!(
-            "{:x}",
-            sha2::Sha256::digest(format!("{SENTINEL_USER}\0{SENTINEL_PASS}"))
-        )
-    };
+    assert!(
+        outcome
+            .unwrap_err()
+            .to_string()
+            .contains("browser backend lacks required conformance")
+    );
+    assert!(browsers.is_empty());
     assert_eq!(
-        state["login_digest"], digest,
-        "the page received the registered secret"
-    );
-    let actions: Vec<String> = w
-        .journal()
-        .iter()
-        .map(|r| r["action"].as_str().unwrap().to_string())
-        .collect();
-    assert!(
-        actions.contains(&"grant".into()) && actions.contains(&"use".into()),
-        "{actions:?}"
-    );
-    // The one-time approval is spent: another dispatch cannot reuse it.
-    assert!(
         w.env
             .store
-            .browser_approvals_for_wait(approval["wait_id"].as_str().unwrap())
+            .browser_waits_for_task(w.task.id)
             .unwrap()
-            .iter()
-            .all(|a| a.consumed_at.is_some())
+            .last()
+            .unwrap()
+            .state
+            .as_str(),
+        "approved"
     );
+    let approvals = w
+        .env
+        .store
+        .browser_approvals_for_wait(approval["wait_id"].as_str().unwrap())
+        .unwrap();
+    assert!(!approvals.is_empty());
+    assert!(approvals.iter().all(|a| a.consumed_at.is_none()));
+    w.assert_no_credential_execution("run-login");
+    w.assert_sentinel_absent_everywhere();
+}
+
+#[tokio::test]
+async fn registered_credential_does_not_open_approval_for_uncertified_backend() {
+    let w = world(site());
+    w.until_registered().await;
+    let before = w.env.store.browser_waits_for_task(w.task.id).unwrap();
+    let (outcome, browsers) = w.dispatch("run-unqualified").await;
+    assert!(
+        outcome
+            .unwrap_err()
+            .to_string()
+            .contains("browser backend lacks required conformance")
+    );
+    assert!(browsers.is_empty());
+    let after = w.env.store.browser_waits_for_task(w.task.id).unwrap();
+    assert_eq!(after.len(), before.len());
+    assert_eq!(after.last().unwrap().state.as_str(), "registered");
+    w.assert_no_credential_execution("run-unqualified");
     w.assert_sentinel_absent_everywhere();
 }
 
@@ -683,83 +692,27 @@ async fn denied_approval_fails_the_task_without_a_lease() {
     w.assert_sentinel_absent_everywhere();
 }
 
-#[tokio::test]
-async fn login_page_on_another_origin_is_denied_before_the_plugin_runs() {
-    let mut s = site();
-    // The trusted login URL redirects to a different (still allowed) origin.
-    s["redirects"] = json!({"https://login.example.com/": "https://sso.example.com/login"});
-    let w = world(s);
-    let approval = w.until_approval().await;
-    w.decide(&approval, "approve_once").await;
-    let (outcome, browsers) = w.dispatch("run-login").await;
-    match &outcome.terminal {
-        Terminal::Error { message, retryable } => {
-            assert!(message.contains("origin_mismatch"), "{message}");
-            assert!(!retryable);
-        }
-        other => panic!("expected denial, got {other:?}"),
-    }
-    assert_eq!(browsers.last().unwrap().state, BrowserRunState::Failed);
-    let commands = w.commands("run-login");
-    assert!(
-        commands.iter().all(|c| c[0] != "auth"),
-        "auth login must not run: {commands:?}"
-    );
-    let actions: Vec<String> = w
-        .journal()
-        .iter()
-        .map(|r| r["action"].as_str().unwrap().to_string())
-        .collect();
-    assert!(actions.contains(&"revoke".into()), "{actions:?}");
-    assert!(!actions.contains(&"use".into()), "{actions:?}");
-    let progress = w.worker_output.lock().unwrap().join("\n");
-    assert!(progress.contains("browser.credential_use: failure"));
-    w.assert_sentinel_absent_everywhere();
-}
-
-/// ADR-0080 H3（実経路）: 承認済みの credential 注入で supervisor が認証区間を開始・終了し、
-/// control 状態の auth_section が区間中 true・終了後 false になる。区間中は takeover が
-/// `auth_section_active` で拒否され、worker 出力（progress・artifact）と live event は 1 件も出ない。
-#[tokio::test]
-async fn auth_section_is_recorded_during_credential_injection_and_nothing_is_forwarded() {
+/// Store-side H3 contract remains tested while actual injection is unavailable.
+/// Worker event suppression is separately exercised by its auth_section tests.
+#[test]
+fn auth_section_store_denies_takeover_until_closed() {
     let w = world(site());
-    let approval = w.until_approval().await;
-    w.decide(&approval, "approve_once").await;
-    let (outcome, browsers) = w.dispatch("run-login").await;
-    assert!(
-        matches!(outcome.terminal, Terminal::Done { .. }),
-        "{outcome:?}"
-    );
-    let calls = w.auth_calls.lock().unwrap().clone();
-    assert_eq!(calls.len(), 2, "{calls:?}");
-    let (on, out_at_on, state_on, takeover) = &calls[0];
-    let (off, out_at_off, state_off, _) = &calls[1];
-    assert!(
-        *on && *state_on,
-        "auth_section true during injection: {calls:?}"
-    );
-    assert_eq!(takeover.as_deref(), Some("auth_section_active"));
-    assert!(
-        !*off && !*state_off,
-        "auth_section false after injection: {calls:?}"
-    );
-    assert_eq!(
-        out_at_on, out_at_off,
-        "nothing forwarded inside the auth section"
-    );
-    let session = &browsers.last().unwrap().session_id;
-    let stored = w
-        .env
-        .store
-        .browser_control_get(task_core::browser_store::BrowserSessionKey {
-            task_id: &w.task.id.to_string(),
-            run_id: "run-login",
-            session_id: session,
-        })
+    let sink = StoreSink {
+        store: SqliteStore::open(&w.env.db_path).unwrap(),
+        task_id: w.task.id,
+        output: w.worker_output.clone(),
+        browsers: Mutex::default(),
+        auth_calls: Mutex::default(),
+        live: Mutex::default(),
+    };
+    sink.browser_auth_section("run-auth", "session-auth", true)
         .unwrap();
-    assert!(!stored.auth_section_active());
-    // Segment verbs (open/get/auth/get) never became live events.
-    let live = w.live.lock().unwrap().join("\n");
-    assert!(!live.contains("auth"), "{live}");
-    w.assert_sentinel_absent_everywhere();
+    sink.browser_auth_section("run-auth", "session-auth", false)
+        .unwrap();
+    let calls = sink.auth_calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].0 && calls[0].2);
+    assert_eq!(calls[0].3.as_deref(), Some("auth_section_active"));
+    assert!(!calls[1].0 && !calls[1].2);
+    assert_eq!(calls[0].1, calls[1].1);
 }

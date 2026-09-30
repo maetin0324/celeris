@@ -5,9 +5,9 @@ import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
-import { screens } from "../support/screens";
+import { v3Screens } from "../support/screens";
 
-for (const screen of screens.filter((item) => item.path === "/tasks" || item.path === "/inbox")) {
+for (const screen of v3Screens()) {
   test(`S2 ${screen.path}: unrelated SSE does not refetch screen queries`, async ({ page }) => {
     const dir = mkdtempSync(path.join(tmpdir(), "celeris-v3-refetch-"));
     const tokenFile = path.join(dir, "token");

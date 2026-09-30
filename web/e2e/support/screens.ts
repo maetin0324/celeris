@@ -2,7 +2,7 @@
 // 動的 id は偽 daemon の T1 / R1 / cos を使う。
 export const screens = [
   { path: "/", fixture: "/", heading: "ホーム" },
-  { path: "/inbox", fixture: "/inbox", heading: "受信箱" },
+  { path: "/inbox", fixture: "/inbox", heading: "受信箱", v3: true },
   { path: "/login", fixture: "/login", heading: "Celeris にログイン" },
   { path: "/org", fixture: "/org", heading: "組織" },
   { path: "/org/secretary", fixture: "/org/cos", heading: "組織の人 cos" },
@@ -18,7 +18,7 @@ export const screens = [
   { path: "/reports", fixture: "/reports", heading: "報告" },
   { path: "/approvals", fixture: "/approvals", heading: "承認" },
   { path: "/artifacts", fixture: "/artifacts", heading: "成果物" },
-  { path: "/tasks", fixture: "/tasks", heading: "タスク" },
+  { path: "/tasks", fixture: "/tasks", heading: "タスク", v3: true },
   { path: "/tasks/new", fixture: "/tasks/new", heading: "タスクの作成" },
   { path: "/tasks/$id", fixture: "/tasks/T1", heading: "タスクの詳細 T1" },
   { path: "/tasks/$id/files", fixture: "/tasks/T1/files", heading: "作業ツリーと成果物 T1" },
@@ -32,6 +32,10 @@ export const screens = [
   { path: "/releases", fixture: "/releases", heading: "リリース" },
   { path: "/graph", fixture: "/graph", heading: "依存グラフ" },
   { path: "/help", fixture: "/help", heading: "ヘルプ" },
-] as const;
+] as const satisfies readonly Screen[];
 
-export type Screen = (typeof screens)[number];
+export type Screen = { path: string; fixture: string; heading: string; v3?: boolean };
+
+export function v3Screens(items: readonly Screen[] = screens): Screen[] {
+  return items.filter((screen) => screen.v3 === true);
+}

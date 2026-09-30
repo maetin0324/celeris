@@ -38,3 +38,11 @@ P2-01 `2194da2f`、P2-02 `8bc88050`、P2-03 `bcfe6276`、P2-04 `279d2bef`、P2-0
 - 修正: P2-03 の shell は 401 で `/login?next=` へ移るため、`parity/gateway-auth.spec.ts` の cookie 消去直後の `page.goto` がその遷移と競って落ちた（27 件中 1 件）。cookie を消す前に `about:blank` へ移すようにし、`--repeat-each 5` を 3 回（60/60）通した。
 - 未解決: なし（V3 の S3 mobile-audit・screenshots は /tasks・/inbox のみ。他画面は Phase 3 で台帳に沿って足す）。
 - 提案: Phase 3 の各画面で V3 の台帳と検査を使い、P5-01 で全画面の遅延 gate と継続的な SSE tick を実測する。
+
+### P2-07 V3 台帳のレビュー修正（2026-09-30）
+
+修正 commit `web phase 2 P2-07: select V3 screens from the ledger`（本節を含む commit）。`screens.ts` の `v3: true` が付いた画面だけを S1・S2・S4 が選ぶようにし、Phase 2 では `/tasks` と `/inbox` のみを対象にした。nav に無い画面は台帳の fixture で開く。動的 route も見出しを起点にデータ領域を確認する。
+
+- 再走: `web/node_modules/.bin/tsc -b`、`web/node_modules/.bin/biome check .`、`web/node_modules/.bin/vitest run`、`node web/scripts/check-parity.mjs --require-phase 2`（前 3 件は `web/` で実行）→ 各 exit 0、vitest 16 files / 148 tests（台帳テスト 2 件を含む）pass。
+- 再走: `web/node_modules/.bin/playwright test latency/transition.spec.ts realtime/refetch-scope.spec.ts a11y/axe.spec.ts parity/`（`web/` で実行）→ exit 0、27 passed（S1・S2・S4 各 2 件、parity 21 件）。S1 の selector 修正後に V3 の 6 件を再走し、6 passed。偽 daemon と gateway は loopback の空き port を使用。
+- 拡張確認: `/tasks/$id` に一時的に `v3: true` を付け、`-g '/tasks/\$id'` で S1・S2・S4 の 3 件 pass。印は確認後に戻した。`corepack pnpm@12.6.0 -C web` はこの worktree の依存未配置から外部取得を試みたため停止し、同じ固定版のローカル依存をコピーして上記の binary を直接実行した。

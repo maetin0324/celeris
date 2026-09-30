@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -50,6 +52,7 @@ class BrowserCliTest(unittest.TestCase):
         self.executable.write_text(FAKE)
         self.executable.chmod(0o700)
         self.config = {'executable': str(self.executable), 'output': str(self.output),
+                       'action_socket': str(self.root / 'action.sock'),
                        'session_id': 'celeris-test-session', 'allowed_domains': ['example.com', '*.example.org']}
         (self.root / 'upstream.json').write_text('{}')
         self.policy(['click', 'close', 'download', 'gettext', 'launch', 'navigate', 'screenshot', 'scroll', 'snapshot'])
@@ -57,6 +60,63 @@ class BrowserCliTest(unittest.TestCase):
         root_patch = patch.object(cli, 'ROOT', self.root)
         root_patch.start()
         self.addCleanup(root_patch.stop)
+        self.stop_server = threading.Event()
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(self.config['action_socket'])
+        self.listener.listen(4)
+        self.listener.settimeout(0.1)
+        self.server = threading.Thread(target=self.serve_actions, daemon=True)
+        self.server.start()
+        self.addCleanup(self.close_server)
+
+    def close_server(self):
+        self.stop_server.set()
+        self.server.join(timeout=3)
+        self.listener.close()
+
+    def serve_actions(self):
+        while not self.stop_server.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except socket.timeout:
+                continue
+            except OSError as error:
+                self.accept_error = repr(error)
+                return
+            with connection:
+                data = bytearray()
+                while True:
+                    part = connection.recv(16384)
+                    if not part:
+                        break
+                    data.extend(part)
+                try:
+                    request = json.loads(data)
+                    verb, args = request['verb'], request['args']
+                    artifact = request.get('artifact')
+                    if verb == 'open':
+                        command = ['open'] + args
+                    elif verb == 'snapshot':
+                        command = ['snapshot', '-i']
+                    elif verb == 'extract':
+                        command = ['get', 'text'] + args
+                    elif verb in ('screenshot', 'download'):
+                        command = [verb] + args + [str(self.output / artifact)]
+                    else:
+                        command = [verb] + args
+                    argv = [str(self.executable), '--config', str(self.root / 'upstream.json'),
+                            '--session', self.config['session_id'], '--action-policy', str(self.root / 'policy.json'),
+                            '--allowed-domains', ','.join(self.config['allowed_domains']),
+                            '--content-boundaries', '--max-output', '16000', '--json'] + command
+                    env = {'AGENT_BROWSER_NAMESPACE': 'celeris', 'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
+                    result = cli.subprocess.run(argv, cwd=self.root, env=env, stdout=cli.subprocess.PIPE,
+                                                stderr=cli.subprocess.DEVNULL, timeout=45, check=False)
+                    response = {'status': result.returncode, 'stdout': result.stdout.decode()}
+                except Exception as error:
+                    self.last_error = repr(error)
+                    response = {'status': 1, 'stdout': ''}
+                self.last_response = response
+                connection.sendall(json.dumps(response).encode())
 
     def policy(self, allow):
         """Write policy.json and config.json the way the supervisor does (hash-bound)."""

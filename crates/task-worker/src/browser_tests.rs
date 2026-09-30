@@ -36,6 +36,16 @@ impl EventSink for RecordingSink {
 }
 
 fn request(workspace: &Path) -> RunRequest {
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.parent().unwrap().parent().unwrap();
+    configure_isolated_runtime(IsolatedBrowserConfig {
+        resolver: Some("127.0.0.1".parse().unwrap()),
+        record_dir: std::env::temp_dir()
+            .join(format!("celeris-browser-unit-{}", std::process::id())),
+        bwrap: "/usr/bin/bwrap".into(),
+        sandboxd: bin.join("celeris-browser-sandboxd"),
+        egress: bin.join("celeris-browser-egress"),
+    });
     let mut task = crate::protocol::tests::sample_task();
     task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
     RunRequest {

@@ -54,6 +54,8 @@ pub use instance::InstanceIdentity;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
+    #[error("browser runtime recovery: {0}")]
+    BrowserRuntimeRecovery(#[from] std::io::Error),
     #[error(transparent)]
     Config(#[from] ConfigError),
     #[error("store: {0}")]
@@ -62,6 +64,50 @@ pub enum DaemonError {
     Dispatch(#[from] DispatchError),
     #[error("api: {0}")]
     Api(#[from] ApiError),
+}
+
+/// Register this daemon instance, then recover only runtimes owned by dead or stale instances.
+/// This is the startup path used by `run`, before the dispatcher's first tick.
+pub fn start_instance(
+    store: Arc<dyn TaskStore>,
+    identity: InstanceIdentity,
+    role: SharedRole,
+    config: &Config,
+) -> Result<instance::Started, DaemonError> {
+    let freshness = instance::freshness_window(config.tick(), config.lease_grace_secs);
+    let now = OffsetDateTime::now_utc();
+    let started = instance::Supervisor::start(
+        store.clone(),
+        identity.clone(),
+        role,
+        freshness,
+        config.drain_timeout(),
+        config.handoff.drain_force_abort,
+        now,
+    )?;
+    if matches!(started, instance::Started::Running(_)) {
+        let root = config
+            .db
+            .path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("browser-runtime");
+        for row in store.instance_list()? {
+            if row.instance_id == identity.instance_id
+                || (row.is_fresh(now, freshness) && instance::pid_alive(row.pid))
+            {
+                continue;
+            }
+            let dir = root.join(&row.instance_id);
+            if dir.is_dir() {
+                let killed = task_worker::browser_runtime::reap_recorded(&dir)?;
+                tracing::info!(instance_id = %row.instance_id, count = killed.len(), pids = ?killed,
+                    "reaped recorded browser runtimes on daemon startup");
+                std::fs::remove_dir(&dir)?;
+            }
+        }
+    }
+    Ok(started)
 }
 
 /// ループの終了条件。
@@ -1628,15 +1674,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         }
         false => {
             let freshness = instance::freshness_window(config.tick(), config.lease_grace_secs);
-            match instance::Supervisor::start(
-                dispatcher.store(),
-                identity.clone(),
-                role.clone(),
-                freshness,
-                config.drain_timeout(),
-                config.handoff.drain_force_abort,
-                OffsetDateTime::now_utc(),
-            )? {
+            match start_instance(dispatcher.store(), identity.clone(), role.clone(), &config)? {
                 instance::Started::Duplicate { instance_id, pid } => {
                     tracing::error!(
                         release = %identity.release, active_instance_id = %instance_id, active_pid = pid,
@@ -1645,6 +1683,25 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                     return Ok(Exit::DuplicateRelease);
                 }
                 instance::Started::Running(supervisor) => {
+                    let bin_dir = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(Path::to_path_buf))
+                        .unwrap_or_else(|| PathBuf::from("/usr/bin"));
+                    task_worker::browser::configure_isolated_runtime(
+                        task_worker::browser::IsolatedBrowserConfig {
+                            resolver: config.browser.egress.resolver,
+                            record_dir: config
+                                .db
+                                .path
+                                .parent()
+                                .unwrap_or(Path::new("."))
+                                .join("browser-runtime")
+                                .join(&identity.instance_id),
+                            bwrap: PathBuf::from("/usr/bin/bwrap"),
+                            sandboxd: bin_dir.join("celeris-browser-sandboxd"),
+                            egress: bin_dir.join("celeris-browser-egress"),
+                        },
+                    );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの
                     // run（孤児）を lease の失効を待たずに回収できる（定義は `task_dispatch::orphan`）。
                     dispatcher.set_orphan_takeover(task_dispatch::orphan::OrphanTakeover {

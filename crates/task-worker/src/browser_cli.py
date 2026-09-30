@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import socket
 import sys
 import uuid
 from urllib.parse import urlsplit
@@ -144,29 +145,28 @@ def main(args):
         audit("policy_block", "blocked")
         print('{"success":false,"error":"command not permitted by the task browser policy"}')
         return 2
-    # Do not inherit CDP, profiles, persistent state, extensions, plugins, proxies,
-    # executable overrides or credentials from the harness/daemon environment.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_BROWSER_")}
-    env["AGENT_BROWSER_NAMESPACE"] = "celeris"
-    argv = [config["executable"], "--config", str(ROOT / "upstream.json"),
-            "--session", config["session_id"], "--action-policy", str(ROOT / "policy.json"),
-            "--allowed-domains", ",".join(config["allowed_domains"]),
-            "--content-boundaries", "--max-output", "16000", "--json"] + command
     try:
         # Serialize calls within a session so refs/artifact/event order stays meaningful.
         with (ROOT / "lock").open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            result = subprocess.run(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, timeout=45, check=False)
-        if len(result.stdout) > 1024 * 1024:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(50)
+                connection.connect(config["action_socket"])
+                request = {"verb": args[0], "args": args[1:],
+                           "artifact": artifact.name if artifact and args[0] in ("screenshot", "download") else None}
+                connection.sendall(json.dumps(request).encode())
+                connection.shutdown(socket.SHUT_WR)
+                response = connection.recv(1024 * 1024 + 4096)
+            result = json.loads(response)
+        if len(result.get("stdout", "")) > 1024 * 1024:
             raise ValueError()
-        data = json.loads(result.stdout)
+        data = json.loads(result["stdout"])
         if isinstance(data, dict) and data.get("success") is False:
             error = data.get("error")
             if isinstance(error, str) and any(marker in error.lower() for marker in
                     ("denied by policy", "allowed domains", "not allowed by domain filter")):
                 raise PolicyBlocked()
-        if result.returncode or not isinstance(data, dict) or data.get("success") is not True:
+        if result["status"] or not isinstance(data, dict) or data.get("success") is not True:
             # Error text can contain URL credentials or reflected page content.
             raise ValueError()
         if artifact and operation == "extract":
@@ -183,7 +183,7 @@ def main(args):
         else:
             print(json.dumps({"success": True, "artifact": artifact.name if artifact else None}))
         return 0
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as error:
+    except (OSError, KeyError, ValueError, TypeError) as error:
         if artifact:
             with contextlib.suppress(OSError):
                 artifact.unlink(missing_ok=True)

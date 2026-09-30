@@ -7,6 +7,7 @@ pub mod adapter;
 pub mod aider;
 pub mod artifact;
 pub mod browser;
+pub mod browser_action;
 pub mod browser_credential;
 pub mod browser_egress;
 pub mod browser_live;

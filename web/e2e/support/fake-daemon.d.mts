@@ -5,6 +5,8 @@ export type FakeDaemonRequest = {
   aborted: boolean;
   authorization: string | null;
   cookie: string | null;
+  query?: string;
+  lastEventId?: string | null;
 };
 export function fixtureFor(node: unknown): unknown;
 export function validateFixture(value: unknown, node: unknown): string[];
@@ -20,6 +22,8 @@ export function createFakeDaemon(options?: {
   requests: FakeDaemonRequest[];
   sendEvent(event: string, data?: unknown): void;
   setDelay(value: number): void;
+  setStreamStatus(value: number): void;
+  readonly streamClients: number;
   start(): Promise<string>;
   close(): Promise<void>;
 };

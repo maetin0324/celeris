@@ -110,6 +110,7 @@ export function createFakeDaemon({
   const requests = [];
   const clients = new Set();
   let delay = delayMs;
+  let streamStatus = 200;
   let timer;
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
@@ -135,7 +136,14 @@ export function createFakeDaemon({
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    if (pathname === "/events" || pathname === "/api/v1/events") {
+    if (pathname === "/api/v1/stream" && streamStatus !== 200) {
+      res.writeHead(streamStatus, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "too_many_streams" }));
+      return;
+    }
+    if (pathname === "/events" || pathname === "/api/v1/events" || pathname === "/api/v1/stream") {
+      record.query = new URL(req.url ?? "/", "http://x").search;
+      record.lastEventId = req.headers["last-event-id"] ?? null;
       res.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
@@ -181,6 +189,13 @@ export function createFakeDaemon({
   return {
     requests,
     sendEvent,
+    // `/api/v1/stream` の応答を 200 以外（503 など）にする（P1-09）。
+    setStreamStatus(value) {
+      streamStatus = value;
+    },
+    get streamClients() {
+      return clients.size;
+    },
     setDelay(value) {
       if (!delayValues.has(value)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
       delay = value;

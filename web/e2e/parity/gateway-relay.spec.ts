@@ -120,3 +120,49 @@ test("parity-x: file 不正 path・header 許可リスト・HTML を実行しな
   expect((await downloaded).suggestedFilename()).toBe("page.html");
   expect(await page.title()).not.toBe("ran");
 });
+
+test("parity: /events 中継（Last-Event-ID・task_id・60 s を超えて流れる・切断で abort・401/503）", async () => {
+  test.setTimeout(120_000);
+  const controller = new AbortController();
+  const res = await fetch(`${base}/events?task_id=T1&after_id=4`, {
+    headers: { "Last-Event-ID": "12" },
+    signal: controller.signal,
+  });
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toBe("text/event-stream");
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(res.headers.get("x-accel-buffering")).toBe("no");
+  const upstream = daemon.requests.at(-1);
+  expect(upstream?.path).toBe("/api/v1/stream");
+  expect(upstream?.query).toBe("?task_id=T1&after_id=4");
+  expect(upstream?.lastEventId).toBe("12");
+  expect(upstream?.authorization).toBe(`Bearer ${FIXTURE_TOKEN}`);
+
+  // 偽 daemon は 2 s ごとに `daemon` を送る。JSON 中継の timeout（30 s）を越え、61 s 後も届き続ける。
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("no body");
+  const decoder = new TextDecoder();
+  const started = Date.now();
+  let lastFrameAt = 0;
+  while (Date.now() - started < 61_000) {
+    const { value, done } = await reader.read();
+    expect(done).toBe(false);
+    if (decoder.decode(value, { stream: true }).includes("event: daemon")) lastFrameAt = Date.now();
+  }
+  expect(lastFrameAt - started).toBeGreaterThan(60_000);
+  controller.abort();
+  await expect.poll(() => daemon.streamClients).toBe(0);
+  expect(upstream?.aborted).toBe(true);
+
+  expect((await fetch(`${base}/events?after_id=x`)).status).toBe(400);
+  daemon.setStreamStatus(503);
+  const busy = await fetch(`${base}/events`);
+  expect(busy.status).toBe(503);
+  expect(await busy.text()).toContain("too_many_streams");
+  daemon.setStreamStatus(401);
+  const denied = await fetch(`${base}/events`);
+  expect(denied.status).toBe(401);
+  expect(denied.headers.get("x-celeris-web-error")).toBeNull();
+  await denied.text();
+  daemon.setStreamStatus(200);
+});

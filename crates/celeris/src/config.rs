@@ -1470,6 +1470,11 @@ pub struct ExecutionTomlConfig {
     /// ADR-0074 D1.3/§4（Phase F2b）: Task ごとの同時 WU 数の上限（既定 3、1..=6）。
     #[serde(default = "default_max_parallel_work_units")]
     pub max_parallel_work_units: usize,
+    /// ADR-0089（Phase R6-5）: CoS の対話 run（Console の一言）の同時数の絶対上限（既定 2、0..=8）。
+    /// CoS の対話 run は `max_concurrency` とアカウントプールのプロバイダの `concurrency` に数えず、
+    /// この上限だけで待つ。`0` で例外を無効にする（通常の run と同じ規則に戻る）。
+    #[serde(default = "default_max_cos_runs")]
+    pub max_cos_runs: usize,
     /// ADR-0079 D3（Phase R1a）: `[execution.tree]`（再帰的な task 分解の上限。既定 `enabled = false`）。
     #[serde(default)]
     pub tree: ExecutionTreeTomlConfig,
@@ -1689,6 +1694,7 @@ impl Default for ExecutionTomlConfig {
             work_unit_lane_cap: default_work_unit_lane_cap(),
             parallel: false,
             max_parallel_work_units: default_max_parallel_work_units(),
+            max_cos_runs: default_max_cos_runs(),
             tree: ExecutionTreeTomlConfig::default(),
         }
     }
@@ -1721,6 +1727,11 @@ fn default_work_unit_lane_cap() -> String {
 fn default_max_parallel_work_units() -> usize {
     3
 }
+fn default_max_cos_runs() -> usize {
+    task_dispatch::capacity::DEFAULT_MAX_COS_RUNS
+}
+/// ADR-0089: `[execution] max_cos_runs` の上限（CoS の対話 run が積み上がらないための設定値の天井）。
+const MAX_COS_RUNS_CAP: usize = 8;
 
 /// `[execution.planner]`（ADR-0072 D14, Phase E3; ADR-0074 D5.3, Phase F1）: task-local な計画 run の
 /// harness と上限。
@@ -2812,6 +2823,13 @@ impl Config {
                 self.execution.max_parallel_work_units
             )));
         }
+        // ADR-0089（Phase R6-5）: max_cos_runs は 0..=8。
+        if self.execution.max_cos_runs > MAX_COS_RUNS_CAP {
+            return Err(ConfigError::Invalid(format!(
+                "[execution] max_cos_runs must be between 0 and {MAX_COS_RUNS_CAP} (got {})",
+                self.execution.max_cos_runs
+            )));
+        }
         // ADR-0079 D3（Phase R1a）: `[execution.tree]` の範囲（max_depth は task の層数で 1..=3）。
         if let Err(why) = self.execution.tree.validate() {
             return Err(ConfigError::Invalid(format!("[execution.tree] {why}")));
@@ -3638,6 +3656,7 @@ impl Config {
                 .unwrap_or_default(),
                 parallel: self.execution.parallel,
                 max_parallel_work_units: self.execution.max_parallel_work_units,
+                max_cos_runs: self.execution.max_cos_runs,
                 // Phase F5-fix3: config.toml に欄は無い（ADR-0072 D18 / ADR-0074 §4 の既定のまま）。
                 // ADR-0079 D3（Phase R1a）: `[execution.tree]` は plan/3 の検証だけに効く。
                 limits: task_core::ExecutionLimits {
@@ -7167,6 +7186,26 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
             let cfg: Config = toml::from_str(&text).unwrap_or_else(|e| panic!("{section}: {e}"));
             let _ = cfg;
         }
+    }
+
+    /// ADR-0089（Phase R6-5）: `[execution] max_cos_runs` の既定（2）・写し・範囲（0..=8）。
+    #[test]
+    fn execution_max_cos_runs_default_and_validation() {
+        let base = "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n";
+        let cfg: Config = toml::from_str(base).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.execution.max_cos_runs, 2);
+        assert_eq!(cfg.dispatch_config().execution.max_cos_runs, 2);
+        for ok in [0, 1, 8] {
+            let cfg: Config =
+                toml::from_str(&format!("{base}[execution]\nmax_cos_runs = {ok}\n")).unwrap();
+            cfg.validate().unwrap();
+            assert_eq!(cfg.dispatch_config().execution.max_cos_runs, ok);
+        }
+        let cfg: Config =
+            toml::from_str(&format!("{base}[execution]\nmax_cos_runs = 9\n")).unwrap();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("max_cos_runs"), "{err}");
     }
 
     /// ADR-0079 D3（Phase R1a）: `[execution.tree]` の既定（`enabled = false`・`max_depth = 3` 層・D3 / U-R4 の

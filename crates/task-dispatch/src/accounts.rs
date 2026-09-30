@@ -448,6 +448,42 @@ pub fn select_account(
     best.map(|(id, _, _)| id)
 }
 
+/// ADR-0089 規則 2（Phase R6-5）: CoS の対話 run のアカウント選び。除外判定は [`evaluate`] のまま
+/// （呼び出し側が `max_runs_per_account` を `crate::capacity::account_run_limit` で +1 して渡す）。
+/// 選べる候補のうち**走っている run の最も少ない**アカウント、同数ならスコアの高い方、次に `id` の昇順。
+/// 選べる候補が無ければ `None`。
+pub fn select_account_least_loaded(
+    cands: &[AccountCandidate<'_>],
+    book: &AccountBook,
+    max_runs_per_account: usize,
+    now: i64,
+) -> Option<String> {
+    let mut best: Option<(String, usize, f64)> = None;
+    for c in cands {
+        let eval = evaluate(c, book.state(c.id), max_runs_per_account, now);
+        let Some(score) = eval.score else { continue };
+        let take = match &best {
+            None => true,
+            Some((best_id, best_in_use, best_score)) => match c.in_use.cmp(best_in_use) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Greater => false,
+                std::cmp::Ordering::Equal => match score
+                    .partial_cmp(best_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Less => false,
+                    std::cmp::Ordering::Equal => c.id < best_id.as_str(),
+                },
+            },
+        };
+        if take {
+            best = Some((c.id.to_string(), c.in_use, score));
+        }
+    }
+    best.map(|(id, _, _)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1735,5 +1771,54 @@ mod quota_calibration_tests {
                 .get("claude-oauth:five_hour")
                 .is_none_or(|q| q.is_empty())
         );
+    }
+}
+
+/// ADR-0089（Phase R6-5）: CoS run のアカウント選び。
+#[cfg(test)]
+mod cos_account_tests {
+    use super::*;
+
+    fn cand(id: &str, in_use: usize) -> AccountCandidate<'_> {
+        AccountCandidate {
+            id,
+            logged_in: true,
+            in_use,
+        }
+    }
+
+    #[test]
+    fn least_loaded_picks_the_account_with_fewest_runs_even_at_max_plus_one() {
+        let mut book = AccountBook::new_in_memory();
+        // `a` は残量が多い（通常の選び方なら `a`）が、走っている run は多い。
+        book.record_observation(
+            "b",
+            RateLimitObservation {
+                five_hour: Some(RateWindow {
+                    utilization: 0.9,
+                    resets_at: 9_000,
+                }),
+                seven_day: None,
+                status: None,
+                resets_at: None,
+                observed_at: 1_000,
+            },
+            ObservationSource::Run,
+        );
+        let cands = vec![cand("a", 2), cand("b", 1)];
+        assert_eq!(
+            select_account_least_loaded(&cands, &book, 3, 1_000),
+            Some("b".to_string())
+        );
+        // 両方 max (= 2) 本走っていても、上限 +1 (= 3) なら選べる。同数は id 昇順（スコア同点）。
+        let full = vec![cand("b", 2), cand("a", 2)];
+        let empty = AccountBook::new_in_memory();
+        assert_eq!(
+            select_account_least_loaded(&full, &empty, 3, 1_000),
+            Some("a".to_string())
+        );
+        // +1 を使い切れば選べない。
+        let over = vec![cand("a", 3), cand("b", 3)];
+        assert_eq!(select_account_least_loaded(&over, &empty, 3, 1_000), None);
     }
 }

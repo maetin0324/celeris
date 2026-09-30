@@ -1840,3 +1840,6 @@ Event を 1 つ足した（events は JSON の列）。本番（systemctl・/var
 - `WorkUnitChecksFailed` の GUI の専用表示は無い（timeline は型名と JSON）。
 - 本番 task 01M3SAHFRK8HA2AM7NYHKF1PD0 は 14:29:18Z に done（人の操作は不要）。昇格後に同じ形が起きたら、events の
   `work_unit_checks_failed` と retry の run の prompt.txt の「前回の run の check の不合格」節で確かめる。
+- 14:56Z: **R7-5** を main に統合 → release **1b3c4ee6ac93**（schema 34）: gate（fmt / cargo-test 130 s / clippy / build / pnpm）全 exit 0 → `verify.sh` ok=true /
+  live_ok=true → `promote.sh` live で昇格（引き継ぎ 2 s、backup `20260930-145618-pre-1b3c4ee6ac93.sqlite3`）。発端の h-life task 01M3SAHF… は v2 の計画
+  （check の引数を `192.168.1.103 8000` に直した版）で 14:29Z に done 済み。次に WU の check が落ちたとき `work_unit_checks_failed` と outcome の要約が出ることを確かめる。

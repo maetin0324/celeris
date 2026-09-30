@@ -259,56 +259,51 @@ fn child_budget_is_never_below_one_leaf_run() {
     assert_eq!(build(&store, &p, "plan-1").budget, p.budget);
 }
 
-/// R5b-fix3 (D3c): 子の `execution_hint` は compound。planner の計画（または見つからない計画）なら
-/// `explicit = false`（signal H）、人の計画（origin human）なら `explicit = true`（human/explicit）。
+/// ADR-0079「R6-2」（R5b-fix3 (D3c) を改める）: 子の `execution_hint` は計画の書き手によらず明示。`gate` を
+/// 省けば `{compound, explicit: true}`、`gate: atomic` なら `{atomic, explicit: true}`、`gate: compound` は
+/// planner の計画でも `{compound, explicit: true}`（計画の版を引かない。見つからない計画の仮の子も同じ）。
 #[test]
-fn child_execution_hint_follows_the_plan_origin() {
+fn child_execution_hint_is_explicit_and_follows_the_unit_gate() {
+    use task_core::{ExecutionHintSpec, ExecutionMode};
     let store = SqliteStore::open_in_memory().unwrap();
     let p = parent(&[]);
     let hint = |t: &Task| t.routing.as_ref().and_then(|r| r.execution_hint);
-    assert_eq!(
-        hint(&build(&store, &p, "plan-unknown")),
-        Some(task_core::ExecutionHintSpec {
-            mode: task_core::ExecutionMode::Compound,
-            explicit: false,
-        })
-    );
-    store.insert(&p).unwrap();
-    let spec = v3(serde_json::json!([task_unit(&[])]));
-    let row = task_core::ExecutionPlanRow {
-        id: "plan-h".into(),
-        task_id: p.id.to_string(),
-        version: 1,
-        origin: task_core::PlanOrigin::Human,
-        planner_run_id: None,
-        status: task_core::PlanStatus::Active,
-        spec: spec.clone(),
-        created_at: "2026-09-29T00:00:00Z".into(),
-        superseded_at: None,
-    };
-    store
-        .execution_plan_adopt(
-            p.id,
-            row,
-            Vec::new(),
-            Vec::new(),
-            task_core::Event::ExecutionPlanned {
-                plan_id: "plan-h".into(),
-                version: 1,
-                origin: task_core::PlanOrigin::Human,
-                supersedes: None,
-                reason: None,
-                plan: Box::new(spec),
-            },
-        )
-        .unwrap();
-    let child = build(&store, &p, "plan-h");
-    assert_eq!(
-        hint(&child),
-        Some(task_core::ExecutionHintSpec {
-            mode: task_core::ExecutionMode::Compound,
+    let explicit = |mode| {
+        Some(ExecutionHintSpec {
+            mode,
             explicit: true,
         })
+    };
+    // 既定（gate なし）: planner の計画・見つからない計画でも明示の compound。
+    assert_eq!(
+        hint(&build(&store, &p, "plan-unknown")),
+        explicit(ExecutionMode::Compound)
+    );
+    assert_eq!(
+        hint(&build(&store, &p, "")),
+        explicit(ExecutionMode::Compound)
+    );
+    let with_gate = |gate: &str| {
+        let mut unit = task_unit(&[]);
+        unit["gate"] = serde_json::json!(gate);
+        let spec = v3(serde_json::json!([unit]));
+        build_child_task(
+            &store,
+            &p,
+            "plan-planner",
+            &spec.units[0],
+            &[],
+            &[],
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap()
+        .0
+    };
+    assert_eq!(hint(&with_gate("atomic")), explicit(ExecutionMode::Atomic));
+    assert_eq!(
+        hint(&with_gate("compound")),
+        explicit(ExecutionMode::Compound)
     );
 }
 

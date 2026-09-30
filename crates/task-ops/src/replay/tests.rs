@@ -1082,7 +1082,7 @@ fn check_and_apply_execution_rebuilds_the_replanned_execution_plans_history() {
 
 /// ADR-0079 R4a（R3a 付記 14.・R3b 付記 12. の gap）: 工程を持つ計画の replan で、(a) 計画から消えた unit
 /// と工程（superseded の `x` と `integrate-p2`）、(b) 同じ key のまま別の工程へ書き直した unit（`b`。行の
-/// `seq` / `phase` は最初の版のまま）、(c) 新しい unit（`c`）があっても、`work_units` を events だけから同じに
+/// `seq` は最初の版のまま、`phase` は新しい版の工程。R6-4）、(c) 新しい unit（`c`）があっても、`work_units` を events だけから同じに
 /// 作り直せる。superseded の行を消した索引も `--apply` で戻る。
 #[test]
 fn replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan() {
@@ -1159,6 +1159,15 @@ fn replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan() {
     };
     assert_eq!(status_of("x"), WorkUnitStatus::Superseded);
     assert_eq!(status_of("integrate-p2"), WorkUnitStatus::Superseded);
+    // ADR-0079 R6-4: p2 → p1 へ移した未完了の `b` は行の `phase` も p1 になる。
+    let phase_of = |key: &str| {
+        stored
+            .iter()
+            .find(|u| u.key == key)
+            .and_then(|u| u.phase.clone())
+    };
+    assert_eq!(phase_of("b").as_deref(), Some("p1"));
+    assert_eq!(phase_of("a").as_deref(), Some("p1"));
 
     let (wu_mm, run_mm, plan_mm, applied) =
         check_and_apply_execution(&store, false).expect("check");

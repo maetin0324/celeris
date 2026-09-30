@@ -1069,7 +1069,8 @@ fn tree_plan_shape_section(
          {{\"key\":\"part-b\",\"stage\":\"build\",\"kind\":\"task\",\"title\":\"...\",\"objective\":\"...\",\
          \"acceptance\":[{{\"text\":\"...\",\"check\":{{\"type\":\"command\",\"cmd\":\"...\",\"expect_exit\":0}}}}],\
          \"depends_on\":[\"<unit key>\"],\"needs_decisions\":[\"<decision key>\"],\"genre\":\"<optional>\",\
-         \"skills\":[\"<skill tag>\"],\"repos\":[\"<subset of this task's repositories>\"],\"features\":{{...}}}}],\
+         \"skills\":[\"<skill tag>\"],\"repos\":[\"<subset of this task's repositories>\"],\
+         \"gate\":\"compound\"|\"atomic\" (optional),\"features\":{{...}}}}],\
          \"decisions\":[{{\"key\":\"h1\",\"question\":\"...\",\
          \"options\":[{{\"key\":\"a\",\"label\":\"...\",\"consequence\":\"...\"}},{{\"key\":\"b\",\"label\":\"...\"}}],\
          \"recommended\":\"a\",\"cost_of_reversal\":\"low\"|\"medium\"|\"high\",\"cost_note\":\"...\",\
@@ -1095,8 +1096,8 @@ fn tree_plan_shape_section(
     ));
     if tree.remaining_depth >= 1 {
         out.push_str(
-            "- You may declare units with `\"kind\":\"task\"` (child tasks). Each child task runs its own \
-             complexity gate: a small one runs as a single run, a large one plans itself.\n",
+            "- You may declare units with `\"kind\":\"task\"` (child tasks). A child task plans itself by \
+             default; write `\"gate\":\"atomic\"` on the unit when the child should run as a single run.\n",
         );
     } else {
         out.push_str(
@@ -1130,23 +1131,32 @@ fn tree_plan_shape_section(
          (b) **One area, one repository**: `context.repo` names at most one repository and `context.paths` \
          stays within one subtree.\n\
          (c) **At least one command check**: `checks` has at least one deterministic command \
-         (`{{\"cmd\":\"...\",\"expect_exit\":0}}`) that really verifies the result.\n\
+         (`{{\"cmd\":\"...\",\"expect_exit\":0}}`) that really verifies the result. \
+         否定の grep（`! grep …`）を check に書くときは、自分が書く説明文や ADR の本文に当たらないか確かめる\
+         （自己言及で落ちた実例あり）。\n\
          Declare a unit as a child task (`\"kind\":\"task\"`) when it fails any of these, when it is a \
          deliverable that should be accepted and reviewed on its own, when it needs a human acceptance or a \
          decision (`needs_decisions`), or when it needs another department's skills. A child-task unit needs \
          `acceptance` (at least one criterion) and must NOT have `checks`, `budget`, `harness` or \
          `context.paths` (the child decides those itself); its `repos` must be a subset of this task's \
          repositories.\n\
+         A child-task unit may set `gate` (leaves must not): `\"gate\":\"compound\"` — the child writes its own \
+         plan and splits the work (this is the default when `gate` is omitted: choosing `\"kind\":\"task\"` \
+         means the child needs its own plan). `\"gate\":\"atomic\"` — the child runs as a single node without \
+         a plan (one worker run and its own final review); write it when you want a child task that is \
+         accepted on its own but small enough for one run. celeris does not override an explicit gate.\n\
          **A unit that cannot fit in a leaf must be declared as a child task{} or raised as a decision — never \
-         squeezed into a leaf.** celeris re-gates every unit when it adopts the plan and records any \
-         disagreement with your declaration.\n\n",
+         squeezed into a leaf.** celeris re-gates every leaf when it adopts the plan (a leaf that is too \
+         large becomes a child task) and records any disagreement with your declaration.\n\
+         {}\n\n",
         l.work_unit_max_turns,
         l.work_unit_max_wall_secs,
         if tree.remaining_depth >= 1 {
             ""
         } else {
             " (not possible at this depth)"
-        }
+        },
+        CLUSTER_JOB_PLANNER_GUIDANCE,
     ));
 
     out.push_str(&format!(

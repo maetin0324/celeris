@@ -94,6 +94,10 @@ pub(super) fn task_unit(
         // 理由が無ければ leaf に下げられる。ここでは子 task のまま残す理由として「親に無い skill（別の部署）」を
         // 持たせる（担当の無い試験の組織では matching に影響しない）。
         "skills": ["tree-fixture"],
+        // ADR-0079 付記「R6-2: unit の gate 欄と kind task の既定（compound explicit）」: kind task の unit の既定は
+        // 明示の compound（子が自分の計画を持つ）になった。この fixture の子は従来どおり 1 run（atomic）で走る前提
+        // なので `gate: atomic` を明示する（期待は変えない）。
+        "gate": "atomic",
         "title": format!("Child {key}"),
         "objective": format!("Deliver the {key} part as its own reviewed task"),
         "depends_on": deps,

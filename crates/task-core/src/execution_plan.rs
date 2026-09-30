@@ -299,6 +299,12 @@ pub struct PlanUnitSpec {
     /// D15: 既存の task をこの unit の子として採用する（人の計画〈origin human〉だけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adopt: Option<crate::model::TaskId>,
+    /// ADR-0079「R6-2」: 子 task の Complexity Gate の明示（`compound` = 子は自分の計画を持つ、`atomic` = 子は計画を
+    /// 持たず 1 つの節点として走る）。子の `routing.execution_hint = {<gate>, explicit: true}`。省いたら
+    /// `compound`（kind task を選んだこと自体が「自分の計画が要る」の意味。`tree::task_unit_execution_hint`）。
+    /// 人の計画・planner の計画のどちらも書ける。leaf には書けない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<crate::execution_gate::ExecutionMode>,
     // ---- leaf だけ ----
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub done_when: Vec<String>,
@@ -923,7 +929,7 @@ pub enum PlanValidationError {
         key: String,
         field: &'static str,
     },
-    /// leaf に kind task 専用の欄（`acceptance` / `genre` / `skills` / `repos` / `adopt`）が書かれている。
+    /// leaf に kind task 専用の欄（`acceptance` / `genre` / `skills` / `repos` / `adopt` / `gate`）が書かれている。
     LeafFieldNotAllowed {
         key: String,
         field: &'static str,
@@ -2017,6 +2023,7 @@ fn validate_v3(
                 ("skills", !u.skills.is_empty()),
                 ("repos", !u.repos.is_empty()),
                 ("adopt", u.adopt.is_some()),
+                ("gate", u.gate.is_some()),
             ] {
                 if present {
                     errors.push(PlanValidationError::LeafFieldNotAllowed {
@@ -4551,6 +4558,7 @@ mod tests {
             skills: vec![],
             repos: vec![],
             adopt: None,
+            gate: None,
             done_when: vec![],
             checks: vec![WorkUnitCheck {
                 cmd: "true".into(),
@@ -5009,6 +5017,51 @@ mod tests {
             key: "p1-note".into(),
             field: "acceptance"
         }));
+    }
+
+    /// ADR-0079「R6-2」: kind task の unit の `gate`（`compound` | `atomic`）は人の計画・planner の計画のどちらでも
+    /// 読めて検証を通る。leaf に書けば `LeafFieldNotAllowed { field: "gate" }`、知らない値は JSON で拒否。
+    #[test]
+    fn plan_unit_gate_parses_on_task_units_and_is_rejected_on_leaves() {
+        let mut v = serde_json::to_value(v3_fixture()).unwrap();
+        v["units"][0]["gate"] = serde_json::json!("atomic");
+        let p: ExecutionPlanSpec = serde_json::from_value(v.clone()).expect("gate parses");
+        assert_eq!(
+            p.units[0].gate,
+            Some(crate::execution_gate::ExecutionMode::Atomic)
+        );
+        validate(&p, tree_on(), &[]).expect("a planner may write gate on a task unit");
+        v["units"][0]["gate"] = serde_json::json!("compound");
+        let p: ExecutionPlanSpec = serde_json::from_value(v.clone()).expect("gate parses");
+        assert_eq!(
+            p.units[0].gate,
+            Some(crate::execution_gate::ExecutionMode::Compound)
+        );
+        validate_with(
+            &p,
+            tree_on(),
+            &[],
+            PlanContext {
+                origin: PlanOrigin::Human,
+                depth: 1,
+            },
+        )
+        .expect("a human may write gate on a task unit");
+        // 往復で残る（省けば出さない）。
+        let back = serde_json::to_value(&p).unwrap();
+        assert_eq!(back["units"][0]["gate"], "compound");
+        assert!(back["units"][1].get("gate").is_none());
+        v["units"][0]["gate"] = serde_json::json!("sometimes");
+        assert!(serde_json::from_value::<ExecutionPlanSpec>(v.clone()).is_err());
+        // leaf の `gate` は検証の誤り。
+        let mut p = v3_fixture();
+        p.units[1].gate = Some(crate::execution_gate::ExecutionMode::Compound);
+        assert!(
+            v3_errors(&p).contains(&PlanValidationError::LeafFieldNotAllowed {
+                key: "p1-note".into(),
+                field: "gate"
+            })
+        );
     }
 
     /// D4 (2) (a): /3 の leaf は予算を丸めずに拒否する（/1・/2 は従来どおり丸める）。

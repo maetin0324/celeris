@@ -245,9 +245,9 @@ pub fn child_objective(
 ///   local に落とす。`task_core::materialize_delegated_logging` の規則をそのまま通す）。ただし親の `Local` が
 ///   親自身の id なら子は自分の id（[`child_own_workspace`]。R5b-fix3）。
 /// - 担当は書かない（matching が決める。ADR-0069 D1）。unit の `features` は `routing.features`（ヒント）。
-/// - `tree = {root_id, depth + 1, parent_unit}`（`base_commit` は R1c）。`execution_hint` = `{compound,
-///   explicit: 計画が origin human}`（R5b-fix3。子は最初の dispatch で自分の Complexity Gate を通る。
-///   ADR-0079 D4 (1)。人の計画なら `human/explicit`、planner の計画なら signal `H`）。
+/// - `tree = {root_id, depth + 1, parent_unit}`（`base_commit` は R1c）。`execution_hint` = `{<unit の gate、
+///   無ければ compound>, explicit: true}`（R6-2。R5b-fix3 の「人の計画だけ明示」を改めた。子は最初の dispatch
+///   で自分の Complexity Gate を通り、`human/explicit` になる。ADR-0079 D4 (1)）。
 ///
 /// `Err` はこの unit を作れない理由（unit を `failed` にする文言）。
 #[allow(clippy::too_many_arguments)]
@@ -329,12 +329,11 @@ pub fn build_child_task(
     child.workspace = child_own_workspace(parent, child.id, &child.workspace);
     // R5b-fix3: 子の予算は `max(親, leaf 1 run の既定 30 turns / 1,800 秒)`（`tree_child_budget`）。
     child.budget = task_core::tree::tree_child_budget(&parent.budget);
-    // R5b-fix3: kind task の unit は計画の書き手の compound の手掛かり（人の計画なら人の明示）。
-    let human_plan = plan_is_human(store, parent, plan_id);
+    // R6-2: kind task の unit は計画の書き手の明示（unit の `gate`、無ければ compound。書き手を問わない）。
     child
         .routing
         .get_or_insert_with(Default::default)
-        .execution_hint = Some(task_core::tree::task_unit_execution_hint(human_plan));
+        .execution_hint = Some(task_core::tree::task_unit_execution_hint(unit.gate));
     child.labels = vec![task_core::child_label(&unit.key)];
     child.skills = if unit.skills.is_empty() {
         parent.skills.clone()
@@ -391,19 +390,6 @@ pub fn child_own_workspace(
         }
         other => other.clone(),
     }
-}
-
-/// R5b-fix3: `plan_id` の計画が人の計画（origin human）か。見つからない（採用前の仮の子 `""` など）・
-/// 読めなければ `false`（planner の計画として扱う）。
-fn plan_is_human(store: &dyn TaskStore, parent: &Task, plan_id: &str) -> bool {
-    if plan_id.is_empty() {
-        return false;
-    }
-    store
-        .execution_plan_list(parent.id)
-        .ok()
-        .and_then(|plans| plans.into_iter().find(|p| p.id == plan_id))
-        .is_some_and(|p| p.origin == task_core::PlanOrigin::Human)
 }
 
 /// ADR-0079 D9（Phase R2b）: 子 task の失敗の要約（親の replan の planner に渡す・基盤の失敗の再試行を決める）。
@@ -908,56 +894,51 @@ mod tests {
         assert_eq!(build(&store, &p, "plan-1").budget, p.budget);
     }
 
-    /// R5b-fix3 (D3c): 子の `execution_hint` は compound。planner の計画（または見つからない計画）なら
-    /// `explicit = false`（signal H）、人の計画（origin human）なら `explicit = true`（human/explicit）。
+    /// ADR-0079「R6-2」（R5b-fix3 (D3c) を改める）: 子の `execution_hint` は計画の書き手によらず明示。`gate` を
+    /// 省けば `{compound, explicit: true}`、`gate: atomic` なら `{atomic, explicit: true}`、`gate: compound` は
+    /// planner の計画でも `{compound, explicit: true}`（計画の版を引かない。見つからない計画の仮の子も同じ）。
     #[test]
-    fn child_execution_hint_follows_the_plan_origin() {
+    fn child_execution_hint_is_explicit_and_follows_the_unit_gate() {
+        use task_core::{ExecutionHintSpec, ExecutionMode};
         let store = SqliteStore::open_in_memory().unwrap();
         let p = parent(&[]);
         let hint = |t: &Task| t.routing.as_ref().and_then(|r| r.execution_hint);
-        assert_eq!(
-            hint(&build(&store, &p, "plan-unknown")),
-            Some(task_core::ExecutionHintSpec {
-                mode: task_core::ExecutionMode::Compound,
-                explicit: false,
-            })
-        );
-        store.insert(&p).unwrap();
-        let spec = v3(serde_json::json!([task_unit(&[])]));
-        let row = task_core::ExecutionPlanRow {
-            id: "plan-h".into(),
-            task_id: p.id.to_string(),
-            version: 1,
-            origin: task_core::PlanOrigin::Human,
-            planner_run_id: None,
-            status: task_core::PlanStatus::Active,
-            spec: spec.clone(),
-            created_at: "2026-09-29T00:00:00Z".into(),
-            superseded_at: None,
-        };
-        store
-            .execution_plan_adopt(
-                p.id,
-                row,
-                Vec::new(),
-                Vec::new(),
-                task_core::Event::ExecutionPlanned {
-                    plan_id: "plan-h".into(),
-                    version: 1,
-                    origin: task_core::PlanOrigin::Human,
-                    supersedes: None,
-                    reason: None,
-                    plan: Box::new(spec),
-                },
-            )
-            .unwrap();
-        let child = build(&store, &p, "plan-h");
-        assert_eq!(
-            hint(&child),
-            Some(task_core::ExecutionHintSpec {
-                mode: task_core::ExecutionMode::Compound,
+        let explicit = |mode| {
+            Some(ExecutionHintSpec {
+                mode,
                 explicit: true,
             })
+        };
+        // 既定（gate なし）: planner の計画・見つからない計画でも明示の compound。
+        assert_eq!(
+            hint(&build(&store, &p, "plan-unknown")),
+            explicit(ExecutionMode::Compound)
+        );
+        assert_eq!(
+            hint(&build(&store, &p, "")),
+            explicit(ExecutionMode::Compound)
+        );
+        let with_gate = |gate: &str| {
+            let mut unit = task_unit(&[]);
+            unit["gate"] = serde_json::json!(gate);
+            let spec = v3(serde_json::json!([unit]));
+            build_child_task(
+                &store,
+                &p,
+                "plan-planner",
+                &spec.units[0],
+                &[],
+                &[],
+                &[],
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap()
+            .0
+        };
+        assert_eq!(hint(&with_gate("atomic")), explicit(ExecutionMode::Atomic));
+        assert_eq!(
+            hint(&with_gate("compound")),
+            explicit(ExecutionMode::Compound)
         );
     }
 

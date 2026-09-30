@@ -4473,6 +4473,13 @@ export interface PlanUnitSpec {
   features?: {
     [k: string]: unknown;
   };
+  /**
+   * ADR-0079「R6-2」: 子 task の Complexity Gate の明示（`compound` = 子は自分の計画を持つ、`atomic` = 子は計画を
+   * 持たず 1 つの節点として走る）。子の `routing.execution_hint = {<gate>, explicit: true}`。省いたら
+   * `compound`（kind task を選んだこと自体が「自分の計画が要る」の意味。`tree::task_unit_execution_hint`）。
+   * 人の計画・planner の計画のどちらも書ける。leaf には書けない。
+   */
+  gate?: ExecutionMode | null;
   genre?: string | null;
   harness?: string | null;
   /**

@@ -172,15 +172,15 @@ Project（案件）… 粗い方向と常設の文脈だけ。計画を持たな
 | `max_stages` | 5（= `max_phases`） | 1 計画の段階の数 | 検証で拒否 |
 | `max_child_tasks_per_plan` | 6 | 1 計画の kind task の unit 数 | 検証で拒否 |
 | `max_parallel_child_tasks` | 2 | 1 つの親で同時に非終端の子 task の数 | 作らずに待つ（`pending` のまま） |
-| `max_tree_leaves` | 40 | 木の生涯で作る leaf（repair・統合を除く） | 決定の要求（limit） |
-| `max_tree_runs` | 120 | 木全体の worker / planner / repair の run（reviewer を除く。ADR-0016 の 100 を置き換える） | 決定の要求（limit） |
-| `max_tree_replans` | 10 | 木全体で採用した replan の版 | 決定の要求（limit） |
+| `max_tree_leaves` | **120**（R6-2 で 40 から） | 木の生涯で作る leaf（repair・統合を除く） | 決定の要求（limit） |
+| `max_tree_runs` | **400**（R6-2 で 120 から） | 木全体の worker / planner / repair の run（reviewer を除く。ADR-0016 の 100 を置き換える） | 決定の要求（limit） |
+| `max_tree_replans` | **30**（R6-2 で 10 から） | 木全体で採用した replan の版 | 決定の要求（limit） |
 | `max_tree_tokens` | 無し | 木全体の input + output（設定したときだけ） | 決定の要求（limit） |
 | `max_open_decisions` | 12 / 木、8 / 計画 | 未回答の決定の数 | 計画の検証で拒否 / 新しい要求を束ねる（D7） |
 | `gate_depth_step` | 2 | 深さ d の gate の閾値 = `5 + step × (d − 1)`（depth 2 は 7） | — |
 | `approval_near_limit_ratio` | 0.8 | D8 の「上限に近い」 | — |
 
-- 節点ごとの上限（`max_runs_per_task` 24、`max_replans` 3、`max_repairs` 3 など、ADR-0072 D18 / ADR-0074 §4）は**そのまま各 task に効く**。
+- 節点ごとの上限（`max_runs_per_task` 24、`max_replans` 5〈R6-2 で 3 から。`[execution]` の既定〉、`max_repairs` 3 など、ADR-0072 D18 / ADR-0074 §4）は**そのまま各 task に効く**。
   木の上限はその上に重なる（どちらか先に当たった方）。
 - **費用の上限は「止めて聞く」上限だけ**（run 数とトークン）。金額・quota の配分や dispatch の選択には使わない（CLAUDE.md の「予算管理は
   別プロジェクト」、ADR-0074 R12）。
@@ -1590,3 +1590,49 @@ replan の done の不変条件（ADR-0072 D14 / D17「replan で done の WU �
   本件（/2 の done の check の訂正）には要らない。/3 の人の replan で新しい kind task の unit や `adopt` を足す使い方は未対応として残す。
 - task の状態は変えない（`blocked` の task は `blocked` のまま）。未完了の WU は replan の規則どおり（D17）`ready` / `pending` に戻り窓を作り直す。
   task を動かすのは人の次の操作（質問への回答・再開）。
+
+## 付記: R6-2: unit の gate 欄と kind task の既定（compound explicit）、木の上限の既定値（2026-09-29）
+
+R6（回収）の 2 つ目。**migration なし**（plan/3 の JSON に任意の欄が 1 つ増えるだけ。既存の計画・events はそのまま読める）。本番には触れていない。
+
+### 発端（本番の証拠）
+
+- `kind: task` の unit から作った子が、すべて `atomic/score`（score 6 = 特徴量 4 + 手掛かり `H` 2、深さ 2 の閾値 7）で atomic になった:
+  browser Phase 4 の子、P4-A、P4-C、web Phase 1。どれも atomic の試行が最終レビューで不合格か継続の上限に当たり、人が `decompose {compound}` を
+  手で打った。R5b-fix3 の「planner の計画の kind task は signal `H`（+2）だけ」は、子の目的が unit の 1 行で短く特徴量が低く出るため、閾値に
+  届かなかった。
+- planner が compound を強制しようとしたが、plan/3 の unit に `gate` の欄が無く（`deny_unknown_fields` で計画全体が拒否される）、`features` を
+  盛ることしかできなかった。「unit の gate の上書き」は daemon の `unit_gate_overridden {kept_task}` の記録だけだった。
+- 木の上限: web GUI は leaf 約 55 が要り `max_tree_leaves 40` に当たる。browser は run 100 で `max_tree_runs 120` に迫った。web Phase 0 は
+  `max_replans 3` を repair の自己言及の check（否定の grep が ADR 本文の説明行に当たった）で使い切って failed になった。
+
+### 決定
+
+1. **plan/3 の unit に `gate: "compound" | "atomic"`（任意）**（`PlanUnitSpec.gate: Option<ExecutionMode>`）。`kind: task` の unit だけ。leaf に
+   書けば検証の誤り（`LeafFieldNotAllowed { field: "gate" }`）。人の計画（`PUT`）・planner の計画のどちらも書ける。
+   - 子の生成（`task_ops::tree::build_child_task`）: `gate: compound` → `routing.execution_hint = {compound, explicit: true}`、`gate: atomic` →
+     `{atomic, explicit: true}`（子は計画を持たない 1 つの節点として走る。worker run と子の最終レビュー）、省略 → 2.。子の dispatch の gate は
+     `human/explicit` になる（固定パイプラインの genre〈`out_of_scope_rule`〉だけは従来どおりその前に atomic）。
+   - 採用のときの unit の gate（`tree::unit_gate`）も同じ値を使う: `unit_view` が kind task の unit に子と同じ `execution_hint` を持たせ、
+     `unit_gate` はそれを人の明示として `decide_at` に渡す。**明示の gate は上書きしない**: kind task の unit には `Demoted` / `KeptTask` を
+     出さない（`UnitGateOverridden` は leaf の暗黙の判定〈`Promoted` / `Decision`〉だけ）。列挙子は過去の event を読むために残す。
+2. **kind task の既定は明示の compound（書き手を問わない）**: `gate` の無い kind task の unit は `{compound, explicit: true}`
+   （`tree::task_unit_execution_hint(None)`）。R5b-fix3 5. の「人の計画だけ明示、planner の計画は `H` +2」を改める。計画の書き手が「task」を
+   選んだこと自体が「自分の計画が要る」の意味で、score の推定で覆すと本番のように atomic の失敗を人が拾うことになる。
+   **1 run で済む子を望む planner は `gate: atomic` を書く**（プロンプトに書いた）。`UnitGateContext.human_plan` と
+   `task_ops::tree::plan_is_human` は使い道が無くなったので消した。`atomic/small` を木の子に当てない（R5b-fix3 4.）はそのまま。
+3. **planner のプロンプト**（`claude_code.rs` の `tree_plan_shape_section`）: 例の JSON の kind task の unit に `"gate":"compound"|"atomic"
+   (optional)`、compound / atomic をそれぞれ 1 文で説明（省略は compound）、深さの節の「子は自分の gate で決まる」を「既定で自分の計画を持つ。
+   1 run なら `gate: atomic`」に、「celeris は採用時にすべての unit を gate し直す」を「すべての leaf を」に改めた。leaf の基準 (c) に
+   「否定の grep（`! grep …`）を check に書くときは、自分が書く説明文や ADR の本文に当たらないか確かめる（自己言及で落ちた実例あり）」を足した。
+4. **木の上限の既定値**（U-R4 の見直し）: `max_tree_leaves` 40 → **120**、`max_tree_runs` 120 → **400**、`max_tree_replans` 10 → **30**
+   （`TreeLimits::default()`、`[execution.tree]`）、節点ごとの `[execution] max_replans` 3 → **5**（`celeris::config` の既定。木でない task の
+   /1・/2 の replan の上限も同じ設定なので 5 になる）。他の上限は変えない。D3 の表を直した。設定ファイルに値を書いていれば、そちらが効く。
+5. **`near_limit:max_child_tasks_per_plan` の数え方**（BenchFS の「10/6」の齟齬）: 計算は `task_ops::plan_gate`（`child_task_units` が
+   `kind == Task` をすべて数える）にあり、本フェーズの担当外なので直していない（`adopt` と done の unit を除くのは R6-1 の担当）。計画の検証
+   （`max_child_tasks_per_plan` の拒否）は既に `creates_child()` で `adopt` を数えていない。
+
+### 残したもの
+
+- 人の `regate`（`decompose` / retry）は従来どおり `execution_hint` を明示で上書きする。
+- 本番の既存の子の `execution_hint`（`explicit: false`）は直さない（新しく作る子から効く）。

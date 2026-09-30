@@ -81,7 +81,6 @@ pub fn unit_gate_plan(
         limits: &tree,
         work_unit_max_turns: limits.work_unit_max_turns,
         work_unit_max_wall_secs: limits.work_unit_max_wall_secs,
-        human_plan: origin == PlanOrigin::Human,
     };
     // replan で持ち越す done の unit は gate をかけ直さない（spec を変えない。D17 の不変条件）。
     let done_keys: BTreeSet<String> = done_work_units.iter().map(|(k, _)| k.clone()).collect();

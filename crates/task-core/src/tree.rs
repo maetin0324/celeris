@@ -199,11 +199,11 @@ pub struct TreeLimits {
     pub max_child_tasks_per_plan: usize,
     /// 1 つの親で同時に非終端の子 task の数（既定 2。R1b で使う）。
     pub max_parallel_child_tasks: usize,
-    /// 木の生涯で作る leaf（repair・統合を除く。既定 40。R2a で使う）。
+    /// 木の生涯で作る leaf（repair・統合を除く。既定 120〈R6-2 で 40 から〉。R2a で使う）。
     pub max_tree_leaves: u32,
-    /// 木全体の worker / planner / repair の run（reviewer を除く。既定 120。R2a で使う）。
+    /// 木全体の worker / planner / repair の run（reviewer を除く。既定 400〈R6-2 で 120 から〉。R2a で使う）。
     pub max_tree_runs: u32,
-    /// 木全体で採用した replan の版（既定 10。R2a で使う）。
+    /// 木全体で採用した replan の版（既定 30〈R6-2 で 10 から〉。R2a で使う）。
     pub max_tree_replans: u32,
     /// 木全体の input + output トークン（設定したときだけ。R2a で使う）。
     pub max_tree_tokens: Option<u64>,
@@ -233,9 +233,10 @@ impl Default for TreeLimits {
             max_stages: 5,
             max_child_tasks_per_plan: 6,
             max_parallel_child_tasks: 2,
-            max_tree_leaves: 40,
-            max_tree_runs: 120,
-            max_tree_replans: 10,
+            // ADR-0079「R6-2」: 本番の木（web GUI は leaf 約 55、browser は run 100）が上限に当たったので上げた。
+            max_tree_leaves: 120,
+            max_tree_runs: 400,
+            max_tree_replans: 30,
             max_tree_tokens: None,
             max_open_decisions_per_tree: 12,
             max_open_decisions_per_plan: 8,
@@ -285,9 +286,11 @@ pub enum UnitGateAction {
     Promoted,
     /// leaf と宣言されたが compound、子 task を持てない深さ → 決定の要求（`leaf_too_large`）。
     Decision,
-    /// task と宣言され atomic だが、構造上の理由があるので task のまま。
+    /// task と宣言され atomic だが、構造上の理由があるので task のまま。R6-2 からは出さない（kind task の
+    /// unit の gate は明示。過去の event の読み取りのために残す）。
     KeptTask,
-    /// task と宣言され atomic、構造上の理由なし・leaf の基準を満たす → leaf に下げた。
+    /// task と宣言され atomic、構造上の理由なし・leaf の基準を満たす → leaf に下げた。R6-2 からは出さない
+    /// （`KeptTask` と同じ）。
     Demoted,
 }
 
@@ -308,9 +311,8 @@ pub struct UnitGateContext<'a> {
     /// leaf の 1 run の上限（`ExecutionLimits.work_unit_max_turns` / `work_unit_max_wall_secs`）。
     pub work_unit_max_turns: u32,
     pub work_unit_max_wall_secs: u64,
-    /// R5b-fix3: 人の計画（origin human）か。kind task の unit は計画の書き手の手掛かり: 人の計画なら
-    /// `human/explicit` の compound（規則表を評価しない）、planner の計画なら signal `H`（+2）。
-    pub human_plan: bool,
+    // R6-2: R5b-fix3 の `human_plan`（人の計画か）は消した。kind task の unit の手掛かりは計画の書き手に
+    // よらず明示（`task_unit_execution_hint`）。
 }
 
 /// D4 (3): 1 つの unit の gate の結果。
@@ -336,7 +338,9 @@ pub struct UnitGate {
 ///   ADR-0072 D18 の既定 `max(親, 30 turns / 1,800 秒)`）、genre は `harness`（無ければ親）。
 /// - kind task: 受け入れは unit の `acceptance`、予算は子 task が受け取る予算（[`tree_child_budget`] =
 ///   `max(親, 30 turns / 1,800 秒)`。R5b-fix3）、genre は unit（無ければ親）。
-/// - `routing` は unit の `features` のヒントだけ（親のヒント・人の明示・CoS のヒントは継がない）。
+/// - `routing` は unit の `features` のヒントだけ（親のヒント・人の明示・CoS のヒントは継がない）。ただし
+///   kind task の unit は子 task が受け取る `execution_hint`（[`task_unit_execution_hint`]。unit の `gate`、
+///   無ければ明示の compound。R6-2）を持つ（[`unit_gate`] はこの値を人の明示として判定に渡す）。
 ///   印（labels）は持たない（対話・support-task の判定に当たらないように）。
 pub fn unit_view(parent: &Task, unit: &crate::execution_plan::PlanUnitSpec) -> Task {
     use crate::model::{Check, Criterion};
@@ -353,6 +357,7 @@ pub fn unit_view(parent: &Task, unit: &crate::execution_plan::PlanUnitSpec) -> T
         .filter(|h| !h.is_empty());
     view.routing = Some(crate::model::TaskRouting {
         features: hints,
+        execution_hint: unit.is_task().then(|| task_unit_execution_hint(unit.gate)),
         ..Default::default()
     });
     if unit.is_task() {
@@ -480,14 +485,16 @@ pub fn task_unit_leaf_shortfalls(
     out
 }
 
-/// ADR-0079「R5b-fix3」: kind task の unit から作る子 task の `routing.execution_hint`（unit の gate も同じ値を
-/// 使う）。`mode = compound`、`explicit` は計画が人の計画（origin human）のとき `true`（gate は
-/// `human/explicit`）、planner の計画なら `false`（signal `H` の +2 だけ。規則表のスコアが閾値より
-/// 十分低ければ atomic のまま）。
-pub fn task_unit_execution_hint(human_plan: bool) -> crate::execution_gate::ExecutionHintSpec {
+/// ADR-0079「R6-2」（R5b-fix3 を改める）: kind task の unit から作る子 task の `routing.execution_hint`（unit の
+/// gate も同じ値を使う）。**計画の書き手（人・planner）によらず明示**（`explicit = true`、gate は
+/// `human/explicit`）で、`mode` は unit の `gate`（無ければ `compound`: kind task を選んだこと自体が「自分の計画が
+/// 要る」の意味）。1 run で済む子を望む書き手は `gate: atomic` を書く。
+pub fn task_unit_execution_hint(
+    gate: Option<crate::execution_gate::ExecutionMode>,
+) -> crate::execution_gate::ExecutionHintSpec {
     crate::execution_gate::ExecutionHintSpec {
-        mode: crate::execution_gate::ExecutionMode::Compound,
-        explicit: human_plan,
+        mode: gate.unwrap_or(crate::execution_gate::ExecutionMode::Compound),
+        explicit: true,
     }
 }
 
@@ -497,7 +504,9 @@ pub fn task_unit_execution_hint(human_plan: bool) -> crate::execution_gate::Exec
 pub fn unit_gate(
     ctx: &UnitGateContext<'_>,
     unit: &crate::execution_plan::PlanUnitSpec,
-    needs_decisions: &[String],
+    // R6-2: kind task の unit を task のまま残す構造上の理由（`structural_reasons`）は、kind task の gate が明示に
+    // なったので見なくなった（引数は呼び出し側の形のために残す）。
+    _needs_decisions: &[String],
 ) -> UnitGate {
     use crate::execution_gate::{ExecutionMode, GateThreshold};
     let depth = ctx.parent_depth.saturating_add(1);
@@ -506,11 +515,9 @@ pub fn unit_gate(
     let view = unit_view(ctx.parent, unit);
     let hints = view.routing.as_ref().and_then(|r| r.features);
     let (features, _) = crate::model_policy::TaskFeatures::infer_with_hints(&view, hints.as_ref());
-    // R5b-fix3: kind task の unit は計画の書き手の「compound」の手掛かり（子 task の
-    // `routing.execution_hint` と同じ。`task_unit_execution_hint`）。leaf の unit には何も足さない。
-    let hint = unit
-        .is_task()
-        .then(|| task_unit_execution_hint(ctx.human_plan));
+    // R6-2: kind task の unit は計画の書き手の明示（unit の `gate`、無ければ compound。子 task の
+    // `routing.execution_hint` と同じ値で、`unit_view` が持つ）。leaf の unit には何も足さない。
+    let hint = view.routing.as_ref().and_then(|r| r.execution_hint);
     let decision = crate::execution_gate::decide_at(
         &view,
         &features,
@@ -525,43 +532,12 @@ pub fn unit_gate(
         decision.rule_id, decision.score
     );
     let (declared, action, reason) = if unit.is_task() {
-        match decision.mode {
-            ExecutionMode::Compound => (UnitDeclared::Task, None, gate_note),
-            ExecutionMode::Atomic => {
-                let reasons =
-                    structural_reasons(ctx.parent, ctx.parent_repo_names, unit, needs_decisions);
-                if !reasons.is_empty() {
-                    (
-                        UnitDeclared::Task,
-                        Some(UnitGateAction::KeptTask),
-                        format!("{gate_note}; kept as a task: {}", reasons.join("; ")),
-                    )
-                } else {
-                    let shortfalls = task_unit_leaf_shortfalls(
-                        ctx.parent,
-                        unit,
-                        ctx.work_unit_max_turns,
-                        ctx.work_unit_max_wall_secs,
-                    );
-                    if shortfalls.is_empty() {
-                        (
-                            UnitDeclared::Task,
-                            Some(UnitGateAction::Demoted),
-                            format!("{gate_note}; meets the leaf criteria: demoted to a leaf"),
-                        )
-                    } else {
-                        (
-                            UnitDeclared::Task,
-                            Some(UnitGateAction::KeptTask),
-                            format!(
-                                "{gate_note}; kept as a task: leaf criteria not met ({})",
-                                shortfalls.join("; ")
-                            ),
-                        )
-                    }
-                }
-            }
-        }
+        // R6-2: kind task の unit の gate は書き手の明示（`gate`、無ければ compound）なので上書きしない
+        // （`gate: atomic` の子は計画を持たない 1 つの節点として走る。task のまま残す）。下げる〈`Demoted`〉・
+        // task のまま残す〈`KeptTask`〉の記録は出ない（`UnitGateOverridden` は leaf の暗黙の判定だけ）。
+        // 固定パイプラインの genre（`out_of_scope_rule`）の atomic も同じく子 task のまま（子の dispatch の
+        // gate が同じ規則で atomic にする）。
+        (UnitDeclared::Task, None, gate_note)
     } else {
         match decision.mode {
             ExecutionMode::Atomic => (UnitDeclared::Leaf, None, gate_note),
@@ -675,7 +651,7 @@ pub const PROMOTED_PATHS_HEADING: &str = "対象のパス（計画の leaf か�
 
 /// D4 (3) の「leaf に下げる」: kind task の spec を leaf の spec（kind = 段階の kind）にする。acceptance の
 /// 文は `done_when`、command の検査は `checks`、`repos`（高々 1）は `context.repo`。kind task 専用の欄
-/// （`acceptance` / `genre` / `skills` / `repos` / `adopt`）は消す（構造上の理由が無いことを確かめてから
+/// （`acceptance` / `genre` / `skills` / `repos` / `adopt` / `gate`）は消す（構造上の理由が無いことを確かめてから
 /// 呼ぶので、genre は親と同じか無く、skills は親の部分集合）。
 pub fn demote_to_leaf(
     unit: &crate::execution_plan::PlanUnitSpec,
@@ -704,6 +680,7 @@ pub fn demote_to_leaf(
     out.skills = Vec::new();
     out.repos = Vec::new();
     out.adopt = None;
+    out.gate = None;
     out
 }
 
@@ -1870,7 +1847,12 @@ mod r3b_tests {
     /// D8: 3 つの条件はそれぞれ単独で承認を要する（理由の文字列は決定的）。
     #[test]
     fn each_trigger_requires_approval() {
-        let limits = TreeLimits::default();
+        // R6-2: 既定の木の上限は leaf 120 / run 400。この表は R3b のときの 40 / 120 で書いてある。
+        let limits = TreeLimits {
+            max_tree_leaves: 40,
+            max_tree_runs: 120,
+            ..TreeLimits::default()
+        };
         let mut f = facts();
         f.open_decisions = vec!["h1".into(), "h2".into()];
         assert_eq!(
@@ -2113,9 +2095,10 @@ mod tests {
         assert_eq!(l.max_stages, 5);
         assert_eq!(l.max_child_tasks_per_plan, 6);
         assert_eq!(l.max_parallel_child_tasks, 2);
-        assert_eq!(l.max_tree_leaves, 40);
-        assert_eq!(l.max_tree_runs, 120);
-        assert_eq!(l.max_tree_replans, 10);
+        // ADR-0079「R6-2」で 40 / 120 / 10 から上げた。
+        assert_eq!(l.max_tree_leaves, 120);
+        assert_eq!(l.max_tree_runs, 400);
+        assert_eq!(l.max_tree_replans, 30);
         assert_eq!(l.max_tree_tokens, None);
         assert_eq!(l.max_open_decisions_per_tree, 12);
         assert_eq!(l.max_open_decisions_per_plan, 8);
@@ -2256,7 +2239,6 @@ mod tests {
             limits: &limits,
             work_unit_max_turns: 80,
             work_unit_max_wall_secs: 3600,
-            human_plan: false,
         };
         unit_gate(&ctx, unit, needs)
     }
@@ -2268,10 +2250,12 @@ mod tests {
         }
     }
 
-    /// R5b-fix3: kind task の unit は計画の書き手の compound の手掛かり。planner の計画なら signal H（+2、
-    /// source hint）、人の計画なら `human/explicit` の compound（下げない）。view の予算は子 task の予算。
+    /// R6-2（R5b-fix3 を改める）: kind task の unit は計画の書き手の明示。`gate` を省けば `human/explicit` の
+    /// compound（人の計画・planner の計画を問わない）、`gate: atomic` なら `human/explicit` の atomic。どちらも
+    /// 上書きしない（記録なし）。view は子 task と同じ `execution_hint` と予算を持つ。leaf には何も足さない。
     #[test]
-    fn task_units_carry_the_compound_hint_of_the_plan_author() {
+    fn task_units_carry_the_explicit_gate_of_the_plan_author() {
+        use crate::execution_gate::ExecutionHintSpec;
         let mut parent = parent_task(30);
         parent.budget.max_turns = 10;
         parent.budget.max_wall_secs = 600;
@@ -2279,34 +2263,49 @@ mod tests {
         let view = unit_view(&parent, &unit);
         assert_eq!(view.budget.max_turns, TREE_CHILD_MIN_MAX_TURNS);
         assert_eq!(view.budget.max_wall_secs, TREE_CHILD_MIN_MAX_WALL_SECS);
-        let g = gate_of(&parent, 1, &unit, &[]);
-        assert!(
-            g.decision
-                .signals
-                .iter()
-                .any(|s| s.name == "H" && s.weight == 2),
-            "{:?}",
-            g.decision
+        let hint = |t: &Task| t.routing.as_ref().and_then(|r| r.execution_hint);
+        assert_eq!(
+            hint(&view),
+            Some(ExecutionHintSpec {
+                mode: ExecutionMode::Compound,
+                explicit: true
+            })
         );
-        assert_eq!(g.decision.source, crate::execution_gate::GateSource::Hint);
-        let limits = enabled();
-        let names = vec!["app".to_string()];
-        let ctx = UnitGateContext {
-            parent: &parent,
-            parent_depth: 1,
-            parent_repo_names: &names,
-            limits: &limits,
-            work_unit_max_turns: 80,
-            work_unit_max_wall_secs: 3600,
-            human_plan: true,
-        };
-        let g = unit_gate(&ctx, &unit, &[]);
+        let g = gate_of(&parent, 1, &unit, &[]);
         assert_eq!(g.decision.mode, ExecutionMode::Compound);
         assert_eq!(g.decision.rule_id, "human/explicit");
+        assert_eq!(g.decision.source, crate::execution_gate::GateSource::Human);
         assert_eq!(g.action, None);
+        // `gate: compound` も同じ。
+        let mut compound = task_spec("c", "s1", false);
+        compound.gate = Some(ExecutionMode::Compound);
+        let g = gate_of(&parent, 1, &compound, &[]);
+        assert_eq!(
+            (g.decision.mode, g.decision.rule_id.as_str(), g.action),
+            (ExecutionMode::Compound, "human/explicit", None)
+        );
+        // `gate: atomic` は明示の atomic。task のまま（下げない・記録しない）。
+        let mut atomic = task_spec("c", "s1", true);
+        atomic.gate = Some(ExecutionMode::Atomic);
+        assert_eq!(
+            hint(&unit_view(&parent, &atomic)),
+            Some(ExecutionHintSpec {
+                mode: ExecutionMode::Atomic,
+                explicit: true
+            })
+        );
+        let g = gate_of(&parent, 1, &atomic, &[]);
+        assert_eq!(
+            (g.decision.mode, g.decision.rule_id.as_str()),
+            (ExecutionMode::Atomic, "human/explicit")
+        );
+        assert_eq!((g.declared, g.action), (UnitDeclared::Task, None));
         // leaf の unit には手掛かりを足さない。
-        let g = gate_of(&parent, 1, &leaf_spec("a", "s1", false), &[]);
+        let leaf = leaf_spec("a", "s1", false);
+        assert_eq!(hint(&unit_view(&parent, &leaf)), None);
+        let g = gate_of(&parent, 1, &leaf, &[]);
         assert!(!g.decision.signals.iter().any(|s| s.name == "H"));
+        assert_ne!(g.decision.rule_id, "human/explicit");
     }
 
     /// ADR-0079 §7 R2a (c) `unit_gate_table`: D4 (3) の表の 7 行。
@@ -2340,7 +2339,8 @@ mod tests {
         assert_eq!(g.decision.mode, ExecutionMode::Compound);
         assert_eq!(g.action, None);
 
-        // 5. task + atomic、構造上の理由（人の acceptance・決定・別の skill・genre・repos）→ task のまま。
+        // 5. / 6.（R6-2）: kind task の unit の gate は書き手の明示なので、atomic（`gate: atomic`）でも構造上の
+        //    理由の有無・leaf の基準によらず task のまま、記録もしない（`KeptTask` / `Demoted` は出ない）。
         let mut human = task_spec("c", "s1", false);
         human.acceptance.push(crate::model::Criterion {
             text: "人が確かめる".into(),
@@ -2348,40 +2348,19 @@ mod tests {
         });
         let mut skills = task_spec("c", "s1", false);
         skills.skills = vec!["gpu".into()];
-        let mut genre = task_spec("c", "s1", false);
-        genre.genre = Some("research".into());
-        let mut repos = task_spec("c", "s1", false);
-        repos.repos = vec!["docs".into()];
-        for (unit, needs, word) in [
-            (&human, vec![], "human acceptance"),
-            (
-                &task_spec("c", "s1", false),
-                vec!["h1".to_string()],
-                "needs decisions [h1]",
-            ),
-            (&skills, vec![], "skills [gpu]"),
-            (&genre, vec![], "genre research"),
-            (&repos, vec![], "repos [docs]"),
-        ] {
-            let g = gate_of(&parent, 1, unit, &needs);
-            assert_eq!(g.decision.mode, ExecutionMode::Atomic, "{word}");
-            assert_eq!(g.action, Some(UnitGateAction::KeptTask), "{word}");
-            assert!(g.reason.contains(word), "{word}: {}", g.reason);
+        let mut plain = task_spec("c", "s1", false);
+        plain.gate = Some(ExecutionMode::Atomic);
+        for unit in [&human, &skills, &task_spec("c", "s1", false)] {
+            let g = gate_of(&parent, 1, unit, &[]);
+            assert_eq!(g.decision.mode, ExecutionMode::Compound);
+            assert_eq!(g.action, None);
         }
-        // 6. task + atomic、理由なし、leaf の基準を満たす → leaf に下げる。
-        let g = gate_of(&parent, 1, &task_spec("c", "s1", false), &[]);
-        assert_eq!(g.action, Some(UnitGateAction::Demoted));
-        // 同じ unit でも、継ぐ予算が 1 run を超える（leaf の基準 (a) を満たさない）なら task のまま。
+        let g = gate_of(&parent, 1, &plain, &[]);
+        assert_eq!(g.decision.mode, ExecutionMode::Atomic);
+        assert_eq!(g.action, None);
         let big = parent_task(200);
-        let g = gate_of(&big, 1, &task_spec("c", "s1", false), &[]);
-        assert_eq!(g.action, Some(UnitGateAction::KeptTask));
-        assert!(g.reason.contains("leaf criteria not met"), "{}", g.reason);
-        // command の検査が無い（基準 (c)）なら task のまま。
-        let mut reviewer_only = task_spec("c", "s1", false);
-        reviewer_only.acceptance[0].check = Check::Reviewer;
-        let g = gate_of(&parent, 1, &reviewer_only, &[]);
-        assert_eq!(g.action, Some(UnitGateAction::KeptTask));
-        assert!(g.reason.contains("no command check"), "{}", g.reason);
+        let g = gate_of(&big, 1, &plain, &["h1".to_string()]);
+        assert_eq!(g.action, None);
 
         // 7. task を子 task を持てない深さ（3）の計画に書く → 検証で拒否（ChildTaskTooDeep）、最後の試行では
         //    `plan_limit_holds` の `MaxDepth`（決定の要求）で止める（下の `plan_limit_holds_*`）。
@@ -2424,7 +2403,6 @@ mod tests {
             limits: &limits,
             work_unit_max_turns: 80,
             work_unit_max_wall_secs: 3600,
-            human_plan: false,
         };
         let report = apply_unit_gates(&ctx, &p, &Default::default());
         let actions: Vec<(String, Option<UnitGateAction>)> = report
@@ -2436,11 +2414,12 @@ mod tests {
             actions,
             vec![
                 ("a".into(), Some(UnitGateAction::Promoted)),
-                ("c".into(), Some(UnitGateAction::Demoted)),
+                // R6-2: kind task の unit は明示の compound（下げない）。
+                ("c".into(), None),
                 ("b".into(), None),
             ]
         );
-        assert_eq!(report.overridden().count(), 2);
+        assert_eq!(report.overridden().count(), 1);
         assert!(report.leaf_too_large.is_empty());
         let a = &report.spec.units[0];
         assert!(a.is_task());
@@ -2460,7 +2439,12 @@ mod tests {
         );
         assert!(a.objective.contains("- a works"), "{}", a.objective);
         assert!(a.done_when.is_empty());
-        let c = &report.spec.units[1];
+        assert!(report.spec.units[1].is_task(), "kind task stays a task");
+        // `demote_to_leaf`（R6-2 から unit の gate は使わない）の形は変えない。
+        let mut declared = p.units[1].clone();
+        declared.gate = Some(ExecutionMode::Atomic);
+        let c = &demote_to_leaf(&declared, WorkUnitKind::Test);
+        assert_eq!(c.gate, None);
         assert_eq!(c.kind, WorkUnitKind::Test, "the stage's kind");
         assert_eq!(c.checks.len(), 1);
         assert_eq!(c.checks[0].cmd, "make c");
@@ -2493,7 +2477,11 @@ mod tests {
     /// 決定的に選ぶ。上限の内の unit は止めない。
     #[test]
     fn plan_limit_holds_select_only_the_excess() {
-        let limits = enabled();
+        // R6-2: 既定の `max_tree_leaves` は 120。この表は 40 のときの値で書いてある。
+        let limits = TreeLimits {
+            max_tree_leaves: 40,
+            ..enabled()
+        };
         let none = std::collections::BTreeSet::new();
         // 段階あたり 7 → 7 つ目だけ。
         let p = plan(&[("s1", "implement")], many_leaves("s1", 7));
@@ -2835,6 +2823,8 @@ mod tests {
         allowances.insert(TreeLimitKind::TreeTokens, 1);
         let base = TreeLimits {
             max_tree_tokens: Some(1000),
+            // R6-2: 既定は 400。この表は 120 のときの値で書いてある。
+            max_tree_runs: 120,
             ..TreeLimits::default()
         };
         let raised = limits_with_allowances(&base, &allowances);

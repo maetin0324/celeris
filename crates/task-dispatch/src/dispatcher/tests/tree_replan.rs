@@ -194,6 +194,9 @@ async fn tree_planner_context_is_wired_from_limits_and_counters() {
     store.create_task(&root, vec![]).unwrap();
     let mut cb = task_unit("cb", "s1", &[], "true");
     cb["features"] = serde_json::json!({"expected_length": "high", "cross_cutting": "high"});
+    // ADR-0079 付記「R6-2: unit の gate 欄と kind task の既定（compound explicit）」: 共通 fixture の `gate: atomic` を外す
+    // （kind task の既定 = 明示の compound。子は従来どおり自分の planner に進む）。
+    cb.as_object_mut().unwrap().remove("gate");
     let root_plan = v3_plan(vec![stage("s1", false)], vec![cb]);
     let child_plan = v3_plan(vec![stage("t1", false)], vec![leaf("l", "t1", &[])]);
     let adapter = Arc::new(ReplanAdapter::new(vec![root_plan, child_plan]));
@@ -226,8 +229,10 @@ async fn tree_planner_context_is_wired_from_limits_and_counters() {
         root_tree.runs_left, 50,
         "no run counted before the first planner run"
     );
-    assert_eq!(root_tree.leaves_left, 40);
-    assert_eq!(root_tree.replans_left, 10);
+    // ADR-0079 付記「R6-2」: 木の上限の既定は leaf 120 / 木の replan 30（40 / 10 から）。節点の replan は
+    // `DispatchConfig` の既定（3）のまま（`celeris::config` の既定 5 は daemon の設定から渡る）。
+    assert_eq!(root_tree.leaves_left, 120);
+    assert_eq!(root_tree.replans_left, 30);
     assert_eq!(root_tree.node_replans_left, 3);
     assert_eq!(root_tree.open_decisions_left, 12);
     assert!(root_tree.ancestors.is_empty());

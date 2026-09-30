@@ -1585,3 +1585,44 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 - 07:4xZ 人「リファクタ task は a（retry）」: `POST /tasks/01M3Q6F0Y8M0HDMF6Y68G8519M/retry {accept: false, execution: "compound"}` → 新 task
   **01M3RM0YS1M9KSYH4WYW59E89R**（draft）。objective に引き継ぎ（元ブランチ 71 commit を最初の葉で merge、nav の check はスクリプトを作る葉の後、
   残りは最終検証と PROGRESS）を追記して accept → ready。
+
+## R7-2: planner の check の書き方、子を作る unit だけを上限に数える、計画 JSON の上限（2026-09-30）
+
+[ADR-0079 付記 R7-2](../adr/0079-recursive-task-decomposition.md)。発端は上の 04:57Z（web Phase 1 の check: PROGRESS 除外なし・`pnpm test` の引数・
+pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task の「nav の check はスクリプトを作る葉の後」、本番の `too many units with kind "task": 7 > 6`
+と `execution plan JSON is too large: 24815 > 24576 bytes`。**migration なし（schema 34 のまま）**。本番（systemctl・/var/lib/celeris・7700/7710・設定）
+には触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-aea7bdf944fe2369d`。
+
+### 実装したもの
+
+- **check の書き方**（`task_worker::claude_code::PLANNER_CHECK_GUIDANCE`、プロンプトの差分 15 行）: 範囲外差分から記録のパスを除く・`pnpm test` /
+  `cargo test` に位置引数を付けない・`corepack pnpm@<版>`・base は merge-base・否定 grep の自己言及・他の unit が作る script を使う check は
+  `depends_on` の後。/1・/2・/3 の planner の上限の節の直後に出す。
+- **子 task の上限**: `validate_v3` の `TooManyChildTasks` と `tree::plan_limit_holds`（引数 `done_keys`、`tree_plan::unit_gate_plan` が渡す）は
+  `creates_child()` かつ持ち越す done でない unit を数える（R6-1 D5 と同じ）。/3 の planner の上限の行も同じ文に。
+- **JSON の上限**: `ExecutionLimits.max_plan_json_bytes_v3 = 64 KiB`（/3 の検証だけ。/1・/2 は 24 KiB のまま）、dispatcher は /3 の planner に
+  この値を渡す。拒否の文に「objective は要点だけにし、詳細は artifacts / 知識ベースのパスで参照してください」。
+- `config/celeris.example.toml`: `max_units_per_stage` / `max_child_tasks_per_plan` に何を数えるかの注釈。ADR-0079 D3 の表を直した。
+
+### 試験
+
+- `task_core::execution_plan::tests::child_task_limit_counts_only_units_that_are_not_done`（done 3 + 生きた 4 / 6 は上限 6 で通る、done 3 + 生きた 7 は
+  `7 > 6`、done なしの 7 は従来どおり拒否）、`v3_plan_json_size_uses_its_own_limit_and_says_what_to_trim`（既定 24 KiB / 64 KiB、/3 は /1・/2 の上限を
+  見ない、拒否の文の案内）。
+- `task_core::tree::tests::plan_limit_holds_do_not_count_done_task_units`（done 3 を渡せば止めない、渡さなければ 7 つ目を止める）。既存の
+  `plan_limit_holds_select_only_the_excess` は引数を足しただけ（期待値は不変）。
+- `task_worker::claude_code::tests::planner_prompt_has_the_check_writing_section`（/2 と /3 のプロンプトに 6 規則が 1 回ずつ、/3 は 65536 bytes と
+  「done と adopt は数えない」、/2 は 24576 bytes）。
+- 既存の fixture で古い数え方に依存したものは無かった（`rejects_too_many_child_task_units` は done なしなので不変）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 542 passed。`-p task-ops` → 369 passed。`-p task-worker` → 620 passed, 4 skipped。`-p task-dispatch` → 477 passed。
+  `-p celeris -E 'test(/example/)'` → 11 passed（example の設定の読み込み）。
+
+### 未解決・提案
+
+- `max_units_per_stage` は done の unit を含めて数える（本番では当たっていない。当たれば同じ直しを検討）。
+- check の指針はプロンプトだけ（機械的な検査はしない）。効き目は次の web / refactor の計画の check で確かめる。

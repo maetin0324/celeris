@@ -170,7 +170,7 @@ Project（案件）… 粗い方向と常設の文脈だけ。計画を持たな
 | `max_depth` | **3**（1..=3 だけ。広げるには ADR） | root = 1。深さ d の task が子 task を持てるのは `d + 1 < max_depth` のとき（既定では root だけ）。leaf は常に最下段 | 検証で拒否 → D4 の決定の要求 |
 | `max_units_per_stage` | 6（leaf + task、統合 WU と repair は数えない） | 1 段階の unit 数 | 検証で拒否 |
 | `max_stages` | 5（= `max_phases`） | 1 計画の段階の数 | 検証で拒否 |
-| `max_child_tasks_per_plan` | 6 | 1 計画の kind task の unit 数 | 検証で拒否 |
+| `max_child_tasks_per_plan` | 6 | 1 計画で子を作る kind task の unit 数（`adopt` と replan で持ち越す done の unit を除く。R7-2） | 検証で拒否 |
 | `max_parallel_child_tasks` | 2 | 1 つの親で同時に非終端の子 task の数 | 作らずに待つ（`pending` のまま） |
 | `max_tree_leaves` | **120**（R6-2 で 40 から） | 木の生涯で作る leaf（repair・統合を除く） | 決定の要求（limit） |
 | `max_tree_runs` | **400**（R6-2 で 120 から） | 木全体の worker / planner / repair の run（reviewer を除く。ADR-0016 の 100 を置き換える） | 決定の要求（limit） |
@@ -1723,3 +1723,44 @@ R6（回収）の 1 つ目。**migration なし**（schema 33 のまま）。新
 - `pending` の版で `ready` の木の節点（人が replan を求めた後、planner の run の前）は、生存確認（D10）では「走れる」に読まれる。planner の run が
   すぐ起きるか、2 回不正なら `plan_invalid` の決定（名指しの待ち）になるので、理由なしの止まりは作らない。
 - 子の基盤の失敗の作り直し（`handle_child_infra_failure`）は人の gate の間も起きる（走っていた子の写しの一部として扱った）。
+
+## 付記: R7-2: check の書き方の指針、子を作る unit だけを上限に数える、計画 JSON の上限（2026-09-30）
+
+R7（回収の続き）の 2 つ目。**migration なし**（schema 34 のまま）。新しい Event・設定キーは足していない。本番には触れていない。
+
+### 発端（本番の証拠。docs/progress/phase-R.md「R6 統合の記録」「昇格後の dogfood」、2026-09-29/30）
+
+- unit の成果ではなく **check そのもの**が誤って落ちた: 範囲外差分の check が計画の許す記録（`docs/PROGRESS.md`）を除外していない、
+  `pnpm -C web test scripts/ e2e/support/` がディレクトリを `node --test` に渡した、bare `pnpm`（host 12.6.0）が `packageManager` の 11.27.0 と
+  食い違い `ERR_PNPM_BAD_PM_VERSION`、固定の main の sha と比べた差分（main は task の間に進む）、否定の grep が ADR-0081 の説明行（174 行）に
+  当たった（自己言及）、`python3 scripts/dev/check-architecture-map-paths.py` をそれを作る leaf より前に走らせた。
+- 長く走る root の replan が `too many units with kind "task": 7 > 6` で拒否された（持ち越した done 2 + failed 1 + 生きた 3 …）。検証は `adopt` で
+  ない kind task の unit を**すべて**数え、done の unit も上限を食うので、根は新しい子を足せなくなる。
+- `execution plan JSON is too large: 24815 > 24576 bytes`: /3 は段階・決定・done の unit の持ち越しを 1 つの JSON に書くので 24 KiB に当たる。
+
+### 決定
+
+1. **planner の「check の書き方」**（`task_worker::claude_code::PLANNER_CHECK_GUIDANCE`、1 規則 1 文の 6 規則）: (a) 範囲外差分の check から
+   `docs/PROGRESS.md`・`docs/progress/`・計画が unit に書かせるパスを除く、(b) `pnpm -C <dir> test` / `cargo test` にはパッケージの script が受ける
+   ときだけ位置引数を付ける、(c) `corepack pnpm@<package.json の packageManager の版> -C <dir> …` で版を固定する、(d) 比べる base は
+   `$(git merge-base HEAD main)` か unit の記録した base（固定の main の sha にしない）、(e) 否定の grep は unit 自身が書く文に当たらない、
+   (f) check は自分の worktree の中で走るので、他の unit が作る script を使う check は作る unit に `depends_on` する unit に置く。
+   **/1・/2・/3 の planner に共通**（上限の節の直後。/3 の leaf の基準 (c) の否定の grep の 1 文〈R6-2〉は残す）。
+2. **`max_child_tasks_per_plan` は子を作る unit だけを数える**: 検証（`validate_v3` の `TooManyChildTasks`）と採用の直後の止め
+   （`task_core::tree::plan_limit_holds`、引数 `done_keys` を足した）は `creates_child()`（`adopt` を除く）**かつ** replan で持ち越す done の unit
+   （`done_work_units` = `replan_done_work_units`）でない unit を数える。R6-1 D5 の承認の材料（`approval_facts.child_task_units`）と同じ数え方。
+   - done でない行を持ち越す unit は数える: failed / cancelled の子の unit を新しい版に残せば replan が新しい子（attempt + 1）を作り、`running` の
+     子はまだ生きている。superseded の unit の key は再利用できない（R2b）ので計画に現れない。
+   - 最初の計画（done が無い）は従来どおり。`max_units_per_stage` は従来どおり段階の unit をすべて数える（done を含む）。
+   - planner のプロンプトの上限の行を「子を作る kind task の unit（done と `adopt` は数えない）」に直した。
+3. **計画 JSON の大きさ**: `ExecutionLimits.max_plan_json_bytes_v3`（既定 **64 KiB**）を足し、/3 の検証はこれで測る。/1・/2 は
+   `max_plan_json_bytes` 24 KiB のまま（R1a の「/1・/2 の検証を 1 バイトも変えない」を守る。/1・/2 は本番で当たっていない）。dispatcher は /3 の
+   planner の `max_plan_json_bytes` に /3 の値を渡す（プロンプトの上限の行と検証が一致する）。拒否の文に「objective は要点だけにし、詳細は
+   artifacts / 知識ベースのパスで参照してください」を足した（拒否の文は次の試行の planner に渡る）。project plan（ADR-0043）の上限は変えない。
+4. `config/celeris.example.toml` の `[execution.tree]` の注釈に `max_units_per_stage` と `max_child_tasks_per_plan` が何を数えるかを 1 行ずつ。
+   D3 の表の `max_child_tasks_per_plan` の行を直した。
+
+### 残したもの
+
+- `max_units_per_stage` は done の unit も数える（段階を長く使う根で当たりうるが、本番では当たっていない）。
+- check の指針はプロンプトの文だけで、検証（check の文字列の機械的な検査）はしない（LLM を dispatcher に入れない。誤検出の割に得が小さい）。

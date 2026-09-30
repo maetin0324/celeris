@@ -12569,6 +12569,7 @@ impl Dispatcher {
     ) -> Result<task_worker::protocol::ExecutionPlannerContext, DispatchError> {
         let decision = task.routing.as_ref().and_then(|r| r.execution.clone());
         let limits = self.config.execution.limits;
+        let tree_planner = self.is_tree_planner(task)?;
         // Phase F5-fix3: 同じ計画の回で前の planner run の計画が拒否されていれば、その理由を渡す。
         let planner_events = self.store.events_for(task.id)?;
         let mut previous_attempt_errors = planner_rejections_since_last_plan(&planner_events);
@@ -12642,10 +12643,15 @@ impl Dispatcher {
             max_done_when_chars: limits.max_done_when_chars,
             max_checks: limits.max_checks,
             max_rationale_chars: limits.max_rationale_chars,
-            max_plan_json_bytes: limits.max_plan_json_bytes,
+            // ADR-0079 R7-2: /3 の planner には /3 の検証と同じ大きさの上限（既定 64 KiB）を渡す。
+            max_plan_json_bytes: if tree_planner {
+                limits.max_plan_json_bytes_v3
+            } else {
+                limits.max_plan_json_bytes
+            },
             max_children: limits.max_children,
             previous_attempt_errors,
-            tree: if self.is_tree_planner(task)? {
+            tree: if tree_planner {
                 Some(self.tree_planner_context(task)?)
             } else {
                 None

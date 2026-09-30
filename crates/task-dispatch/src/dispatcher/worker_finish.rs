@@ -120,6 +120,34 @@ impl Dispatcher {
         provider: ProviderId,
         result: Result<RunOutcome, AdapterError>,
     ) -> Result<(), DispatchError> {
+        self.finish_worker_result_with(
+            task,
+            current_wu,
+            run_id,
+            account,
+            account_adapter,
+            run_since,
+            provider,
+            result,
+            None,
+        )
+    }
+
+    /// `finish_worker_result` の本体。`check_failure` は WU の checks が不合格で `Terminal::Done` を
+    /// `Terminal::Error` にすり替えた run だけ `Some`（ADR-0079 付記 R7-5: 記録・outcome の要約・usage）。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn finish_worker_result_with(
+        &mut self,
+        task: Task,
+        current_wu: Option<task_core::WorkUnitRow>,
+        run_id: String,
+        account: Option<String>,
+        account_adapter: Option<AccountAdapter>,
+        run_since: Option<OffsetDateTime>,
+        provider: ProviderId,
+        result: Result<RunOutcome, AdapterError>,
+        check_failure: Option<WorkUnitCheckFailure>,
+    ) -> Result<(), DispatchError> {
         let task_id = task.id;
         let mut subject = ReviewSubject::default();
         // ADR-0013 D9: 供給側失敗なら種別（ProviderThrottled.reason）を、result を消費する前に取っておく。
@@ -338,6 +366,13 @@ impl Dispatcher {
                 }
             },
         };
+        // ADR-0079 付記 R7-5 D4: checks の不合格で `Terminal::Error` にすり替えた run も、worker が返した usage を残す。
+        let usage = usage.or_else(|| check_failure.as_ref().and_then(|f| f.usage));
+        // ADR-0079 付記 R7-5 D2: outcome の文に足す不合格の要約（無ければ空）。
+        let check_failure_suffix = check_failure
+            .as_ref()
+            .map(|f| format!(": {}", f.summary()))
+            .unwrap_or_default();
         // ADR-0072 D7/D8/D9/D11/D18（Phase E1/E2）: 予算切れ・yield の続き（continuation）。
         // checkpoint は常に合成して残す（(b)）。continuation そのものの可否・上限到達の扱いは
         // `[execution]` で決める。無効化・上限到達のときは trigger/outcome_str を従来の形に戻す。
@@ -492,7 +527,7 @@ impl Dispatcher {
                         }
                         "retry" => {
                             outcome_str = format!(
-                                "work_unit_retry: WorkUnit {} を最初からやり直します（{}/{}）",
+                                "work_unit_retry: WorkUnit {} を最初からやり直します（{}/{}）{check_failure_suffix}",
                                 wu.key, decision.updated.retries, limits.max_retries
                             );
                         }
@@ -528,7 +563,9 @@ impl Dispatcher {
                         let replans_so_far = self.counted_replans(task_id)?;
                         if replans_so_far < self.effective_max_replans(task_id)? {
                             let why = match decision.reason {
-                                "failed" => format!("work unit {} failed", wu.key),
+                                "failed" => {
+                                    format!("work unit {} failed{check_failure_suffix}", wu.key)
+                                }
                                 "limit" => format!("work unit {} made no progress", wu.key),
                                 _ => {
                                     let text = checkpoint_opt
@@ -942,6 +979,10 @@ impl Dispatcher {
             end: run_end,
         };
         let mut events = vec![finished];
+        // ADR-0079 付記 R7-5 D1: WU の checks の不合格（どの check が・どこで・どう落ちたか）を同じトランザクションで残す。
+        if let (Some(f), Some(wu)) = (&check_failure, &current_wu) {
+            events.push(f.event(&run_id, wu));
+        }
         // ADR-0072 D5/D8（Phase E1）: `CheckpointSaved` は `WorkerFinished` と同じトランザクションで残す。
         if let Some(checkpoint_event) = checkpoint_event {
             events.push(checkpoint_event);

@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 48] = [
+pub(crate) const EVENT_TYPES: [&str; 49] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -194,6 +194,7 @@ pub(crate) const EVENT_TYPES: [&str; 48] = [
     "work_unit_transitioned",
     // ADR-0079 R5b-fix1: 人の replan が done の WorkUnit の spec を上書きした。
     "work_unit_spec_overridden",
+    "work_unit_checks_failed",
     // ADR-0072 D5/D13（Phase E3）: Complexity Gate の判定。
     "execution_gated",
     // ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形を人が後から決めた。
@@ -255,6 +256,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ExecutionPlanned { .. } => "execution_planned",
         Event::WorkUnitTransitioned { .. } => "work_unit_transitioned",
         Event::WorkUnitSpecOverridden { .. } => "work_unit_spec_overridden",
+        Event::WorkUnitChecksFailed { .. } => "work_unit_checks_failed",
         Event::ExecutionGated { .. } => "execution_gated",
         Event::ExecutionHintSet { .. } => "execution_hint_set",
         Event::RepairScheduled { .. } => "repair_scheduled",

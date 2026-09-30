@@ -513,7 +513,7 @@ GUI_DEPS_SECS="$(sd_secs_since "$GUI_DEPS_T0")"
 sd_log "gui: prod node_modules ready in ${GUI_DEPS_SECS}s (key $GUI_DEPS_KEY, reused=$GUI_DEPS_REUSED)"
 
 SCHEMA_VERSION="$(sd_schema_version_of_tree "$BUILD")" \
-  || sd_die "cannot parse SCHEMA_VERSION from crates/task-core/src/store.rs at $SHA12"
+  || sd_die "cannot parse SCHEMA_VERSION from crates/task-core/src/store/migrations.rs (or store/mod.rs, store.rs) at $SHA12"
 # `celeris` の版は Cargo.toml から読む（バイナリを起こさない。`--version` は無い）。
 CELERIS_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' "$BUILD/crates/celeris/Cargo.toml" | head -n 1)"
 if [ -z "$CELERIS_VERSION" ]; then

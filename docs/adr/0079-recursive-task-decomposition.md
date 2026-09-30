@@ -168,9 +168,9 @@ Project（案件）… 粗い方向と常設の文脈だけ。計画を持たな
 |---|---|---|---|
 | `enabled` | `false`（R5b で人が `true` に） | plan/3 と子 task の生成を有効にする | — |
 | `max_depth` | **3**（1..=3 だけ。広げるには ADR） | root = 1。深さ d の task が子 task を持てるのは `d + 1 < max_depth` のとき（既定では root だけ）。leaf は常に最下段 | 検証で拒否 → D4 の決定の要求 |
-| `max_units_per_stage` | 6（leaf + task、統合 WU と repair は数えない） | 1 段階の unit 数 | 検証で拒否 |
+| `max_units_per_stage` | 6（leaf + task、統合 WU と repair は数えない） | 1 段階の生きた unit 数（replan で持ち越す done の unit と `adopt` を除く。failed / running を残せば数える。R7-3） | 検証で拒否 |
 | `max_stages` | 5（= `max_phases`） | 1 計画の段階の数 | 検証で拒否 |
-| `max_child_tasks_per_plan` | 6 | 1 計画の kind task の unit 数 | 検証で拒否 |
+| `max_child_tasks_per_plan` | 6 | 1 計画で子を作る kind task の unit 数（`adopt` と replan で持ち越す done の unit を除く。R7-2。failed / running の子の unit を残せば数える。R7-3） | 検証で拒否 |
 | `max_parallel_child_tasks` | 2 | 1 つの親で同時に非終端の子 task の数 | 作らずに待つ（`pending` のまま） |
 | `max_tree_leaves` | **120**（R6-2 で 40 から） | 木の生涯で作る leaf（repair・統合を除く） | 決定の要求（limit） |
 | `max_tree_runs` | **400**（R6-2 で 120 から） | 木全体の worker / planner / repair の run（reviewer を除く。ADR-0016 の 100 を置き換える） | 決定の要求（limit） |
@@ -1723,3 +1723,152 @@ R6（回収）の 1 つ目。**migration なし**（schema 33 のまま）。新
 - `pending` の版で `ready` の木の節点（人が replan を求めた後、planner の run の前）は、生存確認（D10）では「走れる」に読まれる。planner の run が
   すぐ起きるか、2 回不正なら `plan_invalid` の決定（名指しの待ち）になるので、理由なしの止まりは作らない。
 - 子の基盤の失敗の作り直し（`handle_child_infra_failure`）は人の gate の間も起きる（走っていた子の写しの一部として扱った）。
+
+## 付記: R7-2: check の書き方の指針、子を作る unit だけを上限に数える、計画 JSON の上限（2026-09-30）
+
+R7（回収の続き）の 2 つ目。**migration なし**（schema 34 のまま）。新しい Event・設定キーは足していない。本番には触れていない。
+
+### 発端（本番の証拠。docs/progress/phase-R.md「R6 統合の記録」「昇格後の dogfood」、2026-09-29/30）
+
+- unit の成果ではなく **check そのもの**が誤って落ちた: 範囲外差分の check が計画の許す記録（`docs/PROGRESS.md`）を除外していない、
+  `pnpm -C web test scripts/ e2e/support/` がディレクトリを `node --test` に渡した、bare `pnpm`（host 12.6.0）が `packageManager` の 11.27.0 と
+  食い違い `ERR_PNPM_BAD_PM_VERSION`、固定の main の sha と比べた差分（main は task の間に進む）、否定の grep が ADR-0081 の説明行（174 行）に
+  当たった（自己言及）、`python3 scripts/dev/check-architecture-map-paths.py` をそれを作る leaf より前に走らせた。
+- 長く走る root の replan が `too many units with kind "task": 7 > 6` で拒否された（持ち越した done 2 + failed 1 + 生きた 3 …）。検証は `adopt` で
+  ない kind task の unit を**すべて**数え、done の unit も上限を食うので、根は新しい子を足せなくなる。
+- `execution plan JSON is too large: 24815 > 24576 bytes`: /3 は段階・決定・done の unit の持ち越しを 1 つの JSON に書くので 24 KiB に当たる。
+
+### 決定
+
+1. **planner の「check の書き方」**（`task_worker::claude_code::PLANNER_CHECK_GUIDANCE`、1 規則 1 文の 6 規則）: (a) 範囲外差分の check から
+   `docs/PROGRESS.md`・`docs/progress/`・計画が unit に書かせるパスを除く、(b) `pnpm -C <dir> test` / `cargo test` にはパッケージの script が受ける
+   ときだけ位置引数を付ける、(c) `corepack pnpm@<package.json の packageManager の版> -C <dir> …` で版を固定する、(d) 比べる base は
+   `$(git merge-base HEAD main)` か unit の記録した base（固定の main の sha にしない）、(e) 否定の grep は unit 自身が書く文に当たらない、
+   (f) check は自分の worktree の中で走るので、他の unit が作る script を使う check は作る unit に `depends_on` する unit に置く。
+   **/1・/2・/3 の planner に共通**（上限の節の直後。/3 の leaf の基準 (c) の否定の grep の 1 文〈R6-2〉は残す）。
+2. **`max_child_tasks_per_plan` は子を作る unit だけを数える**: 検証（`validate_v3` の `TooManyChildTasks`）と採用の直後の止め
+   （`task_core::tree::plan_limit_holds`、引数 `done_keys` を足した）は `creates_child()`（`adopt` を除く）**かつ** replan で持ち越す done の unit
+   （`done_work_units` = `replan_done_work_units`）でない unit を数える。R6-1 D5 の承認の材料（`approval_facts.child_task_units`）と同じ数え方。
+   - done でない行を持ち越す unit は数える: failed / cancelled の子の unit を新しい版に残せば replan が新しい子（attempt + 1）を作り、`running` の
+     子はまだ生きている。superseded の unit の key は再利用できない（R2b）ので計画に現れない。
+   - 最初の計画（done が無い）は従来どおり。`max_units_per_stage` は従来どおり段階の unit をすべて数える（done を含む）。
+   - planner のプロンプトの上限の行を「子を作る kind task の unit（done と `adopt` は数えない）」に直した。
+3. **計画 JSON の大きさ**: `ExecutionLimits.max_plan_json_bytes_v3`（既定 **64 KiB**）を足し、/3 の検証はこれで測る。/1・/2 は
+   `max_plan_json_bytes` 24 KiB のまま（R1a の「/1・/2 の検証を 1 バイトも変えない」を守る。/1・/2 は本番で当たっていない）。dispatcher は /3 の
+   planner の `max_plan_json_bytes` に /3 の値を渡す（プロンプトの上限の行と検証が一致する）。拒否の文に「objective は要点だけにし、詳細は
+   artifacts / 知識ベースのパスで参照してください」を足した（拒否の文は次の試行の planner に渡る）。project plan（ADR-0043）の上限は変えない。
+4. `config/celeris.example.toml` の `[execution.tree]` の注釈に `max_units_per_stage` と `max_child_tasks_per_plan` が何を数えるかを 1 行ずつ。
+   D3 の表の `max_child_tasks_per_plan` の行を直した。
+
+### 残したもの
+
+- `max_units_per_stage` は done の unit も数える（段階を長く使う根で当たりうるが、本番では当たっていない）。
+- check の指針はプロンプトの文だけで、検証（check の文字列の機械的な検査）はしない（LLM を dispatcher に入れない。誤検出の割に得が小さい）。
+
+## 付記: R7-3: 段階の統合の check は採用した版に従う、人の replan は統合の再実行より先、退役した key の再利用は検証で、段階の上限は生きた unit だけ（2026-09-30）
+
+R7（回収の続き）の 3 つ目。**migration なし**（schema 34 のまま）。新しい Event・設定キーは足していない。本番には触れていない。
+
+### 発端（本番の証拠。docs/progress/phase-R.md「昇格後の dogfood」、2026-09-30 05:00Z〜09:00Z）
+
+- リファクタ retry の子（01M3RMEW5X86JBSKH4PH7J4RVP）: 旧 tip を merge する葉の check `HEAD^2`（merge commit の形を前提にした check）が段階の
+  統合で落ちた。replan（v9）で衝突解消の葉が done になった後も、統合は**同じ `HEAD^2` の check** で再び落ちた（09:00Z）。
+  原因: 段階の統合の check は「その段階の生きた unit の行の `spec.checks`」（`start_integration`）で、`HEAD^2` は **done の葉の行**が持っていた。
+  planner の replan は done の unit の spec を 1 文字も変えられない（D14 の done 不変。/3 は `carry_done_units_v3` が planner の書いた
+  done の unit を採用した spec で黙って上書きする）ので、planner が check を直しても統合の check は v1 のまま残る。
+  統合 WU の行そのもの（`integrate-<stage>`）は replan のたびに spec を作り直していて、持ち越しが原因ではない。
+- 統合の失敗の質問に回答すると、人が先に `decompose {compound}`（replan の依頼）を入れていても「同じ check で統合を再実行して再び失敗」した
+  （web Phase 1 の子 05:00Z → 05:09Z、リファクタ retry の子 08:0xZ → 08:11Z）。
+- `UNIQUE constraint failed: work_units.task_id, key` で replan の採用が DB のエラーに落ちた（08:15Z）。
+- `leaf_too_large` の決定文が「score 7 ≥ 閾値 11」（08:18Z）。
+- R7-2 の残: `max_units_per_stage` は done の unit も数える。failed のまま残した task unit の数え方が明文化されていない。
+
+### 決定
+
+1. **D1 done の unit の `checks` は planner の replan でも書き換えられる**（段階の統合の check が採用した版に従う）:
+   - 検証の done 不変（`done_carry_over_errors`）は、planner の計画（`PlanOrigin::Planner`）が done の unit の **`checks` だけ**を変えることを
+     許す（他の欄の差は従来どおり `DoneWorkUnitChanged`）。repair / fixture の計画は従来どおり完全一致、人は R5b-fix1 のまま。
+   - /3 の `carry_done_units_v3` は、planner が done の unit に**空でない** `checks` を書いていればそれを残し、他の欄を採用した spec に戻す
+     （unit を省いた・`checks` を書かなかった写しは従来どおり採用した spec のまま = check も変えない。簡略な写しで check を黙って消さない。
+     /3 で check をすべて外したいなら、常に通る check に置き換える）。/2 の差分（`modify: [{key, checks}]`）・全体形式も同じ規則で通る。
+   - 採用（`task_ops::execution::replan`）は R5b-fix1 の上書きと同じ経路で done の行の `spec` を置き換え、`WorkUnitSpecOverridden{changed_fields:
+     ["checks"]}` を積む（状態・`plan_id`・`seq`・依存は元のまま。replay も同じ event から同じ行を作る）。unit の run はやり直さない。
+     新しい check は次の段階の統合（`start_integration` が段階の行の `spec.checks` を集める）で初めて走る。
+   - planner のプロンプト（/2・/3）と `DoneWorkUnitChanged` の拒否文に「done の unit で直せるのは `checks` だけ（統合で再実行される）」を書いた。
+   - 統合 WU の行の持ち越し（依存に統合の repair を残す、`done` の統合は触らない）は変えない。
+2. **D2 人の replan の依頼は統合の再実行より先**: `wu_dispatch_gate` は既に人の依頼（`pending_replan_request`）を回答による再開
+   （`just_answered` → `blocked(question)` の統合 WU を `ready`）より先に見て `RunPlanner{replan: true}` を返す。R7-3 の回帰試験（統合の
+   失敗 → 質問 → 人が decompose → 回答）で、planner の run が統合の再実行より先に起き、その後の統合は planner が直した check で通ることを
+   確かめた。本番の「同じ check で再実行」は planner の replan が採用された**後**の統合が done の葉の古い check を走らせたもの（D1）と読む。
+   dispatcher の順序は変えていない。
+3. **D3 退役した key の再利用は検証の理由にする**: `task_core::execution_plan::retired_key_errors(spec, rows)`（新しい
+   `PlanValidationError::RetiredKeyReused { key, stage }`）が、(a) 生きた行に無く superseded / cancelled の行が持つ key を新しい unit に
+   使う、(b) 新しい計画の段階の統合 WU の key `integrate-<stage>` が退役した統合 WU の行と重なる（前の版で消した段階の key を戻した）、を
+   拒否する。dispatcher は planner の計画の検証の直後（採用の前）にこれを当て、`invalid execution plan: …` として planner の再試行・
+   `plan_invalid` の経路に乗せる（文は「新しい key を選ぶ」）。`task_ops::execution::replan` も同じ関数で守る（人の `PUT` も同じ 400）。
+   以前は (a) だけを採用の中で調べ、(b) は `UNIQUE constraint failed` の sqlite エラーになっていた。
+4. **D4 `leaf_too_large` の決定文**: gate が `compound/score`（score ≥ 閾値）で compound にしたときだけ「score S ≥ 閾値 T」と書く。強制規則
+   （`compound/long-and-broad` = `expected_length=high` かつ `cross_cutting=high`）の compound は「score S は閾値 T 未満だが、規則 R は
+   score によらず compound と判定する（…）」と書く（`task_core::tree::gate_basis_text`）。本番の「score 7 ≥ 閾値 11」は後者。
+5. **D5 `max_units_per_stage` は生きた unit だけを数える**: 検証（`TooManyUnitsInStage`）と採用直後の止め（`plan_limit_holds` の
+   `UnitsPerStage`）は、replan で持ち越す done の unit（`done_work_units` / `done_keys`）と `adopt` の unit を数えない。R7-2 の
+   `max_child_tasks_per_plan` と同じ考え方（R5b-prep 付記 8. の「`adopt` は段階の unit 数には数える」を改める。`adopt` は run を費やさない）。
+   planner のプロンプトの上限の行と `config/celeris.example.toml` の注釈を直した。
+6. **D6 failed の unit の数え方（明文化、挙動は変えない）**: `max_units_per_stage` / `max_child_tasks_per_plan` の「数えない」は done と
+   `adopt` だけ。**failed / cancelled の子の unit、`running` の子の unit を新しい版に残せば数える**（残した failed の unit は replan で新しい子
+   〈attempt + 1〉を作る、`running` の子はまだ生きている）。数えたくなければ planner はその unit を計画から外す（superseded になる。key は
+   再利用できない = D3）。config 例の注釈と ADR の D3 の表に書いた。
+
+### 残したもの
+
+- done の unit の `checks` を書き換えても、その unit の worktree で check を走らせ直すことはしない（統合の check として走る）。
+- D2 は本番の event を直接見ていない（本番 DB には触れない）。試験で順序を確かめ、症状は D1 で説明した。再発したら event の列で確かめる。
+
+## 付記: R7-5: WU の check の不合格を記録し、次の run と replan に渡す、check の不合格で usage を落とさない（2026-09-30）
+
+R7 の 5 つ目。**migration なし**（schema 34 のまま。Event を 1 つ足すが events は JSON の列）。設定キーは足していない。本番には触れていない
+（読み取りだけ）。WU の checks の実行そのもの（ADR-0072 D14 / E4 (g)、作業場所は ADR-0074 D1.2）の規則は変えない。記録と伝達の欠けを
+ここで直すので、付記は木の回収（R6〜R7）の続きとして ADR-0079 に置く。
+
+### 発端（本番の証拠。2026-09-30 14:14Z〜14:26Z、task 01M3SAHFRK8HA2AM7NYHKF1PD0「h-life ミラーを同一LANの別デバイスから閲覧可能にする」）
+
+- 作業場所は `Local{path: <task_id>}`（git でない）。`parallel_mode` は `no git worktree for this task` で並列 1、WU の worktree も
+  task の worktree も無い（`task_workspaces_for` = `None`）。WU の checks は **task のディレクトリ**（`<workspace_root>/<task_id>`。worker の
+  cwd、`artifacts/` のある所）で走った。lan-bind の `test -s artifacts/lan-bind.md` はここで通っている。**cwd は原因ではない。**
+- v1 の lan-verify の check `bash /home/rmaeda/sites/h-life/check_lan.sh http://192.168.1.103:8000/` は、unit 自身が run 1 で作った
+  スクリプト（引数は `[LAN_IP] [PORT]`）に URL を渡すので必ず exit 1（`ss` の LISTEN 照合・`ip addr` の照合・LAN crawl が
+  `http://http://…:8000/:8000/` になる）。worker は引数なしで実行して exit 0 を見て `done` を 3 回返し、daemon は 3 回とも check で不合格にした。
+- daemon は不合格の理由（`work unit checks failed: cmd=… exit=… stdout_tail=… stderr_tail=…`）を `Terminal::Error` の文に入れたが、
+  `finish_worker_result` が outcome を `work_unit_retry: WorkUnit lan-verify を最初からやり直します（1/2）` / `replan: work unit lan-verify failed`
+  に**上書き**し、どの event にも残らなかった。次の run（retry）のプロンプトにも、replan の planner の「Why this replan was triggered」にも
+  理由は無かった（planner は自分で原因を推理した）。retry の 2 run は「前回ほぼ完了」と読んで同じ `done` を返し、同じ check で落ちた。
+- `Terminal::Done` を `Terminal::Error` にすり替えるので、run の `usage` が `null`、`quota_estimated.weighted_tokens` が 0 になった。
+- 「replan 後に planner が起きない」は誤り: 14:19:13Z の replan の時点で `max_concurrency = 6` の枠が 6 run で埋まっていて、14:26:01.985Z に
+  別 task の run が終わった 0.1 s 後に planner が dispatch された（dispatcher の欠陥ではない。直していない）。
+
+### 決定
+
+1. **D1 check の不合格は event に残す**: 新しい `Event::WorkUnitChecksFailed { run_id, work_unit_id, key, cwd, failed: [{cmd, expect_exit,
+   detail}] }` を、その run の `WorkerFinished` と同じトランザクションで積む（`detail` は review.rs の判定文そのもの = `cmd=… exit=…
+   expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。`cwd` は check を実際に走らせた所（WU の worktree / task の
+   worktree / task のディレクトリ）。状態は変えない（`replay` は無視）。`GET /events` の型名は `work_unit_checks_failed`。
+2. **D2 outcome にも理由を残す**（R6-1 D7 と同じく人が読む文に要約を入れる）: `work_unit_retry: … （n/m）: checks failed in <cwd>: <要約>`、
+   `replan: work unit <key> failed: checks failed in <cwd>: <要約>`、replan を使い切った後の質問の文も同じ要約を持つ。要約は不合格の検査ごとに
+   `detail` を `; ` で繋ぎ、全体を 1,500 文字で切る。replan の planner の `replan_reason` は従来どおり `replan: ` の outcome から取るので、
+   planner にも同じ要約が渡る。
+3. **D3 次の run に前の run の不合格を渡す**: `WorkUnitPromptContext.previous_check_failures`（`detail` の行。`cwd` を先頭の行に）を、
+   その WU の直前の run（`wu.last_run_id`）に `WorkUnitChecksFailed` があるときだけ埋める。プロンプトの節「## 前回の run の check の不合格」は
+   「前の run は done を返したが daemon の check が落ちた。check は変えられない。成果を直して check を自分で同じ cwd から走らせてから done を
+   返す。check そのものが誤っていて成果では通せないなら、`result.json` に `{"yield": {"plan_issue": "<どの check がなぜ>"}}` を書いて終える
+   （計画の問題の申告 = replan）」と書く。空ならプロンプトは 1 バイトも変わらない。
+4. **D4 usage を落とさない**: check の不合格で `Terminal::Done` を `Terminal::Error{retryable: true}` にすり替えるとき、worker が返した
+   `usage` を `finish_worker_result` に渡し、`WorkerFinished.usage` と quota の見積もりに使う。
+5. **D5 planner の check の書き方に 1 行**（R7-2 の `PLANNER_CHECK_GUIDANCE`）: 「check が unit 自身の作るスクリプトを実行するなら、その
+   呼び出し方（引数）を objective に書き、unit がその形を受けるスクリプトを書くようにする」「check は worker が始まる所（unit の worktree、
+   git の worktree が無い task では task のディレクトリ = `artifacts/` のある所）で走る」。
+
+### 残したもの
+
+- 同じ check が同じ `detail` で続けて落ちても、retry は `max_retries` まで回す（D3 で次の run が理由を知るので、直すか `plan_issue` を
+  申告できる。決定的な不合格の早期打ち切りは入れていない）。
+- `WorkUnitChecksFailed` の GUI の専用表示は無い（timeline は型名と JSON をそのまま出す）。

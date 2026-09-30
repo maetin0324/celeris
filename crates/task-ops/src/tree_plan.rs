@@ -138,6 +138,7 @@ pub fn unit_gate_plan(
         tree_leaves,
         &existing_keys,
         &extra_held,
+        &done_keys,
     );
     (validated, Some(TreePlanOutcome { report, holds }))
 }

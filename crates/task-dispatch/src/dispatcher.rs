@@ -114,6 +114,9 @@ mod snapshot;
 mod tree_units;
 use sinks::{ReviewerSink, StoreSink};
 mod work_units;
+#[cfg(test)]
+use work_units::previous_check_failure_lines;
+use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
 mod worker_finish;
 mod worker_task;
 mod workspaces;
@@ -640,6 +643,9 @@ enum Completion {
         result: Box<Result<RunOutcome, AdapterError>>,
         /// `(pass, reason)` の 1 件ずつ（`review::run_work_unit_checks` の結果そのまま）。
         check_results: Vec<(bool, String)>,
+        /// ADR-0079 付記 R7-5 D1: 走らせた checks（`check_results` と同じ順）と、走らせた所。
+        checks: Vec<task_core::WorkUnitCheck>,
+        check_cwd: PathBuf,
     },
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合（葉の merge と検査の再実行）が終わった。
     Integration {
@@ -1820,6 +1826,8 @@ impl Dispatcher {
                     provider,
                     result,
                     check_results,
+                    checks,
+                    check_cwd,
                 } => {
                     self.checking.remove(&run_id);
                     if let Err(e) = self.on_work_unit_checks_finished(
@@ -1830,7 +1838,11 @@ impl Dispatcher {
                         run_since,
                         provider,
                         *result,
-                        check_results,
+                        WorkUnitCheckRun {
+                            checks,
+                            results: check_results,
+                            cwd: check_cwd,
+                        },
                     ) {
                         self.record_finalisation_failure(task_id, &run_id, &e);
                     }

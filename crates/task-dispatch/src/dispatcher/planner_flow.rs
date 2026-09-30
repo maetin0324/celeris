@@ -205,6 +205,21 @@ impl Dispatcher {
         } else {
             Err(format!("planner run did not finish cleanly: {describe}"))
         };
+        // ADR-0079 付記「R7-3」D3: replan の計画が退役した（superseded / cancelled の）行の key を再利用していれば、採用の
+        // 前に検証の理由として planner に返す（再試行・`plan_invalid` の経路）。以前は段階の統合 WU の key の重なりが
+        // 採用の中で sqlite の `UNIQUE constraint failed: work_units.task_id, key` に落ちていた（08:15Z）。
+        let validation = match validation {
+            Ok(v) if active_plan.is_some() => {
+                let rows = self.store.work_units_for(task_id)?;
+                let retired = task_core::execution_plan::retired_key_errors(&v.spec, &rows);
+                if retired.is_empty() {
+                    Ok(v)
+                } else {
+                    Err(task_ops::execution::describe_validation_errors(&retired))
+                }
+            }
+            other => other,
+        };
 
         let metrics = run_since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
@@ -693,6 +708,7 @@ impl Dispatcher {
     ) -> Result<task_worker::protocol::ExecutionPlannerContext, DispatchError> {
         let decision = task.routing.as_ref().and_then(|r| r.execution.clone());
         let limits = self.config.execution.limits;
+        let tree_planner = self.is_tree_planner(task)?;
         // Phase F5-fix3: 同じ計画の回で前の planner run の計画が拒否されていれば、その理由を渡す。
         let planner_events = self.store.events_for(task.id)?;
         let mut previous_attempt_errors = planner_rejections_since_last_plan(&planner_events);
@@ -766,10 +782,15 @@ impl Dispatcher {
             max_done_when_chars: limits.max_done_when_chars,
             max_checks: limits.max_checks,
             max_rationale_chars: limits.max_rationale_chars,
-            max_plan_json_bytes: limits.max_plan_json_bytes,
+            // ADR-0079 R7-2: /3 の planner には /3 の検証と同じ大きさの上限（既定 64 KiB）を渡す。
+            max_plan_json_bytes: if tree_planner {
+                limits.max_plan_json_bytes_v3
+            } else {
+                limits.max_plan_json_bytes
+            },
             max_children: limits.max_children,
             previous_attempt_errors,
-            tree: if self.is_tree_planner(task)? {
+            tree: if tree_planner {
                 Some(self.tree_planner_context(task)?)
             } else {
                 None

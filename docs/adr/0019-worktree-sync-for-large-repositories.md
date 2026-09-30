@@ -87,3 +87,12 @@ ADR-0018 D4 は「クラスタのディレクトリを丸ごと手元へ pull �
 - 進行: 初期化したら `initialised N submodules in <worktree> on cluster <cluster>`（N は初期化後の `submodule status --recursive` の行数）を
   tracing に出し、`SshWorkspace::take_progress_notes()` で取り出せるようにした。`WorkerProgress` に積む配線は task-dispatch 側（未実装）。
 - ローカル（ADR-0041 の `LocalWorktree::ensure_blocking`、task-worker/src/local_worktree.rs）にも同じステップ（`init_submodules`）を足した。
+- **R7-4: best-effort（2026-09-30）**。本番の task 01M3PAZ4XG4QN1T8S98VNA6ABV（sirius の BenchFS）で、上位が固定した `ior_integration/ior` の commit が
+  submodule の remote に無く（push していない commit、`upload-pack: not our ref`）、1 回の `submodule update --init --recursive` の exit 67 で準備ごと落ち、
+  根の planner の run が infra の失敗になった（`cargo build` に要るのは path 依存の `lib/locusta` / `lib/pluvio` だけ）。決定: 未初期化（行頭 `-`）が
+  あるとき、`.gitmodules` の path ごとに `git submodule update --init --recursive -- <path>` を 1 つずつ実行し、失敗しても続ける。成功は従来の進行の行
+  （N は初期化済みの数。失敗した path とその下は数えない。0 なら出さない）、失敗は path ごとに `submodule <path> could not be initialised: <stderr の
+  fatal:/error: の最初の行> (worktree <wt> on cluster <cluster>)` の進行の行と `tracing::warn!`。worktree 自体が使えれば準備は成功する。exit 67 は
+  `git submodule status` 自体が動かない（git が無い・worktree が壊れている）ときだけに残す。失敗した submodule は clone までは済んで行頭が `-` で
+  なくなることがあり、再利用では試し直さない（`-` の無い worktree に触らない R6-3 の冪等をそのまま保つ）。ローカルの `init_submodules` も同じで、
+  戻り値は `Option<SubmoduleInit { initialised, failed }>`（失敗は `Err` にしない）。

@@ -25,8 +25,11 @@ pub struct ExecutionLimits {
     pub max_done_when_chars: usize,
     /// WU の `checks` の件数上限（既定 6）。
     pub max_checks: usize,
-    /// 計画の JSON 全体の大きさの上限（バイト、既定 24 KiB）。
+    /// 計画の JSON 全体の大きさの上限（バイト、既定 24 KiB）。/1・/2 の検証が見る。
     pub max_plan_json_bytes: usize,
+    /// ADR-0079 R7-2: `celeris.execution-plan/3` の JSON 全体の大きさの上限（バイト、既定 64 KiB）。/3 は段階・
+    /// 決定・done の unit の持ち越しを 1 つの JSON に書くので /1・/2 の 24 KiB では足りない（本番 24815 > 24576）。
+    pub max_plan_json_bytes_v3: usize,
     /// ADR-0074 §4（Phase F2）: `celeris.execution-plan/2` の `work_units` の件数上限（既定 10。
     /// 統合 WU・repair は数えない）。`max_work_units` は v1 専用のまま（既定 8。§4 の表）。
     pub max_work_units_v2: usize,
@@ -54,6 +57,7 @@ impl ExecutionLimits {
             max_done_when_chars: usize::MAX,
             max_checks: usize::MAX,
             max_plan_json_bytes: usize::MAX,
+            max_plan_json_bytes_v3: usize::MAX,
             max_work_units_v2: usize::MAX,
             max_phases: usize::MAX,
             tree: crate::tree::TreeLimits::permissive(),
@@ -74,6 +78,7 @@ impl Default for ExecutionLimits {
             max_done_when_chars: 300,
             max_checks: 6,
             max_plan_json_bytes: 24 * 1024,
+            max_plan_json_bytes_v3: 64 * 1024,
             max_work_units_v2: 10,
             max_phases: 5,
             max_children: 8,
@@ -295,6 +300,12 @@ pub enum PlanValidationError {
         count: usize,
         max: usize,
     },
+    /// ADR-0079 付記「R7-3」D3: 退役した（superseded / cancelled の）行の key の再利用。`stage` は段階の統合 WU の key
+    /// `integrate-<stage>` が退役した統合 WU と重なった（前の版で消した段階の key を戻した）ときの段階。
+    RetiredKeyReused {
+        key: String,
+        stage: Option<String>,
+    },
     /// この深さの task の計画は kind task の unit を持てない（U-R1: `depth < max_depth` のときだけ）。
     ChildTaskTooDeep {
         key: String,
@@ -399,7 +410,7 @@ impl std::fmt::Display for PlanValidationError {
             PlanValidationError::DoneWorkUnitChanged { key } => {
                 write!(
                     f,
-                    "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}。done の WU の spec〈例: check のコマンド〉の誤りを直す必要があるなら、planner は直さずに質問で人に伝える: 人は `PUT /tasks/{{id}}/execution-plan`〈origin human の replan〉で done の WU の spec を上書きできる〈ADR-0079 R5b-fix1〉）"
+                    "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}。planner が done の WU で直せるのは `checks` だけ〈段階の統合で再実行される。ADR-0079 R7-3〉。それ以外の欄の誤りを直す必要があるなら、planner は直さずに質問で人に伝える: 人は `PUT /tasks/{{id}}/execution-plan`〈origin human の replan〉で done の WU の spec を上書きできる〈ADR-0079 R5b-fix1〉）"
                 )
             }
             PlanValidationError::DoneWorkUnitStructureChanged { key, field } => {
@@ -450,7 +461,12 @@ impl std::fmt::Display for PlanValidationError {
                 write!(f, "work unit {key}: too many checks: {count} > {max}")
             }
             PlanValidationError::PlanTooLarge { bytes, max } => {
-                write!(f, "execution plan JSON is too large: {bytes} > {max} bytes")
+                // ADR-0079 R7-2: planner が何を削ればよいかを添える（拒否の文は次の試行の planner に渡る）。
+                write!(
+                    f,
+                    "execution plan JSON is too large: {bytes} > {max} bytes \
+                     (objective は要点だけにし、詳細は artifacts / 知識ベースのパスで参照してください)"
+                )
             }
             PlanValidationError::PhasesNotAllowedInV1 => {
                 write!(f, "phases must be empty in {EXECUTION_PLAN_SCHEMA}")
@@ -589,11 +605,22 @@ impl std::fmt::Display for PlanValidationError {
             }
             PlanValidationError::TooManyUnitsInStage { stage, count, max } => write!(
                 f,
-                "stage {stage}: too many units: {count} > {max} (leaf + task; split the stage or group units into a child task)"
+                "stage {stage}: too many units: {count} > {max} (leaf + task; units already done and adopt units do not count; split the stage or group units into a child task)"
             ),
             PlanValidationError::TooManyChildTasks { count, max } => {
                 write!(f, "too many units with kind \"task\": {count} > {max}")
             }
+            PlanValidationError::RetiredKeyReused { key, stage: None } => write!(
+                f,
+                "work unit key {key:?} was used by a superseded work unit and cannot be reused; choose a new key（superseded の unit の key は再利用できない。新しい key を選ぶこと。ADR-0079 R7-3）"
+            ),
+            PlanValidationError::RetiredKeyReused {
+                key,
+                stage: Some(stage),
+            } => write!(
+                f,
+                "stage key {stage:?} was used by a stage removed in an earlier plan version (its integration work unit {key} is superseded) and cannot be reused; choose a new stage key（前の版で消した段階の key は再利用できない。新しい段階の key を選ぶこと。ADR-0079 R7-3）"
+            ),
             PlanValidationError::ChildTaskTooDeep {
                 key,
                 depth,
@@ -709,10 +736,19 @@ pub struct ValidatedPlan {
 
 /// ADR-0079 R5b-fix1: /3 の unit が、前の版の done の unit をそのまま写したものか（内部の形
 /// 〈[`PlanUnitSpec::to_work_unit_spec`]〉が done の spec と一致する）。
+/// ADR-0079 付記「R7-3」D1: `checks` だけが違う写しも done の写しとして扱う（planner の replan は done の unit の
+/// `checks` を書き換えられる）。
 fn is_done_carry_over(unit: &PlanUnitSpec, done_work_units: &[(String, WorkUnitSpec)]) -> bool {
     done_work_units
         .iter()
-        .any(|(k, s)| *k == unit.key && *s == unit.to_work_unit_spec())
+        .any(|(k, s)| *k == unit.key && same_except_checks(s, &unit.to_work_unit_spec()))
+}
+
+/// ADR-0079 付記「R7-3」D1: 2 つの WU の spec が `checks` の他は同じか。
+pub fn same_except_checks(a: &WorkUnitSpec, b: &WorkUnitSpec) -> bool {
+    let mut b = b.clone();
+    b.checks = a.checks.clone();
+    *a == b
 }
 
 /// replan の done の不変条件（D14 / D17）。done の WU は新しい計画に同じ key で残り、spec も変わらない。
@@ -720,7 +756,9 @@ fn is_done_carry_over(unit: &PlanUnitSpec, done_work_units: &[(String, WorkUnitS
 /// ADR-0079 R5b-fix1: 人の replan（`origin == Human`）だけは done の WU の spec を上書きできる（人がその仕事は
 /// 済んだと言い、記録した spec〈典型的には `checks` のコマンド〉を直す）。ただし消すこと（`DoneWorkUnitChanged`）と、
 /// 構造の欄（`kind` / `phase` = /3 の段階 / `depends_on`）を変えること（`DoneWorkUnitStructureChanged`）は人でも拒む。
-/// planner / repair / fixture の計画は従来どおり完全一致だけ。
+/// ADR-0079 付記「R7-3」D1: planner の計画は done の WU の **`checks` だけ**を書き換えられる（段階の統合で再実行される
+/// check。done の葉の check が統合で成り立たない形〈`HEAD^2` など〉だと、直せないまま同じ check で落ち続けた）。
+/// repair / fixture の計画は従来どおり完全一致だけ。
 fn done_carry_over_errors(
     work_units: &[WorkUnitSpec],
     done_work_units: &[(String, WorkUnitSpec)],
@@ -735,6 +773,9 @@ fn done_carry_over_errors(
             continue;
         };
         if *new_spec == done_spec {
+            continue;
+        }
+        if origin == PlanOrigin::Planner && same_except_checks(done_spec, new_spec) {
             continue;
         }
         if origin != PlanOrigin::Human {
@@ -759,7 +800,7 @@ fn done_carry_over_errors(
 
 /// ADR-0079 R5b-fix1: 検証を通った計画（`spec`。/3 は内部の形に写して比べる）で、spec が done の spec から
 /// 変わった done の WU（人の replan の上書き）と、変わった欄の名前（`WorkUnitSpec` の JSON の最上位の key、
-/// 昇順）。検証が planner の計画にこれを許さないので、planner の replan では常に空。
+/// 昇順）。planner の replan では `checks` だけを変えた done の WU（R7-3 D1。検証が他の欄の変更を許さない）。
 pub fn done_work_unit_overrides(
     spec: &ExecutionPlanSpec,
     done_work_units: &[(String, WorkUnitSpec)],
@@ -1343,8 +1384,18 @@ fn validate_v3(
             });
         }
     }
+    // ADR-0079 付記「R7-3」D5: 段階あたりの unit は生きた unit だけを数える（replan で持ち越す done の unit と、run を
+    // 費やさない `adopt` の unit を除く。R7-2 の `max_child_tasks_per_plan` と同じ考え方）。failed / running の行を
+    // 持ち越す unit は数える（D6）。
+    let done_keys: BTreeSet<&str> = done_work_units.iter().map(|(k, _)| k.as_str()).collect();
     for s in &spec.stages {
-        let count = spec.units.iter().filter(|u| u.stage == s.key).count();
+        let count = spec
+            .units
+            .iter()
+            .filter(|u| {
+                u.stage == s.key && u.adopt.is_none() && !done_keys.contains(u.key.as_str())
+            })
+            .count();
         if count > tree.max_units_per_stage {
             errors.push(PlanValidationError::TooManyUnitsInStage {
                 stage: s.key.clone(),
@@ -1354,7 +1405,14 @@ fn validate_v3(
         }
     }
     // ADR-0079 D15（Phase R5b-prep）: `adopt` の unit は子を作らないので数えない。
-    let task_units = spec.units.iter().filter(|u| u.creates_child()).count();
+    // ADR-0079 R7-2: replan で持ち越す done の unit（`done_work_units`）も数えない（子はもう終わっていて新しい子を
+    // 作らない。R6-1 D5 の承認の材料と同じ数え方）。長く走る root が done の kind task を溜めると新しい unit を
+    // 足せなくなっていた（本番「7 > 6」）。done でない行を持ち越す unit（failed の子を作り直す・走っている子）は数える。
+    let task_units = spec
+        .units
+        .iter()
+        .filter(|u| u.creates_child() && !done_keys.contains(u.key.as_str()))
+        .count();
     if task_units > tree.max_child_tasks_per_plan {
         errors.push(PlanValidationError::TooManyChildTasks {
             count: task_units,
@@ -1621,11 +1679,12 @@ fn validate_v3(
             });
         }
     }
+    // ADR-0079 R7-2: /3 は `max_plan_json_bytes_v3`（既定 64 KiB）で測る。
     let plan_bytes = serde_json::to_vec(spec).map(|v| v.len()).unwrap_or(0);
-    if plan_bytes > limits.max_plan_json_bytes {
+    if plan_bytes > limits.max_plan_json_bytes_v3 {
         errors.push(PlanValidationError::PlanTooLarge {
             bytes: plan_bytes,
-            max: limits.max_plan_json_bytes,
+            max: limits.max_plan_json_bytes_v3,
         });
     }
 

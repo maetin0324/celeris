@@ -41,26 +41,28 @@ export function readTokenFile(file) {
 // `/api` より後ろの path を daemon の `/api/v1/...` にする。受けられなければ null。
 export function upstreamPath(rest) {
   if (typeof rest !== "string" || !rest.startsWith("/") || rest === "/") return null;
-  const parts = rest.slice(1).split("/");
-  for (const part of parts) {
-    if (!segment.test(part.replace(/%[0-9A-Fa-f]{2}/g, "_"))) return null;
-    let decoded;
-    try {
-      decoded = decodeURIComponent(part);
-    } catch {
-      return null;
-    }
-    if (!decoded || decoded === "." || decoded === ".." || /[/\\]/.test(decoded)) return null;
-    if ([...decoded].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)) return null;
+  return rest.slice(1).split("/").every(validSegment) ? `/api/v1${rest}` : null;
+}
+
+// URL の path segment 1 つ（符号化のまま）を検査する。`.`・`..`・区切り文字（`/` `\`、その符号化）・
+// NUL を含む制御文字・不正な % 符号化を拒む。file と SSE の中継（files.js・events.js）も使う。
+export function validSegment(part) {
+  if (typeof part !== "string" || !segment.test(part.replace(/%[0-9A-Fa-f]{2}/g, "_"))) return false;
+  let decoded;
+  try {
+    decoded = decodeURIComponent(part);
+  } catch {
+    return false;
   }
-  return `/api/v1${rest}`;
+  if (!decoded || decoded === "." || decoded === ".." || /[/\\]/.test(decoded)) return false;
+  return ![...decoded].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
 }
 
 function redact(text, token) {
   return token ? text.split(token).join("[redacted]") : text;
 }
 
-function fail(res, status, code) {
+export function fail(res, status, code) {
   if (res.headersSent) return res.destroy();
   res.set("X-Celeris-Web-Error", code).status(status).json({ error: code });
 }

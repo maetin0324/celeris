@@ -93,6 +93,7 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
+// files は daemon の path（`/api/v1/tasks/...`）→ `{ body, type?, disposition? }`。
 // token を与えると、`Authorization: Bearer <token>` の無い要求に 401 を返す（P1-07 の中継の検査）。
 export function createFakeDaemon({
   host = "127.0.0.1",
@@ -100,6 +101,7 @@ export function createFakeDaemon({
   delayMs = 0,
   fixtures = defaultFixtures,
   token = null,
+  files = {},
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
@@ -142,6 +144,26 @@ export function createFakeDaemon({
       res.write(": connected\n\n");
       clients.add(res);
       return;
+    }
+    const file = files[pathname];
+    if (file) {
+      // run のファイル・成果物（P1-08）。単一の `bytes=a-b` の Range だけを扱う。
+      const body = Buffer.from(file.body);
+      const headers = { "content-type": file.type ?? "text/plain", "accept-ranges": "bytes" };
+      if (file.disposition) headers["content-disposition"] = file.disposition;
+      const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? "");
+      if (range) {
+        const start = Number(range[1]);
+        const end = Math.min(range[2] ? Number(range[2]) : body.length - 1, body.length - 1);
+        if (start >= body.length || end < start) {
+          res.writeHead(416, { "content-range": `bytes */${body.length}` });
+          return res.end();
+        }
+        res.writeHead(206, { ...headers, "content-range": `bytes ${start}-${end}/${body.length}` });
+        return res.end(body.subarray(start, end + 1));
+      }
+      res.writeHead(200, headers);
+      return res.end(body);
     }
     const value = fixtures[pathname] ?? fixtures[pathname.replace(/^\/api\/v1/, "")];
     const respond = () => {

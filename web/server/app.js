@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
+import { createFiles } from "./files.js";
 import { createRelay } from "./relay.js";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -72,9 +73,13 @@ export function createApp({
   validateConfig({ bind, passwordFile });
   const auth = createAuth({ passwordFile, secretFile, failedDelayMs: failedLoginDelayMs });
   // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
-  const relay = daemonUrl
-    ? createRelay({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs })
-    : null;
+  // `/files/*` も同じ daemon へ中継する（P1-08）。
+  const relays = daemonUrl
+    ? [
+        createRelay({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
+        createFiles({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
+      ]
+    : [];
   const allowed = new Set(["localhost", "127.0.0.1", "::1", bind.host.toLowerCase()]);
   for (const value of allowedHosts.split(",")) {
     const host = hostName(value.trim());
@@ -131,7 +136,7 @@ export function createApp({
   );
   auth.register(app);
   registerRoutes(app);
-  relay?.register(app);
+  for (const relay of relays) relay.register(app);
   app.use((req, res, next) => {
     if (
       req.path.startsWith("/api/") ||

@@ -459,6 +459,7 @@ impl WorktreeLock {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
 
@@ -710,3 +711,6 @@ mod tests {
         assert_eq!(current_release_sha(&releases), None);
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

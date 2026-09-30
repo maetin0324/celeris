@@ -1,11 +1,13 @@
 //! celeris: デーモン本体（DESIGN §3, §5.2, ADR-0005 D7）。設定読込、ログ初期化、tick ループ。
-//! 判断ロジックは `task-dispatch` にあり、ここはループと配線だけ。
+//! 判断ロジックは `task-dispatch` にあり、ここはループと配線だけ。このファイルは入口（`mod` 宣言・
+//! エラーと終了条件の型・再公開）で、配線の本体は `daemon` の下にある（module map は `daemon.rs`）。
 
 mod accounts_admin;
 pub mod cache_server;
 mod cluster_admin;
 pub mod config;
 pub mod control_path;
+mod daemon;
 /// ADR-0064 D3 / D5（Phase 110a）: 背景チェックポイントと定期バックアップ。
 pub mod db_maintenance;
 pub mod delivery;
@@ -22,35 +24,19 @@ pub mod releases;
 /// ADR-0033 D3（Phase 25）: 報告の圧縮（まとめの run を起こす決定的な判断）。
 pub mod reports;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-
-use task_api::types::{
-    ApiConfigView, ClusterConfigView, ConfigView, GenreConfigView, ProviderConfigView,
-    ReviewerConfigView, RoleConfigView,
-};
-use task_api::{ApiError, ApiSettings, ApiState};
-use task_core::{
-    DaemonMode, InstanceRole, SharedRole, SqliteStore, StoreError, StoreOptions, TaskStore,
-};
-use task_dispatch::{
-    DispatchError, Dispatcher, ProviderId, SnapshotPublisher, StaticPolicy, TickReport,
-};
-use task_ops::daemon::{ProviderCheckView, ProviderLive};
-use task_ops::view::ViewContext;
-use task_worker::{
-    AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, ClaudeCodeAdapter, ClaudeCodeConfig,
-    CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig, LdrAdapter, LdrConfig,
-    PaperQaAdapter, PaperQaConfig, WorkerAdapter, Workspace,
-};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
+use task_api::ApiError;
+use task_core::{DaemonMode, StoreError};
+use task_dispatch::DispatchError;
 
 pub use config::{Config, ConfigError, Overrides};
+pub use daemon::adapters::{build_adapters, effective_models, provider_lives, secret_usage};
+pub use daemon::api::{api_settings, bind_reuseport, config_view};
+pub use daemon::bootstrap::{build_dispatcher, seed_org_if_empty};
+pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};
+pub use daemon::run::run;
 pub use instance::InstanceIdentity;
+
+pub(crate) use daemon::secrets::resolve_secret;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -92,10 +78,8 @@ pub enum Exit {
     DuplicateRelease,
 }
 
-/// `[adapters.<種別>].env` にプロバイダの `env` を重ねる（同名キーはプロバイダが優先。順序は決定的）。
-/// ADR-0030 以降、本体（`build_adapters`）は `merged_env_with_secrets` を使う。これはテストが期待値を
-/// 組み立てるのに使う（`env_from_secrets` が空なら `merged_env_with_secrets` と同じ結果になる）。
 #[cfg(test)]
+<<<<<<< HEAD
 fn merged_env(
     base: &HashMap<String, String>,
     provider: &HashMap<String, String>,
@@ -3917,3 +3901,7 @@ model_id = "explicit-id"
         );
     }
 }
+=======
+#[path = "lib/tests.rs"]
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

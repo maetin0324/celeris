@@ -1,71 +1,66 @@
 //! ルーティングとハンドラ（`docs/gui/api.md` §2〜§3）。HTTP の写像だけを行い、判断は task-ops / ストアに任せる。
 
-use std::sync::Arc;
-
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{FromRequestParts, Path, RawQuery, State};
+use axum::extract::{FromRequestParts, Path};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
 use futures_util::StreamExt;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use task_core::{
-    EventRow, ListFilter, ListOrder, MilestoneId, NodeSessionStore, OrgNode, Project, ProjectId,
-    ProjectStatus, SqliteStore, Status, StoreError, Task, TaskId, TaskKind, TaskStore,
-};
-use task_ops::OpsError;
-use task_ops::add::NewTaskSpec;
+use task_core::{OrgNode, ProjectId, SqliteStore, TaskStore};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::admin::{
-    AccountAdminError, AdminRequest, ClusterAdminError, ProviderCreateBody, ProviderPatchBody,
-    read_provider_file, valid_adapter, valid_provider_id, write_provider_file,
-};
-use crate::files::{self, FileRequest, FileTarget, RunFile};
-use crate::middleware::{require_active, require_admin};
-use crate::problem::{ApiProblem, ops_problem, store_problem};
-use crate::query::{QueryParams, event_type_name, parse_snake, parse_task_id};
-use crate::schema::API_V1_SCHEMA_JSON;
+use crate::MAX_BODY_BYTES;
+use crate::problem::{ApiProblem, store_problem};
+use crate::query::QueryParams;
 use crate::state::ApiState;
-use crate::types::{
-    AccountCheckResponse, AccountCreateBody, AccountList, AccountLoginCodeBody, AccountLoginResult,
-    AccountLoginStart, AccountStats, AccountView, AnswerBody, ArtifactList, CancelBody,
-    ClusterConnectCodeBody, ClusterConnectResult, ClusterConnectStart, ClusterForwardView,
-    ClusterSettingsPutBody, ClusterSettingsView, ClusterStatsView, ClusterView, Clusters,
-    CommentBody, CommentList, DaemonView, DbInfo, DecisionBody, EventsPage, Health,
-    MilestoneReviewView, MilestoneView, OrgCreateBody, OrgList, OrgPatchBody, ProjectCreateBody,
-    ProjectDetail, ProjectList, ProjectPatchBody, ProjectTaskView, ProviderCheckResponse,
-    ProviderConfigView, ProviderView, Providers, ReloadResult, ReopenBody, RetryBody, RunList,
-    SecretList, SecretPutBody, SecretPutResult, SecretView, ValidationError,
+use crate::types::ValidationError;
+
+mod accounts;
+mod clusters;
+mod org;
+mod projects;
+mod providers;
+mod secrets;
+mod system;
+mod task_actions;
+mod task_io;
+mod tasks;
+
+use accounts::{
+    accounts, cancel_account_login, check_account, create_account, delete_account,
+    start_account_login, submit_account_login_code,
 };
-use crate::{API_VERSION, MAX_BODY_BYTES};
+use clusters::{
+    cancel_cluster_connect, clusters, put_cluster_settings, start_cluster_connect,
+    submit_cluster_connect_code,
+};
+use org::{create_org_node, delete_org_node, org_list, patch_org_node};
+use projects::{
+    create_milestone, create_project, patch_milestone, patch_project, project_detail, project_list,
+};
+use providers::{
+    check_provider, create_provider, delete_provider, patch_provider, providers, reload,
+};
+use secrets::{delete_secret, put_secret, secrets_list};
+use system::{config, create_plan, daemon, graph, health, inbox, metrics_scratch, replay, schema};
+use task_actions::{
+    accept, answer, approve, cancel, create_comment, list_comments, patch_task, reject, reopen,
+    rereview, retry,
+};
+use task_io::{
+    artifact_body, artifact_list, events, run_prompt, run_request, run_result, run_stderr,
+    run_stdout, task_events, task_runs,
+};
+use tasks::{create_task, list_tasks, task_detail};
 
 pub(crate) type ApiResult = Result<Response, ApiProblem>;
 
 const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
-const TITLE_QUERY_MAX_CHARS: usize = 200;
-/// ADR-0033 D2: `GET /projects/{id}` が返す仕事の木の上限（GUI が一目で見る図なので十分に大きく取る）。
-const PROJECT_TASKS_LIMIT: usize = 2_000;
-
-/// ADR-0024 D2 / ADR-0025 D1: `account_pool = true` は claude-code/codex だけ、かつ `[accounts]` にそのアダプタの
-/// 根ディレクトリが設定済みのときだけ有効。
-fn check_account_pool_adapter(state: &ApiState, adapter: &str) -> Result<(), ApiProblem> {
-    let Some(account_adapter) = task_core::AccountAdapter::parse(adapter) else {
-        return Err(ApiProblem::invalid_provider(
-            "account_pool = true requires adapter = \"claude-code\" or \"codex\"",
-        ));
-    };
-    if !state.inner.accounts_roots.contains_key(&account_adapter) {
-        return Err(ApiProblem::invalid_provider(format!(
-            "account_pool = true requires the [accounts] section to configure a root for adapter {adapter:?}"
-        )));
-    }
-    Ok(())
-}
 
 pub(crate) fn router(state: ApiState) -> Router {
     Router::new()
@@ -232,14 +227,6 @@ pub(crate) fn json_response<T: Serialize>(status: StatusCode, value: &T) -> Resp
     }
 }
 
-fn created_task(task: &Task) -> Response {
-    let mut response = json_response(StatusCode::CREATED, task);
-    if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/tasks/{}", task.id)) {
-        response.headers_mut().insert(header::LOCATION, location);
-    }
-    response
-}
-
 /// path の値。解析の失敗は 400 `bad_request`（axum の既定の text 応答にしない）。
 pub(crate) struct Params<T>(pub(crate) T);
 
@@ -289,53 +276,6 @@ pub(crate) async fn read_json<T: DeserializeOwned>(
         .map_err(|e| ApiProblem::bad_request(format!("invalid JSON body: {e}")))
 }
 
-/// ADR-0026 D7 / ADR-0027 D3 / ADR-0030 D2: `command`/`args`/`settings`/`env_from_secrets` は
-/// `[[providers]]`/`providers.d/*.toml` の行にしか書けない。`command`/`args` を HTTP から差し替えられると
-/// `[api]` のトークンだけで任意コマンド実行に道が開くので、`POST /providers` と `PATCH /providers/{id}` の
-/// 本文にこのいずれかのキーがあれば、値の型や中身を見る前に拒否する（`env_from_secrets` は実行コマンドの
-/// 差し替えではないが、`ProviderConfigFile` の素通り用フィールドと同じ扱いにして往復で失われないようにする）。
-fn reject_provider_command_and_args(
-    map: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), ApiProblem> {
-    if map.contains_key("command")
-        || map.contains_key("args")
-        || map.contains_key("settings")
-        || map.contains_key("env_from_secrets")
-    {
-        return Err(ApiProblem::invalid_provider(
-            "command, args, settings, and env_from_secrets cannot be set through the admin API; edit providers.d/<id>.toml by hand (ADR-0026 D7, ADR-0027 D3, ADR-0030 D2)",
-        ));
-    }
-    Ok(())
-}
-
-/// `read_json` と同じだが、先に §ADR-0026 D7 / ADR-0027 D3 / ADR-0030 D2 の
-/// `command`/`args`/`settings`/`env_from_secrets` 拒否を通す（`ProviderCreateBody`/`ProviderPatchBody` は
-/// このキーを知らないので、素の `read_json` では黙って無視されてしまう）。
-async fn read_provider_json<T: DeserializeOwned>(
-    body: Body,
-    empty_is_object: bool,
-) -> Result<T, ApiProblem> {
-    let bytes = read_body(body).await?;
-    let text: &[u8] = if empty_is_object && bytes.iter().all(u8::is_ascii_whitespace) {
-        b"{}"
-    } else {
-        &bytes
-    };
-    if let Ok(serde_json::Value::Object(map)) = serde_json::from_slice::<serde_json::Value>(text) {
-        reject_provider_command_and_args(&map)?;
-    }
-    serde_json::from_slice(text)
-        .map_err(|e| ApiProblem::bad_request(format!("invalid JSON body: {e}")))
-}
-
-fn load_task(store: &SqliteStore, id: TaskId) -> Result<Task, ApiProblem> {
-    store
-        .get(id)
-        .map_err(store_problem)?
-        .ok_or_else(|| ApiProblem::task_not_found(id))
-}
-
 pub(crate) fn no_query(raw: &Option<String>) -> Result<(), ApiProblem> {
     QueryParams::parse(raw.as_deref(), &[]).map(|_| ())
 }
@@ -367,6 +307,7 @@ pub(crate) fn parse_project_id(raw: &str) -> Result<ProjectId, ApiProblem> {
         .map_err(|_| ApiProblem::project_not_found(raw))
 }
 
+<<<<<<< HEAD
 /// 監査 L-1: 組織のノードの `genre` は設定の `[[genres]]` にあるものだけ（分野を 1 つも設定していない
 /// 構成では検証しない。`POST /tasks` の `genre` と同じ規律。ADR-0027 D1）。
 fn validate_genre(state: &ApiState, genre: Option<&str>) -> Result<(), ApiProblem> {
@@ -905,6 +846,8 @@ async fn patch_project(
     Ok(json_response(StatusCode::OK, &project))
 }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 /// ADR-0039 D1 / D5: 案件の作業場所を受け取るときの検証と正規化（純粋に近い: 設定の一覧と `$HOME` を見るだけ）。
 /// `Remote` の `cluster` は `[[clusters]]` にあること（無ければ 422）、`Local` の `~` は `$HOME` で展開する。
 pub(crate) fn validated_workspace(
@@ -927,6 +870,7 @@ pub(crate) fn validated_workspace(
     Ok(spec.with_home_expanded(task_core::home_dir().as_deref()))
 }
 
+<<<<<<< HEAD
 /// ADR-0079 D13（Phase R5a）: 途中目標の作成は 410（途中目標は root task の段階で表す）。
 async fn create_milestone(State(state): State<ApiState>, headers: HeaderMap) -> ApiResult {
     require_admin(&state, &headers)?;
@@ -3135,287 +3079,8 @@ fn migrate_credentials(
     crate::admin::migrate_credentials(file, dir).map_err(|e| ApiProblem::internal(e.to_string()))
 }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-    use std::time::Duration;
-
-    use axum::http::Request;
-    use task_ops::view::ViewContext;
-    use tower::ServiceExt;
-
-    use super::*;
-    use crate::types::{ApiConfigView, ConfigView, ReviewerConfigView};
-    use crate::{ApiSettings, ApiState};
-
-    fn state(dir: &std::path::Path) -> ApiState {
-        state_rx(dir, tokio::sync::watch::channel(None).1)
-    }
-
-    fn state_rx(
-        dir: &std::path::Path,
-        rx: tokio::sync::watch::Receiver<Option<task_ops::daemon::DaemonSnapshot>>,
-    ) -> ApiState {
-        let settings = ApiSettings {
-            browser: Default::default(),
-            documentation_state_dir: None,
-            listen: "127.0.0.1:7710".parse().unwrap_or_else(|e| panic!("{e}")),
-            // ADR-0044 §5 Phase 53 追記（Phase 55）: `POST /replay` は管理系になったので、
-            // この単体テストのルータにもトークンを持たせる（下の要求は Bearer を付ける）。
-            token: Some(REPLAY_TEST_TOKEN.to_string()),
-            allowed_hosts: vec![],
-            db_path: dir.join("celeris.db"),
-            busy_timeout: Duration::from_millis(5000),
-            background_checkpoint: false,
-            view: ViewContext {
-                workspace_root: dir.join("ws"),
-                retry_backoff_base: Duration::from_secs(0),
-                retry_backoff_max: Duration::from_secs(0),
-                max_requeues: 5,
-                clusters: Default::default(),
-            },
-            config_view: ConfigView {
-                config_path: String::new(),
-                db: String::new(),
-                workspace_root: String::new(),
-                tick_ms: 2000,
-                max_concurrency: 1,
-                lease_grace_secs: 0,
-                idle_timeout_secs: 0,
-                kill_grace_secs: 0,
-                review_timeout_secs: 0,
-                error_cooldown_secs: 0,
-                retry_backoff_base_secs: 0,
-                retry_backoff_max_secs: 0,
-                max_requeues: 5,
-                plan_auto_accept: false,
-                reviewer: ReviewerConfigView {
-                    adapter: None,
-                    tier: Some(task_core::Tier::Standard),
-                },
-                providers: vec![],
-                clusters: vec![],
-                roles: vec![],
-                genres: vec![],
-                delegation: task_core::DelegationLimits::default(),
-                api: ApiConfigView {
-                    bind: "127.0.0.1:7710".into(),
-                    auth_required: false,
-                    allowed_hosts: vec![],
-                },
-            },
-            roles: vec![],
-            genres: vec![],
-            conversation_genre: task_core::CONVERSATION_GENRE.to_string(),
-            celeris_version: "test".into(),
-            instance_id: "01J00000000000000000000000".into(),
-            started_at: "2026-09-14T00:00:00Z".into(),
-            providers_dir: None,
-            admin_tx: None,
-            accounts_roots: std::collections::HashMap::new(),
-            max_runs_per_account: 0,
-            secrets_dir: None,
-            secret_usage: std::collections::HashMap::new(),
-            memory_dir: None,
-            notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
-            notify_gui_base_url: None,
-            releases: None,
-            release: "dev".to_string(),
-            mode: task_core::DaemonMode::Normal,
-            role: task_core::SharedRole::new(task_core::InstanceRole::Active),
-            github: crate::GithubSettings::default(),
-            knowledge_root: None,
-            docs_repo_root: Some(dir.join("workspace")),
-            llm_sources: None,
-            tree_limits: task_core::TreeLimits::default(),
-        };
-        ApiState::new(settings, rx).unwrap_or_else(|e| panic!("{e}"))
-    }
-
-    fn state_with_tx(
-        dir: &std::path::Path,
-    ) -> (
-        ApiState,
-        tokio::sync::watch::Sender<Option<task_ops::daemon::DaemonSnapshot>>,
-    ) {
-        let (tx, rx) = tokio::sync::watch::channel(None);
-        (state_rx(dir, rx), tx)
-    }
-
-    /// ADR-0075 §5 G1 受け入れ条件 8: `GET /api/v1/metrics/scratch` は `DaemonSnapshot.scratch`（`celerisctl scratch
-    /// status --json` と同じ `task_ops::daemon::ScratchStatus`）を返し、その JSON のキーは committed schema の
-    /// `ScratchStatus` の properties と一致する。スナップショットが無ければ 404。
-    #[tokio::test]
-    async fn metrics_scratch_matches_the_status_schema() {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let (state, tx) = state_with_tx(dir.path());
-        let app = router(state);
-        let get = || {
-            Request::get("/api/v1/metrics/scratch")
-                .header("host", "127.0.0.1:7710")
-                .header("authorization", format!("Bearer {REPLAY_TEST_TOKEN}"))
-                .body(Body::empty())
-                .unwrap_or_else(|e| panic!("{e}"))
-        };
-        let resp = app
-            .clone()
-            .oneshot(get())
-            .await
-            .unwrap_or_else(|e| match e {});
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-
-        let status = task_ops::daemon::ScratchStatus {
-            schema: task_ops::daemon::SCRATCH_STATUS_SCHEMA.to_string(),
-            enabled: true,
-            disabled_reason: None,
-            dir: "/var/lib/celeris/scratch".into(),
-            observed_at: "2026-09-28T00:00:00Z".into(),
-            fs_total_bytes: Some(252 << 30),
-            fs_free_bytes: Some(91 << 30),
-            targets_bytes: 62 << 30,
-            pinned_bytes: 18 << 30,
-            targets_max_bytes: 100 << 30,
-            total_max_bytes: 150 << 30,
-            effective_max_bytes: 106 << 30,
-            high_watermark: 0.9,
-            low_watermark: 0.7,
-            pressure: "none".into(),
-            owners: vec![task_ops::daemon::ScratchOwnerView {
-                owner: "task-01ABC".into(),
-                kind: "task".into(),
-                class: "p0".into(),
-                reason: "task running".into(),
-                has_target: true,
-                size_bytes: Some(18 << 30),
-                estimated_bytes: 18 << 30,
-                measured_at: None,
-                lease_mtime: Some("2026-09-28T00:00:00Z".into()),
-                repo_key: Some("agent-platform-0123456789".into()),
-                base_commit: Some("0123456789ab".into()),
-                adopted_from: None,
-                work_unit_key: None,
-            }],
-            legacy: vec![task_ops::daemon::ScratchLegacyView {
-                path: "/var/lib/celeris/build-cache/cargo/agent-platform-dev".into(),
-                class: "legacy".into(),
-                size_bytes: Some(21 << 30),
-                last_write: None,
-            }],
-            last_gc: Some(task_ops::daemon::ScratchGcView {
-                at: "2026-09-28T00:00:00Z".into(),
-                pressure: "none".into(),
-                emergency: false,
-                removed: vec![task_ops::daemon::ScratchGcRemovedView {
-                    id: "task-01ABC/wu-01DEF".into(),
-                    class: "p3".into(),
-                    estimated_bytes: 3 << 30,
-                    why: "immediate".into(),
-                }],
-                reclaimed_bytes: 3 << 30,
-            }),
-            sccache: Some(task_ops::daemon::ScratchSccacheView {
-                state: "ready".into(),
-                reason: None,
-                binary: "/home/u/.local/celeris/tools/sccache/bin/sccache".into(),
-                port: 4236,
-                dir: "/var/lib/celeris/scratch/sccache-l1".into(),
-                max_bytes: 40 << 30,
-                stats: None,
-            }),
-            cache: None,
-        };
-        let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
-            "instance_id": "01TEST", "pid": 1, "hostname": "h", "started_at": "2026-09-28T00:00:00Z",
-            "last_tick_at": "2026-09-28T00:00:00Z", "ticks": 1, "tick_ms": 1000, "in_flight": [],
-            "cooldowns": [], "awaiting_human": [], "unroutable": [], "providers": []
-        }))
-        .unwrap_or_else(|e| panic!("{e}"));
-        snapshot.scratch = Some(status.clone());
-        tx.send_replace(Some(snapshot));
-        let resp = app.oneshot(get()).await.unwrap_or_else(|e| match e {});
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(
-            json,
-            serde_json::to_value(&status).unwrap_or_else(|e| panic!("{e}"))
-        );
-        // committed schema の `ScratchStatus` と同じキー（CLI の `--json` も同じ型を出す）。
-        let schema = crate::schema::api_v1_schema_value();
-        let props = schema["$defs"]["ScratchStatus"]["properties"]
-            .as_object()
-            .unwrap_or_else(|| panic!("ScratchStatus is not in the api schema"));
-        let mut schema_keys: Vec<&String> = props.keys().collect();
-        schema_keys.sort();
-        let obj = json.as_object().unwrap_or_else(|| panic!("not an object"));
-        let mut keys: Vec<&String> = obj.keys().collect();
-        keys.sort();
-        assert_eq!(keys, schema_keys);
-        assert_eq!(json["schema"], "celeris.scratch-status/1");
-    }
-
-    /// この単体テストだけで使う管理系トークン。
-    const REPLAY_TEST_TOKEN: &str = "replay-test-token";
-
-    fn replay_request() -> Request<Body> {
-        Request::post("/api/v1/replay")
-            .header("host", "127.0.0.1:7710")
-            .header("content-type", "application/json")
-            .header("authorization", format!("Bearer {REPLAY_TEST_TOKEN}"))
-            .body(Body::from("{}"))
-            .unwrap_or_else(|e| panic!("{e}"))
-    }
-
-    /// ADR-0044 §5 Phase 53 追記（Phase 55）: トークンが無ければ 401。
-    #[tokio::test]
-    async fn replay_without_a_token_is_unauthorized() {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let app = router(state(dir.path()));
-        let request = Request::post("/api/v1/replay")
-            .header("host", "127.0.0.1:7710")
-            .header("content-type", "application/json")
-            .body(Body::from("{}"))
-            .unwrap_or_else(|e| panic!("{e}"));
-        let resp = app.oneshot(request).await.unwrap_or_else(|e| match e {});
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn second_concurrent_replay_is_rejected_with_503() {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let state = state(dir.path());
-        let app = router(state.clone());
-
-        let guard = state.try_begin_replay();
-        assert!(guard.is_some());
-        let busy = app
-            .clone()
-            .oneshot(replay_request())
-            .await
-            .unwrap_or_else(|e| match e {});
-        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            busy.headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok()),
-            Some("5")
-        );
-        let body = axum::body::to_bytes(busy.into_body(), usize::MAX)
-            .await
-            .unwrap_or_else(|e| panic!("{e}"));
-        let problem: serde_json::Value =
-            serde_json::from_slice(&body).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(problem["code"], "replay_in_progress");
-
-        drop(guard);
-        let ok = app
-            .oneshot(replay_request())
-            .await
-            .unwrap_or_else(|e| match e {});
-        assert_eq!(ok.status(), StatusCode::OK);
-        let _ = PathBuf::new();
-    }
-}
+#[path = "handlers/tests.rs"]
+mod tests;

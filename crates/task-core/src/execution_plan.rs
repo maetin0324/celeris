@@ -613,10 +613,10 @@ pub fn apply_delta(
     })
 }
 
-// ---------------------------------------------------------------------------
-// D14: 検証
-// ---------------------------------------------------------------------------
+mod scheduling;
+mod validation;
 
+<<<<<<< HEAD
 /// D18: 検証・丸めに使う上限（既定値は ADR-0072 D18 の表）。
 /// ADR-0074 D5.3（Phase F1）: 計画のサイズ上限（§4）を足す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5229,3 +5229,11 @@ mod tests {
         assert!(serde_json::from_value::<ExecutionPlanSpec>(v).is_err());
     }
 }
+=======
+pub use scheduling::*;
+pub use validation::*;
+
+#[cfg(test)]
+#[path = "execution_plan/tests.rs"]
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

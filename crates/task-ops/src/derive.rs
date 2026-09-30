@@ -468,6 +468,7 @@ pub fn latest_block_is_unroutable(events: &[(u64, Event)]) -> bool {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
 
@@ -1110,3 +1111,6 @@ mod tests {
         assert_eq!(current_run_seq(&[]), 0);
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

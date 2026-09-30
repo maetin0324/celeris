@@ -1182,6 +1182,7 @@ Monitor・ScheduleWakeup・Cron など「後で通知が来る」「後で起こ
 成果物と `result.json`（または `yield`）を書き終えたときだけ。\n";
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
     use crate::protocol::{
@@ -2210,3 +2211,6 @@ mod tests {
         assert!(!render(&RunContext::default(), "artifacts").contains("headless 実行"));
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

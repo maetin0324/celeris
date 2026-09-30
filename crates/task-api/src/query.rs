@@ -278,6 +278,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
     use task_core::{Status, TaskKind};
@@ -466,3 +467,7 @@ mod tests {
         assert_eq!(EVENT_TYPES.len(), 48);
     }
 }
+=======
+#[path = "query/tests.rs"]
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

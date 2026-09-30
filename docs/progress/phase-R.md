@@ -1225,3 +1225,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   新しいテスト: `ssh::tests::{ensure_worktree_initialises_submodules_and_is_idempotent_on_reuse, ensure_worktree_skips_the_submodule_step_without_gitmodules,
   a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree}`（偽 ssh = 手元の `sh`、ローカルパスの submodule）、
   `local_worktree::tests::the_worktree_initialises_submodules_and_reuse_is_idempotent`。
+- 2026-09-30 01:50Z: BenchFS 修復（再試行）の子が決定 `p0-git-metadata-import`（検証済み台本で task branch に Git object/index/ref だけ反映する例外）→
+  推奨どおり **allow-metadata-only**（task 専用 worktree / branch 限定）で回答。D7（remote の木にブランチ管理が無い）の実害の一つ。
+- 02:42Z: 知識整理 task 01M3R1S3EQCJ35BQ6BWFWG1ZYS（langmem、BenchFS 修復子の後続）が idle timeout ×2 で failed。Qwen トンネルは応答（/v1/models 14 ms）、
+  他の langmem run は 3 分で完了しており、入力が大きい 1 件だけの疑い。副次 task なので放置し、回収候補（langmem の idle timeout を入力量で延ばす）に記録。

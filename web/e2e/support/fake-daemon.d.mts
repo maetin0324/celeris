@@ -15,7 +15,7 @@ export function createFakeDaemon(options?: {
   host?: string;
   port?: number;
   delayMs?: number;
-  fixtures?: Record<string, unknown>;
+  fixtures?: Record<string, unknown | ((url: URL) => unknown)>;
   token?: string | null;
   files?: Record<string, { body: string; type?: string; disposition?: string }>;
 }): {

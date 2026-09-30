@@ -173,7 +173,8 @@ export function createFakeDaemon({
       res.writeHead(200, headers);
       return res.end(body);
     }
-    const value = fixtures[pathname] ?? fixtures[pathname.replace(/^\/api\/v1/, "")];
+    const raw = fixtures[pathname] ?? fixtures[pathname.replace(/^\/api\/v1/, "")];
+    const value = typeof raw === "function" ? raw(new URL(req.url ?? "/", "http://x")) : raw;
     const respond = () => {
       if (res.destroyed) return;
       res.writeHead(value === undefined ? 404 : 200, { "content-type": "application/json" });

@@ -871,6 +871,9 @@ pub struct ExecutionConfig {
     /// プロンプトにもこの値をそのまま出す（検証と文面の出どころを 1 つにする）。config.toml の欄は無く、
     /// 常に `ExecutionLimits::default()`（テストが既定と違う値を挿す）。
     pub limits: task_core::ExecutionLimits,
+    /// ADR-0089（Phase R6-5）: `[execution] max_cos_runs`（既定 2）。`max_concurrency` とプールの
+    /// `concurrency` から外す CoS の対話 run の同時数の絶対上限。`0` で例外を無効にする。
+    pub max_cos_runs: usize,
 }
 
 /// ADR-0074 §4: `max_parallel_work_units` の上限。
@@ -891,6 +894,7 @@ impl Default for ExecutionConfig {
             parallel: false,
             max_parallel_work_units: 3,
             limits: task_core::ExecutionLimits::default(),
+            max_cos_runs: crate::capacity::DEFAULT_MAX_COS_RUNS,
         }
     }
 }
@@ -1038,6 +1042,8 @@ struct RunEntry {
     /// ラベルでコンテナを止める口。`killpg` はコンテナの中の PID 名前空間には届かないので、
     /// `stop_run` がこれを `task_worker::kill_tree_with` に渡す。ホスト実行なら `None`。
     container: Option<Arc<dyn task_worker::ContainerStopper>>,
+    /// ADR-0089（Phase R6-5）: CoS の対話 run か（`max_concurrency`・プールの `concurrency` に数えない）。
+    cos: bool,
 }
 
 /// ADR-0033 D4（Phase 24 / Phase 27）: この run の途中で「部をまたぐ委譲」を止めたときに `StoreSink` が
@@ -4286,6 +4292,7 @@ impl Dispatcher {
             .iter()
             .map(|p| ProviderLive {
                 in_use: self.provider_in_use(&p.id) as u32,
+                in_use_cos: self.provider_in_use_cos(&p.id) as u32,
                 last_check: publisher.provider_checks.get(&p.id).cloned(),
                 ..p.clone()
             })
@@ -8137,8 +8144,9 @@ impl Dispatcher {
     }
 
     /// 実行中の run と、プロバイダを使っているレビュー run の合計（並列度の分母）。
+    /// ADR-0089（Phase R6-5）: CoS の対話 run は数えない（`cos_in_flight` で別に数える）。
     fn workers_in_flight(&self) -> usize {
-        self.running.len()
+        self.running.values().filter(|e| !e.cos).count()
             + self
                 .reviewing
                 .values()
@@ -8146,10 +8154,55 @@ impl Dispatcher {
                 .count()
     }
 
+    /// ADR-0089（Phase R6-5）: 走っている CoS の対話 run の数。
+    fn cos_in_flight(&self) -> usize {
+        self.running.values().filter(|e| e.cos).count()
+    }
+
+    /// ADR-0089（Phase R6-5）: 並列度の会計（`crate::capacity::RunLoad`）。
+    fn run_load(&self) -> crate::capacity::RunLoad {
+        crate::capacity::RunLoad {
+            workers_in_flight: self.workers_in_flight(),
+            max_concurrency: self.config.max_concurrency,
+            cos_in_flight: self.cos_in_flight(),
+            max_cos_runs: self.config.execution.max_cos_runs,
+        }
+    }
+
+    /// ADR-0089 規則 1（Phase R6-5）: この task の run が CoS の対話 run か（`crate::capacity::is_cos_run`）。
+    /// `max_cos_runs = 0` なら例外を無効にする（常に `false`）。対話でなければ組織を引かない。
+    fn is_cos_task(&self, task: &Task) -> Result<bool, DispatchError> {
+        if self.config.execution.max_cos_runs == 0 || !task_core::is_conversation(task) {
+            return Ok(false);
+        }
+        Ok(crate::capacity::is_cos_run(task, &self.store.org_list()?))
+    }
+
+    /// ADR-0089 規則 2 / 3（Phase R6-5）: `cos` の run にとってそのプロバイダが満杯か。
+    fn provider_full(&self, provider: &ProviderId, cos: bool) -> bool {
+        crate::capacity::provider_full(
+            cos,
+            self.account_pool_providers.contains(provider),
+            self.provider_in_use(provider),
+            self.provider_in_use_cos(provider),
+            self.policy.concurrency_limit(provider.clone()),
+        )
+    }
+
+    /// ADR-0089（Phase R6-5）: そのプロバイダで走っている CoS の対話 run の数（`GET /providers` の `in_use_cos`）。
+    fn provider_in_use_cos(&self, provider: &ProviderId) -> usize {
+        self.running
+            .values()
+            .filter(|e| e.cos && &e.provider == provider)
+            .count()
+    }
+
+    /// そのプロバイダで走っている run の数。ADR-0089（Phase R6-5）: CoS の対話 run は数えない
+    /// （`provider_in_use_cos`）。
     fn provider_in_use(&self, provider: &ProviderId) -> usize {
         self.running
             .values()
-            .filter(|e| &e.provider == provider)
+            .filter(|e| !e.cos && &e.provider == provider)
             .count()
             + self
                 .reviewing
@@ -12588,7 +12641,8 @@ impl Dispatcher {
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
         self.unroutable.clear();
         self.cluster_waiting.clear();
-        if self.workers_in_flight() >= self.config.max_concurrency {
+        // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
+        if !self.run_load().any_slot() {
             return Ok(0);
         }
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
@@ -12601,8 +12655,13 @@ impl Dispatcher {
         // この tick で並列度の上限に達していると分かったプロバイダ（tick 内では空きが増えないので共有する）。
         let mut full: std::collections::HashSet<ProviderId> = std::collections::HashSet::new();
         for task in candidates {
-            if self.workers_in_flight() >= self.config.max_concurrency {
+            let load = self.run_load();
+            if !load.any_slot() {
                 break;
+            }
+            // ADR-0089: 非 CoS の枠が無いときは対話用タスク（CoS の候補）だけを見る（判定は dispatch_one）。
+            if !load.admits(false) && !task_core::is_conversation(&task) {
+                continue;
             }
             if self.dispatch_one(task, None, &mut full, now)? {
                 dispatched += 1;
@@ -12682,6 +12741,11 @@ impl Dispatcher {
         // バックオフは 1 本目で済んでいる）。
         let second_pass = forced_wu.is_some();
         if !second_pass && self.running_for_task(task.id) > 0 {
+            return Ok(false);
+        }
+        // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
+        let cos = !second_pass && self.is_cos_task(&task)?;
+        if !self.run_load().admits(cos) {
             return Ok(false);
         }
         // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
@@ -13033,12 +13097,13 @@ impl Dispatcher {
         // 軽く行う。継続セッションを見つけてから選ぶのでないと、ADR-0049 ランキングが先に別の
         // アダプタ・アカウントへ倒れてしまう）。
         let sticky_session = self.cos_conversation_session(&task)?;
-        let Some((adapter_id, provider_id, selected_account)) = self.select_provider(
+        let Some((adapter_id, provider_id, selected_account)) = self.select_provider_for(
             &task.worker_hint,
             now,
             task.id,
             full,
             sticky_session.as_ref(),
+            cos,
         ) else {
             return Ok(false);
         };
@@ -13427,6 +13492,7 @@ impl Dispatcher {
                 account,
                 account_adapter,
                 container: container_stop,
+                cos,
             },
         );
         Ok(true)
@@ -15129,7 +15195,26 @@ impl Dispatcher {
         full: &mut std::collections::HashSet<ProviderId>,
         sticky_session: Option<&NodeSession>,
     ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
-        if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full) {
+        self.select_provider_for(hint, now, task_id, full, sticky_session, false)
+    }
+
+    /// `select_provider` に ADR-0089（Phase R6-5）の `cos` を足したもの。`cos = true`（CoS の対話 run）
+    /// なら、プールのプロバイダの `concurrency` を見ず（`crate::capacity::provider_full`）、アカウントは
+    /// 上限 +1 で走っている run の最も少ないものを選ぶ。この tick の満杯集合 `full` は非 CoS の判定
+    /// なので、CoS は共有せず自分だけの集合で選ぶ（CoS の選択も `full` を汚さない）。
+    #[allow(clippy::type_complexity)]
+    fn select_provider_for(
+        &mut self,
+        hint: &task_core::WorkerHint,
+        now: Instant,
+        task_id: TaskId,
+        full: &mut std::collections::HashSet<ProviderId>,
+        sticky_session: Option<&NodeSession>,
+        cos: bool,
+    ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
+        let mut cos_full = std::collections::HashSet::new();
+        let full = if cos { &mut cos_full } else { full };
+        if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full, cos) {
             return Some(sticky);
         }
         // 候補を列挙するための除外はこの選択だけ。満杯の集合へ候補自体を混ぜない。
@@ -15143,8 +15228,7 @@ impl Dispatcher {
                     if !visited.insert(provider.clone()) {
                         break;
                     }
-                    let limit = self.policy.concurrency_limit(provider.clone());
-                    if self.provider_in_use(&provider) >= limit {
+                    if self.provider_full(&provider, cos) {
                         full.insert(provider);
                         continue;
                     }
@@ -15159,7 +15243,7 @@ impl Dispatcher {
                             .and_then(|a| a.account_id())
                             .map(str::to_owned);
                         let Some(account_id) =
-                            self.pick_account(account_adapter, requested_account.as_deref())
+                            self.pick_account(account_adapter, requested_account.as_deref(), cos)
                         else {
                             full.insert(provider);
                             continue;
@@ -15204,14 +15288,16 @@ impl Dispatcher {
         hint: &task_core::WorkerHint,
         now: Instant,
         full: &std::collections::HashSet<ProviderId>,
+        cos: bool,
     ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
         let active = sticky_session?;
         let account_usable = match &active.account_id {
             None => true,
             Some(account_id) => AccountAdapter::parse(&active.adapter)
-                .is_some_and(|adapter| self.account_usable(adapter, account_id)),
+                .is_some_and(|adapter| self.account_usable(adapter, account_id, cos)),
         };
-        let provider = self.matching_provider_for_adapter(&active.adapter, hint.tier, now, full);
+        let provider =
+            self.matching_provider_for_adapter(&active.adapter, hint.tier, now, full, cos);
         // 設定行が見つかっても、プールの有無がセッション作成時と食い違っていたら（config を書き換えた
         // 等）留まらない。`decide` の `AccountChanged`（プールを使う ⇔ 使わないの切り替えも該当）と
         // 矛盾しないように。
@@ -15245,6 +15331,7 @@ impl Dispatcher {
         requested_tier: Tier,
         now: Instant,
         excluded: &std::collections::HashSet<ProviderId>,
+        cos: bool,
     ) -> Option<ProviderId> {
         let mut tiers: Vec<Tier> = [Tier::Cheap, Tier::Standard, Tier::Frontier]
             .into_iter()
@@ -15258,11 +15345,10 @@ impl Dispatcher {
                 tier,
                 adapter: Some(adapter_id.to_string()),
             };
-            if let Selection::Picked { provider, .. } = self.policy.select(&pinned, now, excluded) {
-                let limit = self.policy.concurrency_limit(provider.clone());
-                if self.provider_in_use(&provider) < limit {
-                    return Some(provider);
-                }
+            if let Selection::Picked { provider, .. } = self.policy.select(&pinned, now, excluded)
+                && !self.provider_full(&provider, cos)
+            {
+                return Some(provider);
             }
         }
         None
@@ -15271,7 +15357,7 @@ impl Dispatcher {
     /// ADR-0054 Phase 67c: 指定した 1 アカウントが今すぐ使えるか（ログイン済み・cooldown 外・上限未満・
     /// 枯渇していない。`crate::accounts::evaluate` の除外判定をそのまま使う）。`pick_account` と同じ
     /// 読み取りだが、ベストスコアを探すのではなく特定の 1 件が使えるかだけを見る。
-    fn account_usable(&mut self, adapter: AccountAdapter, account_id: &str) -> bool {
+    fn account_usable(&mut self, adapter: AccountAdapter, account_id: &str, cos: bool) -> bool {
         let Some(cfg) = self.config.accounts.clone() else {
             return false;
         };
@@ -15299,7 +15385,7 @@ impl Dispatcher {
         evaluate(
             &candidate,
             book.state(account_id),
-            cfg.max_runs_per_account,
+            crate::capacity::account_run_limit(cfg.max_runs_per_account, cos),
             now,
         )
         .excluded
@@ -15332,7 +15418,14 @@ impl Dispatcher {
     /// ADR-0024 D3 / ADR-0025 D2: `[accounts]` の指定アダプタのプールから 1 アカウントを選ぶ（残量に基づく決定的な
     /// 選択）。そのアダプタの根ディレクトリが無い、または選べるアカウントが無ければ `None`。
     /// ディレクトリのスキャンは tick につき高々 1 回（アダプタごと）。
-    fn pick_account(&mut self, adapter: AccountAdapter, requested: Option<&str>) -> Option<String> {
+    /// ADR-0089（Phase R6-5）: `cos` なら上限 +1 で、走っている run の最も少ないアカウントを選ぶ
+    /// （`crate::accounts::select_account_least_loaded`）。
+    fn pick_account(
+        &mut self,
+        adapter: AccountAdapter,
+        requested: Option<&str>,
+        cos: bool,
+    ) -> Option<String> {
         let cfg = self.config.accounts.clone()?;
         let root = cfg.root_for(adapter)?;
         let dirs = self
@@ -15352,6 +15445,10 @@ impl Dispatcher {
                 in_use: self.account_in_use(adapter, &d.id),
             })
             .collect();
+        if cos {
+            let limit = crate::capacity::account_run_limit(cfg.max_runs_per_account, true);
+            return crate::accounts::select_account_least_loaded(&candidates, &book, limit, now);
+        }
         select_account(&candidates, &book, cfg.max_runs_per_account, now)
     }
 
@@ -22886,6 +22983,7 @@ mod tests {
                 model: Some("m".into()),
                 env_keys: vec![],
                 in_use: 0,
+                in_use_cos: 0,
                 last_check: None,
                 account_pool: false,
             }],
@@ -22969,6 +23067,7 @@ mod tests {
                 model: Some("m2".into()),
                 env_keys: vec![],
                 in_use: 0,
+                in_use_cos: 0,
                 last_check: None,
                 account_pool: false,
             },
@@ -22983,6 +23082,7 @@ mod tests {
                 model: None,
                 env_keys: vec![],
                 in_use: 0,
+                in_use_cos: 0,
                 last_check: None,
                 account_pool: false,
             },
@@ -23013,6 +23113,7 @@ mod tests {
             model: None,
             env_keys: vec![],
             in_use: 0,
+            in_use_cos: 0,
             last_check: None,
             account_pool: false,
         }]);
@@ -35662,6 +35763,10 @@ mod tests {
     /// Phase F5-fix7: 依存 WU のブランチが無いときの基点と、準備の失敗で黙って止まらないこと
     /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。
     mod work_unit_dependency_base;
+
+    /// ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency`・プールの `concurrency` の外
+    /// （`src/dispatcher/tests/cos_capacity.rs`）。
+    mod cos_capacity;
 
     /// ADR-0079 §7 R1b: plan/3 の kind task の unit から子 task を作り、状態を写し、段階の完了・
     /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。

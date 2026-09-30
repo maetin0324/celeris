@@ -1266,3 +1266,49 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   `dispatcher/tests/tree_branches.rs`（同じく fixture に `gate: atomic`、compound の子は gate を外す）、`tree_replan.rs` / `tree_approval.rs`（compound の子は gate を外す、
   木の残りの既定値）、`task-api/tests/task_tree.rs`（木の上限の既定値。担当の範囲外のファイルだが期待値だけ）。
 
+
+
+## R6-5: CoS の対話 run は max_concurrency とプールの concurrency の外（2026-09-30）
+
+人の指示（上の 23:0xZ）の実装。判断は [ADR-0089](../adr/0089-cos-runs-bypass-concurrency.md)。本番には触れていない（systemctl・本番 DB・7700/7710・
+config の編集なし）。migration なし。
+
+### 実装したもの
+
+- **規則 1（判定は 1 か所）**: `task_dispatch::capacity::is_cos_run(task, org)` = `task_core::is_conversation(task) && !task_core::is_milestone_review(task)
+  && task.assignee が org の OrgKind::Secretary のノード`。`POST /console/instruct` の既定の宛先・`POST /org/cos/messages` の対話用タスク。
+- **規則 2**: CoS run は `max_concurrency` に数えず、`account_pool = true` のプロバイダの `concurrency` も見ない（プールでないプロバイダには例外なし）。
+  アカウントは消費し、`accounts::select_account_least_loaded`（走っている run の最も少ないもの → スコア → id）で `max_runs_per_account + 1` まで。
+  ADR-0054 の sticky も同じ緩めた上限で判定。CoS はこの tick の満杯集合 `full` を共有しない。
+- **規則 3**: `workers_in_flight` とプロバイダの `in_use` は CoS を除く（葉は CoS が走っていても枠いっぱいまで起きる。葉が CoS の例外に乗ることはない）。
+  `ProviderLive.in_use_cos` / `GET /providers` の `in_use_cos` に CoS run を別に出す。
+- **規則 4**: `[execution] max_cos_runs`（既定 2、0..=8、`0` で例外を無効化）。`dispatch_ready` は非 CoS の枠が無くても CoS の枠があれば対話用タスクだけを走査し、
+  `dispatch_one` の入口で `run_load().admits(cos)`。
+- dispatcher.rs の変更は局所（`RunEntry.cos`、会計の関数、`dispatch_ready` / `dispatch_one` の入口、`select_provider_for` と account 選択の `cos` 引数、
+  スナップショットの 1 行、`mod cos_capacity;`）。テストは `src/dispatcher/tests/cos_capacity.rs`（新設）。
+- 設定: `celeris::config::ExecutionTomlConfig.max_cos_runs` → `ExecutionConfig.max_cos_runs`。文書: `docs/providers.md`、`docs/gui/api.md` §3.19、
+  `config/celeris.example.toml`（コメント）、`config/celeris.multi-account.example.toml`。API schema を再生成（`ProviderView.in_use_cos`）。
+
+### 逸脱・未解決
+
+- 途中目標レビューの対話（`milestone_id` あり）は CoS 宛てでも例外に乗せない（裏方で人が待っていないため）。部署ノードとの対話も対象外。
+- CoS run のアカウント選びは「最も空いている」優先で、ADR-0024 D3 の残量スコアは同数のときの順序にだけ使う（依頼どおり）。
+- GUI（`gui/` の型・表示）は `in_use_cos` をまだ出していない（API とスナップショットだけ）。
+- ready の窓（`max_concurrency * 4 + 16`）は変えていない。非 CoS の枠が埋まっている tick も CoS の枠が空いていれば `ready_tasks` を 1 回引く。
+
+### 本番への反映
+
+- 新しいキーは `[execution] max_cos_runs` だけで、書かなければ既定 2 が効く。**config の変更は不要**。挙動の反映には release の昇格（再起動）が要る。
+
+### gate（CARGO_TARGET_DIR はローカル LVM）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema` → 1 passed（`docs/api/v1/api-v1.schema.json` を再生成、差分は `in_use_cos`）
+- `cargo test -p task-dispatch -p task-api -p celeris` → celeris + task-api 658 passed / 0 failed。task-dispatch lib は負荷下で
+  `sccache_family_is_deterministic_regardless_of_the_parent_env` が 1 件タイミングで落ち（`Running` ≠ `Done`、今回の変更と無関係）、単独で再実行 → ok。
+  `cargo test -p task-dispatch` の再実行 → lib 458 passed / 0 failed、unified_kill 4 passed。
+- 新しいテスト: `dispatcher::tests::cos_capacity::{cos_run_bypasses_max_concurrency_but_leaves_do_not,
+  cos_run_bypasses_pool_concurrency_on_the_least_loaded_account_up_to_max_cos_runs, max_cos_runs_zero_disables_the_exemption}`、
+  `capacity::tests::*`（4 件）、`accounts::cos_account_tests::least_loaded_picks_the_account_with_fewest_runs_even_at_max_plus_one`、
+  `config::tests::execution_max_cos_runs_default_and_validation`、`daemon_providers_config`（`in_use_cos` の null / 1 / 0）。

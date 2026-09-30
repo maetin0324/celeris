@@ -34,6 +34,16 @@ codex_dir = "~/.local/celeris/codex-accounts"
 max_runs_per_account = 2
 ```
 
+**CoS の対話 run は枠の外**（ADR-0089、Phase R6-5）: Console から CoS に話しかけた一言の run は、全体の `max_concurrency` と
+`account_pool = true` のプロバイダの `concurrency` に数えず、葉で枠が埋まっていても起きます。アカウントは消費し、走っている run の
+最も少ないアカウントに `max_runs_per_account + 1` 本目まで載ります。同時数の絶対上限は `[execution] max_cos_runs`（既定 2、0..=8。
+`0` で例外を無効化）。`GET /providers` の `in_use_cos` に別に出ます。
+
+```toml
+[execution]
+max_cos_runs = 2
+```
+
 これは既存の設定へ組み込む抜粋です。CoS の指示文や他のハーネスを消す必要はありません。
 各 CLI の認証は GUI の「アカウント」で行います。Codex だけを使う構成でも、Claude の設定は不要です。
 モデル名はプロバイダ側で指定します。別サービスのモデル名を共有する必要はありません。

@@ -17,7 +17,7 @@ db = "../celeris.sqlite3"            # celerisctl --db / CELERIS_DB と同じフ
 # 相対パスを書いたときだけ、この設定ファイルのあるディレクトリ基準になる（Phase 51 までの挙動）。
 workspace_root = "../workspaces"   # WorkspaceSpec::Local の相対パスの基準でもある
 tick_ms = 2000
-max_concurrency = 2
+max_concurrency = 2                # CoS の対話 run（Console の一言）は数えない（ADR-0089。上限は [execution] max_cos_runs）
 lease_grace_secs = 60              # ADR-0002 D7: リース ttl = max_wall_secs + 猶予
 idle_timeout_secs = 300            # ADR-0003 D4: 無出力タイムアウト
 kill_grace_secs = 10               # ADR-0003 D4 / ADR-0044 Phase 53 追記: run を止めるときに
@@ -500,3 +500,9 @@ batch_pages = 8
 max_context_chars = 24000
 # assignee = "software-engineering"
 # adapter = "codex"
+
+# ADR-0089（Phase R6-5）: CoS の対話 run（Console から CoS に話しかけた一言）は `max_concurrency` と
+# `account_pool = true` のプロバイダの `concurrency` の外で走る（アカウントは消費し、走っている run の最も少ない
+# アカウントに `max_runs_per_account + 1` 本目まで載る）。その同時数の絶対上限。既定 2、0..=8。0 で例外を無効化。
+# [execution]
+# max_cos_runs = 2

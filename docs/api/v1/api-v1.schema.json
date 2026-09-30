@@ -13760,7 +13760,14 @@
           "type": "string"
         },
         "in_use": {
-          "description": "実行中の run と Reviewer run の合計。",
+          "description": "実行中の run と Reviewer run の合計。ADR-0089（Phase R6-5）: CoS の対話 run は含めない\n（`in_use_cos`）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "in_use_cos": {
+          "default": 0,
+          "description": "ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外。\n古いスナップショットには無いので既定 0）。",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -13931,7 +13938,16 @@
           "type": "string"
         },
         "in_use": {
-          "description": "スナップショットが無ければ `null`。",
+          "description": "スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "in_use_cos": {
+          "description": "ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外で\n走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。",
           "format": "uint32",
           "minimum": 0,
           "type": [

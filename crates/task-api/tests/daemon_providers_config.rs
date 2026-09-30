@@ -159,6 +159,8 @@ async fn providers_combine_config_snapshot_and_incremental_stats() {
         items[0]["in_use"].is_null() && items[0]["cooldown"].is_null(),
         "no snapshot yet"
     );
+    // ADR-0089（Phase R6-5）: CoS の対話 run は別の欄。スナップショットが無ければ null。
+    assert!(items[0]["in_use_cos"].is_null(), "no snapshot yet");
     assert!(
         items[0]["last_check"].is_null(),
         "ADR-0022 D2: スナップショットが無ければ確認の記録も無い"
@@ -189,6 +191,8 @@ async fn providers_combine_config_snapshot_and_incremental_stats() {
         .cloned()
         .expect("items");
     assert_eq!(items[0]["in_use"], 1);
+    // ADR-0089（Phase R6-5）: CoS の対話 run は `in_use` に含めず `in_use_cos` に別に出る。
+    assert_eq!(items[0]["in_use_cos"], 1);
     assert!(items[0]["cooldown"].is_null());
     // ADR-0022 D2: 一度 check したアカウントには「いつ・どうだったか」が出る。していないものは null のまま。
     assert_eq!(
@@ -199,6 +203,7 @@ async fn providers_combine_config_snapshot_and_incremental_stats() {
     assert_eq!(items[0]["stats"]["question"], 1);
     assert_eq!(items[0]["stats"]["by_day"][0]["runs"], 2);
     assert_eq!(items[1]["in_use"], 0);
+    assert_eq!(items[1]["in_use_cos"], 0);
     assert_eq!(
         items[1]["cooldown"],
         json!({"provider": "claude-b", "until": "2026-09-14T00:05:00Z", "reason": "throttled"})

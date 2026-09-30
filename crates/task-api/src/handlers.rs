@@ -1894,6 +1894,10 @@ async fn providers(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> Ap
                 .as_ref()
                 .and_then(|s| s.providers.iter().find(|live| live.id == provider.id))
                 .map(|live| live.in_use),
+            in_use_cos: snapshot
+                .as_ref()
+                .and_then(|s| s.providers.iter().find(|live| live.id == provider.id))
+                .map(|live| live.in_use_cos),
             cooldown: snapshot
                 .as_ref()
                 .and_then(|s| s.cooldowns.iter().find(|c| c.provider == provider.id))

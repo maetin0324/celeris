@@ -1642,3 +1642,5 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
   昇格させて planner へ理由を返す）。plan_invalid に replan + note（形式、新 key、衝突解消の葉、内容の検査）で回答。
 - 08:15Z: BenchFS の Sirius 実験(2) の子が決定 `e3-e4-scope`（E3/E4 の有効測定 0 件、CHFS runner 未整備、GekkoFS 未導入、8 ノード job が予算不足で動かない。
   full / chfs-4node（推奨）/ drop-c3）。論文の主張範囲（C3）に関わる研究判断なので人へ。
+- 08:18Z: リファクタ retry の子の replan v9 で `leaf_too_large` 決定 ×2（resolve-conflicts-1、verify-merge-1。深さ上限で子 task にできない）→ run-as-leaf で回答。
+  **表示の欠陥**: 決定文が「score 7 ≥ 閾値 11」（7 は 11 以上ではない）と出る。leaf_too_large の文言が gate の score / threshold の意味を取り違えている（R7 候補）。

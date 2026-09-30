@@ -3192,6 +3192,13 @@
           },
           "type": "array"
         },
+        "previous_check_failures": {
+          "description": "ADR-0079 付記 R7-5 D3: この WU の直前の run が `done` を返したのに daemon の `checks` が不合格だったときだけ、\nその記録（先頭の行が `cwd: <走らせた所>`、続いて不合格の検査ごとに判定文 1 行）。前置きの\n「前回の run の check の不合格」節に出す。無ければ空でプロンプトは変わらない。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "task_objective_excerpt": {
           "description": "D9: Task 全体の目的の先頭 1,500 文字（参考として渡す）。",
           "type": "string"

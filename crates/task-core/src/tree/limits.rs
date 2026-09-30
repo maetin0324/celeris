@@ -152,13 +152,15 @@ pub struct LimitHold {
 ///
 /// - 段階の数: `max_stages` 番目より後の段階の unit すべて。
 /// - 段階あたり: 段階ごとに、先頭から `max_units_per_stage` 個より後の unit。
-/// - 子 task: kind task の unit の先頭から `max_child_tasks_per_plan` 個より後。
+/// - 子 task: 子を作る kind task の unit（`adopt` と `done_keys` の unit を除く。R7-2）の先頭から
+///   `max_child_tasks_per_plan` 個より後。
 /// - `max_depth`: `depth` の task が子 task を持てなければ、kind task の unit すべて。
 /// - 木の leaf: この計画で新しく作る leaf（`existing_keys` に無い leaf）のうち、木の残り
 ///   （`max_tree_leaves − tree_leaves`）より後。
 ///
 /// 前の束で止めた unit は後の束に入れない（1 つの unit は 1 件の決定で止まる）。`extra_held` は unit の
-/// gate が既に止めた unit（`leaf_too_large`。数えるが止める束には入れない）。
+/// gate が既に止めた unit（`leaf_too_large`。数えるが止める束には入れない）。`done_keys` は replan で持ち越す
+/// done の unit（子 task の数に入れない。検証と同じ。ADR-0079 R7-2。段階あたりの unit の数にも入れない。R7-3）。
 pub fn plan_limit_holds(
     spec: &crate::execution_plan::ExecutionPlanSpec,
     limits: &TreeLimits,
@@ -166,6 +168,7 @@ pub fn plan_limit_holds(
     tree_leaves: u32,
     existing_keys: &std::collections::BTreeSet<String>,
     extra_held: &std::collections::BTreeSet<String>,
+    done_keys: &std::collections::BTreeSet<String>,
 ) -> Vec<LimitHold> {
     let mut holds: Vec<LimitHold> = Vec::new();
     if spec.schema != crate::execution_plan::EXECUTION_PLAN_SCHEMA_V3 {
@@ -219,10 +222,14 @@ pub fn plan_limit_holds(
             limits.max_stages as u64,
         );
     }
-    // 段階あたりの unit。
+    // 段階あたりの unit。ADR-0079 付記「R7-3」D5: 生きた unit だけ（持ち越す done の unit と `adopt` の unit を除く。
+    // 検証の `TooManyUnitsInStage` と同じ）。
     for stage in &spec.stages {
-        let in_stage: Vec<&crate::execution_plan::PlanUnitSpec> =
-            spec.units.iter().filter(|u| u.stage == stage.key).collect();
+        let in_stage: Vec<&crate::execution_plan::PlanUnitSpec> = spec
+            .units
+            .iter()
+            .filter(|u| u.stage == stage.key && u.adopt.is_none() && !done_keys.contains(&u.key))
+            .collect();
         if in_stage.len() > limits.max_units_per_stage {
             let units = in_stage
                 .iter()
@@ -244,8 +251,11 @@ pub fn plan_limit_holds(
     let task_units: Vec<&crate::execution_plan::PlanUnitSpec> =
         spec.units.iter().filter(|u| u.is_task()).collect();
     // ADR-0079 D15（Phase R5b-prep）: `adopt` の unit は子を作らないので子 task の上限に数えない（検証と同じ）。
-    let new_children: Vec<&&crate::execution_plan::PlanUnitSpec> =
-        task_units.iter().filter(|u| u.creates_child()).collect();
+    // ADR-0079 R7-2: 持ち越す done の unit も数えない（検証の `TooManyChildTasks` と同じ）。
+    let new_children: Vec<&&crate::execution_plan::PlanUnitSpec> = task_units
+        .iter()
+        .filter(|u| u.creates_child() && !done_keys.contains(&u.key))
+        .collect();
     if new_children.len() > limits.max_child_tasks_per_plan {
         let units = new_children
             .iter()
@@ -523,6 +533,29 @@ pub fn limit_decision(
     }
 }
 
+/// ADR-0079 付記「R7-3」D4: gate が compound と判定した根拠の文（決定文に使う）。score が閾値以上
+/// （`compound/score`）なら「score S ≥ 閾値 T」、強制規則（`compound/long-and-broad` など）なら score が閾値に
+/// 届いていなくても規則で compound になったことを書く（以前は常に「score S ≥ 閾値 T」と書き、「score 7 ≥ 閾値 11」の
+/// ような誤った文になっていた）。
+pub fn gate_basis_text(
+    decision: &crate::execution_gate::ExecutionGateDecision,
+    threshold: u32,
+) -> String {
+    let rule = decision.rule_id.as_str();
+    let score = decision.score;
+    if i64::from(score) >= i64::from(threshold) {
+        return format!("gate {rule}、score {score} ≥ 閾値 {threshold}");
+    }
+    let why = match rule {
+        "compound/long-and-broad" => "expected_length=high かつ cross_cutting=high",
+        "human/explicit" => "人の明示",
+        _ => "score 以外の規則",
+    };
+    format!(
+        "gate {rule}: score {score} は閾値 {threshold} 未満だが、この規則は score によらず compound と判定する（{why}）"
+    )
+}
+
 /// D4 (3)（Phase R2a）: `kind: leaf_too_large` の決定の要求（compound な leaf を子 task にできない深さ）。
 pub fn leaf_too_large_decision(
     gate: &UnitGate,
@@ -536,8 +569,9 @@ pub fn leaf_too_large_decision(
         key: format!("leaf_too_large:{}", gate.unit_key),
         kind: DecisionKind::LeafTooLarge,
         question: format!(
-            "unit {}「{unit_title}」は 1 run に収まらない見込み（gate {}、score {} ≥ 閾値 {}）ですが、この深さでは子 task にできません。どうしますか",
-            gate.unit_key, gate.decision.rule_id, gate.decision.score, gate.threshold
+            "unit {}「{unit_title}」は 1 run に収まらない見込み（{}）ですが、この深さでは子 task にできません。どうしますか",
+            gate.unit_key,
+            gate_basis_text(&gate.decision, gate.threshold)
         ),
         options: vec![
             DecisionOption {

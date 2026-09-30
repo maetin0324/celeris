@@ -1580,3 +1580,266 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
   有効かを確認する。
 - 07:14Z: browser 根の repair-phase-4-1 が continuation 上限 → 「予算を増やして続ける」で回答。
 - 07:26Z: release **b4521dd9d3ad**（main = R6 + R7-1、schema 34）: gate ok、push、verify ok（n-1-compat は想定どおり SchemaTooNew で live_ok=false → 昇格は停止→起動）。
+- 07:3xZ: 人が release **b4521dd9d3ad**（R6 + R7-1、schema 34）を停止→起動で昇格（health b4521dd9d3ad、schema 34）。web Phase 1 の人 PUT（v6、
+  `overridden_done = p1-01-scaffold, p1-02-03-types-fake`、R5b-fix1 の本番 2 例目）を適用 → 質問に回答して統合検査へ。
+- 07:4xZ 人「リファクタ task は a（retry）」: `POST /tasks/01M3Q6F0Y8M0HDMF6Y68G8519M/retry {accept: false, execution: "compound"}` → 新 task
+  **01M3RM0YS1M9KSYH4WYW59E89R**（draft）。objective に引き継ぎ（元ブランチ 71 commit を最初の葉で merge、nav の check はスクリプトを作る葉の後、
+  残りは最終検証と PROGRESS）を追記して accept → ready。
+
+## R7-2: planner の check の書き方、子を作る unit だけを上限に数える、計画 JSON の上限（2026-09-30）
+
+[ADR-0079 付記 R7-2](../adr/0079-recursive-task-decomposition.md)。発端は上の 04:57Z（web Phase 1 の check: PROGRESS 除外なし・`pnpm test` の引数・
+pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task の「nav の check はスクリプトを作る葉の後」、本番の `too many units with kind "task": 7 > 6`
+と `execution plan JSON is too large: 24815 > 24576 bytes`。**migration なし（schema 34 のまま）**。本番（systemctl・/var/lib/celeris・7700/7710・設定）
+には触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-aea7bdf944fe2369d`。
+
+### 実装したもの
+
+- **check の書き方**（`task_worker::claude_code::PLANNER_CHECK_GUIDANCE`、プロンプトの差分 15 行）: 範囲外差分から記録のパスを除く・`pnpm test` /
+  `cargo test` に位置引数を付けない・`corepack pnpm@<版>`・base は merge-base・否定 grep の自己言及・他の unit が作る script を使う check は
+  `depends_on` の後。/1・/2・/3 の planner の上限の節の直後に出す。
+- **子 task の上限**: `validate_v3` の `TooManyChildTasks` と `tree::plan_limit_holds`（引数 `done_keys`、`tree_plan::unit_gate_plan` が渡す）は
+  `creates_child()` かつ持ち越す done でない unit を数える（R6-1 D5 と同じ）。/3 の planner の上限の行も同じ文に。
+- **JSON の上限**: `ExecutionLimits.max_plan_json_bytes_v3 = 64 KiB`（/3 の検証だけ。/1・/2 は 24 KiB のまま）、dispatcher は /3 の planner に
+  この値を渡す。拒否の文に「objective は要点だけにし、詳細は artifacts / 知識ベースのパスで参照してください」。
+- `config/celeris.example.toml`: `max_units_per_stage` / `max_child_tasks_per_plan` に何を数えるかの注釈。ADR-0079 D3 の表を直した。
+
+### 試験
+
+- `task_core::execution_plan::tests::child_task_limit_counts_only_units_that_are_not_done`（done 3 + 生きた 4 / 6 は上限 6 で通る、done 3 + 生きた 7 は
+  `7 > 6`、done なしの 7 は従来どおり拒否）、`v3_plan_json_size_uses_its_own_limit_and_says_what_to_trim`（既定 24 KiB / 64 KiB、/3 は /1・/2 の上限を
+  見ない、拒否の文の案内）。
+- `task_core::tree::tests::plan_limit_holds_do_not_count_done_task_units`（done 3 を渡せば止めない、渡さなければ 7 つ目を止める）。既存の
+  `plan_limit_holds_select_only_the_excess` は引数を足しただけ（期待値は不変）。
+- `task_worker::claude_code::tests::planner_prompt_has_the_check_writing_section`（/2 と /3 のプロンプトに 6 規則が 1 回ずつ、/3 は 65536 bytes と
+  「done と adopt は数えない」、/2 は 24576 bytes）。
+- 既存の fixture で古い数え方に依存したものは無かった（`rejects_too_many_child_task_units` は done なしなので不変）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 542 passed。`-p task-ops` → 369 passed。`-p task-worker` → 620 passed, 4 skipped。`-p task-dispatch` → 477 passed。
+  `-p celeris -E 'test(/example/)'` → 11 passed（example の設定の読み込み）。
+
+### 未解決・提案
+
+- `max_units_per_stage` は done の unit を含めて数える（本番では当たっていない。当たれば同じ直しを検討）。
+- check の指針はプロンプトだけ（機械的な検査はしない）。効き目は次の web / refactor の計画の check で確かめる。
+- 08:0xZ: **R7-2**（planner の「check の書き方」指針、`max_child_tasks_per_plan` は子を作る unit だけ（done / adopt を除く）、plan/3 の JSON 上限 64 KiB と
+  削り方の案内、config 例の注記。Opus 4b28613）を main に統合 → release chain 実行中。残: failed のまま残した task unit は数える、`max_units_per_stage` は done も数える。
+- 08:00Z: release **fc60977fd142**（main = R7-2 まで、schema 34）: gate ok、verify ok / live_ok。昇格は人（live）。
+- 08:09Z: リファクタ retry の子 01M3RMEW5X86JBSKH4PH7J4RVP（旧 tip の merge）が段階 merge の統合検査で失敗 → 質問（R6-1 D7 の効果で失敗した check が質問文に
+  出る）。原因 3 つ: planner の check が git の形（`HEAD^2` = 旧 tip、merge commit）を前提にしている（統合は WU ブランチの取り込みで merge commit にならない）、
+  commit message の grep を受け入れ条件にしている、そして **葉が conflict marker を含んだまま commit**（task-ops / task-worker がコンパイル不能）。
+  compound の note で「内容の検査に置き換え、衝突解消の葉を足す」を渡して replan（2 回目の note は planner run 中で 409、次の失敗時に再送）。
+  **R7 候補**: 旧ブランチを merge する葉の check に「conflict marker 無し + cargo build」を planner 指針として足す。
+- 08:11Z: **欠陥（R7 候補）**: 統合失敗の質問に回答すると、人が `decompose {compound}`（replan 要求）を先に入れていても、dispatcher は統合 WU を同じ check で
+  再実行してから（再び失敗して）次の質問で初めて planner を回す。web Phase 1（05:00Z → 05:09Z）とリファクタ retry の子（08:0xZ → 08:11Z）で再現。
+  人の replan 要求が pending のときは統合の再実行より planner を優先すべき。
+- 08:15Z: リファクタ retry の子の replan が 2 回とも失敗: (1) planner の JSON 形式（acceptance の要素が文字列）、(2) **`UNIQUE constraint failed: work_units.task_id, key`
+  で採用が DB 制約エラーに落ちる**（superseded の key を planner が再利用。検証で「key の再利用」として弾くべき事象が sqlite のエラーで出ている。R7 候補: 検証に
+  昇格させて planner へ理由を返す）。plan_invalid に replan + note（形式、新 key、衝突解消の葉、内容の検査）で回答。
+- 08:15Z: BenchFS の Sirius 実験(2) の子が決定 `e3-e4-scope`（E3/E4 の有効測定 0 件、CHFS runner 未整備、GekkoFS 未導入、8 ノード job が予算不足で動かない。
+  full / chfs-4node（推奨）/ drop-c3）。論文の主張範囲（C3）に関わる研究判断なので人へ。
+- 08:18Z: リファクタ retry の子の replan v9 で `leaf_too_large` 決定 ×2（resolve-conflicts-1、verify-merge-1。深さ上限で子 task にできない）→ run-as-leaf で回答。
+  **表示の欠陥**: 決定文が「score 7 ≥ 閾値 11」（7 は 11 以上ではない）と出る。leaf_too_large の文言が gate の score / threshold の意味を取り違えている（R7 候補）。
+- 08:20Z: web Phase 1 の子 01M3QEA4HC12TFCNDG5A7WT722 が最終 review で **failed**。web/ の検証は全部 pass（test 36/36、e2e parity、build、boundaries / secrets / parity
+  check、workspace test / clippy）。落ちたのは task 受け入れ条件 0 の `pnpm -C gui test`（root planner が書いた）が `ERR_PNPM_BAD_PM_VERSION`（repo 直下から
+  corepack 経由で起動した pnpm は既定 12.6.0、gui は 11.27.0 固定）。原因は check の書き方（`corepack pnpm@11.27.0 -C gui …` なら通る。R7-2 の指針、未昇格）。
+  根の unit phase-1 failed → 根が replan 中。次の子は前の子のブランチ celeris/01M3QEA4… を merge して引き継ぐこと。R6-1 D4 の効果で、failed と同時に
+  stale な reviewer run 3 件が索引で閉じられた。
+- 08:44Z: **R7-1 の本番初回**: BenchFS「Sirius 実験(2)」の子 01M3RM9HP2P6MABRNSB1N1CEHJ が `wait`（sirius、PBS job 42660〜42662、poll 300 s、timeout 24 h、
+  E3 CHFS W1）を書き、daemon が `cluster_job_wait_started` → 2 秒後に `cluster_job_wait_polled`（3 job とも R）を記録。run は枠を離し、task は待ちで止まる。
+  終了時の `cluster_job_wait_finished` と続き run の preamble（job の終了状態）を次に確認する。
+- 08:49Z: **R7-1 の一周を本番で確認**: `cluster_job_wait_finished {satisfied}`（42660〜42662 とも F、exit 0）→ `transitioned blocked→ready reason=cluster_job_resume`
+  → 21 秒後に続き run が dispatch（同じ子 task、job の終了状態を preamble で受け取る）。待ち 5 分間は枠を使っていない。
+- 09:00Z: リファクタ retry の子は衝突解消の葉（15 ファイル、workspace build/test/clippy pass）が done になったが、統合 WU の check が v1 のまま（`HEAD^2` 検査）で
+  再失敗 → 質問。**統合 WU の check は replan で更新されない**（daemon が旧版から統合 WU 行を持ち越す）欠陥として **R7-3** に委譲（あわせて: 人の replan 要求を
+  統合再実行より優先、superseded key 再利用の検証、leaf_too_large の文言、段階上限は走る unit だけ、failed unit の数え方の明文化）。この子は R7-3 昇格まで
+  blocked のまま置く（回答すると同じ check で再実行されるだけ）。
+- 09:11Z: BenchFS 根の planner run が infra error: R6-3 の submodule 展開が sirius の worktree で失敗（`ior_integration/ior` の pin 7054224d が remote に無い
+  = 未 push の commit。`not our ref`）→ prepare 全体が失敗し planner が回れない。**R7-4**（submodule 展開を submodule ごとの best-effort にし、失敗は進捗行の
+  警告に）を Opus に委譲。人への依頼: ior fork の commit 7054224d を remote に push するか、superproject の pin を存在する commit に更新する。
+- 09:11Z: BenchFS 実験(2) の子は review 不合格 → failed（`full` を選んだため E3/E4・GekkoFS 導入・等予算 grid が要件だが未実施。子は子作業を提案）→ 根が replan。
+
+
+## R7-4: submodule の初期化は submodule ごとの best-effort（2026-09-30）
+
+[ADR-0019 付記 R6-3 の R7-4](../adr/0019-worktree-sync-for-large-repositories.md)。発端は本番 2026-09-30 09:11Z、task 01M3PAZ4XG4QN1T8S98VNA6ABV（sirius の BenchFS）:
+上位が固定した `ior_integration/ior` の commit（push していない）が remote に無く、`git submodule update --init --recursive` が exit 67 → workspace の
+準備ごと失敗 → 根の planner の run が infra の失敗で進まない。**migration なし**。本番（systemctl・/var/lib/celeris・7700/7710・設定・ssh）には触れていない。
+task-ops / task-dispatch / task-core には触れていない（R7-3 と並行）。
+
+### 実装したもの
+
+- `task_worker::ssh::SshWorkspace::ensure_worktree`: 行頭 `-` があれば `.gitmodules` の path ごとに `submodule update --init --recursive -- <path>`、
+  失敗は `celeris-submodule-failed <path>\t<要点>` の行で返して続ける。Rust 側で `submodule <path> could not be initialised: <要点> (worktree <wt> on cluster <c>)`
+  の進行の行と `tracing::warn!`。要点は stderr の最初の `fatal:` / `error:` の行（`Cloning into ...` を避ける）、無ければ最初の空でない行。成功の行
+  `initialised N submodules ...` の N は失敗した path とその下を除いた初期化済みの数（0 なら出さない）。exit 67 は `git submodule status` が動かないときだけ。
+- `task_worker::local_worktree::init_submodules`: 同じ手順。戻り値を `Result<Option<SubmoduleInit { initialised, failed: Vec<(path, 要点)> }>>` にした
+  （`Err` は `submodule status` が動かないときだけ）。呼び出し側は `ensure_blocking` だけ（戻り値は捨てる。失敗は tracing の warn）。
+- 再利用: 失敗した submodule は clone まで済んで行頭 `-` でなくなることがあり、試し直さない（R6-3 の「`-` が無ければ触らない」をそのまま）。警告は最初の準備の 1 回。
+
+### 試験
+
+- `ssh::tests::one_unfetchable_submodule_does_not_stop_the_other_or_the_prepare`（偽 ssh。`lib/sub` と、remote に無い commit を固定した `ior`）: 準備は成功、
+  `lib/sub/lib.rs` が入る、進行の行は `initialised 1 submodules ...` と `submodule ior could not be initialised: fatal: ...`、再利用も成功で行は増えない。
+- `ssh::tests::a_failed_submodule_init_is_a_warning_note_not_a_prepare_error`（旧 `a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree`。
+  submodule の元を消す）: 準備は成功、警告の行 1 つ（path・クラスタ・worktree を名指し）。
+- `local_worktree::tests::one_unfetchable_submodule_does_not_stop_the_others`（同じ構成、`initialised = 1`、`failed = [("ior", "fatal: ...")]`）、
+  `the_worktree_initialises_submodules_and_reuse_is_idempotent`（既定の git の file 拒否は `ensure` のエラーでなく警告になった）。
+
+### 証拠
+
+- `cargo fmt --all` → 整形のみ、`cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo test -p task-worker` → exit 0（lib 612 passed / 0 failed / 1 ignored、ほかの test バイナリも 0 failed）。
+
+### 未解決・提案
+
+- 失敗した submodule を再利用で試し直す手段は無い（人が `git submodule deinit -f <path>` すれば次の準備で試し直す）。remote に commit が
+  push されたら直る種類の失敗なので、要るなら「警告の出た path を覚えて再試行する」を別 Phase で。
+- 09:52Z: release **7c10d528ad2a**（main = R7-4 まで、schema 34）: `release.sh main` exit 0（13 commits / 4 files / sensitive 0）→ `verify.sh` ok=true / live_ok=true（checks 1〜6、smoke 7.4 s）
+  → `promote.sh 7c10d528ad2a` live で昇格（引き継ぎ 2 s、backup `20260930-095156-pre-7c10d528ad2a.sqlite3`）。`/health` release=7c10d528ad2a role=active。
+  BenchFS 根の planner の submodule 展開は次の準備から best-effort になる（ior の pin は人が push するまで警告のまま）。
+
+## R7-3: 段階の統合の check は採用した版に従う、人の replan は統合の再実行より先、退役 key の検証、段階の上限は生きた unit だけ（2026-09-30）
+
+[ADR-0079 付記 R7-3](../adr/0079-recursive-task-decomposition.md)。発端は上の 08:09Z〜09:00Z（リファクタ retry の子の `HEAD^2` の統合 check が replan 後も残る、
+人の decompose 後の回答で統合が同じ check で再実行、`UNIQUE constraint failed: work_units.task_id, key`、`leaf_too_large` の「score 7 ≥ 閾値 11」）と R7-2 の残
+（`max_units_per_stage` は done も数える、failed の数え方）。**migration なし（schema 34 のまま）**。本番（systemctl・/var/lib/celeris・7700/7710・設定）には
+触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a142b6f989b6148df`。
+
+### 実装したもの
+
+- **D1 done の unit の `checks` は planner の replan でも書き換えられる**: 原因は統合 WU の行ではなく、段階の統合が集める**done の葉の行の `spec.checks`**
+  （done 不変で planner は直せず、/3 は `carry_done_units_v3` が planner の書いた check を黙って採用した spec に戻していた）。
+  `done_carry_over_errors` は `PlanOrigin::Planner` の `checks` だけの差を許す（`same_except_checks`）。`carry_done_units_v3` は planner が書いた空でない
+  `checks` を残す。採用は R5b-fix1 の経路で done の行の spec を置き換え `WorkUnitSpecOverridden{changed_fields: ["checks"]}`（replay も一致）。unit は再実行
+  しない。/2・/3 の planner プロンプトと `DoneWorkUnitChanged` の文に「done の unit で直せるのは `checks` だけ（統合で再実行）」。
+- **D2 人の replan は統合の再実行より先**: `wu_dispatch_gate` は既に人の依頼を回答による再開より先に見ていた（順序は変えていない）。回帰試験で、planner が先に
+  走り、直した check で統合が 1 回で通ることを確かめた。本番の「同じ check で再実行」は D1（replan 採用後の統合が done の葉の古い check を走らせた）と読む。
+  作業開始時に残っていた `eprintln!("DBG …")` 2 行は削除。
+- **D3 退役 key の再利用は検証の理由**: `task_core::execution_plan::retired_key_errors`（`PlanValidationError::RetiredKeyReused{key, stage}`）が unit の key と、
+  前の版で消した段階の `integrate-<stage>` の重なりを拒否（後者が sqlite の UNIQUE エラーの原因だった）。dispatcher は planner の計画の検証の直後（採用の前）に
+  当て `invalid execution plan: …`（再試行・`plan_invalid` の経路）、`task_ops::execution::replan` も同じ関数を使う（人の PUT も 400）。
+- **D4 `leaf_too_large` の文**: `tree::gate_basis_text`。`compound/score` だけ「score S ≥ 閾値 T」、強制規則（`compound/long-and-broad`）は「score S は閾値 T 未満
+  だが、この規則は score によらず compound と判定する（expected_length=high かつ cross_cutting=high）」。
+- **D5 `max_units_per_stage` は生きた unit だけ**: 検証（`TooManyUnitsInStage`）と `plan_limit_holds`（`UnitsPerStage`）は持ち越す done と `adopt` を数えない。
+  プロンプトの上限の行・拒否文・config 例を直した。
+- **D6 failed の数え方の明文化**: failed / cancelled / running の子の unit を新しい版に残せば両上限に数える（ADR の D3 の表と config 例の注釈）。挙動は不変。
+
+### 試験
+
+- task-core: `execution_plan::tests::planner_replan_may_change_only_the_checks_of_a_done_unit`、`carry_done_units_v3_keeps_the_planners_non_empty_checks`、
+  `retired_key_errors_catch_unit_keys_and_removed_stage_keys`、`units_per_stage_limit_counts_only_live_units`、`tree::tests::plan_limit_holds_count_only_live_units_per_stage`、
+  `leaf_too_large_text_states_the_real_gate_basis`。既存の `planner_replan_still_rejects_a_changed_done_work_unit`（R5b-fix1）は D1 に合わせ、planner は
+  check だけなら通る・objective も変えれば拒否・repair は拒否、に直した。
+- task-ops: `execution::tests::planner_replan_rewrites_the_checks_of_a_done_unit`（行・event・replay 一致）、`replan_rejects_a_removed_stage_key_as_a_validation_error`。
+  既存の `human_replan_overrides_the_spec_of_a_done_work_unit` の「planner は拒む」段は repair の計画に置き換えた。
+- task-dispatch: `a_pending_human_replan_runs_the_planner_before_retrying_the_integration`（統合失敗 → 質問 → 人の decompose → 回答 → planner が先、差分で
+  done の `b` の check を直す → 統合は 1 回で done、`b` は再実行しない）、`a_replan_reusing_a_removed_stage_key_is_rejected_as_an_invalid_plan`。
+- task-worker: `claude_code::tests::replan_prompt_allows_rewriting_only_the_checks_of_done_units`。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 548 passed。`-p task-ops` → 371 passed。`-p task-worker` → 621 passed, 4 skipped。`-p task-dispatch` → 479 passed。
+  `cargo nextest run --workspace` → 2950 passed, 7 skipped（exit 0）。
+
+### 未解決・提案
+
+- D2 は本番の event を直接見ていない（本番 DB に触れない）。昇格後に同じ形（統合失敗 → decompose → 回答）が起きたら event の列で planner が先に走ることを確かめる。
+- done の unit の新しい `checks` は unit の worktree では走らせず、段階の統合でだけ走る。
+- 保留中のリファクタ retry の子（blocked）は、R7-3 の昇格後に replan + note（`HEAD^2` の check を内容の検査に置き換える）で進められる見込み。
+- 10:12Z: **R7-3** を main に統合（7b2cd54c）→ release **7b2cd54c1914**（schema 34）: gate（fmt / cargo-test 128 s / clippy / build / pnpm）全 exit 0 → `verify.sh` ok=true /
+  live_ok=true → `promote.sh` live で昇格（引き継ぎ 2 s、backup `20260930-100939-pre-7b2cd54c1914.sqlite3`）。旧 fc60977fd142 / 7c10d528ad2a は
+  in-flight の run（web Phase 2 の codex WU run 等）を drain 中（正常。`--stop-stale` は使っていない）。リファクタ retry の子 01M3RMEW… は、replan の note で
+  done の葉の `HEAD^2` check を内容の検査に置き換えれば進める（R7-3 D1）。次の「統合失敗 → decompose → 回答」で planner が先に回ることを events で確かめる。
+- 11:4xZ: **R7-3 の本番初回**（リファクタ retry の子 01M3RMEW…）: `decompose {compound, note}`（done の葉 merge-store の checks の `HEAD^2` / `git log -1` を
+  `merge-base --is-ancestor` と merge commit 077742f8 名指しの検査に置き換え。人が統合 HEAD 64d53218 で事前に確認: 祖先 2 つ・store.rs 無し・マーカー 0・名指し 24 件）
+  → 質問に回答。**統合より先に planner**（11:42:34 planner run → 11:43:15 plan v10、`work_unit_spec_overridden {merge-store, changed_fields: [checks]}`、
+  `overridden_done=merge-store`）→ `integrate-merge` running → **11:48:40 done（integrated）**。merge-store は再実行していない（D1・D2 とも本番で確認）。
+  v10 で出た `leaf_too_large:verify-merge-1` の文言は「score 6 は閾値 11 未満だが、この規則は score によらず compound と判定する（expected_length=high かつ
+  cross_cutting=high）」（D4 の直りを確認）→ run-as-leaf で回答、verify-merge-1 が再開。
+
+## R7-5: WU の check の不合格を記録し、次の run と replan に渡す、check の不合格で usage を落とさない（2026-09-30）
+
+[ADR-0079 付記 R7-5](../adr/0079-recursive-task-decomposition.md)。発端は本番 2026-09-30 14:14Z〜14:26Z、task 01M3SAHFRK8HA2AM7NYHKF1PD0
+（h-life ミラーを同一LANの別デバイスから閲覧可能にする。作業場所は git でない `Local{path: <task_id>}`）: lan-verify が 3 run とも `done` を
+返したのに daemon が retry → failed → replan にし、**なぜ落としたかがどの event にも無く**、`usage: null`。**migration なし（schema 34 のまま）**。
+Event を 1 つ足した（events は JSON の列）。本番（systemctl・/var/lib/celeris・7700/7710・設定）には読み取り（GET・sqlite `mode=ro`・workspace の
+閲覧）以外で触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a67474ceae6cfec8c`。
+
+### 原因（本番の読み取りとコード）
+
+- **A（run を落とした理由）**: cwd ではない。worktree の無い task では `task_workspaces_for` = `None`（`legacy_worktree_for` が git でない path で
+  `None`）→ `spawn_work_unit_checks` の `work_dir_for` = `None` → check は **task のディレクトリ**（worker の cwd = `artifacts/` の親）で走る。
+  lan-bind の `test -s artifacts/lan-bind.md` はそこで通り、lan-verify の `grep -q '192.168.1.103:8000' artifacts/report.md` も task の
+  ディレクトリからは exit 0（`/home/rmaeda/sites/h-life` からは exit 2）。落ちたのは v1 の check
+  `bash /home/rmaeda/sites/h-life/check_lan.sh http://192.168.1.103:8000/` で、unit 自身が run 1 で作ったスクリプトの引数は `[LAN_IP] [PORT]`
+  （`IP=http://…` になり `ss`・`ip addr` の照合と LAN crawl が必ず FAIL → exit 1。スクリプトは `lan_check.tsv` を書き docker も起動するので本番では
+  走らせず、静的に確認）。worker は引数なしで走らせて exit 0 を見ていた。v2 の planner の rationale も同じ結論。
+- **欠陥**: `on_work_unit_checks_finished` は理由を `Terminal::Error{message: "work unit checks failed: cmd=… exit=…"}` に入れるが、
+  `finish_worker_result` が outcome を `work_unit_retry: …（n/m）` / `replan: work unit lan-verify failed` に上書きして消した。retry の run の
+  プロンプト（runs/01M3SAVEX…/prompt.txt・01M3SAWQ…/prompt.txt）にも replan の planner（「Why this replan was triggered: work unit lan-verify
+  failed」）にも理由が無い。`Terminal::Done` → `Error` のすり替えで usage も落ちた（`quota_estimated.weighted_tokens` 0）。
+- **B（replan 後に planner が起きない）**: 前提が誤り。planner run 01M3SBAJ7CZAYZSYNWQ733FYGA は 14:26:02Z に dispatch された。14:19:13Z の
+  replan の時点で `max_concurrency = 6`（`~/.config/celeris/config.toml:4`）が 6 run（01M3SAN66P…・01M3SAMZG… の WU 3 本・langmem 01M3SASRRG…・
+  01M3SAY0ZW…）で埋まっていて、langmem の run が 14:26:01.985Z に終わった 0.1 s 後に dispatch（枠待ち。dispatcher の欠陥ではないので直していない）。
+  その後 v2（check を `check_lan.sh 192.168.1.103 8000` に直した版）→ lan-verify done 14:28:36Z → 統合 → review_pass → **task done 14:29:18Z**。
+
+### 実装したもの
+
+- **D1** `task_core::Event::WorkUnitChecksFailed { run_id, work_unit_id, key, cwd, failed: [FailedWorkUnitCheck{cmd, expect_exit, detail}] }`
+  （`detail` は review.rs の判定文 = `cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`）。`Completion::WorkUnitChecks` に走らせた checks と
+  cwd（`LocalWorkspace::work_dir()`）を足し、`WorkUnitCheckRun::failure` が不合格の記録（worker の usage 付き）を作る。`finish_worker_result_with`
+  が `WorkerFinished` と同じトランザクションで積む。replay は無視。task-api の型名 `work_unit_checks_failed`（`EVENT_TYPES` 49）。
+- **D2** outcome の要約: `work_unit_retry: WorkUnit <key> を最初からやり直します（n/m）: checks failed in <cwd>: <detail>; …`、
+  `replan: work unit <key> failed: checks failed in <cwd>: …`（1,500 文字で切る）。replan の `replan_reason` は `replan: ` の outcome から取るので
+  planner にも届く。replan を使い切った後の質問も同じ要約を持つ（`Terminal::Error` の文が `work unit checks failed in <cwd>: …`）。
+- **D3** `WorkUnitPromptContext.previous_check_failures`（`previous_check_failure_lines`: events を新しい方から見て、その WU の
+  `WorkUnitChecksFailed` が別の run の `running` 遷移より先にあるときだけ `cwd: …` + 判定文）。プロンプトの節「## 前回の run の check の不合格」
+  （原因を先に確かめる、同じ cwd で check を自分で走らせてから done、check が誤りなら `{"yield": {"plan_issue": "…"}}` で申告 = replan）。空なら
+  プロンプトは不変。
+- **D4** check の不合格で `Error` にすり替えても worker の usage を `WorkerFinished.usage` と quota の見積もりに使う。
+- **D5** `PLANNER_CHECK_GUIDANCE`: check の走る所（unit の worktree、git の worktree が無い task は task のディレクトリ）と、「unit 自身が作る
+  スクリプトを check が走らせるなら呼び出し方（引数）を objective に書く」を 1 行ずつ。
+- schema: `docs/api/v1/event.schema.json`・`docs/api/v1/api-v1.schema.json`・`docs/protocol/worker-protocol.schema.json` を `UPDATE_SCHEMA=1` で再生成。
+
+### 試験
+
+- task-dispatch（新しい `dispatcher/tests/work_unit_check_failures.rs`）:
+  - `a_failed_work_unit_check_is_recorded_and_handed_to_the_next_run`（git でない tempdir の task、check `test -s artifacts/report.md` と
+    `test -f .fixed`）: `WorkUnitChecksFailed` は 1 件・cwd = task のディレクトリ・落ちたのは `.fixed` だけ（相対の artifacts の check は通る）・
+    `exit=Some(1)`、その run の `WorkerFinished` は `work_unit_retry: …（1/2）: checks failed in …` で usage を保つ、2 回目の run の文脈に
+    `cwd: …` と判定文 → 直して done、replay は clean。
+  - `a_work_unit_whose_check_keeps_failing_replans_with_the_failed_check_as_the_reason`（本番の形: `[LAN_IP] [PORT]` のスクリプトに URL を渡す
+    check）: 2 run とも記録、`replan: work unit b failed: checks failed in …FAIL not listening…`、planner の `replan_reason` に落ちた check の
+    cmd、retry の run の文脈に 1 回目の不合格、replan 後に done。
+  - `previous_check_failure_lines_only_describe_the_immediately_preceding_run`（初回・直前の run が checks で落ちていない・別 WU は空、
+    判定文に cmd が無い exec 失敗は `cmd=… expected=…:` を前置）。
+- task-worker: `claude_code::tests::leaf_prompt_carries_the_previous_runs_failed_checks`、`planner_prompt_has_the_check_writing_section` に
+  R7-5 の 2 行。
+- task-api: `query::tests::*event_types*` に `WorkUnitChecksFailed`（49 種）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 548 passed。`-p task-worker` → 624 passed, 4 skipped。`-p task-api` → 395 passed, 2 skipped。
+  `-p task-ops` → 371 passed。`-p task-dispatch` → 482 passed。
+- `cargo nextest run --workspace` → **2956 passed, 7 skipped（exit 0）**。
+
+### 未解決・提案
+
+- 同じ check が同じ判定文で続けて落ちても retry は `max_retries` まで回す（次の run は理由を読めるので直すか `plan_issue` で申告できる）。
+  決定的な不合格の早期打ち切り（同じ `detail` が 2 回続いたら retry せず replan）は要るなら別 Phase で。
+- `WorkUnitChecksFailed` の GUI の専用表示は無い（timeline は型名と JSON）。
+- 本番 task 01M3SAHFRK8HA2AM7NYHKF1PD0 は 14:29:18Z に done（人の操作は不要）。昇格後に同じ形が起きたら、events の
+  `work_unit_checks_failed` と retry の run の prompt.txt の「前回の run の check の不合格」節で確かめる。
+- 14:56Z: **R7-5** を main に統合 → release **1b3c4ee6ac93**（schema 34）: gate（fmt / cargo-test 130 s / clippy / build / pnpm）全 exit 0 → `verify.sh` ok=true /
+  live_ok=true → `promote.sh` live で昇格（引き継ぎ 2 s、backup `20260930-145618-pre-1b3c4ee6ac93.sqlite3`）。発端の h-life task 01M3SAHF… は v2 の計画
+  （check の引数を `192.168.1.103 8000` に直した版）で 14:29Z に done 済み。次に WU の check が落ちたとき `work_unit_checks_failed` と outcome の要約が出ることを確かめる。

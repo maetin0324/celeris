@@ -2072,6 +2072,42 @@
           "type": "object"
         },
         {
+          "description": "ADR-0079 付記 R7-5 D1: WU の run が `done` を返したが、その WU の `checks` が不合格だった（daemon が run を\nretry / failed にすり替えた理由）。`cwd` は check を実際に走らせた所。その run の `WorkerFinished` と同じ\nトランザクションで積む。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "cwd": {
+              "type": "string"
+            },
+            "failed": {
+              "items": {
+                "$ref": "#/$defs/FailedWorkUnitCheck"
+              },
+              "type": "array"
+            },
+            "key": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "work_unit_checks_failed",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "work_unit_id",
+            "key",
+            "cwd",
+            "failed"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 R5b-fix1: 人の replan（`PlanOrigin::Human`）が done の WorkUnit の spec を上書きした\n（状態は `done` のまま。`work_units.spec` だけを新しい版の spec に置き換える）。`plan_id` / `plan_version` は\n上書きした新しい版、`changed_fields` は変わった `WorkUnitSpec` の欄の名前（昇順）。replan と同じ\nトランザクションで、その版の `ExecutionPlanned` の前に積む。状態は変えない（`replay` は行の spec の\n書き換えにだけ使う）。",
           "properties": {
             "changed_fields": {
@@ -2964,6 +3000,27 @@
       "required": [
         "schema",
         "rationale"
+      ],
+      "type": "object"
+    },
+    "FailedWorkUnitCheck": {
+      "description": "ADR-0079 付記 R7-5 D1: `Event::WorkUnitChecksFailed` の不合格の検査 1 件。`detail` は判定文そのもの\n（`cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "expect_exit": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cmd",
+        "expect_exit",
+        "detail"
       ],
       "type": "object"
     },

@@ -18,6 +18,11 @@ impl Dispatcher {
         if !second_pass && self.running_for_task(task.id) > 0 {
             return Ok(false);
         }
+        // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
+        let cos = !second_pass && self.is_cos_task(&task)?;
+        if !self.run_load().admits(cos) {
+            return Ok(false);
+        }
         // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
         // 入れない（孫プロセスが片付く猶予を 1 tick 置く）。
         if self.just_aborted.contains(&task.id) {
@@ -367,12 +372,13 @@ impl Dispatcher {
         // 軽く行う。継続セッションを見つけてから選ぶのでないと、ADR-0049 ランキングが先に別の
         // アダプタ・アカウントへ倒れてしまう）。
         let sticky_session = self.cos_conversation_session(&task)?;
-        let Some((adapter_id, provider_id, selected_account)) = self.select_provider(
+        let Some((adapter_id, provider_id, selected_account)) = self.select_provider_for(
             &task.worker_hint,
             now,
             task.id,
             full,
             sticky_session.as_ref(),
+            cos,
         ) else {
             return Ok(false);
         };
@@ -761,6 +767,7 @@ impl Dispatcher {
                 account,
                 account_adapter,
                 container: container_stop,
+                cos,
             },
         );
         Ok(true)

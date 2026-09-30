@@ -871,6 +871,58 @@ fn task_worker_recent_work_sample(
     }
 }
 
+/// ADR-0090 D2: クラスタ job を待った続きの run の前置きは、job の最終状態と終了コード・回収の指示を含む
+/// （`cluster_jobs` が無ければ節は出ない）。
+#[test]
+fn continuation_section_carries_the_cluster_job_results() {
+    use crate::protocol::{ClusterJobsContinuation, ContinuationContext};
+    let mut cont = ContinuationContext {
+        run_seq: 2,
+        previous_end: "waiting(cluster_jobs)".into(),
+        checkpoint: serde_json::json!({"completed": ["E1 v2 を投入した"], "next_action": "結果を回収する"}),
+        prior_runs: vec!["Run #1 waiting".into()],
+        cluster_jobs: None,
+    };
+    let without = continuation_section(&RunContext {
+        continuation: Some(cont.clone()),
+        ..RunContext::default()
+    });
+    assert!(!without.contains("クラスタ job の結果"), "{without}");
+    cont.cluster_jobs = Some(ClusterJobsContinuation {
+        cluster: "sirius".into(),
+        scheduler: "pbs".into(),
+        state: "satisfied".into(),
+        jobs: vec![
+            "42634: finished (Exit_status 0 / scheduler: F)".into(),
+            "42635: finished (Exit_status 271 / scheduler: F)".into(),
+        ],
+        summary: "E1 v2 の 2 job を投入".into(),
+    });
+    let out = continuation_section(&RunContext {
+        continuation: Some(cont),
+        ..RunContext::default()
+    });
+    assert!(
+        out.contains("### クラスタ job の結果（前の Run が待った job）"),
+        "{out}"
+    );
+    assert!(out.contains("クラスタ `sirius` の PBS job"), "{out}");
+    assert!(out.contains("すべての job が終わりました"), "{out}");
+    assert!(
+        out.contains("- 42634: finished (Exit_status 0 / scheduler: F)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("- 42635: finished (Exit_status 271 / scheduler: F)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("前の Run の要約: E1 v2 の 2 job を投入"),
+        "{out}"
+    );
+    assert!(out.contains("結果（出力ファイル・ログ）を回収し"), "{out}");
+}
+
 /// ADR-0072 D9（Phase E1）: `context.continuation` が無ければ、この節は 1 バイトも出ない。
 #[test]
 fn continuation_section_is_empty_without_continuation_context() {
@@ -899,6 +951,7 @@ fn continuation_section_summarizes_the_checkpoint_without_the_full_transcript() 
                 "Run #1 budget_exhausted(turns)".into(),
                 "Run #2 budget_exhausted(turns)".into(),
             ],
+            cluster_jobs: None,
         }),
         ..RunContext::default()
     };
@@ -936,6 +989,7 @@ fn continuation_section_tolerates_a_sparse_or_malformed_checkpoint() {
             previous_end: "yielded".into(),
             checkpoint: serde_json::json!({"completed": "not-an-array"}),
             prior_runs: vec![],
+            cluster_jobs: None,
         }),
         ..RunContext::default()
     };

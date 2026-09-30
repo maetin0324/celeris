@@ -1,4 +1,43 @@
 use super::*;
+
+/// ADR-0090 D2: wait で終わった unit の run は `blocked(cluster_jobs)`（continuation・retry に数えない）で、
+/// task は `advance`。
+#[test]
+fn a_waiting_run_blocks_the_unit_on_cluster_jobs() {
+    let wu = row("a", WorkUnitStatus::Running, &[]);
+    let d = decide(
+        RunEnd::Waiting,
+        "run-1",
+        &wu,
+        std::slice::from_ref(&wu),
+        ContinuationInputs::default(),
+        WuLimits {
+            max_continuations: 1,
+            no_progress_limit: 1,
+            max_retries: 0,
+        },
+    );
+    assert_eq!(d.reason, "cluster_jobs");
+    assert_eq!(d.updated.status, WorkUnitStatus::Blocked);
+    assert_eq!(
+        d.updated.blocked_reason,
+        Some(WorkUnitBlockedReason::ClusterJobs)
+    );
+    assert_eq!(d.updated.continuations, 0);
+    assert_eq!(d.updated.retries, 0);
+    assert_eq!(
+        d.trigger,
+        Trigger::Continue {
+            why: ContinueWhy::Advance
+        }
+    );
+    // 同じ段階の兄弟は止めない（settle は advance）。
+    let sibling = row("b", WorkUnitStatus::Ready, &[]);
+    assert_eq!(
+        settle_phase(&[d.updated.clone(), sibling]),
+        PhaseSettle::Advance
+    );
+}
 use task_core::{WorkUnitContext, WorkUnitKind, WorkUnitSpec};
 
 fn row(key: &str, status: WorkUnitStatus, depends_on: &[&str]) -> WorkUnitRow {

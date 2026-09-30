@@ -1,4 +1,5 @@
 use super::*;
+use crate::dispatcher::worker_task::drain_remote_progress_notes;
 use std::sync::Mutex as SyncMutex;
 
 #[derive(Default)]
@@ -76,5 +77,29 @@ async fn a_failed_push_is_reported_and_fails_the_run() {
     assert!(
         matches!(out, Err(AdapterError::Other(ref m)) if m == "boom"),
         "{out:?}"
+    );
+}
+
+/// ADR-0079 付記「R6-1」D6: remote の準備の進行の行（R6-3 の submodule の初期化など）は run の進行に 1 行ずつ
+/// 残る。準備で何も溜まらなければ何も書かない（新しい `SshWorkspace` は空）。
+#[test]
+fn remote_prepare_notes_are_drained_into_worker_progress() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ws = ws_with(dir.path(), "true");
+    let sink = RecordingSink::default();
+    assert_eq!(
+        drain_remote_progress_notes(ws.take_progress_notes(), &sink),
+        0
+    );
+    assert!(sink.lines.lock().expect("lock").is_empty());
+    let notes = vec![
+        "initialised 2 submodules in /work/x/.celeris-worktrees/t on cluster sirius".to_string(),
+        "second note".to_string(),
+    ];
+    assert_eq!(drain_remote_progress_notes(notes.clone(), &sink), 2);
+    let lines = sink.lines.lock().expect("lock").clone();
+    assert_eq!(
+        lines,
+        notes.into_iter().map(|n| (n, false)).collect::<Vec<_>>()
     );
 }

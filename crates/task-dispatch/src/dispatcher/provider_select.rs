@@ -113,7 +113,26 @@ impl Dispatcher {
         full: &mut std::collections::HashSet<ProviderId>,
         sticky_session: Option<&NodeSession>,
     ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
-        if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full) {
+        self.select_provider_for(hint, now, task_id, full, sticky_session, false)
+    }
+
+    /// `select_provider` に ADR-0089（Phase R6-5）の `cos` を足したもの。`cos = true`（CoS の対話 run）
+    /// なら、プールのプロバイダの `concurrency` を見ず（`crate::capacity::provider_full`）、アカウントは
+    /// 上限 +1 で走っている run の最も少ないものを選ぶ。この tick の満杯集合 `full` は非 CoS の判定
+    /// なので、CoS は共有せず自分だけの集合で選ぶ（CoS の選択も `full` を汚さない）。
+    #[allow(clippy::type_complexity)]
+    pub(super) fn select_provider_for(
+        &mut self,
+        hint: &task_core::WorkerHint,
+        now: Instant,
+        task_id: TaskId,
+        full: &mut std::collections::HashSet<ProviderId>,
+        sticky_session: Option<&NodeSession>,
+        cos: bool,
+    ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
+        let mut cos_full = std::collections::HashSet::new();
+        let full = if cos { &mut cos_full } else { full };
+        if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full, cos) {
             return Some(sticky);
         }
         // 候補を列挙するための除外はこの選択だけ。満杯の集合へ候補自体を混ぜない。
@@ -127,8 +146,7 @@ impl Dispatcher {
                     if !visited.insert(provider.clone()) {
                         break;
                     }
-                    let limit = self.policy.concurrency_limit(provider.clone());
-                    if self.provider_in_use(&provider) >= limit {
+                    if self.provider_full(&provider, cos) {
                         full.insert(provider);
                         continue;
                     }
@@ -143,7 +161,7 @@ impl Dispatcher {
                             .and_then(|a| a.account_id())
                             .map(str::to_owned);
                         let Some(account_id) =
-                            self.pick_account(account_adapter, requested_account.as_deref())
+                            self.pick_account(account_adapter, requested_account.as_deref(), cos)
                         else {
                             full.insert(provider);
                             continue;
@@ -188,14 +206,16 @@ impl Dispatcher {
         hint: &task_core::WorkerHint,
         now: Instant,
         full: &std::collections::HashSet<ProviderId>,
+        cos: bool,
     ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
         let active = sticky_session?;
         let account_usable = match &active.account_id {
             None => true,
             Some(account_id) => AccountAdapter::parse(&active.adapter)
-                .is_some_and(|adapter| self.account_usable(adapter, account_id)),
+                .is_some_and(|adapter| self.account_usable(adapter, account_id, cos)),
         };
-        let provider = self.matching_provider_for_adapter(&active.adapter, hint.tier, now, full);
+        let provider =
+            self.matching_provider_for_adapter(&active.adapter, hint.tier, now, full, cos);
         // 設定行が見つかっても、プールの有無がセッション作成時と食い違っていたら（config を書き換えた
         // 等）留まらない。`decide` の `AccountChanged`（プールを使う ⇔ 使わないの切り替えも該当）と
         // 矛盾しないように。
@@ -229,6 +249,7 @@ impl Dispatcher {
         requested_tier: Tier,
         now: Instant,
         excluded: &std::collections::HashSet<ProviderId>,
+        cos: bool,
     ) -> Option<ProviderId> {
         let mut tiers: Vec<Tier> = [Tier::Cheap, Tier::Standard, Tier::Frontier]
             .into_iter()
@@ -242,11 +263,10 @@ impl Dispatcher {
                 tier,
                 adapter: Some(adapter_id.to_string()),
             };
-            if let Selection::Picked { provider, .. } = self.policy.select(&pinned, now, excluded) {
-                let limit = self.policy.concurrency_limit(provider.clone());
-                if self.provider_in_use(&provider) < limit {
-                    return Some(provider);
-                }
+            if let Selection::Picked { provider, .. } = self.policy.select(&pinned, now, excluded)
+                && !self.provider_full(&provider, cos)
+            {
+                return Some(provider);
             }
         }
         None
@@ -255,7 +275,12 @@ impl Dispatcher {
     /// ADR-0054 Phase 67c: 指定した 1 アカウントが今すぐ使えるか（ログイン済み・cooldown 外・上限未満・
     /// 枯渇していない。`crate::accounts::evaluate` の除外判定をそのまま使う）。`pick_account` と同じ
     /// 読み取りだが、ベストスコアを探すのではなく特定の 1 件が使えるかだけを見る。
-    pub(super) fn account_usable(&mut self, adapter: AccountAdapter, account_id: &str) -> bool {
+    pub(super) fn account_usable(
+        &mut self,
+        adapter: AccountAdapter,
+        account_id: &str,
+        cos: bool,
+    ) -> bool {
         let Some(cfg) = self.config.accounts.clone() else {
             return false;
         };
@@ -283,7 +308,7 @@ impl Dispatcher {
         evaluate(
             &candidate,
             book.state(account_id),
-            cfg.max_runs_per_account,
+            crate::capacity::account_run_limit(cfg.max_runs_per_account, cos),
             now,
         )
         .excluded
@@ -320,6 +345,7 @@ impl Dispatcher {
         &mut self,
         adapter: AccountAdapter,
         requested: Option<&str>,
+        cos: bool,
     ) -> Option<String> {
         let cfg = self.config.accounts.clone()?;
         let root = cfg.root_for(adapter)?;
@@ -340,6 +366,10 @@ impl Dispatcher {
                 in_use: self.account_in_use(adapter, &d.id),
             })
             .collect();
+        if cos {
+            let limit = crate::capacity::account_run_limit(cfg.max_runs_per_account, true);
+            return crate::accounts::select_account_least_loaded(&candidates, &book, limit, now);
+        }
         select_account(&candidates, &book, cfg.max_runs_per_account, now)
     }
 

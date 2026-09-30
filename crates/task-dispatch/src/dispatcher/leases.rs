@@ -453,6 +453,30 @@ impl Dispatcher {
         }
     }
 
+    /// ADR-0079 付記「R6-1」D4: 終端（done / failed / cancelled）の task なのに `runs` 索引で `running` のままの行を
+    /// 閉じる（`TaskStore::close_runs_of_terminal_tasks`。`WorkerFinished{end: Cancelled}` を積む）。起動後の最初の
+    /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。閉じた行は 1 行ずつ 1 回だけログに残す（閉じた行は二度と
+    /// 見つからない）。終端への遷移は store が同じトランザクションで閉じるので、見つかるのは R6-1 より前の行だけ。
+    pub(super) fn reconcile_terminal_runs(&mut self) {
+        let now = self.now_utc();
+        if let Some(last) = self.runs_reconciled_at
+            && (now - last).whole_seconds() < RUNS_RECONCILE_INTERVAL_SECS
+        {
+            return;
+        }
+        self.runs_reconciled_at = Some(now);
+        match self.store.close_runs_of_terminal_tasks() {
+            Ok(closed) => {
+                for (task_id, run_id) in closed {
+                    tracing::warn!(%task_id, %run_id, "closed a runs index row left running on a terminal task (ADR-0079 R6-1)");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to close the runs index rows of terminal tasks");
+            }
+        }
+    }
+
     /// ADR-0002 D9: ストア上で `running` でなくなった（cancel / ADR-0044 D2 の割り込み等）run を
     /// 強制終了する。打ち切ったタスクは `just_aborted` に入れ、**この tick では dispatch し直さない**。
     pub(super) fn abort_stale_runs(&mut self) -> Result<(), DispatchError> {

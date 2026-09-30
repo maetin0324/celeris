@@ -98,6 +98,70 @@ fn worktree_for(repo: &Path, root: &Path, id: &str) -> LocalWorktree {
     }
 }
 
+/// Phase R6-3: submodule を持つリポジトリのタスクの worktree は、submodule まで初期化される
+/// （再利用でも落ちない。`.gitmodules` が無ければ何もしない）。
+#[tokio::test]
+async fn the_worktree_initialises_submodules_and_reuse_is_idempotent() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sub = tmp.path().join("sub");
+    init_repo(&sub);
+    let repo = tmp.path().join("repo");
+    init_repo(&repo);
+    let url = sub.to_string_lossy().into_owned();
+    let out = git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &url,
+            "lib/sub",
+        ],
+    )
+    .expect("git");
+    assert!(out.ok, "{}", out.stderr);
+    let out = git(&repo, &["commit", "-q", "-m", "submodule"]).expect("git");
+    assert!(out.ok, "{}", out.stderr);
+
+    let root = tmp.path().join("ws");
+    let wt = worktree_for(&repo, &root, "01R63LOCAL");
+    // 既定の git はローカルパス（file）の submodule の clone を拒む（git >= 2.38.1）。その失敗は黙らず、
+    // worktree を名指しした準備のエラーになる。
+    let err = wt
+        .ensure()
+        .await
+        .expect_err("file transport is refused by default");
+    let msg = err.to_string();
+    assert!(msg.contains("submodules"), "{msg}");
+    assert!(
+        msg.contains(&wt.dir.to_string_lossy().into_owned()),
+        "{msg}"
+    );
+    assert!(!wt.dir.join("lib/sub/README.md").exists());
+    // file を許すと初期化される（本番の submodule は ssh / https なのでこの前置きは要らない）。
+    let count =
+        init_submodules_with(&wt.dir, &["-c", "protocol.file.allow=always"]).expect("init");
+    assert_eq!(count, Some(1));
+    assert!(
+        wt.dir.join("lib/sub/README.md").is_file(),
+        "submodule populated"
+    );
+    // 再利用: 初期化済みなので何もしない（落ちない、ネットワークにも出ない）。
+    assert_eq!(
+        init_submodules(&wt.dir).expect("again"),
+        None,
+        "already initialised"
+    );
+    wt.ensure().await.expect("reuse");
+    assert!(wt.dir.join("lib/sub/README.md").is_file());
+
+    let plain = tempfile::tempdir().expect("tempdir");
+    init_repo(plain.path());
+    assert_eq!(init_submodules(plain.path()).expect("no gitmodules"), None);
+}
+
 /// ADR-0041 D1: やり直しの run は worktree を**作り直さない**（未コミットの作業を消さない）。
 #[tokio::test]
 async fn a_retry_reuses_the_existing_worktree() {

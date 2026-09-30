@@ -504,6 +504,11 @@ pub(super) async fn run_worker(
         account_book,
         session_key,
     };
+    // ADR-0079 付記「R6-1」D6: remote の準備の進行（submodule の初期化など）を run の進行に残す（sink はここで
+    // できるので、準備の直後ではなく run の前に書く）。
+    if let Some(ws) = &remote_ws {
+        drain_remote_progress_notes(ws.take_progress_notes(), &sink);
+    }
     let outcome = if task_core::browser::requests_browser(&req.task.skills)
         && (remote.is_some() || container_plan.is_some())
     {
@@ -558,6 +563,19 @@ pub(super) async fn run_worker(
         }
     }
     outcome
+}
+
+/// ADR-0079 付記「R6-1」D6: remote workspace の準備（`prepare` / `ensure_worktree`）の途中で溜まった進行の行
+/// （R6-3 の submodule の初期化「initialised N submodules in <wt> on cluster <c>」など）を、その run の進行
+/// （`WorkerProgress`）に 1 行ずつ残す。取り出した行は消える。書いた行の数を返す。
+pub(super) fn drain_remote_progress_notes(
+    notes: Vec<String>,
+    sink: &dyn task_worker::EventSink,
+) -> usize {
+    for line in &notes {
+        sink.progress(line);
+    }
+    notes.len()
 }
 
 /// ADR-0079 R5b-fix2: ワーカー run の後の push（1 run につき 1 回）。結果は進行（`WorkerProgress`）に

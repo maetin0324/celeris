@@ -80,6 +80,54 @@ pub struct ClusterConfig {
     /// 既定を変える運用は想定しない（逃げ道）。
     #[serde(default = "default_control_persist")]
     pub control_persist: String,
+    /// ADR-0090 D7: クラスタ job の durable wait の既定（`job_wait = { poll_secs = 300, max_wait_secs = 86400 }`）。
+    /// **本番の設定に足すのは、この欄を知る release の昇格の後**（旧い版は未知のキーで起動に失敗する）。
+    #[serde(default)]
+    pub job_wait: ClusterJobWaitConfig,
+}
+
+/// `[[clusters]] job_wait`（ADR-0090 D7）: worker の `result.json` の `wait` を daemon が poll する間隔と上限。
+///
+/// ```toml
+/// [[clusters]]
+/// id = "sirius"
+/// host = "sirius"
+/// job_wait = { poll_secs = 300, max_wait_secs = 86400 }
+/// ```
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClusterJobWaitConfig {
+    /// poll の既定の間隔（秒、既定 300、30 以上）。worker の `poll_secs` はこれより短くできない。
+    #[serde(default = "default_job_wait_poll_secs")]
+    pub poll_secs: u64,
+    /// 待ちの上限（秒、既定 86400、`poll_secs` 以上 14 日以下）。worker の `timeout_secs` の上限と既定。
+    #[serde(default = "default_job_wait_max_wait_secs")]
+    pub max_wait_secs: u64,
+}
+
+impl Default for ClusterJobWaitConfig {
+    fn default() -> Self {
+        Self {
+            poll_secs: default_job_wait_poll_secs(),
+            max_wait_secs: default_job_wait_max_wait_secs(),
+        }
+    }
+}
+
+impl ClusterJobWaitConfig {
+    fn limits(&self) -> task_core::cluster_job::ClusterJobWaitLimits {
+        task_core::cluster_job::ClusterJobWaitLimits {
+            poll_secs: self.poll_secs,
+            max_wait_secs: self.max_wait_secs,
+        }
+    }
+}
+
+fn default_job_wait_poll_secs() -> u64 {
+    task_core::cluster_job::DEFAULT_POLL_SECS
+}
+fn default_job_wait_max_wait_secs() -> u64 {
+    task_core::cluster_job::DEFAULT_MAX_WAIT_SECS
 }
 
 /// `[[clusters.forwards]]`（ADR-0053 D3）: 1 本の port forward。
@@ -178,6 +226,8 @@ impl Config {
                         // ADR-0062 A（Phase 107）。
                         keepalive_secs: c.keepalive_secs,
                         liveness_probe_secs: c.liveness_probe_secs,
+                        // ADR-0090 D7。
+                        job_wait: c.job_wait.limits(),
                         // ADR-0053 D3（Phase 66）。
                         forwards: c
                             .forwards
@@ -266,6 +316,10 @@ pub(super) fn validate_clusters(clusters: &[ClusterConfig]) -> Result<(), Config
                 "[[clusters]] {}: control_persist must be \"yes\" or a positive number of seconds (got {:?})",
                 c.id, c.control_persist
             )));
+        }
+        // ADR-0090 D7: クラスタ job の wait の poll 間隔と上限。
+        if let Err(e) = c.job_wait.limits().validate() {
+            return Err(ConfigError::Invalid(format!("[[clusters]] {}: {e}", c.id)));
         }
         // ADR-0019 D2: 自動削除は実装しない（実行結果を消してしまわないため）。
         if c.remove_worktree_when != "never" {

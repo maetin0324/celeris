@@ -427,9 +427,45 @@ fn worker_and_reviewer_instructions_share_the_remote_exec_usage() {
         assert!(text.contains("ブランチ `celeris/01TASK`"), "{text}");
     }
     assert!(worker.contains("run の後にクラスタへ同期され"));
-    assert!(worker.ends_with("元のリポジトリの作業ツリーは触らないでください。"));
+    // ADR-0090 D5: worker の指示文の最後はクラスタ job の wait の段落（reviewer には無い）。
+    assert!(
+        worker
+            .contains("元のリポジトリの作業ツリーは触らないでください。\n長く走るクラスタ job")
+    );
+    assert!(worker.ends_with(&cluster_job_wait_instructions(&settings)));
+    assert!(
+        worker
+            .contains("\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": \"sirius\"")
+    );
+    assert!(worker.contains("job が Q / R の間に完了を申告しない"));
+    assert!(!reviewer.contains("長く走るクラスタ job"));
     assert!(reviewer.contains("`git status`"));
     assert!(!reviewer.contains("元のリポジトリの作業ツリーは触らないでください"));
+}
+
+/// ADR-0090 D2: master 越しの 1 コマンドは stdout / stderr を先頭から丸ごと返し、exit 255 は接続の失敗。
+#[test]
+fn remote_command_returns_the_whole_output_and_treats_255_as_a_connection_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let ok = fake_ssh_probe(
+        dir.path(),
+        "#!/bin/sh\nprintf 'Job Id: 1.pbs\\n    job_state = F\\n'\necho 'qstat: Unknown Job Id 2.pbs' >&2\nexit 153\n",
+    );
+    let out =
+        run_remote_command_blocking(&ok, "sirius", "qstat -xf 1 2", Duration::from_secs(10))
+            .expect("ran");
+    assert_eq!(out.exit, Some(153));
+    assert!(out.stdout.contains("job_state = F"), "{out:?}");
+    assert!(out.stderr.contains("Unknown Job Id 2.pbs"), "{out:?}");
+    let dir = tempfile::tempdir().unwrap();
+    let down = fake_ssh_probe(
+        dir.path(),
+        "#!/bin/sh\necho 'mux_client: no master' >&2\nexit 255\n",
+    );
+    let err =
+        run_remote_command_blocking(&down, "sirius", "qstat -xf 1", Duration::from_secs(10))
+            .expect_err("255 is a connection failure");
+    assert!(err.contains("exit 255"), "{err}");
 }
 
 // ---- ADR-0062 A（Phase 107）: 実通信 probe（`ssh -o BatchMode=yes <host> -- true`） ----
@@ -495,4 +531,155 @@ fn command_probe_times_out_and_kills_a_hanging_ssh() {
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("hanging ssh process {pid} was not killed");
+}
+
+// ---- Phase R6-3: クラスタの worktree は git submodule を初期化する ----
+
+/// テスト用の git（人の設定・対話的な認証に引きずられない。ローカルパスの submodule を許す）。
+fn test_git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "protocol.file.allow=always",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {args:?} in {}: {}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `sub`（1 ファイル）を submodule `lib/sub` に持つ `proj` を作る。`with_submodule = false` なら submodule 無し。
+fn project_repo(root: &Path, with_submodule: bool) -> PathBuf {
+    let sub = root.join("sub");
+    let proj = root.join("proj");
+    for dir in [&sub, &proj] {
+        std::fs::create_dir_all(dir).unwrap();
+        test_git(dir, &["init", "-q", "-b", "main"]);
+    }
+    std::fs::write(sub.join("lib.rs"), "pub fn sub() {}\n").unwrap();
+    test_git(&sub, &["add", "-A"]);
+    test_git(&sub, &["commit", "-q", "-m", "sub"]);
+    std::fs::write(proj.join("README.md"), "proj\n").unwrap();
+    test_git(&proj, &["add", "-A"]);
+    if with_submodule {
+        let url = sub.to_string_lossy().into_owned();
+        test_git(&proj, &["submodule", "add", "-q", &url, "lib/sub"]);
+    }
+    test_git(&proj, &["commit", "-q", "-m", "proj"]);
+    proj
+}
+
+/// `local_ssh` と同じ偽 ssh だが、ローカルパスの submodule の clone を許す（git ≥ 2.38.1 の既定は拒否）。
+fn local_ssh_allowing_file_protocol(dir: &Path) -> Vec<String> {
+    let path = dir.join("fake-ssh-git");
+    crate::test_support::write_executable(
+        &path,
+        "#!/bin/sh\nwhile [ \"$1\" = \"-o\" ]; do shift 2; done\nshift\n\
+         export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=protocol.file.allow GIT_CONFIG_VALUE_0=always GIT_TERMINAL_PROMPT=0\n\
+         exec sh -c \"$*\"\n",
+    );
+    vec![path.to_string_lossy().into_owned()]
+}
+
+fn worktree_workspace(tmp: &Path, proj: &Path, ssh: Vec<String>) -> SshWorkspace {
+    let mut settings = SshSettings::new("sirius", "h", proj);
+    settings.sync = SyncMode::Worktree;
+    settings.task_id = "01R63TASK".into();
+    settings.ssh_command = ssh;
+    SshWorkspace::new(tmp.join("mirror"), settings)
+}
+
+/// 本番 2026-09-29（task 01M3Q25DSD895DGMGPWD752G3G、sirius の BenchFS）: `git worktree add` の直後は
+/// submodule のディレクトリが空だった。準備で `submodule update --init --recursive` し、進行を 1 行残す。
+/// 2 回目（再利用）は落ちず、初期化済みなので何もしない（行も増えない）。
+#[tokio::test]
+async fn ensure_worktree_initialises_submodules_and_is_idempotent_on_reuse() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = project_repo(tmp.path(), true);
+    let ws = worktree_workspace(
+        tmp.path(),
+        &proj,
+        local_ssh_allowing_file_protocol(tmp.path()),
+    );
+    let wt = ws.effective_remote_dir();
+
+    ws.ensure_worktree().await.expect("first prepare");
+    assert_eq!(
+        std::fs::read_to_string(wt.join("lib/sub/lib.rs")).unwrap(),
+        "pub fn sub() {}\n",
+        "the submodule is populated in the fresh worktree"
+    );
+    let notes = ws.take_progress_notes();
+    assert_eq!(
+        notes,
+        vec![format!(
+            "initialised 1 submodules in {} on cluster sirius",
+            wt.display()
+        )]
+    );
+
+    ws.ensure_worktree().await.expect("reuse does not fail");
+    assert!(wt.join("lib/sub/lib.rs").is_file());
+    assert!(
+        ws.take_progress_notes().is_empty(),
+        "already initialised: nothing to do on reuse"
+    );
+
+    // 人が submodule を deinit しても（空のディレクトリに戻る）、次の準備で戻る。
+    test_git(&wt, &["submodule", "deinit", "-q", "--all", "--force"]);
+    assert!(!wt.join("lib/sub/lib.rs").exists());
+    ws.ensure_worktree().await.expect("re-init on reuse");
+    assert!(wt.join("lib/sub/lib.rs").is_file());
+    assert_eq!(ws.take_progress_notes().len(), 1);
+}
+
+#[tokio::test]
+async fn ensure_worktree_skips_the_submodule_step_without_gitmodules() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = project_repo(tmp.path(), false);
+    let ws = worktree_workspace(tmp.path(), &proj, local_ssh(tmp.path()));
+    ws.ensure_worktree().await.expect("prepare");
+    let wt = ws.effective_remote_dir();
+    assert!(wt.join("README.md").is_file());
+    assert!(!wt.join(".gitmodules").exists());
+    assert!(ws.take_progress_notes().is_empty());
+}
+
+/// submodule の初期化に失敗したら（ここでは submodule の元を消した）、クラスタと worktree を名指しした
+/// 準備のエラーになる（黙って空のディレクトリのまま進まない）。
+#[tokio::test]
+async fn a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = project_repo(tmp.path(), true);
+    std::fs::remove_dir_all(tmp.path().join("sub")).unwrap();
+    let ws = worktree_workspace(
+        tmp.path(),
+        &proj,
+        local_ssh_allowing_file_protocol(tmp.path()),
+    );
+    let err = ws
+        .ensure_worktree()
+        .await
+        .expect_err("the submodule source is gone");
+    let msg = err.to_string();
+    let wt = ws.effective_remote_dir();
+    assert!(matches!(err, WorkspaceError::Remote(_)), "{err:?}");
+    assert!(msg.contains("submodules"), "{msg}");
+    assert!(msg.contains("sirius"), "{msg}");
+    assert!(msg.contains(&wt.to_string_lossy().into_owned()), "{msg}");
+    assert!(ws.take_progress_notes().is_empty());
 }

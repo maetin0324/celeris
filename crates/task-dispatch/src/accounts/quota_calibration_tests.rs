@@ -102,3 +102,47 @@ fn zero_weighted_tokens_are_not_recorded() {
             .is_none_or(|q| q.is_empty())
     );
 }
+
+/// ADR-0089（Phase R6-5）: CoS run のアカウント選び。
+fn cand(id: &str, in_use: usize) -> AccountCandidate<'_> {
+    AccountCandidate {
+        id,
+        logged_in: true,
+        in_use,
+    }
+}
+
+#[test]
+fn least_loaded_picks_the_account_with_fewest_runs_even_at_max_plus_one() {
+    let mut book = AccountBook::new_in_memory();
+    // `a` は残量が多い（通常の選び方なら `a`）が、走っている run は多い。
+    book.record_observation(
+        "b",
+        RateLimitObservation {
+            five_hour: Some(RateWindow {
+                utilization: 0.9,
+                resets_at: 9_000,
+            }),
+            seven_day: None,
+            status: None,
+            resets_at: None,
+            observed_at: 1_000,
+        },
+        ObservationSource::Run,
+    );
+    let cands = vec![cand("a", 2), cand("b", 1)];
+    assert_eq!(
+        select_account_least_loaded(&cands, &book, 3, 1_000),
+        Some("b".to_string())
+    );
+    // 両方 max (= 2) 本走っていても、上限 +1 (= 3) なら選べる。同数は id 昇順（スコア同点）。
+    let full = vec![cand("b", 2), cand("a", 2)];
+    let empty = AccountBook::new_in_memory();
+    assert_eq!(
+        select_account_least_loaded(&full, &empty, 3, 1_000),
+        Some("a".to_string())
+    );
+    // +1 を使い切れば選べない。
+    let over = vec![cand("a", 3), cand("b", 3)];
+    assert_eq!(select_account_least_loaded(&over, &empty, 3, 1_000), None);
+}

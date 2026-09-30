@@ -509,6 +509,36 @@ fn consecutive_continuations_counts_trailing_continues_and_resets_on_answer() {
     );
 }
 
+/// ADR-0090 D1: クラスタ job の wait とその再開は continuation に数えず、窓も切らない。wait の checkpoint は
+/// 進捗なしの窓・進捗の基準から外す。
+#[test]
+fn cluster_job_waits_do_not_count_as_continuations_or_progress_checkpoints() {
+    let events: Vec<(u64, Event)> = vec![
+        (0, transitioned("continue")),
+        (1, transitioned("dispatch")),
+        (2, transitioned(task_core::cluster_job::REASON_WAITING)),
+        (3, transitioned(task_core::cluster_job::REASON_RESUME)),
+        (4, transitioned("dispatch")),
+    ];
+    assert_eq!(consecutive_continuations(&events), 1);
+
+    let mut waiting = checkpoint_saved("r2", 1, 1, "h");
+    if let Event::CheckpointSaved { checkpoint, .. } = &mut waiting {
+        checkpoint.end = task_core::CheckpointEnd::Waiting;
+    }
+    let events: Vec<(u64, Event)> = vec![(0, checkpoint_saved("r1", 1, 1, "h")), (1, waiting)];
+    // 同じ中身の checkpoint が続いても、wait の checkpoint は「進捗なし」に数えない。
+    assert_eq!(no_progress_streak(&events, None), 0);
+    assert_eq!(
+        latest_progress_checkpoint(&events, None).map(|c| c.run_id),
+        Some("r1".to_string())
+    );
+    assert_eq!(
+        latest_checkpoint(&events, None).map(|c| c.run_id),
+        Some("r2".to_string())
+    );
+}
+
 fn checkpoint_saved(run_id: &str, completed: usize, remaining: usize, head: &str) -> Event {
     Event::CheckpointSaved {
         run_id: run_id.into(),

@@ -563,6 +563,216 @@ fn human_replan_overrides_the_spec_of_a_done_work_unit() {
     assert!(plan_mm.is_empty(), "{plan_mm:?}");
 }
 
+/// ADR-0079 R6-4: replan で別の段階（工程）へ移した未完了の unit は `work_units.phase` も新しい版の段階に
+/// 書き換わる（R4a から既知の食い違い）。移していない unit はそのまま。events だけから作り直しても同じ。
+#[test]
+fn replan_rewrites_the_phase_of_a_unit_moved_to_another_phase() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task();
+    store.insert(&task).unwrap();
+    let mut v1 = spec_v2_two_phases();
+    let mut c = wu("c", &[]);
+    c.phase = Some("build".to_string());
+    v1.work_units.push(c.clone());
+    adopt_plan(
+        &store,
+        task.id,
+        v1.clone(),
+        PlanOrigin::Fixture,
+        None,
+        ExecutionLimits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let phase_of = |key: &str| {
+        store
+            .work_units_for(task.id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == key)
+            .and_then(|u| u.phase)
+    };
+    assert_eq!(phase_of("b").as_deref(), Some("build"));
+
+    // b を build → design へ移す（c は build に残る）。
+    let mut v2 = v1;
+    v2.rationale = "move b to design".to_string();
+    for w in v2.work_units.iter_mut() {
+        if w.key == "b" {
+            w.phase = Some("design".to_string());
+        }
+    }
+    replan(
+        &store,
+        task.id,
+        v2,
+        "move b".to_string(),
+        PlanOrigin::Human,
+        None,
+        ExecutionLimits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert_eq!(phase_of("b").as_deref(), Some("design"));
+    assert_eq!(phase_of("a").as_deref(), Some("design"));
+    assert_eq!(phase_of("c").as_deref(), Some("build"));
+
+    let (wu_mm, run_mm, plan_mm, applied) =
+        crate::replay::check_and_apply_execution(&store, false).unwrap();
+    assert!(wu_mm.is_empty(), "{wu_mm:?}");
+    assert!(run_mm.is_empty(), "{run_mm:?}");
+    assert!(plan_mm.is_empty(), "{plan_mm:?}");
+    assert_eq!(applied, 0);
+}
+
+/// ADR-0079 R6-4（本番 01M3QGRC542ZC23996DNCTHZF5 の再現）: /3 の planner replan v2 が unit `x` を段階 `relay`
+/// から `verify` へ移し、`verify` の unit `p` に依存させた。行の `phase` が `relay` のまま（`seq` も v1 の並び）
+/// だと、`relay` に pending の unit が残るので `integrate-relay` が走れず、`x` は後の段階を待つ → 何も走れない
+/// （`stall_detected{nothing_runnable}`）。replan は `phase` と `seq` を新しい版に直し、`relay` の残りが done に
+/// なれば今の段階（seq 最小の未終端の行の段階）は `relay` のままで、その統合 WU が走れる。replay も同じ行を作る。
+#[test]
+fn replan_moving_a_unit_to_a_later_stage_does_not_strand_the_earlier_stage() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task();
+    store.insert(&task).unwrap();
+    let limits = ExecutionLimits {
+        tree: task_core::TreeLimits {
+            enabled: true,
+            ..task_core::TreeLimits::default()
+        },
+        ..ExecutionLimits::default()
+    };
+    let leaf = |key: &str, stage: &str, deps: &[&str]| {
+        serde_json::json!({
+            "key": key,
+            "stage": stage,
+            "kind": "implement",
+            "title": format!("leaf {key}"),
+            "objective": format!("objective of leaf {key} that is distinct"),
+            "depends_on": deps,
+            "checks": [{"cmd": "true", "expect_exit": 0}],
+        })
+    };
+    let plan = |rationale: &str, units: Vec<serde_json::Value>| -> ExecutionPlanSpec {
+        serde_json::from_value(serde_json::json!({
+            "schema": task_core::EXECUTION_PLAN_SCHEMA_V3,
+            "rationale": rationale,
+            "stages": [
+                {"key": "relay", "kind": "implement", "title": "relay"},
+                {"key": "verify", "kind": "implement", "title": "verify"},
+            ],
+            "units": units,
+        }))
+        .unwrap()
+    };
+    let v1 = plan(
+        "v1",
+        vec![
+            leaf("r1", "relay", &[]),
+            leaf("x", "relay", &[]),
+            leaf("p", "verify", &[]),
+        ],
+    );
+    adopt_plan(
+        &store,
+        task.id,
+        v1,
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let v2 = plan(
+        "v2: x needs p",
+        vec![
+            leaf("r1", "relay", &[]),
+            leaf("p", "verify", &[]),
+            leaf("x", "verify", &["p"]),
+        ],
+    );
+    let (_, diff) = replan(
+        &store,
+        task.id,
+        v2,
+        "x needs the launch".to_string(),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert_eq!(diff.moved, vec!["x(relay→verify)".to_string()]);
+
+    let rows = |store: &SqliteStore| {
+        let mut rows: Vec<WorkUnitRow> = store
+            .work_units_for(task.id)
+            .unwrap()
+            .into_iter()
+            .filter(|u| u.status.is_active())
+            .collect();
+        rows.sort_by_key(|u| u.seq);
+        rows
+    };
+    let order: Vec<(String, Option<String>)> =
+        rows(&store).into_iter().map(|u| (u.key, u.phase)).collect();
+    let s = |k: &str, p: &str| (k.to_string(), Some(p.to_string()));
+    assert_eq!(
+        order,
+        vec![
+            s("r1", "relay"),
+            s("integrate-relay", "relay"),
+            s("p", "verify"),
+            s("x", "verify"),
+            s("integrate-verify", "verify"),
+        ]
+    );
+
+    // relay の残り（r1）が done → 今の段階は relay のまま、relay の unit はすべて done、統合 WU が待っている
+    // （= scheduler の `settle_phase` が `Integrate(integrate-relay)` を返す形）。verify の unit はまだ上がらない。
+    mark_done(&store, task.id, "r1");
+    let now_rows = rows(&store);
+    let current = now_rows
+        .iter()
+        .find(|u| !u.status.is_terminal())
+        .and_then(|u| u.phase.clone());
+    assert_eq!(current.as_deref(), Some("relay"));
+    assert!(
+        now_rows
+            .iter()
+            .filter(|u| u.phase.as_deref() == Some("relay")
+                && u.kind != task_core::WorkUnitKind::Integrate)
+            .all(|u| u.status == WorkUnitStatus::Done)
+    );
+    let integ = now_rows
+        .iter()
+        .find(|u| u.key == "integrate-relay")
+        .unwrap();
+    assert!(matches!(
+        integ.status,
+        WorkUnitStatus::Pending | WorkUnitStatus::Ready
+    ));
+    assert!(task_core::newly_ready(&now_rows).is_empty());
+
+    // 段階の移動は `ExecutionPlanned.reason` に残る（タイムラインで見える）。
+    let events = store.events_for(task.id).unwrap();
+    assert!(
+        events.iter().any(|(_, e)| matches!(
+            e,
+            Event::ExecutionPlanned { version: 2, reason: Some(r), .. }
+                if r.contains("phase: x(relay→verify)")
+        )),
+        "{events:?}"
+    );
+
+    let (wu_mm, run_mm, plan_mm, applied) =
+        crate::replay::check_and_apply_execution(&store, false).unwrap();
+    assert!(wu_mm.is_empty(), "{wu_mm:?}");
+    assert!(run_mm.is_empty(), "{run_mm:?}");
+    assert!(plan_mm.is_empty(), "{plan_mm:?}");
+    assert_eq!(applied, 0);
+}
+
 /// ADR-0079 R5b-fix1: planner の replan は done の WU の spec を変えられない（人の replan は上書きできる。
 /// `human_replan_overrides_the_spec_of_a_done_work_unit`）。
 #[test]

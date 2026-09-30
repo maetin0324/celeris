@@ -144,6 +144,9 @@ impl Dispatcher {
         let mut run_end: Option<task_core::RunEnd> = None;
         // ADR-0072 D9: `Terminal::Yielded` の生の checkpoint JSON（`result.json` の `yield`）。
         let mut yield_checkpoint_json: Option<serde_json::Value> = None;
+        // ADR-0090 D1/D2: `Terminal::Waiting` を検証して組んだクラスタ job の wait（`ClusterJobWaitStarted` にする）。
+        let mut cluster_wait: Option<task_core::cluster_job::ClusterJobWait> = None;
+        let current_wu_id = current_wu.as_ref().map(|w| w.id.clone());
         let (mut trigger, mut outcome_str, usage, provider_outcome) = match result {
             Ok(RunOutcome {
                 terminal:
@@ -234,6 +237,45 @@ impl Dispatcher {
                     ProviderOutcome::Ok,
                 )
             }
+            // ADR-0090 D1: クラスタ job の終了待ち。検証に通れば run を `waiting` で閉じ、task / unit を止める
+            // （continuation の回数・進捗なし・attempts に数えない）。通らなければ retryable な失敗。
+            Ok(RunOutcome {
+                terminal:
+                    Terminal::Waiting {
+                        request,
+                        checkpoint,
+                        usage,
+                    },
+                ..
+            }) => match self.cluster_job_wait_for(
+                &task,
+                &run_id,
+                current_wu_id.as_deref(),
+                &request,
+                checkpoint.clone(),
+            ) {
+                Ok(wait) => {
+                    run_end = Some(task_core::RunEnd::Waiting);
+                    yield_checkpoint_json = checkpoint;
+                    let line = format!(
+                        "waiting: クラスタ {} の {} job の終了を待ちます: {}",
+                        wait.cluster,
+                        wait.scheduler.as_str(),
+                        wait.jobs.join(" ")
+                    );
+                    cluster_wait = Some(wait);
+                    (Trigger::ClusterJobWait, line, usage, ProviderOutcome::Ok)
+                }
+                Err(reason) => {
+                    run_end = Some(task_core::RunEnd::Failed { retryable: true });
+                    (
+                        Trigger::WorkerError { retryable: true },
+                        format!("error(retryable=true): invalid cluster job wait: {reason}"),
+                        usage,
+                        ProviderOutcome::Ok,
+                    )
+                }
+            },
             // ADR-0072 D7（Phase E1）: turn / wall-clock / context の上限に当たった。usage を運ぶ。
             Ok(RunOutcome {
                 terminal:
@@ -312,6 +354,8 @@ impl Dispatcher {
         )> = None;
         // ADR-0079 D7（Phase R3a）: worker が `result.json` の `decisions` で出した決定の要求（記録と止める unit）。
         let mut worker_decisions: Option<WorkerDecisions> = None;
+        // ADR-0090 D2: この WU の run が unit を `blocked(cluster_jobs)` にした。
+        let mut wu_parked_on_cluster_jobs = false;
         if let Some(wu) = &current_wu {
             // ADR-0072 D6（Phase E2）: WU の run。`end` が無ければ（分類できない供給側・インフラの
             // 失敗）、harness_error 相当として WU を ready に戻すだけで、Task レベルの trigger は
@@ -326,7 +370,10 @@ impl Dispatcher {
             let mut checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut prev_checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut no_progress_before = 0u32;
-            if effective_end.is_continuable() && self.config.execution.continuation {
+            // ADR-0090 D1: クラスタ job の wait も checkpoint を残す（`[execution] continuation` に依らない）。
+            if (effective_end.is_continuable() && self.config.execution.continuation)
+                || effective_end == task_core::RunEnd::Waiting
+            {
                 let events_so_far = self.store.events_for(task_id)?;
                 // ADR-0074 D1.6（Phase F2b）: v2 の WU は WU の worktree・ブランチ・base で取る。
                 let (artifacts_dir, cwd_buf, branch, base) =
@@ -378,7 +425,8 @@ impl Dispatcher {
                     created_at: rfc3339(OffsetDateTime::now_utc()),
                 };
                 let checkpoint = task_core::merge_checkpoint(worker_checkpoint, mechanical, ctx);
-                prev_checkpoint_opt = latest_checkpoint(&events_so_far, Some(&wu.id));
+                prev_checkpoint_opt =
+                    task_ops::derive::latest_progress_checkpoint(&events_so_far, Some(&wu.id));
                 no_progress_before = no_progress_streak(&events_so_far, Some(&wu.id));
                 checkpoint_event = Some(Event::CheckpointSaved {
                     run_id: run_id.clone(),
@@ -448,6 +496,14 @@ impl Dispatcher {
                                 wu.key, decision.updated.retries, limits.max_retries
                             );
                         }
+                        // ADR-0090 D2: unit はクラスタ job を待つ（`blocked(cluster_jobs)`）。v2 の task は兄弟を止めず
+                        // `advance` で進み、段階の unit を順に並べる v1 の task は task ごと待つ。
+                        "cluster_jobs" => {
+                            outcome_str = format!("{outcome_str}（WorkUnit {}）", wu.key);
+                            if wu.phase.is_none() {
+                                trigger = Trigger::ClusterJobWait;
+                            }
+                        }
                         // ADR-0072 D17 3.（Phase E4b 項目2）: worker の checkpoint/result.json が
                         // `plan_issue` を書いた。
                         "plan_issue" => {
@@ -469,11 +525,7 @@ impl Dispatcher {
                     // D12「失敗にしないもの」: 進捗なし・継続の上限到達は元々失敗にしない。
                     // D12 3.: WU failed は「replan できない」ときだけ failed にする。
                     if matches!(decision.reason, "failed" | "limit" | "plan_issue") {
-                        let replans_so_far = self
-                            .store
-                            .execution_plan_list(task_id)?
-                            .len()
-                            .saturating_sub(1) as u32;
+                        let replans_so_far = self.counted_replans(task_id)?;
                         if replans_so_far < self.effective_max_replans(task_id)? {
                             let why = match decision.reason {
                                 "failed" => format!("work unit {} failed", wu.key),
@@ -490,6 +542,17 @@ impl Dispatcher {
                                 why: task_core::ContinueWhy::Replan,
                             };
                             outcome_str = format!("replan: {why}");
+                        } else if decision.reason == "failed" {
+                            // ADR-0079 付記「R6-1」D3: replan を使い切った後の WU の失敗で task を黙って `failed`
+                            // にしない（web Phase 0 の 17:56Z）。木の節点は `limit:max_replans` の決定、木で
+                            // ない task は人への質問（回答 = 人の replan、上限に数えない）。
+                            let msg = outcome_str
+                                .strip_prefix("error(retryable=false): ")
+                                .unwrap_or(outcome_str.as_str())
+                                .to_string();
+                            let (t, o) = self.replan_exhausted_ask(&task, &msg, replans_so_far)?;
+                            trigger = t;
+                            outcome_str = o;
                         }
                     }
                     if decision.plan_complete {
@@ -557,10 +620,11 @@ impl Dispatcher {
                         worker_decisions = Some(found);
                     }
                 }
+                wu_parked_on_cluster_jobs = wu_reason == "cluster_jobs";
                 wu_update = Some((updated_row, wu_reason, all_new_rows));
             }
         } else if let Some(end) = run_end
-            && end.is_continuable()
+            && end.saves_checkpoint()
         {
             let events_so_far = self.store.events_for(task_id)?;
             let run_seq = current_run_seq(&events_so_far);
@@ -622,9 +686,19 @@ impl Dispatcher {
             };
             let checkpoint = task_core::merge_checkpoint(worker_checkpoint, mechanical, ctx);
 
-            if self.config.execution.continuation {
+            if end == task_core::RunEnd::Waiting {
+                // ADR-0090 D1: クラスタ job の wait。checkpoint は残すが continuation の上限・進捗なしには数えない
+                // （trigger は `ClusterJobWait` のまま）。
+                checkpoint_for_index = Some(checkpoint.clone());
+                checkpoint_event = Some(Event::CheckpointSaved {
+                    run_id: run_id.clone(),
+                    work_unit_id: None,
+                    checkpoint: Box::new(checkpoint),
+                });
+            } else if self.config.execution.continuation {
                 let continuations_so_far = consecutive_continuations(&events_so_far);
-                let prev_checkpoint = latest_checkpoint(&events_so_far, None);
+                let prev_checkpoint =
+                    task_ops::derive::latest_progress_checkpoint(&events_so_far, None);
                 let progressed =
                     task_core::checkpoint_shows_progress(prev_checkpoint.as_ref(), &checkpoint);
                 let no_progress = if progressed {
@@ -871,6 +945,21 @@ impl Dispatcher {
         // ADR-0072 D5/D8（Phase E1）: `CheckpointSaved` は `WorkerFinished` と同じトランザクションで残す。
         if let Some(checkpoint_event) = checkpoint_event {
             events.push(checkpoint_event);
+        }
+        // ADR-0090 D2: wait を開く（`cluster_job_waits` の行は同じトランザクションで作られる）。atomic の run は task を
+        // `ClusterJobWait` で止めるときだけ、WU の run は unit を `blocked(cluster_jobs)` にしたときだけ。
+        if let Some(wait) = cluster_wait.take() {
+            let parked = match &current_wu {
+                None => matches!(trigger, Trigger::ClusterJobWait),
+                Some(_) => wu_parked_on_cluster_jobs,
+            };
+            if parked {
+                events.push(Event::ClusterJobWaitStarted {
+                    wait: Box::new(wait),
+                });
+            } else {
+                tracing::warn!(%task_id, %run_id, "the run asked for a cluster job wait, but another outcome took precedence; not waiting (ADR-0090)");
+            }
         }
         if let Some(ev) = committed_event {
             events.push(ev);
@@ -1368,6 +1457,7 @@ pub(super) fn describe_run_end(end: task_core::RunEnd) -> String {
         task_core::RunEnd::Failed { retryable } => format!("failed(retryable={retryable})"),
         task_core::RunEnd::HarnessError { class } => format!("harness_error({class:?})"),
         task_core::RunEnd::Cancelled => "cancelled".to_string(),
+        task_core::RunEnd::Waiting => "waiting(cluster_jobs)".to_string(),
     }
 }
 
@@ -1427,7 +1517,8 @@ pub(super) fn set_worker_finished_end(event: &mut Option<Event>, end: task_core:
 pub(super) fn build_continuation_context(
     events: &[(u64, Event)],
 ) -> Option<task_worker::ContinuationContext> {
-    if consecutive_continuations(events) == 0 {
+    let after_wait = cluster_job_wait::last_worker_run_waited(events);
+    if consecutive_continuations(events) == 0 && !after_wait {
         return None;
     }
     let checkpoint = latest_checkpoint(events, None)?;
@@ -1479,5 +1570,10 @@ pub(super) fn build_continuation_context(
         previous_end,
         checkpoint: checkpoint_json,
         prior_runs,
+        cluster_jobs: if after_wait {
+            cluster_job_wait::cluster_jobs_from_events(events)
+        } else {
+            None
+        },
     })
 }

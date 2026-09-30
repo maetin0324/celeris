@@ -103,11 +103,7 @@ impl Dispatcher {
             .collect();
         let mut facts = Vec::with_capacity(nodes.len());
         for t in &nodes {
-            let replans_so_far = self
-                .store
-                .execution_plan_list(t.id)?
-                .len()
-                .saturating_sub(1) as u32;
+            let replans_so_far = self.counted_replans(t.id)?;
             let replans_left = replans_so_far < self.effective_max_replans(t.id)?;
             facts.push(
                 task_ops::tree::node_liveness_facts(
@@ -493,6 +489,36 @@ impl Dispatcher {
         Ok(task_core::tree::limits_with_allowances(&tree, &allowances))
     }
 
+    /// ADR-0079 付記「R6-1」D3: `[execution] max_replans` に数える replan の数（人が起こした replan は数えない。
+    /// `task_ops::plan_gate::counted_replans`）。以前は版の数 − 1。
+    pub(super) fn counted_replans(&self, task_id: TaskId) -> Result<u32, DispatchError> {
+        Ok(task_ops::plan_gate::counted_replans(
+            &self.store.events_for(task_id)?,
+        ))
+    }
+
+    /// ADR-0079 付記「R6-1」D1 / D2: 人の gate がこの task の unit を止めているなら、その理由。
+    /// - 有効な計画の版が PlanGate を通っていない（`PlanGateState::Pending`: 承認待ち、または承認待ちのまま人が
+    ///   replan を求め、次の版がまだ採用・承認されていない）。
+    /// - task が人の gate で止まっている（段階の `review: human`〈`awaiting_human`〉・計画の承認待ち）。
+    ///
+    /// 止めている間は、leaf の run・子 task の生成・段階の統合・次の段階の unit の `ready` への引き上げをしない
+    /// （走っている run・子はそのまま走らせる）。
+    pub(super) fn human_gate_hold(
+        &self,
+        task: &Task,
+        plan: &task_core::ExecutionPlanRow,
+        events: &[(u64, Event)],
+    ) -> Option<&'static str> {
+        if !task_ops::plan_gate::plan_gate_state(plan, events).allows_dispatch() {
+            return Some("plan_gate_pending");
+        }
+        if task_ops::plan_gate::is_human_gate(task, events) {
+            return Some("human_gate");
+        }
+        None
+    }
+
     /// ADR-0079 D7（Phase R3a）: 節点の replan の上限（`[execution] max_replans`）に、`limit:max_replans` への
     /// `raise-once` / `replan` の回答の数を足したもの（木が無効・木の節点でなければ設定の値のまま）。
     pub(super) fn effective_max_replans(&self, task_id: TaskId) -> Result<u32, DispatchError> {
@@ -567,6 +593,41 @@ impl Dispatcher {
             },
         )?;
         Ok(())
+    }
+
+    /// ADR-0079 付記「R6-1」D3: replan の上限を使い切った後に WU が失敗した。task を `failed` にせず人に聞く
+    /// （`Trigger` と `WorkerFinished.outcome` を返す）:
+    /// - 木の節点（木が有効）: `limit:max_replans` の決定の要求（D9。同じ節点の未回答があれば増やさない）を出し、
+    ///   `Continue{advance}`（task は `ready` に戻り、`replan_gate` が決定を待つ `Skip` になる）。`raise-once` /
+    ///   `replan` の回答で上限が 1 回分上がる（R3a）。取り下げは決定の `withdraw`。
+    /// - 木でない task: `WorkerQuestion`（`blocked`、承認の行も作る）。質問は
+    ///   `task_ops::plan_gate::REPLAN_EXHAUSTED_QUESTION_PREFIX` で始まり、回答は人の replan の依頼として次の
+    ///   dispatch で planner を起こす（`answered_replan_exhausted`。上限に数えない = 1 回だけ上げるのと同じ）。
+    ///   やめるなら人が task を取り下げる（cancel）。
+    pub(super) fn replan_exhausted_ask(
+        &self,
+        task: &Task,
+        why: &str,
+        used: u32,
+    ) -> Result<(Trigger, String), DispatchError> {
+        let max = self.effective_max_replans(task.id)?;
+        if self.config.execution.limits.tree.enabled && self.is_tree_node(task)? {
+            self.raise_node_replan_limit(task.id, used)?;
+            return Ok((
+                Trigger::Continue {
+                    why: task_core::ContinueWhy::Advance,
+                },
+                format!(
+                    "replan_limit: {why}; the node's replans are exhausted ({used}/{max}), asking a human (limit:max_replans)"
+                ),
+            ));
+        }
+        let text = format!(
+            "{}（{used}/{max} 回）: {why}。回答すると、回答を planner への指示として replan します（人の replan は上限に数えません）。やめるなら task を取り下げてください。",
+            task_ops::plan_gate::REPLAN_EXHAUSTED_QUESTION_PREFIX
+        );
+        tracing::warn!(task_id = %task.id, used, max, "replans are exhausted after a work unit failure; asking a human instead of failing (ADR-0079 R6-1)");
+        Ok((Trigger::WorkerQuestion, format!("question: {text}")))
     }
 
     /// ADR-0079 D3（Phase R2a）: 木の節点か（木の子 task、または /3 の計画を持つ root）。
@@ -711,6 +772,12 @@ impl Dispatcher {
             if plan.spec.schema != task_core::EXECUTION_PLAN_SCHEMA_V3 {
                 continue;
             }
+            // ADR-0079 付記「R6-1」D1 / D2: 人の gate（PlanGate を通っていない版・段階の `review: human`・計画の
+            // 承認待ち）が止めている間は、子の終端の写しだけを行い、unit を `ready` に上げず子も作らない。
+            let hold = {
+                let events = self.store.events_for(task_id)?;
+                self.human_gate_hold(&parent, &plan, &events)
+            };
             // 1. 子の状態の写し。
             let units = self.store.work_units_for(task_id)?;
             let mut changed = false;
@@ -777,7 +844,10 @@ impl Dispatcher {
                 tracing::info!(%task_id, work_unit = %u.key, %child_id, child_status = ?child.status, to = ?to, "task unit mirrors its child task (ADR-0079 D4 (5))");
                 changed = true;
             }
-            let units = if changed {
+            let units = if changed && hold.is_some() {
+                // R6-1: 止めている間は引き上げない（解けた後の dispatch の `promote_newly_ready` が上げる）。
+                self.store.work_units_for(task_id)?
+            } else if changed {
                 let units = self.store.work_units_for(task_id)?;
                 // 子の done で依存が満たされた unit を ready に（段階の障壁は `newly_ready` が見る）。
                 for id in task_core::newly_ready(&units) {
@@ -805,13 +875,11 @@ impl Dispatcher {
                 units
             };
             // 2. 子 task の生成。ADR-0079 D8（Phase R3b）: root の計画が承認を待つ間は子を作らない
-            // （承認までは unit を 1 つも起こさない）。
-            if parent.status == Status::Blocked
-                && task_ops::plan_gate::is_awaiting_plan_approval(
-                    &parent,
-                    &self.store.events_for(task_id)?,
-                )
-            {
+            // （承認までは unit を 1 つも起こさない）。ADR-0079 付記「R6-1」D1 / D2: 承認待ちで止まっている間だけで
+            // なく、承認待ちの版に人が replan を求めて task が `ready` に戻った後（次の版が承認されるまで）と、
+            // 段階の `review: human`（`awaiting_human`）の間も作らない（P-R5b-4 / P-R5b-5）。
+            if let Some(why) = hold {
+                tracing::debug!(%task_id, hold = why, "a human gate holds the task units; no child is created (ADR-0079 R6-1)");
                 continue;
             }
             let limit = self

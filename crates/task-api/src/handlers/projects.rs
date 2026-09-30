@@ -132,6 +132,13 @@ pub(super) async fn project_detail(
             };
             let all_milestones = store.milestone_list(project_id).map_err(store_problem)?;
             let milestones_frozen = u32::try_from(all_milestones.len()).unwrap_or(u32::MAX);
+            let milestones_frozen_open = u32::try_from(
+                all_milestones
+                    .iter()
+                    .filter(|m| !m.status.is_terminal())
+                    .count(),
+            )
+            .unwrap_or(u32::MAX);
             let all_milestones = if include_frozen {
                 all_milestones
             } else {
@@ -206,6 +213,7 @@ pub(super) async fn project_detail(
                 repos,
                 milestones,
                 milestones_frozen,
+                milestones_frozen_open,
                 tasks,
                 project_plan,
                 root_totals: Some(root_totals),

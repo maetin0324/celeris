@@ -393,6 +393,10 @@ pub(crate) async fn check_provider(
                 task_api::ProviderCheckResult::Ok,
                 Some(format!("budget exhausted ({kind:?}): {message}")),
             ),
+            task_worker::Terminal::Waiting { .. } => (
+                task_api::ProviderCheckResult::Ok,
+                Some("asked for a cluster job wait".to_string()),
+            ),
         },
         Err(e @ task_worker::AdapterError::AuthFailed(_)) => (
             task_api::ProviderCheckResult::AuthFailed,

@@ -1412,3 +1412,13 @@ config の編集なし）。migration なし。
 - 逆リンクの 1 回目（冷えた `git grep` / `git show`）は NFS の負荷しだいで 1 s 近い。常時速くするなら、文書の front matter の `tasks:` の索引を
   書き込み時に作る（task-ops/docs の範囲。本 Phase ではしない）。
 - タイムラインは root の子の events を読まない（木の分は `GET /tasks/{id}/task-tree`）。「1366+ events」は根ではなく木の合計と思われる（根は 184 件）。
+
+### R6 統合の記録（2026-09-30 04:xxZ）
+- main に統合済み: R6-3（d47dce3）、R6-2（4b25e9f）、R6-5（002e960、ADR-0089）、R6-4（08c3882）。R6-1 は作業中。
+- 開発環境: NFS の worktree に `target/` を書いて I/O が飽和（03:00Z、I/O pressure 71%、load 80）→ `scripts/dev/worktree-target-dir.sh` +
+  PreToolUse hook で worktree ごとの `.cargo/config.toml` を生成（d6fe615）。置き場は `/var/tmp/agent-platform-build/<name>`（`/var/lib/celeris/build-cache`
+  は委譲エージェントの権限分類で拒否されるため変更、c542e5a）。docs/ops/dev-builds-local-target-dir.md。
+- ローカル LVM の空きが 20 GB まで減っていた（92%）→ 完了したエージェントの build cache 29 GB を削除して 58 GB（77%）。大物は
+  `/var/lib/celeris/scratch/targets` 93 GB と `/var/lib/celeris/workspaces` 70 GB（回収候補: 終端 task の scratch target と workspace の GC）。
+- main の `gui/node_modules` が壊れていた（rolldown/parseAst 欠落、途中で止まった install の痕跡）→ 作り直し中。release gate は自前の node_modules
+  cache を使うので影響なし。

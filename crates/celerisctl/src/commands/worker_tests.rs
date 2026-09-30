@@ -158,6 +158,7 @@ fn cluster(id: &str, host: &str) -> celeris::config::ClusterConfig {
         master_launcher: "auto".into(),
         keepalive_secs: 0,
         liveness_probe_secs: 0,
+        job_wait: Default::default(),
         control_persist: "yes".into(),
     }
 }

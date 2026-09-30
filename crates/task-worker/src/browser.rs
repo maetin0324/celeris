@@ -477,16 +477,11 @@ pub async fn run_with_executable_candidates_record(
 /// (ADR-0080 D3): authenticated pages may reflect secrets.
 const OBSERVATION_UPSTREAM_ACTIONS: [&str; 4] = ["download", "gettext", "screenshot", "snapshot"];
 
-/// Load only measured conformance. The path is supplied by the daemon operator; a missing,
-/// corrupt or stale record fails closed. The runner writes the record after invoking the real
-/// substrate against its local fixture. Sensitive capabilities remain undeclared until P4-A/B.
-fn route_existing_backend(
-    adapter_id: &str,
-    policy: &crate::browser_policy::PreparedBrowserPolicy,
-    record_path: &Path,
-) -> Result<browser_backend::RoutingDecision, AdapterError> {
+/// Public (non-sensitive) capabilities the existing-harness backends declare. Sensitive
+/// capabilities remain undeclared until P4-A/B record real conformance.
+fn public_capabilities() -> BTreeSet<Capability> {
     use Capability as C;
-    let supported: BTreeSet<C> = [
+    [
         C::Navigate,
         C::Snapshot,
         C::Click,
@@ -494,8 +489,11 @@ fn route_existing_backend(
         C::Download,
     ]
     .into_iter()
-    .collect();
-    let backends: Vec<BackendDescriptor> = ["acp", "claude-code", "browser-specialist"]
+    .collect()
+}
+
+fn existing_backends(declared: &BTreeSet<Capability>) -> Vec<BackendDescriptor> {
+    BROWSER_BACKEND_IDS
         .into_iter()
         .map(|id| BackendDescriptor {
             id: id.into(),
@@ -505,10 +503,47 @@ fn route_existing_backend(
                 BackendKind::ExistingLoop
             },
             version: SUPPORTED_VERSION.into(),
-            declared: supported.clone(),
+            declared: declared.clone(),
             enabled: true,
         })
-        .collect();
+        .collect()
+}
+
+/// Adapter ids that can carry the browser capability (ADR-0085 D2).
+pub const BROWSER_BACKEND_IDS: [&str; 3] = ["acp", "claude-code", "browser-specialist"];
+
+/// The operator-supplied runner ledger (`CELERIS_BROWSER_CONFORMANCE_FILE`), if configured.
+pub fn conformance_record_path() -> Option<PathBuf> {
+    std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").map(PathBuf::from)
+}
+
+/// ADR-0089 D1: adapter ids whose runner-recorded conformance certifies every declared public
+/// capability at the supported substrate version. A missing, corrupt or stale ledger fails closed
+/// (the caller gets the error and must not offer any fallback).
+pub fn conformant_backend_ids(record_path: &Path) -> Result<BTreeSet<String>, AdapterError> {
+    let results = load_conformance(record_path)?;
+    let declared = public_capabilities();
+    Ok(existing_backends(&declared)
+        .into_iter()
+        .filter(|backend| {
+            browser_backend::certify(backend, results.get(&backend.id))
+                .is_ok_and(|certified| certified == backend.declared)
+        })
+        .map(|backend| backend.id)
+        .collect())
+}
+
+/// Load only measured conformance. The path is supplied by the daemon operator; a missing,
+/// corrupt or stale record fails closed. The runner writes the record after invoking the real
+/// substrate against its local fixture. Sensitive capabilities remain undeclared until P4-A/B.
+fn route_existing_backend(
+    adapter_id: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    record_path: &Path,
+) -> Result<browser_backend::RoutingDecision, AdapterError> {
+    use Capability as C;
+    let supported = public_capabilities();
+    let backends = existing_backends(&supported);
     let results = load_conformance(record_path)?;
     let mut required = BTreeSet::new();
     for action in &policy.effective.actions {

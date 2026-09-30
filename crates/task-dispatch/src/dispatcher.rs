@@ -14419,6 +14419,128 @@ impl Dispatcher {
         Ok(out)
     }
 
+    /// ADR-0088 D2: browser fallback candidates for one run. Only providers that are enabled
+    /// (configured in the policy table with a non-zero concurrency, not an account pool), healthy
+    /// (not in cooldown) and whose adapter id is conformant in the runner-recorded ledger are
+    /// offered, ordered specialist first and one per adapter id. A `CredentialUse` policy never
+    /// falls back (credential waits and auth sections must not be replayed). When a browser task
+    /// ends up without any candidate the refusal is recorded as a progress event.
+    fn browser_fallback_candidates(
+        &self,
+        task_id: TaskId,
+        run_id: &str,
+        primary_provider: &ProviderId,
+        primary_adapter: &str,
+        record: Option<&std::path::Path>,
+    ) -> Vec<Arc<dyn WorkerAdapter>> {
+        let task = match self.store.get(task_id) {
+            Ok(Some(task)) => task,
+            _ => return Vec::new(),
+        };
+        if !task_core::browser::requests_browser(&task.skills) {
+            return Vec::new();
+        }
+        let credential_use = self
+            .store
+            .browser_task_policy_get(task_id)
+            .ok()
+            .flatten()
+            .is_some_and(|p| {
+                p.allowed_actions
+                    .contains(&task_core::BrowserAction::CredentialUse)
+            });
+        if credential_use {
+            self.record_browser_fallback_refusal(
+                task_id,
+                run_id,
+                "browser fallback refused: CredentialUse policy is never replayed on another backend",
+            );
+            return Vec::new();
+        }
+        let conformant = match record.map(task_worker::browser::conformant_backend_ids) {
+            Some(Ok(ids)) => Some(ids),
+            Some(Err(_)) | None => None,
+        };
+        let cooling: std::collections::HashSet<ProviderId> = self
+            .policy
+            .cooldowns(Instant::now())
+            .into_iter()
+            .map(|c| c.provider)
+            .collect();
+        let mut excluded: Vec<String> = Vec::new();
+        let mut candidates: Vec<(String, ProviderId, Arc<dyn WorkerAdapter>)> = Vec::new();
+        let mut providers: Vec<(&ProviderId, &Arc<dyn WorkerAdapter>)> =
+            self.adapters.iter().collect();
+        providers.sort_by(|a, b| a.0.cmp(b.0));
+        for (provider, adapter) in providers {
+            let id = adapter.id();
+            if provider == primary_provider
+                || id == primary_adapter
+                || !task_worker::browser::BROWSER_BACKEND_IDS.contains(&id)
+            {
+                continue;
+            }
+            let reason = if self.account_pool_providers.contains(provider)
+                || self.policy.concurrency_limit(provider.clone()) == 0
+            {
+                Some("disabled")
+            } else if cooling.contains(provider) {
+                Some("unhealthy")
+            } else if !conformant.as_ref().is_some_and(|ids| ids.contains(id)) {
+                Some("not_conformant")
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => excluded.push(format!("{provider}={reason}")),
+                None => candidates.push((id.to_string(), provider.clone(), Arc::clone(adapter))),
+            }
+        }
+        candidates.sort_by(|a, b| {
+            (a.0 != "browser-specialist", &a.0, &a.1).cmp(&(
+                b.0 != "browser-specialist",
+                &b.0,
+                &b.1,
+            ))
+        });
+        candidates.dedup_by(|a, b| a.0 == b.0);
+        if candidates.is_empty() {
+            let ledger = if conformant.is_some() {
+                "ledger loaded"
+            } else {
+                "ledger unavailable"
+            };
+            self.record_browser_fallback_refusal(
+                task_id,
+                run_id,
+                &format!(
+                    "browser fallback refused: no enabled, healthy, conformant alternate backend ({ledger}; excluded: [{}])",
+                    excluded.join(", ")
+                ),
+            );
+        }
+        candidates
+            .into_iter()
+            .map(|(_, _, adapter)| adapter)
+            .collect()
+    }
+
+    fn record_browser_fallback_refusal(&self, task_id: TaskId, run_id: &str, msg: &str) {
+        let ev = Event::WorkerProgress {
+            run_id: run_id.to_string(),
+            msg: msg.to_string(),
+            kind: None,
+            tool: None,
+            summary: None,
+            detail: None,
+            truncated: false,
+            error: false,
+        };
+        if let Err(e) = self.store.append_event(task_id, &ev) {
+            tracing::warn!(task_id = %task_id, error = %e, "failed to record the browser fallback refusal (ADR-0088 D2)");
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn spawn_worker(
         &self,
@@ -14437,35 +14559,15 @@ impl Dispatcher {
         container: ContainerDecision,
     ) -> JoinHandle<()> {
         let store = self.store.clone();
-        // Only configured, non-pooled local providers can be replayed as browser fallbacks.
-        // Pool accounts require a separate account selection and are excluded here.
-        let mut browser_candidates: Vec<(String, String, Arc<dyn WorkerAdapter>)> = self
-            .adapters
-            .iter()
-            .filter(|(provider, adapter)| {
-                !self.account_pool_providers.contains(*provider)
-                    && matches!(adapter.id(), "acp" | "claude-code" | "browser-specialist")
-            })
-            .map(|(provider, adapter)| {
-                (
-                    adapter.id().to_string(),
-                    provider.clone(),
-                    Arc::clone(adapter),
-                )
-            })
-            .collect();
-        browser_candidates.sort_by(|a, b| {
-            (a.0 != "browser-specialist", &a.0, &a.1).cmp(&(
-                b.0 != "browser-specialist",
-                &b.0,
-                &b.1,
-            ))
-        });
-        browser_candidates.dedup_by(|a, b| a.0 == b.0);
-        let browser_candidates: Vec<Arc<dyn WorkerAdapter>> = browser_candidates
-            .into_iter()
-            .map(|(_, _, adapter)| adapter)
-            .collect();
+        // ADR-0088 D2: the dispatcher builds the browser fallback list from provider state and
+        // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0088).
+        let browser_candidates = self.browser_fallback_candidates(
+            task_id,
+            &run_id,
+            &provider,
+            adapter.id(),
+            task_worker::browser::conformance_record_path().as_deref(),
+        );
         let tx = self.tx.clone();
         let lease = LeaseRenewal {
             ttl: self.config.idle_timeout + self.config.lease_grace,
@@ -23925,6 +24027,291 @@ mod tests {
         }
         let seen = seen.lock().unwrap().clone();
         (primary_env, candidate_env, seen)
+    }
+
+    // ADR-0088 D2: these tests start with the dispatcher's candidate selection, then exercise the
+    // worker supervisor with exactly that list. The ledger is a test fixture, not certification.
+    fn browser_fallback_test_ledger(dir: &Path, ids: &[&str]) -> PathBuf {
+        let path = dir.join("conformance.json");
+        let cases = [
+            "open_allowed_origin",
+            "refuse_denied_origin",
+            "resume_after_crash",
+            "snapshot_has_refs",
+            "click_by_ref",
+            "screenshot_artifact",
+            "download_to_artifacts",
+        ];
+        let results: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "backend_id": id, "version": "0.38.1", "passed": cases,
+                })
+            })
+            .collect();
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "schema": 1, "source": "celeris-browser-conformance", "results": results,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[derive(Clone)]
+    struct BrowserFallbackHarness {
+        adapter_id: &'static str,
+        fails: bool,
+        sessions: Arc<StdMutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl WorkerAdapter for BrowserFallbackHarness {
+        fn id(&self) -> &str {
+            self.adapter_id
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            _: &str,
+            _: RunLimits,
+            _: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            let browser = req.context.browser.as_ref().expect("browser context");
+            self.sessions
+                .lock()
+                .unwrap()
+                .push((self.adapter_id.into(), browser.run.session_id.clone()));
+            if self.fails {
+                Err(AdapterError::Other("primary failed".into()))
+            } else {
+                Ok(RunOutcome {
+                    terminal: Terminal::Done {
+                        summary: "fallback completed".into(),
+                        evidence: vec![],
+                        usage: None,
+                    },
+                    exit_code: Some(0),
+                })
+            }
+        }
+    }
+
+    fn browser_fallback_dispatcher(
+        dir: &Path,
+        secondary_concurrency: usize,
+    ) -> (
+        Dispatcher,
+        Arc<dyn TaskStore>,
+        Task,
+        Arc<StdMutex<Vec<(String, String)>>>,
+    ) {
+        use crate::policy::{ProviderSpec, StaticPolicy};
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = new_task(
+            dir,
+            Check::Command {
+                cmd: ":".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+        store.insert(&task).unwrap();
+        let sessions = Arc::new(StdMutex::new(Vec::new()));
+        let primary: Arc<dyn WorkerAdapter> = Arc::new(BrowserFallbackHarness {
+            adapter_id: "acp",
+            fails: true,
+            sessions: sessions.clone(),
+        });
+        let secondary: Arc<dyn WorkerAdapter> = Arc::new(BrowserFallbackHarness {
+            adapter_id: "claude-code",
+            fails: false,
+            sessions: sessions.clone(),
+        });
+        let mut d = dispatcher(store.clone(), primary.clone(), 1);
+        d.adapters = HashMap::from([("p1".into(), primary), ("p2".into(), secondary)]);
+        d.policy = Box::new(StaticPolicy::new(
+            vec![
+                ProviderSpec {
+                    id: "p1".into(),
+                    adapter: "acp".into(),
+                    tiers: vec![Tier::Standard],
+                    concurrency: 1,
+                    model: "m".into(),
+                },
+                ProviderSpec {
+                    id: "p2".into(),
+                    adapter: "claude-code".into(),
+                    tiers: vec![Tier::Standard],
+                    concurrency: secondary_concurrency,
+                    model: "m".into(),
+                },
+            ],
+            Duration::from_secs(60),
+        ));
+        (d, store, task, sessions)
+    }
+
+    fn browser_fallback_request(task: Task, dir: &Path) -> RunRequest {
+        use task_core::{
+            BrowserAction, BrowserCapability, BrowserDomainMode, BrowserTaskPolicy,
+            EffectiveProfile,
+        };
+        RunRequest {
+            protocol: PROTOCOL_VERSION,
+            task,
+            workspace: dir.to_path_buf(),
+            work_dir: None,
+            artifacts_dir: dir.join("artifacts"),
+            cargo_target_dir: None,
+            context: RunContext {
+                profile: Some(EffectiveProfile {
+                    browser: Some(BrowserCapability {
+                        allowed_domains: vec!["example.com".into()],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                browser_policy: Some(BrowserTaskPolicy {
+                    policy_id: "public".into(),
+                    revision: 1,
+                    domain_mode: BrowserDomainMode::CommonHosts,
+                    navigation_origins: vec![],
+                    network_domains: vec!["example.com".into()],
+                    allowed_actions: vec![BrowserAction::Navigate],
+                    approval_actions: vec![],
+                    credential_policy_ids: vec![],
+                    artifact_policy_id: None,
+                }),
+                ..Default::default()
+            },
+        }
+    }
+
+    struct BrowserFallbackSink;
+    impl EventSink for BrowserFallbackSink {
+        fn progress(&self, _: &str) {}
+        fn artifact(&self, _: &ArtifactRef) {}
+    }
+
+    #[tokio::test]
+    async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, _, task, sessions) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        let candidates = d.browser_fallback_candidates(
+            task.id,
+            "fallback-run",
+            &"p1".into(),
+            "acp",
+            Some(&record),
+        );
+        assert_eq!(
+            candidates.iter().map(|a| a.id()).collect::<Vec<_>>(),
+            vec!["claude-code"]
+        );
+        let executable = dir.path().join("fake-agent-browser");
+        std::fs::write(&executable, "#!/bin/sh\nif [ \"$1\" = '--version' ]; then echo 'agent-browser 0.38.1'; exit 0; fi\necho '{\"success\":true}'\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        let outcome = task_worker::browser::run_with_executable_candidates_record(
+            d.adapters.get("p1").unwrap().clone(),
+            candidates,
+            browser_fallback_request(task, dir.path()),
+            "fallback-run",
+            RunLimits {
+                wall_clock: Duration::from_secs(10),
+                idle_timeout: Duration::from_secs(5),
+                kill_grace: Duration::from_millis(100),
+            },
+            &BrowserFallbackSink,
+            &executable,
+            None,
+            &record,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+        let seen = sessions.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].1, seen[1].1);
+        assert!(
+            dir.path()
+                .join("runs/fallback-run/browser-fallback-1/config.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_disabled_provider_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, _, task, sessions) = browser_fallback_dispatcher(dir.path(), 0);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+        assert!(sessions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_unhealthy_provider_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut d, _, task, _) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        d.policy.report("p2".into(), &ProviderOutcome::AuthFailed);
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_no_conformant_candidate_records_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, store, task, _) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp"]);
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+        assert!(store.events_for(task.id).unwrap().iter().any(|(_, e)| matches!(e,
+            Event::WorkerProgress { msg, .. } if msg.contains("browser fallback refused: no enabled, healthy, conformant alternate backend")
+        )));
+    }
+
+    #[test]
+    fn dispatch_browser_fallback_credential_use_never_replays() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, store, task, _) = browser_fallback_dispatcher(dir.path(), 1);
+        let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);
+        let mut policy = browser_fallback_request(task.clone(), dir.path())
+            .context
+            .browser_policy
+            .unwrap();
+        policy
+            .allowed_actions
+            .push(task_core::BrowserAction::CredentialUse);
+        store.browser_task_policy_set(task.id, &policy).unwrap();
+        assert!(
+            d.browser_fallback_candidates(task.id, "run", &"p1".into(), "acp", Some(&record))
+                .is_empty()
+        );
+        assert!(
+            store
+                .events_for(task.id)
+                .unwrap()
+                .iter()
+                .any(|(_, e)| matches!(e,
+                    Event::WorkerProgress { msg, .. } if msg.contains("CredentialUse policy")
+                ))
+        );
     }
 
     /// ADR-0088 D1: 候補は主 adapter と同じ除去 env・`CARGO_TARGET_DIR`・scratch env を受ける。

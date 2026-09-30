@@ -126,3 +126,61 @@ fn tree_event_types_match_their_serde_names() {
     }
     assert!(EVENT_TYPES.contains(&"decision_requested"));
 }
+
+/// ADR-0090 D3: クラスタ job の wait の Event の `type` 名が serde の名前・`event_type_name`・`EVENT_TYPES` で一致し、
+/// `EVENT_TYPES` は重複なく 48 語（browser Phase 2 の 45 語 + 3）。
+#[test]
+fn cluster_job_wait_event_types_match_their_serde_names() {
+    use task_core::cluster_job::{
+        ClusterJobState, ClusterJobStatus, ClusterJobWait, ClusterJobWaitState, ClusterScheduler,
+    };
+    let task_id = TaskId::new();
+    let status = ClusterJobStatus {
+        job_id: "42634".into(),
+        state: ClusterJobState::Running,
+        exit_status: None,
+        raw_state: Some("R".into()),
+    };
+    let events = vec![
+        Event::ClusterJobWaitStarted {
+            wait: Box::new(ClusterJobWait {
+                wait_id: "w".into(),
+                task_id,
+                work_unit_id: None,
+                run_id: "r".into(),
+                cluster: "sirius".into(),
+                scheduler: ClusterScheduler::Pbs,
+                jobs: vec!["42634".into()],
+                poll_secs: 300,
+                timeout_secs: 3600,
+                summary: String::new(),
+                checkpoint: None,
+                created_at: "2026-09-30T00:00:00Z".into(),
+                deadline: "2026-09-30T01:00:00Z".into(),
+                last_polled_at: None,
+                finished_at: None,
+                state: ClusterJobWaitState::Waiting,
+                last_status: Vec::new(),
+            }),
+        },
+        Event::ClusterJobWaitPolled {
+            wait_id: "w".into(),
+            jobs: vec![status.clone()],
+        },
+        Event::ClusterJobWaitFinished {
+            wait_id: "w".into(),
+            state: ClusterJobWaitState::Satisfied,
+            jobs: vec![status],
+            detail: String::new(),
+        },
+    ];
+    for e in &events {
+        let v = serde_json::to_value(e).unwrap_or_default();
+        let serde_name = v.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+        assert_eq!(serde_name, event_type_name(e));
+        assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
+    }
+    let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
+    assert_eq!(unique.len(), EVENT_TYPES.len());
+    assert_eq!(EVENT_TYPES.len(), 48);
+}

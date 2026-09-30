@@ -68,12 +68,17 @@ def call(cli, *args):
 def drive():
     cli = Path(os.environ["CELERIS_BROWSER_CLI"])
     phase = os.environ["CELERIS_BROWSER_PHASE"]
-    if phase == "open":
+    if phase in ("open", "fallback"):
         opened = call(cli, "open", os.environ["CELERIS_BROWSER_ORIGIN"])
         denied = call(cli, "open", "http://denied.invalid/")
-        if opened[0] == 0 and denied[0] != 0:
-            os.kill(os.getpid(), signal.SIGKILL)  # simulated harness crash after real browser use
-        return 1
+        if phase == "fallback" and opened[0] == 0 and denied[0] != 0:
+            phase = "resume"
+        elif phase == "fallback":
+            return 1
+        else:
+            if opened[0] == 0 and denied[0] != 0:
+                os.kill(os.getpid(), signal.SIGKILL)
+            return 1
     if phase != "resume":
         return 2
     code, snapshot = call(cli, "snapshot")
@@ -174,6 +179,8 @@ def main():
                         help="use this file as a scripted LLM driver for all three backends")
     parser.add_argument("--protocol-scripted", action="store_true",
                         help="run the Rust ACP, Claude and specialist adapters against a scripted LLM")
+    parser.add_argument("--fallback-scenario", action="store_true",
+                        help="after protocol conformance, exercise worker fallback with the real browser")
     parser.add_argument("--drive", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.drive:
@@ -191,6 +198,8 @@ def main():
         parser.error("choose a scripted mode or explicit backend commands")
     if args.scripted and args.protocol_scripted:
         parser.error("choose only one scripted mode")
+    if args.fallback_scenario and not args.protocol_scripted:
+        parser.error("--fallback-scenario requires --protocol-scripted")
     if args.scripted:
         command = {backend: [sys.executable, str(Path(__file__).resolve()),
                              "--drive", "--output-dir", args.output_dir] for backend in BACKENDS}
@@ -247,6 +256,38 @@ def main():
                 temporary.unlink()
                 print("routing test rejected runner ledger", file=sys.stderr)
                 return 1
+            if args.fallback_scenario:
+                first_fallback_request = len(Site.requests)
+                browser_bin = output / "runner-bin"
+                browser_bin.mkdir(mode=0o700)
+                (browser_bin / "agent-browser").symlink_to(executable)
+                env["PATH"] = str(browser_bin) + os.pathsep + env.get("PATH", "")
+                env["CELERIS_BROWSER_FALLBACK_ROOT"] = str(output / "fallback")
+                env["CELERIS_BROWSER_EXECUTABLE"] = executable
+                env["CELERIS_BROWSER_ORIGIN"] = origin
+                fallback = subprocess.run(
+                    ["cargo", "test", "--manifest-path", str(manifest), "-p", "task-worker", "--lib",
+                     "p4c_fallback_real_harness_scenario", "--", "--ignored", "--nocapture"],
+                    cwd=output, env=env, text=True, capture_output=True, timeout=300, check=False,
+                )
+                (output / "fallback-test.json").write_text(json.dumps({
+                    "exit": fallback.returncode, "stdout_tail": fallback.stdout[-3000:],
+                    "stderr_tail": fallback.stderr[-3000:],
+                }))
+                if fallback.returncode:
+                    temporary.unlink()
+                    print("real browser fallback scenario failed", file=sys.stderr)
+                    return 1
+                observed = Site.requests[first_fallback_request:]
+                (output / "fallback-fixture.json").write_text(json.dumps({
+                    "requests": observed,
+                    "alternate_clicked": ("POST", "/clicked") in observed,
+                    "navigation_count": observed.count(("GET", "/")),
+                }, indent=2) + "\n")
+                if ("POST", "/clicked") not in observed or observed.count(("GET", "/")) < 2:
+                    temporary.unlink()
+                    print("fallback completion not observed by fixture", file=sys.stderr)
+                    return 1
         temporary.replace(output / "conformance.json")
         (output / "same-task.json").write_text(json.dumps(comparison, indent=2) + "\n")
         print(json.dumps({"record": str(output / "conformance.json"), "comparison": comparison}))

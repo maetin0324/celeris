@@ -29,6 +29,9 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// ADR-0088 D4: isolated browser runtime transport. Resolver has no default.
+    #[serde(default)]
+    pub browser: BrowserRuntimeConfig,
     /// ADR-0064 D1: 従来どおり `db = "<path>"`（文字列）で書けるほか、`[db]` テーブルで
     /// `path` と一緒に `busy_timeout_ms` 等を書ける（`DbConfig` のカスタム `Deserialize` が両方を
     /// 受け付ける）。
@@ -184,6 +187,19 @@ pub struct Config {
     /// `Config::load` で読んだファイルの絶対パス（`GET /api/v1/config` の `config_path`。TOML には書かない）。
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserRuntimeConfig {
+    #[serde(default)]
+    pub egress: BrowserEgressConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserEgressConfig {
+    pub resolver: Option<std::net::IpAddr>,
 }
 
 /// `[sessions]`（ADR-0054 D1。Phase 67）: CoS の対話・部門長のレビュー run の継続セッション

@@ -398,6 +398,25 @@ impl task_core::browser_isolation::LiveIsolation for LiveSession {
     }
 }
 
+/// 直に起動した runtime も隔離 session として登録できる（ADR-0088 D5）。controller への
+/// state 投入口は持たないので、復元は開封前に止まる。
+impl task_core::browser_isolation::LiveSessionEntry for LiveSession {
+    fn kind(&self) -> task_core::browser_isolation::RuntimeKind {
+        task_core::browser_isolation::RuntimeKind::Isolated
+    }
+
+    fn accepts_state(&self) -> bool {
+        false
+    }
+
+    fn deliver_state(
+        &self,
+        _state: &[u8],
+    ) -> Result<(), task_core::browser_isolation::StateRejected> {
+        Err(task_core::browser_isolation::StateRejected)
+    }
+}
+
 /// sandboxd の要求ごとに egress を 1 本起動し、相手側の unix stream を返す（ADR-0088 D1）。
 /// channel の EOF で終わる。
 fn relay_loop(

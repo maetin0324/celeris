@@ -461,6 +461,73 @@ pub trait LiveIsolation {
     fn current_attestation(&self) -> Result<IsolationAttestation, Vec<IsolationViolation>>;
 }
 
+/// 稼働中 session の runtime 種別（ADR-0088 D5）。`NotIsolated` の session には復元しない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeKind {
+    Isolated,
+    NotIsolated,
+}
+
+/// controller が開封済み state を受け取らなかった（ADR-0088 D5）。理由は持たない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StateRejected;
+
+/// registry に載る稼働中 session（ADR-0088 D5）。attestation は呼ぶたびに採り直す。
+pub trait LiveSessionEntry: LiveIsolation + Send + Sync {
+    fn kind(&self) -> RuntimeKind;
+    /// controller（CDP 側）に開封済み state の投入口があるか。無ければ開封しない。
+    fn accepts_state(&self) -> bool;
+    /// 開封済み state を controller にだけ渡す。agent・HTTP 応答には出さない。
+    fn deliver_state(&self, state: &[u8]) -> Result<(), StateRejected>;
+}
+
+/// 稼働中 session の索引（ADR-0088 D5）。登録・削除は runtime の supervisor だけが行う。
+pub trait LiveSessionRegistry: Send + Sync {
+    fn get(&self, session_id: &str) -> Option<std::sync::Arc<dyn LiveSessionEntry>>;
+}
+
+/// daemon が 1 つ作り、supervisor と API に配る registry。
+#[derive(Default)]
+pub struct LiveSessions {
+    map: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<dyn LiveSessionEntry>>>,
+}
+
+impl std::fmt::Debug for LiveSessions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveSessions")
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
+impl LiveSessions {
+    pub fn insert(&self, session_id: &str, entry: std::sync::Arc<dyn LiveSessionEntry>) {
+        if let Ok(mut m) = self.map.lock() {
+            m.insert(session_id.to_owned(), entry);
+        }
+    }
+
+    pub fn remove(&self, session_id: &str) {
+        if let Ok(mut m) = self.map.lock() {
+            m.remove(session_id);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.lock().map(|m| m.len()).unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl LiveSessionRegistry for LiveSessions {
+    fn get(&self, session_id: &str) -> Option<std::sync::Arc<dyn LiveSessionEntry>> {
+        self.map.lock().ok()?.get(session_id).cloned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

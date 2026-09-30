@@ -15,7 +15,7 @@ export const screens = [
   { path: "/knowledge", fixture: "/knowledge", heading: "知識" },
   { path: "/knowledge/inbox", fixture: "/knowledge/inbox", heading: "知識の候補" },
   { path: "/knowledge/skills", fixture: "/knowledge/skills", heading: "skills" },
-  { path: "/reports", fixture: "/reports", heading: "報告" },
+  { path: "/reports", fixture: "/reports", heading: "報告", v3: true },
   { path: "/approvals", fixture: "/approvals", heading: "承認", v3: true },
   { path: "/artifacts", fixture: "/artifacts", heading: "成果物" },
   { path: "/tasks", fixture: "/tasks", heading: "タスク", v3: true },

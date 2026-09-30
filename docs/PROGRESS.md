@@ -38,3 +38,7 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - Rust gate: `cargo test --workspace` → exit 101（sccache 起動時 `Operation not permitted`、rustc コンパイル開始前）。`cargo clippy --workspace -- -D warnings` → exit 101（指定 `CARGO_TARGET_DIR` 内の `.cargo-build-lock` を read-only filesystem のため開けず）。どちらもコード検査に到達せず、コード起因か判定できていない。
 - GUI gate（`gui/`）: `pnpm typecheck` / `pnpm test` / `pnpm build` は各 exit 1。pnpm 11.27.0 の依存事前確認がユーザー cache の SQLite database を開けず、各コマンドの実処理は開始しなかった。テスト数は未取得。main との比較も未実施。
 - 未解決と提案: sccache と `CARGO_TARGET_DIR` が書き込み可能な環境で Rust 2 gate を再実行し、pnpm store が利用できる環境で GUI 3 gate と main 比較を再実行してテスト件数を記録する。今回の GUI 差分 gate `git diff --quiet 06e9a03cffe8 -- gui ':!gui/docs/adr/0002-frontend-stack.md'` は exit 0。旧 ADR 追記を含む GUI 全体の差分は新 ADR-0081 に supersede として記録済み。ADR・parity・計画の相互リンクを確認済み。
+
+## Web GUI Phase 1（完了 2026-09-30、scaffold と gateway）
+
+P1-01〜P1-09 完了。以後の Web GUI の記録は [progress/phase-web.md](progress/phase-web.md) へ（Phase 1 の証拠・未解決・提案もそこ）。

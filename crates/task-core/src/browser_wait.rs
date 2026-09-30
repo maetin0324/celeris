@@ -542,6 +542,13 @@ pub trait BrowserWaitStore: Send + Sync {
         key: crate::browser_store::BrowserSessionKey<'_>,
         active: bool,
     ) -> Result<(), crate::browser_store::BrowserStoreError>;
+    /// ADR-0094 D2: worker の agent 操作 gate（task-api の `agent/begin`・`agent/end` と同じ op）。
+    fn browser_session_agent_action(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        op: crate::browser_control_ops::AgentActionOp,
+        now: u64,
+    ) -> Result<crate::browser_control::BrowserControl, crate::browser_store::BrowserStoreError>;
     /// ADR-0082: scrub 済みの live event を 1 件追記する。
     fn browser_session_live_append(
         &self,
@@ -1246,6 +1253,15 @@ impl BrowserWaitStore for SqliteStore {
         active: bool,
     ) -> Result<(), crate::browser_store::BrowserStoreError> {
         self.browser_control_auth_section(key, active).map(|_| ())
+    }
+    fn browser_session_agent_action(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        op: crate::browser_control_ops::AgentActionOp,
+        now: u64,
+    ) -> Result<crate::browser_control::BrowserControl, crate::browser_store::BrowserStoreError>
+    {
+        self.browser_control_agent_action(key, op, now)
     }
     fn browser_session_live_append(
         &self,

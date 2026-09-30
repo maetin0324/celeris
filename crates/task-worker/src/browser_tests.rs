@@ -47,6 +47,13 @@ struct RecordingSink {
     comments: Mutex<Vec<String>>,
 }
 impl EventSink for RecordingSink {
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
     fn browser_updated(&self, browser: &BrowserRun) {
         self.browsers.lock().unwrap().push(browser.clone());
     }
@@ -1110,6 +1117,13 @@ struct WaitSink {
     browsers: Mutex<Vec<BrowserRun>>,
 }
 impl EventSink for WaitSink {
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
     fn progress(&self, _: &str) {}
     fn artifact(&self, _: &ArtifactRef) {}
     fn browser_updated(&self, browser: &BrowserRun) {

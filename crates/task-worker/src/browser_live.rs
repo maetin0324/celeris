@@ -94,6 +94,68 @@ impl ControlGate for InMemoryGate {
     }
 }
 
+/// ADR-0094 D2: store の control 状態を正とする gate（task-api の `agent/begin`・`agent/end` と同じ op）。
+/// store の読み書きに失敗したら操作を出さない側に倒す。
+pub struct StoreGate {
+    store: Arc<dyn task_core::browser_wait::BrowserWaitStore + Send + Sync>,
+    task_id: String,
+    run_id: String,
+    session_id: String,
+}
+
+impl StoreGate {
+    pub fn new(
+        store: Arc<dyn task_core::browser_wait::BrowserWaitStore + Send + Sync>,
+        task_id: &str,
+        run_id: &str,
+        session_id: &str,
+    ) -> Self {
+        Self {
+            store,
+            task_id: task_id.into(),
+            run_id: run_id.into(),
+            session_id: session_id.into(),
+        }
+    }
+
+    fn call(
+        &self,
+        op: task_core::browser_control_ops::AgentActionOp,
+    ) -> Result<BrowserControl, task_core::browser_store::BrowserStoreError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        self.store.browser_session_agent_action(
+            task_core::browser_store::BrowserSessionKey {
+                task_id: &self.task_id,
+                run_id: &self.run_id,
+                session_id: &self.session_id,
+            },
+            op,
+            now,
+        )
+    }
+}
+
+impl ControlGate for StoreGate {
+    fn phase(&self) -> ControlPhase {
+        self.call(task_core::browser_control_ops::AgentActionOp::Read)
+            .map_or(ControlPhase::Paused, |s| s.phase())
+    }
+    fn begin_action(&self) -> Result<(), ControlError> {
+        match self.call(task_core::browser_control_ops::AgentActionOp::Begin) {
+            Ok(_) => Ok(()),
+            Err(task_core::browser_store::BrowserStoreError::Control(e)) => Err(e),
+            Err(_) => Err(ControlError::InvalidPhase {
+                phase: ControlPhase::Paused,
+            }),
+        }
+    }
+    fn end_action(&self) {
+        let _ = self.call(task_core::browser_control_ops::AgentActionOp::End);
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum GatedOutcome<T> {
     Ran(T),

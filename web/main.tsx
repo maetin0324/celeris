@@ -1,6 +1,10 @@
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { configureApiClient } from "./api/client";
+import { SessionQueryProvider } from "./api/provider";
+import { bindQueryClientToSession } from "./api/query-client";
+import { onUnauthenticated } from "./lib/session";
 import { routeTree } from "./routeTree.gen";
 import "./styles.css";
 
@@ -12,11 +16,17 @@ declare module "@tanstack/react-router" {
   }
 }
 
+// 401 は session 失効。QueryClient の cache を捨て、進行中の fetch を止めてから login へ移る。
+bindQueryClientToSession();
+configureApiClient({ onUnauthorized: () => onUnauthenticated(`${window.location.pathname}${window.location.search}`) });
+
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      <RouterProvider router={router} />
+      <SessionQueryProvider>
+        <RouterProvider router={router} />
+      </SessionQueryProvider>
     </StrictMode>,
   );
 }

@@ -238,6 +238,7 @@ pub struct CdpController {
     auth_section: Option<String>,
     injected: Vec<(String, String, String, String)>,
     events: Vec<Value>,
+    redirect_seen: bool,
 }
 
 impl CdpController {
@@ -250,15 +251,23 @@ impl CdpController {
             auth_section: None,
             injected: Vec::new(),
             events: Vec::new(),
+            redirect_seen: false,
         }
     }
 
     pub fn open_auth_section(&mut self, id: String) {
         self.events.clear();
+        self.redirect_seen = false;
         self.auth_section = Some(id);
     }
 
-    pub fn close_auth_section(&mut self) -> Result<(), InjectionError> {
+    /// Only a non-secret redirect bit survives H3 event suppression.
+    pub fn redirect_seen(&self) -> bool {
+        self.redirect_seen
+    }
+
+    /// Remove injected values while the agent relay remains blocked.
+    pub fn clear_injected_values(&mut self) -> Result<(), InjectionError> {
         // Clear on the same document before observations become available.
         for (object_id, session, frame_id, loader_id) in self.injected.clone() {
             let tree = self.call("Page.getFrameTree", json!({}), Some(&session))?;
@@ -273,6 +282,11 @@ impl CdpController {
             }
         }
         self.injected.clear();
+        Ok(())
+    }
+
+    pub fn close_auth_section(&mut self) -> Result<(), InjectionError> {
+        self.clear_injected_values()?;
         self.auth_section = None;
         Ok(())
     }
@@ -379,14 +393,20 @@ impl CdpController {
             .as_i64()
             .ok_or(InjectionError::TargetChanged)?;
         let queried = self.call(
-            "DOM.querySelector",
+            "DOM.querySelectorAll",
             json!({"nodeId":root_id,"selector":request.selector}),
             Some(cdp_session),
         )?;
-        let node_id = queried["result"]["nodeId"]
+        let nodes = queried["result"]["nodeIds"]
+            .as_array()
+            .ok_or(InjectionError::TargetMismatch)?;
+        if nodes.len() != 1 {
+            return Err(InjectionError::TargetMismatch);
+        }
+        let node_id = nodes[0]
             .as_i64()
             .filter(|id| *id > 0)
-            .ok_or(InjectionError::TargetChanged)?;
+            .ok_or(InjectionError::TargetMismatch)?;
         let resolved = self.call(
             "DOM.resolveNode",
             json!({"nodeId":node_id,"executionContextId":context}),
@@ -548,8 +568,15 @@ impl CdpController {
                 if value["id"] == id {
                     return Ok(value);
                 }
-                if value.get("method").is_some() && self.auth_section.is_none() {
-                    self.events.push(value);
+                if value.get("method").is_some() {
+                    if self.auth_section.is_some()
+                        && value["method"] == "Network.requestWillBeSent"
+                        && value["params"]["redirectResponse"].is_object()
+                    {
+                        self.redirect_seen = true;
+                    } else if self.auth_section.is_none() {
+                        self.events.push(value);
+                    }
                 }
                 continue;
             }
@@ -595,6 +622,7 @@ fn broker_denial(reply: &Value) -> InjectionError {
         Some("redisplay_field") => "redisplay_field",
         Some("auth_section_required") => "auth_section_required",
         Some("auth_section_mismatch") => "auth_section_mismatch",
+        Some("selector_mismatch") => "selector_mismatch",
         Some("lease_expired") => "lease_expired",
         Some("lease_used") => "lease_used",
         Some("other_session") => "other_session",

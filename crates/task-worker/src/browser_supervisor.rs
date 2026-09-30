@@ -100,6 +100,7 @@ impl LiveSessionEntry for SupervisedEntry {
 /// 稼働中 runtime の handle。drop でも停止する。
 pub struct Supervisor {
     session_id: String,
+    runtime_pid: i32,
     tx: mpsc::Sender<Cmd>,
     thread: Option<std::thread::JoinHandle<()>>,
     procs: Arc<Mutex<Vec<RecordedProcess>>>,
@@ -111,6 +112,7 @@ pub struct Supervisor {
 }
 
 struct Started {
+    runtime_pid: i32,
     cdp_write: Option<File>,
     cdp_read: Option<File>,
 }
@@ -139,6 +141,7 @@ impl Supervisor {
                 }
                 Ok(Self {
                     session_id,
+                    runtime_pid: started.runtime_pid,
                     tx,
                     thread: Some(thread),
                     procs,
@@ -161,6 +164,11 @@ impl Supervisor {
 
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// The namespace child used for broker-side isolation fact collection.
+    pub fn runtime_pid(&self) -> i32 {
+        self.runtime_pid
     }
 
     pub fn record_path(&self) -> &Path {
@@ -221,6 +229,7 @@ fn runtime_thread(
         return;
     }
     let started = Started {
+        runtime_pid: rt.inner_pid(),
         cdp_write: rt.cdp_write.take(),
         cdp_read: rt.cdp_read.take(),
     };

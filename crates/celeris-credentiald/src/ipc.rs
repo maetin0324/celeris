@@ -34,6 +34,10 @@ pub enum ControlRequest {
         revision: u64,
         origin: String,
     },
+    DescribePolicy {
+        reference: CredentialRef,
+        origin: String,
+    },
     Revoke {
         lease_id: String,
         actor_id: String,
@@ -68,6 +72,8 @@ pub struct IpcReply {
     pub expires_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<IpcCredential>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_login: Option<task_core::browser_wait::TrustedLogin>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct IpcCredential {
@@ -89,6 +95,7 @@ impl IpcReply {
             lease_id: None,
             expires_at: None,
             credential: None,
+            trusted_login: None,
         }
     }
     fn code(code: InjectCode) -> Self {
@@ -99,6 +106,7 @@ impl IpcReply {
             lease_id: None,
             expires_at: None,
             credential: None,
+            trusted_login: None,
         }
     }
     fn err(e: Error) -> Self {
@@ -109,6 +117,7 @@ impl IpcReply {
             lease_id: None,
             expires_at: None,
             credential: None,
+            trusted_login: None,
         }
     }
 }
@@ -208,6 +217,14 @@ fn serve_one(
                         .provider()
                         .resolve_registered(&reference, revision, &origin)?;
                     Ok(IpcReply::ok())
+                }
+                ControlRequest::DescribePolicy { reference, origin } => {
+                    let trusted = broker
+                        .provider()
+                        .describe_registered(&reference, &origin, None)?;
+                    let mut out = IpcReply::ok();
+                    out.trusted_login = Some(trusted);
+                    Ok(out)
                 }
                 ControlRequest::Revoke { lease_id, actor_id } => {
                     broker.revoke(&lease_id, &actor_id)?;

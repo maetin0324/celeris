@@ -164,3 +164,15 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
   - A4: fixture の 2 host が同一 site のため OOPIF にならず、OOPIF の `target_mismatch` は未再現。
   - A13: 別 host UID の実 process による試験は、別 UID が使える host が必要。
   - `cargo clippy --workspace --all-targets -- -D warnings` は既存の `task-worker/src/browser_tests.rs`（`await_holding_lock`）と `task-dispatch`（`type_complexity`）で exit 101（この unit の変更と無関係）。
+
+## P4-B attacks/h3-prod merge の compile 不整合修正（2026-09-30、WorkUnit attacks-merge）
+
+- 経緯: h3-prod（`ADR-0091` D2, 管理者 site policy の trusted login）を merge commit `717c7733` で取り込んだ結果、`CredentialPolicy` に `login_url`/`password_selector`/`submit_selector` が追加され、攻撃試験 fixture 側の初期化（`crates/task-worker/tests/browser_injection_attacks.rs:247` の `grant()`）がこれらを持たず `cargo test --workspace` が E0063（exit 101）で失敗していた。
+- 修正: `grant()` の `CredentialPolicy` に fixture の login URL と selector（`login_url: Some(format!("{ORIGIN}/login.html"))`・`password_selector: Some("#pass".into())`・`submit_selector: None`）を追加。攻撃試験の期待値・A8 所見・A0〜A17 の判定条件は変更していない。新しい `selector_mismatch` 照合で既存攻撃が意図と違う理由で拒否される事象は無かった（`real_browser_injection_attack_matrix` は元の行列どおり通過）。
+- 併せて `crates/task-worker/src/browser_credential.rs` の未使用コードを削除: 旧 `use_credential`（`auth login` + 旧 bridge、H3 経路から外れ `#[cfg(test)]` 専用のまま残っていた）と、それが使っていた `top_level_origin`・`celeris_credentiald::canonical_origin` の再 import・`Segment::origin` フィールドを削除（`Segment` は現在 CDP sink 経路のみで使い `origin` を読まない）。本番コード（H3 経路・ADR-0091 の挙動）は変更していない。
+- 証拠コマンド:
+  - `cargo test -p task-worker --test browser_injection_attacks --test browser_injection_wire --test browser_cdp_sink --test browser_h3_wire --test browser_shared_cdp` → 全 5 バイナリ exit 0（各 **2 passed / 0 failed**、`browser_injection_attacks` は `inner_injection_attacks`・`real_browser_injection_attack_matrix` とも skip 無し）。
+  - `cargo test --workspace` → exit 0（212 + 618 他、全クレート `0 failed`、doctest 含む）。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `cargo fmt --all --check` → exit 0。
+- 未解決: A8（RedisplayGuard 未配線）・A1 の stale-id 競合再現・A4 の OOPIF・A13 の別 UID 実証は上の節のまま未達。次段は `redisplay` WorkUnit（RedisplayGuard を controller の agent 観測経路へ配線）。

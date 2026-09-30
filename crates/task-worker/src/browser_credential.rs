@@ -11,8 +11,6 @@ use std::sync::{Arc, OnceLock};
 #[cfg(test)]
 use std::time::Duration;
 
-#[cfg(test)]
-use celeris_credentiald::canonical_origin;
 use celeris_credentiald::{CredentialPolicy, CredentialRef, LeaseRequest, ipc};
 use serde_json::json;
 use task_core::browser_wait::ConsumedBrowserApproval;
@@ -129,7 +127,6 @@ pub(crate) struct Segment<'a> {
     pub runtime: &'a Path,
     pub session_id: &'a str,
     pub allowed_domains: &'a [String],
-    pub origin: &'a str,
 }
 
 /// Credential-segment action policy: lifecycle, the trusted login navigation and the two
@@ -249,107 +246,6 @@ fn libc_fcntl(fd: i32, cmd: i32, arg: i32) -> std::io::Result<i32> {
     } else {
         Ok(rc)
     }
-}
-
-/// Active top-level page origin as reported by the substrate, canonicalized.
-#[cfg(test)]
-async fn top_level_origin(seg: &Segment<'_>) -> Result<String, &'static str> {
-    let value = substrate(seg, &["get", "url"], None).await?;
-    let url = value
-        .pointer("/data/url")
-        .and_then(|u| u.as_str())
-        .ok_or("substrate_failed")?;
-    let rest = url.strip_prefix("https://").ok_or("origin_mismatch")?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    canonical_origin(&format!("https://{authority}")).map_err(|_| "origin_mismatch")
-}
-
-/// Grant + bind a one-use lease for the consumed approval, then drive `auth login` with the
-/// fixed `celeris-credential` plugin. The top-level origin is checked before and after.
-/// Returns only a fixed failure code; the lease is revoked on any failure.
-#[cfg(test)]
-pub(crate) async fn use_credential(
-    sup: &CredentialSupervisor,
-    seg: &Segment<'_>,
-    approval: &ConsumedBrowserApproval,
-    task_id: &str,
-) -> Result<(), &'static str> {
-    let wait = &approval.wait;
-    if canonical_origin(seg.origin).as_deref() != Ok(wait.origin.as_str()) {
-        return Err("origin_mismatch");
-    }
-    // The broker's ids are `[A-Za-z0-9_-]{1,64}`; bind it to the bare digest of the policy hash.
-    let policy_hash = wait
-        .policy_hash
-        .strip_prefix("sha256:")
-        .unwrap_or(&wait.policy_hash)
-        .to_string();
-    let now = unix_now();
-    let approval_expires = u64::try_from(wait.deadline.unix_timestamp()).unwrap_or(0);
-    let expires = (now + LEASE_TTL_SECS).min(approval_expires.max(now + 1));
-    let token = sup.broker.bind(celeris_credentiald::Binding {
-        token: String::new(),
-        task_id: task_id.into(),
-        run_id: wait.run_id.clone(),
-        session_id: wait.session_id.clone(),
-        exact_origin: wait.origin.clone(),
-        policy_hash: policy_hash.clone(),
-        expires_at: expires,
-    })?;
-    let lease_id = sup.broker.grant(LeaseRequest {
-        reference: CredentialRef {
-            credential_id: approval.credential.credential_id.clone(),
-            provider: approval.credential.provider.clone(),
-            policy_id: approval.credential.policy_id.clone(),
-        },
-        policy: CredentialPolicy {
-            policy_id: approval.credential.policy_id.clone(),
-            revision: approval.credential.credential_revision,
-            exact_origin: wait.origin.clone(),
-            task_id: task_id.into(),
-            max_ttl_seconds: LEASE_TTL_SECS,
-            require_approval: true,
-            allow_persistence: false,
-            login_url: None,
-            password_selector: None,
-            submit_selector: None,
-        },
-        credential_revision: approval.credential.credential_revision,
-        task_id: task_id.into(),
-        run_id: wait.run_id.clone(),
-        session_id: wait.session_id.clone(),
-        approval_id: wait.approval_id.clone().ok_or("approval record missing")?,
-        approved_by: approval.approved_by.clone(),
-        policy_hash,
-        idempotency_key: format!("lease-{}", wait.wait_id),
-        ttl_seconds: LEASE_TTL_SECS,
-        approval_expires_at: approval_expires,
-        session_expires_at: expires,
-    })?;
-    let result = async {
-        let login_url = format!("{}/", wait.origin);
-        // The CLI starts a session daemon on `open`. Its plugin host inherits FD 3
-        // from that daemon, not from the later `auth login` CLI process.
-        substrate(seg, &["open", &login_url], Some(token.as_str())).await?;
-        if top_level_origin(seg).await? != wait.origin {
-            return Err("origin_mismatch");
-        }
-        substrate(
-            seg,
-            &login_argv(&lease_id, &login_url),
-            Some(token.as_str()),
-        )
-        .await?;
-        if top_level_origin(seg).await? != wait.origin {
-            return Err("origin_mismatch");
-        }
-        Ok(())
-    }
-    .await;
-    if result.is_err() {
-        sup.broker.revoke(&lease_id, "supervisor");
-    }
-    result
 }
 
 /// Issue a lease for the pinned site policy without starting the retired bridge.
@@ -503,7 +399,6 @@ mod tests {
             runtime: temp.path(),
             session_id: "session-test",
             allowed_domains: &domains,
-            origin: "https://example.com",
         };
         assert!(
             substrate(

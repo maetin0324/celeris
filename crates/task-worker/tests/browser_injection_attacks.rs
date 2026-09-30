@@ -252,6 +252,9 @@ fn grant(root: &tempfile::TempDir, n: u32) -> String {
         max_ttl_seconds: 60,
         require_approval: true,
         allow_persistence: false,
+        login_url: Some(format!("{ORIGIN}/login.html")),
+        password_selector: Some("#pass".into()),
+        submit_selector: None,
     };
     let reference = CredentialRef {
         credential_id: format!("login-{n}"),

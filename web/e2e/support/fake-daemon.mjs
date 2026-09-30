@@ -82,7 +82,7 @@ export function validateFixture(value, original, location = "$", errors = []) {
 }
 
 export const defaultFixtures = Object.fromEntries(
-  ["health", "inbox", "daemon"].flatMap((key) => {
+  ["health", "inbox", "daemon", "console"].flatMap((key) => {
     const value = fixtureFor(schema.properties[key]);
     const errors = validateFixture(value, schema.properties[key]);
     if (errors.length) throw new Error(`${key}: ${errors.join(", ")}`);
@@ -109,7 +109,9 @@ export function createFakeDaemon({
   if (!delayValues.has(delayMs)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
   const requests = [];
   const clients = new Set();
+  const consoleClients = new Set();
   let delay = delayMs;
+  let postDelay = 0;
   let streamStatus = 200;
   let timer;
   const server = http.createServer((req, res) => {
@@ -153,10 +155,44 @@ export function createFakeDaemon({
       clients.add(res);
       return;
     }
+    if (pathname === "/api/v1/console/stream") {
+      record.query = new URL(req.url ?? "/", "http://x").search;
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      const since = new URL(req.url ?? "/", "http://x").searchParams.get("since");
+      res.write(
+        `event: hello\ndata: ${JSON.stringify({ cursor: since ?? "h0", now: "2026-01-01T00:00:00Z", scope: "all" })}\n\n`,
+      );
+      consoleClients.add(res);
+      res.on("close", () => consoleClients.delete(res));
+      return;
+    }
+    if (
+      req.method === "POST" &&
+      (pathname === "/api/v1/console/instruct" || pathname === "/api/v1/console/new-conversation")
+    ) {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        record.body = Buffer.concat(chunks).toString("utf8");
+        const respond = () => {
+          if (pathname.endsWith("/instruct")) {
+            res.writeHead(202, { "content-type": "application/json" });
+            res.end(JSON.stringify({ message_id: "M1", node_id: "cos", task_id: "T1" }));
+          } else {
+            res.writeHead(204);
+            res.end();
+          }
+        };
+        if (postDelay) setTimeout(respond, postDelay);
+        else respond();
+      });
+      return;
+    }
     const file = files[pathname];
     if (file) {
       // run のファイル・成果物（P1-08）。単一の `bytes=a-b` の Range だけを扱う。
-      const body = Buffer.from(file.body);
+      // body は関数でもよい（実行中の run の追記を試す。P3-12）。
+      const body = Buffer.from(typeof file.body === "function" ? file.body() : file.body);
       const headers = { "content-type": file.type ?? "text/plain", "accept-ranges": "bytes" };
       if (file.disposition) headers["content-disposition"] = file.disposition;
       const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? "");
@@ -170,10 +206,22 @@ export function createFakeDaemon({
         res.writeHead(206, { ...headers, "content-range": `bytes ${start}-${end}/${body.length}` });
         return res.end(body.subarray(start, end + 1));
       }
+      // `offset`（P3-12 の追い掛け）: offset == size は空本体、offset > size は 416。
+      const offsetParam = new URL(req.url ?? "/", "http://x").searchParams.get("offset");
+      if (offsetParam !== null) {
+        const offset = Number(offsetParam);
+        if (offset > body.length) {
+          res.writeHead(416, { "content-range": `bytes */${body.length}` });
+          return res.end();
+        }
+        res.writeHead(200, headers);
+        return res.end(body.subarray(offset));
+      }
       res.writeHead(200, headers);
       return res.end(body);
     }
-    const value = fixtures[pathname] ?? fixtures[pathname.replace(/^\/api\/v1/, "")];
+    const raw = fixtures[pathname] ?? fixtures[pathname.replace(/^\/api\/v1/, "")];
+    const value = typeof raw === "function" ? raw(new URL(req.url ?? "/", "http://x")) : raw;
     const respond = () => {
       if (res.destroyed) return;
       res.writeHead(value === undefined ? 404 : 200, { "content-type": "application/json" });
@@ -193,6 +241,20 @@ export function createFakeDaemon({
     setStreamStatus(value) {
       streamStatus = value;
     },
+    // Console（P3-01）: `/api/v1/console/stream` の接続へ block を流す・切る。POST の応答を遅らせる。
+    sendConsoleBlock(block) {
+      const frame = `event: console.block\ndata: ${JSON.stringify(block)}\n\n`;
+      for (const client of consoleClients) client.write(frame);
+    },
+    dropConsoleClients() {
+      for (const client of consoleClients) client.destroy();
+    },
+    setPostDelay(value) {
+      postDelay = value;
+    },
+    get consoleClients() {
+      return consoleClients.size;
+    },
     get streamClients() {
       return clients.size;
     },
@@ -210,7 +272,7 @@ export function createFakeDaemon({
     },
     async close() {
       clearInterval(timer);
-      for (const client of clients) client.destroy();
+      for (const client of [...clients, ...consoleClients]) client.destroy();
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     },
   };

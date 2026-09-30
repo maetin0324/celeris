@@ -2,6 +2,7 @@ import { Link, useRouter } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useState } from "react";
 import { badgeView } from "../../api/queries/badges";
 import { useRealtimeSubscription } from "../../api/realtime/use-realtime";
+import { NotificationsWatcher } from "../../features/reports/notifications-watcher";
 import { formatAbsolute, formatRelative, useLastHello } from "../../lib/time";
 import { buttonClassName } from "../ui/button";
 import { navItems } from "./nav-items";
@@ -18,6 +19,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const badges: Record<string, ReturnType<typeof badgeView>> = {
     "/inbox": badgeView(server.inboxBadge, "受信箱"),
     "/approvals": badgeView(server.approvalsBadge, "承認待ち"),
+    "/reports": badgeView(server.reportsLive?.unread_secretary, "未読の報告"),
   };
 
   useRealtimeSubscription();
@@ -46,6 +48,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div data-shell className="flex min-h-dvh flex-col md:flex-row">
+      <NotificationsWatcher reportsLive={server.reportsLive} />
       <header className="flex items-center justify-between gap-2 border-b border-neutral-300 px-3 py-1 md:w-56 md:flex-col md:items-stretch md:justify-start md:border-r md:border-b-0 md:py-3">
         <Link to="/" className="inline-flex min-h-11 min-w-11 items-center text-lg font-semibold">
           Celeris

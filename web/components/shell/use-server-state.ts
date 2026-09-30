@@ -67,5 +67,6 @@ export function useShellServerState(authenticated: boolean) {
     down,
     inboxBadge: inbox.data === undefined ? null : inboxTotal(inbox.data),
     approvalsBadge: daemon.data?.approvalsPending ?? null,
+    reportsLive: daemon.data?.reports ?? null,
   };
 }

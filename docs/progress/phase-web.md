@@ -39,6 +39,21 @@ P2-01 `2194da2f`、P2-02 `8bc88050`、P2-03 `bcfe6276`、P2-04 `279d2bef`、P2-0
 - 未解決: なし（V3 の S3 mobile-audit・screenshots は /tasks・/inbox のみ。他画面は Phase 3 で台帳に沿って足す）。
 - 提案: Phase 3 の各画面で V3 の台帳と検査を使い、P5-01 で全画面の遅延 gate と継続的な SSE tick を実測する。
 
+## Phase 3（完了 2026-09-30、中核の画面 P3-01〜P3-15）
+
+P3-01〜P3-15 は各 1 commit 以上（web phase 3 の全 commit は `git log --oneline --grep 'web phase 3'` で拾える）: P3-01 `bd00a32c`（Console 中継と cache）、P3-02 `cd421e3d`（Console の画面）・`7891d3a7`（parity 完了）・`fe7f6f6b`（screens.test.ts の型直し、replan v2 の r2 葉）、P3-03 `6a0bbbc7`（inbox と共通の操作フィードバック）、P3-04 `6e9eb5d4`（approvals と常設ルール）、P3-05 `753e272f`（タスク一覧の絞り込み・並び）、P3-06 `f9e74443`（タスクと計画の作成画面）、P3-07 `6937011f`（依存グラフ）、P3-08 `23ebdd61`（タスク詳細の枠・overview・timeline）、P3-09 `744f660a`（判断パネル）、P3-10 `0a2bfd68`（実行・routing 操作）・`b96485d4`（e2e の port 7720 衝突回避）、P3-11 `127ddb46`（作業ツリー・成果物 viewer、H8）、P3-12 `8d35dbee`（run ログの会話表示）、P3-13 `cfe6b400`（変更 tab と 5 tab の結合）、P3-14 `cafcaf76`（報告の一覧・詳細）、P3-15 `44cf8508`（ブラウザ通知、タブ間 1 回、H9）。parity の補修は `ccb95796`（R21・R35 close）、`d2b142dd`（task・graph の絞り込みと history の同期）、`f4a22a16`+`8b6ddc97`（R28 を `POST /tasks` の root task 作成へ移す）。
+
+Phase 3 の完了検証は turn 切れを避けるため 3 葉（p3-close-static → p3-close-e2e → p3-close-record）に分割した（前試行の p3-close は同じ検証を 4 回繰り返して turn 切れを繰り返した）。
+
+- p3-close-static（前 p3-close の branch を `--ff-only` 取り込み、V1・V2・parity 台帳）: `git merge-base --is-ancestor f4a22a16 HEAD && git merge-base --is-ancestor 8b6ddc97 HEAD` → exit 0（両方 ancestor）。`corepack pnpm@11.27.0 -C gui test && typecheck && build` → exit 0。`corepack pnpm@12.6.0 -C web install --frozen-lockfile && typecheck && lint && test && build`、続けて `gen:types --check && check:boundaries && check:secrets` → 各 exit 0。`node web/scripts/check-parity.mjs --require-phase 3` → exit 0（Phase 3 対象の parity 行 R01・R02・R08・R17〜R28・R35・R38・R39・X9・X14 はすべて「完了（\<commit\>）」）。修正 commit は発生せず（作業ツリーは clean のまま）。
+- p3-close-e2e（parity e2e 全件と V3 の e2e）: p3-close-static の branch は既に HEAD の祖先。`corepack pnpm@12.6.0 -C web e2e parity/ latency/transition.spec.ts realtime/refetch-scope.spec.ts a11y/axe.spec.ts` → 89 件中 86 passed・3 skipped（fixture screenshots のみ）、exit 0。typecheck（`tsc -b`）・lint（`biome check`）も exit 0。落ちた spec が無く web/ の修正は不要だった（作業ツリーは clean のまま）。
+- p3-close-record（この葉、cargo と記録）: `git merge --ff-only celeris-wu/.../p3-close-e2e` → 既に取り込み済み（up to date）。`cargo test --workspace` → exit 0（テストバイナリ 95 個すべて `test result: ok`、合計 2886 passed・0 failed）。`cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+
+V1〜V3 と parity の受け入れ条件（このタスク全体の受け入れ条件 0〜2）は上記 3 葉の検証をあわせて満たす。各画面の V3（遷移の独立・再取得の範囲・mobile 4 幅・axe）は個々の P3-NN 葉と p3-close-e2e の a11y/axe・latency/transition・realtime/refetch-scope spec で確認済み。
+
+- 未解決: Phase 3 の parity 台帳で Phase 4/5 に属する行（R29〜R34・R36、X10 の mobile-audit 全画面）は引き続き「未着手」（計画どおり Phase 3 の範囲外）。
+- 提案: Phase 4 では `check-parity.mjs --require-phase 4` を新しい gate にし、R29〜R36 と X10（全画面の mobile-audit・axe）をまとめて閉じる。close 葉を 3 分割する運用（静的検査 / e2e / cargo+記録）は turn 切れを避けられたため、以後の Phase close でも踏襲する。
+
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 
 修正 commit `web phase 2 P2-07: select V3 screens from the ledger`（本節を含む commit）。`screens.ts` の `v3: true` が付いた画面だけを S1・S2・S4 が選ぶようにし、Phase 2 では `/tasks` と `/inbox` のみを対象にした。nav に無い画面は台帳の fixture で開く。動的 route も見出しを起点にデータ領域を確認する。

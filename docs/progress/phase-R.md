@@ -1580,3 +1580,8 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
   有効かを確認する。
 - 07:14Z: browser 根の repair-phase-4-1 が continuation 上限 → 「予算を増やして続ける」で回答。
 - 07:26Z: release **b4521dd9d3ad**（main = R6 + R7-1、schema 34）: gate ok、push、verify ok（n-1-compat は想定どおり SchemaTooNew で live_ok=false → 昇格は停止→起動）。
+- 07:3xZ: 人が release **b4521dd9d3ad**（R6 + R7-1、schema 34）を停止→起動で昇格（health b4521dd9d3ad、schema 34）。web Phase 1 の人 PUT（v6、
+  `overridden_done = p1-01-scaffold, p1-02-03-types-fake`、R5b-fix1 の本番 2 例目）を適用 → 質問に回答して統合検査へ。
+- 07:4xZ 人「リファクタ task は a（retry）」: `POST /tasks/01M3Q6F0Y8M0HDMF6Y68G8519M/retry {accept: false, execution: "compound"}` → 新 task
+  **01M3RM0YS1M9KSYH4WYW59E89R**（draft）。objective に引き継ぎ（元ブランチ 71 commit を最初の葉で merge、nav の check はスクリプトを作る葉の後、
+  残りは最終検証と PROGRESS）を追記して accept → ready。

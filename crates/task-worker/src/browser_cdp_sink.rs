@@ -111,7 +111,11 @@ impl UnixInjectionClient {
     }
 
     fn check_socket(&self) -> Result<(), InjectionError> {
-        if self.socket.file_name().is_some_and(|name| name == "injection.sock") {
+        if self
+            .socket
+            .file_name()
+            .is_some_and(|name| name == "injection.sock")
+        {
             Ok(())
         } else {
             Err(InjectionError::SinkFailed)

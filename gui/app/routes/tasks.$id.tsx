@@ -65,6 +65,7 @@ import type {
   TimelineItem,
 } from "~/celeris/types";
 import type { LiveViewState } from "~/components/BrowserRunsPanel";
+import { ClusterJobWaitBanner } from "~/components/ClusterJobWaitBanner";
 import { CodeViewer } from "~/components/CodeViewer";
 /* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
 import { ReplyStepRow } from "~/components/ConsoleBlockItem";
@@ -808,6 +809,9 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
           dismissing={dismissing}
         />
       )}
+
+      {/* celeris ADR-0090 D5（Phase R7-1）: クラスタ job の durable wait（daemon が poll し、終われば続きの run）。 */}
+      {detail.cluster_job_wait && <ClusterJobWaitBanner wait={detail.cluster_job_wait} />}
 
       {/* celeris ADR-0079 D10 / D14（Phase R4b）: 止まっている理由（理由なし・決定・基盤・承認）。
           候補のときだけ lazy の帯を読み、判定と文言は帯の側（`~/lib/tree.ts`）で行う。 */}

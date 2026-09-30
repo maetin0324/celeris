@@ -788,6 +788,10 @@ async fn terminal_from_result_file(
             };
         }
     };
+    // ADR-0090 D1: クラスタ job の終了待ち（`question` が無ければ `summary` より優先）。
+    if let Some(terminal) = crate::adapter::result_file_wait(&text, None) {
+        return terminal;
+    }
     match serde_json::from_str::<ResultFile>(&text) {
         Ok(rf) => {
             // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。

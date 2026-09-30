@@ -231,6 +231,8 @@ pub struct ClusterSpec {
     /// ServerAliveCountMax=3 -o TCPKeepAlive=yes`（`0` なら keepalive を付けない）。既定 30 秒。
     /// コマンドラインの `-o` は `~/.ssh/config` より優先されるので、人の設定を変えずに効く。
     pub keepalive_secs: u64,
+    /// ADR-0090 D7: クラスタ job の durable wait の poll 間隔と上限（`[[clusters]] job_wait`）。
+    pub job_wait: task_core::cluster_job::ClusterJobWaitLimits,
     /// ADR-0062 A: master 越しの実通信（`ssh -o BatchMode=yes <host> -- true`）による生存確認を
     /// この秒数ごとに行う（`0` で無効）。既定 300 秒。NAT / ファイアウォールの idle timeout で
     /// TCP が黙って死んでも、`-O check`（unix socket を見るだけ）は気づかないので、実通信で確定させる。
@@ -698,6 +700,10 @@ fn render_phase_report_markdown(report: &task_core::PhaseReport) -> String {
     }
     out
 }
+/// ADR-0090: クラスタ job の durable wait（検証・poll・再開・continuation の前置き）。
+mod cluster_job_wait;
+pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+
 use crate::review::{
     HumanVerdicts, PLAN_FILE_NAME, PlanCheck, ReviewExtras, ReviewOutcome, ReviewSubject,
     ReviewerRun, Verdict, needs_reviewer_run, review_task,
@@ -1097,6 +1103,7 @@ fn describe_run_end(end: task_core::RunEnd) -> String {
         task_core::RunEnd::Failed { retryable } => format!("failed(retryable={retryable})"),
         task_core::RunEnd::HarnessError { class } => format!("harness_error({class:?})"),
         task_core::RunEnd::Cancelled => "cancelled".to_string(),
+        task_core::RunEnd::Waiting => "waiting(cluster_jobs)".to_string(),
     }
 }
 
@@ -1325,7 +1332,9 @@ fn validate_plan_harnesses(
 /// （`run_worker` が `dispatch` の遷移と `WorkerStarted` の追記のあとに呼ばれるため）。
 /// continuation でなければ `None`（前の run の会話・出力の全文は載せない。D9）。
 fn build_continuation_context(events: &[(u64, Event)]) -> Option<task_worker::ContinuationContext> {
-    if consecutive_continuations(events) == 0 {
+    // ADR-0090 D2: クラスタ job の wait の後の run（再開・上限切れの後の回答）も continuation にする。
+    let after_wait = cluster_job_wait::last_worker_run_waited(events);
+    if consecutive_continuations(events) == 0 && !after_wait {
         return None;
     }
     let checkpoint = latest_checkpoint(events, None)?;
@@ -1377,6 +1386,11 @@ fn build_continuation_context(events: &[(u64, Event)]) -> Option<task_worker::Co
         previous_end,
         checkpoint: checkpoint_json,
         prior_runs,
+        cluster_jobs: if after_wait {
+            cluster_job_wait::cluster_jobs_from_events(events)
+        } else {
+            None
+        },
     })
 }
 
@@ -2246,6 +2260,13 @@ pub struct Dispatcher {
     cluster_command_probe: Option<ClusterCommandProbe>,
     /// ADR-0062 A: クラスタごとに最後に実通信 probe を行った時刻（`liveness_probe_secs` の間引きに使う）。
     last_cluster_command_probe: HashMap<String, Instant>,
+    /// ADR-0090 D2: クラスタ job の poll のフック（`None` なら poll しない。celeris が本物を挿す）。
+    cluster_job_poller: Option<ClusterJobPoller>,
+    /// ADR-0090 D2: 走っている poll（wait id → 結果の受け口）。結果は次の tick 以降に拾う。
+    cluster_job_polls: HashMap<
+        String,
+        std::sync::mpsc::Receiver<Result<task_worker::RemoteCommandOutput, String>>,
+    >,
     /// ADR-0078: クラスタごとの接続の帳簿（遷移・probe・鍵認証の再接続・回数）。
     cluster_conn: HashMap<String, ClusterConnState>,
     /// ADR-0078 D5: 直前の tick の開始時刻と、その前の tick との間隔（`cluster ssh master lost` の
@@ -2517,6 +2538,8 @@ impl Dispatcher {
             cluster_connector: None,
             cluster_command_probe: None,
             last_cluster_command_probe: HashMap::new(),
+            cluster_job_poller: None,
+            cluster_job_polls: HashMap::new(),
             cluster_conn: HashMap::new(),
             last_tick_started: None,
             last_tick_gap_ms: 0,
@@ -3423,6 +3446,10 @@ impl Dispatcher {
         run_cluster_hooks_off_async(|| self.refresh_cluster_liveness());
         // ADR-0062 A: `try_wait` は非ブロッキングなので、他のフックと違いスレッドを逃がす必要は無い。
         self.refresh_cluster_master_exits();
+        // ADR-0090 D2: クラスタ job の durable wait の poll（ssh は OS スレッドに逃がし、終わった結果だけを拾う）。
+        if let Err(e) = self.poll_cluster_job_waits() {
+            tracing::warn!(error = %e, "cluster job wait poll failed (ADR-0090)");
+        }
         let cluster_ms = lap(&mut at);
         run_cluster_hooks_off_async(|| self.refresh_cluster_tunnels());
         let tunnel_ms = lap(&mut at);
@@ -5168,6 +5195,9 @@ impl Dispatcher {
         let mut run_end: Option<task_core::RunEnd> = None;
         // ADR-0072 D9: `Terminal::Yielded` の生の checkpoint JSON（`result.json` の `yield`）。
         let mut yield_checkpoint_json: Option<serde_json::Value> = None;
+        // ADR-0090 D1/D2: `Terminal::Waiting` を検証して組んだクラスタ job の wait（`ClusterJobWaitStarted` にする）。
+        let mut cluster_wait: Option<task_core::cluster_job::ClusterJobWait> = None;
+        let current_wu_id = current_wu.as_ref().map(|w| w.id.clone());
         let (mut trigger, mut outcome_str, usage, provider_outcome) = match result {
             Ok(RunOutcome {
                 terminal:
@@ -5258,6 +5288,45 @@ impl Dispatcher {
                     ProviderOutcome::Ok,
                 )
             }
+            // ADR-0090 D1: クラスタ job の終了待ち。検証に通れば run を `waiting` で閉じ、task / unit を止める
+            // （continuation の回数・進捗なし・attempts に数えない）。通らなければ retryable な失敗。
+            Ok(RunOutcome {
+                terminal:
+                    Terminal::Waiting {
+                        request,
+                        checkpoint,
+                        usage,
+                    },
+                ..
+            }) => match self.cluster_job_wait_for(
+                &task,
+                &run_id,
+                current_wu_id.as_deref(),
+                &request,
+                checkpoint.clone(),
+            ) {
+                Ok(wait) => {
+                    run_end = Some(task_core::RunEnd::Waiting);
+                    yield_checkpoint_json = checkpoint;
+                    let line = format!(
+                        "waiting: クラスタ {} の {} job の終了を待ちます: {}",
+                        wait.cluster,
+                        wait.scheduler.as_str(),
+                        wait.jobs.join(" ")
+                    );
+                    cluster_wait = Some(wait);
+                    (Trigger::ClusterJobWait, line, usage, ProviderOutcome::Ok)
+                }
+                Err(reason) => {
+                    run_end = Some(task_core::RunEnd::Failed { retryable: true });
+                    (
+                        Trigger::WorkerError { retryable: true },
+                        format!("error(retryable=true): invalid cluster job wait: {reason}"),
+                        usage,
+                        ProviderOutcome::Ok,
+                    )
+                }
+            },
             // ADR-0072 D7（Phase E1）: turn / wall-clock / context の上限に当たった。usage を運ぶ。
             Ok(RunOutcome {
                 terminal:
@@ -5336,6 +5405,8 @@ impl Dispatcher {
         )> = None;
         // ADR-0079 D7（Phase R3a）: worker が `result.json` の `decisions` で出した決定の要求（記録と止める unit）。
         let mut worker_decisions: Option<WorkerDecisions> = None;
+        // ADR-0090 D2: この WU の run が unit を `blocked(cluster_jobs)` にした。
+        let mut wu_parked_on_cluster_jobs = false;
         if let Some(wu) = &current_wu {
             // ADR-0072 D6（Phase E2）: WU の run。`end` が無ければ（分類できない供給側・インフラの
             // 失敗）、harness_error 相当として WU を ready に戻すだけで、Task レベルの trigger は
@@ -5350,7 +5421,10 @@ impl Dispatcher {
             let mut checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut prev_checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut no_progress_before = 0u32;
-            if effective_end.is_continuable() && self.config.execution.continuation {
+            // ADR-0090 D1: クラスタ job の wait も checkpoint を残す（`[execution] continuation` に依らない）。
+            if (effective_end.is_continuable() && self.config.execution.continuation)
+                || effective_end == task_core::RunEnd::Waiting
+            {
                 let events_so_far = self.store.events_for(task_id)?;
                 // ADR-0074 D1.6（Phase F2b）: v2 の WU は WU の worktree・ブランチ・base で取る。
                 let (artifacts_dir, cwd_buf, branch, base) =
@@ -5402,7 +5476,8 @@ impl Dispatcher {
                     created_at: rfc3339(OffsetDateTime::now_utc()),
                 };
                 let checkpoint = task_core::merge_checkpoint(worker_checkpoint, mechanical, ctx);
-                prev_checkpoint_opt = latest_checkpoint(&events_so_far, Some(&wu.id));
+                prev_checkpoint_opt =
+                    task_ops::derive::latest_progress_checkpoint(&events_so_far, Some(&wu.id));
                 no_progress_before = no_progress_streak(&events_so_far, Some(&wu.id));
                 checkpoint_event = Some(Event::CheckpointSaved {
                     run_id: run_id.clone(),
@@ -5471,6 +5546,14 @@ impl Dispatcher {
                                 "work_unit_retry: WorkUnit {} を最初からやり直します（{}/{}）",
                                 wu.key, decision.updated.retries, limits.max_retries
                             );
+                        }
+                        // ADR-0090 D2: unit はクラスタ job を待つ（`blocked(cluster_jobs)`）。v2 の task は兄弟を止めず
+                        // `advance` で進み、段階の unit を順に並べる v1 の task は task ごと待つ。
+                        "cluster_jobs" => {
+                            outcome_str = format!("{outcome_str}（WorkUnit {}）", wu.key);
+                            if wu.phase.is_none() {
+                                trigger = Trigger::ClusterJobWait;
+                            }
                         }
                         // ADR-0072 D17 3.（Phase E4b 項目2）: worker の checkpoint/result.json が
                         // `plan_issue` を書いた。
@@ -5588,10 +5671,11 @@ impl Dispatcher {
                         worker_decisions = Some(found);
                     }
                 }
+                wu_parked_on_cluster_jobs = wu_reason == "cluster_jobs";
                 wu_update = Some((updated_row, wu_reason, all_new_rows));
             }
         } else if let Some(end) = run_end
-            && end.is_continuable()
+            && end.saves_checkpoint()
         {
             let events_so_far = self.store.events_for(task_id)?;
             let run_seq = current_run_seq(&events_so_far);
@@ -5653,9 +5737,19 @@ impl Dispatcher {
             };
             let checkpoint = task_core::merge_checkpoint(worker_checkpoint, mechanical, ctx);
 
-            if self.config.execution.continuation {
+            if end == task_core::RunEnd::Waiting {
+                // ADR-0090 D1: クラスタ job の wait。checkpoint は残すが continuation の上限・進捗なしには数えない
+                // （trigger は `ClusterJobWait` のまま）。
+                checkpoint_for_index = Some(checkpoint.clone());
+                checkpoint_event = Some(Event::CheckpointSaved {
+                    run_id: run_id.clone(),
+                    work_unit_id: None,
+                    checkpoint: Box::new(checkpoint),
+                });
+            } else if self.config.execution.continuation {
                 let continuations_so_far = consecutive_continuations(&events_so_far);
-                let prev_checkpoint = latest_checkpoint(&events_so_far, None);
+                let prev_checkpoint =
+                    task_ops::derive::latest_progress_checkpoint(&events_so_far, None);
                 let progressed =
                     task_core::checkpoint_shows_progress(prev_checkpoint.as_ref(), &checkpoint);
                 let no_progress = if progressed {
@@ -5903,6 +5997,21 @@ impl Dispatcher {
         if let Some(checkpoint_event) = checkpoint_event {
             events.push(checkpoint_event);
         }
+        // ADR-0090 D2: wait を開く（`cluster_job_waits` の行は同じトランザクションで作られる）。atomic の run は task を
+        // `ClusterJobWait` で止めるときだけ、WU の run は unit を `blocked(cluster_jobs)` にしたときだけ。
+        if let Some(wait) = cluster_wait.take() {
+            let parked = match &current_wu {
+                None => matches!(trigger, Trigger::ClusterJobWait),
+                Some(_) => wu_parked_on_cluster_jobs,
+            };
+            if parked {
+                events.push(Event::ClusterJobWaitStarted {
+                    wait: Box::new(wait),
+                });
+            } else {
+                tracing::warn!(%task_id, %run_id, "the run asked for a cluster job wait, but another outcome took precedence; not waiting (ADR-0090)");
+            }
+        }
         if let Some(ev) = committed_event {
             events.push(ev);
         }
@@ -6116,6 +6225,16 @@ impl Dispatcher {
             }) => (
                 Some(task_core::RunEnd::Yielded),
                 "yielded (planner runs are not continued; treated as an invalid attempt)"
+                    .to_string(),
+                *usage,
+            ),
+            // ADR-0090: planner run は job を待たない（不正な試行として扱う）。
+            Ok(RunOutcome {
+                terminal: Terminal::Waiting { usage, .. },
+                ..
+            }) => (
+                Some(task_core::RunEnd::Failed { retryable: true }),
+                "error(retryable=true): planner runs cannot wait for cluster jobs; treated as an invalid attempt"
                     .to_string(),
                 *usage,
             ),
@@ -12329,16 +12448,27 @@ impl Dispatcher {
         &self,
         wu: &task_core::WorkUnitRow,
     ) -> Option<task_worker::ContinuationContext> {
-        if wu.continuations == 0 {
-            return None;
-        }
         let runs = self.store.runs_for_work_unit(&wu.id).ok()?;
         let last = runs.last()?;
+        // ADR-0090 D2: クラスタ job の wait の後の run も continuation にする（`continuations` は数えていない）。
+        let after_wait = last.status == task_core::RunIndexStatus::Waiting;
+        if wu.continuations == 0 && !after_wait {
+            return None;
+        }
         let checkpoint = last.checkpoint.clone()?;
         let checkpoint_json = serde_json::to_value(&checkpoint).ok()?;
         let previous_end = match last.status {
             task_core::RunIndexStatus::Yielded => "yielded".to_string(),
+            task_core::RunIndexStatus::Waiting => "waiting(cluster_jobs)".to_string(),
             other => other.as_str().to_string(),
+        };
+        let cluster_jobs = if after_wait {
+            wu.task_id
+                .parse::<TaskId>()
+                .ok()
+                .and_then(|task_id| self.work_unit_cluster_jobs(task_id, &wu.id, &last.run_id))
+        } else {
+            None
         };
         let prior_runs: Vec<String> = runs
             .iter()
@@ -12349,6 +12479,7 @@ impl Dispatcher {
             previous_end,
             checkpoint: checkpoint_json,
             prior_runs,
+            cluster_jobs,
         })
     }
 
@@ -17435,6 +17566,15 @@ const SHUTDOWN_WHY: &str = "daemon shutdown (SIGTERM/SIGINT)";
 fn terminal_from_run_dir(dir: &std::path::Path, run_id: &str) -> Option<Terminal> {
     let path = dir.join("runs").join(run_id).join("result.json");
     let text = std::fs::read_to_string(path).ok()?;
+    // ADR-0090 D1: `{"type":"wait",...}` の行は `result.json` と同じ検証で `Terminal::Waiting` に戻す。
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim())
+        && value.get("type").and_then(|t| t.as_str()) == Some("wait")
+    {
+        let usage = value
+            .get("usage")
+            .and_then(|u| serde_json::from_value::<task_core::Usage>(u.clone()).ok());
+        return task_worker::adapter::wait_terminal(&value, usage);
+    }
     match serde_json::from_str::<WorkerMessage>(text.trim()).ok()? {
         WorkerMessage::Done {
             summary,
@@ -21175,6 +21315,7 @@ mod tests {
                 work_dir: None,
                 keepalive_secs: 0,
                 liveness_probe_secs: 0,
+                job_wait: Default::default(),
             },
         );
         if !control_master_alive_blocking(&["ssh".to_string()], "celeris-localhost") {
@@ -21255,6 +21396,7 @@ mod tests {
                 work_dir: None,
                 keepalive_secs: 0,
                 liveness_probe_secs: 0,
+                job_wait: Default::default(),
             },
         );
         let (tx, rx) = tokio::sync::watch::channel(None);
@@ -21927,6 +22069,7 @@ mod tests {
             work_dir: None,
             keepalive_secs: 0,
             liveness_probe_secs: 0,
+            job_wait: Default::default(),
         }
     }
 
@@ -23075,6 +23218,7 @@ mod tests {
                 work_dir: None,
                 keepalive_secs: 0,
                 liveness_probe_secs: 0,
+                job_wait: Default::default(),
             },
         );
         d.cluster_cooldown
@@ -36094,6 +36238,10 @@ mod tests {
     /// ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency`・プールの `concurrency` の外
     /// （`src/dispatcher/tests/cos_capacity.rs`）。
     mod cos_capacity;
+
+    /// ADR-0090（Phase R7-1）: クラスタ job の durable wait（開く・poll・再開・上限・中止・replay）
+    /// （`src/dispatcher/tests/cluster_job_wait.rs`）。
+    mod cluster_job_wait;
 
     /// ADR-0079 §7 R1b: plan/3 の kind task の unit から子 task を作り、状態を写し、段階の完了・
     /// 子待ち・subtree の中止・`review: human`（`src/dispatcher/tests/tree.rs`）。

@@ -304,6 +304,22 @@ export type Event =
       wait_id: string;
     }
   | {
+      type: "cluster_job_wait_started";
+      wait: ClusterJobWait;
+    }
+  | {
+      jobs: ClusterJobStatus[];
+      type: "cluster_job_wait_polled";
+      wait_id: string;
+    }
+  | {
+      detail?: string;
+      jobs?: ClusterJobStatus[];
+      state: ClusterJobWaitState;
+      type: "cluster_job_wait_finished";
+      wait_id: string;
+    }
+  | {
       /**
        * ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から
        * daemon が作った子 task だけが `plan_unit` を持つ。それ以外は省略〈従来の JSON のまま〉）。
@@ -734,6 +750,18 @@ export type Event =
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
 /**
+ * 1 つの job の状態（scheduler の文字を正規化したもの）。
+ */
+export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finished" | "gone" | "unknown";
+/**
+ * job scheduler の種類。
+ */
+export type ClusterScheduler = "pbs" | "slurm";
+/**
+ * wait の状態。`waiting` だけが「開いている」。
+ */
+export type ClusterJobWaitState = "waiting" | "satisfied" | "timed_out" | "cancelled";
+/**
  * ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。
  */
 export type CreatedOrigin = "plan_unit";
@@ -840,6 +868,9 @@ export type RunEnd =
     }
   | {
       type: "cancelled";
+    }
+  | {
+      type: "waiting";
     };
 /**
  * D7: 予算切れの種類。
@@ -853,7 +884,7 @@ export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_tim
  * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
  */
 export type TierSource = "human" | "system" | "hint" | "default";
-export type CheckpointEnd = "completed" | "yielded" | "budget_exhausted";
+export type CheckpointEnd = ("completed" | "yielded" | "budget_exhausted") | "waiting";
 /**
  * checkpoint を合成した出所（D8）。
  */
@@ -922,7 +953,8 @@ export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
 /**
  * D6: `work_units.blocked_reason`。
  */
-export type WorkUnitBlockedReason = ("question" | "dependency_failed" | "limit") | "plan_issue" | "decision" | "infra";
+export type WorkUnitBlockedReason =
+  ("question" | "dependency_failed" | "limit") | "plan_issue" | "decision" | "infra" | "cluster_jobs";
 export type RunOutcomeKind =
   ("done" | "question" | "error" | "requeue" | "lease_expired") | "interrupted" | "continued";
 export type AttentionItem =
@@ -3089,9 +3121,15 @@ export interface ProviderLive {
   env_keys?: string[];
   id: string;
   /**
-   * 実行中の run と Reviewer run の合計。
+   * 実行中の run と Reviewer run の合計。ADR-0089（Phase R6-5）: CoS の対話 run は含めない
+   * （`in_use_cos`）。
    */
   in_use: number;
+  /**
+   * ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外。
+   * 古いスナップショットには無いので既定 0）。
+   */
+  in_use_cos?: number;
   /**
    * ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
    * celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
@@ -3787,6 +3825,57 @@ export interface BrowserPolicyBinding {
   hash: string;
   policy_id: string;
   revision: number;
+}
+/**
+ * `cluster_job_waits` の 1 行（`ClusterJobWaitStarted` の中身と同じ形）。
+ */
+export interface ClusterJobWait {
+  /**
+   * worker が添えた checkpoint の申告（生の JSON）。
+   */
+  checkpoint?: {
+    [k: string]: unknown;
+  };
+  cluster: string;
+  /**
+   * RFC 3339。
+   */
+  created_at: string;
+  /**
+   * RFC 3339（`created_at + timeout_secs`）。
+   */
+  deadline: string;
+  finished_at?: string | null;
+  jobs: string[];
+  last_polled_at?: string | null;
+  last_status?: ClusterJobStatus[];
+  poll_secs: number;
+  run_id: string;
+  scheduler: ClusterScheduler;
+  state: ClusterJobWaitState;
+  summary?: string;
+  task_id: TaskId;
+  timeout_secs: number;
+  wait_id: string;
+  work_unit_id?: string | null;
+}
+/**
+ * 1 つの job の poll の結果。
+ */
+export interface ClusterJobStatus {
+  /**
+   * 終わった job の終了コード（PBS `Exit_status`、Slurm `ExitCode` の前半）。未確定なら省略。
+   */
+  exit_status?: number | null;
+  /**
+   * worker が申告した id（`42634`。scheduler の server 名の接尾辞は付けない）。
+   */
+  job_id: string;
+  /**
+   * scheduler が返した生の状態（PBS の `job_state` の文字、Slurm の `State`）。
+   */
+  raw_state?: string | null;
+  state: ClusterJobState;
 }
 /**
  * DESIGN §4.1 の `Task`。
@@ -7204,9 +7293,14 @@ export interface ProviderView {
   env_keys: string[];
   id: string;
   /**
-   * スナップショットが無ければ `null`。
+   * スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。
    */
   in_use?: number | null;
+  /**
+   * ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外で
+   * 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
+   */
+  in_use_cos?: number | null;
   /**
    * ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
    * または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
@@ -7914,6 +8008,11 @@ export interface TaskDetail {
    * ADR-0018: `WorkspaceSpec::Remote` のクラスタ（`[[clusters]] id`）。ローカルのタスクは `null`。
    */
   cluster?: string | null;
+  /**
+   * ADR-0090 D5: この task が待っているクラスタ job（`waiting` の wait。無ければ省略）。GUI の 1 行
+   * 「クラスタ job を待っています: 42634 (R) 42635 (Q) …」の材料。
+   */
+  cluster_job_wait?: ClusterJobWaitView | null;
   criteria: CriterionView[];
   /**
    * ADR-0016 D2: 各 run が `delegate` で作った子（`Event::Delegated` の順）。
@@ -7972,6 +8071,36 @@ export interface ApprovalLink {
   attempt?: number | null;
   criterion_idx?: number | null;
   decided?: ApprovalDecisionView | null;
+}
+/**
+ * ADR-0090 D5: 待っているクラスタ job（`cluster_job_waits` の `waiting` の行）。
+ */
+export interface ClusterJobWaitView {
+  cluster: string;
+  created_at: string;
+  deadline: string;
+  /**
+   * job ごとの直近の状態（申告の順。まだ poll していない job は `unknown`）。
+   */
+  jobs: ClusterJobStatus[];
+  last_polled_at?: string | null;
+  /**
+   * 次の poll の目安（`last_polled_at + poll_secs`。まだ poll していなければ省略 = 次の tick）。
+   */
+  next_poll_at?: string | null;
+  poll_secs: number;
+  run_id: string;
+  scheduler: ClusterScheduler;
+  /**
+   * `42634 (R) 42635 (Q)` の形。
+   */
+  status_line: string;
+  summary?: string;
+  wait_id: string;
+  /**
+   * 待っている WorkUnit（atomic の run なら省略）。
+   */
+  work_unit_id?: string | null;
 }
 export interface CriterionView {
   approval?: ApprovalLink | null;

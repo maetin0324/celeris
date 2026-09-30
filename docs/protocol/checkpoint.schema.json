@@ -33,12 +33,21 @@
       "type": "object"
     },
     "CheckpointEnd": {
-      "enum": [
-        "completed",
-        "yielded",
-        "budget_exhausted"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "completed",
+            "yielded",
+            "budget_exhausted"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "waiting",
+          "description": "ADR-0090 D1: クラスタ job の wait で止めた run の checkpoint（進捗なしの窓の比較から外す）。",
+          "type": "string"
+        }
+      ]
     },
     "CheckpointFileChange": {
       "properties": {

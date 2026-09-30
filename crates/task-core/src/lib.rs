@@ -8,6 +8,8 @@ pub mod approval;
 pub mod browser;
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の耐久記録。
 pub mod browser_wait;
+/// ADR-0090: クラスタ job（PBS / Slurm）の durable wait（`cluster_job_waits`・poll の出力の parser）。
+pub mod cluster_job;
 pub use browser::{
     AgentBrowserActionPolicy, BrowserAction, BrowserCapability, BrowserDomainMode,
     BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,

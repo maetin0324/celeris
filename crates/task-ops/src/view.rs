@@ -166,6 +166,74 @@ pub struct TaskDetail {
     /// `paused_at` を持つ一番近い祖先）。止まっていなければ省略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_by: Option<TaskId>,
+    /// ADR-0090 D5: この task が待っているクラスタ job（`waiting` の wait。無ければ省略）。GUI の 1 行
+    /// 「クラスタ job を待っています: 42634 (R) 42635 (Q) …」の材料。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_job_wait: Option<ClusterJobWaitView>,
+}
+
+/// ADR-0090 D5: 待っているクラスタ job（`cluster_job_waits` の `waiting` の行）。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct ClusterJobWaitView {
+    pub wait_id: String,
+    /// 待っている WorkUnit（atomic の run なら省略）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+    pub run_id: String,
+    pub cluster: String,
+    pub scheduler: task_core::cluster_job::ClusterScheduler,
+    /// job ごとの直近の状態（申告の順。まだ poll していない job は `unknown`）。
+    pub jobs: Vec<task_core::cluster_job::ClusterJobStatus>,
+    /// `42634 (R) 42635 (Q)` の形。
+    pub status_line: String,
+    pub poll_secs: u64,
+    pub created_at: String,
+    pub deadline: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_polled_at: Option<String>,
+    /// 次の poll の目安（`last_polled_at + poll_secs`。まだ poll していなければ省略 = 次の tick）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_poll_at: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+}
+
+/// ADR-0090 D5: task の `waiting` の wait（新しいもの）を GUI・API の形にする。
+pub fn active_cluster_job_wait(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+) -> Result<Option<ClusterJobWaitView>, OpsError> {
+    let Some(wait) = store
+        .cluster_job_waits_for_task(task_id)?
+        .into_iter()
+        .rev()
+        .find(|w| w.state == task_core::cluster_job::ClusterJobWaitState::Waiting)
+    else {
+        return Ok(None);
+    };
+    let jobs = wait.job_statuses();
+    let next_poll_at = wait.last_polled_at.as_deref().and_then(|t| {
+        let last =
+            time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).ok()?;
+        let next = last + time::Duration::seconds(i64::try_from(wait.poll_secs).ok()?);
+        next.format(&time::format_description::well_known::Rfc3339)
+            .ok()
+    });
+    Ok(Some(ClusterJobWaitView {
+        status_line: task_core::cluster_job::status_line(&jobs),
+        wait_id: wait.wait_id,
+        work_unit_id: wait.work_unit_id,
+        run_id: wait.run_id,
+        cluster: wait.cluster,
+        scheduler: wait.scheduler,
+        jobs,
+        poll_secs: wait.poll_secs,
+        created_at: wait.created_at,
+        deadline: wait.deadline,
+        last_polled_at: wait.last_polled_at,
+        next_poll_at,
+        summary: wait.summary,
+    }))
 }
 
 /// ADR-0072 D20（Phase E5）: タスクの状態バッジの横に出す、今どの段階かの導出値（D6 の R3 の代替。
@@ -1088,10 +1156,12 @@ pub fn task_detail(
     let priority_label = task_core::priority_label(task.priority).to_string();
     let is_root_task = task_core::is_root_task(&task);
     let paused_by = paused_by(store, &task)?;
+    let cluster_job_wait = active_cluster_job_wait(store, task.id)?;
 
     Ok(TaskDetail {
         is_root_task,
         paused_by,
+        cluster_job_wait,
         task,
         priority_label,
         workspace_dir,

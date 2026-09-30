@@ -46,11 +46,21 @@ pub enum HarnessErrorClass {
 pub enum RunEnd {
     Completed,
     Yielded,
-    BudgetExhausted { kind: BudgetKind },
+    BudgetExhausted {
+        kind: BudgetKind,
+    },
     Question,
-    Failed { retryable: bool },
-    HarnessError { class: HarnessErrorClass },
+    Failed {
+        retryable: bool,
+    },
+    HarnessError {
+        class: HarnessErrorClass,
+    },
     Cancelled,
+    /// ADR-0090 D1/D4: `result.json` の `wait`（クラスタ job の終了待ち）で終わった。run は閉じるが task / unit は
+    /// 終わっていない（job が終われば continuation の run が続きをやる）。continuation の回数・進捗なしの窓・
+    /// attempts には数えない（[`RunEnd::is_continuable`] は `false`）。
+    Waiting,
 }
 
 impl RunEnd {
@@ -65,8 +75,15 @@ impl RunEnd {
             RunEnd::Completed => Some(CheckpointEnd::Completed),
             RunEnd::Yielded => Some(CheckpointEnd::Yielded),
             RunEnd::BudgetExhausted { .. } => Some(CheckpointEnd::BudgetExhausted),
+            RunEnd::Waiting => Some(CheckpointEnd::Waiting),
             _ => None,
         }
+    }
+
+    /// ADR-0090 D1: checkpoint を合成して残す終わり方か（continuation の対象〈予算切れ・yield〉と、
+    /// クラスタ job の wait）。
+    pub fn saves_checkpoint(self) -> bool {
+        self.is_continuable() || self == RunEnd::Waiting
     }
 }
 
@@ -109,6 +126,8 @@ pub enum CheckpointEnd {
     Completed,
     Yielded,
     BudgetExhausted,
+    /// ADR-0090 D1: クラスタ job の wait で止めた run の checkpoint（進捗なしの窓の比較から外す）。
+    Waiting,
 }
 
 /// checkpoint を合成した出所（D8）。

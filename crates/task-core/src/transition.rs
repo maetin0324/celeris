@@ -113,6 +113,13 @@ pub enum Trigger {
     /// 足さなかった版を含む）がまだ最終レビューを受けていないときだけ dispatcher が使う。
     /// `Ready → Reviewing`（Execute kind のみ）、`reason = "plan_complete"`、attempts 不変。
     PlanComplete,
+    /// ADR-0090 D2: worker の run が `result.json` の `wait`（クラスタ job の終了待ち）で終わった
+    /// （または v2 の工程に起こせる unit が無く、job を待つ unit だけが残った）。`Running → Blocked`、
+    /// attempts 不変、`reason = "waiting_for_cluster_jobs"`。lease を解放する（provider の枠・account を持たない）。
+    ClusterJobWait,
+    /// ADR-0090 D2: 待っていた job がすべて終わった（daemon の poll）。`Blocked → Ready`、attempts 不変、
+    /// `reason = "cluster_job_resume"`。次の run は continuation（前置きに job の最終状態と終了コード）。
+    ClusterJobResume,
 }
 
 impl Trigger {
@@ -155,6 +162,8 @@ impl Trigger {
             Trigger::BrowserFail { expired: false } => "approval_denied",
             Trigger::PlanGate { .. } => "awaiting_plan_approval",
             Trigger::PlanComplete => "plan_complete",
+            Trigger::ClusterJobWait => crate::cluster_job::REASON_WAITING,
+            Trigger::ClusterJobResume => crate::cluster_job::REASON_RESUME,
         }
     }
 
@@ -596,6 +605,29 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
                 Err(invalid(s, t))
             }
         }
+        // ADR-0090 D2: クラスタ job の durable wait。Status は増やさず `Blocked` を使う（browser の wait と同じ）。
+        Trigger::ClusterJobWait => {
+            if s.status == Status::Running {
+                Ok(Outcome {
+                    next: Status::Blocked,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+        Trigger::ClusterJobResume => {
+            if s.status == Status::Blocked {
+                Ok(Outcome {
+                    next: Status::Ready,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
     }
 }
 
@@ -796,6 +828,21 @@ mod tests {
                     expect_err()
                 }
             }
+            // ADR-0090 D2: クラスタ job の wait は `Running → Blocked`、再開は `Blocked → Ready`。
+            Trigger::ClusterJobWait => {
+                if status == Status::Running {
+                    expect_ok(Status::Blocked)
+                } else {
+                    expect_err()
+                }
+            }
+            Trigger::ClusterJobResume => {
+                if status == Status::Blocked {
+                    expect_ok(Status::Ready)
+                } else {
+                    expect_err()
+                }
+            }
             _ => unreachable!("handled by retry-aware helper"),
         }
     }
@@ -848,6 +895,9 @@ mod tests {
             Trigger::BrowserResume,
             Trigger::BrowserFail { expired: true },
             Trigger::BrowserFail { expired: false },
+            // ADR-0090 D2: クラスタ job の durable wait と再開（attempts 据え置き）。
+            Trigger::ClusterJobWait,
+            Trigger::ClusterJobResume,
         ];
 
         let mut count = 0usize;
@@ -895,8 +945,8 @@ mod tests {
         // Phase 116（ADR-0070 D3）で InfraRequeue、Phase E1（ADR-0072）で Continue、
         // Phase F3 途中確認（ADR-0074 D2.2）で PhaseGate / PhaseResume、Phase R3b（ADR-0079 D8）で PlanGate、
         // F5-fix8（ADR-0074 付記）で PlanComplete、ブラウザ capability Phase 2（ADR-0080 D4）で
-        // BrowserWait×2 / BrowserResume / BrowserFail×2 を追加）
-        assert_eq!(count, 4 * 8 * 27);
+        // BrowserWait×2 / BrowserResume / BrowserFail×2、ADR-0090 D2 で ClusterJobWait / ClusterJobResume を追加）
+        assert_eq!(count, 4 * 8 * 29);
     }
 
     /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる

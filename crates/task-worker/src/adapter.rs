@@ -41,6 +41,40 @@ pub enum Terminal {
         message: String,
         usage: Option<Usage>,
     },
+    /// ADR-0090 D1: result.json の `{"type": "wait", "kind": "cluster_job", ...}`（クラスタ job の終了待ち）。
+    /// `checkpoint` は `yield` と同じ checkpoint の意味の欄を寛容に持つ生の JSON（無ければ `None`）。
+    Waiting {
+        request: task_core::cluster_job::ClusterJobWaitRequest,
+        checkpoint: Option<serde_json::Value>,
+        usage: Option<Usage>,
+    },
+}
+
+/// ADR-0090 D1: `result.json` の本文が wait の申告で、`question` を持たなければその終端（優先順位は
+/// `question` > `wait` > `summary` > `yield`。入れ子の形 `{"summary": .., "wait": {..}}` は `summary` を一緒に持つ）。
+/// JSON として読めない・申告が無ければ `None`。
+pub fn result_file_wait(text: &str, usage: Option<Usage>) -> Option<Terminal> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if value.get("question").is_some_and(|q| q.is_string()) {
+        return None;
+    }
+    wait_terminal(&value, usage)
+}
+
+/// ADR-0090 D1: `result.json` の値が wait の申告なら、その終端（不正なら `Error{retryable: true}`）。
+/// 申告が無ければ `None`（呼び出し側は従来の `question` / `summary` / `yield` の読み方に進む）。
+pub fn wait_terminal(value: &serde_json::Value, usage: Option<Usage>) -> Option<Terminal> {
+    match task_core::cluster_job::parse_wait_request(value)? {
+        Ok((request, checkpoint)) => Some(Terminal::Waiting {
+            request,
+            checkpoint,
+            usage,
+        }),
+        Err(reason) => Some(Terminal::Error {
+            message: format!("result.json has an invalid cluster job wait: {reason}"),
+            retryable: true,
+        }),
+    }
 }
 
 /// アダプタが返す run の結果。

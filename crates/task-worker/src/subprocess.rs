@@ -335,6 +335,14 @@ pub async fn run_subprocess(
                                 usage,
                             });
                         }
+                        // ADR-0090 D1: 外部ハーネスが直接プロトコルでクラスタ job の wait を申告する経路。
+                        // `result.json` と同じ検証（`parse_wait_request`）を通す。
+                        WorkerMessage::Wait { usage, .. } => {
+                            terminal_raw = Some(trimmed.to_string());
+                            terminal = serde_json::from_str::<serde_json::Value>(trimmed)
+                                .ok()
+                                .and_then(|v| crate::adapter::wait_terminal(&v, usage));
+                        }
                     },
                     Err(parse_err) => {
                         if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
@@ -440,6 +448,21 @@ pub(crate) async fn write_result_json(
         } => WorkerMessage::BudgetExhausted {
             kind: *kind,
             message: message.clone(),
+            usage: *usage,
+        },
+        Terminal::Waiting {
+            request,
+            checkpoint,
+            usage,
+        } => WorkerMessage::Wait {
+            kind: task_core::cluster_job::WAIT_KIND_CLUSTER_JOB.to_string(),
+            cluster: request.cluster.clone(),
+            scheduler: Some(request.scheduler),
+            jobs: request.jobs.clone(),
+            poll_secs: request.poll_secs,
+            timeout_secs: request.timeout_secs,
+            checkpoint: checkpoint.clone(),
+            summary: request.summary.clone(),
             usage: *usage,
         },
     };

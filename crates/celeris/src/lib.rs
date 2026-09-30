@@ -843,6 +843,8 @@ pub fn wire_cluster_liveness_hooks(dispatcher: &mut Dispatcher, masters: Cluster
         },
     ));
     dispatcher.set_cluster_master_watcher(cluster_master_watcher(masters));
+    // ADR-0090 D2: クラスタ job の durable wait の poll（`qstat -xf` / `sacct` を master 越しに流す）。
+    dispatcher.set_cluster_job_poller(task_dispatch::dispatcher::ssh_cluster_job_poller());
 }
 
 /// ADR-0062 A（Phase 107）: `ClusterMasters` から、明示的な切断を経ずに終了した master を集める
@@ -2584,6 +2586,11 @@ async fn check_provider(
             task_worker::Terminal::BudgetExhausted { kind, message, .. } => (
                 task_api::ProviderCheckResult::Ok,
                 Some(format!("budget exhausted ({kind:?}): {message}")),
+            ),
+            // ADR-0090: 疎通確認の run が wait を書いても、起動して応答した証拠として `Ok`（待たない）。
+            task_worker::Terminal::Waiting { .. } => (
+                task_api::ProviderCheckResult::Ok,
+                Some("asked for a cluster job wait".to_string()),
             ),
         },
         Err(e @ task_worker::AdapterError::AuthFailed(_)) => (

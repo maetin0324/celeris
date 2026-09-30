@@ -89,11 +89,11 @@ pub use probe::{PROBE_CACHE_TTL, PROBE_TIMEOUT, Reachability, probe_models};
 pub use process_group::{ProcessGroup, kill_tree, kill_tree_with};
 pub use protocol::{
     ActiveMilestoneContext, ActiveProjectContext, Answer, ChildSummary, ClusterContext,
-    CommentContext, ContinuationContext, ConversationAddressee, ConversationTurn, Evidence,
-    GenreContext, GenreRoleContext, MemoryContext, MilestoneBrief, MilestoneReviewContext,
-    MilestoneTaskResult, NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview,
-    ProviderFailure, RecentWork, ReviewOutput, ReviewRequest, ReviewVerdictOut, RoleContext,
-    RunContext, RunRequest, SessionHandle, WorkerMessage,
+    ClusterJobsContinuation, CommentContext, ContinuationContext, ConversationAddressee,
+    ConversationTurn, Evidence, GenreContext, GenreRoleContext, MemoryContext, MilestoneBrief,
+    MilestoneReviewContext, MilestoneTaskResult, NodeContext, OrgNodeContext, PROTOCOL_VERSION,
+    PriorReview, ProviderFailure, RecentWork, ReviewOutput, ReviewRequest, ReviewVerdictOut,
+    RoleContext, RunContext, RunRequest, SessionHandle, WorkerMessage,
 };
 pub use provider::classify_provider_failure;
 pub use result_report::{
@@ -102,9 +102,10 @@ pub use result_report::{
     read_result_report_kind, report_kind_from_result_json,
 };
 pub use ssh::{
-    PUSH_PENDING_MARKER, SYNC_ALWAYS_EXCLUDED, SYNC_PULL_PROTECTED, SshSettings, SshWorkspace,
-    SyncMode, WorktreeSettings, control_master_alive_blocking, remote_dir_is_resolved,
-    remote_exec_instructions, remote_exec_reviewer_instructions, resolve_remote_dir,
+    PUSH_PENDING_MARKER, RemoteCommandOutput, SYNC_ALWAYS_EXCLUDED, SYNC_PULL_PROTECTED,
+    SshSettings, SshWorkspace, SyncMode, WorktreeSettings, control_master_alive_blocking,
+    remote_dir_is_resolved, remote_exec_instructions, remote_exec_reviewer_instructions,
+    resolve_remote_dir, run_remote_command_blocking,
 };
 pub use subprocess::{SubprocessSpec, run_subprocess};
 pub use task_repos::{

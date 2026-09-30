@@ -950,6 +950,25 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         actor_id: Option<String>,
     },
+    /// ADR-0090 D3: worker の run が `result.json` の `wait` でクラスタ job の終了待ちに入った（`state = waiting`）。
+    /// `cluster_job_waits` の行は同じトランザクションで作る（`cluster_job::apply_event_tx`）。
+    ClusterJobWaitStarted {
+        wait: Box<crate::cluster_job::ClusterJobWait>,
+    },
+    /// ADR-0090 D3: poll で job の状態が変わった（変わらない poll では出さない）。
+    ClusterJobWaitPolled {
+        wait_id: String,
+        jobs: Vec<crate::cluster_job::ClusterJobStatus>,
+    },
+    /// ADR-0090 D3: wait が終わった（`satisfied` = すべての job が終わった / `timed_out` / `cancelled`）。
+    ClusterJobWaitFinished {
+        wait_id: String,
+        state: crate::cluster_job::ClusterJobWaitState,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        jobs: Vec<crate::cluster_job::ClusterJobStatus>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
+    },
     Created {
         task: Box<Task>,
         /// ADR-0079 D4 (4)（Phase R1b）: どの入口から作られたか（今は親の計画の kind task の unit から

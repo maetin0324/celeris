@@ -202,7 +202,7 @@ test("parity: /plans/new 作成と失敗表示", async ({ page }) => {
   const gateway = await h.start();
   let requests = 0;
   let submitted: unknown;
-  await page.route("**/api/plans", async (route) => {
+  await page.route("**/api/tasks", async (route) => {
     requests += 1;
     submitted = route.request().postDataJSON();
     await route.fulfill({
@@ -223,7 +223,11 @@ test("parity: /plans/new 作成と失敗表示", async ({ page }) => {
     await expect(page.getByRole("alert")).toHaveText("目標を確認してください");
     await expect(page.getByLabel("目標")).toHaveValue("大きな目標");
     expect(requests).toBe(1);
-    expect(submitted).toEqual({ goal: "大きな目標" });
+    expect(submitted).toEqual({
+      title: "大きな目標",
+      objective: "大きな目標",
+      acceptance: [{ type: "reviewer", text: "大きな目標" }],
+    });
     await create.click();
     await expect(page).toHaveURL(`${gateway.base}/tasks/T43`);
     expect(requests).toBe(2);

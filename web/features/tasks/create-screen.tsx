@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useRef, useState } from "react";
-import type { CriterionSpec, NewPlanSpec, NewTaskSpec, Task } from "../../api/generated/types";
+import type { CriterionSpec, NewTaskSpec, Task } from "../../api/generated/types";
 import { taskKeys } from "../../api/queries/keys";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { ScreenFrame } from "../../components/shell/screen-frame";
@@ -151,8 +151,16 @@ export function PlanCreateScreen() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const id = "create-plan";
-    const body: NewPlanSpec = { goal };
-    const [outcome] = await sender.run([{ id, path: "/api/plans", body }]);
+    // ADR-0079 U-R6: POST /plans は 410。計画（root task）は POST /tasks で作り、分解は
+    // Complexity Gate と planner に任せる（ここでは stages_hint を付けない）。goal をそのまま
+    // objective と reviewer 条件にし、title は先頭 80 文字。
+    const title = goal.trim().slice(0, 80) || goal;
+    const body: NewTaskSpec = {
+      title,
+      objective: goal,
+      acceptance: [{ type: "reviewer", text: goal }],
+    };
+    const [outcome] = await sender.run([{ id, path: "/api/tasks", body }]);
     if (outcome?.ok) {
       const taskId = createdId(outcome.response);
       if (taskId) void navigate({ to: "/tasks/$id", params: { id: taskId } });

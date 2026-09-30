@@ -468,6 +468,13 @@ impl EventSink for BrowserSink<'_> {
     ) -> Result<(), String> {
         self.0.browser_auth_section(run_id, session_id, active)
     }
+    fn browser_control_gate(
+        &self,
+        run_id: &str,
+        session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        self.0.browser_control_gate(run_id, session_id)
+    }
     fn browser_live(
         &self,
         run_id: &str,
@@ -1190,11 +1197,16 @@ async fn run_with_executable_attempt(
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
         .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    // ADR-0094: every shim-issued agent action passes the store-backed control gate.
+    let control_gate = sink
+        .browser_control_gate(run_id, &session)
+        .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
     let action_server = crate::browser_action::ActionServer::start(
         &action_socket,
         &runtime,
         policy.allowed_domains().to_vec(),
         allowed.allow,
+        control_gate,
     )
     .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let egress_policy = task_core::browser_isolation::EgressPolicy {

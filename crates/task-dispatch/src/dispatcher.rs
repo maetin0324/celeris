@@ -1916,6 +1916,18 @@ impl EventSink for StoreSink {
             .map(|_| ())
             .map_err(|_| "browser control store unavailable".into())
     }
+    fn browser_control_gate(
+        &self,
+        run_id: &str,
+        session_id: &str,
+    ) -> Option<Arc<dyn task_worker::browser_live::ControlGate>> {
+        Some(Arc::new(task_worker::browser_live::StoreGate::new(
+            self.store.clone(),
+            &self.task_id.to_string(),
+            run_id,
+            session_id,
+        )))
+    }
     fn browser_live(
         &self,
         run_id: &str,

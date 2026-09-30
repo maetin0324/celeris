@@ -417,6 +417,7 @@ pub fn resume_after_answer(wu: &WorkUnitRow) -> WorkUnitRow {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
 
@@ -838,3 +839,6 @@ mod tests {
         assert_eq!(resume_after_answer(&b).status, WorkUnitStatus::Ready);
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

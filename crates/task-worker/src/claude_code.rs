@@ -126,6 +126,7 @@ impl WorkerAdapter for ClaudeCodeAdapter {
     }
 }
 
+<<<<<<< HEAD
 /// ADR-0006 Phase 115 D1（本番障害 01M3915FARENW8M0JM11XVF6W0 / 01M38T8N17MEWPTJQXGX1TNYJD）:
 /// `work_dir`（実際の cwd）が `workspace` と異なる run（部署のリポジトリの git worktree で走るタスク）
 /// だけ、プロンプトの先頭に「cwd と成果物ディレクトリは別」の注意を 2 行足す。`result_json_instructions`
@@ -1635,6 +1636,17 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push_str(&result_json_instructions(artifacts));
     out
 }
+=======
+// プロンプト文面と子プロセスの実行・結果処理は別の変更境界。
+mod prompt;
+pub use prompt::build_prompt;
+pub(crate) use prompt::work_dir_note;
+#[cfg(test)]
+use prompt::{
+    delegate_workspace_instruction, harness_artifacts_section_for_plan,
+    harness_artifacts_section_for_review, workspace_section_for_plan,
+};
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 
 /// ADR-0090 D5: planner の leaf の基準に足す 1 段落（数時間かかるクラスタ job の扱い）。
 pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm, ADR-0090)**: a unit that \
@@ -2581,6 +2593,7 @@ async fn terminal_from_result(
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
@@ -5932,3 +5945,6 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
         assert!(!prompt.contains("Remaining depth"));
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

@@ -13,6 +13,35 @@
 //! レビューが通れば `TaskStore::complete_plan` で子タスクを挿入する。
 //!
 //! **LLM 呼び出しはここに書かない。** 判断は全て設定・状態機械・ストアのクエリで決まる。
+//!
+//! ## module map（ADR-0082）
+//!
+//! この facade に残すもの: `Dispatcher` struct と private な補助型（`RunEntry`・`ReviewEntry`・
+//! `Completion` など）、公開の設定型、`new` と setter/getter、`tick`（段階の順序。`disk_ready` は drain
+//! より前）・`drain_completions`・`dispatch_ready`・`is_idle`、`StoreSink` / `ReviewerSink`（browser
+//! ブランチの統合まで）、`mod` 宣言と明示した `pub use`。依存の向きは L0（この facade の型と free helper）
+//! ← L1 ← L2 ← L3 ← L4 ← `tick`。横の呼び出しは `worker_finish` → `phase_integration` の 1 本だけ。
+//!
+//! | モジュール | 責務 | 層 |
+//! |---|---|---|
+//! | `cluster` | cluster / tunnel の接続・生存確認・probe | L1 |
+//! | `housekeeping` | disk guard・scratch pool の GC・後片付け | L1 |
+//! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
+//! | `quota_book` | quota の見積りと release | L1 |
+//! | `provider_select` | provider / account の選択と cooldown | L1 |
+//! | `workspaces` | 作業場所・worktree・container の準備 | L1 |
+//! | `run_context` | run の文脈（extras・session・knowledge・skills） | L1 |
+//! | `worker_task` | worker 本体（free fn の `run_worker`。`Dispatcher` に依存しない） | L1 |
+//! | `work_units` | WorkUnit の gate・準備・並列・checks | L2 |
+//! | `tree_units` | 木の子 task の gate・liveness・一括作成 | L2 |
+//! | `child_tasks` | 委譲した子と承認の子 | L2 |
+//! | `review_spawn` | review run の起動（per-task lock は verdict の保存まで） | L2 |
+//! | `worker_finish` | worker run の終了処理 | L3 |
+//! | `planner_flow` | planner の結果の採用と replan | L3 |
+//! | `review_verdict` | review の判定の適用と repair | L3 |
+//! | `phase_integration` | 工程の統合と途中報（phase report） | L3 |
+//! | `leases` | lease の回収・abort・orphan・drain | L3 |
+//! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -64,8 +93,67 @@ use crate::policy::{
     AdapterId, CooldownReason, ProviderId, ProviderOutcome, ProviderPolicy, Selection,
 };
 
+<<<<<<< HEAD
 /// ADR-0079 付記「R6-1」D4: 終端の task の `running` のままの `runs` 行を照合する間隔（秒）。
 pub const RUNS_RECONCILE_INTERVAL_SECS: i64 = 600;
+=======
+// ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
+mod child_tasks;
+mod cluster;
+mod dispatch_run;
+mod housekeeping;
+mod leases;
+mod phase_integration;
+mod planner_flow;
+mod provider_select;
+mod quota_book;
+mod review_spawn;
+mod review_verdict;
+mod run_context;
+mod snapshot;
+mod tree_units;
+mod work_units;
+mod worker_finish;
+mod worker_task;
+mod workspaces;
+
+pub use cluster::{
+    ClusterCommandProbe, ClusterConnector, ClusterForwardSpec, ClusterLivenessProbe,
+    ClusterMasterExit, ClusterMasterWatcher, ClusterSpec, DEFAULT_TUNNEL_PROBE_INTERVAL_SECS,
+    TUNNEL_PROBE_MAX_INTERVAL_SECS, TunnelEvent, TunnelEventKind, TunnelForwardEnsurer,
+    TunnelListenerProbe, TunnelProbe,
+};
+pub use provider_select::provider_failure_outcome;
+pub use snapshot::SnapshotPublisher;
+
+#[cfg(test)]
+use cluster::{CLUSTER_LIVENESS_INTERVAL, next_key_auth_backoff, next_probe_interval_secs};
+use cluster::{
+    ClusterConnChange, ClusterConnState, ClusterDisconnectInfo, ClusterResolution,
+    ForwardObservation, TargetProbeState, run_cluster_hooks_off_async,
+};
+use leases::wall_ms_since;
+#[cfg(test)]
+use planner_flow::{
+    REJECTED_PLAN_FILE, planner_blocked_question, planner_rejections_since_last_plan,
+    planner_retry_message,
+};
+use provider_select::{
+    account_cooldown_reason_name, cooldown_reason_name, excluded_reason_name,
+    provider_failure_reason,
+};
+use worker_finish::{
+    build_continuation_context, finish_reviewer_run_index, set_worker_finished_end,
+    worker_finished_usage,
+};
+#[cfg(test)]
+use worker_task::push_remote_after_run;
+use worker_task::{LeaseRenewal, run_worker};
+use workspaces::{
+    CONTAINER_PROBE_TIMEOUT, downgraded_remote_workspace, remote_mode_omitted,
+    workspace_error_to_adapter, worktree_marker,
+};
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 
 /// これを超えた tick は段階ごとの所要時間を `warn` で出す（ADR-0015 D2）。
 /// ADR-0079 D10（Phase R3b）: 木の生存確認の間隔（秒。tick ごとに全節点の events を読まない）。
@@ -202,6 +290,7 @@ fn allocate_scratch_target(
     }
 }
 
+<<<<<<< HEAD
 /// ADR-0018: コマンドを実行するクラスタ 1 つ分の設定（`celeris::config::ClusterConfig` の写し。task-dispatch は celeris に依存しない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterSpec {
@@ -537,6 +626,8 @@ struct TargetProbeState {
     interval_secs: u64,
 }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 /// ADR-0041 D5: この celeris が**面倒を見てよいタスク**の述語。`None`（既定）は「全部」＝従来どおり。
 ///
 /// 検証（`--mode verify`）の celeris は、ここに「`genre = "smoke"` で、かつアダプタが `fake`」を渡す。
@@ -544,71 +635,6 @@ struct TargetProbeState {
 /// `reviewing` の拾い上げ）で同じ述語を使う。手元で起こした run の後始末はこの述語に関係なく続ける
 /// （自分が起こしたものは必ず自分が畳む）。
 pub type TaskFilter = Arc<dyn Fn(&Task) -> bool + Send + Sync>;
-
-impl ClusterSpec {
-    /// このタスクの写し（ローカル）とリモートのパス（呼び出し側が D6 の `work_dir` で解決済み）から、
-    /// ワーカー用の設定を作る。`task_id` は worktree のディレクトリ名とブランチ名に使う（ADR-0019 D2）。
-    /// `mode`（ADR-0059 D1、`WorkspaceSpec::Remote.mode`）が `Shared` なら、クラスタの `sync` 設定に
-    /// 関わらず**同期も worktree も行わない**（`SyncMode::None`）。`Worktree`（省略時の既定を含む）は
-    /// 従来どおりクラスタの `sync` に従う。
-    pub fn ssh_settings(
-        &self,
-        remote_path: &std::path::Path,
-        task_id: task_core::TaskId,
-        mode: task_core::WorkspaceMode,
-    ) -> SshSettings {
-        let mut settings = SshSettings::new(self.id.clone(), self.host.clone(), remote_path);
-        settings.sync = match mode {
-            task_core::WorkspaceMode::Shared => SyncMode::None,
-            task_core::WorkspaceMode::Worktree => self.sync,
-        };
-        settings.delete_on_push = self.delete_on_push;
-        settings.setup = self.setup.clone();
-        settings.env = self.env.clone();
-        settings.rsync_excludes = self.rsync_excludes.clone();
-        settings.worktree = self.worktree.clone();
-        settings.task_id = task_id.to_string();
-        settings
-    }
-}
-
-/// ADR-0023 D1: クラスタの多重接続を確認する間隔（`ssh -O check`）。tick がこれより長ければ毎 tick になる。
-const CLUSTER_LIVENESS_INTERVAL: Duration = Duration::from_secs(5);
-
-/// ADR-0053 D3 / Phase 66b: `refresh_cluster_liveness` / `refresh_cluster_tunnels` は `ssh` を同期に
-/// 呼び、`cluster_connector`（ADR-0032 D3）経由でネストした tokio ランタイムを `block_on` することがある。
-/// `tick()` は celeris の tick ループの中から**同期のまま**呼ばれ、そのループ自身が（マルチスレッドの）
-/// tokio ランタイムの上で動く async タスクなので、ここで直接ブロックすると (a) 他の非同期処理を
-/// 数秒単位で止め、(b) ネストしたランタイムの `block_on` が「Cannot start a runtime from within a
-/// runtime」で panic する（本番 2026-09-21 の観測、`crates/celeris/src/lib.rs` の `cluster_connector`）。
-///
-/// `f` を、tokio の文脈を一切持たない本物の OS スレッドへ逃がして実行する。マルチスレッド・ランタイムの
-/// 中から呼ばれたときだけ `block_in_place` で包み、スケジューラが他のタスクを別ワーカーへ逃がせるように
-/// する（`block_in_place` は `current_thread` ランタイムの中で呼ぶと panic するため、既存の
-/// `#[tokio::test]`〈既定は current_thread〉の `tunnel_*` テストや、ランタイムが無い素の同期呼び出しでは
-/// 使わない。どちらの場合も `f` は素の OS スレッドで動くので、ネストしたランタイムを作っても安全）。
-///
-/// Phase 81: `f` の戻り値をそのまま返す（`try_auto_connect_cluster` は `Result<(), String>` を
-/// 呼び出し元に返す必要があるため、`refresh_cluster_liveness`/`refresh_cluster_tunnels` の頃の
-/// `FnOnce() + Send`〈戻り値 `()`〉から一般化した。既存の 2 呼び出し（`()` を返す）はそのまま通る）。
-fn run_cluster_hooks_off_async<F, T>(f: F) -> T
-where
-    F: FnOnce() -> T + Send,
-    T: Send,
-{
-    let on_multi_thread_runtime = tokio::runtime::Handle::try_current()
-        .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-        .unwrap_or(false);
-    let spawn_and_join = move || match std::thread::scope(|scope| scope.spawn(f).join()) {
-        Ok(v) => v,
-        Err(panic) => std::panic::resume_unwind(panic),
-    };
-    if on_multi_thread_runtime {
-        tokio::task::block_in_place(spawn_and_join)
-    } else {
-        spawn_and_join()
-    }
-}
 
 /// RFC 3339 の文字列（デーモンのスナップショット用）。書式化に失敗することは実質無いが、その場合は空文字列。
 /// ADR-0074 §4（Phase F2b）: 工程ごとの merge の repair の上限。
@@ -635,6 +661,7 @@ fn parse_rfc3339(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &Rfc3339).ok()
 }
 
+<<<<<<< HEAD
 /// ADR-0074 D2.3（Phase F3 途中確認）: `PhaseReport` を人が読める Markdown にする（決定的。LLM 不使用）。
 /// `Event::PhaseReported.report` と同じ内容を `artifacts/phase-reports/<n>-<phase>.md` にも残す。
 fn render_phase_report_markdown(report: &task_core::PhaseReport) -> String {
@@ -704,6 +731,8 @@ fn render_phase_report_markdown(report: &task_core::PhaseReport) -> String {
 mod cluster_job_wait;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 use crate::review::{
     HumanVerdicts, PLAN_FILE_NAME, PlanCheck, ReviewExtras, ReviewOutcome, ReviewSubject,
     ReviewerRun, Verdict, needs_reviewer_run, review_task,
@@ -1055,6 +1084,7 @@ struct RunEntry {
     cos: bool,
 }
 
+<<<<<<< HEAD
 /// ADR-0033 D4（Phase 24 / Phase 27）: この run の途中で「部をまたぐ委譲」を止めたときに `StoreSink` が
 /// 残した質問（1 件の部またぎにつき 1 件。同じ文面は 1 回だけ）。
 fn cross_department_questions_of(events: &[(u64, Event)], run_id: &str) -> Vec<String> {
@@ -1394,6 +1424,8 @@ fn build_continuation_context(events: &[(u64, Event)]) -> Option<task_worker::Co
     })
 }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 /// Phase 33: `recent_work_of` が `list_page` から読む候補の上限（裏方タスクを除いた後に
 /// `RECENT_WORK_LIMIT` 件へ絞るための余裕）。
 const RECENT_WORK_SCAN: usize = 100;
@@ -1711,22 +1743,6 @@ struct ReviewEntry {
     account: Option<String>,
     /// ADR-0025 D1: `account` が属するアダプタ（`account` が `None` なら `None`）。
     account_adapter: Option<AccountAdapter>,
-}
-
-/// デーモン状態をメモリから公開するための送り口（ADR-0013 D4）。celeris が `[api]` 有効時に `set_snapshot_publisher` で渡す。
-pub struct SnapshotPublisher {
-    pub tx: tokio::sync::watch::Sender<Option<DaemonSnapshot>>,
-    /// 起動ごとの ULID（API の `/health` と同じ値）。
-    pub instance_id: String,
-    pub hostname: String,
-    /// RFC 3339。
-    pub started_at: String,
-    pub tick_ms: u64,
-    /// `[[providers]]` の定義（`in_use` は毎 tick に埋める）。
-    pub providers: Vec<ProviderLive>,
-    /// ADR-0022 D2: プロバイダ id → 直近の疎通確認。`reload` でプロバイダ表を差し替えても保持する
-    /// （確認した事実は設定の書き換えでは古くならない）。celeris を再起動すると消える。
-    pub provider_checks: HashMap<String, ProviderCheckView>,
 }
 
 /// run 途中のイベントをストアに追記するシンク。ワーカーの出力（heartbeat）があればリースを延長する（ADR-0010 D7）。
@@ -2343,57 +2359,6 @@ impl Drop for Dispatcher {
     }
 }
 
-/// ADR-0066 D3: 専用スレッドが期限をチェックする周期。`probe_interval_secs`（最短でも 1 秒）よりずっと
-/// 短くして、期限が来たらすぐ probe する。
-const TUNNEL_PROBER_STEP: Duration = Duration::from_millis(200);
-
-/// ADR-0066 D3: forward ごとの target probe を、tick とは無縁に裏で行い続けるループ
-/// （`ensure_tunnel_prober_started` が専用スレッドで起こす）。`stop` が立ったら抜ける。
-fn tunnel_prober_loop(
-    probe: TunnelProbe,
-    forwards: Vec<(String, String, String, u64)>,
-    state: Arc<std::sync::Mutex<HashMap<String, TargetProbeState>>>,
-    stop: Arc<std::sync::atomic::AtomicBool>,
-) {
-    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-        let now = Instant::now();
-        for (cluster, listen, _target, min_secs) in &forwards {
-            let key = tunnel_key(cluster, listen);
-            let due = {
-                let Ok(guard) = state.lock() else { continue };
-                guard
-                    .get(&key)
-                    .map(|s| {
-                        now.duration_since(s.checked_at) >= Duration::from_secs(s.interval_secs)
-                    })
-                    .unwrap_or(true)
-            };
-            if !due {
-                continue;
-            }
-            let result = probe(listen);
-            let healthy = result.is_ok();
-            let Ok(mut guard) = state.lock() else {
-                continue;
-            };
-            let prev_interval = guard
-                .get(&key)
-                .map(|s| s.interval_secs)
-                .unwrap_or(*min_secs);
-            guard.insert(
-                key,
-                TargetProbeState {
-                    healthy,
-                    error: result.err(),
-                    checked_at: Instant::now(),
-                    interval_secs: next_probe_interval_secs(prev_interval, *min_secs, healthy),
-                },
-            );
-        }
-        std::thread::sleep(TUNNEL_PROBER_STEP);
-    }
-}
-
 /// ADR-0052 D1（Phase 65b で `bearer_token` を追加）: 到達性の検査のフック（差し替えられるようにして
 /// ある。既定は本物の HTTP GET）。第 2 引数は `[knowledge.langmem].api_key_secret` から解決した
 /// 平文のトークン（`llm-proxy` のように `/v1/models` が認証を要求する上流のため。値はログに出さない）。
@@ -2666,270 +2631,6 @@ impl Dispatcher {
         self.running.len() + self.reviewing.len() + self.checking.len() + self.integrating.len()
     }
 
-    /// ADR-0040 D4: `[handoff] drain_timeout_secs` を超えたときに、残っている run とレビューを
-    /// 打ち切る。DB の状態は変えない（リースが切れて新しい active が従来の「リース切れ」の経路で拾う）。
-    /// 打ち切った数を返す。
-    pub fn abort_all_runs(&mut self) -> usize {
-        // ADR-0044 §5 Phase 53 追記（Phase 55）: drain も他の 4 つと同じ止め方
-        // （プロセスグループへ SIGTERM → `kill_grace_secs` → SIGKILL）。
-        let kill_grace = self.config.kill_grace;
-        let mut aborted = 0;
-        for (key, entry) in self.running.drain() {
-            let task_id = key.task;
-            tracing::warn!(task_id = %task_id, run_id = %entry.run_id, "drain timeout; aborting the run (the lease will expire and the new active will reclaim it)");
-            // Phase 55/56 の合流: コンテナで走っている run はラベル越しにも止める（P55-4 / P56-7）。
-            task_worker::kill_tree_with(&entry.run_id, kill_grace, entry.container);
-            entry.handle.abort();
-            aborted += 1;
-        }
-        let reviewing: Vec<(TaskId, ReviewEntry)> = self.reviewing.drain().collect();
-        for (task_id, entry) in reviewing {
-            tracing::warn!(task_id = %task_id, "drain timeout; aborting the review");
-            task_worker::kill_tree(&entry.run_id, kill_grace);
-            if let Some(review_run_id) = &entry.review_run_id {
-                task_worker::kill_tree(review_run_id, kill_grace);
-                // Phase F5-fix3: Reviewer run は lease を持たない（新しい active は review をやり直すだけで
-                // この run を閉じない）ので、ここで `runs` 行ごと閉じる。Task の状態は変えない。
-                self.close_aborted_run(
-                    task_id,
-                    review_run_id,
-                    Some(RunRole::Reviewer),
-                    "review aborted (drain timeout)",
-                );
-            }
-            entry.handle.abort();
-            aborted += 1;
-        }
-        // Phase F5-fix2: 検査中の WU と工程の統合も止める（DB は変えない。lease 切れの経路で
-        // 新しい active が拾う。検査前の run の result.json があれば、そこから確定させる）。
-        for (run_id, entry) in self.checking.drain() {
-            tracing::warn!(task_id = %entry.task_id, %run_id, "drain timeout; aborting the work unit checks");
-            entry.handle.abort();
-            aborted += 1;
-        }
-        for (task_id, entry) in self.integrating.drain() {
-            tracing::warn!(%task_id, work_unit = %entry.work_unit_id, "drain timeout; aborting the phase integration");
-            entry.handle.abort();
-            aborted += 1;
-        }
-        self.pending_subjects.clear();
-        aborted
-    }
-
-    /// Phase F5-fix6: SIGTERM / SIGINT（`systemctl restart`、`promote.sh` の停止→起動）で止まる直前に、
-    /// 手元の worker run の終わりを DB に記録する。本番 2026-09-28 17:05:50Z: 止まるデーモンは SIGTERM を
-    /// 受けた tick でループを抜け、0.6 秒後にアダプタが `result.json`（exit=143）を書いたが、完了を
-    /// 受け取る者が居ないまま exit し、`worker_finished` も Task の遷移も残らなかった（新しいデーモンは
-    /// lease の失効まで 15 分待った）。
-    ///
-    /// 1. 既に届いた完了を記録する（`drain_completions`）。
-    /// 2. 残りの run はプロセスグループごと止め（`stop_run`）、`WorkerFinished{outcome: "interrupted:
-    ///    daemon shutdown …", end: cancelled}` を残す。Task の lease を持つ run は `InfraRequeue`
-    ///    （attempts を消費しない。上限超過は `infra failure ×N`）、WU の run は WU を ready /
-    ///    needs_continuation に戻す（reason `shutdown`）。
-    /// 3. ただし run が既に error 以外の終端の `result.json`（done 等）を書き終えていたら DB は触らない
-    ///    （次のデーモンが孤児の回収でその内容から確定させる。ここで検査・レビューを spawn しても exit で
-    ///    失われるため）。
-    ///
-    /// レビュー・WU の検査・工程の統合は触らない（次のデーモンの `recover_reviews` と孤児の回収が拾う）。
-    /// DB に記録した run の数を返す。
-    pub fn interrupt_runs_on_shutdown(&mut self) -> usize {
-        if let Err(e) = self.drain_completions() {
-            tracing::warn!(error = %e, "failed to record the completions received before the shutdown");
-        }
-        let entries: Vec<(RunKey, RunEntry)> = self.running.drain().collect();
-        let mut recorded = 0;
-        for (key, entry) in entries {
-            let run_id = entry.run_id.clone();
-            let since = entry.since;
-            self.stop_run(&run_id, entry.handle, entry.container);
-            let task = match self.store.get(key.task) {
-                Ok(Some(t)) => t,
-                Ok(None) => continue,
-                Err(e) => {
-                    tracing::warn!(task_id = %key.task, %run_id, error = %e, "could not read the task while recording the shutdown");
-                    continue;
-                }
-            };
-            if let Some(dir) = self.task_dir(&task)
-                && let Some(terminal) = terminal_from_run_dir(&dir, &run_id)
-                && !matches!(terminal, Terminal::Error { .. })
-            {
-                tracing::info!(task_id = %task.id, %run_id, "the run already wrote a terminal result.json; leaving it to the next daemon's orphan takeover (Phase F5-fix6)");
-                continue;
-            }
-            match self.record_shutdown_interrupt(&task, &run_id, since) {
-                Ok(()) => {
-                    tracing::warn!(task_id = %task.id, %run_id, "daemon shutdown: the run was stopped and recorded as interrupted (Phase F5-fix6)");
-                    recorded += 1;
-                }
-                Err(e) => {
-                    tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the shutdown interrupt; the next daemon's orphan takeover will pick it up");
-                }
-            }
-        }
-        recorded
-    }
-
-    fn record_shutdown_interrupt(
-        &mut self,
-        task: &Task,
-        run_id: &str,
-        since: OffsetDateTime,
-    ) -> Result<(), DispatchError> {
-        let events = self.store.events_for(task.id)?;
-        if events
-            .iter()
-            .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id))
-        {
-            return Ok(());
-        }
-        let finished = |outcome: String| Event::WorkerFinished {
-            run_id: run_id.to_string(),
-            outcome,
-            usage: None,
-            role: None,
-            metrics: Some(task_core::RunMetrics {
-                wall_ms: wall_ms_since(since),
-                retries: task.attempts,
-                peak_context_tokens: None,
-                turns: None,
-            }),
-            end: Some(task_core::RunEnd::Cancelled),
-        };
-        let holds_task_lease = task.status == Status::Running
-            && task
-                .lease
-                .as_ref()
-                .is_some_and(|l| l.worker_run_id == run_id);
-        if holds_task_lease {
-            let infra_n = consecutive_infra_requeues(&events) + 1;
-            let (trigger, outcome) = if infra_n <= self.config.max_infra_retries {
-                (
-                    Trigger::InfraRequeue,
-                    format!("interrupted: {SHUTDOWN_WHY} (run_id={run_id})"),
-                )
-            } else {
-                (
-                    Trigger::WorkerError { retryable: false },
-                    format!("{INFRA_FAILURE_MARKER}{infra_n}: {SHUTDOWN_WHY} (run_id={run_id})"),
-                )
-            };
-            match self
-                .store
-                .apply_transition_with_events(task.id, trigger, vec![finished(outcome)])
-            {
-                Ok(_) | Err(StoreError::InvalidTransition(_)) => {}
-                Err(e) => return Err(e.into()),
-            }
-        } else {
-            self.store.append_event(
-                task.id,
-                &finished(format!("interrupted: {SHUTDOWN_WHY} (run_id={run_id})")),
-            )?;
-        }
-        self.reconcile_work_unit_run(task.id, run_id, "shutdown")
-    }
-
-    /// ADR-0032 D3: `auth = "publickey"` のクラスタへの自動接続を有効にする（celeris 側が本番の実装を挿す）。
-    /// 呼ばなければ従来どおり自動接続しない。
-    pub fn set_cluster_connector(&mut self, connector: ClusterConnector) {
-        self.cluster_connector = Some(connector);
-    }
-
-    /// ADR-0032 D4/D5: GUI 発の接続が進行中かを記録する（celeris の管理 API が呼ぶ。呼び出しは celeris 側の配線）。
-    pub fn set_cluster_connect_pending(&mut self, id: &str, pending: bool) {
-        if pending {
-            self.connect_pending_clusters.insert(id.to_string());
-        } else if self.connect_pending_clusters.remove(id) {
-            // ADR-0078 D5: 次に繋がったら、それは GUI 発の接続（`method = auth`）として数える。
-            self.cluster_conn
-                .entry(id.to_string())
-                .or_default()
-                .gui_connect_finished = true;
-        }
-    }
-
-    /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフックを挿す。呼ばなければ
-    /// `refresh_cluster_tunnels` は forward を張り直さない（届かないまま観測するだけ）。
-    pub fn set_tunnel_forward_ensurer(&mut self, ensurer: TunnelForwardEnsurer) {
-        self.tunnel_forward_ensurer = Some(ensurer);
-    }
-
-    /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフックを挿す。呼ばなければ常に
-    /// 「不健全」扱い。
-    pub fn set_tunnel_probe(&mut self, probe: TunnelProbe) {
-        self.tunnel_probe = Some(probe);
-    }
-
-    /// ADR-0053 Phase 85: forward のリスナー（`-O forward` が実際に手元で待ち受けているか）を見るフックを
-    /// 挿す。呼ばなければ常に「無い」扱い（安全側のデフォルト）。
-    pub fn set_tunnel_listener_probe(&mut self, probe: TunnelListenerProbe) {
-        self.tunnel_listener_probe = Some(probe);
-    }
-
-    /// ADR-0053 Phase 84b: クラスタの ssh master の多重接続の有無を調べるフックを差し替える。
-    /// 呼ばなければ本物の `ssh -O check`（`control_master_alive_blocking`）のまま。テストは実機の ssh
-    /// 状態に依存しないよう、必ずこれで偽物に差し替える。
-    pub fn set_cluster_liveness_probe(&mut self, probe: ClusterLivenessProbe) {
-        self.cluster_liveness_probe = probe;
-    }
-
-    /// ADR-0062 A（Phase 107）: master 越しの実通信 probe を挿す（celeris 側の配線）。
-    pub fn set_cluster_command_probe(&mut self, probe: ClusterCommandProbe) {
-        self.cluster_command_probe = Some(probe);
-    }
-
-    /// ADR-0062 A: celeris が保持している master の終了検出フックを挿す（celeris 側の配線）。
-    pub fn set_cluster_master_watcher(&mut self, watcher: ClusterMasterWatcher) {
-        self.cluster_master_watcher = Some(watcher);
-    }
-
-    /// ADR-0053 D3: 直近のトンネル状態遷移を取り出す（呼ぶと空になる。celeris はこれを Discord/Console に流す）。
-    pub fn take_tunnel_events(&mut self) -> Vec<TunnelEvent> {
-        self.tunnel_events.drain(..).collect()
-    }
-
-    /// ADR-0053 D3: 現在「TOTP ログインが要る」状態のクラスタ id（昇順）。
-    pub fn clusters_needing_login(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.cluster_login_needed.iter().cloned().collect();
-        v.sort();
-        v
-    }
-
-    /// ADR-0053 D3: forward が今届いているか（listener も target も健全。無ければ観測が無い＝`false`）。
-    pub fn tunnel_reachable(&self, cluster: &str, listen: &str) -> bool {
-        self.tunnel_state
-            .get(&tunnel_key(cluster, listen))
-            .map(ForwardObservation::up)
-            .unwrap_or(false)
-    }
-
-    /// ADR-0053 Phase 85: forward の**リスナー**が今有るか（`-O forward` が届いているか。target の健康とは
-    /// 別。無ければ観測が無い＝`false`）。
-    pub fn tunnel_listener_present(&self, cluster: &str, listen: &str) -> bool {
-        self.tunnel_state
-            .get(&tunnel_key(cluster, listen))
-            .map(|o| o.listener)
-            .unwrap_or(false)
-    }
-
-    /// ADR-0053 Phase 85: forward の**target**が今健全か（`/v1/models` が応答するか。listener の有無とは
-    /// 別。無ければ観測が無い＝`false`）。
-    pub fn tunnel_target_healthy(&self, cluster: &str, listen: &str) -> bool {
-        self.tunnel_state
-            .get(&tunnel_key(cluster, listen))
-            .map(|o| o.target_healthy)
-            .unwrap_or(false)
-    }
-
-    /// ADR-0053 Phase 85: forward の直近の失敗理由（無ければ `None`）。
-    pub fn tunnel_last_error(&self, cluster: &str, listen: &str) -> Option<String> {
-        self.tunnel_state
-            .get(&tunnel_key(cluster, listen))
-            .and_then(|o| o.last_error.clone())
-    }
-
     pub fn set_delivery_policy(&mut self, policy: task_ops::delivery::DeliveryPolicy) {
         self.config.delivery = policy;
     }
@@ -3123,228 +2824,6 @@ impl Dispatcher {
         }
     }
 
-    /// ADR-0075: scratch pool を使うか（`shared_build_cache` かつ `[scratch]` が有効〈NFS で無効化されていない〉）。
-    fn scratch_active(&self) -> bool {
-        self.config.shared_build_cache && self.config.scratch.enabled
-    }
-
-    /// ADR-0075 D2（Phase G1）: tick の `scratch_gc` phase。lease と DB の状態を読み、`plan_gc` で決めた target を
-    /// `.deleting-*` へ rename する（`remove_dir_all` は削除スレッド、サイズは測定スレッド）。`emergency` は空き <
-    /// `min_free_disk_mb` のときの緊急モード。rename した件数を返す。
-    fn scratch_gc(&mut self, emergency: bool) -> usize {
-        use task_worker::scratch::{GIB, Pressure};
-        let settings = self.config.scratch.clone();
-        let legacy = crate::scratch_gc::legacy_paths(
-            &self.config.build_cache_dir,
-            self.config.releases_dir.as_deref(),
-        );
-        let sizes = self
-            .scratch
-            .sizes
-            .lock()
-            .map(|m| m.clone())
-            .unwrap_or_default();
-        let min_free = self.config.min_free_disk_mb.saturating_mul(1024 * 1024);
-        let lookup = task_worker::scratch::StoreLookup(self.store.as_ref());
-        let run = crate::scratch_gc::run_gc(
-            &settings,
-            &legacy,
-            &lookup,
-            true,
-            &sizes,
-            min_free,
-            emergency,
-            &std::collections::BTreeSet::new(),
-            false,
-        );
-        let now = std::time::SystemTime::now();
-        // journal: watermark の到達・解除（tracing だけ。満杯の瞬間に DB へ書かない。D2）。
-        if self.scratch.pressure != Some(run.plan.pressure) {
-            match run.plan.pressure {
-                Pressure::None => {
-                    if self.scratch.pressure.is_some() {
-                        tracing::info!(
-                            targets_bytes = run.plan.used_bytes,
-                            "scratch: below the watermark again"
-                        );
-                    }
-                }
-                p => tracing::warn!(
-                    pressure = p.as_str(),
-                    targets_bytes = run.plan.used_bytes,
-                    pinned_bytes = run.plan.pinned_bytes,
-                    high = (settings.targets_max_bytes as f64 * settings.high_watermark) as u64,
-                    free_bytes = ?run.fs.map(|f| f.1),
-                    "scratch: watermark reached; reclaiming targets"
-                ),
-            }
-            self.scratch.pressure = Some(run.plan.pressure);
-        }
-        let eff = crate::scratch_gc::effective_max(
-            settings.total_max_bytes,
-            run.fs,
-            run.plan.used_bytes,
-            min_free,
-        );
-        let eff_gib = eff / GIB;
-        if eff < settings.total_max_bytes && self.scratch.effective_warned_gib != Some(eff_gib) {
-            tracing::warn!(
-                "scratch: 実効上限 {eff_gib} GB（設定 {} GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）",
-                settings.total_max_bytes / GIB
-            );
-            self.scratch.effective_warned_gib = Some(eff_gib);
-        }
-        let executed = run.executed.clone().unwrap_or(crate::scratch_gc::Executed {
-            removed: Vec::new(),
-            reclaimed_bytes: 0,
-        });
-        let removed: std::collections::BTreeSet<String> =
-            executed.removed.iter().map(|p| p.id.clone()).collect();
-        if !executed.removed.is_empty() {
-            tracing::info!(
-                removed = executed.removed.len(),
-                reclaimed_bytes = executed.reclaimed_bytes,
-                emergency,
-                pressure = run.plan.pressure.as_str(),
-                "scratch gc: moved targets aside"
-            );
-            self.scratch.last_gc = Some(crate::scratch_gc::gc_view(
-                &run.plan, &executed, emergency, now,
-            ));
-        }
-        self.scratch.candidates = run
-            .scan
-            .candidates
-            .iter()
-            .filter(|c| !removed.contains(&c.owner.to_string()))
-            .cloned()
-            .collect();
-        self.scratch.pinned_summary = Some(crate::scratch_gc::pinned_summary(&run.scan, &run.plan));
-        // 削除スレッド（同時に 1 本）。
-        let roots = crate::scratch_gc::deleting_roots(&settings.pool(), &legacy);
-        if !self
-            .scratch
-            .removing
-            .load(std::sync::atomic::Ordering::SeqCst)
-            && crate::scratch_gc::has_pending_deletes(&roots)
-        {
-            crate::scratch_gc::spawn_removal(roots, self.scratch.removing.clone());
-        }
-        // 測定スレッド（同時に 1 本、間隔ごとに 1 つ）。
-        let due = self
-            .scratch
-            .last_measure
-            .is_none_or(|t| t.elapsed() >= crate::scratch_gc::measure_interval(&settings));
-        if due
-            && !self
-                .scratch
-                .measuring
-                .load(std::sync::atomic::Ordering::SeqCst)
-            && let Some((path, lease)) = crate::scratch_gc::next_to_measure(&run.scan, &sizes)
-        {
-            self.scratch.last_measure = Some(Instant::now());
-            crate::scratch_gc::spawn_measure(
-                path,
-                lease,
-                self.scratch.sizes.clone(),
-                self.scratch.measuring.clone(),
-            );
-        }
-        let mut view = crate::scratch_gc::build_status(
-            &settings,
-            &run.scan,
-            &run.plan,
-            run.fs,
-            min_free,
-            &sizes,
-            self.scratch.last_gc.clone(),
-            now,
-        );
-        // ADR-0075 D6（Phase G2）: sccache の配線の状態（統計は `celerisctl scratch status` だけ。tick で client を起こさない）。
-        let sccache = task_worker::scratch::resolve_sccache(
-            &settings,
-            task_worker::scratch::server_listening,
-        );
-        view.sccache = Some(crate::scratch_gc::sccache_view(&settings, &sccache));
-        // ADR-0075 D6（Phase G3）: cache server の `/stats`（loopback、500 ms。無効なら問い合わせない）。
-        view.cache = Some(crate::scratch_gc::cache_view(&settings, true));
-        self.scratch.view = Some(view);
-        executed.removed.len()
-    }
-
-    /// ディスク不足は Phase 116 の infra 障害として一度だけ通知し、空きが戻ると自動で解除する。
-    /// 検査不能も安全側に倒して run を開始しない。
-    fn check_disk_space(&mut self) -> bool {
-        if self.config.min_free_disk_mb == 0 {
-            self.disk_low = false;
-            return true;
-        }
-        let mut paths: Vec<PathBuf> = vec![
-            PathBuf::from("/"),
-            self.config.workspace_root.clone(),
-            self.config.build_cache_dir.clone(),
-        ];
-        // ADR-0075 D3: scratch pool の filesystem も見る。
-        if self.scratch_active() {
-            paths.push(self.config.scratch.dir.clone());
-        }
-        let min_free = self.config.min_free_disk_mb;
-        let find_low = move |paths: &[PathBuf]| {
-            paths.iter().find_map(|path| match free_disk_mb(path) {
-                Ok(free) if free < min_free => Some(format!(
-                    "{}: {free} MiB free (minimum {min_free} MiB)",
-                    path.display(),
-                )),
-                Err(error) => Some(error),
-                _ => None,
-            })
-        };
-        let mut low = find_low(&paths);
-        // ADR-0075 D3: 空きが足りなければ、新しい run を始める前にこの tick で緊急 GC（rename まで）を回す。
-        // 削除は別スレッドなので空きが戻るのは数 tick 後。その間は下の保留と通知 1 回（attempts を消費しない）。
-        let mut pinned_note = None;
-        if low.is_some() && self.scratch_active() {
-            let selected = self.scratch_gc(true);
-            self.scratch.ran_this_tick = true;
-            if selected == 0 {
-                pinned_note = self.scratch.pinned_summary.clone();
-            }
-            low = find_low(&paths);
-        }
-        let low = low.map(|reason| match pinned_note {
-            Some(note) => format!("{reason}; {note}"),
-            None => reason,
-        });
-        match low {
-            Some(reason) => {
-                if !self.disk_low {
-                    let body = format!("ディスク不足 (infra): {reason}. 新規 run を保留します。");
-                    tracing::warn!(%body, "dispatch paused for disk space");
-                    match self.store.notification_upsert_pending(
-                        NotificationKind::BadNews,
-                        &format!("dispatch:disk-low:{}", ulid::Ulid::new()),
-                        &body,
-                        None,
-                        OffsetDateTime::now_utc(),
-                    ) {
-                        Ok(_) => self.disk_low = true,
-                        Err(error) => {
-                            tracing::error!(%error, "failed to record disk shortage notification")
-                        }
-                    }
-                }
-                false
-            }
-            None => {
-                if self.disk_low {
-                    tracing::info!("disk space recovered; dispatch resumed");
-                }
-                self.disk_low = false;
-                true
-            }
-        }
-    }
-
     /// 1 tick。tokio ランタイム内から呼ぶ（ワーカーとレビューを `tokio::spawn` する）。
     pub fn tick(&mut self) -> Result<TickReport, DispatchError> {
         self.ticks += 1;
@@ -3481,6 +2960,7 @@ impl Dispatcher {
         Ok(report)
     }
 
+<<<<<<< HEAD
     /// ADR-0018 D2 / ADR-0032 D3: 多重接続が無い（または自動接続を試みて失敗した）クラスタを cooldown にし、
     /// 理由をタスクのイベントに残す（人にログインを促すため）。`reason` は呼び出し側が組み立てる
     /// （自動接続を試みて失敗した場合は `"auto-connect failed: ..."` を含め、従来の「接続が無い」だけの文言と区別する）。
@@ -4514,6 +3994,8 @@ impl Dispatcher {
         (accounts_root, roots, Some(cfg.max_runs_per_account), items)
     }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
     fn drain_completions(&mut self) -> Result<(usize, usize), DispatchError> {
         let mut finished = 0;
         let mut reviewed = 0;
@@ -4580,6 +4062,7 @@ impl Dispatcher {
         Ok((finished, reviewed))
     }
 
+<<<<<<< HEAD
     /// ADR-0074 D4（Phase F3 quota）: run の開始で、そのアカウントの現在の観測値をグループの
     /// `before` として `QuotaActivity` に登録する。アカウントプールを使わない run
     /// （`account`/`account_adapter` が `None`）は何もしない（D4.2 手順 5 の `free` は完了時に
@@ -8302,6 +7785,8 @@ impl Dispatcher {
         self.running.remove(&key)
     }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
     /// 実行中の run と、プロバイダを使っているレビュー run の合計（並列度の分母）。
     /// ADR-0089（Phase R6-5）: CoS の対話 run は数えない（`cos_in_flight` で別に数える）。
     fn workers_in_flight(&self) -> usize {
@@ -8370,27 +7855,6 @@ impl Dispatcher {
                 .count()
     }
 
-    /// ADR-0007 D2: その Plan 自身を含む祖先 Plan の数。
-    fn plan_depth(&self, task: &Task) -> Result<u32, DispatchError> {
-        let mut depth = 0;
-        let mut current = Some(task.clone());
-        let mut hops = 0;
-        while let Some(t) = current {
-            if t.kind == TaskKind::Plan {
-                depth += 1;
-            }
-            hops += 1;
-            if hops > 64 {
-                break;
-            }
-            current = match t.parent_id {
-                Some(p) => self.store.get(p)?,
-                None => None,
-            };
-        }
-        Ok(depth)
-    }
-
     /// ADR-0052 D1: このタスクが「知識整理 run（`langmem` 固定）」で、かつ接続先に届かないなら、
     /// 倒す理由（人が読む 1 行）を返す。それ以外は `None`（＝従来どおり `langmem` で走らせる）。
     ///
@@ -8409,6 +7873,7 @@ impl Dispatcher {
             .map(str::to_string)
     }
 
+<<<<<<< HEAD
     /// ADR-0072 D15（Phase E2）: `run_id` の run が「まだ `running` の WU」に属していたら、
     /// checkpoint があれば `needs_continuation`、無ければ `ready` に戻す
     /// （`WorkUnitTransitioned{reason}`）。属していなければ何もしない（`Ok(())`）。
@@ -12917,6 +12382,8 @@ impl Dispatcher {
         Ok("a human or the daemon requested a replan".to_string())
     }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
         self.unroutable.clear();
         self.cluster_waiting.clear();
@@ -12952,6 +12419,7 @@ impl Dispatcher {
         Ok(dispatched)
     }
 
+<<<<<<< HEAD
     /// ADR-0074 D1.3 3.（Phase F2b）: 並列 WU の 2 本目以降。このインスタンスが既に run を持っている
     /// （＝工程の lease の持ち主の）Task だけを対象にする（引き継ぎ中の別インスタンスの Task には
     /// 手を出さない。持ち主のいない Task は再起動の照合〈D1.7〉が Ready に戻す）。
@@ -16720,6 +16188,8 @@ impl Dispatcher {
                 .count()
     }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
     fn is_idle(&self) -> Result<bool, DispatchError> {
         if !self.running.is_empty() || !self.reviewing.is_empty() {
             return Ok(false);
@@ -16750,6 +16220,7 @@ impl Dispatcher {
     }
 }
 
+<<<<<<< HEAD
 /// ADR-0043 D3 / D4: `[commands] setup` の 1 コマンドあたりの上限（設定キーにはしない。
 /// `cargo fetch` / `pnpm install` が入る想定で、run の予算とは別に取る）。
 const SETUP_TIMEOUT: Duration = Duration::from_secs(1800);
@@ -17528,6 +16999,8 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
     }
 }
 
+=======
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
 /// ADR-0016 M4: イベント列に集約遷移（`Transitioned{reason: "aggregate"}`）があるか。以後の run は集約 run。
 fn has_aggregate_transition(events: &[(u64, Event)]) -> bool {
     events
@@ -17621,6 +17094,7 @@ fn subject_from_run_dir(dir: &std::path::Path, run_id: &str) -> ReviewSubject {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
     use crate::policy::{ProviderSpec, StaticPolicy};
@@ -36786,3 +36260,6 @@ mod remote_push_after_run_tests {
         );
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

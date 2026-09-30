@@ -848,6 +848,7 @@ pub fn active_plan(store: &dyn TaskStore, task_id: TaskId) -> Result<Option<Plan
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -1795,3 +1796,6 @@ mod tests {
         assert_eq!(scheduled.1, task_core::execution::RepairOrigin::Planner);
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

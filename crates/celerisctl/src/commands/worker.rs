@@ -786,6 +786,7 @@ impl EventSink for PrintSink {
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
 
@@ -1352,3 +1353,7 @@ mod tests {
         );
     }
 }
+=======
+#[path = "worker_tests.rs"]
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

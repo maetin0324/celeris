@@ -294,10 +294,12 @@ pub enum UnitGateAction {
     Demoted,
 }
 
-// ---------------------------------------------------------------------------
-// ADR-0079 D4 (3)（Phase R2a）: unit の gate（計画の採用のときの最終判断）
-// ---------------------------------------------------------------------------
+mod approval;
+mod gate;
+mod limits;
+mod liveness;
 
+<<<<<<< HEAD
 /// D4 (3): unit の gate の入力のうち、計画と親から決まるもの。
 #[derive(Debug, Clone, Copy)]
 pub struct UnitGateContext<'a> {
@@ -2885,3 +2887,16 @@ mod tests {
         );
     }
 }
+=======
+pub use approval::*;
+pub use gate::*;
+pub use limits::*;
+pub use liveness::*;
+
+#[cfg(test)]
+#[path = "tree/r3b_tests.rs"]
+mod r3b_tests;
+#[cfg(test)]
+#[path = "tree/tests.rs"]
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

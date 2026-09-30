@@ -1210,6 +1210,7 @@ pub fn check_and_apply_execution(
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -2752,3 +2753,6 @@ mod tests {
         );
     }
 }
+=======
+mod tests;
+>>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1

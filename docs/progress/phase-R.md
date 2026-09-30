@@ -1574,3 +1574,8 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
   GUI の 1 行が出ること、`journalctl` に `cluster job states changed` / `cluster jobs finished; resuming` が出て続きの run が回収すること。
 - PBS の job history（`qstat -x`）が無効なクラスタでは終わった job の終了コードが取れない（`gone`）。sirius の設定を実機で確かめる。
 - v1 の unit の上限切れの回答の後の run には job の結果の節が出ない（ADR-0090「残したもの」）。
+- 06:xxZ: 人が release 1753ccc641e4（R6-1〜R6-5）を昇格（health 1753ccc641e4、schema 33）。**R7-1**（ADR-0090 cluster job の durable wait、schema 34、
+  Opus 85993e7）を main に統合（b4521dd）→ release chain 実行中。schema が上がるので昇格は停止→起動（verify の N-1 は live_ok=false になる想定）。
+  本番 config に `job_wait` は足さない（既定 300 s / 24 h）。昇格後に BenchFS の子で wait → poll → 続き run を実機確認、sirius の PBS job history が
+  有効かを確認する。
+- 07:14Z: browser 根の repair-phase-4-1 が continuation 上限 → 「予算を増やして続ける」で回答。

@@ -1654,3 +1654,7 @@ pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task �
   終了時の `cluster_job_wait_finished` と続き run の preamble（job の終了状態）を次に確認する。
 - 08:49Z: **R7-1 の一周を本番で確認**: `cluster_job_wait_finished {satisfied}`（42660〜42662 とも F、exit 0）→ `transitioned blocked→ready reason=cluster_job_resume`
   → 21 秒後に続き run が dispatch（同じ子 task、job の終了状態を preamble で受け取る）。待ち 5 分間は枠を使っていない。
+- 09:00Z: リファクタ retry の子は衝突解消の葉（15 ファイル、workspace build/test/clippy pass）が done になったが、統合 WU の check が v1 のまま（`HEAD^2` 検査）で
+  再失敗 → 質問。**統合 WU の check は replan で更新されない**（daemon が旧版から統合 WU 行を持ち越す）欠陥として **R7-3** に委譲（あわせて: 人の replan 要求を
+  統合再実行より優先、superseded key 再利用の検証、leaf_too_large の文言、段階上限は走る unit だけ、failed unit の数え方の明文化）。この子は R7-3 昇格まで
+  blocked のまま置く（回答すると同じ check で再実行されるだけ）。

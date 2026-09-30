@@ -21,9 +21,11 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:parity": "node scripts/check-parity.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "mobile-audit": "node scripts/mobile-audit.mjs"
+    "mobile-audit": "node scripts/mobile-audit.mjs",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
+    "@tanstack/react-query": "5.103.2",
     "@tanstack/react-router": "1.170.38",
     "express": "5.2.1",
     "react": "19.2.8",
@@ -39,6 +41,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
+    "axe-core": "4.13.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.2.2",

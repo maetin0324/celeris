@@ -7,6 +7,8 @@ const PORT = Number(process.env.WEB_E2E_PORT ?? "7720");
 
 export default defineConfig({
   testDir: "./e2e",
+  // e2e/support/*.test.ts は vitest の単体テストなので拾わない。
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   workers: 1,
   retries: 0,

@@ -76,7 +76,8 @@ test("parity: /login 成功・失敗・next・daemon 停止中", async ({ page }
   await page.waitForURL(`${base}/tasks?tab=runs`);
   const cookies = await page.context().cookies();
   expect(cookies.map((cookie) => cookie.name)).toEqual(["__celeris_web_session"]);
-  // 外への next は "/" に落ちる。
+  // 外への next は "/" に落ちる。shell は 401 で /login へ移るので、先に画面を離れてから cookie を消す。
+  await page.goto("about:blank");
   await page.context().clearCookies();
   await page.goto(`${base}/login?next=${encodeURIComponent("//evil.example/x")}`);
   await login(page, PASSWORD);
@@ -94,7 +95,8 @@ test("parity-x: auth cookie 属性・401・next・非 loopback", async ({ page }
   const [cookie] = await page.context().cookies();
   expect(cookie).toMatchObject({ name: "__celeris_web_session", httpOnly: true, sameSite: "Strict", secure: false });
   expect(cookie?.expires ?? 0).toBeGreaterThan(Date.now() / 1000 + 24 * 3600 - 120);
-  // gui/ の cookie では入れない。
+  // gui/ の cookie では入れない。shell の 401 遷移と競らないよう先に画面を離れる。
+  await page.goto("about:blank");
   await page.context().clearCookies();
   await page.context().addCookies([{ name: "__celeris_gui_session", value: "e30%3D.abc", url: base }]);
   await page.goto(`${base}/`);

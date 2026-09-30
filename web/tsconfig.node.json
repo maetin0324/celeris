@@ -9,6 +9,7 @@
     "e2e/**/*",
     "test/**/*"
   ],
+  "exclude": ["e2e/parity/realtime.spec.ts", "e2e/support/node-event-source.ts"],
   "compilerOptions": {
     "composite": true,
     "lib": ["ES2023"],

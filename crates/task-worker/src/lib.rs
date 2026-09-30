@@ -13,6 +13,7 @@ pub mod browser_egress;
 pub mod browser_live;
 pub mod browser_policy;
 pub mod browser_relay;
+pub mod browser_cdp_sink;
 pub mod browser_runtime;
 pub mod browser_supervisor;
 pub mod browser_specialist;

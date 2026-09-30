@@ -7,6 +7,7 @@ edition.workspace = true
 task-core = { path = "../task-core" }
 celeris-credentiald = { path = "../celeris-credentiald" }
 zeroize = "1"
+url = "2"
 tokio = { version = "1", features = ["process", "io-util", "time", "sync", "macros", "rt-multi-thread", "fs", "net"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

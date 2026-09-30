@@ -38,3 +38,13 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - Rust gate: `cargo test --workspace` → exit 101（sccache 起動時 `Operation not permitted`、rustc コンパイル開始前）。`cargo clippy --workspace -- -D warnings` → exit 101（指定 `CARGO_TARGET_DIR` 内の `.cargo-build-lock` を read-only filesystem のため開けず）。どちらもコード検査に到達せず、コード起因か判定できていない。
 - GUI gate（`gui/`）: `pnpm typecheck` / `pnpm test` / `pnpm build` は各 exit 1。pnpm 11.27.0 の依存事前確認がユーザー cache の SQLite database を開けず、各コマンドの実処理は開始しなかった。テスト数は未取得。main との比較も未実施。
 - 未解決と提案: sccache と `CARGO_TARGET_DIR` が書き込み可能な環境で Rust 2 gate を再実行し、pnpm store が利用できる環境で GUI 3 gate と main 比較を再実行してテスト件数を記録する。今回の GUI 差分 gate `git diff --quiet 06e9a03cffe8 -- gui ':!gui/docs/adr/0002-frontend-stack.md'` は exit 0。旧 ADR 追記を含む GUI 全体の差分は新 ADR-0081 に supersede として記録済み。ADR・parity・計画の相互リンクを確認済み。
+
+## Web GUI Phase 1（2026-09-30、scaffold と gateway）
+
+P1-01〜P1-09 の実装を完了。React SPA の scaffold、型生成・偽 daemon、Express gateway、独立 session と login、JSON・file・SSE 中継を追加した。parity の R40・R41・X6 を完了、R37 は中継まで実装済みで、再接続と invalidate は Phase 2 に残る。
+
+- 証拠: `pnpm -C web install --frozen-lockfile && pnpm -C web typecheck && pnpm -C web lint && pnpm -C web test && pnpm -C web build && pnpm -C web gen:types --check && pnpm -C web check:boundaries && pnpm -C web check:secrets && pnpm -C web check:parity` → exit 0（Vitest 14 件、server 36 件）。
+- 証拠: `pnpm -C web e2e parity/gateway.spec.ts parity/gateway-auth.spec.ts parity/gateway-relay.spec.ts` → 14 件 pass。偽 daemon と gateway は loopback の空き port を使用し、SSE が 60 秒を超えて流れ続け、切断で upstream が abort されることを確認。
+- 証拠: `cargo test --workspace && cargo clippy --workspace -- -D warnings` → exit 0。`git diff --quiet b77d7e4d5885 -- gui crates docs/api deploy scripts/selfdeploy` → exit 0。
+- 未解決: host の pnpm は 12.6.0、`gui/` は pnpm 11.27.0 固定のため、合意済みの別 task が版合わせと lockfile 更新を main に入れ、この task の base と criterion 0 を更新するまで gui の test・typecheck・build は実行できない。この葉では gui の差分ゼロで代えた。
+- 提案: 別 task の版合わせと base 更新後に V1 の gui 3 gate を実行し、Phase 2 の SSE 再接続・invalidate 実装へ進む。

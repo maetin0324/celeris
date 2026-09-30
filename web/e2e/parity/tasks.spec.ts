@@ -92,3 +92,37 @@ test("parity: /tasks 絞り込み・検索・続き", async ({ page }) => {
   }
 });
 
+test("parity: /graph root・depth", async ({ page }) => {
+  const calls: string[] = [];
+  const graph = {
+    nodes: [
+      { id: "T1", title: "親", kind: "execute", status: "ready" },
+      { id: "T2", title: "子", kind: "execute", status: "running", parent_id: "T1" },
+    ],
+    edges: [{ from: "T1", to: "T2", kind: "depends_on" }],
+  };
+  const h = harness({
+    "/api/v1/graph": (url: URL) => {
+      calls.push(url.search);
+      return graph;
+    },
+  });
+  const gateway = await h.start();
+  try {
+    await page.goto(`${gateway.base}/graph`);
+    await expect(page.locator("[data-graph-node]")).toHaveCount(2);
+    await page.getByLabel("root").fill("T1");
+    await page.getByLabel("depth").fill("2");
+    await page.getByRole("button", { name: "絞り込み" }).click();
+    await expect(page).toHaveURL(/root=T1&depth=2/);
+    await expect.poll(() => calls.some((query) => query.includes("root=T1") && query.includes("depth=2"))).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
+      0,
+    );
+    expect(await page.locator("[data-testid='graph-canvas']").evaluate((el) => el.scrollWidth >= el.clientWidth)).toBe(
+      true,
+    );
+  } finally {
+    await h.close(gateway);
+  }
+});

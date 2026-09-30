@@ -12,10 +12,7 @@ use std::time::Duration;
 use common::*;
 use ring::signature::KeyPair;
 use serde_json::{Value, json};
-use task_api::browser::{
-    BrokerFailure, BrokerReceipt, BrowserApiConfig, CredentialBrokerControl, ManualRegistration,
-    UnixCredentialBrokerControl,
-};
+use task_api::browser::{BrowserApiConfig, TrustedSitePolicy, UnixCredentialBrokerControl};
 use task_core::browser_wait::{BrowserWait, BrowserWaitStore, ConsumedBrowserApproval};
 use task_core::{
     ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserRun,
@@ -29,63 +26,6 @@ use time::OffsetDateTime;
 const SENTINEL_USER: &str = "SENTINEL-e2e-user-51f0";
 const ORIGIN: &str = "https://fixture.example.com";
 type AuthCall = (bool, usize, bool, Option<String>);
-
-/// The administrator's site policy used by the real API registration flow.
-/// The production API control client currently creates a policy without
-/// selectors, so this test adapter registers the administrator's policy with
-/// the real broker while leaving the HTTP handler and broker IPC unchanged.
-struct SitePolicyControl {
-    socket: PathBuf,
-}
-impl CredentialBrokerControl for SitePolicyControl {
-    fn register(&self, registration: ManualRegistration) -> Result<BrokerReceipt, BrokerFailure> {
-        use celeris_credentiald::{CredentialPolicy, CredentialRef, ipc};
-        let reference = CredentialRef {
-            credential_id: format!("cred-{}", registration.wait_id),
-            provider: "manual".into(),
-            policy_id: registration.policy_id.clone(),
-        };
-        let policy = CredentialPolicy {
-            policy_id: registration.policy_id.clone(),
-            revision: 1,
-            exact_origin: registration.origin.clone(),
-            task_id: registration.task_id.to_string(),
-            max_ttl_seconds: 60,
-            require_approval: true,
-            allow_persistence: false,
-            login_url: Some(format!("{ORIGIN}/login")),
-            password_selector: Some("#password".into()),
-            submit_selector: Some("#submit".into()),
-        };
-        let request = serde_json::json!({"op":"register","reference":reference,"policy":policy,"revision":1,
-            "secret":{"username":registration.username.expose(),"password":registration.password.expose()}});
-        let bytes = zeroize::Zeroizing::new(
-            serde_json::to_vec(&request).map_err(|_| BrokerFailure::Unavailable)?,
-        );
-        let reply = ipc::call(&self.socket, &bytes).map_err(|_| BrokerFailure::Unavailable)?;
-        if !reply.success {
-            return Err(BrokerFailure::Rejected("broker_rejected"));
-        }
-        Ok(BrokerReceipt {
-            credential_id: reference.credential_id,
-            provider: "manual".into(),
-            policy_id: registration.policy_id,
-            credential_revision: 1,
-            origin: registration.origin,
-            receipt_id: format!("reg-{}", registration.wait_id),
-        })
-    }
-    fn verify_receipt(
-        &self,
-        wait_id: &str,
-        receipt: &BrokerReceipt,
-    ) -> Result<bool, BrokerFailure> {
-        UnixCredentialBrokerControl {
-            socket: self.socket.clone(),
-        }
-        .verify_receipt(wait_id, receipt)
-    }
-}
 
 struct World {
     env: TestEnv,
@@ -176,8 +116,17 @@ fn world() -> World {
     let key = keypair();
     let app = task_api::router(env.state.clone().with_browser(BrowserApiConfig {
         attestation_public_key: Some(key.public_key().as_ref().to_vec()),
-        broker: Some(Arc::new(SitePolicyControl {
+        // ADR-0091 D2: the administrator's site policy is daemon configuration handed to the
+        // production control client; the HTTP registration cannot name a URL or selector.
+        broker: Some(Arc::new(UnixCredentialBrokerControl {
             socket: control.clone(),
+            site_policies: vec![TrustedSitePolicy {
+                policy_id: "pol-login".into(),
+                exact_origin: ORIGIN.into(),
+                login_url: format!("{ORIGIN}/login"),
+                password_selector: "#password".into(),
+                submit_selector: Some("#submit".into()),
+            }],
         })),
     }));
     let fixture = root.join("browser-fixture");

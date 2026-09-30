@@ -5,6 +5,7 @@ import { daemonKeys } from "../queries/keys";
 import type { ConnectionStore } from "./connection-state";
 import { connectionStore } from "./connection-state";
 import type { Frame } from "./frames";
+import { createInvalidator, type Invalidator } from "./invalidator";
 import { bindResume } from "./resume";
 import { createTransport, type Transport, type TransportOptions } from "./transport";
 
@@ -44,10 +45,13 @@ export function applyFrame(
   }
 }
 
-export type Realtime = Transport & { dispose(): void };
+export type Realtime = Transport & { dispose(): void; invalidator: Invalidator };
 
 export function createRealtime(options: RealtimeOptions): Realtime {
   const store = options.store ?? connectionStore;
+  const invalidator = createInvalidator(options.queryClient);
+  const onTaskEvent = options.onTaskEvent ?? ((f) => invalidator.onTaskEvent(f.data));
+  const onReset = options.onReset ?? (() => invalidator.onReset());
   const transport = createTransport({
     store,
     url: options.url,
@@ -55,8 +59,11 @@ export function createRealtime(options: RealtimeOptions): Realtime {
     probe: options.probe,
     backoffBaseMs: options.backoffBaseMs,
     backoffMaxMs: options.backoffMaxMs,
-    onFrame: (frame) => applyFrame(options.queryClient, frame, options),
-    onResume: () => options.onResumed?.(),
+    onFrame: (frame) => applyFrame(options.queryClient, frame, { onTaskEvent, onReset }),
+    onResume: () => {
+      invalidator.onResume();
+      options.onResumed?.();
+    },
   });
   let unbind: (() => void) | undefined;
   if (typeof window !== "undefined" && typeof document !== "undefined") {
@@ -64,7 +71,9 @@ export function createRealtime(options: RealtimeOptions): Realtime {
   }
   return {
     ...transport,
+    invalidator,
     dispose() {
+      invalidator.dispose();
       unbind?.();
       transport.stop();
     },

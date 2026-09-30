@@ -57,3 +57,56 @@ test("parity: /logout cookie 消去と CSRF", async () => {
   expect(logout.headers.get("location")).toBe("/login");
   expect(logout.headers.get("set-cookie")).toMatch(/^__celeris_web_session=;.*Expires=Thu, 01 Jan 1970/);
 });
+
+async function login(page: import("@playwright/test").Page, password: string) {
+  await page.getByLabel("パスワード").fill(password);
+  await page.getByRole("button", { name: "ログイン" }).click();
+}
+
+test("parity: /login 成功・失敗・next・daemon 停止中", async ({ page }) => {
+  // この gateway には daemon が居ない（偽 daemon も起こさない）状態で login が完結する。
+  await page.goto(`${base}/login?next=${encodeURIComponent("/tasks?tab=runs")}`);
+  await expect(page.getByLabel("パスワード")).toHaveAttribute("autocomplete", "current-password");
+  const started = Date.now();
+  await login(page, "wrong");
+  await expect(page.getByRole("alert")).toHaveText("パスワードが違います");
+  expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  expect(await page.context().cookies()).toHaveLength(0);
+  await login(page, PASSWORD);
+  await page.waitForURL(`${base}/tasks?tab=runs`);
+  const cookies = await page.context().cookies();
+  expect(cookies.map((cookie) => cookie.name)).toEqual(["__celeris_web_session"]);
+  // 外への next は "/" に落ちる。
+  await page.context().clearCookies();
+  await page.goto(`${base}/login?next=${encodeURIComponent("//evil.example/x")}`);
+  await login(page, PASSWORD);
+  await page.waitForURL(`${base}/`);
+});
+
+test("parity-x: auth cookie 属性・401・next・非 loopback", async ({ page }) => {
+  for (const route of ["/api/tasks", "/files/x/y", "/events"])
+    expect((await fetch(`${base}${route}`)).status).toBe(401);
+  // 未認証の保護画面は /login?next= へ（daemon の health は見ない）。
+  await page.goto(`${base}/tasks/01ABC?tab=runs`);
+  await page.waitForURL(`${base}/login?next=${encodeURIComponent("/tasks/01ABC?tab=runs")}`);
+  await login(page, PASSWORD);
+  await page.waitForURL(`${base}/tasks/01ABC?tab=runs`);
+  const [cookie] = await page.context().cookies();
+  expect(cookie).toMatchObject({ name: "__celeris_web_session", httpOnly: true, sameSite: "Strict", secure: false });
+  expect(cookie?.expires ?? 0).toBeGreaterThan(Date.now() / 1000 + 24 * 3600 - 120);
+  // gui/ の cookie では入れない。
+  await page.context().clearCookies();
+  await page.context().addCookies([{ name: "__celeris_gui_session", value: "e30%3D.abc", url: base }]);
+  await page.goto(`${base}/`);
+  await page.waitForURL(/\/login\?next=/);
+  // 非 loopback の bind でパスワードのファイルが無ければ起動しない。
+  expect(() => createApp({ bind: { host: "0.0.0.0", port: 7720 }, passwordFile: undefined })).toThrow(/PASSWORD_FILE/);
+});
+
+test("parity-x: auth キーボード表示でもボタンが見える", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 360 });
+  await page.goto(`${base}/login`);
+  await page.getByLabel("パスワード").focus();
+  const box = await page.getByRole("button", { name: "ログイン" }).boundingBox();
+  expect(box && box.y + box.height).toBeLessThanOrEqual(360);
+});

@@ -13,6 +13,7 @@
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use celeris_credentiald::identity_seal::{IdentitySealer, IdentityStatePlain, StateEntry};
@@ -21,7 +22,8 @@ use task_core::SqliteStore;
 use task_core::browser_isolation::{
     IsolationViolation, LiveIsolation, LiveSessionEntry, LiveSessionRegistry, LiveSessions,
 };
-use task_worker::browser_cdp_sink::CdpController;
+use task_worker::browser_cdp_sink::{CdpController, InjectionError};
+use task_worker::browser_live::{CollectingSink, LiveEmitter};
 use task_worker::browser_runtime::{IsolatedRuntime, LiveSession, RestoreAdmission, RuntimeSpec};
 use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 
@@ -90,10 +92,12 @@ fn launch(
     id: &str,
     registry: &Arc<LiveSessions>,
     admission: RestoreAdmission,
-) -> (Supervisor, Arc<Mutex<CdpController>>) {
+) -> (Supervisor, Arc<Mutex<CdpController>>, Arc<AtomicBool>) {
     let mut opts = SupervisorOptions::new(session.join("records"));
     opts.registry = Some(Arc::clone(registry));
     opts.admission = admission;
+    opts.live_key = Some(("task-r".into(), "run-r".into()));
+    let stop = Arc::clone(&opts.observation_stop);
     let mut sup = Supervisor::start(spec(session, id), opts).expect("isolated runtime starts");
     let mut controller = CdpController::new(
         sup.cdp_write.take().expect("cdp write"),
@@ -103,7 +107,7 @@ fn launch(
     controller
         .controller_command("Browser.getVersion", serde_json::json!({}), None)
         .expect("browser answered over CDP pipe");
-    (sup, Arc::new(Mutex::new(controller)))
+    (sup, Arc::new(Mutex::new(controller)), stop)
 }
 
 /// loopback の fixture（listener を持ったまま、その origin を identity の origin にする）。
@@ -218,7 +222,7 @@ fn supervisor_entry_delivers_restored_state_to_controller_cdp_under_harness_admi
 
     let registry = Arc::new(LiveSessions::default());
     let session = tempfile::tempdir().expect("session");
-    let (sup, controller) = launch(
+    let (sup, controller, _) = launch(
         session.path(),
         "live-h",
         &registry,
@@ -341,7 +345,7 @@ fn identity_restore_sameuid_rejected_in_production() {
 
     let registry = Arc::new(LiveSessions::default());
     let session = tempfile::tempdir().expect("session");
-    let (sup, controller) = launch(
+    let (sup, controller, _) = launch(
         session.path(),
         "live-p",
         &registry,
@@ -448,4 +452,111 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
     assert!(seen.iter().all(|(n, _, _)| n != "x"));
     eprintln!("delivered: LiveSession live-d, cookie sid visible over CDP pipe");
     rt.kill();
+}
+
+/// ADR-0080 H3 / ADR-0083 D4: 復元を受けた session は、session の終わりまで agent 由来の観測
+/// （snapshot・console・event）を拒否・破棄する。投入前は観測が通り、拒否された復元は停止に入らない。
+#[test]
+fn restored_session_refuses_agent_observation() {
+    if skip() {
+        return;
+    }
+    let (_fixture, origin) = loopback_origin();
+    let keys = tempfile::tempdir().expect("keys");
+    let sealer = IdentitySealer::open(keys.path().join("keys")).expect("sealer");
+    let store = SqliteStore::open_in_memory().expect("store");
+    let svc = IdentityService {
+        store: &store,
+        sealer: &sealer,
+    };
+    let t = now();
+    svc.register(
+        input("a", "proj", &origin, None, state(&origin, "sid", SECRET)),
+        t,
+    )
+    .expect("register");
+
+    let registry = Arc::new(LiveSessions::default());
+    let session = tempfile::tempdir().expect("session");
+    let (sup, controller, stop) = launch(
+        session.path(),
+        "live-o",
+        &registry,
+        RestoreAdmission::SameUidHarness,
+    );
+    sup.attach_controller(Arc::clone(&controller));
+    let reg: &dyn LiveSessionRegistry = &*registry;
+    let emitter = LiveEmitter::with_observation_stop(CollectingSink::default(), Arc::clone(&stop));
+    let observe = |c: &Arc<Mutex<CdpController>>| {
+        let mut c = c.lock().expect("controller");
+        let snapshot = c
+            .agent_command("Target.getTargets", serde_json::json!({}), None)
+            .map(|_| ());
+        (snapshot, c.take_agent_events())
+    };
+
+    // 投入前: agent の観測（browser 全体の target 一覧）は通る。
+    let (snap, _) = observe(&controller);
+    assert_eq!(snap, Ok(()), "observation works before restore");
+    assert!(emitter.emit(&task_core::browser_live::LiveEvent::Status {
+        state: "browser.navigate: success".into()
+    }));
+    // 拒否された復元（他 project）は停止に入らない（開封前に落ちる）。
+    assert_eq!(
+        svc.restore_in_session("a", "other", &origin, "live-o", Some(reg), t)
+            .unwrap_err()
+            .code(),
+        "other_project"
+    );
+    assert!(!stop.load(Ordering::SeqCst));
+    assert!(!controller.lock().expect("controller").observation_stopped());
+
+    // 成功した復元: 投入の前に停止へ入り、session の終わりまで解除されない。
+    svc.restore_in_session("a", "proj", &origin, "live-o", Some(reg), t)
+        .expect("restore delivers under harness admission");
+    assert!(stop.load(Ordering::SeqCst), "entry raised the observation stop");
+    assert!(controller.lock().expect("controller").observation_stopped());
+    for _ in 0..3 {
+        let (snap, events) = observe(&controller);
+        assert_eq!(snap, Err(InjectionError::AuthSectionRequired));
+        assert!(events.is_empty(), "console/events are dropped");
+    }
+    // Page のスナップショット系も同じく拒否（method を問わない）。
+    for method in [
+        "Page.captureScreenshot",
+        "DOM.getDocument",
+        "Runtime.evaluate",
+        "Storage.getCookies",
+    ] {
+        assert_eq!(
+            controller
+                .lock()
+                .expect("controller")
+                .agent_command(method, serde_json::json!({}), None)
+                .map(|_| ()),
+            Err(InjectionError::AuthSectionRequired),
+            "{method} refused after restore"
+        );
+    }
+    // worker 側の live event・progress・artifact の出口（LiveEmitter）も閉じる。
+    assert!(emitter.in_auth_section());
+    assert!(!emitter.emit(&task_core::browser_live::LiveEvent::Console {
+        level: "log".into(),
+        text: "obs".into()
+    }));
+    assert_eq!(emitter.sink().events().len(), 1, "only the pre-restore event");
+    // controller（信頼側）は使えるので、復元した cookie は controller からだけ見える。
+    assert!(cookies(&controller).iter().any(|c| c.1 == SECRET));
+    // 認証区間の開閉でも解除されない（解除の口は session の終わりだけ）。
+    {
+        let mut c = controller.lock().expect("controller");
+        c.open_auth_section("h3".into());
+        c.close_auth_section().expect("close");
+        assert!(c.observation_stopped());
+    }
+    assert_eq!(observe(&controller).0, Err(InjectionError::AuthSectionRequired));
+    eprintln!("restored session live-o: agent observation refused, events dropped until stop");
+    sup.stop();
+    assert!(registry.get("live-o").is_none());
+    assert!(stop.load(Ordering::SeqCst), "not cleared by stopping");
 }

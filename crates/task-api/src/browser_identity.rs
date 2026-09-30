@@ -343,14 +343,32 @@ impl IdentityService<'_> {
         if attestation.session_id() != session_id {
             return Err(denied());
         }
-        // 4. controller に投入口が無ければ開封しない。
+        // 4. controller に投入口が無い、または Live View の鍵が無ければ開封しない。
         if !entry.accepts_state() {
             return Err(denied());
         }
+        let (task_id, run_id) = entry.live_key().ok_or_else(denied)?;
         let plain = self.restore_isolated(identity_id, project_id, origin, &attestation, now)?;
         let bytes = zeroize::Zeroizing::new(
             serde_json::to_vec(&plain).map_err(|_| IdentityApiError::SealFailed)?,
         );
+        // 5. 投入の前に観測停止を記録する（ADR-0080 H3 / ADR-0083 D4）。最後の live event が
+        // observation_stopped の間は Live View の接続も worker の event 書き込みも拒否され、
+        // 解除は session の終了だけ。記録できなければ投入しない。投入に失敗しても停止のまま。
+        let stop = task_core::browser_live::ScrubbedLiveEvent::from_event(
+            &task_core::browser_live::LiveEvent::Status {
+                state: "observation_stopped".into(),
+            },
+        )
+        .ok_or_else(denied)?;
+        let key = task_core::browser_store::BrowserSessionKey {
+            task_id: &task_id,
+            run_id: &run_id,
+            session_id,
+        };
+        self.store
+            .browser_live_append(key, &stop)
+            .map_err(|_| IdentityApiError::Store)?;
         entry.deliver_state(&bytes).map_err(|_| denied())
     }
 }
@@ -872,6 +890,9 @@ mod tests {
         ) -> Result<(), task_core::browser_isolation::StateRejected> {
             self.delivered.lock().unwrap().push(state.to_vec());
             Ok(())
+        }
+        fn live_key(&self) -> Option<(String, String)> {
+            Some(("task-1".into(), "run-1".into()))
         }
     }
 

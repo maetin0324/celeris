@@ -240,6 +240,9 @@ pub struct CdpController {
     buffered: Vec<u8>,
     next_id: u64,
     auth_section: Option<String>,
+    /// ADR-0080 H3 / ADR-0083 D4: identity の復元を受けた session。session（= controller）の
+    /// 終わりまで agent の観測を止める。解除する口は無い。
+    restored: bool,
     injected: Vec<(String, String, String, String)>,
     events: Vec<Value>,
     redirect_seen: bool,
@@ -259,6 +262,7 @@ impl CdpController {
             buffered: Vec::new(),
             next_id: 1,
             auth_section: None,
+            restored: false,
             injected: Vec::new(),
             events: Vec::new(),
             redirect_seen: false,
@@ -326,6 +330,18 @@ impl CdpController {
         Ok(())
     }
 
+    /// identity 復元の state を投入する前に呼ぶ。以後この controller が生きている間、
+    /// agent 由来の観測は拒否され、CDP event（console を含む）は捨てられる。
+    pub fn enter_restored_observation_stop(&mut self) {
+        self.events.clear();
+        self.restored = true;
+    }
+
+    /// 認証区間中か、復元を受けた session か（どちらも agent の観測を止める）。
+    pub fn observation_stopped(&self) -> bool {
+        self.auth_section.is_some() || self.restored
+    }
+
     pub fn close_auth_section(&mut self) -> Result<(), InjectionError> {
         self.clear_injected_values()?;
         self.auth_section = None;
@@ -340,7 +356,7 @@ impl CdpController {
         params: Value,
         session: Option<&str>,
     ) -> Result<Value, InjectionError> {
-        if self.auth_section.is_some() {
+        if self.observation_stopped() {
             return Err(InjectionError::AuthSectionRequired);
         }
         let reply = self.call(method, params, session)?;
@@ -377,7 +393,7 @@ impl CdpController {
     /// Events collected while a command was in flight. An auth section discards
     /// them before the relay can expose them to an agent connection.
     pub fn take_agent_events(&mut self) -> Vec<Value> {
-        if self.auth_section.is_some() {
+        if self.observation_stopped() {
             self.events.clear();
             Vec::new()
         } else {
@@ -656,7 +672,7 @@ impl CdpController {
                         && value["params"]["redirectResponse"].is_object()
                     {
                         self.redirect_seen = true;
-                    } else if self.auth_section.is_none() {
+                    } else if !self.observation_stopped() {
                         self.events.push(value);
                     }
                 }

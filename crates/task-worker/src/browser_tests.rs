@@ -1977,4 +1977,41 @@ mod live_wiring {
         assert_eq!(emitter.sink().events().len(), 1);
         assert_eq!(sink.progress.lock().unwrap().len(), 1);
     }
+
+    /// ADR-0080 H3 / ADR-0083 D4: identity の復元で立った旗の後は、`forward_events` が
+    /// progress・artifact・live event を流さず、session の終わりまで戻らない。
+    #[test]
+    fn browser_restored_session_forward_events_drops_until_session_end() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("extract-a.json"), "{}").unwrap();
+        let events = temp.path().join("events.jsonl");
+        std::fs::write(
+            &events,
+            "{\"operation\":\"extract\",\"status\":\"success\",\"artifact\":\"extract-a.json\"}\n",
+        )
+        .unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let emitter = LiveEmitter::with_observation_stop(CollectingSink::default(), stop);
+        let sink = RecordingSink::default();
+        let mut offset = 0;
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        {
+            // 認証区間を開いて閉じても解除されない。
+            let _auth = emitter.auth_section();
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&events)
+            .unwrap();
+        std::io::Write::write_all(&mut f, b"{\"operation\":\"click\",\"status\":\"success\"}\n")
+            .unwrap();
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert!(emitter.sink().events().is_empty());
+        assert!(sink.progress.lock().unwrap().is_empty());
+        assert!(sink.artifacts.lock().unwrap().is_empty());
+        assert!(emitter.in_auth_section());
+    }
 }

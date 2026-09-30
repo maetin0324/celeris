@@ -80,3 +80,82 @@ test("parity: /tasks/:id 表示", async ({ page }) => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+async function withDetail(
+  fixtures: Record<string, unknown | ((url: URL) => unknown)>,
+  body: (base: string, daemon: ReturnType<typeof createFakeDaemon>) => Promise<void>,
+) {
+  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-task-detail-"));
+  const tokenFile = path.join(dir, "token");
+  writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
+  const daemon = createFakeDaemon({
+    token: FIXTURE_TOKEN,
+    fixtures: { ...defaultFixtures, "/api/v1/tasks/T1/timeline": { task_id: "T1", items: [] }, ...fixtures },
+  });
+  const gateway = await startGateway({ daemonUrl: await daemon.start(), daemonTokenFile: tokenFile });
+  try {
+    await body(gateway.base, daemon);
+  } finally {
+    await gateway.close();
+    await daemon.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("parity: /tasks/:id 判断（expected_status と 409 再取得）", async ({ page }) => {
+  let status = "reviewing";
+  const reviewing = () => {
+    const value = detail();
+    value.task = { ...value.task, status };
+    (value as Record<string, unknown>).actions = status === "reviewing" ? ["approve", "reject", "cancel", "edit"] : [];
+    return value;
+  };
+  await withDetail({ "/api/v1/tasks/T1": () => reviewing() }, async (base, daemon) => {
+    const sent: { path: string; method: string; body: unknown }[] = [];
+    let approveCount = 0;
+    await page.route(/\/api\/tasks\/T1(\/[a-z]+)?$/, async (route) => {
+      const request = route.request();
+      if (request.method() === "GET") return route.fallback();
+      sent.push({ path: new URL(request.url()).pathname, method: request.method(), body: request.postDataJSON() });
+      if (request.url().endsWith("/approve")) {
+        approveCount += 1;
+        if (approveCount === 1) {
+          // 別の画面が先に動かした。409 のあとは detail を取り直して新しい状態を出す。
+          status = "done";
+          return route.fulfill({ status: 409, contentType: "application/json", body: '{"error":"conflict"}' });
+        }
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await page.goto(`${base}/tasks/T1`);
+    const panel = page.getByTestId("decision-panel");
+    await expect(panel.getByRole("heading", { name: "判断" })).toBeVisible();
+
+    await panel.getByLabel("コメント").fill("見ました");
+    await panel.getByRole("button", { name: "コメント" }).click();
+    await expect(panel.getByText("操作が完了しました")).toBeVisible();
+    expect(sent.at(-1)).toEqual({ path: "/api/tasks/T1/comments", method: "POST", body: { body: "見ました" } });
+
+    await panel.getByText("編集", { exact: true }).click();
+    await panel.getByLabel("題").fill("新しい題");
+    await panel.getByRole("button", { name: "編集を保存" }).click();
+    await expect.poll(() => sent.at(-1)?.method).toBe("PATCH");
+    expect(sent.at(-1)?.body).toMatchObject({ expected_status: "reviewing", title: "新しい題" });
+
+    const before = daemon.requests.filter((request) => request.path === "/api/v1/tasks/T1").length;
+    await panel.getByLabel("理由・note（任意）").fill("確認済み");
+    await panel.getByRole("button", { name: "承認" }).click();
+    await expect(panel.getByText("状態が変わりました。最新の状態を確認してください。")).toBeVisible();
+    expect(sent.at(-1)).toEqual({
+      path: "/api/tasks/T1/approve",
+      method: "POST",
+      body: { expected_status: "reviewing", note: "確認済み" },
+    });
+    await expect
+      .poll(() => daemon.requests.filter((request) => request.path === "/api/v1/tasks/T1").length)
+      .toBeGreaterThan(before);
+    await expect(panel.getByTestId("decision-status")).toHaveText("done");
+    await expect(panel.getByRole("button", { name: "承認" })).toHaveCount(0);
+    expect(approveCount).toBe(1);
+  });
+});

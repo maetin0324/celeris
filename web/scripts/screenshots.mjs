@@ -14,7 +14,7 @@ const arg = (name) => {
 const only = arg("--only");
 const out = arg("--out");
 if (!out) throw new Error("--out <directory> is required");
-const selected = only ? screens.filter((screen) => screen.fixture === only) : screens;
+const selected = only ? screens.filter((screen) => screen.fixture === only.split("?")[0]) : screens;
 if (!selected.length) throw new Error(`unknown screen: ${only}`);
 if (!existsSync(path.join(webRoot, "dist/index.html"))) {
   const built = spawnSync(path.join(webRoot, "node_modules/.bin/vite"), ["build"], { cwd: webRoot, stdio: "inherit" });
@@ -29,11 +29,13 @@ await new Promise((resolve, reject) => {
 const browser = await chromium.launch();
 try {
   for (const screen of selected) {
+    // --only は台帳の fixture に ?tab= などの query を付けてもよい（P3-13 の tab）。
+    const target = only ?? screen.fixture;
     for (const width of [360, 390, 412, 1440]) {
       const page = await browser.newPage({ viewport: { width, height: 800 } });
-      await page.goto(`http://127.0.0.1:${server.address().port}${screen.fixture}`);
+      await page.goto(`http://127.0.0.1:${server.address().port}${target}`);
       await page.screenshot({
-        path: path.join(out, `${screen.fixture.replace(/[^a-z0-9]+/gi, "_") || "root"}-${width}.png`),
+        path: path.join(out, `${target.replace(/[^a-z0-9]+/gi, "_") || "root"}-${width}.png`),
         fullPage: true,
       });
       await page.close();

@@ -248,3 +248,195 @@ test("parity: /tasks/:id 実行（promote・phase_gate は確定まで成功と�
     },
   );
 });
+
+function changesFixture() {
+  const repo = fixtureFor(schema.$defs.RepoChangesView) as Record<string, unknown>;
+  const integration = fixtureFor(schema.$defs.TaskIntegration) as Record<string, unknown>;
+  return {
+    task_id: "T1",
+    gh: true,
+    merge_method: "squash",
+    delivery: null,
+    repos: [
+      {
+        ...repo,
+        repo: "web",
+        branch: "celeris/T1",
+        default_branch: "main",
+        ahead: 2,
+        dirty: false,
+        missing: false,
+        files: [{ path: "src/long.ts", status: "M", additions: 3, deletions: 1 }],
+        integration: { ...integration, repo: "web", method: "pr", state: "open", pr_number: 7, pr_url: null },
+      },
+    ],
+  };
+}
+
+const longDiff = `--- a/src/long.ts\n+++ b/src/long.ts\n@@ -1 +1 @@\n-old\n+${"x".repeat(600)}\n`;
+
+function changesFixtures() {
+  const tree = fixtureFor(schema.$defs.TreeView) as Record<string, unknown>;
+  return {
+    "/api/v1/tasks/T1/changes": changesFixture(),
+    "/api/v1/tasks/T1/changes/web/diff": { repo: "web", path: "src/long.ts", diff: longDiff, truncated: false },
+    "/api/v1/tasks/T1/tree": { ...tree, entries: [{ name: "README.md", path: "README.md", kind: "file", size: 3 }] },
+    "/api/v1/tasks/T1/artifacts": { task_id: "T1", items: [] },
+  };
+}
+
+const overflow = (page: import("@playwright/test").Page) =>
+  page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+test("parity: /tasks/:id 5 tab と全 intent・409", async ({ page }) => {
+  const full = () => {
+    const value = detail();
+    value.task = { ...value.task, status: "reviewing" };
+    Object.assign(value, {
+      latest_question: "どちらにしますか",
+      actions: ["approve", "reject", "answer", "cancel", "retry", "edit", "reopen", "rereview", "phase_gate"],
+    });
+    return value;
+  };
+  await withDetail({ "/api/v1/tasks/T1": () => full(), ...changesFixtures() }, async (base) => {
+    const sent: { path: string; method: string; body: unknown }[] = [];
+    await page.route(/\/api\/tasks\/T1(\/.*)?$/, async (route) => {
+      const request = route.request();
+      if (request.method() === "GET") return route.fallback();
+      const pathname = new URL(request.url()).pathname;
+      sent.push({ path: pathname, method: request.method(), body: request.postDataJSON() });
+      if (pathname.endsWith("/cancel"))
+        return route.fulfill({ status: 409, contentType: "application/json", body: '{"error":"conflict"}' });
+      return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await page.goto(`${base}/tasks/T1`);
+    const decision = page.getByTestId("decision-panel");
+    const execution = page.getByTestId("execution-panel");
+    await expect(decision.getByTestId("decision-status")).toHaveText("reviewing");
+    const last = () => sent.at(-1)?.path;
+    const click = async (scope: typeof decision, name: string, path: string) => {
+      await scope.getByRole("button", { name, exact: true }).click();
+      await expect.poll(last).toBe(path);
+      await expect(scope.getByRole("button", { name, exact: true })).toBeEnabled();
+    };
+
+    // 判断（P3-09）: approve / reject / answer / retry / reopen / comment / edit、cancel は 409。
+    await click(decision, "承認", "/api/tasks/T1/approve");
+    await click(decision, "却下", "/api/tasks/T1/reject");
+    await decision.getByLabel("回答").fill("A にします");
+    await click(decision, "回答", "/api/tasks/T1/answer");
+    await click(decision, "やり直す", "/api/tasks/T1/retry");
+    await click(decision, "再開", "/api/tasks/T1/reopen");
+    await decision.getByLabel("コメント").fill("見ました");
+    await click(decision, "コメント", "/api/tasks/T1/comments");
+    await decision.getByText("編集", { exact: true }).click();
+    await decision.getByLabel("題").fill("新しい題");
+    await click(decision, "編集を保存", "/api/tasks/T1");
+    expect(sent.at(-1)?.method).toBe("PATCH");
+    await decision.getByRole("button", { name: "中止", exact: true }).click();
+    await expect.poll(last).toBe("/api/tasks/T1/cancel");
+    await expect(decision.getByText("状態が変わりました。最新の状態を確認してください。")).toBeVisible();
+
+    // 実行（P3-10）: phase_gate / rereview / execution_decompose / promote。
+    await execution.getByRole("button", { name: "続ける" }).click();
+    await expect.poll(last).toBe("/api/tasks/T1/execution/phase-gate");
+    await expect(execution.getByText("確定しました")).toBeVisible();
+    await click(execution, "再レビュー", "/api/tasks/T1/rereview");
+    await click(execution, "計画を作らせる", "/api/tasks/T1/execution/decompose");
+    await execution.getByText("成果物を文書に昇格").click();
+    await execution.getByLabel("成果物の名前").fill("report.md");
+    await execution.getByLabel("文書の path").fill("docs/report.md");
+    await execution.getByRole("button", { name: "昇格する" }).click();
+    await expect.poll(last).toBe("/api/tasks/T1/artifacts/promote");
+
+    // 5 tab: どれも見出しを保ち、横に溢れない。
+    const tabs: [string, string][] = [
+      ["timeline", "timeline-empty"],
+      ["changes", "task-changes"],
+      ["files", "files-tree"],
+      ["artifacts", "task-artifacts-empty"],
+      ["overview", "task-overview"],
+    ];
+    for (const [tab, testId] of tabs) {
+      await page.locator(`[data-tab='${tab}']`).click();
+      await expect(page.locator(`[data-tab='${tab}']`)).toHaveAttribute("aria-current", "page");
+      await expect(page.getByRole("heading", { level: 1, name: "タスクの詳細 T1" })).toBeVisible();
+      await expect(page.getByTestId(testId)).toBeVisible();
+      expect(await overflow(page)).toBe(0);
+    }
+    await page.goto(`${base}/tasks/T1?tab=changes`);
+    await expect(page.getByTestId("task-changes")).toContainText("src/long.ts");
+  });
+});
+
+test("parity: /tasks/:id/changes 差分・取り込み・merge", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await withDetail(changesFixtures(), async (base, daemon) => {
+    const sent: { path: string; body: unknown }[] = [];
+    await page.route(/\/api\/tasks\/T1\/changes\/web\/(integrate|pr\/merge)$/, async (route) => {
+      const request = route.request();
+      const pathname = new URL(request.url()).pathname;
+      const body = request.postDataJSON() as Record<string, unknown>;
+      sent.push({ path: pathname, body });
+      if (body.method === "discard" && body.confirm !== true)
+        return route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "validation", message: "confirm が必要です" }),
+        });
+      const state = pathname.endsWith("/pr/merge") ? "merged" : "conflict";
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          integration: { id: "I2", task_id: "T1", repo: "web", method: "merge", state, created_at: "", updated_at: "" },
+          child_task_id: state === "conflict" ? "T9" : null,
+        }),
+      });
+    });
+    const count = () => daemon.requests.filter((request) => request.path === "/api/v1/tasks/T1/changes").length;
+    await page.goto(`${base}/tasks/T1/changes`);
+    await expect(page.getByRole("heading", { level: 1, name: "変更 T1" })).toBeVisible();
+    await expect(page.getByTestId("integration-state")).toContainText("pr / open");
+
+    // 差分: 長い行は枠（pre）の中で横に scroll し、画面は溢れない。
+    await page.locator("[data-file='src/long.ts']").click();
+    const pre = page.getByTestId("change-diff-body");
+    await expect(pre).toContainText("xxxx");
+    expect(await pre.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+    expect(await overflow(page)).toBe(0);
+
+    // integrate: 衝突は 200 のまま結果と「衝突の解消」タスクを出し、changes を取り直す。
+    const before = count();
+    await page.getByLabel("取り込みの note（任意）").fill("入れます");
+    await page.getByRole("button", { name: "取り込む" }).click();
+    await expect(page.getByTestId("integrate-result")).toContainText("conflict");
+    await expect(page.getByTestId("integrate-result").getByRole("link", { name: "T9" })).toBeVisible();
+    expect(sent.at(-1)).toEqual({
+      path: "/api/tasks/T1/changes/web/integrate",
+      body: { method: "merge", note: "入れます" },
+    });
+    await expect.poll(count).toBeGreaterThan(before);
+
+    // discard は確認が無ければ daemon の 422 をそのまま出す。確認すれば confirm: true を送る。
+    await page.getByLabel("取り込みの方法").selectOption("discard");
+    await page.getByRole("button", { name: "取り込む" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "confirm が必要です" })).toBeVisible();
+    await page.getByLabel("取り返しがつかないことを確認した").check();
+    await page.getByRole("button", { name: "取り込む" }).click();
+    await expect.poll(() => sent.at(-1)?.body).toEqual({ method: "discard", note: "入れます", confirm: true });
+
+    // pr_merge: 開いている PR を Celeris で merge する。
+    await page.getByRole("button", { name: "Celeris で merge（squash）" }).click();
+    await expect.poll(() => sent.at(-1)?.path).toBe("/api/tasks/T1/changes/web/pr/merge");
+    await expect(page.getByTestId("integrate-result")).toContainText("merged");
+
+    // その task の取り込みのイベントだけが changes を取り直す。
+    const scoped = count();
+    daemon.sendEvent("task.event", row(20, "other", { type: "phase_integrated" }));
+    await page.waitForTimeout(1500);
+    expect(count()).toBe(scoped);
+    daemon.sendEvent("task.event", row(21, "T1", { type: "phase_integrated" }));
+    await expect.poll(count).toBeGreaterThan(scoped);
+  });
+});

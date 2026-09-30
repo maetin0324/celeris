@@ -1,8 +1,11 @@
 // /tasks/:id の tab（P3-08）。?tab= の search param で切り替え、取得を待たない。
-// P3-08 は overview と timeline。P3-13 が changes・files・artifacts を足す（この配列に並べるだけ）。
+// P3-08 は overview と timeline、P3-13 が changes・files・artifacts を足した（旧 GUI と同じ 5 tab）。
 export const TASK_DETAIL_TABS = [
   { key: "overview", label: "概要" },
   { key: "timeline", label: "timeline" },
+  { key: "changes", label: "変更" },
+  { key: "files", label: "作業ツリー" },
+  { key: "artifacts", label: "成果物" },
 ] as const;
 
 export type TaskDetailTab = (typeof TASK_DETAIL_TABS)[number]["key"];

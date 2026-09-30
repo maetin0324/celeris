@@ -15,9 +15,18 @@ export function TaskFilesScreen({ taskId, search }: { taskId: string; search: Fi
           タスクの詳細へ
         </Link>
       </p>
+      <TaskFilesPanel taskId={taskId} search={search} />
+    </ScreenFrame>
+  );
+}
+
+/** 作業ツリーの一覧と本文。/tasks/:id?tab=files（P3-13）も同じ部品を置く。 */
+export function TaskFilesPanel({ taskId, search }: { taskId: string; search: FilesSearch }) {
+  return (
+    <>
       <TreePane taskId={taskId} search={search} />
       {search.file ? <FilePane taskId={taskId} search={search} file={search.file} /> : null}
-    </ScreenFrame>
+    </>
   );
 }
 

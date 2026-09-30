@@ -7,9 +7,12 @@ describe("task detail tabs", () => {
   it("parses known tabs and falls back to overview", () => {
     expect(parseTaskDetailTab("timeline")).toBe("timeline");
     expect(parseTaskDetailTab("overview")).toBe("overview");
+    expect(parseTaskDetailTab("changes")).toBe("changes");
+    expect(parseTaskDetailTab("files")).toBe("files");
+    expect(parseTaskDetailTab("artifacts")).toBe("artifacts");
     expect(parseTaskDetailTab(undefined)).toBe("overview");
     expect(parseTaskDetailTab("bogus")).toBe("overview");
-    expect(TASK_DETAIL_TABS.map((tab) => tab.key)).toEqual(["overview", "timeline"]);
+    expect(TASK_DETAIL_TABS.map((tab) => tab.key)).toEqual(["overview", "timeline", "changes", "files", "artifacts"]);
   });
 });
 

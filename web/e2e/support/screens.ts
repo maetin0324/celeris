@@ -22,7 +22,7 @@ export const screens = [
   { path: "/tasks/new", fixture: "/tasks/new", heading: "タスクの作成", v3: true },
   { path: "/tasks/$id", fixture: "/tasks/T1", heading: "タスクの詳細 T1", v3: true },
   { path: "/tasks/$id/files", fixture: "/tasks/T1/files", heading: "作業ツリーと成果物 T1", v3: true },
-  { path: "/tasks/$id/changes", fixture: "/tasks/T1/changes", heading: "変更 T1" },
+  { path: "/tasks/$id/changes", fixture: "/tasks/T1/changes", heading: "変更 T1", v3: true },
   { path: "/tasks/$id/runs/$runId", fixture: "/tasks/T1/runs/R1", heading: "run ログ T1 / R1", v3: true },
   { path: "/plans/new", fixture: "/plans/new", heading: "計画の作成", v3: true },
   { path: "/daemon", fixture: "/daemon", heading: "daemon" },

@@ -86,7 +86,7 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 | R39 | `/console/new-conversation` | resource | `POST` 新しい会話 | 要 | なし | なし | なし | — | unit `console.server.test` | 3 / `console` | `parity: /console/new-conversation 開始` | 未着手 |
 | R40 | `/files/tasks/:id/runs/:runId/:name` | resource（file） | run のファイルの中継（Range / `offset` / `length` / `download`、許可リストのヘッダ、`nosniff`） | 要（401） | なし | なし | **file relay 本体**（R26 が使う） | — | unit `files.route.test` | 1 / `gateway-relay` | `parity: files runs 中継・Range・offset・不正 name` | 完了（3bc52d5） |
 | R41 | `/files/tasks/:id/artifacts/:idx` | resource（file） | 成果物の中継（同上） | 要（401） | なし | なし | **file relay 本体**（R02 R10 R20 R23 が使う） | — | unit `files.route.test` `artifacts.route.test` | 1 / `gateway-relay` | `parity: files artifacts 中継・download・不正 idx` | 完了（3bc52d5） |
-| R42 | `*` | 画面（404） | 未定義パスも middleware（Host・認証・CSRF・header）を通して 404 | 要 | なし | なし | なし | 404 画面からナビへ戻れる | e2e `g5`（`/no-such-page`） | 2 / `shell` | `parity: * 未定義パスの 404 と header` | 未着手 |
+| R42 | `*` | 画面（404） | 未定義パスも middleware（Host・認証・CSRF・header）を通して 404 | 要 | なし | なし | なし | 404 画面からナビへ戻れる | e2e `g5`（`/no-such-page`） | 2 / `shell` | `parity: * 未定義パスの 404 と header` | 完了（8bc8805） |
 
 補足:
 - 行ごとの SSE の invalidate 範囲（どのイベントでどの key を捨てるか）は ADR-0081 D6 の表が正。parity の確認では、

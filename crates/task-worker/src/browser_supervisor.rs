@@ -293,6 +293,18 @@ fn stop_runtime(
             _ => break,
         }
     }
+    // bwrap の子（pid namespace の init = bwrap-init）とその下は bwrap の回収後に PDEATHSIG と
+    // pid namespace の後始末で非同期に消える。高負荷ではここで戻るとまだ生きて見えるので、
+    // 記録した本人（pid+starttime）が全て消えるまで待つ。signal は追加で送らない。
+    let recorded: Vec<RecordedProcess> = procs.lock().map(|p| p.clone()).unwrap_or_default();
+    let deadline = Instant::now() + STOP_GRACE;
+    while Instant::now() < deadline
+        && recorded
+            .iter()
+            .any(|p| same_process_alive(p.pid, p.starttime))
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let _ = std::fs::remove_file(dir.join(format!("{session}.pid")));
     if let Ok(mut p) = procs.lock() {
         p.clear();

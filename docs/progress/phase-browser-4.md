@@ -198,3 +198,36 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM
   - 本番 admission は `Attested` 必須、同一 UID host では拒否のまま（ADR-0091）。別 UID/attested runtime が要る。
   - P4-A の `isolation_suite`・`egress_negative_suite` は件名のみで証拠化していない。runner の `--p4b-evidence` を実 ledger に対して走らせた記録はまだ無い（運用者が本番 ledger を作るときに実行する）。
   - `IdentityRestore` は `certify` 上は同じ証拠要件だが、worker の routing が要求する起動前能力は `CredentialUse`→`CredentialInjection` のみ。
+
+## P4-B integrate-gate 失敗の再検査（2026-09-30、WorkUnit gate-recheck）
+
+- 対象 tree: `21604dce`。integrate-gate が落ちた `67ef0515`（integrate wu/unlock）と `git diff --stat 21604dce 67ef0515` は差分ゼロ（同一 tree）。
+- 結論: **コード起因の失敗・タイミング依存の失敗は再現しなかった。原因は環境（sandbox 内の sccache）と判断する。** コード・試験の期待値・攻撃の合否基準・本番の拒否の意味・ADR-0093 の解放条件は変更していない（この unit の変更はこの節のみ）。
+- 環境要因の根拠: 工程の artifacts に残る gate の log（`cargo-test-workspace.log`・`cargo-clippy-workspace.log`）は、どちらもコンパイル前の `sccache rustc -vV` で `sccache: error: Operation not permitted (os error 1)`（exit status 2 → cargo exit 101）で終わっている。これは試験の結果ではなく、sandbox 内から sccache server（socket・`/var/lib/celeris/scratch` 配下）に触れられないために起きる。同じ場所の `*-unsandboxed.log` にある E0063（`browser_injection_attacks.rs:247` の `CredentialPolicy`）は 13:08 時点の古い tree のもので、`1810384a`（attacks-merge）で解消済み。
+- 再現手順（環境要因）:
+  1. Celeris が渡す `RUSTC_WRAPPER=/var/lib/celeris/scratch/bin/sccache` と `CARGO_TARGET_DIR` のまま、agent の Bash sandbox の中で `cargo test --workspace` または `cargo clippy --workspace -- -D warnings` を実行する。
+  2. `error: process didn't exit successfully: .../sccache .../rustc -vV (exit status: 2)` と `sccache: error: Operation not permitted (os error 1)` で exit 101 になる。
+  3. 同じコマンドを sandbox 外（同じ環境変数、`RUSTC_WRAPPER` を unset しない）で実行すると下記のとおり exit 0。
+  - 対処: gate 検査は sandbox 外で実行する（`RUSTC_WRAPPER`・`CARGO_TARGET_DIR` は上書きしない）。
+- 証拠コマンドと結果（すべて sandbox 外、Celeris が渡した `CARGO_TARGET_DIR`・`RUSTC_WRAPPER`）:
+  - `cargo test -p task-worker --test browser_injection_attacks -- --nocapture` → exit 0、2 passed。`ATTACK-A8-OK page-copied value discarded with redisplay_detected on 8 agent paths`、`ATTACK-A8n-OK`、`FINDING-A8` 無し。
+  - `cargo test -p celeris-credentiald` → exit 0（15 + 12 + 14 + 5 passed、0 failed）。
+  - `cargo test -p task-worker --test browser_cdp_sink --test browser_injection_wire --test browser_h3_wire --test browser_shared_cdp` → exit 0（各 2 passed）。
+  - `cargo test -p task-api --test browser_h3_injection` → exit 0（3 passed）。
+  - 負荷下の反復: `cargo test --workspace --no-fail-fast` を並行実行しながら、attacks（`--nocapture`）・`task-api browser_h3_injection`・`browser_shared_cdp`+`browser_cdp_sink` を各 **5 回**直列に実行 → **15/15 回 exit 0**、attacks は 5 回とも `ATTACK-A8-OK` 1 件・`FINDING-A8` 0 件。並行の workspace test も exit 0（3047 passed / 0 failed / 11 ignored）。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+- flaky: 実 browser 試験では検出されず、修正は入れていない。前節（unlock）に記録した `celeris --test instance_handoff` の高負荷時の失敗は今回の負荷下 workspace test でも再発しなかった（P4-B 範囲外、未修正のまま）。
+- 未解決: integrate-gate の失敗そのものの log（14:35 以降）は工程 artifacts に残っておらず、sccache 以外の原因を完全には排除できない。gate を sandbox 外で再実行すれば通る見込み。A1・A4・A13 と本番 admission（`Attested` 必須）は前節のまま。
+
+## P4-B gate-recheck 再試行（2026-09-30、run 01M3SEAJ）: `browser_runtime_supervisor` の 2 つの競合を修正
+
+- 前節の結論（環境要因のみ）は不十分だった。前回 run 後の check `cargo test --workspace && cargo clippy --workspace -- -D warnings` が exit 101 で落ち、原因は `task-worker --test browser_runtime_supervisor` の `runtime_processes_do_not_survive_controller_kill_restart_or_stop`（`not alive: RecordedProcess { role: "egress" }`）だった。sccache ではない。
+- 原因 1（試験側）: 記録には接続ごとの egress が載り、supervisor は 100ms ごとに採り直す。browser が fixture 取得に使った egress が `CTRL READY` の直後に終わると、書き直される前の記録に死んだ egress が一時的に残る。親はその記録を 1 回だけ読み、「全員生存」を即座に assert していた。修正: `read_full_runtime` で「4 役が揃い、載っている全 process が生存」を条件に（上限 30 秒）記録を読み直す。上限を過ぎた場合は従来どおり `assert_full_runtime` で判定する。期待値（4 役が記録されていて全員生存）は変えていない。
+- 原因 2（本番の競合、ADR-0088 追記）: 負荷下で反復すると 8 回中 1 回、(c) 正常停止が `CTRL STOPPED left=[bwrap-init]` で落ちた。`stop_runtime` は外側の bwrap を回収したところで戻っていた。ところが pid namespace の init（`bwrap-init`）とその下は、PDEATHSIG と namespace の後始末で非同期に消える。そのため `stop()` の「戻った時点で残存 0」が破れることがあった。修正: bwrap と egress を回収した後、記録にある本人（pid+starttime）が全て消えるまで `STOP_GRACE` を上限に待つ。signal は追加で送らない。停止の意味・signal の順序・起動時回収・記録の形式は変えていない。
+- 変えていないもの: 攻撃試験の期待値と合否基準、ADR-0093 の解放条件、本番の拒否の意味。
+- 証拠（すべて Celeris が渡した `CARGO_TARGET_DIR`・`RUSTC_WRAPPER`）:
+  - 修正前の負荷下反復（`cargo test --workspace` を並行実行）: supervisor 試験は 8 回中 7 回 exit 0、1 回が上記 (c) で失敗。attacks・`browser_shared_cdp`・`browser_cdp_sink`・`task-api browser_h3_injection` は各 5 回で 20/20 回 exit 0。attacks は毎回 `ATTACK-A8-OK` 1 件、`FINDING-A8` は 0 件。
+  - 本番修正後の負荷下反復: `cargo test -p task-worker --test browser_runtime_supervisor` を 10 回 → 10/10 回 exit 0。並行した `cargo test --workspace` も exit 0。
+  - gate: `cargo test --workspace && cargo clippy --workspace -- -D warnings` → exit 0（112 個の test binary、3047 passed、0 failed。clippy は警告 0）。
+  - `browser_cdp_sink`・`browser_injection_wire`・`browser_h3_wire`・`browser_shared_cdp` → 各 exit 0、2 passed。`browser_injection_attacks -- --nocapture` → exit 0、`ATTACK-A8-OK` あり、`FINDING-A8` 無し。`celeris-credentiald` → exit 0。`task-api --test browser_h3_injection` → exit 0、3 passed。
+- 未解決: 無し（前節の `instance_handoff` の高負荷時失敗は今回も再発しなかった）。

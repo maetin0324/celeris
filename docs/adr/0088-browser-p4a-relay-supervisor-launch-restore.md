@@ -208,3 +208,14 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
   live view は isolated runtime で出ない。同一 UID の限界（ADR-0087 結果）は残り、機密解放は別 UID の実証まで拒否。
 - 後続 unit: egress-relay（D1）、restore-binding（D5）、supervisor（D2）、daemon-reap（D3）、prod-launch（D4）、
   evidence（実 runtime 証跡と PROGRESS・手順書）。
+
+## 追記（2026-09-30、P4-B gate-recheck）: 停止時の残存 0 の待ち
+
+D2 の「正常停止（TERM → 猶予 → KILL → wait）で戻った時点で残存 0」は、bwrap（外側）の回収までしか待っていなかった。
+bwrap の子である pid namespace の init（記録上の `bwrap-init`）とその下は、bwrap の回収後に PDEATHSIG と
+pid namespace の後始末で非同期に消えるため、高負荷の評価器では `stop()` の直後に `bwrap-init` がまだ生きて
+見えることがあった（`browser_runtime_supervisor` の (c) が 8 回中 1 回 `left=[bwrap-init]` で失敗）。
+
+決定: `stop_runtime` は bwrap と egress を回収した後、記録にある本人（pid+starttime 一致）が全て消えるまで
+`STOP_GRACE` を上限に待ってから記録を消す。追加の signal は送らない（pid 再利用の保護は `same_process_alive`
+の starttime 照合のまま）。停止の意味・signal の順序・起動時回収・記録の形式は変えない。

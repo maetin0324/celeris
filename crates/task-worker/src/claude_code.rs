@@ -1083,8 +1083,8 @@ fn plan_limits_section(planner: &crate::protocol::ExecutionPlannerContext) -> St
     if planner.tree.is_some() {
         // ADR-0079 D3（Phase R2b）: /3 の計画の上限（検証で拒否）。
         out.push_str(&format!(
-            "- `stages`: 1 to {} stages. At most {} units per stage (leaves + child tasks; celeris-added \
-             integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"` that will \
+            "- `stages`: 1 to {} stages. At most {} units per stage (leaves + child tasks; units already done, \
+             `adopt` units, and celeris-added integration steps and repairs do not count). At most {} units with `\"kind\":\"task\"` that will \
              create a child (units already done and `adopt` units do not count). At most {} `decisions` \
              (plan-level and unit-level together).\n",
             l.tree.max_stages,
@@ -1391,7 +1391,10 @@ fn tree_replan_context_section(
     if !planner.preserve_done_keys.is_empty() {
         out.push_str(&format!(
             "These units are already done and carry over unchanged (celeris restores their adopted spec; you \
-             may omit them, and you must not change them): {}.\n\n",
+             may omit them): {}. The only thing you may change in a done unit is its `checks`: write the unit \
+             with a new non-empty `checks` list to replace a check that cannot hold after the stage \
+             integration (e.g. one that assumes a merge commit). The done unit is not re-run; its checks are \
+             re-run at the stage integration. Every other field is restored.\n\n",
             planner.preserve_done_keys.join(", ")
         ));
     }
@@ -1505,7 +1508,7 @@ fn replan_context_section(planner: &crate::protocol::ExecutionPlannerContext) ->
          \"modify\":[{{\"key\":\"<existing key>\", ...only the fields you are changing...}}],\
          \"remove\":[\"<key>\", ...]}}` to `{{artifacts}}/execution-plan.json`. Do NOT restate \
          WorkUnits you are not changing — they carry over automatically, including every WorkUnit \
-         that is already done (you cannot touch a done WorkUnit's spec anyway; see below). If a \
+         that is already done (you cannot change a done WorkUnit's spec except its `checks`; see below). If a \
          diff genuinely cannot express what you need, you may instead write the full \
          `\"schema\":\"{}\"` plan shape shown above (still subject to the done-WorkUnit rule).\n\n",
         task_core::EXECUTION_PLAN_SCHEMA
@@ -1535,9 +1538,13 @@ fn replan_context_section(planner: &crate::protocol::ExecutionPlannerContext) ->
     } else {
         out.push_str(&format!(
             "IMPORTANT: these WorkUnit keys are already done and MUST appear unchanged (same \
-             `key`, same spec — objective, depends_on, done_when, checks, context, harness, \
-             budget, outputs) in your new plan; do not edit, rename, remove, or reorder them. A \
-             plan that changes a done WorkUnit will be rejected: {}.\n\n",
+             `key`, same spec — objective, depends_on, done_when, context, harness, budget, \
+             outputs) in your new plan; do not edit, rename, remove, or reorder them. A plan that \
+             changes a done WorkUnit will be rejected: {}. The one exception is `checks`: you may \
+             replace a done WorkUnit's `checks` (in a diff: `\"modify\":[{{\"key\":\"<done key>\",\
+             \"checks\":[...]}}]`) when a check cannot hold after the phase integration (e.g. one \
+             that assumes a merge commit). The done WorkUnit is not re-run; its checks are re-run \
+             at the phase integration.\n\n",
             planner.preserve_done_keys.join(", ")
         ));
     }
@@ -6013,6 +6020,67 @@ echo '{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_t
                 assert!(prompt.contains(
                     "that will create a child (units already done and `adopt` units do not count)"
                 ));
+            }
+        }
+    }
+
+    /// ADR-0079 付記「R7-3」D1 / D5: replan の planner（/2・/3）に「done の unit で直せるのは `checks` だけ（統合で再実行）」
+    /// を伝え、/3 の段階あたりの上限の行は done と `adopt` を数えないと書く。
+    #[test]
+    fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
+        let task = crate::protocol::tests::sample_task();
+        let v2 = crate::protocol::ExecutionPlannerContext {
+            gate_rule_id: "human/explicit".to_string(),
+            max_work_units: 8,
+            parallel: true,
+            max_phases: 5,
+            max_plan_json_bytes: 24 * 1024,
+            replan: true,
+            current_plan_version: Some(1),
+            preserve_done_keys: vec!["merge-old-tip".to_string()],
+            ..Default::default()
+        };
+        let v3 = crate::protocol::ExecutionPlannerContext {
+            max_plan_json_bytes: 64 * 1024,
+            tree: Some(crate::protocol::TreePlannerContext {
+                depth: 2,
+                max_depth: 3,
+                remaining_depth: 1,
+                max_stages: 5,
+                max_units_per_stage: 6,
+                max_child_tasks_per_plan: 6,
+                ..Default::default()
+            }),
+            ..v2.clone()
+        };
+        for (name, planner, needles) in [
+            (
+                "v2",
+                v2,
+                vec![
+                    "The one exception is `checks`: you may replace a done WorkUnit's `checks`",
+                    "The done WorkUnit is not re-run; its checks are re-run at the phase integration.",
+                ],
+            ),
+            (
+                "v3",
+                v3,
+                vec![
+                    "The only thing you may change in a done unit is its `checks`",
+                    "The done unit is not re-run; its checks are re-run at the stage integration.",
+                    "At most 6 units per stage (leaves + child tasks; units already done, `adopt` units, and \
+                     celeris-added integration steps and repairs do not count)",
+                ],
+            ),
+        ] {
+            let context = RunContext {
+                execution_planner: Some(planner),
+                ..RunContext::default()
+            };
+            let prompt = build_prompt(&task, &context, "run-planner-replan", "artifacts");
+            assert!(prompt.contains("merge-old-tip"), "{name}");
+            for needle in needles {
+                assert!(prompt.contains(needle), "{name}: missing {needle:?}");
             }
         }
     }

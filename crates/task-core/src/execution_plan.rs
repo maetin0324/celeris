@@ -911,6 +911,12 @@ pub enum PlanValidationError {
         count: usize,
         max: usize,
     },
+    /// ADR-0079 付記「R7-3」D3: 退役した（superseded / cancelled の）行の key の再利用。`stage` は段階の統合 WU の key
+    /// `integrate-<stage>` が退役した統合 WU と重なった（前の版で消した段階の key を戻した）ときの段階。
+    RetiredKeyReused {
+        key: String,
+        stage: Option<String>,
+    },
     /// この深さの task の計画は kind task の unit を持てない（U-R1: `depth < max_depth` のときだけ）。
     ChildTaskTooDeep {
         key: String,
@@ -1015,7 +1021,7 @@ impl std::fmt::Display for PlanValidationError {
             PlanValidationError::DoneWorkUnitChanged { key } => {
                 write!(
                     f,
-                    "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}。done の WU の spec〈例: check のコマンド〉の誤りを直す必要があるなら、planner は直さずに質問で人に伝える: 人は `PUT /tasks/{{id}}/execution-plan`〈origin human の replan〉で done の WU の spec を上書きできる〈ADR-0079 R5b-fix1〉）"
+                    "done work unit {key} must not change on replan（done の WU は差分に書かない・全体形式なら旧版のまま写す。{DAEMON_ADDED_HINT}。planner が done の WU で直せるのは `checks` だけ〈段階の統合で再実行される。ADR-0079 R7-3〉。それ以外の欄の誤りを直す必要があるなら、planner は直さずに質問で人に伝える: 人は `PUT /tasks/{{id}}/execution-plan`〈origin human の replan〉で done の WU の spec を上書きできる〈ADR-0079 R5b-fix1〉）"
                 )
             }
             PlanValidationError::DoneWorkUnitStructureChanged { key, field } => {
@@ -1210,11 +1216,22 @@ impl std::fmt::Display for PlanValidationError {
             }
             PlanValidationError::TooManyUnitsInStage { stage, count, max } => write!(
                 f,
-                "stage {stage}: too many units: {count} > {max} (leaf + task; split the stage or group units into a child task)"
+                "stage {stage}: too many units: {count} > {max} (leaf + task; units already done and adopt units do not count; split the stage or group units into a child task)"
             ),
             PlanValidationError::TooManyChildTasks { count, max } => {
                 write!(f, "too many units with kind \"task\": {count} > {max}")
             }
+            PlanValidationError::RetiredKeyReused { key, stage: None } => write!(
+                f,
+                "work unit key {key:?} was used by a superseded work unit and cannot be reused; choose a new key（superseded の unit の key は再利用できない。新しい key を選ぶこと。ADR-0079 R7-3）"
+            ),
+            PlanValidationError::RetiredKeyReused {
+                key,
+                stage: Some(stage),
+            } => write!(
+                f,
+                "stage key {stage:?} was used by a stage removed in an earlier plan version (its integration work unit {key} is superseded) and cannot be reused; choose a new stage key（前の版で消した段階の key は再利用できない。新しい段階の key を選ぶこと。ADR-0079 R7-3）"
+            ),
             PlanValidationError::ChildTaskTooDeep {
                 key,
                 depth,
@@ -1330,10 +1347,19 @@ pub struct ValidatedPlan {
 
 /// ADR-0079 R5b-fix1: /3 の unit が、前の版の done の unit をそのまま写したものか（内部の形
 /// 〈[`PlanUnitSpec::to_work_unit_spec`]〉が done の spec と一致する）。
+/// ADR-0079 付記「R7-3」D1: `checks` だけが違う写しも done の写しとして扱う（planner の replan は done の unit の
+/// `checks` を書き換えられる）。
 fn is_done_carry_over(unit: &PlanUnitSpec, done_work_units: &[(String, WorkUnitSpec)]) -> bool {
     done_work_units
         .iter()
-        .any(|(k, s)| *k == unit.key && *s == unit.to_work_unit_spec())
+        .any(|(k, s)| *k == unit.key && same_except_checks(s, &unit.to_work_unit_spec()))
+}
+
+/// ADR-0079 付記「R7-3」D1: 2 つの WU の spec が `checks` の他は同じか。
+pub fn same_except_checks(a: &WorkUnitSpec, b: &WorkUnitSpec) -> bool {
+    let mut b = b.clone();
+    b.checks = a.checks.clone();
+    *a == b
 }
 
 /// replan の done の不変条件（D14 / D17）。done の WU は新しい計画に同じ key で残り、spec も変わらない。
@@ -1341,7 +1367,9 @@ fn is_done_carry_over(unit: &PlanUnitSpec, done_work_units: &[(String, WorkUnitS
 /// ADR-0079 R5b-fix1: 人の replan（`origin == Human`）だけは done の WU の spec を上書きできる（人がその仕事は
 /// 済んだと言い、記録した spec〈典型的には `checks` のコマンド〉を直す）。ただし消すこと（`DoneWorkUnitChanged`）と、
 /// 構造の欄（`kind` / `phase` = /3 の段階 / `depends_on`）を変えること（`DoneWorkUnitStructureChanged`）は人でも拒む。
-/// planner / repair / fixture の計画は従来どおり完全一致だけ。
+/// ADR-0079 付記「R7-3」D1: planner の計画は done の WU の **`checks` だけ**を書き換えられる（段階の統合で再実行される
+/// check。done の葉の check が統合で成り立たない形〈`HEAD^2` など〉だと、直せないまま同じ check で落ち続けた）。
+/// repair / fixture の計画は従来どおり完全一致だけ。
 fn done_carry_over_errors(
     work_units: &[WorkUnitSpec],
     done_work_units: &[(String, WorkUnitSpec)],
@@ -1356,6 +1384,9 @@ fn done_carry_over_errors(
             continue;
         };
         if *new_spec == done_spec {
+            continue;
+        }
+        if origin == PlanOrigin::Planner && same_except_checks(done_spec, new_spec) {
             continue;
         }
         if origin != PlanOrigin::Human {
@@ -1380,7 +1411,7 @@ fn done_carry_over_errors(
 
 /// ADR-0079 R5b-fix1: 検証を通った計画（`spec`。/3 は内部の形に写して比べる）で、spec が done の spec から
 /// 変わった done の WU（人の replan の上書き）と、変わった欄の名前（`WorkUnitSpec` の JSON の最上位の key、
-/// 昇順）。検証が planner の計画にこれを許さないので、planner の replan では常に空。
+/// 昇順）。planner の replan では `checks` だけを変えた done の WU（R7-3 D1。検証が他の欄の変更を許さない）。
 pub fn done_work_unit_overrides(
     spec: &ExecutionPlanSpec,
     done_work_units: &[(String, WorkUnitSpec)],
@@ -1964,8 +1995,18 @@ fn validate_v3(
             });
         }
     }
+    // ADR-0079 付記「R7-3」D5: 段階あたりの unit は生きた unit だけを数える（replan で持ち越す done の unit と、run を
+    // 費やさない `adopt` の unit を除く。R7-2 の `max_child_tasks_per_plan` と同じ考え方）。failed / running の行を
+    // 持ち越す unit は数える（D6）。
+    let done_keys: BTreeSet<&str> = done_work_units.iter().map(|(k, _)| k.as_str()).collect();
     for s in &spec.stages {
-        let count = spec.units.iter().filter(|u| u.stage == s.key).count();
+        let count = spec
+            .units
+            .iter()
+            .filter(|u| {
+                u.stage == s.key && u.adopt.is_none() && !done_keys.contains(u.key.as_str())
+            })
+            .count();
         if count > tree.max_units_per_stage {
             errors.push(PlanValidationError::TooManyUnitsInStage {
                 stage: s.key.clone(),
@@ -1978,7 +2019,6 @@ fn validate_v3(
     // ADR-0079 R7-2: replan で持ち越す done の unit（`done_work_units`）も数えない（子はもう終わっていて新しい子を
     // 作らない。R6-1 D5 の承認の材料と同じ数え方）。長く走る root が done の kind task を溜めると新しい unit を
     // 足せなくなっていた（本番「7 > 6」）。done でない行を持ち越す unit（failed の子を作り直す・走っている子）は数える。
-    let done_keys: BTreeSet<&str> = done_work_units.iter().map(|(k, _)| k.as_str()).collect();
     let task_units = spec
         .units
         .iter()
@@ -3080,6 +3120,47 @@ pub fn replan_done_work_units(
         .collect()
 }
 
+/// ADR-0079 付記「R7-3」D3: 新しい計画 `spec` が退役した（superseded / cancelled の）行の key を再利用していないか
+/// （`work_units` は `UNIQUE(task_id, key)`。採用の前に検証の理由として planner に返す）。`rows` はその task のすべての
+/// 行（退役したものを含む）。
+/// - 生きた行に無く退役した行が持つ key を、新しい計画の unit が使う（D5 の「superseded の key は再利用できない」）。
+/// - 新しい計画の段階の統合 WU の key（`integrate-<stage>`）が、生きた行に無く退役した統合 WU の行と重なる（前の版で消した
+///   段階の key を戻した）。以前はこれを調べず、採用が sqlite の `UNIQUE constraint failed` に落ちていた。
+pub fn retired_key_errors(
+    spec: &ExecutionPlanSpec,
+    rows: &[WorkUnitRow],
+) -> Vec<PlanValidationError> {
+    let live: BTreeSet<&str> = rows
+        .iter()
+        .filter(|u| u.status.is_active())
+        .map(|u| u.key.as_str())
+        .collect();
+    let retired: BTreeSet<&str> = rows
+        .iter()
+        .filter(|u| !u.status.is_active())
+        .map(|u| u.key.as_str())
+        .filter(|k| !live.contains(k))
+        .collect();
+    let mut errors = Vec::new();
+    for w in &internal_view(spec).work_units {
+        if retired.contains(w.key.as_str()) {
+            errors.push(PlanValidationError::RetiredKeyReused {
+                key: w.key.clone(),
+                stage: None,
+            });
+        }
+    }
+    for integ in integration_work_unit_specs(spec) {
+        if retired.contains(integ.key.as_str()) {
+            errors.push(PlanValidationError::RetiredKeyReused {
+                key: integ.key.clone(),
+                stage: integ.phase.clone(),
+            });
+        }
+    }
+    errors
+}
+
 /// ADR-0079 D9（Phase R2b）: /3 の replan（差分 `execution-plan-delta/1` は /2 の形しか持たないので /3 は計画の全体を
 /// 書く）で、`done` の unit を今の版（`active`）から持ち越す（純粋関数）。planner が done の unit を書かなかった・
 /// 書き写し損ねた（unit の gate で上げ下げされた spec を知らない）ときも、採用した spec のまま新しい版に入る:
@@ -3111,7 +3192,16 @@ pub fn carry_done_units_v3(
             new.stages.insert(at, stage.clone());
         }
         match new.units.iter_mut().find(|u| u.key == done.key) {
-            Some(existing) => *existing = done.clone(),
+            // ADR-0079 付記「R7-3」D1: planner が done の unit に空でない `checks` を書いていれば残す（段階の統合の
+            // check を直せる）。他の欄は採用した spec に戻す。`checks` を書かなかった（空の）写しは従来どおり採用した
+            // spec のまま（簡略に写した done の unit で check を黙って消さない）。
+            Some(existing) => {
+                let checks = std::mem::take(&mut existing.checks);
+                *existing = done.clone();
+                if !checks.is_empty() {
+                    existing.checks = checks;
+                }
+            }
             None => {
                 let at = new
                     .units
@@ -3492,13 +3582,27 @@ mod tests {
     }
 
     /// ADR-0079 R5b-fix1: planner（と repair）の replan は従来どおり done の spec を変えられない。
+    /// ADR-0079 付記「R7-3」D1: ただし planner は `checks` だけなら変えられる（この fixture の check だけの変更は
+    /// planner には通る。`objective` も変えれば拒否）。repair は `checks` だけでも拒否。
     #[test]
     fn planner_replan_still_rejects_a_changed_done_work_unit() {
         let (done_spec, p) = baseline_override_fixture();
         let done = [("baseline".to_string(), done_spec)];
-        for origin in [PlanOrigin::Planner, PlanOrigin::Repair] {
+        validate_with(
+            &p,
+            ExecutionLimits::default(),
+            &done,
+            ctx(PlanOrigin::Planner),
+        )
+        .expect("R7-3 D1: a planner may change only the checks of a done work unit");
+        let mut beyond_checks = p.clone();
+        beyond_checks.work_units[0].objective = "a rewritten objective for baseline".into();
+        for (origin, p) in [
+            (PlanOrigin::Planner, &beyond_checks),
+            (PlanOrigin::Repair, &p),
+        ] {
             let errs =
-                validate_with(&p, ExecutionLimits::default(), &done, ctx(origin)).unwrap_err();
+                validate_with(p, ExecutionLimits::default(), &done, ctx(origin)).unwrap_err();
             assert!(
                 errs.contains(&PlanValidationError::DoneWorkUnitChanged {
                     key: "baseline".into()
@@ -5239,6 +5343,256 @@ mod tests {
         assert!(
             errs.contains(&PlanValidationError::TooManyChildTasks { count: 7, max: 6 }),
             "{errs:?}"
+        );
+    }
+
+    /// ADR-0079 付記「R7-3」D1（リファクタ retry の子の `HEAD^2`）: planner の replan は done の WU の `checks` だけを
+    /// 書き換えられる（段階の統合で再実行される check）。他の欄の変更・repair の計画の `checks` の変更は従来どおり拒否。
+    #[test]
+    fn planner_replan_may_change_only_the_checks_of_a_done_unit() {
+        let mut done = spec("a", &[]);
+        done.checks = vec![WorkUnitCheck {
+            cmd: "git rev-parse HEAD^2".into(),
+            expect_exit: 0,
+        }];
+        let done_units = vec![("a".to_string(), done.clone())];
+        let mut fixed = done.clone();
+        fixed.checks = vec![WorkUnitCheck {
+            cmd: "! git grep -n '<<<<<<<'".into(),
+            expect_exit: 0,
+        }];
+        let planner = PlanContext::default();
+        let v = validate_with(
+            &plan(vec![fixed.clone(), spec("b", &["a"])]),
+            ExecutionLimits::default(),
+            &done_units,
+            planner,
+        )
+        .expect("the planner may rewrite the checks of a done unit");
+        assert_eq!(
+            done_work_unit_overrides(&v.spec, &done_units),
+            vec![("a".to_string(), fixed.clone(), vec!["checks".to_string()])]
+        );
+        let mut objective_changed = fixed.clone();
+        objective_changed.objective = "a different objective for a".into();
+        let errs = validate_with(
+            &plan(vec![objective_changed, spec("b", &["a"])]),
+            ExecutionLimits::default(),
+            &done_units,
+            planner,
+        )
+        .unwrap_err();
+        assert!(
+            errs.contains(&PlanValidationError::DoneWorkUnitChanged { key: "a".into() }),
+            "{errs:?}"
+        );
+        let repair = PlanContext {
+            origin: PlanOrigin::Repair,
+            depth: 1,
+        };
+        let errs = validate_with(
+            &plan(vec![fixed, spec("b", &["a"])]),
+            ExecutionLimits::default(),
+            &done_units,
+            repair,
+        )
+        .unwrap_err();
+        assert!(
+            errs.contains(&PlanValidationError::DoneWorkUnitChanged { key: "a".into() }),
+            "{errs:?}"
+        );
+        assert!(
+            PlanValidationError::DoneWorkUnitChanged { key: "a".into() }
+                .to_string()
+                .contains("`checks` だけ"),
+            "the rejection tells the planner what it may change"
+        );
+    }
+
+    /// ADR-0079 付記「R7-3」D1: /3 の replan で planner が done の unit に空でない `checks` を書けばそれを残し（他の欄は
+    /// 採用した spec に戻す）、書かなければ（省く・空）採用した spec のまま。検証も通る。
+    #[test]
+    fn carry_done_units_v3_keeps_the_planners_non_empty_checks() {
+        let stage = |key: &str| StageSpec {
+            key: key.into(),
+            kind: WorkUnitKind::Implement,
+            title: key.into(),
+            review: StageReview::None,
+        };
+        let mut merged = leaf("merge-old-tip", "s1");
+        merged.checks = vec![WorkUnitCheck {
+            cmd: "git rev-parse HEAD^2".into(),
+            expect_exit: 0,
+        }];
+        let active = ExecutionPlanSpec {
+            schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+            rationale: "v1".into(),
+            stages: vec![stage("s1")],
+            units: vec![merged.clone(), leaf("other", "s1")],
+            ..plan(vec![])
+        };
+        let done_keys: BTreeSet<String> = ["merge-old-tip".to_string(), "other".to_string()]
+            .into_iter()
+            .collect();
+        let mut rewritten = merged.clone();
+        rewritten.objective = "the planner paraphrased the objective".into();
+        rewritten.checks = vec![WorkUnitCheck {
+            cmd: "! git grep -n '<<<<<<<'".into(),
+            expect_exit: 0,
+        }];
+        let mut terse = leaf("other", "s1");
+        terse.checks = vec![];
+        let mut new = ExecutionPlanSpec {
+            rationale: "v2".into(),
+            units: vec![rewritten.clone(), terse, leaf("resolve-conflicts", "s1")],
+            ..active.clone()
+        };
+        carry_done_units_v3(&active, &mut new, &done_keys);
+        let get = |k: &str| new.units.iter().find(|u| u.key == k).unwrap().clone();
+        assert_eq!(get("merge-old-tip").objective, merged.objective, "restored");
+        assert_eq!(
+            get("merge-old-tip").checks,
+            rewritten.checks,
+            "the new checks stay"
+        );
+        assert_eq!(
+            get("other").checks,
+            leaf("other", "s1").checks,
+            "an empty copy does not drop the checks"
+        );
+        let done_units: Vec<(String, WorkUnitSpec)> = active
+            .units
+            .iter()
+            .map(|u| (u.key.clone(), u.to_work_unit_spec()))
+            .collect();
+        let v = validate_with(&new, tree_on(), &done_units, PlanContext::default())
+            .expect("a checks-only change of a done unit is valid");
+        let overrides = done_work_unit_overrides(&v.spec, &done_units);
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].0, "merge-old-tip");
+        assert_eq!(overrides[0].2, vec!["checks".to_string()]);
+    }
+
+    /// ADR-0079 付記「R7-3」D3（08:15Z の `UNIQUE constraint failed: work_units.task_id, key`）: 退役した行の key の
+    /// 再利用を検証の理由にする。unit の key と、前の版で消した段階の統合 WU の key（`integrate-<stage>`）の両方。
+    /// 生きた行の key（持ち越し）は当たらない。
+    #[test]
+    fn retired_key_errors_catch_unit_keys_and_removed_stage_keys() {
+        let row = |key: &str, phase: &str, kind: WorkUnitKind, status: WorkUnitStatus| {
+            let mut s = spec_v2(key, phase, &[]);
+            s.kind = kind;
+            WorkUnitRow::new(
+                crate::new_id(),
+                "t".into(),
+                "p1".into(),
+                0,
+                s,
+                status,
+                "2026-09-30T00:00:00Z".into(),
+            )
+        };
+        let rows = vec![
+            row("a", "build", WorkUnitKind::Implement, WorkUnitStatus::Done),
+            row(
+                "old",
+                "build",
+                WorkUnitKind::Implement,
+                WorkUnitStatus::Superseded,
+            ),
+            row(
+                "integrate-build",
+                "build",
+                WorkUnitKind::Integrate,
+                WorkUnitStatus::Pending,
+            ),
+            row(
+                "integrate-extra",
+                "extra",
+                WorkUnitKind::Integrate,
+                WorkUnitStatus::Superseded,
+            ),
+        ];
+        let ok = plan_v2(
+            vec![phase("build")],
+            vec![spec_v2("a", "build", &[]), spec_v2("new", "build", &[])],
+        );
+        assert!(retired_key_errors(&ok, &rows).is_empty());
+        let reuse = plan_v2(
+            vec![phase("build"), phase("extra")],
+            vec![
+                spec_v2("a", "build", &[]),
+                spec_v2("old", "build", &[]),
+                spec_v2("e", "extra", &[]),
+            ],
+        );
+        let errs = retired_key_errors(&reuse, &rows);
+        assert_eq!(
+            errs,
+            vec![
+                PlanValidationError::RetiredKeyReused {
+                    key: "old".into(),
+                    stage: None
+                },
+                PlanValidationError::RetiredKeyReused {
+                    key: "integrate-extra".into(),
+                    stage: Some("extra".into())
+                },
+            ]
+        );
+        assert!(errs[0].to_string().contains("choose a new key"));
+        assert!(errs[1].to_string().contains("choose a new stage key"));
+    }
+
+    /// ADR-0079 付記「R7-3」D5: `max_units_per_stage` は生きた unit だけを数える（持ち越す done の unit と `adopt` の
+    /// unit は数えない）。最初の計画（done なし）は従来どおり。
+    #[test]
+    fn units_per_stage_limit_counts_only_live_units() {
+        let stage = |key: &str| StageSpec {
+            key: key.into(),
+            kind: WorkUnitKind::Implement,
+            title: key.into(),
+            review: StageReview::None,
+        };
+        let v3 = |live: usize| {
+            let mut units: Vec<PlanUnitSpec> =
+                (0..3).map(|i| leaf(&format!("done-{i}"), "s1")).collect();
+            units.extend((0..live).map(|i| leaf(&format!("live-{i}"), "s1")));
+            ExecutionPlanSpec {
+                schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+                rationale: "r".into(),
+                stages: vec![stage("s1")],
+                units,
+                ..plan(vec![])
+            }
+        };
+        let done_of = |p: &ExecutionPlanSpec| -> Vec<(String, WorkUnitSpec)> {
+            p.units
+                .iter()
+                .filter(|u| u.key.starts_with("done-"))
+                .map(|u| (u.key.clone(), u.to_work_unit_spec()))
+                .collect()
+        };
+        let p = v3(6);
+        validate(&p, tree_on(), &done_of(&p)).expect("3 done + 6 live in one stage passes");
+        let p = v3(7);
+        let errs = validate(&p, tree_on(), &done_of(&p)).unwrap_err();
+        assert!(
+            errs.contains(&PlanValidationError::TooManyUnitsInStage {
+                stage: "s1".into(),
+                count: 7,
+                max: 6
+            }),
+            "{errs:?}"
+        );
+        let p = v3(4);
+        let errs = validate(&p, tree_on(), &[]).unwrap_err();
+        assert!(
+            errs.contains(&PlanValidationError::TooManyUnitsInStage {
+                stage: "s1".into(),
+                count: 7,
+                max: 6
+            }),
+            "the first plan counts every unit: {errs:?}"
         );
     }
 

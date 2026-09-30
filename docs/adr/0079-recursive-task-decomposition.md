@@ -168,9 +168,9 @@ Project（案件）… 粗い方向と常設の文脈だけ。計画を持たな
 |---|---|---|---|
 | `enabled` | `false`（R5b で人が `true` に） | plan/3 と子 task の生成を有効にする | — |
 | `max_depth` | **3**（1..=3 だけ。広げるには ADR） | root = 1。深さ d の task が子 task を持てるのは `d + 1 < max_depth` のとき（既定では root だけ）。leaf は常に最下段 | 検証で拒否 → D4 の決定の要求 |
-| `max_units_per_stage` | 6（leaf + task、統合 WU と repair は数えない） | 1 段階の unit 数 | 検証で拒否 |
+| `max_units_per_stage` | 6（leaf + task、統合 WU と repair は数えない） | 1 段階の生きた unit 数（replan で持ち越す done の unit と `adopt` を除く。failed / running を残せば数える。R7-3） | 検証で拒否 |
 | `max_stages` | 5（= `max_phases`） | 1 計画の段階の数 | 検証で拒否 |
-| `max_child_tasks_per_plan` | 6 | 1 計画で子を作る kind task の unit 数（`adopt` と replan で持ち越す done の unit を除く。R7-2） | 検証で拒否 |
+| `max_child_tasks_per_plan` | 6 | 1 計画で子を作る kind task の unit 数（`adopt` と replan で持ち越す done の unit を除く。R7-2。failed / running の子の unit を残せば数える。R7-3） | 検証で拒否 |
 | `max_parallel_child_tasks` | 2 | 1 つの親で同時に非終端の子 task の数 | 作らずに待つ（`pending` のまま） |
 | `max_tree_leaves` | **120**（R6-2 で 40 から） | 木の生涯で作る leaf（repair・統合を除く） | 決定の要求（limit） |
 | `max_tree_runs` | **400**（R6-2 で 120 から） | 木全体の worker / planner / repair の run（reviewer を除く。ADR-0016 の 100 を置き換える） | 決定の要求（limit） |
@@ -1764,3 +1764,62 @@ R7（回収の続き）の 2 つ目。**migration なし**（schema 34 のまま
 
 - `max_units_per_stage` は done の unit も数える（段階を長く使う根で当たりうるが、本番では当たっていない）。
 - check の指針はプロンプトの文だけで、検証（check の文字列の機械的な検査）はしない（LLM を dispatcher に入れない。誤検出の割に得が小さい）。
+
+## 付記: R7-3: 段階の統合の check は採用した版に従う、人の replan は統合の再実行より先、退役した key の再利用は検証で、段階の上限は生きた unit だけ（2026-09-30）
+
+R7（回収の続き）の 3 つ目。**migration なし**（schema 34 のまま）。新しい Event・設定キーは足していない。本番には触れていない。
+
+### 発端（本番の証拠。docs/progress/phase-R.md「昇格後の dogfood」、2026-09-30 05:00Z〜09:00Z）
+
+- リファクタ retry の子（01M3RMEW5X86JBSKH4PH7J4RVP）: 旧 tip を merge する葉の check `HEAD^2`（merge commit の形を前提にした check）が段階の
+  統合で落ちた。replan（v9）で衝突解消の葉が done になった後も、統合は**同じ `HEAD^2` の check** で再び落ちた（09:00Z）。
+  原因: 段階の統合の check は「その段階の生きた unit の行の `spec.checks`」（`start_integration`）で、`HEAD^2` は **done の葉の行**が持っていた。
+  planner の replan は done の unit の spec を 1 文字も変えられない（D14 の done 不変。/3 は `carry_done_units_v3` が planner の書いた
+  done の unit を採用した spec で黙って上書きする）ので、planner が check を直しても統合の check は v1 のまま残る。
+  統合 WU の行そのもの（`integrate-<stage>`）は replan のたびに spec を作り直していて、持ち越しが原因ではない。
+- 統合の失敗の質問に回答すると、人が先に `decompose {compound}`（replan の依頼）を入れていても「同じ check で統合を再実行して再び失敗」した
+  （web Phase 1 の子 05:00Z → 05:09Z、リファクタ retry の子 08:0xZ → 08:11Z）。
+- `UNIQUE constraint failed: work_units.task_id, key` で replan の採用が DB のエラーに落ちた（08:15Z）。
+- `leaf_too_large` の決定文が「score 7 ≥ 閾値 11」（08:18Z）。
+- R7-2 の残: `max_units_per_stage` は done の unit も数える。failed のまま残した task unit の数え方が明文化されていない。
+
+### 決定
+
+1. **D1 done の unit の `checks` は planner の replan でも書き換えられる**（段階の統合の check が採用した版に従う）:
+   - 検証の done 不変（`done_carry_over_errors`）は、planner の計画（`PlanOrigin::Planner`）が done の unit の **`checks` だけ**を変えることを
+     許す（他の欄の差は従来どおり `DoneWorkUnitChanged`）。repair / fixture の計画は従来どおり完全一致、人は R5b-fix1 のまま。
+   - /3 の `carry_done_units_v3` は、planner が done の unit に**空でない** `checks` を書いていればそれを残し、他の欄を採用した spec に戻す
+     （unit を省いた・`checks` を書かなかった写しは従来どおり採用した spec のまま = check も変えない。簡略な写しで check を黙って消さない。
+     /3 で check をすべて外したいなら、常に通る check に置き換える）。/2 の差分（`modify: [{key, checks}]`）・全体形式も同じ規則で通る。
+   - 採用（`task_ops::execution::replan`）は R5b-fix1 の上書きと同じ経路で done の行の `spec` を置き換え、`WorkUnitSpecOverridden{changed_fields:
+     ["checks"]}` を積む（状態・`plan_id`・`seq`・依存は元のまま。replay も同じ event から同じ行を作る）。unit の run はやり直さない。
+     新しい check は次の段階の統合（`start_integration` が段階の行の `spec.checks` を集める）で初めて走る。
+   - planner のプロンプト（/2・/3）と `DoneWorkUnitChanged` の拒否文に「done の unit で直せるのは `checks` だけ（統合で再実行される）」を書いた。
+   - 統合 WU の行の持ち越し（依存に統合の repair を残す、`done` の統合は触らない）は変えない。
+2. **D2 人の replan の依頼は統合の再実行より先**: `wu_dispatch_gate` は既に人の依頼（`pending_replan_request`）を回答による再開
+   （`just_answered` → `blocked(question)` の統合 WU を `ready`）より先に見て `RunPlanner{replan: true}` を返す。R7-3 の回帰試験（統合の
+   失敗 → 質問 → 人が decompose → 回答）で、planner の run が統合の再実行より先に起き、その後の統合は planner が直した check で通ることを
+   確かめた。本番の「同じ check で再実行」は planner の replan が採用された**後**の統合が done の葉の古い check を走らせたもの（D1）と読む。
+   dispatcher の順序は変えていない。
+3. **D3 退役した key の再利用は検証の理由にする**: `task_core::execution_plan::retired_key_errors(spec, rows)`（新しい
+   `PlanValidationError::RetiredKeyReused { key, stage }`）が、(a) 生きた行に無く superseded / cancelled の行が持つ key を新しい unit に
+   使う、(b) 新しい計画の段階の統合 WU の key `integrate-<stage>` が退役した統合 WU の行と重なる（前の版で消した段階の key を戻した）、を
+   拒否する。dispatcher は planner の計画の検証の直後（採用の前）にこれを当て、`invalid execution plan: …` として planner の再試行・
+   `plan_invalid` の経路に乗せる（文は「新しい key を選ぶ」）。`task_ops::execution::replan` も同じ関数で守る（人の `PUT` も同じ 400）。
+   以前は (a) だけを採用の中で調べ、(b) は `UNIQUE constraint failed` の sqlite エラーになっていた。
+4. **D4 `leaf_too_large` の決定文**: gate が `compound/score`（score ≥ 閾値）で compound にしたときだけ「score S ≥ 閾値 T」と書く。強制規則
+   （`compound/long-and-broad` = `expected_length=high` かつ `cross_cutting=high`）の compound は「score S は閾値 T 未満だが、規則 R は
+   score によらず compound と判定する（…）」と書く（`task_core::tree::gate_basis_text`）。本番の「score 7 ≥ 閾値 11」は後者。
+5. **D5 `max_units_per_stage` は生きた unit だけを数える**: 検証（`TooManyUnitsInStage`）と採用直後の止め（`plan_limit_holds` の
+   `UnitsPerStage`）は、replan で持ち越す done の unit（`done_work_units` / `done_keys`）と `adopt` の unit を数えない。R7-2 の
+   `max_child_tasks_per_plan` と同じ考え方（R5b-prep 付記 8. の「`adopt` は段階の unit 数には数える」を改める。`adopt` は run を費やさない）。
+   planner のプロンプトの上限の行と `config/celeris.example.toml` の注釈を直した。
+6. **D6 failed の unit の数え方（明文化、挙動は変えない）**: `max_units_per_stage` / `max_child_tasks_per_plan` の「数えない」は done と
+   `adopt` だけ。**failed / cancelled の子の unit、`running` の子の unit を新しい版に残せば数える**（残した failed の unit は replan で新しい子
+   〈attempt + 1〉を作る、`running` の子はまだ生きている）。数えたくなければ planner はその unit を計画から外す（superseded になる。key は
+   再利用できない = D3）。config 例の注釈と ADR の D3 の表に書いた。
+
+### 残したもの
+
+- done の unit の `checks` を書き換えても、その unit の worktree で check を走らせ直すことはしない（統合の check として走る）。
+- D2 は本番の event を直接見ていない（本番 DB には触れない）。試験で順序を確かめ、症状は D1 で説明した。再発したら event の列で確かめる。

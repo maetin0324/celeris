@@ -6361,6 +6361,21 @@ impl Dispatcher {
         } else {
             Err(format!("planner run did not finish cleanly: {describe}"))
         };
+        // ADR-0079 付記「R7-3」D3: replan の計画が退役した（superseded / cancelled の）行の key を再利用していれば、採用の
+        // 前に検証の理由として planner に返す（再試行・`plan_invalid` の経路）。以前は段階の統合 WU の key の重なりが
+        // 採用の中で sqlite の `UNIQUE constraint failed: work_units.task_id, key` に落ちていた（08:15Z）。
+        let validation = match validation {
+            Ok(v) if active_plan.is_some() => {
+                let rows = self.store.work_units_for(task_id)?;
+                let retired = task_core::execution_plan::retired_key_errors(&v.spec, &rows);
+                if retired.is_empty() {
+                    Ok(v)
+                } else {
+                    Err(task_ops::execution::describe_validation_errors(&retired))
+                }
+            }
+            other => other,
+        };
 
         let metrics = run_since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
@@ -34043,6 +34058,222 @@ mod tests {
             .find(|q| q.task.id == task.id)
             .expect("the question is in the inbox");
         assert_eq!(item.question, question);
+    }
+
+    /// ADR-0079 付記「R7-3」D2（web Phase 1 の子 05:00Z、リファクタ retry の子 08:0xZ）: 統合後の検査の失敗で人に
+    /// 聞いた後、人が replan を求め（`decompose {compound}` = `ExecutionHintSet{replan: true}`）てから質問に答えたら、
+    /// 次の dispatch は replan の planner run で、同じ check の統合 WU を先に再実行しない。
+    /// D1: planner が done の WU `b` の `checks` を差分（`modify`）で直すと、その後の統合は新しい check で走って通る
+    /// （以前は done の行の check が v1 のまま残り、統合は同じ check でもう一度落ちた = 本番の「同じ check で再実行」）。
+    #[tokio::test]
+    async fn a_pending_human_replan_runs_the_planner_before_retrying_the_integration() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = parallel_task(repo.path(), "true");
+        task.routing = Some(task_core::TaskRouting::default());
+        store.insert(&task).unwrap();
+        let mut b = v2_wu("b", "build", &[]);
+        b.checks = vec![task_core::WorkUnitCheck {
+            cmd: "test ! -f bad.txt".into(),
+            expect_exit: 0,
+        }];
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["build"],
+            vec![v2_wu("a", "build", &[]), b],
+        );
+        let delta = serde_json::json!({
+            "schema": task_core::execution_plan::EXECUTION_PLAN_DELTA_SCHEMA,
+            "base_version": 1,
+            "rationale": "the check of b does not hold after the integration; check the content instead",
+            "modify": [{"key": "b", "checks": [{"cmd": "test -f bad.txt", "expect_exit": 0}]}]
+        })
+        .to_string();
+        let adapter = Arc::new(
+            ParallelWuAdapter::new(Duration::from_millis(20))
+                .with_file("a", "bad.txt", "x")
+                .with_planner_output(delta),
+        );
+        let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+        d.config.execution.max_replans = 0;
+        d.config.execution.planner.adapter = "instant".to_string();
+        let s = store.clone();
+        let id = task.id;
+        assert!(
+            run_until(&mut d, 400, || s
+                .get(id)
+                .unwrap()
+                .is_some_and(|t| t.status == Status::Blocked))
+            .await,
+            "the task asks a human"
+        );
+        assert_eq!(
+            wu_status(&store, task.id, "integrate-build"),
+            Some(task_core::WorkUnitStatus::Blocked)
+        );
+        let integration_starts = |events: &[Event]| {
+            events
+                .iter()
+                .filter(|e| {
+                    matches!(e, Event::WorkUnitTransitioned { key, to: task_core::WorkUnitStatus::Running, .. }
+                        if key == "integrate-build")
+                })
+                .count()
+        };
+        let before = integration_starts(&events_of(&store, task.id));
+        let r = task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task.id,
+            task_core::ExecutionMode::Compound,
+            "human",
+            Some("統合の check を内容の検査に置き換える".to_string()),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        assert!(r.replan);
+        task_ops::gate::answer(
+            store.as_ref(),
+            task.id,
+            "replan してください".to_string(),
+            None,
+        )
+        .unwrap();
+        let is_planner_start = |e: &Event| {
+            matches!(
+                e,
+                Event::WorkerStarted {
+                    role: Some(task_core::RunRole::Planner),
+                    ..
+                }
+            )
+        };
+        assert!(
+            run_until(&mut d, 400, || events_of(&s, id)
+                .iter()
+                .any(is_planner_start))
+            .await,
+            "the human's replan request runs the planner"
+        );
+        let events = events_of(&store, task.id);
+        let planner = events.iter().position(is_planner_start).unwrap();
+        assert_eq!(
+            integration_starts(&events[..planner]),
+            before,
+            "the integration is not retried with the same checks before the planner"
+        );
+        assert!(
+            run_until(&mut d, 600, || wu_status(&s, id, "integrate-build")
+                == Some(task_core::WorkUnitStatus::Done))
+            .await,
+            "after the replan the integration runs the corrected checks and passes: {:#?}",
+            events_of(&store, task.id)
+                .iter()
+                .rev()
+                .take(20)
+                .collect::<Vec<_>>()
+        );
+        let b = store
+            .work_units_for(task.id)
+            .unwrap()
+            .into_iter()
+            .find(|u| u.key == "b")
+            .unwrap();
+        assert_eq!(b.status, task_core::WorkUnitStatus::Done, "b is not re-run");
+        assert_eq!(b.spec.checks[0].cmd, "test -f bad.txt");
+        assert_eq!(
+            integration_starts(&events_of(&store, task.id)),
+            before + 1,
+            "exactly one integration after the replan"
+        );
+    }
+
+    /// ADR-0079 付記「R7-3」D3（08:15Z）: planner の replan が前の版で消した段階の key を戻すと（統合 WU の key
+    /// `integrate-<stage>` が退役した行と重なる）、採用の中の sqlite の `UNIQUE constraint failed` ではなく、検証の理由
+    /// 「新しい段階の key を選ぶ」として planner に返る（`invalid execution plan: …`、再試行の経路）。
+    #[tokio::test]
+    async fn a_replan_reusing_a_removed_stage_key_is_rejected_as_an_invalid_plan() {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let root = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut task = parallel_task(repo.path(), "true");
+        task.routing = Some(task_core::TaskRouting::default());
+        store.insert(&task).unwrap();
+        adopt_v2_plan(
+            &store,
+            task.id,
+            &["build", "extra"],
+            vec![v2_wu("a", "build", &[]), v2_wu("e", "extra", &[])],
+        );
+        // v2: extra の段階を消す（e と integrate-extra は superseded）。
+        let mut build_only = store.execution_plan_active(task.id).unwrap().unwrap().spec;
+        build_only.work_units.truncate(1);
+        build_only.phases.truncate(1);
+        task_ops::execution::replan(
+            store.as_ref(),
+            task.id,
+            build_only.clone(),
+            "drop extra".to_string(),
+            task_core::PlanOrigin::Fixture,
+            None,
+            task_core::ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        // planner は extra の段階を新しい unit（e2）で戻す計画を 2 回書く。
+        let mut back = build_only;
+        back.phases.push(task_core::PhaseSpec {
+            key: "extra".into(),
+            kind: task_core::WorkUnitKind::Implement,
+            title: "extra".into(),
+        });
+        back.work_units.push(v2_wu("e2", "extra", &[]));
+        let json = serde_json::to_string(&back).unwrap();
+        let adapter = Arc::new(
+            ParallelWuAdapter::new(Duration::from_millis(5))
+                .with_planner_output(json.clone())
+                .with_planner_output(json),
+        );
+        let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+        d.config.execution.planner.adapter = "instant".to_string();
+        task_ops::regate::set_execution_mode(
+            store.as_ref(),
+            task.id,
+            task_core::ExecutionMode::Compound,
+            "human",
+            Some("extra をやり直す".to_string()),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        let s = store.clone();
+        let id = task.id;
+        let rejected = |e: &Event| {
+            matches!(e, Event::WorkerFinished { role: Some(RunRole::Planner), outcome, .. }
+                if outcome.contains("invalid execution plan") && outcome.contains("choose a new stage key"))
+        };
+        assert!(
+            run_until(&mut d, 400, || events_of(&s, id).iter().any(rejected)).await,
+            "the planner gets a validation reason: {:#?}",
+            events_of(&store, task.id)
+                .iter()
+                .filter(|e| matches!(e, Event::WorkerFinished { .. }))
+                .collect::<Vec<_>>()
+        );
+        let events = events_of(&store, task.id);
+        assert!(
+            !events
+                .iter()
+                .any(|e| format!("{e:?}").contains("UNIQUE constraint failed")),
+            "not a sqlite error"
+        );
+        assert_eq!(
+            store.execution_plan_list(task.id).unwrap().len(),
+            2,
+            "nothing adopted"
+        );
     }
 
     /// ADR-0074 F5-fix（不具合 2 の再現、タスク 01M3HS2E19BRC021ZXMDZANP5B）: 2 工程の v2 で

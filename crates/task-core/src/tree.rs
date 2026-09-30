@@ -905,7 +905,7 @@ pub struct LimitHold {
 ///
 /// 前の束で止めた unit は後の束に入れない（1 つの unit は 1 件の決定で止まる）。`extra_held` は unit の
 /// gate が既に止めた unit（`leaf_too_large`。数えるが止める束には入れない）。`done_keys` は replan で持ち越す
-/// done の unit（子 task の数に入れない。検証と同じ。ADR-0079 R7-2）。
+/// done の unit（子 task の数に入れない。検証と同じ。ADR-0079 R7-2。段階あたりの unit の数にも入れない。R7-3）。
 pub fn plan_limit_holds(
     spec: &crate::execution_plan::ExecutionPlanSpec,
     limits: &TreeLimits,
@@ -967,10 +967,14 @@ pub fn plan_limit_holds(
             limits.max_stages as u64,
         );
     }
-    // 段階あたりの unit。
+    // 段階あたりの unit。ADR-0079 付記「R7-3」D5: 生きた unit だけ（持ち越す done の unit と `adopt` の unit を除く。
+    // 検証の `TooManyUnitsInStage` と同じ）。
     for stage in &spec.stages {
-        let in_stage: Vec<&crate::execution_plan::PlanUnitSpec> =
-            spec.units.iter().filter(|u| u.stage == stage.key).collect();
+        let in_stage: Vec<&crate::execution_plan::PlanUnitSpec> = spec
+            .units
+            .iter()
+            .filter(|u| u.stage == stage.key && u.adopt.is_none() && !done_keys.contains(&u.key))
+            .collect();
         if in_stage.len() > limits.max_units_per_stage {
             let units = in_stage
                 .iter()
@@ -1274,6 +1278,29 @@ pub fn limit_decision(
     }
 }
 
+/// ADR-0079 付記「R7-3」D4: gate が compound と判定した根拠の文（決定文に使う）。score が閾値以上
+/// （`compound/score`）なら「score S ≥ 閾値 T」、強制規則（`compound/long-and-broad` など）なら score が閾値に
+/// 届いていなくても規則で compound になったことを書く（以前は常に「score S ≥ 閾値 T」と書き、「score 7 ≥ 閾値 11」の
+/// ような誤った文になっていた）。
+pub fn gate_basis_text(
+    decision: &crate::execution_gate::ExecutionGateDecision,
+    threshold: u32,
+) -> String {
+    let rule = decision.rule_id.as_str();
+    let score = decision.score;
+    if i64::from(score) >= i64::from(threshold) {
+        return format!("gate {rule}、score {score} ≥ 閾値 {threshold}");
+    }
+    let why = match rule {
+        "compound/long-and-broad" => "expected_length=high かつ cross_cutting=high",
+        "human/explicit" => "人の明示",
+        _ => "score 以外の規則",
+    };
+    format!(
+        "gate {rule}: score {score} は閾値 {threshold} 未満だが、この規則は score によらず compound と判定する（{why}）"
+    )
+}
+
 /// D4 (3)（Phase R2a）: `kind: leaf_too_large` の決定の要求（compound な leaf を子 task にできない深さ）。
 pub fn leaf_too_large_decision(
     gate: &UnitGate,
@@ -1287,8 +1314,9 @@ pub fn leaf_too_large_decision(
         key: format!("leaf_too_large:{}", gate.unit_key),
         kind: DecisionKind::LeafTooLarge,
         question: format!(
-            "unit {}「{unit_title}」は 1 run に収まらない見込み（gate {}、score {} ≥ 閾値 {}）ですが、この深さでは子 task にできません。どうしますか",
-            gate.unit_key, gate.decision.rule_id, gate.decision.score, gate.threshold
+            "unit {}「{unit_title}」は 1 run に収まらない見込み（{}）ですが、この深さでは子 task にできません。どうしますか",
+            gate.unit_key,
+            gate_basis_text(&gate.decision, gate.threshold)
         ),
         options: vec![
             DecisionOption {
@@ -2631,6 +2659,78 @@ mod tests {
         assert_eq!(holds.len(), 1);
         assert_eq!(holds[0].limit, TreeLimitKind::ChildTasks);
         assert_eq!(holds[0].units, vec!["c6".to_string()]);
+    }
+
+    /// ADR-0079 付記「R7-3」D5: `max_units_per_stage` の止めは生きた unit だけを数える（持ち越す done の unit と
+    /// `adopt` の unit を除く。検証の `TooManyUnitsInStage` と同じ）。done を渡さなければ従来どおり 7 つ目を止める。
+    #[test]
+    fn plan_limit_holds_count_only_live_units_per_stage() {
+        let limits = enabled();
+        let none = std::collections::BTreeSet::new();
+        let mut units: Vec<PlanUnitSpec> = (0..3)
+            .map(|i| leaf_spec(&format!("done-{i}"), "s1", false))
+            .collect();
+        units.extend((0..6).map(|i| leaf_spec(&format!("live-{i}"), "s1", false)));
+        let mut adopted = task_spec("adopted", "s1", false);
+        adopted.adopt = Some(TaskId::new());
+        units.push(adopted);
+        let p = plan(&[("s1", "implement")], units);
+        let done: std::collections::BTreeSet<String> = [
+            "done-0".to_string(),
+            "done-1".to_string(),
+            "done-2".to_string(),
+        ]
+        .into();
+        assert!(
+            plan_limit_holds(&p, &limits, 1, 0, &none, &none, &done)
+                .iter()
+                .all(|h| h.limit != TreeLimitKind::UnitsPerStage),
+            "3 done + 1 adopt + 6 live: only the 6 live units count"
+        );
+        let mut p7 = p.clone();
+        p7.units.push(leaf_spec("live-6", "s1", false));
+        let holds = plan_limit_holds(&p7, &limits, 1, 0, &none, &none, &done);
+        let per_stage: Vec<&LimitHold> = holds
+            .iter()
+            .filter(|h| h.limit == TreeLimitKind::UnitsPerStage)
+            .collect();
+        assert_eq!(per_stage.len(), 1);
+        assert_eq!(per_stage[0].units, vec!["live-6".to_string()]);
+        assert_eq!((per_stage[0].count, per_stage[0].max), (7, 6));
+    }
+
+    /// ADR-0079 付記「R7-3」D4（08:18Z「score 7 ≥ 閾値 11」）: `leaf_too_large` の決定文は gate の根拠を正しく書く。
+    /// 強制規則の compound は「score は閾値未満だが規則で compound」、score による compound だけ「score ≥ 閾値」。
+    #[test]
+    fn leaf_too_large_text_states_the_real_gate_basis() {
+        let raised_by = crate::decision::DecisionRaisedBy {
+            task_id: TaskId::new(),
+            run_id: None,
+            origin: crate::decision::DecisionOrigin::Daemon,
+        };
+        let parent = parent_task(30);
+        let mut g = gate_of(&parent, 3, &leaf_spec("a", "s1", true), &[]);
+        g.decision.rule_id = "compound/long-and-broad".into();
+        g.decision.score = 7;
+        g.threshold = 11;
+        let d = leaf_too_large_decision(&g, "Leaf a", vec![], raised_by.clone());
+        assert!(!d.question.contains('≥'), "{}", d.question);
+        assert!(
+            d.question.contains(
+                "gate compound/long-and-broad: score 7 は閾値 11 未満だが、この規則は score によらず compound と判定する（expected_length=high かつ cross_cutting=high）"
+            ),
+            "{}",
+            d.question
+        );
+        g.decision.rule_id = "compound/score".into();
+        g.decision.score = 12;
+        let d = leaf_too_large_decision(&g, "Leaf a", vec![], raised_by);
+        assert!(
+            d.question
+                .contains("（gate compound/score、score 12 ≥ 閾値 11）"),
+            "{}",
+            d.question
+        );
     }
 
     fn run(task: TaskId, role: RunIndexRole, tokens: (u64, u64), cost: Option<f64>) -> RunRow {

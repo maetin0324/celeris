@@ -5,7 +5,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5]
 ---
 
 - 状態: **P4-A/B/C の受け入れは未完**。runtime 方式・H7 は人の回答を採用済み（ADR-0085）。旧 broker IPC の秘密返却を廃止。実 runtime・CDP sink・backend 適合は継続実装が必要。本番未昇格。
-- 更新: 2026-09-29（run 01M3QGRCAHDK1AB4R9WBHJ9XHZ: ADR-0087、P4-A 実 runtime）
+- 更新: 2026-09-30（run 01M3RCSFK5ZTC4JV0YJF17DV7C: P4-A D3/D4 配線）
 - ADR-0087: [same-uid bwrap runtime](../adr/0087-browser-p4a-same-uid-bwrap-runtime.md)
 - ADR: [ADR-0084](../adr/0084-browser-phase4-isolation-injection-routing.md) D6、[ADR-0085](../adr/0085-browser-phase4-runtime-selection.md)
 
@@ -13,7 +13,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5]
 
 | 行 | 判定 | 証拠・限界 |
 |---|---|---|
-| P4-A isolated runtime | 一部達成（決定 p4a-uid: 同一 host UID）。実 bwrap runtime・事実採取・分離・orphan 回収・復元結合は実装済み。egress proxy と netns の接続は未 | `cargo test -p task-worker --test browser_runtime_isolated` → 4 passed / 1 ignored（helper）。実 chrome-headless-shell（agent-browser の browser、playwright 1243）を bwrap で起動し CDP pipe で `Browser.getVersion` 応答、host 側 `/proc` で 6 namespace 別・root ro・書ける mount は `/session` だけ・NoNewPrivs=1・CapEff/CapPrm=0・uid_map `1000 1001 1`・netns TCP LISTEN 0 件。同 spec の probe で broker/control socket・`/run/user`・host tmp 不可視、`/usr`・`/etc` 書込不可、host loopback fixture・10.0.0.1・::1・192.0.2.53:53 へ接続不可。controller SIGKILL 後に bwrap・sandbox 内 process が消える（実 process）。記録からの再起動回収は starttime 一致だけを殺す。`verify_isolation` は弱めず、違反は `SameUid` だけ → attestation 無し → 復元拒否。egress proxy 経由の fixture 到達は未試験。 |
+| P4-A isolated runtime | 一部達成（決定 p4a-uid: 同一 host UID）。実 bwrap runtime・事実採取・分離・daemon 起動時 orphan 回収・production worker の egress 接続は実装済み。復元結合は別 WorkUnit が担当 | `cargo test -p task-worker --test browser_runtime_isolated` → 4 passed / 1 ignored（helper）。実 chrome-headless-shell（agent-browser の browser、playwright 1243）を bwrap で起動し CDP pipe で `Browser.getVersion` 応答、host 側 `/proc` で 6 namespace 別・root ro・書ける mount は `/session` だけ・NoNewPrivs=1・CapEff/CapPrm=0・uid_map `1000 1001 1`・netns TCP LISTEN 0 件。同 spec の probe で broker/control socket・`/run/user`・host tmp 不可視、`/usr`・`/etc` 書込不可、host loopback fixture・10.0.0.1・::1・192.0.2.53:53 へ接続不可。controller SIGKILL 後に bwrap・sandbox 内 process が消える（実 process）。記録からの再起動回収は starttime 一致だけを殺す。`verify_isolation` は弱めず、違反は `SameUid` だけ → attestation 無し → 復元拒否。D3 の実 daemon 起動試験 1 passed、D4 の run_with_executable 実 chrome/egress/fixture 試験 1 passed（下記）。 |
 | P3-A identity 復元（隔離下のみ） | 未達。API の契約テストだけ | `cargo test -p task-api restore_is` の前回結果は2 passed。`restore_isolated` は稼働中 runtime に未結合。`--restore` / `--state` / `--profile` は利用しない。 |
 | P4-B stronger injection | 未達。攻撃の純関数テストだけ | `cargo test -p celeris-credentiald injection` の前回結果は6 passed。実 CDP sink / IPC peer UID role は未接続。旧 plugin bridge と resolve.sock 自体を固定拒否に変更。有効 lease を持つ別 worker process の実 IPC 拒否を検証。実注入は未達。 |
 | H3 観測停止の維持 | 実装維持。機密起動は拒否 | `cargo test -p task-worker browser --lib` → 31 passed。`browser_auth_section_forward_events_drops_progress_artifact_and_live` と LiveEmitter の抑止試験を含む。API 結合テストの store auth_section / takeover 拒否も成功。実注入中の end-to-end 検証はP4-A/B待ち。 |
@@ -40,11 +40,11 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5]
 
 ## 未解決
 
-- P4-A（run 01M3QGRCAHDK1AB4R9WBHJ9XHZ 時点）: netns 内 loopback listener → host unix socket → 接続ごとの `celeris-browser-egress`（継承 FD 3）の中継が未実装。browser は `--proxy-server=http://127.0.0.1:3128` を指すが netns 内に listener が無いので、現状は loopback 以外へ一切出られない（閉じた側）。「fixture へは proxy 経由でだけ届く」正例は未試験。production の browser 起動経路（agent-browser 経由）の切替も未。agent-browser 0.38.1 本体は host に無く（`which agent-browser` 空）、その browser（chrome-headless-shell）で代えた。
+- P4-A: egress relay と production 起動経路は D1〜D4 で接続し、ローカル fixture 正例を検証済み。実 agent-browser 0.38.1 本体は host に無いため、その browser（chrome-headless-shell）を起動 script から使って検証した。
 - P4-A 別 host UID: 同一 UID のため host 側の同 UID process からの ptrace・/proc 参照は防げない。機密解放は拒否のまま。手順書 [browser-isolated-runtime-subuid](../ops/browser-isolated-runtime-subuid.md)。
 - 注意: `PR_SET_PDEATHSIG` は起動した thread の終了でも発火する。tokio の blocking thread から起動すると thread 終了で runtime が殺される。production 配線では専用の長寿命 thread から起動すること。
 
-- P4-A: 実 bwrap/subuid browser 起動・事実採取・broker/CDP/IPC 分離・namespace と新 egress transport の接続・runtime orphan 回収・稼働中隔離 session への identity 復元。subuid mapping はこの run の親 user namespace の範囲外で EPERM。proxy 部分の成功だけで受け入れない。
+- P4-A: 同一 host UID の残存リスク、D4 action の channel message と実装の差、実 agent-browser 0.38.1 本体での検証、稼働中隔離 session への identity 復元。subuid mapping はこの run の親 user namespace の範囲外で EPERM。D5 は別 WorkUnit が担当する。
 - P4-B: P4-A の後、別 injection-only IPC の SO_PEERCRED role/session 認可・実 CDP sink・実攻撃負例・H3 の端から端の検証。旧 endpoint は再開しない。
 - P4-C: 選択済み specialist と既存 loop を実 fixture runner/同一 task 評価へ接続し、能力を失わない fallback を実行経路で検査する。機密機能は P4-A/B の実適合まで拒否する。
 - 3件の継続小タスクを run の `delegate.json` に提案した。P4-B は P4-A に依存し、公開能力の P4-C は独立。採用・実行・完了はこの run では確認できていない。提案を実装済みとして数えず、親の受け入れ条件0/1/2は未達のままとする。
@@ -73,3 +73,11 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5]
 - `/etc` を丸ごと bind した初回は `verify_isolation` が `BrokerVisible{/etc}`（`/etc/celeris` の親）で拒否した。検査を緩めず bind を file 単位に絞って解消。
 - 最終検査: `cargo test --workspace` → exit 0（2977 passed / 0 failed / ignored 8）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0（workspace の `--all-targets` は既存 `task-api/tests/browser_e2e.rs` の type_complexity で失敗、本変更外）。
 - 本番昇格・本番設定変更・内部 origin 追加はしていない。
+
+## P4-A D3/D4 production 配線（run 01M3RCSFK5ZTC4JV0YJF17DV7C）
+
+- D3: `celeris::run` の `Started::Running` 直後、`set_orphan_takeover` と同じ起動経路で `start_instance` を呼び、`browser-runtime/<instance_id>/` の記録を starttime と照合して回収する。`Duplicate` と `--mode verify` は回収しない。`cargo test -p celeris --test browser_startup_reap -- --nocapture` → 1 passed。実 daemon 起動関数を経て死んだ instance の記録を消し、生きた instance の runtime を維持した。
+- D4: `browser::run` / `run_with_executable` は resolver・bwrap・sandboxd・egress が揃わなければ起動前に `isolated_runtime_unavailable`。host 直接起動への fallback はない。shim の `action.sock` は sandbox の外に置き、worker 側で policy を再検査する。現在の sandboxd への action 配送は `/session/actions` のファイルキューであり、ADR-0088 D4 に書かれた channel の別 message 種別とは実装が異なる。この差は解消が必要。
+- 実結合: `cargo test -p task-worker --lib browser::tests::production_action_path_reaches_fixture_through_real_browser_and_egress -- --nocapture` → 1 passed。`unshare --user --map-root-user --net` の試験用 netns 内で公開扱いの 93.184.216.34 を loopback に設定し、ローカル DNS/HTTPS fixture を動かした。`run_with_executable` から shim → action.sock → sandboxd → 実 chrome-headless-shell → sandboxd relay → 実 celeris-browser-egress → fixture の本文を取得し、禁止 flag は exit 2 で拒否した。外部ネットワークには接続していない。実 agent-browser 0.38.1 本体はこの host に無く、起動 script が同梱 chrome-headless-shell を呼んだ。
+- 検査: `cargo test --workspace` → exit 0（新試験を含む）。`cargo clippy --workspace -- -D warnings`、`cargo fmt --all --check`、`git diff --check` → 各 exit 0。
+- D1/D2 は変更していない。H3/auth_section・機密要求の起動前拒否・旧 IPC 拒否も維持。本番昇格・本番設定変更・内部 origin 追加はしていない。同一 host UID は決定 p4a-uid の制約で、`SameUid` の identity 復元拒否は続く。D5 の復元結合は別 WorkUnit が担当する。

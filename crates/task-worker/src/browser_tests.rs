@@ -824,6 +824,272 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
     assert!(!temp.path().join("runs/refused").exists());
 }
 
+// Re-exec this unit test in a private network namespace. Its public-looking fixture address
+// has no route to the outside world; only the host-side egress process can reach it.
+#[test]
+fn production_action_path_reaches_fixture_through_real_browser_and_egress() {
+    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
+        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
+        return;
+    }
+    if std::env::var("CELERIS_BROWSER_ACTION_INNER").is_ok() {
+        return;
+    }
+    let out = std::process::Command::new("/usr/bin/unshare")
+        .args(["--user", "--map-root-user", "--net", "--"])
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "browser::tests::production_action_path_inner",
+            "--nocapture",
+        ])
+        .env("CELERIS_BROWSER_ACTION_INNER", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success()
+            && stdout.contains("1 passed")
+            && stderr.contains("ACTION-EGRESS positive"),
+        "real action runtime failed: {stdout}\n{stderr}"
+    );
+}
+
+fn fixture_dns(listener: std::net::TcpListener) {
+    use std::io::{Read, Write};
+    for conn in listener.incoming() {
+        let Ok(mut c) = conn else { continue };
+        let mut length = [0u8; 2];
+        if c.read_exact(&mut length).is_err() {
+            continue;
+        }
+        let mut query = vec![0; u16::from_be_bytes(length) as usize];
+        if c.read_exact(&mut query).is_err() {
+            continue;
+        }
+        let mut pos = 12;
+        while pos < query.len() && query[pos] != 0 {
+            pos += usize::from(query[pos]) + 1;
+        }
+        if pos + 4 >= query.len() {
+            continue;
+        }
+        let typ = u16::from_be_bytes([query[pos + 1], query[pos + 2]]);
+        let mut answer = query[..pos + 5].to_vec();
+        answer[2..4].copy_from_slice(&0x8180u16.to_be_bytes());
+        if typ == 1 {
+            answer[6..8].copy_from_slice(&1u16.to_be_bytes());
+            answer.extend([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 93, 184, 216, 34]);
+        }
+        let _ = c.write_all(&(answer.len() as u16).to_be_bytes());
+        let _ = c.write_all(&answer);
+    }
+}
+
+struct FixtureHarness;
+#[async_trait::async_trait]
+impl WorkerAdapter for FixtureHarness {
+    fn id(&self) -> &str {
+        "acp"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        let cli = &req.context.browser.as_ref().unwrap().cli;
+        let open = tokio::process::Command::new("python3")
+            .arg(cli)
+            .args(["open", "https://fixture.example.com/index.html"])
+            .output()
+            .await?;
+        assert!(
+            open.status.success(),
+            "open: {}",
+            String::from_utf8_lossy(&open.stdout)
+        );
+        let blocked = tokio::process::Command::new("python3")
+            .arg(cli)
+            .args(["--proxy-server=http://127.0.0.1:1"])
+            .output()
+            .await?;
+        assert_eq!(blocked.status.code(), Some(2), "forbidden flag");
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "fixture reached".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+#[tokio::test]
+async fn production_action_path_inner() {
+    if std::env::var("CELERIS_BROWSER_ACTION_INNER").is_err() {
+        return;
+    }
+    use std::net::TcpStream;
+    use std::time::Instant;
+    let temp = tempfile::tempdir().unwrap();
+    let sh = |command: &str| {
+        assert!(
+            std::process::Command::new("/bin/sh")
+                .args(["-c", command])
+                .status()
+                .unwrap()
+                .success(),
+            "{command}"
+        );
+    };
+    sh("ip link set lo up && ip addr add 93.184.216.34/32 dev lo");
+    let dns = std::net::TcpListener::bind("127.0.0.1:53").unwrap();
+    std::thread::spawn(move || fixture_dns(dns));
+    std::fs::write(
+        temp.path().join("index.html"),
+        "<html>celeris-action-fixture-9581</html>",
+    )
+    .unwrap();
+    let cert = std::process::Command::new("/usr/bin/openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "key.pem",
+            "-out",
+            "cert.pem",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=fixture.example.com",
+            "-addext",
+            "subjectAltName=DNS:fixture.example.com",
+        ])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(cert.status.success(), "{:?}", cert.status);
+    let mut fixture = std::process::Command::new("/usr/bin/openssl")
+        .args([
+            "s_server",
+            "-quiet",
+            "-WWW",
+            "-cert",
+            "cert.pem",
+            "-key",
+            "key.pem",
+            "-accept",
+            "93.184.216.34:443",
+        ])
+        .current_dir(temp.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while TcpStream::connect(("93.184.216.34", 443)).is_err() {
+        assert!(Instant::now() < deadline, "fixture did not start");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let browser = {
+        let mut candidates: Vec<_> = std::fs::read_dir(
+            Path::new(&std::env::var("HOME").unwrap()).join(".cache/ms-playwright"),
+        )
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            e.path()
+                .join("chrome-headless-shell-linux64/chrome-headless-shell")
+        })
+        .filter(|p| p.is_file())
+        .collect();
+        candidates.sort();
+        candidates
+            .pop()
+            .expect("real chrome-headless-shell required")
+    };
+    let script = temp.path().join("fixture-agent-browser");
+    let source = format!(
+        r#"#!/usr/bin/python3
+import json, pathlib, subprocess, sys
+if sys.argv[1:] == ['--version']:
+    print('agent-browser 0.38.1')
+    sys.exit(0)
+args = sys.argv[1:]
+action = args[args.index('--json') + 1:]
+if action[0] == 'open':
+    browser = subprocess.run([{browser:?}, '--headless', '--no-sandbox', '--no-zygote',
+        '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking',
+        '--disable-component-update', '--no-first-run', '--ignore-certificate-errors',
+        '--proxy-server=http://127.0.0.1:3128', '--proxy-bypass-list=<-loopback>',
+        '--user-data-dir=/session/profile', '--dump-dom', action[1]],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=35)
+    ok = b'celeris-action-fixture-9581' in browser.stdout
+    if ok:
+        pathlib.Path('/session/fixture-reached').write_text('real chrome through egress')
+    print(json.dumps({{'success': ok, 'data': {{'text': 'fixture' if ok else 'unreachable'}}}}))
+    sys.exit(0 if ok else 1)
+print(json.dumps({{'success': True, 'data': {{}}}}))
+"#,
+        browser = browser.to_string_lossy()
+    );
+    crate::test_support::write_executable(&script, &source);
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.parent().unwrap().parent().unwrap();
+    configure_isolated_runtime(IsolatedBrowserConfig {
+        resolver: Some("127.0.0.1".parse().unwrap()),
+        record_dir: temp.path().join("records"),
+        bwrap: "/usr/bin/bwrap".into(),
+        sandboxd: bin.join("celeris-browser-sandboxd"),
+        egress: bin.join("celeris-browser-egress"),
+    });
+    let mut req = request(temp.path());
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_domains = vec!["fixture.example.com".into()];
+    req.context.browser_policy.as_mut().unwrap().network_domains =
+        vec!["fixture.example.com".into()];
+    let outcome = run_with_executable(
+        Arc::new(FixtureHarness),
+        req,
+        "real-egress",
+        RunLimits {
+            wall_clock: Duration::from_secs(90),
+            idle_timeout: Duration::from_secs(80),
+            kill_grace: Duration::from_millis(100),
+        },
+        &RecordingSink::default(),
+        &script,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("runs/real-egress/browser/fixture-reached"))
+            .unwrap(),
+        "real chrome through egress"
+    );
+    eprintln!(
+        "ACTION-EGRESS positive: shim -> action.sock -> sandboxd -> chrome -> egress -> fixture; forbidden flag rejected"
+    );
+    let _ = fixture.kill();
+    let _ = fixture.wait();
+}
+
 mod live_wiring {
     use super::*;
     use crate::browser_live::{CollectingSink, LiveEmitter};

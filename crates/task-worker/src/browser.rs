@@ -72,10 +72,10 @@ fn resolve_executable(executable: &Path) -> std::io::Result<PathBuf> {
         ));
     };
     for dir in std::env::split_paths(&paths) {
-        if let Ok(path) = dir.join(executable).canonicalize() {
-            if path.is_file() {
-                return Ok(path);
-            }
+        if let Ok(path) = dir.join(executable).canonicalize()
+            && path.is_file()
+        {
+            return Ok(path);
         }
     }
     Err(std::io::Error::new(

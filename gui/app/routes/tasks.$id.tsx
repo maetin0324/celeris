@@ -4,67 +4,10 @@ import { browserOwnerView } from "~/browser-owner.server";
 import type { RetryOutcome, TaskCommentOutcome, TaskRereviewOutcome, TransitionOutcome } from "~/celeris/action-types";
 import { liveViewRelayAvailable } from "~/celeris/browser-live.server";
 import { getCelerisClient } from "~/celeris/client.server";
-<<<<<<< HEAD
-import { planGateTask } from "~/celeris/decisions-admin.server";
-import { promoteArtifact, readArtifactPromoteBody } from "~/celeris/docs-admin.server";
-import { type CelerisRouteErrorData, celerisErrorResponse, toActionError } from "~/celeris/errors";
-import { runRetryAction, runTaskAction } from "~/celeris/route-actions.server";
-import { loadTaskChanges, readTaskChangesQuery, type TaskChangesData } from "~/celeris/task-changes";
-import { loadTaskFiles, readTaskFilesQuery, type TaskFilesData } from "~/celeris/task-files";
-import {
-  buildTaskEdit,
-  commentOnTask,
-  decomposeTask,
-  editTask,
-  phaseGateTask,
-  reopenTask,
-  rereviewTask,
-} from "~/celeris/tasks-admin.server";
-import type {
-  Action,
-  ApprovalItem,
-  ArtifactList,
-  ArtifactView,
-  BrowserRun,
-  BrowserWait,
-  CommentList,
-  ConfigView,
-  Event,
-  EventsPage,
-  Inbox,
-  MilestoneView,
-  OrgList,
-  OrgNode,
-  ProjectDetail,
-  TaskComment,
-  TaskDetail,
-  TaskRef,
-  TaskRoutingView,
-  TaskTreeView,
-  Timeline,
-  TimelineItem,
-} from "~/celeris/types";
-import type { LiveViewState } from "~/components/BrowserRunsPanel";
-import { ClusterJobWaitBanner } from "~/components/ClusterJobWaitBanner";
-import { CodeViewer } from "~/components/CodeViewer";
-/* ADR-0048 D2・フェーズ 74: worker_progress の折り畳みの中身は Console と同じ行を再利用する。 */
-import { ReplyStepRow } from "~/components/ConsoleBlockItem";
-/* celeris ADR-0072 D19/D20（Phase E5）: 実行の分解（Execution 節・ExecutionPhase）。 */
-import { ExecutionSection } from "~/components/ExecutionSection";
-import {
-  ErrorFlash,
-  RetryFlash,
-  TaskCommentFlash,
-  TaskEditFlash,
-  TaskReopenFlash,
-  TaskRereviewFlash,
-  TransitionFlash,
-} from "~/components/Flash";
-=======
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import { loadTaskDetail, runTaskDetailAction, type TaskDetailData } from "~/celeris/task-detail.server";
 import type { TaskDetail, TimelineItem } from "~/celeris/types";
->>>>>>> 6ab1cde026d3205f02d859e401813c9f690d49b1
+import { ClusterJobWaitBanner } from "~/components/ClusterJobWaitBanner";
 import { HelpLink } from "~/components/HelpLink";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { TaskRoutingPanel } from "~/components/TaskRoutingPanel";

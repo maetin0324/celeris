@@ -132,6 +132,9 @@ impl CredentialBrokerControl for UnixCredentialBrokerControl {
             max_ttl_seconds: 60,
             require_approval: true,
             allow_persistence: false,
+            login_url: None,
+            password_selector: None,
+            submit_selector: None,
         };
         let request = Request {
             op: "register",

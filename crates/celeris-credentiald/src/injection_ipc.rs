@@ -39,6 +39,8 @@ pub enum InjectCode {
     RedisplayField,
     AuthSectionRequired,
     AuthSectionMismatch,
+    SelectorMismatch,
+    TrustedSelectorMissing,
     LeaseExpired,
     LeaseUsed,
     OtherSession,
@@ -65,6 +67,8 @@ impl InjectCode {
             Self::RedisplayField => "redisplay_field",
             Self::AuthSectionRequired => "auth_section_required",
             Self::AuthSectionMismatch => "auth_section_mismatch",
+            Self::SelectorMismatch => "selector_mismatch",
+            Self::TrustedSelectorMissing => "trusted_selector_missing",
             Self::LeaseExpired => "lease_expired",
             Self::LeaseUsed => "lease_used",
             Self::OtherSession => "other_session",
@@ -682,6 +686,16 @@ impl InjectionService {
         // 4. auth_section
         if section.auth_section_id != req.auth_section_id || section.lease_id != req.lease_id {
             return Err(InjectCode::AuthSectionMismatch);
+        }
+        // 4b. trusted selector（ADR-0091 D2 照合 3）: lease が保持する管理者 policy の selector だけが出所。
+        // 要求の selector は byte 一致でなければ拒否し、lease は消費しない。policy に selector が無ければ注入しない。
+        // lease が無い場合は順 5 が `lease_invalid` を返す。
+        if let Some(pinned) = self.broker.lease_trusted_selector(&req.lease_id) {
+            let pinned = pinned.ok_or(InjectCode::TrustedSelectorMissing)?;
+            // username 欄の trusted selector は ADR-0091 の範囲外（未解決）。password 欄だけ照合する。
+            if req.field == Field::Password && pinned.as_bytes() != req.selector.as_bytes() {
+                return Err(InjectCode::SelectorMismatch);
+            }
         }
         // 5. lease（ここで消費）
         let (reference, context, provider) = self

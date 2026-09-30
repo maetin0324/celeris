@@ -503,6 +503,7 @@ impl World {
                         action: "credential_use".into(),
                         args_digest: None,
                     }),
+                    trusted_login: None,
                     policy_revision: policy.binding.revision,
                     policy_hash: policy.binding.hash,
                     owner_id: Some("owner".into()),

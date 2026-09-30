@@ -156,6 +156,10 @@ impl Fx {
         self.provider.calls.load(Ordering::SeqCst)
     }
     fn grant(&self, session_id: &str, key: &str, ttl: u64) -> String {
+        self.grant_with(session_id, key, ttl, Some("input[name=password]"))
+    }
+    /// `selector` が `None` なら管理者 selector の無い（旧い）policy で grant する。
+    fn grant_with(&self, session_id: &str, key: &str, ttl: u64, selector: Option<&str>) -> String {
         let policy = CredentialPolicy {
             policy_id: "site-1".into(),
             revision: 1,
@@ -164,6 +168,9 @@ impl Fx {
             max_ttl_seconds: 60,
             require_approval: true,
             allow_persistence: false,
+            login_url: selector.map(|_| format!("{ORIGIN}/login")),
+            password_selector: selector.map(str::to_owned),
+            submit_selector: None,
         };
         self.broker
             .grant(LeaseRequest {
@@ -682,4 +689,56 @@ fn in_page_recheck_failure_is_target_changed_and_lease_stays_consumed() {
         code(&fx, &request("sess-1", "auth-1", &lease)),
         "lease_used"
     );
+}
+
+#[test]
+fn request_selector_must_equal_the_admin_policy_selector_before_lease_use() {
+    // ADR-0091 D2 照合 3: 要求の selector は lease の policy 断面の管理者 selector と byte 一致でなければ
+    // `selector_mismatch`。順 4（auth section）の後・順 5（lease 消費）の前なので lease も provider も使わない。
+    let mut fx = Fx::new(Admission::SameUidHarnessFacts(facts));
+    let lease = fx.grant("sess-1", "k1", 60);
+    fx.live("sess-1");
+    let before = fx.calls();
+    // 区間を開く前は順 4 が先に落ちる（照合順の確認）。
+    let mut swapped = request("sess-1", "auth-1", &lease);
+    swapped.selector = "#attacker".into();
+    assert_eq!(code(&fx, &swapped), "auth_section_required");
+    fx.open("sess-1", "auth-1", &lease);
+    for other in [
+        "#attacker",
+        "input[name=password] ",
+        "input[name=\"password\"]",
+        "input",
+    ] {
+        let mut req = request("sess-1", "auth-1", &lease);
+        req.selector = other.into();
+        assert_eq!(code(&fx, &req), "selector_mismatch", "{other:?}");
+    }
+    // 空の selector は形式の段（順 0）で落ちる。
+    let mut empty = request("sess-1", "auth-1", &lease);
+    empty.selector = String::new();
+    assert_eq!(code(&fx, &empty), "invalid_request");
+    assert_eq!(fx.calls(), before);
+    // 拒否の後も lease は未消費: 管理者 selector の要求は通る。
+    let (reply, raw, _) = inject(&fx, &request("sess-1", "auth-1", &lease));
+    assert!(reply.ok, "{:?}", reply.code);
+    assert_eq!(fx.calls(), before + 1);
+    assert!(!contains(&raw, "#attacker"));
+    let journal = fx.journal();
+    assert!(journal.contains("\"decision_code\":\"selector_mismatch\""));
+}
+
+#[test]
+fn policy_without_admin_selector_cannot_inject() {
+    // 旧い policy（login_url・password_selector 無し）でも grant はできるが、注入は固定拒否で lease は残る。
+    let mut fx = Fx::new(Admission::SameUidHarnessFacts(facts));
+    let lease = fx.grant_with("sess-1", "k1", 60, None);
+    fx.live("sess-1");
+    fx.open("sess-1", "auth-1", &lease);
+    let before = fx.calls();
+    assert_eq!(
+        code(&fx, &request("sess-1", "auth-1", &lease)),
+        "trusted_selector_missing"
+    );
+    assert_eq!(fx.calls(), before);
 }

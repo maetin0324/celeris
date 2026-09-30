@@ -80,6 +80,12 @@ fn with_features(mut unit: serde_json::Value, features: serde_json::Value) -> se
     unit
 }
 
+/// ADR-0079 付記「R6-2」: fixture の `gate: atomic` を外す（kind task の既定 = 明示の compound）。
+fn without_gate(mut unit: serde_json::Value) -> serde_json::Value {
+    unit.as_object_mut().unwrap().remove("gate");
+    unit
+}
+
 fn gate_decision(task: &Task) -> task_core::ExecutionGateDecision {
     task.routing
         .as_ref()
@@ -125,7 +131,8 @@ async fn tree_nodes_adopt_gate_even_in_shadow() {
         vec![stage("s1", false)],
         vec![
             with_features(task_unit("c6", "s1", &[], "true"), score_six()),
-            with_features(task_unit("cb", "s1", &[], "true"), broad()),
+            // ADR-0079 付記「R6-2」: `gate` を省いた kind task の unit は明示の compound（fixture の `gate: atomic` を外す）。
+            without_gate(with_features(task_unit("cb", "s1", &[], "true"), broad())),
         ],
     );
     let child_plan = v3_plan(vec![stage("t1", false)], vec![leaf("l", "t1", &[])]);
@@ -153,13 +160,26 @@ async fn tree_nodes_adopt_gate_even_in_shadow() {
     assert_eq!(root_gate.depth, None);
     assert_eq!(root_gate.threshold, 5);
 
-    // score 6 の子: 深さ 2 の閾値 7 で atomic、shadow でも採用（`shadow = false`）、1 run で done。
+    // `gate: atomic` の子（ADR-0079 付記「R6-2」: 以前は score 6 が深さ 2 の閾値 7 に届かず atomic だった）:
+    // 明示の atomic（`human/explicit`、score は数えない）、shadow でも採用（`shadow = false`）、1 run で done。
     let c6 = child_task(&store, root_id, "c6");
     assert_eq!(c6.status, Status::Done);
     let g6 = gate_decision(&c6);
     assert_eq!(
-        (g6.mode, g6.score, g6.threshold, g6.depth, g6.shadow),
-        (task_core::ExecutionMode::Atomic, 6, 7, Some(2), false),
+        (
+            g6.mode,
+            g6.rule_id.as_str(),
+            g6.threshold,
+            g6.depth,
+            g6.shadow
+        ),
+        (
+            task_core::ExecutionMode::Atomic,
+            "human/explicit",
+            7,
+            Some(2),
+            false
+        ),
         "{g6:?}"
     );
     assert!(store.execution_plan_active(c6.id).unwrap().is_none());
@@ -189,17 +209,10 @@ async fn tree_nodes_adopt_gate_even_in_shadow() {
     );
     // 子の計画の unit には深さ 3 の閾値（9）で gate がかかる（leaf l は atomic で一致、記録なし）。
     assert!(overrides(&store.events_for(cb.id).unwrap()).is_empty());
-    // root の計画の unit の gate: c6 は atomic だが別の skill（構造上の理由）で task のまま（kept_task）。
-    // cb は compound で一致（記録なし）。
+    // root の計画の unit の gate（ADR-0079 付記「R6-2」: kind task の unit の gate は明示なので上書きしない）:
+    // c6（明示の atomic）も cb（明示の compound）も記録なし（以前は c6 が kept_task）。
     let root_overrides = overrides(&store.events_for(root_id).unwrap());
-    assert_eq!(root_overrides.len(), 1, "{root_overrides:?}");
-    assert_eq!(root_overrides[0].0, "c6");
-    assert_eq!(root_overrides[0].1, task_core::UnitGateAction::KeptTask);
-    assert_eq!(root_overrides[0].2, 6);
-    assert!(
-        root_overrides[0].3.contains("tree-fixture"),
-        "{root_overrides:?}"
-    );
+    assert!(root_overrides.is_empty(), "{root_overrides:?}");
     assert_replay_is_clean(&store);
 
     // 木でない task: 規則表の compound（ヒントの強制規則）は shadow のまま記録だけ、1 run（atomic）。
@@ -316,19 +329,11 @@ async fn unit_gate_promotes_and_demotes_with_override_events() {
         )
     );
     assert!(big.8.contains("compound/long-and-broad"), "{}", big.8);
-    let sm = seen.next().expect("small overridden");
-    assert_eq!(
-        (sm.1.as_str(), sm.2, sm.3, sm.4),
-        (
-            "small",
-            task_core::UnitDeclared::Task,
-            task_core::ExecutionMode::Atomic,
-            task_core::UnitGateAction::Demoted
-        )
+    // ADR-0079 付記「R6-2」: small（kind task、`gate: atomic`）は明示の gate なので下げない（以前は demoted）。
+    assert!(
+        seen.next().is_none(),
+        "leaf a agrees with the gate, small keeps its explicit gate"
     );
-    assert!(sm.7 < 7, "score {} under the depth-2 threshold", sm.7);
-    assert!(sm.8.contains("demoted"), "{}", sm.8);
-    assert!(seen.next().is_none(), "leaf a agrees with the gate");
 
     // 採用した計画の spec と行: big は kind task（子 task）、small は leaf（段階の kind）。
     let spec_kind = |key: &str| {
@@ -340,16 +345,19 @@ async fn unit_gate_promotes_and_demotes_with_override_events() {
             .unwrap()
     };
     assert_eq!(spec_kind("big"), task_core::WorkUnitKind::Task);
-    assert_eq!(spec_kind("small"), task_core::WorkUnitKind::Implement);
+    // R6-2: small は kind task のまま（明示の atomic の子 task として 1 run で走る）。
+    assert_eq!(spec_kind("small"), task_core::WorkUnitKind::Task);
     let units = store.work_units_for(root_id).unwrap();
     assert_eq!(unit(&units, "big").kind, task_core::WorkUnitKind::Task);
     assert!(unit(&units, "big").child_task_id.is_some());
+    assert_eq!(unit(&units, "small").kind, task_core::WorkUnitKind::Task);
+    assert!(unit(&units, "small").child_task_id.is_some());
+    let small_child = child_task(&store, root_id, "small");
+    assert_eq!(small_child.status, Status::Done);
     assert_eq!(
-        unit(&units, "small").kind,
-        task_core::WorkUnitKind::Implement
+        gate_decision(&small_child).mode,
+        task_core::ExecutionMode::Atomic
     );
-    assert!(unit(&units, "small").child_task_id.is_none());
-    assert_eq!(unit(&units, "small").runs, 1, "small ran as a leaf");
     for key in ["a", "big", "small"] {
         assert_eq!(
             unit(&units, key).status,
@@ -373,7 +381,11 @@ async fn unit_gate_promotes_and_demotes_with_override_events() {
         "{}",
         big_child.objective
     );
-    assert_eq!(store.children(root_id).unwrap().len(), 1, "only big");
+    assert_eq!(
+        store.children(root_id).unwrap().len(),
+        2,
+        "big and small (R6-2: small is not demoted)"
+    );
     assert_replay_is_clean(&store);
 }
 

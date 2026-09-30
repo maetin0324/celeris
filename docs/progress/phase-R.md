@@ -1147,3 +1147,39 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   いたため task は **failed**（人に聞かず終端。R6 項目「max_replans 超過時の人の要求」と同根）。ブランチ `celeris/01M3MS2J…` は docs のみ 6 ファイル
   +951（ADR-0081 web SPA frontend、docs/web/feature-parity.md、docs/web/implementation-plan.md、ADR-0002 の supersede 注記、PROGRESS.md）で内容は完成して
   いたので人（Fable）が main に統合（docs 差分のみ、非 docs ファイルなし）。教訓: planner の repair WU の check は自己言及に弱い（否定 grep）。
+
+## R6-2: plan/3 unit の gate 欄、kind task の子は明示の compound、木の上限の既定値（2026-09-30）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) 付記「R6-2: unit の gate 欄と kind task の既定（compound explicit）、木の上限の既定値」、
+  D3 の表（`max_tree_leaves` / `max_tree_runs` / `max_tree_replans`、節点の `max_replans`）。
+- 種類: コード（task-core / task-ops / task-worker のプロンプト / celeris の設定の既定）+ schema / GUI の型の再生成。**migration なし**。本番には触れていない。
+- 発端: 本番で kind task の子（browser Phase 4 の子、P4-A、P4-C、web Phase 1）がすべて `atomic/score`（6 = 特徴 4 + H 2 / 閾値 7）になり、atomic の試行が
+  失敗して人が `decompose {compound}` を打った。planner は /3 の unit に `gate` が無く（`deny_unknown_fields`）compound を指定できなかった。
+- 直したもの:
+  - **plan/3 の unit の `gate: "compound" | "atomic"`**（任意、kind task だけ。leaf は `LeafFieldNotAllowed { field: "gate" }`）。子の
+    `execution_hint = {<gate>, explicit: true}`（`build_child_task`）、採用時の unit の gate も同じ値（`unit_view` の `execution_hint` → `unit_gate` が人の明示として
+    判定）。kind task の unit には `Demoted` / `KeptTask` を出さない（`UnitGateOverridden` は leaf の Promoted / Decision だけ）。
+  - **kind task の既定は明示の compound**（人・planner を問わない。R5b-fix3 の `human_plan` と `plan_is_human` を削除）。1 run の子は `gate: atomic`。
+  - **planner のプロンプト**: 例の JSON に `gate`、compound / atomic を 1 文ずつ、否定の grep の自己言及の注意。
+  - **既定値**: `max_tree_leaves` 40 → 120、`max_tree_runs` 120 → 400、`max_tree_replans` 10 → 30、`[execution] max_replans` 3 → 5。
+    `config/celeris.example.toml` に `[execution.tree]` の注釈付きの例を足した。
+- 直していないもの: `near_limit:max_child_tasks_per_plan` の数え方（BenchFS の 10/6）は `task_ops::plan_gate`（担当外）にある → R6-1。
+  task-dispatch の `DispatchConfig` の既定（`dispatcher.rs` の `max_replans: 3`、試験用の既定）は担当外のため 3 のまま（本番は `celeris::config` の既定 5 が渡る）。
+- 本番への効き方: `~/.config/celeris/config.toml` は `[execution]`（parallel / gate）と `[execution.tree] enabled = true` だけで、上の 4 つの鍵を書いていない
+  → **再起動（新しい release）で新しい既定が効く**。設定の変更は不要。組織の profile の `budget`（ADR-0069 D2）で `max_tree_runs` を狭めていればそちらが効く。
+  既存の子 task の `execution_hint`（`explicit: false`）は直さない（新しく作る子から）。
+- gate: `cargo fmt --all -- --check` exit 0 / `cargo clippy --workspace --all-targets -- -D warnings` exit 0 /
+  `cargo nextest run -p task-core -p task-ops -p task-api -p task-worker -p celeris` 2162 本中 2159 passed / 3 failed（`task-api::task_tree` の上限の既定値
+  → 期待を直して 4/4 passed。`task-api::browser_e2e` の 2 本は入れ子の `cargo build` が高負荷で `serde_core` のコンパイルに失敗、変更とは無関係）/
+  `cargo nextest run -p task-dispatch -j 6` 454 本中 453 passed / 1 failed（`tree_replan::tree_planner_context_is_wired_from_limits_and_counters`
+  の既定値 → 期待を直して `-E test(/tree/)` 67/67 passed）。1 回目の task-dispatch（負荷 90〜146）は tick 数依存の 29 本が落ち 5 本が timeout だったが、
+  負荷の下がった 2 回目で通った（木の試験の timeout は fixture の子が既定の compound になり planner の計画を待っていたもので、fixture に `gate: atomic` を
+  明示して直した）。schema: `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema`（api-v1 / event / execution-plan の 3 ファイル）、
+  GUI の型は `json2ts`（`gen:types` と同じ引数）で再生成（`PlanUnitSpec.gate?: ExecutionMode | null` の 7 行）。`tsc -b` は `types.ts` 由来の誤りなし
+  （worktree に node_modules が無く `react-router typegen` が動かなかったため、ルートの型の欠落の誤りだけが出た）。
+- 変えた既存の試験: task-core `tree.rs`（unit の gate の表の 5・6 行、既定値、承認の near_limit・limit の余裕は旧値を明示）、task-ops `tree.rs`（子の hint）、
+  celeris `config.rs`（既定値）、`dispatcher/tests/tree.rs`（共通 fixture の kind task の unit に `gate: atomic`。1 run の子の前提を保つ）、
+  `dispatcher/tests/tree_gate.rs`（cb は gate を外して明示の compound、c6 は `human/explicit` の atomic、small は下げずに atomic の子 task、記録は big の Promoted だけ）、
+  `dispatcher/tests/tree_branches.rs`（同じく fixture に `gate: atomic`、compound の子は gate を外す）、`tree_replan.rs` / `tree_approval.rs`（compound の子は gate を外す、
+  木の残りの既定値）、`task-api/tests/task_tree.rs`（木の上限の既定値。担当の範囲外のファイルだが期待値だけ）。
+

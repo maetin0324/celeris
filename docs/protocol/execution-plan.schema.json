@@ -243,6 +243,14 @@
       ],
       "type": "object"
     },
+    "ExecutionMode": {
+      "description": "D13: atomic / compound の判定結果。",
+      "enum": [
+        "atomic",
+        "compound"
+      ],
+      "type": "string"
+    },
     "Level": {
       "description": "各軸の段階（小さな順序尺度）。",
       "enum": [
@@ -337,6 +345,17 @@
         },
         "features": {
           "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
+        },
+        "gate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079「R6-2」: 子 task の Complexity Gate の明示（`compound` = 子は自分の計画を持つ、`atomic` = 子は計画を\n持たず 1 つの節点として走る）。子の `routing.execution_hint = {<gate>, explicit: true}`。省いたら\n`compound`（kind task を選んだこと自体が「自分の計画が要る」の意味。`tree::task_unit_execution_hint`）。\n人の計画・planner の計画のどちらも書ける。leaf には書けない。"
         },
         "genre": {
           "type": [

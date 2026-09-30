@@ -1457,7 +1457,7 @@ pub struct ExecutionTomlConfig {
     /// ADR-0072 D16/D18（Phase E4）: 同じ class の repair の上限（既定 2）。
     #[serde(default = "default_max_repairs_per_class")]
     pub max_repairs_per_class: u32,
-    /// ADR-0072 D17/D18（Phase E4）: Task ごとの replan（計画の版の更新）の上限（既定 3）。
+    /// ADR-0072 D17/D18（Phase E4）: Task ごとの replan（計画の版の更新）の上限（既定 5。ADR-0079「R6-2」で 3 から）。
     #[serde(default = "default_max_replans")]
     pub max_replans: u32,
     /// ADR-0074 D5.2（Phase F1）: WU の lane の上限を Task の lane に合わせるか
@@ -1713,7 +1713,8 @@ fn default_max_repairs_per_class() -> u32 {
     2
 }
 fn default_max_replans() -> u32 {
-    3
+    // ADR-0079「R6-2」: 木の節点ごとの replan の余地を 3 → 5（子の失敗の replan で使い切っていた）。
+    5
 }
 fn default_work_unit_lane_cap() -> String {
     "task".to_string()
@@ -7197,7 +7198,16 @@ env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily-row" }
         assert_eq!(tree.max_units_per_stage, 4);
         assert_eq!(tree.max_tree_tokens, Some(5_000_000));
         assert_eq!(tree.approval_near_limit_permille, 750);
-        assert_eq!(tree.max_tree_runs, 120);
+        // ADR-0079「R6-2」の既定（leaf 120・run 400・木の replan 30・節点の replan 5）。
+        assert_eq!(
+            (
+                tree.max_tree_leaves,
+                tree.max_tree_runs,
+                tree.max_tree_replans
+            ),
+            (120, 400, 30)
+        );
+        assert_eq!(cfg.execution.max_replans, 5);
         assert_eq!(tree.gate_depth_step, 2);
         // Phase R2a: 深さの閾値の刻みと木の run・replan・leaf の上限も設定から写る。
         let cfg: Config = toml::from_str(&format!(

@@ -3433,6 +3433,17 @@
         "features": {
           "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
         },
+        "gate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079「R6-2」: 子 task の Complexity Gate の明示（`compound` = 子は自分の計画を持つ、`atomic` = 子は計画を\n持たず 1 つの節点として走る）。子の `routing.execution_hint = {<gate>, explicit: true}`。省いたら\n`compound`（kind task を選んだこと自体が「自分の計画が要る」の意味。`tree::task_unit_execution_hint`）。\n人の計画・planner の計画のどちらも書ける。leaf には書けない。"
+        },
         "genre": {
           "type": [
             "string",
@@ -4722,12 +4733,12 @@
         },
         {
           "const": "kept_task",
-          "description": "task と宣言され atomic だが、構造上の理由があるので task のまま。",
+          "description": "task と宣言され atomic だが、構造上の理由があるので task のまま。R6-2 からは出さない（kind task の\nunit の gate は明示。過去の event の読み取りのために残す）。",
           "type": "string"
         },
         {
           "const": "demoted",
-          "description": "task と宣言され atomic、構造上の理由なし・leaf の基準を満たす → leaf に下げた。",
+          "description": "task と宣言され atomic、構造上の理由なし・leaf の基準を満たす → leaf に下げた。R6-2 からは出さない\n（`KeptTask` と同じ）。",
           "type": "string"
         }
       ]

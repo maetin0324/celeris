@@ -33,6 +33,8 @@ pub struct IsolatedBrowserConfig {
     pub bwrap: PathBuf,
     pub sandboxd: PathBuf,
     pub egress: PathBuf,
+    /// ADR-0088 D5: daemon が 1 つ作る稼働中 session の registry（API と共有）。
+    pub live_sessions: Option<std::sync::Arc<task_core::browser_isolation::LiveSessions>>,
 }
 
 static ISOLATED: OnceLock<IsolatedBrowserConfig> = OnceLock::new();
@@ -804,11 +806,11 @@ pub async fn run_with_executable(
             max_concurrent: crate::browser_runtime::DEFAULT_MAX_EGRESS,
         }),
     };
-    let supervisor = crate::browser_supervisor::Supervisor::start(
-        spec,
-        crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir),
-    )
-    .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
+    let mut supervisor_opts =
+        crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir);
+    supervisor_opts.registry = isolation.live_sessions.clone();
+    let supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
+        .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let version = action_request(&action_socket, "__version__", &[], None)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     if version.0 != 0 || version.1.trim() != format!("agent-browser {SUPPORTED_VERSION}") {

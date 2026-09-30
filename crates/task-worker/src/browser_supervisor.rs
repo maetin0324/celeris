@@ -17,6 +17,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use nix::libc;
+use task_core::browser_isolation::{
+    IsolationAttestation, IsolationViolation, LiveIsolation, LiveSessionEntry, LiveSessions,
+    RuntimeKind,
+};
 
 use crate::browser_runtime::{
     IsolatedRuntime, RecordedProcess, RuntimeError, RuntimeSpec, process_starttime, read_record,
@@ -34,6 +38,8 @@ pub struct SupervisorOptions {
     pub record_dir: PathBuf,
     /// false なら bwrap に PDEATHSIG を掛けない（取りこぼしを再現する試験専用。本番は true）。
     pub arm_parent_death: bool,
+    /// ADR-0088 D5: 稼働中 session の registry。起動後に登録し、停止の最初に外す。
+    pub registry: Option<Arc<LiveSessions>>,
 }
 
 impl SupervisorOptions {
@@ -41,12 +47,54 @@ impl SupervisorOptions {
         Self {
             record_dir: record_dir.into(),
             arm_parent_death: true,
+            registry: None,
         }
     }
 }
 
 enum Cmd {
     Stop(mpsc::Sender<()>),
+    Attest(mpsc::Sender<Result<IsolationAttestation, Vec<IsolationViolation>>>),
+}
+
+/// registry に載る supervisor 管理の session（ADR-0088 D5）。attestation は runtime thread に
+/// 採り直させる。controller への state 投入口は持たない（CDP pipe は `Supervisor` の持ち主が
+/// 持つか、agent-browser が駆動する）ので、復元は開封前に `isolation_required` で止まる。
+struct SupervisedEntry {
+    tx: Mutex<mpsc::Sender<Cmd>>,
+}
+
+impl LiveIsolation for SupervisedEntry {
+    fn current_attestation(&self) -> Result<IsolationAttestation, Vec<IsolationViolation>> {
+        let (reply, rx) = mpsc::channel();
+        let sent = self
+            .tx
+            .lock()
+            .map(|tx| tx.send(Cmd::Attest(reply)).is_ok())
+            .unwrap_or(false);
+        if !sent {
+            return Err(vec![IsolationViolation::NoProcessGroup]);
+        }
+        rx.recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| Err(vec![IsolationViolation::NoProcessGroup]))
+    }
+}
+
+impl LiveSessionEntry for SupervisedEntry {
+    fn kind(&self) -> RuntimeKind {
+        RuntimeKind::Isolated
+    }
+
+    fn accepts_state(&self) -> bool {
+        false
+    }
+
+    fn deliver_state(
+        &self,
+        _state: &[u8],
+    ) -> Result<(), task_core::browser_isolation::StateRejected> {
+        Err(task_core::browser_isolation::StateRejected)
+    }
 }
 
 /// 稼働中 runtime の handle。drop でも停止する。
@@ -56,6 +104,7 @@ pub struct Supervisor {
     thread: Option<std::thread::JoinHandle<()>>,
     procs: Arc<Mutex<Vec<RecordedProcess>>>,
     record_path: PathBuf,
+    registry: Option<Arc<LiveSessions>>,
     /// controller が持つ CDP pipe（`cdp_pipe` の runtime だけ）。
     pub cdp_write: Option<File>,
     pub cdp_read: Option<File>,
@@ -76,19 +125,29 @@ impl Supervisor {
         let (tx, rx) = mpsc::channel::<Cmd>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Started, RuntimeError>>();
         let thread_procs = procs.clone();
+        let registry = opts.registry.clone();
         let thread = std::thread::Builder::new()
             .name(format!("celeris-browser-rt-{session_id}"))
             .spawn(move || runtime_thread(spec, opts, thread_procs, rx, ready_tx))?;
         match ready_rx.recv() {
-            Ok(Ok(started)) => Ok(Self {
-                session_id,
-                tx,
-                thread: Some(thread),
-                procs,
-                record_path,
-                cdp_write: started.cdp_write,
-                cdp_read: started.cdp_read,
-            }),
+            Ok(Ok(started)) => {
+                if let Some(reg) = &registry {
+                    let entry = SupervisedEntry {
+                        tx: Mutex::new(tx.clone()),
+                    };
+                    reg.insert(&session_id, Arc::new(entry));
+                }
+                Ok(Self {
+                    session_id,
+                    tx,
+                    thread: Some(thread),
+                    procs,
+                    record_path,
+                    registry,
+                    cdp_write: started.cdp_write,
+                    cdp_read: started.cdp_read,
+                })
+            }
             Ok(Err(e)) => {
                 let _ = thread.join();
                 Err(e)
@@ -119,6 +178,9 @@ impl Supervisor {
     }
 
     fn shutdown(&mut self) {
+        if let Some(reg) = self.registry.take() {
+            reg.remove(&self.session_id);
+        }
         let (done_tx, done_rx) = mpsc::channel();
         if self.tx.send(Cmd::Stop(done_tx)).is_ok() {
             let _ = done_rx.recv();
@@ -168,6 +230,9 @@ fn runtime_thread(
     }
     loop {
         match rx.recv_timeout(REFRESH) {
+            Ok(Cmd::Attest(reply)) => {
+                let _ = reply.send(rt.attest());
+            }
             Ok(Cmd::Stop(done)) => {
                 stop_runtime(&mut rt, &opts.record_dir, &session, &procs);
                 let _ = done.send(());

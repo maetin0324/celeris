@@ -39,6 +39,7 @@ fn request(workspace: &Path) -> RunRequest {
     let exe = std::env::current_exe().unwrap();
     let bin = exe.parent().unwrap().parent().unwrap();
     configure_isolated_runtime(IsolatedBrowserConfig {
+        live_sessions: None,
         resolver: Some("127.0.0.1".parse().unwrap()),
         record_dir: std::env::temp_dir()
             .join(format!("celeris-browser-unit-{}", std::process::id())),
@@ -854,6 +855,7 @@ async fn missing_egress_resolver_inner() {
     let exe = std::env::current_exe().unwrap();
     let bin = exe.parent().unwrap().parent().unwrap();
     configure_isolated_runtime(IsolatedBrowserConfig {
+        live_sessions: None,
         resolver: None,
         record_dir: temp.path().join("records"),
         bwrap: "/usr/bin/bwrap".into(),
@@ -1094,6 +1096,7 @@ print(json.dumps({{'success': True, 'data': {{}}}}))
     let exe = std::env::current_exe().unwrap();
     let bin = exe.parent().unwrap().parent().unwrap();
     configure_isolated_runtime(IsolatedBrowserConfig {
+        live_sessions: None,
         resolver: Some("127.0.0.1".parse().unwrap()),
         record_dir: temp.path().join("records"),
         bwrap: "/usr/bin/bwrap".into(),

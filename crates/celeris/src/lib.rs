@@ -1493,6 +1493,7 @@ async fn start_api(
     role: SharedRole,
     admin: bool,
     llm_proxy_state: Option<Arc<llm_proxy::ProxyState>>,
+    live_sessions: Arc<task_core::browser_isolation::LiveSessions>,
 ) -> Result<
     (
         RunningApi,
@@ -1598,6 +1599,7 @@ async fn start_api(
         Some(sealer) => state.with_identity_sealer(sealer),
         None => state,
     };
+    let state = state.with_live_sessions(live_sessions);
     let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {
         addr: listen,
         source,
@@ -1649,6 +1651,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     let identity = InstanceIdentity::new(opts.release.as_deref());
     let cluster_masters: ClusterMasters = Arc::new(std::sync::Mutex::new(HashMap::new()));
     let mut dispatcher = build_dispatcher(&config, Arc::clone(&cluster_masters))?;
+    // ADR-0088 D5: 稼働中 browser session の registry は 1 つだけ作り、supervisor（登録・削除）と API で共有する。
+    let live_sessions = Arc::new(task_core::browser_isolation::LiveSessions::default());
     // ADR-0062 A（Phase 107）: 実 ssh を打つフック（実通信 probe・死んだ接続の片付け）は本番の起動経路
     // だけで配線する（`build_dispatcher` はテストからも広く呼ばれるため、そこでは配線しない）。
     wire_cluster_liveness_hooks(&mut dispatcher, Arc::clone(&cluster_masters));
@@ -1700,6 +1704,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                             bwrap: PathBuf::from("/usr/bin/bwrap"),
                             sandboxd: bin_dir.join("celeris-browser-sandboxd"),
                             egress: bin_dir.join("celeris-browser-egress"),
+                            live_sessions: Some(Arc::clone(&live_sessions)),
                         },
                     );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの
@@ -1762,6 +1767,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                 role.clone(),
                 !verify,
                 llm_proxy_state.clone(),
+                Arc::clone(&live_sessions),
             )
             .await?;
             (Some(api), admin_rx)

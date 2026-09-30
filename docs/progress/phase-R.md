@@ -1758,3 +1758,9 @@ task-ops / task-dispatch / task-core には触れていない（R7-3 と並行�
   live_ok=true → `promote.sh` live で昇格（引き継ぎ 2 s、backup `20260930-100939-pre-7b2cd54c1914.sqlite3`）。旧 fc60977fd142 / 7c10d528ad2a は
   in-flight の run（web Phase 2 の codex WU run 等）を drain 中（正常。`--stop-stale` は使っていない）。リファクタ retry の子 01M3RMEW… は、replan の note で
   done の葉の `HEAD^2` check を内容の検査に置き換えれば進める（R7-3 D1）。次の「統合失敗 → decompose → 回答」で planner が先に回ることを events で確かめる。
+- 11:4xZ: **R7-3 の本番初回**（リファクタ retry の子 01M3RMEW…）: `decompose {compound, note}`（done の葉 merge-store の checks の `HEAD^2` / `git log -1` を
+  `merge-base --is-ancestor` と merge commit 077742f8 名指しの検査に置き換え。人が統合 HEAD 64d53218 で事前に確認: 祖先 2 つ・store.rs 無し・マーカー 0・名指し 24 件）
+  → 質問に回答。**統合より先に planner**（11:42:34 planner run → 11:43:15 plan v10、`work_unit_spec_overridden {merge-store, changed_fields: [checks]}`、
+  `overridden_done=merge-store`）→ `integrate-merge` running → **11:48:40 done（integrated）**。merge-store は再実行していない（D1・D2 とも本番で確認）。
+  v10 で出た `leaf_too_large:verify-merge-1` の文言は「score 6 は閾値 11 未満だが、この規則は score によらず compound と判定する（expected_length=high かつ
+  cross_cutting=high）」（D4 の直りを確認）→ run-as-leaf で回答、verify-merge-1 が再開。

@@ -68,7 +68,7 @@ Parity で閉じた Phase 4 行は R06・R07・R09〜R16・R29〜R34・R36（`do
 
 - 未解決: X10 全画面 axe gate は Phase 5 に残る。crates の flaky 修正（dispatcher.rs・ssh.rs）はこの web 差分から戻してあり、main への別途投入が必要。
 - 提案: Phase 5 で X10 の全画面 axe/mobile gate を閉じ、crates の flaky 修正を main に別途投入する。
-- prune テストの event 待ちと `ssh.rs` stub の ETXTBSY 修正は web の差分外なので戻した。main（分割後の dispatcher）へ別途入れる。
+- prune テストの event 待ち修正は web の差分外なので戻した。main（分割後の dispatcher）へ別途入れる。
 
 ## Phase 5（完了 2026-10-01、横断 gate P5-01〜P5-04）
 
@@ -85,8 +85,9 @@ P5-01〜P5-03 の測定記録は [latency gate](../web/gates/p5-01-latency.md)�
 
 P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は ADR-0096・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。dogfood は H6 の決定まで未開始であり、本番 daemon への接続はしていない。
 
-- Rust gate: `cargo test --workspace` → exit 101。全 7 test suites で 261 passed、2 failed、0 ignored。`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は、user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。`cargo test -p celeris --test releases_api` でも同じ 2 件を再現（6 passed / 2 failed）。2026-10-01 の人の判断に従い、この sandbox から user systemd bus に接続できない環境由来の 2 件として除外し、残りの全テストを合格として扱う。テスト側の skip は別 task で対応する。
+- Rust gate（2026-10-01、repair-cargo-1 の `crates/task-worker/src/ssh.rs` 修正を merge-base `8a61eae488eb` に戻した後）: `cargo test --workspace` → exit 101。記録された test suites は全て pass し、`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。人の 2026-10-01 の判断に従い、この sandbox から user systemd bus に接続できない環境由来の2件として除外し、残りの全テストを合格として扱う。`cargo test -p celeris --test releases_api` の再実行でも同じ2件が再現（6 passed / 2 failed）。テスト側の skip は別 task で対応する。
 - Rust lint: `cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。
+- 未解決（web の差分制約）: repair-cargo-1 の `ssh.rs` stub に対する ETXTBSY 修正（`c0910506`）は web の差分外なので戻した。main へ別途入れる。
 - 未解決: H6（dogfood の期間・合格条件）、H9（並行運用中の通知）、H10（staging 実 celeris 確認）は未決／未確認。H7（gui/web 配信切替）の判断も未実施。P6-04 以降は未着手。
 - 提案: H6 と H9 を決め、H10 staging 確認を記録してから dogfood を開始する。配信切替は H7 の判断材料を確認したうえで別途判断する。P5 横断 gate の値（30 path の URL/見出し最大 69.4/90.1 ms、H1 fallback 1 回、30 path × 4 幅の mobile/a11y 合格）は Phase 5 節と各 gate 記録を参照。
 

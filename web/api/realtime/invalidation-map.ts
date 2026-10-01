@@ -121,7 +121,11 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   browser_updated: { sets: ["T", "R", "N"] },
   browser_wait_opened: { sets: ["T", "R", "N"] },
   browser_wait_resolved: { sets: ["T", "R", "N"] },
+  cluster_job_wait_started: { sets: ["T", "R", "E", "L"] },
+  cluster_job_wait_polled: { sets: ["T", "R", "E"] },
+  cluster_job_wait_finished: { sets: ["T", "R", "E", "L"] },
   work_unit_spec_overridden: { sets: ["T", "E", "R", "L", "P"] },
+  work_unit_checks_failed: { sets: ["T", "E", "R", "L", "P"] },
   unit_gate_overridden: { sets: ["T", "E", "R", "L", "P"] },
   child_task_created: {
     sets: ["T", "E", "R", "L", "P"],

@@ -897,15 +897,30 @@ fn sh_quote(s: &str) -> String {
 
 /// `<scratch>/bin/sccache` の中身（決定的）。sccache 0.18 は `CARGO_` で始まる env を全て Rust の key に入れるので、
 /// owner ごとに違う `CARGO_TARGET_DIR` を rustc の env から外してから本物の sccache を exec する（G2 の U1）。
+///
+/// ADR-0075 R7-7: エージェントの sandbox（codex の `workspace-write` でネットワーク無し）の中では `socket(AF_INET)` が
+/// `EPERM` になり、sccache の client は server に繋げず build を落とす。wrapper は compiler の起動のたびに**自分の居る
+/// 場所から** `127.0.0.1:$SCCACHE_SERVER_PORT` に TCP で繋がるか（`server_listening` と同じ見方。sccache の client は
+/// 呼ばない＝server を起こさない）を bash の `/dev/tcp` で見て、届かなければ compiler を直接 exec する。sccache 自身の
+/// 操作（第 1 引数が `-` で始まる・引数なし）と `SCCACHE_SERVER_UDS` があるときは見ずに sccache へ渡す。
 pub fn wrapper_script(binary: &Path) -> String {
+    let sccache = sh_quote(&binary.display().to_string());
     format!(
-        "#!/bin/sh\n\
-         # Celeris が生成（ADR-0075 D4、Phase G2）。手で編集しない（次の run で書き直される）。\n\
+        "#!/bin/bash\n\
+         # Celeris が生成（ADR-0075 D4、Phase G2 / R7-7）。手で編集しない（次の run で書き直される）。\n\
          # sccache は CARGO_* の env を Rust の cache key に入れる。owner ごとに違う target の場所を外し、\n\
          # owner をまたいで依存 crate の cache を共有する。\n\
          unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR\n\
-         exec {} \"$@\"\n",
-        sh_quote(&binary.display().to_string())
+         # sccache 自身の操作（--show-stats 等）は compiler ではないのでそのまま渡す。\n\
+         case \"${{1-}}\" in\n\
+         \x20 -*|'') exec {sccache} \"$@\" ;;\n\
+         esac\n\
+         # R7-7: ここ（エージェントの sandbox の中でありうる）から server に届くときだけ sccache を通す。\n\
+         # 届かない（ネットワークの無い sandbox では socket が EPERM、server が居なければ refused）なら compiler を直接動かす。\n\
+         if [ -n \"${{SCCACHE_SERVER_UDS-}}\" ] || : 2>/dev/null 3<>\"/dev/tcp/127.0.0.1/${{SCCACHE_SERVER_PORT:-4226}}\"; then\n\
+         \x20 exec {sccache} \"$@\"\n\
+         fi\n\
+         exec \"$@\"\n"
     )
 }
 

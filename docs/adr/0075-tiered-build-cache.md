@@ -606,3 +606,48 @@ D3 / D7 の「release ゲートの owner は `release-<sha12>`」から次のよ
 
 **提案（P-SD1-1）**: `release-build` を P0 に固定する代わりに、`released_at` のある `release-build` を P1（waiting_keep_secs の間は保持、
 watermark の圧力では消せる）に分類する規則を `classify` に足す。daemon の昇格が要るので SD-1 ではやらない。
+
+## R7-7: run の sandbox から sccache の server に届かないときは素の compiler で動かす（2026-10-01）
+
+**事実（本番の調査、`docs/progress/phase-R.md` の R7-7）**
+
+- 2026-09-28 16:57Z 以降、codex の worker の run の `cargo test` / `cargo clippy` が、コンパイル前の
+  `<scratch>/bin/sccache …/rustc -vV` で `sccache: error: Operation not permitted (os error 1)`（exit 2 → cargo exit 101）で落ちていた
+  （この文言を含む run の transcript は 68 件、うち codex 60 件。claude-code の run の該当は、codex の run が `artifacts/` に残した log を
+  `cat` / `tail` したものだけ）。ADR-0095（R7-6、2026-10-01 00:30Z）より前から起きており、db_guard の namespace は原因ではない
+  （`unshare --user --map-user=<uid> --mount` の中の wrapper は通る）。
+- 原因: codex の `workspace-write` sandbox は、`[sandbox_workspace_write] network_access` が真でなければ seccomp でネットワークを塞ぐ。
+  `socket(AF_INET, SOCK_STREAM)` が `EPERM` になり（strace で確認）、AF_UNIX の `connect` も `EPERM`。したがって sandbox の中の
+  sccache の client は `127.0.0.1:<server_port>` の server に繋げず、sccache 0.18 はこれを致命的な誤りとして exit 2 する
+  （`SCCACHE_IGNORE_SERVER_IO_ERROR=1` でも同じ。server との I/O の前に落ちるため）。
+  worker の codex は `[accounts] codex_dir` の各アカウント（`CODEX_HOME=<codex_dir>/<id>`）の `config.toml` を読み、そこには
+  `network_access` が無い（人の `~/.codex/config.toml` には `network_access = true` がある）。同じ条件の `codex sandbox` で再現し、
+  `network_access = true` の `CODEX_HOME` では通る。
+- dispatcher の「server が居るか」（`server_listening`、D4）は daemon（sandbox の外）から見るので真になり、`RUSTC_WRAPPER` を与える。
+  run の中の compiler が実際に動く場所（エージェントの sandbox の中）からは届かない、という食い違い。
+
+**決定**
+
+1. wrapper（`wrapper_script`）は、compiler の起動のたびに**自分の居る場所から** server に届くかを見て、届かなければ sccache を通さずに
+   compiler を直接 exec する（cache は使えないが build は通る。cache は最適化であって正しさの条件ではない）。
+   - 見方は `server_listening` と同じ「`127.0.0.1:${SCCACHE_SERVER_PORT:-4226}` に TCP で繋がるか」。sccache の client は呼ばない
+     （server が無いと run の中から server を起こしてしまう。D4 の「server は run の中から起こさない」）。bash の `/dev/tcp`
+     （組み込み、fork なし）で `connect` するだけなので、wrapper は `#!/bin/bash` にする。
+   - `SCCACHE_SERVER_UDS` があれば（Celeris は与えない）見ずに sccache へ渡す。第 1 引数が `-` で始まる（`--show-stats` 等の sccache 自身の
+     操作）か無いときも sccache へ渡す（compiler ではないので素の exec はできない）。
+   - server が居ない（connection refused）ときも素の compiler になる。従来は sccache の client が run の中から server を起こしえた
+     （D4 が避けたいこと）ので、これは D4 に沿う方向の変化。
+2. codex の sandbox にネットワークを与える（アカウントの `config.toml` の `[sandbox_workspace_write] network_access = true`）かは
+   **人の判断**（codex の worker の sandbox にネットワーク全体を開けることになり、localhost だけに絞る設定は codex 0.157 に無い）。
+   Celeris は codex の設定を書き換えない。与えれば codex の run でも L1 の cache が効く。与えなければ codex の run は素の compiler
+   （1. により失敗はしない）。
+
+**採らない案**
+
+- `SCCACHE_IGNORE_SERVER_IO_ERROR=1`: 実測で効かない（上記）。
+- codex の adapter が `-c sandbox_workspace_write.network_access=true` を常に足す: sandbox の方針（ネットワーク）を Celeris が黙って
+  緩めることになる。人の判断の 2. に残す。
+- daemon 側で「codex の run には `RUSTC_WRAPPER` を与えない」: codex の設定（アカウントごとの `network_access`）を Celeris が読んで
+  推測することになり、他のアダプタの sandbox（claude-code の sandbox を有効にした場合など）には効かない。wrapper の中で実際に見る方が
+  どの sandbox にも同じに効く。
+- 失敗した sccache の後に compiler をもう一度動かす: compiler 自身の失敗と区別できず、二重実行になりうる。

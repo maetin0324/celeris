@@ -27512,31 +27512,27 @@ mod tests {
         std::fs::create_dir_all(&target_dir).unwrap();
 
         d.tick().unwrap();
-        // 削除と event の記録は背景スレッドなので、event が記録されるまで待つ
-        // （ディレクトリが消えた直後はまだ event が無いことがある）。
-        let has_pruned_event = |events: &[(u64, Event)]| {
-            events.iter().any(|(_, e)| {
-                matches!(
-                    e,
-                    Event::WorkspacePruned { removed }
-                        if removed == &vec!["repos/benchfs/target".to_string()]
-                )
-            })
-        };
-        let mut events = store.events_for(task.id).unwrap();
-        for _ in 0..250 {
-            if !target_dir.exists() && has_pruned_event(&events) {
+        // 削除は背景スレッドなので、少し待って反映を確かめる。
+        for _ in 0..100 {
+            if !target_dir.exists() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
-            events = store.events_for(task.id).unwrap();
         }
         assert!(!target_dir.exists(), "target/ should have been pruned");
         assert!(
             task_dir.join("repos").join("benchfs").is_dir(),
             "the repo dir itself is kept"
         );
-        assert!(has_pruned_event(&events), "{events:?}");
+        let events = store.events_for(task.id).unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                Event::WorkspacePruned { removed }
+                    if removed == &vec!["repos/benchfs/target".to_string()]
+            )),
+            "{events:?}"
+        );
     }
 
     /// `workspace_prune_after_secs == 0` は無効（何も消さない）。

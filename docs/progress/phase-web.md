@@ -68,6 +68,7 @@ Parity で閉じた Phase 4 行は R06・R07・R09〜R16・R29〜R34・R36（`do
 
 - 未解決: この環境では cargo test/clippy を完了できていない。sccache が利用可能な環境で両コマンドを実行する必要がある。
 - 提案: sccache の起動権限と `CARGO_TARGET_DIR` が利用可能な環境で Rust 2 gate を実施する。Phase 5 で X10 の全画面 axe/mobile gate を閉じる。
+- prune テストの event 待ちと `ssh.rs` stub の ETXTBSY 修正は web の差分外なので戻した。main（分割後の dispatcher）へ別途入れる。
 
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 

@@ -995,6 +995,7 @@ async fn run_worker_for_test(
     run_worker(
         store,
         done_adapter(),
+        Vec::new(),
         task_id,
         Tier::Standard,
         dir,
@@ -3160,3 +3161,5 @@ mod planner_budget;
 /// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
 /// （`src/dispatcher/tests/stage_reopen.rs`）。
 mod stage_reopen;
+
+mod browser_fallback;

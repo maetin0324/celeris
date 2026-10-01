@@ -70,6 +70,9 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Isolated browser runtime is disabled unless its API and provider are configured.
+    #[serde(default)]
+    pub browser: BrowserRuntimeConfig,
     /// ADR-0064 D1: 従来どおり `db = "<path>"`（文字列）で書けるほか、`[db]` テーブルで
     /// `path` と一緒に `busy_timeout_ms` 等を書ける（`DbConfig` のカスタム `Deserialize` が両方を
     /// 受け付ける）。
@@ -225,6 +228,20 @@ pub struct Config {
     /// `Config::load` で読んだファイルの絶対パス（`GET /api/v1/config` の `config_path`。TOML には書かない）。
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserRuntimeConfig {
+    #[serde(default)]
+    pub egress: BrowserEgressConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserEgressConfig {
+    #[serde(default)]
+    pub resolver: Option<std::net::IpAddr>,
 }
 
 /// ADR-0040 D3（Phase 47）: CLI からの上書き。`verify.sh` が本番の設定をそのまま読ませたまま、

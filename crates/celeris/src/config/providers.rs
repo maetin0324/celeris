@@ -175,12 +175,13 @@ pub(super) fn validate_providers(
             && p.adapter != task_worker::CodexAdapter::ID
             && p.adapter != task_worker::AiderAdapter::ID
             && p.adapter != task_worker::AcpAdapter::ID
+            && p.adapter != task_worker::BrowserSpecialistAdapter::ID
             && p.adapter != task_worker::PaperQaAdapter::ID
             && p.adapter != task_worker::LdrAdapter::ID
             && p.adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "provider {}: adapter {:?} is not available in this build (fake, claude-code, codex, aider, acp, paperqa, local-deep-research, langmem only)",
+                "provider {}: adapter {:?} is not available in this build (fake, claude-code, codex, aider, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
                 p.id, p.adapter
             )));
         }
@@ -190,11 +191,14 @@ pub(super) fn validate_providers(
                 p.id
             )));
         }
-        // ADR-0026 D2: `command`/`args` は `adapter = "acp"` の行だけで意味を持つ。他のアダプタに書いたら
+        // ADR-0026 D2 / ADR-0087: `command`/`args` は ACP と browser-specialist の行で意味を持つ。他のアダプタに書いたら
         // 静かに無視せず設定エラーにする（書いた本人の勘違いを早く見つけるため）。
-        if p.adapter != task_worker::AcpAdapter::ID && (p.command.is_some() || p.args.is_some()) {
+        if p.adapter != task_worker::AcpAdapter::ID
+            && p.adapter != task_worker::BrowserSpecialistAdapter::ID
+            && (p.command.is_some() || p.args.is_some())
+        {
             return Err(ConfigError::Invalid(format!(
-                "provider {}: command/args are only allowed when adapter = \"acp\" (ADR-0026 D2)",
+                "provider {}: command/args are only allowed when adapter = \"acp\" or \"browser-specialist\" (ADR-0087)",
                 p.id
             )));
         }

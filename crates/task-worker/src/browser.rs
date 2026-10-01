@@ -1336,6 +1336,9 @@ async fn run_with_executable_attempt(
     );
     let events = runtime.join("events.jsonl");
     let mut offset = 0;
+    // H3 belongs to the session, not just the injection call. Keep the live guard
+    // through adapter.run and the final event drain.
+    let mut injected_session_guard = None;
     let credential_segment = match (&approval, credentials) {
         (Some(approval), Some(sup)) => {
             let trusted = approval
@@ -1372,7 +1375,7 @@ async fn run_with_executable_attempt(
                     exit_code: None,
                 });
             }
-            let auth = live.auth_section();
+            injected_session_guard = Some(live.auth_section());
             let mut result = inject_h3(
                 &shared_cdp,
                 &mut broker,
@@ -1409,29 +1412,9 @@ async fn run_with_executable_attempt(
             {
                 result = Err("policy_transition_failed");
             }
-            // Consume (never buffer) whatever H3 wrote before lifting the event guard.
+            // Consume (never buffer) whatever H3 wrote. The guard remains active
+            // for all subsequent adapter events in this session.
             forward_events(&events, &mut offset, &req, &output, sink, &live);
-            if broker_closed
-                && sink
-                    .browser_auth_section(run_id, &browser.session_id, false)
-                    .is_err()
-            {
-                result = Err("auth_section_close_failed");
-            }
-            drop(auth);
-            if result != Err("auth_section_close_failed")
-                && shared_cdp
-                    .controller()
-                    .lock()
-                    .map_err(|_| "auth_section_close_failed")
-                    .and_then(|mut c| {
-                        c.close_auth_section()
-                            .map_err(|_| "auth_section_close_failed")
-                    })
-                    .is_err()
-            {
-                result = Err("auth_section_close_failed");
-            }
             let status = if result.is_ok() { "success" } else { "failure" };
             sink.progress_with(
                 &format!("browser.credential_use: {status}"),
@@ -1452,6 +1435,11 @@ async fn run_with_executable_attempt(
     };
     if let Some((close, Err(code))) = &credential_segment {
         let closed = close_with(close).await;
+        if closed && injected_session_guard.is_some() {
+            // Injection failed, but the session has ended; only now may the
+            // externally visible auth interval be released.
+            let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
+        }
         browser.state = BrowserRunState::Failed;
         sink.browser_updated(&browser);
         return Ok(RunOutcome {
@@ -1549,6 +1537,23 @@ async fn run_with_executable_attempt(
         });
     }
     forward_events(&events, &mut offset, &monitor_req, &output, sink, &live);
+    if closed && injected_session_guard.is_some() {
+        // The session is gone; no browser observation can resume. A failed close
+        // leaves both the store and controller in their stopped state.
+        if sink
+            .browser_auth_section(run_id, &browser.session_id, false)
+            .is_err()
+        {
+            outcome = Ok(RunOutcome {
+                terminal: Terminal::Error {
+                    message: "browser auth section could not be closed after session end".into(),
+                    retryable: true,
+                },
+                exit_code: None,
+            });
+        }
+    }
+    drop(injected_session_guard);
     browser.state = if browser.state == BrowserRunState::WaitingForAuth {
         BrowserRunState::WaitingForAuth
     } else {

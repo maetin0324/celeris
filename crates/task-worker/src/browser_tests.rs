@@ -1877,6 +1877,59 @@ mod live_wiring {
     use crate::browser_live::{CollectingSink, LiveEmitter};
 
     #[test]
+    fn h3_injected_session_forward_events_stays_stopped_after_injection() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        let events = temp.path().join("events.jsonl");
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let sink = RecordingSink::default();
+        let mut offset = 0;
+        let session_guard = emitter.auth_section();
+        std::fs::write(
+            &events,
+            "{\"operation\":\"navigate\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        std::fs::write(
+            &events,
+            "{\"operation\":\"click\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        offset = 0;
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert!(sink.progress.lock().unwrap().is_empty());
+        assert!(sink.artifacts.lock().unwrap().is_empty());
+        assert!(emitter.sink().events().is_empty());
+        drop(session_guard);
+    }
+
+    #[test]
+    fn h3_injected_session_live_view_stays_stopped_after_injection() {
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let session_guard = emitter.auth_section();
+        for state in ["injecting", "adapter-running", "session-closing"] {
+            assert!(!emitter.emit(&task_core::browser_live::LiveEvent::Status {
+                state: state.into(),
+            }));
+        }
+        assert!(emitter.sink().events().is_empty());
+        drop(session_guard);
+    }
+
+    #[test]
+    fn h3_injected_session_guard_releases_at_session_end() {
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let session_guard = emitter.auth_section();
+        assert!(emitter.in_auth_section());
+        // Production drops the guard only after close_with and the final drain.
+        drop(session_guard);
+        assert!(!emitter.in_auth_section());
+    }
+
+    #[test]
     fn browser_live_forwarded_events_are_scrubbed_status_only() {
         let temp = tempfile::tempdir().unwrap();
         let req = request(temp.path());
@@ -2006,8 +2059,11 @@ mod live_wiring {
             .append(true)
             .open(&events)
             .unwrap();
-        std::io::Write::write_all(&mut f, b"{\"operation\":\"click\",\"status\":\"success\"}\n")
-            .unwrap();
+        std::io::Write::write_all(
+            &mut f,
+            b"{\"operation\":\"click\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
         forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
         assert!(emitter.sink().events().is_empty());
         assert!(sink.progress.lock().unwrap().is_empty());

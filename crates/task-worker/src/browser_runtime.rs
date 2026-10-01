@@ -695,6 +695,7 @@ pub fn collect_facts(session_id: &str, pid: i32, pgid: i32) -> Result<RuntimeFac
         session_id: session_id.to_owned(),
         host_uid: nix::unistd::getuid().as_raw(),
         runtime_uid,
+        userns_owner_uid: task_core::browser_isolation::collect_userns_owner_uid(pid),
         namespaces,
         root_readonly,
         writable_mounts,

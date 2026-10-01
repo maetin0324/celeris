@@ -159,6 +159,7 @@ fn attestation() -> task_core::browser_isolation::IsolationAttestation {
         session_id: "s1".into(),
         host_uid: 1000,
         runtime_uid: 200_001,
+        userns_owner_uid: Some(1001),
         namespaces: REQUIRED_NAMESPACES.into_iter().collect(),
         root_readonly: true,
         writable_mounts: vec!["/session/profile".into()],

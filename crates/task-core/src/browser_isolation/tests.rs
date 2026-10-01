@@ -5,6 +5,7 @@ fn good() -> RuntimeFacts {
         session_id: "s1".into(),
         host_uid: 1000,
         runtime_uid: 200_001,
+        userns_owner_uid: Some(1001),
         namespaces: REQUIRED_NAMESPACES.into_iter().collect(),
         root_readonly: true,
         writable_mounts: vec!["/session/profile".into(), "/session/downloads".into()],
@@ -26,6 +27,36 @@ fn verified_runtime_is_isolated() {
     assert_eq!(a.isolation(), Isolation::Isolated);
     assert_eq!(a.session_id(), "s1");
     assert_eq!(a.pgid(), 4242);
+    assert_eq!(a.userns_owner_uid(), 1001);
+}
+
+#[test]
+fn daemon_owned_userns_is_rejected() {
+    let mut f = good();
+    f.userns_owner_uid = Some(f.host_uid);
+    assert_eq!(
+        violations(&f),
+        vec![IsolationViolation::UsernsOwnedByDaemon]
+    );
+}
+
+#[test]
+fn unknown_userns_owner_is_rejected() {
+    let mut f = good();
+    f.userns_owner_uid = None;
+    assert_eq!(violations(&f), vec![IsolationViolation::OwnerUnknown]);
+}
+
+#[test]
+fn different_userns_owner_is_attested() {
+    let f = good();
+    let a = verify_isolation(&f).expect("different owner with complete isolation");
+    assert_eq!(a.userns_owner_uid(), f.userns_owner_uid.unwrap());
+}
+
+#[test]
+fn missing_runtime_owner_is_unknown() {
+    assert_eq!(collect_userns_owner_uid(-1), None);
 }
 
 #[test]

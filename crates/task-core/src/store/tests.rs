@@ -1606,6 +1606,40 @@ fn event_rows_for_returns_one_tasks_rows_with_ids_after_seq() {
 }
 
 #[test]
+fn latest_delivery_skipped_rows_returns_latest_per_task_only() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = sample_task(Status::Draft);
+    let b = sample_task(Status::Draft);
+    store.insert(&a).unwrap();
+    store.insert(&b).unwrap();
+    let skipped = |detail: &str| Event::DeliverySkipped {
+        reason: crate::DeliverySkipReason::NoMarker,
+        detail: detail.to_string(),
+        head: None,
+    };
+    store.append_event(a.id, &skipped("old")).unwrap();
+    store.append_event(a.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(b.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(a.id, &skipped("latest")).unwrap();
+    store.append_event(b.id, &skipped("other task")).unwrap();
+
+    let rows = store.latest_delivery_skipped_rows().unwrap();
+    assert_eq!(rows.len(), 2);
+    let by_task = rows
+        .into_iter()
+        .map(|row| (row.task_id, row))
+        .collect::<HashMap<_, _>>();
+    assert!(matches!(
+        &by_task[&a.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "latest"
+    ));
+    assert!(matches!(
+        &by_task[&b.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "other task"
+    ));
+}
+
+#[test]
 fn events_since_orders_globally_and_respects_after_id_and_limit() {
     let store = SqliteStore::open_in_memory().unwrap();
     let a = sample_task(Status::Draft);

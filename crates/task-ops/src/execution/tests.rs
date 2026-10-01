@@ -1076,3 +1076,184 @@ fn replan_records_repair_scheduled_for_a_planner_authored_repair_unit() {
     assert_eq!(scheduled.0, "planner");
     assert_eq!(scheduled.1, task_core::execution::RepairOrigin::Planner);
 }
+
+/// ADR-0079 付記「R7-9」D2（本番 01M3PAX6RVE7AX8Z6118KADME3 の再現）: /3 の 2 段階（`p4` と `inject`）がどちらも
+/// 統合済み（統合 WU が done）の後、planner の replan が `p4` に `land2`、`inject` に `gaps` → `closeout` を足す。
+/// 修正前は done の統合 WU をそのまま持ち越したので、足した unit は統合されないまま計画が完了した。修正後は両方の
+/// 統合 WU を `pending` に戻し、依存に足した unit を入れ、`replan v2: stage_reopened` の遷移と
+/// `stage_reopened: p4,inject` の reason を残す。段階の順も保つ（`inject` の新しい unit は `p4` の統合を待つ）。
+/// replay は同じ行を作る。
+#[test]
+fn replan_adding_units_to_integrated_stages_reopens_their_integrations() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task();
+    store.insert(&task).unwrap();
+    let limits = ExecutionLimits {
+        tree: task_core::TreeLimits {
+            enabled: true,
+            ..task_core::TreeLimits::default()
+        },
+        ..ExecutionLimits::default()
+    };
+    let leaf = |key: &str, stage: &str, deps: &[&str]| {
+        serde_json::json!({
+            "key": key,
+            "stage": stage,
+            "kind": "implement",
+            "title": format!("leaf {key}"),
+            "objective": format!("objective of leaf {key} that is distinct"),
+            "depends_on": deps,
+            "checks": [{"cmd": "true", "expect_exit": 0}],
+        })
+    };
+    let plan = |rationale: &str, units: Vec<serde_json::Value>| -> ExecutionPlanSpec {
+        serde_json::from_value(serde_json::json!({
+            "schema": task_core::EXECUTION_PLAN_SCHEMA_V3,
+            "rationale": rationale,
+            "stages": [
+                {"key": "p4", "kind": "implement", "title": "phase 4"},
+                {"key": "inject", "kind": "implement", "title": "phase 4 inject"},
+            ],
+            "units": units,
+        }))
+        .unwrap()
+    };
+    adopt_plan(
+        &store,
+        task.id,
+        plan(
+            "v1",
+            vec![leaf("p4a", "p4", &[]), leaf("p4b", "inject", &["p4a"])],
+        ),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    for key in ["p4a", "integrate-p4", "p4b", "integrate-inject"] {
+        mark_done(&store, task.id, key);
+    }
+
+    let (_, diff) = replan(
+        &store,
+        task.id,
+        plan(
+            "v2: land the phase and close the gaps",
+            vec![
+                leaf("p4a", "p4", &[]),
+                leaf("land2", "p4", &[]),
+                leaf("p4b", "inject", &["p4a"]),
+                leaf("gaps", "inject", &[]),
+                leaf("closeout", "inject", &["gaps"]),
+            ],
+        ),
+        "replan (planner run)".to_string(),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert_eq!(diff.added, vec!["land2", "gaps", "closeout"]);
+    assert_eq!(diff.reopened_stages, vec!["p4", "inject"]);
+
+    let rows = store.work_units_for(task.id).unwrap();
+    let row = |key: &str| rows.iter().find(|u| u.key == key).unwrap().clone();
+    let p4 = row("integrate-p4");
+    assert_eq!(p4.status, WorkUnitStatus::Pending);
+    assert_eq!(p4.depends_on, vec!["p4a", "land2"]);
+    assert_eq!(p4.spec.depends_on, p4.depends_on);
+    let inject = row("integrate-inject");
+    assert_eq!(inject.status, WorkUnitStatus::Pending);
+    assert_eq!(inject.depends_on, vec!["p4b", "gaps", "closeout"]);
+    // 段階の順: p4 の新しい unit は走れる、inject の新しい unit は p4 の統合を待つ。
+    assert_eq!(row("land2").status, WorkUnitStatus::Ready);
+    assert_eq!(row("gaps").status, WorkUnitStatus::Pending);
+    assert_eq!(row("closeout").status, WorkUnitStatus::Pending);
+    assert!(task_core::stale_stage_integrations(&rows).is_empty());
+
+    let events = store.events_for(task.id).unwrap();
+    let reopened: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::WorkUnitTransitioned {
+                key,
+                from: WorkUnitStatus::Done,
+                to: WorkUnitStatus::Pending,
+                reason,
+                ..
+            } => Some((key.clone(), reason.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reopened,
+        vec![
+            (
+                "integrate-p4".to_string(),
+                "replan v2: stage_reopened".to_string()
+            ),
+            (
+                "integrate-inject".to_string(),
+                "replan v2: stage_reopened".to_string()
+            ),
+        ]
+    );
+    assert!(
+        events.iter().any(|(_, e)| matches!(
+            e,
+            Event::ExecutionPlanned { version: 2, reason: Some(r), .. }
+                if r.contains("(stage_reopened: p4,inject)")
+        )),
+        "{events:?}"
+    );
+    let replay_is_clean = |store: &SqliteStore| {
+        let (wu_mm, run_mm, plan_mm, applied) =
+            crate::replay::check_and_apply_execution(store, false).unwrap();
+        assert!(wu_mm.is_empty(), "{wu_mm:?}");
+        assert!(run_mm.is_empty(), "{run_mm:?}");
+        assert!(plan_mm.is_empty(), "{plan_mm:?}");
+        assert_eq!(applied, 0);
+    };
+    replay_is_clean(&store);
+
+    // 何も足さない replan（done の統合 WU の依存が段階の unit をすべて持つ）は統合 WU に触れない。
+    for key in [
+        "land2",
+        "integrate-p4",
+        "gaps",
+        "closeout",
+        "integrate-inject",
+    ] {
+        mark_done(&store, task.id, key);
+    }
+    let (_, diff) = replan(
+        &store,
+        task.id,
+        plan(
+            "v3: nothing to add",
+            vec![
+                leaf("p4a", "p4", &[]),
+                leaf("land2", "p4", &[]),
+                leaf("p4b", "inject", &["p4a"]),
+                leaf("gaps", "inject", &[]),
+                leaf("closeout", "inject", &["gaps"]),
+            ],
+        ),
+        "replan (planner run)".to_string(),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert!(diff.reopened_stages.is_empty());
+    let rows = store.work_units_for(task.id).unwrap();
+    assert!(
+        rows.iter()
+            .filter(|u| u.kind == task_core::WorkUnitKind::Integrate)
+            .all(|u| u.status == WorkUnitStatus::Done)
+    );
+    replay_is_clean(&store);
+}

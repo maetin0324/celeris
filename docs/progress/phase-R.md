@@ -2086,3 +2086,88 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 - `exec resume` は `--add-dir` を受け付けないため、R7-8 より前に作られたスレッドの resume run と、別 owner の target を与えられた
   resume run は引き続き target に書けない（ADR-0075 R7-8 決定 2）。resume は主に CoS（read-only）なので記録に留める。必要なら
   resume に `-c sandbox_workspace_write.writable_roots=[…]` を与える（実測で効く。アカウント設定の `writable_roots` を置き換える点を判断して）。
+
+## R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す、統合されていない unit を残して完了にしない（2026-10-01）
+
+### 事象
+
+- root task 01M3PAX6RVE7AX8Z6118KADME3「browser capability（Phase 1〜4）」が 3 回目の review_fail で `failed`（2026-10-01 00:05Z）。
+  reviewer: 「root HEAD は 99d5d0bf。land 4d65de6e と統合記録 68323b11 は HEAD の祖先ではない」。
+- replan v7 / v8 が統合済みの段階に unit を足していた: `phase-4-inject`（`integrate-phase-4-inject` done 09-30 16:07Z、HEAD 99d5d0bf）に
+  `gaps`・`closeout`、`phase-4`（`integrate-phase-4` done 07:24Z）に `land`（v8 で `land2`）。本番 DB（読み取り専用の写し）の行:
+  `integrate-phase-4.depends_on = [p4a, p4c, merge-phase-4-p4c, repair-phase-4-1]`（`land2` 無し）、`integrate-phase-4-inject.depends_on = [p4b]`
+  （`gaps`・`closeout` 無し）、`land2` は done（`head_commit` 68323b11、ブランチ `celeris-wu/01M3PAX6…/land2`）。`land2` の done（23:57:40Z）の
+  直後に `running → reviewing (worker_done)`。
+
+### 根本原因
+
+- `crates/task-ops/src/execution.rs`（修正前 L628）`Some(existing) if existing.status == WorkUnitStatus::Done => {}`: done の統合 WU は依存も
+  状態もそのまま持ち越される。
+- `crates/task-dispatch/src/execution_scheduler.rs`（修正前 L151 `complete`、`settle_phase` の `AllDone`）: 生きた行がすべて done なら完了。
+- 葉の行の `integrated_commit` はどの経路でも書かれない（統合 WU の行だけ）ので、「統合済みか」は統合 WU の依存で見るしかない。
+
+### 修正（ADR-0079 付記「R7-9」）
+
+- `task_core::stale_stage_integrations` / `reopened_integration` / `STAGE_REOPENED_REASON`（`crates/task-core/src/execution_plan/scheduling.rs:928-980`）:
+  done の統合 WU のうち、同じ段階にその依存に無い生きた unit があるもの（統合の後に足された unit）と、その行を `pending` に戻して依存に足す関数。
+- 採用（`crates/task-ops/src/execution.rs:636` 付近）: 新しい版の段階の unit が done の統合 WU の依存に無ければ、未統合の統合 WU と同じ経路で
+  持ち越して `pending`（`replan v<n>: stage_reopened`）。`ReplanDiff.reopened_stages`（:352）、`ExecutionPlanned.reason` に `(stage_reopened: …)`（:837）。
+  planner の replan も人の `PUT` / celerisctl も同じ関数を通る（/2・/3 共通）。R7-3 の check の書き換えはそのまま。
+- 完了の守り: `execution_scheduler::complete`（:157）と `settle_phase`（:355、`AllDone` → `Advance`）。dispatcher の `wu_dispatch_gate`
+  （`crates/task-dispatch/src/dispatcher/work_units.rs:203`、`reopen_stale_stage_integrations` :368）が計画の完了を見る前に当たる統合 WU を
+  `pending` に戻す（`WorkUnitTransitioned{done→pending, reason: "stage_reopened"}`）。修正前に作られた行もこれで救う。
+- replay（`crates/task-ops/src/replay.rs:292-313`）: `reason == "stage_reopened"` の遷移で、その時点で生きている行に同じ関数を当てる。replan の
+  経路は従来の「未完了の統合 WU」の規則（`apply_replan_step`）がそのまま同じ依存を作る。
+- `retry` と `reopen`: `retry` は task を複製する（`tree: None`、計画・unit なし → planner からやり直し、done の成果を捨てる）。**本番の task は
+  `reopen`**（同じ task を `failed → ready`、attempts 0、計画・unit・子・ブランチを残す）。
+
+### 試験
+
+- task-ops `execution::tests::replan_adding_units_to_integrated_stages_reopens_their_integrations`（本番の形: /3 の 2 段階が統合済み → planner の
+  replan が `land2` / `gaps` → `closeout` を足す）: 両方の統合 WU が `pending`・依存に足した unit、`replan v2: stage_reopened` の遷移 2 件、
+  reason に `(stage_reopened: p4,inject)`、段階の順（inject の新しい unit は p4 の統合を待つ）、replay が一致、何も足さない replan は統合 WU に触れない。
+- task-dispatch `execution_scheduler::tests::settle_is_not_all_done_while_an_integrated_stage_has_an_unmerged_unit`・
+  `completing_a_unit_added_to_an_integrated_stage_does_not_complete_the_plan`。
+- task-dispatch `dispatcher::tests::stage_reopen`（実 git・偽のアダプタ）:
+  - `a_replan_adding_a_unit_to_an_integrated_stage_reintegrates_that_stage`: s2 の失敗 → planner の差分が統合済みの s1 に a2 を足す → s1 の統合が
+    2 回目に a2 を merge → s2 → 最終レビューの check（a.txt・a2.txt・b.txt）が通って done。replay 一致。
+  - `reopening_a_task_whose_integrated_stage_gained_units_merges_them_before_review`: 修正前の replan の events（統合 WU に触れない v2 + done の
+    `late` とそのブランチの commit）を store に直接書き、終端の task を `task_ops::comment::reopen` → gate が `integrate-s1` を `stage_reopened` で
+    `pending` に戻し、`late` を merge して check を走らせてから最終レビュー（`worker_done` → done）。done の unit は走り直さない。replay 一致。
+- **変異確認**（3 つとも戻して通る）: (1) 採用の `reopened` を常に false → task-ops の試験と dispatcher の 1 本目が落ちる（1 本目は gate の守りで
+  完了はするが遷移の reason が `stage_reopened` になる）。(2) gate の開き直しを無効 → 2 本目が本番と同じく `reopen → plan_complete → review_fail`
+  で落ちる。(3) replay の規則を無効 → 2 本目の replay 検査が `integrate-s1 depends_on replayed "a" stored "a,late"` で落ちる。
+- **本番 DB の写しでの確認**（`sqlite3 'file:/var/lib/celeris/celeris.sqlite3?mode=ro' ".backup …"` の写しに一時的な ignored 試験を当てた。
+  commit していない。tick は回さず git には触れない）: 写しの上で `reopen`（Failed → Ready）→ `wu_dispatch_gate` = `StartIntegration(integrate-phase-4)`、
+  `integrate-phase-4` の依存に `land2`、`integrate-phase-4-inject` の依存に `gaps`・`closeout` が足され両方 `pending`。`integrate-phase-4` を done に
+  した後の `settle_phase` = `Integrate(integrate-phase-4-inject)`、gate = `StartIntegration(integrate-phase-4-inject)`。この task の replay の
+  不一致は前後で同じ 4 件（`integrate-phase-4` の seq / integrated_commit、統合の repair 行 2 件の欠落。いずれも R7-9 以前からのもの）で、
+  依存の不一致は増えない。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0（最初は新しいコードの整形差分 → `cargo fmt --all` で直して exit 0）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2986 passed, 7 skipped（exit 0）**（R7-8 の 2981 + 新規 5）。1 回目は
+  `task-api schema::tests::committed_schema_matches_generated` が落ちた（`ReplanDiff.reopened_stages` が API の schema に出る）→
+  `UPDATE_SCHEMA=1 cargo test -p task-api` で `docs/api/v1/api-v1.schema.json` に欄を 1 つ足して再実行、全件合格。
+
+### 昇格後に人がすること
+
+- `POST /api/v1/tasks/01M3PAX6RVE7AX8Z6118KADME3/reopen`（本文 `{"expected_status": "failed"}`）。**`/retry` は使わない**（複製して計画と
+  done の成果を捨てる）。最初の tick で `integrate-phase-4` と `integrate-phase-4-inject` が `stage_reopened` で `pending` に戻り、
+  `phase-4`（`land2` 68323b11 の merge、段階の check と `cargo test` / `cargo clippy`）→ `phase-4-inject`（`gaps`・`closeout` の子のブランチは
+  68323b11 の祖先なので skipped、check）→ 最終レビューの順に進む。
+- 確かめ方: `GET /api/v1/tasks/01M3PAX6RVE7AX8Z6118KADME3/events` に `work_unit_transitioned{reason: "stage_reopened"}` 2 件と
+  `phase_integrated{phase: "phase-4"}`（`merged` に `land2`）・`phase_integrated{phase: "phase-4-inject"}`、root のブランチ
+  `celeris/01M3PAX6RVE7AX8Z6118KADME3` が 68323b11 を含む（`git merge-base --is-ancestor 68323b11 celeris/01M3PAX6RVE7AX8Z6118KADME3`）。
+
+### 未解決・提案
+
+- reviewer の他の 2 つの不合格（ADR-0080 D3 の観測停止、P3-C の production run loop の gate 未配線）は統合の欠落とは別の中身の指摘で、R7-9 は
+  直さない。統合後の最終レビューで再び落ちれば従来どおり（attempts 0 からの review_fail → replan / 人の判断）。
+- 段階の統合の check（その段階の unit の `spec.checks` と workspace の check）が統合をやり直した時点で落ちれば、従来の統合の repair / replan の
+  経路に乗る（R7-3・R7-5）。
+- この task の replay には R7-9 以前からの不一致（統合の repair 行が replay で作られない等）が 4 件ある。別課題。
+- 本番のリポジトリ（`/var/lib/celeris/workspaces/01M3PAX6…/repos/agent-platform`）の ref は worktree の隔離で読めなかった。ブランチの存在は
+  依頼文の git の事実と DB の `work_unit_committed` を根拠にした。

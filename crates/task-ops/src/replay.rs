@@ -287,9 +287,30 @@ pub fn rebuild_work_units_and_runs(
                 run_id,
                 ..
             } => {
+                // ADR-0079 付記「R7-9」D4: dispatcher が統合済みの段階を開き直した（`stage_reopened`）。その時点で生きている
+                // 行（既に畳み込んだ版の行）に live と同じ規則を当て、統合 WU の依存に足りない key を足す。
+                let reopen_missing: Option<Vec<String>> =
+                    if reason == task_core::STAGE_REOPENED_REASON {
+                        let live: Vec<WorkUnitRow> = wu_rows
+                            .values()
+                            .filter(|w| introduced.get(&w.id).is_some_and(|k| *k < plan_step))
+                            .cloned()
+                            .collect();
+                        task_core::stale_stage_integrations(&live)
+                            .into_iter()
+                            .find(|(id, _)| id == work_unit_id)
+                            .map(|(_, missing)| missing)
+                    } else {
+                        None
+                    };
                 let Some(wu) = wu_rows.get_mut(work_unit_id) else {
                     continue;
                 };
+                if let Some(missing) = reopen_missing {
+                    let reopened = task_core::reopened_integration(wu, &missing);
+                    wu.depends_on = reopened.depends_on;
+                    wu.spec.depends_on = reopened.spec.depends_on;
+                }
                 if matches!(
                     reason.as_str(),
                     "merge_conflict" | "integration_check_failed"

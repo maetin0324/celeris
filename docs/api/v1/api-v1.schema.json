@@ -15180,6 +15180,13 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "reopened_stages": {
+          "description": "ADR-0079 付記「R7-9」D2: 統合済み（done）だった段階のうち、この版で unit が増えたので統合 WU を `pending` に\n戻した段階の key。`ExecutionPlanned.reason` にも `stage_reopened: …` として残す。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

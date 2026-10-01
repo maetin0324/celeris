@@ -923,6 +923,62 @@ pub fn phase_leaves<'a>(units: &'a [WorkUnitRow], phase: &str) -> Vec<&'a WorkUn
     leaves
 }
 
+/// ADR-0079 付記「R7-9」D3: dispatcher が統合済みの段階を開き直したときの `WorkUnitTransitioned.reason`
+/// （replay はこの値の統合 WU の遷移で [`reopened_integration`] を当てる）。
+pub const STAGE_REOPENED_REASON: &str = "stage_reopened";
+
+/// ADR-0079 付記「R7-9」D1: done の統合 WU のうち、同じ段階に、その統合 WU の `depends_on` に無い生きた unit
+/// （統合 WU 以外）があるもの（統合の後に段階へ入った unit。その branch / 子のブランチは task のブランチに merge
+/// されていない）。戻り値は `(統合 WU の id, 足りない key〈seq 順〉)`、統合 WU の `seq` 順。純粋関数。
+///
+/// 統合 WU の依存は採用の時点の段階の unit すべて（[`integration_work_unit_specs`]）と統合の repair WU なので、
+/// 統合の時点で段階にあった unit は必ず依存に入っている。`phase` を持たない行（最終レビューの repair WU）は
+/// どの段階にも属さないので見ない。
+pub fn stale_stage_integrations(units: &[WorkUnitRow]) -> Vec<(String, Vec<String>)> {
+    let mut integrations: Vec<&WorkUnitRow> = units
+        .iter()
+        .filter(|u| u.kind == WorkUnitKind::Integrate && u.status == WorkUnitStatus::Done)
+        .filter(|u| u.phase.is_some())
+        .collect();
+    integrations.sort_by_key(|u| u.seq);
+    let mut out = Vec::new();
+    for integ in integrations {
+        let mut missing: Vec<&WorkUnitRow> = units
+            .iter()
+            .filter(|u| u.status.is_active())
+            .filter(|u| u.kind != WorkUnitKind::Integrate)
+            .filter(|u| u.phase.is_some() && u.phase == integ.phase)
+            .filter(|u| !integ.depends_on.iter().any(|d| d == &u.key))
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        missing.sort_by_key(|u| u.seq);
+        out.push((
+            integ.id.clone(),
+            missing.into_iter().map(|u| u.key.clone()).collect(),
+        ));
+    }
+    out
+}
+
+/// ADR-0079 付記「R7-9」D3/D4: [`stale_stage_integrations`] に当たった統合 WU `integ` を開き直した行（`pending`、
+/// `depends_on` と `spec.depends_on` の末尾に `missing` を足す。lease・blocked_reason は外す。`integrated_commit` は
+/// 前の統合の HEAD のまま残す〈次の統合が上書きする〉）。dispatcher と replay が同じ関数を使う。
+pub fn reopened_integration(integ: &WorkUnitRow, missing: &[String]) -> WorkUnitRow {
+    let mut row = integ.clone();
+    for key in missing {
+        if !row.depends_on.contains(key) {
+            row.depends_on.push(key.clone());
+        }
+    }
+    row.spec.depends_on = row.depends_on.clone();
+    row.status = WorkUnitStatus::Pending;
+    row.blocked_reason = None;
+    row.clear_lease();
+    row
+}
+
 /// D15: WU が `failed` になったとき、それに（直接・間接に）依存する未着手の WU を
 /// `blocked(dependency_failed)` にする対象の `id` を返す（推移閉包）。
 pub fn dependents_to_block(units: &[WorkUnitRow], failed_key: &str) -> Vec<String> {

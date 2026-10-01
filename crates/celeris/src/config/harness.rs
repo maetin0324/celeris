@@ -563,12 +563,13 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
             && adapter != task_worker::ClaudeCodeAdapter::ID
             && adapter != task_worker::CodexAdapter::ID
             && adapter != task_worker::AcpAdapter::ID
+            && adapter != task_worker::BrowserSpecialistAdapter::ID
             && adapter != task_worker::PaperQaAdapter::ID
             && adapter != task_worker::LdrAdapter::ID
             && adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "[[harnesses]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, paperqa, local-deep-research, langmem only)",
+                "[[harnesses]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
                 h.id
             )));
         }
@@ -606,12 +607,13 @@ pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, C
             && adapter != task_worker::ClaudeCodeAdapter::ID
             && adapter != task_worker::CodexAdapter::ID
             && adapter != task_worker::AcpAdapter::ID
+            && adapter != task_worker::BrowserSpecialistAdapter::ID
             && adapter != task_worker::PaperQaAdapter::ID
             && adapter != task_worker::LdrAdapter::ID
             && adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, paperqa, local-deep-research, langmem only)",
+                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
                 r.id
             )));
         }

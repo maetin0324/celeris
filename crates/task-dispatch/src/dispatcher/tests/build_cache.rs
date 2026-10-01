@@ -181,6 +181,7 @@ async fn shared_build_cache_is_not_applied_to_remote_workspaces() {
     let outcome = run_worker(
         store.clone(),
         adapter,
+        Vec::new(),
         task.id,
         Tier::Standard,
         tmp.path().join("mirror"),

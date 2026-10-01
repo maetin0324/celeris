@@ -205,6 +205,17 @@
         "task_id": {
           "$ref": "#/$defs/TaskId"
         },
+        "trusted_login": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrustedLogin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。"
+        },
         "version": {
           "format": "uint64",
           "minimum": 0,
@@ -5029,6 +5040,39 @@
       "required": [
         "root_id",
         "depth"
+      ],
+      "type": "object"
+    },
+    "TrustedLogin": {
+      "additionalProperties": false,
+      "description": "ADR-0110 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を\n承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。",
+      "properties": {
+        "login_url": {
+          "type": "string"
+        },
+        "password_selector": {
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "submit_selector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "policy_id",
+        "revision",
+        "login_url",
+        "password_selector"
       ],
       "type": "object"
     },

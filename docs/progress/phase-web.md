@@ -1,7 +1,7 @@
 # PROGRESS — Web GUI（ADR-0081、`web/`）
 
 ---
-tasks: [01M3W79QE2ZD22YW7P499PZKPP]
+tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D]
 ---
 
 計画の正本: [implementation plan](../web/implementation-plan.md)、[feature parity matrix](../web/feature-parity.md)、[ADR-0081](../adr/0081-web-spa-frontend.md)。Phase 0 の記録は [PROGRESS.md](../PROGRESS.md#web-gui-phase-02026-09-29設計移行計画) に残す。
@@ -82,18 +82,18 @@ P5-01〜P5-03 の測定記録は [latency gate](../web/gates/p5-01-latency.md)�
 - P5-02 security: `corepack pnpm@12.6.0 -C web typecheck` と `corepack pnpm@12.6.0 -C web e2e parity/gateway.spec.ts parity/gateway-auth.spec.ts parity/gateway-relay.spec.ts parity/shell.spec.ts` → exit 0、20/20。最終変更後の横断 security/storage 2 spec も exit 0、2/2。X1〜X6/X8 を確認し、許可外 Host は全経路 400、CSRF は 403、保護経路の未認証・不正 cookie は 401。security header と token 非露出が合格。全 31 台帳行を開いた直後に localStorage/sessionStorage/IndexedDB/Cache Storage/Service Worker を検査し、表示設定以外の秘密・API 本文の永続化なし。
 - P5-03 mobile/a11y: `corepack pnpm@12.6.0 -C web mobile-audit` → exit 0（30 path × 360/390/412/1440、各幅の横溢れ 0、タップ/名前/構造/focus 判定 ok）。`corepack pnpm@12.6.0 -C web e2e a11y/ parity/mobile-gate.spec.ts --workers 4` → exit 0、191 passed。全 path/幅で axe critical/serious 0。検出された `/providers` checkbox などのタップ領域は修正済み。
 - P5-04 総点検: `docs/web/feature-parity.md` の X10・X11・X15 を gate 証拠と照合し、完了（X10 `ba629384`、X11 `46b3275f`、X15 `4d41b3e3`）を確認。X11 の閾値は遷移 URL/見出し各 300 ms 以下、10 秒遅延と 0 秒の差各 100 ms 以下、無関係イベントによる画面固有再取得 0 本。
-- 未解決: gate は loopback 偽 daemon/gateway と fixture による検証で、本番頻度や実環境の遅延分布は測っていない。dogfood 開始条件 H6 は人の決定待ち。X15 の staging 実機確認と gui/web 配信切替も運用段階に残る。
-- 提案: H6 と H9 の扱いを決めてから dogfood を開始する。開始前に H10 の staging 確認手順を実施し、配信切替は H7 の判断材料を確認して決める。
+- 未解決: gate は loopback 偽 daemon/gateway と fixture による検証で、本番頻度や実環境の遅延分布は測っていない。H6 の期間・合格条件は人の決定待ち。gui/web 配信切替も運用段階に残る。X15 の staging 実機確認は下の Phase 6 節のとおり完了した。
+- 提案: dogfood の問題を記録し、H6 と H9 を人が決める。配信切替は H7 の判断材料を確認して決める。
 
 ## Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備。P6-04 以降は未着手）
 
-P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は ADR-0096・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。dogfood は H6 の決定まで未開始であり、本番 daemon への接続はしていない。
+P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は ADR-0096・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。P6-03 は同日 18:32 UTC に開始し、詳細は下の開始記録に追記した。H6 の期間と合格条件は人の判断待ち。
 
 - Rust gate（2026-10-01、repair-cargo-1 の `crates/task-worker/src/ssh.rs` 修正を merge-base `8a61eae488eb` に戻した後）: `cargo test --workspace` → exit 101。記録された test suites は全て pass し、`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。人の 2026-10-01 の判断に従い、この sandbox から user systemd bus に接続できない環境由来の2件として除外し、残りの全テストを合格として扱う。`cargo test -p celeris --test releases_api` の再実行でも同じ2件が再現（6 passed / 2 failed）。テスト側の skip は別 task で対応する。
 - Rust lint: `cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。
 - 未解決（web の差分制約）: repair-cargo-1 の `ssh.rs` stub に対する ETXTBSY 修正（`c0910506`）は web の差分外なので戻した。main へ別途入れる。
 - 未解決: H6（dogfood の期間・合格条件）、H9（並行運用中の通知）、H7（gui/web 配信切替）の判断は未実施。P6-04 以降は未着手。
-- 提案: H6 と H9 を決めてから dogfood の開始を判断する。配信切替は H7 の判断材料を確認したうえで別途判断する。P5 横断 gate の値（30 path の URL/見出し最大 69.4/90.1 ms、H1 fallback 1 回、30 path × 4 幅の mobile/a11y 合格）は Phase 5 節と各 gate 記録を参照。
+- 提案: H6 と H9 を人が決め、dogfood 中の問題を記録する。配信切替は H7 の判断材料を確認したうえで別途判断する。P5 横断 gate の値（30 path の URL/見出し最大 69.4/90.1 ms、H1 fallback 1 回、30 path × 4 幅の mobile/a11y 合格）は Phase 5 節と各 gate 記録を参照。
 
 - P6-02 staging 実機確認（2026-10-01、release `6ef01deff025`）: `release.sh HEAD` exit 0、`gate.json` の `ok=true`・`web.ok=true`、`web/app/server/index.js` と prod `node_modules/` を確認。`verify.sh 6ef01deff025` exit 1（`verify.json.ok=false`、`live_ok=false`）。現行 schema 34 の celeris binary を同じ snapshot に起動し、gui `:7701` と web `http://127.0.0.1:7720` を同時起動。実 staging celeris `:7711` への `web/e2e/parity/real-staging-readonly.spec.ts` は 3 passed / exit 0。verify は DB schema 34 が release binary の上限 33 を超えて check 1 で失敗。この parity は release binary の検査を代替しない。本番 `:7700/:7710` には接続せず、web gateway は hook の終了時に停止。生ログ: `/var/lib/celeris/workspaces/01M3W79QAQ06PG1M0MCK5HRZ5K/artifacts/release-local-retry.log`、`verify.log`、`manual-parity.log`、`web-parity-e2e.log`、`web-gateway.log`。
 
@@ -101,6 +101,16 @@ P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-0
 - `verify.sh bf54b41ad627` は exit 0、`verify.json.ok=true`。本番 DB の読み取り専用 snapshot（schema 34）を staging `:7711` で schema 36 に migrate。check 1〜4・4b・4c・6 はすべて true。gui `:7701` と web gateway `127.0.0.1:7720` が同時に healthy（どちらも release `bf54b41ad627`）。web/e2e/parity/real-staging-readonly.spec.ts は実 staging celeris に対して 3 passed / exit 0。読み取り e2e は主要 GET と SPA 6 画面のみ。gateway は hook 終了時に停止し、`:7701/:7711/:7712/:7720` に残存 listener がないことを確認。本番 `:7700/:7710` には接続していない。
 - `verify.json.live_ok=false`: check 5 の N-1 binary `7fbfc347b240`（schema 34）は、新 release が schema 36 に migrate した後の snapshot を読めず失敗した。`verify.json.ok=true` と区別して扱う。初回の sandbox 内 verify は worker DB guard の user namespace probe が EPERM で check 1 に失敗し、権限のある staging 実行で再試行して上記の exit 0 を得た。
 - 生ログ: `/var/lib/celeris/workspaces/01M3W79QAQ06PG1M0MCK5HRZ5K/artifacts/release-schema36-retry.log`、`verify-schema36-retry.log`、`web-parity-e2e.log`、`web-gateway.log`、`staging-state/staging/logs/e2e-staging.log`。途中失敗のログも同じ artifacts の `release-schema36.log`、`verify-schema36.log` に保存。
+
+### P6-03 dogfood 開始（2026-10-01、task 01M3WAKKJQXT79DDDFCF9F5Q3D）
+
+人の回答は dogfood-mode=a（loopback `127.0.0.1:7720` の web gateway を本番 daemon `127.0.0.1:7710` に向けて起動し、PC 1440px・スマホ 390px を読み取りだけで確認）に加え、LAN `192.168.1.103:7721` から別端末への公開。H6 の期間・合格条件は未決定で、cutover は行わない。
+
+**2026-10-01 18:32 UTC に開始。** staging で `verify.sh` exit 0・読み取り parity 3 passed の release `bf54b41ad627` を参照する `celeris-web@bf54b41ad627.service` を起動した。`CELERIS_WEB_BIND=127.0.0.1:7720`、`CELERIS_API_URL=http://127.0.0.1:7710`。web 専用 password と session secret を設置した。`127.0.0.1:7720/healthz` は HTTP 200 で release `bf54b41ad627` と一致。`celeris-web-lan.socket` と `celeris-web-lan.service` で `192.168.1.103:7721` から loopback gateway に公開し、LAN 側 `/healthz` も同じ release を返した。
+
+Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 390px は LAN URL を使用。各幅で `/`・`/tasks`・`/projects`・`/org`・`/reports`・`/clusters` の 6 画面が HTTP 200、見出し表示、daemon down 表示なし。主要 GET API（`health`・`tasks`・`projects`・`org`・`reports`・`clusters`）も各幅で HTTP 200。ログイン POST 以外の変更系リクエストは 0。既存 gui/ の `127.0.0.1:7700/healthz` は HTTP 200 で継続稼働。LAN の別の物理端末からの到達は未確認。
+
+配置上の未解決: 本番 release パスは前 run の staging 成果物への symlink。NFS 上への実体コピーは時間がかかり途中で中止し、host の `/var/lib/celeris/web-dogfood` へのコピーは read-only filesystem で失敗した。dogfood 中は参照先を保持する必要がある。user unit は start のみで enable していない。詳細と問題追記先は [dogfood 手順](../web/dogfood.md) と [PROGRESS の dogfood 節](../PROGRESS.md#web-gui-dogfood開始-2026-10-01release-bf54b41ad627) を参照。
 
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 

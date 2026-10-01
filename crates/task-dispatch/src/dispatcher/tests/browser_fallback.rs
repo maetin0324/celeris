@@ -369,6 +369,23 @@ async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session
     // The browser run path refuses to start without the isolated runtime (P4-A).
     let exe = std::env::current_exe().unwrap();
     let bin = exe.parent().unwrap().parent().unwrap();
+    let sandboxd = bin.join("celeris-browser-sandboxd");
+    let egress = bin.join("celeris-browser-egress");
+    let headless_shell_available = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|home| std::fs::read_dir(home.join(".cache/ms-playwright")).ok())
+        .is_some_and(|dirs| {
+            dirs.flatten().any(|entry| {
+                entry
+                    .path()
+                    .join("chrome-headless-shell-linux64/chrome-headless-shell")
+                    .is_file()
+            })
+        });
+    if !sandboxd.is_file() || !egress.is_file() || !headless_shell_available {
+        eprintln!("skipping browser runtime integration: isolated runtime binaries unavailable");
+        return;
+    }
     task_worker::browser::configure_isolated_runtime(task_worker::browser::IsolatedBrowserConfig {
         live_sessions: None,
         resolver: Some("127.0.0.1".parse().unwrap()),
@@ -377,8 +394,8 @@ async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session
             std::process::id()
         )),
         bwrap: "/usr/bin/bwrap".into(),
-        sandboxd: bin.join("celeris-browser-sandboxd"),
-        egress: bin.join("celeris-browser-egress"),
+        sandboxd,
+        egress,
     });
     let (d, _, task, sessions) = browser_fallback_dispatcher(dir.path(), 1);
     let record = browser_fallback_test_ledger(dir.path(), &["acp", "claude-code"]);

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Browser capability Phase 1〜4 受け入れ行の追跡表（docs/progress/phase-browser-acceptance.md）を検査する。
 #
-# 1. 表の各行（`| P…` と `| A…`）の判定が `合格` か `後続`。合格行は `cmd:` と `test:`、後続行は ULID の task id を持つ。A1〜A17 が全部ある。
+# 1. 表の各行（`| P…` と `| A…`）の判定が `合格`・`後続`・`未達`。合格行は `cmd:` と `test:`、後続行は ULID の task id、未達行は `理由:` と `後続:` を持つ。A1〜A17 が全部ある。
 # 2. 文書中の `test: \`<名前>\`` の各名前が crates/ 配下に `fn <名前>` として実在する。
 # 3. 決定適合節の `crates/...rs:N` が実在ファイルで、N がその行数以内。
 # 4. 引用した `cmd:` を (crate, target) ごとにまとめて cargo test で実行し、全部 exit 0 かつ引用した各テストが `... ok` と出る。
@@ -43,8 +43,12 @@ while IFS= read -r line; do
     後続)
       grep -Eq "task: \`?$ULID_RE" <<<"$evidence" || err "$id: 後続行に ULID の task id がない"
       ;;
+    未達)
+      grep -q '理由:' <<<"$evidence" || err "$id: 未達行に 理由: がない"
+      grep -q '後続:' <<<"$evidence" || err "$id: 未達行に 後続: がない"
+      ;;
     *)
-      err "$id: 判定が '合格' でも '後続' でもない（'$verdict'）"
+      err "$id: 判定が '合格'・'後続'・'未達' のいずれでもない（'$verdict'）"
       ;;
   esac
 done < <(grep -E '^\| (P|A)[0-9A-Za-z-]* \|' "$DOC")

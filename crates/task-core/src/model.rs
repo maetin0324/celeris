@@ -1432,6 +1432,14 @@ pub enum Event {
         plan_id: String,
         reasons: Vec<String>,
     },
+    /// ADR-0099 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない
+    /// 監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。
+    DeliverySkipped {
+        reason: crate::DeliverySkipReason,
+        detail: String,
+        #[serde(default)]
+        head: Option<String>,
+    },
     /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
     /// `liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には
     /// 1 回だけ）。

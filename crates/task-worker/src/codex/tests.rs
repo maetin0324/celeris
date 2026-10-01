@@ -1668,6 +1668,146 @@ fn f5_fix4_git_admin_dirs_ignores_subdirectories_and_plain_dirs() {
 
 // ---- ADR-0074 Phase F5-fix4 ここまで ----
 
+// ---- ADR-0075 R7-8（本番 run 01M3VCWE54P73CPFG09ZSW6Q6M: `…/scratch/targets/<owner>/target/debug` が
+// `Read-only file system`）: fresh の `workspace-write` run は env の `CARGO_TARGET_DIR` も `--add-dir` で足す。ここから ----
+
+/// dispatcher と同じく `with_env` で scratch の env を重ねた adapter（`WorkerAdapter` のまま返す）。
+fn adapter_with_env(config: CodexConfig, env: &[(&str, String)]) -> Arc<dyn WorkerAdapter> {
+    let env: Vec<(String, String)> = env
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), v.clone()))
+        .collect();
+    CodexAdapter::new(config).with_env(&env).unwrap()
+}
+
+/// fresh の `workspace-write` run: `--add-dir <artifacts> --add-dir <CARGO_TARGET_DIR>`。存在しない target は先に作る
+/// （codex は存在しない root を書けるようにしない）。同名の `CARGO_TARGET_DIR` は後勝ち（`with_env` の規則）。
+#[tokio::test]
+async fn r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("scratch/targets/task-T/wu-W/target");
+    let mut config = stub_codex(dir.path(), args_log_script());
+    config.env.push((
+        "CARGO_TARGET_DIR".to_string(),
+        dir.path().join("operator-target").display().to_string(),
+    ));
+    let adapter = adapter_with_env(
+        config,
+        &[
+            ("CARGO_TARGET_DIR", target.display().to_string()),
+            ("CARGO_INCREMENTAL", "0".to_string()),
+            (
+                "SCCACHE_DIR",
+                dir.path().join("scratch/l1").display().to_string(),
+            ),
+        ],
+    );
+    let req = sample_req(dir.path().to_path_buf());
+    let artifacts_dir = req.artifacts_dir.to_str().unwrap().to_string();
+    assert!(!target.exists());
+    let _ = adapter
+        .run(req, "run-r7-8", default_limits(), &RecordingSink::default())
+        .await
+        .unwrap();
+    let args = captured_args(dir.path());
+    assert_eq!(
+        add_dir_values(&args),
+        [artifacts_dir.as_str(), target.to_str().unwrap()],
+        "only the last CARGO_TARGET_DIR is granted; SCCACHE_DIR is server-side: {args:?}"
+    );
+    assert!(
+        target.is_dir(),
+        "the target dir is created before codex starts"
+    );
+    assert_eq!(args.last().map(String::as_str), Some("-"), "{args:?}");
+}
+
+/// read-only の CoS run には足さず、作りもしない。
+#[tokio::test]
+async fn r7_8_readonly_cos_run_does_not_add_the_cargo_target_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("scratch/targets/task-T/target");
+    let adapter = adapter_with_env(
+        stub_codex(dir.path(), args_log_script()),
+        &[("CARGO_TARGET_DIR", target.display().to_string())],
+    );
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.conversation_addressee = Some(crate::protocol::ConversationAddressee::Secretary);
+    let artifacts_dir = req.artifacts_dir.to_str().unwrap().to_string();
+    let _ = adapter
+        .run(
+            req,
+            "run-r7-8-cos",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let args = captured_args(dir.path());
+    assert_eq!(add_dir_values(&args), [artifacts_dir.as_str()], "{args:?}");
+    assert!(!target.exists());
+}
+
+/// `exec resume` には従来どおり `--add-dir` を付けない（最初の fresh `exec` の許可を引き継ぐ前提。ADR-0075 R7-8 決定 2）。
+#[tokio::test]
+async fn r7_8_exec_resume_has_no_add_dir_even_with_a_cargo_target_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("scratch/targets/task-T/target");
+    let adapter = adapter_with_env(
+        stub_codex(dir.path(), args_log_script()),
+        &[("CARGO_TARGET_DIR", target.display().to_string())],
+    );
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.session = Some(crate::protocol::SessionHandle {
+        adapter: CodexAdapter::ID.to_string(),
+        session_id: "thread-r7-8".to_string(),
+        resume: true,
+    });
+    let _ = adapter
+        .run(
+            req,
+            "run-r7-8-resume",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let args = captured_args(dir.path());
+    assert_eq!(&args[..2], ["exec", "resume"], "{args:?}");
+    assert!(!args.contains(&"--add-dir".to_string()), "{args:?}");
+}
+
+/// 空・相対パスの `CARGO_TARGET_DIR` は足さない（cwd 相対なら cwd の中で、既に書ける）。
+#[tokio::test]
+async fn r7_8_empty_or_relative_cargo_target_dir_is_not_added() {
+    for value in ["", "target"] {
+        let dir = tempfile::tempdir().unwrap();
+        let adapter = adapter_with_env(
+            stub_codex(dir.path(), args_log_script()),
+            &[("CARGO_TARGET_DIR", value.to_string())],
+        );
+        let req = sample_req(dir.path().to_path_buf());
+        let artifacts_dir = req.artifacts_dir.to_str().unwrap().to_string();
+        let _ = adapter
+            .run(
+                req,
+                "run-r7-8-rel",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        let args = captured_args(dir.path());
+        assert_eq!(
+            add_dir_values(&args),
+            [artifacts_dir.as_str()],
+            "value {value:?}: {args:?}"
+        );
+    }
+}
+
+// ---- ADR-0075 R7-8 ここまで ----
+
 // ADR-0054 Phase 68c（本番障害 2026-09-21 15:44 UTC、release a2942d5d8a94。68b 配備後、fresh run は
 // 成功したが resume run が `--approve-for-me`（`[adapters.codex] extra_args` 由来）で exit 2）:
 //

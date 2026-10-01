@@ -286,6 +286,21 @@ struct CodexAttempt {
     saw_any_stdout_line: bool,
 }
 
+/// ADR-0075 R7-8: 子プロセスに渡す env（`config.env`。同名は後勝ち）の `CARGO_TARGET_DIR`。空・相対パス・
+/// コンテナ実行（パスはホストのもの）なら `None`。
+fn cargo_target_writable_root(config: &CodexConfig) -> Option<std::path::PathBuf> {
+    if config.container.is_some() {
+        return None;
+    }
+    let (_, value) = config
+        .env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == crate::build_cache::CARGO_TARGET_DIR_VAR)?;
+    let path = std::path::PathBuf::from(value);
+    (!value.is_empty() && path.is_absolute()).then_some(path)
+}
+
 /// ADR-0074 Phase F5-fix4: この run が触るリポジトリの git 管理領域（`--add-dir` で足す分）。
 ///
 /// 対象のリポジトリは request に一覧として載っていないので、ディスパッチャの配置（ADR-0043 D2 /
@@ -485,6 +500,21 @@ async fn run_codex_once(
         if sandbox_mode == "workspace-write" {
             for dir in git_writable_roots(req) {
                 command.arg("--add-dir").arg(dir);
+            }
+            // ADR-0075 R7-8（本番 run 01M3VCWE54P73CPFG09ZSW6Q6M）: run の `CARGO_TARGET_DIR`（scratch の
+            // `<scratch>/targets/<owner>/target` など。cwd の外）も書ける場所として足す。codex は存在しない
+            // root を書けるようにしない（実測）ので先に作る。作れなければ足さない（cargo が同じ誤りを出す）。
+            if let Some(target) = cargo_target_writable_root(config) {
+                match tokio::fs::create_dir_all(&target).await {
+                    Ok(()) => {
+                        command.arg("--add-dir").arg(&target);
+                    }
+                    Err(e) => warn!(
+                        "run {run_id}: could not create CARGO_TARGET_DIR {} for the codex sandbox \
+                         (ADR-0075 R7-8); not adding it as a writable root: {e}",
+                        target.display()
+                    ),
+                }
             }
         }
         command.args(&config.extra_args);

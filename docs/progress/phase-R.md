@@ -2032,3 +2032,57 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 - codex の network 無しの run では、cargo が依存を新しく取得する必要がある場合（crates.io）も失敗しうる（未確認。今回の失敗は
   それより前の `rustc -vV` で起きている）。必要なら `network_access` の判断と一緒に見直す。
 - 09:5xZ（2026-10-01）: **R7-7 昇格（a2d1ef5e5d9b）と codex の network_access**。release a2d1ef5e5d9b（R7-7）を verify ok / live_ok → live で昇格。web P6-03（01M3TSBAP2…）に回答して再開 → wrapper は R7-7 版に書き直され sccache の EPERM は消えたが、次の段で codex の sandbox が CARGO_TARGET_DIR（/var/lib/celeris/scratch/targets/…）を read-only にしていて `Read-only file system` → **R7-8**（codex の `--add-dir` に CARGO_TARGET_DIR）を委譲。人の許可で `~/.local/celeris/codex-accounts/chatgpt_plus_personal/config.toml` に `[sandbox_workspace_write] network_access = true` を追加（backup `config.toml.bak-20261001a`）。同じ CODEX_HOME の `codex sandbox` から 127.0.0.1:4236 へ connect ok（network_access=false では EPERM）。codex の run でも sccache が効く。
+
+## R7-8: codex の `workspace-write` run に `CARGO_TARGET_DIR` を書ける場所として渡す（2026-10-01）
+
+### 事象
+
+- R7-7 の後、codex の run 01M3VCWE54P73CPFG09ZSW6Q6M（task 01M3TSBAP2X6RCP829CVKN4TGG、09:31Z）の `cargo test --workspace` と
+  `cargo clippy` が `failed to create directory /var/lib/celeris/scratch/targets/task-01M3TSBAP2X6RCP829CVKN4TGG/wu-01M3VA6EWRNAP0W5VJB56MX6CG/target/debug
+  — Read-only file system (os error 30)` で落ちた（2026-09-29 の codex の run の `.cargo-build-lock` read-only も同じ原因）。
+
+### 根本原因（証拠）
+
+- codex の `workspace-write` sandbox が書けるのは cwd・`/tmp` 系・`--add-dir` だけ。codex adapter が `--add-dir` で足していたのは
+  `artifacts_dir` と git の管理領域（F5-fix4）だけで、dispatcher が `with_env` で重ねる `CARGO_TARGET_DIR`（ADR-0075 D3、cwd の外）が無い。
+- 再現（自前のプロセスだけ。codex-cli 0.157.0、空の `CODEX_HOME`、cwd = `/var/tmp/r78probe-…/cwd`）:
+  `codex sandbox -c 'sandbox_mode="workspace-write"' -- touch <兄弟>/tgt/plain` → `Read-only file system`（exit 1）。
+  `-c 'sandbox_workspace_write.writable_roots=["<兄弟>/tgt"]'` を足すと exit 0。**root が存在しないと許可は効かない**
+  （存在しない root の下の `mkdir -p` も `Read-only file system`）→ adapter が先に作る。
+
+### 修正（ADR-0075 の「R7-8」追記）
+
+- `crates/task-worker/src/codex.rs:291` `cargo_target_writable_root`: `config.env`（同名は後勝ち）の最後の `CARGO_TARGET_DIR` を返す。
+  空・相対パス・コンテナ実行（`config.container` が `Some`）は `None`。
+- `crates/task-worker/src/codex.rs:504-519`: fresh の `codex exec` で sandbox が `workspace-write` のとき、上の値を `create_dir_all` してから
+  `--add-dir` で足す（git の管理領域の後）。作れなければ warn して足さない。read-only の CoS run・`exec resume` は変えない。
+- 他の scratch の env: `SCCACHE_DIR` は sccache server（daemon 側）が書く。run の中の wrapper（R7-7）は TCP で繋ぐか素の compiler を exec する
+  だけなので不要。`RUSTC_WRAPPER` は読み・実行のみ。claude-code / aider / ACP は Celeris が OS の sandbox を掛けていないので同じ欠落は無い。
+
+### 試験（`crates/task-worker/src/codex/tests.rs:1671-1809`）
+
+- `r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir`: `with_env` で scratch の env を重ねた fresh run の `--add-dir` が
+  `[artifacts, <target>]`（`config.env` の先の `CARGO_TARGET_DIR` は後勝ちで上書き、`SCCACHE_DIR` は足さない）、target が作られる。
+- `r7_8_readonly_cos_run_does_not_add_the_cargo_target_dir`: CoS（read-only）は `[artifacts]` だけ、target を作らない。
+- `r7_8_exec_resume_has_no_add_dir_even_with_a_cargo_target_dir`: resume には `--add-dir` 無し。
+- `r7_8_empty_or_relative_cargo_target_dir_is_not_added`: `""` と `target` は足さない。
+- **変異確認**: 追加の `if let` を `.filter(|_| false)` で無効にすると fresh の試験が
+  `left: ["…/artifacts"]` / `right: ["…/artifacts", "…/scratch/targets/task-T/wu-W/target"]` で落ちる（戻して通る）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2981 passed, 7 skipped（exit 0）**（R7-7 の 2977 + 新規 4）。
+
+### 昇格後にすること
+
+- blocked の task 01M3TSBAP2X6RCP829CVKN4TGG を、R7-7 の文面に「target に書けない（Read-only file system）のも release <sha12> で直した」を
+  足したコメントで再開させる。最初の fresh run の argv（`request.json` / transcript）に `--add-dir /var/lib/celeris/scratch/targets/…/target`
+  が載っていることを確かめる。
+
+### 未解決・提案
+
+- `exec resume` は `--add-dir` を受け付けないため、R7-8 より前に作られたスレッドの resume run と、別 owner の target を与えられた
+  resume run は引き続き target に書けない（ADR-0075 R7-8 決定 2）。resume は主に CoS（read-only）なので記録に留める。必要なら
+  resume に `-c sandbox_workspace_write.writable_roots=[…]` を与える（実測で効く。アカウント設定の `writable_roots` を置き換える点を判断して）。

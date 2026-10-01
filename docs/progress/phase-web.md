@@ -1,7 +1,7 @@
 # PROGRESS — Web GUI（ADR-0081、`web/`）
 
 ---
-tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D]
+tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D, 01M3WCAQ762PKQ75CR6K03236M]
 ---
 
 計画の正本: [implementation plan](../web/implementation-plan.md)、[feature parity matrix](../web/feature-parity.md)、[ADR-0081](../adr/0081-web-spa-frontend.md)。Phase 0 の記録は [PROGRESS.md](../PROGRESS.md#web-gui-phase-02026-09-29設計移行計画) に残す。
@@ -119,3 +119,56 @@ Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 
 - 再走: `web/node_modules/.bin/tsc -b`、`web/node_modules/.bin/biome check .`、`web/node_modules/.bin/vitest run`、`node web/scripts/check-parity.mjs --require-phase 2`（前 3 件は `web/` で実行）→ 各 exit 0、vitest 16 files / 148 tests（台帳テスト 2 件を含む）pass。
 - 再走: `web/node_modules/.bin/playwright test latency/transition.spec.ts realtime/refetch-scope.spec.ts a11y/axe.spec.ts parity/`（`web/` で実行）→ exit 0、27 passed（S1・S2・S4 各 2 件、parity 21 件）。S1 の selector 修正後に V3 の 6 件を再走し、6 passed。偽 daemon と gateway は loopback の空き port を使用。
 - 拡張確認: `/tasks/$id` に一時的に `v3: true` を付け、`-g '/tasks/\$id'` で S1・S2・S4 の 3 件 pass。印は確認後に戻した。`corepack pnpm@12.6.0 -C web` はこの worktree の依存未配置から外部取得を試みたため停止し、同じ固定版のローカル依存をコピーして上記の binary を直接実行した。
+
+## 最終整合（task close-out）
+
+- 最終検証 HEAD: c530d4d6bccc1b46b8490d73acc8969c8df7fc45
+
+上記 HEAD（parity-ancestor 統合後、S）をコードを変えずに foreground で検証した（2026-10-01）。この節とそれに続く `docs/PROGRESS.md` の追記は検証の後に別 commit で足したため、記録 commit の sha は S と異なる。
+
+### V1（gui/、`corepack pnpm@11.27.0 -C gui`）
+
+- `install --frozen-lockfile` → exit 0
+- `test`（vitest run）→ exit 0、84 files / 1249 tests passed
+- `typecheck`（`react-router typegen && tsc -b`）→ exit 0
+- `build` → exit 0
+
+### V2（web/、`corepack pnpm@12.6.0 -C web`）
+
+- `install --frozen-lockfile` → exit 0
+- `typecheck`（`tsc -b`）→ exit 0
+- `lint`（`biome check .`）→ exit 0（Checked 223 files、info 1 件、fixable style 指摘のみでエラー無し）
+- `test`（`vitest run && node --test server/*.test.mjs`）→ exit 0、vitest 24 files / 178 tests passed、node:test 41 tests passed
+- `build`（vite build）→ exit 0
+- `gen:types --check` → **exit 1**。`docs/api/v1/api-v1.schema.json` が `web/api/generated/types.ts`・`schema.json` より新しく、`BrowserWait.trusted_login`、`CheckpointEnd` の `"waiting"` 分岐、`ClusterJobState`・`ClusterJobStatus`・`ClusterJobWait`・`ClusterJobWaitState`・`ClusterJobWaitView` などが生成物に未反映。`node web/scripts/gen-types.mjs`（`--check` 無し）を一度実行して差分を確認した後、`git checkout -- web/api/generated/types.ts web/api/generated/schema.json` で即座に戻し、コードは変更していない（この検証後の `git status` は clean）。再実行でも同じ2ファイルが stale と出る、再現する真の差分であり、sandbox 環境起因ではない（ネットワーク・権限エラーではなく、スキーマ内容の不一致）。web 差分の範囲外の是正が必要。
+- `check:boundaries` → exit 0
+- `check:secrets` → exit 0（`token absent from build output, HTML, /api responses, errors and logs`）
+- `check:parity --require-phase 6` → exit 0
+
+### e2e parity/（`corepack pnpm@12.6.0 -C web e2e parity/`）
+
+exit 1、102 passed / 1 failed / 8 skipped（4.4m）。
+
+- 失敗 1 件: `e2e/parity/gateway.spec.ts:44 parity-x: 型の再生成差分ゼロ・gui import なし` — 上記の `gen-types --check` と同じ drift が原因（`execFileSync(... "scripts/gen-types.mjs", "--check")` が exit 1 を投げる）。環境起因ではなく、上と同じ真の差分。
+- skip 8 件の内訳と理由: `/inbox`・`/approvals`・`/knowledge`・`/org`・`/reports` の fixture screenshots 計 5 件は `test.skip(!process.env.WEB_SHOTS_OUT, ...)` によるもので `WEB_SHOTS_OUT` 未設定のため skip。`real-staging-readonly.spec.ts` の 3 件は `test.skip(!base, "requires WEB_E2E_REAL_BASE_URL for the staging gateway")` によるもので実 staging 環境が無いため skip（前回の p6-staging 検証と同じ理由）。どちらも環境由来の明示的 skip であり、テストの欠落ではない。
+
+### selfdeploy（`scripts/selfdeploy/tests/*.sh` を 1 本ずつ bash で実行）
+
+全 7 本が exit 0: `pid_resolution_test.sh`、`prepare_timeout_test.sh`、`release_gui_skip_and_shared_tree.sh`、`release_parallel_test_gate.sh`、`release_uses_scratch_lease.sh`、`release_web_stage_nonblocking.sh`、`verify_durations_and_parallel.sh`。
+
+### cargo（Celeris が渡した `CARGO_TARGET_DIR`・`RUSTC_WRAPPER`（sccache）をそのまま使用）
+
+- `cargo test --workspace` → exit 101、再実行でも同じ結果。`crates/celeris/tests/instance_handoff.rs` は 3 passed / 5 failed / 0 ignored。他の suite は pass（最初の run では unit 214 passed、main 1 passed、他の integration suite も通過）。失敗 3 件（`starting_the_same_release_twice_exits_three`、`normal_mode_does_not_inject_the_smoke_builtins`、`verify_mode_never_dispatches_and_never_touches_daemon_instances`）は worker DB guard の namespace probe が `Operation not permitted` で起動できない。残る 2 件（`a_newer_release_takes_over_while_the_old_one_finishes_its_run`、`a_stale_heartbeat_promotes_the_standby`）は期待された dispatch 停止／standby 昇格を確認できず失敗し、後者は 60 秒で終了。2 回目の実行でも同一の 5 件が再現した。namespace の失敗はこの sandbox の制限を示す明確な環境要因。残る handoff 2 件の原因はこの実行だけでは特定できず、コード原因か環境原因か確定できない。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning 0
+
+### まとめ
+
+V1・selfdeploy・clippy は全件 exit 0。V2 の `gen:types --check` とそれに依存する e2e 1 件は `docs/api/v1/api-v1.schema.json` と `web/api/generated/*` の真の drift により失敗。Rust workspace test は 2 回とも instance_handoff の同じ 5 件が失敗し、3 件は sandbox namespace 制約、2 件は原因未確定。コードは変更していない。
+
+### adr-place の記録
+
+人の判断 adr-place の回答は (a): `docs/adr/0082`・`0083`・`0096`（web 関連の 3 本、`0082-web-sse-invalidate-unlisted-kinds.md`・`0083-web-project-plan-milestone-successors.md`・`0096-web-parallel-operation.md`）は `docs/adr/` に置いたまま。実装計画 §1 と P6-02 が `docs/adr/NNNN-*.md` への追加を要求しており、人が範囲内と判断した。ADR ファイルは移動していない（`git status` で `docs/adr/` に差分なしを確認済み）。
+
+### 未解決・提案
+
+- `docs/api/v1/api-v1.schema.json` と `web/api/generated/{types.ts,schema.json}` の drift（`BrowserWait.trusted_login`・`ClusterJobState`/`ClusterJobWait` 系）を解消する commit を別途入れ、`gen:types --check` と `e2e/parity/gateway.spec.ts` の該当 1 件を再度合格させる。この WorkUnit の変更範囲（`docs/progress/`・`docs/PROGRESS.md`）には含めていない。

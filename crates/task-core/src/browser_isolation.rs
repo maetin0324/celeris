@@ -580,11 +580,14 @@ pub fn collect_userns_owner_uid(pid: i32) -> Option<u32> {
     use std::os::fd::AsRawFd;
 
     // linux/nsfs.h: NS_GET_OWNER_UID = _IO(NSIO, 0x4), NSIO = 0xb7.
-    const NS_GET_OWNER_UID: libc::c_ulong = 0xb704;
+    const NS_GET_OWNER_UID: std::ffi::c_ulong = 0xb704;
+    unsafe extern "C" {
+        fn ioctl(fd: std::ffi::c_int, request: std::ffi::c_ulong, ...) -> std::ffi::c_int;
+    }
     let ns = std::fs::File::open(format!("/proc/{pid}/ns/user")).ok()?;
-    let mut owner: libc::uid_t = 0;
+    let mut owner: u32 = 0;
     // SAFETY: ns is an open namespace FD, and owner points to a writable uid_t.
-    let result = unsafe { libc::ioctl(ns.as_raw_fd(), NS_GET_OWNER_UID, &mut owner) };
+    let result = unsafe { ioctl(ns.as_raw_fd(), NS_GET_OWNER_UID, &mut owner) };
     (result == 0).then_some(owner)
 }
 

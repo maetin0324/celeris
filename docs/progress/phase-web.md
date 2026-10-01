@@ -70,6 +70,17 @@ Parity で閉じた Phase 4 行は R06・R07・R09〜R16・R29〜R34・R36（`do
 - 提案: Phase 5 で X10 の全画面 axe/mobile gate を閉じ、crates の flaky 修正を main に別途投入する。
 - prune テストの event 待ちと `ssh.rs` stub の ETXTBSY 修正は web の差分外なので戻した。main（分割後の dispatcher）へ別途入れる。
 
+## Phase 5（完了 2026-10-01、横断 gate P5-01〜P5-04）
+
+P5-01〜P5-03 の測定記録は [latency gate](../web/gates/p5-01-latency.md)、[security gate](../web/gates/p5-02-security.md)、[mobile・a11y gate](../web/gates/p5-03-mobile-a11y.md)、P5-04 の総点検は [feature parity matrix](../web/feature-parity.md) に記録した。X10/X11/X15 は完了。
+
+- P5-01 latency: `corepack pnpm@12.6.0 -C web e2e latency/transition.spec.ts realtime/refetch-scope.spec.ts parity/latency-gate.spec.ts` → exit 0。偽 daemon/gateway、JSON 0/5/10 秒遅延で全 30 path を計測。最大値は URL 69.4 ms、見出し 90.1 ms、10 秒−0 秒の最大差は URL 15.5 ms・見出し 16.5 ms。閾値は URL/見出し各 300 ms 以下、差各 100 ms 以下で全件合格。画面固有の無関係イベント再取得は全画面 0 本。H1 project fallback は fixture の 4 event 中 1 回（fixture 実測で本番頻度を示さない）。
+- P5-02 security: `corepack pnpm@12.6.0 -C web typecheck` と `corepack pnpm@12.6.0 -C web e2e parity/gateway.spec.ts parity/gateway-auth.spec.ts parity/gateway-relay.spec.ts parity/shell.spec.ts` → exit 0、20/20。最終変更後の横断 security/storage 2 spec も exit 0、2/2。X1〜X6/X8 を確認し、許可外 Host は全経路 400、CSRF は 403、保護経路の未認証・不正 cookie は 401。security header と token 非露出が合格。全 31 台帳行を開いた直後に localStorage/sessionStorage/IndexedDB/Cache Storage/Service Worker を検査し、表示設定以外の秘密・API 本文の永続化なし。
+- P5-03 mobile/a11y: `corepack pnpm@12.6.0 -C web mobile-audit` → exit 0（30 path × 360/390/412/1440、各幅の横溢れ 0、タップ/名前/構造/focus 判定 ok）。`corepack pnpm@12.6.0 -C web e2e a11y/ parity/mobile-gate.spec.ts --workers 4` → exit 0、191 passed。全 path/幅で axe critical/serious 0。検出された `/providers` checkbox などのタップ領域は修正済み。
+- P5-04 総点検: `docs/web/feature-parity.md` の X10・X11・X15 を gate 証拠と照合し、完了（X10 `ba629384`、X11 `46b3275f`、X15 `4d41b3e3`）を確認。X11 の閾値は遷移 URL/見出し各 300 ms 以下、10 秒遅延と 0 秒の差各 100 ms 以下、無関係イベントによる画面固有再取得 0 本。
+- 未解決: gate は loopback 偽 daemon/gateway と fixture による検証で、本番頻度や実環境の遅延分布は測っていない。dogfood 開始条件 H6 は人の決定待ち。X15 の staging 実機確認と gui/web 配信切替も運用段階に残る。
+- 提案: H6 と H9 の扱いを決めてから dogfood を開始する。開始前に H10 の staging 確認手順を実施し、配信切替は H7 の判断材料を確認して決める。
+
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 
 修正 commit `web phase 2 P2-07: select V3 screens from the ledger`（本節を含む commit）。`screens.ts` の `v3: true` が付いた画面だけを S1・S2・S4 が選ぶようにし、Phase 2 では `/tasks` と `/inbox` のみを対象にした。nav に無い画面は台帳の fixture で開く。動的 route も見出しを起点にデータ領域を確認する。

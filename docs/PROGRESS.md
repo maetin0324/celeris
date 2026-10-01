@@ -50,3 +50,7 @@ P3-01〜P3-15 完了。証拠・未解決・提案は [progress/phase-web.md の
 ## Web GUI Phase 4（完了 2026-10-01、管理の画面 P4-01〜P4-17）
 
 P4-01〜P4-17 完了。GUI/web 静的検査・parity e2e・V3・mobile-audit は exit 0。`cargo test --workspace` は exit 0（2,886 passed / 0 failed / 7 ignored）、`cargo clippy --workspace -- -D warnings` は exit 0（warning 0）。証拠・未解決・提案は [progress/phase-web.md の Phase 4 節](progress/phase-web.md#phase-4完了-2026-10-01管理の画面-p4-01p4-17)。
+
+## Web GUI Phase 5（完了 2026-10-01、横断 gate P5-01〜P5-04）
+
+P5-01〜P5-04 完了。Latency は 30 path で URL/見出し最大 69.4/90.1 ms、10 秒遅延時の差は最大 15.5/16.5 ms、H1 fallback は fixture で 1 回。Security X1〜X6/X8、mobile/a11y 30 path × 4 幅（axe critical/serious 0、横溢れ 0）、parity 総点検 X10/X11/X15 は合格。dogfood は H6 決定待ち。証拠・未解決・提案は [progress/phase-web.md の Phase 5 節](progress/phase-web.md#phase-5完了-2026-10-01横断-gate-p5-01p5-04)。

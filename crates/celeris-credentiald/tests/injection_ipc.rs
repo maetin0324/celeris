@@ -28,7 +28,10 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use task_core::browser_isolation::{CdpEndpoint, Namespace, RuntimeFacts};
+use task_core::browser_isolation::{
+    CdpEndpoint, IsolationViolation, Namespace, RuntimeFacts, collect_runtime_facts,
+    verify_isolation,
+};
 use tempfile::TempDir;
 
 const SENTINEL: &str = "SENTINEL-INJECT-3f9a1c7e5b2d4a60";
@@ -517,11 +520,20 @@ fn isolation_is_verified_by_the_broker() {
 }
 
 #[test]
-fn production_admission_refuses_same_uid_host() {
+fn credential_injection_sameuid_rejected_in_production() {
     // Attested は /proc から事実を採り直す。子 process は host と同じ namespace・UID なので必ず拒否。
     let mut fx = Fx::new(Admission::Attested);
     let lease = fx.grant("sess-1", "k1", 60);
-    fx.live("sess-1");
+    let runtime_pid = fx.live("sess-1") as i32;
+    let pgid = unsafe { libc::getpgid(runtime_pid) };
+    assert!(pgid > 0);
+    let runtime_facts = collect_runtime_facts("sess-1", runtime_pid, pgid).expect("runtime facts");
+    assert_eq!(runtime_facts.host_uid, runtime_facts.runtime_uid);
+    assert!(
+        verify_isolation(&runtime_facts)
+            .unwrap_err()
+            .contains(&IsolationViolation::SameUid)
+    );
     fx.open("sess-1", "auth-1", &lease);
     let before = fx.calls();
     assert_eq!(

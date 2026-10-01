@@ -20,7 +20,7 @@ use crate::browser_relay::{self, CHANNEL_FD, CONNECT, GRANT, READY, REFUSE};
 use nix::libc;
 use task_core::browser_isolation::{
     CdpEndpoint, IsolationAttestation, IsolationViolation, Namespace, RuntimeFacts, SESSION_ROOT,
-    verify_isolation,
+    StateRejected, verify_isolation,
 };
 
 /// sandbox の中の UID/GID（host から見た UID は変わらない。ADR-0087）。
@@ -326,8 +326,16 @@ impl IsolatedRuntime {
 
     /// 事実を採り直して検査する（ADR-0087 D5）。
     pub fn attest(&mut self) -> Result<IsolationAttestation, Vec<IsolationViolation>> {
+        self.attest_with(RestoreAdmission::Attested)
+    }
+
+    /// 事実を採り直し、`admission` で検査する（ADR-0094 D2）。
+    pub fn attest_with(
+        &mut self,
+        admission: RestoreAdmission,
+    ) -> Result<IsolationAttestation, Vec<IsolationViolation>> {
         match self.facts() {
-            Ok(f) => verify_isolation(&f),
+            Ok(f) => admission.admit(&f),
             Err(_) => Err(vec![IsolationViolation::NoProcessGroup]),
         }
     }
@@ -398,23 +406,119 @@ impl task_core::browser_isolation::LiveIsolation for LiveSession {
     }
 }
 
-/// 直に起動した runtime も隔離 session として登録できる（ADR-0088 D5）。controller への
-/// state 投入口は持たないので、復元は開封前に止まる。
+/// 直に起動した runtime も隔離 session として登録できる（ADR-0088 D5）。CDP pipe を runtime が
+/// 持っている間だけ、開封済み state を controller としてその pipe に投入する（ADR-0094 D1）。
 impl task_core::browser_isolation::LiveSessionEntry for LiveSession {
     fn kind(&self) -> task_core::browser_isolation::RuntimeKind {
         task_core::browser_isolation::RuntimeKind::Isolated
     }
 
     fn accepts_state(&self) -> bool {
-        false
+        self.0
+            .lock()
+            .map(|rt| rt.cdp_write.is_some() && rt.cdp_read.is_some())
+            .unwrap_or(false)
     }
 
-    fn deliver_state(
-        &self,
-        _state: &[u8],
-    ) -> Result<(), task_core::browser_isolation::StateRejected> {
-        Err(task_core::browser_isolation::StateRejected)
+    fn deliver_state(&self, state: &[u8]) -> Result<(), StateRejected> {
+        let rt = self.0.lock().map_err(|_| StateRejected)?;
+        let (Some(w), Some(r)) = (rt.cdp_write.as_ref(), rt.cdp_read.as_ref()) else {
+            return Err(StateRejected);
+        };
+        // lock を持つ間はこの pipe の読み手は自分だけ。応答を読み切ってから返す。
+        let mut controller = crate::browser_cdp_sink::CdpController::new(
+            w.try_clone().map_err(|_| StateRejected)?,
+            r.try_clone().map_err(|_| StateRejected)?,
+        );
+        deliver_state_via(state, |method, params| {
+            controller
+                .controller_command(method, params, None)
+                .map_err(|_| StateRejected)
+        })
     }
+}
+
+/// identity 復元の隔離 admission（ADR-0094 D2）。production は [`RestoreAdmission::Attested`] だけ。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RestoreAdmission {
+    /// `verify_isolation` の attestation を要求する。
+    #[default]
+    Attested,
+    /// 試験専用: 違反が `SameUid` だけの実 runtime を通す（別 UID の無い host で成功経路を実証する）。
+    #[cfg(feature = "same-uid-harness")]
+    SameUidHarness,
+}
+
+impl RestoreAdmission {
+    pub fn admit(
+        self,
+        facts: &RuntimeFacts,
+    ) -> Result<IsolationAttestation, Vec<IsolationViolation>> {
+        match self {
+            Self::Attested => verify_isolation(facts),
+            #[cfg(feature = "same-uid-harness")]
+            Self::SameUidHarness => match verify_isolation(facts) {
+                Err(v) if v == [IsolationViolation::SameUid] => {
+                    // 残りの検査は実の事実のまま。UID だけを別 UID として扱う。
+                    let mut f = facts.clone();
+                    f.runtime_uid = f.host_uid.wrapping_add(100_000).max(1);
+                    verify_isolation(&f)
+                }
+                other => other,
+            },
+        }
+    }
+}
+
+/// 開封済み state の 1 項目（`IdentityStatePlain` の JSON と同じ形）。値は drop で消す。
+#[derive(serde::Deserialize)]
+struct PlainEntry {
+    origin: String,
+    kind: String,
+    name: String,
+    value: String,
+}
+impl Drop for PlainEntry {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.name.zeroize();
+        self.value.zeroize();
+    }
+}
+#[derive(serde::Deserialize)]
+struct PlainState {
+    entries: Vec<PlainEntry>,
+}
+
+/// 開封済み state を controller の CDP（`Storage.setCookies`）へ投入する（ADR-0094 D1）。
+/// `call` は controller の CDP 呼出しだけ。state は log・応答・argv・ファイルに出さない。
+/// 知らない種別・https でない origin があれば 1 件も投入しない。
+pub(crate) fn deliver_state_via(
+    state: &[u8],
+    mut call: impl FnMut(&str, serde_json::Value) -> Result<serde_json::Value, StateRejected>,
+) -> Result<(), StateRejected> {
+    let plain: PlainState = serde_json::from_slice(state).map_err(|_| StateRejected)?;
+    if plain.entries.is_empty() {
+        return Err(StateRejected);
+    }
+    let mut cookies = Vec::with_capacity(plain.entries.len());
+    for e in &plain.entries {
+        let url = url::Url::parse(&e.origin).map_err(|_| StateRejected)?;
+        if e.kind != "cookie" || url.scheme() != "https" || url.host_str().is_none() {
+            return Err(StateRejected);
+        }
+        cookies.push(serde_json::json!({
+            "name": e.name,
+            "value": e.value,
+            "url": e.origin,
+            "secure": true,
+        }));
+    }
+    call(
+        "Storage.setCookies",
+        serde_json::json!({ "cookies": cookies }),
+    )
+    .map(|_| ())
 }
 
 /// sandboxd の要求ごとに egress を 1 本起動し、相手側の unix stream を返す（ADR-0088 D1）。

@@ -770,6 +770,10 @@ mod tests {
     use super::*;
     use crate::test_support::write_executable;
 
+    /// 成功経路のテストで使う待ち時間。偽 ssh は即座に応答するので、成功時は
+    /// この値まで待たない。高負荷の評価器で 5 秒の timeout を踏んだため長めに取る。
+    const LOAD_TOLERANT_WAIT: Duration = Duration::from_secs(30);
+
     async fn wait_until_process_gone(pid: u32) {
         for _ in 0..150 {
             if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
@@ -847,12 +851,14 @@ mod tests {
     }
 
     /// `SSH_ASKPASS` を呼び、返ってきたコードが `{expected_code}` と一致すれば以後 `-O check` が通る偽 ssh
-    /// （`auth = \"totp\"` を模す）。
+    /// （`auth = \"totp\"` を模す）。askpass は `sh` で読ませる: 直前に同じプロセスで書いた実行ファイルを
+    /// exec すると、並行テストの fork が書き込み fd を exec 前まで握っていて ETXTBSY で黙って失敗し、
+    /// プロンプトが来ないまま prompt_timeout に落ちることがある（高負荷の評価器で観測）。
     fn askpass_script(state: &Path, prompt: &str, expected_code: &str) -> String {
         format!(
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"{expected_code}\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -906,7 +912,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -986,8 +992,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1017,7 +1023,7 @@ mod tests {
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                echo $$ > \"$STATE/masterpid\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"{expected_code}\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                exit 0\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -1050,8 +1056,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1060,7 +1066,7 @@ mod tests {
         let ClusterConnectStart::NeedsCode { session, .. } = result else {
             panic!("expected NeedsCode");
         };
-        match session.submit_code("123456", Duration::from_secs(5)).await {
+        match session.submit_code("123456", LOAD_TOLERANT_WAIT).await {
             // 保持する子は無い（ssh が切り離した）が、**接続は成功している**。
             Ok(master) => assert!(
                 master.is_none(),
@@ -1087,8 +1093,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1121,8 +1127,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1131,7 +1137,7 @@ mod tests {
         let ClusterConnectStart::NeedsCode { session, .. } = result else {
             panic!("expected NeedsCode");
         };
-        let master = session.submit_code("123456", Duration::from_secs(5)).await;
+        let master = session.submit_code("123456", LOAD_TOLERANT_WAIT).await;
         match master {
             Ok(_master) => {}
             Err(e) => panic!("expected Ok(ClusterMaster), got {e:?}"),
@@ -1158,8 +1164,8 @@ mod tests {
                 "c1",
                 &MasterLauncher::Inline,
                 true,
-                Duration::from_secs(5),
-                Duration::from_secs(5),
+                LOAD_TOLERANT_WAIT,
+                LOAD_TOLERANT_WAIT,
                 0,
                 "yes",
             )
@@ -1196,8 +1202,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1230,7 +1236,7 @@ mod tests {
             &MasterLauncher::Inline,
             true,
             Duration::from_millis(300),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1437,8 +1443,8 @@ mod tests {
             "c1",
             &launcher,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1447,7 +1453,7 @@ mod tests {
         let ClusterConnectStart::NeedsCode { session, .. } = result else {
             panic!("expected NeedsCode");
         };
-        let master = session.submit_code("123456", Duration::from_secs(5)).await;
+        let master = session.submit_code("123456", LOAD_TOLERANT_WAIT).await;
         match master {
             Ok(_master) => {}
             Err(e) => {
@@ -1474,7 +1480,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1574,7 +1580,7 @@ mod tests {
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                printf '%s\\n' \"$@\" > \"$STATE/argv\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"123456\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -1590,8 +1596,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             20,
             "yes",
         )
@@ -1601,7 +1607,7 @@ mod tests {
             panic!("expected NeedsCode");
         };
         let master = session
-            .submit_code("123456", Duration::from_secs(5))
+            .submit_code("123456", LOAD_TOLERANT_WAIT)
             .await
             .unwrap();
         let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();
@@ -1692,7 +1698,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             30,
             "yes",
         )
@@ -1712,7 +1718,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             30,
             "yes",
         )
@@ -1745,7 +1751,7 @@ mod tests {
             &MasterLauncher::Inline,
             false,
             Duration::from_millis(200),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
             30,
             "",
         )
@@ -1802,7 +1808,7 @@ mod tests {
             "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                printf '%s\\n' \"$@\" > \"$STATE/argv\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"123456\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -1818,8 +1824,8 @@ mod tests {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -1829,7 +1835,7 @@ mod tests {
             panic!("expected NeedsCode");
         };
         let master = session
-            .submit_code("123456", Duration::from_secs(5))
+            .submit_code("123456", LOAD_TOLERANT_WAIT)
             .await
             .unwrap();
         let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();

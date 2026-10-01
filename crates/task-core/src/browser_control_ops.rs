@@ -285,3 +285,40 @@ mod tests {
         Ok(())
     }
 }
+
+/// worker の agent 操作 gate の op（ADR-0094 D2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentActionOp {
+    /// 状態を読むだけ。
+    Read,
+    /// 操作を 1 つ始める。lease 期限切れを先に失効させ、`AgentRunning` 以外と auth_section 中は拒否する。
+    Begin,
+    /// 操作が 1 つ終わった。pause 中で最後なら `Paused` に収束する。
+    End,
+}
+
+impl SqliteStore {
+    /// ADR-0094 D2: task-api の `agent/begin`・`agent/end` と同じ遷移（auth_section 中の begin は拒否）。
+    pub fn browser_control_agent_action(
+        &self,
+        key: BrowserSessionKey<'_>,
+        op: AgentActionOp,
+        now: u64,
+    ) -> Result<BrowserControl, BrowserStoreError> {
+        match op {
+            AgentActionOp::Read => Ok(self.browser_control_get(key)?),
+            AgentActionOp::Begin => self.browser_control_mutate(key, |s| {
+                s.expire(now);
+                if s.auth_section_active() {
+                    return Err(ControlError::AuthSectionActive);
+                }
+                s.begin_agent_action()?;
+                Ok(s.clone())
+            }),
+            AgentActionOp::End => self.browser_control_mutate(key, |s| {
+                s.end_agent_action();
+                Ok(s.clone())
+            }),
+        }
+    }
+}

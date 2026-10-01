@@ -13,18 +13,20 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use nix::libc;
 use task_core::browser_isolation::{
     IsolationAttestation, IsolationViolation, LiveIsolation, LiveSessionEntry, LiveSessions,
-    RuntimeKind,
+    RuntimeKind, StateRejected,
 };
 
+use crate::browser_cdp_sink::CdpController;
 use crate::browser_runtime::{
-    IsolatedRuntime, RecordedProcess, RuntimeError, RuntimeSpec, process_starttime, read_record,
-    reap_recorded, same_process_alive, write_record,
+    IsolatedRuntime, RecordedProcess, RestoreAdmission, RuntimeError, RuntimeSpec,
+    process_starttime, read_record, reap_recorded, same_process_alive, write_record,
 };
 
 /// 停止時の SIGTERM から SIGKILL までの猶予（ADR-0088 D2）。
@@ -40,6 +42,13 @@ pub struct SupervisorOptions {
     pub arm_parent_death: bool,
     /// ADR-0088 D5: 稼働中 session の registry。起動後に登録し、停止の最初に外す。
     pub registry: Option<Arc<LiveSessions>>,
+    /// identity 復元の隔離 admission（ADR-0094 D2）。本番は `Attested` のまま。
+    pub admission: RestoreAdmission,
+    /// Live View の鍵（task_id, run_id）。無ければ API は復元を開封前に拒否する（観測停止を記録できない）。
+    pub live_key: Option<(String, String)>,
+    /// ADR-0080 H3 / ADR-0083 D4: 復元の投入前に立てる旗。worker の `LiveEmitter` と共有し、
+    /// session の終わりまで progress・artifact・live event を捨てさせる。
+    pub observation_stop: Arc<AtomicBool>,
 }
 
 impl SupervisorOptions {
@@ -48,6 +57,9 @@ impl SupervisorOptions {
             record_dir: record_dir.into(),
             arm_parent_death: true,
             registry: None,
+            admission: RestoreAdmission::Attested,
+            live_key: None,
+            observation_stop: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -57,11 +69,17 @@ enum Cmd {
     Attest(mpsc::Sender<Result<IsolationAttestation, Vec<IsolationViolation>>>),
 }
 
+/// controller の CDP の口（ADR-0094 D1）。`Supervisor::attach_controller` が入れるまで空。
+type ControllerSlot = Arc<Mutex<Option<Arc<Mutex<CdpController>>>>>;
+
 /// registry に載る supervisor 管理の session（ADR-0088 D5）。attestation は runtime thread に
-/// 採り直させる。controller への state 投入口は持たない（CDP pipe は `Supervisor` の持ち主が
-/// 持つか、agent-browser が駆動する）ので、復元は開封前に `isolation_required` で止まる。
+/// 採り直させる。state の投入口は `Supervisor` の持ち主が controller を渡した後だけ開き、
+/// それまでは復元は開封前に `isolation_required` で止まる（ADR-0094 D1）。
 struct SupervisedEntry {
     tx: Mutex<mpsc::Sender<Cmd>>,
+    controller: ControllerSlot,
+    live_key: Option<(String, String)>,
+    observation_stop: Arc<AtomicBool>,
 }
 
 impl LiveIsolation for SupervisedEntry {
@@ -86,14 +104,29 @@ impl LiveSessionEntry for SupervisedEntry {
     }
 
     fn accepts_state(&self) -> bool {
-        false
+        self.controller.lock().map(|c| c.is_some()).unwrap_or(false)
     }
 
-    fn deliver_state(
-        &self,
-        _state: &[u8],
-    ) -> Result<(), task_core::browser_isolation::StateRejected> {
-        Err(task_core::browser_isolation::StateRejected)
+    fn deliver_state(&self, state: &[u8]) -> Result<(), StateRejected> {
+        let controller = self
+            .controller
+            .lock()
+            .ok()
+            .and_then(|c| c.clone())
+            .ok_or(StateRejected)?;
+        // 投入の前に観測停止へ入る（ADR-0080 H3 / ADR-0083 D4）。投入に失敗しても戻さない。
+        self.observation_stop.store(true, Ordering::SeqCst);
+        let mut controller = controller.lock().map_err(|_| StateRejected)?;
+        controller.enter_restored_observation_stop();
+        crate::browser_runtime::deliver_state_via(state, |method, params| {
+            controller
+                .controller_command(method, params, None)
+                .map_err(|_| StateRejected)
+        })
+    }
+
+    fn live_key(&self) -> Option<(String, String)> {
+        self.live_key.clone()
     }
 }
 
@@ -106,6 +139,7 @@ pub struct Supervisor {
     procs: Arc<Mutex<Vec<RecordedProcess>>>,
     record_path: PathBuf,
     registry: Option<Arc<LiveSessions>>,
+    controller: ControllerSlot,
     /// controller が持つ CDP pipe（`cdp_pipe` の runtime だけ）。
     pub cdp_write: Option<File>,
     pub cdp_read: Option<File>,
@@ -128,14 +162,20 @@ impl Supervisor {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Started, RuntimeError>>();
         let thread_procs = procs.clone();
         let registry = opts.registry.clone();
+        let live_key = opts.live_key.clone();
+        let observation_stop = opts.observation_stop.clone();
         let thread = std::thread::Builder::new()
             .name(format!("celeris-browser-rt-{session_id}"))
             .spawn(move || runtime_thread(spec, opts, thread_procs, rx, ready_tx))?;
         match ready_rx.recv() {
             Ok(Ok(started)) => {
+                let controller: ControllerSlot = Arc::new(Mutex::new(None));
                 if let Some(reg) = &registry {
                     let entry = SupervisedEntry {
                         tx: Mutex::new(tx.clone()),
+                        controller: controller.clone(),
+                        live_key: live_key.clone(),
+                        observation_stop: observation_stop.clone(),
                     };
                     reg.insert(&session_id, Arc::new(entry));
                 }
@@ -147,6 +187,7 @@ impl Supervisor {
                     procs,
                     record_path,
                     registry,
+                    controller,
                     cdp_write: started.cdp_write,
                     cdp_read: started.cdp_read,
                 })
@@ -159,6 +200,14 @@ impl Supervisor {
                 let _ = thread.join();
                 Err(RuntimeError::NotRunning)
             }
+        }
+    }
+
+    /// CDP pipe を持つ controller を渡し、identity 復元の state 投入口を開く（ADR-0094 D1）。
+    /// 投入は controller 経由だけで、agent の接続には出さない。
+    pub fn attach_controller(&self, controller: Arc<Mutex<CdpController>>) {
+        if let Ok(mut slot) = self.controller.lock() {
+            *slot = Some(controller);
         }
     }
 
@@ -188,6 +237,10 @@ impl Supervisor {
     fn shutdown(&mut self) {
         if let Some(reg) = self.registry.take() {
             reg.remove(&self.session_id);
+        }
+        // 停止後に registry の外で entry を持っていても、state は投入できない。
+        if let Ok(mut slot) = self.controller.lock() {
+            *slot = None;
         }
         let (done_tx, done_rx) = mpsc::channel();
         if self.tx.send(Cmd::Stop(done_tx)).is_ok() {
@@ -240,7 +293,7 @@ fn runtime_thread(
     loop {
         match rx.recv_timeout(REFRESH) {
             Ok(Cmd::Attest(reply)) => {
-                let _ = reply.send(rt.attest());
+                let _ = reply.send(rt.attest_with(opts.admission));
             }
             Ok(Cmd::Stop(done)) => {
                 stop_runtime(&mut rt, &opts.record_dir, &session, &procs);

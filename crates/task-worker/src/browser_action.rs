@@ -5,10 +5,13 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+
+use crate::browser_live::{ControlGate, GatedOutcome, SessionCloser, run_gated};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -16,12 +19,6 @@ struct ActionRequest {
     verb: String,
     args: Vec<String>,
     artifact: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ActionReply<'a> {
-    status: i32,
-    stdout: &'a str,
 }
 
 pub struct ActionServer {
@@ -36,6 +33,7 @@ impl ActionServer {
         session: &Path,
         allowed_domains: Vec<String>,
         allowed: Vec<String>,
+        gate: Arc<dyn ControlGate>,
     ) -> std::io::Result<Self> {
         let socket = socket.to_path_buf();
         let listener = UnixListener::bind(&socket)?;
@@ -47,11 +45,19 @@ impl ActionServer {
             .name("celeris-browser-actions".into())
             .spawn(move || {
                 let mut sequence = 0u64;
+                let closed = AtomicBool::new(false);
                 while rx.try_recv().is_err() {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             sequence += 1;
-                            serve(stream, &root, sequence, &allowed_domains, &allowed);
+                            let ctx = Serve {
+                                root: &root,
+                                domains: &allowed_domains,
+                                actions: &allowed,
+                                gate: gate.as_ref(),
+                                closed: &closed,
+                            };
+                            serve(stream, &ctx, sequence);
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(Duration::from_millis(10));
@@ -136,13 +142,35 @@ fn allowed(req: &ActionRequest, domains: &[String], actions: &[String]) -> bool 
     }
 }
 
-fn serve(
-    mut stream: UnixStream,
-    root: &Path,
+struct Serve<'a> {
+    root: &'a Path,
+    domains: &'a [String],
+    actions: &'a [String],
+    gate: &'a dyn ControlGate,
+    closed: &'a AtomicBool,
+}
+
+/// ADR-0094 D4: `Stopped` closes the session once through the upstream `close` action
+/// (the same close the cancel path issues).
+struct CloseOnce<'a> {
+    root: &'a Path,
     sequence: u64,
-    domains: &[String],
-    actions: &[String],
-) {
+    closed: &'a AtomicBool,
+}
+impl SessionCloser for CloseOnce<'_> {
+    fn close(&self) {
+        if !self.closed.swap(true, Ordering::SeqCst) {
+            let close = ActionRequest {
+                verb: "close".into(),
+                args: Vec::new(),
+                artifact: None,
+            };
+            let _ = run_action(self.root, self.sequence, &close);
+        }
+    }
+}
+
+fn serve(mut stream: UnixStream, ctx: &Serve<'_>, sequence: u64) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let mut input = Vec::new();
     let valid = Read::by_ref(&mut stream)
@@ -155,14 +183,28 @@ fn serve(
     } else {
         None
     };
-    let response = match req.filter(|r| allowed(r, domains, actions)) {
-        Some(req) => run_action(root, sequence, &req)
-            .unwrap_or_else(|_| serde_json::json!({"status":1,"stdout":""})),
-        None => serde_json::to_value(ActionReply {
-            status: 2,
-            stdout: "",
-        })
-        .unwrap(),
+    let failed = || serde_json::json!({"status":1,"stdout":""});
+    let response = match req.filter(|r| allowed(r, ctx.domains, ctx.actions)) {
+        // The supervisor's own version probe is trusted and not an agent action.
+        Some(req) if req.verb == "__version__" => {
+            run_action(ctx.root, sequence, &req).unwrap_or_else(|_| failed())
+        }
+        // ADR-0094 D1: agent actions reach the browser only while the store's control state
+        // lets the agent act; otherwise nothing is written for the action child.
+        Some(req) => {
+            let closer = CloseOnce {
+                root: ctx.root,
+                sequence,
+                closed: ctx.closed,
+            };
+            match run_gated(ctx.gate, &closer, || run_action(ctx.root, sequence, &req)) {
+                GatedOutcome::Ran(out) => out.unwrap_or_else(|_| failed()),
+                GatedOutcome::Blocked(_) | GatedOutcome::Closed => {
+                    serde_json::json!({"status":3,"stdout":""})
+                }
+            }
+        }
+        None => serde_json::json!({"status":2,"stdout":""}),
     };
     let _ = stream.write_all(response.to_string().as_bytes());
 }

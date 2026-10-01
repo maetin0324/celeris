@@ -94,3 +94,15 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 
 - run `01M3REKJA5PF78ZTD0XT42VA0N`（P4-A D5 restore 結合）: `LiveSessionRegistry` を追加し daemon で 1 つ作って supervisor（登録・削除）と API に配線。restore の HTTP に `session_id` を追加し ADR-0108 D5 の順に判定、成功時は controller にだけ渡して 204。`cargo test -p task-api --test browser_restore_live_session` → 1 passed（実 bwrap + 実 chrome-headless-shell の session に `restore_for_session` と HTTP 7 拒否経路、`open_attempts()==0`）。`cargo test --workspace` exit 0（2992 passed / 0 failed）、`cargo clippy --workspace -- -D warnings` exit 0。別 UID 実証は引き続き未解決（同一 UID のため `SameUid` で拒否、成功経路は実 runtime で未実証）。本番昇格・本番設定変更・内部 origin 追加なし。詳細は [phase-browser-4](progress/phase-browser-4.md)。
 - run `01M3SEAJBYPPPNWHNQ78ZY1J0J`（P4-B gate-recheck 再試行）: integrate-gate の失敗は `browser_runtime_supervisor` の競合 2 つだった。(1) 試験側: 接続ごとの egress が消えた直後の記録を即 assert していた → 条件の待ちに変更。(2) 本番: `stop_runtime` が `bwrap-init` の非同期終了を待たずに戻っていた → 記録した本人が消えるまで待つよう修正（ADR-0108 追記）。負荷下で supervisor 10/10、attacks・shared_cdp・cdp_sink・h3_injection 各 5/5。`cargo test --workspace && cargo clippy --workspace -- -D warnings` → exit 0（3047 passed）。詳細は `docs/progress/phase-browser-4.md`。
+
+## browser: ptrace 境界分離 launcher 設計
+
+完了日 2026-10-01（task 01M3SPF94RDWTPWHNDEQD68VB9 の record unit `01M3WB98KYN3F3P8YMDSN6T8H8`）。
+
+- 成果: A13（別 UID 実 process 攻撃試験、判定『部分』）の根因 — daemon が user namespace の持ち主となり `CAP_SYS_PTRACE` を持つこと — を [ADR-0115](adr/0115-browser-ptrace-owner-ns-launcher.md) に記録し、権限分離 launcher（namespace の所有を launcher 側に移し daemon から `CAP_SYS_PTRACE` を分離する設計）をまとめた。`docs/progress/browser-followups.md` の `a13-real-process` と `prod-admission-release` 項に ADR-0115 へのリンクと「実装と実 process 検証は後続段階」を追記済み。
+- 証拠コマンドと結果:
+  - `cargo test --workspace` → exit 0（3206 passed / 0 failed / 12 ignored）
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+  - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行（sccache EPERM 等の環境要因なし）。
+- 未解決事項: ホスト準備（別 host UID / subuid の割当）は人の判断が必要。launcher 本体の実装は未着手。A13 の実 process 再試験（別 UID 前提）は launcher 実装後に行う。本番 admission の `CredentialInjection`・`IdentityRestore` は引き続き未解放。
+- 提案: launcher 実装を独立 task として切り出し、完了後に A13 を再試験してから `prod-admission-release` の判断に戻す。

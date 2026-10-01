@@ -136,3 +136,20 @@ Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 
 ### adr-place の記録
 
 人の判断 adr-place の回答は (a): `docs/adr/0082`・`0083`・`0096`（web 関連の 3 本、`0082-web-sse-invalidate-unlisted-kinds.md`・`0083-web-project-plan-milestone-successors.md`・`0096-web-parallel-operation.md`）は `docs/adr/` に置いたまま。実装計画 §1 と P6-02 が `docs/adr/NNNN-*.md` への追加を要求しており、人が範囲内と判断した。ADR ファイルは移動していない（`git status` で `docs/adr/` に差分なしを確認済み）。
+
+### 最終整合の再試行（run 01M3WSCR1TVZ16NDM2BYKF8E2X、attempt 2）
+
+**検証 SHA:** `d387be16a00426b03a48b7e11849611d8cd19047`。前の子の `d95b1653` を含む HEAD に、parity e2e の `/tasks/new` 遷移直後の同期 assertion を待機型へ直した commit を積んだ。以下は記録 commit より前のこの SHA で実行した結果。
+
+| 検証 | 結果 |
+| --- | --- |
+| `git merge-base --is-ancestor d95b1653 HEAD`、GUI・crates・API docs の差分なし、parity 完了 commit の祖先検査、main からの差分範囲検査 | 各 exit 0 |
+| V1: `corepack pnpm@11.27.0 -C gui` の frozen install（`--prefer-offline`）、test、typecheck、build | 各 exit 0。test は 84 files / 1,249 passed |
+| V2: `corepack pnpm@12.6.0 -C web` の frozen install、typecheck、lint、test、build、`gen:types --check`、`check:boundaries`、`check:secrets`、`check:parity --require-phase 6` | 各 exit 0。test は Vitest 24 files / 178 passed、Node 41 passed |
+| `corepack pnpm@12.6.0 -C web e2e parity/` | exit 0、103 passed / 8 skipped。前回レビューで失敗した `parity: /tasks/new 作成・条件 4 型・422` も pass |
+| `scripts/selfdeploy/tests/*.sh` | 7 スクリプトすべて exit 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo test --workspace --no-fail-fast`、初回 | exit 101、3,130 passed / 77 failed / 12 ignored、25 targets failed |
+| 同コマンドの指定どおりの 1 回の再実行 | exit 101、3,130 passed / 77 failed / 12 ignored、25 targets failed |
+
+Rust の失敗テスト名と各 panic message はこの run の機械向け成果物 `cargo-test-attempt2-failures.json` に初回・再実行を分けて記録し、全文ログは `cargo-test-attempt2-first.log` と `cargo-test-attempt2-retry.log` に残した。代表例は `instance_handoff::normal_mode_does_not_inject_the_smoke_builtins`（worker DB guard の namespace 生成が `Operation not permitted`）、`browser_shared_cdp::real_shared_cdp_and_auth_section`（`unshare: Operation not permitted`）、`browser_runtime_isolated::real_browser_in_runtime_facts_and_restore_refused_on_same_uid`（`NoChildPid`）。`instance_handoff::a_newer_release_takes_over_while_the_old_one_finishes_its_run` の期待値不成立など、派生する失敗も含む。初回・再実行の 77 名は同じ。crates/ は無変更。Rust gate の namespace 制約と派生失敗は未解決として main の別 task で扱う。人の adr-place 判断 (a) と check-parity の到達不能 commit を拒む単体テストは引き続き維持した。

@@ -191,7 +191,7 @@ test("parity: /tasks/new 作成・条件 4 型・422", async ({ page }) => {
     await create.click();
     await expect(page).toHaveURL(`${gateway.base}/tasks/T42`);
     expect(requests).toBe(2);
-    expect(await rows.count()).toBe(0);
+    await expect(rows).toHaveCount(0);
   } finally {
     await h.close(gateway);
   }

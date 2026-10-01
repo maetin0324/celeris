@@ -1,7 +1,7 @@
 # PROGRESS — Web GUI（ADR-0081、`web/`）
 
 ---
-tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D]
+tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D, 01M3WCAQ762PKQ75CR6K03236M]
 ---
 
 計画の正本: [implementation plan](../web/implementation-plan.md)、[feature parity matrix](../web/feature-parity.md)、[ADR-0081](../adr/0081-web-spa-frontend.md)。Phase 0 の記録は [PROGRESS.md](../PROGRESS.md#web-gui-phase-02026-09-29設計移行計画) に残す。
@@ -119,3 +119,37 @@ Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 
 - 再走: `web/node_modules/.bin/tsc -b`、`web/node_modules/.bin/biome check .`、`web/node_modules/.bin/vitest run`、`node web/scripts/check-parity.mjs --require-phase 2`（前 3 件は `web/` で実行）→ 各 exit 0、vitest 16 files / 148 tests（台帳テスト 2 件を含む）pass。
 - 再走: `web/node_modules/.bin/playwright test latency/transition.spec.ts realtime/refetch-scope.spec.ts a11y/axe.spec.ts parity/`（`web/` で実行）→ exit 0、27 passed（S1・S2・S4 各 2 件、parity 21 件）。S1 の selector 修正後に V3 の 6 件を再走し、6 passed。偽 daemon と gateway は loopback の空き port を使用。
 - 拡張確認: `/tasks/$id` に一時的に `v3: true` を付け、`-g '/tasks/\$id'` で S1・S2・S4 の 3 件 pass。印は確認後に戻した。`corepack pnpm@12.6.0 -C web` はこの worktree の依存未配置から外部取得を試みたため停止し、同じ固定版のローカル依存をコピーして上記の binary を直接実行した。
+
+## 最終整合（task close-out、2026-10-01）
+
+**検証 sha:** `d95b1653859d4dd5e3ded68b0abbba793a3a3eac`（前の子 `01M3WCAQ762PKQ75CR6K03236M` の成果を fast-forward で取り込んだ HEAD。記録 commit は本更新の後に積む）。
+
+- `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api` → exit 0（差分なし）。`git merge-base --is-ancestor d95b1653 HEAD` → exit 0。
+- V1: 指定コマンド `corepack pnpm@11.27.0 -C gui install --frozen-lockfile --prefer-offline` は pnpm store DB を開けず exit 1。store を `/tmp/celeris-pnpm-store` に明示して install を再実行 → exit 0。その後 test 84 files / 1249 passed、typecheck、build → 各 exit 0。
+- V2: `corepack pnpm@12.6.0 -C web install --frozen-lockfile` は store を `/tmp/celeris-pnpm-store` に指定して exit 0。typecheck、lint（info 1、warning/error 0）、test（Vitest 24 files / 178 passed、Node 41 passed / 0 failed）、build、`gen:types --check`、`check:boundaries`、`check:secrets`、`check:parity --require-phase 6` → 各 exit 0。
+- parity e2e: 初回 `corepack pnpm@12.6.0 -C web e2e parity/` は 102 passed / 8 skipped / 1 failed（cutover spec の `cp: cannot stat .../.pnpm-store/v11`）。repo root に一時 store を用意して同コマンドを再実行 → exit 0、103 passed / 8 skipped（111 total）。skip は screenshot fixture 5 件と staging 専用 3 件。
+- selfdeploy: `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → 対象 7 本すべて exit 0。完了 parity commit の祖先検査 → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo test --workspace --no-fail-fast` は初回・許可された再実行とも exit 101、両方とも 25 targets failed。失敗群は `celeris --test instance_handoff`（namespace worker DB guard `Operation not permitted`、takeover/standby 期待値不成立）、e2e の worker DB guard を使う複数 suite（同じ user namespace 制約と派生する delegation/dispatch 失敗）、task-api/task-worker の browser isolation・restore・egress suite（`unshare: Operation not permitted` / `NoChildPid`）。初回 `browser_shared_cdp::real_shared_cdp_and_auth_section` は sandbox TCP relay 失敗、再実行では再現しなかった。crates/ は本 task で変更していない。失敗 test 名と完全な2ログは run artifacts の `cargo-test-first.log` / `cargo-test-retry.log` に保存。
+
+未解決: Rust workspace gate はこの環境で二度失敗。namespace を要する crates/ の試験と instance handoff の環境依存失敗は web 差分範囲外のため修正せず、main の別 task で扱う。V1/V2・parity e2e・selfdeploy は合格。検証 SHA は記録更新前の `d95b1653…` で、記録 commit 自身は含まない。
+
+### adr-place の記録
+
+人の判断 adr-place の回答は (a): `docs/adr/0082`・`0083`・`0096`（web 関連の 3 本、`0082-web-sse-invalidate-unlisted-kinds.md`・`0083-web-project-plan-milestone-successors.md`・`0096-web-parallel-operation.md`）は `docs/adr/` に置いたまま。実装計画 §1 と P6-02 が `docs/adr/NNNN-*.md` への追加を要求しており、人が範囲内と判断した。ADR ファイルは移動していない（`git status` で `docs/adr/` に差分なしを確認済み）。
+
+### 最終整合の再試行（run 01M3WSCR1TVZ16NDM2BYKF8E2X、attempt 2）
+
+**検証 SHA:** `d387be16a00426b03a48b7e11849611d8cd19047`。前の子の `d95b1653` を含む HEAD に、parity e2e の `/tasks/new` 遷移直後の同期 assertion を待機型へ直した commit を積んだ。以下は記録 commit より前のこの SHA で実行した結果。
+
+| 検証 | 結果 |
+| --- | --- |
+| `git merge-base --is-ancestor d95b1653 HEAD`、GUI・crates・API docs の差分なし、parity 完了 commit の祖先検査、main からの差分範囲検査 | 各 exit 0 |
+| V1: `corepack pnpm@11.27.0 -C gui` の frozen install（`--prefer-offline`）、test、typecheck、build | 各 exit 0。test は 84 files / 1,249 passed |
+| V2: `corepack pnpm@12.6.0 -C web` の frozen install、typecheck、lint、test、build、`gen:types --check`、`check:boundaries`、`check:secrets`、`check:parity --require-phase 6` | 各 exit 0。test は Vitest 24 files / 178 passed、Node 41 passed |
+| `corepack pnpm@12.6.0 -C web e2e parity/` | exit 0、103 passed / 8 skipped。前回レビューで失敗した `parity: /tasks/new 作成・条件 4 型・422` も pass |
+| `scripts/selfdeploy/tests/*.sh` | 7 スクリプトすべて exit 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo test --workspace --no-fail-fast`、初回 | exit 101、3,130 passed / 77 failed / 12 ignored、25 targets failed |
+| 同コマンドの指定どおりの 1 回の再実行 | exit 101、3,130 passed / 77 failed / 12 ignored、25 targets failed |
+
+Rust の失敗テスト名と各 panic message はこの run の機械向け成果物 `cargo-test-attempt2-failures.json` に初回・再実行を分けて記録し、全文ログは `cargo-test-attempt2-first.log` と `cargo-test-attempt2-retry.log` に残した。代表例は `instance_handoff::normal_mode_does_not_inject_the_smoke_builtins`（worker DB guard の namespace 生成が `Operation not permitted`）、`browser_shared_cdp::real_shared_cdp_and_auth_section`（`unshare: Operation not permitted`）、`browser_runtime_isolated::real_browser_in_runtime_facts_and_restore_refused_on_same_uid`（`NoChildPid`）。`instance_handoff::a_newer_release_takes_over_while_the_old_one_finishes_its_run` の期待値不成立など、派生する失敗も含む。初回・再実行の 77 名は同じ。crates/ は無変更。Rust gate の namespace 制約と派生失敗は未解決として main の別 task で扱う。人の adr-place 判断 (a) と check-parity の到達不能 commit を拒む単体テストは引き続き維持した。

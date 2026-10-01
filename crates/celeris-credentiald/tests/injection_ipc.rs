@@ -79,6 +79,7 @@ fn facts(session_id: &str, _pid: i32) -> RuntimeFacts {
         session_id: session_id.into(),
         host_uid: 1000,
         runtime_uid: 1000,
+        userns_owner_uid: Some(1001),
         namespaces: BTreeSet::from([
             Namespace::User,
             Namespace::Pid,

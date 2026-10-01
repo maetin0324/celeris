@@ -53,6 +53,9 @@ pub struct RuntimeFacts {
     pub host_uid: u32,
     /// sandbox の中の browser process の実 UID（host から見た値）。
     pub runtime_uid: u32,
+    /// runtime user namespace の owner UID（daemon と同じ親 namespace で解釈）。
+    #[serde(default)]
+    pub userns_owner_uid: Option<u32>,
     /// host と別であると確認できた namespace。
     pub namespaces: BTreeSet<Namespace>,
     pub root_readonly: bool,
@@ -73,6 +76,8 @@ pub struct RuntimeFacts {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IsolationViolation {
     SameUid,
+    OwnerUnknown,
+    UsernsOwnedByDaemon,
     RootUid,
     MissingNamespace { ns: Namespace },
     RootWritable,
@@ -122,6 +127,7 @@ fn normal(path: &str) -> Option<&str> {
 pub struct IsolationAttestation {
     session_id: String,
     runtime_uid: u32,
+    userns_owner_uid: u32,
     pgid: i32,
 }
 
@@ -131,6 +137,9 @@ impl IsolationAttestation {
     }
     pub fn runtime_uid(&self) -> u32 {
         self.runtime_uid
+    }
+    pub fn userns_owner_uid(&self) -> u32 {
+        self.userns_owner_uid
     }
     pub fn pgid(&self) -> i32 {
         self.pgid
@@ -159,6 +168,11 @@ pub fn verify_isolation(
     }
     if facts.runtime_uid == facts.host_uid {
         v.push(IsolationViolation::SameUid);
+    }
+    match facts.userns_owner_uid {
+        None => v.push(IsolationViolation::OwnerUnknown),
+        Some(owner) if owner == facts.host_uid => v.push(IsolationViolation::UsernsOwnedByDaemon),
+        Some(_) => {}
     }
     for ns in REQUIRED_NAMESPACES {
         if !facts.namespaces.contains(&ns) {
@@ -202,10 +216,11 @@ pub fn verify_isolation(
     if facts.pgid <= 1 {
         v.push(IsolationViolation::NoProcessGroup);
     }
-    if v.is_empty() {
+    if let (true, Some(userns_owner_uid)) = (v.is_empty(), facts.userns_owner_uid) {
         Ok(IsolationAttestation {
             session_id: facts.session_id.clone(),
             runtime_uid: facts.runtime_uid,
+            userns_owner_uid,
             pgid: facts.pgid,
         })
     } else {
@@ -560,6 +575,19 @@ fn proc_real_uid(status: &str) -> Option<u32> {
         .ok()
 }
 
+/// runtime の user namespace FD から owner UID を採る。取得不能なら不明として拒否させる。
+pub fn collect_userns_owner_uid(pid: i32) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+
+    // linux/nsfs.h: NS_GET_OWNER_UID = _IO(NSIO, 0x4), NSIO = 0xb7.
+    const NS_GET_OWNER_UID: libc::c_ulong = 0xb704;
+    let ns = std::fs::File::open(format!("/proc/{pid}/ns/user")).ok()?;
+    let mut owner: libc::uid_t = 0;
+    // SAFETY: ns is an open namespace FD, and owner points to a writable uid_t.
+    let result = unsafe { libc::ioctl(ns.as_raw_fd(), NS_GET_OWNER_UID, &mut owner) };
+    (result == 0).then_some(owner)
+}
+
 /// `/proc/<pid>` から runtime の事実を採る（呼び出し側 process を host とみなす）。
 /// 読めない値は隔離を否定する側（uid 0・namespace 無し・書込み可）に倒す。
 pub fn collect_runtime_facts(
@@ -613,6 +641,7 @@ pub fn collect_runtime_facts(
         session_id: session_id.to_owned(),
         host_uid,
         runtime_uid,
+        userns_owner_uid: collect_userns_owner_uid(pid),
         namespaces,
         root_readonly,
         writable_mounts,

@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { recordLatency } from "../support/latency-results";
 import { v3Screens } from "../support/screens";
 
 // baseline と同じくクリックを起点に URL、見出し、画面データ（現 Phase は準備中の枠）を別々に測る。
@@ -41,6 +42,7 @@ for (const screen of v3Screens()) {
         expect(heading, `${screen.path} heading @${delay}`).toBeLessThanOrEqual(300);
       }
       process.stdout.write(`S1 ${screen.path} ${JSON.stringify(measures)}\n`);
+      recordLatency({ kind: "S1", path: screen.path, fixture: screen.fixture, measures });
       expect(Math.abs(measures[2].url - measures[0].url), "URL 10s-0s").toBeLessThanOrEqual(100);
       expect(Math.abs(measures[2].heading - measures[0].heading), "heading 10s-0s").toBeLessThanOrEqual(100);
     } finally {

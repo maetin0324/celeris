@@ -1,10 +1,38 @@
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-export function checkParity(root = defaultRoot, requirePhase = null) {
+export function runGitCommand(args, cwd) {
+  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+}
+
+function checkCommitAncestry(doneRows, root, runGit, errors) {
+  if (doneRows.length === 0) return;
+  try {
+    runGit(["rev-parse", "--is-inside-work-tree"], root);
+  } catch {
+    errors.push("git が使えないため commit の到達性を検査できない");
+    return;
+  }
+  for (const { id, sha } of doneRows) {
+    try {
+      runGit(["cat-file", "-e", `${sha}^{commit}`], root);
+    } catch {
+      errors.push(`${id}: commit ${sha} not found`);
+      continue;
+    }
+    try {
+      runGit(["merge-base", "--is-ancestor", sha, "HEAD"], root);
+    } catch {
+      errors.push(`${id}: commit ${sha} is not an ancestor of HEAD`);
+    }
+  }
+}
+
+export function checkParity(root = defaultRoot, requirePhase = null, runGit = runGitCommand) {
   const matrix = readFileSync(path.join(root, "docs/web/feature-parity.md"), "utf8");
   const specDir = path.join(root, "web/e2e/parity");
   const specs = readdirSync(specDir)
@@ -23,6 +51,7 @@ export function checkParity(root = defaultRoot, requirePhase = null) {
   if (new Set(screens).size !== screens.length) errors.push("duplicate V3 screen");
   const rows = matrix.split("\n").filter((line) => /^\| (?:R\d\d|X\d+) \|/.test(line));
   if (rows.filter((line) => line.startsWith("| R")).length !== 42) errors.push("expected 42 route rows");
+  const doneRows = [];
   for (const row of rows) {
     const cells = row
       .split("|")
@@ -31,11 +60,14 @@ export function checkParity(root = defaultRoot, requirePhase = null) {
     const id = cells[0];
     const phaseMatch = cells.at(-3)?.match(/^(\d+)\s*\//);
     const title = cells.at(-2)?.match(/`((?:parity|parity-x): [^`]+)`/)?.[1];
-    const done = /^完了（[0-9a-f]{7,40}）$/.test(cells.at(-1) ?? "");
+    const doneMatch = cells.at(-1)?.match(/^完了（([0-9a-f]{7,40})）$/);
+    const done = Boolean(doneMatch);
     if (requirePhase !== null && phaseMatch && Number(phaseMatch[1]) <= requirePhase && !done)
       errors.push(`${id}: phase ${requirePhase} requires completion`);
     if (done && (!title || !specs.includes(title))) errors.push(`${id}: missing parity test title`);
+    if (done) doneRows.push({ id, sha: doneMatch[1] });
   }
+  checkCommitAncestry(doneRows, root, runGit, errors);
   return errors;
 }
 

@@ -815,21 +815,23 @@ fn build_attention(
     }
 
     // ADR-0099 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
-    for t in all_tasks.iter().filter(|t| {
-        t.status == Status::Done
-            && t.project_id.is_some()
-            && !task_core::tree::is_tree_child(t)
-            && task_core::support_kind(t).is_none()
-    }) {
-        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
-        let Some((reason, detail, head, at)) = rows.iter().rev().find_map(|r| match &r.event {
-            Event::DeliverySkipped {
-                reason,
-                detail,
-                head,
-            } => Some((*reason, detail.clone(), head.clone(), r.ts.clone())),
-            _ => None,
+    let latest_skipped = store.latest_delivery_skipped_rows()?;
+    for row in latest_skipped {
+        let Some(t) = all_tasks.iter().find(|t| {
+            t.id == row.task_id
+                && t.status == Status::Done
+                && t.project_id.is_some()
+                && !task_core::tree::is_tree_child(t)
+                && task_core::support_kind(t).is_none()
         }) else {
+            continue;
+        };
+        let Event::DeliverySkipped {
+            reason,
+            detail,
+            head,
+        } = row.event
+        else {
             continue;
         };
         let delivered = store
@@ -838,6 +840,7 @@ fn build_attention(
         if delivered {
             continue;
         }
+        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
         let events = view::seq_pairs(&rows);
         let mut task_ref = view::task_ref(t);
         task_ref.actions = view::actions_with_events(t, &events);
@@ -850,7 +853,7 @@ fn build_attention(
             ),
             detail,
             head,
-            at,
+            at: row.ts,
         });
     }
 

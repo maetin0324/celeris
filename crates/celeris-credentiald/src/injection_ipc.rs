@@ -13,7 +13,9 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use task_core::browser_isolation::{IsolationViolation, RuntimeFacts, verify_isolation};
+use task_core::browser_isolation::{
+    IsolationAttestation, IsolationViolation, RuntimeFacts, verify_isolation,
+};
 use zeroize::Zeroize;
 
 pub use crate::injection::PeerRole;
@@ -310,8 +312,12 @@ impl Admission {
             Self::SameUidHarness | Self::SameUidHarnessFacts(_) => "same_uid_harness",
         }
     }
-    fn admit(self, session_id: &str, runtime_pid: i32) -> Result<(), InjectCode> {
+    /// Broker が稼働中 runtime を再検査する。`Attested` は試験用の例外を通らない。
+    pub fn admit(self, session_id: &str, runtime_pid: i32) -> Result<(), InjectCode> {
         let facts = || -> Result<RuntimeFacts, InjectCode> {
+            if runtime_pid <= 1 {
+                return Err(InjectCode::SessionNotLive);
+            }
             let pgid = unsafe { libc::getpgid(runtime_pid) };
             if pgid <= 0 {
                 return Err(InjectCode::SessionNotLive);
@@ -320,15 +326,18 @@ impl Admission {
                 .map_err(|_| InjectCode::IsolationRequired)
         };
         match self {
-            Self::Attested => verify_isolation(&facts()?)
-                .map(|_| ())
-                .map_err(|_| InjectCode::IsolationRequired),
+            Self::Attested => admit_attested(&facts()?).map(|_| ()),
             #[cfg(feature = "same-uid-harness")]
             Self::SameUidHarness => same_uid_only(&facts()?),
             #[cfg(feature = "same-uid-harness")]
             Self::SameUidHarnessFacts(f) => same_uid_only(&f(session_id, runtime_pid)),
         }
     }
+}
+
+/// 本番 admission の純粋な判定。owner を含むすべての隔離条件が満たされたときだけ証明を返す。
+pub fn admit_attested(facts: &RuntimeFacts) -> Result<IsolationAttestation, InjectCode> {
+    verify_isolation(facts).map_err(|_| InjectCode::IsolationRequired)
 }
 
 #[cfg(feature = "same-uid-harness")]

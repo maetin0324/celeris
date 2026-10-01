@@ -1,13 +1,43 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
-use task_core::browser_wait::{
-    BrowserDecision, BrowserWait, BrowserWaitStore, CredentialRecord, HumanDecision, NewBrowserWait,
-};
+use task_core::browser_wait::{BrowserWait, BrowserWaitStore, NewBrowserWait};
 use task_core::{
     ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserTaskPolicy,
     EffectiveProfile, SqliteStore, Status, TaskId, TaskStore,
 };
+
+/// Mock ledger for unit tests of routing and the supervisor. These tests do not certify a
+/// production backend; the real conformance runner is responsible for production records.
+pub(super) fn test_record(workspace: &Path) -> PathBuf {
+    let path = workspace.join("browser-conformance-test.json");
+    let cases = [
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "snapshot_has_refs",
+        "click_by_ref",
+        "screenshot_artifact",
+        "download_to_artifacts",
+    ];
+    let results: Vec<_> = ["acp", "claude-code", "browser-specialist"]
+        .into_iter()
+        .map(|backend_id| {
+            serde_json::json!({
+                "backend_id": backend_id, "version": SUPPORTED_VERSION, "passed": cases,
+            })
+        })
+        .collect();
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "source": "celeris-browser-conformance", "results": results,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    path
+}
 
 #[derive(Default)]
 struct RecordingSink {
@@ -17,6 +47,13 @@ struct RecordingSink {
     comments: Mutex<Vec<String>>,
 }
 impl EventSink for RecordingSink {
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
     fn browser_updated(&self, browser: &BrowserRun) {
         self.browsers.lock().unwrap().push(browser.clone());
     }
@@ -38,6 +75,17 @@ impl EventSink for RecordingSink {
 }
 
 fn request(workspace: &Path) -> RunRequest {
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.parent().unwrap().parent().unwrap();
+    configure_isolated_runtime(IsolatedBrowserConfig {
+        live_sessions: None,
+        resolver: Some("127.0.0.1".parse().unwrap()),
+        record_dir: std::env::temp_dir()
+            .join(format!("celeris-browser-unit-{}", std::process::id())),
+        bwrap: "/usr/bin/bwrap".into(),
+        sandboxd: bin.join("celeris-browser-sandboxd"),
+        egress: bin.join("celeris-browser-egress"),
+    });
     let mut task = crate::protocol::tests::sample_task();
     task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
     RunRequest {
@@ -81,12 +129,350 @@ fn task_policy(actions: &[BrowserAction]) -> BrowserTaskPolicy {
     }
 }
 
+#[test]
+fn p4c_fallback_ledger_parsing_and_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = test_record(dir.path());
+    let ids = conformant_backend_ids(&record).unwrap();
+    assert!(ids.contains("acp") && ids.contains("claude-code"));
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    ledger["results"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["backend_id"] == "acp");
+    std::fs::write(&record, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    let ids = conformant_backend_ids(&record).unwrap();
+    assert_eq!(ids, ["acp".to_string()].into());
+    let req = request(dir.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let policy = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    let route = route_existing_backend("acp", &policy, &record).unwrap();
+    assert!(route.fallbacks.is_empty());
+    assert!(route_existing_backend("claude-code", &policy, &record).is_err());
+    ledger["source"] = serde_json::json!("celeris-browser-conformance-scripted");
+    std::fs::write(&record, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    assert!(conformant_backend_ids(&record).is_err());
+}
+
 fn limits() -> RunLimits {
     RunLimits {
         wall_clock: Duration::from_secs(10),
         idle_timeout: Duration::from_secs(5),
         kill_grace: Duration::from_millis(100),
     }
+}
+
+/// Invoked by scripts/browser-conformance.py in a separate process for each backend and
+/// phase. This runs the real adapter protocol against a scripted LLM while the Python
+/// runner provides the real agent-browser executable and loopback site. It is ignored
+/// in the normal workspace gate because those external local executables are optional.
+#[tokio::test]
+#[ignore]
+async fn p4c_conformance_backend_protocol() {
+    let backend = std::env::var("CELERIS_BROWSER_BACKEND").expect("runner backend");
+    let phase = std::env::var("CELERIS_BROWSER_PHASE").expect("runner phase");
+    let runtime =
+        PathBuf::from(std::env::var_os("CELERIS_BROWSER_RUNTIME").expect("runner runtime"));
+    let cli = PathBuf::from(std::env::var_os("CELERIS_BROWSER_CLI").expect("runner cli"));
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/browser-conformance-harness.py");
+    let mut req = request(&runtime);
+    req.context.browser = Some(BrowserContext {
+        run: BrowserRun {
+            task_id: req.task.id,
+            run_id: format!("p4c-{phase}"),
+            session_id: format!("celeris-p4c-{backend}"),
+            state: BrowserRunState::Running,
+            live_view_url: None,
+            policy: None,
+        },
+        cli,
+        credential_used: false,
+    });
+    let command = script.to_string_lossy().into_owned();
+    let adapter: Arc<dyn WorkerAdapter> = match backend.as_str() {
+        "acp" => Arc::new(crate::AcpAdapter::new(crate::AcpConfig {
+            command,
+            args: vec![],
+            startup_timeout: Duration::from_secs(10),
+            ..Default::default()
+        })),
+        "claude-code" => Arc::new(crate::ClaudeCodeAdapter::new(crate::ClaudeCodeConfig {
+            command,
+            ..Default::default()
+        })),
+        "browser-specialist" => Arc::new(crate::BrowserSpecialistAdapter::new(Arc::new(
+            crate::AcpAdapter::new(crate::AcpConfig {
+                command,
+                args: vec![],
+                startup_timeout: Duration::from_secs(10),
+                ..Default::default()
+            }),
+        ))),
+        _ => panic!("unknown backend: {backend}"),
+    };
+    let result = adapter
+        .run(
+            req,
+            &format!("p4c-{phase}"),
+            RunLimits {
+                wall_clock: Duration::from_secs(90),
+                idle_timeout: Duration::from_secs(90),
+                kill_grace: Duration::from_millis(100),
+            },
+            &RecordingSink::default(),
+        )
+        .await;
+    if phase == "resume" {
+        assert!(matches!(result.unwrap().terminal, Terminal::Done { .. }));
+    } else {
+        assert_eq!(phase, "open");
+        assert!(!matches!(
+            result,
+            Ok(RunOutcome {
+                terminal: Terminal::Done { .. },
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capabilities() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut req = request(temp.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let public = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    let record = test_record(temp.path());
+    let routed = route_existing_backend("acp", &public, &record).unwrap();
+    assert_eq!(routed.primary, "acp");
+    assert!(routed.fallbacks.contains(&"claude-code".to_string()));
+
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    req.context.browser_policy.as_mut().unwrap().allowed_actions =
+        vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    req.context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    let sensitive = crate::browser_policy::prepare(
+        req.context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    for backend in ["acp", "claude-code"] {
+        assert!(route_existing_backend(backend, &sensitive, &record).is_err());
+    }
+    assert!(route_existing_backend("unsupported", &public, &record).is_err());
+
+    let scripted = temp.path().join("scripted.json");
+    let bytes = std::fs::read(&record).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    value["source"] = serde_json::json!("celeris-browser-conformance-scripted");
+    std::fs::write(&scripted, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &public, &scripted).is_err());
+
+    value["source"] = serde_json::json!("celeris-browser-conformance");
+    value["results"][0]["version"] = serde_json::json!("0.38.0");
+    std::fs::write(&scripted, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &public, &scripted).is_err());
+}
+
+/// ADR-0093: the P4-B ledger with per-test evidence, as `scripts/browser-conformance.py
+/// --p4b-evidence` writes it, for `backends` only.
+fn p4b_record(dir: &Path, backends: &[&str], evidence: bool) -> PathBuf {
+    use task_core::browser_backend::{
+        ConformanceEvidence, EvidenceOutcome, FixtureCase, required_evidence,
+    };
+    let mut passed: Vec<serde_json::Value> = [
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "snapshot_has_refs",
+        "click_by_ref",
+        "screenshot_artifact",
+        "download_to_artifacts",
+        "isolation_suite",
+        "egress_negative_suite",
+        "injection_attack_suite",
+        "auth_section_observation_stop",
+    ]
+    .into_iter()
+    .map(serde_json::Value::from)
+    .collect();
+    passed.sort_by_key(|v| v.to_string());
+    let proof: Vec<ConformanceEvidence> = if evidence {
+        [
+            FixtureCase::InjectionAttackSuite,
+            FixtureCase::AuthSectionObservationStop,
+        ]
+        .into_iter()
+        .flat_map(|case| {
+            required_evidence(case)
+                .into_iter()
+                .map(move |test| ConformanceEvidence {
+                    case,
+                    test,
+                    outcome: EvidenceOutcome::Passed,
+                })
+        })
+        .collect()
+    } else {
+        Vec::new()
+    };
+    let results: Vec<_> = backends
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "backend_id": id, "version": SUPPORTED_VERSION,
+                "passed": passed, "evidence": proof,
+            })
+        })
+        .collect();
+    let path = dir.join(format!("p4b-{}-{evidence}.json", backends.join("-")));
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "source": "celeris-browser-conformance", "results": results,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    path
+}
+
+fn credential_policy(workspace: &Path) -> crate::browser_policy::PreparedBrowserPolicy {
+    let mut req = request(workspace);
+    let grant = req
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap();
+    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    grant.credential_policy_ids = vec!["pol-example".into()];
+    let task_policy = req.context.browser_policy.as_mut().unwrap();
+    task_policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    task_policy.credential_policy_ids = vec!["pol-example".into()];
+    crate::browser_policy::prepare(
+        req.context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap()
+}
+
+/// ADR-0093 D1/D2: CredentialUse is released only by a ledger carrying the P4-B measured
+/// evidence; the same case names without evidence stay refused.
+#[test]
+fn credential_use_is_released_only_by_p4b_evidence_in_the_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    let policy = credential_policy(temp.path());
+    let bare = p4b_record(temp.path(), &["acp"], false);
+    let error = route_existing_backend("acp", &policy, &bare).unwrap_err();
+    assert!(error.to_string().contains("lacks required conformance"));
+    let released = p4b_record(temp.path(), &["acp"], true);
+    assert_eq!(
+        route_existing_backend("acp", &policy, &released)
+            .unwrap()
+            .primary,
+        "acp"
+    );
+    // one failed attack mark closes it again
+    let bytes = std::fs::read(&released).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    value["results"][0]["evidence"][8]["outcome"] = serde_json::json!("failed");
+    let failed = temp.path().join("p4b-failed.json");
+    std::fs::write(&failed, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(route_existing_backend("acp", &policy, &failed).is_err());
+}
+
+/// ADR-0093 D3: after the release, a backend without its own P4-B record and a runtime that is
+/// not isolated are still refused.
+#[test]
+fn released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime() {
+    let temp = tempfile::tempdir().unwrap();
+    let policy = credential_policy(temp.path());
+    let released = p4b_record(temp.path(), &["acp"], true);
+    assert!(route_existing_backend("acp", &policy, &released).is_ok());
+    for backend in ["claude-code", "browser-specialist", "unsupported"] {
+        assert!(route_existing_backend(backend, &policy, &released).is_err());
+    }
+    let unisolated = |bwrap: &str| IsolatedBrowserConfig {
+        live_sessions: None,
+        resolver: Some("127.0.0.1".parse().unwrap()),
+        record_dir: temp.path().join("records"),
+        bwrap: bwrap.into(),
+        sandboxd: temp.path().join("missing-sandboxd"),
+        egress: temp.path().join("missing-egress"),
+    };
+    let unavailable = |r: Result<&IsolatedBrowserConfig, AdapterError>| {
+        r.err()
+            .is_some_and(|e| e.to_string().contains("isolated_runtime_unavailable"))
+    };
+    assert!(unavailable(isolated_runtime_ready(None)));
+    assert!(unavailable(isolated_runtime_ready(Some(&unisolated(
+        "/nonexistent/bwrap"
+    )))));
+    let mut no_resolver = unisolated("/usr/bin/bwrap");
+    no_resolver.resolver = None;
+    assert!(unavailable(isolated_runtime_ready(Some(&no_resolver))));
 }
 
 #[test]
@@ -202,8 +588,10 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
     content.push_str("{\"operation\":\"click\""); // torn writes must wait for a complete line
     std::fs::write(&events, content).unwrap();
     let sink = RecordingSink::default();
+    let live =
+        crate::browser_live::LiveEmitter::new(crate::browser_live::CollectingSink::default());
     let mut offset = 0;
-    forward_events(&events, &mut offset, &req, &output, &sink);
+    forward_events(&events, &mut offset, &req, &output, &sink, &live);
     assert_eq!(sink.artifacts.lock().unwrap().len(), 1);
     assert_eq!(sink.artifacts.lock().unwrap()[0].name, "extract-a.json");
     assert!(
@@ -212,7 +600,7 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
             .contains(secret)
     );
     let count = sink.progress.lock().unwrap().len();
-    forward_events(&events, &mut offset, &req, &output, &sink);
+    forward_events(&events, &mut offset, &req, &output, &sink, &live);
     assert_eq!(
         sink.progress.lock().unwrap().len(),
         count,
@@ -223,6 +611,415 @@ fn event_forwarding_discards_untrusted_fields_and_constrains_artifact_paths() {
 struct CliHarness {
     id: &'static str,
     question: bool,
+}
+
+struct FailingHarness;
+
+#[async_trait::async_trait]
+impl WorkerAdapter for FailingHarness {
+    fn id(&self) -> &str {
+        "acp"
+    }
+
+    async fn run(
+        &self,
+        req: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        assert!(req.context.browser.is_some());
+        Err(AdapterError::Other("scripted backend failed".into()))
+    }
+}
+
+#[tokio::test]
+async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance() {
+    let temp = tempfile::tempdir().unwrap();
+    let record = test_record(temp.path());
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    let outcome = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        request(temp.path()),
+        "fallback-run",
+        limits(),
+        &sink,
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(
+        temp.path()
+            .join("runs/fallback-run/browser-fallback-1/config.json")
+            .exists()
+    );
+    let browsers = sink.browsers.lock().unwrap();
+    assert_eq!(browsers.len(), 4);
+    assert_ne!(browsers[0].session_id, browsers[2].session_id);
+
+    let denied = temp.path().join("empty-conformance.json");
+    std::fs::write(
+        &denied,
+        br#"{"schema":1,"source":"celeris-browser-conformance","results":[]}"#,
+    )
+    .unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let error = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        request(empty.path()),
+        "denied-run",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &denied,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("lacks required conformance"));
+    assert!(!empty.path().join("runs/denied-run").exists());
+}
+
+/// The Python conformance runner calls this with its just-produced ledger before
+/// publishing it. Routing and the fallback execution path must consume that same file.
+#[tokio::test]
+#[ignore]
+async fn p4c_runner_record_routes_and_falls_back() {
+    let record = PathBuf::from(
+        std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").expect("runner record path"),
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let req = request(temp.path());
+    let grant = req
+        .context
+        .profile
+        .as_ref()
+        .unwrap()
+        .browser
+        .as_ref()
+        .unwrap();
+    let policy = crate::browser_policy::prepare(
+        grant,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    for backend in ["acp", "claude-code", "browser-specialist"] {
+        assert_eq!(
+            route_existing_backend(backend, &policy, &record)
+                .unwrap()
+                .primary,
+            backend
+        );
+    }
+    let mut sensitive = request(temp.path());
+    let sensitive_grant = sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap();
+    sensitive_grant.allowed_actions =
+        Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    sensitive_grant.credential_policy_ids = vec!["pol-example".into()];
+    let sensitive_policy = sensitive.context.browser_policy.as_mut().unwrap();
+    sensitive_policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    sensitive_policy.credential_policy_ids = vec!["pol-example".into()];
+    let effective = crate::browser_policy::prepare(
+        sensitive
+            .context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        sensitive.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap();
+    for backend in ["acp", "claude-code", "browser-specialist"] {
+        assert!(route_existing_backend(backend, &effective, &record).is_err());
+    }
+    let executable = substrate(temp.path());
+    let outcome = run_with_executable_candidates_record(
+        Arc::new(FailingHarness),
+        vec![Arc::new(CliHarness {
+            id: "claude-code",
+            question: false,
+        })],
+        req,
+        "runner-ledger-fallback",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(
+        temp.path()
+            .join("runs/runner-ledger-fallback/browser-fallback-1/config.json")
+            .exists()
+    );
+}
+
+/// The conformance runner supplies its measured ledger, real 0.38.1 executable and
+/// loopback origin. The primary ACP harness is SIGKILLed after navigation; the worker
+/// then starts Claude in a fresh browser session and completes the same fixture.
+#[tokio::test]
+#[ignore]
+async fn p4c_fallback_real_harness_scenario() {
+    let root = PathBuf::from(std::env::var_os("CELERIS_BROWSER_FALLBACK_ROOT").unwrap());
+    let record = PathBuf::from(std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").unwrap());
+    let executable = PathBuf::from(std::env::var_os("CELERIS_BROWSER_EXECUTABLE").unwrap());
+    let origin = std::env::var("CELERIS_BROWSER_ORIGIN").unwrap();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/browser-conformance-harness.py");
+    let command = script.to_string_lossy().into_owned();
+    let primary: Arc<dyn WorkerAdapter> = Arc::new(crate::AcpAdapter::new(crate::AcpConfig {
+        command: command.clone(),
+        startup_timeout: Duration::from_secs(10),
+        ..Default::default()
+    }));
+    let alternate: Arc<dyn WorkerAdapter> =
+        Arc::new(crate::ClaudeCodeAdapter::new(crate::ClaudeCodeConfig {
+            command,
+            ..Default::default()
+        }));
+    let env = |phase: &str, runtime: &Path| {
+        vec![
+            ("CELERIS_BROWSER_PHASE".into(), phase.into()),
+            (
+                "CELERIS_BROWSER_BACKEND".into(),
+                if phase == "open" {
+                    "acp"
+                } else {
+                    "claude-code"
+                }
+                .into(),
+            ),
+            (
+                "CELERIS_BROWSER_RUNTIME".into(),
+                runtime.to_string_lossy().into_owned(),
+            ),
+            ("CELERIS_BROWSER_ORIGIN".into(), origin.clone()),
+            (
+                "CELERIS_BROWSER_KILL_HARNESS".into(),
+                if phase == "open" { "1" } else { "0" }.into(),
+            ),
+        ]
+    };
+    let primary_dir = root.join("primary");
+    let alternate_dir = root.join("alternate");
+    std::fs::create_dir_all(&primary_dir).unwrap();
+    std::fs::create_dir_all(&alternate_dir).unwrap();
+    let primary = primary.with_env(&env("open", &primary_dir)).unwrap();
+    let alternate = alternate
+        .with_env(&env("fallback", &alternate_dir))
+        .unwrap();
+    let primary = primary
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-real-fallback/browser/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let alternate = alternate
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-real-fallback/browser-fallback-1/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let mut req = request(&root);
+    let host = "localhost".to_string();
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_domains = vec![host.clone()];
+    let policy = req.context.browser_policy.as_mut().unwrap();
+    policy.network_domains = vec![host];
+    policy.allowed_actions = vec![
+        BrowserAction::Navigate,
+        BrowserAction::Snapshot,
+        BrowserAction::Click,
+        BrowserAction::Screenshot,
+        BrowserAction::Download,
+    ];
+    let sink = RecordingSink::default();
+    let outcome = run_with_candidates(
+        primary.clone(),
+        vec![alternate.clone()],
+        req.clone(),
+        "p4c-real-fallback",
+        RunLimits {
+            wall_clock: Duration::from_secs(120),
+            idle_timeout: Duration::from_secs(120),
+            kill_grace: Duration::from_millis(100),
+        },
+        &sink,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert!(primary_dir.join("harness-killed.pid").exists());
+    let sessions = sink.browsers.lock().unwrap();
+    assert!(sessions.len() >= 4);
+    assert_eq!(sessions[1].state, BrowserRunState::Failed);
+    assert_ne!(sessions[0].session_id, sessions[2].session_id);
+    drop(sessions);
+    let no_alternate_record = root.join("no-alternate-conformance.json");
+    let mut no_alternate_ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    no_alternate_ledger["results"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["backend_id"] == "acp");
+    std::fs::write(
+        &no_alternate_record,
+        serde_json::to_vec(&no_alternate_ledger).unwrap(),
+    )
+    .unwrap();
+    let no_candidate_primary = primary
+        .with_env(&[(
+            "CELERIS_BROWSER_CLI".into(),
+            root.join("runs/p4c-no-candidate/browser/celeris-browser.py")
+                .to_string_lossy()
+                .into_owned(),
+        )])
+        .unwrap();
+    let no_candidate = run_with_executable_candidates_record(
+        no_candidate_primary,
+        vec![alternate.clone()],
+        req.clone(),
+        "p4c-no-candidate",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &no_alternate_record,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        no_candidate
+            .to_string()
+            .contains("all capable backends failed")
+    );
+    assert!(
+        !root
+            .join("runs/p4c-no-candidate/browser-fallback-1")
+            .exists()
+    );
+    let mut sensitive = req;
+    sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    sensitive
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    sensitive
+        .context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    sensitive
+        .context
+        .browser_policy
+        .as_mut()
+        .unwrap()
+        .credential_policy_ids = vec!["pol-example".into()];
+    let credential = run_with_executable_candidates_record(
+        primary,
+        vec![alternate],
+        sensitive,
+        "p4c-credential",
+        limits(),
+        &RecordingSink::default(),
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        credential
+            .to_string()
+            .contains("lacks required conformance")
+    );
+    assert!(!root.join("runs/p4c-credential").exists());
+    std::fs::write(
+        root.join("fallback-outcome.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "primary_harness_killed": true, "alternate_completed": true,
+            "fresh_session": true, "no_candidate_refused": no_candidate.to_string(),
+            "credential_refused": credential.to_string(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn specialist_wraps_existing_harness_and_runs_same_browser_task() {
+    let temp = tempfile::tempdir().unwrap();
+    let record = test_record(temp.path());
+    let executable = substrate(temp.path());
+    let sink = RecordingSink::default();
+    let specialist = crate::BrowserSpecialistAdapter::new(Arc::new(CliHarness {
+        id: "acp",
+        question: false,
+    }));
+    let outcome = run_with_executable_record(
+        Arc::new(specialist),
+        request(temp.path()),
+        "specialist-run",
+        limits(),
+        &sink,
+        &executable,
+        None,
+        &record,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert_eq!(sink.artifacts.lock().unwrap().len(), 2);
 }
 #[async_trait::async_trait]
 impl WorkerAdapter for CliHarness {
@@ -320,6 +1117,13 @@ struct WaitSink {
     browsers: Mutex<Vec<BrowserRun>>,
 }
 impl EventSink for WaitSink {
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
     fn progress(&self, _: &str) {}
     fn artifact(&self, _: &ArtifactRef) {}
     fn browser_updated(&self, browser: &BrowserRun) {
@@ -338,308 +1142,89 @@ impl EventSink for WaitSink {
     }
 }
 
-struct CredentialHarness {
-    origin: &'static str,
-    expect_success: bool,
-}
-#[async_trait::async_trait]
-impl WorkerAdapter for CredentialHarness {
-    fn id(&self) -> &str {
-        "acp"
-    }
-    async fn run(
-        &self,
-        req: RunRequest,
-        _: &str,
-        _: RunLimits,
-        _: &dyn EventSink,
-    ) -> Result<RunOutcome, AdapterError> {
-        let cli = &req.context.browser.as_ref().unwrap().cli;
-        let output = tokio::process::Command::new("python3")
-            .arg(cli)
-            .args([
-                "request-credential",
-                "pol-example",
-                self.origin,
-                "Read dashboard",
-            ])
-            .output()
-            .await?;
-        assert_eq!(
-            output.status.success(),
-            self.expect_success,
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-        Ok(RunOutcome {
-            terminal: Terminal::Done {
-                summary: "ignored request".into(),
-                evidence: vec![],
-                usage: None,
-            },
-            exit_code: Some(0),
-        })
-    }
-}
-
 #[tokio::test]
-async fn worker_credential_request_opens_durable_auth_wait_and_discards_done() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut req = request(temp.path());
-    req.task.status = Status::Ready;
-    req.context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap()
-        .allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
-    req.context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap()
-        .credential_policy_ids = vec!["pol-example".into()];
-    req.context.browser_policy.as_mut().unwrap().allowed_actions =
-        vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
-    req.context
-        .browser_policy
-        .as_mut()
-        .unwrap()
-        .credential_policy_ids = vec!["pol-example".into()];
-    let task_id = req.task.id;
-    let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
-    store.insert(&req.task).unwrap();
-    assert!(
-        store
-            .acquire_lease(task_id, "auth-run", Duration::from_secs(60))
+async fn sensitive_backend_is_refused_before_substrate_harness_and_wait_creation() {
+    for id in ["acp", "claude-code"] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut req = request(temp.path());
+        req.task.status = Status::Ready;
+        let grant = req
+            .context
+            .profile
+            .as_mut()
             .unwrap()
-    );
-    let sink = WaitSink {
-        store,
-        task_id,
-        browsers: Mutex::new(Vec::new()),
-    };
-    let result = run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://example.com",
-            expect_success: true,
-        }),
-        req,
-        "auth-run",
-        limits(),
-        &sink,
-        &substrate(temp.path()),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(result.terminal, Terminal::Question { .. }));
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Blocked
-    );
-    let waits = sink.store.browser_waits_for_task(task_id).unwrap();
-    assert_eq!(waits.len(), 1);
-    assert_eq!(
-        waits[0].reason,
-        task_core::browser_wait::BrowserWaitReason::WaitingForAuth
-    );
-    assert_eq!(waits[0].origin, "https://example.com");
-    assert_eq!(
-        sink.browsers.lock().unwrap().last().unwrap().state,
-        BrowserRunState::WaitingForAuth
-    );
-}
-
-#[tokio::test]
-async fn registered_credential_requires_approval_and_denial_fails_task() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut req = request(temp.path());
-    req.task.status = Status::Ready;
-    let grant = req
-        .context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap();
-    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
-    grant.credential_policy_ids = vec!["pol-example".into()];
-    let policy = req.context.browser_policy.as_mut().unwrap();
-    policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
-    policy.credential_policy_ids = vec!["pol-example".into()];
-    let task_id = req.task.id;
-    let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
-    store.insert(&req.task).unwrap();
-    assert!(
-        store
-            .acquire_lease(task_id, "auth-run", Duration::from_secs(60))
-            .unwrap()
-    );
-    let sink = WaitSink {
-        store,
-        task_id,
-        browsers: Mutex::new(Vec::new()),
-    };
-    run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://example.com",
-            expect_success: true,
-        }),
-        req.clone(),
-        "auth-run",
-        limits(),
-        &sink,
-        &substrate(temp.path()),
-        None,
-    )
-    .await
-    .unwrap();
-    let auth = sink
-        .store
-        .browser_waits_for_task(task_id)
-        .unwrap()
-        .pop()
-        .unwrap();
-    let record = CredentialRecord {
-        credential_id: "cred-test".into(),
-        provider: "manual".into(),
-        policy_id: "pol-example".into(),
-        credential_revision: 1,
-        origin: auth.origin.clone(),
-        receipt_id: "receipt-test".into(),
-    };
-    sink.store
-        .browser_wait_register(
-            task_id,
-            &auth.wait_id,
-            auth.version,
-            &record,
-            "owner",
-            time::OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Ready
-    );
-    assert!(
-        sink.store
-            .acquire_lease(task_id, "approval-run", Duration::from_secs(60))
-            .unwrap()
-    );
-    let outcome = run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://example.com",
-            expect_success: true,
-        }),
-        req,
-        "approval-run",
-        limits(),
-        &sink,
-        &temp.path().join("must-not-launch"),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(outcome.terminal, Terminal::Question { .. }));
-    let approval = sink
-        .store
-        .browser_waits_for_task(task_id)
-        .unwrap()
-        .pop()
-        .unwrap();
-    assert_eq!(
-        approval.reason,
-        task_core::browser_wait::BrowserWaitReason::WaitingForApproval
-    );
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Blocked
-    );
-    sink.store
-        .browser_wait_decide(
-            task_id,
-            &approval.wait_id,
-            &HumanDecision {
-                decision: BrowserDecision::Deny,
-                expected_version: approval.version,
-                actor_id: "owner".into(),
-                owner_session_hash: "session-hash".into(),
-                policy_hash: approval.policy_hash.clone(),
-                nonce: "nonce-deny".into(),
-                idempotency_key: "deny-once".into(),
-            },
-            time::OffsetDateTime::now_utc(),
-        )
-        .unwrap();
-    assert_eq!(
-        sink.store.get(task_id).unwrap().unwrap().status,
-        Status::Failed
-    );
-}
-
-#[tokio::test]
-async fn credential_origin_outside_effective_domain_is_denied_before_substrate() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut req = request(temp.path());
-    req.task.status = Status::Ready;
-    let grant = req
-        .context
-        .profile
-        .as_mut()
-        .unwrap()
-        .browser
-        .as_mut()
-        .unwrap();
-    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
-    grant.credential_policy_ids = vec!["pol-example".into()];
-    let policy = req.context.browser_policy.as_mut().unwrap();
-    policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
-    policy.credential_policy_ids = vec!["pol-example".into()];
-    let task_id = req.task.id;
-    let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
-    store.insert(&req.task).unwrap();
-    assert!(
-        store
-            .acquire_lease(task_id, "wrong-origin", Duration::from_secs(60))
-            .unwrap()
-    );
-    let sink = WaitSink {
-        store,
-        task_id,
-        browsers: Mutex::new(Vec::new()),
-    };
-    let outcome = run_with_executable(
-        Arc::new(CredentialHarness {
-            origin: "https://other.example.com",
-            expect_success: false,
-        }),
-        req,
-        "wrong-origin",
-        limits(),
-        &sink,
-        &substrate(temp.path()),
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
-    assert!(
-        sink.store
-            .browser_waits_for_task(task_id)
-            .unwrap()
-            .is_empty()
-    );
-    let commands =
-        std::fs::read_to_string(temp.path().join("runs/wrong-origin/browser/commands.jsonl"))
+            .browser
+            .as_mut()
             .unwrap();
-    assert_eq!(commands.lines().collect::<Vec<_>>(), ["[\"close\"]"]);
+        grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+        grant.credential_policy_ids = vec!["pol-example".into()];
+        let policy = req.context.browser_policy.as_mut().unwrap();
+        policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+        policy.credential_policy_ids = vec!["pol-example".into()];
+        let task_id = req.task.id;
+        let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
+        store.insert(&req.task).unwrap();
+        let sink = WaitSink {
+            store,
+            task_id,
+            browsers: Mutex::default(),
+        };
+        let error = run_with_executable(
+            Arc::new(CliHarness {
+                id,
+                question: false,
+            }),
+            req,
+            "denied-run",
+            limits(),
+            &sink,
+            &temp.path().join("must-not-launch"),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("browser backend lacks required conformance")
+        );
+        assert!(
+            sink.store
+                .browser_waits_for_task(task_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(sink.browsers.lock().unwrap().is_empty());
+        assert!(!temp.path().join("runs").exists());
+    }
+}
+
+#[test]
+fn credential_request_origin_outside_effective_domain_is_denied() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut req = request(temp.path());
+    let grant = req
+        .context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap();
+    grant.allowed_actions = Some(vec![BrowserAction::Navigate, BrowserAction::CredentialUse]);
+    grant.credential_policy_ids = vec!["pol-example".into()];
+    let policy = req.context.browser_policy.as_mut().unwrap();
+    policy.allowed_actions = vec![BrowserAction::Navigate, BrowserAction::CredentialUse];
+    policy.credential_policy_ids = vec!["pol-example".into()];
+    let prepared = crate::browser_policy::prepare(grant, Some(policy), SUPPORTED_VERSION).unwrap();
+    let path = temp.path().join("credential-request.json");
+    for (origin, accepted) in [
+        ("https://example.com", true),
+        ("https://other.example.com", false),
+    ] {
+        std::fs::write(&path, serde_json::json!({"policy_id":"pol-example", "origin":origin, "purpose":"Read dashboard"}).to_string()).unwrap();
+        assert_eq!(read_credential_request(&path, &prepared).is_ok(), accepted);
+    }
 }
 
 #[tokio::test]
@@ -968,4 +1553,521 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
     }
     assert!(sink.browsers.lock().unwrap().is_empty());
     assert!(!temp.path().join("runs/refused").exists());
+}
+
+// Re-exec this unit test in a private network namespace. Its public-looking fixture address
+// has no route to the outside world; only the host-side egress process can reach it.
+#[test]
+fn missing_egress_resolver_refuses_before_browser_start() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "browser::tests::missing_egress_resolver_inner",
+            "--nocapture",
+        ])
+        .env("CELERIS_MISSING_EGRESS_INNER", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[tokio::test]
+async fn missing_egress_resolver_inner() {
+    if std::env::var("CELERIS_MISSING_EGRESS_INNER").is_err() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.parent().unwrap().parent().unwrap();
+    configure_isolated_runtime(IsolatedBrowserConfig {
+        live_sessions: None,
+        resolver: None,
+        record_dir: temp.path().join("records"),
+        bwrap: "/usr/bin/bwrap".into(),
+        sandboxd: bin.join("celeris-browser-sandboxd"),
+        egress: bin.join("celeris-browser-egress"),
+    });
+    let req = request(temp.path());
+    let error = run_with_executable(
+        Arc::new(CliHarness {
+            id: "acp",
+            question: false,
+        }),
+        req,
+        "no-egress",
+        limits(),
+        &RecordingSink::default(),
+        &temp.path().join("must-not-start"),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("isolated_runtime_unavailable"));
+    assert!(!temp.path().join("runs").exists());
+}
+
+#[test]
+fn production_action_path_reaches_fixture_through_real_browser_and_egress() {
+    if std::env::var("CELERIS_BROWSER_ACTION_INNER").is_ok() {
+        return;
+    }
+    let out = std::process::Command::new("/usr/bin/unshare")
+        .args(["--user", "--map-root-user", "--net", "--"])
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "browser::tests::production_action_path_inner",
+            "--nocapture",
+        ])
+        .env("CELERIS_BROWSER_ACTION_INNER", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success()
+            && stdout.contains("1 passed")
+            && stderr.contains("ACTION-EGRESS positive"),
+        "real action runtime failed: {stdout}\n{stderr}"
+    );
+}
+
+fn fixture_dns(listener: std::net::TcpListener) {
+    use std::io::{Read, Write};
+    for conn in listener.incoming() {
+        let Ok(mut c) = conn else { continue };
+        let mut length = [0u8; 2];
+        if c.read_exact(&mut length).is_err() {
+            continue;
+        }
+        let mut query = vec![0; u16::from_be_bytes(length) as usize];
+        if c.read_exact(&mut query).is_err() {
+            continue;
+        }
+        let mut pos = 12;
+        while pos < query.len() && query[pos] != 0 {
+            pos += usize::from(query[pos]) + 1;
+        }
+        if pos + 4 >= query.len() {
+            continue;
+        }
+        let typ = u16::from_be_bytes([query[pos + 1], query[pos + 2]]);
+        let mut answer = query[..pos + 5].to_vec();
+        answer[2..4].copy_from_slice(&0x8180u16.to_be_bytes());
+        if typ == 1 {
+            answer[6..8].copy_from_slice(&1u16.to_be_bytes());
+            answer.extend([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 93, 184, 216, 34]);
+        }
+        let _ = c.write_all(&(answer.len() as u16).to_be_bytes());
+        let _ = c.write_all(&answer);
+    }
+}
+
+struct FixtureHarness;
+#[async_trait::async_trait]
+impl WorkerAdapter for FixtureHarness {
+    fn id(&self) -> &str {
+        "acp"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        let cli = &req.context.browser.as_ref().unwrap().cli;
+        let open = tokio::process::Command::new("python3")
+            .arg(cli)
+            .args(["open", "https://fixture.example.com/index.html"])
+            .output()
+            .await?;
+        assert!(
+            open.status.success(),
+            "open: {}",
+            String::from_utf8_lossy(&open.stdout)
+        );
+        let blocked = tokio::process::Command::new("python3")
+            .arg(cli)
+            .args(["--proxy-server=http://127.0.0.1:1"])
+            .output()
+            .await?;
+        assert_eq!(blocked.status.code(), Some(2), "forbidden flag");
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "fixture reached".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+#[tokio::test]
+async fn production_action_path_inner() {
+    if std::env::var("CELERIS_BROWSER_ACTION_INNER").is_err() {
+        return;
+    }
+    use std::net::TcpStream;
+    use std::time::Instant;
+    let temp = tempfile::tempdir().unwrap();
+    let sh = |command: &str| {
+        assert!(
+            std::process::Command::new("/bin/sh")
+                .args(["-c", command])
+                .status()
+                .unwrap()
+                .success(),
+            "{command}"
+        );
+    };
+    sh("ip link set lo up && ip addr add 93.184.216.34/32 dev lo");
+    let dns = std::net::TcpListener::bind("127.0.0.1:53").unwrap();
+    std::thread::spawn(move || fixture_dns(dns));
+    std::fs::write(
+        temp.path().join("index.html"),
+        "<html>celeris-action-fixture-9581</html>",
+    )
+    .unwrap();
+    let cert = std::process::Command::new("/usr/bin/openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "key.pem",
+            "-out",
+            "cert.pem",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=fixture.example.com",
+            "-addext",
+            "subjectAltName=DNS:fixture.example.com",
+        ])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(cert.status.success(), "{:?}", cert.status);
+    let mut fixture = std::process::Command::new("/usr/bin/openssl")
+        .args([
+            "s_server",
+            "-quiet",
+            "-WWW",
+            "-cert",
+            "cert.pem",
+            "-key",
+            "key.pem",
+            "-accept",
+            "93.184.216.34:443",
+        ])
+        .current_dir(temp.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while TcpStream::connect(("93.184.216.34", 443)).is_err() {
+        assert!(Instant::now() < deadline, "fixture did not start");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let browser = {
+        let mut candidates: Vec<_> = std::fs::read_dir(
+            Path::new(&std::env::var("HOME").unwrap()).join(".cache/ms-playwright"),
+        )
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            e.path()
+                .join("chrome-headless-shell-linux64/chrome-headless-shell")
+        })
+        .filter(|p| p.is_file())
+        .collect();
+        candidates.sort();
+        candidates
+            .pop()
+            .expect("real chrome-headless-shell required")
+    };
+    let script = temp.path().join("fixture-agent-browser");
+    let source = format!(
+        r#"#!/usr/bin/python3
+import json, pathlib, subprocess, sys
+if sys.argv[1:] == ['--version']:
+    print('agent-browser 0.38.1')
+    sys.exit(0)
+args = sys.argv[1:]
+action = args[args.index('--json') + 1:]
+if action[0] == 'open':
+    browser = subprocess.run([{browser:?}, '--headless', '--no-sandbox', '--no-zygote',
+        '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking',
+        '--disable-component-update', '--no-first-run', '--ignore-certificate-errors',
+        '--proxy-server=http://127.0.0.1:3128', '--proxy-bypass-list=<-loopback>',
+        '--user-data-dir=/session/fixture-profile', '--dump-dom', action[1]],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=35)
+    ok = b'celeris-action-fixture-9581' in browser.stdout
+    if ok:
+        pathlib.Path('/session/fixture-reached').write_text('real chrome through egress')
+    print(json.dumps({{'success': ok, 'data': {{'text': 'fixture' if ok else 'unreachable'}}}}))
+    sys.exit(0 if ok else 1)
+print(json.dumps({{'success': True, 'data': {{}}}}))
+"#,
+        browser = browser.to_string_lossy()
+    );
+    crate::test_support::write_executable(&script, &source);
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.parent().unwrap().parent().unwrap();
+    configure_isolated_runtime(IsolatedBrowserConfig {
+        live_sessions: None,
+        resolver: Some("127.0.0.1".parse().unwrap()),
+        record_dir: temp.path().join("records"),
+        bwrap: "/usr/bin/bwrap".into(),
+        sandboxd: bin.join("celeris-browser-sandboxd"),
+        egress: bin.join("celeris-browser-egress"),
+    });
+    let mut req = request(temp.path());
+    req.context
+        .profile
+        .as_mut()
+        .unwrap()
+        .browser
+        .as_mut()
+        .unwrap()
+        .allowed_domains = vec!["fixture.example.com".into()];
+    req.context.browser_policy.as_mut().unwrap().network_domains =
+        vec!["fixture.example.com".into()];
+    let outcome = run_with_executable(
+        Arc::new(FixtureHarness),
+        req,
+        "real-egress",
+        RunLimits {
+            wall_clock: Duration::from_secs(90),
+            idle_timeout: Duration::from_secs(80),
+            kill_grace: Duration::from_millis(100),
+        },
+        &RecordingSink::default(),
+        &script,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("runs/real-egress/browser/fixture-reached"))
+            .unwrap(),
+        "real chrome through egress"
+    );
+    eprintln!(
+        "ACTION-EGRESS positive: shim -> action.sock -> sandboxd -> chrome -> egress -> fixture; forbidden flag rejected"
+    );
+    let _ = fixture.kill();
+    let _ = fixture.wait();
+}
+
+mod live_wiring {
+    use super::*;
+    use crate::browser_live::{CollectingSink, LiveEmitter};
+
+    #[test]
+    fn h3_injected_session_forward_events_stays_stopped_after_injection() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        let events = temp.path().join("events.jsonl");
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let sink = RecordingSink::default();
+        let mut offset = 0;
+        let session_guard = emitter.auth_section();
+        std::fs::write(
+            &events,
+            "{\"operation\":\"navigate\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        std::fs::write(
+            &events,
+            "{\"operation\":\"click\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        offset = 0;
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert!(sink.progress.lock().unwrap().is_empty());
+        assert!(sink.artifacts.lock().unwrap().is_empty());
+        assert!(emitter.sink().events().is_empty());
+        drop(session_guard);
+    }
+
+    #[test]
+    fn h3_injected_session_live_view_stays_stopped_after_injection() {
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let session_guard = emitter.auth_section();
+        for state in ["injecting", "adapter-running", "session-closing"] {
+            assert!(!emitter.emit(&task_core::browser_live::LiveEvent::Status {
+                state: state.into(),
+            }));
+        }
+        assert!(emitter.sink().events().is_empty());
+        drop(session_guard);
+    }
+
+    #[test]
+    fn h3_injected_session_guard_releases_at_session_end() {
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let session_guard = emitter.auth_section();
+        assert!(emitter.in_auth_section());
+        // Production drops the guard only after close_with and the final drain.
+        drop(session_guard);
+        assert!(!emitter.in_auth_section());
+    }
+
+    #[test]
+    fn browser_live_forwarded_events_are_scrubbed_status_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        let events = temp.path().join("events.jsonl");
+        let secret = "Cookie: session=abc; token=SECRET_TOKEN";
+        let lines = [
+            serde_json::json!({"operation":"navigate","status":"success"}),
+            serde_json::json!({"operation":"click","status":"success","detail":secret}),
+            serde_json::json!({"operation":secret,"status":"success"}),
+        ];
+        std::fs::write(
+            &events,
+            lines
+                .iter()
+                .map(|l| l.to_string() + "\n")
+                .collect::<String>(),
+        )
+        .unwrap();
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let mut offset = 0;
+        forward_events(
+            &events,
+            &mut offset,
+            &req,
+            &output,
+            &RecordingSink::default(),
+            &emitter,
+        );
+        let sent = emitter.sink().events();
+        assert_eq!(sent.len(), 1, "untyped lines are dropped before live");
+        let json = serde_json::to_string(&sent).unwrap();
+        for bad in [
+            "frame",
+            "title",
+            "Cookie",
+            "cookie",
+            "SECRET_TOKEN",
+            "token",
+        ] {
+            assert!(!json.contains(bad), "{bad} leaked: {json}");
+        }
+        assert!(json.contains("\"kind\":\"status\""));
+    }
+
+    /// ADR-0080 H3: the production `forward_events` forwards nothing from inside the auth
+    /// section — no progress (LLM-visible / persisted), no artifact, no live event — and
+    /// consumes the lines instead of buffering them.
+    #[test]
+    fn browser_auth_section_forward_events_drops_progress_artifact_and_live() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("extract-a.json"), "{}").unwrap();
+        let events = temp.path().join("events.jsonl");
+        std::fs::write(
+            &events,
+            "{\"operation\":\"navigate\",\"status\":\"success\"}\n\
+             {\"operation\":\"extract\",\"status\":\"success\",\"artifact\":\"extract-a.json\"}\n",
+        )
+        .unwrap();
+        let emitter = LiveEmitter::new(CollectingSink::default());
+        let sink = RecordingSink::default();
+        let mut offset = 0;
+        {
+            let _auth = emitter.auth_section();
+            forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        }
+        assert!(
+            emitter.sink().events().is_empty(),
+            "no live events during auth"
+        );
+        assert!(
+            sink.progress.lock().unwrap().is_empty(),
+            "no progress during auth"
+        );
+        assert!(
+            sink.artifacts.lock().unwrap().is_empty(),
+            "no artifact during auth"
+        );
+        // not buffered: leaving the section does not replay them
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert!(emitter.sink().events().is_empty());
+        assert!(sink.progress.lock().unwrap().is_empty());
+        // lines written after the section are forwarded as usual
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&events)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut f,
+            b"{\"operation\":\"click\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert_eq!(emitter.sink().events().len(), 1);
+        assert_eq!(sink.progress.lock().unwrap().len(), 1);
+    }
+
+    /// ADR-0080 H3 / ADR-0083 D4: identity の復元で立った旗の後は、`forward_events` が
+    /// progress・artifact・live event を流さず、session の終わりまで戻らない。
+    #[test]
+    fn browser_restored_session_forward_events_drops_until_session_end() {
+        let temp = tempfile::tempdir().unwrap();
+        let req = request(temp.path());
+        let output = req.artifacts_dir.join("browser");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("extract-a.json"), "{}").unwrap();
+        let events = temp.path().join("events.jsonl");
+        std::fs::write(
+            &events,
+            "{\"operation\":\"extract\",\"status\":\"success\",\"artifact\":\"extract-a.json\"}\n",
+        )
+        .unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let emitter = LiveEmitter::with_observation_stop(CollectingSink::default(), stop);
+        let sink = RecordingSink::default();
+        let mut offset = 0;
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        {
+            // 認証区間を開いて閉じても解除されない。
+            let _auth = emitter.auth_section();
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&events)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut f,
+            b"{\"operation\":\"click\",\"status\":\"success\"}\n",
+        )
+        .unwrap();
+        forward_events(&events, &mut offset, &req, &output, &sink, &emitter);
+        assert!(emitter.sink().events().is_empty());
+        assert!(sink.progress.lock().unwrap().is_empty());
+        assert!(sink.artifacts.lock().unwrap().is_empty());
+        assert!(emitter.in_auth_section());
+    }
 }

@@ -70,10 +70,16 @@ pub(crate) const MIGRATION_0033: &str =
     include_str!("../../migrations/0033_browser_task_policies.sql");
 /// ADR-0090 D2: `cluster_job_waits`（クラスタ job の durable wait。events が正本の派生の索引）。
 pub(crate) const MIGRATION_0034: &str = include_str!("../../migrations/0034_cluster_job_waits.sql");
+/// browser Phase 3: control lease・live proxy・identity の store（ブランチの 0034 を main の後へ振り直し）。
+pub(crate) const MIGRATION_0035: &str =
+    include_str!("../../migrations/0035_browser_phase3_store.sql");
+/// browser Phase 4: trusted login（ブランチの 0035 を振り直し）。
+pub(crate) const MIGRATION_0036: &str =
+    include_str!("../../migrations/0036_browser_trusted_login.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 34;
+pub const SCHEMA_VERSION: u32 = 36;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -112,6 +118,8 @@ impl SqliteStore {
             32 => Ok(MIGRATION_0032),
             33 => Ok(MIGRATION_0033),
             34 => Ok(MIGRATION_0034),
+            35 => Ok(MIGRATION_0035),
+            36 => Ok(MIGRATION_0036),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

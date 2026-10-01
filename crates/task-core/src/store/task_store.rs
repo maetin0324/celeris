@@ -19,7 +19,7 @@ use crate::transition::{Outcome, Trigger};
 use super::query::{ListFilter, ListOrder, Page};
 use super::{
     ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, ProjectPlanApply,
-    StoreError, TreeAdoption,
+    StoreError, TaskWithEvents, TreeAdoption,
 };
 
 /// ADR-0033 D3: 報告（`reports`）の読み書きは `crate::report::ReportStore` にあり、`TaskStore` はそれを
@@ -58,6 +58,18 @@ pub trait TaskStore:
     /// 異なるタスクのイベント同士の前後関係を比較してよい（`events_for` の `seq` はタスクごとにローカルなので
     /// 比較できない）。
     fn events_for_with_global_ids(&self, task_id: TaskId) -> Result<Vec<(u64, Event)>, StoreError>;
+    /// 全タスクとそれぞれの `events_for` を**同じ読み取りスナップショット**で返す（`replay` 用）。
+    /// `list` と `events_for` を別々に呼ぶと、その間に稼働中の daemon が状態遷移（例: Ready→Running の
+    /// lease 取得）を書き込み、「古い tasks 行 × 新しい events」を突き合わせた偽の不一致になる。
+    fn tasks_with_events(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+        let tasks = self.list(None)?;
+        let mut out = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let events = self.events_for(task.id)?;
+            out.push((task, events));
+        }
+        Ok(out)
+    }
     /// 排他的にリースを取得する。成功したら true を返し、task の status を Running にし、
     /// lease = Some{worker_run_id, expires_at: now + ttl} をDBに書く。
     /// 既にリースされている／status != Ready の場合は false を返す（エラーではない）。

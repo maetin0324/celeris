@@ -51,6 +51,9 @@ impl Fixture {
             max_ttl_seconds: 60,
             require_approval: true,
             allow_persistence: false,
+            login_url: None,
+            password_selector: None,
+            submit_selector: None,
         };
         Self {
             root,
@@ -291,31 +294,24 @@ fn concurrent_resolve_only_one_wins() {
     assert_eq!(wins, 1);
 }
 #[test]
-fn plugin_bridge_uses_upstream_json_and_never_echoes_error() {
-    use std::io::{Read, Write};
+fn retired_plugin_bridge_never_connects_or_echoes_input() {
     use std::os::unix::net::UnixListener;
     let dir = tempfile::tempdir().expect("tempdir");
     let path: PathBuf = dir.path().join("resolve.sock");
     let listener = UnixListener::bind(&path).expect("bind");
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut input = String::new();
-        stream.read_to_string(&mut input).expect("read");
-        assert!(input.contains("\"binding_token\":\"private-binding\""));
-        assert!(input.contains("\"lease_id\":\"lease-1\""));
-        stream.write_all(format!("{{\"success\":true,\"credential\":{{\"username\":\"u\",\"password\":\"{SENTINEL}\"}}}}").as_bytes()).expect("write");
-    });
-    let input=br#"{"protocol":"agent-browser.plugin.v1","type":"credential.resolve","capability":"credential.read","request":{"profileName":"celeris-credential","itemRef":"lease-1","url":"https://example.test/login"}}"#;
-    let out = ipc::bridge_request(input, "private-binding", &path);
-    server.join().expect("server");
-    let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
-    assert_eq!(value["success"], true);
-    assert_eq!(value["credential"]["password"], SENTINEL);
-    let bad=ipc::bridge_request(br#"{"protocol":"agent-browser.plugin.v1","type":"browser.launch","capability":"credential.read","request":{"itemRef":"SENTINEL-PASSWORD-6c4fe259","url":"https://example.test"}}"#,"private-binding",&path);
-    assert!(!String::from_utf8_lossy(&bad).contains(SENTINEL));
+    listener.set_nonblocking(true).unwrap();
+    for input in [
+        br#"{"protocol":"agent-browser.plugin.v1","type":"credential.resolve","capability":"credential.read","request":{"profileName":"default","itemRef":"lease-1","url":"https://example.test/login"}}"#.as_slice(),
+        SENTINEL.as_bytes(),
+    ] {
+        let out = ipc::bridge_request(input, SENTINEL, &path);
+        assert_eq!(out, br#"{"protocol":"agent-browser.plugin.v1","success":false}"#);
+        assert!(!String::from_utf8_lossy(&out).contains(SENTINEL));
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }
 }
 #[test]
-fn daemon_control_and_resolve_sockets_are_separate() {
+fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
     use std::process::{Child, Command, Stdio};
     struct ChildGuard(Child);
     impl Drop for ChildGuard {
@@ -390,7 +386,45 @@ fn daemon_control_and_resolve_sockets_are_separate() {
         &resolve,
     );
     let response: serde_json::Value = serde_json::from_slice(&out).expect("response");
-    assert_eq!(response["credential"]["password"], SENTINEL);
+    assert_eq!(response["success"], false);
+    assert!(response.get("credential").is_none());
+    // Bypass the retired bridge and call the real broker socket directly, with
+    // credentials that used to authorize it. Even the admitted control PID fails.
+    for request in [
+        serde_json::json!({"op":"resolve","binding_token":token,"lease_id":lease_id,"observed_origin":"https://example.test"}),
+        serde_json::json!({"op":"resolve","role":"injector","binding_token":token,"lease_id":lease_id,"observed_origin":"https://example.test"}),
+    ] {
+        let reply = ipc::call(&resolve, &serde_json::to_vec(&request).unwrap()).unwrap();
+        assert!(!reply.success);
+        assert_eq!(reply.code.as_deref(), Some("trusted_injection_required"));
+        assert!(reply.credential.is_none());
+    }
+    // A separate worker process shares the UID but is not an admitted control
+    // PID. It can connect to the socket and knows a valid lease: still no secret.
+    let mut worker = Command::new("python3")
+        .arg("-c")
+        .arg("import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.stdin.buffer.read()); s.shutdown(socket.SHUT_WR); sys.stdout.buffer.write(s.makefile('rb').read())")
+        .arg(&resolve)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("worker process");
+    let direct = serde_json::json!({"op":"resolve","binding_token":token,"lease_id":lease_id,"observed_origin":"https://example.test"});
+    worker
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&direct).unwrap())
+        .unwrap();
+    let output = worker.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let denied: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(denied["code"], "trusted_injection_required");
+    assert_eq!(denied["success"], false);
+    assert!(denied.get("credential").is_none());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(SENTINEL));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(SENTINEL));
     // Exercise the actual stdio executable with a private inherited FD 3 binding.
     use std::os::fd::AsRawFd;
     use std::os::unix::{net::UnixStream, process::CommandExt};
@@ -435,13 +469,22 @@ fn daemon_control_and_resolve_sockets_are_separate() {
     let output = bridge.wait_with_output().expect("bridge output");
     assert!(output.status.success());
     let actual: serde_json::Value = serde_json::from_slice(&output.stdout).expect("bridge json");
-    assert_eq!(actual["credential"]["password"], SENTINEL);
+    assert_eq!(actual["success"], false);
+    assert!(actual.get("credential").is_none());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(SENTINEL));
     assert!(!String::from_utf8_lossy(&output.stderr).contains(SENTINEL));
     let cross = ipc::call(&resolve, br#"{"op":"initialize_key"}"#).expect("resolve response");
     assert!(!cross.success);
+    assert_eq!(cross.code.as_deref(), Some("trusted_injection_required"));
     let journal = fs::read_to_string(home.join(".local/celeris/credentiald/audit/journal.jsonl"))
         .expect("journal");
     assert!(!journal.contains(SENTINEL));
+    let events: Vec<serde_json::Value> = journal
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(events.iter().filter(|e| e["action"] == "grant").count(), 2);
+    assert!(!events.iter().any(|e| e["action"] == "use"));
 }
 #[test]
 fn missing_key_symlink_hardlink_and_directory_modes_fail_closed() {

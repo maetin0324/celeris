@@ -20,7 +20,8 @@ use crate::transition::{Outcome, Trigger};
 
 use super::{
     ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, ListFilter,
-    ListOrder, Page, ProjectPlanApply, SqliteStore, StoreError, TaskStore, TreeAdoption,
+    ListOrder, Page, ProjectPlanApply, SqliteStore, StoreError, TaskStore, TaskWithEvents,
+    TreeAdoption,
 };
 
 impl TaskStore for SqliteStore {
@@ -46,6 +47,10 @@ impl TaskStore for SqliteStore {
 
     fn events_for_with_global_ids(&self, task_id: TaskId) -> Result<Vec<(u64, Event)>, StoreError> {
         self.events_for_with_global_ids_impl(task_id)
+    }
+
+    fn tasks_with_events(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+        self.tasks_with_events_impl()
     }
 
     fn acquire_lease(

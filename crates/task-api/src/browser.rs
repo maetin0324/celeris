@@ -96,10 +96,45 @@ pub trait CredentialBrokerControl: Send + Sync {
     -> Result<bool, BrokerFailure>;
 }
 
+/// ADR-0091 D2: 管理者の site policy（daemon の設定から来る。モデル・worker・HTTP 要求は指定できない）。
+/// 手動登録の `policy_id` と `origin` が両方一致したものだけが broker の `CredentialPolicy` に入る。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedSitePolicy {
+    pub policy_id: String,
+    pub exact_origin: String,
+    pub login_url: String,
+    pub password_selector: String,
+    #[serde(default)]
+    pub submit_selector: Option<String>,
+}
+
+impl TrustedSitePolicy {
+    /// ADR-0091 D2 の形式検証（broker と同じ検査）。
+    pub fn validate(&self) -> Result<(), &'static str> {
+        task_core::browser_wait::validate_trusted_login(
+            &self.login_url,
+            &self.exact_origin,
+            &self.password_selector,
+            self.submit_selector.as_deref(),
+        )
+    }
+}
+
 /// Production control client. Only the daemon PID admitted by credentiald may use this socket.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct UnixCredentialBrokerControl {
     pub socket: std::path::PathBuf,
+    /// 管理者の site policy。該当が無い登録は selector 無しの policy になり、broker は注入を拒否する。
+    pub site_policies: Vec<TrustedSitePolicy>,
+}
+
+impl UnixCredentialBrokerControl {
+    fn site_policy(&self, policy_id: &str, origin: &str) -> Option<&TrustedSitePolicy> {
+        self.site_policies
+            .iter()
+            .find(|p| p.policy_id == policy_id && p.exact_origin == origin)
+    }
 }
 
 impl CredentialBrokerControl for UnixCredentialBrokerControl {
@@ -118,6 +153,10 @@ impl CredentialBrokerControl for UnixCredentialBrokerControl {
             revision: u64,
             secret: Secret<'a>,
         }
+        let site = self.site_policy(&registration.policy_id, &registration.origin);
+        if site.is_some_and(|p| p.validate().is_err()) {
+            return Err(BrokerFailure::Rejected("site_policy_invalid"));
+        }
         let credential_id = format!("cred-{}", registration.wait_id);
         let reference = CredentialRef {
             credential_id: credential_id.clone(),
@@ -132,6 +171,9 @@ impl CredentialBrokerControl for UnixCredentialBrokerControl {
             max_ttl_seconds: 60,
             require_approval: true,
             allow_persistence: false,
+            login_url: site.map(|p| p.login_url.clone()),
+            password_selector: site.map(|p| p.password_selector.clone()),
+            submit_selector: site.and_then(|p| p.submit_selector.clone()),
         };
         let request = Request {
             op: "register",
@@ -249,7 +291,7 @@ pub struct AttestationClaims {
     pub expires_at: i64,
 }
 
-fn decode_hex(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_hex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }

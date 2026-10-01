@@ -1,6 +1,10 @@
 use super::*;
 use crate::test_support::write_executable;
 
+/// 成功経路のテストで使う待ち時間。偽 ssh は即座に応答するので、成功時は
+/// この値まで待たない。高負荷の評価器で 5 秒の timeout を踏んだため長めに取る。
+const LOAD_TOLERANT_WAIT: Duration = Duration::from_secs(30);
+
 async fn wait_until_process_gone(pid: u32) {
     for _ in 0..150 {
         if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
@@ -78,12 +82,14 @@ fn delayed_success_script(state: &Path, delay_ms: u64) -> String {
 }
 
 /// `SSH_ASKPASS` を呼び、返ってきたコードが `{expected_code}` と一致すれば以後 `-O check` が通る偽 ssh
-/// （`auth = \"totp\"` を模す）。
+/// （`auth = \"totp\"` を模す）。askpass は `sh` で読ませる: 直前に同じプロセスで書いた実行ファイルを
+/// exec すると、並行テストの fork が書き込み fd を exec 前まで握っていて ETXTBSY で黙って失敗し、
+/// プロンプトが来ないまま prompt_timeout に落ちることがある（高負荷の評価器で観測）。
 fn askpass_script(state: &Path, prompt: &str, expected_code: &str) -> String {
     format!(
         "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"{expected_code}\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -137,7 +143,7 @@ async fn publickey_connects_after_a_delay() {
         &MasterLauncher::Inline,
         false,
         Duration::from_millis(200),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -215,8 +221,8 @@ async fn totp_needs_code_reports_the_exact_prompt() {
         "c1",
         &MasterLauncher::Inline,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -246,7 +252,7 @@ fn daemonizing_askpass_script(state: &Path, prompt: &str, expected_code: &str) -
         "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                echo $$ > \"$STATE/masterpid\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"{expected_code}\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                exit 0\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -279,8 +285,8 @@ async fn totp_succeeds_when_ssh_backgrounds_itself_after_authenticating() {
         "c1",
         &MasterLauncher::Inline,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -289,7 +295,7 @@ async fn totp_succeeds_when_ssh_backgrounds_itself_after_authenticating() {
     let ClusterConnectStart::NeedsCode { session, .. } = result else {
         panic!("expected NeedsCode");
     };
-    match session.submit_code("123456", Duration::from_secs(5)).await {
+    match session.submit_code("123456", LOAD_TOLERANT_WAIT).await {
         // 保持する子は無い（ssh が切り離した）が、**接続は成功している**。
         Ok(master) => assert!(
             master.is_none(),
@@ -316,8 +322,8 @@ async fn totp_still_fails_when_the_code_is_wrong_and_ssh_exits() {
         "c1",
         &MasterLauncher::Inline,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -350,8 +356,8 @@ async fn totp_submit_code_connects_with_the_right_code() {
         "c1",
         &MasterLauncher::Inline,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -360,7 +366,7 @@ async fn totp_submit_code_connects_with_the_right_code() {
     let ClusterConnectStart::NeedsCode { session, .. } = result else {
         panic!("expected NeedsCode");
     };
-    let master = session.submit_code("123456", Duration::from_secs(5)).await;
+    let master = session.submit_code("123456", LOAD_TOLERANT_WAIT).await;
     match master {
         Ok(_master) => {}
         Err(e) => panic!("expected Ok(ClusterMaster), got {e:?}"),
@@ -387,8 +393,8 @@ async fn totp_rejects_invalid_codes_without_delivering_them() {
             "c1",
             &MasterLauncher::Inline,
             true,
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WAIT,
+            LOAD_TOLERANT_WAIT,
             0,
             "yes",
         )
@@ -425,8 +431,8 @@ async fn cancel_kills_the_child_and_removes_the_tempdir() {
         "c1",
         &MasterLauncher::Inline,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -459,7 +465,7 @@ async fn totp_times_out_when_no_prompt_arrives() {
         &MasterLauncher::Inline,
         true,
         Duration::from_millis(300),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -666,8 +672,8 @@ async fn fake_systemd_run_execs_ssh_and_preserves_the_askpass_env() {
         "c1",
         &launcher,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -676,7 +682,7 @@ async fn fake_systemd_run_execs_ssh_and_preserves_the_askpass_env() {
     let ClusterConnectStart::NeedsCode { session, .. } = result else {
         panic!("expected NeedsCode");
     };
-    let master = session.submit_code("123456", Duration::from_secs(5)).await;
+    let master = session.submit_code("123456", LOAD_TOLERANT_WAIT).await;
     match master {
         Ok(_master) => {}
         Err(e) => {
@@ -703,7 +709,7 @@ async fn cluster_master_kill_terminates_the_child_explicitly() {
         &MasterLauncher::Inline,
         false,
         Duration::from_millis(200),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -803,7 +809,7 @@ async fn keepalive_args_are_added_on_the_totp_path_too() {
         "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                printf '%s\\n' \"$@\" > \"$STATE/argv\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"123456\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -819,8 +825,8 @@ async fn keepalive_args_are_added_on_the_totp_path_too() {
         "c1",
         &MasterLauncher::Inline,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         20,
         "yes",
     )
@@ -830,7 +836,7 @@ async fn keepalive_args_are_added_on_the_totp_path_too() {
         panic!("expected NeedsCode");
     };
     let master = session
-        .submit_code("123456", Duration::from_secs(5))
+        .submit_code("123456", LOAD_TOLERANT_WAIT)
         .await
         .unwrap();
     let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();
@@ -921,7 +927,7 @@ async fn a_control_persist_yes_master_survives_a_daemon_restart_gap() {
         &MasterLauncher::Inline,
         false,
         Duration::from_millis(200),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
         30,
         "yes",
     )
@@ -941,7 +947,7 @@ async fn a_control_persist_yes_master_survives_a_daemon_restart_gap() {
         &MasterLauncher::Inline,
         false,
         Duration::from_millis(200),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
         30,
         "yes",
     )
@@ -974,7 +980,7 @@ async fn without_control_persist_yes_the_master_dies_in_the_restart_gap() {
         &MasterLauncher::Inline,
         false,
         Duration::from_millis(200),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
         30,
         "",
     )
@@ -1031,7 +1037,7 @@ async fn control_persist_yes_is_added_before_m_on_the_totp_path_too() {
         "#!/bin/sh\nSTATE={state:?}\n{preamble}\
              if [ \"$is_master\" -ge 2 ]; then\n  \
                printf '%s\\n' \"$@\" > \"$STATE/argv\"\n  \
-               code=$(\"$SSH_ASKPASS\" \"{prompt}\")\n  \
+               code=$(sh \"$SSH_ASKPASS\" \"{prompt}\")\n  \
                if [ \"$code\" = \"123456\" ]; then echo ok > \"$STATE/authed\"; fi\n  \
                while kill -0 \"$PPID\" 2>/dev/null; do sleep 0.2; done\nfi\n\
              if [ \"$is_check\" = 1 ]; then\n  \
@@ -1047,8 +1053,8 @@ async fn control_persist_yes_is_added_before_m_on_the_totp_path_too() {
         "c1",
         &MasterLauncher::Inline,
         true,
-        Duration::from_secs(5),
-        Duration::from_secs(5),
+        LOAD_TOLERANT_WAIT,
+        LOAD_TOLERANT_WAIT,
         0,
         "yes",
     )
@@ -1058,7 +1064,7 @@ async fn control_persist_yes_is_added_before_m_on_the_totp_path_too() {
         panic!("expected NeedsCode");
     };
     let master = session
-        .submit_code("123456", Duration::from_secs(5))
+        .submit_code("123456", LOAD_TOLERANT_WAIT)
         .await
         .unwrap();
     let argv = std::fs::read_to_string(state.path().join("argv")).unwrap();

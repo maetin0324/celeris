@@ -96,6 +96,11 @@ pub struct TaskEdit {
     /// その場で `ready` に戻す（下記 `edit_task` を見よ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceSpec>,
+    /// ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・
+    /// `draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。
+    /// 既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<task_core::ProjectId>,
     /// ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（`none`/`each_phase`/`after`）。
     /// 次に計画が採用（新規・replan）されたときに `Event::PausePointsResolved` へ解決される
     /// （PATCH 自体は解決を起こさない。走っている計画の停止点はそのまま）。
@@ -172,6 +177,17 @@ pub fn edit_task(
 
     let original_status = task.status;
     let mut fields: Vec<String> = Vec::new();
+
+    // ADR-0098 D7: 案件を付ける（`repos` / `milestone_id` の検証より先。どちらも task の案件を見る）。
+    if let Some(project_id) = edit.project_id
+        && task.project_id != Some(project_id)
+    {
+        attach_project(store, &mut task, project_id, edit.repos.is_some())?;
+        fields.push("project_id".to_string());
+        if edit.repos.is_none() && !task.repos.is_empty() {
+            fields.push("repos".to_string());
+        }
+    }
 
     if let Some(title) = edit.title {
         if title.trim().is_empty() {
@@ -484,6 +500,63 @@ pub fn edit_task(
         }
     }
     Ok(EditResult { task, fields })
+}
+
+/// ADR-0098 D7: 案件を持たない・まだ一度も run していない task に案件 `project_id` を付ける。
+/// `repos_given` が偽なら案件の primary を付ける（ADR-0043 D2。リモートの primary は作業場所の種類が変わるので 422）。
+fn attach_project(
+    store: &dyn TaskStore,
+    task: &mut Task,
+    project_id: task_core::ProjectId,
+    repos_given: bool,
+) -> Result<(), OpsError> {
+    if let Some(current) = task.project_id {
+        return Err(OpsError::Validation(format!(
+            "task already belongs to project {current}; a task's project cannot be changed or removed (ADR-0098 D7)"
+        )));
+    }
+    if task.parent_id.is_some() {
+        return Err(OpsError::Validation(
+            "a child task follows its parent's project; attach the project to the root task (ADR-0098 D7)"
+                .to_string(),
+        ));
+    }
+    let started = task.lease.is_some()
+        || task.attempts > 0
+        || store
+            .events_for(task.id)?
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerStarted { .. }));
+    if !matches!(task.status, Status::Draft | Status::Ready) || started {
+        return Err(OpsError::InvalidState {
+            id: task.id,
+            context: format!("status={:?}, started={started}", task.status),
+            action: "given a project; only a draft/ready task that has never run accepts one (ADR-0098 D7)"
+                .to_string(),
+        });
+    }
+    if store.project_get(project_id)?.is_none() {
+        return Err(OpsError::ProjectNotFound(project_id));
+    }
+    task.project_id = Some(project_id);
+    if !repos_given {
+        let primary = store
+            .repo_list(project_id)?
+            .into_iter()
+            .find(|r| r.is_primary);
+        task.repos = match primary {
+            Some(repo) if matches!(repo.location, WorkspaceSpec::Remote { .. }) => {
+                return Err(OpsError::Validation(format!(
+                    "project {project_id}'s primary repository {:?} is remote; attaching it would change the \
+                     task's workspace kind, so recreate the task in the project instead (ADR-0098 D7)",
+                    repo.name
+                )));
+            }
+            Some(repo) => vec![task_core::RepoRef::of(&repo)],
+            None => Vec::new(),
+        };
+    }
+    Ok(())
 }
 
 /// `starts` から `depends_on` をたどって `target` に着くか（着くなら最初に見つけた経路上の id）。

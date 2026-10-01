@@ -4,7 +4,7 @@
 //! 出力整形だけをここで行う。判断と検証（受け入れ条件の必須化、`depends_on` の検証、`Task` の
 //! 組み立て）は `task-ops::add`（ADR-0013 D7）に移した。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
@@ -192,13 +192,53 @@ fn load_roles_and_genres(
     }
 }
 
-pub fn run(store: &dyn TaskStore, mut args: AddArgs) -> Result<ExitCode, CliError> {
-    let acceptance = build_criteria(&mut args);
+pub fn run(store: &dyn TaskStore, args: AddArgs) -> Result<ExitCode, CliError> {
     let (roles, genres) = load_roles_and_genres(
         args.config.as_ref(),
         args.role.as_deref(),
         args.genre.as_deref(),
     )?;
+    let spec = build_spec(args)?;
+    let task = create_task_with_roles(store, spec, &roles, &genres, OffsetDateTime::now_utc())?;
+
+    outln!("{}", task.id);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// ADR-0098 D6: worker の run の中で daemon の DB（`CELERIS_RUN_DB`）に向けた `add` は **DB を開かず**、spec を
+/// その run の `followups.json` に追記する。run の終わりに daemon が run の task の案件・リポジトリで `draft` として作る。
+/// `--parent` / `--workspace` / `--cluster` は daemon が使わない欄なのでここで断る（D3-4）。`--role` / `--genre` は
+/// 名前のまま渡し、daemon の `[[roles]]` / `[[genres]]` で解決する（`--config` は読まない）。
+pub fn queue(args: AddArgs, followups_file: &Path) -> Result<ExitCode, CliError> {
+    let refused: Vec<&str> = [
+        ("--parent", args.parent.is_some()),
+        ("--workspace", args.workspace.is_some()),
+        ("--cluster", args.cluster.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(flag, given)| given.then_some(flag))
+    .collect();
+    if !refused.is_empty() {
+        return Err(CliError::msg(format!(
+            "{} cannot be used inside a worker run: the follow-up is an independent task in this run's \
+             project and its workspace follows the project's repositories (ADR-0098 D3). For a child task \
+             write delegate.json instead",
+            refused.join(", ")
+        )));
+    }
+    let spec = build_spec(args)?;
+    let title = spec.title.clone();
+    let n = task_ops::followup::append_to_file(followups_file, &spec)?;
+    outln!(
+        "queued follow-up #{n} {title:?} in {} — celeris creates it as a draft in this run's project \
+         (with its repositories) when the run ends (ADR-0098)",
+        followups_file.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn build_spec(mut args: AddArgs) -> Result<NewTaskSpec, CliError> {
+    let acceptance = build_criteria(&mut args);
 
     let parent = match &args.parent {
         Some(s) => Some(parse_task_id(s)?),
@@ -250,11 +290,7 @@ pub fn run(store: &dyn TaskStore, mut args: AddArgs) -> Result<ExitCode, CliErro
         stages_hint: Vec::new(),
         provenance: task_ops::add::SpecProvenance::default(),
     };
-
-    let task = create_task_with_roles(store, spec, &roles, &genres, OffsetDateTime::now_utc())?;
-
-    outln!("{}", task.id);
-    Ok(ExitCode::SUCCESS)
+    Ok(spec)
 }
 
 #[cfg(test)]

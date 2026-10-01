@@ -13,6 +13,9 @@ fn ctl(db: &Path, args: &[&str]) -> Output {
         .args(args)
         .env_remove("CELERIS_DB")
         .env_remove("CELERIS_CONFIG")
+        // ADR-0098 D6: 試験を Celeris の worker の run の中で回しても `add` が後続の宣言に化けないように。
+        .env_remove("CELERIS_FOLLOWUPS_FILE")
+        .env_remove("CELERIS_RUN_DB")
         .output()
         .unwrap_or_else(|e| panic!("spawn celerisctl: {e}"))
 }

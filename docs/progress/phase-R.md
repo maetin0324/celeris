@@ -2171,3 +2171,89 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 - この task の replay には R7-9 以前からの不一致（統合の repair 行が replay で作られない等）が 4 件ある。別課題。
 - 本番のリポジトリ（`/var/lib/celeris/workspaces/01M3PAX6…/repos/agent-platform`）の ref は worktree の隔離で読めなかった。ブランチの存在は
   依頼文の git の事実と DB の `work_unit_committed` を根拠にした。
+## R7-10: worker の run が作る task は、その run の task の案件とリポジトリを継ぐ（2026-10-01）
+
+### 事象
+
+- task 01M3SPF94RDWTPWHNDEQD68VB9（案件 01M2WTS3DKNZBSZ2JMVB4CZMBW、repo `agent-platform`）の run が `celerisctl add --db /var/lib/celeris/celeris.sqlite3`
+  で後続（01M3SPN8HP…、01M3SPN8H05…、01M3SPN8HE6A…、後の run で 01M3T7FRCW…）を作った。どれも `project_id` / `repos` 無しで、planner が
+  「子の repos が親の `[]` の部分集合でない」で落ちた。後から案件を付ける API も無い（本番を読み取り専用で確認: 4 件とも現在は done / cancelled で救済不要）。
+- 人の決定: 案件の worker が作った task はその案件（とリポジトリ）に結び付ける。
+- R7-6（ADR-0095）以降、run の中から本番 DB には書けないので、worker が後続を起票する口そのものが無くなっていた。
+
+### 調査: worker の run から task が作られる経路（HEAD 291f1701）
+
+- 委譲 `delegate.json` → `StoreSink::delegate_impl` → `task_core::delegate`: **既に継ぐ**（`delegate.rs` の `project_id: parent.project_id`、
+  `child_repos` = 明示 > 親 > primary）。ただし子は親の完了を止める（独立の後続には使えない）。
+- 木の子 task（plan/3 の unit）・人の承認の子（`create_human_approval_child`）: 既に継ぐ。
+- CoS の `actions.create_task`: 秘書（`OrgKind::Secretary`）の対話 run だけ。案件をまたぐ 1 本の対話で人の依頼の代筆（`project` は明示）→ 変えない。
+- `celerisctl add --db <本番>`: R7-6 以降 `SQLITE_READONLY` で失敗。celerisctl に HTTP API モードは無い。
+- HTTP API: 単一の admin token（`token_file`）で、run には渡らない。MCP: task を作る tool は無く、run に MCP server を渡していない（acp は `mcpServers: []`）。
+- run の中に task id / run id を伝える env は無かった（`CELERIS_*` の grep で 0 件）。
+
+### 決定（ADR-0098 新規。0096 は別ブランチで使用済み、0097 は並行の R7-9 に空けた）
+
+- 後続は run が `<artifacts_dir>/followups.json`（`{"tasks":[<POST /tasks body>…]}`）で宣言し、daemon が run の後に作る。
+  **出自は daemon が run に割り当てた成果物ディレクトリで決まる**（ファイルや env の自己申告は使わない）。
+- 案件 = 元の task の案件。違う案件を書いた 1 件は拒否（元の task が案件無しなら案件の指定も拒否）。repos 省略 → 元の task の repos → 案件の primary。
+  `parent` / `assignee` / `adapter` / `workspace` / `cluster` / `workspace_mode` は使わず、`status` は常に `draft`（人が Go）。同じ案件に終端でない同題の task があれば作らない。
+- 出自: `Event::Created.origin = {"worker_run":{"task_id","run_id"}}`（migration 無し）と、元の task の `WorkerProgress`「follow-up created: …」。
+- run の中で daemon の DB（`CELERIS_RUN_DB`）に向けた `celerisctl add` は DB を開かずに `followups.json` へ追記（事故の形の `--db <本番>` も、`--db` 無しも）。
+  一時 DB に向けた `add` はそのまま DB に書く（worker が run の中で試験を回しても後続に化けない）。
+- `PATCH /tasks/{id}` に `project_id`（案件無し・親無し・draft/ready・一度も run していない task だけ。primary を付ける。付け替えは 422）。
+
+### 変更（file:line）
+
+- `crates/task-core/src/model.rs:926` `CreatedOrigin::WorkerRun { task_id, run_id }`（`Copy` を外した）。
+- `crates/task-core/src/store/task_store.rs:117` / `task_store_impl.rs:95` / `store/tasks.rs:413`: `create_task_with_origin`（`create_task_impl` が origin を受ける）。
+- `crates/task-ops/src/followup.rs`（新規）: `append_to_file`:49、`bind_to_origin`:83（D3）、`live_duplicate`:160（D4）、`create_followup`:182（D5）、
+  `absorb_followups_file`:221（D1。改名 `followups.<run_id>.applied.json`、1 run 20 件まで、理由は `WorkerProgress`）。env 名の定数。
+- `crates/task-ops/src/edit.rs:103`（`TaskEdit.project_id`）、`:185`（適用）、`:507` `attach_project`（D7）。
+- `crates/task-dispatch/src/dispatcher/followups.rs`（新規）: `followups_env`:18、`clear_stale_followups`:42、`store_run_holds_lease`:47（`run_holds_lease` と同じ規則）、
+  `absorb_run_followups`:71。
+- `crates/task-dispatch/src/dispatcher/worker_task.rs:274-279`（worker の run だけ。古い宣言を消す）、`:462-476`（env を `with_env`。`CELERIS_RUN_DB` は
+  `db_guard::installed()` があるときだけ。container の包みより前）、`:559-567`（run の後、終わり方に依らず取り込む）。
+- `crates/celerisctl/src/main.rs:191` `run_db`（`--db` の既定に `CELERIS_RUN_DB`）、`:199` `followups_target`（canonicalize で比較）、`:315`（DB を開く前に分岐）。
+  `crates/celerisctl/src/commands/add.rs:212` `queue`（`--parent`/`--workspace`/`--cluster` は断る）、`:240` `build_spec`（`run` と共有）。
+  `crates/celerisctl/src/error.rs:40` `READ_ONLY_HINT` に run の中の起票の案内。
+- `crates/task-worker/src/claude_code/prompt.rs:485` `followups_instructions`、`:601`（対話でない run の指示文だけ）。
+- `docs/api/v1/{event,api-v1}.schema.json`・`gui/app/celeris/types.ts`（再生成。types.ts には未反映だった R7-5 の `work_unit_checks_failed` も入った）、
+  `docs/architecture-map.md`（task-ops の表に 1 行）、`docs/adr/0098-…md`。
+
+### 試験
+
+- `crates/task-ops/src/followup/tests.rs`（9 件）: 案件と X の repos を継ぎ出自を残す（:134）、X が repos 無しなら primary（:171）、明示の repos は案件の中で解決（:208）、
+  別案件は拒否して他は作る（:246）、案件無しの X は案件を選べない（:280）、使わない欄と status（:302）、同題の再宣言は 1 件（:342）、壊れた要素・ファイル（:355）、追記（:374）。
+- `crates/task-ops/src/edit/tests.rs:795`・`crates/task-api/tests/task_management.rs:961`: PATCH `project_id`（200 / 422 付け替え / 404 / 409 run 済み・blocked / 子）。
+- `crates/task-dispatch/src/dispatcher/tests/followups.rs`: run が env の書き先に宣言 → 案件・primary・draft・`worker_run`（:106）、lease の無い run は作らない（:178）、
+  委譲の子は案件と primary を継ぐ（回帰、:217）。
+- `crates/celerisctl/tests/followups.rs`: run の中の `add`（`--db` 無し・`--db <run db>`）は宣言になり DB を開かない、`--parent` は断る（:54）。
+  一時 DB に向けた `add` と run の外は従来どおり（:87）。`tests/no_migrate.rs` は env を外して hermetic に。
+- `tests/e2e/tests/worker_db_read_only.rs`（R7-6 の e2e を拡張）: 実バイナリ `celeris` + codex スタブ + 実 `celerisctl` で、`celerisctl --db <daemon の DB> add` が
+  `queued follow-up #1` になり、run の後に daemon が元の task の案件・primary の draft を `worker_run` 付きで作る。R7-10 の env を外した `add` は
+  `attempt to write a readonly database` + ADR-0095 の案内で失敗（ADR-0095 の保証は維持）。
+- `crates/task-worker/src/claude_code/tests.rs:413-420`: 指示文の段落は対話でない run だけ。
+- **変異確認**: (1) `bind_to_origin` の `spec.project_id = origin.project_id` を消す → followup 試験 6/9 が落ちる。(2) env を渡さない（`followups_enabled && false`）→
+  dispatcher の :106 が落ちる。(3) lease 確認を常に真 → :178 が落ちる。いずれも戻して通る。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし。変更した target を touch して再検査）。
+- `cargo nextest run --workspace` → **2997 passed, 7 skipped（exit 0）**（R7-8 の 2981 + 新規 16）。
+- `python3 scripts/dev/check-architecture-map.py` → OK（147 件）。`python3 scripts/dev/source-size-report.py` → 0 active warning。
+- 途中で host の `/` が満杯（`No space left on device`）になり task-api のビルドが落ちた。自分の target の `debug/incremental`（8.2G）だけ消し、`CARGO_INCREMENTAL=0` で続けた。
+
+### 昇格後にすること
+
+- 設定の変更は不要。案件に属す task の run で `celerisctl add --title … --objective … --check-cmd …`（`--db` 無し、または `--db /var/lib/celeris/celeris.sqlite3`）が
+  `queued follow-up #n` を出し、run の後に同じ案件・リポジトリの `draft` が作られ、`celerisctl show <id>` の `created` に `worker_run` が載ることを確かめる。
+  元の task の timeline に「follow-up created: …」が出る。
+- 案件の無い後続ができてしまったら `PATCH /tasks/{id}` `{"project_id":"<id>"}`（未実行の draft/ready だけ）。
+
+### 未解決・提案
+
+- 別の task の成果物ディレクトリへの書き込み（同じ uid、`workspaces/` は書ける）でその task の案件に後続を作れる（ADR-0098「残る穴」。worktree を書き換えられるのと同じ信頼の水準）。
+- `[db] worker_read_only = false` の opt-out では `CELERIS_RUN_DB` を渡さないので、run の中の `add --db <本番>` は従来どおり直接書く（継承しない）。必要なら daemon の DB の
+  パスを `DispatchConfig` に持たせて opt-out でも渡す（試験の `DispatchConfig` の組み立てが多数あるので今回は見送り）。
+- GUI に「案件を付ける」操作は無い（API のみ）。後続の draft を人が Go する画面の導線は別途。

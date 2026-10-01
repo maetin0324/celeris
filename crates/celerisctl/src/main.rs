@@ -43,7 +43,8 @@ use error::CliError;
 )]
 struct Cli {
     /// SQLite データベースファイルのパス（ADR-0004 D5）。
-    /// 優先順位: --db > 環境変数 CELERIS_DB > ./celeris.sqlite3
+    /// 優先順位: --db > 環境変数 CELERIS_DB > CELERIS_RUN_DB（worker の run の中で daemon が渡す。ADR-0098 D6）
+    /// > ./celeris.sqlite3
     #[arg(long, global = true)]
     db: Option<PathBuf>,
 
@@ -182,7 +183,30 @@ fn open_store(db_path: &Path) -> Result<SqliteStore, ExitCode> {
 fn resolve_db_path(cli_db: Option<PathBuf>) -> PathBuf {
     cli_db
         .or_else(|| env::var_os("CELERIS_DB").map(PathBuf::from))
+        .or_else(run_db)
         .unwrap_or_else(|| PathBuf::from("celeris.sqlite3"))
+}
+
+/// ADR-0098 D6: worker の run の中で daemon が渡す、その daemon の DB（`CELERIS_RUN_DB`）。
+fn run_db() -> Option<PathBuf> {
+    env::var_os(task_ops::followup::ENV_RUN_DB)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+}
+
+/// ADR-0098 D6: `add` を後続の宣言にするか。run の中（`CELERIS_FOLLOWUPS_FILE` と `CELERIS_RUN_DB` がある）で、
+/// 書き先の DB がその daemon の DB のときだけ。試験が一時 DB（`--db <tmp>`）に書く `add` はそのまま DB に書く。
+fn followups_target(cli_db: Option<&Path>) -> Option<PathBuf> {
+    let file = env::var_os(task_ops::followup::ENV_FOLLOWUPS_FILE)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)?;
+    let run_db = run_db()?;
+    let target = resolve_db_path(cli_db.map(Path::to_path_buf));
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    same(&target, &run_db).then_some(file)
 }
 
 fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<ExitCode, CliError> {
@@ -278,6 +302,20 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    // ADR-0098 D6: worker の run の中で daemon の DB に向けた `add` は DB を開かず、その run の後続の宣言になる
+    // （run の終わりに daemon が run の task の案件で作る）。
+    let followups_file = followups_target(cli.db.as_deref());
+    if let Some(path) = followups_file.as_deref()
+        && let Command::Add(args) = cli.command
+    {
+        return match add::queue(args, path) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
                 ExitCode::FAILURE
             }
         };

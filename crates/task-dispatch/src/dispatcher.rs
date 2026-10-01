@@ -100,6 +100,8 @@ pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_
 mod child_tasks;
 mod cluster;
 mod dispatch_run;
+/// ADR-0098（Phase R7-10）: worker の run が宣言した後続 task（`followups.json`）。
+mod followups;
 mod housekeeping;
 mod leases;
 mod phase_integration;

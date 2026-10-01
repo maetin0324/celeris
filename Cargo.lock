@@ -292,6 +292,7 @@ dependencies = [
  "celeris",
  "celeris-mcp",
  "clap",
+ "rusqlite",
  "scratch-cache",
  "serde",
  "serde_json",

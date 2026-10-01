@@ -48,6 +48,9 @@ pub enum DaemonError {
     Dispatch(#[from] DispatchError),
     #[error("api: {0}")]
     Api(#[from] ApiError),
+    /// ADR-0095 D5: worker の run から DB を読み取り専用にできない（起動しない）。
+    #[error("worker db guard: {0}")]
+    DbGuard(String),
 }
 
 /// ループの終了条件。

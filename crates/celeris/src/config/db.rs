@@ -29,6 +29,9 @@ pub struct DbConfig {
     pub backup_interval_secs: u64,
     /// 残す世代数（既定 48）。
     pub backup_keep: usize,
+    /// ADR-0095 D5: worker の run（adapter・check）から DB のディレクトリを読み取り専用にする（既定 `true`）。
+    /// `false` は user namespace を使えない環境のための明示的な opt-out（非推奨）。
+    pub worker_read_only: bool,
 }
 
 impl DbConfig {
@@ -54,6 +57,7 @@ impl Default for DbConfig {
             backup_dir: None,
             backup_interval_secs: default_db_backup_interval_secs(),
             backup_keep: default_db_backup_keep(),
+            worker_read_only: true,
         }
     }
 }
@@ -69,6 +73,9 @@ fn default_db_backup_interval_secs() -> u64 {
 }
 fn default_db_backup_keep() -> usize {
     48
+}
+fn default_true() -> bool {
+    true
 }
 
 impl<'de> Deserialize<'de> for DbConfig {
@@ -97,6 +104,8 @@ impl<'de> Deserialize<'de> for DbConfig {
             backup_interval_secs: u64,
             #[serde(default = "default_db_backup_keep")]
             backup_keep: usize,
+            #[serde(default = "default_true")]
+            worker_read_only: bool,
         }
         Ok(match Repr::deserialize(deserializer)? {
             Repr::Path(path) => DbConfig {
@@ -110,6 +119,7 @@ impl<'de> Deserialize<'de> for DbConfig {
                 backup_dir: t.backup_dir,
                 backup_interval_secs: t.backup_interval_secs,
                 backup_keep: t.backup_keep,
+                worker_read_only: t.worker_read_only,
             },
         })
     }

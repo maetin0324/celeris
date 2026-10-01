@@ -236,7 +236,26 @@ fn role_of(store: &SqliteStore, release: &str) -> Option<InstanceRole> {
 /// (b) draining の手元の run は旧が完了させ、新は二重に dispatch しない。旧は exit 0（`Exit::Drained`）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_newer_release_takes_over_while_the_old_one_finishes_its_run() {
-    let env = Env::new();
+    // 旧の run は「新が active になったのを試験が見る」まで終わらない（ゲートのファイルを待つ。最大 30 秒）。
+    // 固定の `sleep 2` だと、負荷下で新の起動（`build_dispatcher`）が 2 秒を超えたとき、新が active になる前に
+    // run が終わって新が idle で即座に抜け（`until_idle`）、行が消えて「新が active にならない」で落ちた
+    // （R7-6 の調査: 新の build_dispatcher 2.8 秒の回で、ADR-0095 のガードの有無に関係なく再現）。
+    let gate_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+    let gate = gate_dir.path().join("release-the-run");
+    let gated_fake = format!(
+        r#"cat >/dev/null; i=0; while [ ! -e {gate} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; printf "{{\"type\":\"done\",\"summary\":\"fake\",\"evidence\":[]}}\n""#,
+        gate = gate.display()
+    );
+    let env = Env::with_body(&format!(
+        r#"
+[adapters.fake]
+command = ["sh", "-c", '{gated_fake}']
+
+[[providers]]
+id = "p1"
+adapter = "fake"
+"#
+    ));
     let task_id = env.ready_task("handoff");
     let store = env.store();
 
@@ -272,6 +291,8 @@ async fn a_newer_release_takes_over_while_the_old_one_finishes_its_run() {
         .await,
         "新が active にならない"
     );
+    // 新が active になったのを見たので、旧の run を終わらせる。
+    std::fs::write(&gate, "").unwrap_or_else(|e| panic!("gate: {e}"));
 
     // (b) 旧は手元の run を最後まで面倒を見て、drained_at を書いて exit 0 する。
     let old_exit = tokio::time::timeout(Duration::from_secs(30), old)

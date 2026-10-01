@@ -1845,3 +1845,103 @@ Event を 1 つ足した（events は JSON の列）。本番（systemctl・/var
   （check の引数を `192.168.1.103 8000` に直した版）で 14:29Z に done 済み。次に WU の check が落ちたとき `work_unit_checks_failed` と outcome の要約が出ることを確かめる。
 - 22:15〜23:17Z: **構造リファクタ（根 01M3RM0YS1…）の配送と release**。(1) 配送の `git merge --ff-only` が NFS の main checkout で 20 秒 timeout → SIGKILL（406 ファイル中の書きかけ・`.git/index.lock` 残り）。人が差分 186 ファイルが 3e27da64 と一致することを確かめ、stale lock を消して ff を完了。repair-1 が timeout 600 s・`--no-progress` の修正（410658a0）→ review 合格 → 配送が main=410658a0 を push。(2) 配送の release 準備が `current/scripts`（1b3c4ee6ac93 同梱の旧 lib.sh）で `cannot parse SCHEMA_VERSION from crates/task-core/src/store.rs`（store/ 分割に未追従）→ 人が作業 checkout の scripts で `release.sh main`。(3) verify が `db schema version 35 is newer than 34` で失敗: **browser task 01M3SPN8H05… の run 01M3T7CR3V… がブランチの `target/debug/celerisctl add --db /var/lib/celeris/celeris.sqlite3` を実行し、ブランチにしかない migration 0035_browser_trusted_login（browser_waits に列 1 本）を 22:37:52 に本番 DB へ適用**していた（起票された draft 01M3T7FRCW… は残す）。人の承認で backup `20260930-231619-pre-rollback-schema35.sqlite3` を取り、`ALTER TABLE browser_waits DROP COLUMN trusted_login_json; DELETE FROM schema_migrations WHERE version=35`（browser_waits は 0 行）で schema 34 に戻した。(4) `verify.sh 410658a05c18` ok=true / live_ok=true → `promote.sh` live で昇格（backup `20260930-231715-pre-410658a05c18.sqlite3`）。
   **再発防止（R7-6、人の方針）**: worker から本番 DB は読み取り専用にする。celerisctl は migration をしない。配送の release 準備が current の scripts を使うため scripts の直しが同じ release で効かない件も候補。
+
+## R7-6: worker の run から本番 DB は読み取り専用、celerisctl は migration をしない（2026-09-30〜10-01）
+
+[ADR-0095](../adr/0095-worker-runs-see-the-db-read-only.md)。発端は上の 22:15〜23:17Z 追記の (3): browser task 01M3SPN8H05… の run
+01M3T7CR3V…（codex、`sandbox_mode="workspace-write"`、`--approve-for-me`）がブランチの `target/debug/celerisctl add --db
+/var/lib/celeris/celeris.sqlite3` を実行し、celerisctl の open が migration 0035 を本番 DB に適用した。**migration なし（schema 34 のまま）**。
+本番（systemctl・/var/lib/celeris の DB・7700/7710・設定）には読み取り（run の記録・codex のセッション記録の閲覧）以外で触れていない。
+build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a134c98d0598ab1d9`。
+
+### なぜ codex の workspace-write が止めなかったか（調査）
+
+- codex のセッション記録 `~/.local/celeris/codex-accounts/chatgpt_plus_personal/sessions/2026/09/30/rollout-2026-09-30T22-36-34-01a0f476-6364-77e1-8d2c-6dc61879d1da.jsonl`
+  の permissions 指示: writable roots は `/home/rmaeda/workspace/agent-platform/.git`、`…/.git/worktrees/agent-platform38`、`/tmp`、
+  `/var/lib/celeris/workspaces/01M3SPN8H05…`、その `artifacts` だけ。**DB（`/var/lib/celeris/celeris.sqlite3`）は writable root の外**で、
+  `--add-dir`（artifacts と git 管理領域）にも入っていない。
+- codex の sandbox はこのホストで効く（`codex sandbox -P :workspace -- touch ~/.cache/…` → `Read-only file system`、`NoNewPrivs: 1`、`Seccomp: 2`）。
+- 原因は **escalation**: モデルは `exec_command({cmd: "target/debug/celerisctl add --db /var/lib/celeris/celeris.sqlite3 …",
+  sandbox_permissions: "require_escalated", justification: "…Celeris DB に起票してよいですか？", prefix_rule: ["target/debug/celerisctl","add"]})`
+  を出し（rollout の ordinal 66・73）、`--approve-for-me`（codex-cli 0.157.0: "Route approval requests through automatic review"、
+  `approvals_reviewer = "auto_review"`）の自動レビューが承認し、**sandbox の外で**実行された。1 回目（22:37:52Z）は入力検証で exit 1 だったが、
+  検証の前の `SqliteStore::open` で migration は済んでいた。同じ run は `systemd-run --user …` も escalation で走らせている。
+- 結論: エージェント CLI の内側の sandbox はそのエージェント自身が外せる。強制は celeris が起動する時点で外側から掛ける。
+
+### 実装したもの
+
+- **D1/D2 worker の namespace**（`crates/task-worker/src/db_guard.rs`）: `launch`（:424）を全ての worker の spawn で `container::wrap` の代わりに
+  呼ぶ（subprocess.rs:140、claude_code.rs:451、codex.rs:503、aider.rs:198、acp.rs:893、langmem.rs:249、local_deep_research.rs:517、
+  paperqa.rs:1199・:1492、workspace.rs:180〈WU の check・受け入れ条件の check・merge probe〉）。コンテナ実行は従来どおり `container::wrap`。
+  `apply`（:332）は fork 前に計画を作り（直下の列挙 `writable_children` :94、`statvfs` の locked flag、uid/gid、cwd の絶対化、ssh 設定の写し）、
+  `pre_exec` の `Plan::enter`（:167）が `unshare(CLONE_NEWUSER|CLONE_NEWNS)` → uid/gid map → `/` を private → 直下の DB 一族以外を自分へ bind →
+  DB のディレクトリを bind して `MS_REMOUNT|MS_BIND|MS_RDONLY` → cwd へ `chdir` し直し、を割り当てなしで行う。準備に失敗したら spawn を失敗させる
+  （守る DB ファイル自体が無いときだけ掛けない）。
+- **D3 WAL**: ディレクトリ単位で読み取り専用にするので、daemon が開いている間の `-wal` / `-shm` はそのまま見え、SQLite は読み取り専用に倒して
+  readonly_shm で読む（`celerisctl show` / `ls`、`sqlite3 'file:…?mode=ro'`）。daemon が作り直した `-wal` / `-shm` も見える。
+- **D4 ssh**: namespace の中では root 所有が nobody に見え、`ssh -G github.com` が `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` の
+  "Bad owner" で落ちた（実測）。同じ内容の写し（`$XDG_RUNTIME_DIR/celeris-db-guard/ssh_config.d`、`sync_ssh_shadow` :282）を
+  `/etc/ssh/ssh_config.d` に bind する（best-effort）。
+- **D5 設定と fail-closed**: `[db] worker_read_only`（既定 `true`、`crates/celeris/src/config/db.rs:34`）。`install_worker_db_guard`
+  （`crates/celeris/src/daemon/bootstrap.rs:95`）を `run`（`daemon/run.rs:62`、verify を含む）が呼び、`probe`（db_guard.rs:377、namespace 付きの
+  `sh -c 'test ! -w "$1"'`）が通らなければ `DaemonError::DbGuard`（`lib.rs:53`）で起動しない。`false` は warn を出して外す。
+- **D6 celerisctl は migration をしない**: `SqliteStore::open_client`（`crates/task-core/src/store/mod.rs:592`）— 無い DB は
+  `StoreError::DbMissing`（:221、作らない）、版数を読み取り専用の接続で読み、古い → `StoreError::SchemaTooOld`（:215。読み取りも拒否）、
+  同じ → 読み書き（`SQLITE_OPEN_CREATE` なし、書けない接続では `journal_mode` を変えない）、新しい → 読み取り専用の接続
+  （`ClientAccess::ReadOnlyNewerSchema` :263）。celerisctl の DB を開く 4 か所（main.rs の `open_store` :164 と scratch の `with_lookup`）を
+  これに替え、新しい DB では stderr に警告、`SQLITE_READONLY` の書き込み失敗には `error::render`（error.rs:47、`READ_ONLY_HINT` :40）で
+  「読み取り専用（worker の run・新しい schema）、`show`/`ls` は使える、変更は API か人へ」を足す。`is_readonly_error`（mod.rs:253）。
+  daemon・API・MCP は従来の `open_with`（migration あり）のまま。
+- 文書: ADR-0095、`docs/architecture-map.md`（db_guard の行・celerisctl の行）、`config/celeris.example.toml` の `db` の注記。
+
+### 試験
+
+- task-core `store/client_open_tests.rs`（6）: 古い DB は `SchemaTooOld` で版数も表の数も不変、未初期化の sqlite も拒否、無い DB は作らない、
+  新しい DB は読めて `insert` は `is_readonly_error`・版数不変、同じ版は読み書き、`is_readonly_error` の判定。
+- task-worker `db_guard_tests.rs`（9、実プロセス）: daemon 役の `SqliteStore` が WAL の DB を開いたまま、namespace の `sh` から
+  DB・`-wal`・`-shm` への追記、`rm`、`mv`、`-journal` の作成、DB の隣への新規作成、cwd からの `../../` 経由の作成、別 mount への hard link、
+  `test -w` が全て失敗し、`workspaces/…`・`scratch/` は書け、DB は読め、integrity_check は ok。入れ子の `unshare -Urm` から
+  `remount,rw` / `umount` できない・入れ子の user namespace は作れる（codex の bwrap と同じ条件）。`CapEff: 0`・uid 不変。probe。
+  直下の列挙（DB 一族と symlink を除く）。ssh の写しの同期。namespace の中で `ssh -G` が通る。DB が消えたガードは spawn を止めない。
+  全ての spawn 箇所が `db_guard::launch` を通る（`container::wrap` の直呼びが無い）。
+- celerisctl `tests/no_migrate.rs`（4、実バイナリ）: 古い DB で `ls` / `add` が "never migrates" で失敗し版数不変、新しい DB で `ls` は警告付きで
+  成功・`add` は `attempt to write a readonly database` + 言い換えで失敗し 0 件、無い DB は作らない、同じ版は `add` / `ls` が通る。
+- e2e `tests/worker_db_read_only.rs`（事故の再現、実バイナリ `celeris` + `adapter = "codex"`〈スタブ、`extra_args = ["--approve-for-me"]`〉+ 実
+  `celerisctl`）: run の中から daemon が開いている DB に `celerisctl ls` / `show` は exit 0、`celerisctl add` は exit 1（readonly + ADR-0095）、
+  生の DB・`-wal` 追記は失敗、DB の task 数・schema 34・integrity は不変、task は done。**変異確認**: 同じ試験の設定に
+  `[db] worker_read_only = false` を入れると `add_exit=0`（事故の再現）で落ちる。
+- celeris `config/tests.rs`: `worker_read_only` の既定 true・`false` の parse。
+- 既存の試験の手直し: e2e `scenarios.rs` の共有ログ `timeline.log` を先に作る（DB のディレクトリ直下に worker が新規作成できなくなったため）。
+  celeris `instance_handoff.rs::a_newer_release_takes_over_while_the_old_one_finishes_its_run` の旧の run を「試験が新 active を見るまで」
+  ゲートのファイルで待たせる（固定 `sleep 2` だと負荷下で新の `build_dispatcher` が 2 秒を超えた回に run が先に終わり、新が `until_idle` で即座に
+  抜けて行が消え「新が active にならない」で落ちた。計測: 失敗回の新の build_dispatcher 2.8 s、ガードを外した build でも全体実行 4 回中 1 回再現
+  ＝既存の負荷依存の flake。ガード有りでは 7 回中 5 回）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2976 passed, 7 skipped（exit 0）**（手直し後に 3 回連続で全件合格）。
+- `cargo test --workspace` → exit 0、2976 passed / 0 failed / 8 ignored。
+- 試作の実測（このホスト、kernel 6.8.12-9-pve、bubblewrap 0.11.0、`kernel.apparmor_restrict_unprivileged_userns = 0`）: bwrap で包むと中の
+  `codex sandbox` が "No permissions to create new namespace" で起動しない → 採らない。unshare + bind（pivot_root なし）なら中の codex sandbox と
+  `bwrap --dev-bind / / true` が通る。`systemd-run --user -p NoNewPrivileges=true`（本番の unit と同じ）の下でも同じ結果。namespace の中から
+  daemon の `/proc/<pid>/fd` は readlink も `EACCES`。spawn の追加コストは約 2.6 ms（mount 52 本）。
+
+### 未解決・提案
+
+- 残る穴（ADR-0095「残る穴」）: `systemd-run --user`・`ssh localhost` など namespace の外で起動させる経路、API token を持つ worker の API 書き込み。
+  前者を塞ぐには daemon を別 uid にして DB をその所有にする必要がある（別課題）。今回の事故の形（直接 `celerisctl add --db`）は止まる。
+- `[adapters.codex] extra_args = ["--approve-for-me"]` は escalation を自動承認するので、DB 以外（`systemd-run` による namespace の外での実行など）
+  も通る。見直すかは人の判断（この Phase では触っていない）。
+- `promote.sh --pre-start` のフックで新リリースの celerisctl を DB に使う場合、migration を含むリリースでは celerisctl が古い DB を拒否する（ADR-0095
+  D6）。現行のフック（org-migrate-v2）は一度きりで既に不要。
+- 配送の release 準備が current の scripts を使う件は別課題（触っていない）。
+
+### 昇格時に人がすること
+
+- 設定の変更は不要（`[db] worker_read_only` は既定で有効）。新しい daemon は起動時に probe し、user namespace が使えなければ
+  `worker db guard: cannot make … read-only for worker runs` で**起動しない**（verify でも同じ probe をするので、効かなければ verify が落ちる）。
+  ログに `worker runs see the db directory read-only (ADR-0095)` が出ることを確かめる。
+- 昇格後、worker の run の中から `celerisctl --db /var/lib/celeris/celeris.sqlite3 ls` が動き、`add` が「read-only」で失敗する。
+- `/var/lib/celeris` 直下に DB 以外のものを新しく置く場合、既存の項目（workspaces/ など）は従来どおり書けるが、run から直下への新規作成はできない。

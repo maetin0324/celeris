@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use task_core::SqliteStore;
+use task_core::{ClientAccess, SCHEMA_VERSION, SqliteStore};
 
 use commands::accept::{self, AcceptArgs};
 use commands::add::{self, AddArgs};
@@ -159,6 +159,26 @@ enum Command {
     },
 }
 
+/// ADR-0095 D6: celerisctl は **migration をしない**（`SqliteStore::open_client`）。DB が無い・古い DB は
+/// 開かずに失敗し（daemon が作り・migrate する）、新しい DB は読み取り専用で開いて警告する。
+fn open_store(db_path: &Path) -> Result<SqliteStore, ExitCode> {
+    match SqliteStore::open_client(db_path) {
+        Ok((store, ClientAccess::ReadWrite)) => Ok(store),
+        Ok((store, ClientAccess::ReadOnlyNewerSchema { found })) => {
+            eprintln!(
+                "warning: db {} has schema version {found}, newer than the {SCHEMA_VERSION} this \
+                 celerisctl supports; opened read-only (reads work, writes are refused; ADR-0095)",
+                db_path.display()
+            );
+            Ok(store)
+        }
+        Err(e) => {
+            eprintln!("error: failed to open db {}: {e}", db_path.display());
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
 fn resolve_db_path(cli_db: Option<PathBuf>) -> PathBuf {
     cli_db
         .or_else(|| env::var_os("CELERIS_DB").map(PathBuf::from))
@@ -275,17 +295,14 @@ fn main() -> ExitCode {
             };
         }
         let db_path = resolve_db_path(cli.db);
-        let store = match SqliteStore::open(&db_path) {
+        let store = match open_store(&db_path) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!("error: failed to open db {}: {e}", db_path.display());
-                return ExitCode::FAILURE;
-            }
+            Err(code) => return code,
         };
         return match knowledge::run_with_store(&store, command) {
             Ok(code) => code,
             Err(e) => {
-                eprintln!("error: {e}");
+                eprintln!("error: {}", error::render(&e));
                 ExitCode::FAILURE
             }
         };
@@ -334,17 +351,14 @@ fn main() -> ExitCode {
             },
             McpCommand::Client { command } => {
                 let db_path = resolve_db_path(cli.db);
-                let store = match SqliteStore::open(&db_path) {
+                let store = match open_store(&db_path) {
                     Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("error: failed to open db {}: {e}", db_path.display());
-                        return ExitCode::FAILURE;
-                    }
+                    Err(code) => return code,
                 };
                 match mcp::run_client(&store, command) {
                     Ok(code) => code,
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        eprintln!("error: {}", error::render(&e));
                         ExitCode::FAILURE
                     }
                 }
@@ -353,18 +367,15 @@ fn main() -> ExitCode {
     }
     let db_path = resolve_db_path(cli.db);
 
-    let store = match SqliteStore::open(&db_path) {
+    let store = match open_store(&db_path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: failed to open db {}: {e}", db_path.display());
-            return ExitCode::FAILURE;
-        }
+        Err(code) => return code,
     };
 
     match dispatch(&store, &db_path, cli.command) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("error: {}", error::render(&e));
             ExitCode::FAILURE
         }
     }

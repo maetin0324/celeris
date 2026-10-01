@@ -84,7 +84,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -205,6 +205,20 @@ pub enum StoreError {
     /// 大きい場合に返す。DB を書き換えずに `open`/`open_with` を失敗させる。
     #[error("db schema version {found} is newer than the {supported} this binary supports")]
     SchemaTooNew { found: u32, supported: u32 },
+    /// ADR-0095 D6: `open_client`（celerisctl）が開いた DB の版数がこのバイナリより古い。クライアントは
+    /// migration をしない（daemon が起動時に migrate する）。DB には何も書かない。
+    #[error(
+        "db schema version {found} is older than the {required} this binary uses; celerisctl never \
+         migrates the database (ADR-0095). Start the daemon (celeris) on this DB to migrate it, or use \
+         a celerisctl built from the same release as the running daemon"
+    )]
+    SchemaTooOld { found: u32, required: u32 },
+    /// ADR-0095 D6: `open_client` の DB ファイルが無い（クライアントは DB を作らない）。
+    #[error(
+        "db {path} does not exist; celerisctl does not create or migrate databases (ADR-0095). \
+         The daemon (celeris) creates it on start"
+    )]
+    DbMissing { path: String },
     /// ADR-0033 D1: 使用中のため消せない（組織のノードが未終了のタスクを抱えている）。API は 409。
     #[error("{kind} {id} is still in use: {detail}")]
     InUse {
@@ -232,6 +246,26 @@ pub fn is_busy_error(e: &StoreError) -> bool {
                 rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
             )
     )
+}
+
+/// ADR-0095 D6: `SQLITE_READONLY`（読み取り専用で開いた DB・読み取り専用の mount への書き込み）かどうか。
+/// celerisctl が「DB は読み取り専用」と言い換えるために使う（純粋関数）。
+pub fn is_readonly_error(e: &StoreError) -> bool {
+    matches!(
+        e,
+        StoreError::Sqlite(rusqlite::Error::SqliteFailure(inner, _))
+            if inner.code == rusqlite::ErrorCode::ReadOnly
+    )
+}
+
+/// ADR-0095 D6: `SqliteStore::open_client` がどう開いたか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientAccess {
+    /// DB の版数がこのバイナリの `SCHEMA_VERSION` と同じ。従来どおり読み書きできる（ただし DB ファイル
+    /// 自体が読み取り専用なら〈ADR-0095 D1 の worker の namespace〉SQLite が読み取り専用に倒す）。
+    ReadWrite,
+    /// DB の版数がこのバイナリより新しい。読み取り専用の接続で開いた（書き込みは `SQLITE_READONLY`）。
+    ReadOnlyNewerSchema { found: u32 },
 }
 
 /// `events` テーブルの 1 行（ADR-0013 D6）。`id` はテーブル全体でのグローバル単調増加値。
@@ -390,10 +424,15 @@ struct ReadPool {
 }
 
 impl ReadPool {
-    fn open(path: &Path, size: usize, busy_timeout: StdDuration) -> Result<Self, StoreError> {
+    fn open(
+        path: &Path,
+        size: usize,
+        busy_timeout: StdDuration,
+        flags: OpenFlags,
+    ) -> Result<Self, StoreError> {
         let mut conns = Vec::with_capacity(size);
         for _ in 0..size {
-            let conn = Connection::open(path)?;
+            let conn = Connection::open_with_flags(path, flags)?;
             conn.busy_timeout(busy_timeout)?;
             // ADR-0064 D4: `?mode=ro` ではなく通常の接続を `query_only=ON` にする（`ATTACH` や
             // 一時テーブルなど、真の読み取り専用オープンでは使えない機能を素朴に避けるため）。
@@ -542,6 +581,122 @@ impl SqliteStore {
         Self::from_connection(conn, &options, Some(path))
     }
 
+    /// ADR-0095 D6: クライアント（celerisctl）用の open。**migration をしない**。
+    ///
+    /// - ファイルが無い → `StoreError::DbMissing`（作らない）。
+    /// - 版数を読み取り専用の接続で読み、古い → `StoreError::SchemaTooOld`（DB には何も書かない）。
+    /// - 同じ → 読み書きの接続（`SQLITE_OPEN_CREATE` なし）。
+    /// - 新しい → 読み取り専用の接続（`ClientAccess::ReadOnlyNewerSchema`）。書き込みは `SQLITE_READONLY`。
+    ///
+    /// daemon・API・MCP は従来どおり `open_with`（migration あり）を使う。
+    pub fn open_client(path: &Path) -> Result<(Self, ClientAccess), StoreError> {
+        Self::open_client_with(path, StoreOptions::default())
+    }
+
+    /// `open_client` の `StoreOptions` 付き（`background_checkpoint` は無視する。クライアントは立てない）。
+    pub fn open_client_with(
+        path: &Path,
+        options: StoreOptions,
+    ) -> Result<(Self, ClientAccess), StoreError> {
+        if !path.exists() {
+            return Err(StoreError::DbMissing {
+                path: path.display().to_string(),
+            });
+        }
+        let options = StoreOptions {
+            background_checkpoint: false,
+            ..options
+        };
+        let read_only = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let read_write = OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let found = {
+            let probe = Connection::open_with_flags(path, read_only)?;
+            probe.busy_timeout(options.busy_timeout)?;
+            Self::read_schema_version(&probe)?
+        };
+        if found < SCHEMA_VERSION {
+            return Err(StoreError::SchemaTooOld {
+                found,
+                required: SCHEMA_VERSION,
+            });
+        }
+        if found == SCHEMA_VERSION {
+            let conn = Connection::open_with_flags(path, read_write)?;
+            conn.busy_timeout(options.busy_timeout)?;
+            // 開くまでの間に daemon が migrate したかもしれないので、使う接続で読み直す。
+            let now = Self::read_schema_version(&conn)?;
+            if now == SCHEMA_VERSION {
+                Self::configure_client_pragmas(&conn, &options)?;
+                let store = Self::from_client_connection(conn, &options, path, read_write)?;
+                return Ok((store, ClientAccess::ReadWrite));
+            }
+        }
+        let conn = Connection::open_with_flags(path, read_only)?;
+        conn.busy_timeout(options.busy_timeout)?;
+        let found = Self::read_schema_version(&conn)?;
+        if found < SCHEMA_VERSION {
+            return Err(StoreError::SchemaTooOld {
+                found,
+                required: SCHEMA_VERSION,
+            });
+        }
+        // ここへ来るのは版数が新しいとき（または読み書きで開く間に daemon が migrate したとき）。
+        let store = Self::from_client_connection(conn, &options, path, read_only)?;
+        Ok((store, ClientAccess::ReadOnlyNewerSchema { found }))
+    }
+
+    /// ADR-0095 D6: 版数を読むだけ（表が無ければ 0。書き込みはしない）。
+    fn read_schema_version(conn: &Connection) -> Result<u32, StoreError> {
+        if !Self::table_exists(conn, "schema_migrations")? {
+            return Ok(0);
+        }
+        let v: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(v as u32)
+    }
+
+    /// ADR-0095 D6: クライアントの接続の PRAGMA。`journal_mode` は**接続が書けるときだけ** WAL にする
+    /// （読み取り専用の mount〈ADR-0095 D1〉では SQLite が読み取り専用に倒しており、`journal_mode` の
+    /// 変更は書き込みになる。本番の DB は daemon が WAL にしてある）。
+    fn configure_client_pragmas(
+        conn: &Connection,
+        options: &StoreOptions,
+    ) -> Result<(), StoreError> {
+        if conn.is_readonly(rusqlite::DatabaseName::Main)? {
+            return Ok(());
+        }
+        Self::configure_pragmas(conn, options)
+    }
+
+    fn from_client_connection(
+        conn: Connection,
+        options: &StoreOptions,
+        path: &Path,
+        flags: OpenFlags,
+    ) -> Result<Self, StoreError> {
+        let read_pool = if options.read_pool_size > 0 {
+            Some(ReadPool::open(
+                path,
+                options.read_pool_size,
+                options.busy_timeout,
+                flags,
+            )?)
+        } else {
+            None
+        };
+        Ok(Self {
+            conn: Mutex::new(conn),
+            read_pool,
+        })
+    }
+
     /// 現在の DB のスキーマ版数（`schema_migrations` の最大 `version`。行が無ければ 0）。
     pub fn schema_version(&self) -> Result<u32, StoreError> {
         let conn = self.lock()?;
@@ -567,6 +722,7 @@ impl SqliteStore {
                 path,
                 options.read_pool_size,
                 options.busy_timeout,
+                OpenFlags::default(),
             )?),
             _ => None,
         };
@@ -696,5 +852,7 @@ impl SqliteStore {
     }
 }
 
+#[cfg(test)]
+mod client_open_tests;
 #[cfg(test)]
 mod tests;

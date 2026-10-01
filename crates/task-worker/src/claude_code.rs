@@ -448,7 +448,7 @@ async fn run_claude_code(
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
-    let mut command = crate::container::wrap(command, config.container.as_deref());
+    let mut command = crate::db_guard::launch(command, config.container.as_deref());
     // F5-fix10: stdin はプロンプトを渡すためだけに開く（書き終えたら閉じるので、対話の入力待ちにはならない。
     // コンテナ実行は `container::argv` が `-i` を付けているので stdin がそのまま中に届く）。
     command

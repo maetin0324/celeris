@@ -8,7 +8,9 @@ use task_worker::FakeAdapter;
 use time::OffsetDateTime;
 
 use super::api::{RunningApi, start_api};
-use super::bootstrap::{build_dispatcher, warn_if_db_on_network_filesystem};
+use super::bootstrap::{
+    build_dispatcher, install_worker_db_guard, warn_if_db_on_network_filesystem,
+};
 use super::clusters::{ClusterMasters, spawn_control_path_inspection, wire_cluster_liveness_hooks};
 use super::services::{
     RunningLlmProxy, RunningMcp, build_llm_proxy_state, build_mcp_state, start_llm_proxy, start_mcp,
@@ -56,6 +58,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     let identity = InstanceIdentity::new(opts.release.as_deref());
     let cluster_masters: ClusterMasters = Arc::new(std::sync::Mutex::new(HashMap::new()));
     let mut dispatcher = build_dispatcher(&config, Arc::clone(&cluster_masters))?;
+    // ADR-0095 D5: worker の run から DB を読み取り専用にする（verify も含む。効かないホストでは起動しない）。
+    install_worker_db_guard(&config)?;
     // ADR-0062 A（Phase 107）: 実 ssh を打つフック（実通信 probe・死んだ接続の片付け）は本番の起動経路
     // だけで配線する（`build_dispatcher` はテストからも広く呼ばれるため、そこでは配線しない）。
     wire_cluster_liveness_hooks(&mut dispatcher, Arc::clone(&cluster_masters));

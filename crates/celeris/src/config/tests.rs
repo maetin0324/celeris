@@ -323,6 +323,15 @@ fn db_accepts_both_the_bare_path_string_and_the_table_form() {
     );
     assert_eq!(raw.db.backup_interval(), Duration::from_secs(900));
     assert_eq!(raw.db.backup_keep, 12);
+    assert!(raw.db.worker_read_only, "ADR-0095 D5: on unless opted out");
+
+    // ADR-0095 D5: 既定（文字列の形も）は worker から読み取り専用。`false` は明示の opt-out。
+    assert!(DbConfig::default().worker_read_only);
+    let raw: Config = toml::from_str(
+        "[db]\npath = \"x.sqlite3\"\nworker_read_only = false\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n",
+    )
+    .unwrap();
+    assert!(!raw.db.worker_read_only);
 
     // 綴り間違いは `[db]` テーブルの中でも設定エラー（`deny_unknown_fields`。`Repr` が
     // untagged のため、メッセージは「どちらの形にも合わない」という一般的な文言になる）。

@@ -1,12 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
+import { ProjectDocsScreen } from "../features/projects/project-docs-screen";
 
-// R11 /projects/:id/docs（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
 export const Route = createFileRoute("/projects/$id/docs/")({
+  validateSearch: (search: Record<string, unknown>): { path?: string; q?: string; edit?: "1" } => ({
+    path: typeof search.path === "string" ? search.path : undefined,
+    q: typeof search.q === "string" ? search.q : undefined,
+    edit: search.edit === "1" || search.edit === 1 ? ("1" as const) : undefined,
+  }),
   component: Screen,
 });
 
 function Screen() {
-  const params = Route.useParams();
-  return <ScreenFrame title={`案件の文書 ${params.id}`} route="/projects/:id/docs" />;
+  const { id } = Route.useParams();
+  const search = Route.useSearch();
+  return <ProjectDocsScreen projectId={id} {...search} />;
 }

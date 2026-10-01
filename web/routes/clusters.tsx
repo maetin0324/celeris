@@ -1,11 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
+import { ClustersScreen } from "../features/ops/clusters-screen";
 
-// R33 /clusters（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
-export const Route = createFileRoute("/clusters")({
-  component: Screen,
-});
-
-function Screen() {
-  return <ScreenFrame title="クラスタ" route="/clusters" />;
-}
+// R33 /clusters。loader は置かず fetch を待たない。
+export const Route = createFileRoute("/clusters")({ component: ClustersScreen });

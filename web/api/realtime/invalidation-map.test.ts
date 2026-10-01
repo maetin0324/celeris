@@ -287,3 +287,16 @@ describe("coalescing and in-flight limits", () => {
     inv.dispose();
   });
 });
+
+describe("P4-02 project membership from project detail", () => {
+  it("resolves via ProjectDetail.tasks and marks known non-members as false", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(projectKeys.detail("P1"), { project: { id: "P1" }, tasks: [{ id: "T1", title: "t" }] });
+    expect(resolveProjectId(qc, "T1", fixtureEvent("transitioned"))).toBe("P1");
+    expect(resolveProjectId(qc, "X9", fixtureEvent("transitioned"))).toBeNull();
+    qc.setQueryData(taskKeys.list({}), { items: [{ id: "X9", title: "outside" }] });
+    expect(resolveProjectId(qc, "X9", fixtureEvent("transitioned"))).toBe(false);
+    const keys = keysForTaskEvent({ taskId: "X9", event: fixtureEvent("transitioned"), projectId: false });
+    expect(keys.some((k) => k[0] === "projects")).toBe(false);
+  });
+});

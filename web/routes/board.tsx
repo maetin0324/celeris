@@ -1,15 +1,20 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { ScreenFrame } from "../components/shell/screen-frame";
-import { optionalBoolean } from "../lib/search";
+import { createFileRoute, useLocation } from "@tanstack/react-router";
+import { BoardScreen } from "../features/projects/board-screen";
 
-// R13 /board（P2-02 は見出しと枠だけ。loader は置かず fetch を待たない）。
 export const Route = createFileRoute("/board")({
-  validateSearch: (search: Record<string, unknown>): { show_support?: boolean } => ({
-    show_support: optionalBoolean(search.show_support),
-  }),
+  validateSearch: (search: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(search).filter(
+        ([key, value]) =>
+          ["project", "q", "label", "category", "tier", "priority", "assignee", "milestone", "show_support"].includes(
+            key,
+          ) &&
+          (typeof value === "string" || typeof value === "number"),
+      ),
+    ),
   component: Screen,
 });
-
 function Screen() {
-  return <ScreenFrame title="ボード" route="/board" />;
+  useLocation();
+  return <BoardScreen searchStr={window.location.search} />;
 }

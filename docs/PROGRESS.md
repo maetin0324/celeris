@@ -46,3 +46,7 @@ P1-01〜P1-09 完了。以後の Web GUI の記録は [progress/phase-web.md](pr
 ## Web GUI Phase 3（完了 2026-09-30、中核の画面 P3-01〜P3-15）
 
 P3-01〜P3-15 完了。証拠・未解決・提案は [progress/phase-web.md の Phase 3 節](progress/phase-web.md#phase-3完了-2026-09-30中核の画面-p3-01p3-15)。
+
+## Web GUI Phase 4（完了 2026-10-01、管理の画面 P4-01〜P4-17）
+
+P4-01〜P4-17 完了。GUI/web 静的検査・parity e2e・V3・mobile-audit は exit 0。`cargo test --workspace` は exit 0（2,886 passed / 0 failed / 7 ignored）、`cargo clippy --workspace -- -D warnings` は exit 0（warning 0）。証拠・未解決・提案は [progress/phase-web.md の Phase 4 節](progress/phase-web.md#phase-4完了-2026-10-01管理の画面-p4-01p4-17)。

@@ -4,14 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import { screens } from "../e2e/support/screens.ts";
-import { createApp } from "../server/app.js";
+import { startFixtureGateway } from "./fixture-gateway.mjs";
 
 // S3 の最小の監査（docs/web/implementation-plan.md §2）。幅 360 / 390 / 412 / 1440 px で、ページ全体の横溢れが 0、
 // 見えている操作要素が 44×44 px 以上かを見る。gateway は空き port の loopback で起こし、daemon には接続しない。
+// 引数なしで screens.ts の全行（fixture の重複は 1 回）を偽 daemon の fixture で監査する（P5-03）。
 // 使い方: node scripts/mobile-audit.mjs [--only "/login"] [--screenshots <dir>]
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WIDTHS = [360, 390, 412, 1440];
-const DEFAULT_PATHS = screens.map((screen) => screen.fixture);
+const DEFAULT_PATHS = [...new Set(screens.map((screen) => screen.fixture))];
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -29,19 +30,24 @@ if (!existsSync(path.join(webRoot, "dist/index.html"))) {
   if (built.status !== 0) throw new Error("vite build failed");
 }
 
-const server = createApp({ log: () => {} }).listen(0, "127.0.0.1");
-await new Promise((resolve, reject) => {
-  server.once("listening", resolve);
-  server.once("error", reject);
-});
-const base = `http://127.0.0.1:${server.address().port}`;
+const gateway = await startFixtureGateway();
+const base = gateway.base;
 const browser = await chromium.launch();
 const failures = [];
 try {
   for (const route of paths) {
     for (const width of WIDTHS) {
       const page = await browser.newPage({ viewport: { width, height: 800 } });
-      await page.goto(`${base}${route}`, { waitUntil: "networkidle" });
+      // SSE が開いたままなので networkidle は待たない。h1 と取得中表示の消失を待つ。
+      await page.goto(`${base}${route}`);
+      await page
+        .locator("h1")
+        .first()
+        .waitFor({ timeout: 10_000 })
+        .catch(() => {});
+      await page
+        .waitForFunction(() => !document.querySelector('[aria-busy="true"]'), null, { timeout: 5_000 })
+        .catch(() => {});
       const result = await page.evaluate(() => {
         const doc = document.documentElement;
         const small = [];
@@ -92,7 +98,7 @@ try {
   }
 } finally {
   await browser.close();
-  await new Promise((resolve) => server.close(resolve));
+  await gateway.close();
 }
 if (failures.length) {
   console.error(failures.join("\n"));

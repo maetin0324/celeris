@@ -131,7 +131,12 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
           </label>
           {method === "discard" ? (
             <label className="flex min-h-11 items-center gap-2 text-sm">
-              <input type="checkbox" checked={confirm} onChange={(event) => setConfirm(event.target.checked)} />
+              <input
+                type="checkbox"
+                className="size-11"
+                checked={confirm}
+                onChange={(event) => setConfirm(event.target.checked)}
+              />
               取り返しがつかないことを確認した
             </label>
           ) : null}

@@ -54,7 +54,7 @@ V1〜V3 と parity の受け入れ条件（このタスク全体の受け入れ�
 - 未解決: Phase 3 の parity 台帳で Phase 4/5 に属する行（R29〜R34・R36、X10 の mobile-audit 全画面）は引き続き「未着手」（計画どおり Phase 3 の範囲外）。
 - 提案: Phase 4 では `check-parity.mjs --require-phase 4` を新しい gate にし、R29〜R36 と X10（全画面の mobile-audit・axe）をまとめて閉じる。close 葉を 3 分割する運用（静的検査 / e2e / cargo+記録）は turn 切れを避けられたため、以後の Phase close でも踏襲する。
 
-## Phase 4（完了 2026-09-30、管理の画面 P4-01〜P4-17）
+## Phase 4（完了 2026-10-01、管理の画面 P4-01〜P4-17）
 
 P4-01 `35be337a`、P4-02 `17c7df81`、P4-03 `6959502d`、P4-04 `1467aaf6`、P4-05 `d7c172f0`・`70eac060`、P4-06 `a09d4984`、P4-07 `f2b1a39c`、P4-08 `9487d16c`、P4-09 `f6d1a44a`・`990feeb9`、P4-10 `0ca70336`、P4-11 `87d719dc`、P4-12 `22eb1d21`・`7209dd11`、P4-13 `cce734b8`・`108246b2`、P4-14 `352bd32a`、P4-15 `362b244b`、P4-16 `068ffdf9`、P4-17 `8b63df32`。追加の parity 記録 commit は `ea26b63a`（組織・ヘルプ）と `0bc1b21e`（R11〜R13）。P4-01/P4-02 の実装と一部 parity 完了記録は同じ Phase 4 commit 群に含む。
 
@@ -62,12 +62,12 @@ Phase 4 の close は `p4-close-static` → `p4-close-e2e` → `p4-close-record`
 
 - p4-close-static: `corepack pnpm@11.27.0 -C gui install --frozen-lockfile`、GUI の typecheck/test/build → exit 0（81 files / 1222 tests）。`corepack pnpm@12.6.0 -C web install --frozen-lockfile`、web の typecheck/lint/test/build と `gen:types --check`・`check:boundaries`・`check:secrets` → 各 exit 0（Vitest 24 files / 174 tests、node:test 41 件）。`node web/scripts/check-parity.mjs --require-phase 4` → exit 0。R06・R07・R09〜R16・R29〜R34・R36 は `完了（<commit>）`。
 - p4-close-e2e: `corepack pnpm@12.6.0 -C web e2e parity/ latency/transition.spec.ts realtime/refetch-scope.spec.ts a11y/axe.spec.ts` → exit 0、157 passed / 5 skipped（screenshots）。typecheck・lint → exit 0。Phase 4 の16画面の `mobile-audit --only <path>` → 全て exit 0。
-- p4-close-record: `git merge --ff-only celeris-wu/01M3SY0ZF3NNAMBNGTTZPEMJYK/p4-close-e2e` → Already up to date。`cargo test --workspace` → exit 101、`cargo clippy --workspace -- -D warnings` → exit 101。いずれも rustc/clippy-driver の起動時に継承環境の sccache が `Operation not permitted (os error 1)` を返し、Rust の compile/test には到達しなかった（ログは run artifacts の `cargo-test.log`・`cargo-clippy.log`）。Rust ソースはこの Phase 4 web 作業で変更していない。
+- p4-close-record（2026-10-01、検査時 HEAD `3afa3767404cc237a05b0b80653f884b4034c435`）: Celeris の cargo 環境をそのまま使い、sandbox 外で `cargo test --workspace` → exit 0（2,886 passed / 0 failed / 7 ignored、warning 0）、`cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。ログ: run artifacts の `cargo-test.log`・`cargo-clippy.log`。前回は sccache の EPERM で一度失敗し、2026-10-01 に再実行して exit 0。Rust ソースはこの Phase 4 web 作業で変更していない。
 
-Parity で閉じた Phase 4 行は R06・R07・R09〜R16・R29〜R34・R36（`docs/web/feature-parity.md` の完了 commit 参照）。R08 は Phase 3 の Console として完了済み。V3 e2e と mobile-audit は上記のとおり成功。X10 全画面 axe gate は Phase 5 の横断 gate として未解決。cargo gate は sccache 制約により未達なので、この close の受け入れ条件は満たしていない。
+Parity で閉じた Phase 4 行は R06・R07・R09〜R16・R29〜R34・R36（`docs/web/feature-parity.md` の完了 commit 参照）。R08 は Phase 3 の Console として完了済み。V3 e2e と mobile-audit は上記のとおり成功。X10 全画面 axe gate は Phase 5 の横断 gate として未解決。cargo test/clippy は 2026-10-01 の再実行で exit 0。Phase 4 cargo gate は完了。
 
-- 未解決: この環境では cargo test/clippy を完了できていない。sccache が利用可能な環境で両コマンドを実行する必要がある。
-- 提案: sccache の起動権限と `CARGO_TARGET_DIR` が利用可能な環境で Rust 2 gate を実施する。Phase 5 で X10 の全画面 axe/mobile gate を閉じる。
+- 未解決: X10 全画面 axe gate は Phase 5 に残る。crates の flaky 修正（dispatcher.rs・ssh.rs）はこの web 差分から戻してあり、main への別途投入が必要。
+- 提案: Phase 5 で X10 の全画面 axe/mobile gate を閉じ、crates の flaky 修正を main に別途投入する。
 - prune テストの event 待ちと `ssh.rs` stub の ETXTBSY 修正は web の差分外なので戻した。main（分割後の dispatcher）へ別途入れる。
 
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）

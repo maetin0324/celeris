@@ -54,3 +54,7 @@ P4-01〜P4-17 完了。GUI/web 静的検査・parity e2e・V3・mobile-audit は
 ## Web GUI Phase 5（完了 2026-10-01、横断 gate P5-01〜P5-04）
 
 P5-01〜P5-04 完了。Latency は 30 path で URL/見出し最大 69.4/90.1 ms、10 秒遅延時の差は最大 15.5/16.5 ms、H1 fallback は fixture で 1 回。Security X1〜X6/X8、mobile/a11y 30 path × 4 幅（axe critical/serious 0、横溢れ 0）、parity 総点検 X10/X11/X15 は合格。dogfood は H6 決定待ち。証拠・未解決・提案は [progress/phase-web.md の Phase 5 節](progress/phase-web.md#phase-5完了-2026-10-01横断-gate-p5-01p5-04)。
+
+## Web GUI Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備）
+
+P6-01 の web 配布物、P6-02 の ADR-0096・systemd unit・非 blocking release 段、P6-03 の dogfood 手順を整備。dogfood は H6 決定まで未開始。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は 261 passed、`releases_api` の user scope bus 接続エラー 2 件のみを人の判断に従い環境由来として除外（同 suite 6 passed / 2 failed、再実行でも再現）。H6・H9 は人の決定待ち、H10 は staging 確認待ち、H7 は配信切替判断待ち。詳細は [progress/phase-web.md の Phase 6 節](progress/phase-web.md#phase-6p6-01p6-03-完了-2026-10-01並行運用の準備p6-04-以降は未着手)。

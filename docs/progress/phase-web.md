@@ -1,5 +1,9 @@
 # PROGRESS — Web GUI（ADR-0081、`web/`）
 
+---
+tasks: [01M3W79QE2ZD22YW7P499PZKPP]
+---
+
 計画の正本: [implementation plan](../web/implementation-plan.md)、[feature parity matrix](../web/feature-parity.md)、[ADR-0081](../adr/0081-web-spa-frontend.md)。Phase 0 の記録は [PROGRESS.md](../PROGRESS.md#web-gui-phase-02026-09-29設計移行計画) に残す。
 
 ## Phase 1（完了 2026-09-30、scaffold と gateway）
@@ -88,10 +92,15 @@ P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-0
 - Rust gate（2026-10-01、repair-cargo-1 の `crates/task-worker/src/ssh.rs` 修正を merge-base `8a61eae488eb` に戻した後）: `cargo test --workspace` → exit 101。記録された test suites は全て pass し、`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。人の 2026-10-01 の判断に従い、この sandbox から user systemd bus に接続できない環境由来の2件として除外し、残りの全テストを合格として扱う。`cargo test -p celeris --test releases_api` の再実行でも同じ2件が再現（6 passed / 2 failed）。テスト側の skip は別 task で対応する。
 - Rust lint: `cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。
 - 未解決（web の差分制約）: repair-cargo-1 の `ssh.rs` stub に対する ETXTBSY 修正（`c0910506`）は web の差分外なので戻した。main へ別途入れる。
-- 未解決: H6（dogfood の期間・合格条件）、H9（並行運用中の通知）、H10（staging 実 celeris 確認）は読み取り parity のみ通過し、verify は schema 不一致で未完了。H7（gui/web 配信切替）の判断も未実施。P6-04 以降は未着手。
-- 提案: H6 と H9 を決め、H10 の verify を通してから dogfood の開始を判断する。配信切替は H7 の判断材料を確認したうえで別途判断する。P5 横断 gate の値（30 path の URL/見出し最大 69.4/90.1 ms、H1 fallback 1 回、30 path × 4 幅の mobile/a11y 合格）は Phase 5 節と各 gate 記録を参照。
+- 未解決: H6（dogfood の期間・合格条件）、H9（並行運用中の通知）、H7（gui/web 配信切替）の判断は未実施。P6-04 以降は未着手。
+- 提案: H6 と H9 を決めてから dogfood の開始を判断する。配信切替は H7 の判断材料を確認したうえで別途判断する。P5 横断 gate の値（30 path の URL/見出し最大 69.4/90.1 ms、H1 fallback 1 回、30 path × 4 幅の mobile/a11y 合格）は Phase 5 節と各 gate 記録を参照。
 
 - P6-02 staging 実機確認（2026-10-01、release `6ef01deff025`）: `release.sh HEAD` exit 0、`gate.json` の `ok=true`・`web.ok=true`、`web/app/server/index.js` と prod `node_modules/` を確認。`verify.sh 6ef01deff025` exit 1（`verify.json.ok=false`、`live_ok=false`）。現行 schema 34 の celeris binary を同じ snapshot に起動し、gui `:7701` と web `http://127.0.0.1:7720` を同時起動。実 staging celeris `:7711` への `web/e2e/parity/real-staging-readonly.spec.ts` は 3 passed / exit 0。verify は DB schema 34 が release binary の上限 33 を超えて check 1 で失敗。この parity は release binary の検査を代替しない。本番 `:7700/:7710` には接続せず、web gateway は hook の終了時に停止。生ログ: `/var/lib/celeris/workspaces/01M3W79QAQ06PG1M0MCK5HRZ5K/artifacts/release-local-retry.log`、`verify.log`、`manual-parity.log`、`web-parity-e2e.log`、`web-gateway.log`。
+
+- P6-02 staging 再検証（2026-10-01、release `bf54b41ad627`）: 現行 DB schema 34 に対応するため、この branch に `main` を merge して schema 36 の HEAD を release。`release.sh HEAD` exit 0（Rust nextest 3206 passed、clippy exit 0）。`gate.json` の `ok=true`・`web.ok=true`、web 節は `{"ok":true,"blocking":false,"failed_step":"","skipped":false,"reason":"","pnpm":"pnpm@12.6.0","steps":["web-pnpm-install","web-pnpm-typecheck","web-pnpm-test","web-pnpm-release"],"bundle":{"tarball":"web/celeris-web-0.1.0-bf54b41ad627.tar.gz","app":"web/app"}}`。`web/app/server/index.js` と prod `node_modules/` を確認。
+- `verify.sh bf54b41ad627` は exit 0、`verify.json.ok=true`。本番 DB の読み取り専用 snapshot（schema 34）を staging `:7711` で schema 36 に migrate。check 1〜4・4b・4c・6 はすべて true。gui `:7701` と web gateway `127.0.0.1:7720` が同時に healthy（どちらも release `bf54b41ad627`）。web/e2e/parity/real-staging-readonly.spec.ts は実 staging celeris に対して 3 passed / exit 0。読み取り e2e は主要 GET と SPA 6 画面のみ。gateway は hook 終了時に停止し、`:7701/:7711/:7712/:7720` に残存 listener がないことを確認。本番 `:7700/:7710` には接続していない。
+- `verify.json.live_ok=false`: check 5 の N-1 binary `7fbfc347b240`（schema 34）は、新 release が schema 36 に migrate した後の snapshot を読めず失敗した。`verify.json.ok=true` と区別して扱う。初回の sandbox 内 verify は worker DB guard の user namespace probe が EPERM で check 1 に失敗し、権限のある staging 実行で再試行して上記の exit 0 を得た。
+- 生ログ: `/var/lib/celeris/workspaces/01M3W79QAQ06PG1M0MCK5HRZ5K/artifacts/release-schema36-retry.log`、`verify-schema36-retry.log`、`web-parity-e2e.log`、`web-gateway.log`、`staging-state/staging/logs/e2e-staging.log`。途中失敗のログも同じ artifacts の `release-schema36.log`、`verify-schema36.log` に保存。
 
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 

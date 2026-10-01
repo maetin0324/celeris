@@ -21,7 +21,7 @@ gui/ の unit・配信・昇格は変えない。人の判断待ち（H2・H3・
 
 web/ の pnpm は `corepack pnpm@<web/package.json の packageManager>`（いまは 12.6.0）で固定。host の pnpm や gui/ の 11.27.0 とは独立。
 `SD_GATE_SKIP_WEB=1` で web 段を飛ばせる。`SD_WEB_PNPM` で呼び出しを差し替えられる（テスト用）。
-verify.sh（staging の自動検査）と promote.sh（昇格）は web/ に触れない。
+verify.sh（staging の自動検査）は `SD_VERIFY_WEB_HOOK` を指定した場合だけ web/ の読み取り parity を追加する。promote.sh（昇格）は web/ に触れない。
 
 ## 2. staging での実 celeris 確認（H10）
 
@@ -91,3 +91,5 @@ release.sh を回す。
 - `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api` — 差分なし（V1）。
 - P6-02 staging 実機確認（2026-10-01、release `6ef01deff025`）: `release.sh HEAD` exit 0、`gate.json` の `ok=true`・`web.ok=true`、`web/app/server/index.js` と prod `node_modules/` を確認。`verify.sh 6ef01deff025` exit 1（`verify.json.ok=false`、`live_ok=false`）。現行 schema 34 の celeris binary を同じ snapshot に起動し、gui `:7701` と web `http://127.0.0.1:7720` を同時起動。実 staging celeris `:7711` への `web/e2e/parity/real-staging-readonly.spec.ts` は 3 passed / exit 0。verify は DB schema 34 が release binary の上限 33 を超えて check 1 で失敗。この parity は release binary の検査を代替しない。本番 `:7700/:7710` には接続せず、web gateway は hook の終了時に停止。生ログ: `/var/lib/celeris/workspaces/01M3W79QAQ06PG1M0MCK5HRZ5K/artifacts/release-local-retry.log`、`verify.log`、`manual-parity.log`、`web-parity-e2e.log`、`web-gateway.log`。
 - gate.json の web 節: `{"ok":true,"blocking":false,"failed_step":"","skipped":false,"reason":"","pnpm":"pnpm@12.6.0","steps":["web-pnpm-install","web-pnpm-typecheck","web-pnpm-test","web-pnpm-release"],"bundle":{"tarball":"web/celeris-web-0.1.0-6ef01deff025.tar.gz","app":"web/app"}}`。
+- P6-02 staging 再検証（2026-10-01、release `bf54b41ad627`）: schema 34 の実 snapshot を読むため、この branch に現行 `main` を merge して schema 36 の HEAD を release。`release.sh HEAD` exit 0、`gate.json` の `ok=true`・`web.ok=true`、`web/app/server/index.js` と prod `node_modules/` を確認。web 節は `{"ok":true,"blocking":false,"failed_step":"","skipped":false,"reason":"","pnpm":"pnpm@12.6.0","steps":["web-pnpm-install","web-pnpm-typecheck","web-pnpm-test","web-pnpm-release"],"bundle":{"tarball":"web/celeris-web-0.1.0-bf54b41ad627.tar.gz","app":"web/app"}}`。
+- `verify.sh bf54b41ad627` exit 0、`verify.json.ok=true`、gui `:7701` と web `127.0.0.1:7720` が同時に healthy。実 staging celeris `:7711` に対する読み取り専用 `web/e2e/parity/real-staging-readonly.spec.ts` は 3 passed / exit 0。verify の check 1〜4・4b・4c・6 は true。N-1 check 5 は旧 binary schema 34 が migration 後の schema 36 を読めず false（`live_ok=false`）。本番 `:7700/:7710` には接続せず、hook が gateway を停止。終了後 staging の 4 port に listener はない。生ログは run artifacts の `release-schema36-retry.log`、`verify-schema36-retry.log`、`web-parity-e2e.log`、`web-gateway.log`、`staging-state/staging/logs/e2e-staging.log`。詳細は [Phase 6 の記録](../progress/phase-web.md)。

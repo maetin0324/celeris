@@ -2031,3 +2031,4 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
   落ちる（失敗はしない）。cache を効かせるには sandbox 側で localhost を許す設定が要る。
 - codex の network 無しの run では、cargo が依存を新しく取得する必要がある場合（crates.io）も失敗しうる（未確認。今回の失敗は
   それより前の `rustc -vV` で起きている）。必要なら `network_access` の判断と一緒に見直す。
+- 09:5xZ（2026-10-01）: **R7-7 昇格（a2d1ef5e5d9b）と codex の network_access**。release a2d1ef5e5d9b（R7-7）を verify ok / live_ok → live で昇格。web P6-03（01M3TSBAP2…）に回答して再開 → wrapper は R7-7 版に書き直され sccache の EPERM は消えたが、次の段で codex の sandbox が CARGO_TARGET_DIR（/var/lib/celeris/scratch/targets/…）を read-only にしていて `Read-only file system` → **R7-8**（codex の `--add-dir` に CARGO_TARGET_DIR）を委譲。人の許可で `~/.local/celeris/codex-accounts/chatgpt_plus_personal/config.toml` に `[sandbox_workspace_write] network_access = true` を追加（backup `config.toml.bak-20261001a`）。同じ CODEX_HOME の `codex sandbox` から 127.0.0.1:4236 へ connect ok（network_access=false では EPERM）。codex の run でも sccache が効く。

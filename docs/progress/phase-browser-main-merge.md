@@ -49,3 +49,31 @@ Phase 1/2 の browser ADR-0078 と ADR-0080 は既存の番号を維持する。
 | `python3 scripts/dev/source-size-report.py --strict` | 0 | active warning 0 件、既存例外 1 件 |
 
 未解決: P3-B frame、別 host UID の実証と `ptrace` を含む A13、機密能力の本番での適合、昇格・本番設定の整備。上記の試験環境の namespace 制約は権限付き再実行で切り分ける。
+
+## release 準備（prepare）失敗の再現（2026-10-01、ref e768594c）
+
+delivery の `scripts/selfdeploy/release.sh` が失敗したため、gate の step を `release.sh` と同じ順・同じコマンドで task の worktree（Celeris が渡した `CARGO_TARGET_DIR`）で実行した。共有の `.build/tree`、`~/.local/celeris/releases`、本番 service には触れていない。
+
+| step（release.sh の名前） | コマンド | exit | 結果 |
+|---|---|---:|---|
+| cargo-fmt-check | `cargo fmt --all -- --check` | 0 | 差分なし |
+| cargo-test | `bash scripts/dev/test-parallel.sh` | 0 | nextest 3,206 passed / 11 skipped、doctest exit 0（118 binaries） |
+| cargo-clippy | `cargo clippy --workspace -- -D warnings` | 0 | 警告 0 |
+| source-size-report | `python3 scripts/dev/source-size-report.py` | 0 | — |
+| cargo-build | `cargo build --release -p celeris -p celerisctl -p celeris-credentiald` | 0 | 108 秒 |
+| pnpm-install | `pnpm install --frozen-lockfile`（pnpm 11.27.0） | 0 | — |
+| pnpm-typecheck | `pnpm typecheck` | 0 | — |
+| pnpm-test | `pnpm test` | 0 | 84 files / 1,249 passed |
+| pnpm-build | `pnpm build` | 0 | — |
+| pnpm-mobile-audit | `MOBILE_AUDIT_SKIP_BUILD=1 timeout 600 pnpm mobile-audit` | 0 | routes=28 schemes=2 violations=0、111 秒 |
+| pnpm-e2e-mock | `E2E_SKIP_BUILD=1 timeout 600 pnpm e2e:mock` | 0 | failures 0、12 秒 |
+
+`cargo-workspace-clean` は共有 target 専用の段なので再現していない。全 step が通ったので、コードの修正は不要だった。
+
+prepare 失敗が環境由来（共有 build tree の競合・中断）と見られる根拠:
+
+- `prepare.log` は `pnpm-mobile-audit` までの 10 段がすべて `exit 0` で、`pnpm-mobile-audit` の開始行（17:56:07Z）で終わっている。`run_step` は失敗時も `step <name>: exit <rc>` を書き、gate が落ちると `.build/e768594c2d18/gate.json` を残すが、どちらも無い。release.sh が step の途中で外から止められたことを示す。
+- 共有 tree の `.gate-pnpm-mobile-audit.log` は `$ node scripts/mobile-audit.mjs` の 1 行だけで、開始の約 1 秒後（17:56:08Z）に更新が止まっている。worktree では同じ段に 111 秒かかり、exit 0 だった。
+- 同じ時刻帯に別 release `6ef01deff025` の directory が更新されている（17:58:55Z に `web/` が作られた）。共有の `.build/tree` と releases 配下を別の配送が使っていた。
+
+あわせて、旧 ADR 番号の参照 2 箇所を直した: `crates/task-api/src/state.rs` の `ADR-0088 D5` → `ADR-0108 D5`（P4-A relay/supervisor/restore）、`crates/task-worker/Cargo.toml` の `ADR-0094 D2` → `ADR-0114 D2`（P4-A restore deliver state、D2 試験 admission）。browser は既定無効のまま、機密能力は解放していない。

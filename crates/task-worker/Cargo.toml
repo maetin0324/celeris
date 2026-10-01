@@ -9,7 +9,7 @@ h3-e2e-insecure-cert = []
 # Test fixture only: ADR-0089 A1 hook that retargets the page between the controller's
 # checks and the broker's CDP command. Enabled by this crate's own dev-dependency.
 attack-test-hooks = []
-# ADR-0094 D2: test-only restore admission (runtime facts whose only violation
+# ADR-0114 D2: test-only restore admission (runtime facts whose only violation
 # is SameUid). Never enabled by default or in release builds.
 same-uid-harness = []
 

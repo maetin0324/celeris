@@ -57,3 +57,11 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `rg -n 'unwrap\\s*\\(' crates/task-ops/src/delivery.rs` → 一致なし。production `delivery.rs` に `unwrap()` は無い（test 用 unwrap は別ファイル）。
 - 未解決: sandbox 制約を外した統合環境で workspace test を再実行して全件成功を確認すること。ブランチの production DB 接続・実行は行っていない。
+
+## Root delivery 部署 fallback 再検証（verify-perf、2026-10-01）
+
+perf-query を含む統合 HEAD `dd413c5e` で指定 gate を再実行。`cargo test --workspace` → exit 101（3,021 passed / 5 failed / 0 ignored）。失敗は `crates/celeris/tests/instance_handoff.rs` の5件で、worker DB guard が user namespace の生成を `Operation not permitted`（ADR-0095）で拒否した後、dispatch / standby の待機試験も失敗。delivery / inbox の試験を含む他の試験は通過。前回と同じ sandbox 制約であり、コード起因の不具合を示す結果ではない。全件列挙 `cargo test --workspace -- --list` は 3,026 件。
+
+`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
+workspace 全 test の成功は未確認。user namespace を利用できる環境で再実行が必要。

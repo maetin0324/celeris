@@ -346,6 +346,10 @@ pub struct ReplanDiff {
     /// `work_units.phase` も新しい段階に書き換える。`ExecutionPlanned.reason` にも `phase: …` として残す。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub moved: Vec<String>,
+    /// ADR-0079 付記「R7-9」D2: 統合済み（done）だった段階のうち、この版で unit が増えたので統合 WU を `pending` に
+    /// 戻した段階の key。`ExecutionPlanned.reason` にも `stage_reopened: …` として残す。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reopened_stages: Vec<String>,
 }
 
 /// D17: 計画を版更新する（旧 `active` な計画を `superseded` にし、新しい版を採用する）。
@@ -625,8 +629,19 @@ pub fn replan(
             .into_iter()
             .enumerate()
         {
+            // ADR-0079 付記「R7-9」D2: 統合済み（done）の段階に、統合 WU の依存に無い unit（この版で足した unit、
+            // 前の版で足されて統合されていない unit）が入ったら、その統合 WU を未統合のものと同じく持ち越して
+            // `pending` に戻す（段階の統合をやり直す）。以前は done の統合 WU をそのまま持ち越し、足した unit の
+            // ブランチは task のブランチに入らないまま計画が完了した（本番 01M3PAX6RVE7AX8Z6118KADME3）。
+            let reopened = current
+                .iter()
+                .find(|u| u.key == integ.key)
+                .is_some_and(|e| {
+                    e.status == WorkUnitStatus::Done
+                        && integ.depends_on.iter().any(|d| !e.depends_on.contains(d))
+                });
             match current.iter().find(|u| u.key == integ.key) {
-                Some(existing) if existing.status == WorkUnitStatus::Done => {}
+                Some(existing) if existing.status == WorkUnitStatus::Done && !reopened => {}
                 Some(existing) => {
                     let mut row = existing.clone();
                     let mut deps = integ.depends_on.clone();
@@ -644,14 +659,26 @@ pub fn replan(
                     row.blocked_reason = None;
                     row.updated_at = created_at.clone();
                     if existing.status != WorkUnitStatus::Pending {
+                        let reason = if reopened {
+                            format!(
+                                "replan v{new_version}: {}",
+                                task_core::STAGE_REOPENED_REASON
+                            )
+                        } else {
+                            format!("replan v{new_version}")
+                        };
                         extra_events.push(Event::WorkUnitTransitioned {
                             work_unit_id: row.id.clone(),
                             key: row.key.clone(),
                             from: existing.status,
                             to: WorkUnitStatus::Pending,
-                            reason: format!("replan v{new_version}"),
+                            reason,
                             run_id: None,
                         });
+                    }
+                    if reopened {
+                        diff.reopened_stages
+                            .push(row.phase.clone().unwrap_or_default());
                     }
                     updated_work_units.push(row);
                 }
@@ -803,6 +830,14 @@ pub fn replan(
     // ADR-0079 R6-4: 段階を移した unit があるときだけ足す（タイムラインで「replan v<n>: phase A→B」が見える）。
     if !diff.moved.is_empty() {
         reason_with_diff = format!("{} (phase: {})", reason_with_diff, diff.moved.join(","));
+    }
+    // ADR-0079 付記「R7-9」D2: 統合をやり直す段階があるときだけ足す。
+    if !diff.reopened_stages.is_empty() {
+        reason_with_diff = format!(
+            "{} (stage_reopened: {})",
+            reason_with_diff,
+            diff.reopened_stages.join(",")
+        );
     }
     let plan_event = Event::ExecutionPlanned {
         plan_id: new_plan_id,

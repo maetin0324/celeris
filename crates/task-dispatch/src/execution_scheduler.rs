@@ -148,10 +148,13 @@ fn complete(wu: &WorkUnitRow, run_id: &str, all_units: &[WorkUnitRow]) -> WuDeci
         }
     }
 
+    // ADR-0079 付記「R7-9」D3: 統合済みの段階に統合されていない unit が残っていれば完了にしない（`Continue{advance}`。
+    // 次の dispatch の gate がその段階の統合 WU を `pending` に戻して統合を走らせる）。
     let plan_complete = projected
         .iter()
         .filter(|u| u.status.is_active())
-        .all(|u| u.status == WorkUnitStatus::Done);
+        .all(|u| u.status == WorkUnitStatus::Done)
+        && task_core::stale_stage_integrations(&projected).is_empty();
 
     WuDecision {
         updated,
@@ -347,6 +350,11 @@ pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
         .filter(|u| !u.status.is_terminal())
         .collect();
     let Some(current) = in_play.iter().min_by_key(|u| u.seq) else {
+        // ADR-0079 付記「R7-9」D3: 統合済みの段階に統合 WU の依存に無い unit（統合の後に足された unit）が残って
+        // いれば完了ではない。gate（`wu_dispatch_gate`）がその統合 WU を開き直すので、通常の経路に戻す。
+        if !task_core::stale_stage_integrations(units).is_empty() {
+            return PhaseSettle::Advance;
+        }
         return PhaseSettle::AllDone;
     };
     let phase = current.phase.clone();

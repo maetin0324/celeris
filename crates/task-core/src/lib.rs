@@ -192,12 +192,13 @@ pub use execution_plan::{
     CHILD_DEP_PREFIX, EXECUTION_PLAN_SCHEMA, EXECUTION_PLAN_SCHEMA_V2, ExecutionChildSpec,
     ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, INTEGRATE_KEY_PREFIX, NextStep,
     PhaseSpec, PlanOrigin, PlanStatus, PlanValidationError, RunIndexRole, RunIndexStatus, RunRow,
-    ValidatedPlan, WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck, WorkUnitContext,
-    WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus, child_label, dependents_to_block,
-    done_work_unit_overrides, integrate_key, integration_work_unit_specs,
+    STAGE_REOPENED_REASON, ValidatedPlan, WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck,
+    WorkUnitContext, WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus, child_label,
+    dependents_to_block, done_work_unit_overrides, integrate_key, integration_work_unit_specs,
     is_daemon_added_work_unit, materialize_work_units, materialized_order, new_id, newly_ready,
     newly_ready_with, next_work_unit, phase_leaves, phase_ranks, plan_awaits_final_review,
-    plan_work_finished, replan_done_work_units, runnable_work_units, validate,
+    plan_work_finished, reopened_integration, replan_done_work_units, runnable_work_units,
+    stale_stage_integrations, validate,
 };
 // ---- ADR-0079（Phase R1a）: plan/3・木・決定の要求 ----
 pub use decision::{

@@ -1872,3 +1872,58 @@ R7 の 5 つ目。**migration なし**（schema 34 のまま。Event を 1 つ�
 - 同じ check が同じ `detail` で続けて落ちても、retry は `max_retries` まで回す（D3 で次の run が理由を知るので、直すか `plan_issue` を
   申告できる。決定的な不合格の早期打ち切りは入れていない）。
 - `WorkUnitChecksFailed` の GUI の専用表示は無い（timeline は型名と JSON をそのまま出す）。
+
+## 付記: R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す、統合されていない unit を残して完了にしない、本番の task は `reopen`（2026-10-01）
+
+R7 の 9 つ目。**migration なし**（schema 34 のまま）。新しい Event・設定キーは足さない（`WorkUnitTransitioned.reason` の新しい値
+`stage_reopened` だけ）。本番には触れていない（読み取りと DB の写しだけ）。
+
+### 発端（本番の証拠。root task 01M3PAX6RVE7AX8Z6118KADME3「browser capability（Phase 1〜4）」、2026-09-30〜10-01）
+
+- replan v7 / v8 が、統合 WU が既に done の段階に新しい unit を足した: 段階 `phase-4-inject`（`integrate-phase-4-inject` は
+  2026-09-30 16:07Z に done、HEAD 99d5d0bf）に `gaps`・`closeout`、段階 `phase-4`（`integrate-phase-4` は 07:24Z に done）に `land`
+  （v8 で `land2` に置き換え）。
+- `task_ops::execution::replan` の統合 WU の扱いは `Some(existing) if existing.status == Done => {}`（done の統合 WU は依存も状態も
+  そのまま持ち越す）。新しい unit は依存に入らず、統合は二度と走らない。
+- scheduler（`execution_scheduler::complete` / `settle_phase`）は「生きた行がすべて done」で計画の完了とみなすので、`land2` の done
+  （23:57Z）でそのまま最終レビューに出た。root のブランチは 99d5d0bf のまま、reviewer は「land 4d65de6e / 統合記録 68323b11 は HEAD の
+  祖先ではない」で不合格 → 3 回目の review_fail で `failed`。planner は「integrate-phase-4 がもう一度走る」と想定していた。
+  （git: 99d5d0bf・closeout ac65208f・gaps 92126674・land 4d65de6e はいずれも 68323b11 の祖先。）
+- 葉の行の `integrated_commit` は元々どの経路でも書かれない（統合 WU の行だけが `PhaseIntegrated.head` を持つ）。「統合された unit か」は
+  行の `integrated_commit` では判定できない。
+
+### 決定
+
+1. **D1 判定の規則**（`task_core::stale_stage_integrations`、純粋関数）: done の統合 WU（`kind = integrate`）のうち、同じ段階
+   （`phase`）に、その統合 WU の `depends_on` に無い**生きた**（superseded / cancelled でない）unit（統合 WU 以外）があるもの。
+   統合 WU の依存は採用の時点の「その段階の unit すべて」（`integration_work_unit_specs`）と統合の repair WU なので、統合の後に段階へ
+   入った unit だけが引っかかる。最終レビューの repair WU（`phase = None`）は段階に属さないので対象外。
+   `adopt` の unit も同じに扱う（統合は採用した子のブランチも merge する〈R1c / R5b-prep〉ので、統合の後に段階へ足した採用の unit も
+   統合し直すのが正しい。既に入っている commit は `integrate` が skipped にするだけ）。
+2. **D2 採用（planner / 人の replan、/2・/3 共通）**: `replan` は、新しい版のその段階の統合 WU の依存（= 新しい版の段階の unit すべて）に
+   done の統合 WU の依存に無い key があれば、その統合 WU を**未統合の統合 WU と同じ経路**で持ち越す: `plan_id` を新しい版に、依存を
+   「新しい版の段階の unit + 前の依存のうち計画に無いもの（統合の repair）」に、状態を `pending` にし、`WorkUnitTransitioned{from: done,
+   to: pending, reason: "replan v<n>: stage_reopened"}` を積む。`integrated_commit` は前の統合の HEAD のまま残す（次の統合が上書き
+   する）。その後の工程の障壁の決め直しで、後の段階の未完了の unit は `pending` に留まる（段階の順は保つ）。足した unit が全部 done
+   になれば daemon が決定的な統合（段階の葉のブランチと子のブランチの merge、段階の check の再実行）を走らせる。R7-3（done の unit の
+   `checks` の書き換え）はそのまま（統合をやり直すと書き換えた check も走る）。
+3. **D3 完了の守り**: 既にある行（修正前に作られた本番の行）も救うため、
+   - `execution_scheduler::complete` の `plan_complete` と `settle_phase` の `AllDone` は、D1 に当たる統合 WU があれば完了にしない
+     （`complete` は `Continue{advance}`、`settle_phase` は `Advance` = 「gate に任せる」）。
+   - dispatcher の `wu_dispatch_gate` は、人の replan の依頼・人の gate の止めを見た後、計画の完了（`plan_work_finished`）を見る前に、
+     D1 に当たる統合 WU を D2 と同じ形（依存に足りない key を足して `pending`）に戻し、`WorkUnitTransitioned{from: done, to: pending,
+     reason: "stage_reopened"}` を積む。その後は従来の段階の scheduler が `StartIntegration` を返す。
+4. **D4 replay**: replan の経路は従来の「未完了の統合 WU」の規則（`apply_replan_step`）がそのまま同じ依存を作る（遷移の event が
+   `ExecutionPlanned` より先に積まれるので、replay ではその時点で行は `pending`）。dispatcher の経路は `reason == "stage_reopened"` の
+   統合 WU の遷移で、その時点で生きている行に D1 を当てて依存を足す（`task_core::reopened_integration`。live と同じ関数）。
+5. **D5 本番の task は `reopen`（`retry` ではない）**: `POST /tasks/{id}/retry` は task を**複製**する（`tree: None`、計画も unit も
+   持たない新しい task。最初から planner をやり直し、done の子・葉の成果を捨てる）。`POST /tasks/{id}/reopen` は同じ task を
+   `failed → ready`（attempts 0）に戻し、計画・unit・子・ブランチをそのまま残す。昇格後の最初の tick で D3 の gate が
+   `integrate-phase-4` と `integrate-phase-4-inject` を `pending` に戻し、`phase-4`（`land2` 68323b11 を merge）→ `phase-4-inject`
+   （`gaps`・`closeout` は既に 68323b11 の祖先なので skipped）の順に統合と check を走らせ、最後の統合の後に最終レビューに出る。
+
+### 残したもの
+
+- reviewer の他の 2 つの不合格（ADR-0080 D3 の観測停止、P3-C の gate の未配線）は統合の欠落とは別の中身の指摘で、R7-9 は直さない
+  （統合後の最終レビューで再び落ちれば、従来どおり replan / 人の判断）。
+- 統合をやり直しても、既に統合した unit の worktree の掃除は従来どおり（統合の成功で段階の WU の worktree を消す）。

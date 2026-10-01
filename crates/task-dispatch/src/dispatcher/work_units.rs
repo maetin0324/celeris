@@ -198,6 +198,11 @@ impl Dispatcher {
         if v2 && self.promote_newly_ready(task_id, &units)? {
             units = self.store.work_units_for(task_id)?;
         }
+        // ADR-0079 付記「R7-9」D3: 統合済みの段階に統合されていない unit（修正前の replan が足した unit など）が
+        // 残っていれば、その段階の統合 WU を `pending` に戻す（計画の完了を見る前。下の段階の scheduler が統合を返す）。
+        if v2 && self.reopen_stale_stage_integrations(task_id, &units)? {
+            units = self.store.work_units_for(task_id)?;
+        }
         if waiting_on_children
             && !units.iter().any(|u| {
                 matches!(
@@ -355,6 +360,43 @@ impl Dispatcher {
             )?;
         }
         Ok(!ids.is_empty())
+    }
+
+    /// ADR-0079 付記「R7-9」D3: [`task_core::stale_stage_integrations`] に当たる done の統合 WU を
+    /// [`task_core::reopened_integration`]（依存に足りない key を足して `pending`）に戻し、
+    /// `WorkUnitTransitioned{from: done, to: pending, reason: "stage_reopened"}` を積む。戻したら `true`。
+    pub(super) fn reopen_stale_stage_integrations(
+        &self,
+        task_id: TaskId,
+        units: &[task_core::WorkUnitRow],
+    ) -> Result<bool, DispatchError> {
+        let stale = task_core::stale_stage_integrations(units);
+        for (id, missing) in &stale {
+            let Some(integ) = units.iter().find(|u| &u.id == id) else {
+                continue;
+            };
+            let mut row = task_core::reopened_integration(integ, missing);
+            row.updated_at = rfc3339(OffsetDateTime::now_utc());
+            tracing::info!(
+                %task_id,
+                work_unit = %integ.key,
+                missing = %missing.join(","),
+                "an integrated stage has units that were never merged; reopening its integration (ADR-0079 R7-9)"
+            );
+            self.store.work_unit_transition(
+                task_id,
+                row,
+                Event::WorkUnitTransitioned {
+                    work_unit_id: integ.id.clone(),
+                    key: integ.key.clone(),
+                    from: task_core::WorkUnitStatus::Done,
+                    to: task_core::WorkUnitStatus::Pending,
+                    reason: task_core::STAGE_REOPENED_REASON.to_string(),
+                    run_id: None,
+                },
+            )?;
+        }
+        Ok(!stale.is_empty())
     }
 
     /// ADR-0074 D3.7（Phase F4b (f)）: `depends_on: ["child:<key>"]` の WU を、子 Task（`child-<key>` の

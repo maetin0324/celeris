@@ -3150,3 +3150,7 @@ mod human_gates;
 /// ADR-0079 付記 R7-5: WU の checks の不合格の記録・次の run と replan への伝達・usage
 /// （`src/dispatcher/tests/work_unit_check_failures.rs`）。
 mod work_unit_check_failures;
+
+/// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
+/// （`src/dispatcher/tests/stage_reopen.rs`）。
+mod stage_reopen;

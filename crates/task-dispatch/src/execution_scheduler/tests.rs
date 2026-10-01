@@ -88,6 +88,64 @@ fn integ(phase: &str, seq: u32, status: WorkUnitStatus, deps: &[&str]) -> WorkUn
     r
 }
 
+/// ADR-0079 付記「R7-9」D3（本番 01M3PAX6RVE7AX8Z6118KADME3 の形）: 段階 `phase-4` の統合 WU は done（依存は
+/// p4a だけ）で、統合の後の replan が同じ段階に `land2` を足し、`land2` も done。生きた行はすべて done だが、
+/// `land2` は統合されていないので計画の完了（`AllDone`）にしない（gate に任せる `Advance`）。
+#[test]
+fn settle_is_not_all_done_while_an_integrated_stage_has_an_unmerged_unit() {
+    use WorkUnitStatus::*;
+    let units = vec![
+        prow("p4a", 0, "phase-4", Done, &[]),
+        prow("land2", 0, "phase-4", Done, &[]),
+        integ("phase-4", 1, Done, &["p4a"]),
+    ];
+    assert_eq!(settle_phase(&units), PhaseSettle::Advance);
+    // 統合 WU の依存に入っていれば（統合済み）完了。
+    let mut units = vec![
+        prow("p4a", 0, "phase-4", Done, &[]),
+        prow("land2", 0, "phase-4", Done, &[]),
+        integ("phase-4", 1, Done, &["p4a", "land2"]),
+    ];
+    assert_eq!(settle_phase(&units), PhaseSettle::AllDone);
+    // 段階を持たない行（最終レビューの repair WU）・退役した行は段階の統合に関係しない。
+    units.push(row("repair-1", Done, &[]));
+    units.push(prow("land", 0, "phase-4", Superseded, &[]));
+    assert_eq!(settle_phase(&units), PhaseSettle::AllDone);
+}
+
+/// ADR-0079 付記「R7-9」D3: 統合済みの段階に後から足された unit の run が done で終わっても、計画の完了
+/// （`plan_complete` / `WorkerDone`）にしない（本番では `land2` の done でそのまま最終レビューに出た）。
+#[test]
+fn completing_a_unit_added_to_an_integrated_stage_does_not_complete_the_plan() {
+    use WorkUnitStatus::*;
+    let land2 = prow("land2", 0, "phase-4", Running, &[]);
+    let units = vec![
+        prow("p4a", 0, "phase-4", Done, &[]),
+        land2.clone(),
+        integ("phase-4", 1, Done, &["p4a"]),
+    ];
+    let d = decide(
+        RunEnd::Completed,
+        "run-1",
+        &land2,
+        &units,
+        ContinuationInputs::default(),
+        WuLimits {
+            max_continuations: 1,
+            no_progress_limit: 1,
+            max_retries: 0,
+        },
+    );
+    assert_eq!(d.updated.status, Done);
+    assert!(!d.plan_complete);
+    assert_eq!(
+        d.trigger,
+        Trigger::Continue {
+            why: ContinueWhy::Advance
+        }
+    );
+}
+
 #[test]
 fn settle_waits_while_a_sibling_is_running_then_reports_the_question() {
     use WorkUnitStatus::*;

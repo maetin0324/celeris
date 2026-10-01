@@ -1,14 +1,109 @@
 //! ADR-0051: 既存レビュアーの対象SHAを固定し、同じrunに取り込み条件を追加する。
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     time::Duration,
 };
-use task_core::{Check, Criterion, Delivery, DeliveryState, StoreError, Task, TaskStore};
+use task_core::{
+    Check, Criterion, Delivery, DeliveryState, Event, OrgNode, PlanOrigin, RunIndexRole,
+    StoreError, Task, TaskId, TaskStore,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryPolicy {
     pub projects: Vec<String>,
     pub repo: PathBuf,
+    pub default_departments: BTreeMap<String, String>,
+}
+
+/// ADR-0099 D1: only an observed owner can supply a department.
+fn resolve_department(
+    store: &dyn TaskStore,
+    task: &Task,
+    policy: &DeliveryPolicy,
+    org: &[OrgNode],
+) -> Result<Option<String>, StoreError> {
+    let department = |id: &str| task_core::department_of(org, id);
+    if let Some(found) = task.assignee.as_deref().and_then(department) {
+        return Ok(Some(found));
+    }
+
+    let events = store.events_for(task.id)?;
+    let routed = |run_id: &str, work_unit_id: Option<&str>| {
+        events.iter().find_map(|(_, event)| match event {
+            Event::RoutingDecided { run_id: id, record }
+                if id == run_id && record.work_unit_id.as_deref() == work_unit_id =>
+            {
+                record.org_node.as_deref().and_then(department)
+            }
+            _ => None,
+        })
+    };
+    if let Some(plan) = store.execution_plan_active(task.id)?
+        && plan.origin == PlanOrigin::Planner
+        && let Some(found) = plan
+            .planner_run_id
+            .as_deref()
+            .and_then(|id| routed(id, None))
+    {
+        return Ok(Some(found));
+    }
+
+    let mut votes: BTreeMap<String, usize> = BTreeMap::new();
+    for child in store.list(None)? {
+        if child.id == task.id
+            || child
+                .tree
+                .as_ref()
+                .and_then(|t| t.parent_unit.as_ref())
+                .is_none()
+        {
+            continue;
+        }
+        let mut ancestor = child.clone();
+        let mut seen = std::collections::BTreeSet::<TaskId>::new();
+        let mut belongs = false;
+        for _ in 0..32 {
+            let Some(parent) = ancestor.tree.as_ref().and_then(|t| t.parent_unit.as_ref()) else {
+                break;
+            };
+            if !seen.insert(parent.task_id) {
+                break;
+            }
+            if parent.task_id == task.id {
+                belongs = true;
+                break;
+            }
+            let Some(next) = store.get(parent.task_id)? else {
+                break;
+            };
+            ancestor = next;
+        }
+        if belongs && let Some(found) = child.assignee.as_deref().and_then(department) {
+            *votes.entry(found).or_default() += 1;
+        }
+    }
+    for unit in store.work_units_for(task.id)? {
+        for run in store.runs_for_work_unit(&unit.id)? {
+            if run.task_id == task.id.to_string()
+                && run.work_unit_id.as_deref() == Some(unit.id.as_str())
+                && run.role == RunIndexRole::Worker
+                && let Some(found) = routed(&run.run_id, Some(&unit.id))
+            {
+                *votes.entry(found).or_default() += 1;
+            }
+        }
+    }
+    if let Some((found, _)) = votes
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+    {
+        return Ok(Some(found));
+    }
+    Ok(task
+        .project_id
+        .and_then(|id| policy.default_departments.get(&id.to_string()))
+        .and_then(|id| department(id)))
 }
 
 pub fn begin(
@@ -32,11 +127,7 @@ pub fn begin(
         return Ok(None);
     }
     let org = store.org_list()?;
-    let Some(department) = task
-        .assignee
-        .as_deref()
-        .and_then(|id| task_core::department_of(&org, id))
-    else {
+    let Some(department) = resolve_department(store, task, policy, &org)? else {
         return Ok(None);
     };
     let Some(marker) = crate::workspace::read_marker(&workspace_root.join(task.id.to_string()))

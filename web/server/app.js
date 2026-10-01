@@ -64,7 +64,7 @@ export function createApp({
   passwordFile = process.env.CELERIS_WEB_PASSWORD_FILE,
   allowedHosts = process.env.CELERIS_WEB_ALLOWED_HOSTS ?? "",
   distDir = path.join(webRoot, "dist"),
-  release = process.env.CELERIS_WEB_RELEASE ?? "dev",
+  release = process.env.CELERIS_WEB_RELEASE ?? packageInfo.release ?? "dev",
   log = (entry) => process.stderr.write(`${JSON.stringify(entry)}\n`),
   secretFile = process.env.CELERIS_WEB_SESSION_SECRET_FILE,
   failedLoginDelayMs,

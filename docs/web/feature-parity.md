@@ -112,7 +112,7 @@ web/ ではこれを「その行の domain の key だけ invalidate」に置き
 | X12 | SSE の再接続・再同期 | `useCelerisStream`（CLOSED なら 5 s 後に張り直し）、`useResumeRevalidate`・`recovery.ts`（visibilitychange / pageshow / online / focus）。`check-resume-recovery.mjs` | `Last-Event-ID` で続きから、`reset` で全 invalidate、復帰時は表示中の key だけ再取得。イベントの burst で request が増え続けない | 2 / `realtime` | `parity-x: SSE 再接続・reset・復帰・burst` | 完了（c353ac0b） |
 | X13 | celeris 断の表示 | root の `health`・`unavailable` バナー、5 s ごとに root だけ再確認。e2e `g0`（停止中のバナーと復旧） | shell にバナー。daemon 断でも shell・ナビ・login は出る。復旧したら表示中の key を取り直す | 2 / `shell` | `parity-x: daemon 停止中のバナーと復旧` | 完了（bcfe6276） |
 | X14 | 409 / 422 の扱い | `revalidateAfterActionErrors`（4xx の後も再検証）、操作の結果は fetcher に載せて SSE の再検証で消さない（監査 H1） | mutation の 409 は該当 key を invalidate して「状態が変わりました」、422 は celeris の文言を欄の横に。結果の表示は再取得で消えない。確定まで同じ操作を二重送信しない | 3 / `inbox`（共通部品） | `parity-x: 409 再取得・422 表示・二重送信なし` | 完了（6dfb3445） |
-| X15 | 配布・起動 | `pnpm release`（`e2e g5-release`: 展開して `pnpm install --prod --offline` だけで動く）、`/healthz` による新旧切替 | web/ も同じ形で配布でき、`/healthz` で切替できる。gui/ と並行して動かせる | 6 / `cutover` | `parity-x: web の配布物が offline install で動く` | 未着手 |
+| X15 | 配布・起動 | `pnpm release`（`e2e g5-release`: 展開して `pnpm install --prod --offline` だけで動く）、`/healthz` による新旧切替 | web/ も同じ形で配布でき、`/healthz` で切替できる。gui/ と並行して動かせる | 6 / `cutover` | `parity-x: web の配布物が offline install で動く` | 完了（4d41b3e3） |
 | X16 | 型と境界 | `gui/scripts/gen-types.mjs`（`docs/api/v1/api-v1.schema.json` → `types.ts`） | 型は同じ schema から生成し差分ゼロ。`web/` は `gui/` を import しない。client に server・token の処理が入らない | 1 / `gateway` | `parity-x: 型の再生成差分ゼロ・gui import なし` | 完了（8ab4362） |
 
 ## この表の範囲外

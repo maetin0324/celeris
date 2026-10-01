@@ -739,7 +739,7 @@ fn sccache_env_is_complete_and_stable() {
     assert_eq!(env, again);
     assert_eq!(mtime(&wrapper), before);
     let script = std::fs::read_to_string(&wrapper).unwrap();
-    assert!(script.starts_with("#!/bin/sh\n"), "{script}");
+    assert!(script.starts_with("#!/bin/bash\n"), "{script}");
     assert!(
         script.contains("unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR"),
         "{script}"
@@ -775,12 +775,121 @@ fn sccache_env_is_complete_and_stable() {
         std::fs::set_permissions(&echo, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let w = ensure_wrapper(&settings.pool(), &echo).unwrap();
+    // R7-7: wrapper は server に届くときだけ sccache を通すので、server 役の listener を立てる。
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let out = std::process::Command::new(&w)
         .arg("rustc")
         .env("CARGO_TARGET_DIR", "/somewhere")
+        .env(
+            "SCCACHE_SERVER_PORT",
+            server.local_addr().unwrap().port().to_string(),
+        )
+        .env_remove("SCCACHE_SERVER_UDS")
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "T=unset A=rustc\n");
+}
+
+/// 実行できる sh の script を置く（試験用）。
+fn write_script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, body).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// 使われていない port（bind して手放す）。
+fn closed_port() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    l.local_addr().unwrap().port()
+}
+
+/// ADR-0075 R7-7（本番の事故の再現）: エージェントの sandbox（codex の `workspace-write`、ネットワーク無し）の中では
+/// sccache の client が server に繋げず `sccache: error: Operation not permitted (os error 1)` で build を落としていた。
+/// wrapper は自分の居る場所から server に届かなければ compiler を直接 exec する（引数・stdout・exit code はそのまま、
+/// `CARGO_TARGET_DIR` は外したまま）。届けば sccache を通す。sccache 自身の操作と `SCCACHE_SERVER_UDS` は常に sccache。
+#[test]
+fn wrapper_runs_the_compiler_directly_when_the_server_is_unreachable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sccache = tmp.path().join("fake-sccache");
+    // 本物の sccache の代わり: 呼ばれたことと引数を出す（sccache は exit 2 で落ちる役もできるが、ここでは呼ばれたかだけを見る）。
+    write_script(
+        &sccache,
+        "#!/bin/sh\necho \"SCCACHE T=${CARGO_TARGET_DIR-unset} A=$*\"\n",
+    );
+    let compiler = tmp.path().join("fake-rustc");
+    write_script(
+        &compiler,
+        "#!/bin/sh\necho \"COMPILER T=${CARGO_TARGET_DIR-unset} A=$*\"\nexit 3\n",
+    );
+    let settings = sccache_settings(tmp.path(), sccache.clone());
+    let wrapper = ensure_wrapper(&settings.pool(), &sccache).unwrap();
+    let run = |port: u16, uds: Option<&str>, args: &[&str]| {
+        let mut c = std::process::Command::new(&wrapper);
+        c.args(args)
+            .env("CARGO_TARGET_DIR", "/somewhere")
+            .env("SCCACHE_SERVER_PORT", port.to_string());
+        match uds {
+            Some(v) => c.env("SCCACHE_SERVER_UDS", v),
+            None => c.env_remove("SCCACHE_SERVER_UDS"),
+        };
+        let out = c.output().unwrap();
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let compiler_s = compiler.display().to_string();
+
+    // server に届く → sccache を通す。
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let up = server.local_addr().unwrap().port();
+    let (out, code, _) = run(up, None, &[&compiler_s, "-vV"]);
+    assert_eq!(out, format!("SCCACHE T=unset A={compiler_s} -vV\n"));
+    assert_eq!(code, Some(0));
+
+    // server に届かない → compiler を直接（exit code もそのまま、probe の失敗は stderr に出さない）。
+    let down = closed_port();
+    let (out, code, err) = run(down, None, &[&compiler_s, "-vV"]);
+    assert_eq!(out, "COMPILER T=unset A=-vV\n");
+    assert_eq!(code, Some(3));
+    assert!(err.is_empty(), "stderr: {err}");
+
+    // sccache 自身の操作（compiler ではない）は届かなくても sccache へ。引数なしも同じ。
+    let (out, _, _) = run(down, None, &["--show-stats"]);
+    assert_eq!(out, "SCCACHE T=unset A=--show-stats\n");
+    let (out, _, _) = run(down, None, &[]);
+    assert_eq!(out, "SCCACHE T=unset A=\n");
+
+    // SCCACHE_SERVER_UDS（Celeris は与えない）があれば TCP は見ない。
+    let (out, _, _) = run(down, Some("/nonexistent.sock"), &[&compiler_s, "-vV"]);
+    assert_eq!(out, format!("SCCACHE T=unset A={compiler_s} -vV\n"));
+
+    // ネットワークの無い sandbox の代わり: user + network namespace（`unshare -rn`）の中からは、外の listener に届かない
+    // （codex の seccomp では socket が EPERM、ここでは lo が無く connect が失敗。wrapper から見て同じ「届かない」）。
+    // unprivileged な user namespace が使えない環境では飛ばす。
+    let probe = std::process::Command::new("unshare")
+        .args(["-rn", "true"])
+        .output();
+    if probe.map(|o| o.status.success()).unwrap_or(false) {
+        let out = std::process::Command::new("unshare")
+            .arg("-rn")
+            .arg(&wrapper)
+            .arg(&compiler_s)
+            .arg("-vV")
+            .env("SCCACHE_SERVER_PORT", up.to_string())
+            .env_remove("SCCACHE_SERVER_UDS")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "COMPILER T=unset A=-vV\n"
+        );
+        assert_eq!(out.status.code(), Some(3));
+    } else {
+        eprintln!("skip: unshare -rn is not available");
+    }
+    drop(server);
 }
 
 /// ADR-0075 D4 / G2 受け入れ条件 2: バイナリが無い・server が応答しない・`enabled = false`・scratch が無効のときは

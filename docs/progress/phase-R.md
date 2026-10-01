@@ -1946,3 +1946,88 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 - 昇格後、worker の run の中から `celerisctl --db /var/lib/celeris/celeris.sqlite3 ls` が動き、`add` が「read-only」で失敗する。
 - `/var/lib/celeris` 直下に DB 以外のものを新しく置く場合、既存の項目（workspaces/ など）は従来どおり書けるが、run から直下への新規作成はできない。
 - 00:30Z（2026-10-01）: **R7-6** を main に統合 → release **883b9aff0832**（schema 34）: gate 全 exit 0 → `verify.sh` ok=true / live_ok=true（staging のログに `worker runs see the db directory read-only (ADR-0095)`）→ `promote.sh` live で昇格（backup `20261001-003033-pre-883b9aff0832.sqlite3`）。昇格後、新 daemon（pid 3129406）が起こした worker（claude、pid 3152230）が別の mount namespace にいて `/var/lib/celeris` が `ro` であることを `/proc/<pid>/mountinfo` で確認。残: `[adapters.codex] extra_args = ["--approve-for-me"]` は escalation を自動承認する（人の判断待ち）、`systemd-run --user` で namespace の外に出る経路は残る（ADR-0095）。
+
+## R7-7: sandbox の中で sccache が `Operation not permitted` になる件 — wrapper は server に届かなければ素の compiler（2026-10-01）
+
+- 症状: worker の run の `cargo test --workspace` / `cargo clippy` がコンパイル前の
+  `/var/lib/celeris/scratch/bin/sccache …/rustc -vV`（exit status 2）+ `sccache: error: Operation not permitted (os error 1)` で exit 101。
+  最新は task 01M3TSBAP2X6RCP829CVKN4TGG の run 01M3VASGXJJ09ZRHZFHWYTXGNW（codex、08:55Z）→ task は `blocked`。
+
+### 根本原因（証拠）
+
+- **codex の `workspace-write` sandbox がネットワークを塞いでいる**。worker の codex は `CODEX_HOME=~/.local/celeris/codex-accounts/<id>`
+  を使い、その `config.toml` には `[sandbox_workspace_write] network_access` が無い（既定 false）。人の `~/.codex/config.toml` には
+  `network_access = true` がある（人の shell で `codex sandbox` が通ったのはこのため）。
+- 再現（自前のプロセスだけ。本番の状態には触れない）: 空の `config.toml` の `CODEX_HOME` で
+  `codex sandbox -c 'sandbox_mode="workspace-write"' -- /var/lib/celeris/scratch/bin/sccache <rustc> -vV` → 本番と同じ
+  `sccache: error: Operation not permitted (os error 1)`。`network_access = true` の `CODEX_HOME` では `rustc 1.98.1 …` が出る。
+- 失敗するシステムコール（sandbox の外から `strace -f -e trace=socket,connect codex sandbox …`）:
+  `socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_IP) = -1 EPERM`（codex の seccomp）。network 有りでは
+  `socket(...) = 5` → `connect(5, 127.0.0.1:4236) = 0`。AF_UNIX の `connect` も同じ sandbox で `EPERM`（python で確認）なので、
+  sccache を UDS にしても届かない。`SCCACHE_IGNORE_SERVER_IO_ERROR=1` も効かない（server との I/O の前に落ちる）。
+- **ADR-0095（db_guard）は原因ではない**: `unshare --user --map-user=1001 --map-group=1001 --mount` の中では wrapper が通る。
+  同じ文言を含む run の transcript は 2026-09-28 16:57Z から 68 件（codex 60 件。R7-6 の 00:30Z より前が大半）。claude-code の 8 件は、
+  codex の run が `artifacts/` に残した `cargo-*.log` を `cat` / `tail` / `grep` したもの（tool_use と tool_result の突き合わせで確認）で、
+  claude-code 自身の cargo が落ちたものは無い。
+- 食い違いの場所: dispatcher の `server_listening`（ADR-0075 D4）は daemon（sandbox の外）から 127.0.0.1:4236 を見るので真になり
+  `RUSTC_WRAPPER` を与えるが、compiler が実際に動くのはエージェントの sandbox の中。
+
+### 修正（ADR-0075 の「R7-7」追記）
+
+- `task_worker::scratch::wrapper_script`（`crates/task-worker/src/scratch.rs`）: wrapper を `#!/bin/bash` にし、compiler の起動の
+  たびに**自分の居る場所から** `127.0.0.1:${SCCACHE_SERVER_PORT:-4226}` に TCP で繋がるか（bash 組み込みの `/dev/tcp`、fork なし、
+  sccache の client は呼ばない＝server を起こさない）を見て、届かなければ compiler を直接 `exec`。第 1 引数が `-` で始まる・引数なし
+  （sccache 自身の操作）と `SCCACHE_SERVER_UDS` があるときは見ずに sccache へ。`CARGO_TARGET_DIR` を外すのは従来どおり。
+- wrapper は `ensure_wrapper` が内容の違いを見て書き直すので、昇格後の最初の run で `/var/lib/celeris/scratch/bin/sccache` は新しい
+  中身になる（手作業は不要）。
+- 設定（人の判断。Celeris は書き換えない）: codex の run でも L1 cache を効かせたいなら、各アカウントの
+  `~/.local/celeris/codex-accounts/<id>/config.toml` に
+  ```toml
+  [sandbox_workspace_write]
+  network_access = true
+  ```
+  を足す（`exec resume` も含め codex 自身が読む）。codex の worker の sandbox にネットワーク全体を開けることになる（localhost だけに絞る
+  設定は codex 0.157 に無い）。足さなくても修正後は codex の run の build は通る（cache を使わない素の compiler）。
+- 試作の実測（自前の sccache server、port 4299・自前の `SCCACHE_DIR`）: network 無しの codex sandbox で新 wrapper の `cargo build` が
+  成功（旧 wrapper は同条件で EPERM）、network 有りでは sccache を通る（server の compile requests 4 → 8）、server の log に probe 由来の
+  error / warn は 0 行。生成した wrapper（`wrapper_script` の出力）で、network 無しの codex sandbox の中から
+  `cargo check --offline -p task-core`（本番と同じ env の形、port 4236、target は自前のローカルディスク）→ 旧 wrapper は本番と同じ
+  `…/rustc -vV (exit status: 2) … Operation not permitted`、新 wrapper はエラーなしで完了。
+
+### 試験
+
+- 新規 `scratch::tests::wrapper_runs_the_compiler_directly_when_the_server_is_unreachable`（実プロセス）: server 役の listener が居れば
+  sccache 役が呼ばれる / 閉じた port なら compiler 役が直接呼ばれ、引数・stdout・exit code（3）がそのまま・stderr は空・
+  `CARGO_TARGET_DIR` は外れたまま / `--show-stats`・引数なしは届かなくても sccache へ / `SCCACHE_SERVER_UDS` があれば sccache へ /
+  `unshare -rn`（ネットワークの無い sandbox の代わり）の中からは外の listener に届かず compiler を直接（user namespace が無ければ飛ばす。
+  このホストでは実行された）。**変異確認**: `scratch.rs` を HEAD に戻すと「閉じた port」の assert で落ちる
+  （`left: "SCCACHE … -vV"` / `right: "COMPILER T=unset A=-vV"`）。
+- 既存 `sccache_env_is_complete_and_stable`: shebang の期待を `#!/bin/bash` に、wrapper を通す部分は server 役の listener を立てる。
+- `scratch-cache/tests/sccache_webdav_e2e.rs` は自前の G2 形の wrapper を使う（server が常に居る）旨を注記だけ。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0（最初の 1 回は新しい試験の 1 行が rustfmt 違反 → `cargo fmt --all` で直して exit 0）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2977 passed, 7 skipped（exit 0）**（R7-6 の 2976 + 新規 1）。
+- `cargo test -p task-worker --lib scratch::` → 21 passed。
+
+### 昇格後にすること
+
+- 昇格後の最初の run で wrapper が書き直されたことを確かめる: `grep -c 'R7-7' /var/lib/celeris/scratch/bin/sccache`（1 以上）、
+  `head -1` が `#!/bin/bash`。
+- blocked の task **01M3TSBAP2X6RCP829CVKN4TGG**（P6-03 dogfood の準備と Phase 5〜6 の完了記録）に、`blocked` への回答として
+  コメントを入れて再開させる（`POST /api/v1/tasks/01M3TSBAP2X6RCP829CVKN4TGG/comments`、または GUI）。文面例:
+  「sccache の `Operation not permitted` は環境要因（codex sandbox のネットワーク無し）で、release <sha12> で wrapper が素の rustc に
+  落ちるよう直した。`RUSTC_WRAPPER`・`CARGO_TARGET_DIR` を上書きせず `cargo test --workspace` と `cargo clippy --workspace -- -D warnings`
+  をそのまま再実行し、結果を記録すること」。
+- 01M3PAX6RVE7AX8Z6118KADME3（browser capability、`failed`）は同じ原因の gate 失敗を含む。やり直すかは人の判断（`reopen`）。
+  同じ親の他の WU の記録に「sandbox 外で実行する」回避策が書かれている（phase-browser-4.md の gate-recheck）が、修正後は不要。
+- （任意・人）codex の run でも cache を効かせるなら、上の `network_access = true` をアカウントの `config.toml` に足す。
+
+### 未解決・提案
+
+- claude-code の Bash sandbox を将来有効にした場合も、network namespace で 127.0.0.1 に届かなければ同じ wrapper で素の compiler に
+  落ちる（失敗はしない）。cache を効かせるには sandbox 側で localhost を許す設定が要る。
+- codex の network 無しの run では、cargo が依存を新しく取得する必要がある場合（crates.io）も失敗しうる（未確認。今回の失敗は
+  それより前の `rustc -vV` で起きている）。必要なら `network_access` の判断と一緒に見直す。

@@ -380,6 +380,7 @@ export type BrowserWait = {
   "session_id": string;
   "state": BrowserWaitState;
   "task_id": TaskId;
+  "trusted_login"?: TrustedLogin | null;
   "version": number;
   "wait_id": string;
   "work_unit_id"?: string | null;
@@ -494,7 +495,7 @@ export type CheckpointDecision = {
   "why": string;
 };
 
-export type CheckpointEnd = "completed" | "yielded" | "budget_exhausted";
+export type CheckpointEnd = "completed" | "yielded" | "budget_exhausted" | "waiting";
 
 export type CheckpointFileChange = {
   "change": string;
@@ -562,6 +563,53 @@ export type ClusterForwardView = {
   "up"?: boolean | null;
 };
 
+export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finished" | "gone" | "unknown";
+
+export type ClusterJobStatus = {
+  "exit_status"?: number | null;
+  "job_id": string;
+  "raw_state"?: string | null;
+  "state": ClusterJobState;
+};
+
+export type ClusterJobWait = {
+  "checkpoint"?: unknown;
+  "cluster": string;
+  "created_at": string;
+  "deadline": string;
+  "finished_at"?: string | null;
+  "jobs": Array<string>;
+  "last_polled_at"?: string | null;
+  "last_status"?: Array<ClusterJobStatus>;
+  "poll_secs": number;
+  "run_id": string;
+  "scheduler": ClusterScheduler;
+  "state": ClusterJobWaitState;
+  "summary"?: string;
+  "task_id": TaskId;
+  "timeout_secs": number;
+  "wait_id": string;
+  "work_unit_id"?: string | null;
+};
+
+export type ClusterJobWaitState = "waiting" | "satisfied" | "timed_out" | "cancelled";
+
+export type ClusterJobWaitView = {
+  "cluster": string;
+  "created_at": string;
+  "deadline": string;
+  "jobs": Array<ClusterJobStatus>;
+  "last_polled_at"?: string | null;
+  "next_poll_at"?: string | null;
+  "poll_secs": number;
+  "run_id": string;
+  "scheduler": ClusterScheduler;
+  "status_line": string;
+  "summary"?: string;
+  "wait_id": string;
+  "work_unit_id"?: string | null;
+};
+
 export type ClusterLive = {
   "auth"?: string;
   "concurrency": number;
@@ -575,6 +623,8 @@ export type ClusterLive = {
   "tunnel_forwards"?: Array<TunnelForwardLive>;
   "tunnel_login_needed"?: boolean;
 };
+
+export type ClusterScheduler = "pbs" | "slurm";
 
 export type ClusterSettingsPutBody = {
   "work_dir"?: string | null;
@@ -828,7 +878,12 @@ export type CooldownView = {
 
 export type CostOfReversal = "low" | "medium" | "high";
 
-export type CreatedOrigin = "plan_unit";
+export type CreatedOrigin = "plan_unit" | {
+  "worker_run": {
+  "run_id": string;
+  "task_id": TaskId;
+};
+};
 
 export type CredentialRecord = {
   "credential_id": string;
@@ -1225,6 +1280,19 @@ export type Event = {
   "version": number;
   "wait_id": string;
 } | {
+  "type": "cluster_job_wait_started";
+  "wait": ClusterJobWait;
+} | {
+  "jobs": Array<ClusterJobStatus>;
+  "type": "cluster_job_wait_polled";
+  "wait_id": string;
+} | {
+  "detail"?: string;
+  "jobs"?: Array<ClusterJobStatus>;
+  "state": ClusterJobWaitState;
+  "type": "cluster_job_wait_finished";
+  "wait_id": string;
+} | {
   "origin"?: CreatedOrigin | null;
   "task": Task;
   "type": "created";
@@ -1353,6 +1421,13 @@ export type Event = {
   "run_id"?: string | null;
   "to": WorkUnitStatus;
   "type": "work_unit_transitioned";
+  "work_unit_id": string;
+} | {
+  "cwd": string;
+  "failed": Array<FailedWorkUnitCheck>;
+  "key": string;
+  "run_id": string;
+  "type": "work_unit_checks_failed";
   "work_unit_id": string;
 } | {
   "changed_fields"?: Array<string>;
@@ -1684,6 +1759,12 @@ export type ExecutionWorkUnitView = {
   "status": WorkUnitStatus;
   "title": string;
   "updated_at": string;
+};
+
+export type FailedWorkUnitCheck = {
+  "cmd": string;
+  "detail": string;
+  "expect_exit": number;
 };
 
 export type FailureClass = "infra" | "work";
@@ -2184,6 +2265,7 @@ export type NewBrowserWait = {
   "resume_key": string;
   "run_id": string;
   "session_id": string;
+  "trusted_login"?: TrustedLogin | null;
   "ttl_secs"?: number | null;
   "work_unit_id"?: string | null;
 };
@@ -2448,6 +2530,7 @@ export type PlanUnitSpec = {
   "depends_on"?: Array<string>;
   "done_when"?: Array<string>;
   "features"?: unknown;
+  "gate"?: ExecutionMode | null;
   "genre"?: string | null;
   "harness"?: string | null;
   "key": string;
@@ -2518,6 +2601,7 @@ export type ProjectCreateBody = {
 export type ProjectDetail = {
   "milestones": Array<MilestoneView>;
   "milestones_frozen"?: number;
+  "milestones_frozen_open"?: number;
   "project": Project;
   "project_plan"?: ProjectPlanDagView | null;
   "repos"?: Array<ProjectRepo>;
@@ -2696,6 +2780,7 @@ export type ProviderLive = {
   "env_keys"?: Array<string>;
   "id": string;
   "in_use": number;
+  "in_use_cos"?: number;
   "last_check"?: ProviderCheckView | null;
   "model"?: string | null;
   "tier_models"?: {
@@ -2730,6 +2815,7 @@ export type ProviderView = {
   "env_keys": Array<string>;
   "id": string;
   "in_use"?: number | null;
+  "in_use_cos"?: number | null;
   "last_check"?: ProviderCheckView | null;
   "model"?: string | null;
   "stats": ProviderStats;
@@ -2896,8 +2982,10 @@ export type RepairOrigin = "review" | "integration" | "delivery" | "planner";
 export type ReplanDiff = {
   "added": Array<string>;
   "changed": Array<string>;
+  "moved"?: Array<string>;
   "overridden_done"?: Array<string>;
   "removed": Array<string>;
+  "reopened_stages"?: Array<string>;
 };
 
 export type ReplayMismatch = {
@@ -3139,6 +3227,8 @@ export type RunEnd = {
   "type": "harness_error";
 } | {
   "type": "cancelled";
+} | {
+  "type": "waiting";
 };
 
 export type RunFiles = {
@@ -3482,6 +3572,7 @@ export type TaskDetail = {
   "approvals": Array<ApprovalLink>;
   "children": Array<TaskRef>;
   "cluster"?: string | null;
+  "cluster_job_wait"?: ClusterJobWaitView | null;
   "criteria": Array<CriterionView>;
   "delegated": Array<DelegatedView>;
   "dependencies": Array<TaskRef>;
@@ -3520,6 +3611,7 @@ export type TaskEdit = {
   "objective"?: string | null;
   "pause_after"?: PausePolicy | null;
   "priority"?: PriorityInput | null;
+  "project_id"?: ProjectId | null;
   "repos"?: Array<string> | null;
   "role"?: string | null;
   "skills"?: Array<string> | null;
@@ -3830,6 +3922,14 @@ export type TreeView = {
   "repos": Array<TreeRepoView>;
 };
 
+export type TrustedLogin = {
+  "login_url": string;
+  "password_selector": string;
+  "policy_id": string;
+  "revision": number;
+  "submit_selector"?: string | null;
+};
+
 export type TunnelForwardLive = {
   "last_error"?: string | null;
   "listen": string;
@@ -3866,7 +3966,7 @@ export type VerdictView = {
   "ts": string;
 };
 
-export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra";
+export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra" | "cluster_jobs";
 
 export type WorkUnitBudget = {
   "max_turns"?: number | null;

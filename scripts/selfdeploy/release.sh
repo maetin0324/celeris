@@ -158,7 +158,10 @@ git -C "$SD_REPO" worktree prune
 # `release-build`）。adopt の安全条件の checkout 時刻は `.build/tree/.git` の mtime。終了時は成功・失敗とも
 # **touch**（release しない。lib.sh の sd_scratch_lease の説明）。lease の TTL は `SD_RELEASE_TARGET_TTL`。
 # celerisctl が無い・scratch が無効なら従来どおり `$SD_RELEASES/.cargo-target`。
-if sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$SHA_FULL" "$BUILD"; then
+if [ "${SD_USE_CALLER_CARGO_TARGET:-0}" = 1 ] && [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  SD_CARGO_TARGET="$CARGO_TARGET_DIR"
+  sd_log "using caller CARGO_TARGET_DIR: $SD_CARGO_TARGET"
+elif sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$SHA_FULL" "$BUILD"; then
   trap 'rm -f "$GATE_TSV"; sd_scratch_touch' EXIT
 fi
 sd_log "CARGO_TARGET_DIR: $SD_CARGO_TARGET (owner ${SD_SCRATCH_OWNER:-<none: fallback>})"

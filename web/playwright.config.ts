@@ -19,7 +19,8 @@ listen(7720).catch(() => listen(0)).then((port) => process.stdout.write(String(p
 // WEB_E2E_PORT（既定 7720、docs/web/implementation-plan.md §3 H2）で待ち受ける。
 // 7720 が他の作業ツリーの e2e に使われているときは空き port に移る。決めた port は env に残し、
 // config を読み直す worker も同じ port を使う。
-if (!process.env.WEB_E2E_PORT) {
+const realBaseUrl = process.env.WEB_E2E_REAL_BASE_URL;
+if (!realBaseUrl && !process.env.WEB_E2E_PORT) {
   process.env.WEB_E2E_PORT = execFileSync(process.execPath, ["-e", PICK_PORT], { encoding: "utf8" }).trim();
 }
 const PORT = Number(process.env.WEB_E2E_PORT);
@@ -34,11 +35,11 @@ export default defineConfig({
   reporter: [["list"]],
   timeout: 60_000,
   use: {
-    baseURL: `http://127.0.0.1:${PORT}`,
+    baseURL: realBaseUrl ?? `http://127.0.0.1:${PORT}`,
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
+  webServer: realBaseUrl ? undefined : {
     // pnpm を挟むと終了時に preview が止まらず test が終わらないので、vite を直接起動する。
     command: `node_modules/.bin/vite build && exec node_modules/.bin/vite preview --host 127.0.0.1 --strictPort --port ${PORT}`,
     url: `http://127.0.0.1:${PORT}/`,

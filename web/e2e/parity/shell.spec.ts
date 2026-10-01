@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { screens } from "../support/screens";
 
 // shell の parity（P2-02）。gateway は空き port の loopback で、daemon には接続しない。
 let gateway: Awaited<ReturnType<typeof startGateway>>;
@@ -141,65 +142,47 @@ for (const timeZone of ["Asia/Tokyo", "America/New_York"]) {
   });
 }
 
-// 画面の一覧は routes/ のファイルから作る。画面が増えても検査が自動で対象にする。
-function routePaths(): string[] {
-  const dir = path.join(import.meta.dirname, "..", "..", "routes");
-  const fixtureIds: Record<string, string> = { id: "T1", runId: "R1" };
-  const paths = readdirSync(dir)
-    .filter((f) => f.endsWith(".tsx") && !f.startsWith("__"))
-    .map((f) => {
-      const segments = f
-        .replace(/\.tsx$/, "")
-        .split(".")
-        .filter((seg) => seg !== "index")
-        .map((seg) => (seg.startsWith("$") ? (fixtureIds[seg.slice(1)] ?? "X1") : seg));
-      return `/${segments.join("/")}`;
-    })
-    .filter((p) => p !== "/login");
-  return [...new Set(paths)];
-}
-
-test("parity-x: storage に機密が無い", async ({ page }) => {
-  test.setTimeout(180_000);
-  const routes = routePaths();
-  expect(routes.length).toBeGreaterThanOrEqual(30);
-  await withDaemon(async ({ base, daemon }) => {
-    await page.goto(`${base}/`);
-    await expect.poll(() => daemon.streamClients).toBeGreaterThan(0);
-    daemon.sendEvent("hello", { cursor: 0, now: new Date().toISOString(), daemon: null });
-    for (const route of routes) {
-      await page.goto(`${base}${route}`);
-      await expect(page.locator("[data-shell] main h1").first(), route).toBeVisible();
-    }
-    await expect.poll(() => daemon.requests.some((r) => r.path === "/api/v1/inbox")).toBe(true);
-
-    const snapshot = await page.evaluate(async () => {
-      const dump = (s: Storage) => Object.fromEntries(Object.keys(s).map((k) => [k, s.getItem(k)]));
-      return {
-        local: dump(localStorage),
-        session: dump(sessionStorage),
-        idb: ((await indexedDB.databases?.()) ?? []).map((d) => d.name),
-        caches: await caches.keys(),
-        workers: (await navigator.serviceWorker.getRegistrations()).length,
-      };
+test.describe("P5-02 全画面 storage gate", () => {
+  test("parity-x: storage に機密が無い（全画面）", async ({ page }) => {
+    test.setTimeout(180_000);
+    expect(screens.length).toBeGreaterThanOrEqual(30);
+    await withDaemon(async ({ base, daemon }) => {
+      await page.goto(`${base}/`);
+      await expect.poll(() => daemon.streamClients).toBeGreaterThan(0);
+      daemon.sendEvent("hello", { cursor: 0, now: new Date().toISOString(), daemon: null });
+      for (const screen of screens) {
+        await page.goto(`${base}${screen.fixture}`);
+        await expect(page.getByRole("heading", { level: 1, name: screen.heading }), screen.path).toBeVisible();
+        const snapshot = await page.evaluate(async () => {
+          const dump = (s: Storage) => Object.fromEntries(Object.keys(s).map((k) => [k, s.getItem(k)]));
+          return {
+            local: dump(localStorage),
+            session: dump(sessionStorage),
+            idb: ((await indexedDB.databases?.()) ?? []).map((d) => d.name),
+            caches: await caches.keys(),
+            workers: (await navigator.serviceWorker.getRegistrations()).length,
+          };
+        });
+        // localStorage: 表示の好みの key だけ（何も設定していなければ空）。
+        for (const [key, value] of Object.entries(snapshot.local)) {
+          expect(key, screen.path).toBe("celeris.web.display");
+          const parsed = JSON.parse(value ?? "{}") as Record<string, unknown>;
+          expect(Object.keys(parsed).every((k) => k === "timeZone" || k === "theme")).toBe(true);
+        }
+        // sessionStorage: 使わない（scroll 位置は memory）。
+        expect(snapshot.session, screen.path).toEqual({});
+        expect(snapshot.idb, screen.path).toEqual([]);
+        expect(snapshot.caches, screen.path).toEqual([]);
+        expect(snapshot.workers, screen.path).toBe(0);
+        // token と API 応答の本文がどの storage にも無い。
+        const all = JSON.stringify([snapshot.local, snapshot.session]);
+        expect(all, screen.path).not.toContain(FIXTURE_TOKEN);
+        for (const fixture of Object.values(defaultFixtures)) {
+          const body = JSON.stringify(fixture);
+          if (body.length > 20) expect(all, screen.path).not.toContain(body);
+        }
+      }
+      await expect.poll(() => daemon.requests.some((r) => r.path === "/api/v1/inbox")).toBe(true);
     });
-    // localStorage: 表示の好みの key だけ（何も設定していなければ空）。
-    for (const [key, value] of Object.entries(snapshot.local)) {
-      expect(key).toBe("celeris.web.display");
-      const parsed = JSON.parse(value ?? "{}") as Record<string, unknown>;
-      expect(Object.keys(parsed).every((k) => k === "timeZone" || k === "theme")).toBe(true);
-    }
-    // sessionStorage: 使わない（scroll 位置は memory）。
-    expect(snapshot.session).toEqual({});
-    expect(snapshot.idb).toEqual([]);
-    expect(snapshot.caches).toEqual([]);
-    expect(snapshot.workers).toBe(0);
-    // token と API 応答の本文がどの storage にも無い。
-    const all = JSON.stringify([snapshot.local, snapshot.session]);
-    expect(all).not.toContain(FIXTURE_TOKEN);
-    for (const fixture of Object.values(defaultFixtures)) {
-      const body = JSON.stringify(fixture);
-      if (body.length > 20) expect(all).not.toContain(body);
-    }
   });
 });

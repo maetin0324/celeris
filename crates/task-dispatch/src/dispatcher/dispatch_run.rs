@@ -816,7 +816,7 @@ impl Dispatcher {
         }
     }
 
-    /// ADR-0088 D2: browser fallback candidates for one run. Only providers that are enabled
+    /// ADR-0107 D2: browser fallback candidates for one run. Only providers that are enabled
     /// (configured in the policy table with a non-zero concurrency, not an account pool), healthy
     /// (not in cooldown) and whose adapter id is conformant in the runner-recorded ledger are
     /// offered, ordered specialist first and one per adapter id. A `CredentialUse` policy never
@@ -934,7 +934,7 @@ impl Dispatcher {
             error: false,
         };
         if let Err(e) = self.store.append_event(task_id, &ev) {
-            tracing::warn!(task_id = %task_id, error = %e, "failed to record the browser fallback refusal (ADR-0088 D2)");
+            tracing::warn!(task_id = %task_id, error = %e, "failed to record the browser fallback refusal (ADR-0107 D2)");
         }
     }
 
@@ -956,8 +956,8 @@ impl Dispatcher {
         container: ContainerDecision,
     ) -> JoinHandle<()> {
         let store = self.store.clone();
-        // ADR-0088 D2: the dispatcher builds the browser fallback list from provider state and
-        // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0088).
+        // ADR-0107 D2: the dispatcher builds the browser fallback list from provider state and
+        // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0107).
         let browser_candidates = self.browser_fallback_candidates(
             task_id,
             &run_id,

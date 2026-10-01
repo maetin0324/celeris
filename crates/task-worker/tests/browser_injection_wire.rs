@@ -1,4 +1,4 @@
-//! ADR-0089 D1-D4: real broker and browser CDP injection against a fixture in a
+//! ADR-0109 D1-D4: real broker and browser CDP injection against a fixture in a
 //! network namespace with no external route. Missing prerequisites fail.
 use celeris_credentiald::injection_ipc::{
     Admission, AuthSectionRegistration, LiveSessionRegistration, process_start,

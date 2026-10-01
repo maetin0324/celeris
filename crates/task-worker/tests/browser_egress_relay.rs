@@ -1,4 +1,4 @@
-//! ADR-0088 D1: 実 bwrap + 実 chrome-headless-shell + 実 sandboxd + 実 celeris-browser-egress で、
+//! ADR-0108 D1: 実 bwrap + 実 chrome-headless-shell + 実 sandboxd + 実 celeris-browser-egress で、
 //! local fixture へは proxy 経由でだけ届くことを確かめる。
 //!
 //! 試験は自分自身を `unshare --user --map-root-user --net` の中で再実行し、その試験用 netns の

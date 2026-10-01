@@ -561,7 +561,7 @@ fn secret_like_values_never_reach_rows_or_events() {
     assert!(!hay.contains(SENTINEL));
 }
 
-// ---- ADR-0091 D2: trusted login の形式検証・固定・照合 ----
+// ---- ADR-0110 D2: trusted login の形式検証・固定・照合 ----
 
 const LOGIN_ORIGIN: &str = "https://login.example.com";
 

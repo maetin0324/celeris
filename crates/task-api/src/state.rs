@@ -47,7 +47,7 @@ pub struct ApiState {
     pub(crate) tuning: StreamTuning,
     /// ADR-0080 D5: browser の人の操作に要る鍵と broker。
     pub(crate) browser: Arc<crate::browser::BrowserApiConfig>,
-    /// ADR-0083（P3-A）: identity の封緘。`None` なら identity API は 503 `identity_unavailable`。
+    /// ADR-0101（P3-A）: identity の封緘。`None` なら identity API は 503 `identity_unavailable`。
     pub(crate) identity_sealer: Option<Arc<celeris_credentiald::identity_seal::IdentitySealer>>,
     pub(crate) live_grants: Arc<Mutex<HashMap<String, crate::browser_live::LiveGrantRecord>>>,
     /// ADR-0088 D5: 稼働中 session の registry（daemon が supervisor と共有する）。`None` なら
@@ -200,7 +200,7 @@ impl ApiState {
         self
     }
 
-    /// ADR-0083（P3-A）: credentiald の identity 封緘を結線する。
+    /// ADR-0101（P3-A）: credentiald の identity 封緘を結線する。
     pub fn with_identity_sealer(
         mut self,
         sealer: Arc<celeris_credentiald::identity_seal::IdentitySealer>,

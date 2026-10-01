@@ -1,4 +1,4 @@
-# ADR-0083: Browser Phase 3 の Browser Identity の契約（P3-A）
+# ADR-0101: Browser Phase 3 の Browser Identity の契約（P3-A）
 
 ---
 tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
@@ -6,7 +6,7 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 
 - 日付: 2026-09-29
 - 状態: **Accepted・保管側を実装（2026-09-29）**。束縛・期限・失効・混入拒否（task-core）、credentiald の project+origin 鍵による封緘と削除時の鍵消去、store の metadata、登録・一覧・失効・削除の API と GUI。**利用（session への復元）は未実装で P4-A の後**。trusted local の復元は `isolation_required` で拒否（e2e `phase3_identity_register_revoke_delete_and_trusted_local_restore_denied`）
-- 関連: [ADR-0078](0078-browser-execution-capability.md) D8 P3-A、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H1・H3・H6、[ADR-0081](0081-browser-phase3-control-lease.md)、[ADR-0082](0082-browser-phase3-live-proxy-acl.md)、人の決定 H5（需要が確認された project+origin に限り期限付き identity）
+- 関連: [ADR-0078](0078-browser-execution-capability.md) D8 P3-A、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H1・H3・H6、[ADR-0099](0099-browser-phase3-control-lease.md)、[ADR-0100](0100-browser-phase3-live-proxy-acl.md)、人の決定 H5（需要が確認された project+origin に限り期限付き identity）
 
 ## 範囲
 
@@ -35,7 +35,7 @@ tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]
 - ADR-0078 の契約どおり、Celeris は `--restore`・`--state`・`--profile`・CDP attach を agent に渡さない。action の allowlist も identity のために広げない（解除だけで対応しない）。
 - 0.38.1 の restore は origin 単位の絞り込みを持たないと仮定する（未検証）。そのままでは project/origin 単位の束縛と合わないので、identity の復元は agent の action ではなく、broker が run の開始前に行う別の経路にする。復元する state は D2-7 の検査を通ったものだけ。
 - 0.38.1 の restore の実際の挙動はこの ADR の時点で確かめていない。上の仮定は安全側（restore を使わない）に倒すための前提であり、配線の前に固定 version 上の負例で確かめる。
-- identity を復元した session は credential を注入した session と同じ扱いにし、session の終わりまで LLM の観測と Live View を止める（ADR-0080 H3、ADR-0082 D2-4）。
+- identity を復元した session は credential を注入した session と同じ扱いにし、session の終わりまで LLM の観測と Live View を止める（ADR-0080 H3、ADR-0100 D2-4）。
 
 ## 未実装（後続）
 

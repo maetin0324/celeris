@@ -1,4 +1,4 @@
-//! ADR-0094: the real shim (`browser_cli.py`) → `ActionServer` → store-backed `StoreGate` path.
+//! ADR-0113: the real shim (`browser_cli.py`) → `ActionServer` → store-backed `StoreGate` path.
 //! A fake action child stands in for sandboxd; no browser and no network are involved.
 use std::path::PathBuf;
 use std::process::Command;

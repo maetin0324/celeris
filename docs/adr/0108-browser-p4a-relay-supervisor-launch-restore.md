@@ -1,4 +1,4 @@
-# ADR-0088: P4-A 実結合 — netns 内中継・runtime supervisor・起動時回収・production 起動経路・稼働中 session への restore 結合
+# ADR-0108: P4-A 実結合 — netns 内中継・runtime supervisor・起動時回収・production 起動経路・稼働中 session への restore 結合
 
 ---
 tasks: [01M3QGRC542ZC23996DNCTHZF5]
@@ -6,11 +6,11 @@ tasks: [01M3QGRC542ZC23996DNCTHZF5]
 
 - 日付: 2026-09-29
 - 状態: Accepted（設計。実装と実 runtime の証拠は後続 unit。この ADR 自体は受入の証拠ではない）
-- 関連: [ADR-0084](0084-browser-phase4-isolation-injection-routing.md) D1/D2/D6、[ADR-0085](0085-browser-phase4-runtime-selection.md) 1/2/5、[ADR-0086](0086-browser-egress-transport.md) 1/4/7、[ADR-0087](0087-browser-p4a-same-uid-bwrap-runtime.md) D1〜D6、人の決定 p4a-uid
+- 関連: [ADR-0102](0102-browser-phase4-isolation-injection-routing.md) D1/D2/D6、[ADR-0103](0103-browser-phase4-runtime-selection.md) 1/2/5、[ADR-0104](0104-browser-egress-transport.md) 1/4/7、[ADR-0105](0105-browser-p4a-same-uid-bwrap-runtime.md) D1〜D6、人の決定 p4a-uid
 
 ## 文脈
 
-ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` だけ rw・CDP pipe）と事実採取は実プロセスで
+ADR-0105 の run で、実 bwrap runtime（6 namespace・ro root・`/session` だけ rw・CDP pipe）と事実採取は実プロセスで
 確認できた。reviewer は次の 3 点を未達とした。
 
 1. browser の `--proxy-server=http://127.0.0.1:3128` の先に何も無く、「fixture へは egress proxy 経由でだけ届く」
@@ -36,12 +36,12 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
   （FD 6。CDP の FD 3/4、`--info-fd` 5 と重ねない）として渡す **request channel** だけとする。
   - sandboxd は TCP 接続を 1 本 accept するごとに channel へ 1 byte の要求を送る。
   - controller は要求ごとに `socketpair(AF_UNIX, SOCK_STREAM)` を作り、一端を FD 3、管理者 policy（D4 参照）を
-    stdin にして `celeris-browser-egress` を起動し（ADR-0086 D7 の契約そのまま）、もう一端を `SCM_RIGHTS` で
+    stdin にして `celeris-browser-egress` を起動し（ADR-0104 D7 の契約そのまま）、もう一端を `SCM_RIGHTS` で
     sandboxd へ返す。sandboxd は accept した TCP とその unix stream の間で byte を中継するだけで、HTTP を解釈しない
     （検査は proxy だけが行う。sandboxd が侵害されても得られるのは「proxy を 1 本起動させる」能力だけ）。
   - controller は runtime ごとに同時 egress 数（既定 32）と要求 rate を制限し、超過分は unix stream を返さずに
-    閉じる（ADR-0086 D4 の「接続数（呼出し側）」をここで実装する）。channel の EOF は runtime 終了として扱う。
-- **ADR-0086 D1「proxy は host listener を開かない」を維持する**: proxy は相変わらず継承 FD 3 しか持たない。
+    閉じる（ADR-0104 D4 の「接続数（呼出し側）」をここで実装する）。channel の EOF は runtime 終了として扱う。
+- **ADR-0104 D1「proxy は host listener を開かない」を維持する**: proxy は相変わらず継承 FD 3 しか持たない。
   host 側には TCP listener も path を持つ unix socket も作らない（channel は無名 socketpair）。listener は
   browser の netns の loopback にだけあり、host の netns からも worker からも到達できない。
 - browser の netns には `lo` しか無いので、proxy を通らない通信（private IP・IPv6・DNS 直叩き・`--no-proxy`
@@ -49,7 +49,7 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
   ことの両方で示す**。
 - 却下: (a) sandbox に bind した path 付き unix socket に browser/relay が connect する — host の同一 UID の
   任意 process が同じ path に connect でき、host 側に listener を開くのと同じになる。(b) sandboxd が accept した
-  TCP fd 自体を SCM_RIGHTS で controller へ渡し、proxy の FD 3 にする — ADR-0086 D7 の「FD 3 は接続済み
+  TCP fd 自体を SCM_RIGHTS で controller へ渡し、proxy の FD 3 にする — ADR-0104 D7 の「FD 3 は接続済み
   AF_UNIX stream」を変えることになり、proxy の試験済み入力面が変わる。(c) slirp4netns/pasta で netns に
   外向き経路を作り proxy を host の port に置く — host listener が要り、proxy 迂回の経路も生まれる。
   (d) proxy を sandbox 内で動かす — DNS resolver への到達に netns の外への経路が要る。
@@ -77,9 +77,9 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
   - 理由: `PR_SET_PDEATHSIG` は親 **thread** の終了で発火する。tokio の `spawn_blocking` の thread は idle で
     終了するので、そこから起動すると runtime が理由なく殺される。async 側は `Supervisor` の handle
     （mpsc と状態）だけを持つ。
-- 起動: bwrap（ADR-0087 D1 の argv。command は sandboxd）を `process_group(0)` と `PR_SET_PDEATHSIG=SIGKILL`
+- 起動: bwrap（ADR-0105 D1 の argv。command は sandboxd）を `process_group(0)` と `PR_SET_PDEATHSIG=SIGKILL`
   で起動し、pre_exec で `getppid()` が spawn 前に控えた pid と違えば即 `_exit`（prctl 前に親が死んだ競合を塞ぐ）。
-  egress は pre_exec で `setpgid(0, bwrap_pgid)` により同じ process group に入れ、ADR-0086 D7 の自前の
+  egress は pre_exec で `setpgid(0, bwrap_pgid)` により同じ process group に入れ、ADR-0104 D7 の自前の
   PDEATHSIG も保つ。sandbox 内は bwrap の `--die-with-parent` と pid namespace（内側 pid 1 の死で全 process が
   SIGKILL される）で回収される。
 - 記録: sandboxd の ready（channel 上の 1 byte）を受けたら、D3 の記録 dir に `<session>.pid`（bwrap の
@@ -106,7 +106,7 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
 - `celeris::run` の `instance::Supervisor::start` が `Started::Running` を返した直後（`set_orphan_takeover` と同じ
   所）、dispatcher の最初の tick より前に呼ぶ。`Started::Duplicate` と `--mode verify` では呼ばない（他の稼働中
   instance の runtime を殺さない）。対象は「`daemon_instances` の freshness 切れ、または記録された pid が
-  `instance::pid_alive` で死んでいる instance」の dir だけで、各記録に ADR-0087 D4 の starttime 照合付き
+  `instance::pid_alive` で死んでいる instance」の dir だけで、各記録に ADR-0105 D4 の starttime 照合付き
   `reap_recorded` を適用し、空になった dir を消す。自分の dir は新規なので空。
 - 回収した数は `tracing::info!` に出す（pid と session id だけ。URL・policy は出さない）。
 - 却下: `shutdown_and_exit` での回収（SIGKILL では走らない）、dispatcher の orphan 回収 tick への相乗り（最初の
@@ -124,13 +124,13 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
 - agent-browser は sandbox の中で動かす: host の `agent-browser` を realpath で解決し、その install dir と同梱
   browser の dir だけを ro bind する（`$HOME` は bind しない）。env は `--clearenv` の後に `HOME=/session/home`、
   `XDG_RUNTIME_DIR=/session/run`、`AGENT_BROWSER_NAMESPACE=celeris` だけを設定し、agent-browser の daemon・control
-  socket は sandbox 内に置く（host の `/run/user` は見えない。ADR-0087 D1 のまま）。version 検査も sandbox 内で行う。
+  socket は sandbox 内に置く（host の `/run/user` は見えない。ADR-0105 D1 のまま）。version 検査も sandbox 内で行う。
 - harness 側 shim（`browser_cli.py`）は agent-browser を直接 exec せず、run dir（0700）の `action.sock` を通して
   supervisor に action を送る。supervisor は `policy.json` で action を検査し直し、channel 上の別 message 種別で
   sandboxd に渡す。sandboxd は固定の argv 形（`--config /session/upstream.json --session <id>
   --action-policy /session/policy.json --json <action> …`）だけを組み、`--restore`・`--state`・`--profile`・
   `--cdp`・`--executable-path` などの未許可 flag を含む要求は固定拒否する。**agent-browser 0.38.1 の
-  --restore/--state/--profile は使わない**（ADR-0084 D2 のまま）。
+  --restore/--state/--profile は使わない**（ADR-0102 D2 のまま）。
   - `action.sock` は同一 UID の process なら connect できるが、受け付けるのは worker がすでに shim で実行できる
     action の語彙だけで、broker・CDP・agent-browser の control socket には届かない。
 - egress policy: allowlist は task の effective policy の `allowed_domains`（443 のみ）から作り、resolver は
@@ -140,7 +140,7 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
 - live view: isolated runtime では host から browser に届く経路が無いので、live view URL は出さない（現行の
   credential 利用時と同じ扱い）。live view の再配線は本 ADR の範囲外。
 - 却下: host で agent-browser を動かし `--cdp` で sandbox の browser に繋ぐ（CDP を worker 側の process に渡す
-  ことになり ADR-0084 D1 の CDP 分離に反する）、controller が setns で sandbox に入って agent-browser を実行する
+  ことになり ADR-0102 D1 の CDP 分離に反する）、controller が setns で sandbox に入って agent-browser を実行する
   （bwrap の cap drop・seccomp の外で動く process ができる）、切替を設定の既定 off で導入する（production が
   隔離なしのまま残る）。
 - 未検証の前提: agent-browser 0.38.1 が host に無いため、その browser 起動時の proxy 指定方法・CDP の持ち方は
@@ -170,7 +170,7 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
      持たない場合）は `isolation_required`。
 - 決定 p4a-uid によりこの host では 3 で必ず拒否される。検査を緩める分岐・試験用の attestation 生成口は作らない。
 - **H3 と auth_section を変えない**: `AuthSectionObservationStop`、Phase 3 の auth_section 配線、ADR-0080 D3 の
-  認証後の観測停止、ADR-0084 D6 の未適合機密要求の起動前拒否、ADR-0085 3/4 の旧 IPC 固定拒否はそのまま。
+  認証後の観測停止、ADR-0102 D6 の未適合機密要求の起動前拒否、ADR-0103 3/4 の旧 IPC 固定拒否はそのまま。
   将来 restore が成功した session は認証済みとして扱い、ADR-0080 D3 と同じく観測 action を止める（弱める方向の
   変更はしない）。
 - 却下: dispatcher が run 開始時に restore を自動実行する（人の承認と session の対応が消える）、`FakeLive` の
@@ -184,15 +184,15 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
 
 ## 既存 ADR との関係（置換範囲）
 
-- ADR-0087 D3「browser の netns の TCP には何も listen しない」を、「netns 内の LISTEN は sandboxd の
+- ADR-0105 D3「browser の netns の TCP には何も listen しない」を、「netns 内の LISTEN は sandboxd の
   `127.0.0.1:3128` だけ（agent-browser 駆動時は agent-browser 自身が netns loopback に開くものを列挙して記録する）。
   host の netns・worker からはどれにも届かない」に置き換える。CDP を controller が持つ場合は pipe だけ、は維持。
-- ADR-0087 D4 の記録場所を D3 の instance 別 dir に、回収対象を bwrap の process group（egress を含む）に具体化する。
+- ADR-0105 D4 の記録場所を D3 の instance 別 dir に、回収対象を bwrap の process group（egress を含む）に具体化する。
   starttime 照合は変えない。
-- ADR-0087 D5 の判定順を D5 のとおり具体化する（拒否されるものは変わらない。開封は attestation の後のまま）。
-- ADR-0087 D6 の「次段の中継」を D1 で決める。ADR-0086 の決定は変えない（D1 は ADR-0086 D1/D7 の範囲内で配線する）。
-- ADR-0084 D1（CDP・broker・control IPC の分離）、D2（`--restore/--state/--profile` 不使用）、D6、ADR-0085 の各項は
-  変えない。ADR-0085 1 の専用 UID は、決定 p4a-uid によりこの host では同一 UID のまま（ADR-0087 と同じ）。
+- ADR-0105 D5 の判定順を D5 のとおり具体化する（拒否されるものは変わらない。開封は attestation の後のまま）。
+- ADR-0105 D6 の「次段の中継」を D1 で決める。ADR-0104 の決定は変えない（D1 は ADR-0104 D1/D7 の範囲内で配線する）。
+- ADR-0102 D1（CDP・broker・control IPC の分離）、D2（`--restore/--state/--profile` 不使用）、D6、ADR-0103 の各項は
+  変えない。ADR-0103 1 の専用 UID は、決定 p4a-uid によりこの host では同一 UID のまま（ADR-0105 と同じ）。
 
 ## 変えないもの
 
@@ -205,7 +205,7 @@ ADR-0087 の run で、実 bwrap runtime（6 namespace・ro root・`/session` �
 - 良い: 出口が proxy だけであることを正例と負例の両方で実証でき、browser・sandboxd・proxy が 1 つの process
   group と pid namespace で回収される。restore の拒否が実 session・実 HTTP 経路で区別して試験できる。
 - 悪い: production で browser を使うには resolver の設定と agent-browser の導入が要る（それまで fail-closed）。
-  live view は isolated runtime で出ない。同一 UID の限界（ADR-0087 結果）は残り、機密解放は別 UID の実証まで拒否。
+  live view は isolated runtime で出ない。同一 UID の限界（ADR-0105 結果）は残り、機密解放は別 UID の実証まで拒否。
 - 後続 unit: egress-relay（D1）、restore-binding（D5）、supervisor（D2）、daemon-reap（D3）、prod-launch（D4）、
   evidence（実 runtime 証跡と PROGRESS・手順書）。
 

@@ -1,4 +1,4 @@
-//! ADR-0094: identity 復元の成功経路を**実** bwrap + chrome-headless-shell で確かめる。
+//! ADR-0114: identity 復元の成功経路を**実** bwrap + chrome-headless-shell で確かめる。
 //! `restore_isolated` で開封した state を `deliver_state` で controller の CDP（`Storage.setCookies`）
 //! にだけ投入し、controller から cookie が見えることを loopback の origin で確かめる。
 //!
@@ -454,7 +454,7 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
     rt.kill();
 }
 
-/// ADR-0080 H3 / ADR-0083 D4: 復元を受けた session は、session の終わりまで agent 由来の観測
+/// ADR-0080 H3 / ADR-0101 D4: 復元を受けた session は、session の終わりまで agent 由来の観測
 /// （snapshot・console・event）を拒否・破棄する。投入前は観測が通り、拒否された復元は停止に入らない。
 #[test]
 fn restored_session_refuses_agent_observation() {

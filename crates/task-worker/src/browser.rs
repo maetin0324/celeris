@@ -187,7 +187,7 @@ pub struct IsolatedBrowserConfig {
     pub bwrap: PathBuf,
     pub sandboxd: PathBuf,
     pub egress: PathBuf,
-    /// ADR-0088 D5: daemon が 1 つ作る稼働中 session の registry（API と共有）。
+    /// ADR-0108 D5: daemon が 1 つ作る稼働中 session の registry（API と共有）。
     pub live_sessions: Option<std::sync::Arc<task_core::browser_isolation::LiveSessions>>,
 }
 
@@ -503,7 +503,7 @@ impl EventSink for BrowserSink<'_> {
 }
 
 /// Production live sink: the scrubbed event goes to the session's persisted live log
-/// through the run's `EventSink` (ADR-0082).
+/// through the run's `EventSink` (ADR-0100).
 pub(crate) struct EventSinkLive<'a> {
     pub(crate) sink: &'a dyn EventSink,
     pub(crate) run_id: String,
@@ -778,7 +778,7 @@ fn existing_backends(declared: &BTreeSet<Capability>) -> Vec<BackendDescriptor> 
         .collect()
 }
 
-/// Adapter ids that can carry the browser capability (ADR-0085 D2).
+/// Adapter ids that can carry the browser capability (ADR-0103 D2).
 pub const BROWSER_BACKEND_IDS: [&str; 3] = ["acp", "claude-code", "browser-specialist"];
 
 /// The operator-supplied runner ledger (`CELERIS_BROWSER_CONFORMANCE_FILE`), if configured.
@@ -786,7 +786,7 @@ pub fn conformance_record_path() -> Option<PathBuf> {
     std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").map(PathBuf::from)
 }
 
-/// ADR-0089 D1: adapter ids whose runner-recorded conformance certifies every declared public
+/// ADR-0109 D1: adapter ids whose runner-recorded conformance certifies every declared public
 /// capability at the supported substrate version. A missing, corrupt or stale ledger fails closed
 /// (the caller gets the error and must not offer any fallback).
 pub fn conformant_backend_ids(record_path: &Path) -> Result<BTreeSet<String>, AdapterError> {
@@ -865,7 +865,7 @@ fn route_existing_backend(
     Ok(decision)
 }
 
-/// ADR-0093 D3: even with a ledger that certifies the sensitive capabilities, a launch needs
+/// ADR-0112 D3: even with a ledger that certifies the sensitive capabilities, a launch needs
 /// the configured isolated runtime (bwrap, sandboxd, egress and a resolver). The ledger never
 /// substitutes for it.
 fn isolated_runtime_ready(
@@ -1197,7 +1197,7 @@ async fn run_with_executable_attempt(
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
         .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
-    // ADR-0094: every shim-issued agent action passes the store-backed control gate.
+    // ADR-0113: every shim-issued agent action passes the store-backed control gate.
     let control_gate = sink
         .browser_control_gate(run_id, &session)
         .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
@@ -1246,7 +1246,7 @@ async fn run_with_executable_attempt(
         crate::browser_supervisor::SupervisorOptions::new(&isolation.record_dir);
     supervisor_opts.registry = isolation.live_sessions.clone();
     supervisor_opts.live_key = Some((req.task.id.to_string(), run_id.to_owned()));
-    // ADR-0080 H3 / ADR-0083 D4: 復元を受けたら session の終わりまで LiveEmitter も止まる。
+    // ADR-0080 H3 / ADR-0101 D4: 復元を受けたら session の終わりまで LiveEmitter も止まる。
     let observation_stop = supervisor_opts.observation_stop.clone();
     let mut supervisor = crate::browser_supervisor::Supervisor::start(spec, supervisor_opts)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
@@ -1268,7 +1268,7 @@ async fn run_with_executable_attempt(
             return Err(AdapterError::Other("isolated_runtime_unavailable".into()));
         }
     };
-    // ADR-0094 D1: identity 復元の state は controller の CDP にだけ投入する。
+    // ADR-0114 D1: identity 復元の state は controller の CDP にだけ投入する。
     supervisor.attach_controller(shared_cdp.controller());
     let broker_session = match (&approved, credentials) {
         (Some(_), Some(sup)) => Some(

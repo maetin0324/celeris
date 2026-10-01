@@ -19,6 +19,6 @@ tempfile = "3"
 celeris-credentiald = { path = ".", features = ["same-uid-harness"] }
 
 [features]
-# ADR-0089 D6: test-only admission (runtime facts whose only violation is
+# ADR-0109 D6: test-only admission (runtime facts whose only violation is
 # SameUid). Never enabled by default or in release builds.
 same-uid-harness = []

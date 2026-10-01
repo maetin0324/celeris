@@ -169,7 +169,7 @@ def backend_run(backend, command, agent_browser, origin, root, protocol_scripted
     }
 
 
-# ADR-0093: P4-B trusted injection evidence. Mirrors task_core::browser_backend.
+# ADR-0112: P4-B trusted injection evidence. Mirrors task_core::browser_backend.
 P4B_ATTACK_MARKS = (
     "A0", "A1", "A2", "A3", "A3b", "A4", "A5", "A6", "A7", "A7a", "A8", "A8n", "A9", "A9a",
     "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17",
@@ -235,7 +235,7 @@ def p4b_evidence(ledger_path, backends, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--p4b-evidence", metavar="LEDGER",
-                        help="add P4-B attack/H3 test evidence to this measured ledger (ADR-0093)")
+                        help="add P4-B attack/H3 test evidence to this measured ledger (ADR-0112)")
     parser.add_argument("--p4b-backend", action="append", default=[],
                         help="backend id that receives the P4-B evidence (repeatable)")
     parser.add_argument("--agent-browser", default="agent-browser")

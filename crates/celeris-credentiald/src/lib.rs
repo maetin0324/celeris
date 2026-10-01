@@ -1,4 +1,4 @@
-//! Local credential broker. Legacy plugin secret retrieval is disabled (ADR-0085).
+//! Local credential broker. Legacy plugin secret retrieval is disabled (ADR-0103).
 #![cfg(unix)]
 
 use chacha20poly1305::{
@@ -123,11 +123,11 @@ pub struct CredentialPolicy {
     pub max_ttl_seconds: u64,
     pub require_approval: bool,
     pub allow_persistence: bool,
-    /// ADR-0091 D2: 管理者が設定するログイン URL（`exact_origin` 直下）。モデル・worker は指定できない。
+    /// ADR-0110 D2: 管理者が設定するログイン URL（`exact_origin` 直下）。モデル・worker は指定できない。
     /// 旧い policy は欄が無くても読めるが、trusted selector が無いので注入は拒否される。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_url: Option<String>,
-    /// 管理者が設定する top-level の password 欄 selector（ADR-0091 D2 の文法）。
+    /// 管理者が設定する top-level の password 欄 selector（ADR-0110 D2 の文法）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_selector: Option<String>,
     /// 管理者が設定する任意の submit selector（同じ文法）。
@@ -984,7 +984,7 @@ impl Broker {
     pub fn provider(&self) -> &ManualProvider {
         &self.manual
     }
-    /// ADR-0091 D2 照合 3: lease が保持する policy 断面の trusted password selector を消費せずに読む。
+    /// ADR-0110 D2 照合 3: lease が保持する policy 断面の trusted password selector を消費せずに読む。
     /// lease が無ければ `None`（その拒否は消費の段で出す）。
     pub(crate) fn lease_trusted_selector(&self, lease_id: &str) -> Option<Option<String>> {
         let s = self.state.lock().ok()?;
@@ -997,7 +997,7 @@ impl Broker {
                 .map(str::to_owned),
         )
     }
-    /// ADR-0089 D3 step 5: the trusted-injection path consumes a lease without a
+    /// ADR-0109 D3 step 5: the trusted-injection path consumes a lease without a
     /// plugin binding. Same lease checks as [`Broker::resolve`]; the durable
     /// consume is committed before the provider is contacted.
     pub(crate) fn consume_for_injection(
@@ -1067,7 +1067,7 @@ impl Broker {
         };
         Ok((req.reference, context, provider))
     }
-    /// Non-secret injection decision record (ADR-0089 D1 audit).
+    /// Non-secret injection decision record (ADR-0109 D1 audit).
     pub(crate) fn audit_injection(&self, record: &serde_json::Value) -> Result<(), Error> {
         let mut s = self.state.lock().map_err(|_| Error::AuditUnavailable)?;
         check_dir(&self.audit_dir).map_err(|_| Error::AuditUnavailable)?;
@@ -1099,7 +1099,7 @@ impl Broker {
         Ok(())
     }
 }
-/// Lease-stage refusals of the injection path (ADR-0089 D3 step 5).
+/// Lease-stage refusals of the injection path (ADR-0109 D3 step 5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LeaseDenied {
     Expired,

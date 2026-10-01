@@ -1,4 +1,4 @@
-//! ADR-0081 D3 / ADR-0082 / ADR-0080 H3: browser 実行に P3-C の制御 gate と live event の出口を挟む。
+//! ADR-0099 D3 / ADR-0100 / ADR-0080 H3: browser 実行に P3-C の制御 gate と live event の出口を挟む。
 //!
 //! - `ControlGate`: agent の browser 操作の直前に問い合わせる。`AgentRunning` 以外では新しい操作を出さない。
 //!   pause は実行中の操作の完了を待って `Paused` に収束する。lease 切れ・切断で自動再開しない。
@@ -95,7 +95,7 @@ impl ControlGate for InMemoryGate {
     }
 }
 
-/// ADR-0094 D2: store の control 状態を正とする gate（task-api の `agent/begin`・`agent/end` と同じ op）。
+/// ADR-0114 D2: store の control 状態を正とする gate（task-api の `agent/begin`・`agent/end` と同じ op）。
 /// store の読み書きに失敗したら操作を出さない側に倒す。
 pub struct StoreGate {
     store: Arc<dyn task_core::browser_wait::BrowserWaitStore + Send + Sync>,
@@ -214,7 +214,7 @@ impl LiveSink for CollectingSink {
 pub struct LiveEmitter<S: LiveSink> {
     sink: S,
     auth_depth: Mutex<u32>,
-    /// ADR-0080 H3 / ADR-0083 D4: identity の復元を受けた session。立ったら session の終わりまで
+    /// ADR-0080 H3 / ADR-0101 D4: identity の復元を受けた session。立ったら session の終わりまで
     /// 認証区間と同じく event・progress・artifact を捨てる（戻す口は無い）。
     restored: Arc<AtomicBool>,
 }

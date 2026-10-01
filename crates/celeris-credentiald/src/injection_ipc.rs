@@ -1,4 +1,4 @@
-//! ADR-0089 D1〜D3: injection-only IPC（`injection.sock`）。
+//! ADR-0109 D1〜D3: injection-only IPC（`injection.sock`）。
 //!
 //! 役割は `SO_PEERCRED` の peer から broker が決める（自己申告は読まない）。照合は D3 の順に行い、
 //! 最初の失敗で止まる。lease 消費（step 5）より前の拒否は lease を消費せず provider を呼ばない。
@@ -19,7 +19,7 @@ use zeroize::Zeroize;
 pub use crate::injection::PeerRole;
 use crate::injection::{RedisplayGuard, RedisplayGuardWire};
 
-/// 要求 frame の上限（ADR-0089 D1）。
+/// 要求 frame の上限（ADR-0109 D1）。
 pub const MAX_REQUEST: usize = 16 * 1024;
 /// 読み取り・sink 応答の期限。
 pub const IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -147,7 +147,7 @@ pub struct InjectionReply {
     pub receipt: Option<InjectionReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
-    /// ADR-0092: 注入した値の再表示 guard（salt・digest・長さだけ）。receipt の外に置き、
+    /// ADR-0111: 注入した値の再表示 guard（salt・digest・長さだけ）。receipt の外に置き、
     /// controller は保持するだけで agent・worker へは渡さない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redisplay_guard: Option<RedisplayGuardWire>,
@@ -294,7 +294,7 @@ impl LiveRegistry {
 pub enum Admission {
     /// `/proc/<runtime_pid>` から事実を採り直し、`verify_isolation` の attestation を要求する。
     Attested,
-    /// 試験専用（ADR-0089 D6）: 違反が `SameUid` だけの runtime を通す。attestation は作らない。
+    /// 試験専用（ADR-0109 D6）: 違反が `SameUid` だけの runtime を通す。attestation は作らない。
     #[cfg(feature = "same-uid-harness")]
     SameUidHarness,
     /// 試験専用: `SameUidHarness` の判定に、試験が与えた事実を使う（fake の事実は D5 の証拠にしない）。
@@ -694,12 +694,12 @@ impl InjectionService {
         if section.auth_section_id != req.auth_section_id || section.lease_id != req.lease_id {
             return Err(InjectCode::AuthSectionMismatch);
         }
-        // 4b. trusted selector（ADR-0091 D2 照合 3）: lease が保持する管理者 policy の selector だけが出所。
+        // 4b. trusted selector（ADR-0110 D2 照合 3）: lease が保持する管理者 policy の selector だけが出所。
         // 要求の selector は byte 一致でなければ拒否し、lease は消費しない。policy に selector が無ければ注入しない。
         // lease が無い場合は順 5 が `lease_invalid` を返す。
         if let Some(pinned) = self.broker.lease_trusted_selector(&req.lease_id) {
             let pinned = pinned.ok_or(InjectCode::TrustedSelectorMissing)?;
-            // username 欄の trusted selector は ADR-0091 の範囲外（未解決）。password 欄だけ照合する。
+            // username 欄の trusted selector は ADR-0110 の範囲外（未解決）。password 欄だけ照合する。
             if req.field == Field::Password && pinned.as_bytes() != req.selector.as_bytes() {
                 return Err(InjectCode::SelectorMismatch);
             }

@@ -1,4 +1,4 @@
-# ADR-0085: Phase 4 の runtime・specialist 採用と旧秘密返却 IPC の廃止
+# ADR-0103: Phase 4 の runtime・specialist 採用と旧秘密返却 IPC の廃止
 
 ---
 tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
@@ -6,7 +6,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
 
 - 日付: 2026-09-29
 - 状態: Accepted（方式選択と拒否境界。P4-A/B/C の完成を意味しない）
-- 関連: [ADR-0084](0084-browser-phase4-isolation-injection-routing.md)、[ADR-0083](0083-browser-phase3-identity-contract.md)
+- 関連: [ADR-0102](0102-browser-phase4-isolation-injection-routing.md)、[ADR-0101](0101-browser-phase3-identity-contract.md)
 
 ## 決定
 

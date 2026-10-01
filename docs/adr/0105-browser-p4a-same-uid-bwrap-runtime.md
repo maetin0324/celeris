@@ -1,11 +1,11 @@
-# ADR-0087: P4-A isolated runtime は同一 host UID の bubblewrap で組み、別 UID までは機密解放しない
+# ADR-0105: P4-A isolated runtime は同一 host UID の bubblewrap で組み、別 UID までは機密解放しない
 
 - 状態: 採用（2026-09-29、人の決定 p4a-uid に従う）
-- 関連: ADR-0083 D3、ADR-0084 D1/D4、ADR-0085 D1、ADR-0086
+- 関連: ADR-0101 D3、ADR-0102 D1/D4、ADR-0103 D1、ADR-0104
 
 ## 文脈
 
-ADR-0085 D1 は bubblewrap + 専用 UID を選んだ。この host では rmaeda の subuid（165536:65536）が親 user namespace の
+ADR-0103 D1 は bubblewrap + 専用 UID を選んだ。この host では rmaeda の subuid（165536:65536）が親 user namespace の
 uid_map の外にあり、newuidmap が EPERM になる。人の決定 p4a-uid は「この host では同一 host UID のまま
 user/pid/net/mount/ipc/uts namespace・read-only root・egress・分離・orphan 回収を実装して試験し、別 host UID の
 実証は docs/ops の手順書に切り出す。restore_isolated など機密能力は別 UID の実証まで拒否のまま」とした。
@@ -32,7 +32,7 @@ user/pid/net/mount/ipc/uts namespace・read-only root・egress・分離・orphan
   attestation を返す。`BrowserIdentityService::restore_for_session` はこれを経由してだけ `restore_isolated` を呼び、
   session 死亡・session id 不一致・隔離違反なら拒否する。agent-browser 0.38.1 の `--restore/--state/--profile`
   は使わない。
-- D6 egress: browser の唯一の出口は `--proxy-server` の netns 内 loopback で、その先を ADR-0086 の
+- D6 egress: browser の唯一の出口は `--proxy-server` の netns 内 loopback で、その先を ADR-0104 の
   celeris-browser-egress（継承 socket）に繋ぐ。netns 内 listener と host 側 unix socket の中継は本 ADR の次段で、
   中継が無い間の browser は loopback 以外へ出られない（閉じている側に倒れる）。
 

@@ -191,14 +191,14 @@ pub(super) fn validate_providers(
                 p.id
             )));
         }
-        // ADR-0026 D2 / ADR-0087: `command`/`args` は ACP と browser-specialist の行で意味を持つ。他のアダプタに書いたら
+        // ADR-0026 D2 / ADR-0106: `command`/`args` は ACP と browser-specialist の行で意味を持つ。他のアダプタに書いたら
         // 静かに無視せず設定エラーにする（書いた本人の勘違いを早く見つけるため）。
         if p.adapter != task_worker::AcpAdapter::ID
             && p.adapter != task_worker::BrowserSpecialistAdapter::ID
             && (p.command.is_some() || p.args.is_some())
         {
             return Err(ConfigError::Invalid(format!(
-                "provider {}: command/args are only allowed when adapter = \"acp\" or \"browser-specialist\" (ADR-0087)",
+                "provider {}: command/args are only allowed when adapter = \"acp\" or \"browser-specialist\" (ADR-0106)",
                 p.id
             )));
         }

@@ -4,7 +4,7 @@
 tasks: [01M3MZKB3DFYJNBH015MJGQ0BT, 01M3Q49ZTST3XQ9DGF6AGNR0XG]
 ---
 
-`celeris-credentiald` は [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) のローカル broker である。起動は `celeris-credentiald serve <control-client-pid>...`。`XDG_RUNTIME_DIR` が所有者の 0700 directory でなければ起動を拒否し、`$XDG_RUNTIME_DIR/celeris-credentiald/{control,resolve}.sock` を 0600 で作る。control は起動時に列挙した PID と process start time に限定し、resolve は同一 UID の呼出しにも `trusted_injection_required` を返す（[ADR-0085](adr/0085-browser-phase4-runtime-selection.md)）。control 許可 PID や有効な binding/lease を持っていても秘密返却は認めない。両 socket は一接続につき一つの JSON request/response を扱い、request は write 側を閉じて終える。request は 64 KiB 以下にする。
+`celeris-credentiald` は [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) のローカル broker である。起動は `celeris-credentiald serve <control-client-pid>...`。`XDG_RUNTIME_DIR` が所有者の 0700 directory でなければ起動を拒否し、`$XDG_RUNTIME_DIR/celeris-credentiald/{control,resolve}.sock` を 0600 で作る。control は起動時に列挙した PID と process start time に限定し、resolve は同一 UID の呼出しにも `trusted_injection_required` を返す（[ADR-0103](adr/0103-browser-phase4-runtime-selection.md)）。control 許可 PID や有効な binding/lease を持っていても秘密返却は認めない。両 socket は一接続につき一つの JSON request/response を扱い、request は write 側を閉じて終える。request は 64 KiB 以下にする。
 
 手動 provider の鍵は `~/.config/celeris/credentiald/keys/master-v1.key`、暗号文は `~/.local/celeris/credentiald/vault/<credential_id>.json`、journal は `~/.local/celeris/credentiald/audit/journal.jsonl` に置く。専用 directory は 0700、ファイルは 0600。control の `initialize_key` は明示的な初回操作であり、暗号文が残る状態の鍵欠落を復旧しない。`register` は `reference`、`policy`、`revision`、`secret: {username,password}` を受け、更新時は ciphertext だけを atomic rename する。`grant` は承認を確認した信頼済み制御側が `LeaseRequest` を送る。broker は approval ID と actor ID を記録するが、承認の真正性は control 側が確定する。`bind` は task/run/session/exact origin/policy hash/expiry を登録し、生成した予測不能な token を返す。`revoke` は未使用 lease を失効させる。
 
@@ -37,7 +37,7 @@ systemctl --user enable --now celeris-credentiald@<release>
 
 ## Phase 2 当時の結線（現在の認証利用経路ではない）
 
-以下は過去の実装と実機試験の記録。現在は ADR-0084 D6 により `CredentialUse` を含む要求を worker 起動前に拒否し、さらに ADR-0085 により旧 IPC/bridge での秘密取得を拒否する。登録・承認・保管 API の動作は維持する。旧 login 成功試験は現在の P4-B 受入証拠ではなく、`scripts/browser-auth-login-check.py` も旧 protocol のため現在は login 成功を期待できない。
+以下は過去の実装と実機試験の記録。現在は ADR-0102 D6 により `CredentialUse` を含む要求を worker 起動前に拒否し、さらに ADR-0103 により旧 IPC/bridge での秘密取得を拒否する。登録・承認・保管 API の動作は維持する。旧 login 成功試験は現在の P4-B 受入証拠ではなく、`scripts/browser-auth-login-check.py` も旧 protocol のため現在は login 成功を期待できない。
 
 1. worker の `request-credential <policy-id> <exact-HTTPS-origin> <purpose>` は policy を再検証し、browser を閉じて `WAITING_FOR_AUTH`（task は Blocked）を作る。登録依頼は `GET /api/v1/browser/waits` に出る。
 2. 人が API/GUI で登録すると秘密は control socket 経由で broker にだけ渡り、task は Ready に戻る。次の run は browser を起動せずに `WAITING_FOR_APPROVAL` を作る。session ID はこの時点で予約される。

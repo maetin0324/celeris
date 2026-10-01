@@ -1,4 +1,4 @@
-//! ADR-0088 D1: netns 内 listener と sandbox 外 controller の間の request channel。
+//! ADR-0108 D1: netns 内 listener と sandbox 外 controller の間の request channel。
 //!
 //! channel は controller が作る無名の `SOCK_SEQPACKET` socketpair で、sandbox 側は継承 FD 6。
 //! sandboxd → controller は 1 byte（[`READY`] / [`CONNECT`]）、controller → sandboxd は

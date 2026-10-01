@@ -1,4 +1,4 @@
-//! ADR-0087（P4-A）: 実 bubblewrap runtime を起動し、host 側で事実を採って検査する。
+//! ADR-0105（P4-A）: 実 bubblewrap runtime を起動し、host 側で事実を採って検査する。
 //! 同一 host UID の決定（p4a-uid）で実行する。外部ネットワークには出ない（netns に経路が無い）。
 //! bwrap か browser が無い環境では失敗する（成功扱いにしない）。明示的に
 //! `CELERIS_ISOLATION_TESTS=skip` を与えた時だけ飛ばし、その旨を stderr に出す。

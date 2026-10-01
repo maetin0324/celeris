@@ -1,4 +1,4 @@
-//! ADR-0089 D5: attack matrix A1-A17 against a real broker, real CDP pipe and real
+//! ADR-0109 D5: attack matrix A1-A17 against a real broker, real CDP pipe and real
 //! chrome-headless-shell in a network namespace with no external route.
 //! Missing prerequisites fail (no skip).
 use celeris_credentiald::injection_ipc::{
@@ -1433,7 +1433,7 @@ fn a7_a8_a9_a10_observation(ctx: &mut Ctx) {
     ctx.check_journal("A7-A10");
 }
 
-/// A8 observation paths (ADR-0092): snapshot text, full HTML, DOM tree and
+/// A8 observation paths (ADR-0111): snapshot text, full HTML, DOM tree and
 /// accessibility tree. Each must be discarded with `redisplay_detected`.
 const A8_PATHS: &[(&str, &str)] = &[
     (
@@ -1663,7 +1663,7 @@ fn real_browser_injection_attack_matrix() {
             "missing ATTACK-{m}-OK\n{stderr}"
         );
     }
-    // A8 (ADR-0092): a pass, never a reported gap.
+    // A8 (ADR-0111): a pass, never a reported gap.
     assert!(
         stderr.contains("ATTACK-A8-OK") && !stderr.contains("ATTACK-A8-GAP"),
         "A8 not passed\n{stderr}"

@@ -1,4 +1,4 @@
-//! ADR-0089 D4: real bwrap/browser CDP injection against a fixture in a
+//! ADR-0109 D4: real bwrap/browser CDP injection against a fixture in a
 //! network namespace with no external route. Missing prerequisites fail.
 use std::ffi::OsString;
 use std::io::{Read, Write};

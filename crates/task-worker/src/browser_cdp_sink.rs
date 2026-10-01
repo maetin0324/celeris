@@ -1,4 +1,4 @@
-//! ADR-0089 D4: controller owned CDP pipe and one way broker sink.
+//! ADR-0109 D4: controller owned CDP pipe and one way broker sink.
 //!
 //! The controller never receives a credential in an IPC response. The broker
 //! writes one CDP command to a private seqpacket socket; its bytes are forwarded
@@ -36,7 +36,7 @@ pub enum InjectionError {
     RedisplayField,
     TargetChanged,
     SinkFailed,
-    /// ADR-0092: an agent observation re-displayed an injected value; it was discarded.
+    /// ADR-0111: an agent observation re-displayed an injected value; it was discarded.
     RedisplayDetected,
     BrokerRejected(&'static str),
 }
@@ -240,15 +240,15 @@ pub struct CdpController {
     buffered: Vec<u8>,
     next_id: u64,
     auth_section: Option<String>,
-    /// ADR-0080 H3 / ADR-0083 D4: identity の復元を受けた session。session（= controller）の
+    /// ADR-0080 H3 / ADR-0101 D4: identity の復元を受けた session。session（= controller）の
     /// 終わりまで agent の観測を止める。解除する口は無い。
     restored: bool,
     injected: Vec<(String, String, String, String)>,
     events: Vec<Value>,
     redirect_seen: bool,
-    /// ADR-0092: one guard per injected value, kept for the controller's (= session's) lifetime.
+    /// ADR-0111: one guard per injected value, kept for the controller's (= session's) lifetime.
     guards: Vec<RedisplayGuard>,
-    /// Test-only (ADR-0089 A1): navigate the page after all checks and before the
+    /// Test-only (ADR-0109 A1): navigate the page after all checks and before the
     /// broker's `Runtime.callFunctionOn` frame is written. Absent from production builds.
     #[cfg(feature = "attack-test-hooks")]
     retarget_before_sink: Option<String>,
@@ -272,7 +272,7 @@ impl CdpController {
         }
     }
 
-    /// Test-only (ADR-0089 A1): the next injection navigates its page session to `url`
+    /// Test-only (ADR-0109 A1): the next injection navigates its page session to `url`
     /// after the controller's checks and before the broker's command reaches CDP.
     #[cfg(feature = "attack-test-hooks")]
     pub fn retarget_before_sink_for_test(&mut self, url: String) {
@@ -368,7 +368,7 @@ impl CdpController {
         Ok(reply)
     }
 
-    /// ADR-0092: whether an observation carries an injected value in any
+    /// ADR-0111: whether an observation carries an injected value in any
     /// representation the guard decodes (raw, percent, UTF-16LE, base64, JSON escape).
     fn redisplayed(&self, observation: &Value) -> bool {
         self.guards.iter().any(|g| g.exposes_json(observation))
@@ -705,7 +705,7 @@ impl CdpController {
 }
 
 fn broker_denial(reply: &Value) -> InjectionError {
-    // Only the broker's fixed ADR-0089 vocabulary may cross this boundary.
+    // Only the broker's fixed ADR-0109 vocabulary may cross this boundary.
     let code = match reply["code"].as_str() {
         Some("invalid_request") => "invalid_request",
         Some("unsupported_version") => "unsupported_version",

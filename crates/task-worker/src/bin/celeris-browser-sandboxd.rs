@@ -1,4 +1,4 @@
-//! ADR-0088 D1: sandbox の最初の process。netns の `127.0.0.1:3128` を listen してから
+//! ADR-0108 D1: sandbox の最初の process。netns の `127.0.0.1:3128` を listen してから
 //! argv の browser（または probe）を子として起動し、accept した TCP を controller が
 //! 返す unix stream（celeris-browser-egress の FD 3 の相手）へ byte 単位で中継する。
 //! HTTP は解釈しない。listen できなければ子を起動せずに固定コードで終わる。

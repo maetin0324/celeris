@@ -1,8 +1,8 @@
-# ADR-0094: P3-C control gate を shim の action server に配線する
+# ADR-0113: P3-C control gate を shim の action server に配線する
 
 - Status: accepted
 - Date: 2026-09-30
-- 関連: ADR-0081 D3（control 状態機械）、ADR-0080 H3（認証区間）、ADR-0088 D4（shim → action socket）、ADR-0084 D6
+- 関連: ADR-0099 D3（control 状態機械）、ADR-0080 H3（認証区間）、ADR-0108 D4（shim → action socket）、ADR-0102 D6
 
 ## 文脈
 `task_worker::browser_live::run_gated` と `ControlGate` は意味論の単体試験しかなく、harness の shim
@@ -11,7 +11,7 @@
 agent 操作が browser に届き得た。
 
 ## 決定
-- D1: gate の位置は worker の `ActionServer::serve`（ADR-0088 D4 の private socket の受け口）とする。
+- D1: gate の位置は worker の `ActionServer::serve`（ADR-0108 D4 の private socket の受け口）とする。
   shim は同 UID で改ざんできるので、shim 内の検査に頼らない。検証済みの要求を `/session/actions` に
   書く直前に `run_gated` を通す。supervisor 自身の `__version__`（trusted、agent 操作ではない）は gate しない。
 - D2: gate の状態は store が正。`StoreGate` は `BrowserWaitStore::browser_session_agent_action`
@@ -24,7 +24,7 @@ agent 操作が browser に届き得た。
   `StoreGate` を返す。store の読み書き失敗も「操作を出さない」側に倒す。
 - D4: `Stopped` を観測したら `SessionCloser` として action child に `close` を 1 度だけ書き
   （cancel の `spawn_close` と同じ upstream close）、その要求は出さない。
-- D5: H3（認証区間中の LLM 観測停止）・approve_once・短い lease・ADR-0084 D6 の起動前拒否は変えない。
+- D5: H3（認証区間中の LLM 観測停止）・approve_once・短い lease・ADR-0102 D6 の起動前拒否は変えない。
   gate は既存の拒否に追加で掛かるだけである。
 
 ## 帰結

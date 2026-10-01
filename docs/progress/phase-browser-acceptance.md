@@ -4,7 +4,7 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 出典: [phase-browser.md](phase-browser.md)・[phase-browser-2.md](phase-browser-2.md)・[phase-browser-3.md](phase-browser-3.md)・[phase-browser-4.md](phase-browser-4.md)、
 [ADR-0078](../adr/0078-browser-execution-capability.md) D8、[ADR-0080](../adr/0080-browser-phase2-policy-broker-approval.md) D1〜D8、
-[ADR-0084](../adr/0084-browser-phase4-isolation-injection-routing.md)〜ADR-0088。後続 task は [browser-followups.md](browser-followups.md)（決定 sep-uid=a）。
+[ADR-0102](../adr/0102-browser-phase4-isolation-injection-routing.md)〜ADR-0108。後続 task は [browser-followups.md](browser-followups.md)（決定 sep-uid=a）。
 
 表の規則:
 
@@ -79,7 +79,7 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 | P4-C-2 | 同一 fixture 比較（fixture が宣言能力を認定し、混ざった fixture は比べない） | 合格 | cmd: `cargo test -p task-core --lib fixture_certifies_declared_capabilities` test: `fixture_certifies_declared_capabilities`<br>cmd: `cargo test -p task-core --lib same_task_evaluation_ranks_and_refuses_mixed_fixtures` test: `same_task_evaluation_ranks_and_refuses_mixed_fixtures` |
 | P4-C-3 | 能力を失わない fallback（新しい session、適合しない backend には渡さない） | 合格 | cmd: `cargo test -p task-core --lib fallback_after_failure_never_drops_capability` test: `fallback_after_failure_never_drops_capability`<br>cmd: `cargo test -p task-worker --lib execution_fallback_uses_fresh_session_and_refuses_without_conformance` test: `execution_fallback_uses_fresh_session_and_refuses_without_conformance`<br>cmd: `cargo test -p task-worker --lib p4c_fallback_ledger_parsing_and_refusal` test: `p4c_fallback_ledger_parsing_and_refusal` |
 | P4-C-4 | browser-specialist は既存 harness を包んで同じ browser task を実行 | 合格 | cmd: `cargo test -p task-worker --lib specialist_wraps_existing_harness_and_runs_same_browser_task` test: `specialist_wraps_existing_harness_and_runs_same_browser_task`<br>cmd: `cargo test -p task-core --lib specialist_disabled_until_decision_reuses_existing_loop` test: `specialist_disabled_until_decision_reuses_existing_loop` |
-| P4-C-5 | 未適合の機密要求は substrate・harness・wait 作成の前に拒否（ADR-0084 D6） | 合格 | cmd: `cargo test -p task-worker --lib sensitive_backend_is_refused_before_substrate_harness_and_wait_creation` test: `sensitive_backend_is_refused_before_substrate_harness_and_wait_creation`<br>cmd: `cargo test -p task-core --lib sensitive_declaration_requires_p4a_and_p4b_conformance` test: `sensitive_declaration_requires_p4a_and_p4b_conformance`<br>cmd: `cargo test -p task-worker --lib released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime` test: `released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime` |
+| P4-C-5 | 未適合の機密要求は substrate・harness・wait 作成の前に拒否（ADR-0102 D6） | 合格 | cmd: `cargo test -p task-worker --lib sensitive_backend_is_refused_before_substrate_harness_and_wait_creation` test: `sensitive_backend_is_refused_before_substrate_harness_and_wait_creation`<br>cmd: `cargo test -p task-core --lib sensitive_declaration_requires_p4a_and_p4b_conformance` test: `sensitive_declaration_requires_p4a_and_p4b_conformance`<br>cmd: `cargo test -p task-worker --lib released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime` test: `released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime` |
 | P4-C-6 | 本番 routing での機密能力（CredentialInjection・IdentityRestore）を持つ backend の解放 | 後続 | task: 01M3SPN8HPHPWZ32F0AG986TWS。理由: sep-uid=a: P4-A/P4-B の本番適合（別 host UID 隔離と A13）が前提。それまで routing は機密要求を拒否する（P4-C-5） |
 
 ## P4-B 攻撃試験 A1〜A17
@@ -137,7 +137,7 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 ### H7
 
-決定: 固定 agent-browser 0.38.1 + 既存 harness の browser-specialist（ADR-0085 決定 2）。
+決定: 固定 agent-browser 0.38.1 + 既存 harness の browser-specialist（ADR-0103 決定 2）。
 
 - 実装: `crates/task-worker/src/browser.rs:25`（`SUPPORTED_VERSION = "0.38.1"`）、`crates/task-worker/src/browser.rs:1282`（sandbox 内の `--version` が一致しなければ承認消費前に起動拒否）
 - 実装: `crates/task-worker/src/browser_specialist.rs:14`（`browser-specialist` adapter）、`crates/task-core/src/browser_backend.rs:265`（routing: 明示 → browser-specialist → 既存 loop）
@@ -167,7 +167,7 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 ### H3
 
-決定（ADR-0080）: credential を注入した session の終わりまで LLM の観測（snapshot・console・event）と Live View を止める。ADR-0083 D4 は identity を復元した session も同じ扱いにする。
+決定（ADR-0080）: credential を注入した session の終わりまで LLM の観測（snapshot・console・event）と Live View を止める。ADR-0101 D4 は identity を復元した session も同じ扱いにする。
 
 frame 配線は 1 run に収まらないため実装せず、P3-B-2/3 を未達に直した。
 frame は現状 `LiveEmitter::emit` が捨てるため live proxy へ流れない。認証区間と復元 session での frame 停止は、後続の frame 配線と同時に実 process で試験する。

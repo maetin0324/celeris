@@ -1,4 +1,4 @@
-//! ADR-0089 D1〜D3: injection-only IPC の照合順・拒否コード・receipt。
+//! ADR-0109 D1〜D3: injection-only IPC の照合順・拒否コード・receipt。
 //!
 //! 実 socket（`injection.sock`、実 SO_PEERCRED、実 SCM_RIGHTS、実 SOCK_SEQPACKET の sink FD）で試す。
 //! 隔離の admission だけは試験 feature の `SameUidHarnessFacts`（与えた事実を verify_isolation に通す）で、
@@ -705,7 +705,7 @@ fn in_page_recheck_failure_is_target_changed_and_lease_stays_consumed() {
 
 #[test]
 fn request_selector_must_equal_the_admin_policy_selector_before_lease_use() {
-    // ADR-0091 D2 照合 3: 要求の selector は lease の policy 断面の管理者 selector と byte 一致でなければ
+    // ADR-0110 D2 照合 3: 要求の selector は lease の policy 断面の管理者 selector と byte 一致でなければ
     // `selector_mismatch`。順 4（auth section）の後・順 5（lease 消費）の前なので lease も provider も使わない。
     let mut fx = Fx::new(Admission::SameUidHarnessFacts(facts));
     let lease = fx.grant("sess-1", "k1", 60);

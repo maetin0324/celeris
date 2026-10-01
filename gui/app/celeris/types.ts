@@ -1861,7 +1861,7 @@ export interface BrowserWait {
   state: BrowserWaitState;
   task_id: TaskId;
   /**
-   * ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+   * ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
    */
   trusted_login?: TrustedLogin | null;
   version: number;
@@ -1888,7 +1888,7 @@ export interface OperationIntent {
   intent_id: string;
 }
 /**
- * ADR-0091 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を
+ * ADR-0110 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を
  * 承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。
  */
 export interface TrustedLogin {
@@ -1940,7 +1940,7 @@ export interface NewBrowserWait {
    * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
    */
   /**
-   * ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+   * ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
    */
   trusted_login?: TrustedLogin | null;
   ttl_secs?: number | null;

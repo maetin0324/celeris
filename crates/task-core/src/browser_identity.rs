@@ -1,4 +1,4 @@
-//! ADR-0083 D2: Browser Identity（P3-A）の束縛・期限・失効・混入拒否の規則。
+//! ADR-0101 D2: Browser Identity（P3-A）の束縛・期限・失効・混入拒否の規則。
 //!
 //! I/O も時計も暗号も持たない。呼び出し側が `now`（UNIX 秒）を渡す。ここが決めるのは
 //! 「どの identity をどの project/origin の browser session に戻してよいか」だけで、

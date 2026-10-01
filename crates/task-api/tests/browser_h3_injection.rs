@@ -116,7 +116,7 @@ fn world() -> World {
     let key = keypair();
     let app = task_api::router(env.state.clone().with_browser(BrowserApiConfig {
         attestation_public_key: Some(key.public_key().as_ref().to_vec()),
-        // ADR-0091 D2: the administrator's site policy is daemon configuration handed to the
+        // ADR-0110 D2: the administrator's site policy is daemon configuration handed to the
         // production control client; the HTTP registration cannot name a URL or selector.
         broker: Some(Arc::new(UnixCredentialBrokerControl {
             socket: control.clone(),
@@ -409,7 +409,7 @@ impl World {
             live: Mutex::default(),
         };
         let record = self.env.dir.path().join("empty-browser-conformance.json");
-        // ADR-0093: the P4-B cases count only with per-test evidence in the ledger.
+        // ADR-0112: the P4-B cases count only with per-test evidence in the ledger.
         let evidence: Vec<_> = [
             task_core::browser_backend::FixtureCase::InjectionAttackSuite,
             task_core::browser_backend::FixtureCase::AuthSectionObservationStop,

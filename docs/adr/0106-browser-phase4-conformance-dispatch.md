@@ -1,4 +1,4 @@
-# ADR-0087: P4-C の実測適合記録と実行時 fallback
+# ADR-0106: P4-C の実測適合記録と実行時 fallback
 
 ---
 tasks: [01M3QGRC6AQ81PWM1XP4C7BH45]
@@ -6,7 +6,7 @@ tasks: [01M3QGRC6AQ81PWM1XP4C7BH45]
 
 - 日付: 2026-09-29
 - 状態: Accepted（実装の受け入れは別途検証する）
-- 関連: [ADR-0084](0084-browser-phase4-isolation-injection-routing.md)、[ADR-0085](0085-browser-phase4-runtime-selection.md)
+- 関連: [ADR-0102](0102-browser-phase4-isolation-injection-routing.md)、[ADR-0103](0103-browser-phase4-runtime-selection.md)
 
 ## 決定
 

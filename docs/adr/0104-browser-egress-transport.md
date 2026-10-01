@@ -1,4 +1,4 @@
-# ADR-0086: Browser isolated runtime の egress transport
+# ADR-0104: Browser isolated runtime の egress transport
 
 ---
 tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
@@ -6,7 +6,7 @@ tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
 
 - 日付: 2026-09-29
 - 状態: Accepted（transport の実装。P4-A 全体の受入ではない）
-- 関連: [ADR-0085](0085-browser-phase4-runtime-selection.md)、[ADR-0084](0084-browser-phase4-isolation-injection-routing.md)
+- 関連: [ADR-0103](0103-browser-phase4-runtime-selection.md)、[ADR-0102](0102-browser-phase4-isolation-injection-routing.md)
 
 ## 決定
 

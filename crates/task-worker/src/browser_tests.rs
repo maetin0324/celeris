@@ -326,7 +326,7 @@ fn production_backend_route_checks_existing_loop_without_claiming_sensitive_capa
     assert!(route_existing_backend("acp", &public, &scripted).is_err());
 }
 
-/// ADR-0093: the P4-B ledger with per-test evidence, as `scripts/browser-conformance.py
+/// ADR-0112: the P4-B ledger with per-test evidence, as `scripts/browser-conformance.py
 /// --p4b-evidence` writes it, for `backends` only.
 fn p4b_record(dir: &Path, backends: &[&str], evidence: bool) -> PathBuf {
     use task_core::browser_backend::{
@@ -418,7 +418,7 @@ fn credential_policy(workspace: &Path) -> crate::browser_policy::PreparedBrowser
     .unwrap()
 }
 
-/// ADR-0093 D1/D2: CredentialUse is released only by a ledger carrying the P4-B measured
+/// ADR-0112 D1/D2: CredentialUse is released only by a ledger carrying the P4-B measured
 /// evidence; the same case names without evidence stay refused.
 #[test]
 fn credential_use_is_released_only_by_p4b_evidence_in_the_ledger() {
@@ -443,7 +443,7 @@ fn credential_use_is_released_only_by_p4b_evidence_in_the_ledger() {
     assert!(route_existing_backend("acp", &policy, &failed).is_err());
 }
 
-/// ADR-0093 D3: after the release, a backend without its own P4-B record and a runtime that is
+/// ADR-0112 D3: after the release, a backend without its own P4-B record and a runtime that is
 /// not isolated are still refused.
 #[test]
 fn released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime() {
@@ -2031,7 +2031,7 @@ mod live_wiring {
         assert_eq!(sink.progress.lock().unwrap().len(), 1);
     }
 
-    /// ADR-0080 H3 / ADR-0083 D4: identity の復元で立った旗の後は、`forward_events` が
+    /// ADR-0080 H3 / ADR-0101 D4: identity の復元で立った旗の後は、`forward_events` が
     /// progress・artifact・live event を流さず、session の終わりまで戻らない。
     #[test]
     fn browser_restored_session_forward_events_drops_until_session_end() {

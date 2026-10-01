@@ -1,4 +1,4 @@
-//! ADR-0081 D3: browser の pause・takeover・renew・resume・stop と、worker が参照する状態取得。
+//! ADR-0099 D3: browser の pause・takeover・renew・resume・stop と、worker が参照する状態取得。
 //!
 //! 人の操作は Live View と同じ署名付き assertion を要し、lease の holder は
 //! assertion の owner session に固定する（本人の session だけ）。遷移は store の

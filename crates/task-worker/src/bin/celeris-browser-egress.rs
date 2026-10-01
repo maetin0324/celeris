@@ -1,4 +1,4 @@
-//! One inherited connection, one proxy process (ADR-0086).
+//! One inherited connection, one proxy process (ADR-0104).
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;

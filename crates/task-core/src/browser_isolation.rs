@@ -1,9 +1,9 @@
-//! ADR-0084 P4-A: isolated browser runtime の契約・検査・egress 判定・orphan 回収。
+//! ADR-0102 P4-A: isolated browser runtime の契約・検査・egress 判定・orphan 回収。
 //!
 //! I/O も時計も持たない。runtime の起動側（worker）が観測した事実（[`RuntimeFacts`]）を渡し、
 //! ここが「隔離が証明されたか」を決める。証明の結果 [`IsolationAttestation`] は
 //! [`verify_isolation`] からしか作れず、これだけが `Isolation::Isolated` を名乗れる
-//! （ADR-0083 D3: identity の復元は隔離下でのみ）。
+//! （ADR-0101 D3: identity の復元は隔離下でのみ）。
 
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -333,7 +333,7 @@ fn non_public_v6(ip: Ipv6Addr) -> bool {
         return non_public_v4(v4);
     }
     let s = ip.segments();
-    // ADR-0086: only ordinary global unicast can be enabled; reject IETF
+    // ADR-0104: only ordinary global unicast can be enabled; reject IETF
     // special assignments conservatively, including their anycast exceptions.
     (s[0] & 0xe000) != 0x2000
         || (s[0] == 0x2001 && s[1] < 0x0200)
@@ -455,24 +455,24 @@ pub fn orphan_groups(
     out.into_iter().collect()
 }
 
-/// 稼働中の隔離 session（ADR-0087 D5）。呼ぶたびに事実を採り直して検査する。
+/// 稼働中の隔離 session（ADR-0105 D5）。呼ぶたびに事実を採り直して検査する。
 /// session が止まっていれば、または隔離に違反していれば attestation を返さない。
 pub trait LiveIsolation {
     fn current_attestation(&self) -> Result<IsolationAttestation, Vec<IsolationViolation>>;
 }
 
-/// 稼働中 session の runtime 種別（ADR-0088 D5）。`NotIsolated` の session には復元しない。
+/// 稼働中 session の runtime 種別（ADR-0108 D5）。`NotIsolated` の session には復元しない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeKind {
     Isolated,
     NotIsolated,
 }
 
-/// controller が開封済み state を受け取らなかった（ADR-0088 D5）。理由は持たない。
+/// controller が開封済み state を受け取らなかった（ADR-0108 D5）。理由は持たない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateRejected;
 
-/// registry に載る稼働中 session（ADR-0088 D5）。attestation は呼ぶたびに採り直す。
+/// registry に載る稼働中 session（ADR-0108 D5）。attestation は呼ぶたびに採り直す。
 pub trait LiveSessionEntry: LiveIsolation + Send + Sync {
     fn kind(&self) -> RuntimeKind;
     /// controller（CDP 側）に開封済み state の投入口があるか。無ければ開封しない。
@@ -480,13 +480,13 @@ pub trait LiveSessionEntry: LiveIsolation + Send + Sync {
     /// 開封済み state を controller にだけ渡す。agent・HTTP 応答には出さない。
     fn deliver_state(&self, state: &[u8]) -> Result<(), StateRejected>;
     /// Live View の鍵（task_id, run_id）。復元は投入の前にこの鍵で session を観測停止として
-    /// 記録する（ADR-0080 H3 / ADR-0083 D4）。無ければ記録できないので開封しない。
+    /// 記録する（ADR-0080 H3 / ADR-0101 D4）。無ければ記録できないので開封しない。
     fn live_key(&self) -> Option<(String, String)> {
         None
     }
 }
 
-/// 稼働中 session の索引（ADR-0088 D5）。登録・削除は runtime の supervisor だけが行う。
+/// 稼働中 session の索引（ADR-0108 D5）。登録・削除は runtime の supervisor だけが行う。
 pub trait LiveSessionRegistry: Send + Sync {
     fn get(&self, session_id: &str) -> Option<std::sync::Arc<dyn LiveSessionEntry>>;
 }
@@ -533,7 +533,7 @@ impl LiveSessionRegistry for LiveSessions {
     }
 }
 
-// ---- 事実採取（ADR-0089 D2: broker と worker で共有）----
+// ---- 事実採取（ADR-0109 D2: broker と worker で共有）----
 
 const FACT_NAMESPACES: [(Namespace, &str); 6] = [
     (Namespace::User, "user"),

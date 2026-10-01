@@ -1,4 +1,4 @@
-//! ADR-0080 H3 / ADR-0083 D4: identity を復元した session は、credential を注入した session と
+//! ADR-0080 H3 / ADR-0101 D4: identity を復元した session は、credential を注入した session と
 //! 同じく session の終わりまで LLM の観測と Live View を止める。HTTP の復元
 //! （`POST /api/v1/browser/identities/{id}/restore`）が、実隔離 session（bwrap +
 //! chrome-headless-shell、supervisor が registry に登録）への投入の前に observation_stopped を

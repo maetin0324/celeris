@@ -1,4 +1,4 @@
-//! ADR-0088 D2: browser・celeris-browser-sandboxd・接続ごとの celeris-browser-egress を 1 runtime として
+//! ADR-0108 D2: browser・celeris-browser-sandboxd・接続ごとの celeris-browser-egress を 1 runtime として
 //! `Supervisor` で起動し、controller process の SIGKILL・記録からの再起動時回収・正常停止のそれぞれの後に
 //! 記録した process が `/proc` から消えることを実プロセスで確かめる。
 //!

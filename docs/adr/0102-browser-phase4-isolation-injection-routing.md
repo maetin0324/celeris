@@ -1,12 +1,12 @@
-# ADR-0084: Browser Phase 4 — isolated runtime・trusted injection・backend routing（P4-A〜C）
+# ADR-0102: Browser Phase 4 — isolated runtime・trusted injection・backend routing（P4-A〜C）
 
 ---
 tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG]
 ---
 
 - 日付: 2026-09-29
-- 状態: **契約・拒否境界は Accepted（2026-09-29）**。runtime 方式・H7 は [ADR-0085](0085-browser-phase4-runtime-selection.md) で人の回答を採用済み。実 runtime・CDP sink・backend 実適合の配線は未。以下 D1〜D6 の決定待ち記述は当時の記録であり、ADR-0085 が更新する。
-- 関連: [ADR-0078](0078-browser-execution-capability.md) D8、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H3・H6・H7、[ADR-0083](0083-browser-phase3-identity-contract.md) D3・D4
+- 状態: **契約・拒否境界は Accepted（2026-09-29）**。runtime 方式・H7 は [ADR-0103](0103-browser-phase4-runtime-selection.md) で人の回答を採用済み。実 runtime・CDP sink・backend 実適合の配線は未。以下 D1〜D6 の決定待ち記述は当時の記録であり、ADR-0103 が更新する。
+- 関連: [ADR-0078](0078-browser-execution-capability.md) D8、[ADR-0080](0080-browser-phase2-policy-broker-approval.md) H3・H6・H7、[ADR-0101](0101-browser-phase3-identity-contract.md) D3・D4
 
 ## 範囲
 
@@ -29,7 +29,7 @@ P4-A / P4-B / P4-C はそれぞれ単独の成果・検査で受け入れる。�
   daemon の UID・root・印の無い process・pgid ≤ 1 には触らない。
 - `IsolationAttestation` は `verify_isolation` からしか作れない（private field）。`isolation()` だけが `Isolation::Isolated` を返す。
 
-## D2. identity 復元の配線（ADR-0083 D3/D4）
+## D2. identity 復元の配線（ADR-0101 D3/D4）
 
 - `IdentityService::restore_isolated(…, &IsolationAttestation, …)` を追加。attestation を持つ時だけ `Isolated` で `authorize_use` を通し、
   封緘を開いて controller に返す。HTTP の `restore` は従来どおり trusted local で 403 `isolation_required`（HTTP から attestation は作れない）。

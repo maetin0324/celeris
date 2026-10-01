@@ -1,4 +1,4 @@
--- ADR-0081..0083: Phase 3 browser persistence. All text in live events is scrubbed before insertion.
+-- ADR-0099..0083: Phase 3 browser persistence. All text in live events is scrubbed before insertion.
 CREATE TABLE browser_live_events (
     task_id TEXT NOT NULL,
     run_id TEXT NOT NULL,

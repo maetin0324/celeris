@@ -1,4 +1,4 @@
-//! ADR-0088 D5: identity の復元を、supervisor（prod-wire の D2）が起動して registry に登録した
+//! ADR-0108 D5: identity の復元を、supervisor（prod-wire の D2）が起動して registry に登録した
 //! **実**隔離 session（bwrap + chrome-headless-shell）に結合する。HTTP は daemon と同じ
 //! `task_api::router` と、supervisor と共有する 1 つの registry を使う。拒否経路では封緘を開かない。
 //!

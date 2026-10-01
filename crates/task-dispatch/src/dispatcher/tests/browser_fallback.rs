@@ -1,7 +1,7 @@
 use super::super::worker_task::{RunAdapterPrep, prepare_run_adapter};
 use super::*;
 
-// ---- ADR-0088: browser fallback 候補の run ごとの準備 ----
+// ---- ADR-0107: browser fallback 候補の run ごとの準備 ----
 
 /// `prepare_run_adapter` が施した包みを run 時に記録するテスト用アダプタ。
 #[derive(Clone)]
@@ -168,7 +168,7 @@ async fn prep_run_both(prep: &RunAdapterPrep, tier: Tier) -> (bool, bool, Vec<Pr
     (primary_env, candidate_env, seen)
 }
 
-// ADR-0088 D2: these tests start with the dispatcher's candidate selection, then exercise the
+// ADR-0107 D2: these tests start with the dispatcher's candidate selection, then exercise the
 // worker supervisor with exactly that list. The ledger is a test fixture, not certification.
 fn browser_fallback_test_ledger(dir: &Path, ids: &[&str]) -> PathBuf {
     let path = dir.join("conformance.json");
@@ -488,7 +488,7 @@ fn dispatch_browser_fallback_credential_use_never_replays() {
     );
 }
 
-/// ADR-0088 D1: 候補は主 adapter と同じ除去 env・`CARGO_TARGET_DIR`・scratch env を受ける。
+/// ADR-0107 D1: 候補は主 adapter と同じ除去 env・`CARGO_TARGET_DIR`・scratch env を受ける。
 #[tokio::test]
 async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() {
     let prep = RunAdapterPrep {
@@ -520,7 +520,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() 
     )));
 }
 
-/// ADR-0088 D1: 候補は主 adapter と同じ実行 tier のモデルと planner の permission mode で走る。
+/// ADR-0107 D1: 候補は主 adapter と同じ実行 tier のモデルと planner の permission mode で走る。
 #[tokio::test]
 async fn dispatch_browser_fallback_prep_candidate_gets_primary_model_and_permission_mode() {
     let prep = RunAdapterPrep {
@@ -539,7 +539,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_model_and_permiss
     assert!(seen[1].removed.is_empty() && seen[1].env.is_empty());
 }
 
-/// ADR-0088 D1: 準備が無い run（env・コンテナ・permission mode 無し）は包まずに素通しする。
+/// ADR-0107 D1: 準備が無い run（env・コンテナ・permission mode 無し）は包まずに素通しする。
 #[tokio::test]
 async fn dispatch_browser_fallback_prep_empty_prep_leaves_candidate_unwrapped() {
     let (primary_env, candidate_env, seen) =

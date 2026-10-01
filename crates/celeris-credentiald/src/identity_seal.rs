@@ -1,10 +1,10 @@
-//! ADR-0083 D2-4/5/6: Browser Identity の state の封緘・開封・鍵消去。
+//! ADR-0101 D2-4/5/6: Browser Identity の state の封緘・開封・鍵消去。
 //!
 //! 鍵は project+origin 単位（`browser_identity::key_label`）。label ごとに 32 byte の乱数
 //! （鍵素材）を `key_dir` に 0600 で置き、AEAD の鍵は鍵素材と label から SHA-256 で導出する。
 //! AAD は `browser_identity::aad`（identity・project・origin・世代）。開封は
 //! `check_envelope` と `check_state_origins`（foreign_origin 等）を通った state だけを返す。
-//! agent-browser の restore には依存しない（ADR-0083 D4）。平文・鍵・cookie の値は
+//! agent-browser の restore には依存しない（ADR-0101 D4）。平文・鍵・cookie の値は
 //! Debug にもエラーにも出さない。
 
 use super::{Error, check_file, ensure_dir, random, read_private, write_atomic};
@@ -126,7 +126,7 @@ impl std::fmt::Debug for SealedIdentityState {
 /// project+origin 鍵の保管と AEAD。鍵素材はメモリに持ち続けない（使うたびに読む）。
 pub struct IdentitySealer {
     key_dir: PathBuf,
-    /// `open_state` が呼ばれた回数（ADR-0088 D5: 拒否経路で開封しないことの観測用。秘密は含まない）。
+    /// `open_state` が呼ばれた回数（ADR-0108 D5: 拒否経路で開封しないことの観測用。秘密は含まない）。
     open_attempts: std::sync::atomic::AtomicU64,
 }
 impl std::fmt::Debug for IdentitySealer {

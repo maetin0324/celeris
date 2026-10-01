@@ -1,4 +1,4 @@
-//! ADR-0088 D3: exercise the daemon's actual instance startup function with real processes.
+//! ADR-0108 D3: exercise the daemon's actual instance startup function with real processes.
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-# ADR-0089: P4-B injection-only IPC・CDP sink・実攻撃試験と機密能力の解放条件
+# ADR-0109: P4-B injection-only IPC・CDP sink・実攻撃試験と機密能力の解放条件
 
 ---
 tasks: [01M3RK6XG30KD3QC0Z67XBB5G5]
@@ -6,18 +6,18 @@ tasks: [01M3RK6XG30KD3QC0Z67XBB5G5]
 
 - 日付: 2026-09-30
 - 状態: Accepted（設計。実装と実攻撃試験の結果は後続の unit が出す。この ADR 自体は受け入れの証拠にならない）
-- 関連: [ADR-0080](0080-browser-phase2-policy-broker-approval.md) H3、[ADR-0084](0084-browser-phase4-isolation-injection-routing.md) D3/D4/D6、
-  [ADR-0085](0085-browser-phase4-runtime-selection.md) 3〜5、[ADR-0087](0087-browser-p4a-same-uid-bwrap-runtime.md)、
-  [ADR-0087 P4-C](0087-browser-phase4-conformance-dispatch.md)、[ADR-0088](0088-browser-p4a-relay-supervisor-launch-restore.md) D2/D5、人の決定 p4a-uid
+- 関連: [ADR-0080](0080-browser-phase2-policy-broker-approval.md) H3、[ADR-0102](0102-browser-phase4-isolation-injection-routing.md) D3/D4/D6、
+  [ADR-0103](0103-browser-phase4-runtime-selection.md) 3〜5、[ADR-0105](0105-browser-p4a-same-uid-bwrap-runtime.md)、
+  [ADR-0106 P4-C](0106-browser-phase4-conformance-dispatch.md)、[ADR-0108](0108-browser-p4a-relay-supervisor-launch-restore.md) D2/D5、人の決定 p4a-uid
 
 ## 文脈
 
-- ADR-0085 3/4 は旧 `resolve.sock` と plugin `bridge` を固定拒否（`trusted_injection_required`）にし、将来の controller は
+- ADR-0103 3/4 は旧 `resolve.sock` と plugin `bridge` を固定拒否（`trusted_injection_required`）にし、将来の controller は
   別の injection-only IPC を使い、SO_PEERCRED の役割・稼働中の隔離 session・CDP 対象・auth_section を照合して
   receipt だけを返すとした。
-- ADR-0084 D3 は `TrustedInjector::prepare/commit`（frame 鎖・redirect 鎖・要素型・TOCTOU）と `RedisplayGuard` を純関数で
+- ADR-0102 D3 は `TrustedInjector::prepare/commit`（frame 鎖・redirect 鎖・要素型・TOCTOU）と `RedisplayGuard` を純関数で
   用意したが、peer の役割割当て・実 CDP sink・実攻撃試験は無い。
-- P4-A（ADR-0087/0088）で、実 bwrap runtime・supervisor（daemon 内の専用 thread）・CDP pipe（fd 3/4 を controller が保持）・
+- P4-A（ADR-0105/0108）で、実 bwrap runtime・supervisor（daemon 内の専用 thread）・CDP pipe（fd 3/4 を controller が保持）・
   `LiveSessionRegistry` が入った。この host は同一 host UID（決定 p4a-uid）なので `verify_isolation` は `SameUid` を返し、
   attestation は出ない。broker（`celeris-credentiald serve`）は daemon とは別 process で、daemon の PID を control の
   許可 PID として起動引数に受ける。
@@ -31,7 +31,7 @@ tasks: [01M3RK6XG30KD3QC0Z67XBB5G5]
 - 新しい socket は `<XDG_RUNTIME_DIR>/celeris-credentiald/injection.sock`。既存の `control.sock` と同じ dir（0700、broker の
   UID 所有、symlink 不可）に 0600 で作り、既存 `socket()` と同じ所有者・mode 検査を通す。**`resolve.sock` と plugin `bridge` は
   固定拒否のまま触らない**（再開しない。設定で旧経路を戻す抜け道も作らない）。
-- sandbox には bind しない（ADR-0087 D1: `/run/user` は見えない）。worker・harness は同一 UID なので path に connect は
+- sandbox には bind しない（ADR-0105 D1: `/run/user` は見えない）。worker・harness は同一 UID なので path に connect は
   できるが、D2 の役割判定で拒否される。
 - 1 接続 = 1 要求 = 1 応答。frame は `u32`（big endian）の長さ + JSON 本文。要求の上限 16 KiB、読み取り期限 5 秒
   （超過は本文を読み捨てて `invalid_request`）。JSON は `deny_unknown_fields`。
@@ -69,14 +69,14 @@ tasks: [01M3RK6XG30KD3QC0Z67XBB5G5]
 | `receipt` | `{lease_id, auth_section_id, session_id, cdp_target_id, frame_id, loader_id, field, injected_at}` | 無 |
 | `code` | 無 | D3 の拒否コード |
 
-- receipt には値・長さ・hash・selector・入力後の DOM 観測を入れない。`InjectionReceipt`（ADR-0084 D3）はこの形に拡張する
+- receipt には値・長さ・hash・selector・入力後の DOM 観測を入れない。`InjectionReceipt`（ADR-0102 D3）はこの形に拡張する
   （`element_id` は `object_id` を返さず `field` で置き換える。object id は page 内の参照で再利用価値があるため）。
 - audit（broker の既存 audit dir）には要求の非秘密 field・`code`・peer pid を書く。秘密・sink FD 上の frame は書かない。
 
 ### D2. SO_PEERCRED による `PeerRole` 判定（b）
 
 - broker は daemon から control 経由で**稼働中 session の登録**を受ける（新しい `ControlRequest`）:
-  - `RegisterLiveSession { session_id, controller_pid, controller_start, runtime_pid, runtime_start }` — supervisor（ADR-0088 D2）
+  - `RegisterLiveSession { session_id, controller_pid, controller_start, runtime_pid, runtime_start }` — supervisor（ADR-0108 D2）
     が `LiveSessions::insert` と同じ時点で送る。`UnregisterLiveSession { session_id }` は `remove` と同じ時点。
   - `OpenAuthSection { session_id, auth_section_id, lease_id, exact_origin, cdp_target_id }` /
     `CloseAuthSection { session_id, auth_section_id }` — worker の `browser_auth_section(…, true/false)`（H3）と同じ時点。
@@ -112,7 +112,7 @@ tasks: [01M3RK6XG30KD3QC0Z67XBB5G5]
 | 5 | lease: 存在・未使用・期限内・`session_id` と exact origin 一致（`Broker::resolve` の既存検査）→ **ここで消費** | `lease_expired` / `lease_used` / `other_session` / `lease_invalid` |
 | 6 | provider 呼出し（`CredentialProvider` 契約は不変）→ D4 の sink | `provider_failed` / `target_changed` / `sink_failed` |
 
-- 3 は ADR-0084 D3 の `prepare`（`check_target`）そのもの。6 の中で D4 の in-page 再確認が `commit` の TOCTOU 検査を実 page 上で担う。
+- 3 は ADR-0102 D3 の `prepare`（`check_target`）そのもの。6 の中で D4 の in-page 再確認が `commit` の TOCTOU 検査を実 page 上で担う。
 - 拒否応答に理由の詳細（どの origin だったか等）は入れない。audit には非秘密の詳細を書いてよい。
 - 5 の後の失敗（6）は lease を返さない。再試行は新しい承認・lease から（P2-B の単回 lease を変えない）。
 
@@ -157,7 +157,7 @@ tasks: [01M3RK6XG30KD3QC0Z67XBB5G5]
 
 ### D5. 攻撃試験行列と H3 sentinel 検査面（e）
 
-すべてローカルの fixture（ADR-0088 D1 の試験用 netns・自己署名 HTTPS・試験用 DNS）と実 chrome-headless-shell、実 broker
+すべてローカルの fixture（ADR-0108 D1 の試験用 netns・自己署名 HTTPS・試験用 DNS）と実 chrome-headless-shell、実 broker
 process、実 CDP pipe で行う。外部ネットワークに出ない。秘密は試験ごとの sentinel（ランダムな 32 byte の hex）。
 fake の sink・fake の attestation は証拠に数えない。
 
@@ -197,31 +197,31 @@ H3 sentinel 検査面（実注入を含む認証区間を 1 回通した後、�
 
 ### D6. この host での正例と、機密能力の解放条件（f）
 
-- production の broker は D2 の attestation を要求し、この host では `SameUid` で必ず拒否する（決定 p4a-uid・ADR-0087 のまま）。
+- production の broker は D2 の attestation を要求し、この host では `SameUid` で必ず拒否する（決定 p4a-uid・ADR-0105 のまま）。
 - 実 CDP sink と照合順の**正例**（A1〜A17 の前提として一度は注入が成功する経路）を得るため、試験専用の admission を置く:
   `InjectionAdmission::SameUidHarness`。これは `verify_isolation` の違反が `SameUid` **だけ**のときに限り session を通すもので、
   - crate feature `same-uid-harness` の下でだけ compile し、既定 feature・release build には入らない
     （crate の `[dev-dependencies]` で自分自身に feature を付けて試験 binary にだけ入れる）。
-  - `IsolationAttestation` を作らない。identity restore（ADR-0088 D5）や他の attestation 要求箇所は通れない
-    （ADR-0088 D5 の「試験用 attestation 生成口を作らない」とは矛盾しない）。
+  - `IsolationAttestation` を作らない。identity restore（ADR-0108 D5）や他の attestation 要求箇所は通れない
+    （ADR-0108 D5 の「試験用 attestation 生成口を作らない」とは矛盾しない）。
   - この admission で通した注入の結果・適合記録には `admission = "same_uid_harness"` を必ず記録する。
 - 解放条件（P4-C `certify` への追加）: `CredentialInjection`・`IdentityRestore` を適合と記録するのは、同じ backend・browser version の
-  実測記録（ADR-0087 P4-C D1）に次が**全部**そろうときだけ:
+  実測記録（ADR-0106 P4-C D1）に次が**全部**そろうときだけ:
   1. `IsolationSuite`・`EgressNegativeSuite` が違反 0（`SameUid` を含まない。= 別 host UID の実 runtime）。
   2. `InjectionAttackSuite` が A1〜A17 全部期待どおり、かつ `admission = "attested"`。
   3. `AuthSectionObservationStop` が D5 の全検査面で sentinel 0 件、かつ `admission = "attested"`。
   4. 記録が runner の実行出力から作られ、壊れていない・古くない。
-- 未達時: 記録に `same_uid_harness` が 1 件でも混ざる、どれかが欠ける・失敗・古い場合は、機密能力を適合なしとし、ADR-0084 D6 の
+- 未達時: 記録に `same_uid_harness` が 1 件でも混ざる、どれかが欠ける・失敗・古い場合は、機密能力を適合なしとし、ADR-0102 D6 の
   起動前拒否（承認・lease を消費しない）を維持する。この host では 1 が満たせないので、P4-B の実装・試験がすべて通っても
   **機密能力は解放されない**。これは失敗ではなく決定 p4a-uid の帰結であり、PROGRESS の未解決に「別 UID host での
   attested 実行」を残す。手順は `docs/ops/browser-isolated-runtime-subuid.md` に追記する。
-- fallback: 機密能力を要求する run は ADR-0088（fallback）D3 のまま fallback しない。
+- fallback: 機密能力を要求する run は ADR-0107（fallback）D3 のまま fallback しない。
 
 ## 変えないもの
 
 - `CredentialProvider` 契約、broker 内部の lease/use/revoke と単回 lease、旧 `resolve.sock`・`bridge` の固定拒否。
-- H3・Phase 3 の auth_section 配線と観測停止（D4-6 は強める方向の追加だけ）、ADR-0084 D6 の未適合機密要求の起動前拒否。
-- ADR-0087/0088 の runtime・supervisor・registry・restore の拒否判定。本番設定・本番昇格・内部 origin（追加しない）。
+- H3・Phase 3 の auth_section 配線と観測停止（D4-6 は強める方向の追加だけ）、ADR-0102 D6 の未適合機密要求の起動前拒否。
+- ADR-0105/0108 の runtime・supervisor・registry・restore の拒否判定。本番設定・本番昇格・内部 origin（追加しない）。
 - dispatcher・store に LLM 呼出しを入れない。
 
 ## 後続 unit への割当て

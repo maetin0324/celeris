@@ -1,8 +1,8 @@
-//! ADR-0087（P4-A）: bubblewrap の isolated browser runtime を起動し、host 側から事実を採る。
+//! ADR-0105（P4-A）: bubblewrap の isolated browser runtime を起動し、host 側から事実を採る。
 //!
 //! 同一 host UID の決定（p4a-uid）のもとで namespace・read-only root・書ける場所・CDP pipe・
 //! orphan 回収を実装する。事実は既存の `verify_isolation` に渡し、弱めない。この host では
-//! `SameUid` で attestation が出ないので、identity の復元は拒否のまま（ADR-0087 D2/D5）。
+//! `SameUid` で attestation が出ないので、identity の復元は拒否のまま（ADR-0105 D2/D5）。
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -23,7 +23,7 @@ use task_core::browser_isolation::{
     StateRejected, verify_isolation,
 };
 
-/// sandbox の中の UID/GID（host から見た UID は変わらない。ADR-0087）。
+/// sandbox の中の UID/GID（host から見た UID は変わらない。ADR-0105）。
 pub const SANDBOX_UID: u32 = 1000;
 
 #[derive(Debug, thiserror::Error)]
@@ -38,18 +38,18 @@ pub enum RuntimeError {
     RelayNotReady,
 }
 
-/// ADR-0088 D1: sandbox の proxy listener から来た接続ごとに起動する celeris-browser-egress。
+/// ADR-0108 D1: sandbox の proxy listener から来た接続ごとに起動する celeris-browser-egress。
 #[derive(Debug, Clone)]
 pub struct EgressRelay {
     /// host の celeris-browser-egress（sandbox には入れない）。
     pub proxy: PathBuf,
-    /// proxy の stdin に渡す `EgressPolicy` の JSON（ADR-0086 D7）。
+    /// proxy の stdin に渡す `EgressPolicy` の JSON（ADR-0104 D7）。
     pub policy: Vec<u8>,
-    /// 同時 egress 数の上限（ADR-0086 D4 の呼出し側の制限）。超過分は fd を返さず閉じる。
+    /// 同時 egress 数の上限（ADR-0104 D4 の呼出し側の制限）。超過分は fd を返さず閉じる。
     pub max_concurrent: usize,
 }
 
-/// 同時 egress 数の既定（ADR-0088 D1）。
+/// 同時 egress 数の既定（ADR-0108 D1）。
 pub const DEFAULT_MAX_EGRESS: usize = 32;
 
 /// 起動した egress の観測（pid は起動順）。
@@ -189,7 +189,7 @@ impl IsolatedRuntime {
         Self::launch_with(spec, true)
     }
 
-    /// `arm_parent_death` が false なら bwrap に `PR_SET_PDEATHSIG` を掛けない。ADR-0088 D2 の
+    /// `arm_parent_death` が false なら bwrap に `PR_SET_PDEATHSIG` を掛けない。ADR-0108 D2 の
     /// 「発火を取りこぼした」場合（prctl 前の競合）を実プロセスで再現する試験のためだけに使う。
     pub fn launch_with(spec: &RuntimeSpec, arm_parent_death: bool) -> Result<Self, RuntimeError> {
         std::fs::create_dir_all(spec.session_dir.join("tmp"))?;
@@ -224,7 +224,7 @@ impl IsolatedRuntime {
                 if arm_parent_death && libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                // prctl の前に親が死んでいれば PDEATHSIG は発火しない。ここで気付いて終わる（ADR-0088 D2）。
+                // prctl の前に親が死んでいれば PDEATHSIG は発火しない。ここで気付いて終わる（ADR-0108 D2）。
                 if libc::getppid() != parent {
                     libc::_exit(127);
                 }
@@ -283,7 +283,7 @@ impl IsolatedRuntime {
             let stats = Arc::new(Mutex::new(EgressStats::default()));
             rt.egress_stats = Some(stats.clone());
             let (ready_tx, ready_rx) = mpsc::channel();
-            // 長寿命の専用 thread（egress の PDEATHSIG は親 thread の終了で発火する。ADR-0088 D2）。
+            // 長寿命の専用 thread（egress の PDEATHSIG は親 thread の終了で発火する。ADR-0108 D2）。
             std::thread::Builder::new()
                 .name(format!("celeris-browser-rt-{}", spec.session_id))
                 .spawn(move || relay_loop(ctrl, cfg, pgid, stats, ready_tx))?;
@@ -324,12 +324,12 @@ impl IsolatedRuntime {
         collect_facts(&self.session_id, self.inner_pid, self.bwrap_pid())
     }
 
-    /// 事実を採り直して検査する（ADR-0087 D5）。
+    /// 事実を採り直して検査する（ADR-0105 D5）。
     pub fn attest(&mut self) -> Result<IsolationAttestation, Vec<IsolationViolation>> {
         self.attest_with(RestoreAdmission::Attested)
     }
 
-    /// 事実を採り直し、`admission` で検査する（ADR-0094 D2）。
+    /// 事実を採り直し、`admission` で検査する（ADR-0114 D2）。
     pub fn attest_with(
         &mut self,
         admission: RestoreAdmission,
@@ -394,7 +394,7 @@ impl Drop for IsolatedRuntime {
     }
 }
 
-/// identity 復元に渡す稼働中 session（ADR-0087 D5）。
+/// identity 復元に渡す稼働中 session（ADR-0105 D5）。
 pub struct LiveSession(pub std::sync::Mutex<IsolatedRuntime>);
 
 impl task_core::browser_isolation::LiveIsolation for LiveSession {
@@ -406,8 +406,8 @@ impl task_core::browser_isolation::LiveIsolation for LiveSession {
     }
 }
 
-/// 直に起動した runtime も隔離 session として登録できる（ADR-0088 D5）。CDP pipe を runtime が
-/// 持っている間だけ、開封済み state を controller としてその pipe に投入する（ADR-0094 D1）。
+/// 直に起動した runtime も隔離 session として登録できる（ADR-0108 D5）。CDP pipe を runtime が
+/// 持っている間だけ、開封済み state を controller としてその pipe に投入する（ADR-0114 D1）。
 impl task_core::browser_isolation::LiveSessionEntry for LiveSession {
     fn kind(&self) -> task_core::browser_isolation::RuntimeKind {
         task_core::browser_isolation::RuntimeKind::Isolated
@@ -438,7 +438,7 @@ impl task_core::browser_isolation::LiveSessionEntry for LiveSession {
     }
 }
 
-/// identity 復元の隔離 admission（ADR-0094 D2）。production は [`RestoreAdmission::Attested`] だけ。
+/// identity 復元の隔離 admission（ADR-0114 D2）。production は [`RestoreAdmission::Attested`] だけ。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RestoreAdmission {
     /// `verify_isolation` の attestation を要求する。
@@ -490,7 +490,7 @@ struct PlainState {
     entries: Vec<PlainEntry>,
 }
 
-/// 開封済み state を controller の CDP（`Storage.setCookies`）へ投入する（ADR-0094 D1）。
+/// 開封済み state を controller の CDP（`Storage.setCookies`）へ投入する（ADR-0114 D1）。
 /// `call` は controller の CDP 呼出しだけ。state は log・応答・argv・ファイルに出さない。
 /// 知らない種別・https でない origin があれば 1 件も投入しない。
 pub(crate) fn deliver_state_via(
@@ -521,7 +521,7 @@ pub(crate) fn deliver_state_via(
     .map(|_| ())
 }
 
-/// sandboxd の要求ごとに egress を 1 本起動し、相手側の unix stream を返す（ADR-0088 D1）。
+/// sandboxd の要求ごとに egress を 1 本起動し、相手側の unix stream を返す（ADR-0108 D1）。
 /// channel の EOF で終わる。
 fn relay_loop(
     ctrl: OwnedFd,
@@ -584,7 +584,7 @@ fn spawn_egress(
     // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は spawn まで親が保持する。
     unsafe {
         cmd.pre_exec(move || {
-            // runtime の process group に入れて一緒に回収する（ADR-0088 D2）。
+            // runtime の process group に入れて一緒に回収する（ADR-0108 D2）。
             // 元がすでに fd 3 なら dup2 は何もせず CLOEXEC が残る（exec で閉じる）。その時は外す。
             let placed = if fd == 3 {
                 libc::fcntl(3, libc::F_SETFD, 0)
@@ -661,7 +661,7 @@ pub fn collect_facts(session_id: &str, pid: i32, pgid: i32) -> Result<RuntimeFac
         }
     }
     let status = std::fs::read_to_string(proc_dir.join("status"))?;
-    // Uid: real effective saved fs。host から見た値（ADR-0087 D2）。
+    // Uid: real effective saved fs。host から見た値（ADR-0105 D2）。
     let runtime_uid = status_field(&status, "Uid")
         .and_then(|v| v.split_whitespace().next().and_then(|u| u.parse().ok()))
         .unwrap_or(0);
@@ -720,7 +720,7 @@ pub fn listening_tcp(pid: i32) -> std::io::Result<usize> {
     Ok(n)
 }
 
-// ---- daemon 再起動後の回収（ADR-0087 D4）----
+// ---- daemon 再起動後の回収（ADR-0105 D4）----
 
 fn starttime(pid: i32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -729,7 +729,7 @@ fn starttime(pid: i32) -> Option<u64> {
     rest.split_whitespace().nth(19)?.parse().ok()
 }
 
-/// 記録の 1 行（ADR-0088 D2）。`role` は診断用（bwrap / sandboxd / browser / egress / child）。
+/// 記録の 1 行（ADR-0108 D2）。`role` は診断用（bwrap / sandboxd / browser / egress / child）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedProcess {
     pub pid: i32,

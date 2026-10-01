@@ -1,12 +1,12 @@
-# ADR-0094: identity 復元の state を controller の CDP に投入する（deliver_state）と試験 admission
+# ADR-0114: identity 復元の state を controller の CDP に投入する（deliver_state）と試験 admission
 
 - 状態: 採用
 - 日付: 2026-09-30
-- 関連: ADR-0084 D4、ADR-0087 D5、ADR-0088 D5、ADR-0089 D6
+- 関連: ADR-0102 D4、ADR-0105 D5、ADR-0108 D5、ADR-0109 D6
 
 ## 背景
 
-ADR-0088 D5 で `LiveSessionEntry::accepts_state` / `deliver_state` の口を作ったが、supervisor の entry
+ADR-0108 D5 で `LiveSessionEntry::accepts_state` / `deliver_state` の口を作ったが、supervisor の entry
 （`SupervisedEntry`）と直起動の `LiveSession` はどちらも `accepts_state() == false` のままで、
 `restore_isolated` で開封した state を controller に渡す成功経路が無かった。
 またこの host には別 UID が無く、本番の検査（`verify_isolation`）は必ず `SameUid` で落ちるので、

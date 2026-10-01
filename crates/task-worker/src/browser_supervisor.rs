@@ -1,4 +1,4 @@
-//! ADR-0088 D2: browser・celeris-browser-sandboxd・接続ごとの celeris-browser-egress を 1 runtime として
+//! ADR-0108 D2: browser・celeris-browser-sandboxd・接続ごとの celeris-browser-egress を 1 runtime として
 //! 起動・記録・停止する supervisor。
 //!
 //! 1 runtime = 1 本の専用の長寿命 std::thread（`celeris-browser-rt-<session>`）。bwrap の spawn・
@@ -29,24 +29,24 @@ use crate::browser_runtime::{
     process_starttime, read_record, reap_recorded, same_process_alive, write_record,
 };
 
-/// 停止時の SIGTERM から SIGKILL までの猶予（ADR-0088 D2）。
+/// 停止時の SIGTERM から SIGKILL までの猶予（ADR-0108 D2）。
 pub const STOP_GRACE: Duration = Duration::from_secs(5);
 /// 記録を採り直す間隔。
 const REFRESH: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct SupervisorOptions {
-    /// daemon 所有の記録 dir（ADR-0088 D3。sandbox に bind しない）。
+    /// daemon 所有の記録 dir（ADR-0108 D3。sandbox に bind しない）。
     pub record_dir: PathBuf,
     /// false なら bwrap に PDEATHSIG を掛けない（取りこぼしを再現する試験専用。本番は true）。
     pub arm_parent_death: bool,
-    /// ADR-0088 D5: 稼働中 session の registry。起動後に登録し、停止の最初に外す。
+    /// ADR-0108 D5: 稼働中 session の registry。起動後に登録し、停止の最初に外す。
     pub registry: Option<Arc<LiveSessions>>,
-    /// identity 復元の隔離 admission（ADR-0094 D2）。本番は `Attested` のまま。
+    /// identity 復元の隔離 admission（ADR-0114 D2）。本番は `Attested` のまま。
     pub admission: RestoreAdmission,
     /// Live View の鍵（task_id, run_id）。無ければ API は復元を開封前に拒否する（観測停止を記録できない）。
     pub live_key: Option<(String, String)>,
-    /// ADR-0080 H3 / ADR-0083 D4: 復元の投入前に立てる旗。worker の `LiveEmitter` と共有し、
+    /// ADR-0080 H3 / ADR-0101 D4: 復元の投入前に立てる旗。worker の `LiveEmitter` と共有し、
     /// session の終わりまで progress・artifact・live event を捨てさせる。
     pub observation_stop: Arc<AtomicBool>,
 }
@@ -69,12 +69,12 @@ enum Cmd {
     Attest(mpsc::Sender<Result<IsolationAttestation, Vec<IsolationViolation>>>),
 }
 
-/// controller の CDP の口（ADR-0094 D1）。`Supervisor::attach_controller` が入れるまで空。
+/// controller の CDP の口（ADR-0114 D1）。`Supervisor::attach_controller` が入れるまで空。
 type ControllerSlot = Arc<Mutex<Option<Arc<Mutex<CdpController>>>>>;
 
-/// registry に載る supervisor 管理の session（ADR-0088 D5）。attestation は runtime thread に
+/// registry に載る supervisor 管理の session（ADR-0108 D5）。attestation は runtime thread に
 /// 採り直させる。state の投入口は `Supervisor` の持ち主が controller を渡した後だけ開き、
-/// それまでは復元は開封前に `isolation_required` で止まる（ADR-0094 D1）。
+/// それまでは復元は開封前に `isolation_required` で止まる（ADR-0114 D1）。
 struct SupervisedEntry {
     tx: Mutex<mpsc::Sender<Cmd>>,
     controller: ControllerSlot,
@@ -114,7 +114,7 @@ impl LiveSessionEntry for SupervisedEntry {
             .ok()
             .and_then(|c| c.clone())
             .ok_or(StateRejected)?;
-        // 投入の前に観測停止へ入る（ADR-0080 H3 / ADR-0083 D4）。投入に失敗しても戻さない。
+        // 投入の前に観測停止へ入る（ADR-0080 H3 / ADR-0101 D4）。投入に失敗しても戻さない。
         self.observation_stop.store(true, Ordering::SeqCst);
         let mut controller = controller.lock().map_err(|_| StateRejected)?;
         controller.enter_restored_observation_stop();
@@ -203,7 +203,7 @@ impl Supervisor {
         }
     }
 
-    /// CDP pipe を持つ controller を渡し、identity 復元の state 投入口を開く（ADR-0094 D1）。
+    /// CDP pipe を持つ controller を渡し、identity 復元の state 投入口を開く（ADR-0114 D1）。
     /// 投入は controller 経由だけで、agent の接続には出さない。
     pub fn attach_controller(&self, controller: Arc<Mutex<CdpController>>) {
         if let Ok(mut slot) = self.controller.lock() {
@@ -275,7 +275,7 @@ fn runtime_thread(
     let session = spec.session_id.clone();
     let mut last = Vec::new();
     if let Err(e) = refresh(&rt, &opts.record_dir, &session, &procs, &mut last) {
-        // 記録できない runtime は残さない（ADR-0088 D2）。
+        // 記録できない runtime は残さない（ADR-0108 D2）。
         rt.signal_group(libc::SIGKILL);
         rt.reap();
         let _ = ready.send(Err(RuntimeError::Io(e)));
@@ -456,7 +456,7 @@ fn role_of(pid: i32) -> String {
     .to_owned()
 }
 
-/// 起動時回収（ADR-0088 D3）: 記録 dir の runtime を starttime 照合つきで SIGKILL し、記録にあった
+/// 起動時回収（ADR-0108 D3）: 記録 dir の runtime を starttime 照合つきで SIGKILL し、記録にあった
 /// 本人がすべて消えるまで `timeout` だけ待つ（待つ間は signal を送らない）。戻り値は signal を送った pid。
 pub fn reap_on_start(dir: &Path, timeout: Duration) -> std::io::Result<Vec<i32>> {
     if !dir.exists() {

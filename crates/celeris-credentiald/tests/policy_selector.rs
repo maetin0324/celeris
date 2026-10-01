@@ -1,4 +1,4 @@
-//! ADR-0091 D2: 管理者の site policy（`CredentialPolicy`）のログイン URL・trusted selector の形式検証と後方互換。
+//! ADR-0110 D2: 管理者の site policy（`CredentialPolicy`）のログイン URL・trusted selector の形式検証と後方互換。
 use celeris_credentiald::{CredentialPolicy, Error};
 
 const ORIGIN: &str = "https://login.example.test";

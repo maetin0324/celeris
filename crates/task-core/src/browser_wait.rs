@@ -139,7 +139,7 @@ pub struct OperationIntent {
     pub args_digest: Option<String>,
 }
 
-/// ADR-0091 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を
+/// ADR-0110 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を
 /// 承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -152,7 +152,7 @@ pub struct TrustedLogin {
     pub submit_selector: Option<String>,
 }
 
-/// trusted selector の上限（ADR-0091 D2）。
+/// trusted selector の上限（ADR-0110 D2）。
 pub const TRUSTED_SELECTOR_MAX_LEN: usize = 256;
 /// trusted selector の compound 数の上限。
 pub const TRUSTED_SELECTOR_MAX_COMPOUNDS: usize = 8;
@@ -200,7 +200,7 @@ fn attr_len(b: &[u8]) -> Option<usize> {
     (*b.get(i)? == b']').then_some(i + 1)
 }
 
-/// ADR-0091 D2 の selector 文法: `type`・`#ident`・`.ident`・`[attr]`・`[attr=ident]`・`[attr="…"]` と、
+/// ADR-0110 D2 の selector 文法: `type`・`#ident`・`.ident`・`[attr]`・`[attr=ident]`・`[attr="…"]` と、
 /// 結合子の空白・`>` だけ。selector list・pseudo・`*`・`+`・`~`・escape・engine 接頭辞・shadow 貫通は拒否する。
 pub fn validate_trusted_selector(selector: &str) -> Result<(), &'static str> {
     let b = selector.as_bytes();
@@ -277,7 +277,7 @@ pub fn validate_trusted_login_url(login_url: &str, exact_origin: &str) -> Result
     }
 }
 
-/// ADR-0091 D2 の形式検証（broker の `CredentialPolicy::validate` と Celeris の pin 時の両方で使う）。
+/// ADR-0110 D2 の形式検証（broker の `CredentialPolicy::validate` と Celeris の pin 時の両方で使う）。
 pub fn validate_trusted_login(
     login_url: &str,
     exact_origin: &str,
@@ -329,7 +329,7 @@ pub struct BrowserWait {
     pub credential: Option<CredentialRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIntent>,
-    /// ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+    /// ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_login: Option<TrustedLogin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -375,7 +375,7 @@ pub struct NewBrowserWait {
     pub credential: Option<CredentialRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIntent>,
-    /// ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+    /// ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_login: Option<TrustedLogin>,
     pub policy_revision: u64,
@@ -542,14 +542,14 @@ pub trait BrowserWaitStore: Send + Sync {
         key: crate::browser_store::BrowserSessionKey<'_>,
         active: bool,
     ) -> Result<(), crate::browser_store::BrowserStoreError>;
-    /// ADR-0094 D2: worker の agent 操作 gate（task-api の `agent/begin`・`agent/end` と同じ op）。
+    /// ADR-0113 D2: worker の agent 操作 gate（task-api の `agent/begin`・`agent/end` と同じ op）。
     fn browser_session_agent_action(
         &self,
         key: crate::browser_store::BrowserSessionKey<'_>,
         op: crate::browser_control_ops::AgentActionOp,
         now: u64,
     ) -> Result<crate::browser_control::BrowserControl, crate::browser_store::BrowserStoreError>;
-    /// ADR-0082: scrub 済みの live event を 1 件追記する。
+    /// ADR-0100: scrub 済みの live event を 1 件追記する。
     fn browser_session_live_append(
         &self,
         key: crate::browser_store::BrowserSessionKey<'_>,
@@ -608,13 +608,13 @@ pub struct ConsumedBrowserApproval {
     pub wait: BrowserWait,
     pub credential: CredentialRecord,
     pub approved_by: String,
-    /// ADR-0091 D2: 承認時に wait へ固定した管理者のログイン URL・selector。store の wait から移すだけで、
+    /// ADR-0110 D2: 承認時に wait へ固定した管理者のログイン URL・selector。store の wait から移すだけで、
     /// 呼出し側の値は受け取らない。固定の無い（旧い）承認は `None` で、注入には使えない。
     pub trusted_login: Option<TrustedLogin>,
 }
 
 impl ConsumedBrowserApproval {
-    /// 注入に使う password selector（ADR-0091 D2 照合 3）。固定値だけが出所で、要求側が selector を
+    /// 注入に使う password selector（ADR-0110 D2 照合 3）。固定値だけが出所で、要求側が selector を
     /// 持ってきた場合は固定値と byte 一致しなければ拒否する。固定が無ければ注入しない。
     pub fn injection_selector(&self, requested: Option<&str>) -> Result<&str, &'static str> {
         let pinned = self
@@ -658,7 +658,7 @@ pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
     {
         return Err("browser approval is not a credential use");
     }
-    // ADR-0091 D2: 呼出し側が渡した wait の固定値は信じない。store の wait と食い違えば一回承認を
+    // ADR-0110 D2: 呼出し側が渡した wait の固定値は信じない。store の wait と食い違えば一回承認を
     // 消費せずに拒否する（差し替え）。
     let stored = store
         .browser_wait_get(&wait.wait_id)

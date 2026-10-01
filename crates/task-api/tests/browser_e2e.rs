@@ -1,4 +1,4 @@
-//! ADR-0084 D6: 旧 Phase 2 の durable wait を再現し、API 登録・承認後も
+//! ADR-0102 D6: 旧 Phase 2 の durable wait を再現し、API 登録・承認後も
 //! 未適合 backend を worker が拒否して lease 発行と承認消費を防ぐ結合試験。
 //!
 //! broker（celeris-credentiald の IPC と `bridge` 実行ファイル）・store・API は本物。

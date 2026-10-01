@@ -3,7 +3,7 @@ tasks: [01M3QGRC542ZC23996DNCTHZF5]
 ---
 # 別 host UID（subuid）での browser isolated runtime の確認手順
 
-ADR-0087 の同一 UID runtime を、subuid が使える host で別 host UID として実証する手順。人が実行する。
+ADR-0105 の同一 UID runtime を、subuid が使える host で別 host UID として実証する手順。人が実行する。
 この手順が通るまで identity 復元などの機密能力は解放しない。
 
 ## 前提の確認

@@ -48,7 +48,7 @@ pub enum ControlRequest {
     Grant {
         request: LeaseRequest,
     },
-    // ADR-0089 D2: live isolated sessions and H3 auth sections (memory only).
+    // ADR-0109 D2: live isolated sessions and H3 auth sections (memory only).
     RegisterLiveSession(LiveSessionRegistration),
     UnregisterLiveSession {
         session_id: String,
@@ -183,7 +183,7 @@ fn serve_one(
             bytes.zeroize();
             return Err(Error::Permission);
         }
-        // ADR-0085: even an admitted control PID with a valid binding/lease
+        // ADR-0103: even an admitted control PID with a valid binding/lease
         // cannot retrieve secrets over this retired endpoint. Read only the
         // bounded frame for orderly shutdown; never parse or consume it.
         if !control {
@@ -290,7 +290,7 @@ fn socket(path: &Path) -> Result<UnixListener, Error> {
     }
     Ok(listener)
 }
-/// One `injection.sock` connection (ADR-0089 D1): one request, one reply.
+/// One `injection.sock` connection (ADR-0109 D1): one request, one reply.
 fn serve_injection(mut stream: UnixStream, service: &InjectionService) {
     let denied = |c: InjectCode| InjectionReply {
         v: 1,
@@ -402,7 +402,7 @@ pub fn call(socket: &Path, request: &[u8]) -> Result<IpcReply, Error> {
     b.zeroize();
     result
 }
-/// Retired agent-browser credential-read protocol (ADR-0085).
+/// Retired agent-browser credential-read protocol (ADR-0103).
 /// Keep the fixed protocol response for old callers, but never contact a socket
 /// or serialize a secret. Trusted injection uses a separate controller endpoint.
 pub fn bridge_request(_input: &[u8], _binding_token: &str, _resolve_socket: &Path) -> Vec<u8> {

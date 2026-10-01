@@ -42,7 +42,7 @@ function post(kind: "takeover" | "renew") {
   });
 }
 
-describe("browser-control auth_section (ADR-0080 H3 / ADR-0081)", () => {
+describe("browser-control auth_section (ADR-0080 H3 / ADR-0099)", () => {
   beforeEach(() => vi.clearAllMocks());
 
   for (const kind of ["takeover", "renew"] as const) {

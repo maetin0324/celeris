@@ -1,9 +1,9 @@
-//! ADR-0083 / H5: Browser Identity の登録・一覧・失効・削除・利用（P3-A）。
+//! ADR-0101 / H5: Browser Identity の登録・一覧・失効・削除・利用（P3-A）。
 //!
 //! 封緘は credentiald の [`IdentitySealer`]、metadata と封緘 blob は store が持つ。
 //! 応答は metadata だけで、封緘 blob・鍵・cookie は返さない。
 //! 利用（session への復元）は Isolated の経路が無いので trusted local では常に
-//! `isolation_required`（ADR-0083 D3、P4-A の後に解除）。agent に state は渡さない。
+//! `isolation_required`（ADR-0101 D3、P4-A の後に解除）。agent に state は渡さない。
 
 use axum::http::StatusCode;
 use celeris_credentiald::identity_seal::{
@@ -252,7 +252,7 @@ impl IdentityService<'_> {
         Err(IdentityApiError::Denied(IdentityDenied::IsolationRequired))
     }
 
-    /// 隔離下の復元（ADR-0084 D4）。[`IsolationAttestation`] は P4-A の検査
+    /// 隔離下の復元（ADR-0102 D4）。[`IsolationAttestation`] は P4-A の検査
     /// （`verify_isolation`）からしか作れないので、HTTP からは呼べない。開いた state は
     /// runtime の controller に渡すだけで、agent・応答には出さない。
     pub fn restore_isolated(
@@ -280,7 +280,7 @@ impl IdentityService<'_> {
             .map_err(|_| IdentityApiError::SealFailed)
     }
 
-    /// 稼働中の隔離 session に結合した復元（ADR-0087 D5）。attestation はこの場で
+    /// 稼働中の隔離 session に結合した復元（ADR-0105 D5）。attestation はこの場で
     /// session から採り直す。session の停止・隔離違反（この host の同一 UID を含む）・
     /// session id の不一致は `IsolationRequired` で拒否する。
     pub fn restore_for_session(
@@ -301,7 +301,7 @@ impl IdentityService<'_> {
         self.restore_isolated(identity_id, project_id, origin, &attestation, now)
     }
 
-    /// HTTP の復元（ADR-0088 D5）。外側の条件 → registry の登録と種別 → attestation の採り直しと
+    /// HTTP の復元（ADR-0108 D5）。外側の条件 → registry の登録と種別 → attestation の採り直しと
     /// session id → controller の投入口、の順に判定し、全部通ったときだけ開封して controller に渡す。
     /// 開いた state は返さない。
     pub fn restore_in_session(
@@ -352,7 +352,7 @@ impl IdentityService<'_> {
         let bytes = zeroize::Zeroizing::new(
             serde_json::to_vec(&plain).map_err(|_| IdentityApiError::SealFailed)?,
         );
-        // 5. 投入の前に観測停止を記録する（ADR-0080 H3 / ADR-0083 D4）。最後の live event が
+        // 5. 投入の前に観測停止を記録する（ADR-0080 H3 / ADR-0101 D4）。最後の live event が
         // observation_stopped の間は Live View の接続も worker の event 書き込みも拒否され、
         // 解除は session の終了だけ。記録できなければ投入しない。投入に失敗しても停止のまま。
         let stop = task_core::browser_live::ScrubbedLiveEvent::from_event(
@@ -508,12 +508,12 @@ pub(crate) async fn delete_identity(
 struct RestoreBody {
     project_id: String,
     origin: String,
-    /// ADR-0088 D5: 復元先の稼働中 session。無ければ従来どおり `isolation_required`。
+    /// ADR-0108 D5: 復元先の稼働中 session。無ければ従来どおり `isolation_required`。
     #[serde(default)]
     session_id: Option<String>,
 }
 
-/// 利用の入口（ADR-0083 D3 / ADR-0088 D5）。`session_id` が稼働中の隔離 session を指し、その場の
+/// 利用の入口（ADR-0101 D3 / ADR-0108 D5）。`session_id` が稼働中の隔離 session を指し、その場の
 /// attestation が通ったときだけ開封して controller に渡し、204（本文なし）を返す。
 pub(crate) async fn restore_identity(
     State(state): State<ApiState>,

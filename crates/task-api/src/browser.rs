@@ -96,7 +96,7 @@ pub trait CredentialBrokerControl: Send + Sync {
     -> Result<bool, BrokerFailure>;
 }
 
-/// ADR-0091 D2: 管理者の site policy（daemon の設定から来る。モデル・worker・HTTP 要求は指定できない）。
+/// ADR-0110 D2: 管理者の site policy（daemon の設定から来る。モデル・worker・HTTP 要求は指定できない）。
 /// 手動登録の `policy_id` と `origin` が両方一致したものだけが broker の `CredentialPolicy` に入る。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -110,7 +110,7 @@ pub struct TrustedSitePolicy {
 }
 
 impl TrustedSitePolicy {
-    /// ADR-0091 D2 の形式検証（broker と同じ検査）。
+    /// ADR-0110 D2 の形式検証（broker と同じ検査）。
     pub fn validate(&self) -> Result<(), &'static str> {
         task_core::browser_wait::validate_trusted_login(
             &self.login_url,

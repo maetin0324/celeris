@@ -1,4 +1,4 @@
-//! ADR-0084 P4-B: trusted injection の接点。
+//! ADR-0102 P4-B: trusted injection の接点。
 //!
 //! [`CredentialProvider`] の契約（P2-B）は変えない。provider を呼べるのは
 //! [`PeerRole::Injector`]（isolated runtime の controller 側）だけで、worker・agent は拒否する。
@@ -218,7 +218,7 @@ impl std::fmt::Debug for RedisplayGuard {
 
 /// 注入した値の salt 付き hash だけを持ち、観測（snapshot・text）に値が再表示されたかを調べる。
 ///
-/// ADR-0092: broker が注入ごとに作り、[`RedisplayGuardWire`]（salt・digest・長さ）だけを
+/// ADR-0111: broker が注入ごとに作り、[`RedisplayGuardWire`]（salt・digest・長さ）だけを
 /// controller に渡す。検査は raw に加え percent・UTF-16LE・base64（標準/URL-safe）・JSON escape の
 /// 表現を復号してから行う（入れ子は 2 段まで）。
 pub struct RedisplayGuard {

@@ -1,4 +1,4 @@
-//! ADR-0081 D3: worker・人の接続・task cancel からの control 状態の遷移。
+//! ADR-0099 D3: worker・人の接続・task cancel からの control 状態の遷移。
 //!
 //! どれも 1 つの IMMEDIATE トランザクションで読み・遷移・書き戻しを行う。
 
@@ -286,7 +286,7 @@ mod tests {
     }
 }
 
-/// worker の agent 操作 gate の op（ADR-0094 D2）。
+/// worker の agent 操作 gate の op（ADR-0113 D2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentActionOp {
     /// 状態を読むだけ。
@@ -298,7 +298,7 @@ pub enum AgentActionOp {
 }
 
 impl SqliteStore {
-    /// ADR-0094 D2: task-api の `agent/begin`・`agent/end` と同じ遷移（auth_section 中の begin は拒否）。
+    /// ADR-0114 D2: task-api の `agent/begin`・`agent/end` と同じ遷移（auth_section 中の begin は拒否）。
     pub fn browser_control_agent_action(
         &self,
         key: BrowserSessionKey<'_>,

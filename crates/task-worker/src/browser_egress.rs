@@ -1,4 +1,4 @@
-//! ADR-0086: bounded CONNECT transport for the trusted browser controller.
+//! ADR-0104: bounded CONNECT transport for the trusted browser controller.
 //!
 //! The caller supplies an already authorised Unix stream; this module opens no host
 //! listener. It is not an isolation attestation: namespace plumbing and controller

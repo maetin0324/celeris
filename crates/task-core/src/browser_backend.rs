@@ -1,8 +1,8 @@
-//! ADR-0084 P4-C: browser backend の適合 fixture・routing・fallback・同一 task 評価。
+//! ADR-0102 P4-C: browser backend の適合 fixture・routing・fallback・同一 task 評価。
 //!
 //! I/O を持たない。backend を実際に走らせた結果（[`ConformanceResult`]）を受け取り、
 //! どの能力を名乗ってよいかと、task をどの backend に送るかを決める。
-//! 既存の loop（ACP / 明示の Claude）と ADR-0085 で採用された browser-specialist
+//! 既存の loop（ACP / 明示の Claude）と ADR-0103 で採用された browser-specialist
 //! を同じ適合記録で扱う。
 //! 機密の能力（credential 注入・identity 復元）は P4-A / P4-B の適合が無ければ名乗れない。
 
@@ -94,7 +94,7 @@ pub fn required_cases(cap: Capability) -> &'static [FixtureCase] {
     }
 }
 
-/// 実測試験 1 件の結果（ADR-0093）。
+/// 実測試験 1 件の結果（ADR-0112）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceOutcome {
@@ -118,19 +118,19 @@ pub struct ConformanceResult {
     pub backend_id: String,
     pub version: String,
     pub passed: BTreeSet<FixtureCase>,
-    /// ADR-0093: P4-B の件は `passed` に載るだけでは足りず、ここに要る試験が全て
+    /// ADR-0112: P4-B の件は `passed` に載るだけでは足りず、ここに要る試験が全て
     /// `passed` で並んでいなければ通ったと数えない。
     #[serde(default)]
     pub evidence: Vec<ConformanceEvidence>,
 }
 
-/// ADR-0093: P4-B trusted injection の実攻撃行列（`browser_injection_attacks`）の印。
+/// ADR-0112: P4-B trusted injection の実攻撃行列（`browser_injection_attacks`）の印。
 pub const P4B_ATTACK_MARKS: [&str; 22] = [
     "A0", "A1", "A2", "A3", "A3b", "A4", "A5", "A6", "A7", "A7a", "A8", "A8n", "A9", "A9a", "A10",
     "A11", "A12", "A13", "A14", "A15", "A16", "A17",
 ];
 
-/// ADR-0093: 本番 H3 経路の端から端（`browser_h3_injection`）と再表示防御の試験。
+/// ADR-0112: 本番 H3 経路の端から端（`browser_h3_injection`）と再表示防御の試験。
 pub const P4B_H3_TESTS: [&str; 2] = [
     "browser_h3_injection::production_h3_injects_once_without_exposure",
     "browser_h3_injection::injected_leak_is_caught_by_the_same_scanner",
@@ -394,7 +394,7 @@ mod tests {
         .collect()
     }
 
-    /// ADR-0093: P4-B の件は試験名つきの実測証拠からしか通らない。
+    /// ADR-0112: P4-B の件は試験名つきの実測証拠からしか通らない。
     #[test]
     fn p4b_cases_count_only_with_measured_evidence() {
         let b = backend(

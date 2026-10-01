@@ -1,8 +1,8 @@
-//! ADR-0081 D3: browser の制御 lease（P3-C takeover）の状態機械。
+//! ADR-0099 D3: browser の制御 lease（P3-C takeover）の状態機械。
 //!
 //! I/O も時計も持たない。呼び出し側が `now`（UNIX 秒）を渡す。ここが決めるのは
 //! 「いま誰が browser を操作してよいか」だけで、ACL（誰が人として要求できるか）は
-//! proxy 側（ADR-0081 D2）が先に確かめる。
+//! proxy 側（ADR-0099 D2）が先に確かめる。
 
 use std::collections::BTreeMap;
 use std::fmt;

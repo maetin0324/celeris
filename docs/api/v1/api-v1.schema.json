@@ -1840,7 +1840,7 @@
               "type": "null"
             }
           ],
-          "description": "ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。"
+          "description": "ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。"
         },
         "version": {
           "format": "uint64",
@@ -11462,7 +11462,7 @@
               "type": "null"
             }
           ],
-          "description": "ADR-0091 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。"
+          "description": "ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。"
         },
         "ttl_secs": {
           "description": "待つ秒数。省略・上限超えは reason ごとの上限に丸める。",
@@ -20252,7 +20252,7 @@
     },
     "TrustedLogin": {
       "additionalProperties": false,
-      "description": "ADR-0091 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を\n承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。",
+      "description": "ADR-0110 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を\n承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。",
       "properties": {
         "login_url": {
           "type": "string"

@@ -1,4 +1,4 @@
-//! ADR-0088 D4: host shim requests enter a private socket; only validated actions are
+//! ADR-0108 D4: host shim requests enter a private socket; only validated actions are
 //! written into the isolated runtime's `/session` for sandboxd's action child.
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -150,7 +150,7 @@ struct Serve<'a> {
     closed: &'a AtomicBool,
 }
 
-/// ADR-0094 D4: `Stopped` closes the session once through the upstream `close` action
+/// ADR-0114 D4: `Stopped` closes the session once through the upstream `close` action
 /// (the same close the cancel path issues).
 struct CloseOnce<'a> {
     root: &'a Path,
@@ -189,7 +189,7 @@ fn serve(mut stream: UnixStream, ctx: &Serve<'_>, sequence: u64) {
         Some(req) if req.verb == "__version__" => {
             run_action(ctx.root, sequence, &req).unwrap_or_else(|_| failed())
         }
-        // ADR-0094 D1: agent actions reach the browser only while the store's control state
+        // ADR-0113 D1: agent actions reach the browser only while the store's control state
         // lets the agent act; otherwise nothing is written for the action child.
         Some(req) => {
             let closer = CloseOnce {

@@ -1,8 +1,8 @@
-//! ADR-0082 D2: browser の live proxy（P3-B）の ACL と記録の規則。
+//! ADR-0100 D2: browser の live proxy（P3-B）の ACL と記録の規則。
 //!
 //! I/O も時計も持たない。呼び出し側が `now`（UNIX 秒）を渡す。ここが決めるのは
 //! 「誰がどの task/run の live を見てよいか」と「何を永続 event に残すか」だけで、
-//! 操作の権利（controller lease）は `browser_control`（ADR-0081 D3）が決める。
+//! 操作の権利（controller lease）は `browser_control`（ADR-0099 D3）が決める。
 
 use serde::{Deserialize, Serialize};
 

@@ -1,4 +1,4 @@
-# ADR-0081: Browser Phase 3 の制御 lease（pause / takeover / resume / stop）
+# ADR-0099: Browser Phase 3 の制御 lease（pause / takeover / resume / stop）
 
 ---
 tasks: [01M3PBAVFAYPDWMQMDBXPTE2V8]

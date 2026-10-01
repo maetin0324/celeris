@@ -368,6 +368,8 @@ impl Dispatcher {
             cargo_target_work_unit: None,
             // ADR-0079 D7（Phase R3a）: 木の節点の worker の run だけ `dispatch_ready` が上書きする。
             decision_requests: false,
+            // ADR-0074「R7-11」: 呼び出し元（`dispatch_ready_task`）が spawn の直前に実効の予算を入れる。
+            budget: None,
         })
     }
 

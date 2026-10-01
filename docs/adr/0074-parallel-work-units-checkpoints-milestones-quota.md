@@ -1341,3 +1341,29 @@ plan v4 が採用された（有効な WU 10 がすべて done。行は元の版
    の依存（D3.7）を待つ unit は「名指しの待ち: children」。木でない Task の障害通知の key は `stall:<task_id>:<StallDetected の seq>`
    （木の節点は従来どおり `tree-stall:`）。
 4. schema・migration の変更は無い（`PlanComplete` は `Transitioned.reason` の新しい値だけ。replay は `to` を読むので変わらない）。
+
+## R7-11 実装時の明確化: planner / WU の予算をワーカーに渡す写しに載せる（2026-10-01）
+
+本番（root task 01M3PAX6RVE7AX8Z6118KADME3、/3、task の予算 `{max_turns: 10, max_wall_secs: 600}`、`[execution.planner]` は既定 24 / 900）で、
+review_fail の後の replan と、`plan_invalid` の決定に `replan` で答えた後の planner run（01M3VK4Q…、01M3VKM1…、01M3VKPD…、それ以前の 01M3T6XR…）が
+`budget_exhausted(Turns): error_max_turns` で落ちた。`request.json` の `task.budget.max_turns` は 10、claude には `--max-turns 10` が渡っていた。
+調べると、この木の **planner run はすべて**（最初の計画を含む）、**WU の run もすべて** `request.json` の予算が task の予算のままだった。
+
+原因: `dispatch_ready_task` は D5.3 / ADR-0072 D14 の planner 予算（と D18 の WU 予算、ADR-0052 の知識整理のフォールバック予算）を
+**手元の `task` の写し**に書くが、`spawn_worker` には `task_id` しか渡さず、`run_worker` が DB から task を読み直す。その写しに戻すのは
+知識整理のフォールバック予算（`RunExtras.knowledge_fallback.budget`）だけだった。手元の予算が効いていたのは `RunLimits.wall_clock`
+（`max_wall_secs`）だけで、`max_turns`（アダプタが `--max-turns` にする `RunRequest.task.budget`）には届いていなかった。
+replan の経路（review_fail・人の decompose・`plan_invalid` の `replan` の回答・不正な計画の後の再試行・R2b の子の失敗の後の replan・
+途中確認の replan）は、どれも `WuDispatchGate::RunPlanner` → `is_planner_dispatch` の同じ分岐を通っており、分岐の判定は正しかった。
+
+決定:
+1. `RunExtras` に `budget: Option<Budget>` を足し、`dispatch_ready_task` は spawn の直前に**この run の実効の予算**（planner なら
+   `[execution.planner] max_turns / max_wall_secs`、WU なら D18 の値、知識整理のフォールバックなら ADR-0052 の値、それ以外は task の予算）
+   を必ず入れる。`run_worker` は DB から読み直した写しの `budget` をこの値で置き換える（DB の task は変えない。ADR-0052 D2 と同じ
+   「ワーカーに渡す写しだけ」）。知識整理のフォールバックの上書きはその後に従来どおり掛かる（同じ値）。
+2. tier（`execution_tier` として既に渡している）と adapter（dispatcher が選んだ `Arc<dyn WorkerAdapter>` を渡している）は従来どおり効いて
+   おり変えない。人の `tier:frontier` の上書き（D5.3）もそのまま。
+3. 回帰テストは `RunRequest.task.budget` そのもの（＝ `--max-turns` の元）を確かめる: 最初の計画、review_fail の後の replan、
+   `plan_invalid` の決定への `replan` の回答の後の planner、WU の run（D18 の既定と `WorkUnitSpec.budget`）。
+4. schema・migration・設定の変更は無い。WU の run の `max_turns` も D18 の意図どおり（`max(task, 30)` か WU の明示）になる（従来は
+   task の値のまま）。

@@ -981,6 +981,10 @@ struct RunExtras {
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run（planner でない）だけ `true`（`result.json` の
     /// `decisions` で人への決定の要求を出せることを前置きで伝える）。
     decision_requests: bool,
+    /// ADR-0074「R7-11 実装時の明確化」: この run の実効の予算（planner なら `[execution.planner]`、WU なら D18、
+    /// 知識整理のフォールバックなら ADR-0052 の値、それ以外は task の予算）。`run_worker` は DB から読み直した
+    /// 写しの `budget` をこれで置き換える（`max_turns` が `RunRequest.task.budget` → `--max-turns` に届くように）。
+    budget: Option<task_core::Budget>,
 }
 
 struct ReviewEntry {

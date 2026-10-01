@@ -2258,3 +2258,55 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
   パスを `DispatchConfig` に持たせて opt-out でも渡す（試験の `DispatchConfig` の組み立てが多数あるので今回は見送り）。
 - GUI に「案件を付ける」操作は無い（API のみ）。後続の draft を人が Go する画面の導線は別途。
 - 10:4x〜11:08Z（2026-10-01）: **R7-9・R7-10 の昇格と browser の後始末**。(1) 案件なしの後続 2 件を案件付きで起票し直し: launcher 設計 01M3VFQK2Z…（draft）、機密能力の解放 01M3VFQZ2T…（launcher に depends_on、ptrace 拒否の実証を条件に追加）。旧 01M3SPN8HP…・01M3T7FRCW… は取り消し。(2) R7-9 を統合 → 初回の release は `/` が満杯（ENOSPC。`/var/tmp/agent-platform-build` 245G = merge 済み worktree の target）で cargo-test が失敗 → merge 済み 6 つ（約 231G）を消して 52% → release **8a88ab4d868e** gate ok / verify ok・live_ok → live 昇格。browser 根 01M3PAX6… を `POST /reopen {"expected_status":"failed"}`（retry は計画を持たない複製になるので使わない）→ `integrate-phase-4` / `integrate-phase-4-inject` が `stage_reopened` で pending → phase-4 の統合が land2 68323b11 を merge して done（11:07:53）。(3) R7-10 を統合（tests/mod.rs と PROGRESS の衝突は両方残し、mod の順を cargo fmt）→ release **81a65f77b156** gate 全段 ok / verify ok・live_ok → live 昇格。以後、worker の `celerisctl add` / `followups.json` は起票元の案件・repo で draft を作る。merge 後に worktree の target を消す運用にする。
+
+## R7-11: planner / WU の run の予算を `RunRequest.task.budget` に載せる（2026-10-01）
+
+### 症状と原因
+
+- 本番 root 01M3PAX6RVE7AX8Z6118KADME3（/3、task の予算 10 turns / 600 s、`[execution.planner]` は既定 24 / 900）の replan の planner run
+  （01M3VK4Q…・01M3VKM1…、それ以前の 01M3T6XR…）が `budget_exhausted(Turns): error_max_turns` で落ちた。`request.json` の `task.budget.max_turns` は 10。
+- 調べるとこの木の **planner run 12 本すべて**（最初の計画を含む）と **WU の run すべて**の `request.json` が task の予算（10 / 600）のまま、
+  `worker_hint.adapter` も `None` だった。replan の経路（review_fail・decompose・`plan_invalid` の `replan` の回答・不正な計画の後の再試行・R2b・
+  途中確認）はどれも `WuDispatchGate::RunPlanner` → `is_planner_dispatch` の同じ分岐を通っており、**分岐の判定は正しかった**。
+- 原因: `dispatch_run.rs` の L127-155（修正前）は planner / WU の予算を手元の `task` の写しに書くが、`spawn_worker`（L741）は `task_id` しか渡さず、
+  `worker_task.rs:34` の `run_worker` が DB から task を読み直す。写しに戻していたのは知識整理のフォールバック予算（L44-47、修正前）だけ。
+  手元の予算は `RunLimits.wall_clock` には効いていた（900 s）が、アダプタが `--max-turns` にする `RunRequest.task.budget` には届いていなかった。
+  （adapter は dispatcher が選んだ `Arc<dyn WorkerAdapter>`、tier は `execution_tier` で渡しているので効いている。）
+
+### 修正（ADR-0074「R7-11 実装時の明確化」を先に追記）
+
+- `RunExtras.budget: Option<Budget>`（`dispatcher.rs:987`）。`dispatch_ready_task` が spawn の直前に実効の予算を入れ（`dispatch_run.rs:743`）、
+  `run_worker` が読み直した写しの `budget` を置き換える（`worker_task.rs:44`。DB の task は変えない）。知識整理のフォールバックは従来どおりその後に掛かる。
+- 副次: WU の run の `max_turns` も ADR-0072 D18 どおり（`max(task, 30)` か `WorkUnitSpec.budget`）になる（従来は task の値のまま）。schema・設定の変更なし。
+
+### 試験
+
+- `crates/task-dispatch/src/dispatcher/tests/planner_budget.rs`（新規 2 本。本番の形 = 人の明示の compound の root、予算 10 / 600、木は有効）:
+  - `review_fail_replan_planner_gets_the_planner_budget`: /3 の計画 → leaf → 最終レビュー不合格（`review_fail`）→ replan の planner → 合格で done。
+    planner 2 本とも `RunRequest.task.budget` が 24 / 900、leaf は 30 / 1800、`wall_clock` も一致。DB の task の予算は 10 / 600 のまま。replay も一致。
+  - `plan_invalid_replan_answer_planner_gets_the_planner_budget`: leaf の検査が落ち続ける → R2b の replan → 不正な計画 2 回 → `plan_invalid` →
+    `replan`（note 付き）と答える → 版 2 で done。planner 4 本（最初の計画・child-failure の replan・不正な計画の後の再試行・回答の後）すべて 24 / 900。
+- **変異確認**: `run_worker` の置き換えを無効にする → 2 本とも `run 0 (... budget: Budget { max_turns: 10, max_wall_secs: 600 ..}, wall_clock: 900s)` で落ちる
+  （本番の形そのもの）。戻して通る。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo nextest run --workspace` → **3004 passed, 7 skipped（exit 0）**。
+
+### 昇格後にすること
+
+- 設定の変更は不要。昇格後の planner run の `runs/<run_id>/request.json` の `task.budget.max_turns` が 24（`[execution.planner]`）、claude の引数が
+  `--max-turns 24` であることを確かめる。WU の run は 30 以上になる。
+- root 01M3PAX6…（paused、`blocked` / `awaiting_plan_approval`）: `plan_invalid` の決定（01M3VK60…）は**既に回答済み**。最後の planner（01M3VKPD…、
+  2 回目の試行で完了）の計画は stage が 6 で上限 5 を超え、`limit:max_stages` の決定（01M3VKQXP34FCZHV399NMXPHJX、open）と計画の承認要求が出ている。
+  この計画は 10 turns で急いで作られたものなので、中身を見て (a) 妥当なら `POST /decisions/{id}/answer {"option":"raise-once"}` → 計画を承認 →
+  `POST /tasks/{id}/resume`、(b) 作り直させるなら `{"option":"replan","note":"stage は 5 以内"}` → `POST /tasks/{id}/resume`（planner は 24 turns で走る）。
+- 別の root 01M3SPN8HPHPWZ32F0AG986TWS にも `plan_invalid`（01M3VA72…、open）がある。これも 10 turns の planner の不正な計画が原因の可能性が高いので、
+  昇格後に `replan` で答え直す価値がある。
+
+### 未解決・提案
+
+- 「dispatcher が手元の写しに書いた値が `run_worker` の読み直しで消える」形は予算以外にも起こり得る（`worker_hint` は今は `execution_tier` と
+  選んだ adapter で別に渡しているので実害なし）。将来、手元で task を書き換える処理を足すときは `RunExtras` に載せること（ADR-0074 R7-11 に記録）。

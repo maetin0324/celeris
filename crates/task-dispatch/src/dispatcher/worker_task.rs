@@ -39,6 +39,11 @@ pub(super) async fn run_worker(
     // ADR-0072 D14（Phase E4b 項目3）: `extras` は後段で複数のフィールドが個別に消費されるので、
     // 使う値だけ先に取り出しておく。
     let planner_permission_mode = extras.planner_permission_mode.clone();
+    // ADR-0074「R7-11 実装時の明確化」: dispatcher が決めたこの run の実効の予算（planner の `[execution.planner]`、
+    // WU の D18 など）をワーカーに渡す写しに戻す（DB の task は変えない）。
+    if let Some(budget) = extras.budget {
+        task.budget = budget;
+    }
     // ADR-0052 D2（Phase 64）: フォールバックした知識整理 run は、DB のタスクではなく**ワーカーに渡す
     // 写し**だけを書き換える（専用アダプタの固定を外し、予算を `max_turns = 8` / `max_wall_secs = 600` に）。
     if let Some(fallback) = &extras.knowledge_fallback {

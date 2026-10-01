@@ -75,6 +75,7 @@ const OUTCOME_TONE: Record<string, Tone> = {
 export function OverviewTab({
   browserRuns,
   liveViews,
+  browserOwner,
   detail,
   artifactCount,
   org,
@@ -91,6 +92,7 @@ export function OverviewTab({
   detail: TaskDetail;
   browserRuns: BrowserRun[];
   liveViews: Record<string, LiveViewState>;
+  browserOwner: { csrfToken: string | null };
   artifactCount: number;
   org: OrgNode[];
   milestones: MilestoneView[];
@@ -276,7 +278,7 @@ export function OverviewTab({
       )}
       {browserRuns.length > 0 && (
         <Suspense fallback={null}>
-          <BrowserRunsPanel runs={browserRuns} liveViews={liveViews} />
+          <BrowserRunsPanel runs={browserRuns} liveViews={liveViews} csrfToken={browserOwner.csrfToken} />
         </Suspense>
       )}
 

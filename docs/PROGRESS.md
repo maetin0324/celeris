@@ -65,3 +65,10 @@ perf-query を含む統合 HEAD `dd413c5e` で指定 gate を再実行。`cargo 
 `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 workspace 全 test の成功は未確認。user namespace を利用できる環境で再実行が必要。
+
+## Root delivery 最終 workspace 検証（verify-final、2026-10-01）
+
+- `cargo test --workspace` → exit 101（約3,029 passed / 5 failed / 0 ignored、`instance_handoff` 実行約60秒）。失敗5件は `crates/celeris/tests/instance_handoff.rs`。3件で worker DB guard probe が user namespace の `Operation not permitted` となり、2件の dispatch / standby 待機試験も同テスト群内で失敗した。delivery / inbox の試験を含む他の試験群は通過し、この task の差分に起因する失敗は確認されなかった。
+- `cargo test --workspace -- --list` → exit 0、3,303 tests 列挙。
+- `cargo clippy --workspace -- -D warnings` → exit 0（41.53秒）。
+- test の受け入れ条件は未達。user namespaces が利用可能な環境で workspace test の再実行が必要。

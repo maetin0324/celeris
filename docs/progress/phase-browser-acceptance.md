@@ -167,10 +167,11 @@ task 01M3SPF94RDWTPWHNDEQD68VB9。2026-09-30 作成。
 
 決定（ADR-0080）: credential を注入した session の終わりまで LLM の観測（snapshot・console・event）と Live View を止める。ADR-0083 D4 は identity を復元した session も同じ扱いにする。
 
-- 実装: `crates/task-worker/src/browser.rs:544`（`forward_events` は認証区間中に progress・artifact・live event を捨て、溜めない）、`crates/task-worker/src/browser_live.rs:255`（`LiveEmitter::auth_section`）
+- 実装: `crates/task-worker/src/browser.rs`（注入後も `adapter.run` を続ける方式。LiveEmitter guard と CDP auth section を session の終了まで保持し、`forward_events` は progress・artifact・live event を捨てる。browser auth section の解除は session の close 成功後のみ。close 失敗時は停止を維持）、`crates/task-worker/src/browser_live.rs`（`LiveEmitter::auth_section`）
 - 実装: `crates/task-core/src/browser_live.rs:112`（認証区間の session は新規・既存接続とも `observation_stopped`）、`crates/task-api/src/browser_live.rs:164`（`credential_interval` を store と event から判定）
 - test: `browser_auth_section_forward_events_drops_progress_artifact_and_live` cmd: `cargo test -p task-worker --lib browser_auth_section_forward_events_drops_progress_artifact_and_live`
 - test: `browser_live_auth_section_drops_events_without_buffering` cmd: `cargo test -p task-worker --lib browser_live_auth_section_drops_events_without_buffering`
+- test: `h3_injected_session_forward_events_stays_stopped_after_injection`、`h3_injected_session_live_view_stays_stopped_after_injection`、`h3_injected_session_guard_releases_at_session_end` cmd: `cargo test -p task-worker --lib h3_injected_session_`
 - test: `credential_interval_stops_new_and_existing_connections` cmd: `cargo test -p task-core --lib credential_interval_stops_new_and_existing_connections`
 - 実装: `crates/task-api/src/browser_identity.rs:307`（`restore_in_session`: controller への投入の前に `observation_stopped` を store へ記録し、投入が失敗しても停止は残る。解除経路は session の終了のみ）
 - test: `restore_enters_observation_stop_until_session_end` cmd: `cargo test -p task-api --test browser_restore_deliver restore_enters_observation_stop_until_session_end`

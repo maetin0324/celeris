@@ -738,6 +738,9 @@ impl Dispatcher {
         // ADR-0074 D4（Phase F3 quota）: 観測の `before` を記録する。ADR-0076: planner run も同じく
         // 登録する（`on_planner_finished` が `resolve_quota_estimate` で閉じる）。
         self.quota_begin(account.as_deref(), account_adapter, &run_id);
+        // ADR-0074「R7-11 実装時の明確化」: 上で書いた予算（planner / WU / 知識整理のフォールバック）は手元の写しにしか
+        // 無い。`run_worker` は DB から task を読み直すので、実効の予算を必ず渡す（`wall` だけでなく `max_turns` も効かせる）。
+        extras.budget = Some(task.budget);
         let handle = self.spawn_worker(
             task.id,
             task.worker_hint.tier,

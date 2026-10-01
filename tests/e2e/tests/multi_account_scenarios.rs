@@ -210,7 +210,8 @@ fn second_account_runs_the_overflow_when_the_first_is_at_capacity() {
         r#"cat >/dev/null
 printf '%s' "$ACCOUNT" > account.txt
 # 両アカウントのワーカーが起動するまで、どちらも完了させない。
-barrier=$(dirname "$0")
+# DB guard は DB の親に新規ファイルを作らせない。既存の workspace 内を共有バリアに使う。
+barrier=$(dirname "$0")/ws-1
 touch "$barrier/started-$ACCOUNT"
 remaining=400
 while [ ! -f "$barrier/started-a" ] || [ ! -f "$barrier/started-b" ]; do

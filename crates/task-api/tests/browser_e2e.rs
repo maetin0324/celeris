@@ -30,6 +30,8 @@ const SENTINEL_USER: &str = "SENTINEL-e2e-user-51f0";
 const SENTINEL_PASS: &str = "SENTINEL-e2e-pass-a93c";
 const ORIGIN: &str = "https://login.example.com";
 
+type AuthCall = (bool, usize, bool, Option<String>);
+
 struct World {
     env: TestEnv,
     app: axum::Router,
@@ -40,7 +42,7 @@ struct World {
     task: Task,
     /// 全 run の worker 出力（進捗・browser lifecycle・harness が見た shim の出力・最終結果）。
     worker_output: Arc<Mutex<Vec<String>>>,
-    auth_calls: Mutex<Vec<(bool, usize, bool, Option<String>)>>,
+    auth_calls: Mutex<Vec<AuthCall>>,
     live: Mutex<Vec<String>>,
 }
 
@@ -206,7 +208,7 @@ struct StoreSink {
     browsers: Mutex<Vec<BrowserRun>>,
     /// ADR-0080 H3 の記録: (active, その時点の worker 出力件数, 書いた後の control 状態の
     /// auth_section, 区間中に takeover を試した結果)。
-    auth_calls: Mutex<Vec<(bool, usize, bool, Option<String>)>>,
+    auth_calls: Mutex<Vec<AuthCall>>,
     live: Mutex<Vec<String>>,
 }
 impl EventSink for StoreSink {
@@ -215,7 +217,9 @@ impl EventSink for StoreSink {
         _run_id: &str,
         _session_id: &str,
     ) -> Option<std::sync::Arc<dyn task_worker::browser_live::ControlGate>> {
-        Some(std::sync::Arc::new(task_worker::browser_live::InMemoryGate::new()))
+        Some(std::sync::Arc::new(
+            task_worker::browser_live::InMemoryGate::new(),
+        ))
     }
     fn browser_auth_section(
         &self,

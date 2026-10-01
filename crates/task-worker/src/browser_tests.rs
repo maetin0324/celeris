@@ -661,9 +661,11 @@ async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance()
             .join("runs/fallback-run/browser-fallback-1/config.json")
             .exists()
     );
-    let browsers = sink.browsers.lock().unwrap();
-    assert_eq!(browsers.len(), 4);
-    assert_ne!(browsers[0].session_id, browsers[2].session_id);
+    {
+        let browsers = sink.browsers.lock().unwrap();
+        assert_eq!(browsers.len(), 4);
+        assert_ne!(browsers[0].session_id, browsers[2].session_id);
+    }
 
     let denied = temp.path().join("empty-conformance.json");
     std::fs::write(
@@ -886,11 +888,12 @@ async fn p4c_fallback_real_harness_scenario() {
     .unwrap();
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     assert!(primary_dir.join("harness-killed.pid").exists());
-    let sessions = sink.browsers.lock().unwrap();
-    assert!(sessions.len() >= 4);
-    assert_eq!(sessions[1].state, BrowserRunState::Failed);
-    assert_ne!(sessions[0].session_id, sessions[2].session_id);
-    drop(sessions);
+    {
+        let sessions = sink.browsers.lock().unwrap();
+        assert!(sessions.len() >= 4);
+        assert_eq!(sessions[1].state, BrowserRunState::Failed);
+        assert_ne!(sessions[0].session_id, sessions[2].session_id);
+    }
     let no_alternate_record = root.join("no-alternate-conformance.json");
     let mut no_alternate_ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();

@@ -237,7 +237,9 @@ impl EventSink for StoreSink {
         _run_id: &str,
         _session_id: &str,
     ) -> Option<std::sync::Arc<dyn task_worker::browser_live::ControlGate>> {
-        Some(std::sync::Arc::new(task_worker::browser_live::InMemoryGate::new()))
+        Some(std::sync::Arc::new(
+            task_worker::browser_live::InMemoryGate::new(),
+        ))
     }
     fn browser_auth_section(
         &self,

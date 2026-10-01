@@ -26,3 +26,26 @@ Browser Phase 1〜4 のブランチ `478e86c4` にあった Phase 3/4 の ADR �
 | 0094 | [P4-A restore deliver state](../adr/0114-browser-p4a-restore-deliver-state.md) | 0114 |
 
 Phase 1/2 の browser ADR-0078 と ADR-0080 は既存の番号を維持する。main に元からある ADR-0078 の重複は、この統合作業の対象外。main 由来の ADR-0081（web SPA）、ADR-0082（dispatcher 分割）、ADR-0083（source size）、ADR-0089（CoS 並列度）などの参照も維持する。Browser の機密能力や本番設定の扱いは [Phase 4 記録](phase-browser-4.md)と[追跡表](phase-browser-acceptance.md)を参照。
+
+## 統合後の検証（2026-10-01）
+
+統合ブランチで `git merge-base --is-ancestor 478e86c484267834efe5e103479e07c214b2f0d1 HEAD` と `git merge-base --is-ancestor 2eb1b03027b1 HEAD` はともに exit 0。`test -z "$(git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- crates gui docs scripts)"` も exit 0。browser と main の双方が履歴に残り、衝突マーカーはない。
+
+- **既定無効・本番設定**: `crates/celeris/src/config/mod.rs` の `Config.browser` は `#[serde(default)]`、`BrowserRuntimeConfig.egress.resolver` は `Option` で既定 `None`。`Config.api.browser_site_policies` も空が既定で、`browser_settings_default_to_unconfigured_and_site_policy_validates` が空 TOML を検査する。さらに `CELERIS_BROWSER_CONFORMANCE_FILE` がなければ conformance ledger はなく、`released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime` は resolver/runtime 不足を拒否する。従って新しい欄を本番 TOML に足さなくても旧設定は解析でき、既定では browser の実行経路は有効にならない。本番で browser を使う前には、運用者が egress resolver、適合記録、必要な site policy と credentiald 接続を評価して明示設定する必要がある。本番の実設定・環境変数はこの作業で検査・編集していない。
+- **機密能力は本番では未解放**: `sensitive_declaration_requires_p4a_and_p4b_conformance` は `CredentialInjection` と `IdentityRestore` の P4-A/P4-B 証拠欠落を拒否する。`credential_use_is_released_only_by_p4b_evidence_in_the_ledger` は試験用の完全な ledger なら解除可能な条件を示すが、証拠が欠ければ拒否する。`released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime` は未適合 backend と隔離 runtime 不在を拒否する。`credential_injection_sameuid_rejected_in_production`（credentiald）・`identity_restore_sameuid_rejected_in_production`（worker）・`restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal`（API）は同一 UID の実 session を `SameUid` / `isolation_required` として拒否する。既定構成ではこの二能力を解放できず、別 host UID 実証と本番での解放は未確認・後続である。これは機能コードの恒久禁止を意味しない。
+- **P3-B frame は未達**: [受け入れ追跡表](phase-browser-acceptance.md) の P3-B-2/3 は「未達」。`crates/task-worker/src/browser_live.rs` の `LiveEmitter::emit` は frame を破棄し、`crates/task-worker/src/browser.rs` の `live_view_url` は `None`。frame の実配線と実 process 試験は追跡表の後続事項のまま。
+- **DB migration**: `crates/task-core/src/store/migrations.rs` は main の `0034_cluster_job_waits.sql` の後に browser の `0035_browser_phase3_store.sql` と `0036_browser_trusted_login.sql` を割り当て、`SCHEMA_VERSION = 36`。本番 DB では検証していない。昇格時の schema 34→36 適用は運用側の手順で実施する。
+- **source size**: `python3 scripts/dev/source-size-report.py --strict` は exit 0、active warning 0 件、`task-api/src/types.rs` の既存例外 1 件。統合で 300 行を超えた `task-api/src/browser_identity.rs` の inline test は `browser_identity/tests.rs` に外出しした。
+
+検証コマンド・exit・テスト数は以下の通り。
+
+| コマンド | exit | 結果 |
+|---|---:|---|
+| `cargo fmt --all -- --check` | 0 | 全ファイルの整形検査に合格 |
+| `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib` | 101 | namespace が使えない sandbox で task-worker の 12 テストが `Operation not permitted`。schema 生成物は `git diff --quiet -- docs/api/v1 docs/protocol` で差分ゼロを確認。 |
+| `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema` | 0 | 29 passed / 0 failed。生成後の `git diff --quiet -- docs/api/v1 docs/protocol` も exit 0。 |
+| `cargo test --workspace` | 0 | 権限付きの namespace 実行で **3,206 passed / 0 failed / 12 ignored**（118 群）。上記の既定無効・機密拒否の引用テストも全て `ok`。初回は e2e の multi-account バリアが DB guard の読み取り専用 DB 親に作られて 60 秒待機に達したため、既存の書き込み可能な workspace 内へ移して再実行した。 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 | 警告 0 件。browser テストの型複雑度と mutex guard の保持を修正後に全 target で合格。 |
+| `python3 scripts/dev/source-size-report.py --strict` | 0 | active warning 0 件、既存例外 1 件 |
+
+未解決: P3-B frame、別 host UID の実証と `ptrace` を含む A13、機密能力の本番での適合、昇格・本番設定の整備。上記の試験環境の namespace 制約は権限付き再実行で切り分ける。

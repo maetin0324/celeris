@@ -215,13 +215,20 @@ async fn restore_enters_observation_stop_until_session_end() {
     let proof = sign(&key, &id, "r1", "live-s");
     let grant = send(
         &app,
-        post_admin(&live(&id, "r1", "live-s", "grant"), &json!({"assertion":proof})),
+        post_admin(
+            &live(&id, "r1", "live-s", "grant"),
+            &json!({"assertion":proof}),
+        ),
     )
     .await;
     assert_eq!(grant.status, 200, "{}", grant.text());
     let grant_id = grant.json()["grant_id"].as_str().expect("grant").to_owned();
     let relay = json!({"assertion":proof,"grant_id":grant_id});
-    let check = send(&app, post_admin(&live(&id, "r1", "live-s", "check"), &relay)).await;
+    let check = send(
+        &app,
+        post_admin(&live(&id, "r1", "live-s", "check"), &relay),
+    )
+    .await;
     assert_eq!(check.status, 200, "{}", check.text());
 
     // 開封前に落ちる復元（他 project）は停止を記録しない。
@@ -232,20 +239,34 @@ async fn restore_enters_observation_stop_until_session_end() {
         )
     };
     assert_problem(&send(&app, restore("other")).await, 422, "other_project");
-    let check = send(&app, post_admin(&live(&id, "r1", "live-s", "check"), &relay)).await;
-    assert_eq!(check.status, 200, "refused restore does not stop observation");
+    let check = send(
+        &app,
+        post_admin(&live(&id, "r1", "live-s", "check"), &relay),
+    )
+    .await;
+    assert_eq!(
+        check.status, 200,
+        "refused restore does not stop observation"
+    );
     assert!(!stop.load(Ordering::SeqCst));
 
     // 成功した復元: 204、投入の前に observation_stopped が記録され、worker 側の旗も立つ。
     let ok = send(&app, restore("proj")).await;
     assert_eq!(ok.status, 204, "{}", ok.text());
     assert!(!ok.text().contains("restore-obs-stop-secret"));
-    assert!(stop.load(Ordering::SeqCst), "worker observation stop raised");
+    assert!(
+        stop.load(Ordering::SeqCst),
+        "worker observation stop raised"
+    );
     assert!(controller.lock().expect("controller").observation_stopped());
 
     // 既存の接続も新規の grant も ObservationStopped で拒否される。
     assert_problem(
-        &send(&app, post_admin(&live(&id, "r1", "live-s", "check"), &relay)).await,
+        &send(
+            &app,
+            post_admin(&live(&id, "r1", "live-s", "check"), &relay),
+        )
+        .await,
         403,
         "observation_stopped",
     );
@@ -253,7 +274,10 @@ async fn restore_enters_observation_stop_until_session_end() {
     assert_problem(
         &send(
             &app,
-            post_admin(&live(&id, "r1", "live-s", "grant"), &json!({"assertion":proof2})),
+            post_admin(
+                &live(&id, "r1", "live-s", "grant"),
+                &json!({"assertion":proof2}),
+            ),
         )
         .await,
         403,
@@ -273,7 +297,11 @@ async fn restore_enters_observation_stop_until_session_end() {
         "observation_stopped",
     );
     assert_problem(
-        &send(&app, post_admin(&live(&id, "r1", "live-s", "check"), &relay)).await,
+        &send(
+            &app,
+            post_admin(&live(&id, "r1", "live-s", "check"), &relay),
+        )
+        .await,
         403,
         "observation_stopped",
     );
@@ -282,11 +310,19 @@ async fn restore_enters_observation_stop_until_session_end() {
     sup.stop();
     assert!(stop.load(Ordering::SeqCst));
     assert_problem(
-        &send(&app, post_admin(&live(&id, "r1", "live-s", "check"), &relay)).await,
+        &send(
+            &app,
+            post_admin(&live(&id, "r1", "live-s", "check"), &relay),
+        )
+        .await,
         403,
         "observation_stopped",
     );
     // 止まった session への復元は開封前に拒否される。
-    assert_problem(&send(&app, restore("proj")).await, 403, "isolation_required");
+    assert_problem(
+        &send(&app, restore("proj")).await,
+        403,
+        "isolation_required",
+    );
     eprintln!("restored session live-s: Live View refused (observation_stopped) until session end");
 }

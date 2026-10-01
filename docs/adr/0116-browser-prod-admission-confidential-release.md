@@ -37,4 +37,4 @@ ADR-0112 の実測 conformance と ADR-0102 D6 の起動前拒否も維持する
 - 別 host UID・全隔離条件成立・owner が daemon 以外・launcher 経由・ptrace 拒否が実証された session で、両方の本番 `Attested` admission が成功する試験を置く。broker は実 process の事実を採り直し、worker の復元経路も同じ owner 条件を通す。
 - `SameUid`、namespace 等の非隔離、採取/検証失敗、`OwnerUnknown`、`UsernsOwnedByDaemon`、launcher なし、ptrace 未拒否を個別に拒否する。資格情報の漏洩と復元時の H3 観測停止も回帰試験で確認する。
 - ADR-0115 の launcher、controller、lifecycle の実 process 攻撃試験結果を記録してから有効化を判断する。A13 の broker `peer_uid_mismatch` と ptrace 拒否は別の判定として記録する。
-- 本番への昇格と設定変更は、統合済み commit と試験証拠を人が確認・承認した後に**人が行う**。エージェントは昇格しない。この ADR の採用だけでは本番を有効化しない。
+- 本番への昇格と設定変更は、統合済み commit と試験証拠に対する人の承認を経て**人が行う**。エージェントは昇格しない。この ADR の採用だけでは本番を有効化しない。

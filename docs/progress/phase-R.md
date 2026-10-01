@@ -1945,3 +1945,4 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
   ログに `worker runs see the db directory read-only (ADR-0095)` が出ることを確かめる。
 - 昇格後、worker の run の中から `celerisctl --db /var/lib/celeris/celeris.sqlite3 ls` が動き、`add` が「read-only」で失敗する。
 - `/var/lib/celeris` 直下に DB 以外のものを新しく置く場合、既存の項目（workspaces/ など）は従来どおり書けるが、run から直下への新規作成はできない。
+- 00:30Z（2026-10-01）: **R7-6** を main に統合 → release **883b9aff0832**（schema 34）: gate 全 exit 0 → `verify.sh` ok=true / live_ok=true（staging のログに `worker runs see the db directory read-only (ADR-0095)`）→ `promote.sh` live で昇格（backup `20261001-003033-pre-883b9aff0832.sqlite3`）。昇格後、新 daemon（pid 3129406）が起こした worker（claude、pid 3152230）が別の mount namespace にいて `/var/lib/celeris` が `ro` であることを `/proc/<pid>/mountinfo` で確認。残: `[adapters.codex] extra_args = ["--approve-for-me"]` は escalation を自動承認する（人の判断待ち）、`systemd-run --user` で namespace の外に出る経路は残る（ADR-0095）。

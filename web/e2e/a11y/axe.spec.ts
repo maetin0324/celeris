@@ -1,39 +1,40 @@
-import { createRequire } from "node:module";
 import { expect, test } from "@playwright/test";
-import { startGateway } from "../support/gateway";
-import { v3Screens } from "../support/screens";
+import { seriousViolations } from "../support/axe";
+import { startFixtureGateway } from "../support/fixture-gateway";
+import { screens } from "../support/screens";
 
-const axePath = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
+// P5-03: screens.ts の全行（/login を含む）を偽 daemon の fixture で描いて検査する。
 test.use({ bypassCSP: true }); // axe の注入だけに適用。配信する CSP は変更しない。
-for (const screen of v3Screens()) {
+let gateway: Awaited<ReturnType<typeof startFixtureGateway>>;
+test.beforeAll(async () => {
+  gateway = await startFixtureGateway();
+});
+test.afterAll(async () => {
+  await gateway.close();
+});
+
+for (const screen of screens) {
   test(`S4 ${screen.path}: axe serious/critical, name, structure and focus`, async ({ page }) => {
-    const gateway = await startGateway();
-    try {
+    const heading = page.getByRole("heading", { level: 1, name: screen.heading });
+    if (screen.path === "/login") {
+      // /login は shell の外の画面なので主要 nav を持たない。
+      await page.goto(`${gateway.base}${screen.fixture}`);
+      await expect(heading).toBeVisible();
+      await expect(page.getByRole("main")).toHaveCount(1);
+    } else {
       // 現在地と同じ link は遷移しないので、"/" は別の画面から始める。
       await page.goto(screen.path === "/" ? `${gateway.base}/help` : gateway.base);
       const nav = page.getByRole("navigation", { name: "主要" });
       await expect(nav).toBeAttached();
-      const link = nav.getByRole("link", { name: screen.heading });
+      const link = nav.getByRole("link", { name: screen.heading, exact: true });
       const hasNavLink = (await link.count()) > 0;
       if (hasNavLink) await link.click();
       else await page.goto(`${gateway.base}${screen.fixture}`);
-      const heading = page.getByRole("heading", { level: 1, name: screen.heading });
       if (hasNavLink) await expect(heading).toBeFocused();
       else await expect(heading).toBeVisible();
       await expect(page.getByRole("main")).toHaveCount(1);
       await expect(page.getByRole("navigation", { name: "主要" })).toHaveCount(1);
-      await page.addScriptTag({ path: axePath });
-      const violations = await page.evaluate(async () => {
-        const axe = (
-          window as unknown as Window & {
-            axe: { run: () => Promise<{ violations: Array<{ id: string; impact: string }> }> };
-          }
-        ).axe;
-        return (await axe.run()).violations.filter((item) => item.impact === "critical" || item.impact === "serious");
-      });
-      expect(violations).toEqual([]);
-    } finally {
-      await gateway.close();
     }
+    expect(await seriousViolations(page)).toEqual([]);
   });
 }

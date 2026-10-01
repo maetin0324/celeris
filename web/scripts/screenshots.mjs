@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import { screens } from "../e2e/support/screens.ts";
-import { createApp } from "../server/app.js";
+import { startFixtureGateway } from "./fixture-gateway.mjs";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (name) => {
@@ -21,11 +21,7 @@ if (!existsSync(path.join(webRoot, "dist/index.html"))) {
   if (built.status !== 0) throw new Error("vite build failed");
 }
 mkdirSync(out, { recursive: true });
-const server = createApp({ log: () => {} }).listen(0, "127.0.0.1");
-await new Promise((resolve, reject) => {
-  server.once("listening", resolve);
-  server.once("error", reject);
-});
+const gateway = await startFixtureGateway();
 const browser = await chromium.launch();
 try {
   for (const screen of selected) {
@@ -33,7 +29,7 @@ try {
     const target = only ?? screen.fixture;
     for (const width of [360, 390, 412, 1440]) {
       const page = await browser.newPage({ viewport: { width, height: 800 } });
-      await page.goto(`http://127.0.0.1:${server.address().port}${target}`);
+      await page.goto(`${gateway.base}${target}`);
       await page.screenshot({
         path: path.join(out, `${target.replace(/[^a-z0-9]+/gi, "_") || "root"}-${width}.png`),
         fullPage: true,
@@ -43,6 +39,6 @@ try {
   }
 } finally {
   await browser.close();
-  await new Promise((resolve) => server.close(resolve));
+  await gateway.close();
 }
 process.stdout.write(`screenshots: ${selected.length} screen(s) x 4 widths -> ${out}\n`);

@@ -68,7 +68,28 @@ Parity で閉じた Phase 4 行は R06・R07・R09〜R16・R29〜R34・R36（`do
 
 - 未解決: X10 全画面 axe gate は Phase 5 に残る。crates の flaky 修正（dispatcher.rs・ssh.rs）はこの web 差分から戻してあり、main への別途投入が必要。
 - 提案: Phase 5 で X10 の全画面 axe/mobile gate を閉じ、crates の flaky 修正を main に別途投入する。
-- prune テストの event 待ちと `ssh.rs` stub の ETXTBSY 修正は web の差分外なので戻した。main（分割後の dispatcher）へ別途入れる。
+- prune テストの event 待ち修正は web の差分外なので戻した。main（分割後の dispatcher）へ別途入れる。
+
+## Phase 5（完了 2026-10-01、横断 gate P5-01〜P5-04）
+
+P5-01〜P5-03 の測定記録は [latency gate](../web/gates/p5-01-latency.md)、[security gate](../web/gates/p5-02-security.md)、[mobile・a11y gate](../web/gates/p5-03-mobile-a11y.md)、P5-04 の総点検は [feature parity matrix](../web/feature-parity.md) に記録した。X10/X11/X15 は完了。
+
+- P5-01 latency: `corepack pnpm@12.6.0 -C web e2e latency/transition.spec.ts realtime/refetch-scope.spec.ts parity/latency-gate.spec.ts` → exit 0。偽 daemon/gateway、JSON 0/5/10 秒遅延で全 30 path を計測。最大値は URL 69.4 ms、見出し 90.1 ms、10 秒−0 秒の最大差は URL 15.5 ms・見出し 16.5 ms。閾値は URL/見出し各 300 ms 以下、差各 100 ms 以下で全件合格。画面固有の無関係イベント再取得は全画面 0 本。H1 project fallback は fixture の 4 event 中 1 回（fixture 実測で本番頻度を示さない）。
+- P5-02 security: `corepack pnpm@12.6.0 -C web typecheck` と `corepack pnpm@12.6.0 -C web e2e parity/gateway.spec.ts parity/gateway-auth.spec.ts parity/gateway-relay.spec.ts parity/shell.spec.ts` → exit 0、20/20。最終変更後の横断 security/storage 2 spec も exit 0、2/2。X1〜X6/X8 を確認し、許可外 Host は全経路 400、CSRF は 403、保護経路の未認証・不正 cookie は 401。security header と token 非露出が合格。全 31 台帳行を開いた直後に localStorage/sessionStorage/IndexedDB/Cache Storage/Service Worker を検査し、表示設定以外の秘密・API 本文の永続化なし。
+- P5-03 mobile/a11y: `corepack pnpm@12.6.0 -C web mobile-audit` → exit 0（30 path × 360/390/412/1440、各幅の横溢れ 0、タップ/名前/構造/focus 判定 ok）。`corepack pnpm@12.6.0 -C web e2e a11y/ parity/mobile-gate.spec.ts --workers 4` → exit 0、191 passed。全 path/幅で axe critical/serious 0。検出された `/providers` checkbox などのタップ領域は修正済み。
+- P5-04 総点検: `docs/web/feature-parity.md` の X10・X11・X15 を gate 証拠と照合し、完了（X10 `ba629384`、X11 `46b3275f`、X15 `4d41b3e3`）を確認。X11 の閾値は遷移 URL/見出し各 300 ms 以下、10 秒遅延と 0 秒の差各 100 ms 以下、無関係イベントによる画面固有再取得 0 本。
+- 未解決: gate は loopback 偽 daemon/gateway と fixture による検証で、本番頻度や実環境の遅延分布は測っていない。dogfood 開始条件 H6 は人の決定待ち。X15 の staging 実機確認と gui/web 配信切替も運用段階に残る。
+- 提案: H6 と H9 の扱いを決めてから dogfood を開始する。開始前に H10 の staging 確認手順を実施し、配信切替は H7 の判断材料を確認して決める。
+
+## Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備。P6-04 以降は未着手）
+
+P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は ADR-0096・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。dogfood は H6 の決定まで未開始であり、本番 daemon への接続はしていない。
+
+- Rust gate（2026-10-01、repair-cargo-1 の `crates/task-worker/src/ssh.rs` 修正を merge-base `8a61eae488eb` に戻した後）: `cargo test --workspace` → exit 101。記録された test suites は全て pass し、`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。人の 2026-10-01 の判断に従い、この sandbox から user systemd bus に接続できない環境由来の2件として除外し、残りの全テストを合格として扱う。`cargo test -p celeris --test releases_api` の再実行でも同じ2件が再現（6 passed / 2 failed）。テスト側の skip は別 task で対応する。
+- Rust lint: `cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。
+- 未解決（web の差分制約）: repair-cargo-1 の `ssh.rs` stub に対する ETXTBSY 修正（`c0910506`）は web の差分外なので戻した。main へ別途入れる。
+- 未解決: H6（dogfood の期間・合格条件）、H9（並行運用中の通知）、H10（staging 実 celeris 確認）は未決／未確認。H7（gui/web 配信切替）の判断も未実施。P6-04 以降は未着手。
+- 提案: H6 と H9 を決め、H10 staging 確認を記録してから dogfood を開始する。配信切替は H7 の判断材料を確認したうえで別途判断する。P5 横断 gate の値（30 path の URL/見出し最大 69.4/90.1 ms、H1 fallback 1 回、30 path × 4 幅の mobile/a11y 合格）は Phase 5 節と各 gate 記録を参照。
 
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 

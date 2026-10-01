@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "vite build",
+    "release": "bash scripts/release.sh",
     "dev": "vite",
     "typecheck": "tsc -b",
     "lint": "biome check .",

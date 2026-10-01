@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { spaRoutePatterns } from "../../server/spa-routes.js";
 import { seriousViolations } from "../support/axe";
 import { startFixtureGateway } from "../support/fixture-gateway";
 import { screens } from "../support/screens";
@@ -7,6 +8,11 @@ import { screens } from "../support/screens";
 // ページ全体の横溢れが 0。44×44 と名前・構造は scripts/mobile-audit.mjs が同じ組で見る。
 const WIDTHS = [360, 390, 412, 1440];
 const fixtures = [...new Map(screens.map((screen) => [screen.fixture, screen])).values()];
+
+test("parity-x: axe 全画面", () => {
+  expect(screens.map((screen) => screen.path).sort()).toEqual([...spaRoutePatterns].sort());
+  expect(WIDTHS).toEqual([360, 390, 412, 1440]);
+});
 
 test.use({ bypassCSP: true }); // axe の注入だけに適用。配信する CSP は変更しない。
 let gateway: Awaited<ReturnType<typeof startFixtureGateway>>;

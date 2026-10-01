@@ -606,3 +606,94 @@ D3 / D7 の「release ゲートの owner は `release-<sha12>`」から次のよ
 
 **提案（P-SD1-1）**: `release-build` を P0 に固定する代わりに、`released_at` のある `release-build` を P1（waiting_keep_secs の間は保持、
 watermark の圧力では消せる）に分類する規則を `classify` に足す。daemon の昇格が要るので SD-1 ではやらない。
+
+## R7-7: run の sandbox から sccache の server に届かないときは素の compiler で動かす（2026-10-01）
+
+**事実（本番の調査、`docs/progress/phase-R.md` の R7-7）**
+
+- 2026-09-28 16:57Z 以降、codex の worker の run の `cargo test` / `cargo clippy` が、コンパイル前の
+  `<scratch>/bin/sccache …/rustc -vV` で `sccache: error: Operation not permitted (os error 1)`（exit 2 → cargo exit 101）で落ちていた
+  （この文言を含む run の transcript は 68 件、うち codex 60 件。claude-code の run の該当は、codex の run が `artifacts/` に残した log を
+  `cat` / `tail` したものだけ）。ADR-0095（R7-6、2026-10-01 00:30Z）より前から起きており、db_guard の namespace は原因ではない
+  （`unshare --user --map-user=<uid> --mount` の中の wrapper は通る）。
+- 原因: codex の `workspace-write` sandbox は、`[sandbox_workspace_write] network_access` が真でなければ seccomp でネットワークを塞ぐ。
+  `socket(AF_INET, SOCK_STREAM)` が `EPERM` になり（strace で確認）、AF_UNIX の `connect` も `EPERM`。したがって sandbox の中の
+  sccache の client は `127.0.0.1:<server_port>` の server に繋げず、sccache 0.18 はこれを致命的な誤りとして exit 2 する
+  （`SCCACHE_IGNORE_SERVER_IO_ERROR=1` でも同じ。server との I/O の前に落ちるため）。
+  worker の codex は `[accounts] codex_dir` の各アカウント（`CODEX_HOME=<codex_dir>/<id>`）の `config.toml` を読み、そこには
+  `network_access` が無い（人の `~/.codex/config.toml` には `network_access = true` がある）。同じ条件の `codex sandbox` で再現し、
+  `network_access = true` の `CODEX_HOME` では通る。
+- dispatcher の「server が居るか」（`server_listening`、D4）は daemon（sandbox の外）から見るので真になり、`RUSTC_WRAPPER` を与える。
+  run の中の compiler が実際に動く場所（エージェントの sandbox の中）からは届かない、という食い違い。
+
+**決定**
+
+1. wrapper（`wrapper_script`）は、compiler の起動のたびに**自分の居る場所から** server に届くかを見て、届かなければ sccache を通さずに
+   compiler を直接 exec する（cache は使えないが build は通る。cache は最適化であって正しさの条件ではない）。
+   - 見方は `server_listening` と同じ「`127.0.0.1:${SCCACHE_SERVER_PORT:-4226}` に TCP で繋がるか」。sccache の client は呼ばない
+     （server が無いと run の中から server を起こしてしまう。D4 の「server は run の中から起こさない」）。bash の `/dev/tcp`
+     （組み込み、fork なし）で `connect` するだけなので、wrapper は `#!/bin/bash` にする。
+   - `SCCACHE_SERVER_UDS` があれば（Celeris は与えない）見ずに sccache へ渡す。第 1 引数が `-` で始まる（`--show-stats` 等の sccache 自身の
+     操作）か無いときも sccache へ渡す（compiler ではないので素の exec はできない）。
+   - server が居ない（connection refused）ときも素の compiler になる。従来は sccache の client が run の中から server を起こしえた
+     （D4 が避けたいこと）ので、これは D4 に沿う方向の変化。
+2. codex の sandbox にネットワークを与える（アカウントの `config.toml` の `[sandbox_workspace_write] network_access = true`）かは
+   **人の判断**（codex の worker の sandbox にネットワーク全体を開けることになり、localhost だけに絞る設定は codex 0.157 に無い）。
+   Celeris は codex の設定を書き換えない。与えれば codex の run でも L1 の cache が効く。与えなければ codex の run は素の compiler
+   （1. により失敗はしない）。
+
+**採らない案**
+
+- `SCCACHE_IGNORE_SERVER_IO_ERROR=1`: 実測で効かない（上記）。
+- codex の adapter が `-c sandbox_workspace_write.network_access=true` を常に足す: sandbox の方針（ネットワーク）を Celeris が黙って
+  緩めることになる。人の判断の 2. に残す。
+- daemon 側で「codex の run には `RUSTC_WRAPPER` を与えない」: codex の設定（アカウントごとの `network_access`）を Celeris が読んで
+  推測することになり、他のアダプタの sandbox（claude-code の sandbox を有効にした場合など）には効かない。wrapper の中で実際に見る方が
+  どの sandbox にも同じに効く。
+- 失敗した sccache の後に compiler をもう一度動かす: compiler 自身の失敗と区別できず、二重実行になりうる。
+
+## R7-8: codex の `workspace-write` run に `CARGO_TARGET_DIR` を書ける場所として渡す（2026-10-01）
+
+**事実**
+
+- R7-7 の後、codex の run 01M3VCWE54P73CPFG09ZSW6Q6M（task 01M3TSBAP2X6RCP829CVKN4TGG、2026-10-01 09:31Z）の
+  `cargo test --workspace` と `cargo clippy` が `error: failed to create directory
+  /var/lib/celeris/scratch/targets/task-…/wu-…/target/debug — Read-only file system (os error 30)` で落ちた。2026-09-29 にも codex の run が
+  与えた `CARGO_TARGET_DIR` の `.cargo-build-lock` で同じ read-only に当たっている。
+- 原因: codex の `workspace-write` sandbox が書き込みを許すのは cwd・`/tmp` 系・`--add-dir`（= `sandbox_workspace_write.writable_roots`）
+  だけ。codex adapter（`crates/task-worker/src/codex.rs`）が `--add-dir` で足すのは `artifacts_dir` と git の管理領域（F5-fix4）だけで、
+  D3 の `CARGO_TARGET_DIR`（`<scratch>/targets/<owner>/target`。legacy の `build_cache` でも cwd の外）は入っていない。
+- 再現（自前のプロセスだけ。codex-cli 0.157.0、空の `CODEX_HOME`）: cwd の兄弟のディレクトリへの `touch` は
+  `codex sandbox -c 'sandbox_mode="workspace-write"'` の中では `Read-only file system`、
+  `-c 'sandbox_workspace_write.writable_roots=["<dir>"]'` を足すと通る。**root にするパスが存在しないと許可は効かない**
+  （存在しない root の下の `mkdir -p` も `Read-only file system`）。
+
+**決定**
+
+1. codex の fresh の `codex exec`（`exec resume` でない形）で、sandbox が `workspace-write` のときは、run の子プロセスに渡す env
+   （`CodexConfig::env`。dispatcher が `with_env` で重ねた D3/D4 の値を含み、同名は後勝ち）の最後の `CARGO_TARGET_DIR` を
+   `--add-dir` で足す。足す前に `create_dir_all` で作る（上の「存在しないと効かない」のため。作れなければ warn して足さない）。
+   - 足すのは絶対パスで空でないときだけ。コンテナ実行（`config.container` が `Some`）では足さない（パスはホストのもので、
+     dispatcher もコンテナには `CARGO_TARGET_DIR` を与えない。ADR-0066 D1）。
+   - read-only の CoS run には足さない（F5-fix4 と同じ。読み取り専用の意味を変えない）。
+   - owner のディレクトリ（`lease.toml` のある親）は足さない。cargo が書くのは `target/` の中だけ（`.cargo-build-lock` も
+     `target/` 直下）で、lease は daemon が書く。
+2. `exec resume` は `--add-dir` を受け付けない（Phase 68b）ので従来どおり何も足さない。resume されたスレッドは最初の fresh `exec` で
+   与えた writable roots を引き継ぐ前提（F5-fix4 と同じ）。したがって **R7-8 より前に作られたスレッドを resume した run と、
+   最初の run と別の owner の `CARGO_TARGET_DIR` を与えられた resume run は、引き続き target に書けない**。resume が使われるのは
+   主に CoS の対話（read-only。cargo を走らせる前提でない）なので、今回は記録に留める。必要になれば resume にも
+   `-c sandbox_workspace_write.writable_roots=[…]` を与える案がある（`-c` は `exec resume` でも通り、上の再現で効くことを確認済み。
+   ただしアカウントの `config.toml` の `writable_roots` を置き換える＝追加ではないので、採るなら別に判断する）。
+3. scratch の env の他のパス:
+   - `SCCACHE_DIR`（L1）は sccache の **server**（daemon 側、sandbox の外）が読み書きする。run の中の wrapper は server に TCP で
+     繋ぐか素の compiler を exec するだけで（R7-7）、`SCCACHE_DIR` には書かない。足さない。
+   - `RUSTC_WRAPPER`（`<scratch>/bin/sccache`）は読み・実行だけ。`CARGO_INCREMENTAL` / `CARGO_PROFILE_DEV_DEBUG` はパスでない。
+   - `CARGO_HOME`（依存の取得）は scratch の env に無く、この run の失敗とも関係しない（R7-7 の未解決のまま）。
+4. 他のアダプタ: claude-code は Celeris からは OS の sandbox を掛けていない（`--allowedTools` などの道具単位の制限だけ）ので、
+   同じ欠落は無い。aider / ACP 系も Celeris は sandbox を掛けない。書き込み可能な場所を argv で列挙する必要があるのは codex だけ。
+
+**採らない案**
+
+- `CARGO_TARGET_DIR` を cwd の中（worktree）に置く: NFS の worktree に `target/` を書かない（D1・CLAUDE.md）。
+- `req.cargo_target_dir`（request.json の監査値）から取る: `with_env` が効いたときにしか入らず、子プロセスが実際に見る値は
+  `config.env` の方。env から取れば、人が `[adapters.codex] env` で与えた `CARGO_TARGET_DIR` にも同じに効く。

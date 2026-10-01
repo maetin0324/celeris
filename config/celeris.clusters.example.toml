@@ -87,6 +87,14 @@ auth = "totp"                     # GUI の「接続」→ 検証コードの入
 # setup = ["module load python/3.12"]
 # env = { OMP_NUM_THREADS = "8" }
 # rsync_excludes = ["target/"]    # .celeris/ runs/ inputs/ は常に除外
+# job_wait = { poll_secs = 300, max_wait_secs = 86400 }
+#   ↑ ADR-0090 D7: クラスタ job（qsub / sbatch）の durable wait の既定。worker が `result.json` に
+#     `{"type": "wait", "kind": "cluster_job", "cluster": "pegasus", "jobs": ["42634"], "scheduler": "pbs"}` を書いて
+#     run を終えると、daemon が `poll_secs` ごとに高々 1 回 `setup` の後に `qstat -xf <ids>`（Slurm は `sacct`）を
+#     ssh master 越しに流し、すべての job が終わったら続きの run を起こす（job の最終状態と Exit_status を前置きに入れる）。
+#     `poll_secs` は 30 以上（worker の申告はこれより短くできない）、`max_wait_secs` は poll_secs 以上 14 日以下
+#     （worker の `timeout_secs` の上限と既定。過ぎたら人に聞く）。celeris は job を qdel しない。
+#     **この欄は ADR-0090 を知る release の昇格の後に足す**（旧い版は未知のキーで起動に失敗する）。
 
 [[clusters]]
 id = "sirius"
@@ -97,6 +105,8 @@ delete_on_push = false
 # ADR-0032 §1 実機確認（`ssh -v -o BatchMode=yes sirius`）: `Authenticated using "publickey" with partial
 # success` の後に `keyboard-interactive`（TOTP）が要求される。2 段構えなので "totp"。
 auth = "totp"
+# ADR-0090 D7: BenchFS の PBS job は数時間かかる。5 分ごとに qstat、24 時間で人に聞く（既定と同じ）。
+# job_wait = { poll_secs = 300, max_wait_secs = 86400 }
 
 [[clusters]]
 id = "fern03"

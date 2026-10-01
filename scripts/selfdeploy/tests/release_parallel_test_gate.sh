@@ -100,18 +100,19 @@ EOF
 chmod +x "$root/bin/"*
 
 repo="$root/repo"
-mkdir -p "$repo/gui" "$repo/crates/task-core/src" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
+mkdir -p "$repo/gui" "$repo/crates/task-core/src/store" "$repo/crates/celeris" "$repo/crates/x/src" "$repo/scripts/selfdeploy"
 cp "$here"/*.sh "$repo/scripts/selfdeploy/"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 # runner はビルドする sha の中のものを使う（release.sh の隣ではない）。
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
+cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 printf '{"name":"celeris-gui","version":"0.1.0","packageManager":"pnpm@11.27.0"}\n' >"$repo/gui/package.json"
 printf 'lockfileVersion: 9.0\n' >"$repo/gui/pnpm-lock.yaml"
 printf 'packages:\n  - "."\n' >"$repo/gui/pnpm-workspace.yaml"
 printf '// server\n' >"$repo/gui/server.js"
-printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store.rs"
+printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store/migrations.rs"
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 git init -q "$repo"
 # `$(new_commit)` はサブシェルで回るので、版の番号はファイルに持つ。

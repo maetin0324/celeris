@@ -22,6 +22,12 @@ const ROUTES_WITH_WRITE_FORMS = [
   "approvals.tsx",
   "reports.tsx",
   "tasks.$id.tsx",
+  // タスク詳細のタブ・節は `app/components/task-detail/` に分けた（変更系のフォームはこちらにある）。
+  "../components/task-detail/ArtifactRow.tsx",
+  "../components/task-detail/FailureBanner.tsx",
+  "../components/task-detail/OverviewTab.tsx",
+  "../components/task-detail/TaskEditSection.tsx",
+  "../components/task-detail/TimelineTab.tsx",
   "tasks.new.tsx",
   "daemon.tsx",
   "artifacts.tsx",

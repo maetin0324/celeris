@@ -1,6 +1,0 @@
-#!/bin/sh
-# Celeris が生成（ADR-0075 D4、Phase G2）。手で編集しない（次の run で書き直される）。
-# sccache は CARGO_* の env を Rust の cache key に入れる。owner ごとに違う target の場所を外し、
-# owner をまたいで依存 crate の cache を共有する。
-unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR
-exec '/home/rmaeda/.local/celeris/tools/sccache/bin/sccache' "$@"

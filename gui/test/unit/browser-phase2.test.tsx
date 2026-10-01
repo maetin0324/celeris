@@ -22,11 +22,11 @@ import {
 import { liveViewRelayAvailable, runLiveViewRoute, setLiveViewRelayForTest } from "~/celeris/browser-live.server";
 import { runCredentialAction, runDecisionAction, runOwnerChallengeAction } from "~/celeris/browser-waits.server";
 import { CelerisClient } from "~/celeris/client.server";
+import { loadTaskDetail } from "~/celeris/task-detail.server";
 import type { BrowserRun, BrowserWait, EventsPage, TaskDetail } from "~/celeris/types";
 import { BrowserWaitsPanel } from "~/components/BrowserWaitsPanel";
 import { redactLiveViewUrls } from "~/lib/browser";
 import { redactLiveViewStream } from "~/routes/events";
-import { loadTaskDetail } from "~/routes/tasks.$id";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 // ADR-0080 D5（登録依頼・承認）/ D6（Live View は本人の session だけ）。
@@ -364,6 +364,9 @@ const browserEvents: EventsPage = {
 };
 
 function serveLiveTask() {
+  mock.on("POST", "/api/v1/tasks/T1/browser/live/R1/S1/grant", (_req, res) =>
+    sendJson(res, 200, { grant_id: "G1", expires_at: 4_000_000_000 }),
+  );
   mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [{ id: "T1", status: "running" }] }));
   mock.on("GET", "/api/v1/tasks/T1", (_req, res) => sendJson(res, 200, runningTask));
   mock.on("GET", "/api/v1/tasks/T1/events", (_req, res) => sendJson(res, 200, browserEvents));

@@ -517,6 +517,49 @@
       ],
       "type": "object"
     },
+    "ClusterJobsContinuation": {
+      "description": "ADR-0090 D2: continuation の前置きに渡す、待っていたクラスタ job の結果。",
+      "properties": {
+        "cluster": {
+          "description": "`[[clusters]] id`。",
+          "type": "string"
+        },
+        "jobs": {
+          "description": "job ごとの 1 行（`42634: finished (Exit_status 0 / scheduler: F)` の形。申告の順）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scheduler": {
+          "description": "`pbs` | `slurm`。",
+          "type": "string"
+        },
+        "state": {
+          "description": "wait の終わり方（`satisfied` | `timed_out` | `cancelled`）。",
+          "type": "string"
+        },
+        "summary": {
+          "description": "待つ前の run の要約（`result.json` の `summary`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "scheduler",
+        "state",
+        "jobs"
+      ],
+      "type": "object"
+    },
+    "ClusterScheduler": {
+      "description": "job scheduler の種類。",
+      "enum": [
+        "pbs",
+        "slurm"
+      ],
+      "type": "string"
+    },
     "CommentAuthorKind": {
       "description": "誰が書いたか（`task_comments.author_kind` の CHECK と対）。",
       "oneOf": [
@@ -580,6 +623,17 @@
       "properties": {
         "checkpoint": {
           "description": "直前の run が確定させた checkpoint（`task_core::Checkpoint` と同じ形。生の JSON のまま\n前置きに埋め込む。celeris 側の型に依存させないため `serde_json::Value`）。"
+        },
+        "cluster_jobs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClusterJobsContinuation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0090 D2: 直前の run が `wait` でクラスタ job を待った続きのときだけ `Some`（job の最終状態と終了コード）。\n前置きの「クラスタ job の結果」節になる。`None` の run のプロンプトは従来どおり。"
         },
         "previous_end": {
           "description": "直前の run の終わり方（`\"yielded\"` | `\"budget_exhausted(turns)\"` | …。\n`describe_run_end` と同じ書式。人が読む前置き用の文字列であり、遷移の判断には使わない）。",
@@ -3138,6 +3192,13 @@
           },
           "type": "array"
         },
+        "previous_check_failures": {
+          "description": "ADR-0079 付記 R7-5 D3: この WU の直前の run が `done` を返したのに daemon の `checks` が不合格だったときだけ、\nその記録（先頭の行が `cwd: <走らせた所>`、続いて不合格の検査ごとに判定文 1 行）。前置きの\n「前回の run の check の不合格」節に出す。無ければ空でプロンプトは変わらない。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "task_objective_excerpt": {
           "description": "D9: Task 全体の目的の先頭 1,500 文字（参考として渡す）。",
           "type": "string"
@@ -3422,6 +3483,78 @@
             "type",
             "kind",
             "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0090 D1: クラスタ job の終了待ち（`result.json` と同じ形\n`{\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": .., \"jobs\": [..], \"scheduler\": \"pbs\", ...}`）。\n`yield` と同じく checkpoint を添えるが、continuation の回数・進捗なしの窓・attempts には数えない。\n追加のみ（`PROTOCOL_VERSION` は変えない）。",
+          "properties": {
+            "checkpoint": true,
+            "cluster": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "jobs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "description": "常に `\"cluster_job\"`。",
+              "type": "string"
+            },
+            "poll_secs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "scheduler": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ClusterScheduler"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "省略時は `pbs`。"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "timeout_secs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "wait",
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Usage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "jobs"
           ],
           "type": "object"
         }

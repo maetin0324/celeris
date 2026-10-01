@@ -26,7 +26,6 @@ import type {
   OrgNode,
   Project,
   ProjectLifecycle,
-  ProjectPlanAccepted,
   ProjectPlanDecided,
   ProjectRepo,
   ProviderCheckResponse,
@@ -258,8 +257,6 @@ export type ProjectOpOutcome =
   // celeris ADR-0072「Phase F6 実装時の決定」: 案件の名前・説明（依頼文）・slug の編集（`PATCH /projects/{id}`）。
   | { ok: true; op: "project_edit"; project: Project }
   | { ok: true; op: "milestone_create" | "milestone_status"; milestone: Milestone }
-  // 「この方針で進める」（`POST /projects/{id}/plan`。**管理系**、202。docs/celeris-api-v1.md §3.61、Phase 29）。
-  | { ok: true; op: "project_plan"; accepted: ProjectPlanAccepted }
   // 途中目標の判定（`POST /milestones/{id}/decide`。**管理系**、202。ADR-0038 D2、docs/celeris-api-v1.md §3.63、
   // Phase 41 / G13j）。`ok` / `discuss` / `ng` のどれでも同じ形（`decided.decision` を見て画面が出し分ける）。
   | { ok: true; op: "milestone_decide"; decided: MilestoneDecided }
@@ -286,7 +283,6 @@ export type ProjectOpOutcome =
         | "project_edit"
         | "milestone_create"
         | "milestone_status"
-        | "project_plan"
         | "milestone_decide"
         | "project_plan_decide"
         | "repo_create"

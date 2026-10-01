@@ -239,11 +239,24 @@ model = "fake"
 fn three_tasks_with_dependency_all_done_at_concurrency_two() {
     let env = Env::new();
     let timeline = env.root.join("timeline.log");
+    // ADR-0095 D1: `root` は DB のディレクトリで、worker の run からは読み取り専用（直下に新しいファイルを
+    // 作れない。既にある項目は書ける）。共有ログは先に作っておく。
+    std::fs::write(&timeline, "").unwrap();
     // 起動・終了時刻を共有ログに記録し、成果物を作って done を返す。
+    // A/B は互いの開始を待つ。固定 sleep では高負荷時の起動遅延で重なりを観測できない。
+    // 直列実行への退行は待ち合わせの上限で失敗させる。C の開始時には既に条件を満たす。
     let script = env.write_script(&format!(
         r#"ID=$(cat | grep -o '"id":"[A-Z0-9]*"' | head -1 | cut -d'"' -f4)
 echo "start $ID $(date +%s.%N)" >> {tl}
-sleep 0.6
+remaining=100
+while [ "$(grep -c '^start ' {tl})" -lt 2 ]; do
+    if [ "$remaining" -eq 0 ]; then
+        echo "timed out waiting for two concurrent workers" >&2
+        exit 1
+    fi
+    remaining=$((remaining - 1))
+    sleep 0.1
+done
 mkdir -p artifacts && echo "$ID" > artifacts/out.txt
 echo '{{"type":"progress","msg":"working on '"$ID"'"}}'
 echo '{{"type":"artifact","name":"out","path":"artifacts/out.txt"}}'
@@ -266,7 +279,7 @@ echo '{{"type":"done","summary":"fake finished","evidence":[{{"criterion":0,"com
     let b = env.add_ready_task("B", &env.workspace_for("b"), checks(), vec![], 0);
     let c = env.add_ready_task("C", &env.workspace_for("c"), checks(), vec![a], 0);
 
-    let log = env.run_celeris(&config, Duration::from_secs(60));
+    let log = env.run_celeris(&config, Duration::from_secs(90));
 
     for id in [a, b, c] {
         let t = env.task(id);

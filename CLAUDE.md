@@ -4,9 +4,11 @@
 1. `docs/DESIGN.md` — 実装方針。ここに書かれた設計原則とPhase順は変更しない
 2. `docs/PROGRESS.md` — どのPhaseまで終わっているか。ここが現在地
 3. `docs/adr/` — 過去の設計判断。矛盾する変更をしない
+4. `docs/architecture-map.md` — subsystem → crate/module → entry point → ADR の索引。1 つの変更で読む範囲を絞る
 
 ## 作業の進め方
 - 今回のPhaseだけをやる。次のPhaseの準備を先回りしない
+- cargo / nextest はローカル LVM の target-dir を使う（`.cargo/config.toml` を `scripts/dev/worktree-target-dir.sh` が生成。PreToolUse hook が自動で書く。NFS の worktree に `target/` を作らない）
 - 設計判断をしたら `docs/adr/NNNN-*.md` を追加してから実装する
 - 各Phase完了時に必ず:
   - `cargo test --workspace` と `cargo clippy --workspace -- -D warnings` を実行し、出力の要点を報告に含める

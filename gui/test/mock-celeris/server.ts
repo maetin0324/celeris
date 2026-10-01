@@ -427,3 +427,39 @@ export function serveOrgSkillMount(mock: MockCeleris, id: string, skill: string,
     sendJson(res, 200, node);
   });
 }
+
+/** Phase 3 の metadata/status と action を検証するための固定 API。 */
+export function serveBrowserPhase3(mock: MockCeleris): void {
+  const status = { phase: "paused", version: 2, lease_expires_at: null, in_flight: 0, auth_section: false };
+  mock.on("GET", "/api/v1/tasks/T1/browser/control/R1/S1", (_req, res) => sendJson(res, 200, status));
+  mock.on("POST", "/api/v1/tasks/T1/browser/control/R1/S1", (_req, res, body) => {
+    const input = JSON.parse(body) as { command: { kind: string }; expected_version: number; idempotency_key: string };
+    if (input.expected_version !== 2)
+      return sendProblem(res, { status: 409, code: "version_conflict", detail: "version changed" });
+    if (!input.idempotency_key)
+      return sendProblem(res, { status: 422, code: "idempotency_key_required", detail: "key required" });
+    if (input.command.kind === "takeover")
+      return sendJson(res, 200, { phase: "human_control", version: 3, lease_expires_at: 1800000000, replayed: false });
+    return sendProblem(res, { status: 409, code: "not_converged", detail: "still running" });
+  });
+  mock.on("GET", "/api/v1/browser/identities", (_req, res) =>
+    sendJson(res, 200, {
+      identities: [
+        {
+          identity_id: "I1",
+          project_id: "P1",
+          origin: "https://example.com",
+          generation: 2,
+          expires_at: 1800000000,
+          state: "active",
+        },
+      ],
+    }),
+  );
+  mock.on("POST", "/api/v1/browser/identities/I1/revoke", (_req, res) =>
+    sendJson(res, 200, { identity: { identity_id: "I1", state: "revoked" } }),
+  );
+  mock.on("DELETE", "/api/v1/browser/identities/I1", (_req, res) =>
+    sendJson(res, 200, { identity: { identity_id: "I1", state: "deleted" } }),
+  );
+}

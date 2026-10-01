@@ -71,7 +71,8 @@ fn write_project(dir: &Path) {
 
 struct Sccache {
     bin: PathBuf,
-    /// `task_worker::scratch::wrapper_script` と同じ形（`CARGO_TARGET_DIR` を外してから本物を exec。G2 の U1）。
+    /// `task_worker::scratch::wrapper_script` の G2 の形（`CARGO_TARGET_DIR` を外してから本物を exec。G2 の U1）。R7-7 の
+    /// 「server に届かなければ compiler を直接」は省く（この試験では server が常に居る）。
     wrapper: PathBuf,
     port: u16,
     endpoint_port: u16,

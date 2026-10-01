@@ -504,7 +504,8 @@ describe("画面の作り（ソースの確認。G10-U1 の制約）", () => {
   const component = read("../../app/components/task-changes.tsx");
   const route = read("../../app/routes/tasks.$id.changes.tsx");
   const routes = read("../../app/routes.ts");
-  const taskDetail = read("../../app/routes/tasks.$id.tsx");
+  // タスク詳細は route（画面）と `~/celeris/task-detail.server.ts`（loader / action の本体）に分かれている。
+  const taskDetail = read("../../app/routes/tasks.$id.tsx") + read("../../app/celeris/task-detail.server.ts");
   const projectDetail = read("../../app/routes/projects.$id.tsx");
   const projectIntegrations = read("../../app/components/ProjectIntegrations.tsx");
 

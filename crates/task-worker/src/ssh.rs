@@ -66,6 +66,19 @@ pub const SYNC_PULL_PROTECTED: [&str; 1] = ["artifacts/"];
 /// （push が落ちたら pull しない = 手元の編集を消さない）。
 pub const PUSH_PENDING_MARKER: &str = ".celeris/push-pending";
 
+/// ADR-0019 付記（Phase R6-3）: worktree 準備のスクリプトが、submodule を初期化したときに標準出力へ出す行の頭
+/// （続けて初期化後の submodule の数）。初期化が要らなかった（`.gitmodules` が無い・全部済み）ときは出さない。
+const SUBMODULES_INITIALISED_PREFIX: &str = "celeris-submodules-initialised ";
+
+/// ADR-0019 付記（Phase R7-4）: submodule を 1 つずつ初期化して、失敗したものごとに標準出力へ出す行の頭
+/// （続けて `<path>\t<stderr の要点の 1 行>`）。失敗は準備を止めない（警告の進行の行になる）。
+const SUBMODULE_FAILED_PREFIX: &str = "celeris-submodule-failed ";
+
+/// ADR-0019 付記（Phase R6-3 / R7-4）: submodule の段が使えないときの exit（65 / 66 と区別する）。
+/// R7-4 から個々の submodule の初期化の失敗では使わない（警告にする）。`git submodule status` 自体が
+/// 動かない（git に submodule が無い・worktree が壊れている）ときだけ。
+const SUBMODULE_INIT_FAILED_EXIT: i32 = 67;
+
 /// 1 タスク分のリモート実行の設定。
 #[derive(Debug, Clone)]
 pub struct SshSettings {
@@ -196,6 +209,9 @@ pub fn remote_dir_is_resolved(path: &Path) -> bool {
 pub struct SshWorkspace {
     local: LocalWorkspace,
     settings: SshSettings,
+    /// Phase R6-3: 準備の途中で人に見せたい進行の行（submodule の初期化など）。呼び出し側が
+    /// `take_progress_notes` で取り出して `WorkerProgress` に積む（clone は同じ入れ物を共有する）。
+    notes: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl SshWorkspace {
@@ -203,7 +219,20 @@ impl SshWorkspace {
         Self {
             local: LocalWorkspace::new(dir),
             settings,
+            notes: std::sync::Arc::default(),
         }
+    }
+
+    /// Phase R6-3: 準備（`prepare` / `push` / `pull` / `exec`）の途中で溜まった進行の行を取り出す
+    /// （例: `initialised 3 submodules in <worktree> on cluster sirius`）。取り出した行は消える。
+    pub fn take_progress_notes(&self) -> Vec<String> {
+        let mut guard = self.notes.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *guard)
+    }
+
+    fn push_progress_note(&self, line: String) {
+        let mut guard = self.notes.lock().unwrap_or_else(|e| e.into_inner());
+        guard.push(line);
     }
 
     pub fn dir(&self) -> &Path {
@@ -260,6 +289,39 @@ impl SshWorkspace {
                 paths = paths.join(" ")
             ));
         }
+        // Phase R6-3: submodule を使うリポジトリ（BenchFS の lib/locusta など）は、`git worktree add` の直後は
+        // submodule のディレクトリが空で、Cargo の path 依存が解決できない。`.gitmodules` があり、未初期化
+        // （`git submodule status` の行頭が `-`）のものが 1 つでもあれば `submodule update --init --recursive`
+        // する（再利用のときは初期化済みなら何もしない = 冪等）。worktree ごとの `modules/` に clone するので
+        // 共有の錠は先に外す（大きな submodule の clone で他のタスクの worktree 作成を待たせない）。
+        // Phase R7-4: submodule は `.gitmodules` の path ごとに 1 つずつ初期化し、失敗しても続ける（本番
+        // 2026-09-30: `ior_integration/ior` の固定 commit が remote に無く、1 つの失敗で準備ごと落ちた）。
+        // 失敗は `<SUBMODULE_FAILED_PREFIX><path>\t<要点>` の行で返し、Rust 側で警告の進行の行にする。
+        inner.push_str(&format!(
+            "exec 9>&-\n\
+             if [ -f {wt}/.gitmodules ]; then\n\
+               sm_status=$(git -C {wt} submodule status --recursive 2>&1) || {{ printf '%s\\n' \"git submodule status failed: $sm_status\" >&2; exit {code}; }}\n\
+               if printf '%s\\n' \"$sm_status\" | grep -q '^-'; then\n\
+                 sm_paths=$(git -C {wt} config -f .gitmodules --get-regexp '^submodule\\..*\\.path$' 2>/dev/null | sed 's/^[^ ]* //' || true)\n\
+                 sm_report=$(printf '%s\\n' \"$sm_paths\" | while IFS= read -r sm_path; do\n\
+                   [ -n \"$sm_path\" ] || continue\n\
+                   if sm_err=$(git -C {wt} submodule update --init --recursive -- \"$sm_path\" 2>&1 >/dev/null); then :; else\n\
+                     sm_why=$(printf '%s\\n' \"$sm_err\" | grep -E '^(fatal|error):' | head -n 1 || true)\n\
+                     [ -n \"$sm_why\" ] || sm_why=$(printf '%s\\n' \"$sm_err\" | grep -v '^[[:space:]]*$' | head -n 1 || true)\n\
+                     printf '%s%s\\t%s\\n' '{failed}' \"$sm_path\" \"$sm_why\"\n\
+                   fi\n\
+                 done)\n\
+                 [ -z \"$sm_report\" ] || printf '%s\\n' \"$sm_report\"\n\
+                 sm_failed=$(printf '%s\\n' \"$sm_report\" | grep '^{failed}' | cut -f1 | sed 's/^{failed}//' || true)\n\
+                 sm_count=$(git -C {wt} submodule status --recursive 2>/dev/null | sm_failed=\"$sm_failed\" awk 'BEGIN {{ n = split(ENVIRON[\"sm_failed\"], f, \"\\n\") }} /^-/ {{ next }} {{ p = substr($0, 2); sub(/^[^ ]* /, \"\", p); for (i = 1; i <= n; i++) if (f[i] != \"\" && (p == f[i] || index(p, f[i] \" \") == 1 || index(p, f[i] \"/\") == 1)) next; c++ }} END {{ print c + 0 }}' || true)\n\
+                 echo \"{prefix}$sm_count\"\n\
+               fi\n\
+             fi\n",
+            wt = shell_remote_path(&wt),
+            code = SUBMODULE_INIT_FAILED_EXIT,
+            prefix = SUBMODULES_INITIALISED_PREFIX,
+            failed = SUBMODULE_FAILED_PREFIX,
+        ));
         // 同じリポジトリに対して複数のタスクが同時に worktree を作ることがある（クラスタの並列度 > 1）。
         // git の worktree 管理は共有なので、あれば `flock` で直列化する（無ければそのまま実行する）。
         let script = format!(
@@ -277,7 +339,43 @@ impl SshWorkspace {
         );
         let out = self.run_ssh(&script, Duration::from_secs(600)).await?;
         match out.exit {
-            Some(0) => Ok(()),
+            Some(0) => {
+                if let Some(count) = out
+                    .stdout_tail
+                    .lines()
+                    .find_map(|l| l.trim().strip_prefix(SUBMODULES_INITIALISED_PREFIX))
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty() && *c != "0")
+                {
+                    let line = format!(
+                        "initialised {count} submodules in {wt} on cluster {}",
+                        self.settings.cluster
+                    );
+                    tracing::info!(cluster = %self.settings.cluster, worktree = %wt, submodules = %count, "initialised git submodules in the cluster worktree (R6-3)");
+                    self.push_progress_note(line);
+                }
+                // Phase R7-4: 初期化できなかった submodule は準備を止めず、1 つずつ警告の進行の行にする。
+                for rest in out
+                    .stdout_tail
+                    .lines()
+                    .filter_map(|l| l.strip_prefix(SUBMODULE_FAILED_PREFIX))
+                {
+                    let (path, why) = rest.split_once('\t').unwrap_or((rest, ""));
+                    let why = why.trim();
+                    let why = if why.is_empty() { "unknown error" } else { why };
+                    tracing::warn!(cluster = %self.settings.cluster, worktree = %wt, submodule = %path, error = %why, "a git submodule could not be initialised in the cluster worktree (R7-4, best-effort)");
+                    self.push_progress_note(format!(
+                        "submodule {path} could not be initialised: {why} (worktree {wt} on cluster {})",
+                        self.settings.cluster
+                    ));
+                }
+                Ok(())
+            }
+            Some(SUBMODULE_INIT_FAILED_EXIT) => Err(WorkspaceError::Remote(format!(
+                "cannot run the git submodule step in the worktree {wt} on {} (exit {SUBMODULE_INIT_FAILED_EXIT}): {}",
+                self.settings.cluster,
+                out.stderr_tail.trim()
+            ))),
             // ADR-0059 D3: 専用のバリアントにする（呼び出し側が「格下げしてよいか」を型で判定できるように。
             // 文字列のパースはしない）。
             Some(65) => Err(WorkspaceError::NotAGitRepository(format!(
@@ -605,10 +703,26 @@ pub fn remote_exec_instructions(settings: &SshSettings) -> String {
          重い処理・クラスタ上のデータやモジュールを使う処理は {REMOTE_EXEC_USAGE}",
         head = remote_exec_head(settings),
     );
-    match remote_worktree_note(settings) {
+    let base = match remote_worktree_note(settings) {
         None => base,
         Some(note) => format!("{base}\n{note}元のリポジトリの作業ツリーは触らないでください。"),
-    }
+    };
+    format!("{base}\n{}", cluster_job_wait_instructions(settings))
+}
+
+/// ADR-0090 D5: 長いクラスタ job（PBS / Slurm）の扱い（worker の remote-exec の前置きの 1 段落）。
+pub fn cluster_job_wait_instructions(settings: &SshSettings) -> String {
+    format!(
+        "長く走るクラスタ job（qsub / sbatch）は、投入したら job id を控えて、この run を \
+         `artifacts/result.json` に `{{\"type\": \"wait\", \"kind\": \"cluster_job\", \"cluster\": \"{cluster}\", \
+         \"scheduler\": \"pbs\", \"jobs\": [\"<job id>\", ...], \"checkpoint\": {{\"completed\": [...], \
+         \"remaining\": [...], \"next_action\": \"...\"}}, \"summary\": \"...\"}}` を書いて終えてください\
+         （`scheduler` は `pbs` か `slurm`、`poll_secs` / `timeout_secs` は任意）。celeris が job の終了を待ち、\
+         終わったら job の最終状態と終了コードを前置きに入れた続きの run を起こします。job が Q / R の間に完了を申告しない\
+         こと（`summary` だけの result.json は完了の申告です）。結果の回収・受け入れ条件の確認は続きの run で行います。\
+         job の終了を poll して run を引き延ばさないこと。",
+        cluster = settings.cluster,
+    )
 }
 
 /// ADR-0079 R5b-fix2: reviewer run（最終レビュー）へ渡す指示文。worker と同じ頭・使い方の一文を使い、
@@ -685,6 +799,95 @@ pub fn control_master_command_probe_blocking(
     }
 }
 
+/// ADR-0090 D2: master 越しに 1 つのコマンドを流した結果（stdout / stderr は先頭から最大
+/// [`REMOTE_COMMAND_OUTPUT_MAX`] バイト。qstat の出力を丸ごと読むため末尾ではなく先頭を残す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteCommandOutput {
+    pub exit: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// [`run_remote_command_blocking`] が残す出力の上限（バイト）。
+pub const REMOTE_COMMAND_OUTPUT_MAX: usize = 1024 * 1024;
+
+/// ADR-0090 D2: tick から OS スレッドに逃がして呼ぶ、master 越しの 1 コマンド（`ssh -o BatchMode=yes <host> -- <script>`）。
+/// `timeout` を超えたら子を kill して `Err`。ssh 自身の失敗（exit 255）も `Err`（接続の問題。poll の失敗として扱う）。
+/// 対話的な認証はしない（`BatchMode=yes`。人が張った ControlMaster を借りるだけ）。
+pub fn run_remote_command_blocking(
+    ssh_command: &[String],
+    host: &str,
+    script: &str,
+    timeout: Duration,
+) -> Result<RemoteCommandOutput, String> {
+    use std::io::Read;
+    let Some((program, rest)) = ssh_command.split_first() else {
+        return Err("empty ssh command".to_string());
+    };
+    let mut child = std::process::Command::new(program)
+        .args(rest)
+        .args(["-o", "BatchMode=yes", host, "--", script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot start ssh: {e}"))?;
+    fn drain(mut r: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                match r.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let room = REMOTE_COMMAND_OUTPUT_MAX.saturating_sub(kept.len());
+                        kept.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                }
+            }
+            kept
+        })
+    }
+    let out = child.stdout.take().map(drain);
+    let err = child.stderr.take().map(drain);
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "ssh to {host} timed out after {}s",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("cannot wait for ssh: {e}")),
+        }
+    };
+    let collect = |h: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        h.and_then(|h| h.join().ok())
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    };
+    let stdout = collect(out);
+    let stderr = collect(err);
+    if status.code() == Some(255) {
+        return Err(format!(
+            "ssh to {host} failed (exit 255): {}",
+            stderr.trim()
+        ));
+    }
+    Ok(RemoteCommandOutput {
+        exit: status.code(),
+        stdout,
+        stderr,
+    })
+}
+
 /// 外部コマンドを 1 つ動かし、末尾の出力と終了コードを返す（`LocalWorkspace::exec` と同じ流儀）。
 async fn run_command(args: &[String], timeout: Duration) -> Result<ExecResult, WorkspaceError> {
     let Some((program, rest)) = args.split_first() else {
@@ -754,503 +957,4 @@ impl Workspace for SshWorkspace {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ---- ADR-0059 D2: `~` の展開（純粋関数） ----
-
-    #[test]
-    fn shell_remote_path_expands_only_a_leading_tilde() {
-        assert_eq!(shell_remote_path("~"), "\"$HOME\"");
-        assert_eq!(
-            shell_remote_path("~/work/project"),
-            "\"$HOME\"'/work/project'"
-        );
-        // `~user` は展開しない（celeris は他ユーザの home を知らない。ADR-0039 D5 と同じ方針）。
-        assert_eq!(shell_remote_path("~user/x"), "'~user/x'");
-        // それ以外は従来どおり `shq`。
-        assert_eq!(shell_remote_path("/work/x"), "'/work/x'");
-        assert_eq!(shell_remote_path("relative/x"), "'relative/x'");
-        assert_eq!(shell_remote_path("it's/quoted"), "'it'\\''s/quoted'");
-    }
-
-    // ---- ADR-0059 D6: `work_dir` からの相対解決（純粋関数） ----
-
-    #[test]
-    fn resolve_remote_dir_keeps_absolute_and_tilde_paths_untouched() {
-        let work_dir = Some(Path::new("/work/NBB/rmaeda"));
-        assert_eq!(
-            resolve_remote_dir(Path::new("/scratch/x"), work_dir),
-            Some(PathBuf::from("/scratch/x"))
-        );
-        assert_eq!(
-            resolve_remote_dir(Path::new("~"), work_dir),
-            Some(PathBuf::from("~"))
-        );
-        assert_eq!(
-            resolve_remote_dir(Path::new("~/work"), work_dir),
-            Some(PathBuf::from("~/work"))
-        );
-        // `work_dir` が無くても絶対・`~` はそのまま解決できる。
-        assert_eq!(
-            resolve_remote_dir(Path::new("/scratch/x"), None),
-            Some(PathBuf::from("/scratch/x"))
-        );
-    }
-
-    #[test]
-    fn resolve_remote_dir_resolves_empty_and_relative_paths_against_work_dir() {
-        let work_dir = Some(Path::new("/work/NBB/rmaeda"));
-        assert_eq!(
-            resolve_remote_dir(Path::new(""), work_dir),
-            Some(PathBuf::from("/work/NBB/rmaeda"))
-        );
-        assert_eq!(
-            resolve_remote_dir(Path::new("benchfs"), work_dir),
-            Some(PathBuf::from("/work/NBB/rmaeda/benchfs"))
-        );
-    }
-
-    #[test]
-    fn resolve_remote_dir_is_none_when_there_is_no_work_dir_to_resolve_against() {
-        assert_eq!(resolve_remote_dir(Path::new(""), None), None);
-        assert_eq!(resolve_remote_dir(Path::new("benchfs"), None), None);
-    }
-
-    #[test]
-    fn remote_dir_is_resolved_matches_absolute_and_tilde_only() {
-        assert!(remote_dir_is_resolved(Path::new("/work/x")));
-        assert!(remote_dir_is_resolved(Path::new("~")));
-        assert!(remote_dir_is_resolved(Path::new("~/work")));
-        assert!(!remote_dir_is_resolved(Path::new("")));
-        assert!(!remote_dir_is_resolved(Path::new("relative")));
-    }
-
-    // ---- ADR-0018 D5 / ADR-0059: `SyncMode::None` は同期を一切しない ----
-
-    #[tokio::test]
-    async fn sync_none_push_and_pull_never_run_rsync_or_ssh() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut settings = SshSettings::new("c", "h", PathBuf::from("/work/x"));
-        settings.sync = SyncMode::None;
-        // 呼ばれたら即座にエラーで分かるように、実在しないプログラムを指す。
-        settings.ssh_command = vec!["/nonexistent/ssh-should-not-run".into()];
-        settings.rsync_command = vec!["/nonexistent/rsync-should-not-run".into()];
-        let ws = SshWorkspace::new(dir.path(), settings);
-        ws.push()
-            .await
-            .expect("push is a no-op under SyncMode::None");
-        ws.pull()
-            .await
-            .expect("pull is a no-op under SyncMode::None");
-    }
-
-    // ---- ADR-0059 D3: worktree 準備の exit 65 を型で区別する ----
-
-    #[tokio::test]
-    async fn ensure_worktree_maps_exit_65_to_not_a_git_repository_and_exit_66_to_remote() {
-        let dir = tempfile::tempdir().unwrap();
-        for (exit_code, matches_not_a_git_repo) in [(65, true), (66, false), (1, false)] {
-            let stub = dir.path().join(format!("stub-{exit_code}.sh"));
-            std::fs::write(&stub, format!("#!/bin/sh\nexit {exit_code}\n")).unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = std::fs::metadata(&stub).unwrap().permissions();
-                perms.set_mode(0o755);
-                std::fs::set_permissions(&stub, perms).unwrap();
-            }
-            let mut settings = SshSettings::new("c", "h", PathBuf::from("/work/proj"));
-            settings.sync = SyncMode::Worktree;
-            settings.task_id = "01TESTTASK".into();
-            settings.ssh_command = vec![stub.to_string_lossy().into_owned()];
-            let mirror = dir.path().join(format!("mirror-{exit_code}"));
-            let ws = SshWorkspace::new(&mirror, settings);
-            let err = ws.ensure_worktree().await.expect_err("stub always fails");
-            assert_eq!(
-                matches!(err, WorkspaceError::NotAGitRepository(_)),
-                matches_not_a_git_repo,
-                "exit {exit_code}: {err:?}"
-            );
-        }
-    }
-
-    // ---- ADR-0059 D5: `.taskd/remote-exec` -> `.celeris/remote-exec` ----
-
-    #[tokio::test]
-    async fn write_remote_exec_helper_writes_celeris_and_cleans_up_the_old_taskd_wrapper() {
-        let dir = tempfile::tempdir().unwrap();
-        let mirror = dir.path().join("mirror");
-        tokio::fs::create_dir_all(mirror.join(".taskd"))
-            .await
-            .unwrap();
-        tokio::fs::write(mirror.join(".taskd").join("remote-exec"), "old wrapper")
-            .await
-            .unwrap();
-
-        let mut settings = SshSettings::new("pegasus", "pegasus", PathBuf::from("~/work/proj"));
-        settings.sync = SyncMode::None;
-        let ws = SshWorkspace::new(&mirror, settings);
-        let path = ws.write_remote_exec_helper().await.expect("write helper");
-        assert_eq!(path, mirror.join(".celeris").join("remote-exec"));
-        assert!(path.is_file());
-        assert!(
-            !mirror.join(".taskd").join("remote-exec").exists(),
-            "the old wrapper must be removed"
-        );
-
-        // ADR-0059 D2: `~/work/proj` は `.celeris/remote-exec` の生成スクリプトの中で `"$HOME"` に展開される。
-        let script = tokio::fs::read_to_string(&path).await.unwrap();
-        assert!(script.contains("\"$HOME\"'/work/proj'"), "{script}");
-        // ADR-0062 Phase 108: `$HOME/.ssh/config` があるときだけ `-F` を足す条件分岐を持つ。
-        assert!(
-            script.contains(r#"if [ -f "$HOME/.ssh/config" ]; then"#),
-            "{script}"
-        );
-        assert!(script.contains(r#"-F "$HOME/.ssh/config""#), "{script}");
-    }
-
-    /// ADR-0062 Phase 108: 生成した `.celeris/remote-exec` は実行時に `$HOME/.ssh/config` があれば
-    /// `-F` で明示的に読み、無ければ何も足さない（システムの `/etc/ssh/ssh_config` に触れない）。
-    /// codex サンドボックス内で `/etc/ssh/ssh_config.d/...` の Include 先が拒否される問題への対応
-    /// （本番 2026-09-23）。
-    #[tokio::test]
-    async fn the_wrapper_only_adds_dash_f_when_the_users_ssh_config_exists() {
-        let dir = tempfile::tempdir().unwrap();
-        let mirror = dir.path().join("mirror");
-        tokio::fs::create_dir_all(&mirror).await.unwrap();
-
-        // 引数をそのままファイルに記録するだけの偽 ssh。
-        let log = dir.path().join("argv.log");
-        let fake_ssh = dir.path().join("ssh");
-        crate::test_support::write_executable(
-            &fake_ssh,
-            &format!("#!/bin/sh\necho \"$@\" > {log:?}\nexit 0\n"),
-        );
-
-        let mut settings = SshSettings::new("pegasus", "pegasus", PathBuf::from("/work/proj"));
-        settings.sync = SyncMode::None;
-        settings.ssh_command = vec![fake_ssh.to_string_lossy().into_owned()];
-        let ws = SshWorkspace::new(&mirror, settings);
-        let path = ws.write_remote_exec_helper().await.expect("write helper");
-
-        // `$HOME/.ssh/config` が無ければ `-F` を付けない。
-        let home_without = dir.path().join("home-without");
-        tokio::fs::create_dir_all(&home_without).await.unwrap();
-        let status = tokio::process::Command::new(&path)
-            .arg("true")
-            .env("HOME", &home_without)
-            .status()
-            .await
-            .expect("run wrapper");
-        assert!(status.success());
-        let argv = tokio::fs::read_to_string(&log).await.unwrap();
-        assert!(!argv.contains("-F"), "{argv}");
-
-        // `$HOME/.ssh/config` があれば `-F "$HOME/.ssh/config"` を付ける。
-        let home_with = dir.path().join("home-with");
-        tokio::fs::create_dir_all(home_with.join(".ssh"))
-            .await
-            .unwrap();
-        tokio::fs::write(home_with.join(".ssh").join("config"), "Host pegasus\n")
-            .await
-            .unwrap();
-        let status = tokio::process::Command::new(&path)
-            .arg("true")
-            .env("HOME", &home_with)
-            .status()
-            .await
-            .expect("run wrapper");
-        assert!(status.success());
-        let argv = tokio::fs::read_to_string(&log).await.unwrap();
-        assert!(
-            argv.contains(&format!("-F {}/.ssh/config", home_with.display())),
-            "{argv}"
-        );
-    }
-
-    // ---- ADR-0018 D3 / ADR-0059 D5: `.celeris/` は同期から常に除外し、`.taskd/` も後方互換で残す ----
-
-    #[test]
-    fn sync_always_excluded_keeps_the_legacy_taskd_alongside_celeris() {
-        assert!(SYNC_ALWAYS_EXCLUDED.contains(&".taskd/"));
-        assert!(SYNC_ALWAYS_EXCLUDED.contains(&".celeris/"));
-    }
-
-    // ---- ADR-0079 R5b-fix2: run 後の push・成果物を pull で消さない・reviewer への指示 ----
-
-    #[test]
-    fn pull_protects_artifacts_and_excludes_the_admin_dirs_while_push_still_sends_artifacts() {
-        assert!(SYNC_PULL_PROTECTED.contains(&"artifacts/"));
-        assert!(SYNC_ALWAYS_EXCLUDED.contains(&".taskd/"));
-        let ws = SshWorkspace::new("/tmp/mirror", SshSettings::new("c", "h", "/work/x"));
-        let pull = ws.pull_args();
-        assert!(pull.contains(&"--delete".to_string()), "{pull:?}");
-        assert!(
-            pull.contains(&"--filter=P artifacts/".to_string()),
-            "{pull:?}"
-        );
-        for dir in [".taskd/", ".celeris/", "runs/", "inputs/"] {
-            assert!(
-                pull.windows(2).any(|w| w[0] == "--exclude" && w[1] == dir),
-                "pull must exclude {dir}: {pull:?}"
-            );
-        }
-        let push = ws.push_args();
-        assert!(!push.contains(&"--delete".to_string()), "{push:?}");
-        assert!(
-            !push
-                .windows(2)
-                .any(|w| w[0] == "--exclude" && w[1] == "artifacts/"),
-            "artifacts are pushed (cluster-side checks may read them): {push:?}"
-        );
-        // push は手元 → クラスタ、pull はクラスタ → 手元。
-        assert_eq!(push.last().map(String::as_str), Some("h:/work/x/"));
-        assert_eq!(pull.last().map(String::as_str), Some("/tmp/mirror/"));
-    }
-
-    /// ssh の代わりに、受け取ったリモートコマンドを手元の `sh` で実行するだけの偽物（外部に出ない）。
-    /// `ssh -o BatchMode=yes <host> <cmd...>` の形で呼ばれる（rsync の `-e` からも、`run_ssh` からも）。
-    fn local_ssh(dir: &Path) -> Vec<String> {
-        let path = dir.join("fake-ssh");
-        crate::test_support::write_executable(
-            &path,
-            "#!/bin/sh\nwhile [ \"$1\" = \"-o\" ]; do shift 2; done\nshift\nexec sh -c \"$*\"\n",
-        );
-        vec![path.to_string_lossy().into_owned()]
-    }
-
-    /// 本物の rsync を包み、呼ばれた向き（最後の引数が手元なら pull）を記録する。`fail` なら rsync を呼ばずに 23 で落ちる。
-    fn logging_rsync(dir: &Path, name: &str, local: &Path, log: &Path, fail: bool) -> Vec<String> {
-        let path = dir.join(name);
-        let run = if fail {
-            "exit 23".to_string()
-        } else {
-            "exec rsync \"$@\"".to_string()
-        };
-        crate::test_support::write_executable(
-            &path,
-            &format!(
-                "#!/bin/sh\nfor a; do last=$a; done\nif [ \"$last\" = {local:?} ]; then echo pull >> {log:?}; else echo push >> {log:?}; fi\n{run}\n",
-                local = format!("{}/", local.display()),
-            ),
-        );
-        vec![path.to_string_lossy().into_owned()]
-    }
-
-    fn log_lines(log: &Path) -> Vec<String> {
-        std::fs::read_to_string(log)
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn rsync_available() -> bool {
-        std::process::Command::new("rsync")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-
-    /// 本番 2026-09-29 の再現: reviewer の検査しか無い task は `exec` で push しないので、次の run の
-    /// prepare（`--delete` 付きの pull）が worker の編集と成果物を消していた。run 後の push（1 回）で
-    /// 編集はクラスタに届き、成果物は pull でも消えない。
-    #[tokio::test]
-    async fn push_after_run_runs_once_and_the_next_pull_keeps_edits_and_artifacts() {
-        if !rsync_available() {
-            eprintln!("rsync is not installed; skipping");
-            return;
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let remote = tmp.path().join("remote");
-        let local = tmp.path().join("mirror");
-        std::fs::create_dir_all(remote.join("src")).unwrap();
-        std::fs::write(remote.join("src/lib.rs"), "old\n").unwrap();
-        let log = tmp.path().join("rsync.log");
-        let mut settings = SshSettings::new("c", "h", &remote);
-        settings.ssh_command = local_ssh(tmp.path());
-        settings.rsync_command = logging_rsync(tmp.path(), "rsync-ok", &local, &log, false);
-        let ws = SshWorkspace::new(&local, settings);
-
-        // run の前（prepare）: クラスタの内容を取り込む。
-        ws.pull().await.expect("initial pull");
-        assert_eq!(
-            std::fs::read_to_string(local.join("src/lib.rs")).unwrap(),
-            "old\n"
-        );
-        // worker の run: ソースを直し、成果物を書く（クラスタ側には無い）。
-        std::fs::write(local.join("src/lib.rs"), "edited\n").unwrap();
-        std::fs::create_dir_all(local.join("artifacts")).unwrap();
-        std::fs::write(local.join("artifacts/experiment-plan.md"), "plan\n").unwrap();
-        // run の後: push はちょうど 1 回。
-        ws.push_after_run().await.expect("push after run");
-        assert_eq!(log_lines(&log), vec!["pull", "push"]);
-        assert!(!ws.push_pending(), "a successful push clears the marker");
-        assert_eq!(
-            std::fs::read_to_string(remote.join("src/lib.rs")).unwrap(),
-            "edited\n"
-        );
-
-        // クラスタ側から成果物が消えても（人が片付けた等）、次の pull は手元の成果物を消さない。
-        std::fs::remove_dir_all(remote.join("artifacts")).unwrap();
-        ws.pull().await.expect("next prepare pull");
-        assert_eq!(log_lines(&log), vec!["pull", "push", "pull"]);
-        assert_eq!(
-            std::fs::read_to_string(local.join("src/lib.rs")).unwrap(),
-            "edited\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(local.join("artifacts/experiment-plan.md")).unwrap(),
-            "plan\n"
-        );
-    }
-
-    /// push が落ちたら印が残り、エラーとして返る（黙らない）。印がある間の pull は `--delete` の前に push を
-    /// やり直し、それも落ちたら pull しない（手元の編集を消さない）。繋がれば push → pull の順で進む。
-    #[tokio::test]
-    async fn failed_push_is_reported_and_blocks_the_deleting_pull_until_a_push_succeeds() {
-        if !rsync_available() {
-            eprintln!("rsync is not installed; skipping");
-            return;
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let remote = tmp.path().join("remote");
-        let local = tmp.path().join("mirror");
-        std::fs::create_dir_all(&remote).unwrap();
-        std::fs::create_dir_all(&local).unwrap();
-        std::fs::write(local.join("new.rs"), "worker edit\n").unwrap();
-        let log = tmp.path().join("rsync.log");
-        let mut failing = SshSettings::new("c", "h", &remote);
-        failing.ssh_command = local_ssh(tmp.path());
-        failing.rsync_command = logging_rsync(tmp.path(), "rsync-fail", &local, &log, true);
-        let ws = SshWorkspace::new(&local, failing.clone());
-
-        let err = ws.push_after_run().await.expect_err("push fails");
-        assert!(matches!(err, WorkspaceError::Remote(_)), "{err:?}");
-        assert!(ws.push_pending());
-        ws.pull()
-            .await
-            .expect_err("pull must not run while the push is pending");
-        assert_eq!(
-            log_lines(&log),
-            vec!["push", "push"],
-            "no pull was attempted"
-        );
-        assert!(local.join("new.rs").is_file(), "the local edit survives");
-
-        let mut ok = failing;
-        ok.rsync_command = logging_rsync(tmp.path(), "rsync-ok", &local, &log, false);
-        let ws = SshWorkspace::new(&local, ok);
-        ws.pull().await.expect("push then pull");
-        assert_eq!(log_lines(&log), vec!["push", "push", "push", "pull"]);
-        assert!(!ws.push_pending());
-        assert_eq!(
-            std::fs::read_to_string(remote.join("new.rs")).unwrap(),
-            "worker edit\n"
-        );
-        assert!(local.join("new.rs").is_file());
-    }
-
-    #[tokio::test]
-    async fn push_after_run_is_a_no_op_under_sync_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut settings = SshSettings::new("c", "h", PathBuf::from("/work/x"));
-        settings.sync = SyncMode::None;
-        settings.ssh_command = vec!["/nonexistent/ssh-should-not-run".into()];
-        settings.rsync_command = vec!["/nonexistent/rsync-should-not-run".into()];
-        let ws = SshWorkspace::new(dir.path(), settings);
-        ws.push_after_run().await.expect("no-op");
-        assert!(!ws.push_pending());
-    }
-
-    #[test]
-    fn worker_and_reviewer_instructions_share_the_remote_exec_usage() {
-        let mut settings = SshSettings::new(
-            "sirius",
-            "sirius",
-            "/work/NBB/rmaeda/workspace/rust/benchfs",
-        );
-        settings.sync = SyncMode::Worktree;
-        settings.task_id = "01TASK".into();
-        let worker = remote_exec_instructions(&settings);
-        let reviewer = remote_exec_reviewer_instructions(&settings);
-        for text in [&worker, &reviewer] {
-            assert!(text.contains(REMOTE_EXEC_USAGE), "{text}");
-            assert!(text.contains(&remote_exec_head(&settings)), "{text}");
-            assert!(text.contains("ブランチ `celeris/01TASK`"), "{text}");
-        }
-        assert!(worker.contains("run の後にクラスタへ同期され"));
-        assert!(worker.ends_with("元のリポジトリの作業ツリーは触らないでください。"));
-        assert!(reviewer.contains("`git status`"));
-        assert!(!reviewer.contains("元のリポジトリの作業ツリーは触らないでください"));
-    }
-
-    // ---- ADR-0062 A（Phase 107）: 実通信 probe（`ssh -o BatchMode=yes <host> -- true`） ----
-
-    fn fake_ssh_probe(dir: &Path, script: &str) -> Vec<String> {
-        let path = dir.join("ssh");
-        crate::test_support::write_executable(&path, script);
-        vec![path.to_string_lossy().into_owned()]
-    }
-
-    #[test]
-    fn command_probe_succeeds_when_the_remote_command_exits_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let ssh = fake_ssh_probe(dir.path(), "#!/bin/sh\nexit 0\n");
-        assert!(control_master_command_probe_blocking(
-            &ssh,
-            "cluster-host",
-            Duration::from_secs(2)
-        ));
-    }
-
-    #[test]
-    fn command_probe_fails_when_the_remote_command_exits_nonzero() {
-        let dir = tempfile::tempdir().unwrap();
-        let ssh = fake_ssh_probe(dir.path(), "#!/bin/sh\nexit 255\n");
-        assert!(!control_master_command_probe_blocking(
-            &ssh,
-            "cluster-host",
-            Duration::from_secs(2)
-        ));
-    }
-
-    /// NAT の idle timeout で TCP が黙って死んだ状況を模す: ssh が応答せずハングし続ける。
-    /// `timeout` を超えたら kill されて `false` になる（ハングしたまま残らない）。
-    #[test]
-    fn command_probe_times_out_and_kills_a_hanging_ssh() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = tempfile::tempdir().unwrap();
-        let script = format!(
-            "#!/bin/sh\necho $$ > {state:?}/pid\nwhile true; do sleep 3600; done\n",
-            state = state.path()
-        );
-        let ssh = fake_ssh_probe(dir.path(), &script);
-        let start = std::time::Instant::now();
-        assert!(!control_master_command_probe_blocking(
-            &ssh,
-            "cluster-host",
-            Duration::from_millis(300)
-        ));
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "probe must not block past the timeout"
-        );
-        let pid: u32 = std::fs::read_to_string(state.path().join("pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        for _ in 0..150 {
-            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        panic!("hanging ssh process {pid} was not killed");
-    }
-}
+mod tests;

@@ -1,0 +1,27 @@
+# Config for scripts/dev/source-size-report.py (ADR-0083).
+#
+# Thresholds and exceptions were decided from the P0 structural audit
+# (wu/audit/artifacts/audit.md §9 "guardrail の閾値の案"): production files
+# over 2,000 handwritten lines and inline `#[cfg(test)] mod` blocks over 300
+# lines are worth a human look, but not worth failing a build over — hence
+# warning-only by default (see the script's --strict flag).
+#
+# Every [[exceptions]] entry needs a non-empty `reason`; the report tool
+# refuses to load the file otherwise. `checks` is optional — omit it to
+# except a path from every size check listed below (it does not silence the
+# untracked/gitignored `mod` check, which exceptions are not expected to need).
+
+[thresholds]
+production_lines = 2000
+inline_test_lines = 300
+
+# task-api's wire types are one flat, cohesive bag of request/response structs
+# (docs/gui/api.md §6.2) that also has to double as the schemars source for
+# docs/api/v1/*.schema.json. Splitting it by endpoint would scatter the single
+# source of truth for the API surface without reducing what an agent touching
+# one endpoint's types has to read (schemars needs every type in scope for
+# codegen). Audit recorded this as an intended exception (audit.md §9).
+[[exceptions]]
+path = "crates/task-api/src/types.rs"
+reason = "flat API wire-type definitions; also the schemars source for docs/api/v1/*.schema.json (audit.md §9)"
+checks = ["production_size"]

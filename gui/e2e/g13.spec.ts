@@ -151,32 +151,6 @@ test.describe("Phase G13f-1: 秘書 → 案件 → 報告 → 認可 → 成果�
     await expect(assignees).not.toContainText("対話:");
   });
 
-  test("「この方針で進める」を押すと、秘書が担当付きの仕事に分解する（監査 H3）", async ({ page }) => {
-    await page.goto(`/projects/${projectId}`);
-    const before = await page.getByTestId("work-tree-assignees").locator("li").count();
-
-    await page.getByTestId("project-plan-note").fill("急がなくてよい。まず関連研究から。");
-    await page.getByTestId("project-plan-submit").click();
-
-    // 202 なので待たない。「分解を秘書に頼みました」と、その裏方のタスクへのリンクが出る。
-    await expect(page.getByTestId("flash-project-op")).toContainText("分解を秘書に頼みました");
-    await expect(page.getByTestId("flash-project-plan-task")).toBeVisible();
-
-    // 仕事の木は SSE の再検証で増えていく（偽のプランナーが担当付きの子を 3 件返す）。
-    const rows = page.getByTestId("work-tree-assignees").locator("li");
-    await expect(async () => {
-      expect(await rows.count()).toBeGreaterThanOrEqual(before + 3);
-    }).toPass({ timeout: 60_000 });
-    const list = page.getByTestId("work-tree-assignees");
-    await expect(list).toContainText("関連研究を洗い出す");
-    await expect(list).toContainText("担当: 関連研究調査課");
-    await expect(list).toContainText("担当: 論文執筆課");
-    // 承認待ち・レビューのような裏方のタスクは木にも一覧にも出ない（`support`。Phase 29）。
-    await expect(list).not.toContainText("Approval needed");
-    // 案件は「提案中」から「進行中」になる（celeris が変える）。
-    await expect(page.getByTestId("project-status")).toHaveText("進行中");
-  });
-
   test("担当の記憶（案件をまたぐ / この案件の引き出し）が読める（監査 M4）", async ({ page }) => {
     await page.goto("/org?selected=secretary");
     const memory = page.getByTestId("org-node-memory");

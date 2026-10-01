@@ -1,12 +1,17 @@
 //! Supervisor-only credential segment (ADR-0080 D2/D3). The harness never sees a lease,
 //! binding token or secret: it only learns `success` or a fixed failure code.
+#[cfg(test)]
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
+#[cfg(test)]
 use std::time::Duration;
 
-use celeris_credentiald::{CredentialPolicy, CredentialRef, LeaseRequest, canonical_origin, ipc};
+use celeris_credentiald::{CredentialPolicy, CredentialRef, LeaseRequest, ipc};
 use serde_json::json;
 use task_core::browser_wait::ConsumedBrowserApproval;
 use zeroize::Zeroizing;
@@ -83,6 +88,30 @@ pub fn configured() -> Option<&'static CredentialSupervisor> {
     CONFIGURED.get()
 }
 
+/// Read the non-secret login intent from the broker's registered site policy.
+pub(crate) fn describe_policy(
+    sup: &CredentialSupervisor,
+    reference: &task_core::browser_wait::CredentialRef,
+    origin: &str,
+) -> Result<task_core::browser_wait::TrustedLogin, &'static str> {
+    let runtime = sup
+        .runtime_dir
+        .clone()
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+        .ok_or("policy_changed")?;
+    let request = serde_json::to_vec(&json!({
+        "op":"describe_policy", "reference":reference,
+        "origin":origin,
+    }))
+    .map_err(|_| "policy_changed")?;
+    let reply = ipc::call(&runtime.join("celeris-credentiald/control.sock"), &request)
+        .map_err(|_| "policy_changed")?;
+    if !reply.success {
+        return Err("policy_changed");
+    }
+    reply.trusted_login.ok_or("policy_changed")
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -91,13 +120,13 @@ fn unix_now() -> u64 {
 }
 
 /// What the substrate commands need; no secret lives here.
+#[cfg(test)]
 pub(crate) struct Segment<'a> {
     pub executable: &'a Path,
     pub credentiald_runtime: Option<&'a Path>,
     pub runtime: &'a Path,
     pub session_id: &'a str,
     pub allowed_domains: &'a [String],
-    pub origin: &'a str,
 }
 
 /// Credential-segment action policy: lifecycle, the trusted login navigation and the two
@@ -115,6 +144,7 @@ pub(crate) fn segment_policy() -> Vec<u8> {
     serde_json::to_vec(&json!({"default":"deny","allow":allow})).unwrap_or_default()
 }
 
+#[cfg(test)]
 fn private_pipe_with(token: &str) -> std::io::Result<OwnedFd> {
     use std::io::Write;
     let (read, write) = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC)?;
@@ -125,6 +155,7 @@ fn private_pipe_with(token: &str) -> std::io::Result<OwnedFd> {
     Ok(read)
 }
 
+#[cfg(test)]
 fn login_argv<'a>(lease_id: &'a str, login_url: &'a str) -> [&'a str; 10] {
     [
         "auth",
@@ -140,6 +171,7 @@ fn login_argv<'a>(lease_id: &'a str, login_url: &'a str) -> [&'a str; 10] {
     ]
 }
 
+#[cfg(test)]
 async fn substrate(
     seg: &Segment<'_>,
     command: &[&str],
@@ -205,6 +237,7 @@ async fn substrate(
     Ok(value)
 }
 
+#[cfg(test)]
 fn libc_fcntl(fd: i32, cmd: i32, arg: i32) -> std::io::Result<i32> {
     // SAFETY: plain fcntl on a known descriptor.
     let rc = unsafe { nix::libc::fcntl(fd, cmd, arg) };
@@ -215,41 +248,33 @@ fn libc_fcntl(fd: i32, cmd: i32, arg: i32) -> std::io::Result<i32> {
     }
 }
 
-/// Active top-level page origin as reported by the substrate, canonicalized.
-async fn top_level_origin(seg: &Segment<'_>) -> Result<String, &'static str> {
-    let value = substrate(seg, &["get", "url"], None).await?;
-    let url = value
-        .pointer("/data/url")
-        .and_then(|u| u.as_str())
-        .ok_or("substrate_failed")?;
-    let rest = url.strip_prefix("https://").ok_or("origin_mismatch")?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    canonical_origin(&format!("https://{authority}")).map_err(|_| "origin_mismatch")
-}
-
-/// Grant + bind a one-use lease for the consumed approval, then drive `auth login` with the
-/// fixed `celeris-credential` plugin. The top-level origin is checked before and after.
-/// Returns only a fixed failure code; the lease is revoked on any failure.
-pub(crate) async fn use_credential(
+/// Issue a lease for the pinned site policy without starting the retired bridge.
+/// The lease is consumed only by the injection IPC after its target checks.
+pub(crate) fn grant_h3_lease(
     sup: &CredentialSupervisor,
-    seg: &Segment<'_>,
     approval: &ConsumedBrowserApproval,
     task_id: &str,
-) -> Result<(), &'static str> {
+) -> Result<String, &'static str> {
     let wait = &approval.wait;
-    if canonical_origin(seg.origin).as_deref() != Ok(wait.origin.as_str()) {
-        return Err("origin_mismatch");
+    let trusted = approval
+        .trusted_login
+        .as_ref()
+        .ok_or("trusted_selector_missing")?;
+    approval.injection_selector(None)?;
+    if trusted.revision != approval.credential.credential_revision
+        || trusted.policy_id != approval.credential.policy_id
+    {
+        return Err("policy_changed");
     }
-    // The broker's ids are `[A-Za-z0-9_-]{1,64}`; bind it to the bare digest of the policy hash.
+    let now = unix_now();
+    let approval_expires = u64::try_from(wait.deadline.unix_timestamp()).unwrap_or(0);
+    let expires = (now + LEASE_TTL_SECS).min(approval_expires.max(now + 1));
     let policy_hash = wait
         .policy_hash
         .strip_prefix("sha256:")
         .unwrap_or(&wait.policy_hash)
         .to_string();
-    let now = unix_now();
-    let approval_expires = u64::try_from(wait.deadline.unix_timestamp()).unwrap_or(0);
-    let expires = (now + LEASE_TTL_SECS).min(approval_expires.max(now + 1));
-    let token = sup.broker.bind(celeris_credentiald::Binding {
+    let _binding = sup.broker.bind(celeris_credentiald::Binding {
         token: String::new(),
         task_id: task_id.into(),
         run_id: wait.run_id.clone(),
@@ -258,20 +283,23 @@ pub(crate) async fn use_credential(
         policy_hash: policy_hash.clone(),
         expires_at: expires,
     })?;
-    let lease_id = sup.broker.grant(LeaseRequest {
+    sup.broker.grant(LeaseRequest {
         reference: CredentialRef {
             credential_id: approval.credential.credential_id.clone(),
             provider: approval.credential.provider.clone(),
             policy_id: approval.credential.policy_id.clone(),
         },
         policy: CredentialPolicy {
-            policy_id: approval.credential.policy_id.clone(),
-            revision: approval.credential.credential_revision,
+            policy_id: trusted.policy_id.clone(),
+            revision: trusted.revision,
             exact_origin: wait.origin.clone(),
             task_id: task_id.into(),
             max_ttl_seconds: LEASE_TTL_SECS,
             require_approval: true,
             allow_persistence: false,
+            login_url: Some(trusted.login_url.clone()),
+            password_selector: Some(trusted.password_selector.clone()),
+            submit_selector: trusted.submit_selector.clone(),
         },
         credential_revision: approval.credential.credential_revision,
         task_id: task_id.into(),
@@ -284,34 +312,11 @@ pub(crate) async fn use_credential(
         ttl_seconds: LEASE_TTL_SECS,
         approval_expires_at: approval_expires,
         session_expires_at: expires,
-    })?;
-    let result = async {
-        let login_url = format!("{}/", wait.origin);
-        // The CLI starts a session daemon on `open`. Its plugin host inherits FD 3
-        // from that daemon, not from the later `auth login` CLI process.
-        substrate(seg, &["open", &login_url], Some(token.as_str())).await?;
-        if top_level_origin(seg).await? != wait.origin {
-            return Err("origin_mismatch");
-        }
-        substrate(
-            seg,
-            &login_argv(&lease_id, &login_url),
-            Some(token.as_str()),
-        )
-        .await?;
-        if top_level_origin(seg).await? != wait.origin {
-            return Err("origin_mismatch");
-        }
-        Ok(())
-    }
-    .await;
-    if result.is_err() {
-        sup.broker.revoke(&lease_id, "supervisor");
-    }
-    result
+    })
 }
 
 /// Upstream config for the credential segment: the only plugin is the fixed bridge.
+#[cfg(test)]
 pub(crate) fn segment_upstream_config(bridge: &Path) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "idleTimeout": "5m",
@@ -394,7 +399,6 @@ mod tests {
             runtime: temp.path(),
             session_id: "session-test",
             allowed_domains: &domains,
-            origin: "https://example.com",
         };
         assert!(
             substrate(

@@ -5,6 +5,8 @@
 pub mod accounts;
 /// ADR-0033 D5（Phase 26）: `Question` 終端から `approvals` に 1 件作る。
 pub(crate) mod approvals;
+/// ADR-0089（Phase R6-5）: CoS の対話 run を `max_concurrency` とプールの `concurrency` から外す規則。
+pub mod capacity;
 /// ADR-0072 D8（Phase E1）: daemon が決定的に集める mechanical checkpoint（git の読み取りだけ）。
 pub mod checkpoint;
 pub mod dispatcher;
@@ -29,7 +31,8 @@ pub use accounts::{
     AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldown, AccountCooldownReason,
     AccountDir, AccountEvaluation, AccountState, EXHAUSTED_UTILIZATION, ExcludedReason,
     FIVE_HOUR_SECS, IN_USE_PENALTY, MIN_WEEK_FRACTION, ObservationSource, SEVEN_DAY_SECS,
-    cooldown_for_failure, evaluate, scan_accounts, select_account, valid_account_id,
+    cooldown_for_failure, evaluate, scan_accounts, select_account, select_account_least_loaded,
+    valid_account_id,
 };
 pub use dispatcher::{
     AccountsRuntimeConfig, ClusterSpec, ContainerDecision, ContainerRun, ContainersRuntimeConfig,

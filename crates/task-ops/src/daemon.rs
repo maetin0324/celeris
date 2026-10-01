@@ -412,8 +412,13 @@ pub struct ProviderLive {
     /// `env` のキー名だけ（値は出さない）。古いスナップショットには無いので既定は空（ADR-0017 M4）。
     #[serde(default)]
     pub env_keys: Vec<String>,
-    /// 実行中の run と Reviewer run の合計。
+    /// 実行中の run と Reviewer run の合計。ADR-0089（Phase R6-5）: CoS の対話 run は含めない
+    /// （`in_use_cos`）。
     pub in_use: u32,
+    /// ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外。
+    /// 古いスナップショットには無いので既定 0）。
+    #[serde(default)]
+    pub in_use_cos: u32,
     /// ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
     /// celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]

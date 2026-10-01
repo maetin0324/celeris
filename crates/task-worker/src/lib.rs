@@ -7,8 +7,17 @@ pub mod adapter;
 pub mod aider;
 pub mod artifact;
 pub mod browser;
+pub mod browser_action;
+pub mod browser_cdp_sink;
 pub mod browser_credential;
+pub mod browser_egress;
+pub mod browser_live;
 pub mod browser_policy;
+pub mod browser_relay;
+pub mod browser_runtime;
+pub mod browser_shared_cdp;
+pub mod browser_specialist;
+pub mod browser_supervisor;
 /// ADR-0066 D1（Phase 110b）: 同一リポジトリの worktree 間で cargo のビルドキャッシュを共有する。
 pub mod build_cache;
 pub mod claude_account;
@@ -18,6 +27,7 @@ pub mod codex;
 pub mod codex_account;
 /// ADR-0043 D3（Phase 56）: ハーネスの CLI をコンテナの中で起こす（runtime 検出・包み方・イメージ）。
 pub mod container;
+pub mod db_guard;
 pub mod delegate_file;
 /// ADR-0060 D1 / Phase 105: celeris の cgroup の外で子プロセスを起こす共通の小道具
 /// （`cluster_login.rs` の ssh master と `celeris::releases::start_promote` の両方が使う）。
@@ -57,6 +67,7 @@ pub mod workspace_prune;
 pub use acp::{AcpAdapter, AcpConfig, AcpPermission};
 pub use adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
 pub use aider::{AiderAdapter, AiderConfig};
+pub use browser_specialist::BrowserSpecialistAdapter;
 pub use claude_account::{
     AccountCheck, AccountCheckResult, LoginError, LoginOutcome, LoginResult, LoginSession,
     check_account, start_login,
@@ -89,11 +100,11 @@ pub use probe::{PROBE_CACHE_TTL, PROBE_TIMEOUT, Reachability, probe_models};
 pub use process_group::{ProcessGroup, kill_tree, kill_tree_with};
 pub use protocol::{
     ActiveMilestoneContext, ActiveProjectContext, Answer, ChildSummary, ClusterContext,
-    CommentContext, ContinuationContext, ConversationAddressee, ConversationTurn, Evidence,
-    GenreContext, GenreRoleContext, MemoryContext, MilestoneBrief, MilestoneReviewContext,
-    MilestoneTaskResult, NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview,
-    ProviderFailure, RecentWork, ReviewOutput, ReviewRequest, ReviewVerdictOut, RoleContext,
-    RunContext, RunRequest, SessionHandle, WorkerMessage,
+    ClusterJobsContinuation, CommentContext, ContinuationContext, ConversationAddressee,
+    ConversationTurn, Evidence, GenreContext, GenreRoleContext, MemoryContext, MilestoneBrief,
+    MilestoneReviewContext, MilestoneTaskResult, NodeContext, OrgNodeContext, PROTOCOL_VERSION,
+    PriorReview, ProviderFailure, RecentWork, ReviewOutput, ReviewRequest, ReviewVerdictOut,
+    RoleContext, RunContext, RunRequest, SessionHandle, WorkerMessage,
 };
 pub use provider::classify_provider_failure;
 pub use result_report::{
@@ -102,9 +113,10 @@ pub use result_report::{
     read_result_report_kind, report_kind_from_result_json,
 };
 pub use ssh::{
-    PUSH_PENDING_MARKER, SYNC_ALWAYS_EXCLUDED, SYNC_PULL_PROTECTED, SshSettings, SshWorkspace,
-    SyncMode, WorktreeSettings, control_master_alive_blocking, remote_dir_is_resolved,
-    remote_exec_instructions, remote_exec_reviewer_instructions, resolve_remote_dir,
+    PUSH_PENDING_MARKER, RemoteCommandOutput, SYNC_ALWAYS_EXCLUDED, SYNC_PULL_PROTECTED,
+    SshSettings, SshWorkspace, SyncMode, WorktreeSettings, control_master_alive_blocking,
+    remote_dir_is_resolved, remote_exec_instructions, remote_exec_reviewer_instructions,
+    resolve_remote_dir, run_remote_command_blocking,
 };
 pub use subprocess::{SubprocessSpec, run_subprocess};
 pub use task_repos::{

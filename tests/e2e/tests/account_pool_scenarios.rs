@@ -38,6 +38,14 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// デーモンの起動（API が `/health` に答え、最初の tick がスナップショットを出す）を待つ上限。
+/// 1 つの検査で複数のデーモンが同時に起動し、`cargo test --workspace` が他の検査と並ぶと
+/// 負荷次第で 20 秒を超えることがあった（統合後の検査で 3 本とも `API did not come up`）。
+/// 早く上がれば早く抜けるので、上限を広げても通常の所要時間は変わらない。
+const STARTUP_WAIT: Duration = Duration::from_secs(90);
+/// 起動後に 1 つの task が dispatch → 完了し、その観測値が `GET /accounts` に載るまでの上限。
+const SETTLE_WAIT: Duration = Duration::from_secs(60);
+
 fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
     let start = Instant::now();
     while start.elapsed() < timeout {
@@ -266,7 +274,7 @@ account_pool = true
     }
 
     fn wait_api(&self, daemon: &mut Proc) {
-        let ok = wait_until(Duration::from_secs(20), || {
+        let ok = wait_until(STARTUP_WAIT, || {
             if let Ok(Some(status)) = daemon.child.try_wait() {
                 panic!("celeris exited early with {status}\n{}", daemon.log_text());
             }
@@ -278,7 +286,7 @@ account_pool = true
         // 起動にかかる時間は環境で動く（Phase 56 で起動時のコンテナ runtime 検出が入った）ため、
         // 「最初の tick がスナップショットを出すまで」を待ちに含める。
         // 認証が要る設定では、この時点でまだトークンを持っていないことがある（そのときは待たない）。
-        let ticked = wait_until(Duration::from_secs(20), || {
+        let ticked = wait_until(STARTUP_WAIT, || {
             let resp = self.request("GET", "/daemon", None, &[]);
             resp.status != 200 || resp.json()["snapshot"].is_object()
         });
@@ -407,7 +415,7 @@ fn account_selection_follows_headroom_and_survives_restart_and_throttle_only_coo
     let t1 = env.add("t1");
     env.celerisctl(&["approve", &t1]);
     assert!(
-        wait_until(Duration::from_secs(10), || env.task_status(&t1)
+        wait_until(SETTLE_WAIT, || env.task_status(&t1)
             == task_core::Status::Done),
         "t1 never completed"
     );
@@ -417,7 +425,7 @@ fn account_selection_follows_headroom_and_survives_restart_and_throttle_only_coo
     let t2 = env.add("t2");
     env.celerisctl(&["approve", &t2]);
     assert!(
-        wait_until(Duration::from_secs(10), || env.task_status(&t2)
+        wait_until(SETTLE_WAIT, || env.task_status(&t2)
             == task_core::Status::Done),
         "t2 never completed"
     );
@@ -427,7 +435,7 @@ fn account_selection_follows_headroom_and_survives_restart_and_throttle_only_coo
     let t3 = env.add("t3");
     env.celerisctl(&["approve", &t3]);
     assert!(
-        wait_until(Duration::from_secs(10), || env.task_status(&t3)
+        wait_until(SETTLE_WAIT, || env.task_status(&t3)
             == task_core::Status::Done),
         "t3 never completed"
     );
@@ -499,15 +507,13 @@ exec "{claude}" "$@"
     let t1 = env.add("throttle1");
     env.celerisctl(&["approve", &t1]);
     assert!(
-        wait_until(Duration::from_secs(10), || env
-            .worker_started_account(&t1)
-            .is_some()),
+        wait_until(SETTLE_WAIT, || env.worker_started_account(&t1).is_some()),
         "t1 was never dispatched"
     );
     assert_eq!(env.worker_started_account(&t1).as_deref(), Some("a"));
 
     // "a" が cooldown に入るまで待つ（GET /accounts の cooldown が埋まる）。
-    let cooling = wait_until(Duration::from_secs(10), || {
+    let cooling = wait_until(SETTLE_WAIT, || {
         env.get("/accounts").json()["items"]
             .as_array()
             .is_some_and(|items| {
@@ -531,9 +537,7 @@ exec "{claude}" "$@"
     let t2 = env.add("throttle2");
     env.celerisctl(&["approve", &t2]);
     assert!(
-        wait_until(Duration::from_secs(10), || env
-            .worker_started_account(&t2)
-            .is_some()),
+        wait_until(SETTLE_WAIT, || env.worker_started_account(&t2).is_some()),
         "t2 was never dispatched"
     );
     assert_eq!(env.worker_started_account(&t2).as_deref(), Some("b"));

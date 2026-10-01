@@ -942,7 +942,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 手順 4 dogfood の観察（2026-09-29 10:25Z〜10:56Z）
 
 - **browser phase-3 子 01M3PBAVFAYPDWMQMDBXPTE2V8**: gate は `atomic/score`（score 2 / 閾値 7、深さ 2）。atomic の run が yield → 続き run を 3 回繰り返し
-  （P3-C 制御 lease の状態機械 + 単体 10、P3-B ACL / 再接続 / scrub の純関数 + 単体 11、P3-A identity の純関数 + 単体 10、ADR-0081〜0083、
+  （P3-C 制御 lease の状態機械 + 単体 10、P3-B ACL / 再接続 / scrub の純関数 + 単体 11、P3-A identity の純関数 + 単体 10、ADR-0099〜0101、
   `cargo test --workspace` 2890 passed）、continuation 上限 3 で「予算を増やす／分割し直す／中止」の質問（10:55Z、blocked）。
   → `POST /tasks/{id}/execution/decompose {mode: compound}` で人の compound を設定し、質問に「分割し直す」で回答（10:58Z、ready）。次の dispatch で
   ExecutionPlan の経路に入るかを見る。
@@ -1154,3 +1154,1163 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 - 20:14Z 人の指示「chatgpt / claude ともアカウントごとに 2 run、全体 6」: config を Fable が変更（backup `config.toml.bak-20260929-2020`）:
   `max_concurrency = 6`、claude-pool `concurrency = 4`（lab / personal × 2）、codex-pool `concurrency = 2`（chatgpt_plus_personal × 2）、
   `[accounts] max_runs_per_account` は既定 2 のまま。`POST /reload` でプールは 4 / 2 に反映済み。`max_concurrency` は起動時固定なので再起動が要る（人）。
+- 20:3xZ 人「TanStack で web 画面を作る task が無くなった。動かして」: web Phase 0（failed、成果は main 884606d）の後続として root task
+  **01M3QE4D330YESFT6FY8G50R12**「web: 新 Web GUI（ADR-0081、TanStack SPA + 薄い gateway）の実装 — Phase 1〜6」を案件 agent-platform に作成
+  （stages_hint 5: Phase 1 / 2 / 3 / 4 / 5〜6、objective は docs/web/implementation-plan.md を正本に、H1〜H10 は「決まるまでの扱い」、Phase 7 は範囲外、
+  P6-04 は H6/H7 の後）→ `decompose {compound}`（人の explicit）→ accept → ready。planner の /3 計画は PlanGate で人が確認する。
+- 20:38Z: 人が再起動（`max_concurrency = 6` 有効）。web root の planner が /3 計画 v1（5 段階 p1〜p56、各 Phase 1 子 task、p56 に `review: human`、
+  決定なし。木全体の葉 40 の制約から P*-NN 55 件を Phase ごとの葉上限 6/5/10/10/6 にまとめる方針）→ PlanGate（`review_human:p56`、near_limit
+  max_stages 5/5、max_child_tasks 5/6）→ 20:4xZ 人（Fable）が approve。葉の上限 `[execution.tree] max_tree_leaves = 40` は web のような大きい木には
+  小さい（回収で見直し候補）。
+- 20:56Z: browser Phase 4 の子 01M3Q49ZTST3XQ9DGF6AGNR0XG（atomic、score 6 / 閾値 7）が最終 review で P4-A/B/C の実配線不足により failed（ADR-0102〜0104、
+  純関数・egress transport の試験は入った）。子の記録: 非特権 LXC では `newuidmap` が EPERM（親 uid_map `0:100000:1001, 1001:1001:1, …`）で
+  bwrap + subuid の隔離が実証できない（環境制約）。根の p4 failed → 木の `max_tree_replans`（10）超過で決定 `limit:max_tree_replans`
+  01M3QF8TWSTGZDQMM33HF9WXF6 が open。判断は人へ（Phase 4 を compound で分解し直すか、P4-A の subuid 実証を別ホストに切り出すか）。
+- 21:03Z: 人が GUI で `limit:max_tree_replans` に `replan` と回答 → planner v4（p4 を p4a / p4c 並行 + p4b（p4a の後）に分割、前回ブランチを各子が merge、
+  決定 `p4a-uid`〈subuid の実証場所〉）→ PlanGate。人（選択肢 1）に従い、決定は **ns-only** で回答し、PlanGate は `replan`（p4a / p4b / p4c に
+  `gate: compound` を明示）を要求（21:22Z）→ **P-R5b-4 再現**: 未承認 v4 の p4a / p4c から子 task が即座に作られ dispatch され、replan 自体は
+  `max_replans`（3）超過の決定 `limit:max_replans` 01M3QGRC80H4M42V5NAF3P9YQN で止まった。
+- 21:25Z: planner v5 = v4 + p4a / p4b / p4c の `features` を compound 寄りに（plan/3 の unit に `gate` 欄は無く deny_unknown_fields で拒否されるため。
+  「unit の gate 上書き」は daemon 側の `unit_gate_overridden` だけ）→ 人が approve。既に動いている p4a / p4c の子（atomic、score 6 / 7）は run が切れた
+  瞬間に人の `decompose {compound}` を当てる（scratchpad `force_compound.sh`、1 秒 poll）。**R6 候補**: plan/3 の unit に `gate: compound|atomic` を
+  planner / 人が書ける欄を足す（ADR-0079 D6 の per-node gate に対する明示の手掛かり）。
+
+## R6: 回収（2026-09-29 22:3xZ 着手、人「背後で監視しつつ R6 と不具合の修正に取り掛かって」）
+
+分担（Opus、worktree、ファイル境界で並列）:
+- **R6-1**（task-dispatch / plan_gate / regate）: P-R5b-4（PlanGate の replan 要求で未承認版の unit を dispatch しない）、P-R5b-5（段階の `review: human` 待ちで
+  次段階の unit を止める）、非 tree の task も max_replans 超過で人に聞く・人の replan は上限に数えない、終端 task の runs 索引を閉じる、near_limit の数え方。
+- **R6-2**（task-core / task-ops tree / config 既定）: plan/3 unit の `gate: compound|atomic` 欄、`kind: task` の子は既定で explicit compound（全 origin）、
+  planner prompt に gate と否定 grep の注意、木の上限の既定値（leaves 40→120、runs 120→400、replans 3→5、tree_replans 10→30）。
+- **R6-3**（task-worker ssh）: クラスタ worktree の submodule 展開。
+- **R6-4**（task-ops execution/replay、task-api、gui）: replan で unit の phase を書き換える、「この方針で進める」撤去、timeline API の遅延、凍結途中目標の注記。
+- 後続 **R6-5**（R6-1 の後、dispatcher）: task 間の公平性（round-robin、task ごとの同時数 ≤ 全体枠 − 1）。
+- **人の判断待ち**: D7（remote workspace の木: 子ブランチ/統合をクラスタ側で実装するか、remote の親では葉だけに制限するか）、D4（人の answer で attempts を
+  reset するか。ADR 要）。
+- 22:44Z: P4-A の子 01M3QGRC542ZC23996DNCTHZF5 に `stall_detected {nothing_runnable}`（人に障害通知）。原因は既知バグ「replan で unit の phase が
+  更新されない」の実害: planner v2 が `restore-binding` を段階 relay → verify（dep prod-launch）に移したが行は `phase = relay` のまま →
+  `integrate-relay` が永遠に待ち、verify 側の依存も満たせない膠着。R6-4 で修正中（再現条件を伝達）。当面の解消は人の replan（unit を
+  `restore-binding-2` に付け替え、内容同じ）。Fable の PUT は classifier に拒否されたため body を用意して人に依頼（scratchpad `p4a-plan-put.json`）。
+- 23:0xZ 人「CoS のチャット task が枠で待たされるのは不便。CoS に割り当てられる run だけ max_concurrency から除外して」→ **R6-5**（Opus）: CoS の対話 run は
+  `max_concurrency` とプールの `concurrency` を数えない・超えてよい、アカウントは最も空いているものに +1 の許容、安全上限 `max_cos_runs`（既定 2）、
+  `GET /providers` に `in_use_cos`。ADR を新設。
+
+
+
+## R6-3: クラスタの worktree は git submodule を初期化する（2026-09-29）
+
+本番の BenchFS の子 01M3Q25DSD895DGMGPWD752G3G（sirius）の決定 `provision-submodules` の回収（上の 17:34Z の回収項目）。判断は ADR-0019 付記
+「Phase R6-3」。本番には触れていない。migration なし。
+
+### 実装したもの
+
+- `task-worker/src/ssh.rs`: `ensure_worktree` のスクリプトに submodule のステップ（`.gitmodules` があり `submodule status --recursive` に `-` が
+  あれば `submodule update --init --recursive`、その前に flock を外す）。失敗は exit 67 → `WorkspaceError::Remote`（クラスタと worktree を名指し）。
+  初期化したら `initialised N submodules in <wt> on cluster <c>` を tracing と `SshWorkspace::take_progress_notes()` に。
+- `task-worker/src/local_worktree.rs`: `pub fn init_submodules(dir)` を足し、`LocalWorktree::ensure_blocking`（新規・再利用とも）の後に呼ぶ。
+
+### 逸脱・未解決
+
+- 進行の 1 行を `WorkerProgress` に積むのは task-dispatch（R5b-fix2 の `push_remote_after_run` と同じく `crates/task-dispatch/src/dispatcher.rs`
+  の remote の prepare の直後）で、今回は編集範囲外。`ws.take_progress_notes()` を `sink.progress` に流す配線が後続の作業。今は tracing の info のみ。
+- ローカルの worktree は ADR-0041 のとおり task-worker にあるので同じステップを足した（task-dispatch には `worktree add` は無い。task-ops の
+  `docs.rs:719` / `changes.rs:676` は `--detach` の一時 worktree で、ビルドしないので対象外）。
+- ローカルの submodule の URL がネットワーク上なら、worktree の初回準備で clone が走る（従来は空のまま）。
+
+### gate
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `cargo test -p task-worker -- --test-threads=8` → exit 0（lib 606 passed / 1 ignored、ssh_localhost 9 passed、reap_finished_children 1 passed）。
+  新しいテスト: `ssh::tests::{ensure_worktree_initialises_submodules_and_is_idempotent_on_reuse, ensure_worktree_skips_the_submodule_step_without_gitmodules,
+  a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree}`（偽 ssh = 手元の `sh`、ローカルパスの submodule）、
+  `local_worktree::tests::the_worktree_initialises_submodules_and_reuse_is_idempotent`。
+- 2026-09-30 01:50Z: BenchFS 修復（再試行）の子が決定 `p0-git-metadata-import`（検証済み台本で task branch に Git object/index/ref だけ反映する例外）→
+  推奨どおり **allow-metadata-only**（task 専用 worktree / branch 限定）で回答。D7（remote の木にブランチ管理が無い）の実害の一つ。
+- 02:42Z: 知識整理 task 01M3R1S3EQCJ35BQ6BWFWG1ZYS（langmem、BenchFS 修復子の後続）が idle timeout ×2 で failed。Qwen トンネルは応答（/v1/models 14 ms）、
+  他の langmem run は 3 分で完了しており、入力が大きい 1 件だけの疑い。副次 task なので放置し、回収候補（langmem の idle timeout を入力量で延ばす）に記録。
+
+
+## R6-2: plan/3 unit の gate 欄、kind task の子は明示の compound、木の上限の既定値（2026-09-30）
+
+- ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) 付記「R6-2: unit の gate 欄と kind task の既定（compound explicit）、木の上限の既定値」、
+  D3 の表（`max_tree_leaves` / `max_tree_runs` / `max_tree_replans`、節点の `max_replans`）。
+- 種類: コード（task-core / task-ops / task-worker のプロンプト / celeris の設定の既定）+ schema / GUI の型の再生成。**migration なし**。本番には触れていない。
+- 発端: 本番で kind task の子（browser Phase 4 の子、P4-A、P4-C、web Phase 1）がすべて `atomic/score`（6 = 特徴 4 + H 2 / 閾値 7）になり、atomic の試行が
+  失敗して人が `decompose {compound}` を打った。planner は /3 の unit に `gate` が無く（`deny_unknown_fields`）compound を指定できなかった。
+- 直したもの:
+  - **plan/3 の unit の `gate: "compound" | "atomic"`**（任意、kind task だけ。leaf は `LeafFieldNotAllowed { field: "gate" }`）。子の
+    `execution_hint = {<gate>, explicit: true}`（`build_child_task`）、採用時の unit の gate も同じ値（`unit_view` の `execution_hint` → `unit_gate` が人の明示として
+    判定）。kind task の unit には `Demoted` / `KeptTask` を出さない（`UnitGateOverridden` は leaf の Promoted / Decision だけ）。
+  - **kind task の既定は明示の compound**（人・planner を問わない。R5b-fix3 の `human_plan` と `plan_is_human` を削除）。1 run の子は `gate: atomic`。
+  - **planner のプロンプト**: 例の JSON に `gate`、compound / atomic を 1 文ずつ、否定の grep の自己言及の注意。
+  - **既定値**: `max_tree_leaves` 40 → 120、`max_tree_runs` 120 → 400、`max_tree_replans` 10 → 30、`[execution] max_replans` 3 → 5。
+    `config/celeris.example.toml` に `[execution.tree]` の注釈付きの例を足した。
+- 直していないもの: `near_limit:max_child_tasks_per_plan` の数え方（BenchFS の 10/6）は `task_ops::plan_gate`（担当外）にある → R6-1。
+  task-dispatch の `DispatchConfig` の既定（`dispatcher.rs` の `max_replans: 3`、試験用の既定）は担当外のため 3 のまま（本番は `celeris::config` の既定 5 が渡る）。
+- 本番への効き方: `~/.config/celeris/config.toml` は `[execution]`（parallel / gate）と `[execution.tree] enabled = true` だけで、上の 4 つの鍵を書いていない
+  → **再起動（新しい release）で新しい既定が効く**。設定の変更は不要。組織の profile の `budget`（ADR-0069 D2）で `max_tree_runs` を狭めていればそちらが効く。
+  既存の子 task の `execution_hint`（`explicit: false`）は直さない（新しく作る子から）。
+- gate: `cargo fmt --all -- --check` exit 0 / `cargo clippy --workspace --all-targets -- -D warnings` exit 0 /
+  `cargo nextest run -p task-core -p task-ops -p task-api -p task-worker -p celeris` 2162 本中 2159 passed / 3 failed（`task-api::task_tree` の上限の既定値
+  → 期待を直して 4/4 passed。`task-api::browser_e2e` の 2 本は入れ子の `cargo build` が高負荷で `serde_core` のコンパイルに失敗、変更とは無関係）/
+  `cargo nextest run -p task-dispatch -j 6` 454 本中 453 passed / 1 failed（`tree_replan::tree_planner_context_is_wired_from_limits_and_counters`
+  の既定値 → 期待を直して `-E test(/tree/)` 67/67 passed）。1 回目の task-dispatch（負荷 90〜146）は tick 数依存の 29 本が落ち 5 本が timeout だったが、
+  負荷の下がった 2 回目で通った（木の試験の timeout は fixture の子が既定の compound になり planner の計画を待っていたもので、fixture に `gate: atomic` を
+  明示して直した）。schema: `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema`（api-v1 / event / execution-plan の 3 ファイル）、
+  GUI の型は `json2ts`（`gen:types` と同じ引数）で再生成（`PlanUnitSpec.gate?: ExecutionMode | null` の 7 行）。`tsc -b` は `types.ts` 由来の誤りなし
+  （worktree に node_modules が無く `react-router typegen` が動かなかったため、ルートの型の欠落の誤りだけが出た）。
+- 変えた既存の試験: task-core `tree.rs`（unit の gate の表の 5・6 行、既定値、承認の near_limit・limit の余裕は旧値を明示）、task-ops `tree.rs`（子の hint）、
+  celeris `config.rs`（既定値）、`dispatcher/tests/tree.rs`（共通 fixture の kind task の unit に `gate: atomic`。1 run の子の前提を保つ）、
+  `dispatcher/tests/tree_gate.rs`（cb は gate を外して明示の compound、c6 は `human/explicit` の atomic、small は下げずに atomic の子 task、記録は big の Promoted だけ）、
+  `dispatcher/tests/tree_branches.rs`（同じく fixture に `gate: atomic`、compound の子は gate を外す）、`tree_replan.rs` / `tree_approval.rs`（compound の子は gate を外す、
+  木の残りの既定値）、`task-api/tests/task_tree.rs`（木の上限の既定値。担当の範囲外のファイルだが期待値だけ）。
+
+
+
+## R6-5: CoS の対話 run は max_concurrency とプールの concurrency の外（2026-09-30）
+
+人の指示（上の 23:0xZ）の実装。判断は [ADR-0089](../adr/0089-cos-runs-bypass-concurrency.md)。本番には触れていない（systemctl・本番 DB・7700/7710・
+config の編集なし）。migration なし。
+
+### 実装したもの
+
+- **規則 1（判定は 1 か所）**: `task_dispatch::capacity::is_cos_run(task, org)` = `task_core::is_conversation(task) && !task_core::is_milestone_review(task)
+  && task.assignee が org の OrgKind::Secretary のノード`。`POST /console/instruct` の既定の宛先・`POST /org/cos/messages` の対話用タスク。
+- **規則 2**: CoS run は `max_concurrency` に数えず、`account_pool = true` のプロバイダの `concurrency` も見ない（プールでないプロバイダには例外なし）。
+  アカウントは消費し、`accounts::select_account_least_loaded`（走っている run の最も少ないもの → スコア → id）で `max_runs_per_account + 1` まで。
+  ADR-0054 の sticky も同じ緩めた上限で判定。CoS はこの tick の満杯集合 `full` を共有しない。
+- **規則 3**: `workers_in_flight` とプロバイダの `in_use` は CoS を除く（葉は CoS が走っていても枠いっぱいまで起きる。葉が CoS の例外に乗ることはない）。
+  `ProviderLive.in_use_cos` / `GET /providers` の `in_use_cos` に CoS run を別に出す。
+- **規則 4**: `[execution] max_cos_runs`（既定 2、0..=8、`0` で例外を無効化）。`dispatch_ready` は非 CoS の枠が無くても CoS の枠があれば対話用タスクだけを走査し、
+  `dispatch_one` の入口で `run_load().admits(cos)`。
+- dispatcher.rs の変更は局所（`RunEntry.cos`、会計の関数、`dispatch_ready` / `dispatch_one` の入口、`select_provider_for` と account 選択の `cos` 引数、
+  スナップショットの 1 行、`mod cos_capacity;`）。テストは `src/dispatcher/tests/cos_capacity.rs`（新設）。
+- 設定: `celeris::config::ExecutionTomlConfig.max_cos_runs` → `ExecutionConfig.max_cos_runs`。文書: `docs/providers.md`、`docs/gui/api.md` §3.19、
+  `config/celeris.example.toml`（コメント）、`config/celeris.multi-account.example.toml`。API schema を再生成（`ProviderView.in_use_cos`）。
+
+### 逸脱・未解決
+
+- 途中目標レビューの対話（`milestone_id` あり）は CoS 宛てでも例外に乗せない（裏方で人が待っていないため）。部署ノードとの対話も対象外。
+- CoS run のアカウント選びは「最も空いている」優先で、ADR-0024 D3 の残量スコアは同数のときの順序にだけ使う（依頼どおり）。
+- GUI（`gui/` の型・表示）は `in_use_cos` をまだ出していない（API とスナップショットだけ）。
+- ready の窓（`max_concurrency * 4 + 16`）は変えていない。非 CoS の枠が埋まっている tick も CoS の枠が空いていれば `ready_tasks` を 1 回引く。
+
+### 本番への反映
+
+- 新しいキーは `[execution] max_cos_runs` だけで、書かなければ既定 2 が効く。**config の変更は不要**。挙動の反映には release の昇格（再起動）が要る。
+
+### gate（CARGO_TARGET_DIR はローカル LVM）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema` → 1 passed（`docs/api/v1/api-v1.schema.json` を再生成、差分は `in_use_cos`）
+- `cargo test -p task-dispatch -p task-api -p celeris` → celeris + task-api 658 passed / 0 failed。task-dispatch lib は負荷下で
+  `sccache_family_is_deterministic_regardless_of_the_parent_env` が 1 件タイミングで落ち（`Running` ≠ `Done`、今回の変更と無関係）、単独で再実行 → ok。
+  `cargo test -p task-dispatch` の再実行 → lib 458 passed / 0 failed、unified_kill 4 passed。
+- 新しいテスト: `dispatcher::tests::cos_capacity::{cos_run_bypasses_max_concurrency_but_leaves_do_not,
+  cos_run_bypasses_pool_concurrency_on_the_least_loaded_account_up_to_max_cos_runs, max_cos_runs_zero_disables_the_exemption}`、
+  `capacity::tests::*`（4 件）、`accounts::cos_account_tests::least_loaded_picks_the_account_with_fewest_runs_even_at_max_plus_one`、
+  `config::tests::execution_max_cos_runs_default_and_validation`、`daemon_providers_config`（`in_use_cos` の null / 1 / 0）。
+
+
+## R6-4: 回収（replan の段階の書き換え、死んだ「この方針で進める」、timeline の遅さ、凍結した未終了の途中目標）（2026-09-30）
+
+### 1. replan が持ち越す unit の `phase` / `seq` を書き換える（R4a から既知 → 本番の stall）
+
+- **症状**（本番 01M3QGRC542ZC23996DNCTHZF5、/3 の木の子）: planner の replan v2 が unit `restore-binding` を段階 `relay` → `verify` へ移し `prod-launch`
+  に依存させた。行は `phase = relay`・v1 の `seq` のまま → scheduler（`settle_phase` の「今の段階 = seq 最小の未終端の行の段階」、`newly_ready` の障壁）が
+  `relay` を未完了と見て `integrate-relay` が走れず、`restore-binding` は後の段階待ち → `stall_detected{nothing_runnable}`。
+- **直したこと**: `task_ops::execution::replan` の持ち越し（`Some(existing)`）で `row.phase = 新しい版の phase`。**`seq` も**: replan は元から新しい版の並び
+  （`materialized_order`）を行に入れていたが、store の `update_work_unit_tx` が `seq` の列を書いていなかった → `seq = ?22` を足した
+  （crates/task-core/src/store.rs。他の書き手は読んだ行の値をそのまま渡すので影響なし）。done の行（R5b-fix1 の上書き）は `seq` を変えない。
+  replay の `apply_replan_step` も同じ（持ち越す未完了の行の `phase` / `seq`、未完了の統合 WU の `seq`）。
+- **見える記録**: `ReplanDiff.moved`（`x(relay→verify)`）、`ExecutionPlanned.reason` の後ろに ` (phase: x(relay→verify))`（移動があるときだけ）。
+- **テスト**: `replan_rewrites_the_phase_of_a_unit_moved_to_another_phase`（/2）、`replan_moving_a_unit_to_a_later_stage_does_not_strand_the_earlier_stage`
+  （/3、本番の形: v1 `relay{r1,x}`・`verify{p}` → v2 `x` を `verify` へ・`p` に依存。行の並びが `r1, integrate-relay, p, x, integrate-verify`、`r1` done で今の
+  段階は `relay`・`relay` の unit はすべて done・`integrate-relay` 待ち・verify はまだ上がらない、reason に `phase: x(relay→verify)`、replay diff 0）、
+  既存の `replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan` に `b` の phase = p1 の assert を足した。ADR-0079 付記 R6-4。
+- **既存の本番の行**: R6-4 の前の replan で食い違った行は `celerisctl replay`（check）で `phase` / `seq` の食い違いとして出る。`--apply` で events から直る
+  （本番への適用は人の判断。本 Phase では本番に触れていない）。
+
+### 2. 案件ページの死んだ「この方針で進める」を外した
+
+- `POST /projects/{id}/plan {mode: decompose}` は R5a から 410。ボタン・フォーム（`project-plan-form`）・目次の項目、`ProjectOpOutcome` の `project_plan`
+  （成功・失敗の op）、Flash の `project_plan` の枝と文言を消した。action の `project_plan` の中継は R5a で既に外れていた。e2e `g13.spec.ts` の
+  「この方針で進める」の test を消した。`/help` の 2 か所の説明を root task の説明に直した。root task の一覧と「以前の途中目標（読み取り専用）」はそのまま。
+  task の「実行の形」の `execution_decompose`（`POST /tasks/{id}/execution/decompose`）は別物なので残した。
+
+### 3. `GET /tasks/{id}/timeline` の遅さ
+
+- **計測**（本番 DB の写し: `sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" ".backup <scratch>/prod-copy.sqlite3"`、task 01M3PAX6RVE7AX8Z6118KADME3
+  = browser の根）: 根の events は **184 件**（1366 件ではない。子を含めても木の分は読まない）。ストアの部分（`store_items`: events・コメント・認可・報告・
+  取り込み）は下の表のとおり小さい。遅さは**ストアではなく、ハンドラが起こす git**（ホームは NFS。冷えていると 1 回が秒単位）:
+  - 文書の逆リンク（`docs::backlinks`）: `git grep -l <id> main -- docs` が `docs/progress/phase-R.md` に当たる（本文に task id が出るだけで front matter の
+    `tasks:` には無い）→ それでも先に `git log --no-merges --name-only main -- docs`（文書の根の全履歴）を起こしていた。**冷 19.0 s / 温 51 ms**。
+  - リリース（`release_items`）: `rev-list base..branch`（温 6 ms）の後、`ReleaseSource::list()` が `git rev-parse main` + リリースごとの
+    `git merge-base --is-ancestor`（`on_main`。タイムラインは使わない）。5 リリースで **冷 7.6 s / 温 54 ms**。
+  - events の索引: `events` は `UNIQUE(task_id, seq)` の自動索引を使う（`EXPLAIN QUERY PLAN`: `SEARCH events USING INDEX sqlite_autoindex_events_1 (task_id=?)`）。
+    索引の追加は不要。`worker_progress` の本体は 69 件 94 KB で、decode は支配的でない。
+- **直したこと**: (a) 逆リンクは front matter で先に絞り、紐付いたページがあるときだけ `git log` を起こす（crates/task-api/src/docs.rs）。
+  (b) `ReleaseSource::list_for_timeline()`（既定は `list()`）を足し、celeris の `FsReleases` は `scan(root, None)`（`on_main` を求めない = git を起こさない）で
+  返す（crates/task-api/src/releases.rs・timeline.rs、crates/celeris/src/releases.rs）。タイムラインの応答の形は変えていない。
+- **before / after**: 下の「計測」節。
+
+### 4. 凍結した未終了の途中目標の件数
+
+- `GET /projects/{id}` に `milestones_frozen_open`（`u32`、既定 0）を足した（`milestones_frozen` のうち `reached` / `redesigned` / `cancelled` でない行の数。
+  既定の応答では行が空なので GUI が数えられなかった）。案件ページの「以前の途中目標（読み取り専用）」に「うち N 件は終わらないまま（達成・再設計・中止の
+  どれでもない状態で）凍結されています。」の 1 行（`milestones-open-note`、0 件なら出さない）。欄の無い古い celeris では読めた行から数える
+  （`frozenMilestonesOpenCount`）。API 文書（celeris-api-v1.md）・schema・GUI の生成型を更新。
+- 追記（(c)）: 逆リンクの結果を memo する（鍵 = 文書リポジトリ・default_branch の commit・文書の根・task id。上限 512 件で溢れたら捨てる）。GUI は SSE の
+  再検証で同じ task のタイムラインを数秒おきに引き直す（本番の journal: 17:08:20〜17:08:45Z に同じ根へ 5 回）ので、2 回目以降は `git rev-parse` 1 回と
+  `docs_target` の分だけになる。
+
+### 計測（before / after）
+
+| 経路 | before | after |
+| --- | --- | --- |
+| 本番の journal（`slow api request … /timeline`、根 01M3PAX6…） | 1,058〜5,622 ms（他の task の GET は < 150 ms） | 未計測（本番に出していない） |
+| `store_items`（写しの DB、in-process） | 5.6〜10.2 ms | 同じ（変えていない） |
+| sort + JSON（237,301 B） | 11.7〜17.9 ms | 同じ |
+| 逆リンク（`doc_items`、`~/workspace` を根に、in-process 3 回） | grep + **`git log` 全履歴（冷 19.0 s / 温 51 ms）** + show | 1 回目 903.6 ms（冷えた grep/show）、2・3 回目 51.5 / 71.8 ms（memo、`rev-parse` と `docs_target` の git だけ） |
+| リリースの照合（`release_items`） | `rev-list` + `rev-parse main` + `merge-base` × 5（**冷 7.6 s / 温 54 ms**） | `rev-list` だけ（温 6 ms）。`scan(root, None)` は git を起こさない |
+
+- 計測の手順: `sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" ".backup <scratch>/prod-copy.sqlite3"` → `CELERIS_TIMELINE_PROFILE_DB=<copy>
+  CELERIS_TIMELINE_PROFILE_TASK=01M3PAX6RVE7AX8Z6118KADME3 cargo test -p task-api --lib profile_timeline -- --ignored --nocapture`（`timeline.rs` の
+  `#[ignore]` のテスト。ストアと逆リンクを分けて測る）。git 単体の冷 / 温は同じ引数の `git` を Python の `subprocess` で 3 回ずつ（ホームは NFS、
+  計測時の host は load 60〜170・I/O 待ちが高い）。冷えた値は host の負荷で大きく振れる（同じ `git log` が 19 s → 51 ms）。
+- 結論: タイムラインの遅さは events の件数・JSON の decode・索引ではなく、1 回の GET ごとに NFS 上のリポジトリへ最大 9 回 git を起こしていたこと
+  （うち 2 つは全履歴 / 全リリースを歩く）。memo 後の定常は 1 回の GET あたり概ね store 10 ms + git 数回（温 50〜70 ms）。
+
+### gate（2026-09-30。build は `CARGO_TARGET_DIR=<scratch>/target`〈tmpfs〉。NFS 上の worktree の `target/` は消した）
+
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test -p task-ops` → 366 passed / 0 failed
+- `cargo test -p task-core --lib` → 528 passed / 0 failed（store の `seq` の書き込み）
+- `cargo test -p task-api --no-fail-fast`（先に `cargo build -p celeris-credentiald`）→ 42 binaries、394 passed / 0 failed / 2 ignored
+  （`UPDATE_SCHEMA=1` で `docs/api/v1/api-v1.schema.json` を再生成）
+- `cargo test -p celeris --lib releases` → 22 passed / 0 failed
+- `cargo test -p task-dispatch --no-fail-fast` → 3 binaries、454 passed / 0 failed（scheduler は行の `seq` を読むので回した）
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- GUI: `pnpm gen:types`（`ReplanDiff.moved`・`ProjectDetail.milestones_frozen_open`）、`pnpm typecheck` → exit 0、`pnpm test` → 81 files / 1223 passed、
+  `pnpm lint` → error 0（既存の info 2 件は scripts/check-resume-recovery.mjs）、`E2E_SKIP_BUILD=1 pnpm e2e:mock` → `failures: []`、
+  `pnpm mobile-audit` → routes=28 schemes=2 violations=0（1 回目は host の I/O 負荷で GUI の `/healthz` 20 s 待ちが切れた。2 回目で通過）
+
+### 逸脱
+
+- `crates/task-core/src/store.rs`（`update_work_unit_tx` に `seq = ?22`）と `crates/celeris/src/releases.rs`（`list_for_timeline` の実装）は依頼の
+  「触るファイル」の外。前者は本番の stall の再現で「`seq` も直す」ことが必要だったため（scheduler の今の段階は `seq` で決まる。`phase` だけでは
+  同じ stall が残る）、後者はタイムラインから git を外す最小の口（trait の既定は従来の `list()`）。
+- 項目 4 は API に欄を 1 つ足した（`milestones_frozen_open`）。既定の応答では凍結した行を返さないので、GUI だけでは数えられなかった。
+- 項目 3 の索引の migration は足していない（`events` は `UNIQUE(task_id, seq)` の索引で引けている）。
+
+### 未解決
+
+- 本番の既存の行（R6-4 の前の replan で `phase` / `seq` が食い違った unit。01M3QGRC542ZC23996DNCTHZF5 の `restore-binding` など）は、release 後に
+  `celerisctl replay`（check）で確かめ、`--apply` するかは人が決める。
+- 逆リンクの 1 回目（冷えた `git grep` / `git show`）は NFS の負荷しだいで 1 s 近い。常時速くするなら、文書の front matter の `tasks:` の索引を
+  書き込み時に作る（task-ops/docs の範囲。本 Phase ではしない）。
+- タイムラインは root の子の events を読まない（木の分は `GET /tasks/{id}/task-tree`）。「1366+ events」は根ではなく木の合計と思われる（根は 184 件）。
+
+### R6 統合の記録（2026-09-30 04:xxZ）
+- main に統合済み: R6-3（d47dce3）、R6-2（4b25e9f）、R6-5（002e960、ADR-0089）、R6-4（08c3882）。R6-1 は作業中。
+- 開発環境: NFS の worktree に `target/` を書いて I/O が飽和（03:00Z、I/O pressure 71%、load 80）→ `scripts/dev/worktree-target-dir.sh` +
+  PreToolUse hook で worktree ごとの `.cargo/config.toml` を生成（d6fe615）。置き場は `/var/tmp/agent-platform-build/<name>`（`/var/lib/celeris/build-cache`
+  は委譲エージェントの権限分類で拒否されるため変更、c542e5a）。docs/ops/dev-builds-local-target-dir.md。
+- ローカル LVM の空きが 20 GB まで減っていた（92%）→ 完了したエージェントの build cache 29 GB を削除して 58 GB（77%）。大物は
+  `/var/lib/celeris/scratch/targets` 93 GB と `/var/lib/celeris/workspaces` 70 GB（回収候補: 終端 task の scratch target と workspace の GC）。
+- main の `gui/node_modules` が壊れていた（rolldown/parseAst 欠落、途中で止まった install の痕跡）→ 作り直し中。release gate は自前の node_modules
+  cache を使うので影響なし。
+- 2026-09-30 04:57Z: web Phase 1 の子 01M3QEA4HC12TFCNDG5A7WT722 が統合検査失敗 → 空文の worker_question で blocked（**欠陥**: 質問文が空）。原因は
+  planner の check の書き方 2 件: (a) 範囲外差分の check が `docs/PROGRESS.md`（計画 §1 が許す完了記録）を除外していない、(b) `pnpm -C web test scripts/ e2e/support/`
+  が引数をディレクトリとして node --test に渡し 2 件 fail（実 test は 36/38 pass）。人の回答で check の直し方（PROGRESS の除外、引数なし、gui は
+  `corepack pnpm@11.27.0` で版固定 = pnpm 版合わせの別 task は不要）を planner に渡し ready に。前日の決定「gui の pnpm を 12.6.0 に上げる別 task」は
+  corepack 明示で満たすため不要（task も作られていない）。**R6 候補**: planner prompt に統合 check の書き方（PROGRESS 除外、`pnpm test` に引数を付けない、
+  corepack で版固定、base は固定 sha より merge-base）を足す。
+- 2026-09-30 05:16Z / 05:38Z: BenchFS の実験子 01M3R8BWFYT81RKEWZCEW5S3HK が 2 回続けて review 不合格 → failed → 根の replan（上限 5 に到達、人が raise-once）。
+  不合格理由は「PBS の job（E1 v2 42634〜42636 が Q、A0 v2 が R）がまだ終わっていないので完了を確認できない」。**設計の穴**: 数時間かかるクラスタ job を、
+  1 run（≤ 1800 s）→ review の cadence で扱えない。worker は job を投げて done と申告し、reviewer が未完了で落とし、根が replan して子を作り直す churn。
+  **提案（R7 候補）**: browser_waits と同型の durable wait を cluster job に足す（`result.json {type: "wait", kind: "pbs_job", cluster, job_ids, poll_secs}`
+  → daemon が remote-exec で qstat を poll し、終了で続き run を起こす。continuation・idle timeout に数えない）。それまでは計画側で「投入」と「回収」を
+  分け、回収の葉は job 終了を人が確認してから ready にする運用。
+- 05:40Z: release **f8a199978065**（main = R6-2/3/4/5 + dev の target-dir 固定）: gate ok（fmt / test / clippy / build / GUI）、push、verify ok / live_ok（schema 33）。
+  昇格は人。昇格後: `celerisctl replay` で既存行の phase/seq 不一致を確認して `--apply`（R6-4）、木の上限の既定値（R6-2）と CoS 枠除外（R6-5）が有効になる。
+
+
+## R6-1: 人の gate は unit を止める、上限超過は人に聞く、runs 索引の回収（2026-09-30）
+
+ADR-0079 付記「R6-1」。migration なし・新しい Event の型なし。本番（systemctl・/var/lib/celeris・7700/7710・設定）には触れていない。
+build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a50d9a36ba24ad7aa`（ローカル LVM）。
+
+### 実装したもの（欠陥ごと）
+
+- **D1（P-R5b-4）** `task_ops::plan_gate::{PlanGateState, plan_gate_state}`（pending / approved / skipped を events から導く）と dispatcher の
+  `human_gate_hold`: `pending` の版の unit は `wu_dispatch_gate`（leaf・統合）でも `reconcile_tree_units`（`ready` への引き上げ・子の生成）でも
+  起こさない。承認待ちの版に `replan` を求めた後も次の版が承認されるまで止まる。
+  試験: `human_gates::plan_gate_replan_does_not_dispatch_the_unapproved_version`、`an_unapproved_version_stays_parked_while_the_replan_is_pending`、
+  `plan_gate::tests::plan_gate_state_is_derived_from_events`。
+- **D2（P-R5b-5）** `finish_phase_integration` は途中確認で止めるとき次の工程を `pending` のまま残し、人の gate の間は照合が子を作らない。
+  「続ける」の後の dispatch が `promote_newly_ready` で上げる。試験: `human_gates::review_human_stage_holds_the_next_stage_child`
+  （旧試験 `tree::review_human_stage_pauses_after_integration` の `b` の期待を `Ready` → `Pending` に、付記名つきの注記で直した）。
+- **D3** `replan_exhausted_ask`: 木の節点は `limit:max_replans` の決定、木でない task は「replan の上限を使い切りました…」の質問（回答 = 人の
+  replan）。`plan_gate::counted_replans`（人の replan は数えない）を 6 か所の「版の数 − 1」と置き換え、人の replan の依頼は常に planner を起こす。
+  試験: `replan_exhaustion_on_a_non_tree_task_asks_a_human_and_the_answer_replans`、
+  `human_gates::a_tree_node_leaf_failure_after_replans_are_exhausted_raises_the_limit_decision`、`plan_gate::tests::human_origin_replans_are_not_counted`
+  （旧試験 `a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_dependents` は `Failed` → `Blocked` と質問の頭に、注記つきで直した）。
+- **D4** `SqliteStore::apply_transition_tx` が終端への遷移で `running` の runs 行を `WorkerFinished{end: Cancelled}` で閉じる（同じ
+  トランザクション）、`TaskStore::close_runs_of_terminal_tasks` と dispatcher の `reconcile_terminal_runs`（起動後の最初の tick と 600 秒ごと）。
+  試験: `human_gates::runs_index_rows_of_terminal_tasks_are_closed`（旧試験 `a_run_aborted_by_cancel_closes_its_runs_row` の outcome の文を注記つきで更新）。
+- **D5** `approval_facts.child_task_units` は `creates_child()` かつ done でない unit だけ。試験: `human_gates::approval_facts_count_only_units_that_will_create_children`。
+- **D6** `drain_remote_progress_notes`（`take_progress_notes()` を run の前に `WorkerProgress` へ）。試験: `remote_prepare_notes_are_drained_into_worker_progress`。
+- **D7** `integration_gives_up` が質問にするとき `QuestionRaised{text: "phase <p> の統合後の検査が失敗しました: …"}` を積む。
+  試験: `integration_check_failure_without_replans_asks_with_the_failed_checks`（受信箱の `questions[].question` が同じ文）。
+
+### gate（2026-09-30）
+
+- `cargo fmt --all` → 差分なし（実行後）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告 0）。
+- `cargo nextest run -p task-dispatch -p task-ops -p task-core -j 6` → 1368 passed / 0 failed。
+- `cargo nextest run -p task-api -j 6` → 394 passed / 0 failed（2 skipped）。
+- `cargo nextest run -p celeris -p celeris-mcp -p celerisctl -p task-worker -p celeris-credentiald -p llm-proxy -p scratch-cache -j 6` → 1111 passed / 0 failed（5 skipped）。
+- `cargo test --doc --workspace` → すべて ok。
+
+### 逸脱
+
+- `crates/task-core/src/store.rs` を触った（依頼の「task-core は新しい Event の型が要るときだけ」の外）: D4 の「終端の遷移と同じトランザクションで
+  閉じる」は store の `apply_transition_tx` の中でしか満たせないため。Event の型は足さず、既存の `WorkerFinished` で閉じる（replay と整合）。
+  `TaskStore` に `close_runs_of_terminal_tasks` を 1 つ足した（実装は SqliteStore だけ）。
+- ADR-0074 D2.4 の「途中確認の replan は `max_replans` に数える」を D3 で改めた（人の replan は数えない）。ADR-0074 の本文は変えていない
+  （ADR-0079 付記に書いた）。
+- 承認の状態は API の欄に出していない（`plan_gate_state` で導く。GUI / API の表示は従来の `awaiting_plan_approval` のまま）。
+
+### 未解決
+
+- 本番の既存の `running` の行（01M3Q01QC6DQTG8XX62WJDC0M7 など）は、release 後の最初の tick で `reconcile_terminal_runs` が閉じる（warn が 1 行ずつ出る）。
+- `pending` の版の間に持ち越しの leaf が終わって段階の統合の条件を満たす形（起きない見込み）と、人の gate の間の子の基盤の失敗の作り直しは
+  止めていない（付記の「残したもの」）。
+- 木の上限（`max_tree_replans`）は人の replan の依頼にも効く（D3 は節点の `max_replans` だけ）。
+- 05:49Z: release **1753ccc641e4**（main = R6-1〜R6-5）: gate ok、push、verify ok / live_ok（schema 33）。f8a199978065 を置き換える昇格候補（人）。
+- 06:1xZ: **R7-1**（cluster job の durable wait、PBS）を Opus に委譲。1 回目は Opus の session 上限（429、06:10Z reset）で即失敗 → 再起動。
+- 05:44Z: BenchFS 根の v7（bf-exp を superseded、bf-exp2 を再発行。受け入れ条件に「PBS job が全部 F」）を人が承認。
+
+
+## R7-1: クラスタ job（PBS / Slurm）の durable wait（2026-09-30）
+
+[ADR-0090](../adr/0090-durable-wait-for-cluster-jobs.md)。発端は上の 05:16Z / 05:38Z（BenchFS の実験の子が PBS の job が Q / R のまま review で
+2 回落ち、根の replan で作り直される churn）。**migration 0034 = schema 34（昇格は stop → start）**。本番（systemctl・/var/lib/celeris・
+7700/7710・設定・クラスタへの ssh）には触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-aedd855ab98306cc9`。
+
+### 実装したもの
+
+- **D1 protocol**: `result.json` の `{"type": "wait", "kind": "cluster_job", "cluster", "jobs", "scheduler": "pbs"|"slurm", "poll_secs",
+  "timeout_secs", "checkpoint", "summary"}`（入れ子の `{"wait": {...}}` も）。`task_core::cluster_job::parse_wait_request`（job id は
+  `[A-Za-z0-9._-[]]`、1〜64 件）、`Terminal::Waiting`（claude-code / codex / acp / aider / subprocess の直接プロトコル `WorkerMessage::Wait`）、
+  優先順位 `question` > `wait` > `summary` > `yield`、不正な wait は `error(retryable)`。`RunEnd::Waiting` / `RunIndexStatus::Waiting` /
+  `CheckpointEnd::Waiting`。continuation の回数・進捗なし・attempts に数えない（`consecutive_continuations` は `waiting_for_cluster_jobs` /
+  `cluster_job_resume` を読み飛ばす、`no_progress_streak` と `latest_progress_checkpoint` は wait の checkpoint を除く）。
+- **D2 daemon**: `cluster_job_waits`（events が正本、`cluster_job::apply_event_tx` で event と同じトランザクション）。atomic の run は
+  `Trigger::ClusterJobWait`（`running → blocked`、lease 解放）、v2 / v3 の unit は `blocked(cluster_jobs)`（兄弟は止めない:
+  `runnable_work_units` / `settle_phase` / liveness は `decision` と同じ扱い）、v1 の unit は task ごと待つ。tick の `poll_cluster_job_waits` が
+  `poll_secs` に高々 1 回 `setup` の後に `qstat -xf`（Slurm は `sacct -n -P -X`）を `ssh -o BatchMode=yes <host> -- …` で OS スレッドに流し
+  （`task_worker::run_remote_command_blocking`、フック `ClusterJobPoller`、本番は `wire_cluster_liveness_hooks` が挿す）、状態が変わったら
+  `ClusterJobWaitPolled`、すべて F（または scheduler が `Unknown Job Id`）で `satisfied` と `cluster_job_resume` / unit `needs_continuation`。
+  続きの run の前置きに「クラスタ job の結果」節（job ごとの最終状態と Exit_status・回収の指示。`ContinuationContext.cluster_jobs`）。
+  上限で `timed_out`: atomic は `blocked` のまま人への質問（延長／job の取り消し／取り下げ）、v2 / v3 の unit は続きの run に回して前置きで人に
+  聞かせる。task の終端で `cancelled`（qdel しない）。`waiting` の間は一般の回答で戻せない（`cluster_job_wait_pending`）、受信箱の質問にも出ない。
+- **D3 events**: `ClusterJobWaitStarted` / `ClusterJobWaitPolled` / `ClusterJobWaitFinished{state}`。`EVENT_TYPES` 45 → 48。replay の
+  `cluster_jobs` / `cluster_jobs_timed_out` の blocked 理由。
+- **D4**: 生存確認は `cluster_jobs`（名指しの待ち）。run は `runs.status = waiting` で閉じる（R6-1 の照合の対象外）。reviewer は続きの run の後。
+- **D5**: `ssh::remote_exec_instructions` の末尾と /3 planner の leaf の基準に 1 段落。`TaskDetail.cluster_job_wait`（`ClusterJobWaitView`）と
+  GUI の task のページの 1 行「クラスタ job を待っています: 42634 (R) 42635 (Q)」（`ClusterJobWaitBanner`）、`RUN_END_LABEL.waiting`。
+- **D7**: `[[clusters]] job_wait = { poll_secs = 300, max_wait_secs = 86400 }`（`poll_secs >= 30`、`poll_secs <= max_wait_secs <= 14 日`）。
+  `config/celeris.clusters.example.toml`、`docs/celeris-api-v1.md`。
+
+### 試験（すべて偽のアダプタ・偽の poll・一時ディレクトリ。外部ネットワーク・ssh に出ない）
+
+- `task_core::cluster_job::tests`: `pbs_qstat_xf_is_parsed_per_job`（Q / R / F・Exit_status 0 / 271・`Unknown Job Id` → gone、折り返しのある
+  実際の形）、`pbs_job_missing_from_the_output_is_unknown_not_finished`、`slurm_sacct_is_parsed`、`poll_commands_only_carry_valid_ids`、
+  `wait_requests_are_parsed_in_both_shapes`、`limits_clamp_and_validate`、`events_project_into_the_table_and_terminal_transitions_cancel`、
+  `a_satisfied_wait_resumes_the_task`、`migration_0034_adds_cluster_job_waits_to_a_schema_33_db`。
+- `task_worker`: `claude_code::tests::result_wait_becomes_terminal_waiting`（result.json の `wait` の解析・不正な wait）、
+  `preamble::tests::continuation_section_carries_the_cluster_job_results`、`ssh::tests::remote_command_returns_the_whole_output_and_treats_255_as_a_connection_failure`、
+  `worker_and_reviewer_instructions_share_the_remote_exec_usage`（段落）。
+- `task_dispatch::dispatcher::tests::cluster_job_wait`: `a_wait_parks_the_task_polls_and_resumes_as_a_continuation`（開く → poll の状態の変化だけ
+  event → `poll_secs` に高々 1 回 → satisfied → continuation の前置きに job の結果 → done、attempts 0、replay 差分 0）、
+  `a_timed_out_wait_asks_a_human_and_the_answer_resumes`、`cancelling_a_waiting_task_cancels_the_wait_without_qdel`、
+  `a_wait_on_an_unknown_cluster_is_a_retryable_failure`、`a_leaf_unit_waits_alone_and_liveness_names_the_wait`（v3 の leaf、兄弟は走る、
+  600 秒を超えても StallDetected なし、satisfied → 続きの run → 統合 → done、replay 差分 0）。`execution_scheduler::tests::a_waiting_run_blocks_the_unit_on_cluster_jobs`。
+- `task_core::tree::tests::cluster_job_waits_are_named_waits`、`task_ops::derive::tests::cluster_job_waits_do_not_count_as_continuations_or_progress_checkpoints`、
+  `task_api::query::tests::cluster_job_wait_event_types_match_their_serde_names`（48 語）、`celeris::config::tests::cluster_job_wait_defaults_and_validation`、
+  GUI `test/unit/cluster-job-wait.test.tsx`。
+
+### gate（2026-09-30）
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告 0）。
+- `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker --lib schema` → `docs/api/v1/{api-v1,event}.schema.json`・
+  `docs/protocol/{worker-protocol,checkpoint}.schema.json` を更新（その後の通常の試験で drift なし）。
+- `cargo nextest run -p task-core -p task-ops -p task-dispatch -j 6` → 1385 passed / 0 failed。
+- `cargo nextest run -p task-api -p task-worker -j 6` → 1014 passed / 0 failed（6 skipped）。
+- `cargo nextest run -p celeris -p celerisctl -p celeris-mcp -p celeris-credentiald -p llm-proxy -p scratch-cache -j 4` → 496 passed / 0 failed（1 skipped）。
+- GUI: `corepack pnpm@11.27.0 -C gui gen:types` → `app/celeris/types.ts` 更新、`typecheck` → exit 0、`test` → 82 files / 1225 tests passed、`lint` → 0 error。
+
+### 逸脱
+
+- v2 / v3 の unit の wait が上限を過ぎたときは、木の決定・task の `blocked` にせず、unit を続きの run に戻して前置きで人に聞かせる（task を
+  `blocked` にすると兄弟の run の後段が壊れる。木でない /2 にも同じ規則で効かせるため）。atomic と v1 は依頼どおり worker_question。
+- local の task も、wait のクラスタを明示すれば待てる（手元から ssh で投げた job。試験もこの形で daemon の全経路を通す）。remote の task は自分の
+  クラスタだけ。
+- Slurm は stub ではなく `sacct` の解析まで実装した（実機の Slurm クラスタでは未確認）。
+- ビルドの途中で共有 LVM が 100% になり（他の worktree の target 30 GB と自分の 44 GB）、`celeris` の試験 4 件が dispatcher の disk gate で
+  落ちた（task が dispatch されない）。自分の target を消して作り直し、再実行で 0 failed。他の worktree の target には触っていない。
+
+### 未解決・昇格後に人がすること
+
+- **schema 34**: 昇格は stop → start（旧いバイナリは `SchemaTooNew` で開けない。verify の N-1 は `live_ok = false` になる）。rollback は
+  `--restore-db`（`scripts/selfdeploy/rollback.sh`）。
+- `job_wait` を本番の設定に書くのは昇格の後（既定のままなら書かなくてよい: 300 秒 / 24 時間）。
+- 実機確認（人か、sirius の master がある環境）: BenchFS の実験の子で worker が `wait` を書き、`GET /tasks/{id}` の `cluster_job_wait` と
+  GUI の 1 行が出ること、`journalctl` に `cluster job states changed` / `cluster jobs finished; resuming` が出て続きの run が回収すること。
+- PBS の job history（`qstat -x`）が無効なクラスタでは終わった job の終了コードが取れない（`gone`）。sirius の設定を実機で確かめる。
+- v1 の unit の上限切れの回答の後の run には job の結果の節が出ない（ADR-0090「残したもの」）。
+- 06:xxZ: 人が release 1753ccc641e4（R6-1〜R6-5）を昇格（health 1753ccc641e4、schema 33）。**R7-1**（ADR-0090 cluster job の durable wait、schema 34、
+  Opus 85993e7）を main に統合（b4521dd）→ release chain 実行中。schema が上がるので昇格は停止→起動（verify の N-1 は live_ok=false になる想定）。
+  本番 config に `job_wait` は足さない（既定 300 s / 24 h）。昇格後に BenchFS の子で wait → poll → 続き run を実機確認、sirius の PBS job history が
+  有効かを確認する。
+- 07:14Z: browser 根の repair-phase-4-1 が continuation 上限 → 「予算を増やして続ける」で回答。
+- 07:26Z: release **b4521dd9d3ad**（main = R6 + R7-1、schema 34）: gate ok、push、verify ok（n-1-compat は想定どおり SchemaTooNew で live_ok=false → 昇格は停止→起動）。
+- 07:3xZ: 人が release **b4521dd9d3ad**（R6 + R7-1、schema 34）を停止→起動で昇格（health b4521dd9d3ad、schema 34）。web Phase 1 の人 PUT（v6、
+  `overridden_done = p1-01-scaffold, p1-02-03-types-fake`、R5b-fix1 の本番 2 例目）を適用 → 質問に回答して統合検査へ。
+- 07:4xZ 人「リファクタ task は a（retry）」: `POST /tasks/01M3Q6F0Y8M0HDMF6Y68G8519M/retry {accept: false, execution: "compound"}` → 新 task
+  **01M3RM0YS1M9KSYH4WYW59E89R**（draft）。objective に引き継ぎ（元ブランチ 71 commit を最初の葉で merge、nav の check はスクリプトを作る葉の後、
+  残りは最終検証と PROGRESS）を追記して accept → ready。
+
+## R7-2: planner の check の書き方、子を作る unit だけを上限に数える、計画 JSON の上限（2026-09-30）
+
+[ADR-0079 付記 R7-2](../adr/0079-recursive-task-decomposition.md)。発端は上の 04:57Z（web Phase 1 の check: PROGRESS 除外なし・`pnpm test` の引数・
+pnpm の版）、R6-2 の自己言及（否定 grep）、リファクタ task の「nav の check はスクリプトを作る葉の後」、本番の `too many units with kind "task": 7 > 6`
+と `execution plan JSON is too large: 24815 > 24576 bytes`。**migration なし（schema 34 のまま）**。本番（systemctl・/var/lib/celeris・7700/7710・設定）
+には触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-aea7bdf944fe2369d`。
+
+### 実装したもの
+
+- **check の書き方**（`task_worker::claude_code::PLANNER_CHECK_GUIDANCE`、プロンプトの差分 15 行）: 範囲外差分から記録のパスを除く・`pnpm test` /
+  `cargo test` に位置引数を付けない・`corepack pnpm@<版>`・base は merge-base・否定 grep の自己言及・他の unit が作る script を使う check は
+  `depends_on` の後。/1・/2・/3 の planner の上限の節の直後に出す。
+- **子 task の上限**: `validate_v3` の `TooManyChildTasks` と `tree::plan_limit_holds`（引数 `done_keys`、`tree_plan::unit_gate_plan` が渡す）は
+  `creates_child()` かつ持ち越す done でない unit を数える（R6-1 D5 と同じ）。/3 の planner の上限の行も同じ文に。
+- **JSON の上限**: `ExecutionLimits.max_plan_json_bytes_v3 = 64 KiB`（/3 の検証だけ。/1・/2 は 24 KiB のまま）、dispatcher は /3 の planner に
+  この値を渡す。拒否の文に「objective は要点だけにし、詳細は artifacts / 知識ベースのパスで参照してください」。
+- `config/celeris.example.toml`: `max_units_per_stage` / `max_child_tasks_per_plan` に何を数えるかの注釈。ADR-0079 D3 の表を直した。
+
+### 試験
+
+- `task_core::execution_plan::tests::child_task_limit_counts_only_units_that_are_not_done`（done 3 + 生きた 4 / 6 は上限 6 で通る、done 3 + 生きた 7 は
+  `7 > 6`、done なしの 7 は従来どおり拒否）、`v3_plan_json_size_uses_its_own_limit_and_says_what_to_trim`（既定 24 KiB / 64 KiB、/3 は /1・/2 の上限を
+  見ない、拒否の文の案内）。
+- `task_core::tree::tests::plan_limit_holds_do_not_count_done_task_units`（done 3 を渡せば止めない、渡さなければ 7 つ目を止める）。既存の
+  `plan_limit_holds_select_only_the_excess` は引数を足しただけ（期待値は不変）。
+- `task_worker::claude_code::tests::planner_prompt_has_the_check_writing_section`（/2 と /3 のプロンプトに 6 規則が 1 回ずつ、/3 は 65536 bytes と
+  「done と adopt は数えない」、/2 は 24576 bytes）。
+- 既存の fixture で古い数え方に依存したものは無かった（`rejects_too_many_child_task_units` は done なしなので不変）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 542 passed。`-p task-ops` → 369 passed。`-p task-worker` → 620 passed, 4 skipped。`-p task-dispatch` → 477 passed。
+  `-p celeris -E 'test(/example/)'` → 11 passed（example の設定の読み込み）。
+
+### 未解決・提案
+
+- `max_units_per_stage` は done の unit を含めて数える（本番では当たっていない。当たれば同じ直しを検討）。
+- check の指針はプロンプトだけ（機械的な検査はしない）。効き目は次の web / refactor の計画の check で確かめる。
+- 08:0xZ: **R7-2**（planner の「check の書き方」指針、`max_child_tasks_per_plan` は子を作る unit だけ（done / adopt を除く）、plan/3 の JSON 上限 64 KiB と
+  削り方の案内、config 例の注記。Opus 4b28613）を main に統合 → release chain 実行中。残: failed のまま残した task unit は数える、`max_units_per_stage` は done も数える。
+- 08:00Z: release **fc60977fd142**（main = R7-2 まで、schema 34）: gate ok、verify ok / live_ok。昇格は人（live）。
+- 08:09Z: リファクタ retry の子 01M3RMEW5X86JBSKH4PH7J4RVP（旧 tip の merge）が段階 merge の統合検査で失敗 → 質問（R6-1 D7 の効果で失敗した check が質問文に
+  出る）。原因 3 つ: planner の check が git の形（`HEAD^2` = 旧 tip、merge commit）を前提にしている（統合は WU ブランチの取り込みで merge commit にならない）、
+  commit message の grep を受け入れ条件にしている、そして **葉が conflict marker を含んだまま commit**（task-ops / task-worker がコンパイル不能）。
+  compound の note で「内容の検査に置き換え、衝突解消の葉を足す」を渡して replan（2 回目の note は planner run 中で 409、次の失敗時に再送）。
+  **R7 候補**: 旧ブランチを merge する葉の check に「conflict marker 無し + cargo build」を planner 指針として足す。
+- 08:11Z: **欠陥（R7 候補）**: 統合失敗の質問に回答すると、人が `decompose {compound}`（replan 要求）を先に入れていても、dispatcher は統合 WU を同じ check で
+  再実行してから（再び失敗して）次の質問で初めて planner を回す。web Phase 1（05:00Z → 05:09Z）とリファクタ retry の子（08:0xZ → 08:11Z）で再現。
+  人の replan 要求が pending のときは統合の再実行より planner を優先すべき。
+- 08:15Z: リファクタ retry の子の replan が 2 回とも失敗: (1) planner の JSON 形式（acceptance の要素が文字列）、(2) **`UNIQUE constraint failed: work_units.task_id, key`
+  で採用が DB 制約エラーに落ちる**（superseded の key を planner が再利用。検証で「key の再利用」として弾くべき事象が sqlite のエラーで出ている。R7 候補: 検証に
+  昇格させて planner へ理由を返す）。plan_invalid に replan + note（形式、新 key、衝突解消の葉、内容の検査）で回答。
+- 08:15Z: BenchFS の Sirius 実験(2) の子が決定 `e3-e4-scope`（E3/E4 の有効測定 0 件、CHFS runner 未整備、GekkoFS 未導入、8 ノード job が予算不足で動かない。
+  full / chfs-4node（推奨）/ drop-c3）。論文の主張範囲（C3）に関わる研究判断なので人へ。
+- 08:18Z: リファクタ retry の子の replan v9 で `leaf_too_large` 決定 ×2（resolve-conflicts-1、verify-merge-1。深さ上限で子 task にできない）→ run-as-leaf で回答。
+  **表示の欠陥**: 決定文が「score 7 ≥ 閾値 11」（7 は 11 以上ではない）と出る。leaf_too_large の文言が gate の score / threshold の意味を取り違えている（R7 候補）。
+- 08:20Z: web Phase 1 の子 01M3QEA4HC12TFCNDG5A7WT722 が最終 review で **failed**。web/ の検証は全部 pass（test 36/36、e2e parity、build、boundaries / secrets / parity
+  check、workspace test / clippy）。落ちたのは task 受け入れ条件 0 の `pnpm -C gui test`（root planner が書いた）が `ERR_PNPM_BAD_PM_VERSION`（repo 直下から
+  corepack 経由で起動した pnpm は既定 12.6.0、gui は 11.27.0 固定）。原因は check の書き方（`corepack pnpm@11.27.0 -C gui …` なら通る。R7-2 の指針、未昇格）。
+  根の unit phase-1 failed → 根が replan 中。次の子は前の子のブランチ celeris/01M3QEA4… を merge して引き継ぐこと。R6-1 D4 の効果で、failed と同時に
+  stale な reviewer run 3 件が索引で閉じられた。
+- 08:44Z: **R7-1 の本番初回**: BenchFS「Sirius 実験(2)」の子 01M3RM9HP2P6MABRNSB1N1CEHJ が `wait`（sirius、PBS job 42660〜42662、poll 300 s、timeout 24 h、
+  E3 CHFS W1）を書き、daemon が `cluster_job_wait_started` → 2 秒後に `cluster_job_wait_polled`（3 job とも R）を記録。run は枠を離し、task は待ちで止まる。
+  終了時の `cluster_job_wait_finished` と続き run の preamble（job の終了状態）を次に確認する。
+- 08:49Z: **R7-1 の一周を本番で確認**: `cluster_job_wait_finished {satisfied}`（42660〜42662 とも F、exit 0）→ `transitioned blocked→ready reason=cluster_job_resume`
+  → 21 秒後に続き run が dispatch（同じ子 task、job の終了状態を preamble で受け取る）。待ち 5 分間は枠を使っていない。
+- 09:00Z: リファクタ retry の子は衝突解消の葉（15 ファイル、workspace build/test/clippy pass）が done になったが、統合 WU の check が v1 のまま（`HEAD^2` 検査）で
+  再失敗 → 質問。**統合 WU の check は replan で更新されない**（daemon が旧版から統合 WU 行を持ち越す）欠陥として **R7-3** に委譲（あわせて: 人の replan 要求を
+  統合再実行より優先、superseded key 再利用の検証、leaf_too_large の文言、段階上限は走る unit だけ、failed unit の数え方の明文化）。この子は R7-3 昇格まで
+  blocked のまま置く（回答すると同じ check で再実行されるだけ）。
+- 09:11Z: BenchFS 根の planner run が infra error: R6-3 の submodule 展開が sirius の worktree で失敗（`ior_integration/ior` の pin 7054224d が remote に無い
+  = 未 push の commit。`not our ref`）→ prepare 全体が失敗し planner が回れない。**R7-4**（submodule 展開を submodule ごとの best-effort にし、失敗は進捗行の
+  警告に）を Opus に委譲。人への依頼: ior fork の commit 7054224d を remote に push するか、superproject の pin を存在する commit に更新する。
+- 09:11Z: BenchFS 実験(2) の子は review 不合格 → failed（`full` を選んだため E3/E4・GekkoFS 導入・等予算 grid が要件だが未実施。子は子作業を提案）→ 根が replan。
+
+
+## R7-4: submodule の初期化は submodule ごとの best-effort（2026-09-30）
+
+[ADR-0019 付記 R6-3 の R7-4](../adr/0019-worktree-sync-for-large-repositories.md)。発端は本番 2026-09-30 09:11Z、task 01M3PAZ4XG4QN1T8S98VNA6ABV（sirius の BenchFS）:
+上位が固定した `ior_integration/ior` の commit（push していない）が remote に無く、`git submodule update --init --recursive` が exit 67 → workspace の
+準備ごと失敗 → 根の planner の run が infra の失敗で進まない。**migration なし**。本番（systemctl・/var/lib/celeris・7700/7710・設定・ssh）には触れていない。
+task-ops / task-dispatch / task-core には触れていない（R7-3 と並行）。
+
+### 実装したもの
+
+- `task_worker::ssh::SshWorkspace::ensure_worktree`: 行頭 `-` があれば `.gitmodules` の path ごとに `submodule update --init --recursive -- <path>`、
+  失敗は `celeris-submodule-failed <path>\t<要点>` の行で返して続ける。Rust 側で `submodule <path> could not be initialised: <要点> (worktree <wt> on cluster <c>)`
+  の進行の行と `tracing::warn!`。要点は stderr の最初の `fatal:` / `error:` の行（`Cloning into ...` を避ける）、無ければ最初の空でない行。成功の行
+  `initialised N submodules ...` の N は失敗した path とその下を除いた初期化済みの数（0 なら出さない）。exit 67 は `git submodule status` が動かないときだけ。
+- `task_worker::local_worktree::init_submodules`: 同じ手順。戻り値を `Result<Option<SubmoduleInit { initialised, failed: Vec<(path, 要点)> }>>` にした
+  （`Err` は `submodule status` が動かないときだけ）。呼び出し側は `ensure_blocking` だけ（戻り値は捨てる。失敗は tracing の warn）。
+- 再利用: 失敗した submodule は clone まで済んで行頭 `-` でなくなることがあり、試し直さない（R6-3 の「`-` が無ければ触らない」をそのまま）。警告は最初の準備の 1 回。
+
+### 試験
+
+- `ssh::tests::one_unfetchable_submodule_does_not_stop_the_other_or_the_prepare`（偽 ssh。`lib/sub` と、remote に無い commit を固定した `ior`）: 準備は成功、
+  `lib/sub/lib.rs` が入る、進行の行は `initialised 1 submodules ...` と `submodule ior could not be initialised: fatal: ...`、再利用も成功で行は増えない。
+- `ssh::tests::a_failed_submodule_init_is_a_warning_note_not_a_prepare_error`（旧 `a_failed_submodule_init_is_a_prepare_error_naming_the_cluster_and_worktree`。
+  submodule の元を消す）: 準備は成功、警告の行 1 つ（path・クラスタ・worktree を名指し）。
+- `local_worktree::tests::one_unfetchable_submodule_does_not_stop_the_others`（同じ構成、`initialised = 1`、`failed = [("ior", "fatal: ...")]`）、
+  `the_worktree_initialises_submodules_and_reuse_is_idempotent`（既定の git の file 拒否は `ensure` のエラーでなく警告になった）。
+
+### 証拠
+
+- `cargo fmt --all` → 整形のみ、`cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo test -p task-worker` → exit 0（lib 612 passed / 0 failed / 1 ignored、ほかの test バイナリも 0 failed）。
+
+### 未解決・提案
+
+- 失敗した submodule を再利用で試し直す手段は無い（人が `git submodule deinit -f <path>` すれば次の準備で試し直す）。remote に commit が
+  push されたら直る種類の失敗なので、要るなら「警告の出た path を覚えて再試行する」を別 Phase で。
+- 09:52Z: release **7c10d528ad2a**（main = R7-4 まで、schema 34）: `release.sh main` exit 0（13 commits / 4 files / sensitive 0）→ `verify.sh` ok=true / live_ok=true（checks 1〜6、smoke 7.4 s）
+  → `promote.sh 7c10d528ad2a` live で昇格（引き継ぎ 2 s、backup `20260930-095156-pre-7c10d528ad2a.sqlite3`）。`/health` release=7c10d528ad2a role=active。
+  BenchFS 根の planner の submodule 展開は次の準備から best-effort になる（ior の pin は人が push するまで警告のまま）。
+
+## R7-3: 段階の統合の check は採用した版に従う、人の replan は統合の再実行より先、退役 key の検証、段階の上限は生きた unit だけ（2026-09-30）
+
+[ADR-0079 付記 R7-3](../adr/0079-recursive-task-decomposition.md)。発端は上の 08:09Z〜09:00Z（リファクタ retry の子の `HEAD^2` の統合 check が replan 後も残る、
+人の decompose 後の回答で統合が同じ check で再実行、`UNIQUE constraint failed: work_units.task_id, key`、`leaf_too_large` の「score 7 ≥ 閾値 11」）と R7-2 の残
+（`max_units_per_stage` は done も数える、failed の数え方）。**migration なし（schema 34 のまま）**。本番（systemctl・/var/lib/celeris・7700/7710・設定）には
+触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a142b6f989b6148df`。
+
+### 実装したもの
+
+- **D1 done の unit の `checks` は planner の replan でも書き換えられる**: 原因は統合 WU の行ではなく、段階の統合が集める**done の葉の行の `spec.checks`**
+  （done 不変で planner は直せず、/3 は `carry_done_units_v3` が planner の書いた check を黙って採用した spec に戻していた）。
+  `done_carry_over_errors` は `PlanOrigin::Planner` の `checks` だけの差を許す（`same_except_checks`）。`carry_done_units_v3` は planner が書いた空でない
+  `checks` を残す。採用は R5b-fix1 の経路で done の行の spec を置き換え `WorkUnitSpecOverridden{changed_fields: ["checks"]}`（replay も一致）。unit は再実行
+  しない。/2・/3 の planner プロンプトと `DoneWorkUnitChanged` の文に「done の unit で直せるのは `checks` だけ（統合で再実行）」。
+- **D2 人の replan は統合の再実行より先**: `wu_dispatch_gate` は既に人の依頼を回答による再開より先に見ていた（順序は変えていない）。回帰試験で、planner が先に
+  走り、直した check で統合が 1 回で通ることを確かめた。本番の「同じ check で再実行」は D1（replan 採用後の統合が done の葉の古い check を走らせた）と読む。
+  作業開始時に残っていた `eprintln!("DBG …")` 2 行は削除。
+- **D3 退役 key の再利用は検証の理由**: `task_core::execution_plan::retired_key_errors`（`PlanValidationError::RetiredKeyReused{key, stage}`）が unit の key と、
+  前の版で消した段階の `integrate-<stage>` の重なりを拒否（後者が sqlite の UNIQUE エラーの原因だった）。dispatcher は planner の計画の検証の直後（採用の前）に
+  当て `invalid execution plan: …`（再試行・`plan_invalid` の経路）、`task_ops::execution::replan` も同じ関数を使う（人の PUT も 400）。
+- **D4 `leaf_too_large` の文**: `tree::gate_basis_text`。`compound/score` だけ「score S ≥ 閾値 T」、強制規則（`compound/long-and-broad`）は「score S は閾値 T 未満
+  だが、この規則は score によらず compound と判定する（expected_length=high かつ cross_cutting=high）」。
+- **D5 `max_units_per_stage` は生きた unit だけ**: 検証（`TooManyUnitsInStage`）と `plan_limit_holds`（`UnitsPerStage`）は持ち越す done と `adopt` を数えない。
+  プロンプトの上限の行・拒否文・config 例を直した。
+- **D6 failed の数え方の明文化**: failed / cancelled / running の子の unit を新しい版に残せば両上限に数える（ADR の D3 の表と config 例の注釈）。挙動は不変。
+
+### 試験
+
+- task-core: `execution_plan::tests::planner_replan_may_change_only_the_checks_of_a_done_unit`、`carry_done_units_v3_keeps_the_planners_non_empty_checks`、
+  `retired_key_errors_catch_unit_keys_and_removed_stage_keys`、`units_per_stage_limit_counts_only_live_units`、`tree::tests::plan_limit_holds_count_only_live_units_per_stage`、
+  `leaf_too_large_text_states_the_real_gate_basis`。既存の `planner_replan_still_rejects_a_changed_done_work_unit`（R5b-fix1）は D1 に合わせ、planner は
+  check だけなら通る・objective も変えれば拒否・repair は拒否、に直した。
+- task-ops: `execution::tests::planner_replan_rewrites_the_checks_of_a_done_unit`（行・event・replay 一致）、`replan_rejects_a_removed_stage_key_as_a_validation_error`。
+  既存の `human_replan_overrides_the_spec_of_a_done_work_unit` の「planner は拒む」段は repair の計画に置き換えた。
+- task-dispatch: `a_pending_human_replan_runs_the_planner_before_retrying_the_integration`（統合失敗 → 質問 → 人の decompose → 回答 → planner が先、差分で
+  done の `b` の check を直す → 統合は 1 回で done、`b` は再実行しない）、`a_replan_reusing_a_removed_stage_key_is_rejected_as_an_invalid_plan`。
+- task-worker: `claude_code::tests::replan_prompt_allows_rewriting_only_the_checks_of_done_units`。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 548 passed。`-p task-ops` → 371 passed。`-p task-worker` → 621 passed, 4 skipped。`-p task-dispatch` → 479 passed。
+  `cargo nextest run --workspace` → 2950 passed, 7 skipped（exit 0）。
+
+### 未解決・提案
+
+- D2 は本番の event を直接見ていない（本番 DB に触れない）。昇格後に同じ形（統合失敗 → decompose → 回答）が起きたら event の列で planner が先に走ることを確かめる。
+- done の unit の新しい `checks` は unit の worktree では走らせず、段階の統合でだけ走る。
+- 保留中のリファクタ retry の子（blocked）は、R7-3 の昇格後に replan + note（`HEAD^2` の check を内容の検査に置き換える）で進められる見込み。
+- 10:12Z: **R7-3** を main に統合（7b2cd54c）→ release **7b2cd54c1914**（schema 34）: gate（fmt / cargo-test 128 s / clippy / build / pnpm）全 exit 0 → `verify.sh` ok=true /
+  live_ok=true → `promote.sh` live で昇格（引き継ぎ 2 s、backup `20260930-100939-pre-7b2cd54c1914.sqlite3`）。旧 fc60977fd142 / 7c10d528ad2a は
+  in-flight の run（web Phase 2 の codex WU run 等）を drain 中（正常。`--stop-stale` は使っていない）。リファクタ retry の子 01M3RMEW… は、replan の note で
+  done の葉の `HEAD^2` check を内容の検査に置き換えれば進める（R7-3 D1）。次の「統合失敗 → decompose → 回答」で planner が先に回ることを events で確かめる。
+- 11:4xZ: **R7-3 の本番初回**（リファクタ retry の子 01M3RMEW…）: `decompose {compound, note}`（done の葉 merge-store の checks の `HEAD^2` / `git log -1` を
+  `merge-base --is-ancestor` と merge commit 077742f8 名指しの検査に置き換え。人が統合 HEAD 64d53218 で事前に確認: 祖先 2 つ・store.rs 無し・マーカー 0・名指し 24 件）
+  → 質問に回答。**統合より先に planner**（11:42:34 planner run → 11:43:15 plan v10、`work_unit_spec_overridden {merge-store, changed_fields: [checks]}`、
+  `overridden_done=merge-store`）→ `integrate-merge` running → **11:48:40 done（integrated）**。merge-store は再実行していない（D1・D2 とも本番で確認）。
+  v10 で出た `leaf_too_large:verify-merge-1` の文言は「score 6 は閾値 11 未満だが、この規則は score によらず compound と判定する（expected_length=high かつ
+  cross_cutting=high）」（D4 の直りを確認）→ run-as-leaf で回答、verify-merge-1 が再開。
+
+## R7-5: WU の check の不合格を記録し、次の run と replan に渡す、check の不合格で usage を落とさない（2026-09-30）
+
+[ADR-0079 付記 R7-5](../adr/0079-recursive-task-decomposition.md)。発端は本番 2026-09-30 14:14Z〜14:26Z、task 01M3SAHFRK8HA2AM7NYHKF1PD0
+（h-life ミラーを同一LANの別デバイスから閲覧可能にする。作業場所は git でない `Local{path: <task_id>}`）: lan-verify が 3 run とも `done` を
+返したのに daemon が retry → failed → replan にし、**なぜ落としたかがどの event にも無く**、`usage: null`。**migration なし（schema 34 のまま）**。
+Event を 1 つ足した（events は JSON の列）。本番（systemctl・/var/lib/celeris・7700/7710・設定）には読み取り（GET・sqlite `mode=ro`・workspace の
+閲覧）以外で触れていない。build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a67474ceae6cfec8c`。
+
+### 原因（本番の読み取りとコード）
+
+- **A（run を落とした理由）**: cwd ではない。worktree の無い task では `task_workspaces_for` = `None`（`legacy_worktree_for` が git でない path で
+  `None`）→ `spawn_work_unit_checks` の `work_dir_for` = `None` → check は **task のディレクトリ**（worker の cwd = `artifacts/` の親）で走る。
+  lan-bind の `test -s artifacts/lan-bind.md` はそこで通り、lan-verify の `grep -q '192.168.1.103:8000' artifacts/report.md` も task の
+  ディレクトリからは exit 0（`/home/rmaeda/sites/h-life` からは exit 2）。落ちたのは v1 の check
+  `bash /home/rmaeda/sites/h-life/check_lan.sh http://192.168.1.103:8000/` で、unit 自身が run 1 で作ったスクリプトの引数は `[LAN_IP] [PORT]`
+  （`IP=http://…` になり `ss`・`ip addr` の照合と LAN crawl が必ず FAIL → exit 1。スクリプトは `lan_check.tsv` を書き docker も起動するので本番では
+  走らせず、静的に確認）。worker は引数なしで走らせて exit 0 を見ていた。v2 の planner の rationale も同じ結論。
+- **欠陥**: `on_work_unit_checks_finished` は理由を `Terminal::Error{message: "work unit checks failed: cmd=… exit=…"}` に入れるが、
+  `finish_worker_result` が outcome を `work_unit_retry: …（n/m）` / `replan: work unit lan-verify failed` に上書きして消した。retry の run の
+  プロンプト（runs/01M3SAVEX…/prompt.txt・01M3SAWQ…/prompt.txt）にも replan の planner（「Why this replan was triggered: work unit lan-verify
+  failed」）にも理由が無い。`Terminal::Done` → `Error` のすり替えで usage も落ちた（`quota_estimated.weighted_tokens` 0）。
+- **B（replan 後に planner が起きない）**: 前提が誤り。planner run 01M3SBAJ7CZAYZSYNWQ733FYGA は 14:26:02Z に dispatch された。14:19:13Z の
+  replan の時点で `max_concurrency = 6`（`~/.config/celeris/config.toml:4`）が 6 run（01M3SAN66P…・01M3SAMZG… の WU 3 本・langmem 01M3SASRRG…・
+  01M3SAY0ZW…）で埋まっていて、langmem の run が 14:26:01.985Z に終わった 0.1 s 後に dispatch（枠待ち。dispatcher の欠陥ではないので直していない）。
+  その後 v2（check を `check_lan.sh 192.168.1.103 8000` に直した版）→ lan-verify done 14:28:36Z → 統合 → review_pass → **task done 14:29:18Z**。
+
+### 実装したもの
+
+- **D1** `task_core::Event::WorkUnitChecksFailed { run_id, work_unit_id, key, cwd, failed: [FailedWorkUnitCheck{cmd, expect_exit, detail}] }`
+  （`detail` は review.rs の判定文 = `cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`）。`Completion::WorkUnitChecks` に走らせた checks と
+  cwd（`LocalWorkspace::work_dir()`）を足し、`WorkUnitCheckRun::failure` が不合格の記録（worker の usage 付き）を作る。`finish_worker_result_with`
+  が `WorkerFinished` と同じトランザクションで積む。replay は無視。task-api の型名 `work_unit_checks_failed`（`EVENT_TYPES` 49）。
+- **D2** outcome の要約: `work_unit_retry: WorkUnit <key> を最初からやり直します（n/m）: checks failed in <cwd>: <detail>; …`、
+  `replan: work unit <key> failed: checks failed in <cwd>: …`（1,500 文字で切る）。replan の `replan_reason` は `replan: ` の outcome から取るので
+  planner にも届く。replan を使い切った後の質問も同じ要約を持つ（`Terminal::Error` の文が `work unit checks failed in <cwd>: …`）。
+- **D3** `WorkUnitPromptContext.previous_check_failures`（`previous_check_failure_lines`: events を新しい方から見て、その WU の
+  `WorkUnitChecksFailed` が別の run の `running` 遷移より先にあるときだけ `cwd: …` + 判定文）。プロンプトの節「## 前回の run の check の不合格」
+  （原因を先に確かめる、同じ cwd で check を自分で走らせてから done、check が誤りなら `{"yield": {"plan_issue": "…"}}` で申告 = replan）。空なら
+  プロンプトは不変。
+- **D4** check の不合格で `Error` にすり替えても worker の usage を `WorkerFinished.usage` と quota の見積もりに使う。
+- **D5** `PLANNER_CHECK_GUIDANCE`: check の走る所（unit の worktree、git の worktree が無い task は task のディレクトリ）と、「unit 自身が作る
+  スクリプトを check が走らせるなら呼び出し方（引数）を objective に書く」を 1 行ずつ。
+- schema: `docs/api/v1/event.schema.json`・`docs/api/v1/api-v1.schema.json`・`docs/protocol/worker-protocol.schema.json` を `UPDATE_SCHEMA=1` で再生成。
+
+### 試験
+
+- task-dispatch（新しい `dispatcher/tests/work_unit_check_failures.rs`）:
+  - `a_failed_work_unit_check_is_recorded_and_handed_to_the_next_run`（git でない tempdir の task、check `test -s artifacts/report.md` と
+    `test -f .fixed`）: `WorkUnitChecksFailed` は 1 件・cwd = task のディレクトリ・落ちたのは `.fixed` だけ（相対の artifacts の check は通る）・
+    `exit=Some(1)`、その run の `WorkerFinished` は `work_unit_retry: …（1/2）: checks failed in …` で usage を保つ、2 回目の run の文脈に
+    `cwd: …` と判定文 → 直して done、replay は clean。
+  - `a_work_unit_whose_check_keeps_failing_replans_with_the_failed_check_as_the_reason`（本番の形: `[LAN_IP] [PORT]` のスクリプトに URL を渡す
+    check）: 2 run とも記録、`replan: work unit b failed: checks failed in …FAIL not listening…`、planner の `replan_reason` に落ちた check の
+    cmd、retry の run の文脈に 1 回目の不合格、replan 後に done。
+  - `previous_check_failure_lines_only_describe_the_immediately_preceding_run`（初回・直前の run が checks で落ちていない・別 WU は空、
+    判定文に cmd が無い exec 失敗は `cmd=… expected=…:` を前置）。
+- task-worker: `claude_code::tests::leaf_prompt_carries_the_previous_runs_failed_checks`、`planner_prompt_has_the_check_writing_section` に
+  R7-5 の 2 行。
+- task-api: `query::tests::*event_types*` に `WorkUnitChecksFailed`（49 種）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run -p task-core` → 548 passed。`-p task-worker` → 624 passed, 4 skipped。`-p task-api` → 395 passed, 2 skipped。
+  `-p task-ops` → 371 passed。`-p task-dispatch` → 482 passed。
+- `cargo nextest run --workspace` → **2956 passed, 7 skipped（exit 0）**。
+
+### 未解決・提案
+
+- 同じ check が同じ判定文で続けて落ちても retry は `max_retries` まで回す（次の run は理由を読めるので直すか `plan_issue` で申告できる）。
+  決定的な不合格の早期打ち切り（同じ `detail` が 2 回続いたら retry せず replan）は要るなら別 Phase で。
+- `WorkUnitChecksFailed` の GUI の専用表示は無い（timeline は型名と JSON）。
+- 本番 task 01M3SAHFRK8HA2AM7NYHKF1PD0 は 14:29:18Z に done（人の操作は不要）。昇格後に同じ形が起きたら、events の
+  `work_unit_checks_failed` と retry の run の prompt.txt の「前回の run の check の不合格」節で確かめる。
+- 14:56Z: **R7-5** を main に統合 → release **1b3c4ee6ac93**（schema 34）: gate（fmt / cargo-test 130 s / clippy / build / pnpm）全 exit 0 → `verify.sh` ok=true /
+  live_ok=true → `promote.sh` live で昇格（引き継ぎ 2 s、backup `20260930-145618-pre-1b3c4ee6ac93.sqlite3`）。発端の h-life task 01M3SAHF… は v2 の計画
+  （check の引数を `192.168.1.103 8000` に直した版）で 14:29Z に done 済み。次に WU の check が落ちたとき `work_unit_checks_failed` と outcome の要約が出ることを確かめる。
+- 22:15〜23:17Z: **構造リファクタ（根 01M3RM0YS1…）の配送と release**。(1) 配送の `git merge --ff-only` が NFS の main checkout で 20 秒 timeout → SIGKILL（406 ファイル中の書きかけ・`.git/index.lock` 残り）。人が差分 186 ファイルが 3e27da64 と一致することを確かめ、stale lock を消して ff を完了。repair-1 が timeout 600 s・`--no-progress` の修正（410658a0）→ review 合格 → 配送が main=410658a0 を push。(2) 配送の release 準備が `current/scripts`（1b3c4ee6ac93 同梱の旧 lib.sh）で `cannot parse SCHEMA_VERSION from crates/task-core/src/store.rs`（store/ 分割に未追従）→ 人が作業 checkout の scripts で `release.sh main`。(3) verify が `db schema version 35 is newer than 34` で失敗: **browser task 01M3SPN8H05… の run 01M3T7CR3V… がブランチの `target/debug/celerisctl add --db /var/lib/celeris/celeris.sqlite3` を実行し、ブランチにしかない migration 0035_browser_trusted_login（browser_waits に列 1 本）を 22:37:52 に本番 DB へ適用**していた（起票された draft 01M3T7FRCW… は残す）。人の承認で backup `20260930-231619-pre-rollback-schema35.sqlite3` を取り、`ALTER TABLE browser_waits DROP COLUMN trusted_login_json; DELETE FROM schema_migrations WHERE version=35`（browser_waits は 0 行）で schema 34 に戻した。(4) `verify.sh 410658a05c18` ok=true / live_ok=true → `promote.sh` live で昇格（backup `20260930-231715-pre-410658a05c18.sqlite3`）。
+  **再発防止（R7-6、人の方針）**: worker から本番 DB は読み取り専用にする。celerisctl は migration をしない。配送の release 準備が current の scripts を使うため scripts の直しが同じ release で効かない件も候補。
+
+## R7-6: worker の run から本番 DB は読み取り専用、celerisctl は migration をしない（2026-09-30〜10-01）
+
+[ADR-0095](../adr/0095-worker-runs-see-the-db-read-only.md)。発端は上の 22:15〜23:17Z 追記の (3): browser task 01M3SPN8H05… の run
+01M3T7CR3V…（codex、`sandbox_mode="workspace-write"`、`--approve-for-me`）がブランチの `target/debug/celerisctl add --db
+/var/lib/celeris/celeris.sqlite3` を実行し、celerisctl の open が migration 0035 を本番 DB に適用した。**migration なし（schema 34 のまま）**。
+本番（systemctl・/var/lib/celeris の DB・7700/7710・設定）には読み取り（run の記録・codex のセッション記録の閲覧）以外で触れていない。
+build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/agent-a134c98d0598ab1d9`。
+
+### なぜ codex の workspace-write が止めなかったか（調査）
+
+- codex のセッション記録 `~/.local/celeris/codex-accounts/chatgpt_plus_personal/sessions/2026/09/30/rollout-2026-09-30T22-36-34-01a0f476-6364-77e1-8d2c-6dc61879d1da.jsonl`
+  の permissions 指示: writable roots は `/home/rmaeda/workspace/agent-platform/.git`、`…/.git/worktrees/agent-platform38`、`/tmp`、
+  `/var/lib/celeris/workspaces/01M3SPN8H05…`、その `artifacts` だけ。**DB（`/var/lib/celeris/celeris.sqlite3`）は writable root の外**で、
+  `--add-dir`（artifacts と git 管理領域）にも入っていない。
+- codex の sandbox はこのホストで効く（`codex sandbox -P :workspace -- touch ~/.cache/…` → `Read-only file system`、`NoNewPrivs: 1`、`Seccomp: 2`）。
+- 原因は **escalation**: モデルは `exec_command({cmd: "target/debug/celerisctl add --db /var/lib/celeris/celeris.sqlite3 …",
+  sandbox_permissions: "require_escalated", justification: "…Celeris DB に起票してよいですか？", prefix_rule: ["target/debug/celerisctl","add"]})`
+  を出し（rollout の ordinal 66・73）、`--approve-for-me`（codex-cli 0.157.0: "Route approval requests through automatic review"、
+  `approvals_reviewer = "auto_review"`）の自動レビューが承認し、**sandbox の外で**実行された。1 回目（22:37:52Z）は入力検証で exit 1 だったが、
+  検証の前の `SqliteStore::open` で migration は済んでいた。同じ run は `systemd-run --user …` も escalation で走らせている。
+- 結論: エージェント CLI の内側の sandbox はそのエージェント自身が外せる。強制は celeris が起動する時点で外側から掛ける。
+
+### 実装したもの
+
+- **D1/D2 worker の namespace**（`crates/task-worker/src/db_guard.rs`）: `launch`（:424）を全ての worker の spawn で `container::wrap` の代わりに
+  呼ぶ（subprocess.rs:140、claude_code.rs:451、codex.rs:503、aider.rs:198、acp.rs:893、langmem.rs:249、local_deep_research.rs:517、
+  paperqa.rs:1199・:1492、workspace.rs:180〈WU の check・受け入れ条件の check・merge probe〉）。コンテナ実行は従来どおり `container::wrap`。
+  `apply`（:332）は fork 前に計画を作り（直下の列挙 `writable_children` :94、`statvfs` の locked flag、uid/gid、cwd の絶対化、ssh 設定の写し）、
+  `pre_exec` の `Plan::enter`（:167）が `unshare(CLONE_NEWUSER|CLONE_NEWNS)` → uid/gid map → `/` を private → 直下の DB 一族以外を自分へ bind →
+  DB のディレクトリを bind して `MS_REMOUNT|MS_BIND|MS_RDONLY` → cwd へ `chdir` し直し、を割り当てなしで行う。準備に失敗したら spawn を失敗させる
+  （守る DB ファイル自体が無いときだけ掛けない）。
+- **D3 WAL**: ディレクトリ単位で読み取り専用にするので、daemon が開いている間の `-wal` / `-shm` はそのまま見え、SQLite は読み取り専用に倒して
+  readonly_shm で読む（`celerisctl show` / `ls`、`sqlite3 'file:…?mode=ro'`）。daemon が作り直した `-wal` / `-shm` も見える。
+- **D4 ssh**: namespace の中では root 所有が nobody に見え、`ssh -G github.com` が `/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf` の
+  "Bad owner" で落ちた（実測）。同じ内容の写し（`$XDG_RUNTIME_DIR/celeris-db-guard/ssh_config.d`、`sync_ssh_shadow` :282）を
+  `/etc/ssh/ssh_config.d` に bind する（best-effort）。
+- **D5 設定と fail-closed**: `[db] worker_read_only`（既定 `true`、`crates/celeris/src/config/db.rs:34`）。`install_worker_db_guard`
+  （`crates/celeris/src/daemon/bootstrap.rs:95`）を `run`（`daemon/run.rs:62`、verify を含む）が呼び、`probe`（db_guard.rs:377、namespace 付きの
+  `sh -c 'test ! -w "$1"'`）が通らなければ `DaemonError::DbGuard`（`lib.rs:53`）で起動しない。`false` は warn を出して外す。
+- **D6 celerisctl は migration をしない**: `SqliteStore::open_client`（`crates/task-core/src/store/mod.rs:592`）— 無い DB は
+  `StoreError::DbMissing`（:221、作らない）、版数を読み取り専用の接続で読み、古い → `StoreError::SchemaTooOld`（:215。読み取りも拒否）、
+  同じ → 読み書き（`SQLITE_OPEN_CREATE` なし、書けない接続では `journal_mode` を変えない）、新しい → 読み取り専用の接続
+  （`ClientAccess::ReadOnlyNewerSchema` :263）。celerisctl の DB を開く 4 か所（main.rs の `open_store` :164 と scratch の `with_lookup`）を
+  これに替え、新しい DB では stderr に警告、`SQLITE_READONLY` の書き込み失敗には `error::render`（error.rs:47、`READ_ONLY_HINT` :40）で
+  「読み取り専用（worker の run・新しい schema）、`show`/`ls` は使える、変更は API か人へ」を足す。`is_readonly_error`（mod.rs:253）。
+  daemon・API・MCP は従来の `open_with`（migration あり）のまま。
+- 文書: ADR-0095、`docs/architecture-map.md`（db_guard の行・celerisctl の行）、`config/celeris.example.toml` の `db` の注記。
+
+### 試験
+
+- task-core `store/client_open_tests.rs`（6）: 古い DB は `SchemaTooOld` で版数も表の数も不変、未初期化の sqlite も拒否、無い DB は作らない、
+  新しい DB は読めて `insert` は `is_readonly_error`・版数不変、同じ版は読み書き、`is_readonly_error` の判定。
+- task-worker `db_guard_tests.rs`（9、実プロセス）: daemon 役の `SqliteStore` が WAL の DB を開いたまま、namespace の `sh` から
+  DB・`-wal`・`-shm` への追記、`rm`、`mv`、`-journal` の作成、DB の隣への新規作成、cwd からの `../../` 経由の作成、別 mount への hard link、
+  `test -w` が全て失敗し、`workspaces/…`・`scratch/` は書け、DB は読め、integrity_check は ok。入れ子の `unshare -Urm` から
+  `remount,rw` / `umount` できない・入れ子の user namespace は作れる（codex の bwrap と同じ条件）。`CapEff: 0`・uid 不変。probe。
+  直下の列挙（DB 一族と symlink を除く）。ssh の写しの同期。namespace の中で `ssh -G` が通る。DB が消えたガードは spawn を止めない。
+  全ての spawn 箇所が `db_guard::launch` を通る（`container::wrap` の直呼びが無い）。
+- celerisctl `tests/no_migrate.rs`（4、実バイナリ）: 古い DB で `ls` / `add` が "never migrates" で失敗し版数不変、新しい DB で `ls` は警告付きで
+  成功・`add` は `attempt to write a readonly database` + 言い換えで失敗し 0 件、無い DB は作らない、同じ版は `add` / `ls` が通る。
+- e2e `tests/worker_db_read_only.rs`（事故の再現、実バイナリ `celeris` + `adapter = "codex"`〈スタブ、`extra_args = ["--approve-for-me"]`〉+ 実
+  `celerisctl`）: run の中から daemon が開いている DB に `celerisctl ls` / `show` は exit 0、`celerisctl add` は exit 1（readonly + ADR-0095）、
+  生の DB・`-wal` 追記は失敗、DB の task 数・schema 34・integrity は不変、task は done。**変異確認**: 同じ試験の設定に
+  `[db] worker_read_only = false` を入れると `add_exit=0`（事故の再現）で落ちる。
+- celeris `config/tests.rs`: `worker_read_only` の既定 true・`false` の parse。
+- 既存の試験の手直し: e2e `scenarios.rs` の共有ログ `timeline.log` を先に作る（DB のディレクトリ直下に worker が新規作成できなくなったため）。
+  celeris `instance_handoff.rs::a_newer_release_takes_over_while_the_old_one_finishes_its_run` の旧の run を「試験が新 active を見るまで」
+  ゲートのファイルで待たせる（固定 `sleep 2` だと負荷下で新の `build_dispatcher` が 2 秒を超えた回に run が先に終わり、新が `until_idle` で即座に
+  抜けて行が消え「新が active にならない」で落ちた。計測: 失敗回の新の build_dispatcher 2.8 s、ガードを外した build でも全体実行 4 回中 1 回再現
+  ＝既存の負荷依存の flake。ガード有りでは 7 回中 5 回）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2976 passed, 7 skipped（exit 0）**（手直し後に 3 回連続で全件合格）。
+- `cargo test --workspace` → exit 0、2976 passed / 0 failed / 8 ignored。
+- 試作の実測（このホスト、kernel 6.8.12-9-pve、bubblewrap 0.11.0、`kernel.apparmor_restrict_unprivileged_userns = 0`）: bwrap で包むと中の
+  `codex sandbox` が "No permissions to create new namespace" で起動しない → 採らない。unshare + bind（pivot_root なし）なら中の codex sandbox と
+  `bwrap --dev-bind / / true` が通る。`systemd-run --user -p NoNewPrivileges=true`（本番の unit と同じ）の下でも同じ結果。namespace の中から
+  daemon の `/proc/<pid>/fd` は readlink も `EACCES`。spawn の追加コストは約 2.6 ms（mount 52 本）。
+
+### 未解決・提案
+
+- 残る穴（ADR-0095「残る穴」）: `systemd-run --user`・`ssh localhost` など namespace の外で起動させる経路、API token を持つ worker の API 書き込み。
+  前者を塞ぐには daemon を別 uid にして DB をその所有にする必要がある（別課題）。今回の事故の形（直接 `celerisctl add --db`）は止まる。
+- `[adapters.codex] extra_args = ["--approve-for-me"]` は escalation を自動承認するので、DB 以外（`systemd-run` による namespace の外での実行など）
+  も通る。見直すかは人の判断（この Phase では触っていない）。
+- `promote.sh --pre-start` のフックで新リリースの celerisctl を DB に使う場合、migration を含むリリースでは celerisctl が古い DB を拒否する（ADR-0095
+  D6）。現行のフック（org-migrate-v2）は一度きりで既に不要。
+- 配送の release 準備が current の scripts を使う件は別課題（触っていない）。
+
+### 昇格時に人がすること
+
+- 設定の変更は不要（`[db] worker_read_only` は既定で有効）。新しい daemon は起動時に probe し、user namespace が使えなければ
+  `worker db guard: cannot make … read-only for worker runs` で**起動しない**（verify でも同じ probe をするので、効かなければ verify が落ちる）。
+  ログに `worker runs see the db directory read-only (ADR-0095)` が出ることを確かめる。
+- 昇格後、worker の run の中から `celerisctl --db /var/lib/celeris/celeris.sqlite3 ls` が動き、`add` が「read-only」で失敗する。
+- `/var/lib/celeris` 直下に DB 以外のものを新しく置く場合、既存の項目（workspaces/ など）は従来どおり書けるが、run から直下への新規作成はできない。
+- 00:30Z（2026-10-01）: **R7-6** を main に統合 → release **883b9aff0832**（schema 34）: gate 全 exit 0 → `verify.sh` ok=true / live_ok=true（staging のログに `worker runs see the db directory read-only (ADR-0095)`）→ `promote.sh` live で昇格（backup `20261001-003033-pre-883b9aff0832.sqlite3`）。昇格後、新 daemon（pid 3129406）が起こした worker（claude、pid 3152230）が別の mount namespace にいて `/var/lib/celeris` が `ro` であることを `/proc/<pid>/mountinfo` で確認。残: `[adapters.codex] extra_args = ["--approve-for-me"]` は escalation を自動承認する（人の判断待ち）、`systemd-run --user` で namespace の外に出る経路は残る（ADR-0095）。
+
+## R7-7: sandbox の中で sccache が `Operation not permitted` になる件 — wrapper は server に届かなければ素の compiler（2026-10-01）
+
+- 症状: worker の run の `cargo test --workspace` / `cargo clippy` がコンパイル前の
+  `/var/lib/celeris/scratch/bin/sccache …/rustc -vV`（exit status 2）+ `sccache: error: Operation not permitted (os error 1)` で exit 101。
+  最新は task 01M3TSBAP2X6RCP829CVKN4TGG の run 01M3VASGXJJ09ZRHZFHWYTXGNW（codex、08:55Z）→ task は `blocked`。
+
+### 根本原因（証拠）
+
+- **codex の `workspace-write` sandbox がネットワークを塞いでいる**。worker の codex は `CODEX_HOME=~/.local/celeris/codex-accounts/<id>`
+  を使い、その `config.toml` には `[sandbox_workspace_write] network_access` が無い（既定 false）。人の `~/.codex/config.toml` には
+  `network_access = true` がある（人の shell で `codex sandbox` が通ったのはこのため）。
+- 再現（自前のプロセスだけ。本番の状態には触れない）: 空の `config.toml` の `CODEX_HOME` で
+  `codex sandbox -c 'sandbox_mode="workspace-write"' -- /var/lib/celeris/scratch/bin/sccache <rustc> -vV` → 本番と同じ
+  `sccache: error: Operation not permitted (os error 1)`。`network_access = true` の `CODEX_HOME` では `rustc 1.98.1 …` が出る。
+- 失敗するシステムコール（sandbox の外から `strace -f -e trace=socket,connect codex sandbox …`）:
+  `socket(AF_INET, SOCK_STREAM|SOCK_CLOEXEC, IPPROTO_IP) = -1 EPERM`（codex の seccomp）。network 有りでは
+  `socket(...) = 5` → `connect(5, 127.0.0.1:4236) = 0`。AF_UNIX の `connect` も同じ sandbox で `EPERM`（python で確認）なので、
+  sccache を UDS にしても届かない。`SCCACHE_IGNORE_SERVER_IO_ERROR=1` も効かない（server との I/O の前に落ちる）。
+- **ADR-0095（db_guard）は原因ではない**: `unshare --user --map-user=1001 --map-group=1001 --mount` の中では wrapper が通る。
+  同じ文言を含む run の transcript は 2026-09-28 16:57Z から 68 件（codex 60 件。R7-6 の 00:30Z より前が大半）。claude-code の 8 件は、
+  codex の run が `artifacts/` に残した `cargo-*.log` を `cat` / `tail` / `grep` したもの（tool_use と tool_result の突き合わせで確認）で、
+  claude-code 自身の cargo が落ちたものは無い。
+- 食い違いの場所: dispatcher の `server_listening`（ADR-0075 D4）は daemon（sandbox の外）から 127.0.0.1:4236 を見るので真になり
+  `RUSTC_WRAPPER` を与えるが、compiler が実際に動くのはエージェントの sandbox の中。
+
+### 修正（ADR-0075 の「R7-7」追記）
+
+- `task_worker::scratch::wrapper_script`（`crates/task-worker/src/scratch.rs`）: wrapper を `#!/bin/bash` にし、compiler の起動の
+  たびに**自分の居る場所から** `127.0.0.1:${SCCACHE_SERVER_PORT:-4226}` に TCP で繋がるか（bash 組み込みの `/dev/tcp`、fork なし、
+  sccache の client は呼ばない＝server を起こさない）を見て、届かなければ compiler を直接 `exec`。第 1 引数が `-` で始まる・引数なし
+  （sccache 自身の操作）と `SCCACHE_SERVER_UDS` があるときは見ずに sccache へ。`CARGO_TARGET_DIR` を外すのは従来どおり。
+- wrapper は `ensure_wrapper` が内容の違いを見て書き直すので、昇格後の最初の run で `/var/lib/celeris/scratch/bin/sccache` は新しい
+  中身になる（手作業は不要）。
+- 設定（人の判断。Celeris は書き換えない）: codex の run でも L1 cache を効かせたいなら、各アカウントの
+  `~/.local/celeris/codex-accounts/<id>/config.toml` に
+  ```toml
+  [sandbox_workspace_write]
+  network_access = true
+  ```
+  を足す（`exec resume` も含め codex 自身が読む）。codex の worker の sandbox にネットワーク全体を開けることになる（localhost だけに絞る
+  設定は codex 0.157 に無い）。足さなくても修正後は codex の run の build は通る（cache を使わない素の compiler）。
+- 試作の実測（自前の sccache server、port 4299・自前の `SCCACHE_DIR`）: network 無しの codex sandbox で新 wrapper の `cargo build` が
+  成功（旧 wrapper は同条件で EPERM）、network 有りでは sccache を通る（server の compile requests 4 → 8）、server の log に probe 由来の
+  error / warn は 0 行。生成した wrapper（`wrapper_script` の出力）で、network 無しの codex sandbox の中から
+  `cargo check --offline -p task-core`（本番と同じ env の形、port 4236、target は自前のローカルディスク）→ 旧 wrapper は本番と同じ
+  `…/rustc -vV (exit status: 2) … Operation not permitted`、新 wrapper はエラーなしで完了。
+
+### 試験
+
+- 新規 `scratch::tests::wrapper_runs_the_compiler_directly_when_the_server_is_unreachable`（実プロセス）: server 役の listener が居れば
+  sccache 役が呼ばれる / 閉じた port なら compiler 役が直接呼ばれ、引数・stdout・exit code（3）がそのまま・stderr は空・
+  `CARGO_TARGET_DIR` は外れたまま / `--show-stats`・引数なしは届かなくても sccache へ / `SCCACHE_SERVER_UDS` があれば sccache へ /
+  `unshare -rn`（ネットワークの無い sandbox の代わり）の中からは外の listener に届かず compiler を直接（user namespace が無ければ飛ばす。
+  このホストでは実行された）。**変異確認**: `scratch.rs` を HEAD に戻すと「閉じた port」の assert で落ちる
+  （`left: "SCCACHE … -vV"` / `right: "COMPILER T=unset A=-vV"`）。
+- 既存 `sccache_env_is_complete_and_stable`: shebang の期待を `#!/bin/bash` に、wrapper を通す部分は server 役の listener を立てる。
+- `scratch-cache/tests/sccache_webdav_e2e.rs` は自前の G2 形の wrapper を使う（server が常に居る）旨を注記だけ。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0（最初の 1 回は新しい試験の 1 行が rustfmt 違反 → `cargo fmt --all` で直して exit 0）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2977 passed, 7 skipped（exit 0）**（R7-6 の 2976 + 新規 1）。
+- `cargo test -p task-worker --lib scratch::` → 21 passed。
+
+### 昇格後にすること
+
+- 昇格後の最初の run で wrapper が書き直されたことを確かめる: `grep -c 'R7-7' /var/lib/celeris/scratch/bin/sccache`（1 以上）、
+  `head -1` が `#!/bin/bash`。
+- blocked の task **01M3TSBAP2X6RCP829CVKN4TGG**（P6-03 dogfood の準備と Phase 5〜6 の完了記録）に、`blocked` への回答として
+  コメントを入れて再開させる（`POST /api/v1/tasks/01M3TSBAP2X6RCP829CVKN4TGG/comments`、または GUI）。文面例:
+  「sccache の `Operation not permitted` は環境要因（codex sandbox のネットワーク無し）で、release <sha12> で wrapper が素の rustc に
+  落ちるよう直した。`RUSTC_WRAPPER`・`CARGO_TARGET_DIR` を上書きせず `cargo test --workspace` と `cargo clippy --workspace -- -D warnings`
+  をそのまま再実行し、結果を記録すること」。
+- 01M3PAX6RVE7AX8Z6118KADME3（browser capability、`failed`）は同じ原因の gate 失敗を含む。やり直すかは人の判断（`reopen`）。
+  同じ親の他の WU の記録に「sandbox 外で実行する」回避策が書かれている（phase-browser-4.md の gate-recheck）が、修正後は不要。
+- （任意・人）codex の run でも cache を効かせるなら、上の `network_access = true` をアカウントの `config.toml` に足す。
+
+### 未解決・提案
+
+- claude-code の Bash sandbox を将来有効にした場合も、network namespace で 127.0.0.1 に届かなければ同じ wrapper で素の compiler に
+  落ちる（失敗はしない）。cache を効かせるには sandbox 側で localhost を許す設定が要る。
+- codex の network 無しの run では、cargo が依存を新しく取得する必要がある場合（crates.io）も失敗しうる（未確認。今回の失敗は
+  それより前の `rustc -vV` で起きている）。必要なら `network_access` の判断と一緒に見直す。
+- 09:5xZ（2026-10-01）: **R7-7 昇格（a2d1ef5e5d9b）と codex の network_access**。release a2d1ef5e5d9b（R7-7）を verify ok / live_ok → live で昇格。web P6-03（01M3TSBAP2…）に回答して再開 → wrapper は R7-7 版に書き直され sccache の EPERM は消えたが、次の段で codex の sandbox が CARGO_TARGET_DIR（/var/lib/celeris/scratch/targets/…）を read-only にしていて `Read-only file system` → **R7-8**（codex の `--add-dir` に CARGO_TARGET_DIR）を委譲。人の許可で `~/.local/celeris/codex-accounts/chatgpt_plus_personal/config.toml` に `[sandbox_workspace_write] network_access = true` を追加（backup `config.toml.bak-20261001a`）。同じ CODEX_HOME の `codex sandbox` から 127.0.0.1:4236 へ connect ok（network_access=false では EPERM）。codex の run でも sccache が効く。
+
+## R7-8: codex の `workspace-write` run に `CARGO_TARGET_DIR` を書ける場所として渡す（2026-10-01）
+
+### 事象
+
+- R7-7 の後、codex の run 01M3VCWE54P73CPFG09ZSW6Q6M（task 01M3TSBAP2X6RCP829CVKN4TGG、09:31Z）の `cargo test --workspace` と
+  `cargo clippy` が `failed to create directory /var/lib/celeris/scratch/targets/task-01M3TSBAP2X6RCP829CVKN4TGG/wu-01M3VA6EWRNAP0W5VJB56MX6CG/target/debug
+  — Read-only file system (os error 30)` で落ちた（2026-09-29 の codex の run の `.cargo-build-lock` read-only も同じ原因）。
+
+### 根本原因（証拠）
+
+- codex の `workspace-write` sandbox が書けるのは cwd・`/tmp` 系・`--add-dir` だけ。codex adapter が `--add-dir` で足していたのは
+  `artifacts_dir` と git の管理領域（F5-fix4）だけで、dispatcher が `with_env` で重ねる `CARGO_TARGET_DIR`（ADR-0075 D3、cwd の外）が無い。
+- 再現（自前のプロセスだけ。codex-cli 0.157.0、空の `CODEX_HOME`、cwd = `/var/tmp/r78probe-…/cwd`）:
+  `codex sandbox -c 'sandbox_mode="workspace-write"' -- touch <兄弟>/tgt/plain` → `Read-only file system`（exit 1）。
+  `-c 'sandbox_workspace_write.writable_roots=["<兄弟>/tgt"]'` を足すと exit 0。**root が存在しないと許可は効かない**
+  （存在しない root の下の `mkdir -p` も `Read-only file system`）→ adapter が先に作る。
+
+### 修正（ADR-0075 の「R7-8」追記）
+
+- `crates/task-worker/src/codex.rs:291` `cargo_target_writable_root`: `config.env`（同名は後勝ち）の最後の `CARGO_TARGET_DIR` を返す。
+  空・相対パス・コンテナ実行（`config.container` が `Some`）は `None`。
+- `crates/task-worker/src/codex.rs:504-519`: fresh の `codex exec` で sandbox が `workspace-write` のとき、上の値を `create_dir_all` してから
+  `--add-dir` で足す（git の管理領域の後）。作れなければ warn して足さない。read-only の CoS run・`exec resume` は変えない。
+- 他の scratch の env: `SCCACHE_DIR` は sccache server（daemon 側）が書く。run の中の wrapper（R7-7）は TCP で繋ぐか素の compiler を exec する
+  だけなので不要。`RUSTC_WRAPPER` は読み・実行のみ。claude-code / aider / ACP は Celeris が OS の sandbox を掛けていないので同じ欠落は無い。
+
+### 試験（`crates/task-worker/src/codex/tests.rs:1671-1809`）
+
+- `r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir`: `with_env` で scratch の env を重ねた fresh run の `--add-dir` が
+  `[artifacts, <target>]`（`config.env` の先の `CARGO_TARGET_DIR` は後勝ちで上書き、`SCCACHE_DIR` は足さない）、target が作られる。
+- `r7_8_readonly_cos_run_does_not_add_the_cargo_target_dir`: CoS（read-only）は `[artifacts]` だけ、target を作らない。
+- `r7_8_exec_resume_has_no_add_dir_even_with_a_cargo_target_dir`: resume には `--add-dir` 無し。
+- `r7_8_empty_or_relative_cargo_target_dir_is_not_added`: `""` と `target` は足さない。
+- **変異確認**: 追加の `if let` を `.filter(|_| false)` で無効にすると fresh の試験が
+  `left: ["…/artifacts"]` / `right: ["…/artifacts", "…/scratch/targets/task-T/wu-W/target"]` で落ちる（戻して通る）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2981 passed, 7 skipped（exit 0）**（R7-7 の 2977 + 新規 4）。
+
+### 昇格後にすること
+
+- blocked の task 01M3TSBAP2X6RCP829CVKN4TGG を、R7-7 の文面に「target に書けない（Read-only file system）のも release <sha12> で直した」を
+  足したコメントで再開させる。最初の fresh run の argv（`request.json` / transcript）に `--add-dir /var/lib/celeris/scratch/targets/…/target`
+  が載っていることを確かめる。
+
+### 未解決・提案
+
+- `exec resume` は `--add-dir` を受け付けないため、R7-8 より前に作られたスレッドの resume run と、別 owner の target を与えられた
+  resume run は引き続き target に書けない（ADR-0075 R7-8 決定 2）。resume は主に CoS（read-only）なので記録に留める。必要なら
+  resume に `-c sandbox_workspace_write.writable_roots=[…]` を与える（実測で効く。アカウント設定の `writable_roots` を置き換える点を判断して）。
+
+## R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す、統合されていない unit を残して完了にしない（2026-10-01）
+
+### 事象
+
+- root task 01M3PAX6RVE7AX8Z6118KADME3「browser capability（Phase 1〜4）」が 3 回目の review_fail で `failed`（2026-10-01 00:05Z）。
+  reviewer: 「root HEAD は 99d5d0bf。land 4d65de6e と統合記録 68323b11 は HEAD の祖先ではない」。
+- replan v7 / v8 が統合済みの段階に unit を足していた: `phase-4-inject`（`integrate-phase-4-inject` done 09-30 16:07Z、HEAD 99d5d0bf）に
+  `gaps`・`closeout`、`phase-4`（`integrate-phase-4` done 07:24Z）に `land`（v8 で `land2`）。本番 DB（読み取り専用の写し）の行:
+  `integrate-phase-4.depends_on = [p4a, p4c, merge-phase-4-p4c, repair-phase-4-1]`（`land2` 無し）、`integrate-phase-4-inject.depends_on = [p4b]`
+  （`gaps`・`closeout` 無し）、`land2` は done（`head_commit` 68323b11、ブランチ `celeris-wu/01M3PAX6…/land2`）。`land2` の done（23:57:40Z）の
+  直後に `running → reviewing (worker_done)`。
+
+### 根本原因
+
+- `crates/task-ops/src/execution.rs`（修正前 L628）`Some(existing) if existing.status == WorkUnitStatus::Done => {}`: done の統合 WU は依存も
+  状態もそのまま持ち越される。
+- `crates/task-dispatch/src/execution_scheduler.rs`（修正前 L151 `complete`、`settle_phase` の `AllDone`）: 生きた行がすべて done なら完了。
+- 葉の行の `integrated_commit` はどの経路でも書かれない（統合 WU の行だけ）ので、「統合済みか」は統合 WU の依存で見るしかない。
+
+### 修正（ADR-0079 付記「R7-9」）
+
+- `task_core::stale_stage_integrations` / `reopened_integration` / `STAGE_REOPENED_REASON`（`crates/task-core/src/execution_plan/scheduling.rs:928-980`）:
+  done の統合 WU のうち、同じ段階にその依存に無い生きた unit があるもの（統合の後に足された unit）と、その行を `pending` に戻して依存に足す関数。
+- 採用（`crates/task-ops/src/execution.rs:636` 付近）: 新しい版の段階の unit が done の統合 WU の依存に無ければ、未統合の統合 WU と同じ経路で
+  持ち越して `pending`（`replan v<n>: stage_reopened`）。`ReplanDiff.reopened_stages`（:352）、`ExecutionPlanned.reason` に `(stage_reopened: …)`（:837）。
+  planner の replan も人の `PUT` / celerisctl も同じ関数を通る（/2・/3 共通）。R7-3 の check の書き換えはそのまま。
+- 完了の守り: `execution_scheduler::complete`（:157）と `settle_phase`（:355、`AllDone` → `Advance`）。dispatcher の `wu_dispatch_gate`
+  （`crates/task-dispatch/src/dispatcher/work_units.rs:203`、`reopen_stale_stage_integrations` :368）が計画の完了を見る前に当たる統合 WU を
+  `pending` に戻す（`WorkUnitTransitioned{done→pending, reason: "stage_reopened"}`）。修正前に作られた行もこれで救う。
+- replay（`crates/task-ops/src/replay.rs:292-313`）: `reason == "stage_reopened"` の遷移で、その時点で生きている行に同じ関数を当てる。replan の
+  経路は従来の「未完了の統合 WU」の規則（`apply_replan_step`）がそのまま同じ依存を作る。
+- `retry` と `reopen`: `retry` は task を複製する（`tree: None`、計画・unit なし → planner からやり直し、done の成果を捨てる）。**本番の task は
+  `reopen`**（同じ task を `failed → ready`、attempts 0、計画・unit・子・ブランチを残す）。
+
+### 試験
+
+- task-ops `execution::tests::replan_adding_units_to_integrated_stages_reopens_their_integrations`（本番の形: /3 の 2 段階が統合済み → planner の
+  replan が `land2` / `gaps` → `closeout` を足す）: 両方の統合 WU が `pending`・依存に足した unit、`replan v2: stage_reopened` の遷移 2 件、
+  reason に `(stage_reopened: p4,inject)`、段階の順（inject の新しい unit は p4 の統合を待つ）、replay が一致、何も足さない replan は統合 WU に触れない。
+- task-dispatch `execution_scheduler::tests::settle_is_not_all_done_while_an_integrated_stage_has_an_unmerged_unit`・
+  `completing_a_unit_added_to_an_integrated_stage_does_not_complete_the_plan`。
+- task-dispatch `dispatcher::tests::stage_reopen`（実 git・偽のアダプタ）:
+  - `a_replan_adding_a_unit_to_an_integrated_stage_reintegrates_that_stage`: s2 の失敗 → planner の差分が統合済みの s1 に a2 を足す → s1 の統合が
+    2 回目に a2 を merge → s2 → 最終レビューの check（a.txt・a2.txt・b.txt）が通って done。replay 一致。
+  - `reopening_a_task_whose_integrated_stage_gained_units_merges_them_before_review`: 修正前の replan の events（統合 WU に触れない v2 + done の
+    `late` とそのブランチの commit）を store に直接書き、終端の task を `task_ops::comment::reopen` → gate が `integrate-s1` を `stage_reopened` で
+    `pending` に戻し、`late` を merge して check を走らせてから最終レビュー（`worker_done` → done）。done の unit は走り直さない。replay 一致。
+- **変異確認**（3 つとも戻して通る）: (1) 採用の `reopened` を常に false → task-ops の試験と dispatcher の 1 本目が落ちる（1 本目は gate の守りで
+  完了はするが遷移の reason が `stage_reopened` になる）。(2) gate の開き直しを無効 → 2 本目が本番と同じく `reopen → plan_complete → review_fail`
+  で落ちる。(3) replay の規則を無効 → 2 本目の replay 検査が `integrate-s1 depends_on replayed "a" stored "a,late"` で落ちる。
+- **本番 DB の写しでの確認**（`sqlite3 'file:/var/lib/celeris/celeris.sqlite3?mode=ro' ".backup …"` の写しに一時的な ignored 試験を当てた。
+  commit していない。tick は回さず git には触れない）: 写しの上で `reopen`（Failed → Ready）→ `wu_dispatch_gate` = `StartIntegration(integrate-phase-4)`、
+  `integrate-phase-4` の依存に `land2`、`integrate-phase-4-inject` の依存に `gaps`・`closeout` が足され両方 `pending`。`integrate-phase-4` を done に
+  した後の `settle_phase` = `Integrate(integrate-phase-4-inject)`、gate = `StartIntegration(integrate-phase-4-inject)`。この task の replay の
+  不一致は前後で同じ 4 件（`integrate-phase-4` の seq / integrated_commit、統合の repair 行 2 件の欠落。いずれも R7-9 以前からのもの）で、
+  依存の不一致は増えない。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0（最初は新しいコードの整形差分 → `cargo fmt --all` で直して exit 0）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo nextest run --workspace` → **2986 passed, 7 skipped（exit 0）**（R7-8 の 2981 + 新規 5）。1 回目は
+  `task-api schema::tests::committed_schema_matches_generated` が落ちた（`ReplanDiff.reopened_stages` が API の schema に出る）→
+  `UPDATE_SCHEMA=1 cargo test -p task-api` で `docs/api/v1/api-v1.schema.json` に欄を 1 つ足して再実行、全件合格。
+
+### 昇格後に人がすること
+
+- `POST /api/v1/tasks/01M3PAX6RVE7AX8Z6118KADME3/reopen`（本文 `{"expected_status": "failed"}`）。**`/retry` は使わない**（複製して計画と
+  done の成果を捨てる）。最初の tick で `integrate-phase-4` と `integrate-phase-4-inject` が `stage_reopened` で `pending` に戻り、
+  `phase-4`（`land2` 68323b11 の merge、段階の check と `cargo test` / `cargo clippy`）→ `phase-4-inject`（`gaps`・`closeout` の子のブランチは
+  68323b11 の祖先なので skipped、check）→ 最終レビューの順に進む。
+- 確かめ方: `GET /api/v1/tasks/01M3PAX6RVE7AX8Z6118KADME3/events` に `work_unit_transitioned{reason: "stage_reopened"}` 2 件と
+  `phase_integrated{phase: "phase-4"}`（`merged` に `land2`）・`phase_integrated{phase: "phase-4-inject"}`、root のブランチ
+  `celeris/01M3PAX6RVE7AX8Z6118KADME3` が 68323b11 を含む（`git merge-base --is-ancestor 68323b11 celeris/01M3PAX6RVE7AX8Z6118KADME3`）。
+
+### 未解決・提案
+
+- reviewer の他の 2 つの不合格（ADR-0080 D3 の観測停止、P3-C の production run loop の gate 未配線）は統合の欠落とは別の中身の指摘で、R7-9 は
+  直さない。統合後の最終レビューで再び落ちれば従来どおり（attempts 0 からの review_fail → replan / 人の判断）。
+- 段階の統合の check（その段階の unit の `spec.checks` と workspace の check）が統合をやり直した時点で落ちれば、従来の統合の repair / replan の
+  経路に乗る（R7-3・R7-5）。
+- この task の replay には R7-9 以前からの不一致（統合の repair 行が replay で作られない等）が 4 件ある。別課題。
+- 本番のリポジトリ（`/var/lib/celeris/workspaces/01M3PAX6…/repos/agent-platform`）の ref は worktree の隔離で読めなかった。ブランチの存在は
+  依頼文の git の事実と DB の `work_unit_committed` を根拠にした。
+## R7-10: worker の run が作る task は、その run の task の案件とリポジトリを継ぐ（2026-10-01）
+
+### 事象
+
+- task 01M3SPF94RDWTPWHNDEQD68VB9（案件 01M2WTS3DKNZBSZ2JMVB4CZMBW、repo `agent-platform`）の run が `celerisctl add --db /var/lib/celeris/celeris.sqlite3`
+  で後続（01M3SPN8HP…、01M3SPN8H05…、01M3SPN8HE6A…、後の run で 01M3T7FRCW…）を作った。どれも `project_id` / `repos` 無しで、planner が
+  「子の repos が親の `[]` の部分集合でない」で落ちた。後から案件を付ける API も無い（本番を読み取り専用で確認: 4 件とも現在は done / cancelled で救済不要）。
+- 人の決定: 案件の worker が作った task はその案件（とリポジトリ）に結び付ける。
+- R7-6（ADR-0095）以降、run の中から本番 DB には書けないので、worker が後続を起票する口そのものが無くなっていた。
+
+### 調査: worker の run から task が作られる経路（HEAD 291f1701）
+
+- 委譲 `delegate.json` → `StoreSink::delegate_impl` → `task_core::delegate`: **既に継ぐ**（`delegate.rs` の `project_id: parent.project_id`、
+  `child_repos` = 明示 > 親 > primary）。ただし子は親の完了を止める（独立の後続には使えない）。
+- 木の子 task（plan/3 の unit）・人の承認の子（`create_human_approval_child`）: 既に継ぐ。
+- CoS の `actions.create_task`: 秘書（`OrgKind::Secretary`）の対話 run だけ。案件をまたぐ 1 本の対話で人の依頼の代筆（`project` は明示）→ 変えない。
+- `celerisctl add --db <本番>`: R7-6 以降 `SQLITE_READONLY` で失敗。celerisctl に HTTP API モードは無い。
+- HTTP API: 単一の admin token（`token_file`）で、run には渡らない。MCP: task を作る tool は無く、run に MCP server を渡していない（acp は `mcpServers: []`）。
+- run の中に task id / run id を伝える env は無かった（`CELERIS_*` の grep で 0 件）。
+
+### 決定（ADR-0098 新規。0096 は別ブランチで使用済み、0097 は並行の R7-9 に空けた）
+
+- 後続は run が `<artifacts_dir>/followups.json`（`{"tasks":[<POST /tasks body>…]}`）で宣言し、daemon が run の後に作る。
+  **出自は daemon が run に割り当てた成果物ディレクトリで決まる**（ファイルや env の自己申告は使わない）。
+- 案件 = 元の task の案件。違う案件を書いた 1 件は拒否（元の task が案件無しなら案件の指定も拒否）。repos 省略 → 元の task の repos → 案件の primary。
+  `parent` / `assignee` / `adapter` / `workspace` / `cluster` / `workspace_mode` は使わず、`status` は常に `draft`（人が Go）。同じ案件に終端でない同題の task があれば作らない。
+- 出自: `Event::Created.origin = {"worker_run":{"task_id","run_id"}}`（migration 無し）と、元の task の `WorkerProgress`「follow-up created: …」。
+- run の中で daemon の DB（`CELERIS_RUN_DB`）に向けた `celerisctl add` は DB を開かずに `followups.json` へ追記（事故の形の `--db <本番>` も、`--db` 無しも）。
+  一時 DB に向けた `add` はそのまま DB に書く（worker が run の中で試験を回しても後続に化けない）。
+- `PATCH /tasks/{id}` に `project_id`（案件無し・親無し・draft/ready・一度も run していない task だけ。primary を付ける。付け替えは 422）。
+
+### 変更（file:line）
+
+- `crates/task-core/src/model.rs:926` `CreatedOrigin::WorkerRun { task_id, run_id }`（`Copy` を外した）。
+- `crates/task-core/src/store/task_store.rs:117` / `task_store_impl.rs:95` / `store/tasks.rs:413`: `create_task_with_origin`（`create_task_impl` が origin を受ける）。
+- `crates/task-ops/src/followup.rs`（新規）: `append_to_file`:49、`bind_to_origin`:83（D3）、`live_duplicate`:160（D4）、`create_followup`:182（D5）、
+  `absorb_followups_file`:221（D1。改名 `followups.<run_id>.applied.json`、1 run 20 件まで、理由は `WorkerProgress`）。env 名の定数。
+- `crates/task-ops/src/edit.rs:103`（`TaskEdit.project_id`）、`:185`（適用）、`:507` `attach_project`（D7）。
+- `crates/task-dispatch/src/dispatcher/followups.rs`（新規）: `followups_env`:18、`clear_stale_followups`:42、`store_run_holds_lease`:47（`run_holds_lease` と同じ規則）、
+  `absorb_run_followups`:71。
+- `crates/task-dispatch/src/dispatcher/worker_task.rs:274-279`（worker の run だけ。古い宣言を消す）、`:462-476`（env を `with_env`。`CELERIS_RUN_DB` は
+  `db_guard::installed()` があるときだけ。container の包みより前）、`:559-567`（run の後、終わり方に依らず取り込む）。
+- `crates/celerisctl/src/main.rs:191` `run_db`（`--db` の既定に `CELERIS_RUN_DB`）、`:199` `followups_target`（canonicalize で比較）、`:315`（DB を開く前に分岐）。
+  `crates/celerisctl/src/commands/add.rs:212` `queue`（`--parent`/`--workspace`/`--cluster` は断る）、`:240` `build_spec`（`run` と共有）。
+  `crates/celerisctl/src/error.rs:40` `READ_ONLY_HINT` に run の中の起票の案内。
+- `crates/task-worker/src/claude_code/prompt.rs:485` `followups_instructions`、`:601`（対話でない run の指示文だけ）。
+- `docs/api/v1/{event,api-v1}.schema.json`・`gui/app/celeris/types.ts`（再生成。types.ts には未反映だった R7-5 の `work_unit_checks_failed` も入った）、
+  `docs/architecture-map.md`（task-ops の表に 1 行）、`docs/adr/0098-…md`。
+
+### 試験
+
+- `crates/task-ops/src/followup/tests.rs`（9 件）: 案件と X の repos を継ぎ出自を残す（:134）、X が repos 無しなら primary（:171）、明示の repos は案件の中で解決（:208）、
+  別案件は拒否して他は作る（:246）、案件無しの X は案件を選べない（:280）、使わない欄と status（:302）、同題の再宣言は 1 件（:342）、壊れた要素・ファイル（:355）、追記（:374）。
+- `crates/task-ops/src/edit/tests.rs:795`・`crates/task-api/tests/task_management.rs:961`: PATCH `project_id`（200 / 422 付け替え / 404 / 409 run 済み・blocked / 子）。
+- `crates/task-dispatch/src/dispatcher/tests/followups.rs`: run が env の書き先に宣言 → 案件・primary・draft・`worker_run`（:106）、lease の無い run は作らない（:178）、
+  委譲の子は案件と primary を継ぐ（回帰、:217）。
+- `crates/celerisctl/tests/followups.rs`: run の中の `add`（`--db` 無し・`--db <run db>`）は宣言になり DB を開かない、`--parent` は断る（:54）。
+  一時 DB に向けた `add` と run の外は従来どおり（:87）。`tests/no_migrate.rs` は env を外して hermetic に。
+- `tests/e2e/tests/worker_db_read_only.rs`（R7-6 の e2e を拡張）: 実バイナリ `celeris` + codex スタブ + 実 `celerisctl` で、`celerisctl --db <daemon の DB> add` が
+  `queued follow-up #1` になり、run の後に daemon が元の task の案件・primary の draft を `worker_run` 付きで作る。R7-10 の env を外した `add` は
+  `attempt to write a readonly database` + ADR-0095 の案内で失敗（ADR-0095 の保証は維持）。
+- `crates/task-worker/src/claude_code/tests.rs:413-420`: 指示文の段落は対話でない run だけ。
+- **変異確認**: (1) `bind_to_origin` の `spec.project_id = origin.project_id` を消す → followup 試験 6/9 が落ちる。(2) env を渡さない（`followups_enabled && false`）→
+  dispatcher の :106 が落ちる。(3) lease 確認を常に真 → :178 が落ちる。いずれも戻して通る。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし。変更した target を touch して再検査）。
+- `cargo nextest run --workspace` → **2997 passed, 7 skipped（exit 0）**（R7-8 の 2981 + 新規 16）。
+- `python3 scripts/dev/check-architecture-map.py` → OK（147 件）。`python3 scripts/dev/source-size-report.py` → 0 active warning。
+- 途中で host の `/` が満杯（`No space left on device`）になり task-api のビルドが落ちた。自分の target の `debug/incremental`（8.2G）だけ消し、`CARGO_INCREMENTAL=0` で続けた。
+
+### 昇格後にすること
+
+- 設定の変更は不要。案件に属す task の run で `celerisctl add --title … --objective … --check-cmd …`（`--db` 無し、または `--db /var/lib/celeris/celeris.sqlite3`）が
+  `queued follow-up #n` を出し、run の後に同じ案件・リポジトリの `draft` が作られ、`celerisctl show <id>` の `created` に `worker_run` が載ることを確かめる。
+  元の task の timeline に「follow-up created: …」が出る。
+- 案件の無い後続ができてしまったら `PATCH /tasks/{id}` `{"project_id":"<id>"}`（未実行の draft/ready だけ）。
+
+### 未解決・提案
+
+- 別の task の成果物ディレクトリへの書き込み（同じ uid、`workspaces/` は書ける）でその task の案件に後続を作れる（ADR-0098「残る穴」。worktree を書き換えられるのと同じ信頼の水準）。
+- `[db] worker_read_only = false` の opt-out では `CELERIS_RUN_DB` を渡さないので、run の中の `add --db <本番>` は従来どおり直接書く（継承しない）。必要なら daemon の DB の
+  パスを `DispatchConfig` に持たせて opt-out でも渡す（試験の `DispatchConfig` の組み立てが多数あるので今回は見送り）。
+- GUI に「案件を付ける」操作は無い（API のみ）。後続の draft を人が Go する画面の導線は別途。
+- 10:4x〜11:08Z（2026-10-01）: **R7-9・R7-10 の昇格と browser の後始末**。(1) 案件なしの後続 2 件を案件付きで起票し直し: launcher 設計 01M3VFQK2Z…（draft）、機密能力の解放 01M3VFQZ2T…（launcher に depends_on、ptrace 拒否の実証を条件に追加）。旧 01M3SPN8HP…・01M3T7FRCW… は取り消し。(2) R7-9 を統合 → 初回の release は `/` が満杯（ENOSPC。`/var/tmp/agent-platform-build` 245G = merge 済み worktree の target）で cargo-test が失敗 → merge 済み 6 つ（約 231G）を消して 52% → release **8a88ab4d868e** gate ok / verify ok・live_ok → live 昇格。browser 根 01M3PAX6… を `POST /reopen {"expected_status":"failed"}`（retry は計画を持たない複製になるので使わない）→ `integrate-phase-4` / `integrate-phase-4-inject` が `stage_reopened` で pending → phase-4 の統合が land2 68323b11 を merge して done（11:07:53）。(3) R7-10 を統合（tests/mod.rs と PROGRESS の衝突は両方残し、mod の順を cargo fmt）→ release **81a65f77b156** gate 全段 ok / verify ok・live_ok → live 昇格。以後、worker の `celerisctl add` / `followups.json` は起票元の案件・repo で draft を作る。merge 後に worktree の target を消す運用にする。
+
+## R7-11: planner / WU の run の予算を `RunRequest.task.budget` に載せる（2026-10-01）
+
+### 症状と原因
+
+- 本番 root 01M3PAX6RVE7AX8Z6118KADME3（/3、task の予算 10 turns / 600 s、`[execution.planner]` は既定 24 / 900）の replan の planner run
+  （01M3VK4Q…・01M3VKM1…、それ以前の 01M3T6XR…）が `budget_exhausted(Turns): error_max_turns` で落ちた。`request.json` の `task.budget.max_turns` は 10。
+- 調べるとこの木の **planner run 12 本すべて**（最初の計画を含む）と **WU の run すべて**の `request.json` が task の予算（10 / 600）のまま、
+  `worker_hint.adapter` も `None` だった。replan の経路（review_fail・decompose・`plan_invalid` の `replan` の回答・不正な計画の後の再試行・R2b・
+  途中確認）はどれも `WuDispatchGate::RunPlanner` → `is_planner_dispatch` の同じ分岐を通っており、**分岐の判定は正しかった**。
+- 原因: `dispatch_run.rs` の L127-155（修正前）は planner / WU の予算を手元の `task` の写しに書くが、`spawn_worker`（L741）は `task_id` しか渡さず、
+  `worker_task.rs:34` の `run_worker` が DB から task を読み直す。写しに戻していたのは知識整理のフォールバック予算（L44-47、修正前）だけ。
+  手元の予算は `RunLimits.wall_clock` には効いていた（900 s）が、アダプタが `--max-turns` にする `RunRequest.task.budget` には届いていなかった。
+  （adapter は dispatcher が選んだ `Arc<dyn WorkerAdapter>`、tier は `execution_tier` で渡しているので効いている。）
+
+### 修正（ADR-0074「R7-11 実装時の明確化」を先に追記）
+
+- `RunExtras.budget: Option<Budget>`（`dispatcher.rs:987`）。`dispatch_ready_task` が spawn の直前に実効の予算を入れ（`dispatch_run.rs:743`）、
+  `run_worker` が読み直した写しの `budget` を置き換える（`worker_task.rs:44`。DB の task は変えない）。知識整理のフォールバックは従来どおりその後に掛かる。
+- 副次: WU の run の `max_turns` も ADR-0072 D18 どおり（`max(task, 30)` か `WorkUnitSpec.budget`）になる（従来は task の値のまま）。schema・設定の変更なし。
+
+### 試験
+
+- `crates/task-dispatch/src/dispatcher/tests/planner_budget.rs`（新規 2 本。本番の形 = 人の明示の compound の root、予算 10 / 600、木は有効）:
+  - `review_fail_replan_planner_gets_the_planner_budget`: /3 の計画 → leaf → 最終レビュー不合格（`review_fail`）→ replan の planner → 合格で done。
+    planner 2 本とも `RunRequest.task.budget` が 24 / 900、leaf は 30 / 1800、`wall_clock` も一致。DB の task の予算は 10 / 600 のまま。replay も一致。
+  - `plan_invalid_replan_answer_planner_gets_the_planner_budget`: leaf の検査が落ち続ける → R2b の replan → 不正な計画 2 回 → `plan_invalid` →
+    `replan`（note 付き）と答える → 版 2 で done。planner 4 本（最初の計画・child-failure の replan・不正な計画の後の再試行・回答の後）すべて 24 / 900。
+- **変異確認**: `run_worker` の置き換えを無効にする → 2 本とも `run 0 (... budget: Budget { max_turns: 10, max_wall_secs: 600 ..}, wall_clock: 900s)` で落ちる
+  （本番の形そのもの）。戻して通る。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo nextest run --workspace` → **3004 passed, 7 skipped（exit 0）**。
+
+### 昇格後にすること
+
+- 設定の変更は不要。昇格後の planner run の `runs/<run_id>/request.json` の `task.budget.max_turns` が 24（`[execution.planner]`）、claude の引数が
+  `--max-turns 24` であることを確かめる。WU の run は 30 以上になる。
+- root 01M3PAX6…（paused、`blocked` / `awaiting_plan_approval`）: `plan_invalid` の決定（01M3VK60…）は**既に回答済み**。最後の planner（01M3VKPD…、
+  2 回目の試行で完了）の計画は stage が 6 で上限 5 を超え、`limit:max_stages` の決定（01M3VKQXP34FCZHV399NMXPHJX、open）と計画の承認要求が出ている。
+  この計画は 10 turns で急いで作られたものなので、中身を見て (a) 妥当なら `POST /decisions/{id}/answer {"option":"raise-once"}` → 計画を承認 →
+  `POST /tasks/{id}/resume`、(b) 作り直させるなら `{"option":"replan","note":"stage は 5 以内"}` → `POST /tasks/{id}/resume`（planner は 24 turns で走る）。
+- 別の root 01M3SPN8HPHPWZ32F0AG986TWS にも `plan_invalid`（01M3VA72…、open）がある。これも 10 turns の planner の不正な計画が原因の可能性が高いので、
+  昇格後に `replan` で答え直す価値がある。
+
+### 未解決・提案
+
+- 「dispatcher が手元の写しに書いた値が `run_worker` の読み直しで消える」形は予算以外にも起こり得る（`worker_hint` は今は `execution_tier` と
+  選んだ adapter で別に渡しているので実害なし）。将来、手元で task を書き換える処理を足すときは `RunExtras` に載せること（ADR-0074 R7-11 に記録）。
+- 11:1x〜11:47Z（2026-10-01）: **browser 根の再 review と R7-11**。phase-4-inject の統合も done（HEAD b9f3fd57）→ 最終 review は中身の 3 件で不合格（条件 0 は計画変更で key p4 が無いだけ、条件 1 P3-B の frame live proxy 未達、条件 2 H3 = 注入後に auth guard を外して観測が再開）。人の方針で条件 0 を P4-A〜C に合わせて PATCH、plan_invalid に replan + note（新しい段階 1 つに h3-hold / p3b-frame）。replan の planner が `--max-turns 10` で切れ続け → **R7-11**: `run_worker` が DB から task を読み直すため planner と WU の予算が要求に載っていなかった（全 planner run が 10/600）。`RunExtras.budget` で実効の予算を渡す。release **7fbfc347b240** gate ok / verify ok・live_ok → live 昇格。根を一時停止していたので、v9（6 段、review-fix 段に h3-hold → p3b-frame）の `limit:max_stages` に raise-once、plan-gate approve、resume → h3-hold の WU run の予算が 60/3000（WU spec）で起動することを request.json で確認。
+### releases_api の systemd user bus 依存試験
+
+`promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は、auto 判定が `systemd-run` を選ぶ環境で user bus に接続できないときだけ skip する。sandbox では `/run/user/<uid>/bus` が見えても接続できず `Failed to connect to user scope bus via local transport` となる一方、release gate では接続できるため、試験側で `systemd-run --user --scope --quiet true` を事前確認する。`systemd-run` が PATH にないか `XDG_RUNTIME_DIR` が未設定なら detach の auto 判定は inline のため、試験を従来どおり実行する。本番 detach の挙動は変更しない。

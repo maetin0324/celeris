@@ -374,17 +374,28 @@ sd_set_link() {
   mv -T "$tmp" "$link"
 }
 
-# `crates/task-core/src/store.rs` から `pub const SCHEMA_VERSION: u32 = N;` を読む。
+# `pub const SCHEMA_VERSION: u32 = N;` を読む。ADR-0079 の分割で store.rs は
+# crates/task-core/src/store/migrations.rs に分かれた。store/mod.rs、旧 store.rs の順に
+# 探す（分割前の木や別の再配置でも読めるように）。
 sd_schema_version_of_tree() {
   # `local a="$1" b="$a"` は全部の語を先に展開してから代入するので `$a` はまだ無い（set -u で落ちる）。
   # 参照する変数は別の `local` に分ける。
   local tree="$1"
-  local file n
-  file="$tree/crates/task-core/src/store.rs"
-  [ -f "$file" ] || { printf '0'; return 1; }
-  n="$(sed -n 's/^[[:space:]]*pub const SCHEMA_VERSION: u32 = \([0-9][0-9]*\);.*$/\1/p' "$file" | head -n 1)"
-  [ -n "$n" ] || { printf '0'; return 1; }
-  printf '%s' "$n"
+  local candidate file n
+  for candidate in \
+    "$tree/crates/task-core/src/store/migrations.rs" \
+    "$tree/crates/task-core/src/store/mod.rs" \
+    "$tree/crates/task-core/src/store.rs"
+  do
+    [ -f "$candidate" ] || continue
+    file="$candidate"
+    n="$(sed -n 's/^[[:space:]]*pub const SCHEMA_VERSION: u32 = \([0-9][0-9]*\);.*$/\1/p' "$file" | head -n 1)"
+    [ -n "$n" ] || continue
+    printf '%s' "$n"
+    return 0
+  done
+  printf '0'
+  return 1
 }
 
 # 本番 DB のスキーマ版数（read-only。`schema_migrations` の最大 `version`）。

@@ -205,6 +205,17 @@
         "task_id": {
           "$ref": "#/$defs/TaskId"
         },
+        "trusted_login": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrustedLogin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。"
+        },
         "version": {
           "format": "uint64",
           "minimum": 0,
@@ -554,12 +565,21 @@
       "type": "object"
     },
     "CheckpointEnd": {
-      "enum": [
-        "completed",
-        "yielded",
-        "budget_exhausted"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "completed",
+            "yielded",
+            "budget_exhausted"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "waiting",
+          "description": "ADR-0090 D1: クラスタ job の wait で止めた run の checkpoint（進捗なしの窓の比較から外す）。",
+          "type": "string"
+        }
+      ]
     },
     "CheckpointFileChange": {
       "properties": {
@@ -634,6 +654,188 @@
       ],
       "type": "object"
     },
+    "ClusterJobState": {
+      "description": "1 つの job の状態（scheduler の文字を正規化したもの）。",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "待ち行列にいる（PBS `Q` / `W` / `T`、Slurm `PENDING`）。",
+          "type": "string"
+        },
+        {
+          "const": "held",
+          "description": "保留・一時停止（PBS `H` / `S` / `U`、Slurm `SUSPENDED` / `REQUEUE_HOLD`）。",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "実行中（PBS `R` / `B`、Slurm `RUNNING`）。",
+          "type": "string"
+        },
+        {
+          "const": "exiting",
+          "description": "終了処理中（PBS `E`、Slurm `COMPLETING`）。",
+          "type": "string"
+        },
+        {
+          "const": "finished",
+          "description": "終わった（PBS `F` / `X` / `C`、Slurm の終端の状態）。",
+          "type": "string"
+        },
+        {
+          "const": "gone",
+          "description": "scheduler が「その job は知らない」と明示した（履歴が消えた・id の誤り）。終わったものとして扱う。",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "出力に現れなかった（poll の失敗かもしれないので終わったとは扱わない）。",
+          "type": "string"
+        }
+      ]
+    },
+    "ClusterJobStatus": {
+      "description": "1 つの job の poll の結果。",
+      "properties": {
+        "exit_status": {
+          "description": "終わった job の終了コード（PBS `Exit_status`、Slurm `ExitCode` の前半）。未確定なら省略。",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "job_id": {
+          "description": "worker が申告した id（`42634`。scheduler の server 名の接尾辞は付けない）。",
+          "type": "string"
+        },
+        "raw_state": {
+          "description": "scheduler が返した生の状態（PBS の `job_state` の文字、Slurm の `State`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ClusterJobState"
+        }
+      },
+      "required": [
+        "job_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "ClusterJobWait": {
+      "description": "`cluster_job_waits` の 1 行（`ClusterJobWaitStarted` の中身と同じ形）。",
+      "properties": {
+        "checkpoint": {
+          "description": "worker が添えた checkpoint の申告（生の JSON）。"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "created_at": {
+          "description": "RFC 3339。",
+          "type": "string"
+        },
+        "deadline": {
+          "description": "RFC 3339（`created_at + timeout_secs`）。",
+          "type": "string"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jobs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "last_polled_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_status": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ClusterJobStatus"
+          },
+          "type": "array"
+        },
+        "poll_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "scheduler": {
+          "$ref": "#/$defs/ClusterScheduler"
+        },
+        "state": {
+          "$ref": "#/$defs/ClusterJobWaitState"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "timeout_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wait_id": {
+          "type": "string"
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "wait_id",
+        "task_id",
+        "run_id",
+        "cluster",
+        "scheduler",
+        "jobs",
+        "poll_secs",
+        "timeout_secs",
+        "created_at",
+        "deadline",
+        "state"
+      ],
+      "type": "object"
+    },
+    "ClusterJobWaitState": {
+      "description": "wait の状態。`waiting` だけが「開いている」。",
+      "enum": [
+        "waiting",
+        "satisfied",
+        "timed_out",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "ClusterScheduler": {
+      "description": "job scheduler の種類。",
+      "enum": [
+        "pbs",
+        "slurm"
+      ],
+      "type": "string"
+    },
     "CostOfReversal": {
       "description": "D7: 後戻りの大きさ。",
       "enum": [
@@ -650,6 +852,31 @@
           "const": "plan_unit",
           "description": "親の計画（plan/3）の kind task の unit から daemon が作った子 task。",
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "ADR-0098 D5（Phase R7-10）: task `task_id` の worker の run `run_id` が宣言した後続\n（`<artifacts_dir>/followups.json`）から daemon が作った task。出自は daemon が run に割り当てた\n成果物ディレクトリで決まる（run の自己申告ではない）。",
+          "properties": {
+            "worker_run": {
+              "properties": {
+                "run_id": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "$ref": "#/$defs/TaskId"
+                }
+              },
+              "required": [
+                "task_id",
+                "run_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "worker_run"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1067,6 +1294,77 @@
             "state",
             "code",
             "version"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0090 D3: worker の run が `result.json` の `wait` でクラスタ job の終了待ちに入った（`state = waiting`）。\n`cluster_job_waits` の行は同じトランザクションで作る（`cluster_job::apply_event_tx`）。",
+          "properties": {
+            "type": {
+              "const": "cluster_job_wait_started",
+              "type": "string"
+            },
+            "wait": {
+              "$ref": "#/$defs/ClusterJobWait"
+            }
+          },
+          "required": [
+            "type",
+            "wait"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0090 D3: poll で job の状態が変わった（変わらない poll では出さない）。",
+          "properties": {
+            "jobs": {
+              "items": {
+                "$ref": "#/$defs/ClusterJobStatus"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "cluster_job_wait_polled",
+              "type": "string"
+            },
+            "wait_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "wait_id",
+            "jobs"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0090 D3: wait が終わった（`satisfied` = すべての job が終わった / `timed_out` / `cancelled`）。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "jobs": {
+              "items": {
+                "$ref": "#/$defs/ClusterJobStatus"
+              },
+              "type": "array"
+            },
+            "state": {
+              "$ref": "#/$defs/ClusterJobWaitState"
+            },
+            "type": {
+              "const": "cluster_job_wait_finished",
+              "type": "string"
+            },
+            "wait_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "wait_id",
+            "state"
           ],
           "type": "object"
         },
@@ -1806,6 +2104,42 @@
             "from",
             "to",
             "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0079 付記 R7-5 D1: WU の run が `done` を返したが、その WU の `checks` が不合格だった（daemon が run を\nretry / failed にすり替えた理由）。`cwd` は check を実際に走らせた所。その run の `WorkerFinished` と同じ\nトランザクションで積む。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "cwd": {
+              "type": "string"
+            },
+            "failed": {
+              "items": {
+                "$ref": "#/$defs/FailedWorkUnitCheck"
+              },
+              "type": "array"
+            },
+            "key": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "work_unit_checks_failed",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "work_unit_id",
+            "key",
+            "cwd",
+            "failed"
           ],
           "type": "object"
         },
@@ -2705,6 +3039,27 @@
       ],
       "type": "object"
     },
+    "FailedWorkUnitCheck": {
+      "description": "ADR-0079 付記 R7-5 D1: `Event::WorkUnitChecksFailed` の不合格の検査 1 件。`detail` は判定文そのもの\n（`cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "expect_exit": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cmd",
+        "expect_exit",
+        "detail"
+      ],
+      "type": "object"
+    },
     "GateSignal": {
       "description": "D13: 当たった信号 1 件（規則表の行、または強制規則・対象外規則）。",
       "properties": {
@@ -3433,6 +3788,17 @@
         "features": {
           "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
         },
+        "gate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0079「R6-2」: 子 task の Complexity Gate の明示（`compound` = 子は自分の計画を持つ、`atomic` = 子は計画を\n持たず 1 つの節点として走る）。子の `routing.execution_hint = {<gate>, explicit: true}`。省いたら\n`compound`（kind task を選んだこと自体が「自分の計画が要る」の意味。`tree::task_unit_execution_hint`）。\n人の計画・planner の計画のどちらも書ける。leaf には書けない。"
+        },
         "genre": {
           "type": [
             "string",
@@ -3958,6 +4324,19 @@
           "properties": {
             "type": {
               "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0090 D1/D4: `result.json` の `wait`（クラスタ job の終了待ち）で終わった。run は閉じるが task / unit は\n終わっていない（job が終われば continuation の run が続きをやる）。continuation の回数・進捗なしの窓・\nattempts には数えない（[`RunEnd::is_continuable`] は `false`）。",
+          "properties": {
+            "type": {
+              "const": "waiting",
               "type": "string"
             }
           },
@@ -4664,6 +5043,39 @@
       ],
       "type": "object"
     },
+    "TrustedLogin": {
+      "additionalProperties": false,
+      "description": "ADR-0110 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を\n承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。",
+      "properties": {
+        "login_url": {
+          "type": "string"
+        },
+        "password_selector": {
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "submit_selector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "policy_id",
+        "revision",
+        "login_url",
+        "password_selector"
+      ],
+      "type": "object"
+    },
     "UnitContext": {
       "additionalProperties": false,
       "description": "ADR-0079 D2: /3 の unit の context（/1・/2 の `WorkUnitContext` に `repo` を足した形）。",
@@ -4722,12 +5134,12 @@
         },
         {
           "const": "kept_task",
-          "description": "task と宣言され atomic だが、構造上の理由があるので task のまま。",
+          "description": "task と宣言され atomic だが、構造上の理由があるので task のまま。R6-2 からは出さない（kind task の\nunit の gate は明示。過去の event の読み取りのために残す）。",
           "type": "string"
         },
         {
           "const": "demoted",
-          "description": "task と宣言され atomic、構造上の理由なし・leaf の基準を満たす → leaf に下げた。",
+          "description": "task と宣言され atomic、構造上の理由なし・leaf の基準を満たす → leaf に下げた。R6-2 からは出さない\n（`KeptTask` と同じ）。",
           "type": "string"
         }
       ]

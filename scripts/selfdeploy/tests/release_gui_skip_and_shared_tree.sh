@@ -97,6 +97,7 @@ cp "$here"/*.sh "$repo/scripts/selfdeploy/"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
+cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 git init -q "$repo"
 gitc() { git -C "$repo" -c user.email=t@example.invalid -c user.name=t "$@"; }

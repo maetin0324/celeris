@@ -122,17 +122,17 @@ Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 
 
 ## 最終整合（task close-out、2026-10-01）
 
-**検証 sha:** `d66869f8f96ef0c755c435b7cf7ec91132adaa08`（本節・PROGRESS の更新前）。記録 commit は検証 sha の後に積む。コードは変更していない。
+**検証 sha:** `580d2684c67134d240fe08129fa42f9fd3eb1a86`（本節・PROGRESS の更新前の HEAD。`d66869f8` からは記録 commit `f28f2875` とその merge commit 自身のみが積まれており、gui/crates/docs/api・web・テストのコードは変更していない）。記録 commit は本更新の後に積む。
 
-- 事前 `corepack pnpm@12.6.0 -C web gen:types --check` → exit 0。stale は再現せず再生成なし。
-- V1: GUI install の既定 store は SQLite open error で exit 1。worktree 内 store を明示した frozen install は exit 0。test → exit 0（84 files / 1249 passed）、typecheck → exit 0、build → exit 0。
-- V2: frozen install（worktree 内 store）、typecheck、lint、test、build、`gen:types --check`、`check:boundaries`、`check:secrets`、`check:parity --require-phase 6` はすべて exit 0。Vitest 24 files / 178 passed、Node test 41 passed / 0 skipped。lint は既存 style/useTemplate info 1 件を表示したが exit 0。
+- `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api` → exit 0（差分なし）。
+- V1: `corepack pnpm@11.27.0 -C gui install --frozen-lockfile --prefer-offline` → exit 0。`test` → exit 0（84 files / 1249 passed）。`typecheck` → exit 0。`build` → exit 0。
+- V2: `corepack pnpm@12.6.0 -C web install --frozen-lockfile` → exit 0。`typecheck` → exit 0。`lint` → exit 0（既存 style/useTemplate info 1 件、warning/error 0）。`test` → exit 0（Vitest 24 files / 178 passed、Node test 41 passed / 0 fail）。`build` → exit 0。`gen:types --check` → exit 0（stale なし）。`check:boundaries` → exit 0。`check:secrets` → exit 0。`check:parity --require-phase 6` → exit 0。
 - `corepack pnpm@12.6.0 -C web e2e parity/` → exit 0、103 passed / 8 skipped（111 total）。skip は screenshot fixture 5 件と staging 環境が必要な 3 件。
-- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0、実行対象 6 本すべて成功。
-- `cargo test --workspace` → exit 101。`instance_handoff` は 3 passed / 5 failed / 0 ignored。worker DB guard の user namespace probe `Operation not permitted` が 3 件、新旧 instance の dispatch/standby 期待値不成立が 2 件。workspace の passed 総数は失敗時出力から確定できず。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t"; done` → 対象 7 本（前回記録時の 6 本から `prepare_timeout_test.sh` が増えている）すべて exit 0。
+- `cargo test --workspace --no-fail-fast` → **exit 0**。ログは run 01M3WMNF3G4BHXFBF8GNGZCYRG の artifacts `cargo-test-workspace.log` に保存。118 個の `test result:` 行を合計して workspace 全体で **3206 passed / 0 failed / 12 ignored**。失敗テストなし。`instance_handoff` バイナリ（8 tests）も含め全バイナリ ok（`a_stale_heartbeat_promotes_the_standby` は 60.52s で ok）。前々回の記録にあった `cargo test --workspace`（no-fail-fast なし）での `instance_handoff` 3 passed/5 failed（namespace probe `Operation not permitted` 3 件、dispatch/standby 期待値不成立 2 件）は、同じコード状態で `--no-fail-fast` 付き・単独含めて全体を再実行した今回は再現せず、全 8 tests が ok だった。cargo は既定で最初に失敗したバイナリで止まるため、前々回の記録は後続バイナリの総数を含んでおらず受け入れ条件未達だった。今回は失敗ゼロのため個別の再現切り分けは不要。
 - `cargo clippy --workspace -- -D warnings` → exit 0、warning 0。
 
-前回 final-verify の記録は `gen:types --check` の stale を見落としていた。今回の HEAD では事前・V2 内の生成型 check と e2e の該当テストが通り、stale はなかった。
+前回 final-verify の記録は `gen:types --check` の stale を見落としていた。今回の HEAD では事前・V2 内の生成型 check と e2e の該当テストが通り、stale はなかった。前々回の記録は `cargo test --workspace`（no-fail-fast なし）の失敗時出力から workspace 全体の passed 総数を確定できていなかった点が受け入れ条件未達だったが、今回 `--no-fail-fast` で全バイナリを走らせ切り、総数(3206 passed / 0 failed / 12 ignored)と失敗ゼロを確認した。
 
 ### adr-place の記録
 

@@ -354,10 +354,13 @@ fn identity_restore_sameuid_rejected_in_production() {
     sup.attach_controller(Arc::clone(&controller));
     let entry = registry.get("live-p").expect("registered");
     assert!(entry.accepts_state());
-    // 本番 admission: この host の同一 UID は SameUid で落ちる（検査は弱めない）。
+    // 本番 admission: この host の同一 UID と daemon 所有 userns は拒否する。
     assert_eq!(
         entry.current_attestation().unwrap_err(),
-        vec![IsolationViolation::SameUid]
+        vec![
+            IsolationViolation::SameUid,
+            IsolationViolation::UsernsOwnedByDaemon,
+        ]
     );
     let reg: &dyn LiveSessionRegistry = &*registry;
     let err = svc
@@ -404,7 +407,11 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let facts = loop {
         let facts = live.0.lock().expect("rt").facts().expect("facts");
-        if RestoreAdmission::Attested.admit(&facts).err() == Some(vec![IsolationViolation::SameUid])
+        if RestoreAdmission::Attested.admit(&facts).err()
+            == Some(vec![
+                IsolationViolation::SameUid,
+                IsolationViolation::UsernsOwnedByDaemon,
+            ])
             || std::time::Instant::now() > deadline
         {
             break facts;
@@ -413,7 +420,10 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
     };
     assert_eq!(
         RestoreAdmission::Attested.admit(&facts).unwrap_err(),
-        vec![IsolationViolation::SameUid]
+        vec![
+            IsolationViolation::SameUid,
+            IsolationViolation::UsernsOwnedByDaemon,
+        ]
     );
     let att = RestoreAdmission::SameUidHarness
         .admit(&facts)

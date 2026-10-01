@@ -294,7 +294,7 @@ impl LiveRegistry {
 pub enum Admission {
     /// `/proc/<runtime_pid>` から事実を採り直し、`verify_isolation` の attestation を要求する。
     Attested,
-    /// 試験専用（ADR-0109 D6）: 違反が `SameUid` だけの runtime を通す。attestation は作らない。
+    /// 試験専用（ADR-0109 D6）: 同一 UID の fixture runtime を通す。attestation は作らない。
     #[cfg(feature = "same-uid-harness")]
     SameUidHarness,
     /// 試験専用: `SameUidHarness` の判定に、試験が与えた事実を使う（fake の事実は D5 の証拠にしない）。
@@ -335,12 +335,25 @@ impl Admission {
 fn same_uid_only(facts: &RuntimeFacts) -> Result<(), InjectCode> {
     match verify_isolation(facts) {
         Ok(_) => Ok(()),
-        Err(v) if v == [IsolationViolation::SameUid] => Ok(()),
+        Err(v)
+            if v == [IsolationViolation::SameUid]
+                || v == [
+                    IsolationViolation::SameUid,
+                    IsolationViolation::UsernsOwnedByDaemon,
+                ] =>
+        {
+            Ok(())
+        }
         // Some CI workers run the entire nested user namespace as host root.
         // This exception exists only in the test feature; Attested is unchanged.
         Err(v)
             if unsafe { libc::geteuid() } == 0
-                && v == [IsolationViolation::RootUid, IsolationViolation::SameUid] =>
+                && (v == [IsolationViolation::RootUid, IsolationViolation::SameUid]
+                    || v == [
+                        IsolationViolation::RootUid,
+                        IsolationViolation::SameUid,
+                        IsolationViolation::UsernsOwnedByDaemon,
+                    ]) =>
         {
             Ok(())
         }

@@ -248,8 +248,14 @@ fn real_browser_in_runtime_facts_and_restore_refused_on_same_uid() {
         0,
         "CDP must not listen on TCP"
     );
-    // 検査は弱めない: 違反は SameUid だけで、attestation は出ない。
-    assert_eq!(rt.attest().unwrap_err(), vec![IsolationViolation::SameUid]);
+    // 検査は弱めない: 同一 UID と daemon 所有 userns に attestation は出ない。
+    assert_eq!(
+        rt.attest().unwrap_err(),
+        vec![
+            IsolationViolation::SameUid,
+            IsolationViolation::UsernsOwnedByDaemon,
+        ]
+    );
     let live = LiveSession(std::sync::Mutex::new(rt));
     assert!(live.current_attestation().is_err());
     // 停止後も出ない

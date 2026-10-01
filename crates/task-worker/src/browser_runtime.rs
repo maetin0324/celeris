@@ -444,7 +444,7 @@ pub enum RestoreAdmission {
     /// `verify_isolation` の attestation を要求する。
     #[default]
     Attested,
-    /// 試験専用: 違反が `SameUid` だけの実 runtime を通す（別 UID の無い host で成功経路を実証する）。
+    /// 試験専用: 同一 UID の実 runtime を通す（別 UID の無い host で成功経路を実証する）。
     #[cfg(feature = "same-uid-harness")]
     SameUidHarness,
 }
@@ -458,10 +458,20 @@ impl RestoreAdmission {
             Self::Attested => verify_isolation(facts),
             #[cfg(feature = "same-uid-harness")]
             Self::SameUidHarness => match verify_isolation(facts) {
-                Err(v) if v == [IsolationViolation::SameUid] => {
-                    // 残りの検査は実の事実のまま。UID だけを別 UID として扱う。
+                Err(v)
+                    if v == [IsolationViolation::SameUid]
+                        || v == [
+                            IsolationViolation::SameUid,
+                            IsolationViolation::UsernsOwnedByDaemon,
+                        ] =>
+                {
+                    // 他の検査は実の事実のまま。同一 UID とその userns owner だけを
+                    // 試験用の別 UID として扱い、本番の Attested は変えない。
                     let mut f = facts.clone();
                     f.runtime_uid = f.host_uid.wrapping_add(100_000).max(1);
+                    if f.userns_owner_uid == Some(f.host_uid) {
+                        f.userns_owner_uid = Some(f.runtime_uid);
+                    }
                     verify_isolation(&f)
                 }
                 other => other,

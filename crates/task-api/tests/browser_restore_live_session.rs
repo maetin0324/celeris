@@ -199,10 +199,13 @@ async fn restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal(
         .get("live-1")
         .expect("supervisor registered the live session");
     assert_eq!(entry.kind(), RuntimeKind::Isolated);
-    // この host は決定 p4a-uid により同一 UID。検査は弱めない。
+    // この host は決定 p4a-uid により同一 UID で、daemon が userns を所有する。
     assert_eq!(
         entry.current_attestation().unwrap_err(),
-        vec![IsolationViolation::SameUid]
+        vec![
+            IsolationViolation::SameUid,
+            IsolationViolation::UsernsOwnedByDaemon,
+        ]
     );
     registry.insert("plain-1", Arc::new(NotIsolated));
 

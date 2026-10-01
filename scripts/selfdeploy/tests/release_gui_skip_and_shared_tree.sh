@@ -48,7 +48,7 @@ case "$1" in
     ;;
   build)
     mkdir -p "$CARGO_TARGET_DIR/release"
-    for b in celeris celerisctl; do printf '#!/bin/sh\nexit 0\n' >"$CARGO_TARGET_DIR/release/$b"; chmod +x "$CARGO_TARGET_DIR/release/$b"; done
+    for b in celeris celerisctl celeris-credentiald; do printf '#!/bin/sh\nexit 0\n' >"$CARGO_TARGET_DIR/release/$b"; chmod +x "$CARGO_TARGET_DIR/release/$b"; done
     ;;
 esac
 exit 0

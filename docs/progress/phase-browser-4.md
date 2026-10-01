@@ -267,7 +267,7 @@ final review が挙げた 3 件の未達（P3-C の run loop 配線、P3-A/P4-A 
 
 ## 本番 admission の機密能力解放（2026-10-01、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）
 
-[ADR-0116](../adr/0116-browser-prod-admission-confidential-release.md) を採用し、本番 `Attested` admission の共通条件に user namespace owner の実測を追加した。`task-core::browser_isolation::verify_isolation` は owner 不明（`OwnerUnknown`）と daemon 所有（`UsernsOwnedByDaemon`）を拒否する。credentiald の `Admission` は `CredentialInjection`、task-worker の `RestoreAdmission` は `IdentityRestore` を、それぞれ別 UID・owner 非 daemon の隔離 session に限って通す。`SameUidHarness` は試験専用で、本番 `Attested` の条件を緩めない。
+[ADR-0116](../adr/0116-browser-prod-admission-confidential-release.md) は提案に戻した。中間成果として、本番 `Attested` admission の共通条件に user namespace owner の実測を追加した。`task-core::browser_isolation::verify_isolation` は owner 不明（`OwnerUnknown`）と daemon 所有（`UsernsOwnedByDaemon`）を拒否し、この点で main の `Attested` より厳しい。credentiald の `Admission` と task-worker の `RestoreAdmission` には境界試験があるが、launcher 経由の実 process ptrace 拒否は未実証である。**解放は未**: その実証が完了するまで `CredentialInjection`・`IdentityRestore` を許す本番 session は無い。`SameUidHarness` は試験専用で、本番 `Attested` の条件を緩めない。
 
 - 本番 admission の境界試験: `cargo test -p celeris-credentiald --test prod_admission` → exit 0、6 passed / 0 failed（別 UID + owner 非 daemon の許可、SameUid・daemon owner・owner 不明・namespace 欠落・終了 runtime の拒否）。
 - 復元 admission の境界試験: `cargo test -p task-worker --test browser_prod_admission` → exit 0、9 passed / 0 failed（別 UID + owner 非 daemon の許可、SameUid・daemon owner・owner 不明・他隔離違反・namespace 欠落・書込み可能 root の拒否、既定 admission が Attested）。
@@ -276,4 +276,4 @@ final review が挙げた 3 件の未達（P3-C の run loop 配線、P3-A/P4-A 
 - H4: task/run/session ACL、期限・失効時の再判定、および H3 区間中の本人 Live View 遮断を維持する。
 - H5: 人が確認した需要、project + exact HTTPS origin 束縛、期限・失効・削除を維持する。
 - H2（ADR-0080）: `approve_once` と既定 60 秒・最大 300 秒、1 回使用の lease を維持し、隔離成功で承認を代替しない。
-- 未解決: この実行環境は subuid の親 user namespace map 外による EPERM を解消しておらず、launcher 配置および実 process での ptrace 拒否（A13 を含む）は未検証。したがってこの記録と ADR は契約・実装の完了を示すが、ptrace 拒否の実証や本番有効化を示さない。本番昇格は証拠を人が承認した後、人が行う。
+- 未解決: この実行環境は subuid の親 user namespace map 外による EPERM を解消しておらず、launcher 配置および実 process での ptrace 拒否（A13 を含む）は未検証。owner 検査は中間実装であり、機密能力の解放も本番有効化も示さない。本番昇格は ptrace 拒否の証拠を人が承認した後、人が行う。

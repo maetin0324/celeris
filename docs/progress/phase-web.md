@@ -81,6 +81,15 @@ P5-01〜P5-03 の測定記録は [latency gate](../web/gates/p5-01-latency.md)�
 - 未解決: gate は loopback 偽 daemon/gateway と fixture による検証で、本番頻度や実環境の遅延分布は測っていない。dogfood 開始条件 H6 は人の決定待ち。X15 の staging 実機確認と gui/web 配信切替も運用段階に残る。
 - 提案: H6 と H9 の扱いを決めてから dogfood を開始する。開始前に H10 の staging 確認手順を実施し、配信切替は H7 の判断材料を確認して決める。
 
+## Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備。P6-04 以降は未着手）
+
+P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は ADR-0096・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。dogfood は H6 の決定まで未開始であり、本番 daemon への接続はしていない。
+
+- Rust gate: `cargo test --workspace` → exit 101。全 7 test suites で 261 passed、2 failed、0 ignored。`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は、user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。`cargo test -p celeris --test releases_api` でも同じ 2 件を再現（6 passed / 2 failed）。2026-10-01 の人の判断に従い、この sandbox から user systemd bus に接続できない環境由来の 2 件として除外し、残りの全テストを合格として扱う。テスト側の skip は別 task で対応する。
+- Rust lint: `cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。
+- 未解決: H6（dogfood の期間・合格条件）、H9（並行運用中の通知）、H10（staging 実 celeris 確認）は未決／未確認。H7（gui/web 配信切替）の判断も未実施。P6-04 以降は未着手。
+- 提案: H6 と H9 を決め、H10 staging 確認を記録してから dogfood を開始する。配信切替は H7 の判断材料を確認したうえで別途判断する。P5 横断 gate の値（30 path の URL/見出し最大 69.4/90.1 ms、H1 fallback 1 回、30 path × 4 幅の mobile/a11y 合格）は Phase 5 節と各 gate 記録を参照。
+
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 
 修正 commit `web phase 2 P2-07: select V3 screens from the ledger`（本節を含む commit）。`screens.ts` の `v3: true` が付いた画面だけを S1・S2・S4 が選ぶようにし、Phase 2 では `/tasks` と `/inbox` のみを対象にした。nav に無い画面は台帳の fixture で開く。動的 route も見出しを起点にデータ領域を確認する。

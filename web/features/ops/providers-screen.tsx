@@ -20,6 +20,7 @@ function TierChecks({ value, onChange }: { value: Tier[]; onChange: (next: Tier[
         <label key={tier} className="inline-flex min-h-11 items-center gap-1">
           <input
             type="checkbox"
+            className="size-11"
             checked={value.includes(tier)}
             onChange={(e) => onChange(e.target.checked ? [...value, tier] : value.filter((t) => t !== tier))}
           />

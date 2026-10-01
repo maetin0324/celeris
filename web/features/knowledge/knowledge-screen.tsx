@@ -180,7 +180,12 @@ function Candidate({ item, sender }: { item: KnowledgeInbox["items"][number]; se
       {result?.status === 422 && <ActionResultView result={result} fieldId={`target-${item.id}`} />}
       {item.target_exists && (
         <label className="flex items-center gap-2 min-h-11">
-          <input type="checkbox" checked={overwrite} onChange={(event) => setOverwrite(event.target.checked)} />
+          <input
+            type="checkbox"
+            className="size-11"
+            checked={overwrite}
+            onChange={(event) => setOverwrite(event.target.checked)}
+          />
           既存ページを上書き
         </label>
       )}

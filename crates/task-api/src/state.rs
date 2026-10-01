@@ -50,7 +50,7 @@ pub struct ApiState {
     /// ADR-0101（P3-A）: identity の封緘。`None` なら identity API は 503 `identity_unavailable`。
     pub(crate) identity_sealer: Option<Arc<celeris_credentiald::identity_seal::IdentitySealer>>,
     pub(crate) live_grants: Arc<Mutex<HashMap<String, crate::browser_live::LiveGrantRecord>>>,
-    /// ADR-0088 D5: 稼働中 session の registry（daemon が supervisor と共有する）。`None` なら
+    /// ADR-0108 D5: 稼働中 session の registry（daemon が supervisor と共有する）。`None` なら
     /// restore は常に `isolation_required`。
     pub(crate) live_sessions: Option<Arc<dyn task_core::browser_isolation::LiveSessionRegistry>>,
 }
@@ -209,7 +209,7 @@ impl ApiState {
         self
     }
 
-    /// ADR-0088 D5: 稼働中 session の registry を結線する。
+    /// ADR-0108 D5: 稼働中 session の registry を結線する。
     pub fn with_live_sessions(
         mut self,
         registry: Arc<dyn task_core::browser_isolation::LiveSessionRegistry>,

@@ -3151,9 +3151,9 @@ mod human_gates;
 /// （`src/dispatcher/tests/work_unit_check_failures.rs`）。
 mod work_unit_check_failures;
 
-/// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
-/// （`src/dispatcher/tests/stage_reopen.rs`）。
-mod stage_reopen;
 /// ADR-0098（Phase R7-10）: worker の run が作る task は元の task の案件とリポジトリを継ぐ
 /// （`src/dispatcher/tests/followups.rs`）。
 mod followups;
+/// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
+/// （`src/dispatcher/tests/stage_reopen.rs`）。
+mod stage_reopen;

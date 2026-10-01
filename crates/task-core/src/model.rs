@@ -915,11 +915,24 @@ pub fn truncate_detail(detail: &str) -> (String, bool) {
 }
 
 /// ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CreatedOrigin {
     /// 親の計画（plan/3）の kind task の unit から daemon が作った子 task。
     PlanUnit,
+    /// ADR-0098 D5（Phase R7-10）: task `task_id` の worker の run `run_id` が宣言した後続
+    /// （`<artifacts_dir>/followups.json`）から daemon が作った task。出自は daemon が run に割り当てた
+    /// 成果物ディレクトリで決まる（run の自己申告ではない）。
+    WorkerRun { task_id: TaskId, run_id: String },
+}
+
+/// ADR-0079 付記 R7-5 D1: `Event::WorkUnitChecksFailed` の不合格の検査 1 件。`detail` は判定文そのもの
+/// （`cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FailedWorkUnitCheck {
+    pub cmd: String,
+    pub expect_exit: i32,
+    pub detail: String,
 }
 
 /// DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の
@@ -949,6 +962,25 @@ pub enum Event {
         credential_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         actor_id: Option<String>,
+    },
+    /// ADR-0090 D3: worker の run が `result.json` の `wait` でクラスタ job の終了待ちに入った（`state = waiting`）。
+    /// `cluster_job_waits` の行は同じトランザクションで作る（`cluster_job::apply_event_tx`）。
+    ClusterJobWaitStarted {
+        wait: Box<crate::cluster_job::ClusterJobWait>,
+    },
+    /// ADR-0090 D3: poll で job の状態が変わった（変わらない poll では出さない）。
+    ClusterJobWaitPolled {
+        wait_id: String,
+        jobs: Vec<crate::cluster_job::ClusterJobStatus>,
+    },
+    /// ADR-0090 D3: wait が終わった（`satisfied` = すべての job が終わった / `timed_out` / `cancelled`）。
+    ClusterJobWaitFinished {
+        wait_id: String,
+        state: crate::cluster_job::ClusterJobWaitState,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        jobs: Vec<crate::cluster_job::ClusterJobStatus>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
     },
     Created {
         task: Box<Task>,
@@ -1170,6 +1202,16 @@ pub enum Event {
         reason: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<String>,
+    },
+    /// ADR-0079 付記 R7-5 D1: WU の run が `done` を返したが、その WU の `checks` が不合格だった（daemon が run を
+    /// retry / failed にすり替えた理由）。`cwd` は check を実際に走らせた所。その run の `WorkerFinished` と同じ
+    /// トランザクションで積む。状態は変えない（`replay` は無視する）。
+    WorkUnitChecksFailed {
+        run_id: String,
+        work_unit_id: String,
+        key: String,
+        cwd: String,
+        failed: Vec<FailedWorkUnitCheck>,
     },
     /// ADR-0079 R5b-fix1: 人の replan（`PlanOrigin::Human`）が done の WorkUnit の spec を上書きした
     /// （状態は `done` のまま。`work_units.spec` だけを新しい版の spec に置き換える）。`plan_id` / `plan_version` は

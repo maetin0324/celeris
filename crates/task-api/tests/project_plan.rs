@@ -223,6 +223,8 @@ async fn project_detail_hides_frozen_milestones_by_default() {
     let hidden = hidden.json();
     assert_eq!(hidden["milestones"], json!([]));
     assert_eq!(hidden["milestones_frozen"], 3);
+    // ADR-0079 R6-4: 終端でない（途中・承認済み）まま凍結した行の数。
+    assert_eq!(hidden["milestones_frozen_open"], 2);
     assert!(hidden.get("project_plan").is_none());
 
     let shown = send(
@@ -241,6 +243,7 @@ async fn project_detail_hides_frozen_milestones_by_default() {
         .collect();
     assert_eq!(titles, vec!["済", "途中", "承認済み"]);
     assert_eq!(shown["milestones_frozen"], 3);
+    assert_eq!(shown["milestones_frozen_open"], 2);
     assert_eq!(shown["milestones"][1]["status"], "in_progress");
 
     // 明示の false も既定と同じ。知らない値は 400 系。

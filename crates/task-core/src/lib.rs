@@ -6,8 +6,22 @@ pub use delivery::{Delivery, DeliveryState, DeliveryStore};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
+/// ADR-0102 P4-C: backend の適合・routing・fallback。
+pub mod browser_backend;
+/// ADR-0099 D3: browser の制御 lease（pause / takeover / resume / stop）の状態機械。
+pub mod browser_control;
+pub mod browser_control_ops;
+/// ADR-0101 D2: Browser Identity（P3-A）の束縛・期限・失効・混入拒否の規則。
+pub mod browser_identity;
+/// ADR-0102 P4-A: isolated runtime・egress・orphan 回収。
+pub mod browser_isolation;
+/// ADR-0100 D2: browser の live proxy（P3-B）の ACL と記録の規則。
+pub mod browser_live;
+pub mod browser_store;
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の耐久記録。
 pub mod browser_wait;
+/// ADR-0090: クラスタ job（PBS / Slurm）の durable wait（`cluster_job_waits`・poll の出力の parser）。
+pub mod cluster_job;
 pub use browser::{
     AgentBrowserActionPolicy, BrowserAction, BrowserCapability, BrowserDomainMode,
     BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,
@@ -116,13 +130,14 @@ pub use message::{
     is_conversation, is_milestone_review, milestone_review_of,
 };
 pub use model::{
-    ArtifactRef, Budget, Check, CreatedOrigin, Criterion, DEFAULT_PRIORITY, Event, GenreSpec,
-    HARNESS_ADAPTERS, Lease, MAX_LABELS, MAX_SKILLS, PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES,
-    PhaseCheckResult, PhaseMerged, ProgressFields, ProgressKind, ProposedMilestone, RoleSpec,
-    RunMetrics, RunRole, Status, Task, TaskCategory, TaskId, TaskKind, TaskMode, TaskRouting, Tier,
-    TierSource, Usage, WorkerHint, WorkspaceMode, WorkspaceSpec, artifact_entry_description,
-    artifact_entry_name, expand_home, home_dir, is_valid_label, normalize_labels, normalize_skills,
-    priority_from_label, priority_label, validate_human_checks_have_deliverable,
+    ArtifactRef, Budget, Check, CreatedOrigin, Criterion, DEFAULT_PRIORITY, Event,
+    FailedWorkUnitCheck, GenreSpec, HARNESS_ADAPTERS, Lease, MAX_LABELS, MAX_SKILLS,
+    PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES, PhaseCheckResult, PhaseMerged, ProgressFields,
+    ProgressKind, ProposedMilestone, RoleSpec, RunMetrics, RunRole, Status, Task, TaskCategory,
+    TaskId, TaskKind, TaskMode, TaskRouting, Tier, TierSource, Usage, WorkerHint, WorkspaceMode,
+    WorkspaceSpec, artifact_entry_description, artifact_entry_name, expand_home, home_dir,
+    is_valid_label, normalize_labels, normalize_skills, priority_from_label, priority_label,
+    validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
 pub mod pricing;
@@ -168,10 +183,10 @@ pub use repos::{
     resolve_task_repos, valid_repo_name,
 };
 pub use store::{
-    ClusterConnectionRecord, ClusterConnectionStats, ClusterSettings, EventRow, ListFilter,
-    ListOrder, Page, ProjectPlanApply, ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore,
-    StoreError, StoreOptions, TaskStore, TreeAdoption, backup_database, event_row_schema_value,
-    integrity_check, is_busy_error,
+    ClientAccess, ClusterConnectionRecord, ClusterConnectionStats, ClusterSettings, EventRow,
+    ListFilter, ListOrder, Page, ProjectPlanApply, ProjectPlanMilestoneChange, SCHEMA_VERSION,
+    SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption, backup_database,
+    event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----
@@ -189,12 +204,13 @@ pub use execution_plan::{
     CHILD_DEP_PREFIX, EXECUTION_PLAN_SCHEMA, EXECUTION_PLAN_SCHEMA_V2, ExecutionChildSpec,
     ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, INTEGRATE_KEY_PREFIX, NextStep,
     PhaseSpec, PlanOrigin, PlanStatus, PlanValidationError, RunIndexRole, RunIndexStatus, RunRow,
-    ValidatedPlan, WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck, WorkUnitContext,
-    WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus, child_label, dependents_to_block,
-    done_work_unit_overrides, integrate_key, integration_work_unit_specs,
+    STAGE_REOPENED_REASON, ValidatedPlan, WorkUnitBlockedReason, WorkUnitBudget, WorkUnitCheck,
+    WorkUnitContext, WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus, child_label,
+    dependents_to_block, done_work_unit_overrides, integrate_key, integration_work_unit_specs,
     is_daemon_added_work_unit, materialize_work_units, materialized_order, new_id, newly_ready,
     newly_ready_with, next_work_unit, phase_leaves, phase_ranks, plan_awaits_final_review,
-    plan_work_finished, replan_done_work_units, runnable_work_units, validate,
+    plan_work_finished, reopened_integration, replan_done_work_units, runnable_work_units,
+    stale_stage_integrations, validate,
 };
 // ---- ADR-0079（Phase R1a）: plan/3・木・決定の要求 ----
 pub use decision::{

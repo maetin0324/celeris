@@ -265,7 +265,7 @@ fn release_items(
         return Vec::new();
     }
     let mut out = Vec::new();
-    for item in source.list().items {
+    for item in source.list_for_timeline().items {
         let Some(changes) = &item.changes else {
             continue;
         };
@@ -294,6 +294,40 @@ fn release_items(
 mod tests {
     use super::*;
     use crate::types::TimelineItem;
+
+    /// ADR-0079 R6-4: 本番 DB の写しに対するタイムラインの計測（手で走らせる。`CELERIS_TIMELINE_PROFILE_DB` に
+    /// `sqlite3 "file:…?mode=ro" ".backup <copy>"` で取った写し、`CELERIS_TIMELINE_PROFILE_TASK` に task id）。
+    /// ストアの部分（`store_items`）と文書の逆リンク（`doc_items`、`~/workspace` を文書の根に）を分けて測る。
+    #[test]
+    #[ignore = "manual profile against a copy of the production DB"]
+    fn profile_timeline_against_a_db_copy() {
+        let (Some(db), Some(task)) = (
+            std::env::var_os("CELERIS_TIMELINE_PROFILE_DB"),
+            std::env::var("CELERIS_TIMELINE_PROFILE_TASK").ok(),
+        ) else {
+            return;
+        };
+        let store = SqliteStore::open(std::path::Path::new(&db)).expect("open copy");
+        let id: TaskId = task.parse().expect("task id");
+        let docs_root = task_core::home_dir().map(|h| h.join("workspace"));
+        for round in 0..3 {
+            let t0 = std::time::Instant::now();
+            let (task, mut items) = store_items(&store, id).expect("store items");
+            let t1 = std::time::Instant::now();
+            items.extend(doc_items(&store, &task, docs_root.as_deref()));
+            let t2 = std::time::Instant::now();
+            sort_items(&mut items);
+            let body = serde_json::to_vec(&Timeline { task_id: id, items }).expect("json");
+            let t3 = std::time::Instant::now();
+            eprintln!(
+                "round {round}: store_items {:?} doc_items {:?} sort+json {:?} ({} bytes)",
+                t1 - t0,
+                t2 - t1,
+                t3 - t2,
+                body.len()
+            );
+        }
+    }
 
     /// 時刻の昇順に並び、同時刻は元の順を保つ（安定ソート）。
     #[test]

@@ -90,6 +90,25 @@ pub fn decide(
         // E2 では単純に ready へ戻す（`retries` は数えない。既存の Requeue/InfraRequeue の
         // カウンタが別に効く）。
         RunEnd::HarnessError { .. } | RunEnd::Cancelled => reset_to_ready(wu),
+        // ADR-0090 D2: クラスタ job の終了待ち。unit は `blocked(cluster_jobs)`（continuation・retry に数えない）で、
+        // task は `advance`（v2 は兄弟を止めない。v1 は呼び出し側が `ClusterJobWait` に差し替える）。
+        RunEnd::Waiting => cluster_jobs_wait(wu),
+    }
+}
+
+fn cluster_jobs_wait(wu: &WorkUnitRow) -> WuDecision {
+    let mut updated = now_wu(wu.clone(), WorkUnitStatus::Blocked);
+    updated.blocked_reason = Some(WorkUnitBlockedReason::ClusterJobs);
+    WuDecision {
+        updated,
+        reason: "cluster_jobs",
+        trigger: Trigger::Continue {
+            why: ContinueWhy::Advance,
+        },
+        outcome_override: None,
+        newly_blocked: Vec::new(),
+        newly_ready: Vec::new(),
+        plan_complete: false,
     }
 }
 
@@ -129,10 +148,13 @@ fn complete(wu: &WorkUnitRow, run_id: &str, all_units: &[WorkUnitRow]) -> WuDeci
         }
     }
 
+    // ADR-0079 付記「R7-9」D3: 統合済みの段階に統合されていない unit が残っていれば完了にしない（`Continue{advance}`。
+    // 次の dispatch の gate がその段階の統合 WU を `pending` に戻して統合を走らせる）。
     let plan_complete = projected
         .iter()
         .filter(|u| u.status.is_active())
-        .all(|u| u.status == WorkUnitStatus::Done);
+        .all(|u| u.status == WorkUnitStatus::Done)
+        && task_core::stale_stage_integrations(&projected).is_empty();
 
     WuDecision {
         updated,
@@ -328,6 +350,11 @@ pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
         .filter(|u| !u.status.is_terminal())
         .collect();
     let Some(current) = in_play.iter().min_by_key(|u| u.seq) else {
+        // ADR-0079 付記「R7-9」D3: 統合済みの段階に統合 WU の依存に無い unit（統合の後に足された unit）が残って
+        // いれば完了ではない。gate（`wu_dispatch_gate`）がその統合 WU を開き直すので、通常の経路に戻す。
+        if !task_core::stale_stage_integrations(units).is_empty() {
+            return PhaseSettle::Advance;
+        }
         return PhaseSettle::AllDone;
     };
     let phase = current.phase.clone();
@@ -398,385 +425,4 @@ pub fn resume_after_answer(wu: &WorkUnitRow) -> WorkUnitRow {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use task_core::{WorkUnitContext, WorkUnitKind, WorkUnitSpec};
-
-    fn row(key: &str, status: WorkUnitStatus, depends_on: &[&str]) -> WorkUnitRow {
-        let spec = WorkUnitSpec {
-            key: key.to_string(),
-            kind: WorkUnitKind::Implement,
-            title: key.to_string(),
-            objective: format!("objective {key}"),
-            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
-            done_when: vec![],
-            checks: vec![],
-            context: WorkUnitContext::default(),
-            harness: None,
-            features: None,
-            budget: None,
-            outputs: vec![],
-            phase: None,
-        };
-        WorkUnitRow::new(
-            format!("id-{key}"),
-            "task".into(),
-            "plan".into(),
-            0,
-            spec,
-            status,
-            "2026-09-24T00:00:00Z".into(),
-        )
-    }
-
-    fn prow(
-        key: &str,
-        seq: u32,
-        phase: &str,
-        status: WorkUnitStatus,
-        depends_on: &[&str],
-    ) -> WorkUnitRow {
-        let mut r = row(key, status, depends_on);
-        r.seq = seq;
-        r.phase = Some(phase.to_string());
-        r.spec.phase = Some(phase.to_string());
-        r
-    }
-
-    fn integ(phase: &str, seq: u32, status: WorkUnitStatus, deps: &[&str]) -> WorkUnitRow {
-        let mut r = prow(&format!("integrate-{phase}"), seq, phase, status, deps);
-        r.kind = task_core::WorkUnitKind::Integrate;
-        r.spec.kind = task_core::WorkUnitKind::Integrate;
-        r
-    }
-
-    #[test]
-    fn settle_waits_while_a_sibling_is_running_then_reports_the_question() {
-        use WorkUnitStatus::*;
-        let mut q = prow("a", 0, "build", Blocked, &[]);
-        q.blocked_reason = Some(WorkUnitBlockedReason::Question);
-        let units = vec![
-            q.clone(),
-            prow("b", 1, "build", Running, &[]),
-            integ("build", 2, Pending, &["a", "b"]),
-        ];
-        assert_eq!(settle_phase(&units), PhaseSettle::Wait);
-        let units = vec![
-            q,
-            prow("b", 1, "build", Done, &[]),
-            integ("build", 2, Pending, &["a", "b"]),
-        ];
-        assert_eq!(settle_phase(&units), PhaseSettle::Question("id-a".into()));
-    }
-
-    #[test]
-    fn settle_reports_a_failure_after_in_flight_reaches_zero() {
-        use WorkUnitStatus::*;
-        let units = vec![
-            prow("a", 0, "build", Failed, &[]),
-            prow("b", 1, "build", Done, &[]),
-            prow("c", 2, "build", Ready, &[]),
-            integ("build", 3, Pending, &["a", "b", "c"]),
-        ];
-        assert_eq!(settle_phase(&units), PhaseSettle::Failure("id-a".into()));
-    }
-
-    #[test]
-    fn settle_advances_integrates_and_finishes() {
-        use WorkUnitStatus::*;
-        let units = vec![
-            prow("a", 0, "build", Done, &[]),
-            prow("b", 1, "build", Ready, &[]),
-            integ("build", 2, Pending, &["a", "b"]),
-            prow("c", 3, "verify", Pending, &["a"]),
-            integ("verify", 4, Pending, &["c"]),
-        ];
-        assert_eq!(settle_phase(&units), PhaseSettle::Advance);
-        let units = vec![
-            prow("a", 0, "build", Done, &[]),
-            prow("b", 1, "build", Done, &[]),
-            integ("build", 2, Pending, &["a", "b"]),
-            prow("c", 3, "verify", Pending, &["a"]),
-            integ("verify", 4, Pending, &["c"]),
-        ];
-        assert_eq!(
-            settle_phase(&units),
-            PhaseSettle::Integrate("id-integrate-build".into())
-        );
-        let units = vec![
-            prow("a", 0, "build", Done, &[]),
-            integ("build", 1, Done, &["a"]),
-        ];
-        assert_eq!(settle_phase(&units), PhaseSettle::AllDone);
-    }
-
-    fn limits() -> WuLimits {
-        WuLimits {
-            max_continuations: 3,
-            no_progress_limit: 2,
-            max_retries: 2,
-        }
-    }
-
-    fn no_ci() -> ContinuationInputs<'static> {
-        ContinuationInputs::default()
-    }
-
-    #[test]
-    fn completing_the_last_work_unit_marks_the_plan_complete_and_triggers_worker_done() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let units = vec![a.clone()];
-        let d = decide(RunEnd::Completed, "r1", &a, &units, no_ci(), limits());
-        assert_eq!(d.updated.status, WorkUnitStatus::Done);
-        assert_eq!(d.trigger, Trigger::WorkerDone);
-        assert!(d.plan_complete);
-    }
-
-    #[test]
-    fn completing_a_work_unit_with_more_pending_advances_and_promotes_dependents() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let b = row("b", WorkUnitStatus::Pending, &["a"]);
-        let units = vec![a.clone(), b.clone()];
-        let d = decide(RunEnd::Completed, "r1", &a, &units, no_ci(), limits());
-        assert_eq!(
-            d.trigger,
-            Trigger::Continue {
-                why: ContinueWhy::Advance
-            }
-        );
-        assert!(!d.plan_complete);
-        assert_eq!(d.newly_ready.len(), 1);
-        assert_eq!(d.newly_ready[0].key, "b");
-        assert_eq!(d.newly_ready[0].status, WorkUnitStatus::Ready);
-    }
-
-    #[test]
-    fn a_retryable_failure_within_the_limit_retries_the_same_work_unit() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let units = vec![a.clone()];
-        let d = decide(
-            RunEnd::Failed { retryable: true },
-            "r1",
-            &a,
-            &units,
-            no_ci(),
-            limits(),
-        );
-        assert_eq!(d.updated.status, WorkUnitStatus::Ready);
-        assert_eq!(d.updated.retries, 1);
-        assert_eq!(
-            d.trigger,
-            Trigger::Continue {
-                why: ContinueWhy::WorkUnitRetry
-            }
-        );
-    }
-
-    #[test]
-    fn a_failure_at_the_retry_limit_fails_the_work_unit_and_blocks_dependents() {
-        let mut a = row("a", WorkUnitStatus::Running, &[]);
-        a.retries = 2; // already at max_retries
-        let b = row("b", WorkUnitStatus::Pending, &["a"]);
-        let c = row("c", WorkUnitStatus::Pending, &["b"]);
-        let units = vec![a.clone(), b, c];
-        let d = decide(
-            RunEnd::Failed { retryable: true },
-            "r1",
-            &a,
-            &units,
-            no_ci(),
-            limits(),
-        );
-        assert_eq!(d.updated.status, WorkUnitStatus::Failed);
-        assert_eq!(d.trigger, Trigger::WorkerError { retryable: false });
-        assert_eq!(d.outcome_override.as_deref(), Some("work unit a failed"));
-        let mut blocked_keys: Vec<&str> = d.newly_blocked.iter().map(|u| u.key.as_str()).collect();
-        blocked_keys.sort();
-        assert_eq!(blocked_keys, vec!["b", "c"]);
-        assert!(
-            d.newly_blocked
-                .iter()
-                .all(|u| u.blocked_reason == Some(WorkUnitBlockedReason::DependencyFailed))
-        );
-    }
-
-    #[test]
-    fn a_non_retryable_failure_fails_immediately_regardless_of_retries_so_far() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let units = vec![a.clone()];
-        let d = decide(
-            RunEnd::Failed { retryable: false },
-            "r1",
-            &a,
-            &units,
-            no_ci(),
-            limits(),
-        );
-        assert_eq!(d.updated.status, WorkUnitStatus::Failed);
-    }
-
-    #[test]
-    fn a_question_blocks_the_work_unit_and_the_task() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let units = vec![a.clone()];
-        let d = decide(RunEnd::Question, "r1", &a, &units, no_ci(), limits());
-        assert_eq!(d.updated.status, WorkUnitStatus::Blocked);
-        assert_eq!(
-            d.updated.blocked_reason,
-            Some(WorkUnitBlockedReason::Question)
-        );
-        assert_eq!(d.trigger, Trigger::WorkerQuestion);
-    }
-
-    fn checkpoint(completed: usize) -> Checkpoint {
-        Checkpoint {
-            schema: task_core::CHECKPOINT_SCHEMA.into(),
-            task_id: "t".into(),
-            work_unit: Some("a".into()),
-            run_id: "r".into(),
-            run_seq: 1,
-            end: task_core::CheckpointEnd::BudgetExhausted,
-            source: task_core::CheckpointSource::Mechanical,
-            completed: (0..completed).map(|i| format!("c{i}")).collect(),
-            remaining: vec![],
-            decisions: vec![],
-            files_changed: vec![],
-            tests_run: vec![],
-            known_failures: vec![],
-            artifact_refs: vec![],
-            next_action: "next".into(),
-            open_questions: vec![],
-            plan_issue: None,
-            repo_state: None,
-            recent_activity: vec![],
-            created_at: "2026-09-24T00:00:00Z".into(),
-        }
-    }
-
-    /// ADR-0072 D17 3.（Phase E4b 項目2）: checkpoint に `plan_issue` があれば、まだ continuation の
-    /// 上限に達していなくても（`continuations = 0`）`blocked(plan_issue)` になる。`limit`/`continue` の
-    /// 判定より優先される。
-    #[test]
-    fn a_plan_issue_in_the_checkpoint_blocks_the_work_unit_even_within_budget() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let units = vec![a.clone()];
-        let mut cp = checkpoint(1);
-        cp.plan_issue = Some("migration M is needed before this work unit".into());
-        let d = decide(
-            RunEnd::BudgetExhausted {
-                kind: task_core::BudgetKind::Turns,
-            },
-            "r1",
-            &a,
-            &units,
-            ContinuationInputs {
-                checkpoint: Some(&cp),
-                prev_checkpoint: None,
-                no_progress_before: 0,
-            },
-            limits(),
-        );
-        assert_eq!(d.updated.status, WorkUnitStatus::Blocked);
-        assert_eq!(
-            d.updated.blocked_reason,
-            Some(WorkUnitBlockedReason::PlanIssue)
-        );
-        assert_eq!(d.reason, "plan_issue");
-        assert_eq!(d.trigger, Trigger::WorkerQuestion);
-        // continuations は増えない（continuation の判定に入る前に分岐する）。
-        assert_eq!(d.updated.continuations, 0);
-    }
-
-    #[test]
-    fn budget_exhausted_within_limits_moves_to_needs_continuation() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let units = vec![a.clone()];
-        let cp = checkpoint(1);
-        let d = decide(
-            RunEnd::BudgetExhausted {
-                kind: task_core::BudgetKind::Turns,
-            },
-            "r1",
-            &a,
-            &units,
-            ContinuationInputs {
-                checkpoint: Some(&cp),
-                prev_checkpoint: None,
-                no_progress_before: 0,
-            },
-            limits(),
-        );
-        assert_eq!(d.updated.status, WorkUnitStatus::NeedsContinuation);
-        assert_eq!(d.updated.continuations, 1);
-        assert_eq!(
-            d.trigger,
-            Trigger::Continue {
-                why: ContinueWhy::Continue
-            }
-        );
-    }
-
-    #[test]
-    fn hitting_the_continuation_limit_blocks_with_a_question() {
-        let mut a = row("a", WorkUnitStatus::Running, &[]);
-        a.continuations = 3; // at max_continuations
-        let units = vec![a.clone()];
-        let cp = checkpoint(1);
-        let d = decide(
-            RunEnd::BudgetExhausted {
-                kind: task_core::BudgetKind::Turns,
-            },
-            "r1",
-            &a,
-            &units,
-            ContinuationInputs {
-                checkpoint: Some(&cp),
-                prev_checkpoint: None,
-                no_progress_before: 0,
-            },
-            limits(),
-        );
-        assert_eq!(d.updated.status, WorkUnitStatus::Blocked);
-        assert_eq!(d.updated.blocked_reason, Some(WorkUnitBlockedReason::Limit));
-        assert_eq!(d.trigger, Trigger::WorkerQuestion);
-    }
-
-    #[test]
-    fn no_progress_at_the_limit_blocks_even_under_the_continuation_cap() {
-        let a = row("a", WorkUnitStatus::Running, &[]);
-        let units = vec![a.clone()];
-        let cp = checkpoint(1);
-        let prev = checkpoint(1); // same `completed` count => no progress
-        let d = decide(
-            RunEnd::BudgetExhausted {
-                kind: task_core::BudgetKind::Turns,
-            },
-            "r1",
-            &a,
-            &units,
-            ContinuationInputs {
-                checkpoint: Some(&cp),
-                prev_checkpoint: Some(&prev),
-                // already 1 consecutive no-progress; this one makes 2 = the limit
-                no_progress_before: 1,
-            },
-            limits(),
-        );
-        assert_eq!(d.updated.status, WorkUnitStatus::Blocked);
-        assert_eq!(d.updated.blocked_reason, Some(WorkUnitBlockedReason::Limit));
-    }
-
-    #[test]
-    fn resume_after_answer_restores_needs_continuation_for_a_limit_block_and_ready_otherwise() {
-        let mut a = row("a", WorkUnitStatus::Blocked, &[]);
-        a.blocked_reason = Some(WorkUnitBlockedReason::Limit);
-        assert_eq!(
-            resume_after_answer(&a).status,
-            WorkUnitStatus::NeedsContinuation
-        );
-
-        let mut b = row("b", WorkUnitStatus::Blocked, &[]);
-        b.blocked_reason = Some(WorkUnitBlockedReason::Question);
-        assert_eq!(resume_after_answer(&b).status, WorkUnitStatus::Ready);
-    }
-}
+mod tests;

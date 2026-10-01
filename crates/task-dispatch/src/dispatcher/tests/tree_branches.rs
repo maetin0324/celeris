@@ -116,6 +116,9 @@ fn task_unit(key: &str, stage: &str, deps: &[&str], acceptance_cmd: &str) -> ser
         // 理由が無ければ leaf に下げられる。ここでは子 task のまま残す理由として「親に無い skill（別の部署）」を
         // 持たせる（担当の無い試験の組織では matching に影響しない）。
         "skills": ["tree-fixture"],
+        // ADR-0079 付記「R6-2: unit の gate 欄と kind task の既定（compound explicit）」: kind task の既定は明示の compound
+        // になった。この fixture の子は従来どおり 1 run（atomic）で走る前提なので `gate: atomic` を明示する。
+        "gate": "atomic",
         "title": format!("Child {key}"),
         "objective": format!("Deliver the {key} part as its own reviewed task"),
         "depends_on": deps,
@@ -135,6 +138,8 @@ fn task_unit(key: &str, stage: &str, deps: &[&str], acceptance_cmd: &str) -> ser
 fn compound_task_unit(key: &str, stage: &str) -> serde_json::Value {
     let mut unit = task_unit(key, stage, &[], "true");
     unit["features"] = serde_json::json!({"expected_length": "high", "cross_cutting": "high"});
+    // ADR-0079 付記「R6-2: unit の gate 欄と kind task の既定（compound explicit）」: `gate` を外す（既定 = 明示の compound）。
+    unit.as_object_mut().unwrap().remove("gate");
     unit
 }
 

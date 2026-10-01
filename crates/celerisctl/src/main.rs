@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use task_core::SqliteStore;
+use task_core::{ClientAccess, SCHEMA_VERSION, SqliteStore};
 
 use commands::accept::{self, AcceptArgs};
 use commands::add::{self, AddArgs};
@@ -43,7 +43,8 @@ use error::CliError;
 )]
 struct Cli {
     /// SQLite データベースファイルのパス（ADR-0004 D5）。
-    /// 優先順位: --db > 環境変数 CELERIS_DB > ./celeris.sqlite3
+    /// 優先順位: --db > 環境変数 CELERIS_DB > CELERIS_RUN_DB（worker の run の中で daemon が渡す。ADR-0098 D6）
+    /// > ./celeris.sqlite3
     #[arg(long, global = true)]
     db: Option<PathBuf>,
 
@@ -159,10 +160,53 @@ enum Command {
     },
 }
 
+/// ADR-0095 D6: celerisctl は **migration をしない**（`SqliteStore::open_client`）。DB が無い・古い DB は
+/// 開かずに失敗し（daemon が作り・migrate する）、新しい DB は読み取り専用で開いて警告する。
+fn open_store(db_path: &Path) -> Result<SqliteStore, ExitCode> {
+    match SqliteStore::open_client(db_path) {
+        Ok((store, ClientAccess::ReadWrite)) => Ok(store),
+        Ok((store, ClientAccess::ReadOnlyNewerSchema { found })) => {
+            eprintln!(
+                "warning: db {} has schema version {found}, newer than the {SCHEMA_VERSION} this \
+                 celerisctl supports; opened read-only (reads work, writes are refused; ADR-0095)",
+                db_path.display()
+            );
+            Ok(store)
+        }
+        Err(e) => {
+            eprintln!("error: failed to open db {}: {e}", db_path.display());
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
 fn resolve_db_path(cli_db: Option<PathBuf>) -> PathBuf {
     cli_db
         .or_else(|| env::var_os("CELERIS_DB").map(PathBuf::from))
+        .or_else(run_db)
         .unwrap_or_else(|| PathBuf::from("celeris.sqlite3"))
+}
+
+/// ADR-0098 D6: worker の run の中で daemon が渡す、その daemon の DB（`CELERIS_RUN_DB`）。
+fn run_db() -> Option<PathBuf> {
+    env::var_os(task_ops::followup::ENV_RUN_DB)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+}
+
+/// ADR-0098 D6: `add` を後続の宣言にするか。run の中（`CELERIS_FOLLOWUPS_FILE` と `CELERIS_RUN_DB` がある）で、
+/// 書き先の DB がその daemon の DB のときだけ。試験が一時 DB（`--db <tmp>`）に書く `add` はそのまま DB に書く。
+fn followups_target(cli_db: Option<&Path>) -> Option<PathBuf> {
+    let file = env::var_os(task_ops::followup::ENV_FOLLOWUPS_FILE)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)?;
+    let run_db = run_db()?;
+    let target = resolve_db_path(cli_db.map(Path::to_path_buf));
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    same(&target, &run_db).then_some(file)
 }
 
 fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<ExitCode, CliError> {
@@ -262,6 +306,20 @@ fn main() -> ExitCode {
             }
         };
     }
+    // ADR-0098 D6: worker の run の中で daemon の DB に向けた `add` は DB を開かず、その run の後続の宣言になる
+    // （run の終わりに daemon が run の task の案件で作る）。
+    let followups_file = followups_target(cli.db.as_deref());
+    if let Some(path) = followups_file.as_deref()
+        && let Command::Add(args) = cli.command
+    {
+        return match add::queue(args, path) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
     // ADR-0047 D3: 知識ベースの道具は **DB を開かない**（ワーカーのコンテナには DB が無い）。
     // ADR-0052 D3 の例外は `knowledge rerun` だけ（管理系。`org migrate-v2` と同じく DB を直接開く）。
     if let Command::Knowledge { command } = cli.command {
@@ -275,17 +333,14 @@ fn main() -> ExitCode {
             };
         }
         let db_path = resolve_db_path(cli.db);
-        let store = match SqliteStore::open(&db_path) {
+        let store = match open_store(&db_path) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!("error: failed to open db {}: {e}", db_path.display());
-                return ExitCode::FAILURE;
-            }
+            Err(code) => return code,
         };
         return match knowledge::run_with_store(&store, command) {
             Ok(code) => code,
             Err(e) => {
-                eprintln!("error: {e}");
+                eprintln!("error: {}", error::render(&e));
                 ExitCode::FAILURE
             }
         };
@@ -334,17 +389,14 @@ fn main() -> ExitCode {
             },
             McpCommand::Client { command } => {
                 let db_path = resolve_db_path(cli.db);
-                let store = match SqliteStore::open(&db_path) {
+                let store = match open_store(&db_path) {
                     Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("error: failed to open db {}: {e}", db_path.display());
-                        return ExitCode::FAILURE;
-                    }
+                    Err(code) => return code,
                 };
                 match mcp::run_client(&store, command) {
                     Ok(code) => code,
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        eprintln!("error: {}", error::render(&e));
                         ExitCode::FAILURE
                     }
                 }
@@ -353,18 +405,15 @@ fn main() -> ExitCode {
     }
     let db_path = resolve_db_path(cli.db);
 
-    let store = match SqliteStore::open(&db_path) {
+    let store = match open_store(&db_path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: failed to open db {}: {e}", db_path.display());
-            return ExitCode::FAILURE;
-        }
+        Err(code) => return code,
     };
 
     match dispatch(&store, &db_path, cli.command) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("error: {}", error::render(&e));
             ExitCode::FAILURE
         }
     }

@@ -12,12 +12,16 @@
 # 「認証を使わない」「そのプールを設定していない」という意味を持つ）。本番は
 # `~/.config/celeris/api.token` と `~/.local/celeris/{claude,codex}-accounts` に置く。
 db = "../celeris.sqlite3"            # celerisctl --db / CELERIS_DB と同じファイルを指すこと
+# ADR-0095: worker の run（adapter・check）からは DB のディレクトリが読み取り専用に見える（既定。user namespace を
+# 使う）。直下の既存の項目（workspaces/ など）は書けるが、DB の隣に新しいファイルは作れない。無効にするのは
+# user namespace を使えない環境だけ: `db = { path = "../celeris.sqlite3", worker_read_only = false }`。
+# celerisctl は migration をしない（古い DB は拒否、新しい DB は読み取り専用。DB は daemon が作り migrate する）。
 # タスクの足回り（worktree・成果物・run のログ）の置き場（ADR-0042 D3）。
 # **書かなければ既定は `~/.local/celeris/workspaces`**（`~` は celeris の `$HOME` で展開する）。
 # 相対パスを書いたときだけ、この設定ファイルのあるディレクトリ基準になる（Phase 51 までの挙動）。
 workspace_root = "../workspaces"   # WorkspaceSpec::Local の相対パスの基準でもある
 tick_ms = 2000
-max_concurrency = 2
+max_concurrency = 2                # CoS の対話 run（Console の一言）は数えない（ADR-0089。上限は [execution] max_cos_runs）
 lease_grace_secs = 60              # ADR-0002 D7: リース ttl = max_wall_secs + 猶予
 idle_timeout_secs = 300            # ADR-0003 D4: 無出力タイムアウト
 kill_grace_secs = 10               # ADR-0003 D4 / ADR-0044 Phase 53 追記: run を止めるときに
@@ -379,6 +383,21 @@ max_tree_runs = 100        # 木全体のワーカー run 数
 #   "ignore"              … 子の失敗を見ずに親を完了させる（ADR-0016 M5 までの挙動）。
 on_child_failure = "retry_then_ask"
 
+# 再帰的な task 分解（ADR-0079 D3）の上限。すべて任意で、書かなければ下の既定値（R6-2 の値）。木の節点では
+# [delegation] の max_tree_depth / max_tree_runs ではなくこちらが効く。節点ごとの replan の上限は [execution] max_replans（既定 5）。
+# [execution.tree]
+# enabled = false             # true で celeris.execution-plan/3（kind task の unit = 子 task）を有効にする
+# max_depth = 3               # task の層数（root 1 / 子 2 / 孫 3）
+# max_units_per_stage = 6     # 1 段階の生きた unit（leaf + kind task。replan で持ち越す done の unit・adopt・celeris が足す統合・repair は数えない。R7-3）
+# max_stages = 5
+# max_child_tasks_per_plan = 6 # 1 計画で子を作る kind task の unit（adopt と replan で持ち越す done の unit は数えない。R7-2）
+#                              # 上の 2 つとも、failed / cancelled / running の子の unit を新しい版に残せば数える（failed を残すと replan が
+#                              # 新しい子を作る）。数えたくなければ計画から外す（superseded になり、その key は再利用できない）。R7-3
+# max_parallel_child_tasks = 2
+# max_tree_leaves = 120       # 木の生涯の leaf（R6-2 で 40 から）
+# max_tree_runs = 400         # 木全体の worker / planner / repair の run（R6-2 で 120 から）
+# max_tree_replans = 30       # 木全体で採用した replan の版（R6-2 で 10 から）
+
 # 報告の圧縮（ADR-0033 D3 / SPEC §3.5）。親ノードに子の報告がたまったら、まとめの run を 1 回だけ起こす。
 # 生成（run の done / error / question を 1 件の報告にすること）は決定的で、まとめる中身だけが LLM の仕事。
 [reports]
@@ -487,3 +506,9 @@ batch_pages = 8
 max_context_chars = 24000
 # assignee = "software-engineering"
 # adapter = "codex"
+
+# ADR-0089（Phase R6-5）: CoS の対話 run（Console から CoS に話しかけた一言）は `max_concurrency` と
+# `account_pool = true` のプロバイダの `concurrency` の外で走る（アカウントは消費し、走っている run の最も少ない
+# アカウントに `max_runs_per_account + 1` 本目まで載る）。その同時数の絶対上限。既定 2、0..=8。0 で例外を無効化。
+# [execution]
+# max_cos_runs = 2

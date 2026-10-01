@@ -542,11 +542,12 @@ async fn task_tree_rolls_up_a_three_level_tree_by_hand() {
     // 木の上限の使用（root の view だけ）: leaf 2（a・x）、run 3（reviewer を除く）、replan 0、決定 2。
     let limits = &view["limits"];
     assert_eq!(limits["leaves"], 2);
-    assert_eq!(limits["max_leaves"], 40);
+    // ADR-0079 付記「R6-2」: 木の上限の既定は leaf 120 / run 400 / replan 30（40 / 120 / 10 から）。
+    assert_eq!(limits["max_leaves"], 120);
     assert_eq!(limits["runs"], 3);
-    assert_eq!(limits["max_runs"], 120);
+    assert_eq!(limits["max_runs"], 400);
     assert_eq!(limits["replans"], 0);
-    assert_eq!(limits["max_replans"], 10);
+    assert_eq!(limits["max_replans"], 30);
     assert_eq!(limits["open_decisions"], 2);
     assert_eq!(limits["max_open_decisions"], 12);
 

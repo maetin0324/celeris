@@ -29,6 +29,7 @@ pub mod edit;
 pub mod error;
 /// ADR-0072（Phase E2）: ExecutionPlan の採用（`POST /tasks/{id}/execution-plan` の業務ロジック）。
 pub mod execution;
+pub mod followup;
 pub mod gate;
 pub mod graph;
 pub mod inbox;

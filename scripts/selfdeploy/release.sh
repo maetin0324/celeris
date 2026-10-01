@@ -2,7 +2,8 @@
 # scripts/selfdeploy/release.sh <git-ref> — ADR-0040 D1/D2 の「リリース」段。
 #
 #   作業チェックアウトとは別の detached の作業ツリー（$CELERIS_STATE_DIR/releases/.build/<sha12>）で
-#   cargo test（Phase SD-2: scripts/dev/test-parallel.sh でバイナリ並列）→ clippy → build --release → GUI pnpm install/typecheck/test/build
+#   cargo test（Phase SD-2: scripts/dev/test-parallel.sh でバイナリ並列）→ clippy → source-size-report
+#   （ADR-0083、warning のみ）→ build --release → GUI pnpm install/typecheck/test/build
 #   → pnpm mobile-audit → pnpm e2e:mock を順に回し、
 #   全部 exit 0 のときだけ $CELERIS_STATE_DIR/releases/<sha12>/ を作る。
 #   1 つでも非 0 なら**リリースを作らず**、.build/<sha12>/gate.json だけ残す。
@@ -158,7 +159,10 @@ git -C "$SD_REPO" worktree prune
 # `release-build`）。adopt の安全条件の checkout 時刻は `.build/tree/.git` の mtime。終了時は成功・失敗とも
 # **touch**（release しない。lib.sh の sd_scratch_lease の説明）。lease の TTL は `SD_RELEASE_TARGET_TTL`。
 # celerisctl が無い・scratch が無効なら従来どおり `$SD_RELEASES/.cargo-target`。
-if sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$SHA_FULL" "$BUILD"; then
+if [ "${SD_USE_CALLER_CARGO_TARGET:-0}" = 1 ] && [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  SD_CARGO_TARGET="$CARGO_TARGET_DIR"
+  sd_log "using caller CARGO_TARGET_DIR: $SD_CARGO_TARGET"
+elif sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$SHA_FULL" "$BUILD"; then
   trap 'rm -f "$GATE_TSV"; sd_scratch_touch' EXIT
 fi
 sd_log "CARGO_TARGET_DIR: $SD_CARGO_TARGET (owner ${SD_SCRATCH_OWNER:-<none: fallback>})"
@@ -491,6 +495,10 @@ run_cargo_test_step() {
 }
 run_cargo_test_step
 run_step cargo-clippy "$BUILD" -- cargo clippy --workspace -- -D warnings
+# ADR-0083: 手書き production の肥大化・巨大 inline test・gitignore された未追跡 mod を毎回可視化する。
+# 既定は warning のみ（exit 0）なので、この段が gate を落とすのは source-size-report.py 自体が
+# 壊れたときだけ（`--strict` を渡していないので閾値超過そのものでは落ちない）。
+run_step source-size-report "$BUILD" -- python3 scripts/dev/source-size-report.py
 run_step cargo-build "$BUILD" -- cargo build --release -p celeris -p celerisctl -p celeris-credentiald
 run_step pnpm-install "$BUILD/gui" -- pnpm install --frozen-lockfile
 run_step pnpm-typecheck "$BUILD/gui" -- pnpm typecheck
@@ -625,7 +633,7 @@ bundle_web
 WEB_BUNDLE_SECS="$(sd_secs_since "$WEB_BUNDLE_T0")"
 
 SCHEMA_VERSION="$(sd_schema_version_of_tree "$BUILD")" \
-  || sd_die "cannot parse SCHEMA_VERSION from crates/task-core/src/store.rs at $SHA12"
+  || sd_die "cannot parse SCHEMA_VERSION from crates/task-core/src/store/migrations.rs (or store/mod.rs, store.rs) at $SHA12"
 # `celeris` の版は Cargo.toml から読む（バイナリを起こさない。`--version` は無い）。
 CELERIS_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' "$BUILD/crates/celeris/Cargo.toml" | head -n 1)"
 if [ -z "$CELERIS_VERSION" ]; then

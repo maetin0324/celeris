@@ -694,6 +694,10 @@ Console（§3.98）はこの形だけを見る。
 
 `items[]` は `[[providers]]` の順。定義（`id` / `adapter` / `tiers` / `concurrency` / `model` = 実効モデル / `env_keys` = **キー名だけ**）は設定から、`in_use` と `cooldown` と `last_check` はスナップショット（無ければ `null`）、`stats` は §5.8 の集計。
 
+`in_use_cos`（ADR-0089、Phase R6-5）: そのプロバイダで走っている **CoS の対話 run**（Console から CoS に話しかけた一言）の数。
+CoS の対話 run は `max_concurrency` とアカウントプールのプロバイダの `concurrency` の外で走るので、`in_use` には含めず別に出す
+（`in_use` + `in_use_cos` が `concurrency` を超えることがある）。スナップショットが無ければ `null`。
+
 `last_check`（ADR-0022 D2）は直近の `POST /providers/{id}/check` の結果 `{at, result, detail}`
 （`result` は §3.27 と同じ 4 値、`detail` は人が読む一行。ADR-0022 M1）。
 **メモリだけに持つ観測値**で、celeris を再起動すると `null` に戻る（イベントにも DB にも残さない）。自動では走らないので、

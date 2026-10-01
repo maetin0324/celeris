@@ -10,7 +10,7 @@
 //! - `POST /standing-rules` / `DELETE /standing-rules/{id}` — GUI から直接編集する（**管理系**）。
 //!
 //! `DaemonSnapshot.approvals_pending` は `reports`（Phase 25）と同じ理由で **API が応答を組むときに埋める**
-//! （`crate::handlers::daemon_snapshot_with_reports` から呼ぶ `approvals_pending` 参照）。
+//! （`crate::handlers::system::daemon_snapshot_with_reports` から呼ぶ `approvals_pending` 参照）。
 
 use axum::body::Body;
 use axum::extract::{RawQuery, State};

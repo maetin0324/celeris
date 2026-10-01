@@ -316,8 +316,11 @@ pub struct ProviderView {
     pub model: Option<String>,
     /// `env` のキー名だけ（値は出さない）。
     pub env_keys: Vec<String>,
-    /// スナップショットが無ければ `null`。
+    /// スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。
     pub in_use: Option<u32>,
+    /// ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外で
+    /// 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
+    pub in_use_cos: Option<u32>,
     /// スナップショットが無い、または cooldown 中でなければ `null`。
     pub cooldown: Option<CooldownView>,
     /// ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
@@ -1004,6 +1007,10 @@ pub struct ProjectDetail {
     /// 「以前の途中目標 N 件」を出すため）。
     #[serde(default)]
     pub milestones_frozen: u32,
+    /// ADR-0079 R6-4: 上の `milestones_frozen` のうち、終端（達成・再設計・中止）でないまま凍結した行の数
+    /// （R5a は未終了の途中目標も状態のまま凍結した。GUI が「うち N 件は未終了のまま凍結」を出すため）。
+    #[serde(default)]
+    pub milestones_frozen_open: u32,
     /// 仕事の木を描くのに必要な最小限だけ（詳細は `GET /tasks/{id}`）。
     pub tasks: Vec<ProjectTaskView>,
     /// ADR-0074 D3.5（Phase F4b (h)）: 案件計画（マイルストーン Task の DAG）。現行の計画の節点と、未決の

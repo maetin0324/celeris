@@ -954,3 +954,92 @@ async fn the_timeline_lists_the_releases_that_contain_this_tasks_commits() {
         "自分のコミットだけ"
     );
 }
+
+/// ADR-0098 D7（Phase R7-10）: `PATCH /tasks/{id}` の `project_id` は案件を持たない未実行の task にだけ付けられ、
+/// 案件の primary のリポジトリも付く。案件の付け替えは 422、知らない案件は 404、run したことのある task は 409。
+#[tokio::test]
+async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
+    use task_core::{Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun};
+    let env = env_with_token();
+    let app = env.router();
+    let now = time::OffsetDateTime::now_utc();
+    let mk_project = |title: &str| {
+        let project = Project {
+            auto_advance: false,
+            slug: None,
+            archived_at: None,
+            paused_from: None,
+            id: ProjectId::new(),
+            title: title.into(),
+            request: "r".into(),
+            status: ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            created_at: now,
+            updated_at: now,
+        };
+        env.store.project_create(&project).expect("project");
+        project.id
+    };
+    let project = mk_project("agent-platform");
+    let other = mk_project("other");
+    let primary = ProjectRepo {
+        id: RepoId::new(),
+        project_id: project,
+        name: "agent-platform".into(),
+        kind: RepoKind::Git,
+        location: task_core::WorkspaceSpec::local("/srv/agent-platform"),
+        default_branch: None,
+        sync: None,
+        run: RepoRun::Auto,
+        is_primary: true,
+        created_at: now,
+    };
+    env.store.repo_create(&primary).expect("repo");
+
+    let task = seeded(&env, Status::Draft);
+    let path = format!("/api/v1/tasks/{}", task.id);
+    let resp = send(
+        &app,
+        patch_json_with(&path, &json!({"project_id": project.to_string()}), &admin()),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["fields"], json!(["project_id", "repos"]));
+    assert_eq!(body["task"]["project_id"], project.to_string());
+    assert_eq!(body["task"]["repos"][0]["name"], "agent-platform");
+
+    let resp = send(
+        &app,
+        patch_json_with(&path, &json!({"project_id": other.to_string()}), &admin()),
+    )
+    .await;
+    assert_eq!(resp.status, 422, "{}", resp.text());
+
+    let fresh = seeded(&env, Status::Ready);
+    let resp = send(
+        &app,
+        patch_json_with(
+            &format!("/api/v1/tasks/{}", fresh.id),
+            &json!({"project_id": ProjectId::new().to_string()}),
+            &admin(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 404, "{}", resp.text());
+
+    let mut ran = new_task(TaskKind::Execute, Status::Ready);
+    ran.attempts = 1;
+    env.seed(&ran);
+    let resp = send(
+        &app,
+        patch_json_with(
+            &format!("/api/v1/tasks/{}", ran.id),
+            &json!({"project_id": project.to_string()}),
+            &admin(),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 409, "{}", resp.text());
+}

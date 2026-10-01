@@ -1,6 +1,9 @@
 use crate::{
     Binding, Broker, CredentialPolicy, CredentialRef, Error, LeaseRequest, SecretEnvelope,
-    canonical_origin,
+    injection_ipc::{
+        Admission, AuthSectionRegistration, InjectCode, InjectionReply, InjectionService,
+        LiveRegistry, LiveSessionRegistration, PeerCred, SeqpacketSink,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -31,6 +34,10 @@ pub enum ControlRequest {
         revision: u64,
         origin: String,
     },
+    DescribePolicy {
+        reference: CredentialRef,
+        origin: String,
+    },
     Revoke {
         lease_id: String,
         actor_id: String,
@@ -41,14 +48,15 @@ pub enum ControlRequest {
     Grant {
         request: LeaseRequest,
     },
-}
-#[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ResolveRequest {
-    Resolve {
-        binding_token: String,
-        lease_id: String,
-        observed_origin: String,
+    // ADR-0109 D2: live isolated sessions and H3 auth sections (memory only).
+    RegisterLiveSession(LiveSessionRegistration),
+    UnregisterLiveSession {
+        session_id: String,
+    },
+    OpenAuthSection(AuthSectionRegistration),
+    CloseAuthSection {
+        session_id: String,
+        auth_section_id: String,
     },
 }
 #[derive(Serialize, Deserialize)]
@@ -64,6 +72,8 @@ pub struct IpcReply {
     pub expires_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<IpcCredential>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_login: Option<task_core::browser_wait::TrustedLogin>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct IpcCredential {
@@ -85,6 +95,18 @@ impl IpcReply {
             lease_id: None,
             expires_at: None,
             credential: None,
+            trusted_login: None,
+        }
+    }
+    fn code(code: InjectCode) -> Self {
+        Self {
+            success: false,
+            code: Some(code.code().into()),
+            binding_token: None,
+            lease_id: None,
+            expires_at: None,
+            credential: None,
+            trusted_login: None,
         }
     }
     fn err(e: Error) -> Self {
@@ -95,6 +117,7 @@ impl IpcReply {
             lease_id: None,
             expires_at: None,
             credential: None,
+            trusted_login: None,
         }
     }
 }
@@ -138,13 +161,19 @@ fn read_limited<R: Read>(r: R) -> Result<Vec<u8>, Error> {
     }
     Ok(bytes)
 }
-fn serve_one(mut stream: UnixStream, broker: &Broker, control: bool, control_pids: &[(u32, u64)]) {
+fn serve_one(
+    mut stream: UnixStream,
+    broker: &Broker,
+    registry: &LiveRegistry,
+    control: bool,
+    control_pids: &[(u32, u64)],
+) {
     let reply = match (|| -> Result<IpcReply, Error> {
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .map_err(|_| Error::Io)?;
-        let mut bytes = read_limited(&mut stream)?;
         let (uid, pid) = peer(&stream)?;
+        let mut bytes = read_limited(&mut stream)?;
         if uid != local_uid()
             || (control
                 && !control_pids
@@ -154,73 +183,81 @@ fn serve_one(mut stream: UnixStream, broker: &Broker, control: bool, control_pid
             bytes.zeroize();
             return Err(Error::Permission);
         }
+        // ADR-0103: even an admitted control PID with a valid binding/lease
+        // cannot retrieve secrets over this retired endpoint. Read only the
+        // bounded frame for orderly shutdown; never parse or consume it.
+        if !control {
+            bytes.zeroize();
+            return Err(Error::TrustedInjectionRequired);
+        }
         let response = (|| -> Result<IpcReply, Error> {
-            if control {
-                match serde_json::from_slice::<ControlRequest>(&bytes)
-                    .map_err(|_| Error::Invalid)?
-                {
-                    ControlRequest::InitializeKey => {
-                        broker.provider().initialize_key()?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Register {
-                        reference,
-                        policy,
-                        revision,
-                        secret,
-                    } => {
-                        broker
-                            .provider()
-                            .register(&reference, &policy, revision, &secret)?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Inspect {
-                        reference,
-                        revision,
-                        origin,
-                    } => {
-                        // Verification performs authenticated decryption, but never returns the secret.
-                        let _secret = broker
-                            .provider()
-                            .resolve_registered(&reference, revision, &origin)?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Revoke { lease_id, actor_id } => {
-                        broker.revoke(&lease_id, &actor_id)?;
-                        Ok(IpcReply::ok())
-                    }
-                    ControlRequest::Bind { binding } => {
-                        let token = broker.register_binding(binding)?;
-                        let mut out = IpcReply::ok();
-                        out.binding_token = Some(token);
-                        Ok(out)
-                    }
-                    ControlRequest::Grant { request } => {
-                        let grant = broker.grant(request)?;
-                        let mut out = IpcReply::ok();
-                        out.lease_id = Some(grant.lease_id);
-                        out.expires_at = Some(grant.expires_at);
-                        Ok(out)
-                    }
+            match serde_json::from_slice::<ControlRequest>(&bytes).map_err(|_| Error::Invalid)? {
+                ControlRequest::InitializeKey => {
+                    broker.provider().initialize_key()?;
+                    Ok(IpcReply::ok())
                 }
-            } else {
-                match serde_json::from_slice::<ResolveRequest>(&bytes)
-                    .map_err(|_| Error::Invalid)?
-                {
-                    ResolveRequest::Resolve {
-                        binding_token,
-                        lease_id,
-                        observed_origin,
-                    } => {
-                        let secret = broker.resolve(&binding_token, &lease_id, &observed_origin)?;
-                        let mut out = IpcReply::ok();
-                        out.credential = Some(IpcCredential {
-                            username: secret.username.clone(),
-                            password: secret.password.clone(),
-                        });
-                        Ok(out)
-                    }
+                ControlRequest::Register {
+                    reference,
+                    policy,
+                    revision,
+                    secret,
+                } => {
+                    broker
+                        .provider()
+                        .register(&reference, &policy, revision, &secret)?;
+                    Ok(IpcReply::ok())
                 }
+                ControlRequest::Inspect {
+                    reference,
+                    revision,
+                    origin,
+                } => {
+                    // Verification performs authenticated decryption, but never returns the secret.
+                    let _secret = broker
+                        .provider()
+                        .resolve_registered(&reference, revision, &origin)?;
+                    Ok(IpcReply::ok())
+                }
+                ControlRequest::DescribePolicy { reference, origin } => {
+                    let trusted = broker
+                        .provider()
+                        .describe_registered(&reference, &origin, None)?;
+                    let mut out = IpcReply::ok();
+                    out.trusted_login = Some(trusted);
+                    Ok(out)
+                }
+                ControlRequest::Revoke { lease_id, actor_id } => {
+                    broker.revoke(&lease_id, &actor_id)?;
+                    Ok(IpcReply::ok())
+                }
+                ControlRequest::Bind { binding } => {
+                    let token = broker.register_binding(binding)?;
+                    let mut out = IpcReply::ok();
+                    out.binding_token = Some(token);
+                    Ok(out)
+                }
+                ControlRequest::Grant { request } => {
+                    let grant = broker.grant(request)?;
+                    let mut out = IpcReply::ok();
+                    out.lease_id = Some(grant.lease_id);
+                    out.expires_at = Some(grant.expires_at);
+                    Ok(out)
+                }
+                ControlRequest::RegisterLiveSession(r) => Ok(registry
+                    .register(r)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
+                ControlRequest::UnregisterLiveSession { session_id } => Ok(registry
+                    .unregister(&session_id)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
+                ControlRequest::OpenAuthSection(a) => Ok(registry
+                    .open_section(a)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
+                ControlRequest::CloseAuthSection {
+                    session_id,
+                    auth_section_id,
+                } => Ok(registry
+                    .close_section(&session_id, &auth_section_id)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
             }
         })();
         bytes.zeroize();
@@ -253,7 +290,54 @@ fn socket(path: &Path) -> Result<UnixListener, Error> {
     }
     Ok(listener)
 }
+/// One `injection.sock` connection (ADR-0109 D1): one request, one reply.
+fn serve_injection(mut stream: UnixStream, service: &InjectionService) {
+    let denied = |c: InjectCode| InjectionReply {
+        v: 1,
+        request_id: String::new(),
+        ok: false,
+        receipt: None,
+        code: Some(c.code().into()),
+        redisplay_guard: None,
+    };
+    let reply = (|| -> InjectionReply {
+        if stream
+            .set_read_timeout(Some(crate::injection_ipc::IO_TIMEOUT))
+            .is_err()
+        {
+            return denied(InjectCode::InvalidRequest);
+        }
+        let Ok((uid, pid)) = peer(&stream) else {
+            return denied(InjectCode::PeerUidMismatch);
+        };
+        let (mut body, mut fds) = match crate::injection_ipc::read_request(stream.as_raw_fd()) {
+            Ok(v) => v,
+            Err(c) => return denied(c),
+        };
+        let sink = match (fds.pop(), fds.is_empty()) {
+            (Some(fd), true) => SeqpacketSink::new(fd),
+            _ => Err(InjectCode::InvalidRequest),
+        };
+        let reply = match sink {
+            Ok(mut sink) => service.handle(PeerCred { uid, pid }, &body, &mut sink),
+            Err(c) => denied(c),
+        };
+        body.zeroize();
+        reply
+    })();
+    crate::injection_ipc::write_reply(&mut stream, &reply);
+}
 pub fn serve(broker: Arc<Broker>, runtime: &Path, control_pids: Vec<u32>) -> Result<(), Error> {
+    serve_with(broker, runtime, control_pids, Admission::Attested)
+}
+/// [`serve`] with an explicit admission. Production (`main`) always uses `Attested`;
+/// other admissions exist only under the `same-uid-harness` test feature.
+pub fn serve_with(
+    broker: Arc<Broker>,
+    runtime: &Path,
+    control_pids: Vec<u32>,
+    admission: Admission,
+) -> Result<(), Error> {
     let control_pids: Vec<(u32, u64)> = control_pids
         .into_iter()
         .map(|pid| {
@@ -287,14 +371,23 @@ pub fn serve(broker: Arc<Broker>, runtime: &Path, control_pids: Vec<u32>) -> Res
     }
     let control = socket(&dir.join("control.sock"))?;
     let resolve = socket(&dir.join("resolve.sock"))?;
+    let injection = socket(&dir.join("injection.sock"))?;
+    let registry = Arc::new(LiveRegistry::default());
     let b = Arc::clone(&broker);
+    let r = Arc::clone(&registry);
     thread::spawn(move || {
         for s in control.incoming().flatten() {
-            serve_one(s, &b, true, &control_pids)
+            serve_one(s, &b, &r, true, &control_pids)
+        }
+    });
+    let service = InjectionService::new(Arc::clone(&broker), Arc::clone(&registry), admission);
+    thread::spawn(move || {
+        for s in injection.incoming().flatten() {
+            serve_injection(s, &service)
         }
     });
     for s in resolve.incoming().flatten() {
-        serve_one(s, &broker, false, &[])
+        serve_one(s, &broker, &registry, false, &[])
     }
     Ok(())
 }
@@ -309,66 +402,11 @@ pub fn call(socket: &Path, request: &[u8]) -> Result<IpcReply, Error> {
     b.zeroize();
     result
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PluginRequest {
-    protocol: String,
-    #[serde(rename = "type")]
-    kind: String,
-    capability: String,
-    request: PluginArgs,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PluginArgs {
-    profile_name: Option<String>,
-    item_ref: Option<String>,
-    url: Option<String>,
-}
-#[derive(Serialize)]
-struct PluginResponse {
-    protocol: &'static str,
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    credential: Option<IpcCredential>,
-}
-/// The private plugin pipe is the only public function that serializes a secret.
-/// The binding token is supplied out of band by the supervisor, never by plugin JSON.
-pub fn bridge_request(input: &[u8], binding_token: &str, resolve_socket: &Path) -> Vec<u8> {
-    let result = (|| -> Result<IpcCredential, Error> {
-        let req: PluginRequest = serde_json::from_slice(input).map_err(|_| Error::Invalid)?;
-        if req.protocol != "agent-browser.plugin.v1"
-            || req.kind != "credential.resolve"
-            || req.capability != "credential.read"
-        {
-            return Err(Error::Denied);
-        }
-        // profileName identifies the browser profile; it is not broker authority.
-        let _ = req.request.profile_name;
-        let lease_id = req.request.item_ref.ok_or(Error::Invalid)?;
-        let url = req.request.url.ok_or(Error::Invalid)?;
-        let origin = url_origin(&url)?;
-        let ipc = serde_json::json!({"op":"resolve","binding_token":binding_token,"lease_id":lease_id,"observed_origin":origin});
-        let bytes = serde_json::to_vec(&ipc).map_err(|_| Error::Invalid)?;
-        let reply = call(resolve_socket, &bytes)?;
-        if !reply.success {
-            return Err(Error::Denied);
-        }
-        reply.credential.ok_or(Error::Denied)
-    })();
-    match serde_json::to_vec(&PluginResponse {
-        protocol: "agent-browser.plugin.v1",
-        success: result.is_ok(),
-        credential: result.ok(),
-    }) {
-        Ok(bytes) => bytes,
-        Err(_) => b"{\"protocol\":\"agent-browser.plugin.v1\",\"success\":false}".to_vec(),
-    }
-}
-fn url_origin(url: &str) -> Result<String, Error> {
-    let rest = url.strip_prefix("https://").ok_or(Error::Invalid)?;
-    let authority = rest.split(['/', '?', '#']).next().ok_or(Error::Invalid)?;
-    canonical_origin(&format!("https://{authority}"))
+/// Retired agent-browser credential-read protocol (ADR-0103).
+/// Keep the fixed protocol response for old callers, but never contact a socket
+/// or serialize a secret. Trusted injection uses a separate controller endpoint.
+pub fn bridge_request(_input: &[u8], _binding_token: &str, _resolve_socket: &Path) -> Vec<u8> {
+    br#"{"protocol":"agent-browser.plugin.v1","success":false}"#.to_vec()
 }
 pub fn resolve_socket(runtime: &Path) -> PathBuf {
     runtime.join("celeris-credentiald/resolve.sock")

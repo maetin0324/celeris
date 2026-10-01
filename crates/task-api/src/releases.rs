@@ -51,6 +51,12 @@ pub enum ReleasePromoteError {
 pub trait ReleaseSource: Send + Sync + 'static {
     /// `releases_dir` を読む（失敗しても落ちない。読めなかったリリースは `problem` 付きで出る）。
     fn list(&self) -> ReleasesFs;
+    /// ADR-0079 R6-4: `GET /tasks/{id}/timeline` 用の一覧。タイムラインは `changes.json` と `built_at` しか
+    /// 読まないので、`on_main`（リリースごとに `git merge-base` を起こす）を求めない実装にしてよい。
+    /// 既定は [`ReleaseSource::list`] と同じ。
+    fn list_for_timeline(&self) -> ReleasesFs {
+        self.list()
+    }
     /// `<releases_dir>/<sha12>/scripts/promote.sh <sha12>` を detached で起こす。
     fn promote(&self, sha12: &str) -> Result<ReleasePromoteAccepted, ReleasePromoteError>;
 

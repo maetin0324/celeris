@@ -257,7 +257,8 @@ export function openWsClient(opts: {
       done = true;
       socket.off("data", onData);
       socket.removeAllListeners("close");
-      socket.removeAllListeners("error");
+      // Keep this now no-op handler: the caller adds its handler after resolve,
+      // and a socket reset in that gap must still have an error listener.
       socket.removeAllListeners("timeout");
       socket.setTimeout(0);
       resolve({ socket, leftover });

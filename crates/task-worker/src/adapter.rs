@@ -41,6 +41,40 @@ pub enum Terminal {
         message: String,
         usage: Option<Usage>,
     },
+    /// ADR-0090 D1: result.json の `{"type": "wait", "kind": "cluster_job", ...}`（クラスタ job の終了待ち）。
+    /// `checkpoint` は `yield` と同じ checkpoint の意味の欄を寛容に持つ生の JSON（無ければ `None`）。
+    Waiting {
+        request: task_core::cluster_job::ClusterJobWaitRequest,
+        checkpoint: Option<serde_json::Value>,
+        usage: Option<Usage>,
+    },
+}
+
+/// ADR-0090 D1: `result.json` の本文が wait の申告で、`question` を持たなければその終端（優先順位は
+/// `question` > `wait` > `summary` > `yield`。入れ子の形 `{"summary": .., "wait": {..}}` は `summary` を一緒に持つ）。
+/// JSON として読めない・申告が無ければ `None`。
+pub fn result_file_wait(text: &str, usage: Option<Usage>) -> Option<Terminal> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if value.get("question").is_some_and(|q| q.is_string()) {
+        return None;
+    }
+    wait_terminal(&value, usage)
+}
+
+/// ADR-0090 D1: `result.json` の値が wait の申告なら、その終端（不正なら `Error{retryable: true}`）。
+/// 申告が無ければ `None`（呼び出し側は従来の `question` / `summary` / `yield` の読み方に進む）。
+pub fn wait_terminal(value: &serde_json::Value, usage: Option<Usage>) -> Option<Terminal> {
+    match task_core::cluster_job::parse_wait_request(value)? {
+        Ok((request, checkpoint)) => Some(Terminal::Waiting {
+            request,
+            checkpoint,
+            usage,
+        }),
+        Err(reason) => Some(Terminal::Error {
+            message: format!("result.json has an invalid cluster job wait: {reason}"),
+            retryable: true,
+        }),
+    }
 }
 
 /// アダプタが返す run の結果。
@@ -117,6 +151,37 @@ pub trait EventSink: Send + Sync {
         _wait: &task_core::browser_wait::BrowserWait,
     ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
         Err("browser wait store unavailable".into())
+    }
+    /// Trusted browser supervisor only (ADR-0080 H3): the credential-injection section of a
+    /// browser session starts (`true`) / ends (`false`). Implementations record it in the
+    /// session's control state through the same store op as task-api's `auth-section`
+    /// endpoint, so takeover/renew are refused while it is active. Failing closed is the
+    /// caller's job.
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
+    /// Trusted browser supervisor only (ADR-0113 D3): the control gate every shim-issued agent
+    /// browser action passes before it reaches the browser. `None` (the default) makes the
+    /// browser run refuse to start (fail closed).
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        None
+    }
+    /// Trusted browser supervisor only (ADR-0100): one scrubbed live event for the session.
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
     }
     fn progress(&self, msg: &str);
     /// ADR-0048 D2（Phase 60a）: 構造化した進行（`kind` / `tool` / `summary` / `detail`）。

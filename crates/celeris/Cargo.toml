@@ -11,6 +11,7 @@ name = "celeris"
 path = "src/main.rs"
 
 [dependencies]
+celeris-credentiald = { path = "../celeris-credentiald" }
 task-core = { path = "../task-core" }
 task-worker = { path = "../task-worker" }
 task-dispatch = { path = "../task-dispatch" }

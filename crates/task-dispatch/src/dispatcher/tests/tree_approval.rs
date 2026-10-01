@@ -440,6 +440,9 @@ async fn small_root_plan_proceeds_with_notice() {
     // 強制規則で compound（深さ 2 でも planner に進む。tree_gate の `broad`）。
     child_unit["features"] =
         serde_json::json!({"expected_length": "high", "cross_cutting": "high"});
+    // ADR-0079 付記「R6-2: unit の gate 欄と kind task の既定（compound explicit）」: 共通 fixture の `gate: atomic` を外す
+    // （kind task の既定 = 明示の compound）。
+    child_unit.as_object_mut().unwrap().remove("gate");
     let root_plan = v3_plan(
         vec![stage("s1", false), stage("s2", false)],
         vec![leaf("a", "s1", &[]), child_unit, leaf("z", "s2", &[])],

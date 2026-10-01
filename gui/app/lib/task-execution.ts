@@ -81,6 +81,8 @@ const RUN_END_LABEL: Record<RunEnd["type"], string> = {
   failed: "failed",
   harness_error: "harness_error",
   cancelled: "cancelled",
+  // celeris ADR-0090 D1: クラスタ job の終了待ちで閉じた run（job が終われば続きの run）。
+  waiting: "waiting(cluster_jobs)",
 };
 
 export const RUN_END_TONE: Record<RunEnd["type"], Tone> = {
@@ -91,6 +93,7 @@ export const RUN_END_TONE: Record<RunEnd["type"], Tone> = {
   failed: "danger",
   harness_error: "danger",
   cancelled: "neutral",
+  waiting: "info",
 };
 
 /** run の終わり方のバッジ文言（`budget_exhausted` は種類も添える）。無ければ `null`（導入前の run）。 */

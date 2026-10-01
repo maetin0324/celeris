@@ -788,3 +788,124 @@ fn changing_the_assignee_to_a_node_with_the_cluster_tool_is_accepted() {
     assert_eq!(result.fields, vec!["assignee".to_string()]);
     assert_eq!(result.task.assignee.as_deref(), Some("cluster-hpc"));
 }
+
+/// ADR-0098 D7（Phase R7-10）: 案件を持たない・まだ run していない task に案件を付けると、案件の primary の
+/// リポジトリも付く。既に案件を持つ task・run したことのある task・子 task・知らない案件は拒否する。
+#[test]
+fn project_id_can_be_attached_once_to_a_project_less_task_that_never_ran() {
+    use task_core::{Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun};
+    let store = SqliteStore::open_in_memory().expect("store");
+    let now = OffsetDateTime::now_utc();
+    let mk_project = |title: &str| {
+        let project = Project {
+            auto_advance: false,
+            slug: None,
+            archived_at: None,
+            paused_from: None,
+            id: ProjectId::new(),
+            title: title.into(),
+            request: "r".into(),
+            status: ProjectStatus::Active,
+            secretary_summary: None,
+            workspace: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store.project_create(&project).expect("project");
+        project.id
+    };
+    let project = mk_project("p");
+    let other = mk_project("q");
+    let primary = ProjectRepo {
+        id: RepoId::new(),
+        project_id: project,
+        name: "agent-platform".into(),
+        kind: RepoKind::Git,
+        location: WorkspaceSpec::local("/srv/agent-platform"),
+        default_branch: None,
+        sync: None,
+        run: RepoRun::Auto,
+        is_primary: true,
+        created_at: now,
+    };
+    store.repo_create(&primary).expect("repo");
+    let attach = |id: TaskId, project_id: ProjectId| {
+        edit_task(
+            &store,
+            id,
+            TaskEdit {
+                project_id: Some(project_id),
+                ..TaskEdit::default()
+            },
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+    };
+
+    // 付けられる: draft、案件無し、未実行。primary が repos に入り、Edited に両方の欄が残る。
+    let task = task_with(Status::Draft);
+    store.insert(&task).expect("insert");
+    let result = attach(task.id, project).expect("attach");
+    assert_eq!(
+        result.fields,
+        vec!["project_id".to_string(), "repos".to_string()]
+    );
+    let stored = store.get(task.id).expect("get").expect("task");
+    assert_eq!(stored.project_id, Some(project));
+    assert_eq!(
+        stored.repos.iter().map(|r| r.repo_id).collect::<Vec<_>>(),
+        vec![primary.id]
+    );
+    // 同じ値は何もしない。別の案件への変更は 422。
+    assert!(attach(task.id, project).expect("same").fields.is_empty());
+    assert!(matches!(
+        attach(task.id, other),
+        Err(OpsError::Validation(m)) if m.contains("cannot be changed")
+    ));
+
+    // 一度でも run した task（attempts > 0）は 409 相当。
+    let mut ran = task_with(Status::Ready);
+    ran.attempts = 1;
+    store.insert(&ran).expect("insert");
+    assert!(matches!(
+        attach(ran.id, project),
+        Err(OpsError::InvalidState { .. })
+    ));
+    // blocked（何かが起きた後）も拒否。
+    let blocked = task_with(Status::Blocked);
+    store.insert(&blocked).expect("insert");
+    assert!(matches!(
+        attach(blocked.id, project),
+        Err(OpsError::InvalidState { .. })
+    ));
+    // 子 task は親に従う。
+    let mut child = task_with(Status::Draft);
+    child.parent_id = Some(task.id);
+    store.insert(&child).expect("insert");
+    assert!(matches!(
+        attach(child.id, project),
+        Err(OpsError::Validation(m)) if m.contains("parent")
+    ));
+    // 知らない案件。
+    let fresh = task_with(Status::Ready);
+    store.insert(&fresh).expect("insert");
+    assert!(matches!(
+        attach(fresh.id, ProjectId::new()),
+        Err(OpsError::ProjectNotFound(_))
+    ));
+    // 同じ PATCH の repos は案件の中で解決する（primary を足さない）。
+    let explicit = edit_task(
+        &store,
+        fresh.id,
+        TaskEdit {
+            project_id: Some(project),
+            repos: Some(vec![]),
+            ..TaskEdit::default()
+        },
+        &[],
+        OffsetDateTime::now_utc(),
+    )
+    .expect("attach with explicit repos");
+    assert_eq!(explicit.fields, vec!["project_id".to_string()]);
+    assert!(explicit.task.repos.is_empty());
+}

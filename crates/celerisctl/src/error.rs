@@ -40,7 +40,9 @@ pub fn parse_task_id(s: &str) -> Result<TaskId, CliError> {
 pub const READ_ONLY_HINT: &str = "the database is open read-only, so celerisctl cannot write to it \
      (ADR-0095): inside a Celeris worker run the production DB is read-only, and a DB whose schema is \
      newer than this celerisctl is opened read-only. Reads such as `show`/`ls` still work; ask for \
-     changes through the HTTP API or the human";
+     changes through the HTTP API or the human. To create a follow-up task from a worker run, run \
+     `celerisctl add` without `--db` inside the run (it is queued in the run's followups.json and \
+     created in the run's project when the run ends; ADR-0098)";
 
 /// stderr に出す 1 行（`error: ` は呼び出し側が付ける）。読み取り専用の書き込み失敗には
 /// `READ_ONLY_HINT` を足す（task-ops が文面に写したものも SQLite の文言で拾う）。

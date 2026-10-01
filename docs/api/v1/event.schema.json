@@ -841,6 +841,31 @@
           "const": "plan_unit",
           "description": "親の計画（plan/3）の kind task の unit から daemon が作った子 task。",
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "ADR-0098 D5（Phase R7-10）: task `task_id` の worker の run `run_id` が宣言した後続\n（`<artifacts_dir>/followups.json`）から daemon が作った task。出自は daemon が run に割り当てた\n成果物ディレクトリで決まる（run の自己申告ではない）。",
+          "properties": {
+            "worker_run": {
+              "properties": {
+                "run_id": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "$ref": "#/$defs/TaskId"
+                }
+              },
+              "required": [
+                "task_id",
+                "run_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "worker_run"
+          ],
+          "type": "object"
         }
       ]
     },

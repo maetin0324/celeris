@@ -270,6 +270,13 @@ pub(super) async fn run_worker(
         // ADR-0007 D1: 前回の run の plan.json を今回の出力と誤読しない。
         let _ = tokio::fs::remove_file(artifacts_dir.join(PLAN_FILE_NAME)).await;
     }
+    // ADR-0098 D1/D6: 後続の宣言（`followups.json`）は worker の run だけ（対話 run は `actions`、planner は計画）。
+    let followups_enabled =
+        extras.conversation_addressee.is_none() && planner_permission_mode.is_none();
+    let artifacts_dir_for_followups = artifacts_dir.clone();
+    if followups_enabled {
+        followups::clear_stale_followups(&artifacts_dir).await;
+    }
     let events = store
         .events_for(task_id)
         .map_err(|e| AdapterError::Other(format!("store: {e}")))?;
@@ -450,6 +457,25 @@ pub(super) async fn run_worker(
     } else {
         adapter
     };
+    // ADR-0098 D6: `celerisctl add` が run の中では後続の宣言になるよう、書き先を env で渡す
+    // （コンテナは同じパスで mount されるので、container の包みより前に重ねる）。
+    let adapter = if followups_enabled {
+        let run_db = task_worker::db_guard::installed().map(|g| g.db_path().to_path_buf());
+        match adapter.with_env(&followups::followups_env(
+            task_id,
+            run_id,
+            &artifacts_dir_for_followups,
+            run_db.as_deref(),
+        )) {
+            Some(wrapped) => wrapped,
+            None => {
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CELERIS_FOLLOWUPS_FILE was not applied (ADR-0098 D6)");
+                adapter
+            }
+        }
+    } else {
+        adapter
+    };
     // ADR-0043 D3（Phase 56）: コンテナで走らせる run は、ここでアダプタを包んだ複製に差し替える
     // （差し込み点はアダプタ側の `container::wrap` 1 か所）。この経路を持たないアダプタ
     // （`with_container` が `None`）はホストのまま走る。
@@ -489,6 +515,9 @@ pub(super) async fn run_worker(
     });
     // ADR-0067 D3: `store` は `sink` に move されるので、後段の未申告成果物の登録用に控えておく。
     let store_for_undeclared_scan = Arc::clone(&store);
+    // ADR-0098 D3: 後続は daemon の `[[roles]]` / `[[genres]]` で解決する（`roles` / `genres` は `sink` に move される）。
+    let roles_for_followups = roles.clone();
+    let genres_for_followups = genres.clone();
     let sink = StoreSink {
         store,
         task_id,
@@ -525,6 +554,18 @@ pub(super) async fn run_worker(
         Some(ws) => push_remote_after_run(ws, &sink, outcome).await,
         None => outcome,
     };
+    // ADR-0098 D1: run の終わり方に依らず、run がまだ lease を持っていれば宣言した後続を作る
+    // （出自 = この run。`absorb_memory` と同じく run の成否とは独立）。
+    if followups_enabled {
+        followups::absorb_run_followups(
+            store_for_undeclared_scan.as_ref(),
+            task_id,
+            run_id,
+            &artifacts_dir_for_followups,
+            &roles_for_followups,
+            &genres_for_followups,
+        );
+    }
     // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）: run が成功したら未申告の成果物を登録する。
     // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
     //   （`artifacts_dir` の外を含む）から `*.md` を拾う（従来どおり。取りこぼし防止）。

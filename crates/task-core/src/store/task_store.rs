@@ -112,6 +112,15 @@ pub trait TaskStore:
     /// ADR-0010 D2: `insert` + `Event::Created` + `extra_events` を 1 トランザクションで行う。
     fn create_task(&self, task: &Task, extra_events: Vec<Event>) -> Result<(), StoreError>;
 
+    /// ADR-0098 D5（Phase R7-10）: `create_task` と同じだが、`Event::Created.origin` に `origin` を書く
+    /// （worker の run が宣言した後続の出自）。
+    fn create_task_with_origin(
+        &self,
+        task: &Task,
+        origin: Option<crate::model::CreatedOrigin>,
+        extra_events: Vec<Event>,
+    ) -> Result<(), StoreError>;
+
     /// ADR-0074 D3.3（Phase F4a (c)）: 案件計画の提案の決定を **1 トランザクションで**適用する。
     /// `milestones` を全て `milestone_status` にし、`tasks` のうちまだ `draft` のもの（`Trigger::Cancel`
     /// のカスケードで既に終端になったもの等は飛ばす）に `trigger` を適用し、最後に `decided_event`

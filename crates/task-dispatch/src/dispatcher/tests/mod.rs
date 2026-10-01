@@ -3150,3 +3150,7 @@ mod human_gates;
 /// ADR-0079 付記 R7-5: WU の checks の不合格の記録・次の run と replan への伝達・usage
 /// （`src/dispatcher/tests/work_unit_check_failures.rs`）。
 mod work_unit_check_failures;
+
+/// ADR-0098（Phase R7-10）: worker の run が作る task は元の task の案件とリポジトリを継ぐ
+/// （`src/dispatcher/tests/followups.rs`）。
+mod followups;

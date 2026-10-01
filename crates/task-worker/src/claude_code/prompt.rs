@@ -480,6 +480,18 @@ fn delegation_instructions(artifacts: &str) -> String {
     )
 }
 
+/// ADR-0098 D6（Phase R7-10）: 親の完了を止めない独立した後続 task の起票の方法。run の中から DB には書けない
+/// （ADR-0095）ので、`followups.json` か run の中の `celerisctl add`（daemon の DB に向けたとき宣言になる）。
+fn followups_instructions(artifacts: &str) -> String {
+    format!(
+        "If a human asked you to file follow-up tasks (independent work that should not block this task), \
+         run `celerisctl add --title ... --objective ... --check-cmd ...` inside this run, or append \
+         `{{\"tasks\":[<POST /tasks body>]}}` to `{artifacts}/followups.json`. You cannot write the database \
+         directly from a run. celeris creates them as drafts when this run ends, in this task's project with its \
+         repositories; do not set a project, parent, assignee or workspace.\n"
+    )
+}
+
 /// ADR-0039 D3: 案件が作業場所を決めている run にだけ、委譲の指示に「子は同じ作業場所を継ぐ」を足す。
 /// 決めていない案件では空文字列（Phase 42 までと 1 バイトも変わらない）。
 pub(super) fn delegate_workspace_instruction(context: &RunContext) -> String {
@@ -586,6 +598,7 @@ fn build_execute_prompt(
     } else {
         out.push_str(&delegation_instructions(artifacts));
         out.push_str(&delegate_workspace_instruction(context));
+        out.push_str(&followups_instructions(artifacts));
     }
     out.push_str("When you are done:\n");
     out.push_str(&result_json_instructions(artifacts));

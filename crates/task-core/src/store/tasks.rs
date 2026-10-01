@@ -413,6 +413,7 @@ impl SqliteStore {
     pub(super) fn create_task_impl(
         &self,
         task: &Task,
+        origin: Option<crate::model::CreatedOrigin>,
         extra_events: Vec<Event>,
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
@@ -423,7 +424,7 @@ impl SqliteStore {
             task.id,
             &Event::Created {
                 task: Box::new(task.clone()),
-                origin: None,
+                origin,
             },
         )?;
         for event in &extra_events {

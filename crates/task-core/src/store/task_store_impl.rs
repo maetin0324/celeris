@@ -89,7 +89,16 @@ impl TaskStore for SqliteStore {
     }
 
     fn create_task(&self, task: &Task, extra_events: Vec<Event>) -> Result<(), StoreError> {
-        self.create_task_impl(task, extra_events)
+        self.create_task_impl(task, None, extra_events)
+    }
+
+    fn create_task_with_origin(
+        &self,
+        task: &Task,
+        origin: Option<crate::model::CreatedOrigin>,
+        extra_events: Vec<Event>,
+    ) -> Result<(), StoreError> {
+        self.create_task_impl(task, origin, extra_events)
     }
 
     fn project_plan_decide_apply(

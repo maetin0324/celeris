@@ -536,6 +536,14 @@ export type Event =
       work_unit_id: string;
     }
   | {
+      cwd: string;
+      failed: FailedWorkUnitCheck[];
+      key: string;
+      run_id: string;
+      type: "work_unit_checks_failed";
+      work_unit_id: string;
+    }
+  | {
       changed_fields?: string[];
       key: string;
       plan_id: string;
@@ -764,7 +772,14 @@ export type ClusterJobWaitState = "waiting" | "satisfied" | "timed_out" | "cance
 /**
  * ADR-0079 D4 (4)（Phase R1b）: `Event::Created.origin`。
  */
-export type CreatedOrigin = "plan_unit";
+export type CreatedOrigin =
+  | "plan_unit"
+  | {
+      worker_run: {
+        run_id: string;
+        task_id: TaskId;
+      };
+    };
 /**
  * DESIGN §5.3/§5.7 の `Check` 種別。
  */
@@ -4661,6 +4676,15 @@ export interface WorkUnitContext {
   paths?: string[];
 }
 /**
+ * ADR-0079 付記 R7-5 D1: `Event::WorkUnitChecksFailed` の不合格の検査 1 件。`detail` は判定文そのもの
+ * （`cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。
+ */
+export interface FailedWorkUnitCheck {
+  cmd: string;
+  detail: string;
+  expect_exit: number;
+}
+/**
  * D4.2 の較正値 `k_w`（同じ source の直近の `measured` run から求めた比の和）。
  */
 export interface QuotaCalibration {
@@ -8498,6 +8522,12 @@ export interface TaskEdit {
    * ADR-0044 D3: `"P1"` でも `20` でもよい。
    */
   priority?: PriorityInput | null;
+  /**
+   * ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・
+   * `draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。
+   * 既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。
+   */
+  project_id?: ProjectId | null;
   /**
    * ADR-0043 D2（Phase 52 / A1）: このタスクが使う案件のリポジトリを**名前で**差し替える
    * （`project_repos.name`。空配列で「リポジトリを使わない」）。名前は `POST /tasks` と同じ規則で

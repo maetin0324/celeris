@@ -411,6 +411,11 @@ fn conversation_runs_do_not_get_the_delegate_json_paragraph() {
     };
     let other = build_prompt(&task, &other_context, "run-other", "artifacts");
     assert!(!other.contains("artifacts/delegate.json"), "{other}");
+    // ADR-0098 D6（Phase R7-10）: 後続の起票の段落も対話でない run だけ。
+    assert!(ordinary.contains("artifacts/followups.json"), "{ordinary}");
+    assert!(ordinary.contains("celerisctl add"), "{ordinary}");
+    assert!(!secretary.contains("followups.json"), "{secretary}");
+    assert!(!other.contains("followups.json"), "{other}");
     assert!(
         other.contains(
             "この run は返事だけを書く。仕事は返事の `actions` で作る（ファイルは書けない）。"

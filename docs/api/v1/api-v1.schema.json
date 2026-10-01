@@ -4330,6 +4330,31 @@
           "const": "plan_unit",
           "description": "親の計画（plan/3）の kind task の unit から daemon が作った子 task。",
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "ADR-0098 D5（Phase R7-10）: task `task_id` の worker の run `run_id` が宣言した後続\n（`<artifacts_dir>/followups.json`）から daemon が作った task。出自は daemon が run に割り当てた\n成果物ディレクトリで決まる（run の自己申告ではない）。",
+          "properties": {
+            "worker_run": {
+              "properties": {
+                "run_id": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "$ref": "#/$defs/TaskId"
+                }
+              },
+              "required": [
+                "task_id",
+                "run_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "worker_run"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -18484,6 +18509,17 @@
             }
           ],
           "description": "ADR-0044 D3: `\"P1\"` でも `20` でもよい。"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・\n`draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。\n既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。"
         },
         "repos": {
           "description": "ADR-0043 D2（Phase 52 / A1）: このタスクが使う案件のリポジトリを**名前で**差し替える\n（`project_repos.name`。空配列で「リポジトリを使わない」）。名前は `POST /tasks` と同じ規則で\n**そのタスクの案件の中**から解決する（知らない名前・リモートと他の混在は 422、案件に属さない\nタスクで空でない `repos` を書くのも 422）。走っている run には効かず、次の run の worktree から。",

@@ -239,6 +239,9 @@ model = "fake"
 fn three_tasks_with_dependency_all_done_at_concurrency_two() {
     let env = Env::new();
     let timeline = env.root.join("timeline.log");
+    // ADR-0095 D1: `root` は DB のディレクトリで、worker の run からは読み取り専用（直下に新しいファイルを
+    // 作れない。既にある項目は書ける）。共有ログは先に作っておく。
+    std::fs::write(&timeline, "").unwrap();
     // 起動・終了時刻を共有ログに記録し、成果物を作って done を返す。
     // A/B は互いの開始を待つ。固定 sleep では高負荷時の起動遅延で重なりを観測できない。
     // 直列実行への退行は待ち合わせの上限で失敗させる。C の開始時には既に条件を満たす。

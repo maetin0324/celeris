@@ -429,7 +429,7 @@ fn with_lookup<T>(
 ) -> T {
     let path = db_path(cli_db, cfg);
     if path.exists()
-        && let Ok(store) = task_core::SqliteStore::open(&path)
+        && let Ok((store, _)) = task_core::SqliteStore::open_client(&path)
     {
         return f(&scratch::StoreLookup(&store), true);
     }

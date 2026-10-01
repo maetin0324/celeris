@@ -177,7 +177,7 @@ impl Workspace for LocalWorkspace {
         }
         command.envs(self.env.iter().cloned());
         // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
-        let mut command = crate::container::wrap(command, self.container.as_deref());
+        let mut command = crate::db_guard::launch(command, self.container.as_deref());
         command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());

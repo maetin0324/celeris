@@ -245,6 +245,8 @@ async fn run_langmem(
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
+    // ADR-0095 D2: 本番 DB を読み取り専用にした namespace で起動する（コンテナ非対応の adapter）。
+    let mut command = crate::db_guard::launch(command, None);
 
     let mut child = command.spawn().map_err(AdapterError::Spawn)?;
     // ADR-0044 §5 Phase 53 追記（Phase 55）: この run のプロセスグループを覚える（`kill_tree` の入口）。

@@ -195,7 +195,7 @@ async fn run_aider(
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
-    let mut command = crate::container::wrap(command, config.container.as_deref());
+    let mut command = crate::db_guard::launch(command, config.container.as_deref());
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

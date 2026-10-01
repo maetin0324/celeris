@@ -12,6 +12,10 @@
 # 「認証を使わない」「そのプールを設定していない」という意味を持つ）。本番は
 # `~/.config/celeris/api.token` と `~/.local/celeris/{claude,codex}-accounts` に置く。
 db = "../celeris.sqlite3"            # celerisctl --db / CELERIS_DB と同じファイルを指すこと
+# ADR-0095: worker の run（adapter・check）からは DB のディレクトリが読み取り専用に見える（既定。user namespace を
+# 使う）。直下の既存の項目（workspaces/ など）は書けるが、DB の隣に新しいファイルは作れない。無効にするのは
+# user namespace を使えない環境だけ: `db = { path = "../celeris.sqlite3", worker_read_only = false }`。
+# celerisctl は migration をしない（古い DB は拒否、新しい DB は読み取り専用。DB は daemon が作り migrate する）。
 # タスクの足回り（worktree・成果物・run のログ）の置き場（ADR-0042 D3）。
 # **書かなければ既定は `~/.local/celeris/workspaces`**（`~` は celeris の `$HOME` で展開する）。
 # 相対パスを書いたときだけ、この設定ファイルのあるディレクトリ基準になる（Phase 51 までの挙動）。

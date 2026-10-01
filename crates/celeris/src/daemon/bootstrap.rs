@@ -87,6 +87,39 @@ pub(crate) fn hostname() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// ADR-0095 D5: worker の run（adapter・check）から DB のディレクトリを読み取り専用にするガードを
+/// プロセス全体に入れる。入れる前に namespace 付きのプロセスを 1 回起動して DB が書けないことを確かめ、
+/// 確かめられなければ**起動しない**（黙って保護なしで走らない）。`[db] worker_read_only = false` なら外す。
+/// `build_dispatcher`（テストから広く呼ばれる）ではなく `run` だけが呼ぶ。DB は `build_dispatcher` が
+/// 開いて作った後なので存在する。
+pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError> {
+    if !config.db.worker_read_only {
+        tracing::warn!(
+            db = %config.db.path.display(),
+            "[db] worker_read_only = false: worker runs can write the database (ADR-0095 D5 opt-out)"
+        );
+        task_worker::db_guard::install(None);
+        return Ok(());
+    }
+    let guard = task_worker::db_guard::DbGuard::new(&config.db.path)
+        .map_err(|e| DaemonError::DbGuard(e.to_string()))?;
+    task_worker::db_guard::probe(&guard).map_err(|e| {
+        DaemonError::DbGuard(format!(
+            "cannot make {} read-only for worker runs ({e}; ADR-0095). Worker runs must not be able to \
+             write the database: enable unprivileged user namespaces for this user, or set \
+             [db] worker_read_only = false to run without the guard (not recommended)",
+            guard.db_path().display()
+        ))
+    })?;
+    tracing::info!(
+        db = %guard.db_path().display(),
+        dir = %guard.dir().display(),
+        "worker runs see the db directory read-only (ADR-0095)"
+    );
+    task_worker::db_guard::install(Some(guard));
+    Ok(())
+}
+
 /// 設定から `Dispatcher` を組み立てる。`[accounts]`/`[secrets]`/`[memory]` があればディレクトリを 0700 で作る
 /// （ADR-0024 D1、ADR-0030 D1、ADR-0033 D6）。
 pub fn build_dispatcher(

@@ -122,17 +122,16 @@ Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 
 
 ## 最終整合（task close-out、2026-10-01）
 
-**検証 sha:** `580d2684c67134d240fe08129fa42f9fd3eb1a86`（本節・PROGRESS の更新前の HEAD。`d66869f8` からは記録 commit `f28f2875` とその merge commit 自身のみが積まれており、gui/crates/docs/api・web・テストのコードは変更していない）。記録 commit は本更新の後に積む。
+**検証 sha:** `d95b1653859d4dd5e3ded68b0abbba793a3a3eac`（前の子 `01M3WCAQ762PKQ75CR6K03236M` の成果を fast-forward で取り込んだ HEAD。記録 commit は本更新の後に積む）。
 
-- `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api` → exit 0（差分なし）。
-- V1: `corepack pnpm@11.27.0 -C gui install --frozen-lockfile --prefer-offline` → exit 0。`test` → exit 0（84 files / 1249 passed）。`typecheck` → exit 0。`build` → exit 0。
-- V2: `corepack pnpm@12.6.0 -C web install --frozen-lockfile` → exit 0。`typecheck` → exit 0。`lint` → exit 0（既存 style/useTemplate info 1 件、warning/error 0）。`test` → exit 0（Vitest 24 files / 178 passed、Node test 41 passed / 0 fail）。`build` → exit 0。`gen:types --check` → exit 0（stale なし）。`check:boundaries` → exit 0。`check:secrets` → exit 0。`check:parity --require-phase 6` → exit 0。
-- `corepack pnpm@12.6.0 -C web e2e parity/` → exit 0、103 passed / 8 skipped（111 total）。skip は screenshot fixture 5 件と staging 環境が必要な 3 件。
-- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t"; done` → 対象 7 本（前回記録時の 6 本から `prepare_timeout_test.sh` が増えている）すべて exit 0。
-- `cargo test --workspace --no-fail-fast` → **exit 0**。ログは run 01M3WMNF3G4BHXFBF8GNGZCYRG の artifacts `cargo-test-workspace.log` に保存。118 個の `test result:` 行を合計して workspace 全体で **3206 passed / 0 failed / 12 ignored**。失敗テストなし。`instance_handoff` バイナリ（8 tests）も含め全バイナリ ok（`a_stale_heartbeat_promotes_the_standby` は 60.52s で ok）。前々回の記録にあった `cargo test --workspace`（no-fail-fast なし）での `instance_handoff` 3 passed/5 failed（namespace probe `Operation not permitted` 3 件、dispatch/standby 期待値不成立 2 件）は、同じコード状態で `--no-fail-fast` 付き・単独含めて全体を再実行した今回は再現せず、全 8 tests が ok だった。cargo は既定で最初に失敗したバイナリで止まるため、前々回の記録は後続バイナリの総数を含んでおらず受け入れ条件未達だった。今回は失敗ゼロのため個別の再現切り分けは不要。
-- `cargo clippy --workspace -- -D warnings` → exit 0、warning 0。
+- `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api` → exit 0（差分なし）。`git merge-base --is-ancestor d95b1653 HEAD` → exit 0。
+- V1: 指定コマンド `corepack pnpm@11.27.0 -C gui install --frozen-lockfile --prefer-offline` は pnpm store DB を開けず exit 1。store を `/tmp/celeris-pnpm-store` に明示して install を再実行 → exit 0。その後 test 84 files / 1249 passed、typecheck、build → 各 exit 0。
+- V2: `corepack pnpm@12.6.0 -C web install --frozen-lockfile` は store を `/tmp/celeris-pnpm-store` に指定して exit 0。typecheck、lint（info 1、warning/error 0）、test（Vitest 24 files / 178 passed、Node 41 passed / 0 failed）、build、`gen:types --check`、`check:boundaries`、`check:secrets`、`check:parity --require-phase 6` → 各 exit 0。
+- parity e2e: 初回 `corepack pnpm@12.6.0 -C web e2e parity/` は 102 passed / 8 skipped / 1 failed（cutover spec の `cp: cannot stat .../.pnpm-store/v11`）。repo root に一時 store を用意して同コマンドを再実行 → exit 0、103 passed / 8 skipped（111 total）。skip は screenshot fixture 5 件と staging 専用 3 件。
+- selfdeploy: `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → 対象 7 本すべて exit 0。完了 parity commit の祖先検査 → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo test --workspace --no-fail-fast` は初回・許可された再実行とも exit 101、両方とも 25 targets failed。失敗群は `celeris --test instance_handoff`（namespace worker DB guard `Operation not permitted`、takeover/standby 期待値不成立）、e2e の worker DB guard を使う複数 suite（同じ user namespace 制約と派生する delegation/dispatch 失敗）、task-api/task-worker の browser isolation・restore・egress suite（`unshare: Operation not permitted` / `NoChildPid`）。初回 `browser_shared_cdp::real_shared_cdp_and_auth_section` は sandbox TCP relay 失敗、再実行では再現しなかった。crates/ は本 task で変更していない。失敗 test 名と完全な2ログは run artifacts の `cargo-test-first.log` / `cargo-test-retry.log` に保存。
 
-前回 final-verify の記録は `gen:types --check` の stale を見落としていた。今回の HEAD では事前・V2 内の生成型 check と e2e の該当テストが通り、stale はなかった。前々回の記録は `cargo test --workspace`（no-fail-fast なし）の失敗時出力から workspace 全体の passed 総数を確定できていなかった点が受け入れ条件未達だったが、今回 `--no-fail-fast` で全バイナリを走らせ切り、総数(3206 passed / 0 failed / 12 ignored)と失敗ゼロを確認した。
+未解決: Rust workspace gate はこの環境で二度失敗。namespace を要する crates/ の試験と instance handoff の環境依存失敗は web 差分範囲外のため修正せず、main の別 task で扱う。V1/V2・parity e2e・selfdeploy は合格。検証 SHA は記録更新前の `d95b1653…` で、記録 commit 自身は含まない。
 
 ### adr-place の記録
 

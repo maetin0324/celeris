@@ -80,7 +80,7 @@ P5-01〜P5-04 完了。Latency は 30 path で URL/見出し最大 69.4/90.1 ms�
 
 ## Web GUI Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備）
 
-P6-01 の web 配布物、P6-02 の ADR-0096・systemd unit・非 blocking release 段、P6-03 の dogfood 手順を整備。dogfood は H6 決定まで未開始。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は 261 passed、`releases_api` の user scope bus 接続エラー 2 件のみを人の判断に従い環境由来として除外（同 suite 6 passed / 2 failed、再実行でも再現）。H10 の staging は release `bf54b41ad627` で verify exit 0・web parity 3 passed。N-1 互換は schema 差で `live_ok=false`。H6・H9 は人の決定待ち、H7 は配信切替判断待ち。詳細は [progress/phase-web.md の Phase 6 節](progress/phase-web.md#phase-6p6-01p6-03-完了-2026-10-01並行運用の準備p6-04-以降は未着手)。
+P6-01 の web 配布物、P6-02 の ADR-0096・systemd unit・非 blocking release 段、P6-03 の dogfood 手順を整備。dogfood-mode=a（本番 daemon 向けに loopback で起動）の人の回答は得たが、2026-10-01 時点では本番 release・unit・認証ファイルが未設置で gateway は未起動。LAN 内の別端末への公開方針も回答済みだが、port・経路は未決定。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は 261 passed、`releases_api` の user scope bus 接続エラー 2 件のみを人の判断に従い環境由来として除外（同 suite 6 passed / 2 failed、再実行でも再現）。H10 の staging は release `bf54b41ad627` で verify exit 0・web parity 3 passed。N-1 互換は schema 差で `live_ok=false`。H6・H9 は人の決定待ち、H7 は配信切替判断待ち。詳細は [progress/phase-web.md の Phase 6 節](progress/phase-web.md#phase-6p6-01p6-03-完了-2026-10-01並行運用の準備p6-04-以降は未着手)。
 ## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）
 
 - 認証区間（ADR-0080 H3）を worker → store op（task-api `auth-section` と共通）→ control 状態へ配線、API で takeover/renew を 409 拒否、実 `forward_events` が区間中 progress・artifact・live event を 0 件にする。詳細・証拠は [phase-browser-3](progress/phase-browser-3.md)。

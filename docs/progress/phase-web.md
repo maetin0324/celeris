@@ -1,7 +1,7 @@
 # PROGRESS — Web GUI（ADR-0081、`web/`）
 
 ---
-tasks: [01M3W79QE2ZD22YW7P499PZKPP]
+tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D]
 ---
 
 計画の正本: [implementation plan](../web/implementation-plan.md)、[feature parity matrix](../web/feature-parity.md)、[ADR-0081](../adr/0081-web-spa-frontend.md)。Phase 0 の記録は [PROGRESS.md](../PROGRESS.md#web-gui-phase-02026-09-29設計移行計画) に残す。
@@ -101,6 +101,12 @@ P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-0
 - `verify.sh bf54b41ad627` は exit 0、`verify.json.ok=true`。本番 DB の読み取り専用 snapshot（schema 34）を staging `:7711` で schema 36 に migrate。check 1〜4・4b・4c・6 はすべて true。gui `:7701` と web gateway `127.0.0.1:7720` が同時に healthy（どちらも release `bf54b41ad627`）。web/e2e/parity/real-staging-readonly.spec.ts は実 staging celeris に対して 3 passed / exit 0。読み取り e2e は主要 GET と SPA 6 画面のみ。gateway は hook 終了時に停止し、`:7701/:7711/:7712/:7720` に残存 listener がないことを確認。本番 `:7700/:7710` には接続していない。
 - `verify.json.live_ok=false`: check 5 の N-1 binary `7fbfc347b240`（schema 34）は、新 release が schema 36 に migrate した後の snapshot を読めず失敗した。`verify.json.ok=true` と区別して扱う。初回の sandbox 内 verify は worker DB guard の user namespace probe が EPERM で check 1 に失敗し、権限のある staging 実行で再試行して上記の exit 0 を得た。
 - 生ログ: `/var/lib/celeris/workspaces/01M3W79QAQ06PG1M0MCK5HRZ5K/artifacts/release-schema36-retry.log`、`verify-schema36-retry.log`、`web-parity-e2e.log`、`web-gateway.log`、`staging-state/staging/logs/e2e-staging.log`。途中失敗のログも同じ artifacts の `release-schema36.log`、`verify-schema36.log` に保存。
+
+### P6-03 dogfood 開始待ち（2026-10-01、task 01M3WAKKJQXT79DDDFCF9F5Q3D）
+
+人の回答は dogfood-mode=a（loopback `127.0.0.1:7720` の web gateway を本番 daemon `127.0.0.1:7710` に向けて起動し、PC 1440px・スマホ 390px を読み取りだけで確認）に加え、LAN 内の別端末からアクセス可能にする方針。H6 の期間・合格条件は未決定で、cutover は行わない。公開 port と接続経路も未決定。
+
+実態は**未開始**。staging で `verify.sh` exit 0・読み取り parity 3 passed の release `bf54b41ad627` は前 run の staging 領域にあるが、本番 release ディレクトリにない。本番側には web unit と専用 password・session secret・env がなく、この run の worktree 内だけの編集制約と user systemd bus の接続失敗（`No data available`）により設置・起動していない。したがって web `/healthz` の release 一致と PC/スマホ幅の Playwright は未確認。既存 gui/ の `127.0.0.1:7700/healthz` は 200、release `7fbfc347b240`。本番 daemon の `:7710` は待ち受け中（未認証 `/healthz` は 401）。開始できた時点で [dogfood の状態と問題記録](../web/dogfood.md) を更新する。
 
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 

@@ -1,18 +1,28 @@
 # web phase 6 P6-03: dogfood の準備
 
-状態: 未開始
+---
+tasks: [01M3WAKKJQXT79DDDFCF9F5Q3D]
+---
 
-この文書は人が開始を決めた後の手順である。H6（実施期間と合格条件）が人に決まるまで dogfood を開始しない。web/ を起動して本番 daemon に接続する作業も、以下の開始条件を満たしてから行う。gui/（`:7700`）は止めず、並行して使える状態を保つ。
+状態: 開始待ち（2026-10-01、人の dogfood-mode=a と LAN 内の別端末への公開方針は回答済み。gateway は未起動）
+
+人は P6-03 の gateway 起動と読み取り確認を選んだ。H6（実施期間と合格条件）は後から人が決め、決まるまで cutover はしない。gui/（`:7700`）は止めず、並行して使える状態を保つ。この run では本番への設置・起動ができていないため、開始日は未記入とする。
 
 ## 1. 開始条件
 
-1. 人が H6 の期間、合格条件、判定日を決め、`docs/PROGRESS.md` の dogfood 節に記録する。
+1. 人が H6 の期間、合格条件、判定日を決め、`docs/PROGRESS.md` の dogfood 節に記録する。P6-03 の起動許可は回答済み。H6 が未決定の間は cutover をしない。
 2. 人が H9（並行運用中のブラウザ通知の扱い）を決める。現行の暫定方針は web/ の origin で利用者が許可したときだけ通知すること（[実装計画](implementation-plan.md) §3）。dogfood で許可するかも記録する。
-3. P6-02 の `celeris-web@.service` と release の web 段を確認し、H10 の staging 実 celeris 確認を人が完了する。[並行運用手順](parallel-operation.md) §2 と [ADR-0096](../adr/0096-web-parallel-operation.md) D4 に従い、release の `gate.json` の `web.ok: true`、`web/app/`、staging の `/healthz`・ログイン・gui/ の継続稼働を確認して結果を記録する。H10 はこの文書の作成時点では未確認である。
+3. P6-02 の `celeris-web@.service` と release の web 段を確認する。H10 の staging 実 celeris 確認は release `bf54b41ad627` で完了済み（`verify.sh` exit 0、読み取り parity 3 passed）。本番で使う release の設置と `gate.json` の `web.ok: true` は本番側で再確認する。
 
-本番への配信切替や本番用の公開 port は、この開始判断に含めない。H2 により本番 port は未決定であり、以下は loopback `127.0.0.1:7720` だけを使う。
+本番への配信切替は、この開始判断に含めない。起動時の bind は loopback `127.0.0.1:7720`。人は LAN 内の別端末からも使える公開方針を回答したが、公開 port・到達経路・Host 許可設定は未決定であり、公開作業も未実施。別端末からのアクセスは確立後に検証する。
 
-## 2. 手順（開始条件がそろった後に人が実施）
+### 2026-10-01 の開始待ち理由
+
+- staging 合格済み release `bf54b41ad627` は前 run の staging 領域にあるが、本番 `~/.local/celeris/releases/` にはない。本番にある release の `gate.json` は web 段の成功を示さず、`web/app/` もない。
+- `~/.config/systemd/user/celeris-web@.service`、`~/.config/celeris/web.password`、`web.session-secret`、`web.env` は未設置。この run は worktree 外を編集できず、user systemd bus にも接続できない（`No data available`）。
+- `127.0.0.1:7700/healthz` は 200、release `7fbfc347b240`。`:7710` は待ち受け中で、未認証の `/healthz` は 401。`:7720` は待ち受けていない。起動後の `/healthz`・PC 1440px・スマホ 390px の Playwright 確認は未実施。
+
+## 2. 手順（本番設置・起動が可能になったとき）
 
 ### 本番 daemon に向ける
 

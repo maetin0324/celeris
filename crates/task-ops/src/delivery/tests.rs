@@ -1,5 +1,6 @@
 use super::*;
 use std::fs;
+use std::path::PathBuf;
 use task_core::*;
 #[test]
 fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
@@ -395,4 +396,267 @@ fn department_fallback_tree_child_and_outside_project_create_no_delivery() {
             .is_none()
     );
     assert!(store.delivery_get(task.id).unwrap().is_none());
+}
+
+struct SkipFixture {
+    store: SqliteStore,
+    task: Task,
+    policy: DeliveryPolicy,
+    root: PathBuf,
+    repo: PathBuf,
+    branch: String,
+    _dir: tempfile::TempDir,
+}
+
+/// ADR-0099 D2: 対象案件・repo 1 つ・assignee 無しの root（既定部署なし）。
+fn skip_fixture() -> SkipFixture {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = time::OffsetDateTime::now_utc();
+    for (id, parent, kind) in [
+        ("cos", None, OrgKind::Secretary),
+        ("engineering", Some("cos"), OrgKind::Department),
+        ("worker", Some("engineering"), OrgKind::Section),
+    ] {
+        store
+            .org_upsert(&OrgNode {
+                id: id.into(),
+                parent_id: parent.map(str::to_string),
+                name: id.into(),
+                kind,
+                genre: None,
+                brief: String::new(),
+                profile: Default::default(),
+                position: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+    }
+    let project = Project {
+        auto_advance: false,
+        slug: None,
+        id: ProjectId::new(),
+        title: "test".into(),
+        request: "fix".into(),
+        status: ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("repo");
+    fs::create_dir(&p).unwrap();
+    let git = |args: &[&str]| {
+        let out = crate::changes::git(&p, args, Duration::from_secs(10)).unwrap();
+        assert!(out.ok, "{}", out.stderr);
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["config", "user.name", "test"]);
+    git(&["commit", "--allow-empty", "-m", "base"]);
+    let row = ProjectRepo {
+        id: RepoId::new(),
+        project_id: project.id,
+        name: "repo".into(),
+        kind: RepoKind::Git,
+        location: WorkspaceSpec::Local {
+            path: p.clone(),
+            mode: None,
+        },
+        default_branch: Some("main".into()),
+        sync: None,
+        run: Default::default(),
+        is_primary: true,
+        created_at: now,
+    };
+    store.repo_create(&row).unwrap();
+    let spec: crate::add::NewTaskSpec = serde_json::from_value(serde_json::json!({"title":"fix","objective":"implement","acceptance":[{"type":"reviewer","text":"works"}],"project_id":project.id,"repos":["repo"]})).unwrap();
+    let mut task = crate::add::create_task_with_roles(&store, spec, &[], &[], now).unwrap();
+    task.assignee = None;
+    let branch = format!("celeris/{}", task.id);
+    git(&["checkout", "-b", &branch]);
+    git(&["commit", "--allow-empty", "-m", "implemented"]);
+    let root = dir.path().join("tasks");
+    let fixture = SkipFixture {
+        store,
+        task,
+        policy: DeliveryPolicy {
+            projects: vec![project.id.to_string()],
+            repo: p.clone(),
+            default_departments: Default::default(),
+        },
+        root,
+        repo: p,
+        branch,
+        _dir: dir,
+    };
+    fixture.write_marker(serde_json::json!([{"name":"repo","kind":"git","source":fixture.repo,"dir":fixture.repo,"branch":fixture.branch}]));
+    fixture
+}
+
+impl SkipFixture {
+    fn write_marker(&self, repos: serde_json::Value) {
+        let taskdir = self.root.join(self.task.id.to_string());
+        fs::create_dir_all(&taskdir).unwrap();
+        fs::write(
+            taskdir.join("worktree.json"),
+            serde_json::json!({"repo":self.repo,"dir":self.repo,"branch":self.branch,"base":"","base_kind":"main","repos":repos}).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn begin(&mut self) -> Option<Delivery> {
+        begin(
+            &self.store,
+            &mut self.task,
+            &self.root,
+            &self.policy,
+            "w",
+            "r",
+        )
+        .unwrap()
+    }
+
+    fn skips(&self) -> Vec<(DeliverySkipReason, String, Option<String>)> {
+        self.store
+            .events_for(self.task.id)
+            .unwrap()
+            .into_iter()
+            .filter_map(|(_, e)| match e {
+                Event::DeliverySkipped {
+                    reason,
+                    detail,
+                    head,
+                } => Some((reason, detail, head)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn head(&self) -> String {
+        let out = crate::changes::git(
+            &self.repo,
+            &["rev-parse", &self.branch],
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        out.stdout.trim().to_string()
+    }
+}
+
+#[test]
+fn delivery_skip_multiple_repos() {
+    let mut f = skip_fixture();
+    let extra = f.task.repos[0].clone();
+    f.task.repos.push(extra);
+    assert!(f.begin().is_none());
+    let skips = f.skips();
+    assert_eq!(skips.len(), 1);
+    assert_eq!(skips[0].0, DeliverySkipReason::MultipleRepos);
+    assert!(skips[0].1.contains('2'), "{}", skips[0].1);
+    assert_eq!(skips[0].2, None);
+    assert_eq!(f.task.acceptance.len(), 1, "no merge criterion");
+}
+
+#[test]
+fn delivery_skip_no_marker() {
+    let mut f = skip_fixture();
+    fs::remove_file(f.root.join(f.task.id.to_string()).join("worktree.json")).unwrap();
+    assert!(f.begin().is_none());
+    let skips = f.skips();
+    assert_eq!(skips.len(), 1);
+    assert_eq!(skips[0].0, DeliverySkipReason::NoMarker);
+    assert!(skips[0].1.contains("worktree.json"));
+    assert!(f.store.delivery_get(f.task.id).unwrap().is_none());
+}
+
+#[test]
+fn delivery_skip_branch_mismatch() {
+    let mut f = skip_fixture();
+    f.write_marker(serde_json::json!([{"name":"repo","kind":"git","source":f.repo,"dir":f.repo,"branch":"celeris/other"}]));
+    assert!(f.begin().is_none());
+    let skips = f.skips();
+    assert_eq!(skips.len(), 1);
+    assert_eq!(skips[0].0, DeliverySkipReason::BranchNameMismatch);
+    assert!(skips[0].1.contains("celeris/other"));
+}
+
+#[test]
+fn delivery_skip_department_unresolved() {
+    let mut f = skip_fixture();
+    assert!(f.begin().is_none());
+    let skips = f.skips();
+    assert_eq!(skips.len(), 1);
+    assert_eq!(skips[0].0, DeliverySkipReason::DepartmentUnresolved);
+    assert_eq!(skips[0].2.as_deref(), Some(f.head().as_str()));
+    assert!(f.store.delivery_get(f.task.id).unwrap().is_none());
+    // 既定部署を設定すれば同じ root でも delivery が作られる。
+    let project = f.task.project_id.unwrap().to_string();
+    f.policy
+        .default_departments
+        .insert(project, "worker".into());
+    let d = f.begin().unwrap();
+    assert_eq!(d.department, "engineering");
+    assert_eq!(f.skips().len(), 1);
+}
+
+#[test]
+fn delivery_skip_once_per_head() {
+    let mut f = skip_fixture();
+    assert!(f.begin().is_none());
+    assert!(f.begin().is_none());
+    assert_eq!(f.skips().len(), 1, "same (reason, head) is recorded once");
+    let first = f.head();
+    let out = crate::changes::git(
+        &f.repo,
+        &["commit", "--allow-empty", "-m", "more"],
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    assert!(out.ok, "{}", out.stderr);
+    assert!(f.begin().is_none());
+    assert!(f.begin().is_none());
+    let skips = f.skips();
+    assert_eq!(skips.len(), 2, "a new head is reported again");
+    assert_eq!(skips[0].2.as_deref(), Some(first.as_str()));
+    assert_eq!(skips[1].2.as_deref(), Some(f.head().as_str()));
+    // head の無い理由も同じ理由なら 1 件。
+    fs::remove_file(f.root.join(f.task.id.to_string()).join("worktree.json")).unwrap();
+    assert!(f.begin().is_none());
+    assert!(f.begin().is_none());
+    assert_eq!(f.skips().len(), 3);
+}
+
+#[test]
+fn delivery_skip_tree_child_and_out_of_policy_emit_nothing() {
+    let mut f = skip_fixture();
+    // 対象外の案件（marker も部署も無いが、何も積まない）。
+    f.policy.projects.clear();
+    fs::remove_file(f.root.join(f.task.id.to_string()).join("worktree.json")).unwrap();
+    assert!(f.begin().is_none());
+    assert!(f.skips().is_empty());
+    // 対象案件の木の子。
+    f.policy
+        .projects
+        .push(f.task.project_id.unwrap().to_string());
+    let parent = TaskId::new();
+    f.task.tree = Some(TreeInfo {
+        root_id: parent,
+        depth: 2,
+        parent_unit: Some(ParentUnit {
+            task_id: parent,
+            plan_id: "plan".into(),
+            unit_key: "child".into(),
+            stage: "stage".into(),
+            attempt: 1,
+        }),
+        base_commit: None,
+    });
+    assert!(f.begin().is_none());
+    assert!(f.skips().is_empty());
+    assert!(f.store.delivery_get(f.task.id).unwrap().is_none());
 }

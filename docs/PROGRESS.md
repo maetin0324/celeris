@@ -198,6 +198,12 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 ## 時間依存試験の決定化（完了日 2026-10-02、[ADR-0125](adr/0125-deterministic-time-tests.md)）
 
 - 方式: (1) `a_wait_parks_the_task_polls_and_resumes_as_a_continuation` は注入時計 + 状態/event 待ち、(2) `every_cargo_path_uses_the_scratch_target_dir` は状態/event 待ち、(3) `command_checks_are_re_executed_in_workspace` は試験 workspace が timeout 結果を注入、(4) `real_broker_browser_injection_receipt_and_origin_guards` は CDP ready 待ち + 試験専用遅延、(5) `controller_kill_leaves_no_runtime_processes` は SIGSTOP/SIGCONT stutter + 同期フック + process 終了待ち、(6) `tick_prunes_the_oldest_terminal_workspace_and_records_an_event` は `target/` 消滅と `WorkspacePruned` event 到着を 1 つの待ちループで待つ（状態/event 待ち）。原因、意図を保つ条件、詳細な方式は [ADR-0125](adr/0125-deterministic-time-tests.md) と[調査一覧](progress/time-dependent-tests.md)を参照。
+- (1) `a_wait_parks_the_task_polls_and_resumes_as_a_continuation` — 原因: 旧 `tick_until` が 200 / 400 tick の上限と各 tick 後の 20 ms sleep で、別 OS thread の偽 poller と worker の完了速度を仮定していた。poll 間隔は注入時計だが、結果の受信は実 scheduler に依存し、負荷で完了が遅れると wait 状態到達前に tick 数を尽きさせ「200 ticks で条件に届かない」にしていた。方式: (a)+(b) で `test_now` 注入時計を維持しつつ `Blocked`・`ClusterJobWaitPolled`・`Satisfied`・`Done` を保存状態・event の到着で待ち、tick 回数は失敗条件から外して壁時計 60 秒を保険にする。poll が 1 回だけ・event 重複なし・continuation が job 最終状態を前置きにして `Done` になる検査は元のまま残す。
+- (2) `every_cargo_path_uses_the_scratch_target_dir` — 原因: 旧 `run_until(..., 800, Done)` が最大約 16 秒の tick 予算で並列 WU・checks・統合・reviewer を走らせ、レビューが `Reviewing` を経由する間に 800 tick に達すると `Reviewing` のまま失敗していた。tick 数は `TargetDirAdapter` の 50 ms 遅延や worktree・shell 起動の実時間を測れず、負荷で進捗と一致しなかった。方式: (b) で各 WU run・check・統合 check・review check の記録を追って最終 task の `Done` 状態を待ち、`run_until_state` の壁時計 60 秒を保険にする。`Reviewing` を成功扱いにせず、全 `CARGO_TARGET_DIR` が owner ごとの scratch target と一致する検査を保持する。
+- (3) `command_checks_are_re_executed_in_workspace` — 原因: 実 `LocalWorkspace` で `test -f`・`exit 7`・`sleep 30` を 3 秒 timeout（timeout 時 6 秒で 1 回再試行）で順に実行していたため、負荷で短い shell の起動自体が遅れると存在するファイルや期待終了コードのケースまで `timed out` と誤判定する危険があった。方式: (d) で通常の pass/fail 判定は負荷で誤判定されない長さの timeout を保険として実 `LocalWorkspace` で検査し、timeout / 再試行の枝は `ScriptedWorkspace` が `sleep 30` に明示的な timeout 結果を注入して決定的にする。3 秒→6 秒の 1 回再試行・最終 `timed out` の文言・期待 exit 7・欠落ファイルの不合格は保持する。
+- (4) `real_broker_browser_injection_receipt_and_origin_guards` — 原因: `IsolatedRuntime::launch` の直後に `Target.createTarget` を送っていたが、runtime ready（bwrap init と egress relay の準備）と browser の CDP pipe が応答できる時点は別であり、browser 起動が遅れると CDP 応答の 5 秒 poll timeout が `page target: SinkFailed` にまとまっていた。方式: (b)+(d) で `Browser.getVersion` の有効応答を CDP ready 条件として 60 秒の保険期限で待ってから page target を作り、応答ごとの timeout は試験用 feature のフックで 30 秒以上に差し替える。ready 後に `SinkFailed` が起きれば実障害として失敗を維持し、receipt に秘密が無いことと origin 不一致・cross-origin iframe・auth section 外の拒否を保持する。
+- (5) `controller_kill_leaves_no_runtime_processes` — 原因: controller `SIGKILL` 後の PID 生存判定が `/proc/<pid>` 存在のみだと subreaper 配下で未 reap の zombie を生存と誤算するほか、bwrap の info-fd 報告から init が `PR_SET_PDEATHSIG` を設定するまでの窓で controller が死ぬ競合があり、scheduler 任せの順序では境界が再現できなかった。方式: (c)+(d)、終了判定は (b) で、試験フックで info-fd 報告直後に init を `SIGSTOP` し、subreaper も `SIGSTOP` したまま controller を `SIGKILL` してから `SIGCONT` する stutter で順序を固定する。生存判定は `Z` / `X` と starttime 不一致を除外し、同一 process の消滅・zombie 化を 60 秒の保険で待ち、継承した `SIGCHLD=SIG_IGN` による auto-reap 防ぐため試験本体・subreaper で SIGCHLD の既定値と mask を復元する。
+- (6) `tick_prunes_the_oldest_terminal_workspace_and_records_an_event` — 原因: `prune_one_workspace` は削除を別スレッドに逃がしてから `WorkspacePruned` event を追記するが、旧試験は `tick()` 後に `target/` の消滅だけを `for _ in 0..100`（20 ms sleep、約 2 秒）の固定回数で待って直後に event を読んでいた。負荷では unlink が終わっても event の sqlite 書き込みが未完了の窓があり、`cleanup_and_disk.rs:97` の assert が先に落ちていた。方式: (b) で固定回数ループを削除し、`target/` の消滅と `store.events_for` に期待の `WorkspacePruned { removed: ["repos/benchfs/target"] }` が現れることの両方を `wait_for_prune` の 1 つの待ちループで確認する。60 秒の `STATE_WAIT_GUARD` は超えたら現在の `events` と `target_dir.exists()` を出して `panic!` する保険で、`target/` 消滅・repo dir 残存・`removed` 中身の assert は元のまま保持する。
 - 2026-10-02 単独再実行: `cargo test -p task-dispatch --lib cluster_job_wait` 3回、各 exit 0 / 5 passed。`cargo test -p task-dispatch --lib every_cargo_path_uses_the_scratch_target_dir` 3回、各 exit 0 / 1 passed。`cargo test -p task-dispatch --lib command_checks_are_re_executed_in_workspace` 3回、各 exit 0 / 1 passed。
 - browser 試験: `unshare -U -r true` は exit 1（uid_map の `Operation not permitted`）。`cargo test -p task-worker --test browser_injection_wire` を3回実行、各 exit 101（各回 inner + delayed scripted の2 passed、real browser の `real_broker_browser_injection_receipt_and_origin_guards` は unshare の `Operation not permitted` で失敗）。`cargo test -p task-worker --test browser_runtime_isolated controller_kill_leaves_no_runtime_processes -- --exact` は exit 101（helper 起動時 `NoChildPid`、launch-info 前に終了し stutter 本体に未到達）。SIGSTOP stutter 条件での今回の実行も userns 不可のため未実施。skip 扱い・成功扱いにはしていない。過去の [kill 再実行記録](progress/time-dependent-tests-kill.md)には userns が許可された環境での stutter 5/5 pass がある。
 - (5) final review の bwrap zombie 証拠失敗は、継承した `SIGCHLD=SIG_IGN` による auto-reap と整合する。試験本体・subreaper で SIGCHLD の既定値と mask を復元し、reaper の停止と zombie の PPid も検証するよう修正した。[再現・修正記録](progress/time-dependent-tests-kill.md)。
@@ -711,3 +717,41 @@ $ curl -s http://127.0.0.1:7720/healthz   # release が <old_sha12> に戻った
 
 - D1 の根因（事故時の release 木で offline install が exit 0 のまま `node_modules` を作らなかった経路の確定）は ADR-0135 に記載のとおり未確定。D1 の検査（node_modules と import 解決の必須化）はどの根因でも壊れた release を通さないため、根因の確定は release の修正を妨げない。
 - `deploy/systemd/celeris-web-lan.*` の実機への install・`daemon-reload`・既存 unit との置き換えは本番 host の操作であり、このWUでは実行していない（上記「人が実行する手順」参照）。
+
+### main 取り込みと SD_GATE_SKIP_WEB の扱い（work unit `merge-main`、final review 差し戻し対応）
+
+final review で、このタスクの branch が main の `f1904ecd`（release.sh の web 段を既定で skip にする変更、`SD_GATE_SKIP_WEB` の既定を 1 に）を含んでおらず、merge すると新設の `release_web_bundle_requires_deps.sh` だけが「web steps: skipped — SD_GATE_SKIP_WEB=1」で落ちる、という技術的欠陥を指摘された。対応は以下のとおり。
+
+- `git merge main`（`f1904ecd` と `5d6df9f3` を含む main）を実行。`git merge-tree --write-tree HEAD main` で事前に衝突なしを確認済みで、実merge も `docs/PROGRESS.md` と `scripts/selfdeploy/release.sh` を auto-merge し、衝突なしで完了した（merge commit 本文に経緯を記載）。
+- `scripts/selfdeploy/tests/release_web_bundle_requires_deps.sh` の `run_release()` に `SD_GATE_SKIP_WEB=0` を明示して追加した（`release_web_stage_nonblocking.sh` の既存の書き方と同じ）。他の selfdeploy 試験で `release.sh` を呼び web 段の実行を前提にしているのはこの 2 本だけで、他は変更不要だった。
+- `release.sh` の `SD_GATE_SKIP_WEB` 既定を 1 にしたコメント（f1904ecd 由来）を書き直した。この task（release-deps / follow-health / lan-units / verify-web）で node_modules の有無・`server/` の import 解決の検査（`bundle_web`、web.ok=false 化）と web-follow の起動確認（ADR-0135）が実装済みであることを明記した。ただし **NFS 上での web/app 展開（offline の prod install 含む）に 40〜60 分かかる問題は未対応のまま残っている**ため、既定を 0（web 段を走らせる）に戻すかどうかは人の判断とし、**既定値 `${SD_GATE_SKIP_WEB:-1}` はこの task では変更していない**。
+- `scripts/selfdeploy/release.sh` の `${SD_GATE_SKIP_WEB:-1}` という既定値自体のコード（条件式）は変更していない。変わったのはテストの呼び出し側の明示指定とコメントの文面のみ。
+
+#### 証拠コマンドと結果
+
+```
+$ git merge-base --is-ancestor f1904ecd HEAD && echo ok
+ok
+$ git merge-base --is-ancestor 5d6df9f3 HEAD && echo ok
+ok
+$ for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || { echo "FAILED: $t"; exit 1; }; done
+...
+pid_resolution_test.sh: all ok
+promote_authorization_marker: all ok
+web_follow_health_gate: all ok
+promote_web_follows_release: all ok
+release_gui_skip_and_shared_tree: ok
+release_parallel_test_gate: ok
+release_uses_scratch_lease: ok
+release_web_bundle_requires_deps: ok
+release_web_stage_nonblocking: ok
+verify_durations_and_parallel: ok
+verify_web_app_start: ok
+web_follow_health_gate: all ok
+```
+
+exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度で、合算の遅さは同一 run 内での繰り返し実行による負荷。詳細な単体実行時間は前節「record」参照）。全 12 本すべて ok。
+
+### 未解決事項（追加）
+
+- NFS 上の web/app 展開が 40〜60 分かかる問題は本 task のスコープ外のまま。`SD_GATE_SKIP_WEB` の既定を 0 に戻すのは、この問題が解決してから人が判断する。

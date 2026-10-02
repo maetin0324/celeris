@@ -839,6 +839,89 @@ fn set_skill_mount_toggles_without_duplicates_and_validates_the_name() {
     );
 }
 
+/// ADR-0122 D2: upstream の実形の frontmatter（`>` / `|` の複数行、未知鍵、`metadata:` の入れ子、
+/// 引用符）から `description` が正しく取れる。1 行形式は今までどおり。
+#[test]
+fn ui_ux_skills_frontmatter_reads_upstream_forms() {
+    let cases: [(&str, &str); 8] = [
+        // 既存の 1 行形式。
+        (SAMPLE_SKILL_MD, "Rust のコードレビューの手順"),
+        // `>`（折り畳み）: 継続行を空白で連結、未知鍵 `license` は後続の鍵として読まれない。
+        (
+            "---\nname: s\ndescription: >\n  Builds distinctive UI.\n  Avoids templated looks.\nlicense: Complete terms in LICENSE.txt\n---\n",
+            "Builds distinctive UI. Avoids templated looks.",
+        ),
+        // `>-`、空行は段落の区切り（改行）。
+        (
+            "---\nname: s\ndescription: >-\n  First para\n  continues.\n\n  Second.\n---\n",
+            "First para continues.\nSecond.",
+        ),
+        // `|`（そのまま）: 改行で連結。
+        (
+            "---\nname: s\ndescription: |\n  line one\n  line two\nuser-invocable: false\n---\n",
+            "line one\nline two",
+        ),
+        // 二重引用符（中の `:` と `\"` を含む）。
+        (
+            "---\nname: s\ndescription: \"Use as gate: check \\\"states\\\".\"\n---\n",
+            "Use as gate: check \"states\".",
+        ),
+        // 一重引用符（`''` は `'`）。
+        (
+            "---\nname: s\ndescription: 'don''t ship defaults'\n---\n",
+            "don't ship defaults",
+        ),
+        // 字下げした継続行（plain の複数行）。
+        (
+            "---\nname: s\ndescription: Web design reference\n  for production.\nmetadata:\n  author: pascalorg\n  version: \"1.0.0\"\n---\n",
+            "Web design reference for production.",
+        ),
+        // 入れ子の `description:` は最上位の鍵ではない。
+        (
+            "---\nname: s\nmetadata:\n  description: nested\ndescription: top\n---\n",
+            "top",
+        ),
+    ];
+    for (raw, want) in cases {
+        assert_eq!(skill_description(raw), want, "{raw}");
+    }
+    // `metadata:` の下の `author:` は最上位の鍵にならない（name の検証を壊さない）。
+    let nested = "---\nname: web-design\ndescription: d\nmetadata:\n  author: pascalorg\n  name: other\n---\n";
+    let (_dir, root) = kb_dir();
+    skills_put(&root, "web-design", nested, &[], None).expect("nested metadata name is ignored");
+}
+
+/// ADR-0122 D2: 複数行の `description` と未知鍵の SKILL.md も `skills_put` で入り、原文は
+/// 書き換えられず（`source:` の追記だけ）、`skills_list` の description は連結した値になる。
+#[test]
+fn ui_ux_skills_put_keeps_upstream_frontmatter_verbatim() {
+    let (_dir, root) = kb_dir();
+    let raw = "---\nname: frontend-design\ndescription: >\n  Distinctive\n  visual design.\nlicense: Complete terms in LICENSE.txt\nallowed-tools: Bash(npx shadcn@latest *)\n---\n\n# Frontend Design\n";
+    let path = skills_put(&root, "frontend-design", raw, &[], Some("celerisctl")).expect("put");
+    let stored = std::fs::read_to_string(root.join(&path)).expect("read");
+    assert_eq!(
+        stored,
+        raw.replace("*)\n---", "*)\nsource: celerisctl\n---"),
+        "{stored}"
+    );
+    assert_eq!(skill_description(&stored), "Distinctive visual design.");
+    assert_eq!(
+        skills_list(&root)[0].description,
+        "Distinctive visual design."
+    );
+    // `description: >` だけで中身が無いものは空として弾く。
+    assert!(matches!(
+        skills_put(
+            &root,
+            "frontend-design",
+            "---\nname: frontend-design\ndescription: >\n---\n",
+            &[],
+            None
+        ),
+        Err(SkillError::NoDescription)
+    ));
+}
+
 // ---- Phase K-1: 置き場のガード ----
 
 fn guard_layout(root: &Path) -> kb::Layout {

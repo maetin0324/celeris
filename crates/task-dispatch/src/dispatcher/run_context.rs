@@ -358,6 +358,8 @@ impl Dispatcher {
             // ここ（`run_extras`）の返り値を上書きする（ここでは常に `None`）。
             work_unit: None,
             continuation_override: None,
+            // ADR-0124 D2: WU の run だけ `dispatch_ready` が `resolve_continuation_session` で書く。
+            continuation_session: None,
             // ADR-0072 D13/D14（Phase E3）: planner run かどうかも `dispatch_ready` が判断し、
             // ここの返り値を上書きする（ここでは常に `None`）。
             execution_planner: None,

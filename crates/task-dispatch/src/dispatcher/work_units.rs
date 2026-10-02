@@ -1261,7 +1261,8 @@ impl Dispatcher {
             adapter: Some(adapter_id.to_string()),
             model: Some(model.to_string()),
             account: account.map(str::to_string),
-            session_id: None,
+            // ADR-0124 D2: この run が使う継続 session の id（resume でも新規でも）。
+            session_id: extras.session.as_ref().map(|s| s.session_id.clone()),
             checkpoint: None,
             usage: None,
             metrics: None,

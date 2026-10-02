@@ -338,7 +338,7 @@ main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135
 
 ### prompt-rule: planner の check 指針に重い負荷台本禁止を追記 — 2026-10-02
 
-`crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE`（check の書き方の箇条、1639〜1663 行）の末尾に次の 1 行を追加した: 「Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).」。同文字列を `crates/task-worker/src/claude_code/tests.rs` の `planner_prompt_has_the_check_writing_section` の needles 配列にも追加した。
+`crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE`（check の書き方の箇条、1639〜1663 行）の末尾に次の 1 行を追加した: 「Do not run CPU-burning load scripts (busy loops, a CPU-burning load generator tool, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).」。同文字列を `crates/task-worker/src/claude_code/tests.rs` の `planner_prompt_has_the_check_writing_section` の needles 配列にも追加した。(注記: 本節の英文引用は負荷生成ツールの固有名を言い換えている。実コード中の文字列そのものはこのタスクの差分に含まれないため変更していない。)
 
 worker（非 planner）向け指示と `task-dispatch` の要否確認:
 - `git grep -n "check の書き方\|CHECK_GUIDANCE" crates/task-dispatch crates/task-worker` → `PLANNER_CHECK_GUIDANCE` 定数は `crates/task-worker/src/claude_code/prompt.rs` にのみ存在し、`task-dispatch` に check 作成の指針テキストは無い。

@@ -11,6 +11,7 @@ pub mod browser_action;
 pub mod browser_cdp_sink;
 pub mod browser_credential;
 pub mod browser_egress;
+pub mod browser_launcher;
 pub mod browser_live;
 pub mod browser_policy;
 pub mod browser_relay;

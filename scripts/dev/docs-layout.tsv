@@ -18,6 +18,12 @@
 # reason docs/ops/adr-0079-r5b-runbook.md: 人の確認で削除。ADR-0079 R5b の一度きりの作業手順であり、現行の運用文書ではない。
 # reason docs/ops/home-nfs-migration-2026-09-25.md: 人の確認で削除。2026-09-25 の一度きりの移行手順であり、現行の運用文書ではない。
 # reason docs/DESIGN.md: 人の確認で削除。現行の仕様の入口は docs/SPEC.md とし、CLAUDE.md の参照もそちらへ変える。
+# reason docs/execution-architecture-2026-09-24.md: cleanup-reports で削除。ADR-0072 前の現状調査で、Task:run 1:1・dispatcher.rs の行番号が今の実装と食い違う（最後の commit a42f9a54）。
+# reason docs/execution-decomposition-report-2026-09-25.md: cleanup-reports で削除。E6 時点の分析で、挙げた問題は Phase F で実装済み、gate 提案は ADR-0079 で置き換わった（最後の commit a42f9a54）。
+# reason docs/execution-parallel-report-2026-09-28.md: cleanup-reports で削除。案件計画（ADR-0074 D3）は ADR-0079 で廃止され、決定は ADR-0074 本文にある（最後の commit a42f9a54）。
+# reason docs/notes/build-cache-tiering-input-2026-09-28.md: cleanup-reports で削除。ADR-0075 の入力メモで、方針は ADR-0075 と実装に入り、現状の記述（sccache 未導入など）は食い違う（最後の commit a42f9a54）。
+# reason docs/celeris-api-v1.md: cleanup-api で中身を docs/api/v1/gui-api.md §3.125 へ統合した。docs/api/v1/overview.md は gui/docs/celeris-api-v1.md（変更禁止）の参照を保つ転送ページ。
+# 末尾の 9 行は task の base（0d438ec1）以降に main が旧配置へ足したもの。land-verify が ADR-0128 D6 で移した。
 docs/DESIGN.md	-	delete
 docs/GOAL_TEMPLATE.md	agent-docs/GOAL_TEMPLATE.md	agent
 docs/PROGRESS.md	agent-docs/PROGRESS.md	agent
@@ -137,9 +143,9 @@ docs/browser-capability.md	docs/guides/browser-capability.md	human
 docs/browser-credentiald.md	docs/guides/browser-credentiald.md	human
 docs/browser-live-relay.md	agent-docs/reports/browser-live-relay.md	agent
 docs/celeris-api-v1.md	docs/api/v1/overview.md	human
-docs/execution-architecture-2026-09-24.md	agent-docs/reports/execution-architecture-2026-09-24.md	agent
-docs/execution-decomposition-report-2026-09-25.md	agent-docs/reports/execution-decomposition-report-2026-09-25.md	agent
-docs/execution-parallel-report-2026-09-28.md	agent-docs/reports/execution-parallel-report-2026-09-28.md	agent
+docs/execution-architecture-2026-09-24.md	-	delete
+docs/execution-decomposition-report-2026-09-25.md	-	delete
+docs/execution-parallel-report-2026-09-28.md	-	delete
 docs/gui/DESIGN-GUI.md	agent-docs/gui/design.md	agent
 docs/gui/adr/0001-architecture-boundary.md	agent-docs/gui/adr/0001-architecture-boundary.md	agent
 docs/gui/adr/0002-frontend-stack.md	agent-docs/gui/adr/0002-frontend-stack.md	agent
@@ -163,7 +169,7 @@ docs/knowledge.md	docs/guides/knowledge.md	human
 docs/llm-source.md	docs/guides/llm-source.md	human
 docs/mcp.md	docs/guides/mcp.md	human
 docs/model-routing-2026-09-20.md	agent-docs/reports/model-routing-2026-09-20.md	agent
-docs/notes/build-cache-tiering-input-2026-09-28.md	agent-docs/notes/build-cache-tiering-input-2026-09-28.md	agent
+docs/notes/build-cache-tiering-input-2026-09-28.md	-	delete
 docs/ops/adr-0079-r5b-runbook.md	-	delete
 docs/ops/browser-isolated-runtime-subuid.md	agent-docs/ops/browser-isolated-runtime-subuid.md	agent
 docs/ops/dev-builds-local-target-dir.md	agent-docs/ops/dev-builds-local-target-dir.md	agent
@@ -215,3 +221,12 @@ docs/web/gates/p5-03-mobile-a11y.md	agent-docs/web/gates/p5-03-mobile-a11y.md	ag
 docs/web/implementation-plan.md	agent-docs/web/implementation-plan.md	agent
 docs/web/parallel-operation.md	docs/ops/web-parallel-operation.md	human
 docs/workspace.md	docs/guides/workspace.md	human
+docs/adr/0116-browser-launcher-implementation.md	agent-docs/adr/0116-browser-launcher-implementation.md	agent
+docs/adr/0125-deterministic-time-tests.md	agent-docs/adr/0125-deterministic-time-tests.md	agent
+docs/adr/0127-skills-native-delivery.md	agent-docs/adr/0127-skills-native-delivery.md	agent
+docs/ops/browser-launcher-host-setup.md	docs/ops/browser-launcher-host-setup.md	human
+docs/progress/phase-skills-progressive.md	agent-docs/progress/2026-10-02-skills-native-delivery.md	agent
+docs/progress/time-dependent-tests.md	agent-docs/progress/2026-10-02-time-dependent-tests.md	agent
+docs/progress/time-dependent-tests-dispatch.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/dispatch.md	agent
+docs/progress/time-dependent-tests-injection.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/injection.md	agent
+docs/progress/time-dependent-tests-kill.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/kill.md	agent

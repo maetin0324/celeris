@@ -374,6 +374,42 @@ sd_set_link() {
   mv -T "$tmp" "$link"
 }
 
+# ---- 昇格中の印（ADR-0040 付記 2026-10-02「handoff と migration の認可」）--------
+#
+# `celeris@<sha12>` を start する**直前**に `releases/<sha12>/promoting.json` を置き、`current` を
+# 付け替えた直後（と EXIT トラップ）で消す。daemon は `current` か 900 秒以内のこの印が自分の
+# release と一致するときだけ DB を開いて migrate し、handoff を要求する（それ以外は exit 4）。
+# 印を書くのも消すのもこの 2 つだけ（daemon は読むだけ）。
+sd_promoting_path() { printf '%s/promoting.json' "$(sd_release_dir "$1")"; }
+
+# `sd_write_promoting <sha12> <script> <mode>` — 一時ファイル → mv で原子的に置く。
+sd_write_promoting() {
+  local sha="$1" script="$2" mode="$3" path tmp
+  path="$(sd_promoting_path "$sha")"
+  tmp="$path.tmp.$$"
+  {
+    printf '{\n'
+    printf '  "sha12": %s,\n' "$(sd_json_str "$sha")"
+    printf '  "script": %s,\n' "$(sd_json_str "$script")"
+    printf '  "mode": %s,\n' "$(sd_json_str "$mode")"
+    printf '  "pid": %s,\n' "$$"
+    printf '  "started_at": %s\n' "$(sd_json_str "$(sd_ts)")"
+    printf '}\n'
+  } >"$tmp"
+  mv -f "$tmp" "$path"
+  sd_log "promoting marker: $path (script=$script mode=$mode)"
+}
+
+# `sd_clear_promoting <sha12>` — 無くてもよい（EXIT トラップから何度呼ばれても害が無い）。
+sd_clear_promoting() {
+  local path
+  path="$(sd_promoting_path "$1")"
+  if [ -e "$path" ]; then
+    rm -f "$path"
+    sd_log "promoting marker removed: $path"
+  fi
+}
+
 # `pub const SCHEMA_VERSION: u32 = N;` を読む。ADR-0079 の分割で store.rs は
 # crates/task-core/src/store/migrations.rs に分かれた。store/mod.rs、旧 store.rs の順に
 # 探す（分割前の木や別の再配置でも読めるように）。

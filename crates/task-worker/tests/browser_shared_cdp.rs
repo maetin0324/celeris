@@ -320,6 +320,7 @@ fn inner() {
     let proxy =
         PathBuf::from(std::env::var("CARGO_BIN_EXE_celeris-browser-egress").expect("egress"));
     let spec = RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"), session_id: "shared-cdp".into(), session_dir: session.path().to_path_buf(),
         ro_dirs: vec![browser.parent().expect("browser parent").to_path_buf(), sandboxd.parent().expect("sandboxd parent").to_path_buf()],
         argv: vec![sandboxd.into_os_string(), OsString::from("--shared-cdp"), browser.into_os_string(),

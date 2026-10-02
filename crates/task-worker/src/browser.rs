@@ -1224,6 +1224,7 @@ async fn run_with_executable_attempt(
     ];
     ro_dirs.extend(browser_dirs);
     let spec = crate::browser_runtime::RuntimeSpec {
+        userns: crate::browser_runtime::UsernsMode::Unshare,
         bwrap: isolation.bwrap.clone(),
         session_id: session.clone(),
         session_dir: runtime.clone(),

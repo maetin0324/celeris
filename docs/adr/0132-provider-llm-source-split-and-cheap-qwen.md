@@ -35,6 +35,7 @@ tasks: [01M3YF3NSR46FM314VHG14T3N6]
 - `[llm_proxy.models.qwen]` の既定と移行後の設定は `cheap = "qwen3.8-27b"` のみとする。旧 `frontier` / `standard` キーは構文エラーにせず、警告して**無視**する。`prefer_free` は cheap でだけ Qwen 優先に作用する。
 - `celeris/frontier` / `celeris/standard` は Qwen 候補を作らず、Claude / Codex の対応 tier のみを選ぶ。`qwen/frontier` / `qwen/standard` は使えないモデルとして明確なエラーにし、`/v1/models` に広告しない。`qwen/cheap` は有効。cheap では生きた Qwen を先に試し、失敗・到達不能なら同じ要求を stream 開始前に Claude / GPT の cheap 候補へ倒す。proxy の偽上流試験でこの 3 経路を固定する。
 - `qwen:<concrete-model>` の明示的な素通りは tier 抽象を通らない既存 API として残す。ただし task の frontier / standard の provider 設定には使わせない。Qwen 直結の実行枠は cheap のみである。
+- ACP 行の実効 source が Qwen（`model` の Qwen 直指定、`llm_source = "openai_compatible:qwen"`、または Qwen 固定の `OPENCODE_CONFIG`）なら、設定に非 cheap tier が残っても dispatch 候補は cheap のみとする。
 
 ### D4. PaperQA・LangMem・LDR は普通の道具
 
@@ -44,6 +45,7 @@ tasks: [01M3YF3NSR46FM314VHG14T3N6]
 ### D5. opencode の Qwen 経路は cheap のみ
 
 - Qwen 直指定の旧 `opencode-qwen` と、新しい opencode の Qwen 専用実行枠は cheap だけを受ける。`tiers` に frontier / standard が残る旧行は読み込めても、その tier では Qwen 直指定の候補にしない。警告に移行先を示す。
+- 管理 API の POST/PATCH は該当 ACP 行で `tiers` 省略なら `[cheap]` を保存・返却し、frontier / standard の明示指定は 400 で拒否する。proxy の `celeris/<tier>` を使う ACP 行は全 tier を使える。
 - frontier / standard で opencode を使うなら、Qwen 固定の `OPENCODE_CONFIG` を外して proxy の `celeris/<tier>` を選ぶ別の道具の行にする。cheap の opencode も proxy の `celeris/cheap` を既定とし、Qwen が落ちたときの D3 の fallback を利用する。
 
 ### D6. API と providers 画面

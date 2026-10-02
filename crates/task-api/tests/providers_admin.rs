@@ -102,11 +102,93 @@ async fn provider_kind_openai_compatible_reference_uses_configured_source_ids() 
         response.json()["llm_source"],
         json!({"source":"openai_compatible:qwen","origin":"explicit"})
     );
-    assert!(
-        std::fs::read_to_string(dir.join("opencode-qwen.toml"))
-            .unwrap()
-            .contains("llm_source = \"openai_compatible:qwen\"")
+    assert_eq!(response.json()["tiers"], json!(["cheap"]));
+    let saved = std::fs::read_to_string(dir.join("opencode-qwen.toml")).unwrap();
+    assert!(saved.contains("llm_source = \"openai_compatible:qwen\""));
+    let saved: toml::Value = toml::from_str(&saved).unwrap();
+    assert_eq!(saved["tiers"].as_array().unwrap().len(), 1);
+    assert_eq!(saved["tiers"][0].as_str(), Some("cheap"));
+    let rejected = send(&app, post_json_with("/api/v1/providers", &json!({"id":"qwen-wide","adapter":"acp","llm_source":"openai_compatible:qwen","tiers":["frontier"]}), &[("authorization", &auth)])).await;
+    assert_problem(&rejected, 400, "bad_request");
+    let rejected = send(
+        &app,
+        patch_json_with(
+            "/api/v1/providers/opencode-qwen",
+            &json!({"tiers":["standard"]}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_problem(&rejected, 400, "bad_request");
+}
+
+#[tokio::test]
+async fn provider_kind_qwen_direct_acp_model_without_config_is_cheap_only() {
+    let (env, _tmp, _) = env_with_providers_dir();
+    let app = env.router();
+    let auth = auth();
+    let created = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id":"direct-qwen","adapter":"acp","model":"qwen3"}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(created.status, 201, "{}", created.text());
+    assert_eq!(created.json()["tiers"], json!(["cheap"]));
+    let rejected = send(
+        &app,
+        patch_json_with(
+            "/api/v1/providers/direct-qwen",
+            &json!({"tiers":["frontier"]}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_problem(&rejected, 400, "bad_request");
+}
+
+#[tokio::test]
+async fn provider_kind_qwen_direct_acp_proxy_keeps_all_tiers() {
+    let (env, _tmp, _) = env_with_providers_dir();
+    let app = env.router();
+    let auth = auth();
+    let created = send(&app, post_json_with("/api/v1/providers", &json!({"id":"proxy-acp","adapter":"acp","model":"celeris/cheap","llm_source":"celeris","env":{"OPENCODE_CONFIG":"/fixture/old-qwen.json"}}), &[("authorization", &auth)])).await;
+    assert_eq!(created.status, 201, "{}", created.text());
+    assert_eq!(
+        created.json()["tiers"],
+        json!(["frontier", "standard", "cheap"])
     );
+}
+
+#[tokio::test]
+async fn provider_kind_qwen_direct_acp_patch_without_tiers_saves_cheap() {
+    let (env, _tmp, _) = env_with_providers_dir();
+    let app = env.router();
+    let auth = auth();
+    let created = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id":"switch-acp","adapter":"acp"}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(created.status, 201, "{}", created.text());
+    let patched = send(
+        &app,
+        patch_json_with(
+            "/api/v1/providers/switch-acp",
+            &json!({"model":"qwen3"}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(patched.status, 200, "{}", patched.text());
+    assert_eq!(patched.json()["tiers"], json!(["cheap"]));
 }
 
 #[tokio::test]

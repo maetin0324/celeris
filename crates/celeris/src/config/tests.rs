@@ -106,6 +106,49 @@ fn provider_kind_qwen_id_without_model_does_not_guess_source() {
 }
 
 #[test]
+fn provider_kind_qwen_direct_acp_without_opencode_config_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config =
+        toml::from_str("[[providers]]\nid = \"direct\"\nadapter = \"acp\"\nmodel = \"qwen3\"\n")
+            .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_source_reference_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config = toml::from_str("[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n[[providers]]\nid = \"source\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:qwen\"\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_proxy_model_keeps_all_tiers() {
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"proxy\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nenv = { OPENCODE_CONFIG = \"/fixture/old-qwen.json\" }\n",
+    )
+    .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
+    assert!(
+        !cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());

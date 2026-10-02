@@ -72,12 +72,6 @@ fn proc_pids() -> HashSet<i32> {
 
 fn is_browser(pid: i32, expected_map: &str) -> bool {
     let base = PathBuf::from(format!("/proc/{pid}"));
-    let Ok(comm) = fs::read_to_string(base.join("comm")) else {
-        return false;
-    };
-    if !comm.contains("chrome") && !comm.contains("chromium") {
-        return false;
-    }
     let Ok(cmdline) = fs::read(base.join("cmdline")) else {
         return false;
     };
@@ -105,10 +99,27 @@ fn chrome_pid(before: &HashSet<i32>, expected_map: &str) -> i32 {
             candidates.len() <= 1,
             "ambiguous new Chrome PIDs: {candidates:?}"
         );
-        assert!(
-            Instant::now() < deadline,
-            "Chrome PID not visible in /proc within 20s"
-        );
+        if Instant::now() >= deadline {
+            let matching_map: Vec<_> = proc_pids()
+                .difference(before)
+                .filter_map(|pid| {
+                    let base = PathBuf::from(format!("/proc/{pid}"));
+                    (fs::read_to_string(base.join("uid_map")).ok().as_deref() == Some(expected_map))
+                        .then(|| {
+                            (
+                                *pid,
+                                fs::read_to_string(base.join("comm"))
+                                    .unwrap_or_default()
+                                    .trim()
+                                    .to_owned(),
+                            )
+                        })
+                })
+                .collect();
+            panic!(
+                "Chrome PID not visible in /proc within 20s; new processes with expected uid_map: {matching_map:?}"
+            );
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }

@@ -1,7 +1,7 @@
 # Phase browser-4: isolated runtime・trusted injection・backend routing（P4-A〜C）
 
 ---
-tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM1XP4C7BH45, 01M3SM0WN346ABGF42QV02RZTP]
+tasks: [01M3Q49ZTST3XQ9DGF6AGNR0XG, 01M3QGRC542ZC23996DNCTHZF5, 01M3QGRC6AQ81PWM1XP4C7BH45, 01M3SM0WN346ABGF42QV02RZTP, 01M3WW2RBB9QW9NPN862TZEK9P]
 ---
 
 - 状態（2026-09-30、[追跡表](phase-browser-acceptance.md) と一致）: **P4-A は一部達成**（P4-A-1〜6 合格、P4-A-7「別 host UID での隔離 runtime の実証」は後続 `01M3SPN8H05EJ3DHPVEGEYTMEH`）。**P4-B は一部達成**（P4-B-1〜5 と攻撃試験 A1〜A12・A14〜A17 合格、P4-B-6「本番 admission での機密能力の解放」は後続 `01M3SPN8HPHPWZ32F0AG986TWS`、A13「別 host UID の実 process」は後続 `01M3SPN8HE6A1TZ54GBZGHMZYJ`）。**P4-C は一部達成**（P4-C-1〜5 合格、P4-C-6「本番 routing での機密能力 backend の解放」は後続 `01M3SPN8HPHPWZ32F0AG986TWS`）。後続はすべて決定 sep-uid=a による。本番 admission は `Attested` 必須で、この host（同一 UID）では SameUid を拒否する（P4-A-6）。
@@ -338,3 +338,9 @@ host 管理者への依頼: [host 準備手順](../ops/browser-launcher-host-set
 この試験は `verify_isolation on launcher observation: [CdpOnTcp]` で止まり、`PTRACE_ATTACH` / `strace -p` と `/proc/<pid>/{environ,mem}` の拒否はまだ実行されていない。`verify_isolation=Ok` と require 試験 exit 0 の証拠は**未取得**。原因は daemon 側が `SessionFacts.listen_count > 0` を Chrome CDP の TCP port と誤判定したこと。実際は Chrome の CDP は `--remote-debugging-pipe` で、private netns の TCP listener は sandboxd の proxy（127.0.0.1:3128）と shared-CDP relay（127.0.0.1:9223）。ADR-0115 の配線に合わせ、daemon 側の `RuntimeFacts.cdp` を `Pipe` にし、launcher の実 `collect_facts`・`verify_isolation` と receipt の `isolation_ok` による netns 検査を維持した。`listen_count` は非機密の観測値として残す。
 
 局所試験 `cargo test -p task-worker --lib browser::launcher_run::tests::runtime_facts_follow_the_observation`、`cargo clippy -p task-worker --all-targets -- -D warnings`、`cargo fmt --all -- --check` は exit 0。この worker 内から require 試験を走らせると exit 101、`observe` までは進むが `Chrome PID not visible in /proc within 20s` で止まる。worker の隔離された `/proc` から host 側の Chrome PID が見えないため、これを host の攻撃試験結果とは扱わない。host の 3 binary はまだ旧 commit のままであり、修正後の host 通常シェルでの require 試験結果は未取得。本番 DB・本番設定・昇格、root 操作、機密能力の解放は行っていない。
+
+## launcher Chrome PID の検出失敗を診断（run 01M3XQR4W2Q4JGFK2H69BR8P36、2026-10-02）
+
+人が commit `03dd5525` の launcher・sandboxd・egress を SHA-256 照合後に配置した。worker 外の UID 1001 通常シェルで require 試験を実行した結果は **exit 101**（20.16 秒）。正の対照は `child pid=3785024 PTRACE_ATTACH=0 PTRACE_DETACH=0`、launcher 観測は `owner=Some(296608) host_uid=995 uid_map="1000 296608 1" gid_map="1000 296608 1"`（map の実出力には空白と改行あり）。失敗は `Chrome PID not visible in /proc within 20s` であり、journal に session 開始失敗行は無かった。Chrome の CDP 引数はコード上 `--remote-debugging-pipe` のまま。Chrome が即終了したか、試験の `comm` 名による絞り込みに合わなかったかは、この証跡だけでは判別できない。
+
+試験の PID 検出から `comm` 名の絞り込みを外し、CDP pipe 引数・`--type=` が無いこと・uid_map で照合する。20 秒で見つからない場合は、同じ uid_map の新規 process の PID と `comm` を出す。sandboxd は Chrome 起動時に PID と固定の CDP 引数名、終了時に code と signal を stderr に記録し、launcher はこの固定形式の行だけを journal に転送する。Chrome の生 stderr・URL・profile・CDP payload は転送しない。host の新版での結果と ptrace / environ / mem / `verify_isolation` は**未取得**。本番 host の操作、機密能力の解放は行っていない。

@@ -192,9 +192,35 @@ fn safe_startup_diagnostics(stderr: &str) -> String {
         .join(" | ")
 }
 
+/// A running launcher reports only fixed Chrome lifecycle fields. Never forward
+/// arbitrary descendant stderr, which could contain browser data.
+fn chrome_lifecycle_diagnostic(line: &str) -> Option<String> {
+    if let Some(pid) = line.strip_prefix("sandboxd: Chrome started pid=")
+        && let Some(pid) = pid.strip_suffix(" flags=remote-debugging-pipe")
+        && pid.parse::<u32>().is_ok()
+    {
+        return Some(format!(
+            "Chrome started pid={pid} flags=remote-debugging-pipe"
+        ));
+    }
+    if let Some(rest) = line.strip_prefix("sandboxd: Chrome exited code=")
+        && let Some((code, signal)) = rest.split_once(" signal=")
+        && [code, signal].iter().all(|value| {
+            value == &"None"
+                || value
+                    .strip_prefix("Some(")
+                    .and_then(|v| v.strip_suffix(')'))
+                    .is_some_and(|v| v.parse::<i32>().is_ok())
+        })
+    {
+        return Some(format!("Chrome exited code={code} signal={signal}"));
+    }
+    None
+}
+
 #[cfg(test)]
 mod startup_diagnostics_tests {
-    use super::safe_startup_diagnostics;
+    use super::{chrome_lifecycle_diagnostic, safe_startup_diagnostics};
 
     #[test]
     fn journal_diagnostics_exclude_browser_output_and_are_bounded() {
@@ -206,6 +232,21 @@ mod startup_diagnostics_tests {
         assert!(!safe.contains("secret URL"));
         assert!(safe.contains("sandboxd: proxy listen: EPERM"));
         assert!(safe.len() <= 280);
+    }
+
+    #[test]
+    fn lifecycle_journal_excludes_unstructured_browser_output() {
+        assert_eq!(
+            chrome_lifecycle_diagnostic(
+                "sandboxd: Chrome started pid=123 flags=remote-debugging-pipe"
+            ),
+            Some("Chrome started pid=123 flags=remote-debugging-pipe".into())
+        );
+        assert_eq!(
+            chrome_lifecycle_diagnostic("sandboxd: Chrome exited code=Some(70) signal=None"),
+            Some("Chrome exited code=Some(70) signal=None".into())
+        );
+        assert!(chrome_lifecycle_diagnostic("sandboxd: Chrome started pid=1 secret=abc").is_none());
     }
 }
 
@@ -513,6 +554,21 @@ impl IsolatedRuntime {
             if ready_rx.recv_timeout(Duration::from_secs(10)).is_err() {
                 return Err(RuntimeError::RelayNotReady(rt.failed_stderr()));
             }
+        }
+        if matches!(spec.userns, UsernsMode::Fd(_))
+            && let Some(stderr) = rt.child.stderr.take()
+        {
+            let session = spec.session_id.clone();
+            std::thread::Builder::new()
+                .name(format!("celeris-browser-diag-{session}"))
+                .spawn(move || {
+                    for line in BufReader::new(stderr.take(8192)).lines() {
+                        let Ok(line) = line else { break };
+                        if let Some(safe) = chrome_lifecycle_diagnostic(&line) {
+                            eprintln!("celeris-browser-launcher: session {session}: {safe}");
+                        }
+                    }
+                })?;
         }
         Ok(rt)
     }

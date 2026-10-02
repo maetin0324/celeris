@@ -141,8 +141,20 @@ fn main() -> ExitCode {
                 return ExitCode::from(EXIT_SETUP);
             }
         };
+        // Only a PID and the fixed CDP transport reach the launcher journal.
+        eprintln!(
+            "sandboxd: Chrome started pid={} flags=remote-debugging-pipe",
+            browser.id()
+        );
         std::thread::spawn(move || {
-            eprintln!("sandboxd: Chrome exited: {:?}", browser.wait());
+            match browser.wait() {
+                Ok(status) => eprintln!(
+                    "sandboxd: Chrome exited code={:?} signal={:?}",
+                    status.code(),
+                    std::os::unix::process::ExitStatusExt::signal(&status)
+                ),
+                Err(e) => eprintln!("sandboxd: Chrome wait failed errno={:?}", e.raw_os_error()),
+            }
             std::process::exit(i32::from(EXIT_SETUP));
         });
         // The action process must never inherit Chromium's pipe endpoints.

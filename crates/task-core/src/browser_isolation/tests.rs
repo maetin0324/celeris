@@ -440,3 +440,198 @@ fn orphans_are_labelled_runtime_groups_without_live_session() {
     let uids = [200_001, 200_002].into_iter().collect();
     assert_eq!(orphan_groups(&procs, &live, &uids, 1000), vec![10]);
 }
+
+// ADR-0116 D-L: launcher session 証明。
+
+const LAUNCHER_UID: u32 = 1001;
+
+fn proof() -> LauncherSessionProof {
+    LauncherSessionProof {
+        session_id: "s1".into(),
+        instance_id: "inst-a".into(),
+        pid: 5151,
+        starttime: 987_654,
+        ns_owner_uid: Some(1001),
+        launcher_uid: LAUNCHER_UID,
+        isolation_ok: true,
+    }
+}
+
+fn seen() -> LauncherObservation {
+    LauncherObservation {
+        session_id: "s1".into(),
+        instance_id: "inst-a".into(),
+        peer_uid: Some(LAUNCHER_UID),
+        configured_launcher_uid: LAUNCHER_UID,
+        runtime_pid: 5151,
+        runtime_starttime: Some(987_654),
+    }
+}
+
+fn invalid(defect: LauncherProofDefect) -> IsolationViolation {
+    IsolationViolation::LauncherProofInvalid { defect }
+}
+
+fn proof_rejected(
+    f: &RuntimeFacts,
+    p: &LauncherSessionProof,
+    o: &LauncherObservation,
+) -> Vec<IsolationViolation> {
+    verify_launcher_session(f, Some(p), o).unwrap_err()
+}
+
+#[test]
+fn valid_launcher_proof_creates_attestation() {
+    let a = verify_launcher_session(&good(), Some(&proof()), &seen()).expect("valid proof");
+    assert_eq!(a.session_id(), "s1");
+    assert_eq!(a.instance_id(), "inst-a");
+    assert_eq!(a.pid(), 5151);
+    assert_eq!(a.starttime(), 987_654);
+    assert_eq!(a.launcher_uid(), LAUNCHER_UID);
+    assert_eq!(a.isolation(), Isolation::Isolated);
+    assert_eq!(a.isolation_attestation().userns_owner_uid(), 1001);
+}
+
+#[test]
+fn owner_check_alone_without_proof_is_rejected() {
+    // owner 検査を含む隔離条件は全部通る。
+    assert!(verify_isolation(&good()).is_ok());
+    assert_eq!(
+        verify_launcher_session(&good(), None, &seen()).unwrap_err(),
+        vec![IsolationViolation::LauncherProofMissing]
+    );
+}
+
+#[test]
+fn proof_does_not_override_isolation_violations() {
+    let mut f = good();
+    f.runtime_uid = f.host_uid;
+    f.userns_owner_uid = Some(f.host_uid);
+    let v = verify_launcher_session(&f, Some(&proof()), &seen()).unwrap_err();
+    assert!(v.contains(&IsolationViolation::SameUid));
+    assert!(v.contains(&IsolationViolation::UsernsOwnedByDaemon));
+    // proof の owner (1001) と daemon が採った owner (1000) が食い違う。
+    assert!(v.contains(&invalid(LauncherProofDefect::OwnerMismatch)));
+
+    let mut f = good();
+    f.namespaces.remove(&Namespace::Net);
+    assert_eq!(
+        verify_launcher_session(&f, Some(&proof()), &seen()).unwrap_err(),
+        vec![IsolationViolation::MissingNamespace { ns: Namespace::Net }]
+    );
+    // 非隔離かつ証明なしは両方を返す。
+    assert_eq!(
+        verify_launcher_session(&f, None, &seen()).unwrap_err(),
+        vec![
+            IsolationViolation::MissingNamespace { ns: Namespace::Net },
+            IsolationViolation::LauncherProofMissing
+        ]
+    );
+}
+
+#[test]
+fn pid_and_starttime_must_bind_the_runtime() {
+    let mut o = seen();
+    o.runtime_pid = 5152;
+    assert_eq!(
+        proof_rejected(&good(), &proof(), &o),
+        vec![invalid(LauncherProofDefect::PidMismatch)]
+    );
+    let mut p = proof();
+    p.pid = 1;
+    let mut o = seen();
+    o.runtime_pid = 1;
+    assert_eq!(
+        proof_rejected(&good(), &p, &o),
+        vec![invalid(LauncherProofDefect::PidMismatch)]
+    );
+    let mut o = seen();
+    o.runtime_starttime = Some(987_655);
+    assert_eq!(
+        proof_rejected(&good(), &proof(), &o),
+        vec![invalid(LauncherProofDefect::StarttimeMismatch)]
+    );
+    // 採取できない starttime（session 終了など）を一致とみなさない。
+    let mut o = seen();
+    o.runtime_starttime = None;
+    assert_eq!(
+        proof_rejected(&good(), &proof(), &o),
+        vec![invalid(LauncherProofDefect::StarttimeUnavailable)]
+    );
+}
+
+#[test]
+fn proof_owner_must_be_known_and_not_daemon() {
+    let mut p = proof();
+    p.ns_owner_uid = None;
+    assert_eq!(
+        proof_rejected(&good(), &p, &seen()),
+        vec![invalid(LauncherProofDefect::OwnerUnknown)]
+    );
+    let mut p = proof();
+    p.ns_owner_uid = Some(1000);
+    assert_eq!(
+        proof_rejected(&good(), &p, &seen()),
+        vec![invalid(LauncherProofDefect::OwnerIsDaemon)]
+    );
+    let mut p = proof();
+    p.ns_owner_uid = Some(1002);
+    assert_eq!(
+        proof_rejected(&good(), &p, &seen()),
+        vec![invalid(LauncherProofDefect::OwnerMismatch)]
+    );
+}
+
+#[test]
+fn launcher_uid_must_match_peer_and_config() {
+    let mut o = seen();
+    o.peer_uid = None;
+    assert_eq!(
+        proof_rejected(&good(), &proof(), &o),
+        vec![invalid(LauncherProofDefect::PeerUidUnavailable)]
+    );
+    let mut o = seen();
+    o.peer_uid = Some(1003);
+    assert_eq!(
+        proof_rejected(&good(), &proof(), &o),
+        vec![invalid(LauncherProofDefect::LauncherUidMismatch)]
+    );
+    let mut o = seen();
+    o.configured_launcher_uid = 1003;
+    assert_eq!(
+        proof_rejected(&good(), &proof(), &o),
+        vec![invalid(LauncherProofDefect::LauncherUidMismatch)]
+    );
+    // daemon 自身が launcher を名乗る（daemon 起動の runtime）。
+    let mut p = proof();
+    p.launcher_uid = 1000;
+    let mut o = seen();
+    o.peer_uid = Some(1000);
+    o.configured_launcher_uid = 1000;
+    assert_eq!(
+        proof_rejected(&good(), &p, &o),
+        vec![invalid(LauncherProofDefect::LauncherUidPrivileged)]
+    );
+}
+
+#[test]
+fn isolation_not_ok_and_session_mismatch_are_rejected() {
+    let mut p = proof();
+    p.isolation_ok = false;
+    assert_eq!(
+        proof_rejected(&good(), &p, &seen()),
+        vec![invalid(LauncherProofDefect::IsolationNotOk)]
+    );
+    let mut p = proof();
+    p.session_id = "s2".into();
+    assert_eq!(
+        proof_rejected(&good(), &p, &seen()),
+        vec![invalid(LauncherProofDefect::SessionMismatch)]
+    );
+    let mut o = seen();
+    o.instance_id = "inst-b".into();
+    assert_eq!(
+        proof_rejected(&good(), &proof(), &o),
+        vec![invalid(LauncherProofDefect::SessionMismatch)]
+    );
+}

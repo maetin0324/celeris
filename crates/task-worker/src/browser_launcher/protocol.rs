@@ -125,7 +125,24 @@ pub enum Outcome {
     Stopped,
 }
 
+/// launcher protocol の版。v2 で `start_session` の receipt に [`SessionBinding`] を足した
+/// （ADR-0116 D-L）。v1 の receipt（`binding` 無し）は decode できるが、daemon は証明なしとして扱う。
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// launcher の `SessionRecord` にある session の束縛（runtime の leader の pid・starttime と、
+/// launcher が採った userns の owner UID）。daemon はこれを自分の観測と照合してから
+/// `LauncherSessionProof` を組む。値を持っているだけでは何も許さない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionBinding {
+    pub pid: i32,
+    pub starttime: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ns_owner_uid: Option<u32>,
+}
+
 /// 固定の receipt（session・instance・verb・結果・時刻・verify_isolation の結果）。
+/// `binding` は `start_session` の receipt にだけ入る（v2 以降）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Receipt {
@@ -136,6 +153,8 @@ pub struct Receipt {
     pub outcome: Outcome,
     pub at_unix_ms: u64,
     pub isolation_ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<SessionBinding>,
 }
 
 /// `RuntimeFacts` の非機密の項目だけ。

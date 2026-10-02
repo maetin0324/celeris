@@ -19,7 +19,7 @@ tasks: [01M3WW2RBB9QW9NPN862TZEK9P]
 
 1. **初期 namespace の root であること**: `cat /proc/self/uid_map` が `0 0 4294967295`。
    container・入れ子 userns（例 `1001 1001 1` だけ、`newuidmap` の所有者が `nobody`）で作業しない。subuid の範囲が親 map に入らず `newuidmap` が EPERM になる。
-2. `bwrap`、`google-chrome`（または設定で指す Chrome）、`celeris-browser-sandboxd` / `celeris-browser-egress` を root 所有の path（`/usr/bin`、`/usr/local/libexec/celeris` など）に置ける。`ProtectHome=true` のため `/home` 下の binary は使えない。
+2. `bwrap`、`google-chrome`（または設定で指す Chrome）、`agent-browser`、`celeris-browser-sandboxd` / `celeris-browser-egress` を root 所有の path（`/usr/bin`、`/usr/local/libexec/celeris` など）に置ける。`ProtectHome=true` のため `/home` 下の binary は使えない。
 
 ## 1. 専用 user/group を作る
 
@@ -97,17 +97,29 @@ install -d -o root -g root -m 0755 /usr/local/libexec/celeris /etc/celeris-brows
 install -o root -g root -m 0755 <release>/bin/celeris-browser-launcher     /usr/local/libexec/celeris/
 install -o root -g root -m 0755 <release>/bin/celeris-browser-sandboxd     /usr/local/libexec/celeris/
 install -o root -g root -m 0755 <release>/bin/celeris-browser-egress       /usr/local/libexec/celeris/
+# agent-browser、bwrap、Chrome も root 所有の固定 path に配置し、その path を下の設定に記す。
 ```
 
-固定設定 `/etc/celeris-browser/launcher.toml`（root:root 0644。daemon の設定からは変えられない、ADR-0116 D5）に次を書く。項目名は launcher 実装の `--config` の定義に合わせる:
+固定設定 `/etc/celeris-browser/launcher.toml`（root:root 0644。daemon の設定からは変えられない、ADR-0116 D5）を作る。次は `BackendConfig` が要求する全項目で、実際に配置した `bwrap`・Chrome・agent-browser の絶対 path と resolver に置き換える。`session_root` は `state_dir` と別の私有 dir にする。IPC の上限は launcher に組み込まれた `LauncherLimits::default()` が適用され、TOML の項目ではない。
 
-- `allowed_uids = [1001]`（daemon だけ）
-- `socket` = `/run/celeris-browser/launcher.sock`、状態 dir = `/var/lib/celeris-browser`
-- `bwrap`・`sandboxd`・`egress`・Chrome の絶対 path（すべて root 所有の場所）
-- 上限（既定値 frame 64 KiB・接続 4・session 2 など、ADR-0116 D2）
+```toml
+socket = "/run/celeris-browser/launcher.sock"
+state_dir = "/var/lib/celeris-browser"
+session_root = "/var/lib/celeris-browser/sessions"
+allowed_uids = [1001]
+bwrap = "/usr/bin/bwrap"
+sandboxd = "/usr/local/libexec/celeris/celeris-browser-sandboxd"
+egress = "/usr/local/libexec/celeris/celeris-browser-egress"
+chrome = "/usr/bin/google-chrome"
+agent_browser = "/usr/local/libexec/celeris/agent-browser"
+resolver = "1.1.1.1"
+```
+
+`resolver` は host で使用を許可する DNS resolver に置き換える。値が合っていることを確認してから unit を起動する。
 
 ```sh
 chown root:root /etc/celeris-browser/launcher.toml && chmod 0644 /etc/celeris-browser/launcher.toml
+install -d -o celeris-browser -g celeris-browser -m 0700 /var/lib/celeris-browser/sessions
 ```
 
 ## 5. socket・状態 dir の所有と mode

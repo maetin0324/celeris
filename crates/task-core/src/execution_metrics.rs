@@ -16,9 +16,116 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution::{BudgetKind, RunEnd};
 use crate::execution_gate::ExecutionMode;
+use crate::execution_plan::{RunIndexRole, RunRow};
 use crate::execution_plan::{WorkUnitKind, WorkUnitStatus};
-use crate::model::{Event, RunRole, Status, Task};
+use crate::model::{Event, RunMetrics, RunRole, Status, Task, Usage};
 use crate::quota::{QuotaMethod, QuotaRunRecord, QuotaUse, QuotaWindowUse, aggregate_quota_use};
+
+/// 同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ContinuationRunTotals {
+    pub runs: u64,
+    pub wall_ms: u64,
+    pub input_tokens: u64,
+    pub duplicate_reads: u64,
+}
+
+impl ContinuationRunTotals {
+    fn add(&mut self, usage: Option<&Usage>, metrics: Option<&RunMetrics>) {
+        self.runs += 1;
+        self.wall_ms += metrics.map_or(0, |m| m.wall_ms);
+        if let Some(usage) = usage {
+            self.input_tokens += usage.input_tokens.unwrap_or(0)
+                + usage.cache_read_tokens.unwrap_or(0)
+                + usage.cache_creation_tokens.unwrap_or(0);
+            self.duplicate_reads += u64::from(usage.duplicate_reads.unwrap_or(0));
+        }
+    }
+    pub fn absorb(&mut self, other: &Self) {
+        self.runs += other.runs;
+        self.wall_ms += other.wall_ms;
+        self.input_tokens += other.input_tokens;
+        self.duplicate_reads += other.duplicate_reads;
+    }
+}
+
+/// `session_resumed` が無い旧 run は unknown。fresh の理由は dispatch の判断記録から読む。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ContinuationMetrics {
+    #[serde(default)]
+    pub fresh: ContinuationRunTotals,
+    #[serde(default)]
+    pub resumed: ContinuationRunTotals,
+    #[serde(default)]
+    pub unknown: ContinuationRunTotals,
+    #[serde(default)]
+    pub fresh_fallback_by_reason: BTreeMap<String, u64>,
+}
+
+impl ContinuationMetrics {
+    fn add(&mut self, usage: Option<&Usage>, metrics: Option<&RunMetrics>, reason: Option<&str>) {
+        match usage.and_then(|u| u.session_resumed) {
+            Some(true) => self.resumed.add(usage, metrics),
+            Some(false) => self.fresh.add(usage, metrics),
+            None => self.unknown.add(usage, metrics),
+        }
+        if let Some(reason) =
+            reason.filter(|r| !matches!(*r, "not_continuation" | "independent_wu" | "role_fresh"))
+        {
+            *self
+                .fresh_fallback_by_reason
+                .entry(reason.to_string())
+                .or_default() += 1;
+        }
+    }
+    pub fn absorb(&mut self, other: &Self) {
+        self.fresh.absorb(&other.fresh);
+        self.resumed.absorb(&other.resumed);
+        self.unknown.absorb(&other.unknown);
+        for (reason, count) in &other.fresh_fallback_by_reason {
+            *self
+                .fresh_fallback_by_reason
+                .entry(reason.clone())
+                .or_default() += count;
+        }
+    }
+}
+
+fn fresh_reason(message: &str) -> Option<&str> {
+    message
+        .strip_prefix("continuation session: fresh (reason=")?
+        .strip_suffix(')')
+}
+
+/// run 索引で WU の所属を確定して集計する。キー `None` は atomic run。
+pub fn summarize_continuation_runs(
+    events: &[Event],
+    runs: &[RunRow],
+) -> (
+    ContinuationMetrics,
+    BTreeMap<Option<String>, ContinuationMetrics>,
+) {
+    let reasons: BTreeMap<&str, &str> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::WorkerProgress { run_id, msg, .. } => {
+                fresh_reason(msg).map(|reason| (run_id.as_str(), reason))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut total = ContinuationMetrics::default();
+    let mut by_wu = BTreeMap::new();
+    for run in runs.iter().filter(|run| run.role == RunIndexRole::Worker) {
+        let reason = reasons.get(run.run_id.as_str()).copied();
+        total.add(run.usage.as_ref(), run.metrics.as_ref(), reason);
+        by_wu
+            .entry(run.work_unit_id.clone())
+            .or_insert_with(ContinuationMetrics::default)
+            .add(run.usage.as_ref(), run.metrics.as_ref(), reason);
+    }
+    (total, by_wu)
+}
 
 /// D19: Task 単位の実行メトリクス（`GET /tasks/{id}/execution` と `GET /metrics/execution` の材料）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -92,6 +199,9 @@ pub struct ExecutionMetrics {
     /// run が 1 件も無ければ `true`（欠けようがない）。
     #[serde(default = "default_true")]
     pub cost_usd_complete: bool,
+    /// ADR-0124: worker run の fresh / resumed / 旧形式の比較値。
+    #[serde(default)]
+    pub continuation: ContinuationMetrics,
 }
 
 fn default_true() -> bool {
@@ -207,6 +317,16 @@ pub fn summarize(task: &Task, events: &[Event]) -> ExecutionMetrics {
     let mut cost_usd: Option<f64> = None;
     // ADR-0074 D4.3（Phase F3 quota）: token を持つのに `cost_usd` が無い run が 1 件でもあれば false。
     let mut cost_usd_complete = true;
+    let mut continuation = ContinuationMetrics::default();
+    let reasons: BTreeMap<&str, &str> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::WorkerProgress { run_id, msg, .. } => {
+                fresh_reason(msg).map(|reason| (run_id.as_str(), reason))
+            }
+            _ => None,
+        })
+        .collect();
 
     for event in events {
         match event {
@@ -254,11 +374,20 @@ pub fn summarize(task: &Task, events: &[Event]) -> ExecutionMetrics {
                 *runs_by_role.entry(name.to_string()).or_insert(0) += 1;
             }
             Event::WorkerFinished {
+                run_id,
+                role,
                 usage,
                 metrics,
                 end,
                 ..
             } => {
+                if role.unwrap_or(RunRole::Worker) == RunRole::Worker {
+                    continuation.add(
+                        usage.as_ref(),
+                        metrics.as_ref(),
+                        reasons.get(run_id.as_str()).copied(),
+                    );
+                }
                 if let Some(u) = usage {
                     if let Some(v) = u.input_tokens {
                         total_input_tokens = Some(total_input_tokens.unwrap_or(0) + v);
@@ -369,6 +498,7 @@ pub fn summarize(task: &Task, events: &[Event]) -> ExecutionMetrics {
         quota,
         quota_unknown_runs,
         cost_usd_complete,
+        continuation,
     }
 }
 

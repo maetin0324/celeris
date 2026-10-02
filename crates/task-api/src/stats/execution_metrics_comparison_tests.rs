@@ -313,3 +313,63 @@ fn indexed_summary_timing_2000_tasks_20_events() {
     assert_eq!(indexed, events);
     println!("indexed={indexed_time:?} events={event_time:?}");
 }
+
+#[test]
+fn continuation_metrics_api_groups_task_and_work_unit_runs() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = task(Status::Done, "continuation", 0);
+    store.create_task(&task, vec![]).unwrap();
+    let run_id = "continuation-api-run";
+    let wu_id = "wu-1";
+    let at = task.updated_at.format(&Rfc3339).unwrap();
+    let usage = task_core::Usage {
+        input_tokens: Some(8),
+        cache_read_tokens: Some(2),
+        duplicate_reads: Some(3),
+        session_resumed: Some(true),
+        ..Default::default()
+    };
+    let metrics = task_core::RunMetrics {
+        wall_ms: 42,
+        ..Default::default()
+    };
+    store
+        .run_index_start(RunRow {
+            run_id: run_id.into(),
+            task_id: task.id.to_string(),
+            work_unit_id: Some(wu_id.into()),
+            role: RunIndexRole::Worker,
+            seq: 1,
+            status: RunIndexStatus::Running,
+            adapter: Some("claude-code".into()),
+            model: None,
+            account: None,
+            session_id: None,
+            checkpoint: None,
+            usage: None,
+            metrics: None,
+            started_at: at,
+            finished_at: None,
+        })
+        .unwrap();
+    store
+        .run_index_finish(
+            run_id,
+            RunIndexStatus::Completed,
+            None,
+            Some(usage),
+            Some(metrics),
+            task.updated_at,
+        )
+        .unwrap();
+    let summary = execution_metrics_summary(&store, None, "genre").unwrap();
+    assert_eq!(summary.continuation.resumed.runs, 1);
+    assert_eq!(summary.continuation.resumed.wall_ms, 42);
+    assert_eq!(
+        summary.continuation_by_work_unit[wu_id]
+            .resumed
+            .input_tokens,
+        10
+    );
+    assert_eq!(summary.groups[0].continuation.resumed.duplicate_reads, 3);
+}

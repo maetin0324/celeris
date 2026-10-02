@@ -280,3 +280,7 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --lib` → exit 0（合計 1335 passed / 0 failed）。
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
 - `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。
+
+## Phase 3 — Claude Code continuation metrics（ADR-0124、2026-10-02）
+
+`ExecutionMetrics` と `GET /metrics/execution` に worker run の fresh / resumed / unknown 別の run 数・総 wall time・入力 token・再探索重複、および WU 別値と fresh fallback 理由別件数を追加した。定義は [continuation-metrics.md](api/v1/continuation-metrics.md)。API schema は `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::tests::committed_schema_matches_generated` で再生成する。GUI / web の `gen:types` はこの WorkUnit の対象外で未実施。検証: `cargo test -p task-core --lib` 638 passed、`cargo test -p task-api --lib` 75 passed / 2 ignored、schema 一致、`cargo clippy --workspace -- -D warnings` と `cargo fmt --all -- --check` exit 0。着手時の main `95ac1644` との merge-tree は `task-api/query.rs` など 8 ファイルで衝突を検出したが、この WorkUnit の変更ファイルとは重ならない。

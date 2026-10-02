@@ -628,6 +628,16 @@ bundle_web() {
   if ! ( cd "$dir" && web_pnpm install --prod --offline --frozen-lockfile ) >>"$BUILD/.gate-web-bundle.log" 2>&1 8>&- 9>&-; then
     WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: offline prod install failed (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
   fi
+  # pnpm の終了コードだけでは実行可能な app を保証できない。server/index.js は
+  # import 時に listen するため、同じ依存を読む app.js を import して確認する。
+  if [ ! -d "$dir/node_modules/" ]; then
+    printf '%s\n' 'web-bundle: offline prod install did not create a resolvable node_modules directory' >>"$BUILD/.gate-web-bundle.log"
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: node_modules missing (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
+  if ! ( cd "$dir" && node --input-type=module -e 'import.meta.resolve("express"); await import("./server/app.js")' ) >>"$BUILD/.gate-web-bundle.log" 2>&1; then
+    printf '%s\n' 'web-bundle: server dependencies could not be imported without listening' >>"$BUILD/.gate-web-bundle.log"
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: server dependencies unresolved (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
   WEB_BUNDLE_JSON="{\"tarball\": $(sd_json_str "web/$name.tar.gz"), \"app\": \"web/app\"}"
   sd_log "web: bundle ready ($STAGE/web/$name.tar.gz, app at web/app)"
 }

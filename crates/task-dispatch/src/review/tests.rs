@@ -123,7 +123,8 @@ async fn command_checks_are_re_executed_in_workspace() {
         ],
         dir.path(),
     );
-    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_millis(300)).await;
+    // 高負荷の評価器では test -f の sh 起動が数百 ms を超えることがある。sleep 30 は 2 倍再試行の 6s 後も超過するので timeout の判定は変わらない。
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(3)).await;
     assert_eq!(
         v.iter().map(|x| x.pass).collect::<Vec<_>>(),
         vec![true, false, true, false]

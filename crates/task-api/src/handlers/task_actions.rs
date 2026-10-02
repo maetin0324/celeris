@@ -21,6 +21,7 @@ use super::{ApiResult, Params, json_response, no_query, read_json, validated_wor
 
 /// PATCH /tasks/{id}: omitted hint leaves it unchanged; null or [] clears it.
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TaskPatchBody {
     #[serde(flatten)]
     pub task: task_ops::edit::TaskEdit,

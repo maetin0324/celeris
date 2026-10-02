@@ -1,10 +1,11 @@
 //! 起動時の組み立て: DB の置き場所の検査、`Dispatcher` の構築、組織図の種まき。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use task_core::{SqliteStore, StoreOptions, TaskStore};
 use task_dispatch::{Dispatcher, StaticPolicy};
+use task_worker::db_guard::{DaemonPaths, GuardDecision, ProtectedSet, WorkerRunMarker};
 use time::OffsetDateTime;
 
 use super::adapters::{build_adapters, effective_models};
@@ -92,6 +93,10 @@ pub(crate) fn hostname() -> String {
 /// 確かめられなければ**起動しない**（黙って保護なしで走らない）。`[db] worker_read_only = false` なら外す。
 /// `build_dispatcher`（テストから広く呼ばれる）ではなく `run` だけが呼ぶ。DB は `build_dispatcher` が
 /// 開いて作った後なので存在する。
+///
+/// ADR-0126 A: `worker_read_only = true` のときは、本番 config から守る対象 P を作り、worker run の印と
+/// 起動する daemon の path で判定する。試験用の一時 DB を guard の効いた worker run の中で使うときだけ
+/// probe をせずに guard を外す（免除）。それ以外は従来どおり probe する。
 pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError> {
     if !config.db.worker_read_only {
         tracing::warn!(
@@ -101,15 +106,43 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
         task_worker::db_guard::install(None);
         return Ok(());
     }
+    let home = passwd_home();
+    let decision = worker_db_guard_decision(
+        &worker_db_guard_protected_set(home.as_deref()),
+        &worker_db_guard_daemon_paths(config),
+        &task_worker::db_guard::detect_worker_run_marker(),
+    );
+    match &decision {
+        GuardDecision::Exempt => {
+            tracing::warn!(
+                db = %config.db.path.display(),
+                "test DB inside a guarded worker run; worker db guard not installed (ADR-0126)"
+            );
+            task_worker::db_guard::install(None);
+            return Ok(());
+        }
+        GuardDecision::RefuseProduction { reason, .. } => {
+            tracing::info!(%reason, "worker db guard: the daemon uses production paths; probing user namespaces (ADR-0126)");
+        }
+        GuardDecision::RequireUserns { reason } => {
+            tracing::debug!(%reason, "worker db guard: not exempt; probing user namespaces (ADR-0126)");
+        }
+    }
     let guard = task_worker::db_guard::DbGuard::new(&config.db.path)
         .map_err(|e| DaemonError::DbGuard(e.to_string()))?;
     task_worker::db_guard::probe(&guard).map_err(|e| {
-        DaemonError::DbGuard(format!(
+        let message = format!(
             "cannot make {} read-only for worker runs ({e}; ADR-0095). Worker runs must not be able to \
              write the database: enable unprivileged user namespaces for this user, or set \
              [db] worker_read_only = false to run without the guard (not recommended)",
             guard.db_path().display()
-        ))
+        );
+        DaemonError::DbGuard(match (decision.refusal_message(), &decision) {
+            (Some(refusal), GuardDecision::RefuseProduction { reason, .. }) => {
+                format!("{refusal}: {reason}. {message}")
+            }
+            _ => message,
+        })
     })?;
     tracing::info!(
         db = %guard.db_path().display(),
@@ -119,6 +152,126 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
     task_worker::db_guard::install(Some(guard));
     Ok(())
 }
+
+/// ADR-0126 A1-2: `getpwuid(getuid())` の home（`$HOME` は使わない。試験が書き換える）。
+fn passwd_home() -> Option<PathBuf> {
+    task_worker::db_guard::production_config_path()
+        .and_then(|config| config.ancestors().nth(3).map(Path::to_path_buf))
+}
+
+/// ADR-0126 A1: `home` の `.config/celeris/config.toml`（本番 config）から守る対象 P を作る。
+/// 本番 config が無ければ P は空（印は判定側で足す）。home が決まらない・存在するのに読めない・
+/// parse できないなら P は Unknown（免除しない）。相対 path は `Config::load` と同じく config の
+/// ディレクトリ基準、`~` は `$HOME` ではなく `home` で展開する。
+pub(crate) fn worker_db_guard_protected_set(home: Option<&Path>) -> ProtectedSet {
+    let mut set = ProtectedSet::new();
+    let Some(home) = home else {
+        set.mark_unknown("cannot resolve the home directory of the current uid");
+        return set;
+    };
+    let path = home.join(".config/celeris/config.toml");
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return set,
+        Err(e) => {
+            set.mark_unknown(format!("production config {}: {e}", path.display()));
+            return set;
+        }
+    }
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => {
+            set.mark_unknown(format!("production config {}: {e}", path.display()));
+            return set;
+        }
+    };
+    let value: toml::Table = match toml::from_str(&text) {
+        Ok(value) => value,
+        Err(e) => {
+            set.mark_unknown(format!(
+                "production config {} cannot be parsed: {e}",
+                path.display()
+            ));
+            return set;
+        }
+    };
+    let base = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.to_path_buf());
+    let base = base.canonicalize().unwrap_or(base);
+    let resolve = |raw: &str, expand: bool| {
+        let p = PathBuf::from(raw);
+        let p = if expand {
+            task_core::expand_home(&p, Some(home))
+        } else {
+            p
+        };
+        if p.is_relative() { base.join(p) } else { p }
+    };
+    // `db` は文字列か `[db]` テーブル（ADR-0064 D1）。省略時は ADR-0045 D2 の既定。
+    let db = match value.get("db") {
+        None => Some("~/.local/celeris/celeris.sqlite3"),
+        Some(toml::Value::String(s)) => Some(s.as_str()),
+        Some(toml::Value::Table(t)) => match t.get("path") {
+            None => Some("~/.local/celeris/celeris.sqlite3"),
+            Some(toml::Value::String(s)) => Some(s.as_str()),
+            Some(_) => None,
+        },
+        Some(_) => None,
+    };
+    match db {
+        Some(db) => set.add_db_file(&resolve(db, true)),
+        None => set.mark_unknown(format!("production config {}: invalid db", path.display())),
+    }
+    match value.get("state_dir") {
+        None => {}
+        Some(toml::Value::String(s)) => set.add_dir(&resolve(s, true)),
+        Some(_) => set.mark_unknown(format!(
+            "production config {}: invalid state_dir",
+            path.display()
+        )),
+    }
+    // `[api] token_file` は相対なら config のディレクトリ基準（`~` は展開しない。`ApiConfig::resolve_paths`）。
+    match value.get("api") {
+        None => {}
+        Some(toml::Value::Table(api)) => match api.get("token_file") {
+            None => {}
+            Some(toml::Value::String(s)) => set.add_token_file(&resolve(s, false)),
+            Some(_) => set.mark_unknown(format!(
+                "production config {}: invalid [api] token_file",
+                path.display()
+            )),
+        },
+        Some(_) => set.mark_unknown(format!(
+            "production config {}: invalid [api]",
+            path.display()
+        )),
+    }
+    set
+}
+
+/// ADR-0126 A2: 起動する daemon の path（`state_dir` は `Config` に無いので DB のディレクトリで代わる）。
+pub(crate) fn worker_db_guard_daemon_paths(config: &Config) -> DaemonPaths {
+    DaemonPaths {
+        db: config.db.path.clone(),
+        state_dir: None,
+        token_file: config.api.token_file.clone(),
+    }
+}
+
+/// ADR-0126 A2/A3: `task_worker::db_guard` の判定関数に渡す（試験から userns なしで呼ぶ）。
+pub(crate) fn worker_db_guard_decision(
+    protected: &ProtectedSet,
+    daemon: &DaemonPaths,
+    marker: &WorkerRunMarker,
+) -> GuardDecision {
+    task_worker::db_guard::judge_worker_db_guard(protected, daemon, marker)
+}
+
+#[cfg(test)]
+#[path = "bootstrap_worker_db_guard_tests.rs"]
+mod worker_db_guard_tests;
 
 /// 設定から `Dispatcher` を組み立てる。`[accounts]`/`[secrets]`/`[memory]` があればディレクトリを 0700 で作る
 /// （ADR-0024 D1、ADR-0030 D1、ADR-0033 D6）。

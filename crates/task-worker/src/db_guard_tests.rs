@@ -44,6 +44,8 @@ fn guard(f: &Fixture) -> DbGuard {
     DbGuard::new(&f.db)
         .unwrap()
         .with_ssh_shadow_root(Some(f._tmp.path().join("shadow")))
+        // 実 HOME に依存しない（付記 D-a の 3 は専用の試験で HOME を注入して見る）。
+        .with_home(None)
 }
 
 /// `script` を namespace の中の `sh -c` で走らせ、(exit 0 か, stdout+stderr) を返す。
@@ -147,6 +149,101 @@ fn user_systemd_bus_is_hidden_from_launched_process() {
             "{program} --user unexpectedly succeeded in the masked namespace"
         );
     }
+}
+
+/// 付記 D-a の 3: `$HOME` の `.config/systemd`・`.local/celeris/releases`・`.config/celeris` は namespace の中で
+/// 読み取り専用（EROFS）になり、外では同じ dir に書ける。HOME は tempdir を注入する（実 HOME に依存しない）。
+#[test]
+fn host_config_read_only_inside_namespace() {
+    if !userns_available() {
+        return;
+    }
+    let f = fixture();
+    let home = f._tmp.path().join("home");
+    let dirs: Vec<PathBuf> = HOST_CONFIG_DIRS.iter().map(|rel| home.join(rel)).collect();
+    for dir in &dirs {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    // `.config` 自体は対象外で、namespace の中でも書ける。
+    let g = guard(&f).with_home(Some(home.clone()));
+    let mut script = String::new();
+    for (i, dir) in dirs.iter().enumerate() {
+        script.push_str(&format!(
+            "if touch {d}/inside 2>err{i}; then echo WRITABLE-{i}; \
+             elif grep -q 'Read-only file system' err{i}; then echo erofs-{i}; \
+             else cat err{i}; fi; ",
+            d = q(dir)
+        ));
+    }
+    script.push_str(&format!(
+        "touch {}/outside-ro && echo config-ok; touch ok && echo ws-ok",
+        q(&home.join(".config"))
+    ));
+    let (ok, out) = run_guarded(&g, &f.ws, &script);
+    assert!(ok, "{out}");
+    for i in 0..dirs.len() {
+        assert!(!out.contains(&format!("WRITABLE-{i}")), "{i} in:\n{out}");
+        assert!(
+            out.contains(&format!("erofs-{i}")),
+            "{i} missing in:\n{out}"
+        );
+    }
+    for good in ["config-ok", "ws-ok"] {
+        assert!(out.contains(good), "{good} missing in:\n{out}");
+    }
+    for dir in &dirs {
+        assert!(!dir.join("inside").exists(), "{}", dir.display());
+        // namespace の外では同じ dir に書ける。
+        std::fs::write(dir.join("outside"), "x").unwrap();
+    }
+}
+
+/// 付記 D-a の 3: 存在しない path には何もしない（spawn は通常どおり）。
+#[test]
+fn host_config_read_only_skips_missing_paths() {
+    let f = fixture();
+    let home = f._tmp.path().join("home");
+    std::fs::create_dir_all(home.join(".config/celeris")).unwrap();
+    let g = guard(&f).with_home(Some(home.clone()));
+    assert_eq!(
+        g.host_config_read_only_paths().unwrap(),
+        vec![std::fs::canonicalize(home.join(".config/celeris")).unwrap()]
+    );
+    assert!(
+        guard(&f)
+            .with_home(Some(f._tmp.path().join("absent-home")))
+            .host_config_read_only_paths()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// 付記 D-a の 3 / D5: 存在を確かめられない（EACCES）なら spawn の準備が失敗する（保護なしで起動しない）。
+#[test]
+fn host_config_read_only_failure_refuses_the_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("skip: root ignores directory permissions");
+        return;
+    }
+    let f = fixture();
+    let home = f._tmp.path().join("home");
+    let config = home.join(".config");
+    std::fs::create_dir_all(config.join("celeris")).unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let g = guard(&f).with_home(Some(home));
+    let mut std_cmd = Command::new("true");
+    let prepared = apply_std(&mut std_cmd, &g);
+    let mut cmd = tokio::process::Command::new("true");
+    apply(&mut cmd, &g);
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(prepared.is_err(), "spawn preparation should fail");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let res = rt.block_on(async { cmd.status().await });
+    assert!(res.is_err(), "spawn should be refused: {res:?}");
 }
 
 #[test]

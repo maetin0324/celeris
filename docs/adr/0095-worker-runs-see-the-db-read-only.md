@@ -200,6 +200,8 @@ celerisctl に `db init` / `db migrate` のような migration の入口は**足
    `~/.config/celeris` を、存在すれば自分自身へ bind して `MS_RDONLY` で remount する（D1 の 4 と同じ手順、下位の bind は作らない）。
    worker の run がここに書く正当な理由は無い（codex のアカウント dir は `~/.local/celeris/codex-accounts` で、`releases` の外）。
    実装時に既存の run が書いていないことを確かめ、書くものが見つかったら付記を直してから進める。
+   実装: `DbGuard::host_config_read_only_paths`（HOME は `DbGuard::new` で解決、試験は `with_home` で注入）を `Plan::enter` が
+   bind + remount する。試験は `db_guard_tests.rs` の `host_config_read_only_inside_namespace` ほか（2026-10-02 の grep で書く run は無し）。
 
 namespace を作れない環境での扱い:
 

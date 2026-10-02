@@ -120,6 +120,20 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
   - いずれも渡された `CARGO_TARGET_DIR` のまま実行。
 - 未解決事項: なし。本番 host の操作、設計原則・Phase 順の変更は行っていない。
 
+## reviewer に人の決定・回答と決定的 check の結果を渡す（ADR-0117）
+
+完了日 2026-10-02（task 01M3WZ1GFBPQ8T699ZF3Y66SJ3 の record unit `verify-all`）。
+
+- 経緯: [ADR-0117](adr/0117-review-human-decisions-and-check-results.md) に基づき、`task-worker`（ReviewRequest の拡張と review プロンプトの節）と `task-dispatch`（spawn_review が対象 task と祖先の回答済み決定・決定的 check の verdict を集めて渡す）を実装済み（D1/D2 実装、D3「acceptance 書き換えの入口」は見送り）。この WorkUnit はその統合後の workspace 全体検査。
+- 証拠コマンドと結果:
+  - `cargo fmt --all -- --check` → exit 0（差分なし）
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+  - `cargo test --workspace` → exit 0（全 118 テストバイナリで `test result: ok`、`0 failed`。主要クレートの内訳: task-core 620 passed、task-dispatch 498 passed、task-ops 382 passed、task-worker 660 passed / 4 ignored。ブラウザ系の実プロセス試験を含め失敗・flake 無し）
+  - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行。外部ネットワークへのアクセスなし。
+- 変更範囲: このWorkUnit自体はコード変更なし（検査と本記録のみ）。実装済みの変更は `crates/task-worker/src/claude_code/{prompt.rs,tests.rs}`、`crates/task-worker/src/protocol.rs`、`docs/protocol/worker-protocol.schema.json`、`crates/task-dispatch/src/{review.rs,review/tests.rs,dispatcher/review_spawn.rs,dispatcher/tests/review.rs}`（別 WorkUnit `worker-prompt`・`dispatch-context` でコミット済み、上記 commit に記録済み）。
+- 未解決事項: D3（人の決定の note から `PATCH acceptance` を提案する入口）は見送り、ADR-0117 に記録済み。reviewer が実際に人の決定を優先して合格させる end-to-end 実例（web root final review のような実 run での再現確認）はこの WorkUnit の範囲外（unit test レベルでの検証のみ）。
+- merge-main（2026-10-02）: 最新 main（33e0a6aa、R7-10 planner check 指針を含む）を本ブランチに merge。`docs/PROGRESS.md` の衝突は上の 2 節（R7-10 を先、ADR-0117 を後）を両方残して解消。コード（`crates/task-worker/src/claude_code/{prompt.rs,tests.rs}`）は自動 merge。ADR 番号 0117 は main の最大 0115 と重複なし。`cargo fmt --all -- --check` / `cargo clippy --workspace -- -D warnings` / `cargo test --workspace` はいずれも exit 0。
+
 ## repair objective の許可範囲受け渡し
 
 完了日 2026-10-02（work unit `wire`）。段階統合は同じ phase の非 repair・非 integrate unit、final review は task の全 unit と task acceptance から、変更してよい paths と `git diff` を含む check を集めて repair objective に渡す。重複を除き、辞書順に並べる。範囲外の失敗はファイルを直さず `plan_issue` で報告する指示が入り、既存の `worker_finish` 経路で replan に進むことを確認した。delivery repair は対象外。

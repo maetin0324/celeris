@@ -876,8 +876,12 @@ async fn run_acp(
     clear_delegate_file(&req.artifacts_dir).await;
 
     let mut prompt = build_prompt(&req.task, &req.context, run_id, &artifacts_rel);
-    // ADR-0056 D3（Phase 79）: mount された skills を前置きに直接埋め込む（acp にはファイルを自動で
-    // 読む契約が無いため。`skills` が空なら 1 バイトも変わらない）。
+    // ADR-0127 D1/D3: mount された skill のディレクトリを `.agents/skills/<name>/` に丸写しし（opencode が
+    // ネイティブに読む。他の ACP エージェントは前置きの一覧から読む）、前置きには名前・説明・パスの
+    // 一覧だけを足す（本文は埋め込まない。`skills` が空なら前置きは 1 バイトも変わらない）。
+    if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
+        warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
+    }
     prompt.push_str(&crate::skills::preamble_section(&req.context.skills));
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;

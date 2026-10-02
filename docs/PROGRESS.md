@@ -236,3 +236,21 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 既存の routing 試験（`example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering` 等）も
   上記のフルスイートに含まれ通過を確認済み。
 - 未解決事項: なし。
+
+## ADR-0122 完了（ui-ux 外部 skills）
+
+完了日 2026-10-02。ADR-0122（外部 agent skill の vendoring・KB への取り込み・ui-ux への mount・quality gate の
+reviewer 配布）の D1〜D6 を実装し、`docs/adr/0122-ui-ux-external-skills.md` の状態欄を「採用・実装済み」に更新した。
+実装 commit: vendor-skills `d39733d8`、vet-skills `3cfdf69a`、adr `7ce72c5c`、skill-import `41e6324b`、
+review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
+
+- 証拠コマンド: `cargo test -p celeris --test ui_ux_skills_delivery`（結果の詳細は
+  `docs/progress/ui-ux-skills.md` を参照。config/skills → 一時 KB → ui-ux 実効 profile → worker 配送の結合試験が
+  全件 pass、routing 回帰試験も同じフルスイートで通過を確認済み）。
+- 未解決事項:
+  - 本番の KB 取り込み・ui-ux への mount は worker からは行わない。人が `docs/ops/ui-ux-external-skills.md` の
+    手順で実行する（ADR-0095 付記 D-d）。
+  - `web-design` の LICENSE 判断（LICENSE ファイルが無く README の License 節に拠っている点）は、より厳しい
+    基準を採るかどうかを人が判断する（ADR-0122 D6、`docs/progress/ui-ux-skills.md`）。
+  - 本 commit 後の HEAD に対する `scripts/selfdeploy/release.sh` / `verify.sh` で検証済みの sha12 は、次の
+    work unit（release-report）が追記する。

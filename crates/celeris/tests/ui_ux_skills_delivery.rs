@@ -148,8 +148,11 @@ async fn ui_ux_skills_reach_claude_code_workspace_with_real_bodies() {
         "scripts/ must not reach the worker workspace"
     );
 
-    // codex: AGENTS.md の区切り節に全スキルの本文が入る。
+    // Codex: AGENTS.md は一覧のみで、skill 本体は作業場所内の相対パスに置く。
     let agents_cwd = tempfile::tempdir().expect("agents workspace");
+    task_worker::skills::deliver_agent_skills(agents_cwd.path(), &work_mounts)
+        .await
+        .expect("deliver codex skill directories");
     task_worker::skills::deliver_agents_md(agents_cwd.path(), &work_mounts)
         .await
         .expect("deliver codex AGENTS.md");
@@ -157,16 +160,110 @@ async fn ui_ux_skills_reach_claude_code_workspace_with_real_bodies() {
         std::fs::read_to_string(agents_cwd.path().join("AGENTS.md")).expect("AGENTS.md written");
     assert!(agents_md.contains(task_worker::skills::SECTION_BEGIN));
     assert!(agents_md.contains(task_worker::skills::SECTION_END));
-    for name in UI_SKILLS {
+    for mount in &work_mounts {
         assert!(
-            agents_md.contains(&format!("### {name}")),
-            "AGENTS.md missing heading for {name}"
+            agents_md.contains(&format!("`{}`", mount.name)),
+            "missing {}",
+            mount.name
         );
+        assert!(agents_md.contains(&format!(".agents/skills/{}/SKILL.md", mount.name)));
     }
+    let web_body =
+        std::fs::read_to_string(config_dir().join("skills/web-design/SKILL.md")).unwrap();
+    assert!(
+        !agents_md.contains(&web_body),
+        "AGENTS.md embeds web-design body"
+    );
+    assert!(agents_md.len() < web_body.len());
+    assert_delivered_tree(agents_cwd.path(), &work_mounts);
     assert!(
         !agents_md.contains("scripts/init_frontend_quality.py"),
         "AGENTS.md must not reference the excluded scripts/ entry point"
     );
+}
+
+#[tokio::test]
+async fn ui_ux_skills_acp_delivery_copies_attachments_and_unmounts_owned_files() {
+    let kb = tempfile::tempdir().expect("kb tempdir");
+    let root = kb.path().join("knowledge");
+    task_ops::knowledge::init(&root).expect("kb init");
+    let names: Vec<String> = UI_SKILLS.iter().map(|s| s.to_string()).collect();
+    task_ops::knowledge::skills_import_dir(&root, &config_dir().join("skills"), &names, None)
+        .expect("import config/skills into temp kb");
+    let mounts = resolve_skill_mounts(&root, &UI_SKILLS, SkillUse::Work);
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let human_file = workspace.path().join(".agents/skills/manual-note.md");
+    std::fs::create_dir_all(human_file.parent().unwrap()).unwrap();
+    std::fs::write(&human_file, "keep me").unwrap();
+
+    task_worker::skills::deliver_agent_skills(workspace.path(), &mounts)
+        .await
+        .unwrap();
+    let preamble = task_worker::skills::preamble_section(&mounts);
+    let web_body =
+        std::fs::read_to_string(config_dir().join("skills/web-design/SKILL.md")).unwrap();
+    assert!(
+        !preamble.contains(&web_body),
+        "ACP preamble embeds web-design body"
+    );
+    assert!(preamble.contains(".agents/skills/web-design/SKILL.md"));
+    assert!(preamble.len() < web_body.len());
+    assert_delivered_tree(workspace.path(), &mounts);
+
+    task_worker::skills::deliver_agent_skills(workspace.path(), &[])
+        .await
+        .unwrap();
+    for name in UI_SKILLS {
+        assert!(
+            !workspace.path().join(".agents/skills").join(name).exists(),
+            "{name} remains mounted"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&human_file).unwrap(), "keep me");
+}
+
+fn assert_delivered_tree(workspace: &Path, mounts: &[SkillMount]) {
+    for mount in mounts {
+        let source = Path::new(&mount.path);
+        let dest = workspace.join(".agents/skills").join(&mount.name);
+        let mut files = Vec::new();
+        collect_files(source, source, &mut files);
+        for relative in files {
+            assert!(
+                dest.join(&relative).is_file(),
+                "{} missing {}",
+                mount.name,
+                relative.display()
+            );
+            assert_eq!(
+                std::fs::read(source.join(&relative)).unwrap(),
+                std::fs::read(dest.join(&relative)).unwrap()
+            );
+        }
+    }
+    for relative in [
+        "shadcn/cli.md",
+        "shadcn/rules/forms.md",
+        "ui-ux-quality-gate/references/workflow.md",
+        "ui-ux-quality-gate/templates/DESIGN.md",
+    ] {
+        assert!(
+            workspace.join(".agents/skills").join(relative).is_file(),
+            "missing attachment {relative}"
+        );
+    }
+}
+
+fn collect_files(root: &Path, current: &Path, files: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(current).unwrap() {
+        let entry = entry.unwrap();
+        let ty = entry.file_type().unwrap();
+        if ty.is_dir() {
+            collect_files(root, &entry.path(), files);
+        } else if ty.is_file() {
+            files.push(entry.path().strip_prefix(root).unwrap().to_path_buf());
+        }
+    }
 }
 
 #[tokio::test]

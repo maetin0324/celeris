@@ -50,6 +50,35 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     if verify {
         config.apply_verify_smoke();
     }
+    let identity = InstanceIdentity::new(opts.release.as_deref());
+    // ADR-0040 付記（2026-10-02）: 昇格の認可。`build_dispatcher`（DB を開いて migrate する）・
+    // `install_worker_db_guard`・`start_instance`（handoff 要求）より前に判定し、拒否なら DB を一度も
+    // 開かずに exit 4。`--mode verify` は判定の外。
+    if !verify {
+        let evidence =
+            instance::read_promotion_evidence(&config.selfdeploy.releases_dir, &identity.release);
+        match instance::decide_promotion(
+            &identity.release,
+            &evidence,
+            time::OffsetDateTime::now_utc(),
+        ) {
+            instance::PromotionGate::Skipped(reason) => {
+                tracing::info!(release = %identity.release, "promotion gate: skipped ({reason})");
+            }
+            instance::PromotionGate::Authorized(reason) => {
+                tracing::info!(release = %identity.release, "promotion gate: authorized ({reason})");
+            }
+            instance::PromotionGate::Rejected(reason) => {
+                tracing::error!(
+                    release = %identity.release,
+                    releases_dir = %config.selfdeploy.releases_dir.display(),
+                    "promotion gate: rejected ({reason}); not opening the DB (no migration, no handoff); \
+                     exiting 4 (ADR-0040 addendum 2026-10-02)"
+                );
+                return Ok(Exit::NotPromoted);
+            }
+        }
+    }
     warn_if_db_on_network_filesystem(&config.db.path);
     // ADR-0047 D3 / D4（P-61-i、Phase 62）: 起動時に索引が無ければ作る（`_inbox` の変化を tick ごとに
     // 見る仕組みは無いが、知識整理 run が `apply_candidates` の後に必ず `reindex` するので、起動後は
@@ -57,7 +86,6 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     if !verify && task_ops::knowledge::exists(&config.knowledge.root) {
         let _ = task_ops::knowledge::ensure_index(&config.knowledge.root);
     }
-    let identity = InstanceIdentity::new(opts.release.as_deref());
     let cluster_masters: ClusterMasters = Arc::new(std::sync::Mutex::new(HashMap::new()));
     // ADR-0126 A2: worker run の中で本番 DB・本番 token を使う daemon は DB を開く前に止める。
     refuse_production_db_in_worker_run(&config)?;
@@ -117,6 +145,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                             sandboxd: bin_dir.join("celeris-browser-sandboxd"),
                             egress: bin_dir.join("celeris-browser-egress"),
                             live_sessions: Some(Arc::clone(&live_sessions)),
+                            // ADR-0116 D5: `[browser] runtime`（既定 `"daemon"`）。`Config::validate` が
+                            // `runtime = "launcher"` のとき `launcher_socket` の有無を既に確かめている。
+                            runtime: config.browser.runtime_kind(),
                         },
                     );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの

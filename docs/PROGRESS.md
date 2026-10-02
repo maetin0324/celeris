@@ -155,6 +155,7 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。
 - H6: 期間・合格条件・判定日は人の決定待ち。決まるまで cutover しない。H9: 通知方針は人の決定待ち。H10: release `bf54b41ad627` の staging verify exit 0、読み取り parity 3 passed。
 - 配置上の問題（2026-10-01）: 本番 release パスが前 run の staging 成果物を指す symlink。参照先を dogfood 中に削除しない。NFS 実体コピーは途中で中止。再起動時は web unit と LAN socket を手動で start する。恒久化の対応・再確認結果は未記入。
+- 恒久化（2026-10-02、web ADR-W3 / ADR-0081 付記 (C)(D)）: `scripts/selfdeploy/web-follow.sh <new> <old>` を新設し、`promote.sh` が昇格後に呼ぶ（旧 `celeris-web@<old>` が active かつ新 release の `gate.json` `web.ok=true`・`web/app/server/index.js` ありのときだけ新へ切替。失敗は warning、exit 0、`celeris@` には触れない）。`celeris-web@.service` から `Wants=celeris@%i.service` を除去。証拠: `bash scripts/selfdeploy/tests/promote_web_follows_release.sh` exit 0（(a)(b)(b2)(c)(d)(e) 全 ok）。本番の override.conf 撤去・unit の置き直し・web 再起動は人の手順（[docs/selfdeploy.md §4e](selfdeploy.md#4e-web-の追従web-followsh)）。未実施。
 - 端末確認の残り: LAN の別の物理端末からの到達・操作は未確認。結果を確認したら追記する。
 - 期間中の問題記録: `<日付>｜<画面>｜<端末・ブラウザ>｜<現象>｜<重大度>｜<対応・タスク ID・再確認結果>` の形で 1 件ずつ追記する。
 ## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）

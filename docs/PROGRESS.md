@@ -644,6 +644,13 @@ blocked daemon repair だったことを覚えておき、続く `ExecutionPlann
   を単独で再実行すると 1 passed で通った。共用 host の負荷による flaky で、本修正と無関係。
   その他は 507 passed（1 回目の集計、上記 1 件を除く）。
 - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-ops --lib blocked_repair_superseded` を再検証（run #3）→ exit 0（5 passed、上と同じ 5 件）。
+  `cargo test -p task-dispatch --lib blocked_repair_replan_loop` → exit 0（1 passed）。
+  `cargo test --workspace` の再実行では exit 101 だったが、落ちたのは `task-worker` の
+  `browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace` 1 件のみ（host の launcher binary
+  が新しい protocol に未更新・run sandbox の userns 制約によるもので、本修正・instance_handoff とは別件。
+  ADR-0115/0116 の既知事項）。他の全テストバイナリは `test result: ok`。
+  `cargo clippy --workspace -- -D warnings` → exit 0（警告なし、再検証）。
 
 ### 人が task `01M3YF3NS2EGTZD2BBWNPG1K28` を再開する手順
 

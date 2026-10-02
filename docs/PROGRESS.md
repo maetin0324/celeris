@@ -481,3 +481,6 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 
 - main 由来の launcher 関連差分を確認: `crates/task-worker/src/browser_runtime.rs` は main 側の init 待ち変更を含み、launcher/sandboxd/egress の起動経路に効く。この変更は既に land-main2 の記録に記載済みで、host の binary 入れ替えと require 試験の再実行が必要。
 - `git merge-base --is-ancestor 0d438ec19d9a HEAD` と `git merge-tree --write-tree main HEAD` は統合完了後に確認する。
+- 最終検査（merge commit `82cc99e1`）: `git merge-base --is-ancestor 0d438ec19d9a HEAD` → exit 0。`git merge-tree --write-tree main HEAD` → exit 0（tree `22d2f56bf0c33149aa3fe58d1322347fd0849b21`）。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace` → exit 101（`instance_handoff` 8件中3 passed / 5 failed）。`cargo test -p celeris --test instance_handoff` 単独再実行も exit 101、同じ5件が再現。うち3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted` で失敗。残り2件（新旧 daemon の dispatch/standby 引継ぎ）も同一環境で失敗した。コードで隠さず、workspace test pass とは扱わない。

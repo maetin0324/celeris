@@ -964,3 +964,120 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
     let hidden = inbox(&store, Some(&connected_snapshot), &ctx, now, &no_evidence).expect("inbox");
     assert!(cluster_unavailable_find(&hidden.attention, "pegasus").is_none());
 }
+
+/// ADR-0121 D3: 完了した root の `DeliverySkipped` は（24 時間より古くても）attention に出る。木の子は出さず、
+/// 同じ head の delivery が後で作られたら消える。
+#[test]
+fn inbox_attention_shows_delivery_skip_reason_for_done_root() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let skipped = |head: Option<&str>| Event::DeliverySkipped {
+        reason: task_core::DeliverySkipReason::DepartmentUnresolved,
+        detail: "assignee なし".into(),
+        head: head.map(str::to_string),
+    };
+    let mut root = sample_task(TaskKind::Execute, Status::Done);
+    root.project_id = Some(task_core::ProjectId::new());
+    root.updated_at = OffsetDateTime::now_utc() - time::Duration::days(3);
+    store.insert(&root).expect("insert root");
+    store
+        .append_event(root.id, &skipped(Some("abc123")))
+        .expect("skip event");
+
+    let mut child = sample_task(TaskKind::Execute, Status::Done);
+    child.project_id = root.project_id;
+    child.tree = Some(task_core::TreeInfo {
+        root_id: root.id,
+        depth: 2,
+        parent_unit: Some(task_core::ParentUnit {
+            task_id: root.id,
+            plan_id: "plan".into(),
+            unit_key: "c".into(),
+            stage: "s".into(),
+            attempt: 1,
+        }),
+        base_commit: None,
+    });
+    store.insert(&child).expect("insert child");
+    store
+        .append_event(child.id, &skipped(None))
+        .expect("child skip event");
+
+    let ctx = view_ctx();
+    let result = inbox(&store, None, &ctx, OffsetDateTime::now_utc(), &no_evidence).expect("inbox");
+    let items: Vec<_> = result
+        .attention
+        .iter()
+        .filter_map(|a| match a {
+            AttentionItem::DeliverySkipped {
+                task,
+                reason,
+                summary,
+                detail,
+                head,
+                ..
+            } => Some((
+                task.id,
+                *reason,
+                summary.clone(),
+                detail.clone(),
+                head.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].0, root.id);
+    assert_eq!(
+        items[0].1,
+        task_core::DeliverySkipReason::DepartmentUnresolved
+    );
+    assert!(
+        items[0]
+            .2
+            .contains("main への取り込みを開始できませんでした")
+    );
+    assert_eq!(items[0].3, "assignee なし");
+    assert_eq!(items[0].4.as_deref(), Some("abc123"));
+    let json = serde_json::to_value(&result.attention).expect("json");
+    assert!(json.to_string().contains("\"type\":\"delivery_skipped\""));
+    assert!(
+        json.to_string()
+            .contains("\"reason\":\"department_unresolved\"")
+    );
+
+    store
+        .delivery_save(
+            None,
+            &task_core::Delivery {
+                task_id: root.id,
+                project_id: task_core::ProjectId::new(),
+                repo_id: task_core::RepoId::new(),
+                repo: "agent-platform".into(),
+                branch: "celeris/x".into(),
+                base: "main".into(),
+                head: "abc123".into(),
+                default_branch: "main".into(),
+                department: "engineering".into(),
+                review_run: "rev-1".into(),
+                worker_run: "run-1".into(),
+                criterion_idx: 0,
+                decision: None,
+                state: task_core::DeliveryState::Reviewing,
+                detail: String::new(),
+                release: None,
+                prepare_pid: None,
+                notification: None,
+                pushed_at: None,
+                push_error: None,
+            },
+        )
+        .expect("delivery save");
+    let result = inbox(&store, None, &ctx, OffsetDateTime::now_utc(), &no_evidence).expect("inbox");
+    assert!(
+        !result
+            .attention
+            .iter()
+            .any(|a| matches!(a, AttentionItem::DeliverySkipped { .. })),
+        "a delivery for the same head clears the item"
+    );
+}

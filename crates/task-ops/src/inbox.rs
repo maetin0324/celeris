@@ -188,6 +188,18 @@ pub enum AttentionItem {
         decision_ids: Vec<String>,
         at: String,
     },
+    /// ADR-0121 D3: 完了した root の成果を main へ取り込み始められなかった（`Event::DeliverySkipped` の写し。
+    /// 正本は event）。同じ head の delivery が後で作られたら出さない。
+    DeliverySkipped {
+        task: TaskRef,
+        reason: task_core::DeliverySkipReason,
+        /// 「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。
+        summary: String,
+        detail: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        head: Option<String>,
+        at: String,
+    },
 }
 
 /// `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
@@ -209,6 +221,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::ClusterUnavailable { at, .. } => at,
         AttentionItem::PhaseCheckpoint { at, .. } => at,
         AttentionItem::PlanApproval { at, .. } => at,
+        AttentionItem::DeliverySkipped { at, .. } => at,
     }
 }
 
@@ -798,6 +811,49 @@ fn build_attention(
             stages,
             decision_ids,
             at,
+        });
+    }
+
+    // ADR-0121 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
+    let latest_skipped = store.latest_delivery_skipped_rows()?;
+    for row in latest_skipped {
+        let Some(t) = all_tasks.iter().find(|t| {
+            t.id == row.task_id
+                && t.status == Status::Done
+                && t.project_id.is_some()
+                && !task_core::tree::is_tree_child(t)
+                && task_core::support_kind(t).is_none()
+        }) else {
+            continue;
+        };
+        let Event::DeliverySkipped {
+            reason,
+            detail,
+            head,
+        } = row.event
+        else {
+            continue;
+        };
+        let delivered = store
+            .delivery_get(t.id)?
+            .is_some_and(|d| head.as_ref().is_none_or(|h| *h == d.head));
+        if delivered {
+            continue;
+        }
+        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
+        let events = view::seq_pairs(&rows);
+        let mut task_ref = view::task_ref(t);
+        task_ref.actions = view::actions_with_events(t, &events);
+        items.push(AttentionItem::DeliverySkipped {
+            task: task_ref,
+            reason,
+            summary: format!(
+                "完了しましたが main への取り込みを開始できませんでした: {}",
+                reason.label()
+            ),
+            detail,
+            head,
+            at: row.ts,
         });
     }
 

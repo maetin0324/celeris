@@ -240,6 +240,10 @@ struct ScratchState {
     pinned_summary: Option<String>,
     /// この tick で緊急 GC を回した（通常の `scratch_gc` phase を重ねない）。
     ran_this_tick: bool,
+    /// ADR-0129 (4): 直近に seed の更新を確かめた時刻（`None` = 起動後まだ。昇格の後の起動で直ちに確かめる）。
+    seed_last_check: Option<Instant>,
+    /// seed の更新スレッドが動いている間は `true`。
+    seed_refreshing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// ADR-0075 D3: run の `CARGO_TARGET_DIR` をどこから取るか（`run_worker` に渡す）。
@@ -1741,6 +1745,8 @@ impl Dispatcher {
             if !self.scratch.ran_this_tick {
                 self.scratch_gc(false);
             }
+            // ADR-0129 (4)(5): seed の GC（rename まで）と、main が進んだときの seed の更新（別スレッド）。
+            self.seed_housekeeping(Instant::now());
         } else {
             self.cleanup_work_unit_build_caches();
             self.scratch.view = self.config.shared_build_cache.then(|| {

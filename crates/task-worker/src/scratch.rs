@@ -879,5 +879,9 @@ pub use gc::*;
 mod reflink;
 pub use reflink::*;
 
+// ADR-0129 (4)(5): seed の更新と GC。
+mod seed;
+pub use seed::*;
+
 #[cfg(test)]
 mod tests;

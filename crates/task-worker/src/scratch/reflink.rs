@@ -47,6 +47,9 @@ pub struct SeedManifest {
     pub dev_debug: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// seed の `target/` の st_blocks の合計（ADR-0129 (5)。owner と共有する extent を含む保守的な上限）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
 }
 
 /// `seeds/<repo-key>/current`。

@@ -817,3 +817,41 @@ async fn run_start_adopts_a_finished_target_that_predates_the_checkout() {
     assert!(pool.target_dir(&owner).join("warm.rlib").exists());
     assert!(!pool.target_dir(&old).exists());
 }
+
+/// ADR-0129 (4)(5): dispatcher の seed の後始末は起動直後に 1 回、以後 `SEED_CHECK_INTERVAL_SECS` ごと（固定した
+/// `Instant` で駆動）。登録外の repo の seed には印を書き（猶予の間は current を残す）、current 以外の世代を退避する。
+#[tokio::test]
+async fn seed_housekeeping_runs_on_its_interval_and_retires_stale_generations() {
+    use task_worker::scratch as sc;
+    let root = tempfile::tempdir().unwrap();
+    let scratch_dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+    let mut d = worktree_dispatcher(store, done_pool_adapter(&captured), root.path(), None);
+    let settings = scratch_on(&mut d, scratch_dir.path());
+    let pool = settings.pool();
+    let repo_dir = sc::seed_repo_dir(&pool, "gone-0000000000");
+    std::fs::create_dir_all(repo_dir.join("gen-a/target")).unwrap();
+    std::fs::create_dir_all(repo_dir.join("gen-b/target")).unwrap();
+    sc::switch_current(&repo_dir, "gen-b", std::time::SystemTime::now()).unwrap();
+    let t0 = Instant::now();
+    d.seed_housekeeping(t0);
+    assert!(!repo_dir.join("gen-a").exists());
+    assert!(repo_dir.join(sc::SEED_UNREGISTERED_MARK).is_file());
+    assert_eq!(
+        sc::current_generation(&pool, "gone-0000000000").as_deref(),
+        Some("gen-b")
+    );
+    // 間隔の前は何もしない。
+    std::fs::create_dir_all(repo_dir.join("gen-c/target")).unwrap();
+    d.seed_housekeeping(t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS - 1));
+    assert!(repo_dir.join("gen-c").is_dir());
+    d.seed_housekeeping(t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS));
+    assert!(!repo_dir.join("gen-c").exists());
+    assert!(repo_dir.join("gen-b/target").is_dir());
+    // seed_reflink = false なら触らない。
+    std::fs::create_dir_all(repo_dir.join("gen-d/target")).unwrap();
+    d.config.scratch.seed_reflink = false;
+    d.seed_housekeeping(t0 + Duration::from_secs(10 * sc::SEED_CHECK_INTERVAL_SECS));
+    assert!(repo_dir.join("gen-d").is_dir());
+}

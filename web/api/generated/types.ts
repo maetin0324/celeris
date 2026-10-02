@@ -99,6 +99,17 @@ export type AccountView = {
 
 export type Action = "approve" | "reject" | "answer" | "cancel" | "retry" | "edit" | "reopen" | "rereview" | "phase_gate" | "plan_gate";
 
+export type ActualWriteSetView = {
+  "base_sha"?: string | null;
+  "head_sha"?: string | null;
+  "owner_id": string;
+  "paths": Array<string>;
+  "reason"?: string | null;
+  "recorded_at": string;
+  "repo_id": string;
+  "status": string;
+};
+
 export type AdoptRequest = {
   "stage": string;
   "task_id": TaskId;
@@ -296,6 +307,23 @@ export type AwaitedChildView = {
   "task_id"?: TaskId | null;
   "title": string;
   "unit_key": string;
+};
+
+export type BehindTarget = {
+  "behind_target_age_seconds"?: number | null;
+  "behind_target_commits"?: number | null;
+  "behind_target_observed_at"?: string | null;
+  "repos"?: Array<BehindTargetRepo>;
+};
+
+export type BehindTargetRepo = {
+  "behind_target_age_seconds"?: number | null;
+  "behind_target_commits"?: number | null;
+  "behind_target_observed_at": string;
+  "head_sha"?: string | null;
+  "repo_id": string;
+  "target_ref": string;
+  "target_sha"?: string | null;
 };
 
 export type BrowserAction = "navigate" | "click" | "snapshot" | "extract" | "screenshot" | "download" | "scroll" | "credential_use";
@@ -869,6 +897,22 @@ export type ContainersLive = {
   "preference": string;
   "probes"?: Array<ContainerProbeView>;
   "runtime"?: string | null;
+};
+
+export type ContinuationMetrics = {
+  "fresh"?: ContinuationRunTotals;
+  "fresh_fallback_by_reason"?: {
+  [key: string]: number;
+};
+  "resumed"?: ContinuationRunTotals;
+  "unknown"?: ContinuationRunTotals;
+};
+
+export type ContinuationRunTotals = {
+  "duplicate_reads": number;
+  "input_tokens": number;
+  "runs": number;
+  "wall_ms": number;
 };
 
 export type CooldownView = {
@@ -1488,6 +1532,9 @@ export type Event = {
   "decision": ExecutionGateDecision;
   "type": "execution_gated";
 } | {
+  "decision": RouteDecision;
+  "type": "execution_routed";
+} | {
   "mode": ExecutionMode;
   "note"?: string | null;
   "previous"?: ExecutionHintSpec | null;
@@ -1663,9 +1710,13 @@ export type ExecutionHintSpec = {
 };
 
 export type ExecutionMetrics = {
+  "behind_target_age_seconds"?: number | null;
+  "behind_target_commits"?: number | null;
+  "behind_target_observed_at"?: string | null;
   "budget_exhausted_by_kind"?: {
   [key: string]: number;
 };
+  "continuation"?: ContinuationMetrics;
   "continuations": number;
   "cost_usd"?: number | null;
   "cost_usd_complete"?: boolean;
@@ -1696,6 +1747,10 @@ export type ExecutionMetrics = {
 
 export type ExecutionMetricsGroup = {
   "completion_rate"?: number | null;
+  "continuation"?: ContinuationMetrics;
+  "continuation_by_work_unit"?: {
+  [key: string]: ContinuationMetrics;
+};
   "continuations": number;
   "cost_usd_complete"?: boolean;
   "done": number;
@@ -1712,6 +1767,10 @@ export type ExecutionMetricsGroup = {
 
 export type ExecutionMetricsSummary = {
   "accounts_now"?: Array<AccountNowView>;
+  "continuation"?: ContinuationMetrics;
+  "continuation_by_work_unit"?: {
+  [key: string]: ContinuationMetrics;
+};
   "group_by": string;
   "groups": Array<ExecutionMetricsGroup>;
   "since"?: string | null;
@@ -1790,6 +1849,7 @@ export type ExecutionView = {
   "phase_checkpoint"?: PhaseCheckpointView | null;
   "plan"?: ExecutionPlanOverview | null;
   "plan_approval"?: PlanApprovalView | null;
+  "route"?: RouteDecision | null;
 };
 
 export type ExecutionWorkUnitView = {
@@ -1800,6 +1860,7 @@ export type ExecutionWorkUnitView = {
   "continuations": number;
   "created_at": string;
   "depends_on": Array<string>;
+  "expected_write_paths"?: Array<string> | null;
   "harness"?: string | null;
   "head_commit"?: string | null;
   "id": string;
@@ -2357,7 +2418,7 @@ export type NewPlanSpec = {
   "workspace"?: string | null;
 };
 
-export type NewTaskSpec = {
+export type NewTaskBody = {
   "acceptance": Array<CriterionSpec>;
   "adapter"?: string | null;
   "aggregate"?: boolean;
@@ -2366,6 +2427,7 @@ export type NewTaskSpec = {
   "cluster"?: string | null;
   "depends_on"?: Array<TaskId>;
   "execution"?: ExecutionMode | null;
+  "expected_write_paths"?: Array<string> | null;
   "features"?: TaskFeatureHints | null;
   "genre"?: string | null;
   "kind"?: TaskKind;
@@ -2608,6 +2670,7 @@ export type PlanUnitSpec = {
   "decisions"?: Array<DecisionSpec>;
   "depends_on"?: Array<string>;
   "done_when"?: Array<string>;
+  "expected_write_paths"?: Array<string> | null;
   "features"?: unknown;
   "gate"?: ExecutionMode | null;
   "genre"?: string | null;
@@ -3255,6 +3318,23 @@ export type RollupMetrics = {
   "wall_ms"?: number | null;
 };
 
+export type Route = "direct" | "planned";
+
+export type RouteDecision = {
+  "gate_rule_id": string;
+  "overrode_gate": boolean;
+  "policy_version": string;
+  "reasons": Array<RouteReason>;
+  "route": Route;
+  "shadow": boolean;
+};
+
+export type RouteReason = {
+  "detail": string;
+  "ok": boolean;
+  "rule_id": string;
+};
+
 export type RoutingAudit = {
   "account"?: string | null;
   "adapter"?: string | null;
@@ -3647,8 +3727,11 @@ export type TaskComment = {
 
 export type TaskDetail = {
   "actions": Array<Action>;
+  "actual_run_write_sets": Array<ActualWriteSetView>;
+  "actual_work_unit_write_sets": Array<ActualWriteSetView>;
   "answers": Array<AnswerNote>;
   "approvals": Array<ApprovalLink>;
+  "behind_target": BehindTarget;
   "children": Array<TaskRef>;
   "cluster"?: string | null;
   "cluster_job_wait"?: ClusterJobWaitView | null;
@@ -3657,6 +3740,7 @@ export type TaskDetail = {
   "dependencies": Array<TaskRef>;
   "dependents": Array<TaskRef>;
   "execution"?: ExecutionView | null;
+  "expected_write_paths"?: Array<string> | null;
   "failure"?: FailureSummary | null;
   "genre"?: string | null;
   "integration_repair"?: IntegrationRepairView | null;
@@ -3674,32 +3758,6 @@ export type TaskDetail = {
   "worktree"?: WorktreeView | null;
 };
 
-export type TaskEdit = {
-  "acceptance"?: Array<CriterionSpec> | null;
-  "adapter"?: string | null;
-  "assignee"?: string | null;
-  "category"?: TaskCategory | null;
-  "depends_on"?: Array<TaskId> | null;
-  "expected_status"?: Status | null;
-  "harness"?: string | null;
-  "labels"?: Array<string> | null;
-  "max_retries"?: number | null;
-  "max_turns"?: number | null;
-  "max_wall_secs"?: number | null;
-  "milestone_id"?: MilestoneId | null;
-  "mode"?: TaskMode | null;
-  "objective"?: string | null;
-  "pause_after"?: PausePolicy | null;
-  "priority"?: PriorityInput | null;
-  "project_id"?: ProjectId | null;
-  "repos"?: Array<string> | null;
-  "role"?: string | null;
-  "skills"?: Array<string> | null;
-  "tier"?: Tier | null;
-  "title"?: string | null;
-  "workspace"?: WorkspaceSpec | null;
-};
-
 export type TaskExecutionView = {
   "awaiting_children"?: Array<AwaitedChildView>;
   "gate"?: ExecutionGateDecision | null;
@@ -3708,6 +3766,7 @@ export type TaskExecutionView = {
   "phase_checkpoint"?: PhaseCheckpointView | null;
   "plan"?: ExecutionPlanView | null;
   "plan_approval"?: PlanApprovalView | null;
+  "route"?: RouteDecision | null;
   "runs": Array<RunSummary>;
 };
 
@@ -3765,6 +3824,33 @@ export type TaskList = {
 
 export type TaskMode = "prototype" | "production" | "research";
 
+export type TaskPatchBody = {
+  "acceptance"?: Array<CriterionSpec> | null;
+  "adapter"?: string | null;
+  "assignee"?: string | null;
+  "category"?: TaskCategory | null;
+  "depends_on"?: Array<TaskId> | null;
+  "expected_status"?: Status | null;
+  "expected_write_paths"?: Array<string> | null;
+  "harness"?: string | null;
+  "labels"?: Array<string> | null;
+  "max_retries"?: number | null;
+  "max_turns"?: number | null;
+  "max_wall_secs"?: number | null;
+  "milestone_id"?: MilestoneId | null;
+  "mode"?: TaskMode | null;
+  "objective"?: string | null;
+  "pause_after"?: PausePolicy | null;
+  "priority"?: PriorityInput | null;
+  "project_id"?: ProjectId | null;
+  "repos"?: Array<string> | null;
+  "role"?: string | null;
+  "skills"?: Array<string> | null;
+  "tier"?: Tier | null;
+  "title"?: string | null;
+  "workspace"?: WorkspaceSpec | null;
+};
+
 export type TaskPauseResult = {
   "paused_at"?: string | null;
   "subtree"?: Array<TaskRef>;
@@ -3787,6 +3873,7 @@ export type TaskRouting = {
   "features"?: TaskFeatureHints | null;
   "pause_after"?: PausePolicy;
   "pause_after_source"?: PauseSource;
+  "route"?: RouteDecision | null;
   "stages_hint"?: Array<StageHint>;
   "tier_source"?: TierSource;
 };

@@ -280,3 +280,7 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --lib` → exit 0（合計 1335 passed / 0 failed）。
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
 - `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。
+
+## Atomic coding task の planner なし直行経路 — Phase 4 統合検証（2026-10-02）
+
+統合後 HEAD `dd4b5a6131b4` の `cargo build --workspace --bins` と `cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は exit 101（instance_handoff 8 件中 3 passed / 5 failed）で、`cargo test -p celeris --test instance_handoff` の単独再実行でも同じ5件が失敗した。3件は ADR-0095 worker db guard の user namespace probe が `Operation not permitted`、2件は handoff dispatch/standby 待機 assertion 失敗。結果、未解決事項、再確認提案は [Phase 4 検証記録](progress/phase-direct-route.md) を参照。実装箇所の案内として architecture map の direct route 行を実ファイル・関数名に更新した。

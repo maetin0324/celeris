@@ -177,6 +177,38 @@ pub fn skill_description(skill_md: &str) -> String {
         .unwrap_or_default()
 }
 
+/// ADR-0122 D4: skill が届く run の種類。指定が無い場合と未知の値だけの場合は
+/// 従来どおり work に届ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillUse {
+    Work,
+    Review,
+}
+
+pub fn skill_applies_to(skill_md: &str, run: SkillUse) -> bool {
+    let uses = skill_frontmatter(skill_md)
+        .and_then(|(fields, ..)| frontmatter_field(&fields, "celeris-use").map(str::to_string));
+    let Some(uses) = uses else {
+        return run == SkillUse::Work;
+    };
+    let mut work = false;
+    let mut review = false;
+    for value in uses.split(',').map(str::trim) {
+        match value {
+            "work" => work = true,
+            "review" => review = true,
+            _ => {}
+        }
+    }
+    if !work && !review {
+        work = true;
+    }
+    match run {
+        SkillUse::Work => work,
+        SkillUse::Review => review,
+    }
+}
+
 /// ADR-0056 D2: `skills/` にある skill の一覧（`name` / frontmatter の `description`）。
 pub fn skills_list(root: &Path) -> Vec<SkillSummary> {
     let dir = root.join(SKILLS_ROOT_DIR);

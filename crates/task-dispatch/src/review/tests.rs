@@ -650,6 +650,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
     ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter,
         run_id: "rev-1".into(),
         limits: RunLimits {
@@ -759,6 +760,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
     let run = ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter: Arc::new(ThrottledReviewer),
         run_id: "rev-x".into(),
         limits: RunLimits {

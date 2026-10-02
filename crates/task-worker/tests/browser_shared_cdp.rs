@@ -23,27 +23,32 @@ const IP: &str = "93.184.216.34";
 const ORIGIN: &str = "https://fixture.example.com";
 const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SECRET: &str = "shared-cdp-secret-sentinel";
-const TCP_PROBE: &str = r#"import json, socket, time
+const TCP_PROBE: &str = r#"import socket, time
 from pathlib import Path
 deadline = time.monotonic() + 60
-while True:
+payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
+while time.monotonic() < deadline:
     try:
-        sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
+        with socket.create_connection(('127.0.0.1', 9223), timeout=2) as sock:
+            sock.settimeout(7)
+            sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
+            head = b''
+            while not head.endswith(b'\r\n\r\n'):
+                byte = sock.recv(1)
+                if not byte:
+                    raise ConnectionError('CDP relay closed during upgrade')
+                head += byte
+            if not head.startswith(b'HTTP/1.1 101'):
+                raise ConnectionError(f'CDP upgrade failed: {head!r}')
+            sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
+            frame = sock.recv(4096)
+            if b'targetInfos' not in frame:
+                raise ConnectionError(f'CDP not ready: {frame!r}')
         break
     except OSError:
-        if time.monotonic() > deadline:
-            raise RuntimeError('CDP forwarding port unavailable')
         time.sleep(.02)
-sock.settimeout(30)
-sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
-head = b''
-while not head.endswith(b'\r\n\r\n'):
-    head += sock.recv(1)
-assert head.startswith(b'HTTP/1.1 101'), head
-payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
-sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
-frame = sock.recv(4096)
-assert b'targetInfos' in frame, frame
+else:
+    raise RuntimeError('CDP forwarding relay did not become ready')
 Path('/session/tcp-probe.ok').write_text('connected')
 time.sleep(90)
 "#;
@@ -341,8 +346,8 @@ fn inner() {
         vec!["fixture.example.com".into()],
     )
     .expect("relay");
-    // 高負荷時（workspace 全体の test と並走）は sandbox 内の browser 起動が 10 秒を超えるので長めに待つ。
-    let until = Instant::now() + Duration::from_secs(60);
+    // probe は Chrome の起動中に閉じられた接続を 60 秒まで再試行する。
+    let until = Instant::now() + Duration::from_secs(75);
     while !session.path().join("tcp-probe.ok").exists() {
         assert!(
             Instant::now() < until,

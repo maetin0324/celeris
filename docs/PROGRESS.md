@@ -70,6 +70,8 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `rg -n 'unwrap\\s*\\(' crates/task-ops/src/delivery.rs` → 一致なし。production `delivery.rs` に `unwrap()` は無い（test 用 unwrap は別ファイル）。
 - 未解決: sandbox 制約を外した統合環境で workspace test を再実行して全件成功を確認すること。ブランチの production DB 接続・実行は行っていない。
+- delivery skipped の inbox query 向けに migration `0037_events_delivery_skipped_index.sql` を追加し、`idx_events_delivery_skipped` 部分 index を作成。問い合わせの predicate は index と同じ式を使い、`latest_delivery_skipped_rows_uses_partial_index` が EXPLAIN QUERY PLAN の index 使用と task ごとの最新 1 件を確認する。schema version 37（`SCHEMA_VERSION = 37`）になる。
+- この migration の昇格は celeris を stop → 新バイナリで start とし、起動時に migration が実行される。index は追加のみで、旧バイナリも残存 index 自体は利用せず動作できる。ただし schema 37 を開く旧バイナリは SchemaTooNew になるため、バイナリを戻す場合は migration 前の DB backup も戻すこと。詳細と任意の `DROP INDEX` は [ADR-0117](adr/0117-root-delivery-without-assignee.md) に記録。
 
 ## Root delivery 部署 fallback 再検証（verify-perf、2026-10-01）
 

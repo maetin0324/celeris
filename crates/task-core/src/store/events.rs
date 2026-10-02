@@ -7,6 +7,23 @@ use crate::model::{Event, Status, TaskId};
 use super::query::{u64_to_i64, usize_to_i64};
 use super::{EventRow, SqliteStore, StoreError, TaskWithEvents, format_rfc3339, status_str};
 
+/// ADR-0117 付記: migration 0037 の部分 index `idx_events_delivery_skipped` の WHERE 式と
+/// 字句まで同じにすること（でなければ SQLite がこの index を使わず events 全件を scan する）。
+pub(super) const DELIVERY_SKIPPED_PREDICATE: &str =
+    "json_extract(json,'$.type')='delivery_skipped'";
+
+/// `latest_delivery_skipped_rows_impl` の問い合わせそのもの。試験の EXPLAIN QUERY PLAN と
+/// 同じ文字列を使うため、ここに切り出す。
+pub(super) fn latest_delivery_skipped_sql() -> String {
+    format!(
+        "SELECT e.id, e.task_id, e.seq, e.ts, e.json FROM events e \
+         JOIN (SELECT task_id, MAX(seq) AS seq FROM events \
+               WHERE {DELIVERY_SKIPPED_PREDICATE} GROUP BY task_id) latest \
+           ON latest.task_id = e.task_id AND latest.seq = e.seq \
+         ORDER BY e.id ASC"
+    )
+}
+
 impl SqliteStore {
     pub(crate) fn append_event_tx(
         conn: &Connection,
@@ -439,13 +456,7 @@ impl SqliteStore {
 
     pub(super) fn latest_delivery_skipped_rows_impl(&self) -> Result<Vec<EventRow>, StoreError> {
         self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT e.id, e.task_id, e.seq, e.ts, e.json FROM events e \
-                 JOIN (SELECT task_id, MAX(seq) AS seq FROM events \
-                       WHERE json_extract(json, '$.type') = 'delivery_skipped' GROUP BY task_id) latest \
-                   ON latest.task_id = e.task_id AND latest.seq = e.seq \
-                 ORDER BY e.id ASC",
-            )?;
+            let mut stmt = conn.prepare(&latest_delivery_skipped_sql())?;
             let rows = stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,

@@ -58,3 +58,9 @@ tasks: [01M3VT5BJZX8JSME7ZQJGTVGEN]
 ## D4. 維持する動作
 
 変更するのは、対象案件の root の部署解決と、取り込みを開始できない理由の可視化だけである。木の子は親のブランチへ統合し、単独の delivery を持たない。対象外の案件と support task は従来どおり何もしない。既存の `task.assignee` が部に解決できる場合の優先順位、独立 Reviewer run の合否、固定 SHA、fast-forward merge、release/verify、最終デプロイの人による操作は ADR-0051 のまま変えない。
+
+## 付記: delivery 見送り inbox の部分 index（2026-10-02）
+
+`latest_delivery_skipped_rows` は `events` からタスクごとの最新 `delivery_skipped` を引く。inbox 構築のたびに全 event を走査しないよう、migration `0037_events_delivery_skipped_index.sql` は部分 index `idx_events_delivery_skipped` を作る。index と問い合わせの predicate は SQLite が部分 index を選べるよう、字句まで `json_extract(json,'$.type')='delivery_skipped'` で一致させる。`latest_delivery_skipped_rows_uses_partial_index` は同じ SQL 定数に対する `EXPLAIN QUERY PLAN` がこの index を使い、結果が各 task の最新 1 件であることを確認する。
+
+この migration により schema version 37（`SCHEMA_VERSION = 37`）になる。昇格時は celeris を stop してから新バイナリで start する。DB migration は新バイナリの起動時に実行される。index は追加のみで、旧バイナリは未知の index が DB に残っていても動作するため、戻すときに index の DROP は不要である。必要なら `DROP INDEX idx_events_delivery_skipped;` で削除できるが、schema migration 履歴の版数は戻さない。**schema 37 を開いた旧バイナリは SchemaTooNew で起動できない**ので、バイナリを戻す運用でも migration 済み DB をそのまま使うことはできない。

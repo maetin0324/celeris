@@ -227,7 +227,6 @@ fn with_task_overrides_harness_tier_and_skills() {
     let org = tree();
     let eff = resolve(&org, "software-engineering");
     let mut task = crate::model::Task {
-        expected_write_paths: None,
         genre: Some("literature".into()),
         skills: vec!["benchmark".into()],
         ..sample_task()
@@ -241,7 +240,6 @@ fn with_task_overrides_harness_tier_and_skills() {
     assert_eq!(out.harnesses_allowed, eff.harnesses_allowed);
     // skills が空のタスクはノードの skills をそのまま残す。
     let bare = crate::model::Task {
-        expected_write_paths: None,
         genre: None,
         skills: vec![],
         ..sample_task()
@@ -287,7 +285,6 @@ fn sample_task() -> crate::model::Task {
     use crate::model::{Budget, Status, TaskKind, WorkerHint, WorkspaceSpec};
     let now = OffsetDateTime::now_utc();
     crate::model::Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

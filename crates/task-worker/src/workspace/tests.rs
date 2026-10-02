@@ -9,7 +9,6 @@ fn sample_task() -> Task {
     use task_core::*;
     let now = time::OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

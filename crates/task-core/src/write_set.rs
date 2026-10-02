@@ -71,6 +71,17 @@ pub fn normalize_write_paths(paths: &[String]) -> Result<Vec<String>, String> {
         .map(|set| set.into_iter().collect())
 }
 
+/// ADR-0130 D1: an own explicit hint wins, otherwise the inherited one is used.
+/// `None` and an empty list both mean "no hint" and never become a gate input.
+pub fn inherit_write_paths(
+    own: Option<&[String]>,
+    inherited: Option<&[String]>,
+) -> Option<Vec<String>> {
+    own.filter(|paths| !paths.is_empty())
+        .or(inherited.filter(|paths| !paths.is_empty()))
+        .map(<[String]>::to_vec)
+}
+
 /// Strong overlap is at least one equal or segment-ancestor pair.
 /// Callers compare only paths belonging to the same repository.
 pub fn write_set_overlap(a: &[String], b: &[String]) -> bool {
@@ -131,6 +142,23 @@ mod tests {
             crate::repos::RepoId::new(),
             &paths(&["src/a.rs"]),
         ));
+    }
+
+    #[test]
+    fn write_set_inherit_prefers_own_hint_and_treats_empty_as_unspecified() {
+        let own = vec!["src/a.rs".to_string()];
+        let parent = vec!["src".to_string()];
+        assert_eq!(
+            inherit_write_paths(Some(&own), Some(&parent)),
+            Some(own.clone())
+        );
+        assert_eq!(
+            inherit_write_paths(Some(&[]), Some(&parent)),
+            Some(parent.clone())
+        );
+        assert_eq!(inherit_write_paths(None, Some(&parent)), Some(parent));
+        assert_eq!(inherit_write_paths(None, None), None);
+        assert_eq!(inherit_write_paths(Some(&[]), Some(&[])), None);
     }
 
     #[test]

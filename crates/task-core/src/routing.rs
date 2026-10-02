@@ -282,7 +282,6 @@ mod tests {
 
         let now = OffsetDateTime::now_utc();
         let task = Task {
-            expected_write_paths: None,
             tree: None,
             paused_at: None,
             routing: None,

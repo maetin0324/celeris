@@ -104,7 +104,6 @@ pub fn retry_task_with_execution(
         r
     });
     let new_task = Task {
-        expected_write_paths: original.expected_write_paths.clone(),
         tree: None,
         paused_at: None,
         routing,

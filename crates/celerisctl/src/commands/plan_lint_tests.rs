@@ -8,7 +8,6 @@ fn base_task(status: Status, acceptance: Vec<Criterion>) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

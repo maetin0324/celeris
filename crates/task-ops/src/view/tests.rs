@@ -15,7 +15,6 @@ fn view_ctx() -> ViewContext {
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,
@@ -1120,7 +1119,6 @@ fn wu_spec(
     depends_on: &[&str],
 ) -> task_core::WorkUnitSpec {
     task_core::WorkUnitSpec {
-        expected_write_paths: None,
         key: key.to_string(),
         kind,
         title: format!("title {key}"),

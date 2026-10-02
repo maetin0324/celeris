@@ -21,7 +21,6 @@ fn insert_done_task(store: &SqliteStore, updated_at: OffsetDateTime) -> TaskId {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     let task = Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

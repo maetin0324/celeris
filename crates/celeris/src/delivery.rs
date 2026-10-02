@@ -398,7 +398,6 @@ fn make_repair(
     let n = repairs.len() + 1;
     let key = format!("repair-{n}");
     let spec = task_core::WorkUnitSpec {
-        expected_write_paths: None,
         key: key.clone(),
         kind: WorkUnitKind::Repair,
         title: format!("repair ({}): 配送の局所修復", class.bucket()),
@@ -445,7 +444,6 @@ fn make_repair(
             .ok_or_else(|| StoreError::Invalid("task missing".into()))?;
         let plan_id = task_core::new_id();
         let main = task_core::WorkUnitSpec {
-            expected_write_paths: None,
             key: "main".into(),
             kind: WorkUnitKind::Implement,
             title: task.title,

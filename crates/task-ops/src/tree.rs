@@ -325,10 +325,6 @@ pub fn build_child_task(
         ));
     };
     child.status = Status::Ready;
-    child.expected_write_paths = unit
-        .expected_write_paths
-        .clone()
-        .or_else(|| parent.expected_write_paths.clone());
     // R5b-fix3: 子は自分の作業ディレクトリを持つ（親の `<root>/<parent_id>` を共有しない。R1c 付記 1.）。
     child.workspace = child_own_workspace(parent, child.id, &child.workspace);
     // R5b-fix3: 子の予算は `max(親, leaf 1 run の既定 30 turns / 1,800 秒)`（`tree_child_budget`）。

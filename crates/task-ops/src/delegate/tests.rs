@@ -179,7 +179,6 @@ fn plan_children_runs_the_delegation_checks_and_asks_before_crossing_departments
 fn make_task(parent_id: Option<TaskId>, status: Status) -> Task {
     let t = now();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

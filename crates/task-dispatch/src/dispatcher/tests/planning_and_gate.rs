@@ -1391,7 +1391,6 @@ async fn reopened_delivery_task_dispatches_only_its_ready_repair_unit() {
     }
 
     let repair_spec = task_core::WorkUnitSpec {
-        expected_write_paths: None,
         key: "repair-1".into(),
         kind: task_core::WorkUnitKind::Repair,
         title: "repair (merge_base): delivery".into(),

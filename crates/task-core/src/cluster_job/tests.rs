@@ -173,7 +173,6 @@ fn task(status: crate::Status) -> crate::Task {
     use crate::model::{Budget, Task, TaskKind, Tier, WorkerHint, WorkspaceSpec};
     let now = time::OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),
@@ -387,8 +386,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE run_write_sets; DROP TABLE work_unit_write_sets; \
-             ALTER TABLE tasks DROP COLUMN expected_write_paths_json; \
-             ALTER TABLE work_units DROP COLUMN expected_write_paths_json; \
+             DROP TABLE task_write_hints; \
              DROP TABLE cluster_job_waits; \
              DROP TABLE browser_live_events; DROP TABLE browser_control_state; \
              DROP TABLE browser_control_actions; DROP TABLE browser_identities; \

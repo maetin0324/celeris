@@ -9,7 +9,6 @@ fn cos_task() -> Task {
     use task_core::{Budget, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec};
     let t = now();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

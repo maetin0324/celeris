@@ -9,7 +9,6 @@ use time::OffsetDateTime;
 fn task(title: &str, status: Status, parent: Option<(&Task, &str)>) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         paused_at: None,
         tree: parent.map(|(p, unit)| TreeInfo {
             root_id: task_core::tree::root_id_of(p),
@@ -73,7 +72,6 @@ fn task_row(key: &str, status: WorkUnitStatus, child: Option<TaskId>, seq: u32) 
         "p".into(),
         seq,
         WorkUnitSpec {
-            expected_write_paths: None,
             key: key.into(),
             kind: WorkUnitKind::Task,
             title: format!("unit {key}"),

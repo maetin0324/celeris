@@ -384,7 +384,6 @@ fn last_run_id_none_without_worker_started() {
 fn sample_task(title: &str, attempts: u32) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

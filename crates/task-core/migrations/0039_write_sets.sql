@@ -1,9 +1,11 @@
--- ADR-0130 D1-D2. Hints remain part of the canonical task/spec JSON; these
--- generated columns expose them to store queries without duplicating writes.
-ALTER TABLE tasks ADD COLUMN expected_write_paths_json TEXT
-    GENERATED ALWAYS AS (json_extract(json, '$.expected_write_paths')) VIRTUAL;
-ALTER TABLE work_units ADD COLUMN expected_write_paths_json TEXT
-    GENERATED ALWAYS AS (json_extract(json, '$.expected_write_paths')) VIRTUAL;
+-- ADR-0130 D1-D2. Explicit task hints live in their own table so the task JSON
+-- (and every `Task` initializer) stays unchanged. A WU hint is the /3 plan
+-- unit's `expected_write_paths` (read from the plan), else the task's hint.
+CREATE TABLE task_write_hints (
+    task_id TEXT PRIMARY KEY,
+    paths_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
 CREATE TABLE run_write_sets (
     run_id TEXT NOT NULL,

@@ -7,7 +7,6 @@ use task_core::{
 
 fn wu(key: &str, depends_on: &[&str]) -> WorkUnitSpec {
     WorkUnitSpec {
-        expected_write_paths: None,
         key: key.to_string(),
         kind: WorkUnitKind::Implement,
         title: format!("title {key}"),
@@ -40,7 +39,6 @@ fn spec() -> ExecutionPlanSpec {
 fn sample_task() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

@@ -192,7 +192,6 @@ fn start_full(
     };
     store.message_append(&message)?;
     let task = Task {
-        expected_write_paths: None,
         conversation: Some(message.id),
         ..task
     };
@@ -263,7 +262,6 @@ fn conversation_task(
         .and_then(|r| RoleSpec::find(roles, r));
     let id = TaskId::new();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

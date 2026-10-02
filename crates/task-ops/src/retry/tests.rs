@@ -82,7 +82,6 @@ fn make_failed(store: &SqliteStore, title: &str) -> Task {
 fn raw_task(status: Status, depends_on: Vec<TaskId>, conversation: Option<MessageId>) -> Task {
     let t = now();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

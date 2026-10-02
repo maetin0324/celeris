@@ -530,7 +530,6 @@ pub fn materialize_delegated_logging(
             budget.max_turns = defaults.max_turns;
             budget.max_wall_secs = defaults.max_wall_secs;
             Task {
-                expected_write_paths: None,
                 tree: None,
                 paused_at: None,
                 id: ids[&i],

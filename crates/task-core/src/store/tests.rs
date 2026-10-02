@@ -17,7 +17,6 @@ use super::*;
 pub(super) fn sample_task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,
@@ -3796,7 +3795,6 @@ fn sample_plan_spec() -> ExecutionPlanSpec {
         rationale: "3 段階の直列計画".to_string(),
         work_units: vec![
             WorkUnitSpec {
-                expected_write_paths: None,
                 key: "a".into(),
                 kind: WorkUnitKind::Implement,
                 title: "A".into(),
@@ -3812,7 +3810,6 @@ fn sample_plan_spec() -> ExecutionPlanSpec {
                 phase: None,
             },
             WorkUnitSpec {
-                expected_write_paths: None,
                 key: "b".into(),
                 kind: WorkUnitKind::Implement,
                 title: "B".into(),
@@ -4091,7 +4088,6 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
             params![
                 root.id.to_string(),
                 serde_json::to_string(&crate::execution_plan::WorkUnitSpec {
-                    expected_write_paths: None,
                     key: "a".into(),
                     kind: WorkUnitKind::Implement,
                     title: "a".into(),
@@ -4242,7 +4238,6 @@ fn tree_events_write_root_id_child_links_and_decisions() {
         "plan-1".into(),
         0,
         crate::execution_plan::WorkUnitSpec {
-            expected_write_paths: None,
             key: "p1".into(),
             kind: WorkUnitKind::Task,
             title: "p1".into(),
@@ -5141,7 +5136,6 @@ fn execution_metrics_task_rows_cover_planned_repair_replan_and_atomic() {
 
 fn repair_spec(task: &Task) -> WorkUnitSpec {
     WorkUnitSpec {
-        expected_write_paths: None,
         key: "repair-1".into(),
         kind: WorkUnitKind::Repair,
         title: "repair (format): 修復".into(),
@@ -5178,7 +5172,6 @@ fn review_repair_apply_materializes_main_and_the_repair_work_unit_for_an_atomic_
     let now = "2026-09-25T00:00:00Z".to_string();
     let plan_id = "plan-repair-1".to_string();
     let main_spec = WorkUnitSpec {
-        expected_write_paths: None,
         key: "main".into(),
         kind: WorkUnitKind::Implement,
         title: task.title.clone(),
@@ -5293,7 +5286,6 @@ fn delivery_repair_apply_reopens_and_materializes_atomically() {
     let stamp = "2026-09-25T00:00:00Z".to_string();
     let plan_id = "delivery-plan".to_string();
     let main = WorkUnitSpec {
-        expected_write_paths: None,
         key: "main".into(),
         kind: WorkUnitKind::Implement,
         title: task.title.clone(),
@@ -5489,7 +5481,6 @@ fn execution_plan_replan_supersedes_the_old_version_and_activates_the_new_one() 
     // v2: `c` を追加し、`b` が `c` にも依存するよう spec を変える。
     let mut new_spec = spec.clone();
     new_spec.work_units.push(WorkUnitSpec {
-        expected_write_paths: None,
         key: "c".into(),
         kind: WorkUnitKind::Implement,
         title: "C".into(),

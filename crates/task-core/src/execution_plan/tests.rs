@@ -2,7 +2,6 @@ use super::*;
 
 fn spec(key: &str, depends_on: &[&str]) -> WorkUnitSpec {
     WorkUnitSpec {
-        expected_write_paths: None,
         key: key.to_string(),
         kind: WorkUnitKind::Implement,
         title: format!("title {key}"),
@@ -1350,7 +1349,6 @@ fn leaf(key: &str, stage: &str) -> PlanUnitSpec {
 
 fn task_unit(key: &str, stage: &str) -> PlanUnitSpec {
     PlanUnitSpec {
-        expected_write_paths: None,
         kind: WorkUnitKind::Task,
         title: format!("task {key}"),
         objective: format!("objective of child task {key} which differs"),
@@ -1376,10 +1374,6 @@ fn plan_v3_accepts_expected_write_paths_and_rejects_invalid_format() {
     let decoded: ExecutionPlanSpec = serde_json::from_value(value).unwrap();
     assert_eq!(
         decoded.units[0].expected_write_paths,
-        plan.units[0].expected_write_paths
-    );
-    assert_eq!(
-        decoded.units[0].to_work_unit_spec().expected_write_paths,
         plan.units[0].expected_write_paths
     );
 

@@ -660,7 +660,6 @@ pub fn integration_work_unit_specs(spec: &ExecutionPlanSpec) -> Vec<WorkUnitSpec
     spec.phases
         .iter()
         .map(|p| WorkUnitSpec {
-            expected_write_paths: None,
             key: integrate_key(&p.key),
             kind: WorkUnitKind::Integrate,
             title: format!("工程 {} の統合", p.title),

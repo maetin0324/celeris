@@ -103,7 +103,6 @@ model = "fake"
     ) -> TaskId {
         let now = OffsetDateTime::now_utc();
         let task = Task {
-            expected_write_paths: None,
             tree: None,
             paused_at: None,
             routing: None,
@@ -437,7 +436,6 @@ fn expired_lease_is_reclaimed_and_task_completes() {
     // 前世代の celeris が落ちた状態を再現: running + 期限切れリース。
     let now = OffsetDateTime::now_utc();
     let task = Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

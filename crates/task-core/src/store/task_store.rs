@@ -49,6 +49,25 @@ pub trait TaskStore:
     /// Final cumulative snapshot from the WU base commit to its committed head.
     fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
     fn work_unit_write_sets(&self, work_unit_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
+    /// ADR-0130 D1: explicit task hint (`None` / empty clears it).
+    fn set_task_expected_write_paths(
+        &self,
+        task_id: TaskId,
+        paths: Option<&[String]>,
+        now: &str,
+    ) -> Result<(), StoreError>;
+    fn task_expected_write_paths(&self, task_id: TaskId)
+    -> Result<Option<Vec<String>>, StoreError>;
+    /// Own hint, else the parent unit's (child tasks).
+    fn effective_task_write_paths(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<Vec<String>>, StoreError>;
+    /// The /3 plan unit's hint, else the task's effective hint.
+    fn work_unit_expected_write_paths(
+        &self,
+        work_unit_id: &str,
+    ) -> Result<Option<Vec<String>>, StoreError>;
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
     fn list(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError>;

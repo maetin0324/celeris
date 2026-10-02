@@ -138,7 +138,6 @@ drain_timeout_secs = 60
         std::fs::create_dir_all(&ws).unwrap_or_else(|e| panic!("ws: {e}"));
         let now = OffsetDateTime::now_utc();
         let task = Task {
-            expected_write_paths: None,
             tree: None,
             paused_at: None,
             routing: None,

@@ -339,7 +339,6 @@ pub fn new_task(kind: TaskKind, status: Status) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

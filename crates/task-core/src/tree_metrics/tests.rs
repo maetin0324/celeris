@@ -49,7 +49,6 @@ fn unit(key: &str, kind: WorkUnitKind, status: WorkUnitStatus) -> WorkUnitRow {
         "p".to_string(),
         0,
         WorkUnitSpec {
-            expected_write_paths: None,
             key: key.to_string(),
             kind,
             title: key.to_string(),

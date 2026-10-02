@@ -4,11 +4,147 @@ use std::collections::BTreeSet;
 
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
-use crate::write_set::{WriteSetRecord, WriteSetStatus};
+use crate::execution_plan::ExecutionPlanSpec;
+use crate::model::TaskId;
+use crate::write_set::{
+    WriteSetRecord, WriteSetStatus, inherit_write_paths, normalize_write_paths,
+};
 
 use super::{SqliteStore, StoreError};
 
+/// Bound for the child-task → parent-unit inheritance walk (ADR-0079 max_depth is 3).
+const HINT_INHERIT_DEPTH: usize = 8;
+
 impl SqliteStore {
+    /// ADR-0130 D1: set (or clear with `None` / empty) a task's explicit hint.
+    /// Values are validated and normalized; invalid prefixes are rejected.
+    pub fn set_task_expected_write_paths(
+        &self,
+        task_id: TaskId,
+        paths: Option<&[String]>,
+        now: &str,
+    ) -> Result<(), StoreError> {
+        let normalized = match paths {
+            Some(paths) if !paths.is_empty() => {
+                Some(normalize_write_paths(paths).map_err(StoreError::Invalid)?)
+            }
+            _ => None,
+        };
+        let conn = self.lock()?;
+        match normalized {
+            Some(paths) => {
+                conn.execute(
+                    "INSERT INTO task_write_hints (task_id, paths_json, updated_at) \
+                     VALUES (?1, ?2, ?3) ON CONFLICT(task_id) DO UPDATE SET \
+                     paths_json = excluded.paths_json, updated_at = excluded.updated_at",
+                    params![task_id.to_string(), serde_json::to_string(&paths)?, now],
+                )?;
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM task_write_hints WHERE task_id = ?1",
+                    params![task_id.to_string()],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The task's own explicit hint (no inheritance).
+    pub fn task_expected_write_paths(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        self.with_read_conn(|conn| Self::task_hint_conn(conn, &task_id.to_string()))
+    }
+
+    /// ADR-0130 D1: the task's own hint, else (for a child task) its parent unit's
+    /// effective hint. Returns `None` when nothing up the tree specifies one.
+    pub fn effective_task_write_paths(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        self.with_read_conn(|conn| Self::effective_task_hint_conn(conn, &task_id.to_string(), 0))
+    }
+
+    /// ADR-0130 D1: the WU's /3 plan unit hint, else its task's effective hint.
+    pub fn work_unit_expected_write_paths(
+        &self,
+        work_unit_id: &str,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        self.with_read_conn(|conn| Self::work_unit_hint_conn(conn, work_unit_id, 0))
+    }
+
+    fn task_hint_conn(
+        conn: &rusqlite::Connection,
+        task_id: &str,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT paths_json FROM task_write_hints WHERE task_id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(json.map(|j| serde_json::from_str(&j)).transpose()?)
+    }
+
+    fn effective_task_hint_conn(
+        conn: &rusqlite::Connection,
+        task_id: &str,
+        depth: usize,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        let own = Self::task_hint_conn(conn, task_id)?;
+        if own.as_ref().is_some_and(|p| !p.is_empty()) || depth >= HINT_INHERIT_DEPTH {
+            return Ok(own);
+        }
+        let parent_unit: Option<String> = conn
+            .query_row(
+                "SELECT id FROM work_units WHERE child_task_id = ?1 ORDER BY created_at LIMIT 1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let inherited = match parent_unit {
+            Some(unit) => Self::work_unit_hint_conn(conn, &unit, depth + 1)?,
+            None => None,
+        };
+        Ok(inherit_write_paths(own.as_deref(), inherited.as_deref()))
+    }
+
+    fn work_unit_hint_conn(
+        conn: &rusqlite::Connection,
+        work_unit_id: &str,
+        depth: usize,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        let row: Option<(String, String, Option<String>)> = conn
+            .query_row(
+                "SELECT w.task_id, w.key, p.json FROM work_units w \
+                 LEFT JOIN execution_plans p ON p.id = w.plan_id WHERE w.id = ?1",
+                params![work_unit_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((task_id, key, plan_json)) = row else {
+            return Ok(None);
+        };
+        let own = match plan_json {
+            Some(json) => {
+                let spec: ExecutionPlanSpec = serde_json::from_str(&json)?;
+                spec.units
+                    .into_iter()
+                    .find(|unit| unit.key == key)
+                    .and_then(|unit| unit.expected_write_paths)
+            }
+            None => None,
+        };
+        if own.as_ref().is_some_and(|p| !p.is_empty()) || depth >= HINT_INHERIT_DEPTH {
+            return Ok(own);
+        }
+        let inherited = Self::effective_task_hint_conn(conn, &task_id, depth + 1)?;
+        Ok(inherit_write_paths(own.as_deref(), inherited.as_deref()))
+    }
+
     pub fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
         self.record_write_set(record, false)
     }
@@ -206,5 +342,134 @@ mod tests {
             store.work_unit_write_sets("wu-1").unwrap()[0].status,
             WriteSetStatus::Complete
         );
+    }
+
+    #[test]
+    fn write_set_hints_resolve_from_plan_unit_task_and_parent_unit() {
+        use crate::execution_plan::{
+            ExecutionLimits, ExecutionPlanRow, PlanOrigin, PlanStatus, materialize_work_units,
+            validate,
+        };
+        use crate::model::{Event, Status};
+        use crate::store::TaskStore;
+        let store = SqliteStore::open_in_memory().unwrap();
+        let task = crate::store::tests::sample_task(Status::Ready);
+        store.insert(&task).unwrap();
+        let now = "2026-10-02T00:00:00Z";
+
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/testdata/execution-plan/v3-browser.json"
+        ))
+        .unwrap();
+        let mut spec: ExecutionPlanSpec = serde_json::from_str(&text).unwrap();
+        let p1 = spec.units.iter().position(|u| u.key == "p1").unwrap();
+        spec.units[p1].expected_write_paths = Some(vec!["crates/a/".into()]);
+        let limits = ExecutionLimits {
+            tree: crate::tree::TreeLimits {
+                enabled: true,
+                ..crate::tree::TreeLimits::default()
+            },
+            ..ExecutionLimits::default()
+        };
+        let validated = validate(&spec, limits, &[]).unwrap();
+        let plan_id = "plan-hints".to_string();
+        let mut n = 0;
+        let rows = materialize_work_units(
+            &task.id.to_string(),
+            &plan_id,
+            &validated.spec,
+            &validated.topological_order,
+            now,
+            &mut |wu| {
+                n += 1;
+                format!("wu-{n}-{}", wu.key)
+            },
+        );
+        let id_of = |key: &str| {
+            rows.iter()
+                .find(|r| r.key == key)
+                .map(|r| r.id.clone())
+                .unwrap()
+        };
+        let (p1_id, p3_id) = (id_of("p1"), id_of("p3"));
+        let plan = ExecutionPlanRow {
+            id: plan_id.clone(),
+            task_id: task.id.to_string(),
+            version: 1,
+            origin: PlanOrigin::Human,
+            planner_run_id: None,
+            status: PlanStatus::Active,
+            spec: validated.spec,
+            created_at: now.into(),
+            superseded_at: None,
+        };
+        let event = Event::ExecutionPlanned {
+            plan_id,
+            version: 1,
+            origin: PlanOrigin::Human,
+            supersedes: None,
+            reason: None,
+            plan: Box::new(plan.spec.clone()),
+        };
+        store
+            .execution_plan_adopt(task.id, plan, rows, Vec::new(), event)
+            .unwrap();
+
+        // 未指定は従来どおり hint なし。
+        assert_eq!(store.work_unit_expected_write_paths(&p3_id).unwrap(), None);
+        assert_eq!(store.effective_task_write_paths(task.id).unwrap(), None);
+        // unit の明示値（正規化済み）が WU の hint、無ければ task の hint を継ぐ。
+        let crates_a = Some(vec!["crates/a".to_string()]);
+        assert_eq!(
+            store.work_unit_expected_write_paths(&p1_id).unwrap(),
+            crates_a
+        );
+        store
+            .set_task_expected_write_paths(task.id, Some(&["docs/".into(), "docs".into()]), now)
+            .unwrap();
+        let docs = Some(vec!["docs".to_string()]);
+        assert_eq!(store.task_expected_write_paths(task.id).unwrap(), docs);
+        assert_eq!(store.work_unit_expected_write_paths(&p3_id).unwrap(), docs);
+        assert_eq!(
+            store.work_unit_expected_write_paths(&p1_id).unwrap(),
+            crates_a
+        );
+
+        // 子 task は自分の明示値が無ければ親 unit の値を継ぐ。
+        let child = crate::store::tests::sample_task(Status::Ready);
+        store.insert(&child).unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE work_units SET child_task_id = ?1 WHERE id = ?2",
+                params![child.id.to_string(), p1_id],
+            )
+            .unwrap();
+        assert_eq!(store.task_expected_write_paths(child.id).unwrap(), None);
+        assert_eq!(
+            store.effective_task_write_paths(child.id).unwrap(),
+            crates_a
+        );
+        store
+            .set_task_expected_write_paths(child.id, Some(&["crates/a/src".into()]), now)
+            .unwrap();
+        assert_eq!(
+            store.effective_task_write_paths(child.id).unwrap(),
+            Some(vec!["crates/a/src".to_string()])
+        );
+
+        // 不正な形式は拒否し、空配列は消去（= 未指定）。
+        assert!(
+            store
+                .set_task_expected_write_paths(task.id, Some(&["../x".into()]), now)
+                .is_err()
+        );
+        assert_eq!(store.task_expected_write_paths(task.id).unwrap(), docs);
+        store
+            .set_task_expected_write_paths(task.id, Some(&[]), now)
+            .unwrap();
+        assert_eq!(store.work_unit_expected_write_paths(&p3_id).unwrap(), None);
     }
 }

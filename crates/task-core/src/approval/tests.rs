@@ -173,7 +173,6 @@ fn f7_task(status: Status, kind: crate::model::TaskKind) -> crate::model::Task {
     use crate::model::{Budget, Tier, WorkerHint, WorkspaceSpec};
     let now = OffsetDateTime::now_utc();
     crate::model::Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

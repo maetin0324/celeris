@@ -215,7 +215,6 @@ fn status_clean(dir: &Path) -> bool {
 
 fn dep_row(key: &str, kind: task_core::WorkUnitKind) -> task_core::WorkUnitRow {
     let spec = task_core::WorkUnitSpec {
-        expected_write_paths: None,
         key: key.to_string(),
         kind,
         title: key.to_string(),

@@ -5,7 +5,6 @@ use time::OffsetDateTime;
 fn blocked_task(store: &SqliteStore, awaiting: bool) -> TaskId {
     let now = OffsetDateTime::now_utc();
     let task = Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

@@ -80,7 +80,6 @@ fn blocked_task_with_approval(
     let now = OffsetDateTime::now_utc();
     let id = TaskId::new();
     let task = Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

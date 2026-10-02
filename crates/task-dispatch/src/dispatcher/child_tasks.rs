@@ -355,7 +355,6 @@ impl Dispatcher {
     ) -> Result<Task, DispatchError> {
         let now = OffsetDateTime::now_utc();
         let approval = Task {
-            expected_write_paths: None,
             tree: None,
             paused_at: None,
             routing: None,

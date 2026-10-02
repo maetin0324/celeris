@@ -725,7 +725,6 @@ impl Dispatcher {
         }
         let (max_turns, max_wall_secs) = task_core::execution::RepairClass::MergeConflict.budget();
         let spec = task_core::WorkUnitSpec {
-            expected_write_paths: None,
             key: key.clone(),
             kind: task_core::WorkUnitKind::Repair,
             title: format!(
@@ -969,7 +968,6 @@ impl Dispatcher {
         );
         let (max_turns, max_wall_secs) = class.budget();
         let spec = task_core::WorkUnitSpec {
-            expected_write_paths: None,
             key: format!("{prefix}{n}"),
             kind: task_core::WorkUnitKind::Repair,
             title: format!("repair ({}): 工程 {phase} の統合後の検査", class.bucket()),

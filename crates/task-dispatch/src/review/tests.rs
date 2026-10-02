@@ -8,7 +8,6 @@ use task_worker::{AdapterError, ExecResult, LocalWorkspace, RunOutcome, Workspac
 fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

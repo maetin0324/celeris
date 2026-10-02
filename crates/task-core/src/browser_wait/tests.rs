@@ -7,7 +7,6 @@ const SENTINEL: &str = "SENTINEL-p4ssw0rd-9f3a";
 fn task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
-        expected_write_paths: None,
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),

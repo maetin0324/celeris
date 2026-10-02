@@ -108,3 +108,10 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 
 - launcher は Chrome の `/proc/<pid>/ns/user` から `NS_GET_PARENT` を辿り、launcher 自身の userns（`/proc/self/ns/user` と inode・dev が一致）の直前までの owner を集める。
 - 鎖の先頭が `S`、末尾（launcher が作った userns）が `B`、全要素が `S` か `B`、`allowed_uids`（daemon UID）が鎖に無いこと、を `isolation_ok` と起動時の検査の条件にする。上の D3 の「親の owner が `B`」はこれに置き換える。
+
+## 付記（2026-10-02、launcher の CDP と netns 内 listener）
+
+実 host で Chrome の起動と owner/map 検査が通った後、daemon 側の `verify_isolation` が `CdpOnTcp` で止まった。`SessionFacts.listen_count` は Chrome と同じ private netns の TCP listener 数であり、sandboxd の egress proxy（127.0.0.1:3128）と shared-CDP relay（127.0.0.1:9223）を数える。Chrome 自身の CDP endpoint ではない。Chrome は引き続き `--remote-debugging-pipe` を使い、fd 3/4 と `CdpController` は launcher 側が保持する（ADR-0115）。
+
+- daemon が観測を `RuntimeFacts` に変換するとき、`listen_count` から CDP endpoint を推定しない。launcher の固定 runtime の CDP は `Pipe` とする。
+- launcher は `collect_facts` による netns 分離と `verify_isolation` を起動時と `isolation_ok` で検査する。daemon 側は `isolation_ok = false` を引き続き拒否する。host に露出する CDP TCP を許可する変更ではない。

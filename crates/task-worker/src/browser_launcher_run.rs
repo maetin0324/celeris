@@ -222,13 +222,12 @@ pub(crate) fn runtime_facts(
         root_readonly: launcher_attested,
         writable_mounts: Vec::new(),
         visible_paths: Vec::new(),
-        cdp: if facts.listen_count == 0 {
-            CdpEndpoint::Pipe
-        } else {
-            CdpEndpoint::Tcp {
-                addr: format!("{} listening sockets", facts.listen_count),
-            }
-        },
+        // The launcher owns Chrome's CDP pipe (fds 3/4). The observed TCP
+        // listeners belong to sandboxd's proxy and shared-CDP relay inside
+        // the private netns; their count does not describe Chrome's CDP
+        // endpoint. The launcher's isolation_ok attests the real netns and
+        // the fixed pipe-based runtime before this observation is accepted.
+        cdp: CdpEndpoint::Pipe,
         no_new_privs: facts.no_new_privs,
         capabilities_dropped,
         pgid: if launcher_attested {

@@ -250,17 +250,24 @@ fn runtime_facts_follow_the_observation() {
     // launcher が隔離を証明しなければ daemon 側の検査も通らない。
     let unattested = runtime_facts("s1", &daemon, &good_facts(), false).expect("facts");
     assert!(verify_isolation(&unattested).is_err());
-    // capability が残る・CDP が TCP で listen している・owner 不明は通らない。
+    // capability が残る・owner 不明は通らない。
     let caps = SessionFacts {
         cap_eff: "000001ffffffffff".into(),
         ..good_facts()
     };
     assert!(verify_isolation(&runtime_facts("s1", &daemon, &caps, true).expect("f")).is_err());
-    let tcp = SessionFacts {
-        listen_count: 1,
+    // netns 内の proxy と shared-CDP relay は TCP を listen するが、Chrome CDP は pipe。
+    let private_listeners = SessionFacts {
+        listen_count: 2,
         ..good_facts()
     };
-    assert!(verify_isolation(&runtime_facts("s1", &daemon, &tcp, true).expect("f")).is_err());
+    let observed = runtime_facts("s1", &daemon, &private_listeners, true).expect("f");
+    assert_eq!(observed.cdp, CdpEndpoint::Pipe);
+    assert!(verify_isolation(&observed).is_ok());
+    assert!(
+        verify_isolation(&runtime_facts("s1", &daemon, &private_listeners, false).expect("f"))
+            .is_err()
+    );
     let unknown_owner = SessionFacts {
         ns_owner_uid: None,
         ..good_facts()

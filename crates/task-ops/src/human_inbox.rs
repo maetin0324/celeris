@@ -5,7 +5,8 @@
 //! 割り当てた種類（`attention[type=requeue_limit_near]` 等）は出さない。
 //!
 //! 意味を失った項目を自動で閉じる規則（置き換え済み failed 子・終端 task の attention 等）は ADR-0131 D7 の
-//! inbox-rules が `build_attention` に入れる（ADR-0133 D4）。ここはその出力をそのまま使い、規則を持たない。
+//! inbox-rules（`inbox::attention_suppression`）が `inbox::inbox` で適用する（ADR-0133 D4）。ここはその出力と
+//! 規則別の除外件数（`Inbox::suppressed`）をそのまま使い、規則を持たない。
 //! 受信箱は DB に行を持たない派生の一覧なので、答える操作が状態を書き換えた後の一覧には項目が構造的に現れない。
 
 use std::collections::{BTreeMap, HashMap};
@@ -157,6 +158,11 @@ pub struct HumanInboxCounts {
 pub struct HumanInbox {
     pub items: Vec<InboxItem>,
     pub counts: HumanInboxCounts,
+    /// ADR-0133 D4: inbox-rules が自動で閉じた attention の件数（規則名 → 件数）。`Inbox::suppressed` の写し。
+    /// API では `HumanInboxView.suppressed` として出す。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub suppressed: BTreeMap<String, u32>,
 }
 
 /// D1.2 `knowledge_review`: KB の取り込み待ち（`_inbox/` の候補）の件数。KB は task-api が読むので呼び出し側が渡す。
@@ -249,6 +255,7 @@ pub fn from_inbox(
             by_kind,
         },
         items,
+        suppressed: inbox.suppressed.clone(),
     }
 }
 

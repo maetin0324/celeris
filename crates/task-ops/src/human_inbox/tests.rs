@@ -84,6 +84,7 @@ fn empty_inbox() -> Inbox {
         questions: Vec::new(),
         drafts: Vec::new(),
         attention: Vec::new(),
+        suppressed: Default::default(),
         browser_waits: Vec::new(),
         decisions: Vec::new(),
         counts: InboxCounts {

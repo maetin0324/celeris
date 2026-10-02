@@ -9,6 +9,7 @@ import { loadTaskDetail, runTaskDetailAction, type TaskDetailData } from "~/cele
 import type { TaskDetail, TimelineItem } from "~/celeris/types";
 import { ClusterJobWaitBanner } from "~/components/ClusterJobWaitBanner";
 import { HelpLink } from "~/components/HelpLink";
+import { IntegrationRepairPanel } from "~/components/IntegrationRepairPanel";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { TaskRoutingPanel } from "~/components/TaskRoutingPanel";
 import { ArtifactRow } from "~/components/task-detail/ArtifactRow";
@@ -311,6 +312,10 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
           dismissing={dismissing}
         />
       )}
+
+      {/* celeris ADR-0120 D5: target drift に伴う integration repair。実装失敗（上の FailureBanner）とは
+          別の欄・色・ラベル。null / 欠落なら何も出さない。 */}
+      <IntegrationRepairPanel repair={detail.integration_repair} />
 
       {/* celeris ADR-0090 D5（Phase R7-1）: クラスタ job の durable wait（daemon が poll し、終われば続きの run）。 */}
       {detail.cluster_job_wait && <ClusterJobWaitBanner wait={detail.cluster_job_wait} />}

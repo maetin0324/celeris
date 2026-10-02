@@ -123,6 +123,8 @@ use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
 mod worker_finish;
 mod worker_task;
 mod workspaces;
+/// ADR-0130 D2: run / WU の actual write-set の採取と保存。
+mod write_set_record;
 
 pub use cluster::{
     ClusterCommandProbe, ClusterConnector, ClusterForwardSpec, ClusterLivenessProbe,
@@ -1044,6 +1046,9 @@ pub struct Dispatcher {
     /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
     /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
     wu_prepare_failures: HashMap<String, WuPrepareFailures>,
+    /// ADR-0130 D2: run（id）ごとの actual write-set の採取場所と開始 HEAD。dispatch で入れ、worker の
+    /// 終了処理で取り出す。プロセス内メモリのみ（再起動後に終わった run は `unavailable` として残す）。
+    run_write_bases: HashMap<String, Vec<write_set_record::RunWriteBase>>,
     /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の
     /// 節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
     stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
@@ -1314,6 +1319,7 @@ impl Dispatcher {
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
             wu_prepare_failures: HashMap::new(),
+            run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
             liveness_checked_at: None,
             runs_reconciled_at: None,

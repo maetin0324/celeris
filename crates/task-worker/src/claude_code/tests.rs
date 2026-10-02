@@ -3390,7 +3390,7 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
     assert!(!prompt.contains("Remaining depth"));
 }
 
-/// ADR-0079 R7-2: /2 と /3 の planner のプロンプトに「check の書き方」の節（R7-5 で 7 規則）が出る。/3 は子を作る unit
+/// ADR-0079 R7-2/R7-10: /2 と /3 の planner のプロンプトに「check の書き方」の節（12 規則）が出る。/3 は子を作る unit
 /// だけを数える上限の説明と、dispatcher が渡す /3 の JSON の大きさの上限を出す。
 #[test]
 fn planner_prompt_has_the_check_writing_section() {
@@ -3400,12 +3400,17 @@ fn planner_prompt_has_the_check_writing_section() {
         "`docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write",
         "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
         "corepack pnpm@<version from package.json packageManager> -C <dir>",
-        "git diff --quiet $(git merge-base HEAD main) --",
+        "Compare against `$(git merge-base HEAD main)`",
         "A negated grep (`! grep ...`) must not match text the unit itself writes",
         "a check that runs a script another unit creates belongs to a unit that `depends_on` the creating unit",
         // ADR-0079 付記 R7-5 D5: check の走る所（git の worktree が無い task）と、unit 自身が作るスクリプトの呼び出し方。
         "or the task's directory (where `artifacts/` is) when the task has no git worktree",
         "write the exact invocation (the arguments the check passes) in the unit's objective",
+        "Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.",
+        "exclude every unit's allowed paths in that stage, not only this unit's paths",
+        "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
+        "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",
+        "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),
@@ -3435,7 +3440,7 @@ fn planner_prompt_has_the_check_writing_section() {
         };
         let prompt = build_prompt(&task, &context, "run-planner-checks", "artifacts");
         for needle in needles {
-            assert!(prompt.contains(needle), "{name}: missing {needle:?}");
+            assert_eq!(prompt.matches(needle).count(), 1, "{name}: {needle:?}");
         }
         assert_eq!(prompt.matches("### check の書き方").count(), 1, "{name}");
         let bytes = if planner.tree.is_some() { 65536 } else { 24576 };

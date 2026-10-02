@@ -4,8 +4,13 @@ tasks: [01M3YFCJKMNWQ13HRS52M5BSWW]
 # ADR-0133: 受信箱（人の判断）と通知（知らせ）の 2 系統
 
 - 日付: 2026-10-02
-- 状態: 採用（実装前。実装は同 task の葉 inbox-model / notify-store / notify-feed / api / outbound /
-  gui-compat / verify）
+- 状態: **実装済み**（inbox-model / notify-store / notify-feed / api / outbound / gui-compat / verify の全葉
+  完了。web 葉は人の決定 `ui-overlap = c` により UI/UX task `01M3XTCNKMQBCHKSZ7Y1GF6ZM4` へ `superseded`）。
+  付記（verify 葉の検査結果）: 1) D4 の自動片付け規則（inbox-rules、task `01M3YF3NS2EGTZD2BBWNPG1K28`）は
+  main にもこの task のブランチにも未統合のため、`human_inbox` は規則なしの仮実装のまま（規則の重複実装は
+  していない）。2) D6 の `GET /api/v1/notify` への 4 設定値・経路別最終送信時刻の掲載は未実装（送り出し自体
+  の判定・束ねは実装・試験済み）。どちらも [phase-inbox-notifications.md](../progress/phase-inbox-notifications.md)
+  に詳細と追従提案を記録
 - 関連: ADR-0033（報告・認可）、ADR-0037 / ADR-0050（Discord 通知）、ADR-0067 D4（承認の材料）、
   ADR-0070 D1（失敗の分類）、ADR-0074 D2.4（途中確認）、ADR-0079 D7 / D8（決定の要求・計画の承認）、
   ADR-0080 D5（browser の待ち）、ADR-0081（web/ SPA）、ADR-0121 D3（配送の取りこぼし）、

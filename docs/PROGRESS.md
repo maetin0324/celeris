@@ -1,5 +1,9 @@
 # PROGRESS — taskd
 
+---
+tasks: [01M3XZ5PYSTTC6GXAH8TZVRHSA]
+---
+
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
 ## 構造リファクタリング完了（2026-09-30、ADR-0079 / ADR-0082 / ADR-0083）
@@ -59,7 +63,23 @@ reland-main 後に main が web GUI（task 01M3QE4D330YESFT6FY8G50R12、ADR-0081
 - `cargo test --workspace reviewed_sha` → 3 passed、0 failed（`delivery::tests::target_advanced_*_reviewed_sha`）。
 - Phase 1 のコード（review 前同期・stale 検出・同期停止が attempts を消費しない経路）は変更していない。既知の flaky（`local_deep_research` の Spawn NotFound、`browser_shared_cdp` の sandbox TCP probe）は今回の `cargo test --workspace` では再現しなかった。
 
-- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
+## Phase 2 — review 前同期の IntegrationRepair（ADR-0120、2026-10-02）
+
+review 前の target への rebase が衝突した場合、元の成果を保持する `integration-repair-<n>` WU を同じ task に追加する。WU が完了すると最新 target へ再同期し、checks と reviewer を新しい SHA でやり直す。2 回の上限、修復不能時の安全な rollback と未同期 HEAD での従来経路への復帰を実装した。`IntegrationRepairScheduled` / `Resolved` / `Exhausted` を task event に残し、`TaskDetail.integration_repair` と受信箱で通常の実装失敗と区別する。Phase 2 の衝突解消経路の実装完了日は 2026-10-02。
+
+- 最新 main の確認: `7f3482a3` と、その後に進んだ `39e22633` は `git merge-tree --write-tree --name-only HEAD main` で衝突なしを確認して取り込んだ。さらに進んだ `95595105` への見積もりでは `docs/PROGRESS.md` の content conflict だけを検出したため、Phase 1/2 の節と main の Browser capability Phase 1 追記を両方残して解消した。ADR-0120 の番号は main の `docs/adr/` に無く一意である。
+- 契約照合: ADR-0120 D5 の event 名・payload、API の `TaskDetail.integration_repair` 欄、`MAX_INTEGRATION_REPAIRS = 2`、rollback の clean/reflog/branch 条件を `task-core`・`task-ops`・`task-dispatch` と照合した。GUI の案内を `FailureBanner` より上に配置し、ADR の付記に実装済み範囲と残件を記した。
+- 検査: `cargo build -p task-worker --bins` → exit 0。`cargo fmt --all -- --check` は既存の `crates/task-api/tests/integration_repair.rs` の整形差分で初回 exit 1、`cargo fmt --all` 後の再検査は exit 0。`cargo clippy --workspace -- -D warnings` → exit 0（main 再取り込み後にも exit 0）。
+- `cargo test --workspace integration_repair` → exit 0、19 passed / 0 failed。dispatcher の起票・最新 target への再同期・2 回上限・rollback、event/API の射影を含む。`git diff --check` と ADR 番号・architecture-map・PROGRESS の受け入れ check → exit 0。
+- `cargo test --workspace` → exit 101。`celeris --test instance_handoff` の 8 件中 5 件が失敗した。3 件は worker db guard が user namespace を作れず `Operation not permitted`、2 件はその結果として dispatch/standby の待ち条件が成立しなかった。`unshare -U -r true` も `uid_map: Operation not permitted` で exit 1。この sandbox の制約として記録し、これを `plan_issue` の理由にしない。daemon の決定的 check は sandbox 外で実行される。
+- `cargo test --workspace --exclude celeris` → exit 101。`e2e --test account_pool_scenarios` の 3 件も daemon 起動時に同じ worker db guard の user namespace probe で停止した。これは上記の制約が `celeris` crate 固有ではないことを示す。
+- `cargo test --workspace --exclude celeris --exclude e2e` → exit 101。`task-api --test browser_h3_injection` の `production_h3_injects_once_without_exposure` が `unshare: Operation not permitted` で失敗した。いずれも IntegrationRepair の失敗ではなく、この sandbox の user namespace 制約による。
+- `cargo test --workspace --lib` → exit 101。`task-worker --lib` は 657 passed / 12 failed / 4 ignored。失敗は browser 実 runtime と `db_guard` の namespace を要する試験で、`Operation not permitted` を含む。IntegrationRepair に関係する `task-core`・`task-ops`・`task-dispatch`・`task-api` の lib 試験は別コマンドでも切り分ける。
+- `cargo test -p task-core -p task-ops -p task-dispatch -p task-api --lib` → exit 0、計 1,611 passed / 0 failed / 2 ignored（74 + 630 + 518 + 389）。
+- `95595105` 取り込み後に `cargo build -p task-worker --bins && cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings` → exit 0。`cargo test --workspace integration_repair` → exit 0、19 passed / 0 failed。`git merge-base --is-ancestor main HEAD` → exit 0。
+- 未解決: ADR-0120 D5 の `WorkUnitView.integration_repair` / `ExecutionWorkUnitView.integration_repair` と GUI の WU 行の専用 badge は未実装。`task_core::integration_repair_snapshots` の event 投影までは実装済み。sandbox 外での `cargo test --workspace` exit 0 の確認も残る。本番への昇格はこの worktree の範囲外。
+
+- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。2026-10-02 追記: `scripts/dev/stress-e2e-phase3.sh` で phase3_control の flaky 修正（`dafffeb1`）を負荷下 2 回（各 20 serial + 8 parallel）で検証、全 pass。fix-stress-build は人の介入を受け、共用 host の既定負荷を焼き 2 本・nice -n 19・300 秒・5 serial + 2 parallel に変更し、背景 cargo 負荷を opt-in 化。指定の `time sh scripts/dev/stress-e2e-phase3.sh` を既定値のまま 1 回実行し exit 0（serial 5/5、parallel 2、real 16.970s）。重負荷検証手順は [phase-browser](progress/phase-browser.md) 末尾。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 1〜4 の main 統合](progress/phase-browser-main-merge.md) — 2026-10-01、`478e86c4` とリファクタ後 main `2eb1b030` がともに祖先となる作業ブランチで、migration 0035/0036・schema 36 と ADR 0099〜0114 を確認。`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、source size active warning 0 件（既存例外 1 件）。P3-B frame、別 host UID・A13、機密能力の本番解放、本番設定と昇格は未解決。検証のコマンド・exit・テスト数はリンク先に記録。
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0099（制御 lease）/ 0100（live proxy ACL）/ 0101（identity 契約）/ 0113（P3-C control gate 配線）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-C の worker 側 control gate は 2026-09-30 に run loop（`ActionServer::serve`）へ配線完了、`browser_control_gate_wire` 5 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A/P4-B の deliver_state（2026-09-30 実装済み）を参照。2026-09-30 の検査（Rust 3055 passed / 0 failed、clippy exit 0）。本番未昇格。
@@ -155,6 +175,7 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。
 - H6: 期間・合格条件・判定日は人の決定待ち。決まるまで cutover しない。H9: 通知方針は人の決定待ち。H10: release `bf54b41ad627` の staging verify exit 0、読み取り parity 3 passed。
 - 配置上の問題（2026-10-01）: 本番 release パスが前 run の staging 成果物を指す symlink。参照先を dogfood 中に削除しない。NFS 実体コピーは途中で中止。再起動時は web unit と LAN socket を手動で start する。恒久化の対応・再確認結果は未記入。
+- 恒久化（2026-10-02、web ADR-W3 / ADR-0081 付記 (C)(D)）: `scripts/selfdeploy/web-follow.sh <new> <old>` を新設し、`promote.sh` が昇格後に呼ぶ（旧 `celeris-web@<old>` が active かつ新 release の `gate.json` `web.ok=true`・`web/app/server/index.js` ありのときだけ新へ切替。失敗は warning、exit 0、`celeris@` には触れない）。`celeris-web@.service` から `Wants=celeris@%i.service` を除去。証拠: `bash scripts/selfdeploy/tests/promote_web_follows_release.sh` exit 0（(a)(b)(b2)(c)(d)(e) 全 ok）。本番の override.conf 撤去・unit の置き直し・web 再起動は人の手順（[docs/selfdeploy.md §4e](selfdeploy.md#4e-web-の追従web-followsh)）。未実施。
 - 端末確認の残り: LAN の別の物理端末からの到達・操作は未確認。結果を確認したら追記する。
 - 期間中の問題記録: `<日付>｜<画面>｜<端末・ブラウザ>｜<現象>｜<重大度>｜<対応・タスク ID・再確認結果>` の形で 1 件ずつ追記する。
 ## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）

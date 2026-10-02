@@ -114,6 +114,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                             sandboxd: bin_dir.join("celeris-browser-sandboxd"),
                             egress: bin_dir.join("celeris-browser-egress"),
                             live_sessions: Some(Arc::clone(&live_sessions)),
+                            // ADR-0116 D5: `[browser] runtime`（既定 `"daemon"`）。`Config::validate` が
+                            // `runtime = "launcher"` のとき `launcher_socket` の有無を既に確かめている。
+                            runtime: config.browser.runtime_kind(),
                         },
                     );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの

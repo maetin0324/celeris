@@ -3,7 +3,33 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use task_core::{Check, Criterion, Delivery, DeliveryState, StoreError, Task, TaskStore};
+use task_core::{
+    Check, Criterion, Delivery, DeliveryState, Event, RepoId, StoreError, Task, TaskStore,
+};
+
+/// ADR-0118 D4: target 再進行による自動の再 sync→再 check→再 review は初回に加え最大 2 回。
+pub const MAX_TARGET_RESYNCS: u32 = 2;
+
+/// ADR-0118 D4: 直近の「人の再開」以後に記録された、`repo` の target 再進行（`ReviewTargetAdvanced`）の数。
+/// 自動の再レビューは `Transitioned{reason:"rereview"}` の直後に同じ transaction で
+/// `ReviewTargetAdvanced` を追記するので、その直後に再進行が続かない `rereview`/`reopen` だけを
+/// 人の明示的な再開として数え直す。
+pub fn target_restale_count(events: &[Event], repo: RepoId) -> u32 {
+    let mut count = 0;
+    for (i, event) in events.iter().enumerate() {
+        match event {
+            Event::ReviewTargetAdvanced { repo_id, .. } if *repo_id == repo => count += 1,
+            Event::Transitioned { reason, .. }
+                if (reason == "rereview" || reason == "reopen")
+                    && !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
+            {
+                count = 0
+            }
+            _ => {}
+        }
+    }
+    count
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryPolicy {

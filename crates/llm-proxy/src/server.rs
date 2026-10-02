@@ -327,42 +327,46 @@ impl ProxyState {
                         .collect()
                 }
                 SourceScope::Only(SourceKind::Qwen) => {
-                    let Some(model) = tier_model(&self.config.models.qwen, *tier) else {
+                    let Some(model) = selection::qwen_tier_model(&self.config.models.qwen, *tier)
+                    else {
                         return vec![];
                     };
                     self.rank_relays(&self.config.sources.openai_compatible)
                         .await
                         .into_iter()
-                        .map(|cfg| (Attempt::Relay(cfg), model.clone()))
+                        .map(|cfg| (Attempt::Relay(cfg), model.to_string()))
                         .collect()
                 }
                 SourceScope::Any => {
+                    let mut attempts = Vec::new();
                     if self.config.prefer_free {
-                        let qwen_model = tier_model(&self.config.models.qwen, *tier);
+                        let qwen_model =
+                            selection::qwen_tier_model(&self.config.models.qwen, *tier);
                         if let Some(model) = qwen_model {
                             let relays = self
                                 .rank_relays(&self.config.sources.openai_compatible)
                                 .await;
-                            if !relays.is_empty() {
-                                return relays
+                            attempts.extend(
+                                relays
                                     .into_iter()
-                                    .map(|cfg| (Attempt::Relay(cfg), model.clone()))
-                                    .collect();
-                            }
+                                    .map(|cfg| (Attempt::Relay(cfg), model.to_string())),
+                            );
                         }
                     }
                     let claude_dirs = self.claude_dirs();
                     let codex_dirs = self.codex_dirs();
-                    self.rank_cross(&claude_dirs, &codex_dirs, now)
-                        .into_iter()
-                        .filter_map(|a| match a.source {
-                            SourceKind::Claude => tier_model(&self.config.models.claude, *tier)
-                                .map(|m| (Attempt::Claude(a), m)),
-                            SourceKind::Gpt => tier_model(&self.config.models.gpt, *tier)
-                                .map(|m| (Attempt::Codex(a), m)),
-                            SourceKind::Qwen => None,
-                        })
-                        .collect()
+                    attempts.extend(
+                        self.rank_cross(&claude_dirs, &codex_dirs, now)
+                            .into_iter()
+                            .filter_map(|a| match a.source {
+                                SourceKind::Claude => tier_model(&self.config.models.claude, *tier)
+                                    .map(|m| (Attempt::Claude(a), m)),
+                                SourceKind::Gpt => tier_model(&self.config.models.gpt, *tier)
+                                    .map(|m| (Attempt::Codex(a), m)),
+                                SourceKind::Qwen => None,
+                            }),
+                    );
+                    attempts
                 }
             },
         }
@@ -740,15 +744,14 @@ async fn list_models(State(state): State<Arc<ProxyState>>) -> Response {
         .openai_compatible
         .iter()
         .any(|c| c.enabled)
+        && selection::qwen_tier_model(&state.config.models.qwen, task_core::Tier::Cheap).is_some()
     {
-        for tier in ["frontier", "standard", "cheap"] {
-            data.push(crate::openai::ModelInfo {
-                id: format!("qwen/{tier}"),
-                object: "model".to_string(),
-                created,
-                owned_by: "openai-compatible".to_string(),
-            });
-        }
+        data.push(crate::openai::ModelInfo {
+            id: "qwen/cheap".to_string(),
+            object: "model".to_string(),
+            created,
+            owned_by: "openai-compatible".to_string(),
+        });
     }
     (
         StatusCode::OK,

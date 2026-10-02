@@ -713,3 +713,365 @@ fn cargo_env_is_target_and_tuning_only() {
         .collect();
     assert_eq!(keys, ["CARGO_TARGET_DIR"]);
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0129 (4)(6): seed からの reflink
+// ---------------------------------------------------------------------------
+
+const SEED_REPO: &str = "/repo/agent-platform";
+
+fn seed_req<'a>(
+    owner: &'a Owner,
+    none: &'a dyn Fn(&AdoptCandidate) -> Option<u64>,
+) -> AllocateRequest<'a> {
+    AllocateRequest {
+        owner,
+        repo_path: Path::new(SEED_REPO),
+        base_commit: None,
+        work_unit_key: None,
+        checkout: None,
+        candidates: &[],
+        distance: none,
+        adopt: false,
+        max_distance: 200,
+    }
+}
+
+/// `seeds/<key>/current/{target,manifest.json}` を作る（`current` は世代ディレクトリへの symlink）。
+fn write_seed(pool: &Pool, manifest: &str) -> PathBuf {
+    let key = crate::build_cache::repo_cache_key(Path::new(SEED_REPO));
+    let gen_dir = pool.root().join(SEEDS_DIR).join(&key).join("gen-1");
+    let target = gen_dir.join(TARGET_SUBDIR);
+    std::fs::create_dir_all(target.join("debug/deps")).unwrap();
+    std::fs::write(
+        target.join("debug/deps/libbig.rlib"),
+        vec![7u8; 1024 * 1024],
+    )
+    .unwrap();
+    std::fs::write(target.join("debug/.fingerprint"), b"fp").unwrap();
+    std::fs::write(target.join("CACHEDIR.TAG"), b"tag").unwrap();
+    std::fs::write(gen_dir.join(SEED_MANIFEST), manifest).unwrap();
+    std::os::unix::fs::symlink("gen-1", seed_current_dir(pool, &key)).unwrap();
+    target
+}
+
+const MANIFEST: &str = r#"{"commit":"abc123","rustc":"rustc 1.98.1","incremental":false,"dev_debug":"line-tables-only"}"#;
+
+fn partials(owner_dir: &Path) -> Vec<String> {
+    std::fs::read_dir(owner_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(SEED_COPY_PREFIX))
+        .collect()
+}
+
+fn is_empty_dir(p: &Path) -> bool {
+    p.is_dir() && std::fs::read_dir(p).unwrap().next().is_none()
+}
+
+/// reflink できない tmp（tmpfs / ext 系）では、seed があっても共有を確かめられず空の target に戻る。残骸は無い。
+#[test]
+fn reflink_unavailable_tmp_falls_back_to_empty_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::work_unit("T1", "W1");
+    let none = |_: &AdoptCandidate| None;
+    let a = allocate(&pool, &seed_req(&owner, &none)).unwrap();
+    let TargetOrigin::Empty {
+        reason: Some(reason),
+    } = &a.origin
+    else {
+        panic!("expected an empty fallback, got {:?}", a.origin);
+    };
+    assert!(reason.contains("reflink"), "{reason}");
+    assert!(is_empty_dir(&a.target_dir));
+    let owner_dir = pool.owner_dir(&owner);
+    assert!(partials(&owner_dir).is_empty());
+    let rec = read_target_origin(&owner_dir).unwrap().unwrap();
+    assert_eq!(rec.schema, TARGET_ORIGIN_SCHEMA);
+    assert_eq!(rec.origin, "empty");
+    assert!(rec.reason.is_some());
+}
+
+/// 共有できる（差し替えた判定）なら seed を写し、`target-origin.json` に seed と commit を残す。
+#[test]
+fn reflink_shared_copy_creates_target_from_seed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    let shared = |_: &Path| Ok(true);
+    let ops = SeedCopyOps {
+        copy: &cp_reflink_auto,
+        is_shared: &shared,
+    };
+    let rustc = || Some("rustc 1.98.1\n".to_string());
+    let policy = SeedPolicy {
+        enabled: true,
+        cargo: Some(CargoTuning::default()),
+        rustc: Some(&rustc),
+    };
+    let a = allocate_with_seed(&pool, &seed_req(&owner, &none), &policy, &ops).unwrap();
+    assert!(
+        matches!(&a.origin, TargetOrigin::Seed { commit: Some(c), .. } if c == "abc123"),
+        "{:?}",
+        a.origin
+    );
+    assert_eq!(
+        std::fs::read(a.target_dir.join("debug/deps/libbig.rlib"))
+            .unwrap()
+            .len(),
+        1024 * 1024
+    );
+    assert!(a.target_dir.join("debug/.fingerprint").is_file());
+    let owner_dir = pool.owner_dir(&owner);
+    assert!(partials(&owner_dir).is_empty());
+    let rec = read_target_origin(&owner_dir).unwrap().unwrap();
+    assert_eq!(rec.origin, "seed");
+    assert_eq!(rec.seed_commit.as_deref(), Some("abc123"));
+    // 2 度目の割り当ては既存の target をそのまま使う（seed で上書きしない）。
+    std::fs::write(a.target_dir.join("mine"), b"x").unwrap();
+    let again = allocate_with_seed(&pool, &seed_req(&owner, &none), &policy, &ops).unwrap();
+    assert_eq!(again.origin, TargetOrigin::Existing);
+    assert!(again.target_dir.join("mine").is_file());
+    assert_eq!(
+        read_target_origin(&owner_dir).unwrap().unwrap().origin,
+        "seed"
+    );
+}
+
+/// 全体の写しが途中で失敗したら、部分的に写した一時ディレクトリを消してから空の target に戻る。
+#[test]
+fn reflink_partial_copy_failure_removes_residue() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    let copy = |from: &Path, to: &Path| -> io::Result<()> {
+        if from.is_file() {
+            return std::fs::copy(from, to).map(|_| ());
+        }
+        std::fs::create_dir_all(to.join("debug/deps"))?;
+        std::fs::write(to.join("debug/deps/half"), b"partial")?;
+        Err(io::Error::from_raw_os_error(nix::libc::EXDEV))
+    };
+    let shared = |_: &Path| Ok(true);
+    let ops = SeedCopyOps {
+        copy: &copy,
+        is_shared: &shared,
+    };
+    let a = allocate_with_seed(
+        &pool,
+        &seed_req(&owner, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.origin, TargetOrigin::Empty { reason: Some(r) } if r.contains("seed copy failed")),
+        "{:?}",
+        a.origin
+    );
+    assert!(is_empty_dir(&a.target_dir));
+    assert!(partials(&pool.owner_dir(&owner)).is_empty());
+}
+
+/// 写した後に共有されていなければ（通常コピーへ落ちた）消して空に戻る。
+#[test]
+fn reflink_copy_not_shared_after_full_copy_falls_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    // probe（.probe の拡張子）だけ共有を報告する。
+    let shared = |p: &Path| Ok(p.extension().is_some_and(|e| e == "probe"));
+    let ops = SeedCopyOps {
+        copy: &cp_reflink_auto,
+        is_shared: &shared,
+    };
+    let a = allocate_with_seed(
+        &pool,
+        &seed_req(&owner, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.origin, TargetOrigin::Empty { reason: Some(r) } if r.contains("did not share")),
+        "{:?}",
+        a.origin
+    );
+    assert!(is_empty_dir(&a.target_dir));
+    assert!(partials(&pool.owner_dir(&owner)).is_empty());
+}
+
+/// seed が無い・無効・manifest が無い・互換でない（rustc / [scratch.cargo]）なら写さずに空から作る。
+#[test]
+fn reflink_seed_absent_or_incompatible_starts_empty_without_copy() {
+    let none = |_: &AdoptCandidate| None;
+    let copied = std::cell::Cell::new(0);
+    let copy = |_: &Path, _: &Path| -> io::Result<()> {
+        copied.set(copied.get() + 1);
+        Err(io::Error::other("must not copy"))
+    };
+    let shared = |_: &Path| Ok(true);
+    let ops = SeedCopyOps {
+        copy: &copy,
+        is_shared: &shared,
+    };
+    let other_rustc = || Some("rustc 1.99.0".to_string());
+    let cases: Vec<(Option<&str>, SeedPolicy<'_>, Option<&str>)> = vec![
+        (None, SeedPolicy::unchecked(), None),
+        (Some(MANIFEST), SeedPolicy::disabled(), None),
+        (
+            Some(""),
+            SeedPolicy::unchecked(),
+            Some("manifest is unreadable"),
+        ),
+        (
+            Some(MANIFEST),
+            SeedPolicy {
+                enabled: true,
+                cargo: None,
+                rustc: Some(&other_rustc),
+            },
+            Some("rustc"),
+        ),
+        (
+            Some(MANIFEST),
+            SeedPolicy {
+                enabled: true,
+                cargo: Some(CargoTuning {
+                    incremental: true,
+                    dev_debug: None,
+                }),
+                rustc: None,
+            },
+            Some("cargo settings"),
+        ),
+        (
+            Some(r#"{"repo_key":"other"}"#),
+            SeedPolicy::unchecked(),
+            Some("repo"),
+        ),
+    ];
+    for (manifest, policy, want) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = Pool::new(tmp.path());
+        if let Some(m) = manifest {
+            write_seed(&pool, m);
+        }
+        let owner = Owner::task("T1");
+        let a = allocate_with_seed(&pool, &seed_req(&owner, &none), &policy, &ops).unwrap();
+        match (&a.origin, want) {
+            (TargetOrigin::Empty { reason: None }, None) => {}
+            (TargetOrigin::Empty { reason: Some(r) }, Some(w)) => assert!(r.contains(w), "{r}"),
+            (o, w) => panic!("{manifest:?}: got {o:?}, want {w:?}"),
+        }
+        assert!(is_empty_dir(&a.target_dir));
+    }
+    assert_eq!(copied.get(), 0);
+}
+
+/// 前回の割り当てで落ちた作りかけ（`.seed-copy-*`）は次の割り当てで消す。
+#[test]
+fn reflink_stale_partial_copy_is_cleaned_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let owner = Owner::task("T1");
+    let owner_dir = pool.owner_dir(&owner);
+    std::fs::create_dir_all(owner_dir.join(format!("{SEED_COPY_PREFIX}1/debug"))).unwrap();
+    std::fs::write(owner_dir.join(format!("{SEED_COPY_PREFIX}2.probe")), b"x").unwrap();
+    let none = |_: &AdoptCandidate| None;
+    let a = allocate(&pool, &seed_req(&owner, &none)).unwrap();
+    assert_eq!(a.origin, TargetOrigin::Empty { reason: None });
+    assert!(partials(&owner_dir).is_empty());
+    assert!(is_empty_dir(&a.target_dir));
+}
+
+/// btrfs の実試験（opt-in）: `CELERIS_REFLINK_TEST_DIR` が btrfs のディレクトリを指すときだけ、実際の
+/// `cp -a --reflink=auto` と FIEMAP で seed から写し、extent の共有と `df` の増分を確かめる。未設定なら skip。
+#[test]
+fn reflink_btrfs_seed_copy_shares_extents() {
+    let Some(dir) = std::env::var_os("CELERIS_REFLINK_TEST_DIR") else {
+        eprintln!("skip: CELERIS_REFLINK_TEST_DIR is not set");
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    let st = nix::sys::statfs::statfs(&dir).unwrap();
+    assert_eq!(
+        st.filesystem_type(),
+        nix::sys::statfs::BTRFS_SUPER_MAGIC,
+        "{} is not btrfs",
+        dir.display()
+    );
+    let tmp = tempfile::tempdir_in(&dir).unwrap();
+    let pool = Pool::new(tmp.path());
+    let seed = write_seed(&pool, MANIFEST);
+    // df の増分を見るため 64 MiB の成果物を足す（中身は 0 でない値。sync して extent を確定させる）。
+    let big = seed.join("debug/deps/libhuge.rlib");
+    std::fs::write(&big, vec![0x5au8; 64 * 1024 * 1024]).unwrap();
+    std::fs::File::open(&big).unwrap().sync_all().unwrap();
+    nix::unistd::sync();
+    let free = || {
+        let v = nix::sys::statvfs::statvfs(&dir).unwrap();
+        v.blocks_available() as u64 * v.fragment_size() as u64
+    };
+    let before = free();
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    let a = allocate(&pool, &seed_req(&owner, &none)).unwrap();
+    assert!(
+        matches!(a.origin, TargetOrigin::Seed { .. }),
+        "{:?}",
+        a.origin
+    );
+    let copied = a.target_dir.join("debug/deps/libhuge.rlib");
+    assert!(fiemap_all_shared(&copied).unwrap());
+    nix::unistd::sync();
+    let after = free();
+    let grew = before.saturating_sub(after);
+    eprintln!(
+        "reflink btrfs: copied 64 MiB seed file, df free {before} -> {after} (grew {} KiB), shared=true",
+        grew / 1024
+    );
+    assert!(
+        grew < 16 * 1024 * 1024,
+        "df grew {grew} bytes; extents were not shared"
+    );
+    assert!(partials(&pool.owner_dir(&owner)).is_empty());
+}
+
+/// ADR-0129 (3): `mount` が mount されていない・`dir` がその下に無いなら従来の場所へ戻す。
+#[test]
+fn scratch_mount_check_falls_back_to_previous_dir() {
+    let fallback = Path::new("/var/lib/celeris/scratch");
+    let mut s = ScratchSettings::with_dir("/local/celeris/scratch");
+    s.mount = Some(PathBuf::from("/local"));
+    let ok = apply_mount_check(s.clone(), fallback, |_| Ok(true));
+    assert_eq!(ok.dir, PathBuf::from("/local/celeris/scratch"));
+    assert!(ok.dir_fallback_reason.is_none());
+    let gone = apply_mount_check(s.clone(), fallback, |_| Ok(false));
+    assert_eq!(gone.dir, fallback);
+    assert!(gone.dir_fallback_reason.unwrap().contains("not mounted"));
+    let err = apply_mount_check(s.clone(), fallback, |_| Err(io::Error::other("boom")));
+    assert_eq!(err.dir, fallback);
+    let mut outside = s.clone();
+    outside.dir = PathBuf::from("/srv/scratch");
+    let o = apply_mount_check(outside, fallback, |_| Ok(true));
+    assert_eq!(o.dir, fallback);
+    // mount を書かなければ何もしない。
+    let plain = ScratchSettings::with_dir("/srv/scratch");
+    assert_eq!(
+        apply_mount_check(plain.clone(), fallback, |_| Ok(false)),
+        plain
+    );
+    // 実物: `/` は mount point、無い path は false。
+    assert!(is_mount_point(Path::new("/")).unwrap());
+    assert!(!is_mount_point(Path::new("/nonexistent-celeris-mount")).unwrap());
+}

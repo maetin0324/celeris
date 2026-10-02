@@ -283,7 +283,15 @@ fn allocate_scratch_target(
         adopt: settings.adopt,
         max_distance: settings.adopt_max_distance,
     };
-    match task_worker::scratch::allocate(&pool, &req) {
+    // ADR-0129 (4): seed は `[scratch.cargo]` と worktree の rustc（rust-toolchain に従う）が一致するときだけ写す。
+    let rustc = || rustc_version(&repo.dir);
+    let seed = task_worker::scratch::SeedPolicy {
+        enabled: settings.seed_reflink,
+        cargo: Some(settings.cargo.clone()),
+        rustc: Some(&rustc),
+    };
+    let ops = task_worker::scratch::SeedCopyOps::real();
+    match task_worker::scratch::allocate_with_seed(&pool, &req, &seed, &ops) {
         Ok(a) => {
             if let Some(from) = &a.adopted_from {
                 tracing::info!(owner = %owner, adopted_from = %from, target = %a.target_dir.display(), "scratch: adopted a warm target (ADR-0075 D3)");
@@ -296,6 +304,19 @@ fn allocate_scratch_target(
             pool.target_dir(owner)
         }
     }
+}
+
+/// `rustc -V`（`dir` で実行する。seed の manifest と比べる）。
+fn rustc_version(dir: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("rustc")
+        .arg("-V")
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// ADR-0041 D5: この celeris が**面倒を見てよいタスク**の述語。`None`（既定）は「全部」＝従来どおり。
@@ -1265,6 +1286,10 @@ impl Dispatcher {
                 None => HashMap::new(),
             };
         // ADR-0075 D1: scratch を NFS 上で無効化したときは起動ログに理由を出す（従来の build_cache_dir に戻る）。
+        // ADR-0129 (3): `[scratch] mount` が mount されていなければ従来の場所へ戻したことを出す。
+        if let Some(reason) = &config.scratch.dir_fallback_reason {
+            tracing::warn!(%reason, "scratch dir fell back to the previous location");
+        }
         if let Some(reason) = &config.scratch.disabled_reason {
             tracing::warn!(%reason, "scratch pool disabled");
         } else if config.scratch.enabled && config.shared_build_cache {

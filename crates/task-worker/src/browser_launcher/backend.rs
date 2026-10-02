@@ -40,27 +40,73 @@ impl RuntimeBackend {
     }
 }
 
-fn write_shared(path: &Path, data: &[u8]) -> Result<(), ErrorCode> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o644)
-        .open(path)
-        .map_err(|_| ErrorCode::LaunchFailed)?;
-    f.write_all(data).map_err(|_| ErrorCode::LaunchFailed)?;
-    f.set_permissions(std::fs::Permissions::from_mode(0o644))
-        .map_err(|_| ErrorCode::LaunchFailed)
+/// 起動失敗の段と原因を launcher の stderr（journal）に出し、daemon には固定の code だけ返す。
+fn fail<'a, E: std::fmt::Display>(
+    session: &'a str,
+    stage: &'static str,
+    code: ErrorCode,
+) -> impl FnOnce(E) -> ErrorCode + 'a {
+    move |e| {
+        eprintln!("celeris-browser-launcher: start {session}: {stage}: {e}");
+        code
+    }
 }
 
-fn owner_uid(pid: i32) -> std::io::Result<u32> {
-    let f = std::fs::File::open(format!("/proc/{pid}/ns/user"))?;
+fn write_shared(path: &Path, data: &[u8]) -> Result<(), ErrorCode> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(path)?;
+        f.write_all(data)?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o644))
+    };
+    write().map_err(|e| {
+        eprintln!("celeris-browser-launcher: write {}: {e}", path.display());
+        ErrorCode::LaunchFailed
+    })
+}
+
+fn ns_owner(f: &std::fs::File) -> std::io::Result<u32> {
     let mut owner = 0u32;
     // NS_GET_OWNER_UID = _IO(0xb7, 0x4); Linux nsfs.h.
     if unsafe { libc::ioctl(f.as_raw_fd(), 0xb704, &mut owner) } < 0 {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(owner)
+    }
+}
+
+/// Chrome の userns の owner（bwrap が内側 1000 = subuid として作った入れ子の userns）。
+fn owner_uid(pid: i32) -> std::io::Result<u32> {
+    ns_owner(&std::fs::File::open(format!("/proc/{pid}/ns/user"))?)
+}
+
+/// Chrome の userns の親（launcher が 2 map で作った userns）の owner。
+fn parent_owner_uid(pid: i32) -> std::io::Result<u32> {
+    use std::os::fd::FromRawFd;
+    let f = std::fs::File::open(format!("/proc/{pid}/ns/user"))?;
+    // NS_GET_PARENT = _IO(0xb7, 0x2)。成功時は親 namespace の新しい fd。
+    let parent = unsafe { libc::ioctl(f.as_raw_fd(), 0xb702) };
+    if parent < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    ns_owner(&unsafe { std::fs::File::from_raw_fd(parent) })
+}
+
+/// launcher が作った userns（親）の owner が launcher、その中で bwrap が内側 1000（subuid）として
+/// 作った userns（Chrome）の owner が subuid であること（ADR-0116 付記）。
+fn owners_match(pid: i32, uid: u32, subuid: u32) -> Result<(), String> {
+    let owner = owner_uid(pid).map_err(|e| format!("NS_GET_OWNER_UID: {e}"))?;
+    let parent = parent_owner_uid(pid).map_err(|e| format!("NS_GET_PARENT owner: {e}"))?;
+    if owner == subuid && parent == uid {
+        Ok(())
+    } else {
+        Err(format!(
+            "namespace owner {owner} (want {subuid}), parent owner {parent} (want {uid})"
+        ))
     }
 }
 
@@ -79,8 +125,10 @@ fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &
             })
             .collect()
     };
-    let expected_u = vec![vec![0, uid.host_id, 1], vec![1000, uid.sub_id, 1]];
-    let expected_g = vec![vec![0, gid.host_id, 1], vec![1000, gid.sub_id, 1]];
+    // launcher から見た入れ子の map: 内側 1000 → subuid / subgid の 1 行だけ。
+    // launcher 自身（host_id）は Chrome の userns には map されない。
+    let expected_u = vec![vec![1000, uid.sub_id, 1]];
+    let expected_g = vec![vec![1000, gid.sub_id, 1]];
     normalize(&u) == expected_u
         && normalize(&g) == expected_g
         && forbidden
@@ -91,44 +139,62 @@ fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &
 impl SessionBackend for RuntimeBackend {
     fn start(&self, req: &StartRequest) -> Result<Launched, ErrorCode> {
         let cfg = &self.cfg;
-        let ns = userns::create().map_err(|_| ErrorCode::LaunchFailed)?;
+        let sid = req.session_id.as_str();
+        let ns = userns::create().map_err(fail(sid, "create userns", ErrorCode::LaunchFailed))?;
         let uid = unsafe { libc::geteuid() };
         let gid = unsafe { libc::getegid() };
         let subuid = userns::subordinate_id(
-            &std::fs::read_to_string("/etc/subuid").map_err(|_| ErrorCode::LaunchFailed)?,
+            &std::fs::read_to_string("/etc/subuid").map_err(fail(
+                sid,
+                "read /etc/subuid",
+                ErrorCode::LaunchFailed,
+            ))?,
             "celeris-browser",
             uid,
         )
-        .map_err(|_| ErrorCode::LaunchFailed)?;
+        .map_err(fail(sid, "subuid", ErrorCode::LaunchFailed))?;
         let subgid = userns::subordinate_id(
-            &std::fs::read_to_string("/etc/subgid").map_err(|_| ErrorCode::LaunchFailed)?,
+            &std::fs::read_to_string("/etc/subgid").map_err(fail(
+                sid,
+                "read /etc/subgid",
+                ErrorCode::LaunchFailed,
+            ))?,
             "celeris-browser",
             gid,
         )
-        .map_err(|_| ErrorCode::LaunchFailed)?;
+        .map_err(fail(sid, "subgid", ErrorCode::LaunchFailed))?;
         if cfg
             .allowed_uids
             .iter()
             .any(|id| [uid, gid, subuid, subgid].contains(id))
         {
+            eprintln!("celeris-browser-launcher: start {sid}: launcher ids overlap allowed_uids");
             return Err(ErrorCode::IsolationFailed);
         }
         let dir = cfg.session_root.join(&req.session_id);
-        std::fs::create_dir(&dir).map_err(|_| ErrorCode::LaunchFailed)?;
+        std::fs::create_dir(&dir).map_err(fail(
+            sid,
+            "create session dir",
+            ErrorCode::LaunchFailed,
+        ))?;
         let setup = (|| {
             for child in ["output", "home", "run", "actions", "profile"] {
-                std::fs::create_dir(dir.join(child)).map_err(|_| ErrorCode::LaunchFailed)?;
+                std::fs::create_dir(dir.join(child)).map_err(fail(
+                    sid,
+                    "create session subdir",
+                    ErrorCode::LaunchFailed,
+                ))?;
             }
-            // The browser is host subuid after bwrap switches to internal UID 1000.
+            // The browser is host subuid: the spawn child switches to internal UID 1000 before bwrap.
             use std::os::unix::fs::PermissionsExt;
             // The parent session_root is 0700 and owned only by the dedicated
             // launcher UID. Within the bind, subuid S needs to create profile and
             // action files. Sticky session root protects B-owned configuration.
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o1777))
-                .map_err(|_| ErrorCode::LaunchFailed)?;
+                .map_err(fail(sid, "chmod session dir", ErrorCode::LaunchFailed))?;
             for child in ["output", "home", "run", "actions", "profile"] {
                 std::fs::set_permissions(dir.join(child), std::fs::Permissions::from_mode(0o777))
-                    .map_err(|_| ErrorCode::LaunchFailed)?;
+                    .map_err(fail(sid, "chmod session subdir", ErrorCode::LaunchFailed))?;
             }
             write_shared(
                 &dir.join("browser_action.py"),
@@ -209,28 +275,36 @@ impl SessionBackend for RuntimeBackend {
                 spec,
                 SupervisorOptions::new(cfg.state_dir.join("supervisor")),
             )
-            .map_err(|_| ErrorCode::LaunchFailed)?;
+            .map_err(fail(sid, "start bwrap", ErrorCode::LaunchFailed))?;
             // bwrap has entered the namespace; releasing the holder cannot change its owner.
             drop(ns);
             let pid = sup.runtime_pid();
-            let owner = owner_uid(pid).map_err(|_| ErrorCode::IsolationFailed)?;
-            if owner != uid
-                || !maps_match(
-                    pid,
-                    userns::Mapping {
-                        host_id: uid,
-                        sub_id: subuid,
-                    },
-                    userns::Mapping {
-                        host_id: gid,
-                        sub_id: subgid,
-                    },
-                    &cfg.allowed_uids,
-                )
-            {
+            owners_match(pid, uid, subuid).map_err(fail(
+                sid,
+                "namespace owner",
+                ErrorCode::IsolationFailed,
+            ))?;
+            if !maps_match(
+                pid,
+                userns::Mapping {
+                    host_id: uid,
+                    sub_id: subuid,
+                },
+                userns::Mapping {
+                    host_id: gid,
+                    sub_id: subgid,
+                },
+                &cfg.allowed_uids,
+            ) {
+                eprintln!(
+                    "celeris-browser-launcher: start {sid}: id map mismatch: uid_map={:?} gid_map={:?}",
+                    std::fs::read_to_string(format!("/proc/{pid}/uid_map")).unwrap_or_default(),
+                    std::fs::read_to_string(format!("/proc/{pid}/gid_map")).unwrap_or_default()
+                );
                 return Err(ErrorCode::IsolationFailed);
             }
             let (Some(write), Some(read)) = (sup.cdp_write.take(), sup.cdp_read.take()) else {
+                eprintln!("celeris-browser-launcher: start {sid}: CDP pipe missing");
                 return Err(ErrorCode::LaunchFailed);
             };
             let shared = SharedCdp::start_with_mode(
@@ -240,16 +314,18 @@ impl SessionBackend for RuntimeBackend {
                 req.policy.allowed_domains.clone(),
                 0o666,
             )
-            .map_err(|_| ErrorCode::LaunchFailed)?;
+            .map_err(fail(sid, "start CDP relay", ErrorCode::LaunchFailed))?;
             sup.attach_controller(shared.controller());
             let facts = crate::browser_runtime::collect_facts(
                 &req.session_id,
                 pid,
                 sup.processes().first().map_or(0, |p| p.pid),
             )
-            .map_err(|_| ErrorCode::IsolationFailed)?;
-            task_core::browser_isolation::verify_isolation(&facts)
-                .map_err(|_| ErrorCode::IsolationFailed)?;
+            .map_err(fail(sid, "collect facts", ErrorCode::IsolationFailed))?;
+            task_core::browser_isolation::verify_isolation(&facts).map_err(|v| {
+                eprintln!("celeris-browser-launcher: start {sid}: verify_isolation: {v:?}");
+                ErrorCode::IsolationFailed
+            })?;
             let leader = sup
                 .processes()
                 .first()
@@ -420,7 +496,7 @@ impl BackendSession for RuntimeSession {
     }
     fn isolation_ok(&mut self) -> bool {
         let pid = self.sup.runtime_pid();
-        owner_uid(pid).ok() == Some(self.uid)
+        owners_match(pid, self.uid, self.subuid).is_ok()
             && maps_match(
                 pid,
                 userns::Mapping {

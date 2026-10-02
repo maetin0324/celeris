@@ -11,9 +11,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use nix::libc;
-use task_core::browser_isolation::verify_isolation;
+use task_worker::browser::verify_launcher_observation;
 use task_worker::browser_launcher::{LauncherClient, Outcome, SessionPolicy, SessionState};
-use task_worker::browser_runtime::collect_facts;
 
 const DEFAULT_SOCKET: &str = "/run/celeris-browser/launcher.sock";
 
@@ -39,6 +38,15 @@ fn browser_uid() -> Option<u32> {
         .nth(2)?
         .parse()
         .ok()
+}
+
+fn subid_start(path: &str) -> Option<u32> {
+    fs::read_to_string(path).ok()?.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        (fields.next() == Some("celeris-browser"))
+            .then(|| fields.next()?.parse().ok())
+            .flatten()
+    })
 }
 
 fn has_subid(path: &str) -> bool {
@@ -273,15 +281,29 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         "observe: owner={:?} host_uid={} uid_map={:?} gid_map={:?}",
         observed.ns_owner_uid, observed.host_uid, observed.uid_map, observed.gid_map
     );
+    // ADR-0116 付記: launcher（B）が 2 map の userns を作り、その中で内側 1000（= subuid S）に
+    // なった bwrap が Chrome の userns を作る。Chrome の userns の owner は S、親の owner は B。
+    let subuid = subid_start("/etc/subuid").expect("celeris-browser subuid");
     assert_eq!(observed.host_uid, browser_uid);
-    assert_eq!(observed.ns_owner_uid, Some(browser_uid));
+    assert_eq!(observed.ns_owner_uid, Some(subuid));
+    assert_ne!(observed.ns_owner_uid, Some(daemon_uid));
     let pid = chrome_pid(&before, &observed.uid_map);
-    let owner = owner_uid(pid).expect("NS_GET_OWNER_UID on real Chrome");
     let uid_map = fs::read_to_string(format!("/proc/{pid}/uid_map")).expect("Chrome uid_map");
     let gid_map = fs::read_to_string(format!("/proc/{pid}/gid_map")).expect("Chrome gid_map");
-    eprintln!("Chrome pid={pid} NS_GET_OWNER_UID={owner} uid_map={uid_map:?} gid_map={gid_map:?}");
-    assert_eq!(owner, browser_uid);
-    assert_ne!(owner, daemon_uid);
+    eprintln!(
+        "Chrome pid={pid} NS_GET_OWNER_UID(launcher)={:?} uid_map={uid_map:?} gid_map={gid_map:?}",
+        observed.ns_owner_uid
+    );
+    // daemon UID からは Chrome の namespace link も開けない（ptrace read の検査）。
+    let ns_error = owner_uid(pid).expect_err("daemon UID opened Chrome /proc/<pid>/ns/user");
+    eprintln!(
+        "NS_GET_OWNER_UID from daemon UID: errno={:?}",
+        ns_error.raw_os_error()
+    );
+    assert!(matches!(
+        ns_error.raw_os_error(),
+        Some(libc::EACCES) | Some(libc::EPERM)
+    ));
     assert_eq!(uid_map, observed.uid_map);
     assert_eq!(gid_map, observed.gid_map);
     for map in [&uid_map, &gid_map] {
@@ -291,13 +313,17 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         );
     }
 
-    let pgid = unsafe { libc::getpgid(pid) };
-    assert!(pgid > 0, "Chrome process group unavailable");
-    let facts = collect_facts(&session.id, pid, pgid).expect("collect real Chrome RuntimeFacts");
-    eprintln!("RuntimeFacts={facts:#?}");
-    let attestation = verify_isolation(&facts).expect("verify_isolation on real Chrome");
+    // launcher は自分の verify_isolation（mount・namespace を含む実観測）が Ok のときだけ
+    // isolation_ok を返す。daemon 側は観測値を同じ判定に掛ける。
+    let attestation =
+        verify_launcher_observation(&session.id, &observed, started.receipt.isolation_ok)
+            .expect("launcher observation rejected (fail closed)")
+            .expect("verify_isolation on launcher observation");
     assert_eq!(attestation.session_id(), session.id);
-    eprintln!("verify_isolation=Ok");
+    eprintln!(
+        "verify_isolation=Ok (launcher isolation_ok={}, CapEff={} NoNewPrivs={})",
+        started.receipt.isolation_ok, observed.cap_eff, observed.no_new_privs
+    );
 
     let error = ptrace_attach(pid).expect_err("daemon UID attached to Chrome");
     eprintln!(

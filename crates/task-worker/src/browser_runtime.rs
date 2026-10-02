@@ -39,8 +39,9 @@ pub enum UsernsMode {
 pub enum RuntimeError {
     #[error("runtime io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("runtime did not report its child pid")]
-    NoChildPid,
+    /// bwrap が `--info-fd` を書かずに終わった。中身は bwrap の stderr の先頭（診断用）。
+    #[error("runtime did not report its child pid: {0}")]
+    NoChildPid(String),
     #[error("runtime is not running")]
     NotRunning,
     #[error("runtime relay did not become ready")]
@@ -100,14 +101,39 @@ const ETC_FILES: [&str; 10] = [
     "/etc/alternatives",
 ];
 
+fn open_dir_path(path: &Path) -> std::io::Result<OwnedFd> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::other("session dir path contains NUL"))?;
+    // SAFETY: c は NUL 終端。成功時の fd はここで所有する。
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
 const ROOT_LINKS: [&str; 5] = ["bin", "lib", "lib32", "lib64", "sbin"];
 
+/// `UsernsMode::Fd` のとき session dir を渡す FD（bwrap の `--bind-fd`）。
+const SESSION_DIR_FD: RawFd = 8;
+/// sandbox の中の UID / GID（`--uid` / `--gid`、launcher の 2 map の内側 ID）。
+const INNER_ID: u32 = 1000;
+
 /// bwrap の引数（`--info-fd` を除く）。I/O は `/` 直下の symlink 判定だけ。
+///
+/// `UsernsMode::Fd` でも bwrap には `--userns` を渡さない。bwrap 0.11 は `--userns` のとき
+/// setuid → setgid の順に切り替え、setuid で capability を失って setgid が EPERM になる。
+/// 代わりに spawn の子が launcher の userns へ入って GID → UID の順に内側 1000 へ切り替え、
+/// bwrap はそこから通常の `--unshare-user` で入れ子の userns を作る（ADR-0116 付記）。
+/// 内側 1000 は session_root の私有 dir を辿れないので、session dir は FD で bind する。
 pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
-    let mut a: Vec<OsString> = match spec.userns {
-        UsernsMode::Unshare => vec!["--unshare-user".into()],
-        UsernsMode::Fd(_) => vec!["--userns".into(), "7".into()],
-    };
+    let mut a: Vec<OsString> = vec!["--unshare-user".into()];
     a.extend(
         [
             "--uid",
@@ -161,8 +187,17 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
             d.clone().into_os_string(),
         ]);
     }
-    a.extend(["--proc", "/proc", "--dev", "/dev", "--bind"].map(OsString::from));
-    a.push(spec.session_dir.clone().into_os_string());
+    a.extend(["--proc", "/proc", "--dev", "/dev"].map(OsString::from));
+    match spec.userns {
+        UsernsMode::Unshare => {
+            a.push("--bind".into());
+            a.push(spec.session_dir.clone().into_os_string());
+        }
+        UsernsMode::Fd(_) => {
+            a.push("--bind-fd".into());
+            a.push(SESSION_DIR_FD.to_string().into());
+        }
+    }
     a.push(SESSION_ROOT.into());
     for (k, v) in [
         ("HOME", SESSION_ROOT.to_owned()),
@@ -181,7 +216,7 @@ mod userns_args_tests {
     use super::*;
 
     #[test]
-    fn external_userns_replaces_only_unshare_argument() {
+    fn external_userns_binds_session_by_fd_only() {
         let mut spec = RuntimeSpec {
             bwrap: "/usr/bin/bwrap".into(),
             userns: UsernsMode::Unshare,
@@ -196,11 +231,25 @@ mod userns_args_tests {
         assert_eq!(old.first().and_then(|s| s.to_str()), Some("--unshare-user"));
         spec.userns = UsernsMode::Fd(11);
         let new = bwrap_args(&spec);
-        assert_eq!(
-            &new[..2],
-            &[OsString::from("--userns"), OsString::from("7")]
-        );
-        assert_eq!(&old[1..], &new[2..]);
+        assert!(!new.contains(&OsString::from("--userns")));
+        let bind = |args: &[OsString], flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .map(|i| args[i + 1].clone())
+        };
+        assert_eq!(bind(&old, "--bind"), Some("/tmp/test-session".into()));
+        assert_eq!(bind(&new, "--bind-fd"), Some("8".into()));
+        assert_eq!(bind(&new, "--bind"), None);
+        let strip = |args: &[OsString]| -> Vec<OsString> {
+            args.iter()
+                .filter(|a| {
+                    !["--bind", "--bind-fd", "/tmp/test-session", "8"]
+                        .contains(&a.to_str().unwrap_or(""))
+                })
+                .cloned()
+                .collect()
+        };
+        assert_eq!(strip(&old), strip(&new));
     }
 }
 
@@ -251,6 +300,12 @@ impl IsolatedRuntime {
             UsernsMode::Unshare => None,
             UsernsMode::Fd(fd) => Some(fd),
         };
+        // 内側 1000 からは session_root（launcher の 0700）を辿れない。親が開いた FD を渡す。
+        let session_fd = match spec.userns {
+            UsernsMode::Unshare => None,
+            UsernsMode::Fd(_) => Some(open_dir_path(&spec.session_dir)?),
+        };
+        let session_raw = session_fd.as_ref().map(|f| f.as_raw_fd());
         // SAFETY: getpid は常に成功する。
         let parent = unsafe { libc::getpid() };
         let mut cmd = Command::new(&spec.bwrap);
@@ -273,6 +328,18 @@ impl IsolatedRuntime {
                 libc::sigemptyset(&mut empty);
                 if libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut()) < 0 {
                     return Err(std::io::Error::last_os_error());
+                }
+                // launcher の userns へ入り、GID → UID の順に内側 1000 へ（UID が先だと
+                // capability を失い setgid が EPERM）。資格の変更は PDEATHSIG を消すので prctl より前。
+                if let Some(fd) = userns_fd {
+                    if libc::setns(fd, libc::CLONE_NEWUSER) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::setresgid(INNER_ID, INNER_ID, INNER_ID) < 0
+                        || libc::setresuid(INNER_ID, INNER_ID, INNER_ID) < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
                 if arm_parent_death && libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
                     return Err(std::io::Error::last_os_error());
@@ -301,7 +368,7 @@ impl IsolatedRuntime {
                     Some(fd) => Some(lift(fd)?),
                     None => None,
                 };
-                let userns = match userns_fd {
+                let session = match session_raw {
                     Some(fd) => Some(lift(fd)?),
                     None => None,
                 };
@@ -318,8 +385,8 @@ impl IsolatedRuntime {
                 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if let Some(fd) = userns
-                    && libc::dup2(fd, 7) < 0
+                if let Some(fd) = session
+                    && libc::dup2(fd, SESSION_DIR_FD) < 0
                 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -327,7 +394,7 @@ impl IsolatedRuntime {
             });
         }
         let child = cmd.spawn()?;
-        drop((info_w, to_browser_r, from_browser_w));
+        drop((info_w, to_browser_r, from_browser_w, session_fd));
         let mut info = String::new();
         File::from(info_r).take(4096).read_to_string(&mut info)?;
         let pgid = child.id() as i32;
@@ -339,7 +406,10 @@ impl IsolatedRuntime {
             cdp_read: spec.cdp_pipe.then(|| File::from(from_browser_r)),
             egress_stats: None,
         };
-        rt.inner_pid = parse_child_pid(&info).ok_or(RuntimeError::NoChildPid)?;
+        rt.inner_pid = match parse_child_pid(&info) {
+            Some(pid) => pid,
+            None => return Err(RuntimeError::NoChildPid(rt.failed_stderr())),
+        };
         if let (Some(cfg), Some((ctrl, sandbox_end))) = (spec.egress.clone(), channel) {
             drop(sandbox_end);
             let stats = Arc::new(Mutex::new(EgressStats::default()));
@@ -400,6 +470,24 @@ impl IsolatedRuntime {
             Ok(f) => admission.admit(&f),
             Err(_) => Err(vec![IsolationViolation::NoProcessGroup]),
         }
+    }
+
+    /// 起動に失敗した bwrap の stderr の先頭。2 秒待って残っていれば process group ごと止める。
+    fn failed_stderr(&mut self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && self.is_running() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if self.is_running() {
+            // SAFETY: 未回収の子の process group にだけ送る。
+            unsafe { libc::killpg(self.child.id() as i32, libc::SIGKILL) };
+            let _ = self.child.wait();
+        }
+        let mut s = String::new();
+        if let Some(e) = self.child.stderr.as_mut() {
+            let _ = e.take(4096).read_to_string(&mut s);
+        }
+        s.trim().to_owned()
     }
 
     /// stderr の先頭（診断用。起動失敗の試験で使う）。

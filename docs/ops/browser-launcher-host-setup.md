@@ -207,7 +207,7 @@ CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher
 
 `require` のため、`celeris-browser`・socket・subuid 範囲のどれかが欠けていれば skip でなく失敗する。確かめる内容（ADR-0116 D7）:
 
-1. Chrome の user namespace owner（`NS_GET_OWNER_UID`）が `B` で、1001 でない。`uid_map` / `gid_map` に 1001 が無い。
+1. Chrome の user namespace owner（`NS_GET_OWNER_UID`、launcher の観測）が `S`（subuid の先頭）、その親 namespace の owner が `B` で、どちらも 1001 でない（ADR-0116 D3 付記）。`uid_map` / `gid_map` に 1001 が無い。1001 からは Chrome の `/proc/<pid>/ns/user` も開けない。
 2. UID 1001 の別 process からの `PTRACE_ATTACH` / `strace -p` と `/proc/<pid>/environ`・`mem` の読取りが拒否される（正の対照も併記される）。
 3. `verify_isolation` が `Ok`。
 

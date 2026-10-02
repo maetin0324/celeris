@@ -51,6 +51,17 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 - 子の userns を `/proc/<pid>/ns/user` で開いた FD を bwrap に `--userns <fd>` で渡し、bwrap は `--unshare-user` を使わず `--uid 1000 --gid 1000` で内側 1000（= host `S`）に下げて Chrome を起動する。`bwrap_args` は `RuntimeSpec` に `userns: UsernsMode`（`Unshare` = 現行・既定 / `Fd(RawFd)`）を足して分岐し、`Unshare` の出力は現行と完全に一致させる（既存試験で不変を確認）。
 - 起動後、`collect_facts` に `NS_GET_OWNER_UID`（`ioctl(ns_fd, NS_GET_OWNER_UID)`）で Chrome の user namespace owner uid を加え、launcher は owner が `B` であること・daemon UID が uid_map / gid_map に現れないことを `verify_isolation` と併せて検査し、満たさなければ session を `isolation_failed` で止める。
 
+### D3 付記（2026-10-02、実 host での bwrap 失敗を受けて）
+
+実 host の strace で、bwrap 0.11 は `--userns <fd>` のとき子で `setuid(1000)` → `setgid(1000)` の順に切り替え、`setuid` で userns 内の capability を失って `setgid(1000) = -1 EPERM` になり起動できなかった。bwrap の順序は変えられないので、上の「`--userns <fd>` で渡す」を次に改める。
+
+- bwrap を spawn する子が `pre_exec` で `setns(<userns fd>, CLONE_NEWUSER)`（owner `B` の userns に入り capability を得る）→ `setresgid(1000)` → `setresuid(1000)` の順に内側 1000（= host `S`）へ切り替える。資格の変更は `PR_SET_PDEATHSIG` を消すので、その `prctl` より前に行う。
+- bwrap には `--userns` を渡さず、`Unshare` 経路と同じ `--unshare-user --uid 1000 --gid 1000` を渡す。bwrap は `S` として入れ子の userns（map `1000 1000 1`）を作るので、Chrome の userns は **owner `S`、親（launcher が作った 2 map の userns）の owner `B`** になる。daemon UID はどちらの owner でもなく、どちらの map にも現れない。
+- 内側 1000 は 0700 の `session_root` を辿れないので、session dir は launcher が `O_PATH` で開いた FD を `--bind-fd 8 /session` で渡す。`Unshare` 経路の引数は従来どおり（`--bind <dir> /session`）。
+- launcher の検査は、Chrome の userns の owner が `S`・`NS_GET_PARENT` の owner が `B`・launcher から見た `uid_map` / `gid_map` が `1000 S 1` の 1 行であること、に置き換える（`isolation_ok` も同じ）。2 map そのものは `userns::create` が読み戻して検査する（D3 の 3）。
+- 起動失敗は段と原因（errno・bwrap の stderr）を launcher の stderr（journal）に出す。daemon に返すのは従来どおり固定の `launch_failed` / `isolation_failed` だけ。
+- 残る点: `setgroups` は D3 の 1 で `deny` のため、launcher の補助 group（systemd が付ける `B` の group）は Chrome に残る（userns 内では 65534 に見える）。
+
 ## D4. FD と state の所有
 
 - CDP pipe（fd 3/4）、egress 中継の制御 FD（sandboxd の FD 6 の request channel と egress relay）、profile / session dir、`CdpController` は launcher の process だけが持つ。daemon には D2 の receipt・状態・非機密の観測だけを返し、FD を渡さない。

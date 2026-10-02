@@ -454,6 +454,7 @@ fn proof() -> LauncherSessionProof {
         ns_owner_uid: Some(1001),
         launcher_uid: LAUNCHER_UID,
         isolation_ok: true,
+        ns_inodes: Default::default(),
     }
 }
 
@@ -634,4 +635,160 @@ fn isolation_not_ok_and_session_mismatch_are_rejected() {
         proof_rejected(&good(), &proof(), &o),
         vec![invalid(LauncherProofDefect::SessionMismatch)]
     );
+}
+
+// ADR-0116 D-L / prod-facts: 別 UID の runtime は daemon UID から `/proc/<pid>/ns/*` を開けない
+// （実 launcher の Chrome で EACCES を観測）。本番の事実は daemon が読める status・mountinfo と、
+// launcher の束縛（ns inode・owner・pid/starttime）から組む。
+
+const RUNTIME_STATUS: &str = "Name:\tchrome\nUid:\t200001\t200001\t200001\t200001\nNoNewPrivs:\t1\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\n";
+const RUNTIME_MOUNTINFO: &str = "\
+1 0 0:1 / / ro,nosuid - tmpfs tmpfs ro
+2 1 0:2 / /usr ro,nosuid - ext4 /dev/sda1 ro
+3 1 0:3 / /session/profile rw,nosuid - tmpfs tmpfs rw
+4 1 0:4 / /proc rw,nosuid - proc proc rw
+";
+
+fn own_ns() -> BTreeMap<Namespace, u64> {
+    REQUIRED_NAMESPACES
+        .into_iter()
+        .zip(4_026_531_835u64..)
+        .collect()
+}
+
+fn launched_proof() -> LauncherSessionProof {
+    LauncherSessionProof {
+        ns_inodes: REQUIRED_NAMESPACES
+            .into_iter()
+            .zip(4_026_532_900u64..)
+            .collect(),
+        ..proof()
+    }
+}
+
+fn launched(p: &LauncherSessionProof) -> RuntimeFacts {
+    launched_runtime_facts(
+        "s1",
+        4242,
+        1000,
+        &own_ns(),
+        ProcView::parse(RUNTIME_STATUS, RUNTIME_MOUNTINFO),
+        p,
+    )
+}
+
+#[test]
+fn launched_facts_from_launcher_binding_pass_production_admission() {
+    let f = launched(&launched_proof());
+    assert_eq!(f.runtime_uid, 200_001);
+    assert_eq!(f.userns_owner_uid, Some(1001));
+    assert_eq!(f.namespaces, REQUIRED_NAMESPACES.into_iter().collect());
+    assert!(f.root_readonly && f.no_new_privs && f.capabilities_dropped);
+    assert_eq!(f.writable_mounts, vec!["/session/profile".to_owned()]);
+    let a = verify_launcher_session(&f, Some(&launched_proof()), &seen()).expect("attested");
+    assert_eq!(a.pid(), 5151);
+    assert_eq!(a.isolation(), Isolation::Isolated);
+}
+
+#[test]
+fn launched_facts_reject_binding_without_or_with_partial_ns_inodes() {
+    // v2 の束縛（inode 無し）: どの namespace も「別」と数えない。
+    let v2 = proof();
+    let v = proof_rejected(&launched(&v2), &v2, &seen());
+    for ns in REQUIRED_NAMESPACES {
+        assert!(
+            v.contains(&IsolationViolation::MissingNamespace { ns }),
+            "{v:?}"
+        );
+    }
+    // 1 つ欠けた束縛。
+    let mut partial = launched_proof();
+    partial.ns_inodes.remove(&Namespace::Net);
+    assert_eq!(
+        proof_rejected(&launched(&partial), &partial, &seen()),
+        vec![IsolationViolation::MissingNamespace { ns: Namespace::Net }]
+    );
+}
+
+#[test]
+fn launched_facts_reject_namespace_shared_with_daemon() {
+    let mut p = launched_proof();
+    p.ns_inodes
+        .insert(Namespace::Pid, own_ns()[&Namespace::Pid]);
+    assert_eq!(
+        proof_rejected(&launched(&p), &p, &seen()),
+        vec![IsolationViolation::MissingNamespace { ns: Namespace::Pid }]
+    );
+}
+
+#[test]
+fn launched_facts_reject_unknown_or_daemon_owner_from_binding() {
+    let mut p = launched_proof();
+    p.ns_owner_uid = None;
+    let v = proof_rejected(&launched(&p), &p, &seen());
+    assert!(v.contains(&IsolationViolation::OwnerUnknown), "{v:?}");
+    assert!(
+        v.contains(&invalid(LauncherProofDefect::OwnerUnknown)),
+        "{v:?}"
+    );
+    p.ns_owner_uid = Some(1000);
+    let v = proof_rejected(&launched(&p), &p, &seen());
+    assert!(
+        v.contains(&IsolationViolation::UsernsOwnedByDaemon),
+        "{v:?}"
+    );
+    assert!(
+        v.contains(&invalid(LauncherProofDefect::OwnerIsDaemon)),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn launched_facts_keep_daemon_observed_violations() {
+    // daemon が自分で読んだ status・mountinfo の違反は束縛で消えない。
+    let status = RUNTIME_STATUS
+        .replace("NoNewPrivs:\t1", "NoNewPrivs:\t0")
+        .replace("Uid:\t200001", "Uid:\t1000");
+    let mountinfo = RUNTIME_MOUNTINFO.replace("/ / ro,nosuid", "/ / rw,nosuid");
+    let f = launched_runtime_facts(
+        "s1",
+        4242,
+        1000,
+        &own_ns(),
+        ProcView::parse(&status, &mountinfo),
+        &launched_proof(),
+    );
+    let v = proof_rejected(&f, &launched_proof(), &seen());
+    for want in [
+        IsolationViolation::SameUid,
+        IsolationViolation::RootWritable,
+        IsolationViolation::PrivilegesKept,
+    ] {
+        assert!(v.contains(&want), "{want:?} missing in {v:?}");
+    }
+    // 解釈できない uid は root 扱い（安全値で埋めない）。
+    let f = launched_runtime_facts(
+        "s1",
+        4242,
+        1000,
+        &own_ns(),
+        ProcView::parse("NoNewPrivs:\t1\n", RUNTIME_MOUNTINFO),
+        &launched_proof(),
+    );
+    assert!(proof_rejected(&f, &launched_proof(), &seen()).contains(&IsolationViolation::RootUid));
+}
+
+#[test]
+fn collect_launched_runtime_facts_errors_instead_of_filling() {
+    assert_eq!(collect_ns_inodes("self").expect("own ns").len(), 6);
+    assert!(collect_ns_inodes("-1").is_err());
+    // 消えた process は Err（呼び出し側は拒否する）。
+    assert!(collect_launched_runtime_facts("s1", -1, 4242, &launched_proof()).is_err());
+    // 自分自身を runtime と偽っても、束縛の inode が daemon と同じなら namespace は別にならない。
+    let mut p = launched_proof();
+    p.ns_inodes = collect_ns_inodes("self").expect("own ns");
+    let pid = std::process::id() as i32;
+    let f = collect_launched_runtime_facts("s1", pid, 4242, &p).expect("own facts");
+    assert!(f.namespaces.is_empty(), "{:?}", f.namespaces);
+    assert!(verify_launcher_session(&f, Some(&p), &seen()).is_err());
 }

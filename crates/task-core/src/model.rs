@@ -941,6 +941,25 @@ pub struct FailedWorkUnitCheck {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// ADR-0118 D3: immutable snapshot of one repository's review attempt.
+    ReviewTargetSynced {
+        review_run: String,
+        repo_id: crate::RepoId,
+        target_ref: String,
+        target_sha: String,
+        before_sha: String,
+        reviewed_sha: String,
+        merge_candidate_sha: String,
+        attempt: u32,
+    },
+    /// ADR-0118 D4: a previously reviewed target advanced before integration.
+    ReviewTargetAdvanced {
+        review_run: String,
+        repo_id: crate::RepoId,
+        reviewed_sha: String,
+        target_sha: String,
+        attempt: u32,
+    },
     /// Credential-free mapping between one isolated browser session and a worker execution.
     BrowserUpdated {
         browser: crate::BrowserRun,

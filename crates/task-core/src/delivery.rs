@@ -25,6 +25,13 @@ pub struct Delivery {
     pub branch: String,
     pub base: String,
     pub head: String,
+    /// Target ref read for this review attempt. NULL means no candidate was checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_candidate_sha: Option<String>,
     pub default_branch: String,
     pub department: String,
     pub review_run: String,
@@ -90,15 +97,116 @@ impl DeliveryStore for SqliteStore {
                 let old_json =
                     serde_json::to_string(old).map_err(|e| StoreError::Invalid(e.to_string()))?;
                 conn.execute(
-                    "UPDATE deliveries SET json=?1 WHERE task_id=?2 AND json=?3",
-                    rusqlite::params![json, next.task_id.to_string(), old_json],
+                    "UPDATE deliveries SET json=?1, target_sha=?4, reviewed_sha=?5, merge_candidate_sha=?6 WHERE task_id=?2 AND json=?3",
+                    rusqlite::params![json, next.task_id.to_string(), old_json, next.target_sha, next.reviewed_sha, next.merge_candidate_sha],
                 )?
             }
             None => conn.execute(
-                "INSERT OR IGNORE INTO deliveries (task_id,json) VALUES (?1,?2)",
-                rusqlite::params![next.task_id.to_string(), json],
+                "INSERT OR IGNORE INTO deliveries (task_id,json,target_sha,reviewed_sha,merge_candidate_sha) VALUES (?1,?2,?3,?4,?5)",
+                rusqlite::params![next.task_id.to_string(), json, next.target_sha, next.reviewed_sha, next.merge_candidate_sha],
             )?,
         };
         Ok(changed == 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::{Connection, params};
+
+    fn columns(conn: &Connection) -> (Option<String>, Option<String>, Option<String>) {
+        conn.query_row(
+            "SELECT target_sha, reviewed_sha, merge_candidate_sha FROM deliveries",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn migration_0037_reads_existing_0036_delivery_and_saves_candidate_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("delivery.sqlite3");
+        let mut conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+        )
+        .unwrap();
+        for version in 1..=36 {
+            SqliteStore::apply_migration_version(&mut conn, version).unwrap();
+        }
+        let task_id = TaskId::new();
+        conn.execute(
+            "INSERT INTO tasks (id,status,kind,priority,created_at,json) VALUES (?1,'ready','execute',0,'2026-10-02T00:00:00Z','{}')",
+            [task_id.to_string()],
+        )
+        .unwrap();
+        let legacy = serde_json::json!({
+            "task_id": task_id,
+            "project_id": ProjectId::new(),
+            "repo_id": RepoId::new(),
+            "repo": "example", "branch": "feature", "base": "base", "head": "head",
+            "default_branch": "main", "department": "engineering",
+            "review_run": "review-1", "worker_run": "worker-1", "criterion_idx": 0,
+            "decision": null, "state": "reviewing", "detail": "",
+            "release": null, "prepare_pid": null, "notification": null
+        });
+        conn.execute(
+            "INSERT INTO deliveries (task_id,json) VALUES (?1,?2)",
+            params![
+                task_id.to_string(),
+                serde_json::to_string(&serde_json::from_value::<Delivery>(legacy).unwrap())
+                    .unwrap()
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 37);
+        let old = store.delivery_get(task_id).unwrap().unwrap();
+        assert_eq!(old.target_sha, None);
+        assert_eq!(old.reviewed_sha, None);
+        assert_eq!(old.merge_candidate_sha, None);
+        assert_eq!(store.delivery_list().unwrap(), vec![old.clone()]);
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(columns(&conn), (None, None, None));
+        drop(conn);
+
+        let mut next = old.clone();
+        next.target_sha = Some("target".into());
+        next.reviewed_sha = Some("reviewed".into());
+        next.merge_candidate_sha = Some("reviewed".into());
+        assert!(store.delivery_save(Some(&old), &next).unwrap());
+        assert_eq!(store.delivery_get(task_id).unwrap(), Some(next.clone()));
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            columns(&conn),
+            (
+                Some("target".into()),
+                Some("reviewed".into()),
+                Some("reviewed".into())
+            )
+        );
+        assert!(!store.delivery_save(Some(&old), &next).unwrap());
+    }
+
+    #[test]
+    fn migration_0037_creates_columns_in_new_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new.sqlite3");
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 37);
+        let conn = Connection::open(&path).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(deliveries)").unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for name in ["target_sha", "reviewed_sha", "merge_candidate_sha"] {
+            assert!(names.iter().any(|column| column == name));
+        }
     }
 }

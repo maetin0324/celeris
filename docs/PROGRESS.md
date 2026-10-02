@@ -102,6 +102,10 @@ dd6219db の probe 修正（`crates/task-worker/tests/browser_shared_cdp.rs` で
 
 scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 passed、Node 41 passed）。GUI は pnpm@11.27.0 frozen install・test・typecheck・build が exit 0（84 files / 1,249 passed、SQLite の既定 store 問題は `/tmp/celeris-pnpm-store` で回避）。`check:secrets` の down gateway port race を blackhole upstream で除去し、前回の `/api/health: expected 502, got 404` は再現せず。crates/ は差分ゼロのため Rust test（3,206 passed / 0 failed / 12 ignored）・clippy（exit 0）は revert-rust の記録を引き継ぐ。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` は exit 0。詳細は [phase-web の scope 復元後検証節](progress/phase-web.md#web-最終-head-検証scope-復元後)。
 
+## Rust gate 再実行（repair、2026-10-02、HEAD `080eeda00176`）
+
+この run で `cargo test --workspace` をフレッシュ実行した結果 exit 101。`instance_handoff` の5 testが worker DB guard で必要な user namespace の `Operation not permitted` により失敗し、並行起動に依存する2 testも失敗した。`browser_shared_cdp` の単独実行も exit 101（`inner_shared_cdp` は pass、`real_shared_cdp_and_auth_section` は `unshare ... Operation not permitted`）。このため sandbox 外での Rust workspace test は未検証であり、過去の pass 件数をこの run の結果としては扱わない。`cargo clippy --workspace -- -D warnings` は exit 0。web の gen:types・boundaries・secrets・parity check は exit 0。crates/ は変更なし。詳細は [phase-web の Rust gate 再実行節](progress/phase-web.md#rust-gate-再実行repair、run-01m3x948ker5j9p5dj3nsrtszw-attempt-2)。
+
 ## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
 
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。

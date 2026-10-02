@@ -225,3 +225,17 @@ install・build 後も `git status --porcelain` は空（node_modules・dist・b
 | scope | `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` | 0 | 差分なし |
 
 前の sandbox exit 101 は unshare/user namespace の `Operation not permitted` による記録であり、crates/ が無変更のため cargo 件数は revert-rust の同一差分記録を引き継いだ。
+
+## Rust gate 再実行（repair、run 01M3X948KER5J9P5DJ3NSRTSZW attempt 2）
+
+この run で `cargo test --workspace` をフレッシュ実行し、exit 101。`instance_handoff` の5 testは worker DB guard の namespace probe が `Operation not permitted` となり失敗し、並行起動に依存する2 testも失敗した。`cargo test -p task-worker --test browser_shared_cdp -- --test-threads=1` も exit 101で、`inner_shared_cdp` は成功、`real_shared_cdp_and_auth_section` は `unshare ... Operation not permitted` で失敗した。依頼ログにあった relay 接続失敗はこの run では再現せず、sandbox の namespace 制約で再現・分類できなかった。sandbox 外の Rust workspace test は未検証のため、前 run の pass 件数を本 run の結果として扱わない。`cargo clippy --workspace -- -D warnings`、`web gen:types --check`・`check:boundaries`・`check:secrets`・`check-parity --require-phase 6` は各 exit 0。scope の2 check は各 exit 0。HEAD `080eeda00176ec04950f6abe5f15df3496042d81`、merge-base `e768594c2d18a57ac445d80746df9ab3b4e861b4`。crates/ は変更していない。
+
+検証した HEAD（この記録 commit の直前）: `080eeda00176ec04950f6abe5f15df3496042d81`。`git merge-base HEAD main` = `e768594c2d18a57ac445d80746df9ab3b4e861b4`、`git diff --quiet` 同範囲で `gui crates docs/api docs/adr` の差分なし（exit 0）。crates/ はこのユニットで変更していない。
+
+| 実行 | コマンド | exit | 件数 |
+| --- | --- | --- | --- |
+| 今回 | `cargo test --workspace` | 101 | `instance_handoff` の 5 test が namespace probe で失敗、同時起動依存の2 testも失敗。sandbox 制限下で workspace gate 未達 |
+| 今回 | `cargo test -p task-worker --test browser_shared_cdp -- --test-threads=1` | 101 | 1 passed / 1 failed（`unshare ... Operation not permitted`） |
+| 今回 | `cargo clippy --workspace -- -D warnings` | 0 | warning 0 |
+
+この run では Rust test gate を完了できなかった。namespace を許可する sandbox 外 execution harness が必要。crates/ は変更していない。

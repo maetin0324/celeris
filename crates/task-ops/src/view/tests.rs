@@ -1234,6 +1234,101 @@ fn task_detail_execution_shows_gate_only_when_there_is_no_plan() {
     assert!(execution.plan.is_none());
     // 走っている WU が無い（そもそも計画が無い）ので phase は導出しない。
     assert!(execution.phase.is_none());
+    // ADR-0124: この Task はまだ経路を評価していない（`routing.route` も `ExecutionRouted` も無い）。
+    assert!(execution.route.is_none());
+}
+
+/// ADR-0124: `routing.route` と `Event::ExecutionRouted` が揃っている Task は `TaskDetail.execution.route`
+/// にそのまま出る。
+#[test]
+fn task_detail_execution_direct_route_is_reported_when_the_event_is_present() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let mut task = sample_task(TaskKind::Execute, Status::Running);
+    let decision = task_core::RouteDecision {
+        route: task_core::Route::Direct,
+        reasons: vec![task_core::RouteReason {
+            rule_id: "direct/single-repo".to_string(),
+            ok: true,
+            detail: "repos=1, multi_environment=false".to_string(),
+        }],
+        gate_rule_id: "atomic/score".to_string(),
+        overrode_gate: false,
+        shadow: false,
+        policy_version: task_core::DIRECT_ROUTE_POLICY_VERSION.to_string(),
+    };
+    task.routing = Some(task_core::TaskRouting {
+        execution: Some(task_core::ExecutionGateDecision {
+            mode: task_core::ExecutionMode::Atomic,
+            source: task_core::GateSource::Policy,
+            score: 1,
+            threshold: 5,
+            rule_id: "atomic/score".to_string(),
+            signals: vec![],
+            policy_version: task_core::EXECUTION_GATE_POLICY_VERSION.to_string(),
+            shadow: false,
+            depth: None,
+        }),
+        route: Some(decision.clone()),
+        ..task_core::TaskRouting::default()
+    });
+    store.insert(&task).expect("insert");
+    store
+        .append_event(
+            task.id,
+            &Event::ExecutionGated {
+                decision: Box::new(task.routing.as_ref().unwrap().execution.clone().unwrap()),
+            },
+        )
+        .expect("append gate");
+    store
+        .append_event(
+            task.id,
+            &Event::ExecutionRouted {
+                decision: Box::new(decision.clone()),
+            },
+        )
+        .expect("append route");
+
+    let ctx = view_ctx();
+    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let execution = detail.execution.expect("execution present");
+    assert_eq!(execution.route, Some(decision));
+}
+
+/// ADR-0124: `Event::ExecutionRouted` が無い（評価していない）Task でも、gate の活動があれば
+/// Execution 節は出るが `route` は `None`（直行の判定を記録していないことが見える）。
+#[test]
+fn task_detail_execution_direct_route_is_absent_without_the_event() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let mut task = sample_task(TaskKind::Execute, Status::Running);
+    task.routing = Some(task_core::TaskRouting {
+        execution: Some(task_core::ExecutionGateDecision {
+            mode: task_core::ExecutionMode::Compound,
+            source: task_core::GateSource::Policy,
+            score: 9,
+            threshold: 5,
+            rule_id: "compound/score".to_string(),
+            signals: vec![],
+            policy_version: task_core::EXECUTION_GATE_POLICY_VERSION.to_string(),
+            shadow: false,
+            depth: None,
+        }),
+        ..task_core::TaskRouting::default()
+    });
+    store.insert(&task).expect("insert");
+    store
+        .append_event(
+            task.id,
+            &Event::ExecutionGated {
+                decision: Box::new(task.routing.as_ref().unwrap().execution.clone().unwrap()),
+            },
+        )
+        .expect("append gate");
+
+    let ctx = view_ctx();
+    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let execution = detail.execution.expect("execution present");
+    assert!(execution.route.is_none());
 }
 
 /// 計画のある Task: WU の表・現在の段階（`running` かつ WU が `running` なら `executing`）・

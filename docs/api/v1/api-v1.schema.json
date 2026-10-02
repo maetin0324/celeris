@@ -9133,6 +9133,17 @@
             }
           ],
           "description": "ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task\nには無い）。"
         }
       },
       "required": [
@@ -19197,6 +19208,17 @@
             }
           ],
           "description": "ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task\nには無い）。"
         },
         "runs": {
           "description": "checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。",

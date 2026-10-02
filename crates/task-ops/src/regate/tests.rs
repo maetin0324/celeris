@@ -133,6 +133,47 @@ fn human_plan_replaces_an_atomic_gate_record_with_human_compound() {
     );
 }
 
+/// ADR-0124 D2: 人が明示の経路（`decompose`）を指示したら、前に記録した直行の判定
+/// （`routing.route`）も gate の判定と同時に消える（次の dispatch で `human/explicit` として
+/// evaluate し直す）。
+#[test]
+fn direct_route_decision_is_cleared_alongside_the_gate_record_on_decompose() {
+    let store = store();
+    let task = gated_atomic(&store);
+    let mut t = store.get(task.id).expect("get").expect("some");
+    let mut routing = t.routing.clone().expect("routing");
+    let decision = task_core::RouteDecision {
+        route: task_core::Route::Direct,
+        reasons: vec![],
+        gate_rule_id: "compound/score".to_string(),
+        overrode_gate: true,
+        shadow: true,
+        policy_version: task_core::DIRECT_ROUTE_POLICY_VERSION.to_string(),
+    };
+    routing.route = Some(decision.clone());
+    t.routing = Some(routing);
+    store
+        .update_task(
+            &t,
+            Event::ExecutionRouted {
+                decision: Box::new(decision),
+            },
+        )
+        .expect("persist route");
+
+    let r = set_execution_mode(
+        &store,
+        task.id,
+        ExecutionMode::Compound,
+        "human",
+        None,
+        OffsetDateTime::now_utc(),
+    )
+    .expect("set");
+    let routing = r.task.routing.expect("routing");
+    assert!(routing.route.is_none(), "the old route decision is cleared");
+}
+
 #[test]
 fn compound_sets_an_explicit_hint_clears_the_decision_and_records_the_source() {
     let store = store();

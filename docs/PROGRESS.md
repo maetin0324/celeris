@@ -153,3 +153,14 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - `cargo fmt --all -- --check` → exit 0（差分なし）
 - `cargo test --workspace` → sandbox のまま 2 回実行し、いずれも exit 0（3209 passed / 0 failed / 12 ignored、`instance_handoff` 8 件を含め userns 制限による失敗なし）。host 権限での再実行は不要だった。flaky な再現は 2 回とも無し。
 - `git status` / `git diff --stat` ともに変更なし（crates/ と docs/adr/ は touch していない。本行の追記のみ）。
+
+### 最新 main（ADR-0117）取り込み後の検査 — 2026-10-02（work unit `land-main`）
+
+`main` の `5f14fe7480f1512a0a62c35cf41c1fedb11a6944` を merge commit `42cefd87986368de6379a5afed4e4eabab2f7a41`（親: `112ed0409bc554b29f4c624017200d95708236d5`, `5f14fe7480f1512a0a62c35cf41c1fedb11a6944`）で取り込んだ。`git merge-tree --write-tree main HEAD` の事前確認では `docs/PROGRESS.md` だけが衝突し、`crates/task-dispatch/src/dispatcher/tests/review.rs` は自動 merge。PROGRESS は ADR-0117 節を先、repair 許可範囲節を後に両方残して解消した。
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-core -p task-dispatch -p celeris` → exit 101。unit tests は task-core 622/622、task-dispatch 499/499、celeris lib 214/214 pass。`celeris --tests` の `instance_handoff` は 8 件中 5 件失敗。うち3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted`、2件は handoff dispatch/standby 起動待ち失敗。失敗はこの task の許可範囲外の sandbox 制約によるため、テスト・実装を変更せず報告する。
+- 追加の `cargo test -p task-core -p task-dispatch -p celeris --lib` → exit 0（合計 1335 passed / 0 failed）。
+- 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
+- `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。

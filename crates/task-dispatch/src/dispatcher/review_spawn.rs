@@ -2,6 +2,38 @@
 
 use super::*;
 
+/// ADR-0118 D4 付記: stale の自動再同期が上限に達し、reviewing のまま止めたことを示す `WorkerProgress` の接頭辞。
+pub(crate) const TARGET_RESYNC_HALTED_PREFIX: &str = "review target resync halted: ";
+
+/// ADR-0118 D4 付記: 直近の遷移（自動の再レビューの遷移を除く）以後の stale（`ReviewTargetAdvanced`）の数、
+/// その最後の記録、上限で止めた印の有無。自動の再レビュー（root delivery の `request_rereview`）は
+/// `Transitioned{rereview}` の直後に同じ transaction で `ReviewTargetAdvanced` を残すので数え直さない。
+fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, bool) {
+    let mut count = 0;
+    let mut last = None;
+    let mut halted = false;
+    for (i, event) in events.iter().enumerate() {
+        match event {
+            Event::ReviewTargetAdvanced { .. } => {
+                count += 1;
+                last = Some(event);
+            }
+            Event::Transitioned { .. }
+                if !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
+            {
+                count = 0;
+                last = None;
+                halted = false;
+            }
+            Event::WorkerProgress { msg, .. } if msg.starts_with(TARGET_RESYNC_HALTED_PREFIX) => {
+                halted = true;
+            }
+            _ => {}
+        }
+    }
+    (count, last, halted)
+}
+
 struct ReviewSync {
     repo_id: task_core::RepoId,
     target_ref: String,
@@ -179,6 +211,9 @@ impl Dispatcher {
         if task.status != Status::Reviewing {
             return Ok(true);
         }
+        if self.target_resync_exhausted(task_id, &run_id)? {
+            return Ok(false);
+        }
 
         let human = match self.resolve_human_approvals(&task)? {
             Some(h) => {
@@ -247,18 +282,18 @@ impl Dispatcher {
                 if !worktree.dir.is_dir() {
                     continue;
                 }
+                let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
+                    continue;
+                };
                 let target = if let Some(parent) =
                     task_core::tree::parent_branch(&task, &self.config.worktree_branch_prefix)
                 {
                     parent
                 } else {
-                    let configured = match task.repos.iter().find(|r| r.name == repo.name) {
-                        Some(reference) => self
-                            .store
-                            .repo_get(reference.repo_id)?
-                            .and_then(|r| r.default_branch),
-                        None => None,
-                    };
+                    let configured = self
+                        .store
+                        .repo_get(reference.repo_id)?
+                        .and_then(|r| r.default_branch);
                     task_ops::changes::default_branch(&repo.source, configured.as_deref())
                 };
                 let target_ref = format!("refs/heads/{target}");
@@ -274,42 +309,62 @@ impl Dispatcher {
                         head_sha,
                     } => (target_sha, before_sha, head_sha),
                     other => {
-                        self.stop_review_for_target_sync(
+                        // ADR-0118 D6 付記: 衝突・dirty・進行中の rebase・ref 不読は同期を諦め、成果を
+                        // 保った未同期の HEAD で従来どおり checks/reviewer へ進む（merge candidate は
+                        // 記録しない）。root は delivery の [merge-base] 経路、子は段階統合の衝突経路が扱う。
+                        let why = match other {
+                            task_ops::changes::SyncOutcome::Conflict { target_sha, files } => {
+                                format!(
+                                    "rebase onto {target_ref} {target_sha} conflicted in [{}] and was aborted",
+                                    files.join(", ")
+                                )
+                            }
+                            task_ops::changes::SyncOutcome::Dirty => {
+                                "the worktree has uncommitted changes".to_string()
+                            }
+                            task_ops::changes::SyncOutcome::Failed { detail } => detail,
+                            _ => String::new(),
+                        };
+                        let message = format!(
+                            "review target sync skipped for {}: {why}; reviewing the unsynced HEAD without a merge candidate",
+                            repo.name
+                        );
+                        tracing::warn!(%task_id, %message);
+                        self.store.append_event(
                             task_id,
-                            &run_id,
-                            &repo.name,
-                            &format!("{other:?}"),
+                            &Event::worker_progress(run_id.clone(), message),
                         )?;
-                        return Ok(true);
+                        continue;
                     }
                 };
-                if crate::integration::rev_parse(&worktree.dir, &target_ref).as_deref()
-                    != Some(target_sha.as_str())
-                {
-                    self.stop_review_for_target_sync(
+                let current = crate::integration::rev_parse(&worktree.dir, &target_ref);
+                if current.as_deref() != Some(target_sha.as_str()) {
+                    self.defer_stale_review(
                         task_id,
                         &run_id,
-                        &repo.name,
-                        "target advanced during sync",
+                        reviewer_run.as_ref().map_or(&run_id, |r| &r.run_id),
+                        reference.repo_id,
+                        &reviewed_sha,
+                        current.as_deref().unwrap_or(""),
+                        &format!("target {target_ref} advanced during sync from {target_sha}"),
                     )?;
-                    return Ok(true);
+                    return Ok(false);
                 }
                 sync_guards.push((
+                    reference.repo_id,
                     worktree.dir.clone(),
                     format!("refs/heads/{}", worktree.branch),
                     target_ref.clone(),
                     target_sha.clone(),
                     reviewed_sha.clone(),
                 ));
-                if let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) {
-                    synced.push(ReviewSync {
-                        repo_id: reference.repo_id,
-                        target_ref,
-                        target_sha,
-                        before_sha,
-                        reviewed_sha,
-                    });
-                }
+                synced.push(ReviewSync {
+                    repo_id: reference.repo_id,
+                    target_ref,
+                    target_sha,
+                    before_sha,
+                    reviewed_sha,
+                });
             }
         }
         // ADR-0117 D1: reviewer run には対象 task と祖先の人の決定・回答を渡す（store から集める。LLM は呼ばない）。
@@ -335,13 +390,19 @@ impl Dispatcher {
                 && old.review_run == reviewer_run.as_ref().map_or("", |r| r.run_id.as_str())
             {
                 if old.base != snapshot.target_sha || old.head != snapshot.reviewed_sha {
-                    self.stop_review_for_target_sync(
+                    self.defer_stale_review(
                         task_id,
                         &run_id,
-                        &old.repo,
-                        "delivery base/head differ from reviewed snapshot",
+                        &old.review_run,
+                        snapshot.repo_id,
+                        &snapshot.reviewed_sha,
+                        &old.base,
+                        &format!(
+                            "delivery base/head {}..{} differ from the reviewed snapshot {}..{}",
+                            old.base, old.head, snapshot.target_sha, snapshot.reviewed_sha
+                        ),
                     )?;
-                    return Ok(true);
+                    return Ok(false);
                 }
                 let mut next = old.clone();
                 next.target_sha = Some(snapshot.target_sha.clone());
@@ -541,7 +602,8 @@ impl Dispatcher {
             .await;
             // A command check or reviewer may have changed the branch while the lock was
             // held. Never persist a passing verdict for a different commit or target.
-            for (worktree, branch, target, target_sha, reviewed_sha) in &sync_guards {
+            // ADR-0118 D4 付記: snapshot の変化は stale（不合格ではない）として返し、attempts を消費しない。
+            for (repo_id, worktree, branch, target, target_sha, reviewed_sha) in &sync_guards {
                 let head = crate::integration::rev_parse(worktree, "HEAD");
                 let branch_head = crate::integration::rev_parse(worktree, branch);
                 let target_head = crate::integration::rev_parse(worktree, target);
@@ -549,11 +611,14 @@ impl Dispatcher {
                     || branch_head != head
                     || target_head.as_deref() != Some(target_sha.as_str())
                 {
-                    outcome.verdicts.push(crate::review::Verdict {
-                        criterion_idx: task.acceptance.len(),
-                        pass: false,
-                        reason: format!("review snapshot changed: target={target} expected={target_sha} HEAD expected={reviewed_sha}"),
-                        repair_hint: None,
+                    outcome.target_stale = Some(crate::review::TargetStale {
+                        repo_id: *repo_id,
+                        reviewed_sha: reviewed_sha.clone(),
+                        target_sha: target_head.unwrap_or_default(),
+                        reason: format!(
+                            "review snapshot changed: target={target} expected={target_sha} HEAD={} expected={reviewed_sha}",
+                            head.unwrap_or_default()
+                        ),
                     });
                     break;
                 }
@@ -585,21 +650,85 @@ impl Dispatcher {
         Ok(true)
     }
 
-    fn stop_review_for_target_sync(
+    /// ADR-0118 D4 付記: stale（target 再進行・delivery の base/head 不一致・検査後の snapshot 変化）。
+    /// `ReviewTargetAdvanced`（検査した SHA と今の target の両方）と理由を残し、遷移はしない（attempts を
+    /// 消費しない）。task は reviewing のまま、次の tick の review 入口が再 sync → 全 checks → reviewer を
+    /// やり直す。上限は [`Self::target_resync_exhausted`] が見る。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn defer_stale_review(
         &self,
         task_id: TaskId,
         run_id: &str,
-        repo: &str,
+        review_run: &str,
+        repo_id: task_core::RepoId,
+        reviewed_sha: &str,
+        target_sha: &str,
         reason: &str,
     ) -> Result<(), DispatchError> {
-        let message = format!("review target sync stopped for {repo}: {reason}");
-        tracing::warn!(%task_id, %message);
-        self.store.apply_transition_with_events(
+        let events: Vec<Event> = self
+            .store
+            .events_for(task_id)?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let (count, _, _) = pre_review_stale_state(&events);
+        tracing::warn!(%task_id, %reason, "review snapshot is stale; re-syncing before review (ADR-0118 D4)");
+        self.store.append_event(
             task_id,
-            Trigger::ReviewFail,
-            vec![Event::worker_progress(run_id.to_owned(), message)],
+            &Event::ReviewTargetAdvanced {
+                review_run: review_run.to_owned(),
+                repo_id,
+                reviewed_sha: reviewed_sha.to_owned(),
+                target_sha: target_sha.to_owned(),
+                attempt: count + 1,
+            },
+        )?;
+        self.store.append_event(
+            task_id,
+            &Event::worker_progress(
+                run_id.to_owned(),
+                format!("review target stale: {reason}; re-syncing, re-checking and re-reviewing"),
+            ),
         )?;
         Ok(())
+    }
+
+    /// ADR-0118 D4 付記: 自動の再同期が上限（[`task_ops::delivery::MAX_TARGET_RESYNCS`]）に達したか。
+    /// 達していれば理由と両 SHA を一度だけ残し、reviewing のまま止める（attempts 不変・`failed` にしない）。
+    /// 人のコメント（`interrupt`）などの遷移で数え直して再開する。
+    fn target_resync_exhausted(
+        &self,
+        task_id: TaskId,
+        run_id: &str,
+    ) -> Result<bool, DispatchError> {
+        let events: Vec<Event> = self
+            .store
+            .events_for(task_id)?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let (count, last, halted) = pre_review_stale_state(&events);
+        if count <= task_ops::delivery::MAX_TARGET_RESYNCS {
+            return Ok(false);
+        }
+        if !halted {
+            let (reviewed, target) = match last {
+                Some(Event::ReviewTargetAdvanced {
+                    reviewed_sha,
+                    target_sha,
+                    ..
+                }) => (reviewed_sha.as_str(), target_sha.as_str()),
+                _ => ("", ""),
+            };
+            let message = format!(
+                "{TARGET_RESYNC_HALTED_PREFIX}the target kept moving after {} automatic re-syncs (reviewed {reviewed}, target {target}); the task stays reviewing with attempts unchanged until a human resumes it",
+                task_ops::delivery::MAX_TARGET_RESYNCS
+            );
+            tracing::warn!(%task_id, %message);
+            self.store
+                .append_event(task_id, &Event::worker_progress(run_id.to_owned(), message))?;
+        }
+        Ok(true)
     }
 
     /// `Reviewer` run のアダプタ／プロバイダを選ぶ（ADR-0007 D5 1.）。並列度の枠は実行中 run と共有する。

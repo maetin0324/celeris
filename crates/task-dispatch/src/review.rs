@@ -110,6 +110,18 @@ pub struct ReviewOutcome {
     pub provider_failure: Option<ReviewerProviderFailure>,
     /// Reviewer run を起動した場合の、その run 自身の結果（ADR-0014 D1。ディスパッチャが `WorkerFinished{role: reviewer}` にする）。
     pub reviewer_run: Option<ReviewerRunRecord>,
+    /// ADR-0118 D4 付記: 検査中に HEAD か target が review 前同期の snapshot から動いた。判定は無効で、
+    /// ディスパッチャは attempts を消費せず再 sync → 再 check → 再 review に回す（上限は D4）。
+    pub target_stale: Option<TargetStale>,
+}
+
+/// ADR-0118 D4 付記: 検査後に review snapshot が変わったリポジトリ（`ReviewTargetAdvanced` に残す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetStale {
+    pub repo_id: task_core::RepoId,
+    pub reviewed_sha: String,
+    pub target_sha: String,
+    pub reason: String,
 }
 
 /// Reviewer run 自身の終わり方（ADR-0014 D1）。
@@ -769,6 +781,7 @@ pub async fn review_task(
         plan: plan_output,
         provider_failure,
         reviewer_run,
+        target_stale: None,
     }
 }
 

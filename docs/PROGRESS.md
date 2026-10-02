@@ -211,27 +211,62 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 原因・方式: [`docs/progress/time-dependent-tests.md`](progress/time-dependent-tests.md#tick_prunes_the_oldest_terminal_workspace_and_records_an_event) の該当節を参照。`for _ in 0..100` の固定回数ループ（約2秒）を削除し、`target/` の消滅と `store.events_for` の期待 `WorkspacePruned { removed: ["repos/benchfs/target"] }` 到着を 1 つの待ちループ（`wait_for_prune`）で待つ。保険の [`STATE_WAIT_GUARD`]（60 秒）を超えたら現在の `events` と `target_dir.exists()` を出して `panic!` する。`target/` 消滅・repo dir 残存・`removed` の中身の assert は元のまま。同 file の `workspace_prune_after_secs_zero_disables_pruning` の 50ms sleep は直さない（`workspace_prune_after_secs == 0` は削除スレッドを立てずに即 return するため、待っても届かない非同期処理が無い）。
 - 検証: `cargo test -p task-dispatch --lib cleanup_and_disk` を3回単独実行、各 exit 0 / 3 passed。`tick_prunes_the_oldest_terminal_workspace_and_records_an_event` 単体を SIGSTOP 2ms / SIGCONT 1ms の stutter 下で3回実行、3/3 `test result: ok`（stutter 無しの 0.03s に対し 0.07〜0.10s、崩れず通過）。`cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0。本体（`crates/task-dispatch/src/dispatcher/housekeeping.rs` の `prune_one_workspace` 等、非試験コード）は変更していない。
 
-### 人が実行する手順（userns が使える host で）
+### 人が実行する手順（userns が使える host で、最終コード向け）
 
-この worker sandbox は `unshare -U -r true` が uid_map の `Operation not permitted` になり、(4) `real_broker_browser_injection_receipt_and_origin_guards` と (5) `controller_kill_leaves_no_runtime_processes` は実行条件に到達しない。user namespace が使える host（`unshare -U -r true` が exit 0 になる環境）で次を実行して結果を `docs/progress/time-dependent-tests-injection.md` と `docs/progress/time-dependent-tests-kill.md` に追記してほしい。
+- 対象 SHA: main（`448891a2`）を取り込んだ merge commit `a46b7423`。この leaf（merge-main）の HEAD と、統合後の task branch の HEAD は crates/ の tree がこれと同じになる。確かめるコマンド: `git diff --stat a46b7423 <使う SHA> -- crates` の出力が空であること。この merge では `crates/task-worker/src/browser_runtime.rs` の init 待ちで衝突が出た。main の `NoChildPid(rt.failed_stderr())` を残し、このブランチの `test_hook::stop_init_after_info(rt.inner_pid)` は inner_pid が決まった直後に置いた。
+- 前回の人の実環境確認は `57576a5a`（SIGCHLD 継承の修正 `e64043be` と main merge の前）。最終コードでは人の手ではまだ確かめていない。
+- 前提: `unshare -U -r true` が exit 0。`CARGO_TARGET_DIR` はローカルを使う。CPU を焼く負荷はかけない。
 
-1. (4) browser injection を3回、単独で:
+1. (4) browser injection を単独で 3 回実行する:
    ```
-   cargo test -p task-worker --test browser_injection_wire -- --exact real_broker_browser_injection_receipt_and_origin_guards
+   for i in 1 2 3; do cargo test -p task-worker --test browser_injection_wire -- --exact real_broker_browser_injection_receipt_and_origin_guards; echo "exit=$?"; done
    ```
-   を3回繰り返す。
-
-2. (5) controller kill を3回、単独で:
+2. (5) controller kill を単独で 3 回実行する。試験は自分で subreaper と init を SIGSTOP し、controller の SIGKILL 後に SIGCONT する（[kill 記録](progress/time-dependent-tests-kill.md)の表、「修正後」行の stutter 条件）:
    ```
-   cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes
+   for i in 1 2 3; do cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes; echo "exit=$?"; done
    ```
-   を3回繰り返す。SIGSTOP stutter の具体的な再現手順（修正前後の比較コマンドを含む）は [`docs/progress/time-dependent-tests-kill.md`](progress/time-dependent-tests-kill.md) の「修正前に落ち、修正後に通ること」表のとおりに実行する。
-
-3. 合格の見分け方:
-   - 各コマンドの出力末尾が `test result: ok` であること（`FAILED` ではない）。
-   - (5) の出力に `runtime survived controller kill` という文字列が出ていないこと（出ていれば bwrap/init が残っている失敗）。
-   - (4) の出力に `SinkFailed` が出ていないこと（出ていれば CDP 応答待ちの競合が再発している）。
-   - いずれも `CELERIS_ISOLATION_TESTS=skip` を設定していないのに `SKIPPED` と出た場合は環境不備（bwrap/browser 欠如）であり、合格ではない。
+3. (5) を SIGCHLD 無視が継承される状態で 3 回実行する（final review で bwrap zombie の assert が落ちた条件）:
+   ```
+   for i in 1 2 3; do sh -c "trap '' CHLD; exec cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes"; echo "exit=$?"; done
+   ```
+4. 外からの SIGSTOP stutter（停止 2ms・再開 1ms、sleep だけで CPU は焼かない）の下で (4)(5) を各 3 回、(5) は SIGCHLD 無視の下でも 3 回実行する。(5) は `STUTTER_SCOPE=pid` で試験 process だけを止める。process group 全体を止めると外からの SIGCONT が、試験が止めた subreaper を起こしてしまい、試験の前提が壊れる。この worker で group 指定にすると bwrap の zombie assert が 6/6 落ちたが、これは試験側の不具合ではない。
+   ```
+   cargo test -p task-worker --test browser_injection_wire --no-run && cargo test -p task-worker --test browser_runtime_isolated --no-run
+   D=$CARGO_TARGET_DIR/debug   # 未設定なら target/debug
+   B4=$(ls -t $D/deps/browser_injection_wire-* | grep -v '\.d$' | head -1)
+   B5=$(ls -t $D/deps/browser_runtime_isolated-* | grep -v '\.d$' | head -1)
+   cat > /tmp/stutter.sh <<'EOF'
+   #!/bin/sh
+   # usage: [STUTTER_SCOPE=pid|group] [BIN_DIR=<target>/debug] stutter.sh <test-binary> <test-name>
+   d=${BIN_DIR:-/nonexistent}
+   # dash は名前に '-' を含む env を落とすので、(4) が実行時に読む CARGO_BIN_EXE_* は env(1) で渡す
+   setsid env "CARGO_BIN_EXE_celeris-browser-sandboxd=$d/celeris-browser-sandboxd" \
+     "CARGO_BIN_EXE_celeris-browser-egress=$d/celeris-browser-egress" \
+     "$1" --exact "$2" --test-threads=1 &
+   pid=$!
+   t=$pid; [ "${STUTTER_SCOPE:-pid}" = group ] && t=-$pid
+   while kill -0 "$pid" 2>/dev/null; do
+     kill -STOP -- "$t" 2>/dev/null; sleep 0.002
+     kill -CONT -- "$t" 2>/dev/null; sleep 0.001
+   done
+   wait "$pid"
+   EOF
+   chmod +x /tmp/stutter.sh
+   for i in 1 2 3; do BIN_DIR=$D STUTTER_SCOPE=group /tmp/stutter.sh $B4 real_broker_browser_injection_receipt_and_origin_guards; echo "exit=$?"; done
+   for i in 1 2 3; do STUTTER_SCOPE=pid /tmp/stutter.sh $B5 controller_kill_leaves_no_runtime_processes; echo "exit=$?"; done
+   for i in 1 2 3; do sh -c "trap '' CHLD; STUTTER_SCOPE=pid exec /tmp/stutter.sh $B5 controller_kill_leaves_no_runtime_processes"; echo "exit=$?"; done
+   ```
+5. 合格の見分け方:
+   - 各回 `exit=0` で、末尾が `test result: ok. 1 passed`（`FAILED` ではない）。
+   - (5) の出力に `runtime survived`、`bwrap must be an unreaped zombie`、`panicked` が無い。
+   - (4) の出力に `SinkFailed` と `panicked` が無い。
+   - `CELERIS_ISOLATION_TESTS=skip` を設定していないのに `SKIPPED` と出たら、環境の不備（bwrap や browser が無い）で、合格ではない。
+- 結果は `docs/progress/time-dependent-tests-injection.md` と `docs/progress/time-dependent-tests-kill.md` に追記する。
+- 2026-10-02 の merge-main worker で上の 1〜4 を `a46b7423` で実行した（この sandbox では `unshare -Ur true` が exit 0、load average 約 31）。結果:
+  - 手順 1〜3: 各 3/3 `test result: ok`。`SinkFailed`、`runtime survived`、`SKIPPED` は出なかった。
+  - 手順 4: (4) は pid 指定・group 指定とも 3/3 ok。(5) は pid 指定で 3/3 ok、SIGCHLD 無視下で 3/3 ok。
+  - 手順 4 の限界: 外からの stutter で実行時間はほとんど変わらなかった（(4) 0.43〜0.48s、(5) 0.08〜0.10s）。止められるのは試験 process とその process group だけで、自分で session を作る runtime の中までは届かないと見られる。競合点への負荷の再現は、試験の中にある stutter（(5)）と遅延（(4) `delayed_cdp_page_target_response`）が担う。
+  - これは人の host での確認の代わりではない。
 
 ### 実環境での確認（2026-10-02、ADR-0079 D7 人の回答）
 

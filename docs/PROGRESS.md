@@ -278,6 +278,20 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 
 未解決事項: 上記の (4)(5) は3回とも合格し、未解決の失敗はない。SIGSTOP stutter の修正前後比較（本来の手順3番目）は今回の人の実行では未実施（worker sandbox では userns が使えず自動実行できず、今回人が実行した際も改めてはやらず、過去の [kill 記録](progress/time-dependent-tests-kill.md)の stutter 5/5 pass を根拠として採用したため）。
 
+この記録は task branch `57576a5a`（SIGCHLD 継承の修正 `e64043be` と main merge の前）に対するもので、最終コードでの確認は下の「実環境での確認（最終コード）」に置き換わる。
+
+### 実環境での確認（最終コード、2026-10-02、ADR-0079 D7 real-env-2 人の回答）
+
+人が上記「人が実行する手順」の手順1〜4を、merge-main 完了後の最終 SHA `ab1914e629d9`（HEAD。`e64043be` の SIGCHLD 継承修正と main merge `a46b7423` を含む）で実行した。host `home-dev`、`unshare -U -r true` は exit 0、load average 14〜18（CPU を焼く負荷なし）。`ab1914e629d9` を `/var/tmp` の worktree に取り出し、`CARGO_TARGET_DIR` はローカル、`CELERIS_USERNS_TESTS=1` で実行した。`git diff --stat a46b7423 ab1914e629d9 -- crates` は空（crates の tree は `a46b7423` と同一）。
+
+- 手順1 (4) browser injection 単独 ×3: 3/3 `test result: ok`（各 0.43〜0.52s）。
+- 手順2 (5) controller kill 単独 ×3: 3/3 `test result: ok`（各 0.08s、`helper_reaper` 0.10s）。
+- 手順3 (5) を `trap '' CHLD` 下で ×3: 3/3 `test result: ok`。
+- 手順4 SIGSTOP stutter: (4) `STUTTER_SCOPE=group` ×3 で 3/3 ok（1.65s・1.73s・7.03s、stutter による遅延が効いている）。(5) `STUTTER_SCOPE=pid` ×3 で 3/3 ok。(5) SIGCHLD 無視 + pid stutter ×3 で 3/3 ok。
+- 全回（合計18回）で `SinkFailed`・`runtime survived`・`bwrap must be an unreaped zombie`・`panicked`・`SKIPPED` のいずれの出力もなかった。
+
+結果: 全件合格（推奨どおり）。未解決の失敗なし。最終コードでの (4)(5) の実環境確認・SIGSTOP stutter 条件（SIGCHLD 無視下を含む）は、ここで完了したものとして記録する。コードの変更はこの記録には含まれない。
+
 ## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
 
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。

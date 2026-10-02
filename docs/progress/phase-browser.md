@@ -93,3 +93,93 @@ GUI lint で検出した lazy import の重複を解消してから、以下を 
 
 検証に使った依存関係は `cd gui && pnpm install --frozen-lockfile` で導入した。
 release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/release.md` に記録する。本番昇格は人が GUI で行う。
+
+## 2026-10-02 追記: phase3_control の負荷下での繰り返し確認（task 01M3XSER5YCVRWJTCHP0XGB8AP、stress-verify WorkUnit）
+
+`phase3_control_converges_rejects_competition_and_cancel_stops` の flaky（`fix-control-test`、commit
+`dafffeb1`）の修正後ブランチ（HEAD `775251d7`）で、負荷下での再現性を確認した。
+
+根因は daemon の tick 時刻依存ではなく、celeris が `SO_REUSEPORT` で bind するため並走する別の e2e テストが
+同じポートを選べてしまい、別 DB の daemon に `agent/begin` が届くこと（詳細は `dafffeb1` のコミットメッセージ）。
+修正は `tests/e2e/src/lib.rs` に `PortReservation` を追加して空きポートを予約し、他プロセスの bind(0) から
+見えなくした。本 WorkUnit の役割は、その修正が負荷下で安定して通ることを確かめ、再現手順を
+`scripts/dev/stress-e2e-phase3.sh` として残すこと。
+
+### 負荷のかけ方
+
+`scripts/dev/stress-e2e-phase3.sh`（dash 互換、引数なしで実行）:
+
+1. `nproc`（本機では 24）本の `timeout <cap> sh -c 'while :; do :; done'` を並走させ CPU を飽和させる。
+2. バックグラウンドで `cargo test -p task-dispatch --lib` を失敗を無視しながら繰り返し実行し、別クレートの
+   test 実行・ビルドキャッシュ参照による負荷を足す。
+3. 上記の負荷をかけたまま `cargo test -p e2e --test api_scenarios phase3_` を 20 回連続で実行（1 回でも
+   落ちたら即 `exit 1` し、その回の出力を表示）。
+4. 続けて同じコマンドを 8 プロセス同時に起動し、全プロセスの exit code を集計（1 つでも非 0 なら
+   `exit 1` で各プロセスのログを表示）。
+5. `trap` で CPU 負荷プロセスと `cargo test` 負荷プロセスを `EXIT INT TERM` で必ず kill・wait し、作業用
+   一時ディレクトリも削除する。
+
+いずれも `set -eu` + `trap cleanup EXIT INT TERM` で、途中で落ちても負荷プロセスが残らないようにしている。
+
+### 実行結果（HEAD `775251d7`、修正後ブランチ）
+
+`sh scripts/dev/stress-e2e-phase3.sh` を 2 回実行し、どちらも exit 0。
+
+| 実行 | 結果 | 所要時間 | 備考 |
+| --- | --- | --- | --- |
+| 1 回目 | exit 0、20 serial + 8 parallel すべて ok | 2m43s（real）、user 47m38s | `time` で計測 |
+| 2 回目 | exit 0、20 serial + 8 parallel すべて ok | 計測なし（ログのみ確認） | 1 回目と合わせ phase3_ グループ（4 試験）を 56 回分（(20+8)×2）負荷下で実行、すべて pass |
+
+実行後に `ps aux` で CPU 負荷プロセス（`while :; do :; done`）が残っていないことを確認した（0 件）。
+
+### 修正前 commit での再現
+
+`fix-control-test` の親（`7f3482a3`、SO_REUSEPORT の修正前）での再現は、この run では行っていない。
+理由: 修正者が `dafffeb1` のコミットメッセージに、使い捨ての実験テストで「同じポートに 2 つ目の celeris を
+起こし begin 直後の状態を読むと 20 回中 7 回 in_flight=0」という再現記録をすでに残しており、根因（ポート
+衝突）も製品コードの該当箇所（`bind_reuseport`、ADR-0040 D4）も特定済みだったため、同じ検証を別 worktree で
+繰り返すコストに見合わないと判断した。必要なら `git worktree add <path> 7f3482a3` で親 commit を取り出し、
+同じ `scripts/dev/stress-e2e-phase3.sh` を走らせれば再現確認できる。
+
+### 試験の意図への影響
+
+`scripts/dev/stress-e2e-phase3.sh` はテストのコードやアサーションを一切変更していない（既存の
+`cargo test -p e2e --test api_scenarios phase3_` をそのまま繰り返し・並走させるだけ）。収束前 takeover の
+`not_converged` 拒否・競合の `not_lease_holder` 拒否・`cancel` での停止という試験の意図は変更していない。
+
+### stress-verify run 01M3XVJ3Y7R5H0MX9AK3BXRNZH の追記（修正済み）
+
+2026-10-02 の再確認では `time sh scripts/dev/stress-e2e-phase3.sh` が exit 1（real 43.217s）となった。原因は
+`cargo test -p e2e --test api_scenarios phase3_ --no-run` が e2e の試験バイナリしか生成せず、fixture が起動する
+`target/debug/celeris` / `celerisctl` を用意しないため、まっさらな target では全試験が `celerisctl not found` で
+落ちることだった。
+
+### fix-stress-build WorkUnit（01M3XSER5YCVRWJTCHP0XGB8AP）での実行結果
+
+人の介入（2026-10-02 09:15）で共用 host の CPU 負荷を抑えるため、台本の既定を焼き 2 本・300 秒・serial 5 回・
+parallel 2 本にした（以前は `nproc` 本・20 回・8 並列で、他 task の検査を落とす load 65 を作っていた）。焼き本数は
+`STRESS_E2E_PHASE3_PARALLEL` で上書き可能で、並走させる e2e の数も同じ値を使う。台本内で CPU 数を数えるコマンドは
+使っていない。全負荷・並走 e2e は `nice -n 19` で起動し、task-dispatch の背景 cargo 負荷は既定で無効（
+`STRESS_E2E_PHASE3_CARGO_LOAD=1` のときだけ有効）にした。負荷の background shell は `trap - EXIT INT TERM` で
+親の `EXIT` trap を外すようにし、親の `WORK_DIR` を消す寿命競合を無くした。workspace bin の build は serial loop
+より前に置いた。
+
+検証前の `unshare -U -r true` は exit 0（この run の sandbox では user namespace 作成が許可されている）。
+指定された一度だけの既定 stress 実行 `time sh scripts/dev/stress-e2e-phase3.sh`（環境変数での上書きなし）は
+exit 0。workspace bin の build は事前に完了済みのため追加ビルドなし、serial 5/5・parallel 2/2 すべて ok、
+実行後 `ps aux` で CPU 焼きプロセス（`while :; do :; done`）が残っていないことを確認した。`time` の実測は
+real 16.970s（user 39.684s、sys 6.427s）。
+
+stress-e2e-phase3 結果: exit 0（serial 5/5、parallel 2、real 16.970s）
+
+### 人に依頼する重い負荷の検証
+
+user namespace が使える専用環境で、焼き本数と時間を増やして一度に検証する。例:
+
+```sh
+STRESS_E2E_PHASE3_PARALLEL=8 STRESS_E2E_PHASE3_LOAD_SECONDS=1800 STRESS_E2E_PHASE3_ITERATIONS=20 time sh scripts/dev/stress-e2e-phase3.sh
+```
+
+`exit 0` と `all 8 concurrent processes: ok` を確認する。必要なら別途 `STRESS_E2E_PHASE3_CARGO_LOAD=1` を付けて
+task-dispatch の cargo 負荷も有効にする。これは CPU を長時間使うため、共用 host では実行せず、専用または空いている
+環境で行う。

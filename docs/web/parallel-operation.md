@@ -21,7 +21,17 @@ gui/ の unit・配信・昇格は変えない。人の判断待ち（H2・H3・
 
 web/ の pnpm は `corepack pnpm@<web/package.json の packageManager>`（いまは 12.6.0）で固定。host の pnpm や gui/ の 11.27.0 とは独立。
 `SD_GATE_SKIP_WEB=1` で web 段を飛ばせる。`SD_WEB_PNPM` で呼び出しを差し替えられる（テスト用）。
-verify.sh（staging の自動検査）は `SD_VERIFY_WEB_HOOK` を指定した場合だけ web/ の読み取り parity を追加する。promote.sh（昇格）は web/ に触れない。
+verify.sh（staging の自動検査）は `SD_VERIFY_WEB_HOOK` を指定した場合だけ web/ の読み取り parity を追加する。promote.sh（昇格）は昇格の後に `web-follow.sh` を呼び、旧 release の web が動いていれば新 release の web へ移す（下の §1.1）。
+
+### 1.1 promote 時の web の追従（2026-10-02 付記 (C)(D)）
+
+- `scripts/selfdeploy/promote.sh` は celeris と gui の切替の後に `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>` を呼ぶ。
+  `celeris-web@<old>` が active で、新 release の `gate.json` の `web.ok=true` かつ `web/app/server/index.js` があるときだけ、
+  `celeris-web@<new>` を start/enable して旧を stop/disable する。条件を満たさなければ何もしない。失敗しても昇格は失敗にしない。
+- `celeris-web@.service` は `Wants=celeris@%i.service` を持たない。web の起動で daemon（`celeris@`）を起こさない。web-follow.sh も `celeris@` に触れない。
+- 試験: `bash scripts/selfdeploy/tests/promote_web_follows_release.sh`（偽の systemctl と一時 dir の releases。本番に触れない）。
+- 本番の一時回避（`celeris-web@ea86af6307f8.service.d/override.conf`）の撤去・unit の置き直し・web の再起動・`curl` で `/` が 200 の確認は、
+  人が [docs/selfdeploy.md §4e](../selfdeploy.md#4e-web-の追従web-followsh) の手順で行う。
 
 ## 2. staging での実 celeris 確認（H10）
 

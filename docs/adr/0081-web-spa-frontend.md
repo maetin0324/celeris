@@ -205,3 +205,30 @@ Phase 0 は本 ADR、全 route の parity matrix、遅延 baseline と実装計�
 - [file relay](../../gui/app/routes/files.runs.ts)、[artifact relay](../../gui/app/routes/files.artifacts.ts)、[SSE relay](../../gui/app/routes/events.ts)、[Console relay](../../gui/app/routes/console.stream.ts)
 - [API schema](../api/v1/api-v1.schema.json)、[SSE producer](../../crates/task-api/src/sse.rs)、[REST snapshot 補完](../../crates/task-api/src/handlers.rs)、[dispatcher snapshot](../../crates/task-dispatch/src/dispatcher.rs)、[Event 定義](../../crates/task-core/src/model.rs)
 - [mobile-audit](../../gui/scripts/mobile-audit.mjs)、[対象画面 fixture](../../gui/scripts/lib/celeris-fixture.mjs)、[a11y 検査](../../gui/e2e/g5-a11y.spec.ts)
+
+## 付記（2026-10-02）: gateway の dotfiles と web の release 追従
+
+本付記は ADR-0081（web SPA と gateway）と web ADR-W3（`docs/web/adr/web-0003-parallel-operation.md`、unit や docs で ADR-0096 と呼ばれている文書）の両方に同じ内容で置く。
+
+### (A) 事象と原因
+- 本番 release `ea86af6307f8` の web を `~/.local/celeris/releases/<sha12>/web/app`（`celeris-web@<sha12>` の WorkingDirectory）から起動すると、`/healthz` は ok だが `/`・`/login`・`/inbox` など全画面が `not found`（404）になった。同じ release を `/var/lib/celeris/web/<sha12>/app` にコピーして起動すると 200 だった。
+- 原因: `web/server/app.js` の `res.sendFile(path.join(distDir, "index.html"))` と `express.static(path.join(distDir, "assets"))` は、send の既定 `dotfiles: "ignore"` で動く。root を渡さない `sendFile` は**絶対 path 全体**を dotfiles 判定にかけるため、途中の `.local` を隠しファイルと見なして 404 を返す。開発・試験の path にドットの dir が無かったため表に出なかった。
+
+### (B) 決定: root を渡し、dotfiles は既定のまま
+- SPA の HTML は `res.sendFile("index.html", { root: distDir })` で送る（相対名 + root）。
+- `express.static` は assets の dir を root にし、`dotfiles` は既定（`ignore`）のまま。`dotfiles: "allow"` は使わない。
+- send は root より上の path を dotfiles 判定に入れないので、配置先の path（`.local` 等を含んでも）に依らず動く。dist の中のドットファイル（`.env` 等）は引き続き配信しない。
+- 試験: `.local` を含む一時 dir に release 相当の dist を置いて gateway を起動し、`/` と SPA の path（例 `/inbox`）が 200、dist 内の `.env` 等のドットファイルが 404 になることを確かめる。
+
+### (C) web の release 追従
+- 事象: 前日（2026-10-01）の dogfood の web は、task の作業場所（staging 成果物）への symlink を持つ release から起動されていた。作業場所の片付けで中身が消え、全画面 404 になった。
+- 決定: `scripts/selfdeploy/promote.sh` は昇格に成功した**後**に `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>` を呼ぶ。
+- `web-follow.sh` は `celeris-web@<old_sha12>` が active のときだけ動く。新 release の `gate.json` の `web.ok=true` と `web/app/server/index.js` の存在を確かめてから、`celeris-web@<new_sha12>` を起動・有効化し、`celeris-web@<old_sha12>` を停止・無効化する。
+- 条件を満たさないとき（旧 web が動いていない・新 release の web 段が不合格・配布物が無い）は何もせず、理由をログに出す。web の追従の失敗で昇格を失敗にしない（D3/H7 の非 blocking を保つ）。
+
+### (D) unit は daemon を起こさない
+- `deploy/systemd/celeris-web@.service` から `Wants=celeris@%i.service` を外し、`After=` だけを残す。web の起動が `celeris@<sha12>` を起こして daemon の handoff を引き起こさないため（2026-10-01 の事故）。
+
+### (E) 本番 host の操作は人が行う
+- 一時回避の `~/.config/systemd/user/celeris-web@ea86af6307f8.service.d/override.conf` の撤去、`systemctl --user daemon-reload`、web の再起動は、人が `docs/selfdeploy.md` の手順で行う。worker の run は本番 host を操作しない。
+- web ADR-W3 D3 の「promote.sh は web/ の unit を起こさない」という既存の記述は、本付記 (C) で上書きする（promote.sh は旧 web が動いているときに限り web を新 release へ追従させる）。

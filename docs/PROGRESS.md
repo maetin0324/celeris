@@ -19,7 +19,7 @@ inline test の外出しと責務分割を完了した（worktree、main 未 mer
 
 ## 目次
 
-- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
+- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。2026-10-02 追記: `scripts/dev/stress-e2e-phase3.sh` で phase3_control の flaky 修正（`dafffeb1`）を負荷下 2 回（各 20 serial + 8 parallel）で検証、全 pass。fix-stress-build は人の介入を受け、共用 host の既定負荷を焼き 2 本・nice -n 19・300 秒・5 serial + 2 parallel に変更し、背景 cargo 負荷を opt-in 化。指定の `time sh scripts/dev/stress-e2e-phase3.sh` を既定値のまま 1 回実行し exit 0（serial 5/5、parallel 2、real 16.970s）。重負荷検証手順は [phase-browser](progress/phase-browser.md) 末尾。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 1〜4 の main 統合](progress/phase-browser-main-merge.md) — 2026-10-01、`478e86c4` とリファクタ後 main `2eb1b030` がともに祖先となる作業ブランチで、migration 0035/0036・schema 36 と ADR 0099〜0114 を確認。`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、source size active warning 0 件（既存例外 1 件）。P3-B frame、別 host UID・A13、機密能力の本番解放、本番設定と昇格は未解決。検証のコマンド・exit・テスト数はリンク先に記録。
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0099（制御 lease）/ 0100（live proxy ACL）/ 0101（identity 契約）/ 0113（P3-C control gate 配線）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-C の worker 側 control gate は 2026-09-30 に run loop（`ActionServer::serve`）へ配線完了、`browser_control_gate_wire` 5 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A/P4-B の deliver_state（2026-09-30 実装済み）を参照。2026-09-30 の検査（Rust 3055 passed / 0 failed、clippy exit 0）。本番未昇格。
@@ -65,6 +65,69 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - Rust gate: `cargo test --workspace` → exit 101（sccache 起動時 `Operation not permitted`、rustc コンパイル開始前）。`cargo clippy --workspace -- -D warnings` → exit 101（指定 `CARGO_TARGET_DIR` 内の `.cargo-build-lock` を read-only filesystem のため開けず）。どちらもコード検査に到達せず、コード起因か判定できていない。
 - GUI gate（`gui/`）: `pnpm typecheck` / `pnpm test` / `pnpm build` は各 exit 1。pnpm 11.27.0 の依存事前確認がユーザー cache の SQLite database を開けず、各コマンドの実処理は開始しなかった。テスト数は未取得。main との比較も未実施。
 - 未解決と提案: sccache と `CARGO_TARGET_DIR` が書き込み可能な環境で Rust 2 gate を再実行し、pnpm store が利用できる環境で GUI 3 gate と main 比較を再実行してテスト件数を記録する。今回の GUI 差分 gate `git diff --quiet 06e9a03cffe8 -- gui ':!gui/docs/adr/0002-frontend-stack.md'` は exit 0。旧 ADR 追記を含む GUI 全体の差分は新 ADR-0081 に supersede として記録済み。ADR・parity・計画の相互リンクを確認済み。
+
+## 担当の無い root task の delivery（ADR-0121、2026-10-01）
+
+- 振り直し: 旧番号 0099 は main の browser-phase3-control-lease（docs/adr/0099-browser-phase3-control-lease.md）と衝突したため main 統合後に 0117 へ振り直したが、refs 全体の走査で 0117 が使用済みと判明した。main・全 refs/heads/celeris/*・refs/remotes の docs/adr を git ls-tree で走査すると 0116/0117/0118 は使用済み、0119 は未使用だったため、2026-10-02 に ADR-0121 へ再度振り直した。
+- 統合 HEAD: `c5f57803`（verify-all worktree）。ADR-0121 を [ADR-0121](adr/0121-root-delivery-without-assignee.md) に記録。部署は root assignee → 有効計画の planner → root 配下の子 task / WU run の実担当票 → 案件設定の既定部署の順に解決し、曖昧な担当推測をしない。対象 root の delivery 見送りは `DeliverySkipped` event と inbox attention に理由を残す。子 task と対象外案件は従来どおり通知・delivery 対象外。
+- `cargo test --workspace` → exit 101。大半の test 群は成功したが、`celeris` の `instance_handoff` 5 件が失敗。4 件は sandbox 内で user namespace が許可されず ADR-0095 worker DB guard probe が失敗したもの、2 件はその後の dispatch/standby 待機失敗（5 failures total）。delivery 関連の test 群は通過。workspace 全件成功とは扱わず、user namespace が利用可能な環境で再実行が必要。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `rg -n 'unwrap\\s*\\(' crates/task-ops/src/delivery.rs` → 一致なし。production `delivery.rs` に `unwrap()` は無い（test 用 unwrap は別ファイル）。
+- 未解決: sandbox 制約を外した統合環境で workspace test を再実行して全件成功を確認すること。ブランチの production DB 接続・実行は行っていない。
+- ADR 番号の再走査（2026-10-02）: main・全 refs/heads/celeris/*・refs/remotes の 130 refs を `git ls-tree` で確認し、0116/0117/0118 は使用済み、最小空き番号 0119 を選択。main に migration 0037 は無く、migration 番号は変更なし。参照と ADR-0051 のリンクを ADR-0121 に更新した。task-api/task-core/task-worker の `UPDATE_SCHEMA=1` schema 整合テストは成功。`corepack pnpm@11.27.0 -C gui gen:types` は pnpm の依存確認が cache SQLite を開けず exit 1。型生成は実行できなかったが、生成物 types.ts の該当 description を schema と同じ ADR-0121 表記に同期した。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は exit 101、`instance_handoff` 5 件が sandbox の user namespace `Operation not permitted` で失敗（delivery 関連以外の環境依存失敗）。
+- delivery skipped の inbox query 向けに migration `0037_events_delivery_skipped_index.sql` を追加し、`idx_events_delivery_skipped` 部分 index を作成。問い合わせの predicate は index と同じ式を使い、`latest_delivery_skipped_rows_uses_partial_index` が EXPLAIN QUERY PLAN の index 使用と task ごとの最新 1 件を確認する。schema version 37（`SCHEMA_VERSION = 37`）になる。
+- この migration の昇格は celeris を stop → 新バイナリで start とし、起動時に migration が実行される。index は追加のみで、旧バイナリも残存 index 自体は利用せず動作できる。ただし schema 37 を開く旧バイナリは SchemaTooNew になるため、バイナリを戻す場合は migration 前の DB backup も戻すこと。詳細と任意の `DROP INDEX` は [ADR-0121](adr/0121-root-delivery-without-assignee.md) に記録。
+- 振り直し仕上げ（renumber-adr、2026-10-02 続き）: main（`29e2d768`）は既に HEAD の祖先（`git merge-base --is-ancestor main HEAD` → exit 0）、main に ADR-0121 や migration `0037` は現れていないため番号の再振り直しは不要。`docs/adr` の重複なし（`0119-root-delivery-without-assignee.md` 1 件、`0117-review-human-decisions-and-check-results.md` 1 件）、全 refs/heads・refs/remotes の `git ls-tree` 走査でも `0119-root-delivery-without-assignee.md` の使用は本ブランチのみ。`git grep -n 'ADR-0117'` を対象 crates/ADR-0051/docs/api/v1/gui types.ts に実行して一致なし（exit 1）。`crates/task-dispatch`・`crates/task-worker`・`docs/protocol`・`docs/adr/0117-review-human-decisions-and-check-results.md` は `git diff main` で差分ゼロ。
+  - `corepack pnpm@11.27.0 -C gui gen:types` → exit 0（今回は pnpm store 事前確認が通った）。実行後 `git status --short` は無変更で、前回手動同期した `types.ts` の ADR-0121 表記と生成物が一致することを確認。
+  - `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker` → 全 test group `0 failed`（schema 固定文字列テストを含む）。
+  - `cargo check --workspace --tests` → exit 0。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `cargo test -p task-core -p task-ops -p task-api` → 全 test group `0 failed`（task-core 624 件・task-ops 395 件を含む）。
+  - `cargo test --workspace` → 今回は exit 0、全 118 test group `0 failed`（計 3,228 passed / 0 failed / 12 ignored）。`crates/celeris/tests/instance_handoff.rs` の `a_stale_heartbeat_promotes_the_standby` は 60 秒超の低速（userns probe 待ち）だったが最終的に `ok`。前回 run で見られた sandbox user namespace 拒否による失敗はこの run では再現せず、workspace 全件成功を確認した。
+
+## Root delivery 部署 fallback 再検証（verify-perf、2026-10-01）
+
+perf-query を含む統合 HEAD `dd413c5e` で指定 gate を再実行。`cargo test --workspace` → exit 101（3,021 passed / 5 failed / 0 ignored）。失敗は `crates/celeris/tests/instance_handoff.rs` の5件で、worker DB guard が user namespace の生成を `Operation not permitted`（ADR-0095）で拒否した後、dispatch / standby の待機試験も失敗。delivery / inbox の試験を含む他の試験は通過。前回と同じ sandbox 制約であり、コード起因の不具合を示す結果ではない。全件列挙 `cargo test --workspace -- --list` は 3,026 件。
+
+`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
+workspace 全 test の成功は未確認。user namespace を利用できる環境で再実行が必要。
+
+## Root delivery 最終 workspace 検証（verify-final、2026-10-01）
+
+- `cargo test --workspace` → exit 101（約3,029 passed / 5 failed / 0 ignored、`instance_handoff` 実行約60秒）。失敗5件は `crates/celeris/tests/instance_handoff.rs`。3件で worker DB guard probe が user namespace の `Operation not permitted` となり、2件の dispatch / standby 待機試験も同テスト群内で失敗した。delivery / inbox の試験を含む他の試験群は通過し、この task の差分に起因する失敗は確認されなかった。
+- `cargo test --workspace -- --list` → exit 0、3,303 tests 列挙。
+- `cargo clippy --workspace -- -D warnings` → exit 0（41.53秒）。
+- test の受け入れ条件は未達。user namespaces が利用可能な環境で workspace test の再実行が必要。
+
+## Root delivery 取り込み最終検証（verify-land、2026-10-02）
+
+main（HEAD `2bd7df3b`）への merge-renumber・delivery-index 統合後の最終ゲート。user namespace が使える環境で実行し、前回 run が未解決としていた `instance_handoff` の失敗を含め全件成功を確認した。
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → exit 0。3,221 passed / 0 failed / 0 ignored（`--list` 相当の doctest 等含む計 118 test binary、`instance_handoff` も含めて全件成功）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test -p task-core delivery_skipped` → exit 0、2 passed（`latest_delivery_skipped_rows_uses_partial_index` が `idx_events_delivery_skipped` の EXPLAIN QUERY PLAN 使用と task ごとの最新1件を確認）。
+- `git merge-tree --write-tree --name-only HEAD main` → exit 0、衝突ファイル名の出力なし（tree `229e6d41c27f0fb716ef3e17faef6fc8c166d0de` のみ）。main を fast-forward 可能な形に近づけた状態を確認。
+- `rg -n 'ADR-0099' docs/ crates/` → 残存参照はすべて main 既存の browser-phase3-control-lease（`docs/adr/0099-browser-phase3-control-lease.md`）向けで、root delivery の旧番号参照は無い。`docs/adr/0121-root-delivery-without-assignee.md` が振り直し後の ADR。
+- GUI（`corepack pnpm@11.27.0 -C gui install --frozen-lockfile` → exit 0 の後）: `pnpm typecheck`（`react-router typegen && tsc -b`）→ exit 0。`pnpm test`（vitest run）→ exit 0、85 test files / 1,250 tests passed。
+- 負荷による flake は今回発生しなかった（追加の待ち上限変更は不要）。
+- 受け入れ条件 0〜3 すべて満たした。取り込み可能性の確認はここまでで、実際の main への merge は celeris の統合工程（integrate-reverify）が行う。
+
+## Root delivery 振り直し後の最終検証（verify-land2、2026-10-02）
+
+前回 run は main が本ブランチの先に進んでいて（Web GUI SPA の大規模統合 `e730f056` 等）`git merge-base --is-ancestor main HEAD && git merge-tree --write-tree HEAD main` が exit 1 で失敗した。本 run で main を 2 回 merge して追従（1 回目: `docs/PROGRESS.md` の目次追記どうしの衝突のみ、両節を残して解消。main がさらに進んだため 2 回目: user systemd bus 遮断・db_guard の host config 読み取り専用化〈ADR-0095 付記〉の取り込みで crates/ に差分、衝突なし）、HEAD を `7c2147f6` にした。
+
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `ea86af63` は HEAD の祖先）。
+- `git merge-tree --write-tree HEAD main` → exit 0、衝突なし。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace` → exit 0。3,239 passed / 0 failed / 0 ignored（118 test binary、doctest 含む）。`instance_handoff` 8 passed / 0 failed（`a_stale_heartbeat_promotes_the_standby` は 60 秒超だが `ok`）。
+- `cargo test -p celeris --test instance_handoff` を単独で 3 回実行 → 毎回 8 passed / 0 failed（60.4〜60.5 秒）。前回 reviewer が懸念した失敗は本 run・本 HEAD では再現せず、workspace 全体実行でも単独実行でも安定して成功する。負荷依存の既存 flaky と判断する根拠も無く、単純に全件成功。
+- GUI（`gui/`、pnpm@11.27.0）: `install --frozen-lockfile` → exit 0。`pnpm typecheck` → exit 0。`pnpm test`（vitest run）→ exit 0、85 files / 1,250 tests passed。
+- web（`web/`、pnpm@12.6.0、main 統合で新規に加わった SPA）: `install --frozen-lockfile` → exit 0。`pnpm typecheck` → exit 0。`pnpm test`（vitest run + node --test server）→ exit 0、Vitest 24 files / 178 tests passed、Node test 41 passed。
+- 2 回目の main merge は `crates/task-worker/src/{db_guard,preamble,claude_code/prompt}.rs` 等に差分があったため gui/web の再検査は不要と判断（`git show --stat` で `gui/`・`web/` への変更が無いことを確認）し、Rust 側のみ再実行した。
+- 受け入れ条件 0〜2 すべて満たした。取り込み可能性の確認はここまでで、実際の main への merge は celeris の統合工程（integrate-reverify）が行う。
 
 ## Web GUI Phase 1（完了 2026-09-30、scaffold と gateway）
 
@@ -115,8 +178,10 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。
 - H6: 期間・合格条件・判定日は人の決定待ち。決まるまで cutover しない。H9: 通知方針は人の決定待ち。H10: release `bf54b41ad627` の staging verify exit 0、読み取り parity 3 passed。
 - 配置上の問題（2026-10-01）: 本番 release パスが前 run の staging 成果物を指す symlink。参照先を dogfood 中に削除しない。NFS 実体コピーは途中で中止。再起動時は web unit と LAN socket を手動で start する。恒久化の対応・再確認結果は未記入。
+- 恒久化（2026-10-02、web ADR-W3 / ADR-0081 付記 (C)(D)）: `scripts/selfdeploy/web-follow.sh <new> <old>` を新設し、`promote.sh` が昇格後に呼ぶ（旧 `celeris-web@<old>` が active かつ新 release の `gate.json` `web.ok=true`・`web/app/server/index.js` ありのときだけ新へ切替。失敗は warning、exit 0、`celeris@` には触れない）。`celeris-web@.service` から `Wants=celeris@%i.service` を除去。証拠: `bash scripts/selfdeploy/tests/promote_web_follows_release.sh` exit 0（(a)(b)(b2)(c)(d)(e) 全 ok）。本番の override.conf 撤去・unit の置き直し・web 再起動は人の手順（[docs/selfdeploy.md §4e](selfdeploy.md#4e-web-の追従web-followsh)）。未実施。
 - 端末確認の残り: LAN の別の物理端末からの到達・操作は未確認。結果を確認したら追記する。
 - 期間中の問題記録: `<日付>｜<画面>｜<端末・ブラウザ>｜<現象>｜<重大度>｜<対応・タスク ID・再確認結果>` の形で 1 件ずつ追記する。
+
 ## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）
 
 - 認証区間（ADR-0080 H3）を worker → store op（task-api `auth-section` と共通）→ control 状態へ配線、API で takeover/renew を 409 拒否、実 `forward_events` が区間中 progress・artifact・live event を 0 件にする。詳細・証拠は [phase-browser-3](progress/phase-browser-3.md)。
@@ -220,6 +285,53 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
 - `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。
 
+### ADR 番号振り直し後の最終検証 — 2026-10-02（work unit `verify-land2`）
+
+前回 reviewer の指摘（ADR-0117 の番号衝突、`instance_handoff` 失敗未確認のまま `cargo test --workspace` が中断）に対応。`docs/adr/` は振り直し済みで、root delivery の ADR は `0119-root-delivery-without-assignee.md`、`0117-review-human-decisions-and-check-results.md` と重複なし（`0078` の重複はこの task 以前から main に存在する無関係な既存衝突で、範囲外のため変更していない）。main（`188fa27409f11305414b21d048f0f0e260c6efdb`）は既に HEAD の祖先。
+
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo test --workspace` → exit 0（`instance_handoff` 8 件を含め全テストバイナリで `test result: ok`、失敗 0。`a_stale_heartbeat_promotes_the_standby` が 60 秒超過の警告を出すが結果は ok）。
+- `cargo test -p celeris --test instance_handoff` を単独で 3 回連続実行 → いずれも exit 0（8 passed / 0 failed、各約 60.5 秒）。前回 reviewer が見た失敗は本ブランチの変更が原因ではなく、再現しなかった（負荷依存の既存 flaky として記録。今回は user namespace 制限も再現せず）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `gui`: `pnpm install --frozen-lockfile` → exit 0、`pnpm run typecheck`（`react-router typegen && tsc -b`）→ exit 0、`pnpm run test`（vitest）→ exit 0（85 files / 1250 tests passed）。
+- `git merge-tree --write-tree main HEAD` → 衝突なしで tree を生成（exit 0）。`git merge-base --is-ancestor main HEAD` → exit 0。
+- `git status` / `git diff --stat` ともに本行追記以外の変更なし。本番 DB・本番 host は操作していない。
+
+### 取り込み前の最終確認 — 2026-10-02（work unit `land-final`）
+
+main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135c488198ace804aab14023db`) の祖先（`git merge-base --is-ancestor main HEAD` → exit 0）で、追加 merge は不要だった。`git merge-tree --write-tree main HEAD` は exit 0、tree `57e25288479c7e08a33a30e3b0a4a9384cb3a8b4` を生成し、衝突なし。
+
+- ADR-0121 `docs/adr/0121-root-delivery-without-assignee.md` と ADR-0051 の付記、コード、生成 schema、PROGRESS の参照は一致。`git ls-tree -r` で main と refs/heads/celeris・refs/remotes/celeris の全 129 refs を走査し、ADR-0121 は本ブランチと関連する統合ブランチの 2 refs のみで使用。main に同番号の決定はなく、内容の異なる ADR 番号衝突はない。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → exit 0（全 workspace 成功、`instance_handoff` を含む）。失敗試験なし。前回レビューでの `instance_handoff` 失敗は今回の再実行で再現せず、`verify-land2` で同 test binary を単独 3 回実行した結果も全て 8/8 pass のため、本ブランチ起因ではない負荷依存 flaky と判断。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- GUI（`gui`）: `pnpm install --frozen-lockfile` → exit 0、`pnpm run typecheck` → exit 0、`pnpm run test` → exit 0（85 files / 1250 tests）。
+- 本番 DB・本番 host は操作していない。
+
+### reland-main — 2026-10-02
+
+- main `7f3482a307f7221d7e74d88af123e26b92aac867` を取り込む前に `git merge-tree --write-tree HEAD main` を実行し、`docs/progress/phase-R.md` に両側の追記競合を確認。通常の `git merge main` が phase-R の両方の節を保持して完了した。統合後 `git merge-base --is-ancestor main HEAD` → exit 0。
+- ADR 番号を main と全 `celeris/*` refs の `git ls-tree` で確認。0119 は既存の root-delivery ADR を持つ refs があり、0120 も既存 ADR に使用済み。0121 は main と走査した全 refs のどちらにも ADR 文書がなく最小の空き番号だったため、root-delivery ADR を `docs/adr/0121-root-delivery-without-assignee.md` に変更。ADR-0051、実装・migration コメント、schema、GUI types、PROGRESS の参照も ADR-0121 に揃えた。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → exit 101。`instance_handoff` は 8 件中 3 件成功、5 件失敗。`normal_mode_does_not_inject_the_smoke_builtins`、`verify_mode_never_dispatches_and_never_touches_daemon_instances`、`starting_the_same_release_twice_exits_three` は worker DB guard の user namespace `Operation not permitted` が原因。`a_newer_release_takes_over_while_the_old_one_finishes_its_run` と `a_stale_heartbeat_promotes_the_standby` も失敗。
+- `cargo test -p celeris --test instance_handoff` を 3 回単独再実行 → 3 回とも 3 passed / 5 failed、同じ 5 件が失敗。userns sandbox 制限を含む既存の `instance_handoff` failures と判断する。指定どおり sandbox 制約を修正理由にはしていないが、workspace test 成功とは扱わない。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `git merge-tree --write-tree main HEAD` → exit 0（作業前 tree `c0a8f60f0e346a020fecd806054c9588f9671fc3`、記録 commit 後 tree `13cadac91414f7cd69f0d9d25ff279d9b5de7ff7`、いずれも衝突なし）。
+- 検証記録を commit `0ec72fdd` に保存。作業後 worktree は clean。
+- 本番 DB・本番 host は操作していない。
+
+### rerun-flaky: 高負荷起因の失敗の単独再実行 — 2026-10-02
+
+段 reverify の統合検査で `browser_injection_wire`（2 試験）と `browser_runtime_isolated::controller_kill_leaves_no_runtime_processes` が失敗した件は、別 task の負荷試験で host の load average が上がったことによる環境起因と人が判断した（負荷は 09:15 に停止済み）。コードは変更していない。
+
+- `uptime` → `09:19:49 up 1 day, 11:26,  6 users,  load average: 23.67, 28.81, 31.48`（再実行開始時点。負荷停止直後で 1 分平均はまだ下降中）。再実行完了時点の `uptime` → `09:22:01 up 1 day, 11:28,  6 users,  load average: 19.53, 26.02, 30.14`。
+- `unshare -U -r true` → 成功（user namespace 作成は拒否されていない）。
+- `cargo build --workspace --bins` → exit 0。
+- `cargo test -p task-worker --test browser_injection_wire` → exit 0、`test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`（`inner_injection_wire`、`real_broker_browser_injection_receipt_and_origin_guards` とも ok）。
+- `cargo test -p task-worker --test browser_runtime_isolated controller_kill_leaves_no_runtime_processes -- --exact` → exit 0、`test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out`。
+- 2 回連続で単独実行し、どちらも同じ結果を再確認した。
+- 人の判断のとおり、環境（host 負荷）起因の flaky と確認できた。コード変更なし。
+
 ## browser: ptrace 境界分離 launcher 実装・実 process 実証完了
 
 完了日 2026-10-02（task 01M3VFQK2ZSPJ89VDA1F4FMA2G、WorkUnit `real-evidence` / `close-out`）。
@@ -246,3 +358,14 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - `crates/task-worker/tests/browser_shared_cdp.rs`: main 側 5eb666f6（R7-12）の `ISOLATION`・`PREFLIGHT_TIMEOUT`・`probe.err` の excepthook・WebSocket frame の読み切り（`recv_exact`）を土台にした。そこへこのブランチの 97eb5194（接続から CDP 応答までを 1 試行とし、期限 55 秒の中で再試行する）を載せた。`find_browser`・`preflight`・`run_bounded` と、launcher 用の `userns: UsernsMode::Unshare` は自動 merge でそのまま残っている。
 - `docs/PROGRESS.md`: main の R7-10・ADR-0117・repair 許可範囲の節を先に、この節を含む launcher 節を後に置き、どちらも残した。
 - 証拠: `cargo build -p task-worker --bins` exit 0。`cargo fmt --all -- --check` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`cargo test --workspace` exit 0（3261 passed / 0 failed / 12 ignored）。`CELERIS_ISOLATION_TESTS=require cargo test -p task-worker --test browser_shared_cdp` を 3 回実行し、3 回とも exit 0（2 passed）。flaky は出なかった。launcher の実 host 試験は再実行していない（人の側で済み）。
+
+### main（764a737d）取り込み — 2026-10-02（work unit `land-main2`）
+
+`main` の `764a737d` を merge で取り込んだ（rebase なし）。衝突は 2 ファイル。
+- `crates/task-worker/src/browser_runtime.rs`: main 側 c11ffd35 の `RuntimeError::InitNotReady` と、`IsolatedRuntime::launch` で `--info-fd` の後に pid ns init の starttime を記録して `/proc/<pid>/wchan` が `do_wait` になるまで待ち、未完了なら本人確認のうえ init を SIGKILL する処理を残した。このブランチ側の `RelayNotReady(String)`・`NoChildPid(failed_stderr)` の診断、launcher 経路（`UsernsMode::Fd`、`/tmp/celeris-session` の bind、relay 診断、Chrome lifecycle 診断）もそのまま残した。
+- launcher 経路での init 待ち: launcher は bwrap の親として host の pid ns にいるので `--info-fd` の pid は host pid。init の userns は launcher（euid celeris-browser）が owner の userns の子孫なので、launcher は init の `/proc/<pid>/stat`・`wchan` を読め、SIGKILL も送れる。このため launcher 経路の扱いは変えていない（理由をコードのコメントにも書いた）。unit（`deploy/systemd/celeris-browser-launcher.service`）に `ProtectProc`・`PrivatePIDs` は無く、他 UID の `/proc` は見える。
+- `tests/browser_runtime_isolated.rs` の main 側変更は自動 merge で残り、launcher 用の `userns: UsernsMode::Unshare` も残っている。
+- `docs/PROGRESS.md`: main の verify-land2・land-final・reland-main・rerun-flaky などの節を先に、launcher 節を後に置き、どちらも残した。
+- 証拠: `cargo build -p task-worker --bins` exit 0。`cargo fmt --all -- --check` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`cargo test --workspace` exit 0（3279 passed / 0 failed / 12 ignored）。`cargo test -p task-worker --test browser_runtime_isolated` exit 0（5 passed、1 ignored）。flaky は出なかった。
+- **launcher の binary に効く変更あり**: `browser_runtime.rs` の launch（init 待ち）は launcher・sandboxd・egress の binary に入る。host の binary は 86ce1a88 のビルドのままなので、反映には人による入れ替えが要る。
+- main 取り込み後の launcher binary の実 host 再試験は未実施（任意で人が require 試験を再実行）。手順は `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture`（binary の入れ替えは `sudo /usr/local/sbin/celeris-browser-launcher-update`）。

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # scripts/selfdeploy/tests/promote_authorization_marker.sh — ADR-0040 付記 2026-10-02
 # 「handoff と migration の認可（昇格していない release）」:
 #
@@ -11,10 +11,11 @@
 # stop-start が本物の :7700 の GUI を見つけて SIGTERM する）。偽 `systemctl start celeris@X` が、
 # その瞬間の印と `current` のリンク先を書き留める。
 #
-# 実行: bash scripts/selfdeploy/tests/promote_authorization_marker.sh
-set -euo pipefail
+# 実行: sh scripts/selfdeploy/tests/promote_authorization_marker.sh
+# dash/sh で走る POSIX sh（bash 配列展開は使わない: ${BASH_SOURCE[0]} も ${@:2} も不可）。
+set -eu
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 SD="$(cd "$HERE/.." && pwd)"
 
 FAIL=0
@@ -148,8 +149,12 @@ setup() {
 
 run_script() {
   # run_script <script> [args...] — 偽の PATH で走らせ、exit code を RC に入れる。
+  # 呼ばれる promote.sh / rollback.sh 自体は bash 前提なので bash で起動する
+  # （このテスト script 自身は sh/dash で走る前提: ${@:2} は使えないので shift で渡す）。
+  script="$1"
+  shift
   set +e
-  PATH="$FAKE_BIN:$PATH" SD_STOP_WAIT=1 bash "$SD/$1" "${@:2}" >"$CASE/out.log" 2>&1
+  PATH="$FAKE_BIN:$PATH" SD_STOP_WAIT=1 bash "$SD/$script" "$@" >"$CASE/out.log" 2>&1
   RC=$?
   set -e
 }

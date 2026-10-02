@@ -330,6 +330,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 ### D9. replan / repair の再帰と、人に届くもの・届かないもの
 
 - **子の中の失敗は子が先に吸収する**: continuation・retry・repair・replan は各 task の中で今どおり（ADR-0072 D11 / D16 / D17）。
+  repair には段階 / task の許可範囲と範囲外差分の check を渡し、範囲外が原因の失敗は直さず `plan_issue` で上げる（ADR-0074 付記 2026-10-02）。
 - **子が `failed` になったら親が吸収する**: 親の unit は `failed` → 親の replan（ADR-0072 D17 の起点 1。起こした理由は「子 task <題名> が失敗: <分類と理由>」、
   planner の入力に子の最後の checkpoint の要約と最終レビューの不合格の理由を足す）。親の planner は子をやり直す（新しい key の task unit、目的を直して）・
   分ける・落とす、のどれかを新しい版で出す。子の done の成果（ブランチ）は捨てない。
@@ -1939,3 +1940,67 @@ web の木の replan 24 回のうち 9 回が計画・check・条件の質に起
 5. 受け入れ条件と差分 check の範囲には、計画が要求する ADR・記録の置き場所を最初から含める。
 
 この 5 規則を `PLANNER_CHECK_GUIDANCE` に加え、/2・/3 の planner prompt にそれぞれ 1 回だけ現れることをテストする。
+
+## 付記: R7-12: 配送・最終レビューの repair WU（`phase` 無し）も daemon が足した WU として replan の検証から外す、環境に依存する browser テストは環境が無ければ理由を出して飛ばす（2026-10-02）
+
+### 発端（本番の証拠。task 01M3WZ1GEPC670GED0TYAXSGDF、2026-10-02）
+
+- /3 の計画（段階 design / impl / verify）がすべて done → 最終レビュー合格 → 配送で main が進んでいた（fast-forward でない）ので
+  `celeris::delivery` が task を開き直し、配送の repair WU `repair-2`（`kind = repair`、**`phase: None`**、計画の spec には書かない。
+  `crates/celeris/src/delivery.rs` の `WorkUnitSpec { … phase: None }`）を足した。repair-2 は done。
+- 再レビューが本件と無関係な flaky test（下の D4）で不合格 → replan。以後の planner の replan はすべて
+  `done work unit repair-2 must not change on replan` で拒否（events seq 398・448・493・521・551・573、`plan_invalid` の決定 3 件）。
+- 原因: `task_core::is_daemon_added_work_unit`（`execution_plan/scheduling.rs`）は「`kind = integrate`」か「/2・/3 で `phase` を持ち
+  active な計画の spec に無い行」（統合の repair WU）だけを daemon が足した WU とみなしていた。`phase` の無い repair WU は planner の
+  done の WU として `replan_done_work_units` に入り、done の不変条件（`done_carry_over_errors`）が「同じ spec で計画に書け」と求める。
+  ところが /3 の unit は `stage` が必須（内部の形で `phase = Some(stage)`）なので planner も人の PUT も同じ spec を書けない。
+  `carry_done_units_v3` は active な計画の `units` にある done の unit しか補わないので repair-2 は補われない。どの replan も通らない。
+  最終レビューの repair WU（`review_verdict.rs` の `try_review_repair`、計画のある task では同じく `phase: None` で spec に書かない）も
+  同じ形で、計画のある task の再レビューの不合格からの replan は同じく通らなかった（本番では未観測）。
+
+### 決定
+
+1. **D1 判定の規則**: `is_daemon_added_work_unit(active, row)` は、`kind = integrate` の行に加え、**active な計画の spec に key が無い**行
+   のうち (a) /2・/3 で `phase` を持つもの（従来の統合の repair WU）、または (b) **`kind = repair` のもの（schema・`phase` を問わない）**を
+   daemon が足した WU とする。配送の repair WU と最終レビューの repair WU は (b)。planner / 人が計画に書いた `kind = repair` の unit は
+   spec に key があるので従来どおり planner の WU（done の不変条件の対象）。atomic な task のレビュー修復が作る v1 の計画（`main` +
+   `repair-N` を spec に書く）も spec にあるので変わらない。
+   marker の key prefix や `phase` を新たに付ける案は採らない: 既にある本番の行（repair-2）を救えず、配送の repair が段階を持つと
+   段階の障壁・`phase_leaves`・`stale_stage_integrations`（R7-9）の対象になり、統合 WU を開き直してしまう。
+2. **D2 replan の扱い（planner・人、/1・/2・/3 共通）**: D1 の規則は dispatcher（`replan_done_work_units`）・`task_ops::execution::replan`・
+   replay（`apply_replan_step`）が共有する関数なので、3 か所が同じ判定になる。done の配送 / レビューの repair WU は
+   - done の不変条件の対象にしない（計画に書かなくてよい）。`carry_done_units_v3` も触らない（新しい計画の spec に入らない）。
+   - 行はそのまま（done のまま、`plan_id`・`seq` は元のまま）。`replan` の「新しい版に無い行の superseded」は done の行に触れない（従来）。
+     replay も新しい版の spec に無い行は書き換えない。
+   - 未完了（ready / running 等）の配送・レビューの repair WU は従来どおり（新しい版に無ければ superseded）。
+3. **D3 daemon の WU の key を計画に書いたら検証の理由で返す**: 新しい計画が、生きた（superseded / cancelled でない）daemon が足した
+   WU（統合 WU 以外）の key を unit に使ったら `PlanValidationError::DaemonAddedKeyReused` で拒む（dispatcher は R7-3 の退役した key と
+   同じ位置で planner に返す、`replan` も同じ検証をする）。以前は done の不変条件がこの key を「planner の done の WU」として扱ったが、
+   D1 の後は「新しい unit」とみなされ、`replan` が既存の done の行を `ready` に戻して repair を再実行してしまう。
+   `DAEMON_ADDED_HINT`（検証の理由に添える一文）にも「配送・最終レビューの repair WU（phase の無い `repair-N`）」を書き足す。
+4. **D4 browser テスト `real_shared_cdp_and_auth_section` の 60 秒の失敗**（`crates/task-worker/tests/browser_shared_cdp.rs`）: 無関係な
+   task の `cargo test --workspace` の受け入れ条件を落としていた（本番 seq 379 = daemon が ADR-0095 の namespace で走らせた WU の check、
+   web の close-out）。
+   - **実測した原因は短い読み取り**（環境の欠如ではない）: sandbox 内の probe（python）が WebSocket の応答を `sock.recv(4096)` の 1 回で
+     読み、`targetInfos` を含むか判定していた。高負荷・並走時は frame の header（`b'\x81~\x00\xdf'`）と本体が別の segment で届き、
+     probe は assert で終わる → host は来ない `tcp-probe.ok` を 60 秒待って `sandbox TCP to controller relay failed`。このホストで同じ
+     テストを 6 本並走すると 3 本が 60.1 秒で落ち、probe の例外を記録すると上の header だけを読んでいた。ADR-0095 を模した namespace
+     （`unshare --user --map-current-user --mount`）の中でも単独なら通る。
+   - **直し方**: probe は frame を読み切ってから判定する（header → 拡張長 → 本体を `recv_exact`）。probe の例外は `/session/probe.err` に
+     書き、host はそれを見たら 60 秒を待たずにその内容で失敗する（待ち時間・assertion は弱めない）。
+   - **環境の preflight**（依頼どおり、環境が本当に無いときだけ飛ばす）: テストの始めに、道具（`unshare` / `ip` / `openssl` / `bwrap` /
+     `python3`）・browser・`CARGO_BIN_EXE_*` の有無と、時間制限（20 秒）つきの機能の probe（`unshare --user --map-root-user --net` で
+     テスト自身を `CELERIS_SHARED_CDP_INNER=preflight` で走らせ、loopback を上げ TCP の bind / connect / 1 byte の往復、入れ子の bwrap
+     〈user / pid / net namespace〉）を見る。どれかが無ければ `SKIPPED (environment unavailable, not passed): <理由>` を stderr に出して抜ける。
+     sandbox の印（`CODEX_SANDBOX` や uid_map の形）では判定しない: このホスト自体が LXC の user namespace の中で uid_map は既定の形でなく、
+     ADR-0095 の namespace の中でもテストは動く（印で飛ばすと動く環境で黙って飛ばす）。機能の probe は codex の seccomp
+     （AF_INET の socket の拒否）や user namespace の無い環境で落ちる。
+   - `CELERIS_ISOLATION_TESTS=skip`（従来）→ 飛ばす。`CELERIS_ISOLATION_TESTS=require` → preflight が落ちたら飛ばさずに失敗する。
+     release gate（`scripts/selfdeploy/release.sh`）は `CELERIS_ISOLATION_TESTS` が未設定なら `require` を export し、release では黙って
+     飛ばさない（他の browser テストは従来どおり `skip` だけを見る）。
+
+### 残したもの
+
+- task 01M3WZ1GEPC670GED0TYAXSGDF の救済は運用（昇格後に open な `plan_invalid` の決定 01M3XDDVB8GBMA9KNF7TTGZ7X6 に `replan` で答える）。
+- replay は配送 / レビューの repair WU の行そのものを events から作らない（spec を運ぶ event が無い。従来からの既知の差）。R7-12 は
+  その行に replan が触れないことだけを保証する。

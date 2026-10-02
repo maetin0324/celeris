@@ -440,6 +440,7 @@ async fn admin_endpoints_are_unavailable_without_providers_dir_configured() {
 }
 
 /// ADR-0026 D7: `adapter = "acp"` は `POST /providers` の既知アダプタに入っている。
+/// Qwen を使う ACP 行は cheap だけを持てる（ADR-0132 D3/D5）。
 #[tokio::test]
 async fn create_accepts_the_acp_adapter() {
     let (env, _providers_tmp, dir) = env_with_providers_dir();
@@ -450,7 +451,7 @@ async fn create_accepts_the_acp_adapter() {
         &app,
         post_json_with(
             "/api/v1/providers",
-            &json!({"id": "opencode-qwen", "adapter": "acp", "tiers": ["standard"], "model": "qwen-local/qwen3.8-27b"}),
+            &json!({"id": "opencode-qwen", "adapter": "acp", "tiers": ["cheap"], "model": "qwen-local/qwen3.8-27b"}),
             &[("authorization", &auth)],
         ),
     )

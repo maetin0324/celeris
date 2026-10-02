@@ -839,6 +839,12 @@ fn run_of(event: &Event) -> Option<&str> {
         | Event::ArtifactProduced { run_id, .. }
         | Event::WorkerFinished { run_id, .. }
         | Event::ReviewVerdict { run_id, .. }
+        | Event::ReviewTargetSynced {
+            review_run: run_id, ..
+        }
+        | Event::ReviewTargetAdvanced {
+            review_run: run_id, ..
+        }
         | Event::QuestionRaised { run_id, .. }
         | Event::Delegated { run_id, .. } => Some(run_id.as_str()),
         _ => None,

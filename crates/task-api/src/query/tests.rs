@@ -193,5 +193,35 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 49);
+    assert_eq!(EVENT_TYPES.len(), 51);
+}
+
+#[test]
+fn review_target_event_types_match_their_serde_names() {
+    let repo_id = task_core::RepoId::new();
+    let events = [
+        Event::ReviewTargetSynced {
+            review_run: "review-1".into(),
+            repo_id,
+            target_ref: "refs/heads/main".into(),
+            target_sha: "target".into(),
+            before_sha: "before".into(),
+            reviewed_sha: "reviewed".into(),
+            merge_candidate_sha: "reviewed".into(),
+            attempt: 1,
+        },
+        Event::ReviewTargetAdvanced {
+            review_run: "review-1".into(),
+            repo_id,
+            reviewed_sha: "reviewed".into(),
+            target_sha: "advanced".into(),
+            attempt: 1,
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name));
+    }
 }

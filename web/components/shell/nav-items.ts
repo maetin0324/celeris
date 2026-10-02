@@ -1,0 +1,20 @@
+// ナビの項目（P2-02）。path は現行 gui/ と同じ（S5）。
+export const navItems = [
+  { to: "/", label: "ホーム" },
+  { to: "/inbox", label: "受信箱" },
+  { to: "/tasks", label: "タスク" },
+  { to: "/projects", label: "案件" },
+  { to: "/board", label: "ボード" },
+  { to: "/reports", label: "報告" },
+  { to: "/approvals", label: "承認" },
+  { to: "/artifacts", label: "成果物" },
+  { to: "/graph", label: "依存グラフ" },
+  { to: "/org", label: "組織" },
+  { to: "/knowledge", label: "知識" },
+  { to: "/daemon", label: "daemon" },
+  { to: "/providers", label: "プロバイダ" },
+  { to: "/accounts", label: "アカウント" },
+  { to: "/clusters", label: "クラスタ" },
+  { to: "/releases", label: "リリース" },
+  { to: "/help", label: "ヘルプ" },
+] as const;

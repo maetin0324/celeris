@@ -1,5 +1,6 @@
 //! ADR-0095: 実プロセスで、namespace の中から DB が書けず、兄弟は書けることを確かめる。
 
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -43,6 +44,8 @@ fn guard(f: &Fixture) -> DbGuard {
     DbGuard::new(&f.db)
         .unwrap()
         .with_ssh_shadow_root(Some(f._tmp.path().join("shadow")))
+        // 実 HOME に依存しない（付記 D-a の 3 は専用の試験で HOME を注入して見る）。
+        .with_home(None)
 }
 
 /// `script` を namespace の中の `sh -c` で走らせ、(exit 0 か, stdout+stderr) を返す。
@@ -61,6 +64,186 @@ fn run_guarded(g: &DbGuard, cwd: &Path, script: &str) -> (bool, String) {
 
 fn q(p: &Path) -> String {
     format!("'{}'", p.display())
+}
+
+fn userns_available() -> bool {
+    let available = Command::new("unshare")
+        .args(["-Ur", "true"])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !available {
+        assert_ne!(
+            std::env::var("CELERIS_DB_GUARD_TESTS").as_deref(),
+            Ok("require"),
+            "user namespace is required for db_guard tests"
+        );
+        eprintln!("skip: unprivileged user namespace is unavailable");
+    }
+    available
+}
+
+#[test]
+fn user_systemd_bus_address_is_removed_even_without_a_guard() {
+    let mut cmd = tokio::process::Command::new("true");
+    cmd.env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/test/bus");
+    let cmd = launch(cmd, None);
+    assert!(
+        cmd.as_std()
+            .get_envs()
+            .find(|(name, _)| *name == "DBUS_SESSION_BUS_ADDRESS")
+            .is_some_and(|(_, value)| value.is_none())
+    );
+}
+
+#[test]
+fn user_systemd_bus_is_hidden_from_launched_process() {
+    if !userns_available() {
+        return;
+    }
+    let f = fixture();
+    let runtime = f._tmp.path().join("runtime");
+    std::fs::create_dir_all(runtime.join("systemd")).unwrap();
+    let _bus = UnixListener::bind(runtime.join("bus")).unwrap();
+    let _private = UnixListener::bind(runtime.join("systemd/private")).unwrap();
+    // install（プロセス全体）は使わない: 並行する他の試験の spawn にこの tempdir のガードが掛かってしまう。
+    let g = guard(&f);
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg("test -z \"${DBUS_SESSION_BUS_ADDRESS+x}\" && test ! -S \"/run/user/$(id -u)/bus\" && test ! -S \"$XDG_RUNTIME_DIR/bus\" && test -f \"$XDG_RUNTIME_DIR/bus\" && test -d \"$XDG_RUNTIME_DIR/systemd\" && test -z \"$(ls -A \"$XDG_RUNTIME_DIR/systemd\")\" && test ! -e \"$XDG_RUNTIME_DIR/systemd/private\"")
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/definitely-not-a-bus");
+    let mut cmd = launch_with(cmd, None, Some(&g));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let out = rt.block_on(async { cmd.output().await }).unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        runtime.join("bus").exists(),
+        "parent namespace was modified"
+    );
+    assert!(
+        runtime.join("systemd/private").exists(),
+        "parent namespace was modified"
+    );
+
+    // Keep this an end-to-end check without consulting or invoking the host manager. The
+    // namespace above is backed by a fake runtime containing listening sockets, so success
+    // would prove that the launched process escaped the masked paths.
+    for (program, args) in [
+        ("systemctl", &["--user", "show-environment"][..]),
+        ("systemd-run", &["--user", "--scope", "true"][..]),
+    ] {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args).env("XDG_RUNTIME_DIR", &runtime);
+        let mut cmd = launch_with(cmd, None, Some(&g));
+        let out = rt.block_on(async { cmd.output().await }).unwrap();
+        assert!(
+            !out.status.success(),
+            "{program} --user unexpectedly succeeded in the masked namespace"
+        );
+    }
+}
+
+/// 付記 D-a の 3: `$HOME` の `.config/systemd`・`.local/celeris/releases`・`.config/celeris` は namespace の中で
+/// 読み取り専用（EROFS）になり、外では同じ dir に書ける。HOME は tempdir を注入する（実 HOME に依存しない）。
+#[test]
+fn host_config_read_only_inside_namespace() {
+    if !userns_available() {
+        return;
+    }
+    let f = fixture();
+    let home = f._tmp.path().join("home");
+    let dirs: Vec<PathBuf> = HOST_CONFIG_DIRS.iter().map(|rel| home.join(rel)).collect();
+    for dir in &dirs {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    // `.config` 自体は対象外で、namespace の中でも書ける。
+    let g = guard(&f).with_home(Some(home.clone()));
+    let mut script = String::new();
+    for (i, dir) in dirs.iter().enumerate() {
+        script.push_str(&format!(
+            "if touch {d}/inside 2>err{i}; then echo WRITABLE-{i}; \
+             elif grep -q 'Read-only file system' err{i}; then echo erofs-{i}; \
+             else cat err{i}; fi; ",
+            d = q(dir)
+        ));
+    }
+    script.push_str(&format!(
+        "touch {}/outside-ro && echo config-ok; touch ok && echo ws-ok",
+        q(&home.join(".config"))
+    ));
+    let (ok, out) = run_guarded(&g, &f.ws, &script);
+    assert!(ok, "{out}");
+    for i in 0..dirs.len() {
+        assert!(!out.contains(&format!("WRITABLE-{i}")), "{i} in:\n{out}");
+        assert!(
+            out.contains(&format!("erofs-{i}")),
+            "{i} missing in:\n{out}"
+        );
+    }
+    for good in ["config-ok", "ws-ok"] {
+        assert!(out.contains(good), "{good} missing in:\n{out}");
+    }
+    for dir in &dirs {
+        assert!(!dir.join("inside").exists(), "{}", dir.display());
+        // namespace の外では同じ dir に書ける。
+        std::fs::write(dir.join("outside"), "x").unwrap();
+    }
+}
+
+/// 付記 D-a の 3: 存在しない path には何もしない（spawn は通常どおり）。
+#[test]
+fn host_config_read_only_skips_missing_paths() {
+    let f = fixture();
+    let home = f._tmp.path().join("home");
+    std::fs::create_dir_all(home.join(".config/celeris")).unwrap();
+    let g = guard(&f).with_home(Some(home.clone()));
+    assert_eq!(
+        g.host_config_read_only_paths().unwrap(),
+        vec![std::fs::canonicalize(home.join(".config/celeris")).unwrap()]
+    );
+    assert!(
+        guard(&f)
+            .with_home(Some(f._tmp.path().join("absent-home")))
+            .host_config_read_only_paths()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// 付記 D-a の 3 / D5: 存在を確かめられない（EACCES）なら spawn の準備が失敗する（保護なしで起動しない）。
+#[test]
+fn host_config_read_only_failure_refuses_the_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("skip: root ignores directory permissions");
+        return;
+    }
+    let f = fixture();
+    let home = f._tmp.path().join("home");
+    let config = home.join(".config");
+    std::fs::create_dir_all(config.join("celeris")).unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let g = guard(&f).with_home(Some(home));
+    let mut std_cmd = Command::new("true");
+    let prepared = apply_std(&mut std_cmd, &g);
+    let mut cmd = tokio::process::Command::new("true");
+    apply(&mut cmd, &g);
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(prepared.is_err(), "spawn preparation should fail");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let res = rt.block_on(async { cmd.status().await });
+    assert!(res.is_err(), "spawn should be refused: {res:?}");
 }
 
 #[test]

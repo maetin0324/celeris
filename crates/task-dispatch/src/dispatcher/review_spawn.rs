@@ -2,6 +2,14 @@
 
 use super::*;
 
+struct ReviewSync {
+    repo_id: task_core::RepoId,
+    target_ref: String,
+    target_sha: String,
+    before_sha: String,
+    reviewed_sha: String,
+}
+
 impl Dispatcher {
     /// ADR-0074「F5-fix8 実装時の明確化」: `ready` の Task の、仕事の残っていない計画を最終レビューに出す
     /// （`Trigger::PlanComplete`。run は起こさない）。レビューの主題は完了した WU の要約（`finish_phase_integration`
@@ -140,6 +148,94 @@ impl Dispatcher {
             .as_ref()
             .map(|(p, _, r)| (p.clone(), r.run_id.clone(), r.adapter.id().to_string()));
         let reviewer_run = reviewer.map(|(_, _, r)| r);
+        // The review lock covers the rebase and the checks that consume its result.
+        // A deferred review reaches this point again and reads the then-current target.
+        // Tree children historically commit their remaining run output on completion.
+        // Move that same commit before review so the inspected commit is the one merged
+        // into the parent stage; a failed commit remains dirty and stops in the sync.
+        if task_core::tree::is_tree_child(&task) {
+            let _ = self.commit_child_branch(&task);
+        }
+        let mut synced = Vec::new();
+        let mut sync_guards = Vec::new();
+        // Legacy projectless worktrees have no RepoId for the durable candidate event;
+        // keep their existing review/integration semantics until they are registered.
+        if self.cluster_of(&task).is_none()
+            && !task.repos.is_empty()
+            && let Some(workspaces) = self.task_workspaces_for(&task)
+        {
+            for repo in &workspaces.repos {
+                let Some(worktree) = &repo.worktree else {
+                    continue;
+                };
+                if !worktree.dir.is_dir() {
+                    continue;
+                }
+                let target = if let Some(parent) =
+                    task_core::tree::parent_branch(&task, &self.config.worktree_branch_prefix)
+                {
+                    parent
+                } else {
+                    let configured = match task.repos.iter().find(|r| r.name == repo.name) {
+                        Some(reference) => self
+                            .store
+                            .repo_get(reference.repo_id)?
+                            .and_then(|r| r.default_branch),
+                        None => None,
+                    };
+                    task_ops::changes::default_branch(&repo.source, configured.as_deref())
+                };
+                let target_ref = format!("refs/heads/{target}");
+                let outcome = task_ops::changes::sync_onto_target(&worktree.dir, &target_ref);
+                let (target_sha, before_sha, reviewed_sha) = match outcome {
+                    task_ops::changes::SyncOutcome::UpToDate {
+                        target_sha,
+                        head_sha,
+                    } => (target_sha, head_sha.clone(), head_sha),
+                    task_ops::changes::SyncOutcome::Rebased {
+                        target_sha,
+                        before_sha,
+                        head_sha,
+                    } => (target_sha, before_sha, head_sha),
+                    other => {
+                        self.stop_review_for_target_sync(
+                            task_id,
+                            &run_id,
+                            &repo.name,
+                            &format!("{other:?}"),
+                        )?;
+                        return Ok(true);
+                    }
+                };
+                if crate::integration::rev_parse(&worktree.dir, &target_ref).as_deref()
+                    != Some(target_sha.as_str())
+                {
+                    self.stop_review_for_target_sync(
+                        task_id,
+                        &run_id,
+                        &repo.name,
+                        "target advanced during sync",
+                    )?;
+                    return Ok(true);
+                }
+                sync_guards.push((
+                    worktree.dir.clone(),
+                    format!("refs/heads/{}", worktree.branch),
+                    target_ref.clone(),
+                    target_sha.clone(),
+                    reviewed_sha.clone(),
+                ));
+                if let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) {
+                    synced.push(ReviewSync {
+                        repo_id: reference.repo_id,
+                        target_ref,
+                        target_sha,
+                        before_sha,
+                        reviewed_sha,
+                    });
+                }
+            }
+        }
         if let Some(run) = &reviewer_run {
             task_ops::delivery::begin(
                 self.store.as_ref(),
@@ -150,6 +246,47 @@ impl Dispatcher {
                 &run.run_id,
             )
             .map_err(DispatchError::from)?;
+        }
+        for snapshot in &synced {
+            if let Some(old) = self.store.delivery_get(task_id)?
+                && old.repo_id == snapshot.repo_id
+                && old.review_run == reviewer_run.as_ref().map_or("", |r| r.run_id.as_str())
+            {
+                if old.base != snapshot.target_sha || old.head != snapshot.reviewed_sha {
+                    self.stop_review_for_target_sync(
+                        task_id,
+                        &run_id,
+                        &old.repo,
+                        "delivery base/head differ from reviewed snapshot",
+                    )?;
+                    return Ok(true);
+                }
+                let mut next = old.clone();
+                next.target_sha = Some(snapshot.target_sha.clone());
+                next.reviewed_sha = Some(snapshot.reviewed_sha.clone());
+                next.merge_candidate_sha = Some(snapshot.reviewed_sha.clone());
+                if !self.store.delivery_save(Some(&old), &next)? {
+                    return Err(
+                        StoreError::Invalid("delivery review changed concurrently".into()).into(),
+                    );
+                }
+            }
+            let attempt = self.store.events_for(task_id)?.iter().filter(|(_, event)| {
+                matches!(event, Event::ReviewTargetSynced { repo_id, .. } if *repo_id == snapshot.repo_id)
+            }).count() as u32 + 1;
+            self.store.append_event(
+                task_id,
+                &Event::ReviewTargetSynced {
+                    review_run: reviewer_run.as_ref().map_or(&run_id, |r| &r.run_id).clone(),
+                    repo_id: snapshot.repo_id,
+                    target_ref: snapshot.target_ref.clone(),
+                    target_sha: snapshot.target_sha.clone(),
+                    before_sha: snapshot.before_sha.clone(),
+                    reviewed_sha: snapshot.reviewed_sha.clone(),
+                    merge_candidate_sha: snapshot.reviewed_sha.clone(),
+                    attempt,
+                },
+            )?;
         }
 
         // ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run は `plan.json` ではなく
@@ -307,7 +444,7 @@ impl Dispatcher {
                 // ADR-0046 D4: `mode = research` の暗黙の条件。
                 research,
             };
-            let outcome = review_task(
+            let mut outcome = review_task(
                 &task,
                 ws.as_ref(),
                 &dir,
@@ -317,6 +454,25 @@ impl Dispatcher {
                 extras,
             )
             .await;
+            // A command check or reviewer may have changed the branch while the lock was
+            // held. Never persist a passing verdict for a different commit or target.
+            for (worktree, branch, target, target_sha, reviewed_sha) in &sync_guards {
+                let head = crate::integration::rev_parse(worktree, "HEAD");
+                let branch_head = crate::integration::rev_parse(worktree, branch);
+                let target_head = crate::integration::rev_parse(worktree, target);
+                if head.as_deref() != Some(reviewed_sha.as_str())
+                    || branch_head != head
+                    || target_head.as_deref() != Some(target_sha.as_str())
+                {
+                    outcome.verdicts.push(crate::review::Verdict {
+                        criterion_idx: task.acceptance.len(),
+                        pass: false,
+                        reason: format!("review snapshot changed: target={target} expected={target_sha} HEAD expected={reviewed_sha}"),
+                        repair_hint: None,
+                    });
+                    break;
+                }
+            }
             // The entry owns the lock through verdict persistence. Release this
             // task's copy before sending completion so it cannot outlive that entry.
             drop(_review_lock);
@@ -342,6 +498,23 @@ impl Dispatcher {
             },
         );
         Ok(true)
+    }
+
+    fn stop_review_for_target_sync(
+        &self,
+        task_id: TaskId,
+        run_id: &str,
+        repo: &str,
+        reason: &str,
+    ) -> Result<(), DispatchError> {
+        let message = format!("review target sync stopped for {repo}: {reason}");
+        tracing::warn!(%task_id, %message);
+        self.store.apply_transition_with_events(
+            task_id,
+            Trigger::ReviewFail,
+            vec![Event::worker_progress(run_id.to_owned(), message)],
+        )?;
+        Ok(())
     }
 
     /// `Reviewer` run のアダプタ／プロバイダを選ぶ（ADR-0007 D5 1.）。並列度の枠は実行中 run と共有する。

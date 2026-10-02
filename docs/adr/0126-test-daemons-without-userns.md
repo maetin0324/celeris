@@ -235,3 +235,76 @@ guard そのものを外しており（A3 の免除経路を検証していな�
 
 修正後は、1〜3 のいずれも「worker run の中で本番 DB・本番 token・印の path に当たる daemon は起動できない」こと（1）と
 「試験用 DB の daemon は guard が有効なまま免除される」こと（3）を起動試験・e2e 実行で固定する。
+
+## 付記2（再提出の修正）
+
+再提出の審査（2026-10-02）で、付記 1 の後も次の 2 点が残っていることが分かった。この付記はその修正方針を記す
+（実装は葉 guard-fix-impl が別ブランチで行う。本付記はコードを変えない）。
+
+### 本文・付記 1 との関係（どれを上書きするか）
+
+- **A1〜A2・付記 1 の 1** はそのまま有効（守る対象 P の作り方、本番に当たるかの判定、worker run 内の本番一致は probe せず拒否）。
+  下の 1 はその拒否を `worker_read_only = false` でも効かせる拡張で、付記 1 の 1 と矛盾しない。
+- **A4 の最後の項**（「`[db] worker_read_only = false` の opt-out は従来のまま」）を上書きする: opt-out は worker run の
+  **外でだけ**効く（下の 1）。
+- **A3-2・A3 末尾の段落**（「worker run の外では試験用 DB でも今まで通り probe する」）と、**却下した案の 4 つ目**
+  （「免除の判定に path だけを使い、worker run の中かを見ない」）を上書きする: 本番に当たらない daemon は印の有無に
+  関わらず免除する（下の 2）。A3-1（拒否に当たらない）と、P が決まらないとき免除しない（A1 末尾）は残る。
+- **付記 1 の 1 の後半**（「worker run の外で `RefuseProduction` になった場合は従来の probe 経路を保つ」）と、
+  `worker_db_guard_still_probes_production_db_outside_worker_run` はそのまま有効（下の 2 の「本番に当たる daemon は従来どおり
+  probe」と同じこと）。B・C・付記 1 の 2〜3 は変えない。
+
+### 1. worker run の中では opt-out（`worker_read_only = false`）でも本番一致を拒否する
+
+現状の `refuse_production_db_in_worker_run`（DB を開く前）と `install_worker_db_guard`（DB を作った後）
+（`crates/celeris/src/daemon/bootstrap.rs`）は、どちらも先頭で `config.db.worker_read_only` が false なら判定前に
+`return` している。このため worker run の中で `[db] worker_read_only = false` を書いた config を作り、本番 DB・本番 token を
+指して daemon を起こせば、A2 の拒否も付記 1 の 1 の即時拒否も通らずに起動できる（A4 の「worker run から本番 DB に繋がる
+daemon は起動できない」が破れる）。
+
+修正方針:
+
+- worker run の印 `CELERIS_WORKER_DB_GUARD` がある（`Absent` でない。読み取り専用で裏付けられたかは問わない）中で、
+  daemon の DB path（DB ファイル・DB のディレクトリ・`state_dir`）または API token（`token_file` の path・inode・内容）が
+  本番（`worker_db_guard_protected_set` が作る P）に当たるなら、**`worker_read_only` の値・probe の成否に関わらず、DB を開く
+  前に**起動を拒否する（`DaemonError::DbGuard`、非 0 終了、DB ファイルを作らない。fail closed）。判定は A1-3・A2 と同じく
+  symlink・相対 path・`..` を canonicalize（DB がまだ無ければ存在する祖先まで解く lenient 解決）し、inode でも比べる。
+  path が解けない・P が決まらない（本番 config が読めない）ときも拒否側に倒す。
+- `worker_read_only` の検査は、この判定の**後**に移す。opt-out（`worker_read_only = false` → guard を入れずに起動）は
+  印が無い（worker run の外）ときだけ効く。印がある中で本番に当たらない daemon は、opt-out があれば従来どおり guard なしで
+  起動してよい（試験用 DB しか触らないので守るものが無い）。
+- 固定する試験:
+  - 起動試験 `worker_db_guard_refuse_with_opt_out`（`crates/celeris/tests/worker_db_guard_refuse.rs`）: `worker_read_only = false`
+    の config・印 `ReadOnly`・印の配下の DB で celeris を起動し、非 0 終了と DB 不作成を確かめる。
+  - 判定部分の unit 試験（`crates/celeris/src/daemon/bootstrap_worker_db_guard_tests.rs`）: opt-out でも印があり本番一致なら
+    `Refuse`、印が無ければ opt-out が効く、の両方。
+
+### 2. 本番に当たらない daemon は印の有無に関わらず Exempt（userns probe をしない）
+
+実例: worker sandbox の中で `cargo test -p celeris --test instance_handoff`（`crates/celeris/tests/instance_handoff.rs`）を
+走らせると、試験が起こす daemon は試験ごとの一時 DB を使うのに、試験が印 `CELERIS_WORKER_DB_GUARD` を子に渡さないため
+A3-2 を満たさず `RequireUserns` → probe になり、`unshare -U` が `uid_map: Operation not permitted` で落ちて（ADR-0095 D5 の
+fail-closed で）daemon が起動しなかった。A3 の「worker run の外では試験用 DB でも probe」が、印を運ばない試験すべてを
+sandbox で落とす。
+
+修正方針:
+
+- DB path・token が本番（P）に当たらず、P が決まっている（A1 末尾の「決められない」に当たらない）daemon は、印の有無・
+  裏付けの成否に関わらず `Exempt`（probe をせず guard を入れない。A3 と同じ `tracing::warn!`）。
+- 本番に当たる daemon は**従来どおり**: worker run の外なら userns を probe し、作れなければ起動しない（D5・付記 1 の 1 の
+  後半）。worker run の中なら上の 1 と付記 1 の 1 で probe せず拒否。P が決まらないときも従来どおり probe（fail closed）。
+  本番 DB・本番 token を守る強さは弱めない。
+- 固定する unit 試験（`bootstrap_worker_db_guard_tests.rs`。どちらも userns・実 mount に依らない）:
+  - `worker_guard_exempt_test_db_without_marker`（印なし・一時 DB・試験 token → `Exempt`、probe が呼ばれない）
+  - `worker_guard_probe_production_without_marker`（印なし・本番 config の DB → `Probe`、probe が呼ばれる）
+- 既存の `worker_db_guard_requires_userns_for_test_db_outside_worker_run`（A5）は期待を `Exempt` に改める（この付記が
+  A3 末尾を上書きするため）。付記 1 の `worker_db_guard_still_probes_production_db_outside_worker_run` は変えない。
+- 確認: worker sandbox の中で `cargo test -p celeris --test instance_handoff` と `cargo test -p e2e --test api_scenarios` が通る。
+
+### 残る穴（受け入れる、付記 2 で増えるもの）
+
+却下した案 4 つ目の懸念（`--config` を既定以外に置いた本番 daemon が P から漏れる）は、worker run の外ではこの付記で
+現実になる: 既定の `~/.config/celeris/config.toml` を使わずに本番 DB を指す daemon は P に入らず免除され、guard が入らない。
+受け入れる理由: selfdeploy の本番 unit（`celeris@<sha12>`）と verify モードは既定の config を使い P に当たるので従来どおり
+probe される。既定以外に本番 config を置く運用はしない（置くなら、その path を既定の config から参照させて P に入れる）。
+worker run の中では、印の path が P に入る（A3-3）ので、印の配下を指す daemon は上の 1 で拒否される。

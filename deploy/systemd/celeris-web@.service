@@ -2,8 +2,9 @@
 # celeris-web（ADR-0096 D1/D2、ADR-0081）。`%i` は リリースの sha12。gui/ と並行に動かす web/ の gateway。
 # `~/.local/celeris/releases/<sha12>/web/app/`（release.sh の web 段が展開して prod install 済み）から動く。
 # インストール: scripts/selfdeploy/install-units.sh（置くだけ。有効化は人: docs/web/parallel-operation.md）。
-# promote.sh はこの unit を起こさない（H7: 昇格は gui/ だけ）。
-# web は celeris@%i.service を起動しない（ADR-0040 付記: 2026-10-01 に未昇格 release が本番の active を奪い migration した事故を受け、起動は昇格済み daemon への依存にしない）。
+# promote.sh は昇格の後、旧 release の celeris-web@ が active のときだけ、新 release の web.ok=true を確かめて
+# この unit を新 sha で起こし旧を止める（scripts/selfdeploy/web-follow.sh。ADR-0081 / web ADR-W3 付記 2026-10-02）。
+# celeris@ を Wants にしない（web の起動で daemon の handoff を起こさない）。After= は順序だけ。
 Description=celeris-web (release %i)
 After=network.target celeris@%i.service
 

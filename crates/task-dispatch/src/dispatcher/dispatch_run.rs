@@ -184,6 +184,26 @@ impl Dispatcher {
             }
             self.infra_backoff.remove(&task.id);
         }
+        // ADR-0130 D3: 同じ repo で走っている run と expected write-set が強く重なれば、起動を次 tick に回す
+        // （lease・遷移・attempts の前。見送りは `Ok(false)` だけ）。planner run は書き込みを予約しない。
+        let run_key = RunKey {
+            task: task.id,
+            work_unit: current_wu
+                .as_ref()
+                .filter(|w| w.phase.is_some())
+                .map(|w| w.id.clone()),
+        };
+        let write_reservation = if is_planner_dispatch {
+            None
+        } else {
+            self.write_reservation_for(&task, current_wu.as_ref())?
+        };
+        if let Some(reservation) = &write_reservation
+            && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
+        {
+            self.note_write_set_hold(&run_key, &blocker);
+            return Ok(false);
+        }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
         // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を
@@ -803,11 +823,13 @@ impl Dispatcher {
             extras,
             container,
         );
+        let key = RunKey {
+            task: task.id,
+            work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
+        };
+        self.reserve_write_set(key.clone(), write_reservation);
         self.running.insert(
-            RunKey {
-                task: task.id,
-                work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
-            },
+            key,
             RunEntry {
                 run_id,
                 provider: provider_id,

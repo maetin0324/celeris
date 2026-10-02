@@ -123,6 +123,7 @@ use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
 mod worker_finish;
 mod worker_task;
 mod workspaces;
+mod write_set_gate;
 
 pub use cluster::{
     ClusterCommandProbe, ClusterConnector, ClusterForwardSpec, ClusterLivenessProbe,
@@ -1069,6 +1070,10 @@ pub struct Dispatcher {
     /// 打ち切りは `handle.abort()`（= 子プロセスへの SIGKILL）で、**孫プロセスは即死しない**ので、
     /// 同じ tick で同じ worktree に次の run を入れると 2 つの書き手が重なる（Phase 53 の監査で発見）。
     just_aborted: std::collections::HashSet<TaskId>,
+    /// ADR-0130 D3: 走っている run の expected write-set の予約（run を起こした時点の hint）。
+    write_reservations: HashMap<RunKey, write_set_gate::WriteReservation>,
+    /// ADR-0130 D3: write-set の重なりで見送った候補の待機記録（公平性）。
+    write_set_waits: HashMap<RunKey, write_set_gate::WriteSetWait>,
     /// ADR-0018 D2（監査 4-1）: この tick でクラスタの多重接続が無い／cooldown 中のため待っている ready タスク。「人のログイン待ち」で
     /// 経路なし（`unroutable`）とは別物。`is_idle` の待ち対象から外すだけで、スナップショットには出さない（受信箱の (d) が知らせる）。
     cluster_waiting: std::collections::HashSet<TaskId>,
@@ -1324,6 +1329,8 @@ impl Dispatcher {
             warned_unroutable: std::collections::HashSet::new(),
             warned_cluster_tool: std::collections::HashSet::new(),
             just_aborted: std::collections::HashSet::new(),
+            write_reservations: HashMap::new(),
+            write_set_waits: HashMap::new(),
             unroutable: std::collections::HashSet::new(),
             cluster_waiting: std::collections::HashSet::new(),
             awaiting_human: std::collections::HashSet::new(),
@@ -1976,6 +1983,9 @@ impl Dispatcher {
         let ready_started = Instant::now();
         let candidates = self.store.ready_tasks(window)?;
         log_slow_step("ready_tasks", ready_started);
+        // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
+        self.prune_write_set_state();
+        let candidates = self.order_write_set_starved_first(candidates);
         let now = self.monotonic_now();
         let mut dispatched = 0;
         // この tick で並列度の上限に達していると分かったプロバイダ（tick 内では空きが増えないので共有する）。

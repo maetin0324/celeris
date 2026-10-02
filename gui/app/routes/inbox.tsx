@@ -641,6 +641,20 @@ function AttentionRow({
         </Link>
       </p>
       <p className="mt-1 text-fg">{attentionText(item)}</p>
+      {item.type === "delivery_skipped" && (
+        <div className="mt-2 space-y-1 border-t border-danger-border/60 pt-2 text-fg">
+          <p>{item.detail}</p>
+          <p className="text-muted">理由コード: {item.reason}</p>
+          {item.head && <p className="font-mono text-xs">HEAD: {item.head}</p>}
+          <Link
+            to={`/tasks/${item.task.id}`}
+            className="inline-flex min-h-11 items-center font-medium text-primary hover:underline"
+            data-testid="attention-delivery-skipped-link"
+          >
+            タスクの詳細を開く
+          </Link>
+        </div>
+      )}
       {item.type === "phase_checkpoint" && (
         <p className="mt-2">
           <Link
@@ -740,6 +754,8 @@ function attentionText(item: AttentionItem): string {
     // celeris ADR-0079 D8（Phase R4b）: 独立の節（`PlanApprovalCard`）に出すのでここには来ない。
     case "plan_approval":
       return `計画の承認待ち: ${item.summary}`;
+    case "delivery_skipped":
+      return item.summary;
     default:
       return "";
   }

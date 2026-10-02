@@ -180,6 +180,17 @@ async fn inject_h3(
     }.await
 }
 
+/// ADR-0116 D5: isolated browser の runtime を誰が持つか。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum BrowserRuntimeKind {
+    /// 従来どおり daemon が bwrap / sandboxd / Chrome と CDP pipe を持つ（same-uid / subuid）。
+    #[default]
+    Daemon,
+    /// 専用 host user の launcher（ADR-0115）に Unix socket で頼む。daemon は CDP pipe も
+    /// 機密 state も持たず、receipt と非機密の観測だけを受ける。不達は fail closed。
+    Launcher { socket: PathBuf },
+}
+
 #[derive(Clone)]
 pub struct IsolatedBrowserConfig {
     pub resolver: Option<IpAddr>,
@@ -189,6 +200,8 @@ pub struct IsolatedBrowserConfig {
     pub egress: PathBuf,
     /// ADR-0108 D5: daemon が 1 つ作る稼働中 session の registry（API と共有）。
     pub live_sessions: Option<std::sync::Arc<task_core::browser_isolation::LiveSessions>>,
+    /// ADR-0116 D5: 既定は `Daemon`（従来経路）。
+    pub runtime: BrowserRuntimeKind,
 }
 
 static ISOLATED: OnceLock<IsolatedBrowserConfig> = OnceLock::new();
@@ -871,12 +884,17 @@ fn route_existing_backend(
 fn isolated_runtime_ready(
     config: Option<&IsolatedBrowserConfig>,
 ) -> Result<&IsolatedBrowserConfig, AdapterError> {
+    // launcher 経路の bwrap / sandboxd / egress / resolver は launcher 側の固定設定にあり、
+    // daemon からは確かめられない。到達性は接続時に確かめ、不達は fail closed（ADR-0116 D5）。
     config
-        .filter(|cfg| {
-            cfg.resolver.is_some()
-                && cfg.bwrap.is_file()
-                && cfg.sandboxd.is_file()
-                && cfg.egress.is_file()
+        .filter(|cfg| match &cfg.runtime {
+            BrowserRuntimeKind::Daemon => {
+                cfg.resolver.is_some()
+                    && cfg.bwrap.is_file()
+                    && cfg.sandboxd.is_file()
+                    && cfg.egress.is_file()
+            }
+            BrowserRuntimeKind::Launcher { .. } => true,
         })
         .ok_or_else(|| AdapterError::Other("isolated_runtime_unavailable".into()))
 }
@@ -1025,6 +1043,9 @@ async fn run_with_executable_attempt(
     .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
     let _routing = route_existing_backend(adapter.id(), &policy, record_path)?;
     let isolation = isolated_runtime_ready(ISOLATED.get())?;
+    if let BrowserRuntimeKind::Launcher { socket } = &isolation.runtime {
+        return launcher_run::run(adapter, req, run_id, limits, sink, socket, &policy).await;
+    }
     let waits = sink
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
@@ -1224,6 +1245,7 @@ async fn run_with_executable_attempt(
     ];
     ro_dirs.extend(browser_dirs);
     let spec = crate::browser_runtime::RuntimeSpec {
+        userns: crate::browser_runtime::UsernsMode::Unshare,
         bwrap: isolation.bwrap.clone(),
         session_id: session.clone(),
         session_dir: runtime.clone(),
@@ -1575,6 +1597,30 @@ async fn run_with_executable_attempt(
     drop(broker_session);
     supervisor.stop();
     outcome
+}
+
+#[path = "browser_launcher_run.rs"]
+mod launcher_run;
+
+/// launcher の観測（`SessionFacts`）を daemon 側と同じ判定で `verify_isolation` に掛ける（ADR-0115 の実証用）。
+/// 観測が fail closed で弾かれた（daemon の ID が map に現れる・owner が daemon・owner 不明）なら `None`。
+pub fn verify_launcher_observation(
+    session_id: &str,
+    facts: &crate::browser_launcher::SessionFacts,
+    launcher_attested: bool,
+) -> Option<
+    Result<
+        task_core::browser_isolation::IsolationAttestation,
+        Vec<task_core::browser_isolation::IsolationViolation>,
+    >,
+> {
+    launcher_run::runtime_facts(
+        session_id,
+        &launcher_run::DaemonIds::current(),
+        facts,
+        launcher_attested,
+    )
+    .map(|f| task_core::browser_isolation::verify_isolation(&f))
 }
 
 #[cfg(test)]

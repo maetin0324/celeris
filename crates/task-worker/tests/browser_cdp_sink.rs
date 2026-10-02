@@ -239,6 +239,7 @@ fn inner() {
     );
     argv.insert(1, browser.clone().into_os_string());
     let spec = RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"),
         session_id: "cdp-sink".into(),
         session_dir: session.path().to_path_buf(),

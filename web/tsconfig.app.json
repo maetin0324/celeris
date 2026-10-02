@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "main.tsx",
+    "routeTree.gen.ts",
+    "routes/**/*",
+    "features/**/*",
+    "components/**/*",
+    "api/**/*",
+    "lib/**/*",
+    "e2e/parity/realtime.spec.ts",
+    "e2e/parity/console.spec.ts",
+    "e2e/parity/latency-gate.spec.ts",
+    "e2e/support/gateway.ts",
+    "e2e/support/latency-results.ts",
+    "e2e/support/node-event-source.ts"
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "types": ["vite/client"],
+    "target": "ES2023",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "resolveJsonModule": true
+  }
+}

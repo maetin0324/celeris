@@ -32,6 +32,7 @@ use commands::rereview::{self, RereviewArgs};
 use commands::retry::{self, RetryArgs};
 use commands::routing::{self as routing_cmd, RoutingCommand};
 use commands::scratch::{self as scratch_cmd, ScratchCommand};
+use commands::skills::{self as skills_cmd, SkillsCommand};
 use commands::worker::{self, WorkerCommand};
 use commands::workspace::{self, WorkspaceCommand};
 use error::CliError;
@@ -102,6 +103,11 @@ enum Command {
     Knowledge {
         #[command(subcommand)]
         command: KnowledgeCommand,
+    },
+    /// ADR-0122 D1: repo に写した skill を KB へ取り込む（`skills import <dir>`）。**DB を開かない**。
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
     },
     /// ADR-0056 D1（Phase 78）: MCP クライアントの発行・一覧・失効（`client`）、stdio 橋（`stdio`）。
     /// `stdio` 以外は DB を直接開く。
@@ -239,6 +245,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         // `main` が先に処理する（DB を開かない場合があるため）。
         Command::Knowledge { .. } => unreachable!("handled before the store is opened"),
         Command::Mcp { .. } => unreachable!("handled before the store is opened"),
+        Command::Skills { .. } => unreachable!("handled before the store is opened"),
         Command::Db { .. } => unreachable!("handled before the store is opened"),
         Command::Worker { command } => match command {
             WorkerCommand::Run(args) => worker::run_run(store, args),
@@ -341,6 +348,16 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    // ADR-0122 D1: `skills import` も KB だけを読み書きする（DB を開かない）。
+    if let Command::Skills { command } = cli.command {
+        return match skills_cmd::run(command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         };

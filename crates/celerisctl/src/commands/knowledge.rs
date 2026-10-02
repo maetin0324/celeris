@@ -130,7 +130,7 @@ pub struct RecordArgs {
 }
 
 /// ADR-0047 D3 の根の決め方。設定ファイルは**読めたら使う**（無くてもエラーにしない）。
-fn root_of(args: &RootArgs) -> PathBuf {
+pub(crate) fn root_of(args: &RootArgs) -> PathBuf {
     let configured = configured_root(args.config.as_deref());
     ops::resolve_root(args.root.as_deref(), configured.as_deref())
 }

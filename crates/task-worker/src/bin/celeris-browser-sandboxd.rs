@@ -7,6 +7,8 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use nix::libc;
 use task_worker::browser_relay::{
@@ -16,6 +18,44 @@ use task_worker::browser_shared_cdp::RELAY_PORT;
 
 /// listen 失敗・channel 不正（browser を起動しない）。
 const EXIT_SETUP: u8 = 70;
+
+// Chromium diagnostics may contain URLs, profile contents or credentials.
+// Only fixed categories cross the launcher journal boundary.
+fn chrome_stderr_category(line: &str) -> Option<&'static str> {
+    if line.contains("ProcessSingleton") || line.contains("profile is in use") {
+        Some("profile-lock")
+    } else if line.contains("Permission denied") || line.contains("Operation not permitted") {
+        Some("permission-denied")
+    } else if line.contains("ERROR:") || line.contains("FATAL:") {
+        Some("other-startup-error")
+    } else {
+        None
+    }
+}
+
+fn report_chrome_stderr(mut stderr: impl Read) {
+    let mut chunk = [0u8; 2048];
+    let mut line = Vec::new();
+    let mut reported = 0;
+    while let Ok(n) = stderr.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        for &byte in &chunk[..n] {
+            if byte == b'\n' {
+                if reported < 4
+                    && let Some(category) = chrome_stderr_category(&String::from_utf8_lossy(&line))
+                {
+                    eprintln!("sandboxd: Chrome stderr category={category}");
+                    reported += 1;
+                }
+                line.clear();
+            } else if line.len() < 2048 {
+                line.push(byte);
+            }
+        }
+    }
+}
 
 fn pump(mut from: impl Read, mut to: impl Write) {
     let mut buf = [0u8; 16384];
@@ -120,9 +160,7 @@ fn main() -> ExitCode {
         #[cfg(feature = "h3-e2e-insecure-cert")]
         command.arg("--ignore-certificate-errors");
         command.arg("about:blank");
-        // Browser diagnostics can contain URLs, profile data, or credentials.
-        // Report only its exit status below.
-        command.stderr(std::process::Stdio::null());
+        command.stderr(std::process::Stdio::piped());
         // SAFETY: fcntl is async-signal-safe and only changes inherited CDP fds.
         unsafe {
             command.pre_exec(|| {
@@ -146,13 +184,25 @@ fn main() -> ExitCode {
             "sandboxd: Chrome started pid={} flags=remote-debugging-pipe",
             browser.id()
         );
+        let (diagnostics_done, diagnostics_rx) = mpsc::channel();
+        if let Some(stderr) = browser.stderr.take() {
+            std::thread::spawn(move || {
+                report_chrome_stderr(stderr);
+                let _ = diagnostics_done.send(());
+            });
+        }
         std::thread::spawn(move || {
             match browser.wait() {
-                Ok(status) => eprintln!(
-                    "sandboxd: Chrome exited code={:?} signal={:?}",
-                    status.code(),
-                    std::os::unix::process::ExitStatusExt::signal(&status)
-                ),
+                Ok(status) => {
+                    // Give the bounded diagnostic reader time to drain an
+                    // immediately exiting browser before sandboxd exits.
+                    let _ = diagnostics_rx.recv_timeout(Duration::from_millis(200));
+                    eprintln!(
+                        "sandboxd: Chrome exited code={:?} signal={:?}",
+                        status.code(),
+                        std::os::unix::process::ExitStatusExt::signal(&status)
+                    );
+                }
                 Err(e) => eprintln!("sandboxd: Chrome wait failed errno={:?}", e.raw_os_error()),
             }
             std::process::exit(i32::from(EXIT_SETUP));
@@ -204,4 +254,22 @@ fn main() -> ExitCode {
     }
     // channel が閉じた = controller が居ない。出口の無い browser を残さない。
     ExitCode::from(EXIT_SETUP)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chrome_stderr_category;
+
+    #[test]
+    fn chrome_diagnostics_expose_only_fixed_categories() {
+        assert_eq!(
+            chrome_stderr_category("Failed to create a ProcessSingleton for /secret/profile"),
+            Some("profile-lock")
+        );
+        assert_eq!(
+            chrome_stderr_category("/secret/path: Permission denied"),
+            Some("permission-denied")
+        );
+        assert_eq!(chrome_stderr_category("https://secret.example"), None);
+    }
 }

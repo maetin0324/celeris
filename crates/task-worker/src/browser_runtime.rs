@@ -215,6 +215,11 @@ fn chrome_lifecycle_diagnostic(line: &str) -> Option<String> {
     {
         return Some(format!("Chrome exited code={code} signal={signal}"));
     }
+    if let Some(category) = line.strip_prefix("sandboxd: Chrome stderr category=")
+        && ["profile-lock", "permission-denied", "other-startup-error"].contains(&category)
+    {
+        return Some(format!("Chrome stderr category={category}"));
+    }
     None
 }
 
@@ -246,6 +251,11 @@ mod startup_diagnostics_tests {
             chrome_lifecycle_diagnostic("sandboxd: Chrome exited code=Some(70) signal=None"),
             Some("Chrome exited code=Some(70) signal=None".into())
         );
+        assert_eq!(
+            chrome_lifecycle_diagnostic("sandboxd: Chrome stderr category=profile-lock"),
+            Some("Chrome stderr category=profile-lock".into())
+        );
+        assert!(chrome_lifecycle_diagnostic("sandboxd: Chrome stderr category=/secret").is_none());
         assert!(chrome_lifecycle_diagnostic("sandboxd: Chrome started pid=1 secret=abc").is_none());
     }
 }
@@ -353,6 +363,28 @@ mod userns_args_tests {
     use super::*;
 
     #[test]
+    fn launcher_tmp_is_writable_by_chrome_subuid() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let spec = RuntimeSpec {
+            bwrap: "/usr/bin/bwrap".into(),
+            userns: UsernsMode::Fd(11),
+            session_id: "test".into(),
+            session_dir: dir.path().into(),
+            ro_dirs: Vec::new(),
+            argv: vec!["/usr/bin/true".into()],
+            cdp_pipe: false,
+            egress: None,
+        };
+        prepare_session_tmp(&spec).unwrap();
+        let mode = std::fs::metadata(dir.path().join("tmp"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o1777);
+    }
+
+    #[test]
     fn external_userns_binds_session_from_private_mount() {
         let mut spec = RuntimeSpec {
             bwrap: "/usr/bin/bwrap".into(),
@@ -411,6 +443,20 @@ fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
+fn prepare_session_tmp(spec: &RuntimeSpec) -> std::io::Result<()> {
+    let tmp = spec.session_dir.join("tmp");
+    std::fs::create_dir_all(&tmp)?;
+    if matches!(spec.userns, UsernsMode::Fd(_)) {
+        // The launcher (host UID B) creates this directory, while Chrome
+        // runs as host subuid S. Chromium's ProcessSingleton creates its
+        // socket under TMPDIR; a default 0755 directory makes that fail
+        // with PROFILE_IN_USE (exit 21). The session mount is private.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o1777))?;
+    }
+    Ok(())
+}
+
 impl IsolatedRuntime {
     pub fn launch(spec: &RuntimeSpec) -> Result<Self, RuntimeError> {
         Self::launch_with(spec, true)
@@ -419,7 +465,7 @@ impl IsolatedRuntime {
     /// `arm_parent_death` が false なら bwrap に `PR_SET_PDEATHSIG` を掛けない。ADR-0108 D2 の
     /// 「発火を取りこぼした」場合（prctl 前の競合）を実プロセスで再現する試験のためだけに使う。
     pub fn launch_with(spec: &RuntimeSpec, arm_parent_death: bool) -> Result<Self, RuntimeError> {
-        std::fs::create_dir_all(spec.session_dir.join("tmp"))?;
+        prepare_session_tmp(spec)?;
         let (info_r, info_w) = pipe()?;
         let (to_browser_r, to_browser_w) = pipe()?;
         let (from_browser_r, from_browser_w) = pipe()?;

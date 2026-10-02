@@ -316,6 +316,66 @@ fn proc_state(pid: i32) -> Option<String> {
     rest.split_whitespace().next().map(str::to_owned)
 }
 
+fn proc_ppid(pid: i32) -> Option<i32> {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("PPid:")?.trim().parse().ok())
+}
+
+fn restore_sigchld_reaping() {
+    // The invoking shell may have ignored or blocked SIGCHLD. In that case Linux
+    // auto-reaps children, so neither waitpid nor the stopped-reaper proof works.
+    // SAFETY: SIGCHLD disposition and mask belong to this test/helper process.
+    unsafe {
+        assert_ne!(libc::signal(libc::SIGCHLD, libc::SIG_DFL), libc::SIG_ERR);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        assert_eq!(libc::sigemptyset(&raw mut set), 0);
+        assert_eq!(libc::sigaddset(&raw mut set, libc::SIGCHLD), 0);
+        assert_eq!(
+            libc::sigprocmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
+            0
+        );
+    }
+}
+
+#[test]
+fn ignored_sigchld_still_keeps_unreaped_child_after_reset() {
+    let status = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "trap '' CHLD; exec \"$1\" --exact helper_sigchld_probe --ignored --nocapture",
+            "sh",
+        ])
+        .arg(std::env::current_exe().unwrap())
+        .env("CELERIS_SIGCHLD_PROBE", "1")
+        .status()
+        .unwrap();
+    assert!(status.success(), "SIGCHLD reset probe: {status}");
+}
+
+#[test]
+#[ignore = "helper process for ignored_sigchld_still_keeps_unreaped_child_after_reset"]
+fn helper_sigchld_probe() {
+    if std::env::var_os("CELERIS_SIGCHLD_PROBE").is_none() {
+        return;
+    }
+    restore_sigchld_reaping();
+    let mut child = Command::new("/bin/true").spawn().unwrap();
+    let pid = child.id() as i32;
+    let deadline = Instant::now() + GUARD;
+    while proc_state(pid).as_deref() != Some("Z") {
+        assert!(
+            Instant::now() < deadline,
+            "child was auto-reaped: {}",
+            process_diagnostics(pid)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(proc_ppid(pid), Some(std::process::id() as i32));
+    assert!(child.wait().unwrap().success());
+}
+
 /// `p` が `END` で閉じるまで待つ。helper（`watch`）が先に終われば、その旨で失敗する。
 fn wait_marker(p: &Path, watch: &mut std::process::Child) -> String {
     let deadline = Instant::now() + GUARD;
@@ -372,6 +432,7 @@ fn controller_kill_leaves_no_runtime_processes() {
     if skip() {
         return;
     }
+    restore_sigchld_reaping();
     let dir = tempfile::tempdir().unwrap();
     let reaper = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "helper_reaper", "--ignored", "--nocapture"])
@@ -430,6 +491,15 @@ fn controller_kill_leaves_no_runtime_processes() {
 
     // (2) subreaper を止めた状態で controller を殺す。
     signal(reaper_pid, libc::SIGSTOP);
+    let deadline = Instant::now() + GUARD;
+    while !matches!(proc_state(reaper_pid).as_deref(), Some("T" | "t")) {
+        assert!(
+            Instant::now() < deadline,
+            "subreaper did not stop: {}",
+            process_diagnostics(reaper_pid)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     signal(ctl, libc::SIGKILL);
     let deadline = Instant::now() + GUARD;
     while same_process_alive(ctl, ctl_starttime) {
@@ -468,6 +538,12 @@ fn controller_kill_leaves_no_runtime_processes() {
         "bwrap must be an unreaped zombie under the stopped subreaper: {}",
         process_diagnostics(pids[0])
     );
+    assert_eq!(
+        proc_ppid(pids[0]),
+        Some(reaper_pid),
+        "unreaped bwrap must belong to the stopped subreaper: {}",
+        process_diagnostics(pids[0])
+    );
 
     // subreaper を再開すると孤児を全て reap して終わる（出来事: reaper の終了）。
     signal(reaper_pid, libc::SIGCONT);
@@ -498,6 +574,7 @@ fn helper_reaper() {
     let Ok(dir) = std::env::var("CELERIS_RT_HELPER_DIR") else {
         return;
     };
+    restore_sigchld_reaping();
     // SAFETY: 自 process の属性を変えるだけ。
     assert_eq!(
         unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) },

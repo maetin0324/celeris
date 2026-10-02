@@ -166,7 +166,8 @@ scripts/cluster-check.sh pegasus /work/NBB/$USER/workspace/rust/benchfs
   [知識](agent-docs/adr/0047-knowledge-base.md)、[Console](agent-docs/adr/0048-console.md)が現在の構成を説明する。
 - [PROGRESS.md](agent-docs/PROGRESS.md) — 実装・検証・実機運用の記録と未解決事項。
 - [モデル供給とアカウント](docs/guides/providers.md) — 自動選択、Codex の残量確認、既存の Claude 固定設定の移行。
-- [ワークスペース](docs/guides/workspace.md) / [知識ベース](docs/guides/knowledge.md) / [API](docs/api/v1/gui-api.md) — 各機能の仕様と使い方。
+- [ワークスペース](docs/guides/workspace.md) / [知識ベース](docs/guides/knowledge.md) — 各機能の仕様と使い方。
+- [HTTP API v1](docs/api/v1/gui-api.md) — GUI が使う API の正本。
 
 ## 開発と検証
 

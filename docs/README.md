@@ -7,7 +7,7 @@ agent（Celeris のタスク）がまず読むべき文書は `docs/` ではな�
 
 - [`SPEC.md`](SPEC.md) — 仕様・概要の入口
 - [`architecture-map.md`](architecture-map.md) — subsystem → crate/module → entry point → ADR の索引
-- `api/` — API の説明と schema（`api/v1/overview.md`, `api/v1/gui-api.md`, `api/v1/*.schema.json`）
+- `api/` — API の説明と schema（説明は [`api/v1/gui-api.md`](api/v1/gui-api.md) の 1 本、schema は `api/v1/*.schema.json`）
 - `protocol/` — worker protocol の説明と schema
 - `guides/` — 機能・画面ごとの使い方（knowledge、mcp、providers、llm-source、workspace、browser-capability、browser-credentiald、
   repository-documentation-maintenance）

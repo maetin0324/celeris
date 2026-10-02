@@ -6,7 +6,7 @@ tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
 
 - Date: 2026-09-28
 - Status: Accepted
-- Supersedes: ADR-GUI-0002（GUI ADR-0002）の D1〜D3（framework mode、SSR、loader/action を server state の正本とし TanStack Router/Query を採用しない判断）、D5 の SSR adapter と D6 の SSR build 配布に依存する部分、および §6 の SPA 不採用判断。対象は [gui 側](../../gui/docs/adr/0002-frontend-stack.md) と [docs/gui 側](../gui/adr/0002-frontend-stack.md) の両方。ルート側 ADR-0002（state machine）は対象外。
+- Supersedes: ADR-GUI-0002（GUI ADR-0002）の D1〜D3（framework mode、SSR、loader/action を server state の正本とし TanStack Router/Query を採用しない判断）、D5 の SSR adapter と D6 の SSR build 配布に依存する部分、および §6 の SPA 不採用判断。対象は [GUI 側 ADR](../gui/adr/0002-frontend-stack.md) と GUI 側 ADR の両方。ルート側 ADR-0002（state machine）は対象外。
 - 適用先: 新設するリポジトリ直下の `web/`。既存 `gui/` は段階移行が完了するまで存続する。
 
 ## 文脈

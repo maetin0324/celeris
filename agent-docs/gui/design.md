@@ -3,9 +3,9 @@
 - 状態: **Accepted**（人間が §11 の H1〜H9 に回答。2026-09-14 改訂）
 - 対象: celeris（`docs/DESIGN.md`）の上に載せる Web GUI。**実装は別リポジトリ `celeris-gui`** で行う。本リポジトリ（celeris）では DESIGN §2 / §6 と CLAUDE.md により
   Web UI の実装は非目標・禁止であり、本文書は設計だけを置く。celeris 側に必要な変更は ADR-0013 で決定済み（Phase 9）。
-- 関連: [ADR-GUI-0001 境界](adr/0001-architecture-boundary.md) / [ADR-GUI-0002 フロントエンド](adr/0002-frontend-stack.md) / [celeris HTTP API v1](../../docs/api/v1/gui-api.md) /
-  [celeris への提案](celeris-proposals.md) / celeris 側 `docs/adr/0013-celeris-api-and-gui-foundations.md`
-- `celeris-gui` リポジトリでは本文書が `docs/DESIGN.md`、`api.md` が `docs/celeris-api-v1.md` になる（bootstrap/README.md の対応表）。
+- 関連: [ADR-GUI-0001 境界](adr/0001-architecture-boundary.md) / [ADR-GUI-0002 フロントエンド](adr/0002-frontend-stack.md) / celeris HTTP API v1（[現行 API 文書](../../docs/api/v1/gui-api.md)） /
+  [celeris への提案](celeris-proposals.md) / celeris 側 [ADR-0013](../adr/0013-taskd-api-and-gui-foundations.md)
+- `celeris-gui` リポジトリへの初期配置用 bootstrap 資料は現行ツリーに含まれない。
 
 ---
 
@@ -226,7 +226,7 @@ GUI の全操作は celeris の `POST` → `task-ops` → `TaskStore::apply_tran
 
 ## 7. API 概要
 
-詳細は [`api.md`](../../docs/api/v1/gui-api.md)。要点:
+詳細は[現行 API 文書](../../docs/api/v1/gui-api.md)。要点:
 
 - 25 エンドポイント。読み取り: `/health` `/inbox` `/tasks` `/tasks/{id}` `/tasks/{id}/events` `/tasks/{id}/runs` `/tasks/{id}/runs/{run_id}/{stdout,stderr,result}` `/tasks/{id}/artifacts[/{idx}]` `/graph` `/events` `/stream` `/providers` `/daemon` `/config` `/schema`。
   変更: `POST /tasks` `/plans` `/tasks/{id}/{approve,reject,answer,cancel}` `/replay`。
@@ -428,6 +428,6 @@ ADR-0013 で不採用・後回し: P-G4（DB スナップショット表）、P-
 ## 12. 参考
 
 - 本リポジトリ: `docs/DESIGN.md` §1, §4, §5, §6、`docs/adr/0009`〜`0013`
-- celeris API v1: [`api.md`](../../docs/api/v1/gui-api.md)。提案の状態: [`celeris-proposals.md`](celeris-proposals.md)
+- celeris API v1: [現行 API 文書](../../docs/api/v1/gui-api.md)。提案の状態: [`celeris-proposals.md`](celeris-proposals.md)
 - 一次情報の出典一覧（Remix の実体、ライブラリの版・日付・ライセンス）: ADR-GUI-0002 §2, §8
 - `celeris-gui` 立ち上げ: 初期配布物（`docs/gui/bootstrap/`）は 2026-10-02 に削除した（ADR-0128。git の履歴に残る）

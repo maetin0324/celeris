@@ -330,6 +330,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 ### D9. replan / repair の再帰と、人に届くもの・届かないもの
 
 - **子の中の失敗は子が先に吸収する**: continuation・retry・repair・replan は各 task の中で今どおり（ADR-0072 D11 / D16 / D17）。
+  repair には段階 / task の許可範囲と範囲外差分の check を渡し、範囲外が原因の失敗は直さず `plan_issue` で上げる（ADR-0074 付記 2026-10-02）。
 - **子が `failed` になったら親が吸収する**: 親の unit は `failed` → 親の replan（ADR-0072 D17 の起点 1。起こした理由は「子 task <題名> が失敗: <分類と理由>」、
   planner の入力に子の最後の checkpoint の要約と最終レビューの不合格の理由を足す）。親の planner は子をやり直す（新しい key の task unit、目的を直して）・
   分ける・落とす、のどれかを新しい版で出す。子の done の成果（ブランチ）は捨てない。

@@ -1743,6 +1743,70 @@ async fn a_format_only_review_failure_is_repaired_without_consuming_attempts() {
     );
 }
 
+#[tokio::test]
+async fn final_review_repair_includes_all_unit_paths_and_task_diff_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let scope_check = "echo 'git diff --quiet HEAD -- crates/' >/dev/null; true";
+    let mut task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "echo 'cargo fmt --check' >/dev/null; test -f .repair-done".into(),
+            expect_exit: 0,
+        },
+        2,
+    );
+    task.acceptance.push(Criterion {
+        text: "scope".into(),
+        check: Check::Command {
+            cmd: scope_check.into(),
+            expect_exit: 0,
+        },
+    });
+    store.insert(&task).unwrap();
+    let mut main = wu_spec("main", &[]);
+    main.context.paths = vec!["web/".into(), "web/".into()];
+    main.checks = vec![task_core::WorkUnitCheck {
+        cmd: scope_check.into(),
+        expect_exit: 0,
+    }];
+    task_ops::execution::adopt_plan(
+        store.as_ref(),
+        task.id,
+        task_core::ExecutionPlanSpec {
+            stages: Vec::new(),
+            units: Vec::new(),
+            decisions: Vec::new(),
+            schema: task_core::EXECUTION_PLAN_SCHEMA.into(),
+            rationale: "review repair scope".into(),
+            work_units: vec![main],
+            phases: Vec::new(),
+            children: Vec::new(),
+        },
+        task_core::PlanOrigin::Fixture,
+        None,
+        task_core::ExecutionLimits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    let adapter = Arc::new(RepairFsAdapter(WuScriptAdapter::new(HashMap::new())));
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    assert!(run_until_idle(&mut d, 400).await.idle);
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    let units = store.work_units_for(task.id).unwrap();
+    let objective = &units
+        .iter()
+        .find(|u| u.kind == task_core::WorkUnitKind::Repair)
+        .expect("review repair")
+        .spec
+        .objective;
+    assert!(objective.contains("## 変更してよい範囲\n- web/\n"));
+    assert!(objective.contains(&format!("- {scope_check}\n")));
+    assert_eq!(objective.matches("- web/\n").count(), 1);
+    assert_eq!(objective.matches(scope_check).count(), 1);
+    assert!(objective.contains("plan_issue"));
+}
+
 /// ADR-0072 §6 E4 (c): repair の上限（`max_repairs_per_class` = 2）を超えると、修復を試みずに
 /// 従来の `ReviewFail`（attempts を消費する）に戻る。
 #[tokio::test]

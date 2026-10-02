@@ -106,3 +106,11 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
   - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行（sccache EPERM 等の環境要因なし）。
 - 未解決事項: ホスト準備（別 host UID / subuid の割当）は人の判断が必要。launcher 本体の実装は未着手。A13 の実 process 再試験（別 UID 前提）は launcher 実装後に行う。本番 admission の `CredentialInjection`・`IdentityRestore` は引き続き未解放。
 - 提案: launcher 実装を独立 task として切り出し、完了後に A13 を再試験してから `prod-admission-release` の判断に戻す。
+
+## repair objective の許可範囲受け渡し
+
+完了日 2026-10-02（work unit `wire`）。段階統合は同じ phase の非 repair・非 integrate unit、final review は task の全 unit と task acceptance から、変更してよい paths と `git diff` を含む check を集めて repair objective に渡す。重複を除き、辞書順に並べる。範囲外の失敗はファイルを直さず `plan_issue` で報告する指示が入り、既存の `worker_finish` 経路で replan に進むことを確認した。delivery repair は対象外。
+
+- 証拠: `cargo test -p task-dispatch integration_check_failure_is_repaired_when_classified`、`cargo test -p task-dispatch final_review_repair_includes_all_unit_paths_and_task_diff_checks`、`cargo test -p task-dispatch a_plan_issue_checkpoint_triggers_a_replan_and_v2_is_adopted` は各 exit 0。
+- `cargo test --workspace` は通常 sandbox で初回 exit 101。`instance_handoff` 5 件が user namespace 作成の `Operation not permitted` により失敗。範囲外のテストは変更せず、ホスト権限で `cargo test -p celeris --test instance_handoff` を再実行して 8/8 通過し、同条件の `cargo test --workspace` は exit 0。
+- `cargo clippy --workspace -- -D warnings` は exit 0（警告なし）。

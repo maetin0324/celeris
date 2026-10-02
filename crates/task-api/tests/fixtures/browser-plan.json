@@ -1,0 +1,63 @@
+{
+  "schema": "celeris.execution-plan/3",
+  "rationale": "製品の Phase 1〜4 を root の段階にする（ADR-0079 §7 R5b）。Phase 1・2 は main に取り込み済みの既存の task を採用し（統合は既に基点に入っているので skipped）、Phase 3・4 はそれぞれ独立に受け入れ・レビューされる子 task にする。子の中の P3-A〜C / P4-A〜C は子の planner が leaf に分ける。Phase 3 の後で人が確認する。",
+  "stages": [
+    {"key": "phase-1", "kind": "implement", "title": "Phase 1 MVP"},
+    {"key": "phase-2", "kind": "implement", "title": "Phase 2 policy・credential・人間承認"},
+    {"key": "phase-3", "kind": "implement", "title": "Phase 3 identity・live proxy・takeover", "review": "human"},
+    {"key": "phase-4", "kind": "implement", "title": "Phase 4 isolated runtime・注入・backend routing"}
+  ],
+  "units": [
+    {"key": "p1", "stage": "phase-1", "kind": "task", "title": "Phase 1 MVP（採用: 01M3MFS5T52FXA63W4V10XGC4S）",
+     "objective": "browser capability の Phase 1 MVP。既存の task 01M3MFS5T52FXA63W4V10XGC4S（done、成果は main 09a6b0c に取り込み済み）を採用する。",
+     "acceptance": [{"text": "採用した task が done で、成果が main に入っている", "check": {"type": "reviewer"}}],
+     "adopt": "01M3MFS5T52FXA63W4V10XGC4S"},
+    {"key": "p2", "stage": "phase-2", "kind": "task", "title": "Phase 2 policy・credential・人間承認（採用: 01M3MZKB3DFYJNBH015MJGQ0BT）",
+     "objective": "browser capability の Phase 2（P2-A policy 契約・P2-B broker / provider 1 種・P2-C durable wait。ADR-0080）。既存の task 01M3MZKB3DFYJNBH015MJGQ0BT（review_fail の後に人が main ce5d768 に取り込んだ）を採用する。",
+     "acceptance": [{"text": "採用した task の成果が main に入っている", "check": {"type": "reviewer"}}],
+     "depends_on": ["p1"],
+     "adopt": "01M3MZKB3DFYJNBH015MJGQ0BT"},
+    {"key": "p3", "stage": "phase-3", "kind": "task", "title": "Phase 3: Browser Identity・live proxy・takeover",
+     "objective": "ADR-0078 / ADR-0080 の browser capability の Phase 3 を実装する。phases-and-decisions.md（01M3MFS5T52FXA63W4V10XGC4S の WU design-gap）の表の行をそのまま写す（ID | 先行依存 | 単独の成果・検査 | 現在の扱い）:\n- P3-A Browser Identity | P2-C、H5、必要なP4-A | project/origin単位の暗号化・期限/削除/失効、他identity混入拒否 | 未実装。0.38.1のallowlistとrestore非互換を解決する境界が先。解除だけで対応しない\n- P3-B live proxy | P1-C、H4 | task/run ACL、WS接続/再接続、frame/status/tabs/url/consoleと永続event、他task拒否、cookie/token非記録 | 未実装。認証task表示にはP2-Cのobservation制御も必要\n- P3-C takeover | P2-C、P3-B | pause収束・controller lease排他・takeover/resume/stop、切断・競合・二重action試験 | 未実装\nPhase の数字だけで直列化しない。P3-A が P4-A の隔離を要するなら契約を先に決め、利用は P4 の後にする（循環を作らない）。Phase 2 の決定（ADR-0080）: H1 credential は手動登録から開始、H2 操作ごとの approve_once・lease 既定 60 秒 / 上限 300 秒・max_uses 1、H3 credential を注入した session の終わりまで LLM の観測（snapshot・console・Live View・artifact）を止める、H6 Phase 2 は trusted local（container / 別 UID / egress は Phase 4）。Live View は本人の session だけ（ADR-0080 D6）。H4・H5 は人の決定（下に注入される）に従う。",
+     "acceptance": [
+       {"text": "P3-A〜C の各行の「単独の成果・検査」が満たされている。満たせない行は理由と後続（Phase 4 など）が明記されている", "check": {"type": "reviewer"}},
+       {"text": "H4・H5 の回答と ADR-0080 の決定（観測の停止・本人限定の Live View・短い lease）に反する実装が無い", "check": {"type": "reviewer"}}
+     ],
+     "depends_on": ["p2"]},
+    {"key": "p4", "stage": "phase-4", "kind": "task", "title": "Phase 4: isolated runtime・stronger injection・backend routing",
+     "objective": "ADR-0078 / ADR-0080 の browser capability の Phase 4 を実装する。phases-and-decisions.md（01M3MFS5T52FXA63W4V10XGC4S の WU design-gap）の表の行をそのまま写す（ID | 先行依存 | 単独の成果・検査 | 現在の扱い）:\n- P4-A isolated runtime | P2-Aの契約確定、H6 | 別UID/namespace/read-only、broker/CDP/IPC分離、proxy/DNS/IPv6/private IP等egress負例、orphan回収 | 未実装。機密auth前へ前倒し。P2-Aの分離enforcementがP4-A依存でも契約を先に決め循環を避ける\n- P4-B stronger injection | P2-Bのinterface確定、P4-A、H3 | trusted injection/extension接点、TOCTOU/redirect/iframe/DOM再表示攻撃、workerからの取得拒否 | 未実装。provider契約はP2-B、利用開始は検証完了後。P2-Bとの循環依存を作らない\n- P4-C backend routing | P1-D、H7、候補のP0再調査 | backend適合fixture、browser-specialist、既存loop再利用、能力を失わないfallback、同一task評価 | 未実装。機密機能を宣言するbackendはP4-A/B相当の適合も必要\nPhase 2 の決定（ADR-0080）: H3 認証 session の間は LLM の観測を止める、H6 container / 別 UID / egress の隔離はこの Phase の責務（peer UID と file mode だけで同一 UID の worker を隔離したと主張しない。ADR-0080 D7）。separate_origins（ADR-0080 D1）は P4 の enforcement が成立してから有効化する。H7 は人の決定（下に注入される）に従う。",
+     "acceptance": [
+       {"text": "P4-A〜C の各行の「単独の成果・検査」が満たされている。満たせない行は理由と後続が明記されている", "check": {"type": "reviewer"}},
+       {"text": "egress / 隔離の負例と、H7 の回答どおりの backend の選び方がある", "check": {"type": "reviewer"}}
+     ],
+     "depends_on": ["p3"]}
+  ],
+  "decisions": [
+    {"key": "h4", "question": "H4 dashboard / Live View の公開範囲（P3-B live proxy の前）",
+     "options": [
+       {"key": "operator-only", "label": "operator 専用の既存画面のまま", "consequence": "複数利用者には開けない"},
+       {"key": "task-acl-proxy", "label": "task 別 ACL の proxy を先行する", "consequence": "proxy の導入・認証導線の変更が要る"},
+       {"key": "shared-namespace", "label": "共有 namespace を一般利用者へ開放する", "consequence": "全 session の閲覧履歴は取り消せない（推奨しない）"}
+     ],
+     "recommended": "task-acl-proxy", "cost_of_reversal": "medium",
+     "cost_note": "proxy 導入・認証導線変更・cookie/token 再発行。既存全 session の閲覧履歴は取り消せない。Phase 2 の既定（ADR-0080 D6: Live View は本人の session だけ）は維持する",
+     "needed_before": ["p3"]},
+    {"key": "h5", "question": "H5 persistent auth（P3-A Browser Identity の前）",
+     "options": [
+       {"key": "per-run-isolation", "label": "毎 run 隔離のまま（identity を持たない）", "consequence": "P3-A は境界の設計だけになる"},
+       {"key": "project-origin-identity", "label": "需要が確認された project+origin に限り期限付き identity", "consequence": "暗号鍵・保存 state・失効・削除の運用が要る"},
+       {"key": "personal-profile", "label": "個人 Chrome profile を共有する", "consequence": "推奨しない（混入と漏洩の範囲が広い）"}
+     ],
+     "recommended": "project-origin-identity", "cost_of_reversal": "high",
+     "cost_note": "暗号鍵・保存 state・サイト cookie の失効・削除の移行が要る。agent-browser 0.38.1 の allowlist / restore の非互換を先に解決する",
+     "needed_before": ["p3"]},
+    {"key": "h7", "question": "H7 長時間 profile / backend（P4-C backend routing の前）",
+     "options": [
+       {"key": "keep-acp-claude", "label": "ACP 継続と Claude 明示を維持し、専用 backend は同一 fixture で比較してから", "consequence": "専用 backend は比較の結果が出るまで入らない"},
+       {"key": "specialist", "label": "browser-specialist + Browser Use 等を導入する", "consequence": "adapter・監視・実行予算・conformance suite が要る。Browser Use の仕様は未確認"}
+     ],
+     "recommended": "keep-acp-claude", "cost_of_reversal": "medium",
+     "cost_note": "adapter・監視・実行予算・conformance suite が要る。task/run/event の共通化で UI の移行を抑える",
+     "needed_before": ["p4"]}
+  ]
+}

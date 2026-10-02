@@ -15,6 +15,7 @@ use crate::org::{
 };
 use crate::repos::{ProjectRepo, RepoId};
 use crate::transition::{Outcome, Trigger};
+use crate::write_set::WriteSetRecord;
 
 use super::query::{ListFilter, ListOrder, Page};
 use super::{
@@ -42,6 +43,12 @@ pub trait TaskStore:
     + crate::browser_wait::BrowserWaitStore
     + crate::cluster_job::ClusterJobWaitStore
 {
+    /// ADR-0130 D2: store an immutable per-run Git diff snapshot.
+    fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
+    fn run_write_sets(&self, run_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
+    /// Final cumulative snapshot from the WU base commit to its committed head.
+    fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
+    fn work_unit_write_sets(&self, work_unit_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
     fn list(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError>;

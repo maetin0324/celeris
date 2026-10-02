@@ -1,0 +1,210 @@
+//! ADR-0130 D1-D2: durable write-set observations. Git collection belongs to callers.
+
+use std::collections::BTreeSet;
+
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
+
+use crate::write_set::{WriteSetRecord, WriteSetStatus};
+
+use super::{SqliteStore, StoreError};
+
+impl SqliteStore {
+    pub fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
+        self.record_write_set(record, false)
+    }
+
+    pub fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
+        self.record_write_set(record, true)
+    }
+
+    fn record_write_set(&self, record: &WriteSetRecord, work_unit: bool) -> Result<(), StoreError> {
+        let table = if work_unit {
+            "work_unit_write_sets"
+        } else {
+            "run_write_sets"
+        };
+        let key = if work_unit { "work_unit_id" } else { "run_id" };
+        if record.status == WriteSetStatus::Complete
+            && (record.base_sha.is_none() || record.head_sha.is_none())
+        {
+            return Err(StoreError::Invalid(
+                "complete write-set needs both Git SHAs".into(),
+            ));
+        }
+        let paths: Vec<_> = record
+            .paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let prior: Option<(Option<String>, Option<String>, String)> = tx
+            .query_row(
+                &format!("SELECT base_sha, head_sha, status FROM {table} WHERE {key} = ?1 AND repo_id = ?2"),
+                params![record.owner_id, record.repo_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((base, head, status)) = &prior {
+            if base != &record.base_sha || head != &record.head_sha {
+                return Err(StoreError::Invalid(
+                    "write-set snapshot SHAs cannot change".into(),
+                ));
+            }
+            if status == "complete" && record.status != WriteSetStatus::Complete {
+                return Ok(());
+            }
+        }
+        let columns = if work_unit {
+            "work_unit_id, task_id, repo_id, base_sha, head_sha, paths_json, status, reason, recorded_at"
+        } else {
+            "run_id, task_id, work_unit_id, repo_id, base_sha, head_sha, paths_json, status, reason, recorded_at"
+        };
+        let placeholders = if work_unit {
+            "?1,?2,?3,?4,?5,?6,?7,?8,?9"
+        } else {
+            "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10"
+        };
+        let sql = format!(
+            "INSERT INTO {table} ({columns}) VALUES ({placeholders}) \
+                           ON CONFLICT({key},repo_id) DO UPDATE SET paths_json=excluded.paths_json, status=excluded.status, reason=excluded.reason, recorded_at=excluded.recorded_at"
+        );
+        let paths_json = serde_json::to_string(&paths)?;
+        if work_unit {
+            tx.execute(
+                &sql,
+                params![
+                    record.owner_id,
+                    record.task_id.to_string(),
+                    record.repo_id.to_string(),
+                    record.base_sha,
+                    record.head_sha,
+                    paths_json,
+                    record.status.as_str(),
+                    record.reason,
+                    record.recorded_at
+                ],
+            )?;
+        } else {
+            tx.execute(
+                &sql,
+                params![
+                    record.owner_id,
+                    record.task_id.to_string(),
+                    record.work_unit_id,
+                    record.repo_id.to_string(),
+                    record.base_sha,
+                    record.head_sha,
+                    paths_json,
+                    record.status.as_str(),
+                    record.reason,
+                    record.recorded_at
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn run_write_sets(&self, run_id: &str) -> Result<Vec<WriteSetRecord>, StoreError> {
+        self.read_write_sets(run_id, false)
+    }
+
+    pub fn work_unit_write_sets(
+        &self,
+        work_unit_id: &str,
+    ) -> Result<Vec<WriteSetRecord>, StoreError> {
+        self.read_write_sets(work_unit_id, true)
+    }
+
+    fn read_write_sets(
+        &self,
+        owner_id: &str,
+        work_unit: bool,
+    ) -> Result<Vec<WriteSetRecord>, StoreError> {
+        let table = if work_unit {
+            "work_unit_write_sets"
+        } else {
+            "run_write_sets"
+        };
+        let key = if work_unit { "work_unit_id" } else { "run_id" };
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT task_id, work_unit_id, repo_id, base_sha, head_sha, paths_json, status, reason, recorded_at FROM {table} WHERE {key}=?1 ORDER BY repo_id"
+            ))?;
+            let rows = stmt.query_map(params![owner_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?, row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (task, work_unit_id, repo, base_sha, head_sha, paths, status, reason, recorded_at) = row?;
+                out.push(WriteSetRecord {
+                    owner_id: owner_id.to_owned(),
+                    task_id: task.parse().map_err(|_| StoreError::Invalid("invalid write-set task ID".into()))?,
+                    work_unit_id,
+                    repo_id: repo.parse().map_err(|_| StoreError::Invalid("invalid write-set repo ID".into()))?,
+                    base_sha,
+                    head_sha,
+                    paths: serde_json::from_str(&paths)?,
+                    status: match status.as_str() {
+                        "complete" => WriteSetStatus::Complete,
+                        "incomplete" => WriteSetStatus::Incomplete,
+                        "unavailable" => WriteSetStatus::Unavailable,
+                        _ => return Err(StoreError::Invalid("invalid write-set status".into())),
+                    },
+                    reason,
+                    recorded_at,
+                });
+            }
+            Ok(out)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::TaskId;
+    use crate::repos::RepoId;
+
+    #[test]
+    fn write_set_record_is_durable_and_sha_immutable() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let mut record = WriteSetRecord {
+            owner_id: "run-1".into(),
+            task_id: TaskId::new(),
+            work_unit_id: Some("wu-1".into()),
+            repo_id: RepoId::new(),
+            base_sha: Some("base".into()),
+            head_sha: Some("head".into()),
+            paths: vec!["src/b.rs".into(), "src/a.rs".into(), "src/a.rs".into()],
+            status: WriteSetStatus::Complete,
+            reason: None,
+            recorded_at: "2026-10-02T00:00:00Z".into(),
+        };
+        store.record_run_write_set(&record).unwrap();
+        store.record_run_write_set(&record).unwrap();
+        assert_eq!(
+            store.run_write_sets("run-1").unwrap()[0].paths,
+            vec!["src/a.rs", "src/b.rs"]
+        );
+        record.head_sha = Some("other".into());
+        assert!(store.record_run_write_set(&record).is_err());
+
+        record.head_sha = Some("head".into());
+        record.owner_id = "wu-1".into();
+        store.record_work_unit_write_set(&record).unwrap();
+        assert_eq!(
+            store.work_unit_write_sets("wu-1").unwrap()[0].status,
+            WriteSetStatus::Complete
+        );
+    }
+}

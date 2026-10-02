@@ -17,6 +17,7 @@ use crate::org::{
 };
 use crate::repos::{ProjectRepo, RepoId};
 use crate::transition::{Outcome, Trigger};
+use crate::write_set::WriteSetRecord;
 
 use super::{
     ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, ListFilter,
@@ -25,6 +26,21 @@ use super::{
 };
 
 impl TaskStore for SqliteStore {
+    fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
+        SqliteStore::record_run_write_set(self, record)
+    }
+
+    fn run_write_sets(&self, run_id: &str) -> Result<Vec<WriteSetRecord>, StoreError> {
+        SqliteStore::run_write_sets(self, run_id)
+    }
+
+    fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
+        SqliteStore::record_work_unit_write_set(self, record)
+    }
+
+    fn work_unit_write_sets(&self, work_unit_id: &str) -> Result<Vec<WriteSetRecord>, StoreError> {
+        SqliteStore::work_unit_write_sets(self, work_unit_id)
+    }
     fn insert(&self, task: &Task) -> Result<(), StoreError> {
         self.insert_impl(task)
     }

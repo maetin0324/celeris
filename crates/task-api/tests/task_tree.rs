@@ -174,6 +174,8 @@ fn run(
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
                 cost_usd: Some(cost),
+                duplicate_reads: None,
+                session_resumed: None,
             }),
             metrics: None,
             started_at: start.to_string(),

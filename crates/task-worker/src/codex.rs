@@ -1116,6 +1116,8 @@ fn handle_line(
                 cache_read_tokens: u.get("cached_input_tokens").and_then(|v| v.as_u64()),
                 cache_creation_tokens: u.get("cache_write_input_tokens").and_then(|v| v.as_u64()),
                 cost_usd: None,
+                duplicate_reads: None,
+                session_resumed: None,
             });
             *last_signal = Some(TurnSignal::Completed { usage });
         }

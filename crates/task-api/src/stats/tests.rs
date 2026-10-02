@@ -94,6 +94,8 @@ fn runs_are_attributed_to_providers_with_daily_usage() {
             cache_read_tokens: None,
             cache_creation_tokens: None,
             cost_usd: None,
+            duplicate_reads: None,
+            session_resumed: None,
         })
     };
     stats.apply(&row(
@@ -172,6 +174,8 @@ fn reviewer_runs_are_counted_for_their_provider() {
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
                 cost_usd: None,
+                duplicate_reads: None,
+                session_resumed: None,
             }),
             role,
             metrics: None,
@@ -210,6 +214,8 @@ fn account_stats_are_attributed_by_account_and_ignore_pool_less_runs() {
             cache_read_tokens: None,
             cache_creation_tokens: None,
             cost_usd: None,
+            duplicate_reads: None,
+            session_resumed: None,
         })
     };
     stats.apply(&row(

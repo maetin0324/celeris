@@ -4034,8 +4034,10 @@ export type Usage = {
   "cache_creation_tokens"?: number | null;
   "cache_read_tokens"?: number | null;
   "cost_usd"?: number | null;
+  "duplicate_reads"?: number | null;
   "input_tokens"?: number | null;
   "output_tokens"?: number | null;
+  "session_resumed"?: boolean | null;
 };
 
 export type VerdictView = {

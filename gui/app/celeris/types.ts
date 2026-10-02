@@ -4357,8 +4357,18 @@ export interface Usage {
    * `task_core::pricing` の静的単価表から推定した USD（不明なモデル・トークン欠落は `None`）。
    */
   cost_usd?: number | null;
+  /**
+   * ADR-0124 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
+   * の 2 回目以降の回数）。tool_use を観測できない adapter は `None`。
+   */
+  duplicate_reads?: number | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
+  /**
+   * ADR-0124 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
+   * 拒否されなかった）。session を扱わない adapter は `None`。
+   */
+  session_resumed?: boolean | null;
 }
 /**
  * ADR-0069 D5: `Event::RoutingDecided` の中身。

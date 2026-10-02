@@ -125,6 +125,7 @@ opencode の JSON は [`config/opencode.openai-compat.example.json`](../../confi
 現行の設定検査は opencode の `celeris-proxy/` 接頭辞を見ないため、行の
 `LITELLM_MODEL = "celeris/cheap"` は `llm_source = "celeris"` の検査にも使う。
 Qwen 直指定の旧 opencode 経路を一時的に残すなら、その行の `tiers` は `cheap` だけにする。
+`OPENCODE_CONFIG` が無い Qwen 直指定や `llm_source = "openai_compatible:qwen"` の ACP 行も cheap に限定される。管理 API で `tiers` を省略すると `[cheap]` が保存され、非 cheap の明示指定は拒否される。
 frontier / standard でも opencode を使う場合は、Qwen 固定の `OPENCODE_CONFIG` と別の行を作り、
 proxy の `celeris/frontier` / `celeris/standard` を使う。
 

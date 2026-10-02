@@ -127,7 +127,7 @@ impl Config {
             .map(|p| ProviderSpec {
                 id: p.id.clone(),
                 adapter: p.adapter.clone(),
-                tiers: if self.is_qwen_fixed_acp(p) {
+                tiers: if self.is_qwen_acp(p) {
                     vec![Tier::Cheap]
                 } else {
                     p.tiers.clone()
@@ -226,10 +226,20 @@ impl Config {
             .any(|key| self.effective_env(p, key).is_some_and(is_celeris_model))
     }
 
-    fn is_qwen_fixed_acp(&self, p: &ProviderConfig) -> bool {
-        p.adapter == "acp"
-            && self.effective_env(p, "OPENCODE_CONFIG").is_some()
-            && is_qwen_model(self.effective_model(p).unwrap_or_default())
+    fn is_qwen_acp(&self, p: &ProviderConfig) -> bool {
+        if p.adapter != "acp" {
+            return false;
+        }
+        let model = self.effective_model(p).unwrap_or_default();
+        // A proxy model takes precedence over a legacy opencode configuration path.
+        if matches!(&p.llm_source, Some(LlmSourceRef::Celeris))
+            || is_celeris_model(model)
+            || self.model_from_env_is_celeris(p)
+        {
+            return false;
+        }
+        is_qwen_model(model)
+            || matches!(&p.llm_source, Some(LlmSourceRef::OpenaiCompatible(id)) if id.to_ascii_lowercase().starts_with("qwen"))
     }
 
     /// Diagnostic codes are stable and contain no environment or credential values.
@@ -253,7 +263,7 @@ impl Config {
             {
                 warnings.push("unknown_llm_source: set llm_source explicitly".into());
             }
-            if self.is_qwen_fixed_acp(p) && p.tiers.iter().any(|t| *t != Tier::Cheap) {
+            if self.is_qwen_acp(p) && p.tiers.iter().any(|t| *t != Tier::Cheap) {
                 warnings.push("qwen_fixed_acp_noncheap_tier: use a separate proxy-backed ACP row for frontier/standard".into());
             }
         }

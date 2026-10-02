@@ -187,20 +187,44 @@ fn advance(d: &Dispatcher, secs: i64) {
     }
 }
 
-/// `pred` が真になるまで tick する（poll のスレッド・worker の完了を待つため、tick の間に少し眠る）。
-async fn tick_until(
-    d: &mut Dispatcher,
-    max_ticks: usize,
-    mut pred: impl FnMut(&Dispatcher) -> bool,
-) {
-    for _ in 0..max_ticks {
+/// ADR-0125 (a)+(b): `pred`（store の状態・event・poll の控え）が真になるまで tick を駆動する。poll のスレッドと
+/// worker は実 scheduler で進むので、tick の回数は失敗条件にせず、壁時計の保険（[`STATE_WAIT_GUARD`]）だけで止める。
+/// poll の間隔・上限の判定は注入時計（[`advance`]）で進める。
+async fn tick_until(d: &mut Dispatcher, mut pred: impl FnMut(&Dispatcher) -> bool) {
+    let started = Instant::now();
+    let mut ticks = 0usize;
+    loop {
         d.tick().unwrap();
+        ticks += 1;
         if pred(d) {
             return;
         }
+        if started.elapsed() >= STATE_WAIT_GUARD {
+            panic!(
+                "condition not reached within {:?} ({ticks} ticks, in_flight {}, polls in flight {})",
+                STATE_WAIT_GUARD,
+                d.in_flight(),
+                d.cluster_job_polls.len()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("condition not reached after {max_ticks} ticks");
+}
+
+/// 走っている poll の結果を tick が拾い終えるまで待つ（poll のスレッドの完了は scheduler 任せなので出来事で待つ）。
+async fn settle_polls(d: &mut Dispatcher) {
+    tick_until(d, |d| d.cluster_job_polls.is_empty()).await;
+}
+
+/// 注入時計を進めない tick は、poll の結果を拾うだけで次の poll を起こさない。poll は tick の中で同期に
+/// `cluster_job_polls` へ載るので、1 回の tick の直後に空であれば「起こしていない」が決まる（スレッドの速さに依らない）。
+fn tick_starts_no_poll(d: &mut Dispatcher) {
+    assert!(d.cluster_job_polls.is_empty(), "a poll is still in flight");
+    d.tick().unwrap();
+    assert!(
+        d.cluster_job_polls.is_empty(),
+        "a tick started a poll before poll_secs passed"
+    );
 }
 
 fn last_reason(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<String> {
@@ -224,7 +248,7 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
 
     // 1. run が wait で終わる: task は blocked、attempts 据え置き、run は waiting で閉じる。
     let id = task.id;
-    tick_until(&mut d, 200, |_| {
+    tick_until(&mut d, |_| {
         store.get(id).unwrap().unwrap().status == Status::Blocked
     })
     .await;
@@ -252,7 +276,7 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
     assert!(!questions.contains(&id), "{questions:?}");
 
     // 2. 最初の poll（状態が変わった: 未知 → R / Q）。
-    tick_until(&mut d, 200, |_| {
+    tick_until(&mut d, |_| {
         store
             .events_for(id)
             .unwrap()
@@ -275,11 +299,9 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
     assert_eq!(view.status_line, "42634 (R) 42635 (Q)");
     assert!(view.next_poll_at.is_some());
 
-    // poll_secs が経つまでは次の poll を起こさない。
-    for _ in 0..5 {
-        d.tick().unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // poll_secs が経つまでは次の poll を起こさない（最初の poll は上で拾い終えている）。
+    settle_polls(&mut d).await;
+    tick_starts_no_poll(&mut d);
     assert_eq!(
         polls.lock().unwrap().len(),
         1,
@@ -288,11 +310,17 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
 
     // 3. 2 回目の poll は状態が同じなので event を出さない。
     advance(&d, 31);
-    tick_until(&mut d, 200, |_| polls.lock().unwrap().len() == 2).await;
-    for _ in 0..5 {
-        d.tick().unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // 2 回目の poll を起こし、その結果を tick が拾い終えるまで待つ（結果の反映前に event を数えない）。
+    tick_until(&mut d, |d| {
+        polls.lock().unwrap().len() == 2 && d.cluster_job_polls.is_empty()
+    })
+    .await;
+    tick_starts_no_poll(&mut d);
+    assert_eq!(
+        polls.lock().unwrap().len(),
+        2,
+        "at most one poll per poll_secs"
+    );
     let polled = store
         .events_for(id)
         .unwrap()
@@ -304,7 +332,7 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
 
     // 4. すべて F: satisfied → ready → continuation の run → review → done。
     advance(&d, 31);
-    tick_until(&mut d, 400, |_| {
+    tick_until(&mut d, |_| {
         store.get(id).unwrap().unwrap().status == Status::Done
     })
     .await;
@@ -382,7 +410,7 @@ async fn a_timed_out_wait_asks_a_human_and_the_answer_resumes() {
         vec![qstat(&[("42634", "R", None)])],
     );
     let id = task.id;
-    tick_until(&mut d, 200, |_| {
+    tick_until(&mut d, |_| {
         store.get(id).unwrap().unwrap().status == Status::Blocked
     })
     .await;
@@ -391,7 +419,7 @@ async fn a_timed_out_wait_asks_a_human_and_the_answer_resumes() {
         store.cluster_job_waits_for_task(id).unwrap()[0].timeout_secs,
         60
     );
-    tick_until(&mut d, 200, |_| {
+    tick_until(&mut d, |_| {
         store
             .events_for(id)
             .unwrap()
@@ -400,7 +428,7 @@ async fn a_timed_out_wait_asks_a_human_and_the_answer_resumes() {
     })
     .await;
     advance(&d, 61);
-    tick_until(&mut d, 200, |_| {
+    tick_until(&mut d, |_| {
         store.cluster_job_waits_for_task(id).unwrap()[0].state == ClusterJobWaitState::TimedOut
     })
     .await;
@@ -415,7 +443,7 @@ async fn a_timed_out_wait_asks_a_human_and_the_answer_resumes() {
 
     // 回答で ready に戻り、次の run は continuation（timed_out の job の状態）と回答を受け取る。
     task_ops::gate::answer(store.as_ref(), id, "延長して待ち直す".into(), None).unwrap();
-    tick_until(&mut d, 400, |_| {
+    tick_until(&mut d, |_| {
         store.get(id).unwrap().unwrap().status == Status::Done
     })
     .await;
@@ -447,11 +475,11 @@ async fn cancelling_a_waiting_task_cancels_the_wait_without_qdel() {
         vec![qstat(&[("42634", "Q", None)])],
     );
     let id = task.id;
-    tick_until(&mut d, 200, |_| {
+    tick_until(&mut d, |_| {
         store.get(id).unwrap().unwrap().status == Status::Blocked
     })
     .await;
-    tick_until(&mut d, 200, |_| polls.lock().unwrap().len() == 1).await;
+    tick_until(&mut d, |_| polls.lock().unwrap().len() == 1).await;
     store
         .apply_transition_with_events(id, Trigger::Cancel, vec![])
         .unwrap();
@@ -463,11 +491,10 @@ async fn cancelling_a_waiting_task_cancels_the_wait_without_qdel() {
         Event::ClusterJobWaitFinished { state: ClusterJobWaitState::Cancelled, detail, .. }
             if detail.contains("no qdel")
     )));
+    // 上限も poll_secs も過ぎた時刻でも、cancelled の wait は poll しない（tick の中で同期に決まる）。
+    settle_polls(&mut d).await;
     advance(&d, 3600);
-    for _ in 0..10 {
-        d.tick().unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    tick_starts_no_poll(&mut d);
     assert_eq!(
         polls.lock().unwrap().len(),
         1,
@@ -489,10 +516,7 @@ async fn a_wait_on_an_unknown_cluster_is_a_retryable_failure() {
     }
     let (store, mut d, task, _adapter, _polls) = setup(dir.path(), vec![bad], vec![]);
     let id = task.id;
-    tick_until(&mut d, 400, |_| {
-        store.get(id).unwrap().unwrap().attempts == 1
-    })
-    .await;
+    tick_until(&mut d, |_| store.get(id).unwrap().unwrap().attempts == 1).await;
     let t = store.get(id).unwrap().unwrap();
     assert_ne!(t.status, Status::Blocked);
     assert!(store.cluster_job_waits_for_task(id).unwrap().is_empty());
@@ -609,7 +633,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     d.test_now = Some(clock.clone());
 
     // 1. a は wait、b は done。task は ready で、unit a は blocked(cluster_jobs)。
-    tick_until(&mut d, 800, |_| {
+    tick_until(&mut d, |_| {
         let units = store.work_units_for(root_id).unwrap();
         units.iter().any(|u| {
             u.key == "a" && u.blocked_reason == Some(task_core::WorkUnitBlockedReason::ClusterJobs)
@@ -639,10 +663,9 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     d.set_cluster_job_poller(fake_poller(poll_script, seen_polls.clone()));
     for secs in [0i64, 40, 640, 1300] {
         *clock.lock().unwrap() = t0 + time::Duration::seconds(secs);
-        for _ in 0..3 {
-            d.tick().unwrap();
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        // この時刻の tick（生存確認・due なら poll）を回し、起こした poll の結果を拾い終えるまで待つ。
+        d.tick().unwrap();
+        settle_polls(&mut d).await;
     }
     let events = store.events_for(root_id).unwrap();
     assert!(
@@ -680,7 +703,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
         .unwrap()
         .push_back(qstat(&[("42634", "F", Some(0))]));
     *clock.lock().unwrap() = t0 + time::Duration::seconds(1400);
-    tick_until(&mut d, 800, |_| {
+    tick_until(&mut d, |_| {
         store.get(root_id).unwrap().unwrap().status == Status::Done
     })
     .await;

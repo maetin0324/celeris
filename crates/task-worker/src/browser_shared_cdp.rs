@@ -33,11 +33,23 @@ impl SharedCdp {
         token: String,
         allowed_domains: Vec<String>,
     ) -> std::io::Result<Self> {
+        Self::start_with_mode(controller, socket, token, allowed_domains, 0o600)
+    }
+
+    /// Launcher sessions use a private parent directory and a token; the
+    /// browser's mapped subordinate UID must be able to connect to this socket.
+    pub fn start_with_mode(
+        controller: CdpController,
+        socket: &Path,
+        token: String,
+        allowed_domains: Vec<String>,
+        mode: u32,
+    ) -> std::io::Result<Self> {
         if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(std::io::Error::other("invalid relay token"));
         }
         let listener = UnixListener::bind(socket)?;
-        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(mode))?;
         listener.set_nonblocking(true)?;
         let controller = Arc::new(Mutex::new(controller));
         let shared = controller.clone();

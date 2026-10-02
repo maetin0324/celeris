@@ -106,6 +106,49 @@ fn provider_kind_qwen_id_without_model_does_not_guess_source() {
 }
 
 #[test]
+fn provider_kind_qwen_direct_acp_without_opencode_config_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config =
+        toml::from_str("[[providers]]\nid = \"direct\"\nadapter = \"acp\"\nmodel = \"qwen3\"\n")
+            .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_source_reference_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config = toml::from_str("[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n[[providers]]\nid = \"source\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:qwen\"\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_proxy_model_keeps_all_tiers() {
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"proxy\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nenv = { OPENCODE_CONFIG = \"/fixture/old-qwen.json\" }\n",
+    )
+    .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
+    assert!(
+        !cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());
@@ -140,6 +183,49 @@ password_selector = "input:not(.x)"
         toml::from_str::<Config>("[browser.egress]\nresolver = \"127.0.0.1\"\nbogus = 1\n")
             .is_err()
     );
+}
+
+/// ADR-0116 D5: `[browser] runtime`。既定は `"daemon"`、`"launcher"` は `launcher_socket` 必須、
+/// 未知の値と socket 欠落は設定検証で error。
+#[test]
+fn browser_runtime_defaults_to_daemon() {
+    let cfg: Config = toml::from_str("").unwrap();
+    assert_eq!(cfg.browser.runtime, "daemon");
+    assert!(cfg.browser.launcher_socket.is_none());
+    assert!(cfg.browser.validate().is_ok());
+    assert_eq!(
+        cfg.browser.runtime_kind(),
+        task_worker::browser::BrowserRuntimeKind::Daemon
+    );
+}
+
+#[test]
+fn browser_runtime_launcher_with_socket_validates() {
+    let cfg: Config = toml::from_str(
+        "[browser]\nruntime = \"launcher\"\nlauncher_socket = \"/run/celeris/browser-launcher.sock\"\n",
+    )
+    .unwrap();
+    assert!(cfg.browser.validate().is_ok());
+    assert_eq!(
+        cfg.browser.runtime_kind(),
+        task_worker::browser::BrowserRuntimeKind::Launcher {
+            socket: std::path::PathBuf::from("/run/celeris/browser-launcher.sock"),
+        }
+    );
+}
+
+#[test]
+fn browser_runtime_launcher_without_socket_is_rejected() {
+    let cfg: Config = toml::from_str("[browser]\nruntime = \"launcher\"\n").unwrap();
+    let err = cfg.browser.validate().unwrap_err();
+    assert!(err.to_string().contains("launcher_socket"));
+}
+
+#[test]
+fn browser_runtime_unknown_value_is_rejected() {
+    let cfg: Config = toml::from_str("[browser]\nruntime = \"bogus\"\n").unwrap();
+    let err = cfg.browser.validate().unwrap_err();
+    assert!(err.to_string().contains("runtime"));
 }
 use task_core::{AccountAdapter, DelegationLimits, OrgKind, Tier, WorkerHint};
 

@@ -214,9 +214,11 @@ pub(super) async fn create_provider(
         return Err(ApiProblem::provider_exists(&create.id));
     }
     validate_credential_refs(&create.credential_refs)?;
+    let create_tiers_explicit = create.tiers.is_some();
     let mut file = create.into_file();
     check_model_routing(&file)?;
     check_provider_kind(&state, &file)?;
+    restrict_qwen_acp_tiers(&mut file, create_tiers_explicit)?;
     migrate_credentials(&state, &mut file)?;
     write_provider_file(&dir, &file).map_err(|e| ApiProblem::internal(e.to_string()))?;
     tracing::info!(who = "admin", op = "provider_create", provider_id = %file.id, adapter = %file.adapter, "admin: provider created");
@@ -261,6 +263,7 @@ pub(super) async fn patch_provider(
     let mut updated = patch.apply(current);
     check_model_routing(&updated)?;
     check_provider_kind(&state, &updated)?;
+    restrict_qwen_acp_tiers(&mut updated, patch.tiers.is_some())?;
     // ADR-0024 D2 / ADR-0025 D1 / S1: patch 後の組み合わせも検証する（`id`/`adapter` は patch で変わらない）。
     if updated.account_pool {
         check_account_pool_adapter(&state, &updated.adapter)?;
@@ -384,6 +387,46 @@ pub(super) async fn check_provider(
         )),
         Err(crate::admin::CheckError::Unavailable(message)) => Err(ApiProblem::internal(message)),
     }
+}
+
+fn restrict_qwen_acp_tiers(
+    file: &mut crate::admin::ProviderConfigFile,
+    tiers_explicit: bool,
+) -> Result<(), ApiProblem> {
+    use task_core::{LlmSourceRef, Tier};
+    let proxy_model = matches!(
+        file.model.as_str(),
+        "celeris/frontier"
+            | "celeris/standard"
+            | "celeris/cheap"
+            | "openai/celeris/frontier"
+            | "openai/celeris/standard"
+            | "openai/celeris/cheap"
+    ) || ["OPENAI_MODEL", "LITELLM_MODEL", "MODEL"]
+        .into_iter()
+        .any(|key| {
+            file.env.get(key).is_some_and(|value| {
+                value.starts_with("celeris/") || value.starts_with("openai/celeris/")
+            })
+        });
+    let qwen_model = {
+        let lower = file.model.to_ascii_lowercase();
+        lower.starts_with("qwen") || lower.contains("/qwen")
+    };
+    let qwen_source = matches!(&file.llm_source, Some(LlmSourceRef::OpenaiCompatible(id)) if id.to_ascii_lowercase().starts_with("qwen"));
+    if file.adapter == "acp"
+        && !matches!(&file.llm_source, Some(LlmSourceRef::Celeris))
+        && !proxy_model
+        && (qwen_model || qwen_source)
+    {
+        if tiers_explicit && file.tiers.iter().any(|tier| *tier != Tier::Cheap) {
+            return Err(ApiProblem::bad_request(
+                "Qwen ACP providers support only the cheap tier",
+            ));
+        }
+        file.tiers = vec![Tier::Cheap];
+    }
+    Ok(())
 }
 
 fn check_model_routing(file: &crate::admin::ProviderConfigFile) -> Result<(), ApiProblem> {

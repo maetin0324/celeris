@@ -385,6 +385,19 @@ case "$MODE" in
   stop-start) promote_stop_start ;;
 esac
 
+# ---- web/ の追従（ADR-0081 / web ADR-W3 付記 2026-10-02 (C)）----------------
+#
+# celeris と gui の切替が済んだ後に、旧 release の celeris-web@ が動いていれば新 release へ移す。
+# web-follow.sh は常に exit 0 の設計だが、万一失敗しても警告だけにして昇格は失敗にしない。
+# celeris@ の unit には触れない（web は daemon の handoff を起こさない）。
+WEB_FOLLOW="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/web-follow.sh"
+if [ -x "$WEB_FOLLOW" ]; then
+  "$WEB_FOLLOW" "$SHA12" "$OLD" 2>&1 | tee -a "$SD_LOG_FILE" >&2 \
+    || sd_log "warning: web-follow.sh $SHA12 ${OLD:-<none>} failed (promotion is not affected)"
+else
+  sd_log "warning: $WEB_FOLLOW not found; web was not moved to $SHA12"
+fi
+
 # ---- promoted.json（ADR-0041 D3）------------------------------------------
 #
 # 「このリリースが、いつ、どの版から、どうやって昇格したか」を**リリースの中に**残す。

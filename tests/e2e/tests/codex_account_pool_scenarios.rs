@@ -10,7 +10,6 @@
 //! 3. `POST /accounts {"id":…,"adapter":"codex"}` → `login` が `kind: "device_code"` と `user_code` を返し、
 //!    スタブの `codex login --device-auth` の完了後に `logged_in: true` になる。`login/code` は 409
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,12 +29,10 @@ fn bin(name: &str) -> PathBuf {
     path
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// celeris に渡すポートを予約する。`Env` が持ち続け、並走する別のテストの celeris と
+/// 同じポートを共有しない（celeris は `SO_REUSEPORT` で bind する。`e2e::PortReservation`）。
+fn reserve_port() -> e2e::PortReservation {
+    e2e::PortReservation::new().unwrap()
 }
 
 /// デーモンの起動（API が `/health` に答え、最初の tick がスナップショットを出す）を待つ上限。
@@ -102,11 +99,13 @@ struct Env {
     root: PathBuf,
     accounts_dir: PathBuf,
     port: u16,
+    _port: e2e::PortReservation,
     token: Option<String>,
 }
 
 impl Env {
     fn new() -> Self {
+        let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let accounts_dir = root.join("codex-accounts");
@@ -114,7 +113,8 @@ impl Env {
             _tmp: tmp,
             root,
             accounts_dir,
-            port: free_port(),
+            port: reserved.port(),
+            _port: reserved,
             token: None,
         }
     }

@@ -115,6 +115,7 @@ impl Config {
             delivery: task_ops::delivery::DeliveryPolicy {
                 projects: self.selfdeploy.delivery_projects.clone(),
                 repo: self.selfdeploy.repo.clone(),
+                default_departments: self.selfdeploy.delivery_default_departments.clone(),
             },
             max_concurrency: self.max_concurrency,
             lease_grace: Duration::from_secs(self.lease_grace_secs),

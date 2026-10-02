@@ -46,6 +46,8 @@ pub enum RuntimeError {
     NotRunning,
     #[error("runtime relay did not become ready: {0}")]
     RelayNotReady(String),
+    #[error("bubblewrap pid namespace init did not become ready")]
+    InitNotReady,
 }
 
 /// ADR-0108 D1: sandbox の proxy listener から来た接続ごとに起動する celeris-browser-egress。
@@ -587,6 +589,39 @@ impl IsolatedRuntime {
             Some(pid) => pid,
             None => return Err(RuntimeError::NoChildPid(rt.failed_stderr())),
         };
+        // --info-fd is written before bwrap releases its child from child_wait_fd. Killing the
+        // controller immediately after that report can kill the outer monitor before pid 1
+        // calls PR_SET_PDEATHSIG, leaving a live sandbox behind. bwrap's init enters do_wait
+        // only after arming the signal; do not expose the runtime until then.
+        // UsernsMode::Fd (launcher, ADR-0115/0116) also works: the launcher process is bwrap's
+        // parent in the host pid ns, so --info-fd reports a host pid, and the launcher (euid
+        // celeris-browser) owns the userns that is an ancestor of the init's userns, so it may
+        // read /proc/<pid>/wchan and stat and may SIGKILL the init.
+        let init_pid = rt.inner_pid;
+        let init_starttime = process_starttime(init_pid);
+        let init_ready = || {
+            init_starttime.is_some_and(|st| same_process_alive(init_pid, st))
+                && std::fs::read_to_string(format!("/proc/{init_pid}/wchan"))
+                    .is_ok_and(|wchan| wchan.trim() == "do_wait")
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && rt.is_running() {
+            if init_ready() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if !rt.is_running() || !init_ready() {
+            // The pid namespace init may not have armed PDEATHSIG. Kill it explicitly while
+            // its identity is still known; killing only the outer monitor can strand it.
+            if init_starttime.is_some_and(|st| same_process_alive(init_pid, st)) {
+                unsafe { libc::kill(init_pid, libc::SIGKILL) };
+            }
+            if rt.is_running() {
+                rt.kill();
+            }
+            return Err(RuntimeError::InitNotReady);
+        }
         if let (Some(cfg), Some((ctrl, sandbox_end))) = (spec.egress.clone(), channel) {
             drop(sandbox_end);
             let stats = Arc::new(Mutex::new(EgressStats::default()));

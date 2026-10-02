@@ -291,3 +291,14 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - `gui`: `pnpm install --frozen-lockfile` → exit 0、`pnpm run typecheck`（`react-router typegen && tsc -b`）→ exit 0、`pnpm run test`（vitest）→ exit 0（85 files / 1250 tests passed）。
 - `git merge-tree --write-tree main HEAD` → 衝突なしで tree を生成（exit 0）。`git merge-base --is-ancestor main HEAD` → exit 0。
 - `git status` / `git diff --stat` ともに本行追記以外の変更なし。本番 DB・本番 host は操作していない。
+
+### 取り込み前の最終確認 — 2026-10-02（work unit `land-final`）
+
+main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135c488198ace804aab14023db`) の祖先（`git merge-base --is-ancestor main HEAD` → exit 0）で、追加 merge は不要だった。`git merge-tree --write-tree main HEAD` は exit 0、tree `57e25288479c7e08a33a30e3b0a4a9384cb3a8b4` を生成し、衝突なし。
+
+- ADR-0119 `docs/adr/0119-root-delivery-without-assignee.md` と ADR-0051 の付記、コード、生成 schema、PROGRESS の参照は一致。`git ls-tree -r` で main と refs/heads/celeris・refs/remotes/celeris の全 129 refs を走査し、ADR-0119 は本ブランチと関連する統合ブランチの 2 refs のみで使用。main に同番号の決定はなく、内容の異なる ADR 番号衝突はない。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → exit 0（全 workspace 成功、`instance_handoff` を含む）。失敗試験なし。前回レビューでの `instance_handoff` 失敗は今回の再実行で再現せず、`verify-land2` で同 test binary を単独 3 回実行した結果も全て 8/8 pass のため、本ブランチ起因ではない負荷依存 flaky と判断。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- GUI（`gui`）: `pnpm install --frozen-lockfile` → exit 0、`pnpm run typecheck` → exit 0、`pnpm run test` → exit 0（85 files / 1250 tests）。
+- 本番 DB・本番 host は操作していない。

@@ -540,3 +540,33 @@ exit 101 になった。コードは変更していない（検証のみ）の�
   時間依存試験の決定化は別タスクで進行中）。`cargo test --workspace` が exit 0 になる実行を得たことと、
   sccache 撤去自体の確認（crate・cache_server・unit・setup スクリプトの不在、env 構築コードの不在）が
   変わらないことを記録する。
+
+### ADR-0129 (1) 撤去後の final review 不合格: browser_h3_wire の再確認（work unit `h3-recheck`）
+
+final review で `cargo test --workspace` が `task-worker` の `browser_h3_wire`
+（`inner_injection_wire`: `page target: SinkFailed`、
+`real_broker_browser_injection_receipt_and_origin_guards`）で落ちた旨の指摘を受けた。
+
+- ブランチ差分の確認: `git diff 7b77f17a39b3 HEAD -- crates/task-worker/src/browser*
+  crates/task-worker/tests/browser*` は**空ではなかった**（Objective の前提が外れていた）。差分は
+  `crates/task-worker/src/browser_specialist.rs` の 4 行のみで、`worker-core`（commit `75c54e53`、
+  「task-worker から sccache の型・配線と env 除去の経路を外す」）が `WorkerAdapter` trait から
+  `with_env_removed`（旧: `RUSTC_WRAPPER`/`SCCACHE_*` を継いだ env から取り除くための経路）を削除した際に、
+  `BrowserSpecialistAdapter` 側の同名ラッパー実装 1 箇所を一緒に削除したもの。trait 側にも他の実装にも
+  `with_env_removed` は残っておらず、`browser_h3_wire.rs` が検査する injection/origin guard のロジックには
+  触れていない（env 除去経路の削除は本タスクの Objective そのもの）。
+- `cargo test -p task-worker --test browser_h3_wire` を単独で 3 回実行 → **3 回とも exit 0、2 passed
+  0 failed**（`inner_injection_wire` ok、`real_broker_browser_injection_receipt_and_origin_guards` ok）。
+  2 回目の実行では cargo のビルドキャッシュ更新時に SQLite ロックの再試行ログ（`Error code 5: database is
+  locked`、cargo 自身の再試行で解消）が出たのみで試験結果に影響は無い。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace` → **exit 0**。試験バイナリ 115 件すべて `test result: ok`、failed 0 件、
+  `test result:` 行の `passed` 数を合算すると 3228。`tests/browser_h3_wire.rs` も同じ run 内で
+  `inner_injection_wire ... ok` / `real_broker_browser_injection_receipt_and_origin_guards ... ok`。
+- 否定 grep（基準2、前回 attempt の不合格点）`! grep -rn '"SCCACHE_' crates/task-dispatch/src
+  crates/task-worker/src crates/celerisctl/src --include=*.rs | grep -v -E '/tests?(/|\.rs|_)'` → exit 0
+  （`ctl-literal` work unit の修正が本ブランチに取り込まれていることを確認）。
+- 結論: final review が報告した `browser_h3_wire` の失敗は、単独実行・全体実行のいずれでも再現しなかった
+  （共用 host の負荷に起因する一時的な flake と推測するが、本タスクのコード — `browser_specialist.rs` の
+  `with_env_removed` 削除 — を疑わせる具体的な根拠は無かった）。browser のコード・試験は変更していない。

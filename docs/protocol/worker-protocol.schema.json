@@ -661,7 +661,7 @@
       "type": "object"
     },
     "ConversationAddressee": {
-      "description": "`context.conversation_addressee`（ADR-0033 D4 / Phase 28）: この run が対話用タスクなら、相手が\n秘書かそれ以外かを表す。対話でない run では `None`。この値そのものは判断せず、`preamble::render`\nが対話専用の指示文（作業を始めない・委譲不可）を出し分けるためだけに使う純粋なデータ\n（判定はディスパッチャが `task.conversation` と組織図から決定的に行う。DESIGN 原則 1）。",
+      "description": "`context.conversation_addressee`（ADR-0033 D4 / Phase 28）: この run が対話用タスクなら、相手が\n秘書かそれ以外かを表す。対話でない run では `None`。この値そのものは判断せず、`preamble::render`\nが対話専用の指示文（作業を始めない・委譲不可）を出し分けるためだけに使う純粋なデータ\n（判定はディスパッチャが `task.conversation` と組織図から決定的に行う。ADR-0001 D2 原則 1）。",
       "enum": [
         "secretary",
         "other"
@@ -1878,7 +1878,7 @@
       ]
     },
     "RecentWork": {
-      "description": "`context.recent_work[]`（ADR-0033 D4 / Phase 33: 実機の事故 — 担当が自分の直近の仕事を知らずに\n「対象タスク ID が必要です」と聞き返した — の再発防止）。対話 run にだけ、その担当の直近の仕事を渡す。\n生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。DESIGN 原則 1）。",
+      "description": "`context.recent_work[]`（ADR-0033 D4 / Phase 33: 実機の事故 — 担当が自分の直近の仕事を知らずに\n「対象タスク ID が必要です」と聞き返した — の再発防止）。対話 run にだけ、その担当の直近の仕事を渡す。\n生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。ADR-0001 D2 原則 1）。",
       "properties": {
         "artifacts": {
           "description": "この仕事が残した成果物の名前（パスは含まない）。",

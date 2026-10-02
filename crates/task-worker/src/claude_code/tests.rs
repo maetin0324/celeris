@@ -3470,7 +3470,11 @@ fn planner_prompt_has_the_check_writing_section() {
     let task = crate::protocol::tests::sample_task();
     let needles = [
         "### check の書き方",
-        "`docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write",
+        "`agent-docs/progress/`, `agent-docs/adr/`, and every path this plan itself says the unit may write",
+        // ADR-0128 D3・D5・D7: 記録の置き場所と land 系 check の 3 本。
+        "a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers)",
+        "`agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).",
+        "`sh scripts/dev/check-doc-links.sh`, `sh scripts/dev/check-adr-numbers.sh` and `sh scripts/dev/progress-index.sh --check`",
         "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
         "corepack pnpm@<version from package.json packageManager> -C <dir>",
         "Compare against `$(git merge-base HEAD main)`",
@@ -3484,7 +3488,7 @@ fn planner_prompt_has_the_check_writing_section() {
         "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
         "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",
         "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
-        "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).",
+        "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),

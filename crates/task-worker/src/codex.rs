@@ -1,4 +1,4 @@
-//! `codex` アダプタ（DESIGN §5.4, ADR-0008 D3）。
+//! `codex` アダプタ（ADR-0008 D3）。
 //!
 //! `codex exec --json` は celeris 独自のワーカープロトコルを話さない。`--json` が吐く JSON Lines
 //! （`thread.started` → `item.*`（進捗）→ `turn.completed`/`turn.failed`）を読み、`claude-code`
@@ -497,7 +497,7 @@ async fn run_codex_once(
     //     `codex exec --help`'s own example is `-c model="o3"`) or dropped for resume with a comment
     //     below explaining why (the resumed thread already carries whatever approval/sandbox/
     //     writable-roots settings were set on the *first*, non-resume `exec` invocation that created
-    //     it — unverified against the real CLI beyond `--help`, see PROGRESS.md Phase 68c 未解決事項).
+    //     it — unverified against the real CLI beyond `--help`, see agent-docs/PROGRESS.md Phase 68c 未解決事項).
     let mut is_exec_resume_subcommand = false;
     if let (Some(id), CodexResumeMode::ExecResume) = (&resume_id, config.resume_mode) {
         command.arg("resume").arg(id);

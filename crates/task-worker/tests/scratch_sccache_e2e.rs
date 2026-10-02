@@ -9,7 +9,7 @@
 //! `cfg-if` / `itoa`。`--offline` で手元の registry の cache だけを使う）を持つ小さな crate を、別の owner の target で 2 回
 //! ビルドする。`task_worker::scratch::cargo_env_with`（Celeris の run と同じ env。`RUSTC_WRAPPER` は `<scratch>/bin/sccache`）
 //! なら 2 回目の依存が hit し、素の sccache（`CARGO_TARGET_DIR` が rustc の env に残る）なら hit しないことを確かめる。
-//! 外部ネットワークには出ない（loopback と手元の registry だけ）。証跡は `docs/progress/phase-G.md`。
+//! 外部ネットワークには出ない（loopback と手元の registry だけ）。証跡は `agent-docs/progress/phase-G.md`。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

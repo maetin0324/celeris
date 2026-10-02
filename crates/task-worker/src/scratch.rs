@@ -2,7 +2,7 @@
 //!
 //! `<scratch>/targets/<owner>/{lease.json,target/}` の owner とパス、`lease.json` の読み書き、`.lock` の flock、
 //! 割り当て（`allocate`。adopt〈rename による引き継ぎ〉を含む）、分類（`classify`）、削除順を決める純粋関数
-//! `plan_gc`、adopt の候補選び `choose_adopt` をここに置く。**LLM は呼ばない**（DESIGN 原則 1）。
+//! `plan_gc`、adopt の候補選び `choose_adopt` をここに置く。**LLM は呼ばない**（ADR-0001 D2 原則 1）。
 //! pool の走査・DB の状態の読み出し・削除スレッド・測定スレッドは `task-dispatch` の `scratch_gc` が持つ
 //! （dispatcher の tick と `celerisctl scratch` の両方が使う）。
 

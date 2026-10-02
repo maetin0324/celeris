@@ -222,20 +222,26 @@ fn retry_or_fail(s: &StateView, reason: &'static str) -> Outcome {
 /// タスクの状態機械。DESIGN.md / ADR-0002 D2,D3,D8 の遷移表を実装する純粋関数。
 pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransition> {
     match t {
-        // ADR-0010 D1（P-4 / P-9）: Cancel と DependencyFailed は非終端状態からのみ cancelled へ。
+        // ADR-0131 D7: 人の Cancel に限り failed → cancelled も許す。
         // ADR-0044 D6（Phase 55）: 案件・途中目標の中止による連鎖も同じ遷移（理由だけが違う）。
         Trigger::Cancel
         | Trigger::DependencyFailed
         | Trigger::ProjectCancelled
         | Trigger::MilestoneCancelled
         | Trigger::ParentCancelled => {
-            if s.status.is_terminal() {
+            if s.status.is_terminal()
+                && !(matches!(t, Trigger::Cancel) && s.status == Status::Failed)
+            {
                 Err(invalid(s, t))
             } else {
                 Ok(Outcome {
                     next: Status::Cancelled,
                     attempts: s.attempts,
-                    reason: t.name(),
+                    reason: if s.status == Status::Failed {
+                        "cancel_failed"
+                    } else {
+                        t.name()
+                    },
                 })
             }
         }

@@ -784,11 +784,11 @@ fn ready_tasks_excludes_approval_kind() {
     assert_eq!(ready[0].id, exec.id);
 }
 
-/// ADR-0010 D1（P-4）: 終端タスクへの Cancel は無効で、状態もイベントも変わらない。
+/// ADR-0131 D7: done/cancelled への Cancel は無効。failed は人が諦める操作として許す。
 #[test]
 fn cancel_is_invalid_for_terminal_tasks() {
     let store = SqliteStore::open_in_memory().unwrap();
-    for status in [Status::Done, Status::Failed, Status::Cancelled] {
+    for status in [Status::Done, Status::Cancelled] {
         let t = sample_task(status);
         store.insert(&t).unwrap();
         assert!(matches!(
@@ -798,6 +798,26 @@ fn cancel_is_invalid_for_terminal_tasks() {
         assert_eq!(store.get(t.id).unwrap().unwrap().status, status);
         assert!(store.events_for(t.id).unwrap().is_empty());
     }
+}
+
+#[test]
+fn inbox_cleanup_cancel_failed_preserves_attempts_and_records_reason() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut task = sample_task(Status::Failed);
+    task.attempts = 3;
+    store.insert(&task).unwrap();
+    let outcome = store
+        .apply_transition(task.id, Trigger::Cancel, None)
+        .unwrap();
+    assert_eq!(outcome.next, Status::Cancelled);
+    assert_eq!(outcome.attempts, 3);
+    assert_eq!(outcome.reason, "cancel_failed");
+    let updated = store.get(task.id).unwrap().unwrap();
+    assert_eq!(updated.status, Status::Cancelled);
+    assert_eq!(updated.attempts, 3);
+    assert!(store.events_for(task.id).unwrap().iter().any(|(_, event)| matches!(event,
+        Event::Transitioned { from: Status::Failed, to: Status::Cancelled, reason } if reason == "cancel_failed"
+    )));
 }
 
 /// ADR-0010 D2: Approval が cancel された場合も（reject と同じく）終端でない直接の子が cancelled になる。

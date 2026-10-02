@@ -34,6 +34,8 @@ pub mod console_action;
 /// ADR-0079 D7（Phase R1a）: 人への決定の要求の型と検証（純粋）。
 pub mod decision;
 pub mod delegate;
+/// ADR-0124: atomic coding task の決定的な直行経路判定。
+pub mod direct_route;
 /// ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation の純粋な型と関数。
 pub mod execution;
 /// ADR-0072 D13（Phase E3）: Complexity Gate（atomic/compound の決定的な判定）の純粋な型と関数。
@@ -237,6 +239,10 @@ pub use tree::{
 };
 pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
+pub use direct_route::{
+    DIRECT_ROUTE_POLICY_VERSION, DirectRouteInputs, Route, RouteDecision, RouteReason,
+    evaluate as evaluate_direct_route,
+};
 pub use execution_gate::{
     EXECUTION_GATE_POLICY_VERSION, EXECUTION_GATE_SCORE_THRESHOLD, ExecutionGateDecision,
     ExecutionGateInputs, ExecutionHintSpec, ExecutionMode, GateMode, GateSignal, GateSource,

@@ -3829,3 +3829,52 @@ echo '{"type":"result","subtype":"error_during_execution","is_error":true,"usage
         "{result_json}"
     );
 }
+
+/// ADR-0124 D4: 直行経路の run だけ `## Acceptance criteria` の直後に「直行経路（planner なし）」の節が出る。
+#[test]
+fn direct_route_prompt_has_the_section_after_the_acceptance_criteria() {
+    let task = crate::protocol::tests::sample_task();
+    let context = RunContext {
+        direct_route: Some(crate::protocol::DirectRouteContext {
+            policy_version: "direct-route/1".into(),
+            overrode_gate: true,
+            reasons: vec!["direct/single-repo: repos=1, multi_environment=false".into()],
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-direct", "artifacts");
+    let section = prompt
+        .find("## 直行経路（planner なし）")
+        .expect("direct route section");
+    let acceptance = prompt.find("## Acceptance criteria").expect("acceptance");
+    let instructions = prompt.find("## Instructions").expect("instructions");
+    assert!(acceptance < section && section < instructions, "{prompt}");
+    assert!(
+        prompt.contains("調査 → 編集 → テスト → 局所修正を、この run の中で完結させる。"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("落ちたら同じ run の中で直して再実行する"));
+    assert!(prompt.contains("判定の根拠（direct-route/1）:"));
+    assert!(prompt.contains("- direct/single-repo: repos=1, multi_environment=false"));
+}
+
+/// ADR-0124 D4: `direct_route` が無い run のプロンプトは 1 バイトも変わらない（節を除けば同一）。
+#[test]
+fn direct_route_prompt_absent_leaves_the_prompt_unchanged() {
+    let task = crate::protocol::tests::sample_task();
+    let without = build_prompt(&task, &RunContext::default(), "run-x", "artifacts");
+    assert!(!without.contains("直行経路"));
+    let context = RunContext {
+        direct_route: Some(crate::protocol::DirectRouteContext {
+            policy_version: "direct-route/1".into(),
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    let with = build_prompt(&task, &context, "run-x", "artifacts");
+    let section = super::prompt::direct_route_section(&context);
+    assert!(!section.is_empty());
+    assert!(!section.contains("判定の根拠"), "{section}");
+    assert_eq!(with.replacen(&section, "", 1), without);
+    assert!(super::prompt::direct_route_section(&RunContext::default()).is_empty());
+}

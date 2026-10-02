@@ -3180,6 +3180,8 @@ mod planner_budget;
 mod stage_reopen;
 
 mod browser_fallback;
+/// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
+mod direct_route;
 /// ADR-0124 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;

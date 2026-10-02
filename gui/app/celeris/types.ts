@@ -605,6 +605,10 @@ export type Event =
       type: "execution_gated";
     }
   | {
+      decision: RouteDecision;
+      type: "execution_routed";
+    }
+  | {
       mode: ExecutionMode;
       note?: string | null;
       /**
@@ -889,6 +893,7 @@ export type GateSource = "policy" | "human" | "hint";
  * 各軸の段階（小さな順序尺度）。
  */
 export type Level = "low" | "medium" | "high";
+export type Route = "direct" | "planned";
 /**
  * DESIGN §5.8 の境界。`Remote{cluster, path}` は `[[clusters]] id` と**クラスタ側の**作業ディレクトリ（ADR-0018、Phase 12）。
  * celeris はその写しを `workspace_root/<task_id>` に持ち、コマンドはクラスタで実行する。
@@ -4180,6 +4185,10 @@ export interface TaskRouting {
    */
   pause_after_source?: "human" | "agent";
   /**
+   * ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。
+   */
+  route?: RouteDecision | null;
+  /**
    * ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{"title": "Phase 1", "scope": "…"}]`）。/3 の planner
    * run の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の
    * `create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。
@@ -4248,6 +4257,19 @@ export interface TaskFeatureHints {
   reversibility?: Level | null;
   tool_intensity?: Level | null;
   verifiability?: Level | null;
+}
+export interface RouteDecision {
+  gate_rule_id: string;
+  overrode_gate: boolean;
+  policy_version: string;
+  reasons: RouteReason[];
+  route: Route;
+  shadow: boolean;
+}
+export interface RouteReason {
+  detail: string;
+  ok: boolean;
+  rule_id: string;
 }
 /**
  * ADR-0079 D12（Phase R2b）: 人が名指しした段階（`Task.routing.stages_hint`）。planner への入力で、
@@ -8331,6 +8353,11 @@ export interface ExecutionView {
    * ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。
    */
   plan_approval?: PlanApprovalView | null;
+  /**
+   * ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task
+   * には無い）。
+   */
+  route?: RouteDecision | null;
 }
 /**
  * ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
@@ -8753,6 +8780,11 @@ export interface TaskExecutionView {
    * ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。
    */
   plan_approval?: PlanApprovalView | null;
+  /**
+   * ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task
+   * には無い）。
+   */
+  route?: RouteDecision | null;
   /**
    * checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。
    */

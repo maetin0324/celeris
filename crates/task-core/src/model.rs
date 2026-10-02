@@ -587,6 +587,9 @@ pub struct TaskRouting {
     /// gate が判定した Task にだけ `Some`（`gate = "off"` の Task・E3 より前のタスクには無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::execution_gate::ExecutionGateDecision>,
+    /// ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::direct_route::RouteDecision>,
     /// ADR-0074 D2.1（Phase F3 途中確認）: `NewTaskSpec.pause_after` / `PATCH` /
     /// `PUT /tasks/{id}/execution/pause-after` / CoS の `create_task.pause_after` の現在値。
     /// **Task 専用の欄をわざわざ増やさず、ここに置く**（`TaskRouting` は既に「あとから足された
@@ -1294,6 +1297,10 @@ pub enum Event {
     /// `Task.routing.execution` と同じトランザクションで書く。状態は変えない（`replay` は無視する）。
     ExecutionGated {
         decision: Box<crate::execution_gate::ExecutionGateDecision>,
+    },
+    /// ADR-0124: 経路選択の監査記録。状態は変えない。
+    ExecutionRouted {
+        decision: Box<crate::direct_route::RouteDecision>,
     },
     /// ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形（atomic / compound）を人が後から
     /// 決めた（`POST /tasks/{id}/execution/decompose`、MCP `task_decompose`、retry の `execution`）。

@@ -269,6 +269,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkUnitSpecOverridden { .. } => "work_unit_spec_overridden",
         Event::WorkUnitChecksFailed { .. } => "work_unit_checks_failed",
         Event::ExecutionGated { .. } => "execution_gated",
+        Event::ExecutionRouted { .. } => "execution_routed",
         Event::ExecutionHintSet { .. } => "execution_hint_set",
         Event::RepairScheduled { .. } => "repair_scheduled",
         Event::QuotaEstimated { .. } => "quota_estimated",

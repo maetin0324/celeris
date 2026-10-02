@@ -304,3 +304,7 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - この run の `cargo test -p celeris --test instance_handoff` → exit 101（3 passed / 5 failed、60.20秒）。3件は ADR-0095 worker db guard の user namespace `Operation not permitted`、残り2件は sandbox 上で handoff dispatch / standby 状態待ちが成立しなかった。sandbox は user namespace を拒否するため、試験は daemon を起動できず、待ち時間の大小にかかわらず実行確認には使えない。
 - instance_handoff を含む実行確認は sandbox 外で daemon が走る stage 統合の workspace check と final review の `cargo test --workspace` に委ねる。この sandbox 内の試験失敗は plan_issue としない。
 - `cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` はこの run で確認する。変更範囲は `crates/celeris/tests/instance_handoff.rs` と本節のみ。
+
+## Atomic coding task の planner なし直行経路 — Phase 4 統合検証（2026-10-02）
+
+統合後 HEAD `dd4b5a6131b4` の `cargo build --workspace --bins` と `cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は exit 101（instance_handoff 8 件中 3 passed / 5 failed）で、`cargo test -p celeris --test instance_handoff` の単独再実行でも同じ5件が失敗した。3件は ADR-0095 worker db guard の user namespace probe が `Operation not permitted`、2件は handoff dispatch/standby 待機 assertion 失敗。結果、未解決事項、再確認提案は [Phase 4 検証記録](progress/phase-direct-route.md) を参照。実装箇所の案内として architecture map の direct route 行を実ファイル・関数名に更新した。

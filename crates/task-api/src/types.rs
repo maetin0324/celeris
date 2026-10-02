@@ -1946,6 +1946,10 @@ pub struct TaskExecutionView {
     /// D13: Complexity Gate の判定（無ければ gate 対象外か、まだ判定していない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<task_core::ExecutionGateDecision>,
+    /// ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task
+    /// には無い）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<task_core::RouteDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<ExecutionPhase>,
     /// 計画の無い Task（暗黙の WorkUnit）は `None`。

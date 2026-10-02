@@ -333,10 +333,11 @@ async fn get_task_execution(
                 }
                 None => None,
             };
-            let (gate, phase, metrics, phase_checkpoint, awaiting_children, plan_approval) =
+            let (gate, route, phase, metrics, phase_checkpoint, awaiting_children, plan_approval) =
                 match detail.execution {
                     Some(e) => (
                         e.gate,
+                        e.route,
                         e.phase,
                         e.metrics,
                         e.phase_checkpoint,
@@ -344,6 +345,7 @@ async fn get_task_execution(
                         e.plan_approval,
                     ),
                     None => (
+                        None,
                         None,
                         None,
                         task_core::summarize_execution_metrics(&task, &[]),
@@ -354,6 +356,7 @@ async fn get_task_execution(
                 };
             Ok(TaskExecutionView {
                 gate,
+                route,
                 phase,
                 plan,
                 runs: detail.runs,

@@ -808,6 +808,7 @@ fn build_task(
         // ADR-0079 D12（Phase R5a）: 人（`POST /tasks`）と CoS（`create_task.stages_hint`）が名指しした段階。
         // root の planner だけが読む（R2b）。空なら出力しない。
         stages_hint: spec.stages_hint.clone(),
+        route: None,
     };
     let task = Task {
         tree: None,

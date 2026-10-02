@@ -19,6 +19,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 | Event（追記専用） | task-core::store | `crates/task-core/src/store/events.rs` | [DESIGN §4.3](DESIGN.md#43-event追記専用) |
 | SQLite 永続化（facade + 領域別 impl） | task-core::store | `crates/task-core/src/store/mod.rs`（module map はここの doc comment） | [DESIGN §5.1](DESIGN.md#51-store-task-core) |
 | 実行計画（ExecutionPlan/WorkUnit/Run） | task-core::execution_plan | `crates/task-core/src/execution_plan.rs`（`execution_plan/{validation,scheduling}.rs`） | [ADR-0072](adr/0072-task-execution-decomposition.md), [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| Execution gate（Complexity Gate の atomic/compound）と直行経路の判定（`direct_route::evaluate`・`ExecutionRouted`） | task-core::execution_gate / direct_route | `crates/task-core/src/execution_gate.rs`（`decide`・`out_of_scope_rule`）, `crates/task-core/src/direct_route.rs`（`evaluate`・`RouteDecision`） | [ADR-0072](adr/0072-task-execution-decomposition.md), [ADR-0124](adr/0124-atomic-direct-route.md) |
 | 再帰task木（leaf/子task, gate, 上限, 生存確認） | task-core::tree | `crates/task-core/src/tree.rs`（`tree/{gate,limits,approval,liveness}.rs`） | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | 継続セッション（node / WU 単位の continuation session） | task-core::node_session | `crates/task-core/src/node_session.rs`（`NodeSessionStore::{node_session_*,work_unit_session_*}`）, `crates/task-core/migrations/{0023_node_sessions,0038_work_unit_sessions}.sql` | [ADR-0054](adr/0054-stateful-sessions-and-streaming-chat.md), [ADR-0124](adr/0124-claude-session-resume.md) |
 | execute continuation の session resume / checkpoint fallback | task-dispatch::sessions, dispatcher::continuation_session | `crates/task-dispatch/src/sessions.rs`（`decide_continuation`）, `crates/task-dispatch/src/dispatcher/continuation_session.rs`（`resolve_continuation_session`。`dispatch_run.rs` の WU run 開始前に呼ぶ）, `dispatcher/sinks.rs`（`StoreSink::session_resume_failed` の retire）, `[sessions] continuation_resume` | [ADR-0124](adr/0124-claude-session-resume.md) |
@@ -35,13 +36,13 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | Dispatcher facade（tick・起動/停止順） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher.rs`（module map はこの doc comment） | [ADR-0082](adr/0082-dispatcher-module-split.md), [記録](progress/phase-P0-dispatcher.md) |
-| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs`（`execution_gate_if_needed`・直行経路の記録 `execution_route_if_needed`・`direct_route_inputs`。試験は `dispatcher/tests/direct_route.rs`） | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0124](adr/0124-atomic-direct-route.md) |
 | Browser backend の適合判定・fallback 候補 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{dispatch_run,worker_task}.rs` | [ADR-0106](adr/0106-browser-phase4-conformance-dispatch.md), [ADR-0107](adr/0107-browser-fallback-candidate-preparation.md) |
 | 木の子task の gate・一括作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/tree_units.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | 委譲/承認の子task 作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/child_tasks.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |
 | provider/account 選択・quota 見積り | task-dispatch | `crates/task-dispatch/src/{dispatcher/provider_select.rs,dispatcher/quota_book.rs,accounts.rs}` | [ADR-0069](adr/0069-routing-four-layers.md) |
 | worker 起動・完了処理 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{worker_task,worker_finish}.rs` | [DESIGN §5.3](DESIGN.md#53-worker-protocol-task-worker) |
-| planner/reviewer の起動・判定（review 前 target 同期・reviewed/merge candidate SHA 記録・衝突時の IntegrationRepair 起票・stale の再同期〈attempts 不変〉） | task-dispatch | `crates/task-dispatch/src/{dispatcher/planner_flow.rs,dispatcher/review_spawn.rs,dispatcher/review_verdict.rs,review.rs}` | [ADR-0076](adr/0076-planner-reviewer-quota-roles.md), [ADR-0118](adr/0118-review-target-sync-and-merge-candidate.md), [ADR-0120](adr/0120-pre-review-sync-integration-repair.md) |
+| planner/reviewer の起動・判定（review 前 target 同期・reviewed/merge candidate SHA 記録・衝突時の IntegrationRepair 起票・stale の再同期〈attempts 不変〉） | task-dispatch | `crates/task-dispatch/src/{dispatcher/planner_flow.rs,dispatcher/review_spawn.rs,dispatcher/review_verdict.rs,review.rs}` | [ADR-0076](adr/0076-planner-reviewer-quota-roles.md), [ADR-0118](adr/0118-review-target-sync-and-merge-candidate.md), [ADR-0120](adr/0120-pre-review-sync-integration-repair.md), [ADR-0124](adr/0124-atomic-direct-route.md)（直行経路は planner を起こさず `dispatch_run.rs` の `is_planner_dispatch` で分岐） |
 | cluster/ssh master・接続監視 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/cluster.rs` | [ADR-0018](adr/0018-remote-clusters-over-ssh.md) |
 | クラスタ job の poll・再開（`qstat -xf`/`sacct`） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/cluster_job_wait.rs` | [ADR-0090](adr/0090-durable-wait-for-cluster-jobs.md) |
 | CoS run の並列度の例外（`is_cos_run`） | task-dispatch::capacity | `crates/task-dispatch/src/capacity.rs` | [ADR-0089](adr/0089-cos-runs-bypass-concurrency.md) |
@@ -56,7 +57,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 |---|---|---|---|
 | RunRequest/RunContext 境界 | task-worker::protocol | `crates/task-worker/src/protocol.rs` | [DESIGN §5.3](DESIGN.md#53-worker-protocol-task-worker) |
 | Adapter 選択 | task-worker::adapter | `crates/task-worker/src/adapter.rs` | [DESIGN §5.4](DESIGN.md#54-adapters) |
-| Claude Code adapter（CLI起動 + prompt、run 内の再探索重複・resume の印を `Usage.duplicate_reads` / `session_resumed` へ） | task-worker::claude_code | `crates/task-worker/src/claude_code.rs`（`claude_code/prompt.rs`、`ExplorationTracker`） | [DESIGN §5.4](DESIGN.md#54-adapters), [ADR-0124](adr/0124-claude-session-resume.md) |
+| Claude Code adapter（CLI起動 + prompt、run 内の再探索重複・resume の印を `Usage.duplicate_reads` / `session_resumed` へ） | task-worker::claude_code | `crates/task-worker/src/claude_code.rs`（`claude_code/prompt.rs`、`ExplorationTracker`。直行経路の節 `direct_route_section` は ADR-0124 D4、`RunContext.direct_route`） | [DESIGN §5.4](DESIGN.md#54-adapters), [ADR-0124 session resume](adr/0124-claude-session-resume.md), [ADR-0124 direct route](adr/0124-atomic-direct-route.md) |
 | Codex / ACP adapter | task-worker | `crates/task-worker/src/{codex,acp}.rs` | [DESIGN §5.4](DESIGN.md#54-adapters), [Phase 6 記録](progress/phase-001-050.md) |
 | PaperQA2 / Local Deep Research adapter | task-worker | `crates/task-worker/src/{paperqa,local_deep_research}.rs`（`paperqa/render.rs`） | [DESIGN §5.4](DESIGN.md#54-adapters) |
 | Browser capability（policy/credential 越境） | task-worker::browser | `crates/task-worker/src/browser{,_credential,_policy}.rs` | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
@@ -70,7 +71,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
-| Task/Project の一覧・詳細 DTO | task-ops::view | `crates/task-ops/src/view.rs` | [DESIGN §5.9](DESIGN.md#59-cli-taskctl) |
+| Task/Project の一覧・詳細 DTO | task-ops::view | `crates/task-ops/src/view.rs`（TaskDetail の `execution.route` は ADR-0124 D3） | [DESIGN §5.9](DESIGN.md#59-cli-taskctl), [ADR-0124](adr/0124-atomic-direct-route.md) |
 | Event からの replay/整合性検査 | task-ops::replay | `crates/task-ops/src/replay.rs` | [DESIGN §4.3](DESIGN.md#43-event追記専用) |
 | 知識ベース操作（KB・skill） | task-ops::knowledge | `crates/task-ops/src/knowledge.rs` | [ADR-0068](adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
 | 決定の要求・plan/phase gate | task-ops | `crates/task-ops/src/{decision,plan_gate,phase_gate}.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
@@ -116,7 +117,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
-| Task detail 画面（loader/action + タブ部品） | gui::app | `gui/app/{routes/tasks.$id.tsx,celeris/task-detail.server.ts,components/task-detail}` | [DESIGN Phase 9](DESIGN.md#phase-9-gui-のための基盤と-http-api-層) |
+| Task detail 画面（loader/action + タブ部品） | gui::app | `gui/app/{routes/tasks.$id.tsx,celeris/task-detail.server.ts,components/task-detail}`（経路の表示は ADR-0124 D3） | [DESIGN Phase 9](DESIGN.md#phase-9-gui-のための基盤と-http-api-層), [ADR-0124](adr/0124-atomic-direct-route.md) |
 | Browser 操作・本人承認・Live View | gui::app | `gui/app/{routes/browser.control.ts,components/BrowserRunsPanel.tsx,celeris/browser-live.server.ts}` | [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md), [ADR-0099](adr/0099-browser-phase3-control-lease.md), [ADR-0100](adr/0100-browser-phase3-live-proxy-acl.md) |
 | 組織図・アカウント・案件の画面 | gui::routes | `gui/app/routes/{org,accounts,projects.$id}.tsx` | [DESIGN Phase 9](DESIGN.md#phase-9-gui-のための基盤と-http-api-層) |
 | 新 SPA（旧 GUI を daemon 遅延から切り離す） | web (設計中) | 未着手（Phase 0 は設計のみ） | [ADR-0081](adr/0081-web-spa-frontend.md), [implementation plan](web/implementation-plan.md) |

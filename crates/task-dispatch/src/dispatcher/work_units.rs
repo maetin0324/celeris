@@ -1465,12 +1465,108 @@ impl Dispatcher {
                 decision: Box::new(decision),
             },
         ) {
-            Ok(updated) => Ok(updated),
+            // ADR-0124 D2: gate の判定を書いた直後、同じ dispatch で 1 回だけ経路を決めて記録する。
+            Ok(updated) => Ok(self.execution_route_if_needed(updated)),
             Err(e) => {
                 tracing::warn!(task_id = %task.id, error = %e, "failed to record the execution gate decision; continuing without it");
                 Ok(task)
             }
         }
+    }
+
+    /// ADR-0124 D2: gate の判定を持ち、経路をまだ決めていない・計画を持たない Task に
+    /// `task_core::direct_route::evaluate` を当て、`Event::ExecutionRouted` と `Task.routing.route` を
+    /// 同じ `update_task` で書く。入力は store と担当の実効 profile から決定的に計算する（LLM なし）。
+    /// 記録に失敗しても dispatch は止めない（経路が無い Task は従来どおり gate の判定に従う）。
+    fn execution_route_if_needed(&self, task: Task) -> Task {
+        let Some(routing) = task.routing.clone() else {
+            return task;
+        };
+        let Some(gate) = routing.execution.as_ref() else {
+            return task;
+        };
+        if routing.route.is_some() {
+            return task;
+        }
+        let inputs = match self.direct_route_inputs(&task) {
+            Ok(inputs) => inputs,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to compute the direct route inputs; leaving the route unrecorded");
+                return task;
+            }
+        };
+        match self.store.execution_plan_active(task.id) {
+            Ok(None) => {}
+            Ok(Some(_)) => return task,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to read the active plan; leaving the route unrecorded");
+                return task;
+            }
+        }
+        let decision = task_core::evaluate_direct_route(&task, gate, inputs);
+        let mut fresh = task.clone();
+        let mut new_routing = routing;
+        new_routing.route = Some(decision.clone());
+        fresh.routing = Some(new_routing);
+        fresh.updated_at = OffsetDateTime::now_utc();
+        match self.store.update_task(
+            &fresh,
+            Event::ExecutionRouted {
+                decision: Box::new(decision),
+            },
+        ) {
+            Ok(updated) => updated,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to record the execution route; continuing without it");
+                task
+            }
+        }
+    }
+
+    /// ADR-0124 D1: `DirectRouteInputs` を store と組織から決定的に計算する。
+    /// - `coding_harness`: 担当の実効 profile（Task の genre の上書き込み）の既定ハーネスが `coding`。
+    ///   組織が無い・担当が無いなら `false`。
+    /// - `cross_department`: Task が担当の profile に無い genre・skill を要する、またはこの Task に
+    ///   部をまたぐ認可（`cross-department: …` の承認）が記録されている。
+    /// - `pending_approval`: この Task に未決の承認がある。
+    fn direct_route_inputs(
+        &self,
+        task: &Task,
+    ) -> Result<task_core::DirectRouteInputs, DispatchError> {
+        let org = self.store.org_list()?;
+        let profile = task
+            .assignee
+            .as_deref()
+            .filter(|_| !org.is_empty())
+            .map(|a| task_core::profile::resolve(&org, a));
+        let coding_harness = profile.as_ref().is_some_and(|p| {
+            p.clone().with_task(task).harness_default.as_deref() == Some("coding")
+        });
+        let foreign_genre = profile.as_ref().is_some_and(|p| {
+            task.genre.as_deref().is_some_and(|g| {
+                !g.is_empty()
+                    && !p.harnesses_allowed.is_empty()
+                    && !p.harnesses_allowed.iter().any(|h| h == g)
+            })
+        });
+        let foreign_skill = profile
+            .as_ref()
+            .is_some_and(|p| task.skills.iter().any(|s| !p.skills.contains(s)));
+        let approvals: Vec<task_core::Approval> = self
+            .store
+            .approval_list(None, None, None)?
+            .into_iter()
+            .filter(|a| a.task_id == Some(task.id))
+            .collect();
+        let crossing_recorded = approvals
+            .iter()
+            .any(|a| task_ops::conversation::cross_department_key(&a.question).is_some());
+        let pending_approval = approvals.iter().any(|a| a.is_pending());
+        Ok(task_core::DirectRouteInputs {
+            coding_harness,
+            cross_department: foreign_genre || foreign_skill || crossing_recorded,
+            pending_approval,
+        })
     }
 
     /// ADR-0074 D1.3 3.（Phase F2b）: 並列 WU の 2 本目以降。このインスタンスが既に run を持っている

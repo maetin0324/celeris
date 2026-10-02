@@ -7569,6 +7569,23 @@
           "type": "object"
         },
         {
+          "description": "ADR-0124: 経路選択の監査記録。状態は変えない。",
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            "type": {
+              "const": "execution_routed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形（atomic / compound）を人が後から\n決めた（`POST /tasks/{id}/execution/decompose`、MCP `task_decompose`、retry の `execution`）。\n同じトランザクションで `Task.routing.execution_hint = {mode, explicit: true}` を書き、\n`Task.routing.execution`（前の gate の判定）を消す（次の dispatch で gate が `human/explicit` として\n判定し直し、新しい `ExecutionGated` を残す）。`replan = true` は計画を既に持つ Task への\ncompound の依頼（次の dispatch で replan の planner run になる。ADR-0072 D17 5.）。\n状態は変えない（`replay` は無視する）。",
           "properties": {
             "mode": {
@@ -9281,6 +9298,17 @@
             }
           ],
           "description": "ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task\nには無い）。"
         }
       },
       "required": [
@@ -16774,6 +16802,66 @@
       ],
       "type": "object"
     },
+    "Route": {
+      "enum": [
+        "direct",
+        "planned"
+      ],
+      "type": "string"
+    },
+    "RouteDecision": {
+      "properties": {
+        "gate_rule_id": {
+          "type": "string"
+        },
+        "overrode_gate": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/RouteReason"
+          },
+          "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/Route"
+        },
+        "shadow": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "route",
+        "reasons",
+        "gate_rule_id",
+        "overrode_gate",
+        "shadow",
+        "policy_version"
+      ],
+      "type": "object"
+    },
+    "RouteReason": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "rule_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "ok",
+        "detail"
+      ],
+      "type": "object"
+    },
     "RoutingAudit": {
       "description": "ワーカー run 1 件の routing の監査。",
       "properties": {
@@ -19286,6 +19374,17 @@
           ],
           "description": "ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。"
         },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task\nには無い）。"
+        },
         "runs": {
           "description": "checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。",
           "items": {
@@ -19707,6 +19806,17 @@
         "pause_after_source": {
           "$ref": "#/$defs/PauseSource",
           "description": "D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は\n人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。"
         },
         "stages_hint": {
           "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。/3 の planner\nrun の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の\n`create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。",

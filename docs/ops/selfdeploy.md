@@ -1,8 +1,8 @@
 # 自己改善のデプロイ — 運用手順（ADR-0040）
 
 `agent-platform` 自身を celeris の上で改善し、**動いている本番を壊さずに**新しい版へ移るための道具。
-設計は `docs/adr/0040-self-improvement-deploy.md`（D1〜D5）と
-`docs/adr/0041-self-improvement-loop-hardening.md`（D2〜D4）。ここはその**使い方**だけを書く。
+設計は [ADR-0040](../../agent-docs/adr/0040-self-improvement-deploy.md)（D1〜D5）と
+[ADR-0041](../../agent-docs/adr/0041-self-improvement-loop-hardening.md)（D2〜D4）。ここはその**使い方**だけを書く。
 
 ## 0. 全体像
 
@@ -17,17 +17,16 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
 
 ```
 ~/.config/celeris/       （0700。設定と秘密）
-  config.toml            本番の設定（**誰も書き換えない**。移行の migrate-to-celeris.sh だけが 1 度書く）
+  config.toml            本番の設定（**誰も書き換えない**。例外は人が実行する `relocate-db.sh` の `db =` の書き換えだけ。§5b）
   org.toml  providers.d/ 組織の種とプロバイダ（GUI が書く）
   api.token              本番 API のトークン
   gui.password  gui.session-secret  GUI の認証
   secrets/               ADR-0030 の秘密（1 秘密 = 1 ファイル）
 
 ~/.local/celeris/        （状態）
-  celeris.sqlite3        本番の DB（`sqlite3 .backup` と `mode=ro` で読むだけ）。ADR-0064 D1/D2
-                          （Phase 110a）以降、`config.toml` の `db =`（または `[db].path`）を
-                          ローカルディスクの別パス（例 `/var/lib/celeris/celeris.sqlite3`）に向けて
-                          よい。状態ディレクトリ本体はここのまま（§5b）。
+  celeris.sqlite3        既定の DB の場所。本番は `config.toml` の `[db].path` でローカルディスクの
+                          `/var/lib/celeris/celeris.sqlite3` を指す（ADR-0064。§5b）。どちらも
+                          `sqlite3 .backup` と `mode=ro` で読むだけ。状態ディレクトリ本体はここのまま。
   current -> releases/<sha12>     いま動いている版
   previous -> releases/<sha12>    直前の版（rollback 先）
   releases/<sha12>/     bin/{celeris,celerisctl}  gui/  manifest.json  gate.json  verify.json
@@ -52,13 +51,13 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
   staging/              verify.sh の作業場所（毎回作り直す。`.lock` だけは残る）
   staging/.lock         verify.sh を 1 本に直列化する flock（ADR-0041 D2）
   backups/              昇格前の DB のコピーと promote-<ts>.log
-  backups/pre-celeris/  改名の移行で残した旧い設定と unit（§9）
+  backups/pre-celeris/  改名の移行（ADR-0045。済み）で残した旧い設定と unit
   workspaces/  memory/  claude-accounts/  codex-accounts/  logs/
   tools/{ldr,paperqa,opencode}/   アダプタが使う venv と設定
 ```
 
-`SD_DB`（selfdeploy が読む DB）は **`config.toml` の `db =` から決まる**。移行のあいだだけ
-`CELERIS_DB` で、設定ファイルそのものは `CELERIS_CONFIG` で上書きできる（§9）。
+`SD_DB`（selfdeploy が読む DB）は **`config.toml` の `db =`（または `[db].path`）から決まる**。
+`CELERIS_DB` で DB を、`CELERIS_CONFIG` で設定ファイルそのものを上書きできる（試験・別の置き場での検証用）。
 
 **同時に走らせない**（ADR-0041 D2）。`verify.sh` は staging のディレクトリとポートを固定で使うので、
 2 本目は `staging/.lock` で待つ（上限 `SD_VERIFY_LOCK_WAIT`、既定 1800 秒。超えたら **exit 75**
@@ -78,7 +77,9 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
 
 ```bash
 bash ~/workspace/agent-platform/scripts/selfdeploy/install-units.sh
-# = deploy/systemd/celeris@.service と celeris-gui@.service を ~/.config/systemd/user/ に置いて daemon-reload
+# = deploy/systemd/ の celeris@ / celeris-gui@ / celeris-web@ / celeris-sccache / celeris-scratch-cache の
+#   .service を ~/.config/systemd/user/ に置いて daemon-reload（置くだけ。enable しない。
+#   内容が違う既存の unit は <unit>.bak-<ts> に残す）
 systemctl --user cat celeris@.service        # 入ったことの確認
 loginctl show-user "$USER" | grep Linger   # Linger=yes であること（ログアウトしても動き続ける）
 ```
@@ -88,8 +89,8 @@ loginctl show-user "$USER" | grep Linger   # Linger=yes であること（ログ
 GUI の環境変数はすべて `CELERIS_*`（Phase 58 / ADR-0045 D1 で改名。読み替えの互換は無い）。値は今の本番と同じ
 （`0.0.0.0:7700` で bind、API は `127.0.0.1:7710`、トークン・パスワード・セッション鍵は `~/.config/celeris/` の下）。
 
-`install-units.sh --remove-old` は**改名の移行のときだけ**使う（`migrate-to-celeris.sh` が渡す）。
-消す対象の名前は環境変数 `SD_OLD_UNITS` で渡す — 改名前の名前を知っているのは移行スクリプトだけ。
+`celeris-web@` は web/ の gateway（[web-parallel-operation.md](web-parallel-operation.md)）、`celeris-sccache` /
+`celeris-scratch-cache` はビルドの cache server（[sccache-l1.md](sccache-l1.md)）。どれも有効化は人が行う。
 
 ## 2. リリースを作る（`release.sh`）
 
@@ -201,7 +202,7 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
 
   `scripts/selfdeploy/` / `deploy/` / `crates/celeris/src/instance.rs` / `crates/celeris/src/releases.rs` /
   `crates/task-api/src/releases.rs` / `crates/task-core/migrations/` / `CLAUDE.md` / `gui/CLAUDE.md` /
-  `.claude/` / `config/` / `docs/adr/0040-` / `docs/adr/0041-`
+  `.claude/` / `config/` / `agent-docs/adr/0040-` / `agent-docs/adr/0041-`
 
   これらを変えたリリースは「昇格の仕組みそのもの」「本番の設定」「エージェントへの指示文」を変える。
   GUI は赤いバッジ「安全に関わる変更 N 件」とパス一覧を**最初から開いて**出し、「昇格」は
@@ -245,6 +246,9 @@ SD_E2E_TIMEOUT=120 scripts/selfdeploy/verify.sh <sha12>       # 検査 4b（gui-
       `/`, `/org`, `/projects`, `/projects/<最新>`, `/approvals`, `/reports`, `/clusters` が 200
    4b. **GUI の e2e（read-only。Phase 83 / G36）**: 検査 4 の GUI/celeris に対して `pnpm e2e:staging`
       （`gui/scripts/e2e-check.mjs`）を走らせる。詳しくは下の節
+   4c. **web/ の読み取り parity**（`SD_VERIFY_WEB_HOOK` を指定したときだけ）: 検査 1 と 4 が通っていれば
+      hook（例 `web/scripts/staging-readonly-parity.sh`）を `<sha12> <release> <api> <gui> <token>` で呼ぶ。
+      指定しなければ検査は記録されず `ok` の条件にも入らない（[web-parallel-operation.md](web-parallel-operation.md) §2）
    5. **N-1 互換**: `~/.local/celeris/current/bin/celeris`（旧）を、**新バイナリがマイグレーションした後の**同じ
       スナップショットに対して `:7712` で起こし、1〜3 と同じ検査（件数は**スナップショット**と比べる。
       ここでも本番 API は読まない）。落ちたら `live_ok = false`（`current` が無い初回も `live_ok = false`）。
@@ -253,7 +257,7 @@ SD_E2E_TIMEOUT=120 scripts/selfdeploy/verify.sh <sha12>       # 検査 4b（gui-
       結果の取り込み → レビュー → 終端 → 報告の生成**までを通す。詳しくは下の節
    **4b と 5 は並行に回す（Phase SD-1、ADR-0041 §7）**: どちらも読むだけ（4b は 7711 / 7701、5 は 7712）で、同じ
    スナップショットを新旧の celeris が同時に開くのは以前から。書き込むのは 6 だけで、4b と 5 の両方が終わってから回す。
-4. `~/.local/celeris/releases/<sha12>/verify.json` を書く。`ok` は **1〜4・4b・6 が全部真**のとき。`live_ok` は 5。
+4. `~/.local/celeris/releases/<sha12>/verify.json` を書く。`ok` は **1〜4・4b・（指定したときの）4c・6 が全部真**のとき。`live_ok` は 5。
    Phase SD-1 から、検査ごとの壁時計の秒数が `checks[].secs`、全体が `durations`
    （`lock_wait_s` / `prepare_s`〈staging の作り直し・スナップショット・数え〉/ `parallel_4b_5_s` / `total_s`）に入る。
    `checks[].elapsed_s` は従来どおり煙試験のタスクが `done` になるまでの秒数（検査 6 だけ）。
@@ -337,7 +341,7 @@ pnpm e2e:mock       # 偽の celeris + pnpm build 済みの GUI に対して読�
 
 - `the smoke task is 'ready' after 60.0s` — dispatch されていない。`logs/celeris-new.log` に
   `no provider in the config matches this worker_hint` が出ていないか（`smoke` の組み込みが
-  入っていない＝そのリリースが Phase 51 より前）
+  効いていない）
 - `the smoke task is 'failed' after …` — ワーカーかレビューが落ちた。`GET /tasks/{id}` の
   `runs` と `~/.local/celeris/staging/workspaces/<task_id>/runs/` を見る
 - `no report for the smoke task under node …` — 終端での報告の生成（ADR-0034）が壊れている
@@ -383,6 +387,9 @@ scripts/selfdeploy/promote.sh <sha12>
 ```
 
 - `verify.json.ok` が真でなければ**拒否する**（`--force` は無い）。
+- `--pre-start <script>`: 停止→起動で、旧が止まり DB をバックアップした後・新を起こす前に 1 度だけ実行する
+  （デーモンが止まっている間に DB を直接触る移行のため。引数は `<sha12> <release dir> <db path> <config path>`）。
+  指定すると必ず停止→起動になる。失敗したら DB をバックアップから戻し、旧 unit を起こし直して止まる。
 - ログは `~/.local/celeris/backups/promote-<ts>.log`。DB のコピーは `~/.local/celeris/backups/<ts>-pre-<sha12>.sqlite3`。
 - 成功したら `~/.local/celeris/releases/<sha12>/promoted.json` に `{promoted_at, mode, from}` を書く
   （ADR-0041 D3。`GET /releases` の `promoted_at` と `status.sh` はこれを読む）。
@@ -394,84 +401,18 @@ scripts/selfdeploy/promote.sh <sha12>
   （`POST /releases/{sha12}/promote` が spawn の直前に消す）ので、古い失敗が残り続けることはない。
   `GET /releases` の `items[].promote_failed` と `status.sh` の `promote_failed` はこれを読む。
 - **git リポジトリには触れない。** `main` への反映は人がやる（次節）。
-- **停止→起動のとき、旧 celeris の pid は `current` の release の systemd unit（`celeris@<sha12>`）の
-  `MainPID` を対象にする**（Phase 119 D3。ADR-0040 追記）。systemd がまだその release を知らない
-  （初回の移行）ときだけ、`/proc` の `--config` 完全一致走査にフォールバックする。
 - 昇格の前に、`current`/`new` 以外に **active な `celeris@*` unit**（drain したまま終了しなかった
   前回昇格の残骸）があれば一覧を出す。既定では出すだけ。`promote.sh <sha12> --stop-stale` を付けると
   SIGKILL する（人が判断する操作なので既定はしない）。`status.sh` の `stale_instances` でも同じ一覧が
   見える（`current`/`previous` 以外に active な `celeris@*` の sha12 と pid）。
 
-### 4e. web/ の追従（`web-follow.sh`。ADR-0081 / web ADR-W3 付記 2026-10-02）
+### 4a. 停止 → 起動（`live_ok` が偽・`/health` に `role` が無い・`--pre-start` を指定したとき）
 
-`promote.sh` は celeris と gui の切替が済んだ**後**に `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>` を呼ぶ。
-
-- 旧 release の `celeris-web@<old>` が **active のときだけ**動く。新 release の `gate.json` の `web.ok` が `true` で
-  `releases/<new>/web/app/server/index.js` があれば、`celeris-web@<new>` を start → enable、`celeris-web@<old>` を stop → disable。
-- 新の start に失敗したら新を stop して旧を start し直す。条件を満たさない（旧 web が動いていない・`web.ok` が偽・配布物が無い）
-  ときは何もせず、理由を promote のログに出す。どの場合も exit 0 で、**web の追従の失敗で昇格は失敗にならない**。
-- `celeris@` の unit には触れない。`celeris-web@.service` は `Wants=celeris@%i.service` を持たない（`After=` だけ）ので、
-  web の起動が daemon を起こして handoff を引き起こすことは無い（2026-10-01 の事故）。
-- web を手で追従させたいときも同じ台本を使う: `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>`。
-- web は必ず**昇格した release**（`~/.local/celeris/releases/<sha12>/web/app`）から動かす。task の作業場所や staging 成果物への
-  symlink の release から動かさない（作業場所の片付けで中身が消え、全画面 404 になる。2026-10-01）。
-
-#### 本番に一度だけ人が行う手順（2026-10-02 の一時回避を撤去する）
-
-worker の run はこの操作をしない。人が順に実行する。
-
-```bash
-# 1. 一時回避（WorkingDirectory をコピー先に向けた drop-in）を撤去する
-rm -f ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d/override.conf
-rmdir ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d 2>/dev/null || true
-# 2. unit を repo 版（Wants=celeris@ 無し）に置き直す
-cp deploy/systemd/celeris-web@.service ~/.config/systemd/user/celeris-web@.service
-grep -n '^Wants=' ~/.config/systemd/user/celeris-web@.service    # 何も出ないこと
-systemctl --user daemon-reload
-# 3. web を再起動する（<sha12> はいま動いている web の release。gateway の dotfiles 修正を含む release に昇格後なら新しい sha）
-systemctl --user restart celeris-web@<sha12>.service
-systemctl --user show -p WorkingDirectory celeris-web@<sha12>.service   # ~/.local/celeris/releases/<sha12>/web/app
-# 4. 確かめる（bind は ~/.config/celeris/web.env の値。既定 127.0.0.1:7720）
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/          # 200
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/inbox     # 200
-curl -s http://127.0.0.1:7720/healthz
-systemctl --user is-active celeris@<current の sha12>.service             # web の再起動で daemon が増えていないこと
-```
-
-`/` が 404 のままなら、その release の gateway が dotfiles の修正（`sendFile` に `root` を渡す。付記 (B)）を含んでいない。
-修正を含む release を作って昇格させるまでは、一時回避の override.conf を戻して使う。
-
-### 4d. 昇格したら `main` に戻す（ADR-0041 D3）
-
-昇格は `~/.local/celeris/` の中だけで完結し、あなたのチェックアウト（`~/workspace/agent-platform`）は
-一切動かない。放っておくと「本番で動いているコード」が `main` に無い状態が続き、次のタスクが
-古い `main` から分岐する。だから**昇格したら人が `main` に反映する**:
-
-```bash
-scripts/selfdeploy/status.sh | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["current"], [r["on_main"] for r in d["releases"] if r["is_current"]])'
-# current が on_main: false なら
-cd ~/workspace/agent-platform
-git switch main
-git merge --ff-only <sha12>     # 実装者のブランチ（celeris/<task-id>）の先端がその sha
-```
-
-- GUI の「リリース」画面は、**現行の行が `on_main: false` のとき**だけ
-  「本番は main に未反映: `git merge --ff-only <sha12>`」と出す。
-- `on_main` は `git -C <[selfdeploy] repo> merge-base --is-ancestor <sha> main` の結果。
-  `repo` の既定は `~/workspace/agent-platform`（`~/.config/celeris/config.toml` に書かなくてよい）。
-  リポジトリが無い・その sha を知らないときは `null` になり、GUI は何も言わない。
-- `--ff-only` なので、**`main` が先に進んでいたら止まる**。そのときは実装者のブランチを
-  `main` に rebase してから `release.sh` をやり直すのが早い（本番より古いコードを `main` に混ぜない）。
-
-### 4a. 初回の移行（停止 → 起動）
-
-いまの本番は `~/workspace/agent-platform/target/debug/celeris` を手で起こしたもので、`daemon_instances` も
-`/health` の `role` も知らない。`promote.sh` はそれを見て**停止 → 起動**を選ぶ（`live_ok` も偽）。
-
-1. 旧 celeris の pid を**設定パスまで含めた完全一致**で探す（`argv[0]` の basename が `celeris` で、
-   `--config ~/.config/celeris/config.toml` を持ち、`--mode` / `--db` / `--listen` 等を持たないもの。
-   `grep` や `bash -c` や staging のプロセスは当たらない）→ `SIGTERM` → `kill_grace_secs + 10` 秒待つ
-2. 旧が終わってから DB をバックアップ（引き継ぎ中の仕事もコピーに入る）
+1. 旧 celeris の pid は `current` の release の unit（`celeris@<sha12>`）の `MainPID`（Phase 119 D3）。
+   systemd がその release を知らないときだけ、**設定パスまで含めた完全一致**で `/proc` を探す（`argv[0]` の
+   basename が `celeris` で、`--config ~/.config/celeris/config.toml` を持ち、`--mode` / `--db` / `--listen` 等を
+   持たないもの。staging のプロセスは当たらない）→ `SIGTERM` → `kill_grace_secs + 10` 秒待つ
+2. 旧が終わってから DB をバックアップ（引き継ぎ中の仕事もコピーに入る）。`--pre-start` があればここで実行
 3. `systemctl --user start celeris@<sha12>` → `/health` が 200 かつ `schema_version` が期待どおりになるまで 60 秒待つ
 4. 駄目なら新を止め、旧 unit があれば起こし直し、**DB は戻さずに**失敗を報告する
    （スキーマが進んでいるかもしれないので、戻すかどうかは人が `rollback.sh --restore-db` で選ぶ）
@@ -481,7 +422,7 @@ git merge --ff-only <sha12>     # 実装者のブランチ（celeris/<task-id>�
 
 **この間だけ API と GUI が止まる**（数十秒）。走っていたワーカーの run はリースが切れて新しい daemon が拾う。
 
-### 4b. 2 回目から（ライブ引き継ぎ）
+### 4b. ライブ引き継ぎ（`live_ok` が真で、動いている celeris の `/health` が `role` を持つとき）
 
 `verify.json.live_ok` が真で、動いている celeris の `/health` が `role` を持っているとき:
 
@@ -537,6 +478,67 @@ curl -sS -X POST -H "Authorization: Bearer $(cat ~/.config/celeris/api.token)" \
 `~/.config/celeris/config.toml` に足す設定は無い（`[selfdeploy] releases_dir` の既定が `releases` なので、
 `~/.local/celeris/releases` をそのまま見る）。
 
+### 4d. 昇格したら `main` に戻す（ADR-0041 D3）
+
+昇格は `~/.local/celeris/` の中だけで完結し、あなたのチェックアウト（`~/workspace/agent-platform`）は
+一切動かない。放っておくと「本番で動いているコード」が `main` に無い状態が続き、次のタスクが
+古い `main` から分岐する。だから**昇格したら人が `main` に反映する**:
+
+```bash
+scripts/selfdeploy/status.sh | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["current"], [r["on_main"] for r in d["releases"] if r["is_current"]])'
+# current が on_main: false なら
+cd ~/workspace/agent-platform
+git switch main
+git merge --ff-only <sha12>     # 実装者のブランチ（celeris/<task-id>）の先端がその sha
+```
+
+- GUI の「リリース」画面は、**現行の行が `on_main: false` のとき**だけ
+  「本番は main に未反映: `git merge --ff-only <sha12>`」と出す。
+- `on_main` は `git -C <[selfdeploy] repo> merge-base --is-ancestor <sha> main` の結果。
+  `repo` の既定は `~/workspace/agent-platform`（`~/.config/celeris/config.toml` に書かなくてよい）。
+  リポジトリが無い・その sha を知らないときは `null` になり、GUI は何も言わない。
+- `--ff-only` なので、**`main` が先に進んでいたら止まる**。そのときは実装者のブランチを
+  `main` に rebase してから `release.sh` をやり直すのが早い（本番より古いコードを `main` に混ぜない）。
+
+### 4e. web/ の追従（`web-follow.sh`。ADR-0081 / web ADR-W3 付記 2026-10-02）
+
+`promote.sh` は celeris と gui の切替が済んだ**後**に `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>` を呼ぶ。
+
+- 旧 release の `celeris-web@<old>` が **active のときだけ**動く。新 release の `gate.json` の `web.ok` が `true` で
+  `releases/<new>/web/app/server/index.js` があれば、`celeris-web@<new>` を start → enable、`celeris-web@<old>` を stop → disable。
+- 新の start に失敗したら新を stop して旧を start し直す。条件を満たさない（旧 web が動いていない・`web.ok` が偽・配布物が無い）
+  ときは何もせず、理由を promote のログに出す。どの場合も exit 0 で、**web の追従の失敗で昇格は失敗にならない**。
+- `celeris@` の unit には触れない。`celeris-web@.service` は `Wants=celeris@%i.service` を持たない（`After=` だけ）ので、
+  web の起動が daemon を起こして handoff を引き起こすことは無い（2026-10-01 の事故）。
+- web を手で追従させたいときも同じ台本を使う: `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>`。
+- web は必ず**昇格した release**（`~/.local/celeris/releases/<sha12>/web/app`）から動かす。task の作業場所や staging 成果物への
+  symlink の release から動かさない（作業場所の片付けで中身が消え、全画面 404 になる。2026-10-01）。
+
+#### 本番に一度だけ人が行う手順（2026-10-02 の一時回避を撤去する）
+
+worker の run はこの操作をしない。人が順に実行する。
+
+```bash
+# 1. 一時回避（WorkingDirectory をコピー先に向けた drop-in）を撤去する
+rm -f ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d/override.conf
+rmdir ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d 2>/dev/null || true
+# 2. unit を repo 版（Wants=celeris@ 無し）に置き直す
+cp deploy/systemd/celeris-web@.service ~/.config/systemd/user/celeris-web@.service
+grep -n '^Wants=' ~/.config/systemd/user/celeris-web@.service    # 何も出ないこと
+systemctl --user daemon-reload
+# 3. web を再起動する（<sha12> はいま動いている web の release。gateway の dotfiles 修正を含む release に昇格後なら新しい sha）
+systemctl --user restart celeris-web@<sha12>.service
+systemctl --user show -p WorkingDirectory celeris-web@<sha12>.service   # ~/.local/celeris/releases/<sha12>/web/app
+# 4. 確かめる（bind は ~/.config/celeris/web.env の値。既定 127.0.0.1:7720）
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/          # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/inbox     # 200
+curl -s http://127.0.0.1:7720/healthz
+systemctl --user is-active celeris@<current の sha12>.service             # web の再起動で daemon が増えていないこと
+```
+
+`/` が 404 のままなら、その release の gateway が dotfiles の修正（`sendFile` に `root` を渡す。付記 (B)）を含んでいない。
+修正を含む release を作って昇格させるまでは、一時回避の override.conf を戻して使う。
+
 ## 5. 戻す（`rollback.sh`。人だけ）
 
 ```bash
@@ -556,21 +558,18 @@ scripts/selfdeploy/rollback.sh --restore-db # DB も昇格前に書き戻す（�
 
 **書き戻すと、昇格してから今までに進んだ仕事は消える。** どちらが損かを人が決める。
 
-## 5b. DB をローカルディスクへ移す（`relocate-db.sh`。人だけ）
+## 5b. DB の置き場を移す（`relocate-db.sh`。人だけ）
 
-ADR-0064（Phase 110a）: 本番の DB（`~/.local/celeris`）が `/home` にあり、その実体が NFS 越しの
-raw イメージ（`/dev/loop*`）だと、fsync が数十 ms かかり I/O が混むと `database is locked` や
-GUI のタイムアウトが起きる（実機で観測。`docs/PROGRESS.md` Phase 110a）。DB ファイル**だけ**を
-ローカルディスク（例 `/var/lib/celeris/`）へ移し、状態ディレクトリ本体（workspaces / releases /
-backups / tools）は `/home` のまま残せる。
+本番の DB は既にローカルディスクの `/var/lib/celeris/celeris.sqlite3` にある（`/home` は NFS で fsync が遅く、
+`database is locked` が起きたため。ADR-0064）。状態ディレクトリ本体（workspaces / releases / backups / tools）は
+`~/.local/celeris` のまま。もう一度別の場所へ移すときだけ使う（`<新パス>` のディレクトリは人が先に作る）:
 
 ```bash
-sudo install -d -o "$(whoami)" -g "$(whoami)" -m 0750 /var/lib/celeris   # 先に人が作る（スクリプトは作らない）
-scripts/selfdeploy/relocate-db.sh /var/lib/celeris/celeris.sqlite3 --dry-run   # 計画と in-flight の確認だけ
-scripts/selfdeploy/relocate-db.sh /var/lib/celeris/celeris.sqlite3            # 実行
+scripts/selfdeploy/relocate-db.sh <新パス> --dry-run   # 計画と in-flight の確認だけ
+scripts/selfdeploy/relocate-db.sh <新パス>             # 実行
 ```
 
-手順（`docs/adr/0064-db-local-disk-and-store-resilience.md` D2）:
+手順（[ADR-0064](../../agent-docs/adr/0064-db-local-disk-and-store-resilience.md) D2）:
 
 1. `GET /api/v1/tasks` の `counts_by_status`（`running` + `reviewing`）が 0 であることを確認する。
    0 でなければ何もせず止まる（待つか、`--dry-run` で様子を見てから改めて実行する）。
@@ -629,8 +628,7 @@ celeris の上の「人」（ワーカー）が自己改善の案件でやって
 
 ## 8. config.toml について
 
-**Phase 46 / 48 / 50 とも設定に変えるところは無かった。Phase 58（改名）は置き場だけを変える。**
-ADR-0045 D2 で「省略したときの既定」が新しい置き場になった:
+selfdeploy のために `config.toml` へ足す設定は無い。省略したときの既定（ADR-0045 D2）:
 
 | 設定 | 省略時の既定 |
 |---|---|
@@ -641,7 +639,7 @@ ADR-0045 D2 で「省略したときの既定」が新しい置き場になっ�
 | `[containers] build_dir` | `~/.local/celeris/containers` |
 | `[secrets] dir` | `~/.config/celeris/secrets` |
 
-ADR-0064 D1（Phase 110a）: `db` は文字列（従来どおり）でも、`[db]` テーブルでもよい
+ADR-0064 D1: `db` は文字列でも、`[db]` テーブルでもよい
 （`db = "<path>"` と `[db] path = "<path>"` は同じ意味）。テーブルにすると追加のキーが書ける:
 
 | `[db]` のキー | 省略時の既定 |
@@ -657,93 +655,18 @@ ADR-0064 D1（Phase 110a）: `db` は文字列（従来どおり）でも、`[db
 `[accounts] claude_dir` / `codex_dir` には**暗黙の既定を入れない**: 「書いていない」こと自体が
 「認証を使わない（ADR-0013 D3）」「そのプールを設定していない（ADR-0024 D2 / ADR-0025 D1）」という
 意味を持っているため。推奨の置き場（`~/.config/celeris/api.token`、
-`~/.local/celeris/{claude,codex}-accounts`）は `config/celeris.example.toml` に書いてあり、
-移行スクリプトは本番の設定をそこへ書き換える。
+`~/.local/celeris/{claude,codex}-accounts`）は `config/celeris.example.toml` に書いてある。
 
-Phase 50 で入った `[selfdeploy] repo` も既定が
+`[selfdeploy] repo` も既定が
 `~/workspace/agent-platform`（`~` は celeris の `$HOME` で展開）なので、書かなければそのまま当たる
 （読むのは `on_main` のためだけで、**書き換えることは無い**。無ければ `on_main` が `null` になるだけ）。
-どちらも別の場所に置きたいときだけ書く。 `[handoff]`（`drain_timeout_secs` など）は
-Phase 47 で celeris 本体に入るときに足す設定で、それまでは既定値（`drain_timeout_secs = 3600`）で動く。
+どちらも別の場所に置きたいときだけ書く。`[handoff] drain_timeout_secs`（既定 3600）は旧 celeris が
+draining のまま run の面倒を見る上限（§4b）。
 `promote.sh` が読むのは既存の `kill_grace_secs` だけ（無ければ 10 秒）。
 `verify.sh` は `config.toml` を**そのまま**新リリースに読ませる（本番の設定が新しいバイナリで通るかを
 見るのが目的なので、上書きは CLI フラグだけ）。
 
-## 9. 改名の移行（`migrate-to-celeris.sh`。一度だけ。人だけ）
-
-Phase 58 / ADR-0045 D3。旧 `~/taskd/`（設定・DB・リリース・道具が 1 か所）を
-`~/.config/celeris/`（設定と秘密）と `~/.local/celeris/`（状態）に分け、unit を
-`celeris@` / `celeris-gui@` に替える。**停止 → 起動**なので、その間（数十秒）だけ API と GUI が止まる。
-
-### 手順（この順に、人が実行する）
-
-```bash
-cd ~/workspace/agent-platform
-git switch main && git pull --ff-only          # 改名後のコードを手元に
-
-# 1. 新しい置き場でリリースを作る（本番には触れない。30〜60 分）
-CELERIS_STATE_DIR=~/.local/celeris scripts/selfdeploy/release.sh main
-#    → ~/.local/celeris/releases/<new>/bin/celeris ができる。`current` が無いので changes.base は null
-
-# 2. 旧い置き場の設定と DB に対して検証する（本番には触れない）
-CELERIS_STATE_DIR=~/.local/celeris \
-CELERIS_CONFIG=~/taskd/taskd.toml \
-CELERIS_DB=~/taskd/taskd.sqlite3 \
-  scripts/selfdeploy/verify.sh <new sha12>
-#    → verify.json.ok = true（live_ok は false。`current` が無いので N-1 検査は行われない）
-
-# 3. 何が動くかを読む（何も変えない。設定の書き換え結果も全文出る）
-scripts/selfdeploy/migrate-to-celeris.sh <new sha12> --dry-run | less
-#    → 「unknown path(s)」で止まったら、その `<x>` を migrate-to-celeris.sh の TABLE に足してからやり直す
-
-# 4. 移行する（停止 → 起動。ログは ~/.local/celeris/backups/migrate-<ts>.log）
-scripts/selfdeploy/migrate-to-celeris.sh <new sha12>
-
-# 5. 確かめる
-curl -s http://127.0.0.1:7710/api/v1/health | python3 -m json.tool   # release = <new sha12>
-curl -s http://127.0.0.1:7700/healthz | python3 -m json.tool         # name = "celeris-gui"
-ls ~/.config/celeris ~/.local/celeris ; ls ~/taskd 2>&1              # ~/taskd は無い
-scripts/selfdeploy/status.sh | head -20
-```
-
-以後の昇格は従来どおり `release.sh` → `verify.sh` → `promote.sh`（環境変数は要らない。既定が新しい置き場）。
-
-### 何が起きるか
-
-1. 旧 unit（`taskd@<old>` / `taskd-gui@<old>`）を止める。`SD_STOP_WAIT`（既定 300 秒）まで待ち、
-   それでも生きていて API が閉じていれば先へ進む（実機 2026-09-19 の ext4 ジャーナル待ちの件。§4a と同じ規則）。
-2. 同一ファイルシステムなので `mv` で移す（順序固定）。DB → `celeris.sqlite3*`、`releases/` の中身
-   （`.build` / `.cargo-target` 込み）、`backups staging workspaces memory claude-accounts codex-accounts` →
-   状態、`ldr paperqa opencode` → `tools/`、`api.token gui.password gui.session-secret org.toml providers.d/
-   secrets/` → 設定、`*.log` → `logs/`、`*.bak-*` → `backups/pre-celeris/`。
-3. 設定を**決定的な対応表**で書き換えて `~/.config/celeris/config.toml`（0600）に置く。
-   旧い絶対パス（`/home/…/taskd/<x>`）も `~/taskd/<x>` も、今日 `~/taskd` の中に解決している**裸の相対値**
-   （`db = "taskd.sqlite3"`、`workspace_root = "workspaces"`、`token_file`、`org_include`、
-   `providers_include`、`[secrets] dir`、`[memory] dir`、`[accounts]` の 2 つ、`[selfdeploy] releases_dir` /
-   `repo`）も絶対パスにする。**表に無いパスが 1 つでも残っていたら、何も動かさずに止まる。**
-   最後に残った旧い名前（コメント・役割の指示文・`TASKD_*`）も `celeris` / `CELERIS_*` に改める。
-   元のファイルは `~/.local/celeris/backups/pre-celeris/taskd.toml` に残る。
-4. `install-units.sh --remove-old` で新しいテンプレートを入れ、旧テンプレートを消す
-   （消す前に `backups/pre-celeris/units/` へ写す）。
-5. `celeris@<new>` を起こし、`/health` が `release = <new>` / `schema_version` が期待どおりになるまで
-   90 秒待つ → `celeris-gui@<new>` → `/healthz.name == "celeris-gui"` → `enable` 新 / `disable` 旧 →
-   `current -> releases/<new>`、`previous -> releases/<old>`（旧リリースの実行ファイルは旧い名前のまま。
-   `verify.sh` の検査 5 はその両方を見る）。
-6. `~/taskd` が空なら消す（互換のシンボリックリンクは作らない。ADR-0045 D2）。
-   `promoted.json` に `mode = "migrate"` を書く。
-
-### 戻す
-
-```bash
-scripts/selfdeploy/migrate-to-celeris.sh --rollback
-```
-
-新 unit を止め、ディレクトリを逆に移し、`backups/pre-celeris/taskd.toml` と旧テンプレート unit を戻して
-`taskd@<previous>` を起こす。DB は **schema が変わっていない**ので、そのまま読める
-（`SCHEMA_VERSION` は据え置き。ADR-0045 D4）。
-
-
-## 部署レビューから自動で候補を準備する（ADR-0051）
+## 9. 部署レビューから自動で候補を準備する（ADR-0051）
 
 `[selfdeploy] delivery_projects = ["案件ID"]` を指定してreloadすると、
 その案件の登録済み自己リポジトリに対する次のReviewer runでマージ可否も判定する。

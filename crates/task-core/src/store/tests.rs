@@ -1639,6 +1639,63 @@ fn latest_delivery_skipped_rows_returns_latest_per_task_only() {
     ));
 }
 
+/// ADR-0117 付記: inbox の `latest_delivery_skipped_rows` は events 全件の full scan をせず、
+/// migration 0037 の部分 index `idx_events_delivery_skipped` を使う（問い合わせと試験で同じ SQL
+/// 文字列 `events::latest_delivery_skipped_sql()` を使うので、式がずれて index を落とすことはない）。
+#[test]
+fn latest_delivery_skipped_rows_uses_partial_index() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = sample_task(Status::Draft);
+    let b = sample_task(Status::Draft);
+    store.insert(&a).unwrap();
+    store.insert(&b).unwrap();
+    let skipped = |detail: &str| Event::DeliverySkipped {
+        reason: crate::DeliverySkipReason::NoMarker,
+        detail: detail.to_string(),
+        head: None,
+    };
+    store.append_event(a.id, &skipped("old")).unwrap();
+    store.append_event(a.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(b.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(a.id, &skipped("latest")).unwrap();
+    store.append_event(b.id, &skipped("other task")).unwrap();
+
+    let plan_details = store
+        .with_read_conn(|conn| {
+            let sql = super::events::latest_delivery_skipped_sql();
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let mut rows = stmt.query([])?;
+            let mut details = Vec::new();
+            while let Some(row) = rows.next()? {
+                details.push(row.get::<_, String>(3)?);
+            }
+            Ok(details)
+        })
+        .unwrap();
+    assert!(
+        plan_details.iter().any(|detail| {
+            detail.contains("USING INDEX idx_events_delivery_skipped")
+                || detail.contains("USING COVERING INDEX idx_events_delivery_skipped")
+        }),
+        "query plan did not use idx_events_delivery_skipped: {plan_details:?}"
+    );
+
+    let rows = store.latest_delivery_skipped_rows().unwrap();
+    assert_eq!(rows.len(), 2);
+    let by_task = rows
+        .into_iter()
+        .map(|row| (row.task_id, row))
+        .collect::<HashMap<_, _>>();
+    assert!(matches!(
+        &by_task[&a.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "latest"
+    ));
+    assert!(matches!(
+        &by_task[&b.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "other task"
+    ));
+}
+
 #[test]
 fn events_since_orders_globally_and_respects_after_id_and_limit() {
     let store = SqliteStore::open_in_memory().unwrap();
@@ -2255,7 +2312,7 @@ fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
     let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     assert!(
         store
@@ -2798,7 +2855,7 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
     // 導入前の案件は「作業場所なし」= 従来どおり。
     assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
     let spec = WorkspaceSpec::Local {
@@ -3289,7 +3346,7 @@ fn migration_0015_adds_the_lifecycle_columns_to_a_schema_14_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
 
     let project = store.project_get(project_id).unwrap().expect("project");
     assert_eq!(project.status, ProjectStatus::Active);
@@ -3355,7 +3412,7 @@ fn migration_0017_adds_message_metadata_and_console_action_runs_to_a_schema_16_d
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
 
     // 導入前の行は `metadata = None` として読める。
     let messages = store.message_list("secretary", None, 10).unwrap();
@@ -3448,7 +3505,7 @@ fn migration_0013_adds_task_comments_and_the_label_columns_to_a_schema_11_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
     {
         let conn = store.lock().unwrap();
         let (labels, category): (String, String) = conn
@@ -3907,7 +3964,7 @@ fn migration_0026_adds_the_execution_tables_to_a_schema_25_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
 
     // 新しい表が使える（round trip）。
     let task = sample_task(Status::Draft);
@@ -4153,7 +4210,7 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
 
     let conn = Connection::open(&path).unwrap();
     // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -4404,7 +4461,7 @@ fn migration_27_adds_work_unit_lease_columns() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 37);
 
     let conn = Connection::open(&path).unwrap();
     let mut columns: Vec<String> = Vec::new();

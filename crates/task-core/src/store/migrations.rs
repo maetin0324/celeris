@@ -76,10 +76,13 @@ pub(crate) const MIGRATION_0035: &str =
 /// browser Phase 4: trusted login（ブランチの 0035 を振り直し）。
 pub(crate) const MIGRATION_0036: &str =
     include_str!("../../migrations/0036_browser_trusted_login.sql");
+/// ADR-0117 付記: `idx_events_delivery_skipped`（受信箱の delivery_skipped 走査を絞る部分 index）。
+pub(crate) const MIGRATION_0037: &str =
+    include_str!("../../migrations/0037_events_delivery_skipped_index.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 36;
+pub const SCHEMA_VERSION: u32 = 37;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -120,6 +123,7 @@ impl SqliteStore {
             34 => Ok(MIGRATION_0034),
             35 => Ok(MIGRATION_0035),
             36 => Ok(MIGRATION_0036),
+            37 => Ok(MIGRATION_0037),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

@@ -70,6 +70,8 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `rg -n 'unwrap\\s*\\(' crates/task-ops/src/delivery.rs` → 一致なし。production `delivery.rs` に `unwrap()` は無い（test 用 unwrap は別ファイル）。
 - 未解決: sandbox 制約を外した統合環境で workspace test を再実行して全件成功を確認すること。ブランチの production DB 接続・実行は行っていない。
+- delivery skipped の inbox query 向けに migration `0037_events_delivery_skipped_index.sql` を追加し、`idx_events_delivery_skipped` 部分 index を作成。問い合わせの predicate は index と同じ式を使い、`latest_delivery_skipped_rows_uses_partial_index` が EXPLAIN QUERY PLAN の index 使用と task ごとの最新 1 件を確認する。schema version 37（`SCHEMA_VERSION = 37`）になる。
+- この migration の昇格は celeris を stop → 新バイナリで start とし、起動時に migration が実行される。index は追加のみで、旧バイナリも残存 index 自体は利用せず動作できる。ただし schema 37 を開く旧バイナリは SchemaTooNew になるため、バイナリを戻す場合は migration 前の DB backup も戻すこと。詳細と任意の `DROP INDEX` は [ADR-0117](adr/0117-root-delivery-without-assignee.md) に記録。
 
 ## Root delivery 部署 fallback 再検証（verify-perf、2026-10-01）
 
@@ -85,6 +87,20 @@ workspace 全 test の成功は未確認。user namespace を利用できる環�
 - `cargo test --workspace -- --list` → exit 0、3,303 tests 列挙。
 - `cargo clippy --workspace -- -D warnings` → exit 0（41.53秒）。
 - test の受け入れ条件は未達。user namespaces が利用可能な環境で workspace test の再実行が必要。
+
+## Root delivery 取り込み最終検証（verify-land、2026-10-02）
+
+main（HEAD `2bd7df3b`）への merge-renumber・delivery-index 統合後の最終ゲート。user namespace が使える環境で実行し、前回 run が未解決としていた `instance_handoff` の失敗を含め全件成功を確認した。
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → exit 0。3,221 passed / 0 failed / 0 ignored（`--list` 相当の doctest 等含む計 118 test binary、`instance_handoff` も含めて全件成功）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test -p task-core delivery_skipped` → exit 0、2 passed（`latest_delivery_skipped_rows_uses_partial_index` が `idx_events_delivery_skipped` の EXPLAIN QUERY PLAN 使用と task ごとの最新1件を確認）。
+- `git merge-tree --write-tree --name-only HEAD main` → exit 0、衝突ファイル名の出力なし（tree `229e6d41c27f0fb716ef3e17faef6fc8c166d0de` のみ）。main を fast-forward 可能な形に近づけた状態を確認。
+- `rg -n 'ADR-0099' docs/ crates/` → 残存参照はすべて main 既存の browser-phase3-control-lease（`docs/adr/0099-browser-phase3-control-lease.md`）向けで、root delivery の旧番号参照は無い。`docs/adr/0117-root-delivery-without-assignee.md` のみが新 ADR。
+- GUI（`corepack pnpm@11.27.0 -C gui install --frozen-lockfile` → exit 0 の後）: `pnpm typecheck`（`react-router typegen && tsc -b`）→ exit 0。`pnpm test`（vitest run）→ exit 0、85 test files / 1,250 tests passed。
+- 負荷による flake は今回発生しなかった（追加の待ち上限変更は不要）。
+- 受け入れ条件 0〜3 すべて満たした。取り込み可能性の確認はここまでで、実際の main への merge は celeris の統合工程（integrate-reverify）が行う。
 
 ## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）
 

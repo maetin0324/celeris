@@ -93,6 +93,47 @@ test("CSRF rejects foreign origin and same-site, allows headerless CLI", async (
     assert.equal((await get("/api/nope", { method: "POST", headers })).status, 404);
 });
 
+test("release path with a dotfile dir: / and SPA routes are 200, dotfiles under dist stay hidden", async () => {
+  const releaseHome = mkdtempSync(path.join(tmpdir(), "celeris-web-release-"));
+  const releaseDistDir = path.join(releaseHome, ".local/celeris/releases/0123456789ab/web/app/dist");
+  mkdirSync(path.join(releaseDistDir, "assets"), { recursive: true });
+  writeFileSync(path.join(releaseDistDir, "index.html"), "<!doctype html><title>release shell</title>");
+  writeFileSync(path.join(releaseDistDir, "assets/x.js"), "export {};\n");
+  writeFileSync(path.join(releaseDistDir, "assets/.secret"), "top secret asset");
+  writeFileSync(path.join(releaseDistDir, ".env"), "SECRET=top secret env");
+
+  const releaseApp = createApp({ distDir: releaseDistDir, release: "release-path-test", log: () => {} });
+  const releaseServer = releaseApp.listen(0, "127.0.0.1");
+  try {
+    await new Promise((resolve, reject) => {
+      releaseServer.once("listening", resolve);
+      releaseServer.once("error", reject);
+    });
+    const releaseBase = `http://127.0.0.1:${releaseServer.address().port}`;
+    const releaseGet = (route) => fetch(`${releaseBase}${route}`);
+
+    for (const route of ["/", "/login", "/inbox"]) {
+      const res = await releaseGet(route);
+      assert.equal(res.status, 200, route);
+      assert.match(await res.text(), /release shell/);
+    }
+
+    const asset = await releaseGet("/assets/x.js");
+    assert.equal(asset.status, 200);
+
+    const secretAsset = await releaseGet("/assets/.secret");
+    assert.equal(secretAsset.status, 404);
+    assert.doesNotMatch(await secretAsset.text(), /top secret asset/);
+
+    const envFile = await releaseGet("/.env");
+    assert.equal(envFile.status, 404);
+    assert.doesNotMatch(await envFile.text(), /top secret env/);
+  } finally {
+    await new Promise((resolve) => releaseServer.close(resolve));
+    rmSync(releaseHome, { recursive: true, force: true });
+  }
+});
+
 test("only fingerprint assets cache; reserved and unknown assets never fall back", async () => {
   const hash = await get("/assets/main-abcdef012345.js");
   assert.match(hash.headers.get("cache-control"), /immutable/);

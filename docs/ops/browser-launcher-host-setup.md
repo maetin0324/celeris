@@ -183,7 +183,19 @@ getcap -r /usr/local/libexec/celeris 2>/dev/null                       # 何も�
 
 ## 8. 準備後に流す試験
 
-daemon の user（UID 1001）で、リポジトリの task branch の worktree から実行する（本番 DB には触れない試験）:
+daemon の user（UID 1001）で、**初期 user namespace の host 上**のリポジトリの task branch の worktree から実行する（本番 DB には触れない試験）。実行前に `cat /proc/self/uid_map` が `0 0 4294967295` であることを確認する。`1001 0 1` のような入れ子 namespace の test runner では host 側 Chrome の `/proc` が見えず、この実 process 証明はできない。
+
+socket だけが active でも service の起動成功は保証されない。管理者は socket activation 後、次を確認する。`ActiveState=failed` や `activating (auto-restart)` の場合は試験の前に service の起動失敗を直す。
+
+```sh
+systemctl status celeris-browser-launcher.service --no-pager -l
+systemctl show celeris-browser-launcher.service -p ActiveState -p Result -p ExecMainStatus -p NRestarts
+sudo journalctl -u celeris-browser-launcher.service -b --no-pager -n 80
+# journal が示す config の所有権、state_dir/session_root の所有権・0700、実行ファイルの配置、
+# socket activation の失敗を修正し、ActiveState=active を確認する。
+```
+
+daemon の user で実行する:
 
 ```sh
 CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture

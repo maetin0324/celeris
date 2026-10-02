@@ -110,3 +110,23 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
   - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行（sccache EPERM 等の環境要因なし）。
 - 未解決事項: ホスト準備（別 host UID / subuid の割当）は人の判断が必要。launcher 本体の実装は未着手。A13 の実 process 再試験（別 UID 前提）は launcher 実装後に行う。本番 admission の `CredentialInjection`・`IdentityRestore` は引き続き未解放。
 - 提案: launcher 実装を独立 task として切り出し、完了後に A13 を再試験してから `prod-admission-release` の判断に戻す。
+
+## browser: ptrace 境界分離 launcher 実装・実 process 実証完了
+
+完了日 2026-10-02（task 01M3VFQK2ZSPJ89VDA1F4FMA2G、WorkUnit `real-evidence` / `close-out`）。
+
+- 成果: [ADR-0115](adr/0115-browser-ptrace-owner-ns-launcher.md) に沿って `celeris-browser-launcher` を実装し、人が host 準備手順（[browser-launcher-host-setup.md](ops/browser-launcher-host-setup.md)）どおりに `celeris-browser` user・subuid/subgid・systemd socket/service を整えた環境で、launcher 経由の実 Chrome について daemon UID からの ptrace・`/proc` 読取り拒否を実証した。既存の daemon 所有 runtime（same-uid / subuid wrapper）経路は維持し、launcher 経由は設定（`[browser] runtime` / `launcher_socket`）で選択する。
+- 証拠（host の人の実行、詳細は [phase-browser-4.md](progress/phase-browser-4.md) の該当 run 記録）:
+  - `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → **exit 0（1 passed、0 failed、0.15 s）**。
+  - 正の対照: 同 UID 子プロセスへの `PTRACE_ATTACH=0`／`PTRACE_DETACH=0`（検査手段自体が機能することの確認）。
+  - launcher 観測・Chrome: `owner=Some(296608)`（Chrome userns owner、subuid）、`NS_GET_OWNER_UID(launcher)=Some(296608)`、daemon UID からの同 NS open は `errno=Some(13)`（EACCES）。
+  - `verify_isolation=Ok (launcher isolation_ok=true, CapEff=0000000000000000 NoNewPrivs=true)`。
+  - daemon UID 1001 の別プロセスからの攻撃: `PTRACE_ATTACH Chrome pid: errno=Some(1)`（EPERM）、`strace -p` は `exit=Some(1)`／`Operation not permitted`、`/proc/<pid>/environ`・`/proc/<pid>/mem` ともに `errno=Some(13)`（EACCES）。
+  - check runner（db_guard namespace、`/proc/self/uid_map`=`1001 1001 1`）からの再実証でも同じ構成で **exit 0（1 passed、0.14 s）**。namespace 越しに subuid が `4294967295` と写る分だけ試験側の map 判定を修正済み（launcher 側の不具合ではない）。
+  - 既存の daemon 所有 runtime 経路: `cargo test -p task-worker --test browser_runtime_isolated` → **exit 0（4 passed、1 ignored）**、壊れていない。
+  - `cargo test --workspace && cargo clippy --workspace -- -D warnings` → exit 0（close-out run、下記参照）。
+- 手順書・証跡リンク: host 準備は [docs/ops/browser-launcher-host-setup.md](ops/browser-launcher-host-setup.md)、試行錯誤と各 run の journal・eprintln 全文は [docs/progress/phase-browser-4.md](progress/phase-browser-4.md)（ADR-0115 launcher 節以降）。
+- 未解決事項:
+  - この host は LXC 内のため、試験 runner（UID 1001）の親 namespace map は初期 namespace の `0 0 4294967295` ではなく `0 100000 1001 / 1001 1001 1 / 1002 101002 64534 / 65536 165536 262144`。検証は db_guard namespace の外・この map のもとで行った。
+  - Chrome stderr の `category=other-startup-error`（journal に 4 行）の中身（無害な起動時警告か）は未確認。
+  - 機密能力（`CredentialInjection`・`IdentityRestore`）はこの task では解放していない。解放は後続 task `01M3VFQZ2TX3W0KTDQHKCAVJR6` / `01M3WV4BFJ71J9ZWJ020MP2Z4K` で判断する。

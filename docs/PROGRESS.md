@@ -88,6 +88,20 @@ workspace 全 test の成功は未確認。user namespace を利用できる環�
 - `cargo clippy --workspace -- -D warnings` → exit 0（41.53秒）。
 - test の受け入れ条件は未達。user namespaces が利用可能な環境で workspace test の再実行が必要。
 
+## Root delivery 取り込み最終検証（verify-land、2026-10-02）
+
+main（HEAD `2bd7df3b`）への merge-renumber・delivery-index 統合後の最終ゲート。user namespace が使える環境で実行し、前回 run が未解決としていた `instance_handoff` の失敗を含め全件成功を確認した。
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → exit 0。3,221 passed / 0 failed / 0 ignored（`--list` 相当の doctest 等含む計 118 test binary、`instance_handoff` も含めて全件成功）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test -p task-core delivery_skipped` → exit 0、2 passed（`latest_delivery_skipped_rows_uses_partial_index` が `idx_events_delivery_skipped` の EXPLAIN QUERY PLAN 使用と task ごとの最新1件を確認）。
+- `git merge-tree --write-tree --name-only HEAD main` → exit 0、衝突ファイル名の出力なし（tree `229e6d41c27f0fb716ef3e17faef6fc8c166d0de` のみ）。main を fast-forward 可能な形に近づけた状態を確認。
+- `rg -n 'ADR-0099' docs/ crates/` → 残存参照はすべて main 既存の browser-phase3-control-lease（`docs/adr/0099-browser-phase3-control-lease.md`）向けで、root delivery の旧番号参照は無い。`docs/adr/0117-root-delivery-without-assignee.md` のみが新 ADR。
+- GUI（`corepack pnpm@11.27.0 -C gui install --frozen-lockfile` → exit 0 の後）: `pnpm typecheck`（`react-router typegen && tsc -b`）→ exit 0。`pnpm test`（vitest run）→ exit 0、85 test files / 1,250 tests passed。
+- 負荷による flake は今回発生しなかった（追加の待ち上限変更は不要）。
+- 受け入れ条件 0〜3 すべて満たした。取り込み可能性の確認はここまでで、実際の main への merge は celeris の統合工程（integrate-reverify）が行う。
+
 ## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）
 
 - 認証区間（ADR-0080 H3）を worker → store op（task-api `auth-section` と共通）→ control 状態へ配線、API で takeover/renew を 409 拒否、実 `forward_events` が区間中 progress・artifact・live event を 0 件にする。詳細・証拠は [phase-browser-3](progress/phase-browser-3.md)。

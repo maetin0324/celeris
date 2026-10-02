@@ -1,0 +1,9 @@
+# web/ の pnpm 設定。gui/pnpm-workspace.yaml と同じ方針（docs/web/implementation-plan.md §1「依存の追加」）。
+# web/ は gui/ と独立した workspace と lockfile を持つ。
+packages:
+  - "."
+# 公開から 7 日（10080 分）未満の版は使わない（サプライチェーン対策）
+minimumReleaseAge: 10080
+# 依存の install スクリプトは許可リストにあるものだけ実行し、未知のものがあれば install を失敗させる
+strictDepBuilds: true
+allowBuilds: {}

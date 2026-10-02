@@ -333,3 +333,16 @@ main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135
 - `cargo test -p task-worker --test browser_runtime_isolated controller_kill_leaves_no_runtime_processes -- --exact` → exit 0、`test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out`。
 - 2 回連続で単独実行し、どちらも同じ結果を再確認した。
 - 人の判断のとおり、環境（host 負荷）起因の flaky と確認できた。コード変更なし。
+
+### prompt-rule: planner の check 指針に重い負荷台本禁止を追記 — 2026-10-02
+
+`crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE`（check の書き方の箇条、1639〜1663 行）の末尾に次の 1 行を追加した: 「Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).」。同文字列を `crates/task-worker/src/claude_code/tests.rs` の `planner_prompt_has_the_check_writing_section` の needles 配列にも追加した。
+
+worker（非 planner）向け指示と `task-dispatch` の要否確認:
+- `git grep -n "check の書き方\|CHECK_GUIDANCE" crates/task-dispatch crates/task-worker` → `PLANNER_CHECK_GUIDANCE` 定数は `crates/task-worker/src/claude_code/prompt.rs` にのみ存在し、`task-dispatch` に check 作成の指針テキストは無い。
+- worker（非 planner）実行の前置きは `crates/task-worker/src/preamble.rs`（`render`/`mode_section`/`repos_note` など）にあるが、worker は checks/acceptance を**書く**側ではなく既存の check を実行・満たす側なので、「check を書くときの注意」を worker 向けに追記する対象がない。worker 向けの指示には変更不要と判断した（追記しない理由として記録）。
+- 試験の prompt snapshot/hash 試験は存在しない（`grep -n "sha256\|snapshot\|hash" crates/task-worker/src/claude_code/tests.rs` に prompt 関連の一致なし）ため、他に更新箇所はない。
+
+検証:
+- `cargo test -p task-worker --lib claude_code::` → exit 0、91 passed（`planner_prompt_has_the_check_writing_section` を含む）、0 failed。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。

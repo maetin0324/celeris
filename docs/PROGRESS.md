@@ -6,6 +6,12 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
+## 試験で CPU を焼く負荷をかけない規則（2026-10-02、task 01M3Y4AV7801NSXB6FD698QZHW、WorkUnit rule-docs）
+
+- 完了日: 2026-10-02。`CLAUDE.md`「作業の進め方」に規則を 1 行追加、[docs/testing.md](testing.md) を新設（禁止の理由と、時計の差し替え・出来事待ち・SIGSTOP/SIGCONT・遅延フックの 4 方法を既存試験の例つきで記載。`tokio::time::pause` はリポジトリに例が無く擬似例）。`scripts/dev/stress-e2e-phase3.sh` を `git rm`、`docs/progress/phase-browser.md` と本ファイルの実行案内を削除の一文に置換（過去の結果行は残す）。
+- 証拠: `grep -q 'SIGSTOP' CLAUDE.md && grep -qE 'CPU を焼' CLAUDE.md && test ! -e scripts/dev/stress-e2e-phase3.sh && ! git grep -n 'stress-e2e-phase3.sh' -- scripts crates .claude` → exit 0。`git diff --name-only 764a737d -- crates docs/DESIGN.md` → 出力なし。cargo は crates/ を変えないため未実行。
+- 未解決: `docs/architecture-map.md` に試験指針の索引は無いので追記しない。planner/worker 指示への追記は別 WorkUnit（prompt-rule）。
+
 ## 構造リファクタリング完了（2026-09-30、ADR-0079 / ADR-0082 / ADR-0083）
 
 inline test の外出しと責務分割を完了した（worktree、main 未 merge）。前後 LOC 表と 2,000 行超ファイルの分類は [phase-structure-refactor.md](progress/phase-structure-refactor.md)。
@@ -19,7 +25,7 @@ inline test の外出しと責務分割を完了した（worktree、main 未 mer
 
 ## 目次
 
-- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。2026-10-02 追記: `scripts/dev/stress-e2e-phase3.sh` で phase3_control の flaky 修正（`dafffeb1`）を負荷下 2 回（各 20 serial + 8 parallel）で検証、全 pass。fix-stress-build は人の介入を受け、共用 host の既定負荷を焼き 2 本・nice -n 19・300 秒・5 serial + 2 parallel に変更し、背景 cargo 負荷を opt-in 化。指定の `time sh scripts/dev/stress-e2e-phase3.sh` を既定値のまま 1 回実行し exit 0（serial 5/5、parallel 2、real 16.970s）。重負荷検証手順は [phase-browser](progress/phase-browser.md) 末尾。
+- [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。2026-10-02 追記: `scripts/dev/stress-e2e-phase3.sh` で phase3_control の flaky 修正（`dafffeb1`）を負荷下 2 回（各 20 serial + 8 parallel）で検証、全 pass。fix-stress-build は人の介入を受け、共用 host の既定負荷を焼き 2 本・nice -n 19・300 秒・5 serial + 2 parallel に変更し、背景 cargo 負荷を opt-in 化。指定の `time sh scripts/dev/stress-e2e-phase3.sh` を既定値のまま 1 回実行し exit 0（serial 5/5、parallel 2、real 16.970s）。`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](testing.md)）。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 1〜4 の main 統合](progress/phase-browser-main-merge.md) — 2026-10-01、`478e86c4` とリファクタ後 main `2eb1b030` がともに祖先となる作業ブランチで、migration 0035/0036・schema 36 と ADR 0099〜0114 を確認。`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、source size active warning 0 件（既存例外 1 件）。P3-B frame、別 host UID・A13、機密能力の本番解放、本番設定と昇格は未解決。検証のコマンド・exit・テスト数はリンク先に記録。
 - [Browser capability Phase 3](progress/phase-browser-3.md) — ADR-0099（制御 lease）/ 0100（live proxy ACL）/ 0101（identity 契約）/ 0113（P3-C control gate 配線）。P3-B live proxy・P3-C takeover は store・task-api・worker・GUI まで配線し e2e `phase3_` 3 passed。P3-C の worker 側 control gate は 2026-09-30 に run loop（`ActionServer::serve`）へ配線完了、`browser_control_gate_wire` 5 passed。P3-A は封緘・保管・失効・削除まで、利用（復元）は P4-A/P4-B の deliver_state（2026-09-30 実装済み）を参照。2026-09-30 の検査（Rust 3055 passed / 0 failed、clippy exit 0）。本番未昇格。
@@ -377,3 +383,104 @@ main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135
 - 証拠: `cargo build -p task-worker --bins` exit 0。`cargo fmt --all -- --check` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`cargo test --workspace` exit 0（3279 passed / 0 failed / 12 ignored）。`cargo test -p task-worker --test browser_runtime_isolated` exit 0（5 passed、1 ignored）。flaky は出なかった。
 - **launcher の binary に効く変更あり**: `browser_runtime.rs` の launch（init 待ち）は launcher・sandboxd・egress の binary に入る。host の binary は 86ce1a88 のビルドのままなので、反映には人による入れ替えが要る。
 - main 取り込み後の launcher binary の実 host 再試験は未実施（任意で人が require 試験を再実行）。手順は `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture`（binary の入れ替えは `sudo /usr/local/sbin/celeris-browser-launcher-update`）。
+
+### prompt-rule: planner の check 指針に重い負荷台本禁止を追記 — 2026-10-02
+
+`crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE`（check の書き方の箇条、1639〜1663 行）の末尾に次の 1 行を追加した: 「Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).」。同文字列を `crates/task-worker/src/claude_code/tests.rs` の `planner_prompt_has_the_check_writing_section` の needles 配列にも追加した。
+
+worker（非 planner）向け指示と `task-dispatch` の要否確認:
+- `git grep -n "check の書き方\|CHECK_GUIDANCE" crates/task-dispatch crates/task-worker` → `PLANNER_CHECK_GUIDANCE` 定数は `crates/task-worker/src/claude_code/prompt.rs` にのみ存在し、`task-dispatch` に check 作成の指針テキストは無い。
+- worker（非 planner）実行の前置きは `crates/task-worker/src/preamble.rs`（`render`/`mode_section`/`repos_note` など）にあるが、worker は checks/acceptance を**書く**側ではなく既存の check を実行・満たす側なので、「check を書くときの注意」を worker 向けに追記する対象がない。worker 向けの指示には変更不要と判断した（追記しない理由として記録）。
+- 試験の prompt snapshot/hash 試験は存在しない（`grep -n "sha256\|snapshot\|hash" crates/task-worker/src/claude_code/tests.rs` に prompt 関連の一致なし）ため、他に更新箇所はない。
+
+検証:
+- `cargo test -p task-worker --lib claude_code::` → exit 0、91 passed（`planner_prompt_has_the_check_writing_section` を含む）、0 failed。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+
+## ui-ux 外部 skill の org 種更新と結合試験（work unit `e2e-verify`）
+
+完了日 2026-10-02。ADR-0122 の木（深さ1: ui-ux 課への 4 外部 skill 登録、深さ2: このtask）の最終段。
+`config/org.example.toml` の `ui-ux` に `skills_mounts = ["frontend-design", "shadcn", "web-design",
+"ui-ux-quality-gate"]`（license: none で除外した skill は無いため 4 件とも）と、依存方針（shadcn 以外の
+新規ライブラリは提案に留める、外部ネットワークに出ない）の policy 1 行を追加した（routing 用の
+`profile.skills` は不変）。`crates/celeris/tests/ui_ux_skills_delivery.rs` を新規に追加し、
+`config/skills/` を一時 KB に取り込み → `org.example.toml` から `ui-ux` の実効 profile を解決 →
+`task-worker` の配送関数（`deliver_claude_code` / `deliver_agents_md`）で実際に materialize するところまでを
+結合して確認した（LLM 呼び出しなし、外部ネットワークなし）。詳細は
+`docs/progress/ui-ux-skills.md` の「org 種の更新と結合試験」節。
+
+- 証拠: `cargo build --workspace --bins` → exit 0。`cargo test --workspace ui_ux_skills` → 4 試験バイナリ
+  （celeris / celerisctl / task-dispatch / task-ops）で計 12 passed / 0 failed。
+  `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+  `cargo test --workspace` → exit 0（120 試験バイナリすべて `test result: ok`、合計 3236 passed / 0 failed、
+  失敗・flake 無し）。
+- 既存の routing 試験（`example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering` 等）も
+  上記のフルスイートに含まれ通過を確認済み。
+- 未解決事項: なし。
+
+## ADR-0122 完了（ui-ux 外部 skills）
+
+完了日 2026-10-02。ADR-0122（外部 agent skill の vendoring・KB への取り込み・ui-ux への mount・quality gate の
+reviewer 配布）の D1〜D6 を実装し、`docs/adr/0122-ui-ux-external-skills.md` の状態欄を「採用・実装済み」に更新した。
+実装 commit: vendor-skills `d39733d8`、vet-skills `3cfdf69a`、adr `7ce72c5c`、skill-import `41e6324b`、
+review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
+
+- 証拠コマンド: `cargo test -p celeris --test ui_ux_skills_delivery`（結果の詳細は
+  `docs/progress/ui-ux-skills.md` を参照。config/skills → 一時 KB → ui-ux 実効 profile → worker 配送の結合試験が
+  全件 pass、routing 回帰試験も同じフルスイートで通過を確認済み）。
+- 未解決事項:
+  - 本番の KB 取り込み・ui-ux への mount は worker からは行わない。人が `docs/ops/ui-ux-external-skills.md` の
+    手順で実行する（ADR-0095 付記 D-d）。
+  - `web-design` の LICENSE 判断（LICENSE ファイルが無く README の License 節に拠っている点）は、より厳しい
+    基準を採るかどうかを人が判断する（ADR-0122 D6、`docs/progress/ui-ux-skills.md`）。
+- release/verify（work unit release-report、2026-10-02、HEAD `a58f68b5551b` = adr-status 統合後）:
+  - release.sh: sha12 a58f68b5551b exit 0（`CELERIS_STATE_DIR` を scratch に、`SD_USE_CALLER_CARGO_TARGET=1`
+    `SD_RELEASE_PRUNE=0`。worker sandbox から本番の `~/.local/celeris/releases` は読み取り専用なので、既定の
+    state dir では lock を作れず exit 1。gate.json ok=true: fmt / cargo-test（nextest 3236 passed・11 skipped・
+    doctest ok）/ clippy / source-size-report / build --release / pnpm install・typecheck・build / web の
+    install・typecheck・test・release がすべて exit 0。gui/ に変更が無いので pnpm-test・mobile-audit・e2e:mock は
+    skipped（base ea86af6307f8））。
+  - verify.sh: exit 0（verify.json ok=true live_ok=true。検査 1〜6 すべて true）。1 回目は worktree の
+    gui/ に devDependencies が無く検査 4b（gui-e2e）だけ「@playwright/test not found」で exit 1。
+    `pnpm install --offline --frozen-lockfile` 後の再実行で 4b も pass。本番の daemon・DB・config・systemd には
+    触れていない（DB は `mode=ro` の `.backup` を読むだけ）。
+  - `unshare -U -r true` → exit 0（この run の sandbox では user namespace を作れた）。
+
+### final review 失敗の再実行（work unit `rerun-dispatch`）
+
+2026-10-02 に、final review の `cargo test --workspace` で失敗した 2 件を単独で各 3 回実行し、続けて
+`cargo test -p task-dispatch --lib` を実行した。各試験の直前に取得した `uptime` の load average（1/5/15 分）も併記する。
+
+| 試験 | 回 | exit | passed | load average (1/5/15 分) |
+| --- | ---: | ---: | ---: | --- |
+| `cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation` | 1 | 0 | 1 | 20.82 / 23.28 / 20.88 |
+| 同上 | 2 | 0 | 1 | 21.93 / 23.41 / 20.99 |
+| 同上 | 3 | 0 | 1 | 19.55 / 22.85 / 20.84 |
+| `every_cargo_path_uses_the_scratch_target_dir` | 1 | 0 | 1 | 16.57 / 22.03 / 20.60 |
+| 同上 | 2 | 0 | 1 | 19.71 / 22.07 / 20.66 |
+| 同上 | 3 | 0 | 1 | 21.56 / 22.42 / 20.82 |
+| `cargo test -p task-dispatch --lib` | — | 0 | 503 | 15.65 / 20.14 / 20.15 |
+
+各単独実行はすべて 1 passed / 0 failed、lib 全体は 503 passed / 0 failed / 0 ignored。再現しなかったため、
+この再実行では `plan_issue` は発生していない。作業ブランチの起点 `6b49a92dd5d7` から HEAD までの
+`git diff --name-only` は空で、`review.rs`・review tests・`review_spawn` 周辺の skill 配布差分も無い。
+したがって、その変更は対象 2 試験の経路に触れていない。
+
+### land-main: 最新 main の統合と最終検査 — 2026-10-02
+
+main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した。ui-ux external skills の記録と CPU 負荷規則・planner 指針の記録を両方保持した。全ターゲット clippy で main 由来の `ui_ux_skills.rs` に型複雑度と不要な let-return の lint が見つかったため、型 alias と直接 return に整えた。
+
+- `git merge-base --is-ancestor 95ac16442f92 HEAD` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
+- `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
+
+### land-main3: 最新 main の統合 — 2026-10-02
+
+main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持した。main の ADR-0122 完了・ui-ux 外部 skill の結合試験・planner 指針・最終検査記録に加え、browser launcher の実 process 証跡、tick_prunes の単独再実行、過去の land-main/land-main2 記録も残した。
+
+- main 由来の launcher 関連差分を確認: `crates/task-worker/src/browser_runtime.rs` は main 側の init 待ち変更を含み、launcher/sandboxd/egress の起動経路に効く。この変更は既に land-main2 の記録に記載済みで、host の binary 入れ替えと require 試験の再実行が必要。
+- `git merge-base --is-ancestor 0d438ec19d9a HEAD` → exit 0。`git merge-tree --write-tree main HEAD` → exit 0（tree `d7c0705a6e14f6dc89fbd842b679f4078c084bd5`）。main の ADR-0122 / ui-ux 記録と launcher 節は両方保持。
+- 最終検査: `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace` → exit 101。`instance_handoff` 8件中3 passed / 5 failed。`cargo test -p celeris --test instance_handoff` 単独再実行も exit 101、同じ5件を再現。3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted` で失敗。残り2件（新旧 daemon の dispatch/standby 引継ぎ）も同じ環境で失敗した。検査は pass 扱いにしない。
+- launcher binary に効く main 差分は `crates/task-worker/src/browser_runtime.rs` の init 起動待ち処理である。既存の記録どおり host の binary 入れ替えと require 試験の再実行が必要。

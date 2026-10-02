@@ -116,6 +116,8 @@ mod review_verdict;
 mod run_context;
 mod sinks;
 mod snapshot;
+/// ADR-0130 D5: review 前 sync の待ち行列の stale 優先。
+mod stale_priority;
 mod tree_units;
 use sinks::{ReviewerSink, StoreSink};
 mod work_units;
@@ -1086,6 +1088,10 @@ pub struct Dispatcher {
     cluster_waiting: std::collections::HashSet<TaskId>,
     /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
     awaiting_human: std::collections::HashSet<TaskId>,
+    /// ADR-0130 D5: review 前 sync を待つ reviewing task（待機開始順と、選ばれなかった連続 tick 数）。
+    review_sync_queue: HashMap<TaskId, stale_priority::ReviewSyncWait>,
+    /// ADR-0130 D5: 次の待機開始順。
+    review_sync_seq: u64,
     /// ADR-0016 D2 / M5: レビューは全 pass だが、委譲した子が終端になるのを待っている reviewing タスク。
     /// 値はその run の id と、Plan kind なら検証済みの plan（子が終わってから `complete_plan` する）。
     awaiting_children: HashMap<TaskId, AwaitingChildren>,
@@ -1342,6 +1348,8 @@ impl Dispatcher {
             unroutable: std::collections::HashSet::new(),
             cluster_waiting: std::collections::HashSet::new(),
             awaiting_human: std::collections::HashSet::new(),
+            review_sync_queue: HashMap::new(),
+            review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
             checking: HashMap::new(),

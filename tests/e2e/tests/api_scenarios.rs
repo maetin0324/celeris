@@ -7,7 +7,6 @@
 //! 7. レート制限シナリオで `/daemon` に実行中の run と cooldown が現れ、`ProviderThrottled` がイベントに残る
 //! 8. loopback 以外で `token_file` 無しは設定エラー、許可されない `Host` は 400、ワークスペース外の成果物は 403、`env` の値は応答に出ない
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -31,13 +30,10 @@ fn bin(name: &str) -> PathBuf {
     path
 }
 
-/// OS に空きポートを選ばせて閉じる（celeris が bind するまでの僅かな競合は許容する）。
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// celeris に渡すポートを予約する。`Env` が持ち続け、並走する別のテストの celeris と
+/// 同じポートを共有しない（celeris は `SO_REUSEPORT` で bind する。`e2e::PortReservation`）。
+fn reserve_port() -> e2e::PortReservation {
+    e2e::PortReservation::new().unwrap()
 }
 
 fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
@@ -115,11 +111,13 @@ struct Env {
     db: PathBuf,
     store: Arc<SqliteStore>,
     port: u16,
+    _port: e2e::PortReservation,
     token: Option<String>,
 }
 
 impl Env {
     fn new() -> Self {
+        let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let db = root.join("celeris.sqlite3");
@@ -129,7 +127,8 @@ impl Env {
             root,
             db,
             store,
-            port: free_port(),
+            port: reserved.port(),
+            _port: reserved,
             token: None,
         }
     }
@@ -190,9 +189,11 @@ env = {provider_env}
     /// ADR-0044 §5 Phase 53 追記（Phase 55）: **変更を伴う API はすべて管理系（bearer 必須）**。
     /// `[api]` に `token_file` を足し、以後の要求に `Authorization: Bearer` を付ける。
     fn api_listen_with_token(&mut self) -> String {
-        let token = "tok-e2e-phase55";
+        // テストごとに違う token にする。万一別のテストの celeris に要求が届いても、黙って
+        // 別の DB を書き換えずに 401 で表に出る。
+        let token = format!("tok-e2e-phase55-{}-{}", std::process::id(), self.port);
         std::fs::write(self.root.join("api.token"), format!("{token}\n")).unwrap();
-        self.token = Some(token.to_string());
+        self.token = Some(token);
         format!("{}\ntoken_file = \"api.token\"", self.api_listen())
     }
 
@@ -1396,11 +1397,14 @@ fn phase3_auth_section_refuses_takeover_and_renew_until_left() {
 fn phase3_control_converges_rejects_competition_and_cancel_stops() {
     let f = BrowserFixture::new();
     let path = f.path(f.task_a, &f.run_a, "control");
+    // in-flight の agent 操作は `agent/end` を呼ぶまで残る（daemon の tick は control 状態に触れない）。
+    // pause が `pausing` で止まることは時刻に依らない。
     let begin = f.env.post(&format!("{path}/agent/begin"), json!({}));
     assert_eq!(begin.status, 200, "{}", begin.body);
+    assert_eq!(begin.json()["in_flight"], 1, "{}", begin.body);
     let pause = f.control("owner-a", json!({"kind":"pause"}), 0, "pause-1");
     assert_eq!(pause.status, 200, "{}", pause.body);
-    assert_eq!(pause.json()["phase"], "pausing");
+    assert_eq!(pause.json()["phase"], "pausing", "{}", pause.body);
     let v = pause.json()["version"].as_u64().unwrap();
     f.control("owner-a", json!({"kind":"takeover"}), v, "early")
         .assert_problem(409, "not_converged");
@@ -1408,9 +1412,11 @@ fn phase3_control_converges_rejects_competition_and_cancel_stops() {
     assert_eq!(end.status, 200, "{}", end.body);
     assert_eq!(end.json()["phase"], "paused");
     let converged_version = end.json()["version"].as_u64().unwrap();
+    // 競合の検査の間に lease が切れないよう既定の期限（60 秒）で取る。切れると owner-b の拒否が
+    // 競合ではなく失効による version_conflict になり、検査が弱まる。
     let acquired = f.control(
         "owner-a",
-        json!({"kind":"takeover", "ttl_secs":1}),
+        json!({"kind":"takeover"}),
         converged_version,
         "take-1",
     );
@@ -1418,7 +1424,7 @@ fn phase3_control_converges_rejects_competition_and_cancel_stops() {
     assert_eq!(acquired.json()["phase"], "human_control");
     let replay = f.control(
         "owner-a",
-        json!({"kind":"takeover", "ttl_secs":1}),
+        json!({"kind":"takeover"}),
         converged_version,
         "take-1",
     );
@@ -1426,10 +1432,19 @@ fn phase3_control_converges_rejects_competition_and_cancel_stops() {
     assert_eq!(replay.json()["replayed"], true);
     assert_eq!(replay.json()["version"], acquired.json()["version"]);
     let version = acquired.json()["version"].as_u64().unwrap();
-    let other = f.control("owner-b", json!({"kind":"takeover"}), version, "take-2");
-    assert_ne!(other.status, 200, "second controller acquired lease");
+    f.control("owner-b", json!({"kind":"takeover"}), version, "take-2")
+        .assert_problem(403, "not_lease_holder");
     f.control("owner-a", json!({"kind":"stop"}), v, "stale")
         .assert_problem(409, "version_conflict");
+    // 失効は期限を縮めてから待つ。期限より前に状態を観測する箇所は無い（sleep は下限なので、
+    // 負荷で遅れても失効済みを見る側にしか倒れない）。
+    let short = f.control(
+        "owner-a",
+        json!({"kind":"renew", "ttl_secs":1}),
+        version,
+        "renew-short",
+    );
+    assert_eq!(short.status, 200, "{}", short.body);
     std::thread::sleep(Duration::from_secs(2));
     let expired = f.env.get(&path);
     assert_eq!(expired.status, 200, "{}", expired.body);

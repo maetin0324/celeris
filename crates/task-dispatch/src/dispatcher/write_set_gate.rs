@@ -1,6 +1,25 @@
-//! ADR-0130 D3（付記「parallel-gate 実装時の明確化」）: 同じ repo で走っている run の expected
-//! write-set と候補の expected write-set が強く重なれば、候補の起動を次 tick に回す（待たせるだけ。
-//! 失敗・attempts・状態遷移なし）。hint の無い run は予約を作らず、照合もしない（従来どおり）。
+//! ADR-0130 D3: 同じ repo で走っている run の expected write-set と候補の expected write-set が
+//! 強く重なれば、候補の起動を次 tick に回す（待たせるだけ。失敗・attempts・状態遷移なし）。
+//! hint の無い run は予約を作らず、照合もしない（従来どおり）。
+//!
+//! D3 の配線で決めた細部（ADR 本文への反映は verify 葉で行う）:
+//!
+//! - **予約の置き場所**: dispatcher のメモリ上の側表（`RunKey` → repo 鍵と正規化 prefix）に、run を
+//!   起こした時点の hint で置く。照合は `running` に残る run の予約だけを見るので、run の終了・lease
+//!   回収・中止で `running` から外れた時点で予約も効かなくなる。task の lease は 1 つの daemon だけが
+//!   持つ（ADR-0040）ので、この Phase では store の予約表は作らない。
+//! - **照合の位置**: `dispatch_one` の retry / infra backoff の後、クラスタ解決・作業場所の用意・
+//!   lease・`Trigger::Dispatch` より前。見送りは `Ok(false)` を返すだけ。
+//! - **対象の run**: implementation の run（atomic task の run と WU の run）。planner run と CoS の
+//!   対話 run は予約も照合もしない。どちらかが hint なしなら重ならない（D1 の従来互換）。
+//! - **repo 鍵**: `task.repos` があれば `RepoId`、無い旧 task はローカル作業場所のパス（`path:`）、
+//!   リモートは `remote:<cluster>:<path>`。
+//! - **同じ task の WU 同士**: 両方が task の有効 hint をそのまま継いだものなら照合しない。unit 固有の
+//!   hint を持つ WU は兄弟とも照合する。
+//! - **見送りの記録**: event は増やさず `tracing` の log（`write-set overlap; deferring the run`）に残す。
+//! - **公平性**: `RunKey` ごとに待機開始 tick と連続回数を持ち、連続 3 回以上見送られた ready task は
+//!   待機開始の古い順に候補の先頭へ移す。
+//! - **actual の併用**: 走行中の run の既知の actual はこの Phase では照合に使わない（expected だけ）。
 
 use super::*;
 

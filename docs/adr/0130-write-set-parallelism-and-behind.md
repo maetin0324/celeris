@@ -74,16 +74,3 @@ remote worktree はローカル Git worktree と同一視しない。ADR-0079 �
 | `verify` | 全 workspace の test/clippy/fmt、main との衝突再見積もり、`docs/architecture-map.md` と `docs/PROGRESS.md` の記録 |
 
 テストは外部ネットワーク、実 claude、systemd を使わず、一時 Git repo と固定 tick (`tick_until` / `run_until`) で決定的に書く。実装の production code で `unwrap()` を使わない。後続実装が本決定から外れる必要があれば、変更前に本 ADR へ理由と新しい不変条件を追記する。
-
-## 付記（parallel-gate 実装時の明確化）
-
-D3 の配線（`crates/task-dispatch/src/dispatcher/write_set_gate.rs`）で、次の点を決めた。
-
-- **予約の置き場所**: 予約は dispatcher のメモリ上の側表（`RunKey` → repo 鍵と正規化 prefix）に、run を起こした時点の hint で置く。照合は `running` に残る run の予約だけを見るので、run の終了・lease 回収・中止で `running` から外れた時点で予約も効かなくなる（明示の解放漏れが起きない）。task の lease は 1 つの daemon だけが持つ（ADR-0040）ので、この Phase では store transaction の予約表は作らない。複数 daemon が同じ repo を同時に dispatch する構成を足すときに store へ移す。
-- **照合の位置**: `dispatch_one` の retry / infra backoff の後、クラスタ解決・作業場所の用意・lease・`Trigger::Dispatch` より前。見送りは `Ok(false)` を返すだけで、状態遷移・`attempts`・WU の retries・worktree の用意をしない。
-- **対象の run**: implementation の run（atomic task の run と WU の run）。planner run（計画を書くだけ）と CoS の対話 run は予約も照合もしない。候補・走行中のどちらかが hint なしなら重ならない（D1 の従来互換）。
-- **repo 鍵**: `task.repos` があればその `RepoId`、無い旧 task はローカル作業場所のパス（`path:` 前置き）、リモートは `remote:<cluster>:<path>`。子 task は親の repo を継ぐので同じ鍵で照合される。
-- **同じ task の WU 同士**: 両方の hint が task の有効 hint をそのまま継いだもの（unit に固有の値が無い）なら照合しない。task に hint を付けただけで、従来並列に走っていた同じ task の WU が直列にならないようにするため。unit 固有の hint を持つ WU は、同じ task の兄弟とも照合する。
-- **見送りの記録**: event は増やさず、`tracing` の log（`write-set overlap; deferring the run`、候補と相手の task / WU、待機開始 tick、連続回数）に残す。
-- **公平性**: 待機記録は `RunKey` ごとの待機開始 tick と連続回数。直前の tick に見送られていなければ数え直す。`dispatch_ready` は連続 3 回以上見送られた ready task を待機開始の古い順に候補の先頭へ移す。並列 WU の 2 本目以降（`dispatch_parallel_work_units`）は従来の作成順のまま照合する。
-- **actual の併用**: 走行中の run の既知の actual はこの Phase では照合に使わない（expected だけ）。

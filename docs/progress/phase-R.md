@@ -2454,3 +2454,33 @@ main（R7-12 の配送 repair WU 修正・browser_shared_cdp の flake 修正ま
 ### 未解決・提案
 
 - なし（この WorkUnit の範囲では追加の既知の問題は見つからなかった）。
+
+### 追記: check は `sh`（dash）でこの script を呼ぶ — bash 配列展開を外した
+
+この WorkUnit の plan の check（`land-main` の受け入れ検査）は `sh scripts/selfdeploy/tests/promote_authorization_marker.sh` で、
+シェバン（`#!/usr/bin/env bash`）を無視して `/bin/sh`（dash）で実行する。dash は `${BASH_SOURCE[0]}`（17 行目、script 自身のディレクトリ取得）
+と `${@:2}`（152 行目、`run_script` の可変長引数の 2 番目以降を渡す配列展開）を解釈できず `Bad substitution` で落ちる
+（前回 run の check 不合格: `exit=Some(2)`、`stderr` に `Bad substitution` ×2）。
+
+直した内容（`scripts/selfdeploy/tests/promote_authorization_marker.sh`）:
+- シェバンを `#!/bin/sh` に変更（実態に合わせる）。
+- `HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` → `HERE="$(cd "$(dirname "$0")" && pwd)"`。
+- `run_script` の `"${@:2}"` → `script="$1"; shift` してから `"$@"` を渡す形に変更（POSIX sh で可変長引数の先頭だけ落とす標準の書き方）。
+- `set -euo pipefail` → `set -eu`（`pipefail` は dash に無い。script 内に実パイプは無く、意味の変化はない）。
+- `promote.sh` / `rollback.sh` 自体は bash 前提なので `run_script` 内の呼び出しは引き続き明示的に `bash "$SD/$script" ...` で起動する
+  （このテスト script 自身だけを sh/dash 互換にした。対象スクリプトの実装は変えていない）。
+
+修正後、`sh` と `bash` の両方で exit 0 になることを確認した（以後 `sh` で記載。以前の記録にある `bash scripts/...` の実行結果も変わらず有効）。
+
+### 証拠（sh 対応後の再検査、このブランチ・このコミット）
+
+- `git merge-base --is-ancestor main HEAD` → exit 0。
+- `cargo build -p task-worker --bins` → exit 0。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo test --workspace` → 全バイナリ exit 0、失敗 0（`browser_shared_cdp` を含む。`real_shared_cdp_and_auth_section` は再発せず pass）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning 0。
+- `cargo test -p celeris --test unpromoted_release` → **8 passed; 0 failed**（exit 0）。
+- `sh scripts/selfdeploy/tests/promote_authorization_marker.sh` → `promote_authorization_marker: all ok`（exit 0。dash で実行、live・
+  stop-start・各失敗・rollback の 5 経路すべて pass）。
+- 上記 2 件を `cargo test -p celeris --test unpromoted_release && sh scripts/selfdeploy/tests/promote_authorization_marker.sh` の
+  一括コマンド（plan の check と同じ形）でも実行し、exit 0 を確認した。

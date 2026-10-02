@@ -31,6 +31,7 @@ import { runEndLabel, runEndTone } from "~/lib/task-execution";
 import { cn } from "~/lib/utils";
 import { ACTION_LABELS } from "./labels";
 import { TaskEditSection } from "./TaskEditSection";
+import { WriteSetSection } from "./WriteSetSection";
 
 const BrowserRunsPanel = lazy(() =>
   import("~/components/BrowserRunsPanel").then((m) => ({ default: m.BrowserRunsPanel })),
@@ -164,6 +165,9 @@ export function OverviewTab({
       {detail.actions.includes("edit") && (
         <TaskEditSection key={task.updated_at} detail={detail} org={org} milestones={milestones} genres={genres} />
       )}
+
+      {/* docs/adr/0130 D1/D2/D4: expected/actual write-set と target からの behind commits・age。 */}
+      <WriteSetSection detail={detail} />
 
       <section data-testid="relations-section">
         <Card>

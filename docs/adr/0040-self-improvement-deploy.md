@@ -376,3 +376,101 @@ journal の WARN と `status.sh` の `stale_instances`〈systemd を直接見る
   カバーする（`acp.rs` も `force_kill` でない枝で `reap_after_terminal` を呼ぶ）。`acp.rs` が別途
   持つ複数の `kill_now` 呼び出しは、`session/cancel` を伴うタイムアウト/中断の経路で、既に
   `send_signal_to_group`（`killpg`）がグループ全体へ signal を送っているので対象外のままでよい。
+
+## 付記 2026-10-02: handoff と migration の認可（昇格していない release）
+
+### 起きたこと（2026-10-01。記録は `docs/progress/phase-R.md` の 23:1x〜23:56Z）
+
+web dogfood の worker run が `systemctl --user start celeris-web@bf54b41ad627` を実行し、unit の
+`Wants=celeris@%i.service` によって、検証も昇格もしていない `celeris@bf54b41ad627`
+（`releases/bf54b41ad627` は task の作業場所の staging 成果物への symlink）が起動した。その daemon は
+起動時に本番 DB を schema 34→36 に migrate し（18:32:38Z）、D4 の handoff を要求して本番
+`7fbfc347b240` から `active` を奪い、約 4.8 時間本番として dispatch した。D4 は「`release` が違えば
+引き継ぐ」だけで、**その release が昇格されたものか**を見ていなかった。migration は
+`build_dispatcher`（`SqliteStore::open_with`）で役割の判断より前に走っていた。
+
+### 規則
+
+`--mode verify` 以外の daemon は、次のどちらかが成り立つ場合**だけ**、DB を開いて migrate し、
+`daemon_instances` に行を書き、handoff を要求し、`active` になる:
+
+1. **昇格済み**: `<releases_dir の親>/current`（本番 `~/.local/celeris/current`）の symlink の
+   リンク先の最後の要素が、自分の `release`（`--release` > `CELERIS_RELEASE`）と一致する。
+   リンク先は `readlink` の文字列で比べ、`canonicalize` しない（`releases/<sha12>` 自体が symlink でも
+   名前で判る。事故の release も名前では `current` と一致しない）。
+2. **昇格中**: `<releases_dir>/<sha12>/promoting.json` があり、その JSON の `sha12` が自分の `release`
+   と一致し、`started_at`（RFC 3339 UTC）が現在から **900 秒以内**（固定の定数。設定にしない）。
+   中身は `{"sha12", "script": "promote.sh" | "rollback.sh" | "migrate-to-celeris.sh", "mode", "pid",
+   "started_at"}`。期限は、スクリプトが SIGKILL などで印を消せずに終わったとき、古い印が後の任意の
+   起動を認可し続けないためのもの。
+
+どちらでもなければ **拒否**する。
+
+- **判定の位置**: `daemon::run` の中、`--mode` を見た直後で、`build_dispatcher`（＝ DB を開いて
+  migrate する所）・`install_worker_db_guard`・`start_instance` のどれよりも前。拒否するときは
+  **DB を一度も開かない**（読み取りもしない）。判定はファイルシステムだけを見る純粋寄りの関数
+  （`crates/celeris/src/instance.rs` に置く。LLM・DB・systemd に触れない）。
+- **拒否時の振る舞い**: standby で待つことは**しない**（待つには DB を開いて行を書く必要があり、
+  開けば migration が走る。待っている間に昇格の記録が変わることを期待する理由も無い）。
+  `tracing::error!` で理由（`release`、`current` のリンク先または「無い」、`promoting.json` の有無と
+  不一致の理由）を出し、`Exit::NotPromoted` を返して **exit 4** で終わる（0 = 正常・drain、1 = 失敗、
+  2 = 設定エラー / schema が新しすぎる、3 = 同じ release の二重起動、4 = 昇格の認可が無い）。
+- **unit**: `deploy/systemd/celeris@.service` に `RestartPreventExitStatus=4` を足す
+  （`Restart=on-failure` が exit 4 を 2 秒ごとに起こし直さない。unit は failed のまま残り、
+  `systemctl status` / `status.sh` で人に見える）。
+
+### 開発・テスト環境（判定をしない場合）
+
+次のどれかなら判定をせず、従来どおり動く（ログに `promotion gate: skipped (<理由>)` を info で出す）:
+
+- `release == "dev"`（`--release` も `CELERIS_RELEASE` も無い。作業チェックアウトから直接起こした場合）。
+- `<releases_dir>/<release>` が存在しない（ディレクトリも symlink も無い）。systemd の
+  `celeris@<sha12>` は `ExecStart` が `releases/%i/bin/celeris` なので、unit から起きた daemon は
+  必ず判定の対象になる。逆に `releases_dir` に無い名前（既存の試験の `"old"` / `"new"` /
+  `"verify-release"` など）は「管理されていない release」として扱う。
+  — 既存の `crates/celeris/tests/instance_handoff.rs` は `releases_dir` を書かず既定
+  （`~/.local/celeris/releases`、実 `$HOME`）を使うので、本番 host で走ると実物の `current` が見える。
+  「`current` が無ければ素通し」だけを条件にすると、この試験が本番 host で落ちる。
+  `<releases_dir>/<release>` の有無を条件にすることで、既存 e2e は**変更なしで**通る。
+- `releases_dir` 自体が無い場合も上に含まれる（`<releases_dir>/<release>` が無い）。
+
+新しい試験は一時ディレクトリに `releases/<sha12>/`・`current`・`promoting.json` を偽で作り、
+`[selfdeploy] releases_dir` をそこへ向ける（実 `$HOME`・実 systemd に触れない）。最低限:
+(a) `current` と一致しない release は exit 4 で、DB ファイルの `schema_version` が変わらず
+`daemon_instances` に行が無い、(b) `current` と一致する release は従来の handoff が通る、
+(c) 新しい `promoting.json` があれば live 引き継ぎが通り、900 秒より古い・`sha12` 違いの印は拒否、
+(d) `--mode verify` は印も `current` も無くても従来どおり動く。
+
+### 各スクリプトの責務（印を書く・消す時機）
+
+印は書くのも消すのも selfdeploy のスクリプトだけ（daemon は読むだけ）。書き方は lib.sh に
+`sd_write_promoting <sha12> <script> <mode>`（一時ファイル → `mv` で原子的に置く）と
+`sd_clear_promoting <sha12>` を足して共有する。`--dry-run` では書かない。
+
+| スクリプト | 書く | 消す |
+|---|---|---|
+| `promote.sh` live | `promote_live` の `systemctl --user start celeris@<new>` の直前（`backup_db` の後） | `update_links`（`current` → new）の直後。失敗・途中終了でも EXIT トラップ（`record_promote_failure` と同じトラップ）で必ず消す |
+| `promote.sh` stop-start | `promote_stop_start` の pre-start hook の後、`systemctl --user start celeris@<new>` の直前 | 同上。`restore_old_daemon` が起こす旧 release は `current` のままなので印は要らない |
+| `rollback.sh` | `releases/<previous>/` に、`systemctl --user start celeris@<previous>` の直前（`current` はまだ旧） | `sd_set_link "$SD_CURRENT" "$PREV"` の直後と EXIT トラップ |
+| `migrate-to-celeris.sh` | 「4. 起こす」の `systemctl --user start celeris@<sha12>` の直前（このとき新しい `current` はまだ無い） | `sd_set_link "$SD_CURRENT" "$SHA12"` の直後と EXIT トラップ。旧 taskd へ戻す分岐（旧バイナリ）は判定を持たないので印は要らない |
+
+`release.sh` と `verify.sh` は印を書かない（verify の daemon は `--mode verify` で判定の外）。
+昇格が終われば `current` が新 release を指すので、その後の `Restart=on-failure` による再起動・
+host 再起動後の起動は規則 1 で通る。
+
+### `celeris-web@.service`
+
+`Wants=celeris@%i.service` を外し、`After=network.target celeris@%i.service` の順序指定だけ残す
+（web は daemon を起動しない。daemon を起こすのは selfdeploy のスクリプトと人だけ）。本番の
+`~/.config/systemd/user/celeris-web@.service` は人が 2026-10-01 に同じ修正をした
+（backup `.bak-20261001a`）。この unit はこの ADR を書いた時点の main（`8dc45bd3`）には無く、
+web/ の枝（`af133256` web phase 6 P6-02）にだけある。repo に置くときも取り込むときも
+`Wants=celeris@` を持たない版にする。上の判定はこの unit の修正とは独立に効く（`Wants=` が戻っても、
+未昇格の release は exit 4 で止まる）。
+
+### 採らない・残ること
+
+- 印に署名や所有者の検査は付けない。`releases_dir` に書ける worker は印を偽造できる。これは事故
+  （unit の依存で意図せず起きる）を止める規則で、悪意ある worker への防御は worker から user systemd
+  bus と `releases_dir` を隠す別の対策（phase-R.md の再発防止候補）で行う。
+- 同じ release の二重起動（exit 3）は `Restart=on-failure` で再起動されうるが、この付記では変えない。

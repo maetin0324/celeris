@@ -2844,15 +2844,21 @@ ExecutionPlan と WorkUnit、再帰的な task の木（ADR-0079）、人への�
 
 #### 3.125.1 `GET /tasks/{id}/execution` → 200 `TaskExecutionView`
 
-タスクの実行詳細。`gate` は `ExecutionGateDecision | null`、`phase` は `ExecutionPhase | null`、`plan` は `ExecutionPlanView | null`。`runs` は `RunSummary[]`、`metrics` は `ExecutionMetrics` で必須。`metrics.total_cache_read_tokens` は観測できた cached input tokens の合計で、未観測なら省略する。計画の無い atomic タスクの `plan` は `null`。不明なタスクは 404。クエリは受け付けない。
+タスクの実行詳細。`runs`（`RunSummary[]`）と `metrics`（`ExecutionMetrics`）は必須。次の欄は値が無ければ省略する（`null` は出さない）: `gate`（`ExecutionGateDecision`。gate の対象外か未判定なら無い）、`phase`（`ExecutionPhase`）、`plan`（`ExecutionPlanView`。計画の無い atomic タスクでは無い）、`phase_checkpoint`（工程の後の途中確認で止まっているときだけ）、`awaiting_children`（`phase = awaiting_children` のときだけ。空なら省略）、`plan_approval`（`PlanApprovalView`。`phase = awaiting_plan_approval` のときだけ）。`metrics.total_cache_read_tokens` は観測できた cached input tokens の合計で、未観測なら省略する。不明なタスクは 404。クエリは受け付けない。
 
 #### 3.125.2 `GET /tasks/{id}/execution-plan` → 200 `ExecutionPlanView`
 
-有効な計画と `work_units[]` を返す。`versions[]` は `ExecutionPlanVersionView` の版履歴（`version` 昇順、superseded を含む）。有効な計画が無ければ 404 `execution_plan_not_found`。`ExecutionPlanView` は `id`、`task_id`、`version`、`origin`、`status`、`plan`、`created_at`、`work_units` が必須で、`versions` は既定 `[]`。`plan.schema` は `celeris.execution-plan/1` または `/2`（v2 は `phases` を持つ）。クエリは受け付けない。
+有効な計画と `work_units[]` を返す。`versions[]` は `ExecutionPlanVersionView` の版履歴（`version` 昇順、superseded を含む）。有効な計画が無ければ 404 `execution_plan_not_found`。`ExecutionPlanView` は `id`、`task_id`、`version`、`origin`、`status`、`plan`、`created_at`、`work_units` が必須で、`versions` は既定 `[]`。`plan` は採用した `ExecutionPlanSpec` をそのまま返す（/3 を内部の /2 の形に写したものではない）。`plan.schema` は `celeris.execution-plan/1`、`celeris.execution-plan/2`（`phases` と `work_units`）、`celeris.execution-plan/3`（ADR-0079 D2。`stages`・`units`・`decisions` を持ち、`work_units` は空。空の `stages` / `units` / `decisions` は出力しない）のいずれか。/3 でも `work_units[]`（`WorkUnitView`）は段階を工程として写した行（`phase` = 段階の key、統合 WU を含む）。クエリは受け付けない。
 
 #### 3.125.3 `POST /tasks/{id}/execution-plan`・`PUT /tasks/{id}/execution-plan` → 201 `ExecutionPlanView`（管理系）
 
-本文は `ExecutionPlanSpec`。`schema`、`rationale`、`work_units` が必須。v2 は `phases` も必要で、`children` は現行では空配列のみ。人が提案した計画（origin `human`）として検証・採用し、応答に `work_units` と `versions` を含む。`POST` は新規だけで、既に有効な計画があれば 409。`PUT` は有効な計画が無ければ `POST` と同じ（201）、**有効な計画があれば人の replan**（200。ADR-0079 付記「R5b-fix1」）: 本文は新しい版の計画の**全体**（差分の形は受け付けない）で、`task_ops::execution::replan`（origin human）を通す。done の WU は同じ key・`kind`・`phase`（/3 は段階）・`depends_on` で残す必要があり（消す・構造を変えると 422）、spec のほかの欄（`checks` など）は上書きできる（状態は `done` のまま、`work_unit_spec_overridden` の event）。応答には `replan`（`added` / `changed` / `removed` / `overridden_done`）が付く。クエリは受け付けない。管理トークンが無ければ 401、計画が無効なら 422。
+本文は `ExecutionPlanSpec`（知らない欄は 400）。型の上で必須なのは `schema` と `rationale` だけで、ほかの欄は省略すると空配列になる。schema ごとの必須欄は検証（`task_core::execution_plan::validate_with`）が決め、違反は 422:
+
+- `celeris.execution-plan/1`: `work_units` が 1 件以上。`phases`・`children`・`stages`・`units`・`decisions` は空。
+- `celeris.execution-plan/2`: `work_units` が 1 件以上、`phases` が 1 件以上で、各 WU に `phase` が要る。`children` は書けるが、この入口（人の計画）では子 Task を作らない（`adopt_plan` は子なしで採用する）。`stages`・`units`・`decisions` は空。
+- `celeris.execution-plan/3`: `stages` と `units` が 1 件以上、`decisions` は任意。`work_units`・`phases`・`children` は空か省略（書くと 422）。`[execution.tree] enabled = true` が要る（下記）。
+
+人が提案した計画（origin `human`）として検証・採用し、応答に `work_units` と `versions` を含む。`POST` は新規だけで、既に有効な計画があれば 409。`PUT` は有効な計画が無ければ `POST` と同じ（201）、**有効な計画があれば人の replan**（200。ADR-0079 付記「R5b-fix1」）: 本文は新しい版の計画の**全体**（差分の形は受け付けない）で、`task_ops::execution::replan`（origin human）を通す。done の WU は同じ key・`kind`・`phase`（/3 は段階）・`depends_on` で残す必要があり（消す・構造を変えると 422）、spec のほかの欄（`checks` など）は上書きできる（状態は `done` のまま、`work_unit_spec_overridden` の event）。応答には `replan`（`added` / `changed` / `removed` / `overridden_done`）が付く。クエリは受け付けない。管理トークンが無ければ 401、計画が無効なら 422。
 
 `celeris.execution-plan/3`（ADR-0079 D2。`stages` / `units` / `decisions`）は daemon と同じ実効の上限（`[execution.tree]`）で検証する。`[execution.tree] enabled = false`（既定）なら 422（本文に `[execution.tree] enabled = true` を案内する `TreeDisabled`）。有効なら planner の計画と同じ経路を 1 トランザクションで通す（ADR-0079 付記「R5b-prep 実装時の逸脱・明確化」）:
 
@@ -2869,7 +2875,7 @@ ExecutionPlan と WorkUnit、再帰的な task の木（ADR-0079）、人への�
 
 #### 3.125.5 `GET /metrics/execution?since=&group_by=` → 200 `ExecutionMetricsSummary`
 
-`since` は RFC 3339 の時刻（省略可）。`group_by` は `gate_mode`（既定）、`genre`、`assignee`、`lane`、`depth`（ADR-0079 R4a）のいずれか。応答は `group_by`、`total_tasks`、`groups[]` が必須で、`since` と `accounts_now[]` は省略可能。各 group は `ExecutionMetricsGroup`。不正な日時・group_by は 400。
+`since` は RFC 3339 の時刻（省略可）。`group_by` は `gate_mode`（既定）、`genre`、`assignee`、`lane`、`depth`（ADR-0079 R4a）のいずれか。応答は `group_by`、`total_tasks`、`groups[]` が必須で、`since` は指定したときだけ出る。`accounts_now[]` は schema 上は省略可能だが、応答では常に出る（`[llm_proxy]` が無効なら `[]`）。各 group は `ExecutionMetricsGroup`。不正な日時・group_by は 400。
 
 `group_by=depth`（ADR-0079 D11 / U-R7「深さ別の review run 数と費用」）: `key` は task の層（`"1"` = root と木の無い task、`"2"` = 子、`"3"` = 孫）。各 group にだけ `rollup`（`RollupMetrics`）が付く: その深さの task の**自分の分**の和で、`tasks`、`runs_by_role`（`worker` / `planner` / `reviewer` / `wrap_up`。reviewer を含む）、`runs`（reviewer を除く）、`reviewer_runs`、`reviewer_cost_usd`、`runs_in_flight`、`input_tokens` / `output_tokens` / `tokens`（cache を除く）、`cost_usd`、`cost_usd_complete`、`quota[]`（`QuotaUse`。(source, account, window) ごと）、`first_run_started_at` / `last_run_finished_at` / `wall_ms`（壁時計: 最初の run の開始 → 最後の run の終わり）、`busy_ms`（終わった run の長さの和）、`leaves_total` / `leaves_done`、`child_tasks_total` / `child_tasks_done`、`open_decisions`。run・定価は `runs` の索引、quota は `quota_estimated` のイベントから決定的に数える（LLM は使わない）。他の `group_by` には `rollup` は出ない（互換）。
 

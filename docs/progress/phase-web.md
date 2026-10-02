@@ -201,4 +201,27 @@ install・build 後も `git status --porcelain` は空（node_modules・dist・b
 | Browser probe test | `cargo test -p task-worker --test browser_shared_cdp -j 2`（sandbox 内の初回再試行） | 101 | `unshare: Operation not permitted`。同 suite はサンドボックス外の workspace test で 2 passed / 0 failed |
 | Rust lint | `cargo clippy --workspace -- -D warnings`（サンドボックス外） | 0 | warning 0 |
 
-web/gui の行は同じ HEAD で次段で追記
+## web 最終 HEAD 検証（scope 復元後）
+
+検証した HEAD（記録 commit 前）: `eb19cfe6d85ab49c4542cda261456d8702dd229b`。Rust 検証記録もこの HEAD を対象とし、記録 commit を除いてコード差分はない。`dd6219db` の revert は段 1 に含まれる。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` → exit 0（差分なし）。
+
+前の記録にある exit 101 は sandbox の user namespace/unshare が `Operation not permitted` となったためであり、段 1 の sandbox 外での cargo 検証で置き換わった。本節では同じ最終 HEAD に対する web/gui 検証結果を記録する。
+
+| 検証 | コマンド | exit | 件数・補足 |
+| --- | --- | --- | --- |
+| web install | `corepack pnpm@12.6.0 -C web install --frozen-lockfile` | 0 | pnpm 12.6.0 |
+| web typecheck | `corepack pnpm@12.6.0 -C web typecheck` | 0 | |
+| web lint | `corepack pnpm@12.6.0 -C web lint` | 0 | Biome 223 files、info 1、warning/error 0 |
+| web test | `corepack pnpm@12.6.0 -C web test` | 0 | Vitest 24 files / 178 passed、Node 41 passed / 0 failed |
+| web build | `corepack pnpm@12.6.0 -C web build` | 0 | client/server build 成功（chunk size warning 1） |
+| web type generation | `corepack pnpm@12.6.0 -C web gen:types --check` | 0 | |
+| web boundaries | `corepack pnpm@12.6.0 -C web check:boundaries` | 0 | |
+| web secrets | `corepack pnpm@12.6.0 -C web check:secrets` | 0 | token absent |
+| web parity | `corepack pnpm@12.6.0 -C web check:parity --require-phase 6` | 0 | |
+| GUI install（指定コマンド） | `corepack pnpm@11.27.0 -C gui install --frozen-lockfile` | 1 | 既定 pnpm store の SQLite を開けず。`--store-dir /tmp/celeris-pnpm-store` を付けた同一 frozen install は exit 0 |
+| GUI test | `corepack pnpm@11.27.0 -C gui test` | 0 | Vitest 84 files / 1,249 passed |
+| GUI typecheck | `corepack pnpm@11.27.0 -C gui typecheck` | 0 | |
+| GUI build | `corepack pnpm@11.27.0 -C gui build` | 0 | client/server build 成功（既存 dynamic import 警告） |
+| 生成物確認 | install・build 後の `git status --porcelain` | 0 | install が作った未追跡 `.pnpm-store/` を削除後、空。追跡ファイル差分なし |
+
+GUI の通常 install が store の SQLite エラーで失敗した点以外、指定された web/gui gate はすべて exit 0。install 再試行では版と lockfile 固定を保ち、一時 store を使用した。

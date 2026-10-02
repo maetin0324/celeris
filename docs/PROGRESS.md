@@ -96,6 +96,8 @@ P6-01 の web 配布物、P6-02 の web ADR-W3・systemd unit・非 blocking rel
 
 dd6219db の probe 修正（`crates/task-worker/tests/browser_shared_cdp.rs` で WebSocket frame を最後まで読む）は crates/ の範囲外変更として revert した。必要な修正は main 向けの別 task で入れる。
 
+**scope 復元後の最終 HEAD 検証（記録 commit 前）:** `eb19cfe6d85ab49c4542cda261456d8702dd229b`。段 1 の Rust 結果も同じ HEAD（記録 commit を除きコード差分なし）。`cargo test --workspace` は exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace -- -D warnings` は exit 0。V1 GUI（pnpm@11.27.0）の test/typecheck/build は exit 0（84 files / 1,249 tests）。V2 web（pnpm@12.6.0）の typecheck/lint/test/build/`gen:types --check`/`check:boundaries`/`check:secrets`/`check:parity --require-phase 6` は各 exit 0（Vitest 24 files / 178 tests、Node 41 passed）。両 install も frozen lockfile で成功。GUI 指定 install は既定 store の SQLite open error で exit 1 となったが、`--store-dir /tmp/celeris-pnpm-store` の再実行は exit 0。前の exit 101 は sandbox の unshare/user namespace `Operation not permitted` によるもので、本節の cargo 結果で置き換える。scope 復元の `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` は exit 0。install・build 後の status は記録対象以外が空。詳細は [phase-web の scope 復元後検証節](progress/phase-web.md#web-最終-head-検証scope-復元後)。
+
 ## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
 
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。

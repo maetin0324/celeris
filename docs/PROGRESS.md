@@ -605,3 +605,12 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
 - `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
+
+## api_scenarios の負荷 flaky 2 件を出来事待ちに（2026-10-02、task 01M3Z08A0T81ZQ60XVR62XJMPD 葉 e2e-stable）
+
+`tests/e2e/tests/api_scenarios.rs` だけを変えた。主張（cooldown と in_flight の同時観測、`database is locked` が出ない、celeris が落ちない）はそのまま。
+
+- `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`: 原因: slow の worker が `sleep 6` で終わるため、tick が遅いと cooldown を観測する前に slow が in_flight から消えていた。方式: worker は workspace の `release` file が現れるまで 0.1s 刻みで待ち、試験は cooldown・in_flight の確認後に `release` を置く。cooldown の待ちは 5s→30s。
+- `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`: 原因: 全 task done を 120s の壁時計で待っていたため、負荷で tick が遅いと進んでいても失敗した。方式: 終わった task の数が 60s 増えないとき（または celeris が落ちたとき）だけ失敗する進捗待ちにした。
+- 重複の可能性: 後者は sccache task 01M3YD2Z585N1YCBZK4AH8QXR0 の葉 deflake-lock も直す予定だった。実行時点で branch `celeris-wu/01M3YD2Z585N1YCBZK4AH8QXR0/deflake-lock` が無かったため同じ方式（終わった数が一定時間増えないときだけ失敗）で自前に直した。後で両方が main に入るときは衝突しうるので片方に揃える。
+- `cargo test -p e2e --test api_scenarios` → exit 0（11 passed）。`cargo clippy -p e2e --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。

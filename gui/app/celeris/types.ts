@@ -77,6 +77,8 @@ export type CommentId = string;
  * 人のコメントが何を起こしたか（ADR-0044 D2 の表）。
  */
 export type CommentEffect = "stored" | "interrupted" | "answered" | "terminal";
+export type SourceOrigin = "explicit" | "derived";
+export type LlmSourceRef = string;
 /**
  * DESIGN §5.4 の `WorkerHint`。
  */
@@ -2550,6 +2552,8 @@ export interface ProviderConfigView {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -2560,6 +2564,10 @@ export interface ProviderConfigView {
     standard?: ModelBinding;
   };
   tiers: Tier[];
+}
+export interface ResolvedLlmSource {
+  origin: SourceOrigin;
+  source: LlmSourceRef;
 }
 export interface ModelBinding {
   model_id?: string | null;
@@ -3198,11 +3206,13 @@ export interface ProviderLive {
    * 古いスナップショットには無いので既定 0）。
    */
   in_use_cos?: number;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
    * celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `None`）。
    */
@@ -7334,6 +7344,8 @@ export interface ProviderConfigView1 {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -7380,11 +7392,13 @@ export interface ProviderView {
    * 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
    */
   in_use_cos?: number | null;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
    * または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   model?: string | null;
   stats: ProviderStats;
   tier_models?: {

@@ -1,8 +1,9 @@
 //! OpenAI 互換エンドポイントの**到達性の検査**（ADR-0052 D1。Phase 64）。
 //!
-//! 知識整理 run（`knowledge` ハーネス = `langmem` アダプタ）の LLM は pegasus のトンネル越しの Qwen で、
-//! トンネルが落ちている間は run が必ず落ちる。dispatch の**直前**に `GET <base_url>/models` を当てて、
-//! 届かなければ tier `cheap` の汎用ハーネスへ倒す（ADR-0052 D2）。
+//! 知識整理 run（`knowledge` ハーネス = `langmem` アダプタ）の設定された接続先を、dispatch の
+//! **直前**に `GET <base_url>/models` で検査する（ADR-0132 D4）。通常は proxy の到達性を見て、
+//! 届かなければ tier `cheap` の汎用ハーネスへ倒す（ADR-0052 D2）。proxy に届く限り、
+//! 個別の LLM source の障害と fallback は proxy が処理する。
 //!
 //! **LLM は呼ばない**（CLAUDE.md「ディスパッチャやストアに LLM 呼び出しを入れない」）。ここがやるのは
 //! ADR-0043 D3 のコンテナ runtime の probe と同じ種類の、決定的な 1 回の HTTP GET だけ。
@@ -12,9 +13,9 @@
 //! `https://` や書き方の壊れた `base_url` は [`Reachability::Unknown`] にして、**従来どおり**
 //! `langmem` で走らせる（検査できないことを「落ちている」と決めつけない）。
 //!
-//! **Phase 65b 追記**: `[llm_proxy]`（ADR-0053）を `[knowledge.langmem].base_url` に向けたとき、
+//! `[llm_proxy]`（ADR-0053）を `[knowledge.langmem].base_url` に向けたとき、
 //! `GET /v1/models` は Bearer トークンが無いと 401 を返す（`/healthz` を除く全エンドポイントが
-//! 認証を要求する。`docs/llm-source.md` §6）。401/403 は「LLM が落ちている」ことを意味しない
+//! 認証を要求する）。401/403 は接続先の到達不能を意味しない
 //! （トークンが未設定・不一致というだけ）ので、[`Reachability::Unreachable`] にせず
 //! [`Reachability::Unknown`]（= 従来どおり `langmem` で走らせる）にする。呼び出し側が
 //! `[knowledge.langmem].api_key_secret` から解決した平文のトークンを渡せば、`Authorization: Bearer`

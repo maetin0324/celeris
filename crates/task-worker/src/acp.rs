@@ -354,7 +354,7 @@ fn choose_permission_option(
     None
 }
 
-/// エージェントの本文はトークン単位の細切れで届く（実機の opencode + Qwen3.8-27B では 1 タスクで 259 件・
+/// エージェントの本文はトークン単位の細切れで届く（実機の opencode では 1 タスクで 259 件・
 /// 平均 9 文字だった）。そのまま `progress` にすると `WorkerProgress` イベントが膨れるので、改行が来るか
 /// 一定量たまるまで溜めてから出す。`heartbeat()` は溜めずに毎行呼ぶので、無出力タイムアウトの判定は変わらない。
 struct ChunkBuffer {

@@ -397,6 +397,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
         started_at: "2026-09-14T00:00:00Z".into(),
         tick_ms: 50,
         providers: vec![ProviderLive {
+            kind: Default::default(),
+            llm_source: None,
             credential_refs: Default::default(),
             tier_models: Default::default(),
             account_id: None,
@@ -481,6 +483,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     // reload でプロバイダ表を差し替えても、残った id の記録は保つ。消えた id の記録は落とす。
     d.set_snapshot_providers(vec![
         ProviderLive {
+            kind: Default::default(),
+            llm_source: None,
             credential_refs: Default::default(),
             tier_models: Default::default(),
             account_id: None,
@@ -496,6 +500,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
             account_pool: false,
         },
         ProviderLive {
+            kind: Default::default(),
+            llm_source: None,
             credential_refs: Default::default(),
             tier_models: Default::default(),
             account_id: None,
@@ -527,6 +533,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     );
 
     d.set_snapshot_providers(vec![ProviderLive {
+        kind: Default::default(),
+        llm_source: None,
         credential_refs: Default::default(),
         tier_models: Default::default(),
         account_id: None,

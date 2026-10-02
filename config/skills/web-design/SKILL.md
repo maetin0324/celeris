@@ -1419,7 +1419,7 @@ Tailwind equivalent:
 - **Collision rule:** If an expanded hit area overlaps another interactive element, shrink it — but keep it as large as possible without colliding. Two interactive elements must never have overlapping hit areas.
 - **Eliminate interaction dead zones.** Common problem: a checkbox in a table cell has padding around it, but only the tiny checkbox is clickable. Expand the hit area to fill the entire cell so clicking anywhere in the padded area works.
 - **Bridge visual gaps in navigation.** Sidebar nav items with `gap-y-px` look separated but should feel continuous — expand hit areas to cover the gaps so there are no dead spots between items.
-- **Use `hit-area` utilities** ([bazza.dev/r/hit-area](https://bazza.dev/r/hit-area)) for a Tailwind-native approach. Install via `npx shadcn@latest add https://bazza.dev/r/hit-area`. Supports uniform (`hit-area-4`), directional (`hit-area-l-8 hit-area-r-4`), axis (`hit-area-x-4 hit-area-y-6`), and custom (`hit-area-[21px]`) expansion. Use `hit-area-debug` to visualize during development.
+- **`hit-area` utilities** (a third-party Tailwind-native package) are an option worth proposing for this pattern, supporting uniform (`hit-area-4`), directional (`hit-area-l-8 hit-area-r-4`), axis (`hit-area-x-4 hit-area-y-6`), and custom (`hit-area-[21px]`) expansion, with `hit-area-debug` to visualize during development. **Do not run the hit-area installation command yourself.** Present it to the human as a proposal (name the package and what it adds) and only install it after the human approves adding the dependency.
 
 ---
 

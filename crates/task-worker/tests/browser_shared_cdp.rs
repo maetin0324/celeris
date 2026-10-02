@@ -35,15 +35,32 @@ while True:
             raise RuntimeError('CDP forwarding port unavailable')
         time.sleep(.02)
 sock.settimeout(30)
+def read_exact(n):
+    data = bytearray()
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise EOFError('CDP relay closed before the response was complete')
+        data.extend(chunk)
+    return bytes(data)
 sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
 head = b''
 while not head.endswith(b'\r\n\r\n'):
-    head += sock.recv(1)
+    head += read_exact(1)
 assert head.startswith(b'HTTP/1.1 101'), head
 payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
 sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
-frame = sock.recv(4096)
-assert b'targetInfos' in frame, frame
+# TCP may split the WebSocket header and payload across separate reads.
+header = read_exact(2)
+assert header[0] == 0x81 and not header[1] & 0x80, header
+length = header[1] & 0x7f
+if length == 126:
+    length = int.from_bytes(read_exact(2), 'big')
+elif length == 127:
+    length = int.from_bytes(read_exact(8), 'big')
+assert length <= 1 << 20, length
+reply = json.loads(read_exact(length))
+assert reply['id'] == 1 and 'targetInfos' in reply.get('result', {}), reply
 Path('/session/tcp-probe.ok').write_text('connected')
 time.sleep(90)
 "#;

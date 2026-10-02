@@ -1,6 +1,7 @@
 //! ADR-0109 D5: attack matrix A1-A17 against a real broker, real CDP pipe and real
 //! chrome-headless-shell in a network namespace with no external route.
 //! Missing prerequisites fail (no skip).
+mod userns_gate;
 use celeris_credentiald::injection_ipc::{
     self, Admission, AuthSectionRegistration, CdpSink, InjectionService, LiveRegistry,
     LiveSessionRegistration, PeerCred, SinkFailed, process_start,
@@ -1610,6 +1611,9 @@ fn a13_other_uid(ctx: &Ctx) {
 
 #[test]
 fn real_browser_injection_attack_matrix() {
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
     for t in ["unshare", "ip", "openssl", "bwrap", "python3"] {
         tool(t);
     }

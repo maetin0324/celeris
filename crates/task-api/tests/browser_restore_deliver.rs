@@ -6,10 +6,11 @@
 //!
 //! この host には別 UID が無いので、成功経路は `same-uid-harness` の試験 admission で実証する
 //! （本番の `Attested` は SameUid を拒否する。task-worker の `identity_restore_sameuid_rejected_in_production`）。
-//! 実 runtime が無い環境では失敗する。`CELERIS_ISOLATION_TESTS=skip` のときだけ
-//! 「SKIPPED (not passed)」を出して抜ける。
+//! 実 runtime が無い環境では失敗する。既定では skip し、`CELERIS_USERNS_TESTS=1` のときだけ走る。
 
 mod common;
+#[path = "../../task-worker/tests/userns_gate/mod.rs"]
+mod userns_gate;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -30,11 +31,7 @@ use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 use time::OffsetDateTime;
 
 fn skip() -> bool {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
-        return true;
-    }
-    false
+    userns_gate::skip_unless_userns_tests()
 }
 
 fn browser() -> PathBuf {

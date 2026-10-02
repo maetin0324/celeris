@@ -8,6 +8,7 @@
 //! 試験は自分自身を `unshare --user --map-root-user --net` の中で再実行し、その試験用 netns の `lo`
 //! に fixture を置く（外部ネットワークに出ない）。前提（unshare・ip・openssl・bwrap・browser）が
 //! 無い環境では失敗する。明示的に `CELERIS_ISOLATION_TESTS=skip` を与えた時だけ飛ばす。
+mod userns_gate;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -507,6 +508,9 @@ fn assert_full_runtime(procs: &[RecordedProcess]) {
 
 #[test]
 fn runtime_processes_do_not_survive_controller_kill_restart_or_stop() {
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
     if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
         eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
         return;

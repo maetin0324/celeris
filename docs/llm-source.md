@@ -12,7 +12,7 @@ celeris は `[llm_proxy]` を有効にすると、`127.0.0.1:18100`（既定）�
 ## 1. モデル名
 
 - `celeris/<tier>`（`frontier` / `standard` / `cheap`）: 供給元をプロキシが決定的に選ぶ。
-- `claude/<tier>` / `gpt/<tier>` / `qwen/cheap`: 供給元を明示的に固定する。Qwen に非 cheap tier はない。
+- `claude/<tier>` / `gpt/<tier>` / `qwen/<tier>`: 供給元を明示的に固定する。
 - `<source>:<具体モデル名>`（例 `claude:claude-sonnet-5`）: 素通り。tier 写像を経由しない。
   供給元の接頭辞（`claude` / `gpt` / `qwen`）を明示したときだけ許す。
 
@@ -21,7 +21,7 @@ ID（ADR-0069 Phase 118 D2。`docs/adr/0069-routing-four-layers.md` Phase 118 �
 claude は frontier=`claude-fable-5-1` / standard=`claude-opus-5-5` / cheap=`claude-sonnet-5`、
 gpt は frontier=`gpt-6-astra` / standard=`gpt-6-sol` / cheap=`gpt-6-luna`。運用側の実際のプラン・
 契約で使えるモデルが違えば `[llm_proxy.models]` で上書きすること。
-ADR-0132 D3 により Qwen は cheap のみ `qwen3.8-27b`。`celeris/frontier` / `celeris/standard` は Qwen を選ばない。
+Qwen は tier に関わらず `qwen3.8-27b`（ADR-0053 D1 で明記）。
 
 ### 単価表
 
@@ -118,14 +118,14 @@ ChatGPT の Codex backend（`https://chatgpt.com/backend-api/codex/responses`）
 ## 3. 選択（決定的。ADR-0053 D1 / ADR-0049 の再利用）
 
 `celeris/<tier>`:
-1. cheap で `prefer_free = true`（既定）なら、設定順で最初に到達可能な `openai-compatible` を使う
-   （`GET <base_url>/models` の probe。`probe_cache_secs` 秒キャッシュ、既定 60）。frontier / standard はこの候補を作らない。
+1. `prefer_free = true`（既定）なら、設定順で最初に到達可能な `openai-compatible` を使う
+   （`GET <base_url>/models` の probe。`probe_cache_secs` 秒キャッシュ、既定 60）。
 2. 到達可能な `openai-compatible` が無ければ、Claude と Codex のアカウントプールを跨いで
    残量スコアを比較する（ADR-0024 D3 の `evaluate`/スコア式そのもの。除外: 未ログイン・cooldown・
    5 時間枠/週次枠の枯渇）。同点は設定順（Claude を先に見る）→ 使用中の少ない方 → id 昇順。
 3. どちらも無ければ 503 `no_source_available`。
 
-`claude/<tier>` / `gpt/<tier>` はそのプールだけを見る。`qwen/cheap` は `openai-compatible` だけを見る
+`claude/<tier>` / `gpt/<tier>` はそのプールだけを見る。`qwen/<tier>` は `openai-compatible` だけを見る
 （`prefer_free` は関係ない。明示されているため）。
 
 **429/401 を受けたら**、そのアカウントに cooldown を付け（既存の帳簘。401 は `AuthFailed`、429 は
@@ -172,19 +172,23 @@ standard = "claude-sonnet-5"
 
 ## 6. ハーネスをプロキシに向ける（ADR-0053 D2）
 
-設定例では `[[providers]]` を実行する道具、`[llm_proxy.sources.*]` を LLM source として分ける。
-PaperQA は `celeris/standard`、LDR・LangMem・opencode は `celeris/cheap` を使う。
+既定の設定は 4 つのプロバイダをプロキシに向ける。**PaperQA だけ `celeris/standard`、他は
+`celeris/cheap`**。
 
-| 道具の ID | 設定ファイル | モデルと source |
+| プロバイダ | 設定ファイル | 変更点 |
 |---|---|---|
-| `paperqa` | `config/celeris.research.example.toml`、`config/paperqa.proxy.example.json` | `openai/celeris/standard`、`llm_source = "celeris"` |
-| `ldr` | `config/celeris.web-research.example.toml` | `celeris/cheap`、`llm_source = "celeris"` |
-| `langmem-main` | `config/celeris.example.toml`、`docs/knowledge.md` | `celeris/cheap`、`llm_source = "celeris"` |
-| `opencode` | `config/celeris.acp-opencode.example.toml`、`config/opencode.openai-compat.example.json` | `celeris-proxy/celeris/cheap`、`llm_source = "celeris"` |
+| `paperqa-qwen` | `config/celeris.research.example.toml` | `[adapters.paperqa].env`: `OPENAI_BASE_URL` → `http://127.0.0.1:18100/v1`、`OPENAI_API_KEY` → `[api] token_file` と同じ値。`model = "openai/celeris/standard"` |
+| `ldr-qwen` | `config/celeris.web-research.example.toml` | `[adapters.local_deep_research.settings]`: `llm.openai_endpoint.url` → プロキシ、`llm.openai_endpoint.api_key` → 同上、`llm.model = "celeris/cheap"`。`[[providers]] model = "celeris/cheap"` |
+| `langmem-main` | `config/celeris.example.toml`（`[knowledge.langmem]`）、`docs/knowledge.md` | `base_url` → プロキシ、`model = "celeris/cheap"` |
+| `opencode-qwen` | `config/celeris.acp-opencode.example.toml` | **コメントで手順を示すのみ**（下の §7 を参照。実機で opencode の provider/model の区切り方を確認できていないため、既定は直接 Qwen のまま） |
 
-proxy を使う道具には `[api] token_file` の Bearer が必要。cheap では Qwen が利用可能なら
-優先し、失敗したら Claude/GPT の cheap に倒れる。standard には Qwen を使わない。
-旧 ID を含む本番設定からの移行は [手順書](ops/provider-llm-source-migration.md) に示す。
+いずれも Qwen が生きていれば従来どおり Qwen、落ちていれば自動で Claude / GPT のアカウントプールに
+倒れる（`prefer_free = true` のときの `celeris/<tier>` の振る舞い。ADR-0052 の
+knowledge_maint 側フォールバックはこのプロキシの中に吸収される）。
+
+**注意**: 上の 3 つ（paperqa/ldr/langmem）はいずれも `OPENAI_API_KEY` / `api_key` にプロキシの
+bearer トークン（`[api] token_file` の中身）が必要。直接 Qwen を叩いていた頃の `"unused"` は
+このプロキシには通らない（`GET /healthz` を除く全エンドポイントが Bearer を要求する）。
 
 ## 7. opencode をプロキシに向ける（未検証。ADR-0053 D2）
 
@@ -209,15 +213,39 @@ proxy を使う道具には `[api] token_file` の Bearer が必要。cheap で�
 
 `CELERIS_API_TOKEN` は `[api] token_file` と同じ値（`[[providers]] env` で渡す）。
 
-この JSON は proxy を使う opencode の設定例である。opencode の導入環境でモデル ID の
-解釈を確認してから適用する。Qwen を直接指定する旧設定は互換で読めるが、
-`opencode-qwen` を含む旧 ID の移行時は cheap に制限する（ADR-0132 D5）。
+**未検証・要確認**: opencode の `"model"` フィールドは `"<providerId>/<modelId>"` の形だが、
+`modelId` 自体に `celeris/cheap` のようにスラッシュを含めてよいか（opencode 側が最初の `/` だけで
+区切るか）は、このセッションでは opencode の実機・ソースで確認していない。安全側に振るなら、
+`models` のキーをスラッシュ無しの別名（例 `"celeris-cheap"`）にし、`[llm_proxy]` 側で
+`qwen:<model>` 形の素通り構文と同様の別名解決を別 ADR で足す運用にしてもよい。**この理由により
+`config/celeris.acp-opencode.example.toml` の既定はまだ直接 Qwen を指すままにしてあり、上の JSON は
+コメントで参照するだけにした**（ADR-0053 D1/D2 の受け入れ条件「too hard なら明示的に無効のまま出す」
+に従った判断）。
 
-## 8. 本番の運用手順
+## 8. 本番の運用手順（PROGRESS.md にも同じ内容を記録）
 
-現在の provider / LLM source 分離と Qwen cheap 専用化の適用は
-[移行手順](ops/provider-llm-source-migration.md) に従う。旧 ID のままの運用例は
-[ADR-0053](adr/0053-llm-source-proxy.md) と過去の進捗記録に残す。
+1. `[llm_proxy]` を有効化（`[llm_proxy.sources.claude_oauth]` / `codex_oauth` を追加するか、
+   既存の Qwen 中継を `[[llm_proxy.sources.openai_compatible]]` として登録）。`POST /reload` では
+   反映されない設定なので celeris を再起動する。
+2. `curl -s -H "Authorization: Bearer $(cat ~/.config/celeris/api.token)" http://127.0.0.1:18100/healthz`
+   → `{"status":"ok"}`。
+3. `curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18100/v1/models` → `celeris/*` 等が並ぶ。
+4. `curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"model":"celeris/cheap","messages":[{"role":"user","content":"hi"}]}' \
+     http://127.0.0.1:18100/v1/chat/completions` → 200 と応答本文。`x-celeris-source` ヘッダで
+   選ばれた供給元を確認する。
+4b. **codex-oauth（Phase 65b で修正）**を明示的に確認する:
+   `curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"model":"gpt/cheap","messages":[{"role":"user","content":"hi"}]}' \
+     http://127.0.0.1:18100/v1/chat/completions` → 200 と応答本文、`x-celeris-source: codex-oauth`。
+   400 等が返ったら、celeris のログの `llm-proxy: codex-oauth upstream returned a non-success status`
+   の `summary` フィールドに上流が言っている理由が出る（§「上流エラーの読み方」参照）。
+5. 4 つのプロバイダ（`paperqa-qwen` / `ldr-qwen` / `opencode-qwen` / `langmem-main`）を**1 つずつ**
+   プロキシへ向け、そのつど 1 タスクを流して結果を確認する（同時に全部変えない）。`langmem-main` を
+   プロキシへ向けるときは、`[knowledge.langmem].api_key_secret` を必ず設定すること（Phase 65b:
+   到達性 probe の `GET /v1/models` がこのトークンで `Authorization: Bearer` を送る。無いと 401 が
+   返るが、401/403 は「落ちている」と誤認せず `Unknown`（＝従来どおり `langmem` で走らせる）として
+   扱うので、フォールバックし続けることはない）。
 
 ## 9. 明示した既知の制約（Phase 65 の範囲）
 

@@ -252,6 +252,7 @@ pub fn api_settings(
             config.selfdeploy.releases_dir.clone(),
             // ADR-0041 D3: `on_main` を出すためだけに読む作業チェックアウト（書き換えない）。
             config.selfdeploy.repo.clone(),
+            config.selfdeploy.detach.clone(),
         ))),
         release,
         mode,

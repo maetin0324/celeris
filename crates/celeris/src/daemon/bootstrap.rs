@@ -96,7 +96,7 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
     if !config.db.worker_read_only {
         tracing::warn!(
             db = %config.db.path.display(),
-            "[db] worker_read_only = false: worker runs can write the database (ADR-0095 D5 opt-out)"
+            "[db] worker_read_only = false: worker runs can write the database and reach the user systemd bus (ADR-0095 D5/D-a opt-out)"
         );
         task_worker::db_guard::install(None);
         return Ok(());

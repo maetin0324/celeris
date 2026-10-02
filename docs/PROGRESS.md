@@ -350,7 +350,15 @@ main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135
 - 未解決事項:
   - この host は LXC 内のため、試験 runner（UID 1001）の親 namespace map は初期 namespace の `0 0 4294967295` ではなく `0 100000 1001 / 1001 1001 1 / 1002 101002 64534 / 65536 165536 262144`。検証は db_guard namespace の外・この map のもとで行った。
   - Chrome stderr の `category=other-startup-error`（journal に 4 行）の中身（無害な起動時警告か）は未確認。
-  - 機密能力（`CredentialInjection`・`IdentityRestore`）はこの task では解放していない。解放は後続 task `01M3VFQZ2TX3W0KTDQHKCAVJR6` / `01M3WV4BFJ71J9ZWJ020MP2Z4K` で判断する。
+- 機密能力（`CredentialInjection`・`IdentityRestore`）はこの task では解放していない。解放は後続 task `01M3VFQZ2TX3W0KTDQHKCAVJR6` / `01M3WV4BFJ71J9ZWJ020MP2Z4K` で判断する。
+
+#### 統合検査 flaky の単独再実行（tick_prunes）
+
+- 対象: `dispatcher::tests::cleanup_and_disk::tick_prunes_the_oldest_terminal_workspace_and_records_an_event`。各回の直前に `/proc/loadavg` を読み、`cargo test -p task-dispatch --lib tick_prunes_the_oldest_terminal_workspace_and_records_an_event` を個別に foreground 実行した。
+- 1回目: loadavg `24.22 24.05 24.86 28/1583 3`、exit 0、`1 passed; 0 failed`（498 filtered out）。
+- 2回目: loadavg `24.33 25.07 25.22 3/1496 3`、exit 0、`1 passed; 0 failed`（498 filtered out）。
+- 3回目: loadavg `21.29 24.39 25.00 2/1427 3`、exit 0、`1 passed; 0 failed`（498 filtered out）。
+- 先行する `cargo test --workspace` は load 25 前後で同じ試験が失敗し、`498 passed; 1 failed` だった。人は環境（host 高負荷）起因の tick 依存 flaky と判断した。今回の3回はすべて pass。指示どおりコードは変更せず、修正は別 task `01M3Y4AV5Z` が担当する。
 
 ### 最新 main（7f3482a3）取り込み — 2026-10-02（work unit `land-main`）
 

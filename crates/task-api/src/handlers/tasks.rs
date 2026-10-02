@@ -4,6 +4,8 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use task_core::{
     ListFilter, ListOrder, MilestoneId, ProjectId, Status, StoreError, Task, TaskKind,
 };
@@ -20,6 +22,16 @@ use crate::state::ApiState;
 use super::{ApiResult, Params, json_response, no_query, read_json};
 
 const TITLE_QUERY_MAX_CHARS: usize = 200;
+
+/// POST /tasks accepts the task specification and an optional write path hint.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewTaskBody {
+    #[serde(flatten)]
+    pub task: NewTaskSpec,
+    #[serde(default)]
+    pub expected_write_paths: Option<Vec<String>>,
+}
 
 fn created_task(task: &Task) -> Response {
     let mut response = json_response(StatusCode::CREATED, task);
@@ -182,12 +194,19 @@ pub(super) async fn create_task(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let mut spec: NewTaskSpec = read_json(body, false).await?;
+    let NewTaskBody {
+        mut task,
+        expected_write_paths,
+    } = read_json(body, false).await?;
+    let paths = expected_write_paths
+        .map(|paths| task_core::write_set::normalize_write_paths(&paths))
+        .transpose()
+        .map_err(ApiProblem::bad_request)?;
     // ADR-0044 D1（Phase 53）: **人が作ったタスクは `ready`**（人は Go を出す側なので draft を挟まない）。
     // `draft` にしたければ `status: "draft"` を明示する。計画・委譲で作られる子（`draft` → Go）の経路は
     // ここを通らないので変わらない。
-    if spec.status.is_none() {
-        spec.status = Some(task_core::Status::Ready);
+    if task.status.is_none() {
+        task.status = Some(task_core::Status::Ready);
     }
     // ADR-0016 M3 / ADR-0027 D1: 省略された tier / adapter / 予算は `[[roles]]` の既定 → `[[genres]]` の
     // `default_role` の既定 → 全体の既定で埋める。API は常に完全な設定を持つので、`genres` が設定されて
@@ -199,12 +218,24 @@ pub(super) async fn create_task(
         .blocking(move |store| {
             task_ops::add::create_task_with_roles(
                 store,
-                spec,
+                task,
                 &roles,
                 &genres,
                 OffsetDateTime::now_utc(),
             )
             .map_err(|e| ops_problem(store, e, None))
+            .and_then(|created| {
+                if let Some(paths) = &paths {
+                    store
+                        .set_task_expected_write_paths(
+                            created.id,
+                            Some(paths),
+                            &OffsetDateTime::now_utc().to_string(),
+                        )
+                        .map_err(|e| ops_problem(store, OpsError::Store(e), None))?;
+                }
+                Ok(created)
+            })
         })
         .await?;
     Ok(created_task(&task))

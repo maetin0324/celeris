@@ -4,7 +4,6 @@
 
 use schemars::JsonSchema;
 use task_core::{EventRow, Task};
-use task_ops::add::NewTaskSpec;
 use task_ops::daemon::DaemonSnapshot;
 use task_ops::gate::TransitionResult;
 use task_ops::graph::Graph;
@@ -51,7 +50,7 @@ pub struct ApiV1Schema {
     pub run_list: RunList,
     pub artifact_list: ArtifactList,
     pub graph: Graph,
-    pub new_task: NewTaskSpec,
+    pub new_task: crate::handlers::tasks::NewTaskBody,
     pub new_plan: NewPlanSpec,
     pub decision: DecisionBody,
     pub answer: AnswerBody,
@@ -143,7 +142,7 @@ pub struct ApiV1Schema {
     pub tree_file: crate::types::TreeFileView,
     // ---- ADR-0044 B1（Phase 53）: 編集・コメント・再開・タイムライン ----
     /// ADR-0044 D1: `PATCH /tasks/{id}` の本文と応答。
-    pub task_edit: task_ops::edit::TaskEdit,
+    pub task_edit: crate::handlers::task_actions::TaskPatchBody,
     pub task_edit_result: task_ops::edit::EditResult,
     /// ADR-0044 D2: コメント（`GET`/`POST /tasks/{id}/comments`）と再開（`POST /tasks/{id}/reopen`）。
     pub comment: CommentBody,

@@ -252,5 +252,15 @@ review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
     手順で実行する（ADR-0095 付記 D-d）。
   - `web-design` の LICENSE 判断（LICENSE ファイルが無く README の License 節に拠っている点）は、より厳しい
     基準を採るかどうかを人が判断する（ADR-0122 D6、`docs/progress/ui-ux-skills.md`）。
-  - 本 commit 後の HEAD に対する `scripts/selfdeploy/release.sh` / `verify.sh` で検証済みの sha12 は、次の
-    work unit（release-report）が追記する。
+- release/verify（work unit release-report、2026-10-02、HEAD `a58f68b5551b` = adr-status 統合後）:
+  - release.sh: sha12 a58f68b5551b exit 0（`CELERIS_STATE_DIR` を scratch に、`SD_USE_CALLER_CARGO_TARGET=1`
+    `SD_RELEASE_PRUNE=0`。worker sandbox から本番の `~/.local/celeris/releases` は読み取り専用なので、既定の
+    state dir では lock を作れず exit 1。gate.json ok=true: fmt / cargo-test（nextest 3236 passed・11 skipped・
+    doctest ok）/ clippy / source-size-report / build --release / pnpm install・typecheck・build / web の
+    install・typecheck・test・release がすべて exit 0。gui/ に変更が無いので pnpm-test・mobile-audit・e2e:mock は
+    skipped（base ea86af6307f8））。
+  - verify.sh: exit 0（verify.json ok=true live_ok=true。検査 1〜6 すべて true）。1 回目は worktree の
+    gui/ に devDependencies が無く検査 4b（gui-e2e）だけ「@playwright/test not found」で exit 1。
+    `pnpm install --offline --frozen-lockfile` 後の再実行で 4b も pass。本番の daemon・DB・config・systemd には
+    触れていない（DB は `mode=ro` の `.backup` を読むだけ）。
+  - `unshare -U -r true` → exit 0（この run の sandbox では user namespace を作れた）。

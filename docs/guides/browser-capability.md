@@ -5,14 +5,14 @@ tasks: [01M3MBV3AKXZGEG5RXR60XC62J, 01M3MFS5T52FXA63W4V10XGC4S]
 ---
 
 Celeris は OpenCode（ACP）または Claude Code に agent-browser CLI を渡す。
-設計は [ADR-0078](adr/0078-browser-execution-capability.md)。Phase 1 は公開・未認証サイト専用である。
+設計は [ADR-0078](../../agent-docs/adr/0078-browser-execution-capability.md)。Phase 1 は公開・未認証サイト専用である。
 DOM 操作・クリック戦略・ブラウザの画面転送は agent-browser が担当する。
 
 ## 導入
 
 worker と同じ実行ユーザーの PATH に **agent-browser 0.38.1** と Python 3 を配置する。
 バージョン不一致・未導入は worker を開始せず失敗する。Chromium は upstream の導入手順で用意する。
-OpenCode は既存 [ACP 設定例](../config/celeris.acp-opencode.example.toml) を使う。
+OpenCode は既存 [ACP 設定例](../../config/celeris.acp-opencode.example.toml) を使う。
 OpenCode の project config を無効化し、Celeris 管理の設定を適用する。
 
 ```sh
@@ -47,7 +47,7 @@ capability の実行には通常の dispatcher 経路を使う。
 
 ## Live View
 
-以下は Phase 1 の導入記録。Phase 2 の GUI では [本人専用の読み取り専用 relay](browser-live-relay.md) を使い、dashboard の公開 proxy や token fragment URL は使わない。
+以下は Phase 1 の導入記録。Phase 2 の GUI では 本人専用の読み取り専用 relay を使い、dashboard の公開 proxy や token fragment URL は使わない。
 
 同じ OS ユーザー・runtime 環境で operator が dashboard を起動する。
 
@@ -124,7 +124,7 @@ ADR-0041 により旧 `self/<task-id>` 規約は Celeris が用意した task br
 
 ## 後続機能との境界
 
-[ADR-0078 D3〜D7](adr/0078-browser-execution-capability.md) の durable wait、
+[ADR-0078 D3〜D7](../../agent-docs/adr/0078-browser-execution-capability.md) の durable wait、
 `celeris-credentiald` / `CredentialProvider`、task policy の細分化、persistent identity、
 GUI の pause/takeover/resume/stop、container + egress は後続設計であり、Phase 1 の設定項目ではない。
 WAITING_FOR_AUTH / WAITING_FOR_APPROVAL は現在は予約 state で、認証用 lease を発行しない。

@@ -4,7 +4,7 @@
 tasks: [01M3MZKB3DFYJNBH015MJGQ0BT, 01M3Q49ZTST3XQ9DGF6AGNR0XG]
 ---
 
-`celeris-credentiald` は [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) のローカル broker である。起動は `celeris-credentiald serve <control-client-pid>...`。`XDG_RUNTIME_DIR` が所有者の 0700 directory でなければ起動を拒否し、`$XDG_RUNTIME_DIR/celeris-credentiald/{control,resolve}.sock` を 0600 で作る。control は起動時に列挙した PID と process start time に限定し、resolve は同一 UID の呼出しにも `trusted_injection_required` を返す（[ADR-0103](adr/0103-browser-phase4-runtime-selection.md)）。control 許可 PID や有効な binding/lease を持っていても秘密返却は認めない。両 socket は一接続につき一つの JSON request/response を扱い、request は write 側を閉じて終える。request は 64 KiB 以下にする。
+`celeris-credentiald` は [ADR-0080](../../agent-docs/adr/0080-browser-phase2-policy-broker-approval.md) のローカル broker である。起動は `celeris-credentiald serve <control-client-pid>...`。`XDG_RUNTIME_DIR` が所有者の 0700 directory でなければ起動を拒否し、`$XDG_RUNTIME_DIR/celeris-credentiald/{control,resolve}.sock` を 0600 で作る。control は起動時に列挙した PID と process start time に限定し、resolve は同一 UID の呼出しにも `trusted_injection_required` を返す（[ADR-0103](../../agent-docs/adr/0103-browser-phase4-runtime-selection.md)）。control 許可 PID や有効な binding/lease を持っていても秘密返却は認めない。両 socket は一接続につき一つの JSON request/response を扱い、request は write 側を閉じて終える。request は 64 KiB 以下にする。
 
 手動 provider の鍵は `~/.config/celeris/credentiald/keys/master-v1.key`、暗号文は `~/.local/celeris/credentiald/vault/<credential_id>.json`、journal は `~/.local/celeris/credentiald/audit/journal.jsonl` に置く。専用 directory は 0700、ファイルは 0600。control の `initialize_key` は明示的な初回操作であり、暗号文が残る状態の鍵欠落を復旧しない。`register` は `reference`、`policy`、`revision`、`secret: {username,password}` を受け、更新時は ciphertext だけを atomic rename する。`grant` は承認を確認した信頼済み制御側が `LeaseRequest` を送る。broker は approval ID と actor ID を記録するが、承認の真正性は control 側が確定する。`bind` は task/run/session/exact origin/policy hash/expiry を登録し、生成した予測不能な token を返す。`revoke` は未使用 lease を失効させる。
 
@@ -14,7 +14,7 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT, 01M3Q49ZTST3XQ9DGF6AGNR0XG]
 
 ## 起動設定
 
-手動鍵は初回に `celeris-credentiald init` で明示的に作成する。既存 vault がある状態で鍵が失われた場合、このコマンドは鍵を再生成せず停止する。credentiald は daemon と同じ user の systemd user service として起動する。例は [`deploy/systemd/celeris-credentiald@.service`](../deploy/systemd/celeris-credentiald@.service) にあり、`celeris@<release>` の MainPID を control 許可リストに渡す。daemon が入れ替わったら broker も同じ release 名で再起動し、旧 lease は失効する。
+手動鍵は初回に `celeris-credentiald init` で明示的に作成する。既存 vault がある状態で鍵が失われた場合、このコマンドは鍵を再生成せず停止する。credentiald は daemon と同じ user の systemd user service として起動する。例は `deploy/systemd/celeris-credentiald@.service` にあり、`celeris@<release>` の MainPID を control 許可リストに渡す。daemon が入れ替わったら broker も同じ release 名で再起動し、旧 lease は失効する。
 
 `config.toml` の `[api]` に次を追加する。片方だけの設定は API 起動エラーにする。公開鍵と socket は絶対パス、または config ファイルからの相対パスを指定する。
 

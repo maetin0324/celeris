@@ -788,6 +788,10 @@ impl Dispatcher {
         // ADR-0074「R7-11 実装時の明確化」: 上で書いた予算（planner / WU / 知識整理のフォールバック）は手元の写しにしか
         // 無い。`run_worker` は DB から task を読み直すので、実効の予算を必ず渡す（`wall` だけでなく `max_turns` も効かせる）。
         extras.budget = Some(task.budget);
+        // ADR-0130 D2: 実装 run の開始 HEAD を worker を起こす前に固定する（planner run は書かない）。
+        if !is_planner_dispatch {
+            self.capture_run_write_bases(&task, &run_id, worktree.as_ref());
+        }
         let handle = self.spawn_worker(
             task.id,
             task.worker_hint.tier,

@@ -1108,11 +1108,14 @@ impl Dispatcher {
         // 別のトランザクションでも監査上の実害は無い。再起動時の照合は `work_units.status` を正とする）。
         // ADR-0074 D1.2（Phase F2b）: v2 の WU が done になったら、WU の作業ツリーで commit する。
         let mut committed_event: Option<Event> = None;
+        // ADR-0130 D2: actual write-set を採る WU の行（自動 commit 後）と、done になったか。
+        let mut write_set_wu: Option<(task_core::WorkUnitRow, bool)> = None;
         if let Some((updated_wu, reason, side_effect_rows)) = wu_update.take() {
             let mut updated_wu = updated_wu;
             if updated_wu.phase.is_some() && reason == "completed" {
                 committed_event = self.commit_work_unit(&task, &mut updated_wu)?;
             }
+            write_set_wu = Some((updated_wu.clone(), reason == "completed"));
             let from = current_wu
                 .as_ref()
                 .map(|w| w.status)
@@ -1154,6 +1157,15 @@ impl Dispatcher {
                     tracing::warn!(%task_id, %run_id, work_unit = %row.key, error = %e, "failed to record a dependent work unit transition");
                 }
             }
+        }
+        // ADR-0130 D2: WU の自動 commit の後に、この run（と done になった WU）の確定差分を残す。
+        // git が読めなくても `unavailable` を残すだけで、run の遷移は変えない。
+        {
+            let (wu_row, wu_completed) = match &write_set_wu {
+                Some((row, completed)) => (Some(row), *completed),
+                None => (current_wu.as_ref(), false),
+            };
+            self.record_run_write_sets(&task, &run_id, wu_row, wu_completed);
         }
         // ADR-0079 D7（Phase R3a）: worker の決定の要求（`DecisionRequested`、path 付き）と、それが指した他の unit の
         // `blocked(decision)` を 1 トランザクションで残す（工程の判定〈下の `settle_phase`〉より前）。

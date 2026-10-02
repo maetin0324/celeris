@@ -282,7 +282,8 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         observed.ns_owner_uid, observed.host_uid, observed.uid_map, observed.gid_map
     );
     // ADR-0116 付記: launcher（B）が 2 map の userns を作り、その中で内側 1000（= subuid S）に
-    // なった bwrap が Chrome の userns を作る。Chrome の userns の owner は S、親の owner は B。
+    // なった bwrap が Chrome の userns を作る（--dev の devpts のため bwrap 内で 2 段）。Chrome から
+    // launcher の ns までの owner の鎖は [S, S, B] で、launcher は鎖に daemon UID が無いことを検査する。
     let subuid = subid_start("/etc/subuid").expect("celeris-browser subuid");
     assert_eq!(observed.host_uid, browser_uid);
     assert_eq!(observed.ns_owner_uid, Some(subuid));

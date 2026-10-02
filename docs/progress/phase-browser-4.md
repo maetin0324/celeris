@@ -321,3 +321,12 @@ host 管理者への依頼: [host 準備手順](../ops/browser-launcher-host-set
 - 修正（ADR-0116 D3 再付記）: spawn の子が launcher の userns に `setns` した直後、capability がある間に私有の mount ns を作り（`unshare(CLONE_NEWNS)`・`/` を rprivate）、`/tmp` に tmpfs（0755）を張って `/tmp/celeris-session` に session dir を bind する。bwrap には `--bind /tmp/celeris-session /session` を渡す。`session_root` の 0700 は変えず、launcher 本体と host の mount ns も変わらない。`Unshare` 経路は変わらない。
 - 局所確認: `unshare -Ur` の中で 0700 の親を持つ 1777 の dir を同じ手順（tmpfs → bind）で `/tmp/celeris-session` に置き、bwrap（`--unshare-user --uid 1000 --gid 1000 --cap-drop ALL ... --bind /tmp/celeris-session /session`）から `uid=1000` で読み書きできた（exit 0）。bwrap の base が `/tmp` でも衝突しない。2 map は sandbox で作れないので launcher 経由の実 Chrome はまだ**未実証**。
 - 次: 人が同じ commit から release build し sha256 を照合して入れ替え、worker 外の UID 1001 シェルで require 試験を再実行する。owner UID・map・ptrace/strace と `/proc` 拒否・`verify_isolation` は依然**未取得**。本番 DB・設定・昇格、root 操作、機密能力の解放は行っていない。
+
+## launcher の userns owner 検査を鎖の検査に直す（run 01M3XQ19Y7YCTNVMZYRM5Y9PBD、2026-10-02）
+
+人が commit `1e62183d` を host に入れて require 試験を流した結果は **exit 101**（正の対照 `PTRACE_ATTACH=0 PTRACE_DETACH=0` は通過、本題は `Remote(IsolationFailed)`、0.06 s）。journal は `namespace owner: namespace owner 296608 (want 296608), parent owner 296608 (want 995)`。bwrap・sandboxd・Chrome の起動までは進んだ。
+
+- 原因: bwrap に `--dev /dev` を渡しているので、bwrap は devpts を張るために内側 0 で userns を作り、そのあと内側 1000 へ map し直す userns をもう 1 段作る。Chrome は launcher の 2 map の userns から 2 段下にあり、owner の鎖は `[S=296608, S=296608, B=995]`。Chrome の owner が `S` であることは観測どおりで、検査の期待値（親 = `B`）が 1 段の前提だった。
+- 判断: ADR-0115 の脅威モデルは「daemon UID が Chrome の祖先 userns のどれの owner でもない」ことで、段数には依らない。構造は変えず、検査を鎖の検査に直した（ADR-0116 付記「owner の鎖」）。launcher は `NS_GET_PARENT` を launcher 自身の userns の直前まで辿り、先頭 `S`・末尾 `B`・全要素が `S` か `B`・`allowed_uids`（1001）が鎖に無いことを、起動時の検査と `isolation_ok` の両方で確かめる。
+- 局所確認: `cargo test -p task-worker --lib browser_launcher` 18 passed（鎖の判定の単体試験 `owner_chain_accepts_nested_bwrap_levels_and_rejects_daemon_uid` を含む）、`cargo clippy -p task-worker --all-targets -- -D warnings` exit 0、`cargo fmt --check` 差分なし。
+- 次: 人が入れ替えて require 試験を再実行する。owner UID・map・ptrace/strace と `/proc` の拒否・`verify_isolation` は依然**未取得**。本番 DB・設定・昇格、root 操作、機密能力の解放は行っていない。

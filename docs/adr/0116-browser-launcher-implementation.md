@@ -101,3 +101,10 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 - **launcher を別 crate にする**: 既存の runtime / supervisor を `pub` で共有するだけで足り、crate を分けると依存と release 成果物が増える。task-worker 内の module + bin とする。
 - **bwrap の `--unshare-user` に map を任せる**: bwrap は単一 map しか張らず `0→B, 1000→S` を表現できない（ADR-0115）。外で作った userns を `--userns` で渡す。
 - **launcher 未稼働時に daemon 経路へ fallback**: 利用者が選んだ隔離を黙って弱めるため棄却（ADR-0115 移行手順 1）。
+
+## 付記（2026-10-02、owner の鎖）
+
+実 host で launcher の検査が `namespace owner 296608 (want 296608), parent owner 296608 (want 995)` で止まった。bwrap は `--dev` の devpts を張るために内側 0 で userns を作り、そのあと内側 1000 へ map し直す userns をもう 1 段作る。Chrome の userns は launcher の 2 map の userns から 2 段下にあり、鎖は `[S, S, B]` になる。脅威モデル（ADR-0115: daemon UID が Chrome の祖先 userns のどれの owner でもない）は段数に依らないので、構造は変えず検査を直す。
+
+- launcher は Chrome の `/proc/<pid>/ns/user` から `NS_GET_PARENT` を辿り、launcher 自身の userns（`/proc/self/ns/user` と inode・dev が一致）の直前までの owner を集める。
+- 鎖の先頭が `S`、末尾（launcher が作った userns）が `B`、全要素が `S` か `B`、`allowed_uids`（daemon UID）が鎖に無いこと、を `isolation_ok` と起動時の検査の条件にする。上の D3 の「親の owner が `B`」はこれに置き換える。

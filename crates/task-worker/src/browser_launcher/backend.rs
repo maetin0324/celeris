@@ -79,35 +79,59 @@ fn ns_owner(f: &std::fs::File) -> std::io::Result<u32> {
     }
 }
 
-/// Chrome の userns の owner（bwrap が内側 1000 = subuid として作った入れ子の userns）。
+/// Chrome の userns の owner（bwrap が内側 1000 = subuid として作った userns）。
 fn owner_uid(pid: i32) -> std::io::Result<u32> {
     ns_owner(&std::fs::File::open(format!("/proc/{pid}/ns/user"))?)
 }
 
-/// Chrome の userns の親（launcher が 2 map で作った userns）の owner。
-fn parent_owner_uid(pid: i32) -> std::io::Result<u32> {
+/// Chrome の userns から launcher 自身の userns の直下までの owner の鎖（Chrome 側が先頭）。
+/// bwrap は `--dev` の devpts のために内側 0 で userns を作り、そのあと内側 1000 へ map し直す
+/// userns をもう 1 段作るので、鎖は `[S, S, B]` になる（段数に依らず検査する）。
+fn owner_chain(pid: i32) -> std::io::Result<Vec<u32>> {
     use std::os::fd::FromRawFd;
-    let f = std::fs::File::open(format!("/proc/{pid}/ns/user"))?;
-    // NS_GET_PARENT = _IO(0xb7, 0x2)。成功時は親 namespace の新しい fd。
-    let parent = unsafe { libc::ioctl(f.as_raw_fd(), 0xb702) };
-    if parent < 0 {
-        return Err(std::io::Error::last_os_error());
+    use std::os::unix::fs::MetadataExt;
+    let own = std::fs::metadata("/proc/self/ns/user")?;
+    let mut ns = std::fs::File::open(format!("/proc/{pid}/ns/user"))?;
+    let mut chain = Vec::new();
+    for _ in 0..MAX_USERNS_DEPTH {
+        let meta = ns.metadata()?;
+        if meta.ino() == own.ino() && meta.dev() == own.dev() {
+            return Ok(chain);
+        }
+        chain.push(ns_owner(&ns)?);
+        // NS_GET_PARENT = _IO(0xb7, 0x2)。成功時は親 namespace の新しい fd。
+        let parent = unsafe { libc::ioctl(ns.as_raw_fd(), 0xb702) };
+        if parent < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        ns = unsafe { std::fs::File::from_raw_fd(parent) };
     }
-    ns_owner(&unsafe { std::fs::File::from_raw_fd(parent) })
+    Err(std::io::Error::other("userns chain too deep"))
 }
 
-/// launcher が作った userns（親）の owner が launcher、その中で bwrap が内側 1000（subuid）として
-/// 作った userns（Chrome）の owner が subuid であること（ADR-0116 付記）。
-fn owners_match(pid: i32, uid: u32, subuid: u32) -> Result<(), String> {
-    let owner = owner_uid(pid).map_err(|e| format!("NS_GET_OWNER_UID: {e}"))?;
-    let parent = parent_owner_uid(pid).map_err(|e| format!("NS_GET_PARENT owner: {e}"))?;
-    if owner == subuid && parent == uid {
+/// 鎖の上限（Linux の userns の入れ子上限 32 に合わせる）。
+const MAX_USERNS_DEPTH: usize = 33;
+
+/// Chrome の userns の owner が subuid、launcher 自身の userns の直下（launcher が 2 map で作った
+/// userns）の owner が launcher、その間の owner がすべて subuid か launcher で、daemon UID など
+/// `forbidden` が鎖に現れないこと（ADR-0115 の脅威モデル、ADR-0116 付記）。
+fn owners_match(pid: i32, uid: u32, subuid: u32, forbidden: &[u32]) -> Result<(), String> {
+    let chain = owner_chain(pid).map_err(|e| format!("userns owner chain: {e}"))?;
+    if chain_ok(&chain, uid, subuid, forbidden) {
         Ok(())
     } else {
         Err(format!(
-            "namespace owner {owner} (want {subuid}), parent owner {parent} (want {uid})"
+            "userns owner chain {chain:?} (want [{subuid}, .., {uid}] without {forbidden:?})"
         ))
     }
+}
+
+fn chain_ok(chain: &[u32], uid: u32, subuid: u32, forbidden: &[u32]) -> bool {
+    chain.len() >= 2
+        && chain.first() == Some(&subuid)
+        && chain.last() == Some(&uid)
+        && chain.iter().all(|o| *o == subuid || *o == uid)
+        && !chain.iter().any(|o| forbidden.contains(o))
 }
 
 fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &[u32]) -> bool {
@@ -279,7 +303,7 @@ impl SessionBackend for RuntimeBackend {
             // bwrap has entered the namespace; releasing the holder cannot change its owner.
             drop(ns);
             let pid = sup.runtime_pid();
-            owners_match(pid, uid, subuid).map_err(fail(
+            owners_match(pid, uid, subuid, &cfg.allowed_uids).map_err(fail(
                 sid,
                 "namespace owner",
                 ErrorCode::IsolationFailed,
@@ -496,7 +520,7 @@ impl BackendSession for RuntimeSession {
     }
     fn isolation_ok(&mut self) -> bool {
         let pid = self.sup.runtime_pid();
-        owners_match(pid, self.uid, self.subuid).is_ok()
+        owners_match(pid, self.uid, self.subuid, &self.forbidden).is_ok()
             && maps_match(
                 pid,
                 userns::Mapping {
@@ -523,5 +547,22 @@ impl BackendSession for RuntimeSession {
         drop(_shared);
         sup.stop();
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::chain_ok;
+
+    #[test]
+    fn owner_chain_accepts_nested_bwrap_levels_and_rejects_daemon_uid() {
+        // launcher B=995、subuid S=296608、daemon 1001。
+        assert!(chain_ok(&[296608, 995], 995, 296608, &[1001]));
+        assert!(chain_ok(&[296608, 296608, 995], 995, 296608, &[1001]));
+        assert!(!chain_ok(&[296608, 1001, 995], 995, 296608, &[1001]));
+        assert!(!chain_ok(&[296608, 296608, 1001], 1001, 296608, &[1001]));
+        assert!(!chain_ok(&[296608, 296608], 995, 296608, &[1001]));
+        assert!(!chain_ok(&[995], 995, 296608, &[1001]));
+        assert!(!chain_ok(&[296608, 4242, 995], 995, 296608, &[1001]));
     }
 }

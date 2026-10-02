@@ -2154,6 +2154,66 @@
       ],
       "type": "object"
     },
+    "Route": {
+      "enum": [
+        "direct",
+        "planned"
+      ],
+      "type": "string"
+    },
+    "RouteDecision": {
+      "properties": {
+        "gate_rule_id": {
+          "type": "string"
+        },
+        "overrode_gate": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/RouteReason"
+          },
+          "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/Route"
+        },
+        "shadow": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "route",
+        "reasons",
+        "gate_rule_id",
+        "overrode_gate",
+        "shadow",
+        "policy_version"
+      ],
+      "type": "object"
+    },
+    "RouteReason": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "rule_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "ok",
+        "detail"
+      ],
+      "type": "object"
+    },
     "RunContext": {
       "description": "`run.context`。未知フィールドは無視する（前方互換）。",
       "properties": {
@@ -2957,6 +3017,17 @@
         "pause_after_source": {
           "$ref": "#/$defs/PauseSource",
           "description": "D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は\n人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。"
         },
         "stages_hint": {
           "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。/3 の planner\nrun の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の\n`create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。",

@@ -870,3 +870,163 @@ async fn target_sync_pre_review_sync_remote_records_skip_without_local_git() {
             .any(|(_, e)| matches!(e, Event::ReviewTargetSynced { .. }))
     );
 }
+
+fn exhausted_fixture(
+    adapter: Arc<dyn WorkerAdapter>,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Arc<dyn TaskStore>,
+    Task,
+    Dispatcher,
+    std::path::PathBuf,
+    String,
+    String,
+) {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = reviewing_task(repo.path(), &store);
+    set_check(&mut task, ":".into());
+    store.insert(&task).unwrap();
+    let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    let before = commit_file(&wt.dir, "README.md", "task\n");
+    let target = commit_file(repo.path(), "README.md", "main\n");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    (repo, ws, store, task, d, wt.dir, before, target)
+}
+
+fn exhausted_for(
+    events: &[Event],
+    reason: task_core::IntegrationRepairExhaustReason,
+) -> Vec<&Event> {
+    events
+        .iter()
+        .filter(
+            |e| matches!(e, Event::IntegrationRepairExhausted { reason: r, .. } if *r == reason),
+        )
+        .collect()
+}
+
+#[tokio::test]
+async fn integration_repair_exhausted_plan_issue_reviews_unsynced_head_without_replan() {
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Yielded {
+            checkpoint: serde_json::json!({"plan_issue": "conflicting design"}),
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let (_repo, _ws, store, task, mut d, wt, before, _) = exhausted_fixture(adapter);
+    run_until_idle(&mut d, 100).await;
+    let events = events_of(&store, &task);
+    let exhausted = exhausted_for(
+        &events,
+        task_core::IntegrationRepairExhaustReason::PlanIssue,
+    );
+    assert_eq!(exhausted.len(), 1);
+    assert!(matches!(
+        exhausted[0],
+        Event::IntegrationRepairExhausted {
+            fallback: true,
+            rollback_to_sha: None,
+            ..
+        }
+    ));
+    assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), before);
+    assert!(events.iter().any(|e| matches!(e, Event::WorkerProgress { msg, .. } if msg.contains("integration repair exhausted"))));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Transitioned { reason, .. } if reason == "replan"))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewTargetSynced { .. }))
+    );
+    assert!(no_review_fail(&events));
+    let current = store.get(task.id).unwrap().unwrap();
+    assert_ne!(current.status, Status::Failed);
+    assert_eq!(current.attempts, task.attempts);
+}
+
+#[tokio::test]
+async fn integration_repair_exhausted_result_untrusted_rolls_back_before_sha_once() {
+    let (_repo, _ws, store, task, mut d, wt, before, target) = exhausted_fixture(done_adapter());
+    git_out(&wt, &["reset", "--hard", "HEAD~1"]);
+    assert_ne!(git_out(&wt, &["rev-parse", "HEAD"]), before);
+    run_until_idle(&mut d, 100).await;
+    let events = events_of(&store, &task);
+    let exhausted = exhausted_for(
+        &events,
+        task_core::IntegrationRepairExhaustReason::ResultUntrusted,
+    );
+    assert_eq!(exhausted.len(), 1);
+    assert!(
+        matches!(exhausted[0], Event::IntegrationRepairExhausted { fallback: true, rollback_to_sha: Some(sha), .. } if sha == &before)
+    );
+    assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), before);
+    assert!(!git_ok(
+        &wt,
+        &["merge-base", "--is-ancestor", &target, "HEAD"]
+    ));
+    let repair = store
+        .work_units_for(task.id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "integration-repair-1")
+        .unwrap();
+    let (fallback, duplicate) = d
+        .integration_repair_exhaustion(
+            &task,
+            &repair,
+            task_core::IntegrationRepairExhaustReason::ResultUntrusted,
+        )
+        .unwrap();
+    assert!(fallback);
+    assert!(duplicate.is_none());
+    assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
+}
+
+#[tokio::test]
+async fn integration_repair_exhausted_dirty_failed_stops_for_manual_inspection() {
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Error {
+            message: "repair failed".into(),
+            retryable: false,
+        },
+        delay: Duration::ZERO,
+    });
+    let (_repo, _ws, store, task, mut d, wt, before, _) = exhausted_fixture(adapter);
+    std::fs::write(wt.join("README.md"), "unsaved\n").unwrap();
+    run_until_idle(&mut d, 100).await;
+    let events = events_of(&store, &task);
+    let exhausted = exhausted_for(
+        &events,
+        task_core::IntegrationRepairExhaustReason::WorkUnitFailed,
+    );
+    assert_eq!(exhausted.len(), 1);
+    assert!(matches!(
+        exhausted[0],
+        Event::IntegrationRepairExhausted {
+            fallback: false,
+            rollback_to_sha: None,
+            ..
+        }
+    ));
+    assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), before);
+    assert_eq!(
+        std::fs::read_to_string(wt.join("README.md")).unwrap(),
+        "unsaved\n"
+    );
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
+    assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
+    assert!(no_review_fail(&events));
+}

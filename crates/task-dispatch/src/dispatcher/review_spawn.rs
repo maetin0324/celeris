@@ -329,6 +329,32 @@ impl Dispatcher {
                 let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
                     continue;
                 };
+                // A failed repair deliberately reviews the restored, unsynced HEAD.
+                // Keep this decision across daemon restarts; a later scheduled repair
+                // supersedes the exhausted event.
+                let fallback = self
+                    .store
+                    .events_for(task_id)?
+                    .iter()
+                    .rev()
+                    .find_map(|(_, e)| match e {
+                        Event::IntegrationRepairExhausted {
+                            repo_id, fallback, ..
+                        } if *repo_id == reference.repo_id => Some(*fallback),
+                        Event::IntegrationRepairScheduled { repo_id, .. }
+                            if *repo_id == reference.repo_id =>
+                        {
+                            Some(false)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                if fallback {
+                    self.store.append_event(task_id, &Event::worker_progress(
+                        run_id.clone(), format!("review target sync skipped for {}: integration repair exhausted; reviewing the unsynced HEAD without a merge candidate", repo.name)
+                    ))?;
+                    continue;
+                }
                 let target = if let Some(parent) =
                     task_core::tree::parent_branch(&task, &self.config.worktree_branch_prefix)
                 {

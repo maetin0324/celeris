@@ -5,7 +5,9 @@
 //! `lo` に公開扱いの `93.184.216.34` を付けて HTTPS fixture（`openssl s_server`）と TCP/53 の DNS
 //! fixture を置く。外部ネットワークへの経路は無い。proxy の拒否境界は変えず、許可する名前と
 //! resolver は試験の stdin policy にだけ書く。前提（unshare・ip・openssl・bwrap・browser）が
-//! 無い環境では失敗する。明示的に `CELERIS_ISOLATION_TESTS=skip` を与えた時だけ飛ばす。
+//! 無い環境では失敗する。既定では skip し、`CELERIS_USERNS_TESTS=1` を与えた時だけ走る（ADR-0126 B）。
+mod userns_gate;
+
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -63,10 +65,13 @@ fn alive(pid: i32) -> bool {
 
 #[test]
 fn fixture_reachable_only_through_per_connection_egress_proxy() {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
+    if userns_gate::skip_unless_userns_tests() {
         return;
     }
+    run_fixture_reachable_only_through_per_connection_egress_proxy();
+}
+
+fn run_fixture_reachable_only_through_per_connection_egress_proxy() {
     for t in ["unshare", "ip", "openssl", "bwrap", "bash"] {
         tool(t);
     }

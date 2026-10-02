@@ -1,5 +1,6 @@
 //! ADR-0109 D1-D4: real broker and browser CDP injection against a fixture in a
 //! network namespace with no external route. Missing prerequisites fail.
+mod userns_gate;
 use celeris_credentiald::injection_ipc::{
     Admission, AuthSectionRegistration, LiveSessionRegistration, process_start,
 };
@@ -485,6 +486,9 @@ fn inner() {
 
 #[test]
 fn real_broker_browser_injection_receipt_and_origin_guards() {
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
     for t in ["unshare", "ip", "openssl", "bwrap"] {
         tool(t);
     }

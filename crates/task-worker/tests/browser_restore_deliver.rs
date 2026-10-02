@@ -8,8 +8,10 @@
 //! 削除済み・別 session も開封前に拒否される。state は argv・記録ファイルに出ない。
 //!
 //! 外部ネットワークには出ない（browser は about:blank のまま、origin は 127.0.0.1 の listener）。
-//! 前提（bwrap・playwright の chrome-headless-shell）が無い環境では失敗する。
-//! `CELERIS_ISOLATION_TESTS=skip` のときだけ「SKIPPED (not passed)」を出して抜ける。
+//! 前提（bwrap・playwright の chrome-headless-shell）が無い環境では失敗する。既定では skip し、
+//! `CELERIS_USERNS_TESTS=1` を与えた時だけ走る（ADR-0126 B）。
+mod userns_gate;
+
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -30,13 +32,7 @@ use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 const SECRET: &str = "restore-deliver-secret-5f1a";
 const OTHER_SECRET: &str = "restore-deliver-other-9b2c";
 
-fn skip() -> bool {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
-        return true;
-    }
-    false
-}
+use userns_gate::skip_unless_userns_tests as skip;
 
 fn browser() -> PathBuf {
     if let Ok(p) = std::env::var("CELERIS_TEST_BROWSER") {

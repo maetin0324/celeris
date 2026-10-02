@@ -9,6 +9,8 @@
 //!   [`install`] されたガードを [`apply`] する（無ければ何もしない）。
 //! - 準備（直下の列挙・`statvfs`・uid/gid・cwd の絶対化・ssh 設定の写し）は fork の**前**に親で行い、子では
 //!   用意した C 文字列で `unshare` / `mount` / `chdir` を呼ぶだけ（割り当てをしない）。
+//! - 付記 D-a: user systemd bus を tmpfs / 空ファイルの bind で覆い、`$HOME` の `.config/systemd`・
+//!   `.local/celeris/releases`・`.config/celeris` を（存在すれば）読み取り専用にする（[`DbGuard::host_config_read_only_paths`]）。
 //! - 準備に失敗したら、その spawn を失敗させる（黙って保護なしで起動しない）。
 
 use std::ffi::{CString, OsString};
@@ -21,6 +23,13 @@ use nix::libc;
 
 /// ssh の `Include` 先（D4）。root 所有のファイルが namespace の中では nobody に見え、ssh が拒否する。
 const SSH_CONFIG_D: &str = "/etc/ssh/ssh_config.d";
+
+/// 付記 D-a の 3: namespace の中で読み取り専用にする `$HOME` 下の host の設定（存在するものだけ）。
+const HOST_CONFIG_DIRS: [&str; 3] = [
+    ".config/systemd",
+    ".local/celeris/releases",
+    ".config/celeris",
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbGuardError {
@@ -41,6 +50,8 @@ pub struct DbGuard {
     family: Vec<OsString>,
     /// ssh 設定の写しを置く所（D4）。`None` なら写さない。
     ssh_shadow_root: Option<PathBuf>,
+    /// 付記 D-a の 3 の基準の `$HOME`（`new` で解決。`None` なら何もしない）。
+    home: Option<PathBuf>,
 }
 
 impl DbGuard {
@@ -70,7 +81,33 @@ impl DbGuard {
             dir,
             family,
             ssh_shadow_root: Some(default_ssh_shadow_root()),
+            home: std::env::var_os("HOME")
+                .filter(|h| !h.is_empty())
+                .map(PathBuf::from)
+                .filter(|h| h.is_absolute()),
         })
+    }
+
+    /// 試験用: 付記 D-a の 3 の基準の `$HOME` を変える（`None` で読み取り専用にしない）。
+    pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
+        self.home = home;
+        self
+    }
+
+    /// 付記 D-a の 3: `$HOME` 下の host の設定のうち、存在するもの（canonicalize 済み）。存在するかを
+    /// 確かめられない（`EACCES` など）ときは失敗にする（D5: 保護なしで起動しない）。
+    pub fn host_config_read_only_paths(&self) -> io::Result<Vec<PathBuf>> {
+        let Some(home) = &self.home else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for rel in HOST_CONFIG_DIRS {
+            let path = home.join(rel);
+            if path.try_exists()? {
+                out.push(std::fs::canonicalize(&path)?);
+            }
+        }
+        Ok(out)
     }
 
     /// 試験用: ssh 設定の写しの置き場所を変える（`None` で写さない）。
@@ -133,6 +170,20 @@ impl DbGuard {
                 .transpose()?,
             None => None,
         };
+        let read_only = self
+            .host_config_read_only_paths()?
+            .into_iter()
+            .map(|p| -> io::Result<(CString, libc::c_ulong)> {
+                let stat = nix::sys::statvfs::statvfs(&p).map_err(io::Error::from)?;
+                Ok((
+                    cstring(p.into_os_string())?,
+                    libc::MS_REMOUNT
+                        | libc::MS_BIND
+                        | libc::MS_RDONLY
+                        | locked_mount_flags(stat.flags()),
+                ))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
         let uid = nix::unistd::getuid().as_raw();
         let gid = nix::unistd::getgid().as_raw();
         let mut bus_paths = Vec::new();
@@ -183,6 +234,7 @@ impl DbGuard {
             uid_map: format!("{uid} {uid} 1").into_bytes(),
             gid_map: format!("{gid} {gid} 1").into_bytes(),
             ssh,
+            read_only,
             bus_paths,
             systemd_dir,
             _empty_bus: empty_bus,
@@ -201,6 +253,8 @@ struct Plan {
     gid_map: Vec<u8>,
     /// (写し, `/etc/ssh/ssh_config.d`)
     ssh: Option<(CString, CString)>,
+    /// 付記 D-a の 3: 自分自身へ bind して読み取り専用にする path と、その remount の flag。
+    read_only: Vec<(CString, libc::c_ulong)>,
     bus_paths: Vec<CString>,
     systemd_dir: Option<CString>,
     /// Retains the source file until all bus socket paths have been overmounted.
@@ -245,6 +299,16 @@ impl Plan {
                 for target in &self.bus_paths {
                     bind(source, target, 0)?;
                 }
+            }
+            for (path, flags) in &self.read_only {
+                bind(path, path, 0)?;
+                check(libc::mount(
+                    std::ptr::null(),
+                    path.as_ptr(),
+                    std::ptr::null(),
+                    *flags,
+                    std::ptr::null(),
+                ))?;
             }
             bind(&self.dir, &self.dir, libc::MS_REC)?;
             check(libc::mount(

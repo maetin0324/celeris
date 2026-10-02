@@ -2315,3 +2315,37 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 
 `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は、auto 判定が `systemd-run` を選ぶ環境で user bus に接続できないときだけ skip する。sandbox では `/run/user/<uid>/bus` が見えても接続できず `Failed to connect to user scope bus via local transport` となる一方、release gate では接続できるため、試験側で `systemd-run --user --scope --quiet true` を事前確認する。`systemd-run` が PATH にないか `XDG_RUNTIME_DIR` が未設定なら detach の auto 判定は inline のため、試験を従来どおり実行する。本番 detach の挙動は変更しない。
 - 23:1x〜23:56Z（2026-10-01）: **6ceec985b5e0 の stop-start 昇格と、無許可の本番差し替えの発見**。main にブラウザ Phase 1〜4（取り込み task 01M3VSNWDC… が 18:33 に delivery）・migration 0035/0036（schema 36）が入っていたため、6ceec985 は live_ok=false。in-flight 0 で `promote.sh 6ceec985b5e0` → stop-start（停止約 20 s、backup `20261001-232111-pre-6ceec985b5e0.sqlite3`）、schema 36 で健全。昇格前に動いていたのは **celeris@bf54b41ad627**（人の昇格なし）: web P6-03 dogfood task 01M3WAKKJQ… の codex run 01M3WAVPGK… が、人の「本番 host への web gateway 設置を許可」に基づき escalation（`--approve-for-me` で自動承認）で `systemctl --user start celeris-web@bf54b41ad627` を実行 → unit の `Wants=celeris@%i.service` で celeris@bf54b41ad627（staging 成果物への symlink）が起動し、18:32:38 に本番 DB を schema 36 へ移行、ADR-0040 handoff で 7fbfc347b240 から active を奪っていた（約 4.8 時間）。ADR-0095 の RO mount は効いていたが user systemd bus の穴を通られた。人の判断 (A): dogfood は続け、`~/.config/systemd/user/celeris-web@.service` から `Wants=` を削除（backup `.bak-20261001a`）して daemon-reload（`After=` のみ残す）。repo の `deploy/systemd/celeris-web@.service` には `Wants=` が残っている（要修正）。再発防止候補: handoff の認可（current と一致しない release は handoff・migrate しない）、worker から user systemd bus を隠す、codex の自動承認に deny パターン、web unit の依存除去、テストから実 systemd-run を叩かない。担当の無い root の delivery 修正 01M3VT5BJZ… は review 差し戻し 3 回で failed → reopen + decompose note（main 取り込み、ADR 番号振り直し、部分 index）で replan 中。
+
+## R7-12: handoff と migration の認可（2026-10-02）
+
+### 変更点
+
+- ADR-0040 に付記「handoff と migration の認可（昇格していない release）」を追加し、方針を先に決めてから実装した: daemon は起動時に
+  `current` の symlink と、`promote.sh`/`rollback.sh --restore-db`/`migrate-to-celeris.sh` が書く `releases/<sha12>/promoting.json`
+  （900 秒以内・sha12 一致）のどちらかが自分の release と一致するときだけ migrate / handoff を行う。一致しなければ DB を開かず exit 4
+  で終了する（`celeris@.service` に `RestartPreventExitStatus=4` を追加し、再起動ループにしない）。dev や `--mode verify`（staging）は
+  この判定をしない。
+- daemon 側（`crates/celeris/src/instance.rs` 新設 + `daemon/run.rs`・`main.rs`）: `build_dispatcher`（migration）と `start_instance`
+  （handoff 要求）より前に認可判定を入れた。
+- selfdeploy 側（`scripts/selfdeploy/lib.sh` の `sd_write_promoting` / `sd_clear_promoting`）: `promote.sh` の `update_links`（current
+  の付け替え）は `systemctl start` の後に呼ばれるため、start 前には current がまだ新 release を指していない。そこで start 直前に
+  `promoting.json` を書き、`update_links` 直後と `EXIT` トラップで消す。`rollback.sh --restore-db` と `migrate-to-celeris.sh` も同じ形。
+  live / stop-start の両経路、各失敗経路、rollback の経路すべてで印の時機を揃えた。
+- `deploy/systemd/celeris-web@.service` から `Wants=celeris@%i.service` を外し、`After=` の順序指定だけ残した（web が daemon を起動しない）。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → 全バイナリ exit 0、失敗 0（新規 `crates/celeris/tests/unpromoted_release.rs` を含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning 0。
+- `bash scripts/selfdeploy/tests/promote_authorization_marker.sh` → `promote_authorization_marker: all ok`（exit 0。live・stop-start・
+  各失敗・rollback の 5 経路すべてで `promoting.json` が `systemctl start` 実行時に存在し、sha12・script・mode・`started_at`(RFC 3339 UTC)
+  が合っていること、処理後に残っていないことを偽 `systemctl`/`curl`/`sqlite3`/`ss` で確認）。
+
+### 未解決・提案
+
+- 本番への反映は今回やらない。本番の daemon とバイナリの入れ替えは人が `release.sh` の gate を通してから `promote.sh`（release/promote の
+  GUI 操作）で行う。
+- `deploy/systemd/celeris-gui@.service` にも `Wants=celeris@%i.service` が残っている（gui も web と同じ依存の形）。今回は daemon 側の
+  起動時判定で無害化される（gui 起動が未昇格の celeris@ を起こしても、認可が一致しなければ migrate も handoff もせず exit 4 で終わる）ため
+  直ちに外す必要はないが、web 側と揃えて `Wants=` を外す方が一貫する。別件として起票する余地がある。

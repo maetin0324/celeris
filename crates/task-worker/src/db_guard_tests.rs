@@ -67,19 +67,18 @@ fn q(p: &Path) -> String {
 }
 
 fn userns_available() -> bool {
+    if crate::test_support::skip_unless_userns_tests() {
+        return false;
+    }
     let available = Command::new("unshare")
         .args(["-Ur", "true"])
         .output()
         .is_ok_and(|out| out.status.success());
-    if !available {
-        assert_ne!(
-            std::env::var("CELERIS_DB_GUARD_TESTS").as_deref(),
-            Ok("require"),
-            "user namespace is required for db_guard tests"
-        );
-        eprintln!("skip: unprivileged user namespace is unavailable");
-    }
-    available
+    assert!(
+        available,
+        "user namespace is required for db_guard tests (CELERIS_USERNS_TESTS=1)"
+    );
+    true
 }
 
 #[test]
@@ -298,12 +297,15 @@ fn the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable() {
 
 #[test]
 fn a_nested_user_namespace_cannot_undo_the_read_only_mount() {
-    let f = fixture();
-    let g = guard(&f);
-    if Command::new("unshare").arg("--help").output().is_err() {
-        eprintln!("skip: unshare(1) is not installed");
+    if crate::test_support::skip_unless_userns_tests() {
         return;
     }
+    let f = fixture();
+    let g = guard(&f);
+    assert!(
+        Command::new("unshare").arg("--help").output().is_ok(),
+        "unshare(1) is required for this test (CELERIS_USERNS_TESTS=1)"
+    );
     let script = format!(
         "unshare -Urm sh -c \"mount -o remount,bind,rw {lib} && echo REMOUNTED; \
          umount {lib} && echo UNMOUNTED; touch {lib}/escaped && echo ESCAPED\" 2>&1; \

@@ -1,10 +1,17 @@
 # Format: old path<TAB>proposed new path<TAB>human|agent|archive|ambiguous; paths are repository-relative; proposals do not move files.
 # human = reader-facing specification/guide; agent = decision/progress/work record; archive = obsolete or duplicate; ambiguous = classification needs a human decision.
-# All agent proposals use the single top-level root agent-docs/. Fixed paths remain unchanged.
+# Roots follow ADR-0128: docs/ = human (current specs, guides, ops, API), agent-docs/ = agent records (adr, progress, reports, notes, archive). Unchanged paths are listed with old = new.
+# reason docs/gui/bootstrap/CLAUDE.md: docs/gui/bootstrap/CLAUDE.md:1-4 は初期配布用の作業規則だが、実際の作業規則は gui/CLAUDE.md:1-5 に配置済みで、同じ役割の重複。
+# reason docs/gui/bootstrap/GOAL_TEMPLATE.md: docs/gui/bootstrap/README.md:16 のコピー用テンプレートで、現行の同名成果は gui/docs/GOAL_TEMPLATE.md:1 に配置済み。初期配布元の重複。
+# reason docs/gui/bootstrap/PROGRESS.md: docs/gui/bootstrap/PROGRESS.md:6-16 は G0〜G5 を全て未着手とするが、現行の進捗は gui/docs/PROGRESS.md:1 以下に記録済み。
+# reason docs/gui/bootstrap/README.md: docs/gui/bootstrap/README.md:3,23 は run-gphases.sh による gui/ 作成と git init を指示するが、gui/package.json:1-16 と gui/README.md:1-5 の現行 gui/ は既に追跡・実装済みで、scripts/ に run-gphases.sh は無い。
+# reason docs/gui/bootstrap/agents/auditor.md: docs/gui/bootstrap/README.md:19 の初期コピー元で、現行の agent 定義は gui/.claude/agents/auditor.md:1 に配置済み。初期配布元の重複。
+# reason docs/gui/bootstrap/agents/implementer.md: docs/gui/bootstrap/README.md:18 の初期コピー元で、現行の agent 定義は gui/.claude/agents/implementer.md:1 に配置済み。初期配布元の重複。
+# reason docs/web/dogfood.md: docs/web/dogfood.md:23-61 は人向け起動・確認手順と H6/H9 の未決定・問題記録欄が一体。手順として docs/ に残すか作業記録として agent-docs/ に分けるか人の判断が必要。
 docs/DESIGN.md	docs/DESIGN.md	human
 docs/GOAL_TEMPLATE.md	agent-docs/GOAL_TEMPLATE.md	agent
 docs/PROGRESS.md	agent-docs/PROGRESS.md	agent
-docs/SPEC.md	docs/overview/spec.md	human
+docs/SPEC.md	docs/SPEC.md	human
 docs/adr/0001-scope-and-principles.md	agent-docs/adr/0001-scope-and-principles.md	agent
 docs/adr/0002-state-machine.md	agent-docs/adr/0002-state-machine.md	agent
 docs/adr/0003-worker-protocol.md	agent-docs/adr/0003-worker-protocol.md	agent
@@ -112,32 +119,27 @@ docs/adr/0115-browser-ptrace-owner-ns-launcher.md	agent-docs/adr/0115-browser-pt
 docs/adr/0117-review-human-decisions-and-check-results.md	agent-docs/adr/0117-review-human-decisions-and-check-results.md	agent
 docs/adr/0121-root-delivery-without-assignee.md	agent-docs/adr/0121-root-delivery-without-assignee.md	agent
 docs/adr/0122-ui-ux-external-skills.md	agent-docs/adr/0122-ui-ux-external-skills.md	agent
+docs/adr/0128-docs-layout.md	agent-docs/adr/0128-docs-layout.md	agent
 docs/api/v1/api-v1.schema.json	docs/api/v1/api-v1.schema.json	human
 docs/api/v1/event.schema.json	docs/api/v1/event.schema.json	human
-docs/architecture-map.md	docs/architecture/map.md	human
+docs/architecture-map.md	docs/architecture-map.md	human
 docs/browser-capability.md	docs/guides/browser-capability.md	human
 docs/browser-credentiald.md	docs/guides/browser-credentiald.md	human
 docs/browser-live-relay.md	docs/guides/browser-live-relay.md	human
 docs/celeris-api-v1.md	docs/api/v1/overview.md	human
-docs/execution-architecture-2026-09-24.md	agent-docs/execution-architecture-2026-09-24.md	agent
-docs/execution-decomposition-report-2026-09-25.md	agent-docs/execution-decomposition-report-2026-09-25.md	agent
-docs/execution-parallel-report-2026-09-28.md	agent-docs/execution-parallel-report-2026-09-28.md	agent
+docs/execution-architecture-2026-09-24.md	agent-docs/reports/execution-architecture-2026-09-24.md	agent
+docs/execution-decomposition-report-2026-09-25.md	agent-docs/reports/execution-decomposition-report-2026-09-25.md	agent
+docs/execution-parallel-report-2026-09-28.md	agent-docs/reports/execution-parallel-report-2026-09-28.md	agent
 docs/gui/DESIGN-GUI.md	docs/gui/design.md	human
 docs/gui/adr/0001-architecture-boundary.md	agent-docs/gui/adr/0001-architecture-boundary.md	agent
 docs/gui/adr/0002-frontend-stack.md	agent-docs/gui/adr/0002-frontend-stack.md	agent
 docs/gui/api.md	docs/api/v1/gui-api.md	human
-docs/gui/bootstrap/CLAUDE.md	docs/archive/gui/bootstrap/CLAUDE.md	archive
-# reason docs/gui/bootstrap/CLAUDE.md: docs/gui/bootstrap/CLAUDE.md:1-4 は初期配布用の作業規則だが、実際の作業規則は gui/CLAUDE.md:1-5 に配置済みで、同じ役割の重複。
-docs/gui/bootstrap/GOAL_TEMPLATE.md	docs/archive/gui/bootstrap/GOAL_TEMPLATE.md	archive
-# reason docs/gui/bootstrap/GOAL_TEMPLATE.md: docs/gui/bootstrap/README.md:16 のコピー用テンプレートで、現行の同名成果は gui/docs/GOAL_TEMPLATE.md:1 に配置済み。初期配布元の重複。
-docs/gui/bootstrap/PROGRESS.md	docs/archive/gui/bootstrap/PROGRESS.md	archive
-# reason docs/gui/bootstrap/PROGRESS.md: docs/gui/bootstrap/PROGRESS.md:6-16 は G0〜G5 を全て未着手とするが、現行の進捗は gui/docs/PROGRESS.md:1 以下に記録済み。
-docs/gui/bootstrap/README.md	docs/archive/gui/bootstrap/README.md	archive
-# reason docs/gui/bootstrap/README.md: docs/gui/bootstrap/README.md:3,23 は run-gphases.sh による gui/ 作成と git init を指示するが、gui/package.json:1-16 と gui/README.md:1-5 の現行 gui/ は既に追跡・実装済みで、scripts/ に run-gphases.sh は無い。
-docs/gui/bootstrap/agents/auditor.md	docs/archive/gui/bootstrap/agents/auditor.md	archive
-# reason docs/gui/bootstrap/agents/auditor.md: docs/gui/bootstrap/README.md:19 の初期コピー元で、現行の agent 定義は gui/.claude/agents/auditor.md:1 に配置済み。初期配布元の重複。
-docs/gui/bootstrap/agents/implementer.md	docs/archive/gui/bootstrap/agents/implementer.md	archive
-# reason docs/gui/bootstrap/agents/implementer.md: docs/gui/bootstrap/README.md:18 の初期コピー元で、現行の agent 定義は gui/.claude/agents/implementer.md:1 に配置済み。初期配布元の重複。
+docs/gui/bootstrap/CLAUDE.md	agent-docs/archive/gui/bootstrap/CLAUDE.md	archive
+docs/gui/bootstrap/GOAL_TEMPLATE.md	agent-docs/archive/gui/bootstrap/GOAL_TEMPLATE.md	archive
+docs/gui/bootstrap/PROGRESS.md	agent-docs/archive/gui/bootstrap/PROGRESS.md	archive
+docs/gui/bootstrap/README.md	agent-docs/archive/gui/bootstrap/README.md	archive
+docs/gui/bootstrap/agents/auditor.md	agent-docs/archive/gui/bootstrap/agents/auditor.md	archive
+docs/gui/bootstrap/agents/implementer.md	agent-docs/archive/gui/bootstrap/agents/implementer.md	archive
 docs/gui/celeris-proposals.md	agent-docs/gui/celeris-proposals.md	agent
 docs/gui/model-routing/accounts-1440.png	docs/gui/model-routing/accounts-1440.png	human
 docs/gui/model-routing/accounts-360.png	docs/gui/model-routing/accounts-360.png	human
@@ -150,7 +152,7 @@ docs/gui/model-routing/providers-412.png	docs/gui/model-routing/providers-412.pn
 docs/knowledge.md	docs/guides/knowledge.md	human
 docs/llm-source.md	docs/guides/llm-source.md	human
 docs/mcp.md	docs/guides/mcp.md	human
-docs/model-routing-2026-09-20.md	agent-docs/model-routing-2026-09-20.md	agent
+docs/model-routing-2026-09-20.md	agent-docs/reports/model-routing-2026-09-20.md	agent
 docs/notes/build-cache-tiering-input-2026-09-28.md	agent-docs/notes/build-cache-tiering-input-2026-09-28.md	agent
 docs/ops/adr-0079-r5b-runbook.md	docs/ops/adr-0079-r5b-runbook.md	human
 docs/ops/browser-isolated-runtime-subuid.md	docs/ops/browser-isolated-runtime-subuid.md	human
@@ -196,7 +198,6 @@ docs/web/adr/web-0001-sse-invalidate-unlisted-kinds.md	agent-docs/web/adr/web-00
 docs/web/adr/web-0002-project-plan-milestone-successors.md	agent-docs/web/adr/web-0002-project-plan-milestone-successors.md	agent
 docs/web/adr/web-0003-parallel-operation.md	agent-docs/web/adr/web-0003-parallel-operation.md	agent
 docs/web/dogfood.md	docs/web/dogfood.md	ambiguous
-# reason docs/web/dogfood.md: docs/web/dogfood.md:23-61 は人向け起動・確認手順と H6/H9 の未決定・問題記録欄が一体。手順として docs/ に残すか作業記録として agent-docs/ に分けるか人の判断が必要。
 docs/web/feature-parity.md	agent-docs/web/feature-parity.md	agent
 docs/web/gates/p5-01-latency.md	agent-docs/web/gates/p5-01-latency.md	agent
 docs/web/gates/p5-02-security.md	agent-docs/web/gates/p5-02-security.md	agent

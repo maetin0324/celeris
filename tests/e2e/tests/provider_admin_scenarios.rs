@@ -10,7 +10,6 @@
 //! 5. 重複 id の追加は 409、存在しない id の変更・削除は 404、`reload` で cooldown が消える
 //! 6. `cargo test --workspace` と clippy は CI 側（本ファイルはそのテストの 1 つ）。スキーマは別途 `task-api` 側で検証
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,12 +29,10 @@ fn bin(name: &str) -> PathBuf {
     path
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// celeris に渡すポートを予約する。`Env` が持ち続け、並走する別のテストの celeris と
+/// 同じポートを共有しない（celeris は `SO_REUSEPORT` で bind する。`e2e::PortReservation`）。
+fn reserve_port() -> e2e::PortReservation {
+    e2e::PortReservation::new().unwrap()
 }
 
 fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
@@ -93,17 +90,20 @@ struct Env {
     _tmp: tempfile::TempDir,
     root: PathBuf,
     port: u16,
+    _port: e2e::PortReservation,
     token: Option<String>,
 }
 
 impl Env {
     fn new() -> Self {
+        let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         Self {
             _tmp: tmp,
             root,
-            port: free_port(),
+            port: reserved.port(),
+            _port: reserved,
             token: None,
         }
     }

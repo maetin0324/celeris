@@ -3187,6 +3187,8 @@ mod direct_route;
 /// ADR-0124 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;
+/// ADR-0130 D5: review 前 sync の待ち行列の stale 優先（`src/dispatcher/tests/stale_priority.rs`）。
+mod stale_priority;
 /// ADR-0130 D3: 同じ repo の expected write-set の重なりで run の起動を待たせる
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;

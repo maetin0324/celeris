@@ -484,3 +484,11 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - 最終検査: `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo test --workspace` → exit 101。`instance_handoff` 8件中3 passed / 5 failed。`cargo test -p celeris --test instance_handoff` 単独再実行も exit 101、同じ5件を再現。3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted` で失敗。残り2件（新旧 daemon の dispatch/standby 引継ぎ）も同じ環境で失敗した。検査は pass 扱いにしない。
 - launcher binary に効く main 差分は `crates/task-worker/src/browser_runtime.rs` の init 起動待ち処理である。既存の記録どおり host の binary 入れ替えと require 試験の再実行が必要。
+
+### pick-chrome: 並走 session での launcher Chrome 特定 — 2026-10-02
+
+`browser_launcher_ptrace.rs` の Chrome 特定が並走 session で曖昧になって落ちていた件を、試験 file だけで直した。launcher は daemon から読める `/proc` に session の印を出さないため、launcher 子孫の新しい Chrome 候補を全部検査して 1 件以上を要求し、自分の session の停止で検査済みの session root が消えることを確かめる。選択は純粋な関数に分け、単体試験 `chrome_pick_*` 4 件を足した。詳細は `docs/progress/phase-browser-4.md`『並走 session での Chrome 特定』。
+
+- `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
+- `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。

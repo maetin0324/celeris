@@ -626,6 +626,37 @@ worker marker と試験用一時 DB を使う e2e 免除経路は `worker_guard_
 - 未解決: instance_handoff の daemon を worker sandbox で試験する時の marker/probe 境界。userns が使える host での
   `CELERIS_USERNS_TESTS=1` 実行も未実施。ADR-0126 は実装済みの状態を維持。
 
+### guard-fix-impl: ADR-0126 付記2 の実装 — 2026-10-02
+
+`crates/celeris/src/daemon/bootstrap.rs` を ADR-0126 付記2 に合わせた。
+
+- 1（opt-out は worker run の外だけ）: `refuse_production_db_in_worker_run`・`install_worker_db_guard` の
+  「`worker_read_only = false` なら判定前に return」をやめた。印 `CELERIS_WORKER_DB_GUARD` がある中で本番（P）に当たる
+  daemon は `worker_read_only`・probe に関わらず DB を開く前に拒否する。DB がまだ無いときも、DB を置く dir（lenient 解決）と
+  token を判定する（本番 token の写しを使う新規 DB も DB を作る前に止まる）。印の中で P が決まらない opt-out も拒否。
+  opt-out の判定は純関数 `worker_db_guard_opt_out_action`。
+- 2（本番に当たらない daemon は Exempt）: `worker_db_guard_decision` で、判定関数の `RequireUserns` を、P が決まっていて
+  印が `ReadOnly` でない（= 本番に当たらないと確かめた上で印が無い・裏付けられない）ときに `Exempt` にする。本番に当たる
+  daemon（`RefuseProduction`）と P 不明は従来どおり probe。task-worker の判定関数（`judge_worker_db_guard`）とその試験は
+  変えていない（変換は celeris 側）。
+- 試験: unit `worker_guard_exempt_test_db_without_marker`・`worker_guard_probe_production_without_marker`・
+  `worker_guard_opt_out_refuses_production_inside_worker_run`・`worker_guard_opt_out_precheck_refuses_before_opening_db` を追加。
+  既存の `worker_db_guard_test_db_requires_userns_outside_worker_run` は期待を `Exempt` に改め
+  `worker_db_guard_test_db_is_exempt_outside_worker_run` に改名（付記2 の 2 が A3 末尾を上書きするため）。起動試験
+  `worker_db_guard_refuse_with_opt_out` を追加（印が無ければ既存と同じ skip、`CELERIS_USERNS_TESTS=1` で unshare の印）。
+- 証拠（すべて worker sandbox の shell、NoNewPrivs=1・Seccomp=2）:
+  - `CELERIS_USERNS_TESTS=1 cargo test -p celeris --test worker_db_guard_refuse` → exit 0（2 passed）。修正前の
+    `bootstrap.rs` に戻すと `worker_db_guard_refuse_with_opt_out` が FAILED（opt-out で起動してしまう）ことを確認。
+  - `cargo test -p celeris --test instance_handoff` → exit 0（8 passed）。この shell では userns が作れるので、probe の
+    失敗を決定的に作るため probe の `sh -c 'test ! -w …'` だけを exit 1 にする stub `sh` を PATH の先頭に置いて再実行 →
+    修正後 exit 0（8 passed）、修正前は 5 failed（`cannot make … read-only for worker runs`）。同じ stub で実 `celeris`
+    （一時 DB・印なし）を起動 → 修正後 exit 0（`worker db guard not installed`）、修正前 exit 1。
+  - `cargo test -p celeris` → exit 0（lib 252 passed ほか全 binary ok）。`cargo test -p celeris worker_guard`・
+    `worker_db_guard` → exit 0。`cargo test -p e2e --test api_scenarios` → exit 0（12 passed）。
+  - `cargo build --workspace --bins`・`cargo clippy --workspace --all-targets -- -D warnings`・
+    `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` → いずれも exit 0。
+- 未解決: `cargo test --workspace` 全体は今回の葉では未実行（関係 crate に絞った）。
+
 ### land-main3: 最新 main の統合 — 2026-10-02
 
 main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持した。main の ADR-0122 完了・ui-ux 外部 skill の結合試験・planner 指針・最終検査記録に加え、browser launcher の実 process 証跡、tick_prunes の単独再実行、過去の land-main/land-main2 記録も残した。

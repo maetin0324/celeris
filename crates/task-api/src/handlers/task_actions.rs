@@ -3,6 +3,9 @@
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer};
+use task_core::TaskStore;
 use time::OffsetDateTime;
 
 use crate::middleware::require_admin;
@@ -15,6 +18,22 @@ use crate::types::{
 };
 
 use super::{ApiResult, Params, json_response, no_query, read_json, validated_workspace};
+
+/// PATCH /tasks/{id}: omitted hint leaves it unchanged; null or [] clears it.
+#[derive(Deserialize, JsonSchema)]
+pub struct TaskPatchBody {
+    #[serde(flatten)]
+    pub task: task_ops::edit::TaskEdit,
+    #[serde(default, deserialize_with = "present_write_paths")]
+    pub expected_write_paths: Option<Option<Vec<String>>>,
+}
+
+fn present_write_paths<'de, D>(deserializer: D) -> Result<Option<Option<Vec<String>>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Vec<String>>::deserialize(deserializer).map(Some)
+}
 
 // ---- 13〜16. POST /tasks/{id}/{approve|reject|answer|cancel} ----
 //
@@ -197,8 +216,19 @@ pub(super) async fn patch_task(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
-    let mut edit: task_ops::edit::TaskEdit = read_json(body, true).await?;
-    if edit.is_empty() {
+    let TaskPatchBody {
+        mut task,
+        expected_write_paths,
+    } = read_json(body, true).await?;
+    let paths = expected_write_paths
+        .map(|paths| {
+            paths
+                .map(|paths| task_core::write_set::normalize_write_paths(&paths))
+                .transpose()
+        })
+        .transpose()
+        .map_err(ApiProblem::bad_request)?;
+    if task.is_empty() && paths.is_none() {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
             message: "at least one field must be given".to_string(),
@@ -206,14 +236,55 @@ pub(super) async fn patch_task(
     }
     // ADR-0062 Phase 108: `workspace` の検証（`Remote.cluster` が設定にあること、`~` の展開）は
     // `PATCH /projects/{id}` と同じ `validated_workspace` を使う（422 はここで返す）。
-    if let Some(spec) = edit.workspace.take() {
-        edit.workspace = Some(validated_workspace(&state, spec)?);
+    if let Some(spec) = task.workspace.take() {
+        task.workspace = Some(validated_workspace(&state, spec)?);
     }
     let genres = state.inner.genres.clone();
     let result = state
         .blocking(move |store| {
-            task_ops::edit::edit_task(store, id, edit, &genres, OffsetDateTime::now_utc())
-                .map_err(|e| ops_problem(store, e, Some("edit")))
+            let now = OffsetDateTime::now_utc();
+            let result = if task.is_empty() {
+                let existing = store
+                    .get(id)
+                    .map_err(|e| ops_problem(store, task_ops::OpsError::Store(e), Some("edit")))?
+                    .ok_or_else(|| ApiProblem::task_not_found(id))?;
+                if let Some(expected) = task.expected_status
+                    && expected != existing.status
+                {
+                    return Err(ops_problem(
+                        store,
+                        task_ops::OpsError::Conflict {
+                            expected,
+                            actual: existing.status,
+                        },
+                        Some("edit"),
+                    ));
+                }
+                if existing.status.is_terminal() {
+                    return Err(ops_problem(
+                        store,
+                        task_ops::OpsError::InvalidState {
+                            id,
+                            context: format!("status={:?}", existing.status),
+                            action: "edited; terminal tasks cannot be edited".into(),
+                        },
+                        Some("edit"),
+                    ));
+                }
+                task_ops::edit::EditResult {
+                    task: existing,
+                    fields: vec![],
+                }
+            } else {
+                task_ops::edit::edit_task(store, id, task, &genres, now)
+                    .map_err(|e| ops_problem(store, e, Some("edit")))?
+            };
+            if let Some(paths) = &paths {
+                store
+                    .set_task_expected_write_paths(id, paths.as_deref(), &now.to_string())
+                    .map_err(|e| ops_problem(store, task_ops::OpsError::Store(e), Some("edit")))?;
+            }
+            Ok(result)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &result))

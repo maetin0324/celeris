@@ -8,9 +8,9 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$ROOT_DIR"
 
-ITERATIONS=${STRESS_E2E_PHASE3_ITERATIONS:-20}
-PARALLEL=${STRESS_E2E_PHASE3_PARALLEL:-8}
-LOAD_SECONDS=${STRESS_E2E_PHASE3_LOAD_SECONDS:-1800}
+ITERATIONS=${STRESS_E2E_PHASE3_ITERATIONS:-5}
+PARALLEL=${STRESS_E2E_PHASE3_PARALLEL:-2}
+LOAD_SECONDS=${STRESS_E2E_PHASE3_LOAD_SECONDS:-300}
 
 WORK_DIR=$(mktemp -d /tmp/stress-e2e-phase3.XXXXXX)
 LOAD_PIDS=""
@@ -27,24 +27,27 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-NPROC=$(nproc 2>/dev/null || echo 4)
-
-echo "[stress-e2e-phase3] starting $NPROC CPU-burn load processes (cap ${LOAD_SECONDS}s)"
+echo "[stress-e2e-phase3] starting $PARALLEL CPU-burn load processes (cap ${LOAD_SECONDS}s)"
 n=0
-while [ "$n" -lt "$NPROC" ]; do
-  timeout "$LOAD_SECONDS" sh -c 'while :; do :; done' &
+while [ "$n" -lt "$PARALLEL" ]; do
+  nice -n 19 timeout "$LOAD_SECONDS" sh -c 'trap - EXIT INT TERM; while :; do :; done' &
   LOAD_PIDS="$LOAD_PIDS $!"
   n=$((n + 1))
 done
 
-echo "[stress-e2e-phase3] starting background cargo test -p task-dispatch --lib load (cap ${LOAD_SECONDS}s)"
-timeout "$LOAD_SECONDS" sh -c '
-  cd "'"$ROOT_DIR"'"
-  while :; do
-    cargo test -p task-dispatch --lib >/dev/null 2>&1 || true
-  done
-' &
-LOAD_PIDS="$LOAD_PIDS $!"
+if [ "${STRESS_E2E_PHASE3_CARGO_LOAD:-0}" = 1 ]; then
+  echo "[stress-e2e-phase3] starting background cargo test -p task-dispatch --lib load (cap ${LOAD_SECONDS}s)"
+  nice -n 19 timeout "$LOAD_SECONDS" sh -c '
+    trap - EXIT INT TERM
+    cd "'"$ROOT_DIR"'"
+    while :; do
+      cargo test -p task-dispatch --lib >/dev/null 2>&1 || true
+    done
+  ' &
+  LOAD_PIDS="$LOAD_PIDS $!"
+else
+  echo "[stress-e2e-phase3] background cargo load disabled (set STRESS_E2E_PHASE3_CARGO_LOAD=1 to enable)"
+fi
 
 echo "[stress-e2e-phase3] building workspace bins (fixture needs target/debug/celeris and celerisctl)"
 cargo build --workspace --bins >"$WORK_DIR/build.log" 2>&1 || {
@@ -64,7 +67,7 @@ echo "[stress-e2e-phase3] running $ITERATIONS serial iterations under load"
 i=1
 while [ "$i" -le "$ITERATIONS" ]; do
   log="$WORK_DIR/serial-$i.log"
-  if cargo test -p e2e --test api_scenarios phase3_ >"$log" 2>&1; then
+  if nice -n 19 cargo test -p e2e --test api_scenarios phase3_ >"$log" 2>&1; then
     echo "[stress-e2e-phase3] serial iteration $i/$ITERATIONS: ok"
   else
     echo "[stress-e2e-phase3] FAIL: serial iteration $i/$ITERATIONS"
@@ -78,7 +81,7 @@ echo "[stress-e2e-phase3] running $PARALLEL concurrent processes under load"
 j=1
 PAR_PIDS=""
 while [ "$j" -le "$PARALLEL" ]; do
-  (cargo test -p e2e --test api_scenarios phase3_ >"$WORK_DIR/parallel-$j.log" 2>&1) &
+  (nice -n 19 cargo test -p e2e --test api_scenarios phase3_ >"$WORK_DIR/parallel-$j.log" 2>&1) &
   PAR_PIDS="$PAR_PIDS $!"
   j=$((j + 1))
 done

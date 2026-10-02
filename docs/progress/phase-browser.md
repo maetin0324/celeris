@@ -156,11 +156,28 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 
 ### fix-stress-build WorkUnit（01M3XSER5YCVRWJTCHP0XGB8AP）での実行結果
 
-`scripts/dev/stress-e2e-phase3.sh` の `--no-run` build の直前に `cargo build --workspace --bins` を追加した。
-前回試行で sandbox が user namespace の作成を拒否したため、最初に `unshare -U -r true` を実行したが、
-`write failed /proc/self/uid_map: Operation not permitted`（exit 1）だった。
+人の介入で共用 host の CPU 負荷を抑えるため、台本の既定を焼き 2 本・300 秒・serial 5 回・parallel 2 本にした。
+並走 e2e 数も `STRESS_E2E_PHASE3_PARALLEL` で指定する。全負荷と e2e は `nice -n 19` で起動し、task-dispatch
+cargo 負荷は既定で無効、必要な場合だけ `STRESS_E2E_PHASE3_CARGO_LOAD=1` で有効にする。background shell の
+`EXIT` trap を明示的に解除し、親が所有する一時 directory を子が消さないようにした。workspace bin の build は
+serial loop より前に行う。
 
-続けて `cargo test -p e2e --test api_scenarios phase3_control` を実行したところ、試験は fixture 起動前に
-`$CARGO_TARGET_DIR/debug/celerisctl not found` で失敗した（cargo exit 101）。従ってこの run では bin を削除した状態からの
-stress 台本実行には進めず、20 serial + 8 parallel の検証結果は得ていない。台本には bin build を追加済みだが、
-この sandbox では ADR-0095 の user namespace が使えないため、引き続き実行環境での再検証が必要。
+検証前の `unshare -U -r true` は `unshare: write failed /proc/self/uid_map: Operation not permitted`（exit 1）。
+指定された一度だけの既定 stress 実行 `time sh scripts/dev/stress-e2e-phase3.sh` は exit 1。workspace bin と e2e
+試験バイナリの build は成功したが、serial 1/5 で fixture の `celeris` が ADR-0095 worker DB guard の namespace
+probe に失敗し、4 件の phase3 試験がすべて起動前に落ちた。user namespace が無効な sandbox では試験結果を得られず、
+重い条件での追加 stress は行っていない。
+
+stress-e2e-phase3 結果: exit 1（serial 0/5、parallel 0、real 17.894s）
+
+### 人に依頼する重い負荷の検証
+
+user namespace が使える専用環境で、焼き本数と時間を増やして一度に検証する。例:
+
+```sh
+STRESS_E2E_PHASE3_PARALLEL=8 STRESS_E2E_PHASE3_LOAD_SECONDS=1800 STRESS_E2E_PHASE3_ITERATIONS=20 time sh scripts/dev/stress-e2e-phase3.sh
+```
+
+`exit 0` と `all 8 concurrent processes: ok` を確認する。必要なら別途 `STRESS_E2E_PHASE3_CARGO_LOAD=1` を付けて
+task-dispatch の cargo 負荷も有効にする。これは CPU を長時間使うため、共用 host では実行せず、専用または空いている
+環境で行う。

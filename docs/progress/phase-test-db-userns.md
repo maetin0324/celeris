@@ -2,16 +2,48 @@
 
 tasks: [01M3YB21F07GQKTRYPRVN184AR]
 
-ADR-0126 の実装（guard-scope / e2e-harness / userns-optin / gate-env / prompt-rule）を worker sandbox（user
-namespace を作れない環境）の中で検証した記録。コードは変更していない。
+ADR-0126 の実装と final review 修正を worker sandbox（user namespace を作れない環境）で検証した記録。
 
-## 前提
+## 初回検証時の記録（履歴。今回の retry 結果は後段）
 
 - main（`7b77f17a`）を `git merge main --no-edit` で取り込んだ。衝突なし（`docs/PROGRESS.md` に 8 行追加のみ）。
   `release 準備失敗の切り分け（0d438ec1）` 節は merge 後も残っている（削除や衝突は起きなかった）。
 - `cargo build -p celeris -p celerisctl` → exit 0（1m02s）。
 
-## 実行コマンドと結果
+当初の検証では以下が通っていた。retry で全 workspace を再実行したところ、`instance_handoff` の通常 daemon 起動が
+一時 DB でも worker run marker を持たないため probe に進み、sandbox の userns 制約で失敗した。したがって初回記録を
+今回の成功根拠として扱わず、下記の retry 結果を採用する。
+
+## Final review 修正の試験
+
+- 本番 DB/token 拒否: `cargo test -p celeris --lib worker_db_guard_refuse_action_never_probes_inside_worker_run` → exit 0
+  （1 passed）。`RefuseProduction` の worker run 内判定で probe closure が呼ばれないことを固定する。
+- e2e の免除経路: `cargo test -p e2e --test api_scenarios worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on`
+  → exit 0（1 passed）。worker marker を通し、`worker_read_only` を false にせず、一時 DB の Exempt 起動ログを確認する。
+- lib 内 userns gate: `cargo test -p task-worker --lib production_action_path_reaches_fixture_through_real_browser_and_egress -- --nocapture`
+  → exit 0（1 passed）。`CELERIS_USERNS_TESTS` 未設定で指定の `SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)` を表示する。
+
+## Retry の検査結果（worker sandbox）
+
+| コマンド | exit | 結果 |
+| --- | ---: | --- |
+| `cargo build --workspace --bins` | 0 | 全 workspace binary build 成功 |
+| `cargo test --workspace` | 101 | `instance_handoff` 8 件中 3 passed / 5 failed。他 test target の全体集計には到達せず |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 | warning 0 件 |
+| `cargo fmt --all -- --check` | 0 | 差分なし |
+
+`instance_handoff` の失敗は `normal_mode_does_not_inject_the_smoke_builtins`、`starting_the_same_release_twice_exits_three`、
+`verify_mode_never_dispatches_and_never_touches_daemon_instances` が一時 DB に対する probe の `Operation not permitted` で失敗。
+`a_newer_release_takes_over_while_the_old_one_finishes_its_run` と `a_stale_heartbeat_promotes_the_standby` も daemon が
+userns probe を通過できず handoff 条件を満たせなかった。これは ADR-0126 A3 の「worker run 内の guard 済み sandbox の
+一時 DB」の免除対象ではなく、通常 daemon は従来どおり userns probe をするためである。既存 `instance_handoff` は WU test
+process に worker marker を渡していない。
+
+`worker_db_guard_refuse_action_never_probes_inside_worker_run`、
+`worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on`、および lib 内 gate の個別試験は pass したが、これらは
+workspace 全試験の成功を代替しない。
+
+## 初回実行コマンドと結果（履歴）
 
 | コマンド | exit | 結果 |
 | --- | ---: | --- |
@@ -37,11 +69,11 @@ namespace を作れない環境）の中で検証した記録。コードは変�
   `browser_restore_deliver.rs`、`browser_injection_wire.rs`、`browser_runtime_supervisor.rs`、
   `browser_injection_attacks.rs`、`browser_shared_cdp.rs`、`browser_cdp_sink.rs`、`browser_h3_wire.rs`、
   `browser_egress_relay.rs`（一覧は [docs/progress/userns-tests.md](userns-tests.md) と一致）。
-- `cargo test --workspace`（nocapture あり/なし）いずれも `0 failed`。再実行は 2 回とも同じ結果（3278 passed / 0
-  failed / 12 ignored）で揺れなし。
+- 当時 `cargo test --workspace`（nocapture あり/なし）は 0 failed と記録した（3278 passed / 0 failed / 12 ignored）。
+  この履歴は後段の retry 失敗により今回の acceptance を満たす証拠ではない。
 
-既知の高負荷 flaky（`task-dispatch` の `cluster_job_wait` / `build_cache`）は今回の `cargo test --workspace` で
-失敗しなかった（単独再実行は不要）。`ignored` の 12 件は手動試験・実クラスタが要る試験（`CELERIS_E2E_SCCACHE` や
+既知の高負荷 flaky（`task-dispatch` の `cluster_job_wait` / `build_cache`）は今回のログでは失敗に含まれなかった。
+`ignored` の 12 件は手動試験・実クラスタが要る試験（`CELERIS_E2E_SCCACHE` や
 `CELERIS_CLUSTER_HOST` 系）で、userns opt-in とは無関係。
 
 ## CELERIS_USERNS_TESTS=1 での実行（userns の使える host で人が行う手順）
@@ -60,8 +92,9 @@ worker sandbox は user namespace を作れないため、本 run では `CELERI
 
 ## 未解決
 
-- 本 run では userns が使える host での `CELERIS_USERNS_TESTS=1` 実行そのものは行っていない（sandbox 制約の
-  ため）。上記手順で人が確認する。
+- 本 run では userns が使える host での `CELERIS_USERNS_TESTS=1` 実行そのものは行っていない（sandbox 制約のため）。
+- retry の acceptance `cargo test --workspace` は未達。`instance_handoff` の5試験が通常 daemon の userns probe 制約で
+  失敗したため、instance 系を worker sandbox で通す条件の整理が必要。
 - `browser_launcher_ptrace.rs` は未作成（[docs/progress/userns-tests.md](userns-tests.md) に既存の既知事項として
   記載済み、本 task の範囲外）。
 

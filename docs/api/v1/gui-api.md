@@ -810,7 +810,7 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 |---|---|---|
 | `root` | — | このタスクの祖先・子孫（`depends_on` と `parent_id` を両方向にたどる）だけ。無いタスクは 404 `task_not_found` |
 | `depth` | 無制限 | `root` からの最大ホップ数 |
-| `include_terminal` | true | false で `done|failed|cancelled` を除く（辺も除く） |
+| `include_terminal` | true | false で `done\|failed\|cancelled` を除く（辺も除く） |
 
 `nodes[] = {id, title, status, kind, parent_id, role}`（`role` は `Task.role`。ノードに役割のラベルを出すための値。役割なしは `null`）、
 `edges[] = {from, to, kind: "depends_on"}`（`from` = 先行、`to` = 後続）。親子は `parent_id` で表し、辺にしない。レイアウトはクライアント。上限 5,000 ノード（超えたら 422 `validation`、`detail` で `root` の指定を促す）。
@@ -918,7 +918,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 `cooldown_until` が過ぎていれば `cooldown_until`・`cooldown_remaining_secs` とも `null`。無認証の読み取り。
 
 - `auth`: `"manual"`（既定）/ `"publickey"` / `"totp"`（ADR-0032 D1）。GUI はこれで「クラスタ」画面の案内を出し分ける
-  （3.39〜3.41、§10）。
+  （3.39〜3.41、§9）。
 - `connect_pending`: GUI 発の接続（`POST /clusters/{id}/connect`）が celeris 側で進行中か（ADR-0032 D5）。
   **プロンプト文字列はここには出さない**（`POST /clusters/{id}/connect` の応答にだけ載る。ADR-0024/0025 の
   「URL とコードは action の戻り値にだけ置く」と同じ規律）。
@@ -3240,7 +3240,7 @@ HTTP 越しの試験は `crates/task-api/tests/`（fake の `SqliteStore` と `t
 
 ---
 
-## 10. 要求の検査と細部の挙動
+## 9. 要求の検査と細部の挙動
 
 GUI はこれを契約として扱ってよい（ADR-0013 の実装メモ）。
 

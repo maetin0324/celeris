@@ -408,3 +408,122 @@ fn a_missing_row_is_registered_again_and_deregister_removes_it() {
     only.deregister();
     assert!(store.instance_list().expect("list").is_empty());
 }
+
+// ADR-0040 付記（2026-10-02）: 昇格の認可の判定。
+
+fn evidence(current: Option<&str>, promoting: Option<(&str, i64)>) -> PromotionEvidence {
+    PromotionEvidence {
+        release_managed: true,
+        current_target: current.map(std::path::PathBuf::from),
+        promoting: promoting.map(|(sha12, started)| {
+            Ok(PromotingMarker {
+                sha12: sha12.into(),
+                started_at: at(started)
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("fmt"),
+            })
+        }),
+    }
+}
+
+#[test]
+fn dev_and_unmanaged_releases_skip_the_promotion_gate() {
+    let ev = evidence(Some("releases/other"), None);
+    assert!(matches!(
+        decide_promotion(DEV_RELEASE, &ev, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+    let unmanaged = PromotionEvidence {
+        release_managed: false,
+        ..ev
+    };
+    assert!(matches!(
+        decide_promotion("abc", &unmanaged, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+}
+
+#[test]
+fn current_pointing_at_the_release_authorizes_by_name() {
+    let ev = evidence(Some("releases/abc"), None);
+    assert!(matches!(
+        decide_promotion("abc", &ev, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    // 名前の比較は最後の要素だけ（`abcd` は `abc` ではない）。
+    let ev = evidence(Some("releases/abcd"), None);
+    assert!(matches!(
+        decide_promotion("abc", &ev, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+}
+
+#[test]
+fn a_fresh_matching_marker_authorizes_and_stale_or_foreign_ones_do_not() {
+    let fresh = evidence(Some("releases/old"), Some(("abc", -10)));
+    assert!(matches!(
+        decide_promotion("abc", &fresh, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let edge = evidence(None, Some(("abc", -PROMOTING_MAX_AGE_SECS)));
+    assert!(matches!(
+        decide_promotion("abc", &edge, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let stale = evidence(
+        Some("releases/old"),
+        Some(("abc", -PROMOTING_MAX_AGE_SECS - 1)),
+    );
+    assert!(matches!(
+        decide_promotion("abc", &stale, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+    let future = evidence(None, Some(("abc", PROMOTING_MAX_AGE_SECS + 1)));
+    assert!(matches!(
+        decide_promotion("abc", &future, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+    let foreign = evidence(Some("releases/old"), Some(("xyz", -10)));
+    assert!(matches!(
+        decide_promotion("abc", &foreign, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+    let broken = PromotionEvidence {
+        promoting: Some(Err("bad json".into())),
+        ..evidence(None, None)
+    };
+    match decide_promotion("abc", &broken, at(0)) {
+        PromotionGate::Rejected(reason) => assert!(reason.contains("bad json"), "{reason}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn read_promotion_evidence_reads_current_and_the_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let releases = dir.path().join("releases");
+    std::fs::create_dir_all(releases.join("abc")).expect("mkdir");
+    std::os::unix::fs::symlink("releases/abc", dir.path().join("current")).expect("symlink");
+    std::fs::write(
+        releases.join("abc").join(PROMOTING_FILE),
+        r#"{"sha12":"abc","script":"promote.sh","mode":"live","pid":1,"started_at":"2026-10-02T00:00:00Z"}"#,
+    )
+    .expect("write");
+    let ev = read_promotion_evidence(&releases, "abc");
+    assert!(ev.release_managed);
+    assert_eq!(
+        ev.current_target.as_deref(),
+        Some(std::path::Path::new("releases/abc"))
+    );
+    assert_eq!(
+        ev.promoting,
+        Some(Ok(PromotingMarker {
+            sha12: "abc".into(),
+            started_at: "2026-10-02T00:00:00Z".into()
+        }))
+    );
+    // 管理外の名前は印を読まない。
+    let other = read_promotion_evidence(&releases, "zzz");
+    assert!(!other.release_managed);
+    assert_eq!(other.promoting, None);
+}

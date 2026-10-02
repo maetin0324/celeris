@@ -42,6 +42,8 @@ pub mod execution_gate;
 pub mod execution_metrics;
 /// ADR-0072（Phase E2）: ExecutionPlan / WorkUnit のデータモデルと決定的な scheduler の純粋な型と関数。
 pub mod execution_plan;
+/// ADR-0133 D3: 通知（アプリ内の知らせ。既読と束ね）。`notify`（外部への送り出し）とは別。
+pub mod feed;
 /// ADR-0046 D3（Phase 59）: ハーネス = 実行契約（`[[harnesses]]`。旧 `[[genres]]` + `[[roles]]`）。
 pub mod harness;
 /// ADR-0040 D4（Phase 47）: celeris のインスタンスの役割（`daemon_instances`）。
@@ -148,6 +150,10 @@ pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingP
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
 pub use node_session::{NodeSession, NodeSessionStore, SessionKind};
 // ---- ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証とログ ----
+pub use feed::{
+    Notice, NoticeEvent, NoticeId, NoticeKind, NoticeLink, NoticePage, NoticeQuery,
+    NoticeRecordOutcome, NoticeStore, NoticeTarget, NoticeUnreadCount,
+};
 pub use mcp::{
     McpCall, McpCallStore, McpClient, McpClientStore, McpScope, scopes_from_string,
     scopes_to_string,

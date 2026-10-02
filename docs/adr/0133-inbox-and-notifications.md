@@ -187,6 +187,12 @@ CREATE TABLE feed_sources (               -- 冪等: 1 出来事は 1 回だけ�
 CREATE TABLE feed_cursor (name TEXT PRIMARY KEY, value TEXT NOT NULL);  -- 走査位置（events の seq 等）
 ```
 
+付記（notify-store 葉、2026-10-02）: 実装時の再走査で 0038（work_unit_sessions）・0039（cron_jobs・write_sets）が
+他ブランチで使用中だったので `0040_feed_notices.sql`（版数 40）にした。版数の飛びを許すため、
+`task_core::store::migrations::RESERVED_VERSIONS = [38, 39]` を置き、`migrate` は「記録の無い版数を順に当てる」
+（予約は飛ばし記録しない）形にした。記録が連続する DB では従来と同じ。統合で本物の 0038/0039 が入ったら
+予約から外せば、版数 40 の DB にも後から当たる。表には対象（`target_kind`・`target_id`）の列を足した。
+
 `feed_sources` の挿入と束の `count` の加算は同じ transaction で行う（daemon の再起動・二重走査で数が
 増えない）。保持は既読から 30 日で削除（daemon の既存 GC の段で）。
 

@@ -266,7 +266,7 @@ async fn parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_wh
     let s = store.clone();
     let id = task.id;
     assert!(
-        run_until(&mut d, 800, || s
+        run_until_state(&mut d, || s
             .get(id)
             .ok()
             .flatten()
@@ -322,21 +322,19 @@ async fn parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_wh
 
     // done の WU の target は消える（rename は tick の中、中身の削除は別スレッド）。
     assert!(
-        run_until(&mut d, 200, || expected.values().all(|p| !p.exists())).await,
+        run_until_state(&mut d, || expected.values().all(|p| !p.exists())).await,
         "done の WU の target が残っている"
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while std::fs::read_dir(&repo_target)
-        .map(|rd| {
-            rd.flatten()
-                .any(|e| e.file_name().to_string_lossy().starts_with(".deleting-"))
-        })
-        .unwrap_or(false)
-        && Instant::now() < deadline
-    {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        d.tick().unwrap();
-    }
+    // 中身の削除（別スレッド）の完了を待つ。残っていれば下の assert が中身を示す。
+    run_until_state(&mut d, || {
+        !std::fs::read_dir(&repo_target)
+            .map(|rd| {
+                rd.flatten()
+                    .any(|e| e.file_name().to_string_lossy().starts_with(".deleting-"))
+            })
+            .unwrap_or(false)
+    })
+    .await;
     let left: Vec<String> = std::fs::read_dir(&repo_target)
         .map(|rd| {
             rd.flatten()
@@ -395,7 +393,7 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
     let s = store.clone();
     let id = task.id;
     assert!(
-        run_until(&mut d, 800, || s
+        run_until_state(&mut d, || s
             .get(id)
             .ok()
             .flatten()
@@ -485,8 +483,18 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
         None,
     );
     let settings = scratch_on(&mut d, scratch_dir.path());
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    let s = store.clone();
+    let id = task.id;
+    assert!(
+        run_until_state(&mut d, || s
+            .get(id)
+            .ok()
+            .flatten()
+            .is_some_and(|t| t.status == Status::Done))
+        .await,
+        "{:?}",
+        events_of(&store, task.id)
+    );
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     let owner = task_worker::scratch::Owner::task(task.id.to_string());

@@ -1,5 +1,7 @@
 # PROGRESS — taskd
 
+- 2026-10-02: phase3 control flaky 再実行は ADR-0095 の user namespace 拒否で `cargo test --workspace` と `api_scenarios` が失敗、clippy は pass。詳細は [phase-R.md](progress/phase-R.md)。
+
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
 ## 試験で CPU を焼く負荷をかけない規則（2026-10-02、task 01M3Y4AV7801NSXB6FD698QZHW、WorkUnit rule-docs）

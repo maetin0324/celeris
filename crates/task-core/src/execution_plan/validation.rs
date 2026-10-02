@@ -306,6 +306,10 @@ pub enum PlanValidationError {
         key: String,
         stage: Option<String>,
     },
+    /// ADR-0079 付記「R7-12」D3: daemon の足した生きた WU（配送 / 最終レビュー / 統合の repair WU）の key を計画に書いた。
+    DaemonAddedKeyReused {
+        key: String,
+    },
     /// この深さの task の計画は kind task の unit を持てない（U-R1: `depth < max_depth` のときだけ）。
     ChildTaskTooDeep {
         key: String,
@@ -620,6 +624,10 @@ impl std::fmt::Display for PlanValidationError {
             } => write!(
                 f,
                 "stage key {stage:?} was used by a stage removed in an earlier plan version (its integration work unit {key} is superseded) and cannot be reused; choose a new stage key（前の版で消した段階の key は再利用できない。新しい段階の key を選ぶこと。ADR-0079 R7-3）"
+            ),
+            PlanValidationError::DaemonAddedKeyReused { key } => write!(
+                f,
+                "work unit key {key:?} belongs to a work unit the daemon added (a delivery / final-review / integration repair work unit, not in the plan); do not write it — the daemon carries it over（{key} は daemon が足した WU〈計画に無い repair WU〉なので計画に書かない。daemon が持ち越す。ADR-0079 R7-12）"
             ),
             PlanValidationError::ChildTaskTooDeep {
                 key,

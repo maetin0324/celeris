@@ -131,7 +131,18 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
         &worker_db_guard_daemon_paths(config),
         &marker,
     );
-    let guard = enforce_worker_db_guard(config, &decision, probe_worker_db_guard)?;
+    let mut guard = enforce_worker_db_guard(config, &decision, probe_worker_db_guard)?;
+    if guard.is_none() && !marker_present(&marker) {
+        // 付記2 の 2: 本番に当たらない daemon は userns を要求しない。ただし worker run の外（印なし）で
+        // userns が使えるなら guard を入れる（失敗しても起動は止めない）。
+        guard = match probe_worker_db_guard(config) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                tracing::warn!(error = %e, "worker db guard unavailable for a non-production daemon; running without it (ADR-0126 addendum 2)");
+                None
+            }
+        };
+    }
     task_worker::db_guard::install(guard);
     Ok(())
 }

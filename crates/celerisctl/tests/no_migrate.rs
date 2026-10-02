@@ -53,10 +53,10 @@ fn db_at(dir: &Path, version: u32) -> PathBuf {
     // `version` が SCHEMA_VERSION を超えるとき・task-core の予約版数（ADR-0133 D3.2）のときも、
     // DB の版数がちょうど `version` になるように記録する。
     conn.execute(
-            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, '2026-09-30T22:37:52Z')",
-            [version],
-        )
-        .unwrap_or_else(|e| panic!("insert: {e}"));
+        "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, '2026-09-30T22:37:52Z')",
+        [version],
+    )
+    .unwrap_or_else(|e| panic!("insert: {e}"));
     db
 }
 

@@ -192,6 +192,9 @@ CREATE TABLE feed_cursor (name TEXT PRIMARY KEY, value TEXT NOT NULL);  -- 走�
 `task_core::store::migrations::RESERVED_VERSIONS = [38, 39]` を置き、`migrate` は「記録の無い版数を順に当てる」
 （予約は飛ばし記録しない）形にした。記録が連続する DB では従来と同じ。統合で本物の 0038/0039 が入ったら
 予約から外せば、版数 40 の DB にも後から当たる。表には対象（`target_kind`・`target_id`）の列を足した。
+DB の版数は従来どおり `MAX(version)` で読む（`open_client` の古い・新しいの判定も同じ）。予約版数は記録されないので、
+試験で「版数 N の DB」を作るとき（`crates/celerisctl/tests/no_migrate.rs` の `db_at`、`SCHEMA_VERSION - 1` = 39 は予約）は
+`N` より大きい記録を消してから `INSERT OR IGNORE` で `N` を記録する。
 
 `feed_sources` の挿入と束の `count` の加算は同じ transaction で行う（daemon の再起動・二重走査で数が
 増えない）。保持は既読から 30 日で削除（daemon の既存 GC の段で）。

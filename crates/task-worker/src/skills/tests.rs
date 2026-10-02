@@ -429,6 +429,29 @@ async fn skills_switches_destinations_and_reads_legacy_marker() {
 }
 
 #[tokio::test]
+async fn skills_switch_conflict_preserves_the_previous_delivery() {
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "shared", "d", "");
+    let cwd = tempfile::tempdir().unwrap();
+    deliver_claude_code(cwd.path(), std::slice::from_ref(&mount))
+        .await
+        .unwrap();
+    let human = cwd.path().join(".agents/skills/shared");
+    std::fs::create_dir_all(&human).unwrap();
+    std::fs::write(human.join("SKILL.md"), "human").unwrap();
+
+    let error = deliver_agent_skills(cwd.path(), &[mount])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(cwd.path().join(".claude/skills/shared/SKILL.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(human.join("SKILL.md")).unwrap(),
+        "human"
+    );
+}
+
+#[tokio::test]
 async fn skills_marker_ignore_is_idempotent_and_preserves_existing_lines() {
     let cwd = tempfile::tempdir().unwrap();
     let dir = cwd.path().join(".celeris");

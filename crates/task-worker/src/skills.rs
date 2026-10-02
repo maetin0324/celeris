@@ -253,6 +253,25 @@ async fn deliver_to(cwd: &Path, root: &str, skills: &[SkillMount]) -> std::io::R
     if copies.is_empty() && skills.is_empty() && marker.roots.is_empty() {
         return Ok(());
     }
+    // 先に衝突を確認する。アダプタ切替時に人の同名ディレクトリがある場合、
+    // 古い届け先を消してから失敗すると利用可能だった skill まで失われる。
+    if root == AGENTS_ROOT {
+        for mount in skills {
+            let dest = cwd.join(root).join(&mount.name);
+            if tokio::fs::symlink_metadata(&dest).await.is_ok()
+                && !owned_copy(&dest).await
+                && !marker
+                    .roots
+                    .get(root)
+                    .is_some_and(|names| names.contains(&mount.name))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "unowned skill directory already exists",
+                ));
+            }
+        }
+    }
     for (old_root, name) in copies {
         if old_root == root && names.contains(&name) {
             continue;
@@ -271,18 +290,6 @@ async fn deliver_to(cwd: &Path, root: &str, skills: &[SkillMount]) -> std::io::R
         for mount in skills {
             let dest = target_root.join(&mount.name);
             if tokio::fs::symlink_metadata(&dest).await.is_ok() {
-                if root == AGENTS_ROOT
-                    && !owned_copy(&dest).await
-                    && !marker
-                        .roots
-                        .get(root)
-                        .is_some_and(|names| names.contains(&mount.name))
-                {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
-                        "unowned skill directory already exists",
-                    ));
-                }
                 tokio::fs::remove_dir_all(&dest).await?;
             }
             copy_dir(Path::new(&mount.path), &dest).await?;

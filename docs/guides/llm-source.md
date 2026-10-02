@@ -17,7 +17,7 @@ celeris は `[llm_proxy]` を有効にすると、`127.0.0.1:18100`（既定）�
   供給元の接頭辞（`claude` / `gpt` / `qwen`）を明示したときだけ許す。
 
 tier → 具体モデルの写像は `[llm_proxy.models]`。既定値は 2026-09-24 に CLI を実際に実行して確認した
-ID（ADR-0069 Phase 118 D2。`docs/adr/0069-routing-four-layers.md` Phase 118 追記に実測の経緯がある）:
+ID（ADR-0069 Phase 118 D2。`agent-docs/adr/0069-routing-four-layers.md` Phase 118 追記に実測の経緯がある）:
 claude は frontier=`claude-fable-5-1` / standard=`claude-opus-5-5` / cheap=`claude-sonnet-5`、
 gpt は frontier=`gpt-6-astra` / standard=`gpt-6-sol` / cheap=`gpt-6-luna`。運用側の実際のプラン・
 契約で使えるモデルが違えば `[llm_proxy.models]` で上書きすること。
@@ -62,7 +62,7 @@ GPT-6 の ID は `docs/` と `config/` にあるが、単価の根拠はない�
 ### codex-oauth の要求形（Phase 65b 追記）
 
 本番で `gpt/*`（codex-oauth）経由の要求が全て 0.4 秒以内に `400 {"error":{"message":"upstream error","type":"upstream_error"}}`
-で落ちる事故があった（2026-09-21。`docs/adr/0053-llm-source-proxy.md` の Phase 65b 追記）。原因は
+で落ちる事故があった（2026-09-21。`agent-docs/adr/0053-llm-source-proxy.md` の Phase 65b 追記）。原因は
 ChatGPT の Codex backend（`https://chatgpt.com/backend-api/codex/responses`）が Codex CLI
 （`codex-rs`）と違う形の要求を拒否すること。この層は Codex CLI と同じ形で送る:
 
@@ -143,7 +143,7 @@ ChatGPT の Codex backend（`https://chatgpt.com/backend-api/codex/responses`）
 （先頭で「選んだ」ことは記録されるが、行そのものは完了後）。
 
 `GET /llm/sources`（主 API、`/api/v1/llm/sources`。ADR-0053 D4）が、供給元ごとの到達性・アカウントの
-残量・cooldown・直近 1 時間の要求/token 数を返す（GUI の表示は Phase 66。ここでは API と型だけ）。
+残量・cooldown・直近 1 時間の要求/token 数を返し、GUI の「アカウント」画面の LLM source 節にも表示する。
 
 ## 5. 設定
 
@@ -179,7 +179,7 @@ standard = "claude-sonnet-5"
 |---|---|---|
 | `paperqa-qwen` | `config/celeris.research.example.toml` | `[adapters.paperqa].env`: `OPENAI_BASE_URL` → `http://127.0.0.1:18100/v1`、`OPENAI_API_KEY` → `[api] token_file` と同じ値。`model = "openai/celeris/standard"` |
 | `ldr-qwen` | `config/celeris.web-research.example.toml` | `[adapters.local_deep_research.settings]`: `llm.openai_endpoint.url` → プロキシ、`llm.openai_endpoint.api_key` → 同上、`llm.model = "celeris/cheap"`。`[[providers]] model = "celeris/cheap"` |
-| `langmem-main` | `config/celeris.example.toml`（`[knowledge.langmem]`）、`docs/knowledge.md` | `base_url` → プロキシ、`model = "celeris/cheap"` |
+| `langmem-main` | `config/celeris.example.toml`（`[knowledge.langmem]`）、`docs/guides/knowledge.md` | `base_url` → プロキシ、`model = "celeris/cheap"` |
 | `opencode-qwen` | `config/celeris.acp-opencode.example.toml` | **コメントで手順を示すのみ**（下の §7 を参照。実機で opencode の provider/model の区切り方を確認できていないため、既定は直接 Qwen のまま） |
 
 いずれも Qwen が生きていれば従来どおり Qwen、落ちていれば自動で Claude / GPT のアカウントプールに
@@ -222,7 +222,7 @@ bearer トークン（`[api] token_file` の中身）が必要。直接 Qwen を
 コメントで参照するだけにした**（ADR-0053 D1/D2 の受け入れ条件「too hard なら明示的に無効のまま出す」
 に従った判断）。
 
-## 8. 本番の運用手順（PROGRESS.md にも同じ内容を記録）
+## 8. 本番の運用手順
 
 1. `[llm_proxy]` を有効化（`[llm_proxy.sources.claude_oauth]` / `codex_oauth` を追加するか、
    既存の Qwen 中継を `[[llm_proxy.sources.openai_compatible]]` として登録）。`POST /reload` では
@@ -256,4 +256,4 @@ bearer トークン（`[api] token_file` の中身）が必要。直接 Qwen を
   取り出しはしない。ログの `prompt_tokens`/`completion_tokens` は relay の stream では `null`）。
 - アカウントの同時実行カウント（`IN_USE_PENALTY` の分母）は、このプロキシ内の同時要求だけで数える
   （CLI ワーカーの `in_use` とは別枠。cooldown・観測値は共有するが、公平性の計算は共有していない）。
-- D3（切れにくい Qwen トンネル）・D4（GUI の「LLM source」節）は Phase 66。
+- Qwen トンネルの操作は GUI のクラスタ画面、供給元の状態はアカウント画面で確認する。

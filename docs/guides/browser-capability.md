@@ -1,18 +1,18 @@
-# Browser capability: Phase 1 運用と動作確認
+# Browser capability の使い方
 
 ---
 tasks: [01M3MBV3AKXZGEG5RXR60XC62J, 01M3MFS5T52FXA63W4V10XGC4S]
 ---
 
 Celeris は OpenCode（ACP）または Claude Code に agent-browser CLI を渡す。
-設計は [ADR-0078](adr/0078-browser-execution-capability.md)。Phase 1 は公開・未認証サイト専用である。
+設計は [ADR-0078](../../agent-docs/adr/0078-browser-execution-capability.md)。公開ページの操作を扱う。資格情報を使う場合は別途 browser policy と [credential broker](browser-credentiald.md) の条件を満たす。
 DOM 操作・クリック戦略・ブラウザの画面転送は agent-browser が担当する。
 
 ## 導入
 
 worker と同じ実行ユーザーの PATH に **agent-browser 0.38.1** と Python 3 を配置する。
 バージョン不一致・未導入は worker を開始せず失敗する。Chromium は upstream の導入手順で用意する。
-OpenCode は既存 [ACP 設定例](../config/celeris.acp-opencode.example.toml) を使う。
+OpenCode は既存 [ACP 設定例](../../config/celeris.acp-opencode.example.toml) を使う。
 OpenCode の project config を無効化し、Celeris 管理の設定を適用する。
 
 ```sh
@@ -36,7 +36,7 @@ agent-browser --version
 
 `allowed_domains` は必須で空を許さない。navigation と subresource に同じ集合を適用するため、
 必要な CDN も明示する。task が書いたページ上の指示や URL から grant は増やさない。
-`live_view_url` は省略可能だが、省略すると GUI はリンクを表示しない。
+`live_view_url` は省略可能だが、省略すると GUI はリンクを表示しない。利用者に生の dashboard URL は渡さない。
 
 task の作成時に `skills: ["browser-enabled"]` と既存 `genre: "coding"` を指定する。
 adapter を省略すると ACP/OpenCode、`adapter: "claude-code"` を明示すると同じ capability を Claude Code に渡す。
@@ -47,24 +47,11 @@ capability の実行には通常の dispatcher 経路を使う。
 
 ## Live View
 
-以下は Phase 1 の導入記録。Phase 2 の GUI では [本人専用の読み取り専用 relay](browser-live-relay.md) を使い、dashboard の公開 proxy や token fragment URL は使わない。
-
-同じ OS ユーザー・runtime 環境で operator が dashboard を起動する。
-
-```sh
-AGENT_BROWSER_NAMESPACE=celeris agent-browser dashboard start \
-  --port 4848 --allowed-origins https://browser.example.org
-```
-
-dashboard は loopback bind のままとし、認証付き HTTPS reverse proxy を管理者が設置する。
-初回 dashboard token の fragment URL は人だけがブラウザで使う。token を profile、task、イベント、
-モデルへのプロンプトへ貼らない。保存する `live_view_url` は上記の通常 URL だけである。
-proxy は WebSocket を扱い、認証情報・Cookie をアクセスログへ出さない。Celeris API token は転送しない。
-
-task 概要または run 詳細の **Open Browser Live View** から既存画面を開き、表示された session ID を選ぶ。
-この dashboard は **同じ namespace の全 session を扱う管理者用画面**であり、task ごとの ACL は提供しない。
-共有利用者に公開する前に Phase 3 の認可付き proxy が必要である。
-完了・取消・停止済み run ではリンクを無効にする。browser 自体は最初の操作で遅延起動される。
+GUI の task/run 詳細にある **Open Browser Live View** は、認証済みの本人にだけ
+同一 origin の `/browser/live/{task_id}/{run_id}` を開く。実行中の run、本人登録、
+読み取り専用 relay の設定が必要で、認証を扱う区間では表示を止める。
+`live_view_url` は表示の可否にだけ使い、dashboard の生 URL を利用者へ渡さない。
+実装は `gui/app/celeris/browser-live.server.ts` と `gui/app/components/BrowserRunsPanel.tsx`。
 
 ## Worker の利用範囲
 
@@ -83,17 +70,15 @@ python3 <managed-cli> close
 
 URL の userinfo/query/fragment、任意 selector/flags/path、fill/auth/cookies/storage/eval/CDP は渡せない。
 run の session は task/run ID に束縛され、retry と並列 WU は別 session。auth state は復元しない。
-認証や承認が必要になったら既存 result.json の question 経路へ戻り、browser は閉じる。
-Phase 1 の `WAITING_FOR_HUMAN` は live session の維持を意味しない。
+資格情報を使う要求は [credential broker](browser-credentiald.md) の policy と承認経路で扱う。通常の browser 操作から grant を増やすことはできない。
 
 ブラウザの操作ログは操作名と成否だけ。汎用 harness の tool input/output/comment/自動申告 artifact は
 browser run では監査へ流さず、raw stdout/stderr のファイル記録も無効化する。
 スクリーンショット・抽出 JSON・download は task の実際の artifacts_dir 配下へ保存し登録する。
 Web content は untrusted data。**公開ページにも秘密が含まれる可能性があり、任意ページやモデルの最終文を
-一般に secret-free にする機能ではない。** 認証済みサイト・秘密を含む業務データには使わない。
+一般に secret-free にする機能ではない。** 認証済みサイト・秘密を含む業務データは、credential policy と H3 の適合条件を満たす場合に限る。
 
-同じ UID の shell worker はラッパーや policy を変更できる。この MVP を悪意ある worker に対する隔離とみなさない。
-強い境界は Phase 4 の container/別 UID/egress firewall とする。正常終了・cancel では session 固有 close、
+同じ UID の shell worker はラッパーや policy を変更できる。browser の隔離は実行時の backend と conformance record に依存する。正常終了・cancel では session 固有 close、
 crash 時の残留には upstream idle timeout（5分）も指定する。close 失敗は FAILED として報告する。
 
 ## 再現可能な検証
@@ -122,16 +107,8 @@ release/verify は指定 worktree の full SHA を渡し、gate.json / verify.js
 ADR-0041 により旧 `self/<task-id>` 規約は Celeris が用意した task branch に置き換わっている。
 本番へ昇格するのは人の GUI 操作だけである。
 
-## 後続機能との境界
+## 対応範囲
 
-[ADR-0078 D3〜D7](adr/0078-browser-execution-capability.md) の durable wait、
-`celeris-credentiald` / `CredentialProvider`、task policy の細分化、persistent identity、
-GUI の pause/takeover/resume/stop、container + egress は後続設計であり、Phase 1 の設定項目ではない。
-WAITING_FOR_AUTH / WAITING_FOR_APPROVAL は現在は予約 state で、認証用 lease を発行しない。
-将来の直接表示では frame/status/tabs/url/console と Celeris の監査 event feed を区別する。
-Browser Use backend の互換性は未確認であり、現行 routing の選択肢には加えない。
-
-upstream の skill には auth、restore、eval 等の例があるが、MVP は上記 managed CLI のみを使う。
-agent-browser の `chat` や dashboard AI Chat を task harness の代わりとして有効化しない。
-0.38.1 の配布物の同梱文書と CLI を確認したことは、native Rust 本体の再現ビルドや
-ブラウザ通信の完全な隔離を検証したことを意味しない。版更新時には禁止操作の負例を再検証する。
+認証情報の登録・承認と現在の制限は [credential broker](browser-credentiald.md) を参照。
+Browser Use backend の互換性は未確認で、現行 routing の選択肢には含まない。
+upstream の skill にある auth、restore、eval の例は managed CLI の許可を広げない。

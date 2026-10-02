@@ -76,7 +76,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
 - `celerisctl mcp client ls` — 一覧（id / name / scopes / last_used_at。トークンは出ない）。
 - `celerisctl mcp client revoke <id>` — 失効（以後そのトークンは使えない。`--no-token` の客も失効できる
   ので、`auth = "none"` の口を一時的に止めたいときにも使える）。
-- トークンの値は**ログ・応答・`docs/PROGRESS.md` のどこにも出さない**（celeris 側の DB にはハッシュ
+- トークンの値は**ログ・応答・`agent-docs/PROGRESS.md` のどこにも出さない**（celeris 側の DB にはハッシュ
   （SHA-256）だけが残る）。
 
 ## 4. スコープ
@@ -108,7 +108,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
   `knowledge_get { path }`（`_retired` は not_found）、
   `knowledge_propose { title, body, scope, path?, op?, tags?, sources?, confidence? }`（`_inbox` に置く。出典に
   `mcp:<client_id>` を必ず足す。秘密を含む本文は拒否）。
-  - **置き場のガード**（Phase K-1。`docs/knowledge.md` §2.1。`celerisctl knowledge record` と知識整理 run と
+  - **置き場のガード**（Phase K-1。`docs/guides/knowledge.md` §2.1。`celerisctl knowledge record` と知識整理 run と
     同じ関数）: `scope` は `user` / `environment` / `experience` / `project:<slug>`。**案件 ID を渡すと
     slug に直す**（`project:01M2…` → `project:agent-platform`）。知らない案件・`environment/` 直下・ULID の段・
     scope と `path` の食い違い・日本語だけの題名で `path` が無い、は `-32002 rejected` で、`message` に
@@ -175,7 +175,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
   `skills_mounts` / `harnesses` / `model` / `policy` / `run` だけ反映される。`tools` / `permissions` /
   `review` を送っても**無視される**）、`org_mount_skill { node_id, skill }` /
   `org_unmount_skill { node_id, skill }`。
-- **skills**（KB の `skills/<name>/SKILL.md`。Phase 79 で run に届く。Phase 78 では置き場だけ）:
+- **skills**（KB の `skills/<name>/SKILL.md`。mount された skill が run に届く）:
   `skills_list {}`、`skills_get { name }`、
   `skills_put { name, skill_md, files? }`（frontmatter に `name` / `description` 必須。名前は
   `[a-z0-9-]{1,64}`。出典 `mcp:<client_id>` を frontmatter に残す。mount されるまで何にも効かない）。
@@ -193,7 +193,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
   書かない。
 - クライアントごとに 1 分あたり `[mcp] rate_limit_per_min`（既定 60）。超えたら JSON-RPC エラー
   `-32000` + `data.retry_after`（秒）。
-- 管理 API（`docs/gui/api.md` §3.110〜3.111）: `GET /mcp/clients`（トークンは出ない）、
+- 管理 API（`docs/api/v1/gui-api.md` §3.110〜3.111）: `GET /mcp/clients`（トークンは出ない）、
   `GET /mcp/calls?client=`（直近 100 件）。
 
 ## 7. 接続手順
@@ -221,9 +221,7 @@ $ claude mcp add --transport http celeris http://127.0.0.1:18200/mcp \
     --header "Authorization: Bearer <celerisctl mcp client add で出たトークン>"
 ```
 
-（Claude Code CLI のバージョンによってフラグ名が変わることがある。`claude mcp add --help` で確認。
-このセッションでは実機の Claude Code CLI での検証はできていない — ADR-0009 P-34、`docs/PROGRESS.md`
-の実機節を参照）。
+（CLI のフラグは `claude mcp add --help` で確認する）。
 
 ### 7.3 Codex（`mcp_servers` 設定）
 
@@ -235,7 +233,7 @@ url = "http://127.0.0.1:18200/mcp"
 headers = { Authorization = "Bearer <トークン>" }
 ```
 
-（キー名は Codex CLI のバージョンに依存する。この設定例も実機未検証）。
+（設定のキーは手元の Codex CLI の設定資料で確認する）。
 
 ### 7.4 stdio ↔ HTTP の橋（`celerisctl mcp stdio`）
 
@@ -342,48 +340,3 @@ $ celeris-chat task_comment '{"id":"<task ulid>","text":"見ました。続け�
 この口は使わない（`chatgpt-rdc` から `18201` を直接叩けてしまうと、§8.2 で絞った scope を素通りして
 `chatgpt`（Secure MCP tunnel 用）のクライアントとして振る舞えてしまう）。RDC 経由は必ず `auth =
 "token"` の口（§2 の 18200）と、§8.2 で絞った専用クライアント（`chatgpt-rdc`）のトークンを使うこと。
-
-## 9. 実機での確認手順（このセッションでは未実施。ADR-0009 P-34）
-
-```
-$ celerisctl --db ~/.local/celeris/celeris.sqlite3 mcp client add chatgpt
-
-$ TOKEN=<上で出たトークン>
-$ curl -sS -X POST http://127.0.0.1:18200/mcp \
-    -H "content-type: application/json" -H "authorization: Bearer $TOKEN" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' -D -
-# Mcp-Session-Id: <セッション id> がヘッダに出る
-
-$ SESSION=<上のヘッダの値>
-$ curl -sS -X POST http://127.0.0.1:18200/mcp \
-    -H "content-type: application/json" -H "authorization: Bearer $TOKEN" \
-    -H "mcp-session-id: $SESSION" \
-    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-
-$ curl -sS -X POST http://127.0.0.1:18200/mcp \
-    -H "content-type: application/json" -H "authorization: Bearer $TOKEN" \
-    -H "mcp-session-id: $SESSION" \
-    -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
-          "name":"knowledge_propose",
-          "arguments":{"title":"test","body":"実機確認","scope":"experience"}
-        }}'
-# 応答の content[0].text の JSON に "path": "_inbox/...md" が入る
-
-$ curl -sS -X POST http://127.0.0.1:18200/mcp \
-    -H "content-type: application/json" -H "authorization: Bearer $TOKEN" \
-    -H "mcp-session-id: $SESSION" \
-    -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
-          "name":"console_instruct",
-          "arguments":{"text":"実機確認: 今の時刻を一言で答えて"}
-        }}'
-# task_id を控え、CoS が返事するまで数十秒待ってから:
-$ curl -sS -X POST http://127.0.0.1:18200/mcp \
-    -H "content-type: application/json" -H "authorization: Bearer $TOKEN" \
-    -H "mcp-session-id: $SESSION" \
-    -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
-          "name":"console_reply",
-          "arguments":{"task_id":"<上の task_id>","wait_secs":30}
-        }}'
-```
-
-結果は `docs/PROGRESS.md` の Phase 78 節に追記する（トークンの値は書かない）。

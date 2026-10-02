@@ -579,3 +579,58 @@ fn registry_rejects_path_like_session_ids_and_writes_private_files() {
         .mode();
     assert_eq!(dmode & 0o777, 0o700);
 }
+
+/// 1 要求を読み、決めた生の応答 body を 1 個返す偽 launcher（版ずれの再現用）。
+fn reply_once(body: &'static [u8]) -> (tempfile::TempDir, PathBuf, std::thread::JoinHandle<()>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("skew.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    let handle = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().expect("accept");
+        read_frame(&mut s, DEFAULT_MAX_FRAME).expect("read request");
+        write_frame(&mut s, body, DEFAULT_MAX_FRAME).expect("write response");
+    });
+    (dir, sock, handle)
+}
+
+#[test]
+fn version_skewed_response_is_protocol_with_raw_json() {
+    // 新しい launcher が足した欄（deny_unknown_fields で読めない）を診断に出す。
+    let (_dir, sock, handle) =
+        reply_once(br#"{"type":"error","code":"limit","detail":"from a newer launcher"}"#);
+    let r = connect(&sock).start_session("t1", "r1", "l1", policy(60));
+    handle.join().expect("server");
+    match r {
+        Err(ClientError::Protocol(diag)) => {
+            assert!(diag.contains("unknown field"), "{diag}");
+            assert!(
+                diag.contains(r#""detail":"from a newer launcher""#),
+                "{diag}"
+            );
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
+}
+
+#[test]
+fn error_response_stays_remote_code_and_wrong_kind_is_named() {
+    let (_dir, sock, handle) = reply_once(br#"{"type":"error","code":"isolation_failed"}"#);
+    let r = connect(&sock).start_session("t1", "r1", "l1", policy(60));
+    handle.join().expect("server");
+    assert!(
+        matches!(r, Err(ClientError::Remote(ErrorCode::IsolationFailed))),
+        "{r:?}"
+    );
+
+    let (_dir, sock, handle) = reply_once(
+        br#"{"type":"stopped","receipt":{"session_id":"s1","instance_id":"i1","outcome":"stopped","at_unix_ms":1,"isolation_ok":true}}"#,
+    );
+    let r = connect(&sock).start_session("t1", "r1", "l1", policy(60));
+    handle.join().expect("server");
+    match r {
+        Err(ClientError::Protocol(diag)) => {
+            assert!(diag.contains("expected a started response"), "{diag}")
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
+}

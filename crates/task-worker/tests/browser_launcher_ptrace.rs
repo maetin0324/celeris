@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 use nix::libc;
 use task_worker::browser::verify_launcher_observation;
-use task_worker::browser_launcher::{LauncherClient, Outcome, SessionPolicy, SessionState};
+use task_worker::browser_launcher::{
+    ClientError, ErrorCode, LauncherClient, Outcome, SessionPolicy, SessionState,
+};
 
 const DEFAULT_SOCKET: &str = "/run/celeris-browser/launcher.sock";
 
@@ -22,6 +24,20 @@ fn missing(reason: impl AsRef<str>) -> bool {
     }
     eprintln!("SKIPPED (not passed): {}", reason.as_ref());
     true
+}
+
+/// host の launcher が試験と組めない（protocol の版ずれ・試験の要求の拒否）なら、その理由。
+/// `IsolationFailed` は隔離の主張そのものの失敗なので環境不足に数えない（呼び出し側で失敗させる）。
+fn launcher_unusable(step: &str, error: &ClientError) -> Option<String> {
+    match error {
+        ClientError::Protocol(diag) => Some(format!(
+            "{step}: launcher protocol skew (host launcher needs updating to this tree): {diag}"
+        )),
+        ClientError::Remote(code) if *code != ErrorCode::IsolationFailed => {
+            Some(format!("{step}: launcher refused with {code}"))
+        }
+        _ => None,
+    }
 }
 
 fn browser_uid() -> Option<u32> {
@@ -391,18 +407,25 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
     let mut client = LauncherClient::connect(&socket, Duration::from_secs(150))
         .expect("connect launcher socket");
     let lease = task_worker::browser_launcher::random_id().expect("random lease");
-    let started = client
-        .start_session(
-            "launcher-ptrace-test",
-            "launcher-ptrace-run",
-            &lease,
-            SessionPolicy {
-                allowed_domains: vec![],
-                allowed_actions: vec![],
-                lease_seconds: 180,
-            },
-        )
-        .expect("start real launcher session");
+    let started = match client.start_session(
+        "launcher-ptrace-test",
+        "launcher-ptrace-run",
+        &lease,
+        SessionPolicy {
+            allowed_domains: vec![],
+            allowed_actions: vec![],
+            lease_seconds: 180,
+        },
+    ) {
+        Ok(started) => started,
+        Err(error) => match launcher_unusable("start_session", &error) {
+            Some(reason) => {
+                missing(reason);
+                return;
+            }
+            None => panic!("start real launcher session: {error:?}"),
+        },
+    };
     assert_eq!(started.receipt.outcome, Outcome::Started);
     assert!(
         started.receipt.isolation_ok,
@@ -413,10 +436,16 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         id: started.session_id,
         lease,
     };
-    let (state, observed) = session
-        .client
-        .observe(&session.id, &session.lease)
-        .expect("observe real session");
+    let (state, observed) = match session.client.observe(&session.id, &session.lease) {
+        Ok(observed) => observed,
+        Err(error) => match launcher_unusable("observe", &error) {
+            Some(reason) => {
+                missing(reason);
+                return;
+            }
+            None => panic!("observe real session: {error:?}"),
+        },
+    };
     assert_eq!(state, SessionState::Running);
     eprintln!(
         "observe: owner={:?} host_uid={} uid_map={:?} gid_map={:?}",

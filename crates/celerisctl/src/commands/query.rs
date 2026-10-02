@@ -32,7 +32,7 @@ pub struct LsArgs {
 pub struct ShowArgs {
     pub id: String,
 
-    /// `TaskDetail` を JSON で出力する（`GET /api/v1/tasks/{id}` と同一。`docs/gui/api.md` §3.5）。
+    /// `TaskDetail` を JSON で出力する（`GET /api/v1/tasks/{id}` と同一。`docs/api/v1/gui-api.md` §3.5）。
     #[arg(long)]
     pub json: bool,
 
@@ -196,7 +196,7 @@ pub fn run_show(store: &dyn TaskStore, args: ShowArgs) -> Result<ExitCode, CliEr
 }
 
 /// `celerisctl show --json <id>` の中身。`task_ops::view::task_detail` の結果を JSON 文字列に
-/// する（`GET /api/v1/tasks/{id}` と同一。`docs/gui/api.md` §3.5）。出力そのものをテストしやすい
+/// する（`GET /api/v1/tasks/{id}` と同一。`docs/api/v1/gui-api.md` §3.5）。出力そのものをテストしやすい
 /// よう `run_show_json` から分離してある。
 ///
 /// `--config`（または `CELERIS_CONFIG`）があれば、`ViewContext` はその `config.toml` から作る
@@ -236,7 +236,7 @@ fn task_detail_json(
         },
     };
     let detail = view::task_detail(store, id, &ctx, OffsetDateTime::now_utc())?;
-    // `GET /api/v1/tasks/{id}` と同じ compact な直列化（docs/gui/api.md §3.5）。整形は `jq` 等で行う。
+    // `GET /api/v1/tasks/{id}` と同じ compact な直列化（docs/api/v1/gui-api.md §3.5）。整形は `jq` 等で行う。
     serde_json::to_string(&detail)
         .map_err(|e| CliError::msg(format!("failed to encode task detail: {e}")))
 }

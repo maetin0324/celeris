@@ -177,7 +177,7 @@ fn topological_order(spec: &ExecutionPlanSpec) -> Vec<usize> {
 /// I/O なし）。`ExecutionPlanned` が無いタスクは `work_units` を空にし、`runs` は Reviewer を含む
 /// 全 run について作る（暗黙の WorkUnit。ADR-0072 D5「E2 以降、全タスクの run について書く」）。
 ///
-/// 実装上の判断（`docs/adr/0072-task-execution-decomposition.md`「Phase E2b 実装時の逸脱・明確化」参照）:
+/// 実装上の判断（`agent-docs/adr/0072-task-execution-decomposition.md`「Phase E2b 実装時の逸脱・明確化」参照）:
 /// - `work_units.id` は本来 `execution_plan_adopt` が発行する ULID だが、`Event::ExecutionPlanned` の
 ///   `plan.work_units` は `key` しか運ばない。最初にその WU が遷移した `WorkUnitTransitioned.work_unit_id`
 ///   から復元し、一度も遷移していない WU（実際にはほぼ起きない）だけ `rebuilt-<task_id>-<key>` を仮の

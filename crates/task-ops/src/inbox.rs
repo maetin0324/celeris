@@ -1,4 +1,4 @@
-//! 受信箱（`docs/gui/api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
+//! 受信箱（`docs/api/v1/gui-api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
 
 use std::collections::{HashMap, HashSet};
 
@@ -958,7 +958,7 @@ fn build_attention(
     Ok(items)
 }
 
-/// `docs/gui/api.md` §5.1。`evidence` は `(親タスク, run_id)` から `runs/<run_id>/result.json` の `evidence[]` を読む
+/// `docs/api/v1/gui-api.md` §5.1。`evidence` は `(親タスク, run_id)` から `runs/<run_id>/result.json` の `evidence[]` を読む
 /// 呼び出し側の関数（ファイル I/O は task-api が行う）。
 pub fn inbox(
     store: &dyn TaskStore,

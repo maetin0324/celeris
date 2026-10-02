@@ -534,7 +534,7 @@ fn build_repair_objective_with_scope_adds_allowed_range_and_out_of_scope_check_s
     let scope = RepairScope {
         allowed_paths: vec![
             "web/".to_string(),
-            "docs/adr/0099-root-delivery.md".to_string(),
+            "agent-docs/adr/0099-root-delivery.md".to_string(),
         ],
         scope_checks: vec!["git diff --name-only <base> -- ':!web'".to_string()],
     };
@@ -548,7 +548,7 @@ fn build_repair_objective_with_scope_adds_allowed_range_and_out_of_scope_check_s
     );
     assert!(obj.contains("## 変更してよい範囲"));
     assert!(obj.contains("- web/"));
-    assert!(obj.contains("- docs/adr/0099-root-delivery.md"));
+    assert!(obj.contains("- agent-docs/adr/0099-root-delivery.md"));
     assert!(obj.contains("## 範囲外差分の検査"));
     assert!(obj.contains("- git diff --name-only <base> -- ':!web'"));
     assert!(obj.contains("plan_issue"));

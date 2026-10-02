@@ -23,7 +23,7 @@ pub(super) fn cooldown_reason_name(outcome: &ProviderOutcome) -> &'static str {
     }
 }
 
-/// ADR-0024 D3: `AccountView.excluded_reason` の語彙（`docs/gui/api.md` §3.29）。
+/// ADR-0024 D3: `AccountView.excluded_reason` の語彙（`docs/api/v1/gui-api.md` §3.29）。
 pub(super) fn excluded_reason_name(reason: ExcludedReason) -> &'static str {
     match reason {
         ExcludedReason::NotLoggedIn => "not_logged_in",

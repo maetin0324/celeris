@@ -1,4 +1,4 @@
-//! ファイル系（`docs/gui/api.md` §3.7〜§3.9、ADR-0013 D11）: run のログと成果物のパス解決・検査、配信、成果物一覧。
+//! ファイル系（`docs/api/v1/gui-api.md` §3.7〜§3.9、ADR-0013 D11）: run のログと成果物のパス解決・検査、配信、成果物一覧。
 //!
 //! ユーザ入力のパスは受け取らない。`run_id` は ULID 形式を検査し、成果物は `events` に記録された `ArtifactRef.path` を使う。
 //! 対象はワークスペース（`WorkspaceSpec::Local`）に結合して `canonicalize` し、ワークスペースの canonical パス配下で

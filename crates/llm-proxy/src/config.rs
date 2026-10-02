@@ -26,7 +26,7 @@ pub struct LlmProxyConfig {
     pub probe_cache_secs: u64,
     /// 1 アカウントに同時に流してよいプロキシ要求数（ADR-0024 D3 の `IN_USE_PENALTY` を使うための
     /// `max_runs_per_account` 相当。CLI ワーカーの `[accounts] max_runs_per_account` とは別枠で数える
-    /// （`docs/llm-source.md` に明記。値そのものは共有しないが、cooldown・観測値は同じ帳簿を共有する）。
+    /// （`docs/guides/llm-source.md` に明記。値そのものは共有しないが、cooldown・観測値は同じ帳簿を共有する）。
     #[serde(default = "default_max_concurrent_per_account")]
     pub max_concurrent_per_account: usize,
     /// 429/401 で cooldown を付けるときの既定の秒数（観測から更に長い期限が分かればそちらを使う。
@@ -105,7 +105,7 @@ pub struct SourcesConfig {
 pub struct ClaudeOauthConfig {
     /// `[accounts] claude_dir` を再利用する（celeris が `Config::load` でここへ絶対パスを埋める。
     /// 空のままなら `[accounts] claude_dir` が無いということで、`effective_enabled` な状態では
-    /// 設定エラーになる。`docs/llm-source.md` 参照）。
+    /// 設定エラーになる。`docs/guides/llm-source.md` 参照）。
     #[serde(default)]
     pub accounts_dir: std::path::PathBuf,
     #[serde(default = "default_claude_base_url")]
@@ -113,7 +113,7 @@ pub struct ClaudeOauthConfig {
     /// OAuth のトークン更新エンドポイント（テストは偽の上流に向ける）。
     #[serde(default = "default_claude_token_url")]
     pub token_url: String,
-    /// Claude Code CLI と同じ client_id（未確認。`docs/llm-source.md` に注記）。
+    /// Claude Code CLI と同じ client_id（未確認。`docs/guides/llm-source.md` に注記）。
     #[serde(default = "default_claude_client_id")]
     pub client_id: String,
     #[serde(default = "default_true")]
@@ -146,7 +146,7 @@ pub struct CodexOauthConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// `User-Agent`（Codex CLI と同じ形 `codex_cli_rs/<version>`）。**バージョン値は未確認**
-    /// （`docs/llm-source.md` §2 参照。実機で `codex --version` 等から確認して上書きすること）。
+    /// （`docs/guides/llm-source.md` §2 参照。実機で `codex --version` 等から確認して上書きすること）。
     #[serde(default = "default_codex_user_agent")]
     pub user_agent: String,
     /// 既定では `temperature` / `max_output_tokens` を上流へ送らない（ChatGPT の Codex backend は
@@ -169,7 +169,7 @@ fn default_codex_token_url() -> String {
 fn default_codex_client_id() -> String {
     "app_EMoamEEZ73f0CkXaXp7hrann".to_string()
 }
-/// **未確認**（`docs/llm-source.md` §2 参照）。Codex CLI (`codex-rs`) が送る形に沿わせた既定値。
+/// **未確認**（`docs/guides/llm-source.md` §2 参照）。Codex CLI (`codex-rs`) が送る形に沿わせた既定値。
 fn default_codex_user_agent() -> String {
     "codex_cli_rs/0.45.0".to_string()
 }
@@ -215,7 +215,7 @@ impl Default for ModelsConfig {
 }
 
 /// ADR-0069 Phase 118 D2: 2026-09-24 に実機（`claude --model <id>`）で実行して確認した ID
-/// （`docs/adr/0069-routing-four-layers.md` Phase 118 追記）。運用側の実際のプラン・契約で
+/// （`agent-docs/adr/0069-routing-four-layers.md` Phase 118 追記）。運用側の実際のプラン・契約で
 /// 使えるモデルが変わったら `[llm_proxy.models]` で上書きすること。
 fn default_claude_models() -> HashMap<Tier, String> {
     HashMap::from([

@@ -1,4 +1,4 @@
-//! 通知の設定とテスト送信（ADR-0037 D4。Phase 39。`docs/gui/api.md` §3.33）。
+//! 通知の設定とテスト送信（ADR-0037 D4。Phase 39。`docs/api/v1/gui-api.md` §3.33）。
 //!
 //! - `GET /notify` — 設定済みか、直近の送信 10 件（読み取り）。
 //! - `POST /notify/test` — その場でテスト送信（**管理系**。トークン必須）。

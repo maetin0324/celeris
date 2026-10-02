@@ -146,7 +146,7 @@ pub use pricing::{estimate_cost_usd, output_input_ratio};
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};
 // ---- ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ ----
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
-pub use node_session::{NodeSession, NodeSessionStore, SessionKind};
+pub use node_session::{NodeSession, NodeSessionStore, SessionKind, WorkUnitSession};
 // ---- ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証とログ ----
 pub use mcp::{
     McpCall, McpCallStore, McpClient, McpClientStore, McpScope, scopes_from_string,
@@ -245,7 +245,8 @@ pub use execution_gate::{
 };
 // ---- ADR-0072 D19（Phase E5）: Task 単位の実行メトリクス ----
 pub use execution_metrics::{
-    ExecutionMetrics, group_quota_by_work_unit, summarize as summarize_execution_metrics,
+    ContinuationMetrics, ContinuationRunTotals, ExecutionMetrics, group_quota_by_work_unit,
+    summarize as summarize_execution_metrics, summarize_continuation_runs,
 };
 // ---- ADR-0074 D4（Phase F3 quota）: quota 消費の推定 ----
 pub use quota::{

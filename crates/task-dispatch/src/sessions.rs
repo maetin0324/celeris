@@ -4,7 +4,7 @@
 //! `Dispatcher::resolve_node_session`（`dispatcher.rs`）が行う。ここに置くのは、テストしやすい形の
 //! 「続けるか、新しく作るか」の判断と、前置きに出す差分・要約の行の組み立てだけ。
 
-use task_core::{MessageRole, NodeSession, Tier};
+use task_core::{BudgetKind, MessageRole, NodeSession, RunEnd, Tier, WorkUnitSession};
 use time::OffsetDateTime;
 
 /// このアダプタだけが継続セッションを持てる（ADR-0054 D1）。他のアダプタ（`paperqa` /
@@ -258,6 +258,184 @@ pub fn summary_lines(history: &[(MessageRole, String)], limit: usize) -> Vec<Str
             format!("{who}: {text}")
         })
         .collect()
+}
+
+// ---- ADR-0124 D1: execute continuation の同一 session resume と checkpoint fallback ----
+
+/// continuation の resume を対象にするアダプタ（ADR-0124 D1 #5。codex / acp は対象外）。
+pub const CONTINUATION_ADAPTER: &str = "claude-code";
+
+/// [`decide_continuation`] に渡す run の役割。reviewer の run は dispatcher の別経路（`review_spawn.rs`）で
+/// 起きるのでここに来ないが、判断表 #1 を純粋関数として固定するために持つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationRole {
+    Worker,
+    Planner,
+    Reviewer,
+}
+
+/// continuation の run を新しい session で起こす理由（ADR-0124 D1 の「fallback 理由（記録値）」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationFreshReason {
+    RoleFresh,
+    IndependentWu,
+    NotContinuation,
+    FreshRequested,
+    AdapterUnsupported,
+    AdapterChanged,
+    AccountChanged,
+    SurfaceUnsupported,
+    SessionMissing,
+    ContextRollover,
+    ResumeRejected,
+}
+
+impl ContinuationFreshReason {
+    /// 記録値（ADR-0124 D1 の表の 3 列目）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContinuationFreshReason::RoleFresh => "role_fresh",
+            ContinuationFreshReason::IndependentWu => "independent_wu",
+            ContinuationFreshReason::NotContinuation => "not_continuation",
+            ContinuationFreshReason::FreshRequested => "fresh_requested",
+            ContinuationFreshReason::AdapterUnsupported => "adapter_unsupported",
+            ContinuationFreshReason::AdapterChanged => "adapter_changed",
+            ContinuationFreshReason::AccountChanged => "account_changed",
+            ContinuationFreshReason::SurfaceUnsupported => "surface_unsupported",
+            ContinuationFreshReason::SessionMissing => "session_missing",
+            ContinuationFreshReason::ContextRollover => "context_rollover",
+            ContinuationFreshReason::ResumeRejected => "resume_rejected",
+        }
+    }
+
+    /// 新しい session を `--session-id` で作って次の continuation に備えるか。役割・設定・アダプタ・
+    /// 実行面が resume の対象外なら作らない（従来どおり session を残さない `--no-session-persistence`）。
+    pub fn starts_session(self) -> bool {
+        !matches!(
+            self,
+            ContinuationFreshReason::RoleFresh
+                | ContinuationFreshReason::FreshRequested
+                | ContinuationFreshReason::AdapterUnsupported
+                | ContinuationFreshReason::SurfaceUnsupported
+        )
+    }
+}
+
+/// [`decide_continuation`] の判断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationDecision {
+    /// 保存された session を `--resume` で続ける。
+    Resume,
+    /// 新しい session（または session 無し）で起こし、前置きに checkpoint を入れる。
+    /// `retire` は保存された現役 session を引退させるか。
+    Fresh {
+        reason: ContinuationFreshReason,
+        retire: bool,
+    },
+}
+
+/// [`decide_continuation`] の入力（dispatcher がストア・events・設定から集める。ここは I/O 無し）。
+#[derive(Debug, Clone, Copy)]
+pub struct ContinuationFacts<'a> {
+    pub role: ContinuationRole,
+    /// この run の WU（`work_units.id`）。
+    pub work_unit_id: Option<&'a str>,
+    /// この WU の直前の run の終わり方（WU の最初の run なら `None`）。
+    pub previous_end: Option<RunEnd>,
+    /// 直前の run が保存 session の resume を拒否された（`EventSink::session_resume_failed`）。
+    pub previous_resume_rejected: bool,
+    /// 設定（`[sessions] continuation_resume = false`）で明示的に fresh context を求められた。
+    pub fresh_requested: bool,
+    pub adapter: &'a str,
+    pub account: Option<&'a str>,
+    pub provider: Option<&'a str>,
+    /// この run の cwd（WU の worktree）。
+    pub cwd: Option<&'a str>,
+    /// container 実行（ADR-0043 D3。config dir が読み取り専用で session を残せない）。
+    pub container: bool,
+    /// `(task_id, work_unit_id)` の現役 session（adapter・account を問わない。`work_unit_session_current`）。
+    pub stored: Option<&'a WorkUnitSession>,
+    pub rollover_tokens: u64,
+}
+
+/// ADR-0124 D1 の判断表を上から順に見る（純粋関数。LLM は使わない）。
+pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
+    use ContinuationFreshReason as R;
+    let fresh = |reason: R| ContinuationDecision::Fresh {
+        reason,
+        retire: f.stored.is_some(),
+    };
+    // #1: planner・reviewer は常に fresh（WU の継続 session に触れない）。
+    if f.role != ContinuationRole::Worker {
+        return ContinuationDecision::Fresh {
+            reason: R::RoleFresh,
+            retire: false,
+        };
+    }
+    // #2: 別 WU の session は引き継がない（触れもしない）。
+    if f.stored
+        .is_some_and(|s| s.work_unit_id.as_deref() != f.work_unit_id)
+    {
+        return ContinuationDecision::Fresh {
+            reason: R::IndependentWu,
+            retire: false,
+        };
+    }
+    // #2: WU の最初の run。
+    let Some(previous_end) = f.previous_end else {
+        return fresh(R::IndependentWu);
+    };
+    // 拒否された resume のやり直し（D1 の表の下の注記）: checkpoint 前置きの fresh。
+    if f.previous_resume_rejected {
+        return fresh(R::ResumeRejected);
+    }
+    // #3: 直前が予算切れ・yield・wait 明けでなければ continuation ではない。
+    if !(previous_end.is_continuable() || previous_end == RunEnd::Waiting) {
+        return fresh(R::NotContinuation);
+    }
+    // #4
+    if f.fresh_requested {
+        return fresh(R::FreshRequested);
+    }
+    // #5
+    if f.adapter != CONTINUATION_ADAPTER {
+        return fresh(R::AdapterUnsupported);
+    }
+    // #8: container は保存 session の有無によらず resume できない。
+    if f.container {
+        return fresh(R::SurfaceUnsupported);
+    }
+    // #9: daemon の restart 後に行が無い等。
+    let Some(stored) = f.stored else {
+        return fresh(R::SessionMissing);
+    };
+    // #6
+    if stored.adapter != f.adapter {
+        return fresh(R::AdapterChanged);
+    }
+    // #7: 別 account・別 provider の session は使わない（account isolation、ADR-0124 D3）。
+    if stored.account_id.as_deref() != f.account || stored.provider.as_deref() != f.provider {
+        return fresh(R::AccountChanged);
+    }
+    // #8: cwd が前回と違う。
+    if stored.cwd.as_deref() != f.cwd {
+        return fresh(R::SurfaceUnsupported);
+    }
+    // #9: 壊れた id（claude-code は UUID 必須。ADR-0054 Phase 67b）。
+    if !session_id_is_valid_for_adapter(f.adapter, &stored.session_id) {
+        return fresh(R::SessionMissing);
+    }
+    // #10
+    if stored.approx_tokens.max(0) as u64 >= f.rollover_tokens
+        || previous_end
+            == (RunEnd::BudgetExhausted {
+                kind: BudgetKind::Context,
+            })
+    {
+        return fresh(R::ContextRollover);
+    }
+    // #11
+    ContinuationDecision::Resume
 }
 
 #[cfg(test)]

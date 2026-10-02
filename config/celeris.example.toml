@@ -231,6 +231,9 @@ dir = "../memory"
 # そのセッションの累計トークン（run の usage の合計）がこれを超えたら、次の run は新しいセッションから
 # 始める（前置きに「前セッションの要約」を乗せる）。既定 400_000。
 rollover_tokens = 400_000
+# ADR-0124 D1: WU の execute continuation（予算切れ・yield の続き）を、同じ Task・WU・claude-code・
+# account/provider なら同じ session で `--resume` する。false なら毎回 checkpoint 前置きの新しい session。
+continuation_resume = true
 
 # Check::Reviewer の判定 run に使う adapter / tier（ADR-0010 D9）。adapter 省略時は tier だけで選ぶ。
 [reviewer]

@@ -1607,6 +1607,8 @@ async fn planner_and_reviewer_runs_emit_quota_estimates() {
                         cache_read_tokens: None,
                         cache_creation_tokens: None,
                         cost_usd: None,
+                        duplicate_reads: None,
+                        session_resumed: None,
                     }),
                 },
                 exit_code: Some(0),

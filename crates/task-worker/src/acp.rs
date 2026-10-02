@@ -549,7 +549,8 @@ async fn wait_for_initialize_response(
 enum WaitOutcome {
     Response(serde_json::Value),
     Eof,
-    TimedOut(Terminal),
+    /// `Usage` が大きいので箱に入れる（clippy `large_enum_variant`）。
+    TimedOut(Box<Terminal>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -571,19 +572,19 @@ async fn wait_for_response(
         if wall_elapsed >= limits.wall_clock {
             // ADR-0072 D7/§6 (i)（Phase E1）: acp には turn の上限が無いので、wall-clock の打ち切り
             // が continuation の唯一の入口になる（`Terminal::BudgetExhausted{kind: WallClock}`）。
-            return Ok(WaitOutcome::TimedOut(Terminal::BudgetExhausted {
+            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::BudgetExhausted {
                 kind: task_core::BudgetKind::WallClock,
                 message: "wall clock exceeded".into(),
                 usage: None,
-            }));
+            })));
         }
         let idle_elapsed = last_activity.elapsed();
         if idle_elapsed >= limits.idle_timeout {
             // ADR-0072 D7: idle timeout は E1 では harness_error に分類変更しない（§7 U7）。
-            return Ok(WaitOutcome::TimedOut(Terminal::Error {
+            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
-            }));
+            })));
         }
         let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
         let pumped = match tokio::time::timeout(
@@ -1093,7 +1094,7 @@ async fn run_acp(
             .await);
         }
         Ok(WaitOutcome::TimedOut(terminal)) => {
-            let message = match &terminal {
+            let message = match terminal.as_ref() {
                 Terminal::Error { message, .. } => message.clone(),
                 _ => format!("timeout waiting for {new_session_method}"),
             };
@@ -1252,7 +1253,7 @@ async fn run_acp(
                             &artifacts_rel,
                             &stderr_log_path,
                             sink,
-                            RawOutcome::TimedOut(terminal),
+                            RawOutcome::TimedOut(*terminal),
                             run_id,
                         )
                         .await;
@@ -1320,7 +1321,7 @@ async fn run_acp(
     chunks.flush(sink);
 
     let outcome = match prompt_wait {
-        WaitOutcome::TimedOut(terminal) => RawOutcome::TimedOut(terminal),
+        WaitOutcome::TimedOut(terminal) => RawOutcome::TimedOut(*terminal),
         WaitOutcome::Eof => RawOutcome::Eof {
             context: "session/prompt",
         },

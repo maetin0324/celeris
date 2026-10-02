@@ -1,5 +1,7 @@
 //! task-api の要求・応答の型（`docs/gui/api.md` §6.2）。task-core / task-ops の型はそのまま使う。
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
@@ -1982,6 +1984,12 @@ pub struct ExecutionMetricsGroup {
     pub max_turn_failures: u64,
     pub repairs: u64,
     pub replans: u64,
+    /// ADR-0124: fresh / resumed / 旧形式の worker run 別比較。
+    #[serde(default)]
+    pub continuation: task_core::ContinuationMetrics,
+    /// WU id ごとの比較値。atomic run は `task:<task_id>` キー。
+    #[serde(default)]
+    pub continuation_by_work_unit: BTreeMap<String, task_core::ContinuationMetrics>,
     /// ADR-0074 D4.3（Phase F3 quota）: このグループの (source, account, window) ごとの quota 消費の合計。
     #[serde(default)]
     pub quota: Vec<task_core::QuotaUse>,
@@ -2024,6 +2032,12 @@ pub struct ExecutionMetricsSummary {
     /// `since` 以降に更新された（フィルタを満たした）タスクの総数。
     pub total_tasks: u64,
     pub groups: Vec<ExecutionMetricsGroup>,
+    /// 全グループの worker run 比較値。
+    #[serde(default)]
+    pub continuation: task_core::ContinuationMetrics,
+    /// WU id ごとの比較値。atomic run は `task:<task_id>` キー。
+    #[serde(default)]
+    pub continuation_by_work_unit: BTreeMap<String, task_core::ContinuationMetrics>,
     /// ADR-0074 D4.3（Phase F3 quota）: 今のアカウントの残量（`GET /llm/sources` と同じ値）。
     /// `[llm_proxy]` が無効なら空。
     #[serde(default)]

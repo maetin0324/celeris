@@ -27,6 +27,9 @@ pub(super) struct StoreSink {
     /// `session_established` / `session_resume_failed` がこれを使って `node_sessions` を書く。
     /// 継続セッションの対象でない run では `None`（両方 no-op）。
     pub(super) session_key: Option<(String, task_core::SessionKind, Option<ProjectId>)>,
+    /// ADR-0124 D2: この run が WU の継続 session を使うなら `(task_id, work_unit_id)`。
+    /// `session_resume_failed` がその session を retire し、拒否の印を run の進行に残す。
+    pub(super) continuation_key: Option<(TaskId, String)>,
 }
 
 impl StoreSink {
@@ -378,6 +381,31 @@ impl EventSink for StoreSink {
     /// ADR-0054 D1（Phase 67）: resume が拒否されたら、そのセッションを retire する（次の run は新規
     /// セッションになる。ADR-0054 D1「失敗も同じ経路で作り直す」）。`session_key` が無ければ no-op。
     fn session_resume_failed(&self, reason: &str) {
+        // ADR-0124 D1: WU の継続 session の resume が拒否されたら retire し、次の dispatch が
+        // `resume_rejected`（checkpoint 前置きの fresh）と判定できる印を残す。
+        if let Some((task_id, work_unit_id)) = &self.continuation_key {
+            if let Err(e) = self.store.work_unit_session_retire(
+                *task_id,
+                Some(work_unit_id),
+                OffsetDateTime::now_utc(),
+            ) {
+                tracing::warn!(task_id = %self.task_id, error = %e, "failed to retire the continuation session after a rejected resume");
+            }
+            let first_line = reason.lines().next().unwrap_or_default();
+            let ev = Event::worker_progress_with(
+                self.run_id.clone(),
+                format!(
+                    "{}: {}",
+                    super::continuation_session::CONTINUATION_RESUME_REJECTED,
+                    first_line.chars().take(200).collect::<String>()
+                ),
+                task_core::ProgressFields::of(task_core::ProgressKind::Status),
+            );
+            if let Err(e) = self.store.append_event(self.task_id, &ev) {
+                tracing::warn!(task_id = %self.task_id, error = %e, "failed to record the rejected continuation resume");
+            }
+            return;
+        }
         let Some((node_id, kind, project_id)) = &self.session_key else {
             return;
         };

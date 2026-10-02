@@ -600,8 +600,15 @@ fn stream_json_maps_to_structured_progress() {
     let sink = RecordingSink::default();
     let mut last_result = None;
     let mut background = BackgroundTasks::default();
+    let mut exploration = ExplorationTracker::default();
     for line in text.lines() {
-        handle_line(line, &sink, &mut last_result, &mut background);
+        handle_line(
+            line,
+            &sink,
+            &mut last_result,
+            &mut background,
+            &mut exploration,
+        );
     }
     let items = sink
         .structured
@@ -806,6 +813,8 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
                     cost_usd: None,
+                    duplicate_reads: Some(0),
+                    session_resumed: Some(false),
                 })
             );
         }
@@ -3635,4 +3644,188 @@ fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
             assert!(prompt.contains(needle), "{name}: missing {needle:?}");
         }
     }
+}
+
+/// ADR-0124 D4: stream-json の行を `handle_line` に通し、最後の `result` の usage に載る
+/// `duplicate_reads` を返す。
+fn duplicate_reads_after(root: &Path, resumed: bool, lines: &[String]) -> Option<Usage> {
+    let sink = RecordingSink::default();
+    let mut last_result = None;
+    let mut background = BackgroundTasks::default();
+    let mut exploration = ExplorationTracker::new(Some(root), resumed);
+    for line in lines {
+        handle_line(
+            line,
+            &sink,
+            &mut last_result,
+            &mut background,
+            &mut exploration,
+        );
+    }
+    last_result.and_then(|meta| meta.usage)
+}
+
+fn tool_use_line(name: &str, input: serde_json::Value) -> String {
+    serde_json::json!({
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": name, "input": input}]}
+    })
+    .to_string()
+}
+
+fn result_line() -> String {
+    r#"{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":2}}"#
+        .to_string()
+}
+
+/// ADR-0124 D4: 同じ path の 2 回目の `Read` は 1 件の重複（絶対 path と cwd 相対・`./`・`..` を
+/// 同じ正規化 path として数える）。
+#[test]
+fn duplicate_read_same_path_twice_counts_one() {
+    let root = Path::new("/work/repo");
+    let lines = vec![
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "/work/repo/src/lib.rs"}),
+        ),
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "./src/../src/lib.rs"}),
+        ),
+        result_line(),
+    ];
+    let usage = duplicate_reads_after(root, false, &lines).expect("usage");
+    assert_eq!(usage.duplicate_reads, Some(1));
+    assert_eq!(usage.session_resumed, Some(false));
+    assert_eq!(usage.input_tokens, Some(1));
+}
+
+/// ADR-0124 D4: 別 path の `Read`、別 path の同じ pattern の `Grep`、`Glob`・他の道具は重複にしない。
+#[test]
+fn duplicate_read_distinct_paths_count_zero() {
+    let root = Path::new("/work/repo");
+    let lines = vec![
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "/work/repo/src/lib.rs"}),
+        ),
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "/work/repo/src/main.rs"}),
+        ),
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "fn main", "path": "src"}),
+        ),
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "fn main", "path": "tests"}),
+        ),
+        tool_use_line("Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        tool_use_line("Bash", serde_json::json!({"command": "cat src/lib.rs"})),
+        tool_use_line("Bash", serde_json::json!({"command": "cat src/lib.rs"})),
+        result_line(),
+    ];
+    let usage = duplicate_reads_after(root, false, &lines).expect("usage");
+    assert_eq!(usage.duplicate_reads, Some(0));
+}
+
+/// ADR-0124 D4: `Grep`/`Glob` は pattern + path が同じなら重複（path の書き方の違いは正規化する）。
+#[test]
+fn duplicate_read_counts_repeated_grep_and_glob() {
+    let root = Path::new("/work/repo");
+    let lines = vec![
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "Usage", "path": "crates"}),
+        ),
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "Usage", "path": "/work/repo/crates"}),
+        ),
+        tool_use_line("Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        tool_use_line("Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        tool_use_line("Read", serde_json::json!({"file_path": "crates"})),
+        result_line(),
+    ];
+    let usage = duplicate_reads_after(root, true, &lines).expect("usage");
+    assert_eq!(usage.duplicate_reads, Some(2));
+    assert_eq!(usage.session_resumed, Some(true));
+}
+
+/// ADR-0124 D4: `--resume` で起動した run は終了結果の usage に `session_resumed = true` が載り、
+/// stream の再 Read も数えられる（スタブの claude。外部ネットワーク・実 claude は使わない）。
+#[tokio::test]
+async fn duplicate_read_and_resume_mark_reach_the_terminal_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"mkdir -p artifacts
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/lib.rs"}}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/lib.rs"}}]}}'
+printf '%s' '{"summary":"continued","evidence":[]}' > artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
+"#,
+    );
+    let adapter = ClaudeCodeAdapter::new(config);
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.session = Some(crate::protocol::SessionHandle {
+        adapter: ClaudeCodeAdapter::ID.to_string(),
+        session_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        resume: true,
+    });
+    let outcome = adapter
+        .run(
+            req,
+            "run-resume",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Done { usage, .. } => {
+            let usage = usage.expect("usage");
+            assert_eq!(usage.session_resumed, Some(true));
+            assert_eq!(usage.duplicate_reads, Some(1));
+        }
+        other => panic!("expected done, got {other:?}"),
+    }
+}
+
+/// ADR-0124 D4: resume を頼んでも拒否された run（`error_during_execution` + 拒否の文言）は
+/// `session_resumed = false`（resume した run に数えない）。
+#[tokio::test]
+async fn duplicate_read_rejected_resume_is_not_marked_resumed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"echo 'No conversation found with session ID: 550e8400-e29b-41d4-a716-446655440000' >&2
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{"input_tokens":1,"output_tokens":0}}'
+"#,
+    );
+    let adapter = ClaudeCodeAdapter::new(config);
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.session = Some(crate::protocol::SessionHandle {
+        adapter: ClaudeCodeAdapter::ID.to_string(),
+        session_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        resume: true,
+    });
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-rejected", default_limits(), &sink)
+        .await;
+    let usage = match outcome {
+        Ok(RunOutcome { mut terminal, .. }) => terminal_usage_mut(&mut terminal).copied(),
+        Err(_) => None,
+    };
+    if let Some(usage) = usage {
+        assert_eq!(usage.session_resumed, Some(false));
+    }
+    let result_json =
+        std::fs::read_to_string(dir.path().join("runs/run-rejected/result.json")).unwrap();
+    assert!(
+        !result_json.contains("\"session_resumed\":true"),
+        "{result_json}"
+    );
 }

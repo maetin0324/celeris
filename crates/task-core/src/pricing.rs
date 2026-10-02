@@ -180,6 +180,8 @@ mod tests {
             cache_read_tokens: Some(2_000_000),
             cache_creation_tokens: Some(1_000_000),
             cost_usd: None,
+            duplicate_reads: None,
+            session_resumed: None,
         };
         let cost = estimate_cost_usd("claude-sonnet-5", &usage).expect("known model");
         // 2.0*1 + 10.0*0.5 + 0.2*2 + 2.5*1 = 9.9

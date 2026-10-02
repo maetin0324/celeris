@@ -96,3 +96,25 @@ ui-ux 課への mount・routing skill との共存確認・worker への注入�
 - `find config/skills -maxdepth 2 -type f | sort` で 4 ディレクトリそれぞれに `SKILL.md` と `SOURCE.md`、ライセンス
   系ファイル（`LICENSE.txt` または `LICENSE.upstream`）が揃っていることを確認済み。
 - 本 WorkUnit の範囲外（`crates/` は未変更。`cargo test` / `cargo clippy` の対象に含まれる変更はなし）。
+
+## 第三者審査の反映（WorkUnit `vet-skills`）
+
+人による第三者 skill 審査で挙がった 3 点を反映した。
+
+1. **web-design の hit-area 導入コマンドの提案化** — `SKILL.md`（1422 行付近）の hit-area ユーティリティの節に、
+   worker がそのまま実行できる形の外部 registry 向け導入コマンド（第三者 CLI 経由で外部 URL から依存を取得する一文）
+   があった。worker が人の承認なしに依存を追加しないよう、「人に提案し、承認後にのみ導入する」文へ書き換えた。
+   元のコマンド文字列は本ファイルを含めどこにも引用していない（`config/skills/web-design/SOURCE.md` に
+   `modified: ` 行として詳細を記録）。
+2. **ui-ux-quality-gate の `scripts/` 除外** — upstream の `scripts/init_frontend_quality.py` は
+   (1) 対象リポジトリの `AGENTS.md` へ無条件で追記する、(2) `--force` でテンプレートを無検査に上書きする、
+   (3) `--project` のパスを検査しない、という 3 点のリスクがあり、worker に mount しない（ディレクトリごと削除）。
+   `SKILL.md` の「Templates」節と `evals/evals.json` の該当箇所は、この配布に `scripts/` が無い前提の文へ
+   書き換えた。詳細は `config/skills/ui-ux-quality-gate/SOURCE.md` の `modified / excluded: ` 行を参照。
+3. **依存方針の明文化** — `config/skills/README.md` を新規作成し、vendored skill のコード例に出るライブラリ
+   （`next-themes`, `motion`, `react-hook-form`, `zod`, `lucide-react`, `figma-squircle`, `ForesightJS`,
+   `next/font/google` 等）を worker が無断で導入しないこと、自律的に追加してよい依存は `shadcn` のみであること、
+   テスト・ビルドで外部ネットワークに出ないことを記載した。
+
+この反映は `config/skills/` と `docs/progress/ui-ux-skills.md` のみの変更であり、`crates/` `web/` `gui/` は
+変更していない（`cargo test` / `cargo clippy` の対象外）。

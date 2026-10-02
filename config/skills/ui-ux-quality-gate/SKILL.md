@@ -305,7 +305,7 @@ Read only what is needed:
 - `references/ux-evaluation.md` — task flow, friction, IA, recovery, mobile UX, and GPT UX weakness review.
 - `references/development-guardrails.md` — rules, constraints, and delivery checks.
 
-Templates (copy into project with `scripts/init_frontend_quality.py`; use `--update-agents` only when the user wants a repository-level `AGENTS.md` pointer):
+Templates (this distribution does not bundle the upstream `scripts/` helper; copy the templates below into the project by hand instead):
 
 - `templates/DESIGN.md`
 - `templates/FRONTEND_CONTRACT.md`

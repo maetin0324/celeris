@@ -51,7 +51,7 @@
       "expected_output": "The response should use the bundled init_frontend_quality.py script or equivalent template copying, create/update the four frontend governance docs, add only a short AGENTS.md pointer, and avoid copying the skill globally unless explicitly requested.",
       "files": [],
       "expectations": [
-        "Uses scripts/init_frontend_quality.py or copies the bundled templates rather than inventing unrelated docs.",
+        "Copies the bundled templates (this distribution does not include the upstream init script) rather than inventing unrelated docs.",
         "Creates or updates DESIGN.md, FRONTEND_CONTRACT.md, PAGE_BRIEF.md, and FRONTEND_REVIEW.md under docs/frontend.",
         "Adds only a short AGENTS.md pointer and does not duplicate long frontend rules in AGENTS.md.",
         "Does not install or copy the skill into the global Codex skills directory unless the user explicitly asks.",

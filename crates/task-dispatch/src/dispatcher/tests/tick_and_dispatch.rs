@@ -1,5 +1,38 @@
 use super::*;
 
+#[test]
+fn notify_digest_tick_syncs_notice_feed_once() {
+    use task_core::feed::NoticeQuery;
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = new_task(std::path::Path::new("/tmp"), Check::Human, 0);
+    store.insert(&root).unwrap();
+    let at = OffsetDateTime::now_utc();
+    store
+        .append_event(
+            root.id,
+            &Event::Transitioned {
+                from: Status::Ready,
+                to: Status::Done,
+                reason: "done".into(),
+            },
+        )
+        .unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let d = dispatcher(store.clone(), adapter, 1);
+    d.sync_notice_feed(at + time::Duration::seconds(1));
+    d.sync_notice_feed(at + time::Duration::seconds(1));
+    let page = store.notice_list(&NoticeQuery::default()).unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].count, 1);
+}
+
 /// Phase 45（実機バグ、2026-09-19）: `newly_failed_delegated_children` が「一度扱った失敗は数え直さない」
 /// （ADR-0021 D3）を判定するのに `events_for`（タスクごとのローカルな `seq`）で親と子を比較していたため、
 /// 子の方が親よりイベント数が多い（＝ `seq` が大きい）場合、子の失敗が毎回「新規」と誤判定され、親が

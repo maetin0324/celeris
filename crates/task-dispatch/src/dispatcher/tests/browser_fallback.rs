@@ -376,6 +376,7 @@ async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session
     }
     task_worker::browser::configure_isolated_runtime(task_worker::browser::IsolatedBrowserConfig {
         live_sessions: None,
+        runtime: Default::default(),
         resolver: Some("127.0.0.1".parse().unwrap()),
         record_dir: std::env::temp_dir().join(format!(
             "celeris-browser-dispatch-unit-{}",

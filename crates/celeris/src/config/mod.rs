@@ -230,11 +230,65 @@ pub struct Config {
     pub source_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+/// ADR-0116 D5: `[browser]`。`runtime` で isolated browser の runtime を誰が持つかを切り替える。
+/// - `"daemon"`（既定）— 従来どおり daemon が bwrap / sandboxd / Chrome を持つ（same-uid / subuid）。
+/// - `"launcher"` — 専用 host user の launcher（ADR-0115）に `launcher_socket` 経由で頼む。
+///   `launcher_socket` が無ければ設定読込みで error（fail closed。daemon 経路への黙った fallback はしない）。
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserRuntimeConfig {
     #[serde(default)]
     pub egress: BrowserEgressConfig,
+    #[serde(default = "default_browser_runtime")]
+    pub runtime: String,
+    #[serde(default)]
+    pub launcher_socket: Option<PathBuf>,
+}
+
+impl Default for BrowserRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            egress: BrowserEgressConfig::default(),
+            runtime: default_browser_runtime(),
+            launcher_socket: None,
+        }
+    }
+}
+
+fn default_browser_runtime() -> String {
+    "daemon".to_string()
+}
+
+impl BrowserRuntimeConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        match self.runtime.as_str() {
+            "daemon" => Ok(()),
+            "launcher" => {
+                if self.launcher_socket.is_none() {
+                    Err(ConfigError::Invalid(
+                        "[browser] launcher_socket is required when runtime = \"launcher\" (ADR-0116 D5)"
+                            .into(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            other => Err(ConfigError::Invalid(format!(
+                "[browser] runtime must be one of [\"daemon\", \"launcher\"] (got {other:?})"
+            ))),
+        }
+    }
+
+    /// ADR-0116 D5: `validate` を通した後にだけ呼ぶ想定（`runtime = "launcher"` なら
+    /// `launcher_socket` が `Some` であることを前提にする）。
+    pub fn runtime_kind(&self) -> task_worker::browser::BrowserRuntimeKind {
+        match self.runtime.as_str() {
+            "launcher" => task_worker::browser::BrowserRuntimeKind::Launcher {
+                socket: self.launcher_socket.clone().unwrap_or_default(),
+            },
+            _ => task_worker::browser::BrowserRuntimeKind::Daemon,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -363,6 +417,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.selfdeploy.validate()?;
+        self.browser.validate()?;
         if self.max_concurrency == 0 {
             return Err(ConfigError::Invalid("max_concurrency must be >= 1".into()));
         }

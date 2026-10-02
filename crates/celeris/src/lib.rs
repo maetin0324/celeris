@@ -128,6 +128,9 @@ pub enum Exit {
     Drained,
     /// ADR-0040 D4: 同じ `release` の `active` が既に動いていた。何もせず exit 3。
     DuplicateRelease,
+    /// ADR-0040 付記（2026-10-02）: `release` が昇格されていない（`current` と一致せず、新しい
+    /// `promoting.json` も無い）。DB を開かず（migration も handoff 要求もせず）exit 4。
+    NotPromoted,
 }
 
 #[cfg(test)]

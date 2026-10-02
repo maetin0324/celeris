@@ -2409,7 +2409,7 @@
           "type": "array"
         },
         "skills": {
-          "description": "ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の\n`skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。\n見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く\n（このフィールドには乗らない）。届け方はアダプタごと（`claude-code` は `.claude/skills/<name>/`\nへコピー、`codex` は `AGENTS.md` の節、`acp` は前置きに埋め込む）。研究系アダプタ\n（paperqa / local-deep-research / langmem）は無視する。空なら省略され、前置き・作業場所は\nPhase 78 までと 1 バイトも変わらない。",
+          "description": "ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の\n`skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。\n見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く\n（このフィールドには乗らない）。ADR-0127: `claude-code` は `.claude/skills/<name>/`、\n`codex`・`acp` は `.agents/skills/<name>/` へ付属ファイルごとコピーする。後者の\n`AGENTS.md` 節・前置きには名前・説明・SKILL.md の相対パスだけを載せる。\n研究系アダプタ（paperqa / local-deep-research / langmem）は無視する。\n空ならコピーを掃除し、以前の `AGENTS.md` の celeris 節も取り除く。",
           "items": {
             "$ref": "#/$defs/SkillMount"
           },

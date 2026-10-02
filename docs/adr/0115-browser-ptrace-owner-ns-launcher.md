@@ -1,11 +1,11 @@
 # ADR-0115: browser の user namespace 所有者を分離する launcher
 
 ---
-tasks: [01M3W96K79NKX7B4ZM7X9E684S]
+tasks: [01M3W96K79NKX7B4ZM7X9E684S, 01M3WW2RBB9QW9NPN862TZEK9P]
 ---
 
 - 日付: 2026-10-01
-- 状態: 採用（設計のみ。実装・実 process 攻撃試験・本番 admission の解放は未）
+- 状態: 採用（launcher 実装と実 process 攻撃試験は完了。本番 admission の機密能力解放は未）
 - 関連: [ADR-0102](0102-browser-phase4-isolation-injection-routing.md) D1/D2、[ADR-0103](0103-browser-phase4-runtime-selection.md)、[ADR-0105](0105-browser-p4a-same-uid-bwrap-runtime.md)、[ADR-0108](0108-browser-p4a-relay-supervisor-launch-restore.md)、[subuid 手順](../ops/browser-isolated-runtime-subuid.md)、[Phase 4 記録](../progress/phase-browser-4.md)、[A13 後続](../progress/browser-followups.md)
 
 ## 背景と決定
@@ -71,6 +71,8 @@ owner UID の process は子 user namespace で `CAP_SYS_PTRACE` を得るため
 
 この ADR は設計の決定だけであり、launcher の実装、host 設定、systemd unit の配置、実 process 攻撃試験は後続段階で行う。この ADR を根拠に本番 admission の機密能力 `CredentialInjection` / `IdentityRestore` を解放しない。`verify_isolation Ok` と本番 `Attested` 復元成功だけでは十分ではない。daemon UID からの ptrace 拒否、A13 の実 process 試験、controller の秘密非露出、全 lifecycle の回収を揃えてから別の適合・昇格判断を行う。
 
+2026-10-02 の後続実装と host 実証は下記の付記と [Phase 4 記録](../progress/phase-browser-4.md) に記す。上の移行手順は設計時の計画であり、今回の試験は機密能力の解放や本番昇格を意味しない。
+
 ## 検討した代替案
 
 - **daemon が subuid に写像した userns を直接作る**: Chrome の host UID は変わり、`/proc/<pid>/environ` も拒否されるが、daemon UID が owner のままで `CAP_SYS_PTRACE` を得る。今回の実測で棄却。
@@ -78,3 +80,9 @@ owner UID の process は子 user namespace で `CAP_SYS_PTRACE` を得るため
 - **`--cap-drop ALL`、`no_new_privs`、uid_map の変更だけに依存する**: Chrome 自身の capability と owner の capability は別であり、棄却。
 - **daemon に host `CAP_SYS_PTRACE` を与える、または root 常駐 launcher にする**: 境界をさらに広げるため棄却。root は配置と限定された map helper のみに使う。
 - **container / VM に全面移行する**: 別の隔離境界にはなり得るが、現行の CDP・egress・broker 契約と lifecycle を維持したまま owner 問題を解く最小の変更として、まず専用 user の launcher を採る。VM 方式を将来の選択肢から除外しない。
+
+## 実 process 検証（2026-10-02）
+
+後続実装（[ADR-0116](0116-browser-launcher-implementation.md)、commit `86ce1a88`）を配置した LXC host で、worker の db_guard namespace の外にある UID 1001 の通常シェルから `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` を実行し、exit 0（1 passed）を確認した。Chrome の `NS_GET_OWNER_UID` は launcher 観測で 296608、`uid_map` / `gid_map` はともに `1000 296608 1`。Chrome に対する UID 1001 からの `PTRACE_ATTACH` は EPERM (1)、`strace -p` も exit 1 / Operation not permitted、`/proc/<pid>/environ` と `mem` は EACCES (13)。`verify_isolation=Ok`、同 UID の子への attach / detach の正の対照も成功した。詳しい PID、コマンド、出力、host namespace の条件は [Phase 4 記録](../progress/phase-browser-4.md) を参照。
+
+この host は LXC 内にあり、試験 runner の `uid_map` は `0 0 4294967295` ではない。試験は worker namespace（`1001 1001 1`）の外で行われ、Chrome PID を `/proc` で確認できた。機密能力 `CredentialInjection` / `IdentityRestore` は引き続き解放しない。

@@ -786,8 +786,12 @@ async fn run_codex(
     // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
-    // ADR-0056 D3（Phase 79）: mount された skills を `AGENTS.md` の節として書く（codex はこのファイルを
-    // 自動で読む。既存の内容は壊さない。run は落とさない）。
+    // ADR-0127 D1/D3: mount された skill のディレクトリを `.agents/skills/<name>/` に丸写しし（codex が
+    // ネイティブに読む作業場所内の場所。account 共有の CODEX_HOME には書かない）、`AGENTS.md` の
+    // celeris:skills 節は名前・説明・パスの一覧にする（本文は埋め込まない。run は落とさない）。
+    if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
+        warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
+    }
     if let Err(e) = crate::skills::deliver_agents_md(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to update AGENTS.md with skills: {e}");
     }

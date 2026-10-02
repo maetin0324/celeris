@@ -513,7 +513,7 @@ impl Dispatcher {
                     return Ok(WuDispatchGate::Skip);
                 };
                 let mode = self.parallel_mode(&task)?;
-                let ids = task_core::runnable_work_units(&units, 0, mode.limit);
+                let ids = crate::execution_scheduler::runnable_in_phase(&units, 0, mode.limit);
                 Ok(ids
                     .first()
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))
@@ -1511,7 +1511,8 @@ impl Dispatcher {
                             && u.kind != task_core::WorkUnitKind::Integrate
                     })
                     .count();
-                let ids = task_core::runnable_work_units(&units, in_flight, mode.limit);
+                let ids =
+                    crate::execution_scheduler::runnable_in_phase(&units, in_flight, mode.limit);
                 let Some(wu) = ids
                     .first()
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))

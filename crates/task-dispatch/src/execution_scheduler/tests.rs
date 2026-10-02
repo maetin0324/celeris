@@ -165,6 +165,7 @@ fn settle_waits_while_a_sibling_is_running_then_reports_the_question() {
     assert_eq!(settle_phase(&units), PhaseSettle::Question("id-a".into()));
 }
 
+/// ADR-0134 D2: 失敗は同じ段の進められる葉（`c`）が尽きてから。
 #[test]
 fn settle_reports_a_failure_after_in_flight_reaches_zero() {
     use WorkUnitStatus::*;
@@ -174,7 +175,112 @@ fn settle_reports_a_failure_after_in_flight_reaches_zero() {
         prow("c", 2, "build", Ready, &[]),
         integ("build", 3, Pending, &["a", "b", "c"]),
     ];
+    assert_eq!(settle_phase(&units), PhaseSettle::Advance);
+    assert_eq!(runnable_in_phase(&units, 0, 2), vec!["id-c".to_string()]);
+    let units = vec![
+        prow("a", 0, "build", Failed, &[]),
+        prow("b", 1, "build", Done, &[]),
+        prow("c", 2, "build", Done, &[]),
+        integ("build", 3, Pending, &["a", "b", "c"]),
+    ];
     assert_eq!(settle_phase(&units), PhaseSettle::Failure("id-a".into()));
+}
+
+fn blocked(key: &str, seq: u32, phase: &str, reason: WorkUnitBlockedReason) -> WorkUnitRow {
+    let mut r = prow(key, seq, phase, WorkUnitStatus::Blocked, &[]);
+    r.blocked_reason = Some(reason);
+    r
+}
+
+/// ADR-0134 D2（本番 01M3YF3NS2EGTZD2BBWNPG1K28 の形）: 段 `core` に daemon の repair WU `repair-core-2` が
+/// `blocked(plan_issue)` で残り、replan が同じ内容の葉 `e2e-cancel` を足した。葉が先に走り（`Advance`、起こす
+/// unit は `e2e-cancel`）、葉が done になって止まった unit だけが残れば `Failure`。
+#[test]
+fn settle_ready_before_blocked_plan_issue_runs_the_new_leaf_first() {
+    use WorkUnitStatus::*;
+    for reason in [
+        WorkUnitBlockedReason::PlanIssue,
+        WorkUnitBlockedReason::Limit,
+        WorkUnitBlockedReason::DependencyFailed,
+    ] {
+        let units = vec![
+            prow("impl", 0, "core", Done, &[]),
+            blocked("repair-core-2", 1, "core", reason),
+            prow("e2e-cancel", 2, "core", Ready, &[]),
+            integ("core", 3, Pending, &["impl", "e2e-cancel"]),
+            prow("repro", 4, "verify", Pending, &[]),
+        ];
+        assert_eq!(settle_phase(&units), PhaseSettle::Advance, "{reason:?}");
+        assert_eq!(
+            runnable_in_phase(&units, 0, 2),
+            vec!["id-e2e-cancel".to_string()],
+            "{reason:?}"
+        );
+        let units = vec![
+            prow("impl", 0, "core", Done, &[]),
+            blocked("repair-core-2", 1, "core", reason),
+            prow("e2e-cancel", 2, "core", Done, &[]),
+            integ("core", 3, Pending, &["impl", "e2e-cancel"]),
+            prow("repro", 4, "verify", Pending, &[]),
+        ];
+        assert_eq!(
+            settle_phase(&units),
+            PhaseSettle::Failure("id-repair-core-2".into()),
+            "{reason:?}"
+        );
+        assert!(runnable_in_phase(&units, 0, 2).is_empty());
+    }
+}
+
+/// ADR-0134 D2: `needs_continuation` の葉も止まった unit より先（failed があっても）。
+#[test]
+fn settle_ready_before_blocked_continues_a_unit_beside_a_failure() {
+    use WorkUnitStatus::*;
+    let units = vec![
+        prow("a", 0, "core", Failed, &[]),
+        prow("b", 1, "core", NeedsContinuation, &[]),
+        prow("c", 2, "core", Ready, &[]),
+        integ("core", 3, Pending, &["a", "b", "c"]),
+    ];
+    assert_eq!(settle_phase(&units), PhaseSettle::Advance);
+    assert_eq!(
+        runnable_in_phase(&units, 0, 3),
+        vec!["id-b".to_string(), "id-c".to_string()]
+    );
+    // 走っている分だけ枠を減らす。
+    assert_eq!(runnable_in_phase(&units, 1, 2), vec!["id-b".to_string()]);
+    assert!(runnable_in_phase(&units, 2, 2).is_empty());
+}
+
+/// ADR-0134 D2: question は今のまま最優先（同じ段に ready の葉があっても `Question`。新しい葉は起こさず、
+/// continuation だけを続ける）。
+#[test]
+fn settle_ready_before_blocked_keeps_the_question_first() {
+    use WorkUnitStatus::*;
+    let units = vec![
+        blocked("repair-core-2", 0, "core", WorkUnitBlockedReason::PlanIssue),
+        blocked("ask", 1, "core", WorkUnitBlockedReason::Question),
+        prow("cont", 2, "core", NeedsContinuation, &[]),
+        prow("e2e-cancel", 3, "core", Ready, &[]),
+        integ("core", 4, Pending, &["ask", "cont", "e2e-cancel"]),
+    ];
+    assert_eq!(settle_phase(&units), PhaseSettle::Question("id-ask".into()));
+    assert_eq!(runnable_in_phase(&units, 0, 3), vec!["id-cont".to_string()]);
+}
+
+/// ADR-0134 D2: 失敗した unit に依存する葉（pending / blocked(dependency_failed)）は進められる葉に数えない。
+/// 次の段の ready の unit も起こさない（段の内側だけ）。
+#[test]
+fn settle_ready_before_blocked_does_not_skip_past_a_failure() {
+    use WorkUnitStatus::*;
+    let units = vec![
+        prow("a", 0, "core", Failed, &[]),
+        prow("b", 1, "core", Pending, &["a"]),
+        integ("core", 2, Pending, &["a", "b"]),
+        prow("v", 3, "verify", Ready, &[]),
+    ];
+    assert_eq!(settle_phase(&units), PhaseSettle::Failure("id-a".into()));
+    assert!(runnable_in_phase(&units, 0, 3).is_empty());
 }
 
 #[test]

@@ -139,26 +139,22 @@ fn user_systemd_bus_is_hidden_from_launched_process() {
         "parent namespace was modified"
     );
 
-    let Some(real_runtime) = std::env::var_os("XDG_RUNTIME_DIR") else {
-        eprintln!("skip: host XDG_RUNTIME_DIR is unset");
-        return;
-    };
-    if !Path::new(&real_runtime).exists() {
-        eprintln!("skip: host XDG_RUNTIME_DIR does not exist");
-        return;
+    // Keep this an end-to-end check without consulting or invoking the host manager. The
+    // namespace above is backed by a fake runtime containing listening sockets, so success
+    // would prove that the launched process escaped the masked paths.
+    for (program, args) in [
+        ("systemctl", &["--user", "show-environment"][..]),
+        ("systemd-run", &["--user", "--scope", "true"][..]),
+    ] {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args).env("XDG_RUNTIME_DIR", &runtime);
+        let mut cmd = launch(cmd, None);
+        let out = rt.block_on(async { cmd.output().await }).unwrap();
+        assert!(
+            !out.status.success(),
+            "{program} --user unexpectedly succeeded in the masked namespace"
+        );
     }
-    if Command::new("systemctl").arg("--version").output().is_err() {
-        eprintln!("skip: systemctl is not installed");
-        return;
-    }
-    let mut cmd = tokio::process::Command::new("systemctl");
-    cmd.args(["--user", "show-environment"]);
-    let mut cmd = launch(cmd, None);
-    let out = rt.block_on(async { cmd.output().await }).unwrap();
-    assert!(
-        !out.status.success(),
-        "systemctl --user reached the host manager"
-    );
 }
 
 #[test]

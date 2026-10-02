@@ -108,7 +108,11 @@ fn a_work_genre_is_shown_right_after_the_brief_when_present() {
 fn an_empty_context_renders_only_the_deliverables_placement_note() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        format!("{}{}", deliverables_placement_note(), production_host_note())
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -273,7 +277,11 @@ fn conversation_runs_get_a_reply_only_instruction_appended_at_the_end() {
     // 対話でない run（既定値の `None`）では何も足さない。
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        format!("{}{}", deliverables_placement_note(), production_host_note())
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -316,7 +324,11 @@ fn secretary_instructions_tell_cos_to_route_cluster_work_via_create_task() {
 
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        format!("{}{}", deliverables_placement_note(), production_host_note())
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -621,7 +633,11 @@ fn recent_work_is_shown_right_after_memory_and_before_conversation() {
     // 対話でない通常 run の前置きは 1 バイトも変わらない（既定値には `recent_work` が無い）。
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        format!("{}{}", deliverables_placement_note(), production_host_note())
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -849,7 +865,11 @@ fn the_knowledge_section_lists_the_index_of_every_mount_kind() {
     assert!(!render(&full_context(), "artifacts").contains("## 知識 (knowledge base"));
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        format!("{}{}", deliverables_placement_note(), production_host_note())
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 

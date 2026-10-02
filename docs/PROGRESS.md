@@ -541,7 +541,7 @@ exit 101 になった。コードは変更していない（検証のみ）の�
   sccache 撤去自体の確認（crate・cache_server・unit・setup スクリプトの不在、env 構築コードの不在）が
   変わらないことを記録する。
 
-### ADR-0129 (1) 撤去後の final review 不合格: browser_h3_wire の再確認（work unit `h3-recheck`）
+### ADR-0129 (1) sccache 撤去後の final review 不合格: browser_h3_wire の再確認（work unit `h3-recheck`）
 
 final review で `cargo test --workspace` が `task-worker` の `browser_h3_wire`
 （`inner_injection_wire`: `page target: SinkFailed`、
@@ -570,3 +570,28 @@ final review で `cargo test --workspace` が `task-worker` の `browser_h3_wire
 - 結論: final review が報告した `browser_h3_wire` の失敗は、単独実行・全体実行のいずれでも再現しなかった
   （共用 host の負荷に起因する一時的な flake と推測するが、本タスクのコード — `browser_specialist.rs` の
   `with_env_removed` 削除 — を疑わせる具体的な根拠は無かった）。browser のコード・試験は変更していない。
+
+再試行（attempt 2）で上の結論を取り直した。`git diff 7b77f17a39b3 HEAD -- crates/task-worker/src/browser*
+crates/task-worker/tests/browser*` は同じ `browser_specialist.rs` の 4 行のみで変化なし。
+
+- `cargo test -p task-worker --test browser_h3_wire` を単独で 3 回実行 → **3 回とも exit 0、2 passed
+  0 failed**。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace`（fail-fast、既定）を 2 回実行したところ、いずれも `task-worker` に到達する前に
+  `e2e --test api_scenarios` の `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`・
+  `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`（実時間待ち依存、
+  既存の共用 host flake。ADR-0129 の sccache 撤去や browser コードとは無関係）で停止した。
+  `--no-fail-fast` で通したところ 1 回目は同じ e2e 2 件は `ok` だったが、代わりに
+  `tests/browser_injection_wire.rs`（`browser_h3_wire.rs` とは別ファイル。同名の `inner_injection_wire`・
+  `real_broker_browser_injection_receipt_and_origin_guards` を持つ）が同種の `SinkFailed` で落ち、
+  `browser_h3_wire.rs` 自体は同じ run 内で `ok`。2 回目（通常の `cargo test --workspace`、fail-fast）は
+  再度 e2e の `writes_from_celerisctl_and_api_...` のみ失敗。3 回目（`--no-fail-fast`）で
+  **exit 0、115 バイナリすべて `test result: ok`、`passed` 合算 3228、failed 0** を得た
+  （`browser_h3_wire.rs` は `inner_injection_wire ... ok` /
+  `real_broker_browser_injection_receipt_and_origin_guards ... ok`）。
+- 結論（attempt 2）: `browser_h3_wire` 単体は 3/3 で常に pass。`cargo test --workspace` 全体は実行ごとに
+  e2e か他の browser 試験ファイルのいずれかで散発的に失敗するが、同じ run 内で失敗する試験ファイルが
+  毎回違う（e2e 2 件 → browser_injection_wire → e2e 1 件 → 全 pass）ことから、特定のコード欠陥ではなく
+  共用 host の負荷に起因する実時間待ち flake と判断する。本ブランチの browser 系ファイルに差分は無く
+  （`browser_specialist.rs` の `with_env_removed` 削除のみ）、sccache 撤去のコードを疑う根拠は無い。
+  最終的に `cargo test --workspace` exit 0 の run を得ている。

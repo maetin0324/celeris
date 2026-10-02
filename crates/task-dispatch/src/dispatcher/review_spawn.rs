@@ -446,6 +446,14 @@ impl Dispatcher {
         let profile = department
             .as_deref()
             .map(|id| task_core::profile::resolve(&org, id));
+        // Review follows the subject's department rules, not the lead reviewer's profile.
+        let review_mounts = task
+            .assignee
+            .as_deref()
+            .map(|id| task_core::profile::resolve(&org, id).skills_mounts)
+            .unwrap_or_default();
+        let (skills, _) =
+            self.skills_context(&review_mounts, task_ops::knowledge::SkillUse::Review);
         // ADR-0069 Phase 118 D4: reviewer の lane は、上ほど強い優先順位で決める。
         //   1. 部署の `profile.review_tier`（ADR-0069 D2。最も具体的な指定）。
         //   2. `[reviewer] tier` の明示（`reviewer_tier_override`）。
@@ -632,6 +640,7 @@ impl Dispatcher {
             ReviewerRun {
                 node,
                 profile,
+                skills,
                 adapter,
                 run_id: review_run_id,
                 limits: RunLimits {

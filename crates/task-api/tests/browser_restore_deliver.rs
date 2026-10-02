@@ -25,7 +25,7 @@ use task_api::browser_identity::{IdentityRegisterInput, IdentityService};
 use task_core::browser_isolation::LiveSessions;
 use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, TaskKind, TaskStore};
 use task_worker::browser_cdp_sink::CdpController;
-use task_worker::browser_runtime::{RestoreAdmission, RuntimeSpec};
+use task_worker::browser_runtime::{RestoreAdmission, RuntimeSpec, UsernsMode};
 use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 use time::OffsetDateTime;
 
@@ -83,6 +83,7 @@ fn launch(session: &Path, id: &str, opts: SupervisorOptions) -> Supervisor {
         argv: argv.into_iter().collect::<Vec<OsString>>(),
         cdp_pipe: true,
         egress: None,
+        userns: UsernsMode::Unshare,
     };
     Supervisor::start(spec, opts).expect("isolated runtime starts")
 }

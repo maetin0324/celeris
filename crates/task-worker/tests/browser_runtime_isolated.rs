@@ -56,6 +56,7 @@ fn browser() -> PathBuf {
 
 fn spec(session: &Path, id: &str, ro: Vec<PathBuf>, argv: &[&str], cdp: bool) -> RuntimeSpec {
     RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: bwrap(),
         session_id: id.into(),
         session_dir: session.to_path_buf(),

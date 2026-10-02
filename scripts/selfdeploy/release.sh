@@ -234,6 +234,8 @@ skip_step() {
 # 落ちても `GATE_OK` は倒さない（リリースは作られ、昇格は gui/ だけのリリースとして進む）。結果は gate.json の
 # `steps[]`（exit ≠ 0 のまま）と `web`（`ok` / `failed_step` / `blocking: false`）に残し、落ちた段より後ろの
 # web/ の段は `skipped: true` にする。ビルドする sha に `web/` が無い・`SD_GATE_SKIP_WEB=1` なら全部 skipped。
+# 2026-10-02（人の判断）: web の配布物の展開が NFS 上で 40〜60 分かかり、node_modules も入らない不具合（task 01M3YT4PT3）
+# があるので、既定を skip にする（SD_GATE_SKIP_WEB の既定 1）。web の段を走らせるときは SD_GATE_SKIP_WEB=0 を明示する。
 WEB_OK=true
 WEB_FAILED_STEP=""
 WEB_SKIP_REASON=""
@@ -293,7 +295,7 @@ web_pnpm_release() {
 }
 
 decide_web_skip() {
-  if [ "${SD_GATE_SKIP_WEB:-0}" = 1 ]; then
+  if [ "${SD_GATE_SKIP_WEB:-1}" = 1 ]; then
     WEB_SKIP_REASON="SD_GATE_SKIP_WEB=1"
   elif [ ! -f "$BUILD/web/package.json" ]; then
     WEB_SKIP_REASON="no web/ directory"

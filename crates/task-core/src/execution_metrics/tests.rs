@@ -614,3 +614,88 @@ fn group_quota_by_work_unit_splits_atomic_and_work_unit_runs() {
         Some(Some(3.0))
     );
 }
+
+fn continuation_metrics_run(id: &str, wu: Option<&str>, resumed: Option<bool>) -> RunRow {
+    RunRow {
+        run_id: id.into(),
+        task_id: "task".into(),
+        work_unit_id: wu.map(str::to_string),
+        role: RunIndexRole::Worker,
+        seq: 1,
+        status: crate::RunIndexStatus::Completed,
+        adapter: Some("claude-code".into()),
+        model: None,
+        account: None,
+        session_id: None,
+        checkpoint: None,
+        usage: Some(Usage {
+            input_tokens: Some(10),
+            cache_read_tokens: Some(2),
+            cache_creation_tokens: Some(3),
+            duplicate_reads: Some(4),
+            session_resumed: resumed,
+            ..Usage::default()
+        }),
+        metrics: Some(RunMetrics {
+            wall_ms: 100,
+            ..RunMetrics::default()
+        }),
+        started_at: String::new(),
+        finished_at: None,
+    }
+}
+
+#[test]
+fn continuation_metrics_compares_fresh_resumed_and_legacy_runs() {
+    let runs = [
+        continuation_metrics_run("fresh", None, Some(false)),
+        continuation_metrics_run("resumed", None, Some(true)),
+        continuation_metrics_run("old", None, None),
+    ];
+    let (summary, _) = summarize_continuation_runs(&[], &runs);
+    assert_eq!(summary.fresh.runs, 1);
+    assert_eq!(summary.resumed.wall_ms, 100);
+    assert_eq!(summary.resumed.input_tokens, 15);
+    assert_eq!(summary.resumed.duplicate_reads, 4);
+    assert_eq!(summary.unknown.runs, 1);
+}
+
+#[test]
+fn continuation_metrics_groups_by_work_unit_and_fallback_reason() {
+    let events = vec![Event::worker_progress_with(
+        "r2",
+        "continuation session: fresh (reason=account_changed)",
+        crate::ProgressFields::of(crate::ProgressKind::Status),
+    )];
+    let runs = [
+        continuation_metrics_run("r1", Some("wu-a"), Some(true)),
+        continuation_metrics_run("r2", Some("wu-b"), Some(false)),
+    ];
+    let (summary, by_wu) = summarize_continuation_runs(&events, &runs);
+    assert_eq!(summary.fresh_fallback_by_reason["account_changed"], 1);
+    assert_eq!(by_wu[&Some("wu-a".into())].resumed.runs, 1);
+    assert_eq!(by_wu[&Some("wu-b".into())].fresh.input_tokens, 15);
+}
+
+#[test]
+fn continuation_metrics_event_summary_and_serde_default() {
+    let task = sample_task("x", vec![]);
+    let events = vec![Event::WorkerFinished {
+        run_id: "run".into(),
+        outcome: "done".into(),
+        role: None,
+        usage: continuation_metrics_run("run", None, Some(true)).usage,
+        metrics: Some(RunMetrics {
+            wall_ms: 50,
+            ..RunMetrics::default()
+        }),
+        end: None,
+    }];
+    let summary = summarize(&task, &events);
+    assert_eq!(summary.continuation.resumed.runs, 1);
+    assert_eq!(summary.continuation.resumed.wall_ms, 50);
+    let mut json = serde_json::to_value(summary).unwrap();
+    json.as_object_mut().unwrap().remove("continuation");
+    let old: ExecutionMetrics = serde_json::from_value(json).unwrap();
+    assert_eq!(old.continuation, ContinuationMetrics::default());
+}

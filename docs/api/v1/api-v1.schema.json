@@ -4315,6 +4315,80 @@
       ],
       "type": "object"
     },
+    "ContinuationMetrics": {
+      "description": "`session_resumed` が無い旧 run は unknown。fresh の理由は dispatch の判断記録から読む。",
+      "properties": {
+        "fresh": {
+          "$ref": "#/$defs/ContinuationRunTotals",
+          "default": {
+            "duplicate_reads": 0,
+            "input_tokens": 0,
+            "runs": 0,
+            "wall_ms": 0
+          }
+        },
+        "fresh_fallback_by_reason": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "resumed": {
+          "$ref": "#/$defs/ContinuationRunTotals",
+          "default": {
+            "duplicate_reads": 0,
+            "input_tokens": 0,
+            "runs": 0,
+            "wall_ms": 0
+          }
+        },
+        "unknown": {
+          "$ref": "#/$defs/ContinuationRunTotals",
+          "default": {
+            "duplicate_reads": 0,
+            "input_tokens": 0,
+            "runs": 0,
+            "wall_ms": 0
+          }
+        }
+      },
+      "type": "object"
+    },
+    "ContinuationRunTotals": {
+      "description": "同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。",
+      "properties": {
+        "duplicate_reads": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wall_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runs",
+        "wall_ms",
+        "input_tokens",
+        "duplicate_reads"
+      ],
+      "type": "object"
+    },
     "CooldownView": {
       "description": "`task_dispatch::policy::Cooldown`（`Instant`）を壁時計に直したもの。",
       "properties": {
@@ -8412,6 +8486,31 @@
           "description": "D7: 予算切れの種類ごとの run 数（`\"turns\"` / `\"wall_clock\"` / `\"context\"`）。",
           "type": "object"
         },
+        "continuation": {
+          "$ref": "#/$defs/ContinuationMetrics",
+          "default": {
+            "fresh": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "fresh_fallback_by_reason": {},
+            "resumed": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "unknown": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            }
+          },
+          "description": "ADR-0124: worker run の fresh / resumed / 旧形式の比較値。"
+        },
         "continuations": {
           "description": "D11: continuation（予算切れ・yield の続き）の回数（`Trigger::Continue{why: Continue}`）。",
           "format": "uint32",
@@ -8592,6 +8691,39 @@
             "null"
           ]
         },
+        "continuation": {
+          "$ref": "#/$defs/ContinuationMetrics",
+          "default": {
+            "fresh": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "fresh_fallback_by_reason": {},
+            "resumed": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "unknown": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            }
+          },
+          "description": "ADR-0124: fresh / resumed / 旧形式の worker run 別比較。"
+        },
+        "continuation_by_work_unit": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ContinuationMetrics"
+          },
+          "default": {},
+          "description": "WU id ごとの比較値。atomic run は `task:<task_id>` キー。",
+          "type": "object"
+        },
         "continuations": {
           "format": "uint64",
           "minimum": 0,
@@ -8685,6 +8817,39 @@
             "$ref": "#/$defs/AccountNowView"
           },
           "type": "array"
+        },
+        "continuation": {
+          "$ref": "#/$defs/ContinuationMetrics",
+          "default": {
+            "fresh": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "fresh_fallback_by_reason": {},
+            "resumed": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "unknown": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            }
+          },
+          "description": "全グループの worker run 比較値。"
+        },
+        "continuation_by_work_unit": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ContinuationMetrics"
+          },
+          "default": {},
+          "description": "WU id ごとの比較値。atomic run は `task:<task_id>` キー。",
+          "type": "object"
         },
         "group_by": {
           "type": "string"

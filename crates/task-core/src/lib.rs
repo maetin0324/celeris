@@ -245,7 +245,8 @@ pub use execution_gate::{
 };
 // ---- ADR-0072 D19（Phase E5）: Task 単位の実行メトリクス ----
 pub use execution_metrics::{
-    ExecutionMetrics, group_quota_by_work_unit, summarize as summarize_execution_metrics,
+    ContinuationMetrics, ContinuationRunTotals, ExecutionMetrics, group_quota_by_work_unit,
+    summarize as summarize_execution_metrics, summarize_continuation_runs,
 };
 // ---- ADR-0074 D4（Phase F3 quota）: quota 消費の推定 ----
 pub use quota::{

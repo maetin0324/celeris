@@ -2616,3 +2616,18 @@ bind し `agent/begin` が別の DB に届くこと（詳細は `wu/fix-control-
 ### 未解決・提案
 
 - 落ちた試験は無かった（本 WorkUnit の範囲内では既知の flaky は再現せず、追加の plan_issue は無い）。
+
+### 昇格認可 bootstrap 再検査（2026-10-02, task 01M3Y72GHC4PC2N4MV5435TFRP）
+
+旧 `promote.sh` からの最初の昇格では、current の旧スクリプトが `promoting.json` を書かず、`update_links` より先に新 daemon を起動する。そこで `start_promote` が対象 release の `promote.lock` に書いた生きた pid を認可印として受理する。daemon は lock の pid が現在も生存し、lock の更新時刻が 900 秒以内で、かつ `promote.lock` のある release と自分の release が一致する場合だけ昇格中と判定する。pid が再利用されても古い lock を誤認しないよう更新時刻も確認する。認可判定は DB open/migration と handoff の前に行う。既存の ADR-0040 付記と bootstrap 試験（`crates/celeris/tests/unpromoted_release.rs`）を含め、この旧版経路を確認した。
+
+### main 取り込みと受け入れ検査（2026-10-02, task 01M3Y72GHC4PC2N4MV5435TFRP）
+
+- `git merge --no-edit main` → exit 0、merge commit `55a282535a83af709d61f71490d76e7fd168cc97`。取り込み対象 main は `95ac16442f92c5a4975a41292f048c6003ba977a`。`git merge-base --is-ancestor main HEAD` → exit 0、未解決パスなし。`git diff --check` → exit 0。
+- `cargo build --workspace --bins` → exit 0。
+- `cargo test --workspace` → exit 101。多数は pass したが `crates/celeris/tests/instance_handoff.rs` の5件が user namespace 作成拒否（`Operation not permitted`）により失敗。worker db guard が namespace 内で DB 読み取り専用化を確認できず、daemon が起動できなかった。`unshare -U -r true` も exit 1（`uid_map: Operation not permitted`）。従って、これは本変更の失敗とは断定できず、sandbox 制約により workspace test gate は未達。
+- 既知 flaky `phase3_control_converges_rejects_competition_and_cancel_stops` の単独再実行 → exit 101、0 passed / 1 failed（10 filtered）。今回は以前の `paused` / `pausing` 競合ではなく、同じ user namespace 拒否による daemon 起動失敗。再実行しても環境制約が再現した。
+- `cargo clippy --workspace -- -D warnings` → exit 0（warning なし）。
+- `scripts/selfdeploy/tests/promote_authorization_marker.sh` → exit 0、`promote_authorization_marker: all ok`。live・stop-start・失敗・rollback の経路で start 時の印と後片付けを確認。
+- `scripts/selfdeploy/tests/promote_web_follows_release.sh` → exit 0、`promote_web_follows_release: all ok`。web 追従と rollback、unit に `Wants=celeris@` が無いことを確認。
+- 本 run では本番 host / DB と systemd user manager を操作していない。

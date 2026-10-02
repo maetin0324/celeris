@@ -740,6 +740,12 @@ export type Event =
     }
   | {
       detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      type: "delivery_skipped";
+    }
+  | {
+      detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
        */
@@ -962,6 +968,22 @@ export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
  */
 export type UnitDeclared = "leaf" | "task";
 /**
+ * ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
+ * 並びは判定の順（同時に複数あれば先のものを記録する）。
+ */
+export type DeliverySkipReason =
+  | "multiple_repos"
+  | "no_marker"
+  | "marker_repo_mismatch"
+  | "repo_row_missing"
+  | "repo_not_local"
+  | "repo_path_mismatch"
+  | "not_git"
+  | "no_branch"
+  | "branch_name_mismatch"
+  | "refs_unresolvable"
+  | "department_unresolved";
+/**
  * D5: `execution_plans.status`。
  */
 export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
@@ -1045,6 +1067,18 @@ export type AttentionItem =
       summary: string;
       task: TaskRef;
       type: "plan_approval";
+    }
+  | {
+      at: string;
+      detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      /**
+       * 「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。
+       */
+      summary: string;
+      task: TaskRef;
+      type: "delivery_skipped";
     };
 /**
  * ADR-0047 D1 / D4。
@@ -1937,12 +1971,12 @@ export interface NewBrowserWait {
   run_id: string;
   session_id: string;
   /**
-   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
-   */
-  /**
    * ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
    */
   trusted_login?: TrustedLogin | null;
+  /**
+   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
+   */
   ttl_secs?: number | null;
   work_unit_id?: string | null;
 }
@@ -5189,6 +5223,11 @@ export interface ReplanDiff {
    * 新しい版に無くなった未完了の WorkUnit（`superseded` にする）。
    */
   removed: string[];
+  /**
+   * ADR-0079 付記「R7-9」D2: 統合済み（done）だった段階のうち、この版で unit が増えたので統合 WU を `pending` に
+   * 戻した段階の key。`ExecutionPlanned.reason` にも `stage_reopened: …` として残す。
+   */
+  reopened_stages?: string[];
 }
 /**
  * ADR-0072 D17（Phase E4）: `execution_plans` の 1 版（`GET /tasks/{id}/execution-plan` の

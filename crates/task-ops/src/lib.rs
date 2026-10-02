@@ -42,6 +42,7 @@ pub mod lifecycle;
 pub mod matching;
 pub mod memory;
 pub mod milestone_review;
+pub mod notify_feed;
 /// ADR-0074 D2（Phase F3 途中確認）: 工程の後の途中確認（`awaiting_human`）の判定と人の操作。
 pub mod phase_gate;
 pub mod plan;

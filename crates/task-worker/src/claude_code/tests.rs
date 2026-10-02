@@ -3484,6 +3484,7 @@ fn planner_prompt_has_the_check_writing_section() {
         "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
         "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",
         "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
+        "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),

@@ -135,6 +135,10 @@ pub enum PlanValidationError {
         key: String,
         detail: String,
     },
+    InvalidWritePaths {
+        key: String,
+        detail: String,
+    },
     /// ADR-0074 D5.3（Phase F1）: `rationale` が上限を超える。
     RationaleTooLong {
         len: usize,
@@ -428,6 +432,9 @@ impl std::fmt::Display for PlanValidationError {
                     f,
                     "work unit {key}: features must parse as TaskFeatureHints: {detail}"
                 )
+            }
+            PlanValidationError::InvalidWritePaths { key, detail } => {
+                write!(f, "work unit {key}: expected_write_paths: {detail}")
             }
             PlanValidationError::RationaleTooLong { len, max } => {
                 write!(f, "rationale is too long: {len} > {max} characters")
@@ -1626,6 +1633,17 @@ fn validate_v3(
 
     // /2 と同じ検査（`features`・サイズ・重複・replan の不変条件）は /2 の形に写して行う。
     let internal = internal_view(spec);
+    // ADR-0130 D1: `expected_write_paths` は /3 の unit だけが持つ任意欄。
+    for unit in &spec.units {
+        if let Some(paths) = &unit.expected_write_paths
+            && let Err(detail) = crate::write_set::normalize_write_paths(paths)
+        {
+            errors.push(PlanValidationError::InvalidWritePaths {
+                key: unit.key.clone(),
+                detail,
+            });
+        }
+    }
     for wu in &internal.work_units {
         if let Some(features) = &wu.features
             && let Err(e) =
@@ -1736,8 +1754,16 @@ fn validate_v3(
     if !errors.is_empty() {
         return Err(errors);
     }
+    let mut normalized = spec.clone();
+    for unit in &mut normalized.units {
+        if let Some(paths) = &unit.expected_write_paths
+            && let Ok(paths) = crate::write_set::normalize_write_paths(paths)
+        {
+            unit.expected_write_paths = Some(paths);
+        }
+    }
     Ok(ValidatedPlan {
-        spec: spec.clone(),
+        spec: normalized,
         rounding_notes: Vec::new(),
         topological_order,
     })

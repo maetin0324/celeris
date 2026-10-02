@@ -236,6 +236,7 @@ export type AttentionItem = {
   "at": string;
   "class": FailureClass;
   "delivered_release"?: string | null;
+  "integration_repair"?: IntegrationRepairView | null;
   "reason": string;
   "task": TaskRef;
   "type": "failed";
@@ -1952,6 +1953,22 @@ export type IntegrationMethod = "merge" | "pr" | "discard";
 
 export type IntegrationRepairExhaustReason = "limit_reached" | "plan_issue" | "work_unit_failed" | "budget_exhausted" | "result_untrusted" | "abort_failed" | "worktree_unavailable";
 
+export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
+
+export type IntegrationRepairView = {
+  "attempt": number;
+  "before_sha"?: string | null;
+  "conflict_files"?: Array<string>;
+  "fallback"?: boolean | null;
+  "max_attempts": number;
+  "reason"?: IntegrationRepairExhaustReason | null;
+  "rollback_to_sha"?: string | null;
+  "state": IntegrationRepairState;
+  "target_ref"?: string | null;
+  "target_sha": string;
+  "work_unit_id"?: string | null;
+};
+
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
 
 export type KnowledgeAcceptBody = {
@@ -3642,6 +3659,7 @@ export type TaskDetail = {
   "execution"?: ExecutionView | null;
   "failure"?: FailureSummary | null;
   "genre"?: string | null;
+  "integration_repair"?: IntegrationRepairView | null;
   "is_root_task"?: boolean;
   "latest_question"?: string | null;
   "paused_by"?: TaskId | null;

@@ -140,6 +140,13 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   decision_withdrawn: { sets: ["T", "L", "N"] },
   plan_approval_requested: { sets: ["T", "L", "N", "E"] },
   stall_detected: { sets: ["T", "R", "L"] },
+  // ADR-0118 / ADR-0120: review 前同期と integration repair（TaskDetail・受信箱の Failed 項目に出る）。
+  review_target_synced: { sets: ["T", "E"] },
+  review_target_advanced: { sets: ["T", "E"] },
+  merge_candidate_stale: { sets: ["T", "E", "L"] },
+  integration_repair_scheduled: { sets: TLE },
+  integration_repair_resolved: { sets: TLE },
+  integration_repair_exhausted: { sets: TLE },
 };
 
 function runScoped(taskId: string, event: EventRow["event"]): QueryKey[] {

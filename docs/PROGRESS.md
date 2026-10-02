@@ -1,5 +1,14 @@
 # PROGRESS — taskd
 
+## sccache 撤去 schema・運用文書（task `01M3YEQW40FPMH82X1JMNXGJEE`）
+
+ADR-0129 (1) に従い `ScratchStatus.sccache` / `cache` の型は互換用に残し、説明を廃止・常に null に更新した。API schema と worker protocol schema は生成試験で照合。scratch status 試験は両欄が JSON null であることを確認する。GUI/web の型コメントも ADR-0129 に合わせた。`docs/ops/sccache-l1.md` は廃止と ADR 参照、人が本番 host で行う unit・旧 cache 後始末の手順に置き換えた。本番 host 操作は行っていない。
+
+- `UPDATE_SCHEMA=1 cargo test -p task-api`: schema 一致と null 断言を含む unit 72 件成功、2 ignored。続く integration test `production_h3_injects_once_without_exposure` は sandbox の `unshare: Operation not permitted` で失敗。
+- `UPDATE_SCHEMA=1 cargo test -p task-worker protocol::tests:: --lib`: 9 件成功（worker protocol schema 一致を含む）。
+- `UPDATE_SCHEMA=1 cargo test -p task-core --lib`: 625 件成功。
+- `corepack pnpm@11.27.0 -C gui gen:types` と `corepack pnpm@12.6.0 -C web gen:types`: pnpm store SQLite を開けず終了。生成型コメントは schema の ADR-0129 記述に手動同期し、型構造は変更していない。
+
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
 ## 試験で CPU を焼く負荷をかけない規則（2026-10-02、task 01M3Y4AV7801NSXB6FD698QZHW、WorkUnit rule-docs）

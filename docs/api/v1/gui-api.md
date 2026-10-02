@@ -1689,21 +1689,14 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 
 ### 3.61〜3.62 GUI 監査対応の API（ADR-0033 D4 / D6）
 
-3.61（と同じ並びの 3.63）は撤去済みで 410（ADR-0079 D13）。3.62 は SPEC §3.2 の「記憶は案件をまたぐ」を
-人が確認するための読み取り専用の窓口（ADR-0033 D6）。
+3.61 は撤去済みで 410（ADR-0079 D13。`POST /milestones/{id}/decide` も同じ撤去理由で §3.125.8 にまとめてある）。
+3.62 は SPEC §3.2 の「記憶は案件をまたぐ」を人が確認するための読み取り専用の窓口（ADR-0033 D6）。
 
 #### 3.61 `POST /projects/{id}/plan` → 410 `removed_by_adr_0079`（**管理系**）
 
 撤去済み（ADR-0079 D13。§3.125.8）。案件は計画を持たない。**本文も id も読まずに** 410 を返す（管理系のまま:
 トークンが無ければ先に 401）。`instead` は「`POST /tasks` に `project_id` を付けて root task を作る（段階は
 `stages_hint` で名付ける）」。要求・応答の型（`ProjectPlanBody` / `ProjectPlanAccepted`）は
-`api-v1.schema.json` の互換のためにだけ残る。
-
-#### 3.63 `POST /milestones/{id}/decide` → 410 `removed_by_adr_0079`（**管理系**）
-
-撤去済み（ADR-0079 D13。§3.125.8。旧: 途中目標の `ok` / `discuss` / `ng` の判定、ADR-0038 D2）。3.61 と同じく
-本文も id も読まずに 410 を返す（トークンが無ければ先に 401）。`instead` は「root task の計画で `review: human`
-の段階を置く（`POST /tasks/{id}/execution/phase-gate`）」。型（`MilestoneDecideBody` / `MilestoneDecided`）は
 `api-v1.schema.json` の互換のためにだけ残る。
 
 #### 3.62 `GET /org/{id}/memory?project=<id>` → 200 `{notes, project, notes_path, project_path}`（読み取り）

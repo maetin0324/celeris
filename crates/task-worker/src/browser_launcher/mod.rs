@@ -9,10 +9,12 @@
 //! 起動の中身（userns 生成・bwrap・Chrome）は [`SessionBackend`] の実装に閉じ、この module は
 //! FD・argv・path を一切受け渡さない（ADR-0116 D2/D4）。
 
+pub mod backend;
 pub mod client;
 pub mod protocol;
 pub mod registry;
 pub mod server;
+pub mod userns;
 
 pub use client::{ClientError, LauncherClient, StartedSession};
 pub use protocol::{

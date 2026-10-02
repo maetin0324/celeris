@@ -26,6 +26,15 @@ use task_core::browser_isolation::{
 /// sandbox の中の UID/GID（host から見た UID は変わらない。ADR-0105）。
 pub const SANDBOX_UID: u32 = 1000;
 
+/// The existing daemon path creates its own user namespace. A launcher may supply
+/// a namespace created under its dedicated host UID instead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UsernsMode {
+    #[default]
+    Unshare,
+    Fd(RawFd),
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("runtime io: {0}")]
@@ -64,6 +73,7 @@ pub struct EgressStats {
 #[derive(Debug, Clone)]
 pub struct RuntimeSpec {
     pub bwrap: PathBuf,
+    pub userns: UsernsMode,
     pub session_id: String,
     /// host 側の session dir。sandbox の `/session` にだけ書ける形で bind する。
     pub session_dir: PathBuf,
@@ -94,33 +104,37 @@ const ROOT_LINKS: [&str; 5] = ["bin", "lib", "lib32", "lib64", "sbin"];
 
 /// bwrap の引数（`--info-fd` を除く）。I/O は `/` 直下の symlink 判定だけ。
 pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
-    let mut a: Vec<OsString> = [
-        "--unshare-user",
-        "--uid",
-        "1000",
-        "--gid",
-        "1000",
-        "--unshare-pid",
-        "--unshare-net",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--unshare-cgroup-try",
-        "--die-with-parent",
-        "--new-session",
-        "--cap-drop",
-        "ALL",
-        "--clearenv",
-        "--hostname",
-        "celeris-browser",
-        "--tmpfs",
-        "/",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
+    let mut a: Vec<OsString> = match spec.userns {
+        UsernsMode::Unshare => vec!["--unshare-user".into()],
+        UsernsMode::Fd(_) => vec!["--userns".into(), "7".into()],
+    };
+    a.extend(
+        [
+            "--uid",
+            "1000",
+            "--gid",
+            "1000",
+            "--unshare-pid",
+            "--unshare-net",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--unshare-cgroup-try",
+            "--die-with-parent",
+            "--new-session",
+            "--cap-drop",
+            "ALL",
+            "--clearenv",
+            "--hostname",
+            "celeris-browser",
+            "--tmpfs",
+            "/",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+        ]
+        .iter()
+        .map(OsString::from),
+    );
     for l in ROOT_LINKS {
         let host = Path::new("/").join(l);
         if let Ok(t) = std::fs::read_link(&host) {
@@ -160,6 +174,34 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
     a.extend(["--remount-ro", "/", "--"].map(OsString::from));
     a.extend(spec.argv.iter().cloned());
     a
+}
+
+#[cfg(test)]
+mod userns_args_tests {
+    use super::*;
+
+    #[test]
+    fn external_userns_replaces_only_unshare_argument() {
+        let mut spec = RuntimeSpec {
+            bwrap: "/usr/bin/bwrap".into(),
+            userns: UsernsMode::Unshare,
+            session_id: "test".into(),
+            session_dir: "/tmp/test-session".into(),
+            ro_dirs: Vec::new(),
+            argv: vec!["/usr/bin/true".into()],
+            cdp_pipe: false,
+            egress: None,
+        };
+        let old = bwrap_args(&spec);
+        assert_eq!(old.first().and_then(|s| s.to_str()), Some("--unshare-user"));
+        spec.userns = UsernsMode::Fd(11);
+        let new = bwrap_args(&spec);
+        assert_eq!(
+            &new[..2],
+            &[OsString::from("--userns"), OsString::from("7")]
+        );
+        assert_eq!(&old[1..], &new[2..]);
+    }
 }
 
 /// 稼働中の runtime。drop で process group ごと SIGKILL する。
@@ -205,6 +247,10 @@ impl IsolatedRuntime {
             .map(|_| browser_relay::seqpacket_pair())
             .transpose()?;
         let channel_fd = channel.as_ref().map(|(_, s)| s.as_raw_fd());
+        let userns_fd = match spec.userns {
+            UsernsMode::Unshare => None,
+            UsernsMode::Fd(fd) => Some(fd),
+        };
         // SAFETY: getpid は常に成功する。
         let parent = unsafe { libc::getpid() };
         let mut cmd = Command::new(&spec.bwrap);
@@ -221,6 +267,13 @@ impl IsolatedRuntime {
         // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は親が spawn まで保持する。
         unsafe {
             cmd.pre_exec(move || {
+                // The launcher blocks termination signals for sigwait; sandbox
+                // children must receive normal SIGTERM during graceful teardown.
+                let mut empty: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut empty);
+                if libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut()) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 if arm_parent_death && libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -248,6 +301,10 @@ impl IsolatedRuntime {
                     Some(fd) => Some(lift(fd)?),
                     None => None,
                 };
+                let userns = match userns_fd {
+                    Some(fd) => Some(lift(fd)?),
+                    None => None,
+                };
                 if libc::dup2(info, 5) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -258,6 +315,11 @@ impl IsolatedRuntime {
                 }
                 if let Some(fd) = chan
                     && libc::dup2(fd, CHANNEL_FD) < 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if let Some(fd) = userns
+                    && libc::dup2(fd, 7) < 0
                 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -584,6 +646,11 @@ fn spawn_egress(
     // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は spawn まで親が保持する。
     unsafe {
         cmd.pre_exec(move || {
+            let mut empty: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut empty);
+            if libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut()) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             // runtime の process group に入れて一緒に回収する（ADR-0108 D2）。
             // 元がすでに fd 3 なら dup2 は何もせず CLOEXEC が残る（exec で閉じる）。その時は外す。
             let placed = if fd == 3 {

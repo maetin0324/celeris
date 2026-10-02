@@ -26,6 +26,20 @@ use super::{
 };
 
 impl TaskStore for SqliteStore {
+    fn record_behind_target(
+        &self,
+        obs: &crate::behind_target::BehindTargetObservation,
+    ) -> Result<crate::behind_target::BehindTargetSnapshot, StoreError> {
+        SqliteStore::record_behind_target(self, obs)
+    }
+
+    fn behind_targets(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<crate::behind_target::BehindTargetSnapshot>, StoreError> {
+        SqliteStore::behind_targets(self, task_id)
+    }
+
     fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
         SqliteStore::record_run_write_set(self, record)
     }

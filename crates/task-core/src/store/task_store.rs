@@ -49,6 +49,16 @@ pub trait TaskStore:
     /// Final cumulative snapshot from the WU base commit to its committed head.
     fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
     fn work_unit_write_sets(&self, work_unit_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
+    /// ADR-0130 D4: store one behind measurement; `behind_target_since` follows
+    /// [`crate::behind_target::next_behind_since`] in the same transaction.
+    fn record_behind_target(
+        &self,
+        obs: &crate::behind_target::BehindTargetObservation,
+    ) -> Result<crate::behind_target::BehindTargetSnapshot, StoreError>;
+    fn behind_targets(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<crate::behind_target::BehindTargetSnapshot>, StoreError>;
     /// ADR-0130 D1: explicit task hint (`None` / empty clears it).
     fn set_task_expected_write_paths(
         &self,

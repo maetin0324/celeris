@@ -168,3 +168,132 @@ celerisctl に `db init` / `db migrate` のような migration の入口は**足
 - 昇格後、worker から `celerisctl --db /var/lib/celeris/celeris.sqlite3 ls` が動き、`add` が「読み取り専用」で失敗することを確認できる。
 - `promote.sh --pre-start` のフックで新しいリリースの celerisctl を DB に使う場合、リリースに migration があると celerisctl は
   古い DB を拒否する（D6）。そのようなフックは daemon の migration の後に回す（現行のフックは ADR-0046 の一度きりのもので、既に不要）。
+
+## 付記（2026-10-02）: user systemd bus の遮断
+
+### 事故
+
+- **2026-10-01 18:32Z**: web dogfood の task の codex run が `systemctl --user` で本番 daemon（`celeris@<sha12>` の user unit）を
+  ブランチのビルドに差し替えた（docs/PROGRESS.md 8dc45bd3 の記録）。「残る穴」に挙げていた `systemd-run --user` と同じ経路で、
+  user manager は D1 の namespace の外にいるので、namespace の中の読み取り専用は効かない。
+- 同じ run で codex の `--approve-for-me`（`approvals_reviewer = "auto_review"`）が `sandbox_permissions: "require_escalated"` の
+  要求を justification の文言だけで自動承認した。上の「なぜ codex の workspace-write が止めなかったか」と同じ構造。
+- **18:26〜18:28Z**: テスト（`task_worker::detach` の試験と `crates/celeris/tests/releases_api.rs`）が本番の user manager に実
+  `systemd-run --user --scope` の scope を 8 件作った。テストの実行環境が本番の user session を継承していたため。
+
+### D-a. worker の run と check から user systemd bus を見えなくする
+
+`db_guard::launch` を通る全ての spawn（D2 の対象: 全 adapter・`LocalWorkspace::exec` の check・remote-exec の親）で:
+
+1. **環境変数**: 子の環境から `DBUS_SESSION_BUS_ADDRESS` を除く（`Command::env_remove`）。namespace の有無・コンテナか否かに
+   関係なく常に行う。`XDG_RUNTIME_DIR` は残す（D4 の ssh_config の写しや他の道具が使う。bus は下の 2 で塞ぐ）。
+2. **mount**: D1 の namespace の中で、exec の前に
+   - `$XDG_RUNTIME_DIR/systemd`（`systemctl --user` の直結経路 `private` と transient unit の置き場がある**ディレクトリ**）を
+     `tmpfs`（`size=0` 相当の小さいもの、`mode=0700`）で覆う。
+   - `/run/user/$UID/bus`（D-Bus の **socket ファイル**。ファイルの上に tmpfs は張れない）を空のファイル（`/dev/null` ではなく
+     空の通常ファイル。open しても connect できない）の bind で覆う。`$XDG_RUNTIME_DIR` が `/run/user/$UID` と違う場合は
+     `$XDG_RUNTIME_DIR/bus` も同様に覆う。
+   - いずれも**存在しないときは何もしない**（非 systemd のホスト、テスト環境、`XDG_RUNTIME_DIR` 未設定）。
+   - 存在するのに覆えなかったときは、D5 の「spawn の準備に失敗したら spawn を失敗させる」に従い、その spawn を失敗させる
+     （保護なしで起動しない）。daemon の起動時の自己試験（D5）にも「namespace の中から bus が見えない」の確認を足す。
+3. **書き込み先の OS 強制**（D-b の rules が path を表せない分）: 同じ namespace で `~/.config/systemd`・`~/.local/celeris/releases`・
+   `~/.config/celeris` を、存在すれば自分自身へ bind して `MS_RDONLY` で remount する（D1 の 4 と同じ手順、下位の bind は作らない）。
+   worker の run がここに書く正当な理由は無い（codex のアカウント dir は `~/.local/celeris/codex-accounts` で、`releases` の外）。
+   実装時に既存の run が書いていないことを確かめ、書くものが見つかったら付記を直してから進める。
+
+namespace を作れない環境での扱い:
+
+- **コンテナ実行**（`[containers]`）: D2 のとおり D1 は掛けない。1 は掛ける。コンテナには `-v` で `/run/user/$UID` を渡さないので
+  bus は元から見えない（渡す設定を足さない）。
+- **`[db] worker_read_only = false`**（明示の opt-out）: 1 だけが効く。`systemctl --user` は `$XDG_RUNTIME_DIR/systemd/private` へ
+  直結でき、`DBUS_SESSION_BUS_ADDRESS` が無くても既定の `/run/user/$UID/bus` を試すので、**bus は塞がらない**。daemon は起動時に
+  「user systemd bus は worker の run から届く（ADR-0095 付記 D-a）」と警告を出す。黙って塞いだつもりにならない。
+- user namespace がそもそも作れないホストでは D5 により daemon が起動しない（変更なし）。
+
+試験は実 process で行う: namespace 付きで起動した子の中から `systemctl --user show-environment` と
+`systemd-run --user --scope true` を実行し、どちらも非 0 で終わることを確かめる（bus が無いホストでは skip、ただし
+`CELERIS_DB_GUARD_TESTS=require` 相当で skip を失敗にできるようにする）。**この試験は bus が塞がっていることの確認なので、
+塞がっていなければ実 user manager に scope を作り得る**: 試験の中の `systemd-run` には `--scope true` 以外を渡さず、
+`--unit` に試験専用の名前を付けて、失敗（=穴）したときは出来た scope を `systemctl --user stop` してから assert を落とす。
+
+### D-b. codex の自動承認に拒否のパターンを入れる: execpolicy の rules（`forbidden`）を adapter が配る
+
+調べたこと（このホストの codex-cli 0.160.0、外部ネットワークは使っていない）:
+
+- `codex exec --help` に `--ignore-rules`（"Do not load user or project execpolicy `.rules` files"）がある。つまり rules は
+  既定で `$CODEX_HOME/rules/*.rules`（user）とプロジェクトの rules から読まれる。`~/.codex/rules/default.rules` は
+  `prefix_rule(pattern=[…], decision="allow")` の形。本番のアカウント dir（`~/.local/celeris/codex-accounts/chatgpt_plus_personal`、
+  adapter が `CODEX_HOME` に渡す、`codex_account.rs`）には `rules/` が無い。
+- `codex execpolicy check --rules <file> <tokens…>` で実測:
+  - `prefix_rule(pattern=["systemctl","--user"], decision="forbidden", justification="…")` に対し `systemctl --user restart celeris`
+    → `"decision":"forbidden"`。`prefix_rule(pattern=["systemd-run"], decision="forbidden")` に対し `systemd-run --user --scope true`
+    → `"decision":"forbidden"`。
+  - `bash -lc "systemctl --user stop x"` → `matchedRules: []`（check の道具は token 列をそのまま照合する。codex の実行時が
+    `bash -lc` の単純な script を分解して照合するかはローカルでは確かめていない）。
+  - `cp a ~/.config/systemd/user/x` → `matchedRules: []`。**prefix_rule は argv の接頭辞しか表せず、書き込み先の path は表せない。**
+- `-c` の設定には「この command を拒否する」を表す key は見当たらない（`codex exec --help` / `codex execpolicy --help` の範囲）。
+  `approval_policy` / `sandbox_mode` / `approvals_reviewer` は全体の強さを変えるだけ。
+- adapter（`crates/task-worker/src/codex.rs`）は `codex exec --json` を起動して出力を読むだけで、run の途中の escalation 要求を
+  受け取って可否を返す口を持たない（`--approve-for-me` は codex の中の自動レビューで完結する）。adapter 側で個々の command を
+  検査するには app-server の承認プロトコルへの移行が要り、この付記の範囲を超える。
+
+選択: **execpolicy の rules**。adapter が spawn の直前に `$CODEX_HOME/rules/celeris-deny.rules` を毎回書き直す（内容は adapter の
+定数。中身が違えば上書き）。rules の `forbidden` は承認の前に判定され、承認 policy・自動レビューに関係なく拒否される
+（codex の rules の意味。prompt を出さない）。中身:
+
+- `prefix_rule(pattern=["systemctl","--user"], decision="forbidden", …)`、`["systemctl","--user-unit"]` 等の変種は実装時に
+  `systemctl --help` で確かめて足す。
+- `prefix_rule(pattern=["systemd-run"], decision="forbidden", …)`（`--user` 以外も worker の仕事ではない）。
+- `["loginctl"]`・`["busctl","--user"]`・`["dbus-send","--session"]` など bus を直接叩く道具も同様に足す。
+- justification は「本番 host の操作は人が実行する手順として書く（ADR-0095 付記 D-d）」。モデルに理由が返る。
+
+あわせて adapter は operator の `extra_args` に `--ignore-rules` が入っていたら拒否する（起動を失敗させる）。resume の
+`--dangerously-bypass-approvals-and-sandbox` の fallback（`translate_resume_extra_args`）で rules が効くかは実装時に
+`codex execpolicy` と実 run の rollout で確かめ、効かないなら fallback を止める。
+
+採らなかったもの: `-c` 設定（表す key が無い）、adapter 側の検査（口が無い）、`--approve-for-me` をやめる（他の運用を壊し、
+却下した案「codex の設定だけ直す」と同じ理由で単独では足りない）。
+
+**rules は補助で、強制は D-a。** prefix_rule は `bash -lc`・`sh -c`・python の `subprocess`・別名の symlink・path での書き込みで
+外れ得る。`~/.config/systemd`・`~/.local/celeris/releases`・`~/.config/celeris` への書き込みは rules では表せないので D-a の 3
+（読み取り専用 bind）で止める。rules の file は `$CODEX_HOME`（worker から書ける）にあるが、codex が起動時に読むので
+同じ run の中で消しても効かず、次の spawn で adapter が書き直す。
+
+### D-c. テストは実 user manager に触らない
+
+- `task_worker::detach` の試験と `crates/celeris/tests/releases_api.rs` は `systemd-run` を**注入した runner**
+  （`DetachLauncher::SystemdRun { program }` の偽物の絶対パス。`crate::test_support::write_executable` で書いた、引数を記録して
+  scope を作らずに残りの command を exec するだけの script）で叩く。`PATH` 上の実 `systemd-run` を選び得る `"auto"` の判定は
+  純関数（`resolve_detach_launcher`）の単体試験だけで確かめる。
+- `releases_api.rs` の「user bus が使えるなら実 `systemd-run --user --scope` で試す」経路（skip 判定の `Command::new("systemd-run")`
+  を含む）は消す。試験の process から `systemd-run` / `systemctl --user` を実行しない。
+- 確認: `cargo test --workspace` の実行前後で `systemctl --user list-units --type=scope` の件数が変わらないこと、または
+  `PATH` の先頭に「呼ばれたら記録して失敗する」偽の `systemd-run` / `systemctl` を置いて全試験を回し、記録が空であること（後者は
+  本番の user manager に触らずに確かめられるので、こちらを検証の既定にする）。D-a の実 process の試験は bus を塞いだ namespace の
+  中でだけ `systemd-run` を呼ぶ（上記）。
+
+### D-d. 本番 host の操作は人が実行する手順として書く
+
+planner と worker の指示（`crates/task-worker/src/preamble.rs` の共通の前置き）に次を入れる:
+「本番 host の操作（`systemctl --user`・`systemd-run`・`~/.config/systemd`・`~/.local/celeris/releases`・`~/.config/celeris`
+の変更、daemon の再起動・差し替え、本番 DB への書き込み）はしない。必要なら、人が実行する手順（コマンドと確認方法）を
+成果物に書き、計画では人の決定（decisions）または人の check を置く。」D-a・D-b で止まる操作を最初から試みさせないためで、
+強制ではない（強制は D-a）。
+
+### 残る穴（2026-10-02 更新）
+
+上の「残る穴」のうち `systemd-run --user` は D-a で塞ぐ（namespace が掛かる run に限る。`worker_read_only = false` では残る）。
+まだ残るもの:
+
+- **`ssh localhost`**（および自ホストへの ssh 全般）: sshd が namespace の外で login shell を起こすので、DB にも user bus にも
+  届く。agent の ssh 鍵・ssh master（`~/.ssh` の ControlPath）を使えば認証も通り得る。塞ぐには ssh の宛先の検査か、worker を
+  別 uid にする必要がある（別の課題）。
+- **D-Bus の abstract socket**: abstract namespace の UNIX socket は mount namespace ではなく network namespace に属するので、
+  path を覆っても届く。このホストの user bus は path（`/run/user/$UID/bus`）だが、`dbus-launch` 等で abstract の bus を
+  起こした session があれば届く。network namespace の分離は外部通信を壊すので採らない。
+- **他の UNIX socket の常駐サービス**: tmux / screen の server、podman の API socket、`gpg-agent`、`ssh-agent` など、
+  namespace の外のプロセスに command を実行させられるもの。`$XDG_RUNTIME_DIR` の下は D-a で `systemd` と `bus` だけを覆う。
+- **cron / at**: `crontab` は setuid の helper を使う。user namespace の中で setuid が効かず失敗すると見込むが、実測していない。
+- **HTTP API**・**`worker_read_only = false`**・**コンテナ以外での opt-out**: 従来どおり。
+- **codex 以外の adapter の承認**: D-b は codex だけ。claude-code・opencode などは自前の承認の仕組みを持ち、D-a と D-d に頼る。
+- いずれも worker が daemon と同じ uid であることが根で、完全に閉じるには worker の実行ユーザーの分離が要る。

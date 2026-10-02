@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use task_core::browser_isolation::{
-    CdpEndpoint, IsolationAttestation, Namespace, REQUIRED_NAMESPACES, RuntimeFacts,
-    verify_isolation,
+    CdpEndpoint, IsolationAttestation, LauncherSessionProof, Namespace, REQUIRED_NAMESPACES,
+    RuntimeFacts, verify_isolation,
 };
 use task_core::browser_wait::BrowserWaitState;
 use task_core::{BrowserRun, BrowserRunState};
@@ -25,7 +25,7 @@ use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, wri
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
 use crate::browser_launcher::{
     ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
-    SessionState, Verb,
+    SessionState, StartedSession, Verb,
 };
 use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
 
@@ -48,6 +48,8 @@ pub(crate) struct LauncherRuntime {
     client: Mutex<LauncherClient>,
     session_id: String,
     lease_id: String,
+    /// daemon 側で照合できた launcher の session 証明（ADR-0116 D-L）。照合に失敗したら `None`。
+    proof: Option<LauncherSessionProof>,
     stopped: std::sync::atomic::AtomicBool,
 }
 
@@ -73,10 +75,13 @@ impl LauncherRuntime {
         let started = client
             .start_session(task_id, run_id, &lease_id, policy)
             .map_err(|_| UNAVAILABLE)?;
+        let ids = DaemonIds::current();
+        let proof = launcher_session_proof(&started, client.peer_uid(), &ids);
         let runtime = Self {
             client: Mutex::new(client),
             session_id: started.session_id.clone(),
             lease_id,
+            proof,
             stopped: std::sync::atomic::AtomicBool::new(false),
         };
         // ここから先の失敗は drop が stop を頼む。
@@ -89,7 +94,6 @@ impl LauncherRuntime {
         if state != SessionState::Running {
             return Err(UNAVAILABLE);
         }
-        let ids = DaemonIds::current();
         let facts = runtime_facts(
             &runtime.session_id,
             &ids,
@@ -121,6 +125,11 @@ impl LauncherRuntime {
         client
             .observe(&self.session_id, &self.lease_id)
             .map_err(|_| UNAVAILABLE)
+    }
+
+    /// daemon 側で照合できた launcher の session 証明。無ければ機密能力の admission は拒否される。
+    pub(crate) fn session_proof(&self) -> Option<&LauncherSessionProof> {
+        self.proof.as_ref()
     }
 
     /// 一度だけ stop を頼む。2 回目以降は何もしない。
@@ -156,6 +165,56 @@ impl DaemonIds {
             gid: nix::unistd::getgid().as_raw(),
         }
     }
+}
+
+/// `pid` が生きている（zombie でない）ときだけ `/proc/<pid>/stat` の starttime を返す。
+fn live_starttime(pid: i32) -> Option<u64> {
+    if pid <= 1 {
+        return None;
+    }
+    let t = crate::browser_runtime::process_starttime(pid)?;
+    crate::browser_runtime::same_process_alive(pid, t).then_some(t)
+}
+
+/// launcher の `Started` 応答を daemon 自身の観測と照合し、通ったときだけ
+/// [`LauncherSessionProof`] を組む（ADR-0116 D-L、fail closed）。次のどれかなら `None`:
+/// receipt に束縛が無い（v1 の launcher）・receipt と応答の session / instance が食い違う・
+/// launcher の `isolation_ok` が偽・`SO_PEERCRED` を採れない・pid の process が無い（zombie を含む）・
+/// `/proc/<pid>/stat` の starttime が束縛と違う・owner UID が不明か daemon の UID。
+/// 欠けた値を安全そうな値で埋めることはしない。launcher UID の設定値との照合は admission 側
+/// （`verify_launcher_session`）が行う。
+pub(crate) fn launcher_session_proof(
+    started: &StartedSession,
+    peer_uid: Option<u32>,
+    daemon: &DaemonIds,
+) -> Option<LauncherSessionProof> {
+    let r = &started.receipt;
+    let binding = r.binding?;
+    if r.outcome != Outcome::Started
+        || !r.isolation_ok
+        || r.session_id != started.session_id
+        || r.instance_id != started.instance_id
+        || started.instance_id.is_empty()
+    {
+        return None;
+    }
+    let launcher_uid = peer_uid?;
+    let owner = binding.ns_owner_uid?;
+    if owner == daemon.uid {
+        return None;
+    }
+    if live_starttime(binding.pid)? != binding.starttime {
+        return None;
+    }
+    Some(LauncherSessionProof {
+        session_id: started.session_id.clone(),
+        instance_id: started.instance_id.clone(),
+        pid: binding.pid,
+        starttime: binding.starttime,
+        ns_owner_uid: Some(owner),
+        launcher_uid,
+        isolation_ok: true,
+    })
 }
 
 /// `/proc/<pid>/uid_map` 形式の 1 行 = `inside outside count`。読めない行があれば `None`。
@@ -413,6 +472,12 @@ pub(super) async fn run(
     .await
     .map_err(|_| unavailable())?
     .map_err(|_| unavailable())?;
+    // 機密能力はこの経路では解放しないので、証明の有無は記録だけする。
+    tracing::info!(
+        session = %runtime.session_id,
+        launcher_proof = runtime.session_proof().is_some(),
+        "browser launcher session started"
+    );
     let runtime = Arc::new(runtime);
     let action_server = ActionServer::start_with(
         &action_socket,

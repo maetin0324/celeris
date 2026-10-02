@@ -62,6 +62,11 @@ impl LauncherClient {
         })
     }
 
+    /// launcher socket の相手の UID（`SO_PEERCRED`）。採れなければ `None`。
+    pub fn peer_uid(&self) -> Option<u32> {
+        super::server::peer_cred(&self.stream).map(|(_, uid)| uid)
+    }
+
     /// 要求を 1 個送り、応答を 1 個受ける。`error` 応答は `Remote` にする。
     pub fn request(&mut self, req: &Request) -> Result<Response, ClientError> {
         write_message(&mut self.stream, req, self.max_frame)?;

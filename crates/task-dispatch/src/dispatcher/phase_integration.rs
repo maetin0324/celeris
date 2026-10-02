@@ -1,6 +1,18 @@
 //! 工程の統合（`start_integration`・merge repair・`finish_phase_integration`）と途中報（phase report）、再起動時の統合と WU run の照合。ADR-0082 の L3。
 
 use super::*;
+use std::collections::BTreeMap;
+
+/// ADR-0118 D4 / D5: 同じ子の merge candidate が古くなったときの自動の再 sync・再レビューの回数
+/// （初回に加えて 2 回 = 合計 3 attempt）。超えたら統合を諦めて理由を残す。
+const MAX_STALE_CANDIDATE_RETRIES: usize = 2;
+
+/// ADR-0118 D5: 子の候補が古くなって統合 WU・子の unit を戻すときの `WorkUnitTransitioned.reason`。
+pub(super) const MERGE_CANDIDATE_STALE_REASON: &str = "merge_candidate_stale";
+
+/// ADR-0118 D5: 子の unit の key → リポジトリ → その子の review が固定した merge candidate。
+pub(super) type ChildCandidates =
+    BTreeMap<String, BTreeMap<task_core::RepoId, crate::integration::MergeCandidate>>;
 
 impl Dispatcher {
     /// ADR-0074 D1.7（Phase F2）: 走らせている spawn の無い `integrate-<phase>`（running）を pending に
@@ -250,7 +262,11 @@ impl Dispatcher {
         &self,
         units: &[task_core::WorkUnitRow],
         phase: &str,
-    ) -> (Vec<crate::integration::MergeItem>, Vec<(String, String)>) {
+    ) -> (
+        Vec<crate::integration::MergeItem>,
+        Vec<(String, String)>,
+        ChildCandidates,
+    ) {
         let mut ordered: Vec<(u32, crate::integration::MergeItem)> =
             task_core::phase_leaves(units, phase)
                 .into_iter()
@@ -264,6 +280,7 @@ impl Dispatcher {
                 })
                 .collect();
         let mut expected = Vec::new();
+        let mut candidates = ChildCandidates::new();
         for u in units.iter().filter(|u| {
             u.kind == task_core::WorkUnitKind::Task
                 && u.status == task_core::WorkUnitStatus::Done
@@ -273,11 +290,19 @@ impl Dispatcher {
                 continue;
             };
             let branch = format!("{}{child_id}", self.config.worktree_branch_prefix);
-            let has_branch = child_id
+            let child = child_id
                 .parse::<TaskId>()
                 .ok()
-                .and_then(|id| self.store.get(id).ok().flatten())
-                .is_some_and(|child| task_core::tree::child_base_commit(&child).is_some());
+                .and_then(|id| self.store.get(id).ok().flatten());
+            let has_branch = child
+                .as_ref()
+                .is_some_and(|child| task_core::tree::child_base_commit(child).is_some());
+            if let Some(child) = &child {
+                let recorded = self.child_merge_candidates(child.id);
+                if !recorded.is_empty() {
+                    candidates.insert(u.key.clone(), recorded);
+                }
+            }
             if has_branch {
                 expected.push((u.key.clone(), branch.clone()));
             }
@@ -290,7 +315,43 @@ impl Dispatcher {
         (
             ordered.into_iter().map(|(_, item)| item).collect(),
             expected,
+            candidates,
         )
+    }
+
+    /// ADR-0118 D3 / D5: 子 task の最新の review attempt が記録した merge candidate（リポジトリごと）。
+    /// `ReviewTargetSynced` は追記順なので、同じリポジトリの後の記録が前の記録を上書きする。記録の無い
+    /// 移行前の子は空（照合しない）。event を読めなければ空にして従来どおりにする。
+    pub(super) fn child_merge_candidates(
+        &self,
+        child_id: TaskId,
+    ) -> BTreeMap<task_core::RepoId, crate::integration::MergeCandidate> {
+        let mut out = BTreeMap::new();
+        let events = match self.store.events_for(child_id) {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!(%child_id, error = %e, "could not read the child's review snapshots (ADR-0118 D5)");
+                return out;
+            }
+        };
+        for (_, event) in events {
+            if let Event::ReviewTargetSynced {
+                repo_id,
+                target_sha,
+                merge_candidate_sha,
+                ..
+            } = event
+            {
+                out.insert(
+                    repo_id,
+                    crate::integration::MergeCandidate {
+                        target_sha,
+                        merge_candidate_sha,
+                    },
+                );
+            }
+        }
+        out
     }
 
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を始める（統合 WU を running にし、Task の lease を延ばし、
@@ -357,12 +418,39 @@ impl Dispatcher {
         // ADR-0079 D5 / D6（Phase R1c）: 葉の WU のブランチに、この段階の done の kind task の unit の
         // 子 task のブランチ `celeris/<child_id>` を足し、`seq` 順に merge する（子に依存する同じ段階の葉は
         // 子の HEAD から切られているので、どちらが先でも子の commit は 1 度だけ入る。既に入っていれば飛ばす）。
-        let (items, expected_children) = self.integration_items(&units, &phase);
+        let (items, expected_children, candidates) = self.integration_items(&units, &phase);
         let repos: Vec<PathBuf> = ws
             .repos
             .iter()
             .filter(|r| r.is_git())
             .map(|r| r.dir.clone())
+            .collect();
+        // ADR-0118 D5: リポジトリごとに、子の item へその子の review が固定した merge candidate を付ける。
+        let repo_items: Vec<(
+            PathBuf,
+            Option<task_core::RepoId>,
+            Vec<crate::integration::MergeItem>,
+        )> = ws
+            .repos
+            .iter()
+            .filter(|r| r.is_git())
+            .map(|r| {
+                let repo_id = task
+                    .repos
+                    .iter()
+                    .find(|reference| reference.name == r.name)
+                    .map(|reference| reference.repo_id);
+                let items = items
+                    .iter()
+                    .map(|item| {
+                        let candidate = repo_id.and_then(|id| {
+                            candidates.get(&item.key).and_then(|c| c.get(&id)).cloned()
+                        });
+                        item.clone().with_candidate(candidate)
+                    })
+                    .collect();
+                (r.dir.clone(), repo_id, items)
+            })
             .collect();
         // D1.4 の 4: その工程の WU の checks（重複を除く）と workspace.toml の check。
         let mut checks: Vec<task_core::WorkUnitCheck> = Vec::new();
@@ -395,11 +483,10 @@ impl Dispatcher {
         let wu_id_for_entry = integ.id.clone();
         let handle = tokio::spawn(async move {
             let phase_for_merge = phase.clone();
-            let repos_for_merge = repos.clone();
             let merged = tokio::task::spawn_blocking(move || -> Result<IntegrationRun, String> {
                 let mut run = IntegrationRun::default();
-                for (i, dir) in repos_for_merge.iter().enumerate() {
-                    let out = crate::integration::integrate(dir, &items, &phase_for_merge)?;
+                for (i, (dir, repo_id, items)) in repo_items.iter().enumerate() {
+                    let out = crate::integration::integrate(dir, items, &phase_for_merge)?;
                     if i == 0 {
                         run.merged = out.merged.clone();
                         run.head = out.head.clone();
@@ -416,8 +503,17 @@ impl Dispatcher {
                         run.conflict = out.conflict;
                         break;
                     }
+                    if let Some(stale) = out.stale {
+                        // candidate は repo_id のあるリポジトリにだけ付くので、ここでは必ず `Some`。
+                        let repo_id = repo_id.ok_or_else(|| {
+                            format!("merge candidate of {} has no repository id", stale.key)
+                        })?;
+                        run.stale = Some((repo_id, stale));
+                        break;
+                    }
                 }
                 if run.conflict.is_none()
+                    && run.stale.is_none()
                     && let Some((key, branch)) = expected_children
                         .iter()
                         .find(|(key, _)| !run.merged.iter().any(|m| &m.key == key))
@@ -433,7 +529,9 @@ impl Dispatcher {
             .map_err(|e| format!("integration task: {e}"))
             .and_then(|r| r);
             let result = match merged {
-                Ok(mut run) if run.conflict.is_none() && !checks.is_empty() => {
+                Ok(mut run)
+                    if run.conflict.is_none() && run.stale.is_none() && !checks.is_empty() =>
+                {
                     let ws = match repos.first() {
                         Some(w) if w.is_dir() => {
                             task_worker::LocalWorkspace::new(&task_dir).with_work_dir(w)
@@ -508,6 +606,9 @@ impl Dispatcher {
         };
         if let Some(conflict) = run.conflict.clone() {
             return self.schedule_merge_repair(&task, &integ, &units, &conflict);
+        }
+        if let Some((repo_id, stale)) = run.stale.clone() {
+            return self.requeue_stale_merge_candidate(&task, &integ, &units, repo_id, &stale);
         }
         if run.checks.iter().any(|(_, pass, _)| !pass) {
             return self.schedule_integration_check_repair(&task, &integ, &units, &run);
@@ -638,6 +739,136 @@ impl Dispatcher {
             task_core::execution::RepairClass::MergeConflict.bucket(),
             "merge_conflict",
         )
+    }
+
+    /// ADR-0118 D5: 子のブランチ HEAD が記録済みの merge candidate と違った（review 後に子のブランチが
+    /// 動いた）。merge せずに `MergeCandidateStale` を残し、子を再レビュー（`Trigger::Rereview`。review の入口が
+    /// 再 sync → 全 checks → reviewer を行う）に戻し、子の unit を running・統合 WU を pending に戻す
+    /// （子が再び done になると統合が続きから再開する）。stale は不合格ではないので review の試行回数に数えない。
+    /// 同じ子で上限（[`MAX_STALE_CANDIDATE_RETRIES`]）を超えた、または再レビューできない子（実装型でない・
+    /// done でない）は、統合を諦めて理由を残す（無言で merge しない）。
+    pub(super) fn requeue_stale_merge_candidate(
+        &mut self,
+        task: &Task,
+        integ: &task_core::WorkUnitRow,
+        units: &[task_core::WorkUnitRow],
+        repo_id: task_core::RepoId,
+        stale: &crate::integration::StaleCandidate,
+    ) -> Result<(), DispatchError> {
+        let phase = integ.phase.clone().unwrap_or_default();
+        let unit = units
+            .iter()
+            .find(|u| u.key == stale.key && u.kind == task_core::WorkUnitKind::Task);
+        let child = match unit
+            .and_then(|u| u.child_task_id.as_deref())
+            .and_then(|id| id.parse::<TaskId>().ok())
+        {
+            Some(id) => self.store.get(id)?,
+            None => None,
+        };
+        let (Some(unit), Some(child)) = (unit, child) else {
+            return self.integration_gives_up(
+                task,
+                integ,
+                &format!(
+                    "phase {phase} の統合で {} のブランチ HEAD {} が merge candidate {} と異なりますが、子 task が見つかりません（ADR-0118 D5）",
+                    stale.key, stale.head_sha, stale.merge_candidate_sha
+                ),
+            );
+        };
+        let stale_event = Event::MergeCandidateStale {
+            phase: phase.clone(),
+            work_unit_id: integ.id.clone(),
+            key: stale.key.clone(),
+            child_task: child.id,
+            repo_id,
+            branch: stale.branch.clone(),
+            merge_candidate_sha: stale.merge_candidate_sha.clone(),
+            head_sha: stale.head_sha.clone(),
+            target_sha: stale.target_sha.clone(),
+        };
+        let previous = self
+            .store
+            .events_for(task.id)?
+            .iter()
+            .filter(|(_, e)| {
+                matches!(e, Event::MergeCandidateStale { work_unit_id, key, .. }
+                    if *work_unit_id == integ.id && *key == stale.key)
+            })
+            .count();
+        let why = if previous >= MAX_STALE_CANDIDATE_RETRIES {
+            Some(format!(
+                "再 sync・再レビューの上限（{MAX_STALE_CANDIDATE_RETRIES} 回）に達しました"
+            ))
+        } else if child.status != Status::Done || child.kind != TaskKind::Execute {
+            Some(format!(
+                "子 task は再レビューできません（status={:?} kind={:?}）",
+                child.status, child.kind
+            ))
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            self.store.append_event(task.id, &stale_event)?;
+            return self.integration_gives_up(
+                task,
+                integ,
+                &format!(
+                    "phase {phase} の統合で {} のブランチ HEAD {} が review 済みの merge candidate {} と異なるため merge しませんでした: {why}（ADR-0118 D5）",
+                    stale.key, stale.head_sha, stale.merge_candidate_sha
+                ),
+            );
+        }
+        match self
+            .store
+            .apply_transition_with_events(child.id, Trigger::Rereview, Vec::new())
+        {
+            Ok(_) => {}
+            Err(StoreError::InvalidTransition(e)) => {
+                self.store.append_event(task.id, &stale_event)?;
+                return self.integration_gives_up(
+                    task,
+                    integ,
+                    &format!(
+                        "phase {phase} の統合で {} の merge candidate が古くなりましたが、子 task を再レビューに戻せません: {e}（ADR-0118 D5）",
+                        stale.key
+                    ),
+                );
+            }
+            Err(e) => return Err(e.into()),
+        }
+        tracing::info!(task_id = %task.id, work_unit = %stale.key, child_id = %child.id, head = %stale.head_sha, candidate = %stale.merge_candidate_sha, "child branch moved after its review; sending the child back to review before integration (ADR-0118 D5)");
+        let now = rfc3339(OffsetDateTime::now_utc());
+        let mut pending = integ.clone();
+        pending.status = task_core::WorkUnitStatus::Pending;
+        pending.clear_lease();
+        pending.updated_at = now.clone();
+        let mut running = unit.clone();
+        running.status = task_core::WorkUnitStatus::Running;
+        running.blocked_reason = None;
+        running.updated_at = now;
+        let events = vec![
+            stale_event,
+            Event::WorkUnitTransitioned {
+                work_unit_id: integ.id.clone(),
+                key: integ.key.clone(),
+                from: task_core::WorkUnitStatus::Running,
+                to: task_core::WorkUnitStatus::Pending,
+                reason: MERGE_CANDIDATE_STALE_REASON.to_string(),
+                run_id: None,
+            },
+            Event::WorkUnitTransitioned {
+                work_unit_id: unit.id.clone(),
+                key: unit.key.clone(),
+                from: unit.status,
+                to: task_core::WorkUnitStatus::Running,
+                reason: MERGE_CANDIDATE_STALE_REASON.to_string(),
+                run_id: None,
+            },
+        ];
+        self.store
+            .work_units_apply(task.id, Vec::new(), vec![pending, running], events)?;
+        Ok(())
     }
 
     /// ADR-0074 D1.4 4.（Phase F2b）: 統合後の検査の失敗。D16 の分類に当たれば repair WU を Task の
@@ -936,6 +1167,8 @@ impl Dispatcher {
                     key: m.key.clone(),
                     commit: m.commit.clone(),
                     skipped: m.skipped,
+                    target_sha: m.target_sha.clone(),
+                    parent_head: m.parent_head.clone(),
                 })
                 .collect(),
             head: run.head.clone(),

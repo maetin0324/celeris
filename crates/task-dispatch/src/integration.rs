@@ -246,6 +246,16 @@ pub struct MergeItem {
     /// 子 task のブランチは子の repos（親の部分集合）にだけあるので `true`。WU のブランチは `false`
     /// （無ければ `Err`。従来どおり）。
     pub optional: bool,
+    /// ADR-0118 D5: 子 task の review が記録した merge candidate（このリポジトリの分）。記録の無い
+    /// 移行前の子と WU のブランチは `None`（照合しない。従来どおり）。
+    pub candidate: Option<MergeCandidate>,
+}
+
+/// ADR-0118 D5: 子 task の最新の review attempt が固定した `(target_sha, merge_candidate_sha)`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeCandidate {
+    pub target_sha: String,
+    pub merge_candidate_sha: String,
 }
 
 impl MergeItem {
@@ -255,6 +265,7 @@ impl MergeItem {
             key: key.into(),
             branch: branch.into(),
             optional: false,
+            candidate: None,
         }
     }
 
@@ -264,7 +275,14 @@ impl MergeItem {
             key: key.into(),
             branch: branch.into(),
             optional: true,
+            candidate: None,
         }
+    }
+
+    /// ADR-0118 D5: merge の直前に照合する merge candidate を付ける。
+    pub fn with_candidate(mut self, candidate: Option<MergeCandidate>) -> Self {
+        self.candidate = candidate;
+        self
     }
 }
 
@@ -276,6 +294,21 @@ pub struct Merged {
     pub commit: String,
     /// 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
     pub skipped: bool,
+    /// ADR-0118 D5: 照合した candidate の review 時の target SHA（candidate の無い item は `None`）。
+    pub target_sha: Option<String>,
+    /// ADR-0118 D5: candidate を merge する直前の Task ブランチの HEAD（candidate の無い item・飛ばした item は `None`）。
+    pub parent_head: Option<String>,
+}
+
+/// ADR-0118 D5: 子のブランチ HEAD が記録済みの merge candidate と違った（review 後に動いた）。
+/// merge していない（Task ブランチはこの item の前のまま）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleCandidate {
+    pub key: String,
+    pub branch: String,
+    pub merge_candidate_sha: String,
+    pub head_sha: String,
+    pub target_sha: String,
 }
 
 /// 衝突（`merge --abort` 済み）。
@@ -295,6 +328,8 @@ pub struct IntegrationOutcome {
     pub head: String,
     /// 衝突で止まったら `Some`（その WU より後は試していない）。
     pub conflict: Option<Conflict>,
+    /// ADR-0118 D5: candidate の照合で止まったら `Some`（その item より後は試していない）。
+    pub stale: Option<StaleCandidate>,
 }
 
 /// ADR-0074 D1.4 1〜3: Task の worktree（`task_tree`）で、葉の WU のブランチを順に merge する。
@@ -302,6 +337,8 @@ pub struct IntegrationOutcome {
 /// - `MERGE_HEAD` が残っていれば `merge --abort` してから始める（途中で止まったやり直し）。
 /// - 既に入っている WU（`merge-base --is-ancestor <branch> HEAD`）は飛ばす（冪等）。
 /// - 衝突したら `merge --abort` して止める（`conflict` に入れて返す。Task ブランチは衝突の前のまま）。
+/// - ADR-0118 D5: candidate の付いた item は、ブランチ HEAD が `merge_candidate_sha` と違えば merge せず
+///   `stale` に入れて止める。親ブランチが review 後に進んだだけなら照合は通り、従来どおり merge する。
 pub fn integrate(
     task_tree: &Path,
     items: &[MergeItem],
@@ -327,9 +364,36 @@ pub fn integrate(
                 key: item.key.clone(),
                 commit,
                 skipped: true,
+                target_sha: item.candidate.as_ref().map(|c| c.target_sha.clone()),
+                parent_head: None,
             });
             continue;
         }
+        if let Some(candidate) = &item.candidate
+            && candidate.merge_candidate_sha != commit
+        {
+            let head = rev_parse(task_tree, "HEAD")
+                .ok_or_else(|| format!("no HEAD in {}", task_tree.display()))?;
+            return Ok(IntegrationOutcome {
+                merged,
+                head,
+                conflict: None,
+                stale: Some(StaleCandidate {
+                    key: item.key.clone(),
+                    branch: item.branch.clone(),
+                    merge_candidate_sha: candidate.merge_candidate_sha.clone(),
+                    head_sha: commit,
+                    target_sha: candidate.target_sha.clone(),
+                }),
+            });
+        }
+        let parent_head = match &item.candidate {
+            Some(_) => Some(
+                rev_parse(task_tree, "HEAD")
+                    .ok_or_else(|| format!("no HEAD in {}", task_tree.display()))?,
+            ),
+            None => None,
+        };
         let out = git(
             task_tree,
             &[
@@ -346,6 +410,8 @@ pub fn integrate(
                 key: item.key.clone(),
                 commit,
                 skipped: false,
+                target_sha: item.candidate.as_ref().map(|c| c.target_sha.clone()),
+                parent_head,
             });
             continue;
         }
@@ -370,6 +436,7 @@ pub fn integrate(
                 branch: item.branch.clone(),
                 files,
             }),
+            stale: None,
         });
     }
     let head = rev_parse(task_tree, "HEAD")
@@ -378,6 +445,7 @@ pub fn integrate(
         merged,
         head,
         conflict: None,
+        stale: None,
     })
 }
 

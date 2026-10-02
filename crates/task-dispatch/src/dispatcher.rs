@@ -798,6 +798,8 @@ struct IntegrationRun {
     merged: Vec<crate::integration::Merged>,
     head: String,
     conflict: Option<crate::integration::Conflict>,
+    /// ADR-0118 D5: 子の merge candidate の照合で止まった（そのリポジトリの id と照合の結果）。
+    stale: Option<(task_core::RepoId, crate::integration::StaleCandidate)>,
     /// `(cmd, pass, summary)`。
     checks: Vec<(String, bool, String)>,
 }

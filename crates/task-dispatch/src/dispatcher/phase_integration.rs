@@ -704,6 +704,7 @@ impl Dispatcher {
             &task.title,
             &task.objective,
             diff_stat.as_deref(),
+            None,
         );
         let (max_turns, max_wall_secs) = class.budget();
         let spec = task_core::WorkUnitSpec {

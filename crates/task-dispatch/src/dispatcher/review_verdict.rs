@@ -537,6 +537,7 @@ impl Dispatcher {
             &task.title,
             &task.objective,
             diff_stat.as_deref(),
+            None,
         );
         let n = repairs.len() + 1;
         let spec = task_core::WorkUnitSpec {

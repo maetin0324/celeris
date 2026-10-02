@@ -1,4 +1,4 @@
-//! `WorkerAdapter` / `EventSink`（DESIGN §5.4, ADR-0003, ADR-0005 D1/D4）。
+//! `WorkerAdapter` / `EventSink`（ADR-0003, ADR-0005 D1/D4）。
 //! アダプタはワーカー固有の事情を閉じ込め、結果を `RunOutcome` に正規化して返す。
 //! 状態遷移の判断はアダプタでは行わない（task-dispatch の責務）。
 
@@ -252,7 +252,7 @@ pub(crate) fn apply_env_removal(command: &mut tokio::process::Command, keys: &[S
     }
 }
 
-/// DESIGN §5.4 `trait WorkerAdapter`。`run_id` は成果物・ログのひも付け用（`runs/<run_id>/`）。
+/// `trait WorkerAdapter`（ADR-0003, ADR-0005 D1）。`run_id` は成果物・ログのひも付け用（`runs/<run_id>/`）。
 #[async_trait]
 pub trait WorkerAdapter: Send + Sync {
     /// アダプタ識別子（設定の `adapter` と一致。例: `"fake"`）。

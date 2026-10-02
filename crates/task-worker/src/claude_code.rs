@@ -1,4 +1,4 @@
-//! `claude-code` アダプタ（DESIGN §5.4, ADR-0003 D7, ADR-0006）。
+//! `claude-code` アダプタ（ADR-0003 D7, ADR-0006）。
 //!
 //! `claude` CLI は celeris 独自のワーカープロトコルを話さない。`--output-format stream-json` が吐く
 //! Claude Code 自身のイベント（`system`/`assistant`/`user`/`result`）を読み、結果ファイル規約

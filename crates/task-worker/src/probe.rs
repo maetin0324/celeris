@@ -14,7 +14,7 @@
 //!
 //! **Phase 65b 追記**: `[llm_proxy]`（ADR-0053）を `[knowledge.langmem].base_url` に向けたとき、
 //! `GET /v1/models` は Bearer トークンが無いと 401 を返す（`/healthz` を除く全エンドポイントが
-//! 認証を要求する。`docs/llm-source.md` §6）。401/403 は「LLM が落ちている」ことを意味しない
+//! 認証を要求する。`docs/guides/llm-source.md` §6）。401/403 は「LLM が落ちている」ことを意味しない
 //! （トークンが未設定・不一致というだけ）ので、[`Reachability::Unreachable`] にせず
 //! [`Reachability::Unknown`]（= 従来どおり `langmem` で走らせる）にする。呼び出し側が
 //! `[knowledge.langmem].api_key_secret` から解決した平文のトークンを渡せば、`Authorization: Bearer`

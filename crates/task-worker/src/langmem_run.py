@@ -113,7 +113,7 @@ def build_chat_model(llm):
 
     `provider = "openai-compatible"` covers both hosted OpenAI-compatible
     endpoints and the production local Qwen OpenAI-compatible endpoint
-    (`docs/knowledge.md` documents pointing `base_url` at it).
+    (`docs/guides/knowledge.md` documents pointing `base_url` at it).
     """
     provider = llm.get("provider") or "openai-compatible"
     model = llm.get("model")

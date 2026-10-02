@@ -45,8 +45,8 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 | CoS run の並列度の例外（`is_cos_run`） | task-dispatch::capacity | `crates/task-dispatch/src/capacity.rs` | [ADR-0089](adr/0089-cos-runs-bypass-concurrency.md) |
 | run 途中のイベントの sink（worker/Reviewer） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/sinks.rs` | [ADR-0082](adr/0082-dispatcher-module-split.md) |
 | scratch/disk guard の後片付け | task-dispatch | `crates/task-dispatch/src/{dispatcher/housekeeping.rs,scratch_gc.rs}` | [ADR-0075](adr/0075-tiered-build-cache.md) |
-| 工程統合・途中報告（target への rebase 同期、IntegrationRepair の完了・rollback・従来経路への復帰） | task-dispatch / task-ops | `crates/task-dispatch/src/{dispatcher/phase_integration.rs,dispatcher/worker_finish.rs,checkpoint.rs,reports.rs}`, `crates/task-ops/src/changes.rs::sync_onto_target` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0118](adr/0118-review-target-sync-and-merge-candidate.md), [ADR-0120](adr/0120-pre-review-sync-integration-repair.md) |
-| 孤児run の回収・承認・policy | task-dispatch | `crates/task-dispatch/src/{orphan,approvals,policy,sessions,undeclared_artifacts}.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |
+| 工程統合・途中報告（target への rebase 同期、IntegrationRepair の完了・rollback・従来経路への復帰） | task-dispatch / task-ops | `crates/task-dispatch/src/{dispatcher/phase_integration.rs,dispatcher/worker_finish.rs,checkpoint.rs,reports.rs}`, `crates/task-ops/src/changes.rs::sync_onto_target` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0118](adr/0118-review-target-sync-and-merge-candidate.md), [ADR-0120](adr/0120-pre-review-sync-integration-repair.md), [ADR-0124](adr/0124-claude-session-resume.md) |
+| 孤児run の回収・承認・policy | task-dispatch | `crates/task-dispatch/src/{orphan,approvals,policy,sessions,undeclared_artifacts}.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch), [ADR-0054](adr/0054-stateful-sessions-and-streaming-chat.md), [ADR-0124](adr/0124-claude-session-resume.md) |
 
 ## task-worker — worker プロトコルと adapter（1 run = 1 プロセス起動）
 

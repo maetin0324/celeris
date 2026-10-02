@@ -4,7 +4,7 @@
 tasks: [01M38FXZZVDNY2VQS2R2ZDWYX0]
 ---
 
-Repository docs の監査・整理・継続管理。設計は [ADR-0068](adr/0068-knowledge-gc-and-repository-docs-maintenance.md)。
+Repository docs の監査・整理・継続管理。設計は [ADR-0068](../../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md)。
 Knowledge GC と別機能であり、組織の知識正本や inbox を変更しません。
 
 ## 操作

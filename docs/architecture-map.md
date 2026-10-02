@@ -97,7 +97,6 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | self-deploy（release/verify/handoff） | celeris | `crates/celeris/src/{instance.rs,releases.rs,config/selfdeploy.rs}` | [selfdeploy.md](selfdeploy.md) |
 | Knowledge GC・doc gardener | celeris | `crates/celeris/src/{knowledge_gc,knowledge_maint,doc_gardener}.rs` | [ADR-0068](adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
 | cluster/accounts 管理の裏方 | celeris | `crates/celeris/src/{cluster_admin,accounts_admin}.rs` | [ADR-0017](adr/0017-account-management-from-gui.md), [ADR-0018](adr/0018-remote-clusters-over-ssh.md) |
-| 2 層ビルドキャッシュ（L2 cache server） | celeris::cache_server | `crates/celeris/src/cache_server.rs` | [ADR-0075](adr/0075-tiered-build-cache.md) |
 
 ## 周辺 crate と結合テスト
 
@@ -107,7 +106,6 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](adr/0053-llm-source-proxy.md) |
 | `celeris-mcp`（外部エージェント向け MCP） | celeris-mcp::rpc | `crates/celeris-mcp/src/rpc.rs` | [ADR-0056](adr/0056-mcp-server.md) |
 | `celeris-credentiald`（credential broker） | celeris-credentiald::lib | `crates/celeris-credentiald/src/lib.rs` | [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
-| `scratch-cache`（build cache L2 サーバー本体） | scratch-cache::server | `crates/scratch-cache/src/server.rs` | [ADR-0075](adr/0075-tiered-build-cache.md) |
 | `tests/e2e`（daemon 起動を伴う結合テスト） | e2e | `tests/e2e/tests/scenarios.rs` | [DESIGN §6](DESIGN.md#6-実装フェーズと受け入れ条件) |
 
 ## GUI（`gui/`、置き換え予定）と web/（新 SPA、設計段階）

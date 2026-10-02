@@ -1,5 +1,14 @@
 # PROGRESS — taskd
 
+## sccache 撤去 schema・運用文書（task `01M3YEQW40FPMH82X1JMNXGJEE`）
+
+ADR-0129 (1) に従い `ScratchStatus.sccache` / `cache` の型は互換用に残し、説明を廃止・常に null に更新した。API schema と worker protocol schema は生成試験で照合。scratch status 試験は両欄が JSON null であることを確認する。GUI/web の型コメントも ADR-0129 に合わせた。`docs/ops/sccache-l1.md` は廃止と ADR 参照、人が本番 host で行う unit・旧 cache 後始末の手順に置き換えた。本番 host 操作は行っていない。
+
+- `UPDATE_SCHEMA=1 cargo test -p task-api`: schema 一致と null 断言を含む unit 72 件成功、2 ignored。続く integration test `production_h3_injects_once_without_exposure` は sandbox の `unshare: Operation not permitted` で失敗。
+- `UPDATE_SCHEMA=1 cargo test -p task-worker protocol::tests:: --lib`: 9 件成功（worker protocol schema 一致を含む）。
+- `UPDATE_SCHEMA=1 cargo test -p task-core --lib`: 625 件成功。
+- `corepack pnpm@11.27.0 -C gui gen:types` と `corepack pnpm@12.6.0 -C web gen:types`: pnpm store SQLite を開けず終了。生成型コメントは schema の ADR-0129 記述に手動同期し、型構造は変更していない。
+
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
 ## 試験で CPU を焼く負荷をかけない規則（2026-10-02、task 01M3Y4AV7801NSXB6FD698QZHW、WorkUnit rule-docs）
@@ -432,3 +441,102 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
+
+## ADR-0129 (1) sccache 撤去: 統合後の全体検証（work unit `verify`）
+
+完了日 2026-10-02。HEAD `273bf5f36153`（統合段 consumers → core → schema-docs がすべて終わった後）で
+workspace 全体の test・clippy・fmt と、sccache 撤去自体の確認を行った。コードの変更は無し（検証のみ）。
+
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace`:
+  - 1 回目 exit 101。`crates/celeris/tests/instance_handoff.rs` の
+    `a_newer_release_takes_over_while_the_old_one_finishes_its_run` が 1 件だけ失敗（「旧インスタンスがタスクを
+    dispatch しない」、10 秒待ちで timeout）。他は全 passed。
+  - 単独再実行（`cargo test -p celeris --test instance_handoff
+    a_newer_release_takes_over_while_the_old_one_finishes_its_run -- --exact`）→ exit 0、1 passed。
+    同時実行中の他試験との負荷競合による flake と判断し、設計変更は不要と判断した（このテストは
+    release handoff のタイミング試験で、ADR-0129 の sccache 撤去とは無関係。このタスクの範囲では修正しない。
+    時間依存試験の決定化は別タスクの対象）。
+  - 2 回目のフル実行 → exit 0。120 試験バイナリすべて `test result: ok`、合計 **3228 passed / 0 failed /
+    0 measured**（ignored を除く）。
+- sccache 撤去自体の確認（非試験コード）:
+  - `crates/scratch-cache` crate は存在しない。`crates/celeris/src/cache_server.rs` は存在しない。
+  - `celeris-sccache.service` / `celeris-scratch-cache.service` は repo 内に存在しない
+    （`scripts/selfdeploy/install-units.sh` は置かない。本番 host 側の既存 unit 停止・削除は
+    `docs/ops/sccache-l1.md` に人が行う手順として書いてある。本番操作はしていない）。
+  - `scripts/scratch/setup-sccache.sh` は存在しない。
+  - `RUSTC_WRAPPER` / `SCCACHE_` の出現は `grep -rn --include='*.rs' crates/`（試験ファイル・`_tests.rs` 除外）で
+    全件確認し、すべてコメント・doc comment（「差し込み・除去をしない」という設計を説明する注記、
+    `ScratchSccacheView` 等の廃止済み型の doc）であって、実際の env 構築・差し込み・除去コードは無い。
+  - `docs/ops/sccache-l1.md` は廃止の旨と ADR-0129 への参照、本番 host 側の後始末手順に置き換わっている
+    （schema-docs work unit で完了済み。本 work unit では内容の変更なし）。
+- 未解決事項: `instance_handoff.rs` の `a_newer_release_takes_over_while_the_old_one_finishes_its_run` は
+  共用 host の負荷下で稀に flake する（今回 1/2 回）。ADR-0129 の変更とは無関係なので、このタスクでは直さない。
+  時間依存試験の決定化（別タスクで進行中）の対象に含めるとよい。
+
+### ADR-0129 (1) 撤去後の全体検証: 再実行（work unit `verify`、check 不合格の追試）
+
+上記の run の後、celeris の post-run check が `cargo test --workspace` を再実行したところ別の 1 件
+（`crates/task-dispatch/src/dispatcher/tests/cluster_job_wait.rs` の
+`a_wait_parks_the_task_polls_and_resumes_as_a_continuation`、「condition not reached after 200 ticks」）で
+exit 101 になった。コードは変更していない（検証のみ）ので、同じ HEAD で追試した。
+
+- `uptime` は実行のたびに load average 34〜46（1 分）と非常に高い（他の並行 work unit・task による共用 host の
+  負荷）。
+- `cargo test -p task-dispatch --lib` で上記 1 件だけを単独実行 → exit 0、1 passed。この試験はバックグラウンド
+  スレッド（`fake_poller` 等）の完了を `tick_until`（最大 200 回 × 20ms sleep = 4 秒)の実時間待ちで見ており、
+  host が高負荷だとバックグラウンドスレッドが 4 秒以内に進まないことがある。`instance_handoff.rs` と同様、
+  共用 host の負荷に起因する実時間待ちの flake であり、ADR-0129 の sccache 撤去とは無関係（dispatcher の
+  cluster job wait 機能の話）。このタスクの範囲では修正しない。
+- `cargo test --workspace` をさらに 2 回実行: 1 回目は上記と同じ 1 件が exit 101 で再現、2 回目は
+  **exit 0、105 試験バイナリ、合計 3228 passed / 0 failed**（doctest 含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- sccache 撤去の確認を再実行し同じ結論を確認: `crates/scratch-cache` crate 無し、
+  `crates/celeris/src/cache_server.rs` 無し、`celeris-sccache.service` / `celeris-scratch-cache.service` を
+  置く記述が repo 内に無し、`scripts/scratch/setup-sccache.sh` 無し。非試験 `.rs` 内の `RUSTC_WRAPPER` /
+  `SCCACHE_` の出現（`task-ops/src/daemon.rs`・`task-dispatch/src/dispatcher/{worker_task,housekeeping}.rs`・
+  `task-worker/src/{preamble,scratch}.rs`・`celerisctl/src/commands/scratch.rs`）はすべて doc comment
+  （廃止・常に `None` な互換型の説明、「継いだ env に触れない」という設計の注記）で、実際に env を組み立てる
+  コードは無い。
+- 結論: `instance_handoff.rs` に続き `cluster_job_wait.rs` も共用 host の負荷下で稀に flake することを確認した
+  （どちらも ADR-0129 とは無関係）。コードの修正は行わず、`cargo test --workspace` が exit 0 になる実行を
+  得たことと、sccache 撤去自体の確認が変わらないことを記録する。
+
+### ADR-0129 (1) 撤去後の全体検証: 2回目の追試（work unit `verify`、check 不合格の再追試）
+
+上記の再実行の後、celeris の post-run check が `cargo test --workspace` をさらに再実行したところ、
+また別の 1 件（`tests/e2e/tests/api_scenarios.rs` の
+`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`、
+「no cooldown in /daemon」）で exit 101 になった。コードは変更していない（検証のみ）ので、同じ HEAD で
+追試した。
+
+- `uptime` は実行のたびに load average 26〜40（1 分）と非常に高い状態が続いている（他の並行 work unit・
+  task による共用 host の負荷。`instance_handoff.rs`・`cluster_job_wait.rs` の追試時と同様）。
+- `cargo test -p e2e --test api_scenarios daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded
+  -- --exact` で単独実行 → exit 0、1 passed。この試験は fake-local provider の in-flight run から cooldown が
+  `/daemon` に現れるまでを実時間で待っており（daemon の tick は `tick_ms: 50`）、host が高負荷だと
+  background の tick/throttle 処理が期待する実時間内に進まないことがある。`instance_handoff.rs`・
+  `cluster_job_wait.rs` と同様、共用 host の負荷に起因する実時間待ちの flake であり、ADR-0129 の sccache
+  撤去とは無関係（daemon view の cooldown/throttle 表示機能の話。表示されている `scratch.sccache: null`・
+  `scratch.cache: null` は ADR-0129 の設計どおり）。このタスクの範囲では修正しない。
+- `cargo test --workspace` を再実行 → **exit 0、全試験バイナリ `test result: ok`**（lib 625 passed、
+  task-dispatch lib 500 passed、task-worker lib 664 passed + 4 ignored 等を含む。failed 0 件）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- sccache 撤去の確認を再実行し同じ結論を確認: `crates/scratch-cache` crate 無し、
+  `crates/celeris/src/cache_server.rs` 無し、`install-units.sh` に `celeris-sccache.service` /
+  `celeris-scratch-cache.service` を置く記述が無し、`scripts/scratch/setup-sccache.sh` 無し。非試験 `.rs`
+  （`*_tests.rs`・`tests.rs`・`tests/` 配下を除外）の `RUSTC_WRAPPER` / `SCCACHE_` の出現
+  （`task-ops/src/daemon.rs`・`task-worker/src/{preamble,scratch}.rs`・
+  `task-dispatch/src/dispatcher/{worker_task,housekeeping}.rs`・`celerisctl/src/commands/scratch.rs`）は
+  すべて doc comment（廃止・常に `None`/`null` な互換項目の説明、「継いだ env に触れない」という設計の
+  注記）で、実際に env を組み立てるコードは無い。
+- 結論: 3 回の追試でそれぞれ異なる時間依存試験（`instance_handoff.rs`・`cluster_job_wait.rs`・
+  `api_scenarios.rs` の 3 件）が共用 host の高負荷（load average 1 分で 20〜40 台）下で単発 flake したが、
+  いずれも単独実行では即 pass し、ADR-0129（sccache 撤去）とは無関係であることを確認した。コードの修正は
+  行わない（設計変更が要る — 実時間待ちを時計注入やイベント待ちに変える — ため、このタスクの範囲外。
+  時間依存試験の決定化は別タスクで進行中）。`cargo test --workspace` が exit 0 になる実行を得たことと、
+  sccache 撤去自体の確認（crate・cache_server・unit・setup スクリプトの不在、env 構築コードの不在）が
+  変わらないことを記録する。

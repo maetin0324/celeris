@@ -3241,8 +3241,7 @@ export interface ReportsLive {
  */
 export interface ScratchStatus {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -3290,7 +3289,7 @@ export interface ScratchStatus {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -3305,7 +3304,7 @@ export interface ScratchStatus {
   total_max_bytes: number;
 }
 /**
- * ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+ * 廃止（ADR-0129）: Celeris の階層 cache server。型だけ残す（値は常に `null`）。
  */
 export interface ScratchCacheView {
   /**
@@ -3331,8 +3330,7 @@ export interface ScratchCacheView {
   stats?: ScratchCacheStats | null;
 }
 /**
- * ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
- * 累計、容量は byte、時刻は RFC 3339。
+ * 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `null`）。
  */
 export interface ScratchCacheStats {
   /**
@@ -3515,7 +3513,7 @@ export interface ScratchOwnerView {
   work_unit_key?: string | null;
 }
 /**
- * ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+ * 廃止（ADR-0129）: sccache L1。型だけ残す（値は常に `null`）。
  */
 export interface ScratchSccacheView {
   /**
@@ -3549,7 +3547,7 @@ export interface ScratchSccacheView {
   stats?: ScratchSccacheStats | null;
 }
 /**
- * `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+ * 廃止（ADR-0129）: sccache stats。型だけ残す（値は常に `null`）。
  */
 export interface ScratchSccacheStats {
   /**
@@ -6092,8 +6090,7 @@ export interface MessagePostBody {
  */
 export interface ScratchStatus1 {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -6141,7 +6138,7 @@ export interface ScratchStatus1 {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
    */
   sccache?: ScratchSccacheView | null;
   /**

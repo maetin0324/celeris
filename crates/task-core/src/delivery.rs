@@ -164,7 +164,7 @@ mod tests {
         drop(conn);
 
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 37);
+        assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
         let old = store.delivery_get(task_id).unwrap().unwrap();
         assert_eq!(old.target_sha, None);
         assert_eq!(old.reviewed_sha, None);
@@ -197,7 +197,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("new.sqlite3");
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 37);
+        assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
         let conn = Connection::open(&path).unwrap();
         let mut stmt = conn.prepare("PRAGMA table_info(deliveries)").unwrap();
         let names: Vec<String> = stmt

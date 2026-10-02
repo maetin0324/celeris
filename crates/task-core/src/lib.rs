@@ -146,7 +146,7 @@ pub use pricing::{estimate_cost_usd, output_input_ratio};
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};
 // ---- ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ ----
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
-pub use node_session::{NodeSession, NodeSessionStore, SessionKind};
+pub use node_session::{NodeSession, NodeSessionStore, SessionKind, WorkUnitSession};
 // ---- ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証とログ ----
 pub use mcp::{
     McpCall, McpCallStore, McpClient, McpClientStore, McpScope, scopes_from_string,

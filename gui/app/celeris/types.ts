@@ -285,6 +285,25 @@ export type DecisionEffect = "resume" | "raise_once" | "replan" | "atomic" | "wi
  */
 export type Event =
   | {
+      attempt: number;
+      before_sha: string;
+      merge_candidate_sha: string;
+      repo_id: RepoId;
+      review_run: string;
+      reviewed_sha: string;
+      target_ref: string;
+      target_sha: string;
+      type: "review_target_synced";
+    }
+  | {
+      attempt: number;
+      repo_id: RepoId;
+      review_run: string;
+      reviewed_sha: string;
+      target_sha: string;
+      type: "review_target_advanced";
+    }
+  | {
       browser: BrowserRun;
       type: "browser_updated";
     }
@@ -628,6 +647,18 @@ export type Event =
       merged: PhaseMerged[];
       phase: string;
       type: "phase_integrated";
+      work_unit_id: string;
+    }
+  | {
+      branch: string;
+      child_task: TaskId;
+      head_sha: string;
+      key: string;
+      merge_candidate_sha: string;
+      phase: string;
+      repo_id: RepoId;
+      target_sha: string;
+      type: "merge_candidate_stale";
       work_unit_id: string;
     }
   | {
@@ -1937,12 +1968,12 @@ export interface NewBrowserWait {
   run_id: string;
   session_id: string;
   /**
-   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
-   */
-  /**
    * ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
    */
   trusted_login?: TrustedLogin | null;
+  /**
+   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
+   */
   ttl_secs?: number | null;
   work_unit_id?: string | null;
 }
@@ -2033,6 +2064,7 @@ export interface Delivery {
   department: string;
   detail: string;
   head: string;
+  merge_candidate_sha?: string | null;
   notification?: MessageId | null;
   prepare_pid?: number | null;
   project_id: ProjectId;
@@ -2050,7 +2082,12 @@ export interface Delivery {
   repo: string;
   repo_id: RepoId;
   review_run: string;
+  reviewed_sha?: string | null;
   state: DeliveryState;
+  /**
+   * Target ref read for this review attempt. NULL means no candidate was checked.
+   */
+  target_sha?: string | null;
   task_id: TaskId;
   worker_run: string;
 }
@@ -4748,9 +4785,17 @@ export interface PhaseMerged {
   commit: string;
   key: string;
   /**
+   * ADR-0118 D5: 子の merge candidate を merge したときの親ブランチの HEAD（merge の直前）。
+   */
+  parent_head?: string | null;
+  /**
    * 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
    */
   skipped?: boolean;
+  /**
+   * ADR-0118 D5: 照合した子の review 時の target（親ブランチ）の SHA（記録の無い子・WU は `None`）。
+   */
+  target_sha?: string | null;
 }
 /**
  * D2.3: 途中報告そのもの（`Event::PhaseReported.report` と `artifacts/phase-reports/<n>-<phase>.md`
@@ -5189,6 +5234,11 @@ export interface ReplanDiff {
    * 新しい版に無くなった未完了の WorkUnit（`superseded` にする）。
    */
   removed: string[];
+  /**
+   * ADR-0079 付記「R7-9」D2: 統合済み（done）だった段階のうち、この版で unit が増えたので統合 WU を `pending` に
+   * 戻した段階の key。`ExecutionPlanned.reason` にも `stage_reopened: …` として残す。
+   */
+  reopened_stages?: string[];
 }
 /**
  * ADR-0072 D17（Phase E4）: `execution_plans` の 1 版（`GET /tasks/{id}/execution-plan` の

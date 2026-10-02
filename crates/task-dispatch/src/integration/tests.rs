@@ -355,7 +355,9 @@ fn child_task_branches_are_optional_and_idempotent() {
         vec![Merged {
             key: "c".into(),
             commit: child_head.clone(),
-            skipped: false
+            skipped: false,
+            target_sha: None,
+            parent_head: None,
         }]
     );
     assert!(task_tree.join("c.txt").is_file());
@@ -392,4 +394,94 @@ fn child_task_branches_are_optional_and_idempotent() {
     );
     let err = dependency_base(&repo, "T1", &dep, "celeris/missing", "celeris/").unwrap_err();
     assert!(err.contains("child task unit"), "{err}");
+}
+
+/// 子の worktree（親ブランチの HEAD から切る）を作る。
+fn make_child(root: &Path, repo: &Path, task_tree: &Path, id: &str) -> PathBuf {
+    let child_dir = root.join("ws").join(id).join("tree");
+    let child = LocalWorktree {
+        repo: repo.to_path_buf(),
+        task_dir: root.join("ws").join(id),
+        dir: child_dir.clone(),
+        branch: format!("celeris/{id}"),
+        base: BaseRef {
+            kind: BaseKind::Parent,
+            sha: rev_parse(task_tree, "HEAD").unwrap(),
+        },
+    };
+    child.ensure_blocking().unwrap();
+    child_dir
+}
+
+/// ADR-0118 D5: 子のブランチが review 後に動いた（HEAD ≠ merge candidate）なら merge せずに止める。
+#[test]
+fn merge_candidate_mismatch_stops_without_merging() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, _task_dir, task_tree) = setup(root.path());
+    let child_dir = make_child(root.path(), &repo, &task_tree, "C1");
+    let reviewed = commit_file(&child_dir, "c.txt");
+    let target = rev_parse(&task_tree, "HEAD").unwrap();
+    // review の後に子のブランチへ commit が足された。
+    let moved = commit_file(&child_dir, "late.txt");
+    let before = rev_parse(&task_tree, "HEAD").unwrap();
+    let items = vec![
+        MergeItem::child_task("c", "celeris/C1").with_candidate(Some(MergeCandidate {
+            target_sha: target.clone(),
+            merge_candidate_sha: reviewed.clone(),
+        })),
+    ];
+    let out = integrate(&task_tree, &items, "s1").unwrap();
+    assert!(out.conflict.is_none());
+    assert!(out.merged.is_empty());
+    assert_eq!(
+        out.stale,
+        Some(StaleCandidate {
+            key: "c".into(),
+            branch: "celeris/C1".into(),
+            merge_candidate_sha: reviewed,
+            head_sha: moved,
+            target_sha: target,
+        })
+    );
+    assert_eq!(out.head, before);
+    assert_eq!(rev_parse(&task_tree, "HEAD").unwrap(), before);
+    assert!(!task_tree.join("c.txt").exists());
+}
+
+/// ADR-0118 D5 / ADR-0079 D6: 親ブランチが子の review 後に進んだだけなら従来どおり merge し、
+/// 記録の target SHA と merge 直前の親 HEAD を返す。記録の無い子は照合しない（移行前）。
+#[test]
+fn merge_candidate_match_merges_after_parent_advanced_and_records_parent_head() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, _task_dir, task_tree) = setup(root.path());
+    let child_dir = make_child(root.path(), &repo, &task_tree, "C1");
+    let reviewed = commit_file(&child_dir, "c.txt");
+    let target = rev_parse(&task_tree, "HEAD").unwrap();
+    // 子の review の後に親ブランチが進んだ（同じ段階の別の merge など）。
+    let parent_head = commit_file(&task_tree, "p.txt");
+    let legacy_dir = make_child(root.path(), &repo, &task_tree, "C2");
+    let legacy = commit_file(&legacy_dir, "legacy.txt");
+    let items = vec![
+        MergeItem::child_task("c", "celeris/C1").with_candidate(Some(MergeCandidate {
+            target_sha: target.clone(),
+            merge_candidate_sha: reviewed.clone(),
+        })),
+        MergeItem::child_task("legacy", "celeris/C2"),
+    ];
+    let out = integrate(&task_tree, &items, "s1").unwrap();
+    assert!(out.conflict.is_none());
+    assert!(out.stale.is_none());
+    assert_eq!(out.merged.len(), 2);
+    assert_eq!(out.merged[0].commit, reviewed);
+    assert_eq!(out.merged[0].target_sha.as_deref(), Some(target.as_str()));
+    assert_eq!(
+        out.merged[0].parent_head.as_deref(),
+        Some(parent_head.as_str())
+    );
+    assert_eq!(out.merged[1].commit, legacy);
+    assert_eq!(out.merged[1].target_sha, None);
+    assert_eq!(out.merged[1].parent_head, None);
+    assert!(task_tree.join("c.txt").is_file());
+    assert!(task_tree.join("legacy.txt").is_file());
+    assert!(is_ancestor(&task_tree, &parent_head, "HEAD"));
 }

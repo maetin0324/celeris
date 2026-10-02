@@ -36,14 +36,16 @@ tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
 **V1（gui/ の回帰。全タスク）**
 
 ```sh
-git diff --quiet <base> -- gui                      # gui/ の追跡ファイルに差分なし
-pnpm -C gui test && pnpm -C gui typecheck && pnpm -C gui build
+git diff --quiet <base> -- . ':!web' ':!docs/web' ':!docs/PROGRESS.md' ':!docs/progress'   # web/・docs/web/・PROGRESS 以外に差分なし
+corepack pnpm@11.27.0 -C gui test && corepack pnpm@11.27.0 -C gui typecheck && corepack pnpm@11.27.0 -C gui build
 ```
+
+`corepack pnpm@11.27.0` はホストの pnpm が 12.6.0 でも `gui/package.json` の `packageManager`（11.27.0 固定、変更禁止）に合わせて起動する。
 
 **V2（web/ の共通検査。P1-01 より後の全タスク。P1-02 までに揃う）**
 
 ```sh
-pnpm -C web typecheck && pnpm -C web lint && pnpm -C web test && pnpm -C web build
+pnpm -C web install --frozen-lockfile && pnpm -C web typecheck && pnpm -C web lint && pnpm -C web test && pnpm -C web build
 pnpm -C web gen:types --check        # docs/api/v1/api-v1.schema.json から再生成して差分なし
 pnpm -C web check:boundaries         # gui/ を import しない、client に server/ と token の処理が入らない、
                                      # routes/ の loader・beforeLoad が fetch を待たない、世代名なし、routes/ の 1 ファイルは 150 行以下
@@ -52,6 +54,8 @@ pnpm -C web check:parity             # 「完了」の行の確認方法のテ�
 ```
 
 **V3（画面の共通検査。画面を作るタスク。P2-07 で揃う）** — `<path>` はその画面の URL
+
+画面の実装時に `web/e2e/support/screens.ts` の該当行へ `v3: true` を付ける。S1・S2・S4 はその行の path・fixture・見出しを使って自動的に対象へ加える。
 
 ```sh
 pnpm -C web e2e latency/transition.spec.ts -g "<path>"      # S1

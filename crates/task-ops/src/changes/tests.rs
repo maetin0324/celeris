@@ -462,3 +462,151 @@ fn a_command_that_never_finishes_is_killed() {
     assert!(!out.ok);
     assert_eq!(out.why(), "コマンドが時間内に終わりませんでした");
 }
+
+fn head_of(dir: &Path) -> String {
+    git_line(dir, &["rev-parse", "HEAD"]).unwrap_or_else(|| panic!("HEAD"))
+}
+
+fn commit_file(dir: &Path, name: &str, body: &[u8], msg: &str) {
+    std::fs::write(dir.join(name), body).unwrap_or_else(|e| panic!("{e}"));
+    git_must(dir, &["add", "-A"]);
+    git_must(dir, &["commit", "-q", "-m", msg]);
+}
+
+/// ADR-0118 D2: target が先に進んでいれば task の worktree をその上へ rebase し、成果を保つ。
+#[test]
+fn sync_onto_target_rebases_the_task_branch_onto_an_advanced_target() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    commit_file(&tree, "task.txt", b"task\n", "task");
+    let before = head_of(&tree);
+    commit_file(&repo, "other.txt", b"other\n", "other task landed");
+    let target = head_of(&repo);
+
+    let outcome = sync_onto_target(&tree, "main");
+    let SyncOutcome::Rebased {
+        target_sha,
+        before_sha,
+        head_sha,
+    } = outcome
+    else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(target_sha, target);
+    assert_eq!(before_sha, before);
+    assert_eq!(head_sha, head_of(&tree));
+    assert_ne!(head_sha, before);
+    assert!(git_ok(
+        &tree,
+        &["merge-base", "--is-ancestor", &target, &head_sha]
+    ));
+    assert_eq!(
+        git_line(&tree, &["rev-parse", "refs/heads/celeris/01TASK"]).as_deref(),
+        Some(head_sha.as_str()),
+        "ブランチ ref も進む"
+    );
+    assert!(tree.join("task.txt").is_file() && tree.join("other.txt").is_file());
+    assert_eq!(head_of(&repo), target, "target は動かさない");
+}
+
+/// ADR-0118 D2: target が既に HEAD の祖先なら rebase しない。
+#[test]
+fn sync_onto_target_reports_up_to_date_without_rebasing() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    commit_file(&tree, "task.txt", b"task\n", "task");
+    let before = head_of(&tree);
+    let target = head_of(&repo);
+
+    assert_eq!(
+        sync_onto_target(&tree, "main"),
+        SyncOutcome::UpToDate {
+            target_sha: target,
+            head_sha: before.clone(),
+        }
+    );
+    assert_eq!(head_of(&tree), before);
+}
+
+/// ADR-0118 D6: 衝突したら `rebase --abort` し、ブランチ・worktree・未 push の commit を元の HEAD のまま残す。
+#[test]
+fn sync_onto_target_keeps_the_original_head_on_conflict() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    commit_file(&tree, "README.md", b"task side\n", "task");
+    let before = head_of(&tree);
+    commit_file(&repo, "README.md", b"human side\n", "human");
+    let target = head_of(&repo);
+
+    assert_eq!(
+        sync_onto_target(&tree, "main"),
+        SyncOutcome::Conflict {
+            target_sha: target.clone(),
+            files: vec!["README.md".to_string()],
+        }
+    );
+    assert_eq!(head_of(&tree), before, "元の HEAD のまま");
+    assert_eq!(
+        git_line(&tree, &["rev-parse", "refs/heads/celeris/01TASK"]).as_deref(),
+        Some(before.as_str())
+    );
+    assert_eq!(
+        git_line(&tree, &["symbolic-ref", "-q", "HEAD"]).as_deref(),
+        Some("refs/heads/celeris/01TASK"),
+        "ブランチを出したまま"
+    );
+    assert_eq!(is_dirty(&tree), Some(false));
+    assert_eq!(
+        std::fs::read_to_string(tree.join("README.md")).unwrap_or_default(),
+        "task side\n"
+    );
+    assert_eq!(head_of(&repo), target, "target は動かさない");
+}
+
+/// ADR-0118 D2: 未コミットの変更があれば何も触らない（stash・reset もしない）。
+#[test]
+fn sync_onto_target_leaves_a_dirty_worktree_untouched() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    commit_file(&tree, "task.txt", b"task\n", "task");
+    let before = head_of(&tree);
+    commit_file(&repo, "other.txt", b"other\n", "other");
+    std::fs::write(tree.join("task.txt"), b"edited\n").unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(tree.join("new.txt"), b"new\n").unwrap_or_else(|e| panic!("{e}"));
+
+    assert_eq!(sync_onto_target(&tree, "main"), SyncOutcome::Dirty);
+    assert_eq!(head_of(&tree), before);
+    assert_eq!(
+        std::fs::read_to_string(tree.join("task.txt")).unwrap_or_default(),
+        "edited\n"
+    );
+    assert!(tree.join("new.txt").is_file());
+}
+
+/// ADR-0118 D2: target が読めなければ触らずに失敗する。
+#[test]
+fn sync_onto_target_fails_when_the_target_is_missing() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    let before = head_of(&tree);
+    match sync_onto_target(&tree, "no-such-branch") {
+        SyncOutcome::Failed { detail } => assert!(detail.contains("no-such-branch"), "{detail}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(head_of(&tree), before);
+}

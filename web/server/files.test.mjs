@@ -1,0 +1,212 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { after, before, test } from "node:test";
+import { createApp } from "./app.js";
+import { dispositionFor, filePath, fileQuery } from "./files.js";
+
+// 偽 daemon と gateway は loopback の空き port。token は fixture で、どの出力にも出てはいけない。
+const TOKEN = "fixture-daemon-token-3f9c2a71";
+const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-files-"));
+const tokenFile = path.join(dir, "token");
+writeFileSync(tokenFile, `${TOKEN}\n`);
+const BODY = Buffer.from("0123456789abcdefghij");
+
+const seen = [];
+let aborted = 0;
+const daemon = http.createServer((req, res) => {
+  seen.push({ url: req.url, headers: req.headers });
+  if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+    res.writeHead(401, { "content-type": "application/json" });
+    return res.end('{"error":"unauthorized"}');
+  }
+  const url = new URL(req.url, "http://x");
+  if (url.pathname === "/api/v1/tasks/T1/runs/R1/slow") {
+    res.writeHead(200, { "content-type": "application/octet-stream" });
+    res.write("first");
+    res.on("close", () => {
+      if (!res.writableFinished) aborted += 1;
+    });
+    return;
+  }
+  if (url.pathname === "/api/v1/tasks/T1/artifacts/1") {
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-disposition": 'inline; filename="report.html"',
+      "content-security-policy": "default-src *",
+      "set-cookie": "daemon=1",
+    });
+    return res.end("<script>alert(1)</script>");
+  }
+  if (url.pathname === "/api/v1/tasks/T1/artifacts/2") {
+    res.writeHead(200, { "content-type": "image/svg+xml" });
+    return res.end("<svg/>");
+  }
+  const range = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? "");
+  if (range) {
+    const [start, end] = [Number(range[1]), Number(range[2])];
+    if (start >= BODY.length) {
+      res.writeHead(416, { "content-range": `bytes */${BODY.length}` });
+      return res.end();
+    }
+    res.writeHead(206, {
+      "content-type": "text/plain",
+      "content-range": `bytes ${start}-${end}/${BODY.length}`,
+      "accept-ranges": "bytes",
+      "content-length": end - start + 1,
+    });
+    return res.end(BODY.subarray(start, end + 1));
+  }
+  res.writeHead(200, {
+    "content-type": "text/plain",
+    "accept-ranges": "bytes",
+    "x-celeris-size": String(BODY.length),
+    "x-daemon-internal": "1",
+  });
+  res.end(JSON.stringify({ path: url.pathname, query: url.search }));
+});
+
+const servers = [];
+let base;
+
+async function listen(server) {
+  server.listen(0, "127.0.0.1");
+  await new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  servers.push(server);
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+before(async () => {
+  const upstream = await listen(daemon);
+  base = await listen(http.createServer(createApp({ daemonUrl: upstream, daemonTokenFile: tokenFile, log: () => {} })));
+});
+
+after(async () => {
+  for (const server of servers) {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("filePath accepts runs and artifacts, rejects traversal, separators and NUL", () => {
+  assert.equal(filePath("/tasks/T1/runs/R1/stdout.jsonl"), "/api/v1/tasks/T1/runs/R1/stdout.jsonl");
+  assert.equal(filePath("/tasks/T1/artifacts/3"), "/api/v1/tasks/T1/artifacts/3");
+  for (const bad of [
+    "/tasks/T1/runs/R1/..",
+    "/tasks/T1/runs/R1/%2e%2e",
+    "/tasks/T1/runs/R1/a%2Fb",
+    "/tasks/T1/runs/R1/a%5Cb",
+    "/tasks/T1/runs/R1/a%00b",
+    "/tasks/T1/runs/R1/a/b",
+    "/tasks/../runs/R1/x",
+    "/tasks/T1/artifacts/-1",
+    "/tasks/T1/artifacts/1.5",
+    "/tasks/T1/artifacts/%31%2F",
+    "/tasks/T1/other/x",
+    "/tasks/T1/runs/R1/%zz",
+  ])
+    assert.equal(filePath(bad), null, bad);
+});
+
+test("fileQuery keeps offset, length and download=1 only", () => {
+  assert.equal(String(fileQuery("offset=10&length=5&download=1")), "offset=10&length=5&download=1");
+  for (const bad of ["offset=-1", "length=abc", "download=0", "url=http://x", "offset=1&offset=2"])
+    assert.equal(fileQuery(bad), null, bad);
+});
+
+test("dispositionFor forces attachment for active content only", () => {
+  assert.equal(dispositionFor("text/html", null), "attachment");
+  assert.equal(dispositionFor("text/html", 'inline; filename="a.html"'), 'attachment; filename="a.html"');
+  assert.equal(dispositionFor("application/xhtml+xml", null), "attachment");
+  assert.equal(dispositionFor("image/svg+xml", null), "attachment");
+  assert.equal(dispositionFor("text/plain", null), null);
+  assert.equal(dispositionFor("application/json", "inline"), "inline");
+});
+
+test("run file relays offset/length/download and allowlisted headers with nosniff", async () => {
+  const res = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl?offset=10&length=5&download=1`, {
+    headers: { Authorization: "Bearer browser", Cookie: "a=b" },
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    path: "/api/v1/tasks/T1/runs/R1/stdout.jsonl",
+    query: "?offset=10&length=5&download=1",
+  });
+  const req = seen.at(-1);
+  assert.equal(req.headers.authorization, `Bearer ${TOKEN}`);
+  assert.equal(req.headers.cookie, undefined);
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(res.headers.get("x-celeris-size"), "20");
+  assert.equal(res.headers.get("accept-ranges"), "bytes");
+  assert.equal(res.headers.get("x-daemon-internal"), null);
+  assert.match(res.headers.get("content-security-policy") ?? "", /sandbox/);
+});
+
+test("Range is forwarded and 206 / 416 with Content-Range are kept", async () => {
+  const partial = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "bytes=2-5" } });
+  assert.equal(partial.status, 206);
+  assert.equal(partial.headers.get("content-range"), "bytes 2-5/20");
+  assert.equal(await partial.text(), "2345");
+  const outside = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "bytes=99-100" } });
+  assert.equal(outside.status, 416);
+  assert.equal(outside.headers.get("content-range"), "bytes */20");
+  const bad = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "lines=1-2" } });
+  assert.equal(bad.status, 400);
+});
+
+test("HTML and SVG artifacts are downloaded, never rendered same-origin", async () => {
+  const html = await fetch(`${base}/files/tasks/T1/artifacts/1`);
+  assert.equal(html.status, 200);
+  assert.equal(html.headers.get("content-disposition"), 'attachment; filename="report.html"');
+  assert.equal(html.headers.get("x-content-type-options"), "nosniff");
+  assert.match(html.headers.get("content-security-policy") ?? "", /^sandbox/);
+  assert.equal(html.headers.get("set-cookie"), null);
+  await html.text();
+  const svg = await fetch(`${base}/files/tasks/T1/artifacts/2`);
+  assert.equal(svg.headers.get("content-disposition"), "attachment");
+  await svg.text();
+});
+
+test("invalid name, idx and query are rejected before reaching the daemon", async () => {
+  const count = seen.length;
+  for (const bad of [
+    "/files/tasks/T1/runs/R1/%2e%2e",
+    "/files/tasks/T1/runs/R1/a%2Fb",
+    "/files/tasks/T1/runs/R1/a%00b",
+    "/files/tasks/T1/artifacts/x",
+    "/files/tasks/T1/artifacts/1?url=http://evil",
+  ]) {
+    const res = await fetch(`${base}${bad}`);
+    assert.equal(res.status, 400, bad);
+    await res.text();
+  }
+  assert.equal(seen.length, count);
+});
+
+test("browser disconnect aborts the upstream body without buffering", async () => {
+  const controller = new AbortController();
+  const res = await fetch(`${base}/files/tasks/T1/runs/R1/slow`, { signal: controller.signal });
+  assert.equal(res.status, 200);
+  const reader = res.body.getReader();
+  const { value } = await reader.read();
+  assert.equal(Buffer.from(value).toString(), "first");
+  controller.abort();
+  for (let i = 0; i < 50 && aborted === 0; i += 1) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(aborted, 1);
+});
+
+test("daemon 401 is reported as daemon_auth, not a session 401", async () => {
+  const other = await listen(
+    http.createServer(createApp({ daemonUrl: base.replace(/:\d+$/, `:${daemon.address().port}`), log: () => {} })),
+  );
+  const res = await fetch(`${other}/files/tasks/T1/runs/R1/stdout.jsonl`);
+  assert.equal(res.status, 502);
+  assert.equal(res.headers.get("x-celeris-web-error"), "daemon_auth");
+  assert.ok(!(await res.text()).includes(TOKEN));
+});

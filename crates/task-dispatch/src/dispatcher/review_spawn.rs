@@ -2,6 +2,46 @@
 
 use super::*;
 
+/// ADR-0118 D4 付記: stale の自動再同期が上限に達し、reviewing のまま止めたことを示す `WorkerProgress` の接頭辞。
+pub(crate) const TARGET_RESYNC_HALTED_PREFIX: &str = "review target resync halted: ";
+
+/// ADR-0118 D4 付記: 直近の遷移（自動の再レビューの遷移を除く）以後の stale（`ReviewTargetAdvanced`）の数、
+/// その最後の記録、上限で止めた印の有無。自動の再レビュー（root delivery の `request_rereview`）は
+/// `Transitioned{rereview}` の直後に同じ transaction で `ReviewTargetAdvanced` を残すので数え直さない。
+fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, bool) {
+    let mut count = 0;
+    let mut last = None;
+    let mut halted = false;
+    for (i, event) in events.iter().enumerate() {
+        match event {
+            Event::ReviewTargetAdvanced { .. } => {
+                count += 1;
+                last = Some(event);
+            }
+            Event::Transitioned { .. }
+                if !matches!(events.get(i + 1), Some(Event::ReviewTargetAdvanced { .. })) =>
+            {
+                count = 0;
+                last = None;
+                halted = false;
+            }
+            Event::WorkerProgress { msg, .. } if msg.starts_with(TARGET_RESYNC_HALTED_PREFIX) => {
+                halted = true;
+            }
+            _ => {}
+        }
+    }
+    (count, last, halted)
+}
+
+struct ReviewSync {
+    repo_id: task_core::RepoId,
+    target_ref: String,
+    target_sha: String,
+    before_sha: String,
+    reviewed_sha: String,
+}
+
 impl Dispatcher {
     /// ADR-0074「F5-fix8 実装時の明確化」: `ready` の Task の、仕事の残っていない計画を最終レビューに出す
     /// （`Trigger::PlanComplete`。run は起こさない）。レビューの主題は完了した WU の要約（`finish_phase_integration`
@@ -58,6 +98,71 @@ impl Dispatcher {
         }
     }
 
+    /// ADR-0117 D1: 対象 task とその祖先（木の親、無ければ `parent_id`）で回答済みの決定と、
+    /// それらの task の `question` への回答を集める。決定は `answered_at` の昇順、回答は root 側から順に並べる。
+    /// 兄弟の決定は混ぜない。`withdrawn` と未回答は含めない。
+    pub(super) fn review_human_inputs(
+        &self,
+        task: &Task,
+    ) -> Result<(Vec<task_worker::protocol::ReviewDecision>, Vec<Answer>), DispatchError> {
+        // 対象 task から root へ（循環・深すぎる木に備えて上限を置く）。
+        let mut chain = vec![task.id];
+        let mut cursor = task_core::tree::tree_parent(task).or(task.parent_id);
+        while let Some(id) = cursor {
+            if chain.contains(&id) || chain.len() >= 32 {
+                break;
+            }
+            chain.push(id);
+            cursor = match self.store.get(id)? {
+                Some(t) => task_core::tree::tree_parent(&t).or(t.parent_id),
+                None => None,
+            };
+        }
+        let mut rows: Vec<task_core::decision::DecisionRow> = self
+            .store
+            .decisions_list(Some(
+                task.tree
+                    .as_ref()
+                    .map(|t| t.root_id)
+                    .unwrap_or(chain[chain.len() - 1]),
+            ))?
+            .into_iter()
+            .filter(|r| {
+                r.status == task_core::decision::DecisionStatus::Answered
+                    && chain.contains(&r.task_id)
+            })
+            .collect();
+        rows.sort_by(|a, b| a.answered_at.cmp(&b.answered_at));
+        let decisions = rows
+            .iter()
+            .filter_map(|r| {
+                let answer = r.request.answer.as_ref()?;
+                let option_label = r
+                    .request
+                    .options
+                    .iter()
+                    .find(|o| o.key == answer.option)
+                    .map(|o| o.label.clone())
+                    .unwrap_or_else(|| answer.option.clone());
+                Some(task_worker::protocol::ReviewDecision {
+                    task_id: r.task_id,
+                    key: r.key.clone(),
+                    question: r.request.question.clone(),
+                    option: answer.option.clone(),
+                    option_label,
+                    note: answer.note.clone(),
+                })
+            })
+            .collect();
+        let mut answers = Vec::new();
+        for id in chain.iter().rev() {
+            answers.extend(to_answers(answers_from_events(
+                &self.store.events_for(*id)?,
+            )));
+        }
+        Ok((decisions, answers))
+    }
+
     /// レビューを開始する。`Reviewer` 条件があるのにプロバイダ／並列度の枠が無いときは `Ok(false)`
     /// （タスクは `reviewing` のまま。次 tick の `recover_reviews` が再試行する。ADR-0007 D5 1.）。
     pub(super) fn spawn_review(
@@ -106,6 +211,9 @@ impl Dispatcher {
         if task.status != Status::Reviewing {
             return Ok(true);
         }
+        if self.target_resync_exhausted(task_id, &run_id)? {
+            return Ok(false);
+        }
 
         let human = match self.resolve_human_approvals(&task)? {
             Some(h) => {
@@ -140,6 +248,131 @@ impl Dispatcher {
             .as_ref()
             .map(|(p, _, r)| (p.clone(), r.run_id.clone(), r.adapter.id().to_string()));
         let reviewer_run = reviewer.map(|(_, _, r)| r);
+        // The review lock covers the rebase and the checks that consume its result.
+        // A deferred review reaches this point again and reads the then-current target.
+        // Tree children historically commit their remaining run output on completion.
+        // Move that same commit before review so the inspected commit is the one merged
+        // into the parent stage; a failed commit remains dirty and stops in the sync.
+        if task_core::tree::is_tree_child(&task) {
+            let _ = self.commit_child_branch(&task);
+        }
+        let mut synced = Vec::new();
+        let mut sync_guards = Vec::new();
+        let remote_workspace = matches!(&task.workspace, task_core::WorkspaceSpec::Remote { .. })
+            || self.cluster_of(&task).is_some();
+        if remote_workspace {
+            self.store.append_event(
+                task_id,
+                &Event::worker_progress(
+                    run_id.clone(),
+                    "review target sync skipped: remote workspace",
+                ),
+            )?;
+        }
+        // Legacy projectless worktrees have no RepoId for the durable candidate event;
+        // keep their existing review/integration semantics until they are registered.
+        if !remote_workspace
+            && !task.repos.is_empty()
+            && let Some(workspaces) = self.task_workspaces_for(&task)
+        {
+            for repo in &workspaces.repos {
+                let Some(worktree) = &repo.worktree else {
+                    continue;
+                };
+                if !worktree.dir.is_dir() {
+                    continue;
+                }
+                let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
+                    continue;
+                };
+                let target = if let Some(parent) =
+                    task_core::tree::parent_branch(&task, &self.config.worktree_branch_prefix)
+                {
+                    parent
+                } else {
+                    let configured = self
+                        .store
+                        .repo_get(reference.repo_id)?
+                        .and_then(|r| r.default_branch);
+                    task_ops::changes::default_branch(&repo.source, configured.as_deref())
+                };
+                let target_ref = format!("refs/heads/{target}");
+                let outcome = task_ops::changes::sync_onto_target(&worktree.dir, &target_ref);
+                let (target_sha, before_sha, reviewed_sha) = match outcome {
+                    task_ops::changes::SyncOutcome::UpToDate {
+                        target_sha,
+                        head_sha,
+                    } => (target_sha, head_sha.clone(), head_sha),
+                    task_ops::changes::SyncOutcome::Rebased {
+                        target_sha,
+                        before_sha,
+                        head_sha,
+                    } => (target_sha, before_sha, head_sha),
+                    other => {
+                        // ADR-0118 D6 付記: 衝突・dirty・進行中の rebase・ref 不読は同期を諦め、成果を
+                        // 保った未同期の HEAD で従来どおり checks/reviewer へ進む（merge candidate は
+                        // 記録しない）。root は delivery の [merge-base] 経路、子は段階統合の衝突経路が扱う。
+                        let why = match other {
+                            task_ops::changes::SyncOutcome::Conflict { target_sha, files } => {
+                                format!(
+                                    "rebase onto {target_ref} {target_sha} conflicted in [{}] and was aborted",
+                                    files.join(", ")
+                                )
+                            }
+                            task_ops::changes::SyncOutcome::Dirty => {
+                                "the worktree has uncommitted changes".to_string()
+                            }
+                            task_ops::changes::SyncOutcome::Failed { detail } => detail,
+                            _ => String::new(),
+                        };
+                        let message = format!(
+                            "review target sync skipped for {}: {why}; reviewing the unsynced HEAD without a merge candidate",
+                            repo.name
+                        );
+                        tracing::warn!(%task_id, %message);
+                        self.store.append_event(
+                            task_id,
+                            &Event::worker_progress(run_id.clone(), message),
+                        )?;
+                        continue;
+                    }
+                };
+                let current = crate::integration::rev_parse(&worktree.dir, &target_ref);
+                if current.as_deref() != Some(target_sha.as_str()) {
+                    self.defer_stale_review(
+                        task_id,
+                        &run_id,
+                        reviewer_run.as_ref().map_or(&run_id, |r| &r.run_id),
+                        reference.repo_id,
+                        &reviewed_sha,
+                        current.as_deref().unwrap_or(""),
+                        &format!("target {target_ref} advanced during sync from {target_sha}"),
+                    )?;
+                    return Ok(false);
+                }
+                sync_guards.push((
+                    reference.repo_id,
+                    worktree.dir.clone(),
+                    format!("refs/heads/{}", worktree.branch),
+                    target_ref.clone(),
+                    target_sha.clone(),
+                    reviewed_sha.clone(),
+                ));
+                synced.push(ReviewSync {
+                    repo_id: reference.repo_id,
+                    target_ref,
+                    target_sha,
+                    before_sha,
+                    reviewed_sha,
+                });
+            }
+        }
+        // ADR-0117 D1: reviewer run には対象 task と祖先の人の決定・回答を渡す（store から集める。LLM は呼ばない）。
+        let (decisions, answers) = if reviewer_run.is_some() {
+            self.review_human_inputs(&task)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
         if let Some(run) = &reviewer_run {
             task_ops::delivery::begin(
                 self.store.as_ref(),
@@ -150,6 +383,53 @@ impl Dispatcher {
                 &run.run_id,
             )
             .map_err(DispatchError::from)?;
+        }
+        for snapshot in &synced {
+            if let Some(old) = self.store.delivery_get(task_id)?
+                && old.repo_id == snapshot.repo_id
+                && old.review_run == reviewer_run.as_ref().map_or("", |r| r.run_id.as_str())
+            {
+                if old.base != snapshot.target_sha || old.head != snapshot.reviewed_sha {
+                    self.defer_stale_review(
+                        task_id,
+                        &run_id,
+                        &old.review_run,
+                        snapshot.repo_id,
+                        &snapshot.reviewed_sha,
+                        &old.base,
+                        &format!(
+                            "delivery base/head {}..{} differ from the reviewed snapshot {}..{}",
+                            old.base, old.head, snapshot.target_sha, snapshot.reviewed_sha
+                        ),
+                    )?;
+                    return Ok(false);
+                }
+                let mut next = old.clone();
+                next.target_sha = Some(snapshot.target_sha.clone());
+                next.reviewed_sha = Some(snapshot.reviewed_sha.clone());
+                next.merge_candidate_sha = Some(snapshot.reviewed_sha.clone());
+                if !self.store.delivery_save(Some(&old), &next)? {
+                    return Err(
+                        StoreError::Invalid("delivery review changed concurrently".into()).into(),
+                    );
+                }
+            }
+            let attempt = self.store.events_for(task_id)?.iter().filter(|(_, event)| {
+                matches!(event, Event::ReviewTargetSynced { repo_id, .. } if *repo_id == snapshot.repo_id)
+            }).count() as u32 + 1;
+            self.store.append_event(
+                task_id,
+                &Event::ReviewTargetSynced {
+                    review_run: reviewer_run.as_ref().map_or(&run_id, |r| &r.run_id).clone(),
+                    repo_id: snapshot.repo_id,
+                    target_ref: snapshot.target_ref.clone(),
+                    target_sha: snapshot.target_sha.clone(),
+                    before_sha: snapshot.before_sha.clone(),
+                    reviewed_sha: snapshot.reviewed_sha.clone(),
+                    merge_candidate_sha: snapshot.reviewed_sha.clone(),
+                    attempt,
+                },
+            )?;
         }
 
         // ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run は `plan.json` ではなく
@@ -306,8 +586,11 @@ impl Dispatcher {
                 repo_checks,
                 // ADR-0046 D4: `mode = research` の暗黙の条件。
                 research,
+                // ADR-0117 D1: 人の決定・回答。
+                decisions,
+                answers,
             };
-            let outcome = review_task(
+            let mut outcome = review_task(
                 &task,
                 ws.as_ref(),
                 &dir,
@@ -317,6 +600,29 @@ impl Dispatcher {
                 extras,
             )
             .await;
+            // A command check or reviewer may have changed the branch while the lock was
+            // held. Never persist a passing verdict for a different commit or target.
+            // ADR-0118 D4 付記: snapshot の変化は stale（不合格ではない）として返し、attempts を消費しない。
+            for (repo_id, worktree, branch, target, target_sha, reviewed_sha) in &sync_guards {
+                let head = crate::integration::rev_parse(worktree, "HEAD");
+                let branch_head = crate::integration::rev_parse(worktree, branch);
+                let target_head = crate::integration::rev_parse(worktree, target);
+                if head.as_deref() != Some(reviewed_sha.as_str())
+                    || branch_head != head
+                    || target_head.as_deref() != Some(target_sha.as_str())
+                {
+                    outcome.target_stale = Some(crate::review::TargetStale {
+                        repo_id: *repo_id,
+                        reviewed_sha: reviewed_sha.clone(),
+                        target_sha: target_head.unwrap_or_default(),
+                        reason: format!(
+                            "review snapshot changed: target={target} expected={target_sha} HEAD={} expected={reviewed_sha}",
+                            head.unwrap_or_default()
+                        ),
+                    });
+                    break;
+                }
+            }
             // The entry owns the lock through verdict persistence. Release this
             // task's copy before sending completion so it cannot outlive that entry.
             drop(_review_lock);
@@ -341,6 +647,87 @@ impl Dispatcher {
                 account_adapter,
             },
         );
+        Ok(true)
+    }
+
+    /// ADR-0118 D4 付記: stale（target 再進行・delivery の base/head 不一致・検査後の snapshot 変化）。
+    /// `ReviewTargetAdvanced`（検査した SHA と今の target の両方）と理由を残し、遷移はしない（attempts を
+    /// 消費しない）。task は reviewing のまま、次の tick の review 入口が再 sync → 全 checks → reviewer を
+    /// やり直す。上限は [`Self::target_resync_exhausted`] が見る。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn defer_stale_review(
+        &self,
+        task_id: TaskId,
+        run_id: &str,
+        review_run: &str,
+        repo_id: task_core::RepoId,
+        reviewed_sha: &str,
+        target_sha: &str,
+        reason: &str,
+    ) -> Result<(), DispatchError> {
+        let events: Vec<Event> = self
+            .store
+            .events_for(task_id)?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let (count, _, _) = pre_review_stale_state(&events);
+        tracing::warn!(%task_id, %reason, "review snapshot is stale; re-syncing before review (ADR-0118 D4)");
+        self.store.append_event(
+            task_id,
+            &Event::ReviewTargetAdvanced {
+                review_run: review_run.to_owned(),
+                repo_id,
+                reviewed_sha: reviewed_sha.to_owned(),
+                target_sha: target_sha.to_owned(),
+                attempt: count + 1,
+            },
+        )?;
+        self.store.append_event(
+            task_id,
+            &Event::worker_progress(
+                run_id.to_owned(),
+                format!("review target stale: {reason}; re-syncing, re-checking and re-reviewing"),
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// ADR-0118 D4 付記: 自動の再同期が上限（[`task_ops::delivery::MAX_TARGET_RESYNCS`]）に達したか。
+    /// 達していれば理由と両 SHA を一度だけ残し、reviewing のまま止める（attempts 不変・`failed` にしない）。
+    /// 人のコメント（`interrupt`）などの遷移で数え直して再開する。
+    fn target_resync_exhausted(
+        &self,
+        task_id: TaskId,
+        run_id: &str,
+    ) -> Result<bool, DispatchError> {
+        let events: Vec<Event> = self
+            .store
+            .events_for(task_id)?
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let (count, last, halted) = pre_review_stale_state(&events);
+        if count <= task_ops::delivery::MAX_TARGET_RESYNCS {
+            return Ok(false);
+        }
+        if !halted {
+            let (reviewed, target) = match last {
+                Some(Event::ReviewTargetAdvanced {
+                    reviewed_sha,
+                    target_sha,
+                    ..
+                }) => (reviewed_sha.as_str(), target_sha.as_str()),
+                _ => ("", ""),
+            };
+            let message = format!(
+                "{TARGET_RESYNC_HALTED_PREFIX}the target kept moving after {} automatic re-syncs (reviewed {reviewed}, target {target}); the task stays reviewing with attempts unchanged until a human resumes it",
+                task_ops::delivery::MAX_TARGET_RESYNCS
+            );
+            tracing::warn!(%task_id, %message);
+            self.store
+                .append_event(task_id, &Event::worker_progress(run_id.to_owned(), message))?;
+        }
         Ok(true)
     }
 

@@ -941,6 +941,25 @@ pub struct FailedWorkUnitCheck {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// ADR-0118 D3: immutable snapshot of one repository's review attempt.
+    ReviewTargetSynced {
+        review_run: String,
+        repo_id: crate::RepoId,
+        target_ref: String,
+        target_sha: String,
+        before_sha: String,
+        reviewed_sha: String,
+        merge_candidate_sha: String,
+        attempt: u32,
+    },
+    /// ADR-0118 D4: a previously reviewed target advanced before integration.
+    ReviewTargetAdvanced {
+        review_run: String,
+        repo_id: crate::RepoId,
+        reviewed_sha: String,
+        target_sha: String,
+        attempt: u32,
+    },
     /// Credential-free mapping between one isolated browser session and a worker execution.
     BrowserUpdated {
         browser: crate::BrowserRun,
@@ -1315,6 +1334,19 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         checks: Vec<PhaseCheckResult>,
     },
+    /// ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った
+    /// （review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。
+    MergeCandidateStale {
+        phase: String,
+        work_unit_id: String,
+        key: String,
+        child_task: TaskId,
+        repo_id: crate::RepoId,
+        branch: String,
+        merge_candidate_sha: String,
+        head_sha: String,
+        target_sha: String,
+    },
     /// ADR-0074 D1.2（Phase F2b）: v2 の計画だが並列 1 に倒した（remote / 書き込み可能な `dir` の
     /// repo / `Shared`）。計画ごとに 1 回だけ残す。状態は変えない。
     WorkUnitsSerialized {
@@ -1467,6 +1499,12 @@ pub struct PhaseMerged {
     /// 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skipped: bool,
+    /// ADR-0118 D5: 照合した子の review 時の target（親ブランチ）の SHA（記録の無い子・WU は `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_sha: Option<String>,
+    /// ADR-0118 D5: 子の merge candidate を merge したときの親ブランチの HEAD（merge の直前）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_head: Option<String>,
 }
 
 /// `Event::PhaseIntegrated.checks[]`（ADR-0074 D1.4 の 4）。

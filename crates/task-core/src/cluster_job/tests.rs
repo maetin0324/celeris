@@ -389,13 +389,16 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              DROP TABLE browser_live_events; DROP TABLE browser_control_state; \
              DROP TABLE browser_control_actions; DROP TABLE browser_identities; \
              ALTER TABLE browser_waits DROP COLUMN trusted_login_json; \
+             ALTER TABLE deliveries DROP COLUMN target_sha; \
+             ALTER TABLE deliveries DROP COLUMN reviewed_sha; \
+             ALTER TABLE deliveries DROP COLUMN merge_candidate_sha; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 36);
+    assert_eq!(crate::SCHEMA_VERSION, 37);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

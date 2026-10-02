@@ -624,6 +624,11 @@ async fn a_task_with_several_repos_gets_one_worktree_per_git_repo_and_a_link_for
     let paper = root.path().join("benchfs-paper");
     init_test_repo(&code);
     init_test_repo(&paper);
+    // The recording worker writes this same content. Keep the worktree clean so
+    // pre-review target sync can inspect a committed HEAD.
+    std::fs::write(code.join("in-tree"), b"x").unwrap();
+    git_out(&code, &["add", "in-tree"]);
+    git_out(&code, &["commit", "-q", "-m", "review fixture"]);
     let data = root.path().join("data");
     std::fs::create_dir_all(&data).unwrap();
     std::fs::write(data.join("one.csv"), b"1\n").unwrap();
@@ -981,6 +986,9 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
         b"[commands]\ncheck = [\"test -f in-tree\"]\n",
     )
     .unwrap();
+    // The recording worker writes this same content; the check fixture is a
+    // committed snapshot for pre-review target sync.
+    std::fs::write(code.join("in-tree"), b"x").unwrap();
     for args in [vec!["add", "-A"], vec!["commit", "-q", "-m", "check"]] {
         let out = std::process::Command::new("git")
             .arg("-C")

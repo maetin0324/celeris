@@ -170,7 +170,7 @@ fn event(
 /// 受信箱へ分類された Event はここでは無視する。
 pub fn sync_notifications<S>(store: &S, now: OffsetDateTime) -> Result<u64, StoreError>
 where
-    S: TaskStore + ReportStore + NoticeStore,
+    S: TaskStore + ReportStore + NoticeStore + ?Sized,
 {
     let mut added = 0;
     let tasks = store.list(None)?;
@@ -356,7 +356,7 @@ where
     Ok(added)
 }
 
-fn record(store: &impl NoticeStore, notice: &NoticeEvent) -> Result<u64, StoreError> {
+fn record(store: &(impl NoticeStore + ?Sized), notice: &NoticeEvent) -> Result<u64, StoreError> {
     Ok(u64::from(!matches!(
         store.notice_record(notice)?,
         NoticeRecordOutcome::Duplicate(_)

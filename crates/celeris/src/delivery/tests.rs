@@ -46,6 +46,10 @@ fn repository() -> (tempfile::TempDir, Delivery) {
     git_text(p, &["add", "."]).unwrap();
     git_text(p, &["commit", "-m", "feature"]).unwrap();
     d.head = sha(p, "HEAD").unwrap();
+    // ADR-0118 D3: review 前の同期が記録する target / reviewed / merge candidate。
+    d.target_sha = Some(d.base.clone());
+    d.reviewed_sha = Some(d.head.clone());
+    d.merge_candidate_sha = Some(d.head.clone());
     git_text(p, &["checkout", "main"]).unwrap();
     (dir, d)
 }
@@ -351,8 +355,10 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
             &Event::worker_progress("original-run", transcript_marker),
         )
         .unwrap();
-    git_text(dir.path(), &["commit", "--allow-empty", "-m", "main moved"]).unwrap();
-    let moved_main = sha(dir.path(), "main").unwrap();
+    // An untracked file that the reviewed commit would overwrite makes the ff-only merge fail.
+    // A moved main is no longer a merge failure: it asks for a re-review (ADR-0118 D4).
+    fs::write(dir.path().join("feature"), "human draft").unwrap();
+    let main_head = sha(dir.path(), "main").unwrap();
     advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
     assert!(blocked.detail.starts_with(MERGE_BASE_FAILURE));
@@ -373,15 +379,16 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
         task_core::PlanStatus::Active
     );
     assert!(repair.spec.objective.contains(&d.branch));
-    assert!(repair.spec.objective.contains(&moved_main));
+    assert!(repair.spec.objective.contains(&main_head));
     assert!(repair.spec.objective.contains(&blocked.detail));
     assert!(!repair.spec.objective.contains(transcript_marker));
     assert!(!repair.spec.objective.contains("implement"));
     assert!(!repair.spec.objective.contains("work_units"));
 
-    // Simulate the repair worker rebasing feature onto the new main and passing review.
+    // Simulate the repair worker committing a fix after the human moved the draft away.
+    fs::remove_file(dir.path().join("feature")).unwrap();
     git_text(dir.path(), &["checkout", "feature"]).unwrap();
-    git_text(dir.path(), &["rebase", "main"]).unwrap();
+    git_text(dir.path(), &["commit", "--allow-empty", "-m", "repair"]).unwrap();
     let repaired_head = sha(dir.path(), "feature").unwrap();
     git_text(dir.path(), &["checkout", "main"]).unwrap();
     let mut done = repair.clone();
@@ -407,8 +414,28 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
     advance(&store, &cfg, &blocked, now).unwrap();
     let requeued = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(requeued.state, State::MergeQueued);
-    assert_eq!(requeued.base, moved_main);
+    assert_eq!(requeued.base, main_head);
     assert_eq!(requeued.head, repaired_head);
+    // The repaired head was never reviewed: it is not merged and goes back to review.
+    advance(&store, &cfg, &requeued, now).unwrap();
+    let rereview = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(rereview.state, State::Reviewing);
+    assert_eq!(sha(dir.path(), "main").unwrap(), main_head);
+    assert_eq!(
+        store.get(d.task_id).unwrap().unwrap().status,
+        Status::Reviewing
+    );
+    // The re-review syncs, checks and reviews the repaired head and records it as the candidate.
+    let mut requeued = rereview.clone();
+    requeued.state = State::MergeQueued;
+    requeued.decision = Some(true);
+    requeued.target_sha = Some(main_head.clone());
+    requeued.reviewed_sha = Some(repaired_head.clone());
+    requeued.merge_candidate_sha = Some(repaired_head.clone());
+    assert!(store.delivery_save(Some(&rereview), &requeued).unwrap());
+    store
+        .apply_transition(d.task_id, Trigger::ReviewPass, None)
+        .unwrap();
     // A local fake prepare script lets the merge proceed without touching a real release.
     let script = cfg
         .selfdeploy
@@ -478,6 +505,9 @@ fn merge_queued_delivery() -> (task_core::SqliteStore, tempfile::TempDir, Delive
     let (dir, repo_d) = repository();
     d.base = repo_d.base;
     d.head = repo_d.head;
+    d.target_sha = repo_d.target_sha;
+    d.reviewed_sha = repo_d.reviewed_sha;
+    d.merge_candidate_sha = repo_d.merge_candidate_sha;
     d.branch = repo_d.branch;
     d.default_branch = repo_d.default_branch;
     d.state = State::MergeQueued;
@@ -641,3 +671,183 @@ fn ready_notification_reports_push_failure_without_the_retry_marker() {
     assert!(!messages[0].text.contains(PUSH_RETRIED_PREFIX));
 }
 // ---- ADR-0051 Phase 106追記: ここまで ----
+
+// ---- ADR-0118 D4: merge 直前の target 再進行と merge candidate の照合 ----
+
+fn target_advanced_events(store: &task_core::SqliteStore, d: &Delivery) -> Vec<Event> {
+    store
+        .events_for(d.task_id)
+        .unwrap()
+        .into_iter()
+        .map(|(_, e)| e)
+        .filter(|e| matches!(e, Event::ReviewTargetAdvanced { .. }))
+        .collect()
+}
+
+#[test]
+fn target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = merge_queued_delivery();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    git_text(dir.path(), &["commit", "--allow-empty", "-m", "main moved"]).unwrap();
+    let moved = sha(dir.path(), "main").unwrap();
+
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+
+    // No ff-only merge and no merge_base repair: the stale review simply does not count.
+    assert_eq!(sha(dir.path(), "main").unwrap(), moved);
+    assert_eq!(sha(dir.path(), "feature").unwrap(), d.head);
+    let after = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(after.state, State::Reviewing);
+    assert_eq!(after.decision, None);
+    assert_eq!(after.merge_candidate_sha, None);
+    assert_eq!(after.reviewed_sha, None);
+    assert!(after.detail.contains(&moved));
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+    let task = store.get(d.task_id).unwrap().unwrap();
+    assert_eq!(task.status, Status::Reviewing);
+    assert_eq!(
+        target_advanced_events(&store, &d),
+        vec![Event::ReviewTargetAdvanced {
+            review_run: d.review_run.clone(),
+            repo_id: d.repo_id,
+            reviewed_sha: d.head.clone(),
+            target_sha: moved,
+            attempt: 1,
+        }]
+    );
+    // While the task is being re-reviewed the delivery waits; nothing is merged or blocked.
+    advance(&store, &cfg, &after, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(store.delivery_get(d.task_id).unwrap().unwrap(), after);
+}
+
+#[test]
+fn target_advanced_rereview_stops_for_human_after_limit_reviewed_sha() {
+    use task_core::{DeliveryStore, Trigger};
+    let (store, dir, d) = merge_queued_delivery();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    let now = OffsetDateTime::now_utc();
+    let mut current = d.clone();
+    // Simulates the dispatcher's re-sync/check/review recording the then-current target.
+    let reviewed_again = |current: &Delivery| {
+        let mut next = current.clone();
+        let target = sha(dir.path(), "main").unwrap();
+        next.state = State::MergeQueued;
+        next.decision = Some(true);
+        next.base = target.clone();
+        next.target_sha = Some(target);
+        next.reviewed_sha = Some(d.head.clone());
+        next.merge_candidate_sha = Some(d.head.clone());
+        assert!(store.delivery_save(Some(current), &next).unwrap());
+        store
+            .apply_transition(d.task_id, Trigger::ReviewPass, None)
+            .unwrap();
+        next
+    };
+    for attempt in 1..=task_ops::delivery::MAX_TARGET_RESYNCS {
+        git_text(dir.path(), &["commit", "--allow-empty", "-m", "main moved"]).unwrap();
+        advance(&store, &cfg, &current, now).unwrap();
+        let after = store.delivery_get(d.task_id).unwrap().unwrap();
+        assert_eq!(after.state, State::Reviewing, "attempt {attempt}");
+        current = reviewed_again(&after);
+    }
+    git_text(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "main moved again"],
+    )
+    .unwrap();
+    let moved = sha(dir.path(), "main").unwrap();
+    advance(&store, &cfg, &current, now).unwrap();
+    let stopped = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(stopped.state, State::Blocked);
+    assert!(stopped.detail.starts_with("[needs-human]"));
+    assert!(stopped.detail.contains(&moved) && stopped.detail.contains(&d.head));
+    assert!(!stopped.detail.starts_with(MERGE_BASE_FAILURE));
+    assert_eq!(stopped.merge_candidate_sha, None);
+    assert_eq!(sha(dir.path(), "main").unwrap(), moved);
+    assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Done);
+    assert_eq!(target_advanced_events(&store, &d).len(), 3);
+    // The stop is visible to the human through the secretary, not repaired automatically.
+    advance(&store, &cfg, &stopped, now).unwrap();
+    let notified = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert!(notified.notification.is_some());
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+
+    // An explicit human re-review restarts the automatic budget.
+    store
+        .apply_transition(d.task_id, Trigger::Rereview, None)
+        .unwrap();
+    store
+        .append_event(d.task_id, &Event::worker_progress("review", "synced"))
+        .unwrap();
+    let mut fresh = notified.clone();
+    fresh.notification = None;
+    assert!(store.delivery_save(Some(&notified), &fresh).unwrap());
+    let current = reviewed_again(&fresh);
+    git_text(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "main moved after restart"],
+    )
+    .unwrap();
+    advance(&store, &cfg, &current, now).unwrap();
+    assert_eq!(
+        store.delivery_get(d.task_id).unwrap().unwrap().state,
+        State::Reviewing
+    );
+}
+
+#[test]
+fn target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate() {
+    use task_core::DeliveryStore;
+    // A candidate that differs from the reviewed SHA is never fast-forwarded.
+    let (store, dir, d) = merge_queued_delivery();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    let mut mismatched = d.clone();
+    mismatched.reviewed_sha = Some(d.base.clone());
+    assert!(store.delivery_save(Some(&d), &mismatched).unwrap());
+    advance(&store, &cfg, &mismatched, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
+    assert_eq!(
+        store.delivery_get(d.task_id).unwrap().unwrap().state,
+        State::Reviewing
+    );
+    // A branch that moved after review is not the candidate either.
+    let (store, dir, d) = merge_queued_delivery();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    git_text(dir.path(), &["checkout", "feature"]).unwrap();
+    git_text(dir.path(), &["commit", "--allow-empty", "-m", "unreviewed"]).unwrap();
+    git_text(dir.path(), &["checkout", "main"]).unwrap();
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
+    assert_eq!(
+        store.delivery_get(d.task_id).unwrap().unwrap().state,
+        State::Reviewing
+    );
+    // Legacy rows without a recorded candidate are not treated as reviewed.
+    let (store, dir, d) = merge_queued_delivery();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    let mut legacy = d.clone();
+    legacy.target_sha = None;
+    legacy.reviewed_sha = None;
+    legacy.merge_candidate_sha = None;
+    assert!(store.delivery_save(Some(&d), &legacy).unwrap());
+    advance(&store, &cfg, &legacy, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
+    // The matching candidate on an unchanged target is fast-forwarded exactly.
+    let (store, dir, d) = merge_queued_delivery();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(dir.path(), "main").unwrap(), d.head);
+    let merged = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(merged.state, State::Preparing);
+    assert_eq!(merged.merge_candidate_sha.as_deref(), Some(d.head.as_str()));
+    assert!(target_advanced_events(&store, &d).is_empty());
+    // merge_reviewed itself refuses a candidate that is not the reviewed SHA.
+    let (dir, mut d) = repository();
+    d.merge_candidate_sha = Some(d.base.clone());
+    assert!(merge_reviewed(dir.path(), &d).is_err());
+    assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
+}

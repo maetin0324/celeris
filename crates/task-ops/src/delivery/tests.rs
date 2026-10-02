@@ -155,3 +155,38 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
             .is_none()
     );
 }
+
+#[test]
+fn target_advanced_count_resets_only_on_explicit_restart() {
+    let repo = RepoId::new();
+    let other = RepoId::new();
+    let advanced = |repo_id| Event::ReviewTargetAdvanced {
+        review_run: "review".into(),
+        repo_id,
+        reviewed_sha: "reviewed".into(),
+        target_sha: "target".into(),
+        attempt: 1,
+    };
+    let transitioned = |reason: &str| Event::Transitioned {
+        from: Status::Done,
+        to: Status::Reviewing,
+        reason: reason.into(),
+    };
+    // 自動の再レビュー: rereview の直後に同じ transaction の再進行が続く。
+    let mut events = vec![
+        transitioned("rereview"),
+        advanced(repo),
+        advanced(other),
+        transitioned("rereview"),
+        advanced(repo),
+    ];
+    assert_eq!(target_restale_count(&events, repo), 2);
+    assert_eq!(target_restale_count(&events, other), 1);
+    // 人の明示的な再レビューは数え直す。
+    events.push(transitioned("rereview"));
+    assert_eq!(target_restale_count(&events, repo), 0);
+    events.push(Event::worker_progress("review", "synced"));
+    events.push(transitioned("rereview"));
+    events.push(advanced(repo));
+    assert_eq!(target_restale_count(&events, repo), 1);
+}

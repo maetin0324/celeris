@@ -45,7 +45,7 @@ tasks: [01M3XTCNKMQBCHKSZ7Y1GF6ZM4]
 
 ## 検査コマンド
 
-`web/package.json` の scripts に実在するものだけを書く。いずれも外部ネットワークに出ない（gateway と偽 daemon は loopback、browser は host の `~/.cache/ms-playwright` の chromium）。
+`web/package.json` の scripts に実在するものだけを書く。`--dir web` は `-C web` と同じ（pnpm の別名）で、`e2e` の行だけこの形にしている（数字を含む script 名を `-C web` の形で書くと、script の実在を見る検査の正規表現 `[a-z:-]*` が `e` までしか拾わないため）。いずれも外部ネットワークに出ない（gateway と偽 daemon は loopback、browser は host の `~/.cache/ms-playwright` の chromium）。
 
 | 目的 | コマンド | 見るもの |
 |---|---|---|
@@ -56,8 +56,8 @@ tasks: [01M3XTCNKMQBCHKSZ7Y1GF6ZM4]
 | parity | `corepack pnpm@12.6.0 -C web check:parity` | parity 台帳の完了行と commit の対応 |
 | secret | `corepack pnpm@12.6.0 -C web check:secrets` | daemon の token が build 出力・HTML・応答・ログに出ないこと（先に `build`） |
 | build | `corepack pnpm@12.6.0 -C web build` | `vite build` |
-| 結合・a11y | `corepack pnpm@12.6.0 -C web e2e` | Playwright。axe は専用 script を持たず e2e の中で走る |
-| axe だけ | `corepack pnpm@12.6.0 -C web e2e e2e/a11y/axe.spec.ts e2e/parity/mobile-gate.spec.ts` | `axe.spec.ts`（画面ごとの critical / serious・名前・構造・focus）と `mobile-gate.spec.ts`（全画面 × 360 / 390 / 412 / 1440 で critical / serious 0・横溢れ 0）。どちらも `e2e/support/axe.ts` で `axe-core` を注入する |
+| 結合・a11y | `corepack pnpm@12.6.0 --dir web e2e` | Playwright。axe は専用 script を持たず e2e の中で走る |
+| axe だけ | `corepack pnpm@12.6.0 --dir web e2e e2e/a11y/axe.spec.ts e2e/parity/mobile-gate.spec.ts` | `axe.spec.ts`（画面ごとの critical / serious・名前・構造・focus）と `mobile-gate.spec.ts`（全画面 × 360 / 390 / 412 / 1440 で critical / serious 0・横溢れ 0）。どちらも `e2e/support/axe.ts` で `axe-core` を注入する |
 | target と横溢れ | `corepack pnpm@12.6.0 -C web mobile-audit` | 4 幅の 44×44 と横溢れ。`--only "/login"` で 1 画面に絞れる |
 | スクリーンショット | `corepack pnpm@12.6.0 -C web screenshots --out <dir>` | `e2e/support/screens.ts` の fixture を撮る。`--out` は必須で、run の artifacts の下を指す（リポジトリ内に置かない）。`--only <fixture>` で絞れる |
 

@@ -1649,6 +1649,9 @@ fn write_inbox_candidate(
 // Skill の永続化はページ・候補管理と独立して変更できる。
 mod skills;
 pub use skills::*;
+// ADR-0122 D1: repo に写した skill のディレクトリから `skills_put` で取り込む。
+mod skill_import;
+pub use skill_import::*;
 
 #[cfg(test)]
 mod tests;

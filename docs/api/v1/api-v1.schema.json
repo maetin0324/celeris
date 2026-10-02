@@ -5636,6 +5636,12 @@
         "head": {
           "type": "string"
         },
+        "merge_candidate_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "notification": {
           "anyOf": [
             {
@@ -5686,8 +5692,21 @@
         "review_run": {
           "type": "string"
         },
+        "reviewed_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "state": {
           "$ref": "#/$defs/DeliveryState"
+        },
+        "target_sha": {
+          "description": "Target ref read for this review attempt. NULL means no candidate was checked.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "task_id": {
           "$ref": "#/$defs/TaskId"
@@ -6258,6 +6277,88 @@
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
+        {
+          "description": "ADR-0118 D3: immutable snapshot of one repository's review attempt.",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "before_sha": {
+              "type": "string"
+            },
+            "merge_candidate_sha": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_ref": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "review_target_synced",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "target_ref",
+            "target_sha",
+            "before_sha",
+            "reviewed_sha",
+            "merge_candidate_sha",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0118 D4: a previously reviewed target advanced before integration.",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "review_target_advanced",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "reviewed_sha",
+            "target_sha",
+            "attempt"
+          ],
+          "type": "object"
+        },
         {
           "description": "Credential-free mapping between one isolated browser session and a worker execution.",
           "properties": {

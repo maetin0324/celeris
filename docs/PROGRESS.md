@@ -15,6 +15,15 @@ inline test の外出しと責務分割を完了した（worktree、main 未 mer
 
 ## 目次
 
+## Phase 1 — review 前の target 同期と merge candidate 固定（ADR-0118、2026-10-02）
+
+reviewer と deterministic checks の前に task worktree を target へ rebase し、reviewed SHA と merge candidate SHA を一致させて記録する。merge/delivery 時に target が進んでいれば再同期・再検査・再 review へ戻す。tree child は親ブランチへの再帰統合を保ち、candidate SHA を照合する。
+
+- 証拠: `cargo fmt --all -- --check` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。
+- `cargo test --workspace` は 2 回実行。いずれも task-crate tests を含む前半は成功したが、`celeris --test instance_handoff` が 5/8 で失敗し全体 exit 101。3 件はこの環境で user namespace 作成が `Operation not permitted`（ADR-0095 guard）、2 件は daemon dispatch/standby 待ちが成立しなかった。再実行でも再現したため、Phase 1 差分外の環境制約として変更せず。
+- 着手時の target: `git log -1 main` = `5f14fe7480f1512a0a62c35cf41c1fedb11a6944 integrate wu/merge-main (phase land)`。`git merge-tree --write-tree --name-only HEAD main` は tree `70360b86cb8d6add2d8493c7c8c6f15ad38aa2ab` を返し、`crates/task-dispatch/src/dispatcher/review_spawn.rs` の content conflict を 1 件検出。これは並行 review-decisions と同じ箇所で、衝突の自動解決は Phase 2。
+- 未解決: 衝突の自動解決は Phase 2。Phase 1 は衝突を検出して安全に止め、成果を保持する。
+
 - [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 1〜4 の main 統合](progress/phase-browser-main-merge.md) — 2026-10-01、`478e86c4` とリファクタ後 main `2eb1b030` がともに祖先となる作業ブランチで、migration 0035/0036・schema 36 と ADR 0099〜0114 を確認。`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、source size active warning 0 件（既存例外 1 件）。P3-B frame、別 host UID・A13、機密能力の本番解放、本番設定と昇格は未解決。検証のコマンド・exit・テスト数はリンク先に記録。

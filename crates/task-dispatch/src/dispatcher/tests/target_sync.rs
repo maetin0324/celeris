@@ -197,3 +197,32 @@ async fn target_sync_conflict_stops_review_and_preserves_branch() {
             .any(|(_, e)| matches!(e, Event::ReviewVerdict { .. }))
     );
 }
+
+#[tokio::test]
+async fn target_sync_remote_records_skip_without_local_git() {
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = remote_task(ws.path(), None, Vec::new());
+    task.status = Status::Reviewing;
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let events = store.events_for(task.id).unwrap();
+    assert!(events.iter().any(|(_, e)| matches!(e, Event::WorkerProgress { msg, .. } if msg == "review target sync skipped: remote workspace")));
+    assert!(
+        !events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::ReviewTargetSynced { .. }))
+    );
+}

@@ -158,9 +158,20 @@ impl Dispatcher {
         }
         let mut synced = Vec::new();
         let mut sync_guards = Vec::new();
+        let remote_workspace = matches!(&task.workspace, task_core::WorkspaceSpec::Remote { .. })
+            || self.cluster_of(&task).is_some();
+        if remote_workspace {
+            self.store.append_event(
+                task_id,
+                &Event::worker_progress(
+                    run_id.clone(),
+                    "review target sync skipped: remote workspace",
+                ),
+            )?;
+        }
         // Legacy projectless worktrees have no RepoId for the durable candidate event;
         // keep their existing review/integration semantics until they are registered.
-        if self.cluster_of(&task).is_none()
+        if !remote_workspace
             && !task.repos.is_empty()
             && let Some(workspaces) = self.task_workspaces_for(&task)
         {

@@ -1463,7 +1463,7 @@ fn loads_research_example_config() {
     // `.json` を付けずに渡す（実機の仕様）。
     assert_eq!(
         cfg.adapters.paperqa.settings.as_deref(),
-        Some("/home/u/celeris/paperqa/settings/qwen-local")
+        Some("/home/u/celeris/paperqa/settings/proxy")
     );
     assert_eq!(
         cfg.adapters.paperqa.paper_directory.as_deref(),

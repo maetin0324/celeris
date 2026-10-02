@@ -206,6 +206,7 @@ async fn restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal(
         vec![
             IsolationViolation::SameUid,
             IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
         ]
     );
     registry.insert("plain-1", Arc::new(NotIsolated));

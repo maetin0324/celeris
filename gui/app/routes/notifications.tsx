@@ -62,7 +62,7 @@ export default function Notifications({ loaderData }: Route.ComponentProps) {
     <main className="space-y-5" data-testid="notifications-page">
       <PageHeader title="通知" description={`未読 ${loaderData.unread} 件`} />
       {loaderData.feed.items.length === 0 ? (
-        <EmptyState title="通知はありません" description="判断が要らない知らせがここに届きます。" />
+        <EmptyState title="通知はありません">判断が要らない知らせがここに届きます。</EmptyState>
       ) : (
         <div className="space-y-3">
           {loaderData.feed.items.map((notice: Notice) => (

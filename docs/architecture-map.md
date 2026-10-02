@@ -39,13 +39,13 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | 委譲/承認の子task 作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/child_tasks.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |
 | provider/account 選択・quota 見積り | task-dispatch | `crates/task-dispatch/src/{dispatcher/provider_select.rs,dispatcher/quota_book.rs,accounts.rs}` | [ADR-0069](adr/0069-routing-four-layers.md) |
 | worker 起動・完了処理 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{worker_task,worker_finish}.rs` | [DESIGN §5.3](DESIGN.md#53-worker-protocol-task-worker) |
-| planner/reviewer の起動・判定 | task-dispatch | `crates/task-dispatch/src/{dispatcher/planner_flow.rs,dispatcher/review_spawn.rs,dispatcher/review_verdict.rs,review.rs}` | [ADR-0076](adr/0076-planner-reviewer-quota-roles.md) |
+| planner/reviewer の起動・判定（review 前 target 同期・reviewed/merge candidate SHA 記録） | task-dispatch | `crates/task-dispatch/src/{dispatcher/planner_flow.rs,dispatcher/review_spawn.rs,dispatcher/review_verdict.rs,review.rs}` | [ADR-0076](adr/0076-planner-reviewer-quota-roles.md), [ADR-0118](adr/0118-review-target-sync-and-merge-candidate.md) |
 | cluster/ssh master・接続監視 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/cluster.rs` | [ADR-0018](adr/0018-remote-clusters-over-ssh.md) |
 | クラスタ job の poll・再開（`qstat -xf`/`sacct`） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/cluster_job_wait.rs` | [ADR-0090](adr/0090-durable-wait-for-cluster-jobs.md) |
 | CoS run の並列度の例外（`is_cos_run`） | task-dispatch::capacity | `crates/task-dispatch/src/capacity.rs` | [ADR-0089](adr/0089-cos-runs-bypass-concurrency.md) |
 | run 途中のイベントの sink（worker/Reviewer） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/sinks.rs` | [ADR-0082](adr/0082-dispatcher-module-split.md) |
 | scratch/disk guard の後片付け | task-dispatch | `crates/task-dispatch/src/{dispatcher/housekeeping.rs,scratch_gc.rs}` | [ADR-0075](adr/0075-tiered-build-cache.md) |
-| 工程統合・途中報告 | task-dispatch | `crates/task-dispatch/src/{dispatcher/phase_integration.rs,checkpoint.rs,reports.rs}` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| 工程統合・途中報告（target への rebase 同期） | task-dispatch / task-ops | `crates/task-dispatch/src/{dispatcher/phase_integration.rs,checkpoint.rs,reports.rs}`, `crates/task-ops/src/changes.rs::sync_onto_target` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0118](adr/0118-review-target-sync-and-merge-candidate.md) |
 | 孤児run の回収・承認・policy | task-dispatch | `crates/task-dispatch/src/{orphan,approvals,policy,sessions,undeclared_artifacts}.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |
 
 ## task-worker — worker プロトコルと adapter（1 run = 1 プロセス起動）

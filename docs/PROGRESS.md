@@ -24,6 +24,25 @@ reviewer と deterministic checks の前に task worktree を target へ rebase 
 - 着手時の target: `git log -1 main` = `5f14fe7480f1512a0a62c35cf41c1fedb11a6944 integrate wu/merge-main (phase land)`。`git merge-tree --write-tree --name-only HEAD main` は tree `70360b86cb8d6add2d8493c7c8c6f15ad38aa2ab` を返し、`crates/task-dispatch/src/dispatcher/review_spawn.rs` の content conflict を 1 件検出。これは並行 review-decisions と同じ箇所で、衝突の自動解決は Phase 2。
 - 未解決: 衝突の自動解決は Phase 2。Phase 1 は衝突を検出して安全に止め、成果を保持する。
 
+### fix-sync-stop: review 前同期の停止が attempts を消費していた不具合の修正 — 2026-10-02（work unit `fix-sync-stop`）
+
+final review 差し戻し（criterion 4 fail）で指摘された不整合を修正した。`stop_review_for_target_sync`（`crates/task-dispatch/src/dispatcher/review_spawn.rs`）が同期の停止全般に `Trigger::ReviewFail` を使っており、`retry_or_fail` を通って attempts を 1 消費し Ready/Failed に落ちていた。これは ADR-0118 D4（stale はコードの不合格ではなく review の試行回数に数えない）に反し、root delivery の `[merge-base]` 局所修復経路と tree child の段階統合衝突経路を壊していた。
+
+- 衝突・dirty worktree・ref 不読は同期を省略し、成果を保った未同期 HEAD のまま従来どおり review に進む（attempts は変化しない）。
+- stale（同期中の target 再進行・delivery の base/head 不一致・検査後の reviewed snapshot 変化）は `ReviewTargetAdvanced` を event に残し、状態遷移を起こさず再 sync → 再 check →再 review のループに入る。上限超過時は Reviewing のまま止める（attempts を消費しない）。
+- `crates/celeris/src/delivery.rs`: 候補 SHA が NULL かつ main と分岐している行は rereview へ戻さず `[merge-base]`（局所修復）へ渡す。
+- 追加試験: `crates/celeris/src/delivery/tests.rs`、`crates/task-dispatch/src/dispatcher/review_spawn.rs` / `review_verdict.rs` に pre_review_sync 系の試験を追加。ADR-0118 に D2/D4/D6 の付記。
+
+### reland-main: 最新 main の取り込みと全検査の再実行 — 2026-10-02（work unit `reland-main`）
+
+fix-sync-stop の後、最新 main（`29e2d76875e0cb3ab21ea606b0014aab62413cd8`、confirm-release 統合・BenchFS 方向転換の記録を含む）をこの task ブランチへ merge した。`git merge-tree --write-tree --name-only HEAD main`（事前確認）は衝突ファイル名を 1 件も返さず（tree `abb8120a171f9edb22e63ff2c9fc6ed998c00bb1`）、実際の merge も衝突なし（`docs/progress/phase-R.md` に 1 行追加されるのみの自動 merge）。`git merge-base --is-ancestor <main-sha> HEAD` → exit 0。衝突マーカーは `git grep -n '^<<<<<<<\|^=======$\|^>>>>>>>' .` → 該当なし。
+
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace` → exit 0（全 118 テストバイナリで `test result: ok`、`0 failed`）。
+- `cargo test --workspace pre_review_sync` → 1 passed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair`）、`cargo test --workspace reviewed_sha` → 3 passed（`delivery::tests::target_advanced_*`）。`cargo test -p task-dispatch` の `dispatcher::tests::target_sync::*` 8 件（pre_review_sync_dirty_keeps_attempts・pre_review_sync_conflict_keeps_attempts_and_branch・pre_review_sync_target_advanced_keeps_attempts・pre_review_sync_target_advanced_limit_halts_without_attempts 等）も exit 0。既知の flaky `task-worker` の `local_deep_research::tests::missing_celeris_result_line_is_retryable_error` を単独で再実行し 1 passed（workspace 全体実行でも今回は失敗なし）。
+- sandbox 内で userns 必須試験（`instance_handoff` 等）が完走できない場合があることは把握済みだが、今回の `cargo test --workspace` では該当失敗なし（daemon はこの制約の外で checks を実行するため、sandbox 制約を plan_issue の理由にはしない）。
+
 - [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 1〜4 の main 統合](progress/phase-browser-main-merge.md) — 2026-10-01、`478e86c4` とリファクタ後 main `2eb1b030` がともに祖先となる作業ブランチで、migration 0035/0036・schema 36 と ADR 0099〜0114 を確認。`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、source size active warning 0 件（既存例外 1 件）。P3-B frame、別 host UID・A13、機密能力の本番解放、本番設定と昇格は未解決。検証のコマンド・exit・テスト数はリンク先に記録。

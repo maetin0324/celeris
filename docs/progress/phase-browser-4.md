@@ -426,3 +426,47 @@ celeris が run の後に流した check（`CELERIS_LAUNCHER_TESTS=require cargo
 - 選択は純粋な関数（`chrome_pick_candidates`・`chrome_pick_stopped_roots`）に分け、偽の process 表の単体試験 `chrome_pick_*` 4 件（並走 2 session・自分の session だけ・候補ゼロ・読む側で subuid が写らない map）を同じ試験 file に置いた。
 
 変更は `crates/task-worker/tests/browser_launcher_ptrace.rs` だけ（`crates/task-worker/src/` は不変、host の binary 入れ替えは不要）。この run の環境（`/proc/self/uid_map` = `1001 1001 1`、host の launcher socket が見える）で `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed）。実 launcher 試験の出力: 候補 `[pid 3335540, session root 3335531]`、`NS_GET_OWNER_UID` errno 13、`PTRACE_ATTACH` errno 1、`strace -p` exit 1（Operation not permitted）、environ・mem errno 13、`verify_isolation=Ok`、停止後 `checked session roots gone=[3335531]`。本番 host の操作、機密能力の解放は行っていない。
+
+## 本番 Attested に launcher 証明と実 process ptrace 拒否を必須化（2026-10-02、子 task 01M3WV4BFJ71J9ZWJ020MP2Z4K、unit launcher-gated-release、closeout）
+
+上記までの launcher 実装（ADR-0115/0116-launcher-implementation）と host 準備完了を受け、「本番 admission の機密能力解放」（上の節、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）の残課題だった launcher session 証明の必須化と実 process ptrace 拒否の実証を行った。
+
+### core-proof・launcher-proof（task-core・task-worker）
+
+- `task_core::browser_isolation` に `LauncherSessionProof{session_id, instance_id, pid, starttime, ns_owner_uid, launcher_uid, isolation_ok}` と `verify_launcher_session` を追加（commit `a11c2b1b`）。launcher の `Response::Started` receipt に pid/starttime を載せ、daemon 側で `SessionBinding` と照合して証明を組み立てる（commit `ce841ff3`）。違反は `LauncherProofMissing` / `LauncherProofInvalid{defect}`（`OwnerMismatch` / `StarttimeMismatch` など）で、owner 検査の成功で上書きしない。
+- `cargo test -p task-core browser_isolation` → exit 0、31 passed / 0 failed。
+
+### inject-admission・restore-admission（両 Attested への必須化）
+
+- `celeris-credentiald::injection_ipc::Admission::Attested.admit`（CredentialInjection、commit `4dd60d11`）と `task-worker::browser_runtime::RestoreAdmission::Attested`（IdentityRestore、commit `52da3c39`）の両方に、証明なし・検証失敗・`SameUid`・非隔離の拒否試験を追加して必須化した。owner 検査（main より厳しい `UsernsOwnedByDaemon` / `OwnerUnknown` 拒否）に通っても、証明が無ければ fail-closed で拒否する。
+- `cargo test -p celeris-credentiald` → exit 0、58 passed（lib・結合試験すべて）。`cargo test -p task-worker --lib browser_launcher` → exit 0、18 passed。
+
+### prod-facts（別 UID runtime からの事実採取の修正、commit `525148aa`）
+
+本番 Attested は別 UID の launcher runtime の `/proc/<pid>/ns` を daemon UID から直接読むと `EACCES`（実測）になり、修正前は毎回 `IsolationRequired` で拒否していた。修正後は、daemon が読めない namespace・userns owner は launcher の束縛（protocol v3 の `SessionBinding.ns_inodes` / `ns_owner_uid`）から採り、daemon 自身が読める `/proc/<pid>/status`・mountinfo・`getpgid` はそのまま daemon が読んで組み合わせる（`collect_launched_runtime_facts`）。読み取りエラーは安全値で埋めず `Err` のまま返す。
+
+### ptrace-test（実 process での ptrace 拒否の実証、commit `fac47dae`・`525148aa` 統合）
+
+sandbox 実行（`browser_launcher_ptrace.rs::launcher_chrome_denies_daemon_uid_ptrace`）と host 実行の両方で、launcher 経由の別 UID runtime（Chrome）への daemon UID からの攻撃が拒否されることを実証した。
+
+| 観測 | sandbox | host（`launcher-host-run.log`） |
+| --- | --- | --- |
+| 正の対照（同 UID 子への ptrace） | `PTRACE_ATTACH=0` `PTRACE_DETACH=0` | `PTRACE_ATTACH=0` `PTRACE_DETACH=0` |
+| `NS_GET_OWNER_UID` from daemon UID | `errno=Some(13)` | `errno=Some(13)` |
+| `verify_isolation` | `Ok (isolation_ok=true, CapEff=0, NoNewPrivs=true)` | 未到達（下記の前提チェックで panic） |
+| daemon UID からの `PTRACE_ATTACH` | `errno=Some(1)`（EPERM） | `errno=Some(1)`（EPERM） |
+| daemon UID からの `strace -p` | `Operation not permitted` | `Operation not permitted` |
+| `/proc/<pid>/environ`・`mem` | `errno=Some(13)`（EACCES） | 未取得（上記で停止） |
+
+許可/拒否の対応表は 2 系統ある:
+
+- **synthetic（構造体を直接組んだ模擬観測）— 実証済み**: `admission_table_on_synthetic_launcher_observation`（sandbox・host とも exit 0）で 5 通り（launcher-proof=allow、same-uid/non-isolated/no-proof/proof-invalid=deny）を両 admission（CredentialInjection・IdentityRestore）それぞれに通した。`task-core browser_isolation` と `celeris-credentiald` の単体・結合試験でも同じ 5 通りを各 admission 入口に直接通して確認済み。
+- **実 session（`ADMISSION[real-session]`、launcher の実観測を本番入口に通した表）— 未実証**: host で protocol v3 launcher（commit `702dc987` 系列を経た v3）に入れ替え、台本 `crates/task-worker/scripts/launcher-admission-evidence.sh` を worker 外の UID 1001 シェルで実行した結果は `EXIT: 101`（6 本中 5 passed・1 failed）。ptrace 拒否の実出力（上表）までは出たが、`ADMISSION[real-session]` の表を作る直前の前提チェック `launcher SO_PEERCRED uid Some(0) is not celeris-browser 995` で panic した。原因は launcher が systemd socket activation（`celeris-browser-launcher.socket`、`Accept=no`）で動き、listen socket を最初に作るのが systemd（root）であるため、試験が読む `SO_PEERCRED` が `celeris-browser`（995）ではなく `systemd`（uid 0）に見えること。sandbox でも同じ理由（userns 越し）で `peer_uid=Some(65534)` となり、どちらの環境でも前提が成立しない。後続 task で、launcher が accept 後に自分の pid/uid を `SCM_CREDENTIALS` 等で伝える仕組みを ADR-0116 に追記して実装し、host で再実行する必要がある。
+
+### evidence・record-docs
+
+証跡一式（試験コマンド・exit code・ptrace 拒否の実出力・対応表・host log・本番昇格手順）は親 task 01M3VFQZ2TX3W0KTDQHKCAVJR6 の成果物 `prod-admission-release-evidence.md` と `launcher-host-run.log` に記録した（本リポジトリ外の成果物ディレクトリ）。
+
+- 全体検査（このブランチ HEAD）: `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` exit 0（6 passed、許可/拒否表は前提欠落で `SKIP:`）、`cargo test -p task-core browser_isolation` exit 0（31 passed）、`cargo test -p celeris-credentiald` exit 0（58 passed）、`cargo test -p task-worker --lib browser_launcher` exit 0（18 passed）、`cargo clippy --workspace -- -D warnings` exit 0。
+- H3・H4・H5・ADR-0080 H2（`approve_once`・短い lease）は維持（弱めていない。ADR-0116 本文で再確認）。
+- **本番昇格は実施していない**。昇格は人が selfdeploy 手順（`projects/agent-platform/selfdeploy-release-verify-procedure.md`）で行う。残課題（`ADMISSION[real-session]` の実証）は後続 task に送る。

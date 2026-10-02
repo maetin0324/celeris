@@ -125,7 +125,7 @@ fn sccache_request_sequence_round_trips() {
     assert_eq!(st["misses"], 1);
     assert_eq!(st["l2_state"], "ok");
     // flusher が L2 へ書く（非同期）。
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while stats(p)["flush_written"] != 1 {
         assert!(Instant::now() < deadline, "flusher did not write L2");
         std::thread::sleep(Duration::from_millis(50));
@@ -183,7 +183,7 @@ fn l2_hit_through_http_is_promoted() {
             request(srv.port, "PUT", &path, &[], b"artifact").status,
             201
         );
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(60);
         while s.queue_len() > 0 {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(20));

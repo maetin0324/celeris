@@ -180,7 +180,7 @@ fn takeover(holder: &str) -> ControlCommand {
 }
 
 fn wait_until(what: &str, f: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !f() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(10));

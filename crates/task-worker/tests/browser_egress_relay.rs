@@ -175,7 +175,7 @@ fn start_fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while TcpStream::connect((FIXTURE_IP, 443)).is_err() {
         assert!(Instant::now() < deadline, "fixture did not start");
         std::thread::sleep(Duration::from_millis(50));
@@ -366,7 +366,7 @@ fn browser_argv(with_proxy: bool) -> Vec<OsString> {
 }
 
 fn wait_exited(rt: &IsolatedRuntime, n: usize) -> task_worker::browser_runtime::EgressStats {
-    let deadline = Instant::now() + Duration::from_secs(40);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let s = rt.egress_stats().unwrap();
         if s.spawned.len() >= n && s.exited.len() == s.spawned.len() {

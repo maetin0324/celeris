@@ -479,7 +479,7 @@ async fn serve_over_loopback_tcp_streams_events_and_closes_on_shutdown() {
     assert!(String::from_utf8_lossy(&buf).contains("event: task.event\nid: "));
 
     let _ = stop_tx.send(());
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let mut chunk = [0u8; 1024];
     loop {
         match tokio::time::timeout_at(deadline, conn.read(&mut chunk)).await {

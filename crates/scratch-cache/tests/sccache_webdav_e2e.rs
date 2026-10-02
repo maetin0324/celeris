@@ -188,7 +188,7 @@ fn real_sccache_uses_the_tiered_cache_server() {
     );
     assert_eq!(h, 0);
     assert!(m >= 3);
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while stats(cache_port)["flush_queue_len"] != 0 {
         assert!(Instant::now() < deadline, "flusher did not drain");
         std::thread::sleep(Duration::from_millis(100));

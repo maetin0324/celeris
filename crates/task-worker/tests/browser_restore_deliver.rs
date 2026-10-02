@@ -402,7 +402,7 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
     let live = LiveSession(Mutex::new(rt));
     assert!(live.accepts_state());
     // bwrap の setup が終わるまで待つ（setup 途中の事実では判定しない）。
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let facts = loop {
         let facts = live.0.lock().expect("rt").facts().expect("facts");
         if RestoreAdmission::Attested.admit(&facts).err() == Some(vec![IsolationViolation::SameUid])

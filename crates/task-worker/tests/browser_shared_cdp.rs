@@ -26,7 +26,7 @@ const SECRET: &str = "shared-cdp-secret-sentinel";
 /// `CELERIS_ISOLATION_TESTS`: `skip` は飛ばす、`require` は preflight で飛ばさない（release gate）。
 const ISOLATION: &str = "CELERIS_ISOLATION_TESTS";
 /// preflight の 1 段の時間の上限（環境が無い sandbox で何十秒も待たない）。
-const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(20);
+const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(60);
 // ADR-0079 付記「R7-12」D4: WebSocket の frame は読み切ってから判定する（1 回の `recv` は header だけを返すことが
 // ある。高負荷時・並走時に `b'\x81~\x00\xdf'` だけを読んで assert に落ち、host は 60 秒待ってから失敗していた）。
 // probe の例外は `/session/probe.err` に書き、host はそれを見たら待たずにその内容で失敗する。
@@ -378,7 +378,7 @@ fn fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .expect("TLS fixture");
-    let until = Instant::now() + Duration::from_secs(30);
+    let until = Instant::now() + Duration::from_secs(60);
     while TcpStream::connect((IP, 443)).is_err() {
         assert!(Instant::now() < until, "TLS fixture never listened");
         thread::sleep(Duration::from_millis(50));
@@ -573,7 +573,7 @@ fn inner() {
         Some(&page),
     );
     assert!(nav["error"].is_null(), "navigation: {nav}");
-    let until = Instant::now() + Duration::from_secs(30);
+    let until = Instant::now() + Duration::from_secs(60);
     loop {
         let result = agent.call(
             "Runtime.evaluate",

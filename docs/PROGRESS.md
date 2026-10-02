@@ -1,5 +1,19 @@
 # PROGRESS — taskd
 
+## e2e・結合試験の時間依存待ち（ADR-0125、task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
+
+- 2026-10-02: [時間依存待ち一覧](testing/time-dependent-waits.md)に `tests/e2e/tests` と `crates/*/tests` の候補 45 ファイル、対象ごとの原因と方式を記録した。
+- `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`: 原因は worker の固定 6 秒と cooldown の短い 5 秒待ち。方式は release ファイルで worker を保持し、同時状態を観測後に解放する。保険超過時は `done` を返さない。
+- `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`: 原因は 180 task を固定 120 秒で判定したこと。方式は全件 `Done` の観測、進捗停止 60 秒、総保険 600 秒。lock 不在と daemon 生存の主張は維持。
+- `wait_api`: 原因は daemon 起動を `/health` の 20 秒待ちだけで判定したこと。方式は TCP listen を観測してから `/health` 200 を確認し、各 120 秒を保険とする。4 fixture に適用。
+- `phase3_control_converges_rejects_competition_and_cancel_stops`: 原因は lease 失効を固定 2 秒 sleep で代用したこと。方式は `GET /control` の `paused` と holder 消滅を観測し、120 秒を保険とする。
+- `instance_handoff`、`worker_run_signal`、`reap_finished_children`: 原因は 5〜30 秒の短い期限または 200 回ループ。方式は既存の状態・PID・zombie 観測を維持し、60 秒以上の保険へ変更した。
+- `provider_admin_scenarios`: 原因は slow worker の固定 8 秒中に reload と dispatch が間に合う前提。方式は release ファイルで保持し、新 account への `WorkerStarted` を確認してから解放した。
+- credentiald/browser の fixture socket、`releases_api` のログ、`unified_kill` の孫 PID・消滅: 原因は固定 40〜400 回の poll 予算。方式は各出来事の観測を主判定にして 60 秒の保険へ変更した。
+- `crates/*/tests` のその他の fixture listen、process 終了、browser ready、WebDAV flush の短い deadline は状態を主判定に維持し、保険を 60 秒へ延長した。`browser_egress_process` の 8 秒など実時間の契約を検査する箇所はそのまま残した。
+- 既存修正は e2e-stable の f307d63b を `cherry-pick -x` で取り込んだ。deflake-lock ブランチはこの worktree から参照できず、同じ全件 Done 待ちは追加の進捗停止・総保険で対応した。後からの main 取り込み時には重複を確認する。
+- 検証: `cargo build --workspace --bins` exit 0、`cargo test -p e2e --test api_scenarios` は 11 passed / exit 0。対象 4 試験は SIGSTOP/SIGCONT stutter 下で各 3/3 通過（詳細は一覧）。この run は user namespace probe が EPERM になるため、API fixture の worker DB guard のみ opt-out した。guard 専用試験は変更していない。
+
 ## browser: ADR-0115 権限分離 launcher
 
 run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順書を統合後に検査。`cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は exit 0。workspace test は sandbox の user namespace probe が `EPERM` となり、ADR-0095 DB guard を使う `instance_handoff` 5 件が失敗して exit 101（`CELERIS_ISOLATION_TESTS=skip` を付けても同じ。skip は browser isolation 試験だけに適用）。launcher ptrace 試験は `celeris-browser` user と `celeris-browser-launcher.socket` が存在しないため `SKIPPED (not passed)`。host 管理者に [browser-launcher-host-setup.md](ops/browser-launcher-host-setup.md) の準備を依頼し、準備後に実 process 証跡を追加する。機密能力は未解放。本節の詳細は [phase-browser-4](progress/phase-browser-4.md)。
@@ -620,3 +634,7 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`: 原因: 全 task done を 120s の壁時計で待っていたため、負荷で tick が遅いと進んでいても失敗した。方式: 終わった task の数が 60s 増えないとき（または celeris が落ちたとき）だけ失敗する進捗待ちにした。
 - 重複の可能性: 後者は sccache task 01M3YD2Z585N1YCBZK4AH8QXR0 の葉 deflake-lock も直す予定だった。実行時点で branch `celeris-wu/01M3YD2Z585N1YCBZK4AH8QXR0/deflake-lock` が無かったため同じ方式（終わった数が一定時間増えないときだけ失敗）で自前に直した。後で両方が main に入るときは衝突しうるので片方に揃える。
 - `cargo test -p e2e --test api_scenarios` → exit 0（11 passed）。`cargo clippy -p e2e --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
+## ADR-0125: e2e・結合試験の時間依存待ち（task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
+
+`docs/testing/time-dependent-waits.md` に候補 45 ファイルと判定を記録した。`api_scenarios` の 4 件は状態・ファイル・listen 完了を待ち、60 秒以上の保険を置いた。SIGSTOP stutter は対象 4 試験を各 3 回実行して 12/12 pass。CDP の追加 2 件も `Browser.getVersion` の ready 応答を待つようにし、試験専用 CDP 応答上限を 30 秒、ready 上限を 60 秒にした。2 件とも compile は pass したが、実行はこの run の sandbox が `unshare` を拒否して browser 起動前に失敗した。詳細は一覧を参照。

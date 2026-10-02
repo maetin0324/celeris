@@ -4,7 +4,7 @@ tasks: [01M3YF3NSR46FM314VHG14T3N6]
 # ADR-0132: provider の LLM source と adapter を分け、Qwen は cheap に限る（ADR-0053 付記）
 
 - 日付: 2026-10-02
-- 状態: **Accepted**（人の方針: paperqa・langmem・local-deep-research は Qwen 専用でなくてよく、GPT 系へのデータ送信を許す。LLM source と adapter / harness を設定・API・GUI で区別し、既存設定を読めるようにする。Qwen3.8-27B は cheap lane だけで使う）
+- 状態: **実装済み**（2026-10-02。D1〜D7 を provider-split・proxy-cheap・config-docs・gui-ui・web-ui・knowledge-route・worker-tools の各 WorkUnit で実装し、`cargo fmt --all -- --check` / `cargo clippy --workspace -- -D warnings` / `cargo test --workspace --no-run` / `cargo test -p llm-proxy` / `cargo test -p celeris config::` / `cargo test -p task-api --test providers_admin --test llm_sources` / `cargo test -p task-dispatch --lib` で確認した。詳細は [docs/PROGRESS.md](../PROGRESS.md) の節「provider の LLM source / adapter 分離と cheap 専用 Qwen」。人の方針: paperqa・langmem・local-deep-research は Qwen 専用でなくてよく、GPT 系へのデータ送信を許す。LLM source と adapter / harness を設定・API・GUI で区別し、既存設定を読めるようにする。Qwen3.8-27B は cheap lane だけで使う）
 - 関連: [ADR-0053](0053-llm-source-proxy.md) D1・D2（供給元の抽象と proxy）、[ADR-0052](0052-knowledge-run-fallback.md) D2（知識整理の汎用ハーネスへの fallback）、[棚卸し](../progress/provider-llm-source-inventory.md)
 - 番号: 2026-10-02 に `main` と全 `celeris/*` ブランチの `docs/adr` を確認した。0131 は `celeris/01M3YF3NS2EGTZD2BBWNPG1K28` の cron jobs で使用済み、0132 は空き。
 

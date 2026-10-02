@@ -589,6 +589,8 @@ impl IsolatedRuntime {
             Some(pid) => pid,
             None => return Err(RuntimeError::NoChildPid(rt.failed_stderr())),
         };
+        #[cfg(feature = "attack-test-hooks")]
+        test_hook::stop_init_after_info(rt.inner_pid);
         // --info-fd is written before bwrap releases its child from child_wait_fd. Killing the
         // controller immediately after that report can kill the outer monitor before pid 1
         // calls PR_SET_PDEATHSIG, leaving a live sandbox behind. bwrap's init enters do_wait
@@ -604,6 +606,8 @@ impl IsolatedRuntime {
                 && std::fs::read_to_string(format!("/proc/{init_pid}/wchan"))
                     .is_ok_and(|wchan| wchan.trim() == "do_wait")
         };
+        #[cfg(feature = "attack-test-hooks")]
+        test_hook::wait_until_init_resumed(init_pid);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline && rt.is_running() {
             if init_ready() {
@@ -1124,6 +1128,60 @@ pub struct RecordedProcess {
     pub pid: i32,
     pub starttime: u64,
     pub role: String,
+}
+
+/// Test-only (ADR-0125 §5): launch の競合点（bwrap が `--info-fd` で init の PID を報告した直後、
+/// init が親死亡シグナルを設定する前）を SIGSTOP で固定する stutter フック。
+/// `attack-test-hooks` を入れた試験 binary でだけコンパイルされ、env はそのフックの引数に過ぎない。
+/// 本番の ready 判定・PDEATHSIG・kill / reap の意味は変えない。
+#[cfg(feature = "attack-test-hooks")]
+pub mod test_hook {
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+
+    use nix::libc;
+
+    /// 段階の印（`launch-info` / `launch-waiting`）を書く dir。
+    pub const LAUNCH_HOOK_DIR_ENV: &str = "CELERIS_TEST_RT_LAUNCH_HOOK_DIR";
+
+    fn dir() -> Option<PathBuf> {
+        std::env::var_os(LAUNCH_HOOK_DIR_ENV).map(PathBuf::from)
+    }
+
+    fn mark(dir: &Path, stage: &str, pid: i32) {
+        let path = dir.join(format!("launch-{stage}"));
+        let tmp = dir.join(format!(".launch-{stage}.tmp"));
+        if std::fs::write(&tmp, format!("{pid}\nEND\n")).is_ok() {
+            let _ = std::fs::rename(tmp, path);
+        }
+    }
+
+    fn stopped(pid: i32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rfind(')')
+                .and_then(|i| stat[i + 1..].split_whitespace().next())
+                .is_some_and(|state| state == "T")
+        })
+    }
+
+    /// info-fd の報告を読んだ直後に init を止め、`launch-info` に PID を書く。
+    pub(super) fn stop_init_after_info(init_pid: i32) {
+        let Some(dir) = dir() else { return };
+        // SAFETY: 直前に bwrap が報告した自分の runtime の init だけに送る。
+        unsafe { libc::kill(init_pid, libc::SIGSTOP) };
+        mark(&dir, "info", init_pid);
+    }
+
+    /// launch が ready 待ちに入ったことを `launch-waiting` で知らせ、試験が init を SIGCONT
+    /// するまで待つ（ready 待ちの上限は再開後から数える）。60 秒は壊れたときの保険。
+    pub(super) fn wait_until_init_resumed(init_pid: i32) {
+        let Some(dir) = dir() else { return };
+        mark(&dir, "waiting", init_pid);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while stopped(init_pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 /// `pid` の process が記録した本人（starttime 一致）で、まだ終わっていない（zombie でない）か。

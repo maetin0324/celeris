@@ -2652,6 +2652,26 @@ async fn run_until(d: &mut Dispatcher, max_ticks: usize, mut done: impl FnMut() 
     false
 }
 
+/// ADR-0125 (b): 状態待ちの保険。tick の回数ではなく壁時計で打ち切る（負荷で遅れても成立条件にしない）。
+pub(super) const STATE_WAIT_GUARD: Duration = Duration::from_secs(60);
+
+/// ADR-0125 (b): `done` が真になるまで tick を駆動する。判定は store の状態・event（`done`）だけで、tick の回数は
+/// 失敗条件にしない。[`STATE_WAIT_GUARD`] を過ぎたら `false`（壊れたときに止まる保険）。tick の間の短い sleep は
+/// worker・検査の task への譲りで、成立条件ではない。
+pub(super) async fn run_until_state(d: &mut Dispatcher, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + STATE_WAIT_GUARD;
+    loop {
+        d.tick().unwrap();
+        if done() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn wu_status(
     store: &Arc<dyn TaskStore>,
     id: TaskId,

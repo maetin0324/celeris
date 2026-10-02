@@ -6,11 +6,14 @@ import type {
   ArtifactList,
   CommentList,
   EventsPage,
+  ExecutionView,
   TaskDetail,
   TaskRoutingView,
   Timeline,
   TreeView,
 } from "~/celeris/types";
+import { renderToStaticMarkup } from "react-dom/server";
+import { TaskExecutionRoute } from "~/components/task-detail/TaskExecutionRoute";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;
@@ -105,6 +108,34 @@ const comments: CommentList = { items: [timeline.items[1].kind === "comment" ? t
 function never(): never {
   throw new Error("fixture broken");
 }
+
+describe("TaskExecutionRoute direct route", () => {
+  const routeExecution = (route: "direct" | "planned"): ExecutionView => ({
+    metrics: {},
+    route: {
+      route,
+      reasons: [{ rule_id: "atomic/single-repo", ok: route === "direct", detail: "repos=1" }],
+      gate_rule_id: "atomic/score",
+      overrode_gate: false,
+      shadow: false,
+      policy_version: "1",
+    },
+  }) as unknown as ExecutionView;
+
+  it("direct route に直行 badge と recorded reason を表示する", () => {
+    const html = renderToStaticMarkup(<TaskExecutionRoute execution={routeExecution("direct")} />);
+    expect(html).toContain("直行");
+    expect(html).toContain("planner を介さず実装へ進みます");
+    expect(html).toContain("<span class=\"font-mono\">atomic/single-repo</span>: repos=1");
+  });
+
+  it("planned direct route に planner 経路 badge と recorded reason を表示する", () => {
+    const html = renderToStaticMarkup(<TaskExecutionRoute execution={routeExecution("planned")} />);
+    expect(html).toContain("計画経路");
+    expect(html).toContain("planner による計画経路で進みます");
+    expect(html).toContain("<span class=\"font-mono\">atomic/single-repo</span>: repos=1");
+  });
+});
 
 /** ADR-0043 D6: `GET /tasks/{id}/tree`（「ファイル」タブのときだけ引く）。 */
 const treeView: TreeView = {

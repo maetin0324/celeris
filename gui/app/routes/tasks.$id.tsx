@@ -12,6 +12,7 @@ import { HelpLink } from "~/components/HelpLink";
 import { IntegrationRepairPanel } from "~/components/IntegrationRepairPanel";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { TaskRoutingPanel } from "~/components/TaskRoutingPanel";
+import { TaskExecutionRoute } from "~/components/task-detail/TaskExecutionRoute";
 import { ArtifactRow } from "~/components/task-detail/ArtifactRow";
 import { FailureBanner } from "~/components/task-detail/FailureBanner";
 import { OverviewTab } from "~/components/task-detail/OverviewTab";
@@ -232,6 +233,7 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
               </div>
               {/* celeris ADR-0069 D5: なぜこの担当・harness・lane・model か。閉じた状態は 1 行。 */}
               <TaskRoutingPanel view={routing} />
+              <TaskExecutionRoute execution={detail.execution} />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-muted">
                 {detail.cluster && (
                   <p data-testid="task-cluster">

@@ -193,7 +193,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 51);
+    assert_eq!(EVENT_TYPES.len(), 54);
 }
 
 #[test]
@@ -216,6 +216,47 @@ fn review_target_event_types_match_their_serde_names() {
             reviewed_sha: "reviewed".into(),
             target_sha: "advanced".into(),
             attempt: 1,
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name));
+    }
+}
+
+/// ADR-0120 D5: IntegrationRepair の Event の `type` 名が serde の名前・`event_type_name`・`EVENT_TYPES` で一致する。
+#[test]
+fn integration_repair_event_types_match_their_serde_names() {
+    let repo_id = task_core::RepoId::new();
+    let events = [
+        Event::IntegrationRepairScheduled {
+            work_unit_id: "wu-1".into(),
+            key: "integration-repair-1".into(),
+            repo_id,
+            target_ref: "refs/heads/main".into(),
+            target_sha: "target".into(),
+            before_sha: "before".into(),
+            conflict_files: vec!["src/a.rs".into()],
+            attempt: 1,
+        },
+        Event::IntegrationRepairResolved {
+            work_unit_id: "wu-1".into(),
+            repo_id,
+            target_sha: "target2".into(),
+            reviewed_sha: "reviewed".into(),
+            attempt: 1,
+        },
+        Event::IntegrationRepairExhausted {
+            work_unit_id: None,
+            repo_id,
+            target_sha: "target".into(),
+            before_sha: "before".into(),
+            attempt: 3,
+            reason: task_core::IntegrationRepairExhaustReason::LimitReached,
+            rollback_to_sha: None,
+            fallback: true,
         },
     ];
     for event in events {

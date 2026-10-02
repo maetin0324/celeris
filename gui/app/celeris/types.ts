@@ -304,6 +304,36 @@ export type Event =
       type: "review_target_advanced";
     }
   | {
+      attempt: number;
+      before_sha: string;
+      conflict_files: string[];
+      key: string;
+      repo_id: RepoId;
+      target_ref: string;
+      target_sha: string;
+      type: "integration_repair_scheduled";
+      work_unit_id: string;
+    }
+  | {
+      attempt: number;
+      repo_id: RepoId;
+      reviewed_sha: string;
+      target_sha: string;
+      type: "integration_repair_resolved";
+      work_unit_id: string;
+    }
+  | {
+      attempt: number;
+      before_sha: string;
+      fallback: boolean;
+      reason: IntegrationRepairExhaustReason;
+      repo_id: RepoId;
+      rollback_to_sha?: string | null;
+      target_sha: string;
+      type: "integration_repair_exhausted";
+      work_unit_id?: string | null;
+    }
+  | {
       browser: BrowserRun;
       type: "browser_updated";
     }
@@ -786,6 +816,17 @@ export type Event =
       task_id: TaskId;
       type: "stall_detected";
     };
+/**
+ * ADR-0120 D4/D5: `Event::IntegrationRepairExhausted.reason`（固定値）。
+ */
+export type IntegrationRepairExhaustReason =
+  | "limit_reached"
+  | "plan_issue"
+  | "work_unit_failed"
+  | "budget_exhausted"
+  | "result_untrusted"
+  | "abort_failed"
+  | "worktree_unavailable";
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
 /**

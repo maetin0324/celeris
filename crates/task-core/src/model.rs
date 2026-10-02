@@ -960,6 +960,43 @@ pub enum Event {
         target_sha: String,
         attempt: u32,
     },
+    /// ADR-0120 D5: review 前同期の衝突に対し IntegrationRepair WU を起票した（WU の追加・
+    /// `ReviewRepair` 遷移と同じ transaction で 1 回）。`attempt` は integration_repair WU の通し番号
+    /// （1 始まり）。`conflict_files` は重複を除きパス順。状態・attempts は変えない。
+    IntegrationRepairScheduled {
+        work_unit_id: String,
+        key: String,
+        repo_id: crate::RepoId,
+        target_ref: String,
+        target_sha: String,
+        before_sha: String,
+        conflict_files: Vec<String>,
+        attempt: u32,
+    },
+    /// ADR-0120 D5: 修復 WU の完了後、最新 target への再同期が成功した（`target_sha` は再同期時の
+    /// SHA）。checks/reviewer の合格は意味しない。状態・attempts は変えない。
+    IntegrationRepairResolved {
+        work_unit_id: String,
+        repo_id: crate::RepoId,
+        target_sha: String,
+        reviewed_sha: String,
+        attempt: u32,
+    },
+    /// ADR-0120 D4/D5: IntegrationRepair を打ち切った（1 回につき 1 件）。`rollback_to_sha` は安全な
+    /// rollback が完了したときだけ `before_sha`。`fallback` は未同期 HEAD で review へ進めるときだけ
+    /// `true`。状態・attempts は変えない。
+    IntegrationRepairExhausted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        work_unit_id: Option<String>,
+        repo_id: crate::RepoId,
+        target_sha: String,
+        before_sha: String,
+        attempt: u32,
+        reason: crate::execution::IntegrationRepairExhaustReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rollback_to_sha: Option<String>,
+        fallback: bool,
+    },
     /// Credential-free mapping between one isolated browser session and a worker execution.
     BrowserUpdated {
         browser: crate::BrowserRun,

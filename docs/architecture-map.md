@@ -18,7 +18,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | Task 型・状態機械 | task-core | `crates/task-core/src/{model,transition}.rs` | [DESIGN §4.1–4.2](DESIGN.md#41-task) |
 | Event（追記専用） | task-core::store | `crates/task-core/src/store/events.rs` | [DESIGN §4.3](DESIGN.md#43-event追記専用) |
 | SQLite 永続化（facade + 領域別 impl） | task-core::store | `crates/task-core/src/store/mod.rs`（module map はここの doc comment） | [DESIGN §5.1](DESIGN.md#51-store-task-core) |
-| 実行計画（ExecutionPlan/WorkUnit/Run） | task-core::execution_plan | `crates/task-core/src/execution_plan.rs`（`execution_plan/{validation,scheduling}.rs`） | [ADR-0072](adr/0072-task-execution-decomposition.md), [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| 実行計画（ExecutionPlan/WorkUnit/Run） | task-core::execution_plan | `crates/task-core/src/execution_plan.rs`（`execution_plan/{validation,scheduling}.rs`） | [ADR-0072](adr/0072-task-execution-decomposition.md), [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0134](adr/0134-blocked-repair-replan-loop.md) |
 | 再帰task木（leaf/子task, gate, 上限, 生存確認） | task-core::tree | `crates/task-core/src/tree.rs`（`tree/{gate,limits,approval,liveness}.rs`） | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | Browser capability の待ち状態 | task-core::browser_wait | `crates/task-core/src/browser_wait.rs`（`browser_wait/sql.rs`） | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
 | Browser 制御・identity・live proxy の状態 | task-core | `crates/task-core/src/{browser_control,browser_identity,browser_live,browser_isolation}.rs` | [ADR-0099](adr/0099-browser-phase3-control-lease.md), [ADR-0100](adr/0100-browser-phase3-live-proxy-acl.md), [ADR-0101](adr/0101-browser-phase3-identity-contract.md) |
@@ -33,7 +33,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | Dispatcher facade（tick・起動/停止順） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher.rs`（module map はこの doc comment） | [ADR-0082](adr/0082-dispatcher-module-split.md), [記録](progress/phase-P0-dispatcher.md) |
-| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0134](adr/0134-blocked-repair-replan-loop.md) |
 | Browser backend の適合判定・fallback 候補 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{dispatch_run,worker_task}.rs` | [ADR-0106](adr/0106-browser-phase4-conformance-dispatch.md), [ADR-0107](adr/0107-browser-fallback-candidate-preparation.md) |
 | 木の子task の gate・一括作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/tree_units.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | 委譲/承認の子task 作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/child_tasks.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |

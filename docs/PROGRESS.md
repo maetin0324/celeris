@@ -22,14 +22,15 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
   `--lib` で全 pass。integration test 込みでは `instance_handoff.rs` の 5 件が失敗: 3 件は worker DB guard の
   user namespace probe が sandbox の `Operation not permitted`、2 件は handoff の wall-clock 条件（既知の flaky）。
   この 3 件に既存の `CELERIS_ISOLATION_TESTS=skip` 分岐は無く、失敗として記録（詳細は上記 progress 文書）。
-  migration 0040 は他の celeris/* ブランチと番号が重ならないことを確認済み。
-- task `01M3YF3NS2EGTZD2BBWNPG1K28`（inbox-rules）との結合: **main にもこの task のブランチにも未統合**
-  （`git log main` に `inbox-rules` の merge なし、`3c967c91` はそのタスクのブランチのみに存在）。そのため
-  「置き換え済み failed 子が新しい受信箱 API に出ない」ことを確かめる既存試験は無い（書けない）。
-  `human_inbox.rs` は ADR-0133 D4 どおり規則の仮実装を置かず、inbox-rules 統合待ちのまま。
-- 未解決: 1) 上記 inbox-rules 統合待ち。2) `GET /api/v1/notify` に ADR-0133 D6 が求める 4 設定値
-  （`inbox_batch_secs`/`inbox_reminder_secs`/`digest_interval_secs`/`digest_max_lines`）と経路別最終送信時刻の
-  掲載が未実装（送り出し自体の判定・束ねは実装・試験済み）。どちらも独立した小さい追従 WorkUnit で閉じられる。
+- 追従（rules-wire / notify-status / sync-main、2026-10-02）: verify 時点の未解決 2 件は閉じた。1) inbox-rules
+  （task `01M3YF3NS2EGTZD2BBWNPG1K28` の `788e5cc0`・`739cd209`）を `cherry-pick -x` で取り込み `human_inbox` に結合
+  （試験 `auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision`、規則の重複実装なし）。2) `GET /api/v1/notify`
+  に D6 の 4 設定値と経路別最終送信時刻（試験 `get_notify_status_exposes_route_settings_and_last_successful_sends`）。
+- sync-main: 最新 main（`5d6df9f3`）を `git merge`（衝突は本ファイルだけ、両方の節を残して解消、`merge-tree` exit 0）。
+  全 celeris/* の走査で 0038〜0040 が他ブランチ使用中のため `0040_feed_notices.sql` を `0041` へ `git mv`
+  （`SCHEMA_VERSION = 41`、`RESERVED_VERSIONS = [38, 39, 40]`）。inbox-rules の「人は failed を cancel できる」に合わせ
+  e2e `phase7_scenarios` の期待を更新。証拠: `cargo fmt --all -- --check` exit 0、
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test --workspace` exit 0（**3,379 passed / 0 failed**）。
 - 本番 host で人が確認・設定する手順は [docs/ops/inbox-notifications.md](ops/inbox-notifications.md)。
 
 ## codex・opencode への skill の付属ファイルと段階的な読み込み

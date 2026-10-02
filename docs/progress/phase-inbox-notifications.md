@@ -1,6 +1,7 @@
 # 受信箱と通知の 2 系統（ADR-0133、task 01M3YFCJKMNWQ13HRS52M5BSWW）
 
-- 完了日: 2026-10-02（WorkUnit verify、HEAD `0bc7ca75a5a8`、schema 40）。
+- 完了日: 2026-10-02（WorkUnit verify、HEAD `0bc7ca75a5a8`、schema 40）。追従の rules-wire / notify-status /
+  sync-main で未解決 2 件を閉じ、最新 main を取り込み schema 41 に振り直した（末尾の節）。
 - 対象: adr / inbox-model / notify-store / notify-feed / api / outbound / gui-compat（全 [done]）。web 葉は
   UI/UX task `01M3XTCNKMQBCHKSZ7Y1GF6ZM4` の決定（`ui-overlap = c`）により `[superseded]`。
 
@@ -29,41 +30,46 @@
   未修正（別 task の対象）。
 - workspace の既存実行では browser isolation 試験は pass し、skip は使わなかった。一方、今回の関連 crate 追試では
   上記 3 件の worker DB guard 試験が sandbox の user namespace 制限で失敗した。
-- migration 番号の重複確認: `crates/task-core/migrations/0040_feed_notices.sql` を持つのはこの task の
-  ブランチ（`celeris/01M3YFCJKMNWQ13HRS52M5BSWW`）だけ（`git branch -a --contains` で確認）。0038/0039 は
-  他ブランチ（work_unit_sessions・cron_jobs・write_sets）が予約済みのためスキップ済み（migration 冒頭コメント
-  に理由を記載）。main には今のところ 0037 までしか無い。
+- migration 番号の重複確認（verify 時点）: 当時は 0040 を選んだが、sync-main 葉の再走査で 0040 も他ブランチ
+  （behind_targets）が使用中と分かり 0041 へ振り直した（末尾の節）。
 
 ## task 01M3YF3NS2EGTZD2BBWNPG1K28（inbox-rules）との結合状況
 
-- **main には未統合**。`git log main --oneline | grep inbox-rules` は 0 件。該当コミット
-  `3c967c91 integrate wu/inbox-rules (phase core)`（ADR-0131 D7、`attention_suppression` / `SuppressRule`
-  / `Inbox.suppressed` を `crates/task-ops/src/inbox.rs` に実装）は `celeris/01M3YF3NS2EGTZD2BBWNPG1K28`
-  ブランチにのみ存在し、main の祖先ではない（`git branch -a --contains 3c967c91` → そのブランチのみ）。
-- **この task のブランチにも未統合**（`git merge-base --is-ancestor 3c967c91 HEAD` → no）。
-- 結果として `crates/task-ops/src/human_inbox.rs` は ADR-0133 D4 で決めたとおり、`attention_suppression` を
-  呼ばず `build_attention` の現行出力（抑制規則なし）をそのまま使う**仮実装のまま**（コードのコメントに
-  依存関係を明記済み。規則の仮実装は置いていない）。
-- **未解決**: 「置き換え済み failed 子・終端 task の attention を外す」規則は、inbox-rules が main（または
-  この task 系列のブランチ）に統合されるまで新しい受信箱 API（`GET /inbox/items`）に反映されない。
-  そのため「置き換え済み failed 子が新しい受信箱 API に出ないこと」を確かめる既存試験は無い（書けない）。
-  inbox-rules が main に入り次第、`human_inbox` 側を `attention_suppression` を使うように差し替える小さな
-  追従 WorkUnit が必要（この task では規則を重複実装しない。人の追記どおり inbox-rules 葉に一本化）。
+- verify 時点では main にもこのブランチにも未統合だった（`3c967c91` はそのタスクのブランチのみ）。
+- **rules-wire 葉で結合済み**: そのタスクの `788e5cc0`・`739cd209` を `git cherry-pick -x` で内容を変えずに取り込み
+  （このブランチの `966dd2b1`・`559bb4ab`、定期実行 task 側と同一差分）、`human_inbox` の自動で閉じるを
+  `task_ops::inbox::attention_suppression` に結合（`10504208`、`suppressed` に規則別件数）。規則の重複実装はしていない。
+- 試験: `crates/task-api/tests/inbox_notifications.rs` の
+  `auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision`（置き換え済み failed 子・終端 task の
+  attention が新しい受信箱 API から消え、判断が要る failed は残る）、task-ops の `inbox_cleanup_*`。
 
-## ADR-0133 D6（外部送り出し）の既知のギャップ
+## ADR-0133 D6（外部送り出し）
 
-- 決定的な判定・束ね（`inbox_new` / `digest`）・`[notify]` の 4 設定キー（`inbox_batch_secs` 既定 60 /
-  `inbox_reminder_secs` 既定 86400 / `digest_interval_secs` 既定 3600 / `digest_max_lines` 既定 10）は
-  `crates/celeris/src/notify.rs` に実装・試験済み（`notify/tests.rs`、`dispatcher/tests/tick_and_dispatch.rs`）。
-  `cargo test --workspace` に含まれ全 pass。
-- ただし ADR 本文「`GET /api/v1/notify` にこの 4 値と、2 経路それぞれの最後の送信時刻を載せる」は未実装:
-  `crates/task-api/src/notify.rs` の `NotifyView` は `configured` / `secret_id` / `fingerprint` /
-  `gui_base_url` / `recent` のみで、4 設定値・経路別の最終送信時刻を持たない（grep で確認、該当フィールドなし）。
-  本番の設定確認は今のところ `config/*.toml` を直接読むしかない（下記 docs/ops 参照）。
-  **未解決**: `NotifyView` に 4 値 + 経路別 `last_sent_at` を足す小さな追従 WorkUnit が必要。
+- 決定的な判定・束ね（`inbox_new` / `digest`）・`[notify]` の 4 設定キーは `crates/celeris/src/notify.rs` に実装・試験済み。
+- verify 時点で未実装だった `GET /api/v1/notify` への 4 設定値（`inbox_batch_secs`・`inbox_reminder_secs`・
+  `digest_interval_secs`・`digest_max_lines`）と経路ごとの最終送信時刻は **notify-status 葉で実装済み**（`988ce389`、
+  試験 `crates/task-api/tests/notify.rs` の `get_notify_status_exposes_route_settings_and_last_successful_sends`）。
+
+## sync-main 葉（2026-10-02）: main の取り込み・migration の振り直し・再検査
+
+- 取り込み: `git merge main`（main `5d6df9f3`、rebase なし）。衝突は `docs/PROGRESS.md` の 1 箇所だけで、
+  この task の節と main の「codex・opencode への skill の付属ファイル」節を両方残して解消。
+  `git merge-tree --write-tree main HEAD` → exit 0。
+- migration の振り直し: `git for-each-ref refs/heads/celeris/` の全ブランチを `git ls-tree` で走査し、
+  0038（work_unit_sessions、6 ブランチ）・0039（cron_jobs 1・write_sets 4）・0040（behind_targets 4）が他ブランチで
+  使用中、0041 以上は未使用、main は 0037 まで。`git mv` で `0040_feed_notices.sql` → `0041_feed_notices.sql`、
+  `MIGRATION_0041`・`SCHEMA_VERSION = 41`・`RESERVED_VERSIONS = [38, 39, 40]`、`feed/tests.rs` のコメント、
+  `store/tests.rs`・`cluster_job/tests.rs` の `SCHEMA_VERSION` 固定値 9 箇所を 41 に更新。
+- 結合の修正: cherry-pick した inbox-rules（ADR-0131 D7）で人の Cancel が failed → cancelled を許すようになり、
+  `tests/e2e/tests/phase7_scenarios.rs` の `cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents`
+  が古い期待（failed の中止は exit 1）で落ちた（定期実行 task のブランチにも同じ古い期待が残っている）。
+  終端の拒否は cancelled task で確かめ、failed の中止は成功して `Failed->Cancelled:cancel_failed`・attempts 不変を
+  確かめる形に更新。
+- 検査: `cargo fmt --all -- --check` exit 0。`cargo clippy --workspace --all-targets -- -D warnings` exit 0。
+  `cargo test --workspace` exit 0（**3,379 passed / 0 failed / 14 ignored**、138 の test result 行）。
+  範囲外の flaky はこの実行では出なかった。
 
 ## 提案
 
-- 上記 2 件の未解決事項はどちらも独立した小さい追従 WorkUnit で閉じられる規模（1）inbox-rules 統合後に
-  `human_inbox` を `attention_suppression` へ差し替え、「置き換え済み failed 子が出ない」試験を追加する、
-  2）`NotifyView` に 4 設定値と経路別最終送信時刻を足す）。どちらも ADR-0133 の変更は不要（既存の決定の範囲内）。
+- 定期実行 task（`01M3YF3NS2EGTZD2BBWNPG1K28`）のブランチにも `phase7_scenarios.rs` の古い期待が残っているので、
+  そちらの統合でも同じ更新が要る（この task のブランチを先に main へ入れれば merge で揃う）。

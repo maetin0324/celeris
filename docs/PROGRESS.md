@@ -107,6 +107,19 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - 未解決事項: ホスト準備（別 host UID / subuid の割当）は人の判断が必要。launcher 本体の実装は未着手。A13 の実 process 再試験（別 UID 前提）は launcher 実装後に行う。本番 admission の `CredentialInjection`・`IdentityRestore` は引き続き未解放。
 - 提案: launcher 実装を独立 task として切り出し、完了後に A13 を再試験してから `prod-admission-release` の判断に戻す。
 
+## planner check の書き方の指針（R7-10, 2026-10-02）
+
+完了日 2026-10-02（task 01M3WZ1GFJ0YNERRNT1W0EMCQR、WorkUnit `verify-all`。兄弟 `planner-guide` / `cos-guide` と統合済み）。
+
+- 背景: web の木の replan 24 回のうち 9 回が計画・check・条件の質に起因（2026-10-01 調査）。[ADR-0079 付記 R7-10](adr/0079-recursive-task-decomposition.md#付記-r7-10-check-の-sh-構文兄弟と衝突しない差分-check葉の大きさwebdocs-task-の-cargo受け入れ条件の範囲2026-10-02) に根拠と 5 規則を記録。
+- 実装: `crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE` に 5 規則（(1) `/bin/sh`/dash 限定の構文、(2) 段の全 unit の許可パスを除外する範囲外差分 check、(3) 葉は 1 run に収まる大きさ、(4) `web/`/`docs/` だけを変える task は `cargo test --workspace` の代わりに `crates/` 無差分検査、(5) 受け入れ条件・差分 check の範囲に ADR・記録の置き場所を最初から含める）を追記。`crates/task-worker/src/claude_code/tests.rs::planner_prompt_has_the_check_writing_section` で各規則の文言が /2・/3 の planner プロンプトに 1 回ずつ出ることを確認。
+- CoS 側: `crates/task-worker/src/preamble.rs` の `actions_instructions()` に (4)(5) と同内容の 2 文を追記（`web/` や `docs/` だけを変える task の cargo 代替検査、ADR・記録の置き場所を acceptance の範囲指定に含める）。`crates/task-worker/src/preamble/tests.rs` で両文がそれぞれ 1 回だけ出ることを確認。
+- 証拠コマンドと結果（このWorkUnitで実行）:
+  - `cargo test --workspace` → exit 0（全 crate `test result: ok`、失敗 0）
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+  - いずれも渡された `CARGO_TARGET_DIR` のまま実行。
+- 未解決事項: なし。本番 host の操作、設計原則・Phase 順の変更は行っていない。
+
 ## repair objective の許可範囲受け渡し
 
 完了日 2026-10-02（work unit `wire`）。段階統合は同じ phase の非 repair・非 integrate unit、final review は task の全 unit と task acceptance から、変更してよい paths と `git diff` を含む check を集めて repair objective に渡す。重複を除き、辞書順に並べる。範囲外の失敗はファイルを直さず `plan_issue` で報告する指示が入り、既存の `worker_finish` 経路で replan に進むことを確認した。delivery repair は対象外。

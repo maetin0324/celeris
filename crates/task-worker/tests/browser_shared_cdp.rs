@@ -23,29 +23,49 @@ const IP: &str = "93.184.216.34";
 const ORIGIN: &str = "https://fixture.example.com";
 const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SECRET: &str = "shared-cdp-secret-sentinel";
-const TCP_PROBE: &str = r#"import json, socket, time
+const TCP_PROBE: &str = r#"import socket, time
 from pathlib import Path
-deadline = time.monotonic() + 60
+deadline = time.monotonic() + 55
+request = b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
+payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
+frame = bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload))
+last_error = None
 while True:
     try:
-        sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
+        with socket.create_connection(('127.0.0.1', 9223), timeout=2) as sock:
+            sock.settimeout(min(2, max(.1, deadline - time.monotonic())))
+            sock.sendall(request)
+            head = b''
+            while not head.endswith(b'\r\n\r\n'):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('WebSocket upgrade deadline exceeded')
+                chunk = sock.recv(1)
+                if not chunk:
+                    raise ConnectionError('EOF during WebSocket upgrade')
+                head += chunk
+                if len(head) > 8192:
+                    raise ValueError('WebSocket upgrade header too large')
+            if not head.startswith(b'HTTP/1.1 101'):
+                raise ValueError('WebSocket upgrade rejected: ' + repr(head))
+            sock.sendall(frame)
+            reply = b''
+            while b'targetInfos' not in reply:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('CDP response deadline exceeded')
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise ConnectionError('EOF before CDP response')
+                reply += chunk
+                if len(reply) > 65536:
+                    raise ValueError('CDP response too large')
+            Path('/session/tcp-probe.ok').write_text('connected')
+            time.sleep(90)
         break
-    except OSError:
-        if time.monotonic() > deadline:
-            raise RuntimeError('CDP forwarding port unavailable')
+    except (OSError, ValueError) as error:
+        last_error = error
+        if time.monotonic() >= deadline:
+            raise RuntimeError('CDP forwarding unavailable') from last_error
         time.sleep(.02)
-sock.settimeout(30)
-sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
-head = b''
-while not head.endswith(b'\r\n\r\n'):
-    head += sock.recv(1)
-assert head.startswith(b'HTTP/1.1 101'), head
-payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
-sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
-frame = sock.recv(4096)
-assert b'targetInfos' in frame, frame
-Path('/session/tcp-probe.ok').write_text('connected')
-time.sleep(90)
 "#;
 
 struct FakeBroker;

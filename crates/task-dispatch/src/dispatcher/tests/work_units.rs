@@ -1562,18 +1562,27 @@ async fn integration_check_failure_is_repaired_when_classified() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
-    let mut b = v2_wu("b", "build", &[]);
-    // WU b の検査は b の worktree では通るが、統合後（a の fmt-bad.txt が入る）に落ちる。
-    b.checks = vec![task_core::WorkUnitCheck {
-        cmd: "test ! -f fmt-bad.txt # rustfmt --check".into(),
+    let scope_check = "git diff --quiet HEAD -- crates/";
+    let mut a = v2_wu("a", "build", &[]);
+    a.context.paths = vec!["web/".into()];
+    a.checks = vec![task_core::WorkUnitCheck {
+        cmd: scope_check.into(),
         expect_exit: 0,
     }];
-    adopt_v2_plan(
-        &store,
-        task.id,
-        &["build"],
-        vec![v2_wu("a", "build", &[]), b],
-    );
+    let mut b = v2_wu("b", "build", &[]);
+    b.context.paths = vec!["web/".into()];
+    // WU b の検査は b の worktree では通るが、統合後（a の fmt-bad.txt が入る）に落ちる。
+    b.checks = vec![
+        task_core::WorkUnitCheck {
+            cmd: "test ! -f fmt-bad.txt # rustfmt --check".into(),
+            expect_exit: 0,
+        },
+        task_core::WorkUnitCheck {
+            cmd: scope_check.into(),
+            expect_exit: 0,
+        },
+    ];
+    adopt_v2_plan(&store, task.id, &["build"], vec![a, b]);
     let adapter = Arc::new(
         ParallelWuAdapter::new(Duration::from_millis(20))
             .with_file("a", "fmt-bad.txt", "x")
@@ -1594,6 +1603,22 @@ async fn integration_check_failure_is_repaired_when_classified() {
                 && class == "format"
                 && *origin == task_core::execution::RepairOrigin::Integration
     )));
+    let units = store.work_units_for(task.id).unwrap();
+    let objective = &units
+        .iter()
+        .find(|u| u.key == "repair-build-1")
+        .expect("integration repair")
+        .spec
+        .objective;
+    assert!(
+        objective.contains("## 変更してよい範囲\n- web/\n"),
+        "{objective}"
+    );
+    assert!(objective.contains(&format!("## 範囲外差分の検査\n- {scope_check}\n")));
+    assert!(objective.contains("範囲外のファイルを変えるな"));
+    assert!(objective.contains("plan_issue"));
+    assert_eq!(objective.matches("- web/\n").count(), 1);
+    assert_eq!(objective.matches(scope_check).count(), 1);
     let checks: Vec<&Vec<task_core::PhaseCheckResult>> = events
         .iter()
         .filter_map(|e| match e {

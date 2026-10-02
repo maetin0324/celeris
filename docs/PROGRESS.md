@@ -43,6 +43,22 @@ fix-sync-stop の後、最新 main（`29e2d76875e0cb3ab21ea606b0014aab62413cd8`�
 - `cargo test --workspace pre_review_sync` → 1 passed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair`）、`cargo test --workspace reviewed_sha` → 3 passed（`delivery::tests::target_advanced_*`）。`cargo test -p task-dispatch` の `dispatcher::tests::target_sync::*` 8 件（pre_review_sync_dirty_keeps_attempts・pre_review_sync_conflict_keeps_attempts_and_branch・pre_review_sync_target_advanced_keeps_attempts・pre_review_sync_target_advanced_limit_halts_without_attempts 等）も exit 0。既知の flaky `task-worker` の `local_deep_research::tests::missing_celeris_result_line_is_retryable_error` を単独で再実行し 1 passed（workspace 全体実行でも今回は失敗なし）。
 - sandbox 内で userns 必須試験（`instance_handoff` 等）が完走できない場合があることは把握済みだが、今回の `cargo test --workspace` では該当失敗なし（daemon はこの制約の外で checks を実行するため、sandbox 制約を plan_issue の理由にはしない）。
 
+### land-main-2: 再進行した main（web GUI 統合）の取り込みと全検査の再実行 — 2026-10-02（work unit `land-main-2`）
+
+reland-main 後に main が web GUI（task 01M3QE4D330YESFT6FY8G50R12、ADR-0081 TanStack SPA + gateway、Phase 1〜6）の統合で `e730f0569db12f8dc1d46fde1932636f40db48a9` まで進み、integrate-verify の check `git merge-base --is-ancestor main HEAD` が落ちていた。着手時にコードの修正（c5e9498a・fix-sync-stop）は済んでおり `review_spawn.rs` に `Trigger::ReviewFail` は無いことを確認済み。`git merge-tree --write-tree --name-only HEAD main` の事前見積もりは `crates/task-worker/tests/browser_shared_cdp.rs` 1 件だけを衝突として返した（`docs/PROGRESS.md` は自動 merge）。
+
+- 実際の merge（commit `31dead31c5fb3f56e37d0644b1bd9339ef93657a`）も見積もりどおり衝突は `browser_shared_cdp.rs` のみ。両側とも R7-12 系の CDP probe EOF 無限待ち修正だったため、main 側（`ISOLATION`/`PREFLIGHT_TIMEOUT` 定数・`probe.err` への例外書き出し・`recv_exact` によるフレーム読み切り・`preflight()`）を基本に採用し、task 側にあって main に無かった「接続後の handshake / CDP 応答が一度失敗しても deadline まで接続からやり直す」期限付き再試行を `except OSError` の外側ループに戻す形で足した。Rust 側の外側タイムアウトは task 側の 75 秒（main は 60 秒）をそのまま残した。`docs/PROGRESS.md` は衝突なしで両節とも残っている。
+- `git grep -n '^<<<<<<<\|^=======$\|^>>>>>>>' .` → 該当なし。`git merge-base --is-ancestor main HEAD` → exit 0。
+- `cargo build -p task-worker --bins` → exit 0（browser_shared_cdp.rs のテストが前提とする `celeris-browser-sandboxd`/`celeris-browser-egress` bin を先に生成）。
+- `cargo test -p task-worker --test browser_shared_cdp --no-run` → exit 0（コンパイル確認）。
+- `cargo test -p task-worker --test browser_shared_cdp -- --nocapture` → exit 0（2 passed。sandbox では preflight が失敗して `SKIPPED (environment unavailable, not passed)` を出すだけで、panic はしない）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace` → exit 0（118 テストバイナリすべて `test result: ok`、FAILED・`error[` なし）。
+- `cargo test --workspace pre_review_sync` → 9 passed、0 failed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair` 1 件 + `dispatcher::tests::target_sync::pre_review_sync_*` / `target_sync_pre_review_sync_*` 8 件）。
+- `cargo test --workspace reviewed_sha` → 3 passed、0 failed（`delivery::tests::target_advanced_*_reviewed_sha`）。
+- Phase 1 のコード（review 前同期・stale 検出・同期停止が attempts を消費しない経路）は変更していない。既知の flaky（`local_deep_research` の Spawn NotFound、`browser_shared_cdp` の sandbox TCP probe）は今回の `cargo test --workspace` では再現しなかった。
+
 - [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 1〜4 の main 統合](progress/phase-browser-main-merge.md) — 2026-10-01、`478e86c4` とリファクタ後 main `2eb1b030` がともに祖先となる作業ブランチで、migration 0035/0036・schema 36 と ADR 0099〜0114 を確認。`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、source size active warning 0 件（既存例外 1 件）。P3-B frame、別 host UID・A13、機密能力の本番解放、本番設定と昇格は未解決。検証のコマンド・exit・テスト数はリンク先に記録。

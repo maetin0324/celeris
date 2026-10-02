@@ -147,10 +147,20 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 `cargo test -p e2e --test api_scenarios phase3_` をそのまま繰り返し・並走させるだけ）。収束前 takeover の
 `not_converged` 拒否・競合の `not_lease_holder` 拒否・`cancel` での停止という試験の意図は変更していない。
 
-### stress-verify run 01M3XVJ3Y7R5H0MX9AK3BXRNZH の追記
+### stress-verify run 01M3XVJ3Y7R5H0MX9AK3BXRNZH の追記（修正済み）
 
-2026-10-02 の再確認では `time sh scripts/dev/stress-e2e-phase3.sh` が exit 1（real 43.217s）となった。
-CPU 負荷 24 本と `task-dispatch` のバックグラウンド test を起動した後、phase3 の serial 1 回目で 4 試験すべてが
-`target/debug/celerisctl not found; run cargo test --workspace` により失敗した。`cargo test ... --no-run` は e2e の試験
-バイナリしか生成せず、fixture が起動する `celerisctl` を用意しないため、受け入れ条件の確認には至っていない。
-スクリプト実行の `EXIT` trap 後に負荷プロセスが残っていないことを確認した。この失敗を受けて追加修正・再実行はしていない。
+2026-10-02 の再確認では `time sh scripts/dev/stress-e2e-phase3.sh` が exit 1（real 43.217s）となった。原因は
+`cargo test -p e2e --test api_scenarios phase3_ --no-run` が e2e の試験バイナリしか生成せず、fixture が起動する
+`target/debug/celeris` / `celerisctl` を用意しないため、まっさらな target では全試験が `celerisctl not found` で
+落ちることだった。
+
+### fix-stress-build WorkUnit（01M3XSER5YCVRWJTCHP0XGB8AP）での実行結果
+
+`scripts/dev/stress-e2e-phase3.sh` の `--no-run` build の直前に `cargo build --workspace --bins` を追加した。
+前回試行で sandbox が user namespace の作成を拒否したため、最初に `unshare -U -r true` を実行したが、
+`write failed /proc/self/uid_map: Operation not permitted`（exit 1）だった。
+
+続けて `cargo test -p e2e --test api_scenarios phase3_control` を実行したところ、試験は fixture 起動前に
+`$CARGO_TARGET_DIR/debug/celerisctl not found` で失敗した（cargo exit 101）。従ってこの run では bin を削除した状態からの
+stress 台本実行には進めず、20 serial + 8 parallel の検証結果は得ていない。台本には bin build を追加済みだが、
+この sandbox では ADR-0095 の user namespace が使えないため、引き続き実行環境での再検証が必要。

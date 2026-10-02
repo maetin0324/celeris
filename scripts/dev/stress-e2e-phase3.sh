@@ -46,6 +46,13 @@ timeout "$LOAD_SECONDS" sh -c '
 ' &
 LOAD_PIDS="$LOAD_PIDS $!"
 
+echo "[stress-e2e-phase3] building workspace bins (fixture needs target/debug/celeris and celerisctl)"
+cargo build --workspace --bins >"$WORK_DIR/build.log" 2>&1 || {
+  echo "[stress-e2e-phase3] FAIL: workspace bins build failed"
+  cat "$WORK_DIR/build.log"
+  exit 1
+}
+
 echo "[stress-e2e-phase3] building tests/e2e (phase3_) once before the timed loop"
 cargo test -p e2e --test api_scenarios phase3_ --no-run >"$WORK_DIR/build.log" 2>&1 || {
   echo "[stress-e2e-phase3] FAIL: build failed"

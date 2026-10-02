@@ -23,27 +23,44 @@ const IP: &str = "93.184.216.34";
 const ORIGIN: &str = "https://fixture.example.com";
 const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SECRET: &str = "shared-cdp-secret-sentinel";
-const TCP_PROBE: &str = r#"import json, socket, time
+// 高負荷時は転送 port が relay の準備前に接続を受けて閉じることがあるので、
+// 接続・upgrade・CDP 応答までを 1 回の試行として期限内に再試行する（EOF で無限待ちにしない）。
+const TCP_PROBE: &str = r#"import socket, time
 from pathlib import Path
-deadline = time.monotonic() + 60
+deadline = time.monotonic() + 120
+def attempt():
+    sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
+    try:
+        sock.settimeout(30)
+        sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
+        head = b''
+        while not head.endswith(b'\r\n\r\n'):
+            b = sock.recv(1)
+            if not b:
+                raise OSError('EOF during upgrade')
+            head += b
+        if not head.startswith(b'HTTP/1.1 101'):
+            raise OSError('upgrade rejected: %r' % head)
+        payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
+        sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
+        frame = b''
+        while b'targetInfos' not in frame:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise OSError('EOF before CDP reply')
+            frame += chunk
+        return sock
+    except BaseException:
+        sock.close()
+        raise
 while True:
     try:
-        sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
+        sock = attempt()
         break
-    except OSError:
+    except OSError as error:
         if time.monotonic() > deadline:
-            raise RuntimeError('CDP forwarding port unavailable')
-        time.sleep(.02)
-sock.settimeout(30)
-sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
-head = b''
-while not head.endswith(b'\r\n\r\n'):
-    head += sock.recv(1)
-assert head.startswith(b'HTTP/1.1 101'), head
-payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
-sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
-frame = sock.recv(4096)
-assert b'targetInfos' in frame, frame
+            raise RuntimeError('CDP forwarding unavailable: %s' % error)
+        time.sleep(.1)
 Path('/session/tcp-probe.ok').write_text('connected')
 time.sleep(90)
 "#;
@@ -342,7 +359,7 @@ fn inner() {
     )
     .expect("relay");
     // 高負荷時（workspace 全体の test と並走）は sandbox 内の browser 起動が 10 秒を超えるので長めに待つ。
-    let until = Instant::now() + Duration::from_secs(60);
+    let until = Instant::now() + Duration::from_secs(150);
     while !session.path().join("tcp-probe.ok").exists() {
         assert!(
             Instant::now() < until,

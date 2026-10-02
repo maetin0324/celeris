@@ -360,6 +360,7 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
               retrying={retrying}
               fetchedAt={fetchedAt}
               humanReview={humanReview}
+              browserOwner={browserOwner}
             />
           )}
 

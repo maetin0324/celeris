@@ -7,13 +7,14 @@ use super::*;
 const SELECT_WAIT: &str = "SELECT wait_id, task_id, work_unit_id, run_id, session_id, reason, origin, \
      purpose, credential_id, credential_provider, credential_policy_id, operation_intent_id, action, \
      args_digest, approval_id, policy_revision, policy_hash, owner_id, deadline, resume_key, version, \
-     state, resolution_code, created_at, resolved_at FROM browser_waits";
+     state, resolution_code, created_at, resolved_at, trusted_login_json FROM browser_waits";
 
 type RawWait = (
     [String; 7],
     [Option<String>; 8],
     (i64, String, Option<String>, String, String, i64, String),
     (Option<String>, String, Option<String>),
+    Option<String>,
 );
 
 fn raw_wait(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawWait> {
@@ -47,6 +48,7 @@ fn raw_wait(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawWait> {
             row.get(21)?,
         ),
         (row.get(22)?, row.get(23)?, row.get(24)?),
+        row.get(25)?,
     ))
 }
 
@@ -64,6 +66,7 @@ fn wait_from_raw(raw: RawWait) -> Result<BrowserWait, StoreError> {
         opt,
         mid,
         tail,
+        trusted_login_json,
     ) = raw;
     let [
         work_unit_id,
@@ -96,6 +99,11 @@ fn wait_from_raw(raw: RawWait) -> Result<BrowserWait, StoreError> {
         }),
         _ => None,
     };
+    let trusted_login = trusted_login_json
+        .as_deref()
+        .map(serde_json::from_str::<TrustedLogin>)
+        .transpose()
+        .map_err(|e| StoreError::Invalid(format!("invalid browser wait trusted login: {e}")))?;
     let operation = match (intent_id, action) {
         (Some(intent_id), Some(action)) => Some(OperationIntent {
             intent_id,
@@ -116,6 +124,7 @@ fn wait_from_raw(raw: RawWait) -> Result<BrowserWait, StoreError> {
         credential_policy_id,
         credential,
         operation,
+        trusted_login,
         approval_id,
         policy_revision: u64::try_from(policy_revision).unwrap_or(0),
         policy_hash,
@@ -372,6 +381,29 @@ fn approval_rows(
 }
 
 impl BrowserWaitStore for SqliteStore {
+    fn browser_session_auth_section(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        active: bool,
+    ) -> Result<(), crate::browser_store::BrowserStoreError> {
+        self.browser_control_auth_section(key, active).map(|_| ())
+    }
+    fn browser_session_agent_action(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        op: crate::browser_control_ops::AgentActionOp,
+        now: u64,
+    ) -> Result<crate::browser_control::BrowserControl, crate::browser_store::BrowserStoreError>
+    {
+        self.browser_control_agent_action(key, op, now)
+    }
+    fn browser_session_live_append(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        event: &crate::browser_live::ScrubbedLiveEvent,
+    ) -> Result<u64, StoreError> {
+        self.browser_live_append(key, event)
+    }
     fn browser_task_policy_get(
         &self,
         task_id: TaskId,
@@ -473,6 +505,7 @@ impl BrowserWaitStore for SqliteStore {
                     .or_else(|| new.credential.as_ref().map(|c| c.policy_id.clone())),
                 credential: new.credential.clone(),
                 operation: new.operation.clone(),
+                trusted_login: new.trusted_login.clone(),
                 approval_id: None,
                 policy_revision: new.policy_revision,
                 policy_hash: new.policy_hash.clone(),
@@ -485,13 +518,21 @@ impl BrowserWaitStore for SqliteStore {
                 created_at: now,
                 resolved_at: None,
             };
+            let trusted_login_json = wait
+                .trusted_login
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| BrowserWaitError::Invalid {
+                    field: "trusted_login",
+                })?;
             tx.execute(
                 "INSERT INTO browser_waits (wait_id, task_id, work_unit_id, run_id, session_id, reason, \
                  origin, purpose, credential_id, credential_provider, credential_policy_id, \
                  operation_intent_id, action, args_digest, approval_id, policy_revision, policy_hash, \
                  owner_id, deadline, resume_key, version, state, resolution_code, created_at, \
-                 resolved_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
-                 NULL, ?15, ?16, ?17, ?18, ?19, ?20, ?21, NULL, ?22, NULL)",
+                 resolved_at, trusted_login_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
+                 ?11, ?12, ?13, ?14, NULL, ?15, ?16, ?17, ?18, ?19, ?20, ?21, NULL, ?22, NULL, ?23)",
                 params![
                     wait.wait_id,
                     task_id.to_string(),
@@ -515,6 +556,7 @@ impl BrowserWaitStore for SqliteStore {
                     to_i64(wait.version),
                     wait.state.as_str(),
                     format_rfc3339(now)?,
+                    trusted_login_json,
                 ],
             )
             .map_err(|e| match e {

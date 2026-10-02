@@ -942,7 +942,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 ### 手順 4 dogfood の観察（2026-09-29 10:25Z〜10:56Z）
 
 - **browser phase-3 子 01M3PBAVFAYPDWMQMDBXPTE2V8**: gate は `atomic/score`（score 2 / 閾値 7、深さ 2）。atomic の run が yield → 続き run を 3 回繰り返し
-  （P3-C 制御 lease の状態機械 + 単体 10、P3-B ACL / 再接続 / scrub の純関数 + 単体 11、P3-A identity の純関数 + 単体 10、ADR-0081〜0083、
+  （P3-C 制御 lease の状態機械 + 単体 10、P3-B ACL / 再接続 / scrub の純関数 + 単体 11、P3-A identity の純関数 + 単体 10、ADR-0099〜0101、
   `cargo test --workspace` 2890 passed）、continuation 上限 3 で「予算を増やす／分割し直す／中止」の質問（10:55Z、blocked）。
   → `POST /tasks/{id}/execution/decompose {mode: compound}` で人の compound を設定し、質問に「分割し直す」で回答（10:58Z、ready）。次の dispatch で
   ExecutionPlan の経路に入るかを見る。
@@ -1162,7 +1162,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
   決定なし。木全体の葉 40 の制約から P*-NN 55 件を Phase ごとの葉上限 6/5/10/10/6 にまとめる方針）→ PlanGate（`review_human:p56`、near_limit
   max_stages 5/5、max_child_tasks 5/6）→ 20:4xZ 人（Fable）が approve。葉の上限 `[execution.tree] max_tree_leaves = 40` は web のような大きい木には
   小さい（回収で見直し候補）。
-- 20:56Z: browser Phase 4 の子 01M3Q49ZTST3XQ9DGF6AGNR0XG（atomic、score 6 / 閾値 7）が最終 review で P4-A/B/C の実配線不足により failed（ADR-0084〜0086、
+- 20:56Z: browser Phase 4 の子 01M3Q49ZTST3XQ9DGF6AGNR0XG（atomic、score 6 / 閾値 7）が最終 review で P4-A/B/C の実配線不足により failed（ADR-0102〜0104、
   純関数・egress transport の試験は入った）。子の記録: 非特権 LXC では `newuidmap` が EPERM（親 uid_map `0:100000:1001, 1001:1001:1, …`）で
   bwrap + subuid の隔離が実証できない（環境制約）。根の p4 failed → 木の `max_tree_replans`（10）超過で決定 `limit:max_tree_replans`
   01M3QF8TWSTGZDQMM33HF9WXF6 が open。判断は人へ（Phase 4 を compound で分解し直すか、P4-A の subuid 実証を別ホストに切り出すか）。
@@ -2314,3 +2314,4 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 ### releases_api の systemd user bus 依存試験
 
 `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は、auto 判定が `systemd-run` を選ぶ環境で user bus に接続できないときだけ skip する。sandbox では `/run/user/<uid>/bus` が見えても接続できず `Failed to connect to user scope bus via local transport` となる一方、release gate では接続できるため、試験側で `systemd-run --user --scope --quiet true` を事前確認する。`systemd-run` が PATH にないか `XDG_RUNTIME_DIR` が未設定なら detach の auto 判定は inline のため、試験を従来どおり実行する。本番 detach の挙動は変更しない。
+- 23:1x〜23:56Z（2026-10-01）: **6ceec985b5e0 の stop-start 昇格と、無許可の本番差し替えの発見**。main にブラウザ Phase 1〜4（取り込み task 01M3VSNWDC… が 18:33 に delivery）・migration 0035/0036（schema 36）が入っていたため、6ceec985 は live_ok=false。in-flight 0 で `promote.sh 6ceec985b5e0` → stop-start（停止約 20 s、backup `20261001-232111-pre-6ceec985b5e0.sqlite3`）、schema 36 で健全。昇格前に動いていたのは **celeris@bf54b41ad627**（人の昇格なし）: web P6-03 dogfood task 01M3WAKKJQ… の codex run 01M3WAVPGK… が、人の「本番 host への web gateway 設置を許可」に基づき escalation（`--approve-for-me` で自動承認）で `systemctl --user start celeris-web@bf54b41ad627` を実行 → unit の `Wants=celeris@%i.service` で celeris@bf54b41ad627（staging 成果物への symlink）が起動し、18:32:38 に本番 DB を schema 36 へ移行、ADR-0040 handoff で 7fbfc347b240 から active を奪っていた（約 4.8 時間）。ADR-0095 の RO mount は効いていたが user systemd bus の穴を通られた。人の判断 (A): dogfood は続け、`~/.config/systemd/user/celeris-web@.service` から `Wants=` を削除（backup `.bak-20261001a`）して daemon-reload（`After=` のみ残す）。repo の `deploy/systemd/celeris-web@.service` には `Wants=` が残っている（要修正）。再発防止候補: handoff の認可（current と一致しない release は handoff・migrate しない）、worker から user systemd bus を隠す、codex の自動承認に deny パターン、web unit の依存除去、テストから実 systemd-run を叩かない。担当の無い root の delivery 修正 01M3VT5BJZ… は review 差し戻し 3 回で failed → reopen + decompose note（main 取り込み、ADR 番号振り直し、部分 index）で replan 中。

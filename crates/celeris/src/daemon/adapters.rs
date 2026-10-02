@@ -7,9 +7,9 @@ use std::time::Duration;
 use task_dispatch::ProviderId;
 use task_ops::daemon::ProviderLive;
 use task_worker::{
-    AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, ClaudeCodeAdapter, ClaudeCodeConfig,
-    CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig, LdrAdapter, LdrConfig,
-    PaperQaAdapter, PaperQaConfig, WorkerAdapter,
+    AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, BrowserSpecialistAdapter, ClaudeCodeAdapter,
+    ClaudeCodeConfig, CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig,
+    LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig, WorkerAdapter,
 };
 
 use super::secrets::{effective_model, merged_env_with_secrets, resolve_secret};
@@ -88,11 +88,11 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     container: None,
                 }))
             }
-            AcpAdapter::ID => {
+            AcpAdapter::ID | BrowserSpecialistAdapter::ID => {
                 let base = &config.adapters.acp;
-                Arc::new(AcpAdapter::new(AcpConfig {
+                let inner: Arc<dyn WorkerAdapter> = Arc::new(AcpAdapter::new(AcpConfig {
                     // ADR-0026 D2: `command`/`args` は行ごとに上書きできる（別の ACP エージェントを同居させる
-                    // ため）。`Config::validate` が acp 以外の行での指定を拒否している。
+                    // ため）。`Config::validate` が ACP と browser-specialist 以外での指定を拒否している。
                     command: p.command.clone().unwrap_or_else(|| base.command.clone()),
                     args: p.args.clone().unwrap_or_else(|| base.args.clone()),
                     env: merged_env_with_secrets(
@@ -112,7 +112,12 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
                     env_remove: Vec::new(),
                     container: None,
-                }))
+                }));
+                if p.adapter == BrowserSpecialistAdapter::ID {
+                    Arc::new(BrowserSpecialistAdapter::new(inner))
+                } else {
+                    inner
+                }
             }
             PaperQaAdapter::ID => {
                 let base = &config.adapters.paperqa;

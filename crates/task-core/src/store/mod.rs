@@ -325,6 +325,9 @@ pub struct ExecutionMetricsTaskRow {
     pub has_quota_events: bool,
 }
 
+/// タスクとその `events_for`（`seq`, event）の組。`TaskStore::tasks_with_events` の要素。
+pub type TaskWithEvents = (Task, Vec<(u64, Event)>);
+
 /// ADR-0059 D6（Phase 99）: `cluster_settings` の 1 行。`work_dir` は絶対パスか `~`/`~/…`
 /// （検証は書き込み側〈API ハンドラ〉で行う。ここは型だけ）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

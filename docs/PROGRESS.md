@@ -346,3 +346,81 @@ worker（非 planner）向け指示と `task-dispatch` の要否確認:
 検証:
 - `cargo test -p task-worker --lib claude_code::` → exit 0、91 passed（`planner_prompt_has_the_check_writing_section` を含む）、0 failed。
 - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+
+## ui-ux 外部 skill の org 種更新と結合試験（work unit `e2e-verify`）
+
+完了日 2026-10-02。ADR-0122 の木（深さ1: ui-ux 課への 4 外部 skill 登録、深さ2: このtask）の最終段。
+`config/org.example.toml` の `ui-ux` に `skills_mounts = ["frontend-design", "shadcn", "web-design",
+"ui-ux-quality-gate"]`（license: none で除外した skill は無いため 4 件とも）と、依存方針（shadcn 以外の
+新規ライブラリは提案に留める、外部ネットワークに出ない）の policy 1 行を追加した（routing 用の
+`profile.skills` は不変）。`crates/celeris/tests/ui_ux_skills_delivery.rs` を新規に追加し、
+`config/skills/` を一時 KB に取り込み → `org.example.toml` から `ui-ux` の実効 profile を解決 →
+`task-worker` の配送関数（`deliver_claude_code` / `deliver_agents_md`）で実際に materialize するところまでを
+結合して確認した（LLM 呼び出しなし、外部ネットワークなし）。詳細は
+`docs/progress/ui-ux-skills.md` の「org 種の更新と結合試験」節。
+
+- 証拠: `cargo build --workspace --bins` → exit 0。`cargo test --workspace ui_ux_skills` → 4 試験バイナリ
+  （celeris / celerisctl / task-dispatch / task-ops）で計 12 passed / 0 failed。
+  `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+  `cargo test --workspace` → exit 0（120 試験バイナリすべて `test result: ok`、合計 3236 passed / 0 failed、
+  失敗・flake 無し）。
+- 既存の routing 試験（`example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering` 等）も
+  上記のフルスイートに含まれ通過を確認済み。
+- 未解決事項: なし。
+
+## ADR-0122 完了（ui-ux 外部 skills）
+
+完了日 2026-10-02。ADR-0122（外部 agent skill の vendoring・KB への取り込み・ui-ux への mount・quality gate の
+reviewer 配布）の D1〜D6 を実装し、`docs/adr/0122-ui-ux-external-skills.md` の状態欄を「採用・実装済み」に更新した。
+実装 commit: vendor-skills `d39733d8`、vet-skills `3cfdf69a`、adr `7ce72c5c`、skill-import `41e6324b`、
+review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
+
+- 証拠コマンド: `cargo test -p celeris --test ui_ux_skills_delivery`（結果の詳細は
+  `docs/progress/ui-ux-skills.md` を参照。config/skills → 一時 KB → ui-ux 実効 profile → worker 配送の結合試験が
+  全件 pass、routing 回帰試験も同じフルスイートで通過を確認済み）。
+- 未解決事項:
+  - 本番の KB 取り込み・ui-ux への mount は worker からは行わない。人が `docs/ops/ui-ux-external-skills.md` の
+    手順で実行する（ADR-0095 付記 D-d）。
+  - `web-design` の LICENSE 判断（LICENSE ファイルが無く README の License 節に拠っている点）は、より厳しい
+    基準を採るかどうかを人が判断する（ADR-0122 D6、`docs/progress/ui-ux-skills.md`）。
+- release/verify（work unit release-report、2026-10-02、HEAD `a58f68b5551b` = adr-status 統合後）:
+  - release.sh: sha12 a58f68b5551b exit 0（`CELERIS_STATE_DIR` を scratch に、`SD_USE_CALLER_CARGO_TARGET=1`
+    `SD_RELEASE_PRUNE=0`。worker sandbox から本番の `~/.local/celeris/releases` は読み取り専用なので、既定の
+    state dir では lock を作れず exit 1。gate.json ok=true: fmt / cargo-test（nextest 3236 passed・11 skipped・
+    doctest ok）/ clippy / source-size-report / build --release / pnpm install・typecheck・build / web の
+    install・typecheck・test・release がすべて exit 0。gui/ に変更が無いので pnpm-test・mobile-audit・e2e:mock は
+    skipped（base ea86af6307f8））。
+  - verify.sh: exit 0（verify.json ok=true live_ok=true。検査 1〜6 すべて true）。1 回目は worktree の
+    gui/ に devDependencies が無く検査 4b（gui-e2e）だけ「@playwright/test not found」で exit 1。
+    `pnpm install --offline --frozen-lockfile` 後の再実行で 4b も pass。本番の daemon・DB・config・systemd には
+    触れていない（DB は `mode=ro` の `.backup` を読むだけ）。
+  - `unshare -U -r true` → exit 0（この run の sandbox では user namespace を作れた）。
+
+### final review 失敗の再実行（work unit `rerun-dispatch`）
+
+2026-10-02 に、final review の `cargo test --workspace` で失敗した 2 件を単独で各 3 回実行し、続けて
+`cargo test -p task-dispatch --lib` を実行した。各試験の直前に取得した `uptime` の load average（1/5/15 分）も併記する。
+
+| 試験 | 回 | exit | passed | load average (1/5/15 分) |
+| --- | ---: | ---: | ---: | --- |
+| `cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation` | 1 | 0 | 1 | 20.82 / 23.28 / 20.88 |
+| 同上 | 2 | 0 | 1 | 21.93 / 23.41 / 20.99 |
+| 同上 | 3 | 0 | 1 | 19.55 / 22.85 / 20.84 |
+| `every_cargo_path_uses_the_scratch_target_dir` | 1 | 0 | 1 | 16.57 / 22.03 / 20.60 |
+| 同上 | 2 | 0 | 1 | 19.71 / 22.07 / 20.66 |
+| 同上 | 3 | 0 | 1 | 21.56 / 22.42 / 20.82 |
+| `cargo test -p task-dispatch --lib` | — | 0 | 503 | 15.65 / 20.14 / 20.15 |
+
+各単独実行はすべて 1 passed / 0 failed、lib 全体は 503 passed / 0 failed / 0 ignored。再現しなかったため、
+この再実行では `plan_issue` は発生していない。作業ブランチの起点 `6b49a92dd5d7` から HEAD までの
+`git diff --name-only` は空で、`review.rs`・review tests・`review_spawn` 周辺の skill 配布差分も無い。
+したがって、その変更は対象 2 試験の経路に触れていない。
+
+### land-main: 最新 main の統合と最終検査 — 2026-10-02
+
+main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した。ui-ux external skills の記録と CPU 負荷規則・planner 指針の記録を両方保持した。全ターゲット clippy で main 由来の `ui_ux_skills.rs` に型複雑度と不要な let-return の lint が見つかったため、型 alias と直接 return に整えた。
+
+- `git merge-base --is-ancestor 95ac16442f92 HEAD` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
+- `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。

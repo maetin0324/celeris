@@ -330,6 +330,7 @@ unit の spec に差し替えたもの）に深さ `d + 1` の閾値で gate を
 ### D9. replan / repair の再帰と、人に届くもの・届かないもの
 
 - **子の中の失敗は子が先に吸収する**: continuation・retry・repair・replan は各 task の中で今どおり（ADR-0072 D11 / D16 / D17）。
+  repair には段階 / task の許可範囲と範囲外差分の check を渡し、範囲外が原因の失敗は直さず `plan_issue` で上げる（ADR-0074 付記 2026-10-02）。
 - **子が `failed` になったら親が吸収する**: 親の unit は `failed` → 親の replan（ADR-0072 D17 の起点 1。起こした理由は「子 task <題名> が失敗: <分類と理由>」、
   planner の入力に子の最後の checkpoint の要約と最終レビューの不合格の理由を足す）。親の planner は子をやり直す（新しい key の task unit、目的を直して）・
   分ける・落とす、のどれかを新しい版で出す。子の done の成果（ブランチ）は捨てない。
@@ -1927,3 +1928,15 @@ R7 の 9 つ目。**migration なし**（schema 34 のまま）。新しい Even
 - reviewer の他の 2 つの不合格（ADR-0080 D3 の観測停止、P3-C の gate の未配線）は統合の欠落とは別の中身の指摘で、R7-9 は直さない
   （統合後の最終レビューで再び落ちれば、従来どおり replan / 人の判断）。
 - 統合をやり直しても、既に統合した unit の worktree の掃除は従来どおり（統合の成功で段階の WU の worktree を消す）。
+
+## 付記: R7-10: check の sh 構文・兄弟と衝突しない差分 check・葉の大きさ・web/docs task の cargo・受け入れ条件の範囲（2026-10-02）
+
+web の木の replan 24 回のうち 9 回が計画・check・条件の質に起因した（2026-10-01 調査）。P6-03 v3 では兄弟 unit の変更を除外しない差分 check が段階統合で失敗し、close-out では bash の substring 構文を `/bin/sh` が解釈できず `Bad substitution` になった。planner の check 指針を次のように補う。
+
+1. `/bin/sh`（dash）で実行する check に bash 専用構文（`${s:0:12}`、`[[ ]]`、配列など）を使わない。
+2. 範囲外差分 check は段階統合で兄弟 unit の差分とも比較されるため、その段の全 unit に許可されたパスを除外する。
+3. 葉は 1 run に収まる大きさに切り、記録や close-out の葉に実装作業を詰め込まない。
+4. `web/` または `docs/` だけを変更する unit/task では `cargo test --workspace` を必須にせず、`git diff --quiet $(git merge-base HEAD main) -- crates/` などで `crates/` に差分が無いことを確認する。Cargo の workspace check は daemon 側で行う。
+5. 受け入れ条件と差分 check の範囲には、計画が要求する ADR・記録の置き場所を最初から含める。
+
+この 5 規則を `PLANNER_CHECK_GUIDANCE` に加え、/2・/3 の planner prompt にそれぞれ 1 回だけ現れることをテストする。

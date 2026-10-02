@@ -1,7 +1,7 @@
 # celeris ワーカープロトコル v1/v2
 
-- 状態: Draft（Phase 0 初版、Phase 10 で v2 に拡張）。規範は `docs/DESIGN.md` §5.3 と [ADR-0003](../adr/0003-worker-protocol.md)、
-  v2 の追加分は [ADR-0016](../adr/0016-roles-and-delegation.md)（役割と委譲、実装メモ M3/M4/M8/M9）
+- 状態: Draft（Phase 0 初版、Phase 10 で v2 に拡張）。規範は `docs/DESIGN.md` §5.3 と [ADR-0003](../../agent-docs/adr/0003-worker-protocol.md)、
+  v2 の追加分は [ADR-0016](../../agent-docs/adr/0016-roles-and-delegation.md)（役割と委譲、実装メモ M3/M4/M8/M9）
 - JSON Schema: 正は隣の `worker-protocol.schema.json`（Phase 3 で `task-worker::protocol` の Rust 型から `schemars` で生成。`task-worker` のテスト `committed_schema_matches_generated` が一致を検証し、`UPDATE_SCHEMA=1 cargo test -p task-worker` で再生成する）。本文書 §7 の手書きスキーマは説明用の抜粋
 - **Phase 60a（ADR-0048 D2）**: `progress` 行に `kind` / `tool` / `summary` / `detail` / `truncated` /
   `error` を追加（§4.1）。`Event::WorkerProgress` にも同じ 6 つが載る。**追加のみ**なので

@@ -1367,3 +1367,48 @@ replan の経路（review_fail・人の decompose・`plan_invalid` の `replan` 
    `plan_invalid` の決定への `replan` の回答の後の planner、WU の run（D18 の既定と `WorkUnitSpec.budget`）。
 4. schema・migration・設定の変更は無い。WU の run の `max_turns` も D18 の意図どおり（`max(task, 30)` か WU の明示）になる（従来は
    task の値のまま）。
+
+## 付記: repair の objective に許可範囲と範囲外差分の check を渡す（2026-10-02）
+
+### 発端
+
+web の木（root 01M3QE4D330YESFT6FY8G50R12）で、web/ だけを変える task なのに段階の統合の check `cargo test --workspace` が
+crates/ の flaky / 環境依存のテストで落ち、自動 repair（`test_small`）が crates/ のテストを直し、その差分が範囲外差分の check
+（`git diff --name-only <base> -- ':!web'` が空であること等）に当たって段階が差し戻され、範囲外差分を戻すための葉を replan で足す、
+という連鎖が 4 回起きた（Phase 4 v3 / v4 / v5、P6-03 v4）。
+
+原因: `task_core::build_repair_objective`（`crates/task-core/src/execution.rs`）は失敗した検査の一覧・分類・`git diff --stat` と、
+task の objective の**先頭 600 文字**だけを渡す。task / 段階の許可範囲（変更してよいパス）も、範囲外差分の check も repair に届かない。
+repair は「失敗を直すことだけをせよ」とだけ言われ、失敗の原因が範囲の外にあっても範囲の外を直す。
+
+### 決定
+
+1. **`RepairScope` を任意引数で渡す**: `task_core::RepairScope { allowed_paths: Vec<String>, scope_checks: Vec<String> }`
+   （許可パスの一覧と、範囲外差分の check の cmd の一覧）を `build_repair_objective` の任意引数（`Option<&RepairScope>`）に足す。
+   範囲が与えられ、かつ空でなければ objective に次の 2 節を出す:
+   - `## 変更してよい範囲` — 許可パスを 1 行 1 件で並べる。
+   - `## 範囲外差分の検査` — 範囲外差分の check の cmd を 1 行 1 件で並べ、「直した後にこれも実行して exit を確かめよ」と書く。
+2. **範囲の集め方**（dispatcher が決定的に集める。LLM は使わない）:
+   - **段階統合の repair**（`phase_integration.rs` の `repair_scope_from_units`）: その段階（`unit.phase` が対象の phase と一致）の
+     unit のうち、`kind` が `Repair` でも `Integrate` でもないものの `context.paths` の和を許可パスとし、それらの unit の `checks` のうち
+     cmd に `git diff` を含むものを範囲外差分の check とする。
+   - **final review の repair**（`review_verdict.rs`）: task の全 unit（`kind` によるフィルタなし。既存の repair unit・`Integrate` unit も含む）の
+     `context.paths` の和を許可パスとし、それらの unit の `checks` のうち cmd に `git diff` を含むもの、**および** task の acceptance の
+     command check のうち cmd に `git diff` を含むものを合わせて範囲外差分の check とする。
+   - 許可パスも check も空でも `RepairScope`（`Some(&scope)`）は渡す。`build_repair_objective` 側が空の `RepairScope` では
+     2 節を出さないので、objective は従来とバイト単位で同じになる（「`None` を渡す」ではない）。
+   - 許可パス・check とも `BTreeSet` に集めて重複を除き、辞書順に並べる（unit の順・出現順ではない）。
+3. **範囲外が原因の失敗の指示文**: 範囲を渡したときは次の趣旨を objective に書く —「失敗の原因が許可範囲の外にある
+   （例: web/ だけの task での crates/ の flaky test・環境依存のテスト）なら、範囲外のファイルを変えるな。
+   `result.json` に `{"yield":{"plan_issue":"<何が範囲外のどこで落ちたか>"}}` を書いて終えよ」。`plan_issue` は既存の
+   `yield.plan_issue`（`WorkerYield.plan_issue`）をそのまま使い、replan / 人の判断に上げる経路（ADR-0072 D17）に乗る。
+   範囲外の失敗を repair が黙って直して範囲外差分の check で差し戻される往復をなくすのが目的で、flaky test そのものの修正は
+   別の task（範囲に crates/ を含むもの）で行う。
+4. **配送（`crates/celeris/src/delivery.rs`）の repair は範囲を渡さない**（`None`）: 配送の repair は main との merge-base のずれ等を直すもので、
+   task の許可範囲の概念が無い。従来どおり。
+
+### 残したもの
+
+- schema・migration・設定の変更は無い（`RepairScope` は objective の文字列を作るための引数だけで、保存しない）。
+- `context.paths` を書いていない計画では範囲が空になり、従来どおり（決定 2）。範囲外差分の check を書いていない計画も同じ。
+- repair が指示に従わず範囲外を変えた場合は、従来どおり範囲外差分の check（段階の統合の check / acceptance）が落として差し戻す。

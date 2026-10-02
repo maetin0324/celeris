@@ -7,8 +7,10 @@
 //! 文面をアダプタごとに複製しない）。生存監視（wall-clock・無出力タイムアウト・SIGTERM→SIGKILL）は
 //! `subprocess.rs` の低レベル部分を再利用する。
 
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -43,10 +45,8 @@ pub enum CodexResumeMode {
     ExperimentalResume,
 }
 
-/// `[adapters.codex] resume_bypass`（ADR-0054 Phase 112 D1）: `exec resume` の翻訳表
-/// （`translate_resume_extra_args`）で `-c key=value` に翻訳できなかった operator `extra_args` が
-/// 残ったときの扱い。既定は `Off`（従来どおり WARN で落とす）。`Dangerous` を明示設定した運用でだけ、
-/// 落とす代わりに `--dangerously-bypass-approvals-and-sandbox` を 1 回足す（意味が広すぎるので既定にはしない）。
+/// `[adapters.codex] resume_bypass`（ADR-0054 Phase 112 D1）。ADR-0095 D-b により、
+/// `Dangerous` の場合も rules の効力を確認できない bypass は行わず fresh run に戻す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CodexResumeBypass {
     #[default]
@@ -105,6 +105,102 @@ impl CodexAdapter {
     pub fn new(config: CodexConfig) -> Self {
         Self { config }
     }
+}
+
+/// ADR-0095 D-b: execpolicy は argv の接頭辞だけを照合する。書き込み先の保護は D-a の
+/// read-only bind に委ね、ここでは user manager へ直接つながるコマンドを拒否する。
+const SYSTEMD_DENY_PREFIXES: &[&[&str]] = &[
+    &["systemctl", "--user"],
+    &["systemctl", "--user-unit"],
+    &["systemd-run"],
+    &["loginctl"],
+    &["busctl", "--user"],
+    &["dbus-send", "--session"],
+];
+static RULES_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn systemd_deny_rules() -> String {
+    let mut rules =
+        String::from("# ADR-0095 D-b: worker runs must not manage the host user systemd.\n");
+    for prefix in SYSTEMD_DENY_PREFIXES {
+        let pattern = serde_json::to_string(prefix).expect("static rule tokens serialize");
+        rules.push_str(&format!(
+            "prefix_rule(pattern={pattern}, decision=\"forbidden\", justification=\"本番 host の操作は人が実行する手順として書く（ADR-0095 付記 D-d）\")\n"
+        ));
+    }
+    rules
+}
+
+/// Codex reads user rules from CODEX_HOME at startup. Resolve a relative CODEX_HOME against
+/// the child's cwd, matching the path that the child will use; the default is ~/.codex.
+fn codex_home(config: &CodexConfig, cwd: &Path) -> Result<PathBuf, AdapterError> {
+    let home = config
+        .env
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "CODEX_HOME")
+        .map(|(_, value)| std::ffi::OsString::from(value))
+        .or_else(|| {
+            (!config.env_remove.iter().any(|key| key == "CODEX_HOME"))
+                .then(|| std::env::var_os("CODEX_HOME"))
+                .flatten()
+        })
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex").into_os_string())
+        })
+        .ok_or_else(|| AdapterError::Other("CODEX_HOME and HOME are both unset".into()))?;
+    let home = PathBuf::from(home);
+    if home.as_os_str().is_empty() {
+        return Err(AdapterError::Other("CODEX_HOME is empty".into()));
+    }
+    Ok(if home.is_absolute() {
+        home
+    } else {
+        cwd.join(home)
+    })
+}
+
+async fn install_systemd_deny_rules(
+    config: &CodexConfig,
+    cwd: &Path,
+) -> Result<PathBuf, AdapterError> {
+    if config.extra_args.iter().any(|arg| {
+        arg == "--ignore-rules"
+            || arg.starts_with("--ignore-rules=")
+            || arg == "--dangerously-bypass-approvals-and-sandbox"
+    }) {
+        return Err(AdapterError::Other(
+            "codex --ignore-rules and --dangerously-bypass-approvals-and-sandbox are forbidden for worker runs (ADR-0095 D-b)".into(),
+        ));
+    }
+    let home = codex_home(config, cwd)?;
+    let rules_dir = home.join("rules");
+    tokio::fs::create_dir_all(&rules_dir).await?;
+    // Shared account homes can serve several runs at once. Never expose a partially written
+    // policy to another codex process starting during this write.
+    let sequence = RULES_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = rules_dir.join(format!(
+        ".celeris-deny.{}.{}.tmp",
+        std::process::id(),
+        sequence
+    ));
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await?;
+        file.write_all(systemd_deny_rules().as_bytes()).await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(&temporary, rules_dir.join("celeris-deny.rules")).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result?;
+    Ok(home)
 }
 
 #[async_trait]
@@ -369,6 +465,9 @@ async fn run_codex_once(
     let stderr_log_path_for_task = stderr_log_path.to_path_buf();
     let resume_id = resume_id.map(|s| s.to_string());
 
+    // Install on every spawn, including resume and a fresh retry after a failed resume.
+    let codex_home = install_systemd_deny_rules(config, req.cwd()).await?;
+
     let mut command = Command::new(&config.command);
     // CoS and standalone task workspaces need not be Git repositories.
     command.arg("exec");
@@ -471,21 +570,11 @@ async fn run_codex_once(
             );
         }
         if !translation.untranslatable.is_empty() {
-            if config.resume_bypass == CodexResumeBypass::Dangerous {
-                command.arg("--dangerously-bypass-approvals-and-sandbox");
-                tracing::info!(
-                    "run {run_id}: using --dangerously-bypass-approvals-and-sandbox on `exec \
-                     resume` for extra_args with no -c translation (resume_bypass = \"dangerous\"; \
-                     ADR-0054 Phase 112 D1): {:?}",
-                    translation.untranslatable
-                );
-            } else {
-                warn!(
-                    "run {run_id}: dropping codex extra_args on `exec resume` (no -c translation \
-                     known and resume_bypass is not configured; ADR-0054 Phase 112 D1): {:?}",
-                    translation.untranslatable
-                );
-            }
+            warn!(
+                "run {run_id}: dropping codex extra_args on `exec resume` (no -c translation \
+                 known; ADR-0054 Phase 112 D1): {:?}",
+                translation.untranslatable
+            );
         }
     } else {
         command.arg("--add-dir").arg(&req.artifacts_dir);
@@ -528,6 +617,7 @@ async fn run_codex_once(
     crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .envs(config.env.iter().cloned())
+        .env("CODEX_HOME", codex_home)
         .current_dir(req.cwd());
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
     let mut command = crate::db_guard::launch(command, config.container.as_deref());
@@ -728,20 +818,15 @@ async fn run_codex(
         .filter(|s| s.resume)
         .map(|s| s.session_id.clone());
     // ADR-0054 Phase 112 D2: if this would go through the `exec resume` whitelist (Phase 68c) and
-    // the operator's `extra_args` have flags D1 can't translate to `-c key=value` (and no
-    // `resume_bypass` is configured to cover them), don't even attempt resume — a resumed thread
-    // that silently loses its approval/sandbox settings can end up permanently read-only. Give up on
-    // resume and run fresh instead (fresh gets the full, untranslated `extra_args`; D1 is preferred
-    // whenever its translation is complete).
+    // the operator's `extra_args` have flags D1 can't translate to `-c key=value`, start fresh.
+    // ADR-0095 D-b also disables the formerly allowed dangerous bypass: its effect on execpolicy
+    // cannot be verified here, so no resumed process may receive that flag.
     let resume_id = if resume_id.is_some() && config.resume_mode == CodexResumeMode::ExecResume {
         let translation = translate_resume_extra_args(&config.extra_args);
-        if !translation.untranslatable.is_empty()
-            && config.resume_bypass != CodexResumeBypass::Dangerous
-        {
+        if !translation.untranslatable.is_empty() {
             warn!(
                 "run {run_id}: skipping `exec resume` and starting a fresh codex session instead \
-                 (extra_args {:?} have no -c translation for `exec resume` and resume_bypass is \
-                 not configured; ADR-0054 Phase 112 D2)",
+                 (extra_args {:?} have no -c translation for `exec resume`; ADR-0095 D-b)",
                 translation.untranslatable
             );
             None

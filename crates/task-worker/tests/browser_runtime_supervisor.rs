@@ -326,6 +326,7 @@ fn controller_main() {
     }
     argv.push("about:blank".into());
     let spec = RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"),
         session_id: format!("sup-{mode}"),
         session_dir: session_dir.clone(),

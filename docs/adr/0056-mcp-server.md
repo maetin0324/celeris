@@ -468,3 +468,10 @@ MCP へ task 操作のツールと scope、`celerisctl mcp call` を足す）
 `console_instruct` / `task_comment` が通ること、`GET /mcp/clients?client=chatgpt-rdc` に
 Phase 101 で発行したクライアントの監査行（`mcp_calls`）が残ること）。認証・ネットワークが使える環境の
 人（またはエージェント）が、RDC の専用ユーザーを用意したうえで実行し、結果を同節に追記すること。
+
+## 付記: ADR-0127（2026-10-02。codex・acp への skill の届け方）
+
+Phase 79 / Phase 81 追記の「codex は `AGENTS.md` に、acp は前置きに `SKILL.md` の本文を埋め込む」
+「`.celeris/skills.json` は `.claude/skills/` だけを掃除する」は、ADR-0127
+（`docs/adr/0127-skills-native-delivery.md`）で置き換える: codex・acp は `<cwd>/.agents/skills/<name>/` に
+ディレクトリごと写し、`AGENTS.md`・前置きには名前・説明・`SKILL.md` のパスの一覧だけを置く。

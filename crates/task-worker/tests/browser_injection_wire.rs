@@ -10,6 +10,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -153,6 +154,42 @@ fn now() -> u64 {
         .expect("clock")
         .as_secs()
 }
+
+#[test]
+fn delayed_cdp_page_target_response() {
+    // A scripted browser holds the response past the production five-second poll.
+    // This exercises the same Target.createTarget path without a user namespace.
+    let (controller, mut browser) = UnixStream::pair().expect("CDP pipe pair");
+    let read = std::fs::File::from(std::os::fd::OwnedFd::from(
+        controller.try_clone().expect("CDP read clone"),
+    ));
+    let write = std::fs::File::from(std::os::fd::OwnedFd::from(controller));
+    let responder = thread::spawn(move || {
+        let mut command = Vec::new();
+        loop {
+            let mut byte = [0];
+            browser.read_exact(&mut byte).expect("CDP command byte");
+            if byte[0] == 0 {
+                break;
+            }
+            command.push(byte[0]);
+        }
+        let request: Value = serde_json::from_slice(&command).expect("CDP command");
+        assert_eq!(request["method"], "Target.createTarget");
+        thread::sleep(Duration::from_secs(6));
+        let response = json!({"id":request["id"],"result":{"targetId":"delayed-page"}});
+        let mut bytes = serde_json::to_vec(&response).expect("CDP response");
+        bytes.push(0);
+        let _ = browser.write_all(&bytes);
+    });
+    let mut cdp = CdpController::new(write, read);
+    cdp.response_timeout_for_test(Duration::from_secs(30));
+    let target = cdp
+        .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
+        .expect("delayed page target");
+    assert_eq!(target["result"]["targetId"], "delayed-page");
+    responder.join().expect("scripted browser");
+}
 fn control(root: &tempfile::TempDir, value: Value) {
     let socket = root.path().join("run/celeris-credentiald/control.sock");
     let reply = ipc::call(&socket, value.to_string().as_bytes()).expect("control call");
@@ -285,6 +322,7 @@ fn inner() {
     );
     argv.insert(1, browser.clone().into_os_string());
     let spec = RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"),
         session_id: "wire-sink".into(),
         session_dir: session.path().to_path_buf(),
@@ -307,6 +345,34 @@ fn inner() {
         rt.cdp_write.take().expect("CDP write"),
         rt.cdp_read.take().expect("CDP read"),
     );
+    cdp.response_timeout_for_test(Duration::from_secs(30));
+    let ready_deadline = Instant::now() + Duration::from_secs(60);
+    let mut last_reply = String::from("no CDP response yet");
+    loop {
+        if !rt.is_running() || Instant::now() >= ready_deadline {
+            let running = rt.is_running();
+            let bwrap_status = std::fs::read_to_string(format!("/proc/{}/status", rt.bwrap_pid()))
+                .unwrap_or_else(|error| format!("unavailable: {error}"));
+            let inner_status = std::fs::read_to_string(format!("/proc/{}/status", rt.inner_pid()))
+                .unwrap_or_else(|error| format!("unavailable: {error}"));
+            rt.kill();
+            let stderr = rt.wait_stderr(Duration::ZERO);
+            panic!(
+                "browser CDP not ready: running={running}, last reply={last_reply}, bwrap={bwrap_status}, sandbox init={inner_status}, stderr={stderr}"
+            );
+        }
+        match cdp.agent_command("Browser.getVersion", json!({}), None) {
+            Ok(reply)
+                if reply["result"]["product"].is_string()
+                    && reply["result"]["protocolVersion"].is_string() =>
+            {
+                break;
+            }
+            Ok(reply) => last_reply = format!("invalid Browser.getVersion response: {reply}"),
+            Err(error) => last_reply = format!("Browser.getVersion: {error:?}"),
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
     let created = cdp
         .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
         .expect("page target");

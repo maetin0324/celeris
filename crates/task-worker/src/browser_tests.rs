@@ -79,6 +79,7 @@ fn request(workspace: &Path) -> RunRequest {
     let bin = exe.parent().unwrap().parent().unwrap();
     configure_isolated_runtime(IsolatedBrowserConfig {
         live_sessions: None,
+        runtime: Default::default(),
         resolver: Some("127.0.0.1".parse().unwrap()),
         record_dir: std::env::temp_dir()
             .join(format!("celeris-browser-unit-{}", std::process::id())),
@@ -456,6 +457,7 @@ fn released_ledger_still_refuses_unconformant_backend_and_unisolated_runtime() {
     }
     let unisolated = |bwrap: &str| IsolatedBrowserConfig {
         live_sessions: None,
+        runtime: Default::default(),
         resolver: Some("127.0.0.1".parse().unwrap()),
         record_dir: temp.path().join("records"),
         bwrap: bwrap.into(),
@@ -1607,6 +1609,7 @@ async fn missing_egress_resolver_inner() {
     let bin = exe.parent().unwrap().parent().unwrap();
     configure_isolated_runtime(IsolatedBrowserConfig {
         live_sessions: None,
+        runtime: Default::default(),
         resolver: None,
         record_dir: temp.path().join("records"),
         bwrap: "/usr/bin/bwrap".into(),
@@ -1851,6 +1854,7 @@ print(json.dumps({{'success': True, 'data': {{}}}}))
     let bin = exe.parent().unwrap().parent().unwrap();
     configure_isolated_runtime(IsolatedBrowserConfig {
         live_sessions: None,
+        runtime: Default::default(),
         resolver: Some("127.0.0.1".parse().unwrap()),
         record_dir: temp.path().join("records"),
         bwrap: "/usr/bin/bwrap".into(),

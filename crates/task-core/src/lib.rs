@@ -2,7 +2,7 @@
 //! DESIGN.md §4-§5.1 のスコープ。LLM呼び出し・サブプロセス起動は行わない（ADR-0001 D2）。
 
 pub mod delivery;
-pub use delivery::{Delivery, DeliveryState, DeliveryStore};
+pub use delivery::{Delivery, DeliverySkipReason, DeliveryState, DeliveryStore};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
@@ -195,8 +195,8 @@ pub use execution::{
     CHECKPOINT_SCHEMA, Checkpoint, CheckpointArtifactRef, CheckpointContext, CheckpointDecision,
     CheckpointEnd, CheckpointFileChange, CheckpointKnownFailure, CheckpointSource,
     CheckpointTestRun, ContinueWhy, FailedCheck, HarnessErrorClass, MechanicalCheckpoint,
-    RepairClass, RepairDecision, RepoState, ReviewRepairHint, ReviewerRepairKind, RunEnd,
-    WorkerCheckpointInput, build_repair_objective, checkpoint_shows_progress,
+    RepairClass, RepairDecision, RepairScope, RepoState, ReviewRepairHint, ReviewerRepairKind,
+    RunEnd, WorkerCheckpointInput, build_repair_objective, checkpoint_shows_progress,
     classify_review_failure, looks_like_context_exceeded, merge_checkpoint,
     parse_worker_checkpoint, truncate_checkpoint,
 };

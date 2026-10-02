@@ -18,7 +18,7 @@ use task_core::browser_isolation::{
     IsolationAttestation, IsolationViolation, LiveIsolation, LiveSessionEntry, LiveSessionRegistry,
     LiveSessions, RuntimeKind,
 };
-use task_worker::browser_runtime::RuntimeSpec;
+use task_worker::browser_runtime::{RuntimeSpec, UsernsMode};
 use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 
 const ORIGIN: &str = "https://app.example";
@@ -78,6 +78,7 @@ fn launch(session: &Path, id: &str, registry: &Arc<LiveSessions>) -> Supervisor 
         argv: argv.into_iter().collect::<Vec<OsString>>(),
         cdp_pipe: true,
         egress: None,
+        userns: UsernsMode::Unshare,
     };
     let mut opts = SupervisorOptions::new(session.join("records"));
     opts.registry = Some(Arc::clone(registry));

@@ -534,6 +534,7 @@ version = "0.1.0"
 dependencies = [
  "ring",
  "serde_json",
+ "socket2 0.5.10",
  "task-core",
  "tempfile",
  "time",
@@ -2150,6 +2151,7 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
+ "toml",
  "tracing",
  "url",
  "zeroize",

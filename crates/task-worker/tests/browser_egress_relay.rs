@@ -320,6 +320,7 @@ fn launch(session: &Path, proxy: PathBuf, argv: Vec<OsString>) -> IsolatedRuntim
     let mut full = vec![sandboxd.clone().into_os_string()];
     full.extend(argv);
     IsolatedRuntime::launch(&RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"),
         session_id: "relay-test".into(),
         session_dir: session.to_path_buf(),

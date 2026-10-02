@@ -1,6 +1,9 @@
 //! `[handoff]`（ADR-0040 D4）と `[selfdeploy]`（ADR-0040 D6 / ADR-0045 D2）: 昇格とリリースの置き場。
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use serde::Deserialize;
 
@@ -50,6 +53,9 @@ pub struct SelfdeployConfig {
     /// ADR-0051: 自動取り込みを許可する自己改善案件。空なら無効。
     #[serde(default)]
     pub delivery_projects: Vec<String>,
+    /// ADR-0121 D1: project ID to fallback department ID.
+    #[serde(default)]
+    pub delivery_default_departments: BTreeMap<String, String>,
     #[serde(default = "default_releases_dir")]
     pub releases_dir: PathBuf,
     /// ADR-0041 D3: **作業チェックアウト**の場所（`~/workspace/agent-platform`）。
@@ -64,6 +70,12 @@ pub struct SelfdeployConfig {
     /// ADR-0051 Phase 106追記: push先のリモート名。
     #[serde(default = "default_selfdeploy_push_remote")]
     pub push_remote: String,
+    /// ADR-0095 付記 D-c: `promote.sh` の起こし方（`task_worker::detach::resolve_detach_launcher`
+    /// にそのまま渡す）。`"auto"` / `"systemd-run"` / `"inline"`。既定は `"auto"`（本番の挙動は
+    /// 変えない）。テストはここを `"inline"` に固定して、実行環境に `systemd-run` があっても
+    /// 本物の user systemd bus に触れないようにする。
+    #[serde(default = "default_selfdeploy_detach")]
+    pub detach: String,
 }
 
 impl Default for SelfdeployConfig {
@@ -71,9 +83,11 @@ impl Default for SelfdeployConfig {
         Self {
             releases_dir: default_releases_dir(),
             delivery_projects: Vec::new(),
+            delivery_default_departments: BTreeMap::new(),
             repo: default_selfdeploy_repo(),
             push: default_selfdeploy_push(),
             push_remote: default_selfdeploy_push_remote(),
+            detach: default_selfdeploy_detach(),
         }
     }
 }
@@ -95,6 +109,10 @@ fn default_selfdeploy_repo() -> PathBuf {
     PathBuf::from("~/workspace/agent-platform")
 }
 
+fn default_selfdeploy_detach() -> String {
+    "auto".to_string()
+}
+
 impl SelfdeployConfig {
     /// ADR-0040 D6 / ADR-0045 D2: `[selfdeploy] releases_dir` は `~` を展開し、相対なら設定ファイルの
     /// ディレクトリ基準（既定の `~/.local/celeris/releases` もここで絶対パスになる）。
@@ -114,6 +132,15 @@ impl SelfdeployConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self
+            .delivery_default_departments
+            .keys()
+            .any(|id| id.parse::<task_core::ProjectId>().is_err())
+        {
+            return Err(ConfigError::Invalid(
+                "delivery_default_departments keys must be project IDs".into(),
+            ));
+        }
         if !self.delivery_projects.is_empty()
             && (self
                 .delivery_projects
@@ -127,6 +154,11 @@ impl SelfdeployConfig {
         if self.push_remote.trim().is_empty() {
             return Err(ConfigError::Invalid(
                 "[selfdeploy] push_remote must not be blank".into(),
+            ));
+        }
+        if !matches!(self.detach.as_str(), "auto" | "systemd-run" | "inline") {
+            return Err(ConfigError::Invalid(
+                "[selfdeploy] detach must be \"auto\", \"systemd-run\" or \"inline\"".into(),
             ));
         }
         Ok(())

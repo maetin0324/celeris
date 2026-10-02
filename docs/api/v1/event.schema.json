@@ -1207,6 +1207,23 @@
       ],
       "type": "string"
     },
+    "DeliverySkipReason": {
+      "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
+      "enum": [
+        "multiple_repos",
+        "no_marker",
+        "marker_repo_mismatch",
+        "repo_row_missing",
+        "repo_not_local",
+        "repo_path_mismatch",
+        "not_git",
+        "no_branch",
+        "branch_name_mismatch",
+        "refs_unresolvable",
+        "department_unresolved"
+      ],
+      "type": "string"
+    },
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
@@ -2796,6 +2813,34 @@
             "type",
             "plan_id",
             "reasons"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0121 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない\n監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "head": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/DeliverySkipReason"
+            },
+            "type": {
+              "const": "delivery_skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "detail"
           ],
           "type": "object"
         },

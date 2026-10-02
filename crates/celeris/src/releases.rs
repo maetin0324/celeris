@@ -50,11 +50,14 @@ pub struct FsReleases {
     root: PathBuf,
     /// `[selfdeploy] repo`（作業チェックアウト）。`on_main` を出すためだけに読む。
     repo: PathBuf,
+    /// `[selfdeploy] detach`（ADR-0095 付記 D-c）: `promote.sh` の起こし方。`"auto"` / `"systemd-run"` /
+    /// `"inline"`。`start_promote` にそのまま渡す。
+    detach: String,
 }
 
 impl FsReleases {
-    pub fn new(root: PathBuf, repo: PathBuf) -> Self {
-        Self { root, repo }
+    pub fn new(root: PathBuf, repo: PathBuf, detach: String) -> Self {
+        Self { root, repo, detach }
     }
 
     pub fn root(&self) -> &Path {
@@ -77,7 +80,7 @@ impl ReleaseSource for FsReleases {
     }
 
     fn promote(&self, sha12: &str) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
-        start_promote(&self.root, sha12)
+        start_promote(&self.root, sha12, &self.detach)
     }
 
     /// ADR-0044 D5（Phase 53）: タスクのブランチにだけ載っているコミットの sha。
@@ -559,9 +562,10 @@ fn promote_exec_command(
 pub fn start_promote(
     root: &Path,
     sha12: &str,
+    detach: &str,
 ) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
     let launcher = task_worker::detach::resolve_detach_launcher(
-        "auto",
+        detach,
         task_worker::detach::systemd_run_on_path(),
         task_worker::detach::xdg_runtime_dir_is_set(),
     );

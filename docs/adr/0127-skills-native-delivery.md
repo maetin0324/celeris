@@ -3,7 +3,7 @@ tasks: [01M3YBGM6RBZXG39YM2XDRZX0K]
 ---
 # ADR-0127: mount した skill を codex・acp（opencode）にもディレクトリごと届け、段階的に読ませる
 
-- 状態: 採用（実装前）
+- 状態: 実装済み（LLM による付属ファイル読込の実証は環境制約で未完。2026-10-02）
 - 日付: 2026-10-02
 - 位置づけ: **ADR-0056（D3: skills を run に届ける）の付記**。ADR-0056 Phase 79 / Phase 81 追記の
   「codex は `AGENTS.md` に本文を埋め込む、acp は前置きに本文を埋め込む」「マーカー
@@ -263,7 +263,8 @@ LLM は呼んでいない（どちらも「一覧を出す」デバッグ用サ�
   `unshare -rn opencode debug skill` に 4 件の location が出ること。どちらも `HOME`・`CODEX_HOME`・`XDG_*` を一時ディレクトリに向ける。
 - LLM を呼ぶ実機確認（real-run。ADR-0009 P-34、使える環境で codex・opencode 各 1 回）: 付属ファイルにだけ書いた合言葉を
   持つ skill を mount し、合言葉を答えさせて付属ファイルまで読まれたことを確かめる。codex の CODEX_HOME は run 専用の一時
-  ディレクトリにし（人の回答 2026-10-02）、本番 account の設定に書き込まない（認証ファイルは読むだけ）。証跡は `docs/PROGRESS.md`。
+  ディレクトリにし（人の回答 2026-10-02）、本番 account の設定に書き込まない（認証ファイルは読むだけ）。証跡と
+  環境が使える場所での再実行手順は `docs/progress/phase-skills-progressive.md`、要約は `docs/PROGRESS.md` に記録する。
 
 ## 4. 採らなかった案
 

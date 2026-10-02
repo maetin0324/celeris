@@ -2,6 +2,12 @@
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
+## codex・opencode への skill の付属ファイルと段階的な読み込み
+
+- 実装・記録完了日: 2026-10-02。[ADR-0127](adr/0127-skills-native-delivery.md) は実装済みに更新。codex・acp では mount した skill を `.agents/skills/` に付属ファイルごと届け、`AGENTS.md`・前置きは一覧だけにした。実機の記録と再実行手順は [phase-skills-progressive.md](progress/phase-skills-progressive.md)。
+- 検査: `cargo test -p task-worker --lib skills` → 31 passed、`cargo test -p task-worker --lib --no-run` → exit 0、`cargo test -p celeris --test ui_ux_skills_delivery` → 4 passed、`cargo fmt --all -- --check` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- 未解決: codex の実 LLM は skill を使う判断まで記録したが、bubblewrap の socket ディレクトリ検査で `SKILL.md` と付属ファイルを読めなかった。opencode は `debug skill` で検出したが、一時 HOME に認証が無く LLM は起動していない。worker sandbox では user namespace を使う実 runtime 試験も走らせられない。付属ファイルの LLM 読込は手順に従う環境で再確認が必要。
+
 ## 試験で CPU を焼く負荷をかけない規則（2026-10-02、task 01M3Y4AV7801NSXB6FD698QZHW、WorkUnit rule-docs）
 
 - 完了日: 2026-10-02。`CLAUDE.md`「作業の進め方」に規則を 1 行追加、[docs/testing.md](testing.md) を新設（禁止の理由と、時計の差し替え・出来事待ち・SIGSTOP/SIGCONT・遅延フックの 4 方法を既存試験の例つきで記載。`tokio::time::pause` はリポジトリに例が無く擬似例）。`scripts/dev/stress-e2e-phase3.sh` を `git rm`、`docs/progress/phase-browser.md` と本ファイルの実行案内を削除の一文に置換（過去の結果行は残す）。

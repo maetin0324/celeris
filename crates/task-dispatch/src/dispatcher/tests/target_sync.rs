@@ -46,7 +46,7 @@ fn check_snapshot(store: &Arc<dyn TaskStore>, task: &Task, target: &str, head: &
 }
 
 #[tokio::test]
-async fn target_sync_root_reviews_the_rebased_sha() {
+async fn target_sync_pre_review_sync_root_reviews_the_rebased_sha() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
@@ -82,7 +82,7 @@ async fn target_sync_root_reviews_the_rebased_sha() {
 }
 
 #[tokio::test]
-async fn target_sync_tree_child_uses_parent_branch() {
+async fn target_sync_pre_review_sync_tree_child_uses_parent_branch() {
     let repo = tempfile::tempdir().unwrap();
     let base = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
@@ -157,7 +157,7 @@ async fn target_sync_tree_child_uses_parent_branch() {
 }
 
 #[tokio::test]
-async fn target_sync_conflict_stops_review_and_preserves_branch() {
+async fn target_sync_pre_review_sync_conflict_stops_review_and_preserves_branch() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
@@ -199,7 +199,7 @@ async fn target_sync_conflict_stops_review_and_preserves_branch() {
 }
 
 #[tokio::test]
-async fn target_sync_remote_records_skip_without_local_git() {
+async fn target_sync_pre_review_sync_remote_records_skip_without_local_git() {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = remote_task(ws.path(), None, Vec::new());

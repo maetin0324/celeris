@@ -147,10 +147,39 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 `cargo test -p e2e --test api_scenarios phase3_` をそのまま繰り返し・並走させるだけ）。収束前 takeover の
 `not_converged` 拒否・競合の `not_lease_holder` 拒否・`cancel` での停止という試験の意図は変更していない。
 
-### stress-verify run 01M3XVJ3Y7R5H0MX9AK3BXRNZH の追記
+### stress-verify run 01M3XVJ3Y7R5H0MX9AK3BXRNZH の追記（修正済み）
 
-2026-10-02 の再確認では `time sh scripts/dev/stress-e2e-phase3.sh` が exit 1（real 43.217s）となった。
-CPU 負荷 24 本と `task-dispatch` のバックグラウンド test を起動した後、phase3 の serial 1 回目で 4 試験すべてが
-`target/debug/celerisctl not found; run cargo test --workspace` により失敗した。`cargo test ... --no-run` は e2e の試験
-バイナリしか生成せず、fixture が起動する `celerisctl` を用意しないため、受け入れ条件の確認には至っていない。
-スクリプト実行の `EXIT` trap 後に負荷プロセスが残っていないことを確認した。この失敗を受けて追加修正・再実行はしていない。
+2026-10-02 の再確認では `time sh scripts/dev/stress-e2e-phase3.sh` が exit 1（real 43.217s）となった。原因は
+`cargo test -p e2e --test api_scenarios phase3_ --no-run` が e2e の試験バイナリしか生成せず、fixture が起動する
+`target/debug/celeris` / `celerisctl` を用意しないため、まっさらな target では全試験が `celerisctl not found` で
+落ちることだった。
+
+### fix-stress-build WorkUnit（01M3XSER5YCVRWJTCHP0XGB8AP）での実行結果
+
+人の介入（2026-10-02 09:15）で共用 host の CPU 負荷を抑えるため、台本の既定を焼き 2 本・300 秒・serial 5 回・
+parallel 2 本にした（以前は `nproc` 本・20 回・8 並列で、他 task の検査を落とす load 65 を作っていた）。焼き本数は
+`STRESS_E2E_PHASE3_PARALLEL` で上書き可能で、並走させる e2e の数も同じ値を使う。台本内で CPU 数を数えるコマンドは
+使っていない。全負荷・並走 e2e は `nice -n 19` で起動し、task-dispatch の背景 cargo 負荷は既定で無効（
+`STRESS_E2E_PHASE3_CARGO_LOAD=1` のときだけ有効）にした。負荷の background shell は `trap - EXIT INT TERM` で
+親の `EXIT` trap を外すようにし、親の `WORK_DIR` を消す寿命競合を無くした。workspace bin の build は serial loop
+より前に置いた。
+
+検証前の `unshare -U -r true` は exit 0（この run の sandbox では user namespace 作成が許可されている）。
+指定された一度だけの既定 stress 実行 `time sh scripts/dev/stress-e2e-phase3.sh`（環境変数での上書きなし）は
+exit 0。workspace bin の build は事前に完了済みのため追加ビルドなし、serial 5/5・parallel 2/2 すべて ok、
+実行後 `ps aux` で CPU 焼きプロセス（`while :; do :; done`）が残っていないことを確認した。`time` の実測は
+real 16.970s（user 39.684s、sys 6.427s）。
+
+stress-e2e-phase3 結果: exit 0（serial 5/5、parallel 2、real 16.970s）
+
+### 人に依頼する重い負荷の検証
+
+user namespace が使える専用環境で、焼き本数と時間を増やして一度に検証する。例:
+
+```sh
+STRESS_E2E_PHASE3_PARALLEL=8 STRESS_E2E_PHASE3_LOAD_SECONDS=1800 STRESS_E2E_PHASE3_ITERATIONS=20 time sh scripts/dev/stress-e2e-phase3.sh
+```
+
+`exit 0` と `all 8 concurrent processes: ok` を確認する。必要なら別途 `STRESS_E2E_PHASE3_CARGO_LOAD=1` を付けて
+task-dispatch の cargo 負荷も有効にする。これは CPU を長時間使うため、共用 host では実行せず、専用または空いている
+環境で行う。

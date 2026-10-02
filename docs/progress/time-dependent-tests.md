@@ -6,7 +6,7 @@ tasks: [01M3Y4FZD5HH800XATG3K5KQ28]
 
 方式の記号は [ADR-0125](../adr/0125-deterministic-time-tests.md) に従う。(a) 注入時計・停止時計、(b) 状態または event の到着待ち、(c) `SIGSTOP` / `SIGCONT` による競合の固定、(d) 試験専用の同期フック。待機上限は成功条件ではなく異常時の保険とする。
 
-## 対象の 5 試験
+## 対象の 6 試験
 
 ### `a_wait_parks_the_task_polls_and_resumes_as_a_continuation`
 
@@ -37,6 +37,13 @@ tasks: [01M3Y4FZD5HH800XATG3K5KQ28]
 - ファイル: `crates/task-worker/tests/browser_runtime_isolated.rs`
 - 原因: controller kill 後の PID 生存判定に subreaper 配下の zombie が混ざり得る。ただし現コードは既に `/proc/<pid>/stat` の `Z` / `X` と starttime を区別するため、再発時は state を確認して実生存と分ける。info-fd 報告と `PR_SET_PDEATHSIG` 準備の間にも競合窓がある。
 - 方式: **(c) + (d)、終了判定は (b)**。準備境界を試験用フックで露出し stutter で順序を固定する。controller 終了後に同一 process の消滅または zombie 化を確認し、PID / starttime / PPid を診断する。明示的な isolation skip 規則は維持する。詳細とフック点は [ADR-0125 §5](../adr/0125-deterministic-time-tests.md#5-controller_kill_leaves_no_runtime_processes)。
+
+### `tick_prunes_the_oldest_terminal_workspace_and_records_an_event`
+
+- ファイル: `crates/task-dispatch/src/dispatcher/tests/cleanup_and_disk.rs`
+- 原因: `prune_one_workspace` は削除を別スレッドに逃がし、削除が終わってから `store.append_event` で `WorkspacePruned` を積む（housekeeping.rs 435-477 行）。元の試験は `tick()` 後に「`target/` が消えるまで」だけを `for _ in 0..100 { … sleep(20ms) }`（約 2 秒）で待ち、その直後に `events_for` を読んでいた。削除とイベント追記は別の処理なので、高負荷で `target/` の unlink は終わっていてもイベントの store 書き込み（sqlite の lock 取得含む）がまだ終わっていない窓があり、`cleanup_and_disk.rs:97` の assert が先に落ちる（2026-10-02 に他 task の統合検査で再現）。
+- 方式: **(b)**。固定回数ループを削除し、`target/` の消滅と `store.events_for` に期待の `WorkspacePruned { removed: ["repos/benchfs/target"] }` が現れることの両方を 1 つの待ちループで確認する（`wait_for_prune`）。[`STATE_WAIT_GUARD`]（60 秒）を壊れたときに止まる保険にし、超えたら `panic!` で `target_dir.exists()` と現在の `events` を出す。`target/` 消滅・repo dir 残存・`removed` の中身の assert は元のまま弱めていない。
+- `workspace_prune_after_secs_zero_disables_pruning`（同 file）の 50ms sleep は直さない: `workspace_prune_after_secs == 0` のとき `prune_one_workspace` は削除スレッドを一切立てずに即 return する（housekeeping.rs の `if ... == 0 { return; }`）ので、待っても届かない非同期処理が無く、負荷で偽の失敗を生む経路がない。
 
 ## その他の一覧
 

@@ -591,8 +591,6 @@ fn nfs_check_disables_scratch_with_a_reason() {
     let got = apply_nfs_check(s.clone(), |_| Ok(true));
     assert!(!got.enabled);
     assert!(got.disabled_reason.unwrap().contains("NFS"));
-    let got = apply_nfs_check(s.clone(), |p| Ok(p.ends_with(L1_DIR)));
-    assert!(!got.enabled);
     let got = apply_nfs_check(s.clone(), |_| Ok(false));
     assert!(got.enabled);
     // 本物の検査は一時ディレクトリ（ローカル）では NFS ではない。
@@ -671,389 +669,47 @@ fn measure_tree_counts_blocks_and_latest_mtime() {
     assert_eq!(measure_tree(&tmp.path().join("missing")).unwrap().0, 0);
 }
 
-/// テスト用の sccache のバイナリ（実行ビットつきの空の script。呼ばれない）。
-fn fake_sccache(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = dir.join("tools/sccache/bin/sccache");
-    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    bin
-}
-
-fn sccache_settings(dir: &Path, binary: PathBuf) -> ScratchSettings {
-    ScratchSettings {
-        l1_max_bytes: 40 * GIB,
-        sccache: SccacheSettings {
-            enabled: true,
-            binary,
-            server_port: 4236,
-        },
-        ..ScratchSettings::with_dir(dir.join("scratch"))
-    }
-}
-
-/// ADR-0075 D4 / G2 受け入れ条件 2: server が応答するとき、env は `CARGO_TARGET_DIR`・`[scratch.cargo]`・sccache 系を
-/// 固定の順で全部持ち、何度組んでも同じ。wrapper は `<scratch>/bin/sccache`（cc-rs が認める名前）で、
-/// `CARGO_TARGET_DIR` を外して本物の sccache を exec する。
+/// ADR-0129 (1): env は `CARGO_TARGET_DIR` と `[scratch.cargo]` だけを固定の順で持ち、`RUSTC_WRAPPER` / `SCCACHE_*`
+/// を足さない（compiler wrapper は host の cargo 設定に任せる）。
 #[test]
-fn sccache_env_is_complete_and_stable() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bin = fake_sccache(tmp.path());
-    let settings = sccache_settings(tmp.path(), bin.clone());
+fn cargo_env_is_target_and_tuning_only() {
+    let root = PathBuf::from("/scratch");
+    let settings = ScratchSettings::with_dir(&root);
     let owner = Owner::work_unit("01TASK", "01WU");
-    let up = |p: u16| p == 4236;
-    let state = resolve_sccache(&settings, up);
-    let root = tmp.path().join("scratch");
-    let wrapper = root.join("bin/sccache");
-    assert_eq!(
-        state,
-        SccacheState::Ready {
-            wrapper: wrapper.clone()
-        }
-    );
-    let env = cargo_env_with(&settings, &owner, &state);
-    let s = |p: PathBuf| p.display().to_string();
+    let env = cargo_env(&settings, &owner);
     assert_eq!(
         env,
         vec![
             (
                 "CARGO_TARGET_DIR".to_string(),
-                s(root.join("targets/task-01TASK/wu-01WU/target"))
+                root.join("targets/task-01TASK/wu-01WU/target")
+                    .display()
+                    .to_string()
             ),
             ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
             (
                 "CARGO_PROFILE_DEV_DEBUG".to_string(),
                 "line-tables-only".to_string()
             ),
-            ("RUSTC_WRAPPER".to_string(), s(wrapper.clone())),
-            ("SCCACHE_DIR".to_string(), s(root.join("sccache-l1"))),
-            ("SCCACHE_CACHE_SIZE".to_string(), "40G".to_string()),
-            ("SCCACHE_SERVER_PORT".to_string(), "4236".to_string()),
-            ("SCCACHE_IDLE_TIMEOUT".to_string(), "0".to_string()),
         ]
     );
-    // 何度組んでも同じ（wrapper は書き直さない）。
-    let before = mtime(&wrapper);
-    let again = cargo_env_with(&settings, &owner, &resolve_sccache(&settings, up));
-    assert_eq!(env, again);
-    assert_eq!(mtime(&wrapper), before);
-    let script = std::fs::read_to_string(&wrapper).unwrap();
-    assert!(script.starts_with("#!/bin/bash\n"), "{script}");
     assert!(
-        script.contains("unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR"),
-        "{script}"
+        !env.iter()
+            .any(|(k, _)| k.starts_with("SCCACHE_") || k.contains("RUSTC_WRAPPER")),
+        "{env:?}"
     );
-    assert!(
-        script.contains(&format!("exec '{}' \"$@\"", bin.display())),
-        "{script}"
-    );
-    // server の env は client の sccache 系と同じ値（RUSTC_WRAPPER を除く）。
-    assert_eq!(sccache_server_env(&settings), env[4..].to_vec());
+    assert_eq!(cargo_child_env(&settings, &owner), CargoEnv::set_only(env));
     // [scratch.cargo] を変えれば与えない。
     let tuned = ScratchSettings {
         cargo: CargoTuning {
             incremental: true,
             dev_debug: None,
         },
-        ..settings.clone()
+        ..settings
     };
-    let env = cargo_env_with(&tuned, &owner, &state);
-    assert!(
-        !env.iter()
-            .any(|(k, _)| k.starts_with("CARGO_INCREMENTAL") || k == "CARGO_PROFILE_DEV_DEBUG")
-    );
-    // 実際に wrapper を通すと CARGO_TARGET_DIR が消えている（本物の sccache の代わりに env を出す script）。
-    let echo = tmp.path().join("echo-env");
-    std::fs::write(
-        &echo,
-        "#!/bin/sh\necho \"T=${CARGO_TARGET_DIR-unset} A=$1\"\n",
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&echo, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let w = ensure_wrapper(&settings.pool(), &echo).unwrap();
-    // R7-7: wrapper は server に届くときだけ sccache を通すので、server 役の listener を立てる。
-    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let out = std::process::Command::new(&w)
-        .arg("rustc")
-        .env("CARGO_TARGET_DIR", "/somewhere")
-        .env(
-            "SCCACHE_SERVER_PORT",
-            server.local_addr().unwrap().port().to_string(),
-        )
-        .env_remove("SCCACHE_SERVER_UDS")
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "T=unset A=rustc\n");
-}
-
-/// 実行できる sh の script を置く（試験用）。
-fn write_script(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, body).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
-
-/// 使われていない port（bind して手放す）。
-fn closed_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
-/// ADR-0075 R7-7（本番の事故の再現）: エージェントの sandbox（codex の `workspace-write`、ネットワーク無し）の中では
-/// sccache の client が server に繋げず `sccache: error: Operation not permitted (os error 1)` で build を落としていた。
-/// wrapper は自分の居る場所から server に届かなければ compiler を直接 exec する（引数・stdout・exit code はそのまま、
-/// `CARGO_TARGET_DIR` は外したまま）。届けば sccache を通す。sccache 自身の操作と `SCCACHE_SERVER_UDS` は常に sccache。
-#[test]
-fn wrapper_runs_the_compiler_directly_when_the_server_is_unreachable() {
-    let tmp = tempfile::tempdir().unwrap();
-    let sccache = tmp.path().join("fake-sccache");
-    // 本物の sccache の代わり: 呼ばれたことと引数を出す（sccache は exit 2 で落ちる役もできるが、ここでは呼ばれたかだけを見る）。
-    write_script(
-        &sccache,
-        "#!/bin/sh\necho \"SCCACHE T=${CARGO_TARGET_DIR-unset} A=$*\"\n",
-    );
-    let compiler = tmp.path().join("fake-rustc");
-    write_script(
-        &compiler,
-        "#!/bin/sh\necho \"COMPILER T=${CARGO_TARGET_DIR-unset} A=$*\"\nexit 3\n",
-    );
-    let settings = sccache_settings(tmp.path(), sccache.clone());
-    let wrapper = ensure_wrapper(&settings.pool(), &sccache).unwrap();
-    let run = |port: u16, uds: Option<&str>, args: &[&str]| {
-        let mut c = std::process::Command::new(&wrapper);
-        c.args(args)
-            .env("CARGO_TARGET_DIR", "/somewhere")
-            .env("SCCACHE_SERVER_PORT", port.to_string());
-        match uds {
-            Some(v) => c.env("SCCACHE_SERVER_UDS", v),
-            None => c.env_remove("SCCACHE_SERVER_UDS"),
-        };
-        let out = c.output().unwrap();
-        (
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    };
-    let compiler_s = compiler.display().to_string();
-
-    // server に届く → sccache を通す。
-    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let up = server.local_addr().unwrap().port();
-    let (out, code, _) = run(up, None, &[&compiler_s, "-vV"]);
-    assert_eq!(out, format!("SCCACHE T=unset A={compiler_s} -vV\n"));
-    assert_eq!(code, Some(0));
-
-    // server に届かない → compiler を直接（exit code もそのまま、probe の失敗は stderr に出さない）。
-    let down = closed_port();
-    let (out, code, err) = run(down, None, &[&compiler_s, "-vV"]);
-    assert_eq!(out, "COMPILER T=unset A=-vV\n");
-    assert_eq!(code, Some(3));
-    assert!(err.is_empty(), "stderr: {err}");
-
-    // sccache 自身の操作（compiler ではない）は届かなくても sccache へ。引数なしも同じ。
-    let (out, _, _) = run(down, None, &["--show-stats"]);
-    assert_eq!(out, "SCCACHE T=unset A=--show-stats\n");
-    let (out, _, _) = run(down, None, &[]);
-    assert_eq!(out, "SCCACHE T=unset A=\n");
-
-    // SCCACHE_SERVER_UDS（Celeris は与えない）があれば TCP は見ない。
-    let (out, _, _) = run(down, Some("/nonexistent.sock"), &[&compiler_s, "-vV"]);
-    assert_eq!(out, format!("SCCACHE T=unset A={compiler_s} -vV\n"));
-
-    // ネットワークの無い sandbox の代わり: user + network namespace（`unshare -rn`）の中からは、外の listener に届かない
-    // （codex の seccomp では socket が EPERM、ここでは lo が無く connect が失敗。wrapper から見て同じ「届かない」）。
-    // unprivileged な user namespace が使えない環境では飛ばす。
-    let probe = std::process::Command::new("unshare")
-        .args(["-rn", "true"])
-        .output();
-    if probe.map(|o| o.status.success()).unwrap_or(false) {
-        let out = std::process::Command::new("unshare")
-            .arg("-rn")
-            .arg(&wrapper)
-            .arg(&compiler_s)
-            .arg("-vV")
-            .env("SCCACHE_SERVER_PORT", up.to_string())
-            .env_remove("SCCACHE_SERVER_UDS")
-            .output()
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            "COMPILER T=unset A=-vV\n"
-        );
-        assert_eq!(out.status.code(), Some(3));
-    } else {
-        eprintln!("skip: unshare -rn is not available");
-    }
-    drop(server);
-}
-
-/// ADR-0075 D4 / G2 受け入れ条件 2: バイナリが無い・server が応答しない・`enabled = false`・scratch が無効のときは
-/// sccache 系を与えない（`CARGO_TARGET_DIR` と `[scratch.cargo]` は残る）。
-/// Phase G3: `/healthz` と `/stats` を読む最小の HTTP クライアント（`Content-Length` で切る。閉じた port・
-/// 200 以外は unhealthy）。
-#[test]
-fn cache_server_health_reads_a_minimal_http_response() {
-    use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for conn in listener.incoming() {
-            let Ok(mut c) = conn else { continue };
-            let mut req = Vec::new();
-            let mut buf = [0u8; 1024];
-            // 要求の終わり（空行）まで読み切ってから答える（高負荷で要求が分かれて届いても RST にしない）。
-            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
-                match c.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => req.extend_from_slice(&buf[..n]),
-                }
-            }
-            let req = String::from_utf8_lossy(&req).to_string();
-            let resp: &[u8] = if req.starts_with("GET /healthz ") {
-                b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\nok\ntrailing"
-            } else {
-                b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n"
-            };
-            let _ = c.write_all(resp);
-        }
-    });
-    assert_eq!(
-        http_get_local(port, "/healthz", Duration::from_secs(2)),
-        Some((200, "ok\n".to_string()))
-    );
-    assert!(cache_server_healthy(port));
-    assert_eq!(
-        http_get_local(port, "/stats", Duration::from_secs(2)).map(|r| r.0),
-        Some(404)
-    );
-    assert!(!cache_server_healthy(1));
-    // token は 0600 で作り、2 回目は同じ値を返す。
-    use std::os::unix::fs::PermissionsExt;
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("sub/cache-server.token");
-    let t = ensure_token(&path).unwrap();
-    assert_eq!(t.len(), 64);
-    assert_eq!(ensure_token(&path).unwrap(), t);
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-}
-
-/// G3-fix1: 配線しないときは sccache の族（`RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / 既知と継いだ `SCCACHE_*`）
-/// を全部外し、配線するときは与えない key だけを外す。結果は親の env に依らない（既知の key は常に入る）。
-#[test]
-fn sccache_family_is_removed_unless_set() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bin = fake_sccache(tmp.path());
-    let owner = Owner::task("01TASK");
-    let settings = sccache_settings(tmp.path(), bin);
-    let inherited = || {
-        [
-            "RUSTC_WRAPPER",
-            "SCCACHE_REDIS_ENDPOINT",
-            "SCCACHE_WEIRD-NAME",
-            "PATH",
-        ]
-        .map(String::from)
-    };
-    let down = resolve_sccache(&settings, |_| false);
-    let set = cargo_env_with(&settings, &owner, &down);
-    let removed = sccache_env_removals_with(&set, inherited());
-    let mut want: Vec<String> = RUSTC_WRAPPER_VARS
-        .iter()
-        .chain(KNOWN_SCCACHE_VARS.iter())
-        .map(|k| k.to_string())
-        .chain(["SCCACHE_REDIS_ENDPOINT".to_string()])
+    let keys: Vec<String> = cargo_env(&tuned, &owner)
+        .into_iter()
+        .map(|(k, _)| k)
         .collect();
-    want.sort();
-    assert_eq!(removed, want);
-    // 親に何も無くても既知の key は外す（判定が親の env に依らない）。
-    let bare = sccache_env_removals_with(&set, Vec::new());
-    assert!(bare.iter().any(|k| k == "RUSTC_WRAPPER"), "{bare:?}");
-    assert!(bare.iter().any(|k| k == "SCCACHE_DIR"), "{bare:?}");
-    // 空の値の代替は wrapper の 2 つだけ（SCCACHE_* は空にしない）。
-    let env = CargoEnv {
-        set: set.clone(),
-        remove: removed,
-    };
-    let fallback = env.set_with_empty_wrappers();
-    assert_eq!(&fallback[..set.len()], &set[..]);
-    assert_eq!(
-        fallback[set.len()..].to_vec(),
-        vec![
-            ("RUSTC_WRAPPER".to_string(), String::new()),
-            ("RUSTC_WORKSPACE_WRAPPER".to_string(), String::new()),
-        ]
-    );
-    // 配線するとき: 与える key は外さない。与えない族（workspace wrapper・webdav 系・継いだ他の SCCACHE_*）は外す。
-    let up = resolve_sccache(&settings, |_| true);
-    let set = cargo_env_with(&settings, &owner, &up);
-    let removed = sccache_env_removals_with(&set, inherited());
-    assert!(
-        removed.iter().all(|k| !set.iter().any(|(s, _)| s == k)),
-        "{removed:?}"
-    );
-    assert_eq!(
-        removed,
-        vec![
-            "RUSTC_WORKSPACE_WRAPPER",
-            "SCCACHE_REDIS_ENDPOINT",
-            "SCCACHE_WEBDAV_ENDPOINT",
-            "SCCACHE_WEBDAV_KEY_PREFIX",
-            "SCCACHE_WEBDAV_TOKEN",
-        ]
-    );
-    assert!(is_sccache_family("SCCACHE_DIR") && is_sccache_family("RUSTC_WRAPPER"));
-    assert!(!is_sccache_family("CARGO_TARGET_DIR"));
-}
-
-#[test]
-fn sccache_env_is_omitted_without_binary_or_server() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bin = fake_sccache(tmp.path());
-    let owner = Owner::task("01TASK");
-    let keys = |env: &[(String, String)]| env.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
-    let plain = vec![
-        "CARGO_TARGET_DIR".to_string(),
-        "CARGO_INCREMENTAL".to_string(),
-        "CARGO_PROFILE_DEV_DEBUG".to_string(),
-    ];
-    // バイナリが無い。
-    let settings = sccache_settings(tmp.path(), tmp.path().join("missing/sccache"));
-    let state = resolve_sccache(&settings, |_| true);
-    assert_eq!(state.label(), "unavailable");
-    assert!(state.reason().unwrap().contains("not found"), "{state:?}");
-    assert_eq!(keys(&cargo_env_with(&settings, &owner, &state)), plain);
-    // server が応答しない。
-    let settings = sccache_settings(tmp.path(), bin.clone());
-    let state = resolve_sccache(&settings, |_| false);
-    assert_eq!(state.label(), "unavailable");
-    assert!(
-        state.reason().unwrap().contains("127.0.0.1:4236"),
-        "{state:?}"
-    );
-    assert_eq!(keys(&cargo_env_with(&settings, &owner, &state)), plain);
-    // `[scratch.sccache] enabled = false`。
-    let mut off = sccache_settings(tmp.path(), bin.clone());
-    off.sccache.enabled = false;
-    let state = resolve_sccache(&off, |_| true);
-    assert_eq!(state.label(), "disabled");
-    assert_eq!(keys(&cargo_env_with(&off, &owner, &state)), plain);
-    // scratch が無効。
-    let mut off = sccache_settings(tmp.path(), bin);
-    off.enabled = false;
-    assert_eq!(resolve_sccache(&off, |_| true).label(), "disabled");
-    // wrapper は Ready のときだけ書く。
-    assert!(!tmp.path().join("scratch/bin/sccache").exists());
-    // 本物の probe（loopback だけ）。閉じた port には port 1（特権 port。テストが bind できないので他のテストと
-    // 競合しない）を使う。
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    assert!(server_listening(l.local_addr().unwrap().port()));
-    assert!(!server_listening(1));
+    assert_eq!(keys, ["CARGO_TARGET_DIR"]);
 }

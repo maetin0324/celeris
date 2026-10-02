@@ -1185,9 +1185,6 @@ async fn wait_for_approval_child(
 /// 走った run の env を記録し、`with_env` を実装するテスト用アダプタ（ADR-0024 D2）。
 type CapturedEnvs = Arc<StdMutex<Vec<Vec<(String, String)>>>>;
 
-/// `PoolAdapter::with_env_removed` が外した key に付ける印（実アダプタの `Command::env_remove` の代わり）。
-const ENV_REMOVED: &str = "<env_remove>";
-
 #[derive(Clone)]
 struct PoolAdapter {
     terminal_or_throttled: Result<Terminal, Duration>,
@@ -1236,15 +1233,6 @@ impl WorkerAdapter for PoolAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut env = self.env.clone();
         env.extend(extra.iter().cloned());
-        Some(Arc::new(PoolAdapter {
-            env,
-            ..self.clone()
-        }))
-    }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut env = self.env.clone();
-        env.retain(|(k, _)| !keys.contains(k));
-        env.extend(keys.iter().map(|k| (k.clone(), ENV_REMOVED.to_string())));
         Some(Arc::new(PoolAdapter {
             env,
             ..self.clone()

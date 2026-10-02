@@ -31,9 +31,6 @@ struct Cli {
     /// （`~` は `$HOME` で展開する。`$HOME` が無い環境では `~/...` のまま渡って読めずに exit 2）。
     #[arg(long, default_value = DEFAULT_CONFIG, global = true)]
     config: PathBuf,
-    /// 省略時はデーモン。
-    #[command(subcommand)]
-    command: Option<Sub>,
     /// 実行中・判定中・ready のタスクが無くなったら終了する。
     #[arg(long)]
     until_idle: bool,
@@ -63,13 +60,6 @@ struct Cli {
     /// それも無ければ `dev`。同じ `release` の `active` が既にいたら何もせず exit 3。
     #[arg(long)]
     release: Option<String>,
-}
-
-#[derive(clap::Subcommand, Debug)]
-enum Sub {
-    /// ADR-0075 D5 (b)（Phase G3）: sccache の webdav backend に対する階層 cache server（L1 = scratch、L2 = NFS）を
-    /// `127.0.0.1:<[scratch.cache_server] port>` で動かす。常駐は `celeris-scratch-cache.service`。
-    CacheServer,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -122,27 +112,6 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if let Some(Sub::CacheServer) = cli.command {
-        let runtime = match tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(e) => {
-                eprintln!("error: failed to start the tokio runtime: {e}");
-                std::process::exit(1);
-            }
-        };
-        let code = match runtime.block_on(celeris::cache_server::run(&config)) {
-            Ok(()) => 0,
-            Err(e) => {
-                tracing::error!(error = %e, "cache server failed");
-                eprintln!("error: {e}");
-                1
-            }
-        };
-        shutdown_and_exit(runtime, code);
-    }
     // ADR-0040 D3: 設定は本番のものをそのまま読み、**上書きは CLI だけ**。
     config.apply_overrides(&Overrides {
         db: cli.db,

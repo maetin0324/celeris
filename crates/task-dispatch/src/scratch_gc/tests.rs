@@ -141,8 +141,9 @@ fn status_has_no_sccache_or_cache_server_and_gc_keeps_old_l1_dirs() {
     let tmp = tempfile::tempdir().unwrap();
     let s = ScratchSettings::with_dir(tmp.path().join("scratch"));
     let pool = s.pool();
-    for dir in [pool.l1_dir(), pool.cache_l1_dir()] {
-        std::fs::create_dir_all(&dir).unwrap();
+    let old_dirs = [pool.root().join("sccache-l1"), pool.root().join("cache-l1")];
+    for dir in &old_dirs {
+        std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("blob"), b"x").unwrap();
     }
     let run = run_gc(
@@ -172,6 +173,7 @@ fn status_has_no_sccache_or_cache_server_and_gc_keeps_old_l1_dirs() {
     let disabled = disabled_status(&s, now);
     assert!(disabled.sccache.is_none());
     assert!(disabled.cache.is_none());
-    assert!(pool.l1_dir().join("blob").exists());
-    assert!(pool.cache_l1_dir().join("blob").exists());
+    for dir in &old_dirs {
+        assert!(dir.join("blob").exists());
+    }
 }

@@ -2432,6 +2432,25 @@ main（R7-12 の配送 repair WU 修正・browser_shared_cdp の flake 修正ま
 - `bash scripts/selfdeploy/tests/promote_authorization_marker.sh` → `promote_authorization_marker: all ok`（exit 0。シェバンが
   `#!/usr/bin/env bash` のため `bash` で実行する。dash/`sh` では配列展開（`${BASH_SOURCE[0]}` 等）が `Bad substitution` で落ちる）。
 
+### 追記: main がさらに進んだため 2 回目の取り込み
+
+最初の merge（上の証拠）を commit した後、main が web GUI SPA の大きな統合（e730f056、ADR-0081 TanStack SPA + gateway Phase 1〜6）で
+進んでいたため、`git merge-base --is-ancestor main HEAD` が exit 1 に戻った。再度 `git merge main --no-edit` で取り込んだ。
+`git merge-tree` には出なかったが、`deploy/systemd/celeris-web@.service` が add/add 衝突（main 側の古い写しに `Wants=celeris@%i.service`
+が残っていた）になったため、本 task の挙動（`Wants=` を外し `After=` の順序指定だけ残す）を保って解いた。他に衝突は無かった。
+
+### 証拠（2 回目の取り込み後）
+
+- `git merge-base --is-ancestor main HEAD` → exit 0。
+- `cargo build -p task-worker --bins` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → 全バイナリ exit 0、失敗 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning 0。
+- `cargo test -p celeris --test unpromoted_release` → **8 passed; 0 failed**（exit 0）。
+- `bash scripts/selfdeploy/tests/promote_authorization_marker.sh` → `promote_authorization_marker: all ok`（exit 0）。
+- `deploy/systemd/celeris-web@.service` に `Wants=` が無いことを確認。`deploy/systemd/celeris-gui@.service` には従来どおり `Wants=`
+  が残っている（R7-12 以前からの既知の提案事項で、本 task の範囲外。daemon 側の起動時認可判定で無害化される）。
+
 ### 未解決・提案
 
 - なし（この WorkUnit の範囲では追加の既知の問題は見つからなかった）。

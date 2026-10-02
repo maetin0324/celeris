@@ -54,6 +54,10 @@ impl SessionBackend for FakeBackend {
             pid,
             pgid: pid,
             starttime,
+            runtime_pid: pid,
+            runtime_starttime: starttime,
+            ns_inodes: task_core::browser_isolation::collect_ns_inodes(&pid.to_string())
+                .map_err(|_| ErrorCode::LaunchFailed)?,
         })
     }
 }
@@ -308,6 +312,16 @@ fn session_lifecycle_and_policy_recheck() {
     assert_eq!(s.instance_id, "inst-now");
     assert_eq!(records(&f.state_dir), 1);
     assert_eq!(f.handle.session_count(), 1);
+    // protocol v3: 束縛は検査した runtime process と、その 6 つの namespace の inode を載せる。
+    let binding = s.receipt.binding.clone().expect("v3 binding");
+    assert!(crate::browser_runtime::same_process_alive(
+        binding.pid,
+        binding.starttime
+    ));
+    assert_eq!(
+        binding.ns_inodes.keys().copied().collect::<Vec<_>>(),
+        task_core::browser_isolation::REQUIRED_NAMESPACES.to_vec()
+    );
 
     let (rcpt, obs) = c
         .action(

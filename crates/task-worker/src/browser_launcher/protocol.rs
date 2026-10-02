@@ -5,9 +5,11 @@
 //! UID/GID map・FD・path を表す型は無い（受け取れない）。cookie・credential・CDP payload も
 //! 応答の型として表現できない。
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 use serde::{Deserialize, Serialize};
+use task_core::browser_isolation::Namespace;
 
 /// frame の上限の既定値（64 KiB）。
 pub const DEFAULT_MAX_FRAME: usize = 64 * 1024;
@@ -125,7 +127,31 @@ pub enum Outcome {
     Stopped,
 }
 
+/// launcher protocol の版。v2 で `start_session` の receipt に [`SessionBinding`] を足した
+/// （ADR-0116 D-L）。v3 で束縛の pid を launcher が隔離を検査した runtime process にし、その
+/// namespace の inode（`ns_inodes`）を足した（daemon UID は別 UID の runtime の
+/// `/proc/<pid>/ns/*` を開けないため）。v1 の receipt（`binding` 無し）と v2 の束縛（`ns_inodes`
+/// 無し）は decode できるが、daemon は証明なしとして扱う。
+pub const PROTOCOL_VERSION: u32 = 3;
+
+/// launcher が `start_session` で返す session の束縛（launcher が `verify_isolation` を掛けた
+/// runtime process の pid・starttime、launcher が採った userns の owner UID と 6 つの namespace の
+/// inode）。daemon はこれを自分の観測と照合してから `LauncherSessionProof` を組む。値を持って
+/// いるだけでは何も許さない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionBinding {
+    pub pid: i32,
+    pub starttime: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ns_owner_uid: Option<u32>,
+    /// v3。v2 以前の launcher は出さない（空 = 証明なし）。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ns_inodes: BTreeMap<Namespace, u64>,
+}
+
 /// 固定の receipt（session・instance・verb・結果・時刻・verify_isolation の結果）。
+/// `binding` は `start_session` の receipt にだけ入る（v2 以降）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Receipt {
@@ -136,6 +162,8 @@ pub struct Receipt {
     pub outcome: Outcome,
     pub at_unix_ms: u64,
     pub isolation_ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<SessionBinding>,
 }
 
 /// `RuntimeFacts` の非機密の項目だけ。

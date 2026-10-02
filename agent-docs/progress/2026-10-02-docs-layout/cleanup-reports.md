@@ -44,7 +44,8 @@ updated: 2026-10-02
 - `sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、exit 0（削除の後）
 - `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → 4 件の違反、exit 1。削除した 4 本が tsv では `agent` の行のまま
   （新パスが追跡されていない）。tsv はこの WU では変えない約束なので、land-verify で 4 行を `delete`・新パス `-` に直す
-- `cargo test --workspace`・`cargo clippy --workspace -- -D warnings` の結果は下の「検査」
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo test --workspace --no-fail-fast` → exit 0、3254 passed / 0 failed / 12 ignored（120 suites）
 
 ## 未解決
 

@@ -10,7 +10,7 @@ import {
 import { ProjectSection } from "./project-detail-view";
 
 // R10 /projects/:id の操作（P4-03〜P4-05）。どれも celeris の応答をそのまま出し、GUI 側で検証しない。
-// 計画・途中目標の intent は ADR-0083 の後継 API に写す（410 の入口は呼ばない）。
+// 計画・途中目標の intent は web ADR-W2 の後継 API に写す（410 の入口は呼ばない）。
 
 const inputClass = "min-h-11 w-full min-w-0 rounded border px-2";
 const buttonClass = "min-h-11 rounded border px-3";
@@ -247,7 +247,7 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
   );
 }
 
-// P4-04: 計画と途中目標（ADR-0083）。
+// P4-04: 計画と途中目標（web ADR-W2）。
 export function PlanOps({ detail }: { detail: ProjectDetail }) {
   const id = detail.project.id;
   const { run, pending, results } = useProjectActions(id);

@@ -225,7 +225,7 @@ skip_step() {
   printf '%s\t0\t0\t\ttrue\t%s\n' "$name" "$(printf '%s' "$reason" | tr '\t\n' '  ')" >>"$GATE_TSV"
 }
 
-# ---- web/ の段（ADR-0096 D3、P6-02）: 非 blocking ---------------------------------
+# ---- web/ の段（web ADR-W3 D3、P6-02）: 非 blocking ---------------------------------
 #
 # gui/ の gate の**後ろ**で web/（ADR-0081 の SPA + gateway）の install / typecheck / test / release を回す。
 # 落ちても `GATE_OK` は倒さない（リリースは作られ、昇格は gui/ だけのリリースとして進む）。結果は gate.json の
@@ -509,7 +509,7 @@ run_step pnpm-build "$BUILD/gui" -- pnpm build
 gui_step pnpm-mobile-audit "$BUILD/gui" -- run_pnpm_mobile_audit
 gui_step pnpm-e2e-mock "$BUILD/gui" -- run_pnpm_e2e_mock
 
-# ADR-0096 D3（P6-02）: web/ の段。gui/ の gate の後ろ、非 blocking（上の web_step）。
+# web ADR-W3 D3（P6-02）: web/ の段。gui/ の gate の後ろ、非 blocking（上の web_step）。
 decide_web_skip
 web_step web-pnpm-install "$BUILD/web" -- web_pnpm install --frozen-lockfile
 web_step web-pnpm-typecheck "$BUILD/web" -- web_pnpm typecheck
@@ -607,7 +607,7 @@ install_gui_prod_deps "$STAGE/gui"
 GUI_DEPS_SECS="$(sd_secs_since "$GUI_DEPS_T0")"
 sd_log "gui: prod node_modules ready in ${GUI_DEPS_SECS}s (key $GUI_DEPS_KEY, reused=$GUI_DEPS_REUSED)"
 
-# ---- web/ の配布物（ADR-0096 D3）: web の段が通ったときだけ。失敗は非 blocking（manifest / gate.json の `web` に残す） ----
+# ---- web/ の配布物（web ADR-W3 D3）: web の段が通ったときだけ。失敗は非 blocking（manifest / gate.json の `web` に残す） ----
 bundle_web() {
   local tgz dir name
   [ "$WEB_OK" = true ] && [ -z "$WEB_SKIP_REASON" ] || return 0

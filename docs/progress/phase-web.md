@@ -33,7 +33,7 @@ P1-01〜P1-09 の実装を完了。React SPA の scaffold、型生成・偽 daem
 
 P2-01 `2194da2f`、P2-02 `8bc88050`、P2-03 `bcfe6276`、P2-04 `279d2bef`、P2-05 `c353ac0b`、P2-06 `89416a54`、P2-07 `156f2929`（各 ID の実装 commit）。R37・R42・X7・X8・X12・X13 の parity 行は対応する e2e が通過した commit で完了としている。P2-07 は画面台帳と V3 の枠を追加し、`/tasks`・`/inbox` の shell 画面で S1〜S4 を確認した。
 
-- V1: `git diff --quiet $(git merge-base HEAD main) -- gui` → exit 0。Phase 2 の設計判断は [ADR-0082](../adr/0082-web-sse-invalidate-unlisted-kinds.md) に記録した。`gui/node_modules/.bin/vitest run && gui/node_modules/.bin/tsc --noEmit && gui/node_modules/.bin/vite build`（`gui/` で実行）→ exit 0（81 files / 1222 tests、typecheck、build）。
+- V1: `git diff --quiet $(git merge-base HEAD main) -- gui` → exit 0。Phase 2 の設計判断は [web ADR-W1](../web/adr/web-0001-sse-invalidate-unlisted-kinds.md) に記録した。`gui/node_modules/.bin/vitest run && gui/node_modules/.bin/tsc --noEmit && gui/node_modules/.bin/vite build`（`gui/` で実行）→ exit 0（81 files / 1222 tests、typecheck、build）。
 - V2: `web/node_modules/.bin/tsc -b`、`web/node_modules/.bin/biome check .`、`web/node_modules/.bin/vitest run && node --test web/server/*.test.mjs`、`web/node_modules/.bin/vite build` → 各 exit 0（vitest 15 files / 146 tests、node 38 tests）。`node web/scripts/gen-types.mjs --check`、`check-boundaries.mjs`、`check-secrets.mjs`、`check-parity.mjs --require-phase 2` → 各 exit 0。
 - parity: `web/node_modules/.bin/playwright test parity/`（web/ で実行）→ exit 0、21 passed。偽 daemon と gateway は loopback の空き port を使用。
 - V3: `web/node_modules/.bin/playwright test latency/transition.spec.ts realtime/refetch-scope.spec.ts a11y/axe.spec.ts`（`web/` で実行）→ S1・S2 各 2 pass、S4 2 pass。S1 の URL / 見出しは全条件 300 ms 以下で、10 s と 0 s の差は 100 ms 以下。S2 は active な inbox query を監視し、2 s ごとの daemon tick 10 件と無関係な worker progress 20 件で、15 s の補完取得を超える再取得がないことを確認。`node web/scripts/mobile-audit.mjs --only /tasks` と `--only /inbox` → 各 exit 0、4 幅。`node web/scripts/screenshots.mjs --only /tasks --out <run artifacts>/shots` → exit 0、4 枚。画面台帳から route を削る単体テストは `check:parity` の失敗を確認。
@@ -87,7 +87,7 @@ P5-01〜P5-03 の測定記録は [latency gate](../web/gates/p5-01-latency.md)�
 
 ## Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備。P6-04 以降は未着手）
 
-P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は ADR-0096・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。P6-03 は同日 18:32 UTC に開始し、詳細は下の開始記録に追記した。H6 の期間と合格条件は人の判断待ち。
+P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は web ADR-W3・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。P6-03 は同日 18:32 UTC に開始し、詳細は下の開始記録に追記した。H6 の期間と合格条件は人の判断待ち。
 
 - Rust gate（2026-10-01、repair-cargo-1 の `crates/task-worker/src/ssh.rs` 修正を merge-base `8a61eae488eb` に戻した後）: `cargo test --workspace` → exit 101。記録された test suites は全て pass し、`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。人の 2026-10-01 の判断に従い、この sandbox から user systemd bus に接続できない環境由来の2件として除外し、残りの全テストを合格として扱う。`cargo test -p celeris --test releases_api` の再実行でも同じ2件が再現（6 passed / 2 failed）。テスト側の skip は別 task で対応する。
 - Rust lint: `cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。
@@ -133,9 +133,15 @@ Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 
 
 未解決: Rust workspace gate はこの環境で二度失敗。namespace を要する crates/ の試験と instance handoff の環境依存失敗は web 差分範囲外のため修正せず、main の別 task で扱う。V1/V2・parity e2e・selfdeploy は合格。検証 SHA は記録更新前の `d95b1653…` で、記録 commit 自身は含まない。
 
-### adr-place の記録
+### adr-place / adr-scope の記録
 
-人の判断 adr-place の回答は (a): `docs/adr/0082`・`0083`・`0096`（web 関連の 3 本、`0082-web-sse-invalidate-unlisted-kinds.md`・`0083-web-project-plan-milestone-successors.md`・`0096-web-parallel-operation.md`）は `docs/adr/` に置いたまま。実装計画 §1 と P6-02 が `docs/adr/NNNN-*.md` への追加を要求しており、人が範囲内と判断した。ADR ファイルは移動していない（`git status` で `docs/adr/` に差分なしを確認済み）。
+人の判断 adr-place (a)（`docs/adr/` に置いたまま）の後、最終 review が「変更範囲は web/・docs/web/ のみ」の criterion で 2 回 fail した。加えて `docs/adr/0082`・`0083` は main の ADR-0082（dispatcher 分割）・ADR-0083（source-size guardrail）と番号が衝突し、web/ のコメント「ADR-0082/0083」が main では別の ADR を指す状態だった。これを受けて人の決定 adr-scope は (a)「3 本を `docs/web/adr/` へ移し（web ADR-W1〜W3）、`docs/adr/` を main と同じに戻す」。
+
+- `docs/adr/0082-web-sse-invalidate-unlisted-kinds.md` → `docs/web/adr/web-0001-sse-invalidate-unlisted-kinds.md`（web ADR-W1）
+- `docs/adr/0083-web-project-plan-milestone-successors.md` → `docs/web/adr/web-0002-project-plan-milestone-successors.md`（web ADR-W2）
+- `docs/adr/0096-web-parallel-operation.md` → `docs/web/adr/web-0003-parallel-operation.md`（web ADR-W3）
+
+`git mv` で移動し、本文中の自身の見出し番号だけ `ADR-NNNN` → `web ADR-Wn` に書き換えた（本文のその他の記述は変更していない）。参照していた web/・docs/web/・scripts/selfdeploy/ 側のコメントとリンクも新しい名前に直した。`git diff --quiet $(git merge-base HEAD main) -- docs/adr` は exit 0（`docs/adr/` は main と同じ）。main 由来の ADR-0082（dispatcher 分割）・ADR-0083（source-size guardrail）への既存の参照（docs/architecture-map.md、scripts/dev/source-size-report.*、docs/progress/phase-P0-dispatcher.md・phase-guardrail.md 等）は変更していない。
 
 ### 最終整合の再試行（run 01M3WSCR1TVZ16NDM2BYKF8E2X、attempt 2）
 

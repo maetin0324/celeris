@@ -1,4 +1,4 @@
-# ADR-0096: web/ の並行運用（port・cookie・selfdeploy の非 blocking 段・staging 確認）
+# web ADR-W3: web/ の並行運用（port・cookie・selfdeploy の非 blocking 段・staging 確認）
 
 ---
 tasks: [01M3TG9K4VV5Z4GZ0WY4DCVBZS]

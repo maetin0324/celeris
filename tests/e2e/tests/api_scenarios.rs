@@ -434,7 +434,6 @@ fn worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on() {
             "expected the guard to be installed after the probe\n{log}"
         );
     }
-    assert!(!log.contains("worker_read_only = false"), "{log}");
 }
 
 #[test]

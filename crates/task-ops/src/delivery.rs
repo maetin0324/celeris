@@ -9,6 +9,8 @@ use task_core::{
 
 /// ADR-0118 D4: target 再進行による自動の再 sync→再 check→再 review は初回に加え最大 2 回。
 pub const MAX_TARGET_RESYNCS: u32 = 2;
+/// ADR-0120 D4: one task may schedule at most two integration repairs.
+pub const MAX_INTEGRATION_REPAIRS: u32 = 2;
 
 /// ADR-0118 D4: 直近の「人の再開」以後に記録された、`repo` の target 再進行（`ReviewTargetAdvanced`）の数。
 /// 自動の再レビューは `Transitioned{reason:"rereview"}` の直後に同じ transaction で

@@ -399,3 +399,16 @@ celeris が run の後に流した check（`CELERIS_LAUNCHER_TESTS=require cargo
 | proc 読取り | `/proc/4048672/environ`、`/proc/4048672/mem` ともに `errno=Some(13)`（EACCES） |
 
 `cargo clippy -p task-worker --all-targets -- -D warnings` と `cargo fmt --all -- --check` は exit 0。host の launcher は 86ce1a88 の build のまま（今回は試験だけの変更なので入れ替え不要）。本番 host の操作、機密能力の解放は行っていない。
+
+## 並走 session での Chrome 特定（WorkUnit pick-chrome、run 01M3YF310B96RRG11N65BTWKXW、2026-10-02）
+
+段 real の統合検査で `launcher_chrome_denies_daemon_uid_ptrace` が落ちた。host の launcher は共有で、別の session（他 task の試験・browser run）が同時に Chrome を起こすと、試験前後の `/proc` の PID 差分に Chrome 候補が 2 つ現れ、「新しい Chrome は 1 つ」という前提が崩れた。launcher の不具合ではない。
+
+自分の session の判別: `backend.rs` と `browser_runtime.rs` を読むと、launcher は daemon UID から読める `/proc` の上に session を示す印を出さない（bwrap の引数は固定で session dir は私有 mount ns の `/tmp/celeris-session` に bind し直す、sandboxd・Chrome の argv も session に依らない、session id 入りの thread 名は comm の 15 byte で切れる、診断は journal だけ、`Started` の receipt に pid は無い）。そのため objective の代替の形を採った:
+
+- 候補は「試験前に無かった PID・`--remote-debugging-pipe` あり `--type=` なし・uid_map が launcher の観測と同じ・PPid を辿ると `celeris-browser-launcher` に届く」もの全部。launcher の直接の子（session ごとの bwrap）を session root として束ねる。
+- 全候補に同じ拒否検査（map に daemon UID なし・`NS_GET_OWNER_UID`・`PTRACE_ATTACH`・`strace -p`・`/proc/<pid>/environ`・`mem`）を当て、1 件以上を要求する。検査中に他の session の停止で消えた候補だけは数えない（生きているのに拒否されなければ失敗）。
+- 最後に自分の session を `stop` し、検査済みの session root のどれかが消えることを確かめる（自分の session が検査済みだった証拠）。
+- 選択は純粋な関数（`chrome_pick_candidates`・`chrome_pick_stopped_roots`）に分け、偽の process 表の単体試験 `chrome_pick_*` 4 件（並走 2 session・自分の session だけ・候補ゼロ・読む側で subuid が写らない map）を同じ試験 file に置いた。
+
+変更は `crates/task-worker/tests/browser_launcher_ptrace.rs` だけ（`crates/task-worker/src/` は不変、host の binary 入れ替えは不要）。この run の環境（`/proc/self/uid_map` = `1001 1001 1`、host の launcher socket が見える）で `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed）。実 launcher 試験の出力: 候補 `[pid 3335540, session root 3335531]`、`NS_GET_OWNER_UID` errno 13、`PTRACE_ATTACH` errno 1、`strace -p` exit 1（Operation not permitted）、environ・mem errno 13、`verify_isolation=Ok`、停止後 `checked session roots gone=[3335531]`。本番 host の操作、機密能力の解放は行っていない。

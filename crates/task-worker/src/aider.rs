@@ -416,6 +416,8 @@ fn parse_aider_usage(stdout: &str) -> Option<Usage> {
         cache_read_tokens: None,
         cache_creation_tokens: None,
         cost_usd: session_cost,
+        duplicate_reads: None,
+        session_resumed: None,
     })
 }
 

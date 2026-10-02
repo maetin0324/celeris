@@ -54,7 +54,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 |---|---|---|---|
 | RunRequest/RunContext 境界 | task-worker::protocol | `crates/task-worker/src/protocol.rs` | [DESIGN §5.3](DESIGN.md#53-worker-protocol-task-worker) |
 | Adapter 選択 | task-worker::adapter | `crates/task-worker/src/adapter.rs` | [DESIGN §5.4](DESIGN.md#54-adapters) |
-| Claude Code adapter（CLI起動 + prompt） | task-worker::claude_code | `crates/task-worker/src/claude_code.rs`（`claude_code/prompt.rs`） | [DESIGN §5.4](DESIGN.md#54-adapters) |
+| Claude Code adapter（CLI起動 + prompt、run 内の再探索重複・resume の印を `Usage.duplicate_reads` / `session_resumed` へ） | task-worker::claude_code | `crates/task-worker/src/claude_code.rs`（`claude_code/prompt.rs`、`ExplorationTracker`） | [DESIGN §5.4](DESIGN.md#54-adapters), [ADR-0124](adr/0124-claude-session-resume.md) |
 | Codex / ACP adapter | task-worker | `crates/task-worker/src/{codex,acp}.rs` | [DESIGN §5.4](DESIGN.md#54-adapters), [Phase 6 記録](progress/phase-001-050.md) |
 | PaperQA2 / Local Deep Research adapter | task-worker | `crates/task-worker/src/{paperqa,local_deep_research}.rs`（`paperqa/render.rs`） | [DESIGN §5.4](DESIGN.md#54-adapters) |
 | Browser capability（policy/credential 越境） | task-worker::browser | `crates/task-worker/src/browser{,_credential,_policy}.rs` | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |

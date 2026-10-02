@@ -303,6 +303,8 @@ fn tokens_cost_and_peak_context_are_summed_and_maxed() {
             cache_read_tokens: Some(input / 2),
             cache_creation_tokens: None,
             cost_usd: Some(cost),
+            duplicate_reads: None,
+            session_resumed: None,
         }),
         role: None,
         metrics: Some(crate::model::RunMetrics {
@@ -407,6 +409,8 @@ fn cost_usd_complete_is_false_with_an_unpriced_model() {
             cache_read_tokens: None,
             cache_creation_tokens: None,
             cost_usd: Some(1.0),
+            duplicate_reads: None,
+            session_resumed: None,
         }),
         role: None,
         metrics: None,
@@ -421,6 +425,8 @@ fn cost_usd_complete_is_false_with_an_unpriced_model() {
             cache_read_tokens: None,
             cache_creation_tokens: None,
             cost_usd: None, // 単価表に無いモデル（例: gpt-6-sol）
+            duplicate_reads: None,
+            session_resumed: None,
         }),
         role: None,
         metrics: None,

@@ -201,6 +201,8 @@ echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":
                     cache_read_tokens: Some(4),
                     cache_creation_tokens: None,
                     cost_usd: None,
+                    duplicate_reads: None,
+                    session_resumed: None,
                 })
             );
         }

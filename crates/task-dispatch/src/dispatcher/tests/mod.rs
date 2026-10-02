@@ -362,6 +362,8 @@ impl WorkerAdapter for ReviewerUsageAdapter {
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
                     cost_usd: Some(0.03),
+                    duplicate_reads: None,
+                    session_resumed: None,
                 })
             }
             _ => {
@@ -2850,6 +2852,8 @@ fn gate_done_terminal() -> Terminal {
             cache_read_tokens: Some(1_531_392),
             cache_creation_tokens: Some(0),
             cost_usd: None,
+            duplicate_reads: None,
+            session_resumed: None,
         }),
     }
 }

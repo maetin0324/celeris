@@ -44,8 +44,8 @@ pub enum RuntimeError {
     NoChildPid(String),
     #[error("runtime is not running")]
     NotRunning,
-    #[error("runtime relay did not become ready")]
-    RelayNotReady,
+    #[error("runtime relay did not become ready: {0}")]
+    RelayNotReady(String),
 }
 
 /// ADR-0108 D1: sandbox の proxy listener から来た接続ごとに起動する celeris-browser-egress。
@@ -116,6 +116,46 @@ fn open_dir_path(path: &Path) -> std::io::Result<OwnedFd> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// Only diagnostics emitted by bwrap and sandboxd are eligible for the launcher journal.
+/// A descendant can still write to the same pipe, so keep output bounded and reject other lines.
+fn safe_startup_diagnostics(stderr: &str) -> String {
+    let lines: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.starts_with("bwrap: ") || line.starts_with("sandboxd: "))
+        .map(|line| {
+            line.chars()
+                .filter(|c| !c.is_control())
+                .take(240)
+                .collect::<String>()
+        })
+        .collect();
+    lines
+        .iter()
+        .rev()
+        .take(4)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+#[cfg(test)]
+mod startup_diagnostics_tests {
+    use super::safe_startup_diagnostics;
+
+    #[test]
+    fn journal_diagnostics_exclude_browser_output_and_are_bounded() {
+        let stderr = format!(
+            "Chrome: secret URL\nsandboxd: proxy listen: EPERM\nbwrap: {}\n",
+            "x".repeat(500)
+        );
+        let safe = safe_startup_diagnostics(&stderr);
+        assert!(!safe.contains("secret URL"));
+        assert!(safe.contains("sandboxd: proxy listen: EPERM"));
+        assert!(safe.len() <= 280);
+    }
 }
 
 const ROOT_LINKS: [&str; 5] = ["bin", "lib", "lib32", "lib64", "sbin"];
@@ -421,7 +461,7 @@ impl IsolatedRuntime {
                 .spawn(move || relay_loop(ctrl, cfg, pgid, stats, ready_tx))?;
             // listener が立つまで browser は起動しない（sandboxd が READY の後に起動する）。
             if ready_rx.recv_timeout(Duration::from_secs(10)).is_err() {
-                return Err(RuntimeError::RelayNotReady);
+                return Err(RuntimeError::RelayNotReady(rt.failed_stderr()));
             }
         }
         Ok(rt)
@@ -472,7 +512,8 @@ impl IsolatedRuntime {
         }
     }
 
-    /// 起動に失敗した bwrap の stderr の先頭。2 秒待って残っていれば process group ごと止める。
+    /// 起動に失敗した bwrap の終了状態と、安全な診断行だけを返す。
+    /// Chrome / action の stderr は sandboxd が破棄するため、機密を journal に流さない。
     fn failed_stderr(&mut self) -> String {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline && self.is_running() {
@@ -483,11 +524,17 @@ impl IsolatedRuntime {
             unsafe { libc::killpg(self.child.id() as i32, libc::SIGKILL) };
             let _ = self.child.wait();
         }
+        let status = self.child.try_wait().ok().flatten();
         let mut s = String::new();
         if let Some(e) = self.child.stderr.as_mut() {
+            // A descendant may still hold stderr after bwrap exits. Never wait for EOF here.
+            unsafe { libc::fcntl(e.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
             let _ = e.take(4096).read_to_string(&mut s);
         }
-        s.trim().to_owned()
+        format!(
+            "bwrap status={status:?}; stderr={}",
+            safe_startup_diagnostics(&s)
+        )
     }
 
     /// stderr の先頭（診断用。起動失敗の試験で使う）。

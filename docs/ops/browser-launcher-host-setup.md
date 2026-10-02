@@ -185,7 +185,7 @@ getcap -r /usr/local/libexec/celeris 2>/dev/null                       # 何も�
 
 ## 8. 準備後に流す試験
 
-daemon の user（UID 1001）で、**初期 user namespace の host 上**のリポジトリの task branch の worktree から実行する（本番 DB には触れない試験）。実行前に `cat /proc/self/uid_map` が `0 0 4294967295` であることを確認する。`1001 0 1` のような入れ子 namespace の test runner では host 側 Chrome の `/proc` が見えず、この実 process 証明はできない。
+daemon の user（UID 1001）で、**launcher と同じ host PID namespace を見られる通常シェル**からリポジトリの task branch の worktree で実行する（本番 DB には触れない試験）。実行前に `cat /proc/self/uid_map` と `readlink /proc/self/ns/pid` を記録する。LXC host では初期 user namespace の `0 0 4294967295` にならず、通常シェルの map が複数行になることがある。worker の db_guard 内の `1001 1001 1` や `1001 0 1` のような単独 map では host 側 Chrome の `/proc` が見えず、この実 process 証明はできない。
 
 socket だけが active でも service の起動成功は保証されない。管理者は socket activation 後、次を確認する。`ActiveState=failed` や `activating (auto-restart)` の場合は試験の前に service の起動失敗を直す。
 
@@ -198,6 +198,8 @@ sudo journalctl -u celeris-browser-launcher.service -b --no-pager -n 80
 ```
 
 journal が `No such file or directory (os error 2)` なら、まず手順 4 の `session_root`（`/var/lib/celeris-browser/sessions`）と `launcher.toml` の各 path の有無を確かめる。
+
+`runtime relay did not become ready` なら、更新した launcher と sandboxd の組を配置したうえで journal の `start <session>: start bwrap:` 行を確認する。launcher は bwrap の終了状態と、bwrap/sandboxd の制御済み診断行を最大 4 行記録する。Chrome と action の stderr は機密を含み得るため記録せず、sandboxd は起動失敗の errno と終了状態だけを報告する。egress は relay の READY 後に初めて起動するため、この段階の失敗には関与しない。
 
 daemon の user で実行する:
 

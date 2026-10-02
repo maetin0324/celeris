@@ -48,15 +48,21 @@ fn relay(tcp: TcpStream, unix: UnixStream) {
 fn main() -> ExitCode {
     // channel を検査し、子に継承させない。
     // SAFETY: fd 6 に対する fcntl だけ。
-    if check_channel(CHANNEL_FD).is_err()
-        || unsafe { libc::fcntl(CHANNEL_FD, libc::F_SETFD, libc::FD_CLOEXEC) } < 0
-    {
-        eprintln!("sandboxd: relay channel missing");
+    if let Err(e) = check_channel(CHANNEL_FD) {
+        eprintln!("sandboxd: relay channel invalid: {e}");
+        return ExitCode::from(EXIT_SETUP);
+    }
+    if unsafe { libc::fcntl(CHANNEL_FD, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        eprintln!(
+            "sandboxd: relay channel cloexec: {}",
+            std::io::Error::last_os_error()
+        );
         return ExitCode::from(EXIT_SETUP);
     }
     let argv: Vec<_> = std::env::args_os().skip(1).collect();
     let (chrome, action) = if argv.first().is_some_and(|a| a == "--shared-cdp") {
         if argv.len() < 3 {
+            eprintln!("sandboxd: shared CDP arguments missing");
             return ExitCode::from(EXIT_SETUP);
         }
         (Some(argv[1].clone()), &argv[2..])
@@ -64,18 +70,27 @@ fn main() -> ExitCode {
         (None, argv.as_slice())
     };
     let Some((program, args)) = action.split_first() else {
+        eprintln!("sandboxd: action arguments missing");
         return ExitCode::from(EXIT_SETUP);
     };
-    let Ok(listener) = TcpListener::bind(("127.0.0.1", LISTEN_PORT)) else {
-        eprintln!("sandboxd: listen failed");
-        return ExitCode::from(EXIT_SETUP);
+    let listener = match TcpListener::bind(("127.0.0.1", LISTEN_PORT)) {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!("sandboxd: proxy listen: {e}");
+            return ExitCode::from(EXIT_SETUP);
+        }
     };
-    if send(CHANNEL_FD, READY, None).is_err() {
+    if let Err(e) = send(CHANNEL_FD, READY, None) {
+        eprintln!("sandboxd: send ready: {e}");
         return ExitCode::from(EXIT_SETUP);
     }
     if let Some(chrome) = chrome {
-        let Ok(cdp_listener) = TcpListener::bind(("127.0.0.1", RELAY_PORT)) else {
-            return ExitCode::from(EXIT_SETUP);
+        let cdp_listener = match TcpListener::bind(("127.0.0.1", RELAY_PORT)) {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("sandboxd: CDP listen: {e}");
+                return ExitCode::from(EXIT_SETUP);
+            }
         };
         std::thread::spawn(move || {
             for connection in cdp_listener.incoming() {
@@ -105,6 +120,9 @@ fn main() -> ExitCode {
         #[cfg(feature = "h3-e2e-insecure-cert")]
         command.arg("--ignore-certificate-errors");
         command.arg("about:blank");
+        // Browser diagnostics can contain URLs, profile data, or credentials.
+        // Report only its exit status below.
+        command.stderr(std::process::Stdio::null());
         // SAFETY: fcntl is async-signal-safe and only changes inherited CDP fds.
         unsafe {
             command.pre_exec(|| {
@@ -116,31 +134,45 @@ fn main() -> ExitCode {
                 Ok(())
             });
         }
-        let Ok(mut browser) = command.spawn() else {
-            return ExitCode::from(EXIT_SETUP);
+        let mut browser = match command.spawn() {
+            Ok(browser) => browser,
+            Err(e) => {
+                eprintln!("sandboxd: Chrome spawn: {e}");
+                return ExitCode::from(EXIT_SETUP);
+            }
         };
         std::thread::spawn(move || {
-            let _ = browser.wait();
+            eprintln!("sandboxd: Chrome exited: {:?}", browser.wait());
             std::process::exit(i32::from(EXIT_SETUP));
         });
         // The action process must never inherit Chromium's pipe endpoints.
         for fd in [3, 4] {
             // SAFETY: these are the inherited CDP fds, held by sandboxd.
             if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                eprintln!(
+                    "sandboxd: CDP pipe cloexec: {}",
+                    std::io::Error::last_os_error()
+                );
                 return ExitCode::from(EXIT_SETUP);
             }
         }
     }
-    let mut child = match Command::new(program).args(args).spawn() {
+    let mut child = match Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
         Ok(c) => c,
-        Err(_) => {
-            eprintln!("sandboxd: child spawn failed");
+        Err(e) => {
+            eprintln!("sandboxd: action spawn: {e}");
             return ExitCode::from(EXIT_SETUP);
         }
     };
     // 子が終われば runtime も終わる（sandboxd は pid namespace の 1 番なので残りは消える）。
     std::thread::spawn(move || {
-        let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(1);
+        let status = child.wait();
+        eprintln!("sandboxd: action exited: {status:?}");
+        let code = status.ok().and_then(|s| s.code()).unwrap_or(1);
         std::process::exit(code);
     });
     for tcp in listener.incoming() {

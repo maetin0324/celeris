@@ -304,3 +304,11 @@ host 管理者への依頼: [host 準備手順](../ops/browser-launcher-host-set
 - 検査: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0。`cargo test --workspace` は exit 101 で、失敗は `browser_launcher_ptrace` の 1 件だけ（host に入っている launcher が旧版のままで `Remote(LaunchFailed)`）。`cargo test --workspace --no-fail-fast -- --skip launcher_chrome_denies_daemon_uid_ptrace` は exit 0（132 binary、3237 passed、0 failed）。
 - 残る点: `setgroups` が `deny` のため、launcher の補助 group は Chrome に残る（userns 内では 65534 に見える）。
 - 未実証のまま: `NS_GET_OWNER_UID`、uid_map / gid_map、`PTRACE_ATTACH` / `strace -p` の errno、environ / mem、`verify_isolation`。新しい launcher を人が入れた後に require 試験を流して追記する。
+
+## launcher relay の即終了を調査中（run 01M3XNT7699MQB1NDTJ5C8VBQH、2026-10-02）
+
+人が commit `082e029d` の launcher・sandboxd・egress を host に配置し、worker 外の UID 1001 シェルで require 試験を実行した結果は **exit 101**。正の対照は `PTRACE_ATTACH=0 PTRACE_DETACH=0` で通ったが、session 開始は `Remote(LaunchFailed)`。人が取得した journal は `start bwrap: runtime relay did not become ready` で、約 0.03 秒で失敗した。egress は relay の READY 後にしか起動しないので、この失敗より前には関与しない。
+
+この run では `RelayNotReady` が bwrap と sandboxd の終了情報を捨てていた経路を修正した。bwrap の終了状態と、bwrap / sandboxd の短い制御済み診断行を launcher の journal に残す。sandboxd は relay・listen・Chrome/action spawn の失敗 errno と終了状態を出し、Chrome/action の生 stderr は機密混入を避けて破棄する。`cargo build -p task-worker --bins`、`cargo clippy -p task-worker --all-targets -- -D warnings` は exit 0。現在の worker 内 `/proc/self/uid_map` は `1001 0 1` なので require 試験は session 開始時に exit 101 となり、host の結果の代わりにはならない。browser runtime supervisor の実 process 試験 1 件も同じ隔離内では `unshare -Ur: EPERM` で失敗する。host の通常シェルは LXC 内で複数行の map となるため、手順書の初期 namespace 前提を訂正した。
+
+次に host で更新 launcher と sandboxd を入れ替え、人が UID 1001 の通常シェルから require 試験を再実行する。失敗時は journal の新しい `start <session>: start bwrap:` 行で原因を確定する。Chrome の owner UID・両 map・ptrace/strace と `/proc` 拒否 errno・`verify_isolation` は依然**未取得**で、合格の証跡とは扱わない。本番 DB・設定・昇格、root 操作、機密能力の解放は行っていない。

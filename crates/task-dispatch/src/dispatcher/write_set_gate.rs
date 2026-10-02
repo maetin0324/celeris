@@ -208,3 +208,14 @@ fn write_set_repo_keys(task: &Task) -> Vec<String> {
         }
     }
 }
+
+#[cfg(test)]
+impl WriteReservation {
+    pub(super) fn for_test(repos: &[&str], paths: &[&str], inherited_from_task: bool) -> Self {
+        WriteReservation {
+            repos: repos.iter().map(|s| s.to_string()).collect(),
+            paths: paths.iter().map(|s| s.to_string()).collect(),
+            inherited_from_task,
+        }
+    }
+}

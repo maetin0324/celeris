@@ -36,6 +36,13 @@ updated: 2026-10-02
 - `sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、exit 0（cleanup の merge 前は 46 件の壊れた参照で exit 1。
   うち docs/ops の 3 件は cleanup と同じ直し）。
 - `git diff --quiet ad454132 -- docs/ops/sccache-l1.md` → 差分なし。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → ok、exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace --no-fail-fast` → 3253 passed / 1 failed（120 suites）。落ちたのは
+  `task-worker` の `scratch::tests::wrapper_runs_the_compiler_directly_when_the_server_is_unreachable`（`scratch/tests.rs:835` で
+  ETXTBSY）で、単独の再実行は pass。1 回目の `cargo test --workspace` では `celeris --test instance_handoff` の
+  `a_newer_release_takes_over_while_the_old_one_finishes_its_run` が落ち、単独の再実行（8 passed）と 2 回目の全体では pass。
+  どちらも時間・負荷依存の既知の揺れで、この WU の差分（docs と記録だけ）とは関係しない。
 
 ## 未解決
 
@@ -45,6 +52,8 @@ updated: 2026-10-02
 
 ## 提案
 
+- `crates/task-worker/src/scratch/tests.rs:835` の ETXTBSY: スタブ実行ファイルを `crate::test_support::write_executable` で書くように
+  直す（task-worker の試験の規則）。crates を扱う task で行う。
 - `deploy/systemd/celeris-web@.service` のコメントが旧パス `docs/web/parallel-operation.md` と `ADR-0096` を指している
   （リンク検査の対象外なので通っている）。`docs/ops/web-parallel-operation.md`・web ADR-W3 に直す。
   deploy/ は `SD_SENSITIVE_PATTERNS` に入る（昇格で sha12 確認になる）ので、この WU では変えなかった。

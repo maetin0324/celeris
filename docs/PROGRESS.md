@@ -73,6 +73,13 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - ADR 番号の再走査（2026-10-02）: main・全 refs/heads/celeris/*・refs/remotes の 130 refs を `git ls-tree` で確認し、0116/0117/0118 は使用済み、最小空き番号 0119 を選択。main に migration 0037 は無く、migration 番号は変更なし。参照と ADR-0051 のリンクを ADR-0119 に更新した。task-api/task-core/task-worker の `UPDATE_SCHEMA=1` schema 整合テストは成功。`corepack pnpm@11.27.0 -C gui gen:types` は pnpm の依存確認が cache SQLite を開けず exit 1。型生成は実行できなかったが、生成物 types.ts の該当 description を schema と同じ ADR-0119 表記に同期した。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は exit 101、`instance_handoff` 5 件が sandbox の user namespace `Operation not permitted` で失敗（delivery 関連以外の環境依存失敗）。
 - delivery skipped の inbox query 向けに migration `0037_events_delivery_skipped_index.sql` を追加し、`idx_events_delivery_skipped` 部分 index を作成。問い合わせの predicate は index と同じ式を使い、`latest_delivery_skipped_rows_uses_partial_index` が EXPLAIN QUERY PLAN の index 使用と task ごとの最新 1 件を確認する。schema version 37（`SCHEMA_VERSION = 37`）になる。
 - この migration の昇格は celeris を stop → 新バイナリで start とし、起動時に migration が実行される。index は追加のみで、旧バイナリも残存 index 自体は利用せず動作できる。ただし schema 37 を開く旧バイナリは SchemaTooNew になるため、バイナリを戻す場合は migration 前の DB backup も戻すこと。詳細と任意の `DROP INDEX` は [ADR-0119](adr/0119-root-delivery-without-assignee.md) に記録。
+- 振り直し仕上げ（renumber-adr、2026-10-02 続き）: main（`29e2d768`）は既に HEAD の祖先（`git merge-base --is-ancestor main HEAD` → exit 0）、main に ADR-0119 や migration `0037` は現れていないため番号の再振り直しは不要。`docs/adr` の重複なし（`0119-root-delivery-without-assignee.md` 1 件、`0117-review-human-decisions-and-check-results.md` 1 件）、全 refs/heads・refs/remotes の `git ls-tree` 走査でも `0119-root-delivery-without-assignee.md` の使用は本ブランチのみ。`git grep -n 'ADR-0117'` を対象 crates/ADR-0051/docs/api/v1/gui types.ts に実行して一致なし（exit 1）。`crates/task-dispatch`・`crates/task-worker`・`docs/protocol`・`docs/adr/0117-review-human-decisions-and-check-results.md` は `git diff main` で差分ゼロ。
+  - `corepack pnpm@11.27.0 -C gui gen:types` → exit 0（今回は pnpm store 事前確認が通った）。実行後 `git status --short` は無変更で、前回手動同期した `types.ts` の ADR-0119 表記と生成物が一致することを確認。
+  - `UPDATE_SCHEMA=1 cargo test -p task-core -p task-api -p task-worker` → 全 test group `0 failed`（schema 固定文字列テストを含む）。
+  - `cargo check --workspace --tests` → exit 0。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `cargo test -p task-core -p task-ops -p task-api` → 全 test group `0 failed`（task-core 624 件・task-ops 395 件を含む）。
+  - `cargo test --workspace` → 今回は exit 0、全 118 test group `0 failed`（計 3,228 passed / 0 failed / 12 ignored）。`crates/celeris/tests/instance_handoff.rs` の `a_stale_heartbeat_promotes_the_standby` は 60 秒超の低速（userns probe 待ち）だったが最終的に `ok`。前回 run で見られた sandbox user namespace 拒否による失敗はこの run では再現せず、workspace 全件成功を確認した。
 
 ## Root delivery 部署 fallback 再検証（verify-perf、2026-10-01）
 

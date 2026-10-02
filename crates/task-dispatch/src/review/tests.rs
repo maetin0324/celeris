@@ -123,9 +123,7 @@ async fn command_checks_are_re_executed_in_workspace() {
         ],
         dir.path(),
     );
-    // 高負荷の評価器では `test -f` の sh 起動が数百 ms を超えることがあるので秒単位にする。
-    // `sleep 30` は 2 倍再試行（exec_check_with_repair_retries）の 6s 後もなお超過するので timeout のままになる。
-    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(3)).await;
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_millis(300)).await;
     assert_eq!(
         v.iter().map(|x| x.pass).collect::<Vec<_>>(),
         vec![true, false, true, false]
@@ -170,8 +168,7 @@ async fn work_unit_checks_time_out() {
         cmd: "sleep 30".into(),
         expect_exit: 0,
     }];
-    // 秒単位の timeout でも `sleep 30` は 2 倍再試行の 6s 後もなお超過するので timeout のままになる。
-    let results = run_work_unit_checks(&ws, &checks, Duration::from_secs(3)).await;
+    let results = run_work_unit_checks(&ws, &checks, Duration::from_millis(300)).await;
     assert_eq!(results.len(), 1);
     assert!(!results[0].0);
     assert!(results[0].1.contains("timed out"));

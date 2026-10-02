@@ -53,3 +53,17 @@ stutter は「対象 process を任意の長さ止める」ことと同じなの
 
 - ADR-0125 §5 にある残りの窓は未対処（本試験の範囲外、本番コードの課題）。`launch` の**途中**（info-fd の報告後・init の ready 前）で controller が SIGKILL されると、`launch` 自身の回収処理は走らない。このとき init が残り得る。本フックで「info 段で止めて controller を殺す」試験を作れば再現できるはずだが、直すには bwrap 側の起動順か外部の回収（`reap_recorded`）が要る。
 - `launch` の ready 待ち 10 秒は本番の上限のまま。フック下では再開後から数えるので、試験の成否には影響しない。
+
+## final review の zombie 証拠失敗への修正（fix-kill-2）
+
+final review では controller と runtime の終了判定を通った後、`bwrap must be an unreaped zombie under the stopped subreaper` で bwrap の `/proc` が消えていた。reaper 停止中に bwrap が消えるのは、親から継承した `SIGCHLD=SIG_IGN` による kernel の auto-reap と整合する。従来の試験は SIGCHLD の disposition と mask を初期化せずに helper を起こしていた。また `SIGSTOP` を送った直後、停止状態の確認前に controller を殺していた。
+
+修正前の試験バイナリを `/bin/sh -c 'trap "" CHLD; exec "$1" --exact controller_kill_leaves_no_runtime_processes --nocapture' sh <test-binary>` で直接起動すると exit 101。`helper_controller` の `NoChildPid` と親試験の `No child processes`（`try_wait`）を再現した。`trap` を cargo に直接かけると cargo 自身が rustc の終了を wait できず `ECHILD` になるため、先に `cargo test -p task-worker --test browser_runtime_isolated --no-run` でバイナリを作ってから直接起動した。
+
+試験本体と `helper_reaper` の開始時に SIGCHLD を `SIG_DFL` に戻し、mask から外す。controller を殺す前に reaper の `/proc` state が `T`/`t` になるまで待つ。従来の zombie assert は維持し、bwrap の PPid がその停止中の reaper であることも確かめる。実行中の bwrap/init が残れば失敗する判定と、`CELERIS_ISOLATION_TESTS=skip` だけを許す規則は維持した。
+
+この worker sandbox は `unshare -U -r true` が exit 1（`uid_map: Operation not permitted`）なので、実 runtime の通常起動・SIGCHLD 無視起動での反復 pass と final review の全コマンド exit 0 はここでは得られない。修正後の直接起動は、両条件とも `helper_controller` の `NoChildPid` により `launch-info` 前で失敗し、SIGCHLD 無視時の親 `ECHILD` は消えた。代わりに追加した `ignored_sigchld_still_keeps_unreaped_child_after_reset` は、`trap '' CHLD` の下で起こした helper が `/bin/true` を unreaped zombie として保持し、明示的に wait できることを 5/5 exit 0 で確認した。`cargo fmt --all -- --check` と `cargo clippy --workspace --all-targets -- -D warnings` も exit 0。
+
+final review と同じ check コマンド列は、task-dispatch の 3 コマンドと `cargo build -p task-worker --bins` まで exit 0。その次の `browser_injection_wire` は real browser 試験の `unshare: Operation not permitted` で exit 101 となり、コマンド列の最後の `browser_runtime_isolated` には到達しなかった。これは上記の sandbox 制限と同じで、pass とは記録しない。
+
+userns を使える host で `cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes` を通常起動と、事前ビルド済み試験バイナリの `trap '' CHLD` 起動でそれぞれ反復し、続けて final review の check コマンドを再実行する必要がある。

@@ -75,6 +75,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | 再帰task木の操作（adopt/plan/view） | task-ops::tree | `crates/task-ops/src/tree{,_adopt,_plan,_view}.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | worker の run が宣言した後続 task（案件・repos の継承、`followups.json`） | task-ops::followup | `crates/task-ops/src/followup.rs`, `crates/task-dispatch/src/dispatcher/followups.rs` | [ADR-0098](adr/0098-worker-created-tasks-inherit-the-origin-project.md) |
 | git 差分・変更取り込み判定 | task-ops::changes | `crates/task-ops/src/changes.rs` | [ADR-0043](adr/0043-workspaces.md) |
+| 受信箱（人の判断）と通知（知らせ）の 2 系統・Discord 送り出し | task-ops::inbox, task-core::notify, celeris::notify | `crates/task-ops/src/inbox.rs`, `crates/task-core/src/notify.rs`, `crates/celeris/src/notify.rs` | [ADR-0133](adr/0133-inbox-and-notifications.md), [ADR-0037](adr/0037-discord-notifications.md) |
 | ドキュメント整備の自動化 | task-ops::docs_maintenance | `crates/task-ops/src/docs_maintenance.rs` | [ADR-0068](adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
 
 ## task-api — HTTP API（`/api/v1`）

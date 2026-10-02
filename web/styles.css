@@ -1,1 +1,156 @@
 @import "tailwindcss";
+
+/*
+ * shadcn/Radix の component は data-state / data-side を使う（例 data-[state=open]）。
+ * これは任意値ではなく任意 variant だが、FRONTEND_CONTRACT.md の grep は `-\[[^]]+\]` に一致してしまうため、
+ * named variant として先に定義し、共通部品側は `state-open:` のように使う（DESIGN.md「@theme の token 名一覧」）。
+ */
+@custom-variant state-open (&[data-state="open"]);
+@custom-variant state-closed (&[data-state="closed"]);
+@custom-variant state-checked (&[data-state="checked"]);
+@custom-variant state-unchecked (&[data-state="unchecked"]);
+@custom-variant state-indeterminate (&[data-state="indeterminate"]);
+@custom-variant state-active (&[data-state="active"]);
+@custom-variant state-inactive (&[data-state="inactive"]);
+@custom-variant state-on (&[data-state="on"]);
+@custom-variant state-off (&[data-state="off"]);
+@custom-variant side-top (&[data-side="top"]);
+@custom-variant side-bottom (&[data-side="bottom"]);
+@custom-variant side-left (&[data-side="left"]);
+@custom-variant side-right (&[data-side="right"]);
+
+@theme {
+  --color-background: #f4f7f9;
+  --color-surface: #ffffff;
+  --color-foreground: #20303c;
+  --color-muted-foreground: #536572;
+  --color-muted: #f4f7f9;
+
+  --color-primary: #245675;
+  --color-primary-foreground: #ffffff;
+  --color-primary-hover: #1d4660;
+  --color-primary-active: #17384d;
+
+  --color-accent: #e5eef4;
+  --color-accent-foreground: #20303c;
+
+  --color-border: #d3dce2;
+  --color-input: #758593;
+  --color-ring: #245675;
+
+  --color-success: #f0fdf4;
+  --color-success-foreground: #166534;
+  --color-warning: #fefce8;
+  --color-warning-foreground: #854d0e;
+  --color-danger: #fef2f2;
+  --color-danger-foreground: #991b1b;
+  --color-info: #eff6ff;
+  --color-info-foreground: #1e40af;
+  --color-neutral: #f1f5f9;
+  --color-neutral-foreground: #475569;
+  --color-running: #ecfeff;
+  --color-running-foreground: #155e75;
+
+  --color-destructive: #991b1b;
+  --color-destructive-foreground: #ffffff;
+  --color-destructive-hover: #7f1d1d;
+
+  --color-code: #f1f5f9;
+  --color-code-foreground: #20303c;
+
+  --color-overlay: rgb(32 48 60 / 0.4);
+
+  --font-sans: "Yu Gothic UI", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --text-title: 1.375rem;
+  --text-title--line-height: 1.35;
+  --text-title-wide: 1.5rem;
+  --text-title-wide--line-height: 1.35;
+  --text-section: 1.125rem;
+  --text-section--line-height: 1.4;
+  --text-body: 1rem;
+  --text-body--line-height: 1.5;
+  --text-label: 0.875rem;
+  --text-label--line-height: 1.5;
+  --text-code: 0.875rem;
+  --text-code--line-height: 1.6;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --spacing: 0.25rem;
+  --spacing-1: 0.25rem;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --spacing-6: 1.5rem;
+  --spacing-8: 2rem;
+  --spacing-11: 2.75rem;
+  --spacing-target: 2.75rem;
+  --spacing-icon-sm: 1rem;
+  --spacing-icon: 1.25rem;
+  --spacing-nav: 14rem;
+  --spacing-list: 20rem;
+  --spacing-drawer: 32rem;
+  --spacing-form: 40rem;
+
+  --container-prose: 65ch;
+  --container-prose-ja: 40em;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  --shadow-flat: none;
+  --shadow-popover: 0 4px 12px rgb(32 48 60 / 0.12);
+  --shadow-dialog: 0 8px 24px rgb(32 48 60 / 0.18);
+
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+}
+
+/* shadcn の既定変数（card/popover/secondary）は Celeris token の alias にし、色の正本を二重化しない。 */
+@theme inline {
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-foreground);
+  --color-popover: var(--color-surface);
+  --color-popover-foreground: var(--color-foreground);
+  --color-secondary: var(--color-surface);
+  --color-secondary-foreground: var(--color-foreground);
+}
+
+/* Tailwind utility を自動生成する名前空間とは別の、通常の custom property。 */
+:root {
+  --duration-fast: 120ms;
+  --duration-overlay: 180ms;
+  --border-width: 1px;
+  --focus-width: 2px;
+  --focus-offset: 2px;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+
+  :focus-visible {
+    outline: var(--focus-width) solid var(--color-ring);
+    outline-offset: var(--focus-offset);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

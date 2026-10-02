@@ -1,14 +1,24 @@
-# Format: old path<TAB>proposed new path<TAB>human|agent|archive|ambiguous; paths are repository-relative; proposals do not move files.
-# human = reader-facing specification/guide; agent = decision/progress/work record; archive = obsolete or duplicate; ambiguous = classification needs a human decision.
-# Roots follow ADR-0128: docs/ = human (current specs, guides, ops, API), agent-docs/ = agent records (adr, progress, reports, notes, archive). Unchanged paths are listed with old = new.
-# reason docs/gui/bootstrap/CLAUDE.md: docs/gui/bootstrap/CLAUDE.md:1-4 は初期配布用の作業規則だが、実際の作業規則は gui/CLAUDE.md:1-5 に配置済みで、同じ役割の重複。
-# reason docs/gui/bootstrap/GOAL_TEMPLATE.md: docs/gui/bootstrap/README.md:16 のコピー用テンプレートで、現行の同名成果は gui/docs/GOAL_TEMPLATE.md:1 に配置済み。初期配布元の重複。
-# reason docs/gui/bootstrap/PROGRESS.md: docs/gui/bootstrap/PROGRESS.md:6-16 は G0〜G5 を全て未着手とするが、現行の進捗は gui/docs/PROGRESS.md:1 以下に記録済み。
-# reason docs/gui/bootstrap/README.md: docs/gui/bootstrap/README.md:3,23 は run-gphases.sh による gui/ 作成と git init を指示するが、gui/package.json:1-16 と gui/README.md:1-5 の現行 gui/ は既に追跡・実装済みで、scripts/ に run-gphases.sh は無い。
-# reason docs/gui/bootstrap/agents/auditor.md: docs/gui/bootstrap/README.md:19 の初期コピー元で、現行の agent 定義は gui/.claude/agents/auditor.md:1 に配置済み。初期配布元の重複。
-# reason docs/gui/bootstrap/agents/implementer.md: docs/gui/bootstrap/README.md:18 の初期コピー元で、現行の agent 定義は gui/.claude/agents/implementer.md:1 に配置済み。初期配布元の重複。
-# reason docs/web/dogfood.md: docs/web/dogfood.md:23-61 は人向け起動・確認手順と H6/H9 の未決定・問題記録欄が一体。手順として docs/ に残すか作業記録として agent-docs/ に分けるか人の判断が必要。
-docs/DESIGN.md	docs/DESIGN.md	human
+# Format: old path<TAB>proposed new path<TAB>human|agent|delete; paths are repository-relative; delete uses - as the new path; proposals do not move files.
+# human = current reader-facing specification/guide/operation; agent = decision/progress/work record or agent-only rule; delete = obsolete or duplicate, with the reason recorded below.
+# Roots follow ADR-0128: docs/ = minimal current human documentation, agent-docs/ = agent records and work rules. Unchanged paths are listed with old = new.
+# reason docs/gui/bootstrap/CLAUDE.md: docs/gui/bootstrap/CLAUDE.md:1-4 は初期配布用の作業規則だが、実際の作業規則は gui/CLAUDE.md:1-5 に配置済みで、同じ役割の重複。 人の確認で削除。
+# reason docs/gui/bootstrap/GOAL_TEMPLATE.md: docs/gui/bootstrap/README.md:16 のコピー用テンプレートで、現行の同名成果は gui/docs/GOAL_TEMPLATE.md:1 に配置済み。初期配布元の重複。 人の確認で削除。
+# reason docs/gui/bootstrap/PROGRESS.md: docs/gui/bootstrap/PROGRESS.md:6-16 は G0〜G5 を全て未着手とするが、現行の進捗は gui/docs/PROGRESS.md:1 以下に記録済み。 人の確認で削除。
+# reason docs/gui/bootstrap/README.md: docs/gui/bootstrap/README.md:3,23 は run-gphases.sh による gui/ 作成と git init を指示するが、gui/package.json:1-16 と gui/README.md:1-5 の現行 gui/ は既に追跡・実装済みで、scripts/ に run-gphases.sh は無い。 人の確認で削除。
+# reason docs/gui/bootstrap/agents/auditor.md: docs/gui/bootstrap/README.md:19 の初期コピー元で、現行の agent 定義は gui/.claude/agents/auditor.md:1 に配置済み。初期配布元の重複。 人の確認で削除。
+# reason docs/gui/bootstrap/agents/implementer.md: docs/gui/bootstrap/README.md:18 の初期コピー元で、現行の agent 定義は gui/.claude/agents/implementer.md:1 に配置済み。初期配布元の重複。 人の確認で削除。
+# reason docs/web/dogfood.md: 人の確認で削除。起動・確認手順と H6/H9 の未決定・問題記録が混在する一度きりの作業文書で、現行の運用文書は docs/web/parallel-operation.md にある。
+# reason docs/browser-live-relay.md: Phase 2 の再実行手順と過去の証跡が中心なので agent の報告へ寄せる。
+# reason docs/gui/DESIGN-GUI.md: Phase 8/9 当時の前提・G フェーズの設計経緯なので agent の設計記録へ寄せる。
+# reason docs/gui/model-routing/*.png: 日付付きの実装報告だけが参照する検証画像なので報告と同じ agent 側へ寄せる。
+# reason docs/ops/browser-isolated-runtime-subuid.md: 一度きりの実証手順と進捗への追記指示なので agent 側へ寄せる。
+# reason docs/ops/dev-builds-local-target-dir.md: agent の開発ビルド規則と 2026-09-30 の経緯なので agent 側へ寄せる。
+# reason docs/ops/ui-ux-external-skills.md: 特定の導入作業を一度だけ行う手順なので agent 側の作業記録へ寄せる。
+# reason docs/testing.md: WU の check と agent 向けの試験規則なので agent 側へ寄せる。
+# reason docs/ops/adr-0079-r5b-runbook.md: 人の確認で削除。ADR-0079 R5b の一度きりの作業手順であり、現行の運用文書ではない。
+# reason docs/ops/home-nfs-migration-2026-09-25.md: 人の確認で削除。2026-09-25 の一度きりの移行手順であり、現行の運用文書ではない。
+# reason docs/DESIGN.md: 人の確認で削除。現行の仕様の入口は docs/SPEC.md とし、CLAUDE.md の参照もそちらへ変える。
+docs/DESIGN.md	-	delete
 docs/GOAL_TEMPLATE.md	agent-docs/GOAL_TEMPLATE.md	agent
 docs/PROGRESS.md	agent-docs/PROGRESS.md	agent
 docs/SPEC.md	docs/SPEC.md	human
@@ -125,42 +135,42 @@ docs/api/v1/event.schema.json	docs/api/v1/event.schema.json	human
 docs/architecture-map.md	docs/architecture-map.md	human
 docs/browser-capability.md	docs/guides/browser-capability.md	human
 docs/browser-credentiald.md	docs/guides/browser-credentiald.md	human
-docs/browser-live-relay.md	docs/guides/browser-live-relay.md	human
+docs/browser-live-relay.md	agent-docs/reports/browser-live-relay.md	agent
 docs/celeris-api-v1.md	docs/api/v1/overview.md	human
 docs/execution-architecture-2026-09-24.md	agent-docs/reports/execution-architecture-2026-09-24.md	agent
 docs/execution-decomposition-report-2026-09-25.md	agent-docs/reports/execution-decomposition-report-2026-09-25.md	agent
 docs/execution-parallel-report-2026-09-28.md	agent-docs/reports/execution-parallel-report-2026-09-28.md	agent
-docs/gui/DESIGN-GUI.md	docs/gui/design.md	human
+docs/gui/DESIGN-GUI.md	agent-docs/gui/design.md	agent
 docs/gui/adr/0001-architecture-boundary.md	agent-docs/gui/adr/0001-architecture-boundary.md	agent
 docs/gui/adr/0002-frontend-stack.md	agent-docs/gui/adr/0002-frontend-stack.md	agent
 docs/gui/api.md	docs/api/v1/gui-api.md	human
-docs/gui/bootstrap/CLAUDE.md	agent-docs/archive/gui/bootstrap/CLAUDE.md	archive
-docs/gui/bootstrap/GOAL_TEMPLATE.md	agent-docs/archive/gui/bootstrap/GOAL_TEMPLATE.md	archive
-docs/gui/bootstrap/PROGRESS.md	agent-docs/archive/gui/bootstrap/PROGRESS.md	archive
-docs/gui/bootstrap/README.md	agent-docs/archive/gui/bootstrap/README.md	archive
-docs/gui/bootstrap/agents/auditor.md	agent-docs/archive/gui/bootstrap/agents/auditor.md	archive
-docs/gui/bootstrap/agents/implementer.md	agent-docs/archive/gui/bootstrap/agents/implementer.md	archive
+docs/gui/bootstrap/CLAUDE.md	-	delete
+docs/gui/bootstrap/GOAL_TEMPLATE.md	-	delete
+docs/gui/bootstrap/PROGRESS.md	-	delete
+docs/gui/bootstrap/README.md	-	delete
+docs/gui/bootstrap/agents/auditor.md	-	delete
+docs/gui/bootstrap/agents/implementer.md	-	delete
 docs/gui/celeris-proposals.md	agent-docs/gui/celeris-proposals.md	agent
-docs/gui/model-routing/accounts-1440.png	docs/gui/model-routing/accounts-1440.png	human
-docs/gui/model-routing/accounts-360.png	docs/gui/model-routing/accounts-360.png	human
-docs/gui/model-routing/accounts-393.png	docs/gui/model-routing/accounts-393.png	human
-docs/gui/model-routing/accounts-412.png	docs/gui/model-routing/accounts-412.png	human
-docs/gui/model-routing/providers-1440.png	docs/gui/model-routing/providers-1440.png	human
-docs/gui/model-routing/providers-360.png	docs/gui/model-routing/providers-360.png	human
-docs/gui/model-routing/providers-393.png	docs/gui/model-routing/providers-393.png	human
-docs/gui/model-routing/providers-412.png	docs/gui/model-routing/providers-412.png	human
+docs/gui/model-routing/accounts-1440.png	agent-docs/gui/model-routing/accounts-1440.png	agent
+docs/gui/model-routing/accounts-360.png	agent-docs/gui/model-routing/accounts-360.png	agent
+docs/gui/model-routing/accounts-393.png	agent-docs/gui/model-routing/accounts-393.png	agent
+docs/gui/model-routing/accounts-412.png	agent-docs/gui/model-routing/accounts-412.png	agent
+docs/gui/model-routing/providers-1440.png	agent-docs/gui/model-routing/providers-1440.png	agent
+docs/gui/model-routing/providers-360.png	agent-docs/gui/model-routing/providers-360.png	agent
+docs/gui/model-routing/providers-393.png	agent-docs/gui/model-routing/providers-393.png	agent
+docs/gui/model-routing/providers-412.png	agent-docs/gui/model-routing/providers-412.png	agent
 docs/knowledge.md	docs/guides/knowledge.md	human
 docs/llm-source.md	docs/guides/llm-source.md	human
 docs/mcp.md	docs/guides/mcp.md	human
 docs/model-routing-2026-09-20.md	agent-docs/reports/model-routing-2026-09-20.md	agent
 docs/notes/build-cache-tiering-input-2026-09-28.md	agent-docs/notes/build-cache-tiering-input-2026-09-28.md	agent
-docs/ops/adr-0079-r5b-runbook.md	docs/ops/adr-0079-r5b-runbook.md	human
-docs/ops/browser-isolated-runtime-subuid.md	docs/ops/browser-isolated-runtime-subuid.md	human
-docs/ops/dev-builds-local-target-dir.md	docs/ops/dev-builds-local-target-dir.md	human
-docs/ops/home-nfs-migration-2026-09-25.md	docs/ops/home-nfs-migration-2026-09-25.md	human
+docs/ops/adr-0079-r5b-runbook.md	-	delete
+docs/ops/browser-isolated-runtime-subuid.md	agent-docs/ops/browser-isolated-runtime-subuid.md	agent
+docs/ops/dev-builds-local-target-dir.md	agent-docs/ops/dev-builds-local-target-dir.md	agent
+docs/ops/home-nfs-migration-2026-09-25.md	-	delete
 docs/ops/nextest.md	docs/ops/nextest.md	human
 docs/ops/sccache-l1.md	docs/ops/sccache-l1.md	human
-docs/ops/ui-ux-external-skills.md	docs/ops/ui-ux-external-skills.md	human
+docs/ops/ui-ux-external-skills.md	agent-docs/ops/ui-ux-external-skills.md	agent
 docs/progress/browser-followups.md	agent-docs/progress/browser-followups.md	agent
 docs/progress/phase-001-050.md	agent-docs/progress/phase-001-050.md	agent
 docs/progress/phase-051-100.md	agent-docs/progress/phase-051-100.md	agent
@@ -193,11 +203,11 @@ docs/protocol/worker-protocol.schema.json	docs/protocol/worker-protocol.schema.j
 docs/providers.md	docs/guides/providers.md	human
 docs/repository-documentation-maintenance.md	docs/guides/repository-documentation-maintenance.md	human
 docs/selfdeploy.md	docs/ops/selfdeploy.md	human
-docs/testing.md	docs/guides/testing.md	human
+docs/testing.md	agent-docs/guides/testing.md	agent
 docs/web/adr/web-0001-sse-invalidate-unlisted-kinds.md	agent-docs/web/adr/web-0001-sse-invalidate-unlisted-kinds.md	agent
 docs/web/adr/web-0002-project-plan-milestone-successors.md	agent-docs/web/adr/web-0002-project-plan-milestone-successors.md	agent
 docs/web/adr/web-0003-parallel-operation.md	agent-docs/web/adr/web-0003-parallel-operation.md	agent
-docs/web/dogfood.md	docs/web/dogfood.md	ambiguous
+docs/web/dogfood.md	-	delete
 docs/web/feature-parity.md	agent-docs/web/feature-parity.md	agent
 docs/web/gates/p5-01-latency.md	agent-docs/web/gates/p5-01-latency.md	agent
 docs/web/gates/p5-02-security.md	agent-docs/web/gates/p5-02-security.md	agent

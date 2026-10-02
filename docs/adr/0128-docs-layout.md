@@ -5,8 +5,9 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
 
 - 日付: 2026-10-02
 - 状態: 採用（実装は同じ task の後続 WorkUnit: doc-tools → move-docs → refs-* → cleanup → land-verify）
+- 付記: 人の確認 2026-10-02 で改訂。archive を廃止し、DESIGN.md の削除と人向け文書の最小化を決定した。
 - 関連: ADR-0079 D7（人の決定）、ADR-0118（review 前の target 同期）、ADR-0120（IntegrationRepair）、
-  `docs/testing.md`（決定的な試験）、分類表 `scripts/dev/docs-layout.tsv`（旧パス → 新パス → 分類）
+  `docs/testing.md`（決定的な試験、移動前のパス）、分類表 `scripts/dev/docs-layout.tsv`（旧パス → 新パス → 分類）
 
 ## 状況
 
@@ -26,7 +27,7 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
 | root | 読み手 | 置くもの | 置かないもの |
 |---|---|---|---|
 | `docs/` | 人（と agent） | **現行の**仕様・概要（`SPEC.md`）、運用手順（`docs/ops/`）、API・protocol の説明と schema（`docs/api/`, `docs/protocol/`）、GUI・機能の使い方（`docs/guides/`, `docs/gui/`, `docs/web/` の運用文書）、索引（`docs/architecture-map.md`） | 経緯・進捗・判断過程・日付付きの調査・作業メモ・古い文書 |
-| `agent-docs/` | agent（人は必要なときだけ） | `adr/`（設計判断）、`progress/`（task ごとの進捗）、`PROGRESS.md`（凍結した旧進捗）、`reports/`（日付付きの調査・報告）、`notes/`（作業メモ）、`gui/` と `web/`（それぞれの ADR・計画・gate 記録）、`archive/`（古い文書）、`GOAL_TEMPLATE.md` | 人が現行の手順として読むべきもの |
+| `agent-docs/` | agent（人は必要なときだけ） | `adr/`（設計判断）、`progress/`（task ごとの進捗）、`PROGRESS.md`（凍結した旧進捗）、`reports/`（日付付きの調査・報告）、`notes/`（作業メモ）、`gui/`・`web/`・`ops/`・`guides/`（agent 向けの設計・検証・作業規則）、`GOAL_TEMPLATE.md` | 人が現行の手順として読むべきもの |
 
 - 判定の問い: 「その文書の内容が今のコードと食い違ったら、文書を直すべきか」。直すべき（現行の説明）なら `docs/`、
   その時点の記録として残すべき（経緯）なら `agent-docs/`。
@@ -36,19 +37,22 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
   （名前を変えても読み手の得が無く、参照の追従だけが増える）。散らばった話題別の文書は `docs/guides/`・`docs/ops/` にまとめる。
 - 入口の文書: 人向けは `docs/README.md`、agent 向けは `agent-docs/README.md`（読む順: SPEC → architecture-map →
   関係する ADR → `progress/` の索引）。どちらも move-docs で新設する。CLAUDE.md の「最初に読むもの」は
-  `agent-docs/README.md` を指す（refs-repo）。
-- 分類と新パスの正本は `scripts/dev/docs-layout.tsv`。新パス列は必ず `docs/` か `agent-docs/` で始まる。
-  分類列（human/agent/archive/ambiguous）は人の確認で変わり得る。`ambiguous` の行は人が決めるまで動かさない。
+  `docs/SPEC.md` と `agent-docs/README.md` を指す（refs-repo）。
+- 分類と新パスの正本は `scripts/dev/docs-layout.tsv`。分類列は `human|agent|delete`。
+  human/agent の新パス列は `docs/` か `agent-docs/` で始め、delete の新パス列は `-` とする。
 
-### D2. archive と『古い』の明示
+### D2. 腐った記述の扱い
 
-- 置き場所は `agent-docs/archive/<docs/ から見た元の相対パス>`（例: `docs/gui/bootstrap/README.md` →
-  `agent-docs/archive/gui/bootstrap/README.md`）。`docs/` には現行のものだけを残し、人が古い手順を読み違えないようにする。
-- move-docs は内容を変えずに `git mv` だけをする。cleanup が各 archive 文書の 1 行目に次の注記を足す:
-  `> **古い（archive YYYY-MM-DD）**: <理由>。現行: <置き換え先のパス、または「なし」>`
-- cleanup は `agent-docs/archive/README.md` に「元のパス・archive 日・理由・現行」の表を置く。
-  消したファイルは理由を付けて task の進捗ファイルと artifacts の一覧に残す（情報を黙って落とさない）。
-- 腐った記述（実装と食い違う・廃止機能の手順・重複）の既定の扱い（消す／直す／archive）は人の決定 `stale-default` に従う。
+- 腐った記述（実装と食い違う・廃止機能の手順・重複）は、現状に合わせて直す、経緯として価値があれば
+  `agent-docs/` へ移す、価値のないものは削除する。判断に迷うものは削除せず agent 側に寄せる。
+- 移動するファイルは `git mv` で履歴を保つ。削除するファイルは `git rm` し、D9 の表に記録する。
+- `agent-docs/reports/` の日付付き報告は、今の実装と食い違うなら削除する。
+
+### D2a. 人向け `docs/` の最小化
+
+- `docs/` には、人が現行の仕様・使い方・運用を理解するのに必要十分な文書だけを置く。
+  一度きりの作業手順、経緯、重複、agent しか使わない説明は `agent-docs/` へ移すか削除する。
+- 同じ話題は 1 つの文書に寄せる。cleanup は現行の実装と照らして古い節を削り、重なる guide や API の説明を整理する。
 
 ### D3. 進捗ファイルの規則（PROGRESS.md への追記をやめる）
 
@@ -63,7 +67,7 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
   ---
   ```
   本文は従来の PROGRESS 節と同じく「完了日・証拠（コマンドと結果）・未解決・提案」を書く。
-  DESIGN.md への提案もこのファイルの `## 提案` 節に書く。
+  仕様変更の提案もこのファイルの `## 提案` 節に書く。
 - **そのファイルは持ち主の task だけが書く。** 同じ段で並列に走る WorkUnit は
   `agent-docs/progress/YYYY-MM-DD-<slug>/<wu-key>.md` に分けて書き、親ファイルは段が直列のときだけ書く。
 - 既存の `phase-*.md` などの旧ファイルは名前を変えずに `agent-docs/progress/` へ移し、履歴として残す。新しい追記先にはしない。
@@ -134,7 +138,7 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
     `web/**`・`gui/**` のソース（`node_modules`・生成物を除く）に出る `docs/…`・`agent-docs/…` のパスの実在を確かめる。
     `NNNN`・`<…>`・`*`・`{…}`・`$` を含む雛形、`scripts/dev/docs-layout.tsv`（旧パス列を持つ）と `scripts/dev/testdata/` は除外。
   - progress・ADR・report の本文に出る素のパス文字列は履歴なので見ない（Markdown リンクだけ見る）。
-    `agent-docs/archive/**` と、移行期間中の `agent-docs/PROGRESS.md`・`agent-docs/progress/phase-F.md` は対象外（台本内の 1 変数に列挙）。
+    移行期間中の `agent-docs/PROGRESS.md`・`agent-docs/progress/phase-F.md` は対象外（台本内の 1 変数に列挙）。
   - 壊れた参照が 1 件でもあれば exit 1、無ければ exit 0。
 - `scripts/dev/check-adr-numbers.sh`
   - 対象: `agent-docs/adr/`、`agent-docs/gui/adr/`、`agent-docs/web/adr/`、および移行期間中は旧 `docs/adr/`・`docs/gui/adr/`・`docs/web/adr/`
@@ -144,22 +148,24 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
     （「新しい ADR は YYYY-MM-DD-<slug>.md で書く」と出す）。日付形式で slug が重複 → 違反。形式に合わない名前 → 違反。
   - `--refs`: この branch で足した ADR（main との merge-base からの追加分）と、`refs/heads/main`・`refs/heads/celeris/*`・
     `refs/heads/celeris-wu/*` の tree にある ADR とで番号・日付+slug が重なるものを出して exit 1（取り込み前の確認用）。
-- `scripts/dev/check-doc-layout.sh <tsv>`（move-docs）: 各行について、旧≠新 なら旧が無く新が追跡されていること、旧=新 なら存在すること。
+- `scripts/dev/check-doc-layout.sh <tsv>`（move-docs）: human/agent の各行は、旧≠新なら旧が無く新が追跡されていること、
+  旧=新なら存在することを確かめる。delete の行は旧が無く、進捗ファイルの削除表に旧パス・理由・最後の commit があることを確かめる。
 - `scripts/dev/progress-index.sh [--check]`（D4）。
 - land-verify と以後の land 系の check は `check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check` を必ず含める。
   WU の check の雛形（task-worker の prompt）には、ADR と進捗の新しい置き場所と、この 3 本を書く（refs-worker）。
 
 ### D8. docs/DESIGN.md（人の決定 `design-md`）
 
-CLAUDE.md で書き換え禁止のため、この ADR では決めない。選択肢:
+人の確認（2026-10-02）により `docs/DESIGN.md` は削除する。本文を変更して別文書に統合しない。
+CLAUDE.md の「最初に読むもの」にある参照は `docs/SPEC.md` へ変える。削除は move-docs、参照変更は refs-repo で行う。
 
-1. 現在地 `docs/DESIGN.md` のまま動かさない（CLAUDE.md の参照もそのまま）。
-2. 本文を変えずに `agent-docs/DESIGN.md` へ `git mv`（経緯の文書として agent 側へ。SPEC.md が人向けの正）。
-3. 本文を変えずに `agent-docs/archive/DESIGN.md` へ `git mv` し、archive の表に「SPEC.md に置き換え済み」と書く
-   （本文への注記は足さない）。
-4. SPEC.md へ統合する（本文の書き換えを伴うため、人が範囲を指示する）。
+### D9. 削除の記録
 
-答えが出るまで `docs-layout.tsv` の DESIGN.md の行は旧=新（`docs/DESIGN.md`）のままにする。
+削除した各ファイルの **旧パス・削除理由・削除前の最後の commit** を表に残す。
+本 task では `agent-docs/progress/2026-10-02-docs-layout.md` を親の記録とし、並列 WorkUnit は
+`agent-docs/progress/2026-10-02-docs-layout/<wu-key>.md` に自分の削除分を書く。
+最後の commit は削除前に `git log -1 --format=%H -- <旧パス>` で確かめる。
+親ファイルは WorkUnit の統合後に記録を集める。これにより Git から内容を取り出せる。
 
 ## 結果
 

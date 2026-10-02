@@ -348,7 +348,15 @@ async fn get_task_execution(
                         None,
                         None,
                         None,
-                        task_core::summarize_execution_metrics(&task, &[]),
+                        // ADR-0130 D4: Execution 節の無い task でも behind の最後の snapshot は出す。
+                        task_core::summarize_execution_metrics(&task, &[]).with_behind_target(
+                            &task_ops::behind_target::behind_target_of(
+                                store,
+                                task_id,
+                                time::OffsetDateTime::now_utc(),
+                            )
+                            .map_err(|e| ops_problem(store, e, Some("task_execution_get")))?,
+                        ),
                         None,
                         Vec::new(),
                         None,

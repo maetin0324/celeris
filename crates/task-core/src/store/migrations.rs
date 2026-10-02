@@ -83,10 +83,12 @@ pub(crate) const MIGRATION_0037: &str =
 pub(crate) const MIGRATION_0038: &str =
     include_str!("../../migrations/0038_work_unit_sessions.sql");
 pub(crate) const MIGRATION_0039: &str = include_str!("../../migrations/0039_write_sets.sql");
+/// ADR-0130 D4: task branch の target からの behind snapshot。
+pub(crate) const MIGRATION_0040: &str = include_str!("../../migrations/0040_behind_targets.sql");
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 39;
+pub const SCHEMA_VERSION: u32 = 40;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -130,6 +132,7 @@ impl SqliteStore {
             37 => Ok(MIGRATION_0037),
             38 => Ok(MIGRATION_0038),
             39 => Ok(MIGRATION_0039),
+            40 => Ok(MIGRATION_0040),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

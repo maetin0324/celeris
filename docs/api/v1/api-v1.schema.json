@@ -8493,6 +8493,31 @@
     "ExecutionMetrics": {
       "description": "D19: Task 単位の実行メトリクス（`GET /tasks/{id}/execution` と `GET /metrics/execution` の材料）。",
       "properties": {
+        "behind_target_age_seconds": {
+          "description": "ADR-0130 D4: 正の behind を最初に観測してからの秒数（behind 0 なら 0）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_commits": {
+          "description": "ADR-0130 D4: target にだけある commit 数（repo の最大）。未観測・計測不可は無い（0 にしない）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_observed_at": {
+          "description": "ADR-0130 D4: 上の 2 欄を観測した UTC 時刻（最後の snapshot。読取時に Git を測り直さない）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "budget_exhausted_by_kind": {
           "additionalProperties": {
             "format": "uint32",

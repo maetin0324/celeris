@@ -1,3 +1,4 @@
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
 import { CelerisError } from "~/celeris/errors";
@@ -12,8 +13,8 @@ import type {
   Timeline,
   TreeView,
 } from "~/celeris/types";
-import { renderToStaticMarkup } from "react-dom/server";
 import { TaskExecutionRoute } from "~/components/task-detail/TaskExecutionRoute";
+import { WriteSetSection } from "~/components/task-detail/WriteSetSection";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;
@@ -67,6 +68,10 @@ const taskDetail: TaskDetail = {
   actions: ["cancel", "edit"],
   worker_run_hint: null,
   delegated: [],
+  // docs/adr/0130 D2/D4 で `TaskDetail` に増えた必須項目。
+  actual_run_write_sets: [],
+  actual_work_unit_write_sets: [],
+  behind_target: {},
 };
 
 const eventsPage: EventsPage = {
@@ -110,30 +115,107 @@ function never(): never {
 }
 
 describe("TaskExecutionRoute direct route", () => {
-  const routeExecution = (route: "direct" | "planned"): ExecutionView => ({
-    metrics: {},
-    route: {
-      route,
-      reasons: [{ rule_id: "atomic/single-repo", ok: route === "direct", detail: "repos=1" }],
-      gate_rule_id: "atomic/score",
-      overrode_gate: false,
-      shadow: false,
-      policy_version: "1",
-    },
-  }) as unknown as ExecutionView;
+  const routeExecution = (route: "direct" | "planned"): ExecutionView =>
+    ({
+      metrics: {},
+      route: {
+        route,
+        reasons: [{ rule_id: "atomic/single-repo", ok: route === "direct", detail: "repos=1" }],
+        gate_rule_id: "atomic/score",
+        overrode_gate: false,
+        shadow: false,
+        policy_version: "1",
+      },
+    }) as unknown as ExecutionView;
 
   it("direct route に直行 badge と recorded reason を表示する", () => {
     const html = renderToStaticMarkup(<TaskExecutionRoute execution={routeExecution("direct")} />);
     expect(html).toContain("直行");
     expect(html).toContain("planner を介さず実装へ進みます");
-    expect(html).toContain("<span class=\"font-mono\">atomic/single-repo</span>: repos=1");
+    expect(html).toContain('<span class="font-mono">atomic/single-repo</span>: repos=1');
   });
 
   it("planned direct route に planner 経路 badge と recorded reason を表示する", () => {
     const html = renderToStaticMarkup(<TaskExecutionRoute execution={routeExecution("planned")} />);
     expect(html).toContain("計画経路");
     expect(html).toContain("planner による計画経路で進みます");
-    expect(html).toContain("<span class=\"font-mono\">atomic/single-repo</span>: repos=1");
+    expect(html).toContain('<span class="font-mono">atomic/single-repo</span>: repos=1');
+  });
+});
+
+/** docs/adr/0130 D1/D2/D4: expected/actual write-set と target からの behind commits・age の表示。 */
+describe("WriteSetSection", () => {
+  const withWriteSets: TaskDetail = {
+    ...taskDetail,
+    expected_write_paths: ["crates/task-core/", "docs/adr/0130-write-set-parallelism-and-behind.md"],
+    actual_run_write_sets: [
+      {
+        repo_id: "code",
+        owner_id: "run-1",
+        base_sha: "a1b2c3d4e5f6",
+        head_sha: "b2c3d4e5f6a1",
+        paths: ["crates/task-core/src/write_set.rs"],
+        status: "complete",
+        recorded_at: "2026-09-15T00:00:05Z",
+      },
+    ],
+    actual_work_unit_write_sets: [
+      {
+        repo_id: "code",
+        owner_id: "wu-core-model",
+        paths: ["crates/task-core/src/write_set.rs", "crates/task-core/migrations/0039_write_sets.sql"],
+        status: "unavailable",
+        reason: "remote worktree",
+        recorded_at: "2026-09-15T00:00:06Z",
+      },
+    ],
+    behind_target: {
+      behind_target_commits: 7,
+      behind_target_age_seconds: 4320,
+      behind_target_observed_at: "2026-09-15T00:00:07Z",
+      repos: [
+        {
+          repo_id: "code",
+          target_ref: "celeris-task/parent",
+          behind_target_commits: 7,
+          behind_target_age_seconds: 4320,
+          behind_target_observed_at: "2026-09-15T00:00:07Z",
+        },
+      ],
+    },
+  };
+
+  it("expected_write_paths・actual write-set・behind target の値をそのまま出す", () => {
+    const html = renderToStaticMarkup(<WriteSetSection detail={withWriteSets} />);
+    expect(html).toContain("crates/task-core/");
+    expect(html).toContain("docs/adr/0130-write-set-parallelism-and-behind.md");
+    expect(html).toContain("crates/task-core/src/write_set.rs");
+    expect(html).toContain("0039_write_sets.sql");
+    expect(html).toContain("remote worktree");
+    expect(html).toContain("a1b2c3d4..b2c3d4e5");
+    // ADR-0130 D4: 遅れを commits / 経過時間で表示し、observed_at を併記する。
+    expect(html).toContain("target から遅れ: 7 commits");
+    expect(html).toContain("1時間12分経過");
+    expect(html).toContain("2026-09-15T00:00:07Z");
+  });
+
+  it("behind が 0・計測不可のときは強調しない（stale だけ warning 色にする）", () => {
+    const html = renderToStaticMarkup(
+      <WriteSetSection
+        detail={{
+          ...taskDetail,
+          behind_target: { behind_target_commits: 0, repos: [] },
+        }}
+      />,
+    );
+    expect(html).toContain("target から遅れ: 0 commits");
+    expect(html).not.toContain("bg-warning-soft");
+  });
+
+  it("expected_write_paths も behind_target も無ければ「指定なし」「計測されていません」を出す", () => {
+    const html = renderToStaticMarkup(<WriteSetSection detail={taskDetail} />);
+    expect(html).toContain("指定なし");
+    expect(html).toContain("計測されていません");
   });
 });
 

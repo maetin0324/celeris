@@ -202,6 +202,25 @@ pub struct ExecutionMetrics {
     /// ADR-0124: worker run の fresh / resumed / 旧形式の比較値。
     #[serde(default)]
     pub continuation: ContinuationMetrics,
+    /// ADR-0130 D4: target にだけある commit 数（repo の最大）。未観測・計測不可は無い（0 にしない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind_target_commits: Option<u64>,
+    /// ADR-0130 D4: 正の behind を最初に観測してからの秒数（behind 0 なら 0）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind_target_age_seconds: Option<u64>,
+    /// ADR-0130 D4: 上の 2 欄を観測した UTC 時刻（最後の snapshot。読取時に Git を測り直さない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behind_target_observed_at: Option<String>,
+}
+
+impl ExecutionMetrics {
+    /// ADR-0130 D4: store の最後の snapshot から組んだ代表値を載せる（events からは再計算しない）。
+    pub fn with_behind_target(mut self, behind: &crate::behind_target::BehindTarget) -> Self {
+        self.behind_target_commits = behind.behind_target_commits;
+        self.behind_target_age_seconds = behind.behind_target_age_seconds;
+        self.behind_target_observed_at = behind.behind_target_observed_at.clone();
+        self
+    }
 }
 
 fn default_true() -> bool {
@@ -499,6 +518,9 @@ pub fn summarize(task: &Task, events: &[Event]) -> ExecutionMetrics {
         quota_unknown_runs,
         cost_usd_complete,
         continuation,
+        behind_target_commits: None,
+        behind_target_age_seconds: None,
+        behind_target_observed_at: None,
     }
 }
 

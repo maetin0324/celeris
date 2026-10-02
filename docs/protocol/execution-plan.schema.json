@@ -343,6 +343,16 @@
           },
           "type": "array"
         },
+        "expected_write_paths": {
+          "description": "Optional repository-relative prefixes inherited by child tasks or leaf WUs.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "features": {
           "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
         },

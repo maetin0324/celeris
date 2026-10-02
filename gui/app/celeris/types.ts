@@ -1455,7 +1455,7 @@ export interface ApiV1Schema {
   milestone_lifecycle: MilestoneLifecycle;
   milestone_patch: MilestonePatchBody;
   new_plan: NewPlanSpec;
-  new_task: NewTaskSpec;
+  new_task: NewTaskBody;
   notify: NotifyView;
   notify_test: NotifyTestResult;
   org_create: OrgCreateBody;
@@ -1509,7 +1509,7 @@ export interface ApiV1Schema {
   stream_reset: StreamReset;
   task: Task;
   task_detail: TaskDetail;
-  task_edit: TaskEdit;
+  task_edit: TaskPatchBody;
   task_edit_result: EditResult;
   task_execution: TaskExecutionView;
   task_list: TaskList;
@@ -4711,6 +4711,10 @@ export interface PlanUnitSpec {
   depends_on?: string[];
   done_when?: string[];
   /**
+   * Optional repository-relative prefixes inherited by child tasks or leaf WUs.
+   */
+  expected_write_paths?: string[] | null;
+  /**
    * ADR-0069 D3: `TaskFeatureHints` の上書きヒント。
    */
   features?: {
@@ -5063,6 +5067,13 @@ export interface ExecutionMetricsSummary {
    * `[llm_proxy]` が無効なら空。
    */
   accounts_now?: AccountNowView[];
+  continuation?: ContinuationMetrics;
+  /**
+   * WU id ごとの比較値。atomic run は `task:<task_id>` キー。
+   */
+  continuation_by_work_unit?: {
+    [k: string]: ContinuationMetrics1;
+  };
   group_by: string;
   groups: ExecutionMetricsGroup[];
   since?: string | null;
@@ -5084,6 +5095,55 @@ export interface AccountNowView {
   source: string;
 }
 /**
+ * `session_resumed` が無い旧 run は unknown。fresh の理由は dispatch の判断記録から読む。
+ */
+export interface ContinuationMetrics {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
+}
+/**
+ * 同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。
+ */
+export interface ContinuationRunTotals {
+  duplicate_reads: number;
+  input_tokens: number;
+  runs: number;
+  wall_ms: number;
+}
+/**
+ * 同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。
+ */
+export interface ContinuationRunTotals1 {
+  duplicate_reads: number;
+  input_tokens: number;
+  runs: number;
+  wall_ms: number;
+}
+/**
+ * 同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。
+ */
+export interface ContinuationRunTotals2 {
+  duplicate_reads: number;
+  input_tokens: number;
+  runs: number;
+  wall_ms: number;
+}
+/**
+ * `session_resumed` が無い旧 run は unknown。fresh の理由は dispatch の判断記録から読む。
+ */
+export interface ContinuationMetrics1 {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
+}
+/**
  * `GET /metrics/execution` の 1 グループ（`group_by` の値ごと）。
  */
 export interface ExecutionMetricsGroup {
@@ -5091,6 +5151,13 @@ export interface ExecutionMetricsGroup {
    * `done / (done + failed)`（両方 0 なら `None`。D19 の「compound の完走率」）。
    */
   completion_rate?: number | null;
+  continuation?: ContinuationMetrics2;
+  /**
+   * WU id ごとの比較値。atomic run は `task:<task_id>` キー。
+   */
+  continuation_by_work_unit?: {
+    [k: string]: ContinuationMetrics1;
+  };
   continuations: number;
   /**
    * D4.3: このグループの全タスクで定価 USD が完全だったか（単価不明のモデルを使った run が
@@ -5123,6 +5190,17 @@ export interface ExecutionMetricsGroup {
    */
   rollup?: RollupMetrics | null;
   tasks: number;
+}
+/**
+ * ADR-0124: fresh / resumed / 旧形式の worker run 別比較。
+ */
+export interface ContinuationMetrics2 {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
 }
 /**
  * D4.3: アカウント × 窓の合計（`ExecutionMetrics.quota` / WU ごとの quota に使う集計行）。
@@ -6379,10 +6457,9 @@ export interface NewPlanSpec {
   workspace?: string | null;
 }
 /**
- * `celerisctl add` から組み立てる新規タスクの指定。API の `POST /tasks` の本文でもある（`docs/gui/api.md` §3.4）。
- * 省略時の既定は `celerisctl add` と同じ。
+ * POST /tasks accepts the task specification and an optional write path hint.
  */
-export interface NewTaskSpec {
+export interface NewTaskBody {
   acceptance: CriterionSpec[];
   /**
    * 省略時は役割の既定 → 指定なし。
@@ -6412,6 +6489,7 @@ export interface NewTaskSpec {
    * gate をバイパスする）。`Agent`（CoS）が書いたときはヒント（signal `H`）として扱う。
    */
   execution?: ExecutionMode | null;
+  expected_write_paths?: string[] | null;
   /**
    * ADR-0069 D3（Phase 114）: lane policy の `TaskFeatures` の明示の上書き（書いた軸だけが勝つ）。
    */
@@ -8199,8 +8277,17 @@ export interface StreamReset {
  */
 export interface TaskDetail {
   actions: Action[];
+  /**
+   * Committed diffs for this task's runs, with snapshot status and Git SHAs.
+   */
+  actual_run_write_sets: ActualWriteSetView[];
+  /**
+   * Cumulative committed diffs for completed work units.
+   */
+  actual_work_unit_write_sets: ActualWriteSetView[];
   answers: AnswerNote[];
   approvals: ApprovalLink[];
+  behind_target: BehindTarget;
   children: TaskRef[];
   /**
    * ADR-0018: `WorkspaceSpec::Remote` のクラスタ（`[[clusters]] id`）。ローカルのタスクは `null`。
@@ -8223,6 +8310,10 @@ export interface TaskDetail {
    * checkpoint・WorkUnit の遷移）が 1 件も無ければ `None`（D23: 既存の古いタスクの詳細を壊さない）。
    */
   execution?: ExecutionView | null;
+  /**
+   * ADR-0130: effective task hint, including inheritance from a parent unit.
+   */
+  expected_write_paths?: string[] | null;
   /**
    * ADR-0070 D1（Phase 116）: `task.status == Failed` のときだけ `Some`（分類・理由・配送済みの release）。
    * GUI のタスク詳細の赤いバナーの材料。
@@ -8270,11 +8361,48 @@ export interface TaskDetail {
    */
   worktree?: WorktreeView | null;
 }
+export interface ActualWriteSetView {
+  base_sha?: string | null;
+  head_sha?: string | null;
+  owner_id: string;
+  paths: string[];
+  reason?: string | null;
+  recorded_at: string;
+  repo_id: string;
+  status: string;
+}
 export interface ApprovalLink {
   approval: TaskRef;
   attempt?: number | null;
   criterion_idx?: number | null;
   decided?: ApprovalDecisionView | null;
+}
+/**
+ * Last observed target snapshot; reading the detail does not run Git.
+ */
+export interface BehindTarget {
+  behind_target_age_seconds?: number | null;
+  behind_target_commits?: number | null;
+  behind_target_observed_at?: string | null;
+  repos?: BehindTargetRepo[];
+}
+/**
+ * Per-repo value with the age computed at `now`.
+ */
+export interface BehindTargetRepo {
+  /**
+   * `null` = 未観測・計測不可。behind 0 なら 0。
+   */
+  behind_target_age_seconds?: number | null;
+  /**
+   * `null` = 計測不可（0 にしない）。
+   */
+  behind_target_commits?: number | null;
+  behind_target_observed_at: string;
+  head_sha?: string | null;
+  repo_id: string;
+  target_ref: string;
+  target_sha?: string | null;
 }
 /**
  * ADR-0090 D5: 待っているクラスタ job（`cluster_job_waits` の `waiting` の行）。
@@ -8382,11 +8510,24 @@ export interface AwaitedChildView {
  */
 export interface ExecutionMetrics {
   /**
+   * ADR-0130 D4: 正の behind を最初に観測してからの秒数（behind 0 なら 0）。
+   */
+  behind_target_age_seconds?: number | null;
+  /**
+   * ADR-0130 D4: target にだけある commit 数（repo の最大）。未観測・計測不可は無い（0 にしない）。
+   */
+  behind_target_commits?: number | null;
+  /**
+   * ADR-0130 D4: 上の 2 欄を観測した UTC 時刻（最後の snapshot。読取時に Git を測り直さない）。
+   */
+  behind_target_observed_at?: string | null;
+  /**
    * D7: 予算切れの種類ごとの run 数（`"turns"` / `"wall_clock"` / `"context"`）。
    */
   budget_exhausted_by_kind?: {
     [k: string]: number;
   };
+  continuation?: ContinuationMetrics3;
   /**
    * D11: continuation（予算切れ・yield の続き）の回数（`Trigger::Continue{why: Continue}`）。
    */
@@ -8481,6 +8622,17 @@ export interface ExecutionMetrics {
   work_units_total: number;
 }
 /**
+ * ADR-0124: worker run の fresh / resumed / 旧形式の比較値。
+ */
+export interface ContinuationMetrics3 {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
+}
+/**
  * ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と
  * GUI の 3 つのボタンの材料）。
  */
@@ -8550,6 +8702,10 @@ export interface ExecutionWorkUnitView {
   continuations: number;
   created_at: string;
   depends_on: string[];
+  /**
+   * Explicit unit hint, or the inherited task hint.
+   */
+  expected_write_paths?: string[] | null;
   harness?: string | null;
   /**
    * ADR-0074 D1.2: `WorkUnitCommitted` の commit。
@@ -8654,7 +8810,7 @@ export interface WorktreeView {
 /**
  * ADR-0044 D1: `PATCH /tasks/{id}` の本文と応答。
  */
-export interface TaskEdit {
+export interface TaskPatchBody {
   /**
    * 差し替え（部分更新はしない）。1 件以上。
    */
@@ -8676,6 +8832,7 @@ export interface TaskEdit {
    * 楽観的排他（現在の `status` と違えば 409）。
    */
   expected_status?: Status | null;
+  expected_write_paths?: string[] | null;
   /**
    * ADR-0046 D3（Phase 59）: ハーネス（`tasks.genre` 列をそのまま harness id として使う）。
    * `null` で外す。`genres`（= ハーネスのレジストリの射影）が空でなければ知らない id は 422。

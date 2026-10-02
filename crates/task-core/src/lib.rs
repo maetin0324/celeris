@@ -28,6 +28,8 @@ pub use browser::{
     EffectiveBrowserPolicy,
 };
 pub mod artifacts;
+/// ADR-0130 D4: task branch の target からの behind commits / age（snapshot と純粋規則）。
+pub mod behind_target;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;
 pub mod console_action;
@@ -84,6 +86,7 @@ pub mod tree;
 pub mod tree_metrics;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
+pub mod write_set;
 
 pub use accounts::{AccountAdapter, RateLimitObservation, RateWindow};
 pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};

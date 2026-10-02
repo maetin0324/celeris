@@ -308,3 +308,12 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 ## Atomic coding task の planner なし直行経路 — Phase 4 統合検証（2026-10-02）
 
 統合後 HEAD `dd4b5a6131b4` の `cargo build --workspace --bins` と `cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は exit 101（instance_handoff 8 件中 3 passed / 5 failed）で、`cargo test -p celeris --test instance_handoff` の単独再実行でも同じ5件が失敗した。3件は ADR-0095 worker db guard の user namespace probe が `Operation not permitted`、2件は handoff dispatch/standby 待機 assertion 失敗。結果、未解決事項、再確認提案は [Phase 4 検証記録](progress/phase-direct-route.md) を参照。実装箇所の案内として architecture map の direct route 行を実ファイル・関数名に更新した。
+
+## expected/actual write-set による並列制御と behind 指標（完了 2026-10-02、ADR-0130）
+
+Phase 5 の実装は完了。expected path hint の正規化、Git 差分からの actual write-set 記録、強く重なる同一 repo の run 待機、target からの behind commits/age の観測、長期 stale task の review 前 sync 優先、API/GUI 表示を接続した。実装箇所は [architecture map](architecture-map.md)、仕様は [ADR-0130](adr/0130-write-set-parallelism-and-behind.md)、検証の証拠・衝突見積もり・未解決事項は [Phase 5 検証記録](progress/phase-writeset.md) を参照。
+
+- 証拠: `cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は exit 0。
+- `cargo test --workspace` と全 binary を続行する `cargo test --workspace --no-fail-fast` はともに exit 101。no-fail-fast は24 targets の失敗を検出し、instance handoff / e2e の worker DB guard user namespace 拒否と browser runtime の `unshare: Operation not permitted` / `NoChildPid` を確認。task-core 657、task-dispatch 557、task-ops 398、task-api lib 76 の各試験は通過。失敗 target の全一覧と test ごとの結果は Phase 5 検証記録に記載。
+- 未解決事項: workspace test 全件の合格は sandbox 制約により未確認。最新 main との merge-tree は10ファイルの衝突を予測。
+- 提案: 統合時に衝突を解消し、通常権限の stage 統合または final review で workspace suite を再実行する。

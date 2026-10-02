@@ -3178,6 +3178,8 @@ mod planner_budget;
 /// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
 /// （`src/dispatcher/tests/stage_reopen.rs`）。
 mod stage_reopen;
+/// ADR-0130 D2: 実装 run・WU の actual write-set の記録（`src/dispatcher/tests/write_set_record.rs`）。
+mod write_set_record;
 
 mod browser_fallback;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
@@ -3185,3 +3187,8 @@ mod direct_route;
 /// ADR-0124 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;
+/// ADR-0130 D5: review 前 sync の待ち行列の stale 優先（`src/dispatcher/tests/stale_priority.rs`）。
+mod stale_priority;
+/// ADR-0130 D3: 同じ repo の expected write-set の重なりで run の起動を待たせる
+/// （`src/dispatcher/tests/write_set_gate.rs`）。
+mod write_set_gate;

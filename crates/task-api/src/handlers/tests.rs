@@ -229,6 +229,98 @@ fn replay_request() -> Request<Body> {
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
+#[tokio::test]
+async fn write_set_can_be_created_updated_and_read_through_task_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router(state(dir.path()));
+    let request = |method: axum::http::Method, uri: &str, body: serde_json::Value| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "127.0.0.1:7710")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {REPLAY_TEST_TOKEN}"))
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let response = app.clone().oneshot(request(axum::http::Method::POST, "/api/v1/tasks", serde_json::json!({
+        "title":"write-set test", "objective":"check API", "acceptance":[{"type":"reviewer","text":"done"}],
+        "expected_write_paths":["src/", "src"]
+    }))).await.unwrap_or_else(|e| match e {});
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = task["id"].as_str().unwrap();
+    let uri = format!("/api/v1/tasks/{id}");
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::GET,
+            &uri,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(detail["expected_write_paths"], serde_json::json!(["src"]));
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::PATCH,
+            &uri,
+            serde_json::json!({
+                "expected_write_paths":["docs/"]
+            }),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::GET,
+            &uri,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(detail["expected_write_paths"], serde_json::json!(["docs"]));
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::PATCH,
+            &uri,
+            serde_json::json!({
+                "expected_write_paths": null
+            }),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(request(
+            axum::http::Method::GET,
+            &uri,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(detail["expected_write_paths"].is_null());
+}
+
 /// ADR-0044 §5 Phase 53 追記（Phase 55）: トークンが無ければ 401。
 #[tokio::test]
 async fn replay_without_a_token_is_unauthorized() {

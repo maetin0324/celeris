@@ -1030,3 +1030,79 @@ async fn integration_repair_exhausted_dirty_failed_stops_for_manual_inspection()
     assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
     assert!(no_review_fail(&events));
 }
+
+/// ADR-0130 D4: the review sync measures behind before and after the rebase. A dirty worktree is
+/// not synced, so the positive behind and its first-observed time (fixed clock) stay recorded;
+/// after a clean sync the snapshot is 0 with no `since`.
+#[tokio::test]
+async fn behind_target_pre_review_sync_records_before_and_after() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = reviewing_task(repo.path(), &store);
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
+    let t0 = OffsetDateTime::parse("2026-10-02T00:00:00Z", &Rfc3339).unwrap();
+    d.test_now = Some(Arc::new(StdMutex::new(t0)));
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    commit_file(&wt.dir, "task.txt", "task\n");
+    commit_file(repo.path(), "main1.txt", "1\n");
+    let target = commit_file(repo.path(), "main2.txt", "2\n");
+
+    // dirty: sync does not touch the branch, behind stays 2 since t0
+    std::fs::write(wt.dir.join("scratch.txt"), "dirty\n").unwrap();
+    let _ = d.spawn_review(task.id, "worker".into(), &ReviewSubject::default());
+    let snaps = store.behind_targets(task.id).unwrap();
+    assert_eq!(snaps.len(), 1);
+    assert_eq!(snaps[0].behind_target_commits, Some(2));
+    assert_eq!(snaps[0].target_sha.as_deref(), Some(target.as_str()));
+    assert_eq!(
+        snaps[0].behind_target_since.as_deref(),
+        Some("2026-10-02T00:00:00Z")
+    );
+}
+
+/// ADR-0130 D4: after a clean pre-review sync the stored behind is 0 and `since` is cleared.
+#[tokio::test]
+async fn behind_target_is_zero_after_pre_review_sync() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = reviewing_task(repo.path(), &store);
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    commit_file(&wt.dir, "task.txt", "task\n");
+    let target = commit_file(repo.path(), "main.txt", "main\n");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let reviewed = git_out(&wt.dir, &["rev-parse", "HEAD"]);
+    let snaps = store.behind_targets(task.id).unwrap();
+    assert_eq!(snaps.len(), 1);
+    assert_eq!(snaps[0].behind_target_commits, Some(0));
+    assert_eq!(snaps[0].behind_target_since, None);
+    assert_eq!(snaps[0].target_sha.as_deref(), Some(target.as_str()));
+    assert_eq!(snaps[0].head_sha.as_deref(), Some(reviewed.as_str()));
+}

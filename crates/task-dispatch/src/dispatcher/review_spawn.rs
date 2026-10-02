@@ -355,20 +355,13 @@ impl Dispatcher {
                     ))?;
                     continue;
                 }
-                let target = if let Some(parent) =
-                    task_core::tree::parent_branch(&task, &self.config.worktree_branch_prefix)
-                {
-                    parent
-                } else {
-                    let configured = self
-                        .store
-                        .repo_get(reference.repo_id)?
-                        .and_then(|r| r.default_branch);
-                    task_ops::changes::default_branch(&repo.source, configured.as_deref())
-                };
-                let target_ref = format!("refs/heads/{target}");
+                let target_ref = self.review_target_ref(&task, reference.repo_id, &repo.source)?;
+                // ADR-0130 D4: sync の前に behind を測る（stale 優先の材料）。
+                self.observe_behind_target(task_id, reference.repo_id, &worktree.dir, &target_ref);
                 let pre_sync_head = crate::integration::rev_parse(&worktree.dir, "HEAD");
                 let outcome = task_ops::changes::sync_onto_target(&worktree.dir, &target_ref);
+                // ADR-0130 D4: sync の後にも測る（取り込めていれば 0 で since が消える）。
+                self.observe_behind_target(task_id, reference.repo_id, &worktree.dir, &target_ref);
                 let (target_sha, before_sha, reviewed_sha) = match outcome {
                     task_ops::changes::SyncOutcome::UpToDate {
                         target_sha,

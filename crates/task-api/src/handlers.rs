@@ -27,9 +27,9 @@ mod projects;
 mod providers;
 mod secrets;
 mod system;
-mod task_actions;
+pub(crate) mod task_actions;
 mod task_io;
-mod tasks;
+pub(crate) mod tasks;
 
 use accounts::{
     accounts, cancel_account_login, check_account, create_account, delete_account,

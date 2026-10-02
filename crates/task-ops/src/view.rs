@@ -126,6 +126,14 @@ pub struct TaskList {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct TaskDetail {
     pub task: Task,
+    /// ADR-0130: effective task hint, including inheritance from a parent unit.
+    pub expected_write_paths: Option<Vec<String>>,
+    /// Committed diffs for this task's runs, with snapshot status and Git SHAs.
+    pub actual_run_write_sets: Vec<ActualWriteSetView>,
+    /// Cumulative committed diffs for completed work units.
+    pub actual_work_unit_write_sets: Vec<ActualWriteSetView>,
+    /// Last observed target snapshot; reading the detail does not run Git.
+    pub behind_target: task_core::behind_target::BehindTarget,
     /// 手元の作業ディレクトリ（絶対パス）。`WorkspaceSpec::Remote` では写し `workspace_root/<task_id>`（run のログはここ。ADR-0018 D1）。
     pub workspace_dir: Option<String>,
     /// ADR-0018: `WorkspaceSpec::Remote` のクラスタ（`[[clusters]] id`）。ローカルのタスクは `null`。
@@ -175,6 +183,33 @@ pub struct TaskDetail {
     /// 解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integration_repair: Option<IntegrationRepairView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct ActualWriteSetView {
+    pub owner_id: String,
+    pub repo_id: String,
+    pub base_sha: Option<String>,
+    pub head_sha: Option<String>,
+    pub paths: Vec<String>,
+    pub status: String,
+    pub reason: Option<String>,
+    pub recorded_at: String,
+}
+
+impl From<task_core::write_set::WriteSetRecord> for ActualWriteSetView {
+    fn from(record: task_core::write_set::WriteSetRecord) -> Self {
+        Self {
+            owner_id: record.owner_id,
+            repo_id: record.repo_id.to_string(),
+            base_sha: record.base_sha,
+            head_sha: record.head_sha,
+            paths: record.paths,
+            status: record.status.as_str().to_string(),
+            reason: record.reason,
+            recorded_at: record.recorded_at,
+        }
+    }
 }
 
 /// ADR-0120 D5: `TaskDetail.integration_repair` / 受信箱 `AttentionItem::Failed.integration_repair`
@@ -396,6 +431,8 @@ pub struct ExecutionPlanOverview {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ExecutionWorkUnitView {
     pub id: String,
+    /// Explicit unit hint, or the inherited task hint.
+    pub expected_write_paths: Option<Vec<String>>,
     pub key: String,
     pub seq: u32,
     pub kind: task_core::WorkUnitKind,
@@ -1183,7 +1220,7 @@ pub fn task_detail(
 
     let task_actions = actions_with_events(&task, &events);
     let failure = task_failure(&task, &events, store)?;
-    let execution = build_execution_view(store, &task, &events)?;
+    let execution = build_execution_view(store, &task, &events, now)?;
     let worker_run_hint = if task.status.is_terminal() {
         None
     } else {
@@ -1213,8 +1250,32 @@ pub fn task_detail(
     let paused_by = paused_by(store, &task)?;
     let cluster_job_wait = active_cluster_job_wait(store, task.id)?;
     let integration_repair = integration_repair_view(&events);
+    let expected_write_paths = store.effective_task_write_paths(id)?;
+    let mut actual_run_write_sets = Vec::new();
+    for run in store.runs_for_task(id)? {
+        actual_run_write_sets.extend(
+            store
+                .run_write_sets(&run.run_id)?
+                .into_iter()
+                .map(ActualWriteSetView::from),
+        );
+    }
+    let mut actual_work_unit_write_sets = Vec::new();
+    for unit in store.work_units_for(id)? {
+        actual_work_unit_write_sets.extend(
+            store
+                .work_unit_write_sets(&unit.id)?
+                .into_iter()
+                .map(ActualWriteSetView::from),
+        );
+    }
+    let behind_target = crate::behind_target::behind_target_of(store, id, now)?;
 
     Ok(TaskDetail {
+        expected_write_paths,
+        actual_run_write_sets,
+        actual_work_unit_write_sets,
+        behind_target,
         is_root_task,
         paused_by,
         cluster_job_wait,
@@ -1303,7 +1364,7 @@ pub fn execution_phase_of(
     task: &Task,
     events: &[(u64, Event)],
 ) -> Result<Option<ExecutionPhase>, OpsError> {
-    Ok(build_execution_view(store, task, events)?.and_then(|v| v.phase))
+    Ok(build_execution_view(store, task, events, OffsetDateTime::now_utc())?.and_then(|v| v.phase))
 }
 
 /// ADR-0072 D19/D20（Phase E5）: Execution 節の組み立て。events に E-phase 由来の活動が 1 件も
@@ -1312,6 +1373,7 @@ fn build_execution_view(
     store: &dyn TaskStore,
     task: &Task,
     events: &[(u64, Event)],
+    now: OffsetDateTime,
 ) -> Result<Option<ExecutionView>, OpsError> {
     let has_activity = events.iter().any(|(_, e)| {
         matches!(
@@ -1336,7 +1398,10 @@ fn build_execution_view(
     }
 
     let event_list: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
-    let metrics = task_core::summarize_execution_metrics(task, &event_list);
+    // ADR-0130 D4: behind は store の最後の snapshot（読取時に Git を測り直さない）。
+    let metrics = task_core::summarize_execution_metrics(task, &event_list).with_behind_target(
+        &crate::behind_target::behind_target_of(store, task.id, now)?,
+    );
     let gate = task.routing.as_ref().and_then(|r| r.execution.clone());
     let route = task.routing.as_ref().and_then(|r| r.route.clone());
 
@@ -1374,6 +1439,7 @@ fn build_execution_view(
             });
             work_units.push(ExecutionWorkUnitView {
                 id: u.id.clone(),
+                expected_write_paths: store.work_unit_expected_write_paths(&u.id)?,
                 key: u.key.clone(),
                 seq: u.seq,
                 kind: u.kind,

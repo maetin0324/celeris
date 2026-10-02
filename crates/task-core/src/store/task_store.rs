@@ -15,6 +15,7 @@ use crate::org::{
 };
 use crate::repos::{ProjectRepo, RepoId};
 use crate::transition::{Outcome, Trigger};
+use crate::write_set::WriteSetRecord;
 
 use super::query::{ListFilter, ListOrder, Page};
 use super::{
@@ -42,6 +43,41 @@ pub trait TaskStore:
     + crate::browser_wait::BrowserWaitStore
     + crate::cluster_job::ClusterJobWaitStore
 {
+    /// ADR-0130 D2: store an immutable per-run Git diff snapshot.
+    fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
+    fn run_write_sets(&self, run_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
+    /// Final cumulative snapshot from the WU base commit to its committed head.
+    fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
+    fn work_unit_write_sets(&self, work_unit_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
+    /// ADR-0130 D4: store one behind measurement; `behind_target_since` follows
+    /// [`crate::behind_target::next_behind_since`] in the same transaction.
+    fn record_behind_target(
+        &self,
+        obs: &crate::behind_target::BehindTargetObservation,
+    ) -> Result<crate::behind_target::BehindTargetSnapshot, StoreError>;
+    fn behind_targets(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<crate::behind_target::BehindTargetSnapshot>, StoreError>;
+    /// ADR-0130 D1: explicit task hint (`None` / empty clears it).
+    fn set_task_expected_write_paths(
+        &self,
+        task_id: TaskId,
+        paths: Option<&[String]>,
+        now: &str,
+    ) -> Result<(), StoreError>;
+    fn task_expected_write_paths(&self, task_id: TaskId)
+    -> Result<Option<Vec<String>>, StoreError>;
+    /// Own hint, else the parent unit's (child tasks).
+    fn effective_task_write_paths(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<Vec<String>>, StoreError>;
+    /// The /3 plan unit's hint, else the task's effective hint.
+    fn work_unit_expected_write_paths(
+        &self,
+        work_unit_id: &str,
+    ) -> Result<Option<Vec<String>>, StoreError>;
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
     fn list(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError>;

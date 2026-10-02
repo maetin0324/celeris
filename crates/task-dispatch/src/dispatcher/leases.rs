@@ -590,16 +590,17 @@ impl Dispatcher {
         // 承認待ちの記録は、まだ reviewing のタスクだけに保つ（cancel 等で抜けたものをスナップショットに残さない。ADR-0013 D4）。
         self.awaiting_human
             .retain(|id| reviewing_tasks.iter().any(|t| t.id == *id));
-        for task in reviewing_tasks {
-            if self.reviewing.contains_key(&task.id)
-                || self.awaiting_children.contains_key(&task.id)
-            {
-                continue;
-            }
-            // ADR-0041 D5: 面倒を見ないタスクのレビューは拾わない（verify は他人のタスクを判定しない）。
-            if !self.is_eligible(&task) {
-                continue;
-            }
+        // ADR-0041 D5: 面倒を見ないタスクのレビューは拾わない（verify は他人のタスクを判定しない）。
+        let candidates: Vec<Task> = reviewing_tasks
+            .into_iter()
+            .filter(|task| {
+                !self.reviewing.contains_key(&task.id)
+                    && !self.awaiting_children.contains_key(&task.id)
+                    && self.is_eligible(task)
+            })
+            .collect();
+        // ADR-0130 D5: 長く stale な task から review 前 sync に渡す。
+        for task in self.order_review_sync_queue(candidates)? {
             let events = self.store.events_for(task.id)?;
             let run_id = last_run_id(&events).unwrap_or_default();
             // 前 tick で見送った場合はメモリ上の done 内容、再起動後は runs/<run_id>/result.json から復元。
@@ -610,9 +611,11 @@ impl Dispatcher {
                     .map(|dir| subject_from_run_dir(&dir, &run_id))
                     .unwrap_or_default(),
             };
-            if !self.spawn_review(task.id, run_id, &subject)? {
+            let started = self.spawn_review(task.id, run_id, &subject)?;
+            if !started {
                 self.pending_subjects.insert(task.id, subject);
             }
+            self.note_review_sync_offer(task.id, started);
         }
         Ok(())
     }

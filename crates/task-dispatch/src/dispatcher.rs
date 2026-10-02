@@ -97,6 +97,8 @@ use crate::policy::{
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod cluster_job_wait;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+/// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
+mod behind_target;
 mod child_tasks;
 mod cluster;
 mod continuation_session;
@@ -114,6 +116,8 @@ mod review_verdict;
 mod run_context;
 mod sinks;
 mod snapshot;
+/// ADR-0130 D5: review 前 sync の待ち行列の stale 優先。
+mod stale_priority;
 mod tree_units;
 use sinks::{ReviewerSink, StoreSink};
 mod work_units;
@@ -123,6 +127,9 @@ use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
 mod worker_finish;
 mod worker_task;
 mod workspaces;
+mod write_set_gate;
+/// ADR-0130 D2: run / WU の actual write-set の採取と保存。
+mod write_set_record;
 
 pub use cluster::{
     ClusterCommandProbe, ClusterConnector, ClusterForwardSpec, ClusterLivenessProbe,
@@ -1044,6 +1051,9 @@ pub struct Dispatcher {
     /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
     /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
     wu_prepare_failures: HashMap<String, WuPrepareFailures>,
+    /// ADR-0130 D2: run（id）ごとの actual write-set の採取場所と開始 HEAD。dispatch で入れ、worker の
+    /// 終了処理で取り出す。プロセス内メモリのみ（再起動後に終わった run は `unavailable` として残す）。
+    run_write_bases: HashMap<String, Vec<write_set_record::RunWriteBase>>,
     /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の
     /// 節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
     stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
@@ -1069,11 +1079,19 @@ pub struct Dispatcher {
     /// 打ち切りは `handle.abort()`（= 子プロセスへの SIGKILL）で、**孫プロセスは即死しない**ので、
     /// 同じ tick で同じ worktree に次の run を入れると 2 つの書き手が重なる（Phase 53 の監査で発見）。
     just_aborted: std::collections::HashSet<TaskId>,
+    /// ADR-0130 D3: 走っている run の expected write-set の予約（run を起こした時点の hint）。
+    write_reservations: HashMap<RunKey, write_set_gate::WriteReservation>,
+    /// ADR-0130 D3: write-set の重なりで見送った候補の待機記録（公平性）。
+    write_set_waits: HashMap<RunKey, write_set_gate::WriteSetWait>,
     /// ADR-0018 D2（監査 4-1）: この tick でクラスタの多重接続が無い／cooldown 中のため待っている ready タスク。「人のログイン待ち」で
     /// 経路なし（`unroutable`）とは別物。`is_idle` の待ち対象から外すだけで、スナップショットには出さない（受信箱の (d) が知らせる）。
     cluster_waiting: std::collections::HashSet<TaskId>,
     /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
     awaiting_human: std::collections::HashSet<TaskId>,
+    /// ADR-0130 D5: review 前 sync を待つ reviewing task（待機開始順と、選ばれなかった連続 tick 数）。
+    review_sync_queue: HashMap<TaskId, stale_priority::ReviewSyncWait>,
+    /// ADR-0130 D5: 次の待機開始順。
+    review_sync_seq: u64,
     /// ADR-0016 D2 / M5: レビューは全 pass だが、委譲した子が終端になるのを待っている reviewing タスク。
     /// 値はその run の id と、Plan kind なら検証済みの plan（子が終わってから `complete_plan` する）。
     awaiting_children: HashMap<TaskId, AwaitingChildren>,
@@ -1314,6 +1332,7 @@ impl Dispatcher {
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
             wu_prepare_failures: HashMap::new(),
+            run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
             liveness_checked_at: None,
             runs_reconciled_at: None,
@@ -1324,9 +1343,13 @@ impl Dispatcher {
             warned_unroutable: std::collections::HashSet::new(),
             warned_cluster_tool: std::collections::HashSet::new(),
             just_aborted: std::collections::HashSet::new(),
+            write_reservations: HashMap::new(),
+            write_set_waits: HashMap::new(),
             unroutable: std::collections::HashSet::new(),
             cluster_waiting: std::collections::HashSet::new(),
             awaiting_human: std::collections::HashSet::new(),
+            review_sync_queue: HashMap::new(),
+            review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
             checking: HashMap::new(),
@@ -1976,6 +1999,9 @@ impl Dispatcher {
         let ready_started = Instant::now();
         let candidates = self.store.ready_tasks(window)?;
         log_slow_step("ready_tasks", ready_started);
+        // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
+        self.prune_write_set_state();
+        let candidates = self.order_write_set_starved_first(candidates);
         let now = self.monotonic_now();
         let mut dispatched = 0;
         // この tick で並列度の上限に達していると分かったプロバイダ（tick 内では空きが増えないので共有する）。

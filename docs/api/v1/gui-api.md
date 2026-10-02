@@ -2848,7 +2848,7 @@ ExecutionPlan と WorkUnit、再帰的な task の木（ADR-0079）、人への�
 
 #### 3.125.2 `GET /tasks/{id}/execution-plan` → 200 `ExecutionPlanView`
 
-有効な計画と `work_units[]` を返す。`versions[]` は `ExecutionPlanVersionView` の版履歴（`version` 昇順、superseded を含む）。有効な計画が無ければ 404 `execution_plan_not_found`。`ExecutionPlanView` は `id`、`task_id`、`version`、`origin`、`status`、`plan`、`created_at`、`work_units` が必須で、`versions` は既定 `[]`。`plan` は採用した `ExecutionPlanSpec` をそのまま返す（/3 を内部の /2 の形に写したものではない）。`plan.schema` は `celeris.execution-plan/1`、`/2`（`phases` と `work_units`）、`/3`（ADR-0079 D2。`stages`・`units`・`decisions` を持ち、`work_units` は空。空の `stages` / `units` / `decisions` は出力しない）のいずれか。/3 でも `work_units[]`（`WorkUnitView`）は段階を工程として写した行（`phase` = 段階の key、統合 WU を含む）。クエリは受け付けない。
+有効な計画と `work_units[]` を返す。`versions[]` は `ExecutionPlanVersionView` の版履歴（`version` 昇順、superseded を含む）。有効な計画が無ければ 404 `execution_plan_not_found`。`ExecutionPlanView` は `id`、`task_id`、`version`、`origin`、`status`、`plan`、`created_at`、`work_units` が必須で、`versions` は既定 `[]`。`plan` は採用した `ExecutionPlanSpec` をそのまま返す（/3 を内部の /2 の形に写したものではない）。`plan.schema` は `celeris.execution-plan/1`、`celeris.execution-plan/2`（`phases` と `work_units`）、`celeris.execution-plan/3`（ADR-0079 D2。`stages`・`units`・`decisions` を持ち、`work_units` は空。空の `stages` / `units` / `decisions` は出力しない）のいずれか。/3 でも `work_units[]`（`WorkUnitView`）は段階を工程として写した行（`phase` = 段階の key、統合 WU を含む）。クエリは受け付けない。
 
 #### 3.125.3 `POST /tasks/{id}/execution-plan`・`PUT /tasks/{id}/execution-plan` → 201 `ExecutionPlanView`（管理系）
 

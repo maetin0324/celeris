@@ -75,6 +75,7 @@ crates/・web/・gui/・scripts/ は変えていない。
 ## 実行した check と結果
 
 - `sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）
+- 計画の check（§3.125.2 に `execution-plan/3`、§3.125.3 に `` `units` `` があるか）→ exit 0。attempt 2 では §3.125.2 が `/3` と略記していて文字列 `execution-plan/3` が無く exit 1 だったため、attempt 3 で `celeris.execution-plan/2`・`celeris.execution-plan/3` と完全な名前で書いた（gui-api.md:2851）。
 - `git diff --quiet 9a53606d -- crates/ web/ gui/ scripts/ CLAUDE.md .claude/ docs/api/v1/api-v1.schema.json docs/api/v1/event.schema.json docs/protocol/` → exit 0
 - docs のみの変更のため `cargo test` / `clippy` は実行していない（コードに差分なし）。
 

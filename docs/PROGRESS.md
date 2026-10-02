@@ -441,3 +441,36 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
+
+## ADR-0129 (1) sccache 撤去: 統合後の全体検証（work unit `verify`）
+
+完了日 2026-10-02。HEAD `273bf5f36153`（統合段 consumers → core → schema-docs がすべて終わった後）で
+workspace 全体の test・clippy・fmt と、sccache 撤去自体の確認を行った。コードの変更は無し（検証のみ）。
+
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace`:
+  - 1 回目 exit 101。`crates/celeris/tests/instance_handoff.rs` の
+    `a_newer_release_takes_over_while_the_old_one_finishes_its_run` が 1 件だけ失敗（「旧インスタンスがタスクを
+    dispatch しない」、10 秒待ちで timeout）。他は全 passed。
+  - 単独再実行（`cargo test -p celeris --test instance_handoff
+    a_newer_release_takes_over_while_the_old_one_finishes_its_run -- --exact`）→ exit 0、1 passed。
+    同時実行中の他試験との負荷競合による flake と判断し、設計変更は不要と判断した（このテストは
+    release handoff のタイミング試験で、ADR-0129 の sccache 撤去とは無関係。このタスクの範囲では修正しない。
+    時間依存試験の決定化は別タスクの対象）。
+  - 2 回目のフル実行 → exit 0。120 試験バイナリすべて `test result: ok`、合計 **3228 passed / 0 failed /
+    0 measured**（ignored を除く）。
+- sccache 撤去自体の確認（非試験コード）:
+  - `crates/scratch-cache` crate は存在しない。`crates/celeris/src/cache_server.rs` は存在しない。
+  - `celeris-sccache.service` / `celeris-scratch-cache.service` は repo 内に存在しない
+    （`scripts/selfdeploy/install-units.sh` は置かない。本番 host 側の既存 unit 停止・削除は
+    `docs/ops/sccache-l1.md` に人が行う手順として書いてある。本番操作はしていない）。
+  - `scripts/scratch/setup-sccache.sh` は存在しない。
+  - `RUSTC_WRAPPER` / `SCCACHE_` の出現は `grep -rn --include='*.rs' crates/`（試験ファイル・`_tests.rs` 除外）で
+    全件確認し、すべてコメント・doc comment（「差し込み・除去をしない」という設計を説明する注記、
+    `ScratchSccacheView` 等の廃止済み型の doc）であって、実際の env 構築・差し込み・除去コードは無い。
+  - `docs/ops/sccache-l1.md` は廃止の旨と ADR-0129 への参照、本番 host 側の後始末手順に置き換わっている
+    （schema-docs work unit で完了済み。本 work unit では内容の変更なし）。
+- 未解決事項: `instance_handoff.rs` の `a_newer_release_takes_over_while_the_old_one_finishes_its_run` は
+  共用 host の負荷下で稀に flake する（今回 1/2 回）。ADR-0129 の変更とは無関係なので、このタスクでは直さない。
+  時間依存試験の決定化（別タスクで進行中）の対象に含めるとよい。

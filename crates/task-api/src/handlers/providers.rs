@@ -70,11 +70,21 @@ async fn read_provider_json<T: DeserializeOwned>(
     } else {
         &bytes
     };
-    if let Ok(serde_json::Value::Object(map)) = serde_json::from_slice::<serde_json::Value>(text) {
+    let provider_fields = if let Ok(serde_json::Value::Object(map)) =
+        serde_json::from_slice::<serde_json::Value>(text)
+    {
         reject_provider_command_and_args(&map)?;
-    }
-    serde_json::from_slice(text)
-        .map_err(|e| ApiProblem::bad_request(format!("invalid JSON body: {e}")))
+        map.contains_key("kind") || map.contains_key("llm_source")
+    } else {
+        false
+    };
+    serde_json::from_slice(text).map_err(|e| {
+        if provider_fields {
+            ApiProblem::invalid_provider(format!("invalid provider fields: {e}"))
+        } else {
+            ApiProblem::bad_request(format!("invalid JSON body: {e}"))
+        }
+    })
 }
 
 // ---- 22. GET /providers ----
@@ -90,6 +100,8 @@ pub(super) fn current_providers(
             .providers
             .iter()
             .map(|p| ProviderConfigView {
+                kind: p.kind,
+                llm_source: p.llm_source.clone(),
                 credential_refs: p.credential_refs.clone(),
                 tier_models: p.tier_models.clone(),
                 account_id: p.account_id.clone(),
@@ -130,6 +142,8 @@ pub(super) async fn providers(State(state): State<ApiState>, RawQuery(raw): RawQ
         .iter()
         .zip(stats)
         .map(|(provider, stats)| ProviderView {
+            kind: provider.kind,
+            llm_source: provider.llm_source.clone(),
             credential_refs: provider.credential_refs.clone(),
             tier_models: provider.tier_models.clone(),
             account_id: provider.account_id.clone(),
@@ -202,6 +216,7 @@ pub(super) async fn create_provider(
     validate_credential_refs(&create.credential_refs)?;
     let mut file = create.into_file();
     check_model_routing(&file)?;
+    check_provider_kind(&state, &file)?;
     migrate_credentials(&state, &mut file)?;
     write_provider_file(&dir, &file).map_err(|e| ApiProblem::internal(e.to_string()))?;
     tracing::info!(who = "admin", op = "provider_create", provider_id = %file.id, adapter = %file.adapter, "admin: provider created");
@@ -245,6 +260,7 @@ pub(super) async fn patch_provider(
     migrate_credentials(&state, &mut current)?;
     let mut updated = patch.apply(current);
     check_model_routing(&updated)?;
+    check_provider_kind(&state, &updated)?;
     // ADR-0024 D2 / ADR-0025 D1 / S1: patch 後の組み合わせも検証する（`id`/`adapter` は patch で変わらない）。
     if updated.account_pool {
         check_account_pool_adapter(&state, &updated.adapter)?;
@@ -384,6 +400,59 @@ fn check_model_routing(file: &crate::admin::ProviderConfigFile) -> Result<(), Ap
     if !file.tier_models.is_empty() && !matches!(file.adapter.as_str(), "claude-code" | "codex") {
         return Err(ApiProblem::bad_request(
             "tier_models supported only for Claude/GPT",
+        ));
+    }
+    Ok(())
+}
+
+fn check_provider_kind(
+    state: &ApiState,
+    file: &crate::admin::ProviderConfigFile,
+) -> Result<(), ApiProblem> {
+    use task_core::LlmSourceRef;
+    let Some(source) = &file.llm_source else {
+        return Ok(());
+    };
+    let celeris_model = matches!(
+        file.model.as_str(),
+        "celeris/frontier"
+            | "celeris/standard"
+            | "celeris/cheap"
+            | "openai/celeris/frontier"
+            | "openai/celeris/standard"
+            | "openai/celeris/cheap"
+    );
+    let celeris_env_model = ["OPENAI_MODEL", "LITELLM_MODEL", "MODEL"]
+        .into_iter()
+        .any(|key| {
+            file.env.get(key).is_some_and(|value| {
+                matches!(
+                    value.as_str(),
+                    "celeris/frontier"
+                        | "celeris/standard"
+                        | "celeris/cheap"
+                        | "openai/celeris/frontier"
+                        | "openai/celeris/standard"
+                        | "openai/celeris/cheap"
+                )
+            })
+        });
+    let valid = match source {
+        LlmSourceRef::Celeris => celeris_model || celeris_env_model,
+        LlmSourceRef::ClaudeOauth => file.adapter == "claude-code" && !celeris_model,
+        LlmSourceRef::CodexOauth => file.adapter == "codex" && !celeris_model,
+        LlmSourceRef::None => matches!(file.adapter.as_str(), "fake" | "browser-specialist"),
+        LlmSourceRef::OpenaiCompatible(id) => {
+            !matches!(file.adapter.as_str(), "fake" | "claude-code" | "codex")
+                && !celeris_model
+                && !celeris_env_model
+                && state.inner.openai_compatible_source_ids.contains(id)
+        }
+        LlmSourceRef::Unknown => false,
+    };
+    if !valid {
+        return Err(ApiProblem::invalid_provider(
+            "llm_source conflicts with adapter/model or references an unknown source",
         ));
     }
     Ok(())

@@ -153,6 +153,8 @@ async fn cos_run_bypasses_pool_concurrency_on_the_least_loaded_account_up_to_max
         started_at: "2026-09-29T00:00:00Z".into(),
         tick_ms: 50,
         providers: vec![ProviderLive {
+            kind: Default::default(),
+            llm_source: None,
             credential_refs: Default::default(),
             tier_models: Default::default(),
             account_id: None,

@@ -27,6 +27,89 @@ fn auth() -> String {
 }
 
 #[tokio::test]
+async fn provider_kind_create_patch_roundtrip_and_reject_invalid_source() {
+    let (env, _tmp, dir) = env_with_providers_dir();
+    let app = env.router();
+    let auth = auth();
+    let create = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id":"source-test","adapter":"fake","kind":"adapter","llm_source":"none"}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(create.status, 201, "{}", create.text());
+    assert_eq!(
+        create.json()["llm_source"],
+        json!({"source":"none","origin":"explicit"})
+    );
+    let saved = std::fs::read_to_string(dir.join("source-test.toml")).unwrap();
+    assert!(saved.contains("kind = \"adapter\""));
+    assert!(saved.contains("llm_source = \"none\""));
+    let patch = send(
+        &app,
+        patch_json_with(
+            "/api/v1/providers/source-test",
+            &json!({"kind":"adapter","llm_source":"none","concurrency":2}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(patch.status, 200, "{}", patch.text());
+    assert_eq!(patch.json()["llm_source"]["origin"], "explicit");
+    assert_eq!(patch.json()["concurrency"], 2);
+    for value in ["unknown", "openai_compatible:missing", "invalid"] {
+        let rejected = send(
+            &app,
+            patch_json_with(
+                "/api/v1/providers/source-test",
+                &json!({"llm_source":value}),
+                &[("authorization", &auth)],
+            ),
+        )
+        .await;
+        assert_problem(&rejected, 422, "invalid_provider");
+    }
+    let rejected = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id":"bad-kind","adapter":"fake","kind":"source"}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_problem(&rejected, 422, "invalid_provider");
+}
+
+#[tokio::test]
+async fn provider_kind_openai_compatible_reference_uses_configured_source_ids() {
+    let providers_tmp = tempfile::tempdir().unwrap();
+    let dir = providers_tmp.path().join("providers.d");
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        providers_dir: Some(dir.clone()),
+        openai_compatible_source_ids: ["qwen".to_string()].into(),
+        ..Default::default()
+    });
+    let app = env.router();
+    let auth = auth();
+    let response = send(&app, post_json_with("/api/v1/providers", &json!({"id":"opencode-qwen","adapter":"acp","kind":"adapter","llm_source":"openai_compatible:qwen","model":"qwen3"}), &[("authorization", &auth)])).await;
+    assert_eq!(response.status, 201, "{}", response.text());
+    assert_eq!(
+        response.json()["llm_source"],
+        json!({"source":"openai_compatible:qwen","origin":"explicit"})
+    );
+    assert!(
+        std::fs::read_to_string(dir.join("opencode-qwen.toml"))
+            .unwrap()
+            .contains("llm_source = \"openai_compatible:qwen\"")
+    );
+}
+
+#[tokio::test]
 async fn create_requires_token_validates_id_and_adapter_and_rejects_duplicates() {
     let (env, _providers_tmp, dir) = env_with_providers_dir();
     let app = env.router();

@@ -1,6 +1,111 @@
 use super::*;
 
 #[test]
+fn provider_kind_legacy_production_inference_warnings_and_cheap_tier() {
+    use task_core::{LlmSourceRef as Source, SourceOrigin, Tier};
+    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, fixture).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    for (id, expected) in [
+        ("opencode-qwen", Source::OpenaiCompatible("qwen".into())),
+        ("ldr-qwen", Source::Celeris),
+        ("paperqa-qwen", Source::Celeris),
+        ("langmem-main", Source::Celeris),
+        ("claude-pool", Source::ClaudeOauth),
+        ("codex-pool", Source::CodexOauth),
+        ("unclassified-tool", Source::Unknown),
+    ] {
+        let resolved = cfg.provider_llm_source(id).unwrap();
+        assert_eq!(resolved.source, expected, "{id}");
+        assert_eq!(resolved.origin, SourceOrigin::Derived, "{id}");
+        assert_eq!(
+            cfg.provider_kind(id),
+            Some(task_core::ProviderKind::Adapter)
+        );
+    }
+    assert_eq!(
+        cfg.provider_specs()
+            .iter()
+            .find(|p| p.id == "opencode-qwen")
+            .unwrap()
+            .tiers,
+        vec![Tier::Cheap]
+    );
+    assert_eq!(
+        cfg.providers
+            .iter()
+            .find(|p| p.id == "opencode-qwen")
+            .unwrap()
+            .tiers
+            .len(),
+        3
+    );
+    let warnings = cfg.provider_kind_warnings();
+    for code in [
+        "deprecated_qwen_provider_id",
+        "direct_qwen_model",
+        "unknown_llm_source",
+        "qwen_fixed_acp_noncheap_tier",
+    ] {
+        assert!(
+            warnings.iter().any(|warning| warning.starts_with(code)),
+            "{code}"
+        );
+    }
+    assert!(!warnings.join(" ").contains("fixture-secret-sentinel"));
+    assert!(!warnings.join(" ").contains("/fixture/qwen.json"));
+}
+
+#[test]
+fn provider_kind_explicit_source_rejects_adapter_model_and_missing_reference() {
+    let head = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n";
+    for row in [
+        "id = \"bad\"\nadapter = \"fake\"\nllm_source = \"celeris\"",
+        "id = \"bad\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nllm_source = \"codex_oauth\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"celeris\"",
+        "id = \"bad\"\nadapter = \"claude-code\"\nmodel = \"celeris/cheap\"\nllm_source = \"claude_oauth\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"unknown\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:missing\"",
+    ] {
+        let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\n{row}\n")).unwrap();
+        assert!(
+            matches!(cfg.validate(), Err(ConfigError::Invalid(_))),
+            "{row}"
+        );
+    }
+    let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\nid = \"ok\"\nadapter = \"acp\"\nkind = \"adapter\"\nllm_source = \"openai_compatible:qwen\"\n")).unwrap();
+    cfg.validate().unwrap();
+    let resolved = cfg.provider_llm_source("ok").unwrap();
+    assert_eq!(resolved.origin, task_core::SourceOrigin::Explicit);
+    assert_eq!(
+        cfg.provider_kind("ok"),
+        Some(task_core::ProviderKind::Adapter)
+    );
+    assert_eq!(
+        serde_json::to_string(&resolved.source).unwrap(),
+        "\"openai_compatible:qwen\""
+    );
+}
+
+#[test]
+fn provider_kind_qwen_id_without_model_does_not_guess_source() {
+    let cfg: Config = toml::from_str("[[providers]]\nid = \"opencode-qwen\"\nadapter = \"acp\"\nenv = { OPENCODE_CONFIG = \"/fixture/private.json\" }\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.provider_llm_source("opencode-qwen").unwrap().source,
+        task_core::LlmSourceRef::Unknown
+    );
+    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("unknown_llm_source"))
+    );
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());

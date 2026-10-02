@@ -50,7 +50,7 @@ impl Env {
             &config_path,
             format!(
                 r#"
-db = "celeris.sqlite3"
+db = {{ path = "celeris.sqlite3", worker_read_only = false }}
 workspace_root = "ws"
 tick_ms = 100
 max_concurrency = 1
@@ -107,6 +107,18 @@ adapter = "fake"
             ),
         )
         .unwrap_or_else(|e| panic!("promoting: {e}"));
+    }
+
+    /// 旧 promote.sh が使う形式の昇格中 lock（10 進 pid と改行）。
+    fn write_promote_lock(&self, pid: u32) {
+        std::fs::write(
+            self.root
+                .join("releases")
+                .join(RELEASE)
+                .join("promote.lock"),
+            format!("{pid}\n"),
+        )
+        .unwrap_or_else(|e| panic!("promote.lock: {e}"));
     }
 
     /// 本番の `active`（heartbeat を打たない種）を置いた、最新 schema の DB。
@@ -302,7 +314,7 @@ fn the_binary_exits_four_for_an_unpromoted_release() {
 }
 
 /// 起動を spawn し、本番の `active` に handoff が要求されるまで待つ（従来の D4 の経路）。
-async fn assert_takes_over(env: &Env) {
+async fn assert_takes_over(env: &Env) -> bool {
     let store = env.seed_prod_active();
     let new = tokio::spawn(celeris::run(env.config(), normal(RELEASE, 4000)));
     let requested = wait_until(STARTUP_WAIT, || {
@@ -314,13 +326,11 @@ async fn assert_takes_over(env: &Env) {
         panic!("the authorized release stopped early: {exit:?}");
     }
     new.abort();
-    assert!(requested, "認可された release は handoff を要求する");
-    assert_eq!(
-        store
-            .schema_version()
-            .unwrap_or_else(|e| panic!("schema: {e}")),
-        task_core::SCHEMA_VERSION
-    );
+    let migrated = store
+        .schema_version()
+        .unwrap_or_else(|e| panic!("schema: {e}"))
+        == task_core::SCHEMA_VERSION;
+    requested && migrated
 }
 
 /// (b) `current` が自分を指す（昇格済み。再起動・host 再起動後）なら従来どおり起動する。
@@ -338,6 +348,58 @@ async fn a_fresh_promoting_marker_authorizes_the_live_takeover() {
     env.set_current(PROD);
     env.write_promoting(RELEASE, RELEASE, 5);
     assert_takes_over(&env).await;
+}
+
+/// (旧 promote.sh) current が旧 release を指し、promoting.json が無くても、稼働中の
+/// promote.lock pid を昇格の印として新 daemon が handoff し、最新 schema へ migrate する。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn old_promote_live_lock_authorizes_the_live_takeover() {
+    let env = Env::new();
+    env.set_current(PROD);
+    let mut promoter = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn sleep: {e}"));
+    env.write_promote_lock(promoter.id());
+    assert!(!env
+        .root
+        .join("releases")
+        .join(RELEASE)
+        .join("promoting.json")
+        .exists());
+
+    let took_over = assert_takes_over(&env).await;
+    let kill = promoter.kill();
+    let wait = promoter.wait();
+    assert!(kill.is_ok(), "kill promoter: {kill:?}");
+    assert!(wait.is_ok(), "wait promoter: {wait:?}");
+    assert!(took_over, "認可された release は handoff を要求し migration する");
+}
+
+/// (旧 promote.sh) lock pid が終了済みなら拒否し、DB/migration/instance 登録を行わない。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn old_promote_dead_lock_is_rejected_without_opening_the_db() {
+    let env = Env::new();
+    env.set_current(PROD);
+    let mut promoter = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn sleep: {e}"));
+    let pid = promoter.id();
+    promoter.kill().unwrap_or_else(|e| panic!("kill promoter: {e}"));
+    promoter.wait().unwrap_or_else(|e| panic!("wait promoter: {e}"));
+    env.write_promote_lock(pid);
+    env.seed_old_schema_db();
+    let before = db_snapshot(&env.db);
+
+    let exit = celeris::run(env.config(), normal(RELEASE, 5))
+        .await
+        .unwrap_or_else(|e| panic!("run: {e}"));
+
+    assert_eq!(exit, Exit::NotPromoted);
+    assert_eq!(db_snapshot(&env.db), before, "DB を開いてはいけない");
+    assert_eq!(max_schema_version(&env.db), OLD_SCHEMA, "migration しない");
+    assert!(!table_exists(&env.db, "daemon_instances"));
 }
 
 /// (c) 900 秒より古い印・sha12 違いの印は認可しない（DB も開かない）。

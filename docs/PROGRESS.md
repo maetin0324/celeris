@@ -623,9 +623,34 @@ daemon が作った `repair-core-1` が `blocked(plan_issue)` になる出来事
 - `cargo fmt --all -- --check` → exit 0。
 
 未解決: ADR-0134 D3 の WU 単位の取り下げ・再開 API は未実装。planner が代わりの葉を足さない
-場合は人による task 単位の replan が必要。また、この再現試験の追加確認で `replay` の既存の再構築処理が、
-superseded となった repair WU を統合 WU の依存に残し、repair WU の presence も一致しないことを検出した。
-通常の dispatch と本節の必須条件は通るが、replay のこの差異は別の修正が必要。
+場合は人による task 単位の replan が必要。
+
+解消済み: `replay`（`task_ops::replay::rebuild_work_units_and_runs`）の replan 畳み込みが、
+`execution.rs` の replan と同じ判定関数 `is_blocked_daemon_repair`（ADR-0134 D1）を呼ぶよう直した。
+`WorkUnitTransitioned { to: superseded, reason: "replan v…" }` を見た時点でその行が
+blocked daemon repair だったことを覚えておき、続く `ExecutionPlanned` の畳み込み
+（`apply_replan_step`）でその key を `superseded` に確定し、統合 WU の `depends_on` からも外す。
+試験 `replay_matches_live_after_blocked_repair_superseded`・
+`replay_matches_live_after_blocked_repair_superseded_limit`（`crates/task-ops/src/replay/tests.rs`）
+で、plan_issue と limit それぞれの場面で replay の work_units（key・status・depends_on 等）が live と
+一致し、統合 WU の depends_on に superseded の repair key が残らないことを確認した。
+
+- `cargo test -p task-ops --lib blocked_repair_superseded` → exit 0（5 passed: 上の 2 件 +
+  `execution::tests::blocked_repair_superseded_on_limit`・`_on_plan_issue`・`_not_for_live_repair_units`）。
+- `cargo test --workspace` → exit 0 相当。1 回目は `tests/e2e/tests/api_scenarios.rs` の
+  `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`
+  （時間依存の tick 待ち、instance_handoff とは別件）が `not all tasks finished` で落ちたが、
+  `cargo test -p e2e --test api_scenarios writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`
+  を単独で再実行すると 1 passed で通った。共用 host の負荷による flaky で、本修正と無関係。
+  その他は 507 passed（1 回目の集計、上記 1 件を除く）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-ops --lib blocked_repair_superseded` を再検証（run #3）→ exit 0（5 passed、上と同じ 5 件）。
+  `cargo test -p task-dispatch --lib blocked_repair_replan_loop` → exit 0（1 passed）。
+  `cargo test --workspace` の再実行では exit 101 だったが、落ちたのは `task-worker` の
+  `browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace` 1 件のみ（host の launcher binary
+  が新しい protocol に未更新・run sandbox の userns 制約によるもので、本修正・instance_handoff とは別件。
+  ADR-0115/0116 の既知事項）。他の全テストバイナリは `test result: ok`。
+  `cargo clippy --workspace -- -D warnings` → exit 0（警告なし、再検証）。
 
 ### 人が task `01M3YF3NS2EGTZD2BBWNPG1K28` を再開する手順
 

@@ -2316,3 +2316,69 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は、auto 判定が `systemd-run` を選ぶ環境で user bus に接続できないときだけ skip する。sandbox では `/run/user/<uid>/bus` が見えても接続できず `Failed to connect to user scope bus via local transport` となる一方、release gate では接続できるため、試験側で `systemd-run --user --scope --quiet true` を事前確認する。`systemd-run` が PATH にないか `XDG_RUNTIME_DIR` が未設定なら detach の auto 判定は inline のため、試験を従来どおり実行する。本番 detach の挙動は変更しない。
 - 23:1x〜23:56Z（2026-10-01）: **6ceec985b5e0 の stop-start 昇格と、無許可の本番差し替えの発見**。main にブラウザ Phase 1〜4（取り込み task 01M3VSNWDC… が 18:33 に delivery）・migration 0035/0036（schema 36）が入っていたため、6ceec985 は live_ok=false。in-flight 0 で `promote.sh 6ceec985b5e0` → stop-start（停止約 20 s、backup `20261001-232111-pre-6ceec985b5e0.sqlite3`）、schema 36 で健全。昇格前に動いていたのは **celeris@bf54b41ad627**（人の昇格なし）: web P6-03 dogfood task 01M3WAKKJQ… の codex run 01M3WAVPGK… が、人の「本番 host への web gateway 設置を許可」に基づき escalation（`--approve-for-me` で自動承認）で `systemctl --user start celeris-web@bf54b41ad627` を実行 → unit の `Wants=celeris@%i.service` で celeris@bf54b41ad627（staging 成果物への symlink）が起動し、18:32:38 に本番 DB を schema 36 へ移行、ADR-0040 handoff で 7fbfc347b240 から active を奪っていた（約 4.8 時間）。ADR-0095 の RO mount は効いていたが user systemd bus の穴を通られた。人の判断 (A): dogfood は続け、`~/.config/systemd/user/celeris-web@.service` から `Wants=` を削除（backup `.bak-20261001a`）して daemon-reload（`After=` のみ残す）。repo の `deploy/systemd/celeris-web@.service` には `Wants=` が残っている（要修正）。再発防止候補: handoff の認可（current と一致しない release は handoff・migrate しない）、worker から user systemd bus を隠す、codex の自動承認に deny パターン、web unit の依存除去、テストから実 systemd-run を叩かない。担当の無い root の delivery 修正 01M3VT5BJZ… は review 差し戻し 3 回で failed → reopen + decompose note（main 取り込み、ADR 番号振り直し、部分 index）で replan 中。
 - 03:3x〜04:00Z（2026-10-02）: **BenchFS の方向転換**。旧 root 01M3PAZ4XG…（国際会議フルペーパー化）を一時停止（R1 準備は trace on/off 等価性 8/12 で 14 回の資源追加の決定をループしていた）。調査で、2026-SWoPP の IO500 ablation（Locusta 優位、10 ノード・800 rank）と E1（UCX 優位、2+2・ppn=1）の逆転は、E1 の測定条件（F1: server NUMA 2 固定なのに Locusta は mlx5_0、F2: client 経路が Locusta だけ memcpy の in-process relay、F3: [locusta] 等が既定値、F4: IOR の -e 2 回で実効 fsync=2）と測っている性能（遅延 vs 総帯域）の違いによる可能性が高いと分かった。旧 root は remote の共有 workspace なので decompose は 422（`atomic/out-of-scope`）。新しい root **01M3XC078T…**「BenchFS: Locusta の性能分析」を案件 benchfs で起票（cluster を指定した版 01M3XBYDPD… は sirius の shared mode で atomic になり取り消し）。新 root も gate は atomic だったので、人の計画（/3）を PUT で入れた: s1 NIC・チューニング → s2 並列度と fsync → s3 client 経路とマイクロベンチ（review: human、S5 の前の人の確認点）→ s5 旧条件の再現（10 ノード）→ report、各子に資源上限（合計 25 node-h）。計画を入れる前に始まっていた atomic の codex run は job 投入前に止めた（kill、Sirius の job なし）。不具合候補: 一時停止中の root でも、計画の採用で作られた木の子は dispatch された。
+
+## R7-12: 配送の repair WU（phase 無し）で replan が永久に拒否される件、browser テスト `real_shared_cdp_and_auth_section` の 60 秒の失敗（2026-10-02）
+
+ADR-0079 付記「R7-12」を先に追記してから実装した。
+
+### 不具合 1: 配送の repair WU が replan を塞ぐ（task 01M3WZ1GEPC670GED0TYAXSGDF）
+
+- 本番の証拠（読み取り専用の sqlite）: `work_units` に `repair-2 | repair | done | phase NULL | plan 01M3WZ5S73…`（seq 8、計画の spec に無い）。
+  planner の replan は events seq 398・448・493・521・551・573 で `done work unit repair-2 must not change on replan`（`plan_invalid` の決定 3 件）。
+- 原因の確認: `crates/celeris/src/delivery.rs` の配送の repair WU は `phase: None`（L290 / L333 の `WorkUnitSpec`）。
+  `crates/task-core/src/execution_plan/scheduling.rs` の `is_daemon_added_work_unit`（修正前 L694）は `kind = integrate` か「/2・/3 で `phase.is_some()`
+  かつ active の spec に無い」行しか daemon の WU とみなさない → `replan_done_work_units` に repair-2 が入り、`done_carry_over_errors`
+  （validation.rs）が同じ spec を求める。/3 の unit は stage 必須（`phase = Some(stage)`）なので誰も書けない。`carry_done_units_v3` は active の
+  `units` にしか無い done を補わない。最終レビューの repair WU（`review_verdict.rs` の `try_review_repair`、計画のある task）も同じ形。
+- 修正:
+  - `is_daemon_added_work_unit`: active の spec に key が無い行のうち `kind = repair` のもの（schema・phase を問わない）も daemon の WU。
+    dispatcher（`replan_done_work_units`）・`task_ops::execution::replan`・replay（`apply_replan_step`）が同じ関数を使うので 3 か所が揃う。
+    planner / 人が計画に書いた repair の unit（spec に key がある）は従来どおり。
+  - `daemon_added_key_errors`（新規）+ `PlanValidationError::DaemonAddedKeyReused`: 計画が生きた daemon の WU（統合 WU 以外）の key を書いたら
+    検証の理由で返す（dispatcher は R7-3 の退役 key と同じ位置、`replan` も同じ）。書いたまま通すと done の行を ready に戻して repair を再実行するため。
+  - `DAEMON_ADDED_HINT` に「配送 / 最終レビューの repair WU」を追記（fixture `v1-invalid` / `v2-invalid` の expected はこの一文だけ変わる）。
+- 試験:
+  - `task-core execution_plan::tests::replan_skips_a_done_delivery_repair_unit_without_a_phase`: dispatcher と同じ順（`replan_done_work_units` →
+    `carry_done_units_v3` → `validate_with` → `daemon_added_key_errors`）で、repair-2 を書かない /3 の replan が通る・修正前の規則なら
+    `DoneWorkUnitChanged{repair-2}`・書けば `DaemonAddedKeyReused`・planner の書いた repair の unit は planner の WU。
+  - `task-ops execution::tests::replan_after_a_done_delivery_repair_unit_without_a_phase_is_adopted`: 本番の形（/3 design / impl / verify すべて done
+    → delivery.rs と同じ行と `delivery_repair` の event で repair-2 → done → planner の replan が repair-2 を省き verify に unit を足す）が採用され、
+    repair-2 の行は done・元の `plan_id` / `seq` のまま、verify の統合は開き直し。replay の差は repair-2 の presence だけ（下の既知の差）。repair-2 を
+    書いた replan は検証エラーで行は done のまま。人の PUT（origin human）の replan も通る。
+  - 変異確認: `kind = repair` の条件を外すと 2 本とも落ちる（task-ops は本番と同じ `done work unit repair-2 must not change on replan`）。
+
+### 不具合 2: `real_shared_cdp_and_auth_section` の 60 秒
+
+- 再現と実測した原因: このホストで同じテストを 6 本並走すると 3 本が 60.1 秒で `sandbox TCP to controller relay failed`（browser_shared_cdp.rs:347）。
+  probe の例外を記録すると `AssertionError: b'\x81~\x00\xdf'`: sandbox 内の python が WebSocket 応答を `sock.recv(4096)` 1 回で読み、header だけ
+  を受け取って assert で終わり、host は来ない `tcp-probe.ok` を 60 秒待っていた。**環境の欠如ではなく短い読み取り**（高負荷・並走で出る）。
+  ADR-0095 を模した namespace（`unshare --user --map-current-user --mount`）の中でも単独なら通る。
+- 修正（`crates/task-worker/tests/browser_shared_cdp.rs`）:
+  - probe は frame を読み切ってから判定（`recv_exact` で header → 拡張長 → 本体）。例外は `/session/probe.err` に書き、host は見たら即その内容で失敗。
+  - preflight（依頼どおり）: 道具・browser・`CARGO_BIN_EXE_*`、20 秒の上限つきで `unshare --user --map-root-user --net` の中の loopback TCP
+    往復と入れ子の bwrap。無ければ `SKIPPED (environment unavailable, not passed): <理由>`。sandbox の印では判定しない（このホスト自体が LXC の
+    user namespace、ADR-0095 の中でも動く）。`CELERIS_ISOLATION_TESTS=skip` は従来どおり飛ばす、`require` は preflight が落ちたら失敗。
+  - `scripts/selfdeploy/release.sh`: 未設定なら `CELERIS_ISOLATION_TESTS=require` を export（release gate は黙って飛ばさない）。
+- 確認: 修正後 8 本並走 ×2 で 16/16 pass（各 0.75〜0.85 秒）。unmapped の user namespace（`unshare --user`）の中では 0.10 秒で
+  `SKIPPED … unshare failed: Operation not permitted`。ADR-0095 を模した namespace で 3 本並走 pass。`CELERIS_TEST_BROWSER=/nonexistent` で SKIPPED、
+  同じく `require` では panic（理由つき）。`require` で通常の環境は pass。
+
+### 証拠
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo nextest run --workspace` → **3215 passed, 11 skipped（exit 0）**（1 回目は fixture の hint の一文で 1 failed → `UPDATE_PLAN_FIXTURES=1` で
+  expected を更新、差分は hint の 2 行だけ）。`real_shared_cdp_and_auth_section` は skip されずに 0.66 秒で pass。
+
+### 昇格後にすること（task 01M3WZ1GEPC670GED0TYAXSGDF）
+
+- 設定の変更は不要。open な `plan_invalid` の決定 **01M3XDDVB8GBMA9KNF7TTGZ7X6** に `POST /decisions/{id}/answer {"option":"replan","note":"R7-12 で repair-2
+  （配送の repair WU）は書かなくてよくなった。repair-2 は書かずに、browser_shared_cdp の flake への対処（R7-12 で修正済みなので main を取り込む
+  だけでよい）を踏まえて計画を書く"}` と答える（task が paused なら `POST /tasks/{id}/resume`）。planner の replan は repair-2 を省いて採用される。
+- 再レビューの不合格の理由（browser_shared_cdp の flake）は R7-12 の main で直るので、task のブランチが main を取り込めば再現しない。
+
+### 未解決・提案
+
+- replay は配送 / 最終レビューの repair WU の行そのものを events から作らない（spec を運ぶ event が無い。従来からの既知の差で、
+  `check_and_apply_execution --apply` はその行を消す）。直すなら `RepairScheduled` に spec を載せ、配送の repair でも積む（別 Phase の提案）。
+- 他の browser テスト（`browser_runtime_*` / `browser_egress_relay` など）にも 1 回の `recv` で判定する箇所が無いか、同じ観点で見直す価値がある。

@@ -1432,7 +1432,7 @@ pub enum Event {
         plan_id: String,
         reasons: Vec<String>,
     },
-    /// ADR-0117 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない
+    /// ADR-0119 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない
     /// 監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。
     DeliverySkipped {
         reason: crate::DeliverySkipReason,

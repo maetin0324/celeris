@@ -965,7 +965,7 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
     assert!(cluster_unavailable_find(&hidden.attention, "pegasus").is_none());
 }
 
-/// ADR-0117 D3: 完了した root の `DeliverySkipped` は（24 時間より古くても）attention に出る。木の子は出さず、
+/// ADR-0119 D3: 完了した root の `DeliverySkipped` は（24 時間より古くても）attention に出る。木の子は出さず、
 /// 同じ head の delivery が後で作られたら消える。
 #[test]
 fn inbox_attention_shows_delivery_skip_reason_for_done_root() {

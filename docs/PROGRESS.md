@@ -264,3 +264,23 @@ review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
     `pnpm install --offline --frozen-lockfile` 後の再実行で 4b も pass。本番の daemon・DB・config・systemd には
     触れていない（DB は `mode=ro` の `.backup` を読むだけ）。
   - `unshare -U -r true` → exit 0（この run の sandbox では user namespace を作れた）。
+
+### final review 失敗の再実行（work unit `rerun-dispatch`）
+
+2026-10-02 に、final review の `cargo test --workspace` で失敗した 2 件を単独で各 3 回実行し、続けて
+`cargo test -p task-dispatch --lib` を実行した。各試験の直前に取得した `uptime` の load average（1/5/15 分）も併記する。
+
+| 試験 | 回 | exit | passed | load average (1/5/15 分) |
+| --- | ---: | ---: | ---: | --- |
+| `cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation` | 1 | 0 | 1 | 20.82 / 23.28 / 20.88 |
+| 同上 | 2 | 0 | 1 | 21.93 / 23.41 / 20.99 |
+| 同上 | 3 | 0 | 1 | 19.55 / 22.85 / 20.84 |
+| `every_cargo_path_uses_the_scratch_target_dir` | 1 | 0 | 1 | 16.57 / 22.03 / 20.60 |
+| 同上 | 2 | 0 | 1 | 19.71 / 22.07 / 20.66 |
+| 同上 | 3 | 0 | 1 | 21.56 / 22.42 / 20.82 |
+| `cargo test -p task-dispatch --lib` | — | 0 | 503 | 15.65 / 20.14 / 20.15 |
+
+各単独実行はすべて 1 passed / 0 failed、lib 全体は 503 passed / 0 failed / 0 ignored。再現しなかったため、
+この再実行では `plan_issue` は発生していない。作業ブランチの起点 `6b49a92dd5d7` から HEAD までの
+`git diff --name-only` は空で、`review.rs`・review tests・`review_spawn` 周辺の skill 配布差分も無い。
+したがって、その変更は対象 2 試験の経路に触れていない。

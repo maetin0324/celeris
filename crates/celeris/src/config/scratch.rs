@@ -174,7 +174,6 @@ impl Config {
             disabled_reason: None,
             dir: self.scratch_dir(),
             targets_max_bytes: c.targets_max_gb.saturating_mul(gib),
-            l1_max_bytes: c.l1_max_gb.saturating_mul(gib),
             total_max_bytes: c.total_max_gb.saturating_mul(gib),
             high_watermark: c.high_watermark,
             low_watermark: c.low_watermark,
@@ -187,17 +186,14 @@ impl Config {
             adopt: c.adopt,
             adopt_max_distance: c.adopt_max_distance,
             measure_interval_secs: c.measure_interval_secs,
-            sccache: task_worker::scratch::SccacheSettings::disabled(),
             cargo: task_worker::scratch::CargoTuning {
                 incremental: c.cargo.incremental,
                 dev_debug: Some(c.cargo.dev_debug.clone()).filter(|v| !v.is_empty()),
             },
-            l2: task_worker::scratch::L2Settings::disabled(),
-            cache_server: task_worker::scratch::CacheServerSettings::disabled(),
         }
     }
 
-    /// ADR-0075 D1: 起動時の検査つき。`dir` か `sccache-l1/` が NFS 上なら `enabled = false` と理由
+    /// ADR-0075 D1: 起動時の検査つき。`dir` が NFS 上なら `enabled = false` と理由
     /// （dispatcher が起動ログに出す）。
     pub fn scratch_settings(&self) -> task_worker::scratch::ScratchSettings {
         task_worker::scratch::apply_nfs_check(

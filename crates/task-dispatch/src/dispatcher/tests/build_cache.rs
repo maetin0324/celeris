@@ -532,10 +532,6 @@ async fn scratch_runs_get_target_and_cargo_tuning_but_no_sccache() {
         run_env[3..].iter().all(|(k, _)| k.starts_with("CELERIS_")),
         "{run_env:?}"
     );
-    assert!(
-        !run_env.iter().any(|(_, v)| v == ENV_REMOVED),
-        "{run_env:?}"
-    );
     let parent = |key: &str| std::env::var(key).unwrap_or_else(|_| "unset".to_string());
     assert_eq!(
         check.lines().next().unwrap_or_default(),

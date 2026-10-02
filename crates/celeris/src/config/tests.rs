@@ -1634,9 +1634,6 @@ fn scratch_cargo_defaults_disable_incremental() {
             dev_debug: Some("line-tables-only".to_string()),
         }
     );
-    assert!(!s.sccache.enabled);
-    assert!(!s.l2.enabled);
-    assert!(!s.cache_server.enabled);
     let cfg: Config = toml::from_str(
         "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.cargo]\nincremental = true\ndev_debug = \"\"\n",
     )
@@ -1667,9 +1664,12 @@ fn legacy_scratch_cache_sections_are_ignored_and_reported() {
         ["scratch.sccache", "scratch.l2", "scratch.cache_server"]
     );
     let settings = cfg.scratch_settings_unchecked();
-    assert!(!settings.sccache.enabled);
-    assert!(!settings.l2.enabled);
-    assert!(!settings.cache_server.enabled);
+    let env = task_worker::scratch::cargo_env(&settings, &task_worker::scratch::Owner::task("01T"));
+    assert!(
+        env.iter()
+            .all(|(k, _)| !k.starts_with("SCCACHE_") && k != "RUSTC_WRAPPER"),
+        "{env:?}"
+    );
     let clean: Config = toml::from_str("").unwrap();
     assert!(clean.scratch.deprecated_sections().is_empty());
 }
@@ -1685,7 +1685,6 @@ fn scratch_defaults_follow_the_build_cache_parent() {
     assert!(s.enabled);
     assert_eq!(s.dir, PathBuf::from("/var/lib/celeris/scratch"));
     assert_eq!(s.targets_max_bytes, 100 * task_worker::scratch::GIB);
-    assert_eq!(s.l1_max_bytes, 40 * task_worker::scratch::GIB);
     assert_eq!(s.total_max_bytes, 150 * task_worker::scratch::GIB);
     assert_eq!((s.high_watermark, s.low_watermark), (0.90, 0.70));
     assert_eq!(s.external_lease_ttl_secs, 21_600);

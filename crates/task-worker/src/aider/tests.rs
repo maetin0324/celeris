@@ -355,7 +355,6 @@ async fn real_aider_binary_end_to_end() {
             ("OPENAI_API_BASE".into(), format!("http://{addr}/v1")),
             ("OPENAI_API_KEY".into(), "dummy".into()),
         ],
-        env_remove: Vec::new(),
         container: None,
     };
     let adapter = AiderAdapter::new(config);

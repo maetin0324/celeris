@@ -26,6 +26,7 @@
 #     `releases/.pnpm-prod-cache/<key>/` で行い、リリースの `gui/node_modules` はそこへの相対 symlink にする。
 #
 # 本番には一切触れない（プロセスも DB も config も）。人でもワーカーでも実行してよい（D5）。
+# ADR-0126 B4: userns の要る試験は既定 skip だが、この gate は既定で `CELERIS_USERNS_TESTS=1` を立てて走らせる。
 set -euo pipefail
 
 SD_PROG=release
@@ -187,6 +188,11 @@ export CARGO_INCREMENTAL=0
 # ADR-0079 付記「R7-12」D4: 環境に依存する browser テスト（実 bwrap / Chromium / netns）は、環境が無いと理由を出して
 # 飛ばす（worker の sandbox で無関係な task の受け入れ条件を落とさない）。release では飛ばさない（環境が無ければ失敗）。
 export CELERIS_ISOLATION_TESTS="${CELERIS_ISOLATION_TESTS:-require}"
+# ADR-0126 B4: userns の要る試験（実 browser/runtime/launcher、unshare/CLONE_NEWUSER）は既定で skip になった
+# （worker run の sandbox が userns を作れないため）。release gate は host（userns が使える）で走るので、既定で
+# 外したことで今まで release で守っていた退行の検出が消えないよう、ここで既定を 1 に戻す（環境が無ければ fail）。
+# userns が使えない host で release するなら人が CELERIS_USERNS_TESTS=0 を明示する（gate の記録に残る）。
+export CELERIS_USERNS_TESTS="${CELERIS_USERNS_TESTS:-1}"
 
 printf 'step:s exit:i secs:f log:s skipped:b reason:s\n' >"$GATE_TSV"
 GATE_OK=true

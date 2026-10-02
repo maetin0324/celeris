@@ -610,3 +610,64 @@ fn sync_onto_target_fails_when_the_target_is_missing() {
     }
     assert_eq!(head_of(&tree), before);
 }
+
+/// ADR-0130 D2: `base..HEAD` の確定差分だけを数える。rename は旧名・新名の両方、未コミットの編集は
+/// path に入れず `dirty` で知らせる。
+#[test]
+fn write_set_record_committed_paths_only_with_renames_and_dirty_flag() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    let start = run_start_head(&tree, &repo, "celeris/01TASK", "main")
+        .unwrap_or_else(|| panic!("start head before worktree add"));
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    assert_eq!(
+        run_start_head(&tree, &repo, "celeris/01TASK", "main").as_deref(),
+        Some(start.as_str())
+    );
+
+    std::fs::create_dir_all(tree.join("src")).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(tree.join("src/b.rs"), b"b\n").unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(tree.join("src/a.rs"), b"a\n").unwrap_or_else(|e| panic!("{e}"));
+    git_must(&tree, &["add", "-A"]);
+    git_must(&tree, &["commit", "-q", "-m", "add"]);
+    git_must(&tree, &["mv", "README.md", "DOC.md"]);
+    git_must(&tree, &["commit", "-q", "-m", "rename"]);
+
+    let clean = committed_write_set(&tree, &start).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(clean.base_sha, start);
+    assert_ne!(clean.head_sha, start);
+    assert_eq!(
+        clean.paths,
+        vec!["DOC.md", "README.md", "src/a.rs", "src/b.rs"]
+    );
+    assert!(!clean.dirty);
+
+    std::fs::write(tree.join("untracked.txt"), b"x\n").unwrap_or_else(|e| panic!("{e}"));
+    let dirty = committed_write_set(&tree, &start).unwrap_or_else(|e| panic!("{e}"));
+    assert!(dirty.dirty);
+    assert_eq!(
+        dirty.paths, clean.paths,
+        "未コミットの path は実績に入れない"
+    );
+
+    // 何もしていない run は空の確定差分（unavailable ではない）。
+    let none = committed_write_set(&tree, "HEAD").unwrap_or_else(|e| panic!("{e}"));
+    assert!(none.paths.is_empty());
+}
+
+/// ADR-0130 D2: git が読めない（base が無い・作業ツリーが無い）ときは `Err` を返し、panic しない。
+#[test]
+fn write_set_record_git_failure_is_an_error_not_a_panic() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    assert!(committed_write_set(&repo, "0000000000000000000000000000000000000000").is_err());
+    assert!(committed_write_set(&root.path().join("missing"), "HEAD").is_err());
+    assert_eq!(
+        parse_name_only_z("a\0b/c\0\0"),
+        Ok(vec!["a".to_string(), "b/c".to_string()])
+    );
+    assert!(parse_name_only_z("ok\0bad\u{FFFD}\0").is_err());
+}

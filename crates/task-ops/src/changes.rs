@@ -172,6 +172,106 @@ fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// ADR-0130 D2: run / WU の actual write-set（確定差分）の採取
+
+/// `base..HEAD` の確定差分（コミット済みの path だけ）。`dirty` は未コミットの編集・追跡外の
+/// ファイルがあったか（あれば記録は `incomplete`。未コミットの path は `paths` に入れない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedWriteSet {
+    pub base_sha: String,
+    pub head_sha: String,
+    pub paths: Vec<String>,
+    pub dirty: bool,
+}
+
+/// run 開始時の HEAD（ADR-0130 D2: 開始前に固定する）。worktree があればその HEAD、無ければ
+/// （これから `worktree add` する）ブランチの先端、ブランチも無ければ切り出す base。
+pub fn run_start_head(
+    dir: &Path,
+    repo: &Path,
+    branch: &str,
+    fallback_base: &str,
+) -> Option<String> {
+    if dir.join(".git").exists() {
+        return git_line(dir, &["rev-parse", "--verify", "HEAD^{commit}"]);
+    }
+    git_line(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    )
+    .or_else(|| {
+        git_line(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{fallback_base}^{{commit}}"),
+            ],
+        )
+    })
+}
+
+/// `git diff --name-only -z --no-renames <base>..HEAD` を `dir` で取る（ADR-0130 D2）。
+/// rename は旧名・新名を両方数え、ソート・重複排除する。git が起きない・SHA が読めない・
+/// path が UTF-8 でないときは `Err`（呼び出し側は `unavailable` として残し、run は落とさない）。
+pub fn committed_write_set(dir: &Path, base: &str) -> Result<CommittedWriteSet, String> {
+    let resolve = |rev: &str| {
+        let out = git(
+            dir,
+            &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+            GIT_TIMEOUT,
+        )
+        .ok_or_else(|| "git did not start".to_string())?;
+        if !out.ok {
+            return Err(format!("cannot resolve {rev}: {}", out.why()));
+        }
+        Ok(out.stdout.trim().to_string())
+    };
+    let base_sha = resolve(base)?;
+    let head_sha = resolve("HEAD")?;
+    let range = format!("{base_sha}..{head_sha}");
+    let out = git(
+        dir,
+        &["diff", "--name-only", "-z", "--no-renames", &range],
+        GIT_TIMEOUT,
+    )
+    .ok_or_else(|| "git did not start".to_string())?;
+    if !out.ok {
+        return Err(format!("git diff {range}: {}", out.why()));
+    }
+    let mut paths = parse_name_only_z(&out.stdout)?;
+    paths.sort();
+    paths.dedup();
+    let dirty = is_dirty(dir).ok_or_else(|| "git status failed".to_string())?;
+    Ok(CommittedWriteSet {
+        base_sha,
+        head_sha,
+        paths,
+        dirty,
+    })
+}
+
+/// `--name-only -z` の出力（NUL 区切り）を path の並びにする。UTF-8 でない path（読み込みで
+/// U+FFFD に置き換わったもの）があれば `Err`（実績を偽らない）。
+pub fn parse_name_only_z(text: &str) -> Result<Vec<String>, String> {
+    text.split('\0')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            if p.contains('\u{FFFD}') {
+                Err(format!("non UTF-8 path: {p}"))
+            } else {
+                Ok(p.to_string())
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // 読み取り（`GET /tasks/{id}/changes`）
 // ---------------------------------------------------------------------------
 

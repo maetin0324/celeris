@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use task_core::{SqliteStore, StoreOptions, TaskStore};
 use task_dispatch::{Dispatcher, StaticPolicy};
-use task_worker::db_guard::{DaemonPaths, GuardDecision, ProtectedSet, WorkerRunMarker};
+use task_worker::db_guard::{
+    DaemonPaths, DbGuard, GuardDecision, PRODUCTION_IN_WORKER_RUN, ProtectedSet, ResolvedPath,
+    WorkerRunMarker,
+};
 use time::OffsetDateTime;
 
 use super::adapters::{build_adapters, effective_models};
@@ -95,8 +98,9 @@ pub(crate) fn hostname() -> String {
 /// 開いて作った後なので存在する。
 ///
 /// ADR-0126 A: `worker_read_only = true` のときは、本番 config から守る対象 P を作り、worker run の印と
-/// 起動する daemon の path で判定する。試験用の一時 DB を guard の効いた worker run の中で使うときだけ
-/// probe をせずに guard を外す（免除）。それ以外は従来どおり probe する。
+/// 起動する daemon の path で判定する（[`worker_db_guard_action`]）。worker run の中で本番 DB・本番 token に
+/// 当たれば probe をせずに拒否する（probe の成否に関わらず起動しない。fail closed）。試験用の一時 DB を
+/// guard の効いた worker run の中で使うときだけ probe をせずに guard を外す（免除）。それ以外は probe する。
 pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError> {
     if !config.db.worker_read_only {
         tracing::warn!(
@@ -106,51 +110,146 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
         task_worker::db_guard::install(None);
         return Ok(());
     }
-    let home = passwd_home();
     let decision = worker_db_guard_decision(
-        &worker_db_guard_protected_set(home.as_deref()),
+        &worker_db_guard_protected_set(passwd_home().as_deref()),
         &worker_db_guard_daemon_paths(config),
         &task_worker::db_guard::detect_worker_run_marker(),
     );
-    match &decision {
-        GuardDecision::Exempt => {
+    let guard = enforce_worker_db_guard(config, &decision, probe_worker_db_guard)?;
+    task_worker::db_guard::install(guard);
+    Ok(())
+}
+
+/// ADR-0126 A2: 判定から決まる動作。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkerDbGuardAction {
+    /// worker run の中で本番を使う daemon。probe せずにこの文言で起動を止める（token の値は含めない）。
+    Refuse(String),
+    /// 試験用の一時 DB を guard の効いた worker run の中で使う。probe せず guard を入れない。
+    Exempt,
+    /// 従来どおり userns の probe をしてから guard を入れる。
+    Probe,
+}
+
+/// ADR-0126 A2: `GuardDecision` → 動作（純関数）。`RefuseProduction { inside_worker_run: true }` は
+/// probe に進まず必ず `Refuse`。worker run の外の本番 daemon（本番そのもの）は従来どおり `Probe`。
+pub(crate) fn worker_db_guard_action(decision: &GuardDecision) -> WorkerDbGuardAction {
+    match decision {
+        GuardDecision::Exempt => WorkerDbGuardAction::Exempt,
+        GuardDecision::RefuseProduction {
+            reason,
+            inside_worker_run: true,
+        } => WorkerDbGuardAction::Refuse(format!("{PRODUCTION_IN_WORKER_RUN}: {reason}")),
+        GuardDecision::RefuseProduction {
+            inside_worker_run: false,
+            ..
+        }
+        | GuardDecision::RequireUserns { .. } => WorkerDbGuardAction::Probe,
+    }
+}
+
+/// 判定に従って guard を決める。`probe` は `Probe` のときだけ呼ぶ（試験が呼ばれないことを確かめる）。
+/// 返り値は `db_guard::install` に渡す（`None` = guard なし）。
+pub(crate) fn enforce_worker_db_guard(
+    config: &Config,
+    decision: &GuardDecision,
+    probe: impl FnOnce(&Config) -> Result<DbGuard, DaemonError>,
+) -> Result<Option<DbGuard>, DaemonError> {
+    match worker_db_guard_action(decision) {
+        WorkerDbGuardAction::Refuse(message) => {
+            tracing::error!(db = %config.db.path.display(), "{message}");
+            Err(DaemonError::DbGuard(message))
+        }
+        WorkerDbGuardAction::Exempt => {
             tracing::warn!(
                 db = %config.db.path.display(),
                 "test DB inside a guarded worker run; worker db guard not installed (ADR-0126)"
             );
-            task_worker::db_guard::install(None);
-            return Ok(());
+            Ok(None)
         }
-        GuardDecision::RefuseProduction { reason, .. } => {
-            tracing::info!(%reason, "worker db guard: the daemon uses production paths; probing user namespaces (ADR-0126)");
-        }
-        GuardDecision::RequireUserns { reason } => {
-            tracing::debug!(%reason, "worker db guard: not exempt; probing user namespaces (ADR-0126)");
+        WorkerDbGuardAction::Probe => {
+            if let GuardDecision::RequireUserns { reason } = decision {
+                tracing::debug!(%reason, "worker db guard: not exempt; probing user namespaces (ADR-0126)");
+            }
+            probe(config).map(Some)
         }
     }
-    let guard = task_worker::db_guard::DbGuard::new(&config.db.path)
-        .map_err(|e| DaemonError::DbGuard(e.to_string()))?;
+}
+
+/// ADR-0095 D5: namespace 付きのプロセスで DB が書けないことを確かめた guard を返す。
+fn probe_worker_db_guard(config: &Config) -> Result<DbGuard, DaemonError> {
+    let guard = DbGuard::new(&config.db.path).map_err(|e| DaemonError::DbGuard(e.to_string()))?;
     task_worker::db_guard::probe(&guard).map_err(|e| {
-        let message = format!(
+        DaemonError::DbGuard(format!(
             "cannot make {} read-only for worker runs ({e}; ADR-0095). Worker runs must not be able to \
              write the database: enable unprivileged user namespaces for this user, or set \
              [db] worker_read_only = false to run without the guard (not recommended)",
             guard.db_path().display()
-        );
-        DaemonError::DbGuard(match (decision.refusal_message(), &decision) {
-            (Some(refusal), GuardDecision::RefuseProduction { reason, .. }) => {
-                format!("{refusal}: {reason}. {message}")
-            }
-            _ => message,
-        })
+        ))
     })?;
     tracing::info!(
         db = %guard.db_path().display(),
         dir = %guard.dir().display(),
         "worker runs see the db directory read-only (ADR-0095)"
     );
-    task_worker::db_guard::install(Some(guard));
-    Ok(())
+    Ok(guard)
+}
+
+/// ADR-0126 A2: DB を開く（`build_dispatcher`）前の拒否。worker run の中で本番 DB・本番 token に当たる
+/// daemon は DB に触れる前に止める。DB がまだ無いときは判定関数が path を解けないので、印の path
+/// （読み取り専用。そこに試験用 DB は作れない）の配下かだけを見る。残りは DB を作った後の
+/// [`install_worker_db_guard`] が判定する。
+pub(crate) fn refuse_production_db_in_worker_run(config: &Config) -> Result<(), DaemonError> {
+    if !config.db.worker_read_only {
+        return Ok(());
+    }
+    let marker = task_worker::db_guard::detect_worker_run_marker();
+    match worker_db_guard_precheck(passwd_home().as_deref(), config, &marker) {
+        WorkerDbGuardAction::Refuse(message) => {
+            tracing::error!(db = %config.db.path.display(), "{message}");
+            Err(DaemonError::DbGuard(message))
+        }
+        WorkerDbGuardAction::Exempt | WorkerDbGuardAction::Probe => Ok(()),
+    }
+}
+
+/// [`refuse_production_db_in_worker_run`] の判定部分（試験から userns なしで呼ぶ）。`Refuse` 以外は
+/// 「ここでは止めない」の意味しかない（`Probe` を返す）。
+pub(crate) fn worker_db_guard_precheck(
+    home: Option<&Path>,
+    config: &Config,
+    marker: &WorkerRunMarker,
+) -> WorkerDbGuardAction {
+    if !marker_present(marker) {
+        return WorkerDbGuardAction::Probe;
+    }
+    let daemon = worker_db_guard_daemon_paths(config);
+    if std::fs::symlink_metadata(&daemon.db).is_ok() {
+        let decision =
+            worker_db_guard_decision(&worker_db_guard_protected_set(home), &daemon, marker);
+        return match worker_db_guard_action(&decision) {
+            refuse @ WorkerDbGuardAction::Refuse(_) => refuse,
+            _ => WorkerDbGuardAction::Probe,
+        };
+    }
+    if let WorkerRunMarker::ReadOnly(guarded) = marker {
+        let under = ResolvedPath::resolve_lenient(&daemon.db)
+            .map(|db| db.path.starts_with(guarded))
+            // 解けない path は判定できないので止める（fail closed）。
+            .unwrap_or(true);
+        if under {
+            return WorkerDbGuardAction::Refuse(format!(
+                "{PRODUCTION_IN_WORKER_RUN}: db {} is under the guarded directory {}",
+                daemon.db.display(),
+                guarded.display()
+            ));
+        }
+    }
+    WorkerDbGuardAction::Probe
+}
+
+fn marker_present(marker: &WorkerRunMarker) -> bool {
+    !matches!(marker, WorkerRunMarker::Absent)
 }
 
 /// ADR-0126 A1-2: `getpwuid(getuid())` の home（`$HOME` は使わない。試験が書き換える）。

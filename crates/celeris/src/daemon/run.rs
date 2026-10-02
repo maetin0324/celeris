@@ -9,7 +9,8 @@ use task_worker::FakeAdapter;
 
 use super::api::{RunningApi, start_api};
 use super::bootstrap::{
-    build_dispatcher, install_worker_db_guard, warn_if_db_on_network_filesystem,
+    build_dispatcher, install_worker_db_guard, refuse_production_db_in_worker_run,
+    warn_if_db_on_network_filesystem,
 };
 use super::clusters::{ClusterMasters, spawn_control_path_inspection, wire_cluster_liveness_hooks};
 use super::services::{
@@ -58,6 +59,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     }
     let identity = InstanceIdentity::new(opts.release.as_deref());
     let cluster_masters: ClusterMasters = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    // ADR-0126 A2: worker run の中で本番 DB・本番 token を使う daemon は DB を開く前に止める。
+    refuse_production_db_in_worker_run(&config)?;
     let mut dispatcher = build_dispatcher(&config, Arc::clone(&cluster_masters))?;
     // ADR-0095 D5: worker の run から DB を読み取り専用にする（verify も含む。効かないホストでは起動しない）。
     install_worker_db_guard(&config)?;

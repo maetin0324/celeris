@@ -59,15 +59,19 @@ export async function checkSecrets({ distDir = path.join(webRoot, "dist") } = {}
   writeFileSync(wrongFile, "wrong-token\n");
   const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
   const daemonUrl = await daemon.start();
-  const closed = await listen(http.createServer());
-  await new Promise((resolve) => closed.server.close(resolve));
+  // 接続した端から破棄する blackhole: port を listen→close で空けて down 上流に使うと、
+  // 他の listen(0)（good/wrong/down 自身や別 process）に先取りされ得て間欠的に落ちる（応答が 404 等になる）。
+  // 代わりに listen したまま接続を reset し、gateway が 502 daemon_unreachable を返すのを保証する。
+  const blackholeServer = http.createServer();
+  blackholeServer.on("connection", (socket) => socket.destroy());
+  const blackhole = await listen(blackholeServer);
   const logs = [];
   const log = (entry) => logs.push(JSON.stringify(entry));
-  const gateways = [];
+  const gateways = [blackhole];
   try {
     const good = await listen(createApp({ distDir, daemonUrl, daemonTokenFile: tokenFile, log }));
     const wrong = await listen(createApp({ distDir, daemonUrl, daemonTokenFile: wrongFile, log }));
-    const down = await listen(createApp({ distDir, daemonUrl: closed.base, daemonTokenFile: tokenFile, log }));
+    const down = await listen(createApp({ distDir, daemonUrl: blackhole.base, daemonTokenFile: tokenFile, log }));
     gateways.push(good, wrong, down);
     const html = await get(good.base, "/");
     const assets = [...html.body.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((match) => match[1]);

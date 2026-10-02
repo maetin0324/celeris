@@ -187,3 +187,55 @@ Rust の失敗テスト名と各 panic message はこの run の機械向け成�
 install・build 後も `git status --porcelain` は空（node_modules・dist・build はいずれも gitignore 対象で、追跡ファイルへの変更なし）。
 
 未解決: この run では V2 の `e2e parity/` と `scripts/selfdeploy/tests/*.sh` は実行していない（Objective の範囲は cargo test/clippy と V1・V2 の指定コマンドまで）。前回（attempt 2）で両方とも exit 0 だったことは上の節を参照。crates/ は本 task で変更していないため、Rust gate がサンドボックス外で exit 0 になったことは crates/ 側の修正によるものではなく、run の実行環境（user namespace 権限）の違いによる。
+
+## web 最終 HEAD 検証（scope 復元後）
+
+検証した HEAD（revert commit）: `43bb05b019e9dd04bb33f29ea1f6bfd7ba720662`。`dd6219db` は HEAD の祖先。merge-base は `e768594c2d18a57ac445d80746df9ab3b4e861b4`。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` → exit 0（差分なし）。
+
+前の記録にある exit 101 は sandbox の user namespace/unshare が `Operation not permitted` となったためであり、本節のサンドボックス外での検証記録がその結果を置き換える。最初の sandbox 実行も同じ理由で失敗した。Bash サンドボックスを外して最終 HEAD で再検証し、`browser_shared_cdp` を含む全テストが通過した。
+
+| 検証 | コマンド | exit | 件数 |
+| --- | --- | --- | --- |
+| 差分範囲 | `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` | 0 | 差分なし |
+| Rust test | `cargo test --workspace --no-fail-fast`（サンドボックス外） | 0 | 3,206 passed / 0 failed / 12 ignored（`test result:` 118 行の合計） |
+| Browser probe test | `cargo test -p task-worker --test browser_shared_cdp -j 2`（sandbox 内の初回再試行） | 101 | `unshare: Operation not permitted`。同 suite はサンドボックス外の workspace test で 2 passed / 0 failed |
+| Rust lint | `cargo clippy --workspace -- -D warnings`（サンドボックス外） | 0 | warning 0 |
+
+## web 最終 HEAD 検証（scope 復元後）
+
+**検証 HEAD（記録 commit 前）:** `a75d882e42a7387163b83065c1f0f2e1a987f52a`。`dd6219db` は revert 済み。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` → exit 0（差分なし）。crates/ は merge-base から差分ゼロのため、`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）と `cargo clippy --workspace -- -D warnings` exit 0（warning 0）は revert-rust の記録を引き継ぐ。
+
+前回 final review の `check:secrets` が `/api/health: expected 502, got 404` で落ちたのは、down gateway 用に一度 listen して閉じた port を他の gateway が先取りできる race が原因だった。`check-secrets.mjs` は決定的に到達不能な blackhole upstream を使うよう修正済みで、今回の再実行は exit 0。
+
+| 検証 | コマンド | exit | 件数・補足 |
+| --- | --- | --- | --- |
+| web install | `corepack pnpm@12.6.0 -C web install --frozen-lockfile` | 0 | |
+| web typecheck | `corepack pnpm@12.6.0 -C web typecheck` | 0 | |
+| web lint | `corepack pnpm@12.6.0 -C web lint` | 0 | warning/error 0 |
+| web test | `corepack pnpm@12.6.0 -C web test` | 0 | Vitest 24 files / 178 passed、Node 41 passed / 0 failed |
+| web build | `corepack pnpm@12.6.0 -C web build` | 0 | |
+| web gen:types | `corepack pnpm@12.6.0 -C web gen:types --check` | 0 | |
+| web boundaries | `corepack pnpm@12.6.0 -C web check:boundaries` | 0 | |
+| web secrets | `corepack pnpm@12.6.0 -C web check:secrets` | 0 | |
+| web parity | `node web/scripts/check-parity.mjs --require-phase 6` | 0 | |
+| GUI install | `corepack pnpm@11.27.0 -C gui install --frozen-lockfile --store-dir /tmp/celeris-pnpm-store` | 0 | 既定 store は SQLite open error、/tmp store で成功 |
+| GUI test | `corepack pnpm@11.27.0 -C gui test` | 0 | Vitest 84 files / 1,249 passed |
+| GUI typecheck | `corepack pnpm@11.27.0 -C gui typecheck` | 0 | |
+| GUI build | `corepack pnpm@11.27.0 -C gui build` | 0 | |
+| scope | `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` | 0 | 差分なし |
+
+前の sandbox exit 101 は unshare/user namespace の `Operation not permitted` による記録であり、crates/ が無変更のため cargo 件数は revert-rust の同一差分記録を引き継いだ。
+
+## Rust gate 再実行（repair、run 01M3X948KER5J9P5DJ3NSRTSZW attempt 2）
+
+この run で `cargo test --workspace` をフレッシュ実行し、exit 101。`instance_handoff` の5 testは worker DB guard の namespace probe が `Operation not permitted` となり失敗し、並行起動に依存する2 testも失敗した。`cargo test -p task-worker --test browser_shared_cdp -- --test-threads=1` も exit 101で、`inner_shared_cdp` は成功、`real_shared_cdp_and_auth_section` は `unshare ... Operation not permitted` で失敗した。依頼ログにあった relay 接続失敗はこの run では再現せず、sandbox の namespace 制約で再現・分類できなかった。sandbox 外の Rust workspace test は未検証のため、前 run の pass 件数を本 run の結果として扱わない。`cargo clippy --workspace -- -D warnings`、`web gen:types --check`・`check:boundaries`・`check:secrets`・`check-parity --require-phase 6` は各 exit 0。scope の2 check は各 exit 0。HEAD `080eeda00176ec04950f6abe5f15df3496042d81`、merge-base `e768594c2d18a57ac445d80746df9ab3b4e861b4`。crates/ は変更していない。
+
+検証した HEAD（この記録 commit の直前）: `080eeda00176ec04950f6abe5f15df3496042d81`。`git merge-base HEAD main` = `e768594c2d18a57ac445d80746df9ab3b4e861b4`、`git diff --quiet` 同範囲で `gui crates docs/api docs/adr` の差分なし（exit 0）。crates/ はこのユニットで変更していない。
+
+| 実行 | コマンド | exit | 件数 |
+| --- | --- | --- | --- |
+| 今回 | `cargo test --workspace` | 101 | `instance_handoff` の 5 test が namespace probe で失敗、同時起動依存の2 testも失敗。sandbox 制限下で workspace gate 未達 |
+| 今回 | `cargo test -p task-worker --test browser_shared_cdp -- --test-threads=1` | 101 | 1 passed / 1 failed（`unshare ... Operation not permitted`） |
+| 今回 | `cargo clippy --workspace -- -D warnings` | 0 | warning 0 |
+
+この run では Rust test gate を完了できなかった。namespace を許可する sandbox 外 execution harness が必要。crates/ は変更していない。

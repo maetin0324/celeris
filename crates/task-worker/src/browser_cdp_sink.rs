@@ -252,6 +252,8 @@ pub struct CdpController {
     /// broker's `Runtime.callFunctionOn` frame is written. Absent from production builds.
     #[cfg(feature = "attack-test-hooks")]
     retarget_before_sink: Option<String>,
+    #[cfg(feature = "attack-test-hooks")]
+    response_timeout: Duration,
 }
 
 impl CdpController {
@@ -269,7 +271,15 @@ impl CdpController {
             guards: Vec::new(),
             #[cfg(feature = "attack-test-hooks")]
             retarget_before_sink: None,
+            #[cfg(feature = "attack-test-hooks")]
+            response_timeout: TIMEOUT,
         }
+    }
+
+    /// Test-only bound for a CDP response while a real browser is being started.
+    #[cfg(feature = "attack-test-hooks")]
+    pub fn response_timeout_for_test(&mut self, timeout: Duration) {
+        self.response_timeout = timeout;
     }
 
     /// Test-only (ADR-0109 A1): the next injection navigates its page session to `url`
@@ -687,7 +697,11 @@ impl CdpController {
                 revents: 0,
             };
             // SAFETY: pollfd points to one valid descriptor and structure.
-            if unsafe { nix::libc::poll(&mut pollfd, 1, TIMEOUT.as_millis() as i32) } <= 0 {
+            #[cfg(feature = "attack-test-hooks")]
+            let timeout = self.response_timeout;
+            #[cfg(not(feature = "attack-test-hooks"))]
+            let timeout = TIMEOUT;
+            if unsafe { nix::libc::poll(&mut pollfd, 1, timeout.as_millis() as i32) } <= 0 {
                 return Err(InjectionError::SinkFailed);
             }
             let mut chunk = [0u8; 4096];

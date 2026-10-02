@@ -284,3 +284,15 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 ## Phase 3 — Claude Code continuation metrics（ADR-0124、2026-10-02）
 
 `ExecutionMetrics` と `GET /metrics/execution` に worker run の fresh / resumed / unknown 別の run 数・総 wall time・入力 token・再探索重複、および WU 別値と fresh fallback 理由別件数を追加した。定義は [continuation-metrics.md](api/v1/continuation-metrics.md)。API schema は `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::tests::committed_schema_matches_generated` で再生成する。GUI / web の `gen:types` はこの WorkUnit の対象外で未実施。検証: `cargo test -p task-core --lib` 638 passed、`cargo test -p task-api --lib` 75 passed / 2 ignored、schema 一致、`cargo clippy --workspace -- -D warnings` と `cargo fmt --all -- --check` exit 0。着手時の main `95ac1644` との merge-tree は `task-api/query.rs` など 8 ファイルで衝突を検出したが、この WorkUnit の変更ファイルとは重ならない。
+
+### Phase 3 session resume — workspace verification（2026-10-02、run `01M3Y90WZRZTGW8D3QZ1K3M0EE`、ADR `claude-session-resume`）
+
+実装参照を確認: [architecture-map](architecture-map.md) の継続 session / execute continuation / Claude Code adapter の行は `node_session.rs`、`sessions.rs` と `dispatcher/continuation_session.rs`、`claude_code.rs` と ADR-0124 を指す。`ExecutionMetrics` 実体は `crates/task-core/src/execution_metrics.rs`。
+
+- 衝突見積もり: `git merge-tree --write-tree --name-only HEAD main` → exit 1。worktree の `main` は `0d438ec19d9a474c5b82507cefd0d9e63846d0d6`、HEAD は `f4fd17d03444fb1822cfbdaa8140384ed416f885`（main は HEAD の祖先でない）。競合は `crates/task-api/src/query.rs`, `crates/task-api/src/query/tests.rs`, `crates/task-core/src/cluster_job/tests.rs`, `crates/task-core/src/store/migrations.rs`, `crates/task-core/src/store/tests.rs`, `crates/task-ops/src/delivery.rs`, `crates/task-ops/src/delivery/tests.rs`, `docs/PROGRESS.md`, `gui/app/routes/inbox.tsx`。最新 main の確認に使える remote/fetch はこの worktree に無いため、登録された `main` ref を対象にした。
+- `unshare -U -r true` → exit 1（`/proc/self/uid_map: Operation not permitted`）。
+- `cargo test --workspace` → exit 101。`instance_handoff` は 8 件中 3 passed / 5 failed（他のテスト binary はこの失敗までに完了）。失敗名: `starting_the_same_release_twice_exits_three`, `normal_mode_does_not_inject_the_smoke_builtins`, `verify_mode_never_dispatches_and_never_touches_daemon_instances`, `a_newer_release_takes_over_while_the_old_one_finishes_its_run`, `a_stale_heartbeat_promotes_the_standby`。前3件のうち namespace 拒否がログで明示された3件は user namespace 制限、後2件は handoff/standby 待ち失敗。
+- `cargo test -p celeris --test instance_handoff` 単独再実行 → exit 101、同じ5件が再現（namespace 拒否3件、handoff/standby 待ち2件）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- 前回 run の acceptance check `grep -q 'claude-session-resume' docs/PROGRESS.md` は、この節に当該識別子が無かったため exit 1 だった。今回の見出しに ADR slug を明記し、同じ check を再実行して通過を確認した。
+- コード変更なし。workspace test は環境制限により受け入れ条件未達として報告する。

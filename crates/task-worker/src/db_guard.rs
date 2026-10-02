@@ -490,15 +490,26 @@ pub fn installed() -> Option<Arc<DbGuard>> {
 /// D2: worker の run のプロセスを spawn する所で `container::wrap` の代わりに呼ぶ。コンテナ実行なら
 /// `container::wrap`、そうでなければ入っているガードを付ける（無ければそのまま）。
 pub fn launch(
+    command: tokio::process::Command,
+    container: Option<&crate::container::ContainerPlan>,
+) -> tokio::process::Command {
+    launch_with(command, container, installed().as_deref())
+}
+
+/// [`launch`] の本体。ガードを引数で受ける（試験はプロセス全体の [`install`] を使わずにここを呼ぶ。
+/// install すると同じ test binary で並行する他の試験の spawn にも試験用の DB のガードが掛かり、その tempdir が
+/// 消えた瞬間に `pre_exec` の bind が ENOENT になる）。
+fn launch_with(
     mut command: tokio::process::Command,
     container: Option<&crate::container::ContainerPlan>,
+    guard: Option<&DbGuard>,
 ) -> tokio::process::Command {
     command.env_remove("DBUS_SESSION_BUS_ADDRESS");
     if container.is_some() {
         return crate::container::wrap(command, container);
     }
-    if let Some(guard) = installed() {
-        apply(&mut command, &guard);
+    if let Some(guard) = guard {
+        apply(&mut command, guard);
     }
     command
 }

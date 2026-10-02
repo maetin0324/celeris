@@ -12,6 +12,7 @@ import { BrowserWaitInboxList } from "~/components/BrowserWaitsPanel";
 import { DecisionItemCard, PlanApprovalCard } from "~/components/DecisionControls";
 import { RetryFlash, TransitionFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
+import { attentionIntegrationRepair, IntegrationRepairPanel } from "~/components/IntegrationRepairPanel";
 import { LocalTime } from "~/components/LocalTime";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -641,6 +642,8 @@ function AttentionRow({
         </Link>
       </p>
       <p className="mt-1 text-fg">{attentionText(item)}</p>
+      {/* celeris ADR-0120 D5: target drift に伴う integration repair（実装失敗とは別の色・ラベル）。 */}
+      <IntegrationRepairPanel repair={attentionIntegrationRepair(item)} compact />
       {item.type === "phase_checkpoint" && (
         <p className="mt-2">
           <Link

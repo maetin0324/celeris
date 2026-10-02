@@ -2215,7 +2215,11 @@ fn a_project_without_a_workspace_keeps_the_previous_prompt_byte_for_byte() {
     assert_eq!(delegate_workspace_instruction(&RunContext::default()), "");
     assert_eq!(
         crate::preamble::render(&RunContext::default(), "artifacts"),
-        crate::preamble::deliverables_placement_note()
+        format!(
+            "{}{}",
+            crate::preamble::deliverables_placement_note(),
+            crate::preamble::production_host_note()
+        )
     );
 }
 
@@ -3448,6 +3452,53 @@ fn planner_prompt_has_the_check_writing_section() {
                 "that will create a child (units already done and `adopt` units do not count)"
             ));
         }
+    }
+}
+
+/// ADR-0095 付記 D-d: /2 と /3 の planner のプロンプトに「本番 host の操作は人が実行する手順として書く」の
+/// 節が出て、`systemctl --user` / `systemd-run` / `~/.config/celeris` / `~/.local/celeris/releases` に
+/// 触れる WorkUnit を計画しない旨が明示される。
+#[test]
+fn planner_prompt_declares_production_host_changes_as_a_human_procedure() {
+    let task = crate::protocol::tests::sample_task();
+    let needles = [
+        "### 本番 host の操作",
+        "systemctl --user",
+        "systemd-run",
+        "~/.config/celeris",
+        "~/.local/celeris/releases",
+    ];
+    let v2 = crate::protocol::ExecutionPlannerContext {
+        gate_rule_id: "human/explicit".to_string(),
+        max_work_units: 8,
+        parallel: true,
+        max_phases: 5,
+        max_plan_json_bytes: 24 * 1024,
+        ..Default::default()
+    };
+    let v3 = crate::protocol::ExecutionPlannerContext {
+        max_plan_json_bytes: 64 * 1024,
+        tree: Some(crate::protocol::TreePlannerContext {
+            depth: 1,
+            max_depth: 3,
+            remaining_depth: 2,
+            max_stages: 5,
+            max_units_per_stage: 6,
+            max_child_tasks_per_plan: 6,
+            ..Default::default()
+        }),
+        ..v2.clone()
+    };
+    for (name, planner) in [("v2", v2), ("v3", v3)] {
+        let context = RunContext {
+            execution_planner: Some(planner),
+            ..RunContext::default()
+        };
+        let prompt = build_prompt(&task, &context, "run-planner-production-host", "artifacts");
+        for needle in needles {
+            assert!(prompt.contains(needle), "{name}: missing {needle:?}");
+        }
+        assert_eq!(prompt.matches("### 本番 host の操作").count(), 1, "{name}");
     }
 }
 

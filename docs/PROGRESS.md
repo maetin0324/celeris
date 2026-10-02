@@ -107,6 +107,19 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - 未解決事項: ホスト準備（別 host UID / subuid の割当）は人の判断が必要。launcher 本体の実装は未着手。A13 の実 process 再試験（別 UID 前提）は launcher 実装後に行う。本番 admission の `CredentialInjection`・`IdentityRestore` は引き続き未解放。
 - 提案: launcher 実装を独立 task として切り出し、完了後に A13 を再試験してから `prod-admission-release` の判断に戻す。
 
+## planner check の書き方の指針（R7-10, 2026-10-02）
+
+完了日 2026-10-02（task 01M3WZ1GFJ0YNERRNT1W0EMCQR、WorkUnit `verify-all`。兄弟 `planner-guide` / `cos-guide` と統合済み）。
+
+- 背景: web の木の replan 24 回のうち 9 回が計画・check・条件の質に起因（2026-10-01 調査）。[ADR-0079 付記 R7-10](adr/0079-recursive-task-decomposition.md#付記-r7-10-check-の-sh-構文兄弟と衝突しない差分-check葉の大きさwebdocs-task-の-cargo受け入れ条件の範囲2026-10-02) に根拠と 5 規則を記録。
+- 実装: `crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE` に 5 規則（(1) `/bin/sh`/dash 限定の構文、(2) 段の全 unit の許可パスを除外する範囲外差分 check、(3) 葉は 1 run に収まる大きさ、(4) `web/`/`docs/` だけを変える task は `cargo test --workspace` の代わりに `crates/` 無差分検査、(5) 受け入れ条件・差分 check の範囲に ADR・記録の置き場所を最初から含める）を追記。`crates/task-worker/src/claude_code/tests.rs::planner_prompt_has_the_check_writing_section` で各規則の文言が /2・/3 の planner プロンプトに 1 回ずつ出ることを確認。
+- CoS 側: `crates/task-worker/src/preamble.rs` の `actions_instructions()` に (4)(5) と同内容の 2 文を追記（`web/` や `docs/` だけを変える task の cargo 代替検査、ADR・記録の置き場所を acceptance の範囲指定に含める）。`crates/task-worker/src/preamble/tests.rs` で両文がそれぞれ 1 回だけ出ることを確認。
+- 証拠コマンドと結果（このWorkUnitで実行）:
+  - `cargo test --workspace` → exit 0（全 crate `test result: ok`、失敗 0）
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+  - いずれも渡された `CARGO_TARGET_DIR` のまま実行。
+- 未解決事項: なし。本番 host の操作、設計原則・Phase 順の変更は行っていない。
+
 ## reviewer に人の決定・回答と決定的 check の結果を渡す（ADR-0117）
 
 完了日 2026-10-02（task 01M3WZ1GFBPQ8T699ZF3Y66SJ3 の record unit `verify-all`）。
@@ -119,3 +132,4 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
   - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行。外部ネットワークへのアクセスなし。
 - 変更範囲: このWorkUnit自体はコード変更なし（検査と本記録のみ）。実装済みの変更は `crates/task-worker/src/claude_code/{prompt.rs,tests.rs}`、`crates/task-worker/src/protocol.rs`、`docs/protocol/worker-protocol.schema.json`、`crates/task-dispatch/src/{review.rs,review/tests.rs,dispatcher/review_spawn.rs,dispatcher/tests/review.rs}`（別 WorkUnit `worker-prompt`・`dispatch-context` でコミット済み、上記 commit に記録済み）。
 - 未解決事項: D3（人の決定の note から `PATCH acceptance` を提案する入口）は見送り、ADR-0117 に記録済み。reviewer が実際に人の決定を優先して合格させる end-to-end 実例（web root final review のような実 run での再現確認）はこの WorkUnit の範囲外（unit test レベルでの検証のみ）。
+- merge-main（2026-10-02）: 最新 main（33e0a6aa、R7-10 planner check 指針を含む）を本ブランチに merge。`docs/PROGRESS.md` の衝突は上の 2 節（R7-10 を先、ADR-0117 を後）を両方残して解消。コード（`crates/task-worker/src/claude_code/{prompt.rs,tests.rs}`）は自動 merge。ADR 番号 0117 は main の最大 0115 と重複なし。`cargo fmt --all -- --check` / `cargo clippy --workspace -- -D warnings` / `cargo test --workspace` はいずれも exit 0。

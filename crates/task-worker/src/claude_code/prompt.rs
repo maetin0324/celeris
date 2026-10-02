@@ -895,7 +895,7 @@ fn build_execution_plan_prompt(
     // その理由も（同じ間違いを繰り返させない。dogfood 4 回目は 2 回とも `too many checks: 8 > 6`）。
     if let Some(planner) = &context.execution_planner {
         out.push_str(&plan_limits_section(planner));
-        // ADR-0079 R7-2: check の書き方（本番で check 自体が誤って落ちた 6 つの形）。
+        // ADR-0079 R7-2/R7-10: check の書き方（本番で check 自体が誤って落ちた形）。
         out.push_str(PLANNER_CHECK_GUIDANCE);
         out.push_str(&previous_attempt_errors_section(planner, artifacts));
     }
@@ -1651,4 +1651,12 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      that runs a script another unit creates belongs to a unit that `depends_on` the creating unit.\n\
      - When a check runs a script the unit itself creates, write the exact invocation (the arguments the check \
      passes) in the unit's objective so the unit writes the script to accept that form (a check passed a URL to \
-     a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\n";
+     a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\
+     - Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.\n\
+     - An out-of-scope diff check is compared with sibling units during stage integration, so exclude every \
+     unit's allowed paths in that stage, not only this unit's paths.\n\
+     - Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.\n\
+     - For a unit or task changing only `web/` or `docs/`, replace mandatory `cargo test --workspace` with a \
+     check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \
+     leave Cargo checks to the daemon's workspace check.\n\
+     - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\n";

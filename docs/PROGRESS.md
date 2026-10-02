@@ -215,3 +215,42 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --lib` → exit 0（合計 1335 passed / 0 failed）。
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
 - `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。
+
+## ui-ux 外部 skill の org 種更新と結合試験（work unit `e2e-verify`）
+
+完了日 2026-10-02。ADR-0122 の木（深さ1: ui-ux 課への 4 外部 skill 登録、深さ2: このtask）の最終段。
+`config/org.example.toml` の `ui-ux` に `skills_mounts = ["frontend-design", "shadcn", "web-design",
+"ui-ux-quality-gate"]`（license: none で除外した skill は無いため 4 件とも）と、依存方針（shadcn 以外の
+新規ライブラリは提案に留める、外部ネットワークに出ない）の policy 1 行を追加した（routing 用の
+`profile.skills` は不変）。`crates/celeris/tests/ui_ux_skills_delivery.rs` を新規に追加し、
+`config/skills/` を一時 KB に取り込み → `org.example.toml` から `ui-ux` の実効 profile を解決 →
+`task-worker` の配送関数（`deliver_claude_code` / `deliver_agents_md`）で実際に materialize するところまでを
+結合して確認した（LLM 呼び出しなし、外部ネットワークなし）。詳細は
+`docs/progress/ui-ux-skills.md` の「org 種の更新と結合試験」節。
+
+- 証拠: `cargo build --workspace --bins` → exit 0。`cargo test --workspace ui_ux_skills` → 4 試験バイナリ
+  （celeris / celerisctl / task-dispatch / task-ops）で計 12 passed / 0 failed。
+  `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+  `cargo test --workspace` → exit 0（120 試験バイナリすべて `test result: ok`、合計 3236 passed / 0 failed、
+  失敗・flake 無し）。
+- 既存の routing 試験（`example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering` 等）も
+  上記のフルスイートに含まれ通過を確認済み。
+- 未解決事項: なし。
+
+## ADR-0122 完了（ui-ux 外部 skills）
+
+完了日 2026-10-02。ADR-0122（外部 agent skill の vendoring・KB への取り込み・ui-ux への mount・quality gate の
+reviewer 配布）の D1〜D6 を実装し、`docs/adr/0122-ui-ux-external-skills.md` の状態欄を「採用・実装済み」に更新した。
+実装 commit: vendor-skills `d39733d8`、vet-skills `3cfdf69a`、adr `7ce72c5c`、skill-import `41e6324b`、
+review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
+
+- 証拠コマンド: `cargo test -p celeris --test ui_ux_skills_delivery`（結果の詳細は
+  `docs/progress/ui-ux-skills.md` を参照。config/skills → 一時 KB → ui-ux 実効 profile → worker 配送の結合試験が
+  全件 pass、routing 回帰試験も同じフルスイートで通過を確認済み）。
+- 未解決事項:
+  - 本番の KB 取り込み・ui-ux への mount は worker からは行わない。人が `docs/ops/ui-ux-external-skills.md` の
+    手順で実行する（ADR-0095 付記 D-d）。
+  - `web-design` の LICENSE 判断（LICENSE ファイルが無く README の License 節に拠っている点）は、より厳しい
+    基準を採るかどうかを人が判断する（ADR-0122 D6、`docs/progress/ui-ux-skills.md`）。
+  - 本 commit 後の HEAD に対する `scripts/selfdeploy/release.sh` / `verify.sh` で検証済みの sha12 は、次の
+    work unit（release-report）が追記する。

@@ -104,10 +104,12 @@ brief = "画面・操作の流れ・見た目を設計し、作り、確かめ�
 
 [org.profile]
 skills = ["ui-design", "ux", "accessibility", "frontend", "react", "typescript", "css", "responsive", "usability"]
+skills_mounts = ["frontend-design", "shadcn", "web-design", "ui-ux-quality-gate"]
 tools = ["gh"]
 policy = [
   "変更前後のスクリーンショットをスマホ幅（360/390/412px）とデスクトップ幅で artifacts に残す。表示確認には gui/ の Playwright（scripts/check-*.mjs）を使う。",
   "デザインだけで終わらせず、実装と表示確認まで行う。",
+  "skill のコード例に出るライブラリ（next-themes, motion, react-hook-form, zod, lucide-react, figma-squircle, ForesightJS, next/font/google 等）は導入しない。依存は決定済みの範囲（shadcn）のみ、それ以外は提案に留める。テストやビルドで外部ネットワークに出ない。",
 ]
 
 [org.profile.harnesses]

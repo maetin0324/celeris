@@ -1943,6 +1943,78 @@
       ],
       "type": "object"
     },
+    "ReviewCheckResult": {
+      "description": "daemon が workspace で実行した決定的 check の結果。",
+      "properties": {
+        "cmd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "criterion": {
+          "description": "acceptance のインデックス。暗黙の条件には無い。",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "pass": {
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "daemon 側で末尾 1000 文字に切り詰めた verdict の理由。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "pass",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ReviewDecision": {
+      "description": "人が選んだ決定と、その決定を出した task。",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "description": "選択肢の key。",
+          "type": "string"
+        },
+        "option_label": {
+          "description": "選択肢の表示名。",
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "key",
+        "question",
+        "option",
+        "option_label"
+      ],
+      "type": "object"
+    },
     "ReviewOutput": {
       "description": "`Review` run がワークスペース直下 `artifacts/review.json` に書く出力（ADR-0007 D1/D5）。",
       "properties": {
@@ -1984,12 +2056,33 @@
     "ReviewRequest": {
       "description": "`Reviewer` check のための `context.review`（ADR-0007 D5）。`RunRequest.task` は合成した `Review` kind の\nタスクで、対象タスクの `run` の `done` の内容と、判定すべき条件のインデックスを渡す。",
       "properties": {
+        "answers": {
+          "description": "対象 task と祖先への人の回答（ADR-0117 D1）。",
+          "items": {
+            "$ref": "#/$defs/Answer"
+          },
+          "type": "array"
+        },
+        "checks": {
+          "description": "同じ review で先に workspace で実行した決定的 check（ADR-0117 D2）。",
+          "items": {
+            "$ref": "#/$defs/ReviewCheckResult"
+          },
+          "type": "array"
+        },
         "criteria": {
           "description": "判定すべき `task.acceptance` のインデックス（`Check::Reviewer` の条件）。",
           "items": {
             "format": "uint",
             "minimum": 0,
             "type": "integer"
+          },
+          "type": "array"
+        },
+        "decisions": {
+          "description": "対象 task と祖先で回答済みの人の決定（ADR-0117 D1）。",
+          "items": {
+            "$ref": "#/$defs/ReviewDecision"
           },
           "type": "array"
         },

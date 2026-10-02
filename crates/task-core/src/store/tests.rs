@@ -5236,6 +5236,7 @@ fn repair_spec(task: &Task) -> WorkUnitSpec {
             &task.title,
             &task.objective,
             None,
+            None,
         ),
         depends_on: vec![],
         done_when: vec![],

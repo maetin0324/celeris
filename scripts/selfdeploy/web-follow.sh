@@ -15,7 +15,7 @@ SD_PROG=web-follow
 
 NEW="${1:-}"
 OLD="${2:-}"
-releases="${SD_RELEASES:-$HOME/.local/celeris/releases}"
+releases="$SD_RELEASES"
 
 if [ -z "$NEW" ]; then
   sd_log "usage: web-follow.sh <new_sha12> <old_sha12>; no new sha given — nothing to do"

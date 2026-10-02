@@ -5,7 +5,7 @@
 #     - ライブ引き継ぎ（verify.json.live_ok が真で、いま動いている celeris の /health が `role` を持つ）
 #     - 停止 → 起動（live_ok が偽、または /health に `role` が無い＝この ADR 以前の版）
 #   のどちらかで切り替え、`current` / `previous` を更新する。すべて
-#   $CELERIS_STATE_DIR/backups/promote-<ts>.log に残る。
+#   $SD_LOGS/promote-<ts>.log に残る。
 set -euo pipefail
 
 SD_PROG=promote
@@ -56,8 +56,8 @@ done
 
 sd_require_json_tool
 TS="$(sd_stamp)"
-mkdir -p "$SD_BACKUPS"
-SD_LOG_FILE="$SD_BACKUPS/promote-$TS.log"
+mkdir -p "$SD_BACKUPS" "$SD_LOGS"
+SD_LOG_FILE="$SD_LOGS/promote-$TS.log"
 sd_log "promote $SHA12 (log: $SD_LOG_FILE)"
 
 REL="$(sd_release_dir "$SHA12")"

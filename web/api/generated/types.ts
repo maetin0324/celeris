@@ -236,6 +236,7 @@ export type AttentionItem = {
   "at": string;
   "class": FailureClass;
   "delivered_release"?: string | null;
+  "integration_repair"?: IntegrationRepairView | null;
   "reason": string;
   "task": TaskRef;
   "type": "failed";
@@ -1140,6 +1141,7 @@ export type Delivery = {
   "department": string;
   "detail": string;
   "head": string;
+  "merge_candidate_sha"?: string | null;
   "notification"?: MessageId | null;
   "prepare_pid"?: number | null;
   "project_id": ProjectId;
@@ -1149,7 +1151,9 @@ export type Delivery = {
   "repo": string;
   "repo_id": RepoId;
   "review_run": string;
+  "reviewed_sha"?: string | null;
   "state": DeliveryState;
+  "target_sha"?: string | null;
   "task_id": TaskId;
   "worker_run": string;
 };
@@ -1264,6 +1268,50 @@ export type EffectiveProfile = {
 };
 
 export type Event = {
+  "attempt": number;
+  "before_sha": string;
+  "merge_candidate_sha": string;
+  "repo_id": RepoId;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_ref": string;
+  "target_sha": string;
+  "type": "review_target_synced";
+} | {
+  "attempt": number;
+  "repo_id": RepoId;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "type": "review_target_advanced";
+} | {
+  "attempt": number;
+  "before_sha": string;
+  "conflict_files": Array<string>;
+  "key": string;
+  "repo_id": RepoId;
+  "target_ref": string;
+  "target_sha": string;
+  "type": "integration_repair_scheduled";
+  "work_unit_id": string;
+} | {
+  "attempt": number;
+  "repo_id": RepoId;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "type": "integration_repair_resolved";
+  "work_unit_id": string;
+} | {
+  "attempt": number;
+  "before_sha": string;
+  "fallback": boolean;
+  "reason": IntegrationRepairExhaustReason;
+  "repo_id": RepoId;
+  "rollback_to_sha"?: string | null;
+  "target_sha": string;
+  "type": "integration_repair_exhausted";
+  "work_unit_id"?: string | null;
+} | {
   "browser": BrowserRun;
   "type": "browser_updated";
 } | {
@@ -1478,6 +1526,17 @@ export type Event = {
   "merged": Array<PhaseMerged>;
   "phase": string;
   "type": "phase_integrated";
+  "work_unit_id": string;
+} | {
+  "branch": string;
+  "child_task": TaskId;
+  "head_sha": string;
+  "key": string;
+  "merge_candidate_sha": string;
+  "phase": string;
+  "repo_id": RepoId;
+  "target_sha": string;
+  "type": "merge_candidate_stale";
   "work_unit_id": string;
 } | {
   "plan_id": string;
@@ -1891,6 +1950,24 @@ export type IntegrateResult = {
 export type IntegrationId = string;
 
 export type IntegrationMethod = "merge" | "pr" | "discard";
+
+export type IntegrationRepairExhaustReason = "limit_reached" | "plan_issue" | "work_unit_failed" | "budget_exhausted" | "result_untrusted" | "abort_failed" | "worktree_unavailable";
+
+export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
+
+export type IntegrationRepairView = {
+  "attempt": number;
+  "before_sha"?: string | null;
+  "conflict_files"?: Array<string>;
+  "fallback"?: boolean | null;
+  "max_attempts": number;
+  "reason"?: IntegrationRepairExhaustReason | null;
+  "rollback_to_sha"?: string | null;
+  "state": IntegrationRepairState;
+  "target_ref"?: string | null;
+  "target_sha": string;
+  "work_unit_id"?: string | null;
+};
 
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
 
@@ -2445,7 +2522,9 @@ export type PhaseGateRequest = {
 export type PhaseMerged = {
   "commit": string;
   "key": string;
+  "parent_head"?: string | null;
   "skipped"?: boolean;
+  "target_sha"?: string | null;
 };
 
 export type PhaseReport = {
@@ -3580,6 +3659,7 @@ export type TaskDetail = {
   "execution"?: ExecutionView | null;
   "failure"?: FailureSummary | null;
   "genre"?: string | null;
+  "integration_repair"?: IntegrationRepairView | null;
   "is_root_task"?: boolean;
   "latest_question"?: string | null;
   "paused_by"?: TaskId | null;

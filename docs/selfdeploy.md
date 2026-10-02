@@ -402,6 +402,45 @@ scripts/selfdeploy/promote.sh <sha12>
   SIGKILL する（人が判断する操作なので既定はしない）。`status.sh` の `stale_instances` でも同じ一覧が
   見える（`current`/`previous` 以外に active な `celeris@*` の sha12 と pid）。
 
+### 4e. web/ の追従（`web-follow.sh`。ADR-0081 / web ADR-W3 付記 2026-10-02）
+
+`promote.sh` は celeris と gui の切替が済んだ**後**に `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>` を呼ぶ。
+
+- 旧 release の `celeris-web@<old>` が **active のときだけ**動く。新 release の `gate.json` の `web.ok` が `true` で
+  `releases/<new>/web/app/server/index.js` があれば、`celeris-web@<new>` を start → enable、`celeris-web@<old>` を stop → disable。
+- 新の start に失敗したら新を stop して旧を start し直す。条件を満たさない（旧 web が動いていない・`web.ok` が偽・配布物が無い）
+  ときは何もせず、理由を promote のログに出す。どの場合も exit 0 で、**web の追従の失敗で昇格は失敗にならない**。
+- `celeris@` の unit には触れない。`celeris-web@.service` は `Wants=celeris@%i.service` を持たない（`After=` だけ）ので、
+  web の起動が daemon を起こして handoff を引き起こすことは無い（2026-10-01 の事故）。
+- web を手で追従させたいときも同じ台本を使う: `scripts/selfdeploy/web-follow.sh <new_sha12> <old_sha12>`。
+- web は必ず**昇格した release**（`~/.local/celeris/releases/<sha12>/web/app`）から動かす。task の作業場所や staging 成果物への
+  symlink の release から動かさない（作業場所の片付けで中身が消え、全画面 404 になる。2026-10-01）。
+
+#### 本番に一度だけ人が行う手順（2026-10-02 の一時回避を撤去する）
+
+worker の run はこの操作をしない。人が順に実行する。
+
+```bash
+# 1. 一時回避（WorkingDirectory をコピー先に向けた drop-in）を撤去する
+rm -f ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d/override.conf
+rmdir ~/.config/systemd/user/celeris-web@ea86af6307f8.service.d 2>/dev/null || true
+# 2. unit を repo 版（Wants=celeris@ 無し）に置き直す
+cp deploy/systemd/celeris-web@.service ~/.config/systemd/user/celeris-web@.service
+grep -n '^Wants=' ~/.config/systemd/user/celeris-web@.service    # 何も出ないこと
+systemctl --user daemon-reload
+# 3. web を再起動する（<sha12> はいま動いている web の release。gateway の dotfiles 修正を含む release に昇格後なら新しい sha）
+systemctl --user restart celeris-web@<sha12>.service
+systemctl --user show -p WorkingDirectory celeris-web@<sha12>.service   # ~/.local/celeris/releases/<sha12>/web/app
+# 4. 確かめる（bind は ~/.config/celeris/web.env の値。既定 127.0.0.1:7720）
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/          # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7720/inbox     # 200
+curl -s http://127.0.0.1:7720/healthz
+systemctl --user is-active celeris@<current の sha12>.service             # web の再起動で daemon が増えていないこと
+```
+
+`/` が 404 のままなら、その release の gateway が dotfiles の修正（`sendFile` に `root` を渡す。付記 (B)）を含んでいない。
+修正を含む release を作って昇格させるまでは、一時回避の override.conf を戻して使う。
+
 ### 4d. 昇格したら `main` に戻す（ADR-0041 D3）
 
 昇格は `~/.local/celeris/` の中だけで完結し、あなたのチェックアウト（`~/workspace/agent-platform`）は

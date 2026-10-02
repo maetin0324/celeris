@@ -160,7 +160,7 @@ export function createApp({
     res.set("Cache-Control", "no-store");
     // 未定義の path も同じ middleware を通したうえで 404。本文は SPA で、shell の中の 404 を出す（R42）。
     if (!isSpaRoute(req.path)) res.status(404);
-    res.sendFile(path.join(distDir, "index.html"), (error) => {
+    res.sendFile("index.html", { root: distDir }, (error) => {
       if (error && !res.headersSent) next(error);
     });
   });

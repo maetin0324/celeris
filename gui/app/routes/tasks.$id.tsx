@@ -9,6 +9,7 @@ import { loadTaskDetail, runTaskDetailAction, type TaskDetailData } from "~/cele
 import type { TaskDetail, TimelineItem } from "~/celeris/types";
 import { ClusterJobWaitBanner } from "~/components/ClusterJobWaitBanner";
 import { HelpLink } from "~/components/HelpLink";
+import { IntegrationRepairPanel } from "~/components/IntegrationRepairPanel";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { TaskRoutingPanel } from "~/components/TaskRoutingPanel";
 import { ArtifactRow } from "~/components/task-detail/ArtifactRow";
@@ -295,6 +296,10 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
           </div>
         </div>
       </section>
+
+      {/* celeris ADR-0120 D5: target drift に伴う integration repair。実装失敗の FailureBanner
+          より上に、別の欄・色・ラベルで表示する。null / 欠落なら何も出さない。 */}
+      <IntegrationRepairPanel repair={detail.integration_repair} />
 
       {/* ADR-0070 D1/D2（Phase 116）: failed のタスクは、原因の分類と「やり直す」「再レビュー」
           「取り下げ」をどのタブからでも見える位置に出す（受け入れ条件 D6(e)）。 */}

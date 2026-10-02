@@ -170,6 +170,57 @@ pub struct TaskDetail {
     /// 「クラスタ job を待っています: 42634 (R) 42635 (Q) …」の材料。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster_job_wait: Option<ClusterJobWaitView>,
+    /// ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では
+    /// 省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を
+    /// 解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_repair: Option<IntegrationRepairView>,
+}
+
+/// ADR-0120 D5: `TaskDetail.integration_repair` / 受信箱 `AttentionItem::Failed.integration_repair`
+/// が共有する形。最後の integration repair event と対応する scheduled event から決定的に組み立てる
+/// （`task_core::integration_repair_status`）。`reason` / `rollback_to_sha` / `fallback` は `exhausted`
+/// のときだけ値を持つ。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationRepairView {
+    pub state: task_core::IntegrationRepairState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+    pub attempt: u32,
+    /// `task_ops::delivery::MAX_INTEGRATION_REPAIRS`。
+    pub max_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<String>,
+    pub target_sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflict_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<task_core::IntegrationRepairExhaustReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_to_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<bool>,
+}
+
+/// ADR-0120 D5: `events`（古い順）から [`IntegrationRepairView`] を組み立てる。履歴が無ければ `None`。
+pub(crate) fn integration_repair_view(events: &[(u64, Event)]) -> Option<IntegrationRepairView> {
+    let event_list: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
+    let status = task_core::integration_repair_status(&event_list)?;
+    Some(IntegrationRepairView {
+        state: status.state,
+        work_unit_id: status.work_unit_id,
+        attempt: status.attempt,
+        max_attempts: crate::delivery::MAX_INTEGRATION_REPAIRS,
+        target_ref: status.target_ref,
+        target_sha: status.target_sha,
+        before_sha: status.before_sha,
+        conflict_files: status.conflict_files,
+        reason: status.reason,
+        rollback_to_sha: status.rollback_to_sha,
+        fallback: status.fallback,
+    })
 }
 
 /// ADR-0090 D5: 待っているクラスタ job（`cluster_job_waits` の `waiting` の行）。
@@ -1157,11 +1208,13 @@ pub fn task_detail(
     let is_root_task = task_core::is_root_task(&task);
     let paused_by = paused_by(store, &task)?;
     let cluster_job_wait = active_cluster_job_wait(store, task.id)?;
+    let integration_repair = integration_repair_view(&events);
 
     Ok(TaskDetail {
         is_root_task,
         paused_by,
         cluster_job_wait,
+        integration_repair,
         task,
         priority_label,
         workspace_dir,

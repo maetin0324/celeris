@@ -1149,6 +1149,17 @@
                 "null"
               ]
             },
+            "integration_repair": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IntegrationRepairView"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況（履歴が無ければ省略）。\n`reason`/`class` は実装失敗（レビュー不合格・ワーカーの明示的な error）の分類であり、これは\n別物（`exhausted` でも task を直接 `failed` にはしない）。"
+            },
             "reason": {
               "type": "string"
             },
@@ -6360,6 +6371,142 @@
           "type": "object"
         },
         {
+          "description": "ADR-0120 D5: review 前同期の衝突に対し IntegrationRepair WU を起票した（WU の追加・\n`ReviewRepair` 遷移と同じ transaction で 1 回）。`attempt` は integration_repair WU の通し番号\n（1 始まり）。`conflict_files` は重複を除きパス順。状態・attempts は変えない。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "before_sha": {
+              "type": "string"
+            },
+            "conflict_files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "key": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "target_ref": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_repair_scheduled",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "repo_id",
+            "target_ref",
+            "target_sha",
+            "before_sha",
+            "conflict_files",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0120 D5: 修復 WU の完了後、最新 target への再同期が成功した（`target_sha` は再同期時の\nSHA）。checks/reviewer の合格は意味しない。状態・attempts は変えない。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_repair_resolved",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "repo_id",
+            "target_sha",
+            "reviewed_sha",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0120 D4/D5: IntegrationRepair を打ち切った（1 回につき 1 件）。`rollback_to_sha` は安全な\nrollback が完了したときだけ `before_sha`。`fallback` は未同期 HEAD で review へ進めるときだけ\n`true`。状態・attempts は変えない。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "before_sha": {
+              "type": "string"
+            },
+            "fallback": {
+              "type": "boolean"
+            },
+            "reason": {
+              "$ref": "#/$defs/IntegrationRepairExhaustReason"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "rollback_to_sha": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_repair_exhausted",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "target_sha",
+            "before_sha",
+            "attempt",
+            "reason",
+            "fallback"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Credential-free mapping between one isolated browser session and a worker execution.",
           "properties": {
             "browser": {
@@ -9721,6 +9868,130 @@
           "type": "string"
         }
       ]
+    },
+    "IntegrationRepairExhaustReason": {
+      "description": "ADR-0120 D4/D5: `Event::IntegrationRepairExhausted.reason`（固定値）。",
+      "oneOf": [
+        {
+          "const": "limit_reached",
+          "description": "D4.1: 起票しようとした時点で上限（`MAX_INTEGRATION_REPAIRS`）に達していた。",
+          "type": "string"
+        },
+        {
+          "const": "plan_issue",
+          "description": "D4.2: 修復 WU が `plan_issue` で終えた。",
+          "type": "string"
+        },
+        {
+          "const": "work_unit_failed",
+          "description": "D4.3: 修復 WU が `failed` になった。",
+          "type": "string"
+        },
+        {
+          "const": "budget_exhausted",
+          "description": "D4.3: 修復 WU が `budget_exhausted` のまま再開できない。",
+          "type": "string"
+        },
+        {
+          "const": "result_untrusted",
+          "description": "D4.4: 成果の保持が確認できない（祖先関係・dirty・rebase 進行中）。",
+          "type": "string"
+        },
+        {
+          "const": "abort_failed",
+          "description": "D4.5: 衝突時の `rebase --abort` が失敗した。",
+          "type": "string"
+        },
+        {
+          "const": "worktree_unavailable",
+          "description": "D4.5: worktree が消えた、remote/shared workspace に変わった。",
+          "type": "string"
+        }
+      ]
+    },
+    "IntegrationRepairState": {
+      "description": "ADR-0120 D5: 最後の integration repair の結末。",
+      "enum": [
+        "scheduled",
+        "resolved",
+        "exhausted"
+      ],
+      "type": "string"
+    },
+    "IntegrationRepairView": {
+      "description": "ADR-0120 D5: `TaskDetail.integration_repair` / 受信箱 `AttentionItem::Failed.integration_repair`\nが共有する形。最後の integration repair event と対応する scheduled event から決定的に組み立てる\n（`task_core::integration_repair_status`）。`reason` / `rollback_to_sha` / `fallback` は `exhausted`\nのときだけ値を持つ。",
+      "properties": {
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "before_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conflict_files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fallback": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_attempts": {
+          "description": "`task_ops::delivery::MAX_INTEGRATION_REPAIRS`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationRepairExhaustReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rollback_to_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/IntegrationRepairState"
+        },
+        "target_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_sha": {
+          "type": "string"
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "attempt",
+        "max_attempts",
+        "target_sha"
+      ],
+      "type": "object"
     },
     "IntegrationState": {
       "description": "取り込みの行方（ADR-0043 D5）。",
@@ -18459,6 +18730,17 @@
             "string",
             "null"
           ]
+        },
+        "integration_repair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationRepairView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では\n省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を\n解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。"
         },
         "is_root_task": {
           "default": false,

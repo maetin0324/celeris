@@ -10,6 +10,8 @@ import { Markdown } from "../../components/content/markdown";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Button } from "../../components/ui/button";
+import { attentionIntegrationRepair } from "../tasks/integration-repair";
+import { IntegrationRepairPanel } from "../tasks/integration-repair-panel";
 
 const labels: Record<string, string> = { approve: "承認", reject: "却下", answer: "回答", cancel: "中止" };
 const actions = ["approve", "reject", "answer", "cancel"] as const;
@@ -187,6 +189,7 @@ function InboxContent({ inbox, sender }: { inbox: Inbox; sender: Sender }) {
                 </>
               )}
               {"reason" in item && <Markdown source={item.reason} />}
+              <IntegrationRepairPanel view={attentionIntegrationRepair(item)} />
               {"cluster" in item && (
                 <Link className="underline" to="/clusters">
                   クラスタ {item.cluster} を確認

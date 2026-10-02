@@ -304,6 +304,36 @@ export type Event =
       type: "review_target_advanced";
     }
   | {
+      attempt: number;
+      before_sha: string;
+      conflict_files: string[];
+      key: string;
+      repo_id: RepoId;
+      target_ref: string;
+      target_sha: string;
+      type: "integration_repair_scheduled";
+      work_unit_id: string;
+    }
+  | {
+      attempt: number;
+      repo_id: RepoId;
+      reviewed_sha: string;
+      target_sha: string;
+      type: "integration_repair_resolved";
+      work_unit_id: string;
+    }
+  | {
+      attempt: number;
+      before_sha: string;
+      fallback: boolean;
+      reason: IntegrationRepairExhaustReason;
+      repo_id: RepoId;
+      rollback_to_sha?: string | null;
+      target_sha: string;
+      type: "integration_repair_exhausted";
+      work_unit_id?: string | null;
+    }
+  | {
       browser: BrowserRun;
       type: "browser_updated";
     }
@@ -786,6 +816,17 @@ export type Event =
       task_id: TaskId;
       type: "stall_detected";
     };
+/**
+ * ADR-0120 D4/D5: `Event::IntegrationRepairExhausted.reason`（固定値）。
+ */
+export type IntegrationRepairExhaustReason =
+  | "limit_reached"
+  | "plan_issue"
+  | "work_unit_failed"
+  | "budget_exhausted"
+  | "result_untrusted"
+  | "abort_failed"
+  | "worktree_unavailable";
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
 /**
@@ -1016,6 +1057,12 @@ export type AttentionItem =
        * 配送済み（`deliveries` に `release` が付いた記録がある）なら sha12。
        */
       delivered_release?: string | null;
+      /**
+       * ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況（履歴が無ければ省略）。
+       * `reason`/`class` は実装失敗（レビュー不合格・ワーカーの明示的な error）の分類であり、これは
+       * 別物（`exhausted` でも task を直接 `failed` にはしない）。
+       */
+      integration_repair?: IntegrationRepairView | null;
       reason: string;
       task: TaskRef;
       type: "failed";
@@ -1077,6 +1124,10 @@ export type AttentionItem =
       task: TaskRef;
       type: "plan_approval";
     };
+/**
+ * ADR-0120 D5: 最後の integration repair の結末。
+ */
+export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
 /**
  * ADR-0047 D1 / D4。
  */
@@ -5512,6 +5563,28 @@ export interface ApprovalDecisionView {
   ts: string;
 }
 /**
+ * ADR-0120 D5: `TaskDetail.integration_repair` / 受信箱 `AttentionItem::Failed.integration_repair`
+ * が共有する形。最後の integration repair event と対応する scheduled event から決定的に組み立てる
+ * （`task_core::integration_repair_status`）。`reason` / `rollback_to_sha` / `fallback` は `exhausted`
+ * のときだけ値を持つ。
+ */
+export interface IntegrationRepairView {
+  attempt: number;
+  before_sha?: string | null;
+  conflict_files?: string[];
+  fallback?: boolean | null;
+  /**
+   * `task_ops::delivery::MAX_INTEGRATION_REPAIRS`。
+   */
+  max_attempts: number;
+  reason?: IntegrationRepairExhaustReason | null;
+  rollback_to_sha?: string | null;
+  state: IntegrationRepairState;
+  target_ref?: string | null;
+  target_sha: string;
+  work_unit_id?: string | null;
+}
+/**
  * `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
  */
 export interface PlanApprovalStage {
@@ -8127,6 +8200,12 @@ export interface TaskDetail {
    * ADR-0027 D1: `Task.genre`（`role` と同じ理由で最上位にも出す）。
    */
   genre?: string | null;
+  /**
+   * ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では
+   * 省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を
+   * 解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。
+   */
+  integration_repair?: IntegrationRepairView | null;
   /**
    * ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
    */

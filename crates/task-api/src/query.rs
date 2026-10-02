@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 51] = [
+pub(crate) const EVENT_TYPES: [&str; 54] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -167,6 +167,10 @@ pub(crate) const EVENT_TYPES: [&str; 51] = [
     "review_verdict",
     "review_target_synced",
     "review_target_advanced",
+    // ADR-0120 D5: review 前同期の衝突の IntegrationRepair（起票・解消・打ち切り）。
+    "integration_repair_scheduled",
+    "integration_repair_resolved",
+    "integration_repair_exhausted",
     "approval_requested",
     "approval_decided",
     // Phase F7: 認可元のタスクが終端になり、未決の認可の要求を celeris が取り下げた。
@@ -241,6 +245,9 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ReviewVerdict { .. } => "review_verdict",
         Event::ReviewTargetSynced { .. } => "review_target_synced",
         Event::ReviewTargetAdvanced { .. } => "review_target_advanced",
+        Event::IntegrationRepairScheduled { .. } => "integration_repair_scheduled",
+        Event::IntegrationRepairResolved { .. } => "integration_repair_resolved",
+        Event::IntegrationRepairExhausted { .. } => "integration_repair_exhausted",
         Event::ApprovalRequested => "approval_requested",
         Event::ApprovalDecided { .. } => "approval_decided",
         Event::ApprovalsWithdrawn { .. } => "approvals_withdrawn",

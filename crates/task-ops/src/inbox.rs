@@ -136,6 +136,11 @@ pub enum AttentionItem {
         /// 配送済み（`deliveries` に `release` が付いた記録がある）なら sha12。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         delivered_release: Option<String>,
+        /// ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況（履歴が無ければ省略）。
+        /// `reason`/`class` は実装失敗（レビュー不合格・ワーカーの明示的な error）の分類であり、これは
+        /// 別物（`exhausted` でも task を直接 `failed` にはしない）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        integration_repair: Option<view::IntegrationRepairView>,
     },
     RequeueLimitNear {
         task: TaskRef,
@@ -694,6 +699,7 @@ fn build_attention(
         // ADR-0070 D1（Phase 116）: 分類・配送済みの release・「再レビュー」操作を足す。
         let (class, _) = derive::classify_task_failure(&events);
         let delivered_release = store.delivery_get(t.id)?.and_then(|d| d.release.clone());
+        let integration_repair = view::integration_repair_view(&events);
         let mut task_ref = view::task_ref(t);
         task_ref.actions = view::actions_with_events(t, &events);
 
@@ -703,6 +709,7 @@ fn build_attention(
             at: view::to_rfc3339(t.updated_at),
             class,
             delivered_release,
+            integration_repair,
         });
     }
 

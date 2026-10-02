@@ -154,7 +154,7 @@ celerisctl knowledge rerun  <task_id>                      # 管理系。**DB �
 
 - GUI の「知識」画面: scope 別のツリー、検索、ページの描画・編集・履歴、`_inbox` の一覧（accept / reject、出典へのリンク）
 - API: `GET /knowledge/tree`、`GET /knowledge/page`、`PUT /knowledge/page`（管理系）、`GET /knowledge/inbox`、
-  `POST /knowledge/inbox/{id}/{accept,reject}`（管理系）。仕様は `docs/gui/api.md` §3.98〜3.103
+  `POST /knowledge/inbox/{id}/{accept,reject}`（管理系）。仕様は `docs/api/v1/gui-api.md` §3.98〜3.103
 - エディタで直接書いてもよい（**正本は作業ツリーのファイル**なので、未コミットの編集もそのまま GUI に見える）。
   そのときは `celerisctl knowledge reindex` を 1 回呼ぶか、GUI をもう一度開けば索引が作り直される
 
@@ -172,7 +172,7 @@ celerisctl knowledge reindex
 ```
 
 `init` が置く雛形は**空欄と書き方だけ**（`confidence: low`）。`environment/clusters/{pegasus,sirius,fern03}.md` は
-「接続 / 作業場所 / ジョブ / 環境」の見出しだけがあるので、`docs/workspace.md` と `config.toml` の `[[clusters]]` に
+「接続 / 作業場所 / ジョブ / 環境」の見出しだけがあるので、`docs/guides/workspace.md` と `config.toml` の `[[clusters]]` に
 既に書いてあることを人が書き写し、`confidence: high` にする。**celeris は雛形を勝手に埋めない**（出典の無い
 知識を作らないため）。
 

@@ -4,7 +4,7 @@
 tasks: [01M3EDF3JEHRQCG6A2EJDRQMXJ, 01M3JXB3DHVBWKWKPW04DTG6SJ]
 ---
 
-共通の base path は `/api/v1`。読み取りはトークン不要、変更系は管理トークンが必要（未設定でも 401）。JSON 本文の上限は 1 MiB（超過時は 413）。JSON の正本は [`api-v1.schema.json`](api/v1/api-v1.schema.json)、従来のエンドポイント一覧は [`gui/api.md`](gui/api.md)。以下の型名は同スキーマの `$defs` を指す。
+共通の base path は `/api/v1`。読み取りはトークン不要、変更系は管理トークンが必要（未設定でも 401）。JSON 本文の上限は 1 MiB（超過時は 413）。JSON の正本は [`api-v1.schema.json`](api-v1.schema.json)、従来のエンドポイント一覧は [`gui-api.md`](gui-api.md)。以下の型名は同スキーマの `$defs` を指す。
 
 ### `GET /tasks/{id}/execution` → 200 `TaskExecutionView`
 

@@ -87,7 +87,7 @@ P5-01〜P5-03 の測定記録は [latency gate](../web/gates/p5-01-latency.md)�
 
 ## Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備。P6-04 以降は未着手）
 
-P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は web ADR-W3・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は [dogfood 手順](../web/dogfood.md) を整備した。P6-03 は同日 18:32 UTC に開始し、詳細は下の開始記録に追記した。H6 の期間と合格条件は人の判断待ち。
+P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-02 は web ADR-W3・`celeris-web@.service`・selfdeploy の非 blocking web 段と `tests/release_web_stage_nonblocking.sh`、P6-03 は dogfood 手順（`docs/web/dogfood.md`、2026-10-02 に削除。ADR-0128） を整備した。P6-03 は同日 18:32 UTC に開始し、詳細は下の開始記録に追記した。H6 の期間と合格条件は人の判断待ち。
 
 - Rust gate（2026-10-01、repair-cargo-1 の `crates/task-worker/src/ssh.rs` 修正を merge-base `8a61eae488eb` に戻した後）: `cargo test --workspace` → exit 101。記録された test suites は全て pass し、`crates/celeris/tests/releases_api.rs` は 8 件中 6 passed・2 failed。失敗した `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は user scope bus への接続エラー（`Failed to connect to user scope bus via local transport: No data available`）。人の 2026-10-01 の判断に従い、この sandbox から user systemd bus に接続できない環境由来の2件として除外し、残りの全テストを合格として扱う。`cargo test -p celeris --test releases_api` の再実行でも同じ2件が再現（6 passed / 2 failed）。テスト側の skip は別 task で対応する。
 - Rust lint: `cargo clippy --workspace -- -D warnings` → exit 0（warning 0）。
@@ -110,7 +110,7 @@ P6-01 は `pnpm -C web release` が web の配布物を生成すること、P6-0
 
 Playwright の読み取り検証: PC 幅 1440px は loopback URL、スマホ幅 390px は LAN URL を使用。各幅で `/`・`/tasks`・`/projects`・`/org`・`/reports`・`/clusters` の 6 画面が HTTP 200、見出し表示、daemon down 表示なし。主要 GET API（`health`・`tasks`・`projects`・`org`・`reports`・`clusters`）も各幅で HTTP 200。ログイン POST 以外の変更系リクエストは 0。既存 gui/ の `127.0.0.1:7700/healthz` は HTTP 200 で継続稼働。LAN の別の物理端末からの到達は未確認。
 
-配置上の未解決: 本番 release パスは前 run の staging 成果物への symlink。NFS 上への実体コピーは時間がかかり途中で中止し、host の `/var/lib/celeris/web-dogfood` へのコピーは read-only filesystem で失敗した。dogfood 中は参照先を保持する必要がある。user unit は start のみで enable していない。詳細と問題追記先は [dogfood 手順](../web/dogfood.md) と [PROGRESS の dogfood 節](../PROGRESS.md#web-gui-dogfood開始-2026-10-01release-bf54b41ad627) を参照。
+配置上の未解決: 本番 release パスは前 run の staging 成果物への symlink。NFS 上への実体コピーは時間がかかり途中で中止し、host の `/var/lib/celeris/web-dogfood` へのコピーは read-only filesystem で失敗した。dogfood 中は参照先を保持する必要がある。user unit は start のみで enable していない。詳細と問題追記先は dogfood 手順（`docs/web/dogfood.md`、2026-10-02 に削除。ADR-0128） と [PROGRESS の dogfood 節](../PROGRESS.md#web-gui-dogfood開始-2026-10-01release-bf54b41ad627) を参照。
 
 ### P2-07 V3 台帳のレビュー修正（2026-09-30）
 

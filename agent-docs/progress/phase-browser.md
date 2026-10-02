@@ -5,7 +5,7 @@ tasks: [01M3MBV3AKXZGEG5RXR60XC62J, 01M3MFS5T52FXA63W4V10XGC4S]
 ---
 
 2026-09-28、[ADR-0078](../adr/0078-browser-execution-capability.md) の Phase 1 を実装。
-運用手順は [browser-capability.md](../browser-capability.md)。本番の profile 設定と昇格は行っていない。
+運用手順は [browser-capability.md](../../docs/guides/browser-capability.md)。本番の profile 設定と昇格は行っていない。
 
 - 既存 profile の管理者 grant と `browser-enabled` skill の要求を分離。ACP/OpenCode を既定に、Claude Code を明示選択できる。
 - task/run ごとの isolated session、非空の upstream action allowlist、domain policy、content boundaries を生成。
@@ -107,7 +107,7 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 
 ### 負荷のかけ方
 
-`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](../testing.md)）。
+`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[agent-docs/guides/testing.md](../guides/testing.md)）。
 以下は削除前の台本がかけていた負荷の記録:
 
 1. `nproc`（本機では 24）本の `timeout <cap> sh -c 'while :; do :; done'` を並走させ CPU を飽和させる。
@@ -139,7 +139,7 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 理由: 修正者が `dafffeb1` のコミットメッセージに、使い捨ての実験テストで「同じポートに 2 つ目の celeris を
 起こし begin 直後の状態を読むと 20 回中 7 回 in_flight=0」という再現記録をすでに残しており、根因（ポート
 衝突）も製品コードの該当箇所（`bind_reuseport`、ADR-0040 D4）も特定済みだったため、同じ検証を別 worktree で
-繰り返すコストに見合わないと判断した。`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](../testing.md)）。
+繰り返すコストに見合わないと判断した。`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[agent-docs/guides/testing.md](../guides/testing.md)）。
 
 ### 試験の意図への影響
 
@@ -174,4 +174,4 @@ stress-e2e-phase3 結果: exit 0（serial 5/5、parallel 2、real 16.970s）
 
 ### 人に依頼する重い負荷の検証
 
-`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](../testing.md)）。
+`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[agent-docs/guides/testing.md](../guides/testing.md)）。

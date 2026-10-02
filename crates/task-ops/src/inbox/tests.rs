@@ -1162,3 +1162,37 @@ fn inbox_cleanup_r4_done_retry_hides_failed_same_unit_but_keeps_other_failures()
     );
     assert_eq!(result.counts.attention, 2);
 }
+
+#[test]
+fn inbox_cleanup_keeps_failed_that_still_needs_human_judgment() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let parent = sample_task(TaskKind::Execute, Status::Running);
+    let failed_child = tree_child(&parent, Status::Failed, "unit", OffsetDateTime::now_utc());
+    let failed_root = sample_task(TaskKind::Execute, Status::Failed);
+    for task in [&parent, &failed_child, &failed_root] {
+        store.insert(task).expect("insert");
+    }
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    for kept in [&failed_child, &failed_root] {
+        assert!(
+            result.attention.iter().any(
+                |item| matches!(item, AttentionItem::Failed { task, .. } if task.id == kept.id)
+            )
+        );
+    }
+    assert!(result.suppressed.is_empty());
+    let by_id = HashMap::from([
+        (parent.id, parent.clone()),
+        (failed_child.id, failed_child.clone()),
+        (failed_root.id, failed_root.clone()),
+    ]);
+    assert_eq!(attention_suppression(&failed_child, &by_id), None);
+    assert_eq!(attention_suppression(&failed_root, &by_id), None);
+}

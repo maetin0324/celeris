@@ -76,7 +76,7 @@ pub(crate) const MIGRATION_0035: &str =
 /// browser Phase 4: trusted login（ブランチの 0035 を振り直し）。
 pub(crate) const MIGRATION_0036: &str =
     include_str!("../../migrations/0036_browser_trusted_login.sql");
-/// ADR-0119 付記: `idx_events_delivery_skipped`（受信箱の delivery_skipped 走査を絞る部分 index）。
+/// ADR-0121 付記: `idx_events_delivery_skipped`（受信箱の delivery_skipped 走査を絞る部分 index）。
 pub(crate) const MIGRATION_0037: &str =
     include_str!("../../migrations/0037_events_delivery_skipped_index.sql");
 

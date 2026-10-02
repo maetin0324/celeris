@@ -1208,7 +1208,7 @@
       "type": "string"
     },
     "DeliverySkipReason": {
-      "description": "ADR-0119 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
+      "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
       "enum": [
         "multiple_repos",
         "no_marker",
@@ -2817,7 +2817,7 @@
           "type": "object"
         },
         {
-          "description": "ADR-0119 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない\n監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。",
+          "description": "ADR-0121 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない\n監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。",
           "properties": {
             "detail": {
               "type": "string"

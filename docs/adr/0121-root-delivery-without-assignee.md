@@ -1,4 +1,4 @@
-# ADR-0119: 担当の無い root task の delivery と見送り通知
+# ADR-0121: 担当の無い root task の delivery と見送り通知
 
 （旧番号 0099 は main の browser-phase3-control-lease と衝突したため振り直した。旧番号 0117 も refs 全体で使用済みだったため再度振り直した。）
 

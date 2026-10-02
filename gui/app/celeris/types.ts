@@ -968,7 +968,7 @@ export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
  */
 export type UnitDeclared = "leaf" | "task";
 /**
- * ADR-0119 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
+ * ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
  * 並びは判定の順（同時に複数あれば先のものを記録する）。
  */
 export type DeliverySkipReason =

@@ -7,7 +7,7 @@ use crate::model::{Event, Status, TaskId};
 use super::query::{u64_to_i64, usize_to_i64};
 use super::{EventRow, SqliteStore, StoreError, TaskWithEvents, format_rfc3339, status_str};
 
-/// ADR-0119 付記: migration 0037 の部分 index `idx_events_delivery_skipped` の WHERE 式と
+/// ADR-0121 付記: migration 0037 の部分 index `idx_events_delivery_skipped` の WHERE 式と
 /// 字句まで同じにすること（でなければ SQLite がこの index を使わず events 全件を scan する）。
 pub(super) const DELIVERY_SKIPPED_PREDICATE: &str =
     "json_extract(json,'$.type')='delivery_skipped'";

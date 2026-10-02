@@ -134,30 +134,46 @@ fn measurement_is_cached_and_written_to_the_lease_without_touching_it() {
     assert_eq!(scratch::mtime(&pool.lease_path(&owner)), before);
 }
 
-/// ADR-0075 D6（Phase G2）: `sccache --show-stats --stats-format=json`（0.18 の形）の要約。
+/// ADR-0129 (1): sccache / cache server は Celeris の外。status の両欄は常に `None` で、旧 `sccache-l1/`・
+/// `cache-l1/` は GC（execute）でも自動では消さない。
 #[test]
-fn sccache_stats_summary_reads_the_json_shape_of_0_18() {
-    let json = r#"{"stats":{"compile_requests":624,"requests_executed":576,
-        "cache_hits":{"counts":{"Rust":163,"C/C++":261,"Assembler":121},"adv_counts":{}},
-        "cache_misses":{"counts":{"Rust":29},"adv_counts":{}},"multi_level":null},
-        "cache_location":"Local disk: \"/x\"","cache_size":1073741824,"max_cache_size":21474836480,"version":"0.18.0"}"#;
-    let s = parse_sccache_stats(json).unwrap();
-    assert_eq!(
-        s,
-        ScratchSccacheStats {
-            compile_requests: 624,
-            hits: 545,
-            misses: 29,
-            rust_hits: 163,
-            rust_misses: 29,
-            cache_size_bytes: Some(1_073_741_824),
-        }
+fn status_has_no_sccache_or_cache_server_and_gc_keeps_old_l1_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = ScratchSettings::with_dir(tmp.path().join("scratch"));
+    let pool = s.pool();
+    let old_dirs = [pool.root().join("sccache-l1"), pool.root().join("cache-l1")];
+    for dir in &old_dirs {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("blob"), b"x").unwrap();
+    }
+    let run = run_gc(
+        &s,
+        &[],
+        &NoDb,
+        false,
+        &HashMap::new(),
+        0,
+        true,
+        &BTreeSet::new(),
+        false,
     );
-    // 起動直後（counts が空、cache_size が null）。
-    let s = parse_sccache_stats(
-        r#"{"stats":{"compile_requests":0,"cache_hits":{"counts":{}},"cache_misses":{"counts":{}}},"cache_size":null}"#,
-    )
-    .unwrap();
-    assert_eq!((s.hits, s.misses, s.cache_size_bytes), (0, 0, None));
-    assert!(parse_sccache_stats("not json").is_none());
+    let now = SystemTime::now();
+    let status = build_status(
+        &s,
+        &run.scan,
+        &run.plan,
+        run.fs,
+        0,
+        &HashMap::new(),
+        None,
+        now,
+    );
+    assert!(status.sccache.is_none());
+    assert!(status.cache.is_none());
+    let disabled = disabled_status(&s, now);
+    assert!(disabled.sccache.is_none());
+    assert!(disabled.cache.is_none());
+    for dir in &old_dirs {
+        assert!(dir.join("blob").exists());
+    }
 }

@@ -12,9 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use task_ops::daemon::{
-    SCRATCH_STATUS_SCHEMA, ScratchCacheStats, ScratchCacheView, ScratchGcRemovedView,
-    ScratchGcView, ScratchLegacyView, ScratchOwnerView, ScratchSccacheStats, ScratchSccacheView,
-    ScratchStatus,
+    SCRATCH_STATUS_SCHEMA, ScratchGcRemovedView, ScratchGcView, ScratchLegacyView,
+    ScratchOwnerView, ScratchStatus,
 };
 use task_worker::scratch::{
     self, AdoptCandidate, Class, DELETING_PREFIX, GcEntry, GcParams, GcPlan, Lease, Owner, Pool,
@@ -625,6 +624,7 @@ pub fn build_status(
         owners,
         legacy,
         last_gc,
+        // ADR-0129 (1): sccache と cache server は Celeris の外（host の cargo 設定）。欄は常に `None`。
         sccache: None,
         cache: None,
     }
@@ -654,139 +654,6 @@ pub fn disabled_status(settings: &ScratchSettings, now: SystemTime) -> ScratchSt
         sccache: None,
         cache: None,
     }
-}
-
-// ---------------------------------------------------------------------------
-// sccache L1（ADR-0075 D4 / D6、Phase G2）
-// ---------------------------------------------------------------------------
-
-/// `ScratchStatus.sccache`（統計なし。統計は `query_sccache_stats` で足す）。
-pub fn sccache_view(
-    settings: &ScratchSettings,
-    state: &scratch::SccacheState,
-) -> ScratchSccacheView {
-    ScratchSccacheView {
-        state: state.label().to_string(),
-        reason: state.reason().map(str::to_string),
-        binary: settings.sccache.binary.display().to_string(),
-        port: settings.sccache.server_port,
-        dir: settings.pool().l1_dir().display().to_string(),
-        max_bytes: settings.l1_max_bytes,
-        stats: None,
-    }
-}
-
-/// `sccache --show-stats --stats-format=json`（0.18）の要約。`cache_hits.counts` は言語ごと（`Rust` / `C/C++` / …）。
-pub fn parse_sccache_stats(json: &str) -> Option<ScratchSccacheStats> {
-    let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let stats = v.get("stats")?;
-    let counts = |key: &str| -> (u64, u64) {
-        let Some(map) = stats
-            .get(key)
-            .and_then(|c| c.get("counts"))
-            .and_then(|c| c.as_object())
-        else {
-            return (0, 0);
-        };
-        let total = map.values().filter_map(|n| n.as_u64()).sum();
-        let rust = map.get("Rust").and_then(|n| n.as_u64()).unwrap_or(0);
-        (total, rust)
-    };
-    let (hits, rust_hits) = counts("cache_hits");
-    let (misses, rust_misses) = counts("cache_misses");
-    Some(ScratchSccacheStats {
-        compile_requests: stats
-            .get("compile_requests")
-            .and_then(|n| n.as_u64())
-            .unwrap_or(0),
-        hits,
-        misses,
-        rust_hits,
-        rust_misses,
-        cache_size_bytes: v.get("cache_size").and_then(|n| n.as_u64()),
-    })
-}
-
-// ---------------------------------------------------------------------------
-// L2 の cache server（ADR-0075 D5 (b) / D6、Phase G3）
-// ---------------------------------------------------------------------------
-
-/// cache server の `/stats`（500 ms。応答が無い・読めなければ `None`）。
-pub fn query_cache_stats(settings: &ScratchSettings) -> Option<ScratchCacheStats> {
-    let (code, body) = scratch::http_get_local(
-        settings.cache_server.port,
-        "/stats",
-        std::time::Duration::from_millis(500),
-    )?;
-    if code != 200 {
-        return None;
-    }
-    serde_json::from_str(&body).ok()
-}
-
-/// `ScratchStatus.cache`。`fetch` なら `/stats` を問い合わせる（応答すれば `ready`）。
-pub fn cache_view(settings: &ScratchSettings, fetch: bool) -> ScratchCacheView {
-    let endpoint = scratch::cache_server_endpoint(settings);
-    let sccache_mode = scratch::read_sccache_mode(&settings.pool());
-    if !settings.enabled || !settings.cache_server.enabled {
-        return ScratchCacheView {
-            state: "disabled".to_string(),
-            reason: Some(if settings.enabled {
-                "[scratch.cache_server] enabled = false".to_string()
-            } else {
-                "scratch is disabled".to_string()
-            }),
-            endpoint,
-            sccache_mode,
-            stats: None,
-        };
-    }
-    let stats = if fetch {
-        query_cache_stats(settings)
-    } else {
-        None
-    };
-    let (state, reason) = match (&stats, fetch) {
-        (Some(_), _) => ("ready", None),
-        (None, true) => (
-            "unavailable",
-            Some(format!(
-                "no cache server on 127.0.0.1:{} (celeris-scratch-cache.service)",
-                settings.cache_server.port
-            )),
-        ),
-        (None, false) => ("unavailable", Some("not queried".to_string())),
-    };
-    ScratchCacheView {
-        state: state.to_string(),
-        reason,
-        endpoint,
-        sccache_mode,
-        stats,
-    }
-}
-
-/// server に統計を問い合わせる（`Ready` のときだけ。直前にもう一度 port を確かめる: sccache の client は server が
-/// 無いと起こしてしまうので、万一の起動に備えて server と同じ env も渡す）。
-pub fn query_sccache_stats(
-    settings: &ScratchSettings,
-    state: &scratch::SccacheState,
-) -> Option<ScratchSccacheStats> {
-    state.wrapper()?;
-    if !scratch::server_listening(settings.sccache.server_port) {
-        return None;
-    }
-    let out = std::process::Command::new(&settings.sccache.binary)
-        .args(["--show-stats", "--stats-format=json"])
-        .envs(scratch::sccache_server_env(settings))
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    parse_sccache_stats(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// GC の 1 回を記録用の view にする。

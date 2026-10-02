@@ -89,6 +89,38 @@ pub enum IsolationViolation {
     PrivilegesKept,
     InvalidSession,
     NoProcessGroup,
+    /// ADR-0116 D-L: launcher の session 証明が無い（daemon 起動の runtime を含む）。
+    LauncherProofMissing,
+    /// ADR-0116 D-L: 証明はあるが検証に失敗した（不一致・採取不能）。
+    LauncherProofInvalid { defect: LauncherProofDefect },
+}
+
+/// launcher 証明の検証に失敗した理由（ADR-0116 D-L）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LauncherProofDefect {
+    /// `SO_PEERCRED` を採れなかった。
+    PeerUidUnavailable,
+    /// 証明の launcher UID が `SO_PEERCRED`・設定上の launcher UID と一致しない。
+    LauncherUidMismatch,
+    /// launcher UID が daemon の UID か root。
+    LauncherUidPrivileged,
+    /// `Receipt.isolation_ok` が偽。
+    IsolationNotOk,
+    /// 証明の owner UID が無い。
+    OwnerUnknown,
+    /// 証明の owner UID が daemon の UID。
+    OwnerIsDaemon,
+    /// 証明の owner UID が daemon 自身の採った owner UID と一致しない。
+    OwnerMismatch,
+    /// 証明の PID が `RuntimeFacts` を採った process ではない。
+    PidMismatch,
+    /// daemon が runtime の starttime を採れなかった（session 終了を含む）。
+    StarttimeUnavailable,
+    /// starttime が証明と一致しない（PID 再利用・process 入替え）。
+    StarttimeMismatch,
+    /// 証明の session・instance が admission の対象と一致しない。
+    SessionMismatch,
 }
 
 /// sandbox の中の固定の path。起動側はここにだけ session の書き込みを置く。
@@ -225,6 +257,159 @@ pub fn verify_isolation(
         })
     } else {
         Err(v)
+    }
+}
+
+/// ADR-0115 の launcher が `Response::Started` / `observe` で返す session 証明（ADR-0116 D-L）。
+/// daemon 側が `Receipt`・`SessionFacts`・`SessionRecord` の値から組み立てる。
+/// 持っているだけでは何も許さず、[`verify_launcher_session`] を通ったときだけ本番の
+/// [`LauncherAttestation`] になる。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LauncherSessionProof {
+    pub session_id: String,
+    pub instance_id: String,
+    /// launcher 内の `SessionRecord.pid`（runtime の leader）。
+    pub pid: i32,
+    /// launcher 内の `SessionRecord.starttime`。
+    pub starttime: u64,
+    /// launcher が採った `SessionFacts.ns_owner_uid`。
+    pub ns_owner_uid: Option<u32>,
+    /// 証明を発行した launcher の UID。
+    pub launcher_uid: u32,
+    /// `Receipt.isolation_ok`（launcher 自身の `verify_isolation` の結果）。
+    pub isolation_ok: bool,
+}
+
+/// admission 側（daemon）が自分で観測・設定から得た照合値。採取できない値は `None` のまま渡す
+/// （安全な値に置き換えない。`None` は検証失敗になる）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LauncherObservation {
+    /// admission の対象 session。
+    pub session_id: String,
+    /// 対象 session を起動した launcher の instance id。
+    pub instance_id: String,
+    /// launcher socket の `SO_PEERCRED` の UID。
+    pub peer_uid: Option<u32>,
+    /// 設定上の launcher UID。
+    pub configured_launcher_uid: u32,
+    /// `RuntimeFacts` を採った process の PID。
+    pub runtime_pid: i32,
+    /// daemon が `/proc/<runtime_pid>/stat` から採った starttime。
+    pub runtime_starttime: Option<u64>,
+}
+
+/// 本番 admission の attestation（ADR-0116 条件 1・2・5）。隔離の検査と launcher 証明の検証の
+/// 両方を通ったときだけ [`verify_launcher_session`] が作る。試験 harness からは作れない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LauncherAttestation {
+    isolation: IsolationAttestation,
+    instance_id: String,
+    pid: i32,
+    starttime: u64,
+    launcher_uid: u32,
+}
+
+impl LauncherAttestation {
+    pub fn isolation_attestation(&self) -> &IsolationAttestation {
+        &self.isolation
+    }
+    pub fn session_id(&self) -> &str {
+        self.isolation.session_id()
+    }
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+    pub fn pid(&self) -> i32 {
+        self.pid
+    }
+    pub fn starttime(&self) -> u64 {
+        self.starttime
+    }
+    pub fn launcher_uid(&self) -> u32 {
+        self.launcher_uid
+    }
+    pub fn isolation(&self) -> Isolation {
+        self.isolation.isolation()
+    }
+}
+
+/// 証明の各条件を検査する。不一致は全部返す。
+fn launcher_proof_defects(
+    facts: &RuntimeFacts,
+    proof: &LauncherSessionProof,
+    seen: &LauncherObservation,
+) -> Vec<LauncherProofDefect> {
+    use LauncherProofDefect as D;
+    let mut d = Vec::new();
+    match seen.peer_uid {
+        None => d.push(D::PeerUidUnavailable),
+        Some(peer) if peer != proof.launcher_uid || peer != seen.configured_launcher_uid => {
+            d.push(D::LauncherUidMismatch)
+        }
+        Some(_) => {}
+    }
+    if proof.launcher_uid == 0
+        || proof.launcher_uid == facts.host_uid
+        || seen.configured_launcher_uid == 0
+        || seen.configured_launcher_uid == facts.host_uid
+    {
+        d.push(D::LauncherUidPrivileged);
+    }
+    if !proof.isolation_ok {
+        d.push(D::IsolationNotOk);
+    }
+    match proof.ns_owner_uid {
+        None => d.push(D::OwnerUnknown),
+        Some(owner) if owner == facts.host_uid => d.push(D::OwnerIsDaemon),
+        Some(owner) if facts.userns_owner_uid != Some(owner) => d.push(D::OwnerMismatch),
+        Some(_) => {}
+    }
+    if proof.pid <= 1 || proof.pid != seen.runtime_pid {
+        d.push(D::PidMismatch);
+    }
+    match seen.runtime_starttime {
+        None => d.push(D::StarttimeUnavailable),
+        Some(t) if t != proof.starttime => d.push(D::StarttimeMismatch),
+        Some(_) => {}
+    }
+    if proof.session_id != seen.session_id
+        || proof.session_id != facts.session_id
+        || proof.instance_id != seen.instance_id
+        || proof.instance_id.is_empty()
+    {
+        d.push(D::SessionMismatch);
+    }
+    d
+}
+
+/// 本番 admission の共通条件（ADR-0116 D-L）。[`verify_isolation`] の全条件に加えて launcher の
+/// session 証明を要求する。証明が無ければ `LauncherProofMissing`、検証に失敗すれば
+/// `LauncherProofInvalid` を返し、owner 検査が通っていても attestation を作らない。
+pub fn verify_launcher_session(
+    facts: &RuntimeFacts,
+    proof: Option<&LauncherSessionProof>,
+    seen: &LauncherObservation,
+) -> Result<LauncherAttestation, Vec<IsolationViolation>> {
+    let isolation = verify_isolation(facts);
+    let mut v = isolation.as_ref().err().cloned().unwrap_or_default();
+    let Some(proof) = proof else {
+        v.push(IsolationViolation::LauncherProofMissing);
+        return Err(v);
+    };
+    v.extend(
+        launcher_proof_defects(facts, proof, seen)
+            .into_iter()
+            .map(|defect| IsolationViolation::LauncherProofInvalid { defect }),
+    );
+    match isolation {
+        Ok(isolation) if v.is_empty() => Ok(LauncherAttestation {
+            isolation,
+            instance_id: proof.instance_id.clone(),
+            pid: proof.pid,
+            starttime: proof.starttime,
+            launcher_uid: proof.launcher_uid,
+        }),
+        _ => Err(v),
     }
 }
 

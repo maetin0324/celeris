@@ -175,3 +175,63 @@ unshare / `CLONE_NEWUSER` / newuidmap / bwrap の user namespace を前提にす
   掛かる（弱めない）。
 - 本番 token が環境変数など `token_file` 以外の経路で渡る形が将来足されたら、A2 の比較対象にそれも足す（この ADR の不変条件:
   「worker run の中で本番 token を持つ daemon は免除しない」）。
+
+## 付記（final review 指摘の修正）
+
+final review（2026-10-02）で、この ADR の決定（A〜C）が次の 3 点で実装に反映されていないことを指摘された。この付記は
+その修正方針を記す（実装は葉 fix-refuse・fix-userns-lib・fix-e2e-guard が別ブランチで行う。本付記はコードを変えない）。
+
+### 1. worker run 内の本番 daemon は probe せず即時拒否する（fail closed。probe の成否に依らない）
+
+現状の `install_worker_db_guard`（`crates/celeris/src/daemon/bootstrap.rs`）は `GuardDecision::RefuseProduction`
+（起動する daemon が A2 の「本番 DB・本番 `state_dir`・本番 token・印の path」のどれかに当たると判定したとき）でも、
+ログを出した後に `task_worker::db_guard::DbGuard::new` と `probe` を呼び、userns が作れれば（host など）そのまま起動して
+しまう。これは A4 の論証（「worker run の中から本番 DB に繋がる daemon は起動できない」）と食い違う: worker run の外
+（userns を作れる host）で本番 config を指す daemon を worker run の印つきで起こすと、probe が通って起動してしまう。
+
+修正方針:
+
+- `GuardDecision::RefuseProduction` を判定したら、worker run の中（`CELERIS_WORKER_DB_GUARD` の印があり A3-2 の
+  読み取り専用確認が成り立つ場合に限らず、印があるだけで）probe を呼ばずに `DaemonError::DbGuard` で即時に起動を拒否する。
+  判定は probe の成否・userns が作れるかどうかに依らない。
+- worker run の外（印が無い、または印が裏付けられない）で `RefuseProduction` になった場合は、A2 の本文どおり**従来の
+  probe 経路**を保つ（host では probe が成功して守られたまま起動し、userns が無い環境では D5 の fail-closed が従来どおり
+  掛かる）。worker run の中かどうかの判定は、印の path を A1-3 と同じ canonicalize（symlink・相対 path・`..` を解く）の
+  後に行い、迂回できないことを次の起動試験で固定する:
+  - `worker_db_guard_refuses_production_db_inside_worker_run_without_probing`（probe が成功する環境でも、worker run の
+    印がある限り即時拒否されることを固定する。symlink・相対 path 経由の本番 path でも同様に拒否）
+  - `worker_db_guard_still_probes_production_db_outside_worker_run`（印が無ければ従来どおり probe 経路を通ることを固定する）
+
+### 2. task-worker の lib 内 userns 試験は B2 の既定 skip 規則に従う
+
+棚卸し（B1）は `tests/` 配下の統合試験ファイルに留まっていたが、`crates/task-worker/src/browser_tests.rs` の
+`production_action_path_reaches_fixture_through_real_browser_and_egress`（lib 内 unit 試験）は `/usr/bin/unshare --user
+--map-root-user --net --` を直接呼んでおり、B2 の `CELERIS_USERNS_TESTS` gate を経ない。sandbox の中では
+`unshare: uid_map: Operation not permitted` でこの試験が失敗する。
+
+修正方針:
+
+- B2 の判定 helper（既定 skip・`SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)` を
+  stderr に 1 行・`CELERIS_USERNS_TESTS=1` で環境が無ければ fail）を、この試験の先頭（`unshare` を呼ぶ前）に適用する。
+  他の lib 内 unit 試験で `unshare` / `CLONE_NEWUSER` / `newuidmap` を使うものも同じ規則にする。
+- 葉 userns-optin の棚卸し grep（`grep -l 'unshare\|CLONE_NEWUSER\|newuidmap'`）の対象を `crates/*/src/` にも広げ、
+  今後 lib 内に追加される userns 試験も同じ漏れをしないようにする。
+
+### 3. e2e harness は guard を有効のまま、免除経路（Exempt）を実際に通す
+
+現状の e2e harness（`tests/e2e/tests/api_scenarios.rs`）は daemon の config に `[db] worker_read_only = false` を書いて
+guard そのものを外しており（A3 の免除経路を検証していない）、daemon を起こす `command()` は `CELERIS_` 前置きの環境変数を
+すべて消していて worker run の印 `CELERIS_WORKER_DB_GUARD` も残らない。これでは「worker db guard は本番 DB・本番 token を
+守ったまま、試験用 DB だけ免除する」という A の主張を e2e が確かめていない。
+
+修正方針:
+
+- e2e harness の daemon config は既定の `[db] worker_read_only = true` のままにする（`worker_read_only = false` を書かない）。
+- `command()` で `CELERIS_` 前置きの環境変数を消すときも、harness 自身の一時 DB のディレクトリを指す
+  `CELERIS_WORKER_DB_GUARD=<canonicalize した一時 DB ディレクトリ>` だけは残す（他の `CELERIS_*`、特に本番 token を運ぶ
+  変数は消したまま）。これにより A3 の免除（Exempt）が実際の判定経路を通る。
+- 印が無い場所（release gate や verify.sh の daemon 起動など worker run の外）では、この変更後も従来どおり probe 経路
+  になることを維持する（B4 の記述と整合）。
+
+修正後は、1〜3 のいずれも「worker run の中で本番 DB・本番 token・印の path に当たる daemon は起動できない」こと（1）と
+「試験用 DB の daemon は guard が有効なまま免除される」こと（3）を起動試験・e2e 実行で固定する。

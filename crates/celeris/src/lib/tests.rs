@@ -387,7 +387,7 @@ model = "fake"
         vec!["question".to_string(), "pdf".to_string()]
     );
     // Phase 38（ADR-0028 追記）: `名前: 説明` を書いても `GenreConfigView` の型は変わらず、値の文字列に
-    // 説明が付くだけ（GUI は `:` の前を名前として扱う。`docs/gui/api.md`）。
+    // 説明が付くだけ（GUI は `:` の前を名前として扱う。`docs/api/v1/gui-api.md`）。
     assert_eq!(
         view.genres[0].output_artifacts,
         vec![

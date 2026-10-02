@@ -2,7 +2,7 @@
 //! `Authorization` の読み取りはここに閉じる。JSON-RPC のメソッド分岐は `crate::rpc`。
 //!
 //! - `POST /mcp`: JSON-RPC 1 件を受け、JSON で応答する（SSE 応答は実装しない。`Accept:
-//!   text/event-stream` でも JSON を返す。**逸脱として `docs/mcp.md` に明記**）。
+//!   text/event-stream` でも JSON を返す。**逸脱として `docs/guides/mcp.md` に明記**）。
 //! - `GET /mcp`: サーバー起点のストリーム購読は実装しない。**405**（ADR-0056 D5 の許容範囲）。
 
 use std::sync::Arc;

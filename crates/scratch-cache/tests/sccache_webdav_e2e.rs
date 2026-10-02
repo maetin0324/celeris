@@ -131,7 +131,7 @@ fn stats(port: u16) -> serde_json::Value {
 }
 
 #[test]
-#[ignore = "manual: needs a real sccache 0.18 (CELERIS_E2E_SCCACHE) and cargo; evidence goes to docs/progress/phase-G.md"]
+#[ignore = "manual: needs a real sccache 0.18 (CELERIS_E2E_SCCACHE) and cargo; evidence goes to agent-docs/progress/2026-10-02-docs-layout/refs-crates.md"]
 fn real_sccache_uses_the_tiered_cache_server() {
     let Some(bin) = std::env::var_os("CELERIS_E2E_SCCACHE").map(PathBuf::from) else {
         eprintln!("CELERIS_E2E_SCCACHE is not set; skipping");

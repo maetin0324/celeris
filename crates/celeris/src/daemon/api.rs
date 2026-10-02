@@ -20,7 +20,7 @@ use super::adapters::{effective_models, provider_lives, secret_usage};
 use super::bootstrap::hostname;
 use crate::{Config, DaemonError, InstanceIdentity};
 
-/// ADR-0013 / `docs/gui/api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
+/// ADR-0013 / `docs/api/v1/gui-api.md` §3.21: `GET /api/v1/config` に出す設定の要約。env は**キー名だけ**、トークンとその場所は出さない。
 pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
     let models = effective_models(config);
     ConfigView {

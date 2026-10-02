@@ -586,7 +586,7 @@ async fn get_releases_carries_promoted_at_on_main_and_changes() {
         format!(
             r#"{{"base":"aaaaaaaaaaaa",
                  "commits":[{{"sha":"{unmerged}","subject":"phase 50: 検証の直列化"}}],
-                 "files":["scripts/selfdeploy/verify.sh","docs/PROGRESS.md"],
+                 "files":["scripts/selfdeploy/verify.sh","agent-docs/progress/2026-10-02-docs-layout/refs-crates.md"],
                  "sensitive":["scripts/selfdeploy/verify.sh"]}}"#
         ),
     )

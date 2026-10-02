@@ -152,7 +152,7 @@ pub struct ClusterForwardConfig {
     /// ADR-0053 Phase 85: target（`/v1/models`）の健康 probe をこの秒数より短い間隔では行わない
     /// （既定 30 秒）。listener（`-O forward` の有無）の確認はこれに縛られず毎回行う。forward は
     /// 張れているのに先方（bnode150 の vLLM 等）が落ちている間、probe を毎 tick 叩いて tick を
-    /// 遅くしないためのバックオフ（本番観測、`docs/adr/0053-llm-source-proxy.md`「Phase 85 追記」）。
+    /// 遅くしないためのバックオフ（本番観測、`agent-docs/adr/0053-llm-source-proxy.md`「Phase 85 追記」）。
     #[serde(default = "default_tunnel_probe_interval_secs")]
     pub probe_interval_secs: u64,
 }

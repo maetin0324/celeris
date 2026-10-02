@@ -33,7 +33,7 @@ pub const INDEX_STALE_SECS: i64 = 6 * 60 * 60;
 /// `grep` にかける上限（`git` が使えないときのフォールバック）。
 const GREP_TIMEOUT: std::time::Duration = GIT_TIMEOUT;
 /// ADR-0047 D4（Phase 62）: `op = retire` の取り込み先（`_inbox` accept が動かす。P-61-k の答え:
-/// `DELETE /knowledge/page` は足さず、「捨てる」は retire 一本にする。`docs/knowledge.md` に明記）。
+/// `DELETE /knowledge/page` は足さず、「捨てる」は retire 一本にする。`docs/guides/knowledge.md` に明記）。
 /// `_inbox` と同じく索引にも検索にも出ない。
 pub const RETIRED_DIR: &str = "_retired";
 
@@ -1098,7 +1098,7 @@ pub fn inbox_accept(root: &Path, id: &str, path: Option<&str>, overwrite: bool) 
     };
     // ADR-0047 D4（Phase 62）: `op = retire` は候補の中身を書くのではなく、`target`（対象の既存ページ）を
     // `_retired/` へ動かす。`op = merge` は候補の本文（= 書き直した完全な版）で `target` を**必ず上書き**する
-    // （P-61-k: `DELETE /knowledge/page` は足さず、捨てるのは retire に一本化。`docs/knowledge.md` に明記）。
+    // （P-61-k: `DELETE /knowledge/page` は足さず、捨てるのは retire に一本化。`docs/guides/knowledge.md` に明記）。
     if item.op == Some(kb::CandidateOp::Retire) {
         return inbox_accept_retire(root, &item);
     }

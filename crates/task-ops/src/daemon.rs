@@ -1,4 +1,4 @@
-//! デーモンのメモリ上のスナップショット（ADR-0013 D4, `docs/gui/api.md` §3.20 / §6.2）。
+//! デーモンのメモリ上のスナップショット（ADR-0013 D4, `docs/api/v1/gui-api.md` §3.20 / §6.2）。
 //!
 //! ディスパッチャ（task-dispatch）が tick の最後に作って `tokio::sync::watch` に送り、API（task-api）が読む。両者が依存する
 //! この crate に型を置く（task-api は task-dispatch に依存しない）。真実ではなく観測値で、DB には書かず `replay` の対象外。

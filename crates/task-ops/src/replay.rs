@@ -101,11 +101,11 @@ fn diff_task(task: &Task, events: &[(u64, Event)]) -> Vec<ReplayMismatch> {
 
 /// `store` の全タスクについて `events` から再構築した状態と `tasks` テーブルを突き合わせる。
 pub fn replay(store: &dyn TaskStore) -> Result<ReplayReport, OpsError> {
-    let tasks = store.list(None)?;
+    // tasks と events は同じスナップショットで読む（daemon 稼働中でも偽の不一致を出さない）。
+    let tasks = store.tasks_with_events()?;
     let mut all_mismatches = Vec::new();
-    for task in &tasks {
-        let events = store.events_for(task.id)?;
-        all_mismatches.extend(diff_task(task, &events));
+    for (task, events) in &tasks {
+        all_mismatches.extend(diff_task(task, events));
     }
     Ok(ReplayReport {
         tasks: tasks.len(),

@@ -321,6 +321,7 @@ pub(crate) async fn start_api(
     role: SharedRole,
     admin: bool,
     llm_proxy_state: Option<Arc<llm_proxy::ProxyState>>,
+    live_sessions: Arc<task_core::browser_isolation::LiveSessions>,
 ) -> Result<
     (
         RunningApi,
@@ -371,10 +372,16 @@ pub(crate) async fn start_api(
         (Some(key_path), Some(socket)) => {
             let key = task_api::browser::BrowserApiConfig::read_public_key(key_path)
                 .map_err(|e| ApiError::Startup(format!("browser attestation key: {e}")))?;
+            for policy in &config.api.browser_site_policies {
+                policy.validate().map_err(|code| {
+                    ApiError::Startup(format!("browser site policy {}: {code}", policy.policy_id))
+                })?;
+            }
             settings.browser = task_api::browser::BrowserApiConfig {
                 attestation_public_key: Some(key),
                 broker: Some(Arc::new(task_api::browser::UnixCredentialBrokerControl {
                     socket: socket.clone(),
+                    site_policies: config.api.browser_site_policies.clone(),
                 })),
             };
             // ADR-0080 D2: the browser supervisor asks the same broker for one-use leases and
@@ -405,9 +412,28 @@ pub(crate) async fn start_api(
             .into());
         }
     }
+    let identity_sealer = if config.api.browser_credentiald_control_socket.is_some() {
+        let key_dir = config
+            .db
+            .path
+            .parent()
+            .map(|dir| dir.join("browser-identity-keys"))
+            .unwrap_or_else(|| PathBuf::from("browser-identity-keys"));
+        Some(Arc::new(
+            celeris_credentiald::identity_seal::IdentitySealer::open(key_dir)
+                .map_err(|e| ApiError::Startup(format!("browser identity keys: {e}")))?,
+        ))
+    } else {
+        None
+    };
     let state = tokio::task::spawn_blocking(move || ApiState::new(settings, rx))
         .await
         .map_err(|e| ApiError::Startup(e.to_string()))??;
+    let state = match identity_sealer {
+        Some(sealer) => state.with_identity_sealer(sealer),
+        None => state,
+    };
+    let state = state.with_live_sessions(live_sessions);
     let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {
         addr: listen,
         source,

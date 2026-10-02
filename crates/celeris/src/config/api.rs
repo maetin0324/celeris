@@ -25,6 +25,9 @@ pub struct ApiConfig {
     /// Private local credentiald control socket. The daemon PID must be admitted by credentiald.
     #[serde(default)]
     pub browser_credentiald_control_socket: Option<PathBuf>,
+    /// Administrator supplied login policies; absent by default.
+    #[serde(default)]
+    pub browser_site_policies: Vec<task_api::browser::TrustedSitePolicy>,
 }
 
 impl ApiConfig {

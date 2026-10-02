@@ -5,7 +5,7 @@ use crate::execution_plan::{RunIndexRole, RunIndexStatus};
 use crate::model::{Event, Status, TaskId};
 
 use super::query::{u64_to_i64, usize_to_i64};
-use super::{EventRow, SqliteStore, StoreError, format_rfc3339, status_str};
+use super::{EventRow, SqliteStore, StoreError, TaskWithEvents, format_rfc3339, status_str};
 
 impl SqliteStore {
     pub(crate) fn append_event_tx(
@@ -293,6 +293,42 @@ impl SqliteStore {
                 events.push((seq as u64, event));
             }
             Ok(events)
+        })
+    }
+
+    pub(super) fn tasks_with_events_impl(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+        self.with_read_conn(|conn| {
+            // 1 つの読み取りトランザクション（WAL のスナップショット）で tasks と events を読む。
+            let tx = conn.unchecked_transaction()?;
+            let mut tasks = Vec::new();
+            {
+                let mut stmt = tx.prepare("SELECT json FROM tasks")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    tasks.push(Self::row_to_task(row?)?);
+                }
+            }
+            let mut out = Vec::with_capacity(tasks.len());
+            {
+                let mut stmt =
+                    tx.prepare("SELECT seq, json FROM events WHERE task_id = ?1 ORDER BY seq ASC")?;
+                for task in tasks {
+                    let rows = stmt.query_map(params![task.id.to_string()], |row| {
+                        let seq: i64 = row.get(0)?;
+                        let json: String = row.get(1)?;
+                        Ok((seq, json))
+                    })?;
+                    let mut events = Vec::new();
+                    for row in rows {
+                        let (seq, json) = row?;
+                        let event: Event = serde_json::from_str(&json)?;
+                        events.push((seq as u64, event));
+                    }
+                    out.push((task, events));
+                }
+            }
+            tx.finish()?;
+            Ok(out)
         })
     }
 

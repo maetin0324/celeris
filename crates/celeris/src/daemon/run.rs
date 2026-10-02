@@ -1,11 +1,11 @@
 //! デーモンの起動と停止の順序（`run`）。起動順と停止順はここだけで決まる。
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use task_core::{DaemonMode, InstanceRole, SharedRole};
 use task_worker::FakeAdapter;
-use time::OffsetDateTime;
 
 use super::api::{RunningApi, start_api};
 use super::bootstrap::{
@@ -18,6 +18,7 @@ use super::services::{
 use super::tick_loop::tick_loop;
 use crate::{
     Config, DaemonError, Exit, InstanceIdentity, RunOptions, config, db_maintenance, instance,
+    start_instance,
 };
 
 /// ADR-0040 D4（Phase 47）: tick ループが役割のために持つもの。API は `draining` になった tick で
@@ -73,6 +74,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     } else {
         InstanceRole::Active
     });
+    let live_sessions = Arc::new(task_core::browser_isolation::LiveSessions::default());
     let supervisor = match verify {
         // ADR-0040 D3: verify は本番の表に触れない（そもそも DB のコピーだが、規約として）。
         true => {
@@ -85,15 +87,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         }
         false => {
             let freshness = instance::freshness_window(config.tick(), config.lease_grace_secs);
-            match instance::Supervisor::start(
-                dispatcher.store(),
-                identity.clone(),
-                role.clone(),
-                freshness,
-                config.drain_timeout(),
-                config.handoff.drain_force_abort,
-                OffsetDateTime::now_utc(),
-            )? {
+            match start_instance(dispatcher.store(), identity.clone(), role.clone(), &config)? {
                 instance::Started::Duplicate { instance_id, pid } => {
                     tracing::error!(
                         release = %identity.release, active_instance_id = %instance_id, active_pid = pid,
@@ -102,6 +96,26 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                     return Ok(Exit::DuplicateRelease);
                 }
                 instance::Started::Running(supervisor) => {
+                    let bin_dir = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(Path::to_path_buf))
+                        .unwrap_or_else(|| PathBuf::from("/usr/bin"));
+                    task_worker::browser::configure_isolated_runtime(
+                        task_worker::browser::IsolatedBrowserConfig {
+                            resolver: config.browser.egress.resolver,
+                            record_dir: config
+                                .db
+                                .path
+                                .parent()
+                                .unwrap_or(Path::new("."))
+                                .join("browser-runtime")
+                                .join(&identity.instance_id),
+                            bwrap: PathBuf::from("/usr/bin/bwrap"),
+                            sandboxd: bin_dir.join("celeris-browser-sandboxd"),
+                            egress: bin_dir.join("celeris-browser-egress"),
+                            live_sessions: Some(Arc::clone(&live_sessions)),
+                        },
+                    );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの
                     // run（孤児）を lease の失効を待たずに回収できる（定義は `task_dispatch::orphan`）。
                     dispatcher.set_orphan_takeover(task_dispatch::orphan::OrphanTakeover {
@@ -162,6 +176,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                 role.clone(),
                 !verify,
                 llm_proxy_state.clone(),
+                Arc::clone(&live_sessions),
             )
             .await?;
             (Some(api), admin_rx)

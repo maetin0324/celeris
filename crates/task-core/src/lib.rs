@@ -6,6 +6,18 @@ pub use delivery::{Delivery, DeliverySkipReason, DeliveryState, DeliveryStore};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
+/// ADR-0102 P4-C: backend の適合・routing・fallback。
+pub mod browser_backend;
+/// ADR-0099 D3: browser の制御 lease（pause / takeover / resume / stop）の状態機械。
+pub mod browser_control;
+pub mod browser_control_ops;
+/// ADR-0101 D2: Browser Identity（P3-A）の束縛・期限・失効・混入拒否の規則。
+pub mod browser_identity;
+/// ADR-0102 P4-A: isolated runtime・egress・orphan 回収。
+pub mod browser_isolation;
+/// ADR-0100 D2: browser の live proxy（P3-B）の ACL と記録の規則。
+pub mod browser_live;
+pub mod browser_store;
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の耐久記録。
 pub mod browser_wait;
 /// ADR-0090: クラスタ job（PBS / Slurm）の durable wait（`cluster_job_waits`・poll の出力の parser）。

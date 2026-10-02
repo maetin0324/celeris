@@ -1,4 +1,41 @@
 use super::*;
+
+#[test]
+fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
+    let cfg: Config = toml::from_str("").unwrap();
+    assert!(cfg.browser.egress.resolver.is_none());
+    assert!(cfg.api.browser_site_policies.is_empty());
+    let cfg: Config = toml::from_str(
+        r##"
+[[api.browser_site_policies]]
+policy_id = "pol-login"
+exact_origin = "https://login.example.com"
+login_url = "https://login.example.com/login"
+password_selector = "#password"
+submit_selector = "#submit"
+"##,
+    )
+    .unwrap();
+    assert!(cfg.api.browser_site_policies[0].validate().is_ok());
+    let bad: Config = toml::from_str(
+        r##"
+[[api.browser_site_policies]]
+policy_id = "pol-login"
+exact_origin = "https://login.example.com"
+login_url = "https://evil.example.com/login"
+password_selector = "input:not(.x)"
+"##,
+    )
+    .unwrap();
+    assert!(bad.api.browser_site_policies[0].validate().is_err());
+    assert!(toml::from_str::<Config>(
+        "[[api.browser_site_policies]]\npolicy_id = \"p\"\nexact_origin = \"https://a.example\"\nlogin_url = \"https://a.example/\"\npassword_selector = \"#p\"\nbogus = 1\n"
+    ).is_err());
+    assert!(
+        toml::from_str::<Config>("[browser.egress]\nresolver = \"127.0.0.1\"\nbogus = 1\n")
+            .is_err()
+    );
+}
 use task_core::{AccountAdapter, DelegationLimits, OrgKind, Tier, WorkerHint};
 
 /// ADR-0046 D3（Phase 59）: `config/org.example.toml` の `genre` が指す全ての harness を、
@@ -2046,7 +2083,7 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
     let cfg: Config = toml::from_str(&bogus).unwrap();
     assert_eq!(
         cfg.validate().unwrap_err().to_string(),
-        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, acp, paperqa, local-deep-research, langmem only)"
+        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
     );
 
     let empty = format!("[[roles]]\nid = \"  \"\n{providers}");

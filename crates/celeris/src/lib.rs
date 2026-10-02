@@ -24,9 +24,13 @@ pub mod releases;
 /// ADR-0033 D3（Phase 25）: 報告の圧縮（まとめの run を起こす決定的な判断）。
 pub mod reports;
 
+use std::path::Path;
+use std::sync::Arc;
 use task_api::ApiError;
-use task_core::{DaemonMode, StoreError};
+
+use task_core::{DaemonMode, SharedRole, StoreError, TaskStore};
 use task_dispatch::DispatchError;
+use time::OffsetDateTime;
 
 pub use config::{Config, ConfigError, Overrides};
 pub use daemon::adapters::{build_adapters, effective_models, provider_lives, secret_usage};
@@ -40,6 +44,8 @@ pub(crate) use daemon::secrets::resolve_secret;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
+    #[error("browser runtime recovery: {0}")]
+    BrowserRuntimeRecovery(#[from] std::io::Error),
     #[error(transparent)]
     Config(#[from] ConfigError),
     #[error("store: {0}")]
@@ -51,6 +57,50 @@ pub enum DaemonError {
     /// ADR-0095 D5: worker の run から DB を読み取り専用にできない（起動しない）。
     #[error("worker db guard: {0}")]
     DbGuard(String),
+}
+
+/// Register this daemon instance, then recover only runtimes owned by dead or stale instances.
+/// This is the startup path used by `run`, before the dispatcher's first tick.
+pub fn start_instance(
+    store: Arc<dyn TaskStore>,
+    identity: InstanceIdentity,
+    role: SharedRole,
+    config: &Config,
+) -> Result<instance::Started, DaemonError> {
+    let freshness = instance::freshness_window(config.tick(), config.lease_grace_secs);
+    let now = OffsetDateTime::now_utc();
+    let started = instance::Supervisor::start(
+        store.clone(),
+        identity.clone(),
+        role,
+        freshness,
+        config.drain_timeout(),
+        config.handoff.drain_force_abort,
+        now,
+    )?;
+    if matches!(started, instance::Started::Running(_)) {
+        let root = config
+            .db
+            .path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("browser-runtime");
+        for row in store.instance_list()? {
+            if row.instance_id == identity.instance_id
+                || (row.is_fresh(now, freshness) && instance::pid_alive(row.pid))
+            {
+                continue;
+            }
+            let dir = root.join(&row.instance_id);
+            if dir.is_dir() {
+                let killed = task_worker::browser_runtime::reap_recorded(&dir)?;
+                tracing::info!(instance_id = %row.instance_id, count = killed.len(), pids = ?killed,
+                    "reaped recorded browser runtimes on daemon startup");
+                std::fs::remove_dir(&dir)?;
+            }
+        }
+    }
+    Ok(started)
 }
 
 /// ループの終了条件。

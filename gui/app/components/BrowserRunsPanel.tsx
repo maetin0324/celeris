@@ -1,4 +1,5 @@
 import type { BrowserRun } from "~/celeris/types";
+import { BrowserControl } from "~/components/BrowserControl";
 import { Badge } from "~/components/ui/badge";
 import { buttonClass } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
@@ -38,9 +39,11 @@ function safeLivePath(href: string): string | null {
 export function BrowserRunsPanel({
   runs,
   liveViews,
+  csrfToken = null,
 }: {
   runs: BrowserRun[];
   liveViews: Record<string, LiveViewState>;
+  csrfToken?: string | null;
 }) {
   if (runs.length === 0) return null;
   return (
@@ -74,6 +77,11 @@ export function BrowserRunsPanel({
                     {live.state === "disabled" ? DISABLED_TEXT[live.reason] : DISABLED_TEXT.not_running}
                   </p>
                 )}
+                <BrowserControl
+                  run={run}
+                  csrfToken={csrfToken}
+                  authInterval={live.state === "disabled" && live.reason === "auth_interval"}
+                />
               </div>
             );
           })}

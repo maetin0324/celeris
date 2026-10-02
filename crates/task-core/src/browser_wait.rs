@@ -139,6 +139,173 @@ pub struct OperationIntent {
     pub args_digest: Option<String>,
 }
 
+/// ADR-0110 D2: 管理者の site policy（broker の `CredentialPolicy`）が持つログイン URL と top-level selector を
+/// 承認要求の時点で固定した値。モデル・worker の要求からは入らない（trusted supervisor が broker に問うた値だけ）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedLogin {
+    pub policy_id: String,
+    pub revision: u64,
+    pub login_url: String,
+    pub password_selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_selector: Option<String>,
+}
+
+/// trusted selector の上限（ADR-0110 D2）。
+pub const TRUSTED_SELECTOR_MAX_LEN: usize = 256;
+/// trusted selector の compound 数の上限。
+pub const TRUSTED_SELECTOR_MAX_COMPOUNDS: usize = 8;
+/// ログイン URL の上限。
+pub const TRUSTED_LOGIN_URL_MAX_LEN: usize = 2048;
+
+fn ident_len(b: &[u8]) -> usize {
+    match b.first() {
+        Some(c) if c.is_ascii_alphabetic() || *c == b'_' => {}
+        _ => return 0,
+    }
+    b.iter()
+        .take_while(|c| c.is_ascii_alphanumeric() || **c == b'_' || **c == b'-')
+        .count()
+}
+
+/// `[attr]`・`[attr=ident]`・`[attr="…"]` を 1 つ読み、読んだ byte 数を返す。
+fn attr_len(b: &[u8]) -> Option<usize> {
+    let mut i = 1;
+    let name = b
+        .get(i..)?
+        .iter()
+        .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || **c == b'-' || **c == b'_')
+        .count();
+    if name == 0 || !b.get(i)?.is_ascii_lowercase() {
+        return None;
+    }
+    i += name;
+    match *b.get(i)? {
+        b']' => return Some(i + 1),
+        b'=' => i += 1,
+        _ => return None,
+    }
+    if *b.get(i)? == b'"' {
+        i += 1;
+        let v = b.get(i..)?.iter().position(|c| *c == b'"')?;
+        i += v + 1;
+    } else {
+        let v = ident_len(b.get(i..)?);
+        if v == 0 {
+            return None;
+        }
+        i += v;
+    }
+    (*b.get(i)? == b']').then_some(i + 1)
+}
+
+/// ADR-0110 D2 の selector 文法: `type`・`#ident`・`.ident`・`[attr]`・`[attr=ident]`・`[attr="…"]` と、
+/// 結合子の空白・`>` だけ。selector list・pseudo・`*`・`+`・`~`・escape・engine 接頭辞・shadow 貫通は拒否する。
+pub fn validate_trusted_selector(selector: &str) -> Result<(), &'static str> {
+    let b = selector.as_bytes();
+    if b.is_empty() || b.len() > TRUSTED_SELECTOR_MAX_LEN {
+        return Err("selector_length");
+    }
+    if !b.iter().all(|c| (0x20..0x7f).contains(c)) || b.contains(&b'\\') {
+        return Err("selector_charset");
+    }
+    let mut i = 0;
+    let mut compounds = 0;
+    loop {
+        // compound 1 つ
+        let start = i;
+        if b.get(i).is_some_and(|c| c.is_ascii_lowercase()) {
+            i += b[i..]
+                .iter()
+                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || **c == b'-')
+                .count();
+        }
+        loop {
+            match b.get(i) {
+                Some(b'#') | Some(b'.') => {
+                    let n = ident_len(b.get(i + 1..).unwrap_or_default());
+                    if n == 0 {
+                        return Err("selector_grammar");
+                    }
+                    i += 1 + n;
+                }
+                Some(b'[') => i += attr_len(&b[i..]).ok_or("selector_grammar")?,
+                _ => break,
+            }
+        }
+        if i == start {
+            return Err("selector_grammar");
+        }
+        compounds += 1;
+        if compounds > TRUSTED_SELECTOR_MAX_COMPOUNDS {
+            return Err("selector_too_complex");
+        }
+        if i == b.len() {
+            return Ok(());
+        }
+        // 結合子（空白の並び、または前後に空白を許す `>` 1 つ）
+        let ws = b[i..].iter().take_while(|c| **c == b' ').count();
+        i += ws;
+        if b.get(i) == Some(&b'>') {
+            i += 1;
+            i += b[i..].iter().take_while(|c| **c == b' ').count();
+        } else if ws == 0 {
+            return Err("selector_grammar");
+        }
+        if i == b.len() {
+            return Err("selector_grammar");
+        }
+    }
+}
+
+/// ログイン URL は policy の exact origin（`https://host[:port]`、正規形）直下の path で、
+/// userinfo・fragment・空白・制御文字・非 ASCII・`\\` を含まない。
+pub fn validate_trusted_login_url(login_url: &str, exact_origin: &str) -> Result<(), &'static str> {
+    if login_url.len() > TRUSTED_LOGIN_URL_MAX_LEN
+        || !login_url.bytes().all(|c| (0x21..0x7f).contains(&c))
+        || login_url.contains(['#', '\\'])
+    {
+        return Err("login_url_charset");
+    }
+    if !exact_origin.starts_with("https://") || exact_origin.len() <= "https://".len() {
+        return Err("login_url_origin");
+    }
+    match login_url.strip_prefix(exact_origin) {
+        Some(rest) if rest.starts_with('/') => Ok(()),
+        _ => Err("login_url_origin"),
+    }
+}
+
+/// ADR-0110 D2 の形式検証（broker の `CredentialPolicy::validate` と Celeris の pin 時の両方で使う）。
+pub fn validate_trusted_login(
+    login_url: &str,
+    exact_origin: &str,
+    password_selector: &str,
+    submit_selector: Option<&str>,
+) -> Result<(), &'static str> {
+    validate_trusted_login_url(login_url, exact_origin)?;
+    validate_trusted_selector(password_selector)?;
+    if let Some(s) = submit_selector {
+        validate_trusted_selector(s)?;
+    }
+    Ok(())
+}
+
+impl TrustedLogin {
+    pub fn validate(&self, exact_origin: &str) -> Result<(), &'static str> {
+        if !valid_token(&self.policy_id) || self.revision == 0 {
+            return Err("trusted_login_invalid");
+        }
+        validate_trusted_login(
+            &self.login_url,
+            exact_origin,
+            &self.password_selector,
+            self.submit_selector.as_deref(),
+        )
+    }
+}
+
 /// 耐久の wait 1 件（ADR-0080 D4 `BrowserWait`）。**秘密を持たない**。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -162,6 +329,9 @@ pub struct BrowserWait {
     pub credential: Option<CredentialRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIntent>,
+    /// ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_login: Option<TrustedLogin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<String>,
     pub policy_revision: u64,
@@ -205,6 +375,9 @@ pub struct NewBrowserWait {
     pub credential: Option<CredentialRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationIntent>,
+    /// ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_login: Option<TrustedLogin>,
     pub policy_revision: u64,
     pub policy_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -363,6 +536,25 @@ pub trait BrowserWaitStore: Send + Sync {
         now: OffsetDateTime,
     ) -> Result<BrowserWaitOpen, BrowserWaitError>;
     fn browser_wait_get(&self, wait_id: &str) -> Result<Option<BrowserWait>, StoreError>;
+    /// ADR-0080 H3: 認証区間の開始/終了を control 状態に書く（task-api の `auth-section` と同じ op）。
+    fn browser_session_auth_section(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        active: bool,
+    ) -> Result<(), crate::browser_store::BrowserStoreError>;
+    /// ADR-0113 D2: worker の agent 操作 gate（task-api の `agent/begin`・`agent/end` と同じ op）。
+    fn browser_session_agent_action(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        op: crate::browser_control_ops::AgentActionOp,
+        now: u64,
+    ) -> Result<crate::browser_control::BrowserControl, crate::browser_store::BrowserStoreError>;
+    /// ADR-0100: scrub 済みの live event を 1 件追記する。
+    fn browser_session_live_append(
+        &self,
+        key: crate::browser_store::BrowserSessionKey<'_>,
+        event: &crate::browser_live::ScrubbedLiveEvent,
+    ) -> Result<u64, StoreError>;
     /// task の wait（新しい順ではなく作成順）。
     fn browser_waits_for_task(&self, task_id: TaskId) -> Result<Vec<BrowserWait>, StoreError>;
     /// 人の対応を待つ wait（`pending`）の全件。inbox・承認一覧に出す。作成順。
@@ -416,6 +608,37 @@ pub struct ConsumedBrowserApproval {
     pub wait: BrowserWait,
     pub credential: CredentialRecord,
     pub approved_by: String,
+    /// ADR-0110 D2: 承認時に wait へ固定した管理者のログイン URL・selector。store の wait から移すだけで、
+    /// 呼出し側の値は受け取らない。固定の無い（旧い）承認は `None` で、注入には使えない。
+    pub trusted_login: Option<TrustedLogin>,
+}
+
+impl ConsumedBrowserApproval {
+    /// 注入に使う password selector（ADR-0110 D2 照合 3）。固定値だけが出所で、要求側が selector を
+    /// 持ってきた場合は固定値と byte 一致しなければ拒否する。固定が無ければ注入しない。
+    pub fn injection_selector(&self, requested: Option<&str>) -> Result<&str, &'static str> {
+        let pinned = self
+            .trusted_login
+            .as_ref()
+            .ok_or("trusted_selector_missing")?;
+        if pinned.policy_id != self.credential.policy_id
+            || validate_trusted_login(
+                &pinned.login_url,
+                &self.wait.origin,
+                &pinned.password_selector,
+                pinned.submit_selector.as_deref(),
+            )
+            .is_err()
+        {
+            return Err("trusted_selector_missing");
+        }
+        match requested {
+            Some(r) if r.as_bytes() != pinned.password_selector.as_bytes() => {
+                Err("selector_mismatch")
+            }
+            _ => Ok(&pinned.password_selector),
+        }
+    }
 }
 
 /// 承認済みの credential 使用 wait を、それを開いた論理 run/session の continuation として一度だけ消費する。
@@ -434,6 +657,15 @@ pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
             .is_none_or(|o| o.action != "credential_use")
     {
         return Err("browser approval is not a credential use");
+    }
+    // ADR-0110 D2: 呼出し側が渡した wait の固定値は信じない。store の wait と食い違えば一回承認を
+    // 消費せずに拒否する（差し替え）。
+    let stored = store
+        .browser_wait_get(&wait.wait_id)
+        .map_err(|_| "browser approval store unavailable")?
+        .ok_or("browser approval missing")?;
+    if stored.trusted_login != wait.trusted_login {
+        return Err("selector_mismatch");
     }
     let consumed = store
         .browser_wait_consume(
@@ -473,10 +705,12 @@ pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
         })
         .map(|a| a.actor_id)
         .ok_or("approval record missing")?;
+    let trusted_login = consumed.trusted_login.clone();
     Ok(ConsumedBrowserApproval {
         wait: consumed,
         credential,
         approved_by,
+        trusted_login,
     })
 }
 
@@ -565,6 +799,25 @@ impl NewBrowserWait {
         }
         if !valid_purpose(&self.purpose) {
             return Err(BrowserWaitError::Invalid { field: "purpose" });
+        }
+        if let Some(t) = &self.trusted_login {
+            let credential_use = self.reason == BrowserWaitReason::WaitingForApproval
+                && self
+                    .operation
+                    .as_ref()
+                    .is_some_and(|o| o.action == "credential_use");
+            if !credential_use
+                || t.validate(&self.origin).is_err()
+                || t.revision != self.policy_revision
+                || self
+                    .credential
+                    .as_ref()
+                    .is_none_or(|c| c.policy_id != t.policy_id)
+            {
+                return Err(BrowserWaitError::Invalid {
+                    field: "trusted_login",
+                });
+            }
         }
         if let Some(p) = &self.credential_policy_id {
             check_token(p, "credential_policy_id")?;

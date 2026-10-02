@@ -74,6 +74,7 @@ fn auth_request(key: &str) -> NewBrowserWait {
         credential_policy_id: Some("pol-example".into()),
         credential: None,
         operation: None,
+        trusted_login: None,
         policy_revision: 3,
         policy_hash: "sha256-abc".into(),
         owner_id: Some("owner".into()),
@@ -558,4 +559,277 @@ fn secret_like_values_never_reach_rows_or_events() {
     let raw = std::fs::read(&path).expect("db");
     let hay = String::from_utf8_lossy(&raw);
     assert!(!hay.contains(SENTINEL));
+}
+
+// ---- ADR-0110 D2: trusted login の形式検証・固定・照合 ----
+
+const LOGIN_ORIGIN: &str = "https://login.example.com";
+
+fn trusted() -> TrustedLogin {
+    TrustedLogin {
+        policy_id: "pol-example".into(),
+        revision: 3,
+        login_url: format!("{LOGIN_ORIGIN}/signin?next=%2F"),
+        password_selector: "form#login > input[name=\"password\"]".into(),
+        submit_selector: Some("button[type=submit]".into()),
+    }
+}
+
+#[test]
+fn trusted_selector_grammar_accepts_only_the_adr_subset() {
+    for ok in [
+        "input",
+        "#pass",
+        ".login-form input[type=password]",
+        "form#login>input[name=\"pass word\"]",
+        "div.a.b > form > input[autocomplete=current-password]",
+        "input[data-x]",
+    ] {
+        assert_eq!(validate_trusted_selector(ok), Ok(()), "{ok}");
+    }
+    for bad in [
+        "",
+        "input, #other",
+        "input:not([type=text])",
+        "input::after",
+        "*",
+        "a + input",
+        "a ~ input",
+        "iframe >>> input",
+        "iframe /deep/ input",
+        "#pa\\ss",
+        "css=input",
+        "xpath=//input",
+        "text=Password",
+        "internal:role=textbox",
+        "frame=login >> input",
+        "@e12",
+        "input[name='p']",
+        "input[name=\"p]",
+        "input >",
+        "> input",
+        "input\n#p",
+        "ｉnput",
+        "INPUT",
+        "#1abc",
+    ] {
+        assert!(validate_trusted_selector(bad).is_err(), "{bad:?}");
+    }
+    let long = format!("#{}", "a".repeat(TRUSTED_SELECTOR_MAX_LEN));
+    assert_eq!(validate_trusted_selector(&long), Err("selector_length"));
+    let deep = ["div"; TRUSTED_SELECTOR_MAX_COMPOUNDS + 1].join(" ");
+    assert_eq!(
+        validate_trusted_selector(&deep),
+        Err("selector_too_complex")
+    );
+    let max = ["div"; TRUSTED_SELECTOR_MAX_COMPOUNDS].join(" > ");
+    assert_eq!(validate_trusted_selector(&max), Ok(()));
+}
+
+#[test]
+fn trusted_login_url_must_stay_on_the_exact_origin() {
+    let o = LOGIN_ORIGIN;
+    assert_eq!(validate_trusted_login_url(&format!("{o}/login"), o), Ok(()));
+    for bad in [
+        o.to_string(),
+        format!("{o}.evil.test/login"),
+        format!("{o}@evil.test/login"),
+        format!("{o}:444/login"),
+        format!("{o}/login#frag"),
+        format!("{o}/lo gin"),
+        format!("{o}/lo\\gin"),
+        "http://login.example.com/login".to_string(),
+        "https://other.example.com/login".to_string(),
+        format!("{o}/{}", "a".repeat(TRUSTED_LOGIN_URL_MAX_LEN)),
+    ] {
+        assert!(validate_trusted_login_url(&bad, o).is_err(), "{bad}");
+    }
+    assert!(validate_trusted_login_url("http://x/login", "http://x").is_err());
+}
+
+#[test]
+fn trusted_login_is_pinned_only_on_valid_credential_use_approvals() {
+    let mut req = approval_request("rk-t");
+    req.trusted_login = Some(trusted());
+    assert!(req.validate().is_ok());
+    let invalid = |t: TrustedLogin| {
+        let mut r = approval_request("rk-t");
+        r.trusted_login = Some(t);
+        matches!(
+            r.validate(),
+            Err(BrowserWaitError::Invalid {
+                field: "trusted_login"
+            })
+        )
+    };
+    assert!(invalid(TrustedLogin {
+        password_selector: "input, #x".into(),
+        ..trusted()
+    }));
+    assert!(invalid(TrustedLogin {
+        submit_selector: Some("button:hover".into()),
+        ..trusted()
+    }));
+    assert!(invalid(TrustedLogin {
+        login_url: "https://evil.example.com/login".into(),
+        ..trusted()
+    }));
+    assert!(invalid(TrustedLogin {
+        policy_id: "pol-other".into(),
+        ..trusted()
+    }));
+    assert!(invalid(TrustedLogin {
+        revision: 4,
+        ..trusted()
+    }));
+    // 登録依頼には固定しない。
+    let mut auth = auth_request("rk-u");
+    auth.trusted_login = Some(trusted());
+    assert!(auth.validate().is_err());
+}
+
+#[test]
+fn model_requests_cannot_carry_selectors() {
+    // モデル・worker が組む操作 intent に selector・URL を混ぜても読まない（deny_unknown_fields）。
+    for extra in [
+        r##""selector":"#evil""##,
+        r#""password_selector":"input""#,
+        r#""login_url":"https://evil.example.com/""#,
+        r#""trusted_login":{}"#,
+    ] {
+        let raw = format!(r#"{{"intent_id":"i-1","action":"credential_use",{extra}}}"#);
+        assert!(
+            serde_json::from_str::<OperationIntent>(&raw).is_err(),
+            "{raw}"
+        );
+    }
+    let raw = r##"{"credential_id":"c","provider":"manual","policy_id":"p","selector":"#x"}"##;
+    assert!(serde_json::from_str::<CredentialRef>(raw).is_err());
+}
+
+/// 登録済み credential と承認済みの credential 使用 wait を用意する。
+fn approved_credential_use(
+    store: &SqliteStore,
+    pinned: Option<TrustedLogin>,
+) -> (TaskId, BrowserWait) {
+    let now = OffsetDateTime::now_utc();
+    let id = running(store);
+    let auth = store
+        .browser_wait_open(id, &auth_request("rk-reg"), now)
+        .expect("open auth")
+        .wait;
+    store
+        .browser_wait_register(
+            id,
+            &auth.wait_id,
+            auth.version,
+            &CredentialRecord {
+                credential_id: "cred-1".into(),
+                provider: "manual".into(),
+                policy_id: "pol-example".into(),
+                credential_revision: 1,
+                origin: LOGIN_ORIGIN.into(),
+                receipt_id: "rcpt-1".into(),
+            },
+            "human-1",
+            now,
+        )
+        .expect("register");
+    assert!(
+        store
+            .acquire_lease(id, "run-1", std::time::Duration::from_secs(60))
+            .expect("lease")
+    );
+    let mut req = approval_request("rk-use");
+    req.trusted_login = pinned;
+    let wait = store.browser_wait_open(id, &req, now).expect("open").wait;
+    let d = decision(BrowserDecision::ApproveOnce, wait.version, "n-use");
+    let wait = store
+        .browser_wait_decide(id, &wait.wait_id, &d, now)
+        .expect("approve")
+        .wait;
+    (id, wait)
+}
+
+#[test]
+fn consumed_approval_carries_the_pinned_selector_and_rejects_request_selectors() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let now = OffsetDateTime::now_utc();
+    let (id, wait) = approved_credential_use(&store, Some(trusted()));
+    // 耐久化した固定値は読み戻しても同じ。
+    let stored = store
+        .browser_wait_get(&wait.wait_id)
+        .expect("get")
+        .expect("wait");
+    assert_eq!(stored.trusted_login, Some(trusted()));
+
+    // 差し替え: 呼出し側の wait の selector を書き換えても採用せず、一回承認も消費しない。
+    let mut swapped = wait.clone();
+    swapped.trusted_login = Some(TrustedLogin {
+        password_selector: "#attacker".into(),
+        ..trusted()
+    });
+    assert_eq!(
+        consume_credential_approval(&store, id, &swapped, now),
+        Err("selector_mismatch")
+    );
+    let mut dropped = wait.clone();
+    dropped.trusted_login = None;
+    assert_eq!(
+        consume_credential_approval(&store, id, &dropped, now),
+        Err("selector_mismatch")
+    );
+    let still = store
+        .browser_wait_get(&wait.wait_id)
+        .expect("get")
+        .expect("wait");
+    assert_eq!(still.state, BrowserWaitState::Approved);
+
+    let consumed = consume_credential_approval(&store, id, &wait, now).expect("consume");
+    assert_eq!(consumed.trusted_login, Some(trusted()));
+    let pinned = trusted().password_selector;
+    assert_eq!(consumed.injection_selector(None), Ok(pinned.as_str()));
+    assert_eq!(
+        consumed.injection_selector(Some(&pinned)),
+        Ok(pinned.as_str())
+    );
+    // 要求側の selector の不一致（1 byte 違い・空・別要素）は拒否。
+    for other in [
+        "#attacker",
+        "",
+        "form#login > input[name=\"password\"] ",
+        "input",
+    ] {
+        assert_eq!(
+            consumed.injection_selector(Some(other)),
+            Err("selector_mismatch"),
+            "{other:?}"
+        );
+    }
+    // 固定後に値を書き換えた ConsumedBrowserApproval（出所が壊れている）も注入に使えない。
+    let mut tampered = consumed.clone();
+    if let Some(t) = tampered.trusted_login.as_mut() {
+        t.password_selector = "input:not([x])".into();
+    }
+    assert_eq!(
+        tampered.injection_selector(None),
+        Err("trusted_selector_missing")
+    );
+}
+
+#[test]
+fn approval_without_pinned_selector_cannot_inject() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let now = OffsetDateTime::now_utc();
+    let (id, wait) = approved_credential_use(&store, None);
+    let consumed = consume_credential_approval(&store, id, &wait, now).expect("consume");
+    assert_eq!(consumed.trusted_login, None);
+    assert_eq!(
+        consumed.injection_selector(None),
+        Err("trusted_selector_missing")
+    );
+    assert_eq!(
+        consumed.injection_selector(Some("#pass")),
+        Err("trusted_selector_missing")
+    );
 }

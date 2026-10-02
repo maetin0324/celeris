@@ -361,6 +361,7 @@ fn identity_restore_sameuid_rejected_in_production() {
         vec![
             IsolationViolation::SameUid,
             IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
         ]
     );
     let reg: &dyn LiveSessionRegistry = &*registry;
@@ -412,6 +413,7 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
             == Some(vec![
                 IsolationViolation::SameUid,
                 IsolationViolation::UsernsOwnedByDaemon,
+                IsolationViolation::LauncherProofMissing,
             ])
             || std::time::Instant::now() > deadline
         {
@@ -424,6 +426,7 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
         vec![
             IsolationViolation::SameUid,
             IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
         ]
     );
     let att = RestoreAdmission::SameUidHarness

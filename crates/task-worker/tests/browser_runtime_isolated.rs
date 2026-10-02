@@ -296,6 +296,7 @@ fn real_browser_in_runtime_facts_and_restore_refused_on_same_uid() {
         vec![
             IsolationViolation::SameUid,
             IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
         ]
     );
     let live = LiveSession(std::sync::Mutex::new(rt));

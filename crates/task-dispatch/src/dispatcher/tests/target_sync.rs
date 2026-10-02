@@ -196,10 +196,8 @@ fn no_review_fail(events: &[Event]) -> bool {
         .any(|e| matches!(e, Event::Transitioned { reason, .. } if reason == "review_fail"))
 }
 
-/// ADR-0118 D6 付記: 衝突は rebase --abort で成果を保ち、同期を諦めて未同期の HEAD で従来どおり
-/// checks/reviewer へ進む（attempts 不変・merge candidate なし）。root は delivery の [merge-base] 経路へ。
 #[tokio::test]
-async fn pre_review_sync_conflict_keeps_attempts_and_branch() {
+async fn integration_repair_schedules_atomic_and_preserves_results() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
@@ -216,26 +214,44 @@ async fn pre_review_sync_conflict_keeps_attempts_and_branch() {
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    // 成果は保たれ、review は未同期の HEAD で進んでいる。
     assert_eq!(git_out(&wt.dir, &["rev-parse", "HEAD"]), before);
     assert_eq!(git_out(repo.path(), &["rev-parse", &wt.branch]), before);
     assert_eq!(
         std::fs::read_to_string(wt.dir.join("README.md")).unwrap(),
         "task\n"
     );
-    assert!(d.reviewing.contains_key(&task.id));
+    assert!(d.reviewing.is_empty());
     let current = store.get(task.id).unwrap().unwrap();
-    assert_eq!(current.status, Status::Reviewing);
+    assert_eq!(current.status, Status::Ready);
     assert_eq!(current.attempts, task.attempts);
-    assert!(run_until_idle(&mut d, 100).await.idle);
-    let done = store.get(task.id).unwrap().unwrap();
-    assert_eq!(done.status, Status::Done);
-    assert_eq!(done.attempts, task.attempts);
+    assert!(git_out(&wt.dir, &["status", "--porcelain"]).is_empty());
+    let units = store.work_units_for(task.id).unwrap();
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].key, "main");
+    assert_eq!(units[0].status, task_core::WorkUnitStatus::Done);
+    let repair = &units[1];
+    assert_eq!(repair.key, "integration-repair-1");
+    assert_eq!(repair.kind, task_core::WorkUnitKind::Repair);
+    assert_eq!(repair.status, task_core::WorkUnitStatus::Ready);
+    assert_eq!(repair.spec.phase, None);
+    assert_eq!(repair.spec.checks.len(), 2);
+    assert_eq!(
+        repair.spec.checks[0].cmd,
+        format!("git merge-base --is-ancestor {target} HEAD")
+    );
+    assert_eq!(
+        repair.spec.checks[1].cmd,
+        "test -z \"$(git status --porcelain)\""
+    );
+    assert!(repair.spec.objective.contains(&before));
+    assert!(repair.spec.objective.contains("README.md"));
     let events = events_of(&store, &task);
     assert!(no_review_fail(&events));
-    assert_eq!(progress_with(&events, "conflicted in [README.md]"), 1);
-    assert_eq!(progress_with(&events, &target), 1);
-    // merge candidate を同期済みとして記録しない（delivery は NULL の候補で [merge-base] 経路に進む）。
+    assert!(events.iter().any(|e| matches!(e, Event::IntegrationRepairScheduled { work_unit_id, target_sha, before_sha, attempt: 1, .. } if work_unit_id == &repair.id && target_sha == &target && before_sha == &before)));
+    assert!(events.iter().any(
+        |e| matches!(e, Event::RepairScheduled { class, .. } if class == "integration_repair")
+    ));
+    assert!(events.iter().any(|e| matches!(e, Event::WorkUnitTransitioned { reason, .. } if reason == "integration_repair")));
     assert!(
         !events
             .iter()
@@ -398,10 +414,8 @@ async fn pre_review_sync_target_advanced_limit_halts_without_attempts() {
     assert!(d.reviewing.is_empty());
 }
 
-/// ADR-0118 D6 付記: tree child の衝突も成果を保って review へ進み、merge candidate を残さない。
-/// 親への取り込みは ADR-0079 の段階統合（衝突時はその衝突経路）が扱う。
 #[tokio::test]
-async fn pre_review_sync_child_conflict_defers_to_stage_integration() {
+async fn integration_repair_schedules_tree_child_on_parent_target() {
     let repo = tempfile::tempdir().unwrap();
     let base = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
@@ -452,20 +466,86 @@ async fn pre_review_sync_child_conflict_defers_to_stage_integration() {
             .unwrap()
     );
     assert_eq!(git_out(&wt.dir, &["rev-parse", "HEAD"]), before);
-    assert!(run_until_idle(&mut d, 100).await.idle);
-    let done = store.get(child.id).unwrap().unwrap();
-    assert_eq!(done.status, Status::Done);
-    assert_eq!(done.attempts, child.attempts);
+    let current = store.get(child.id).unwrap().unwrap();
+    assert_eq!(current.status, Status::Ready);
+    assert_eq!(current.attempts, child.attempts);
+    assert!(d.reviewing.is_empty());
     let events = events_of(&store, &child);
     assert!(no_review_fail(&events));
-    assert_eq!(progress_with(&events, "conflicted in [README.md]"), 1);
-    // 候補が無いので段階統合は照合せずに通常の merge（衝突ならその衝突経路）へ進む。
+    assert!(events.iter().any(|e| matches!(e, Event::IntegrationRepairScheduled { target_ref, before_sha, .. } if target_ref == &format!("refs/heads/{parent_branch}") && before_sha == &before)));
     assert!(d.child_merge_candidates(child.id).is_empty());
     assert_eq!(git_out(repo.path(), &["rev-parse", &wt.branch]), before);
     assert!(!git_ok(
         repo.path(),
         &["merge-base", "--is-ancestor", &parent_branch, &before]
     ));
+}
+
+#[tokio::test]
+async fn integration_repair_schedules_limit_falls_back_to_unsynced_review() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = reviewing_task(repo.path(), &store);
+    set_check(&mut task, ":".into());
+    store.insert(&task).unwrap();
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    let before = commit_file(&wt.dir, "README.md", "task\n");
+    let target = commit_file(repo.path(), "README.md", "main\n");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    store
+        .apply_transition(task.id, task_core::Trigger::Dispatch, None)
+        .unwrap();
+    store
+        .apply_transition(task.id, task_core::Trigger::WorkerDone, None)
+        .unwrap();
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let units = store.work_units_for(task.id).unwrap();
+    assert_eq!(units.len(), 3);
+    assert_eq!(units[2].key, "integration-repair-2");
+    assert_eq!(units[2].status, task_core::WorkUnitStatus::Ready);
+    store
+        .apply_transition(task.id, task_core::Trigger::Dispatch, None)
+        .unwrap();
+    store
+        .apply_transition(task.id, task_core::Trigger::WorkerDone, None)
+        .unwrap();
+    let attempts = store.get(task.id).unwrap().unwrap().attempts;
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert!(d.reviewing.contains_key(&task.id));
+    assert_eq!(
+        store.get(task.id).unwrap().unwrap().status,
+        Status::Reviewing
+    );
+    assert_eq!(store.get(task.id).unwrap().unwrap().attempts, attempts);
+    assert_eq!(git_out(&wt.dir, &["rev-parse", "HEAD"]), before);
+    let events = events_of(&store, &task);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::IntegrationRepairExhausted {
+        reason: task_core::IntegrationRepairExhaustReason::LimitReached,
+        target_sha, before_sha, fallback: true, ..
+    } if target_sha == &target && before_sha == &before))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewTargetSynced { .. }))
+    );
+    assert!(no_review_fail(&events));
 }
 
 #[tokio::test]

@@ -297,6 +297,7 @@ impl Dispatcher {
                     task_ops::changes::default_branch(&repo.source, configured.as_deref())
                 };
                 let target_ref = format!("refs/heads/{target}");
+                let pre_sync_head = crate::integration::rev_parse(&worktree.dir, "HEAD");
                 let outcome = task_ops::changes::sync_onto_target(&worktree.dir, &target_ref);
                 let (target_sha, before_sha, reviewed_sha) = match outcome {
                     task_ops::changes::SyncOutcome::UpToDate {
@@ -308,17 +309,95 @@ impl Dispatcher {
                         before_sha,
                         head_sha,
                     } => (target_sha, before_sha, head_sha),
-                    other => {
-                        // ADR-0118 D6 付記: 衝突・dirty・進行中の rebase・ref 不読は同期を諦め、成果を
-                        // 保った未同期の HEAD で従来どおり checks/reviewer へ進む（merge candidate は
-                        // 記録しない）。root は delivery の [merge-base] 経路、子は段階統合の衝突経路が扱う。
-                        let why = match other {
-                            task_ops::changes::SyncOutcome::Conflict { target_sha, files } => {
-                                format!(
-                                    "rebase onto {target_ref} {target_sha} conflicted in [{}] and was aborted",
-                                    files.join(", ")
+                    task_ops::changes::SyncOutcome::Conflict { target_sha, files } => {
+                        let before_sha = crate::integration::rev_parse(&worktree.dir, "HEAD")
+                            .ok_or_else(|| {
+                                StoreError::Invalid(
+                                    "integration repair: cannot read HEAD after rebase abort"
+                                        .into(),
                                 )
+                            })?;
+                        if self.try_integration_repair(
+                            &task,
+                            reference.repo_id,
+                            &target_ref,
+                            &target_sha,
+                            &before_sha,
+                            &files,
+                        )? {
+                            // No checks or reviewer run may observe the conflicted SHA.
+                            return Ok(true);
+                        }
+                        self.store.append_event(
+                            task_id,
+                            &Event::IntegrationRepairExhausted {
+                                work_unit_id: None,
+                                repo_id: reference.repo_id,
+                                target_sha: target_sha.clone(),
+                                before_sha,
+                                attempt: task_ops::delivery::MAX_INTEGRATION_REPAIRS,
+                                reason: task_core::IntegrationRepairExhaustReason::LimitReached,
+                                rollback_to_sha: None,
+                                fallback: true,
+                            },
+                        )?;
+                        let message = format!(
+                            "review target sync skipped for {}: rebase onto {target_ref} {target_sha} conflicted in [{}] and was aborted; integration repair limit reached, reviewing the unsynced HEAD without a merge candidate",
+                            repo.name,
+                            files.join(", ")
+                        );
+                        tracing::warn!(%task_id, %message);
+                        self.store.append_event(
+                            task_id,
+                            &Event::worker_progress(run_id.clone(), message),
+                        )?;
+                        continue;
+                    }
+                    task_ops::changes::SyncOutcome::Failed { ref detail }
+                        if detail.contains("rebase --abort") || detail.contains("元の HEAD") =>
+                    {
+                        if let (Some(before_sha), Some(target_sha)) = (
+                            pre_sync_head.as_deref(),
+                            crate::integration::rev_parse(&worktree.dir, &target_ref),
+                        ) {
+                            let already_recorded = self.store.events_for(task_id)?.iter().any(|(_, e)| {
+                                matches!(e, Event::IntegrationRepairExhausted {
+                                    target_sha: recorded_target,
+                                    before_sha: recorded_before,
+                                    reason: task_core::IntegrationRepairExhaustReason::AbortFailed,
+                                    ..
+                                } if recorded_target == &target_sha && recorded_before == before_sha)
+                            });
+                            if !already_recorded {
+                                self.store.append_event(
+                                    task_id,
+                                    &Event::IntegrationRepairExhausted {
+                                        work_unit_id: None,
+                                        repo_id: reference.repo_id,
+                                        target_sha,
+                                        before_sha: before_sha.to_string(),
+                                        attempt: 0,
+                                        reason:
+                                            task_core::IntegrationRepairExhaustReason::AbortFailed,
+                                        rollback_to_sha: None,
+                                        fallback: false,
+                                    },
+                                )?;
                             }
+                        }
+                        self.store.append_event(
+                            task_id,
+                            &Event::worker_progress(
+                                run_id.clone(),
+                                format!("integration repair halted for {}: {detail}", repo.name),
+                            ),
+                        )?;
+                        return Ok(false);
+                    }
+                    other => {
+                        // Dirty・一般の Failed は未同期 HEAD で従来どおり checks/reviewer へ進む。
+                        // 衝突は上の IntegrationRepair 経路が扱う。
+                        let why = match other {
                             task_ops::changes::SyncOutcome::Dirty => {
                                 "the worktree has uncommitted changes".to_string()
                             }

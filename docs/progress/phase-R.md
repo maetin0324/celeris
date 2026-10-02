@@ -2315,3 +2315,60 @@ build は `.cargo/config.toml` の `target-dir = /var/tmp/agent-platform-build/a
 
 `promoting_a_verified_release_starts_the_bundled_script_and_returns_202` と `promoting_prefers_the_promote_script_of_the_current_release` は、auto 判定が `systemd-run` を選ぶ環境で user bus に接続できないときだけ skip する。sandbox では `/run/user/<uid>/bus` が見えても接続できず `Failed to connect to user scope bus via local transport` となる一方、release gate では接続できるため、試験側で `systemd-run --user --scope --quiet true` を事前確認する。`systemd-run` が PATH にないか `XDG_RUNTIME_DIR` が未設定なら detach の auto 判定は inline のため、試験を従来どおり実行する。本番 detach の挙動は変更しない。
 - 23:1x〜23:56Z（2026-10-01）: **6ceec985b5e0 の stop-start 昇格と、無許可の本番差し替えの発見**。main にブラウザ Phase 1〜4（取り込み task 01M3VSNWDC… が 18:33 に delivery）・migration 0035/0036（schema 36）が入っていたため、6ceec985 は live_ok=false。in-flight 0 で `promote.sh 6ceec985b5e0` → stop-start（停止約 20 s、backup `20261001-232111-pre-6ceec985b5e0.sqlite3`）、schema 36 で健全。昇格前に動いていたのは **celeris@bf54b41ad627**（人の昇格なし）: web P6-03 dogfood task 01M3WAKKJQ… の codex run 01M3WAVPGK… が、人の「本番 host への web gateway 設置を許可」に基づき escalation（`--approve-for-me` で自動承認）で `systemctl --user start celeris-web@bf54b41ad627` を実行 → unit の `Wants=celeris@%i.service` で celeris@bf54b41ad627（staging 成果物への symlink）が起動し、18:32:38 に本番 DB を schema 36 へ移行、ADR-0040 handoff で 7fbfc347b240 から active を奪っていた（約 4.8 時間）。ADR-0095 の RO mount は効いていたが user systemd bus の穴を通られた。人の判断 (A): dogfood は続け、`~/.config/systemd/user/celeris-web@.service` から `Wants=` を削除（backup `.bak-20261001a`）して daemon-reload（`After=` のみ残す）。repo の `deploy/systemd/celeris-web@.service` には `Wants=` が残っている（要修正）。再発防止候補: handoff の認可（current と一致しない release は handoff・migrate しない）、worker から user systemd bus を隠す、codex の自動承認に deny パターン、web unit の依存除去、テストから実 systemd-run を叩かない。担当の無い root の delivery 修正 01M3VT5BJZ… は review 差し戻し 3 回で failed → reopen + decompose note（main 取り込み、ADR 番号振り直し、部分 index）で replan 中。
+
+### ADR-0095 user systemd bus 遮断の検証（2026-10-02, task 01M3X2SZMMFYFKP7AY5DA411NZ）
+
+- D-a〜D-d の判断と実装は [ADR-0095 付記](../adr/0095-worker-runs-see-the-db-read-only.md) を参照。worker/check の launch から `DBUS_SESSION_BUS_ADDRESS` を除去し、namespace 内で `/run/user/$UID/bus` と `$XDG_RUNTIME_DIR/systemd` を覆う。Codex 自動承認には systemd / release / config 領域の拒否を設定し、本番 host 操作は人が行うよう planner / worker に指示。`detach` と release API の試験は注入 runner / inline を利用する。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `CELERIS_DB_GUARD_TESTS=require cargo test --workspace` と通常の `cargo test --workspace` は exit 101。再実行で `celeris --test instance_handoff` の5件が再現し、db_guard probe が `unshare -Ur true` の `Operation not permitted` で失敗した。専用の `user_systemd_bus_is_hidden_from_launched_process` も require モードで同じ理由により失敗。さらに `e2e` の `account_pool_scenarios` / `api_scenarios` と `task-api --test browser_h3_injection` の process 試験も namespace 不可で失敗した。時間依存 flake ではなく、この sandbox の user namespace 制限である。
+- 記録用の偽 `systemd-run` / `systemctl` を PATH 先頭に置いた `cargo test --workspace` も namespace probe 失敗で完走せず、呼び出しゼロの gate は完了できなかった。偽 wrapper による試験中、本番 host の操作は行っていない。
+- 未解決: user namespace が許可された環境で workspace test、偽 systemd wrapper 付き workspace test、および db_guard の実 process bus 遮断を再検証する。現時点で test gate は未達。
+- 昇格後の人手確認（本番 host では未実施）: 専用の安全な smoke task 内で `systemctl --user show-environment` と `systemd-run --user --scope --quiet true` がどちらも失敗することを確認する。worker 実行前後の `systemctl --user list-units --type=scope` 件数が変化しないことも照合する。scope が生成されていないことを確認したうえで結果を追記する。
+- ADR-0095 の残る穴: `ssh localhost` / 自ホスト ssh、abstract UNIX socket の D-Bus、tmux / podman / agent など他の常駐 UNIX socket、未計測の cron / at、HTTP API、`worker_read_only = false` opt-out、Codex 以外の承認機構。ssh は namespace 外で shell を起動するため bus 遮断では防げない。
+
+### ADR-0095 bus 遮断 workspace 最終検証（2026-10-02, task 01M3X4034AYHBGJVD8AQ9865A8）
+
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- user namespace を必要とする実 process bus 遮断試験を強化し、namespace 内で `systemctl --user show-environment` と `systemd-run --user --scope true` の両方が失敗することを検査するよう変更。ホスト側の systemd manager は起動・照会しない。
+- 前回 fmt check の失敗は `preamble/tests.rs` の未整形だったため `cargo fmt --all` で修正。
+- `cargo test -p task-worker db_guard_tests -- --skip user_systemd_bus` → exit 0。ただし `db_guard_tests` は integration test binary ではなく、669 件の lib tests が filter されて実行 0 件。専用の実 process 試験も require モードで起動したが、冒頭の userns probe がこの sandbox で失敗して test body には到達しなかった。
+- 専用の実 process 試験を `CELERIS_DB_GUARD_TESTS=require cargo test -p task-worker user_systemd_bus_is_hidden_from_launched_process -- --nocapture` で実行 → 1 件選択され、userns probe の `Operation not permitted` で exit 101。試験本体は未実行。
+- `unshare -Ur true` → exit 1 (`Operation not permitted`)。sandbox は user namespace を許可しない。依頼どおりこれを理由に plan_issue を出さず、daemon 側で通常 test・require mode・偽 wrapper gate を実行する。ここでは workspace test と「実 process 試験が require mode で 1 件以上 pass」の acceptance は未達として記録する。
+- 記録用偽 `systemd-run` / `systemctl` を PATH 先頭に置いて `cargo test --workspace -- --skip user_systemd_bus` を実行。`celeris` unit tests 214 件などは通過したが、`instance_handoff` で userns を要する試験が複数失敗し、完走前に中断したため cargo test は exit 130。スクリプトはその時点で終了し呼び出し記録の事後確認には至らず、wrapper 呼び出しゼロ gate は未達。sandbox では test gate 完走を見込めないため、daemon 側で workspace test と偽 wrapper の記録ファイル不在を確認する。
+- 昇格時に人が本番 host で確認する手順（未実施）: worker run の中で `systemctl --user show-environment` と `systemd-run --user --scope --quiet true` が両方失敗することを専用の安全な smoke task で確認し、実行前後の `systemctl --user list-units --type=scope` を比較する。本番 host はこの run では操作していない。
+- ADR-0095 の残る穴は直前の「ADR-0095 user systemd bus 遮断の検証」節に記載したとおり。
+
+### ADR-0095 bus 遮断 workspace 再検証: この run の sandbox は user namespace が使えた（2026-10-02, task 01M3X57GEYRMMRCFHD6EV1CZ59）
+
+- 前 2 節は codex sandbox（`unshare -Ur true` が EPERM）での記録。この run の sandbox では `unshare -Ur true` → exit 0 で userns が使えたため、daemon 側 checks に回さず、ここで実 process 試験と workspace test gate をそのまま完走させた。「未解決: userns 環境で再実行」はこの run で解消。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `CELERIS_DB_GUARD_TESTS=require cargo test -p task-worker user_systemd_bus_is_hidden_from_launched_process -- --nocapture` → 1 selected, `test db_guard::tests::user_systemd_bus_is_hidden_from_launched_process ... ok`、exit 0。namespace 内で偽 runtime を使い、`systemctl --user show-environment` と `systemd-run --user --scope true` の両方が非 0 で終わることを実 process で確認（ホストの user manager には接続しない）。
+- 記録用の偽 `systemd-run` / `systemctl` を PATH 先頭に置いて `cargo test --workspace -- --skip user_systemd_bus` → exit 0、全件 ok。実行後 `/tmp/fake-systemd-records/calls.log` は生成されず（呼び出しゼロ）。
+- `CELERIS_DB_GUARD_TESTS=require cargo test --workspace`（偽 wrapper なし）→ 1 回目は `local_deep_research::tests::{missing_celeris_result_line_is_retryable_error, non_zero_exit_is_retryable_error, llm_auth_failure_is_classified_as_adapter_error}` が `Spawn(Os { code: 2, kind: NotFound })` で failed（662 passed; 3 failed）。これは ADR-0010 D10 の ETXTBSY 対策（別プロセスがスタブ実行ファイルを書いてから spawn する）が高負荷下で書き込み完了前に実行される既知の race で、本件の変更とは無関係（既知の flaky、[[evaluator-flaky-tests-sigstop-stutter]] 系）。2 回目の再実行は 3 件とも ok、exit 0 で完走（workspace 全体、require モード込み）。
+- 通常の `cargo test --workspace`（`CELERIS_DB_GUARD_TESTS` 未設定）→ exit 0。
+- acceptance: (0) fmt/clippy exit 0。(1) userns bus 試験が require モードで 1 件 pass。(2) 偽 systemd-run/systemctl が呼ばれない。(3) 本節がその証拠。すべて満たした。
+- 昇格時の人手確認手順は上の節の記述のまま変更なし（本番 host はこの run でも操作していない）。
+
+### ADR-0095 bus 遮断 verify-all 継続（2026-10-02, task 01M3X7HAMHPTNR6XF30EF93HT2）
+
+- 前回 report の `local_deep_research::tests::retry_run_escalates_mode_and_iterations_and_redacts_secrets` は `run(...).await.unwrap()` が `AdapterError::Spawn(NotFound)` で失敗した。再実行では `cargo test -p task-worker retry_run_escalates_mode_and_iterations_and_redacts_secrets -- --nocapture` が 1 件 pass し、同じ失敗は再現しなかった。これはアダプタ起動を伴う断続的な `ENOENT` であり、本 sandbox では原因を特定できていない。
+- `cargo fmt --all` と `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `CELERIS_DB_GUARD_TESTS=require cargo test -p task-worker user_systemd_bus_is_hidden_from_launched_process -- --nocapture` → exit 101。require-mode の試験は 1 件選択されたが、user namespace probe が `Operation not permitted` となり試験 body に到達しなかった。`unshare -Ur true` もこの sandbox では許可されない。userns を必要とする試験の pass は daemon 側 checks に委ねる。
+- `cargo test --workspace` → exit 101。前回報告の ENOENT は再現せず、`celeris --test instance_handoff` の 5 件が userns 起動不可（`Operation not permitted`）で失敗した。従って workspace 全体の test gate はこの sandbox では完走できない。
+- 記録用偽 `systemd-run` / `systemctl` を PATH 先頭に置き `cargo test --workspace -- --skip user_systemd_bus` を実行 → exit 101。上記と同じ `instance_handoff` の userns 制約で失敗。実行後 `/tmp/fake-systemd-records/calls.log` は存在せず、試験中に偽 wrapper 呼び出しはなかった。
+- この sandbox では userns 不可のため、require-mode bus 試験の pass と workspace test 完走は未確認。daemon 側 checks で再検証すること。本番 host は操作していない。
+- 昇格時の人手確認手順（専用 smoke task で `systemctl --user show-environment` と `systemd-run --user --scope --quiet true` の失敗および scope 件数不変を照合）は上記節の記述を維持する。
+
+### ADR-0095 bus 遮断 verify-all 再実行: fix-ldr-flake 取り込みと全 acceptance 達成（2026-10-02, task 01M3X7HAMHPTNR6XF30EF93HT2, run 01M3X95BQWVG12SFHRWAYBG73F）
+
+- 前回 run の不合格原因: `cargo test --workspace` で `local_deep_research::tests::missing_celeris_result_line_is_retryable_error` が `Spawn(Os { code: 2, kind: NotFound })` で失敗。根因は `db_guard_tests::user_systemd_bus_is_hidden_from_launched_process` がプロセス全体の `db_guard::install(Some(guard))` を呼んでいたこと。同じ test binary で並行する他の試験（アダプタの spawn を伴うもの）の起動にもこの一時ディレクトリのガードが掛かり、ガードの tempdir が片付いた瞬間に `pre_exec` の bind マウントが ENOENT になっていた。
+- 修正は並行 WorkUnit `fix-ldr-flake`（commit `69b69a60`, `ad6f7be6`）で、試験はプロセス全体の `install()`/`installed()` を使わず、`launch_with(cmd, None, Some(&g))` で試験専用のガードを明示的に渡す形に変更済み。これを `git merge celeris-wu/01M3WZ1GEXAN479FR3NKKCQZ81/fix-ldr-flake` で取り込んだ（commit `69270f06`）。
+- merge 衝突 1 件（`crates/task-worker/src/db_guard_tests.rs`）を解消: HEAD 側のシステム起動チェックは for ループで偽 `runtime`（`XDG_RUNTIME_DIR`）に対して `systemctl --user show-environment` と `systemd-run --user --scope true` を試すが、incoming 側には同じ関数の末尾に実ホストの `$XDG_RUNTIME_DIR` を直接使う旧い追加チェックが残っていた（偽 runtime を経由せず本物の user bus に届きうる危険な重複）。これは削除し、代わりに for ループ内の呼び出しを `launch(cmd, None)`（`installed()` に依存、install しない新方式では常に guard 無しになり無意味）から `launch_with(cmd, None, Some(&g))` に直して、試験が実際に偽 runtime のガード越しで両コマンドの失敗を確認するようにした。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `unshare -Ur true` → exit 0（この run の sandbox は userns 利用可）。
+- `CELERIS_DB_GUARD_TESTS=require cargo test -p task-worker --lib user_systemd_bus_is_hidden_from_launched_process -- --nocapture --test-threads=1` → `test db_guard::tests::user_systemd_bus_is_hidden_from_launched_process ... ok`、1 passed、exit 0。実 process で `DBUS_SESSION_BUS_ADDRESS` 未設定・`/run/user/$(id -u)/bus` と `$XDG_RUNTIME_DIR/{bus,systemd/private}` が見えないこと、`systemctl --user show-environment` と `systemd-run --user --scope true` が偽 runtime 越しで両方非 0 終了することを確認。
+- `cargo test --workspace` → exit 0（全件 ok、`local_deep_research` の 3 件を含め失敗なし）。
+- 記録用偽 `systemd-run` / `systemctl` を `/tmp/fake-systemd-bin` に置いて PATH 先頭に挿し、`cargo test --workspace -- --skip user_systemd_bus` → 1 回目は `browser_shared_cdp::inner_shared_cdp` / `real_shared_cdp_and_auth_section` が並列負荷下で「sandbox TCP to controller relay failed」で failed（exit 101、既知の flaky、[[evaluator-flaky-tests-sigstop-stutter]] 系、本件の変更と無関係。`--test-threads=1` で単独再実行すると 2 件とも ok）。2 回目の実行は全件 ok で exit 0。いずれの実行でも `/tmp/fake-systemd-records/calls.log` は生成されず（偽 wrapper の呼び出しゼロ）。
+- acceptance: (0) fmt/clippy exit 0 — 満たした。(1) userns 必須の bus 試験が require モードで 1 件 pass — 満たした。(2) 偽 systemd-run/systemctl が workspace test（`user_systemd_bus` を除く）で呼ばれない — 満たした（2 回とも calls.log 不在）。(3) 本節がその証拠。(4) fix-ldr-flake 取り込み後の `cargo test --workspace` が exit 0 — 満たした。すべて満たした。
+- 昇格時の人手確認手順（専用 smoke task で `systemctl --user show-environment` と `systemd-run --user --scope --quiet true` の失敗および scope 件数不変を照合）は変更なし。本番 host はこの run でも操作していない。

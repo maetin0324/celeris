@@ -80,14 +80,6 @@ fn userns_available() -> bool {
     available
 }
 
-struct InstalledGuard;
-
-impl Drop for InstalledGuard {
-    fn drop(&mut self) {
-        install(None);
-    }
-}
-
 #[test]
 fn user_systemd_bus_address_is_removed_even_without_a_guard() {
     let mut cmd = tokio::process::Command::new("true");
@@ -111,15 +103,15 @@ fn user_systemd_bus_is_hidden_from_launched_process() {
     std::fs::create_dir_all(runtime.join("systemd")).unwrap();
     let _bus = UnixListener::bind(runtime.join("bus")).unwrap();
     let _private = UnixListener::bind(runtime.join("systemd/private")).unwrap();
-    install(Some(guard(&f)));
-    let _reset = InstalledGuard;
+    // install（プロセス全体）は使わない: 並行する他の試験の spawn にこの tempdir のガードが掛かってしまう。
+    let g = guard(&f);
 
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg("test -z \"${DBUS_SESSION_BUS_ADDRESS+x}\" && test ! -S \"/run/user/$(id -u)/bus\" && test ! -S \"$XDG_RUNTIME_DIR/bus\" && test -f \"$XDG_RUNTIME_DIR/bus\" && test -d \"$XDG_RUNTIME_DIR/systemd\" && test -z \"$(ls -A \"$XDG_RUNTIME_DIR/systemd\")\" && test ! -e \"$XDG_RUNTIME_DIR/systemd/private\"")
         .env("XDG_RUNTIME_DIR", &runtime)
         .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/definitely-not-a-bus");
-    let mut cmd = launch(cmd, None);
+    let mut cmd = launch_with(cmd, None, Some(&g));
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -139,26 +131,22 @@ fn user_systemd_bus_is_hidden_from_launched_process() {
         "parent namespace was modified"
     );
 
-    let Some(real_runtime) = std::env::var_os("XDG_RUNTIME_DIR") else {
-        eprintln!("skip: host XDG_RUNTIME_DIR is unset");
-        return;
-    };
-    if !Path::new(&real_runtime).exists() {
-        eprintln!("skip: host XDG_RUNTIME_DIR does not exist");
-        return;
+    // Keep this an end-to-end check without consulting or invoking the host manager. The
+    // namespace above is backed by a fake runtime containing listening sockets, so success
+    // would prove that the launched process escaped the masked paths.
+    for (program, args) in [
+        ("systemctl", &["--user", "show-environment"][..]),
+        ("systemd-run", &["--user", "--scope", "true"][..]),
+    ] {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args).env("XDG_RUNTIME_DIR", &runtime);
+        let mut cmd = launch_with(cmd, None, Some(&g));
+        let out = rt.block_on(async { cmd.output().await }).unwrap();
+        assert!(
+            !out.status.success(),
+            "{program} --user unexpectedly succeeded in the masked namespace"
+        );
     }
-    if Command::new("systemctl").arg("--version").output().is_err() {
-        eprintln!("skip: systemctl is not installed");
-        return;
-    }
-    let mut cmd = tokio::process::Command::new("systemctl");
-    cmd.args(["--user", "show-environment"]);
-    let mut cmd = launch(cmd, None);
-    let out = rt.block_on(async { cmd.output().await }).unwrap();
-    assert!(
-        !out.status.success(),
-        "systemctl --user reached the host manager"
-    );
 }
 
 #[test]

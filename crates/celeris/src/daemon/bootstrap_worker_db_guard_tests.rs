@@ -6,7 +6,10 @@ use task_worker::db_guard::{
     DaemonPaths, GuardDecision, PRODUCTION_IN_WORKER_RUN, WorkerRunMarker,
 };
 
-use super::{worker_db_guard_decision, worker_db_guard_protected_set};
+use super::{
+    WorkerDbGuardAction, enforce_worker_db_guard, worker_db_guard_action, worker_db_guard_decision,
+    worker_db_guard_precheck, worker_db_guard_protected_set,
+};
 
 /// 本番の home（`.config/celeris/config.toml`）と本番 DB・token、試験用の別 dir。
 struct Env {
@@ -216,4 +219,248 @@ fn worker_db_guard_refuses_production_state_dir_from_production_config() {
     let mut daemon = test_daemon(&e);
     daemon.state_dir = Some(state.join("sub"));
     assert_refused_inside(&decide(Some(&e.home), &daemon, &inside(&e)));
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0126 A2（final review 指摘）: worker run の中で本番に当たる daemon は probe せずに拒否する。
+// ---------------------------------------------------------------------------
+
+const PROVIDER: &str =
+    "\n[adapters.fake]\ncommand = [\"true\"]\n\n[[providers]]\nid = \"p1\"\nadapter = \"fake\"\n";
+
+/// 試験 daemon の config（`db` だけを指定。worker_read_only は既定の true）。
+fn daemon_config(e: &Env, db: &Path) -> crate::Config {
+    let path = e.test.join("daemon.toml");
+    std::fs::write(&path, format!("db = \"{}\"\n{PROVIDER}", db.display())).unwrap();
+    crate::Config::load(&path).unwrap()
+}
+
+#[track_caller]
+fn assert_refuse_action(d: &GuardDecision) {
+    assert_refused_inside(d);
+    match worker_db_guard_action(d) {
+        WorkerDbGuardAction::Refuse(message) => {
+            assert!(message.contains(PRODUCTION_IN_WORKER_RUN), "{message}");
+            assert!(!message.contains("production-token"), "{message}");
+        }
+        other => panic!("not refused: {other:?}"),
+    }
+}
+
+#[test]
+fn worker_db_guard_refuse_action_never_probes_inside_worker_run() {
+    let e = env(PROD_CONFIG);
+    let config = daemon_config(&e, &e.db);
+    let decision = GuardDecision::RefuseProduction {
+        reason: "db is the production db".into(),
+        inside_worker_run: true,
+    };
+    let mut probed = false;
+    let err = enforce_worker_db_guard(&config, &decision, |_| {
+        probed = true;
+        Err(crate::DaemonError::DbGuard("probe must not run".into()))
+    })
+    .err()
+    .unwrap();
+    assert!(
+        !probed,
+        "probe ran for RefuseProduction inside a worker run"
+    );
+    let text = err.to_string();
+    assert!(text.contains(PRODUCTION_IN_WORKER_RUN), "{text}");
+    assert!(text.contains("db is the production db"), "{text}");
+}
+
+#[test]
+fn worker_db_guard_refuse_action_table() {
+    let refuse = |inside| GuardDecision::RefuseProduction {
+        reason: "r".into(),
+        inside_worker_run: inside,
+    };
+    assert_eq!(
+        worker_db_guard_action(&refuse(true)),
+        WorkerDbGuardAction::Refuse(format!("{PRODUCTION_IN_WORKER_RUN}: r"))
+    );
+    // worker run の外の本番 daemon（本番そのもの）は従来どおり probe。
+    assert_eq!(
+        worker_db_guard_action(&refuse(false)),
+        WorkerDbGuardAction::Probe
+    );
+    assert_eq!(
+        worker_db_guard_action(&GuardDecision::RequireUserns { reason: "r".into() }),
+        WorkerDbGuardAction::Probe
+    );
+    assert_eq!(
+        worker_db_guard_action(&GuardDecision::Exempt),
+        WorkerDbGuardAction::Exempt
+    );
+    // Exempt も probe しない。Probe のときだけ probe を呼ぶ。
+    let e = env(PROD_CONFIG);
+    let config = daemon_config(&e, &e.test.join("t.sqlite3"));
+    let mut probed = 0;
+    let got = enforce_worker_db_guard(&config, &GuardDecision::Exempt, |_| {
+        probed += 1;
+        Err(crate::DaemonError::DbGuard("x".into()))
+    });
+    assert!(matches!(got, Ok(None)));
+    let got = enforce_worker_db_guard(&config, &refuse(false), |_| {
+        probed += 1;
+        Err(crate::DaemonError::DbGuard("probe failed".into()))
+    });
+    assert!(got.is_err());
+    assert_eq!(probed, 1);
+}
+
+#[test]
+fn worker_db_guard_refuse_production_db() {
+    let e = env(PROD_CONFIG);
+    let marker = WorkerRunMarker::ReadOnly(e.home.clone());
+    let daemon = DaemonPaths {
+        db: e.db.clone(),
+        state_dir: None,
+        token_file: None,
+    };
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+}
+
+#[test]
+fn worker_db_guard_refuse_state_dir_overlap() {
+    let e = env("db = \"@LIB@/celeris.sqlite3\"\nstate_dir = \"~/state\"\n");
+    let state = e.home.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let marker = WorkerRunMarker::ReadOnly(e.home.join(".config"));
+    // daemon の DB が本番 state_dir の中。
+    let db = state.join("t.sqlite3");
+    std::fs::write(&db, b"t").unwrap();
+    let daemon = DaemonPaths {
+        db,
+        state_dir: None,
+        token_file: None,
+    };
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+    // daemon の state_dir が本番 state_dir を含む（祖先）。
+    let mut daemon = test_daemon(&e);
+    daemon.state_dir = Some(e.home.clone());
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+}
+
+#[test]
+fn worker_db_guard_refuse_production_token() {
+    let e = env(PROD_CONFIG);
+    let marker = WorkerRunMarker::ReadOnly(e.home.join(".config"));
+    let mut daemon = test_daemon(&e);
+    daemon.token_file = Some(e.token.clone());
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+    // 同じ内容の写し（path は別）。
+    let copy = e.test.join("copy.token");
+    std::fs::write(&copy, "production-token\n").unwrap();
+    daemon.token_file = Some(copy);
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+}
+
+#[test]
+fn worker_db_guard_refuse_via_symlink() {
+    let e = env(PROD_CONFIG);
+    let marker = WorkerRunMarker::ReadOnly(e.home.join(".config"));
+    // 本番 DB への symlink。
+    let link = e.test.join("link.sqlite3");
+    std::os::unix::fs::symlink(&e.db, &link).unwrap();
+    let daemon = DaemonPaths {
+        db: link,
+        state_dir: None,
+        token_file: None,
+    };
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+    // 本番 DB のディレクトリへの symlink を通した path。
+    let dir_link = e.test.join("libdir");
+    std::os::unix::fs::symlink(&e.lib, &dir_link).unwrap();
+    let daemon = DaemonPaths {
+        db: dir_link.join("celeris.sqlite3"),
+        state_dir: None,
+        token_file: None,
+    };
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+    // 本番 token への symlink。
+    let token_link = e.test.join("token.link");
+    std::os::unix::fs::symlink(&e.token, &token_link).unwrap();
+    let mut daemon = test_daemon(&e);
+    daemon.token_file = Some(token_link);
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+}
+
+#[test]
+fn worker_db_guard_refuse_relative_path_with_dotdot() {
+    // 本番 config の相対 db（config のディレクトリ基準、`..` を含む）。
+    let e = env("db = \"../../../lib/celeris.sqlite3\"\n");
+    let marker = WorkerRunMarker::ReadOnly(e.home.join(".config"));
+    let daemon = DaemonPaths {
+        db: e.db.clone(),
+        state_dir: None,
+        token_file: None,
+    };
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+    // daemon 側の `..` を含む path。
+    let daemon = DaemonPaths {
+        db: e.test.join("../lib/./celeris.sqlite3"),
+        state_dir: None,
+        token_file: None,
+    };
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+    // 試験 daemon の config に書いた相対 path（config 基準で解ける）。
+    let path = e.test.join("rel.toml");
+    std::fs::write(
+        &path,
+        format!("db = \"../lib/celeris.sqlite3\"\n{PROVIDER}"),
+    )
+    .unwrap();
+    let config = crate::Config::load(&path).unwrap();
+    let daemon = super::worker_db_guard_daemon_paths(&config);
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &marker));
+}
+
+#[test]
+fn worker_db_guard_refuse_under_marker_path() {
+    // 本番 config が無くても、印の path（guard が読み取り専用にした本番 DB の dir）配下は拒否。
+    let e = env(PROD_CONFIG);
+    std::fs::remove_file(e.home.join(".config/celeris/config.toml")).unwrap();
+    let sub = e.lib.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let db = sub.join("t.sqlite3");
+    std::fs::write(&db, b"t").unwrap();
+    let daemon = DaemonPaths {
+        db,
+        state_dir: None,
+        token_file: None,
+    };
+    assert_refuse_action(&decide(Some(&e.home), &daemon, &inside(&e)));
+}
+
+#[test]
+fn worker_db_guard_refuse_precheck_before_opening_db() {
+    let e = env(PROD_CONFIG);
+    // 既にある本番 DB: DB を開く前に止める。
+    let config = daemon_config(&e, &e.db);
+    let action = worker_db_guard_precheck(Some(&e.home), &config, &inside(&e));
+    assert!(
+        matches!(&action, WorkerDbGuardAction::Refuse(m) if m.contains(PRODUCTION_IN_WORKER_RUN)),
+        "{action:?}"
+    );
+    // まだ無い DB でも、印の path 配下なら止める（読み取り専用の dir に試験 DB は作れない）。
+    let config = daemon_config(&e, &e.lib.join("new/t.sqlite3"));
+    let action = worker_db_guard_precheck(Some(&e.home), &config, &inside(&e));
+    assert!(
+        matches!(&action, WorkerDbGuardAction::Refuse(m) if m.contains(PRODUCTION_IN_WORKER_RUN)),
+        "{action:?}"
+    );
+    // 印の外のまだ無い試験 DB・worker run の外は、ここでは止めない。
+    let config = daemon_config(&e, &e.test.join("fresh.sqlite3"));
+    assert_eq!(
+        worker_db_guard_precheck(Some(&e.home), &config, &inside(&e)),
+        WorkerDbGuardAction::Probe
+    );
+    let config = daemon_config(&e, &e.db);
+    assert_eq!(
+        worker_db_guard_precheck(Some(&e.home), &config, &WorkerRunMarker::Absent),
+        WorkerDbGuardAction::Probe
+    );
 }

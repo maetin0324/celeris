@@ -267,6 +267,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::QuotaEstimated { .. } => "quota_estimated",
         Event::WorkUnitCommitted { .. } => "work_unit_committed",
         Event::PhaseIntegrated { .. } => "phase_integrated",
+        Event::MergeCandidateStale { .. } => "merge_candidate_stale",
         Event::WorkUnitsSerialized { .. } => "work_units_serialized",
         Event::ProjectPlanProposed { .. } => "project_plan_proposed",
         Event::ProjectPlanDecided { .. } => "project_plan_decided",

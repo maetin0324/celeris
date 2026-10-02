@@ -650,6 +650,18 @@ export type Event =
       work_unit_id: string;
     }
   | {
+      branch: string;
+      child_task: TaskId;
+      head_sha: string;
+      key: string;
+      merge_candidate_sha: string;
+      phase: string;
+      repo_id: RepoId;
+      target_sha: string;
+      type: "merge_candidate_stale";
+      work_unit_id: string;
+    }
+  | {
       plan_id: string;
       reason: string;
       type: "work_units_serialized";
@@ -4773,9 +4785,17 @@ export interface PhaseMerged {
   commit: string;
   key: string;
   /**
+   * ADR-0118 D5: 子の merge candidate を merge したときの親ブランチの HEAD（merge の直前）。
+   */
+  parent_head?: string | null;
+  /**
    * 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
    */
   skipped?: boolean;
+  /**
+   * ADR-0118 D5: 照合した子の review 時の target（親ブランチ）の SHA（記録の無い子・WU は `None`）。
+   */
+  target_sha?: string | null;
 }
 /**
  * D2.3: 途中報告そのもの（`Event::PhaseReported.report` と `artifacts/phase-reports/<n>-<phase>.md`

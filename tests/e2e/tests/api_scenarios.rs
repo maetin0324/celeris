@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 use task_core::{ArtifactRef, Event, SCHEMA_VERSION, SqliteStore, Status, Task, TaskId, TaskStore};
 use task_core::{RunIndexRole, RunIndexStatus, RunRow};
 
+/// worker run の印（`task_worker::db_guard::WORKER_DB_GUARD_ENV`、ADR-0126 A1-1）。
+const WORKER_DB_GUARD_ENV: &str = "CELERIS_WORKER_DB_GUARD";
+
 fn bin(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     let debug_dir = exe.parent().unwrap().parent().unwrap();
@@ -145,8 +148,9 @@ impl Env {
     /// `api` は `[api]` 節の本体（空なら節を書かない）。`provider_env` は `[[providers]]` の `env` の TOML インライン表。
     fn write_config(&self, script: &Path, api: &str, provider_env: &str) -> PathBuf {
         let path = self.root.join("config.toml");
-        // The guard reads the production config and token via the passwd home even when
-        // HOME is isolated. This daemon has only a private DB, so opt out before that read.
+        // The worker db guard stays on (ADR-0126): this daemon uses only a private test DB,
+        // state dir and test token, so inside a guarded worker run it is exempt from the
+        // user namespace probe; outside one it probes as in production.
         let api_section = if api.is_empty() {
             String::new()
         } else {
@@ -164,7 +168,6 @@ retry_backoff_base_secs = 0
 
 [db]
 path = "celeris.sqlite3"
-worker_read_only = false
 
 {api_section}
 [adapters.fake]
@@ -192,9 +195,11 @@ env = {provider_env}
 
     fn command(&self, name: &str) -> Command {
         let mut cmd = Command::new(bin(name));
-        // A worker run can carry production state and credentials in CELERIS_*.
+        // A worker run can carry production state and credentials in CELERIS_*. Keep only the
+        // worker run marker: the guard needs it to exempt this test DB (ADR-0126 A3).
         for (key, _) in std::env::vars_os() {
-            if key.to_string_lossy().starts_with("CELERIS_") {
+            let key_str = key.to_string_lossy();
+            if key_str.starts_with("CELERIS_") && key_str != WORKER_DB_GUARD_ENV {
                 cmd.env_remove(key);
             }
         }
@@ -397,6 +402,41 @@ fn sse_events(text: &str) -> Vec<(String, Option<u64>, Value)> {
 }
 
 /// 受け入れ 4: `[api]` が無ければリッスンしない。有効にすると `/health` が版と版数を返す。
+/// ADR-0126 A3: guard 有効の daemon が試験用の一時 DB で起動する。worker run の中（印あり）では
+/// userns の probe をせず免除行を出し、印が無ければ `CELERIS_USERNS_TESTS=1` のときだけ probe 経路を確かめる。
+#[test]
+fn worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on() {
+    let in_worker_run = std::env::var_os(WORKER_DB_GUARD_ENV).is_some_and(|v| !v.is_empty());
+    let userns_opt_in = std::env::var("CELERIS_USERNS_TESTS").as_deref() == Ok("1");
+    if !in_worker_run && !userns_opt_in {
+        eprintln!(
+            "SKIPPED (worker_guard_exempt): {WORKER_DB_GUARD_ENV} is not set (not in a worker run); \
+             set CELERIS_USERNS_TESTS=1 to check the probe path (ADR-0126)"
+        );
+        return;
+    }
+    let env = Env::new();
+    let script = env.write_script("exit 0");
+    let config = env.write_config(&script, &env.api_listen(), "");
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(!text.contains("worker_read_only"), "{text}");
+    let mut daemon = env.start_celeris(&config);
+    env.wait_api(&mut daemon);
+    let log = daemon.log_text();
+    if in_worker_run {
+        assert!(
+            log.contains("test DB inside a guarded worker run"),
+            "expected the ADR-0126 exemption line\n{log}"
+        );
+    } else {
+        assert!(
+            log.contains("worker runs see the db directory read-only"),
+            "expected the guard to be installed after the probe\n{log}"
+        );
+    }
+    assert!(!log.contains("worker_read_only = false"), "{log}");
+}
+
 #[test]
 fn api_is_off_by_default_and_health_reports_versions_when_enabled() {
     let env = Env::new();

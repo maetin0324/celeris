@@ -19,6 +19,9 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
+/// worker run の印（`task_worker::db_guard::WORKER_DB_GUARD_ENV`、ADR-0126 A1-1）。
+const WORKER_DB_GUARD_ENV: &str = "CELERIS_WORKER_DB_GUARD";
+
 fn bin(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     let debug_dir = exe.parent().unwrap().parent().unwrap();
@@ -136,6 +139,17 @@ fn ready_task(store: &SqliteStore, dir: &Path, project: Option<ProjectId>) -> Ta
 
 #[test]
 fn a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl() {
+    // ADR-0126 A3: worker run の印があると試験用 DB の daemon は guard を入れない（免除）。この試験は
+    // guard そのもの（実 namespace）を確かめるので、daemon から印を外して probe 経路を通す。印がある
+    // （worker sandbox の中で userns を作れない）なら CELERIS_USERNS_TESTS=1 のときだけ走らせる。
+    let in_worker_run = std::env::var_os(WORKER_DB_GUARD_ENV).is_some_and(|v| !v.is_empty());
+    if in_worker_run && std::env::var("CELERIS_USERNS_TESTS").as_deref() != Ok("1") {
+        eprintln!(
+            "SKIPPED (userns test, not passed): inside a worker run ({WORKER_DB_GUARD_ENV} is set); \
+             set CELERIS_USERNS_TESTS=1 to run (ADR-0126)"
+        );
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let db = root.join("celeris.sqlite3");
@@ -209,6 +223,7 @@ concurrency = 1
 
     let log = root.join("celeris.log");
     let mut child = Command::new(bin("celeris"))
+        .env_remove(WORKER_DB_GUARD_ENV)
         .args([
             "--config",
             config.to_str().unwrap(),

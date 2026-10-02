@@ -314,3 +314,15 @@ main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135
 - `git merge-tree --write-tree main HEAD` → exit 0（作業前 tree `c0a8f60f0e346a020fecd806054c9588f9671fc3`、記録 commit 後 tree `13cadac91414f7cd69f0d9d25ff279d9b5de7ff7`、いずれも衝突なし）。
 - 検証記録を commit `0ec72fdd` に保存。作業後 worktree は clean。
 - 本番 DB・本番 host は操作していない。
+
+### rerun-flaky: 高負荷起因の失敗の単独再実行 — 2026-10-02
+
+段 reverify の統合検査で `browser_injection_wire`（2 試験）と `browser_runtime_isolated::controller_kill_leaves_no_runtime_processes` が失敗した件は、別 task の負荷試験で host の load average が上がったことによる環境起因と人が判断した（負荷は 09:15 に停止済み）。コードは変更していない。
+
+- `uptime` → `09:19:49 up 1 day, 11:26,  6 users,  load average: 23.67, 28.81, 31.48`（再実行開始時点。負荷停止直後で 1 分平均はまだ下降中）。再実行完了時点の `uptime` → `09:22:01 up 1 day, 11:28,  6 users,  load average: 19.53, 26.02, 30.14`。
+- `unshare -U -r true` → 成功（user namespace 作成は拒否されていない）。
+- `cargo build --workspace --bins` → exit 0。
+- `cargo test -p task-worker --test browser_injection_wire` → exit 0、`test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`（`inner_injection_wire`、`real_broker_browser_injection_receipt_and_origin_guards` とも ok）。
+- `cargo test -p task-worker --test browser_runtime_isolated controller_kill_leaves_no_runtime_processes -- --exact` → exit 0、`test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out`。
+- 2 回連続で単独実行し、どちらも同じ結果を再確認した。
+- 人の判断のとおり、環境（host 負荷）起因の flaky と確認できた。コード変更なし。

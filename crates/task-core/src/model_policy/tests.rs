@@ -24,6 +24,7 @@ fn f(
 pub(crate) fn task(objective: &str, acceptance: Vec<Criterion>) -> Task {
     let now = time::OffsetDateTime::UNIX_EPOCH;
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         id: TaskId::new(),
@@ -273,6 +274,7 @@ fn wu_row(features: Option<serde_json::Value>, checks: Vec<Criterion>) -> crate:
         WorkUnitCheck, WorkUnitContext, WorkUnitKind, WorkUnitSpec, WorkUnitStatus,
     };
     let spec = WorkUnitSpec {
+        expected_write_paths: None,
         key: "a".to_string(),
         kind: WorkUnitKind::Implement,
         title: "a".to_string(),

@@ -209,6 +209,7 @@ fn plain_task(kind: crate::model::TaskKind) -> crate::model::Task {
     };
     let now = OffsetDateTime::now_utc();
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

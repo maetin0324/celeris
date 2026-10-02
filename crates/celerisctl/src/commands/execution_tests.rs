@@ -5,6 +5,7 @@ use task_core::{Budget, SqliteStore, Status, TaskId, TaskKind, WorkerHint, Works
 fn sample_task() -> task_core::Task {
     let now = OffsetDateTime::now_utc();
     task_core::Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

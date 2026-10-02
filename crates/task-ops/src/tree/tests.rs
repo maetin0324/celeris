@@ -4,6 +4,7 @@ use task_core::{Budget, Check, Criterion, SqliteStore, TaskKind, Tier, WorkerHin
 fn parent(repos: &[&str]) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

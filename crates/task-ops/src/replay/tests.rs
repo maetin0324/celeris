@@ -9,6 +9,7 @@ use time::OffsetDateTime;
 fn sample_task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,
@@ -289,6 +290,7 @@ const TS: &str = "2026-09-24T00:00:00Z";
 
 fn wu_spec(key: &str, depends_on: &[&str]) -> task_core::WorkUnitSpec {
     task_core::WorkUnitSpec {
+        expected_write_paths: None,
         key: key.to_string(),
         kind: task_core::WorkUnitKind::Implement,
         title: format!("title {key}"),

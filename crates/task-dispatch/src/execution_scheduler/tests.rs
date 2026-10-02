@@ -42,6 +42,7 @@ use task_core::{WorkUnitContext, WorkUnitKind, WorkUnitSpec};
 
 fn row(key: &str, status: WorkUnitStatus, depends_on: &[&str]) -> WorkUnitRow {
     let spec = WorkUnitSpec {
+        expected_write_paths: None,
         key: key.to_string(),
         kind: WorkUnitKind::Implement,
         title: key.to_string(),

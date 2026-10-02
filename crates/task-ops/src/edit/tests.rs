@@ -7,6 +7,7 @@ use task_core::{
 fn task_with(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

@@ -84,6 +84,7 @@ pub mod tree;
 pub mod tree_metrics;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
+pub mod write_set;
 
 pub use accounts::{AccountAdapter, RateLimitObservation, RateWindow};
 pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};

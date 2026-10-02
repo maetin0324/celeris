@@ -158,6 +158,7 @@ impl Env {
 fn task(status: Status) -> Task {
     let now = at(0);
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,
@@ -1624,6 +1625,7 @@ fn empty_plan_spec() -> task_core::ExecutionPlanSpec {
         schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
         rationale: "A".into(),
         work_units: vec![task_core::WorkUnitSpec {
+            expected_write_paths: None,
             key: "a".into(),
             kind: task_core::WorkUnitKind::Implement,
             title: "title a".into(),

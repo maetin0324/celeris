@@ -64,6 +64,7 @@ fn node(title: &str, status: Status, project: ProjectId, parent: Option<(&Task, 
 
 fn wu(key: &str, kind: WorkUnitKind) -> WorkUnitSpec {
     WorkUnitSpec {
+        expected_write_paths: None,
         key: key.to_string(),
         kind,
         title: format!("unit {key}"),

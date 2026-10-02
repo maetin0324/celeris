@@ -585,6 +585,7 @@ impl Dispatcher {
         );
         let n = repairs.len() + 1;
         let spec = task_core::WorkUnitSpec {
+            expected_write_paths: None,
             key: format!("repair-{n}"),
             kind: task_core::WorkUnitKind::Repair,
             title: format!("repair ({}): 修復", class.bucket()),
@@ -661,6 +662,7 @@ impl Dispatcher {
         let conflict_files = task_core::normalize_conflict_files(files);
         let scope = Self::review_repair_scope(task, &units);
         let spec = task_core::WorkUnitSpec {
+            expected_write_paths: None,
             key: task_core::integration_repair_key(attempt),
             kind: task_core::WorkUnitKind::Repair,
             title: task_core::INTEGRATION_REPAIR_TITLE.to_string(),
@@ -766,6 +768,7 @@ impl Dispatcher {
                 // D5: atomic な Task は、初めての WorkUnit で暗黙の WU を `main`（done）として実体化する。
                 let plan_id = task_core::new_id();
                 let main_spec = task_core::WorkUnitSpec {
+                    expected_write_paths: None,
                     key: "main".to_string(),
                     kind: task_core::WorkUnitKind::Implement,
                     title: task.title.clone(),

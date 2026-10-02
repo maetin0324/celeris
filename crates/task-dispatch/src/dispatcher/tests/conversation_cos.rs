@@ -1474,6 +1474,7 @@ fn recent_work_outcome_reuses_the_report_wording_for_done_failed_and_blocked() {
         },
     )];
     let done_task = Task {
+        expected_write_paths: None,
         status: Status::Done,
         ..new_task(std::path::Path::new("/nonexistent"), Check::Human, 0)
     };
@@ -1494,6 +1495,7 @@ fn recent_work_outcome_reuses_the_report_wording_for_done_failed_and_blocked() {
         },
     )];
     let failed_task = Task {
+        expected_write_paths: None,
         status: Status::Failed,
         ..new_task(std::path::Path::new("/nonexistent"), Check::Human, 0)
     };
@@ -1574,6 +1576,7 @@ fn recent_work_outcome_reuses_the_report_wording_for_done_failed_and_blocked() {
         },
     )];
     let blocked_task = Task {
+        expected_write_paths: None,
         status: Status::Blocked,
         ..new_task(std::path::Path::new("/nonexistent"), Check::Human, 0)
     };
@@ -1584,6 +1587,7 @@ fn recent_work_outcome_reuses_the_report_wording_for_done_failed_and_blocked() {
 
     // 進行中のタスクには要約を出さない。
     let running_task = Task {
+        expected_write_paths: None,
         status: Status::Running,
         ..new_task(std::path::Path::new("/nonexistent"), Check::Human, 0)
     };

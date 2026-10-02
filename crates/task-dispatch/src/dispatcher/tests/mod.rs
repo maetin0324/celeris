@@ -41,6 +41,7 @@ impl WorkerAdapter for InstantAdapter {
 fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,
@@ -2083,6 +2084,7 @@ impl WorkerAdapter for WuScriptAdapter {
 
 fn wu_spec(key: &str, depends_on: &[&str]) -> task_core::WorkUnitSpec {
     task_core::WorkUnitSpec {
+        expected_write_paths: None,
         key: key.to_string(),
         kind: task_core::WorkUnitKind::Implement,
         title: format!("Work on {key}"),

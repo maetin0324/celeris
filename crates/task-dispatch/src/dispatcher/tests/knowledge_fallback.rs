@@ -49,6 +49,7 @@ impl WorkerAdapter for CandidatesAdapter {
 fn knowledge_task(dir: &std::path::Path) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

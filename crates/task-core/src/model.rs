@@ -447,6 +447,9 @@ pub fn priority_label(priority: i32) -> &'static str {
 /// DESIGN §4.1 の `Task`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Task {
+    /// Explicit repository-relative write prefixes (ADR-0130 D1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_write_paths: Option<Vec<String>>,
     pub id: TaskId,
     pub parent_id: Option<TaskId>,
     pub kind: TaskKind,

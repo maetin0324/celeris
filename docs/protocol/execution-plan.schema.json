@@ -343,6 +343,16 @@
           },
           "type": "array"
         },
+        "expected_write_paths": {
+          "description": "Optional repository-relative prefixes inherited by child tasks or leaf WUs.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "features": {
           "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
         },
@@ -743,6 +753,16 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "expected_write_paths": {
+          "description": "Optional repository-relative prefixes (ADR-0130 D1).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "features": {
           "description": "D21: `TaskFeatures` の上書きヒント（任意の JSON。E3 以降の routing が読む）。"

@@ -281,6 +281,7 @@ pub(crate) async fn check_provider(
     let dir = std::env::temp_dir().join(format!("celeris-provider-check-{}", ulid::Ulid::new()));
     let now = OffsetDateTime::now_utc();
     let task = task_core::Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

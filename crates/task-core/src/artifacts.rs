@@ -75,6 +75,7 @@ mod tests {
         use crate::model::*;
         let now = time::OffsetDateTime::now_utc();
         Task {
+            expected_write_paths: None,
             tree: None,
             paused_at: None,
             routing: None,

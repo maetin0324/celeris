@@ -9,6 +9,7 @@ use crate::model_policy::tests::task as sample_task;
 
 fn wu(key: &str, kind: WorkUnitKind, title: &str, depends_on: &[&str]) -> WorkUnitSpec {
     WorkUnitSpec {
+        expected_write_paths: None,
         key: key.to_string(),
         kind,
         title: title.to_string(),

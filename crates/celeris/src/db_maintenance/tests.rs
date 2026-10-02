@@ -105,6 +105,7 @@ async fn spawned_tasks_run_on_their_interval_and_stop_cleanly() {
 fn sample_task() -> task_core::Task {
     let now = OffsetDateTime::now_utc();
     task_core::Task {
+        expected_write_paths: None,
         tree: None,
         paused_at: None,
         routing: None,

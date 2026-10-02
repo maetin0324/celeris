@@ -540,6 +540,7 @@ pub fn materialize_logging(
                 genres,
             );
             Task {
+                expected_write_paths: None,
                 tree: None,
                 paused_at: None,
                 id: ids[i],

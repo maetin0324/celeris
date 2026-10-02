@@ -125,6 +125,9 @@ pub struct WorkUnitBudget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkUnitSpec {
+    /// Optional repository-relative prefixes (ADR-0130 D1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_write_paths: Option<Vec<String>>,
     /// `[a-z0-9-]{1,32}`。計画の中で一意（D14）。
     pub key: String,
     pub kind: WorkUnitKind,
@@ -269,6 +272,9 @@ impl UnitContext {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanUnitSpec {
+    /// Optional repository-relative prefixes inherited by child tasks or leaf WUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_write_paths: Option<Vec<String>>,
     /// `[a-z0-9-]{1,32}`。計画の中で一意。
     pub key: String,
     /// `stages` の key。
@@ -339,6 +345,7 @@ impl PlanUnitSpec {
     /// `work_units` の行の spec（/2 の `WorkUnitSpec` と同じ形。`phase` = 段階）。
     pub fn to_work_unit_spec(&self) -> WorkUnitSpec {
         WorkUnitSpec {
+            expected_write_paths: self.expected_write_paths.clone(),
             key: self.key.clone(),
             kind: self.kind,
             title: self.title.clone(),

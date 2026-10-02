@@ -4123,6 +4123,16 @@
           },
           "type": "array"
         },
+        "expected_write_paths": {
+          "description": "Optional repository-relative prefixes inherited by child tasks or leaf WUs.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "features": {
           "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
         },
@@ -4938,6 +4948,16 @@
             "$ref": "#/$defs/TaskId"
           },
           "type": "array"
+        },
+        "expected_write_paths": {
+          "description": "Explicit repository-relative write prefixes (ADR-0130 D1).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "genre": {
           "description": "ADR-0027 D1: 分野名（自由記述。`[[genres]] id` と一致すれば既定の役割・プロンプトの説明が効く）。\n状態機械は見ない。導入前のタスクには無いので任意。",
@@ -5755,6 +5775,16 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "expected_write_paths": {
+          "description": "Optional repository-relative prefixes (ADR-0130 D1).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "features": {
           "description": "D21: `TaskFeatures` の上書きヒント（任意の JSON。E3 以降の routing が読む）。"

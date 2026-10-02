@@ -643,3 +643,10 @@ superseded となった repair WU を統合 WU の依存に残し、repair WU �
    が `done` になったことを確認する。task 詳細の run 履歴で `e2e-cancel` の worker run、
    計画履歴で新しい版への更新を確認する。版と planner run がさらに繰り返し増える場合は
    task を一時停止し、その run の結果と event を調べる。
+
+### main merge（browser 試験の起動競合修正の取り込み）
+
+main（ffb87b0d を含む）を `--no-ff` で merge した。merge-tree に衝突は無く、`docs/PROGRESS.md`
+だけが自動 merge された。`cargo test -p task-worker --test browser_h3_wire` → exit 0（2 passed）、
+`cargo test --workspace` → exit 0（全 test バイナリで 0 failed）、
+`cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。

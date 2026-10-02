@@ -184,6 +184,49 @@ password_selector = "input:not(.x)"
             .is_err()
     );
 }
+
+/// ADR-0116 D5: `[browser] runtime`。既定は `"daemon"`、`"launcher"` は `launcher_socket` 必須、
+/// 未知の値と socket 欠落は設定検証で error。
+#[test]
+fn browser_runtime_defaults_to_daemon() {
+    let cfg: Config = toml::from_str("").unwrap();
+    assert_eq!(cfg.browser.runtime, "daemon");
+    assert!(cfg.browser.launcher_socket.is_none());
+    assert!(cfg.browser.validate().is_ok());
+    assert_eq!(
+        cfg.browser.runtime_kind(),
+        task_worker::browser::BrowserRuntimeKind::Daemon
+    );
+}
+
+#[test]
+fn browser_runtime_launcher_with_socket_validates() {
+    let cfg: Config = toml::from_str(
+        "[browser]\nruntime = \"launcher\"\nlauncher_socket = \"/run/celeris/browser-launcher.sock\"\n",
+    )
+    .unwrap();
+    assert!(cfg.browser.validate().is_ok());
+    assert_eq!(
+        cfg.browser.runtime_kind(),
+        task_worker::browser::BrowserRuntimeKind::Launcher {
+            socket: std::path::PathBuf::from("/run/celeris/browser-launcher.sock"),
+        }
+    );
+}
+
+#[test]
+fn browser_runtime_launcher_without_socket_is_rejected() {
+    let cfg: Config = toml::from_str("[browser]\nruntime = \"launcher\"\n").unwrap();
+    let err = cfg.browser.validate().unwrap_err();
+    assert!(err.to_string().contains("launcher_socket"));
+}
+
+#[test]
+fn browser_runtime_unknown_value_is_rejected() {
+    let cfg: Config = toml::from_str("[browser]\nruntime = \"bogus\"\n").unwrap();
+    let err = cfg.browser.validate().unwrap_err();
+    assert!(err.to_string().contains("runtime"));
+}
 use task_core::{AccountAdapter, DelegationLimits, OrgKind, Tier, WorkerHint};
 
 /// ADR-0046 D3（Phase 59）: `config/org.example.toml` の `genre` が指す全ての harness を、

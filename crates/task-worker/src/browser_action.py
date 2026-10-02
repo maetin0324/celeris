@@ -107,6 +107,7 @@ while True:
         result = path.with_suffix('.result')
         temporary = path.with_suffix('.next')
         temporary.write_text(json.dumps(response))
+        temporary.chmod(0o644)
         temporary.replace(result)
         path.unlink(missing_ok=True)
     time.sleep(0.02)

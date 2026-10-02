@@ -372,7 +372,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
 /// 文面）の末尾に `## Skills（celeris）` 節として名前・説明・パスの一覧で載る（本文と `### <name>` の
 /// 見出しは埋め込まない）。
 #[tokio::test]
-async fn mounted_skills_are_embedded_in_the_preamble() {
+async fn mounted_skills_are_listed_in_the_preamble() {
     let dir = tempfile::tempdir().unwrap();
     let kb = tempfile::tempdir().unwrap();
     let mount = skills_fixture_kb(kb.path(), "writing");

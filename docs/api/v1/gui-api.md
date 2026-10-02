@@ -469,39 +469,37 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 ### 3.1 `GET /health` → 200 `Health`
 
 ```json
-{"api_version":"1","schema_version":11,"celeris_version":"0.9.0","instance_id":"01J…",
- "started_at":"…","now":"…","db":{"journal_mode":"wal","busy_timeout_ms":5000},
+{"api_version":"1","schema_version":37,"celeris_version":"0.9.0","instance_id":"01J…",
+ "started_at":"…","now":"…","db":{"journal_mode":"wal","busy_timeout_ms":5000,"filesystem":"ext4","device":"/dev/sda1"},
  "release":"a1b2c3d4e5f6","mode":"normal","role":"active"}
 ```
 
 - `api_version` は `"1"` 固定。互換性を壊す変更は `/api/v2` で行う（ADR-0013 D8）。
-- `schema_version` は `schema_migrations` の最大版数（= `task_core::SCHEMA_VERSION`。現在 **14**:
-  0001 init / 0002 events id / 0003 tasks の title・updated_at 列 / 0004 tasks の objective 列（ADR-0014 D2）/
-  0005 tasks の genre 列（ADR-0027）/ 0006 組織・案件・報告・対話・認可の表と tasks の project_id・
-  milestone_id・assignee 列（ADR-0033）/ 0007 messages の task_id 列と reports.project_id の NULL 可（Phase 27）/
-  0008 notifications（ADR-0037）/ 0009 notifications の project_id 列 / 0010 projects の workspace 列（ADR-0039）/
-  0011 daemon_instances（ADR-0040 D4）/ 0012 project_repos と tasks の repos_json 列（ADR-0043 D1/D2）/
-  0013 task_comments と tasks の labels_json・category 列（ADR-0044 D2/D3）/
-  0014 task_integrations（ADR-0043 D5））。
+- `schema_version` は `schema_migrations` の最大版数（= `task_core::SCHEMA_VERSION`）。
 - `journal_mode` は `PRAGMA journal_mode` の実測値（`"wal"` でなければ設定不備。GUI は警告を出す）。
-- ADR-0040 D3 / D4（Phase 47）: `release` はこのプロセスのリリース（`--release <sha12>` / 環境変数
-  `CELERIS_RELEASE` / 既定 `"dev"`）、`mode` は `"normal"` か `"verify"`（`--mode`）、`role` は
-  `"active"` / `"standby"` / `"draining"` / `"verify"`。昇格（`promote.sh`）と検証（`verify.sh`）は
-  「どの版がどの役割で動いているか」をここだけで判定する。`role` が `standby` / `draining` の間は
-  ディスパッチャの状態を要する管理系が 503 `standby`（§1.5）。
-- ADR-0041 D5（Phase 51）: `mode == "verify"` のプロセスは、**`genre = "smoke"` のタスクだけ**を
-  dispatch する（他の ready は動かさない・リースも奪わない・レビューも拾わない・`daemon_instances` にも
-  書かない）。その役割・分野・プロバイダは verify モードが組み込みで足すもので、すべて偽のアダプタ
-  （`adapter = "fake"`）。`GET /config` にだけ姿が出る（§3.21）。本番（`normal`）には何の影響も無い。
+- `db.filesystem` / `db.device` は `/proc/self/mountinfo` から引いた DB のファイルシステム種別とマウントソース。
+  判定できなければ省略される（ADR-0064 D1）。
+- `release` はこのプロセスのリリース（`--release <sha12>` / 環境変数 `CELERIS_RELEASE` / 既定 `"dev"`）、
+  `mode` は `"normal"` か `"verify"`（`--mode`）、`role` は `"active"` / `"standby"` / `"draining"` / `"verify"`。
+  昇格（`promote.sh`）と検証（`verify.sh`）は「どの版がどの役割で動いているか」をここだけで判定する。
+  `role` が `standby` / `draining` の間はディスパッチャの状態を要する管理系が 503 `standby`（§1.5。ADR-0040 D3/D4）。
+- `mode == "verify"` のプロセスは、**`genre = "smoke"` かつアダプタが `fake` のタスクだけ**を dispatch する
+  （他の ready は動かさない）。その役割・分野・プロバイダは verify モードが組み込みで足すもので、すべて偽のアダプタ
+  （`adapter = "fake"`）。`GET /config` にだけ姿が出る（§3.21）。本番（`normal`）には何の影響も無い（ADR-0041 D5）。
 - 無認証（1.3）。DB のパスは出さない（`GET /config` に出す）。
 
 ### 3.2 `GET /inbox` → 200 `Inbox`
 
-計算規則は §5.1。クエリ無し。`attention.unroutable` はデーモンのスナップショット（3.23）から合成する。スナップショットがまだ無ければ空。
+計算規則は §5.1。クエリ無し（あれば 400）。応答は `task_ops::inbox::Inbox`:
+`{approvals, questions, drafts, attention, browser_waits, decisions, counts}`（`counts` は各配列の件数と
+DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区別する（`failed` / `requeue_limit_near` /
+`unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped`）。
+`type: "unroutable"` はデーモンのスナップショット（3.20）から合成する。スナップショットがまだ無ければ出ない。
 
-- `questions[].approval_id`（Phase 29。GUI 監査対応）: その質問に対応する**未決の** `approvals` の id
-  （§3.56）。GUI はこれで `POST /approvals/{id}/decide`（3.57）へ直接リンクできる。行がまだ無い、または
-  既に決定済みなら `null`。
+- `questions[].approval_id`: その質問に対応する**未決の** `approvals` の id（§3.56）。GUI はこれで
+  `POST /approvals/{id}/decide`（3.57）へ直接リンクできる。行がまだ無い、または既に決定済みなら `null`。
+- `browser_waits[]` は人の対応を待つ browser の wait（ADR-0080 D5）、`decisions[]` は未回答の決定の要求
+  （回答は `POST /decisions/{id}/answer`。ADR-0079 D7）。
 
 ### 3.3 `GET /tasks` → 200 `TaskList`
 
@@ -513,195 +511,236 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 | `parent` | `TaskId` | — | 直接の子だけ（`ListFilter.parent_id`） |
 | `project` | `ProjectId`（ULID） | — | その案件のタスクだけ（`ListFilter.project_id`。ADR-0033 D2）。ULID でなければ 400 |
 | `root_only` | bool | false | `parent_id IS NULL` のものだけ。`parent` と AND で効く（同時指定は空になるだけで、エラーではない） |
-| `q` | 文字列（最大 200 文字） | — | `title` / `objective` / **コメント本文**の部分一致（`ListFilter.text_contains` + `text_includes_comments`。SQLite の LIKE なので **ASCII の大文字小文字は区別しない**。`%` `_` はリテラル。ADR-0014 D2 / ADR-0044 D4） |
+| `q` | 文字列（最大 200 文字） | — | `title` / `objective` / **コメント本文**の部分一致（`ListFilter.text_contains` + `text_includes_comments`。SQLite の LIKE なので **ASCII の大文字小文字は区別しない**。`%` `_` はリテラル。ADR-0014 D2 / ADR-0044 D4）。200 文字超は 400、空文字は絞り込まない |
 | `label` | 文字列（小文字 `[a-z0-9-]`）、複数可 | 全て | **AND**（指定したラベルを全部持つタスクだけ）。規則に合わない値は 400（ADR-0044 D4） |
 | `category` | `feature`/`bug`/`research`/`ops`/`docs`/`other`、複数可 | 全て | OR。知らない値は 400（ADR-0044 D3/D4） |
-| `assignee` | 文字列（`org_nodes.id`） | — | 完全一致（`ListFilter.assignee`） |
+| `assignee` | 文字列（`org_nodes.id`） | — | 完全一致（`ListFilter.assignee`）。空文字は絞り込まない |
 | `milestone` | `MilestoneId`（ULID） | — | その途中目標のタスクだけ。ULID でなければ 400 |
 | `tier` | `frontier`/`standard`/`cheap`、複数可 | 全て | `worker_hint.tier`（`json_extract`）。知らない値は 400 |
-| `priority` | `P0`〜`P3` または整数、複数可 | 全て | `Task.priority` の完全一致（ラベルは P0=30 / P1=20 / P2=10 / P3=0 に写す） |
-| `order` | `dispatch` / `updated_desc` / `created_desc` | `updated_desc` | `ListOrder` と同じ: `dispatch` = `priority DESC, created_at ASC, id ASC`（`ready_tasks` と同じ）。`updated_desc` = `updated_at DESC, id DESC`。`created_desc` = `created_at DESC, id DESC` |
-| `limit` | 1..=500 | 100 | |
-| `archived` | bool（`1`/`0`/`true`/`false`） | `false` | `true` なら**アーカイブされた案件のタスクも返す**。既定はそれらを隠す（`ListFilter.hide_archived`。ADR-0044 D6、Phase 55）。案件に属さないタスクは常に見える。`GET /tasks/{id}`（個別）は既定でもそのまま見える |
+| `priority` | `P0`〜`P3`（大文字小文字は区別しない）または整数、複数可 | 全て | `Task.priority` の完全一致（ラベルは P0=30 / P1=20 / P2=10 / P3=0 に写す）。どちらでもなければ 400 |
+| `order` | `dispatch` / `updated_desc` / `created_desc` | `updated_desc` | `ListOrder` と同じ: `dispatch` = `priority DESC, created_at ASC, id ASC`（`ready_tasks` と同じ）。`updated_desc` = `updated_at DESC, id DESC`。`created_desc` = `created_at DESC, id DESC`。他は 400 |
+| `limit` | 1 以上の整数 | 100 | 0 は 400。500 を超える値は 500 に丸める |
+| `archived` | bool（`1`/`0`/`true`/`false`） | `false` | `true` なら**アーカイブされた案件のタスクも返す**。既定はそれらを隠す（`ListFilter.hide_archived`。ADR-0044 D6）。案件に属さないタスクは常に見える。`GET /tasks/{id}`（個別）は既定でもそのまま見える |
 | `cursor` | 不透明文字列 | — | 前応答の `next_cursor`（`Page<T>.next_cursor` をそのまま）。解読できない cursor は 400 |
 
-- `TaskStore::list_page(&ListFilter, ListOrder, cursor, limit) -> Page<Task>` をそのまま使い、`Task` を `TaskSummary` に写す（`children` / `pending_children` / `backoff_until` の付加は task-ops）。
+- 知らないクエリキー、複数可でないキーの重複は 400。
+- `task_ops::view::task_list`（`TaskStore::list_page(&ListFilter, ListOrder, cursor, limit) -> Page<Task>`）を使い、`Task` を `TaskSummary` に写す（`children` / `pending_children` / `backoff_until` の付加は task-ops）。
 - `total` は `Page.total`（同じフィルタでの総件数。cursor に依らない）。
 - `items[].children` / `pending_children` は `parent_id` で集計（`pending` = 非終端）。`backoff_until` は §5.3。
-- `items[].role` は `Task.role`（ADR-0016 D1）。一覧の行に役割のラベルを出すための値で、`TaskDetail.role` と同じ（GUI-R2。役割なしは `null`）。
+- `items[].role` は `Task.role`（ADR-0016 D1）。一覧の行に役割のラベルを出すための値で、`TaskDetail.role` と同じ（役割なしは `null`）。
 - `items[].genre` は `Task.genre`（ADR-0027 D1）。`role` と同じ理由で一覧の行に出す値で、`TaskDetail.genre` と同じ（分野なしは `null`）。
 - `items[].assignee` は `Task.assignee`（組織のノード id。ADR-0033 D2。担当なしは `null`）、
   `items[].conversation` は**対話用タスクか**（`true` なら人への返事のための run。§3.54〜3.55）。
-  どちらも GUI-R3（Phase 27）で足した。仕事の木やタスク一覧から対話用タスクを隠すのに使う
-  （API 側の絞り込みは足していない。GUI がこの真偽値で弾く）。
-- `items[].support` は**裏方タスクの印**（Phase 29。GUI 監査 H4）: `"conversation"` | `"compaction"` |
-  `"approval"` | `"review"` | `null`。決定的な優先順（`task_core::support_kind`）で 1 つだけ付く:
-  対話（`conversation.is_some()`）> 圧縮（`role == "report-compressor"`）> 承認（`kind == "approval"`）>
-  合成レビュー（`kind == "review"`）。人が見る本体の仕事（`kind == "execute"` かつどれにも当たらない）は
-  `null`。GUI はこれで仕事の木から裏方を一括で外せる（`conversation` は互換のため残す。同じ判定の下位互換）。
+  仕事の木やタスク一覧から対話用タスクを隠すのに使う（API 側の絞り込みは無い。GUI がこの真偽値で弾く）。
+- `items[].support` は**裏方タスクの印**: `"milestone_review"` | `"conversation"` | `"plan"` | `"compaction"` |
+  `"knowledge"` | `"doc_gardener"` | `"approval"` | `"review"` | `null`。決定的な優先順（`task_core::support_kind`）で 1 つだけ付く:
+  途中目標レビュー（対話 + `milestone_id`）> 対話 > 計画（`kind == "plan"`）> 圧縮（`role == "report-compressor"`）>
+  知識整理（`role == "knowledge"`）> `role == "doc-gardener"` > 承認（`kind == "approval"`）> 合成レビュー（`kind == "review"`）。
+  人が見る本体の仕事は `null`。GUI はこれで仕事の木から裏方を一括で外せる（`conversation` は互換のため残す）。
 - `items[].labels` / `items[].category` / `items[].priority_label` / `items[].project_id` /
-  `items[].milestone_id` は Phase 53（ADR-0044 D3/D4）で足した。ボードのカードが要るものを一覧に出す。
+  `items[].milestone_id` はボードのカードが要るもの（ADR-0044 D3/D4）。
   `priority_label` は `priority`（`i32`）を P0〜P3 に丸めた文字列（30 以上 = P0、20..30 = P1、
   10..20 = P2、10 未満 = P3）。`priority`（`i32`）は互換のため残す。
+- `items[].is_root_task` は案件の root task か、`items[].paused` はそのタスク自身が subtree の一時停止中か
+  （ADR-0079 D13）。`items[].actions` は今この状態で許される操作（§5.4）。
 - 複数のフィルタを同時に書いたら **AND**（`label` どうしも AND、`category` / `tier` / `priority` /
   `status` / `kind` / `genre` は同じキーの中では OR）。
-- `counts_by_status` は**フィルタに関係なく** DB 全体の status 別件数（`count_by_status()` の `Vec<(Status, u64)>` をオブジェクトに。0 件の status は現れない）。タイトルバーの件数表示用。
+- `counts_by_status` は**フィルタに関係なく** DB 全体の status 別件数（0 件の status は現れない）。タイトルバーの件数表示用。
 - 空のときは `{"items":[],"next_cursor":null,"total":0,"counts_by_status":{…}}`。
 
-### 3.4 `POST /tasks` → 201 `Task`（`Location: /api/v1/tasks/{id}`）
+### 3.4 `POST /tasks` → 201 `Task`（`Location: /api/v1/tasks/{id}`。**管理系**）
 
-要求本文は `task_ops::add::NewTaskSpec`（`celerisctl add` の引数と 1:1。Phase 9b で `Deserialize` + `JsonSchema` + `deny_unknown_fields` と `#[serde(default)]` を付ける。§6.2）:
+`token_file` 未設定でも 401（`require_admin`。認可は本文の検証より先）。クエリは受けない。
+要求本文は `task_ops::add::NewTaskSpec`（`celerisctl add` の引数と 1:1。`deny_unknown_fields`。§6.2）:
 
 ```json
 {"title":"add CLI parsing","objective":"…",
  "acceptance":[{"type":"human","text":"reviewer is happy"},
                {"type":"command","cmd":"cargo test","expect_exit":0},
                {"type":"artifact_exists","name":"bench.json"},
+               {"type":"knowledge_page","path":"design/cli.md"},
                {"type":"reviewer","text":"the diff is minimal"}],
  "kind":"execute","tier":"standard","adapter":null,"priority":0,
  "parent":null,"depends_on":["01J…"],
- "max_turns":10,"max_wall_secs":600,"max_retries":2,"workspace":null,
+ "max_turns":10,"max_wall_secs":600,"max_retries":2,
+ "workspace":null,"cluster":null,"workspace_mode":null,
  "role":"lead","genre":null,"aggregate":false,
- "project_id":null,"milestone_id":null,"assignee":null,
- "labels":["infra"],"category":"ops","status":"ready"}
+ "project_id":null,"milestone_id":null,"assignee":null,"repos":[],
+ "labels":["infra"],"skills":[],"mode":null,"category":"ops","status":"ready",
+ "features":null,"execution":null,"pause_after":null,"stages_hint":[]}
 ```
 
-- `acceptance[]` は `task_ops::add::CriterionSpec`（`Human{text}` / `Command{cmd, expect_exit}` / `ArtifactExists{name}` / `Reviewer{text}`）を `#[serde(tag = "type", rename_all = "snake_case")]` で表したもの。
-- 省略可能なフィールドと既定は `celerisctl add` と同じ: `kind=execute`、`priority=0`、`parent=null`、`depends_on=[]`、
-  `max_retries=2`、`workspace=null`（→ `Local{path: "<task_id>"}`、相対）、`role=null`、`genre=null`、`aggregate=false`。`title` / `objective` / `acceptance` は必須。
-- **`tier` / `max_turns` / `max_wall_secs` / `adapter` は Phase 10 から任意**（ADR-0016 D1 / M3）。省略時は
-  **`role` に一致する `[[roles]]` の既定 → `genre` に一致する `[[genres]]` の `default_role` の既定 → 全体の既定**
-  （`tier=standard`、`max_turns=10`、`max_wall_secs=600`、`adapter=null`。ADR-0027 D1）の順で埋める。
-  書いた値は常に役割の既定より優先する。`max_retries` に役割・分野の既定は無い（常に 2）。
+- `acceptance[]` は `task_ops::add::CriterionSpec`（`Human{text}` / `Command{cmd, expect_exit}` / `ArtifactExists{name}` /
+  `KnowledgePage{path}` / `Reviewer{text}`）を `#[serde(tag = "type", rename_all = "snake_case")]` で表したもの。
+  `expect_exit` は省略可（既定 0）。
+- 必須は `title` / `objective` / `acceptance`。省略可能なフィールドと既定は `celerisctl add` と同じ: `kind=execute`、
+  `parent=null`、`depends_on=[]`、`max_retries=2`、`workspace=null`（→ `Local{path: "<task_id>"}`、相対）、
+  `role=null`、`genre=null`、`aggregate=false`。
+- `tier` / `max_turns` / `max_wall_secs` / `adapter` は任意。省略時は
+  **タスクに書いた値 → `role` に一致する `[[roles]]` の既定 → `assignee` のノードの分野の `default_role` の既定 →
+  `genre` の `default_role` の既定 → 全体の既定**（`tier=standard`、`max_turns=10`、`max_wall_secs=600`、`adapter=null`）
+  の順で埋める（ADR-0016 D1 / M3、ADR-0027 D1、ADR-0033 D2）。`max_retries` に役割・分野の既定は無い（常に 2）。
 - `role` は自由記述の役割名（ADR-0016 D1）。`[[roles]]` に無い名前でもエラーにせず、名前だけ保存する（既定も指示文も付かない）。
   状態機械は `role` を見ない。`GET /config` の `roles[]` が設定にある役割の一覧。
-- **`project_id` / `milestone_id` / `assignee` は Phase 23 から任意**（ADR-0033 D2）。`project_id` はその案件の
+- `project_id` / `milestone_id` / `assignee` は任意（ADR-0033 D2）。`project_id` はその案件の
   仕事の木にタスクを載せる（`GET /projects/{id}` に出る）。`milestone_id` は `project_id` と同じ案件のもので
-  あること（違えば 422）。`assignee` は `GET /org` のノード id で、**省略された `tier` / `adapter` / 予算は
-  役割・分野より先にここから埋まる**（ノードの `genre` → その分野の `default_role` → その役割の既定）。
-  タスク自身に書いた値の方が常に強い。知らない `assignee` / 無い案件 / 案件違いの途中目標は 422 `validation`。
-  3 つとも省略した従来の本文はそのまま通る（互換）。
+  あること。`assignee` は `GET /org` のノード id。違反（無い案件・`project_id` 無しの `milestone_id`・案件違いの途中目標・
+  知らない `assignee`・そのタスクのハーネスを許さない `assignee`）は 422 `validation`。
 - `genre` は分野の id（ADR-0027 D1）。**`[[genres]]` が 1 件でも設定されている celeris では常に検証する**
-  （celeris は起動時に完全な設定を持つので、`celerisctl add --config` 無しのような「検証しない」緩さは API には無い）。
+  （`celerisctl add --config` 無しのような「検証しない」緩さは API には無い）。
   `genre` を省略し `role` が指定されていれば、その役割を含む分野がちょうど 1 つだけあるとき、その分野を継ぐ
-  （0 件・2 件以上は継がない）。`GET /config` の `genres[]` が設定にある分野の一覧
+  （0 件・2 件以上は継がない）。それも無ければ `assignee` のノードの分野を継ぐ。`GET /config` の `genres[]` が設定にある分野の一覧
   （`{id, description, capabilities?, input_artifacts?, output_artifacts?, default_role, roles}`。
-  `capabilities` / `input_artifacts` / `output_artifacts` は Phase 18（ADR-0028 D1）の任意の自由記述で、空なら省略される。
-  Phase 38: `input_artifacts` / `output_artifacts` の要素は `名前` でも `名前: 説明` でもよい（GUI は `:` の前を名前として扱う））。
+  `capabilities` / `input_artifacts` / `output_artifacts` は任意の自由記述で、空なら省略される。要素は `名前` でも
+  `名前: 説明` でもよい（GUI は `:` の前を名前として扱う）。ADR-0028 D1）。
 - `aggregate`（ADR-0016 D3）: true の親は、委譲した子が全て終端になった後に集約 run を 1 回だけ行い `artifacts/summary.md` を書く。
-  応答の `Task` では **false のとき省略される**（`#[serde(skip_serializing_if)]`。`role` / `genre` も `null` のとき省略）。
-- `acceptance` は**クライアントが並べた順**で保存する（CLI は accept → cmd → artifact → reviewer の固定順で渡す。並びに意味は無い）。
-  `command` の `text` は `` `<cmd>` exits 0 ``（現状の `CriterionSpec::into_criterion` は `expect_exit` に関わらずこの文。CLI も常に `expect_exit = 0`）、`artifact_exists` の `text` は `artifact <name> exists`。整形は task-ops が行う。
-- **`labels` / `category` / `priority` のラベル表記 / `status` は Phase 53 から任意**（ADR-0044 D1/D3）:
+  応答の `Task` では **false のとき省略される**（`#[serde(skip_serializing_if)]`。`role` / `genre` / `project_id` /
+  `milestone_id` / `assignee` も `null` のとき、`labels` / `skills` / `repos` は空のとき省略）。
+- `acceptance` は**クライアントが並べた順**で保存する（並びに意味は無い）。
+  `command` の `text` は `` `<cmd>` exits 0 ``（`expect_exit` に関わらずこの文）、`artifact_exists` の `text` は `artifact <name> exists`、
+  `knowledge_page` の `text` は `knowledge base page <path> exists`。整形は task-ops が行う。
+- `labels` / `category` / `priority` のラベル表記 / `status` は任意（ADR-0044 D1/D3）:
   - `labels`: 小文字の `[a-z0-9-]`、1〜64 文字、最大 8 個（重複は畳む）。違反は 422 `validation`。
   - `category`: `feature` / `bug` / `research` / `ops` / `docs` / `other`。**既定は `other`**
     （応答の `Task` では既定のとき省略される）。
   - `priority`: `"P1"` のようなラベルでも `20` のような整数でも書ける（P0=30 / P1=20 / P2=10 / P3=0）。
     **省略時は P2（= 10）**。`celerisctl add` は `--priority` の既定 0 を明示して渡すので従来どおり。
   - `status`: `"draft"` か `"ready"` だけ（他は 422）。
-- 初期 `status`（ADR-0044 D1 で変わった）: `kind=approval` なら従来どおり `ready`。それ以外は
+- `skills`（小文字 `[a-z0-9._-]`、最大 12 個。`assignee` を書かなければこれで担当が決まる。ADR-0046 D2/D5）、
+  `mode`（`prototype` / `production` / `research`。既定 `production`。ADR-0046 D4）、
+  `cluster` / `workspace_mode`（`WorkspaceSpec::Remote` と作業場所の扱い。ADR-0018 / ADR-0059 D1）、
+  `features`（ADR-0069 D3）、`execution`（`atomic` / `compound`。人が書けば Complexity Gate の明示。ADR-0072 D13）、
+  `pause_after`（ADR-0074 D2.1）、`stages_hint`（`[{title, scope}]`、最大 16 件。ADR-0079 D12）も任意。
+- 初期 `status`（ADR-0044 D1）: `kind=approval` なら常に `ready`。それ以外は
   **`POST /tasks` では `ready`**（人は Go を出す側なので draft を挟まない）。`status: "draft"` を
-  明示したときだけ Go 待ちの `draft` で始まる。`celerisctl add`・計画（`POST /plans`）・委譲・分解の
-  子は**従来どおり `draft`**（この規則は API のハンドラが `status` を省略時に `ready` で埋めることで
-  実現していて、`task_ops::add` の既定は変わっていない）。
-  `Created` イベントと同一トランザクション（`task_ops::add::create_task(store, spec, now) -> Task`）。
-- 422 `validation`（`OpsError::Validation` の文言そのまま。`celerisctl add` も同じ関数を通る。検査はこの順。ADR-0014 D3 / ADR-0027 D1）:
+  明示したときだけ Go 待ちの `draft` で始まる。`celerisctl add`・委譲・分解の子は `draft`
+  （API のハンドラが `status` を省略時に `ready` で埋める。`task_ops::add` の既定は `draft`）。
+  `Created` イベントと同一トランザクション（`task_ops::add::create_task_with_roles(store, spec, roles, genres, now) -> Task`）。
+- 422 `validation`（`OpsError::Validation` の文言そのまま。`celerisctl add` も同じ関数を通る。主な検査をこの順で。ADR-0014 D3 / ADR-0027 D1）:
+  - `stages_hint` の形（件数・空の `title`・長さ）
+  - `genre` が `[[genres]]` に無い（`[[genres]]` が空でない設定に限る）→ `unknown genre: "<genre>"`
+  - `genre` と `role` を両方指定し、`role` がその分野の `roles` に無い（同上）→ `role "<role>" is not one of genre "<genre>"'s roles`
+  - `assignee` が組織のノードに無い → `assignee "<id>" is not an org node`
+  - `project_id` が無い → `project <id> does not exist`、`project_id` 無しの `milestone_id` → `milestone_id requires project_id`、
+    案件違い → `milestone <id> does not belong to project <id>`
+  - `status` が `draft` / `ready` 以外、`labels` / `skills` の規則違反
   - `title` が空白だけ → `title must not be blank`（`field: "title"`）
   - `objective` が空白だけ → `objective must not be blank`（`field: "objective"`）
-  - `acceptance` が空 → `at least one acceptance criterion is required (--accept, --check-cmd, --check-artifact, or --check-reviewer)`（`field: "acceptance"`）
+  - `acceptance` が空 → `at least one acceptance criterion is required (--accept, --check-cmd, --check-artifact, or --check-reviewer)`（`field: "acceptance"`）。
+    `human` を含むのに `artifact_exists` も `knowledge_page` も無い → 422（ADR-0067 D2）
   - `parent` が存在しない → `parent <id> does not exist`（`field: "parent"`）
   - `depends_on[i]` が存在しない → `dependency <id> does not exist`、`failed` / `cancelled` → `dependency <id> has status Failed and cannot be depended on`（`Failed` / `Cancelled` は `{:?}` 表記。`field: "depends_on"`）
-  - `genre` が `[[genres]]` に無い（`[[genres]]` が空でない設定に限る）→ `unknown genre: "<genre>"`
-  - `genre` と `role` を両方指定し、`role` がその分野の `roles` に無い（`[[genres]]` が空でない設定に限る）→ `role "<role>" is not one of genre "<genre>"'s roles`
+  - `repos` の違反（下記）
 - 検証に失敗したら何も挿入しない。
-- **`repos` は Phase 52 から任意**（ADR-0043 D2）。そのタスクが使う案件のリポジトリを**名前で**並べる
+- **`repos`** は任意（ADR-0043 D2）。そのタスクが使う案件のリポジトリを**名前で**並べる
   （`"repos": ["benchfs", "benchfs-paper"]`。名前は `GET /projects/{id}/repos` の `name`）。
   省略すると **親のタスクの `repos` → 案件の primary** を継ぐ。`repos[0]` がワーカーの
-  カレントディレクトリになる。422 `validation` になるのは次の 3 つ:
+  カレントディレクトリになる。422 `validation` になるのは次のとき:
   - `project_id` を書かずに `repos` を書いた → `repos can only be used on a task that belongs to a project`
   - その案件に無い名前 → `task repo "<name>" is not one of this project's repositories`
   - リモートのリポジトリを他と混ぜた → `a task cannot mix a remote repository with other repositories yet (ADR-0043 D2)`
+  - 手元の `workspace` とリモートのリポジトリを組み合わせた → `a local workspace cannot be combined with the remote repo "<name>"; …`
   応答の `Task.repos[]` は `{"repo_id": "01J…", "name": "benchfs"}` の配列（空なら省略される）。
 
 ### 3.5 `GET /tasks/{id}` → 200 `TaskDetail`
 
-- `celerisctl show --json <id>` と**同じ型・同じ直列化**（task-ops の `TaskDetail` を compact な JSON で出す。ADR-0013 D12）。差は次の 3 点（Phase 9b で確定）:
+- `celerisctl show --json <id>` と**同じ型・同じ直列化**（task-ops の `TaskDetail` を compact な JSON で出す。ADR-0013 D12）。差は次の 3 点:
   API は `runs[].files` を埋める（celerisctl は `null`）、`timers.now` は応答時刻、celerisctl は `--config <config.toml>`
   （または `CELERIS_CONFIG`）を渡さない限り `workspace_dir` / `timers.backoff_until` / `timers.max_requeues` / `worktree` を
   設定の既定値で計算する（`--workspace-root` で基準だけ上書き可）。`--config` を渡せば API と同じ値になる。
 - `workspace_dir` は `WorkspaceSpec::Local{path}` を `workspace_root` で絶対化した文字列（`canonicalize` はしない。存在しなくてもよい）。
-  `Remote{cluster, path}` では**手元の写し** `workspace_root/<task_id>`（run のログ `runs/` と成果物はここ。クラスタ側のパスは `task.workspace.path`。ADR-0018 D1、Phase 12）。
-- `cluster` は `WorkspaceSpec::Remote` の `cluster`（`[[clusters]] id`）。`Local` は `null`（Phase 12）。
+  `Remote{cluster, path}` では**手元の写し** `workspace_root/<task_id>`（run のログ `runs/` と成果物はここ。クラスタ側のパスは `task.workspace.path`。ADR-0018 D1）。
+- `cluster` は `WorkspaceSpec::Remote` の `cluster`（`[[clusters]] id`）。`Local` は `null`。
 - `worktree` は `sync = "worktree"` のクラスタで動くタスクだけに出る（ADR-0019 D2）。
   `{project, dir, branch}` = 元のリポジトリ / クラスタ上の worktree のパス（既定 `<project>/.celeris-worktrees/<task_id>`、
   `worktree_root` があればその下）/ ブランチ `celeris/<task_id>`。**celeris は commit しない**ので、変更は worktree の作業ツリーに残る。
   GUI はここを「クラスタで結果を見る場所」として出す（`git -C <dir> diff`、`git -C <dir> commit`、`git worktree remove <dir>` は人の操作）。
-- **Phase 49（ADR-0041 D1）**: ローカルの作業場所（`kind = "local"`、`mode = "worktree"` 既定）が git リポジトリの
+- ローカルの作業場所（`kind = "local"`、`mode = "worktree"` 既定）が git リポジトリの
   タスクにも `worktree` が出る（`{project, dir, branch}` = 元のリポジトリ / `<workspace_root>/<task_id>/tree` /
   `celeris/<task_id>`）。このとき `workspace_dir` は `<workspace_root>/<task_id>`（run のログ `runs/` と成果物は
   作業ツリーの**外**にある）。celeris が用意した目印 `<workspace_dir>/worktree.json` があるタスクだけがこの扱いで、
-  worktree を消した後も `runs/` と `artifacts/` は同じ場所から引ける。
-  `sync = "rsync"` / `"none"` のクラスタと Local のタスクでは `null`。
+  worktree を消した後も `runs/` と `artifacts/` は同じ場所から引ける（ADR-0041 D1）。
+  `sync = "rsync"` / `"none"` のクラスタと worktree を切らない Local のタスクでは `null`。
   `celerisctl show --json` は `--config <config.toml>`（または `CELERIS_CONFIG`）を渡したときだけ `worktree` を出せる
   （`[[clusters]]` を知らないと worktree のパスが決まらないため）。
-- `role` は `task.role` と同じ値を最上位にも出したもの（GUI の表示用。Phase 10、ADR-0016 D1）。役割が無ければ `null`。
-- `genre` は `task.genre` と同じ値を最上位にも出したもの（`role` と同じ理由。Phase 16、ADR-0027 D1）。分野が無ければ `null`。
-- `delegated[]` は、このタスクの run が `delegate` で作った子の履歴（`Event::Delegated` の出現順。Phase 10、ADR-0016 D2）。
+- `role` は `task.role` と同じ値を最上位にも出したもの（GUI の表示用。ADR-0016 D1）。役割が無ければ `null`。
+- `genre` は `task.genre` と同じ値を最上位にも出したもの（`role` と同じ理由。ADR-0027 D1）。分野が無ければ `null`。
+- `priority_label` は `task.priority` を P0〜P3 に丸めたもの（§3.3 と同じ規則。ADR-0044 D3）。
+- `delegated[]` は、このタスクの run が `delegate` で作った子の履歴（`Event::Delegated` の出現順。ADR-0016 D2）。
   1 要素は `{run_id, ts, tasks: TaskRef[]}` で、`ts` はイベントの `ts`、`tasks` は子の**現在の**状態（既に存在しない ID は落とす）。
   委譲された子は `children[]` にも出る（`delegated[]` はどの run が作ったかを足すだけ）。
+- `failure` は `status == failed` のときだけ値を持つ（分類・理由。ADR-0070 D1）。`execution` は gate・計画・WorkUnit の活動が
+  あるときだけ出る（無ければ省略。ADR-0072 D20）。`is_root_task` / `paused_by`（一時停止で dispatch を止めている task。
+  無ければ省略）は ADR-0079 D13、`cluster_job_wait`（待っているクラスタ job。無ければ省略）は ADR-0090 D5。
 - `timers.now` は応答時刻。クライアントは `lease_expires_at - now` 等をこの `now` 基準で計算する（時計ずれ対策）。
 - `runs[].files` は task-api が `<workspace_dir>/runs/<run_id>/` を `stat` して埋める（task-ops は `null`）。
 - `actions` は今この状態で許される操作（§5.4）。GUI はボタンの表示にこれを使い、押した結果の 409 も正常系として扱う。
-- 404 `task_not_found`。
+- 404 `task_not_found`。`{id}` が ULID でなければ 400。
 
 ### 3.6 `GET /tasks/{id}/events` → 200 `EventsPage`
 
 | クエリ | 既定 | 意味 |
 |---|---|---|
-| `after_seq` | −1 | この `seq` より大きいものから |
-| `limit` | 500（最大 5000） | |
+| `after_seq` | −1 | この `seq` より大きいものから（−1 未満は 400） |
+| `limit` | 500（最大 5000。超える値は 5000 に丸める。0 は 400） | |
 | `types` | 全て | `Event` の `type` 名をカンマ区切り（例 `transitioned,worker_finished`）。未知の名前は 400 |
 
-`worker_progress` は `{run_id, msg}` に加えて、ADR-0048 D2（Phase 60a）の
+`worker_progress` は `{run_id, msg}` に加えて
 `kind`（`tool_use` / `tool_result` / `text` / `thinking` / `status`）/ `tool` / `summary` / `detail`（4 KiB まで）/
-`truncated` / `error` を**あれば**持つ（**追加のみ**。付けないワーカー・導入前のイベントには無い）。
+`truncated` / `error` を**あれば**持つ（**追加のみ**。付けないワーカー・導入前のイベントには無い。ADR-0048 D2）。
 Console（§3.98）はこの形だけを見る。
 
-`types` の語彙（`Event` の `type`、17 種）: `created`、`transitioned`、`worker_started`、`worker_progress`、`artifact_produced`、
-`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、
-`approvals_withdrawn`（Phase F7。`{approval_ids, task_status, reason}`。タスクが終端になり、未決の認可の要求
-〈§3.56〉を celeris が `withdrawn` で閉じた。`reason` は `task_terminal` か `reconcile`。状態は変えない）、
-`answered`、`provider_throttled`、
-`cluster_unavailable`（Phase 12。`{cluster, host, reason}`）、
-`delegated`（Phase 10。`{run_id, task_ids}`。状態は変えないので `replay` は無視する）、
-`question_raised`（ADR-0021。`{run_id, text}`。ディスパッチャが人に出した質問。同じトランザクションの
-`transitioned{to: "blocked", reason: "child_failed"}` と対。状態は変えないので `replay` は無視する）、
-`retried`（Phase 31。`{from}`。`failed`/`cancelled` を複製してやり直した新しいタスクに付く。状態は
-変えないので `replay` は無視する。§3.63）、
-`edited`（ADR-0044 D1、Phase 53。`{fields}`。人が `PATCH /tasks/{id}` で変えた項目名の一覧）、
-`assigned`（ADR-0046 D5、Phase 59。`{node, score, reason}`。`assignee` が無いタスクの担当を matching が
-決定的に決めたときに 1 件だけ付く。`node` は決まった担当の id、`score` はタスクの `skills` とその担当の
-実効 `skills` の重なりの件数、`reason` は人が読める理由の文。GUI のタスク画面の「なぜこの担当か」はこれを表示する）。
+`types` の語彙は `task_api::query::EVENT_TYPES`（50 種）: `created`、`transitioned`、`worker_started`、`worker_progress`、
+`artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
+`answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
+`browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
+`cluster_job_wait_finished`、`workspace_mode_downgraded`、`cluster_master_exited`、`workspace_pruned`、`routing_decided`、
+`checkpoint_saved`、`execution_planned`、`work_unit_transitioned`、`work_unit_spec_overridden`、`work_unit_checks_failed`、
+`execution_gated`、`execution_hint_set`、`repair_scheduled`、`quota_estimated`、`pause_points_resolved`、`phase_reported`、
+`project_plan_proposed`、`project_plan_decided`、`child_task_created`、`child_adopted`、`unit_gate_overridden`、
+`decision_requested`、`decision_answered`、`decision_withdrawn`、`plan_approval_requested`、`stall_detected`、`delivery_skipped`。
+主なものの形:
+
+- `approvals_withdrawn`（`{approval_ids, task_status, reason}`）: タスクが終端になり、未決の認可の要求
+  （§3.56）を celeris が `withdrawn` で閉じた。`reason` は `task_terminal` か `reconcile`。状態は変えない。
+- `cluster_unavailable`（`{cluster, host, reason}`。ADR-0018）。
+- `delegated`（`{run_id, task_ids}`。ADR-0016 D2）。状態は変えないので `replay` は無視する。
+- `question_raised`（`{run_id, text}`。ADR-0021）: ディスパッチャが人に出した質問。同じトランザクションの
+  `transitioned{to: "blocked", reason: "child_failed"}` と対。状態は変えないので `replay` は無視する。
+- `retried`（`{from}`）: `failed`/`cancelled` を複製してやり直した新しいタスクに付く。状態は変えないので `replay` は無視する（§3.63）。
+- `edited`（`{fields, by}`。ADR-0044 D1）: 人が `PATCH /tasks/{id}` で変えた項目名の一覧。
+- `assigned`（`{node, score, reason}`。ADR-0046 D5）: `assignee` が無いタスクの担当を matching が決定的に決めたときに
+  1 件だけ付く。`node` は決まった担当の id、`score` はタスクの `skills` とその担当の実効 `skills` の重なりの件数、
+  `reason` は人が読める理由の文。GUI のタスク画面の「なぜこの担当か」はこれを表示する。
+
+`work_unit_committed` / `phase_integrated` / `work_units_serialized` は応答の `items[]` には現れるが、`types` の語彙には無い（指定すると 400）。
 
 - `seq` 昇順。`has_more` が true なら最後の `seq` を `after_seq` に入れて続きを取る。
 - `items[].id` はグローバル id（ADR-0013 D6）。`items[].ts` は `events.ts`。
+- 404 `task_not_found`。
 
 ### 3.7 `GET /tasks/{id}/runs` → 200 `RunList`
 
-§5.2 の規則で events から組み立て、`files` を埋める。`started_at` 昇順。
+§5.2 の規則で events から組み立て、`files`（`{stdout, stderr, result, request, prompt}` の有無）を埋める。
+応答は `{"runs": [...]}`。events 上の出現順（`started_at` 昇順）。クエリは受けない。404 `task_not_found`。
 
 ### 3.8 ファイル系: `GET /tasks/{id}/runs/{run_id}/{stdout|stderr|result|request|prompt}`、`GET /tasks/{id}/artifacts/{idx}`
 
 **パス解決（ユーザ入力のパスは受け取らない。ADR-0013 D11）**
 
-1. `<ws>` = `WorkspaceSpec::Local{path}`（相対なら `workspace_root` 基準）を `canonicalize`。失敗（存在しない）→ 404 `file_not_found`。`Remote` → 404 `file_not_found`（`detail: "remote workspace"`）。
-2. run: `run_id` が `^[0-9A-HJKMNP-TV-Z]{26}$` に一致しなければ 403 `path_forbidden`。対象 = `<ws>/runs/<run_id>/{stdout.jsonl|stderr.log|result.json|request.json}`。
+1. run: `run_id` が `^[0-9A-HJKMNP-TV-Z]{26}$` に一致しなければ（ファイルシステムに触る前に）403 `path_forbidden`。
+   成果物: `idx` が非負整数でなければ 400。タスクが無ければ 404 `task_not_found`。
+2. `<ws>` = タスクの手元の作業場所（`task_ops::workspace::local_dir`）を `canonicalize`。`Local{path}` は `workspace_root` 基準
+   （worktree を切ったタスクは `<workspace_root>/<task_id>`。ADR-0041 D1）、`Remote` は手元の写し `<workspace_root>/<task_id>`
+   （ADR-0018 D1）。存在しなければ 404 `file_not_found`。
+3. run: 対象 = `<ws>/runs/<run_id>/{stdout.jsonl|stderr.log|result.json|request.json|prompt.txt}`。
    `request.json` は**ワーカーに渡した `RunRequest`**（objective・役割の指示文・クラスタ用の追記・前回の判定・人の回答・子の結果。ADR-0023 D2）。
    `prompt.txt` は claude-code / codex に**実際に渡した文面**（`build_prompt` の結果。ADR-0023 M1。fake アダプタの run には無い）。
    どちらにも秘密は含まれない（`[[providers]].env` の値やトークンは `RunRequest` に入らない）。run のディレクトリごと無ければ 404 `run_not_found`。
-3. 成果物: `idx` は `GET /tasks/{id}/artifacts` の `items[].idx`（`ArtifactProduced` の出現順、0 始まり）。範囲外 → 404 `artifact_not_found`。対象 = `<ws>` + 記録された `ArtifactRef.path`。
-4. 対象を `canonicalize` し、`<ws>` の canonical パスで始まらなければ 403 `path_forbidden`（symlink でワークスペース外へ出るものを弾く）。ファイルでなければ（ディレクトリ等）403。存在しなければ 404 `file_not_found`。
-5. ワークスペースの**外は絶対に出さない**が、中は信頼境界の内側とする。
+4. 成果物: `idx` は `GET /tasks/{id}/artifacts` の `items[].idx`（`ArtifactProduced` の出現順、0 始まり）。範囲外 → 404 `artifact_not_found`。
+   記録された `ArtifactRef.path` が空・絶対パス・`..` を含む → 403 `path_forbidden`。対象 = `<ws>` + `ArtifactRef.path`。
+5. 対象を `canonicalize` し、`<ws>` の canonical パスで始まらなければ 403 `path_forbidden`（symlink でワークスペース外へ出るものを弾く）。ファイルでなければ（ディレクトリ等）403。存在しなければ 404 `file_not_found`。
+6. ワークスペースの**外は絶対に出さない**が、中は信頼境界の内側とする。
 
 **応答**
 
@@ -710,62 +749,70 @@ Console（§3.98）はこの形だけを見る。
   - `application/json`: `.json`（`result` は常にこれ）
   - `text/markdown; charset=utf-8`: `.md`
   - `image/png` / `image/jpeg` / `image/gif` / `image/webp`: 対応する拡張子
-- `Content-Disposition: inline; filename="<basename>"`（`?download=1` で `attachment`。`filename` は RFC 8187 でエスケープ）。
+- `Content-Disposition: inline; filename="<basename>"; filename*=UTF-8''<RFC 8187 でエスケープ>`（`?download=1`（または `true`）で `attachment`）。
 - 成果物には `X-Celeris-Sha256: <記録値>` と `X-Celeris-Sha256-Current: <現在の値>`（計算は 64 MiB までで、超えるファイルは省略）。
-- `X-Celeris-Size: <現在のバイト数>` を常に付ける（追尾用）。
-- 範囲: `Range: bytes=a-b` に 206 + `Content-Range` で応える（単一範囲のみ。複数範囲は 416）。または `?offset=N&length=M`（`Range` と併用不可、併用は 400）。`offset == size` は **200 で空本体**（追尾で「新着なし」を表すため）。`offset > size` / `Range` の開始がサイズ超 → 416。
+- `X-Celeris-Size: <現在のバイト数>` と `Accept-Ranges: bytes` を常に付ける（追尾用）。
+- 範囲: `Range: bytes=a-b`（`a-` / `-n` も可）に 206 + `Content-Range` で応える（単一範囲のみ。複数範囲・不正な形・開始がサイズ以上は 416。`bytes` 以外の単位は無視して全体を返す）。
+  または `?offset=N&length=M`（`Range` と併用不可、併用は 400）。`offset == size` は **200 で空本体**（追尾で「新着なし」を表すため）。`offset > size` → 416。
+- 受けるクエリは `offset` / `length` / `download` だけ（他は 400）。
 - 本体はストリーミング。サイズ上限は設けない（追尾は `offset` で行う）。
 
 ### 3.9 `GET /tasks/{id}/artifacts` → 200 `ArtifactList`
 
-`ArtifactProduced` を出現順に並べ、`idx`、`run_id`、`ts`、`artifact`（`ArtifactRef`）、`exists`、`size`、`sha256_current`、`sha256_matches`（記録値との一致。`exists=false` なら `null`）。パス検査（3.8）に落ちるものは `exists=false, forbidden=true` として一覧には残す（GUI は警告表示、本体は 403）。
+`{"items": [...]}`。`ArtifactProduced` を出現順に並べ、`idx`、`run_id`、`ts`、`artifact`（`ArtifactRef`）、`exists`、`forbidden`、`size`、`sha256_current`、`sha256_matches`（記録値との一致。`exists=false` なら `null`）。パス検査（3.8）で `path_forbidden` に落ちるものは `exists=false, forbidden=true` として一覧には残す（GUI は警告表示、本体は 403）。ワークスペースやファイルが無いものは `exists=false, forbidden=false`。クエリは受けない。404 `task_not_found`。
 
-### 3.10 `POST /tasks/{id}/approve` → 200 `TransitionResult`
+### 3.10 `POST /tasks/{id}/approve` → 200 `TransitionResult`（**管理系**）
 
+`token_file` 未設定でも 401（`require_admin`。§3.11〜3.13 も同じ。認可は本文の検証より先）。
 本文 `DecisionBody{note?: string, expected_status?: Status}`（空本体は `{}` と同じ。ただし `Content-Type` は必要）。呼ぶのは `task_ops::gate::approve(store, id, note, expected_status)`。
+応答 `TransitionResult{id, from, to, reason, cascaded: TaskRef[]}`。
 
 - 写像は `celerisctl approve` と同じ: `status == draft`（kind 不問）→ `Trigger::Accept`（イベント追加無し）。`kind == approval && status == ready` → `Trigger::Approve` + `Event::ApprovalDecided{by:"human", approved:true, note}` を同一トランザクション。
-- それ以外 → 409 `invalid_transition`（`OpsError::InvalidState`: `detail: "task <id> (kind=<kind>, status=<status>) cannot be approved"`、`trigger: "approve"`）。
-- `expected_status` があり現在と違う → 409 `conflict`（`OpsError::Conflict`。写像より先に検査される）。
+- それ以外 → 409 `invalid_transition`（`OpsError::InvalidState`: `detail: "task <id> (kind=<kind>, status=<status>) cannot be approved"`（`kind` / `status` は `{:?}` 表記）、`trigger: "approve"`、`task_status`、`kind`）。
+- `expected_status` があり現在と違う → 409 `conflict`（`OpsError::Conflict`。`expected` / `actual` を添える。写像より先に検査される）。
 - `by` は `"human"` 固定（H9）。
+- 404 `task_not_found`。
 
-### 3.11 `POST /tasks/{id}/reject` → 200 `TransitionResult`
+### 3.11 `POST /tasks/{id}/reject` → 200 `TransitionResult`（**管理系**）
 
-本文 `DecisionBody`。`task_ops::gate::reject(store, id, note, expected_status)`: `kind == approval && status == ready` のみ `Trigger::Reject` + `ApprovalDecided{approved:false, note}`。それ以外は 409 `invalid_transition`（`cannot be rejected`）。`draft` の取り消しは `cancel`（ADR-0004 D2）。
+本文 `DecisionBody`。`task_ops::gate::reject(store, id, note, expected_status)`: `kind == approval && status == ready` のみ `Trigger::Reject` + `ApprovalDecided{by:"human", approved:false, note}`。それ以外は 409 `invalid_transition`（`cannot be rejected`、`trigger: "reject"`）。`draft` の取り消しは `cancel`（ADR-0004 D2）。
 
-### 3.12 `POST /tasks/{id}/answer` → 200 `TransitionResult`
+### 3.12 `POST /tasks/{id}/answer` → 200 `TransitionResult`（**管理系**）
 
-本文 `AnswerBody{answer: string, expected_status?}`。`answer` が空白のみ → 422 `validation`（`answer must not be blank`。task-api が task-ops を呼ぶ前に検査する。CLI は clap が空文字を通すので挙動は CLI と同じにしない）。
-`task_ops::gate::answer(store, id, answer, expected_status)`: `status != blocked` → 409 `invalid_transition`（`cannot be answered; only blocked tasks accept an answer`）。
+本文 `AnswerBody{answer: string, expected_status?}`（`answer` は必須。空本体は 400）。`answer` が空白のみ → 422 `validation`（`answer must not be blank`、`field: "answer"`。task-api が task-ops を呼ぶ前に検査する。CLI は clap が空文字を通すので挙動は CLI と同じにしない）。
+`task_ops::gate::answer(store, id, answer, expected_status)`: `status != blocked` → 409 `invalid_transition`（`cannot be answered; only blocked tasks accept an answer`、`trigger: "answer"`）。
+`blocked` でも、工程の後の途中確認（`awaiting_human`）と root の計画の承認待ちは質問ではないので 409 `invalid_transition`
+（それぞれ `POST /tasks/{id}/execution/phase-gate`・`POST /tasks/{id}/execution/plan-gate` を使う。ADR-0074 D2.2 / ADR-0079 D8）。
 `Trigger::Answer` + `Event::Answered{question, answer}`（`question` は §5.5 の `latest_question`。無ければ空文字列）を同一トランザクション。
 
-- **Phase 29（GUI 監査 H2）**: このタスクの未決の `approvals`（§3.56）があれば、同じ遷移の中で
-  `once` + 同じ `answer` の文言で決定済みにする（`approvals` が無ければ何もしない。決定的）。
-  `POST /approvals/{id}/decide`（3.57）は既にこの経路（`gate::answer`）に相乗りしているので、
-  どちらから答えても `GET /approvals?pending=true` から同じように消える（両方向が揃う）。
+- 遷移の後、このタスクの未決の `approvals`（§3.56）があれば `once` + 同じ `answer` の文言で決定済みにする
+  （`approvals` が無ければ何もしない。決定的）。`POST /approvals/{id}/decide`（3.57）は既にこの経路（`gate::answer`）に
+  相乗りしているので、どちらから答えても `GET /approvals?pending=true` から同じように消える。
 
-### 3.13 `POST /tasks/{id}/cancel` → 200 `TransitionResult`
+### 3.13 `POST /tasks/{id}/cancel` → 200 `TransitionResult`（**管理系**）
 
-本文 `CancelBody{expected_status?}`。`task_ops::gate::cancel(store, id, expected_status)`: 終端（`done|failed|cancelled`）→ 409 `invalid_transition`（`cannot be cancelled`）。伝播（Approval の子、`depends_on` の後続）はストアが同一トランザクションで行い、`cascaded` にその id を列挙する（§5.7）。
+本文 `CancelBody{expected_status?}`（空本体は `{}` と同じ）。`task_ops::gate::cancel(store, id, expected_status)`: 終端（`done|failed|cancelled`）→ 409 `invalid_transition`（`cannot be cancelled`、`trigger: "cancel"`）。伝播（Approval の子、`depends_on` の後続）はストアが同一トランザクションで行い、`cascaded` にその id を列挙する（§5.7）。
+取り消しの後、そのタスクの browser の session をすべて止める（ADR-0099 D3）。
 
-### 3.14 `POST /plans` → 201 `Task`（`Location`）
+### 3.14 `POST /plans` → 410 `removed_by_adr_0079`（**管理系**）
 
-本文 `task_ops::plan::NewPlanSpec`（`celerisctl plan` と 1:1。9b で serde / JsonSchema を付ける）: `goal`（必須）、`workspace?`、`tier=frontier`、`priority=0`、`max_turns=30`、`max_wall_secs=900`、`max_retries=1`。
-`task_ops::plan::create_plan(store, spec, now) -> Task`。`title` = `goal` の 1 行目の先頭 80 文字（char 境界）。`goal` が空白のみ → 422（`goal must not be blank`、`field: "goal"`）。`kind=plan`、`acceptance=[]`、`status=draft`、`parent_id=null`。
+廃止（ADR-0079 U-R6）。認可（`require_admin`）を通ると本文を見ずに 410 を返す（problem の `adr: "ADR-0079"`、
+`instead: "POST /api/v1/tasks (a root task; name the stages in stages_hint)"`）。分解は root task の Complexity Gate と
+planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の `kind = plan` の行と子はそのまま読める。
 
-### 3.15 `POST /replay` → 200 `ReplayReport`
+### 3.15 `POST /replay` → 200 `ReplayReport`（**管理系**）
 
-本文は空（`{}`）。`task_ops::replay::replay(store) -> ReplayReport{tasks, mismatches}`。`celerisctl replay` と同じ規則（`Created` で初期化、`Transitioned` で上書き、`worker_error|lease_expired|review_fail` で attempts+1）で全タスクを再構築し、`tasks` との差分を返す。**DB は変更しない。** 数万イベントで数秒かかりうるので、`spawn_blocking` で行い、同時実行は 1 つ（2 つ目は 503 `replay_in_progress`、`Retry-After: 5`）。
+`token_file` 未設定でも 401（`require_admin`）。本文は空（`{}`。空本体も可。未知のフィールドは 400）。`task_ops::replay::replay(store) -> ReplayReport{tasks, mismatches}`（`mismatches[]` = `{task_id, field: "status"|"attempts", replayed, stored}`）。`celerisctl replay` と同じ規則（`Created` で初期化、`Transitioned` で上書き、`worker_error|lease_expired|review_fail` と `ready` へ戻る `child_failed` で attempts+1、`reopen` で attempts を 0 に戻す）で全タスクを再構築し、`tasks` との差分を返す。**DB は変更しない。** 数万イベントで数秒かかりうるので、`spawn_blocking` で行い、同時実行は 1 つ（2 つ目は 503 `replay_in_progress`、`Retry-After: 5`）。
 
 ### 3.16 `GET /graph` → 200 `Graph`
 
 | クエリ | 既定 | 意味 |
 |---|---|---|
-| `root` | — | このタスクの祖先・子孫（`depends_on` と `parent_id` を両方向にたどる）だけ |
+| `root` | — | このタスクの祖先・子孫（`depends_on` と `parent_id` を両方向にたどる）だけ。無いタスクは 404 `task_not_found` |
 | `depth` | 無制限 | `root` からの最大ホップ数 |
 | `include_terminal` | true | false で `done|failed|cancelled` を除く（辺も除く） |
 
-`nodes[] = {id, title, status, kind, parent_id, role}`（`role` は `Task.role`。ノードに役割のラベルを出すための値。役割なしは `null`。GUI-R2）、
+`nodes[] = {id, title, status, kind, parent_id, role}`（`role` は `Task.role`。ノードに役割のラベルを出すための値。役割なしは `null`）、
 `edges[] = {from, to, kind: "depends_on"}`（`from` = 先行、`to` = 後続）。親子は `parent_id` で表し、辺にしない。レイアウトはクライアント。上限 5,000 ノード（超えたら 422 `validation`、`detail` で `root` の指定を促す）。
 
 ### 3.17 `GET /events` → 200 `EventsPage`
@@ -773,11 +820,11 @@ Console（§3.98）はこの形だけを見る。
 | クエリ | 既定 | 意味 |
 |---|---|---|
 | `after_id` | 0 | このグローバル id より大きいものから |
-| `limit` | 500（最大 5000） | |
-| `task_id` | — | 1 タスクに絞る |
+| `limit` | 500（最大 5000。超える値は 5000 に丸める。0 は 400） | |
+| `task_id` | — | 1 タスクに絞る（ULID でなければ 400） |
 | `types` | 全て | 3.6 と同じ |
 
-`id` 昇順。`events_since(after_id, limit)` そのもの。SSE を使えないクライアント（`curl`、テスト）用。
+`id` 昇順。`task_id` も `types` も無ければ `events_since(after_id, limit)` そのもの。SSE を使えないクライアント（`curl`、テスト）用。
 
 ### 3.18 `GET /stream`
 
@@ -785,14 +832,16 @@ Console（§3.98）はこの形だけを見る。
 
 ### 3.19 `GET /providers` → 200 `Providers`
 
-`items[]` は `[[providers]]` の順。定義（`id` / `adapter` / `tiers` / `concurrency` / `model` = 実効モデル / `env_keys` = **キー名だけ**）は設定から、`in_use` と `cooldown` と `last_check` はスナップショット（無ければ `null`）、`stats` は §5.8 の集計。
+`items[]` は `[[providers]]` の順。定義（`id` / `adapter` / `tiers` / `concurrency` / `model` = 実効モデル / `env_keys` = **キー名だけ** /
+`account_pool` / `account_id` / `tier_models` / `credential_refs`）は設定から、`in_use` と `in_use_cos` と `cooldown` と
+`last_check` はスナップショット（無ければ `null`）、`stats` は §5.8 の集計。クエリは受けない。
 
-`in_use_cos`（ADR-0089、Phase R6-5）: そのプロバイダで走っている **CoS の対話 run**（Console から CoS に話しかけた一言）の数。
+`in_use_cos`: そのプロバイダで走っている **CoS の対話 run**（Console から CoS に話しかけた一言）の数。
 CoS の対話 run は `max_concurrency` とアカウントプールのプロバイダの `concurrency` の外で走るので、`in_use` には含めず別に出す
-（`in_use` + `in_use_cos` が `concurrency` を超えることがある）。スナップショットが無ければ `null`。
+（`in_use` + `in_use_cos` が `concurrency` を超えることがある。ADR-0089）。
 
-`last_check`（ADR-0022 D2）は直近の `POST /providers/{id}/check` の結果 `{at, result, detail}`
-（`result` は §3.27 と同じ 4 値、`detail` は人が読む一行。ADR-0022 M1）。
+`last_check`（ADR-0022 D2）は直近の `POST /providers/{id}/check` の結果 `{at, result, detail?}`
+（`result` は §3.27 と同じ 4 値、`detail` は人が読む一行で、無ければ省略。ADR-0022 M1）。
 **メモリだけに持つ観測値**で、celeris を再起動すると `null` に戻る（イベントにも DB にも残さない）。自動では走らないので、
 値が入るのは人が `check` を叩いた後だけ。`reload` でプロバイダ表を差し替えても、同じ `id` の記録は残る。
 
@@ -805,18 +854,24 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
   "in_flight":[{"task_id":"01J…","run_id":"01J…","provider":"claude-a","kind":"worker","since":"…"}],
   "cooldowns":[{"provider":"claude-b","until":"…","reason":"throttled"}],
   "awaiting_human":["01J…"],"awaiting_children":["01J…"],"unroutable":[],
-  "providers":[{"id":"claude-a","adapter":"claude-code","tiers":["frontier","standard","cheap"],"concurrency":2,"model":"claude-sonnet-5","in_use":1}]}}
+  "reports":null,"approvals_pending":0,"decisions_open":0,
+  "providers":[{"id":"claude-a","adapter":"claude-code","tiers":["frontier","standard","cheap"],"concurrency":2,"model":"claude-sonnet-5","env_keys":[],"in_use":1,"in_use_cos":0,"account_pool":false}],
+  "clusters":[],"accounts_root":null,"max_runs_per_account":null,"accounts_roots":{},"accounts":[]}}
 ```
 
-- ディスパッチャが tick の最後に `DaemonSnapshot` を `tokio::sync::watch` に送り、API は最新値を読む（I/O 無し。ADR-0013 D4）。DB には書かない。
+- ディスパッチャが tick の最後に `DaemonSnapshot` を `tokio::sync::watch` に送り、API は最新値を読む（ADR-0013 D4）。DB には書かない。クエリは受けない。
 - 最初の tick より前は `snapshot: null`。
+- `reports`（秘書レベルの未読の報告と通知の判定）・`approvals_pending`（未決定の認可の件数）・`decisions_open`（未回答の決定の要求の件数）は
+  ディスパッチャではなく **API が応答を組むときに埋める**（ADR-0033 D3/D5、ADR-0079 D7）。
+- `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
+  `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
 - `awaiting_human[]` は承認待ちで延期中のタスク、`awaiting_children[]` は**委譲した子が終わるのを待っている親**
   （どちらも `reviewing` のままだが理由が違う。ADR-0023 D3）。GUI はこれを見て「判定中」と「部下待ち」を区別する
   （`reviewing` かつ子が非終端、という再計算を GUI 側でしない）。
-- cooldown は `ProviderPolicy::cooldowns(now) -> Vec<Cooldown{provider, until: Instant, reason: CooldownReason}>`（既定実装は空。Phase 9a で `StaticPolicy` が実装済み）で取り、`Instant` を壁時計に直す。`reason` の語彙は `throttled | auth_failed | exhausted`（`Spawn` は `provider_failure_outcome` が `Exhausted` に写すので cooldown の理由としては現れない。`ProviderThrottled.reason` には `spawn` も入りうる）。
+- cooldown は `ProviderPolicy::cooldowns(now) -> Vec<Cooldown{provider, until: Instant, reason: CooldownReason}>` で取り、`Instant` を壁時計に直す。`reason` の語彙は `throttled | auth_failed | exhausted`（`Spawn` は `provider_failure_outcome` が `Exhausted` に写すので cooldown の理由としては現れない。`ProviderThrottled.reason` には `spawn` も入りうる）。
 - `last_tick_at` が `now` から `3 × tick_ms` 以上古ければ GUI は「ディスパッチャが遅延」と表示する（API は判定しない）。
 - API に繋がらないこと自体が「celeris 停止」を意味する（GUI 側で表示）。
-- **`containers`**（Phase 56、ADR-0043 D3。古いスナップショットには無いので任意）: コンテナ実行の設定と、
+- **`containers`**（ADR-0043 D3。古いスナップショットには無いので任意）: コンテナ実行の設定と、
   **起動時に 1 度だけ**調べた runtime の能力。
 
 ```json
@@ -827,37 +882,40 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 ```
 
   - `preference` は `[containers] runtime`（`"auto"` / `"podman"` / `"docker"`）。`"auto"` は podman を先に試す。
-  - `runtime` は実際に使うもの。**`null` なら `run = container` のタスクは dispatch されず `blocked`** になる
+  - `runtime` は実際に使うもの。**無ければ（省略）`run = container` のタスクは dispatch されず `blocked`** になる
     （質問「コンテナ runtime が使えません…」）。GUI は設定画面で赤く出す。
   - `probes[]` は試した順の `<runtime> info` の結果（`detail` は成功なら `"ok"`、失敗なら理由の 1 行）。
   - これは**観測値**で、DB には書かないし `replay` の対象でもない（再起動すると調べ直す）。
 
 ### 3.21 `GET /config` → 200 `ConfigView`
 
-`config.toml` の要約。`db`（絶対パス）、`workspace_root`、`tick_ms`、`max_concurrency`、`lease_grace_secs`、`idle_timeout_secs`、`kill_grace_secs`、`review_timeout_secs`、`error_cooldown_secs`、`retry_backoff_base_secs`、`retry_backoff_max_secs`、`max_requeues`、`plan.auto_accept`、`reviewer{adapter, tier}`、`providers[]{id, adapter, tiers, concurrency, model, env_keys}`、`clusters[]{id, host, concurrency, sync, delete_on_push, has_setup, env_keys, rsync_excludes}`（Phase 12）、
-`roles[]{id, tier, adapter, max_turns, max_wall_secs, has_instructions}`（Phase 10。`[[roles]]` の順）、
-`genres[]{id, description, capabilities?, input_artifacts?, output_artifacts?, default_role, roles}`（Phase 16、ADR-0027 D1。
-`capabilities` / `input_artifacts` / `output_artifacts` は Phase 18、ADR-0028 D1 — 3 つとも自由記述の任意フィールドで、空なら省略される。
+`config.toml` の要約。`config_path`、`db`（絶対パス）、`workspace_root`、`tick_ms`、`max_concurrency`、`lease_grace_secs`、`idle_timeout_secs`、`kill_grace_secs`、`review_timeout_secs`、`error_cooldown_secs`、`retry_backoff_base_secs`、`retry_backoff_max_secs`、`max_requeues`、`plan_auto_accept`（`[plan] auto_accept`）、`reviewer{adapter, tier?}`（`tier` は `[reviewer] tier` を明示したときだけ。無ければ worker run の lane に合わせて動的に決まる）、
+`providers[]{id, adapter, tiers, concurrency, model, env_keys, account_pool, account_id, tier_models, credential_refs}`、
+`clusters[]{id, host, work_dir?, concurrency, sync, delete_on_push, has_setup, env_keys, rsync_excludes, auth, forwards}`（ADR-0018。`work_dir` は設定ファイルの値だけ）、
+`roles[]{id, tier, adapter, max_turns, max_wall_secs, has_instructions}`（`[[roles]]` の順。ADR-0016 D1）、
+`genres[]{id, description, capabilities?, input_artifacts?, output_artifacts?, default_role, roles}`（ADR-0027 D1 / ADR-0028 D1。
+`capabilities` / `input_artifacts` / `output_artifacts` は自由記述の任意フィールドで、空なら省略される。
 `[[genres]]` の順。`[[genres]]` を書かない設定では `[]`）、
-`delegation{max_delegate_per_run, max_tree_depth, max_tree_runs, on_child_failure}`（Phase 10 / ADR-0021。既定 8 / 5 / 100 /
-`"retry_then_ask"`。`on_child_failure` は `"retry_then_ask"` か `"ignore"`）、`api{bind, auth_required, allowed_hosts}`、`config_path`。
+`delegation{max_delegate_per_run, max_tree_depth, max_tree_runs, on_child_failure}`（ADR-0021。既定 8 / 5 / 100 /
+`"retry_then_ask"`。`on_child_failure` は `"retry_then_ask"` か `"ignore"`）、`api{bind, auth_required, allowed_hosts}`。クエリは受けない。
 `[[providers]].env` の**値**、`[adapters.*].env` の値、`[[clusters]].env` の値と `setup` の中身、`[[roles]].instructions` の**本文**（有無だけを `has_instructions` で出す）、`token_file` のパスと内容は出さない。
 
-- ADR-0041 D5（Phase 51）: `GET /health` の `mode` が `"verify"` のプロセスでは、`roles[]` / `genres[]` /
+- `GET /health` の `mode` が `"verify"` のプロセスでは、`roles[]` / `genres[]` /
   `providers[]` の末尾に組み込みの **`smoke`**（`adapter = "fake"`、`tier`/`tiers` は `standard`）が 1 つずつ
   増え、`reviewer` が `{adapter: "fake", tier: "standard"}` になる。設定ファイルに同じ id があっても
-  上書きされる（煙試験が本物の LLM を呼ぶ経路を設定で開けられないようにするため）。**型は変わらない**し、
-  本番（`mode = "normal"`）の応答も変わらない。GUI は本番の API しか見ないので対応は要らない。`task-api` は `celeris` crate に依存しないので、この型は task-api に置き、celeris が起動時に値を作って `ApiState` に渡す。
+  上書きされる（煙試験が本物の LLM を呼ぶ経路を設定で開けられないようにするため。ADR-0041 D5）。**型は変わらない**し、
+  本番（`mode = "normal"`）の応答も変わらない。`task-api` は `celeris` crate に依存しないので、この型は task-api に置き、celeris が起動時に値を作って `ApiState` に渡す。
 
 ### 3.22 `GET /schema` → 200 `application/schema+json`
 
-コミット済み `docs/api/v1/api-v1.schema.json` を `include_str!` で返す（開発・型生成の確認用。GUI の型生成はリポジトリのファイルから行い、この応答には依存しない）。
+コミット済み `docs/api/v1/api-v1.schema.json` を `include_str!` で返す（開発・型生成の確認用。GUI の型生成はリポジトリのファイルから行い、この応答には依存しない）。クエリは受けない。
 
-### 3.23 `GET /clusters` → 200 `Clusters`（ADR-0018、Phase 12。トンネルは ADR-0053 D3、Phase 66・85）
+### 3.23 `GET /clusters` → 200 `Clusters`（ADR-0018。トンネルは ADR-0053 D3）
 
 `items[]` は `[[clusters]]` の順。定義（`id` / `host` / `concurrency` / `sync` / `delete_on_push` / `has_setup` = `setup` の有無 / `env_keys` = **キー名だけ** / `rsync_excludes` / `auth`）は設定から、
 `in_use`（そのクラスタで走っている run + 判定の数）/ `connected`（この tick の `ssh -O check` の結果 = 多重接続があるか）/ `cooldown_until` / `cooldown_remaining_secs` / `connect_pending` /
-`tunnel_forwards` / `tunnel_login_needed` は スナップショットから（無ければ `null` / `false` / `[]`）。`env` の値と `setup` の中身は出さない（ADR-0018 D7）。
+`tunnel_forwards` / `tunnel_login_needed` は スナップショットから（無ければ `in_use`・`connected` は `null`、`connect_pending`・`tunnel_login_needed` は `false`）。`env` の値と `setup` の中身は出さない（ADR-0018 D7）。
+`cooldown_until` が過ぎていれば `cooldown_until`・`cooldown_remaining_secs` とも `null`。無認証の読み取り。
 
 - `auth`: `"manual"`（既定）/ `"publickey"` / `"totp"`（ADR-0032 D1）。GUI はこれで「クラスタ」画面の案内を出し分ける
   （3.39〜3.41、§10）。
@@ -868,16 +926,15 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
   接続が戻れば cooldown はその tick で解ける。`auth = "publickey"` のクラスタは、未接続を見つけると cooldown にする前に
   1 回だけ自動で接続を試みる（ADR-0032 D3）。
 - GUI は `connected == false` のクラスタに、`auth` に応じた案内を出す（3.39〜3.41）。受信箱の `attention[].cluster_unavailable`（§5.1 (d)）と対。
-- `tunnel_forwards[]`（ADR-0053 D3、Phase 66。listener/target の分離は Phase 85）: `[[clusters.forwards]]`
+- `tunnel_forwards[]`（ADR-0053 D3）: `[[clusters.forwards]]`
   （`listen` / `target`）と、観測。`up`（forward 越しに `GET <listen>/v1/models` が届くか＝
   `listener && target_healthy`）、`listener`（手元の `-O forward`/`ssh -N -L` の待ち受けが有るか）、
-  `target_healthy`（listener 越しに target が `/v1/models` に応答するか）、`last_error`（直近の失敗理由。
-  無ければ `null`）。観測が無ければ `up`/`listener`/`target_healthy` は `null`。`forwards` を持たない
-  クラスタは空配列。
+  `target_healthy`（listener 越しに target が `/v1/models` に応答するか）、`last_error`（直近の失敗理由）。
+  観測が無ければ `up`/`listener`/`target_healthy` は**欄ごと省略**し、`last_error` も失敗が無ければ省略する。
+  `forwards` を持たないクラスタは空配列。
   - **`listener == true` かつ `target_healthy == false`** は「転送（forward）はあるが先方が応答しない」
     （GUI はこれを 1 語のバッジとは別に、理由の文で示す）。celeris はこの状態では `-O forward` を
-    **再発行しない**（listener は既に有るので無意味。Phase 85 のバックオフ。以前は毎 tick 打ち直して
-    tick が数秒伸びる不具合があった）。target の健康 probe 自体も
+    **再発行しない**（listener は既に有るので無意味。ADR-0053 D3）。target の健康 probe 自体も
     `[[clusters.forwards]] probe_interval_secs`（既定 30 秒）の間隔でしか行わない。
   - **`listener == false`** は「転送そのものが無い」。celeris は次の tick で `-O forward` の(再)発行を
     試みる。
@@ -885,6 +942,14 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
   **鍵認証を試しても**繋がらなかった状態（人の TOTP 入力が要る）。`GET /clusters` にはこれだけが出る
   （プロンプト文字列やコードは `POST /clusters/{id}/connect`/`connect/code` の応答にだけ載る。§3.39〜3.41
   と同じ経路で接続する）。この状態は Discord にも `cluster_login_needed`（§5.1）で 1 回だけ知らせる。
+- `stats`（ADR-0078 D5）: ssh master の接続・切断の回数 `{last_24h, since_start}`。各値は `connects_totp` /
+  `connects_publickey` / `connects_borrowed`（人や前の daemon が張った master を見つけた回数）/ `losses` /
+  `losses_by_cause`（`check_failed` / `probe_failed` / `master_exited` / `explicit` → 回数）/ `key_auth_attempts` /
+  `last_lost_at` / `last_lost_cause`。`last_24h` は DB の `cluster_connection_log` から（再起動をまたぐ）、
+  `since_start` はこの daemon の起動以降（スナップショットが無ければ `null`）。
+- `work_dir` / `work_dir_source`（ADR-0059 D6）: 実効の作業ディレクトリと出どころ。DB の上書き
+  （`PUT /clusters/{id}/settings`）があれば `"settings"`、無ければ設定ファイルの `[[clusters]] work_dir` で `"config"`。
+  どちらも無ければ両方とも欄ごと省略。
 
 ```json
 {"items": [
@@ -895,41 +960,61 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
    "tunnel_forwards": [{"listen": "127.0.0.1:18000", "target": "bnode150:18000", "up": false,
      "listener": true, "target_healthy": false,
      "last_error": "target bnode150:18000 did not answer /v1/models through the forward"}],
-   "tunnel_login_needed": false}
+   "tunnel_login_needed": false,
+   "stats": {"last_24h": {"connects_totp": 1, "connects_publickey": 0, "connects_borrowed": 0, "losses": 0,
+                          "losses_by_cause": {}, "key_auth_attempts": 0, "last_lost_at": null, "last_lost_cause": null},
+             "since_start": null},
+   "work_dir": "/work/NBB/u", "work_dir_source": "settings"}
 ]}
 ```
 
-### 3.24〜3.28 プロバイダ管理（ADR-0017、Phase 11。**すべて管理系: `token_file` 未設定でも 401**）
+### 3.24〜3.28 プロバイダ管理（ADR-0017。**すべて管理系: `token_file` 未設定でも 401**）
 
 設計は ADR-0017。`config.toml` を直接書き換えず、`providers_include`（例: `providers_include = "providers.d/*.toml"`）が指す
 ディレクトリに 1 アカウント 1 ファイル（`providers.d/<id>.toml`。`[[providers]]` の 1 行と同じ形）を読み書きする。
 反映（実際の dispatch と `GET /providers`/`GET /config` への表示）は `POST /reload` を呼んだ**次の tick から**で、
-実行中の run には影響しない。`providers_include` が設定されていない構成では、この 5 本は全て 409
-`providers_admin_unavailable` を返す。
+実行中の run には影響しない。`providers_include` が設定されていない構成では、3.24〜3.26 は 409
+`providers_admin_unavailable` を返す（3.27・3.28 は celeris への管理要求の経路が無い構成で同じ 409）。
+3.27・3.28 は `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。
 
 #### 3.24 `POST /providers` → 201 `ProviderConfigView`（`Location: /api/v1/providers/{id}`）
 
-要求本文: `{"id": "acct-b", "adapter": "fake"|"claude-code"|"codex"|"acp"|"paperqa"|"local-deep-research", "tiers"?: [...], "concurrency"?: 1, "model"?: "", "env"?: {...}}`
-（`tiers`/`concurrency`/`model` は省略可、`[[providers]]` と同じ既定）。`id` は 1〜64 文字の ASCII 英数字・`-`・`_`
+要求本文: `{"id": "acct-b", "adapter": "fake"|"claude-code"|"codex"|"acp"|"paperqa"|"local-deep-research", "tiers"?: [...], "concurrency"?: 1, "model"?: "", "env"?: {...}, "account_pool"?: false, "account_id"?: "…", "tier_models"?: {...}, "credential_refs"?: {...}}`
+（省略したものは `[[providers]]` と同じ既定。`tiers` は 3 tier 全部、`concurrency` は 1）。`id` は 1〜64 文字の ASCII 英数字・`-`・`_`
 （`providers.d/<id>.toml` のファイル名になるため、パス区切りは拒否）。`adapter` は既知の 6 種類のみ。
-`id` が既にあれば 409 `provider_exists`。応答・ログとも `env` は `env_keys`（キー名だけ）で、値は一切出さない。
-**`command`/`args`（ADR-0026 D2: `adapter = "acp"` の行だけが持つ実行ファイル／引数の上書き）と `settings`
-（ADR-0027 D3: `adapter = "paperqa"` の行だけが持つ PaperQA 設定ファイルの上書き）は本文に含められない**
-（含まれていたら値を見る前に 422 `invalid_provider`。実行するコマンド／設定を HTTP から差し替えられないように
-するため。`providers.d/<id>.toml` は人が直接編集する。ADR-0026 D7、ADR-0027 D3）。`local-deep-research` の
-`[adapters.local_deep_research].settings`（ADR-0029 D1）は行ごとの上書きが無く、そもそも `ProviderConfig` に
-対応するフィールドが無いので、この制約の対象外（本文に置けるフィールドは他アダプタと同じ）。
+`id`・`adapter` の形が不正、`concurrency` が 0 は 400 `bad_request`。`id` が既にあれば 409 `provider_exists`。
+応答・ログとも `env` は `env_keys`（キー名だけ）で、値は一切出さない。
+
+- `tier_models`（ADR-0069 D4）: tier → `{name, model_id?, unavailable_reason?, reasoning_effort?}` の明示束縛。
+  `adapter` が `"claude-code"`/`"codex"` 以外で空でなければ 400 `bad_request`。
+- `account_id`: プールの中の特定アカウントに固定する。`account_pool = true` が要り（無ければ 400）、
+  形はアカウント id と同じ規則（不正なら 400）。
+- `credential_refs`: LLM の認証用環境変数（`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` /
+  `CODEX_API_KEY`）→ 秘密 id（§3.36〜3.38）。ファイルの `env_from_secrets` に書かれる。キーがこの 4 つ以外か、
+  秘密 id の形が不正なら 400。
+- `[secrets]` が設定されている構成では、`env` に上の 4 つのキーの値が平文で入っていると、書き込む前に
+  秘密（id は `migrated-<ULID>`）へ移し、`env_from_secrets` からの参照に置き換える（値はファイルに残さない）。
+
+**`command`/`args`（ADR-0026 D2: `adapter = "acp"` の行だけが持つ実行ファイル／引数の上書き）・`settings`
+（ADR-0027 D3: `adapter = "paperqa"` の行だけが持つ PaperQA 設定ファイルの上書き）・`env_from_secrets`
+（ADR-0030 D2）は本文に含められない**（含まれていたら値を見る前に 422 `invalid_provider`。実行するコマンド／設定を
+HTTP から差し替えられないようにするため。`providers.d/<id>.toml` は人が直接編集する。ADR-0026 D7、ADR-0027 D3）。
+`local-deep-research` の `[adapters.local_deep_research].settings`（ADR-0029 D1）は行ごとの上書きが無く、
+そもそも `ProviderConfig` に対応するフィールドが無いので、この制約の対象外（本文に置けるフィールドは他アダプタと同じ）。
 
 #### 3.25 `PATCH /providers/{id}` → 200 `ProviderConfigView`
 
-要求本文は `{"tiers"?, "concurrency"?, "model"?, "env"?}`（渡したフィールドだけ上書き。`id`/`adapter` は変更不可）。
-存在しない `id` は 404 `provider_not_found`。**`command`/`args` は 3.24 と同じく本文に含められない**（422
-`invalid_provider`。含まれていたらファイルには一切触れない）。ファイルに人が直接書いた `command`/`args` は、
+要求本文は `{"tiers"?, "concurrency"?, "model"?, "env"?, "account_pool"?, "account_id"?, "tier_models"?, "credential_refs"?}`
+（渡したフィールドだけ上書き。`id`/`adapter` は変更不可。空の本文は `{}` と同じ）。`account_id: ""` は固定を外す。
+`credential_refs` は既存の認証用キーの参照を置き換え、それ以外の `env_from_secrets` は残す。検証と 400 の条件は 3.24 と同じ
+（patch 後の組み合わせで判定する）。存在しない `id`（形が不正な `id` を含む）は 404 `provider_not_found`。
+**`command`/`args`/`settings`/`env_from_secrets` は 3.24 と同じく本文に含められない**（422
+`invalid_provider`。含まれていたらファイルには一切触れない）。ファイルに人が直接書いたこれらの値は、
 これらを含まない PATCH では変更されずそのまま残る。
 
 #### 3.26 `DELETE /providers/{id}` → 200 `{}`
 
-`providers.d/<id>.toml` を削除する。存在しない `id` は 404 `provider_not_found`。
+`providers.d/<id>.toml` を削除する。存在しない `id`（形が不正な `id` を含む）は 404 `provider_not_found`。
 
 #### 3.27 `POST /providers/{id}/check` → 200 `ProviderCheckResponse`
 
@@ -937,26 +1022,26 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 {"result": "ok" | "auth_failed" | "throttled" | "spawn_failed", "checked_at": "…", "detail": "Confirmed ready; …"}
 ```
 
-`detail`（ADR-0022 M1）は人が読むための一行（ワーカーの返答、または失敗の理由）。`GET /providers` の `last_check.detail` にも同じ値が出る。
+`detail`（ADR-0022 M1）は人が読むための一行（ワーカーの返答、または失敗の理由。無ければ欄ごと省略）。`GET /providers` の `last_check.detail` にも同じ値が出る。
 **見ているのは「このアカウントで CLI が起動して応答するか」だけ**なので、ワーカープロトコル上のエラー（`Terminal::Error`）は
 アカウントの問題ではなく `ok` として扱い、理由を `detail` に入れる。起動できない・認証切れ・枯渇はそれぞれ
 `spawn_failed` / `auth_failed` / `throttled`。
 
-そのアカウントの env で短い run（30 秒・1 ターン）を 1 回だけ行い、疎通を確かめる（ADR-0017 D2）。DB には
+そのアカウントの env で短い run（30 秒・3 ターンまで）を 1 回だけ行い、疎通を確かめる（ADR-0017 D2）。設定は毎回
+読み直すので、`reload` 前に足した `providers.d/` の行も確かめられる。DB には
 一切触れない（タスクにもイベント列にも残らない、観測値）。結果は**次の tick のスナップショット**にも載り、
 `GET /providers` の `last_check` として読める（ADR-0022 D2。celeris の再起動で消える）。
-**自動では走らない**（起動時の一括確認も定期実行もしない。1 回ごとに実際の API 呼び出しを 1 ターン消費するため。ADR-0022 D3）。存在しない `id` は 404 `provider_not_found`。設定の
-再読込自体が失敗した（`providers.d/` の壊れた TOML 等）場合は 400。**celeris（`task-worker` に依存する側）が実行し、
-task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。ADR-0017 M2）。
+**自動では走らない**（起動時の一括確認も定期実行もしない。1 回ごとに実際の API 呼び出しを消費するため。ADR-0022 D3）。存在しない `id` は 404 `provider_not_found`。設定の
+再読込自体が失敗した（`providers.d/` の壊れた TOML 等）場合は 400 `bad_request`。40 秒以内に結果が返らなければ 500 `internal`。
+**celeris（`task-worker` に依存する側）が実行し、task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。ADR-0017 M2）。
 
 #### 3.28 `POST /reload` → 200 `ReloadResult`（`{"reloaded": true}`）
 
-`config.toml` と `providers_include` の指すディレクトリを読み直す。設定の検証に失敗したら 400 を返し、
-稼働中の状態には触れない（古い設定のまま動き続ける）。実行中の run はそれぞれ差し替え前のアダプタ・役割・
+`config.toml` と `providers_include` の指すディレクトリを読み直す。設定の検証に失敗したら 400 `bad_request`
+（`detail` は `invalid config: …`）を返し、稼働中の状態には触れない（古い設定のまま動き続ける）。実行中の run はそれぞれ差し替え前のアダプタ・役割・
 分野の写しを既に掴んでいるので、reload の影響を受けない。**反映は次に起動する run / 次 tick から**。
 
-反映されるもの（Phase 44、実機 2026-09-18 の前は役割・分野・委譲設定・`[reports]`/`[notify]`/`[conversation]`
-が対象外で、`max_turns` を変えても委譲された子が古い値のまま動いていた）:
+反映されるもの:
 
 | 設定 | 反映先 | いつから効くか |
 | --- | --- | --- |
@@ -965,15 +1050,16 @@ task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。A
 | `[reports]` | 報告の圧縮の閾値 | 次 tick から |
 | `[notify]` | 通知の間隔・webhook の秘密 id・GUI base URL | 次 tick から |
 | `[conversation]` | 対話が常に走る分野 | 次に始まる対話から |
+| `[selfdeploy]` の `delivery_projects` / `delivery_default_departments` | 納品の方針 | 次 tick から |
 
 **cooldown はメモリ上（`StaticPolicy` の内部状態）なので reload で消える**（ADR-0017 D1）。
 
 再起動が要るもの（reload では触れない。変更しても黙って古いまま動き続ける）: `db` / `workspace_root` /
-`[api]` / `[[clusters]]`。**`[accounts]` だけは例外的にこの reload 自体を 400 で拒否する**（ADR-0024。S7）:
-`claude_dir` / `max_runs_per_account` / `check_model` のどれかが読み直した設定で変わっていれば、`detail` に
+`[api]` / `[[clusters]]`、および秘密の `used_by`（§3.36）。**`[accounts]` だけは例外的にこの reload 自体を 400 で拒否する**（ADR-0024）:
+`claude_dir` / `codex_dir` / `max_runs_per_account` / `check_model` のどれかが読み直した設定で変わっていれば、`detail` に
 再起動が必要な旨を書いて拒否する（それ以外のフィールドの変更は反映されない）。
 
-### 3.29〜3.35 アカウントのプール（claude-code / codex。ADR-0024・ADR-0025、Phase 13/14）
+### 3.29〜3.35 アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）
 
 設計は ADR-0024（claude-code）と ADR-0025（codex を追加）。`[accounts] claude_dir` / `codex_dir` の下の 1
 ディレクトリ（`<claude_dir>/<id>/` または `<codex_dir>/<id>/`）が 1 アカウントで、アカウントは `(adapter, id)`
@@ -982,10 +1068,12 @@ task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。A
 `token_count` の `rate_limits` が出す `five_hour` / `seven_day` の `utilization`）から選んだアカウントの環境変数
 （claude-code は `CLAUDE_SECURESTORAGE_CONFIG_DIR`、codex は `CODEX_HOME`）で起動する（選び方は ADR-0024 D3。
 アダプタが違っても同じ計算式を使う）。`[accounts]` はどちらか一方の根ディレクトリだけでもよい。
-`[accounts]` が無い構成では、`GET /accounts` は `{"root": null, "roots": {}, "items": []}`、管理系は 409
-`accounts_unavailable`。**3.30 以降はすべて管理系**（`token_file` 未設定でも 401。ADR-0017 M3）。`id` の規則は
-プロバイダと同じ（1〜64 文字の ASCII 英数字・`-`・`_`）。3.30〜3.35 は `?adapter=` クエリを受け取る
-（省略時 `"claude-code"`。未知の値は 400 `bad_request`）。
+`[accounts]` が無い構成では、`GET /accounts` は `{"root": null, "roots": {}, "max_runs_per_account": 0, "items": []}`、管理系は 409
+`accounts_unavailable`。**3.30 以降はすべて管理系**（`token_file` 未設定でも 401。ADR-0017 M3）。3.29 は無認証の読み取り。
+`id` の規則はプロバイダと同じ（1〜64 文字の ASCII 英数字・`-`・`_`）。3.31〜3.35 は `?adapter=` クエリを受け取る
+（省略時 `"claude-code"`。未知の値は 400 `bad_request`）。3.30 はクエリを受け取らず、本文の `adapter` で指定する。
+3.31〜3.35 は `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。celeris への管理要求の経路が
+無い構成も 409 `accounts_unavailable`。
 
 #### 3.29 `GET /accounts` → 200 `AccountList`
 
@@ -1013,13 +1101,14 @@ task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。A
 - `usage` / `score` / `excluded_reason` / `cooldown` / `last_check` / `login_pending` / `in_use` はスナップショットの観測値（最初の tick 前は `null` / `false` / 0）。
   `usage` と `cooldown` はそのアダプタの根ディレクトリの `.celeris-usage.json` にも保存され、再起動後も残る（`last_check` も同じ）。
 - `excluded_reason`（選ばれない理由）: `not_logged_in` / `at_capacity` / `cooldown` / `five_hour_exhausted` / `seven_day_exhausted` / `rejected`。選べるなら `null` で `score` が入る。
-- `cooldown.reason`: `auth_failed`（再ログインが必要）/ `throttled` / `exhausted`。
+- `cooldown` は `{until, reason}`。`reason`: `auth_failed`（再ログインが必要）/ `throttled` / `exhausted`。
 - `stats` は `WorkerStarted.account` と対応する `WorkerFinished` から、同じ `WorkerStarted.adapter` のものだけ集計する（§5.8 のプロバイダ集計と同じ規則。同じ id でもアダプタが違えば別集計）。
 - 時刻はすべて RFC 3339。
 
-#### 3.30 `POST /accounts` → 201 `AccountView`
+#### 3.30 `POST /accounts` → 201 `AccountView`（`Location: /api/v1/accounts/{id}`）
 
-要求本文 `{"id": "b", "adapter": "codex"}`（`adapter` 省略時 `"claude-code"`）。`<root>/<id>/` を 0700 で作る
+要求本文 `{"id": "b", "adapter": "codex"}`（`adapter` 省略時 `"claude-code"`）。`id` の形が不正、または `adapter` が
+`"claude-code"`/`"codex"` 以外なら 400 `bad_request`。`<root>/<id>/` を 0700 で作る
 （`root` はそのアダプタの根ディレクトリ。設定されていなければ 409 `accounts_unavailable`）。既にあれば 409
 `account_exists`。作っただけでは `logged_in: false`（3.33 でログインする）。
 
@@ -1028,8 +1117,7 @@ task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。A
 `?adapter=`（省略時 `claude-code`）。ディレクトリを `<root>/.removed/<id>-<unix秒>/` に移す（認証ファイルは消さない。人が後で片付ける）。
 `in_use > 0` なら 409 `account_in_use`、無ければ 404 `account_not_found`。進行中のログインは止める。
 **実装は celeris 側で行う**（`AdminRequest::AccountRemove` 経由。`in_use` はディスパッチャの権威ある値
-`account_in_use`（running/reviewing を直接見る。`(adapter, id)` で判定）で判定するので、task-api のスナップショット経由のレースが無い。
-`admin_tx` が無い構成は 409 `accounts_unavailable`）。応答の形・ステータスコードは変わらない。
+`account_in_use`（running/reviewing を直接見る。`(adapter, id)` で判定）で判定するので、task-api のスナップショット経由のレースが無い）。
 
 #### 3.32 `POST /accounts/{id}/check` → 200 `AccountCheckResponse`
 
@@ -1040,6 +1128,7 @@ task-api 自身はワーカーを起動しない**（DESIGN §5.10 の境界。A
  "usage": {"five_hour": {…}, "seven_day": {…}, "status": "allowed", "observed_at": "…", "source": "check"}}
 ```
 
+`detail` と `usage` は無ければ欄ごと省略。存在しない `id` は 404 `account_not_found`。
 claude-code はそのアカウントで `claude -p … --max-turns 1 --model <[accounts].check_model>` を、codex は
 `codex exec --json --skip-git-repo-check "Reply with exactly: ok"`（モデルは指定しない）を、それぞれ 1 回だけ
 （60 秒まで）実行し、観測値（`rate_limit_event` / `token_count`）を記録する。codex は出力に 401 の行が出たら
@@ -1064,9 +1153,10 @@ claude-code はそのアカウントで `claude -p … --max-turns 1 --model <[a
 
 #### 3.34 `POST /accounts/{id}/login/code` → 200 `AccountLoginResult`
 
-claude-code のみ。要求本文 `{"code": "…"}`。`{"result": "ok" | "failed", "detail": "…"}`。コードを `claude auth login` の標準入力に渡し、終了を 30 秒まで待つ。
-exit 0 かつ `.credentials.json` ができたら `ok`。進行中のログインが無ければ 409 `login_not_started`。**コードはログにも応答にも出さない**。
-`?adapter=codex` は 409 `login_code_not_supported`（codex はデバイス認証だけで完結する。ADR-0025 D5）。
+claude-code のみ。要求本文 `{"code": "…"}`。`{"result": "ok" | "failed", "detail": "…"}`（`detail` は無ければ省略）。コードを `claude auth login` の標準入力に渡し、終了を 30 秒まで待つ。
+exit 0 かつ `.credentials.json` ができたら `ok`。空・空白だけのコードは 422 `validation`（`errors[].field = "code"`）。
+進行中のログインが無ければ 409 `login_not_started`。**コードはログにも応答にも出さない**。
+`?adapter=codex` は本文を見る前に 409 `login_code_not_supported`（codex はデバイス認証だけで完結する。ADR-0025 D5）。
 
 #### 3.35 `DELETE /accounts/{id}/login` → 200 `{}`
 
@@ -1078,22 +1168,22 @@ exit 0 かつ `.credentials.json` ができたら `ok`。進行中のログイ�
 `true` は `adapter` が `"claude-code"` か `"codex"` で、かつ `[accounts]` にそのアダプタの根ディレクトリが設定されているときだけ有効
 （ADR-0025 D1）。それ以外の `adapter` はもちろん、
 **対応する根ディレクトリが設定されていない構成（`GET /accounts` の `roots["<adapter>"]: null`）で `account_pool = true` を
-`POST`/`PATCH /providers` に渡した時点で** 422 `invalid_provider` を返す（S1。`create`/`patch` の時点で拒否する。
-reload を待たない）。
+`POST`/`PATCH /providers` に渡した時点で** 422 `invalid_provider` を返す（reload を待たない）。
 プール経由の run の失敗は、原因がアカウント側（throttled/auth_failed/exhausted）ならアカウントを cooldown に
 しプロバイダは cooldown にしない。**Spawn 失敗（起動できない）はアカウントの責任ではないので、通常どおり
-プロバイダを cooldown にする**（ADR-0024 D4、S10）。
+プロバイダを cooldown にする**（ADR-0024 D4）。
 
-### 3.36〜3.38 秘密（API キー等）の管理（ADR-0030、Phase 20。**すべて管理系: `token_file` 未設定でも 401**）
+### 3.36〜3.38 秘密（API キー等）の管理（ADR-0030。**すべて管理系: `token_file` 未設定でも 401**）
 
 設計は ADR-0030。ADR-0017 の「API キーを GUI から入力して保存しない」を上書きする（人間の依頼）。秘密は celeris が
-`[secrets] dir` の下にファイルで持つ（1 秘密 = 1 ファイル、ファイル名 = id、中身 = 値 1 行・0600）。**値を返す
+`[secrets] dir` の下にファイルで持つ（1 秘密 = 1 ファイル、ファイル名 = id、中身 = 値 1 行・0600。ディレクトリは 0700）。**値を返す
 API は無い**（作成・削除だけ）。`[secrets]` が未設定なら 3 本とも 409 `secrets_unavailable`。`id` の規則はプロバイダ
 と同じ（1〜64 文字の ASCII 英数字・`-`・`_`。`PUT`/`DELETE` の id はパスにあるので、無効な形は
 `PATCH`/`DELETE /providers/{id}` と同じ規約で 404 `secret_not_found` にする）。
 
 **使い方（`env_from_secrets`）**: `[adapters.<種別>]` と `[[providers]]` の行の両方に、環境変数名 → 秘密 id の
-対応 `env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily" }` を書ける。値は `build_adapters`
+対応 `env_from_secrets = { LDR_SEARCH_ENGINE_WEB_TAVILY_API_KEY = "tavily" }` を書ける（`[[providers]]` の行の
+LLM 認証用キーは 3.24 の `credential_refs` からも書ける）。値は `build_adapters`
 （アダプタを組み立てるとき）に読むので、鍵を入れ替えたら `POST /reload` が要る（GUI は保存後に自動で呼ぶ）。
 優先順は celeris の環境 < `[adapters.*].env` < `[adapters.*].env_from_secrets` < 行の `env` < 行の
 `env_from_secrets`。**秘密が見つからないのは設定エラーにしない**（`warn!` を出してその環境変数を渡さず、その層
@@ -1112,18 +1202,19 @@ API は無い**（作成・削除だけ）。`[secrets]` が未設定なら 3 �
     ]}]}
 ```
 
-**値は返さない**。`fingerprint` は値の sha256 の先頭 8 桁（16 進。人が「入れ替えた鍵が届いているか」を確かめる
-ためで、値そのものは復元できない）。`updated_at` はファイルの mtime。`used_by` は**稼働中の設定から導く**
-（`GET /secrets` の呼び出しのたびに `[adapters.*].env_from_secrets` と `[[providers]].env_from_secrets` を
-走査する。GUI は再計算しない）。**設定が参照している id は、まだ鍵を入れていなくても `items[]` に載る**
+**値は返さない**。`fingerprint` は値（末尾の改行を除く）の sha256 の先頭 8 桁（16 進。人が「入れ替えた鍵が届いているか」を確かめる
+ためで、値そのものは復元できない）。`updated_at` はファイルの mtime。`used_by` は celeris の**起動時の設定から導いた**もの
+（`[adapters.*].env_from_secrets` と `[[providers]].env_from_secrets` を走査する。`POST /reload` では更新されない。
+GUI は再計算しない）。**設定が参照している id は、まだ鍵を入れていなくても `items[]` に載る**
 （`updated_at` と `fingerprint` が `null`。GUI が「鍵を入れる場所」を一覧に出せるようにするため）。したがって
 `items[]` = ファイルとして存在する秘密 ∪ どこかの `env_from_secrets` が指している id。ファイルがある id を
-先に id 昇順、続けて未設定の id を id 昇順で並べる。
+先に id 昇順、続けて未設定の id を id 昇順で並べる。`dir` のディレクトリがまだ無ければファイルは 0 件として扱う。
 
 #### 3.37 `PUT /secrets/{id}` → 200 `SecretPutResult`
 
 要求本文 `{"value": "tvly-abc123..."}`。作成／置き換え（既にあれば上書き）、ファイルを 0600 で
-atomic（一時ファイル→rename）に書く。空文字・空白だけの値は 422 `validation`。応答は
+atomic（一時ファイル→rename）に書く。空文字・空白だけの値は 422 `validation`。本文が JSON として読めない・型違いは
+400 `bad_request`（`detail` は固定文で、本文の値を反射しない）。応答は
 `{"id", "updated_at", "fingerprint"}`（**値は含まない**）。無効な id（パス区切りを含む等）は 404
 `secret_not_found`（`PATCH`/`DELETE /providers/{id}` と同じ規約。本文を見る前に判定する）。
 
@@ -1134,28 +1225,29 @@ atomic（一時ファイル→rename）に書く。空文字・空白だけの�
 **ログ・応答のどこにも値は出ない**（`who = "admin"`, `op = "secret_put" | "secret_delete"`, `secret_id` だけ記録
 する。ADR-0024 D5 と同じ規律）。
 
-### 3.39〜3.41 クラスタへの接続を GUI から張る（ADR-0032、Phase 22。**すべて管理系: `token_file` 未設定でも 401**）
+### 3.39〜3.41 クラスタへの接続を GUI から張る（ADR-0032。**すべて管理系: `token_file` 未設定でも 401**）
 
 設計は ADR-0032。ADR-0018 D2/D7 の「celeris から対話的な認証は絶対に行わない・接続を張るのは人力」を、
 `[[clusters]].auth` で opt-in する形に上書きする（既定 `"manual"` は従来どおり celeris が接続を張らない）。
 実際の ssh の起動・`SSH_ASKPASS` を使った検証コードの中継は celeris 側（`AdminRequest::ClusterConnect*`）が行い、
 task-api 自身は ssh を起動しない（DESIGN §5.10 の境界）。未知の `id`（`[[clusters]]` に無い）はどの操作も
-404 `cluster_not_found`。
+404 `cluster_not_found`。3 本とも `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。
+celeris への管理要求の経路が無い・応答が時間内に返らない（3.39・3.40 は 40 秒、3.41 は 10 秒）ときは 500 `internal`。
 
 #### 3.39 `POST /clusters/{id}/connect` → 200 `ClusterConnectStart`
 
 ```json
-{"kind": "connected", "prompt": null, "expires_at": null}
+{"kind": "connected"}
 ```
 ```json
 {"kind": "needs_code", "prompt": "(rmaeda@130.158.241.2) Verification code: ", "expires_at": "2026-09-17T01:35:00Z"}
 ```
 
 - `kind = "connected"`: コード不要で張れた（`auth = "publickey"` で鍵だけの接続が通った、または既に
-  多重接続があった。ADR-0032 D2: 既にあれば新しく張らずに成功を返す）。
+  多重接続があった。ADR-0032 D2: 既にあれば新しく張らずに成功を返す）。`prompt`・`expires_at` は欄ごと省略。
 - `kind = "needs_code"`: ssh がプロンプトを出した（`auth = "totp"`）。`prompt` は ssh が実際に出した文字列を
   そのまま返す（ユーザ名・ホスト名を含みうる）。人はこれを見て検証コードを入力し、3.40 に渡す。
-  `expires_at`（既定 300 秒後）を過ぎたセッションは celeris が自動で片付ける。
+  `expires_at`（300 秒後）を過ぎたセッションは celeris が自動で片付ける。進行中のセッションがあれば古い方を畳んでやり直す。
 - `auth = "manual"` のクラスタへの `connect` は 409 `cluster_connect_not_supported`
   （人が `scripts/cluster-login.sh` で張る運用のまま。ADR-0032 D7）。
 - 接続そのものの失敗（ssh の失敗、タイムアウト）は 502 `cluster_connect_failed`（`detail` に一行の手がかり）。
@@ -1164,8 +1256,9 @@ task-api 自身は ssh を起動しない（DESIGN §5.10 の境界）。未知�
 
 #### 3.40 `POST /clusters/{id}/connect/code` → 200 `ClusterConnectResult`
 
-要求本文 `{"code": "123456"}`。`{"ok": true, "detail": null}`。
+要求本文 `{"code": "123456"}`。`{"ok": true}`（`detail` は無ければ欄ごと省略）。
 
+- 本文が JSON として読めない・型違いは 400 `bad_request`（`detail` は固定文で、本文の値を反射しない）。
 - コードは `trim` して空、または制御文字を含めば ssh に渡さず 422 `validation`（`claude_account.rs::submit_code`
   と同じ注入防止。長さや文字種は制限しない）。この場合 `admin_tx` には何も送らない。
 - 進行中のセッションが無ければ 409 `cluster_connect_not_started`。
@@ -1177,17 +1270,18 @@ task-api 自身は ssh を起動しない（DESIGN §5.10 の境界）。未知�
 
 #### 3.41 `DELETE /clusters/{id}/connect` → 200 `{}`
 
-進行中の接続セッションを取り消す（ssh の子プロセスをプロセスグループごと落とす）、または既に張った接続を切る
-（`ssh -O exit <host>` を `BatchMode=yes` で呼ぶ）。無ければ何もしない。
+進行中の接続セッションがあれば取り消し（ssh の子プロセスをプロセスグループごと落とす）、celeris が保持している
+master も落とし、さらに人が張った master が残っている場合に備えて `ssh -o BatchMode=yes -O exit <host>` を呼ぶ。
+接続が元から無い（`-O exit` が失敗する）場合も 200。
 
-### 3.42〜3.49 組織・案件・途中目標（ADR-0033 D1/D2、Phase 23）
+### 3.42〜3.49 組織・案件・途中目標（ADR-0033 D1/D2）
 
 SPEC §3.2〜§3.3 の「組織（一つ、役割の木）」と「案件・仕事の木」を第一級のエンティティにしたもの。
 既存の `tasks` は実行基盤として残り、案件の仕事の木は `tasks WHERE project_id = ?`（DAG は従来どおり
-`parent_id` / `depends_on`）。**組織の編集（3.43〜3.45）と案件の作成（3.46 の `POST`）が管理系**
-（`token_file` 未設定でも 401。案件を作ると秘書の run が起きるので、`POST /org/{id}/messages` と同じ規律。
-Phase 27 の監査 M-4）。読み取りと途中目標の操作は通常の要求（トークンを設定した celeris では、他の全要求と
-同じくトークンが要る）。
+`parent_id` / `depends_on`）。**組織の編集（3.43〜3.45）、案件の作成と変更（3.46 の `POST`、3.48）、
+途中目標の作成と変更（3.49）が管理系**（`token_file` 未設定でも 401。案件を作ると秘書の run が起きるので、
+`POST /org/{id}/messages` と同じ規律）。読み取り（3.42・3.46 の `GET`・3.47）は通常の要求（トークンを設定した
+celeris では、他の全要求と同じくトークンが要る）。
 
 #### 3.42 `GET /org` → 200 `OrgList`
 
@@ -1198,15 +1292,16 @@ Phase 27 の監査 M-4）。読み取りと途中目標の操作は通常の要�
            "genre":"literature","brief":"…","position":6,"created_at":"…","updated_at":"…"}]}
 ```
 
+- クエリは受けない（知らないクエリキーは 400）。
 - 並びは `position` 昇順、同値なら `id` 昇順。**木は GUI が `parent_id` で組む**（API は入れ子にしない）。
 - `kind` は `secretary`（根。1 つだけ）/ `department`（部）/ `section`（課）。
 - `genre` は `[[genres]] id`（無ければ項目ごと出ない）。その「人」が仕事に使うハーネスの束（ADR-0027/0028）。
-  書き込み（3.43 / 3.44）では**設定の `[[genres]]` にある id だけ**を受ける（無い id は 422 `validation`。
-  分野を 1 つも設定していない celeris では検証しない。Phase 27 の監査 L-1）。
+  書き込み（3.43 / 3.44）では**設定の `[[genres]]` にある id だけ**を受ける（無い id は 422 `validation`、
+  `errors[0].field = "genre"`。分野を 1 つも設定していない celeris では検証しない）。
 - 初期の形は `org_include` が指すファイル（`config/org.example.toml`）から、**DB の `org_nodes` が空のときだけ**
   蒔かれる。以後は DB が正で、設定を書き換えても反映されない（ADR-0033 D1）。
 
-**Phase 59（ADR-0046 D1）**: 各ノードは `profile` を持ち、**子は親を継ぐ**。応答には
+各ノードは `profile` を持ち、**子は親を継ぐ**（ADR-0046 D1）。応答には
 そのノード自身の `profile`（空なら項目ごと出ない）と、**継いだ後**の `effective_profiles[]` の両方が入る。
 
 ```json
@@ -1226,51 +1321,55 @@ Phase 27 の監査 M-4）。読み取りと途中目標の操作は通常の要�
  "lead_sessions":[{"node_id":"engineering","turns":3,"approx_tokens":12345,"last_used_at":"…"}]}
 ```
 
-**Phase 68（ADR-0054 D3）**: `lead_sessions[]`（`NodeSessionSummary`）は部門長（`kind = "department"`）
-の継続セッション（`node_sessions`、`kind = "lead"`。ADR-0054 D1）が**あるノードだけ**、`node_id` で
-対応づけて渡す（無いノードは配列に出ない。空なら `lead_sessions` 自体を省略）。組織画面はこれで
+`lead_sessions[]`（`NodeSessionSummary`）は部門長（`kind = "department"`）
+の継続セッション（`node_sessions`、`kind = "lead"`）が**あるノードだけ**、`node_id` で
+対応づけて渡す（無いノードは配列に出ない。空なら `lead_sessions` 自体を省略。ADR-0054 D1/D3）。組織画面はこれで
 「継続中のセッション: turns / tokens / 最終使用」を部門長ノードに出す。CoS の対話セッションはここには
 出ない（Console のチャット欄自身が状態を見せるため）。
 
-- `effective_profiles[]` は `items[]` と**同じ並び**で、`node_id` で対応づく。`chain` は根から葉までの
+- `effective_profiles[]` は `items[]` と**同じ並び**で、`node_id` で対応づく（空なら省略）。`chain` は根から葉までの
   ノード id（GUI の「どこから継いだか」）。
 - 継ぎ方（ADR-0046 D1。GUI はこれを再実装しない。表示は `effective_profiles` をそのまま使う）:
-  `skills` / `knowledge` / `tools` / `harnesses.allowed` / `permissions.approvals` は**親と和**（根→葉の順、
-  重複は落ちる）、`deny_tools` は和だが**常に勝つ**（実効の `tools` から引かれる）、
-  `run` / `model.tier` / `harnesses.default` / `review.*` は**子が勝つ**、`model.allowed_tiers` は**交わり**
-  （空の親は制限なし）、`policy` は根→葉の順に**連結**。
-- `profile` の項目はすべて任意。空の `profile` は応答に出ない（Phase 58 までのノードと 1 バイトも変わらない）。
+  `skills` / `knowledge` / `skills_mounts` / `tools` / `harnesses.allowed` / `permissions.approvals` は**親と和**
+  （根→葉の順、重複は落ちる）、`deny_tools` は和だが**常に勝つ**（実効の `tools` から引かれる）、
+  `browser` / `run` / `model.tier` / `harnesses.default` / `review.*` は**子が勝つ**、`model.allowed_tiers` は**交わり**
+  （空の親は制限なし）、`budget.max_lane` / `budget.max_attempts` は**最も厳しい値**（ADR-0069 D2）、
+  `policy` は根→葉の順に**連結**。
+- `profile` の項目はすべて任意。空の `profile` は応答に出ない。
 
 #### 3.43 `POST /org` → 201 `OrgNode`（`Location: /api/v1/org/{id}`）（**管理系**）
 
 要求本文 `{"id":"coding-poc","name":"PoC・R&D 課","kind":"section","parent_id":"coding","genre":"coding","brief":"…","position":4}`。
-`brief` と `position` は省略可（既定 `""` / `0`）。
+`parent_id` / `genre` / `brief` / `position` / `profile` は省略可（`brief` と `position` の既定は `""` / `0`）。
+知らない欄・本文の解析の失敗は 400 `bad_request`。
 
 - `id` は英小文字ケバブ（`[a-z0-9-]`、1〜64 文字、先頭末尾は `-` でない）。
 - 既にある `id` は 409 `org_node_exists`（更新は 3.44）。
-- 検証に落ちたら 422 `validation`: 秘書が 2 人、秘書に親がある、秘書以外に親が無い、親が存在しない、
-  自分を祖先にする、種類の順序違反（`secretary` > `department` > `section`）。
+- 検証に落ちたら 422 `validation`: `id` の綴り違反、空白だけの `name`、秘書が 2 人、秘書に親がある、
+  秘書以外に親が無い、親が存在しない、自分を祖先にする、種類の順序違反（`secretary` > `department` > `section`）。
 
-**Phase 59（ADR-0046 D1）**: 任意で `profile` を受ける（省略時は空）。`profile` の検証に落ちたら
+任意で `profile` を受ける（省略時は空。ADR-0046 D1）。`profile` の検証に落ちたら
 422 `validation`（`errors[0].field = "profile"`）:
 
 - `tools` / `deny_tools` の語彙は `gh` / `tavily` / `exa` / `docker` / `cluster:<id>` だけ（それ以外は 422）。
-- `harnesses.allowed[]` / `harnesses.default` / `review.harness` は**設定にあるハーネス id**か組み込み
-  （`conversation` / `plan` / `reviewer` / `smoke`）だけ（ハーネスを 1 つも設定していない celeris では検証しない）。
-- `skills[]` は小文字の `[a-z0-9._-]`、1〜64 文字。
+- `harnesses.allowed[]` / `harnesses.default` / `review.harness` は**設定にある分野（ハーネス）id**か組み込み
+  （`conversation` / `plan` / `reviewer` / `smoke` / `knowledge`）だけ（分野を 1 つも設定していない celeris では検証しない）。
+- `skills[]` は小文字の `[a-z0-9._-]`、1〜64 文字。`skills_mounts[]` は小文字の `[a-z0-9-]`、1〜64 文字。
+- `browser` は `BrowserCapability` の検証に通ること。
 - `run` は `"host"` / `"container"`、`model.tier` と `model.allowed_tiers[]` と `review.tier` は
-  `"frontier"` / `"standard"` / `"cheap"` だけ（知らない綴りは本文の解析で落ちて 400 `bad_request`）。
+  `"frontier"` / `"standard"` / `"cheap"` だけ（知らない綴り・知らない欄は本文の解析で落ちて 400 `bad_request`）。
 
 #### 3.44 `PATCH /org/{id}` → 200 `OrgNode`（**管理系**）
 
-`{"name":…, "kind":…, "parent_id":…, "genre":…, "brief":…, "position":…}` のうち**書いた項目だけ**を変える。
-`genre` は設定の `[[genres]]` にある id だけ（無い id は 422 `validation`）。
-`"genre": null` と書けば分野を外せる（書かなければ今の値のまま）。無い id は 404 `org_node_not_found`。
-検証は 3.43 と同じ（付け替えで木が壊れるなら 422）。
+`{"name":…, "kind":…, "parent_id":…, "genre":…, "brief":…, "position":…, "profile":…}` のうち**書いた項目だけ**を変える
+（空の本文は `{}` と同じ）。`genre` は設定の `[[genres]]` にある id だけ（無い id は 422 `validation`）。
+`"genre": null` と書けば分野を外せる（書かなければ今の値のまま）。`parent_id` は付け替えだけで、`null` は
+「書かない」と同じ（親を外せない）。無い id は 404 `org_node_not_found`。
+検証は 3.43 と同じ（付け替え・`kind` の変更で木が壊れるなら 422。既存の子との種類の順序も見る）。
 
-**Phase 59（ADR-0046 D1）**: `profile` は**丸ごと差し替え**（部分更新はしない）。書かなければ今の値のまま、
+`profile` は**丸ごと差し替え**（部分更新はしない）。書かなければ今の値のまま、
 `{}` を書けば空になる。検証は 3.43 と同じ。実効 profile（継いだ後）は `GET /org` の
-`effective_profiles[]` で読む（`PATCH` の応答は**そのノード自身の** `profile` だけを返す）。
+`effective_profiles[]` で読む（`PATCH` の応答は**そのノード自身の** `profile` だけを返す。ADR-0046 D1）。
 
 #### 3.45 `DELETE /org/{id}` → 204（**管理系**）
 
@@ -1281,19 +1380,18 @@ Phase 27 の監査 M-4）。読み取りと途中目標の操作は通常の要�
 
 #### 3.46 `GET /projects` → 200 `ProjectList` / `POST /projects` → 201 `Project`（**`POST` は管理系**）
 
-要求本文 `{"title":"Pluvio の新テーマ","request":"Pluvio を基盤に用いた新たな研究テーマの模索、検証"}`。
-作られた案件は必ず `status = "proposed"`（秘書が理解確認・方針・最初の途中目標を返すまで人の返事待ち。
-SPEC §7 / ADR-0033 D2）。空白だけの `title` / `request` は 422 `validation`。
+`POST` の要求本文 `{"title":"Pluvio の新テーマ","request":"Pluvio を基盤に用いた新たな研究テーマの模索、検証"}`
+（応答に `Location: /api/v1/projects/{id}`）。
+作られた案件は必ず `status = "proposed"`（秘書が理解確認・方針を返すまで人の返事待ち。
+SPEC §7 / ADR-0033 D2）。空白だけの `title` / `request` は 422 `validation`。知らない欄は 400 `bad_request`。
 一覧は `created_at` の降順。
 
-**Phase 55（ADR-0044 D6）**: `GET /projects` は**アーカイブされた案件を既定で隠す**。`?archived=1`
-（`1`/`0`/`true`/`false`）で全部返す。`GET /projects/{id}`（個別）は既定でもそのまま見える。
-`PATCH /projects/{id}`（3.48）と `POST /projects/{id}/milestones`（3.49）、`PATCH /milestones/{id}`（3.49）は
-Phase 55 から**管理系**（§1.3）。また **`PATCH` では `paused` / `cancelled` を入れられない**
-（422 `validation`、`errors[0].field = "status"`）: `paused_from`（`resume` の戻り先）が空のままになり、
-中止の連鎖も起きないので、§3.84〜3.91 の専用のエンドポイントを使う。
+`GET /projects` は**アーカイブされた案件を既定で隠す**。`?archived=1`
+（`1`/`0`/`true`/`false`）で全部返す（他のクエリキーは 400）。`GET /projects/{id}`（個別）は既定でもそのまま見える。
+`Project` の状態は `proposed` / `active` / `paused` / `done` / `cancelled`。`paused` / `cancelled` は
+§3.84〜3.91 の専用のエンドポイントでだけ入る（ADR-0044 D6）。
 
-**Phase 43（ADR-0039 D1）**: 任意で `workspace`（**案件の作業場所** = コードのある場所）を受ける:
+任意で `workspace`（**案件の作業場所** = コードのある場所）を受ける（ADR-0039 D1）:
 
 ```json
 {"title":"Pluvio の PoC","request":"…",
@@ -1305,93 +1403,107 @@ Phase 55 から**管理系**（§1.3）。また **`PATCH` では `paused` / `ca
 - `kind` は `local`（手元の普段のパス。SPEC §2.1）か `remote`（クラスタ側の作業ディレクトリ。ADR-0018 D1。
   celeris は写しを持ち、`sync` の設定で往復する）。
 - `local` の `~` / `~/…` は celeris の `$HOME` で**展開して保存する**（`GET` は展開後の絶対パスを返す）。
-  `remote` の `path` はクラスタ側なので展開しない。
+  `remote` の `path` はクラスタ側なので展開しない。`remote` の `path` は省略可（省略・相対パスはクラスタの
+  `work_dir` から解決する。ADR-0059 D6）。
 - `remote` の `cluster` が `[[clusters]]`（`GET /clusters`）に無ければ 422 `validation`
   （`errors[].field = "workspace.cluster"`）。
-- 省略すれば従来どおり「作業場所なし」（`Project.workspace` は応答に出ない）。
-- この作業場所は**分解（`POST /projects/{id}/plan`）とその子タスク**が継ぐ（明示 > 案件 > 親。ADR-0039 D2）。
-  コードを扱う案件では、GUI から必ず入れてもらうのがよい（入れないと子タスクは空の作業ディレクトリに置かれ、
-  ワーカーが自分で `ssh` してリポジトリを探しに行く。実機の事故 2026-09-18）。
+- 省略すれば「作業場所なし」（`Project.workspace` は応答に出ない）。
+- この作業場所は案件に属するタスクの**子タスク（分解・委譲）**が継ぐ（明示 > 案件 > 親。ADR-0039 D2）。
+  コードを扱う案件では、GUI から必ず入れてもらうのがよい。
 
-**Phase 52（ADR-0043 D1）**: 案件は**リポジトリを複数持てる**ようになった（3.68〜3.71）。
-`POST /projects {workspace}` と `PATCH /projects {workspace}` は従来どおり使え、**primary のリポジトリを
+案件は**リポジトリを複数持てる**（3.68〜3.71。ADR-0043 D1）。
+`POST /projects {workspace}` と `PATCH /projects/{id} {workspace}` は **primary のリポジトリを
 作る／書き換える**（`"workspace": null` は primary を消す。未終端のタスクが使っていれば 409 `repo_in_use`）。
-`Project.workspace` は primary の `location` の写しなので、従来の GUI はそのまま動く。
-`GET /projects/{id}` の応答には `repos[]`（primary が先頭）が増えた。
+`Project.workspace` は primary の `location` の写し。`GET /projects/{id}` の応答には `repos[]`（primary が先頭）が入る。
 
-**Phase 49（ADR-0041 D1）**: `kind = "local"` は任意で `mode` を持てる（`"worktree"` | `"shared"`、**既定
-`"worktree"`**）。知らない値は 400 `bad_request`（本文の解析で落ちる）。`remote` にこのキーは無い。
+`kind = "local"` も `kind = "remote"` も任意で `mode` を持てる（`"worktree"` | `"shared"`、**既定
+`"worktree"`**。ADR-0041 D1 / ADR-0059 D1）。知らない値は 400 `bad_request`（本文の解析で落ちる）。
 
 ```json
 {"workspace":{"kind":"local","path":"~/workspace/agent-platform","mode":"worktree"}}
 ```
 
-- `"worktree"`（既定）: `path` が git リポジトリなら、celeris は**タスクごとに `git worktree` を切る**。
-  ワーカーのカレントディレクトリは `<workspace_root>/<task_id>/tree`、ブランチは `celeris/<task_id>`
-  （接頭辞は `[workspace] worktree_branch_prefix`）、base は `main`（無ければ `HEAD`。本番の `current`
-  リリースが `main` の子孫ならその sha）。run のログ（`runs/`）と成果物（`artifacts/`）は**作業ツリーの外**の
-  `<workspace_root>/<task_id>/` に置かれ、ファイル系エンドポイント（§3.7〜§3.9）と `workspace_dir` も
-  そちらを指す。celeris は**コミットしない**し、ブランチも消さない。run が終端に達したとき
-  `git status --porcelain` が空なら worktree だけ消す（空でなければ残し、`WorkerProgress`
-  「未コミットの変更が残っています: `<dir>`」を 1 行積む）。
-- `"shared"`: 従来どおり `path` をそのまま作業ディレクトリにする（celeris 専用の使い捨てリポジトリ向け）。
-- `path` が git リポジトリでなければ `"worktree"` でも従来どおり（`"shared"` と同じ）。
-- 省略したものは応答の JSON にも出ない（Phase 48 までと同じ本文）。
+- `local` の `"worktree"`（既定）: `path` が git リポジトリなら、celeris は**タスクごとに `git worktree` を切る**
+  （ブランチは `celeris/<task_id>`。接頭辞は `[workspace] worktree_branch_prefix`）。run のログ（`runs/`）と
+  成果物（`artifacts/`）は**作業ツリーの外**の `<workspace_root>/<task_id>/` に置かれ、ファイル系エンドポイント
+  （§3.7〜§3.9）と `workspace_dir` もそちらを指す。置き場所・base・後片付けは ADR-0041 D1 / ADR-0043 / ADR-0079 D6。
+- `local` の `"shared"`: `path` をそのまま作業ディレクトリにする（celeris 専用の使い捨てリポジトリ向け）。
+- `path` が git リポジトリでなければ `"worktree"` でも `"shared"` と同じ。
+- `remote` の `mode` はクラスタ側の同期方針（`"worktree"` = クラスタの `sync` に従う。ADR-0059 D1）。
+- 省略したものは応答の JSON にも出ない。
 
 #### 3.47 `GET /projects/{id}` → 200 `ProjectDetail`
 
+```
+GET /api/v1/projects/{id}?include_frozen=true
+```
+
 ```json
 {"project":{…Project…},
- "milestones":[{"id":"01J…","project_id":"01J…","seq":1,"title":"関連研究を棚卸し","description":"",
-                "status":"in_progress","created_at":"…","updated_at":"…",
-                "review":{"message_id":"01J…","text":"候補を 3 本に絞りました。次は…","at":"…"},
-                "proposal":{"id":"01J…","seq":2,"title":"候補の比較実験","status":"proposed", …}}],
+ "repos":[{…ProjectRepo…}],
+ "milestones":[],
+ "milestones_frozen":2,
+ "milestones_frozen_open":1,
  "tasks":[{"id":"01J…","title":"調べる","status":"ready","parent_id":null,"depends_on":[],
-           "assignee":"research-survey","milestone_id":"01J…","conversation":false,"support":null}]}
+           "assignee":"research-survey","milestone_id":null,"is_root_task":true,
+           "conversation":false,"support":null}],
+ "root_totals":{…ProjectRootTotals…}}
 ```
 
 `project` には案件の作業場所（`workspace`。ADR-0039 D1。決めていない案件では出ない）も入る。
-`tasks` は**仕事の木を描くのに必要な分だけ**（詳細は `GET /tasks/{id}`）。`project_id` が一致するタスクだけが
-入り、他の案件・案件に属さないタスクは出ない。ULID でない id・無い案件は 404 `project_not_found`。
-`conversation` が `true` の行は**対話用タスク**（人への返事のための run。3.54 参照）なので、仕事の木からは
-隠してよい（GUI-R3。Phase 27）。`support`（Phase 29。§3.3 の `TaskSummary.support` と同じ規則）が
-`null` でない行は裏方（対話・報告のまとめ・承認・合成レビュー・**途中目標レビュー**）なので、GUI は
-仕事の木から一括で外せる。
+`repos` は案件のリポジトリ（primary が先頭。ADR-0043 D1）。
+`tasks` は**仕事の木を描くのに必要な分だけ**（`created_at` 降順で最大 2,000 件。詳細は `GET /tasks/{id}`）。
+`project_id` が一致するタスクだけが入り、他の案件・案件に属さないタスクは出ない。
+ULID でない id・無い案件は 404 `project_not_found`。知らないクエリキーは 400。
 
-**Phase 41（ADR-0038 D1 / D4）**: `milestones[]` の各行は `Milestone` のフィールドが**そのまま平らに**出たうえで、
-2 つが増える（どちらも無ければ省略。既存の読み手はそのまま動く）:
+- `is_root_task` が `true` の行は案件の root task（案件直下・木の子でない・対話でも裏方でもない。ADR-0079 D13）。
+- `conversation` が `true` の行は**対話用タスク**（人への返事のための run。3.54 参照）なので、仕事の木からは
+  隠してよい。`support`（§3.3 の `TaskSummary.support` と同じ規則）が `null` でない行は裏方なので、
+  GUI は仕事の木から一括で外せる。
+- `root_totals` は root task の数（状態ごと）とその subtree の合計（`tasks` と同じ 2,000 件の範囲。ADR-0079 D11）。
 
-- `review`: その途中目標についての**秘書のレビューの返事**（`{message_id, text, at}`）。途中目標の仕事が
-  止まると celeris が秘書の対話 run（裏方 `support = "milestone_review"`。`tasks[]` にも出る）を 1 回起こし、
-  その返事がここに入る。**まだ無ければ「秘書が結果をまとめています」**（`tasks[]` にその裏方タスクが
-  `ready` / `running` で居る）。
+途中目標と案件計画は**凍結した履歴**（ADR-0079 D13）。既定では `milestones` は空で、件数だけ
+`milestones_frozen`（全行）と `milestones_frozen_open`（そのうち終端でないまま凍結した行）に入る。
+`?include_frozen=true` のときだけ、`milestones[]` に全行と `project_plan`（案件計画の DAG。無ければ省略）を
+読み取り専用で返す。
+
+`milestones[]` の各行は `Milestone` のフィールドが**そのまま平らに**出たうえで、
+2 つが増える（どちらも無ければ省略。ADR-0038 D1 / D4）:
+
+- `review`: その途中目標についての**秘書のレビューの返事**（`{message_id, text, at}`）。
 - `proposal`: その返事が提案した**次の途中目標**（`proposed` の最新。`review` がある行にだけ付く）。
 
-GUI はこの 2 つが揃ったカードに「ok」「議論」「ng」の 3 ボタンと自由記述欄を出す（3.63）。
+#### 3.48 `PATCH /projects/{id}` → 200 `Project`（**管理系**）
 
-#### 3.48 `PATCH /projects/{id}` → 200 `Project`
+`{"status":…, "workspace":…, "slug":…, "title":…, "request":…}` のうち**書いたものだけ**を変える。
+知らない欄・知らない `status` の値は 400 `bad_request`（本文の解析で落ちる）。
 
-`{"status":"proposed"|"active"|"paused"|"done"}`。知らない値は 400 `bad_request`（本文の解析で落ちる）。
-
-**Phase 43（ADR-0039 D1）**: `status` と `workspace` はどちらも任意になった（書いたものだけ変える）。
-
-- `{"workspace":{"kind":"local","path":"~/workspace/rust/pluvio-poc"}}` — 作業場所だけを設定・差し替える
-  （`POST` と同じ検証・`~` の展開・422）。
-- `{"workspace":null}` — 作業場所を消す（「作業場所なし」に戻す）。
-- `{}`（どちらも書かない）は 422 `validation`。
+- `status`: `"proposed"` / `"active"` / `"done"`。**`paused` / `cancelled` は入れられない**
+  （422 `validation`、`errors[0].field = "status"`。§3.84〜3.91 の専用のエンドポイントを使う。ADR-0044 D6）。
+- `{"workspace":{"kind":"local","path":"~/workspace/rust/pluvio-poc"}}` — 作業場所（primary のリポジトリ）を
+  設定・差し替える（`POST` と同じ検証・`~` の展開・422）。`{"workspace":null}` は作業場所を消す
+  （未終端のタスクが使っていれば 409 `repo_in_use`）。
+- `slug`: 知識ベースの置き場 `projects/<slug>/` の slug（小文字の `[a-z0-9-]`、1〜64 文字、`-` の連続・先頭末尾は
+  不可、案件 ID の形は不可。違反は 422、他の案件と重複すれば 409 `project_slug_in_use`）。KB のディレクトリは動かさない
+  （ADR-0044 D7）。
+- `title`（前後の空白を除いて 1〜200 文字）/ `request`（同じく 1〜20,000 文字）。空・長すぎるものは 422。
+  `request` を書き換えても run は起きない（ADR-0072）。
+- `auto_advance` は廃止（書けば 422 `validation`、`errors[0].field = "auto_advance"`。ADR-0079 D13）。
+- どれも書かない（`{}`）は 422 `validation`。
+- ULID でない id・無い案件は 404 `project_not_found`。
 
 #### 3.49 途中目標: `POST /projects/{id}/milestones` → 201 `Milestone` / `PATCH /milestones/{id}` → 200 `Milestone`
 
-- 作成の本文は `{"title":"…","description":"…","status":"proposed"}`（`description` と `status` は省略可。
-  既定は `""` と `proposed`）。`seq` は**その案件の中での通し番号**をストアが採番する（1 始まり）。
-- 状態は `proposed` / `approved` / `in_progress` / `reached` / `redesigned`。達成ごとに人が判定し、
-  Go を出すか再設計する（SPEC §7 のアジャイル）。
-- 無い案件・無い途中目標は 404 `project_not_found` / `milestone_not_found`。
+**廃止**（ADR-0079 D13）。どちらも管理系の認証（401）を通ったあと、本文を見ずに 410 `removed_by_adr_0079`
+（`adr = "ADR-0079"`、`instead` に代わりの経路）を返す。途中目標は root task の段階で表す
+（`POST /tasks` に `project_id` と `stages_hint`）。既存の途中目標は凍結され、読み取りは
+`GET /projects/{id}?include_frozen=true`（3.47）。
 
-### 3.50〜3.53 報告（ADR-0033 D3、Phase 25）
+### 3.50〜3.53 報告（ADR-0033 D3）
 
 報告は**下から上へ**流れる。生成は決定的（run の `done` / `error` / `question` から celeris が 1 件作る。LLM は呼ばない）、
-**圧縮だけが LLM**（親ノードが子の報告 4 件、または最古が 2 時間を過ぎたら「まとめの run」を 1 回起こし、その `done` が
+**圧縮だけが LLM**（親ノードに子の報告が既定 4 件（`[reports] compress_after`）たまるか、最古が既定 2 時間
+（`[reports] compress_after_secs`）を過ぎたら「まとめの run」を 1 回起こし、その `done` が
 親の報告になる。`sources` に子の id が入る）。**悪い知らせ（`bad_news`）は圧縮を待たず、各祖先に複製されて秘書まで届く**
 （SPEC §2.4）。人が見るのは `level = 0`（秘書）の報告。
 
@@ -1403,7 +1515,8 @@ GUI はこの 2 つが揃ったカードに「ok」「議論」「ng」の 3 ボ
 GET /api/v1/reports?project=<ULID>&node=<org id>&level=<n>&unread=true&limit=50
 ```
 
-- 新しい順（`created_at` 降順、同値は id 降順）。`limit` の既定は 50、上限 500。知らないクエリキーは 400。
+- 新しい順（`created_at` 降順、同値は id 降順）。`limit` の既定は 50、1〜500 に丸める。知らないクエリキーは 400。
+  ULID でない `project` は 400 `bad_request`。
 - `level=0&unread=true` が**秘書レベルの未読**（GUI の「報告の流れ」の既定）。
 - `Report`: `{id, project_id?, node_id, task_id?, kind, level, headline, body, sources[], read_at?, created_at}`。
   `kind` は `progress` / `result` / `bad_news` / `proposal` / `question`。`project_id` が無いものは「案件なし」
@@ -1417,25 +1530,26 @@ GET /api/v1/reports?project=<ULID>&node=<org id>&level=<n>&unread=true&limit=50
 #### 3.52 `POST /reports/read` → 200 `{updated}`（**管理系**）
 
 - 本文 `{"ids": ["<report id>", …]}`。既に既読のものは触らない（`updated` は未読から既読に変わった件数）。
-- ULID でない id は 404 `report_not_found`。
+- ULID でない id は 404 `report_not_found`（無い ULID は数えずに飛ばす）。
 
 #### 3.53 `POST /reports/notified` → 200 `{last_notified_at}`（**管理系**）
 
-- GUI がブラウザ通知を出したときに呼ぶ。次の通知は**2 時間後**まで出ない（SPEC §3.5「通知は数時間単位」）。
+- GUI がブラウザ通知を出したときに呼ぶ（本文は取らない）。次の通知は**2 時間後**まで出ない（`bad_news` の未読を除く。
+  SPEC §3.5「通知は数時間単位」）。
 - `last_notified_at` は **API プロセスのメモリ**にある観測値で、DB には書かない（celeris を再起動すると「まだ通知していない」に戻る）。
 
 #### `GET /daemon` への追加（3.20）
 
-`DaemonSnapshot.reports`（古いスナップショットには無いので `null` でもよい）:
+`DaemonSnapshot.reports`（`ReportsLive`。未読数を読めなければ `null`）:
 
 ```
 reports: { unread_secretary: u32, unread_bad_news: u32, last_notified_at?: String, notify_now: bool }
 ```
 
-`notify_now` は決定的に決まる: **`bad_news` の未読があれば即 true**、無ければ「未読があり、前回の通知から 2 時間以上経った」とき true。
+`notify_now` は決定的に決まる: **`bad_news` の未読があれば即 true**、無ければ「未読があり、まだ通知していないか前回の通知から 2 時間以上経った」とき true。
 この 1 フィールドだけはディスパッチャではなく**API が応答を組むときに埋める**（`last_notified_at` が API 側にあるため）。
 
-#### 3.54〜3.55 対話（ADR-0033 D4、Phase 24）
+#### 3.54〜3.55 対話（ADR-0033 D4）
 
 SPEC §3.4「組織の木を見て誰に言うかを決め、その担当に直接言う。相手は人なので先週の議論の続きとして話せる」。
 **新しいプロトコルは足していない**: 話しかけると `messages` に `role = "user"` の行が 1 つ入り、そのノードの
@@ -1453,10 +1567,10 @@ run を 1 回起こすための**対話用タスク**（`kind = "execute"`、受
 ```
 
 - `task_id` は**その 1 往復を起こした対話用タスク**（`role = "user"` の行にも `role = "node"` の行にも
-  同じ id。GUI-R4 / migration 0007。Phase 27 より前に入った行には無い）。
+  同じ id。古い行には無い）。`metadata`（`author` や実行した操作の記録）は有るときだけ出る。
 
-- 並びは**古い順**（`created_at` 昇順、同値は `id` 昇順）。`limit`（既定 50、上限 500）を超えるときは
-  **新しい方**を残す（直近のやり取りを読むため）。
+- 並びは**古い順**（`created_at` 昇順、同値は `id` 昇順）。`limit`（既定 50、上限 500、0 は 400）を超えるときは
+  **新しい方**を残す（直近のやり取りを読むため）。知らないクエリキーは 400。
 - `project` を書けばその案件のスレッド、書かなければ**案件に紐づかない雑談**だけ（混ざらない）。
 - 無いノードは 404 `org_node_not_found`、ULID でない `project` は 404 `project_not_found`
   （存在しない案件の ULID は空の一覧）。
@@ -1471,23 +1585,24 @@ run を 1 回起こすための**対話用タスク**（`kind = "execute"`、受
 - **202**（同期で返事を待たない）。返事が入ったかは 3.54 で見る。
 - 人格を持つノードに指示を出す経路なので**管理系**（`token_file` 未設定でも 401。`POST /org` と同じ規律）。
 - 無いノードは 404 `org_node_not_found`。空白だけの `text`・存在しない `project_id` は 422 `validation`。
-- run の道具立ては決定的に決まる: そのノードの `genre` → 無ければ**対話用分野**（`[[genres]] id = "secretary"`）
-  → その分野の `default_role` → 役割の `tier` / `adapter`。予算は対話用の小さい既定
-  （`max_turns = 6` / `max_wall_secs = 300` / `max_retries = 1`）で、役割の既定より優先する。
+- run の道具立ては決定的に決まる: ノードの `genre` に関係なく**対話用分野**（設定の `[conversation] genre`、
+  既定 `"secretary"`）→ その分野の `default_role` → 役割の `tier` / `adapter`（役割が無ければ `standard`）。
+  予算は対話用の小さい既定（`max_turns = 10` / `max_wall_secs = 300` / `max_retries = 1`）で、役割の既定より優先する。
 - run のプロンプトには、ノードの `brief`・そのノードの長期記憶（ADR-0033 D6）・**この案件のこのノードとの
   直近のやり取り（既定 20 件）**が前置きされる。
 - run が `error` に終わったときの返事は `"返事できませんでした: <理由>"`。これを書くのは**タスクが `failed` に
-  落ちたときだけ**で、途中のやり直し（retryable / requeue）では書かない（1 通の問いに返事は 1 行。Phase 27 の
-  監査 M-5）。`question` は本文をそのまま返事にすることに加え、**`approvals` に 1 件を作る**（Phase 26、§3.6）。
-- **同じノード・同じ案件の対話は直列**（監査 M-3）: 未終了の対話タスクがあれば、新しい対話タスクの
+  落ちたときだけ**で、途中のやり直し（retryable / requeue）では書かない（1 通の問いに返事は 1 行）。
+  `question` は本文をそのまま返事にすることに加え、**`approvals` に 1 件を作る**（§3.6）。
+- **同じノード・同じ案件の対話は直列**: 未終了の対話タスクがあれば、新しい対話タスクの
   `depends_on` にそれが入る。つまり 2 通続けて送ると、2 通目は 1 通目の返事が終わるまで `ready` にならない
-  （GUI は `GET /tasks/{id}` の `depends_on` で待ち行列を見せられる）。
-- 対話用タスクは**報告を作らない**（返事は `messages` で読むもので、報告の流れには出ない。監査 M-6）。
-- **秘書の最初の返事**: `POST /projects`（3.46。こちらも管理系）で案件を作ると、その直後に秘書ノードへ
-  `request` を本文とした対話が 1 回自動で起きる（SPEC §7）。秘書がいない構成（組織を種蒔きしていない）では
-  何も起きない。
+  （GUI は `GET /tasks/{id}` の `depends_on` で待ち行列を見せられる）。CoS（`cos`）だけは**案件をまたいで**直列
+  （継続セッションが全体で 1 本のため。ADR-0054 D1/D2）。
+- 対話用タスクは**報告を作らない**（返事は `messages` で読むもので、報告の流れには出ない）。
+- **秘書の最初の返事**: `POST /projects`（3.46。こちらも管理系）で案件を作ると、その直後に秘書ノード
+  （`kind = "secretary"`）へ `request` を本文とした対話が 1 回自動で起きる（SPEC §7）。秘書がいない構成
+  （組織を種蒔きしていない）では何も起きない。失敗しても案件の作成は成功のまま。
 
-### 3.56〜3.60 認可（ADR-0033 D5、Phase 26）
+### 3.56〜3.60 認可（ADR-0033 D5）
 
 SPEC §3.6「少しでも聞くべきだとエージェントが判断したら、あなたに指示を仰ぐ。あなたはそれに対して
 『今回だけ』か『同じようなことは今後ずっと』のどちらかの認可を出す。永続の認可は文字で記録してエージェントに
@@ -1502,22 +1617,22 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 
 - 古い順（`created_at` 昇順、同値は id 昇順。答える順に並ぶキュー）。`pending` は**三値**:
   `pending=true` で未決定だけ（`decision` 無し）、`pending=false` で**決定済みだけ**（`decision` あり。
-  「決めたものの履歴」）、省略すると全件（GUI からの依頼 R5。Phase 27 で `false` が絞り込むようになった）。
+  「決めたものの履歴」）、省略すると全件。
   `project` / `node` と AND で効く。
 - `Approval`: `{id, project_id?, node_id, task_id?, question, decision?, answer?, created_at, decided_at?}`。
   `decision` は `once` / `standing` / `denied` / `withdrawn`（未決定は無い）。
-- **`withdrawn`（Phase F7、ADR-0033 D5 追記 2026-09-28）**: 認可元のタスク（`task_id`）が終端
+- **`withdrawn`（ADR-0033 D5）**: 認可元のタスク（`task_id`）が終端
   （`done` / `failed` / `cancelled`）になったので、**celeris が自動で閉じた**（人の決定ではない）。
   人が中止した・子として連鎖で中止された・依存先の失敗で `dependency_failed` になった・run が失敗した・
   完了した、のどれでも、その終端への遷移と**同じトランザクション**で、そのタスクの未決の行がすべて
   `decision = "withdrawn"`、`answer = "task <status>: 認可元のタスクが終わったため、celeris が自動で取り下げました"`、
   `decided_at` = 遷移の時刻になり、タスクに `Event::ApprovalsWithdrawn {approval_ids, task_status,
-  reason: "task_terminal"}`（`type = "approvals_withdrawn"`）が 1 件つく。F7 より前に残った行や遷移との
-  競合で取りこぼした行は、ディスパッチャの tick の照合が同じ形で閉じる（`reason: "reconcile"`）。
+  reason: "task_terminal"}`（`type = "approvals_withdrawn"`）が 1 件つく。遷移で取りこぼした行は、ディスパッチャの tick の照合が
+  同じ形で閉じる（`reason: "reconcile"`）。
   閉じた行は `pending=true`・`DaemonSnapshot.approvals_pending`・受信箱の `questions[].approval_id`・
   通知から消え、`pending=false`（決めたものの履歴）に残る。部をまたぐ委譲の判定では `withdrawn` を
   「まだ決まっていない」と読む（`denied` のように「もう聞かない」にはしない）。
-- **部をまたぐ委譲の認可**（SPEC §3.1 / Phase 27）は `question` が
+- **部をまたぐ委譲の認可**（SPEC §3.1）は `question` が
   **`"cross-department: <委譲元> -> <委譲先>: <理由>"`** の固定の形で来る（`node_id` = 委譲元、
   `task_id` = 委譲しようとした親タスク）。`once` ならそのタスクの次の run で委譲が通り、`standing` なら
   以後ずっと通る（このとき `standing_rules.rule` には答えの文ではなく
@@ -1537,18 +1652,20 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 - 応答は `{approval, standing_rule?, transition?, note?}`。`standing_rule` は `decision = "standing"` のときだけ、
   `transition`（`TransitionResult`。3.12 `POST /tasks/{id}/answer` と同じ形）は `approval.task_id` のタスクに
   答えて再開したときだけ載る。
-- **認可元のタスクの状態で分かれる（Phase F7）**。どれも**書く前に**判定する（半端に書かない）:
-  - `blocked`（途中確認 `awaiting_human` ではない）: 上のとおり答えて再開する。
+- **認可元のタスクの状態で分かれる（ADR-0033 D5）**。どれも**書く前に**判定する（半端に書かない）:
+  - `blocked`（段階の途中確認 `awaiting_human`・計画の承認待ち `awaiting_plan_approval` ではない）:
+    上のとおり答えて再開する。
   - **終端（`done` / `failed` / `cancelled`）またはタスクが無い**: 答える相手がいないので、**決定だけ記録して
     200**（`once` / `standing` / `denied` のどれでも。`standing` なら規則も足す）。`transition` は載らず、
-    `note`（例 `"task … is already cancelled; decision recorded without resuming the task"`）が載る。
+    `note`（例 `"task … is already cancelled; decision recorded without resuming the task"`、タスクが無ければ
+    `"task … no longer exists; decision recorded only"`）が載る。
     取り下げ済み（`withdrawn`）の行に人が答え直すのもこれ。
-  - それ以外（`ready` / `running` / `reviewing` / `draft`、途中確認の `blocked`）: 409 `invalid_transition`、
-    **何も書かない**（行は未決のまま）。
-  以前は決定を書いてから答えに行き、終端のタスクでは 409 を返しつつ決定だけ残っていた（2026-09-28 に本番で確認）。
+  - それ以外（`ready` / `running` / `reviewing` / `draft`、途中確認・計画の承認待ちの `blocked`）:
+    409 `invalid_transition`（`task_status` / `kind` / `trigger: "decide"` 付き）、**何も書かない**（行は未決のまま）。
+  - `task_id` の無い行: 決定だけ記録して 200（`transition` も `note` も載らない）。
 - `decision = "withdrawn"` は celeris だけが書く。人が送ると 422 `validation`。
 - `answer` が空白だけは 422 `validation`。無い id・ULID でない id は 404 `approval_not_found`。
-  `scope` が `"node"`/`"all"` 以外は 400。
+  `scope` が `"node"`/`"all"` 以外、`decision` が上の 4 値以外、知らない欄（`deny_unknown_fields`）は 400。
 
 #### 3.58 `GET /standing-rules?node=` → 200 `StandingRuleList`
 
@@ -1570,59 +1687,24 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 `DaemonSnapshot.approvals_pending`（`u32`。古いスナップショットには無いので既定は 0）: 未決定の認可の件数。
 `reports` と同じ理由で**API が応答を組むときに埋める**（ディスパッチャの送るスナップショットでは常に 0）。
 
-### 3.61〜3.62 GUI が SPEC の一本を通すために要る API（GUI 監査対応、Phase 29）
+### 3.61〜3.62 GUI 監査対応の API（ADR-0033 D4 / D6）
 
-GUI の監査（SPEC §4 との突き合わせ、実機操作あり）で「案件が分解されて組織を流れる、を GUI から起動も
-観察もできない」と判定された。§3.55 の対話 run は返事だけ（Phase 28）なので、人が方針に納得した後、
-分解そのものを起こす入口が無かった。3.61 がその入口。3.62 は SPEC §3.2 の「記憶は案件をまたぐ」を
+3.61（と同じ並びの 3.63）は撤去済みで 410（ADR-0079 D13）。3.62 は SPEC §3.2 の「記憶は案件をまたぐ」を
 人が確認するための読み取り専用の窓口（ADR-0033 D6）。
 
-#### 3.61 `POST /projects/{id}/plan` → 202 `{task_id}`（**管理系**）
+#### 3.61 `POST /projects/{id}/plan` → 410 `removed_by_adr_0079`（**管理系**）
 
-要求本文 `{"milestone_id":"01J…","note":"急がなくてよい"}`（両方省略可）。GUI の「この方針で進める」の
-入口（ADR-0033 D4 に「分解は人が `POST /projects/{id}/plan` で起こす」を追記）。
+撤去済み（ADR-0079 D13。§3.125.8）。案件は計画を持たない。**本文も id も読まずに** 410 を返す（管理系のまま:
+トークンが無ければ先に 401）。`instead` は「`POST /tasks` に `project_id` を付けて root task を作る（段階は
+`stages_hint` で名付ける）」。要求・応答の型（`ProjectPlanBody` / `ProjectPlanAccepted`）は
+`api-v1.schema.json` の互換のためにだけ残る。
 
-- 案件の `request`、途中目標（**`approved` / `in_progress` のもの**。`milestone_id` を指定すればそれだけを
-  使う）、`note`（人の一言）、そして**この案件の秘書との直近のやり取り**（`messages` 最大 20 件）を
-  1 つの `goal` にまとめ、`kind = "plan"` のタスクを 1 件作る（**新しいタスクの種類は作らない**。
-  `task_ops::add::create_support_task` にそのまま渡すだけ）。`project_id` / `milestone_id`（明示したときだけ）
-  / `assignee = <その案件の秘書>` を持ち、`role` / `genre` は秘書の分野から解決する。受け入れ条件は空で、
-  作った直後から `ready`（人が明示的にこの API を呼んだ時点が承認）。
-- プランナー（この run）の出力（`PlanOutput.tasks[]`）から作られる子は、親（この plan タスク）の
-  `project_id` / `milestone_id` を継ぐ（`task_core::plan::materialize`。Phase 23 の監査 D-3 で確定済み）。
-  `assignee` は組織図と分野の manifest を渡されたプロンプトの中で秘書が振る（ADR-0033 D4）。
-- 案件の `status` が `proposed` なら `active` にする。`milestone_id` を指定していれば、その途中目標を
-  `in_progress` にする（指定しなければ途中目標の状態は変えない。文脈として読むだけ）。
-- 応答は `{"task_id":"01J…"}`（202。run を待たない）。
-- 401（管理系。`token_file` 未設定でも）。無い案件は 404 `project_not_found`。`milestone_id` がその案件の
-  ものでなければ 422 `validation`（`milestone <id> does not belong to project <id>`）。秘書がいない構成
-  （組織を種蒔きしていない）は 422 `validation`（`no secretary is configured`）。
+#### 3.63 `POST /milestones/{id}/decide` → 410 `removed_by_adr_0079`（**管理系**）
 
-#### 3.63 `POST /milestones/{id}/decide` → 202 `MilestoneDecided`（**管理系**）
-
-要求本文 `{"decision":"ok"|"discuss"|"ng","note":"…"}`。SPEC §7 の「途中目標の達成ごとに人が判定し、
-Go か再設計」を**人の 3 つの答え**にしたもの（ADR-0038 D2）。**達成にするのは人の `ok` だけ**で、
-秘書は「達成と言えるか」を提案するにとどまる（3 値を LLM に解釈させない）。
-
-| `decision` | celeris がすること（決定的） |
-|---|---|
-| `ok` | この途中目標を `reached`。提案された次の途中目標（`proposed` の最新）を `approved` にし、**その途中目標の分解**を 3.61 と同じ経路で起こす（`note` は計画の `note` に渡り、秘書への `messages` にも `role = "user"` で残る）。分解が始まるので、応答時点のその途中目標は `in_progress` |
-| `discuss` | 状態は何も変えない。`note` を秘書への対話として送る（3.55 と同じ経路。案件付き）。秘書の返事に新しい `milestone_proposal` があれば `proposed` の途中目標が差し替わる（古い提案は `redesigned`）。人は納得したら `ok` を押す |
-| `ng` | この途中目標を `redesigned`（達成にしない）。提案された次の途中目標も `redesigned`。理由 +「この途中目標自体の再設計を提案せよ」の定型を秘書への対話として送る |
-
-応答（202。run は待たない）:
-
-```json
-{"decision":"ok","milestone":{…Milestone…},"next_milestone":{…Milestone…},
- "plan_task_id":"01J…","message_id":null,"conversation_task_id":null}
-```
-
-- `next_milestone` / `plan_task_id` は `ok`（提案があるとき）、`message_id` / `conversation_task_id` は
-  `discuss` / `ng` で入る（無いものは省略）。提案がまだ無い途中目標に `ok` を押すと、達成にするだけで
-  分解は起こさない（`plan_task_id` は `null`）。
-- `note` は `discuss` / `ng` では**必須**（空白だけも 422 `validation`）。`ok` では任意。
-- 401（管理系。`token_file` 未設定でも）。無い途中目標・ULID でない id は 404 `milestone_not_found`。
-  既に `reached` の途中目標は 409 `milestone_reached`。秘書がいない構成は 422 `validation`。
+撤去済み（ADR-0079 D13。§3.125.8。旧: 途中目標の `ok` / `discuss` / `ng` の判定、ADR-0038 D2）。3.61 と同じく
+本文も id も読まずに 410 を返す（トークンが無ければ先に 401）。`instead` は「root task の計画で `review: human`
+の段階を置く（`POST /tasks/{id}/execution/phase-gate`）」。型（`MilestoneDecideBody` / `MilestoneDecided`）は
+`api-v1.schema.json` の互換のためにだけ残る。
 
 #### 3.62 `GET /org/{id}/memory?project=<id>` → 200 `{notes, project, notes_path, project_path}`（読み取り）
 
@@ -1635,9 +1717,10 @@ Go か再設計」を**人の 3 つの答え**にしたもの（ADR-0038 D2）�
 
 - `<memory_dir>/<node_id>/notes.md`（案件をまたぐ記憶）と `projects/<project_id>.md`（案件の引き出し）の
   **全文**（前置き用の 8,000 字カット。ADR-0033 D6 とは別で、上限は切らない）。無ければ空文字列。
-  `project` を書かなければ `project` / `project_path` は `null`。
-- `[memory]`（`config.toml`）が設定されていなければ 409 `memory_unavailable`。無いノードは 404
-  `org_node_not_found`。
+  `project` を書かない・空文字列なら `project` / `project_path` は `null`（`project` は案件の存在を確かめない。
+  ファイルが正）。
+- `[memory]`（`config.toml`）が設定されていなければ 409 `memory_unavailable`（ノードの確認より先）。
+  無いノードは 404 `org_node_not_found`。知らないクエリは 400。
 - **書き込み API は無い**（記憶は run の後にワーカーが書く。ADR-0033 D6）。人が直したければ
   `notes_path` / `project_path` のファイルを直接編集する。この応答がパスを返すのはそのため。
 

@@ -1623,6 +1623,35 @@ pub fn verify_launcher_observation(
     .map(|f| task_core::browser_isolation::verify_isolation(&f))
 }
 
+/// launcher の観測から daemon 側と同じ規則で [`RuntimeFacts`] を組む（ADR-0116 D-L の実証用）。
+/// 本番 admission（`RestoreAdmission` / credentiald の `admit_attested`）に渡す事実と同じもの。
+/// 観測が fail closed で弾かれたなら `None`。
+///
+/// [`RuntimeFacts`]: task_core::browser_isolation::RuntimeFacts
+pub fn launcher_runtime_facts(
+    session_id: &str,
+    facts: &crate::browser_launcher::SessionFacts,
+    launcher_attested: bool,
+) -> Option<task_core::browser_isolation::RuntimeFacts> {
+    launcher_run::runtime_facts(
+        session_id,
+        &launcher_run::DaemonIds::current(),
+        facts,
+        launcher_attested,
+    )
+}
+
+/// launcher の `Started` 応答を daemon 自身の観測と照合し、本番経路と同じ規則で
+/// [`LauncherSessionProof`] を組む（ADR-0116 D-L の実証用）。照合に失敗したら `None`。
+///
+/// [`LauncherSessionProof`]: task_core::browser_isolation::LauncherSessionProof
+pub fn launcher_session_proof(
+    started: &crate::browser_launcher::StartedSession,
+    peer_uid: Option<u32>,
+) -> Option<task_core::browser_isolation::LauncherSessionProof> {
+    launcher_run::launcher_session_proof(started, peer_uid, &launcher_run::DaemonIds::current())
+}
+
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;

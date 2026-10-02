@@ -74,12 +74,17 @@ pub struct StartRequest {
     pub policy: SessionPolicy,
 }
 
-/// 起動できた session。`pid` は process group の leader（bwrap）。
+/// 起動できた session。`pid` は process group の leader（bwrap）。`runtime_*` と `ns_inodes` は
+/// launcher が `verify_isolation` を掛けた runtime process とその namespace の inode で、receipt の
+/// 束縛（protocol v3）に載る。
 pub struct Launched {
     pub session: Box<dyn BackendSession>,
     pub pid: i32,
     pub pgid: i32,
     pub starttime: u64,
+    pub runtime_pid: i32,
+    pub runtime_starttime: u64,
+    pub ns_inodes: std::collections::BTreeMap<task_core::browser_isolation::Namespace, u64>,
 }
 
 /// session の起動の中身（userns・bwrap・Chrome）。単体試験では偽の実装を使う。
@@ -534,6 +539,12 @@ fn start_reserved(
         Some(Err(code)) => return err(code),
         None => return err(ErrorCode::Timeout),
     };
+    let binding = SessionBinding {
+        pid: launched.runtime_pid,
+        starttime: launched.runtime_starttime,
+        ns_owner_uid,
+        ns_inodes: launched.ns_inodes,
+    };
     let record = SessionRecord {
         session_id: session_id.clone(),
         instance_id: inner.registry.instance_id().to_owned(),
@@ -560,11 +571,7 @@ fn start_reserved(
         .sessions
         .insert(session_id.clone(), entry.clone());
     let mut started = receipt(&entry.record, None, Outcome::Started, true);
-    started.binding = Some(SessionBinding {
-        pid: entry.record.pid,
-        starttime: entry.record.starttime,
-        ns_owner_uid,
-    });
+    started.binding = Some(binding);
     Response::Started {
         session_id,
         instance_id: entry.record.instance_id.clone(),

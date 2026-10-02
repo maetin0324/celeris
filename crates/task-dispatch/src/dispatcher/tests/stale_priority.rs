@@ -168,7 +168,7 @@ fn behind_target_stale_priority_order_and_fifo_relief() {
     let old_more = candidate(4, 0, Some((2, 600)));
     let starved = candidate(5, STALE_PRIORITY_RELIEF_TICKS, Some((0, 0)));
     let starved_earlier = candidate(1, STALE_PRIORITY_RELIEF_TICKS, None);
-    let mut all = vec![
+    let mut all = [
         fresh,
         unreadable,
         young,

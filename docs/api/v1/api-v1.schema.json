@@ -10711,6 +10711,9 @@
       ],
       "type": "object"
     },
+    "LlmSourceRef": {
+      "type": "string"
+    },
     "LlmSourceView": {
       "description": "`GET /llm/sources` の 1 供給元。",
       "properties": {
@@ -14787,6 +14790,20 @@
         "id": {
           "type": "string"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "model": {
           "description": "実効モデル（空なら `null`）。",
           "type": [
@@ -14825,6 +14842,12 @@
         "env_keys"
       ],
       "type": "object"
+    },
+    "ProviderKind": {
+      "enum": [
+        "adapter"
+      ],
+      "type": "string"
     },
     "ProviderLive": {
       "description": "プロバイダ（`[[providers]]` の行。認証アカウントは別参照）の稼働状況。`env` の値は含めない。",
@@ -14880,6 +14903,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -14890,6 +14917,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、\nceleris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "description": "実効モデル（空なら `None`）。",
@@ -15063,6 +15100,10 @@
             "null"
           ]
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -15073,6 +15114,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、\nまたは celeris を再起動した後は `null`（メモリだけに持つ観測値）。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "type": [
@@ -16510,6 +16561,21 @@
       },
       "required": [
         "updated"
+      ],
+      "type": "object"
+    },
+    "ResolvedLlmSource": {
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/SourceOrigin"
+        },
+        "source": {
+          "$ref": "#/$defs/LlmSourceRef"
+        }
+      },
+      "required": [
+        "source",
+        "origin"
       ],
       "type": "object"
     },
@@ -18424,6 +18490,13 @@
         "description"
       ],
       "type": "object"
+    },
+    "SourceOrigin": {
+      "enum": [
+        "explicit",
+        "derived"
+      ],
+      "type": "string"
     },
     "StageHint": {
       "additionalProperties": false,

@@ -72,6 +72,7 @@ fn state_rx(
         instance_id: "01J00000000000000000000000".into(),
         started_at: "2026-09-14T00:00:00Z".into(),
         providers_dir: None,
+        openai_compatible_source_ids: Default::default(),
         admin_tx: None,
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: 0,

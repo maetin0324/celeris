@@ -106,7 +106,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | `celerisctl`（CLI。migration をしない `open_client`） | celerisctl::main | `crates/celerisctl/src/main.rs` | [DESIGN §5.9](DESIGN.md#59-cli-taskctl), [ADR-0095](adr/0095-worker-runs-see-the-db-read-only.md) |
-| `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](adr/0053-llm-source-proxy.md) |
+| `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](adr/0053-llm-source-proxy.md), [ADR-0132](adr/0132-provider-llm-source-split-and-cheap-qwen.md) |
 | `celeris-mcp`（外部エージェント向け MCP） | celeris-mcp::rpc | `crates/celeris-mcp/src/rpc.rs` | [ADR-0056](adr/0056-mcp-server.md) |
 | `celeris-credentiald`（credential broker） | celeris-credentiald::lib | `crates/celeris-credentiald/src/lib.rs` | [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
 | `scratch-cache`（build cache L2 サーバー本体） | scratch-cache::server | `crates/scratch-cache/src/server.rs` | [ADR-0075](adr/0075-tiered-build-cache.md) |

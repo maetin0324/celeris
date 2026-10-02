@@ -432,3 +432,19 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
+
+## provider / LLM source 分離の設定例（2026-10-02、config-docs）
+
+ADR-0132 D2・D7 に合わせ、設定例の provider ID を source 非依存の名前にし、
+PaperQA の設定 JSON を `config/paperqa.proxy.example.json` に改名した。
+PaperQA は `celeris/standard`、LDR・LangMem・opencode は `celeris/cheap` を参照する。
+Qwen の tier 写像は cheap のみ。人が実行する本番移行・確認・戻し方は
+`docs/ops/provider-llm-source-migration.md` に記した。
+
+`cargo test -p celeris --lib example` の既存 `loads_research_example_config` は
+`[adapters.paperqa].settings` の旧ローカルパスを文字列一致で固定しているため、
+設定例を `settings/proxy` にした後はそのアサーションだけ失敗する。
+設定の `Config::load` と `validate` は成功し、他の example 試験は成功した。
+この WorkUnit の指示に従って試験コードは変更していない。
+`celerisctl config to-harnesses --config <file>` による全 10 件の
+`config/celeris*.example.toml` の読み込みと設定検査は全件 exit 0。

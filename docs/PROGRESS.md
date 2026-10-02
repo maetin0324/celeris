@@ -453,3 +453,20 @@ userns が要る試験（実 browser・実 runtime・launcher）を既定 skip�
 - 未解決: `CELERIS_USERNS_TESTS=1` での実行は userns が使える host で人が行う（手順は
   `docs/progress/phase-test-db-userns.md` に記載）。`browser_launcher_ptrace.rs` は未作成（本 task の範囲外）。
 - ADR-0126 の状態を「実装済み」に更新した。
+
+### Retry: final review 修正と workspace 検査
+
+worker run 内で本番 DB/token に一致する daemon は probe より先に拒否することを
+`worker_db_guard_refuse_action_never_probes_inside_worker_run`（1 passed）で確認した。guard を有効にしたまま
+worker marker と試験用一時 DB を使う e2e 免除経路は `worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on`
+（1 passed）で確認した。lib 内 browser 試験 `production_action_path_reaches_fixture_through_real_browser_and_egress` は
+`CELERIS_USERNS_TESTS` 未設定時に skip 理由を表示し pass した。
+
+- `cargo build --workspace --bins` → exit 0。
+- `cargo test --workspace` → exit 101。`instance_handoff` が 8 件中 3 passed / 5 failed。3 件は通常 daemon の一時 DB
+  に対する userns probe の `Operation not permitted`、2 件はその起動不成立による handoff 条件未達。WU test process に
+  worker marker が無い経路は ADR-0126 A3 の免除対象外で、従来どおり probe を要求する。従って全 workspace 試験の acceptance
+  は未達であり、初回検証の成功記録を今回の retry 成功として扱わない。
+- `cargo clippy --workspace --all-targets -- -D warnings` と `cargo fmt --all -- --check` → exit 0。
+- 未解決: instance_handoff の daemon を worker sandbox で試験する時の marker/probe 境界。userns が使える host での
+  `CELERIS_USERNS_TESTS=1` 実行も未実施。ADR-0126 は実装済みの状態を維持。

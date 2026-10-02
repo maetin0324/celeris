@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { DEFAULT_RELAY_TIMEOUT_MS, fail, parseUpstream, readTokenFile, validSegment } from "./relay.js";
 
-// file の中継（docs/web/implementation-plan.md P1-08、feature-parity R40・R41・X6、H8）。
+// file の中継（agent-docs/web/implementation-plan.md P1-08、feature-parity R40・R41・X6、H8）。
 // - `/files/tasks/:id/runs/:runId/:name` → daemon の `/api/v1/tasks/{id}/runs/{run_id}/{name}`、
 //   `/files/tasks/:id/artifacts/:idx` → `/api/v1/tasks/{id}/artifacts/{idx}`。path の解釈は daemon が行い、
 //   gateway は segment を検査する（`..`・区切り文字・NUL を拒む。`:idx` は 10 進の整数だけ）。

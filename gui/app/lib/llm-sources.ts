@@ -21,7 +21,7 @@ export function sourceLabel(id: string): string {
 /**
  * 状態バッジの一語（ADR-0055 D2 D1-3: 空白なし、12 字以内）。
  * `openai-compatible` は probe した到達性（`reachable`）、oauth のプールは `enabled` だけを見る
- * （到達性ではなくアカウントの残量で見る供給元なので、`reachable` は元から無い。`docs/gui/api.md` §3.108）。
+ * （到達性ではなくアカウントの残量で見る供給元なので、`reachable` は元から無い。`docs/api/v1/gui-api.md` §3.108）。
  */
 export function sourceStatusWord(source: Pick<LlmSourceView, "enabled" | "reachable">): string {
   if (!source.enabled) return "disabled";

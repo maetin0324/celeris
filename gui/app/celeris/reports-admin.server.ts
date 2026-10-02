@@ -4,7 +4,7 @@ import type { CelerisClient } from "./client.server";
 import type { ReportsNotifiedResult, ReportsReadBody, ReportsReadResult } from "./types";
 
 /**
- * 「報告」画面（`/reports`）からの既読・通知（ADR-0033 D3、docs/gui/api.md §3.52〜3.53。**管理系**、
+ * 「報告」画面（`/reports`）からの既読・通知（ADR-0033 D3、docs/api/v1/gui-api.md §3.52〜3.53。**管理系**、
  * `token_file` 未設定でも 401）。celeris のエラーは例外にせず `ReportOpOutcome` として返す
  * （`org-admin.server.ts` と同じ作り）。
  */

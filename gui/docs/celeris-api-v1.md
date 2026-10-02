@@ -1,6 +1,6 @@
 # celeris HTTP API v1 仕様
 
-実行・計画・再実行の追加エンドポイントは [`docs/celeris-api-v1.md`](../celeris-api-v1.md) を参照。
+実行・計画・再実行の追加エンドポイントは [`docs/api/v1/overview.md`](../../docs/api/v1/overview.md) を参照。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
 - 改訂: 2026-09-21 Phase 82（ADR-0056 D3 続き、skills を GUI から見る・作る・mount する）

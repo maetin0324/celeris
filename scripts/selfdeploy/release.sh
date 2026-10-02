@@ -45,7 +45,7 @@ env:
   SD_AUDIT_TIMEOUT  既定 600（秒）。`pnpm-mobile-audit` / `pnpm-e2e-mock` それぞれの壁時計の上限
                     （Phase 89。ADR-0041 追記）。Playwright の Chromium 実行ファイルが
                     ~/.cache/ms-playwright に無いホストでは、この 2 ステップは待たずに
-                    「false — playwright browser not installed」で失敗する（`docs/selfdeploy.md` 参照）。
+                    「false — playwright browser not installed」で失敗する（`docs/ops/selfdeploy.md` 参照）。
   SD_GATE_FORCE_GUI  1 なら gui/ に変更が無くても GUI の検査の段を飛ばさない（Phase SD-1）
   SD_RELEASE_SCRATCH_OWNER  既定 release-build（全リリースで共有する scratch の owner。Phase SD-1）
   SD_RELEASE_TARGET_TTL     既定 172800（秒）。共有 target の lease の TTL（最後のリリースからこの間は P0）
@@ -81,7 +81,7 @@ SHA_FULL="$(sd_sha_full "$REF")"
 sd_mkdirs
 
 # Phase SD-1: ビルドは場所を固定した作業ツリー（`.build/tree`）で行う。`.build/<sha12>/` は gate が落ちたときの
-# gate.json とログの置き場（ただのディレクトリ。docs/selfdeploy.md §2）。
+# gate.json とログの置き場（ただのディレクトリ。docs/ops/selfdeploy.md §2）。
 BUILD="$SD_BUILD_TREE"
 FAILED_DIR="$SD_BUILD_ROOT/$SHA12"
 REL="$(sd_release_dir "$SHA12")"

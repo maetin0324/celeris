@@ -775,7 +775,10 @@ fn daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded() {
 if [ -f throttle-me ]; then
   echo '{"type":"error","message":"429 rate limited","retryable":true,"provider_failure":{"kind":"throttled","retry_after_secs":30}}'
 else
-  sleep 6
+  # 壁時計の sleep ではなく、試験が cooldown と in_flight を確かめ終えて release を置くまで待つ（docs/testing.md）。
+  # 上限（0.1s × 3000）は試験が途中で落ちたときに worker を残さないためだけのもの。
+  n=0
+  while [ ! -f release ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
   echo '{"type":"done","summary":"slow ok","evidence":[]}'
 fi"#,
     );
@@ -825,7 +828,8 @@ fi"#,
     env.celerisctl(&["approve", &throttled.to_string()]);
 
     let mut snap = Value::Null;
-    let seen = wait_until(Duration::from_secs(5), || {
+    // slow は release を置くまで止まっているので、tick が遅くても in_flight のまま cooldown を待てる。
+    let seen = wait_until(Duration::from_secs(30), || {
         snap = env.get("/daemon").json()["snapshot"].clone();
         snap["cooldowns"].as_array().is_some_and(|c| {
             c.iter()
@@ -861,6 +865,8 @@ fi"#,
         0,
         "a requeue does not consume attempts"
     );
+    // 確認が済んだので slow を終わらせる。
+    std::fs::write(Path::new(&ws_slow).join("release"), "").unwrap();
     drop(daemon);
     env.replay_is_consistent();
 }
@@ -1048,13 +1054,35 @@ fn writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is
             daemon.log_text()
         );
     }
-    assert!(
-        wait_until(Duration::from_secs(120), || ids
+    // 壁時計の総時間ではなく進捗で待つ: 終わった task の数が 60s 増えないときだけ失敗する（tick が遅くても進んでいれば待つ）。
+    let stall = Duration::from_secs(60);
+    let mut done = 0;
+    let mut last_progress = Instant::now();
+    loop {
+        let now_done = ids
             .iter()
-            .all(|id| env.task(*id).status == Status::Done)),
-        "not all tasks finished\n{}",
-        daemon.log_text()
-    );
+            .filter(|id| env.task(**id).status == Status::Done)
+            .count();
+        if now_done == ids.len() {
+            break;
+        }
+        if now_done > done {
+            done = now_done;
+            last_progress = Instant::now();
+        }
+        assert!(
+            last_progress.elapsed() < stall,
+            "tasks stopped finishing at {done}/{}\n{}",
+            ids.len(),
+            daemon.log_text()
+        );
+        assert!(
+            daemon.child.try_wait().unwrap().is_none(),
+            "celeris exited while tasks were running\n{}",
+            daemon.log_text()
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
     assert!(
         daemon.child.try_wait().unwrap().is_none(),
         "celeris must still be running\n{}",

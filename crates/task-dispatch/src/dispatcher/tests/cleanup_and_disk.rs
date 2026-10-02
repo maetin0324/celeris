@@ -42,8 +42,39 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
 
 // ---- ADR-0066 D2（Phase 110b）: 終端タスクの作業場所からビルド生成物を刈る ----
 
+/// ADR-0125 (b): 削除は背景スレッドなので、`target/` の消滅と期待の `WorkspacePruned` event の両方が
+/// 観測できるまで待つ（固定回数のループではなく出来事待ち）。[`STATE_WAIT_GUARD`] は壊れたときに止まる保険。
+async fn wait_for_prune(
+    store: &Arc<dyn TaskStore>,
+    task_id: TaskId,
+    target_dir: &std::path::Path,
+    expected_removed: &[String],
+) -> Vec<(u64, Event)> {
+    let started = Instant::now();
+    loop {
+        let events = store.events_for(task_id).unwrap();
+        let pruned = !target_dir.exists()
+            && events.iter().any(|(_, e)| {
+                matches!(
+                    e,
+                    Event::WorkspacePruned { removed } if removed == expected_removed
+                )
+            });
+        if pruned {
+            return events;
+        }
+        if started.elapsed() >= STATE_WAIT_GUARD {
+            panic!(
+                "workspace prune not observed within {STATE_WAIT_GUARD:?}: target_dir exists={}, events={events:?}",
+                target_dir.exists(),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// `tick()` は、終端になってから `workspace_prune_after_secs` 経った作業場所の `target/` を消し、
-/// `workspace_pruned` イベントを積む（削除は背景スレッド。少し待てば反映される）。
+/// `workspace_pruned` イベントを積む（削除は背景スレッド。出来事が届くまで待つ）。
 #[tokio::test]
 async fn tick_prunes_the_oldest_terminal_workspace_and_records_an_event() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -81,30 +112,27 @@ async fn tick_prunes_the_oldest_terminal_workspace_and_records_an_event() {
     std::fs::create_dir_all(&target_dir).unwrap();
 
     d.tick().unwrap();
-    // 削除は背景スレッドなので、少し待って反映を確かめる。
-    for _ in 0..100 {
-        if !target_dir.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let expected_removed = vec!["repos/benchfs/target".to_string()];
+    let events = wait_for_prune(&store, task.id, &target_dir, &expected_removed).await;
     assert!(!target_dir.exists(), "target/ should have been pruned");
     assert!(
         task_dir.join("repos").join("benchfs").is_dir(),
         "the repo dir itself is kept"
     );
-    let events = store.events_for(task.id).unwrap();
     assert!(
         events.iter().any(|(_, e)| matches!(
             e,
-            Event::WorkspacePruned { removed }
-                if removed == &vec!["repos/benchfs/target".to_string()]
+            Event::WorkspacePruned { removed } if removed == &expected_removed
         )),
         "{events:?}"
     );
 }
 
 /// `workspace_prune_after_secs == 0` は無効（何も消さない）。
+///
+/// この 50ms sleep は直さない: `prune_one_workspace` は `workspace_prune_after_secs == 0` のとき
+/// 削除スレッドを一切立てずに即 return する（housekeeping.rs の `if ... == 0 { return; }`）ので、
+/// 負荷で遅れて偽の失敗を生む非同期処理が無い（待っても届かない出来事を待つ形には書き直せない）。
 #[tokio::test]
 async fn workspace_prune_after_secs_zero_disables_pruning() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());

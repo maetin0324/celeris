@@ -1269,23 +1269,6 @@ impl Dispatcher {
             tracing::warn!(%reason, "scratch pool disabled");
         } else if config.scratch.enabled && config.shared_build_cache {
             tracing::info!(dir = %config.scratch.dir.display(), "scratch pool enabled (ADR-0075)");
-            // ADR-0075 D4（Phase G2）: sccache を配線するか（run ごとにも確かめる。ここは起動ログだけ）。
-            let state = task_worker::scratch::resolve_sccache(
-                &config.scratch,
-                task_worker::scratch::server_listening,
-            );
-            match state.reason() {
-                None => tracing::info!(
-                    port = config.scratch.sccache.server_port,
-                    binary = %config.scratch.sccache.binary.display(),
-                    "sccache L1 wired into cargo runs (ADR-0075 D4)"
-                ),
-                Some(reason) => tracing::info!(
-                    state = state.label(),
-                    reason,
-                    "sccache L1 not wired; runs use plain cargo (ADR-0075 D4)"
-                ),
-            }
         }
         Self {
             store,

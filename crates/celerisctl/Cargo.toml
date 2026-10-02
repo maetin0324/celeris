@@ -25,5 +25,3 @@ tokio = { version = "1", features = ["rt", "macros", "signal"] }
 tempfile = "3"
 # ADR-0095 D6: 試験で `schema_migrations` を古い／新しい版に書き換える。
 rusqlite = { version = "0.32", features = ["bundled"] }
-# ADR-0075 D6（Phase G3）: `scratch status` が本物の cache server の `/stats` を読むテスト。
-scratch-cache = { path = "../scratch-cache" }

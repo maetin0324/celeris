@@ -28,15 +28,17 @@ fn skills_block_is_none_for_empty_skills() {
 }
 
 #[test]
-fn skills_block_concatenates_name_description_and_body() {
+fn skills_block_lists_name_description_and_path_without_body() {
     let dir = tempfile::tempdir().unwrap();
     let mount = write_skill(dir.path(), "rust-review", "Rust のレビュー観点", "");
     let block = skills_block(std::slice::from_ref(&mount)).unwrap();
     assert!(block.starts_with("## Skills（celeris）\n"));
-    assert!(block.contains("### rust-review\n"));
+    assert!(block.contains("- `rust-review`"));
     assert!(block.contains("Rust のレビュー観点"));
-    assert!(block.contains("# rust-review"));
-    assert!(block.contains("本文"));
+    assert!(block.contains(".agents/skills/rust-review/SKILL.md"));
+    assert!(block.contains("付属ファイル"));
+    assert!(!block.contains("# rust-review"));
+    assert!(!block.contains("本文"));
 }
 
 #[test]
@@ -47,7 +49,7 @@ fn skills_block_survives_a_missing_skill_md_without_panicking() {
         description: String::new(),
     };
     let block = skills_block(&[mount]).unwrap();
-    assert!(block.contains("### ghost"));
+    assert!(block.contains("- `ghost`"));
 }
 
 #[test]
@@ -111,7 +113,7 @@ fn preamble_section_carries_the_skills_block() {
     let mount = write_skill(dir.path(), "writing", "文章の書き方", "");
     let section = preamble_section(std::slice::from_ref(&mount));
     assert!(section.contains("## Skills（celeris）"));
-    assert!(section.contains("### writing"));
+    assert!(section.contains("- `writing`"));
 }
 
 #[tokio::test]
@@ -231,7 +233,7 @@ async fn deliver_agents_md_creates_the_file_and_preserves_reruns() {
     assert!(first.contains("# Notes"));
     assert!(first.contains("Build with cargo."));
     assert!(first.contains(SECTION_BEGIN));
-    assert!(first.contains("### rust-review"));
+    assert!(first.contains("- `rust-review`"));
 
     // 同じ skills でもう一度届けても増殖しない。
     deliver_agents_md(cwd.path(), std::slice::from_ref(&mount))
@@ -268,9 +270,12 @@ async fn deliver_claude_code_removes_unmounted_directories_but_keeps_user_author
     assert!(cwd.path().join(".claude/skills/b/SKILL.md").exists());
     assert!(cwd.path().join(".claude/skills/c/SKILL.md").exists());
     let marker_path = cwd.path().join(".celeris/skills.json");
-    let marker: Vec<String> =
+    let marker: SkillsMarker =
         serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
-    assert_eq!(marker, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(
+        marker.roots[CLAUDE_ROOT],
+        vec!["a".to_string(), "b".to_string()]
+    );
 
     // 2 回目: A だけを mount。B は消え、C（マーカーに無い）は残る。
     deliver_claude_code(cwd.path(), &[mount_a]).await.unwrap();
@@ -284,9 +289,9 @@ async fn deliver_claude_code_removes_unmounted_directories_but_keeps_user_author
         "user authored\n",
         "c is not in the marker (celeris never wrote it); it must survive"
     );
-    let marker: Vec<String> =
+    let marker: SkillsMarker =
         serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
-    assert_eq!(marker, vec!["a".to_string()]);
+    assert_eq!(marker.roots[CLAUDE_ROOT], vec!["a".to_string()]);
 }
 
 /// mount A+B の後に skills が空になったら、A と B の両方が消え、マーカーも空になる
@@ -309,9 +314,9 @@ async fn deliver_claude_code_removes_all_previously_mounted_when_skills_becomes_
     assert!(!cwd.path().join(".claude/skills/b").exists());
     assert!(cwd.path().join(".claude/skills/c").exists());
     let marker_path = cwd.path().join(".celeris/skills.json");
-    let marker: Vec<String> =
+    let marker: SkillsMarker =
         serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
-    assert!(marker.is_empty());
+    assert!(marker.roots[CLAUDE_ROOT].is_empty());
 }
 
 /// `codex`: mount A+B → AGENTS.md の節に両方。次に mount A だけにすると、節から B が消え、
@@ -328,14 +333,174 @@ async fn deliver_agents_md_shrinks_the_section_when_a_skill_is_unmounted() {
         .await
         .unwrap();
     let with_both = std::fs::read_to_string(cwd.path().join("AGENTS.md")).unwrap();
-    assert!(with_both.contains("### a"));
-    assert!(with_both.contains("### b"));
+    assert!(with_both.contains("- `a`"));
+    assert!(with_both.contains("- `b`"));
 
     deliver_agents_md(cwd.path(), &[mount_a]).await.unwrap();
     let with_one = std::fs::read_to_string(cwd.path().join("AGENTS.md")).unwrap();
-    assert!(with_one.contains("### a"));
+    assert!(with_one.contains("- `a`"));
     assert!(
-        !with_one.contains("### b"),
+        !with_one.contains("- `b`"),
         "b was unmounted; the section must shrink to just a"
+    );
+}
+
+#[tokio::test]
+async fn skills_agent_delivery_copies_nested_files_and_unmounts_only_owned_directories() {
+    let kb = tempfile::tempdir().unwrap();
+    let a = write_skill(kb.path(), "a", "A", " BODY_MARKER");
+    let b = write_skill(kb.path(), "b", "B", " BODY_MARKER");
+    std::fs::create_dir_all(kb.path().join("a/rules/nested")).unwrap();
+    std::fs::write(kb.path().join("a/rules/nested/check.md"), "auxiliary").unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(cwd.path().join(".agents/skills/human")).unwrap();
+    std::fs::write(cwd.path().join(".agents/skills/human/SKILL.md"), "human").unwrap();
+    std::fs::write(cwd.path().join(".agents/config.json"), "{}").unwrap();
+    deliver_agent_skills(cwd.path(), &[a.clone(), b])
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(cwd.path().join(".agents/skills/a/rules/nested/check.md")).unwrap(),
+        "auxiliary"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.path().join(".agents/skills/a/.gitignore")).unwrap(),
+        COPY_IGNORE
+    );
+    let block = skills_block(std::slice::from_ref(&a)).unwrap();
+    assert!(!block.contains("BODY_MARKER"));
+    assert!(block.contains(".agents/skills/a/SKILL.md"));
+    deliver_agent_skills(cwd.path(), &[a]).await.unwrap();
+    assert!(!cwd.path().join(".agents/skills/b").exists());
+    deliver_agent_skills(cwd.path(), &[]).await.unwrap();
+    assert!(!cwd.path().join(".agents/skills/a").exists());
+    assert_eq!(
+        std::fs::read_to_string(cwd.path().join(".agents/skills/human/SKILL.md")).unwrap(),
+        "human"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.path().join(".agents/config.json")).unwrap(),
+        "{}"
+    );
+    let marker = read_skills_marker(cwd.path()).await;
+    assert!(marker.roots[AGENTS_ROOT].is_empty());
+}
+
+#[tokio::test]
+async fn skills_agent_delivery_cleans_imprinted_copy_without_marker_and_preserves_same_name_human_copy()
+ {
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "orphan", "d", "");
+    let cwd = tempfile::tempdir().unwrap();
+    let orphan = cwd.path().join(".agents/skills/orphan");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join(".gitignore"), COPY_IGNORE).unwrap();
+    std::fs::write(orphan.join("SKILL.md"), "old").unwrap();
+    deliver_agent_skills(cwd.path(), &[]).await.unwrap();
+    assert!(!orphan.exists());
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("SKILL.md"), "human").unwrap();
+    let error = deliver_agent_skills(cwd.path(), &[mount])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        std::fs::read_to_string(orphan.join("SKILL.md")).unwrap(),
+        "human"
+    );
+}
+
+#[tokio::test]
+async fn skills_switches_destinations_and_reads_legacy_marker() {
+    let kb = tempfile::tempdir().unwrap();
+    let a = write_skill(kb.path(), "a", "A", "");
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(cwd.path().join(".celeris")).unwrap();
+    std::fs::create_dir_all(cwd.path().join(".claude/skills/a")).unwrap();
+    std::fs::write(cwd.path().join(SKILLS_MARKER_REL), "[\"a\"]").unwrap();
+    deliver_agent_skills(cwd.path(), std::slice::from_ref(&a))
+        .await
+        .unwrap();
+    assert!(!cwd.path().join(".claude/skills/a").exists());
+    assert!(cwd.path().join(".agents/skills/a/SKILL.md").exists());
+    deliver_claude_code(cwd.path(), &[a]).await.unwrap();
+    assert!(!cwd.path().join(".agents/skills/a").exists());
+    assert!(cwd.path().join(".claude/skills/a/SKILL.md").exists());
+}
+
+#[tokio::test]
+async fn skills_marker_ignore_is_idempotent_and_preserves_existing_lines() {
+    let cwd = tempfile::tempdir().unwrap();
+    let dir = cwd.path().join(".celeris");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".gitignore"), "# human line\n!keep.txt\n").unwrap();
+    write_skills_marker(cwd.path(), AGENTS_ROOT, &[])
+        .await
+        .unwrap();
+    let first = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+    write_skills_marker(cwd.path(), AGENTS_ROOT, &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        first
+    );
+    assert_eq!(first, "# human line\n!keep.txt\n*\n");
+}
+
+#[test]
+fn skills_listing_uses_frontmatter_fallback_and_limits_description() {
+    let kb = tempfile::tempdir().unwrap();
+    let mut mount = write_skill(kb.path(), "small", "fallback", " BODY_MARKER");
+    mount.description.clear();
+    let block = skills_block(&[mount.clone()]).unwrap();
+    assert!(block.contains("fallback"));
+    assert!(!block.contains("BODY_MARKER"));
+    mount.description = "x".repeat(1200);
+    let block = skills_block(&[mount]).unwrap();
+    assert_eq!(block.matches('x').count(), 1024);
+}
+
+#[tokio::test]
+async fn skills_copy_is_excluded_from_git_status_without_touching_repo_exclude() {
+    use std::process::Command;
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "example", "Example", "");
+    let cwd = tempfile::tempdir().unwrap();
+    let init = Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .arg(cwd.path())
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let repo_exclude = cwd.path().join(".git/info/exclude");
+    let before = std::fs::read(&repo_exclude).unwrap();
+    deliver_agent_skills(cwd.path(), &[mount]).await.unwrap();
+    let status = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert_eq!(String::from_utf8(status.stdout).unwrap(), "");
+    assert_eq!(std::fs::read(repo_exclude).unwrap(), before);
+}
+
+#[tokio::test]
+async fn skills_agents_md_removes_only_celeris_section_on_unmount() {
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "example", "Example", " BODY_MARKER");
+    let cwd = tempfile::tempdir().unwrap();
+    let path = cwd.path().join("AGENTS.md");
+    std::fs::write(&path, "# Human instructions\n").unwrap();
+    deliver_agents_md(cwd.path(), &[mount]).await.unwrap();
+    let mounted = std::fs::read_to_string(&path).unwrap();
+    assert!(mounted.contains(".agents/skills/example/SKILL.md"));
+    assert!(!mounted.contains("BODY_MARKER"));
+    deliver_agents_md(cwd.path(), &[]).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# Human instructions\n"
     );
 }

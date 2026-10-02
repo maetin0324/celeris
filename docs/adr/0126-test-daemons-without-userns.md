@@ -4,8 +4,10 @@ tasks: [01M3YB21F07GQKTRYPRVN184AR]
 # ADR-0126: 試験用一時 DB の daemon は worker run の中で userns を要求しない、userns の要る試験は opt-in（ADR-0095 付記）
 
 - 日付: 2026-10-02
-- 状態: 採用（実装前）。実装は葉 guard-scope（A）・e2e-harness（A の試験側）・userns-optin（B）・gate-env（B の gate）・
-  prompt-rule（C）が行う。
+- 状態: 実装済み。葉 guard-scope（A）・e2e-harness（A の試験側）・userns-optin（B）・gate-env（B の gate）・
+  prompt-rule（C）を実装し、worker sandbox の中で `cargo test -p e2e --test api_scenarios`・
+  `cargo test -p celeris --test instance_handoff`・`cargo test --workspace`・`cargo clippy --workspace -- -D warnings` を
+  実行して確認した（証拠: [docs/progress/phase-test-db-userns.md](../progress/phase-test-db-userns.md)）。
 - 関連: [ADR-0095](0095-worker-runs-see-the-db-read-only.md) D1/D5（worker db guard、fail-closed）と付記 D-a〜D-d、
   ADR-0079 付記「R7-6」（daemon 起動時の guard）・「R7-12」D4（`CELERIS_ISOLATION_TESTS` と環境の preflight）、
   ADR-0045 D2（既定の設定 `~/.config/celeris/config.toml`）。DESIGN.md は変えない。

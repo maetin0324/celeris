@@ -42,6 +42,50 @@ struct ReviewSync {
     reviewed_sha: String,
 }
 
+/// An integration repair is resolved only after its WU is done and a new target
+/// snapshot has been recorded. Looking at terminal events also makes a retried
+/// review entry idempotent after a daemon restart.
+fn pending_integration_repair(
+    events: &[(u64, Event)],
+    units: &[task_core::WorkUnitRow],
+    repo_id: task_core::RepoId,
+) -> Option<(String, u32)> {
+    let mut closed = std::collections::HashSet::new();
+    for (_, event) in events.iter().rev() {
+        match event {
+            Event::IntegrationRepairResolved { work_unit_id, .. } => {
+                closed.insert(work_unit_id.clone());
+            }
+            Event::IntegrationRepairExhausted {
+                work_unit_id: Some(work_unit_id),
+                ..
+            } => {
+                closed.insert(work_unit_id.clone());
+            }
+            Event::IntegrationRepairExhausted {
+                work_unit_id: None,
+                repo_id: exhausted_repo,
+                ..
+            } if *exhausted_repo == repo_id => return None,
+            Event::IntegrationRepairScheduled {
+                work_unit_id,
+                repo_id: scheduled_repo,
+                attempt,
+                ..
+            } if *scheduled_repo == repo_id && !closed.contains(work_unit_id) => {
+                return units
+                    .iter()
+                    .find(|unit| {
+                        unit.id == *work_unit_id && unit.status == task_core::WorkUnitStatus::Done
+                    })
+                    .map(|_| (work_unit_id.clone(), *attempt));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 impl Dispatcher {
     /// ADR-0074「F5-fix8 実装時の明確化」: `ready` の Task の、仕事の残っていない計画を最終レビューに出す
     /// （`Trigger::PlanComplete`。run は起こさない）。レビューの主題は完了した WU の要約（`finish_phase_integration`
@@ -509,6 +553,22 @@ impl Dispatcher {
                     attempt,
                 },
             )?;
+            let events = self.store.events_for(task_id)?;
+            let units = self.store.work_units_for(task_id)?;
+            if let Some((work_unit_id, attempt)) =
+                pending_integration_repair(&events, &units, snapshot.repo_id)
+            {
+                self.store.append_event(
+                    task_id,
+                    &Event::IntegrationRepairResolved {
+                        work_unit_id,
+                        repo_id: snapshot.repo_id,
+                        target_sha: snapshot.target_sha.clone(),
+                        reviewed_sha: snapshot.reviewed_sha.clone(),
+                        attempt,
+                    },
+                )?;
+            }
         }
 
         // ADR-0074 D3.3（Phase F4a (b)）: 案件計画（マイルストーン DAG）の run は `plan.json` ではなく

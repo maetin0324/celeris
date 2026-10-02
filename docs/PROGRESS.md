@@ -94,6 +94,8 @@ P6-01 の web 配布物、P6-02 の web ADR-W3・systemd unit・非 blocking rel
 
 前回 2 回の最終整合記録（attempt 1・attempt 2）はいずれも `cargo test --workspace --no-fail-fast` が sandbox の user namespace 制約で exit 101 となり、reviewer が Phase 完了 gate 未達とした。crates/ は本 task で無変更なのでこれは環境の問題と判断し、Bash サンドボックスを外して（dangerouslyDisableSandbox）、Celeris が渡した `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` のまま再実行した。結果: `cargo test --workspace --no-fail-fast` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace -- -D warnings` exit 0。V1（gui/、pnpm@11.27.0 固定）の install/test/typecheck/build は各 exit 0（Vitest 84 files / 1,249 passed）。V2（web/、pnpm@12.6.0 固定）の install/typecheck/lint/test/build/`gen:types --check`/`check:boundaries`/`check:secrets`/`check:parity --require-phase 6` は各 exit 0（Vitest 24 files / 178 passed、Node test 41 passed）。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api` は exit 0（差分なし）。install・build 後も追跡ファイルへの変更なし。詳細な表とコマンドは [phase-web の最終 gate 節](progress/phase-web.md#最終-gate2026-10-02head-c63d53c21d46)。
 
+dd6219db の probe 修正（`crates/task-worker/tests/browser_shared_cdp.rs` で WebSocket frame を最後まで読む）は crates/ の範囲外変更として revert した。必要な修正は main 向けの別 task で入れる。
+
 ## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
 
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。

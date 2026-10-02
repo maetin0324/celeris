@@ -187,3 +187,18 @@ Rust の失敗テスト名と各 panic message はこの run の機械向け成�
 install・build 後も `git status --porcelain` は空（node_modules・dist・build はいずれも gitignore 対象で、追跡ファイルへの変更なし）。
 
 未解決: この run では V2 の `e2e parity/` と `scripts/selfdeploy/tests/*.sh` は実行していない（Objective の範囲は cargo test/clippy と V1・V2 の指定コマンドまで）。前回（attempt 2）で両方とも exit 0 だったことは上の節を参照。crates/ は本 task で変更していないため、Rust gate がサンドボックス外で exit 0 になったことは crates/ 側の修正によるものではなく、run の実行環境（user namespace 権限）の違いによる。
+
+## web 最終 HEAD 検証（scope 復元後）
+
+検証した HEAD（revert commit）: `43bb05b019e9dd04bb33f29ea1f6bfd7ba720662`。`dd6219db` は HEAD の祖先。merge-base は `e768594c2d18a57ac445d80746df9ab3b4e861b4`。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` → exit 0（差分なし）。
+
+前の記録にある exit 101 は sandbox の user namespace/unshare が `Operation not permitted` となったためであり、本節のサンドボックス外での検証記録がその結果を置き換える。最初の sandbox 実行も同じ理由で失敗した。Bash サンドボックスを外して最終 HEAD で再検証し、`browser_shared_cdp` を含む全テストが通過した。
+
+| 検証 | コマンド | exit | 件数 |
+| --- | --- | --- | --- |
+| 差分範囲 | `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` | 0 | 差分なし |
+| Rust test | `cargo test --workspace --no-fail-fast`（サンドボックス外） | 0 | 3,206 passed / 0 failed / 12 ignored（`test result:` 118 行の合計） |
+| Browser probe test | `cargo test -p task-worker --test browser_shared_cdp -j 2`（sandbox 内の初回再試行） | 101 | `unshare: Operation not permitted`。同 suite はサンドボックス外の workspace test で 2 passed / 0 failed |
+| Rust lint | `cargo clippy --workspace -- -D warnings`（サンドボックス外） | 0 | warning 0 |
+
+web/gui の行は同じ HEAD で次段で追記

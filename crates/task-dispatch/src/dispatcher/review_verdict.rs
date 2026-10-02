@@ -531,13 +531,38 @@ impl Dispatcher {
         let diff_stat = crate::checkpoint::gather_repo_facts(cwd, branch)
             .0
             .map(|r| r.diff_stat);
+        let mut allowed_paths = std::collections::BTreeSet::new();
+        let mut scope_checks = std::collections::BTreeSet::new();
+        for unit in &units {
+            allowed_paths.extend(unit.spec.context.paths.iter().cloned());
+            scope_checks.extend(
+                unit.spec
+                    .checks
+                    .iter()
+                    .filter(|check| check.cmd.contains("git diff"))
+                    .map(|check| check.cmd.clone()),
+            );
+        }
+        scope_checks.extend(task.acceptance.iter().filter_map(|criterion| {
+            if let task_core::Check::Command { cmd, .. } = &criterion.check
+                && cmd.contains("git diff")
+            {
+                Some(cmd.clone())
+            } else {
+                None
+            }
+        }));
+        let scope = task_core::RepairScope {
+            allowed_paths: allowed_paths.into_iter().collect(),
+            scope_checks: scope_checks.into_iter().collect(),
+        };
         let objective = task_core::build_repair_objective(
             class,
             &failing_details,
             &task.title,
             &task.objective,
             diff_stat.as_deref(),
-            None,
+            Some(&scope),
         );
         let n = repairs.len() + 1;
         let spec = task_core::WorkUnitSpec {

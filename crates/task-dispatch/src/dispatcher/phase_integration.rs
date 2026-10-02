@@ -2,6 +2,28 @@
 
 use super::*;
 
+/// Repair に渡す unit の変更許可パスと差分範囲 check を重複なく安定した順序にする。
+fn repair_scope_from_units<'a>(
+    units: impl IntoIterator<Item = &'a task_core::WorkUnitRow>,
+) -> task_core::RepairScope {
+    let mut allowed_paths = std::collections::BTreeSet::new();
+    let mut scope_checks = std::collections::BTreeSet::new();
+    for unit in units {
+        allowed_paths.extend(unit.spec.context.paths.iter().cloned());
+        scope_checks.extend(
+            unit.spec
+                .checks
+                .iter()
+                .filter(|check| check.cmd.contains("git diff"))
+                .map(|check| check.cmd.clone()),
+        );
+    }
+    task_core::RepairScope {
+        allowed_paths: allowed_paths.into_iter().collect(),
+        scope_checks: scope_checks.into_iter().collect(),
+    }
+}
+
 impl Dispatcher {
     /// ADR-0074 D1.7（Phase F2）: 走らせている spawn の無い `integrate-<phase>`（running）を pending に
     /// 戻す（次の tick で冪等な手順でやり直す）。
@@ -698,13 +720,20 @@ impl Dispatcher {
                     .0
                     .map(|s| s.diff_stat)
             });
+        let scope = repair_scope_from_units(units.iter().filter(|unit| {
+            unit.phase.as_deref() == Some(phase.as_str())
+                && !matches!(
+                    unit.kind,
+                    task_core::WorkUnitKind::Repair | task_core::WorkUnitKind::Integrate
+                )
+        }));
         let objective = task_core::build_repair_objective(
             class,
             &summary,
             &task.title,
             &task.objective,
             diff_stat.as_deref(),
-            None,
+            Some(&scope),
         );
         let (max_turns, max_wall_secs) = class.budget();
         let spec = task_core::WorkUnitSpec {

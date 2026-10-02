@@ -433,7 +433,14 @@ pub fn replan(
     // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を
     // 「新しい」key として再利用しようとしたら拒否する（D5）。ADR-0079 付記「R7-3」D3: 段階の統合 WU の key
     // （前の版で消した段階の key を戻した）も同じく検証の理由にする（以前は sqlite の UNIQUE 制約のエラーだった）。
-    let retired = task_core::execution_plan::retired_key_errors(&validated.spec, &all_units);
+    let mut retired = task_core::execution_plan::retired_key_errors(&validated.spec, &all_units);
+    // ADR-0079 付記「R7-12」D3: daemon の足した WU（配送 / 最終レビュー / 統合の repair WU）の key を書いた計画も拒む
+    // （新しい unit とみなすと、既存の done の行を ready に戻して repair を再実行してしまう）。
+    retired.extend(task_core::execution_plan::daemon_added_key_errors(
+        &active.spec,
+        &validated.spec,
+        &all_units,
+    ));
     if !retired.is_empty() {
         return Err(OpsError::Validation(describe_validation_errors(&retired)));
     }

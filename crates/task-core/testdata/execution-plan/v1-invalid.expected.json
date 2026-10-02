@@ -2,7 +2,7 @@
   "errors": [
     "children are only allowed in celeris.execution-plan/2 (must be empty in v1)",
     "phases must be empty in celeris.execution-plan/1",
-    "work unit b: kind \"integrate\" is reserved for daemon-created integration work units（daemon が足した WU（kind = integrate の統合 WU・統合の repair WU）は書かなくてよい（daemon が旧版から持ち越す・補う））",
+    "work unit b: kind \"integrate\" is reserved for daemon-created integration work units（daemon が足した WU（kind = integrate の統合 WU・統合の repair WU・配送 / 最終レビューの repair WU〈計画に無い kind = repair の repair-N〉）は書かなくてよい・書かない（daemon が旧版から持ち越す・補う））",
     "work unit b: phase must not be set in celeris.execution-plan/1",
     "invalid work unit key: \"A\" (must match [a-z0-9-]{1,32})",
     "work unit b depends on unknown key zzz",

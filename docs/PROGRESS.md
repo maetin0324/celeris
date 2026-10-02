@@ -432,3 +432,24 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
+
+## 試験用 DB の daemon と userns 試験の opt-in（完了 2026-10-02、ADR-0126）
+
+worker run の sandbox（user namespace を作れない環境）の中で e2e・daemon 試験が userns 拒否で全滅していた問題
+（2026-10-02 handoff 認可 task の `phase-R.md`）を、worker db guard の判定を本番 DB・本番 token の有無で絞り、
+userns が要る試験（実 browser・実 runtime・launcher）を既定 skip・`CELERIS_USERNS_TESTS=1` の opt-in にすることで
+解消した。詳細な記録は [docs/progress/phase-test-db-userns.md](progress/phase-test-db-userns.md)、opt-in 対象の
+一覧は [docs/progress/userns-tests.md](progress/userns-tests.md)。
+
+- 完了日: 2026-10-02。main（`7b77f17a`）を merge（衝突なし）。
+- 証拠: worker sandbox の中で `cargo build -p celeris -p celerisctl` → exit 0。`cargo test -p e2e --test
+  api_scenarios` → exit 0（11 passed / 0 failed）。`cargo test -p celeris --test instance_handoff` → exit 0（8
+  passed / 0 failed）。`cargo test --workspace`（`CELERIS_USERNS_TESTS` 未設定） → exit 0（3278 passed / 0 failed
+  / 12 ignored）、userns opt-in 分岐の `SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run
+  (ADR-0126)` が 18 件（`--nocapture` で確認）。`cargo clippy --workspace -- -D warnings` と `cargo fmt --all --
+  --check` → いずれも exit 0。
+- 既知の高負荷 flaky（`task-dispatch` の `cluster_job_wait` / `build_cache`）は今回失敗しなかったため単独再実行は
+  行っていない。
+- 未解決: `CELERIS_USERNS_TESTS=1` での実行は userns が使える host で人が行う（手順は
+  `docs/progress/phase-test-db-userns.md` に記載）。`browser_launcher_ptrace.rs` は未作成（本 task の範囲外）。
+- ADR-0126 の状態を「実装済み」に更新した。

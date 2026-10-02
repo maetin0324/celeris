@@ -43,7 +43,7 @@ LangMem による知識整理などのアダプタを持ちます。利用には
 
 知識ベースの正本は、既定で `~/.local/share/celeris/knowledge` に置く Git 管理の Markdown です。
 有効化すると、仕事の終了後に知識の抽出・整理を行い、確信度の高い追加・更新は取り込み、
-確認が必要な候補は GUI の受信箱に残します。詳細は [知識ベース](docs/knowledge.md)を参照してください。
+確認が必要な候補は GUI の受信箱に残します。詳細は知識ベースの運用資料を参照してください。
 
 ## 実行を支える仕組み
 
@@ -85,7 +85,7 @@ Console、組織プロファイルと担当の選択、案件と途中目標、�
 2026-09-20 の進捗記録には、**Console への指示 → タスク作成 → 担当決定 → 実行 → レビュー → 報告 → 知識の保存**を
 実機で通した証跡があります。Celeris 自身の改善を扱うリリース作成・検証・昇格・ロールバックの仕組みもあります。
 
-各機能の検証結果と未解決事項は [PROGRESS.md](docs/PROGRESS.md) の該当 Phase と末尾の実機記録を参照してください。
+各機能の検証結果と未解決事項は agent-docs の進捗記録を参照してください。
 先頭の Phase 一覧や初期設計には古い記述が残っています。
 
 ## 起動する
@@ -128,7 +128,7 @@ CELERIS_API_URL=http://127.0.0.1:7710 pnpm dev
 
 ブラウザで `http://127.0.0.1:7700/` を開くと Console が表示されます。
 API の `token_file` を設定した場合は、GUI にも `CELERIS_API_TOKEN_FILE` を指定してください。
-GUI の認証・公開設定は [gui/README.md](gui/README.md)、継続運用は [デプロイ手順](docs/selfdeploy.md)を参照してください。
+GUI の認証・公開設定は [gui/README.md](gui/README.md)、継続運用は selfdeploy の運用資料を参照してください。
 画面の説明と操作方法は GUI の `/help` にあります。
 
 ## クラスタで実行する
@@ -162,12 +162,11 @@ scripts/cluster-check.sh pegasus /work/NBB/$USER/workspace/rust/benchfs
 | `scripts/` / `deploy/` | クラスタ、コンテナ、知識整理、リリースと運用の道具 |
 
 - [SPEC.md](docs/SPEC.md) — 何を実現したいか。利用場面と人の関わり方。
-- [DESIGN.md](docs/DESIGN.md) — 初期のタスク管理層の設計。以後の拡張・変更は ADR と併読する。
-- [ADR](docs/adr/) — 設計判断。[組織](docs/adr/0046-organization-as-agent-profiles.md)、
-  [知識](docs/adr/0047-knowledge-base.md)、[Console](docs/adr/0048-console.md)が現在の構成を説明する。
-- [PROGRESS.md](docs/PROGRESS.md) — 実装・検証・実機運用の記録と未解決事項。
-- [モデル供給とアカウント](docs/providers.md) — 自動選択、Codex の残量確認、既存の Claude 固定設定の移行。
-- [ワークスペース](docs/workspace.md) / [知識ベース](docs/knowledge.md) / [API](docs/gui/api.md) — 各機能の仕様と使い方。
+- [SPEC.md](docs/SPEC.md) — 利用場面と人の関わり方。
+- [ADR](agent-docs/adr/) — 設計判断と採用理由。
+- [モデル供給とアカウント](docs/guides/providers.md)、[ワークスペース](docs/guides/workspace.md)、
+  [知識ベース](docs/guides/knowledge.md) — 運用資料。
+- [HTTP API v1](docs/api/v1/gui-api.md) — GUI が使う API の正本。
 
 ## 開発と検証
 

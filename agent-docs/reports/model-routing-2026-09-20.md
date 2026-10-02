@@ -25,7 +25,7 @@ tasks: [01M305NG9QRX7HE59VF6K3FZ7H]
 
 これらはGUIの名称初期値。リポジトリには、この6名称と現在利用可能な実行IDを保証するカタログがない。既存CLIアダプターは `--model` に指定IDを渡す構造であり、希望名を実行IDと同一視しない。
 
-[設定例](../config/celeris.model-tiers.example.toml)は全6件を「実行モデルID未確認」として記載。利用可能なIDを確認後、該当する `model_id` を設定し `unavailable_reason` を解除する。未設定・階層欠落・無効書式・明示的未対応は起動前に停止し、理由をイベントに残す。停止したタスクは設定修正後に再開する。外部サービスで拒否されるIDの完全な事前検証は行わず、CLIのエラーを既存経路で報告する。他モデルへ置き換えない。
+[設定例](../../config/celeris.model-tiers.example.toml)は全6件を「実行モデルID未確認」として記載。利用可能なIDを確認後、該当する `model_id` を設定し `unavailable_reason` を解除する。未設定・階層欠落・無効書式・明示的未対応は起動前に停止し、理由をイベントに残す。停止したタスクは設定修正後に再開する。外部サービスで拒否されるIDの完全な事前検証は行わず、CLIのエラーを既存経路で報告する。他モデルへ置き換えない。
 
 ## 互換性と移行
 
@@ -62,7 +62,7 @@ CoSの `create_task` に `tier` を追加し、既存の部署管理者の `dele
 
 GUI再現: `cd gui && ./node_modules/.bin/react-router build` の後、リポジトリ直下で `node scripts/check-model-routing.mjs`。一時ポートのモックAPI・GUIのみを使用し、運用サービスには接続しない。既定の測定JSONは `/tmp/celeris-model-routing-measurements.json`。PNGは `docs/gui/model-routing/`。
 
-[スマホのプロバイダー画面](gui/model-routing/providers-393.png)／[PCのプロバイダー画面](gui/model-routing/providers-1440.png)／[スマホのアカウント画面](gui/model-routing/accounts-393.png)。360／393／412／1440pxで確認。プロバイダー入力欄は44px以上、画面の横はみ出しなし。保存したIDがAPIに届くこととJSエラーなしを確認。
+[スマホのプロバイダー画面](../gui/model-routing/providers-393.png)／[PCのプロバイダー画面](../gui/model-routing/providers-1440.png)／[スマホのアカウント画面](../gui/model-routing/accounts-393.png)。360／393／412／1440pxで確認。プロバイダー入力欄は44px以上、画面の横はみ出しなし。保存したIDがAPIに届くこととJSエラーなしを確認。
 
 このベースには記憶にある `docs/gui/mobile-gui-investigation-2026-09-20.md` は無かった。現在のナビ・Console実装を維持し、設定画面だけ変更した。Nothing 2a実機・IME・実アカウントでの6モデル利用可否は未検証。運用への取り込み後、実行IDの確認・設定と実機確認が必要。
 

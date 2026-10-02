@@ -829,7 +829,7 @@ U-R1 = task の層数で数える（根 1 / 子 2 / 孫 3、葉は数えない�
 
 - ADR: [ADR-0079](../adr/0079-recursive-task-decomposition.md) D2・D8・D15・§7 R5b、付記「R5b-prep 実装時の逸脱・明確化」（13 項目）。
 - 種類: コード（task-core / task-ops / task-api / task-dispatch / celeris / celerisctl / celeris-mcp）、schema と GUI の型の再生成、GUI の
-  `/plans/new` の撤去と「以前の途中目標」の開き方、手順書 [`docs/ops/adr-0079-r5b-runbook.md`](../ops/adr-0079-r5b-runbook.md)。
+  `/plans/new` の撤去と「以前の途中目標」の開き方を記録した。
   **migration なし（schema 33 のまま。次の空きは 0034）**。本番の DB・設定・サービスには触れていない（読み取りの `sqlite3 …?mode=ro` と
   `GET /health` だけ）。
 - **本番の読み取りで分かったこと**: R5b で採用する browser の Phase 2（01M3MZKB3DFYJNBH015MJGQ0BT）は `done` ではなく **`failed`**

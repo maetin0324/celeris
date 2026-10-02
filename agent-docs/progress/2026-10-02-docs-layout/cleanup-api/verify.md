@@ -15,6 +15,7 @@ api-s3a・api-s3b）が残した欠陥 2 件を直し、処理表をここに集
 | 処理(削除/統合/移動/修正) | 旧パス | 新パス or - | 理由 | 最後の commit |
 |---|---|---|---|---|
 | 統合 | `docs/api/v1/overview.md` | `docs/api/v1/gui-api.md` §3.125 | 同じ API（実行・計画・木・決定の要求・撤去した入口）を 2 つ目の文書で説明していた | `a42f9a54` |
+| 修正 | `docs/api/v1/overview.md` | `docs/api/v1/overview.md` | gui/docs の生成コピーが旧 overview を参照し続けるため、本文を重複させず gui-api.md へ案内する転送ページとして復元 | new |
 | 修正 | `docs/api/v1/gui-api.md` §1・§2 | - | §2 を router の全 route（174 = 表 168 + browser 制御 6、146 パス）に合わせ、§1 を middleware・problem と照らした | `01fd1f91` |
 | 修正 | `docs/README.md` | - | `api/` の行から `overview.md` を外し、説明は gui-api.md の 1 本と明記 | `01fd1f91` |
 | 処理なし | `docs/gui/` | - | move-docs（別 unit）で `agent-docs/gui/` へ移動済み。本 task では既に無い | - |
@@ -54,7 +55,7 @@ Rust・生成 schema は変更していないため `cargo test --workspace` / `
 
 ## 未解決
 
-- `gui/docs/celeris-api-v1.md`（`scripts/sync-gui-docs.sh` の写し）は削除済みの `docs/api/v1/overview.md` を参照したまま。gui/ はこの task では変更できない（api-list・api-rest・api-s3b の記録と同じ指摘）。
+- `gui/docs/celeris-api-v1.md`（`scripts/sync-gui-docs.sh` の写し）は旧 `docs/api/v1/overview.md` を参照したまま。gui/ は変更禁止のため、overview.md を gui-api.md への短い案内ページとして復元した。リンク修正一覧は [links leaf](links.md)。
 - リポジトリ全体の `check-doc-links.sh` は 43 件の既存の壊れたリンクで失敗する。すべて docs/guides・docs/ops・agent-docs・gui/docs にあり、本 task（docs/api・docs/protocol）の範囲外。
 - browser の Live View（§3.126.14〜17）・制御（§3.126.18）は `docs/guides/browser-capability.md` 側に説明が無い（gui-api.md 側には §3.126 で記載済み）。
 - §3.126 の route は定数 `BASE` + `format!` で登録されるため、文字列リテラルだけを拾う機械的な route 一致検査（今回使ったワンライナーを含む）では見えない。決定的な check にするなら括弧対応で読む方式（api-list leaf が使った `routes.py` 相当）が必要。

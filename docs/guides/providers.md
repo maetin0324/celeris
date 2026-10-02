@@ -120,10 +120,10 @@ python3 scripts/portable-providers.py ~/.config/celeris/config.toml --apply
 専用ハーネス、プロバイダ、モデル、認証設定は保持します。適用前に権限 0600 のバックアップを作り、
 設定の内容や秘密は標準出力へ出しません。特定の汎用ハーネスを固定して使う場合は、その adapter を残してください。
 
-ハーネス変更にはデーモンの再起動が必要です。通常のリリース手順は [selfdeploy.md](selfdeploy.md) を参照してください。
+ハーネス変更にはデーモンの再起動が必要です。通常のリリース手順は [selfdeploy の運用資料](../ops/selfdeploy.md) を参照してください。
 既存タスクに保存された明示的な adapter 指定は変更しません。移行後に Console から送った依頼から自動選択になります。
 
-設計判断: [ADR-0049](adr/0049-portable-providers-and-codex-usage.md)。
+設計判断: [ADR-0049](../../agent-docs/adr/0049-portable-providers-and-codex-usage.md)。
 
 ## Codex の worktree と成果物
 

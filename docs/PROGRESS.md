@@ -115,3 +115,61 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
   - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行（sccache EPERM 等の環境要因なし）。
 - 未解決事項: ホスト準備（別 host UID / subuid の割当）は人の判断が必要。launcher 本体の実装は未着手。A13 の実 process 再試験（別 UID 前提）は launcher 実装後に行う。本番 admission の `CredentialInjection`・`IdentityRestore` は引き続き未解放。
 - 提案: launcher 実装を独立 task として切り出し、完了後に A13 を再試験してから `prod-admission-release` の判断に戻す。
+
+## planner check の書き方の指針（R7-10, 2026-10-02）
+
+完了日 2026-10-02（task 01M3WZ1GFJ0YNERRNT1W0EMCQR、WorkUnit `verify-all`。兄弟 `planner-guide` / `cos-guide` と統合済み）。
+
+- 背景: web の木の replan 24 回のうち 9 回が計画・check・条件の質に起因（2026-10-01 調査）。[ADR-0079 付記 R7-10](adr/0079-recursive-task-decomposition.md#付記-r7-10-check-の-sh-構文兄弟と衝突しない差分-check葉の大きさwebdocs-task-の-cargo受け入れ条件の範囲2026-10-02) に根拠と 5 規則を記録。
+- 実装: `crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE` に 5 規則（(1) `/bin/sh`/dash 限定の構文、(2) 段の全 unit の許可パスを除外する範囲外差分 check、(3) 葉は 1 run に収まる大きさ、(4) `web/`/`docs/` だけを変える task は `cargo test --workspace` の代わりに `crates/` 無差分検査、(5) 受け入れ条件・差分 check の範囲に ADR・記録の置き場所を最初から含める）を追記。`crates/task-worker/src/claude_code/tests.rs::planner_prompt_has_the_check_writing_section` で各規則の文言が /2・/3 の planner プロンプトに 1 回ずつ出ることを確認。
+- CoS 側: `crates/task-worker/src/preamble.rs` の `actions_instructions()` に (4)(5) と同内容の 2 文を追記（`web/` や `docs/` だけを変える task の cargo 代替検査、ADR・記録の置き場所を acceptance の範囲指定に含める）。`crates/task-worker/src/preamble/tests.rs` で両文がそれぞれ 1 回だけ出ることを確認。
+- 証拠コマンドと結果（このWorkUnitで実行）:
+  - `cargo test --workspace` → exit 0（全 crate `test result: ok`、失敗 0）
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+  - いずれも渡された `CARGO_TARGET_DIR` のまま実行。
+- 未解決事項: なし。本番 host の操作、設計原則・Phase 順の変更は行っていない。
+
+## reviewer に人の決定・回答と決定的 check の結果を渡す（ADR-0117）
+
+完了日 2026-10-02（task 01M3WZ1GFBPQ8T699ZF3Y66SJ3 の record unit `verify-all`）。
+
+- 経緯: [ADR-0117](adr/0117-review-human-decisions-and-check-results.md) に基づき、`task-worker`（ReviewRequest の拡張と review プロンプトの節）と `task-dispatch`（spawn_review が対象 task と祖先の回答済み決定・決定的 check の verdict を集めて渡す）を実装済み（D1/D2 実装、D3「acceptance 書き換えの入口」は見送り）。この WorkUnit はその統合後の workspace 全体検査。
+- 証拠コマンドと結果:
+  - `cargo fmt --all -- --check` → exit 0（差分なし）
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+  - `cargo test --workspace` → exit 0（全 118 テストバイナリで `test result: ok`、`0 failed`。主要クレートの内訳: task-core 620 passed、task-dispatch 498 passed、task-ops 382 passed、task-worker 660 passed / 4 ignored。ブラウザ系の実プロセス試験を含め失敗・flake 無し）
+  - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行。外部ネットワークへのアクセスなし。
+- 変更範囲: このWorkUnit自体はコード変更なし（検査と本記録のみ）。実装済みの変更は `crates/task-worker/src/claude_code/{prompt.rs,tests.rs}`、`crates/task-worker/src/protocol.rs`、`docs/protocol/worker-protocol.schema.json`、`crates/task-dispatch/src/{review.rs,review/tests.rs,dispatcher/review_spawn.rs,dispatcher/tests/review.rs}`（別 WorkUnit `worker-prompt`・`dispatch-context` でコミット済み、上記 commit に記録済み）。
+- 未解決事項: D3（人の決定の note から `PATCH acceptance` を提案する入口）は見送り、ADR-0117 に記録済み。reviewer が実際に人の決定を優先して合格させる end-to-end 実例（web root final review のような実 run での再現確認）はこの WorkUnit の範囲外（unit test レベルでの検証のみ）。
+- merge-main（2026-10-02）: 最新 main（33e0a6aa、R7-10 planner check 指針を含む）を本ブランチに merge。`docs/PROGRESS.md` の衝突は上の 2 節（R7-10 を先、ADR-0117 を後）を両方残して解消。コード（`crates/task-worker/src/claude_code/{prompt.rs,tests.rs}`）は自動 merge。ADR 番号 0117 は main の最大 0115 と重複なし。`cargo fmt --all -- --check` / `cargo clippy --workspace -- -D warnings` / `cargo test --workspace` はいずれも exit 0。
+
+## repair objective の許可範囲受け渡し
+
+完了日 2026-10-02（work unit `wire`）。段階統合は同じ phase の非 repair・非 integrate unit、final review は task の全 unit と task acceptance から、変更してよい paths と `git diff` を含む check を集めて repair objective に渡す。重複を除き、辞書順に並べる。範囲外の失敗はファイルを直さず `plan_issue` で報告する指示が入り、既存の `worker_finish` 経路で replan に進むことを確認した。delivery repair は対象外。
+
+- 証拠: `cargo test -p task-dispatch integration_check_failure_is_repaired_when_classified`、`cargo test -p task-dispatch final_review_repair_includes_all_unit_paths_and_task_diff_checks`、`cargo test -p task-dispatch a_plan_issue_checkpoint_triggers_a_replan_and_v2_is_adopted` は各 exit 0。
+- `cargo test --workspace` は通常 sandbox で初回 exit 101。`instance_handoff` 5 件が user namespace 作成の `Operation not permitted` により失敗。範囲外のテストは変更せず、ホスト権限で `cargo test -p celeris --test instance_handoff` を再実行して 8/8 通過し、同条件の `cargo test --workspace` は exit 0。
+- `cargo clippy --workspace -- -D warnings` は exit 0（警告なし）。
+
+### 統合後（adr・core・wire merge 済み）の再検証 — 2026-10-02（work unit `verify-land`）
+
+段階 build の統合ブランチ（HEAD `0892b0c2`、adr・core・wire 3 葉を含む）で、前回 integrate-build が落ちた check（兄弟葉 adr の docs/ 限定差分検査が core・wire の crates/ 差分に当たっていた点、`cargo test --workspace` が sandbox の user namespace 制限で落ちうる点）を差し替えた上で検査をやり直した。コードは変更していない。
+
+- `cargo test -p task-core execution` → exit 0（143 passed / 0 failed）
+- `cargo test -p task-dispatch repair` → exit 0（8 passed / 0 failed。`final_review_repair_includes_all_unit_paths_and_task_diff_checks` を含む）
+- `cargo test -p task-dispatch final_review_repair` → 同上のフィルタに含まれ exit 0
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+- `cargo fmt --all -- --check` → exit 0（差分なし）
+- `cargo test --workspace` → sandbox のまま 2 回実行し、いずれも exit 0（3209 passed / 0 failed / 12 ignored、`instance_handoff` 8 件を含め userns 制限による失敗なし）。host 権限での再実行は不要だった。flaky な再現は 2 回とも無し。
+- `git status` / `git diff --stat` ともに変更なし（crates/ と docs/adr/ は touch していない。本行の追記のみ）。
+
+### 最新 main（ADR-0117）取り込み後の検査 — 2026-10-02（work unit `land-main`）
+
+`main` の `5f14fe7480f1512a0a62c35cf41c1fedb11a6944` を merge commit `42cefd87986368de6379a5afed4e4eabab2f7a41`（親: `112ed0409bc554b29f4c624017200d95708236d5`, `5f14fe7480f1512a0a62c35cf41c1fedb11a6944`）で取り込んだ。`git merge-tree --write-tree main HEAD` の事前確認では `docs/PROGRESS.md` だけが衝突し、`crates/task-dispatch/src/dispatcher/tests/review.rs` は自動 merge。PROGRESS は ADR-0117 節を先、repair 許可範囲節を後に両方残して解消した。
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-core -p task-dispatch -p celeris` → exit 101。unit tests は task-core 622/622、task-dispatch 499/499、celeris lib 214/214 pass。`celeris --tests` の `instance_handoff` は 8 件中 5 件失敗。うち3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted`、2件は handoff dispatch/standby 起動待ち失敗。失敗はこの task の許可範囲外の sandbox 制約によるため、テスト・実装を変更せず報告する。
+- 追加の `cargo test -p task-core -p task-dispatch -p celeris --lib` → exit 0（合計 1335 passed / 0 failed）。
+- 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
+- `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。

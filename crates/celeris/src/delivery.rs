@@ -384,7 +384,7 @@ fn make_repair(
         key: key.clone(),
         kind: WorkUnitKind::Repair,
         title: format!("repair ({}): 配送の局所修復", class.bucket()),
-        objective: task_core::build_repair_objective(class, &details, "配送", "", None),
+        objective: task_core::build_repair_objective(class, &details, "配送", "", None, None),
         depends_on: vec![],
         done_when: vec![],
         checks: vec![],

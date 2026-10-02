@@ -787,6 +787,30 @@
       ],
       "type": "object"
     },
+    "DirectRouteContext": {
+      "description": "`context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。",
+      "properties": {
+        "overrode_gate": {
+          "description": "gate の compound/score を直行で上書きしたなら `true`。",
+          "type": "boolean"
+        },
+        "policy_version": {
+          "description": "判定の規則の版（`direct-route/1` 等）。",
+          "type": "string"
+        },
+        "reasons": {
+          "description": "満たした条件を `\"<rule_id>: <detail>\"` の形で 1 行ずつ。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "policy_version"
+      ],
+      "type": "object"
+    },
     "EffectiveProfile": {
       "description": "ADR-0046 D1: 根から葉まで merge した結果。前置き・matching・道具の受け渡しはこれだけを見る。",
       "properties": {
@@ -2317,6 +2341,17 @@
         "decision_requests": {
           "description": "ADR-0079 D7（Phase R3a）: 木の節点（`[execution.tree] enabled` の子 task・/3 の root）の worker の run だけ\n`true`。前置きに「`result.json` の `decisions` で人への決定の要求を出せる」節が出る。`false` なら\nプロンプトは変わらない。",
           "type": "boolean"
+        },
+        "direct_route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectRouteContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124 D4: planner を挟まない直行経路（`route = direct`・shadow でない）の implementation run\nだけ `Some`。`build_execute_prompt` が「直行経路（planner なし）」の節を出す。`None` の run の\nプロンプトは 1 バイトも変わらない。"
         },
         "execution_planner": {
           "anyOf": [

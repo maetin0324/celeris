@@ -34,7 +34,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | Dispatcher facade（tick・起動/停止順） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher.rs`（module map はこの doc comment） | [ADR-0082](adr/0082-dispatcher-module-split.md), [記録](progress/phase-P0-dispatcher.md) |
-| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs`（`execution_gate_if_needed`・直行経路の記録） | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0124](adr/0124-atomic-direct-route.md) |
+| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs`（`execution_gate_if_needed`・直行経路の記録 `execution_route_if_needed`・`direct_route_inputs`。試験は `dispatcher/tests/direct_route.rs`） | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0124](adr/0124-atomic-direct-route.md) |
 | Browser backend の適合判定・fallback 候補 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{dispatch_run,worker_task}.rs` | [ADR-0106](adr/0106-browser-phase4-conformance-dispatch.md), [ADR-0107](adr/0107-browser-fallback-candidate-preparation.md) |
 | 木の子task の gate・一括作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/tree_units.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | 委譲/承認の子task 作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/child_tasks.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |
@@ -55,7 +55,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 |---|---|---|---|
 | RunRequest/RunContext 境界 | task-worker::protocol | `crates/task-worker/src/protocol.rs` | [DESIGN §5.3](DESIGN.md#53-worker-protocol-task-worker) |
 | Adapter 選択 | task-worker::adapter | `crates/task-worker/src/adapter.rs` | [DESIGN §5.4](DESIGN.md#54-adapters) |
-| Claude Code adapter（CLI起動 + prompt） | task-worker::claude_code | `crates/task-worker/src/claude_code.rs`（`claude_code/prompt.rs`。直行経路の節は ADR-0124 D4） | [DESIGN §5.4](DESIGN.md#54-adapters), [ADR-0124](adr/0124-atomic-direct-route.md) |
+| Claude Code adapter（CLI起動 + prompt） | task-worker::claude_code | `crates/task-worker/src/claude_code.rs`（`claude_code/prompt.rs`。直行経路の節 `direct_route_section` は ADR-0124 D4、`RunContext.direct_route`） | [DESIGN §5.4](DESIGN.md#54-adapters), [ADR-0124](adr/0124-atomic-direct-route.md) |
 | Codex / ACP adapter | task-worker | `crates/task-worker/src/{codex,acp}.rs` | [DESIGN §5.4](DESIGN.md#54-adapters), [Phase 6 記録](progress/phase-001-050.md) |
 | PaperQA2 / Local Deep Research adapter | task-worker | `crates/task-worker/src/{paperqa,local_deep_research}.rs`（`paperqa/render.rs`） | [DESIGN §5.4](DESIGN.md#54-adapters) |
 | Browser capability（policy/credential 越境） | task-worker::browser | `crates/task-worker/src/browser{,_credential,_policy}.rs` | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |

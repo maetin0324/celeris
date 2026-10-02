@@ -3164,3 +3164,5 @@ mod planner_budget;
 mod stage_reopen;
 
 mod browser_fallback;
+/// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
+mod direct_route;

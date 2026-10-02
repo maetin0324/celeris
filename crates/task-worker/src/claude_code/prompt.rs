@@ -577,6 +577,8 @@ fn build_execute_prompt(
         }
         out.push('\n');
     }
+    // ADR-0124 D4: 直行経路の run だけ。`context.direct_route` が無い run は 1 バイトも増えない。
+    out.push_str(&direct_route_section(context));
     out.push_str(&prior_review_section(context));
     out.push_str(&answers_section(context));
     out.push_str(&children_section(context, artifacts));
@@ -602,6 +604,31 @@ fn build_execute_prompt(
     }
     out.push_str("When you are done:\n");
     out.push_str(&result_json_instructions(artifacts));
+    out
+}
+
+/// ADR-0124 D4: planner を挟まない直行経路の節（文面はここ 1 箇所。codex・acp・aider も
+/// `build_prompt` を共有するので同じ節が出る）。`context.direct_route` が `None` なら空文字列。
+pub(crate) fn direct_route_section(context: &RunContext) -> String {
+    let Some(route) = &context.direct_route else {
+        return String::new();
+    };
+    let mut out = String::from(
+        "## 直行経路（planner なし）\n\
+         この task は決定的な条件で分解不要と判定され、planner を挟まずこの 1 run で実装する。\n\
+         - 調査 → 編集 → テスト → 局所修正を、この run の中で完結させる。\n\
+         - 上の acceptance の command check を自分で実行し、落ちたら同じ run の中で直して再実行する。\n\
+         - run が終わると celeris が同じ command check を決定的に再実行し、その後に最終レビューが入る。\n\
+         - 範囲が想定より大きいと分かったら、無理に広げず result.json の summary にそう書く\n  \
+         （分解は人が decompose で指示する。委譲の書式は従来どおり使える）。\n",
+    );
+    if !route.reasons.is_empty() {
+        out.push_str(&format!("判定の根拠（{}）:\n", route.policy_version));
+        for reason in &route.reasons {
+            out.push_str(&format!("- {reason}\n"));
+        }
+    }
+    out.push('\n');
     out
 }
 

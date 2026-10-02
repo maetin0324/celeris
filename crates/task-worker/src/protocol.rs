@@ -566,6 +566,24 @@ pub struct RunContext {
     /// プロンプトは変わらない。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub decision_requests: bool,
+    /// ADR-0124 D4: planner を挟まない直行経路（`route = direct`・shadow でない）の implementation run
+    /// だけ `Some`。`build_execute_prompt` が「直行経路（planner なし）」の節を出す。`None` の run の
+    /// プロンプトは 1 バイトも変わらない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_route: Option<DirectRouteContext>,
+}
+
+/// `context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DirectRouteContext {
+    /// 判定の規則の版（`direct-route/1` 等）。
+    pub policy_version: String,
+    /// gate の compound/score を直行で上書きしたなら `true`。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overrode_gate: bool,
+    /// 満たした条件を `"<rule_id>: <detail>"` の形で 1 行ずつ。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
 }
 
 /// `context.execution_planner`（ADR-0072 D13/D14。Phase E3）: 計画を作らせる run に渡す、

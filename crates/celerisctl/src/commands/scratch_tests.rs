@@ -40,7 +40,7 @@ fn env_has_only_target_and_cargo_tuning() {
     let owner = Owner::parse("agent-a5caa712b0867e383").unwrap();
     let text = render_env(&settings, &owner);
     assert!(!text.starts_with("unset"), "{text}");
-    for key in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "SCCACHE_"] {
+    for key in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "SCCACHE"] {
         assert!(!text.contains(key), "{text}");
     }
     let parsed: Vec<(String, String)> = text

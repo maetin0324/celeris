@@ -38,6 +38,7 @@ fn proof() -> LauncherSessionProof {
         ns_owner_uid: Some(165536),
         launcher_uid: LAUNCHER_UID,
         isolation_ok: true,
+        ns_inodes: Default::default(),
     }
 }
 

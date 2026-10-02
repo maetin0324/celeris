@@ -56,6 +56,10 @@ impl SessionBackend for FakeBackend {
             pid,
             pgid: pid,
             starttime,
+            runtime_pid: pid,
+            runtime_starttime: starttime,
+            ns_inodes: task_core::browser_isolation::collect_ns_inodes("self")
+                .map_err(|_| ErrorCode::LaunchFailed)?,
         })
     }
 }
@@ -460,6 +464,8 @@ fn started(pid: i32, starttime: u64, owner: Option<u32>) -> StartedSession {
                 pid,
                 starttime,
                 ns_owner_uid: owner,
+                ns_inodes: task_core::browser_isolation::collect_ns_inodes("self")
+                    .expect("launcher-reported ns inodes"),
             }),
         },
     }
@@ -490,6 +496,7 @@ fn launcher_proof_is_built_only_when_pid_starttime_and_owner_match() {
             ns_owner_uid: Some(LAUNCHER_UID),
             launcher_uid: LAUNCHER_UID,
             isolation_ok: true,
+            ns_inodes: task_core::browser_isolation::collect_ns_inodes("self").expect("ns inodes"),
         }
     );
     reap(child);
@@ -556,6 +563,25 @@ fn launcher_proof_is_not_built_without_peer_uid_binding_or_isolation() {
     v1.receipt.binding = None;
     assert_eq!(
         launcher_session_proof(&v1, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    // v2 の launcher（束縛に namespace の inode が無い）。
+    let mut v2 = good.clone();
+    if let Some(b) = v2.receipt.binding.as_mut() {
+        b.ns_inodes.clear();
+    }
+    assert_eq!(
+        launcher_session_proof(&v2, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    // inode が 1 つ欠けた束縛。
+    let mut partial = good.clone();
+    if let Some(b) = partial.receipt.binding.as_mut() {
+        b.ns_inodes
+            .remove(&task_core::browser_isolation::Namespace::Net);
+    }
+    assert_eq!(
+        launcher_session_proof(&partial, Some(LAUNCHER_UID), &daemon),
         None
     );
     // launcher 自身の隔離検査が偽。

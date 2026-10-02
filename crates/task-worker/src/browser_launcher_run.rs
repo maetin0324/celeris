@@ -178,7 +178,8 @@ fn live_starttime(pid: i32) -> Option<u64> {
 
 /// launcher の `Started` 応答を daemon 自身の観測と照合し、通ったときだけ
 /// [`LauncherSessionProof`] を組む（ADR-0116 D-L、fail closed）。次のどれかなら `None`:
-/// receipt に束縛が無い（v1 の launcher）・receipt と応答の session / instance が食い違う・
+/// receipt に束縛が無い（v1 の launcher）・束縛に 6 つの namespace の inode が揃っていない
+/// （v2 の launcher）・receipt と応答の session / instance が食い違う・
 /// launcher の `isolation_ok` が偽・`SO_PEERCRED` を採れない・pid の process が無い（zombie を含む）・
 /// `/proc/<pid>/stat` の starttime が束縛と違う・owner UID が不明か daemon の UID。
 /// 欠けた値を安全そうな値で埋めることはしない。launcher UID の設定値との照合は admission 側
@@ -189,7 +190,14 @@ pub(crate) fn launcher_session_proof(
     daemon: &DaemonIds,
 ) -> Option<LauncherSessionProof> {
     let r = &started.receipt;
-    let binding = r.binding?;
+    let binding = r.binding.as_ref()?;
+    // v2 以前の束縛（namespace の inode が無い・欠けている）は証明なし。
+    if !REQUIRED_NAMESPACES
+        .iter()
+        .all(|ns| binding.ns_inodes.contains_key(ns))
+    {
+        return None;
+    }
     if r.outcome != Outcome::Started
         || !r.isolation_ok
         || r.session_id != started.session_id
@@ -214,6 +222,7 @@ pub(crate) fn launcher_session_proof(
         ns_owner_uid: Some(owner),
         launcher_uid,
         isolation_ok: true,
+        ns_inodes: binding.ns_inodes.clone(),
     })
 }
 

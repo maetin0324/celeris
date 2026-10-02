@@ -97,6 +97,8 @@ use crate::policy::{
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod cluster_job_wait;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+/// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
+mod behind_target;
 mod child_tasks;
 mod cluster;
 mod continuation_session;

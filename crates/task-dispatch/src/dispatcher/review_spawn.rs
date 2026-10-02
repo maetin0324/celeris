@@ -367,8 +367,12 @@ impl Dispatcher {
                     task_ops::changes::default_branch(&repo.source, configured.as_deref())
                 };
                 let target_ref = format!("refs/heads/{target}");
+                // ADR-0130 D4: sync の前に behind を測る（stale 優先の材料）。
+                self.observe_behind_target(task_id, reference.repo_id, &worktree.dir, &target_ref);
                 let pre_sync_head = crate::integration::rev_parse(&worktree.dir, "HEAD");
                 let outcome = task_ops::changes::sync_onto_target(&worktree.dir, &target_ref);
+                // ADR-0130 D4: sync の後にも測る（取り込めていれば 0 で since が消える）。
+                self.observe_behind_target(task_id, reference.repo_id, &worktree.dir, &target_ref);
                 let (target_sha, before_sha, reviewed_sha) = match outcome {
                     task_ops::changes::SyncOutcome::UpToDate {
                         target_sha,

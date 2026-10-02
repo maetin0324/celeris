@@ -1336,7 +1336,10 @@ fn build_execution_view(
     }
 
     let event_list: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
-    let metrics = task_core::summarize_execution_metrics(task, &event_list);
+    // ADR-0130 D4: behind は store の最後の snapshot（読取時に Git を測り直さない）。
+    let metrics = task_core::summarize_execution_metrics(task, &event_list).with_behind_target(
+        &crate::behind_target::behind_target_of(store, task.id, time::OffsetDateTime::now_utc())?,
+    );
     let gate = task.routing.as_ref().and_then(|r| r.execution.clone());
     let route = task.routing.as_ref().and_then(|r| r.route.clone());
 

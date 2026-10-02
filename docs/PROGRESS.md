@@ -106,3 +106,16 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
   - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行（sccache EPERM 等の環境要因なし）。
 - 未解決事項: ホスト準備（別 host UID / subuid の割当）は人の判断が必要。launcher 本体の実装は未着手。A13 の実 process 再試験（別 UID 前提）は launcher 実装後に行う。本番 admission の `CredentialInjection`・`IdentityRestore` は引き続き未解放。
 - 提案: launcher 実装を独立 task として切り出し、完了後に A13 を再試験してから `prod-admission-release` の判断に戻す。
+
+## reviewer に人の決定・回答と決定的 check の結果を渡す（ADR-0117）
+
+完了日 2026-10-02（task 01M3WZ1GFBPQ8T699ZF3Y66SJ3 の record unit `verify-all`）。
+
+- 経緯: [ADR-0117](adr/0117-review-human-decisions-and-check-results.md) に基づき、`task-worker`（ReviewRequest の拡張と review プロンプトの節）と `task-dispatch`（spawn_review が対象 task と祖先の回答済み決定・決定的 check の verdict を集めて渡す）を実装済み（D1/D2 実装、D3「acceptance 書き換えの入口」は見送り）。この WorkUnit はその統合後の workspace 全体検査。
+- 証拠コマンドと結果:
+  - `cargo fmt --all -- --check` → exit 0（差分なし）
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+  - `cargo test --workspace` → exit 0（全 118 テストバイナリで `test result: ok`、`0 failed`。主要クレートの内訳: task-core 620 passed、task-dispatch 498 passed、task-ops 382 passed、task-worker 660 passed / 4 ignored。ブラウザ系の実プロセス試験を含め失敗・flake 無し）
+  - いずれも渡された `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` / `SCCACHE_*` のまま実行。外部ネットワークへのアクセスなし。
+- 変更範囲: このWorkUnit自体はコード変更なし（検査と本記録のみ）。実装済みの変更は `crates/task-worker/src/claude_code/{prompt.rs,tests.rs}`、`crates/task-worker/src/protocol.rs`、`docs/protocol/worker-protocol.schema.json`、`crates/task-dispatch/src/{review.rs,review/tests.rs,dispatcher/review_spawn.rs,dispatcher/tests/review.rs}`（別 WorkUnit `worker-prompt`・`dispatch-context` でコミット済み、上記 commit に記録済み）。
+- 未解決事項: D3（人の決定の note から `PATCH acceptance` を提案する入口）は見送り、ADR-0117 に記録済み。reviewer が実際に人の決定を優先して合格させる end-to-end 実例（web root final review のような実 run での再現確認）はこの WorkUnit の範囲外（unit test レベルでの検証のみ）。

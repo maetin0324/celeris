@@ -105,10 +105,11 @@ pub fn legacy_paths(build_cache_dir: &Path, releases_dir: Option<&Path>) -> Vec<
     out
 }
 
-/// 削除待ち（`.deleting-*`）を探す根（pool の `targets/` と legacy の親）。
+/// 削除待ち（`.deleting-*`）を探す根（pool の `targets/`、退避した seed の `seeds/`、legacy の親）。
 pub fn deleting_roots(pool: &Pool, legacy: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots: BTreeSet<PathBuf> = BTreeSet::new();
     roots.insert(pool.targets_dir());
+    roots.insert(scratch::seed_deleting_root(pool));
     for p in legacy {
         if let Some(parent) = p.parent() {
             roots.insert(parent.to_path_buf());
@@ -755,6 +756,91 @@ pub fn pinned_summary(scan: &Scan, plan: &GcPlan) -> String {
             list.join(", ")
         }
     )
+}
+
+/// ADR-0129 (4)(5): seed の更新の 1 repo 分の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeedStep {
+    /// main の commit が分からない（git が無い・branch が無い）。
+    NoCommit,
+    /// main の根に `Cargo.toml` が無い（cargo の repo ではない）。
+    NotCargo,
+    UpToDate,
+    /// 容量が足りないので保留した（旧 seed はそのまま）。
+    Held {
+        reason: String,
+    },
+    Done(scratch::SeedRefreshOutcome),
+}
+
+/// seed の更新の対象（登録された local の git repo と、その main の commit）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeedRepo {
+    pub path: PathBuf,
+    pub commit: Option<String>,
+    /// `commit` の根に `Cargo.toml` がある。
+    pub cargo: bool,
+}
+
+/// ADR-0129 (4)(5): repo ごとに、main が進んだ（または rustc・`[scratch.cargo]` が変わった・seed が無い）なら
+/// 容量を確かめて seed を作り直す。`hold` は今の seed の大きさを受けて保留の理由を返す。dispatcher の seed
+/// スレッドが呼ぶ（tick では呼ばない。build は長い）。**LLM は呼ばない**。
+pub fn refresh_seeds(
+    settings: &ScratchSettings,
+    repos: &[SeedRepo],
+    rustc: &dyn Fn(&Path) -> Option<String>,
+    hold: &dyn Fn(Option<u64>) -> Option<String>,
+    ops: &scratch::SeedBuildOps<'_>,
+    now: SystemTime,
+) -> Vec<(String, SeedStep)> {
+    let pool = settings.pool();
+    let mut out = Vec::new();
+    for repo in repos {
+        let key = task_worker::build_cache::repo_cache_key(&repo.path);
+        let Some(commit) = repo.commit.as_deref() else {
+            out.push((key, SeedStep::NoCommit));
+            continue;
+        };
+        if !repo.cargo {
+            out.push((key, SeedStep::NotCargo));
+            continue;
+        }
+        let manifest = scratch::read_current_manifest(&pool, &key);
+        let rustc_now = rustc(&repo.path);
+        let Some(why) = scratch::seed_refresh_reason(
+            manifest.as_ref(),
+            commit,
+            &settings.cargo,
+            rustc_now.as_deref(),
+        ) else {
+            out.push((key, SeedStep::UpToDate));
+            continue;
+        };
+        if let Some(reason) = hold(manifest.as_ref().and_then(|m| m.size_bytes)) {
+            tracing::warn!(repo_key = %key, %reason, "scratch: seed refresh held; the current seed is kept (ADR-0129 (5))");
+            out.push((key, SeedStep::Held { reason }));
+            continue;
+        }
+        tracing::info!(repo_key = %key, commit = %commit, why = %why, "scratch: refreshing the seed (ADR-0129 (4))");
+        let outcome = scratch::refresh_seed(&pool, &repo.path, commit, &settings.cargo, ops, now);
+        match &outcome {
+            scratch::SeedRefreshOutcome::Refreshed {
+                generation,
+                replaced,
+                ..
+            } => {
+                tracing::info!(repo_key = %key, generation = %generation, replaced = ?replaced, "scratch: seed switched")
+            }
+            scratch::SeedRefreshOutcome::Busy => {
+                tracing::debug!(repo_key = %key, "scratch: seed refresh already running")
+            }
+            scratch::SeedRefreshOutcome::Failed { reason } => {
+                tracing::warn!(repo_key = %key, %reason, "scratch: seed refresh failed; the current seed is kept")
+            }
+        }
+        out.push((key, SeedStep::Done(outcome)));
+    }
+    out
 }
 
 /// 測定の間隔の既定（テスト用に分けておく）。

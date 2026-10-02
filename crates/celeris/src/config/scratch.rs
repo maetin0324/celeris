@@ -16,6 +16,13 @@ pub struct ScratchConfig {
     /// 既定は `[workspace] build_cache_dir` の**親の `scratch/`**（本番は `/var/lib/celeris/scratch`）。
     #[serde(default)]
     pub dir: Option<PathBuf>,
+    /// ADR-0129 (3): `dir` を置く mount point（例 `/local`）。書けば起動時に mount を確かめ、mount されていなければ
+    /// `dir` を従来の場所（`dir` を書かないときの既定）へ戻す。
+    #[serde(default)]
+    pub mount: Option<PathBuf>,
+    /// ADR-0129 (4): 新しい task・WU の target を repo の seed から reflink で作る（既定 true。seed が無ければ空から）。
+    #[serde(default = "default_scratch_enabled")]
+    pub seed_reflink: bool,
     #[serde(default = "default_scratch_targets_max_gb")]
     pub targets_max_gb: u64,
     #[serde(default = "default_scratch_l1_max_gb")]
@@ -86,6 +93,8 @@ impl Default for ScratchConfig {
         Self {
             enabled: default_scratch_enabled(),
             dir: None,
+            mount: None,
+            seed_reflink: default_scratch_enabled(),
             targets_max_gb: default_scratch_targets_max_gb(),
             l1_max_gb: default_scratch_l1_max_gb(),
             total_max_gb: default_scratch_total_max_gb(),
@@ -156,13 +165,18 @@ impl Config {
     pub fn scratch_dir(&self) -> PathBuf {
         match &self.scratch.dir {
             Some(dir) => dir.clone(),
-            None => self
-                .workspace
-                .build_cache_dir
-                .parent()
-                .map(|p| p.join("scratch"))
-                .unwrap_or_else(|| self.workspace.build_cache_dir.join("scratch")),
+            None => self.default_scratch_dir(),
         }
+    }
+
+    /// `[scratch] dir` を書かないときの場所（`build_cache_dir` の親の `scratch/`）。ADR-0129 (3) の `mount` が
+    /// mount されていないときもここへ戻る。
+    pub fn default_scratch_dir(&self) -> PathBuf {
+        self.workspace
+            .build_cache_dir
+            .parent()
+            .map(|p| p.join("scratch"))
+            .unwrap_or_else(|| self.workspace.build_cache_dir.join("scratch"))
     }
 
     /// ADR-0075 D1: `[scratch]` を解決した値（NFS の検査をしない。テストと `scratch_settings` の下請け）。
@@ -190,14 +204,22 @@ impl Config {
                 incremental: c.cargo.incremental,
                 dev_debug: Some(c.cargo.dev_debug.clone()).filter(|v| !v.is_empty()),
             },
+            seed_reflink: c.seed_reflink,
+            mount: c.mount.clone(),
+            dir_fallback_reason: None,
         }
     }
 
     /// ADR-0075 D1: 起動時の検査つき。`dir` が NFS 上なら `enabled = false` と理由
     /// （dispatcher が起動ログに出す）。
+    /// ADR-0129 (3): `mount` を書いていれば、mount されていないとき `dir` を従来の場所へ戻す（NFS の検査の前）。
     pub fn scratch_settings(&self) -> task_worker::scratch::ScratchSettings {
         task_worker::scratch::apply_nfs_check(
-            self.scratch_settings_unchecked(),
+            task_worker::scratch::apply_mount_check(
+                self.scratch_settings_unchecked(),
+                &self.default_scratch_dir(),
+                task_worker::scratch::is_mount_point,
+            ),
             task_worker::scratch::is_on_nfs,
         )
     }
@@ -218,13 +240,15 @@ impl ScratchConfig {
 
     /// ADR-0075 D7: `[scratch] dir`（書いたときだけ。既定は `scratch_dir()` が build_cache_dir の親から組む）。
     pub(super) fn resolve_paths(&mut self, base: &Path) {
-        if let Some(dir) = &self.dir {
-            let expanded = task_core::expand_home(dir, task_core::home_dir().as_deref());
-            self.dir = Some(if expanded.is_relative() {
+        let resolve = |p: &PathBuf| {
+            let expanded = task_core::expand_home(p, task_core::home_dir().as_deref());
+            if expanded.is_relative() {
                 base.join(&expanded)
             } else {
                 expanded
-            });
-        }
+            }
+        };
+        self.dir = self.dir.as_ref().map(resolve);
+        self.mount = self.mount.as_ref().map(resolve);
     }
 }

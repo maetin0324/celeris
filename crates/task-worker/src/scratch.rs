@@ -233,6 +233,13 @@ pub struct ScratchSettings {
     pub measure_interval_secs: u64,
     /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
     pub cargo: CargoTuning,
+    /// ADR-0129 (4): 新しい owner の target を repo の seed から reflink で作るか（既定 true。seed が無ければ空から）。
+    pub seed_reflink: bool,
+    /// ADR-0129 (3): `dir` を置く mount point（例 `/local`）。`Some` なら起動時に mount されているかを確かめ、
+    /// されていなければ `dir` を従来の場所へ戻す（`apply_mount_check`）。
+    pub mount: Option<PathBuf>,
+    /// `apply_mount_check` が `dir` を従来の場所へ戻した理由（起動ログに出す）。
+    pub dir_fallback_reason: Option<String>,
 }
 
 /// ADR-0075 D4（Phase G2）: `[scratch.cargo]` を解決した値。scratch が有効な経路に常に与える。
@@ -279,6 +286,9 @@ impl ScratchSettings {
             adopt_max_distance: 200,
             measure_interval_secs: 30,
             cargo: CargoTuning::default(),
+            seed_reflink: true,
+            mount: None,
+            dir_fallback_reason: None,
         }
     }
 
@@ -326,6 +336,62 @@ pub fn apply_nfs_check(
             "scratch dir {} is on NFS; falling back to [workspace] build_cache_dir (ADR-0075 D1)",
             settings.dir.display()
         ));
+    }
+    settings
+}
+
+/// path が mount point か（親と `st_dev` が違う、または `/`）。無ければ false。
+pub fn is_mount_point(path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let Some(parent) = path.parent() else {
+        return Ok(true);
+    };
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    Ok(std::fs::metadata(parent)?.dev() != meta.dev())
+}
+
+/// ADR-0129 (3): `mount`（例 `/local`）が設定されていれば、それが mount point で `dir` がその下にあるときだけ
+/// `dir` を使う。満たさなければ `dir` を `fallback`（従来の場所）へ戻して理由を残す（mount が外れた `/local` の
+/// 下の root filesystem に scratch を作らない）。`probe` は `is_mount_point`（テストでは差し替える）。
+pub fn apply_mount_check(
+    mut settings: ScratchSettings,
+    fallback: &Path,
+    probe: impl Fn(&Path) -> io::Result<bool>,
+) -> ScratchSettings {
+    let Some(mount) = settings.mount.clone() else {
+        return settings;
+    };
+    if !settings.enabled {
+        return settings;
+    }
+    let reason = if !settings.dir.starts_with(&mount) {
+        Some(format!(
+            "scratch dir {} is not under [scratch] mount {}",
+            settings.dir.display(),
+            mount.display()
+        ))
+    } else {
+        match probe(&mount) {
+            Ok(true) => None,
+            Ok(false) => Some(format!("{} is not mounted", mount.display())),
+            Err(e) => Some(format!("cannot inspect {}: {e}", mount.display())),
+        }
+    };
+    if let Some(reason) = reason {
+        settings.dir_fallback_reason = Some(format!(
+            "{reason}; using {} instead (ADR-0129 (3))",
+            fallback.display()
+        ));
+        settings.dir = fallback.to_path_buf();
     }
     settings
 }
@@ -603,11 +669,25 @@ pub struct Allocation {
     pub adopted_from: Option<String>,
     /// lease を新しく作った（既にあったなら false）。
     pub created: bool,
+    /// ADR-0129 (4): `target/` をどう作ったか（既にあった・adopt・seed・空）。
+    pub origin: TargetOrigin,
 }
 
 /// ADR-0075 D3: owner の lease を作る（あれば touch し `released_at` を消す）。`target/` がまだ無ければ adopt を試み、
-/// 無理なら空の `target/` を作る。`.lock` を持って行う。
+/// 無理なら seed から reflink で写し（ADR-0129 (4)。互換の検査はしない）、それも無理なら空の `target/` を作る。
+/// `.lock` を持って行う。
 pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation> {
+    allocate_with_seed(pool, req, &SeedPolicy::unchecked(), &SeedCopyOps::real())
+}
+
+/// `allocate` の seed の条件と写し方を指定する版（dispatcher は `[scratch.cargo]` と rustc の版を渡す）。
+/// seed の写しは `.lock` の下で行う（seed の切り替え・GC と直列）。
+pub fn allocate_with_seed(
+    pool: &Pool,
+    req: &AllocateRequest<'_>,
+    seed: &SeedPolicy<'_>,
+    ops: &SeedCopyOps<'_>,
+) -> io::Result<Allocation> {
     let _lock = pool.lock()?;
     let owner_dir = pool.owner_dir(req.owner);
     let lease_path = owner_dir.join(LEASE_FILE);
@@ -674,12 +754,37 @@ pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation
             }
         }
     }
+    let origin = if target.exists() {
+        match &adopted_from {
+            Some(from) => TargetOrigin::Adopted { from: from.clone() },
+            None => TargetOrigin::Existing,
+        }
+    } else {
+        seed_target(pool, &owner_dir, &repo_key, seed, ops)
+    };
     std::fs::create_dir_all(&target)?;
+    if origin != TargetOrigin::Existing {
+        match &origin {
+            TargetOrigin::Seed { seed, commit } => {
+                tracing::info!(owner = %req.owner, seed = %seed.display(), commit = ?commit, target = %target.display(), "scratch: target created from the seed by reflink (ADR-0129)");
+            }
+            TargetOrigin::Empty {
+                reason: Some(reason),
+            } => {
+                tracing::info!(owner = %req.owner, reason = %reason, target = %target.display(), "scratch: seed not used; target created empty (ADR-0129)");
+            }
+            _ => {}
+        }
+        if let Err(e) = write_target_origin(&owner_dir, &origin) {
+            tracing::warn!(owner = %req.owner, error = %e, "scratch: could not record how the target was created");
+        }
+    }
     write_lease(&lease_path, &lease)?;
     Ok(Allocation {
         target_dir: target,
         adopted_from,
         created,
+        origin,
     })
 }
 
@@ -769,6 +874,14 @@ pub fn cargo_child_env(settings: &ScratchSettings, owner: &Owner) -> CargoEnv {
 // Lease と cargo 環境の管理から GC の分類・回収計画を分離する。
 mod gc;
 pub use gc::*;
+
+// ADR-0129 (4): seed からの reflink。
+mod reflink;
+pub use reflink::*;
+
+// ADR-0129 (4)(5): seed の更新と GC。
+mod seed;
+pub use seed::*;
 
 #[cfg(test)]
 mod tests;

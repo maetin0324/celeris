@@ -1715,6 +1715,30 @@ fn scratch_defaults_follow_the_build_cache_parent() {
     assert!(cfg.dispatch_config().scratch.enabled);
 }
 
+/// ADR-0129 (3)(4): `[scratch] mount` が mount されていなければ `dir` を既定の場所へ戻す。`seed_reflink` の既定は true。
+#[test]
+fn scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_on() {
+    let tmp = tempfile::tempdir().unwrap();
+    let not_mounted = tmp.path().join("local");
+    std::fs::create_dir_all(&not_mounted).unwrap();
+    let cfg: Config = toml::from_str(&format!(
+        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nmount = \"{m}\"\ndir = \"{m}/celeris/scratch\"\n",
+        m = not_mounted.display()
+    ))
+    .unwrap();
+    let unchecked = cfg.scratch_settings_unchecked();
+    assert!(unchecked.seed_reflink);
+    assert_eq!(unchecked.mount.as_deref(), Some(not_mounted.as_path()));
+    let s = cfg.scratch_settings();
+    assert_eq!(s.dir, cfg.default_scratch_dir());
+    assert!(s.dir_fallback_reason.unwrap().contains("not mounted"));
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nseed_reflink = false\n",
+    )
+    .unwrap();
+    assert!(!cfg.scratch_settings_unchecked().seed_reflink);
+}
+
 /// ADR-0075 D7: `[scratch] enabled = false` で F5-fix の挙動に戻す（dispatcher は build_cache_dir を使う）。
 #[test]
 fn scratch_can_be_disabled() {

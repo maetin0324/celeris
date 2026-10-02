@@ -145,6 +145,121 @@ impl Dispatcher {
         executed.removed.len()
     }
 
+    /// ADR-0129 (4)(5): seed の後始末と更新。`SEED_CHECK_INTERVAL_SECS` ごと（起動直後〈＝昇格の後〉は直ちに）に、
+    /// 登録された local の git repo を読み、seed の GC（current 以外の世代・放棄された build・猶予を過ぎた登録外の
+    /// repo を `.deleting-*` へ rename）を tick の中で行い、main の前進の確認と build は別スレッド（同時に 1 本）で行う。
+    /// seed は owner の semantic GC（`scratch_gc`）の対象にしない。
+    pub(super) fn seed_housekeeping(&mut self, now: Instant) {
+        use std::sync::atomic::Ordering;
+        if !self.scratch_active() || !self.config.scratch.seed_reflink {
+            return;
+        }
+        if !task_worker::scratch::seed_check_due(
+            self.scratch.seed_last_check,
+            now,
+            Duration::from_secs(task_worker::scratch::SEED_CHECK_INTERVAL_SECS),
+        ) {
+            return;
+        }
+        self.scratch.seed_last_check = Some(now);
+        let repos = self.seed_repos();
+        let settings = self.config.scratch.clone();
+        let pool = settings.pool();
+        let registered: std::collections::BTreeSet<String> = repos
+            .iter()
+            .map(|(p, _)| task_worker::build_cache::repo_cache_key(p))
+            .collect();
+        let gc = task_worker::scratch::seed_gc(&pool, &registered, std::time::SystemTime::now());
+        if !gc.retired.is_empty() && !self.scratch.removing.load(Ordering::SeqCst) {
+            crate::scratch_gc::spawn_removal(
+                vec![task_worker::scratch::seed_deleting_root(&pool)],
+                self.scratch.removing.clone(),
+            );
+        }
+        if repos.is_empty() || self.scratch.seed_refreshing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let pressure_high = self
+            .scratch
+            .pressure
+            .is_some_and(|p| p != task_worker::scratch::Pressure::None);
+        let min_free = self.config.min_free_disk_mb.saturating_mul(1024 * 1024);
+        let busy = self.scratch.seed_refreshing.clone();
+        let spawned = std::thread::Builder::new()
+            .name("celeris-scratch-seed".to_string())
+            .spawn({
+                let busy = busy.clone();
+                move || {
+                    let seed_repos: Vec<crate::scratch_gc::SeedRepo> = repos
+                        .iter()
+                        .map(|(path, configured)| {
+                            let branch =
+                                task_ops::changes::default_branch(path, configured.as_deref());
+                            let commit = task_worker::scratch::resolve_commit(path, &branch);
+                            let cargo = commit.as_deref().is_some_and(|c| {
+                                task_worker::scratch::commit_has_cargo_manifest(path, c)
+                            });
+                            crate::scratch_gc::SeedRepo {
+                                path: path.clone(),
+                                commit,
+                                cargo,
+                            }
+                        })
+                        .collect();
+                    let root = settings.pool().root().to_path_buf();
+                    let hold = |seed_bytes: Option<u64>| {
+                        task_worker::scratch::seed_refresh_hold(
+                            pressure_high,
+                            crate::scratch_gc::fs_stats(&root).map(|f| f.1),
+                            min_free,
+                            seed_bytes,
+                        )
+                    };
+                    crate::scratch_gc::refresh_seeds(
+                        &settings,
+                        &seed_repos,
+                        &task_worker::scratch::rustc_version,
+                        &hold,
+                        &task_worker::scratch::SeedBuildOps::real(),
+                        std::time::SystemTime::now(),
+                    );
+                    busy.store(false, Ordering::SeqCst);
+                }
+            });
+        if let Err(e) = spawned {
+            busy.store(false, Ordering::SeqCst);
+            tracing::warn!(error = %e, "scratch: could not spawn the seed refresh thread");
+        }
+    }
+
+    /// seed の対象: 登録された全案件の local の git repo（path と設定の既定ブランチ）。
+    fn seed_repos(&self) -> Vec<(PathBuf, Option<String>)> {
+        let projects = match self.store.project_list() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "scratch: could not list projects for the seeds");
+                return Vec::new();
+            }
+        };
+        let mut out: Vec<(PathBuf, Option<String>)> = Vec::new();
+        for project in projects {
+            let Ok(repos) = self.store.repo_list(project.id) else {
+                continue;
+            };
+            for r in repos {
+                if r.kind != task_core::repos::RepoKind::Git {
+                    continue;
+                }
+                if let WorkspaceSpec::Local { path, .. } = &r.location
+                    && !out.iter().any(|(p, _)| p == path)
+                {
+                    out.push((path.clone(), r.default_branch.clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// ディスク不足は Phase 116 の infra 障害として一度だけ通知し、空きが戻ると自動で解除する。
     /// 検査不能も安全側に倒して run を開始しない。
     pub(super) fn check_disk_space(&mut self) -> bool {

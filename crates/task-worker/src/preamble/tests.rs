@@ -102,14 +102,34 @@ fn a_work_genre_is_shown_right_after_the_brief_when_present() {
     assert!(!render(&no_node, "artifacts").contains("あなたの仕事で使う道具"));
 }
 
-/// 空の `RunContext` では前置きは「成果物の置き場所」の節だけ（ADR-0067 D1。Phase 23〜110 の出力は
-/// 空文字だったが、この節だけは context に関わらず常に出る）。
+/// 空の `RunContext` では前置きは「成果物の置き場所」と「本番 host の操作」の節だけ（ADR-0067 D1 と
+/// ADR-0095 付記 D-d。Phase 23〜110 の出力は空文字だったが、この 2 節は context に関わらず常に出る）。
 #[test]
 fn an_empty_context_renders_only_the_deliverables_placement_note() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        deliverables_placement_note()
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
+}
+
+/// ADR-0095 付記 D-d: worker の前置きには常に「本番 host の操作は人が実行する手順として書く」の
+/// 一文が入り、`systemctl --user` / `systemd-run` / `~/.config/celeris` / `~/.local/celeris/releases`
+/// には触れない旨が明示される。
+#[test]
+fn production_host_changes_are_declared_as_a_human_procedure() {
+    let out = render(&full_context(), "artifacts");
+    assert!(
+        out.contains("本番 host の操作は人が実行する手順として書く"),
+        "{out}"
+    );
+    assert!(out.contains("systemctl --user"), "{out}");
+    assert!(out.contains("systemd-run"), "{out}");
+    assert!(out.contains("~/.config/celeris"), "{out}");
+    assert!(out.contains("~/.local/celeris/releases"), "{out}");
 }
 
 /// ADR-0044 D2（Phase 53）: コメントの節は**前置きの先頭**。人の割り込みがいちばん先に来て、
@@ -198,8 +218,9 @@ fn a_role_only_context_renders_exactly_the_old_role_section() {
     assert_eq!(
         render(&with_instructions, "artifacts"),
         format!(
-            "## Role: lead\nYou coordinate.\n\n{}",
-            deliverables_placement_note()
+            "## Role: lead\nYou coordinate.\n\n{}{}",
+            deliverables_placement_note(),
+            production_host_note()
         )
     );
     let bare = RunContext {
@@ -211,7 +232,11 @@ fn a_role_only_context_renders_exactly_the_old_role_section() {
     };
     assert_eq!(
         render(&bare, "artifacts"),
-        format!("## Role: lead\n\n{}", deliverables_placement_note())
+        format!(
+            "## Role: lead\n\n{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -252,7 +277,11 @@ fn conversation_runs_get_a_reply_only_instruction_appended_at_the_end() {
     // 対話でない run（既定値の `None`）では何も足さない。
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        deliverables_placement_note()
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -295,7 +324,11 @@ fn secretary_instructions_tell_cos_to_route_cluster_work_via_create_task() {
 
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        deliverables_placement_note()
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -605,7 +638,11 @@ fn recent_work_is_shown_right_after_memory_and_before_conversation() {
     // 対話でない通常 run の前置きは 1 バイトも変わらない（既定値には `recent_work` が無い）。
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        deliverables_placement_note()
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 
@@ -833,7 +870,11 @@ fn the_knowledge_section_lists_the_index_of_every_mount_kind() {
     assert!(!render(&full_context(), "artifacts").contains("## 知識 (knowledge base"));
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
-        deliverables_placement_note()
+        format!(
+            "{}{}",
+            deliverables_placement_note(),
+            production_host_note()
+        )
     );
 }
 

@@ -9397,6 +9397,57 @@
       ],
       "type": "object"
     },
+    "HumanInboxCounts": {
+      "description": "D5 `GET /inbox/items` の `counts`。",
+      "properties": {
+        "by_kind": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "by_kind"
+      ],
+      "type": "object"
+    },
+    "HumanInboxView": {
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/HumanInboxCounts"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/InboxItem"
+          },
+          "type": "array"
+        },
+        "suppressed": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "Populated by ADR-0131 inbox-rules when its counters are exposed.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "items",
+        "counts",
+        "suppressed"
+      ],
+      "type": "object"
+    },
     "InFlight": {
       "description": "実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。",
       "properties": {
@@ -9487,6 +9538,114 @@
       ],
       "type": "object"
     },
+    "InboxAnswer": {
+      "description": "D2 `answer`: 答え方の操作（新 API の answer と委ね先）。",
+      "properties": {
+        "body_schema": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "method": {
+          "type": "string"
+        },
+        "native": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InboxNativeOp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "body_schema"
+      ],
+      "type": "object"
+    },
+    "InboxAnswerBody": {
+      "additionalProperties": false,
+      "properties": {
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "type": "string"
+        },
+        "payload": {
+          "default": null
+        }
+      },
+      "required": [
+        "option"
+      ],
+      "type": "object"
+    },
+    "InboxAnswerResult": {
+      "properties": {
+        "item_id": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "result": true
+      },
+      "required": [
+        "removed",
+        "item_id",
+        "result"
+      ],
+      "type": "object"
+    },
+    "InboxBlocking": {
+      "description": "D2 `blocking`: 止めている範囲。",
+      "properties": {
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskRef"
+          },
+          "type": "array"
+        },
+        "units": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks",
+        "units",
+        "summary"
+      ],
+      "type": "object"
+    },
     "InboxCounts": {
       "properties": {
         "approvals": {
@@ -9539,6 +9698,179 @@
         "browser_waits",
         "decisions",
         "by_status"
+      ],
+      "type": "object"
+    },
+    "InboxItem": {
+      "description": "ADR-0133 D2: 受信箱項目の共通形。",
+      "properties": {
+        "age_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "answer": {
+          "$ref": "#/$defs/InboxAnswer"
+        },
+        "blocked_by": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocking": {
+          "$ref": "#/$defs/InboxBlocking"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "決定的な id `<kind>-<元の id>`（URL にそのまま使える文字だけ）。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/InboxKind"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/InboxLink"
+          },
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/InboxOption"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "description": "何を決めるか（1 行）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "options",
+        "blocking",
+        "blocked_by",
+        "answer",
+        "created_at",
+        "age_secs",
+        "links"
+      ],
+      "type": "object"
+    },
+    "InboxKind": {
+      "description": "D2: 受信箱の種類（D1 の 14 種）。宣言順が D2 の並びの固定順。",
+      "enum": [
+        "decision",
+        "plan_gate",
+        "phase_gate",
+        "authorization",
+        "browser_wait",
+        "question",
+        "acceptance_check",
+        "draft_accept",
+        "project_plan",
+        "failed",
+        "unroutable",
+        "cluster_login",
+        "delivery_skipped",
+        "knowledge_review"
+      ],
+      "type": "string"
+    },
+    "InboxLink": {
+      "description": "D2 `links[]`: 判断材料への API path。",
+      "properties": {
+        "href": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "href"
+      ],
+      "type": "object"
+    },
+    "InboxNativeOp": {
+      "description": "D2 `answer.native`: 委ね先の既存 endpoint。",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path"
+      ],
+      "type": "object"
+    },
+    "InboxOption": {
+      "description": "D2 `options[]`: 選択肢 1 件。",
+      "properties": {
+        "effect": {
+          "description": "選んだら何が起きるかの 1 行。",
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "needs_note": {
+          "description": "`true` なら note 必須（replan・質問への回答など）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "needs_note",
+        "effect"
       ],
       "type": "object"
     },
@@ -11939,6 +12271,166 @@
       ],
       "type": "object"
     },
+    "Notice": {
+      "description": "通知の束（`feed_notices` の 1 行）。",
+      "properties": {
+        "count": {
+          "description": "束ねた出来事の件数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "first_at": {
+          "type": "string"
+        },
+        "group_key": {
+          "description": "束ね key（`<kind>:<範囲>`。ADR-0133 D3.3）。",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/NoticeId"
+        },
+        "kind": {
+          "$ref": "#/$defs/NoticeKind"
+        },
+        "last_at": {
+          "type": "string"
+        },
+        "links": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NoticeLink"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "description": "最新の 1 件の要約（`count > 1` なら末尾に「ほか n−1 件」）。",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "最新の 1 件の題名。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "group_key",
+        "title",
+        "summary",
+        "count",
+        "first_at",
+        "last_at"
+      ],
+      "type": "object"
+    },
+    "NoticeId": {
+      "description": "通知（束）の id（ULID）。",
+      "type": "string"
+    },
+    "NoticeKind": {
+      "description": "通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。",
+      "enum": [
+        "task_done",
+        "report",
+        "bad_news",
+        "secretary_reply",
+        "delivery",
+        "release",
+        "cron_run",
+        "auto_recovered",
+        "requeue_limit_near"
+      ],
+      "type": "string"
+    },
+    "NoticeLink": {
+      "description": "通知に付けるリンク（GUI / web が開く先）。",
+      "properties": {
+        "href": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "href"
+      ],
+      "type": "object"
+    },
+    "NoticeReadAllResult": {
+      "properties": {
+        "marked": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "marked"
+      ],
+      "type": "object"
+    },
+    "NoticeReadResult": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "read_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "read_at"
+      ],
+      "type": "object"
+    },
+    "NoticeTarget": {
+      "description": "通知の対象（最新の 1 件）。`kind` は `task` / `report` / `release` / `delivery` / `cron_job` 等の\n短い名前で、`id` はその領域の id（文字列のまま。領域の型には依存しない）。",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
     "NotificationKind": {
       "description": "判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。",
       "oneOf": [
@@ -11998,6 +12490,32 @@
           "type": "string"
         }
       ]
+    },
+    "NotificationsView": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Notice"
+          },
+          "type": "array"
+        },
+        "next_before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unread": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "unread"
+      ],
+      "type": "object"
     },
     "NotifyRecent": {
       "description": "`GET /notify` の `recent[]` の 1 件（ADR-0037 D4）。",
@@ -14793,6 +15311,34 @@
         "utilization",
         "resets_at"
       ],
+      "type": "object"
+    },
+    "ReadAllBody": {
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ReleaseChanges": {
@@ -20474,6 +21020,34 @@
         }
       ]
     },
+    "UnreadCountView": {
+      "properties": {
+        "by_kind": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "events": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unread": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unread",
+        "events",
+        "by_kind"
+      ],
+      "type": "object"
+    },
     "Usage": {
       "description": "DESIGN §5.3 の `usage`。取れない項目は省略可。\n\nADR-0061（Phase 104）: harness routing 基盤で `cache_read_tokens` / `cache_creation_tokens` /\n`cost_usd` を追加した（追加のみ。既存の `input_tokens` / `output_tokens` の意味は変えない）。\n`Eq` は落とした（`cost_usd: Option<f64>` は `Eq` を持てない）。",
       "properties": {
@@ -21241,6 +21815,19 @@
     "inbox": {
       "$ref": "#/$defs/Inbox"
     },
+    "inbox_answer": {
+      "$ref": "#/$defs/InboxAnswerBody"
+    },
+    "inbox_answer_result": {
+      "$ref": "#/$defs/InboxAnswerResult"
+    },
+    "inbox_item": {
+      "$ref": "#/$defs/InboxItem"
+    },
+    "inbox_items": {
+      "$ref": "#/$defs/HumanInboxView",
+      "description": "ADR-0133 D5: human decisions and informational notices."
+    },
     "integrate": {
       "$ref": "#/$defs/IntegrateBody"
     },
@@ -21319,6 +21906,21 @@
     },
     "new_task": {
       "$ref": "#/$defs/NewTaskSpec"
+    },
+    "notification_read": {
+      "$ref": "#/$defs/NoticeReadResult"
+    },
+    "notifications": {
+      "$ref": "#/$defs/NotificationsView"
+    },
+    "notifications_read_all": {
+      "$ref": "#/$defs/NoticeReadAllResult"
+    },
+    "notifications_read_all_body": {
+      "$ref": "#/$defs/ReadAllBody"
+    },
+    "notifications_unread_count": {
+      "$ref": "#/$defs/UnreadCountView"
     },
     "notify": {
       "$ref": "#/$defs/NotifyView",
@@ -21546,6 +22148,15 @@
     "health",
     "problem",
     "inbox",
+    "inbox_items",
+    "inbox_item",
+    "inbox_answer",
+    "inbox_answer_result",
+    "notifications",
+    "notifications_unread_count",
+    "notification_read",
+    "notifications_read_all",
+    "notifications_read_all_body",
     "task_list",
     "task",
     "task_detail",

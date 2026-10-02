@@ -38,6 +38,7 @@ pub mod docs;
 pub mod execution;
 mod files;
 mod handlers;
+mod inbox_notifications;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
 pub mod knowledge;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。

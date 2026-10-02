@@ -66,6 +66,71 @@ impl Dispatcher {
         }
     }
 
+    /// ADR-0117 D1: 対象 task とその祖先（木の親、無ければ `parent_id`）で回答済みの決定と、
+    /// それらの task の `question` への回答を集める。決定は `answered_at` の昇順、回答は root 側から順に並べる。
+    /// 兄弟の決定は混ぜない。`withdrawn` と未回答は含めない。
+    pub(super) fn review_human_inputs(
+        &self,
+        task: &Task,
+    ) -> Result<(Vec<task_worker::protocol::ReviewDecision>, Vec<Answer>), DispatchError> {
+        // 対象 task から root へ（循環・深すぎる木に備えて上限を置く）。
+        let mut chain = vec![task.id];
+        let mut cursor = task_core::tree::tree_parent(task).or(task.parent_id);
+        while let Some(id) = cursor {
+            if chain.contains(&id) || chain.len() >= 32 {
+                break;
+            }
+            chain.push(id);
+            cursor = match self.store.get(id)? {
+                Some(t) => task_core::tree::tree_parent(&t).or(t.parent_id),
+                None => None,
+            };
+        }
+        let mut rows: Vec<task_core::decision::DecisionRow> = self
+            .store
+            .decisions_list(Some(
+                task.tree
+                    .as_ref()
+                    .map(|t| t.root_id)
+                    .unwrap_or(chain[chain.len() - 1]),
+            ))?
+            .into_iter()
+            .filter(|r| {
+                r.status == task_core::decision::DecisionStatus::Answered
+                    && chain.contains(&r.task_id)
+            })
+            .collect();
+        rows.sort_by(|a, b| a.answered_at.cmp(&b.answered_at));
+        let decisions = rows
+            .iter()
+            .filter_map(|r| {
+                let answer = r.request.answer.as_ref()?;
+                let option_label = r
+                    .request
+                    .options
+                    .iter()
+                    .find(|o| o.key == answer.option)
+                    .map(|o| o.label.clone())
+                    .unwrap_or_else(|| answer.option.clone());
+                Some(task_worker::protocol::ReviewDecision {
+                    task_id: r.task_id,
+                    key: r.key.clone(),
+                    question: r.request.question.clone(),
+                    option: answer.option.clone(),
+                    option_label,
+                    note: answer.note.clone(),
+                })
+            })
+            .collect();
+        let mut answers = Vec::new();
+        for id in chain.iter().rev() {
+            answers.extend(to_answers(answers_from_events(
+                &self.store.events_for(*id)?,
+            )));
+        }
+        Ok((decisions, answers))
+    }
+
     /// レビューを開始する。`Reviewer` 条件があるのにプロバイダ／並列度の枠が無いときは `Ok(false)`
     /// （タスクは `reviewing` のまま。次 tick の `recover_reviews` が再試行する。ADR-0007 D5 1.）。
     pub(super) fn spawn_review(
@@ -247,6 +312,12 @@ impl Dispatcher {
                 }
             }
         }
+        // ADR-0117 D1: reviewer run には対象 task と祖先の人の決定・回答を渡す（store から集める。LLM は呼ばない）。
+        let (decisions, answers) = if reviewer_run.is_some() {
+            self.review_human_inputs(&task)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
         if let Some(run) = &reviewer_run {
             task_ops::delivery::begin(
                 self.store.as_ref(),
@@ -454,6 +525,9 @@ impl Dispatcher {
                 repo_checks,
                 // ADR-0046 D4: `mode = research` の暗黙の条件。
                 research,
+                // ADR-0117 D1: 人の決定・回答。
+                decisions,
+                answers,
             };
             let mut outcome = review_task(
                 &task,

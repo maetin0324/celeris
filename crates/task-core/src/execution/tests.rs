@@ -490,12 +490,69 @@ fn build_repair_objective_does_not_include_the_full_original_objective() {
         "some task",
         &long_objective,
         Some("1 file changed"),
+        None,
     );
     assert!(!obj.contains(&long_objective));
     assert!(obj.contains(&"x".repeat(600)));
     assert!(!obj.contains(&"x".repeat(601)));
     assert!(obj.contains("cargo fmt --check"));
     assert!(obj.contains("1 file changed"));
+}
+
+/// ADR-0074 付記（2026-10-02）: `scope` が無ければ従来の出力と 1 バイトも変わらない。
+#[test]
+fn build_repair_objective_without_scope_matches_previous_output_exactly() {
+    let without_none = build_repair_objective(
+        RepairClass::Format,
+        &["cmd=\"cargo fmt --check\" exit=Some(1)".to_string()],
+        "some task",
+        "do the thing",
+        Some("1 file changed"),
+        None,
+    );
+    let empty_scope = RepairScope {
+        allowed_paths: vec![],
+        scope_checks: vec![],
+    };
+    let with_empty_scope = build_repair_objective(
+        RepairClass::Format,
+        &["cmd=\"cargo fmt --check\" exit=Some(1)".to_string()],
+        "some task",
+        "do the thing",
+        Some("1 file changed"),
+        Some(&empty_scope),
+    );
+    assert_eq!(without_none, with_empty_scope);
+    assert!(!without_none.contains("変更してよい範囲"));
+    assert!(!without_none.contains("範囲外差分の検査"));
+    assert!(!without_none.contains("plan_issue"));
+}
+
+/// ADR-0074 付記（2026-10-02）: 範囲があれば 2 節と `plan_issue` の指示が出る。
+#[test]
+fn build_repair_objective_with_scope_adds_allowed_range_and_out_of_scope_check_sections() {
+    let scope = RepairScope {
+        allowed_paths: vec![
+            "web/".to_string(),
+            "docs/adr/0099-root-delivery.md".to_string(),
+        ],
+        scope_checks: vec!["git diff --name-only <base> -- ':!web'".to_string()],
+    };
+    let obj = build_repair_objective(
+        RepairClass::Format,
+        &["cmd=\"cargo fmt --check\" exit=Some(1)".to_string()],
+        "web task",
+        "web だけを変える",
+        None,
+        Some(&scope),
+    );
+    assert!(obj.contains("## 変更してよい範囲"));
+    assert!(obj.contains("- web/"));
+    assert!(obj.contains("- docs/adr/0099-root-delivery.md"));
+    assert!(obj.contains("## 範囲外差分の検査"));
+    assert!(obj.contains("- git diff --name-only <base> -- ':!web'"));
+    assert!(obj.contains("plan_issue"));
+    assert!(obj.contains("範囲外のファイルを変えるな"));
 }
 
 #[test]

@@ -123,7 +123,8 @@ async fn command_checks_are_re_executed_in_workspace() {
         ],
         dir.path(),
     );
-    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_millis(300)).await;
+    // 高負荷の評価器では test -f の sh 起動が数百 ms を超えることがある。sleep 30 は 2 倍再試行の 6s 後も超過するので timeout の判定は変わらない。
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(3)).await;
     assert_eq!(
         v.iter().map(|x| x.pass).collect::<Vec<_>>(),
         vec![true, false, true, false]
@@ -650,6 +651,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
     ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter,
         run_id: "rev-1".into(),
         limits: RunLimits {
@@ -759,6 +761,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
     let run = ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter: Arc::new(ThrottledReviewer),
         run_id: "rev-x".into(),
         limits: RunLimits {

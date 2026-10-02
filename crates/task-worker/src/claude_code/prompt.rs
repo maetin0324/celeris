@@ -1655,6 +1655,9 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      passes) in the unit's objective so the unit writes the script to accept that form (a check passed a URL to \
      a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\
      - Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.\n\
+     - Do not put tests that need a user namespace (real browser/runtime/launcher, unshare/CLONE_NEWUSER/newuidmap) \
+     in WU checks: the worker sandbox cannot create one. They skip unless CELERIS_USERNS_TESTS=1; if they must run, \
+     run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.\n\
      - An out-of-scope diff check is compared with sibling units during stage integration, so exclude every \
      unit's allowed paths in that stage, not only this unit's paths.\n\
      - Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.\n\

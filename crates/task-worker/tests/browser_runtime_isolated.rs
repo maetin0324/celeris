@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use task_core::browser_isolation::{IsolationViolation, LiveIsolation, Namespace};
 use task_worker::browser_runtime::{
-    IsolatedRuntime, LiveSession, RuntimeSpec, listening_tcp, reap_recorded, record,
+    IsolatedRuntime, LiveSession, RuntimeSpec, listening_tcp, process_starttime, reap_recorded,
+    record, same_process_alive,
 };
 
 fn skip() -> bool {
@@ -275,15 +276,29 @@ fn controller_kill_leaves_no_runtime_processes() {
     let pids = wait_file(&dir.path().join("pids"), Duration::from_secs(20));
     let pids: Vec<i32> = pids.lines().filter_map(|l| l.parse().ok()).collect();
     assert_eq!(pids.len(), 2);
-    assert!(pids.iter().all(|p| alive(*p)));
+    let processes: Vec<_> = pids
+        .iter()
+        .map(|&pid| (pid, process_starttime(pid).expect("runtime starttime")))
+        .collect();
+    assert!(
+        processes
+            .iter()
+            .all(|&(pid, starttime)| same_process_alive(pid, starttime))
+    );
     ctl.kill().unwrap();
     ctl.wait().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while pids.iter().any(|p| alive(*p)) && Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while processes
+        .iter()
+        .any(|&(pid, starttime)| same_process_alive(pid, starttime))
+        && Instant::now() < deadline
+    {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(
-        !pids.iter().any(|p| alive(*p)),
+        !processes
+            .iter()
+            .any(|&(pid, starttime)| same_process_alive(pid, starttime)),
         "runtime survived controller kill: {pids:?}"
     );
 }

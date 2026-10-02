@@ -968,7 +968,7 @@ export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
  */
 export type UnitDeclared = "leaf" | "task";
 /**
- * ADR-0099 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
+ * ADR-0117 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
  * 並びは判定の順（同時に複数あれば先のものを記録する）。
  */
 export type DeliverySkipReason =
@@ -1971,12 +1971,12 @@ export interface NewBrowserWait {
   run_id: string;
   session_id: string;
   /**
-   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
-   */
-  /**
    * ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
    */
   trusted_login?: TrustedLogin | null;
+  /**
+   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
+   */
   ttl_secs?: number | null;
   work_unit_id?: string | null;
 }

@@ -188,7 +188,7 @@ pub enum AttentionItem {
         decision_ids: Vec<String>,
         at: String,
     },
-    /// ADR-0099 D3: 完了した root の成果を main へ取り込み始められなかった（`Event::DeliverySkipped` の写し。
+    /// ADR-0117 D3: 完了した root の成果を main へ取り込み始められなかった（`Event::DeliverySkipped` の写し。
     /// 正本は event）。同じ head の delivery が後で作られたら出さない。
     DeliverySkipped {
         task: TaskRef,
@@ -814,7 +814,7 @@ fn build_attention(
         });
     }
 
-    // ADR-0099 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
+    // ADR-0117 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
     let latest_skipped = store.latest_delivery_skipped_rows()?;
     for row in latest_skipped {
         let Some(t) = all_tasks.iter().find(|t| {

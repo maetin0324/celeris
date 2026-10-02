@@ -40,8 +40,14 @@ async fn task_detail_shows_integration_repair_scheduled_state() {
     assert_eq!(repair["target_ref"], "refs/heads/main");
     assert_eq!(repair["target_sha"], "abc123");
     assert_eq!(repair["before_sha"], "def456");
-    assert_eq!(repair["conflict_files"], serde_json::json!(["src/a.rs", "src/b.rs"]));
-    assert!(repair.get("reason").is_none(), "scheduled has no exhaust reason");
+    assert_eq!(
+        repair["conflict_files"],
+        serde_json::json!(["src/a.rs", "src/b.rs"])
+    );
+    assert!(
+        repair.get("reason").is_none(),
+        "scheduled has no exhaust reason"
+    );
     // 走っているだけの task は失敗欄を持たない（integration_repair とは別の欄）。
     assert!(body["failure"].is_null());
 }

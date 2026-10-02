@@ -1,11 +1,11 @@
 # ADR-0120: review 前同期の衝突を成果保持型 IntegrationRepair で解消する
 
 ---
-tasks: [01M3XNQH6DRVP790WNGEXKMTZG]
+tasks: [01M3XNQH6DRVP790WNGEXKMTZG, 01M3XZ5PYSTTC6GXAH8TZVRHSA]
 ---
 
 - 日付: 2026-10-02
-- 状態: 採用（設計。実装は後続 WorkUnit）
+- 状態: 採用（Phase 2 の衝突解消経路を実装。D5 の WU 個別表示は未完了）
 - 関連: [ADR-0118 D6](0118-review-target-sync-and-merge-candidate.md)（review 前同期と衝突）、[ADR-0072 D16](0072-task-execution-decomposition.md)（ReviewRepair・repair WU）、[ADR-0043 D5](0043-workspaces.md)（衝突の解消タスク）、[ADR-0074](0074-parallel-work-units-checkpoints-milestones-quota.md)（RepairScope・RepairOrigin）、[ADR-0079 D6](0079-recursive-task-decomposition.md)（再帰統合）
 
 ## 背景
@@ -110,7 +110,7 @@ ADR-0118 は最終レビューの deterministic checks と reviewer の前に ta
 
 `integration_repair_scheduled` を先に書いてから WU だけが残る半端な状態を作らない。WU の完了と再同期の間に daemon が再起動したら、未解決の scheduled event と WU 状態から再開し、resolved/exhausted を重複発行しない。`RepairScheduled` の class 集計は既存の `execution_metrics` を使い、上限判定は D4 の WU 数を正とする。event 件数を上限に使わない。
 
-`GET /tasks/{id}` の `TaskDetail.integration_repair` を省略可能な表示用 object として追加する。欄は `state`（`scheduled` / `resolved` / `exhausted`）、`work_unit_id`, `attempt`, `max_attempts`, `target_ref`, `target_sha`, `before_sha`, `conflict_files`, `reason: Option<String>`, `rollback_to_sha: Option<String>`, `fallback: Option<bool>`。最後の integration_repair event と対応する scheduled event から決定的に組み立て、履歴が無い task では欄を省略する。`max_attempts` は `MAX_INTEGRATION_REPAIRS`。`resolved` の `target_sha` は再同期時の値を返す。`reason`・`rollback_to_sha`・`fallback` は exhausted のときだけ値を持つ。
+`GET /tasks/{id}` の `TaskDetail.integration_repair` を省略可能な表示用 object として追加する。欄は `state`（`scheduled` / `resolved` / `exhausted`）、`work_unit_id: Option<String>`, `attempt`, `max_attempts`, `target_ref: Option<String>`, `target_sha`, `before_sha: Option<String>`, `conflict_files`, `reason: Option<IntegrationRepairExhaustReason>`, `rollback_to_sha: Option<String>`, `fallback: Option<bool>`。最後の integration_repair event と対応する scheduled event から決定的に組み立て、履歴が無い task では欄を省略する。`max_attempts` は `MAX_INTEGRATION_REPAIRS`。`resolved` の `target_sha` は再同期時の値を返す。`reason`・`rollback_to_sha`・`fallback` は exhausted のときだけ値を持つ。`limit_reached` のように対応する WU が無い場合は `work_unit_id` と `target_ref` を省略する。
 
 WU の応答 `WorkUnitView.integration_repair`（`GET /tasks/{id}/execution-plan` の `work_units[]`）と task 詳細の `ExecutionWorkUnitView.integration_repair` には、対応する scheduled event がある WU に限り `{repo_id, target_ref, target_sha, before_sha, conflict_files, attempt}` を付ける。WU の `kind = repair`・title だけから SHA や衝突ファイルを推測しない。既存行・通常の ReviewRepair・remote task では欄を省略する。`TaskDetail.integration_repair` は現在の状況、WU 側は各 attempt の起票時 snapshot なので、再同期後の target SHA は両者で異なり得る。event と応答型の schema、および GUI の生成型を更新するが、旧 task の JSON の意味は変えない。
 
@@ -136,4 +136,11 @@ remote/shared workspace はローカル task branch を target へ rebase する
 | API・GUI | `TaskDetail.integration_repair`、`WorkUnitView.integration_repair`、`ExecutionWorkUnitView.integration_repair`。`state`, `work_unit_id`, `attempt`, `max_attempts`, `target_ref`, `target_sha`, `before_sha`, `conflict_files`, `reason`, `rollback_to_sha`, `fallback` は D5 の用途どおり。GUI は task 詳細の状態欄直下と Execution 節の WU 行。 |
 | 定数・分類 | `MAX_INTEGRATION_REPAIRS = 2`、`RepairClass::IntegrationConflict` の bucket `integration_repair`、`integration-repair-<n>`、`repair (integration_repair): target 同期の衝突解消`。 |
 | 関数 | `task_core::build_integration_repair_objective`、`dispatcher::try_integration_repair`、`repair_bucket_of_title`、既存の `sync_onto_target`、`spawn_review`、`try_review_repair`、delivery の `check_candidate` / `validate_candidate`。 |
-| 試験名（必須） | `integration_repair_conflict_preserves_results`（元 HEAD・worktree・attempts）、`integration_repair_resync_rechecks_latest_target`（新 SHA の checks/reviewer と resolved）、`integration_repair_limit_fallback`（2 回上限・候補 NULL・root/child の従来経路）、`integration_repair_rollback_preserves_before_sha`（失敗と手動確認）、`integration_repair_event_api_gui`（payload・省略欄・表示）、`integration_repair_remote_workspace_skipped`（remote 不変）。各名に `integration_repair` を含め、受け入れ check の名前フィルタで 0 件にならないようにする。 |
+| 試験名 | 実装上の試験名は `integration_repair_schedules_atomic_and_preserves_results`、`integration_repair_resumes_review_on_latest_target`、`integration_repair_schedules_limit_falls_back_to_unsynced_review`、`integration_repair_exhausted_result_untrusted_rolls_back_before_sha_once`、`integration_repair_events_serde_round_trip_and_type_names`、`task_detail_shows_integration_repair_scheduled_state` など。各名に `integration_repair` を含み、名前フィルタで 0 件にならないようにする。 |
+
+## 付記: Phase 2 実装との照合（2026-10-02）
+
+- `IntegrationRepairScheduled` / `Resolved` / `Exhausted` の serde `type`、D5 の payload 欄、`IntegrationRepairExhaustReason` の 7 固定値は `task-core` の event・enum と一致する。`RepairScheduled.class` と `WorkUnitTransitioned.reason` は `integration_repair`、WU の key は `integration-repair-<n>`、上限 `MAX_INTEGRATION_REPAIRS` は 2 件で一致する。
+- `TaskDetail.integration_repair` と受信箱の `AttentionItem::Failed.integration_repair` は実装済み。表示 object の `state`、`work_unit_id`、`attempt`、`max_attempts`、`target_ref`、`target_sha`、`before_sha`、`conflict_files`、`reason`、`rollback_to_sha`、`fallback` は実装と一致する。一方、D5 の `WorkUnitView.integration_repair` と `ExecutionWorkUnitView.integration_repair`、GUI の WU 行の専用 badge は未実装。`IntegrationRepairScheduled` から WU ごとの起票時 snapshot を組み立てる関数は `task_core::integration_repair_snapshots` として存在するが、API 応答にはまだ渡していない。D5 の未完了項目として追跡する。
+- rollback の現実の安全条件は `dispatcher/worker_finish.rs::rollback_integration_repair` に従う。task branch 上で、**rollback 判定時点で** `git status --porcelain` が空、`before_sha` がその branch の reflog にあり、必要な `rebase --abort` が成功した場合だけ `reset --hard before_sha` を行う。rebase 中に未コミットの変更が残る場合は、その変更を推測で捨てず `fallback = false` の手動確認に止める。成功時だけ `rollback_to_sha = before_sha` を記録する。
+- `limit_reached` は `work_unit_id = null`、`attempt = 2`、`fallback = true` で記録する。修復 WU の `plan_issue` / `failed` / 信頼できない結果は、`before_sha` の clean な復元に成功した場合だけ未同期 HEAD の review に戻す。abort 失敗または安全な復元ができない場合は review を進めない。これらは `integration_repair_exhausted` の `reason` と `fallback` で区別する。

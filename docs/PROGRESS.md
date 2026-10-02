@@ -1,5 +1,9 @@
 # PROGRESS — taskd
 
+---
+tasks: [01M3XZ5PYSTTC6GXAH8TZVRHSA]
+---
+
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
 ## 構造リファクタリング完了（2026-09-30、ADR-0079 / ADR-0082 / ADR-0083）
@@ -58,6 +62,20 @@ reland-main 後に main が web GUI（task 01M3QE4D330YESFT6FY8G50R12、ADR-0081
 - `cargo test --workspace pre_review_sync` → 9 passed、0 failed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair` 1 件 + `dispatcher::tests::target_sync::pre_review_sync_*` / `target_sync_pre_review_sync_*` 8 件）。
 - `cargo test --workspace reviewed_sha` → 3 passed、0 failed（`delivery::tests::target_advanced_*_reviewed_sha`）。
 - Phase 1 のコード（review 前同期・stale 検出・同期停止が attempts を消費しない経路）は変更していない。既知の flaky（`local_deep_research` の Spawn NotFound、`browser_shared_cdp` の sandbox TCP probe）は今回の `cargo test --workspace` では再現しなかった。
+
+## Phase 2 — review 前同期の IntegrationRepair（ADR-0120、2026-10-02）
+
+review 前の target への rebase が衝突した場合、元の成果を保持する `integration-repair-<n>` WU を同じ task に追加する。WU が完了すると最新 target へ再同期し、checks と reviewer を新しい SHA でやり直す。2 回の上限、修復不能時の安全な rollback と未同期 HEAD での従来経路への復帰を実装した。`IntegrationRepairScheduled` / `Resolved` / `Exhausted` を task event に残し、`TaskDetail.integration_repair` と受信箱で通常の実装失敗と区別する。Phase 2 の衝突解消経路の実装完了日は 2026-10-02。
+
+- 最新 main の確認: `git merge-tree --write-tree --name-only HEAD main` は衝突ファイルを返さず、`7f3482a3` と、その後に進んだ `39e22633` を順に取り込んだ。`docs/PROGRESS.md` の両側の節を保持し、ADR-0120 の番号は main の `docs/adr/` に無く一意である。
+- 契約照合: ADR-0120 D5 の event 名・payload、API の `TaskDetail.integration_repair` 欄、`MAX_INTEGRATION_REPAIRS = 2`、rollback の clean/reflog/branch 条件を `task-core`・`task-ops`・`task-dispatch` と照合した。GUI の案内を `FailureBanner` より上に配置し、ADR の付記に実装済み範囲と残件を記した。
+- 検査: `cargo build -p task-worker --bins` → exit 0。`cargo fmt --all -- --check` は既存の `crates/task-api/tests/integration_repair.rs` の整形差分で初回 exit 1、`cargo fmt --all` 後の再検査は exit 0。`cargo clippy --workspace -- -D warnings` → exit 0（main 再取り込み後にも exit 0）。
+- `cargo test --workspace integration_repair` → exit 0、19 passed / 0 failed。dispatcher の起票・最新 target への再同期・2 回上限・rollback、event/API の射影を含む。`git diff --check` と ADR 番号・architecture-map・PROGRESS の受け入れ check → exit 0。
+- `cargo test --workspace` → exit 101。`celeris --test instance_handoff` の 8 件中 5 件が失敗した。3 件は worker db guard が user namespace を作れず `Operation not permitted`、2 件はその結果として dispatch/standby の待ち条件が成立しなかった。`unshare -U -r true` も `uid_map: Operation not permitted` で exit 1。この sandbox の制約として記録し、これを `plan_issue` の理由にしない。daemon の決定的 check は sandbox 外で実行される。
+- `cargo test --workspace --exclude celeris` → exit 101。`e2e --test account_pool_scenarios` の 3 件も daemon 起動時に同じ worker db guard の user namespace probe で停止した。これは上記の制約が `celeris` crate 固有ではないことを示す。
+- `cargo test --workspace --exclude celeris --exclude e2e` → exit 101。`task-api --test browser_h3_injection` の `production_h3_injects_once_without_exposure` が `unshare: Operation not permitted` で失敗した。いずれも IntegrationRepair の失敗ではなく、この sandbox の user namespace 制約による。
+- `cargo test --workspace --lib` → exit 101。`task-worker --lib` は 657 passed / 12 failed / 4 ignored。失敗は browser 実 runtime と `db_guard` の namespace を要する試験で、`Operation not permitted` を含む。IntegrationRepair に関係する `task-core`・`task-ops`・`task-dispatch`・`task-api` の lib 試験は別コマンドでも切り分ける。
+- 未解決: ADR-0120 D5 の `WorkUnitView.integration_repair` / `ExecutionWorkUnitView.integration_repair` と GUI の WU 行の専用 badge は未実装。`task_core::integration_repair_snapshots` の event 投影までは実装済み。sandbox 外での `cargo test --workspace` exit 0 の確認も残る。本番への昇格はこの worktree の範囲外。
 
 - [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。

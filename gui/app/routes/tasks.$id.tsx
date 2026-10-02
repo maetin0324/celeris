@@ -297,6 +297,10 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
         </div>
       </section>
 
+      {/* celeris ADR-0120 D5: target drift に伴う integration repair。実装失敗の FailureBanner
+          より上に、別の欄・色・ラベルで表示する。null / 欠落なら何も出さない。 */}
+      <IntegrationRepairPanel repair={detail.integration_repair} />
+
       {/* ADR-0070 D1/D2（Phase 116）: failed のタスクは、原因の分類と「やり直す」「再レビュー」
           「取り下げ」をどのタブからでも見える位置に出す（受け入れ条件 D6(e)）。 */}
       {detail.failure && (
@@ -312,10 +316,6 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
           dismissing={dismissing}
         />
       )}
-
-      {/* celeris ADR-0120 D5: target drift に伴う integration repair。実装失敗（上の FailureBanner）とは
-          別の欄・色・ラベル。null / 欠落なら何も出さない。 */}
-      <IntegrationRepairPanel repair={detail.integration_repair} />
 
       {/* celeris ADR-0090 D5（Phase R7-1）: クラスタ job の durable wait（daemon が poll し、終われば続きの run）。 */}
       {detail.cluster_job_wait && <ClusterJobWaitBanner wait={detail.cluster_job_wait} />}

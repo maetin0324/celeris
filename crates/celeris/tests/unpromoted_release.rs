@@ -361,19 +361,23 @@ async fn old_promote_live_lock_authorizes_the_live_takeover() {
         .spawn()
         .unwrap_or_else(|e| panic!("spawn sleep: {e}"));
     env.write_promote_lock(promoter.id());
-    assert!(!env
-        .root
-        .join("releases")
-        .join(RELEASE)
-        .join("promoting.json")
-        .exists());
+    assert!(
+        !env.root
+            .join("releases")
+            .join(RELEASE)
+            .join("promoting.json")
+            .exists()
+    );
 
     let took_over = assert_takes_over(&env).await;
     let kill = promoter.kill();
     let wait = promoter.wait();
     assert!(kill.is_ok(), "kill promoter: {kill:?}");
     assert!(wait.is_ok(), "wait promoter: {wait:?}");
-    assert!(took_over, "認可された release は handoff を要求し migration する");
+    assert!(
+        took_over,
+        "認可された release は handoff を要求し migration する"
+    );
 }
 
 /// (旧 promote.sh) lock pid が終了済みなら拒否し、DB/migration/instance 登録を行わない。
@@ -386,8 +390,12 @@ async fn old_promote_dead_lock_is_rejected_without_opening_the_db() {
         .spawn()
         .unwrap_or_else(|e| panic!("spawn sleep: {e}"));
     let pid = promoter.id();
-    promoter.kill().unwrap_or_else(|e| panic!("kill promoter: {e}"));
-    promoter.wait().unwrap_or_else(|e| panic!("wait promoter: {e}"));
+    promoter
+        .kill()
+        .unwrap_or_else(|e| panic!("kill promoter: {e}"));
+    promoter
+        .wait()
+        .unwrap_or_else(|e| panic!("wait promoter: {e}"));
     env.write_promote_lock(pid);
     env.seed_old_schema_db();
     let before = db_snapshot(&env.db);

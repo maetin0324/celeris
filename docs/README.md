@@ -14,3 +14,4 @@ agent（Celeris のタスク）がまず読むべき文書は `docs/` ではな�
 - `ops/` — 運用手順（selfdeploy、nextest、sccache-l1、web-parallel-operation）
 
 一度きりの作業手順・経緯・日付付きの調査報告・ADR・進捗記録は `agent-docs/` にある。
+`adr/` と `progress/` は移行期間（ADR-0128 D6）だけ残す案内の README で、新しいファイルは置かない。

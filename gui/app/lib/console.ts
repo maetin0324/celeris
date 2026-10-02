@@ -40,7 +40,7 @@ export interface ConsoleData {
 /**
  * Console（ADR-0048 D1/D3/D4、Phase G22）の純粋な補助。ここには HTTP も React も持ち込まない
  * （`~/lib/reports.ts` / `~/lib/approvals.ts` と同じ方針）。celeris が返した値をそのまま出す・並べる・
- * まとめるだけで、新しい判断（誰に届くか等）は作らない（それは celeris の仕事。docs/adr/0048-console.md）。
+ * まとめるだけで、新しい判断（誰に届くか等）は作らない（それは celeris の仕事。agent-docs/adr/0048-console.md）。
  */
 
 /** CoS（Chief of Staff。ADR-0046 D6）の組織ノード id。旧 `SECRETARY_NODE_ID`（`~/lib/conversation.ts`、削除済み）と同じ値。 */
@@ -148,7 +148,7 @@ export type InstructReplyTarget = { kind: "node"; nodeId: string } | { kind: "pr
 /**
  * `human` / `reply` ブロックへの「返信」が指す先。CoS 宛て（`node_id === COS_NODE_ID`）かつ案件に
  * 紐づいていれば、その案件に紐づけたまま CoS へ続ける（`scope=project:<id>`）。それ以外はそのノード宛て
- * （`scope=node:<id>`）。`docs/adr/0048-console.md` §3.107 の「相手の決め方」の 3 と同じ判断。
+ * （`scope=node:<id>`）。`agent-docs/adr/0048-console.md` §3.107 の「相手の決め方」の 3 と同じ判断。
  */
 export function replyTargetForMessageBlock(block: {
   node_id: string;
@@ -228,7 +228,7 @@ export interface ConsoleWaitingCounts {
 /**
  * いま読み込んでいるブロックから、答え待ちの件数を数える（新しい API 呼び出しは足さない。G22 の方針）。
  * `question` は `answered = false`、`approval` は `decision` 未設定、`milestone` は celeris が
- * `proposed` のものしか流さない（`docs/adr/0048-console.md` Phase 60a 追記 7）ので、出ているだけ数える。
+ * `proposed` のものしか流さない（`agent-docs/adr/0048-console.md` Phase 60a 追記 7）ので、出ているだけ数える。
  */
 export function consoleWaitingCounts(blocks: readonly ConsoleBlock[]): ConsoleWaitingCounts {
   let questions = 0;

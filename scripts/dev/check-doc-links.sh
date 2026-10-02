@@ -12,7 +12,8 @@
 set -u
 
 # 移行期間（ADR-0128 D6）の対象外。期間が終わったら空にする。
-MIGRATION_EXCLUDE="agent-docs/PROGRESS.md agent-docs/progress/phase-F.md"
+# check-adr-numbers.sh は移行期間中だけ旧 ADR ディレクトリ（存在するものだけ）も数えるので、旧パスを名指しする。
+MIGRATION_EXCLUDE="agent-docs/PROGRESS.md agent-docs/progress/phase-F.md scripts/dev/check-adr-numbers.sh"
 
 # 素のパスを見ない・Markdown も見ないもの（前方一致）。
 ALWAYS_EXCLUDE="scripts/dev/testdata/ scripts/dev/docs-layout.tsv scripts/dev/check-doc-links.sh"

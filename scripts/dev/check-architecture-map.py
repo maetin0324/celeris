@@ -11,7 +11,7 @@
 - 直前の backtick パスにすぐ続く全角括弧 `（... `sub/path`, ... ）` の中の backtick パスは、
   直前パスと同じディレクトリからの相対パスとして展開する（Rust の親ファイル + 子 module の慣習）。
 
-ADR / DESIGN の見出しアンカー（`#...`）はレンダラ依存のため検査しない。
+ADR / SPEC の見出しアンカー（`#...`）はレンダラ依存のため検査しない。
 """
 
 from __future__ import annotations

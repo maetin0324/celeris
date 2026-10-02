@@ -822,3 +822,80 @@ async fn tree_disabled_ignores_worker_decisions() {
     assert!(adapter.contexts().iter().all(|c| !c.decision_requests));
     assert_eq!(task_ops::decision::open_count(store.as_ref()).unwrap(), 0);
 }
+
+/// ADR-0074 付記（2026-10-02）: 段階 s1 の途中確認を `continue` で返し、メモを付けたときだけ、次の段階 s2 の
+/// leaf の前置き（`WorkUnitPromptContext.human_decisions`）と s2 の kind task の unit から作る子の objective の
+/// 「人の決定」節（D7 の回答と同じ節・同じ形の行）にメモが入る。前の段階 s1 の leaf には入らない。メモが無ければ
+/// 何も足さない（節も出ない）。
+async fn continue_note_scenario(
+    note: Option<&str>,
+) -> (Arc<DecisionAdapter>, Arc<dyn TaskStore>, TaskId) {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = root_task(dir.path());
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1", true), stage("s2", false)],
+        vec![
+            leaf("a", "s1", &[]),
+            leaf("b", "s2", &[]),
+            task_unit("c", "s2", &[], "true"),
+        ],
+    );
+    let adapter = Arc::new(DecisionAdapter::new(vec![plan]));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    assert_eq!(
+        quiet_then_approve(&mut d, &store, root_id, 1500).await,
+        vec!["review_human:s1".to_string()]
+    );
+    let events = store.events_for(root_id).unwrap();
+    let stored = store.get(root_id).unwrap().unwrap();
+    assert!(
+        task_ops::phase_gate::is_awaiting_human(&stored, &events),
+        "{events:?}"
+    );
+    task_ops::phase_gate::phase_gate(
+        store.as_ref(),
+        root_id,
+        task_ops::phase_gate::PhaseGateAction::Continue,
+        note.map(str::to_string),
+    )
+    .unwrap();
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(root_id).unwrap().unwrap().status, Status::Done);
+    assert_replay_is_clean(&store);
+    (adapter, store, root_id)
+}
+
+#[tokio::test]
+async fn phase_gate_continue_note_reaches_next_stage_leaf_and_child() {
+    let (adapter, store, root_id) = continue_note_scenario(Some("  14 node-h までに留める ")).await;
+    let line = "- 途中確認: 工程『s1』の後: 続ける — 14 node-h までに留める".to_string();
+    let a = adapter.work_unit_contexts("a");
+    assert_eq!(a.len(), 1);
+    assert!(a[0].human_decisions.is_empty(), "s1 は前の段階: {a:?}");
+    let b = adapter.work_unit_contexts("b");
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].human_decisions, vec![line.clone()]);
+    let child = child_named(&store, root_id, "c").expect("the child is created");
+    let tail = format!("{}\n{line}", task_core::decision::DECISIONS_HEADING);
+    assert!(child.objective.ends_with(&tail), "{}", child.objective);
+}
+
+#[tokio::test]
+async fn phase_gate_continue_without_note_adds_nothing() {
+    let (adapter, store, root_id) = continue_note_scenario(None).await;
+    let b = adapter.work_unit_contexts("b");
+    assert_eq!(b.len(), 1);
+    assert!(b[0].human_decisions.is_empty(), "{b:?}");
+    let child = child_named(&store, root_id, "c").expect("the child is created");
+    assert!(
+        !child
+            .objective
+            .contains(task_core::decision::DECISIONS_HEADING),
+        "{}",
+        child.objective
+    );
+}

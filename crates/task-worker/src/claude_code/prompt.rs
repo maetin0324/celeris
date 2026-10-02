@@ -897,6 +897,8 @@ fn build_execution_plan_prompt(
         out.push_str(&plan_limits_section(planner));
         // ADR-0079 R7-2/R7-10: check の書き方（本番で check 自体が誤って落ちた形）。
         out.push_str(PLANNER_CHECK_GUIDANCE);
+        // ADR-0095 付記 D-d: 本番 host の操作は人が実行する手順として書く。
+        out.push_str(PRODUCTION_HOST_PLANNER_GUIDANCE);
         out.push_str(&previous_attempt_errors_section(planner, artifacts));
     }
     let schema = serde_json::to_string(&task_core::execution_plan::schema_value())
@@ -1660,3 +1662,10 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \
      leave Cargo checks to the daemon's workspace check.\n\
      - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\n";
+/// ADR-0095 付記 D-d: 本番 host の操作は人が実行する手順として書く（planner 指示。worker 前置きの
+/// `production_host_note` と対になる — 計画段階でも最初から試みさせない）。
+pub const PRODUCTION_HOST_PLANNER_GUIDANCE: &str = "### 本番 host の操作 (production host changes)\n\
+     本番 host の操作は人が実行する手順として書く: `systemctl --user` / `systemd-run` / `~/.config/systemd` / \
+     `~/.local/celeris/releases` / `~/.config/celeris` を変更する WorkUnit を計画しない。本番の daemon の \
+     再起動・差し替えが要るときは、人が実行する手順（コマンドと確認方法）を成果物に書く WorkUnit を置き、\
+     実行そのものは `decisions` か `needs_decisions` の人の check に回す（ADR-0095 付記 D-d）。\n\n";

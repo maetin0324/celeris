@@ -70,6 +70,12 @@ pub struct SelfdeployConfig {
     /// ADR-0051 Phase 106追記: push先のリモート名。
     #[serde(default = "default_selfdeploy_push_remote")]
     pub push_remote: String,
+    /// ADR-0095 付記 D-c: `promote.sh` の起こし方（`task_worker::detach::resolve_detach_launcher`
+    /// にそのまま渡す）。`"auto"` / `"systemd-run"` / `"inline"`。既定は `"auto"`（本番の挙動は
+    /// 変えない）。テストはここを `"inline"` に固定して、実行環境に `systemd-run` があっても
+    /// 本物の user systemd bus に触れないようにする。
+    #[serde(default = "default_selfdeploy_detach")]
+    pub detach: String,
 }
 
 impl Default for SelfdeployConfig {
@@ -81,6 +87,7 @@ impl Default for SelfdeployConfig {
             repo: default_selfdeploy_repo(),
             push: default_selfdeploy_push(),
             push_remote: default_selfdeploy_push_remote(),
+            detach: default_selfdeploy_detach(),
         }
     }
 }
@@ -100,6 +107,10 @@ fn default_releases_dir() -> PathBuf {
 
 fn default_selfdeploy_repo() -> PathBuf {
     PathBuf::from("~/workspace/agent-platform")
+}
+
+fn default_selfdeploy_detach() -> String {
+    "auto".to_string()
 }
 
 impl SelfdeployConfig {
@@ -143,6 +154,11 @@ impl SelfdeployConfig {
         if self.push_remote.trim().is_empty() {
             return Err(ConfigError::Invalid(
                 "[selfdeploy] push_remote must not be blank".into(),
+            ));
+        }
+        if !matches!(self.detach.as_str(), "auto" | "systemd-run" | "inline") {
+            return Err(ConfigError::Invalid(
+                "[selfdeploy] detach must be \"auto\", \"systemd-run\" or \"inline\"".into(),
             ));
         }
         Ok(())

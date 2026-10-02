@@ -415,3 +415,12 @@ review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
 この再実行では `plan_issue` は発生していない。作業ブランチの起点 `6b49a92dd5d7` から HEAD までの
 `git diff --name-only` は空で、`review.rs`・review tests・`review_spawn` 周辺の skill 配布差分も無い。
 したがって、その変更は対象 2 試験の経路に触れていない。
+
+### land-main: 最新 main の統合と最終検査 — 2026-10-02
+
+main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した。ui-ux external skills の記録と CPU 負荷規則・planner 指針の記録を両方保持した。全ターゲット clippy で main 由来の `ui_ux_skills.rs` に型複雑度と不要な let-return の lint が見つかったため、型 alias と直接 return に整えた。
+
+- `git merge-base --is-ancestor 95ac16442f92 HEAD` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
+- `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。

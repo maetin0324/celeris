@@ -59,4 +59,4 @@
 
 ## 付記（2026-10-01）
 
-担当の無い root task の部署解決と、delivery を見送る理由の通知は [ADR-0117](0117-root-delivery-without-assignee.md) に定める。
+担当の無い root task の部署解決と、delivery を見送る理由の通知は [ADR-0119](0119-root-delivery-without-assignee.md) に定める。

@@ -62,16 +62,17 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - GUI gate（`gui/`）: `pnpm typecheck` / `pnpm test` / `pnpm build` は各 exit 1。pnpm 11.27.0 の依存事前確認がユーザー cache の SQLite database を開けず、各コマンドの実処理は開始しなかった。テスト数は未取得。main との比較も未実施。
 - 未解決と提案: sccache と `CARGO_TARGET_DIR` が書き込み可能な環境で Rust 2 gate を再実行し、pnpm store が利用できる環境で GUI 3 gate と main 比較を再実行してテスト件数を記録する。今回の GUI 差分 gate `git diff --quiet 06e9a03cffe8 -- gui ':!gui/docs/adr/0002-frontend-stack.md'` は exit 0。旧 ADR 追記を含む GUI 全体の差分は新 ADR-0081 に supersede として記録済み。ADR・parity・計画の相互リンクを確認済み。
 
-## 担当の無い root task の delivery（ADR-0117、2026-10-01）
+## 担当の無い root task の delivery（ADR-0119、2026-10-01）
 
-- 振り直し: 旧番号 0099 は main の browser-phase3-control-lease（docs/adr/0099-browser-phase3-control-lease.md）と衝突したため、main 統合後に ADR-0117 へ振り直した（2026-10-02）。
-- 統合 HEAD: `c5f57803`（verify-all worktree）。ADR-0117 を [ADR-0117](adr/0117-root-delivery-without-assignee.md) に記録。部署は root assignee → 有効計画の planner → root 配下の子 task / WU run の実担当票 → 案件設定の既定部署の順に解決し、曖昧な担当推測をしない。対象 root の delivery 見送りは `DeliverySkipped` event と inbox attention に理由を残す。子 task と対象外案件は従来どおり通知・delivery 対象外。
+- 振り直し: 旧番号 0099 は main の browser-phase3-control-lease（docs/adr/0099-browser-phase3-control-lease.md）と衝突したため main 統合後に 0117 へ振り直したが、refs 全体の走査で 0117 が使用済みと判明した。main・全 refs/heads/celeris/*・refs/remotes の docs/adr を git ls-tree で走査すると 0116/0117/0118 は使用済み、0119 は未使用だったため、2026-10-02 に ADR-0119 へ再度振り直した。
+- 統合 HEAD: `c5f57803`（verify-all worktree）。ADR-0119 を [ADR-0119](adr/0119-root-delivery-without-assignee.md) に記録。部署は root assignee → 有効計画の planner → root 配下の子 task / WU run の実担当票 → 案件設定の既定部署の順に解決し、曖昧な担当推測をしない。対象 root の delivery 見送りは `DeliverySkipped` event と inbox attention に理由を残す。子 task と対象外案件は従来どおり通知・delivery 対象外。
 - `cargo test --workspace` → exit 101。大半の test 群は成功したが、`celeris` の `instance_handoff` 5 件が失敗。4 件は sandbox 内で user namespace が許可されず ADR-0095 worker DB guard probe が失敗したもの、2 件はその後の dispatch/standby 待機失敗（5 failures total）。delivery 関連の test 群は通過。workspace 全件成功とは扱わず、user namespace が利用可能な環境で再実行が必要。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `rg -n 'unwrap\\s*\\(' crates/task-ops/src/delivery.rs` → 一致なし。production `delivery.rs` に `unwrap()` は無い（test 用 unwrap は別ファイル）。
 - 未解決: sandbox 制約を外した統合環境で workspace test を再実行して全件成功を確認すること。ブランチの production DB 接続・実行は行っていない。
+- ADR 番号の再走査（2026-10-02）: main・全 refs/heads/celeris/*・refs/remotes の 130 refs を `git ls-tree` で確認し、0116/0117/0118 は使用済み、最小空き番号 0119 を選択。main に migration 0037 は無く、migration 番号は変更なし。参照と ADR-0051 のリンクを ADR-0119 に更新した。task-api/task-core/task-worker の `UPDATE_SCHEMA=1` schema 整合テストは成功。`corepack pnpm@11.27.0 -C gui gen:types` は pnpm の依存確認が cache SQLite を開けず exit 1。型生成は実行できなかったが、生成物 types.ts の該当 description を schema と同じ ADR-0119 表記に同期した。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は exit 101、`instance_handoff` 5 件が sandbox の user namespace `Operation not permitted` で失敗（delivery 関連以外の環境依存失敗）。
 - delivery skipped の inbox query 向けに migration `0037_events_delivery_skipped_index.sql` を追加し、`idx_events_delivery_skipped` 部分 index を作成。問い合わせの predicate は index と同じ式を使い、`latest_delivery_skipped_rows_uses_partial_index` が EXPLAIN QUERY PLAN の index 使用と task ごとの最新 1 件を確認する。schema version 37（`SCHEMA_VERSION = 37`）になる。
-- この migration の昇格は celeris を stop → 新バイナリで start とし、起動時に migration が実行される。index は追加のみで、旧バイナリも残存 index 自体は利用せず動作できる。ただし schema 37 を開く旧バイナリは SchemaTooNew になるため、バイナリを戻す場合は migration 前の DB backup も戻すこと。詳細と任意の `DROP INDEX` は [ADR-0117](adr/0117-root-delivery-without-assignee.md) に記録。
+- この migration の昇格は celeris を stop → 新バイナリで start とし、起動時に migration が実行される。index は追加のみで、旧バイナリも残存 index 自体は利用せず動作できる。ただし schema 37 を開く旧バイナリは SchemaTooNew になるため、バイナリを戻す場合は migration 前の DB backup も戻すこと。詳細と任意の `DROP INDEX` は [ADR-0119](adr/0119-root-delivery-without-assignee.md) に記録。
 
 ## Root delivery 部署 fallback 再検証（verify-perf、2026-10-01）
 
@@ -97,7 +98,7 @@ main（HEAD `2bd7df3b`）への merge-renumber・delivery-index 統合後の最�
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo test -p task-core delivery_skipped` → exit 0、2 passed（`latest_delivery_skipped_rows_uses_partial_index` が `idx_events_delivery_skipped` の EXPLAIN QUERY PLAN 使用と task ごとの最新1件を確認）。
 - `git merge-tree --write-tree --name-only HEAD main` → exit 0、衝突ファイル名の出力なし（tree `229e6d41c27f0fb716ef3e17faef6fc8c166d0de` のみ）。main を fast-forward 可能な形に近づけた状態を確認。
-- `rg -n 'ADR-0099' docs/ crates/` → 残存参照はすべて main 既存の browser-phase3-control-lease（`docs/adr/0099-browser-phase3-control-lease.md`）向けで、root delivery の旧番号参照は無い。`docs/adr/0117-root-delivery-without-assignee.md` のみが新 ADR。
+- `rg -n 'ADR-0099' docs/ crates/` → 残存参照はすべて main 既存の browser-phase3-control-lease（`docs/adr/0099-browser-phase3-control-lease.md`）向けで、root delivery の旧番号参照は無い。`docs/adr/0119-root-delivery-without-assignee.md` が振り直し後の ADR。
 - GUI（`corepack pnpm@11.27.0 -C gui install --frozen-lockfile` → exit 0 の後）: `pnpm typecheck`（`react-router typegen && tsc -b`）→ exit 0。`pnpm test`（vitest run）→ exit 0、85 test files / 1,250 tests passed。
 - 負荷による flake は今回発生しなかった（追加の待ち上限変更は不要）。
 - 受け入れ条件 0〜3 すべて満たした。取り込み可能性の確認はここまでで、実際の main への merge は celeris の統合工程（integrate-reverify）が行う。

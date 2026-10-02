@@ -1639,7 +1639,7 @@ fn latest_delivery_skipped_rows_returns_latest_per_task_only() {
     ));
 }
 
-/// ADR-0117 付記: inbox の `latest_delivery_skipped_rows` は events 全件の full scan をせず、
+/// ADR-0119 付記: inbox の `latest_delivery_skipped_rows` は events 全件の full scan をせず、
 /// migration 0037 の部分 index `idx_events_delivery_skipped` を使う（問い合わせと試験で同じ SQL
 /// 文字列 `events::latest_delivery_skipped_sql()` を使うので、式がずれて index を落とすことはない）。
 #[test]

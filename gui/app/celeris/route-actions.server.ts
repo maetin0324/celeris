@@ -2,7 +2,7 @@ import { data } from "react-router";
 import type { CreateFailure, ReplayOutcome, RetryOutcome, TransitionOutcome } from "./action-types";
 import { applyRetry, applyTransition, readTransitionForm, toActionError } from "./actions.server";
 import type { CelerisClient } from "./client.server";
-import type { NewTaskSpec, ReplayReport, Task } from "./types";
+import type { NewTaskBody, ReplayReport, Task } from "./types";
 
 /**
  * 各ルートの `action` 本体（docs/DESIGN.md §6.3 の 2、§6.6、docs/adr/0005 D2 / D4）。
@@ -62,7 +62,7 @@ export async function runInboxAction(
 /** `POST /tasks`。celeris のエラーは例外にせず `CreateFailure` として返す。 */
 export async function createTask(
   client: CelerisClient,
-  spec: NewTaskSpec,
+  spec: NewTaskBody,
   signal?: AbortSignal,
 ): Promise<{ ok: true; task: Task } | CreateFailure> {
   try {

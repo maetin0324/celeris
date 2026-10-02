@@ -595,3 +595,21 @@ crates/task-worker/tests/browser*` は同じ `browser_specialist.rs` の 4 行�
   共用 host の負荷に起因する実時間待ち flake と判断する。本ブランチの browser 系ファイルに差分は無く
   （`browser_specialist.rs` の `with_env_removed` 削除のみ）、sccache 撤去のコードを疑う根拠は無い。
   最終的に `cargo test --workspace` exit 0 の run を得ている。
+
+## sccache の host 設定化と reflink target
+
+### deflake-lock: api_scenarios の `database is locked` 試験を進捗待ちへ（2026-10-02）
+
+原因: `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`
+（`tests/e2e/tests/api_scenarios.rs`）は 180 件の task の完了を `wait_until(Duration::from_secs(120), ...)`
+という固定 wall-clock 期限で待っており、共用 host が高負荷のとき tick 処理が実時間内に収まらず
+期限切れで落ちていた（daemon 自体は生きたまま in-flight で処理中）。
+方式: `wait_until` とは別に `wait_for_progress(overall_limit, stall_limit, target, count)` を追加し、
+done の件数が増え続ける限りは待ち、`stall_limit`（60s）だけ増えなければ失敗、全体は `overall_limit`
+（600s）を安全弁にする出来事待ち（docs/testing.md 方法 2）に変えた。`tick_ms = 20` と件数（150+30）、
+主張（全 done・daemon が生きている・`database is locked` が出ない・replay 一致）は変えていない。
+
+- `cargo build -p celeris -p celerisctl` → exit 0。
+- `cargo test -p e2e --test api_scenarios writes_from_celerisctl_and_api` → exit 0、1 passed。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy -p e2e --all-targets -- -D warnings` → exit 0（警告なし）。

@@ -2413,3 +2413,25 @@ ADR-0079 付記「R7-12」を先に追記してから実装した。
   `check_and_apply_execution --apply` はその行を消す）。直すなら `RepairScheduled` に spec を載せ、配送の repair でも積む（別 Phase の提案）。
 - 他の browser テスト（`browser_runtime_*` / `browser_egress_relay` など）にも 1 回の `recv` で判定する箇所が無いか、同じ観点で見直す価値がある。
 - 05:2xZ（2026-10-02）: **R7-12 の昇格と handoff 認可 task の再開**。handoff 認可 task 01M3WZ1GEP… は実装・review 合格（01:36）後、delivery が main の前進で repair-2（phase なし）を足して reopen → 再 review で browser_shared_cdp の 60 s 失敗 → replan が `done work unit repair-2 must not change on replan` で毎回 invalid（plan_invalid ×3。人は「a: 別 task で直す」と答えたが task は作られていなかった）。R7-12（`is_daemon_added_work_unit` が spec に無い repair WU も daemon 製とみなす、`DaemonAddedKeyReused`、probe の WebSocket 読み取りの取りこぼし修正と環境 preflight）を統合 → release **f8c84d8df978**（load 11.66 で開始してしまった。gate は全段 exit 0）→ verify ok / live_ok → live 昇格（backup `20261002-051914-pre-f8c84d8df978.sqlite3`）。決定 01M3XDDVB8… に replan + note で回答 → plan v2（land 段に land-main を 1 つ）が検証を通過、plan-gate を approve。
+
+## R7-13: land-main — 最新 main の取り込みと受け入れ検査の再実行（2026-10-02）
+
+main（R7-12 の配送 repair WU 修正・browser_shared_cdp の flake 修正まで含む）をこのブランチに `git merge main --no-edit` で取り込んだ。
+`git merge-tree` で見た衝突は `docs/progress/phase-R.md` の 2 箇所（この節の直前）だけで、どちらも main 側とこのブランチ側の節を両方残す形で解いた。
+コードの衝突は無かった（daemon のバイナリ化・promote.sh の印・`celeris-web@.service` の `Wants=` 除去は main 側の変更と重ならず、
+そのまま残っている）。
+
+### 証拠
+
+- `git merge-base --is-ancestor main HEAD` → exit 0（main はこのブランチの祖先）。
+- `cargo build -p task-worker --bins` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo test --workspace` → 全バイナリ exit 0、失敗 0。`real_shared_cdp_and_auth_section` は main の R7-12 修正により 0.76 秒で pass（単独実行で再発せず）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning 0。
+- `cargo test -p celeris --test unpromoted_release` → **8 passed; 0 failed**（exit 0）。
+- `bash scripts/selfdeploy/tests/promote_authorization_marker.sh` → `promote_authorization_marker: all ok`（exit 0。シェバンが
+  `#!/usr/bin/env bash` のため `bash` で実行する。dash/`sh` では配列展開（`${BASH_SOURCE[0]}` 等）が `Bad substitution` で落ちる）。
+
+### 未解決・提案
+
+- なし（この WorkUnit の範囲では追加の既知の問題は見つからなかった）。

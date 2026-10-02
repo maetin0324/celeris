@@ -134,6 +134,19 @@ pub fn decide_startup(
 pub const PROMOTING_MAX_AGE_SECS: i64 = 900;
 /// ADR-0040 付記: selfdeploy のスクリプトが昇格の間だけ `<releases_dir>/<sha12>/` に置く印。
 pub const PROMOTING_FILE: &str = "promoting.json";
+/// ADR-0040 付記の規則 3: 旧版の `start_promote_with_launcher` が `<releases_dir>/<sha12>/` に
+/// 昇格プロセスの pid を書く lock（`releases.rs` の `lock_pid` と同じ書式: pid の 10 進数・前後空白可）。
+pub const PROMOTE_LOCK_FILE: &str = "promote.lock";
+
+/// `promote.lock` から読んだ事実（規則 3）。生死と更新時刻は読んだ時点のもの。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromoteLockFact {
+    pub pid: u32,
+    /// `pid_alive(pid)` の結果（pid 0 は判定せず `false`）。
+    pub alive: bool,
+    /// lock の最終更新時刻（mtime）。
+    pub modified: OffsetDateTime,
+}
 
 /// `promoting.json` の中身のうち判定に使う欄（他の欄 `script` / `mode` / `pid` は読まない）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -151,6 +164,8 @@ pub struct PromotionEvidence {
     pub current_target: Option<std::path::PathBuf>,
     /// `<releases_dir>/<release>/promoting.json`: 無ければ `None`、読めない・壊れていれば `Some(Err)`。
     pub promoting: Option<Result<PromotingMarker, String>>,
+    /// `<releases_dir>/<release>/promote.lock`: 無ければ `None`、読めない・pid でなければ `Some(Err)`。
+    pub promote_lock: Option<Result<PromoteLockFact, String>>,
 }
 
 /// 昇格の認可の判定の結果（ADR-0040 付記）。
@@ -224,9 +239,55 @@ pub fn decide_promotion(
             }
         }
     };
+    // 規則 3: 旧版の GUI/API が書いた `promote.lock` の pid が生きていて、lock が新しい。
+    let lock_desc = match &evidence.promote_lock {
+        None => format!("no {PROMOTE_LOCK_FILE}"),
+        Some(Err(e)) => format!("{PROMOTE_LOCK_FILE} is unreadable: {e}"),
+        // `pid_alive(0)` は true を返すので、生死より先に弾く。
+        Some(Ok(lock)) if lock.pid == 0 => format!("{PROMOTE_LOCK_FILE} has an invalid pid 0"),
+        Some(Ok(lock)) if !lock.alive => {
+            format!("{PROMOTE_LOCK_FILE} pid {} is not running", lock.pid)
+        }
+        Some(Ok(lock)) => {
+            let age = (now - lock.modified).whole_seconds();
+            // 規則 2 と同じく、未来の時刻も同じ幅の外なら認めない。
+            if age.abs() <= PROMOTING_MAX_AGE_SECS {
+                return PromotionGate::Authorized(format!(
+                    "{PROMOTE_LOCK_FILE} pid {} is running and the lock is {age}s old",
+                    lock.pid
+                ));
+            }
+            format!(
+                "{PROMOTE_LOCK_FILE} pid {} is running but the lock is {age}s old (limit {PROMOTING_MAX_AGE_SECS}s)",
+                lock.pid
+            )
+        }
+    };
     PromotionGate::Rejected(format!(
-        "release `{release}` is not promoted: {current_desc}; {marker_desc}"
+        "release `{release}` is not promoted: {current_desc}; {marker_desc}; {lock_desc}"
     ))
+}
+
+/// `promote.lock` を読む（規則 3）。無ければ `None`。
+fn read_promote_lock(path: &std::path::Path) -> Option<Result<PromoteLockFact, String>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => return Some(Err(e.to_string())),
+    };
+    let pid = match text.trim().parse::<u32>() {
+        Ok(pid) => pid,
+        Err(e) => return Some(Err(format!("not a pid `{}`: {e}", text.trim()))),
+    };
+    let modified = match std::fs::metadata(path).and_then(|m| m.modified()) {
+        Ok(t) => OffsetDateTime::from(t),
+        Err(e) => return Some(Err(format!("no mtime: {e}"))),
+    };
+    Some(Ok(PromoteLockFact {
+        pid,
+        alive: pid != 0 && pid_alive(pid),
+        modified,
+    }))
 }
 
 /// `decide_promotion` に渡す事実をファイルシステムから読む（`current` は `releases_dir` の親にある）。
@@ -249,10 +310,16 @@ pub fn read_promotion_evidence(releases_dir: &std::path::Path, release: &str) ->
     } else {
         None
     };
+    let promote_lock = if release_managed {
+        read_promote_lock(&release_dir.join(PROMOTE_LOCK_FILE))
+    } else {
+        None
+    };
     PromotionEvidence {
         release_managed,
         current_target,
         promoting,
+        promote_lock,
     }
 }
 

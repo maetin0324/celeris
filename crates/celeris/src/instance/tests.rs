@@ -423,6 +423,7 @@ fn evidence(current: Option<&str>, promoting: Option<(&str, i64)>) -> PromotionE
                     .expect("fmt"),
             })
         }),
+        promote_lock: None,
     }
 }
 
@@ -522,8 +523,172 @@ fn read_promotion_evidence_reads_current_and_the_marker() {
             started_at: "2026-10-02T00:00:00Z".into()
         }))
     );
+    assert_eq!(ev.promote_lock, None);
     // 管理外の名前は印を読まない。
     let other = read_promotion_evidence(&releases, "zzz");
     assert!(!other.release_managed);
     assert_eq!(other.promoting, None);
+    assert_eq!(other.promote_lock, None);
+}
+
+// ADR-0040 付記の規則 3: 旧版の GUI/API が書いた `promote.lock`。
+
+fn lock_evidence(pid: u32, alive: bool, modified: i64) -> PromotionEvidence {
+    PromotionEvidence {
+        promote_lock: Some(Ok(PromoteLockFact {
+            pid,
+            alive,
+            modified: at(modified),
+        })),
+        ..evidence(Some("releases/old"), None)
+    }
+}
+
+fn rejected_reason(gate: PromotionGate) -> String {
+    match gate {
+        PromotionGate::Rejected(reason) => reason,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_live_pid_and_a_fresh_promote_lock_authorize_the_old_promote_script() {
+    let fresh = lock_evidence(4242, true, -10);
+    assert!(matches!(
+        decide_promotion("abc", &fresh, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let edge = lock_evidence(4242, true, -PROMOTING_MAX_AGE_SECS);
+    assert!(matches!(
+        decide_promotion("abc", &edge, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    // dev・管理外は lock があっても素通しのまま。
+    assert!(matches!(
+        decide_promotion(DEV_RELEASE, &fresh, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+    let unmanaged = PromotionEvidence {
+        release_managed: false,
+        ..fresh
+    };
+    assert!(matches!(
+        decide_promotion("abc", &unmanaged, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+}
+
+#[test]
+fn a_dead_pid_or_pid_zero_in_promote_lock_is_rejected() {
+    let dead = rejected_reason(decide_promotion(
+        "abc",
+        &lock_evidence(4242, false, -10),
+        at(0),
+    ));
+    assert!(dead.contains("pid 4242 is not running"), "{dead}");
+    // pid 0 は `alive` が true でも（`pid_alive(0)` は true を返す）認可しない。
+    let zero = rejected_reason(decide_promotion("abc", &lock_evidence(0, true, -10), at(0)));
+    assert!(zero.contains("invalid pid 0"), "{zero}");
+}
+
+#[test]
+fn a_stale_or_future_promote_lock_is_rejected_even_with_a_live_pid() {
+    let stale = rejected_reason(decide_promotion(
+        "abc",
+        &lock_evidence(4242, true, -PROMOTING_MAX_AGE_SECS - 1),
+        at(0),
+    ));
+    assert!(stale.contains(PROMOTE_LOCK_FILE), "{stale}");
+    let future = rejected_reason(decide_promotion(
+        "abc",
+        &lock_evidence(4242, true, PROMOTING_MAX_AGE_SECS + 1),
+        at(0),
+    ));
+    assert!(future.contains("limit 900s"), "{future}");
+}
+
+#[test]
+fn an_unreadable_promote_lock_is_rejected_with_its_reason() {
+    let broken = PromotionEvidence {
+        promote_lock: Some(Err("not a pid `x`".into())),
+        ..evidence(Some("releases/old"), None)
+    };
+    let reason = rejected_reason(decide_promotion("abc", &broken, at(0)));
+    assert!(reason.contains("not a pid `x`"), "{reason}");
+    // lock が無ければ理由に「無い」と出る（規則 1・2 の理由も残る）。
+    let none = rejected_reason(decide_promotion("abc", &evidence(None, None), at(0)));
+    assert!(none.contains("no promote.lock"), "{none}");
+    assert!(none.contains("no promoting.json"), "{none}");
+}
+
+#[test]
+fn rules_one_and_two_still_win_over_a_bad_promote_lock() {
+    let current = PromotionEvidence {
+        promote_lock: Some(Ok(PromoteLockFact {
+            pid: 4242,
+            alive: false,
+            modified: at(-10_000),
+        })),
+        ..evidence(Some("releases/abc"), None)
+    };
+    assert!(matches!(
+        decide_promotion("abc", &current, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let marker = PromotionEvidence {
+        promote_lock: Some(Err("bad".into())),
+        ..evidence(None, Some(("abc", -10)))
+    };
+    assert!(matches!(
+        decide_promotion("abc", &marker, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+}
+
+#[test]
+fn read_promotion_evidence_reads_promote_lock_pid_liveness_and_mtime() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let releases = dir.path().join("releases");
+    let rel = releases.join("abc");
+    std::fs::create_dir_all(&rel).expect("mkdir");
+    let lock = rel.join(PROMOTE_LOCK_FILE);
+    // 自分自身の pid は生きている。前後の空白は許す。
+    let me = std::process::id();
+    std::fs::write(&lock, format!(" {me}\n")).expect("write");
+    let before = OffsetDateTime::now_utc() - time::Duration::seconds(5);
+    let ev = read_promotion_evidence(&releases, "abc");
+    let fact = ev.promote_lock.clone().expect("some").expect("ok");
+    assert_eq!(fact.pid, me);
+    assert!(fact.alive);
+    assert!(fact.modified >= before, "{:?}", fact.modified);
+    assert!(matches!(
+        decide_promotion("abc", &ev, OffsetDateTime::now_utc()),
+        PromotionGate::Authorized(_)
+    ));
+    // 古い mtime は拒否。
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&lock)
+        .expect("open")
+        .set_modified(old)
+        .expect("set mtime");
+    let ev = read_promotion_evidence(&releases, "abc");
+    assert!(matches!(
+        decide_promotion("abc", &ev, OffsetDateTime::now_utc()),
+        PromotionGate::Rejected(_)
+    ));
+    // pid でない中身は読めない lock。
+    std::fs::write(&lock, "not-a-pid").expect("write");
+    let ev = read_promotion_evidence(&releases, "abc");
+    assert!(
+        matches!(ev.promote_lock, Some(Err(_))),
+        "{:?}",
+        ev.promote_lock
+    );
+    // pid 0 は生死を判定せず false。
+    std::fs::write(&lock, "0").expect("write");
+    let ev = read_promotion_evidence(&releases, "abc");
+    let fact = ev.promote_lock.clone().expect("some").expect("ok");
+    assert_eq!((fact.pid, fact.alive), (0, false));
 }

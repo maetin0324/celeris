@@ -391,7 +391,7 @@ web dogfood の worker run が `systemctl --user start celeris-web@bf54b41ad627`
 
 ### 規則
 
-`--mode verify` 以外の daemon は、次のどちらかが成り立つ場合**だけ**、DB を開いて migrate し、
+`--mode verify` 以外の daemon は、次のいずれかが成り立つ場合**だけ**、DB を開いて migrate し、
 `daemon_instances` に行を書き、handoff を要求し、`active` になる:
 
 1. **昇格済み**: `<releases_dir の親>/current`（本番 `~/.local/celeris/current`）の symlink の
@@ -403,6 +403,11 @@ web dogfood の worker run が `systemctl --user start celeris-web@bf54b41ad627`
    中身は `{"sha12", "script": "promote.sh" | "rollback.sh" | "migrate-to-celeris.sh", "mode", "pid",
    "started_at"}`。期限は、スクリプトが SIGKILL などで印を消せずに終わったとき、古い印が後の任意の
    起動を認可し続けないためのもの。
+3. **旧版の GUI/API から昇格中**: `<releases_dir>/<release>/promote.lock` に書かれた pid が
+   `kill(pid, 0)` 相当で生きており、lock の最終更新時刻が現在から `PROMOTING_MAX_AGE_SECS`
+   （900 秒）以内である。読めない lock、無効な pid、死んだ pid、未来または 900 秒より古い
+   更新時刻は認可しない。pid の再利用だけで古い lock が認可になるのを避けるため、
+   **生存と時刻の両方**を要する。これは短期の互換経路であり、pid と mtime は強い本人確認ではない。
 
 どちらでもなければ **拒否**する。
 
@@ -412,8 +417,9 @@ web dogfood の worker run が `systemctl --user start celeris-web@bf54b41ad627`
   （`crates/celeris/src/instance.rs` に置く。LLM・DB・systemd に触れない）。
 - **拒否時の振る舞い**: standby で待つことは**しない**（待つには DB を開いて行を書く必要があり、
   開けば migration が走る。待っている間に昇格の記録が変わることを期待する理由も無い）。
-  `tracing::error!` で理由（`release`、`current` のリンク先または「無い」、`promoting.json` の有無と
-  不一致の理由）を出し、`Exit::NotPromoted` を返して **exit 4** で終わる（0 = 正常・drain、1 = 失敗、
+  `tracing::error!` で理由（`release`、`current` のリンク先または「無い」、`promoting.json` と
+  `promote.lock` の不一致の理由）を出し、`Exit::NotPromoted` を返して **exit 4** で終わる
+  （0 = 正常・drain、1 = 失敗、
   2 = 設定エラー / schema が新しすぎる、3 = 同じ release の二重起動、4 = 昇格の認可が無い）。
 - **unit**: `deploy/systemd/celeris@.service` に `RestartPreventExitStatus=4` を足す
   （`Restart=on-failure` が exit 4 を 2 秒ごとに起こし直さない。unit は failed のまま残り、
@@ -439,11 +445,14 @@ web dogfood の worker run が `systemctl --user start celeris-web@bf54b41ad627`
 (a) `current` と一致しない release は exit 4 で、DB ファイルの `schema_version` が変わらず
 `daemon_instances` に行が無い、(b) `current` と一致する release は従来の handoff が通る、
 (c) 新しい `promoting.json` があれば live 引き継ぎが通り、900 秒より古い・`sha12` 違いの印は拒否、
-(d) `--mode verify` は印も `current` も無くても従来どおり動く。
+(d) `--mode verify` は印も `current` も無くても従来どおり動く、
+(e) 生きた pid と新しい mtime の `promote.lock` は旧 `promote.sh` による起動を認可し、
+死んだ pid・古い mtime・無効な lock は拒否する。
 
 ### 各スクリプトの責務（印を書く・消す時機）
 
-印は書くのも消すのも selfdeploy のスクリプトだけ（daemon は読むだけ）。書き方は lib.sh に
+通常の昇格では印を書くのも消すのも selfdeploy のスクリプトだけ（daemon は読むだけ。
+旧 CLI の bootstrap は下記の人の手順）。書き方は lib.sh に
 `sd_write_promoting <sha12> <script> <mode>`（一時ファイル → `mv` で原子的に置く）と
 `sd_clear_promoting <sha12>` を足して共有する。`--dry-run` では書かない。
 
@@ -457,6 +466,44 @@ web dogfood の worker run が `systemctl --user start celeris-web@bf54b41ad627`
 `release.sh` と `verify.sh` は印を書かない（verify の daemon は `--mode verify` で判定の外）。
 昇格が終われば `current` が新 release を指すので、その後の `Restart=on-failure` による再起動・
 host 再起動後の起動は規則 1 で通る。
+
+### 旧 `promote.sh` からの最初の昇格（bootstrap）
+
+`start_promote_with_launcher` は**現在稼働中の release** の `promote.sh` を選ぶ。
+本番 current `ea86af6307f8` の `promote.sh` は `promoting.json` を書かず、live と stop-start の
+どちらも `update_links` より前に `systemctl --user start celeris@<new>` を呼ぶ。
+このため規則 1・2 だけでは最初の昇格が exit 4 になる。一方、同版の `start_promote_with_launcher` は
+対象の `<releases_dir>/<sha12>/promote.lock` に昇格プロセスの pid を書くので、GUI/API 経由では
+規則 3 で新 daemon を認可する。
+
+旧版は昇格プロセスを背景で起こしてから shell が `$!` を lock に書く。順序に厳密な同期は無いが、
+旧 `promote.sh` は daemon 起動前に verify・unit・health・stale unit の確認と DB backup を行うため、
+通常は lock が先にできる。これらが極端に速い場合は lock 書き込み前に daemon の判定が走りうる。
+その場合は認可せず exit 4 で止め、lock ができたことを確認して再試行する。時間差を**保証**と
+みなさない。pid 再利用や時計のずれに対しても 900 秒の期限で残留 lock の効力を絞る。
+
+人が CLI から旧 `promote.sh` を**直接**実行すると `start_promote` を通らないので lock は無い。
+最初の昇格前に、検証済みの対象 `<releases_dir>/<sha12>/promoting.json`（既定
+`~/.local/celeris/releases/<sha12>/promoting.json`）を人が置く。中身は少なくとも
+`{"sha12":"<sha12>","started_at":"<現在の RFC 3339 UTC>"}` とし、`sha12` は対象 release と一致させる。
+例えば対象 SHA を確認した後、**本番 host で人が**次を実行する:
+
+```bash
+SHA12=0123456789ab  # 実際に検証した対象の12桁SHAへ置き換える
+REL="${CELERIS_STATE_DIR:-$HOME/.local/celeris}/releases/$SHA12"
+test -d "$REL" && test -f "$REL/verify.json" || exit 1
+tmp=$(mktemp "$REL/.promoting.XXXXXX") || exit 1
+trap 'rm -f "$REL/promoting.json" "$tmp"' EXIT
+printf '{"sha12":"%s","started_at":"%s"}\n' "$SHA12" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$tmp"
+mv "$tmp" "$REL/promoting.json"
+"${CELERIS_STATE_DIR:-$HOME/.local/celeris}/current/scripts/promote.sh" "$SHA12"
+```
+
+印は書いてから **900 秒**だけ有効で、期限を過ぎたら新しい時刻で置き直す。成否にかかわらず
+終了後は `promoting.json` を消す（上の EXIT trap）。中断で trap が動かなければ人が残留印を消し、
+`current`・`promote.log`・新旧 daemon の状態を確認してから再試行する。
+最初の昇格後は新 release の `promote.sh` が current 側のスクリプトになり、次回以降は
+daemon 起動前の `promoting.json`（規則 2）と更新後の `current`（規則 1）で足りる。
 
 ### `celeris-web@.service`
 

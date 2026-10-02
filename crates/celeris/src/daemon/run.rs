@@ -78,6 +78,13 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
             }
         }
     }
+    // ADR-0136: `[storage] hot_mount`（本番は `/local`）が mount されていなければ、DB を開く・dir を作る
+    // （`build_dispatcher`）より前に止める。rootfs に同名の dir を作って hot データを書き始めない。
+    config.check_hot_mount(
+        std::fs::read_to_string("/proc/self/mountinfo")
+            .ok()
+            .as_deref(),
+    )?;
     warn_if_db_on_network_filesystem(&config.db.path);
     // ADR-0047 D3 / D4（P-61-i、Phase 62）: 起動時に索引が無ければ作る（`_inbox` の変化を tick ごとに
     // 見る仕組みは無いが、知識整理 run が `apply_candidates` の後に必ず `reindex` するので、起動後は

@@ -3310,3 +3310,145 @@ fn multi_account_example_mentions_account_pool_commented_out() {
     // 既存の受け入れ条件（Config::load が通る）はコメントアウトされているので変わらない。
     assert!(Config::load(path).is_ok());
 }
+
+/// ADR-0136: hot な path は既存の key で `/local` 側に変えられ、書かなければ従来の home の既定のまま。
+/// `[storage]` を書かなければ mount 検査はしない。
+#[test]
+fn hot_paths_follow_the_adr_0136_keys_and_default_to_the_previous_locations() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let home = task_core::home_dir().expect("HOME in tests");
+    let state = home.join(".local/celeris");
+    let defaults: Vec<(&str, PathBuf)> = vec![
+        ("[db].path", state.clone()),
+        ("workspace_root", state.join("workspaces")),
+        ("[workspace].build_cache_dir", state.join("build-cache")),
+        ("[scratch].dir", state.join("scratch")),
+        ("[containers].build_dir", state.join("containers")),
+        ("[selfdeploy].releases_dir", state.join("releases")),
+    ];
+    assert_eq!(cfg.hot_paths(), defaults);
+    assert_eq!(cfg.db.path, state.join("celeris.sqlite3"));
+    assert_eq!(cfg.storage, StorageConfig::default());
+    assert!(cfg.check_hot_mount(None).is_ok(), "no [storage]: no check");
+
+    std::fs::write(
+        &path,
+        r#"
+workspace_root = "/local/celeris/data/workspaces"
+[db]
+path = "/local/celeris/data/db/celeris.sqlite3"
+backup_dir = "/local/celeris/state/backups"
+[workspace]
+build_cache_dir = "/local/celeris/data/build-cache"
+[scratch]
+dir = "/local/celeris/data/scratch"
+[containers]
+build_dir = "/local/celeris/data/containers"
+[memory]
+dir = "/local/celeris/data/memory"
+[selfdeploy]
+releases_dir = "/local/celeris/state/releases"
+[storage]
+hot_mount = "/local"
+[[providers]]
+id = "x"
+adapter = "fake"
+"#,
+    )
+    .unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let local = PathBuf::from("/local/celeris");
+    assert_eq!(
+        cfg.hot_paths(),
+        vec![
+            ("[db].path", local.join("data/db")),
+            ("workspace_root", local.join("data/workspaces")),
+            (
+                "[workspace].build_cache_dir",
+                local.join("data/build-cache")
+            ),
+            ("[scratch].dir", local.join("data/scratch")),
+            ("[containers].build_dir", local.join("data/containers")),
+            ("[selfdeploy].releases_dir", local.join("state/releases")),
+            ("[memory].dir", local.join("data/memory")),
+            ("[db].backup_dir", local.join("state/backups")),
+        ]
+    );
+    assert_eq!(cfg.storage.hot_mount.as_deref(), Some(Path::new("/local")));
+    assert_eq!(
+        cfg.dispatch_config().memory_dir.as_deref(),
+        Some(local.join("data/memory").as_path())
+    );
+
+    // 相対 path・`/` は拒否、知らない key も拒否。
+    assert!(
+        toml::from_str::<Config>("[storage]\nhot_mount = \"local\"\n")
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+    assert!(
+        toml::from_str::<Config>("[storage]\nhot_mount = \"/\"\n")
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+    assert!(toml::from_str::<Config>("[storage]\nbogus = 1\n").is_err());
+}
+
+/// ADR-0136: `[storage] hot_mount` が mount point そのものでなければ（rootfs 上の同名 dir・mountinfo が
+/// 読めない）理由を出して止め、dir は作らない。注入した mountinfo と tempdir で決定的に確かめる。
+#[test]
+fn hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mount = tmp.path().join("local");
+    let workspaces = mount.join("celeris/data/workspaces");
+    let mut cfg: Config = toml::from_str("").unwrap();
+    cfg.storage.hot_mount = Some(mount.clone());
+    cfg.workspace_root = workspaces.clone();
+    cfg.memory = Some(MemoryConfig {
+        dir: mount.join("celeris/data/memory"),
+    });
+    cfg.storage.validate().unwrap();
+
+    let root_only = "25 1 0:24 / / rw,relatime shared:1 - ext4 /dev/mapper/root rw\n";
+    let err = cfg
+        .check_hot_mount(Some(root_only))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not a mount point"), "{err}");
+    assert!(
+        err.contains(&format!("workspace_root = {}", workspaces.display())),
+        "{err}"
+    );
+    assert!(err.contains("[memory].dir"), "{err}");
+    // 検査は何も作らない（rootfs に同名 dir を作らない）。
+    assert!(!mount.exists());
+
+    // 子の mount（`<mount>/sub`）や前方一致する別名（`<mount>2`）では足りない。
+    let near = format!(
+        "{root_only}30 25 0:60 / {m}/sub rw - btrfs /dev/sdb rw\n31 25 0:61 / {m}2 rw - btrfs /dev/sdc rw\n",
+        m = mount.display()
+    );
+    assert!(cfg.check_hot_mount(Some(&near)).is_err());
+
+    let err = cfg.check_hot_mount(None).unwrap_err().to_string();
+    assert!(err.contains("cannot read /proc/self/mountinfo"), "{err}");
+
+    let mounted = format!(
+        "{root_only}40 25 0:70 / {} rw,relatime shared:9 - btrfs /dev/mapper/pve-local rw,compress=zstd:1\n",
+        mount.display()
+    );
+    assert!(cfg.check_hot_mount(Some(&mounted)).is_ok());
+    assert!(!mount.exists());
+
+    // mountinfo の 8 進 escape（空白 = `\040`）を戻して比べる。
+    assert!(is_mount_point(
+        "50 25 0:80 / /mnt/hot\\040data rw - btrfs /dev/sdd rw\n",
+        Path::new("/mnt/hot data")
+    ));
+    assert!(!is_mount_point("garbage\n", Path::new("/local")));
+}

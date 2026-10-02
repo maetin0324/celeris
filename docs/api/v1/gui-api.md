@@ -810,7 +810,7 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 |---|---|---|
 | `root` | — | このタスクの祖先・子孫（`depends_on` と `parent_id` を両方向にたどる）だけ。無いタスクは 404 `task_not_found` |
 | `depth` | 無制限 | `root` からの最大ホップ数 |
-| `include_terminal` | true | false で `done|failed|cancelled` を除く（辺も除く） |
+| `include_terminal` | true | false で `done\|failed\|cancelled` を除く（辺も除く） |
 
 `nodes[] = {id, title, status, kind, parent_id, role}`（`role` は `Task.role`。ノードに役割のラベルを出すための値。役割なしは `null`）、
 `edges[] = {from, to, kind: "depends_on"}`（`from` = 先行、`to` = 後続）。親子は `parent_id` で表し、辺にしない。レイアウトはクライアント。上限 5,000 ノード（超えたら 422 `validation`、`detail` で `root` の指定を促す）。
@@ -918,7 +918,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 `cooldown_until` が過ぎていれば `cooldown_until`・`cooldown_remaining_secs` とも `null`。無認証の読み取り。
 
 - `auth`: `"manual"`（既定）/ `"publickey"` / `"totp"`（ADR-0032 D1）。GUI はこれで「クラスタ」画面の案内を出し分ける
-  （3.39〜3.41、§10）。
+  （3.39〜3.41、§9）。
 - `connect_pending`: GUI 発の接続（`POST /clusters/{id}/connect`）が celeris 側で進行中か（ADR-0032 D5）。
   **プロンプト文字列はここには出さない**（`POST /clusters/{id}/connect` の応答にだけ載る。ADR-0024/0025 の
   「URL とコードは action の戻り値にだけ置く」と同じ規律）。
@@ -1689,21 +1689,14 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 
 ### 3.61〜3.62 GUI 監査対応の API（ADR-0033 D4 / D6）
 
-3.61（と同じ並びの 3.63）は撤去済みで 410（ADR-0079 D13）。3.62 は SPEC §3.2 の「記憶は案件をまたぐ」を
-人が確認するための読み取り専用の窓口（ADR-0033 D6）。
+3.61 は撤去済みで 410（ADR-0079 D13。`POST /milestones/{id}/decide` も同じ撤去理由で §3.125.8 にまとめてある）。
+3.62 は SPEC §3.2 の「記憶は案件をまたぐ」を人が確認するための読み取り専用の窓口（ADR-0033 D6）。
 
 #### 3.61 `POST /projects/{id}/plan` → 410 `removed_by_adr_0079`（**管理系**）
 
 撤去済み（ADR-0079 D13。§3.125.8）。案件は計画を持たない。**本文も id も読まずに** 410 を返す（管理系のまま:
 トークンが無ければ先に 401）。`instead` は「`POST /tasks` に `project_id` を付けて root task を作る（段階は
 `stages_hint` で名付ける）」。要求・応答の型（`ProjectPlanBody` / `ProjectPlanAccepted`）は
-`api-v1.schema.json` の互換のためにだけ残る。
-
-#### 3.63 `POST /milestones/{id}/decide` → 410 `removed_by_adr_0079`（**管理系**）
-
-撤去済み（ADR-0079 D13。§3.125.8。旧: 途中目標の `ok` / `discuss` / `ng` の判定、ADR-0038 D2）。3.61 と同じく
-本文も id も読まずに 410 を返す（トークンが無ければ先に 401）。`instead` は「root task の計画で `review: human`
-の段階を置く（`POST /tasks/{id}/execution/phase-gate`）」。型（`MilestoneDecideBody` / `MilestoneDecided`）は
 `api-v1.schema.json` の互換のためにだけ残る。
 
 #### 3.62 `GET /org/{id}/memory?project=<id>` → 200 `{notes, project, notes_path, project_path}`（読み取り）
@@ -3247,7 +3240,7 @@ HTTP 越しの試験は `crates/task-api/tests/`（fake の `SqliteStore` と `t
 
 ---
 
-## 10. 要求の検査と細部の挙動
+## 9. 要求の検査と細部の挙動
 
 GUI はこれを契約として扱ってよい（ADR-0013 の実装メモ）。
 

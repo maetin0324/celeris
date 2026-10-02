@@ -88,7 +88,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.children` | array | –（省略可。空なら省略。v2, ADR-0016 D3/M4） | 集約 run（`task.aggregate == true` の親の、子が全て終端になった後の run）でのみ非空。`ChildSummary`: `{id, title, role?, status, outcome?, artifacts: ArtifactRef[], workspace?, branch?}`。`branch` はその子が worktree で作業したときのブランチ（`celeris/<child_id>`。Phase 49, ADR-0041 D1）で、親はこれを merge して子の成果を統合する |
 | `context.node` | object | –（省略可。v4, ADR-0033 D4） | `task.assignee` の組織ノード（担当が決まっている run だけ）。`{id, name, brief?}`。プロンプトの一番前に「あなたは誰で、何の担当か」として置かれる |
 | `context.memory` | object | –（省略可。v4, ADR-0033 D6） | `[memory]` を設定し、担当が決まっている run だけ。`{notes?: string, project?: string}`（`<memory_dir>/<node_id>/notes.md` と `projects/<project_id>.md` の中身。それぞれ 8,000 字で切る） |
-| `context.conversation` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | その案件でのこのノードと人の**直近のやり取り**（既定 20 件、古い順）。`{role: "user"|"node", text: string}` |
+| `context.conversation` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | その案件でのこのノードと人の**直近のやり取り**（既定 20 件、古い順）。`{role: "user"\|"node", text: string}` |
 | `context.standing_rules` | array | –（省略可。空なら省略。v4, ADR-0033 D5） | 「今後ずっと」の認可（担当宛て + 全員向け。ADR-0033 D5）。前置きの「永続の認可」節になる |
 | `context.organization` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | 分解・委譲できる run（`context.available_genres` を渡す run と同じ条件）に渡す組織図。`{id, name, kind, parent_id?, brief?, genre?, skills?, harnesses?, tools?}`。「どの課に何を振るか」を `assignee` で決めさせる |
 | `context.workspace_note` | string | –（省略可。Phase 43, ADR-0039 D3） | **案件が作業場所を決めている run** にだけ載る 1 行（そのコードがどこにあるか）。前置きに `## 作業場所` として出て、「編集は手元の作業ディレクトリで、別のホストの作業ツリーへ `ssh` で直接書くな」が続く。作業場所を決めていない案件・案件に属さないタスク・対話 run では省略（プロンプトは Phase 42 までとバイト単位で同じ） |

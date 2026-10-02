@@ -200,6 +200,16 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
    - (4) の出力に `SinkFailed` が出ていないこと（出ていれば CDP 応答待ちの競合が再発している）。
    - いずれも `CELERIS_ISOLATION_TESTS=skip` を設定していないのに `SKIPPED` と出た場合は環境不備（bwrap/browser 欠如）であり、合格ではない。
 
+### 実環境での確認（2026-10-02、ADR-0079 D7 人の回答）
+
+人が上記の手順を userns の使える host（host `home-dev`）で実行した。`unshare -U -r true` は exit 0。load average 18.5（CPU を焼く負荷はかけていない）。task branch `57576a5a` を `/var/tmp` の worktree に取り出し、`CARGO_TARGET_DIR` はローカルを使用。
+
+- (4) `cargo test -p task-worker --test browser_injection_wire -- --exact real_broker_browser_injection_receipt_and_origin_guards` を3回単独実行: 3/3 `test result: ok`（1 passed、各回 0.45〜0.49s）。`SinkFailed`・`SKIPPED` の出力なし。
+- (5) `cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes` を3回単独実行: 3/3 `test result: ok`（1 passed、各回 0.08s、`helper_reaper` ok）。`runtime survived`・`SKIPPED` の出力なし。
+- SIGSTOP stutter の修正前後比較（コードを一時的に外して再現させる手順）は、今回この人の実行では行っていない。[`docs/progress/time-dependent-tests-kill.md`](progress/time-dependent-tests-kill.md) にある、userns が許可された環境での過去の stutter 5/5 pass の記録を採用する。
+
+未解決事項: 上記の (4)(5) は3回とも合格し、未解決の失敗はない。SIGSTOP stutter の修正前後比較（本来の手順3番目）は今回の人の実行では未実施（worker sandbox では userns が使えず自動実行できず、今回人が実行した際も改めてはやらず、過去の [kill 記録](progress/time-dependent-tests-kill.md)の stutter 5/5 pass を根拠として採用したため）。
+
 ## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
 
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。

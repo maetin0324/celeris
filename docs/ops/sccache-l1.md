@@ -5,6 +5,8 @@ Celeris から撤去した。経緯と設計は [ADR-0129](../adr/0129-host-scca
 host 管理者が `~/.cargo/config.toml` の `[build] rustc-wrapper` で決める（ADR-0129 §2）。Celeris は `RUSTC_WRAPPER` /
 `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` を差し込みも除去もせず、host から継いだ値をそのまま run の子プロセスへ渡す。
 
+`/local` の btrfs、host の sccache、scratch の移行と戻し方は[切り替え手順](host-sccache-reflink-targets.md)を参照。
+
 `scratch status` / `GET /api/v1/metrics/scratch` の `sccache` / `cache` 欄は型を残すが常に `null`（旧 client を壊さないため）。
 
 ## 人が行う後始末（本番 host、1 回だけ）

@@ -53,7 +53,7 @@ pub struct SelfdeployConfig {
     /// ADR-0051: 自動取り込みを許可する自己改善案件。空なら無効。
     #[serde(default)]
     pub delivery_projects: Vec<String>,
-    /// ADR-0117 D1: project ID to fallback department ID.
+    /// ADR-0119 D1: project ID to fallback department ID.
     #[serde(default)]
     pub delivery_default_departments: BTreeMap<String, String>,
     #[serde(default = "default_releases_dir")]

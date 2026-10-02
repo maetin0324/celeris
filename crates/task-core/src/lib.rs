@@ -195,8 +195,8 @@ pub use execution::{
     CHECKPOINT_SCHEMA, Checkpoint, CheckpointArtifactRef, CheckpointContext, CheckpointDecision,
     CheckpointEnd, CheckpointFileChange, CheckpointKnownFailure, CheckpointSource,
     CheckpointTestRun, ContinueWhy, FailedCheck, HarnessErrorClass, MechanicalCheckpoint,
-    RepairClass, RepairDecision, RepoState, ReviewRepairHint, ReviewerRepairKind, RunEnd,
-    WorkerCheckpointInput, build_repair_objective, checkpoint_shows_progress,
+    RepairClass, RepairDecision, RepairScope, RepoState, ReviewRepairHint, ReviewerRepairKind,
+    RunEnd, WorkerCheckpointInput, build_repair_objective, checkpoint_shows_progress,
     classify_review_failure, looks_like_context_exceeded, merge_checkpoint,
     parse_worker_checkpoint, truncate_checkpoint,
 };

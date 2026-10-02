@@ -23,44 +23,52 @@ const IP: &str = "93.184.216.34";
 const ORIGIN: &str = "https://fixture.example.com";
 const TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SECRET: &str = "shared-cdp-secret-sentinel";
-// 高負荷時は転送 port が relay の準備前に接続を受けて閉じることがあるので、
-// 接続・upgrade・CDP 応答までを 1 回の試行として期限内に再試行する（EOF で無限待ちにしない）。
-const TCP_PROBE: &str = r#"import socket, time
+/// `CELERIS_ISOLATION_TESTS`: `skip` は飛ばす、`require` は preflight で飛ばさない（release gate）。
+const ISOLATION: &str = "CELERIS_ISOLATION_TESTS";
+/// preflight の 1 段の時間の上限（環境が無い sandbox で何十秒も待たない）。
+const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(20);
+// ADR-0079 付記「R7-12」D4: WebSocket の frame は読み切ってから判定する（1 回の `recv` は header だけを返すことが
+// ある。高負荷時・並走時に `b'\x81~\x00\xdf'` だけを読んで assert に落ち、host は 60 秒待ってから失敗していた）。
+// probe の例外は `/session/probe.err` に書き、host はそれを見たら待たずにその内容で失敗する。
+const TCP_PROBE: &str = r#"import json, socket, time, sys, traceback
 from pathlib import Path
-deadline = time.monotonic() + 120
-def attempt():
-    sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
-    try:
-        sock.settimeout(30)
-        sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
-        head = b''
-        while not head.endswith(b'\r\n\r\n'):
-            b = sock.recv(1)
-            if not b:
-                raise OSError('EOF during upgrade')
-            head += b
-        if not head.startswith(b'HTTP/1.1 101'):
-            raise OSError('upgrade rejected: %r' % head)
-        payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
-        sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
-        frame = b''
-        while b'targetInfos' not in frame:
-            chunk = sock.recv(4096)
-            if not chunk:
-                raise OSError('EOF before CDP reply')
-            frame += chunk
-        return sock
-    except BaseException:
-        sock.close()
-        raise
+def _report(t, v, tb):
+    Path('/session/probe.err').write_text(''.join(traceback.format_exception(t, v, tb)))
+sys.excepthook = _report
+deadline = time.monotonic() + 60
 while True:
     try:
-        sock = attempt()
+        sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
         break
-    except OSError as error:
+    except OSError:
         if time.monotonic() > deadline:
-            raise RuntimeError('CDP forwarding unavailable: %s' % error)
-        time.sleep(.1)
+            raise RuntimeError('CDP forwarding port unavailable')
+        time.sleep(.02)
+sock.settimeout(30)
+def recv_exact(n):
+    buf = b''
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise RuntimeError('relay closed after %r' % buf)
+        buf += chunk
+    return buf
+sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
+head = b''
+while not head.endswith(b'\r\n\r\n'):
+    head += recv_exact(1)
+assert head.startswith(b'HTTP/1.1 101'), head
+payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
+sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
+header = recv_exact(2)
+assert header[0] == 0x81, header
+size = header[1] & 0x7f
+if size == 126:
+    size = int.from_bytes(recv_exact(2), 'big')
+elif size == 127:
+    size = int.from_bytes(recv_exact(8), 'big')
+frame = recv_exact(size)
+assert b'targetInfos' in frame, frame
 Path('/session/tcp-probe.ok').write_text('connected')
 time.sleep(90)
 "#;
@@ -134,13 +142,22 @@ fn tool(name: &str) -> PathBuf {
     path
 }
 
-fn browser() -> PathBuf {
+fn find_browser() -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("CELERIS_TEST_BROWSER") {
-        return PathBuf::from(path);
+        let path = PathBuf::from(path);
+        return if path.is_file() {
+            Ok(path)
+        } else {
+            Err(format!(
+                "CELERIS_TEST_BROWSER {} is not a file",
+                path.display()
+            ))
+        };
     }
-    let home = std::env::var("HOME").expect("HOME");
-    let mut found: Vec<_> = std::fs::read_dir(Path::new(&home).join(".cache/ms-playwright"))
-        .expect("Playwright cache")
+    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    let cache = Path::new(&home).join(".cache/ms-playwright");
+    let mut found: Vec<_> = std::fs::read_dir(&cache)
+        .map_err(|e| format!("Playwright cache {}: {e}", cache.display()))?
         .filter_map(Result::ok)
         .map(|e| {
             e.path()
@@ -149,7 +166,130 @@ fn browser() -> PathBuf {
         .filter(|p| p.is_file())
         .collect();
     found.sort();
-    found.pop().expect("chrome-headless-shell")
+    found
+        .pop()
+        .ok_or_else(|| format!("no chrome-headless-shell under {}", cache.display()))
+}
+
+fn browser() -> PathBuf {
+    find_browser().expect("chrome-headless-shell")
+}
+
+/// `command` を `timeout` まで待つ（出力は捨てる。stderr の末尾だけ理由に使う）。時間切れは kill して `Err`。
+fn run_bounded(mut command: Command, what: &str, timeout: Duration) -> Result<(), String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{what}: cannot start: {e}"))?;
+    let mut stderr = child.stderr.take();
+    let reader = thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(s) = stderr.as_mut() {
+            let _ = s.read_to_string(&mut text);
+        }
+        text
+    });
+    let until = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < until => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{what}: no answer within {timeout:?}"));
+            }
+            Err(e) => return Err(format!("{what}: wait failed: {e}")),
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    if status.success() {
+        Ok(())
+    } else {
+        let tail: String = text.lines().rev().take(3).collect::<Vec<_>>().join(" | ");
+        Err(format!("{what}: {status}: {tail}"))
+    }
+}
+
+/// ADR-0079 付記「R7-12」D4: このテストが要る環境（道具・browser・unprivileged な user + net namespace・その中の
+/// loopback の TCP・bwrap の入れ子の namespace）が使えるか。worker の sandbox（codex workspace-write の seccomp、
+/// ADR-0095 の namespace の中の WU の check）では使えないことがある。どの段も [`PREFLIGHT_TIMEOUT`] で打ち切る。
+fn preflight() -> Result<(), String> {
+    for name in ["unshare", "ip", "openssl", "bwrap", "python3"] {
+        let path = PathBuf::from("/usr/bin").join(name);
+        if !path.is_file() {
+            return Err(format!("required tool missing: {}", path.display()));
+        }
+    }
+    find_browser()?;
+    for var in [
+        "CARGO_BIN_EXE_celeris-browser-sandboxd",
+        "CARGO_BIN_EXE_celeris-browser-egress",
+    ] {
+        if std::env::var_os(var).is_none() {
+            return Err(format!(
+                "{var} is not set (run through cargo test / nextest)"
+            ));
+        }
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("test binary: {e}"))?;
+    let mut command = Command::new("/usr/bin/unshare");
+    command
+        .args(["--user", "--map-root-user", "--net", "--"])
+        .arg(exe)
+        .args(["--exact", "inner_shared_cdp", "--test-threads=1"])
+        .env(INNER, "preflight");
+    run_bounded(
+        command,
+        "user+net namespace with loopback TCP and nested bwrap",
+        PREFLIGHT_TIMEOUT,
+    )
+}
+
+/// preflight の netns の中（`CELERIS_SHARED_CDP_INNER=preflight`）: loopback を上げ、TCP の bind / connect / 1 byte の
+/// 往復、bwrap の入れ子の user / net namespace が動くかを見る。
+fn inner_preflight() {
+    assert!(
+        Command::new(tool("ip"))
+            .args(["link", "set", "lo", "up"])
+            .status()
+            .expect("ip")
+            .success(),
+        "ip link set lo up"
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback TCP bind");
+    let addr = listener.local_addr().expect("local addr");
+    let mut client = TcpStream::connect(addr).expect("loopback TCP connect");
+    let (mut server, _) = listener.accept().expect("loopback TCP accept");
+    client.write_all(b"x").expect("loopback TCP write");
+    let mut byte = [0];
+    server
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout");
+    server.read_exact(&mut byte).expect("loopback TCP read");
+    assert!(
+        Command::new(tool("bwrap"))
+            .args([
+                "--unshare-user",
+                "--unshare-pid",
+                "--unshare-net",
+                "--ro-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                "--",
+                "/usr/bin/true",
+            ])
+            .status()
+            .expect("bwrap")
+            .success(),
+        "nested bwrap namespaces"
+    );
 }
 
 fn dns(listener: TcpListener) {
@@ -359,8 +499,12 @@ fn inner() {
     )
     .expect("relay");
     // 高負荷時（workspace 全体の test と並走）は sandbox 内の browser 起動が 10 秒を超えるので長めに待つ。
-    let until = Instant::now() + Duration::from_secs(150);
+    // ADR-0079 付記「R7-12」D4: probe が例外で終わったら（`probe.err`）待たずにその内容で失敗する。
+    let until = Instant::now() + Duration::from_secs(60);
     while !session.path().join("tcp-probe.ok").exists() {
+        if let Ok(err) = std::fs::read_to_string(session.path().join("probe.err")) {
+            panic!("sandbox TCP probe failed:\n{err}");
+        }
         assert!(
             Instant::now() < until,
             "sandbox TCP to controller relay failed"
@@ -528,6 +672,26 @@ fn inner() {
 
 #[test]
 fn real_shared_cdp_and_auth_section() {
+    // ADR-0079 付記「R7-12」D4: 環境が無ければ理由を出して飛ばす（`require` なら飛ばさず失敗する）。
+    match std::env::var(ISOLATION).as_deref() {
+        Ok("skip") => {
+            eprintln!("SKIPPED (not passed): {ISOLATION}=skip");
+            return;
+        }
+        Ok("require") => {
+            if let Err(reason) = preflight() {
+                panic!("{ISOLATION}=require but the environment is unavailable: {reason}");
+            }
+        }
+        _ => {
+            if let Err(reason) = preflight() {
+                eprintln!(
+                    "SKIPPED (environment unavailable, not passed): {reason} (set {ISOLATION}=require to fail instead)"
+                );
+                return;
+            }
+        }
+    }
     for name in ["unshare", "ip", "openssl", "bwrap"] {
         tool(name);
     }
@@ -558,7 +722,9 @@ fn real_shared_cdp_and_auth_section() {
 
 #[test]
 fn inner_shared_cdp() {
-    if std::env::var(INNER).is_ok() {
-        inner();
+    match std::env::var(INNER).as_deref() {
+        Ok("preflight") => inner_preflight(),
+        Ok(_) => inner(),
+        Err(_) => {}
     }
 }

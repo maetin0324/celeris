@@ -181,6 +181,9 @@ export CARGO_TERM_COLOR=never
 # Phase SD-1: 共有 target の fingerprint を呼び出し元の env に左右させない（incremental は profile の一部で、
 # 切り替わると workspace のメンバーを全部作り直す）。`target/*/incremental/` も作らない（ADR-0075 G2 と同じ）。
 export CARGO_INCREMENTAL=0
+# ADR-0079 付記「R7-12」D4: 環境に依存する browser テスト（実 bwrap / Chromium / netns）は、環境が無いと理由を出して
+# 飛ばす（worker の sandbox で無関係な task の受け入れ条件を落とさない）。release では飛ばさない（環境が無ければ失敗）。
+export CELERIS_ISOLATION_TESTS="${CELERIS_ISOLATION_TESTS:-require}"
 
 printf 'step:s exit:i secs:f log:s skipped:b reason:s\n' >"$GATE_TSV"
 GATE_OK=true

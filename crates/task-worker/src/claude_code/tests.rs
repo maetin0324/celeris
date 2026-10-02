@@ -491,6 +491,7 @@ fn build_prompt_for_review_kind_includes_review_json_and_context() {
                 stdout_tail: Some("test result: ok".into()),
             }],
             criteria: vec![0],
+            ..Default::default()
         }),
         inputs: vec![ArtifactRef {
             name: "readme.diff".into(),
@@ -514,6 +515,74 @@ fn build_prompt_for_review_kind_includes_review_json_and_context() {
     let prompt_none = build_prompt(&task, &none_context, "run-review-2", "artifacts");
     assert!(prompt_none.contains("no review context"));
     assert!(prompt_none.contains("artifacts/review.json"));
+}
+
+#[test]
+fn review_prompt_includes_human_decisions_and_check_results() {
+    let mut task = crate::protocol::tests::sample_task();
+    task.kind = task_core::TaskKind::Review;
+    let empty = build_prompt(
+        &task,
+        &RunContext::default(),
+        "run-review-empty",
+        "artifacts",
+    );
+    assert!(!empty.contains("## Human decisions and answers (authoritative)"));
+    assert!(!empty.contains("## Deterministic checks already executed by celeris"));
+
+    let context = RunContext {
+        review: Some(crate::protocol::ReviewRequest {
+            decisions: vec![crate::protocol::ReviewDecision {
+                task_id: task.id,
+                key: "adr-place".into(),
+                question: "Where should the ADR go?".into(),
+                option: "docs".into(),
+                option_label: "Place in docs/adr".into(),
+                note: Some("Include the new ADR in the scope".into()),
+            }],
+            answers: vec![crate::protocol::Answer {
+                question: "Use the new location?".into(),
+                answer: "Yes, use docs/adr".into(),
+            }],
+            checks: vec![crate::protocol::ReviewCheckResult {
+                criterion: Some(0),
+                kind: "command".into(),
+                cmd: Some("cargo test -p task-worker".into()),
+                pass: true,
+                reason: "exit 0; test result: ok".into(),
+            }],
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-review-context", "artifacts");
+    for expected in [
+        "## Human decisions and answers (authoritative)",
+        "adr-place",
+        "Where should the ADR go?",
+        "Place in docs/adr",
+        "Include the new ADR in the scope",
+        "Yes, use docs/adr",
+        "expanded scope",
+        "differs from the criterion's strict wording",
+        "## Deterministic checks already executed by celeris (authoritative)",
+        "cargo test -p task-worker",
+        "pass=true",
+        "exit 0; test result: ok",
+        "run the command yourself now",
+        "include your command and relevant output",
+        "treat the passing check as authoritative",
+    ] {
+        assert!(prompt.contains(expected), "missing {expected:?}: {prompt}");
+    }
+
+    let context = RunContext {
+        review: Some(crate::protocol::ReviewRequest::default()),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-review-empty", "artifacts");
+    assert!(!prompt.contains("## Human decisions and answers (authoritative)"));
+    assert!(!prompt.contains("## Deterministic checks already executed by celeris"));
 }
 
 /// ADR-0048 D2（Phase 60a）: stream-json の実物に近い標本（`tests/fixtures/claude-code-stream.jsonl`）を

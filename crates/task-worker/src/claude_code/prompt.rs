@@ -403,7 +403,7 @@ fn prior_review_section(context: &RunContext) -> String {
 }
 
 /// `context.answers` があれば「以前の質問への人間の回答」節として列挙する（ADR-0010 D3, P-10）。
-/// Review プロンプトには使わない（`build_review_prompt` からは呼ばない）。
+/// Review では `ReviewRequest.answers` を別の節で出す。
 fn answers_section(context: &RunContext) -> String {
     let mut out = String::new();
     if !context.answers.is_empty() {
@@ -1519,6 +1519,59 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push_str(&harness_artifacts_section_for_review(context));
     match &context.review {
         Some(review) => {
+            if !review.decisions.is_empty() || !review.answers.is_empty() {
+                out.push_str("## Human decisions and answers (authoritative)\n\
+                    Human decisions and answers take precedence when interpreting the acceptance criteria. \
+                    If a human decision changed the scope, location, or method, judge against that decided scope. \
+                    Do not fail a criterion solely because work added or changed under a human decision, including \
+                    expanded scope, differs from the criterion's strict wording. Changes beyond the human decision \
+                    must still be judged against the criterion.\n");
+                for decision in &review.decisions {
+                    out.push_str(&format!(
+                        "- decision {} (task {}): {} => {} ({})",
+                        decision.key,
+                        decision.task_id,
+                        decision.question,
+                        decision.option,
+                        decision.option_label
+                    ));
+                    if let Some(note) = &decision.note {
+                        out.push_str(&format!("; note: {note}"));
+                    }
+                    out.push('\n');
+                }
+                for answer in &review.answers {
+                    out.push_str(&format!(
+                        "- Q: {}\n  A: {}\n",
+                        answer.question, answer.answer
+                    ));
+                }
+                out.push('\n');
+            }
+            if !review.checks.is_empty() {
+                out.push_str("## Deterministic checks already executed by celeris (authoritative)\n\
+                    These results were produced by celeris in this workspace, not self-reported by the worker; \
+                    they take precedence over the worker's summary and evidence. To fail a criterion for a reason \
+                    that contradicts a passing check (for example, claiming the same command exited 101), run \
+                    the command yourself now and include your command and relevant output in the verdict reason. \
+                    Do not rely only on the worker's record. If you cannot rerun it because of sandbox limits or \
+                    cost, treat the passing check as authoritative.\n");
+                for check in &review.checks {
+                    let criterion = check.criterion.map_or_else(
+                        || "implicit criterion".to_string(),
+                        |index| format!("criterion {index}"),
+                    );
+                    out.push_str(&format!(
+                        "- {criterion}, {}: pass={}",
+                        check.kind, check.pass
+                    ));
+                    if let Some(cmd) = &check.cmd {
+                        out.push_str(&format!(" command `{cmd}`"));
+                    }
+                    out.push_str(&format!(" reason: {}\n", check.reason));
+                }
+                out.push('\n');
+            }
             out.push_str(&format!(
                 "## Worker's self-reported summary (not to be trusted blindly)\n{}\n\n",
                 review.summary

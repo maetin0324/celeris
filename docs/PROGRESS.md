@@ -296,3 +296,11 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - 前回 run の acceptance check `grep -q 'claude-session-resume' docs/PROGRESS.md` は、この節に当該識別子が無かったため exit 1 だった。今回の見出しに ADR slug を明記し、同じ check を再実行して通過を確認した。
 - コード変更なし。workspace test は環境制限により受け入れ条件未達として報告する。
+
+### Phase 3 session resume — instance handoff 待ち時間の安定化（2026-10-02、run `01M3YAZJHT6ERY2RNBFV3HGW5E`）
+
+前回の final review で sandbox 外の `cargo test --workspace` が高負荷により `instance_handoff` の10秒状態待ちを越えて失敗したため、3つの状態待ちを共通の60秒上限に延長した。条件成立時には直ちに抜ける。fake adapter のゲートも最大60秒（1200 × 0.05秒）にし、状態観測後に解放する。drain / idle の終了待ちも60秒に揃えた。理由は試験コードの定数コメントに記した。CPU を焼く負荷再現は行っていない。
+
+- この run の `cargo test -p celeris --test instance_handoff` → exit 101（3 passed / 5 failed、60.20秒）。3件は ADR-0095 worker db guard の user namespace `Operation not permitted`、残り2件は sandbox 上で handoff dispatch / standby 状態待ちが成立しなかった。sandbox は user namespace を拒否するため、試験は daemon を起動できず、待ち時間の大小にかかわらず実行確認には使えない。
+- instance_handoff を含む実行確認は sandbox 外で daemon が走る stage 統合の workspace check と final review の `cargo test --workspace` に委ねる。この sandbox 内の試験失敗は plan_issue としない。
+- `cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` はこの run で確認する。変更範囲は `crates/celeris/tests/instance_handoff.rs` と本節のみ。

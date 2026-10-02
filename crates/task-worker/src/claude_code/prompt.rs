@@ -403,7 +403,7 @@ fn prior_review_section(context: &RunContext) -> String {
 }
 
 /// `context.answers` があれば「以前の質問への人間の回答」節として列挙する（ADR-0010 D3, P-10）。
-/// Review プロンプトには使わない（`build_review_prompt` からは呼ばない）。
+/// Review では `ReviewRequest.answers` を別の節で出す。
 fn answers_section(context: &RunContext) -> String {
     let mut out = String::new();
     if !context.answers.is_empty() {
@@ -895,7 +895,7 @@ fn build_execution_plan_prompt(
     // その理由も（同じ間違いを繰り返させない。dogfood 4 回目は 2 回とも `too many checks: 8 > 6`）。
     if let Some(planner) = &context.execution_planner {
         out.push_str(&plan_limits_section(planner));
-        // ADR-0079 R7-2: check の書き方（本番で check 自体が誤って落ちた 6 つの形）。
+        // ADR-0079 R7-2/R7-10: check の書き方（本番で check 自体が誤って落ちた形）。
         out.push_str(PLANNER_CHECK_GUIDANCE);
         // ADR-0095 付記 D-d: 本番 host の操作は人が実行する手順として書く。
         out.push_str(PRODUCTION_HOST_PLANNER_GUIDANCE);
@@ -1521,6 +1521,59 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push_str(&harness_artifacts_section_for_review(context));
     match &context.review {
         Some(review) => {
+            if !review.decisions.is_empty() || !review.answers.is_empty() {
+                out.push_str("## Human decisions and answers (authoritative)\n\
+                    Human decisions and answers take precedence when interpreting the acceptance criteria. \
+                    If a human decision changed the scope, location, or method, judge against that decided scope. \
+                    Do not fail a criterion solely because work added or changed under a human decision, including \
+                    expanded scope, differs from the criterion's strict wording. Changes beyond the human decision \
+                    must still be judged against the criterion.\n");
+                for decision in &review.decisions {
+                    out.push_str(&format!(
+                        "- decision {} (task {}): {} => {} ({})",
+                        decision.key,
+                        decision.task_id,
+                        decision.question,
+                        decision.option,
+                        decision.option_label
+                    ));
+                    if let Some(note) = &decision.note {
+                        out.push_str(&format!("; note: {note}"));
+                    }
+                    out.push('\n');
+                }
+                for answer in &review.answers {
+                    out.push_str(&format!(
+                        "- Q: {}\n  A: {}\n",
+                        answer.question, answer.answer
+                    ));
+                }
+                out.push('\n');
+            }
+            if !review.checks.is_empty() {
+                out.push_str("## Deterministic checks already executed by celeris (authoritative)\n\
+                    These results were produced by celeris in this workspace, not self-reported by the worker; \
+                    they take precedence over the worker's summary and evidence. To fail a criterion for a reason \
+                    that contradicts a passing check (for example, claiming the same command exited 101), run \
+                    the command yourself now and include your command and relevant output in the verdict reason. \
+                    Do not rely only on the worker's record. If you cannot rerun it because of sandbox limits or \
+                    cost, treat the passing check as authoritative.\n");
+                for check in &review.checks {
+                    let criterion = check.criterion.map_or_else(
+                        || "implicit criterion".to_string(),
+                        |index| format!("criterion {index}"),
+                    );
+                    out.push_str(&format!(
+                        "- {criterion}, {}: pass={}",
+                        check.kind, check.pass
+                    ));
+                    if let Some(cmd) = &check.cmd {
+                        out.push_str(&format!(" command `{cmd}`"));
+                    }
+                    out.push_str(&format!(" reason: {}\n", check.reason));
+                }
+                out.push('\n');
+            }
             out.push_str(&format!(
                 "## Worker's self-reported summary (not to be trusted blindly)\n{}\n\n",
                 review.summary
@@ -1600,8 +1653,15 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      that runs a script another unit creates belongs to a unit that `depends_on` the creating unit.\n\
      - When a check runs a script the unit itself creates, write the exact invocation (the arguments the check \
      passes) in the unit's objective so the unit writes the script to accept that form (a check passed a URL to \
-     a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\n";
-
+     a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\
+     - Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.\n\
+     - An out-of-scope diff check is compared with sibling units during stage integration, so exclude every \
+     unit's allowed paths in that stage, not only this unit's paths.\n\
+     - Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.\n\
+     - For a unit or task changing only `web/` or `docs/`, replace mandatory `cargo test --workspace` with a \
+     check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \
+     leave Cargo checks to the daemon's workspace check.\n\
+     - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\n";
 /// ADR-0095 付記 D-d: 本番 host の操作は人が実行する手順として書く（planner 指示。worker 前置きの
 /// `production_host_note` と対になる — 計画段階でも最初から試みさせない）。
 pub const PRODUCTION_HOST_PLANNER_GUIDANCE: &str = "### 本番 host の操作 (production host changes)\n\

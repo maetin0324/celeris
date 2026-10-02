@@ -491,6 +491,7 @@ fn build_prompt_for_review_kind_includes_review_json_and_context() {
                 stdout_tail: Some("test result: ok".into()),
             }],
             criteria: vec![0],
+            ..Default::default()
         }),
         inputs: vec![ArtifactRef {
             name: "readme.diff".into(),
@@ -514,6 +515,74 @@ fn build_prompt_for_review_kind_includes_review_json_and_context() {
     let prompt_none = build_prompt(&task, &none_context, "run-review-2", "artifacts");
     assert!(prompt_none.contains("no review context"));
     assert!(prompt_none.contains("artifacts/review.json"));
+}
+
+#[test]
+fn review_prompt_includes_human_decisions_and_check_results() {
+    let mut task = crate::protocol::tests::sample_task();
+    task.kind = task_core::TaskKind::Review;
+    let empty = build_prompt(
+        &task,
+        &RunContext::default(),
+        "run-review-empty",
+        "artifacts",
+    );
+    assert!(!empty.contains("## Human decisions and answers (authoritative)"));
+    assert!(!empty.contains("## Deterministic checks already executed by celeris"));
+
+    let context = RunContext {
+        review: Some(crate::protocol::ReviewRequest {
+            decisions: vec![crate::protocol::ReviewDecision {
+                task_id: task.id,
+                key: "adr-place".into(),
+                question: "Where should the ADR go?".into(),
+                option: "docs".into(),
+                option_label: "Place in docs/adr".into(),
+                note: Some("Include the new ADR in the scope".into()),
+            }],
+            answers: vec![crate::protocol::Answer {
+                question: "Use the new location?".into(),
+                answer: "Yes, use docs/adr".into(),
+            }],
+            checks: vec![crate::protocol::ReviewCheckResult {
+                criterion: Some(0),
+                kind: "command".into(),
+                cmd: Some("cargo test -p task-worker".into()),
+                pass: true,
+                reason: "exit 0; test result: ok".into(),
+            }],
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-review-context", "artifacts");
+    for expected in [
+        "## Human decisions and answers (authoritative)",
+        "adr-place",
+        "Where should the ADR go?",
+        "Place in docs/adr",
+        "Include the new ADR in the scope",
+        "Yes, use docs/adr",
+        "expanded scope",
+        "differs from the criterion's strict wording",
+        "## Deterministic checks already executed by celeris (authoritative)",
+        "cargo test -p task-worker",
+        "pass=true",
+        "exit 0; test result: ok",
+        "run the command yourself now",
+        "include your command and relevant output",
+        "treat the passing check as authoritative",
+    ] {
+        assert!(prompt.contains(expected), "missing {expected:?}: {prompt}");
+    }
+
+    let context = RunContext {
+        review: Some(crate::protocol::ReviewRequest::default()),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-review-empty", "artifacts");
+    assert!(!prompt.contains("## Human decisions and answers (authoritative)"));
+    assert!(!prompt.contains("## Deterministic checks already executed by celeris"));
 }
 
 /// ADR-0048 D2（Phase 60a）: stream-json の実物に近い標本（`tests/fixtures/claude-code-stream.jsonl`）を
@@ -3394,7 +3463,7 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
     assert!(!prompt.contains("Remaining depth"));
 }
 
-/// ADR-0079 R7-2: /2 と /3 の planner のプロンプトに「check の書き方」の節（R7-5 で 7 規則）が出る。/3 は子を作る unit
+/// ADR-0079 R7-2/R7-10: /2 と /3 の planner のプロンプトに「check の書き方」の節が出る。/3 は子を作る unit
 /// だけを数える上限の説明と、dispatcher が渡す /3 の JSON の大きさの上限を出す。
 #[test]
 fn planner_prompt_has_the_check_writing_section() {
@@ -3404,12 +3473,17 @@ fn planner_prompt_has_the_check_writing_section() {
         "`docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write",
         "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
         "corepack pnpm@<version from package.json packageManager> -C <dir>",
-        "git diff --quiet $(git merge-base HEAD main) --",
+        "Compare against `$(git merge-base HEAD main)`",
         "A negated grep (`! grep ...`) must not match text the unit itself writes",
         "a check that runs a script another unit creates belongs to a unit that `depends_on` the creating unit",
         // ADR-0079 付記 R7-5 D5: check の走る所（git の worktree が無い task）と、unit 自身が作るスクリプトの呼び出し方。
         "or the task's directory (where `artifacts/` is) when the task has no git worktree",
         "write the exact invocation (the arguments the check passes) in the unit's objective",
+        "Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.",
+        "exclude every unit's allowed paths in that stage, not only this unit's paths",
+        "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
+        "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",
+        "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),
@@ -3439,7 +3513,7 @@ fn planner_prompt_has_the_check_writing_section() {
         };
         let prompt = build_prompt(&task, &context, "run-planner-checks", "artifacts");
         for needle in needles {
-            assert!(prompt.contains(needle), "{name}: missing {needle:?}");
+            assert_eq!(prompt.matches(needle).count(), 1, "{name}: {needle:?}");
         }
         assert_eq!(prompt.matches("### check の書き方").count(), 1, "{name}");
         let bytes = if planner.tree.is_some() { 65536 } else { 24576 };

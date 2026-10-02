@@ -1085,6 +1085,10 @@ fn actions_instructions() -> String {
      `knowledge_page`（知識ベースのページ参照）の条件も添えてください。人が読む決定材料は登録済みの\
      artifacts か知識ベースのページに置き（GUI から見える場所）、対象リポジトリの `docs/` などの\
      追跡ファイルには置きません（ADR-0067）。\n\
+     `web/` や `docs/` だけを変える task の acceptance では `cargo test --workspace` を必須にせず、\
+     `crates/` に差分が無いことの検査に置き換えてください（Cargo の workspace check は daemon 側で行います）。\
+     acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録（`docs/PROGRESS.md`、\
+     `docs/progress/`）の置き場所を最初から含めてください（ADR-0079 R7-10）。\
      調査系（`literature` / `web-research`）の `create_task` を書くときは、`objective` の 1 行目を \
      **`対象: <対象1> / <対象2> / …（観点: <観点1>、<観点2>、…）`** の明示形にしてください \
      （例: `対象: CHFS / FINCHFS / GekkoFS / UnifyFS / BeeOND（観点: server/client 配置、\

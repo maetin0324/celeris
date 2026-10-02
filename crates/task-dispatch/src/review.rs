@@ -22,9 +22,10 @@ use task_core::{
 use task_worker::artifact::sha256_file;
 
 use crate::policy::ProviderOutcome;
+use task_worker::protocol::{ReviewCheckResult, ReviewDecision};
 use task_worker::{
-    EventSink, Evidence, PROTOCOL_VERSION, ReviewOutput, ReviewRequest, RunContext, RunLimits,
-    RunRequest, Terminal, WorkerAdapter, Workspace,
+    Answer, EventSink, Evidence, PROTOCOL_VERSION, ReviewOutput, ReviewRequest, RunContext,
+    RunLimits, RunRequest, Terminal, WorkerAdapter, Workspace,
 };
 
 /// 条件 1 件の判定結果。`Event::ReviewVerdict` にそのまま写す。
@@ -190,6 +191,59 @@ pub struct ReviewExtras {
     /// ADR-0046 D4（Phase 59）: `mode = research` のタスクだけ true。暗黙の条件として
     /// 「結果に出典（`sources`）か計測の記録がある」を足す（[`research_evidence`] が決定的に判定する）。
     pub research: bool,
+    /// ADR-0117 D1: 対象 task と祖先で回答済みの人の決定（ディスパッチャが store から集める）。
+    /// reviewer run の `ReviewRequest.decisions` にそのまま渡す。
+    pub decisions: Vec<ReviewDecision>,
+    /// ADR-0117 D1: 対象 task と祖先の `question` への人の回答（`ReviewRequest.answers`）。
+    pub answers: Vec<Answer>,
+}
+
+/// ADR-0117 D2: `ReviewCheckResult.reason` に残す末尾の文字数。
+const CHECK_REASON_TAIL_CHARS: usize = 1000;
+
+fn tail_chars(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    if count <= n {
+        return s.to_string();
+    }
+    s.chars().skip(count - n).collect()
+}
+
+/// ADR-0117 D2: reviewer より先に出た決定的な verdict を `ReviewCheckResult` に写す。
+/// `implicit` は暗黙の条件（plan / aggregate / repo check / research）の criterion idx ごとの `(kind, cmd)`。
+fn deterministic_check_results(
+    task: &Task,
+    verdicts: &[Verdict],
+    implicit: &HashMap<usize, (&'static str, Option<String>)>,
+) -> Vec<ReviewCheckResult> {
+    verdicts
+        .iter()
+        .map(|v| {
+            let (criterion, kind, cmd) = match task.acceptance.get(v.criterion_idx) {
+                Some(c) => {
+                    let (kind, cmd) = match &c.check {
+                        Check::Command { cmd, .. } => ("command", Some(cmd.clone())),
+                        Check::ArtifactExists { .. } => ("artifact_exists", None),
+                        Check::KnowledgePage { .. } => ("knowledge_page", None),
+                        Check::Human => ("human", None),
+                        Check::Reviewer => ("reviewer", None),
+                    };
+                    (Some(v.criterion_idx), kind, cmd)
+                }
+                None => match implicit.get(&v.criterion_idx) {
+                    Some((kind, cmd)) => (None, *kind, cmd.clone()),
+                    None => (None, "implicit", None),
+                },
+            };
+            ReviewCheckResult {
+                criterion,
+                kind: kind.to_string(),
+                cmd,
+                pass: v.pass,
+                reason: tail_chars(&v.reason, CHECK_REASON_TAIL_CHARS),
+            }
+        })
+        .collect()
 }
 
 /// ADR-0046 D4（Phase 59）: `mode = research` の暗黙の条件。**決定的**（LLM は使わない）。
@@ -504,7 +558,10 @@ pub async fn review_task(
         aggregate,
         repo_checks,
         research,
+        decisions,
+        answers,
     } = extras;
+    let mut implicit: HashMap<usize, (&'static str, Option<String>)> = HashMap::new();
     let subject = &subject;
     let mut verdicts = Vec::with_capacity(task.acceptance.len() + 1);
     let mut reviewer_criteria: Vec<usize> = Vec::new();
@@ -562,6 +619,7 @@ pub async fn review_task(
     if let Some(check) = &plan {
         let (pass, reason, parsed) = check_plan_file(artifacts_dir, &artifacts_rel, check);
         plan_output = parsed;
+        implicit.insert(task.acceptance.len(), ("plan", None));
         verdicts.push(Verdict {
             criterion_idx: task.acceptance.len(),
             pass,
@@ -586,6 +644,7 @@ pub async fn review_task(
                 format!("aggregate run did not produce {summary_rel}"),
             )
         };
+        implicit.insert(idx, ("aggregate_summary", None));
         verdicts.push(Verdict {
             criterion_idx: idx,
             pass,
@@ -611,6 +670,7 @@ pub async fn review_task(
                 "workspace.toml check: ",
             )
             .await;
+            implicit.insert(base + n, ("repo_check", Some(cmd.clone())));
             verdicts.push(Verdict {
                 criterion_idx: base + n,
                 pass,
@@ -635,6 +695,7 @@ pub async fn review_task(
                 repo_checks.len()
             };
         let (pass, reason) = research_evidence(artifacts_dir, &artifacts_rel);
+        implicit.insert(idx, ("research_evidence", None));
         verdicts.push(Verdict {
             criterion_idx: idx,
             pass,
@@ -670,6 +731,11 @@ pub async fn review_task(
                     })
                     .collect(),
                 Some(run) => {
+                    let human_context = ReviewHumanContext {
+                        decisions,
+                        answers,
+                        checks: deterministic_check_results(task, &verdicts, &implicit),
+                    };
                     let (result, record) = run_reviewer(
                         task,
                         workspace_dir,
@@ -678,6 +744,7 @@ pub async fn review_task(
                         produced,
                         subject,
                         &reviewer_criteria,
+                        human_context,
                         run,
                     )
                     .await;
@@ -799,6 +866,13 @@ pub fn synthetic_review_task(subject_task: &Task, run_id: &str, hint: &WorkerHin
     }
 }
 
+/// ADR-0117 D1/D2: `ReviewRequest` に載せる人の決定・回答と、先に出た決定的 check の結果。
+struct ReviewHumanContext {
+    decisions: Vec<ReviewDecision>,
+    answers: Vec<Answer>,
+    checks: Vec<ReviewCheckResult>,
+}
+
 /// Reviewer run を実行し、判定と、その run 自身の結果（`WorkerFinished` 用。ADR-0014 D1）を返す。
 #[allow(clippy::too_many_arguments)]
 async fn run_reviewer(
@@ -809,6 +883,7 @@ async fn run_reviewer(
     produced: &[ArtifactRef],
     subject: &ReviewSubject,
     criteria: &[usize],
+    human_context: ReviewHumanContext,
     run: ReviewerRun,
 ) -> (
     Result<Vec<Verdict>, ReviewerProviderFailure>,
@@ -827,6 +902,7 @@ async fn run_reviewer(
         produced,
         subject,
         criteria,
+        human_context,
         run,
         &mut record,
     )
@@ -843,6 +919,7 @@ async fn run_reviewer_inner(
     produced: &[ArtifactRef],
     subject: &ReviewSubject,
     criteria: &[usize],
+    human_context: ReviewHumanContext,
     run: ReviewerRun,
     record: &mut ReviewerRunRecord,
 ) -> Result<Vec<Verdict>, ReviewerProviderFailure> {
@@ -883,11 +960,15 @@ async fn run_reviewer_inner(
             profile: run.profile.clone(),
             prior_review: vec![],
             inputs: produced.to_vec(),
+            // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。
             answers: vec![],
             review: Some(ReviewRequest {
                 summary: subject.summary.clone(),
                 evidence: subject.evidence.clone(),
                 criteria: criteria.to_vec(),
+                decisions: human_context.decisions,
+                answers: human_context.answers,
+                checks: human_context.checks,
             }),
             role: None,
             children: Vec::new(),

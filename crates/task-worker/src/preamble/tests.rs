@@ -494,6 +494,11 @@ fn cos_conversations_show_active_projects_and_the_actions_instructions() {
     assert!(!out.contains("add_milestone"), "{out}");
     assert!(out.contains("ask_human"), "{out}");
     assert!(out.contains("mode: \"production\""), "{out}");
+    let web_docs_cargo_rule = "`web/` や `docs/` だけを変える task の acceptance では `cargo test --workspace` を必須にせず";
+    let acceptance_scope_rule =
+        "acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録";
+    assert_eq!(out.matches(web_docs_cargo_rule).count(), 1, "{out}");
+    assert_eq!(out.matches(acceptance_scope_rule).count(), 1, "{out}");
     // ADR-0069 D1（Phase 114）: CoS は担当とモデルを選ばない。
     assert!(
         out.contains("担当（`assignee`）とモデル（`tier`）は"),

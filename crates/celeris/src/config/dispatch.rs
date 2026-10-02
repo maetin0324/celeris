@@ -16,18 +16,27 @@ use super::{Config, ConfigError, ProviderConfig};
 pub struct SessionsConfig {
     #[serde(default = "default_rollover_tokens")]
     pub rollover_tokens: u64,
+    /// ADR-0124 D1 #4: WU の execute continuation（予算切れ・yield の続き）を同じ Claude Code session で
+    /// resume するか（既定 `true`）。`false` なら毎回 checkpoint 前置きの新しい session（導入前の挙動）。
+    #[serde(default = "default_continuation_resume")]
+    pub continuation_resume: bool,
 }
 
 impl Default for SessionsConfig {
     fn default() -> Self {
         Self {
             rollover_tokens: default_rollover_tokens(),
+            continuation_resume: default_continuation_resume(),
         }
     }
 }
 
 fn default_rollover_tokens() -> u64 {
     400_000
+}
+
+fn default_continuation_resume() -> bool {
+    true
 }
 
 /// `[reviewer]`（ADR-0010 D9, P-30）: `Check::Reviewer` の判定 run に使う adapter / tier。
@@ -219,6 +228,7 @@ impl Config {
                 parallel: self.execution.parallel,
                 max_parallel_work_units: self.execution.max_parallel_work_units,
                 max_cos_runs: self.execution.max_cos_runs,
+                continuation_session_resume: self.sessions.continuation_resume,
                 // Phase F5-fix3: config.toml に欄は無い（ADR-0072 D18 / ADR-0074 §4 の既定のまま）。
                 // ADR-0079 D3（Phase R1a）: `[execution.tree]` は plan/3 の検証だけに効く。
                 limits: task_core::ExecutionLimits {

@@ -622,6 +622,40 @@ impl Dispatcher {
         }
         // ADR-0072 D6/D9/D15（Phase E2）: 計画のある Task の WU の run。WU の行を `running` にし
         // （`runs`/`last_run_id` を更新）、`runs` 索引に 1 行作り、prompt に載せる文脈を組み立てる。
+        // ADR-0124 D1: WU の worker run は、continuation なら同じ Claude Code session を resume するか、
+        // checkpoint 前置きの新しい session に倒すかをここで決める（planner run は判断表 #1 で常に fresh）。
+        if let Some(wu) = &current_wu {
+            let cwd = worktree
+                .as_ref()
+                .and_then(|w| w.cwd())
+                .unwrap_or(dir.as_path())
+                .to_string_lossy()
+                .into_owned();
+            let surface = continuation_session::ContinuationSurface {
+                provider: Some(provider_id.as_str()),
+                cwd: Some(cwd.as_str()),
+                container: matches!(container, ContainerDecision::Container(_)),
+            };
+            let role = if is_planner_dispatch {
+                crate::sessions::ContinuationRole::Planner
+            } else {
+                crate::sessions::ContinuationRole::Worker
+            };
+            if let Err(e) = self.resolve_continuation_session(
+                &task,
+                wu,
+                &run_id,
+                role,
+                &adapter_id,
+                account.as_deref(),
+                &surface,
+                &mut extras,
+            ) {
+                tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %e, "failed to resolve the continuation session; running with a fresh context");
+                extras.session = None;
+                extras.continuation_session = None;
+            }
+        }
         if let Some(wu) = &current_wu
             && let Err(e) = self.start_work_unit_run(
                 task.id,

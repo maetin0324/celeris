@@ -103,10 +103,22 @@ fn dispatcher_with_test_clock(
     max_concurrency: usize,
     use_test_clock: bool,
 ) -> Dispatcher {
+    dispatcher_with_adapter_id(store, adapter, max_concurrency, use_test_clock, "instant")
+}
+
+/// `dispatcher_with_test_clock` と同じだが、provider `p1` のアダプタ id を選べる
+/// （ADR-0124: continuation の resume は `claude-code` だけが対象）。
+fn dispatcher_with_adapter_id(
+    store: Arc<dyn TaskStore>,
+    adapter: Arc<dyn WorkerAdapter>,
+    max_concurrency: usize,
+    use_test_clock: bool,
+    adapter_id: &str,
+) -> Dispatcher {
     let mut policy = StaticPolicy::new(
         vec![ProviderSpec {
             id: "p1".into(),
-            adapter: "instant".into(),
+            adapter: adapter_id.into(),
             tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
             concurrency: max_concurrency,
             model: "m".into(),
@@ -3168,3 +3180,6 @@ mod planner_budget;
 mod stage_reopen;
 
 mod browser_fallback;
+/// ADR-0124 D1: WU の execute continuation の同一 session resume と checkpoint fallback
+/// （`src/dispatcher/tests/session_resume.rs`）。
+mod session_resume;

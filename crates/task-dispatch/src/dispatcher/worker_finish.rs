@@ -1043,6 +1043,28 @@ impl Dispatcher {
                 tracing::warn!(%task_id, error = %e, "failed to record session usage");
             }
         }
+        // ADR-0124 D2: WU の継続 session を使った run は、その usage を `approx_tokens` に積む
+        // （判断表 #10 の rollover の材料）。継続 session を持たない run（`runs.session_id` が無い）は何もしない。
+        if let Ok(Some(row)) = self.store.run_index_get(&run_id)
+            && row.session_id.is_some()
+            && let (Some(wu_id), Some(adapter)) =
+                (row.work_unit_id.as_deref(), row.adapter.as_deref())
+        {
+            let tokens = usage
+                .as_ref()
+                .map(|u| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
+                .unwrap_or(0);
+            if let Err(e) = self.store.work_unit_session_touch(
+                task_id,
+                Some(wu_id),
+                adapter,
+                row.account.as_deref(),
+                tokens as i64,
+                OffsetDateTime::now_utc(),
+            ) {
+                tracing::warn!(%task_id, error = %e, "failed to record continuation session usage");
+            }
+        }
         // ADR-0033 D4: 部をまたぐ委譲の質問は、run の自己申告の終わり方より優先する（子は作られていない）。
         // Phase 27: 人に見せる質問は 1 件の部またぎにつき 1 つ（`approvals` の行の単位）。
         let mut questions: Vec<String> = Vec::new();

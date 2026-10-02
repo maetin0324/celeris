@@ -1196,6 +1196,79 @@ fn task_detail_execution_is_none_for_a_task_with_no_execution_activity() {
     assert!(detail.execution.is_none());
 }
 
+#[test]
+fn task_detail_write_set_and_behind_show_durable_snapshots() {
+    use task_core::execution_plan::{RunIndexRole, RunIndexStatus, RunRow};
+    use task_core::repos::RepoId;
+    use task_core::write_set::{WriteSetRecord, WriteSetStatus};
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&task).unwrap();
+    store
+        .set_task_expected_write_paths(task.id, Some(&["src/".into()]), "2026-10-02T00:00:00Z")
+        .unwrap();
+    let repo_id = RepoId::new();
+    store
+        .run_index_start(RunRow {
+            run_id: "run-1".into(),
+            task_id: task.id.to_string(),
+            work_unit_id: None,
+            role: RunIndexRole::Worker,
+            seq: 1,
+            status: RunIndexStatus::Completed,
+            adapter: None,
+            model: None,
+            account: None,
+            session_id: None,
+            checkpoint: None,
+            usage: None,
+            metrics: None,
+            started_at: "2026-10-02T00:00:00Z".into(),
+            finished_at: Some("2026-10-02T00:01:00Z".into()),
+        })
+        .unwrap();
+    store
+        .record_run_write_set(&WriteSetRecord {
+            owner_id: "run-1".into(),
+            task_id: task.id,
+            work_unit_id: None,
+            repo_id,
+            base_sha: Some("base".into()),
+            head_sha: Some("head".into()),
+            paths: vec!["src/main.rs".into()],
+            status: WriteSetStatus::Complete,
+            reason: None,
+            recorded_at: "2026-10-02T00:01:00Z".into(),
+        })
+        .unwrap();
+    store
+        .record_behind_target(&task_core::behind_target::BehindTargetObservation {
+            task_id: task.id,
+            repo_id,
+            target_ref: "refs/heads/main".into(),
+            target_sha: Some("target".into()),
+            head_sha: Some("head".into()),
+            commits: Some(2),
+            observed_at: "2026-10-02T00:00:00Z".into(),
+        })
+        .unwrap();
+    let now = OffsetDateTime::parse(
+        "2026-10-02T01:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    let detail = task_detail(&store, task.id, &view_ctx(), now).unwrap();
+    assert_eq!(detail.expected_write_paths, Some(vec!["src".into()]));
+    assert_eq!(detail.actual_run_write_sets[0].paths, ["src/main.rs"]);
+    assert_eq!(detail.actual_run_write_sets[0].status, "complete");
+    assert_eq!(detail.behind_target.behind_target_commits, Some(2));
+    assert_eq!(detail.behind_target.behind_target_age_seconds, Some(3600));
+    assert_eq!(
+        detail.behind_target.repos[0].target_sha.as_deref(),
+        Some("target")
+    );
+}
+
 /// gate が atomic と判定しただけ（計画なし）の Task は Execution 節が出るが `plan` は無い
 /// （D20 の「直接実行」の 1 行に対応する材料）。
 #[test]

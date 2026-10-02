@@ -156,19 +156,21 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 
 ### fix-stress-build WorkUnit（01M3XSER5YCVRWJTCHP0XGB8AP）での実行結果
 
-人の介入で共用 host の CPU 負荷を抑えるため、台本の既定を焼き 2 本・300 秒・serial 5 回・parallel 2 本にした。
-並走 e2e 数も `STRESS_E2E_PHASE3_PARALLEL` で指定する。全負荷と e2e は `nice -n 19` で起動し、task-dispatch
-cargo 負荷は既定で無効、必要な場合だけ `STRESS_E2E_PHASE3_CARGO_LOAD=1` で有効にする。background shell の
-`EXIT` trap を明示的に解除し、親が所有する一時 directory を子が消さないようにした。workspace bin の build は
-serial loop より前に行う。
+人の介入（2026-10-02 09:15）で共用 host の CPU 負荷を抑えるため、台本の既定を焼き 2 本・300 秒・serial 5 回・
+parallel 2 本にした（以前は `nproc` 本・20 回・8 並列で、他 task の検査を落とす load 65 を作っていた）。焼き本数は
+`STRESS_E2E_PHASE3_PARALLEL` で上書き可能で、並走させる e2e の数も同じ値を使う。台本内で CPU 数を数えるコマンドは
+使っていない。全負荷・並走 e2e は `nice -n 19` で起動し、task-dispatch の背景 cargo 負荷は既定で無効（
+`STRESS_E2E_PHASE3_CARGO_LOAD=1` のときだけ有効）にした。負荷の background shell は `trap - EXIT INT TERM` で
+親の `EXIT` trap を外すようにし、親の `WORK_DIR` を消す寿命競合を無くした。workspace bin の build は serial loop
+より前に置いた。
 
-検証前の `unshare -U -r true` は `unshare: write failed /proc/self/uid_map: Operation not permitted`（exit 1）。
-指定された一度だけの既定 stress 実行 `time sh scripts/dev/stress-e2e-phase3.sh` は exit 1。workspace bin と e2e
-試験バイナリの build は成功したが、serial 1/5 で fixture の `celeris` が ADR-0095 worker DB guard の namespace
-probe に失敗し、4 件の phase3 試験がすべて起動前に落ちた。user namespace が無効な sandbox では試験結果を得られず、
-重い条件での追加 stress は行っていない。
+検証前の `unshare -U -r true` は exit 0（この run の sandbox では user namespace 作成が許可されている）。
+指定された一度だけの既定 stress 実行 `time sh scripts/dev/stress-e2e-phase3.sh`（環境変数での上書きなし）は
+exit 0。workspace bin の build は事前に完了済みのため追加ビルドなし、serial 5/5・parallel 2/2 すべて ok、
+実行後 `ps aux` で CPU 焼きプロセス（`while :; do :; done`）が残っていないことを確認した。`time` の実測は
+real 16.970s（user 39.684s、sys 6.427s）。
 
-stress-e2e-phase3 結果: exit 1（serial 0/5、parallel 0、real 17.894s）
+stress-e2e-phase3 結果: exit 0（serial 5/5、parallel 2、real 16.970s）
 
 ### 人に依頼する重い負荷の検証
 

@@ -81,7 +81,66 @@ fn is_browser(pid: i32, expected_map: &str) -> bool {
     {
         return false;
     }
-    fs::read_to_string(base.join("uid_map")).is_ok_and(|map| map == expected_map)
+    fs::read_to_string(base.join("uid_map"))
+        .is_ok_and(|map| same_map_from_reader(&map, expected_map))
+        && has_launcher_ancestor(pid)
+}
+
+/// `/proc/<pid>/uid_map` の外側の ID は読む側の userns で訳される。celeris の check runner
+/// （db_guard の `1001 1001 1`）からは subuid が写らず `4294967295` に見えるので、内側の ID と
+/// 長さが一致し、外側が一致するか読む側で写らない（u32::MAX）ときを同じ map とみなす。
+/// 読む側は daemon UID を恒等に写すので、Chrome の map に daemon UID があればそのまま見える。
+fn same_map_from_reader(seen: &str, expected: &str) -> bool {
+    let parse = |map: &str| -> Vec<Vec<u32>> {
+        map.lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .filter_map(|field| field.parse().ok())
+                    .collect()
+            })
+            .collect()
+    };
+    let (seen, expected) = (parse(seen), parse(expected));
+    seen.len() == expected.len()
+        && seen.iter().zip(&expected).all(|(s, e)| {
+            s.len() == 3
+                && e.len() == 3
+                && s[0] == e[0]
+                && s[2] == e[2]
+                && (s[1] == e[1] || s[1] == u32::MAX)
+        })
+}
+
+/// 候補が launcher の子孫であること（PPid を辿り、cmdline に launcher の binary 名がある祖先）。
+fn has_launcher_ancestor(pid: i32) -> bool {
+    let mut current = pid;
+    for _ in 0..16 {
+        let Some(parent) = fs::read_to_string(format!("/proc/{current}/status"))
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix("PPid:"))
+                    .and_then(|v| v.trim().parse::<i32>().ok())
+            })
+        else {
+            return false;
+        };
+        if parent <= 1 {
+            return false;
+        }
+        let is_launcher = fs::read(format!("/proc/{parent}/cmdline")).is_ok_and(|cmdline| {
+            cmdline
+                .split(|b| *b == 0)
+                .next()
+                .is_some_and(|arg0| arg0.ends_with(b"celeris-browser-launcher"))
+        });
+        if is_launcher {
+            return true;
+        }
+        current = parent;
+    }
+    false
 }
 
 fn chrome_pid(before: &HashSet<i32>, expected_map: &str) -> i32 {
@@ -104,7 +163,8 @@ fn chrome_pid(before: &HashSet<i32>, expected_map: &str) -> i32 {
                 .difference(before)
                 .filter_map(|pid| {
                     let base = PathBuf::from(format!("/proc/{pid}"));
-                    (fs::read_to_string(base.join("uid_map")).ok().as_deref() == Some(expected_map))
+                    fs::read_to_string(base.join("uid_map"))
+                        .is_ok_and(|map| same_map_from_reader(&map, expected_map))
                         .then(|| {
                             (
                                 *pid,
@@ -316,8 +376,16 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         ns_error.raw_os_error(),
         Some(libc::EACCES) | Some(libc::EPERM)
     ));
-    assert_eq!(uid_map, observed.uid_map);
-    assert_eq!(gid_map, observed.gid_map);
+    assert!(
+        same_map_from_reader(&uid_map, &observed.uid_map),
+        "uid_map {uid_map:?} != launcher {:?}",
+        observed.uid_map
+    );
+    assert!(
+        same_map_from_reader(&gid_map, &observed.gid_map),
+        "gid_map {gid_map:?} != launcher {:?}",
+        observed.gid_map
+    );
     for map in [&uid_map, &gid_map] {
         assert!(
             !maps_host_id(map, daemon_uid),

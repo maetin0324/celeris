@@ -378,3 +378,24 @@ CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher
 この host は LXC 内なので UID 1001 シェルの親 namespace の map は `0 100000 1001 / 1001 1001 1 / 1002 101002 64534 / 65536 165536 262144` であり、初期 namespace の `0 0 4294967295` ではない。試験 runner は db_guard namespace（`1001 1001 1`）の外で `/proc` の Chrome PID を確認できた。launcher の userns owner 鎖は起動時と `isolation_ok` で検査される（ADR-0116 付記）。UID 1001 は Chrome の map に入らず、今回の ptrace と `/proc` の拒否は、UID だけが異なる旧 runtime の結果とは区別する。
 
 既存の daemon 所有経路は同じ host で `cargo test -p task-worker --test browser_runtime_isolated` が exit 0（4 passed、1 ignored）。journal は `session 3841ddf8…: Chrome started pid=4 flags=remote-debugging-pipe` を記録し、試験中に Chrome は生存した。`Chrome stderr category=other-startup-error` が 4 行あったが、生 stderr は記録されておらず内容は未判定。この分類だけで今回の合否は変えない。root 操作・本番 DB / 設定の変更・昇格は本 WorkUnit では行わず、機密能力 `CredentialInjection` / `IdentityRestore` は解放していない。
+
+## check runner の namespace からの再実証（run 01M3XS1VN60T1RW7NEJCX8D843、2026-10-02）
+
+celeris が run の後に流した check（`CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture`）は exit 101（`Chrome PID not visible in /proc within 20s; new processes with expected uid_map: []`）。check runner は db_guard namespace（`/proc/self/uid_map` = `1001 1001 1`）で動く。ここで Chrome の `/proc/<pid>/uid_map` を読むと、外側の ID が読む側の userns で訳されるため、subuid 296608 は写らず `1000 4294967295 1` に見える。試験は launcher が返した map（`1000 296608 1`）と文字列で一致を求めていたので、Chrome（comm=chrome）が起動していても候補から外れていた。launcher 側の不具合ではない。
+
+試験の修正: 内側の ID と長さが一致し、外側が一致するか読む側で写らない（`4294967295`）map を同じ map とみなす。そのうえで候補は PPid を辿って `celeris-browser-launcher` の子孫であることも要求する。読む側は UID 1001 を恒等に写すので、Chrome の map に daemon UID があればそのまま見え、`maps_host_id` の検査は弱まらない。
+
+同じ check を db_guard namespace の中から実行した結果は **exit 0**（1 passed、0.14 s）:
+
+| 項目 | 結果 |
+| --- | --- |
+| 正の対照 | 同 UID の子 PID 4048659 へ `PTRACE_ATTACH=0`、`PTRACE_DETACH=0` |
+| launcher の観測 | `owner=Some(296608)`、`host_uid=995`、`uid_map`/`gid_map` = `1000 296608 1` |
+| Chrome（runner から見た map） | PID 4048672、`NS_GET_OWNER_UID(launcher)=Some(296608)`、`uid_map`/`gid_map` = `1000 4294967295 1` |
+| daemon UID からの ns open | `errno=Some(13)`（EACCES） |
+| 隔離検査 | `verify_isolation=Ok (launcher isolation_ok=true, CapEff=0000000000000000 NoNewPrivs=true)` |
+| ptrace | `PTRACE_ATTACH Chrome pid=4048672: errno=Some(1)`（EPERM） |
+| strace | `strace -p 4048672: exit=Some(1)`、`ptrace(PTRACE_SEIZE, 4048672): Operation not permitted` |
+| proc 読取り | `/proc/4048672/environ`、`/proc/4048672/mem` ともに `errno=Some(13)`（EACCES） |
+
+`cargo clippy -p task-worker --all-targets -- -D warnings` と `cargo fmt --all -- --check` は exit 0。host の launcher は 86ce1a88 の build のまま（今回は試験だけの変更なので入れ替え不要）。本番 host の操作、機密能力の解放は行っていない。

@@ -650,6 +650,8 @@ cheap だけにする fallback、paperqa・langmem・ldr・opencode の Qwen 前
     対象試験に絞って実行した）。
 - 提案: 次に本番 config.toml を移行する際は、移行前後で `GET /api/v1/providers` と `GET /api/v1/llm/sources`
   の応答を保存し比較すると、`kind` / `llm_source` の推定結果が意図どおりか目視確認しやすい。
+- ACP の Qwen 直指定（`OPENCODE_CONFIG` 無し・`openai_compatible` の Qwen source）も cheap だけに絞る修正（acp-cheap）。
+
 ### land-main3: 最新 main の統合 — 2026-10-02
 
 main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持した。main の ADR-0122 完了・ui-ux 外部 skill の結合試験・planner 指針・最終検査記録に加え、browser launcher の実 process 証跡、tick_prunes の単独再実行、過去の land-main/land-main2 記録も残した。

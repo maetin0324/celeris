@@ -67,3 +67,14 @@ final review では controller と runtime の終了判定を通った後、`bwr
 final review と同じ check コマンド列は、task-dispatch の 3 コマンドと `cargo build -p task-worker --bins` まで exit 0。その次の `browser_injection_wire` は real browser 試験の `unshare: Operation not permitted` で exit 101 となり、コマンド列の最後の `browser_runtime_isolated` には到達しなかった。これは上記の sandbox 制限と同じで、pass とは記録しない。
 
 userns を使える host で `cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes` を通常起動と、事前ビルド済み試験バイナリの `trap '' CHLD` 起動でそれぞれ反復し、続けて final review の check コマンドを再実行する必要がある。
+
+## 実環境での確認（最終コード、2026-10-02、ADR-0079 D7 real-env-2 人の回答）
+
+人が `docs/PROGRESS.md`「時間依存試験の決定化」の「人が実行する手順」を、merge-main 完了後の最終 SHA `ab1914e629d9`（この fix-kill-2 節の SIGCHLD 継承修正 `e64043be` と main merge `a46b7423` を含む）で実行した。host `home-dev`、`unshare -U -r true` は exit 0、load average 14〜18（CPU を焼く負荷なし）。`ab1914e629d9` を `/var/tmp` の worktree に取り出し、`CARGO_TARGET_DIR` はローカル、`CELERIS_USERNS_TESTS=1` で実行した。`git diff --stat a46b7423 ab1914e629d9 -- crates` は空（crates の tree は同一）。
+
+- 通常起動 ×3: 3/3 `test result: ok`（各 0.08s、`helper_reaper` 0.10s）。`runtime survived`・`SKIPPED` の出力なし。
+- `trap '' CHLD` 下（SIGCHLD 無視が継承される final review の条件）×3: 3/3 `test result: ok`。`bwrap must be an unreaped zombie`・`panicked` の出力なし。
+- SIGSTOP stutter（`STUTTER_SCOPE=pid`）×3: 3/3 `test result: ok`。
+- SIGCHLD 無視 + pid stutter の組み合わせ ×3: 3/3 `test result: ok`。
+
+結果: 全件合格（4条件 × 3回 = 12回、すべて `test result: ok`）。未解決の失敗なし。本節が未解決としていた「userns を使える host での反復」はこれで満たされた。コードの変更はこの記録には含まれない。

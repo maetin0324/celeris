@@ -107,7 +107,8 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 
 ### 負荷のかけ方
 
-`scripts/dev/stress-e2e-phase3.sh`（dash 互換、引数なしで実行）:
+`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](../testing.md)）。
+以下は削除前の台本がかけていた負荷の記録:
 
 1. `nproc`（本機では 24）本の `timeout <cap> sh -c 'while :; do :; done'` を並走させ CPU を飽和させる。
 2. バックグラウンドで `cargo test -p task-dispatch --lib` を失敗を無視しながら繰り返し実行し、別クレートの
@@ -138,8 +139,7 @@ release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/releas
 理由: 修正者が `dafffeb1` のコミットメッセージに、使い捨ての実験テストで「同じポートに 2 つ目の celeris を
 起こし begin 直後の状態を読むと 20 回中 7 回 in_flight=0」という再現記録をすでに残しており、根因（ポート
 衝突）も製品コードの該当箇所（`bind_reuseport`、ADR-0040 D4）も特定済みだったため、同じ検証を別 worktree で
-繰り返すコストに見合わないと判断した。必要なら `git worktree add <path> 7f3482a3` で親 commit を取り出し、
-同じ `scripts/dev/stress-e2e-phase3.sh` を走らせれば再現確認できる。
+繰り返すコストに見合わないと判断した。`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](../testing.md)）。
 
 ### 試験の意図への影響
 
@@ -174,12 +174,4 @@ stress-e2e-phase3 結果: exit 0（serial 5/5、parallel 2、real 16.970s）
 
 ### 人に依頼する重い負荷の検証
 
-user namespace が使える専用環境で、焼き本数と時間を増やして一度に検証する。例:
-
-```sh
-STRESS_E2E_PHASE3_PARALLEL=8 STRESS_E2E_PHASE3_LOAD_SECONDS=1800 STRESS_E2E_PHASE3_ITERATIONS=20 time sh scripts/dev/stress-e2e-phase3.sh
-```
-
-`exit 0` と `all 8 concurrent processes: ok` を確認する。必要なら別途 `STRESS_E2E_PHASE3_CARGO_LOAD=1` を付けて
-task-dispatch の cargo 負荷も有効にする。これは CPU を長時間使うため、共用 host では実行せず、専用または空いている
-環境で行う。
+`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](../testing.md)）。

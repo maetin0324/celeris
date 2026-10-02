@@ -3121,6 +3121,7 @@ mod provider_and_retry;
 mod review;
 mod routing_and_quota;
 mod tick_and_dispatch;
+mod ui_ux_skills;
 mod work_units;
 
 /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。

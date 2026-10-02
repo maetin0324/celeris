@@ -15,6 +15,7 @@
   - `docs/PROGRESS.md` を更新（完了日、証拠コマンドと結果、未解決事項、提案）
   - `git add -A && git commit -m "phase N: <summary>"`
 - 同じアプローチを3回失敗したら、`docs/PROGRESS.md` に状況を書き、報告本文で人間に質問する
+- 試験・検査・検証で CPU を焼く負荷（busy loop、stress-ng、並走 cargo の負荷台本）をかけない。WU の check にも重い負荷の台本を置かない。時間依存の不具合は時計の差し替え（tokio::time::pause・注入した時計）、出来事待ち、対象 process への SIGSTOP/SIGCONT、試験専用の遅延フックで決定的に再現する（詳細は `docs/testing.md`）
 - テストで外部ネットワークに出ない。LLM呼び出しを伴う実機確認は、認証が使える環境ならエージェントが実行し証跡を `docs/PROGRESS.md` に残してよい。使えなければ手順を書いて人間に依頼する（ADR-0009 P-34）
 
 ## 禁止

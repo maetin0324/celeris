@@ -2,6 +2,30 @@
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
+## 受信箱と通知の 2 系統（2026-10-02、task 01M3YFCJKMNWQ13HRS52M5BSWW、ADR-0133、WorkUnit verify）
+
+- 完了日: 2026-10-02。全葉（adr / inbox-model / notify-store / notify-feed / api / outbound / gui-compat）完了、
+  ADR-0133 の状態を「実装済み」に更新（web 葉は人の決定 `ui-overlap = c` で UI/UX task
+  `01M3XTCNKMQBCHKSZ7Y1GF6ZM4` へ `superseded`）。詳細・証跡は
+  [phase-inbox-notifications.md](progress/phase-inbox-notifications.md)。
+- 証拠（HEAD `0bc7ca75a5a8`、schema 40）: `cargo fmt --all -- --check` exit 0。
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0。`cargo test --workspace` exit 0
+  （**3,294 passed / 0 failed**、121 バイナリ + doctest、ignored は既存の手動試験のみ）。再実行 1 回で
+  `task-worker` の `scratch::tests::wrapper_runs_the_compiler_directly_when_the_server_is_unreachable` が
+  ETXTBSY で単発失敗（単体実行では再現せず、この task の範囲外の既知の flaky）。今回の関連 crate 再試験は
+  `--lib` で全 pass。integration test 込みでは `instance_handoff.rs` の 5 件が失敗: 3 件は worker DB guard の
+  user namespace probe が sandbox の `Operation not permitted`、2 件は handoff の wall-clock 条件（既知の flaky）。
+  この 3 件に既存の `CELERIS_ISOLATION_TESTS=skip` 分岐は無く、失敗として記録（詳細は上記 progress 文書）。
+  migration 0040 は他の celeris/* ブランチと番号が重ならないことを確認済み。
+- task `01M3YF3NS2EGTZD2BBWNPG1K28`（inbox-rules）との結合: **main にもこの task のブランチにも未統合**
+  （`git log main` に `inbox-rules` の merge なし、`3c967c91` はそのタスクのブランチのみに存在）。そのため
+  「置き換え済み failed 子が新しい受信箱 API に出ない」ことを確かめる既存試験は無い（書けない）。
+  `human_inbox.rs` は ADR-0133 D4 どおり規則の仮実装を置かず、inbox-rules 統合待ちのまま。
+- 未解決: 1) 上記 inbox-rules 統合待ち。2) `GET /api/v1/notify` に ADR-0133 D6 が求める 4 設定値
+  （`inbox_batch_secs`/`inbox_reminder_secs`/`digest_interval_secs`/`digest_max_lines`）と経路別最終送信時刻の
+  掲載が未実装（送り出し自体の判定・束ねは実装・試験済み）。どちらも独立した小さい追従 WorkUnit で閉じられる。
+- 本番 host で人が確認・設定する手順は [docs/ops/inbox-notifications.md](ops/inbox-notifications.md)。
+
 ## 試験で CPU を焼く負荷をかけない規則（2026-10-02、task 01M3Y4AV7801NSXB6FD698QZHW、WorkUnit rule-docs）
 
 - 完了日: 2026-10-02。`CLAUDE.md`「作業の進め方」に規則を 1 行追加、[docs/testing.md](testing.md) を新設（禁止の理由と、時計の差し替え・出来事待ち・SIGSTOP/SIGCONT・遅延フックの 4 方法を既存試験の例つきで記載。`tokio::time::pause` はリポジトリに例が無く擬似例）。`scripts/dev/stress-e2e-phase3.sh` を `git rm`、`docs/progress/phase-browser.md` と本ファイルの実行案内を削除の一文に置換（過去の結果行は残す）。

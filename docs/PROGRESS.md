@@ -236,3 +236,31 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 既存の routing 試験（`example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering` 等）も
   上記のフルスイートに含まれ通過を確認済み。
 - 未解決事項: なし。
+
+## ADR-0122 完了（ui-ux 外部 skills）
+
+完了日 2026-10-02。ADR-0122（外部 agent skill の vendoring・KB への取り込み・ui-ux への mount・quality gate の
+reviewer 配布）の D1〜D6 を実装し、`docs/adr/0122-ui-ux-external-skills.md` の状態欄を「採用・実装済み」に更新した。
+実装 commit: vendor-skills `d39733d8`、vet-skills `3cfdf69a`、adr `7ce72c5c`、skill-import `41e6324b`、
+review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
+
+- 証拠コマンド: `cargo test -p celeris --test ui_ux_skills_delivery`（結果の詳細は
+  `docs/progress/ui-ux-skills.md` を参照。config/skills → 一時 KB → ui-ux 実効 profile → worker 配送の結合試験が
+  全件 pass、routing 回帰試験も同じフルスイートで通過を確認済み）。
+- 未解決事項:
+  - 本番の KB 取り込み・ui-ux への mount は worker からは行わない。人が `docs/ops/ui-ux-external-skills.md` の
+    手順で実行する（ADR-0095 付記 D-d）。
+  - `web-design` の LICENSE 判断（LICENSE ファイルが無く README の License 節に拠っている点）は、より厳しい
+    基準を採るかどうかを人が判断する（ADR-0122 D6、`docs/progress/ui-ux-skills.md`）。
+- release/verify（work unit release-report、2026-10-02、HEAD `a58f68b5551b` = adr-status 統合後）:
+  - release.sh: sha12 a58f68b5551b exit 0（`CELERIS_STATE_DIR` を scratch に、`SD_USE_CALLER_CARGO_TARGET=1`
+    `SD_RELEASE_PRUNE=0`。worker sandbox から本番の `~/.local/celeris/releases` は読み取り専用なので、既定の
+    state dir では lock を作れず exit 1。gate.json ok=true: fmt / cargo-test（nextest 3236 passed・11 skipped・
+    doctest ok）/ clippy / source-size-report / build --release / pnpm install・typecheck・build / web の
+    install・typecheck・test・release がすべて exit 0。gui/ に変更が無いので pnpm-test・mobile-audit・e2e:mock は
+    skipped（base ea86af6307f8））。
+  - verify.sh: exit 0（verify.json ok=true live_ok=true。検査 1〜6 すべて true）。1 回目は worktree の
+    gui/ に devDependencies が無く検査 4b（gui-e2e）だけ「@playwright/test not found」で exit 1。
+    `pnpm install --offline --frozen-lockfile` 後の再実行で 4b も pass。本番の daemon・DB・config・systemd には
+    触れていない（DB は `mode=ro` の `.backup` を読むだけ）。
+  - `unshare -U -r true` → exit 0（この run の sandbox では user namespace を作れた）。

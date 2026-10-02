@@ -4,9 +4,10 @@ tasks: [01M3XTAH6KYYXTWRTNC2D4MDTG]
 # ADR-0122: 外部 agent skill の vendoring・KB への取り込み・ui-ux への mount・quality gate の reviewer 配布
 
 - 日付: 2026-10-02
-- 状態: 採用（実装待ち）。D1〜D4 のコードと D3 の種、D5 の手順書は後続の WorkUnit（skill-import / review-skills /
-  e2e-verify / runbook）で入れる。この ADR の時点で入っているのは `config/skills/` の 4 件（vendor-skills）と
-  審査の反映（vet-skills）だけ。
+- 状態: 採用・実装済み（2026-10-02）。D1〜D4 のコードと D3 の種、D5 の手順書まで実装済み。実装 commit:
+  vendor-skills `d39733d8`、vet-skills `3cfdf69a`、adr `7ce72c5c`、skill-import `41e6324b`、
+  review-skills `dcf7aefd`、e2e-verify `6d95a306`、runbook `99a529c6`。
+  D5（本番の KB 取り込み・mount）は人が `docs/ops/ui-ux-external-skills.md` の手順で実行する。
 - 関連: ADR-0056 D3（KB の `skills/` と `skills_mounts`、run への届け方）、ADR-0046（profile の継承、skill はタグ）、
   ADR-0073（ui-ux 課と routing）、ADR-0069（担当の決定的な選択）、ADR-0007 D5（合成 review task）、
   ADR-0095 付記 D-d（本番 host の操作は人）

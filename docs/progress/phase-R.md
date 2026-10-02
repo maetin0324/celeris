@@ -2481,6 +2481,7 @@ ADR-0079 付記「R7-12」を先に追記してから実装した。
   `check_and_apply_execution --apply` はその行を消す）。直すなら `RepairScheduled` に spec を載せ、配送の repair でも積む（別 Phase の提案）。
 - 他の browser テスト（`browser_runtime_*` / `browser_egress_relay` など）にも 1 回の `recv` で判定する箇所が無いか、同じ観点で見直す価値がある。
 - 05:2xZ（2026-10-02）: **R7-12 の昇格と handoff 認可 task の再開**。handoff 認可 task 01M3WZ1GEP… は実装・review 合格（01:36）後、delivery が main の前進で repair-2（phase なし）を足して reopen → 再 review で browser_shared_cdp の 60 s 失敗 → replan が `done work unit repair-2 must not change on replan` で毎回 invalid（plan_invalid ×3。人は「a: 別 task で直す」と答えたが task は作られていなかった）。R7-12（`is_daemon_added_work_unit` が spec に無い repair WU も daemon 製とみなす、`DaemonAddedKeyReused`、probe の WebSocket 読み取りの取りこぼし修正と環境 preflight）を統合 → release **f8c84d8df978**（load 11.66 で開始してしまった。gate は全段 exit 0）→ verify ok / live_ok → live 昇格（backup `20261002-051914-pre-f8c84d8df978.sqlite3`）。決定 01M3XDDVB8… に replan + note で回答 → plan v2（land 段に land-main を 1 つ）が検証を通過、plan-gate を approve。
+- 05:4x〜07:15Z（2026-10-02）: **web GUI の取り込みと昇格、launcher の host 試験の自動化**。web root 01M3QE4D33… は done だったが担当が無く delivery が作られていなかった（browser と同じ）。`git merge-tree` で衝突 0・crates/ の変更なしを確かめて手で merge（e730f056。delivery が同じ checkout の上に ea86af63 を足して push）→ release e730f0569db1 gate 全段 ok（web-pnpm-install/typecheck/test/release の段を含む）/ verify ok → 最新 main で release **ea86af6307f8**（load 待ちで 06:32 開始）gate ok / verify ok・live_ok → live 昇格（backup `20261002-071443-pre-ea86af6307f8.sqlite3`）。launcher（01M3WW2RBB…）の host 試験: 人の判断で journal を rmaeda が読めるようにし（systemd-journal）、入れ替えは `/usr/local/sbin/celeris-browser-launcher-update`（root 所有、人が sha を照合した build dir から 3 つを install + restart。rmaeda は既に NOPASSWD sudo）。session_root 未作成 → bwrap の setgid EPERM → `/proc/self/fd/8` EACCES → userns owner の鎖の検査 → CdpOnTcp まで進み、Chrome は launcher 経由で起動（owner 296608、uid_map に 1001 なし、daemon UID からの NS_GET_OWNER_UID は EACCES）。ptrace 拒否の確認は CdpOnTcp の判断の後。**注意**: rmaeda の `NOPASSWD: ALL` と docker group は daemon 侵害時に root を許す（ADR-0115/0095 の前提外）。機密能力の解放前に絞ること。
 
 ## R7-13: land-main — 最新 main の取り込みと受け入れ検査の再実行（2026-10-02）
 
@@ -2571,3 +2572,47 @@ handoff と migration の認可」節）と main 側（ADR-0095 の検証〜veri
 - `sh scripts/selfdeploy/tests/promote_authorization_marker.sh` → `promote_authorization_marker: all ok`（exit 0。live・stop-start・
   各失敗・rollback の 5 経路すべて pass）。
 - merge commit 後に `git merge-base --is-ancestor main HEAD` → exit 0 を確認する。
+
+## R7-13: port-fix — main 39e22633 の再取り込みと e2e ポート予約（dafffeb1）
+
+final review の `cargo test --workspace` が `tests/e2e/tests/api_scenarios.rs:1403` の
+`phase3_control_converges_rejects_competition_and_cancel_stops`（pause 直後に `pausing` ではなく `paused`）で落ちた件。根因は本 task の
+差分ではなく、e2e の `free_port()` と celeris の `SO_REUSEPORT` bind（ADR-0040 D4）の組み合わせで、並走する別の celeris が同じポートに
+bind し `agent/begin` が別の DB に届くこと（詳細は `wu/fix-control-test` の commit `dafffeb1` のログに記載）。
+
+取り込み内容（先行 WU `merge-pick` / `integrate-sync` で実施済み、本 WU は検査と記録のみ）:
+- `git merge main`（main `39e22633` 以降、web-follow.sh と `celeris-web@.service` の `Wants=` 除去を含む）→ merge commit
+  `f4397b57`。衝突は `deploy/systemd/celeris-web@.service` と `docs/progress/phase-R.md`。unit は `Wants=celeris@%i.service` を持たず
+  `After=` に `celeris@%i.service` が残る形を維持し、main の他の変更（`web-follow.sh` 追従等）を保った。`phase-R.md` は両側の節を残した。
+  `scripts/selfdeploy/promote.sh` は自動 merge され、main の web 追従と本 task の `promoting.json`（start 前に書く）処理が両方残っている
+  ことを確認した。
+- `git cherry-pick -x dafffeb1` → commit `86876485`（`-x` によりコミットメッセージ末尾に
+  `(cherry picked from commit dafffeb15dec816c9104058b7f2a95fa62d766a2)` が残る）。`tests/e2e` 以外に触れる衝突は無かった。
+- 統合 commit `0b7a33c3`（`integrate wu/merge-pick (phase sync)`）で上記 2 commit を取り込み。
+
+### 事前確認
+
+- `git merge-base --is-ancestor 39e22633 HEAD` → exit 0。
+- `grep -rl '^<<<<<<<' docs/progress/phase-R.md deploy/systemd scripts/selfdeploy tests/e2e` → 該当なし（衝突マーカー残存なし）。
+- `grep -q 'PortReservation' tests/e2e/src/lib.rs` → 該当あり。`grep -q 'PortReservation\|reserve_port' tests/e2e/tests/api_scenarios.rs` →
+  該当あり。
+- `! grep -q '^Wants=celeris@' deploy/systemd/celeris-web@.service` → 一致なし（`Wants=` が無いことを確認）。
+  `grep -q '^After=.*celeris@%i.service' deploy/systemd/celeris-web@.service` → 該当あり。
+  `grep -q 'promoting' scripts/selfdeploy/promote.sh` → 該当あり。
+- `unshare -U -r true` → exit 0（userns 作成は許可されている。拒否されなかったので e2e は通常経路で実行した）。
+
+### 検査コマンドと結果
+
+- `cargo build --workspace --bins` → exit 0（`Finished dev profile … in 1m 18s`）。
+- `cargo test -p e2e --test api_scenarios phase3_control` → **1 passed; 0 failed; 0 ignored**（10 filtered out、2.43s）。
+  `phase3_control_converges_rejects_competition_and_cancel_stops` が単独でも pass し、flaky の再現は無かった。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo test --workspace` → exit 0。119 試験バイナリすべて `test result: ok`、集計 **3239 passed; 0 failed; 12 ignored**（doctest 含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning 0。
+- `cargo test -p celeris --test unpromoted_release` → **8 passed; 0 failed; 0 ignored**（exit 0）。
+- `sh scripts/selfdeploy/tests/promote_authorization_marker.sh` → `promote_authorization_marker: all ok`（exit 0。live・stop-start・
+  各失敗・rollback の 5 経路すべて pass）。
+
+### 未解決・提案
+
+- 落ちた試験は無かった（本 WorkUnit の範囲内では既知の flaky は再現せず、追加の plan_issue は無い）。

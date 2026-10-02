@@ -392,6 +392,12 @@ export default function ProjectDetailPage({ loaderData }: Route.ComponentProps) 
         description="案件は組織の上から入り、分解されて下へ流れます。その依存関係が「仕事の木」です。"
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to={`/browser/identities/${encodeURIComponent(project.id)}`}
+              className={buttonClass({ variant: "secondary", size: "sm" })}
+            >
+              Browser Identity
+            </Link>
             <Badge tone={PROJECT_STATUS_TONE[project.status]} data-testid="project-status" data-status-badge="project">
               {projectStatusLabel(project.status)}
             </Badge>

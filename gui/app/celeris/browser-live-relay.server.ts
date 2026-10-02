@@ -4,12 +4,14 @@ import type { Duplex } from "node:stream";
 import { checkOwner, onOwnerRevoked } from "~/browser-owner.server";
 import {
   cachedLiveViewGuard,
+  checkLiveGrant,
   type LiveViewBinding,
   type LiveViewUpstream,
   liveViewBinding,
   liveViewClient,
   liveViewPlain,
   liveViewUpstream,
+  readLiveEvents,
   relayResponse,
   runLiveViewRoute,
   upstreamGet,
@@ -158,6 +160,8 @@ async function decideSub(
   }
   const guard = await cachedLiveViewGuard(binding.taskId, binding.runId);
   if (!guard.ok) return guard;
+  const checked = await checkLiveGrant(binding, owner.sessionHash);
+  if (!checked.ok) return checked;
   return { ok: true, path, binding, sessionHash: owner.sessionHash };
 }
 
@@ -280,6 +284,8 @@ class RelayConnection {
   });
   #closed = false;
   #timer: NodeJS.Timeout | null = null;
+  #lastSeen = 0;
+  #polling = false;
   /** 捨てた client→upstream の message の数。 */
   dropped = 0;
 
@@ -300,7 +306,9 @@ class RelayConnection {
   }
 
   start(clientHead: Buffer, upstreamLeftover: Buffer): void {
-    this.#client.on("data", (chunk: Buffer) => this.#onClientData(chunk));
+    this.#client.on("data", (chunk: Buffer) => {
+      void this.#onClientData(chunk);
+    });
     this.#upstream.on("data", (chunk: Buffer) => {
       void this.#onUpstreamData(chunk).catch(() => this.close(1011));
     });
@@ -310,9 +318,9 @@ class RelayConnection {
     this.#upstream.on("close", () => this.close(1001, true));
     this.#client.on("end", () => this.close(1000, true));
     this.#upstream.on("end", () => this.close(1001, true));
-    this.#timer = setInterval(() => void this.#revalidate(), revalidateMs);
+    this.#timer = setInterval(() => void this.pollEvents(), revalidateMs);
     this.#timer.unref();
-    if (clientHead.length > 0) this.#onClientData(clientHead);
+    if (clientHead.length > 0) void this.#onClientData(clientHead);
     if (upstreamLeftover.length > 0) {
       void this.#onUpstreamData(upstreamLeftover).catch(() => this.close(1011));
     }
@@ -322,30 +330,92 @@ class RelayConnection {
     return this.#closed;
   }
 
-  async #revalidate(): Promise<void> {
-    if (this.#closed) return;
-    const owner = await checkOwner(this.#request);
-    if (this.#closed) return;
-    if (!owner.ok || owner.sessionHash !== this.sessionHash) {
-      logDecision("ws_closed_owner");
-      this.close(1008);
-      return;
-    }
-    const binding = liveViewBinding(this.sessionHash);
-    if (!binding || binding.taskId !== this.taskId || binding.runId !== this.runId) {
-      logDecision("ws_closed_unbound");
-      this.close(1008);
-      return;
-    }
-    const guard = await cachedLiveViewGuard(this.taskId, this.runId);
-    if (this.#closed) return;
-    if (!guard.ok) {
-      logDecision(`ws_closed_${guard.code}`);
-      this.close(1008);
+  /** The task API is the source of live events, including those emitted after the WS opened. */
+  async pollEvents(): Promise<void> {
+    if (this.#closed || this.#polling) return;
+    this.#polling = true;
+    try {
+      await this.#revalidate();
+      if (this.#closed) return;
+      const binding = liveViewBinding(this.sessionHash);
+      if (!binding) {
+        this.close(1008);
+        return;
+      }
+      const page = await readLiveEvents(binding, this.sessionHash, this.#lastSeen);
+      if (!page) {
+        this.close(1008);
+        return;
+      }
+      // A read may finish after owner revocation or a newer binding has replaced this one.
+      if (this.#closed || liveViewBinding(this.sessionHash) !== binding) return;
+      await this.#revalidate();
+      if (this.#closed) return;
+      if (page.plan.kind === "reset") {
+        this.#lastSeen = page.plan.latest_seq;
+        this.#client.write(
+          encodeWsFrame(WS_OP.TEXT, Buffer.from(JSON.stringify({ type: "live_reset", latest_seq: this.#lastSeen }))),
+        );
+      } else {
+        for (const event of page.events) {
+          if (this.#closed || event.seq <= this.#lastSeen) continue;
+          this.#lastSeen = event.seq;
+          this.#client.write(
+            encodeWsFrame(
+              WS_OP.TEXT,
+              Buffer.from(JSON.stringify({ type: "live_event", seq: event.seq, body: event.body })),
+            ),
+          );
+        }
+      }
+    } finally {
+      this.#polling = false;
     }
   }
 
-  #onClientData(chunk: Buffer): void {
+  setLastSeen(seq: number): void {
+    this.#lastSeen = seq;
+  }
+
+  async validate(): Promise<boolean> {
+    await this.#revalidate();
+    return !this.#closed;
+  }
+
+  async #revalidate(): Promise<void> {
+    if (this.#closed) return;
+    try {
+      const owner = await checkOwner(this.#request);
+      if (this.#closed) return;
+      if (!owner.ok || owner.sessionHash !== this.sessionHash) {
+        logDecision("ws_closed_owner");
+        this.close(1008);
+        return;
+      }
+      const binding = liveViewBinding(this.sessionHash);
+      if (!binding || binding.taskId !== this.taskId || binding.runId !== this.runId) {
+        logDecision("ws_closed_unbound");
+        this.close(1008);
+        return;
+      }
+      const guard = await cachedLiveViewGuard(this.taskId, this.runId);
+      if (this.#closed) return;
+      if (!guard.ok) {
+        logDecision(`ws_closed_${guard.code}`);
+        this.close(1008);
+        return;
+      }
+      const checked = await checkLiveGrant(binding, this.sessionHash);
+      if (!checked.ok) {
+        logDecision(`ws_closed_${checked.code}`);
+        this.close(1008);
+      }
+    } catch {
+      this.close(1011);
+    }
+  }
+
+  async #onClientData(chunk: Buffer): Promise<void> {
     if (this.#closed) return;
     let messages: WsMessage[];
     try {
@@ -363,6 +433,8 @@ class RelayConnection {
             this.dropped++;
             break;
           }
+          await this.#revalidate();
+          if (this.#closed) return;
           this.#upstream.write(encodeWsFrame(WS_OP.TEXT, Buffer.from(forwarded, "utf8"), true));
           break;
         }
@@ -616,6 +688,20 @@ async function openRelay(
     rejectUpgrade(socket, 404, "live_view_not_bound");
     return;
   }
+  const checked = await checkLiveGrant(binding, decision.sessionHash);
+  if (!checked.ok) {
+    up.socket.destroy();
+    rejectUpgrade(socket, checked.status, checked.code);
+    return;
+  }
+  const lastSeenRaw = new URL(_req.url ?? "/", "http://relay.invalid").searchParams.get("last_seen");
+  const lastSeen = lastSeenRaw !== null && /^\d{1,15}$/.test(lastSeenRaw) ? Number(lastSeenRaw) : 0;
+  const page = await readLiveEvents(binding, decision.sessionHash, lastSeen);
+  if (!page) {
+    up.socket.destroy();
+    rejectUpgrade(socket, 503, "live_view_guard_unavailable");
+    return;
+  }
   onOwnerRevoked(onRevoked);
   socket.write(
     [
@@ -637,7 +723,52 @@ async function openRelay(
   });
   register(conn);
   logDecision("ws_opened");
-  conn.start(head, up.leftover);
+  conn.setLastSeen(lastSeen);
+  if (!(await conn.validate())) return;
+  if (page.plan.kind === "reset") {
+    conn.setLastSeen(page.plan.latest_seq);
+    socket.write(
+      encodeWsFrame(WS_OP.TEXT, Buffer.from(JSON.stringify({ type: "live_reset", latest_seq: page.plan.latest_seq }))),
+    );
+    const port = decision.path.split("/")[3];
+    for (const path of [`/api/session/${port}/status`, `/api/session/${port}/tabs`]) {
+      try {
+        const snapshot = await upstreamGet(upstream, path);
+        const current = liveViewBinding(decision.sessionHash);
+        if (!current || current !== binding || !(await conn.validate())) {
+          conn.close(1008);
+          return;
+        }
+        if (snapshot.status === 200 && !conn.closed)
+          socket.write(
+            encodeWsFrame(
+              WS_OP.TEXT,
+              Buffer.from(
+                JSON.stringify({
+                  type: "live_snapshot",
+                  path: path.endsWith("/tabs") ? "tabs" : "status",
+                  value: JSON.parse(snapshot.body.toString("utf8")),
+                }),
+              ),
+            ),
+          );
+      } catch {
+        /* A missing dashboard snapshot does not authorize any other data. */
+      }
+    }
+  } else {
+    for (const event of page.events) {
+      if (conn.closed || event.seq <= lastSeen) continue;
+      conn.setLastSeen(event.seq);
+      socket.write(
+        encodeWsFrame(
+          WS_OP.TEXT,
+          Buffer.from(JSON.stringify({ type: "live_event", seq: event.seq, body: event.body })),
+        ),
+      );
+    }
+  }
+  if (!conn.closed) conn.start(head, up.leftover);
 }
 
 /** http.Server の `upgrade` に relay を付ける（`server.js` が呼ぶ）。 */

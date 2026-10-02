@@ -8,6 +8,27 @@ use task_api::types::GenreConfigView;
 use task_core::{DaemonMode, InstanceRole, SharedRole, SqliteStore, TaskStore};
 use time::OffsetDateTime;
 
+#[test]
+fn browser_specialist_provider_uses_configured_acp_harness() {
+    let cfg: Config = toml::from_str(
+        r#"
+[[providers]]
+id = "browser-specialist-test"
+adapter = "browser-specialist"
+tiers = ["standard"]
+command = "scripted-acp"
+args = ["acp"]
+"#,
+    )
+    .unwrap();
+    cfg.validate().unwrap();
+    let adapters = build_adapters(&cfg);
+    assert_eq!(
+        adapters["browser-specialist-test"].id(),
+        "browser-specialist"
+    );
+}
+
 // ---- ADR-0033 D1（Phase 23）: 組織図の種蒔き ----
 
 /// 空の DB には例の組織図（11 ノード）が入り、2 回目は何もしない（以後は DB が正）。

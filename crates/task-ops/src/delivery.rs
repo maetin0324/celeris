@@ -16,7 +16,7 @@ pub struct DeliveryPolicy {
     pub default_departments: BTreeMap<String, String>,
 }
 
-/// ADR-0099 D1: only an observed owner can supply a department.
+/// ADR-0117 D1: only an observed owner can supply a department.
 fn resolve_department(
     store: &dyn TaskStore,
     task: &Task,
@@ -106,7 +106,7 @@ fn resolve_department(
         .and_then(|id| department(id)))
 }
 
-/// ADR-0099 D2: `begin` が delivery を作らない理由。`Silent` は従来どおり何も残さない対象外。
+/// ADR-0117 D2: `begin` が delivery を作らない理由。`Silent` は従来どおり何も残さない対象外。
 enum Skip {
     Silent,
     Report {
@@ -291,7 +291,7 @@ fn prepare(
     }))
 }
 
-/// ADR-0099 D3: `DeliverySkipped` を (task, reason, head) ごとに高々 1 件積む。積んだら `true`。
+/// ADR-0117 D3: `DeliverySkipped` を (task, reason, head) ごとに高々 1 件積む。積んだら `true`。
 fn record_skip(
     store: &dyn TaskStore,
     task: &Task,

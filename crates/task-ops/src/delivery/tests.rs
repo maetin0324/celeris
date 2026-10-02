@@ -408,7 +408,7 @@ struct SkipFixture {
     _dir: tempfile::TempDir,
 }
 
-/// ADR-0099 D2: 対象案件・repo 1 つ・assignee 無しの root（既定部署なし）。
+/// ADR-0117 D2: 対象案件・repo 1 つ・assignee 無しの root（既定部署なし）。
 fn skip_fixture() -> SkipFixture {
     let store = SqliteStore::open_in_memory().unwrap();
     let now = time::OffsetDateTime::now_utc();

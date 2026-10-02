@@ -76,3 +76,28 @@ export function signAttestation(input: AttestationInput, nowMs = Date.now()): Hu
   const signature = sign(null, Buffer.from(payload, "utf8"), key).toString("hex");
   return { payload, signature };
 }
+
+/** Short-lived assertion for the task-scoped live relay. */
+export function signLiveAssertion(
+  input: {
+    taskId: string;
+    runId: string;
+    browserSessionId: string;
+    ownerSessionId: string;
+    originOk: boolean;
+  },
+  nowMs = Date.now(),
+): HumanAttestation | null {
+  const key = attestationKey();
+  if (!key) return null;
+  const payload = JSON.stringify({
+    task_id: input.taskId,
+    run_id: input.runId,
+    browser_session_id: input.browserSessionId,
+    owner_session_id: input.ownerSessionId,
+    owner_session: true,
+    origin_ok: input.originOk,
+    expires_at: Math.floor(nowMs / 1000) + ATTESTATION_TTL_SECS,
+  });
+  return { payload, signature: sign(null, Buffer.from(payload), key).toString("hex") };
+}

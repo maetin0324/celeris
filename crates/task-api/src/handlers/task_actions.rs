@@ -133,8 +133,10 @@ pub(super) async fn cancel(
     let CancelBody { expected_status } = read_json(body, true).await?;
     let result = state
         .blocking(move |store| {
-            task_ops::gate::cancel(store, id, expected_status)
-                .map_err(|e| ops_problem(store, e, Some("cancel")))
+            let result = task_ops::gate::cancel(store, id, expected_status)
+                .map_err(|e| ops_problem(store, e, Some("cancel")))?;
+            crate::browser_control::stop_task(store, &id.to_string())?;
+            Ok(result)
         })
         .await?;
     Ok(json_response(StatusCode::OK, &result))

@@ -364,6 +364,9 @@ const browserEvents: EventsPage = {
 };
 
 function serveLiveTask() {
+  mock.on("POST", "/api/v1/tasks/T1/browser/live/R1/S1/grant", (_req, res) =>
+    sendJson(res, 200, { grant_id: "G1", expires_at: 4_000_000_000 }),
+  );
   mock.on("GET", "/api/v1/tasks", (_req, res) => sendJson(res, 200, { items: [{ id: "T1", status: "running" }] }));
   mock.on("GET", "/api/v1/tasks/T1", (_req, res) => sendJson(res, 200, runningTask));
   mock.on("GET", "/api/v1/tasks/T1/events", (_req, res) => sendJson(res, 200, browserEvents));

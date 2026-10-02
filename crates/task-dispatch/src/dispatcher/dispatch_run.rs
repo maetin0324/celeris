@@ -816,6 +816,128 @@ impl Dispatcher {
         }
     }
 
+    /// ADR-0107 D2: browser fallback candidates for one run. Only providers that are enabled
+    /// (configured in the policy table with a non-zero concurrency, not an account pool), healthy
+    /// (not in cooldown) and whose adapter id is conformant in the runner-recorded ledger are
+    /// offered, ordered specialist first and one per adapter id. A `CredentialUse` policy never
+    /// falls back (credential waits and auth sections must not be replayed). When a browser task
+    /// ends up without any candidate the refusal is recorded as a progress event.
+    pub(super) fn browser_fallback_candidates(
+        &self,
+        task_id: TaskId,
+        run_id: &str,
+        primary_provider: &ProviderId,
+        primary_adapter: &str,
+        record: Option<&std::path::Path>,
+    ) -> Vec<Arc<dyn WorkerAdapter>> {
+        let task = match self.store.get(task_id) {
+            Ok(Some(task)) => task,
+            _ => return Vec::new(),
+        };
+        if !task_core::browser::requests_browser(&task.skills) {
+            return Vec::new();
+        }
+        let credential_use = self
+            .store
+            .browser_task_policy_get(task_id)
+            .ok()
+            .flatten()
+            .is_some_and(|p| {
+                p.allowed_actions
+                    .contains(&task_core::BrowserAction::CredentialUse)
+            });
+        if credential_use {
+            self.record_browser_fallback_refusal(
+                task_id,
+                run_id,
+                "browser fallback refused: CredentialUse policy is never replayed on another backend",
+            );
+            return Vec::new();
+        }
+        let conformant = match record.map(task_worker::browser::conformant_backend_ids) {
+            Some(Ok(ids)) => Some(ids),
+            Some(Err(_)) | None => None,
+        };
+        let cooling: std::collections::HashSet<ProviderId> = self
+            .policy
+            .cooldowns(Instant::now())
+            .into_iter()
+            .map(|c| c.provider)
+            .collect();
+        let mut excluded: Vec<String> = Vec::new();
+        let mut candidates: Vec<(String, ProviderId, Arc<dyn WorkerAdapter>)> = Vec::new();
+        let mut providers: Vec<(&ProviderId, &Arc<dyn WorkerAdapter>)> =
+            self.adapters.iter().collect();
+        providers.sort_by(|a, b| a.0.cmp(b.0));
+        for (provider, adapter) in providers {
+            let id = adapter.id();
+            if provider == primary_provider
+                || id == primary_adapter
+                || !task_worker::browser::BROWSER_BACKEND_IDS.contains(&id)
+            {
+                continue;
+            }
+            let reason = if self.account_pool_providers.contains(provider)
+                || self.policy.concurrency_limit(provider.clone()) == 0
+            {
+                Some("disabled")
+            } else if cooling.contains(provider) {
+                Some("unhealthy")
+            } else if !conformant.as_ref().is_some_and(|ids| ids.contains(id)) {
+                Some("not_conformant")
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => excluded.push(format!("{provider}={reason}")),
+                None => candidates.push((id.to_string(), provider.clone(), Arc::clone(adapter))),
+            }
+        }
+        candidates.sort_by(|a, b| {
+            (a.0 != "browser-specialist", &a.0, &a.1).cmp(&(
+                b.0 != "browser-specialist",
+                &b.0,
+                &b.1,
+            ))
+        });
+        candidates.dedup_by(|a, b| a.0 == b.0);
+        if candidates.is_empty() {
+            let ledger = if conformant.is_some() {
+                "ledger loaded"
+            } else {
+                "ledger unavailable"
+            };
+            self.record_browser_fallback_refusal(
+                task_id,
+                run_id,
+                &format!(
+                    "browser fallback refused: no enabled, healthy, conformant alternate backend ({ledger}; excluded: [{}])",
+                    excluded.join(", ")
+                ),
+            );
+        }
+        candidates
+            .into_iter()
+            .map(|(_, _, adapter)| adapter)
+            .collect()
+    }
+
+    fn record_browser_fallback_refusal(&self, task_id: TaskId, run_id: &str, msg: &str) {
+        let ev = Event::WorkerProgress {
+            run_id: run_id.to_string(),
+            msg: msg.to_string(),
+            kind: None,
+            tool: None,
+            summary: None,
+            detail: None,
+            truncated: false,
+            error: false,
+        };
+        if let Err(e) = self.store.append_event(task_id, &ev) {
+            tracing::warn!(task_id = %task_id, error = %e, "failed to record the browser fallback refusal (ADR-0107 D2)");
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_worker(
         &self,
@@ -834,6 +956,15 @@ impl Dispatcher {
         container: ContainerDecision,
     ) -> JoinHandle<()> {
         let store = self.store.clone();
+        // ADR-0107 D2: the dispatcher builds the browser fallback list from provider state and
+        // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0107).
+        let browser_candidates = self.browser_fallback_candidates(
+            task_id,
+            &run_id,
+            &provider,
+            adapter.id(),
+            task_worker::browser::conformance_record_path().as_deref(),
+        );
         let tx = self.tx.clone();
         let lease = LeaseRenewal {
             ttl: self.config.idle_timeout + self.config.lease_grace,
@@ -859,6 +990,7 @@ impl Dispatcher {
             let result = run_worker(
                 store,
                 adapter,
+                browser_candidates,
                 task_id,
                 execution_tier,
                 dir,

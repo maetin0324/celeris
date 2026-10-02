@@ -21,6 +21,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | 実行計画（ExecutionPlan/WorkUnit/Run） | task-core::execution_plan | `crates/task-core/src/execution_plan.rs`（`execution_plan/{validation,scheduling}.rs`） | [ADR-0072](adr/0072-task-execution-decomposition.md), [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
 | 再帰task木（leaf/子task, gate, 上限, 生存確認） | task-core::tree | `crates/task-core/src/tree.rs`（`tree/{gate,limits,approval,liveness}.rs`） | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | Browser capability の待ち状態 | task-core::browser_wait | `crates/task-core/src/browser_wait.rs`（`browser_wait/sql.rs`） | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
+| Browser 制御・identity・live proxy の状態 | task-core | `crates/task-core/src/{browser_control,browser_identity,browser_live,browser_isolation}.rs` | [ADR-0099](adr/0099-browser-phase3-control-lease.md), [ADR-0100](adr/0100-browser-phase3-live-proxy-acl.md), [ADR-0101](adr/0101-browser-phase3-identity-contract.md) |
 | 組織・案件・報告 | task-core::org | `crates/task-core/src/org.rs`, `crates/task-core/src/store/{org,projects}.rs` | [ADR-0033](adr/0033-organization-projects-and-reports.md) |
 | ワークスペース（案件×リポジトリ） | task-core::repos | `crates/task-core/src/repos.rs`, `crates/task-core/src/store/repos.rs` | [ADR-0043](adr/0043-workspaces.md) |
 | モデル/供給層ルーティング・quota | task-core | `crates/task-core/src/{routing,model_routing,model_policy,quota}.rs` | [ADR-0069](adr/0069-routing-four-layers.md) |
@@ -33,6 +34,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 |---|---|---|---|
 | Dispatcher facade（tick・起動/停止順） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher.rs`（module map はこの doc comment） | [ADR-0082](adr/0082-dispatcher-module-split.md), [記録](progress/phase-P0-dispatcher.md) |
 | WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs` | [ADR-0074](adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| Browser backend の適合判定・fallback 候補 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{dispatch_run,worker_task}.rs` | [ADR-0106](adr/0106-browser-phase4-conformance-dispatch.md), [ADR-0107](adr/0107-browser-fallback-candidate-preparation.md) |
 | 木の子task の gate・一括作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/tree_units.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | 委譲/承認の子task 作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/child_tasks.rs` | [DESIGN §5.2](DESIGN.md#52-dispatcher-task-dispatch) |
 | provider/account 選択・quota 見積り | task-dispatch | `crates/task-dispatch/src/{dispatcher/provider_select.rs,dispatcher/quota_book.rs,accounts.rs}` | [ADR-0069](adr/0069-routing-four-layers.md) |
@@ -56,6 +58,8 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | Codex / ACP adapter | task-worker | `crates/task-worker/src/{codex,acp}.rs` | [DESIGN §5.4](DESIGN.md#54-adapters), [Phase 6 記録](progress/phase-001-050.md) |
 | PaperQA2 / Local Deep Research adapter | task-worker | `crates/task-worker/src/{paperqa,local_deep_research}.rs`（`paperqa/render.rs`） | [DESIGN §5.4](DESIGN.md#54-adapters) |
 | Browser capability（policy/credential 越境） | task-worker::browser | `crates/task-worker/src/browser{,_credential,_policy}.rs` | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
+| Browser 隔離 runtime・supervisor・egress | task-worker::browser_runtime | `crates/task-worker/src/{browser_runtime,browser_supervisor,browser_egress}.rs` | [ADR-0102](adr/0102-browser-phase4-isolation-injection-routing.md), [ADR-0105](adr/0105-browser-p4a-same-uid-bwrap-runtime.md), [ADR-0108](adr/0108-browser-p4a-relay-supervisor-launch-restore.md) |
+| Browser CDP 注入・共有・操作 gate | task-worker | `crates/task-worker/src/{browser_cdp_sink,browser_shared_cdp,browser_action}.rs` | [ADR-0109](adr/0109-browser-p4b-injection-ipc-cdp-sink.md), [ADR-0110](adr/0110-browser-p4b-h3-shared-cdp-trusted-selector.md), [ADR-0113](adr/0113-browser-p3c-control-gate-action-server.md) |
 | scratch/build cache（GC は別責務） | task-worker | `crates/task-worker/src/{scratch.rs,scratch/gc.rs,build_cache.rs,tiered.rs}` | [ADR-0075](adr/0075-tiered-build-cache.md) |
 | ワークスペース/worktree 準備 | task-worker | `crates/task-worker/src/{workspace.rs,local_worktree.rs}` | [ADR-0043](adr/0043-workspaces.md) |
 | worker の run から DB を読み取り専用（namespace・`launch`） | task-worker::db_guard | `crates/task-worker/src/db_guard.rs` | [ADR-0095](adr/0095-worker-runs-see-the-db-read-only.md) |
@@ -81,6 +85,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | domain 別 handler（tasks/projects/accounts/…） | task-api::handlers | `crates/task-api/src/handlers/*.rs` | [DESIGN §5.10](DESIGN.md#510-api-層task-apiadr-0013) |
 | SSE（イベント購読） | task-api::sse | `crates/task-api/src/sse.rs` | [DESIGN §5.10](DESIGN.md#510-api-層task-apiadr-0013) |
 | 決定・木・実行系のサブAPI | task-api | `crates/task-api/src/{decisions,tree,execution}.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
+| Browser 制御・identity・Live View API | task-api | `crates/task-api/src/{browser_control,browser_identity,browser_live}.rs` | [ADR-0099](adr/0099-browser-phase3-control-lease.md), [ADR-0100](adr/0100-browser-phase3-live-proxy-acl.md), [ADR-0101](adr/0101-browser-phase3-identity-contract.md) |
 
 ## celeris — daemon 本体（配線・設定・自己更新）
 
@@ -110,6 +115,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | Task detail 画面（loader/action + タブ部品） | gui::app | `gui/app/{routes/tasks.$id.tsx,celeris/task-detail.server.ts,components/task-detail}` | [DESIGN Phase 9](DESIGN.md#phase-9-gui-のための基盤と-http-api-層) |
+| Browser 操作・本人承認・Live View | gui::app | `gui/app/{routes/browser.control.ts,components/BrowserRunsPanel.tsx,celeris/browser-live.server.ts}` | [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md), [ADR-0099](adr/0099-browser-phase3-control-lease.md), [ADR-0100](adr/0100-browser-phase3-live-proxy-acl.md) |
 | 組織図・アカウント・案件の画面 | gui::routes | `gui/app/routes/{org,accounts,projects.$id}.tsx` | [DESIGN Phase 9](DESIGN.md#phase-9-gui-のための基盤と-http-api-層) |
 | 新 SPA（旧 GUI を daemon 遅延から切り離す） | web (設計中) | 未着手（Phase 0 は設計のみ） | [ADR-0081](adr/0081-web-spa-frontend.md), [implementation plan](web/implementation-plan.md) |
 

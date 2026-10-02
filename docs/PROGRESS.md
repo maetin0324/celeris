@@ -212,3 +212,15 @@ main（HEAD `2bd7df3b`）への merge-renumber・delivery-index 統合後の最�
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --lib` → exit 0（合計 1335 passed / 0 failed）。
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
 - `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。
+
+### ADR 番号振り直し後の最終検証 — 2026-10-02（work unit `verify-land2`）
+
+前回 reviewer の指摘（ADR-0117 の番号衝突、`instance_handoff` 失敗未確認のまま `cargo test --workspace` が中断）に対応。`docs/adr/` は振り直し済みで、root delivery の ADR は `0119-root-delivery-without-assignee.md`、`0117-review-human-decisions-and-check-results.md` と重複なし（`0078` の重複はこの task 以前から main に存在する無関係な既存衝突で、範囲外のため変更していない）。main（`188fa27409f11305414b21d048f0f0e260c6efdb`）は既に HEAD の祖先。
+
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo test --workspace` → exit 0（`instance_handoff` 8 件を含め全テストバイナリで `test result: ok`、失敗 0。`a_stale_heartbeat_promotes_the_standby` が 60 秒超過の警告を出すが結果は ok）。
+- `cargo test -p celeris --test instance_handoff` を単独で 3 回連続実行 → いずれも exit 0（8 passed / 0 failed、各約 60.5 秒）。前回 reviewer が見た失敗は本ブランチの変更が原因ではなく、再現しなかった（負荷依存の既存 flaky として記録。今回は user namespace 制限も再現せず）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `gui`: `pnpm install --frozen-lockfile` → exit 0、`pnpm run typecheck`（`react-router typegen && tsc -b`）→ exit 0、`pnpm run test`（vitest）→ exit 0（85 files / 1250 tests passed）。
+- `git merge-tree --write-tree main HEAD` → 衝突なしで tree を生成（exit 0）。`git merge-base --is-ancestor main HEAD` → exit 0。
+- `git status` / `git diff --stat` ともに本行追記以外の変更なし。本番 DB・本番 host は操作していない。

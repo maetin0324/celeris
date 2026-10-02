@@ -93,3 +93,64 @@ GUI lint で検出した lazy import の重複を解消してから、以下を 
 
 検証に使った依存関係は `cd gui && pnpm install --frozen-lockfile` で導入した。
 release.sh / verify.sh の結果と最終 SHA は WorkUnit の `artifacts/release.md` に記録する。本番昇格は人が GUI で行う。
+
+## 2026-10-02 追記: phase3_control の負荷下での繰り返し確認（task 01M3XSER5YCVRWJTCHP0XGB8AP、stress-verify WorkUnit）
+
+`phase3_control_converges_rejects_competition_and_cancel_stops` の flaky（`fix-control-test`、commit
+`dafffeb1`）の修正後ブランチ（HEAD `775251d7`）で、負荷下での再現性を確認した。
+
+根因は daemon の tick 時刻依存ではなく、celeris が `SO_REUSEPORT` で bind するため並走する別の e2e テストが
+同じポートを選べてしまい、別 DB の daemon に `agent/begin` が届くこと（詳細は `dafffeb1` のコミットメッセージ）。
+修正は `tests/e2e/src/lib.rs` に `PortReservation` を追加して空きポートを予約し、他プロセスの bind(0) から
+見えなくした。本 WorkUnit の役割は、その修正が負荷下で安定して通ることを確かめ、再現手順を
+`scripts/dev/stress-e2e-phase3.sh` として残すこと。
+
+### 負荷のかけ方
+
+`scripts/dev/stress-e2e-phase3.sh`（dash 互換、引数なしで実行）:
+
+1. `nproc`（本機では 24）本の `timeout <cap> sh -c 'while :; do :; done'` を並走させ CPU を飽和させる。
+2. バックグラウンドで `cargo test -p task-dispatch --lib` を失敗を無視しながら繰り返し実行し、別クレートの
+   test 実行・ビルドキャッシュ参照による負荷を足す。
+3. 上記の負荷をかけたまま `cargo test -p e2e --test api_scenarios phase3_` を 20 回連続で実行（1 回でも
+   落ちたら即 `exit 1` し、その回の出力を表示）。
+4. 続けて同じコマンドを 8 プロセス同時に起動し、全プロセスの exit code を集計（1 つでも非 0 なら
+   `exit 1` で各プロセスのログを表示）。
+5. `trap` で CPU 負荷プロセスと `cargo test` 負荷プロセスを `EXIT INT TERM` で必ず kill・wait し、作業用
+   一時ディレクトリも削除する。
+
+いずれも `set -eu` + `trap cleanup EXIT INT TERM` で、途中で落ちても負荷プロセスが残らないようにしている。
+
+### 実行結果（HEAD `775251d7`、修正後ブランチ）
+
+`sh scripts/dev/stress-e2e-phase3.sh` を 2 回実行し、どちらも exit 0。
+
+| 実行 | 結果 | 所要時間 | 備考 |
+| --- | --- | --- | --- |
+| 1 回目 | exit 0、20 serial + 8 parallel すべて ok | 2m43s（real）、user 47m38s | `time` で計測 |
+| 2 回目 | exit 0、20 serial + 8 parallel すべて ok | 計測なし（ログのみ確認） | 1 回目と合わせ phase3_ グループ（4 試験）を 56 回分（(20+8)×2）負荷下で実行、すべて pass |
+
+実行後に `ps aux` で CPU 負荷プロセス（`while :; do :; done`）が残っていないことを確認した（0 件）。
+
+### 修正前 commit での再現
+
+`fix-control-test` の親（`7f3482a3`、SO_REUSEPORT の修正前）での再現は、この run では行っていない。
+理由: 修正者が `dafffeb1` のコミットメッセージに、使い捨ての実験テストで「同じポートに 2 つ目の celeris を
+起こし begin 直後の状態を読むと 20 回中 7 回 in_flight=0」という再現記録をすでに残しており、根因（ポート
+衝突）も製品コードの該当箇所（`bind_reuseport`、ADR-0040 D4）も特定済みだったため、同じ検証を別 worktree で
+繰り返すコストに見合わないと判断した。必要なら `git worktree add <path> 7f3482a3` で親 commit を取り出し、
+同じ `scripts/dev/stress-e2e-phase3.sh` を走らせれば再現確認できる。
+
+### 試験の意図への影響
+
+`scripts/dev/stress-e2e-phase3.sh` はテストのコードやアサーションを一切変更していない（既存の
+`cargo test -p e2e --test api_scenarios phase3_` をそのまま繰り返し・並走させるだけ）。収束前 takeover の
+`not_converged` 拒否・競合の `not_lease_holder` 拒否・`cancel` での停止という試験の意図は変更していない。
+
+### stress-verify run 01M3XVJ3Y7R5H0MX9AK3BXRNZH の追記
+
+2026-10-02 の再確認では `time sh scripts/dev/stress-e2e-phase3.sh` が exit 1（real 43.217s）となった。
+CPU 負荷 24 本と `task-dispatch` のバックグラウンド test を起動した後、phase3 の serial 1 回目で 4 試験すべてが
+`target/debug/celerisctl not found; run cargo test --workspace` により失敗した。`cargo test ... --no-run` は e2e の試験
+バイナリしか生成せず、fixture が起動する `celerisctl` を用意しないため、受け入れ条件の確認には至っていない。
+スクリプト実行の `EXIT` trap 後に負荷プロセスが残っていないことを確認した。この失敗を受けて追加修正・再実行はしていない。

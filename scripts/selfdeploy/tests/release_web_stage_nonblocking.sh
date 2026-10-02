@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P6-02（ADR-0096 D3）: release.sh の web/ の段は**非 blocking**。
+# P6-02（web ADR-W3 D3）: release.sh の web/ の段は**非 blocking**。
 #   (1) web/ の段（web-pnpm-install / typecheck / test / release）が全部通る → リリースが作られ、gate.json の `web.ok`
 #       が true、リリースに web/<tarball> と展開済みの web/app/（offline の prod install 済み）がある。
 #   (2) web/ の段が落ちる（web-pnpm-test が exit 1）→ **それでもリリースは作られ** gate.json は `ok: true`、

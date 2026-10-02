@@ -4,15 +4,15 @@
 tasks: [01M3TG9K4VV5Z4GZ0WY4DCVBZS, 01M3W79QE2ZD22YW7P499PZKPP]
 ---
 
-P6-02（ADR-0096）。gui/（`:7700`）と web/（ADR-0081 の SPA + gateway）を**同じ celeris に対して並行に**動かす。
+P6-02（web ADR-W3）。gui/（`:7700`）と web/（ADR-0081 の SPA + gateway）を**同じ celeris に対して並行に**動かす。
 gui/ の unit・配信・昇格は変えない。人の判断待ち（H2・H3・H7・H10）は「決まるまでの扱い」で進めている
-（implementation-plan.md §3、ADR-0096）。
+（implementation-plan.md §3、web ADR-W3）。
 
 ## 1. 何が入ったか
 
 | もの | 場所 | 要点 |
 |---|---|---|
-| ADR | `docs/adr/0096-web-parallel-operation.md` | H2（port）・H3（cookie）・H7（gate は gui/ のまま）・H10（staging は人） |
+| ADR | [web ADR-W3](adr/web-0003-parallel-operation.md) | H2（port）・H3（cookie）・H7（gate は gui/ のまま）・H10（staging は人） |
 | unit | `deploy/systemd/celeris-web@.service` | `%i` = release の sha12。`~/.local/celeris/releases/<sha12>/web/app/` から `node server/index.js`。bind の既定は `127.0.0.1:7720`。上書きは `~/.config/celeris/web.env` |
 | install-units | `scripts/selfdeploy/install-units.sh` | `celeris-web@.service` も `~/.config/systemd/user/` に置く（置くだけ。enable は人） |
 | release の web 段 | `scripts/selfdeploy/release.sh` | gui/ の gate の後ろに `web-pnpm-install` → `web-pnpm-typecheck` → `web-pnpm-test` → `web-pnpm-release`。**非 blocking**。通れば release の `web/<tarball>` と展開済み `web/app/`（`pnpm install --prod --offline` 済み） |

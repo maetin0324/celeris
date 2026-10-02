@@ -1,4 +1,4 @@
-# ADR-0082: ADR-0081 D6 の表に無い task.event 12 種の invalidate 範囲
+# web ADR-W1: ADR-0081 D6 の表に無い task.event 12 種の invalidate 範囲
 
 ---
 tasks: [01M3RQSXY0306GYMM19G5VTEQE]

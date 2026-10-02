@@ -37,7 +37,7 @@ curl -fsS http://127.0.0.1:7720/healthz
 journalctl --user -u celeris-web@<sha12>.service -n 50
 ```
 
-`/healthz` の `release` が `<sha12>` と一致することを確認する。LAN 中継を再起動する場合は `systemctl --user start celeris-web-lan.socket` を使う。公開先 URL は `http://192.168.1.103:7721/`、認証情報は `~/.config/celeris/web.password` にある。selfdeploy の `scripts/selfdeploy/release.sh` は gui/ の gate の後に web 段を非 blocking で実行し、成功した release に `web/app/` を作る。`gate_ok` だけでは web 段の成功を示さないため、必ず `gate.json` の `web.ok` を見る。`verify.sh` と `promote.sh` は web gateway を起動しない（[ADR-0096](../adr/0096-web-parallel-operation.md) D3）。
+`/healthz` の `release` が `<sha12>` と一致することを確認する。LAN 中継を再起動する場合は `systemctl --user start celeris-web-lan.socket` を使う。公開先 URL は `http://192.168.1.103:7721/`、認証情報は `~/.config/celeris/web.password` にある。selfdeploy の `scripts/selfdeploy/release.sh` は gui/ の gate の後に web 段を非 blocking で実行し、成功した release に `web/app/` を作る。`gate_ok` だけでは web 段の成功を示さないため、必ず `gate.json` の `web.ok` を見る。`verify.sh` と `promote.sh` は web gateway を起動しない（[web ADR-W3](adr/web-0003-parallel-operation.md) D3）。
 
 ### PC とスマホで確認する
 

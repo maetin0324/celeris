@@ -1,4 +1,4 @@
-# ADR-0083: /projects/:id の計画・途中目標の intent を ADR-0079 の後継 API に写す
+# web ADR-W2: /projects/:id の計画・途中目標の intent を ADR-0079 の後継 API に写す
 
 ---
 tasks: [01M3SY0ZF3NNAMBNGTTZPEMJYK]

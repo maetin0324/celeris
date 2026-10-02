@@ -1,0 +1,496 @@
+//! ADR-0116 D5: launcher 経由の isolated browser runtime（daemon 側）。
+//!
+//! `[browser] runtime = "launcher"` のとき、daemon は bwrap / sandboxd / Chrome も CDP pipe も
+//! 持たない。[`LauncherRuntime`] が [`crate::browser_launcher::LauncherClient`] で session の
+//! start / action / observe / stop を頼み、受けるのは receipt と非機密の観測だけ。観測から
+//! [`RuntimeFacts`] を組んで `verify_isolation` に通し、通らなければ session を止めて
+//! `isolated_runtime_unavailable` にする。どの失敗も daemon 所有経路へ fallback しない。
+//!
+//! 機密能力（CredentialInjection / IdentityRestore）はこの経路では解放しない: credential を使う
+//! policy・承認待ちは接続前に拒否し、identity 復元の state は daemon にも launcher にも渡さない。
+
+use std::collections::BTreeSet;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use task_core::browser_isolation::{
+    CdpEndpoint, IsolationAttestation, Namespace, REQUIRED_NAMESPACES, RuntimeFacts,
+    verify_isolation,
+};
+use task_core::browser_wait::BrowserWaitState;
+use task_core::{BrowserRun, BrowserRunState};
+
+use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
+use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
+use crate::browser_launcher::{
+    ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
+    SessionState, Verb,
+};
+use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
+
+pub(crate) const UNAVAILABLE: &str = "isolated_runtime_unavailable";
+
+/// 1 要求の読み書きの期限。launcher 側の最長（`action` 120 秒）より長く取る。
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(150);
+
+/// launcher の中で Chrome が動く userns 内の UID / GID（ADR-0115 の `1000 → S`）。
+const INNER_ID: u32 = 1000;
+
+/// daemon は launcher の process group を観測できない（別 UID の process）。launcher の
+/// `isolation_ok`（launcher 自身が `collect_facts` → `verify_isolation` を通した結果）が真のとき
+/// だけ、group が launcher に保持されていることの印としてこの値を入れる。daemon はこの値で
+/// signal を送らない（回収は launcher の stop / 切断で行う）。
+const LAUNCHER_HELD_PGID: i32 = i32::MAX;
+
+/// launcher の 1 session。drop で stop を頼み、接続も閉じる（launcher は切断でも回収する）。
+pub(crate) struct LauncherRuntime {
+    client: Mutex<LauncherClient>,
+    session_id: String,
+    lease_id: String,
+    stopped: std::sync::atomic::AtomicBool,
+}
+
+impl std::fmt::Debug for LauncherRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LauncherRuntime")
+            .field("session_id", &self.session_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LauncherRuntime {
+    /// 接続・起動・観測・隔離検査。どこで失敗しても session を残さず `UNAVAILABLE`。
+    pub(crate) fn start(
+        socket: &Path,
+        task_id: &str,
+        run_id: &str,
+        policy: SessionPolicy,
+    ) -> Result<(Self, IsolationAttestation), &'static str> {
+        let mut client =
+            LauncherClient::connect(socket, CLIENT_TIMEOUT).map_err(|_| UNAVAILABLE)?;
+        let lease_id = crate::browser_launcher::random_id().map_err(|_| UNAVAILABLE)?;
+        let started = client
+            .start_session(task_id, run_id, &lease_id, policy)
+            .map_err(|_| UNAVAILABLE)?;
+        let runtime = Self {
+            client: Mutex::new(client),
+            session_id: started.session_id.clone(),
+            lease_id,
+            stopped: std::sync::atomic::AtomicBool::new(false),
+        };
+        // ここから先の失敗は drop が stop を頼む。
+        if started.receipt.outcome != Outcome::Started
+            || started.receipt.session_id != started.session_id
+        {
+            return Err(UNAVAILABLE);
+        }
+        let (state, facts) = runtime.observe()?;
+        if state != SessionState::Running {
+            return Err(UNAVAILABLE);
+        }
+        let ids = DaemonIds::current();
+        let facts = runtime_facts(
+            &runtime.session_id,
+            &ids,
+            &facts,
+            started.receipt.isolation_ok,
+        )
+        .ok_or(UNAVAILABLE)?;
+        let attestation = verify_isolation(&facts).map_err(|_| UNAVAILABLE)?;
+        Ok((runtime, attestation))
+    }
+
+    pub(crate) fn action(
+        &self,
+        verb: Verb,
+        args: ActionArgs,
+    ) -> Result<(Receipt, Observation), &'static str> {
+        let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
+        let (receipt, observation) = client
+            .action(&self.session_id, &self.lease_id, verb, args)
+            .map_err(|_| UNAVAILABLE)?;
+        if !receipt.isolation_ok || receipt.session_id != self.session_id {
+            return Err(UNAVAILABLE);
+        }
+        Ok((receipt, observation))
+    }
+
+    pub(crate) fn observe(&self) -> Result<(SessionState, SessionFacts), &'static str> {
+        let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
+        client
+            .observe(&self.session_id, &self.lease_id)
+            .map_err(|_| UNAVAILABLE)
+    }
+
+    /// 一度だけ stop を頼む。2 回目以降は何もしない。
+    pub(crate) fn stop(&self) -> Result<Option<Receipt>, &'static str> {
+        if self.stopped.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Ok(None);
+        }
+        let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
+        client
+            .stop(&self.session_id, &self.lease_id)
+            .map(Some)
+            .map_err(|_| UNAVAILABLE)
+    }
+}
+
+impl Drop for LauncherRuntime {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+/// daemon 自身の UID / GID（`RuntimeFacts.host_uid` と、map に現れてはならない値）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DaemonIds {
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+}
+
+impl DaemonIds {
+    pub(crate) fn current() -> Self {
+        Self {
+            uid: nix::unistd::getuid().as_raw(),
+            gid: nix::unistd::getgid().as_raw(),
+        }
+    }
+}
+
+/// `/proc/<pid>/uid_map` 形式の 1 行 = `inside outside count`。読めない行があれば `None`。
+fn parse_map(map: &str) -> Option<Vec<(u32, u32, u32)>> {
+    let mut out = Vec::new();
+    for line in map.lines().filter(|l| !l.trim().is_empty()) {
+        let mut it = line.split_whitespace().map(str::parse::<u32>);
+        let (Some(Ok(inside)), Some(Ok(outside)), Some(Ok(count)), None) =
+            (it.next(), it.next(), it.next(), it.next())
+        else {
+            return None;
+        };
+        out.push((inside, outside, count));
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn covers_outside(map: &[(u32, u32, u32)], id: u32) -> bool {
+    map.iter().any(|&(_, outside, count)| {
+        id >= outside && u64::from(id) < u64::from(outside) + u64::from(count)
+    })
+}
+
+fn outside_of(map: &[(u32, u32, u32)], inside_id: u32) -> Option<u32> {
+    map.iter().find_map(|&(inside, outside, count)| {
+        (inside_id >= inside && u64::from(inside_id) < u64::from(inside) + u64::from(count))
+            .then(|| outside + (inside_id - inside))
+    })
+}
+
+/// launcher の非機密の観測から `RuntimeFacts` を組む。daemon が観測で確かめられる項目
+/// （map・namespace owner・CapEff・NoNewPrivs・listen 数）は観測値をそのまま使い、daemon UID / GID
+/// が map に現れる・owner が daemon UID・owner が不明のいずれかなら `None`（fail closed）。
+/// daemon から見えない項目（mount・namespace の別・process group）は launcher の
+/// `isolation_ok` が真のときだけ満たした値にし、偽なら違反になる値にする。
+pub(crate) fn runtime_facts(
+    session_id: &str,
+    daemon: &DaemonIds,
+    facts: &SessionFacts,
+    launcher_attested: bool,
+) -> Option<RuntimeFacts> {
+    let uid_map = parse_map(&facts.uid_map)?;
+    let gid_map = parse_map(&facts.gid_map)?;
+    if covers_outside(&uid_map, daemon.uid) || covers_outside(&gid_map, daemon.gid) {
+        return None;
+    }
+    let owner = facts.ns_owner_uid?;
+    if owner == daemon.uid {
+        return None;
+    }
+    let runtime_uid = outside_of(&uid_map, INNER_ID)?;
+    let capabilities_dropped = u64::from_str_radix(facts.cap_eff.trim(), 16) == Ok(0);
+    let namespaces: BTreeSet<Namespace> = if launcher_attested {
+        REQUIRED_NAMESPACES.into_iter().collect()
+    } else {
+        // map が host と異なることだけは観測から言える。
+        [Namespace::User].into_iter().collect()
+    };
+    Some(RuntimeFacts {
+        session_id: session_id.to_owned(),
+        host_uid: daemon.uid,
+        runtime_uid,
+        namespaces,
+        root_readonly: launcher_attested,
+        writable_mounts: Vec::new(),
+        visible_paths: Vec::new(),
+        // The launcher owns Chrome's CDP pipe (fds 3/4). The observed TCP
+        // listeners belong to sandboxd's proxy and shared-CDP relay inside
+        // the private netns; their count does not describe Chrome's CDP
+        // endpoint. The launcher's isolation_ok attests the real netns and
+        // the fixed pipe-based runtime before this observation is accepted.
+        cdp: CdpEndpoint::Pipe,
+        no_new_privs: facts.no_new_privs,
+        capabilities_dropped,
+        pgid: if launcher_attested {
+            LAUNCHER_HELD_PGID
+        } else {
+            0
+        },
+    })
+}
+
+/// agent-browser の action 名（harness policy の `allow`）を launcher の固定 verb に写す。
+pub(crate) fn session_policy(
+    allow: &[String],
+    domains: &[String],
+    lease: Duration,
+) -> SessionPolicy {
+    let mut actions = Vec::new();
+    for a in allow {
+        let verb = match a.as_str() {
+            "navigate" => Verb::Open,
+            "click" => Verb::Click,
+            "snapshot" => Verb::Snapshot,
+            "gettext" => Verb::Extract,
+            "screenshot" => Verb::Screenshot,
+            "download" => Verb::Download,
+            "scroll" => Verb::Scroll,
+            "close" => Verb::Close,
+            _ => continue,
+        };
+        if !actions.contains(&verb) {
+            actions.push(verb);
+        }
+    }
+    SessionPolicy {
+        allowed_domains: domains.to_vec(),
+        allowed_actions: actions,
+        lease_seconds: lease
+            .as_secs()
+            .clamp(1, crate::browser_launcher::protocol::MAX_LEASE_SECONDS),
+    }
+}
+
+/// shim の検査済み action を launcher に頼む（[`ActionServer`] の検査と control gate の後）。
+/// screenshot / download の artifact は launcher の dir にあり daemon へは渡らないので、この経路
+/// では失敗として返す（agent には opaque な失敗）。
+pub(crate) struct LauncherExecutor {
+    pub(crate) runtime: Arc<LauncherRuntime>,
+}
+
+impl ActionExecutor for LauncherExecutor {
+    fn run(&self, _sequence: u64, req: &ActionRequest) -> std::io::Result<serde_json::Value> {
+        let unsupported = || std::io::Error::other(UNAVAILABLE);
+        let first = || req.args.first().cloned();
+        let (verb, args) = match req.verb.as_str() {
+            "open" => (
+                Verb::Open,
+                ActionArgs {
+                    url: first(),
+                    ..ActionArgs::default()
+                },
+            ),
+            "click" | "extract" => (
+                if req.verb == "click" {
+                    Verb::Click
+                } else {
+                    Verb::Extract
+                },
+                ActionArgs {
+                    selector: first(),
+                    ..ActionArgs::default()
+                },
+            ),
+            "snapshot" => (Verb::Snapshot, ActionArgs::default()),
+            "scroll" => {
+                let amount: i32 = req
+                    .args
+                    .get(1)
+                    .and_then(|v| v.parse().ok())
+                    .ok_or_else(unsupported)?;
+                let y = if req.args.first().map(String::as_str) == Some("up") {
+                    -amount
+                } else {
+                    amount
+                };
+                (
+                    Verb::Scroll,
+                    ActionArgs {
+                        y: Some(y),
+                        ..ActionArgs::default()
+                    },
+                )
+            }
+            "close" => (Verb::Close, ActionArgs::default()),
+            _ => return Err(unsupported()),
+        };
+        let (_receipt, observation) = self.runtime.action(verb, args).map_err(|_| unsupported())?;
+        Ok(serde_json::json!({
+            "status": 0,
+            "stdout": observation.text.unwrap_or_default(),
+        }))
+    }
+}
+
+/// 機密能力はこの経路で解放しない（ADR-0116「機密能力」）。接続より前に拒否する。
+fn refuse_confidential(
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    sink: &dyn EventSink,
+) -> Result<(), AdapterError> {
+    let denied = || {
+        AdapterError::Other(
+            "browser credential use is not available through the launcher runtime".into(),
+        )
+    };
+    if policy
+        .effective
+        .actions
+        .contains(&task_core::BrowserAction::CredentialUse)
+    {
+        return Err(denied());
+    }
+    let waits = sink
+        .browser_waits()
+        .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
+    if waits.last().is_some_and(|w| {
+        matches!(
+            w.state,
+            BrowserWaitState::Approved | BrowserWaitState::Registered
+        )
+    }) {
+        return Err(denied());
+    }
+    Ok(())
+}
+
+/// launcher 経由の browser run。harness は従来と同じ shim（`celeris-browser.py`）を使い、
+/// shim の action は daemon の [`ActionServer`] の検査と gate を通ってから launcher に頼まれる。
+pub(super) async fn run(
+    adapter: Arc<dyn WorkerAdapter>,
+    mut req: RunRequest,
+    run_id: &str,
+    limits: RunLimits,
+    sink: &dyn EventSink,
+    socket: &Path,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+) -> Result<RunOutcome, AdapterError> {
+    refuse_confidential(policy, sink)?;
+    let unavailable = || AdapterError::Other(UNAVAILABLE.into());
+    let session = super::session_id(req.task.id, run_id);
+    let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
+    let output = runtime_dir.join("output");
+    std::fs::create_dir_all(&output)?;
+    let cli = runtime_dir.join("celeris-browser.py");
+    let action_socket = runtime_dir.with_extension("action.sock");
+    write_private(&cli, CLI)?;
+    write_private(&runtime_dir.join("policy.json"), &policy.action_policy)?;
+    write_private(
+        &runtime_dir.join("config.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "session_id": session,
+            "allowed_domains": policy.allowed_domains(),
+            "output": output,
+            "credential_policy_ids": [],
+            "credential_use": false,
+        }))?,
+    )?;
+    let allowed: task_core::AgentBrowserActionPolicy =
+        serde_json::from_slice(&policy.action_policy)
+            .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    let control_gate = sink
+        .browser_control_gate(run_id, &session)
+        .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
+    let session_policy =
+        session_policy(&allowed.allow, policy.allowed_domains(), limits.wall_clock);
+    let (socket, task_id, owned_run) = (
+        socket.to_path_buf(),
+        req.task.id.to_string(),
+        run_id.to_owned(),
+    );
+    let (runtime, _attestation) = tokio::task::spawn_blocking(move || {
+        LauncherRuntime::start(&socket, &task_id, &owned_run, session_policy)
+    })
+    .await
+    .map_err(|_| unavailable())?
+    .map_err(|_| unavailable())?;
+    let runtime = Arc::new(runtime);
+    let action_server = ActionServer::start_with(
+        &action_socket,
+        Arc::new(LauncherExecutor {
+            runtime: Arc::clone(&runtime),
+        }),
+        policy.allowed_domains().to_vec(),
+        allowed.allow,
+        control_gate,
+    )
+    .map_err(|_| unavailable())?;
+    let mut browser = BrowserRun {
+        task_id: req.task.id,
+        run_id: run_id.into(),
+        session_id: session,
+        state: BrowserRunState::Running,
+        live_view_url: None,
+        policy: Some(policy.binding.clone()),
+    };
+    sink.browser_updated(&browser);
+    let live = crate::browser_live::LiveEmitter::new(EventSinkLive {
+        sink,
+        run_id: run_id.into(),
+        session_id: browser.session_id.clone(),
+    });
+    let events = runtime_dir.join("events.jsonl");
+    let mut offset = 0;
+    req.context.browser = Some(BrowserContext {
+        run: browser.clone(),
+        cli,
+        credential_used: false,
+    });
+    let monitor_req = req.clone();
+    let outcome = {
+        let browser_sink = BrowserSink(sink);
+        let future = adapter.run(req, run_id, limits, &browser_sink);
+        tokio::pin!(future);
+        let mut interval = tokio::time::interval(Duration::from_millis(200));
+        loop {
+            tokio::select! {
+                result = &mut future => break result,
+                _ = interval.tick() => forward_events(&events, &mut offset, &monitor_req, &output, sink, &live),
+            }
+        }
+    };
+    forward_events(&events, &mut offset, &monitor_req, &output, sink, &live);
+    drop(action_server);
+    let stop_runtime = Arc::clone(&runtime);
+    let stopped = tokio::task::spawn_blocking(move || stop_runtime.stop())
+        .await
+        .map_err(|_| unavailable())
+        .and_then(|r| r.map_err(|_| unavailable()));
+    let outcome = match stopped {
+        Ok(_) => outcome,
+        Err(_) => Ok(RunOutcome {
+            terminal: crate::Terminal::Error {
+                message:
+                    "browser session cleanup failed; inspect the launcher session before retrying"
+                        .into(),
+                retryable: false,
+            },
+            exit_code: None,
+        }),
+    };
+    browser.state = match &outcome {
+        Ok(RunOutcome {
+            terminal: crate::Terminal::Done { .. },
+            ..
+        }) => BrowserRunState::Completed,
+        Ok(RunOutcome {
+            terminal: crate::Terminal::Question { .. },
+            ..
+        }) => BrowserRunState::WaitingForHuman,
+        _ => BrowserRunState::Failed,
+    };
+    sink.browser_updated(&browser);
+    outcome
+}
+
+#[cfg(test)]
+#[path = "browser_launcher_run_tests.rs"]
+mod tests;

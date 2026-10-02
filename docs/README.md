@@ -11,7 +11,7 @@ agent（Celeris のタスク）がまず読むべき文書は `docs/` ではな�
 - `protocol/` — worker protocol の説明と schema
 - `guides/` — 機能・画面ごとの使い方（knowledge、mcp、providers、llm-source、workspace、browser-capability、browser-credentiald、
   repository-documentation-maintenance）
-- `ops/` — 運用手順（selfdeploy、nextest、sccache-l1、web-parallel-operation）
+- `ops/` — 運用手順（selfdeploy、nextest、sccache-l1、web-parallel-operation、browser-launcher-host-setup）
 
 一度きりの作業手順・経緯・日付付きの調査報告・ADR・進捗記録は `agent-docs/` にある。
 `adr/` と `progress/` は移行期間（ADR-0128 D6）だけ残す案内の README で、新しいファイルは置かない。

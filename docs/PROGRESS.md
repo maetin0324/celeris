@@ -43,6 +43,22 @@ fix-sync-stop の後、最新 main（`29e2d76875e0cb3ab21ea606b0014aab62413cd8`�
 - `cargo test --workspace pre_review_sync` → 1 passed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair`）、`cargo test --workspace reviewed_sha` → 3 passed（`delivery::tests::target_advanced_*`）。`cargo test -p task-dispatch` の `dispatcher::tests::target_sync::*` 8 件（pre_review_sync_dirty_keeps_attempts・pre_review_sync_conflict_keeps_attempts_and_branch・pre_review_sync_target_advanced_keeps_attempts・pre_review_sync_target_advanced_limit_halts_without_attempts 等）も exit 0。既知の flaky `task-worker` の `local_deep_research::tests::missing_celeris_result_line_is_retryable_error` を単独で再実行し 1 passed（workspace 全体実行でも今回は失敗なし）。
 - sandbox 内で userns 必須試験（`instance_handoff` 等）が完走できない場合があることは把握済みだが、今回の `cargo test --workspace` では該当失敗なし（daemon はこの制約の外で checks を実行するため、sandbox 制約を plan_issue の理由にはしない）。
 
+### land-main-2: 再進行した main（web GUI 統合）の取り込みと全検査の再実行 — 2026-10-02（work unit `land-main-2`）
+
+reland-main 後に main が web GUI（task 01M3QE4D330YESFT6FY8G50R12、ADR-0081 TanStack SPA + gateway、Phase 1〜6）の統合で `e730f0569db12f8dc1d46fde1932636f40db48a9` まで進み、integrate-verify の check `git merge-base --is-ancestor main HEAD` が落ちていた。着手時にコードの修正（c5e9498a・fix-sync-stop）は済んでおり `review_spawn.rs` に `Trigger::ReviewFail` は無いことを確認済み。`git merge-tree --write-tree --name-only HEAD main` の事前見積もりは `crates/task-worker/tests/browser_shared_cdp.rs` 1 件だけを衝突として返した（`docs/PROGRESS.md` は自動 merge）。
+
+- 実際の merge（commit `31dead31c5fb3f56e37d0644b1bd9339ef93657a`）も見積もりどおり衝突は `browser_shared_cdp.rs` のみ。両側とも R7-12 系の CDP probe EOF 無限待ち修正だったため、main 側（`ISOLATION`/`PREFLIGHT_TIMEOUT` 定数・`probe.err` への例外書き出し・`recv_exact` によるフレーム読み切り・`preflight()`）を基本に採用し、task 側にあって main に無かった「接続後の handshake / CDP 応答が一度失敗しても deadline まで接続からやり直す」期限付き再試行を `except OSError` の外側ループに戻す形で足した。Rust 側の外側タイムアウトは task 側の 75 秒（main は 60 秒）をそのまま残した。`docs/PROGRESS.md` は衝突なしで両節とも残っている。
+- `git grep -n '^<<<<<<<\|^=======$\|^>>>>>>>' .` → 該当なし。`git merge-base --is-ancestor main HEAD` → exit 0。
+- `cargo build -p task-worker --bins` → exit 0（browser_shared_cdp.rs のテストが前提とする `celeris-browser-sandboxd`/`celeris-browser-egress` bin を先に生成）。
+- `cargo test -p task-worker --test browser_shared_cdp --no-run` → exit 0（コンパイル確認）。
+- `cargo test -p task-worker --test browser_shared_cdp -- --nocapture` → exit 0（2 passed。sandbox では preflight が失敗して `SKIPPED (environment unavailable, not passed)` を出すだけで、panic はしない）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace` → exit 0（118 テストバイナリすべて `test result: ok`、FAILED・`error[` なし）。
+- `cargo test --workspace pre_review_sync` → 9 passed、0 failed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair` 1 件 + `dispatcher::tests::target_sync::pre_review_sync_*` / `target_sync_pre_review_sync_*` 8 件）。
+- `cargo test --workspace reviewed_sha` → 3 passed、0 failed（`delivery::tests::target_advanced_*_reviewed_sha`）。
+- Phase 1 のコード（review 前同期・stale 検出・同期停止が attempts を消費しない経路）は変更していない。既知の flaky（`local_deep_research` の Spawn NotFound、`browser_shared_cdp` の sandbox TCP probe）は今回の `cargo test --workspace` では再現しなかった。
+
 - [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
 - [Browser capability Phase 1〜4 の main 統合](progress/phase-browser-main-merge.md) — 2026-10-01、`478e86c4` とリファクタ後 main `2eb1b030` がともに祖先となる作業ブランチで、migration 0035/0036・schema 36 と ADR 0099〜0114 を確認。`cargo test --workspace` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、source size active warning 0 件（既存例外 1 件）。P3-B frame、別 host UID・A13、機密能力の本番解放、本番設定と昇格は未解決。検証のコマンド・exit・テスト数はリンク先に記録。
@@ -90,6 +106,57 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - GUI gate（`gui/`）: `pnpm typecheck` / `pnpm test` / `pnpm build` は各 exit 1。pnpm 11.27.0 の依存事前確認がユーザー cache の SQLite database を開けず、各コマンドの実処理は開始しなかった。テスト数は未取得。main との比較も未実施。
 - 未解決と提案: sccache と `CARGO_TARGET_DIR` が書き込み可能な環境で Rust 2 gate を再実行し、pnpm store が利用できる環境で GUI 3 gate と main 比較を再実行してテスト件数を記録する。今回の GUI 差分 gate `git diff --quiet 06e9a03cffe8 -- gui ':!gui/docs/adr/0002-frontend-stack.md'` は exit 0。旧 ADR 追記を含む GUI 全体の差分は新 ADR-0081 に supersede として記録済み。ADR・parity・計画の相互リンクを確認済み。
 
+## Web GUI Phase 1（完了 2026-09-30、scaffold と gateway）
+
+P1-01〜P1-09 完了。以後の Web GUI の記録は [progress/phase-web.md](progress/phase-web.md) へ（Phase 1 の証拠・未解決・提案もそこ）。
+
+## Web GUI Phase 3（完了 2026-09-30、中核の画面 P3-01〜P3-15）
+
+P3-01〜P3-15 完了。証拠・未解決・提案は [progress/phase-web.md の Phase 3 節](progress/phase-web.md#phase-3完了-2026-09-30中核の画面-p3-01p3-15)。
+
+## Web GUI Phase 4（完了 2026-10-01、管理の画面 P4-01〜P4-17）
+
+P4-01〜P4-17 完了。GUI/web 静的検査・parity e2e・V3・mobile-audit は exit 0。`cargo test --workspace` は exit 0（2,886 passed / 0 failed / 7 ignored）、`cargo clippy --workspace -- -D warnings` は exit 0（warning 0）。証拠・未解決・提案は [progress/phase-web.md の Phase 4 節](progress/phase-web.md#phase-4完了-2026-10-01管理の画面-p4-01p4-17)。
+
+## Web GUI Phase 5（完了 2026-10-01、横断 gate P5-01〜P5-04）
+
+P5-01〜P5-04 完了。Latency は 30 path で URL/見出し最大 69.4/90.1 ms、10 秒遅延時の差は最大 15.5/16.5 ms、H1 fallback は fixture で 1 回。Security X1〜X6/X8、mobile/a11y 30 path × 4 幅（axe critical/serious 0、横溢れ 0）、parity 総点検 X10/X11/X15 は合格。H6 の期間・合格条件は人の決定待ち。証拠・未解決・提案は [progress/phase-web.md の Phase 5 節](progress/phase-web.md#phase-5完了-2026-10-01横断-gate-p5-01p5-04)。
+
+## Web GUI Phase 6（P6-01〜P6-03 完了 2026-10-01、並行運用の準備）
+
+P6-01 の web 配布物、P6-02 の web ADR-W3・systemd unit・非 blocking release 段、P6-03 の dogfood 手順を整備。dogfood-mode=a の人の回答に従い、2026-10-01 18:32 UTC に release `bf54b41ad627` の web gateway を本番 daemon 向けに loopback `127.0.0.1:7720` で起動。LAN `192.168.1.103:7721` の入口も起動し、両方の `/healthz` は release 一致。Playwright で PC 1440px・スマホ 390px の各 6 画面と主要 GET API 6 件が HTTP 200、gui/ :7700 は継続して HTTP 200。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は 261 passed、`releases_api` の user scope bus 接続エラー 2 件のみを人の判断に従い環境由来として除外（同 suite 6 passed / 2 failed、再実行でも再現）。H10 の staging は release `bf54b41ad627` で verify exit 0・web parity 3 passed。N-1 互換は schema 差で `live_ok=false`。H6・H9 は人の決定待ち、H7 は配信切替判断待ち。LAN の別端末からの実到達は未確認。本番 release パスは前 run の staging 成果物への symlink なので保持が必要。詳細は [progress/phase-web.md の Phase 6 節](progress/phase-web.md#phase-6p6-01p6-03-完了-2026-10-01並行運用の準備p6-04-以降は未着手)。
+
+## Web GUI 最終整合（task close-out、2026-10-01）
+
+**検証 sha:** `d95b1653859d4dd5e3ded68b0abbba793a3a3eac`（前の子の成果を取り込んだ HEAD、記録更新前）。V1 install/test/typecheck/build は成功（GUI 84 files / 1249 tests）。V2 frozen install/typecheck/lint/test/build/gen:types/boundaries/secrets/parity(--require-phase 6) は成功（Vitest 24 files / 178 tests、Node 41 tests）。parity e2e は最初 cutover の store path 前提で失敗したが、一時 store を用意した再実行で 103 passed / 8 skipped。selfdeploy 7 本と parity commit 祖先検査は成功。`cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace --no-fail-fast` は初回と1回の再実行がともに exit 101、25 targets failed。主因は sandbox の user namespace 拒否（`Operation not permitted`、browser isolation の `NoChildPid`）と、それに伴う instance handoff/delegation 系失敗。初回だけ `browser_shared_cdp` の TCP relay 失敗も発生。crates/ は変更せず、Rust gate は main の別 task で扱う。人の adr-place 判断 (a) により当時 ADR 0082・0083・0096 は `docs/adr/` に置いたままだったが、後の人の決定 adr-scope により `docs/web/adr/`（web ADR-W1〜W3）へ移設した（[phase-web の adr-place / adr-scope の記録](progress/phase-web.md#adr-place--adr-scope-の記録)）。詳細・各 exit・失敗群は [phase-web 最終整合節](progress/phase-web.md#最終整合task-close-out)。
+
+再試行（run `01M3WSCR1TVZ16NDM2BYKF8E2X`、attempt 2）の**検証 SHA は `d387be16a00426b03a48b7e11849611d8cd19047`**（記録 commit 前）。前回レビューで失敗した `/tasks/new` parity e2e の遷移待ちを修正。V1 の frozen install/test/typecheck/build は各 exit 0（GUI 84 files / 1,249 passed）。V2 の frozen install/typecheck/lint/test/build/gen:types/boundaries/secrets/parity(--require-phase 6) は各 exit 0（Vitest 24 files / 178 passed、Node 41 passed）。全 parity e2e は exit 0（103 passed / 8 skipped）、selfdeploy 7 本も各 exit 0。前子の祖先・完了 parity commit・差分範囲の検査と `cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace --no-fail-fast` は初回と指定された1回の再実行がともに exit 101（各 3,130 passed / 77 failed / 12 ignored、25 targets failed）。失敗例は `instance_handoff::normal_mode_does_not_inject_the_smoke_builtins`（namespace の `Operation not permitted`）、`browser_shared_cdp::real_shared_cdp_and_auth_section`（`unshare: Operation not permitted`）、`browser_runtime_isolated::real_browser_in_runtime_facts_and_restore_refused_on_same_uid`（`NoChildPid`）。両回の全失敗名とメッセージは run artifacts に記録。namespace 制約に伴う crates/ の失敗は未解決で、crates/ は変更せず main の別 task で扱う。詳細は [phase-web の再試行節](progress/phase-web.md#最終整合の再試行run-01m3wscr1tvz16ndm2bykf8e2xattempt-2)。
+
+**この exit 101 の記録は、下の「最終 gate（2026-10-02）」の記録で置き換わった。** crates/ は無変更で、原因は run のサンドボックスによる user namespace 制約だった。サンドボックスを外して実行したところ `cargo test --workspace` は exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace -- -D warnings` も exit 0 だった。
+
+## Web GUI 最終 gate（2026-10-02、HEAD `c63d53c21d46`）
+
+前回 2 回の最終整合記録（attempt 1・attempt 2）はいずれも `cargo test --workspace --no-fail-fast` が sandbox の user namespace 制約で exit 101 となり、reviewer が Phase 完了 gate 未達とした。crates/ は本 task で無変更なのでこれは環境の問題と判断し、Bash サンドボックスを外して（dangerouslyDisableSandbox）、Celeris が渡した `CARGO_TARGET_DIR` / `RUSTC_WRAPPER` のまま再実行した。結果: `cargo test --workspace --no-fail-fast` exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace -- -D warnings` exit 0。V1（gui/、pnpm@11.27.0 固定）の install/test/typecheck/build は各 exit 0（Vitest 84 files / 1,249 passed）。V2（web/、pnpm@12.6.0 固定）の install/typecheck/lint/test/build/`gen:types --check`/`check:boundaries`/`check:secrets`/`check:parity --require-phase 6` は各 exit 0（Vitest 24 files / 178 passed、Node test 41 passed）。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api` は exit 0（差分なし）。install・build 後も追跡ファイルへの変更なし。詳細な表とコマンドは [phase-web の最終 gate 節](progress/phase-web.md#最終-gate2026-10-02head-c63d53c21d46)。
+
+dd6219db の probe 修正（`crates/task-worker/tests/browser_shared_cdp.rs` で WebSocket frame を最後まで読む）は crates/ の範囲外変更として revert した。必要な修正は main 向けの別 task で入れる。
+
+**scope 復元後の最終 HEAD 検証（記録 commit 前）:** `eb19cfe6d85ab49c4542cda261456d8702dd229b`。段 1 の Rust 結果も同じ HEAD（記録 commit を除きコード差分なし）。`cargo test --workspace` は exit 0（3,206 passed / 0 failed / 12 ignored）、`cargo clippy --workspace -- -D warnings` は exit 0。V1 GUI（pnpm@11.27.0）の test/typecheck/build は exit 0（84 files / 1,249 tests）。V2 web（pnpm@12.6.0）の typecheck/lint/test/build/`gen:types --check`/`check:boundaries`/`check:secrets`/`check:parity --require-phase 6` は各 exit 0（Vitest 24 files / 178 tests、Node 41 passed）。両 install も frozen lockfile で成功。GUI 指定 install は既定 store の SQLite open error で exit 1 となったが、`--store-dir /tmp/celeris-pnpm-store` の再実行は exit 0。前の exit 101 は sandbox の unshare/user namespace `Operation not permitted` によるもので、本節の cargo 結果で置き換える。scope 復元の `git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` は exit 0。install・build 後の status は記録対象以外が空。詳細は [phase-web の scope 復元後検証節](progress/phase-web.md#web-最終-head-検証scope-復元後)。
+
+## Web GUI 最終再検証（2026-10-02、HEAD `a75d882e42a7`）
+
+scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 passed、Node 41 passed）。GUI は pnpm@11.27.0 frozen install・test・typecheck・build が exit 0（84 files / 1,249 passed、SQLite の既定 store 問題は `/tmp/celeris-pnpm-store` で回避）。`check:secrets` の down gateway port race を blackhole upstream で除去し、前回の `/api/health: expected 502, got 404` は再現せず。crates/ は差分ゼロのため Rust test（3,206 passed / 0 failed / 12 ignored）・clippy（exit 0）は revert-rust の記録を引き継ぐ。`git diff --quiet $(git merge-base HEAD main) -- gui crates docs/api docs/adr` は exit 0。詳細は [phase-web の scope 復元後検証節](progress/phase-web.md#web-最終-head-検証scope-復元後)。
+
+## Rust gate 再実行（repair、2026-10-02、HEAD `080eeda00176`）
+
+この run で `cargo test --workspace` をフレッシュ実行した結果 exit 101。`instance_handoff` の5 testが worker DB guard で必要な user namespace の `Operation not permitted` により失敗し、並行起動に依存する2 testも失敗した。`browser_shared_cdp` の単独実行も exit 101（`inner_shared_cdp` は pass、`real_shared_cdp_and_auth_section` は `unshare ... Operation not permitted`）。このため sandbox 外での Rust workspace test は未検証であり、過去の pass 件数をこの run の結果としては扱わない。`cargo clippy --workspace -- -D warnings` は exit 0。web の gen:types・boundaries・secrets・parity check は exit 0。crates/ は変更なし。詳細は [phase-web の Rust gate 再実行節](progress/phase-web.md#rust-gate-再実行repair、run-01m3x948ker5j9p5dj3nsrtszw-attempt-2)。
+
+## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
+
+- 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。
+- H6: 期間・合格条件・判定日は人の決定待ち。決まるまで cutover しない。H9: 通知方針は人の決定待ち。H10: release `bf54b41ad627` の staging verify exit 0、読み取り parity 3 passed。
+- 配置上の問題（2026-10-01）: 本番 release パスが前 run の staging 成果物を指す symlink。参照先を dogfood 中に削除しない。NFS 実体コピーは途中で中止。再起動時は web unit と LAN socket を手動で start する。恒久化の対応・再確認結果は未記入。
+- 端末確認の残り: LAN の別の物理端末からの到達・操作は未確認。結果を確認したら追記する。
+- 期間中の問題記録: `<日付>｜<画面>｜<端末・ブラウザ>｜<現象>｜<重大度>｜<対応・タスク ID・再確認結果>` の形で 1 件ずつ追記する。
 ## Phase browser-3 再試行（2026-09-29, task 01M3Q2FPRCF34F00PBZSMNSZE8）
 
 - 認証区間（ADR-0080 H3）を worker → store op（task-api `auth-section` と共通）→ control 状態へ配線、API で takeover/renew を 409 拒否、実 `forward_events` が区間中 progress・artifact・live event を 0 件にする。詳細・証拠は [phase-browser-3](progress/phase-browser-3.md)。

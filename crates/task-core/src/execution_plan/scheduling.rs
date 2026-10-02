@@ -686,19 +686,47 @@ pub fn integration_work_unit_specs(spec: &ExecutionPlanSpec) -> Vec<WorkUnitSpec
 }
 
 /// ADR-0074 F5-fix: 検証エラーに添える「daemon が足した WU は書かなくてよい」の一文。
-pub const DAEMON_ADDED_HINT: &str = "daemon が足した WU（kind = integrate の統合 WU・統合の repair WU）は書かなくてよい（daemon が旧版から持ち越す・補う）";
+pub const DAEMON_ADDED_HINT: &str = "daemon が足した WU（kind = integrate の統合 WU・統合の repair WU・配送 / 最終レビューの repair WU〈計画に無い kind = repair の repair-N〉）は書かなくてよい・書かない（daemon が旧版から持ち越す・補う）";
 
 /// ADR-0074 D1.4（Phase F2b、F5-fix で共通化）: この行が daemon の足した WU（計画の spec に無い
-/// system WU）か。`kind = integrate` の統合 WU、および v2 で `phase` を持ち `active` な計画の spec に
-/// 無い WU（統合の repair WU）。planner の視野に無いので、replan の done の不変条件の対象にしない。
+/// system WU）か。`kind = integrate` の統合 WU、および `active` な計画の spec に key が無い行のうち、
+/// v2/v3 で `phase` を持つもの（統合の repair WU）と、ADR-0079 付記「R7-12」D1: `kind = repair` のもの
+/// （配送の repair WU・計画のある task の最終レビューの repair WU。`phase` を持たない）。planner の視野に
+/// 無いので、replan の done の不変条件の対象にしない。
 pub fn is_daemon_added_work_unit(active: &ExecutionPlanSpec, row: &WorkUnitRow) -> bool {
-    row.kind == WorkUnitKind::Integrate
-        || (is_phased_schema(&active.schema)
-            && row.phase.is_some()
-            && !internal_view(active)
-                .work_units
-                .iter()
-                .any(|w| w.key == row.key))
+    if row.kind == WorkUnitKind::Integrate {
+        return true;
+    }
+    let candidate = row.kind == WorkUnitKind::Repair
+        || (is_phased_schema(&active.schema) && row.phase.is_some());
+    candidate
+        && !internal_view(active)
+            .work_units
+            .iter()
+            .any(|w| w.key == row.key)
+}
+
+/// ADR-0079 付記「R7-12」D3: 新しい計画 `spec` が、生きた（superseded / cancelled でない）daemon の足した WU
+/// （[`is_daemon_added_work_unit`]、統合 WU 以外）の key を unit に使っていないか。使えば `replan` はその key を
+/// 新しい unit とみなし、既存の行（done の repair WU）を ready に戻して repair を再実行してしまう。統合 WU の key は
+/// 段階から決まる（[`retired_key_errors`] の対象）ので見ない。
+pub fn daemon_added_key_errors(
+    active: &ExecutionPlanSpec,
+    spec: &ExecutionPlanSpec,
+    rows: &[WorkUnitRow],
+) -> Vec<PlanValidationError> {
+    let daemon: BTreeSet<&str> = rows
+        .iter()
+        .filter(|u| u.status.is_active())
+        .filter(|u| u.kind != WorkUnitKind::Integrate && is_daemon_added_work_unit(active, u))
+        .map(|u| u.key.as_str())
+        .collect();
+    internal_view(spec)
+        .work_units
+        .iter()
+        .filter(|w| daemon.contains(w.key.as_str()))
+        .map(|w| PlanValidationError::DaemonAddedKeyReused { key: w.key.clone() })
+        .collect()
 }
 
 /// ADR-0074 D5.3/D1.4（F5-fix）: replan の `validate` に渡す done の WU（`(key, spec)`）。

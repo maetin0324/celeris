@@ -452,7 +452,8 @@ pub fn status_of(
     );
     let sizes = measure_unleased(&settings, &legacy);
     let min_free = cfg.dispatch.min_free_disk_mb.saturating_mul(1024 * 1024);
-    let mut status = with_lookup(cfg, cli_db, |lookup, has_db| {
+    // ADR-0129 (1): sccache / cache server の欄は `build_status` が `None` にする（Celeris の外）。
+    let status = with_lookup(cfg, cli_db, |lookup, has_db| {
         let run = scratch_gc::run_gc(
             &settings,
             &legacy,
@@ -468,13 +469,6 @@ pub fn status_of(
             &settings, &run.scan, &run.plan, run.fs, min_free, &sizes, None, now,
         )
     });
-    // ADR-0075 D6（Phase G2）: sccache の配線の状態と、server が居れば `--show-stats` の要約。
-    let state = scratch::resolve_sccache(&settings, scratch::server_listening);
-    let mut view = scratch_gc::sccache_view(&settings, &state);
-    view.stats = scratch_gc::query_sccache_stats(&settings, &state);
-    status.sccache = Some(view);
-    // ADR-0075 D6（Phase G3）: cache server の状態と `/stats`（L1 / L2 の hit・使用量・flusher の遅延）。
-    status.cache = Some(scratch_gc::cache_view(&settings, true));
     Ok(status)
 }
 

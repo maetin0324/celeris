@@ -505,7 +505,7 @@ fn dispatch_browser_fallback_credential_use_never_replays() {
     );
 }
 
-/// ADR-0107 D1: 候補は主 adapter と同じ除去 env・`CARGO_TARGET_DIR`・scratch env を受ける。
+/// ADR-0107 D1: 候補は主 adapter と同じ `CARGO_TARGET_DIR`・scratch env を受ける。ADR-0129 (1): env は外さない。
 #[tokio::test]
 async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() {
     let prep = RunAdapterPrep {
@@ -517,7 +517,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() 
                 ),
                 ("CARGO_INCREMENTAL".into(), "0".into()),
             ],
-            remove: vec!["RUSTC_WRAPPER".into(), "SCCACHE_DIR".into()],
+            remove: Vec::new(),
         }),
         followups_env: None,
         container: None,
@@ -527,10 +527,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() 
     assert!(primary_env && candidate_env);
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0], seen[1]);
-    assert_eq!(
-        seen[1].removed,
-        vec!["RUSTC_WRAPPER".to_string(), "SCCACHE_DIR".to_string()]
-    );
+    assert!(seen[1].removed.is_empty());
     assert!(seen[1].env.contains(&(
         task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
         "/scratch/targets/task-x/target".to_string()

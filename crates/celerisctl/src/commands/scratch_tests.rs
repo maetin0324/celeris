@@ -112,77 +112,16 @@ fn env_matches_the_dispatcher_env() {
     assert!(settings.pool().lease_path(&owner).exists());
 }
 
-/// ADR-0075 §5 G3 受け入れ条件 6: `scratch status` は cache server の `/stats`（L1 / L2 の hit・promote・使用量・
-/// flusher の待ち行列と最終 flush 時刻・L2 の状態）を `cache` に入れる。cache server が居なければ `unavailable`。
+/// ADR-0129 (1): sccache と cache server は Celeris の外（host の cargo 設定）。`scratch status` の `sccache` /
+/// `cache` は常に空（cache server の `/stats` も sccache の `--show-stats` も問い合わせない）。
 #[test]
-fn status_reads_the_cache_server_stats() {
+fn status_has_no_sccache_or_cache_server() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("cs/l2")).unwrap();
-    let mut sc =
-        scratch_cache::StoreConfig::new(tmp.path().join("cs/l1"), Some(tmp.path().join("cs/l2")));
-    sc.l2_gc_interval = std::time::Duration::ZERO;
-    let store = scratch_cache::TieredStore::open(sc).unwrap();
-    let k = "ab".repeat(32);
-    store.put(&k, b"entry").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while store.queue_len() > 0 {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(store.get(&k).unwrap().into_bytes().is_some());
-    let (ptx, prx) = std::sync::mpsc::channel();
-    let served = store.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async move {
-            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            ptx.send(l.local_addr().unwrap().port()).unwrap();
-            let app = scratch_cache::server::router(served, Default::default());
-            let _ = scratch_cache::server::serve(l, app, std::future::pending()).await;
-        });
-    });
-    let port = prx.recv().unwrap();
-    let cfg_path = config(tmp.path());
-    let text = std::fs::read_to_string(&cfg_path).unwrap().replace(
-        "[scratch.cache_server]\nport = 1\n",
-        &format!("[scratch.cache_server]\nport = {port}\n"),
-    );
-    std::fs::write(&cfg_path, text).unwrap();
-    // 手元の sccache の server（本番の 4236）を拾わない。
-    let mut text = std::fs::read_to_string(&cfg_path).unwrap();
-    text.push_str("[scratch.sccache]\nport = 1\n");
-    std::fs::write(&cfg_path, text).unwrap();
-    let cfg = load(&cfg_path).unwrap();
+    let cfg = load(&config(tmp.path())).unwrap();
     let status = status_of(&cfg, None).unwrap();
-    let cache = status.cache.clone().unwrap();
-    assert_eq!(cache.state, "ready", "{cache:?}");
-    assert_eq!(cache.endpoint, format!("http://127.0.0.1:{port}"));
-    let st = cache.stats.unwrap();
-    assert_eq!((st.puts, st.gets, st.l1_hits), (1, 1, 1));
-    assert_eq!(st.flush_written, 1);
-    assert!(st.flush_last_at.is_some());
-    assert_eq!(st.l2_state, "ok");
-    assert_eq!(st.flush_queue_len, 0);
+    assert!(status.sccache.is_none());
+    assert!(status.cache.is_none());
     print_status(&status);
-    // 同じ形を JSON でも出す（`status --json` と `GET /metrics/scratch` は同じ型）。
-    let json = serde_json::to_value(&status).unwrap();
-    assert_eq!(
-        json["cache"]["stats"]["schema"],
-        "celeris.scratch-cache-stats/1"
-    );
-    // cache server が居なければ unavailable（config の既定の port 1 は閉じた特権 port）。
-    let cfg_path = config(tmp.path());
-    let mut text = std::fs::read_to_string(&cfg_path).unwrap();
-    text.push_str("[scratch.sccache]\nport = 1\n");
-    std::fs::write(&cfg_path, text).unwrap();
-    let cfg = load(&cfg_path).unwrap();
-    let cache = status_of(&cfg, None).unwrap().cache.unwrap();
-    assert_eq!(cache.state, "unavailable");
-    assert!(cache.stats.is_none());
-    store.shutdown();
 }
 
 /// ADR-0075 §5 G3: `env --server` は cache server が応答すれば webdav（`SCCACHE_WEBDAV_*`、token、`SCCACHE_DIR` なし）、
@@ -323,12 +262,8 @@ fn env_includes_sccache_when_the_server_is_up() {
     assert!(server.contains("export SCCACHE_CACHE_SIZE=40G\n"));
     assert!(server.contains(&format!("export CELERIS_SCCACHE_BIN={}\n", bin.display())));
     assert!(!server.contains("RUSTC_WRAPPER"));
-    let status = status_of(&cfg, None).unwrap();
-    let view = status.sccache.unwrap();
-    assert_eq!(view.state, "ready");
-    assert_eq!(view.port, port);
-    // 偽のバイナリは `--show-stats` に失敗するので統計は無い（status は落ちない）。
-    assert!(view.stats.is_none());
+    // ADR-0129 (1): `status` は sccache の欄を持たない。
+    assert!(status_of(&cfg, None).unwrap().sccache.is_none());
     // server が居なければ sccache 系は消え、`status` は理由を出す（閉じた port は特権 port の 1。並行するテストと
     // 競合しない）。
     let text = std::fs::read_to_string(&cfg_path)
@@ -353,9 +288,7 @@ fn env_includes_sccache_when_the_server_is_up() {
             "{key}: {text}"
         );
     }
-    let view = status_of(&cfg, None).unwrap().sccache.unwrap();
-    assert_eq!(view.state, "unavailable");
-    assert!(view.reason.unwrap().contains("no sccache server"));
+    assert!(status_of(&cfg, None).unwrap().sccache.is_none());
     // バイナリが無ければ `env --server` は失敗する（unit は起動に失敗して気づける）。
     std::fs::remove_file(&bin).unwrap();
     assert!(render_server_env(&settings).is_err());

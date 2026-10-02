@@ -130,7 +130,8 @@ impl Dispatcher {
                 self.scratch.measuring.clone(),
             );
         }
-        let mut view = crate::scratch_gc::build_status(
+        // ADR-0129 (1): sccache と cache server は Celeris の外（host の cargo 設定）。`build_status` は両欄を `None` にする。
+        let view = crate::scratch_gc::build_status(
             &settings,
             &run.scan,
             &run.plan,
@@ -140,14 +141,6 @@ impl Dispatcher {
             self.scratch.last_gc.clone(),
             now,
         );
-        // ADR-0075 D6（Phase G2）: sccache の配線の状態（統計は `celerisctl scratch status` だけ。tick で client を起こさない）。
-        let sccache = task_worker::scratch::resolve_sccache(
-            &settings,
-            task_worker::scratch::server_listening,
-        );
-        view.sccache = Some(crate::scratch_gc::sccache_view(&settings, &sccache));
-        // ADR-0075 D6（Phase G3）: cache server の `/stats`（loopback、500 ms。無効なら問い合わせない）。
-        view.cache = Some(crate::scratch_gc::cache_view(&settings, true));
         self.scratch.view = Some(view);
         executed.removed.len()
     }
@@ -230,8 +223,8 @@ impl Dispatcher {
     /// reviewer の checks）に与える `CARGO_TARGET_DIR`。`run_worker` と同じ条件（共有ビルドキャッシュが
     /// 有効、ローカルの git の作業場所）で、`work_unit_id` が `Some` なら `<repo-key>/wu-<id>`、`None` なら
     /// `<repo-key>`。条件に当たらなければ空（従来どおり daemon の環境を継ぐ）。
-    /// ADR-0075 G3-fix1: scratch のときは `remove`（sccache の族のうち与えないもの）も返す。検査の子プロセスは
-    /// daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*` を外してから `set` を重ねる。
+    /// ADR-0129 (1): `remove` は常に空。検査の子プロセスは daemon から継いだ env（`RUSTC_WRAPPER` / `SCCACHE_*` を
+    /// 含む）をそのまま持ち、`set` を重ねるだけ。
     pub(super) fn check_cargo_target_env(
         &self,
         task: &Task,
@@ -258,9 +251,8 @@ impl Dispatcher {
                 ..self.config.scratch.clone()
             };
             allocate_scratch_target(&settings, &[], &owner, repo, None);
-            // ADR-0075 D4（Phase G2）: run と同じ `cargo_env`（`[scratch.cargo]` と、server が応答すれば sccache 系）。
-            // G3-fix1: 与えない sccache の族は外す（`remove`）。
-            return task_worker::scratch::cargo_child_env(&settings, &owner);
+            // ADR-0129 (1): run と同じ env（`CARGO_TARGET_DIR` と `[scratch.cargo]`。sccache 系は足さない）。
+            return super::worker_task::scratch_cargo_env(&settings, &owner);
         }
         let dir = match work_unit_id {
             Some(id) => task_worker::build_cache::work_unit_cargo_target_dir(

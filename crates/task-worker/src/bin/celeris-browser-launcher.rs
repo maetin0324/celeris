@@ -1,6 +1,6 @@
 //! Dedicated browser launcher service. The service manager starts this as celeris-browser.
 use std::os::fd::{FromRawFd, RawFd};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,17 +18,18 @@ fn config_path() -> Result<PathBuf, String> {
 }
 
 fn load(path: &Path) -> Result<BackendConfig, String> {
-    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if meta.uid() != 0 || meta.mode() & 0o022 != 0 || !meta.is_file() {
         return Err("launcher config must be a root-owned, non-writable regular file".into());
     }
-    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let contents = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let cfg: BackendConfig = toml::from_str(&contents).map_err(|e| e.to_string())?;
     if cfg.allowed_uids.is_empty() || cfg.allowed_uids.contains(&unsafe { libc::geteuid() }) {
         return Err("allowed_uids must name a distinct daemon UID".into());
     }
+    ensure_session_root(&cfg.state_dir, &cfg.session_root)?;
     for dir in [&cfg.state_dir, &cfg.session_root] {
-        let meta = std::fs::metadata(dir).map_err(|e| e.to_string())?;
+        let meta = std::fs::metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         if !dir.is_absolute()
             || !meta.is_dir()
             || meta.uid() != unsafe { libc::geteuid() }
@@ -54,6 +55,18 @@ fn load(path: &Path) -> Result<BackendConfig, String> {
     Ok(cfg)
 }
 
+/// session_root が state_dir の直下にあり未作成なら 0700 で作る。
+/// state_dir は systemd の StateDirectory が launcher の所有で用意する。
+fn ensure_session_root(state_dir: &Path, session_root: &Path) -> Result<(), String> {
+    if session_root.parent() != Some(state_dir) || session_root.symlink_metadata().is_ok() {
+        return Ok(());
+    }
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(session_root)
+        .map_err(|e| format!("{}: {e}", session_root.display()))
+}
+
 fn activation_listener() -> Result<Option<UnixListener>, String> {
     let fds = std::env::var("LISTEN_FDS").ok();
     let pid = std::env::var("LISTEN_PID").ok();
@@ -75,7 +88,7 @@ fn run() -> Result<(), String> {
         cfg.state_dir.join("registry"),
         task_worker::browser_launcher::random_id().map_err(|e| e.to_string())?,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("{}: {e}", cfg.state_dir.join("registry").display()))?;
     let server_cfg = ServerConfig {
         allowed_uids: cfg.allowed_uids.clone(),
         limits: LauncherLimits::default(),

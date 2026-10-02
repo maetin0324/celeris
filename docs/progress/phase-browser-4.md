@@ -284,3 +284,11 @@ final review が挙げた 3 件の未達（P3-C の run loop 配線、P3-A/P4-A 
 この試験プロセスの `/proc/self/uid_map` と `gid_map` はともに `1001 0 1` であり、試験環境は手順書が要求する初期 user namespace 上にない。Chrome session は起動していないため、`NS_GET_OWNER_UID`、Chrome の `uid_map` / `gid_map`、`PTRACE_ATTACH` と `strace -p` の拒否 errno、`/proc/<pid>/{environ,mem}` の読取り結果、`verify_isolation` は**すべて未取得**。ptrace 拒否・隔離成功の証拠として扱わない。
 
 host 管理者への依頼: [host 準備手順](../ops/browser-launcher-host-setup.md) の更新した第 8 節に従い、launcher service の journal にある exit 1 の原因を修正して `ActiveState=active` を確認し、UID 1001 が初期 user namespace で動く runner（`uid_map: 0 0 4294967295`）を用意する。準備後、同じ require コマンドを再実行して owner UID・2 map・拒否 errno・`verify_isolation=Ok` と exit 0 を追記する。本試行で root 操作、本番 DB・設定変更、昇格、機密能力の解放は行っていない。
+
+## launcher 起動失敗の原因と修正（run 01M3XHRGZFWA87NP2J0WF73QBH、2026-10-02）
+
+人から受け取った journal は `celeris-browser-launcher: No such file or directory (os error 2)` で、restart counter は 1403 まで増えていた。UID 1001 から読める範囲を確認した。`/etc/celeris-browser/launcher.toml` と、そこに書かれた `bwrap`・`sandboxd`・`egress`・`chrome`・`agent_browser`（symlink の先を含む）はすべて存在する。一方、`stat -c '%h' /var/lib/celeris-browser` は `2` で、state_dir にはサブディレクトリが無い。設定の `session_root = "/var/lib/celeris-browser/sessions"` が未作成で、launcher の起動検査 `std::fs::metadata(session_root)` が path を付けずに ENOENT を返していたと判断した（手順書 4 の `install -d ... /var/lib/celeris-browser/sessions` が未実施）。
+
+- launcher の修正（`crates/task-worker/src/bin/celeris-browser-launcher.rs`）: 起動時のエラーに対象 path を付けた。`session_root` が `state_dir` の直下で未作成なら、launcher（state_dir の所有者）が 0700 で作るようにした。私有性の検査（所有者 = launcher の euid、mode & 077 = 0）はそのまま残した。`--config /nonexistent/launcher.toml` を指定すると `celeris-browser-launcher: /nonexistent/launcher.toml: No such file or directory (os error 2)`、exit 1 になることを確認した。
+- 手順書: 第 4 節に `session_root` が必須であること、確認方法、このときの journal の症状を書き足した。第 8 節にも ENOENT のときに見る場所を足した。
+- 実 process 試験は今回も未実行。service が起動しないため Chrome session に到達しない。この run の runner は `/proc/self/uid_map` = `1001 1001 1`（初期 user namespace ではない）。`NS_GET_OWNER_UID`・2 map・ptrace/strace の errno・`environ`/`mem`・`verify_isolation` は**未取得**で、合格とは扱わない。root 操作、本番 DB・本番設定の変更、昇格、機密能力の解放は行っていない。

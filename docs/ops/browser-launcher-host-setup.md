@@ -122,6 +122,8 @@ chown root:root /etc/celeris-browser/launcher.toml && chmod 0644 /etc/celeris-br
 install -d -o celeris-browser -g celeris-browser -m 0700 /var/lib/celeris-browser/sessions
 ```
 
+`session_root` が無いと launcher は起動直後に exit 1 する（旧版の journal は `celeris-browser-launcher: No such file or directory (os error 2)` だけを出す）。`install -d` は `useradd` の後・unit 起動の前に必ず実行し、`ls -ld /var/lib/celeris-browser/sessions` が `drwx------ celeris-browser celeris-browser` であることを確かめる。2026-10-02 以降の launcher は、`session_root` が `state_dir` の直下で未作成なら自分で 0700 で作り、起動失敗の journal には対象の path を出す。
+
 ## 5. socket・状態 dir の所有と mode
 
 | path | 所有 | mode | 作り手 |
@@ -194,6 +196,8 @@ sudo journalctl -u celeris-browser-launcher.service -b --no-pager -n 80
 # journal が示す config の所有権、state_dir/session_root の所有権・0700、実行ファイルの配置、
 # socket activation の失敗を修正し、ActiveState=active を確認する。
 ```
+
+journal が `No such file or directory (os error 2)` なら、まず手順 4 の `session_root`（`/var/lib/celeris-browser/sessions`）と `launcher.toml` の各 path の有無を確かめる。
 
 daemon の user で実行する:
 

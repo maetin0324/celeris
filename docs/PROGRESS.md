@@ -603,6 +603,23 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
 
+### land-main3: 最新 main の統合 — 2026-10-02
+
+main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持した。main の ADR-0122 完了・ui-ux 外部 skill の結合試験・planner 指針・最終検査記録に加え、browser launcher の実 process 証跡、tick_prunes の単独再実行、過去の land-main/land-main2 記録も残した。
+
+- main 由来の launcher 関連差分を確認: `crates/task-worker/src/browser_runtime.rs` は main 側の init 待ち変更を含み、launcher/sandboxd/egress の起動経路に効く。この変更は既に land-main2 の記録に記載済みで、host の binary 入れ替えと require 試験の再実行が必要。
+- `git merge-base --is-ancestor 0d438ec19d9a HEAD` → exit 0。`git merge-tree --write-tree main HEAD` → exit 0（tree `d7c0705a6e14f6dc89fbd842b679f4078c084bd5`）。main の ADR-0122 / ui-ux 記録と launcher 節は両方保持。
+- 最終検査: `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace` → exit 101。`instance_handoff` 8件中3 passed / 5 failed。`cargo test -p celeris --test instance_handoff` 単独再実行も exit 101、同じ5件を再現。3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted` で失敗。残り2件（新旧 daemon の dispatch/standby 引継ぎ）も同じ環境で失敗した。検査は pass 扱いにしない。
+- launcher binary に効く main 差分は `crates/task-worker/src/browser_runtime.rs` の init 起動待ち処理である。既存の記録どおり host の binary 入れ替えと require 試験の再実行が必要。
+
+### pick-chrome: 並走 session での launcher Chrome 特定 — 2026-10-02
+
+`browser_launcher_ptrace.rs` の Chrome 特定が並走 session で曖昧になって落ちていた件を、試験 file だけで直した。launcher は daemon から読める `/proc` に session の印を出さないため、launcher 子孫の新しい Chrome 候補を全部検査して 1 件以上を要求し、自分の session の停止で検査済みの session root が消えることを確かめる。選択は純粋な関数に分け、単体試験 `chrome_pick_*` 4 件を足した。詳細は `docs/progress/phase-browser-4.md`『並走 session での Chrome 特定』。
+
+- `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
+- `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
 ## ADR-0129 (1) sccache 撤去: 統合後の全体検証（work unit `verify`）
 
 完了日 2026-10-02。HEAD `273bf5f36153`（統合段 consumers → core → schema-docs がすべて終わった後）で
@@ -775,20 +792,36 @@ done の件数が増え続ける限りは待ち、`stall_limit`（60s）だけ�
 - `cargo fmt --all -- --check` → exit 0（差分なし）。
 - `cargo clippy -p e2e --all-targets -- -D warnings` → exit 0（警告なし）。
 
-### land-main3: 最新 main の統合 — 2026-10-02
 
-main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持した。main の ADR-0122 完了・ui-ux 外部 skill の結合試験・planner 指針・最終検査記録に加え、browser launcher の実 process 証跡、tick_prunes の単独再実行、過去の land-main/land-main2 記録も残した。
+### verify: main の取り込み・全体検証（work unit `verify`、2026-10-02）
 
-- main 由来の launcher 関連差分を確認: `crates/task-worker/src/browser_runtime.rs` は main 側の init 待ち変更を含み、launcher/sandboxd/egress の起動経路に効く。この変更は既に land-main2 の記録に記載済みで、host の binary 入れ替えと require 試験の再実行が必要。
-- `git merge-base --is-ancestor 0d438ec19d9a HEAD` → exit 0。`git merge-tree --write-tree main HEAD` → exit 0（tree `d7c0705a6e14f6dc89fbd842b679f4078c084bd5`）。main の ADR-0122 / ui-ux 記録と launcher 節は両方保持。
-- 最終検査: `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
-- `cargo test --workspace` → exit 101。`instance_handoff` 8件中3 passed / 5 failed。`cargo test -p celeris --test instance_handoff` 単独再実行も exit 101、同じ5件を再現。3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted` で失敗。残り2件（新旧 daemon の dispatch/standby 引継ぎ）も同じ環境で失敗した。検査は pass 扱いにしない。
-- launcher binary に効く main 差分は `crates/task-worker/src/browser_runtime.rs` の init 起動待ち処理である。既存の記録どおり host の binary 入れ替えと require 試験の再実行が必要。
+main を `wu/verify` の作業ツリーへ2段階で merge した。まず他 WU（`ops-doc`）ブランチの先端 `e901c9388601`（main を取り込んだもの）を取り込み、`docs/PROGRESS.md` の衝突は冒頭の節（ADR-0129 sccache schema・browser launcher 権限分離の2節）を両方残し、文末付近の `### land-main3` / `### pick-chrome` が本節（`## sccache の host 設定化と reflink target`）の下に誤って連結されていたのを `## ADR-0122 完了（ui-ux 外部 skills）` 配下の `### land-main` の直後へ戻した（内容は変更していない、見出しの付け先だけ修正）。それ以外の衝突（`Cargo.lock`・`crates/celeris/*`・`crates/task-dispatch/*`・`crates/task-worker/*` など）は git の自動 merge で解決し、手動介入は無かった。続いてその後に main が進んだ `14b052eaacee`（ADR-0079 D7 continue note を child_objective/human_decisions へ届ける変更。`crates/task-dispatch/src/dispatcher/work_units.rs`・`crates/task-ops/src/phase_gate.rs`・`crates/task-ops/src/tree.rs`・試験・ADR 付記のみで `docs/PROGRESS.md` には触れない）を merge し、衝突なしで取り込んだ。
 
-### pick-chrome: 並走 session での launcher Chrome 特定 — 2026-10-02
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `14b052eaacee` が HEAD の祖先）。
+- 衝突マーカー確認: `grep -rln '^<<<<<<<\|^=======$\|^>>>>>>>' .`（`.git/` 除外）→ 該当なし。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace`:
+  - 1 回目の完走 → **exit 0**。108 試験バイナリすべて `test result: ok`、`passed` 合算 **3326**（main `14b052eaacee` の `tree_decisions.rs` 新規試験 2 件を含む）、`failed` 0、`ignored` 12（内訳: `task-api` 2 件 `UPDATE_SCHEMA` 手動確認用、`task-ops` 4 件（`execution_metrics_comparison_tests` の手動計測・`profile_timeline_against_a_db_copy`）、`browser_runtime_isolated.rs` の helper process 3 件、`ssh_cluster_manual.rs` の実クラスタ要の 2 件、`task-worker` doctest 1 件。いずれも既存の意図的な ignore で、このタスクの変更とは無関係）。再実行なしで一発で通ったため、共用 host の負荷起因 flaky（`instance_handoff`・`cluster_job_wait`・`api_scenarios` 系）は今回は発現しなかった。
+  - sandbox の userns 制約で落ちる既知試験: 今回は発現せず、`CELERIS_ISOLATION_TESTS=skip` 等の opt-in は使わなかった。`crates/celeris/tests/instance_handoff.rs` は8件（`a_newer_release_takes_over_while_the_old_one_finishes_its_run`・`a_stale_heartbeat_promotes_the_standby` を含む）すべて `ok`。
+  - `tests/e2e` の負荷時 flaky（`writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`・`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`）も今回の `cargo test --workspace` の中で両方 `ok`。本 work unit は `tests/e2e` を変更していない（`git diff` の変更範囲に `tests/e2e/` は含まれない）。
+- `deflake-lock`（work unit `deflake-lock`）で固定 120s `wait_until` を `wait_for_progress` の出来事待ちへ直した試験 `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked` は、上記 `cargo test --workspace` の中で `tests/api_scenarios.rs`（11 passed）の一部として `ok`。`database is locked` は出ず、180 件の task はすべて done に到達した（試験の主張どおり）。
 
-`browser_launcher_ptrace.rs` の Chrome 特定が並走 session で曖昧になって落ちていた件を、試験 file だけで直した。launcher は daemon から読める `/proc` に session の印を出さないため、launcher 子孫の新しい Chrome 候補を全部検査して 1 件以上を要求し、自分の session の停止で検査済みの session root が消えることを確かめる。選択は純粋な関数に分け、単体試験 `chrome_pick_*` 4 件を足した。詳細は `docs/progress/phase-browser-4.md`『並走 session での Chrome 特定』。
+#### ディスク使用量・ビルド時間の実測（参照）
 
-- `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
-- `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
+`experiment` work unit の `docs/progress/reflink-target-experiment.md` に記録済みの実測を要約する（本 work unit では再測定していない）。
+
+- seed から空で build: 5 crate を compile、0.74 秒。
+- seed を同じ source・別 target path へ `cp -a --reflink=auto` でコピーした直後の build: compile 0 件、0.03〜0.04 秒（`df` 増分 +27.6 MiB、コピー先 `du` 28 MiB — 当時の実験環境は ext 系で実体コピー。container の `/local`（btrfs）は `FICLONE`/`FICLONERANGE` が EPERM だが、`copy_file_range(2)` で extent 共有となり `df` 増分 0 MiB を人が別途実測済み、`docs/adr/0129-host-sccache-reflink-targets.md` 参照）。
+- 新規 checkout を模して mtime を更新した場合: `pdep`（path 依存）と `app` の 2 crate が再 compile、0.23 秒。registry 依存（itoa・libc・anyhow）は mtime 更新でも再ビルドされなかった。
+- 結論: seed からのコピーは target path・source path が変わっても mtime を保てば fresh 判定を保てるが、worktree の checkout で mtime が変わる経路（path 依存とその利用側）は再ビルドが残る。これは ADR-0129 付記と `reflink-target-experiment.md` の既存の結論のままで、今回の merge・検証で変化はない。
+
+#### 未解決事項
+
+- 本番の切り替え（host の `~/.cargo/config.toml`・sccache user unit・`/local` への scratch 移行）は人が `docs/ops/host-sccache-reflink-targets.md` の手順で実行する。本 work unit は本番 host には触れていない。
+- `/local`（btrfs）上での実際の reflink 共有（`copy_file_range` の extent 共有、`df`/`filefrag` での確認）は `CELERIS_REFLINK_TEST_DIR` を人がこの環境変数に `/local` 配下のパスを設定して実行する必要がある。このタスクの run 環境には書き込み可能な `/local` が無いため実行していない。
+- 共用 host の負荷起因の時間依存試験（`instance_handoff`・`cluster_job_wait`・`api_scenarios` 系）は今回発現しなかったが、既知の flaky として別タスク（時間依存試験の決定化）で追跡中。
+
+#### 提案
+
+- `docs/PROGRESS.md` の末尾追記方式（複数 work unit が同時に EOF へ `##`/`###` を足す）は、今回のように無関係な既存節（main 側の `land-main3`/`pick-chrome`）が別 work unit の新設 `##` 節の下に紛れ込む merge 結果を生みやすい。長期分岐タスクでは「新しい `##` 節は必ず対象の h2 の直後に挿入する」運用、または merge 後に見出しの親子関係をざっと確認する一手順を `docs/testing.md` か ADR に足すとよい。

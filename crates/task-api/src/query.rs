@@ -220,7 +220,7 @@ pub(crate) const EVENT_TYPES: [&str; 50] = [
     "decision_withdrawn",
     "plan_approval_requested",
     "stall_detected",
-    // ADR-0099 D3: root の取り込みを開始できなかった理由。
+    // ADR-0117 D3: root の取り込みを開始できなかった理由。
     "delivery_skipped",
 ];
 

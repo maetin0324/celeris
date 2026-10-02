@@ -189,7 +189,7 @@ pub trait TaskStore:
         after_seq: Option<u64>,
         limit: usize,
     ) -> Result<Vec<EventRow>, StoreError>;
-    /// ADR-0099 D3: 各タスクの最新 `delivery_skipped` イベントだけを返す。
+    /// ADR-0117 D3: 各タスクの最新 `delivery_skipped` イベントだけを返す。
     fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError>;
 
     /// ADR-0013 D10: `filter` に一致する `tasks` を `order` で keyset ページングして返す。`cursor` は

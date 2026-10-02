@@ -1,4 +1,6 @@
-# ADR-0099: 担当の無い root task の delivery と見送り通知
+# ADR-0117: 担当の無い root task の delivery と見送り通知
+
+（旧番号 0099。main の同じ番号は別の提案（browser-phase3-control-lease）に使われていたため振り直した。）
 
 ---
 tasks: [01M3VT5BJZX8JSME7ZQJGTVGEN]

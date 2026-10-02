@@ -62,9 +62,10 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - GUI gate（`gui/`）: `pnpm typecheck` / `pnpm test` / `pnpm build` は各 exit 1。pnpm 11.27.0 の依存事前確認がユーザー cache の SQLite database を開けず、各コマンドの実処理は開始しなかった。テスト数は未取得。main との比較も未実施。
 - 未解決と提案: sccache と `CARGO_TARGET_DIR` が書き込み可能な環境で Rust 2 gate を再実行し、pnpm store が利用できる環境で GUI 3 gate と main 比較を再実行してテスト件数を記録する。今回の GUI 差分 gate `git diff --quiet 06e9a03cffe8 -- gui ':!gui/docs/adr/0002-frontend-stack.md'` は exit 0。旧 ADR 追記を含む GUI 全体の差分は新 ADR-0081 に supersede として記録済み。ADR・parity・計画の相互リンクを確認済み。
 
-## 担当の無い root task の delivery（ADR-0099、2026-10-01）
+## 担当の無い root task の delivery（ADR-0117、2026-10-01）
 
-- 統合 HEAD: `c5f57803`（verify-all worktree）。ADR-0099 を [ADR-0099](adr/0099-root-delivery-without-assignee.md) に記録。部署は root assignee → 有効計画の planner → root 配下の子 task / WU run の実担当票 → 案件設定の既定部署の順に解決し、曖昧な担当推測をしない。対象 root の delivery 見送りは `DeliverySkipped` event と inbox attention に理由を残す。子 task と対象外案件は従来どおり通知・delivery 対象外。
+- 振り直し: 旧番号 0099 は main の browser-phase3-control-lease（docs/adr/0099-browser-phase3-control-lease.md）と衝突したため、main 統合後に ADR-0117 へ振り直した（2026-10-02）。
+- 統合 HEAD: `c5f57803`（verify-all worktree）。ADR-0117 を [ADR-0117](adr/0117-root-delivery-without-assignee.md) に記録。部署は root assignee → 有効計画の planner → root 配下の子 task / WU run の実担当票 → 案件設定の既定部署の順に解決し、曖昧な担当推測をしない。対象 root の delivery 見送りは `DeliverySkipped` event と inbox attention に理由を残す。子 task と対象外案件は従来どおり通知・delivery 対象外。
 - `cargo test --workspace` → exit 101。大半の test 群は成功したが、`celeris` の `instance_handoff` 5 件が失敗。4 件は sandbox 内で user namespace が許可されず ADR-0095 worker DB guard probe が失敗したもの、2 件はその後の dispatch/standby 待機失敗（5 failures total）。delivery 関連の test 群は通過。workspace 全件成功とは扱わず、user namespace が利用可能な環境で再実行が必要。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `rg -n 'unwrap\\s*\\(' crates/task-ops/src/delivery.rs` → 一致なし。production `delivery.rs` に `unwrap()` は無い（test 用 unwrap は別ファイル）。

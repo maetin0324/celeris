@@ -120,6 +120,9 @@ impl Env {
         let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
+        for name in ["home", "config-home", "state", "cache"] {
+            std::fs::create_dir(root.join(name)).unwrap();
+        }
         let db = root.join("celeris.sqlite3");
         let store = Arc::new(SqliteStore::open(&db).unwrap());
         Self {
@@ -142,14 +145,15 @@ impl Env {
     /// `api` は `[api]` 節の本体（空なら節を書かない）。`provider_env` は `[[providers]]` の `env` の TOML インライン表。
     fn write_config(&self, script: &Path, api: &str, provider_env: &str) -> PathBuf {
         let path = self.root.join("config.toml");
+        // The guard reads the production config and token via the passwd home even when
+        // HOME is isolated. This daemon has only a private DB, so opt out before that read.
         let api_section = if api.is_empty() {
             String::new()
         } else {
             format!("[api]\n{api}\n")
         };
         let text = format!(
-            r#"db = "celeris.sqlite3"
-workspace_root = "workspaces"
+            r#"workspace_root = "workspaces"
 tick_ms = 50
 max_concurrency = 2
 lease_grace_secs = 60
@@ -157,6 +161,10 @@ idle_timeout_secs = 30
 kill_grace_secs = 1
 review_timeout_secs = 30
 retry_backoff_base_secs = 0
+
+[db]
+path = "celeris.sqlite3"
+worker_read_only = false
 
 {api_section}
 [adapters.fake]
@@ -182,6 +190,21 @@ env = {provider_env}
         path
     }
 
+    fn command(&self, name: &str) -> Command {
+        let mut cmd = Command::new(bin(name));
+        // A worker run can carry production state and credentials in CELERIS_*.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("CELERIS_") {
+                cmd.env_remove(key);
+            }
+        }
+        cmd.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("config-home"))
+            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env("CELERIS_STATE_DIR", self.root.join("state"));
+        cmd
+    }
+
     fn api_listen(&self) -> String {
         format!("listen = \"127.0.0.1:{}\"", self.port)
     }
@@ -204,7 +227,8 @@ env = {provider_env}
     }
 
     fn celerisctl(&self, args: &[&str]) -> String {
-        let out = Command::new(bin("celerisctl"))
+        let out = self
+            .command("celerisctl")
             .arg("--db")
             .arg(&self.db)
             .args(args)
@@ -231,7 +255,8 @@ env = {provider_env}
             "celeris-{}.log",
             STARTS.fetch_add(1, Ordering::Relaxed)
         ));
-        let child = Command::new(bin("celeris"))
+        let child = self
+            .command("celeris")
             .args(["--config", config.to_str().unwrap(), "--log-format", "text"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -259,6 +284,8 @@ env = {provider_env}
     /// `curl` で 1 要求。接続できなければ `status = 0`。`token` があれば `Authorization` を付ける（`headers` に明示があればそちら）。
     fn request(&self, method: &str, path: &str, body: Option<&str>, headers: &[&str]) -> Resp {
         let mut cmd = Command::new("curl");
+        // -q must be first so curl does not read the runner's ~/.curlrc.
+        cmd.args(["-q", "--noproxy", "*"]);
         cmd.args([
             "-s",
             "-S",
@@ -675,7 +702,7 @@ fn sse_delivers_created_quickly_and_resumes_from_last_event_id() {
     let subscribe = |name: &str, last_event_id: Option<u64>| {
         let log = env.root.join(name);
         let mut cmd = Command::new("curl");
-        cmd.args(["-s", "-N", "--max-time", "30"]);
+        cmd.args(["-q", "--noproxy", "*", "-s", "-N", "--max-time", "30"]);
         if let Some(id) = last_event_id {
             cmd.args(["-H", &format!("Last-Event-ID: {id}")]);
         }

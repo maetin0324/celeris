@@ -16,6 +16,8 @@ ExecStart=%h/.local/celeris/releases/%i/bin/celeris --config %h/.config/celeris/
 # drain して exit 0 したときは再起動しない（ADR-0040 D4 のライブ引き継ぎ）。落ちたときだけ起こし直す。
 Restart=on-failure
 RestartSec=2
+# ADR-0040 付記（2026-10-02）: 昇格の認可が無い release は exit 4。起こし直さず failed のまま残す。
+RestartPreventExitStatus=4
 # drain は長い（既定 [handoff] drain_timeout_secs = 3600）。stop で待つ時間もそれに合わせる。
 TimeoutStopSec=3900
 KillSignal=SIGTERM

@@ -351,6 +351,10 @@ pub struct ExecutionView {
     /// D13: Complexity Gate の判定（gate が判定していない Task には無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<task_core::ExecutionGateDecision>,
+    /// ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task
+    /// には無い）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<task_core::RouteDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<ExecutionPhase>,
     /// 計画が無い Task（D20:「直接実行」の 1 行）は `None`。
@@ -1323,6 +1327,8 @@ fn build_execution_view(
                 | Event::PhaseReported { .. }
                 // ADR-0079 D8（Phase R3b）: root の計画の承認待ち
                 | Event::PlanApprovalRequested { .. }
+                // ADR-0124: 直行経路の判定
+                | Event::ExecutionRouted { .. }
         )
     });
     if !has_activity {
@@ -1332,6 +1338,7 @@ fn build_execution_view(
     let event_list: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
     let metrics = task_core::summarize_execution_metrics(task, &event_list);
     let gate = task.routing.as_ref().and_then(|r| r.execution.clone());
+    let route = task.routing.as_ref().and_then(|r| r.route.clone());
 
     let all_units = store.work_units_for(task.id)?;
     let active_units: Vec<&task_core::WorkUnitRow> =
@@ -1513,6 +1520,7 @@ fn build_execution_view(
     }
     Ok(Some(ExecutionView {
         gate,
+        route,
         phase,
         plan,
         metrics,

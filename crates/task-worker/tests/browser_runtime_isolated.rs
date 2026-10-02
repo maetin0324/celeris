@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use task_core::browser_isolation::{IsolationViolation, LiveIsolation, Namespace};
 use task_worker::browser_runtime::{
-    IsolatedRuntime, LiveSession, RuntimeSpec, listening_tcp, reap_recorded, record,
+    IsolatedRuntime, LiveSession, RuntimeSpec, listening_tcp, process_starttime, reap_recorded,
+    record, same_process_alive,
 };
 
 fn skip() -> bool {
@@ -78,14 +79,54 @@ fn wait_file(p: &Path, t: Duration) -> String {
 }
 
 fn alive(pid: i32) -> bool {
-    // zombie は生存に数えない。
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .map(|s| {
-            s.rsplit(')')
-                .next()
-                .is_some_and(|r| !r.trim_start().starts_with('Z'))
+    process_starttime(pid).is_some_and(|starttime| same_process_alive(pid, starttime))
+}
+
+fn process_diagnostics(pid: i32) -> String {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .unwrap_or_else(|e| format!("unavailable: {e}"));
+    let ppid = std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find(|line| line.starts_with("PPid:"))
+                .map(str::to_owned)
         })
-        .unwrap_or(false)
+        .unwrap_or_else(|| "PPid: unavailable".to_owned());
+    format!("pid={pid} {ppid} stat={stat}")
+}
+
+#[test]
+fn process_liveness_counts_running_but_not_unreaped_zombie() {
+    let mut running = Command::new("/bin/sleep").arg("5").spawn().unwrap();
+    let running_pid = running.id() as i32;
+    let running_starttime = process_starttime(running_pid).unwrap();
+    assert!(same_process_alive(running_pid, running_starttime));
+    running.kill().unwrap();
+    running.wait().unwrap();
+
+    let mut zombie = Command::new("/bin/true").spawn().unwrap();
+    let zombie_pid = zombie.id() as i32;
+    let zombie_starttime = process_starttime(zombie_pid).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while same_process_alive(zombie_pid, zombie_starttime) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        std::fs::read_to_string(format!("/proc/{zombie_pid}/stat"))
+            .unwrap()
+            .rsplit(')')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .next(),
+        Some("Z"),
+        "child must still be an unreaped zombie"
+    );
+    assert!(!same_process_alive(zombie_pid, zombie_starttime));
+    zombie.wait().unwrap();
+    assert!(!same_process_alive(zombie_pid, zombie_starttime));
 }
 
 /// sandbox の中から host の broker/control socket・/run/user・host の loopback fixture・
@@ -276,15 +317,34 @@ fn controller_kill_leaves_no_runtime_processes() {
     let pids: Vec<i32> = pids.lines().filter_map(|l| l.parse().ok()).collect();
     assert_eq!(pids.len(), 2);
     assert!(pids.iter().all(|p| alive(*p)));
+    let identities: Vec<(i32, u64)> = pids
+        .iter()
+        .map(|&pid| (pid, process_starttime(pid).expect("runtime starttime")))
+        .collect();
     ctl.kill().unwrap();
     ctl.wait().unwrap();
+    // PID 再利用や unreaped zombie は残存扱いしない。実行中の本人は引き続き失敗にする。
     let deadline = Instant::now() + Duration::from_secs(10);
-    while pids.iter().any(|p| alive(*p)) && Instant::now() < deadline {
+    while identities
+        .iter()
+        .any(|&(pid, starttime)| same_process_alive(pid, starttime))
+        && Instant::now() < deadline
+    {
         std::thread::sleep(Duration::from_millis(50));
     }
+    let survivors: Vec<_> = identities
+        .iter()
+        .filter_map(|&(pid, starttime)| {
+            if !same_process_alive(pid, starttime) {
+                return None;
+            }
+            let diagnosis = process_diagnostics(pid);
+            same_process_alive(pid, starttime).then_some(diagnosis)
+        })
+        .collect();
     assert!(
-        !pids.iter().any(|p| alive(*p)),
-        "runtime survived controller kill: {pids:?}"
+        survivors.is_empty(),
+        "running runtime survived controller kill: {survivors:#?}"
     );
 }
 

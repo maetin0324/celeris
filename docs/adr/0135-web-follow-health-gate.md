@@ -40,6 +40,12 @@ tasks: [01M3YT4PT3EP8A38111BXH1DCF]
   3. `SD_WEB_PNPM` または `corepack` で起動された pnpm の版や作業ディレクトリが想定と違い、別の場所に install した（`.pnpm-store` 件数が多いのに `node_modules` が無いことと合う）。
 - 確定には `ae780a918695` の build 木の `.gate-web-bundle.log` を読み、同じ tarball で offline install を再現する必要がある。D1 の確認は根因が何であっても壊れた release を通さない。
 
+### D1 実装時のローカル調査（2026-10-02）
+
+`ae780a918695` の lockfile には YAML 文書が 2 個連結されている。先頭には pnpm 自身、後ろには `express` を含む app の依存が載る。ただし、手元の pnpm 12.6.0 は後ろの依存を読み、offline install で不足した tarball の取得を試みて失敗した。したがって、文書の連結だけを「node_modules が無いのに exit 0」の原因とは判定しない。手元の store は事故時の build 木の store と同一ではなく、事故時の install 成功を再現できていない。
+
+確実に確認できた release 側の欠陥は、`bundle_web` が offline install の終了コードだけで `web.ok=true` にしていたこと。修正では展開先の `node_modules` と listen しない `server/app.js` の import を必須とし、どちらかに失敗すれば `web-bundle` で web だけを失敗にする。実際の pnpm が終了コード 0 で依存を作らない経路は、偽 pnpm を使う回帰試験で固定した。
+
 ## D2: web-follow は新 app の起動を確かめてから切り替え、失敗時は旧 web を残す
 
 共通関数として `lib.sh` に `sd_web_app_probe <app_dir> <port> <sha12>` を置く（成功で 0）。

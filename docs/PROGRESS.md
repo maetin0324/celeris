@@ -110,6 +110,21 @@ main（HEAD `2bd7df3b`）への merge-renumber・delivery-index 統合後の最�
 - 負荷による flake は今回発生しなかった（追加の待ち上限変更は不要）。
 - 受け入れ条件 0〜3 すべて満たした。取り込み可能性の確認はここまでで、実際の main への merge は celeris の統合工程（integrate-reverify）が行う。
 
+## Root delivery 振り直し後の最終検証（verify-land2、2026-10-02）
+
+前回 run は main が本ブランチの先に進んでいて（Web GUI SPA の大規模統合 `e730f056` 等）`git merge-base --is-ancestor main HEAD && git merge-tree --write-tree HEAD main` が exit 1 で失敗した。本 run で main を 2 回 merge して追従（1 回目: `docs/PROGRESS.md` の目次追記どうしの衝突のみ、両節を残して解消。main がさらに進んだため 2 回目: user systemd bus 遮断・db_guard の host config 読み取り専用化〈ADR-0095 付記〉の取り込みで crates/ に差分、衝突なし）、HEAD を `7c2147f6` にした。
+
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `ea86af63` は HEAD の祖先）。
+- `git merge-tree --write-tree HEAD main` → exit 0、衝突なし。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace` → exit 0。3,239 passed / 0 failed / 0 ignored（118 test binary、doctest 含む）。`instance_handoff` 8 passed / 0 failed（`a_stale_heartbeat_promotes_the_standby` は 60 秒超だが `ok`）。
+- `cargo test -p celeris --test instance_handoff` を単独で 3 回実行 → 毎回 8 passed / 0 failed（60.4〜60.5 秒）。前回 reviewer が懸念した失敗は本 run・本 HEAD では再現せず、workspace 全体実行でも単独実行でも安定して成功する。負荷依存の既存 flaky と判断する根拠も無く、単純に全件成功。
+- GUI（`gui/`、pnpm@11.27.0）: `install --frozen-lockfile` → exit 0。`pnpm typecheck` → exit 0。`pnpm test`（vitest run）→ exit 0、85 files / 1,250 tests passed。
+- web（`web/`、pnpm@12.6.0、main 統合で新規に加わった SPA）: `install --frozen-lockfile` → exit 0。`pnpm typecheck` → exit 0。`pnpm test`（vitest run + node --test server）→ exit 0、Vitest 24 files / 178 tests passed、Node test 41 passed。
+- 2 回目の main merge は `crates/task-worker/src/{db_guard,preamble,claude_code/prompt}.rs` 等に差分があったため gui/web の再検査は不要と判断（`git show --stat` で `gui/`・`web/` への変更が無いことを確認）し、Rust 側のみ再実行した。
+- 受け入れ条件 0〜2 すべて満たした。取り込み可能性の確認はここまでで、実際の main への merge は celeris の統合工程（integrate-reverify）が行う。
+
 ## Web GUI Phase 1（完了 2026-09-30、scaffold と gateway）
 
 P1-01〜P1-09 完了。以後の Web GUI の記録は [progress/phase-web.md](progress/phase-web.md) へ（Phase 1 の証拠・未解決・提案もそこ）。

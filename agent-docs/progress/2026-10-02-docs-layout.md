@@ -98,3 +98,16 @@ workspace 全体の `cargo test --workspace` は daemon の workspace check に�
   - それまでに main に入った旧配置の ADR・進捗・PROGRESS.md 末尾の節は、land する task が本ファイルの「land-verify」節と同じ規則で移す。
 - `deploy/systemd/celeris-web@.service` のコメントを `docs/ops/web-parallel-operation.md` へ直す（昇格の sha12 確認が要る）。
 - `crates/task-worker/src/scratch/tests.rs:835` の ETXTBSY は `crate::test_support::write_executable` で書くよう直す（cleanup-ops の提案）。
+
+## sync-main-2: main の取り込み（5d6df9f3）
+
+main `5d6df9f3` を取り込んだ。衝突は `agent-docs/PROGRESS.md` の時間依存試験節のみ。main が旧 `docs/PROGRESS.md` に追加した原因・方式の 6 行を、ADR-0128 D6 に従い `agent-docs/progress/2026-10-02-time-dependent-tests-fix.md` の該当節へ移した。凍結した `agent-docs/PROGRESS.md` には追記せず、`docs/PROGRESS.md`・`docs/DESIGN.md` は復活させていない。
+
+| 文書検査 | exit |
+|---|---:|
+| `sh scripts/dev/check-doc-links.sh` | 0 |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 |
+| `sh scripts/dev/check-adr-numbers.sh` | 0 |
+| `sh scripts/dev/progress-index.sh --check` | 0 |
+
+build cache 判定: **残っている**。`crates/task-dispatch/src/dispatcher/tests/mod.rs:3026` の sccache 系 helper は `run_until_idle(&mut d, 60).await`、同 `:3027` は直後に `Status::Done` を assert する。`crates/task-dispatch/src/dispatcher/tests/build_cache.rs:396-401` の `every_cargo_path_uses_the_scratch_target_dir` は `run_until_state` で `Done` を待つ形に直っている（同 `:489-494` の task 単位経路も同様）。

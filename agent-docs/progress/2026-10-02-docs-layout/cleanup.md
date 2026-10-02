@@ -32,8 +32,10 @@ browser capability と credential broker は公開ページ操作と認証情報
 
 - `sh scripts/dev/check-doc-links.sh docs/guides`: exit 0。
 - `git diff --check`: exit 0。
-- `sh scripts/dev/check-doc-links.sh`: exit 1。残る 36 件は README.md、agent-docs/、docs/api/、docs/ops/、docs/protocol/ の参照であり、この WorkUnit の範囲外。移動前から全体検査は失敗しており、guide 内の違反は解消した。
+- `sh scripts/dev/check-doc-links.sh`（全体）: 1 回目の run は exit 1（36 件）。2 回目の run（attempt 2）で、残った参照を移動・削除後のパスへ直して exit 0（`check-doc-links: ok`）。
+  - 直したファイル: `README.md`（docs/knowledge・providers・workspace・selfdeploy・gui/api・PROGRESS・adr を新パスへ。削除済み DESIGN.md の行を除去）、`agent-docs/adr/0081-web-spa-frontend.md`、`agent-docs/gui/design.md`（api.md → `docs/api/v1/gui-api.md`、削除済み bootstrap/ への link を外す）、`agent-docs/progress/phase-R.md`・`phase-web.md`（削除済み runbook・dogfood への link を文字の記述に）、`phase-browser.md`、`agent-docs/reports/model-routing-2026-09-20.md`、`docs/api/v1/overview.md`、`docs/ops/web-parallel-operation.md`、`docs/protocol/worker-protocol.md`。
+  - どれもリンク先パスの書き換えだけで、本文の整理はしていない（docs/api・docs/protocol・docs/ops・agent-docs/reports の本文整理は cleanup-api・cleanup-ops・cleanup-reports の担当）。
 
 ## 提案
 
-全体のリンク検査で残る参照は担当 WorkUnit と land-verify の統合時に直す。CLAUDE.md・.claude・crates・scripts から参照される guide のパスは変えていない。
+並行 WorkUnit が同じ行のリンクを別の形で直すと統合で衝突しうる。衝突したら新パスを指す方を採る。`docs/protocol/worker-protocol.md:3` は削除済みの `docs/DESIGN.md` §5.3 を文字で指したままなので、cleanup-api が本文を整理するときに直すのがよい。CLAUDE.md・.claude・crates・scripts から参照される guide のパスは変えていない。

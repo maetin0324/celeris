@@ -203,7 +203,7 @@ Phase 0 は本 ADR、全 route の parity matrix、遅延 baseline と実装計�
 - [route 一覧](../../gui/app/routes.ts)、[root loader](../../gui/app/root.tsx)、[useCelerisStream](../../gui/app/hooks/useCelerisStream.ts)、[GUI package](../../gui/package.json)
 - [gateway 起動と Host 検査](../../gui/server.js)、[auth/session](../../gui/app/auth.server.ts)、[CSRF / security headers](../../gui/app/middleware/security.server.ts)、[token を保持する client](../../gui/app/celeris/client.server.ts)
 - [file relay](../../gui/app/routes/files.runs.ts)、[artifact relay](../../gui/app/routes/files.artifacts.ts)、[SSE relay](../../gui/app/routes/events.ts)、[Console relay](../../gui/app/routes/console.stream.ts)
-- [API schema](../api/v1/api-v1.schema.json)、[SSE producer](../../crates/task-api/src/sse.rs)、[REST snapshot 補完](../../crates/task-api/src/handlers.rs)、[dispatcher snapshot](../../crates/task-dispatch/src/dispatcher.rs)、[Event 定義](../../crates/task-core/src/model.rs)
+- [API schema](../../docs/api/v1/api-v1.schema.json)、[SSE producer](../../crates/task-api/src/sse.rs)、[REST snapshot 補完](../../crates/task-api/src/handlers.rs)、[dispatcher snapshot](../../crates/task-dispatch/src/dispatcher.rs)、[Event 定義](../../crates/task-core/src/model.rs)
 - [mobile-audit](../../gui/scripts/mobile-audit.mjs)、[対象画面 fixture](../../gui/scripts/lib/celeris-fixture.mjs)、[a11y 検査](../../gui/e2e/g5-a11y.spec.ts)
 
 ## 付記（2026-10-02）: gateway の dotfiles と web の release 追従

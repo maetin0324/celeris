@@ -9474,6 +9474,15 @@
             "$ref": "#/$defs/QuestionItem"
           },
           "type": "array"
+        },
+        "suppressed": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。",
+          "type": "object"
         }
       },
       "required": [
@@ -9481,6 +9490,7 @@
         "questions",
         "drafts",
         "attention",
+        "suppressed",
         "browser_waits",
         "decisions",
         "counts"

@@ -101,21 +101,72 @@ const ETC_FILES: [&str; 10] = [
     "/etc/alternatives",
 ];
 
-fn open_dir_path(path: &Path) -> std::io::Result<OwnedFd> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::other("session dir path contains NUL"))?;
-    // SAFETY: c は NUL 終端。成功時の fd はここで所有する。
-    let fd = unsafe {
-        libc::open(
-            c.as_ptr(),
-            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
+/// spawn の子が私有 mount ns に session dir を bind し直すための C 文字列（fork 前に用意）。
+struct SessionMount {
+    source: std::ffi::CString,
+    base: std::ffi::CString,
+    target: std::ffi::CString,
+}
+
+impl SessionMount {
+    fn new(session_dir: &Path) -> std::io::Result<Self> {
+        use std::os::unix::ffi::OsStrExt;
+        let c = |b: &[u8]| {
+            std::ffi::CString::new(b).map_err(|_| std::io::Error::other("path contains NUL"))
+        };
+        Ok(Self {
+            source: c(session_dir.as_os_str().as_bytes())?,
+            base: c(SESSION_MOUNT_BASE.as_bytes())?,
+            target: c(SESSION_MOUNT.as_bytes())?,
+        })
     }
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+
+    /// fork と exec の間で呼ぶ（syscall だけ）。新しい mount ns は launcher の userns の持ち物で、
+    /// 親の mount は slave になる。念のため private にしてから `/tmp` に tmpfs（0755）を張り、
+    /// その下の dir に session dir を bind する。launcher 本体の mount ns は変わらない。
+    fn apply(&self) -> std::io::Result<()> {
+        let err = || Err(std::io::Error::last_os_error());
+        // SAFETY: 引数はすべて NUL 終端の C 文字列か null。
+        unsafe {
+            if libc::unshare(libc::CLONE_NEWNS) < 0 {
+                return err();
+            }
+            if libc::mount(
+                std::ptr::null(),
+                c"/".as_ptr(),
+                std::ptr::null(),
+                libc::MS_REC | libc::MS_PRIVATE,
+                std::ptr::null(),
+            ) < 0
+            {
+                return err();
+            }
+            if libc::mount(
+                c"tmpfs".as_ptr(),
+                self.base.as_ptr(),
+                c"tmpfs".as_ptr(),
+                libc::MS_NOSUID | libc::MS_NODEV,
+                c"mode=0755,size=64k".as_ptr().cast(),
+            ) < 0
+            {
+                return err();
+            }
+            if libc::mkdir(self.target.as_ptr(), 0o755) < 0 {
+                return err();
+            }
+            if libc::mount(
+                self.source.as_ptr(),
+                self.target.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND | libc::MS_REC,
+                std::ptr::null(),
+            ) < 0
+            {
+                return err();
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Only diagnostics emitted by bwrap and sandboxd are eligible for the launcher journal.
@@ -160,8 +211,12 @@ mod startup_diagnostics_tests {
 
 const ROOT_LINKS: [&str; 5] = ["bin", "lib", "lib32", "lib64", "sbin"];
 
-/// `UsernsMode::Fd` のとき session dir を渡す FD（bwrap の `--bind-fd`）。
-const SESSION_DIR_FD: RawFd = 8;
+/// `UsernsMode::Fd` のとき spawn の子が私有の mount ns で session dir を bind する先。
+/// bwrap は bind の source を realpath で辿る（`--bind-fd` の `/proc/self/fd/N` も実 path に
+/// 展開して各段を lstat する）ため、内側 1000 が辿れない 0700 の session_root の下は使えない。
+/// tmpfs（0755）の下に置き直し、bwrap にはこの path を渡す（ADR-0116 付記）。
+const SESSION_MOUNT_BASE: &str = "/tmp";
+const SESSION_MOUNT: &str = "/tmp/celeris-session";
 /// sandbox の中の UID / GID（`--uid` / `--gid`、launcher の 2 map の内側 ID）。
 const INNER_ID: u32 = 1000;
 
@@ -171,7 +226,8 @@ const INNER_ID: u32 = 1000;
 /// setuid → setgid の順に切り替え、setuid で capability を失って setgid が EPERM になる。
 /// 代わりに spawn の子が launcher の userns へ入って GID → UID の順に内側 1000 へ切り替え、
 /// bwrap はそこから通常の `--unshare-user` で入れ子の userns を作る（ADR-0116 付記）。
-/// 内側 1000 は session_root の私有 dir を辿れないので、session dir は FD で bind する。
+/// 内側 1000 は session_root の私有 dir を辿れないので、session dir は子の私有 mount ns で
+/// `SESSION_MOUNT` に bind し直してから渡す。
 pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
     let mut a: Vec<OsString> = vec!["--unshare-user".into()];
     a.extend(
@@ -234,8 +290,8 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
             a.push(spec.session_dir.clone().into_os_string());
         }
         UsernsMode::Fd(_) => {
-            a.push("--bind-fd".into());
-            a.push(SESSION_DIR_FD.to_string().into());
+            a.push("--bind".into());
+            a.push(SESSION_MOUNT.into());
         }
     }
     a.push(SESSION_ROOT.into());
@@ -256,7 +312,7 @@ mod userns_args_tests {
     use super::*;
 
     #[test]
-    fn external_userns_binds_session_by_fd_only() {
+    fn external_userns_binds_session_from_private_mount() {
         let mut spec = RuntimeSpec {
             bwrap: "/usr/bin/bwrap".into(),
             userns: UsernsMode::Unshare,
@@ -278,13 +334,12 @@ mod userns_args_tests {
                 .map(|i| args[i + 1].clone())
         };
         assert_eq!(bind(&old, "--bind"), Some("/tmp/test-session".into()));
-        assert_eq!(bind(&new, "--bind-fd"), Some("8".into()));
-        assert_eq!(bind(&new, "--bind"), None);
+        assert_eq!(bind(&new, "--bind"), Some(SESSION_MOUNT.into()));
+        assert!(!new.contains(&OsString::from("--bind-fd")));
         let strip = |args: &[OsString]| -> Vec<OsString> {
             args.iter()
                 .filter(|a| {
-                    !["--bind", "--bind-fd", "/tmp/test-session", "8"]
-                        .contains(&a.to_str().unwrap_or(""))
+                    !["/tmp/test-session", SESSION_MOUNT].contains(&a.to_str().unwrap_or(""))
                 })
                 .cloned()
                 .collect()
@@ -340,12 +395,12 @@ impl IsolatedRuntime {
             UsernsMode::Unshare => None,
             UsernsMode::Fd(fd) => Some(fd),
         };
-        // 内側 1000 からは session_root（launcher の 0700）を辿れない。親が開いた FD を渡す。
-        let session_fd = match spec.userns {
+        // 内側 1000 からは session_root（launcher の 0700）を辿れない。子が私有の mount ns で
+        // tmpfs の下に bind し直す。path は fork の前に C 文字列にしておく。
+        let session_mount = match spec.userns {
             UsernsMode::Unshare => None,
-            UsernsMode::Fd(_) => Some(open_dir_path(&spec.session_dir)?),
+            UsernsMode::Fd(_) => Some(SessionMount::new(&spec.session_dir)?),
         };
-        let session_raw = session_fd.as_ref().map(|f| f.as_raw_fd());
         // SAFETY: getpid は常に成功する。
         let parent = unsafe { libc::getpid() };
         let mut cmd = Command::new(&spec.bwrap);
@@ -374,6 +429,10 @@ impl IsolatedRuntime {
                 if let Some(fd) = userns_fd {
                     if libc::setns(fd, libc::CLONE_NEWUSER) < 0 {
                         return Err(std::io::Error::last_os_error());
+                    }
+                    // まだ launcher の userns の 0（host の launcher UID）で capability がある間に。
+                    if let Some(m) = &session_mount {
+                        m.apply()?;
                     }
                     if libc::setresgid(INNER_ID, INNER_ID, INNER_ID) < 0
                         || libc::setresuid(INNER_ID, INNER_ID, INNER_ID) < 0
@@ -408,10 +467,6 @@ impl IsolatedRuntime {
                     Some(fd) => Some(lift(fd)?),
                     None => None,
                 };
-                let session = match session_raw {
-                    Some(fd) => Some(lift(fd)?),
-                    None => None,
-                };
                 if libc::dup2(info, 5) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -425,16 +480,11 @@ impl IsolatedRuntime {
                 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if let Some(fd) = session
-                    && libc::dup2(fd, SESSION_DIR_FD) < 0
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
                 Ok(())
             });
         }
         let child = cmd.spawn()?;
-        drop((info_w, to_browser_r, from_browser_w, session_fd));
+        drop((info_w, to_browser_r, from_browser_w));
         let mut info = String::new();
         File::from(info_r).take(4096).read_to_string(&mut info)?;
         let pgid = child.id() as i32;

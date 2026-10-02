@@ -60,6 +60,7 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 - 内側 1000 は 0700 の `session_root` を辿れないので、session dir は launcher が `O_PATH` で開いた FD を `--bind-fd 8 /session` で渡す。`Unshare` 経路の引数は従来どおり（`--bind <dir> /session`）。
 - launcher の検査は、Chrome の userns の owner が `S`・`NS_GET_PARENT` の owner が `B`・launcher から見た `uid_map` / `gid_map` が `1000 S 1` の 1 行であること、に置き換える（`isolation_ok` も同じ）。2 map そのものは `userns::create` が読み戻して検査する（D3 の 3）。
 - 起動失敗は段と原因（errno・bwrap の stderr）を launcher の stderr（journal）に出す。daemon に返すのは従来どおり固定の `launch_failed` / `isolation_failed` だけ。
+- 再付記（同日、実 host の `bwrap: Can't find source path /proc/self/fd/8: Permission denied` を受けて）: bwrap 0.11 は bind の source を `realpath` で解決し、`--bind-fd` の `/proc/self/fd/N` も実 path（`session_root/<id>`）に展開して各段を辿る。内側 1000 は 0700 の `session_root` を辿れないので `--bind-fd` は使えない。代わりに spawn の子が `setns` の直後（まだ launcher の userns の 0 で capability がある間）に `unshare(CLONE_NEWNS)` → `/` を rprivate → `/tmp` に tmpfs（0755）→ `/tmp/celeris-session` に session dir を bind し、bwrap には `--bind /tmp/celeris-session /session` を渡す。この mount ns は launcher の userns の持ち物で、launcher 本体・host の mount ns は変わらない。`session_root` の 0700 はそのまま。
 - 残る点: `setgroups` は D3 の 1 で `deny` のため、launcher の補助 group（systemd が付ける `B` の group）は Chrome に残る（userns 内では 65534 に見える）。
 
 ## D4. FD と state の所有

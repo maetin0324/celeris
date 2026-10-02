@@ -312,3 +312,12 @@ host 管理者への依頼: [host 準備手順](../ops/browser-launcher-host-set
 この run では `RelayNotReady` が bwrap と sandboxd の終了情報を捨てていた経路を修正した。bwrap の終了状態と、bwrap / sandboxd の短い制御済み診断行を launcher の journal に残す。sandboxd は relay・listen・Chrome/action spawn の失敗 errno と終了状態を出し、Chrome/action の生 stderr は機密混入を避けて破棄する。`cargo build -p task-worker --bins`、`cargo clippy -p task-worker --all-targets -- -D warnings` は exit 0。現在の worker 内 `/proc/self/uid_map` は `1001 0 1` なので require 試験は session 開始時に exit 101 となり、host の結果の代わりにはならない。browser runtime supervisor の実 process 試験 1 件も同じ隔離内では `unshare -Ur: EPERM` で失敗する。host の通常シェルは LXC 内で複数行の map となるため、手順書の初期 namespace 前提を訂正した。
 
 次に host で更新 launcher と sandboxd を入れ替え、人が UID 1001 の通常シェルから require 試験を再実行する。失敗時は journal の新しい `start <session>: start bwrap:` 行で原因を確定する。Chrome の owner UID・両 map・ptrace/strace と `/proc` 拒否 errno・`verify_isolation` は依然**未取得**で、合格の証跡とは扱わない。本番 DB・設定・昇格、root 操作、機密能力の解放は行っていない。
+
+## launcher の session dir bind 失敗の修正（run 01M3XPKGD6K1610ZDXD5S96RZV、2026-10-02）
+
+人が commit `702dc987` を host に入れて require 試験を流した結果は **exit 101**（正の対照は通過、本題は `Remote(LaunchFailed)`）。journal は `start bwrap: runtime relay did not become ready: bwrap status=...(256); stderr=bwrap: Can't find source path /proc/self/fd/8: Permission denied` で、原因が確定した。
+
+- 原因: bwrap 0.11 は bind の source を `realpath` で解決する。`--bind-fd 8` の source は `/proc/self/fd/8` で、`realpath` はこれを実 path `/var/lib/celeris-browser/sessions/<id>` に展開して各段を辿る。bwrap は内側 1000（host `S`）として動くので、0700 の `/var/lib/celeris-browser` を辿れず EACCES。FD 渡しでは path の権限を避けられない。
+- 修正（ADR-0116 D3 再付記）: spawn の子が launcher の userns に `setns` した直後、capability がある間に私有の mount ns を作り（`unshare(CLONE_NEWNS)`・`/` を rprivate）、`/tmp` に tmpfs（0755）を張って `/tmp/celeris-session` に session dir を bind する。bwrap には `--bind /tmp/celeris-session /session` を渡す。`session_root` の 0700 は変えず、launcher 本体と host の mount ns も変わらない。`Unshare` 経路は変わらない。
+- 局所確認: `unshare -Ur` の中で 0700 の親を持つ 1777 の dir を同じ手順（tmpfs → bind）で `/tmp/celeris-session` に置き、bwrap（`--unshare-user --uid 1000 --gid 1000 --cap-drop ALL ... --bind /tmp/celeris-session /session`）から `uid=1000` で読み書きできた（exit 0）。bwrap の base が `/tmp` でも衝突しない。2 map は sandbox で作れないので launcher 経由の実 Chrome はまだ**未実証**。
+- 次: 人が同じ commit から release build し sha256 を照合して入れ替え、worker 外の UID 1001 シェルで require 試験を再実行する。owner UID・map・ptrace/strace と `/proc` 拒否・`verify_isolation` は依然**未取得**。本番 DB・設定・昇格、root 操作、機密能力の解放は行っていない。

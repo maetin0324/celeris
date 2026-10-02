@@ -867,11 +867,8 @@ fn wrapper_runs_the_compiler_directly_when_the_server_is_unreachable() {
 
     // ネットワークの無い sandbox の代わり: user + network namespace（`unshare -rn`）の中からは、外の listener に届かない
     // （codex の seccomp では socket が EPERM、ここでは lo が無く connect が失敗。wrapper から見て同じ「届かない」）。
-    // unprivileged な user namespace が使えない環境では飛ばす。
-    let probe = std::process::Command::new("unshare")
-        .args(["-rn", "true"])
-        .output();
-    if probe.map(|o| o.status.success()).unwrap_or(false) {
+    // ADR-0126 付記: userns 前提の部分だけを既定 skip にする（残りの assert は上で既に済んでいる）。
+    if !crate::test_support::skip_unless_userns_tests() {
         let out = std::process::Command::new("unshare")
             .arg("-rn")
             .arg(&wrapper)
@@ -886,8 +883,6 @@ fn wrapper_runs_the_compiler_directly_when_the_server_is_unreachable() {
             "COMPILER T=unset A=-vV\n"
         );
         assert_eq!(out.status.code(), Some(3));
-    } else {
-        eprintln!("skip: unshare -rn is not available");
     }
     drop(server);
 }

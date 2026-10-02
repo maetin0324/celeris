@@ -169,6 +169,37 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 
 この run で `cargo test --workspace` をフレッシュ実行した結果 exit 101。`instance_handoff` の5 testが worker DB guard で必要な user namespace の `Operation not permitted` により失敗し、並行起動に依存する2 testも失敗した。`browser_shared_cdp` の単独実行も exit 101（`inner_shared_cdp` は pass、`real_shared_cdp_and_auth_section` は `unshare ... Operation not permitted`）。このため sandbox 外での Rust workspace test は未検証であり、過去の pass 件数をこの run の結果としては扱わない。`cargo clippy --workspace -- -D warnings` は exit 0。web の gen:types・boundaries・secrets・parity check は exit 0。crates/ は変更なし。詳細は [phase-web の Rust gate 再実行節](progress/phase-web.md#rust-gate-再実行repair、run-01m3x948ker5j9p5dj3nsrtszw-attempt-2)。
 
+## 時間依存試験の決定化（完了日 2026-10-02、[ADR-0125](adr/0125-deterministic-time-tests.md)）
+
+- 方式: (1) `a_wait_parks_the_task_polls_and_resumes_as_a_continuation` は注入時計 + 状態/event 待ち、(2) `every_cargo_path_uses_the_scratch_target_dir` は状態/event 待ち、(3) `command_checks_are_re_executed_in_workspace` は試験 workspace が timeout 結果を注入、(4) `real_broker_browser_injection_receipt_and_origin_guards` は CDP ready 待ち + 試験専用遅延、(5) `controller_kill_leaves_no_runtime_processes` は SIGSTOP/SIGCONT stutter + 同期フック + process 終了待ち。原因、意図を保つ条件、詳細な方式は [ADR-0125](adr/0125-deterministic-time-tests.md) と[調査一覧](progress/time-dependent-tests.md)を参照。
+- 2026-10-02 単独再実行: `cargo test -p task-dispatch --lib cluster_job_wait` 3回、各 exit 0 / 5 passed。`cargo test -p task-dispatch --lib every_cargo_path_uses_the_scratch_target_dir` 3回、各 exit 0 / 1 passed。`cargo test -p task-dispatch --lib command_checks_are_re_executed_in_workspace` 3回、各 exit 0 / 1 passed。
+- browser 試験: `unshare -U -r true` は exit 1（uid_map の `Operation not permitted`）。`cargo test -p task-worker --test browser_injection_wire` を3回実行、各 exit 101（各回 inner + delayed scripted の2 passed、real browser の `real_broker_browser_injection_receipt_and_origin_guards` は unshare の `Operation not permitted` で失敗）。`cargo test -p task-worker --test browser_runtime_isolated controller_kill_leaves_no_runtime_processes -- --exact` は exit 101（helper 起動時 `NoChildPid`、launch-info 前に終了し stutter 本体に未到達）。SIGSTOP stutter 条件での今回の実行も userns 不可のため未実施。skip 扱い・成功扱いにはしていない。過去の [kill 再実行記録](progress/time-dependent-tests-kill.md)には userns が許可された環境での stutter 5/5 pass がある。
+- 統合検査: `cargo test --workspace` は exit 101、停止した最初の target `celeris --test instance_handoff` は 8 件中 3 passed / 5 failed（worker DB guard の user namespace `Operation not permitted` が3件、handoff/standby 状態待ち失敗が2件: `a_newer_release_takes_over_while_the_old_one_finishes_its_run`、`a_stale_heartbeat_promotes_the_standby`）。残り3失敗名は `normal_mode_does_not_inject_the_smoke_builtins`、`verify_mode_never_dispatches_and_never_touches_daemon_instances`、`starting_the_same_release_twice_exits_three`。cargo は後続 target を実行せず workspace 全体の件数は未確定。`cargo clippy --workspace -- -D warnings` は exit 0（警告なし）。`crates/` に差分なし。
+- 未修正の同種試験: ファイル・試験名・待機の形は[調査一覧「その他の一覧」](progress/time-dependent-tests.md#その他の一覧)を参照。cluster wait の human/cancel/unknown-cluster/leaf wait、build cache の parallel target-dir、orphan takeover、tree approval/gate/replan、work-unit、browser startup reap、task-api stream / browser H3、credentiald injection IPC、process-group kill、browser egress、scratch-cache wait などを含む。
+- 未解決事項: user namespace を許可する環境で実 browser injection と controller kill を各3回再実行し、controller kill は今回未実施の SIGSTOP stutter 条件でも再確認する。workspace test は userns 制限下で失敗し、別途2件の handoff/standby 状態待ちも発生したため、許可環境で再実行して全 workspace 件数を記録する。今回コード変更なし。
+
+### 人が実行する手順（userns が使える host で）
+
+この worker sandbox は `unshare -U -r true` が uid_map の `Operation not permitted` になり、(4) `real_broker_browser_injection_receipt_and_origin_guards` と (5) `controller_kill_leaves_no_runtime_processes` は実行条件に到達しない。user namespace が使える host（`unshare -U -r true` が exit 0 になる環境）で次を実行して結果を `docs/progress/time-dependent-tests-injection.md` と `docs/progress/time-dependent-tests-kill.md` に追記してほしい。
+
+1. (4) browser injection を3回、単独で:
+   ```
+   cargo test -p task-worker --test browser_injection_wire -- --exact real_broker_browser_injection_receipt_and_origin_guards
+   ```
+   を3回繰り返す。
+
+2. (5) controller kill を3回、単独で:
+   ```
+   cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes
+   ```
+   を3回繰り返す。SIGSTOP stutter の具体的な再現手順（修正前後の比較コマンドを含む）は [`docs/progress/time-dependent-tests-kill.md`](progress/time-dependent-tests-kill.md) の「修正前に落ち、修正後に通ること」表のとおりに実行する。
+
+3. 合格の見分け方:
+   - 各コマンドの出力末尾が `test result: ok` であること（`FAILED` ではない）。
+   - (5) の出力に `runtime survived controller kill` という文字列が出ていないこと（出ていれば bwrap/init が残っている失敗）。
+   - (4) の出力に `SinkFailed` が出ていないこと（出ていれば CDP 応答待ちの競合が再発している）。
+   - いずれも `CELERIS_ISOLATION_TESTS=skip` を設定していないのに `SKIPPED` と出た場合は環境不備（bwrap/browser 欠如）であり、合格ではない。
+
 ## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
 
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。

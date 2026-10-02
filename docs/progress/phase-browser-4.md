@@ -264,3 +264,9 @@ final review が挙げた 3 件の未達（P3-C の run loop 配線、P3-A/P4-A 
 | closeout（celeris/01M3SHZGWGKG2VPP0G5DHG92C4） | `92126674` | integrate wu/record (phase record) |
 
 追跡表 `phase-browser-acceptance.md` と合わせ、P4-A/B/C は一部達成、別 host UID 実証と本番機密能力解放は名前付き後続 task とする。本番 admission は `Attested` 必須であり、この host の SameUid は引き続き拒否する。P4-A/B/C の行別判定と制約は上記追跡表を正とする。
+# ADR-0115 権限分離 launcher（run 01M3X8SRB3X08AXW8WK5PY7P9N、2026-10-02）
+
+- 実装統合: `celeris-browser-launcher` binary と固定 IPC、`SO_PEERCRED` 検査、session registry/回収、launcher 所有 user namespace の UID/GID map、daemon 側 runtime 選択と receipt を統合済み。従来 daemon 所有 runtime は既定経路として維持し、launcher は設定で選択する。root 配置用 socket/service unit と host 準備手順は [browser-launcher-host-setup.md](../ops/browser-launcher-host-setup.md) に記載。
+- launcher 実 process 試験: `CELERIS_ISOLATION_TESTS=skip cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0、1 件は `SKIPPED (not passed): celeris-browser user is absent`。この環境には `celeris-browser` user がなく、`celeris-browser-launcher.socket` unit も見つからない。従って Chrome の namespace owner・daemon UID 1001 からの ptrace/proc 読取り拒否は実証していない。
+- 全体検査: `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo test --workspace` は exit 101。再試行 `CELERIS_ISOLATION_TESTS=skip cargo test --workspace` も exit 101。sandbox で `unshare -Ur` が `EPERM` となり、`celeris --test instance_handoff` 5 件が失敗。ログは ADR-0095 worker DB guard の namespace probe が `Operation not permitted` と報告し、残る handoff 試験もその結果として期待する dispatch/standby 状態に到達しなかった。browser の `CELERIS_ISOLATION_TESTS=skip` はこの daemon DB guard を無効化しないため、workspace test 合格とは扱わない。
+- 未解決・依頼: host 管理者に上記手順書に沿った専用 user/subuid/subgid・root 所有 binary・systemd socket/service の準備を依頼する。準備後に skip なしで `browser_launcher_ptrace` を実行し、`NS_GET_OWNER_UID`、`uid_map`/`gid_map`、ptrace attach と `/proc/<pid>/{environ,mem}` の拒否、`verify_isolation` の成功を記録する。workspace test は user namespace 利用可能な環境で再実行が必要。`CredentialInjection` と `IdentityRestore` は未解放、本番昇格・設定変更なし。

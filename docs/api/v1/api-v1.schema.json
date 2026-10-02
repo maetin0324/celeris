@@ -12621,6 +12621,22 @@
           "description": "webhook の秘密が登録されていて、送れる状態か。",
           "type": "boolean"
         },
+        "digest_interval_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "digest_last_sent_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest_max_lines": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "fingerprint": {
           "description": "登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。",
           "type": [
@@ -12634,6 +12650,24 @@
             "string",
             "null"
           ]
+        },
+        "inbox_batch_secs": {
+          "description": "`[notify]` outbound route configuration (ADR-0133 D6).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inbox_new_last_sent_at": {
+          "description": "Last successful send for each outbound route; absent history is `null`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inbox_reminder_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "recent": {
           "description": "直近の送信（新しい順、最大 10 件）。",
@@ -12650,7 +12684,11 @@
       "required": [
         "configured",
         "secret_id",
-        "recent"
+        "recent",
+        "inbox_batch_secs",
+        "inbox_reminder_secs",
+        "digest_interval_secs",
+        "digest_max_lines"
       ],
       "type": "object"
     },

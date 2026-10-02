@@ -31,6 +31,8 @@ pub mod artifacts;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;
 pub mod console_action;
+// ADR-0131 D1〜D3: 定期実行（cron job）の型と発火時刻の純関数。
+pub mod cron;
 /// ADR-0079 D7（Phase R1a）: 人への決定の要求の型と検証（純粋）。
 pub mod decision;
 pub mod delegate;
@@ -93,6 +95,11 @@ pub use comment::{
     CommentAuthorKind, CommentId, MAX_COMMENT_CHARS, PREAMBLE_COMMENTS, TaskComment,
 };
 pub use console_action::ConsoleAction;
+pub use cron::{
+    CronCatchUp, CronError, CronJob, CronJobId, CronJobRun, CronJobRunId, CronJobRunUpdate,
+    CronJobStore, CronOverlap, CronRunOutcome, CronSchedule, CronTaskTemplate, CronTrigger, CronTz,
+    DueFires,
+};
 pub use delegate::{
     DelegateDep, DelegateError, DelegateTask, DelegationLimits, OnChildFailure, WorkspaceContext,
     materialize_delegated, materialize_delegated_logging, validate_each,

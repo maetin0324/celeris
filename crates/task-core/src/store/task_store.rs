@@ -41,6 +41,7 @@ pub trait TaskStore:
     + crate::mcp::McpCallStore
     + crate::browser_wait::BrowserWaitStore
     + crate::cluster_job::ClusterJobWaitStore
+    + crate::cron::CronJobStore
 {
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;

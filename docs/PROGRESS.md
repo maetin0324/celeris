@@ -114,3 +114,15 @@ worker・review の完了を JoinHandle で明示同期し、実時間の待機�
 - 証拠: `cargo test -p task-dispatch integration_check_failure_is_repaired_when_classified`、`cargo test -p task-dispatch final_review_repair_includes_all_unit_paths_and_task_diff_checks`、`cargo test -p task-dispatch a_plan_issue_checkpoint_triggers_a_replan_and_v2_is_adopted` は各 exit 0。
 - `cargo test --workspace` は通常 sandbox で初回 exit 101。`instance_handoff` 5 件が user namespace 作成の `Operation not permitted` により失敗。範囲外のテストは変更せず、ホスト権限で `cargo test -p celeris --test instance_handoff` を再実行して 8/8 通過し、同条件の `cargo test --workspace` は exit 0。
 - `cargo clippy --workspace -- -D warnings` は exit 0（警告なし）。
+
+### 統合後（adr・core・wire merge 済み）の再検証 — 2026-10-02（work unit `verify-land`）
+
+段階 build の統合ブランチ（HEAD `0892b0c2`、adr・core・wire 3 葉を含む）で、前回 integrate-build が落ちた check（兄弟葉 adr の docs/ 限定差分検査が core・wire の crates/ 差分に当たっていた点、`cargo test --workspace` が sandbox の user namespace 制限で落ちうる点）を差し替えた上で検査をやり直した。コードは変更していない。
+
+- `cargo test -p task-core execution` → exit 0（143 passed / 0 failed）
+- `cargo test -p task-dispatch repair` → exit 0（8 passed / 0 failed。`final_review_repair_includes_all_unit_paths_and_task_diff_checks` を含む）
+- `cargo test -p task-dispatch final_review_repair` → 同上のフィルタに含まれ exit 0
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）
+- `cargo fmt --all -- --check` → exit 0（差分なし）
+- `cargo test --workspace` → sandbox のまま 2 回実行し、いずれも exit 0（3209 passed / 0 failed / 12 ignored、`instance_handoff` 8 件を含め userns 制限による失敗なし）。host 権限での再実行は不要だった。flaky な再現は 2 回とも無し。
+- `git status` / `git diff --stat` ともに変更なし（crates/ と docs/adr/ は touch していない。本行の追記のみ）。

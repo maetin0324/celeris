@@ -1918,3 +1918,137 @@ async fn plain_task_writes_both_a_worker_and_a_reviewer_row_to_the_runs_index() 
         assert!(r.finished_at.is_some(), "{r:?}");
     }
 }
+
+/// ADR-0117 D1: reviewer に渡す人の決定・回答は、対象 task とその祖先のものだけ（兄弟・未回答・取り下げは
+/// 除く）。決定は回答の時刻順、選んだ選択肢の label と note が入る。回答は root 側から順に並ぶ。
+#[test]
+fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_its_ancestors() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let check = Check::Command {
+        cmd: ":".into(),
+        expect_exit: 0,
+    };
+    let root = new_task(dir.path(), check.clone(), 0);
+    let mut child = new_task(dir.path(), check.clone(), 0);
+    child.parent_id = Some(root.id);
+    let mut sibling = new_task(dir.path(), check, 0);
+    sibling.parent_id = Some(root.id);
+    for t in [&root, &child, &sibling] {
+        store.insert(t).unwrap();
+    }
+    let row = |task_id: TaskId, key: &str, answer: Option<(&str, Option<&str>, &str)>| {
+        let request = task_core::DecisionRequest {
+            id: format!("d-{key}"),
+            key: key.into(),
+            kind: task_core::DecisionKind::Choice,
+            question: format!("question {key}"),
+            options: vec![
+                task_core::DecisionOption {
+                    key: "a".into(),
+                    label: format!("option a of {key}"),
+                    consequence: None,
+                },
+                task_core::DecisionOption {
+                    key: "b".into(),
+                    label: format!("option b of {key}"),
+                    consequence: None,
+                },
+            ],
+            recommended: "a".into(),
+            cost_of_reversal: task_core::CostOfReversal::Low,
+            cost_note: None,
+            needed_before: vec!["self".into()],
+            path: vec![task_core::DecisionPathEntry {
+                task_id: root.id,
+                title: root.title.clone(),
+                stage: None,
+                unit: None,
+            }],
+            raised_by: task_core::DecisionRaisedBy {
+                task_id,
+                run_id: None,
+                origin: task_core::DecisionOrigin::Planner,
+            },
+            status: task_core::DecisionStatus::Open,
+            answer: None,
+            withdrawn_reason: None,
+        };
+        let mut r = task_core::DecisionRow::from_request(task_id, &request, "2026-10-02T00:00:00Z");
+        if let Some((option, note, ts)) = answer {
+            r.apply_answer(option, note, "human", ts);
+        }
+        r
+    };
+    store
+        .decisions_replace(vec![
+            // 子の決定の方が先に答えられた。
+            row(
+                root.id,
+                "root-later",
+                Some(("a", None, "2026-10-02T02:00:00Z")),
+            ),
+            row(
+                child.id,
+                "child-first",
+                Some(("b", Some("範囲を広げる"), "2026-10-02T01:00:00Z")),
+            ),
+            row(
+                sibling.id,
+                "sibling",
+                Some(("a", None, "2026-10-02T00:30:00Z")),
+            ),
+            row(child.id, "open", None),
+        ])
+        .unwrap();
+    store
+        .append_event(
+            root.id,
+            &Event::Answered {
+                question: "root q".into(),
+                answer: "root a".into(),
+            },
+        )
+        .unwrap();
+    store
+        .append_event(
+            child.id,
+            &Event::Answered {
+                question: "child q".into(),
+                answer: "child a".into(),
+            },
+        )
+        .unwrap();
+    store
+        .append_event(
+            sibling.id,
+            &Event::Answered {
+                question: "sibling q".into(),
+                answer: "sibling a".into(),
+            },
+        )
+        .unwrap();
+
+    let d = dispatcher(store.clone(), done_adapter(), 1);
+    let (decisions, answers) = d.review_human_inputs(&child).unwrap();
+    assert_eq!(
+        decisions
+            .iter()
+            .map(|x| (x.key.as_str(), x.option.as_str(), x.option_label.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("child-first", "b", "option b of child-first"),
+            ("root-later", "a", "option a of root-later"),
+        ]
+    );
+    assert_eq!(decisions[0].task_id, child.id);
+    assert_eq!(decisions[0].note.as_deref(), Some("範囲を広げる"));
+    assert_eq!(decisions[0].question, "question child-first");
+    assert_eq!(
+        answers
+            .iter()
+            .map(|a| (a.question.as_str(), a.answer.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("root q", "root a"), ("child q", "child a")]
+    );
+}

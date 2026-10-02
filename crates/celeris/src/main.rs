@@ -171,7 +171,7 @@ fn main() {
     shutdown_and_exit(runtime, code);
 }
 
-/// `celeris::run` を実行し、終了コード（0/1/2/3。`main` が `std::process::exit` にそのまま渡す）に
+/// `celeris::run` を実行し、終了コード（0/1/2/3/4。`main` が `std::process::exit` にそのまま渡す）に
 /// まとめる。ログとメッセージの中身は従来と同じ。
 async fn run_and_report(config: Config, opts: RunOptions) -> u8 {
     match celeris::run(config, opts).await {
@@ -179,6 +179,13 @@ async fn run_and_report(config: Config, opts: RunOptions) -> u8 {
         Ok(celeris::Exit::DuplicateRelease) => {
             eprintln!("error: another instance of the same release is already active");
             3
+        }
+        // ADR-0040 付記: 昇格の認可が無い release。DB に触れずに exit 4（unit の RestartPreventExitStatus）。
+        Ok(celeris::Exit::NotPromoted) => {
+            eprintln!(
+                "error: this release is not promoted (see `current` / promoting.json); exiting 4"
+            );
+            4
         }
         Ok(exit) => {
             tracing::info!(?exit, "celeris stopped");

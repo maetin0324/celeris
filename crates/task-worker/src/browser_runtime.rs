@@ -26,16 +26,26 @@ use task_core::browser_isolation::{
 /// sandbox の中の UID/GID（host から見た UID は変わらない。ADR-0105）。
 pub const SANDBOX_UID: u32 = 1000;
 
+/// The existing daemon path creates its own user namespace. A launcher may supply
+/// a namespace created under its dedicated host UID instead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UsernsMode {
+    #[default]
+    Unshare,
+    Fd(RawFd),
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("runtime io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("runtime did not report its child pid")]
-    NoChildPid,
+    /// bwrap が `--info-fd` を書かずに終わった。中身は bwrap の stderr の先頭（診断用）。
+    #[error("runtime did not report its child pid: {0}")]
+    NoChildPid(String),
     #[error("runtime is not running")]
     NotRunning,
-    #[error("runtime relay did not become ready")]
-    RelayNotReady,
+    #[error("runtime relay did not become ready: {0}")]
+    RelayNotReady(String),
     #[error("bubblewrap pid namespace init did not become ready")]
     InitNotReady,
 }
@@ -66,6 +76,7 @@ pub struct EgressStats {
 #[derive(Debug, Clone)]
 pub struct RuntimeSpec {
     pub bwrap: PathBuf,
+    pub userns: UsernsMode,
     pub session_id: String,
     /// host 側の session dir。sandbox の `/session` にだけ書ける形で bind する。
     pub session_dir: PathBuf,
@@ -92,37 +103,213 @@ const ETC_FILES: [&str; 10] = [
     "/etc/alternatives",
 ];
 
+/// spawn の子が私有 mount ns に session dir を bind し直すための C 文字列（fork 前に用意）。
+struct SessionMount {
+    source: std::ffi::CString,
+    base: std::ffi::CString,
+    target: std::ffi::CString,
+}
+
+impl SessionMount {
+    fn new(session_dir: &Path) -> std::io::Result<Self> {
+        use std::os::unix::ffi::OsStrExt;
+        let c = |b: &[u8]| {
+            std::ffi::CString::new(b).map_err(|_| std::io::Error::other("path contains NUL"))
+        };
+        Ok(Self {
+            source: c(session_dir.as_os_str().as_bytes())?,
+            base: c(SESSION_MOUNT_BASE.as_bytes())?,
+            target: c(SESSION_MOUNT.as_bytes())?,
+        })
+    }
+
+    /// fork と exec の間で呼ぶ（syscall だけ）。新しい mount ns は launcher の userns の持ち物で、
+    /// 親の mount は slave になる。念のため private にしてから `/tmp` に tmpfs（0755）を張り、
+    /// その下の dir に session dir を bind する。launcher 本体の mount ns は変わらない。
+    fn apply(&self) -> std::io::Result<()> {
+        let err = || Err(std::io::Error::last_os_error());
+        // SAFETY: 引数はすべて NUL 終端の C 文字列か null。
+        unsafe {
+            if libc::unshare(libc::CLONE_NEWNS) < 0 {
+                return err();
+            }
+            if libc::mount(
+                std::ptr::null(),
+                c"/".as_ptr(),
+                std::ptr::null(),
+                libc::MS_REC | libc::MS_PRIVATE,
+                std::ptr::null(),
+            ) < 0
+            {
+                return err();
+            }
+            if libc::mount(
+                c"tmpfs".as_ptr(),
+                self.base.as_ptr(),
+                c"tmpfs".as_ptr(),
+                libc::MS_NOSUID | libc::MS_NODEV,
+                c"mode=0755,size=64k".as_ptr().cast(),
+            ) < 0
+            {
+                return err();
+            }
+            if libc::mkdir(self.target.as_ptr(), 0o755) < 0 {
+                return err();
+            }
+            if libc::mount(
+                self.source.as_ptr(),
+                self.target.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND | libc::MS_REC,
+                std::ptr::null(),
+            ) < 0
+            {
+                return err();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Only diagnostics emitted by bwrap and sandboxd are eligible for the launcher journal.
+/// A descendant can still write to the same pipe, so keep output bounded and reject other lines.
+fn safe_startup_diagnostics(stderr: &str) -> String {
+    let lines: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.starts_with("bwrap: ") || line.starts_with("sandboxd: "))
+        .map(|line| {
+            line.chars()
+                .filter(|c| !c.is_control())
+                .take(240)
+                .collect::<String>()
+        })
+        .collect();
+    lines
+        .iter()
+        .rev()
+        .take(4)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// A running launcher reports only fixed Chrome lifecycle fields. Never forward
+/// arbitrary descendant stderr, which could contain browser data.
+fn chrome_lifecycle_diagnostic(line: &str) -> Option<String> {
+    if let Some(pid) = line.strip_prefix("sandboxd: Chrome started pid=")
+        && let Some(pid) = pid.strip_suffix(" flags=remote-debugging-pipe")
+        && pid.parse::<u32>().is_ok()
+    {
+        return Some(format!(
+            "Chrome started pid={pid} flags=remote-debugging-pipe"
+        ));
+    }
+    if let Some(rest) = line.strip_prefix("sandboxd: Chrome exited code=")
+        && let Some((code, signal)) = rest.split_once(" signal=")
+        && [code, signal].iter().all(|value| {
+            value == &"None"
+                || value
+                    .strip_prefix("Some(")
+                    .and_then(|v| v.strip_suffix(')'))
+                    .is_some_and(|v| v.parse::<i32>().is_ok())
+        })
+    {
+        return Some(format!("Chrome exited code={code} signal={signal}"));
+    }
+    if let Some(category) = line.strip_prefix("sandboxd: Chrome stderr category=")
+        && ["profile-lock", "permission-denied", "other-startup-error"].contains(&category)
+    {
+        return Some(format!("Chrome stderr category={category}"));
+    }
+    None
+}
+
+#[cfg(test)]
+mod startup_diagnostics_tests {
+    use super::{chrome_lifecycle_diagnostic, safe_startup_diagnostics};
+
+    #[test]
+    fn journal_diagnostics_exclude_browser_output_and_are_bounded() {
+        let stderr = format!(
+            "Chrome: secret URL\nsandboxd: proxy listen: EPERM\nbwrap: {}\n",
+            "x".repeat(500)
+        );
+        let safe = safe_startup_diagnostics(&stderr);
+        assert!(!safe.contains("secret URL"));
+        assert!(safe.contains("sandboxd: proxy listen: EPERM"));
+        assert!(safe.len() <= 280);
+    }
+
+    #[test]
+    fn lifecycle_journal_excludes_unstructured_browser_output() {
+        assert_eq!(
+            chrome_lifecycle_diagnostic(
+                "sandboxd: Chrome started pid=123 flags=remote-debugging-pipe"
+            ),
+            Some("Chrome started pid=123 flags=remote-debugging-pipe".into())
+        );
+        assert_eq!(
+            chrome_lifecycle_diagnostic("sandboxd: Chrome exited code=Some(70) signal=None"),
+            Some("Chrome exited code=Some(70) signal=None".into())
+        );
+        assert_eq!(
+            chrome_lifecycle_diagnostic("sandboxd: Chrome stderr category=profile-lock"),
+            Some("Chrome stderr category=profile-lock".into())
+        );
+        assert!(chrome_lifecycle_diagnostic("sandboxd: Chrome stderr category=/secret").is_none());
+        assert!(chrome_lifecycle_diagnostic("sandboxd: Chrome started pid=1 secret=abc").is_none());
+    }
+}
+
 const ROOT_LINKS: [&str; 5] = ["bin", "lib", "lib32", "lib64", "sbin"];
 
+/// `UsernsMode::Fd` のとき spawn の子が私有の mount ns で session dir を bind する先。
+/// bwrap は bind の source を realpath で辿る（`--bind-fd` の `/proc/self/fd/N` も実 path に
+/// 展開して各段を lstat する）ため、内側 1000 が辿れない 0700 の session_root の下は使えない。
+/// tmpfs（0755）の下に置き直し、bwrap にはこの path を渡す（ADR-0116 付記）。
+const SESSION_MOUNT_BASE: &str = "/tmp";
+const SESSION_MOUNT: &str = "/tmp/celeris-session";
+/// sandbox の中の UID / GID（`--uid` / `--gid`、launcher の 2 map の内側 ID）。
+const INNER_ID: u32 = 1000;
+
 /// bwrap の引数（`--info-fd` を除く）。I/O は `/` 直下の symlink 判定だけ。
+///
+/// `UsernsMode::Fd` でも bwrap には `--userns` を渡さない。bwrap 0.11 は `--userns` のとき
+/// setuid → setgid の順に切り替え、setuid で capability を失って setgid が EPERM になる。
+/// 代わりに spawn の子が launcher の userns へ入って GID → UID の順に内側 1000 へ切り替え、
+/// bwrap はそこから通常の `--unshare-user` で入れ子の userns を作る（ADR-0116 付記）。
+/// 内側 1000 は session_root の私有 dir を辿れないので、session dir は子の私有 mount ns で
+/// `SESSION_MOUNT` に bind し直してから渡す。
 pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
-    let mut a: Vec<OsString> = [
-        "--unshare-user",
-        "--uid",
-        "1000",
-        "--gid",
-        "1000",
-        "--unshare-pid",
-        "--unshare-net",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--unshare-cgroup-try",
-        "--die-with-parent",
-        "--new-session",
-        "--cap-drop",
-        "ALL",
-        "--clearenv",
-        "--hostname",
-        "celeris-browser",
-        "--tmpfs",
-        "/",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-    ]
-    .iter()
-    .map(OsString::from)
-    .collect();
+    let mut a: Vec<OsString> = vec!["--unshare-user".into()];
+    a.extend(
+        [
+            "--uid",
+            "1000",
+            "--gid",
+            "1000",
+            "--unshare-pid",
+            "--unshare-net",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--unshare-cgroup-try",
+            "--die-with-parent",
+            "--new-session",
+            "--cap-drop",
+            "ALL",
+            "--clearenv",
+            "--hostname",
+            "celeris-browser",
+            "--tmpfs",
+            "/",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+        ]
+        .iter()
+        .map(OsString::from),
+    );
     for l in ROOT_LINKS {
         let host = Path::new("/").join(l);
         if let Ok(t) = std::fs::read_link(&host) {
@@ -149,8 +336,17 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
             d.clone().into_os_string(),
         ]);
     }
-    a.extend(["--proc", "/proc", "--dev", "/dev", "--bind"].map(OsString::from));
-    a.push(spec.session_dir.clone().into_os_string());
+    a.extend(["--proc", "/proc", "--dev", "/dev"].map(OsString::from));
+    match spec.userns {
+        UsernsMode::Unshare => {
+            a.push("--bind".into());
+            a.push(spec.session_dir.clone().into_os_string());
+        }
+        UsernsMode::Fd(_) => {
+            a.push("--bind".into());
+            a.push(SESSION_MOUNT.into());
+        }
+    }
     a.push(SESSION_ROOT.into());
     for (k, v) in [
         ("HOME", SESSION_ROOT.to_owned()),
@@ -162,6 +358,69 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
     a.extend(["--remount-ro", "/", "--"].map(OsString::from));
     a.extend(spec.argv.iter().cloned());
     a
+}
+
+#[cfg(test)]
+mod userns_args_tests {
+    use super::*;
+
+    #[test]
+    fn launcher_tmp_is_writable_by_chrome_subuid() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let spec = RuntimeSpec {
+            bwrap: "/usr/bin/bwrap".into(),
+            userns: UsernsMode::Fd(11),
+            session_id: "test".into(),
+            session_dir: dir.path().into(),
+            ro_dirs: Vec::new(),
+            argv: vec!["/usr/bin/true".into()],
+            cdp_pipe: false,
+            egress: None,
+        };
+        prepare_session_tmp(&spec).unwrap();
+        let mode = std::fs::metadata(dir.path().join("tmp"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o1777);
+    }
+
+    #[test]
+    fn external_userns_binds_session_from_private_mount() {
+        let mut spec = RuntimeSpec {
+            bwrap: "/usr/bin/bwrap".into(),
+            userns: UsernsMode::Unshare,
+            session_id: "test".into(),
+            session_dir: "/tmp/test-session".into(),
+            ro_dirs: Vec::new(),
+            argv: vec!["/usr/bin/true".into()],
+            cdp_pipe: false,
+            egress: None,
+        };
+        let old = bwrap_args(&spec);
+        assert_eq!(old.first().and_then(|s| s.to_str()), Some("--unshare-user"));
+        spec.userns = UsernsMode::Fd(11);
+        let new = bwrap_args(&spec);
+        assert!(!new.contains(&OsString::from("--userns")));
+        let bind = |args: &[OsString], flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .map(|i| args[i + 1].clone())
+        };
+        assert_eq!(bind(&old, "--bind"), Some("/tmp/test-session".into()));
+        assert_eq!(bind(&new, "--bind"), Some(SESSION_MOUNT.into()));
+        assert!(!new.contains(&OsString::from("--bind-fd")));
+        let strip = |args: &[OsString]| -> Vec<OsString> {
+            args.iter()
+                .filter(|a| {
+                    !["/tmp/test-session", SESSION_MOUNT].contains(&a.to_str().unwrap_or(""))
+                })
+                .cloned()
+                .collect()
+        };
+        assert_eq!(strip(&old), strip(&new));
+    }
 }
 
 /// 稼働中の runtime。drop で process group ごと SIGKILL する。
@@ -186,6 +445,20 @@ fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
+fn prepare_session_tmp(spec: &RuntimeSpec) -> std::io::Result<()> {
+    let tmp = spec.session_dir.join("tmp");
+    std::fs::create_dir_all(&tmp)?;
+    if matches!(spec.userns, UsernsMode::Fd(_)) {
+        // The launcher (host UID B) creates this directory, while Chrome
+        // runs as host subuid S. Chromium's ProcessSingleton creates its
+        // socket under TMPDIR; a default 0755 directory makes that fail
+        // with PROFILE_IN_USE (exit 21). The session mount is private.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o1777))?;
+    }
+    Ok(())
+}
+
 impl IsolatedRuntime {
     pub fn launch(spec: &RuntimeSpec) -> Result<Self, RuntimeError> {
         Self::launch_with(spec, true)
@@ -194,7 +467,7 @@ impl IsolatedRuntime {
     /// `arm_parent_death` が false なら bwrap に `PR_SET_PDEATHSIG` を掛けない。ADR-0108 D2 の
     /// 「発火を取りこぼした」場合（prctl 前の競合）を実プロセスで再現する試験のためだけに使う。
     pub fn launch_with(spec: &RuntimeSpec, arm_parent_death: bool) -> Result<Self, RuntimeError> {
-        std::fs::create_dir_all(spec.session_dir.join("tmp"))?;
+        prepare_session_tmp(spec)?;
         let (info_r, info_w) = pipe()?;
         let (to_browser_r, to_browser_w) = pipe()?;
         let (from_browser_r, from_browser_w) = pipe()?;
@@ -207,6 +480,16 @@ impl IsolatedRuntime {
             .map(|_| browser_relay::seqpacket_pair())
             .transpose()?;
         let channel_fd = channel.as_ref().map(|(_, s)| s.as_raw_fd());
+        let userns_fd = match spec.userns {
+            UsernsMode::Unshare => None,
+            UsernsMode::Fd(fd) => Some(fd),
+        };
+        // 内側 1000 からは session_root（launcher の 0700）を辿れない。子が私有の mount ns で
+        // tmpfs の下に bind し直す。path は fork の前に C 文字列にしておく。
+        let session_mount = match spec.userns {
+            UsernsMode::Unshare => None,
+            UsernsMode::Fd(_) => Some(SessionMount::new(&spec.session_dir)?),
+        };
         // SAFETY: getpid は常に成功する。
         let parent = unsafe { libc::getpid() };
         let mut cmd = Command::new(&spec.bwrap);
@@ -223,6 +506,29 @@ impl IsolatedRuntime {
         // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は親が spawn まで保持する。
         unsafe {
             cmd.pre_exec(move || {
+                // The launcher blocks termination signals for sigwait; sandbox
+                // children must receive normal SIGTERM during graceful teardown.
+                let mut empty: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut empty);
+                if libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut()) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // launcher の userns へ入り、GID → UID の順に内側 1000 へ（UID が先だと
+                // capability を失い setgid が EPERM）。資格の変更は PDEATHSIG を消すので prctl より前。
+                if let Some(fd) = userns_fd {
+                    if libc::setns(fd, libc::CLONE_NEWUSER) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // まだ launcher の userns の 0（host の launcher UID）で capability がある間に。
+                    if let Some(m) = &session_mount {
+                        m.apply()?;
+                    }
+                    if libc::setresgid(INNER_ID, INNER_ID, INNER_ID) < 0
+                        || libc::setresuid(INNER_ID, INNER_ID, INNER_ID) < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
                 if arm_parent_death && libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -279,11 +585,18 @@ impl IsolatedRuntime {
             cdp_read: spec.cdp_pipe.then(|| File::from(from_browser_r)),
             egress_stats: None,
         };
-        rt.inner_pid = parse_child_pid(&info).ok_or(RuntimeError::NoChildPid)?;
+        rt.inner_pid = match parse_child_pid(&info) {
+            Some(pid) => pid,
+            None => return Err(RuntimeError::NoChildPid(rt.failed_stderr())),
+        };
         // --info-fd is written before bwrap releases its child from child_wait_fd. Killing the
         // controller immediately after that report can kill the outer monitor before pid 1
         // calls PR_SET_PDEATHSIG, leaving a live sandbox behind. bwrap's init enters do_wait
         // only after arming the signal; do not expose the runtime until then.
+        // UsernsMode::Fd (launcher, ADR-0115/0116) also works: the launcher process is bwrap's
+        // parent in the host pid ns, so --info-fd reports a host pid, and the launcher (euid
+        // celeris-browser) owns the userns that is an ancestor of the init's userns, so it may
+        // read /proc/<pid>/wchan and stat and may SIGKILL the init.
         let init_pid = rt.inner_pid;
         let init_starttime = process_starttime(init_pid);
         let init_ready = || {
@@ -320,8 +633,23 @@ impl IsolatedRuntime {
                 .spawn(move || relay_loop(ctrl, cfg, pgid, stats, ready_tx))?;
             // listener が立つまで browser は起動しない（sandboxd が READY の後に起動する）。
             if ready_rx.recv_timeout(Duration::from_secs(10)).is_err() {
-                return Err(RuntimeError::RelayNotReady);
+                return Err(RuntimeError::RelayNotReady(rt.failed_stderr()));
             }
+        }
+        if matches!(spec.userns, UsernsMode::Fd(_))
+            && let Some(stderr) = rt.child.stderr.take()
+        {
+            let session = spec.session_id.clone();
+            std::thread::Builder::new()
+                .name(format!("celeris-browser-diag-{session}"))
+                .spawn(move || {
+                    for line in BufReader::new(stderr.take(8192)).lines() {
+                        let Ok(line) = line else { break };
+                        if let Some(safe) = chrome_lifecycle_diagnostic(&line) {
+                            eprintln!("celeris-browser-launcher: session {session}: {safe}");
+                        }
+                    }
+                })?;
         }
         Ok(rt)
     }
@@ -369,6 +697,31 @@ impl IsolatedRuntime {
             Ok(f) => admission.admit(&f),
             Err(_) => Err(vec![IsolationViolation::NoProcessGroup]),
         }
+    }
+
+    /// 起動に失敗した bwrap の終了状態と、安全な診断行だけを返す。
+    /// Chrome / action の stderr は sandboxd が破棄するため、機密を journal に流さない。
+    fn failed_stderr(&mut self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && self.is_running() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if self.is_running() {
+            // SAFETY: 未回収の子の process group にだけ送る。
+            unsafe { libc::killpg(self.child.id() as i32, libc::SIGKILL) };
+            let _ = self.child.wait();
+        }
+        let status = self.child.try_wait().ok().flatten();
+        let mut s = String::new();
+        if let Some(e) = self.child.stderr.as_mut() {
+            // A descendant may still hold stderr after bwrap exits. Never wait for EOF here.
+            unsafe { libc::fcntl(e.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
+            let _ = e.take(4096).read_to_string(&mut s);
+        }
+        format!(
+            "bwrap status={status:?}; stderr={}",
+            safe_startup_diagnostics(&s)
+        )
     }
 
     /// stderr の先頭（診断用。起動失敗の試験で使う）。
@@ -615,6 +968,11 @@ fn spawn_egress(
     // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は spawn まで親が保持する。
     unsafe {
         cmd.pre_exec(move || {
+            let mut empty: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut empty);
+            if libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut()) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             // runtime の process group に入れて一緒に回収する（ADR-0108 D2）。
             // 元がすでに fd 3 なら dup2 は何もせず CLOEXEC が残る（exec で閉じる）。その時は外す。
             let placed = if fd == 3 {

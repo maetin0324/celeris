@@ -1,5 +1,6 @@
 //! ADR-0095: 実プロセスで、namespace の中から DB が書けず、兄弟は書けることを確かめる。
 
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -61,6 +62,103 @@ fn run_guarded(g: &DbGuard, cwd: &Path, script: &str) -> (bool, String) {
 
 fn q(p: &Path) -> String {
     format!("'{}'", p.display())
+}
+
+fn userns_available() -> bool {
+    let available = Command::new("unshare")
+        .args(["-Ur", "true"])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !available {
+        assert_ne!(
+            std::env::var("CELERIS_DB_GUARD_TESTS").as_deref(),
+            Ok("require"),
+            "user namespace is required for db_guard tests"
+        );
+        eprintln!("skip: unprivileged user namespace is unavailable");
+    }
+    available
+}
+
+struct InstalledGuard;
+
+impl Drop for InstalledGuard {
+    fn drop(&mut self) {
+        install(None);
+    }
+}
+
+#[test]
+fn user_systemd_bus_address_is_removed_even_without_a_guard() {
+    let mut cmd = tokio::process::Command::new("true");
+    cmd.env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/test/bus");
+    let cmd = launch(cmd, None);
+    assert!(
+        cmd.as_std()
+            .get_envs()
+            .find(|(name, _)| *name == "DBUS_SESSION_BUS_ADDRESS")
+            .is_some_and(|(_, value)| value.is_none())
+    );
+}
+
+#[test]
+fn user_systemd_bus_is_hidden_from_launched_process() {
+    if !userns_available() {
+        return;
+    }
+    let f = fixture();
+    let runtime = f._tmp.path().join("runtime");
+    std::fs::create_dir_all(runtime.join("systemd")).unwrap();
+    let _bus = UnixListener::bind(runtime.join("bus")).unwrap();
+    let _private = UnixListener::bind(runtime.join("systemd/private")).unwrap();
+    install(Some(guard(&f)));
+    let _reset = InstalledGuard;
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg("test -z \"${DBUS_SESSION_BUS_ADDRESS+x}\" && test ! -S \"/run/user/$(id -u)/bus\" && test ! -S \"$XDG_RUNTIME_DIR/bus\" && test -f \"$XDG_RUNTIME_DIR/bus\" && test -d \"$XDG_RUNTIME_DIR/systemd\" && test -z \"$(ls -A \"$XDG_RUNTIME_DIR/systemd\")\" && test ! -e \"$XDG_RUNTIME_DIR/systemd/private\"")
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/definitely-not-a-bus");
+    let mut cmd = launch(cmd, None);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let out = rt.block_on(async { cmd.output().await }).unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        runtime.join("bus").exists(),
+        "parent namespace was modified"
+    );
+    assert!(
+        runtime.join("systemd/private").exists(),
+        "parent namespace was modified"
+    );
+
+    let Some(real_runtime) = std::env::var_os("XDG_RUNTIME_DIR") else {
+        eprintln!("skip: host XDG_RUNTIME_DIR is unset");
+        return;
+    };
+    if !Path::new(&real_runtime).exists() {
+        eprintln!("skip: host XDG_RUNTIME_DIR does not exist");
+        return;
+    }
+    if Command::new("systemctl").arg("--version").output().is_err() {
+        eprintln!("skip: systemctl is not installed");
+        return;
+    }
+    let mut cmd = tokio::process::Command::new("systemctl");
+    cmd.args(["--user", "show-environment"]);
+    let mut cmd = launch(cmd, None);
+    let out = rt.block_on(async { cmd.output().await }).unwrap();
+    assert!(
+        !out.status.success(),
+        "systemctl --user reached the host manager"
+    );
 }
 
 #[test]

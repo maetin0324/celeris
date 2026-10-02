@@ -108,7 +108,7 @@ impl DbGuard {
         Ok(out)
     }
 
-    fn plan(&self, cwd: Option<&Path>) -> io::Result<Plan> {
+    fn plan(&self, cwd: Option<&Path>, runtime_dir: Option<PathBuf>) -> io::Result<Plan> {
         let keep = self
             .writable_children()?
             .into_iter()
@@ -135,6 +135,43 @@ impl DbGuard {
         };
         let uid = nix::unistd::getuid().as_raw();
         let gid = nix::unistd::getgid().as_raw();
+        let mut bus_paths = Vec::new();
+        let host_bus = PathBuf::from(format!("/run/user/{uid}/bus"));
+        if host_bus.exists() {
+            bus_paths.push(cstring(host_bus.into_os_string())?);
+        }
+        let mut systemd_dir = None;
+        if let Some(runtime) = runtime_dir.filter(|p| !p.as_os_str().is_empty()) {
+            if !runtime.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "XDG_RUNTIME_DIR is not absolute",
+                ));
+            }
+            let bus = runtime.join("bus");
+            if bus.exists()
+                && !bus_paths
+                    .iter()
+                    .any(|p| p.as_bytes() == bus.as_os_str().as_bytes())
+            {
+                bus_paths.push(cstring(bus.into_os_string())?);
+            }
+            let systemd = runtime.join("systemd");
+            if systemd.exists() {
+                systemd_dir = Some(cstring(systemd.into_os_string())?);
+            }
+        }
+        // Bind mounts from anonymous fds (memfd/O_TMPFILE) fail on socket targets.
+        // NamedTempFile keeps a randomly named, empty regular file alive through pre_exec.
+        let empty_bus = if bus_paths.is_empty() {
+            None
+        } else {
+            Some(tempfile::NamedTempFile::new()?)
+        };
+        let empty_bus_path = empty_bus
+            .as_ref()
+            .map(|file| cstring(file.path().as_os_str().to_os_string()))
+            .transpose()?;
         Ok(Plan {
             dir: cstring(self.dir.clone().into_os_string())?,
             keep,
@@ -146,6 +183,10 @@ impl DbGuard {
             uid_map: format!("{uid} {uid} 1").into_bytes(),
             gid_map: format!("{gid} {gid} 1").into_bytes(),
             ssh,
+            bus_paths,
+            systemd_dir,
+            _empty_bus: empty_bus,
+            empty_bus_path,
         })
     }
 }
@@ -160,6 +201,11 @@ struct Plan {
     gid_map: Vec<u8>,
     /// (写し, `/etc/ssh/ssh_config.d`)
     ssh: Option<(CString, CString)>,
+    bus_paths: Vec<CString>,
+    systemd_dir: Option<CString>,
+    /// Retains the source file until all bus socket paths have been overmounted.
+    _empty_bus: Option<tempfile::NamedTempFile>,
+    empty_bus_path: Option<CString>,
 }
 
 impl Plan {
@@ -185,6 +231,20 @@ impl Plan {
             if let Some((shadow, target)) = &self.ssh {
                 // D4 は best-effort（失敗しても DB の保護には関係しない）。
                 let _ = bind(shadow, target, 0);
+            }
+            if let Some(systemd) = &self.systemd_dir {
+                check(libc::mount(
+                    c"tmpfs".as_ptr(),
+                    systemd.as_ptr(),
+                    c"tmpfs".as_ptr(),
+                    libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                    c"size=4096,mode=0700".as_ptr().cast(),
+                ))?;
+            }
+            if let Some(source) = &self.empty_bus_path {
+                for target in &self.bus_paths {
+                    bind(source, target, 0)?;
+                }
             }
             bind(&self.dir, &self.dir, libc::MS_REC)?;
             check(libc::mount(
@@ -244,6 +304,14 @@ fn check(rc: libc::c_int) -> io::Result<()> {
 
 fn cstring(s: OsString) -> io::Result<CString> {
     CString::new(s.into_vec()).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+}
+
+fn runtime_dir(command: &std::process::Command) -> Option<PathBuf> {
+    command
+        .get_envs()
+        .find(|(name, _)| *name == "XDG_RUNTIME_DIR")
+        .map(|(_, value)| value.map(PathBuf::from))
+        .unwrap_or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
 }
 
 /// user namespace では元の mount の `nosuid` / `nodev` / `noexec` / atime 系は外せない（locked）ので、
@@ -340,7 +408,7 @@ pub fn apply(command: &mut tokio::process::Command, guard: &DbGuard) {
         return;
     }
     let cwd = command.as_std().get_current_dir().map(Path::to_path_buf);
-    match guard.plan(cwd.as_deref()) {
+    match guard.plan(cwd.as_deref(), runtime_dir(command.as_std())) {
         Ok(plan) => {
             // SAFETY: `Plan::enter` は fork 後の子で libc の呼び出しだけを行い、割り当てをしない。
             unsafe {
@@ -364,7 +432,7 @@ pub fn apply(command: &mut tokio::process::Command, guard: &DbGuard) {
 /// `apply` の std 版（起動時の probe と試験用）。
 pub fn apply_std(command: &mut std::process::Command, guard: &DbGuard) -> io::Result<()> {
     use std::os::unix::process::CommandExt;
-    let plan = guard.plan(command.get_current_dir())?;
+    let plan = guard.plan(command.get_current_dir(), runtime_dir(command))?;
     // SAFETY: `apply` と同じ。
     unsafe {
         command.pre_exec(move || plan.enter());
@@ -372,15 +440,15 @@ pub fn apply_std(command: &mut std::process::Command, guard: &DbGuard) -> io::Re
     Ok(())
 }
 
-/// D5: 起動時に 1 回、実際に namespace 付きでプロセスを起動し、DB が書けないことを確かめる
-/// （`sh -c 'test ! -w "$1"'`。`access(2)` は読み取り専用の mount で `EROFS` を返す）。
+/// D5/D-a: 起動時に namespace 付きプロセスで DB の読み取り専用化と user bus の遮断を確かめる。
 pub fn probe(guard: &DbGuard) -> Result<(), DbGuardError> {
     let mut command = std::process::Command::new("sh");
     command
         .arg("-c")
-        .arg("test ! -w \"$1\"")
+        .arg("test ! -w \"$1\" && test ! -S \"/run/user/$(id -u)/bus\" && { test -z \"$XDG_RUNTIME_DIR\" || { test ! -S \"$XDG_RUNTIME_DIR/bus\" && test ! -e \"$XDG_RUNTIME_DIR/systemd/private\"; }; }")
         .arg("sh")
         .arg(guard.db_path())
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
@@ -392,7 +460,7 @@ pub fn probe(guard: &DbGuard) -> Result<(), DbGuardError> {
         Ok(())
     } else {
         Err(DbGuardError::Probe(format!(
-            "{} is still writable inside the namespace ({}; {})",
+            "{} is writable or the user systemd bus is visible inside the namespace ({}; {})",
             guard.db_path().display(),
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
@@ -422,13 +490,13 @@ pub fn installed() -> Option<Arc<DbGuard>> {
 /// D2: worker の run のプロセスを spawn する所で `container::wrap` の代わりに呼ぶ。コンテナ実行なら
 /// `container::wrap`、そうでなければ入っているガードを付ける（無ければそのまま）。
 pub fn launch(
-    command: tokio::process::Command,
+    mut command: tokio::process::Command,
     container: Option<&crate::container::ContainerPlan>,
 ) -> tokio::process::Command {
+    command.env_remove("DBUS_SESSION_BUS_ADDRESS");
     if container.is_some() {
         return crate::container::wrap(command, container);
     }
-    let mut command = command;
     if let Some(guard) = installed() {
         apply(&mut command, &guard);
     }

@@ -717,3 +717,41 @@ $ curl -s http://127.0.0.1:7720/healthz   # release が <old_sha12> に戻った
 
 - D1 の根因（事故時の release 木で offline install が exit 0 のまま `node_modules` を作らなかった経路の確定）は ADR-0135 に記載のとおり未確定。D1 の検査（node_modules と import 解決の必須化）はどの根因でも壊れた release を通さないため、根因の確定は release の修正を妨げない。
 - `deploy/systemd/celeris-web-lan.*` の実機への install・`daemon-reload`・既存 unit との置き換えは本番 host の操作であり、このWUでは実行していない（上記「人が実行する手順」参照）。
+
+### main 取り込みと SD_GATE_SKIP_WEB の扱い（work unit `merge-main`、final review 差し戻し対応）
+
+final review で、このタスクの branch が main の `f1904ecd`（release.sh の web 段を既定で skip にする変更、`SD_GATE_SKIP_WEB` の既定を 1 に）を含んでおらず、merge すると新設の `release_web_bundle_requires_deps.sh` だけが「web steps: skipped — SD_GATE_SKIP_WEB=1」で落ちる、という技術的欠陥を指摘された。対応は以下のとおり。
+
+- `git merge main`（`f1904ecd` と `5d6df9f3` を含む main）を実行。`git merge-tree --write-tree HEAD main` で事前に衝突なしを確認済みで、実merge も `docs/PROGRESS.md` と `scripts/selfdeploy/release.sh` を auto-merge し、衝突なしで完了した（merge commit 本文に経緯を記載）。
+- `scripts/selfdeploy/tests/release_web_bundle_requires_deps.sh` の `run_release()` に `SD_GATE_SKIP_WEB=0` を明示して追加した（`release_web_stage_nonblocking.sh` の既存の書き方と同じ）。他の selfdeploy 試験で `release.sh` を呼び web 段の実行を前提にしているのはこの 2 本だけで、他は変更不要だった。
+- `release.sh` の `SD_GATE_SKIP_WEB` 既定を 1 にしたコメント（f1904ecd 由来）を書き直した。この task（release-deps / follow-health / lan-units / verify-web）で node_modules の有無・`server/` の import 解決の検査（`bundle_web`、web.ok=false 化）と web-follow の起動確認（ADR-0135）が実装済みであることを明記した。ただし **NFS 上での web/app 展開（offline の prod install 含む）に 40〜60 分かかる問題は未対応のまま残っている**ため、既定を 0（web 段を走らせる）に戻すかどうかは人の判断とし、**既定値 `${SD_GATE_SKIP_WEB:-1}` はこの task では変更していない**。
+- `scripts/selfdeploy/release.sh` の `${SD_GATE_SKIP_WEB:-1}` という既定値自体のコード（条件式）は変更していない。変わったのはテストの呼び出し側の明示指定とコメントの文面のみ。
+
+#### 証拠コマンドと結果
+
+```
+$ git merge-base --is-ancestor f1904ecd HEAD && echo ok
+ok
+$ git merge-base --is-ancestor 5d6df9f3 HEAD && echo ok
+ok
+$ for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || { echo "FAILED: $t"; exit 1; }; done
+...
+pid_resolution_test.sh: all ok
+promote_authorization_marker: all ok
+web_follow_health_gate: all ok
+promote_web_follows_release: all ok
+release_gui_skip_and_shared_tree: ok
+release_parallel_test_gate: ok
+release_uses_scratch_lease: ok
+release_web_bundle_requires_deps: ok
+release_web_stage_nonblocking: ok
+verify_durations_and_parallel: ok
+verify_web_app_start: ok
+web_follow_health_gate: all ok
+```
+
+exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度で、合算の遅さは同一 run 内での繰り返し実行による負荷。詳細な単体実行時間は前節「record」参照）。全 12 本すべて ok。
+
+### 未解決事項（追加）
+
+- NFS 上の web/app 展開が 40〜60 分かかる問題は本 task のスコープ外のまま。`SD_GATE_SKIP_WEB` の既定を 0 に戻すのは、この問題が解決してから人が判断する。

@@ -234,8 +234,12 @@ skip_step() {
 # 落ちても `GATE_OK` は倒さない（リリースは作られ、昇格は gui/ だけのリリースとして進む）。結果は gate.json の
 # `steps[]`（exit ≠ 0 のまま）と `web`（`ok` / `failed_step` / `blocking: false`）に残し、落ちた段より後ろの
 # web/ の段は `skipped: true` にする。ビルドする sha に `web/` が無い・`SD_GATE_SKIP_WEB=1` なら全部 skipped。
-# 2026-10-02（人の判断）: web の配布物の展開が NFS 上で 40〜60 分かかり、node_modules も入らない不具合（task 01M3YT4PT3）
-# があるので、既定を skip にする（SD_GATE_SKIP_WEB の既定 1）。web の段を走らせるときは SD_GATE_SKIP_WEB=0 を明示する。
+# 2026-10-02（task 01M3YT4PT3）: node_modules が入らない不具合そのものは bundle_web（web-bundle 段。node_modules の
+# 有無と `node -e 'import.meta.resolve(...); await import("./server/app.js")'` による import 解決）で直り、
+# node_modules が無い・import できないリリースは web.ok=false になって web-follow が切り替えない（ADR-0135）。
+# ただし NFS 上での web/app の展開（offline の prod install 含む）に 40〜60 分かかる問題は未対応で残っている。
+# それを解決するまで既定を skip にするかは人の判断なので、既定は 1（skip）のまま変えない。web の段を走らせるとき
+# は SD_GATE_SKIP_WEB=0 を明示する。
 WEB_OK=true
 WEB_FAILED_STEP=""
 WEB_SKIP_REASON=""

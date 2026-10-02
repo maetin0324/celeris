@@ -95,6 +95,37 @@ impl Dispatcher {
             );
             return Ok(());
         }
+        // ADR-0118 D4 付記: 検査中に review snapshot が変わった判定は適用しない（stale は不合格ではない）。
+        // attempts を消費せず reviewing のまま、次の tick の review 入口で再 sync → 再 check → 再 review。
+        if let Some(stale) = outcome.target_stale.take() {
+            let review_run = completed_review_run
+                .clone()
+                .unwrap_or_else(|| run_id.clone());
+            self.defer_stale_review(
+                task_id,
+                &run_id,
+                &review_run,
+                stale.repo_id,
+                &stale.reviewed_sha,
+                &stale.target_sha,
+                &stale.reason,
+            )?;
+            set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
+            for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
+                self.store.append_event(task_id, ev)?;
+            }
+            finish_reviewer_run_index(
+                self.store.as_ref(),
+                &completed_review_run,
+                task_core::RunIndexStatus::Cancelled,
+                worker_finished_usage(&reviewer_finished),
+                review_metrics,
+            );
+            if let Some(entry) = entry {
+                self.pending_subjects.insert(task_id, entry.subject);
+            }
+            return Ok(());
+        }
         let mut throttled_events = Vec::new();
         if let Some(pf) = outcome.provider_failure.take() {
             // ADR-0054 D2（Phase 113）: `pf.outcome = Some(..)` はプロバイダが分類できた供給側失敗

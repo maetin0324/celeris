@@ -851,3 +851,44 @@ fn target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate() {
     assert!(merge_reviewed(dir.path(), &d).is_err());
     assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
 }
+
+/// ADR-0118 D6 付記: review 前同期が衝突で諦めた行（merge candidate が NULL）で main が分岐していれば、
+/// 再レビューを要求せず（無限の rereview にしない）、従来どおり [merge-base] の Blocked（局所修復の対象）に進む。
+#[test]
+fn pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair() {
+    use task_core::DeliveryStore;
+    let (store, dir, mut d) = merge_queued_delivery();
+    let mut unsynced = d.clone();
+    unsynced.target_sha = None;
+    unsynced.reviewed_sha = None;
+    unsynced.merge_candidate_sha = None;
+    assert!(store.delivery_save(Some(&d), &unsynced).unwrap());
+    d = unsynced;
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    fs::write(dir.path().join("base"), "main changed").unwrap();
+    git_text(dir.path(), &["commit", "-am", "main diverged"]).unwrap();
+    let moved = sha(dir.path(), "main").unwrap();
+    // review 開始時の base は分岐後の main（衝突した同期と同じ状況）。
+    let mut diverged = d.clone();
+    diverged.base = moved.clone();
+    assert!(store.delivery_save(Some(&d), &diverged).unwrap());
+
+    advance(&store, &cfg, &diverged, OffsetDateTime::now_utc()).unwrap();
+
+    assert_eq!(sha(dir.path(), "main").unwrap(), moved);
+    assert_eq!(sha(dir.path(), "feature").unwrap(), d.head);
+    let after = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(after.state, State::Blocked);
+    assert!(
+        after.detail.starts_with(MERGE_BASE_FAILURE),
+        "{}",
+        after.detail
+    );
+    assert_eq!(
+        classify_delivery_failure(after.state, &after.detail, None),
+        Some(RepairClass::MergeBase)
+    );
+    assert!(target_advanced_events(&store, &d).is_empty());
+    assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Done);
+}

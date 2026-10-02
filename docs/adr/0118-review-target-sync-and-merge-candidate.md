@@ -30,6 +30,14 @@ dirty worktree、進行中の rebase、対象 ref が読めない場合は branc
 
 remote workspace や shared workspace でローカルの task Git worktree/対象ブランチを持たない場合はローカル rebase を試みない。remote 実行・remote reviewer の現行の意味は保ち、同期済み SHA を捏造しない。`spawn_review` がレビュー対象を確保できず起動しない場合も記録を作らない。この除外を root/child の Git worktree の成功として扱わない。
 
+#### D2 付記（2026-10-02、同期を省く場合の実装）
+
+dirty・進行中の rebase・ref 不読・detached HEAD など `sync_onto_target` が `Dirty`/`Failed` を返した場合、`dispatcher/review_spawn.rs` は「レビューを止める」のではなく **同期を省く**。branch は動かさず、`Event::WorkerProgress`（`review target sync skipped for <repo>: <理由>; reviewing the unsynced HEAD without a merge candidate`）を残し、未同期の HEAD で従来どおり checks/reviewer へ進む。`ReviewTargetSynced` と delivery の三つの SHA は記録しない。遷移を起こさないので attempts は消費しない。root の未コミット変更は従来どおり delivery の「コミット後に再レビュー」（`[merge-base]` の Blocked）が扱う。task に登録されていない（`RepoRef` の無い）リポジトリは同期しない。
+
+#### D4 付記（2026-10-02、stale の実装）
+
+stale（同期中の target 再進行、delivery の base/head と同期 snapshot の不一致、検査後の HEAD・branch・target の変化）は遷移せず `Event::ReviewTargetAdvanced`（検査した `reviewed_sha` と今の `target_sha`、`attempt`）と理由の `WorkerProgress`（`review target stale: …`）を残し、task は `reviewing` のまま次の tick の review 入口で再 sync → 全 checks → reviewer をやり直す。検査後の変化は `ReviewOutcome::target_stale` で返し、`review_verdict.rs` は判定を適用しない（reviewer run は `Cancelled` で閉じる）。回数は直近の遷移（`Transitioned{rereview}` の直後に `ReviewTargetAdvanced` が続く自動の再レビューは除く）以後の `ReviewTargetAdvanced` の数で、root delivery の自動再レビューと共有する。`MAX_TARGET_RESYNCS`（2）を超えたら `WorkerProgress`（接頭辞 `review target resync halted: `、両 SHA を含む）を一度だけ残し、`reviewing` のまま review を起動しない（attempts 不変、`failed` にしない）。人のコメント（`interrupt`）などの遷移で数え直して再開する。
+
 ### D3. 検査した SHA の記録
 
 同期後、checks を起動する直前の HEAD を `reviewed_sha` として固定し、`merge_candidate_sha = reviewed_sha` とする。`target_sha` は同じ同期で読んだ target ref である。三つ組はリポジトリ単位かつ review attempt 単位で保持する。checks と reviewer は同じ task worktree を見て、レビューの task 単位ロックを verdict の保存まで持つ。checks の前後、reviewer の前後、verdict 保存前に HEAD と task ブランチ ref が `reviewed_sha` から動いていないことを確かめる。変化した attempt の合格判定を破棄し、D4 に戻す。reviewer がいない task でも deterministic checks の SHA を同じように固定する。
@@ -53,6 +61,10 @@ ADR-0079 D5/D6 の子→親ブランチの段階末尾 merge と順序を維持�
 rebase 衝突はこの Phase では自動解消しない。共通関数が衝突ファイルを収集し `git rebase --abort` を実行して、元のブランチと worktree の成果を保つ。abort 失敗時は追加の Git 変更を行わず、手動確認が必要な状態として止める。ADR-0043 D5 の衝突/失敗経路へ理由を渡し、レビュー・merge・delivery に進めない。衝突解消作業の自動化は Phase 2 に残す。
 
 `dispatcher/review_verdict.rs` の ReviewRepair は **同期後に実行した checks/reviewer が実装内容を不合格としたとき**の修復経路として維持する。修復 WU が HEAD を変えたら、新しい同期と全 checks/reviewer を要求する。target 再進行だけで修復 WU を作らず、既存の `merge_base` 修復ヒントも、同期や衝突を成功と偽装する理由に使わない。
+
+#### D6 付記（2026-10-02、衝突の実装）
+
+rebase 衝突（`SyncOutcome::Conflict`）は `rebase --abort` 済みで成果が保たれているので、review は止めずに同期を省く（D2 付記と同じ `WorkerProgress` に衝突ファイルと target SHA を含める）。merge candidate を記録しないので、root は review 合格後に delivery の `check_candidate` が「候補 NULL かつ既定ブランチが HEAD の祖先でない」を stale とせず `merge_reviewed` に進め、`validate_candidate` が merge-base の照合で `[merge-base]` の Blocked にし、従来どおり `make_repair` の局所修復へ進む（自動の再レビューを繰り返さない）。候補 NULL でも祖先関係が成り立つ行は従来どおり再レビューを要求する。tree child は `ReviewTargetSynced` が無いので段階統合は候補を照合せず、ADR-0079 の段階末尾 merge とその衝突経路が扱う。同期の停止はどれも `ReviewFail` を使わず、attempts を消費しない。
 
 ## 実装箇所と検証
 

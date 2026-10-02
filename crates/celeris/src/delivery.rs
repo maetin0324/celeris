@@ -207,7 +207,15 @@ fn check_candidate(repo: &Path, d: &Delivery) -> Result<Candidate, String> {
             }
         }
         // 旧行や未同期の行の NULL は「検査済み」とみなさない。
-        _ => "検査済みの merge candidate が記録されていません".into(),
+        _ => {
+            // ADR-0118 D6 付記: review 前同期を諦めた行（衝突など）で既定ブランチが HEAD の祖先でなければ、
+            // 再レビューしても同じ衝突に戻るだけ。従来どおり merge_reviewed の [merge-base] 失敗
+            // （局所修復）に任せる。
+            if git_text(repo, &["merge-base", "--is-ancestor", &target, &head]).is_err() {
+                return Ok(Candidate::Fresh);
+            }
+            "検査済みの merge candidate が記録されていません".into()
+        }
     };
     Ok(Candidate::Stale { target, reason })
 }
@@ -276,6 +284,15 @@ fn request_rereview(
 }
 
 fn validate_candidate(repo: &Path, d: &Delivery) -> Result<(), String> {
+    // ADR-0118 D6 付記: 同期を諦めた（候補の無い）行は、まず従来の merge-base の照合で理由を出す。
+    if d.merge_candidate_sha.is_none()
+        && let Err(stderr) = git_text(repo, &["merge-base", "--is-ancestor", &d.base, &d.head])
+    {
+        return Err(format!(
+            "git merge-base --is-ancestor {} {} failed; stderr: {stderr}",
+            d.base, d.head
+        ));
+    }
     // ADR-0118 D4: 取り込むのは reviewer と checks が見た merge candidate だけ。
     if d.merge_candidate_sha.as_deref() != Some(d.head.as_str())
         || d.reviewed_sha.as_deref() != Some(d.head.as_str())

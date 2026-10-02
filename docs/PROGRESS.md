@@ -474,3 +474,32 @@ workspace 全体の test・clippy・fmt と、sccache 撤去自体の確認を�
 - 未解決事項: `instance_handoff.rs` の `a_newer_release_takes_over_while_the_old_one_finishes_its_run` は
   共用 host の負荷下で稀に flake する（今回 1/2 回）。ADR-0129 の変更とは無関係なので、このタスクでは直さない。
   時間依存試験の決定化（別タスクで進行中）の対象に含めるとよい。
+
+### ADR-0129 (1) 撤去後の全体検証: 再実行（work unit `verify`、check 不合格の追試）
+
+上記の run の後、celeris の post-run check が `cargo test --workspace` を再実行したところ別の 1 件
+（`crates/task-dispatch/src/dispatcher/tests/cluster_job_wait.rs` の
+`a_wait_parks_the_task_polls_and_resumes_as_a_continuation`、「condition not reached after 200 ticks」）で
+exit 101 になった。コードは変更していない（検証のみ）ので、同じ HEAD で追試した。
+
+- `uptime` は実行のたびに load average 34〜46（1 分）と非常に高い（他の並行 work unit・task による共用 host の
+  負荷）。
+- `cargo test -p task-dispatch --lib` で上記 1 件だけを単独実行 → exit 0、1 passed。この試験はバックグラウンド
+  スレッド（`fake_poller` 等）の完了を `tick_until`（最大 200 回 × 20ms sleep = 4 秒)の実時間待ちで見ており、
+  host が高負荷だとバックグラウンドスレッドが 4 秒以内に進まないことがある。`instance_handoff.rs` と同様、
+  共用 host の負荷に起因する実時間待ちの flake であり、ADR-0129 の sccache 撤去とは無関係（dispatcher の
+  cluster job wait 機能の話）。このタスクの範囲では修正しない。
+- `cargo test --workspace` をさらに 2 回実行: 1 回目は上記と同じ 1 件が exit 101 で再現、2 回目は
+  **exit 0、105 試験バイナリ、合計 3228 passed / 0 failed**（doctest 含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- sccache 撤去の確認を再実行し同じ結論を確認: `crates/scratch-cache` crate 無し、
+  `crates/celeris/src/cache_server.rs` 無し、`celeris-sccache.service` / `celeris-scratch-cache.service` を
+  置く記述が repo 内に無し、`scripts/scratch/setup-sccache.sh` 無し。非試験 `.rs` 内の `RUSTC_WRAPPER` /
+  `SCCACHE_` の出現（`task-ops/src/daemon.rs`・`task-dispatch/src/dispatcher/{worker_task,housekeeping}.rs`・
+  `task-worker/src/{preamble,scratch}.rs`・`celerisctl/src/commands/scratch.rs`）はすべて doc comment
+  （廃止・常に `None` な互換型の説明、「継いだ env に触れない」という設計の注記）で、実際に env を組み立てる
+  コードは無い。
+- 結論: `instance_handoff.rs` に続き `cluster_job_wait.rs` も共用 host の負荷下で稀に flake することを確認した
+  （どちらも ADR-0129 とは無関係）。コードの修正は行わず、`cargo test --workspace` が exit 0 になる実行を
+  得たことと、sccache 撤去自体の確認が変わらないことを記録する。

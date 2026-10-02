@@ -108,8 +108,17 @@ impl Dispatcher {
         // ADR-0079 D4 (1)（Phase R2a）: 木の子 task の compound は `[execution] gate` に関わらず採用する
         // （root が compound で分けると決めた木を途中で 1 run に潰さない）。root は従来どおり（U-R5）。
         let tree_child_compound = decision_is_compound && task_core::tree::is_tree_child(&task);
+        // ADR-0124 D3: 直行経路（`route = direct`・shadow でない）と記録した Task は planner を挟まず、
+        // 計画の無い 1 本の implementation run で走る（その後は従来の review 前同期 → command checks →
+        // reviewer）。`replan_dispatch` は計画を持つ Task だけなので触らない。
+        let direct_route = task
+            .routing
+            .as_ref()
+            .and_then(|r| r.route.as_ref())
+            .filter(|r| r.route == task_core::Route::Direct && !r.shadow);
         let is_planner_dispatch = replan_dispatch
             || (current_wu.is_none()
+                && direct_route.is_none()
                 && decision_is_compound
                 && (self.config.execution.gate == task_core::GateMode::On
                     || shadow_human_explicit_compound
@@ -649,6 +658,10 @@ impl Dispatcher {
             extras.available_genres = Vec::new();
         }
         // ADR-0079 D7（Phase R3a）: 木の節点の worker の run は `result.json` の `decisions` で決定の要求を出せる。
+        // ADR-0124 D4: 直行経路の implementation run にだけ worker への節を渡す。
+        if current_wu.is_none() && !is_planner_dispatch {
+            extras.direct_route = direct_route.map(direct_route_context);
+        }
         extras.decision_requests = !is_planner_dispatch
             && self.config.execution.limits.tree.enabled
             && self.is_tree_node(&task).unwrap_or(false);
@@ -1216,5 +1229,21 @@ impl Dispatcher {
             .0
             .commands
             .check
+    }
+}
+
+/// ADR-0124 D4: `RouteDecision` を worker に渡す要約（満たした条件の行）にする。
+fn direct_route_context(
+    decision: &task_core::RouteDecision,
+) -> task_worker::protocol::DirectRouteContext {
+    task_worker::protocol::DirectRouteContext {
+        policy_version: decision.policy_version.clone(),
+        overrode_gate: decision.overrode_gate,
+        reasons: decision
+            .reasons
+            .iter()
+            .filter(|r| r.ok)
+            .map(|r| format!("{}: {}", r.rule_id, r.detail))
+            .collect(),
     }
 }

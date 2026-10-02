@@ -52,7 +52,7 @@
 
 ## sync-main 葉（2026-10-02）: main の取り込み・migration の振り直し・再検査
 
-- 取り込み: `git merge main`（main `5d6df9f3`、rebase なし）。衝突は `docs/PROGRESS.md` の 1 箇所だけで、
+- 取り込み: `git merge main`（main `5d6df9f3`、作業中に進んだ `14b052ea` も続けて merge、rebase なし）。衝突は `docs/PROGRESS.md` の 1 箇所だけで、
   この task の節と main の「codex・opencode への skill の付属ファイル」節を両方残して解消。
   `git merge-tree --write-tree main HEAD` → exit 0。
 - migration の振り直し: `git for-each-ref refs/heads/celeris/` の全ブランチを `git ls-tree` で走査し、
@@ -66,7 +66,7 @@
   終端の拒否は cancelled task で確かめ、failed の中止は成功して `Failed->Cancelled:cancel_failed`・attempts 不変を
   確かめる形に更新。
 - 検査: `cargo fmt --all -- --check` exit 0。`cargo clippy --workspace --all-targets -- -D warnings` exit 0。
-  `cargo test --workspace` exit 0（**3,379 passed / 0 failed / 14 ignored**、138 の test result 行）。
+  `cargo test --workspace` exit 0（**3,381 passed / 0 failed / 14 ignored**、`14b052ea` 取り込み後の最終実行）。
   範囲外の flaky はこの実行では出なかった。
 
 ## 提案

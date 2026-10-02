@@ -2631,3 +2631,13 @@ bind し `agent/begin` が別の DB に届くこと（詳細は `wu/fix-control-
 - `scripts/selfdeploy/tests/promote_authorization_marker.sh` → exit 0、`promote_authorization_marker: all ok`。live・stop-start・失敗・rollback の経路で start 時の印と後片付けを確認。
 - `scripts/selfdeploy/tests/promote_web_follows_release.sh` → exit 0、`promote_web_follows_release: all ok`。web 追従と rollback、unit に `Wants=celeris@` が無いことを確認。
 - 本 run では本番 host / DB と systemd user manager を操作していない。
+
+### phase3 control flaky 再実行（2026-10-02, task 01M3Y9STP19P4VF38Z9P00MG4X）
+
+main `0d438ec19d9a474c5b82507cefd0d9e63846d0d6` を `git merge --no-edit main` で取り込み、衝突なく merge した。`git merge-base --is-ancestor 0d438ec1 HEAD` は exit 0。
+
+- `cargo test -p e2e --test api_scenarios`（bin 未生成の初回）→ exit 101、0 passed / 11 failed。すべて「celeris/celerisctl not found; run `cargo test --workspace`」で起動前に失敗。
+- `cargo test --workspace` → exit 101。`instance_handoff` は 3 passed / 5 failed。複数 daemon 試験が ADR-0095 worker db guard の user namespace 作成拒否（`Operation not permitted`）で起動できず失敗。
+- workspace test 後の `cargo test -p e2e --test api_scenarios` → exit 101、0 passed / 11 failed。対象 `phase3_control_converges_rejects_competition_and_cancel_stops` を含む全試験が、同じ user namespace 作成拒否により daemon 起動前に失敗した（`paused` / `pausing` の競合は再現評価できず）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning なし。
+- 試験結果は本 task の変更と無関係な環境制約であり、受け入れ検査の `api_scenarios` pass は未達。`tests/` と `crates/` に本 task の変更は加えていない。

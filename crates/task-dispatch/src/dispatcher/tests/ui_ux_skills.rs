@@ -7,8 +7,10 @@ const UI_SKILLS: [&str; 4] = [
     "ui-ux-quality-gate",
 ];
 
+type CapturedSkills = Vec<(TaskKind, Vec<String>)>;
+
 struct SkillCaptureAdapter {
-    seen: Arc<StdMutex<Vec<(TaskKind, Vec<String>)>>>,
+    seen: Arc<StdMutex<CapturedSkills>>,
 }
 
 #[async_trait]
@@ -91,8 +93,7 @@ fn skill_names_for(assignee: &str) -> Vec<(TaskKind, Vec<String>)> {
         dispatcher.config.knowledge.root = kb.path().to_path_buf();
         assert!(run_until_idle(&mut dispatcher, 100).await.idle);
         assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
-        let captured = seen.lock().unwrap().clone();
-        captured
+        seen.lock().unwrap().clone()
     })
 }
 

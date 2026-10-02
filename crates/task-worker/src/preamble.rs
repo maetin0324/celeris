@@ -107,6 +107,7 @@ pub fn render(context: &RunContext, artifacts: &str) -> String {
     }
     out.push_str(&role_section(context));
     out.push_str(&deliverables_placement_note());
+    out.push_str(&production_host_note());
     out.push_str(&memory_instructions(context, artifacts));
     // ADR-0044 D2（Phase 53）: コメントの書き方（`comments_enabled` の run にだけ）。
     out.push_str(&comment_instructions(context));
@@ -948,6 +949,18 @@ pub(crate) fn deliverables_placement_note() -> String {
      （`artifacts/`）か知識ベース（`projects/<project>/…` のページ）に置いてください。対象リポジトリの\
      追跡ファイル（`docs/` を含む）には Celeris 自身の判断過程・候補案・決定パケットを置かないこと\
      （そのリポジトリに書いてよいのはそのリポジトリ自身の成果 — コード・テスト・決定後の本文など）。\n\n"
+        .to_string()
+}
+
+/// ADR-0095 付記 D-d: 本番 host の操作は人が実行する手順として書く（D-a・D-b で止まる操作を
+/// 最初から試みさせないための事前の指示。常に出る — context に関わらない）。
+pub(crate) fn production_host_note() -> String {
+    "## 本番 host の操作 (production host changes)\n\
+     本番 host の操作は人が実行する手順として書く（`systemctl --user`・`systemd-run`・\
+     `~/.config/systemd`・`~/.local/celeris/releases`・`~/.config/celeris` の変更、daemon の\
+     再起動・差し替え、本番 DB への書き込みはしない）。必要なら、人が実行する手順（コマンドと\
+     確認方法）を成果物に書き、計画では人の決定（decisions）または人の check を置く（ADR-0095 \
+     付記 D-d）。\n\n"
         .to_string()
 }
 

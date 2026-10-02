@@ -66,6 +66,10 @@ fn stub_codex(dir: &std::path::Path, script: &str) -> CodexConfig {
     crate::test_support::write_executable(&path, &format!("#!/bin/sh\n{script}\n"));
     CodexConfig {
         command: path.to_string_lossy().into_owned(),
+        env: vec![(
+            "CODEX_HOME".into(),
+            dir.join("codex-home").to_string_lossy().into_owned(),
+        )],
         ..CodexConfig::default()
     }
 }
@@ -838,7 +842,10 @@ async fn command_line_has_exec_json_model_then_prompt_as_last_arg() {
         extra_args: vec!["--sandbox".into(), "read-only".into()],
         model: Some("gpt-5-codex".into()),
         reasoning_effort: None,
-        env: Vec::new(),
+        env: vec![(
+            "CODEX_HOME".into(),
+            dir.path().join("codex-home").to_string_lossy().into_owned(),
+        )],
         env_remove: Vec::new(),
         container: None,
         resume_mode: CodexResumeMode::default(),
@@ -1007,7 +1014,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .unwrap();
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     let seen = std::fs::read_to_string(&out_file).unwrap();
-    assert_eq!(seen, "new-account-dir");
+    assert_eq!(seen, dir.path().join("new-account-dir").to_string_lossy());
 }
 /// ADR-0075 G3-fix1: `with_env_removed` は親から継いだ値（ここでは `HOME`）も設定の `env` の値も子から外し、
 /// その後の `with_env` で足した値は残る。`TieredAdapter` を通しても同じ。
@@ -1029,6 +1036,10 @@ async fn with_env_removed_drops_inherited_and_configured_keys() {
         },
         ..CodexConfig::default()
     };
+    config.env.push((
+        "CODEX_HOME".into(),
+        dir.path().join("codex-home").to_string_lossy().into_owned(),
+    ));
     config
         .env
         .push(("FROM_CONFIG".to_string(), "x".to_string()));
@@ -1234,6 +1245,86 @@ fn captured_args(dir: &std::path::Path) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// ADR-0095 D-b: the same rules are present before both fresh and resumed codex processes start.
+#[tokio::test]
+async fn systemd_deny_rules_are_installed_for_fresh_and_resume() {
+    for resume in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = stub_codex(
+            dir.path(),
+            r#"for a in "$@"; do printf '%s\0' "$a" >> args.log; done
+printf '%s' "$CODEX_HOME" > codex-home-seen
+test -f "$CODEX_HOME/rules/celeris-deny.rules" || exit 19
+mkdir -p artifacts
+printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
+printf '%s\n' '{"type":"turn.completed"}'"#,
+        );
+        config.extra_args = vec!["--approve-for-me".into()];
+        let mut req = sample_req(dir.path().to_path_buf());
+        if resume {
+            req.context.session = Some(crate::protocol::SessionHandle {
+                adapter: CodexAdapter::ID.into(),
+                session_id: "thread-systemd-deny".into(),
+                resume: true,
+            });
+        }
+        let rules_path = dir.path().join("codex-home/rules/celeris-deny.rules");
+        std::fs::create_dir_all(rules_path.parent().unwrap()).unwrap();
+        std::fs::write(&rules_path, "stale rules").unwrap();
+        let outcome = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-systemd-deny",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("codex-home-seen")).unwrap(),
+            dir.path().join("codex-home").to_string_lossy()
+        );
+        let args = captured_args(dir.path());
+        assert_eq!(args.contains(&"resume".to_string()), resume, "{args:?}");
+        if resume {
+            assert!(args.contains(&"approval_policy=\"never\"".to_string()));
+        } else {
+            assert!(args.contains(&"--approve-for-me".to_string()));
+        }
+        assert!(!args.contains(&"--ignore-rules".to_string()));
+        let rules = std::fs::read_to_string(rules_path).unwrap();
+        assert_eq!(rules, systemd_deny_rules());
+        for prefix in SYSTEMD_DENY_PREFIXES {
+            let pattern = serde_json::to_string(prefix).unwrap();
+            assert!(
+                rules.contains(&format!(
+                    "prefix_rule(pattern={pattern}, decision=\"forbidden\""
+                )),
+                "missing {pattern}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn systemd_deny_rejects_ignore_rules_before_spawning_codex() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_codex(dir.path(), "touch spawned");
+    config.extra_args = vec!["--ignore-rules".into()];
+    let err = CodexAdapter::new(config)
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "run-systemd-deny",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("--ignore-rules"));
+    assert!(!dir.path().join("spawned").exists());
 }
 
 /// ADR-0054 D1（Phase 67）: `context.session` が無ければ Phase 66 までと同じ（resume の引数は付かない）。
@@ -2020,10 +2111,9 @@ async fn phase_112_untranslatable_extra_args_without_bypass_skip_resume_and_run_
     );
 }
 
-/// D1: `resume_bypass = Dangerous` かつ untranslatable なフラグが残るときは、resume はそのまま
-/// 行われ、落とす代わりに `--dangerously-bypass-approvals-and-sandbox` を 1 回だけ足す。
+/// ADR-0095 D-b: `resume_bypass = Dangerous` でも未検証の bypass は使わず fresh に戻す。
 #[tokio::test]
-async fn phase_112_resume_bypass_dangerous_uses_the_bypass_flag_for_untranslatable_extra_args() {
+async fn systemd_deny_disables_dangerous_resume_bypass() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_codex(dir.path(), args_log_script());
     config.extra_args = vec!["--unknown-flag".into()];
@@ -2045,14 +2135,14 @@ async fn phase_112_resume_bypass_dangerous_uses_the_bypass_flag_for_untranslatab
         .await
         .unwrap();
     let args = captured_args(dir.path());
-    assert!(args.contains(&"resume".to_string()), "{args:?}");
+    assert!(!args.contains(&"resume".to_string()), "{args:?}");
     assert!(
-        args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
+        !args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
         "{args:?}"
     );
     assert!(
-        !args.contains(&"--unknown-flag".to_string()),
-        "the untranslatable flag itself must not reach `exec resume`: {args:?}"
+        args.contains(&"--unknown-flag".to_string()),
+        "the fresh run receives the operator flag: {args:?}"
     );
 }
 

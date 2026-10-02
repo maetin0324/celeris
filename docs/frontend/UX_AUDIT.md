@@ -279,20 +279,136 @@ __root.tsx（認証 gate）
 
 ## cosmetic と IA/component 層の切り分け
 
-余白、文字階層、色、境界、折返しなど情報構造を変えない問題は cosmetic として調整できる。主要操作の発見性、情報の優先順、一覧と詳細の移動、複数操作の混在、状態の誤認は IA または component 境界から見直す。管理画面を共通カードの寄せ集めにせず、設定対象と危険度に沿ってまとまりを作る。
+判定の基準は quality gate の Rescue 手順（cosmetic fix / page-level refactor / component-layer refactor / restart）に合わせる。情報の並びと操作の置き場を変えずに直せるもの（余白・文字の階層・色・境界・折返し・文言）は **cosmetic**。主操作の発見性、情報の優先順、一覧と詳細の行き来、危険度の違う操作の混在、状態の誤認は、画面の構成（**IA**）か共通部品（**component**）を作ってから直す。cosmetic だけで直すと、各画面が直書きの class を個別に直すことになり、上の「component hierarchy」の局所的なずれが増える。
+
+### 共通部品（component 層から直す）
+
+| component | cosmetic で足りる所 | IA/component 層から直す所 |
+|---|---|---|
+| shell（`web/components/shell/shell.tsx`, `nav-items.ts`） | nav の現在位置の強調、badge の `?` の見た目、header の高さ | 17 項目の平らな nav を「日々の仕事（受信箱・タスク・案件…）」と「管理（daemon・プロバイダ・リリース…）」に分ける。360〜412 で接続状態と受信箱・承認の badge が隠れる問題は header に常時出す置き場を作る |
+| page header（`screen-frame.tsx`） | h1 の大きさ・余白 | パンくず・状態・主操作の置き場を持つ page header を作る。`/tasks/T1` の tab、`/projects/P1` の「文書」「ボード」、`/tasks/T1/files` の戻り先をここに寄せる |
+| 取得の枠（`fetch-frame.tsx` の `ErrorNotice`） | 灰色の棒・文言の調子 | error を理由別（未接続・権限・存在しない・server error）に分け、いつの値か（stale）と再試行の結果を出す。`/tasks/T1/runs/R1` の固有 error も同じ部品へ |
+| list/table（各 feature の `<ul>` 直書き） | 行の余白・区切り線の統一 | 一覧の行の型（題名・状態 badge・補助情報・行の操作）を 1 つ作る。`/inbox`・`/approvals`・`/projects`・`/reports`・`/knowledge` の行をそれに載せる |
+| form・button（`web/components/ui/button.tsx`） | label と入力の間隔、focus の輪郭 | button に主・副・危険の区別を足し、field（label・説明・検証の文）の部品を作る。`/board` の 9 欄・`/providers`・`/accounts` の縦長 form はこの部品と折りたたみで短くする |
+| 確認（`project-ops.tsx` の `<dialog>`, `window.confirm`） | なし（見た目を揃えるだけでは解決しない） | 破壊的操作の確認部品を 1 つにし、影響範囲を本文に書く。確認なしの `/inbox` の却下・`/approvals` の常設許可・`/knowledge/skills` の削除・`/releases` の昇格・`/projects/P1/docs/maintenance` の適用に入れる |
+| 状態の表示（生の status 文字列） | 色・badge の形 | status を人の言葉と badge に写す共通の表（`/projects/P1` の `Overview`・`PlanDag`、`/graph` のノード、`/reports` の level、`/clusters` の接続状態）を作る。色だけに頼らず文字も出す |
+| `web/styles.css` | — | 色・余白・文字の token を定義する（`neutral-*` 直書きの置き換え）。cosmetic の直しはすべてこの token 経由にする |
+
+### 画面ごと
+
+| 画面（fixture） | cosmetic で足りる所 | IA/component 層から直す所 |
+|---|---|---|
+| `/` | 空の初期画面の余白を詰め、入力欄までの距離を縮める | なし（Console の構成は妥当。キーボード表示時の重なりは実機確認） |
+| `/login` | 失敗理由の文の位置・強調 | なし（戻り先 `next` の表示は文言の追加で足りる） |
+| `/help` | 目次と節の輪郭を変え、カードの連続をやめる | 状況から探す入口（「失敗した task を直す」など）と検索。関連画面へのリンクを節の頭へ |
+| `/org/cos` | 宛先の表示（名前と役割を ID より前に） | なし |
+| `/tasks` | 状態 8 ボタンの折返し、1440 の右の空白 | 絞り込みを折りたたみ、表を広い幅で列を増やす（list/table 部品） |
+| `/tasks/new`・`/plans/new` | 受け入れ条件の欄の高さ | 計画の作成と通常の task 作成の違い・作成後の流れを form の前に示す（IA） |
+| `/tasks/T1` | tab のラベルの言語を揃える | 現在状態と要判断を先頭に置き、`decision-panel.tsx` の多数の操作を危険度で分ける（IA + 確認部品） |
+| `/tasks/T1/files` | 長い path の折返し | 空と取得失敗を分ける（取得の枠） |
+| `/tasks/T1/changes` | 差分の行の色・行番号 | 破棄を取り込み方法の select から外し、危険の button と確認にする（IA + 確認部品） |
+| `/tasks/T1/runs/R1` | 発話と tool の枠の色分け | 再試行の導線、現在位置（実行中の末尾へ）の置き場（取得の枠） |
+| `/graph` | 状態の色分け、辺の矢印 | ノードを task 詳細へのリンクにし、キーボードで辿れるようにする。root の入力を task 選択にする（component） |
+| `/inbox` | 0 件の区画を 1 行に縮める | 区画を判断の種類ごとの一覧の型に載せ、行の操作に危険度を付ける（list/table + 確認部品） |
+| `/approvals` | 3 区画の取得失敗の重複表示 | 一回許可と常設許可の影響差を押す前に示す（IA + 確認部品） |
+| `/reports` | 行の level・種別の表示 | 通知設定・試験ボタンを報告の一覧より後ろへ下げる（IA） |
+| `/artifacts` | 行の余白 | 案件を選ばずに最近の成果物を出す初期状態（IA） |
+| `/projects` | archive の checkbox の大きさ | 作成フォームを主操作から外し、一覧の行に未処理数・最終更新を足す（IA + list/table） |
+| `/projects/P1` | 区画の見出し | 概要 → 計画 → 仕事の木を先にし、`ProjectOps` などの編集を後ろか別画面へ（IA）。「ボード」を案件で絞る |
+| `/projects/P1/docs` | 一覧の行の密度 | 狭い幅で一覧を折りたたむ list-detail（component） |
+| `/projects/P1/docs/maintenance` | `h2` の装飾 | JSON の `pre`・textarea を人が読める監査結果と整理案の表示に作り直し、適用に確認を付ける（restart 相当） |
+| `/board` | カードの余白、列の見出し | 絞り込みの折りたたみと候補付きの入力、カードの編集を詳細へ移す（IA + form 部品） |
+| `/knowledge` | 1440 の検索欄の幅、空の本文枠 | 結果の行に scope・更新日・抜粋を足し、狭い幅で選んだ本文へ移る（list/table + list-detail） |
+| `/knowledge/inbox` | 題名の 2 重表示 | 結果を押した候補の近くに出し、却下に確認、既存ページとの差分を出す（IA + 確認部品） |
+| `/knowledge/skills` | 空の右枠 | 削除に確認と影響範囲（mount している課）を出す（IA + 確認部品） |
+| `/org` | 木の button の余白 | 追加フォームを木から出し、選んだ担当の詳細を先に（IA）。削除を共通の確認へ |
+| `/daemon` | 取得時刻の位置、英語の文 | `last_tick_at` を「N 秒前」と stale の判定で出し、件数から該当 task へ移る（IA） |
+| `/providers` | 1440 の 2 列の欄の伸び | 使えるかどうかを先頭の badge にし、編集を行の展開へ。reload の失敗を押したカードに出す（IA + form 部品） |
+| `/accounts` | 節の見出し | account・secret・MCP クライアントを別の区画か tab に分ける（IA） |
+| `/clusters` | 1 行の文を区切る | 接続状態を badge にし、作業ディレクトリの現在値を欄に入れる。disconnected と stale を分ける（component） |
+| `/releases` | 稼働中・current・previous の文の強調 | 昇格を確認付きにし、昇格の状態を該当の行に出す。current の disabled の理由を示す（IA + 確認部品） |
+
+まとめると、cosmetic だけで済むのは `/`・`/login`・`/org/cos` の 3 画面だけ。残りは共通部品（page header・一覧の行・button の階層・確認・状態の badge・token）を先に作ってから画面へ当てる方が手戻りが少ない。`/projects/P1/docs/maintenance` は画面の作り直しが要る。
 
 ## 4 群の割り当て
 
-| 群 | fixture |
-|---|---|
-| foundation | `/`, `/login`, `/help` |
-| task・run 系 | `/tasks`, `/tasks/new`, `/tasks/T1`, `/tasks/T1/files`, `/tasks/T1/changes`, `/tasks/T1/runs/R1`, `/plans/new`, `/graph` |
-| inbox・project 系 | `/inbox`, `/projects`, `/projects/P1`, `/projects/P1/docs`, `/projects/P1/docs/maintenance`, `/board`, `/knowledge`, `/knowledge/inbox`, `/knowledge/skills`, `/reports`, `/approvals`, `/artifacts` |
-| 管理系 | `/org`, `/org/cos`, `/daemon`, `/providers`, `/accounts`, `/clusters`, `/releases` |
+foundation は shell・login・home・help と、全画面が使う共通部品（Console を含む）の群。`/org/secretary`・`/org/$id` は Console（`features/console/console-view.tsx`）を home と共有するので foundation に入れる。台帳の 31 route（30 unique fixture）を 1 行 1 画面で割り当てる。
+
+| 画面（台帳の route） | fixture | 群 | 理由 |
+|---|---|---|---|
+| / | `/` | foundation | home。Console と shell の既定の行き先 |
+| /login | `/login` | foundation | 認証 gate（`routes/__root.tsx`）の行き先 |
+| /help | `/help` | foundation | 全画面の説明と導線 |
+| /org/secretary | `/org/cos` | foundation | home と同じ Console。旧 route からの転送 |
+| /org/$id | `/org/cos` | foundation | 人ごとの Console |
+| /tasks | `/tasks` | task・run 系 | task 一覧 |
+| /tasks/new | `/tasks/new` | task・run 系 | task の作成 |
+| /plans/new | `/plans/new` | task・run 系 | 計画（root task）の作成。`create-screen.tsx` を `/tasks/new` と共有 |
+| /tasks/$id | `/tasks/T1` | task・run 系 | task 詳細と判断 |
+| /tasks/$id/files | `/tasks/T1/files` | task・run 系 | task の作業ツリー |
+| /tasks/$id/changes | `/tasks/T1/changes` | task・run 系 | task の差分と取り込み |
+| /tasks/$id/runs/$runId | `/tasks/T1/runs/R1` | task・run 系 | run ログ |
+| /graph | `/graph` | task・run 系 | task の依存関係 |
+| /inbox | `/inbox` | inbox・project 系 | 人の判断の入口 |
+| /approvals | `/approvals` | inbox・project 系 | 認可の判断（受信箱から続く） |
+| /reports | `/reports` | inbox・project 系 | 上がってくる報告 |
+| /artifacts | `/artifacts` | inbox・project 系 | 案件単位の成果物 |
+| /projects | `/projects` | inbox・project 系 | 案件一覧 |
+| /projects/$id | `/projects/P1` | inbox・project 系 | 案件詳細 |
+| /projects/$id/docs | `/projects/P1/docs` | inbox・project 系 | 案件の文書 |
+| /projects/$id/docs/maintenance | `/projects/P1/docs/maintenance` | inbox・project 系 | 案件の文書の保守 |
+| /board | `/board` | inbox・project 系 | 案件の task を列で見る |
+| /knowledge | `/knowledge` | inbox・project 系 | 案件をまたぐ知識の閲覧 |
+| /knowledge/inbox | `/knowledge/inbox` | inbox・project 系 | 知識候補の判断 |
+| /knowledge/skills | `/knowledge/skills` | inbox・project 系 | skill の閲覧と編集 |
+| /org | `/org` | 管理系 | 組織の構成 |
+| /daemon | `/daemon` | 管理系 | dispatcher の状態 |
+| /providers | `/providers` | 管理系 | provider の設定 |
+| /accounts | `/accounts` | 管理系 | account・secret・MCP |
+| /clusters | `/clusters` | 管理系 | cluster の接続 |
+| /releases | `/releases` | 管理系 | release の昇格 |
+
+群ごとの数: foundation 5 route（4 fixture）、task・run 系 8、inbox・project 系 12、管理系 6。合計 31 route・30 fixture。
 
 ## quality gate critique
 
-品質ゲートでは、Celeris 固有の高密度な ops workbench として、現在の作業・判断・復旧に必要な情報が先に読めるかを確かめる。generic AI dashboard の統計ヒーロー、同じ形の card wall、用途のない過剰余白、unstyled admin の単調なフォーム列になっていないかを全画面で見る。状態を色だけに頼らず示し、キーボード focus、狭幅での操作、エラーからの復帰、破壊的操作の確認を画面ごとに検証する。撮影画像は初期状態の視覚資料であり、これらの操作性・アクセシビリティ gate の合格証明ではない。
+`.claude/skills/ui-ux-quality-gate/SKILL.md` の Surface type では、web/ は「ops workbench」と「admin」の混在で、既定の方針は「Admin / ops pages prioritize state, issues, and next action over decoration」。この観点で before を見ると、問題は装飾過多ではなく、**状態と次の操作が先に読めない**ことと、**部品の型が無いための局所的なずれ**（Anti-pattern の「Local consistency drift」）にある。以下、4 つの兆候ごとに具体の画面を挙げる。
+
+### generic AI dashboard
+
+- 統計ヒーローや飾りのグラフは無く、典型的な generic AI dashboard ではない。ただし「Default component-library look with no project-specific adaptation」に当たる。`web/styles.css` が `@import "tailwindcss";` だけで、全画面が `neutral-*` の灰色・`rounded border` の枠・同じ button で、Celeris 固有の状態（人の待ち・stale・昇格中）を表す視覚の語彙が無い。
+- `/daemon` は dispatcher の状態を件数の行で並べるだけで、「最後の tick が古い」という結論より生の `last_tick_at` が先に出る（「Raw technical states as primary copy」）。`/projects/P1` の `Overview`・`PlanDag`、`/reports` の level、`/graph` のノードも生の status 名をそのまま主表示にしている。
+- `/projects/P1/docs/maintenance` は JSON の `pre` と JSON を書く textarea が主操作で、「Raw JSON as the primary interface for non-developer tasks」に当たる。
+
+### card wall
+
+- `/help` は目次と各節が同じ輪郭の枠で 1800px（360）続き、task の階層が無い card wall。
+- `/inbox` は 0 件の区画カードが縦に連続し（360）、今処理すべき判断が見えない。
+- `/board` の `BoardCard` は全カードに編集フォームを常に出し、カードが高く、列の一覧性が落ちる（「Table stuffed with complex configuration」の card 版）。
+- `/providers`・`/accounts`・`/clusters` は 1 件ずつのカードに状態・入力・操作を同じ重みで詰め、カードの違いが名前だけ。
+- `/knowledge/skills` と `/knowledge` は一覧の枠と空の本文枠が同じ輪郭で並び、空の枠が主役に見える。
+
+### 過剰余白
+
+- 1440 の main に `max-width` も 2 列の配置も無く、`/tasks`・`/tasks/T1`・`/tasks/new`・`/graph` は入力と button が左上に集まり右 1000px 以上が空く（`_tasks-1440.png`, `_tasks_T1-1440.png`）。高密度の ops workbench として幅を使えていない（「empty leftover space is intentional, not unfinished layout residue」に反する）。
+- `/knowledge` の 1440 は検索欄が全幅に伸びる一方、本文の枠は「知識を選択してください。」だけで右側が大きく空く。
+- `/` と `/org/cos` の 360 の空の初期画面は、入力欄まで大きな空白が続く。
+- 逆に 360〜412 では form の 1 項目が 76px 前後を使い、`/board`（952px）・`/providers`（1158px）の一覧が最初の画面に出ない（「Mechanical mobile stacking without task reordering」）。
+
+### unstyled admin
+
+- `/providers` の 1440 は concurrency・model の欄が全幅の 2 列に伸び、tier の checkbox と 3 つの button が同じ重みで並ぶ。使えるかどうかの状態は小さな文の行。
+- `/accounts` は account・secret・MCP クライアントが `h2` だけを切れ目に縦に続き、「確認」「ログイン開始」「削除」が同じ見た目。
+- `/clusters` は「pegasus.example / auth totp / 未接続」が 1 行の文で、接続状態の badge が無い。
+- `/releases` は稼働中・current・previous が 1 行の小さな文で、本番を切り替える昇格の button が確認なしで他と同じ見た目（「Dangerous / destructive actions without confirmation or undo」）。
+- `/org` の担当の削除は `window.confirm`、`/projects/P1` は `<dialog>`、`/knowledge/skills` は確認なし、と確認の作りが画面ごとに違う。
+
+### その他の gate 項目
+
+- 復帰（「No recovery path after error, permission denial」）: before の取得系画面はすべて同じ「取得に失敗しました。」で、未接続・権限・存在しないの区別が無い。`/tasks/T1/runs/R1` は再試行の導線が無い。
+- スマホでの主タスク: 360〜412 で接続状態（disconnected）と受信箱・承認の badge が隠れ、`/knowledge`・`/org`・`/projects/P1/docs` は選んだ詳細が画面外に出る。
+- アクセシビリティ: `/graph` のノードはリンクでもボタンでもなくキーボードで辿れない。状態の色分けを足すときは文字も併記する。
+- これは before 画像とコードからの critique で、撮影画像は操作性・アクセシビリティ gate の合格証明ではない。直した後は同じ 4 幅で after を撮り、`pnpm mobile-audit` 相当のタップ領域と focus を確かめる。
 
 ## before screenshot
 

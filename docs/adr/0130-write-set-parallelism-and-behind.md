@@ -74,3 +74,9 @@ remote worktree はローカル Git worktree と同一視しない。ADR-0079 �
 | `verify` | 全 workspace の test/clippy/fmt、main との衝突再見積もり、`docs/architecture-map.md` と `docs/PROGRESS.md` の記録 |
 
 テストは外部ネットワーク、実 claude、systemd を使わず、一時 Git repo と固定 tick (`tick_until` / `run_until`) で決定的に書く。実装の production code で `unwrap()` を使わない。後続実装が本決定から外れる必要があれば、変更前に本 ADR へ理由と新しい不変条件を追記する。
+
+## 付記（behind-metric の実装時の決定）
+
+- 保存先は migration 0040 の `task_behind_targets`（`(task_id, repo_id)` ごとに最後の 1 行）。`target_ref` を target 系列の識別に使い、系列が変われば `behind_target_since` を測り直す。計測不可（`null`）の観測は同じ系列の `since` を消さない。観測時刻が保存済みより古い観測は捨てる。
+- 計測は `task_ops::behind_target::observe_behind_target`（`HEAD` と target を先に SHA で固定してから `rev-list --count`）。この葉で配線した測定点は ADR-0118 の review 前 sync の直前と直後（`Dispatcher::observe_behind_target`。失敗は warn のみ）と、API/Execution 読取時の snapshot 読み出し（Git を測らない）。run dispatch 候補選択前の測定点は dispatcher の候補選択を変える `parallel-gate` / `stale-priority` と同じ箇所になるため、それらの葉で配線する。
+- metrics の 3 欄は `task_core::ExecutionMetrics` に置き（`GET /tasks/{id}/execution` と task 詳細の Execution 節）、`TaskDetail.behind_target` の repo 別内訳は `api-writeset` が `task_ops::behind_target::behind_target_of` の結果を載せる。

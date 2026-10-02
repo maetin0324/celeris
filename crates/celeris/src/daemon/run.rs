@@ -114,6 +114,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                             sandboxd: bin_dir.join("celeris-browser-sandboxd"),
                             egress: bin_dir.join("celeris-browser-egress"),
                             live_sessions: Some(Arc::clone(&live_sessions)),
+                            runtime: Default::default(),
                         },
                     );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの

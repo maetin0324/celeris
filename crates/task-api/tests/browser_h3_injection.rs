@@ -905,6 +905,7 @@ async fn inner_h3_test() {
         sandboxd: worker_binary("celeris-browser-sandboxd"),
         egress: worker_binary("celeris-browser-egress"),
         live_sessions: None,
+        runtime: Default::default(),
     };
     task_worker::browser::configure_isolated_runtime(isolation);
     let approval = world.until_approval().await;

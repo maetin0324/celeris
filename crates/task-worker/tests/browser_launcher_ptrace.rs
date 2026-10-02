@@ -11,9 +11,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use nix::libc;
-use task_core::browser_isolation::verify_isolation;
+use task_worker::browser::verify_launcher_observation;
 use task_worker::browser_launcher::{LauncherClient, Outcome, SessionPolicy, SessionState};
-use task_worker::browser_runtime::collect_facts;
 
 const DEFAULT_SOCKET: &str = "/run/celeris-browser/launcher.sock";
 
@@ -41,6 +40,15 @@ fn browser_uid() -> Option<u32> {
         .ok()
 }
 
+fn subid_start(path: &str) -> Option<u32> {
+    fs::read_to_string(path).ok()?.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        (fields.next() == Some("celeris-browser"))
+            .then(|| fields.next()?.parse().ok())
+            .flatten()
+    })
+}
+
 fn has_subid(path: &str) -> bool {
     fs::read_to_string(path).is_ok_and(|body| {
         body.lines().any(|line| {
@@ -64,12 +72,6 @@ fn proc_pids() -> HashSet<i32> {
 
 fn is_browser(pid: i32, expected_map: &str) -> bool {
     let base = PathBuf::from(format!("/proc/{pid}"));
-    let Ok(comm) = fs::read_to_string(base.join("comm")) else {
-        return false;
-    };
-    if !comm.contains("chrome") && !comm.contains("chromium") {
-        return false;
-    }
     let Ok(cmdline) = fs::read(base.join("cmdline")) else {
         return false;
     };
@@ -79,7 +81,66 @@ fn is_browser(pid: i32, expected_map: &str) -> bool {
     {
         return false;
     }
-    fs::read_to_string(base.join("uid_map")).is_ok_and(|map| map == expected_map)
+    fs::read_to_string(base.join("uid_map"))
+        .is_ok_and(|map| same_map_from_reader(&map, expected_map))
+        && has_launcher_ancestor(pid)
+}
+
+/// `/proc/<pid>/uid_map` の外側の ID は読む側の userns で訳される。celeris の check runner
+/// （db_guard の `1001 1001 1`）からは subuid が写らず `4294967295` に見えるので、内側の ID と
+/// 長さが一致し、外側が一致するか読む側で写らない（u32::MAX）ときを同じ map とみなす。
+/// 読む側は daemon UID を恒等に写すので、Chrome の map に daemon UID があればそのまま見える。
+fn same_map_from_reader(seen: &str, expected: &str) -> bool {
+    let parse = |map: &str| -> Vec<Vec<u32>> {
+        map.lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .filter_map(|field| field.parse().ok())
+                    .collect()
+            })
+            .collect()
+    };
+    let (seen, expected) = (parse(seen), parse(expected));
+    seen.len() == expected.len()
+        && seen.iter().zip(&expected).all(|(s, e)| {
+            s.len() == 3
+                && e.len() == 3
+                && s[0] == e[0]
+                && s[2] == e[2]
+                && (s[1] == e[1] || s[1] == u32::MAX)
+        })
+}
+
+/// 候補が launcher の子孫であること（PPid を辿り、cmdline に launcher の binary 名がある祖先）。
+fn has_launcher_ancestor(pid: i32) -> bool {
+    let mut current = pid;
+    for _ in 0..16 {
+        let Some(parent) = fs::read_to_string(format!("/proc/{current}/status"))
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix("PPid:"))
+                    .and_then(|v| v.trim().parse::<i32>().ok())
+            })
+        else {
+            return false;
+        };
+        if parent <= 1 {
+            return false;
+        }
+        let is_launcher = fs::read(format!("/proc/{parent}/cmdline")).is_ok_and(|cmdline| {
+            cmdline
+                .split(|b| *b == 0)
+                .next()
+                .is_some_and(|arg0| arg0.ends_with(b"celeris-browser-launcher"))
+        });
+        if is_launcher {
+            return true;
+        }
+        current = parent;
+    }
+    false
 }
 
 fn chrome_pid(before: &HashSet<i32>, expected_map: &str) -> i32 {
@@ -97,10 +158,28 @@ fn chrome_pid(before: &HashSet<i32>, expected_map: &str) -> i32 {
             candidates.len() <= 1,
             "ambiguous new Chrome PIDs: {candidates:?}"
         );
-        assert!(
-            Instant::now() < deadline,
-            "Chrome PID not visible in /proc within 20s"
-        );
+        if Instant::now() >= deadline {
+            let matching_map: Vec<_> = proc_pids()
+                .difference(before)
+                .filter_map(|pid| {
+                    let base = PathBuf::from(format!("/proc/{pid}"));
+                    fs::read_to_string(base.join("uid_map"))
+                        .is_ok_and(|map| same_map_from_reader(&map, expected_map))
+                        .then(|| {
+                            (
+                                *pid,
+                                fs::read_to_string(base.join("comm"))
+                                    .unwrap_or_default()
+                                    .trim()
+                                    .to_owned(),
+                            )
+                        })
+                })
+                .collect();
+            panic!(
+                "Chrome PID not visible in /proc within 20s; new processes with expected uid_map: {matching_map:?}"
+            );
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -273,17 +352,40 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         "observe: owner={:?} host_uid={} uid_map={:?} gid_map={:?}",
         observed.ns_owner_uid, observed.host_uid, observed.uid_map, observed.gid_map
     );
+    // ADR-0116 付記: launcher（B）が 2 map の userns を作り、その中で内側 1000（= subuid S）に
+    // なった bwrap が Chrome の userns を作る（--dev の devpts のため bwrap 内で 2 段）。Chrome から
+    // launcher の ns までの owner の鎖は [S, S, B] で、launcher は鎖に daemon UID が無いことを検査する。
+    let subuid = subid_start("/etc/subuid").expect("celeris-browser subuid");
     assert_eq!(observed.host_uid, browser_uid);
-    assert_eq!(observed.ns_owner_uid, Some(browser_uid));
+    assert_eq!(observed.ns_owner_uid, Some(subuid));
+    assert_ne!(observed.ns_owner_uid, Some(daemon_uid));
     let pid = chrome_pid(&before, &observed.uid_map);
-    let owner = owner_uid(pid).expect("NS_GET_OWNER_UID on real Chrome");
     let uid_map = fs::read_to_string(format!("/proc/{pid}/uid_map")).expect("Chrome uid_map");
     let gid_map = fs::read_to_string(format!("/proc/{pid}/gid_map")).expect("Chrome gid_map");
-    eprintln!("Chrome pid={pid} NS_GET_OWNER_UID={owner} uid_map={uid_map:?} gid_map={gid_map:?}");
-    assert_eq!(owner, browser_uid);
-    assert_ne!(owner, daemon_uid);
-    assert_eq!(uid_map, observed.uid_map);
-    assert_eq!(gid_map, observed.gid_map);
+    eprintln!(
+        "Chrome pid={pid} NS_GET_OWNER_UID(launcher)={:?} uid_map={uid_map:?} gid_map={gid_map:?}",
+        observed.ns_owner_uid
+    );
+    // daemon UID からは Chrome の namespace link も開けない（ptrace read の検査）。
+    let ns_error = owner_uid(pid).expect_err("daemon UID opened Chrome /proc/<pid>/ns/user");
+    eprintln!(
+        "NS_GET_OWNER_UID from daemon UID: errno={:?}",
+        ns_error.raw_os_error()
+    );
+    assert!(matches!(
+        ns_error.raw_os_error(),
+        Some(libc::EACCES) | Some(libc::EPERM)
+    ));
+    assert!(
+        same_map_from_reader(&uid_map, &observed.uid_map),
+        "uid_map {uid_map:?} != launcher {:?}",
+        observed.uid_map
+    );
+    assert!(
+        same_map_from_reader(&gid_map, &observed.gid_map),
+        "gid_map {gid_map:?} != launcher {:?}",
+        observed.gid_map
+    );
     for map in [&uid_map, &gid_map] {
         assert!(
             !maps_host_id(map, daemon_uid),
@@ -291,13 +393,17 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         );
     }
 
-    let pgid = unsafe { libc::getpgid(pid) };
-    assert!(pgid > 0, "Chrome process group unavailable");
-    let facts = collect_facts(&session.id, pid, pgid).expect("collect real Chrome RuntimeFacts");
-    eprintln!("RuntimeFacts={facts:#?}");
-    let attestation = verify_isolation(&facts).expect("verify_isolation on real Chrome");
+    // launcher は自分の verify_isolation（mount・namespace を含む実観測）が Ok のときだけ
+    // isolation_ok を返す。daemon 側は観測値を同じ判定に掛ける。
+    let attestation =
+        verify_launcher_observation(&session.id, &observed, started.receipt.isolation_ok)
+            .expect("launcher observation rejected (fail closed)")
+            .expect("verify_isolation on launcher observation");
     assert_eq!(attestation.session_id(), session.id);
-    eprintln!("verify_isolation=Ok");
+    eprintln!(
+        "verify_isolation=Ok (launcher isolation_ok={}, CapEff={} NoNewPrivs={})",
+        started.receipt.isolation_ok, observed.cap_eff, observed.no_new_privs
+    );
 
     let error = ptrace_attach(pid).expect_err("daemon UID attached to Chrome");
     eprintln!(

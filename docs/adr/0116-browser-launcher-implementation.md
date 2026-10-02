@@ -51,6 +51,18 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 - 子の userns を `/proc/<pid>/ns/user` で開いた FD を bwrap に `--userns <fd>` で渡し、bwrap は `--unshare-user` を使わず `--uid 1000 --gid 1000` で内側 1000（= host `S`）に下げて Chrome を起動する。`bwrap_args` は `RuntimeSpec` に `userns: UsernsMode`（`Unshare` = 現行・既定 / `Fd(RawFd)`）を足して分岐し、`Unshare` の出力は現行と完全に一致させる（既存試験で不変を確認）。
 - 起動後、`collect_facts` に `NS_GET_OWNER_UID`（`ioctl(ns_fd, NS_GET_OWNER_UID)`）で Chrome の user namespace owner uid を加え、launcher は owner が `B` であること・daemon UID が uid_map / gid_map に現れないことを `verify_isolation` と併せて検査し、満たさなければ session を `isolation_failed` で止める。
 
+### D3 付記（2026-10-02、実 host での bwrap 失敗を受けて）
+
+実 host の strace で、bwrap 0.11 は `--userns <fd>` のとき子で `setuid(1000)` → `setgid(1000)` の順に切り替え、`setuid` で userns 内の capability を失って `setgid(1000) = -1 EPERM` になり起動できなかった。bwrap の順序は変えられないので、上の「`--userns <fd>` で渡す」を次に改める。
+
+- bwrap を spawn する子が `pre_exec` で `setns(<userns fd>, CLONE_NEWUSER)`（owner `B` の userns に入り capability を得る）→ `setresgid(1000)` → `setresuid(1000)` の順に内側 1000（= host `S`）へ切り替える。資格の変更は `PR_SET_PDEATHSIG` を消すので、その `prctl` より前に行う。
+- bwrap には `--userns` を渡さず、`Unshare` 経路と同じ `--unshare-user --uid 1000 --gid 1000` を渡す。bwrap は `S` として入れ子の userns（map `1000 1000 1`）を作るので、Chrome の userns は **owner `S`、親（launcher が作った 2 map の userns）の owner `B`** になる。daemon UID はどちらの owner でもなく、どちらの map にも現れない。
+- 内側 1000 は 0700 の `session_root` を辿れないので、session dir は launcher が `O_PATH` で開いた FD を `--bind-fd 8 /session` で渡す。`Unshare` 経路の引数は従来どおり（`--bind <dir> /session`）。
+- launcher の検査は、Chrome の userns の owner が `S`・`NS_GET_PARENT` の owner が `B`・launcher から見た `uid_map` / `gid_map` が `1000 S 1` の 1 行であること、に置き換える（`isolation_ok` も同じ）。2 map そのものは `userns::create` が読み戻して検査する（D3 の 3）。
+- 起動失敗は段と原因（errno・bwrap の stderr）を launcher の stderr（journal）に出す。daemon に返すのは従来どおり固定の `launch_failed` / `isolation_failed` だけ。
+- 再付記（同日、実 host の `bwrap: Can't find source path /proc/self/fd/8: Permission denied` を受けて）: bwrap 0.11 は bind の source を `realpath` で解決し、`--bind-fd` の `/proc/self/fd/N` も実 path（`session_root/<id>`）に展開して各段を辿る。内側 1000 は 0700 の `session_root` を辿れないので `--bind-fd` は使えない。代わりに spawn の子が `setns` の直後（まだ launcher の userns の 0 で capability がある間）に `unshare(CLONE_NEWNS)` → `/` を rprivate → `/tmp` に tmpfs（0755）→ `/tmp/celeris-session` に session dir を bind し、bwrap には `--bind /tmp/celeris-session /session` を渡す。この mount ns は launcher の userns の持ち物で、launcher 本体・host の mount ns は変わらない。`session_root` の 0700 はそのまま。
+- 残る点: `setgroups` は D3 の 1 で `deny` のため、launcher の補助 group（systemd が付ける `B` の group）は Chrome に残る（userns 内では 65534 に見える）。
+
 ## D4. FD と state の所有
 
 - CDP pipe（fd 3/4）、egress 中継の制御 FD（sandboxd の FD 6 の request channel と egress relay）、profile / session dir、`CdpController` は launcher の process だけが持つ。daemon には D2 の receipt・状態・非機密の観測だけを返し、FD を渡さない。
@@ -89,3 +101,17 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 - **launcher を別 crate にする**: 既存の runtime / supervisor を `pub` で共有するだけで足り、crate を分けると依存と release 成果物が増える。task-worker 内の module + bin とする。
 - **bwrap の `--unshare-user` に map を任せる**: bwrap は単一 map しか張らず `0→B, 1000→S` を表現できない（ADR-0115）。外で作った userns を `--userns` で渡す。
 - **launcher 未稼働時に daemon 経路へ fallback**: 利用者が選んだ隔離を黙って弱めるため棄却（ADR-0115 移行手順 1）。
+
+## 付記（2026-10-02、owner の鎖）
+
+実 host で launcher の検査が `namespace owner 296608 (want 296608), parent owner 296608 (want 995)` で止まった。bwrap は `--dev` の devpts を張るために内側 0 で userns を作り、そのあと内側 1000 へ map し直す userns をもう 1 段作る。Chrome の userns は launcher の 2 map の userns から 2 段下にあり、鎖は `[S, S, B]` になる。脅威モデル（ADR-0115: daemon UID が Chrome の祖先 userns のどれの owner でもない）は段数に依らないので、構造は変えず検査を直す。
+
+- launcher は Chrome の `/proc/<pid>/ns/user` から `NS_GET_PARENT` を辿り、launcher 自身の userns（`/proc/self/ns/user` と inode・dev が一致）の直前までの owner を集める。
+- 鎖の先頭が `S`、末尾（launcher が作った userns）が `B`、全要素が `S` か `B`、`allowed_uids`（daemon UID）が鎖に無いこと、を `isolation_ok` と起動時の検査の条件にする。上の D3 の「親の owner が `B`」はこれに置き換える。
+
+## 付記（2026-10-02、launcher の CDP と netns 内 listener）
+
+実 host で Chrome の起動と owner/map 検査が通った後、daemon 側の `verify_isolation` が `CdpOnTcp` で止まった。`SessionFacts.listen_count` は Chrome と同じ private netns の TCP listener 数であり、sandboxd の egress proxy（127.0.0.1:3128）と shared-CDP relay（127.0.0.1:9223）を数える。Chrome 自身の CDP endpoint ではない。Chrome は引き続き `--remote-debugging-pipe` を使い、fd 3/4 と `CdpController` は launcher 側が保持する（ADR-0115）。
+
+- daemon が観測を `RuntimeFacts` に変換するとき、`listen_count` から CDP endpoint を推定しない。launcher の固定 runtime の CDP は `Pipe` とする。
+- launcher は `collect_facts` による netns 分離と `verify_isolation` を起動時と `isolation_ok` で検査する。daemon 側は `isolation_ok = false` を引き続き拒否する。host に露出する CDP TCP を許可する変更ではない。

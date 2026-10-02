@@ -19,7 +19,7 @@ tasks: [01M3WW2RBB9QW9NPN862TZEK9P]
 
 1. **初期 namespace の root であること**: `cat /proc/self/uid_map` が `0 0 4294967295`。
    container・入れ子 userns（例 `1001 1001 1` だけ、`newuidmap` の所有者が `nobody`）で作業しない。subuid の範囲が親 map に入らず `newuidmap` が EPERM になる。
-2. `bwrap`、`google-chrome`（または設定で指す Chrome）、`celeris-browser-sandboxd` / `celeris-browser-egress` を root 所有の path（`/usr/bin`、`/usr/local/libexec/celeris` など）に置ける。`ProtectHome=true` のため `/home` 下の binary は使えない。
+2. `bwrap`、`google-chrome`（または設定で指す Chrome）、`agent-browser`、`celeris-browser-sandboxd` / `celeris-browser-egress` を root 所有の path（`/usr/bin`、`/usr/local/libexec/celeris` など）に置ける。`ProtectHome=true` のため `/home` 下の binary は使えない。
 
 ## 1. 専用 user/group を作る
 
@@ -97,18 +97,32 @@ install -d -o root -g root -m 0755 /usr/local/libexec/celeris /etc/celeris-brows
 install -o root -g root -m 0755 <release>/bin/celeris-browser-launcher     /usr/local/libexec/celeris/
 install -o root -g root -m 0755 <release>/bin/celeris-browser-sandboxd     /usr/local/libexec/celeris/
 install -o root -g root -m 0755 <release>/bin/celeris-browser-egress       /usr/local/libexec/celeris/
+# agent-browser、bwrap、Chrome も root 所有の固定 path に配置し、その path を下の設定に記す。
 ```
 
-固定設定 `/etc/celeris-browser/launcher.toml`（root:root 0644。daemon の設定からは変えられない、ADR-0116 D5）に次を書く。項目名は launcher 実装の `--config` の定義に合わせる:
+固定設定 `/etc/celeris-browser/launcher.toml`（root:root 0644。daemon の設定からは変えられない、ADR-0116 D5）を作る。次は `BackendConfig` が要求する全項目で、実際に配置した `bwrap`・Chrome・agent-browser の絶対 path と resolver に置き換える。`session_root` は `state_dir` と別の私有 dir にする。IPC の上限は launcher に組み込まれた `LauncherLimits::default()` が適用され、TOML の項目ではない。
 
-- `allowed_uids = [1001]`（daemon だけ）
-- `socket` = `/run/celeris-browser/launcher.sock`、状態 dir = `/var/lib/celeris-browser`
-- `bwrap`・`sandboxd`・`egress`・Chrome の絶対 path（すべて root 所有の場所）
-- 上限（既定値 frame 64 KiB・接続 4・session 2 など、ADR-0116 D2）
+```toml
+socket = "/run/celeris-browser/launcher.sock"
+state_dir = "/var/lib/celeris-browser"
+session_root = "/var/lib/celeris-browser/sessions"
+allowed_uids = [1001]
+bwrap = "/usr/bin/bwrap"
+sandboxd = "/usr/local/libexec/celeris/celeris-browser-sandboxd"
+egress = "/usr/local/libexec/celeris/celeris-browser-egress"
+chrome = "/usr/bin/google-chrome"
+agent_browser = "/usr/local/libexec/celeris/agent-browser"
+resolver = "1.1.1.1"
+```
+
+`resolver` は host で使用を許可する DNS resolver に置き換える。値が合っていることを確認してから unit を起動する。
 
 ```sh
 chown root:root /etc/celeris-browser/launcher.toml && chmod 0644 /etc/celeris-browser/launcher.toml
+install -d -o celeris-browser -g celeris-browser -m 0700 /var/lib/celeris-browser/sessions
 ```
+
+`session_root` が無いと launcher は起動直後に exit 1 する（旧版の journal は `celeris-browser-launcher: No such file or directory (os error 2)` だけを出す）。`install -d` は `useradd` の後・unit 起動の前に必ず実行し、`ls -ld /var/lib/celeris-browser/sessions` が `drwx------ celeris-browser celeris-browser` であることを確かめる。2026-10-02 以降の launcher は、`session_root` が `state_dir` の直下で未作成なら自分で 0700 で作り、起動失敗の journal には対象の path を出す。
 
 ## 5. socket・状態 dir の所有と mode
 
@@ -171,7 +185,23 @@ getcap -r /usr/local/libexec/celeris 2>/dev/null                       # 何も�
 
 ## 8. 準備後に流す試験
 
-daemon の user（UID 1001）で、リポジトリの task branch の worktree から実行する（本番 DB には触れない試験）:
+daemon の user（UID 1001）で、**launcher と同じ host PID namespace を見られる通常シェル**からリポジトリの task branch の worktree で実行する（本番 DB には触れない試験）。実行前に `cat /proc/self/uid_map` と `readlink /proc/self/ns/pid` を記録する。LXC host では初期 user namespace の `0 0 4294967295` にならず、通常シェルの map が複数行になることがある。worker の db_guard 内の `1001 1001 1` や `1001 0 1` のような単独 map では host 側 Chrome の `/proc` が見えず、この実 process 証明はできない。
+
+socket だけが active でも service の起動成功は保証されない。管理者は socket activation 後、次を確認する。`ActiveState=failed` や `activating (auto-restart)` の場合は試験の前に service の起動失敗を直す。
+
+```sh
+systemctl status celeris-browser-launcher.service --no-pager -l
+systemctl show celeris-browser-launcher.service -p ActiveState -p Result -p ExecMainStatus -p NRestarts
+sudo journalctl -u celeris-browser-launcher.service -b --no-pager -n 80
+# journal が示す config の所有権、state_dir/session_root の所有権・0700、実行ファイルの配置、
+# socket activation の失敗を修正し、ActiveState=active を確認する。
+```
+
+journal が `No such file or directory (os error 2)` なら、まず手順 4 の `session_root`（`/var/lib/celeris-browser/sessions`）と `launcher.toml` の各 path の有無を確かめる。
+
+`runtime relay did not become ready` なら、更新した launcher と sandboxd の組を配置したうえで journal の `start <session>: start bwrap:` 行を確認する。launcher は bwrap の終了状態と、bwrap/sandboxd の制御済み診断行を最大 4 行記録する。Chrome と action の stderr は機密を含み得るため記録せず、sandboxd は起動失敗の errno と終了状態だけを報告する。egress は relay の READY 後に初めて起動するため、この段階の失敗には関与しない。
+
+daemon の user で実行する:
 
 ```sh
 CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture
@@ -179,7 +209,7 @@ CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher
 
 `require` のため、`celeris-browser`・socket・subuid 範囲のどれかが欠けていれば skip でなく失敗する。確かめる内容（ADR-0116 D7）:
 
-1. Chrome の user namespace owner（`NS_GET_OWNER_UID`）が `B` で、1001 でない。`uid_map` / `gid_map` に 1001 が無い。
+1. Chrome の user namespace owner（`NS_GET_OWNER_UID`、launcher の観測）が `S`（subuid の先頭）、その親 namespace の owner が `B` で、どちらも 1001 でない（ADR-0116 D3 付記）。`uid_map` / `gid_map` に 1001 が無い。1001 からは Chrome の `/proc/<pid>/ns/user` も開けない。
 2. UID 1001 の別 process からの `PTRACE_ATTACH` / `strace -p` と `/proc/<pid>/environ`・`mem` の読取りが拒否される（正の対照も併記される）。
 3. `verify_isolation` が `Ok`。
 

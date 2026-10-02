@@ -1602,6 +1602,27 @@ async fn run_with_executable_attempt(
 #[path = "browser_launcher_run.rs"]
 mod launcher_run;
 
+/// launcher の観測（`SessionFacts`）を daemon 側と同じ判定で `verify_isolation` に掛ける（ADR-0115 の実証用）。
+/// 観測が fail closed で弾かれた（daemon の ID が map に現れる・owner が daemon・owner 不明）なら `None`。
+pub fn verify_launcher_observation(
+    session_id: &str,
+    facts: &crate::browser_launcher::SessionFacts,
+    launcher_attested: bool,
+) -> Option<
+    Result<
+        task_core::browser_isolation::IsolationAttestation,
+        Vec<task_core::browser_isolation::IsolationViolation>,
+    >,
+> {
+    launcher_run::runtime_facts(
+        session_id,
+        &launcher_run::DaemonIds::current(),
+        facts,
+        launcher_attested,
+    )
+    .map(|f| task_core::browser_isolation::verify_isolation(&f))
+}
+
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;

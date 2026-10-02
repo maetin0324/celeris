@@ -32,6 +32,7 @@ pub mod execution;
 pub mod followup;
 pub mod gate;
 pub mod graph;
+pub mod human_inbox;
 pub mod inbox;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本。git・索引・検索・`_inbox`）。
 pub mod knowledge;

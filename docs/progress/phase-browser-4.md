@@ -354,3 +354,27 @@ host 管理者への依頼: [host 準備手順](../ops/browser-launcher-host-set
 次に更新版を host に入れて同じ require 試験を実行する。現時点の owner と map の観測は取得済みだが、daemon UID からの `PTRACE_ATTACH` / `strace -p` と `/proc/<pid>/{environ,mem}` の拒否、`verify_isolation=Ok`、require 試験 exit 0 は**未取得**。本番 host の操作、本番 DB・設定・昇格、機密能力の解放は行っていない。
 
 局所検査: `cargo fmt --all -- --check` exit 0、`cargo test -p task-worker --lib launcher_tmp_is_writable_by_chrome_subuid` 1 passed、`cargo test -p task-worker --bin celeris-browser-sandboxd chrome_diagnostics_expose_only_fixed_categories` 1 passed、`cargo test -p task-worker --lib lifecycle_journal_excludes_unstructured_browser_output` 1 passed、`cargo clippy -p task-worker --all-targets -- -D warnings` exit 0、`cargo build -p task-worker --release --bins` exit 0。release binary の SHA-256 は launcher `28787c32b03f6804453f9721f604c66d6f2ffe972305aaf72ce2bfdd86b1905e`、sandboxd `6096de8e875863f2c0527945eddfb4597e926d3b73f06a25a766a09ad5a3eb8e`、egress `4b4e7cfc334f2575c38d58f870b458fceec8da7dae960ab2d1aca06613d69299`。3 つとも同じ commit から build して照合する。
+
+## ADR-0115 launcher の実 process 攻撃試験（run 01M3XRQ3HXV9K7HDKVFHZQNQE6、2026-10-02）
+
+人が commit `86ce1a88` から release build した launcher・sandboxd・egress の SHA-256 を上記の値と照合し、root 所有で `/usr/local/libexec/celeris/` に配置した。`celeris-browser-launcher.service` は active、`NRestarts=0`。worker の db_guard namespace の外にある UID 1001 の通常シェルで、同 commit の worktree から次を実行した（人からの試験出力と journal の報告）。
+
+```sh
+CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture
+# exit 0: 1 passed, 0 failed, 0.15 s
+```
+
+| 観測 | 実 process の結果 |
+| --- | --- |
+| 正の対照 | 同 UID の子 PID 3997177 へ `PTRACE_ATTACH=0`、`PTRACE_DETACH=0` |
+| launcher の観測 | `owner=Some(296608)`、`host_uid=995`、`uid_map="      1000     296608          1\n"`、`gid_map="      1000     296608          1\n"` |
+| Chrome | PID 3997191、`NS_GET_OWNER_UID` は launcher 側で `Some(296608)`。`uid_map` と `gid_map` はいずれも上記と同じ |
+| daemon UID からの namespace link | `NS_GET_OWNER_UID from daemon UID: errno=Some(13)`。`/proc/3997191/ns/user` を開く段階で EACCES |
+| 隔離検査 | `verify_isolation=Ok (launcher isolation_ok=true, CapEff=0000000000000000 NoNewPrivs=true)` |
+| daemon UID からの ptrace | `PTRACE_ATTACH Chrome pid=3997191: errno=Some(1)`（EPERM） |
+| daemon UID からの strace | `strace -p 3997191: exit=Some(1)`、`ptrace(PTRACE_SEIZE, 3997191): Operation not permitted` |
+| daemon UID からの proc 読取り | `/proc/3997191/environ: errno=Some(13)`、`/proc/3997191/mem: errno=Some(13)`（EACCES） |
+
+この host は LXC 内なので UID 1001 シェルの親 namespace の map は `0 100000 1001 / 1001 1001 1 / 1002 101002 64534 / 65536 165536 262144` であり、初期 namespace の `0 0 4294967295` ではない。試験 runner は db_guard namespace（`1001 1001 1`）の外で `/proc` の Chrome PID を確認できた。launcher の userns owner 鎖は起動時と `isolation_ok` で検査される（ADR-0116 付記）。UID 1001 は Chrome の map に入らず、今回の ptrace と `/proc` の拒否は、UID だけが異なる旧 runtime の結果とは区別する。
+
+既存の daemon 所有経路は同じ host で `cargo test -p task-worker --test browser_runtime_isolated` が exit 0（4 passed、1 ignored）。journal は `session 3841ddf8…: Chrome started pid=4 flags=remote-debugging-pipe` を記録し、試験中に Chrome は生存した。`Chrome stderr category=other-startup-error` が 4 行あったが、生 stderr は記録されておらず内容は未判定。この分類だけで今回の合否は変えない。root 操作・本番 DB / 設定の変更・昇格は本 WorkUnit では行わず、機密能力 `CredentialInjection` / `IdentityRestore` は解放していない。

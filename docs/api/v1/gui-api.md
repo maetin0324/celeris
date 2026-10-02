@@ -1,6 +1,6 @@
 # celeris HTTP API v1 仕様
 
-実行・計画・木・決定の要求のエンドポイントは §3.125 にある（旧 `overview.md` を統合した）。
+実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
 - 改訂: 2026-09-21 Phase 82（ADR-0056 D3 続き、skills を GUI から見る・作る・mount する）
@@ -271,7 +271,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（174）
+## 2. エンドポイント一覧（174 = 表 168 + browser 制御 6）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -448,12 +448,17 @@ browser 系（#151〜174）の流れは §3.118〜3.124 と `docs/guides/browser
 | 166 | POST | `/tasks/{id}/browser/live/{run}/{session}/check` | 閲覧許可を確かめる | `CheckResponse` | `crate::browser_live` |
 | 167 | POST | `/tasks/{id}/browser/live/{run}/{session}/read` | Live View の event を読む | `ReadResponse` | store `browser_live_after` |
 | 168 | POST | `/tasks/{id}/browser/live/{run}/{session}/events` | Live View の event を追記する（daemon bearer） | `EventResponse` | store `browser_live_append` |
-| 169 | GET | `/tasks/{id}/browser/control/{run}/{session}` | browser の制御状態（ADR-0099 D3。worker が参照） | `ControlStatus` | store `browser_control` |
-| 170 | POST | `/tasks/{id}/browser/control/{run}/{session}` | pause・takeover・renew・resume・stop（署名付き assertion） | `ControlOutcome` | store `browser_control_mutate` |
-| 171 | POST | `/tasks/{id}/browser/control/{run}/{session}/disconnect` | 人の操作の接続を切る | `ControlStatus` | store `browser_control_mutate` |
-| 172 | POST | `/tasks/{id}/browser/control/{run}/{session}/agent/begin` | agent の操作の開始を記録する（daemon bearer） | `ControlStatus` | store `browser_control_mutate` |
-| 173 | POST | `/tasks/{id}/browser/control/{run}/{session}/agent/end` | agent の操作の終わりを記録する（daemon bearer） | `ControlStatus` | store `browser_control_mutate` |
-| 174 | POST | `/tasks/{id}/browser/control/{run}/{session}/auth-section` | 認証の区間を記録する | `ControlStatus` | store `browser_control_mutate` |
+
+browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
+
+| メソッド | パス | 目的 | 応答型 | 出所 |
+|---|---|---|---|---|
+| GET | `/tasks/{id}/browser/control/{run}/{session}` | browser の制御状態（ADR-0099 D3。worker が参照） | `ControlStatus` | store `browser_control` |
+| POST | `/tasks/{id}/browser/control/{run}/{session}` | pause・takeover・renew・resume・stop（署名付き assertion） | `ControlOutcome` | store `browser_control_mutate` |
+| POST | `/tasks/{id}/browser/control/{run}/{session}/disconnect` | 人の操作の接続を切る | `ControlStatus` | store `browser_control_mutate` |
+| POST | `/tasks/{id}/browser/control/{run}/{session}/agent/begin` | agent の操作の開始を記録する（daemon bearer） | `ControlStatus` | store `browser_control_mutate` |
+| POST | `/tasks/{id}/browser/control/{run}/{session}/agent/end` | agent の操作の終わりを記録する（daemon bearer） | `ControlStatus` | store `browser_control_mutate` |
+| POST | `/tasks/{id}/browser/control/{run}/{session}/auth-section` | 認証の区間を記録する | `ControlStatus` | store `browser_control_mutate` |
 
 ---
 
@@ -2786,7 +2791,7 @@ task は `blocked` のまま、wait の `reason`（`waiting_for_auth` / `waiting
   422 `browser_body_invalid` / `browser_wait_invalid`（`field` だけ）/ `credential_receipt_invalid` /
   `credential_rejected`、503 `browser_unavailable`（attestation 鍵・broker が未設定）。
 
-### 3.125 実行・計画・木・決定の要求（ADR-0072・ADR-0079。旧 `docs/api/v1/overview.md` を統合）
+### 3.125 実行・計画・木・決定の要求（ADR-0072・ADR-0079）
 
 ExecutionPlan と WorkUnit、再帰的な task の木（ADR-0079）、人への決定の要求、ADR-0079 R5a で撤去した入口をまとめる。
 認証・本文の規約・エラーの形は §1 のとおり（変更系はすべて管理系）。型名は `api-v1.schema.json` の `$defs` を指す。

@@ -32,7 +32,14 @@ updated: 2026-10-02
 - 実在しない行は無かった（表の 101 行はすべて route にあった）。
 - 410 を返す 9 本（#17・48・49・54・78〜80・131・132）の応答型を `410 Problem（旧 …）` にし、壊れていた
   `docs/celeris-api-v1.md` への案内を §3.125.8 に変えた。
-- 見出しを「（174）」にし、番号の意味・パスの書き方・browser 系の詳細の在りかを表の前に書いた。
+- 見出しを「（174 = 表 168 + browser 制御 6）」にし、番号の意味・パスの書き方・browser 系の詳細の在りかを表の前に書いた。
+
+- （2 回目の run）browser 制御の 6 本（旧 #169〜174）は番号付きの表から外し、表の直後の別表（番号なし）に置いた。
+  route が定数 `BASE` と `format!` で登録されていて、計画の check（`.route( "…"` の文字列リテラルだけを拾う）からは見えず
+  `stale` と判定されたため。行は残っているので、全 route が §2 にあることは変わらない。
+- （2 回目の run）gui-api.md の冒頭と §3.125 の見出しにあった「旧 `overview.md` を統合した」の文言を消した（経緯はこの記録にある）。
+- （2 回目の run）`docs/protocol/worker-protocol.md` 3〜4 行目の ADR へのリンク 2 件を `../../agent-docs/adr/` に直した（パスだけ。
+  protocol WU と同じ行に触れるので、統合で衝突したら protocol 側の版を採ればよい）。
 
 ### §1 全体（`middleware.rs`・`problem.rs`・`lib.rs` と照合）
 
@@ -65,6 +72,9 @@ updated: 2026-10-02
 | `sh scripts/dev/check-doc-links.sh`（全体） | exit 1、45 件。うち本 WU 由来は `gui/docs/celeris-api-v1.md:3: ../../docs/api/v1/overview.md` の 1 件（下の未解決）。残り 44 件は docs/guides・docs/ops・docs/protocol の既存の壊れたリンクで本 WU の範囲外 |
 | `git diff --stat HEAD` | `docs/README.md`・`docs/api/v1/gui-api.md`・`docs/api/v1/overview.md`（削除）・この記録だけ |
 
+| 計画の check 1（route ⇔ §2 表、`missing`/`stale`） | 2 回目の run で exit 0 |
+| 計画の check 2（overview.md 無し・参照無し・`check-doc-links.sh docs/api docs/protocol docs/README.md`） | 2 回目の run で `check-doc-links: ok`、exit 0 |
+
 ## 未解決
 
 - `gui/docs/celeris-api-v1.md:3` が `docs/api/v1/overview.md` を指したまま壊れる。gui/ はこの task では変えられない。
@@ -73,6 +83,8 @@ updated: 2026-10-02
   §3.125.8・§3.125.14 が現行。直すのは api-s3a / api-s3b の範囲。
 - browser の Live View（#165〜168）と制御（#169〜174）は §3 に節が無く、`docs/guides/browser-capability.md` にも説明が無い（表の行だけ）。
 - `cargo test --workspace` / `cargo clippy` はこの WU では回していない（Rust・schema に差分が無い文書だけの変更）。
+
+- 計画の check 1 は `format!` で組み立てた route（browser 制御 6 本）を拾えない。そのため 6 本は番号付きの表の外に置いてある。
 
 ## 提案
 

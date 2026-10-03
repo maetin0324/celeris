@@ -543,7 +543,7 @@ pub struct ExecutionConfig {
     /// ADR-0089（Phase R6-5）: `[execution] max_cos_runs`（既定 2）。`max_concurrency` とプールの
     /// `concurrency` から外す CoS の対話 run の同時数の絶対上限。`0` で例外を無効にする。
     pub max_cos_runs: usize,
-    /// ADR-0124 D1 #4: `[sessions] continuation_resume`（既定 `true`）。`false` なら WU の continuation を
+    /// ADR-0140 D1 #4: `[sessions] continuation_resume`（既定 `true`）。`false` なら WU の continuation を
     /// 同じ Claude Code session で resume せず、常に checkpoint 前置きの fresh にする（`fresh_requested`）。
     pub continuation_session_resume: bool,
 }
@@ -1004,7 +1004,7 @@ struct RunExtras {
     /// ADR-0072 D9（Phase E2）: この run が WU の continuation なら、events からではなく
     /// `runs` 索引から組み立てた続きの文脈（`run_worker` は events から求める代わりにこれを使う）。
     continuation_override: Option<task_worker::ContinuationContext>,
-    /// ADR-0124 D2: この run が WU の継続 session（`kind = continuation`）を使うなら `(task_id, work_unit_id)`。
+    /// ADR-0140 D2: この run が WU の継続 session（`kind = continuation`）を使うなら `(task_id, work_unit_id)`。
     /// `run_worker` が sink に渡し、resume 拒否でその session を retire する（CoS の `session_key` とは別）。
     continuation_session: Option<(TaskId, String)>,
     /// ADR-0072 D13/D14（Phase E3）: task-local な planner run にだけ `Some`

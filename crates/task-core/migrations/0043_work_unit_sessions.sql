@@ -1,4 +1,4 @@
--- ADR-0124 D2: execute continuation 用の継続セッション（`node_sessions.kind = 'continuation'`）。
+-- ADR-0140 D2: execute continuation 用の継続セッション（`node_sessions.kind = 'continuation'`）。
 --
 -- 新しい表は作らず `node_sessions` に列を足す。key は `(task_id, work_unit_id, adapter, account_id)`。
 --   task_id       — その WU を持つ Task の id（`continuation` 行だけ非 NULL）。

@@ -199,7 +199,7 @@ pub struct ExecutionMetrics {
     /// run が 1 件も無ければ `true`（欠けようがない）。
     #[serde(default = "default_true")]
     pub cost_usd_complete: bool,
-    /// ADR-0124: worker run の fresh / resumed / 旧形式の比較値。
+    /// ADR-0140: worker run の fresh / resumed / 旧形式の比較値。
     #[serde(default)]
     pub continuation: ContinuationMetrics,
     /// ADR-0130 D4: target にだけある commit 数（repo の最大）。未観測・計測不可は無い（0 にしない）。

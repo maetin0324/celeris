@@ -16,7 +16,7 @@ use super::{Config, ConfigError, ProviderConfig};
 pub struct SessionsConfig {
     #[serde(default = "default_rollover_tokens")]
     pub rollover_tokens: u64,
-    /// ADR-0124 D1 #4: WU の execute continuation（予算切れ・yield の続き）を同じ Claude Code session で
+    /// ADR-0140 D1 #4: WU の execute continuation（予算切れ・yield の続き）を同じ Claude Code session で
     /// resume するか（既定 `true`）。`false` なら毎回 checkpoint 前置きの新しい session（導入前の挙動）。
     #[serde(default = "default_continuation_resume")]
     pub continuation_resume: bool,

@@ -8768,7 +8768,7 @@
               "wall_ms": 0
             }
           },
-          "description": "ADR-0124: worker run の fresh / resumed / 旧形式の比較値。"
+          "description": "ADR-0140: worker run の fresh / resumed / 旧形式の比較値。"
         },
         "continuations": {
           "description": "D11: continuation（予算切れ・yield の続き）の回数（`Trigger::Continue{why: Continue}`）。",
@@ -8973,7 +8973,7 @@
               "wall_ms": 0
             }
           },
-          "description": "ADR-0124: fresh / resumed / 旧形式の worker run 別比較。"
+          "description": "ADR-0140: fresh / resumed / 旧形式の worker run 別比較。"
         },
         "continuation_by_work_unit": {
           "additionalProperties": {
@@ -22158,7 +22158,7 @@
           ]
         },
         "duplicate_reads": {
-          "description": "ADR-0124 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
+          "description": "ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -22183,7 +22183,7 @@
           ]
         },
         "session_resumed": {
-          "description": "ADR-0124 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
+          "description": "ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
           "type": [
             "boolean",
             "null"

@@ -7,6 +7,7 @@
 - 検証の限界: launcher 必須モードは host protocol v1 の session binding 欠如で exit 101。通常モードでの 3 回は ptrace 拒否・起動・消滅が通過し、admission 表だけ `SKIP: (not passed)`。手動 `sccache_webdav_e2e` は server 操作と環境変数変更がこの run で禁止されているため ignored のまま（0 passed）。この 2 点を検証成功とは数えない。本番 host は変更していない。
 - attempt 3 の指定ゲート: `cargo build --workspace --bins && cargo test -p e2e --test api_scenarios && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings` は exit 0（api_scenarios 11 passed）。初回 clippy の未使用 Result 指摘は fixture 終了結果の検査を追加して解消し、releases_api の stutter も 3 回取り直した。
 - attempt 3 の全体検証: `cargo test --workspace` は user namespace が使える権限付き環境で exit 0。ログは run の `workspace-final.log`。手動 ignored と launcher admission 表の環境制約は上記のとおり。
+- 最終同期: main `0b8a2256` の文書のみの追加 2 行を取り込み、統合後に指定ゲートを再実行して exit 0（api_scenarios 11 passed）。全体試験・stutter 実行時からコードの変更はない。
 - 2026-10-02: [時間依存待ち一覧](testing/time-dependent-waits.md)に `tests/e2e/tests` と `crates/*/tests` の候補 45 ファイル、対象ごとの原因と方式を記録した。
 - `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`: 原因は worker の固定 6 秒と cooldown の短い 5 秒待ち。方式は release ファイルで worker を保持し、同時状態を観測後に解放する。保険超過時は `done` を返さない。
 - `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`: 原因は 180 task を固定 120 秒で判定したこと。方式は全件 `Done` の観測、進捗停止 60 秒、総保険 600 秒。lock 不在と daemon 生存の主張は維持。
@@ -883,3 +884,5 @@ exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度�
 - NFS 上の web/app 展開が 40〜60 分かかる問題は本 task のスコープ外のまま。`SD_GATE_SKIP_WEB` の既定を 0 に戻すのは、この問題が解決してから人が判断する。
 
 main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-latest`）。
+
+main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。

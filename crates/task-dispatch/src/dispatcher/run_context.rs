@@ -308,7 +308,8 @@ impl Dispatcher {
         let profile_skills_mounts: Vec<String> = assigned
             .map(|n| task_core::resolve_profile(&org, &n.id).skills_mounts)
             .unwrap_or_default();
-        let (skills, missing_skills) = self.skills_context(&profile_skills_mounts);
+        let (skills, missing_skills) =
+            self.skills_context(&profile_skills_mounts, task_ops::knowledge::SkillUse::Work);
         // ADR-0048 D3（Phase 60b）: CoS の対話 run にだけ、進行中の案件とその途中目標を渡す
         // （`actions` の `create_task.project` を選ぶ材料。決定的にストアを
         // 読むだけ。CoS 以外の run・継続中の run（ADR-0054 D1: 差分に「新しい案件」が乗る）では常に空）。
@@ -358,7 +359,7 @@ impl Dispatcher {
             // ここ（`run_extras`）の返り値を上書きする（ここでは常に `None`）。
             work_unit: None,
             continuation_override: None,
-            // ADR-0124 D2: WU の run だけ `dispatch_ready` が `resolve_continuation_session` で書く。
+            // ADR-0140 D2: WU の run だけ `dispatch_ready` が `resolve_continuation_session` で書く。
             continuation_session: None,
             // ADR-0072 D13/D14（Phase E3）: planner run かどうかも `dispatch_ready` が判断し、
             // ここの返り値を上書きする（ここでは常に `None`）。
@@ -730,6 +731,7 @@ impl Dispatcher {
     pub(super) fn skills_context(
         &self,
         mounts: &[String],
+        run: task_ops::knowledge::SkillUse,
     ) -> (Vec<task_worker::protocol::SkillMount>, Vec<String>) {
         let root = &self.config.knowledge.root;
         let mut skills = Vec::new();
@@ -737,6 +739,9 @@ impl Dispatcher {
         for name in mounts {
             match task_ops::knowledge::skills_get(root, name) {
                 Some(detail) => {
+                    if !task_ops::knowledge::skill_applies_to(&detail.skill_md, run) {
+                        continue;
+                    }
                     let description = task_ops::knowledge::skill_description(&detail.skill_md);
                     let path = root
                         .join(task_core::knowledge::SKILLS_DIR)

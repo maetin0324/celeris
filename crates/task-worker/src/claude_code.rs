@@ -1,4 +1,4 @@
-//! `claude-code` アダプタ（DESIGN §5.4, ADR-0003 D7, ADR-0006）。
+//! `claude-code` アダプタ（ADR-0003 D7, ADR-0006）。
 //!
 //! `claude` CLI は celeris 独自のワーカープロトコルを話さない。`--output-format stream-json` が吐く
 //! Claude Code 自身のイベント（`system`/`assistant`/`user`/`result`）を読み、結果ファイル規約
@@ -40,8 +40,6 @@ pub struct ClaudeCodeConfig {
     pub model: Option<String>,
     /// 追加の環境変数（例: `CLAUDE_CONFIG_DIR`）。
     pub env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
-    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `claude` をコンテナの中で起こす（`container::wrap`）。
     /// TOML には書かない（ディスパッチャが `with_container` で入れる）。
     pub container: Option<crate::container::SharedPlan>,
@@ -55,7 +53,6 @@ impl Default for ClaudeCodeConfig {
             permission_mode: "bypassPermissions".to_string(),
             model: None,
             env: Vec::new(),
-            env_remove: Vec::new(),
             container: None,
         }
     }
@@ -102,12 +99,6 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(ClaudeCodeAdapter::new(config)))
     }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
-        Some(Arc::new(ClaudeCodeAdapter::new(config)))
-    }
-
     /// ADR-0043 D3（Phase 56）: コンテナの中で `claude` を起こす複製。
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
@@ -243,7 +234,7 @@ impl BackgroundTasks {
     }
 }
 
-/// ADR-0124 D4: run 内の再探索の観測（`tool_use` の `name`/`input` から決定的に数える）。
+/// ADR-0140 D4: run 内の再探索の観測（`tool_use` の `name`/`input` から決定的に数える）。
 /// `Read` は正規化した path、`Grep`/`Glob` は pattern + path を key にし、同じ key の 2 回目以降を
 /// `duplicate_reads` とする。key（path・pattern）は数えるためだけに持ち、外へは件数しか出さない。
 #[derive(Debug, Default)]
@@ -539,8 +530,6 @@ async fn run_claude_code(
         command.arg("--allowedTools").arg(allowed);
     }
     command.args(&config.extra_args);
-    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
-    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     // F5-fix5: headless の run では background task を無効にする（Claude Code CLI 2.1.283 は
     // `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` が立っていると Bash / Agent の `run_in_background` を道具の
     // schema から外す）。background が無いぶん、foreground の Bash が run の壁時計まで待てるよう
@@ -817,7 +806,7 @@ async fn run_claude_code(
                     || crate::provider::looks_like_resume_rejection(result_text)
                 {
                     sink.session_resume_failed(&tail);
-                    // ADR-0124 D4: 拒否された resume は「resume した run」に数えない。
+                    // ADR-0140 D4: 拒否された resume は「resume した run」に数えない。
                     if let Some(usage) = terminal_usage_mut(&mut outcome.0) {
                         usage.session_resumed = Some(false);
                     }
@@ -997,7 +986,7 @@ fn handle_line(
                 duplicate_reads: None,
                 session_resumed: None,
             });
-            // ADR-0124 D4: 再探索の重複と resume の印は usage に同乗させる（usage の無い result には付けない）。
+            // ADR-0140 D4: 再探索の重複と resume の印は usage に同乗させる（usage の無い result には付けない）。
             if let Some(usage) = usage.as_mut() {
                 exploration.annotate(usage);
             }

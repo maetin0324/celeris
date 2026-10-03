@@ -13,7 +13,7 @@ use crate::derive::latest_question;
 use crate::error::OpsError;
 use crate::view::{TaskRef, task_ref};
 
-/// `events_since` を読むときの「大きめの limit」（`docs/gui/api.md` §5.7）。伝播は同一トランザクション
+/// `events_since` を読むときの「大きめの limit」（`docs/api/v1/gui-api.md` §5.7）。伝播は同一トランザクション
 /// 内で完結するので、通常はこの上限にかからない。
 const CASCADE_EVENTS_LIMIT: usize = 100_000;
 
@@ -24,14 +24,14 @@ pub struct TransitionResult {
     pub from: Status,
     pub to: Status,
     pub reason: String,
-    /// この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。
+    /// この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。
     #[serde(default)]
     pub cascaded: Vec<TaskRef>,
 }
 
 /// `since_id`（遷移前の `latest_event_id()`）より後に追記されたイベントのうち、`subject` 以外の
 /// タスクに付いた `Transitioned{to: Cancelled, reason: "cancel" | "dependency_failed" | "parent_cancelled"}` を
-/// `TaskRef` にして返す（`docs/gui/api.md` §5.7）。
+/// `TaskRef` にして返す（`docs/api/v1/gui-api.md` §5.7）。
 fn collect_cascaded(
     store: &dyn TaskStore,
     subject: TaskId,
@@ -292,8 +292,8 @@ pub(crate) fn settle_pending_approvals(
     Ok(())
 }
 
-/// 非終端（`draft/ready/running/blocked/reviewing`）のタスクだけを `Trigger::Cancel` で
-/// `cancelled` にする。終端はエラーにし、状態は変えない（ADR-0010 D1, P-4）。子・後続への
+/// 非終端と `failed` のタスクを `Trigger::Cancel` で `cancelled` にする。
+/// `done` / `cancelled` はエラーにする（ADR-0131 D7）。子・後続への
 /// 取り消し伝播は `TaskStore::apply_transition` がストア側の同一トランザクションで行う。
 pub fn cancel(
     store: &dyn TaskStore,
@@ -303,7 +303,7 @@ pub fn cancel(
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
 
-    if task.status.is_terminal() {
+    if matches!(task.status, Status::Done | Status::Cancelled) {
         return Err(OpsError::InvalidState {
             id,
             context: format!("status={:?}", task.status),

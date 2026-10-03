@@ -55,6 +55,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
       counts: null,
       reportsLive: null,
       approvalsPending: 0,
+      unreadNotifications: 0,
       session,
       // 接続先も出さない（hydration payload にも載せない）
       gui: { version: guiVersion, celerisApiUrl: "" },
@@ -72,6 +73,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   // 「認可」ナビのバッジ（ADR-0033 D5、docs/celeris-api-v1.md §3.20 の追加。`DaemonSnapshot.approvals_pending`
   // も `reports` と同じく API が応答を組むときに埋める）。celeris に届かないときは 0（バッジを出さない）。
   let approvalsPending = 0;
+  let unreadNotifications = 0;
   if (!state.unavailable && state.health) {
     try {
       counts = (await client.get<{ counts: InboxCounts }>("/inbox", { signal: request.signal })).counts;
@@ -85,10 +87,16 @@ export async function loader({ request, context }: Route.LoaderArgs) {
       const daemon = await client.get<DaemonView>("/daemon", { signal: request.signal });
       reportsLive = daemon.snapshot?.reports ?? null;
       approvalsPending = approvalsPendingCount(daemon);
+      try {
+        unreadNotifications = (await client.get<{ unread: number }>("/notifications/unread-count", { signal: request.signal })).unread;
+      } catch {
+        unreadNotifications = 0;
+      }
     } catch {
       // バッジと通知が出ないだけにする（他の画面のバナー・ErrorBoundary が状況を伝える）。
       reportsLive = null;
       approvalsPending = 0;
+      unreadNotifications = 0;
     }
   }
   // トークンは含めない。baseUrl は接続先の表示用（loopback が既定）。
@@ -97,6 +105,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     counts,
     reportsLive,
     approvalsPending,
+    unreadNotifications,
     session,
     gui: { version: guiVersion, celerisApiUrl: client.baseUrl },
   };
@@ -125,7 +134,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 const RECHECK_MS = 5_000;
 
 export default function App({ loaderData }: Route.ComponentProps) {
-  const { health, unavailable, problem, counts, reportsLive, approvalsPending, gui, session } = loaderData;
+  const { health, unavailable, problem, counts, reportsLive, approvalsPending, unreadNotifications, gui, session } = loaderData;
   const revalidator = useRevalidator();
   const disconnected = unavailable || health === null;
   const showBanner = disconnected || problem !== null;
@@ -176,6 +185,7 @@ export default function App({ loaderData }: Route.ComponentProps) {
           approvals={counts?.approvals ?? 0}
           reportsLive={reportsLive}
           approvalsPending={approvalsPending}
+          unreadNotifications={unreadNotifications}
           connected={connected}
           celerisVersion={health?.celeris_version ?? null}
           logoutEnabled={session.enabled}
@@ -257,7 +267,7 @@ export default function App({ loaderData }: Route.ComponentProps) {
               本当の状態が見えるようになった）。`ConsoleComposer` と同じ実測値（`mobileHeight`）を使う。 */}
           {isConsoleComposerPathname(pathname) && <FooterComposerSpacer />}
         </div>
-        <MobileTabBar approvalsPending={approvalsPending} reportsLive={reportsLive} />
+        <MobileTabBar approvalsPending={approvalsPending} reportsLive={reportsLive} unreadNotifications={unreadNotifications} />
         {/* ADR-0057（Phase 92）: モバイル版 composer。`<Outlet/>`（`.animate-fade-in` の中）の外、
           `MobileTabBar` と同じ階層でレンダーする（ページ遷移アニメーションが `position: fixed` の
           containing block を差し替える Chromium の挙動の影響を構造的に受けない。ADR-0055 ラウンド 15 の
@@ -288,7 +298,7 @@ function FooterComposerSpacer() {
   );
 }
 
-type NavItem = { href: string; label: string; icon: IconName; badge?: "approvals" | "reports" | "org_approvals" };
+type NavItem = { href: string; label: string; icon: IconName; badge?: "approvals" | "reports" | "notifications" | "org_approvals" };
 
 /**
  * ナビゲーションのグループ（docs/adr/0011 D3、Phase G13a で SPEC §4 の順に組み替え。ADR-0033 D8）。
@@ -309,6 +319,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       // ADR-0047 D5（Phase 61 / G21）: 組織が覚えていること（正本は `[knowledge] root` の Markdown）
       { href: "/knowledge", label: "知識", icon: "database" },
       { href: "/reports", label: "報告", icon: "send", badge: "reports" },
+      { href: "/notifications", label: "通知", icon: "activity", badge: "notifications" },
       { href: "/approvals", label: "認可", icon: "shield", badge: "org_approvals" },
       { href: "/artifacts", label: "成果物", icon: "file" },
     ],
@@ -346,6 +357,7 @@ const MOBILE_TABS: NavItem[] = [
 const MOBILE_OTHER: NavItem[] = [
   { href: "/org", label: "組織", icon: "users" },
   { href: "/reports", label: "報告", icon: "send", badge: "reports" },
+  { href: "/notifications", label: "通知", icon: "activity", badge: "notifications" },
   { href: "/releases", label: "リリース", icon: "layers" },
   { href: "/knowledge", label: "知識", icon: "database" },
   { href: "/clusters", label: "クラスタ", icon: "server" },
@@ -370,6 +382,7 @@ function isActive(pathname: string, href: string): boolean {
 function Sidebar({
   approvals,
   reportsLive,
+  unreadNotifications,
   connected,
   approvalsPending,
   celerisVersion,
@@ -377,6 +390,7 @@ function Sidebar({
 }: {
   approvals: number;
   reportsLive: ReportsLive | null;
+  unreadNotifications: number;
   approvalsPending: number;
   connected: boolean;
   celerisVersion: string | null;
@@ -448,6 +462,9 @@ function Sidebar({
                           >
                             {unreadSecretary}
                           </span>
+                        )}
+                        {item.badge === "notifications" && unreadNotifications > 0 && (
+                          <span data-testid="notifications-unread-badge" className="ml-auto min-w-5 rounded-full bg-surface-2 px-1.5 py-0.5 text-center text-xs font-bold text-fg-muted">{unreadNotifications}</span>
                         )}
                         {item.badge === "org_approvals" && approvalsPending > 0 && (
                           <span
@@ -528,9 +545,11 @@ function MobileTopBar({ connected, logoutEnabled }: { connected: boolean; logout
 function MobileTabBar({
   approvalsPending,
   reportsLive,
+  unreadNotifications,
 }: {
   approvalsPending: number;
   reportsLive: ReportsLive | null;
+  unreadNotifications: number;
 }) {
   const { pathname } = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -610,6 +629,11 @@ function MobileTabBar({
                           className="ml-auto min-w-5 rounded-full bg-danger px-1.5 py-0.5 text-center text-xs leading-none font-bold text-white tabular-nums shadow-sm dark:text-bg"
                         >
                           {unreadSecretary}
+                        </span>
+                      )}
+                      {item.badge === "notifications" && unreadNotifications > 0 && (
+                        <span data-testid="mobile-notifications-unread-badge" className="ml-auto min-w-5 rounded-full bg-surface-2 px-1.5 py-0.5 text-center text-xs font-bold text-fg-muted">
+                          {unreadNotifications}
                         </span>
                       )}
                     </a>

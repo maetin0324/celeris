@@ -68,7 +68,7 @@ async fn standby_refuses_the_dispatcher_admin_endpoints_with_503_and_retry_after
         )
         .await
     });
-    let request = tokio::time::timeout(std::time::Duration::from_secs(5), admin_rx.recv())
+    let request = tokio::time::timeout(EVENT_WAIT, admin_rx.recv())
         .await
         .unwrap_or_else(|_| panic!("active になったのに reload が届かない"));
     match request {

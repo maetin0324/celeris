@@ -1,4 +1,4 @@
-//! ADR-0124 D1/D2: WU の execute continuation（予算切れ・yield の続き）は、同じ Task・同じ WU・
+//! ADR-0140 D1/D2: WU の execute continuation（予算切れ・yield の続き）は、同じ Task・同じ WU・
 //! `claude-code`・同じ account/provider なら保存した session を `--resume` し、条件が崩れたら
 //! checkpoint 前置きの新しい session に倒す。planner・別 WU は fresh のまま。偽のアダプタ（id は
 //! `claude-code`）と in-memory のストアだけで、実 claude・外部ネットワークには出ない。

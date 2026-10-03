@@ -3479,7 +3479,11 @@ fn planner_prompt_has_the_check_writing_section() {
     let task = crate::protocol::tests::sample_task();
     let needles = [
         "### check の書き方",
-        "`docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write",
+        "`agent-docs/progress/`, `agent-docs/adr/`, and every path this plan itself says the unit may write",
+        // ADR-0128 D3・D5・D7: 記録の置き場所と land 系 check の 3 本。
+        "a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers)",
+        "`agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).",
+        "`sh scripts/dev/check-doc-links.sh`, `sh scripts/dev/check-adr-numbers.sh` and `sh scripts/dev/progress-index.sh --check`",
         "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
         "corepack pnpm@<version from package.json packageManager> -C <dir>",
         "Compare against `$(git merge-base HEAD main)`",
@@ -3493,6 +3497,7 @@ fn planner_prompt_has_the_check_writing_section() {
         "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
         "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",
         "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
+        "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),
@@ -3550,6 +3555,8 @@ fn planner_prompt_declares_production_host_changes_as_a_human_procedure() {
         "systemd-run",
         "~/.config/celeris",
         "~/.local/celeris/releases",
+        "`/local`",
+        "/local/celeris/state/releases",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),
@@ -3646,7 +3653,7 @@ fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
     }
 }
 
-/// ADR-0124 D4: stream-json の行を `handle_line` に通し、最後の `result` の usage に載る
+/// ADR-0140 D4: stream-json の行を `handle_line` に通し、最後の `result` の usage に載る
 /// `duplicate_reads` を返す。
 fn duplicate_reads_after(root: &Path, resumed: bool, lines: &[String]) -> Option<Usage> {
     let sink = RecordingSink::default();
@@ -3678,7 +3685,7 @@ fn result_line() -> String {
         .to_string()
 }
 
-/// ADR-0124 D4: 同じ path の 2 回目の `Read` は 1 件の重複（絶対 path と cwd 相対・`./`・`..` を
+/// ADR-0140 D4: 同じ path の 2 回目の `Read` は 1 件の重複（絶対 path と cwd 相対・`./`・`..` を
 /// 同じ正規化 path として数える）。
 #[test]
 fn duplicate_read_same_path_twice_counts_one() {
@@ -3700,7 +3707,7 @@ fn duplicate_read_same_path_twice_counts_one() {
     assert_eq!(usage.input_tokens, Some(1));
 }
 
-/// ADR-0124 D4: 別 path の `Read`、別 path の同じ pattern の `Grep`、`Glob`・他の道具は重複にしない。
+/// ADR-0140 D4: 別 path の `Read`、別 path の同じ pattern の `Grep`、`Glob`・他の道具は重複にしない。
 #[test]
 fn duplicate_read_distinct_paths_count_zero() {
     let root = Path::new("/work/repo");
@@ -3730,7 +3737,7 @@ fn duplicate_read_distinct_paths_count_zero() {
     assert_eq!(usage.duplicate_reads, Some(0));
 }
 
-/// ADR-0124 D4: `Grep`/`Glob` は pattern + path が同じなら重複（path の書き方の違いは正規化する）。
+/// ADR-0140 D4: `Grep`/`Glob` は pattern + path が同じなら重複（path の書き方の違いは正規化する）。
 #[test]
 fn duplicate_read_counts_repeated_grep_and_glob() {
     let root = Path::new("/work/repo");
@@ -3753,7 +3760,7 @@ fn duplicate_read_counts_repeated_grep_and_glob() {
     assert_eq!(usage.session_resumed, Some(true));
 }
 
-/// ADR-0124 D4: `--resume` で起動した run は終了結果の usage に `session_resumed = true` が載り、
+/// ADR-0140 D4: `--resume` で起動した run は終了結果の usage に `session_resumed = true` が載り、
 /// stream の再 Read も数えられる（スタブの claude。外部ネットワーク・実 claude は使わない）。
 #[tokio::test]
 async fn duplicate_read_and_resume_mark_reach_the_terminal_usage() {
@@ -3793,7 +3800,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
     }
 }
 
-/// ADR-0124 D4: resume を頼んでも拒否された run（`error_during_execution` + 拒否の文言）は
+/// ADR-0140 D4: resume を頼んでも拒否された run（`error_during_execution` + 拒否の文言）は
 /// `session_resumed = false`（resume した run に数えない）。
 #[tokio::test]
 async fn duplicate_read_rejected_resume_is_not_marked_resumed() {

@@ -1207,6 +1207,23 @@
       ],
       "type": "string"
     },
+    "DeliverySkipReason": {
+      "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
+      "enum": [
+        "multiple_repos",
+        "no_marker",
+        "marker_repo_mismatch",
+        "repo_row_missing",
+        "repo_not_local",
+        "repo_path_mismatch",
+        "not_git",
+        "no_branch",
+        "branch_name_mismatch",
+        "refs_unresolvable",
+        "department_unresolved"
+      ],
+      "type": "string"
+    },
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
@@ -3084,6 +3101,34 @@
           "type": "object"
         },
         {
+          "description": "ADR-0121 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない\n監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "head": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/DeliverySkipReason"
+            },
+            "type": {
+              "const": "delivery_skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -4422,7 +4467,7 @@
         },
         "method": {
           "$ref": "#/$defs/QuotaMethod",
-          "description": "**ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
+          "description": "**ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
         },
         "resets_at": {
           "format": "int64",
@@ -5593,7 +5638,7 @@
           ]
         },
         "duplicate_reads": {
-          "description": "ADR-0124 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
+          "description": "ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -5618,7 +5663,7 @@
           ]
         },
         "session_resumed": {
-          "description": "ADR-0124 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
+          "description": "ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
           "type": [
             "boolean",
             "null"

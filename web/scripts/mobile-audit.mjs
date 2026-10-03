@@ -6,7 +6,7 @@ import { chromium } from "@playwright/test";
 import { screens } from "../e2e/support/screens.ts";
 import { startFixtureGateway } from "./fixture-gateway.mjs";
 
-// S3 の最小の監査（docs/web/implementation-plan.md §2）。幅 360 / 390 / 412 / 1440 px で、ページ全体の横溢れが 0、
+// S3 の最小の監査（agent-docs/web/implementation-plan.md §2）。幅 360 / 390 / 412 / 1440 px で、ページ全体の横溢れが 0、
 // 見えている操作要素が 44×44 px 以上かを見る。gateway は空き port の loopback で起こし、daemon には接続しない。
 // 引数なしで screens.ts の全行（fixture の重複は 1 回）を偽 daemon の fixture で監査する（P5-03）。
 // 使い方: node scripts/mobile-audit.mjs [--only "/login"] [--screenshots <dir>]

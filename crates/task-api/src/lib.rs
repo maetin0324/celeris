@@ -1,4 +1,4 @@
-//! `task-api`: celeris の HTTP API v1（`docs/gui/api.md`、ADR-0013 D2〜D4 / D8 / D11）。
+//! `task-api`: celeris の HTTP API v1（`docs/api/v1/gui-api.md`、ADR-0013 D2〜D4 / D8 / D11）。
 //!
 //! - `/api/v1` 配下の 26 エンドポイント。JSON で応答し、エラーは `application/problem+json`、通知は SSE。
 //! - ハンドラは協調判断をしない。読み取りはストアのクエリと `task-ops` のビュー、状態変更は `task-ops` 経由だけ。
@@ -38,6 +38,7 @@ pub mod docs;
 pub mod execution;
 mod files;
 mod handlers;
+mod inbox_notifications;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
 pub mod knowledge;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
@@ -182,6 +183,8 @@ pub struct ApiSettings {
     /// ADR-0017 M1: `providers.d/<id>.toml` の書き込み先。`providers_include` が未設定なら `None`
     /// （そのときは管理系の作成/変更/削除が使えない）。
     pub providers_dir: Option<PathBuf>,
+    /// IDs of configured OpenAI-compatible sources, supplied by the daemon.
+    pub openai_compatible_source_ids: std::collections::HashSet<String>,
     /// ADR-0017 M2: `reload` / `check` を celeris（ワーカー起動ができる側）へ委譲するチャネル。`None` なら両方使えない。
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1 / ADR-0025 D1/D6: アダプタごとの `[accounts]` の根ディレクトリの絶対パス（設定されている
@@ -203,6 +206,11 @@ pub struct ApiSettings {
     pub notify_secret_id: String,
     /// ADR-0037 D3: `[notify] gui_base_url`（文面のリンクの根。無ければリンク無し）。
     pub notify_gui_base_url: Option<String>,
+    /// ADR-0133 D6: outbound inbox and digest policy values exposed by GET /notify.
+    pub notify_inbox_batch_secs: u64,
+    pub notify_inbox_reminder_secs: u64,
+    pub notify_digest_interval_secs: u64,
+    pub notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す。task-api は
     /// リリースのファイル規約を知らない）。`None` なら `GET /releases` は空、昇格は 409。
     pub releases: Option<SharedReleaseSource>,

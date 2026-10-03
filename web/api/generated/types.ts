@@ -288,6 +288,14 @@ export type AttentionItem = {
   "summary": string;
   "task": TaskRef;
   "type": "plan_approval";
+} | {
+  "at": string;
+  "detail": string;
+  "head"?: string | null;
+  "reason": DeliverySkipReason;
+  "summary": string;
+  "task": TaskRef;
+  "type": "delivery_skipped";
 };
 
 export type AttestationClaims = {
@@ -1202,6 +1210,8 @@ export type Delivery = {
   "worker_run": string;
 };
 
+export type DeliverySkipReason = "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
+
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
 export type DiffStat = {
@@ -1654,6 +1664,11 @@ export type Event = {
   "type": "plan_approval_requested";
 } | {
   "detail": string;
+  "head"?: string | null;
+  "reason": DeliverySkipReason;
+  "type": "delivery_skipped";
+} | {
+  "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
   "since"?: string;
@@ -1958,6 +1973,21 @@ export type HumanAttestation = {
   "signature": string;
 };
 
+export type HumanInboxCounts = {
+  "by_kind": {
+  [key: string]: number;
+};
+  "total": number;
+};
+
+export type HumanInboxView = {
+  "counts": HumanInboxCounts;
+  "items": Array<InboxItem>;
+  "suppressed": {
+  [key: string]: number;
+};
+};
+
 export type InFlight = {
   "kind": InFlightKind;
   "provider": string;
@@ -1976,6 +2006,37 @@ export type Inbox = {
   "decisions": Array<DecisionInboxItem>;
   "drafts": Array<DraftGroup>;
   "questions": Array<QuestionItem>;
+  "suppressed": {
+  [key: string]: number;
+};
+};
+
+export type InboxAnswer = {
+  "body_schema": {
+  [key: string]: string;
+};
+  "method": string;
+  "native"?: InboxNativeOp | null;
+  "path": string;
+};
+
+export type InboxAnswerBody = {
+  "note"?: string | null;
+  "option": string;
+  "payload"?: unknown;
+};
+
+export type InboxAnswerResult = {
+  "item_id": string;
+  "removed": boolean;
+  "result": unknown;
+};
+
+export type InboxBlocking = {
+  "root"?: TaskRef | null;
+  "summary": string;
+  "tasks": Array<TaskRef>;
+  "units": Array<string>;
 };
 
 export type InboxCounts = {
@@ -1988,6 +2049,43 @@ export type InboxCounts = {
   "decisions": number;
   "drafts": number;
   "questions": number;
+};
+
+export type InboxItem = {
+  "age_secs": number;
+  "answer": InboxAnswer;
+  "blocked_by": Array<string>;
+  "blocking": InboxBlocking;
+  "created_at": string;
+  "detail"?: string | null;
+  "due_at"?: string | null;
+  "id": string;
+  "kind": InboxKind;
+  "links": Array<InboxLink>;
+  "options": Array<InboxOption>;
+  "project_id"?: string | null;
+  "recommended"?: string | null;
+  "task"?: TaskRef | null;
+  "title": string;
+};
+
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "delivery_skipped" | "knowledge_review";
+
+export type InboxLink = {
+  "href": string;
+  "label": string;
+};
+
+export type InboxNativeOp = {
+  "method": string;
+  "path": string;
+};
+
+export type InboxOption = {
+  "effect": string;
+  "key": string;
+  "label": string;
+  "needs_note": boolean;
 };
 
 export type InstanceRole = "active" | "standby" | "draining" | "verify";
@@ -2173,6 +2271,8 @@ export type LlmSourceAccountView = {
   "remaining_long"?: number | null;
   "remaining_short"?: number | null;
 };
+
+export type LlmSourceRef = string;
 
 export type LlmSourceView = {
   "accounts": Array<LlmSourceAccountView>;
@@ -2460,7 +2560,52 @@ export type NodeSessionSummary = {
   "turns": number;
 };
 
-export type NotificationKind = "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+export type Notice = {
+  "count": number;
+  "first_at": string;
+  "group_key": string;
+  "id": NoticeId;
+  "kind": NoticeKind;
+  "last_at": string;
+  "links"?: Array<NoticeLink>;
+  "project_id"?: string | null;
+  "read_at"?: string | null;
+  "summary": string;
+  "target"?: NoticeTarget | null;
+  "task_id"?: string | null;
+  "title": string;
+};
+
+export type NoticeId = string;
+
+export type NoticeKind = "task_done" | "report" | "bad_news" | "secretary_reply" | "delivery" | "release" | "cron_run" | "auto_recovered" | "requeue_limit_near";
+
+export type NoticeLink = {
+  "href": string;
+  "label": string;
+};
+
+export type NoticeReadAllResult = {
+  "marked": number;
+};
+
+export type NoticeReadResult = {
+  "id": string;
+  "read_at": string;
+};
+
+export type NoticeTarget = {
+  "id": string;
+  "kind": string;
+};
+
+export type NotificationKind = "inbox_new" | "digest" | "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+
+export type NotificationsView = {
+  "items": Array<Notice>;
+  "next_before"?: string | null;
+  "unread": number;
+};
 
 export type NotifyRecent = {
   "attempts": number;
@@ -2480,8 +2625,14 @@ export type NotifyTestResult = {
 
 export type NotifyView = {
   "configured": boolean;
+  "digest_interval_secs": number;
+  "digest_last_sent_at"?: string | null;
+  "digest_max_lines": number;
   "fingerprint"?: string | null;
   "gui_base_url"?: string | null;
+  "inbox_batch_secs": number;
+  "inbox_new_last_sent_at"?: string | null;
+  "inbox_reminder_secs": number;
   "recent": Array<NotifyRecent>;
   "secret_id": string;
 };
@@ -2902,6 +3053,8 @@ export type ProviderConfigView = {
 };
   "env_keys": Array<string>;
   "id": string;
+  "kind"?: ProviderKind;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "tier_models"?: {
   "cheap"?: ModelBinding;
@@ -2910,6 +3063,8 @@ export type ProviderConfigView = {
 };
   "tiers": Array<Tier>;
 };
+
+export type ProviderKind = "adapter";
 
 export type ProviderLive = {
   "account_id"?: string | null;
@@ -2923,7 +3078,9 @@ export type ProviderLive = {
   "id": string;
   "in_use": number;
   "in_use_cos"?: number;
+  "kind"?: ProviderKind;
   "last_check"?: ProviderCheckView | null;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "tier_models"?: {
   "cheap"?: ModelBinding;
@@ -2958,7 +3115,9 @@ export type ProviderView = {
   "id": string;
   "in_use"?: number | null;
   "in_use_cos"?: number | null;
+  "kind"?: ProviderKind;
   "last_check"?: ProviderCheckView | null;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "stats": ProviderStats;
   "tier_models"?: {
@@ -3022,6 +3181,12 @@ export type RateWindow = {
 export type RateWindowView = {
   "resets_at": string;
   "utilization": number;
+};
+
+export type ReadAllBody = {
+  "before"?: string | null;
+  "kind"?: NoticeKind | null;
+  "project"?: string | null;
 };
 
 export type ReleaseChanges = {
@@ -3248,6 +3413,11 @@ export type ReportsReadBody = {
 
 export type ReportsReadResult = {
   "updated": number;
+};
+
+export type ResolvedLlmSource = {
+  "origin": SourceOrigin;
+  "source": LlmSourceRef;
 };
 
 export type RetryBody = {
@@ -3628,6 +3798,8 @@ export type SkillSummaryView = {
   "name": string;
   "updated"?: string | null;
 };
+
+export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {
   "scope"?: string;
@@ -4116,6 +4288,14 @@ export type UnitContext = {
 export type UnitDeclared = "leaf" | "task";
 
 export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
+
+export type UnreadCountView = {
+  "by_kind": {
+  [key: string]: number;
+};
+  "events": number;
+  "unread": number;
+};
 
 export type Usage = {
   "cache_creation_tokens"?: number | null;

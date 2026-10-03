@@ -102,7 +102,9 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
         return Ok(());
     }
     let guard = task_worker::db_guard::DbGuard::new(&config.db.path)
-        .map_err(|e| DaemonError::DbGuard(e.to_string()))?;
+        .map_err(|e| DaemonError::DbGuard(e.to_string()))?
+        .with_releases_dir(config.selfdeploy.releases_dir.clone())
+        .with_hot_mount(config.storage.hot_mount.clone());
     task_worker::db_guard::probe(&guard).map_err(|e| {
         DaemonError::DbGuard(format!(
             "cannot make {} read-only for worker runs ({e}; ADR-0095). Worker runs must not be able to \

@@ -5,7 +5,7 @@ tasks: [01M3YE0JTQEYBFDTV3HCHR4G9J]
 
 完了日 2026-10-02（verify WorkUnit、ADR-0130）。実装済みの Phase 5 を workspace 全体で検証し、architecture map に参照を追加した。コード機能の変更はない。
 
-- 実装案内: `task-core::write_set` は hint の正規化・重なり判定、`task-core::store::write_sets` は実績永続化を担う。Dispatcher は `write_set_gate` で同一 repo の強い重なりを待機させ、`write_set_record` で Git 差分を記録する。`behind_target` が target との差分と age を観測し、`stale_priority` が長期 stale task の review 前 sync を優先する。API の TaskDetail / execution metrics と GUI task 詳細にも公開している。詳細は [ADR-0130](../adr/0130-write-set-parallelism-and-behind.md) D1–D5。
+- 実装案内: `task-core::write_set` は hint の正規化・重なり判定、`task-core::store::write_sets` は実績永続化を担う。Dispatcher は `write_set_gate` で同一 repo の強い重なりを待機させ、`write_set_record` で Git 差分を記録する。`behind_target` が target との差分と age を観測し、`stale_priority` が長期 stale task の review 前 sync を優先する。API の TaskDetail / execution metrics と GUI task 詳細にも公開している。詳細は [ADR-0130](../../agent-docs/adr/0130-write-set-parallelism-and-behind.md) D1–D5。
 - 着手時の ref: `main` と `origin/main` はともに `faa20195521f6edae6f508d7523b4ec97837cf12`、HEAD は `0ca05217640c44d3bd625c660ebabe2a27d779cd`。fetch は行わず、登録済み ref を使った。
 - 衝突見積もり: `git merge-tree --write-tree --name-only HEAD main` → exit 1。衝突対象は `crates/task-api/src/query.rs`, `crates/task-api/src/query/tests.rs`, `crates/task-core/src/cluster_job/tests.rs`, `crates/task-core/src/store/migrations.rs`, `crates/task-core/src/store/tests.rs`, `crates/task-ops/src/delivery.rs`, `crates/task-ops/src/delivery/tests.rs`, `crates/task-worker/tests/browser_shared_cdp.rs`, `docs/PROGRESS.md`, `gui/app/routes/inbox.tsx`。自動 merge 候補も複数あり、最終 merge 時に確認が必要。
 - `cargo fmt --all -- --check` → exit 0。

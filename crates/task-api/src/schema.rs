@@ -1,4 +1,4 @@
-//! API v1 の JSON Schema（`docs/gui/api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
+//! API v1 の JSON Schema（`docs/api/v1/gui-api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
 //! 生成物は `docs/api/v1/api-v1.schema.json` にコミットし、`committed_schema_matches_generated` で一致を確かめる
 //! （`UPDATE_SCHEMA=1 cargo test -p task-api` で再生成）。
 
@@ -43,6 +43,16 @@ pub struct ApiV1Schema {
     pub health: Health,
     pub problem: Problem,
     pub inbox: Inbox,
+    /// ADR-0133 D5: human decisions and informational notices.
+    pub inbox_items: crate::inbox_notifications::HumanInboxView,
+    pub inbox_item: task_ops::human_inbox::InboxItem,
+    pub inbox_answer: crate::inbox_notifications::InboxAnswerBody,
+    pub inbox_answer_result: crate::inbox_notifications::InboxAnswerResult,
+    pub notifications: crate::inbox_notifications::NotificationsView,
+    pub notifications_unread_count: crate::inbox_notifications::UnreadCountView,
+    pub notification_read: crate::inbox_notifications::NoticeReadResult,
+    pub notifications_read_all: crate::inbox_notifications::NoticeReadAllResult,
+    pub notifications_read_all_body: crate::inbox_notifications::ReadAllBody,
     pub task_list: TaskList,
     pub task: Task,
     pub task_detail: TaskDetail,

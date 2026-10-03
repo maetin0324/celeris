@@ -130,6 +130,8 @@ fn production_host_changes_are_declared_as_a_human_procedure() {
     assert!(out.contains("systemd-run"), "{out}");
     assert!(out.contains("~/.config/celeris"), "{out}");
     assert!(out.contains("~/.local/celeris/releases"), "{out}");
+    assert!(out.contains("`/local`"), "{out}");
+    assert!(out.contains("/local/celeris/state/releases"), "{out}");
 }
 
 /// ADR-0044 D2（Phase 53）: コメントの節は**前置きの先頭**。人の割り込みがいちばん先に来て、

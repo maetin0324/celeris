@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import { resolve } from "node:path";
 import { chromium } from "../gui/node_modules/@playwright/test/index.mjs";
-const output = resolve(process.argv[2] ?? new URL("../docs/gui/model-routing", import.meta.url).pathname);
+const output = resolve(process.argv[2] ?? new URL("../agent-docs/gui/model-routing", import.meta.url).pathname);
 const measurementsPath = resolve(process.argv[3] ?? "/tmp/celeris-model-routing-measurements.json");
 await mkdir(output, { recursive: true });
 const providers = ["codex", "claude-code"].map((adapter, i) => ({

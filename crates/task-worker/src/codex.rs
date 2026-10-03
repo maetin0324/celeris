@@ -1,4 +1,4 @@
-//! `codex` アダプタ（DESIGN §5.4, ADR-0008 D3）。
+//! `codex` アダプタ（ADR-0008 D3）。
 //!
 //! `codex exec --json` は celeris 独自のワーカープロトコルを話さない。`--json` が吐く JSON Lines
 //! （`thread.started` → `item.*`（進捗）→ `turn.completed`/`turn.failed`）を読み、`claude-code`
@@ -68,8 +68,6 @@ pub struct CodexConfig {
     pub reasoning_effort: Option<String>,
     /// 追加の環境変数。
     pub env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
-    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `codex` をコンテナの中で起こす（`container::wrap`）。
     pub container: Option<crate::container::SharedPlan>,
     /// ADR-0054 D1（Phase 67）: `context.session` が resume を求めたときの継続手段。
@@ -86,7 +84,6 @@ impl Default for CodexConfig {
             model: None,
             reasoning_effort: None,
             env: Vec::new(),
-            env_remove: Vec::new(),
             container: None,
             resume_mode: CodexResumeMode::default(),
             resume_bypass: CodexResumeBypass::default(),
@@ -140,11 +137,7 @@ fn codex_home(config: &CodexConfig, cwd: &Path) -> Result<PathBuf, AdapterError>
         .rev()
         .find(|(key, _)| key == "CODEX_HOME")
         .map(|(_, value)| std::ffi::OsString::from(value))
-        .or_else(|| {
-            (!config.env_remove.iter().any(|key| key == "CODEX_HOME"))
-                .then(|| std::env::var_os("CODEX_HOME"))
-                .flatten()
-        })
+        .or_else(|| std::env::var_os("CODEX_HOME"))
         .or_else(|| {
             std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex").into_os_string())
         })
@@ -240,12 +233,6 @@ impl WorkerAdapter for CodexAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(CodexAdapter::new(config)))
     }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
-        Some(Arc::new(CodexAdapter::new(config)))
-    }
-
     /// ADR-0043 D3（Phase 56）: コンテナの中で `codex` を起こす複製。
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
@@ -497,7 +484,7 @@ async fn run_codex_once(
     //     `codex exec --help`'s own example is `-c model="o3"`) or dropped for resume with a comment
     //     below explaining why (the resumed thread already carries whatever approval/sandbox/
     //     writable-roots settings were set on the *first*, non-resume `exec` invocation that created
-    //     it — unverified against the real CLI beyond `--help`, see PROGRESS.md Phase 68c 未解決事項).
+    //     it — unverified against the real CLI beyond `--help`, see agent-docs/PROGRESS.md Phase 68c 未解決事項).
     let mut is_exec_resume_subcommand = false;
     if let (Some(id), CodexResumeMode::ExecResume) = (&resume_id, config.resume_mode) {
         command.arg("resume").arg(id);
@@ -613,8 +600,6 @@ async fn run_codex_once(
     // argument (or if `-` is used), instructions are read from stdin"、`codex exec resume --help`:
     // "[PROMPT] … If `-` is used, read from stdin"。resume は SESSION_ID の後なので `-` を明示する）。
     command.arg("-");
-    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
-    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .envs(config.env.iter().cloned())
         .env("CODEX_HOME", codex_home)
@@ -801,8 +786,12 @@ async fn run_codex(
     // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
-    // ADR-0056 D3（Phase 79）: mount された skills を `AGENTS.md` の節として書く（codex はこのファイルを
-    // 自動で読む。既存の内容は壊さない。run は落とさない）。
+    // ADR-0127 D1/D3: mount された skill のディレクトリを `.agents/skills/<name>/` に丸写しし（codex が
+    // ネイティブに読む作業場所内の場所。account 共有の CODEX_HOME には書かない）、`AGENTS.md` の
+    // celeris:skills 節は名前・説明・パスの一覧にする（本文は埋め込まない。run は落とさない）。
+    if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
+        warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
+    }
     if let Err(e) = crate::skills::deliver_agents_md(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to update AGENTS.md with skills: {e}");
     }

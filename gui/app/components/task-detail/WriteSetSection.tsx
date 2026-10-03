@@ -5,7 +5,7 @@ import { EmptyState, Mono } from "~/components/ui/misc";
 import { formatDuration } from "~/lib/time-delta";
 import { cn } from "~/lib/utils";
 
-/** docs/adr/0130 D4: 遅れを「N commits / 経過時間」で読めるようにする。欠落は「計測不可」。 */
+/** agent-docs/adr/0130 D4: 遅れを「N commits / 経過時間」で読めるようにする。欠落は「計測不可」。 */
 function behindLabel(commits: number | null | undefined, ageSeconds: number | null | undefined): string {
   if (commits == null) return "target から遅れ: 計測不可";
   const age = ageSeconds != null ? `${formatDuration(ageSeconds)}経過` : "経過時間: 計測不可";
@@ -76,7 +76,7 @@ function WriteSetList({ title, items }: { title: string; items: ActualWriteSetVi
 }
 
 /**
- * タスク詳細の write-set / behind 節（docs/adr/0130 D1/D2/D4）。
+ * タスク詳細の write-set / behind 節（agent-docs/adr/0130 D1/D2/D4）。
  * expected_write_paths（粗い hint）・actual_run_write_sets/actual_work_unit_write_sets（Git diff から
  * の確定実績）・behind_target（target からの遅れと計測時刻）を表示する。GUI は celeris の判定を
  * 再実装せず、API が返した値をそのまま出す。

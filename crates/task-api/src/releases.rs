@@ -1,4 +1,4 @@
-//! リリースの一覧と昇格（ADR-0040 D6。Phase 48。`docs/gui/api.md` §3.54/§3.55）。
+//! リリースの一覧と昇格（ADR-0040 D6。Phase 48。`docs/api/v1/gui-api.md` §3.54/§3.55）。
 //!
 //! - `GET /releases` — 読み取り（トークン不要）。`[selfdeploy] releases_dir` の下と、
 //!   `[selfdeploy] repo`（作業チェックアウト。`on_main` のためだけ）を**読むだけ**。

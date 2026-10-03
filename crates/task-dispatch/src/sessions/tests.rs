@@ -293,7 +293,7 @@ fn a_poolless_session_sticks_without_an_account_check() {
     );
 }
 
-// ---- ADR-0124 D1: `decide_continuation`（execute continuation の同一 session resume と fallback） ----
+// ---- ADR-0140 D1: `decide_continuation`（execute continuation の同一 session resume と fallback） ----
 
 const UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
 

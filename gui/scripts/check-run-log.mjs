@@ -4,7 +4,7 @@
 // スクリーンショットを撮って表示を確かめる。偽の celeris（fixture）だけを使い、実 celeris・認証・LLM・外部
 // ネットワークには出ない。
 // 使い方: pnpm build && node scripts/check-run-log.mjs [--out <dir>] [--no-checks]
-//   --out        スクリーンショットの出力先（既定 docs/gui/run-log）
+//   --out        スクリーンショットの出力先（既定 gui/docs/gui/run-log。human-review と同じ置き場所）
 //   --no-checks  画面の要素の検査をせずに撮るだけ（変更前の画面を撮るとき用）
 // 失敗（期待の要素が無い・横スクロールが出る・実行中の run の追記が表示されない）は exit 1。
 import { spawn } from "node:child_process";
@@ -20,7 +20,7 @@ const { chromium } = require("@playwright/test");
 
 const args = process.argv.slice(2);
 const outIdx = args.indexOf("--out");
-const OUT_DIR = outIdx >= 0 ? path.resolve(args[outIdx + 1]) : path.join(GUI_DIR, "docs/gui/run-log");
+const OUT_DIR = outIdx >= 0 ? path.resolve(args[outIdx + 1]) : path.join(GUI_DIR, "docs", "gui", "run-log");
 const CHECKS = !args.includes("--no-checks");
 fs.mkdirSync(OUT_DIR, { recursive: true });
 

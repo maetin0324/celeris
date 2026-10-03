@@ -7,7 +7,7 @@
 //! いずれも HTTP ハンドラ（`task-api::handlers`）と**同じ** `task-ops` の関数を呼ぶ（ロジックの
 //! 二重実装をしない）。書き込みの主体は `mcp:<client_id>`（`knowledge_propose` と同じ流儀。
 //! `task_retry` / `task_cancel` は下敷きの `task-ops` 関数がそもそも actor を持たないので、監査は
-//! `mcp_calls` に任せる — `docs/mcp.md` §4 参照）。
+//! `mcp_calls` に任せる — `docs/guides/mcp.md` §4 参照）。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -24,7 +24,7 @@ use crate::auth::AuthedClient;
 use crate::state::McpState;
 
 /// `OpsError` → `ToolError`（Phase 101。`NotFound`/`*NotFound` は not_found、状態や検証の不整合は
-/// invalid_params、それ以外（`Store`）は internal。`docs/gui/api.md` の `ops_problem` と同じ分類を
+/// invalid_params、それ以外（`Store`）は internal。`docs/api/v1/gui-api.md` の `ops_problem` と同じ分類を
 /// JSON-RPC のエラーコードに写しただけ）。
 pub(crate) fn map_ops_err(e: OpsError) -> ToolError {
     match e {
@@ -442,7 +442,7 @@ pub fn retry_def() -> ToolDef {
 // ---- ADR-0072「Phase F6 実装時の決定」: task_decompose (scope tasks:interact) ----
 // scope は `tasks:interact`（`task_answer` と同じ重さ）: draft / ready / blocked の Task の実行の形を決め直すだけで、
 // run を止めない・複製しない・承認しない・atomic に戻せる（取り消せる）。複製を伴う `task_retry { execution }` は
-// 従来どおり `tasks:control`。ChatGPT（RDC）の推奨 scope（docs/mcp.md §8.2）のまま使える。
+// 従来どおり `tasks:control`。ChatGPT（RDC）の推奨 scope（docs/guides/mcp.md §8.2）のまま使える。
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

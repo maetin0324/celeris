@@ -40,7 +40,7 @@ import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/projects";
 
 /**
- * `/projects`（案件の一覧と作成、SPEC §3.3・§4、ADR-0033 D2、docs/gui/api.md §3.46）。
+ * `/projects`（案件の一覧と作成、SPEC §3.3・§4、ADR-0033 D2、docs/api/v1/gui-api.md §3.46）。
  * 一覧は `GET /projects` に加え、「途中目標の数」を出すため各案件の `GET /projects/{id}` を束ねて取る
  * （`ProjectList` 自体には milestones が無い。件数は API が返した `milestones.length` そのままで、
  * GUI 側で新しい判断はしていない）。

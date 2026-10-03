@@ -1,4 +1,4 @@
-//! ADR-0124 D1/D2: WU の execute continuation を同じ Claude Code session で resume するか、checkpoint
+//! ADR-0140 D1/D2: WU の execute continuation を同じ Claude Code session で resume するか、checkpoint
 //! 前置きの新しい session に倒すか（store の読み書きと記録。判断そのものは
 //! `crate::sessions::decide_continuation`、純粋・テスト容易）。LLM は使わない。
 
@@ -22,7 +22,7 @@ pub(super) struct ContinuationSurface<'a> {
 }
 
 impl Dispatcher {
-    /// ADR-0124 D1: WU の worker run の session を決める。`extras.session`（`--resume` / `--session-id`）と
+    /// ADR-0140 D1: WU の worker run の session を決める。`extras.session`（`--resume` / `--session-id`）と
     /// `extras.continuation_session`（sink が resume 拒否で retire する key）を書き、resume 拒否のやり直しでは
     /// `extras.continuation_override` に直近の checkpoint を入れる。判断は run の進行に 1 行残す。
     #[allow(clippy::too_many_arguments)]

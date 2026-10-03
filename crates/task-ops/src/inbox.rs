@@ -1,6 +1,6 @@
-//! 受信箱（`docs/gui/api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
+//! 受信箱（`docs/api/v1/gui-api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -23,6 +23,8 @@ pub struct Inbox {
     pub questions: Vec<QuestionItem>,
     pub drafts: Vec<DraftGroup>,
     pub attention: Vec<AttentionItem>,
+    /// ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。
+    pub suppressed: BTreeMap<String, u32>,
     /// ADR-0080 D5: 人の対応（credential の登録・一回だけの承認・拒否）を待っている browser の wait。
     pub browser_waits: Vec<crate::browser::BrowserWaitItem>,
     /// ADR-0079 D7（Phase R3a）: 未回答の決定の要求（path・問い・推奨・止めている unit・経過時間）。
@@ -193,6 +195,18 @@ pub enum AttentionItem {
         decision_ids: Vec<String>,
         at: String,
     },
+    /// ADR-0121 D3: 完了した root の成果を main へ取り込み始められなかった（`Event::DeliverySkipped` の写し。
+    /// 正本は event）。同じ head の delivery が後で作られたら出さない。
+    DeliverySkipped {
+        task: TaskRef,
+        reason: task_core::DeliverySkipReason,
+        /// 「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。
+        summary: String,
+        detail: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        head: Option<String>,
+        at: String,
+    },
 }
 
 /// `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
@@ -206,6 +220,83 @@ pub struct PlanApprovalStage {
     pub units: Vec<String>,
 }
 
+/// ADR-0131 D7 の表示抑制規則。順序は、同じ task が複数に当たるときの集計の優先順位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuppressRule {
+    TerminalTask,
+    ParentDone,
+    AncestorCancelled,
+    UnitRetriedDone,
+}
+
+impl SuppressRule {
+    fn key(self) -> &'static str {
+        match self {
+            Self::TerminalTask => "r3_terminal_task",
+            Self::ParentDone => "r1_parent_done",
+            Self::AncestorCancelled => "r2_ancestor_cancelled",
+            Self::UnitRetriedDone => "r4_unit_retried_done",
+        }
+    }
+}
+
+/// Task 木の現在状態だけから表示可否を決める。欠けた親や巡回は判定不能として残す。
+pub fn attention_suppression(task: &Task, by_id: &HashMap<TaskId, Task>) -> Option<SuppressRule> {
+    if matches!(task.status, Status::Done | Status::Cancelled) {
+        return Some(SuppressRule::TerminalTask);
+    }
+    if task.status != Status::Failed {
+        return None;
+    }
+    let parent_id = task_core::tree::tree_parent(task).or(task.parent_id);
+    if parent_id
+        .and_then(|id| by_id.get(&id))
+        .is_some_and(|parent| parent.status == Status::Done)
+    {
+        return Some(SuppressRule::ParentDone);
+    }
+    let mut seen = HashSet::new();
+    let mut ancestor = parent_id;
+    while let Some(id) = ancestor {
+        if !seen.insert(id) {
+            break;
+        }
+        let Some(parent) = by_id.get(&id) else { break };
+        if parent.status == Status::Cancelled {
+            return Some(SuppressRule::AncestorCancelled);
+        }
+        ancestor = task_core::tree::tree_parent(parent).or(parent.parent_id);
+    }
+    let unit = task.tree.as_ref()?.parent_unit.as_ref()?;
+    by_id
+        .values()
+        .find(|other| {
+            other.id != task.id
+                && other.status == Status::Done
+                && other.created_at > task.created_at
+                && other
+                    .tree
+                    .as_ref()
+                    .and_then(|tree| tree.parent_unit.as_ref())
+                    .is_some_and(|candidate| {
+                        candidate.task_id == unit.task_id && candidate.unit_key == unit.unit_key
+                    })
+        })
+        .map(|_| SuppressRule::UnitRetriedDone)
+}
+
+fn attention_task(item: &AttentionItem) -> Option<TaskId> {
+    match item {
+        AttentionItem::Failed { task, .. }
+        | AttentionItem::RequeueLimitNear { task, .. }
+        | AttentionItem::Unroutable { task, .. }
+        | AttentionItem::PhaseCheckpoint { task, .. }
+        | AttentionItem::PlanApproval { task, .. }
+        | AttentionItem::DeliverySkipped { task, .. } => Some(task.id),
+        AttentionItem::ClusterUnavailable { .. } => None,
+    }
+}
+
 fn attention_at(item: &AttentionItem) -> &str {
     match item {
         AttentionItem::Failed { at, .. } => at,
@@ -214,6 +305,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::ClusterUnavailable { at, .. } => at,
         AttentionItem::PhaseCheckpoint { at, .. } => at,
         AttentionItem::PlanApproval { at, .. } => at,
+        AttentionItem::DeliverySkipped { at, .. } => at,
     }
 }
 
@@ -808,6 +900,49 @@ fn build_attention(
         });
     }
 
+    // ADR-0121 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
+    let latest_skipped = store.latest_delivery_skipped_rows()?;
+    for row in latest_skipped {
+        let Some(t) = all_tasks.iter().find(|t| {
+            t.id == row.task_id
+                && t.status == Status::Done
+                && t.project_id.is_some()
+                && !task_core::tree::is_tree_child(t)
+                && task_core::support_kind(t).is_none()
+        }) else {
+            continue;
+        };
+        let Event::DeliverySkipped {
+            reason,
+            detail,
+            head,
+        } = row.event
+        else {
+            continue;
+        };
+        let delivered = store
+            .delivery_get(t.id)?
+            .is_some_and(|d| head.as_ref().is_none_or(|h| *h == d.head));
+        if delivered {
+            continue;
+        }
+        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
+        let events = view::seq_pairs(&rows);
+        let mut task_ref = view::task_ref(t);
+        task_ref.actions = view::actions_with_events(t, &events);
+        items.push(AttentionItem::DeliverySkipped {
+            task: task_ref,
+            reason,
+            summary: format!(
+                "完了しましたが main への取り込みを開始できませんでした: {}",
+                reason.label()
+            ),
+            detail,
+            head,
+            at: row.ts,
+        });
+    }
+
     if ctx.max_requeues > 0 {
         for t in all_tasks.iter().filter(|t| t.status == Status::Ready) {
             let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
@@ -909,7 +1044,7 @@ fn build_attention(
     Ok(items)
 }
 
-/// `docs/gui/api.md` §5.1。`evidence` は `(親タスク, run_id)` から `runs/<run_id>/result.json` の `evidence[]` を読む
+/// `docs/api/v1/gui-api.md` §5.1。`evidence` は `(親タスク, run_id)` から `runs/<run_id>/result.json` の `evidence[]` を読む
 /// 呼び出し側の関数（ファイル I/O は task-api が行う）。
 pub fn inbox(
     store: &dyn TaskStore,
@@ -924,7 +1059,21 @@ pub fn inbox(
     let approvals = build_approvals(store, &all_tasks, &by_id, evidence)?;
     let questions = build_questions(store, &all_tasks)?;
     let drafts = build_drafts(store, &all_tasks, &by_id, ctx, now)?;
-    let attention = build_attention(store, &all_tasks, &by_id, snapshot, ctx, now)?;
+    let mut suppressed = BTreeMap::new();
+    let attention = build_attention(store, &all_tasks, &by_id, snapshot, ctx, now)?
+        .into_iter()
+        .filter(|item| {
+            let rule = attention_task(item)
+                .and_then(|id| by_id.get(&id))
+                .and_then(|task| attention_suppression(task, &by_id));
+            if let Some(rule) = rule {
+                *suppressed.entry(rule.key().to_string()).or_insert(0) += 1;
+                false
+            } else {
+                true
+            }
+        })
+        .collect::<Vec<_>>();
     let browser_waits = crate::browser::pending_items(store, &by_id)?;
 
     let by_status = store
@@ -952,6 +1101,7 @@ pub fn inbox(
         questions,
         drafts,
         attention,
+        suppressed,
         browser_waits,
         decisions,
         counts,

@@ -540,7 +540,7 @@ fn changes_json_becomes_changes_with_stale_computed_against_current() {
         r#"{"base":"aaaaaaaaaaaa",
                 "commits":[{"sha":"1111111111111111111111111111111111111111","subject":"phase 50"},
                            {"sha":"2222222222222222222222222222222222222222","subject":"adr-0041"}],
-                "files":["crates/celeris/src/releases.rs","docs/PROGRESS.md","README.md"],
+                "files":["crates/celeris/src/releases.rs","agent-docs/progress/2026-10-02-docs-layout/refs-crates.md","README.md"],
                 "sensitive":["crates/celeris/src/releases.rs"]}"#,
     )
     .expect("write");

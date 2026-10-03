@@ -43,13 +43,13 @@ async fn stream_sends_daemon_events_when_the_snapshot_changes() {
     let app = env.router();
 
     let mut sse = open_stream(&app, get(&format!("/api/v1/stream?task_id={}", task.id))).await;
-    let hello = sse.next_frame(Duration::from_secs(2)).await.expect("hello");
+    let hello = sse.next_frame(EVENT_WAIT).await.expect("hello");
     assert!(hello.data["daemon"].is_null());
 
     let first = snapshot(1);
     env.daemon_tx.send(Some(first.clone())).expect("send");
     let frame = sse
-        .next_named("daemon", Duration::from_secs(2))
+        .next_named("daemon", EVENT_WAIT)
         .await
         .expect("daemon event");
     assert_eq!(frame.data, serde_json::to_value(&first).expect("json"));
@@ -58,16 +58,13 @@ async fn stream_sends_daemon_events_when_the_snapshot_changes() {
     let second = snapshot(2);
     env.daemon_tx.send(Some(second.clone())).expect("send");
     let frame = sse
-        .next_named("daemon", Duration::from_secs(2))
+        .next_named("daemon", EVENT_WAIT)
         .await
         .expect("daemon event");
     assert_eq!(frame.data["ticks"], 2);
 
     let mut late = open_stream(&app, get("/api/v1/stream")).await;
-    let hello = late
-        .next_frame(Duration::from_secs(2))
-        .await
-        .expect("hello");
+    let hello = late.next_frame(EVENT_WAIT).await.expect("hello");
     assert_eq!(
         hello.data["daemon"],
         serde_json::to_value(&second).expect("json")
@@ -218,6 +215,30 @@ async fn providers_combine_config_snapshot_and_incremental_stats() {
             items[1]["stats"]["lease_expired"].as_u64()
         ),
         (Some(2), Some(1))
+    );
+}
+
+#[tokio::test]
+async fn provider_kind_get_exposes_derived_source_in_provider_and_config_views() {
+    let env = TestEnv::new();
+    let app = env.router();
+    let providers = send(&app, get("/api/v1/providers")).await.json();
+    assert_eq!(providers["items"][0]["kind"], "adapter");
+    assert_eq!(
+        providers["items"][0]["llm_source"],
+        json!({"source":"claude_oauth","origin":"derived"})
+    );
+    let config = send(&app, get("/api/v1/config")).await.json();
+    assert_eq!(config["providers"][0]["kind"], "adapter");
+    assert_eq!(
+        config["providers"][0]["llm_source"],
+        json!({"source":"claude_oauth","origin":"derived"})
+    );
+    env.daemon_tx.send(Some(snapshot(1))).unwrap();
+    let live = send(&app, get("/api/v1/providers")).await.json();
+    assert_eq!(
+        live["items"][0]["llm_source"],
+        json!({"source":"claude_oauth","origin":"derived"})
     );
 }
 

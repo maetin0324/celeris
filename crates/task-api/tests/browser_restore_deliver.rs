@@ -25,7 +25,7 @@ use task_api::browser_identity::{IdentityRegisterInput, IdentityService};
 use task_core::browser_isolation::LiveSessions;
 use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, TaskKind, TaskStore};
 use task_worker::browser_cdp_sink::CdpController;
-use task_worker::browser_runtime::{RestoreAdmission, RuntimeSpec};
+use task_worker::browser_runtime::{RestoreAdmission, RuntimeSpec, UsernsMode};
 use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 use time::OffsetDateTime;
 
@@ -83,6 +83,7 @@ fn launch(session: &Path, id: &str, opts: SupervisorOptions) -> Supervisor {
         argv: argv.into_iter().collect::<Vec<OsString>>(),
         cdp_pipe: true,
         egress: None,
+        userns: UsernsMode::Unshare,
     };
     Supervisor::start(spec, opts).expect("isolated runtime starts")
 }
@@ -114,7 +115,7 @@ fn now() -> u64 {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn restore_enters_observation_stop_until_session_end() {
-    if skip() {
+    if skip() || !userns_available() {
         return;
     }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback");
@@ -175,10 +176,12 @@ async fn restore_enters_observation_stop_until_session_end() {
     opts.live_key = Some((id.clone(), "r1".into()));
     let stop = Arc::clone(&opts.observation_stop);
     let mut sup = launch(session.path(), "live-s", opts);
-    let controller = Arc::new(std::sync::Mutex::new(CdpController::new(
+    let mut controller = CdpController::new(
         sup.cdp_write.take().expect("cdp write"),
         sup.cdp_read.take().expect("cdp read"),
-    )));
+    );
+    controller.response_timeout_for_test(std::time::Duration::from_secs(60));
+    let controller = Arc::new(std::sync::Mutex::new(controller));
     controller
         .lock()
         .expect("controller")

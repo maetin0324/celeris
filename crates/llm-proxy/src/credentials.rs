@@ -109,7 +109,7 @@ pub fn apply_claude_tokens(value: &mut serde_json::Value, tokens: &ClaudeTokens)
 
 /// Codex の `auth.json` から取り出した値。`expires_at` は無い（`last_refresh` は RFC3339 の時刻のみで、
 /// 期限は分からない。ADR-0053 のフィクスチャに expires 相当が無いため、更新は 401 を受けての事後更新に限る。
-/// `docs/llm-source.md` に明記）。
+/// `docs/guides/llm-source.md` に明記）。
 #[derive(Clone)]
 pub struct CodexTokens {
     pub access_token: String,

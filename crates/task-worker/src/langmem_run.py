@@ -39,6 +39,7 @@ optional dependencies installed.
 """
 
 import json
+import os
 import sys
 
 MAX_SUMMARY_CHARS = 1500
@@ -111,14 +112,15 @@ def single_line(text, max_chars=MAX_SUMMARY_CHARS):
 def build_chat_model(llm):
     """Build a LangChain chat model from `[knowledge.langmem]` (ADR-0047 D4).
 
-    `provider = "openai-compatible"` covers both hosted OpenAI-compatible
-    endpoints and the production local Qwen OpenAI-compatible endpoint
-    (`docs/knowledge.md` documents pointing `base_url` at it).
+    `provider = "openai-compatible"` uses the configured endpoint and model.
+    A proxy endpoint can resolve `celeris/<tier>` to an available LLM source.
     """
     provider = llm.get("provider") or "openai-compatible"
     model = llm.get("model")
     base_url = llm.get("base_url")
-    api_key = llm.get("api_key") or "not-needed"
+    # ADR-0139 D4: celeris puts the same key into the env; use it if the JSON lacks one.
+    env_key = os.environ.get("ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY")
+    api_key = llm.get("api_key") or env_key or "not-needed"
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 

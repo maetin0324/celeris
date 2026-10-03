@@ -1430,6 +1430,46 @@
             "at"
           ],
           "type": "object"
+        },
+        {
+          "description": "ADR-0121 D3: 完了した root の成果を main へ取り込み始められなかった（`Event::DeliverySkipped` の写し。\n正本は event）。同じ head の delivery が後で作られたら出さない。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "head": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/DeliverySkipReason"
+            },
+            "summary": {
+              "description": "「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。",
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "delivery_skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "reason",
+            "summary",
+            "detail",
+            "at"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -4660,7 +4700,7 @@
       "type": "object"
     },
     "CriterionSpec": {
-      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/gui/api.md` §3.4）。",
+      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -5095,7 +5135,7 @@
           ]
         },
         "filesystem": {
-          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/gui/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
+          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
           "type": [
             "string",
             "null"
@@ -5949,6 +5989,23 @@
         "detail"
       ],
       "type": "object"
+    },
+    "DeliverySkipReason": {
+      "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
+      "enum": [
+        "multiple_repos",
+        "no_marker",
+        "marker_repo_mismatch",
+        "repo_row_missing",
+        "repo_not_local",
+        "repo_path_mismatch",
+        "not_git",
+        "no_branch",
+        "branch_name_mismatch",
+        "refs_unresolvable",
+        "department_unresolved"
+      ],
+      "type": "string"
     },
     "DeliveryState": {
       "enum": [
@@ -8368,6 +8425,34 @@
           "type": "object"
         },
         {
+          "description": "ADR-0121 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない\n監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "head": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/DeliverySkipReason"
+            },
+            "type": {
+              "const": "delivery_skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -8683,7 +8768,7 @@
               "wall_ms": 0
             }
           },
-          "description": "ADR-0124: worker run の fresh / resumed / 旧形式の比較値。"
+          "description": "ADR-0140: worker run の fresh / resumed / 旧形式の比較値。"
         },
         "continuations": {
           "description": "D11: continuation（予算切れ・yield の続き）の回数（`Trigger::Continue{why: Continue}`）。",
@@ -8888,7 +8973,7 @@
               "wall_ms": 0
             }
           },
-          "description": "ADR-0124: fresh / resumed / 旧形式の worker run 別比較。"
+          "description": "ADR-0140: fresh / resumed / 旧形式の worker run 別比較。"
         },
         "continuation_by_work_unit": {
           "additionalProperties": {
@@ -9969,6 +10054,57 @@
       ],
       "type": "object"
     },
+    "HumanInboxCounts": {
+      "description": "D5 `GET /inbox/items` の `counts`。",
+      "properties": {
+        "by_kind": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "by_kind"
+      ],
+      "type": "object"
+    },
+    "HumanInboxView": {
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/HumanInboxCounts"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/InboxItem"
+          },
+          "type": "array"
+        },
+        "suppressed": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "ADR-0133 D4: attention items auto-closed by the ADR-0131 inbox-rules\n(`task_ops::inbox::attention_suppression`), counted per rule. Not narrowed by `project`/`kind`.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "items",
+        "counts",
+        "suppressed"
+      ],
+      "type": "object"
+    },
     "InFlight": {
       "description": "実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。",
       "properties": {
@@ -10046,6 +10182,15 @@
             "$ref": "#/$defs/QuestionItem"
           },
           "type": "array"
+        },
+        "suppressed": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。",
+          "type": "object"
         }
       },
       "required": [
@@ -10053,9 +10198,118 @@
         "questions",
         "drafts",
         "attention",
+        "suppressed",
         "browser_waits",
         "decisions",
         "counts"
+      ],
+      "type": "object"
+    },
+    "InboxAnswer": {
+      "description": "D2 `answer`: 答え方の操作（新 API の answer と委ね先）。",
+      "properties": {
+        "body_schema": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "method": {
+          "type": "string"
+        },
+        "native": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InboxNativeOp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "body_schema"
+      ],
+      "type": "object"
+    },
+    "InboxAnswerBody": {
+      "additionalProperties": false,
+      "properties": {
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "type": "string"
+        },
+        "payload": {
+          "default": null
+        }
+      },
+      "required": [
+        "option"
+      ],
+      "type": "object"
+    },
+    "InboxAnswerResult": {
+      "properties": {
+        "item_id": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "result": true
+      },
+      "required": [
+        "removed",
+        "item_id",
+        "result"
+      ],
+      "type": "object"
+    },
+    "InboxBlocking": {
+      "description": "D2 `blocking`: 止めている範囲。",
+      "properties": {
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskRef"
+          },
+          "type": "array"
+        },
+        "units": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks",
+        "units",
+        "summary"
       ],
       "type": "object"
     },
@@ -10111,6 +10365,179 @@
         "browser_waits",
         "decisions",
         "by_status"
+      ],
+      "type": "object"
+    },
+    "InboxItem": {
+      "description": "ADR-0133 D2: 受信箱項目の共通形。",
+      "properties": {
+        "age_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "answer": {
+          "$ref": "#/$defs/InboxAnswer"
+        },
+        "blocked_by": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocking": {
+          "$ref": "#/$defs/InboxBlocking"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "決定的な id `<kind>-<元の id>`（URL にそのまま使える文字だけ）。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/InboxKind"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/InboxLink"
+          },
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/InboxOption"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "description": "何を決めるか（1 行）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "options",
+        "blocking",
+        "blocked_by",
+        "answer",
+        "created_at",
+        "age_secs",
+        "links"
+      ],
+      "type": "object"
+    },
+    "InboxKind": {
+      "description": "D2: 受信箱の種類（D1 の 14 種）。宣言順が D2 の並びの固定順。",
+      "enum": [
+        "decision",
+        "plan_gate",
+        "phase_gate",
+        "authorization",
+        "browser_wait",
+        "question",
+        "acceptance_check",
+        "draft_accept",
+        "project_plan",
+        "failed",
+        "unroutable",
+        "cluster_login",
+        "delivery_skipped",
+        "knowledge_review"
+      ],
+      "type": "string"
+    },
+    "InboxLink": {
+      "description": "D2 `links[]`: 判断材料への API path。",
+      "properties": {
+        "href": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "href"
+      ],
+      "type": "object"
+    },
+    "InboxNativeOp": {
+      "description": "D2 `answer.native`: 委ね先の既存 endpoint。",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path"
+      ],
+      "type": "object"
+    },
+    "InboxOption": {
+      "description": "D2 `options[]`: 選択肢 1 件。",
+      "properties": {
+        "effect": {
+          "description": "選んだら何が起きるかの 1 行。",
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "needs_note": {
+          "description": "`true` なら note 必須（replan・質問への回答など）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "needs_note",
+        "effect"
       ],
       "type": "object"
     },
@@ -10439,7 +10866,7 @@
           "type": "string"
         },
         "op": {
-          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。\n取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を\n`_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は\n`target` の末尾に節として足す（`docs/knowledge.md` 参照）。",
+          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。\n取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を\n`_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は\n`target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。",
           "type": [
             "string",
             "null"
@@ -11064,6 +11491,9 @@
         "logged_in"
       ],
       "type": "object"
+    },
+    "LlmSourceRef": {
+      "type": "string"
     },
     "LlmSourceView": {
       "description": "`GET /llm/sources` の 1 供給元。",
@@ -12275,7 +12705,7 @@
     },
     "NewPlanSpec": {
       "additionalProperties": false,
-      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/gui/api.md` §3.14）。",
+      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。",
       "properties": {
         "goal": {
           "description": "大目標。1行目の先頭80文字が `title` になる。",
@@ -12645,9 +13075,179 @@
       ],
       "type": "object"
     },
+    "Notice": {
+      "description": "通知の束（`feed_notices` の 1 行）。",
+      "properties": {
+        "count": {
+          "description": "束ねた出来事の件数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "first_at": {
+          "type": "string"
+        },
+        "group_key": {
+          "description": "束ね key（`<kind>:<範囲>`。ADR-0133 D3.3）。",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/NoticeId"
+        },
+        "kind": {
+          "$ref": "#/$defs/NoticeKind"
+        },
+        "last_at": {
+          "type": "string"
+        },
+        "links": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NoticeLink"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "description": "最新の 1 件の要約（`count > 1` なら末尾に「ほか n−1 件」）。",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "最新の 1 件の題名。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "group_key",
+        "title",
+        "summary",
+        "count",
+        "first_at",
+        "last_at"
+      ],
+      "type": "object"
+    },
+    "NoticeId": {
+      "description": "通知（束）の id（ULID）。",
+      "type": "string"
+    },
+    "NoticeKind": {
+      "description": "通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。",
+      "enum": [
+        "task_done",
+        "report",
+        "bad_news",
+        "secretary_reply",
+        "delivery",
+        "release",
+        "cron_run",
+        "auto_recovered",
+        "requeue_limit_near"
+      ],
+      "type": "string"
+    },
+    "NoticeLink": {
+      "description": "通知に付けるリンク（GUI / web が開く先）。",
+      "properties": {
+        "href": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "href"
+      ],
+      "type": "object"
+    },
+    "NoticeReadAllResult": {
+      "properties": {
+        "marked": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "marked"
+      ],
+      "type": "object"
+    },
+    "NoticeReadResult": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "read_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "read_at"
+      ],
+      "type": "object"
+    },
+    "NoticeTarget": {
+      "description": "通知の対象（最新の 1 件）。`kind` は `task` / `report` / `release` / `delivery` / `cron_job` 等の\n短い名前で、`id` はその領域の id（文字列のまま。領域の型には依存しない）。",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
     "NotificationKind": {
       "description": "判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。",
       "oneOf": [
+        {
+          "const": "inbox_new",
+          "description": "ADR-0133 D6: new human decisions, batched into one webhook message.",
+          "type": "string"
+        },
+        {
+          "const": "digest",
+          "description": "ADR-0133 D6: periodic summary of non-actionable notices.",
+          "type": "string"
+        },
         {
           "const": "milestone_ready",
           "description": "途中目標に属する仕事がすべて終端になった（達成の判定と次の Go を人に求める）。`key` = 途中目標 id。",
@@ -12704,6 +13304,32 @@
           "type": "string"
         }
       ]
+    },
+    "NotificationsView": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Notice"
+          },
+          "type": "array"
+        },
+        "next_before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unread": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "unread"
+      ],
+      "type": "object"
     },
     "NotifyRecent": {
       "description": "`GET /notify` の `recent[]` の 1 件（ADR-0037 D4）。",
@@ -12789,6 +13415,22 @@
           "description": "webhook の秘密が登録されていて、送れる状態か。",
           "type": "boolean"
         },
+        "digest_interval_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "digest_last_sent_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest_max_lines": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "fingerprint": {
           "description": "登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。",
           "type": [
@@ -12802,6 +13444,24 @@
             "string",
             "null"
           ]
+        },
+        "inbox_batch_secs": {
+          "description": "`[notify]` outbound route configuration (ADR-0133 D6).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inbox_new_last_sent_at": {
+          "description": "Last successful send for each outbound route; absent history is `null`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inbox_reminder_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "recent": {
           "description": "直近の送信（新しい順、最大 10 件）。",
@@ -12818,7 +13478,11 @@
       "required": [
         "configured",
         "secret_id",
-        "recent"
+        "recent",
+        "inbox_batch_secs",
+        "inbox_reminder_secs",
+        "digest_interval_secs",
+        "digest_max_lines"
       ],
       "type": "object"
     },
@@ -14941,6 +15605,20 @@
         "id": {
           "type": "string"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "model": {
           "description": "実効モデル（空なら `null`）。",
           "type": [
@@ -14979,6 +15657,12 @@
         "env_keys"
       ],
       "type": "object"
+    },
+    "ProviderKind": {
+      "enum": [
+        "adapter"
+      ],
+      "type": "string"
     },
     "ProviderLive": {
       "description": "プロバイダ（`[[providers]]` の行。認証アカウントは別参照）の稼働状況。`env` の値は含めない。",
@@ -15034,6 +15718,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -15044,6 +15732,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、\nceleris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "description": "実効モデル（空なら `None`）。",
@@ -15217,6 +15915,10 @@
             "null"
           ]
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -15227,6 +15929,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、\nまたは celeris を再起動した後は `null`（メモリだけに持つ観測値）。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "type": [
@@ -15462,7 +16174,7 @@
         },
         "method": {
           "$ref": "#/$defs/QuotaMethod",
-          "description": "**ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
+          "description": "**ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
         },
         "resets_at": {
           "format": "int64",
@@ -15523,6 +16235,34 @@
         "utilization",
         "resets_at"
       ],
+      "type": "object"
+    },
+    "ReadAllBody": {
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ReleaseChanges": {
@@ -16639,6 +17379,21 @@
       ],
       "type": "object"
     },
+    "ResolvedLlmSource": {
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/SourceOrigin"
+        },
+        "source": {
+          "$ref": "#/$defs/LlmSourceRef"
+        }
+      },
+      "required": [
+        "source",
+        "origin"
+      ],
+      "type": "object"
+    },
     "RetryBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/retry`（Phase 31）の本文。`accept: true` なら新しいタスクは `draft` を経ず `ready` で始まる。\nADR-0062 Phase 108 追記: `workspace`（省略可）を与えると、複製先の作業場所をそれに差し替える\n（検証は `PATCH /tasks/{id}` の `workspace` と同じ）。省略時は従来どおり元のタスクの `workspace` を複製する。",
@@ -17618,7 +18373,7 @@
       "type": "object"
     },
     "ScratchCacheStats": {
-      "description": "ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の\n累計、容量は byte、時刻は RFC 3339。",
+      "description": "廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。",
       "properties": {
         "flush_dropped": {
           "description": "待ち行列の上限で「L2 に書かない」で落とした数。",
@@ -17871,7 +18626,7 @@
       "type": "object"
     },
     "ScratchCacheView": {
-      "description": "ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。",
+      "description": "廃止（ADR-0129）: Celeris の階層 cache server（sccache の webdav backend 向け）は撤去した。\n`ScratchStatus.cache` が旧 client 向けの schema 互換のため型だけ残す（値は常に `None`）。",
       "properties": {
         "endpoint": {
           "description": "`http://127.0.0.1:<port>`（`SCCACHE_WEBDAV_ENDPOINT`）。",
@@ -18095,7 +18850,7 @@
       "type": "object"
     },
     "ScratchSccacheStats": {
-      "description": "`sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。",
+      "description": "廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `None`）。",
       "properties": {
         "cache_size_bytes": {
           "description": "L1 の使用量（byte。読めなければ `None`）。",
@@ -18143,7 +18898,7 @@
       "type": "object"
     },
     "ScratchSccacheView": {
-      "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。",
+      "description": "廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client\n向けの schema 互換のため型だけ残す（値は常に `None`）。",
       "properties": {
         "binary": {
           "description": "本物の sccache（`[scratch.sccache] binary`）。",
@@ -18211,7 +18966,7 @@
             }
           ],
           "default": null,
-          "description": "ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の\nスナップショットには無い。"
+          "description": "廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の\nため残す。"
         },
         "dir": {
           "description": "`[scratch] dir`。",
@@ -18307,7 +19062,7 @@
             }
           ],
           "default": null,
-          "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。"
+          "description": "廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との\n互換のため残す。"
         },
         "schema": {
           "description": "常に `celeris.scratch-status/1`。",
@@ -18610,6 +19365,13 @@
         "description"
       ],
       "type": "object"
+    },
+    "SourceOrigin": {
+      "enum": [
+        "explicit",
+        "derived"
+      ],
+      "type": "string"
     },
     "StageHint": {
       "additionalProperties": false,
@@ -20810,7 +21572,7 @@
       "properties": {
         "cascaded": {
           "default": [],
-          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。",
+          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。",
           "items": {
             "$ref": "#/$defs/TaskRef"
           },
@@ -21338,6 +22100,34 @@
         }
       ]
     },
+    "UnreadCountView": {
+      "properties": {
+        "by_kind": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "events": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unread": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unread",
+        "events",
+        "by_kind"
+      ],
+      "type": "object"
+    },
     "Usage": {
       "description": "DESIGN §5.3 の `usage`。取れない項目は省略可。\n\nADR-0061（Phase 104）: harness routing 基盤で `cache_read_tokens` / `cache_creation_tokens` /\n`cost_usd` を追加した（追加のみ。既存の `input_tokens` / `output_tokens` の意味は変えない）。\n`Eq` は落とした（`cost_usd: Option<f64>` は `Eq` を持てない）。",
       "properties": {
@@ -21368,7 +22158,7 @@
           ]
         },
         "duplicate_reads": {
-          "description": "ADR-0124 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
+          "description": "ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -21393,7 +22183,7 @@
           ]
         },
         "session_resumed": {
-          "description": "ADR-0124 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
+          "description": "ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
           "type": [
             "boolean",
             "null"
@@ -22121,6 +22911,19 @@
     "inbox": {
       "$ref": "#/$defs/Inbox"
     },
+    "inbox_answer": {
+      "$ref": "#/$defs/InboxAnswerBody"
+    },
+    "inbox_answer_result": {
+      "$ref": "#/$defs/InboxAnswerResult"
+    },
+    "inbox_item": {
+      "$ref": "#/$defs/InboxItem"
+    },
+    "inbox_items": {
+      "$ref": "#/$defs/HumanInboxView",
+      "description": "ADR-0133 D5: human decisions and informational notices."
+    },
     "integrate": {
       "$ref": "#/$defs/IntegrateBody"
     },
@@ -22199,6 +23002,21 @@
     },
     "new_task": {
       "$ref": "#/$defs/NewTaskBody"
+    },
+    "notification_read": {
+      "$ref": "#/$defs/NoticeReadResult"
+    },
+    "notifications": {
+      "$ref": "#/$defs/NotificationsView"
+    },
+    "notifications_read_all": {
+      "$ref": "#/$defs/NoticeReadAllResult"
+    },
+    "notifications_read_all_body": {
+      "$ref": "#/$defs/ReadAllBody"
+    },
+    "notifications_unread_count": {
+      "$ref": "#/$defs/UnreadCountView"
     },
     "notify": {
       "$ref": "#/$defs/NotifyView",
@@ -22426,6 +23244,15 @@
     "health",
     "problem",
     "inbox",
+    "inbox_items",
+    "inbox_item",
+    "inbox_answer",
+    "inbox_answer_result",
+    "notifications",
+    "notifications_unread_count",
+    "notification_read",
+    "notifications_read_all",
+    "notifications_read_all_body",
     "task_list",
     "task",
     "task_detail",

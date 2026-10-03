@@ -77,6 +77,8 @@ export type CommentId = string;
  * 人のコメントが何を起こしたか（ADR-0044 D2 の表）。
  */
 export type CommentEffect = "stored" | "interrupted" | "answered" | "terminal";
+export type SourceOrigin = "explicit" | "derived";
+export type LlmSourceRef = string;
 /**
  * DESIGN §5.4 の `WorkerHint`。
  */
@@ -805,6 +807,12 @@ export type Event =
     }
   | {
       detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      type: "delivery_skipped";
+    }
+  | {
+      detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
        */
@@ -1039,6 +1047,22 @@ export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
  */
 export type UnitDeclared = "leaf" | "task";
 /**
+ * ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
+ * 並びは判定の順（同時に複数あれば先のものを記録する）。
+ */
+export type DeliverySkipReason =
+  | "multiple_repos"
+  | "no_marker"
+  | "marker_repo_mismatch"
+  | "repo_row_missing"
+  | "repo_not_local"
+  | "repo_path_mismatch"
+  | "not_git"
+  | "no_branch"
+  | "branch_name_mismatch"
+  | "refs_unresolvable"
+  | "department_unresolved";
+/**
  * D5: `execution_plans.status`。
  */
 export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
@@ -1128,11 +1152,41 @@ export type AttentionItem =
       summary: string;
       task: TaskRef;
       type: "plan_approval";
+    }
+  | {
+      at: string;
+      detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      /**
+       * 「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。
+       */
+      summary: string;
+      task: TaskRef;
+      type: "delivery_skipped";
     };
 /**
  * ADR-0120 D5: 最後の integration repair の結末。
  */
 export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
+/**
+ * D2: 受信箱の種類（D1 の 14 種）。宣言順が D2 の並びの固定順。
+ */
+export type InboxKind =
+  | "decision"
+  | "plan_gate"
+  | "phase_gate"
+  | "authorization"
+  | "browser_wait"
+  | "question"
+  | "acceptance_check"
+  | "draft_accept"
+  | "project_plan"
+  | "failed"
+  | "unroutable"
+  | "cluster_login"
+  | "delivery_skipped"
+  | "knowledge_review";
 /**
  * ADR-0047 D1 / D4。
  */
@@ -1155,7 +1209,7 @@ export type McpScope =
 export type MessageRole = "user" | "node";
 /**
  * 受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/
- * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/gui/api.md` §3.4）。
+ * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。
  */
 export type CriterionSpec =
   | {
@@ -1194,9 +1248,28 @@ export type TaskMode = "prototype" | "production" | "research";
  */
 export type PriorityInput = ("P0" | "P1" | "P2" | "P3") | number;
 /**
+ * 通知（束）の id（ULID）。
+ */
+export type NoticeId = string;
+/**
+ * 通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。
+ */
+export type NoticeKind =
+  | "task_done"
+  | "report"
+  | "bad_news"
+  | "secretary_reply"
+  | "delivery"
+  | "release"
+  | "cron_run"
+  | "auto_recovered"
+  | "requeue_limit_near";
+/**
  * 判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。
  */
 export type NotificationKind =
+  | "inbox_new"
+  | "digest"
   | "milestone_ready"
   | "approval_pending"
   | "question_blocked"
@@ -1432,6 +1505,10 @@ export interface ApiV1Schema {
   graph: Graph;
   health: Health;
   inbox: Inbox;
+  inbox_answer: InboxAnswerBody;
+  inbox_answer_result: InboxAnswerResult;
+  inbox_item: InboxItem;
+  inbox_items: HumanInboxView;
   integrate: IntegrateBody;
   integrate_result: IntegrateResult;
   knowledge_accept: KnowledgeAcceptBody;
@@ -1456,6 +1533,11 @@ export interface ApiV1Schema {
   milestone_patch: MilestonePatchBody;
   new_plan: NewPlanSpec;
   new_task: NewTaskBody;
+  notification_read: NoticeReadResult;
+  notifications: NotificationsView;
+  notifications_read_all: NoticeReadAllResult;
+  notifications_read_all_body: ReadAllBody;
+  notifications_unread_count: UnreadCountView;
   notify: NotifyView;
   notify_test: NotifyTestResult;
   org_create: OrgCreateBody;
@@ -1750,7 +1832,7 @@ export interface StandingRule {
  */
 export interface TransitionResult {
   /**
-   * この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。
+   * この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。
    */
   cascaded?: TaskRef[];
   from: Status;
@@ -2609,6 +2691,8 @@ export interface ProviderConfigView {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -2619,6 +2703,10 @@ export interface ProviderConfigView {
     standard?: ModelBinding;
   };
   tiers: Tier[];
+}
+export interface ResolvedLlmSource {
+  origin: SourceOrigin;
+  source: LlmSourceRef;
 }
 export interface ModelBinding {
   model_id?: string | null;
@@ -3257,11 +3345,13 @@ export interface ProviderLive {
    * 古いスナップショットには無いので既定 0）。
    */
   in_use_cos?: number;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
    * celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `None`）。
    */
@@ -3300,8 +3390,8 @@ export interface ReportsLive {
  */
 export interface ScratchStatus {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の
+   * ため残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -3349,7 +3439,8 @@ export interface ScratchStatus {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
+   * 互換のため残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -3364,7 +3455,8 @@ export interface ScratchStatus {
   total_max_bytes: number;
 }
 /**
- * ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+ * 廃止（ADR-0129）: Celeris の階層 cache server（sccache の webdav backend 向け）は撤去した。
+ * `ScratchStatus.cache` が旧 client 向けの schema 互換のため型だけ残す（値は常に `None`）。
  */
 export interface ScratchCacheView {
   /**
@@ -3390,8 +3482,7 @@ export interface ScratchCacheView {
   stats?: ScratchCacheStats | null;
 }
 /**
- * ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
- * 累計、容量は byte、時刻は RFC 3339。
+ * 廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。
  */
 export interface ScratchCacheStats {
   /**
@@ -3574,7 +3665,8 @@ export interface ScratchOwnerView {
   work_unit_key?: string | null;
 }
 /**
- * ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+ * 廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client
+ * 向けの schema 互換のため型だけ残す（値は常に `None`）。
  */
 export interface ScratchSccacheView {
   /**
@@ -3608,7 +3700,7 @@ export interface ScratchSccacheView {
   stats?: ScratchSccacheStats | null;
 }
 /**
- * `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+ * 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `None`）。
  */
 export interface ScratchSccacheStats {
   /**
@@ -4380,14 +4472,14 @@ export interface Usage {
    */
   cost_usd?: number | null;
   /**
-   * ADR-0124 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
+   * ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
    * の 2 回目以降の回数）。tool_use を観測できない adapter は `None`。
    */
   duplicate_reads?: number | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
   /**
-   * ADR-0124 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
+   * ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
    * 拒否されなかった）。session を扱わない adapter は `None`。
    */
   session_resumed?: boolean | null;
@@ -4841,7 +4933,7 @@ export interface QuotaWindowUse {
   after?: number | null;
   before?: number | null;
   /**
-   * **ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
+   * **ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
    * D4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により
    * 決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。
    * `Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。
@@ -5192,7 +5284,7 @@ export interface ExecutionMetricsGroup {
   tasks: number;
 }
 /**
- * ADR-0124: fresh / resumed / 旧形式の worker run 別比較。
+ * ADR-0140: fresh / resumed / 旧形式の worker run 別比較。
  */
 export interface ContinuationMetrics2 {
   fresh?: ContinuationRunTotals;
@@ -5532,7 +5624,7 @@ export interface DbInfo {
   device?: string | null;
   /**
    * ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`"ext4"` 等）。
-   * `GET /health` は無認証（`docs/gui/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
+   * `GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
    * **絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が
    * 既に返している）。判定できなければ `null`。
    */
@@ -5557,6 +5649,12 @@ export interface Inbox {
   decisions: DecisionInboxItem[];
   drafts: DraftGroup[];
   questions: QuestionItem[];
+  /**
+   * ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。
+   */
+  suppressed: {
+    [k: string]: number;
+  };
 }
 export interface ApprovalItem {
   approval: TaskRef;
@@ -5872,6 +5970,116 @@ export interface AnswerNote {
   answer: string;
   question: string;
 }
+export interface InboxAnswerBody {
+  note?: string | null;
+  option: string;
+  payload?: {
+    [k: string]: unknown;
+  };
+}
+export interface InboxAnswerResult {
+  item_id: string;
+  removed: boolean;
+  result: unknown;
+}
+/**
+ * ADR-0133 D2: 受信箱項目の共通形。
+ */
+export interface InboxItem {
+  age_secs: number;
+  answer: InboxAnswer;
+  blocked_by: string[];
+  blocking: InboxBlocking;
+  created_at: string;
+  detail?: string | null;
+  due_at?: string | null;
+  /**
+   * 決定的な id `<kind>-<元の id>`（URL にそのまま使える文字だけ）。
+   */
+  id: string;
+  kind: InboxKind;
+  links: InboxLink[];
+  options: InboxOption[];
+  project_id?: string | null;
+  recommended?: string | null;
+  task?: TaskRef | null;
+  /**
+   * 何を決めるか（1 行）。
+   */
+  title: string;
+}
+/**
+ * D2 `answer`: 答え方の操作（新 API の answer と委ね先）。
+ */
+export interface InboxAnswer {
+  body_schema: {
+    [k: string]: string;
+  };
+  method: string;
+  native?: InboxNativeOp | null;
+  path: string;
+}
+/**
+ * D2 `answer.native`: 委ね先の既存 endpoint。
+ */
+export interface InboxNativeOp {
+  method: string;
+  path: string;
+}
+/**
+ * D2 `blocking`: 止めている範囲。
+ */
+export interface InboxBlocking {
+  root?: TaskRef | null;
+  summary: string;
+  tasks: TaskRef[];
+  units: string[];
+}
+/**
+ * D2 `links[]`: 判断材料への API path。
+ */
+export interface InboxLink {
+  href: string;
+  label: string;
+}
+/**
+ * D2 `options[]`: 選択肢 1 件。
+ */
+export interface InboxOption {
+  /**
+   * 選んだら何が起きるかの 1 行。
+   */
+  effect: string;
+  key: string;
+  label: string;
+  /**
+   * `true` なら note 必須（replan・質問への回答など）。
+   */
+  needs_note: boolean;
+}
+/**
+ * ADR-0133 D5: human decisions and informational notices.
+ */
+export interface HumanInboxView {
+  counts: HumanInboxCounts;
+  items: InboxItem[];
+  /**
+   * ADR-0133 D4: attention items auto-closed by the ADR-0131 inbox-rules
+   * (`task_ops::inbox::attention_suppression`), counted per rule. Not narrowed by `project`/`kind`.
+   */
+  suppressed: {
+    [k: string]: number;
+  };
+}
+/**
+ * D5 `GET /inbox/items` の `counts`。
+ */
+export interface HumanInboxCounts {
+  by_kind: {
+    [k: string]: number;
+  };
+  total: number;
+}
 /**
  * `POST /tasks/{id}/changes/{repo}/integrate` の要求本文（**管理系。人だけ**。ADR-0043 D5）。
  */
@@ -5939,7 +6147,7 @@ export interface KnowledgeCandidate {
    * ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。
    * 取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を
    * `_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は
-   * `target` の末尾に節として足す（`docs/knowledge.md` 参照）。
+   * `target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。
    */
   op?: string | null;
   /**
@@ -6286,8 +6494,8 @@ export interface MessagePostBody {
  */
 export interface ScratchStatus1 {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の
+   * ため残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -6335,7 +6543,8 @@ export interface ScratchStatus1 {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
+   * 互換のため残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -6439,7 +6648,7 @@ export interface MilestonePatchBody {
   status: MilestoneStatus;
 }
 /**
- * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/gui/api.md` §3.14）。
+ * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。
  */
 export interface NewPlanSpec {
   /**
@@ -6583,6 +6792,75 @@ export interface NewTaskBody {
    */
   workspace_mode?: WorkspaceMode | null;
 }
+export interface NoticeReadResult {
+  id: string;
+  read_at: string;
+}
+export interface NotificationsView {
+  items: Notice[];
+  next_before?: string | null;
+  unread: number;
+}
+/**
+ * 通知の束（`feed_notices` の 1 行）。
+ */
+export interface Notice {
+  /**
+   * 束ねた出来事の件数。
+   */
+  count: number;
+  first_at: string;
+  /**
+   * 束ね key（`<kind>:<範囲>`。ADR-0133 D3.3）。
+   */
+  group_key: string;
+  id: NoticeId;
+  kind: NoticeKind;
+  last_at: string;
+  links?: NoticeLink[];
+  project_id?: string | null;
+  read_at?: string | null;
+  /**
+   * 最新の 1 件の要約（`count > 1` なら末尾に「ほか n−1 件」）。
+   */
+  summary: string;
+  target?: NoticeTarget | null;
+  task_id?: string | null;
+  /**
+   * 最新の 1 件の題名。
+   */
+  title: string;
+}
+/**
+ * 通知に付けるリンク（GUI / web が開く先）。
+ */
+export interface NoticeLink {
+  href: string;
+  label: string;
+}
+/**
+ * 通知の対象（最新の 1 件）。`kind` は `task` / `report` / `release` / `delivery` / `cron_job` 等の
+ * 短い名前で、`id` はその領域の id（文字列のまま。領域の型には依存しない）。
+ */
+export interface NoticeTarget {
+  id: string;
+  kind: string;
+}
+export interface NoticeReadAllResult {
+  marked: number;
+}
+export interface ReadAllBody {
+  before?: string | null;
+  kind?: NoticeKind | null;
+  project?: string | null;
+}
+export interface UnreadCountView {
+  by_kind: {
+    [k: string]: number;
+  };
+  events: number;
+  unread: number;
+}
 /**
  * Phase 39（ADR-0037 D4）: 通知（Discord）。`GET /notify` と `POST /notify/test` の応答。
  */
@@ -6591,6 +6869,9 @@ export interface NotifyView {
    * webhook の秘密が登録されていて、送れる状態か。
    */
   configured: boolean;
+  digest_interval_secs: number;
+  digest_last_sent_at?: string | null;
+  digest_max_lines: number;
   /**
    * 登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。
    */
@@ -6599,6 +6880,15 @@ export interface NotifyView {
    * `[notify] gui_base_url`（文面のリンクの根）。
    */
   gui_base_url?: string | null;
+  /**
+   * `[notify]` outbound route configuration (ADR-0133 D6).
+   */
+  inbox_batch_secs: number;
+  /**
+   * Last successful send for each outbound route; absent history is `null`.
+   */
+  inbox_new_last_sent_at?: string | null;
+  inbox_reminder_secs: number;
   /**
    * 直近の送信（新しい順、最大 10 件）。
    */
@@ -7531,6 +7821,8 @@ export interface ProviderConfigView1 {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -7577,11 +7869,13 @@ export interface ProviderView {
    * 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
    */
   in_use_cos?: number | null;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
    * または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   model?: string | null;
   stats: ProviderStats;
   tier_models?: {
@@ -8622,7 +8916,7 @@ export interface ExecutionMetrics {
   work_units_total: number;
 }
 /**
- * ADR-0124: worker run の fresh / resumed / 旧形式の比較値。
+ * ADR-0140: worker run の fresh / resumed / 旧形式の比較値。
  */
 export interface ContinuationMetrics3 {
   fresh?: ContinuationRunTotals;

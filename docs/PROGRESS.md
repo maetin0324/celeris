@@ -561,13 +561,13 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
 - `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。
 
-## Phase 3 — Claude Code continuation metrics（ADR-0124、2026-10-02）
+## Phase 3 — Claude Code continuation metrics（ADR-0140、2026-10-02）
 
 `ExecutionMetrics` と `GET /metrics/execution` に worker run の fresh / resumed / unknown 別の run 数・総 wall time・入力 token・再探索重複、および WU 別値と fresh fallback 理由別件数を追加した。定義は [continuation-metrics.md](api/v1/continuation-metrics.md)。API schema は `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::tests::committed_schema_matches_generated` で再生成する。GUI / web の `gen:types` はこの WorkUnit の対象外で未実施。検証: `cargo test -p task-core --lib` 638 passed、`cargo test -p task-api --lib` 75 passed / 2 ignored、schema 一致、`cargo clippy --workspace -- -D warnings` と `cargo fmt --all -- --check` exit 0。着手時の main `95ac1644` との merge-tree は `task-api/query.rs` など 8 ファイルで衝突を検出したが、この WorkUnit の変更ファイルとは重ならない。
 
 ### Phase 3 session resume — workspace verification（2026-10-02、run `01M3Y90WZRZTGW8D3QZ1K3M0EE`、ADR `claude-session-resume`）
 
-実装参照を確認: [architecture-map](architecture-map.md) の継続 session / execute continuation / Claude Code adapter の行は `node_session.rs`、`sessions.rs` と `dispatcher/continuation_session.rs`、`claude_code.rs` と ADR-0124 を指す。`ExecutionMetrics` 実体は `crates/task-core/src/execution_metrics.rs`。
+実装参照を確認: [architecture-map](architecture-map.md) の継続 session / execute continuation / Claude Code adapter の行は `node_session.rs`、`sessions.rs` と `dispatcher/continuation_session.rs`、`claude_code.rs` と ADR-0140 を指す。`ExecutionMetrics` 実体は `crates/task-core/src/execution_metrics.rs`。
 
 - 衝突見積もり: `git merge-tree --write-tree --name-only HEAD main` → exit 1。worktree の `main` は `0d438ec19d9a474c5b82507cefd0d9e63846d0d6`、HEAD は `f4fd17d03444fb1822cfbdaa8140384ed416f885`（main は HEAD の祖先でない）。競合は `crates/task-api/src/query.rs`, `crates/task-api/src/query/tests.rs`, `crates/task-core/src/cluster_job/tests.rs`, `crates/task-core/src/store/migrations.rs`, `crates/task-core/src/store/tests.rs`, `crates/task-ops/src/delivery.rs`, `crates/task-ops/src/delivery/tests.rs`, `docs/PROGRESS.md`, `gui/app/routes/inbox.tsx`。最新 main の確認に使える remote/fetch はこの worktree に無いため、登録された `main` ref を対象にした。
 - `unshare -U -r true` → exit 1（`/proc/self/uid_map: Operation not permitted`）。

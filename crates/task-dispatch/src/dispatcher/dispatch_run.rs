@@ -193,7 +193,7 @@ impl Dispatcher {
                 .filter(|w| w.phase.is_some())
                 .map(|w| w.id.clone()),
         };
-        let write_reservation = if is_planner_dispatch {
+        let write_reservation = if is_planner_dispatch || self.write_set_gate_disabled() {
             None
         } else {
             self.write_reservation_for(&task, current_wu.as_ref())?
@@ -201,7 +201,7 @@ impl Dispatcher {
         if let Some(reservation) = &write_reservation
             && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
         {
-            self.note_write_set_hold(&run_key, &blocker);
+            self.note_write_set_hold(&run_key, &blocker, reservation);
             return Ok(false);
         }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。

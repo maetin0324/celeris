@@ -9,6 +9,12 @@
 //!   再 review の run が増える。
 //! - on（既定）: review 前に target へ同期し、衝突は review 前の IntegrationRepair で直す。review は 1 回。
 //!
+//! 別の scenario `review_sync_phase2` は Phase 2（ADR-0120）の off/on。同期はどちらも行い、
+//!
+//! - off（`test_sync_conflict_as_review_fail = true`、旧経路）: review 前同期の衝突を `ReviewFail` で worker に
+//!   戻す。B の attempts を 1 つ使い（`max_retries = 0` なら B はそこで failed）、worker の run が rebase する。
+//! - on（既定）: 衝突は IntegrationRepair の repair WU で直し、attempts を使わない。
+//!
 //! 偽アダプタは新しい session なら全文脈の、resume なら差分の固定入力 token を返し、注入した時計
 //! （`SimClock`）を run の種類ごとの固定秒だけ進める。repair run はアダプタの中で衝突を解いて rebase する。
 
@@ -16,9 +22,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
 use super::super::*;
-use super::{AbMetric, Variant, print_ab_metric};
+use super::{AbMetric, Variant, print_ab_metric, print_ab_metric_with};
 
 const SCENARIO: &str = "review_sync";
+const SCENARIO_PHASE2: &str = "review_sync_phase2";
 /// 新しい session が読み直す全文脈の入力 token。
 const FULL_CONTEXT_TOKENS: u64 = 40_000;
 /// resume した session に足される差分の入力 token。
@@ -166,7 +173,20 @@ fn reviewing_task(repo: &Path, store: &Arc<dyn TaskStore>, title: &str) -> Task 
         check: Check::Reviewer,
     });
     task.status = Status::Reviewing;
+    // Phase 2 off（衝突 → ReviewFail）でも B が failed にならず、やり直しの run で直せるようにする。
+    task.budget.max_retries = 1;
     task
+}
+
+/// どの経路を切るか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Case {
+    /// review 前同期と IntegrationRepair が両方ある（既定）。
+    Current,
+    /// review 前同期を飛ばす（Phase 1 off）。
+    NoPreReviewSync,
+    /// 同期の衝突を ReviewFail で返す（Phase 2 off）。
+    ConflictAsReviewFail,
 }
 
 /// 統合（配送の main 取り込み）の模擬: `branch` を main へ `merge --no-ff`。衝突したら abort して
@@ -184,13 +204,25 @@ fn integrate(repo: &Path, branch: &str) -> Result<(), Vec<String>> {
 }
 
 async fn run_variant(variant: Variant) -> AbMetric {
+    let case = match variant {
+        Variant::Off => Case::NoPreReviewSync,
+        Variant::On => Case::Current,
+    };
+    let (metric, _) = run_case(case).await;
+    print_ab_metric(SCENARIO, variant, &metric);
+    metric
+}
+
+/// 1 つの経路を走らせ、測り値と B の attempts を返す。
+async fn run_case(case: Case) -> (AbMetric, u32) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(SyncScenarioAdapter::new());
     let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
-    d.test_skip_pre_review_sync = variant == Variant::Off;
+    d.test_skip_pre_review_sync = case == Case::NoPreReviewSync;
+    d.test_sync_conflict_as_review_fail = case == Case::ConflictAsReviewFail;
 
     // 古い base（初回 commit の main）から並列の 2 task を切り、同じ README.md を変える。
     let a = reviewing_task(repo.path(), &store, "task A");
@@ -216,8 +248,8 @@ async fn run_variant(variant: Variant) -> AbMetric {
     store.insert(&b).unwrap();
     assert!(run_until_idle(&mut d, 100).await.idle);
     assert_eq!(store.get(b.id).unwrap().unwrap().status, Status::Done);
-    match (variant, integrate(repo.path(), &wt_b.branch)) {
-        (Variant::On, result) => {
+    match (case, integrate(repo.path(), &wt_b.branch)) {
+        (Case::Current | Case::ConflictAsReviewFail, result) => {
             // review 前に同期済みなので統合は衝突しない。
             assert_eq!(
                 result,
@@ -225,8 +257,10 @@ async fn run_variant(variant: Variant) -> AbMetric {
                 "on: B merges cleanly after the pre-review sync"
             );
         }
-        (Variant::Off, Ok(())) => panic!("off: B was reviewed on the stale base and must conflict"),
-        (Variant::Off, Err(files)) => {
+        (Case::NoPreReviewSync, Ok(())) => {
+            panic!("off: B was reviewed on the stale base and must conflict")
+        }
+        (Case::NoPreReviewSync, Err(files)) => {
             assert_eq!(files, vec!["README.md".to_string()]);
             // 統合の衝突を既存の入口で dispatcher に戻す: 再 review（Done → Reviewing）し、
             // IntegrationRepair の repair WU を積む（Reviewing → Ready）。
@@ -258,15 +292,16 @@ async fn run_variant(variant: Variant) -> AbMetric {
 
     let reviews = adapter.reviews.load(Ordering::SeqCst);
     let repairs = adapter.repairs.load(Ordering::SeqCst);
-    match variant {
+    match case {
         // A の review、B の review（古い base）、統合後の repair、B の再 review。
-        Variant::Off => assert_eq!((reviews, repairs), (3, 1), "{variant:?}"),
-        // A の review、B の review 前 repair、B の review（1 回）。
-        Variant::On => assert_eq!((reviews, repairs), (2, 1), "{variant:?}"),
+        Case::NoPreReviewSync => assert_eq!((reviews, repairs), (3, 1), "{case:?}"),
+        // A の review、B の review 前 repair（Phase 2 off では ReviewFail の後の worker run）、B の review。
+        Case::Current | Case::ConflictAsReviewFail => {
+            assert_eq!((reviews, repairs), (2, 1), "{case:?}")
+        }
     }
-    let metric = *adapter.metric.lock().unwrap();
-    print_ab_metric(SCENARIO, variant, &metric);
-    metric
+    let attempts = store.get(b.id).unwrap().unwrap().attempts;
+    (*adapter.metric.lock().unwrap(), attempts)
 }
 
 /// off は B が古い base のまま review を通り、統合の衝突で repair と再 review が足される。on は review 前に
@@ -280,4 +315,29 @@ async fn phase_effect_ab_review_sync_pre_review_sync_reduces_runs() {
     assert!(on.runs < off.runs, "off={off:?} on={on:?}");
     assert!(on.wall_secs < off.wall_secs, "off={off:?} on={on:?}");
     assert!(on.input_tokens < off.input_tokens, "off={off:?} on={on:?}");
+}
+
+/// Phase 2: off は review 前同期の衝突を ReviewFail で worker に戻すので B の attempts を 1 つ使う
+/// （`max_retries = 0` の task ならそこで failed）。on は IntegrationRepair で直し attempts を使わない。
+/// run 数・時間は同じ（偽アダプタでは worker のやり直しと repair WU が同じ rebase をする）。
+#[tokio::test]
+async fn phase_effect_ab_review_sync_phase2_integration_repair_keeps_attempts() {
+    let (off, off_attempts) = run_case(Case::ConflictAsReviewFail).await;
+    print_ab_metric_with(
+        SCENARIO_PHASE2,
+        Variant::Off,
+        &off,
+        &[("attempts", u64::from(off_attempts))],
+    );
+    let (on, on_attempts) = run_case(Case::Current).await;
+    print_ab_metric_with(
+        SCENARIO_PHASE2,
+        Variant::On,
+        &on,
+        &[("attempts", u64::from(on_attempts))],
+    );
+    assert_eq!(off_attempts, 1, "{off:?}");
+    assert_eq!(on_attempts, 0, "{on:?}");
+    assert!(on_attempts < off_attempts);
+    assert_eq!(on.runs, off.runs, "off={off:?} on={on:?}");
 }

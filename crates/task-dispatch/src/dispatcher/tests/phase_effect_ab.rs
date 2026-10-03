@@ -8,8 +8,12 @@
 mod atomic_route;
 /// continuation（予算切れ・yield の続き）の同一 session resume（ADR-0140 D1）。
 mod continuation;
-/// review 前の target 同期（ADR-0118）。
+/// review 前の target 同期（ADR-0118）と、その衝突の IntegrationRepair（ADR-0120、Phase 2）。
 mod review_sync;
+/// review 前 sync の stale 優先（ADR-0130 D5、Phase 5）。
+mod stale_priority;
+/// expected write-set の重なりで run を待たせる gate（ADR-0130 D3、Phase 5）。
+mod write_set;
 
 /// 1 つの variant の測り値。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -48,6 +52,30 @@ pub(super) fn ab_metric_line(scenario: &str, variant: Variant, m: &AbMetric) -> 
     )
 }
 
+/// `ab_metric_line` の行末に scenario 固有の欄（`conflicts=…` など）を足した行。既存の欄の形は変えない。
+pub(super) fn ab_metric_line_with(
+    scenario: &str,
+    variant: Variant,
+    m: &AbMetric,
+    extra: &[(&str, u64)],
+) -> String {
+    let mut line = ab_metric_line(scenario, variant, m);
+    for (key, value) in extra {
+        line.push_str(&format!(" {key}={value}"));
+    }
+    line
+}
+
+/// `ab_metric_line_with` の 1 行を stdout に出す。
+pub(super) fn print_ab_metric_with(
+    scenario: &str,
+    variant: Variant,
+    m: &AbMetric,
+    extra: &[(&str, u64)],
+) {
+    println!("{}", ab_metric_line_with(scenario, variant, m, extra));
+}
+
 /// `ab-metric` の 1 行を stdout に出す。
 pub(super) fn print_ab_metric(scenario: &str, variant: Variant, m: &AbMetric) {
     println!("{}", ab_metric_line(scenario, variant, m));
@@ -76,5 +104,24 @@ fn phase_effect_ab_metric_line_format() {
     assert_eq!(
         ab_metric_line("continuation", Variant::Off, &m),
         "ab-metric continuation off runs=3 wall_secs=90 input_tokens=30000 fresh_sessions=3"
+    );
+}
+
+#[test]
+fn phase_effect_ab_metric_line_with_extra_fields() {
+    let m = AbMetric {
+        runs: 2,
+        wall_secs: 120,
+        input_tokens: 80_000,
+        fresh_sessions: 2,
+    };
+    assert_eq!(
+        ab_metric_line_with(
+            "write_set",
+            Variant::On,
+            &m,
+            &[("conflicts", 0), ("repairs", 0)]
+        ),
+        "ab-metric write_set on runs=2 wall_secs=120 input_tokens=80000 fresh_sessions=2 conflicts=0 repairs=0"
     );
 }

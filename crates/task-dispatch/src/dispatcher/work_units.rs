@@ -1580,13 +1580,17 @@ impl Dispatcher {
     /// ADR-0074 D1.3 3.（Phase F2b）: 並列 WU の 2 本目以降。このインスタンスが既に run を持っている
     /// （＝工程の lease の持ち主の）Task だけを対象にする（引き継ぎ中の別インスタンスの Task には
     /// 手を出さない。持ち主のいない Task は再起動の照合〈D1.7〉が Ready に戻す）。
+    ///
+    /// 戻り値は（起こした run の数, `max_concurrency` が尽きて走査を途中で切ったか）。
+    /// 2026-10-03-write-set-no-starvation: 起こせなかった WU（write-set の重なりで待たされた等）は飛ばして
+    /// 後ろの WU を試す（同じ tick に同じ WU を二度試さない）。
     pub(super) fn dispatch_parallel_work_units(
         &mut self,
         full: &mut std::collections::HashSet<ProviderId>,
         now: Instant,
-    ) -> Result<usize, DispatchError> {
+    ) -> Result<(usize, bool), DispatchError> {
         if self.workers_in_flight() >= self.config.max_concurrency {
-            return Ok(0);
+            return Ok((0, true));
         }
         let mut dispatched = 0;
         let window = self.ready_window();
@@ -1604,9 +1608,10 @@ impl Dispatcher {
                 continue;
             }
             let mode = self.parallel_mode(&task)?;
+            let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
                 if self.workers_in_flight() >= self.config.max_concurrency {
-                    return Ok(dispatched);
+                    return Ok((dispatched, true));
                 }
                 let units = self.store.work_units_for(task.id)?;
                 let in_flight = units
@@ -1616,21 +1621,25 @@ impl Dispatcher {
                             && u.kind != task_core::WorkUnitKind::Integrate
                     })
                     .count();
-                let ids =
-                    crate::execution_scheduler::runnable_in_phase(&units, in_flight, mode.limit);
+                if in_flight >= mode.limit {
+                    break;
+                }
+                // 並列上限で切らずに候補を全部並べ、この tick にまだ試していない最初の WU を選ぶ。
+                let ids = crate::execution_scheduler::runnable_in_phase(&units, 0, usize::MAX);
                 let Some(wu) = ids
-                    .first()
+                    .iter()
+                    .find(|id| !tried.contains(*id))
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))
                 else {
                     break;
                 };
-                if !self.dispatch_one(task.clone(), Some(wu), full, now)? {
-                    break;
+                tried.insert(wu.id.clone());
+                if self.dispatch_one(task.clone(), Some(wu), full, now)? {
+                    dispatched += 1;
                 }
-                dispatched += 1;
             }
         }
-        Ok(dispatched)
+        Ok((dispatched, false))
     }
 
     /// ADR-0072 D21（Phase E3）: WU の run の lane。`decide_lane` と同じ天井（担当ノードの実効

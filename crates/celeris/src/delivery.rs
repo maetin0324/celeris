@@ -659,7 +659,7 @@ fn advance(
                                 config.execution.max_repairs_per_class
                             ),
                         );
-                        auto_resolve::record_request(store, old, &request, now)?;
+                        auto_resolve::record_request(store, old, &request)?;
                     }
                     return Ok(());
                 }

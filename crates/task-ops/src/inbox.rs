@@ -459,6 +459,24 @@ fn build_questions(
     store: &dyn TaskStore,
     all_tasks: &[Task],
 ) -> Result<Vec<QuestionItem>, OpsError> {
+    // A phase integration request has its own inbox item. Its blocked integration WU must not
+    // also appear as a generic question, even though the task uses the blocked status.
+    let phase_requests: HashMap<TaskId, HashSet<String>> = store
+        .open_integration_requests()?
+        .into_iter()
+        .filter_map(|row| match row.event {
+            Event::IntegrationRequested { origin, .. } => origin
+                .strip_prefix("phase:")
+                .map(|key| (row.task_id, key.to_string())),
+            _ => None,
+        })
+        .fold(HashMap::new(), |mut by_task, (task_id, key)| {
+            by_task
+                .entry(task_id)
+                .or_insert_with(HashSet::new)
+                .insert(key);
+            by_task
+        });
     // GUI 監査対応 Phase 29: 未決の approvals を task_id で引けるように 1 回だけ読む。
     let pending_approval_by_task: HashMap<TaskId, task_core::approval::ApprovalId> = store
         .approval_list(Some(true), None, None)?
@@ -491,6 +509,15 @@ fn build_questions(
         // ADR-0074 D2.4（Phase F3 途中確認）: 工程の後の途中確認は質問ではない（attention に出す）。
         // ADR-0079 D8（Phase R3b）: root の計画の承認待ちも同じ（attention の `plan_approval`）。
         if crate::plan_gate::is_human_gate(t, &events) {
+            continue;
+        }
+        if let Some(keys) = phase_requests.get(&t.id)
+            && store.work_units_for(t.id)?.iter().any(|wu| {
+                keys.contains(&wu.key)
+                    && wu.status == task_core::WorkUnitStatus::Blocked
+                    && wu.blocked_reason == Some(task_core::WorkUnitBlockedReason::Question)
+            })
+        {
             continue;
         }
         let question = derive::latest_question(&events);

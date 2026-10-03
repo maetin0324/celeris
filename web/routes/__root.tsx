@@ -18,7 +18,7 @@ export const Route = createRootRoute({
 function RootLayout() {
   const isLogin = useRouterState({ select: (state) => state.location.pathname === "/login" });
   return (
-    <div className="min-h-dvh bg-white text-neutral-900">
+    <div className="min-h-dvh bg-background text-foreground">
       {isLogin ? (
         <Outlet />
       ) : (

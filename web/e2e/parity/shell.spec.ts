@@ -186,3 +186,23 @@ test.describe("P5-02 全画面 storage gate", () => {
     });
   });
 });
+
+// shell の作り直し（page header・接続状態）。既存の 404・バナーの parity に加えて、新しい header と接続状態を見る。
+test("parity-x: 404 の page header と接続状態の表示", async ({ page }) => {
+  await page.goto(`${gateway.base}/no-such-page`);
+  const shell = page.locator("[data-shell]");
+  await expect(shell.getByRole("heading", { level: 1, name: "ページが見つかりません" })).toBeVisible();
+  const crumbs = shell.getByRole("navigation", { name: "パンくず" });
+  await expect(crumbs.getByRole("link", { name: "ホーム" })).toHaveAttribute("href", "/");
+  await expect(crumbs.locator('[aria-current="page"]')).toHaveText("ページが見つかりません");
+  await expect(shell.locator('[data-slot="page-actions"]').getByRole("link", { name: "ホームへ戻る" })).toBeVisible();
+  await expect(shell.locator("[data-not-found-path]")).toContainText("/no-such-page");
+
+  // この gateway は daemon に繋がらないので、接続状態は「切断」と danger の帯になる。
+  const status = shell.getByRole("status").filter({ hasText: "接続状態:" });
+  await expect(status).toHaveCount(1);
+  await expect(status).toHaveText("接続状態: 切断", { timeout: 20_000 });
+  await expect(status).toHaveAttribute("data-connection", "down");
+  await expect(page.locator("[data-celeris-down]")).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "celeris に接続できません" })).toBeVisible();
+});

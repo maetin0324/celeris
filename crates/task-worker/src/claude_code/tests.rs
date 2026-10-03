@@ -3493,6 +3493,7 @@ fn planner_prompt_has_the_check_writing_section() {
         "or the task's directory (where `artifacts/` is) when the task has no git worktree",
         "write the exact invocation (the arguments the check passes) in the unit's objective",
         "Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.",
+        "run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.",
         "exclude every unit's allowed paths in that stage, not only this unit's paths",
         "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
         "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",

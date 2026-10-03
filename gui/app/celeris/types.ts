@@ -258,6 +258,30 @@ export type ReportId = string;
  * 報告の種類（ADR-0033 D3）。
  */
 export type ReportKind = "progress" | "result" | "bad_news" | "proposal" | "question";
+/**
+ * ADR-0131 D3: daemon 停止中に過ぎた予定時刻の扱い。
+ */
+export type CronCatchUp = "latest" | "skip";
+/**
+ * cron job 1 件の識別子（ULID）。
+ */
+export type CronJobId = string;
+/**
+ * 実行履歴 1 行の識別子（ULID）。
+ */
+export type CronJobRunId = string;
+/**
+ * ADR-0131 D1: 履歴 1 行の結果。
+ */
+export type CronRunOutcome = "created" | "queued" | "skipped_overlap" | "skipped_missed" | "error";
+/**
+ * ADR-0131 D1: 履歴 1 行の発火のきっかけ。
+ */
+export type CronTrigger = "schedule" | "catch_up" | "manual";
+/**
+ * ADR-0131 D2: 前回の task が終わっていないときの規則。
+ */
+export type CronOverlap = "skip" | "queue";
 export type InFlightKind = "worker" | "reviewer";
 /**
  * D7: 後戻りの大きさ。
@@ -1485,6 +1509,12 @@ export interface ApiV1Schema {
   console_hello: ConsoleHello;
   console_instruct: InstructBody;
   console_instruct_accepted: ConsoleInstructAccepted;
+  cron_job: CronJobView;
+  cron_job_create: CronJobCreateBody;
+  cron_job_list: CronJobList;
+  cron_job_patch: CronJobPatchBody;
+  cron_job_run_list: CronJobRunList;
+  cron_run_result: CronRunResult;
   daemon: DaemonView;
   decision: DecisionBody;
   decision_answer: DecisionAnswerBody;
@@ -3012,6 +3042,137 @@ export interface ConsoleInstructAccepted {
    * タスクの一意識別子（ULID）。DESIGN §4.1。
    */
   task_id: string;
+}
+/**
+ * job 1 件と最後の履歴（一覧・詳細・作成・更新・一時停止・再開の応答）。
+ */
+export interface CronJobView {
+  catch_up: CronCatchUp;
+  created_at: string;
+  enabled: boolean;
+  id: CronJobId;
+  /**
+   * 最後に記録した履歴（無ければ `null`）。
+   */
+  last_run?: CronJobRun | null;
+  name: string;
+  /**
+   * UTC。`enabled = false` のとき `None`。
+   */
+  next_fire_at?: string | null;
+  overlap: CronOverlap;
+  schedule: string;
+  template: CronTaskTemplate;
+  timezone: string;
+  updated_at: string;
+}
+/**
+ * `cron_job_runs` の 1 行。
+ */
+export interface CronJobRun {
+  detail?: string | null;
+  id: CronJobRunId;
+  job_id: CronJobId;
+  outcome: CronRunOutcome;
+  recorded_at: string;
+  /**
+   * 発火の予定時刻（UTC）。手動実行は押した時刻。
+   */
+  scheduled_for: string;
+  task_id?: TaskId | null;
+  trigger: CronTrigger;
+}
+/**
+ * ADR-0131 D1: job が作る task の雛形（`cron_jobs.template_json`）。`acceptance` は `task_ops::add` の
+ * `CriterionSpec` と同じ JSON の形で持ち、検証と `NewTaskSpec` への変換は task-ops 側で行う
+ * （task-core は task-ops に依存しない）。`extra` は job 固有の値（日次整理の `mode` 等）。
+ */
+export interface CronTaskTemplate {
+  acceptance?: unknown[];
+  assignee?: string | null;
+  harness?: string | null;
+  lane?: Tier | null;
+  objective?: string;
+  priority?: unknown;
+  project?: string | null;
+  repos?: string[];
+  /**
+   * `{date}` は発火時刻の job タイムゾーンでの `YYYY-MM-DD` に置き換わる（[`render_title`]）。
+   */
+  title: string;
+  [k: string]: unknown;
+}
+/**
+ * ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。
+ */
+export interface CronJobCreateBody {
+  /**
+   * 取りこぼした予定時刻の扱い（既定 `latest`）。
+   */
+  catch_up?: "latest" | "skip";
+  /**
+   * 既定 `true`。`false` なら一時停止の状態で作る。
+   */
+  enabled?: boolean;
+  /**
+   * 人が読む識別子（一意。ULID の形は不可）。
+   */
+  name: string;
+  /**
+   * 前回の task が終わっていないときの扱い（既定 `skip`）。
+   */
+  overlap?: "skip" | "queue";
+  /**
+   * 5 欄の cron 式（`@daily` 等の別名も可）。
+   */
+  schedule: string;
+  template: CronTaskTemplate;
+  /**
+   * IANA タイムゾーン名（例 `Asia/Tokyo`）。
+   */
+  timezone: string;
+}
+/**
+ * `GET /cron-jobs` の応答。
+ */
+export interface CronJobList {
+  items: CronJobView[];
+}
+/**
+ * `PATCH /cron-jobs/{id}` の本文（書いた欄だけ変える。有効/無効は `pause` / `resume` で変える）。
+ */
+export interface CronJobPatchBody {
+  catch_up?: CronCatchUp | null;
+  name?: string | null;
+  overlap?: CronOverlap | null;
+  schedule?: string | null;
+  /**
+   * 雛形は丸ごと置き換える。
+   */
+  template?: CronTaskTemplate | null;
+  timezone?: string | null;
+}
+/**
+ * `GET /cron-jobs/{id}/runs` の応答（新しい順）。
+ */
+export interface CronJobRunList {
+  items: CronJobRun[];
+  job_id: CronJobId;
+}
+/**
+ * `POST /cron-jobs/{id}/run` の応答。
+ */
+export interface CronRunResult {
+  job_id: CronJobId;
+  job_name: string;
+  /**
+   * この実行で書いた履歴（古い順。手動実行では 1 件）。
+   */
+  runs: CronJobRun[];
+  /**
+   * 作った task（`outcome = created` のときだけ）。
+   */
+  task_id?: TaskId | null;
 }
 /**
  * `GET /daemon`。

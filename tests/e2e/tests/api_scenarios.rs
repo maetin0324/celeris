@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 use task_core::{ArtifactRef, Event, SCHEMA_VERSION, SqliteStore, Status, Task, TaskId, TaskStore};
 use task_core::{RunIndexRole, RunIndexStatus, RunRow};
 
+/// worker run の印（`task_worker::db_guard::WORKER_DB_GUARD_ENV`、ADR-0126 A1-1）。
+const WORKER_DB_GUARD_ENV: &str = "CELERIS_WORKER_DB_GUARD";
+
 fn bin(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     let debug_dir = exe.parent().unwrap().parent().unwrap();
@@ -149,6 +152,9 @@ impl Env {
         let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
+        for name in ["home", "config-home", "state", "cache"] {
+            std::fs::create_dir(root.join(name)).unwrap();
+        }
         let db = root.join("celeris.sqlite3");
         let store = Arc::new(SqliteStore::open(&db).unwrap());
         Self {
@@ -171,15 +177,16 @@ impl Env {
     /// `api` は `[api]` 節の本体（空なら節を書かない）。`provider_env` は `[[providers]]` の `env` の TOML インライン表。
     fn write_config(&self, script: &Path, api: &str, provider_env: &str) -> PathBuf {
         let path = self.root.join("config.toml");
+        // The worker db guard stays on (ADR-0126): this daemon uses only a private test DB,
+        // state dir and test token, so inside a guarded worker run it is exempt from the
+        // user namespace probe; outside one it probes as in production.
         let api_section = if api.is_empty() {
             String::new()
         } else {
             format!("[api]\n{api}\n")
         };
         let text = format!(
-            r#"# API fixture: DB guard is covered by its own integration tests.
-db = {{ path = "celeris.sqlite3", worker_read_only = false }}
-workspace_root = "workspaces"
+            r#"workspace_root = "workspaces"
 tick_ms = 50
 max_concurrency = 2
 lease_grace_secs = 60
@@ -187,6 +194,9 @@ idle_timeout_secs = 30
 kill_grace_secs = 1
 review_timeout_secs = 30
 retry_backoff_base_secs = 0
+
+[db]
+path = "celeris.sqlite3"
 
 {api_section}
 [adapters.fake]
@@ -212,6 +222,23 @@ env = {provider_env}
         path
     }
 
+    fn command(&self, name: &str) -> Command {
+        let mut cmd = Command::new(bin(name));
+        // A worker run can carry production state and credentials in CELERIS_*. Keep only the
+        // worker run marker: the guard needs it to exempt this test DB (ADR-0126 A3).
+        for (key, _) in std::env::vars_os() {
+            let key_str = key.to_string_lossy();
+            if key_str.starts_with("CELERIS_") && key_str != WORKER_DB_GUARD_ENV {
+                cmd.env_remove(key);
+            }
+        }
+        cmd.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("config-home"))
+            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env("CELERIS_STATE_DIR", self.root.join("state"));
+        cmd
+    }
+
     fn api_listen(&self) -> String {
         format!("listen = \"127.0.0.1:{}\"", self.port)
     }
@@ -234,7 +261,8 @@ env = {provider_env}
     }
 
     fn celerisctl(&self, args: &[&str]) -> String {
-        let out = Command::new(bin("celerisctl"))
+        let out = self
+            .command("celerisctl")
             .arg("--db")
             .arg(&self.db)
             .args(args)
@@ -261,7 +289,8 @@ env = {provider_env}
             "celeris-{}.log",
             STARTS.fetch_add(1, Ordering::Relaxed)
         ));
-        let child = Command::new(bin("celeris"))
+        let child = self
+            .command("celeris")
             .args(["--config", config.to_str().unwrap(), "--log-format", "text"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -299,6 +328,8 @@ env = {provider_env}
     /// `curl` で 1 要求。接続できなければ `status = 0`。`token` があれば `Authorization` を付ける（`headers` に明示があればそちら）。
     fn request(&self, method: &str, path: &str, body: Option<&str>, headers: &[&str]) -> Resp {
         let mut cmd = Command::new("curl");
+        // -q must be first so curl does not read the runner's ~/.curlrc.
+        cmd.args(["-q", "--noproxy", "*"]);
         cmd.args([
             "-s",
             "-S",
@@ -410,6 +441,42 @@ fn sse_events(text: &str) -> Vec<(String, Option<u64>, Value)> {
 }
 
 /// 受け入れ 4: `[api]` が無ければリッスンしない。有効にすると `/health` が版と版数を返す。
+/// ADR-0126 A3: guard 有効の daemon が試験用の一時 DB で起動する。worker run の中（印あり）では
+/// userns の probe をせず免除行を出し、印が無ければ `CELERIS_USERNS_TESTS=1` のときだけ probe 経路を確かめる。
+#[test]
+fn worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on() {
+    let in_worker_run = std::env::var_os(WORKER_DB_GUARD_ENV).is_some_and(|v| !v.is_empty());
+    let userns_opt_in = std::env::var("CELERIS_USERNS_TESTS").as_deref() == Ok("1");
+    if !in_worker_run && !userns_opt_in {
+        eprintln!(
+            "SKIPPED (worker_guard_exempt): {WORKER_DB_GUARD_ENV} is not set (not in a worker run); \
+             set CELERIS_USERNS_TESTS=1 to check the probe path (ADR-0126)"
+        );
+        return;
+    }
+    let env = Env::new();
+    let script = env.write_script("exit 0");
+    let config = env.write_config(&script, &env.api_listen(), "");
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(!text.contains("worker_read_only"), "{text}");
+    let mut daemon = env.start_celeris(&config);
+    env.wait_api(&mut daemon);
+    let log = daemon.log_text();
+    if in_worker_run {
+        assert!(
+            log.contains(
+                "the daemon does not use the production DB/token; worker db guard not installed"
+            ),
+            "expected the ADR-0126 exemption line\n{log}"
+        );
+    } else {
+        assert!(
+            log.contains("worker runs see the db directory read-only"),
+            "expected the guard to be installed after the probe\n{log}"
+        );
+    }
+}
+
 #[test]
 fn api_is_off_by_default_and_health_reports_versions_when_enabled() {
     let env = Env::new();
@@ -715,7 +782,7 @@ fn sse_delivers_created_quickly_and_resumes_from_last_event_id() {
     let subscribe = |name: &str, last_event_id: Option<u64>| {
         let log = env.root.join(name);
         let mut cmd = Command::new("curl");
-        cmd.args(["-s", "-N", "--max-time", "30"]);
+        cmd.args(["-q", "--noproxy", "*", "-s", "-N", "--max-time", "30"]);
         if let Some(id) = last_event_id {
             cmd.args(["-H", &format!("Last-Event-ID: {id}")]);
         }

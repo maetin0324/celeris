@@ -44,6 +44,7 @@ pub trait TaskStore:
     + crate::mcp::McpCallStore
     + crate::browser_wait::BrowserWaitStore
     + crate::cluster_job::ClusterJobWaitStore
+    + crate::cron::CronJobStore
 {
     /// ADR-0130 D2: store an immutable per-run Git diff snapshot.
     fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;

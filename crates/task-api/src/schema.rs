@@ -251,6 +251,13 @@ pub struct ApiV1Schema {
     pub decision_outcome: task_ops::decision::DecisionOutcome,
     /// ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。
     pub task_tree: task_ops::tree_view::TaskTreeView,
+    /// ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。
+    pub cron_job_create: crate::cron_jobs::CronJobCreateBody,
+    pub cron_job_patch: crate::cron_jobs::CronJobPatchBody,
+    pub cron_job: crate::cron_jobs::CronJobView,
+    pub cron_job_list: crate::cron_jobs::CronJobList,
+    pub cron_job_run_list: crate::cron_jobs::CronJobRunList,
+    pub cron_run_result: crate::cron_jobs::CronRunResult,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

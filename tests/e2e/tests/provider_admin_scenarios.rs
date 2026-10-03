@@ -531,6 +531,8 @@ fi"#,
     // 新しい account への dispatch を確認したので、acct-a の run を解放する。
     std::fs::write(Path::new(&ws_slow).join("release"), "").unwrap();
     // acct-a の run はそのまま完了する（reload / 新アカウント追加の影響を受けない）。
+    // stub は 8 秒眠ってから done を返し、その後に check が走る。`cargo test --workspace` で他の試験と
+    // 並走すると 20 秒では足りないことがあるので、出来事待ちの上限だけを広く取る（成功時の所要時間は変わらない）。
     assert!(
         wait_until(Duration::from_secs(120), || {
             let store = task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap();
@@ -540,7 +542,18 @@ fi"#,
                 .status
                 == task_core::Status::Done
         }),
-        "slow task on acct-a never completed"
+        "slow task on acct-a never completed: status={:?} events={:#?}",
+        task_core::TaskStore::get(
+            &task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap(),
+            slow.parse().unwrap()
+        )
+        .unwrap()
+        .map(|t| t.status),
+        task_core::TaskStore::events_for(
+            &task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap(),
+            slow.parse().unwrap()
+        )
+        .unwrap()
     );
     {
         let store = task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap();

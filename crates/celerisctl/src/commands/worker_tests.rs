@@ -129,6 +129,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         scratch: Default::default(),
         github: Default::default(),
         containers: Default::default(),
+        cron: Default::default(),
         storage: Default::default(),
         knowledge: Default::default(),
         docs_maintenance: Default::default(),

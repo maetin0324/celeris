@@ -371,7 +371,7 @@ fallback = { tier = "cheap" }
 capabilities = ["KB ページの統合・新規・削除の振り分け", "重複ページの統合", "古い記述の修正・削除", "受信箱の片付けの提案"]
 input_artifacts = ["inputs/kb/（本番 KB の読み取り用の写し）", "inputs/inbox.json", "inputs/reports.json", "inputs/curation-inputs.json（daemon の検証用 snapshot）"]
 output_artifacts = ["curation-plan.json", "curation.diff", "daily-summary.md"]
-budget = { max_turns = 30 }
+budget = { max_turns = 120 }
 instructions = """あなたは知識整理担当。本番 KB と inputs/ は変更しない。変更後の本文は計画の content に書く。計画は artifacts/curation-plan.json に書き、
 出す前に必ず `celerisctl curation validate` を走らせて exit 0 にする（daemon と同じ検証。非 0 なら stderr の理由を直して再実行。
 受け入れ条件も同じコマンドで判定する。cwd が repos/<name> でも作業場所を上に探す。見つからなければ

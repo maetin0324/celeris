@@ -38,6 +38,7 @@ pub mod docs;
 pub mod execution;
 mod files;
 mod handlers;
+mod inbox_notifications;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本）。ツリー・ページ・`_inbox`。
 pub mod knowledge;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
@@ -205,6 +206,11 @@ pub struct ApiSettings {
     pub notify_secret_id: String,
     /// ADR-0037 D3: `[notify] gui_base_url`（文面のリンクの根。無ければリンク無し）。
     pub notify_gui_base_url: Option<String>,
+    /// ADR-0133 D6: outbound inbox and digest policy values exposed by GET /notify.
+    pub notify_inbox_batch_secs: u64,
+    pub notify_inbox_reminder_secs: u64,
+    pub notify_digest_interval_secs: u64,
+    pub notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す。task-api は
     /// リリースのファイル規約を知らない）。`None` なら `GET /releases` は空、昇格は 409。
     pub releases: Option<SharedReleaseSource>,

@@ -17,6 +17,37 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
+## 受信箱と通知の 2 系統（2026-10-02、task 01M3YFCJKMNWQ13HRS52M5BSWW、ADR-0133、WorkUnit verify）
+
+- 完了日: 2026-10-02。全葉（adr / inbox-model / notify-store / notify-feed / api / outbound / gui-compat）完了、
+  ADR-0133 の状態を「実装済み」に更新（web 葉は人の決定 `ui-overlap = c` で UI/UX task
+  `01M3XTCNKMQBCHKSZ7Y1GF6ZM4` へ `superseded`）。詳細・証跡は
+  [phase-inbox-notifications.md](progress/phase-inbox-notifications.md)。
+- 証拠（HEAD `0bc7ca75a5a8`、schema 40）: `cargo fmt --all -- --check` exit 0。
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0。`cargo test --workspace` exit 0
+  （**3,294 passed / 0 failed**、121 バイナリ + doctest、ignored は既存の手動試験のみ）。再実行 1 回で
+  `task-worker` の `scratch::tests::wrapper_runs_the_compiler_directly_when_the_server_is_unreachable` が
+  ETXTBSY で単発失敗（単体実行では再現せず、この task の範囲外の既知の flaky）。今回の関連 crate 再試験は
+  `--lib` で全 pass。integration test 込みでは `instance_handoff.rs` の 5 件が失敗: 3 件は worker DB guard の
+  user namespace probe が sandbox の `Operation not permitted`、2 件は handoff の wall-clock 条件（既知の flaky）。
+  この 3 件に既存の `CELERIS_ISOLATION_TESTS=skip` 分岐は無く、失敗として記録（詳細は上記 progress 文書）。
+- 追従（rules-wire / notify-status / sync-main、2026-10-02）: verify 時点の未解決 2 件は閉じた。1) inbox-rules
+  （task `01M3YF3NS2EGTZD2BBWNPG1K28` の `788e5cc0`・`739cd209`）を `cherry-pick -x` で取り込み `human_inbox` に結合
+  （試験 `auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision`、規則の重複実装なし）。2) `GET /api/v1/notify`
+  に D6 の 4 設定値と経路別最終送信時刻（試験 `get_notify_status_exposes_route_settings_and_last_successful_sends`）。
+- sync-main: 最新 main（`5d6df9f3`、続けて `14b052ea`・`33aca5a3`）を `git merge`（衝突は本ファイルだけ、両方の節を残して解消、`merge-tree` exit 0）。
+  全 celeris/* の走査で 0038〜0040 が他ブランチ使用中のため `0040_feed_notices.sql` を `0041` へ `git mv`
+  （`SCHEMA_VERSION = 41`、`RESERVED_VERSIONS = [38, 39, 40]`）。inbox-rules の「人は failed を cancel できる」に合わせ
+  e2e `phase7_scenarios` の期待を更新。証拠: `cargo fmt --all -- --check` exit 0、
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test --workspace` exit 0（**3,406 passed / 0 failed**）。
+- sync-main 再検査（2026-10-03）: 前回 check の `cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation`
+  は 60 秒の状態待ちで失敗したが、単独再実行と今回の全体実行ではともに pass。sandbox 内の
+  `cargo test --workspace` は別の `instance_handoff` 5 件で exit 101（worker DB guard の user namespace probe が
+  `Operation not permitted`、残り 2 件は引継ぎ条件に達せず）。隔離外では `unshare -U -r true` exit 0、同じ
+  `cargo test --workspace` exit 0（**3,406 passed / 0 failed / 14 ignored**）。`cargo fmt --all -- --check` と
+  `cargo clippy --workspace --all-targets -- -D warnings` は exit 0。コード変更なし。詳細は進捗文書を参照。
+- 本番 host で人が確認・設定する手順は [docs/ops/inbox-notifications.md](ops/inbox-notifications.md)。
+
 ## codex・opencode への skill の付属ファイルと段階的な読み込み
 
 - 実装・記録完了日: 2026-10-02。[ADR-0127](adr/0127-skills-native-delivery.md) は実装済みに更新。codex・acp では mount した skill を `.agents/skills/` に付属ファイルごと届け、`AGENTS.md`・前置きは一覧だけにした。実機の記録と再実行手順は [phase-skills-progressive.md](progress/phase-skills-progressive.md)。

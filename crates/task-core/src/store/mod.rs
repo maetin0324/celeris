@@ -103,7 +103,7 @@ mod execution;
 mod instances;
 mod integrations;
 mod messages;
-mod migrations;
+pub(crate) mod migrations;
 mod org;
 mod projects;
 mod query;
@@ -798,7 +798,7 @@ impl SqliteStore {
             )?;
         }
 
-        let mut current: u32 = if migrations_table_existed {
+        let current: u32 = if migrations_table_existed {
             let v: i64 = conn.query_row(
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
                 [],
@@ -820,10 +820,20 @@ impl SqliteStore {
             // 既存 DB（Phase 1〜8 で作られた、schema_migrations の無い DB）は版数 1 が
             // 適用済みとみなす。0001_init.sql は再実行しない。
             Self::mark_migration_applied(conn, 1)?;
-            current = 1;
         }
 
-        for version in (current + 1)..=SCHEMA_VERSION {
+        // ADR-0133 D3.2: 版数は記録の有無で決める（`RESERVED_VERSIONS` の飛びを後から埋められるように）。
+        // 記録が連続していれば従来の `(current + 1)..=SCHEMA_VERSION` と同じ。
+        let applied: std::collections::HashSet<u32> = {
+            let mut stmt = conn.prepare("SELECT version FROM schema_migrations")?;
+            let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+            rows.map(|r| r.map(|v| v as u32))
+                .collect::<Result<_, _>>()?
+        };
+        for version in 1..=SCHEMA_VERSION {
+            if applied.contains(&version) || migrations::RESERVED_VERSIONS.contains(&version) {
+                continue;
+            }
             Self::apply_migration_version(conn, version)?;
         }
 

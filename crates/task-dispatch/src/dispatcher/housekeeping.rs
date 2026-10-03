@@ -3,6 +3,12 @@
 use super::*;
 
 impl Dispatcher {
+    /// Derive the notice feed once per tick, after task transitions have settled.
+    pub(super) fn sync_notice_feed(&self, now: OffsetDateTime) {
+        if let Err(error) = task_ops::notify_feed::sync_notifications(self.store.as_ref(), now) {
+            tracing::warn!(%error, "failed to synchronize notice feed");
+        }
+    }
     /// ADR-0075: scratch pool を使うか（`shared_build_cache` かつ `[scratch]` が有効〈NFS で無効化されていない〉）。
     pub(super) fn scratch_active(&self) -> bool {
         self.config.shared_build_cache && self.config.scratch.enabled
@@ -308,13 +314,18 @@ impl Dispatcher {
                 if !self.disk_low {
                     let body = format!("ディスク不足 (infra): {reason}. 新規 run を保留します。");
                     tracing::warn!(%body, "dispatch paused for disk space");
-                    match self.store.notification_upsert_pending(
-                        NotificationKind::BadNews,
-                        &format!("dispatch:disk-low:{}", ulid::Ulid::new()),
-                        &body,
-                        None,
-                        OffsetDateTime::now_utc(),
-                    ) {
+                    match self.store.notice_record(&task_core::feed::NoticeEvent {
+                        source_key: format!("dispatch:disk-low:{}", ulid::Ulid::new()),
+                        kind: task_core::feed::NoticeKind::BadNews,
+                        group_key: "bad_news:project:none".into(),
+                        title: body.clone(),
+                        summary: body.clone(),
+                        project_id: None,
+                        task_id: None,
+                        target: None,
+                        links: Vec::new(),
+                        at: OffsetDateTime::now_utc(),
+                    }) {
                         Ok(_) => self.disk_low = true,
                         Err(error) => {
                             tracing::error!(%error, "failed to record disk shortage notification")

@@ -239,7 +239,7 @@ fn read_proc_table() -> Vec<ProcEntry> {
 }
 
 fn chrome_candidates(before: &HashSet<i32>, expected_map: &str) -> Vec<ChromeCandidate> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let candidates = chrome_pick_candidates(&read_proc_table(), before, expected_map);
         if !candidates.is_empty() {
@@ -347,7 +347,7 @@ fn strace_denied(pid: i32) {
         }
         Err(e) => panic!("strace spawn failed: {e}"),
     };
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().expect("poll strace").is_none() {
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -540,7 +540,7 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
 
     // 自分の session を止め、検査済みの session root のどれかが消えることを確かめる。
     drop(session);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let stopped = loop {
         let stopped = chrome_pick_stopped_roots(&checked, &proc_pids());
         if !stopped.is_empty() || Instant::now() >= deadline {

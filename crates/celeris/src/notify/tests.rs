@@ -1,10 +1,84 @@
 use super::*;
 
+fn notify_digest_view() -> task_ops::view::ViewContext {
+    task_ops::view::ViewContext {
+        workspace_root: std::path::PathBuf::from("/tmp"),
+        retry_backoff_base: Duration::from_secs(1),
+        retry_backoff_max: Duration::from_secs(60),
+        max_requeues: 3,
+        clusters: Default::default(),
+    }
+}
+
+#[test]
+fn notify_digest_waits_for_interval_and_never_sends_notice_kind_immediately() {
+    use task_core::NotificationStore;
+    use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
+    let store = task_core::SqliteStore::open_in_memory().unwrap();
+    let at = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+    let config = NotifyConfig::default();
+    let notice = |source: &str, title: &str| NoticeEvent {
+        source_key: source.into(),
+        kind: NoticeKind::TaskDone,
+        group_key: "task_done:project:none".into(),
+        title: title.into(),
+        summary: title.into(),
+        project_id: None,
+        task_id: None,
+        target: None,
+        links: Vec::new(),
+        at,
+    };
+    assert!(
+        schedule_routes(&store, &config, &notify_digest_view(), at)
+            .unwrap()
+            .is_empty()
+    );
+    store.notice_record(&notice("one", "最初の完了")).unwrap();
+    store.notice_record(&notice("two", "次の完了")).unwrap();
+    assert!(
+        schedule_routes(
+            &store,
+            &config,
+            &notify_digest_view(),
+            at + time::Duration::minutes(59)
+        )
+        .unwrap()
+        .is_empty()
+    );
+    let rows = schedule_routes(
+        &store,
+        &config,
+        &notify_digest_view(),
+        at + time::Duration::hours(1),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, NotificationKind::Digest);
+    assert!(rows[0].body.contains("task_done: 2 件"));
+    assert!(
+        schedule_routes(
+            &store,
+            &config,
+            &notify_digest_view(),
+            at + time::Duration::hours(2)
+        )
+        .unwrap()
+        .is_empty()
+    );
+    let legacy = store
+        .notification_upsert_pending(NotificationKind::TaskReady, "old", "old", None, at)
+        .unwrap()
+        .unwrap();
+    let batch = select_routes_batch(&[legacy, rows[0].clone()]).unwrap();
+    assert_eq!(batch.ids, vec![rows[0].id]);
+}
+
 /// ADR-0074 §6 F3 (c)（途中確認）: 工程の後の途中確認（`blocked(awaiting_human)`）は
 /// `PhaseCheckpoint` として 1 回だけ鳴り、`QuestionBlocked` は鳴らない。質問で止まった Task は
 /// 従来どおり `QuestionBlocked` だけ。
 #[test]
-fn phase_checkpoint_is_not_a_question() {
+fn notify_digest_phase_checkpoint_is_batched_as_inbox_new() {
     use task_core::{
         Budget, Check, Criterion, SqliteStore, Task, TaskId, TaskKind, Tier, Trigger, WorkerHint,
         WorkspaceSpec,
@@ -132,6 +206,23 @@ fn phase_checkpoint_is_not_a_question() {
             .any(|n| n.kind == NotificationKind::PhaseCheckpoint),
         "2 回目の tick では鳴らない: {second:?}"
     );
+    let routes = schedule_routes(
+        &store,
+        &NotifyConfig {
+            inbox_batch_secs: 0,
+            ..NotifyConfig::default()
+        },
+        &notify_digest_view(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert_eq!(
+        routes.len(),
+        1,
+        "phase gate and question share one message: {routes:?}"
+    );
+    assert_eq!(routes[0].kind, NotificationKind::InboxNew);
+    assert!(routes[0].body.contains("2 件"));
 }
 
 #[test]
@@ -170,6 +261,10 @@ fn defaults_match_the_adr() {
     let config = NotifyConfig::default();
     assert_eq!(config.discord_webhook_secret, "discord-webhook");
     assert_eq!(config.interval_secs, 30);
+    assert_eq!(config.inbox_batch_secs, 60);
+    assert_eq!(config.inbox_reminder_secs, 86_400);
+    assert_eq!(config.digest_interval_secs, 3_600);
+    assert_eq!(config.digest_max_lines, 10);
     assert!(config.gui_base_url.is_none());
 }
 

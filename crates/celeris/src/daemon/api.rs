@@ -255,6 +255,10 @@ pub fn api_settings(
         memory_dir: config.memory.as_ref().map(|m| m.dir.clone()),
         notify_secret_id: config.notify.discord_webhook_secret.clone(),
         notify_gui_base_url: config.notify.base_url().map(str::to_string),
+        notify_inbox_batch_secs: config.notify.inbox_batch_secs,
+        notify_inbox_reminder_secs: config.notify.inbox_reminder_secs,
+        notify_digest_interval_secs: config.notify.digest_interval_secs,
+        notify_digest_max_lines: config.notify.digest_max_lines,
         // ADR-0040 D6（Phase 48）: `GET /releases` / `POST /releases/{sha12}/promote` が読む先。
         // task-api はファイルの規約を知らないので、読む係をここで渡す。
         releases: Some(Arc::new(crate::releases::FsReleases::new(

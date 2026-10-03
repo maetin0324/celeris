@@ -81,6 +81,10 @@ fn state_rx(
         memory_dir: None,
         notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
         notify_gui_base_url: None,
+        notify_inbox_batch_secs: 60,
+        notify_inbox_reminder_secs: 86_400,
+        notify_digest_interval_secs: 3_600,
+        notify_digest_max_lines: 10,
         releases: None,
         release: "dev".to_string(),
         mode: task_core::DaemonMode::Normal,
@@ -175,15 +179,8 @@ async fn metrics_scratch_matches_the_status_schema() {
             }],
             reclaimed_bytes: 3 << 30,
         }),
-        sccache: Some(task_ops::daemon::ScratchSccacheView {
-            state: "ready".into(),
-            reason: None,
-            binary: "/home/u/.local/celeris/tools/sccache/bin/sccache".into(),
-            port: 4236,
-            dir: "/var/lib/celeris/scratch/sccache-l1".into(),
-            max_bytes: 40 << 30,
-            stats: None,
-        }),
+        // ADR-0129 (1): sccache と cache server は Celeris の外。欄は型を残すが常に `None`。
+        sccache: None,
         cache: None,
     };
     let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
@@ -216,6 +213,9 @@ async fn metrics_scratch_matches_the_status_schema() {
     keys.sort();
     assert_eq!(keys, schema_keys);
     assert_eq!(json["schema"], "celeris.scratch-status/1");
+    // ADR-0129 (1): sccache と cache server は Celeris の外。欄は null で出る。
+    assert!(json["sccache"].is_null());
+    assert!(json["cache"].is_null());
 }
 
 /// この単体テストだけで使う管理系トークン。

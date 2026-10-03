@@ -30,6 +30,10 @@ use tower::ServiceExt;
 pub const HOST: &str = "127.0.0.1:7710";
 pub const TOKEN: &str = "s3cret-token-value";
 
+/// 来るはずのフレーム・状態を待つ保険の上限（ADR-0125）。主判定は出来事の到着で、
+/// 負荷で遅れても落ちないよう長く取る。来ないことを確かめる短い待ちには使わない。
+pub const EVENT_WAIT: Duration = Duration::from_secs(60);
+
 pub struct EnvOptions {
     pub token: Option<String>,
     pub allowed_hosts: Vec<String>,
@@ -60,6 +64,10 @@ pub struct EnvOptions {
     pub notify_secret_id: String,
     /// ADR-0037 D3: `[notify] gui_base_url`。
     pub notify_gui_base_url: Option<String>,
+    pub notify_inbox_batch_secs: u64,
+    pub notify_inbox_reminder_secs: u64,
+    pub notify_digest_interval_secs: u64,
+    pub notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `GET /releases` / `POST /releases/{sha12}/promote` が読む係。
     pub releases: Option<task_api::SharedReleaseSource>,
     /// ADR-0040 D4（Phase 47）: `GET /health` の `release` / `mode` と、管理系の 503 に使う役割。
@@ -94,6 +102,10 @@ impl Default for EnvOptions {
             memory_dir: None,
             notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
             notify_gui_base_url: None,
+            notify_inbox_batch_secs: 60,
+            notify_inbox_reminder_secs: 86_400,
+            notify_digest_interval_secs: 3_600,
+            notify_digest_max_lines: 10,
             releases: None,
             release: "dev".to_string(),
             mode: task_core::DaemonMode::Normal,
@@ -332,6 +344,10 @@ pub fn settings(
         memory_dir: options.memory_dir,
         notify_secret_id: options.notify_secret_id,
         notify_gui_base_url: options.notify_gui_base_url,
+        notify_inbox_batch_secs: options.notify_inbox_batch_secs,
+        notify_inbox_reminder_secs: options.notify_inbox_reminder_secs,
+        notify_digest_interval_secs: options.notify_digest_interval_secs,
+        notify_digest_max_lines: options.notify_digest_max_lines,
         releases: options.releases,
         release: options.release,
         mode: options.mode,

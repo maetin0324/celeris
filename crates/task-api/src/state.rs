@@ -90,6 +90,10 @@ pub(crate) struct Inner {
     pub(crate) notify_secret_id: String,
     /// ADR-0037 D3: `[notify] gui_base_url`。
     pub(crate) notify_gui_base_url: Option<String>,
+    pub(crate) notify_inbox_batch_secs: u64,
+    pub(crate) notify_inbox_reminder_secs: u64,
+    pub(crate) notify_digest_interval_secs: u64,
+    pub(crate) notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む係（celeris が渡す）。`None` なら
     /// `GET /releases` は空、`POST /releases/{sha12}/promote` は 409。
     pub(crate) releases: Option<crate::releases::SharedReleaseSource>,
@@ -163,6 +167,10 @@ impl ApiState {
             memory_dir: settings.memory_dir,
             notify_secret_id: settings.notify_secret_id,
             notify_gui_base_url: settings.notify_gui_base_url,
+            notify_inbox_batch_secs: settings.notify_inbox_batch_secs,
+            notify_inbox_reminder_secs: settings.notify_inbox_reminder_secs,
+            notify_digest_interval_secs: settings.notify_digest_interval_secs,
+            notify_digest_max_lines: settings.notify_digest_max_lines,
             releases: settings.releases,
             release: settings.release,
             mode: settings.mode,
@@ -229,6 +237,12 @@ impl ApiState {
     /// SSE の購読ループが `events_since` を呼んだ累計回数（購読解除でポーリングが止まることの確認用）。
     pub fn stream_poll_count(&self) -> u64 {
         self.inner.stream_polls.load(Ordering::SeqCst)
+    }
+
+    /// ADR-0133 付記: API の store が書き込み接続・読み取り接続を取った累計（回帰試験が
+    /// 「GET が書き込み接続を何回取るか」を処理件数で固定する）。
+    pub fn store_lock_counts(&self) -> task_core::LockCounts {
+        self.inner.store.lock_counts()
     }
 
     /// 現在開いている SSE 接続の数。

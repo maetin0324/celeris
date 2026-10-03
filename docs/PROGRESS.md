@@ -1,5 +1,38 @@
 # PROGRESS — taskd
 
+## e2e・結合試験の時間依存待ち（ADR-0125、task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
+
+- 2026-10-03（人の判断を反映・最新 main 取り込み）: main `f45f218e` を `git merge`。scratch-cache は main で撤去済みのため削除側、180 件待ちは main の deflake-lock `wait_for_progress` を採って重複を解消。launcher の host stutter 3/3（人の実行）と sccache_webdav_e2e の例外承認を[一覧](testing/time-dependent-waits.md#人の判断による例外の確定と最新-main-の取り込み2026-10-03)に記録。
+- 2026-10-03（最終 review 修正）: main `3527c8e3` 取り込み後の `notification_change_emits_a_reload_hint` に残った hello 2 秒・通知到着 7 秒を `EVENT_WAIT`（60 秒の保険）へ統一。通知到着・内容の主張は不変。修正後の stream 全 9 件を SIGSTOP stutter で各 3 回、全て exit 0。指定 build・api_scenarios・fmt・clippy の連続ゲートも exit 0。main は既に HEAD の祖先。詳細は[最終再検証](testing/time-dependent-waits.md#main-取り込み後の通知試験の修正再検証2026-10-03)。
+- launcher の現状: host は人が main `3527c8e3` / protocol v3 に更新済みで、必須モード 6 passed・real-session admission 5 行・EXIT 0 の通常実行 1 回をログで確認。run 内の必須モード stutter は権限付きでも SCM_CREDENTIALS UID が 65534 になる user namespace 制約で失敗し、host stutter 3 回は未確認。人の判断どおり sandbox の制約と host の証拠を区別する。手動 WebDAV 試験は対象外。host 設定変更・判定の緩和は行っていない。
+- 2026-10-03（attempt 3）: review 指摘の `browser_runtime_isolated` の CDP 応答と `browser_runtime_supervisor` の SIGKILL 後消滅待ちを 30 → 60 秒へ。同型の CDP/socket/gate/fixture 終了待ちと埋め込み Python/shell も再走査し、出来事を主判定に 60 秒以上の保険へ揃えた。本番の既定値は変更せず、CDP は既存の試験用 feature を利用。クリック解放と fixture server 終了の失敗は無視せず検査する。
+- attempt 3 の検証: main `aed80844` を取り込み、通常有効な変更対象 36 ファイルを SIGSTOP 300 ms / SIGCONT 後 100 ms の下で各 3 回、計 108 実行が exit 0（最上位 libtest 集計は 170 passed/回）。主要 4 件、追加 CDP 2 件、今回指摘の runtime/supervisor を含む。全ファイル別の件数・方式・機械ログの所在は[一覧](testing/time-dependent-waits.md#第-3-走査後の全変更対象-stutter-記録)に追記。
+- 検証の限界: launcher 必須モードは host protocol v1 の session binding 欠如で exit 101。通常モードでの 3 回は ptrace 拒否・起動・消滅が通過し、admission 表だけ `SKIP: (not passed)`。手動 `sccache_webdav_e2e` は server 操作と環境変数変更がこの run で禁止されているため ignored のまま（0 passed）。この 2 点を検証成功とは数えない。本番 host は変更していない。
+- attempt 3 の指定ゲート: `cargo build --workspace --bins && cargo test -p e2e --test api_scenarios && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings` は exit 0（api_scenarios 11 passed）。初回 clippy の未使用 Result 指摘は fixture 終了結果の検査を追加して解消し、releases_api の stutter も 3 回取り直した。
+- attempt 3 の全体検証: `cargo test --workspace` は user namespace が使える権限付き環境で exit 0。ログは run の `workspace-final.log`。手動 ignored と launcher admission 表の環境制約は上記のとおり。
+- 最終同期: main `0b8a2256` の文書のみの追加 2 行を取り込み、統合後に指定ゲートを再実行して exit 0（api_scenarios 11 passed）。全体試験・stutter 実行時からコードの変更はない。
+- 2026-10-02: [時間依存待ち一覧](testing/time-dependent-waits.md)に `tests/e2e/tests` と `crates/*/tests` の候補 45 ファイル、対象ごとの原因と方式を記録した。
+- `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`: 原因は worker の固定 6 秒と cooldown の短い 5 秒待ち。方式は release ファイルで worker を保持し、同時状態を観測後に解放する。保険超過時は `done` を返さない。
+- `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`: 原因は 180 task を固定 120 秒で判定したこと。方式は全件 `Done` の観測、進捗停止 60 秒、総保険 600 秒。lock 不在と daemon 生存の主張は維持。
+- `wait_api`: 原因は daemon 起動を `/health` の 20 秒待ちだけで判定したこと。方式は TCP listen を観測してから `/health` 200 を確認し、各 120 秒を保険とする。4 fixture に適用。
+- `phase3_control_converges_rejects_competition_and_cancel_stops`: 原因は lease 失効を固定 2 秒 sleep で代用したこと。方式は `GET /control` の `paused` と holder 消滅を観測し、120 秒を保険とする。
+- `instance_handoff`、`worker_run_signal`、`reap_finished_children`: 原因は 5〜30 秒の短い期限または 200 回ループ。方式は既存の状態・PID・zombie 観測を維持し、60 秒以上の保険へ変更した。
+- `provider_admin_scenarios`: 原因は slow worker の固定 8 秒中に reload と dispatch が間に合う前提。方式は release ファイルで保持し、新 account への `WorkerStarted` を確認してから解放した。
+- credentiald/browser の fixture socket、`releases_api` のログ、`unified_kill` の孫 PID・消滅: 原因は固定 40〜400 回の poll 予算。方式は各出来事の観測を主判定にして 60 秒の保険へ変更した。
+- `crates/*/tests` のその他の fixture listen、process 終了、browser ready、WebDAV flush の短い deadline は状態を主判定に維持し、保険を 60 秒へ延長した。`browser_egress_process` の 8 秒など実時間の契約を検査する箇所はそのまま残した。
+- 2026-10-03（review 差し戻し後の第 2 走査）: `Duration` の字面 200 ms〜60 秒の 95 行を全て判定した。`task-api` の `console.rs`（SSE hello 500 ms・`console.block` 3 秒）、`daemon_providers_config.rs`（hello・`daemon` 2 秒）、`stream.rs`（2 秒契約の 1 試験以外の到着待ち）、`standby.rs`（5 秒）は原因が短い固定期限の到着待ちで、方式は到着を主判定に 60 秒の保険 `EVENT_WAIT` へ。`browser_runtime_supervisor`・`browser_runtime_isolated`・`browser_shared_cdp`・`browser_egress_process`・`scratch-cache` の 1〜20 秒の消滅・出現・読み待ちも 60 秒の保険へ。不在の確認と仕様の時間検査は残した。SIGSTOP stutter で 6 試験 file を各 3/3。
+- main（33aca5a3、続けて 41366893）を取り込み、main を HEAD の祖先にした。
+- 既存修正は e2e-stable の f307d63b を `cherry-pick -x` で取り込んだ。deflake-lock ブランチはこの worktree から参照できず、同じ全件 Done 待ちは追加の進捗停止・総保険で対応した。後からの main 取り込み時には重複を確認する。
+- 検証: `cargo build --workspace --bins` exit 0、`cargo test -p e2e --test api_scenarios` は 11 passed / exit 0。対象 4 試験は SIGSTOP/SIGCONT stutter 下で各 3/3 通過（詳細は一覧）。この run は user namespace probe が EPERM になるため、API fixture の worker DB guard のみ opt-out した。guard 専用試験は変更していない。
+## sccache 撤去 schema・運用文書（task `01M3YEQW40FPMH82X1JMNXGJEE`）
+
+ADR-0129 (1) に従い `ScratchStatus.sccache` / `cache` の型は互換用に残し、説明を廃止・常に null に更新した。API schema と worker protocol schema は生成試験で照合。scratch status 試験は両欄が JSON null であることを確認する。GUI/web の型コメントも ADR-0129 に合わせた。`docs/ops/sccache-l1.md` は廃止と ADR 参照、人が本番 host で行う unit・旧 cache 後始末の手順に置き換えた。本番 host 操作は行っていない。
+
+- `UPDATE_SCHEMA=1 cargo test -p task-api`: schema 一致と null 断言を含む unit 72 件成功、2 ignored。続く integration test `production_h3_injects_once_without_exposure` は sandbox の `unshare: Operation not permitted` で失敗。
+- `UPDATE_SCHEMA=1 cargo test -p task-worker protocol::tests:: --lib`: 9 件成功（worker protocol schema 一致を含む）。
+- `UPDATE_SCHEMA=1 cargo test -p task-core --lib`: 625 件成功。
+- `corepack pnpm@11.27.0 -C gui gen:types` と `corepack pnpm@12.6.0 -C web gen:types`: pnpm store SQLite を開けず終了。生成型コメントは schema の ADR-0129 記述に手動同期し、型構造は変更していない。
+
 ## browser: ADR-0115 権限分離 launcher
 
 run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順書を統合後に検査。`cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は exit 0。workspace test は sandbox の user namespace probe が `EPERM` となり、ADR-0095 DB guard を使う `instance_handoff` 5 件が失敗して exit 101（`CELERIS_ISOLATION_TESTS=skip` を付けても同じ。skip は browser isolation 試験だけに適用）。launcher ptrace 試験は `celeris-browser` user と `celeris-browser-launcher.socket` が存在しないため `SKIPPED (not passed)`。host 管理者に [browser-launcher-host-setup.md](ops/browser-launcher-host-setup.md) の準備を依頼し、準備後に実 process 証跡を追加する。機密能力は未解放。本節の詳細は [phase-browser-4](progress/phase-browser-4.md)。
@@ -7,6 +40,37 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
 - 2026-10-02: phase3 control flaky 再実行は ADR-0095 の user namespace 拒否で `cargo test --workspace` と `api_scenarios` が失敗、clippy は pass。詳細は [phase-R.md](progress/phase-R.md)。
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
+
+## 受信箱と通知の 2 系統（2026-10-02、task 01M3YFCJKMNWQ13HRS52M5BSWW、ADR-0133、WorkUnit verify）
+
+- 完了日: 2026-10-02。全葉（adr / inbox-model / notify-store / notify-feed / api / outbound / gui-compat）完了、
+  ADR-0133 の状態を「実装済み」に更新（web 葉は人の決定 `ui-overlap = c` で UI/UX task
+  `01M3XTCNKMQBCHKSZ7Y1GF6ZM4` へ `superseded`）。詳細・証跡は
+  [phase-inbox-notifications.md](progress/phase-inbox-notifications.md)。
+- 証拠（HEAD `0bc7ca75a5a8`、schema 40）: `cargo fmt --all -- --check` exit 0。
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0。`cargo test --workspace` exit 0
+  （**3,294 passed / 0 failed**、121 バイナリ + doctest、ignored は既存の手動試験のみ）。再実行 1 回で
+  `task-worker` の `scratch::tests::wrapper_runs_the_compiler_directly_when_the_server_is_unreachable` が
+  ETXTBSY で単発失敗（単体実行では再現せず、この task の範囲外の既知の flaky）。今回の関連 crate 再試験は
+  `--lib` で全 pass。integration test 込みでは `instance_handoff.rs` の 5 件が失敗: 3 件は worker DB guard の
+  user namespace probe が sandbox の `Operation not permitted`、2 件は handoff の wall-clock 条件（既知の flaky）。
+  この 3 件に既存の `CELERIS_ISOLATION_TESTS=skip` 分岐は無く、失敗として記録（詳細は上記 progress 文書）。
+- 追従（rules-wire / notify-status / sync-main、2026-10-02）: verify 時点の未解決 2 件は閉じた。1) inbox-rules
+  （task `01M3YF3NS2EGTZD2BBWNPG1K28` の `788e5cc0`・`739cd209`）を `cherry-pick -x` で取り込み `human_inbox` に結合
+  （試験 `auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision`、規則の重複実装なし）。2) `GET /api/v1/notify`
+  に D6 の 4 設定値と経路別最終送信時刻（試験 `get_notify_status_exposes_route_settings_and_last_successful_sends`）。
+- sync-main: 最新 main（`5d6df9f3`、続けて `14b052ea`・`33aca5a3`）を `git merge`（衝突は本ファイルだけ、両方の節を残して解消、`merge-tree` exit 0）。
+  全 celeris/* の走査で 0038〜0040 が他ブランチ使用中のため `0040_feed_notices.sql` を `0041` へ `git mv`
+  （`SCHEMA_VERSION = 41`、`RESERVED_VERSIONS = [38, 39, 40]`）。inbox-rules の「人は failed を cancel できる」に合わせ
+  e2e `phase7_scenarios` の期待を更新。証拠: `cargo fmt --all -- --check` exit 0、
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test --workspace` exit 0（**3,406 passed / 0 failed**）。
+- sync-main 再検査（2026-10-03）: 前回 check の `cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation`
+  は 60 秒の状態待ちで失敗したが、単独再実行と今回の全体実行ではともに pass。sandbox 内の
+  `cargo test --workspace` は別の `instance_handoff` 5 件で exit 101（worker DB guard の user namespace probe が
+  `Operation not permitted`、残り 2 件は引継ぎ条件に達せず）。隔離外では `unshare -U -r true` exit 0、同じ
+  `cargo test --workspace` exit 0（**3,406 passed / 0 failed / 14 ignored**）。`cargo fmt --all -- --check` と
+  `cargo clippy --workspace --all-targets -- -D warnings` は exit 0。コード変更なし。詳細は進捗文書を参照。
+- 本番 host で人が確認・設定する手順は [docs/ops/inbox-notifications.md](ops/inbox-notifications.md)。
 
 ## codex・opencode への skill の付属ファイルと段階的な読み込み
 
@@ -693,6 +757,239 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
 
+## api_scenarios の負荷 flaky 2 件を出来事待ちに（2026-10-02、task 01M3Z08A0T81ZQ60XVR62XJMPD 葉 e2e-stable）
+
+`tests/e2e/tests/api_scenarios.rs` だけを変えた。主張（cooldown と in_flight の同時観測、`database is locked` が出ない、celeris が落ちない）はそのまま。
+
+- `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`: 原因: slow の worker が `sleep 6` で終わるため、tick が遅いと cooldown を観測する前に slow が in_flight から消えていた。方式: worker は workspace の `release` file が現れるまで 0.1s 刻みで待ち、試験は cooldown・in_flight の確認後に `release` を置く。cooldown の待ちは 5s→30s。
+- `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`: 原因: 全 task done を 120s の壁時計で待っていたため、負荷で tick が遅いと進んでいても失敗した。方式: 終わった task の数が 60s 増えないとき（または celeris が落ちたとき）だけ失敗する進捗待ちにした。
+- 重複の可能性: 後者は sccache task 01M3YD2Z585N1YCBZK4AH8QXR0 の葉 deflake-lock も直す予定だった。実行時点で branch `celeris-wu/01M3YD2Z585N1YCBZK4AH8QXR0/deflake-lock` が無かったため同じ方式（終わった数が一定時間増えないときだけ失敗）で自前に直した。後で両方が main に入るときは衝突しうるので片方に揃える。
+- `cargo test -p e2e --test api_scenarios` → exit 0（11 passed）。`cargo clippy -p e2e --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
+## ADR-0125: e2e・結合試験の時間依存待ち（task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
+
+`docs/testing/time-dependent-waits.md` に候補 45 ファイルと判定を記録した。`api_scenarios` の 4 件は状態・ファイル・listen 完了を待ち、60 秒以上の保険を置いた。SIGSTOP stutter は対象 4 試験を各 3 回実行して 12/12 pass。CDP の追加 2 件も `Browser.getVersion` の ready 応答を待つようにし、試験専用 CDP 応答上限を 30 秒、ready 上限を 60 秒にした。通常 sandbox は `unshare` を拒否したが、権限付き実行では両方 pass。追加 2 件の SIGSTOP stutter も各 3 回で 6/6 pass。詳細は一覧を参照。
+## ADR-0129 (1) sccache 撤去: 統合後の全体検証（work unit `verify`）
+
+完了日 2026-10-02。HEAD `273bf5f36153`（統合段 consumers → core → schema-docs がすべて終わった後）で
+workspace 全体の test・clippy・fmt と、sccache 撤去自体の確認を行った。コードの変更は無し（検証のみ）。
+
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace`:
+  - 1 回目 exit 101。`crates/celeris/tests/instance_handoff.rs` の
+    `a_newer_release_takes_over_while_the_old_one_finishes_its_run` が 1 件だけ失敗（「旧インスタンスがタスクを
+    dispatch しない」、10 秒待ちで timeout）。他は全 passed。
+  - 単独再実行（`cargo test -p celeris --test instance_handoff
+    a_newer_release_takes_over_while_the_old_one_finishes_its_run -- --exact`）→ exit 0、1 passed。
+    同時実行中の他試験との負荷競合による flake と判断し、設計変更は不要と判断した（このテストは
+    release handoff のタイミング試験で、ADR-0129 の sccache 撤去とは無関係。このタスクの範囲では修正しない。
+    時間依存試験の決定化は別タスクの対象）。
+  - 2 回目のフル実行 → exit 0。120 試験バイナリすべて `test result: ok`、合計 **3228 passed / 0 failed /
+    0 measured**（ignored を除く）。
+- sccache 撤去自体の確認（非試験コード）:
+  - `crates/scratch-cache` crate は存在しない。`crates/celeris/src/cache_server.rs` は存在しない。
+  - `celeris-sccache.service` / `celeris-scratch-cache.service` は repo 内に存在しない
+    （`scripts/selfdeploy/install-units.sh` は置かない。本番 host 側の既存 unit 停止・削除は
+    `docs/ops/sccache-l1.md` に人が行う手順として書いてある。本番操作はしていない）。
+  - `scripts/scratch/setup-sccache.sh` は存在しない。
+  - `RUSTC_WRAPPER` / `SCCACHE_` の出現は `grep -rn --include='*.rs' crates/`（試験ファイル・`_tests.rs` 除外）で
+    全件確認し、すべてコメント・doc comment（「差し込み・除去をしない」という設計を説明する注記、
+    `ScratchSccacheView` 等の廃止済み型の doc）であって、実際の env 構築・差し込み・除去コードは無い。
+  - `docs/ops/sccache-l1.md` は廃止の旨と ADR-0129 への参照、本番 host 側の後始末手順に置き換わっている
+    （schema-docs work unit で完了済み。本 work unit では内容の変更なし）。
+- 未解決事項: `instance_handoff.rs` の `a_newer_release_takes_over_while_the_old_one_finishes_its_run` は
+  共用 host の負荷下で稀に flake する（今回 1/2 回）。ADR-0129 の変更とは無関係なので、このタスクでは直さない。
+  時間依存試験の決定化（別タスクで進行中）の対象に含めるとよい。
+
+### ADR-0129 (1) 撤去後の全体検証: 再実行（work unit `verify`、check 不合格の追試）
+
+上記の run の後、celeris の post-run check が `cargo test --workspace` を再実行したところ別の 1 件
+（`crates/task-dispatch/src/dispatcher/tests/cluster_job_wait.rs` の
+`a_wait_parks_the_task_polls_and_resumes_as_a_continuation`、「condition not reached after 200 ticks」）で
+exit 101 になった。コードは変更していない（検証のみ）ので、同じ HEAD で追試した。
+
+- `uptime` は実行のたびに load average 34〜46（1 分）と非常に高い（他の並行 work unit・task による共用 host の
+  負荷）。
+- `cargo test -p task-dispatch --lib` で上記 1 件だけを単独実行 → exit 0、1 passed。この試験はバックグラウンド
+  スレッド（`fake_poller` 等）の完了を `tick_until`（最大 200 回 × 20ms sleep = 4 秒)の実時間待ちで見ており、
+  host が高負荷だとバックグラウンドスレッドが 4 秒以内に進まないことがある。`instance_handoff.rs` と同様、
+  共用 host の負荷に起因する実時間待ちの flake であり、ADR-0129 の sccache 撤去とは無関係（dispatcher の
+  cluster job wait 機能の話）。このタスクの範囲では修正しない。
+- `cargo test --workspace` をさらに 2 回実行: 1 回目は上記と同じ 1 件が exit 101 で再現、2 回目は
+  **exit 0、105 試験バイナリ、合計 3228 passed / 0 failed**（doctest 含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- sccache 撤去の確認を再実行し同じ結論を確認: `crates/scratch-cache` crate 無し、
+  `crates/celeris/src/cache_server.rs` 無し、`celeris-sccache.service` / `celeris-scratch-cache.service` を
+  置く記述が repo 内に無し、`scripts/scratch/setup-sccache.sh` 無し。非試験 `.rs` 内の `RUSTC_WRAPPER` /
+  `SCCACHE_` の出現（`task-ops/src/daemon.rs`・`task-dispatch/src/dispatcher/{worker_task,housekeeping}.rs`・
+  `task-worker/src/{preamble,scratch}.rs`・`celerisctl/src/commands/scratch.rs`）はすべて doc comment
+  （廃止・常に `None` な互換型の説明、「継いだ env に触れない」という設計の注記）で、実際に env を組み立てる
+  コードは無い。
+- 結論: `instance_handoff.rs` に続き `cluster_job_wait.rs` も共用 host の負荷下で稀に flake することを確認した
+  （どちらも ADR-0129 とは無関係）。コードの修正は行わず、`cargo test --workspace` が exit 0 になる実行を
+  得たことと、sccache 撤去自体の確認が変わらないことを記録する。
+
+### ADR-0129 (1) 撤去後の全体検証: 2回目の追試（work unit `verify`、check 不合格の再追試）
+
+上記の再実行の後、celeris の post-run check が `cargo test --workspace` をさらに再実行したところ、
+また別の 1 件（`tests/e2e/tests/api_scenarios.rs` の
+`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`、
+「no cooldown in /daemon」）で exit 101 になった。コードは変更していない（検証のみ）ので、同じ HEAD で
+追試した。
+
+- `uptime` は実行のたびに load average 26〜40（1 分）と非常に高い状態が続いている（他の並行 work unit・
+  task による共用 host の負荷。`instance_handoff.rs`・`cluster_job_wait.rs` の追試時と同様）。
+- `cargo test -p e2e --test api_scenarios daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded
+  -- --exact` で単独実行 → exit 0、1 passed。この試験は fake-local provider の in-flight run から cooldown が
+  `/daemon` に現れるまでを実時間で待っており（daemon の tick は `tick_ms: 50`）、host が高負荷だと
+  background の tick/throttle 処理が期待する実時間内に進まないことがある。`instance_handoff.rs`・
+  `cluster_job_wait.rs` と同様、共用 host の負荷に起因する実時間待ちの flake であり、ADR-0129 の sccache
+  撤去とは無関係（daemon view の cooldown/throttle 表示機能の話。表示されている `scratch.sccache: null`・
+  `scratch.cache: null` は ADR-0129 の設計どおり）。このタスクの範囲では修正しない。
+- `cargo test --workspace` を再実行 → **exit 0、全試験バイナリ `test result: ok`**（lib 625 passed、
+  task-dispatch lib 500 passed、task-worker lib 664 passed + 4 ignored 等を含む。failed 0 件）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- sccache 撤去の確認を再実行し同じ結論を確認: `crates/scratch-cache` crate 無し、
+  `crates/celeris/src/cache_server.rs` 無し、`install-units.sh` に `celeris-sccache.service` /
+  `celeris-scratch-cache.service` を置く記述が無し、`scripts/scratch/setup-sccache.sh` 無し。非試験 `.rs`
+  （`*_tests.rs`・`tests.rs`・`tests/` 配下を除外）の `RUSTC_WRAPPER` / `SCCACHE_` の出現
+  （`task-ops/src/daemon.rs`・`task-worker/src/{preamble,scratch}.rs`・
+  `task-dispatch/src/dispatcher/{worker_task,housekeeping}.rs`・`celerisctl/src/commands/scratch.rs`）は
+  すべて doc comment（廃止・常に `None`/`null` な互換項目の説明、「継いだ env に触れない」という設計の
+  注記）で、実際に env を組み立てるコードは無い。
+- 結論: 3 回の追試でそれぞれ異なる時間依存試験（`instance_handoff.rs`・`cluster_job_wait.rs`・
+  `api_scenarios.rs` の 3 件）が共用 host の高負荷（load average 1 分で 20〜40 台）下で単発 flake したが、
+  いずれも単独実行では即 pass し、ADR-0129（sccache 撤去）とは無関係であることを確認した。コードの修正は
+  行わない（設計変更が要る — 実時間待ちを時計注入やイベント待ちに変える — ため、このタスクの範囲外。
+  時間依存試験の決定化は別タスクで進行中）。`cargo test --workspace` が exit 0 になる実行を得たことと、
+  sccache 撤去自体の確認（crate・cache_server・unit・setup スクリプトの不在、env 構築コードの不在）が
+  変わらないことを記録する。
+
+### ADR-0129 (1) sccache 撤去後の final review 不合格: browser_h3_wire の再確認（work unit `h3-recheck`）
+
+final review で `cargo test --workspace` が `task-worker` の `browser_h3_wire`
+（`inner_injection_wire`: `page target: SinkFailed`、
+`real_broker_browser_injection_receipt_and_origin_guards`）で落ちた旨の指摘を受けた。
+
+- ブランチ差分の確認: `git diff 7b77f17a39b3 HEAD -- crates/task-worker/src/browser*
+  crates/task-worker/tests/browser*` は**空ではなかった**（Objective の前提が外れていた）。差分は
+  `crates/task-worker/src/browser_specialist.rs` の 4 行のみで、`worker-core`（commit `75c54e53`、
+  「task-worker から sccache の型・配線と env 除去の経路を外す」）が `WorkerAdapter` trait から
+  `with_env_removed`（旧: `RUSTC_WRAPPER`/`SCCACHE_*` を継いだ env から取り除くための経路）を削除した際に、
+  `BrowserSpecialistAdapter` 側の同名ラッパー実装 1 箇所を一緒に削除したもの。trait 側にも他の実装にも
+  `with_env_removed` は残っておらず、`browser_h3_wire.rs` が検査する injection/origin guard のロジックには
+  触れていない（env 除去経路の削除は本タスクの Objective そのもの）。
+- `cargo test -p task-worker --test browser_h3_wire` を単独で 3 回実行 → **3 回とも exit 0、2 passed
+  0 failed**（`inner_injection_wire` ok、`real_broker_browser_injection_receipt_and_origin_guards` ok）。
+  2 回目の実行では cargo のビルドキャッシュ更新時に SQLite ロックの再試行ログ（`Error code 5: database is
+  locked`、cargo 自身の再試行で解消）が出たのみで試験結果に影響は無い。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace` → **exit 0**。試験バイナリ 115 件すべて `test result: ok`、failed 0 件、
+  `test result:` 行の `passed` 数を合算すると 3228。`tests/browser_h3_wire.rs` も同じ run 内で
+  `inner_injection_wire ... ok` / `real_broker_browser_injection_receipt_and_origin_guards ... ok`。
+- 否定 grep（基準2、前回 attempt の不合格点）`! grep -rn '"SCCACHE_' crates/task-dispatch/src
+  crates/task-worker/src crates/celerisctl/src --include=*.rs | grep -v -E '/tests?(/|\.rs|_)'` → exit 0
+  （`ctl-literal` work unit の修正が本ブランチに取り込まれていることを確認）。
+- 結論: final review が報告した `browser_h3_wire` の失敗は、単独実行・全体実行のいずれでも再現しなかった
+  （共用 host の負荷に起因する一時的な flake と推測するが、本タスクのコード — `browser_specialist.rs` の
+  `with_env_removed` 削除 — を疑わせる具体的な根拠は無かった）。browser のコード・試験は変更していない。
+
+再試行（attempt 2）で上の結論を取り直した。`git diff 7b77f17a39b3 HEAD -- crates/task-worker/src/browser*
+crates/task-worker/tests/browser*` は同じ `browser_specialist.rs` の 4 行のみで変化なし。
+
+- `cargo test -p task-worker --test browser_h3_wire` を単独で 3 回実行 → **3 回とも exit 0、2 passed
+  0 failed**。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace`（fail-fast、既定）を 2 回実行したところ、いずれも `task-worker` に到達する前に
+  `e2e --test api_scenarios` の `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`・
+  `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`（実時間待ち依存、
+  既存の共用 host flake。ADR-0129 の sccache 撤去や browser コードとは無関係）で停止した。
+  `--no-fail-fast` で通したところ 1 回目は同じ e2e 2 件は `ok` だったが、代わりに
+  `tests/browser_injection_wire.rs`（`browser_h3_wire.rs` とは別ファイル。同名の `inner_injection_wire`・
+  `real_broker_browser_injection_receipt_and_origin_guards` を持つ）が同種の `SinkFailed` で落ち、
+  `browser_h3_wire.rs` 自体は同じ run 内で `ok`。2 回目（通常の `cargo test --workspace`、fail-fast）は
+  再度 e2e の `writes_from_celerisctl_and_api_...` のみ失敗。3 回目（`--no-fail-fast`）で
+  **exit 0、115 バイナリすべて `test result: ok`、`passed` 合算 3228、failed 0** を得た
+  （`browser_h3_wire.rs` は `inner_injection_wire ... ok` /
+  `real_broker_browser_injection_receipt_and_origin_guards ... ok`）。
+- 結論（attempt 2）: `browser_h3_wire` 単体は 3/3 で常に pass。`cargo test --workspace` 全体は実行ごとに
+  e2e か他の browser 試験ファイルのいずれかで散発的に失敗するが、同じ run 内で失敗する試験ファイルが
+  毎回違う（e2e 2 件 → browser_injection_wire → e2e 1 件 → 全 pass）ことから、特定のコード欠陥ではなく
+  共用 host の負荷に起因する実時間待ち flake と判断する。本ブランチの browser 系ファイルに差分は無く
+  （`browser_specialist.rs` の `with_env_removed` 削除のみ）、sccache 撤去のコードを疑う根拠は無い。
+  最終的に `cargo test --workspace` exit 0 の run を得ている。
+
+## sccache の host 設定化と reflink target
+
+### deflake-lock: api_scenarios の `database is locked` 試験を進捗待ちへ（2026-10-02）
+
+原因: `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`
+（`tests/e2e/tests/api_scenarios.rs`）は 180 件の task の完了を `wait_until(Duration::from_secs(120), ...)`
+という固定 wall-clock 期限で待っており、共用 host が高負荷のとき tick 処理が実時間内に収まらず
+期限切れで落ちていた（daemon 自体は生きたまま in-flight で処理中）。
+方式: `wait_until` とは別に `wait_for_progress(overall_limit, stall_limit, target, count)` を追加し、
+done の件数が増え続ける限りは待ち、`stall_limit`（60s）だけ増えなければ失敗、全体は `overall_limit`
+（600s）を安全弁にする出来事待ち（docs/testing.md 方法 2）に変えた。`tick_ms = 20` と件数（150+30）、
+主張（全 done・daemon が生きている・`database is locked` が出ない・replay 一致）は変えていない。
+
+- `cargo build -p celeris -p celerisctl` → exit 0。
+- `cargo test -p e2e --test api_scenarios writes_from_celerisctl_and_api` → exit 0、1 passed。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy -p e2e --all-targets -- -D warnings` → exit 0（警告なし）。
+
+
+### verify: main の取り込み・全体検証（work unit `verify`、2026-10-02）
+
+main を `wu/verify` の作業ツリーへ2段階で merge した。まず他 WU（`ops-doc`）ブランチの先端 `e901c9388601`（main を取り込んだもの）を取り込み、`docs/PROGRESS.md` の衝突は冒頭の節（ADR-0129 sccache schema・browser launcher 権限分離の2節）を両方残し、文末付近の `### land-main3` / `### pick-chrome` が本節（`## sccache の host 設定化と reflink target`）の下に誤って連結されていたのを `## ADR-0122 完了（ui-ux 外部 skills）` 配下の `### land-main` の直後へ戻した（内容は変更していない、見出しの付け先だけ修正）。それ以外の衝突（`Cargo.lock`・`crates/celeris/*`・`crates/task-dispatch/*`・`crates/task-worker/*` など）は git の自動 merge で解決し、手動介入は無かった。続いてその後に main が進んだ `14b052eaacee`（ADR-0079 D7 continue note を child_objective/human_decisions へ届ける変更。`crates/task-dispatch/src/dispatcher/work_units.rs`・`crates/task-ops/src/phase_gate.rs`・`crates/task-ops/src/tree.rs`・試験・ADR 付記のみで `docs/PROGRESS.md` には触れない）を merge し、衝突なしで取り込んだ。
+
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `14b052eaacee` が HEAD の祖先）。
+- 衝突マーカー確認: `grep -rln '^<<<<<<<\|^=======$\|^>>>>>>>' .`（`.git/` 除外）→ 該当なし。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace`:
+  - 1 回目の完走 → **exit 0**。108 試験バイナリすべて `test result: ok`、`passed` 合算 **3326**（main `14b052eaacee` の `tree_decisions.rs` 新規試験 2 件を含む）、`failed` 0、`ignored` 12（内訳: `task-api` 2 件 `UPDATE_SCHEMA` 手動確認用、`task-ops` 4 件（`execution_metrics_comparison_tests` の手動計測・`profile_timeline_against_a_db_copy`）、`browser_runtime_isolated.rs` の helper process 3 件、`ssh_cluster_manual.rs` の実クラスタ要の 2 件、`task-worker` doctest 1 件。いずれも既存の意図的な ignore で、このタスクの変更とは無関係）。再実行なしで一発で通ったため、共用 host の負荷起因 flaky（`instance_handoff`・`cluster_job_wait`・`api_scenarios` 系）は今回は発現しなかった。
+  - sandbox の userns 制約で落ちる既知試験: 今回は発現せず、`CELERIS_ISOLATION_TESTS=skip` 等の opt-in は使わなかった。`crates/celeris/tests/instance_handoff.rs` は8件（`a_newer_release_takes_over_while_the_old_one_finishes_its_run`・`a_stale_heartbeat_promotes_the_standby` を含む）すべて `ok`。
+  - `tests/e2e` の負荷時 flaky（`writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`・`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`）も今回の `cargo test --workspace` の中で両方 `ok`。本 work unit は `tests/e2e` を変更していない（`git diff` の変更範囲に `tests/e2e/` は含まれない）。
+- `deflake-lock`（work unit `deflake-lock`）で固定 120s `wait_until` を `wait_for_progress` の出来事待ちへ直した試験 `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked` は、上記 `cargo test --workspace` の中で `tests/api_scenarios.rs`（11 passed）の一部として `ok`。`database is locked` は出ず、180 件の task はすべて done に到達した（試験の主張どおり）。
+
+### verify: main の追加取り込み（33aca5a3）と再検証（Run #3、2026-10-03）
+
+Run #2 で main がさらに進んだ `33aca5a3`（アカウント/プロバイダー分離とモデル階層ルーティング関連。`config/*.example.toml`・`crates/celeris/src/config/*`・`crates/celeris/src/daemon/*`・`crates/llm-proxy/src/config.rs` などを含む。`docs/PROGRESS.md` には触れない）を merge し、コミット `bffc87b2`（`wu/verify: main (33aca5a3) を取り込み`）として取り込み済みだった。Run #3 ではこの状態を引き継ぎ、PROGRESS への記録が未了だった全体検証をやり直した。
+
+- `git status --short` → 変更なし（Run #2 終了時点で merge 済み・commit 済み）。
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `33aca5a3` が HEAD の祖先。`git fetch origin main` 後の `origin/main` と一致）。
+- 衝突マーカー確認: `grep -rn '^<<<<<<<\|^=======$\|^>>>>>>>' --include=*.rs --include=*.md --include=*.toml .`（`target` 除外）→ 該当なし。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし、`Finished` のみ）。
+- `cargo test --workspace` → **exit 0**。120 試験バイナリすべて `test result: ok`、`passed` 合算 **3351**、`failed` **0**、`ignored` **12**（内訳は上の 14b052ea 検証時と同じ既存の意図的 ignore。main `33aca5a3` が追加した provider/config 周りの新規試験も含めすべて通過）。一発で通り、再実行は不要だった。
+  - sandbox の userns 制約で落ちる既知試験: 今回も発現せず、`CELERIS_ISOLATION_TESTS=skip` は使わなかった。`crates/celeris/tests/instance_handoff.rs` は8件（`a_newer_release_takes_over_while_the_old_one_finishes_its_run`・`a_stale_heartbeat_promotes_the_standby` を含む）すべて `ok`。
+  - `tests/e2e` の負荷時 flaky 2 件（`writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`・`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`）も `cargo test --workspace` の中で両方 `ok`。本 work unit は `tests/e2e` を変更していない。
+  - 参考: Run #2 の途中経過では `cargo test --workspace` を3回走らせており、2回目（merge 直後、commit 前）に `task-worker` の `browser_restore_deliver.rs::live_session_delivers_restored_state_over_its_own_cdp_pipe` が1件だけ `StateRejected` で落ちた（共用 host の負荷に伴うタイミング依存の既知 flaky、`docs/testing.md` 方法3〈SIGSTOP stutter〉系統。本 work unit は `task-worker` の browser 配送コードを変更していない）。3回目の全体再実行では発現せず `ok`。Run #3 の今回の実行でも発現しなかった。
+- `deflake-lock` で直した試験 `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked` は、今回の `cargo test --workspace`（`tests/api_scenarios.rs`、11 passed の一部）でも `ok`。`database is locked` は出ず、全 task が done に到達した。
+
+#### ディスク使用量・ビルド時間の実測（参照）
+
+`experiment` work unit の `docs/progress/reflink-target-experiment.md` に記録済みの実測を要約する（本 work unit では再測定していない）。
+
+- seed から空で build: 5 crate を compile、0.74 秒。
+- seed を同じ source・別 target path へ `cp -a --reflink=auto` でコピーした直後の build: compile 0 件、0.03〜0.04 秒（`df` 増分 +27.6 MiB、コピー先 `du` 28 MiB — 当時の実験環境は ext 系で実体コピー。container の `/local`（btrfs）は `FICLONE`/`FICLONERANGE` が EPERM だが、`copy_file_range(2)` で extent 共有となり `df` 増分 0 MiB を人が別途実測済み、`docs/adr/0129-host-sccache-reflink-targets.md` 参照）。
+- 新規 checkout を模して mtime を更新した場合: `pdep`（path 依存）と `app` の 2 crate が再 compile、0.23 秒。registry 依存（itoa・libc・anyhow）は mtime 更新でも再ビルドされなかった。
+- 結論: seed からのコピーは target path・source path が変わっても mtime を保てば fresh 判定を保てるが、worktree の checkout で mtime が変わる経路（path 依存とその利用側）は再ビルドが残る。これは ADR-0129 付記と `reflink-target-experiment.md` の既存の結論のままで、今回の merge・検証で変化はない。
+
+#### 未解決事項
+
+- 本番の切り替え（host の `~/.cargo/config.toml`・sccache user unit・`/local` への scratch 移行）は人が `docs/ops/host-sccache-reflink-targets.md` の手順で実行する。本 work unit は本番 host には触れていない。
+- `/local`（btrfs）上での実際の reflink 共有（`copy_file_range` の extent 共有、`df`/`filefrag` での確認）は `CELERIS_REFLINK_TEST_DIR` を人がこの環境変数に `/local` 配下のパスを設定して実行する必要がある。このタスクの run 環境には書き込み可能な `/local` が無いため実行していない。
+- 共用 host の負荷起因の時間依存試験（`instance_handoff`・`cluster_job_wait`・`api_scenarios` 系）は今回発現しなかったが、既知の flaky として別タスク（時間依存試験の決定化）で追跡中。
+
+#### 提案
+
+- `docs/PROGRESS.md` の末尾追記方式（複数 work unit が同時に EOF へ `##`/`###` を足す）は、今回のように無関係な既存節（main 側の `land-main3`/`pick-chrome`）が別 work unit の新設 `##` 節の下に紛れ込む merge 結果を生みやすい。長期分岐タスクでは「新しい `##` 節は必ず対象の h2 の直後に挿入する」運用、または merge 後に見出しの親子関係をざっと確認する一手順を `docs/testing.md` か ADR に足すとよい。
+
 ## launcher の身元確認を SCM_CREDENTIALS に（socket 起動対応）— 2026-10-03
 
 - 完了日: 2026-10-03（task 01M3ZFJ2DZ5TZPAFKACX45JNF4）。Attested task branch（celeris/01M3WV4BFJ71J9ZWJ020MP2Z4K）を取り込んだ上で修正。
@@ -851,3 +1148,179 @@ exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度�
 main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-latest`）。
 
 main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。
+
+main ea2d9d32 取り込み、selfdeploy 試験全 pass（work unit `sync-ea2d`）。
+
+## 通知フィード同期の退行修正（release 3527c8e39ee2 の verify 失敗、2026-10-03）
+
+- 原因: 29d0ffc5 が tick ごとに `sync_notifications`（5982b3cb）を呼ぶ。その同期は events を全部読むまで回り、1 行ごとに
+  走査位置を書いていた（写し 172,994 行で 11.3 秒・書き込み 17 万回。NFS の staging では位置 2170 で止まり dispatch に戻らない）。
+  追いついた後も、tick ごとに報告・発言・delivery の全件に書き込みの transaction を開いていた（約 500 回/tick）。
+  詳細と決定は ADR-0133 付記「通知フィードの同期を差分にする」。
+- 修正: 走査位置（events id・報告/発言の created_at）からの差分だけを読み、events は 1 回 2048 行まで。記録済みは
+  読み取り接続で先に一括判定し、新しい出来事の記録と位置の更新を 1 つの transaction で書く（同期 1 回の書き込み高々 1 回、
+  何も無ければ 0 回）。通知・delivery の読み取りは読み取り接続へ。
+- 測定（staging の写し、`crates/task-ops/tests/feed_measure.rs`）: 修正前 初回 11.3 秒・以後 tick ごと約 500 回の書き込み →
+  修正後 初回 113 ms・書き込み 1 回、追いついた後 1〜2 ms・書き込み 0 回。記録結果（feed_sources 502 件）は同じ。
+  verify の起動と煙試験を写しで再現（artifacts の replay-verify.sh）: 修正後 smoke done 8.1 秒・slow api 0 件。
+- 回帰試験（件数で固定）: `task-ops notify_feed::tests::notify_feed_sync_reads_only_new_sources_and_writes_nothing_when_idle`、
+  `task-api --test request_lock_counts`（300 task × events 1,800 / 21,300 行で inbox・notifications・org・tasks/{id} の
+  接続回数が同じ、書き込み接続の上限）、`task-dispatch tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events`。
+- 証拠: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、
+  `cargo test -p task-ops` 431 passed、`-p task-api` 432 passed、`-p task-core` 652 passed、`-p task-dispatch` 514 passed。
+- 未解決: 受信箱の構築は task ごとに events を読む既存の形のまま（読み取り接続で task 数に比例）。本番 active の
+  tick loop は 30 秒ごとに `notify::schedule_routes` で受信箱を構築する（verify の退行とは別）。
+- release/verify（2026-10-03 02:42〜02:51 UTC、検証済み sha `8e42a33ca126aa5f75acae7aad966dfbad018537`）: run の sandbox では
+  `~/.local/celeris/releases` が読み取り専用の mount なので、`CELERIS_STATE_DIR` を run の artifacts の別 dir
+  （`current` は本番の `releases/0b8a225629fd` への symlink、`SD_CELERISCTL=/nonexistent` で scratch lease を使わない、
+  staging port は 17711/17701/17712）にして同じ台本を実行した。本番の DB は `.backup`（mode=ro）で読むだけ、昇格はしていない。
+  - `scripts/selfdeploy/release.sh 8e42a33c`: exit 0（gate.json ok=true。fmt・cargo-test・clippy・build・pnpm の
+    typecheck/test/build・mobile-audit・e2e-mock がすべて exit 0。web 段は既定の `SD_GATE_SKIP_WEB=1` で skip）。
+  - `scripts/selfdeploy/verify.sh 8e42a33ca126`: exit 0、**verify.json ok=true**。検査 1 schema 41・2 件数一致（tasks 699）・
+    3 主要 GET・4 GUI（/ と /projects/<id> を含めて 200）・4b gui-e2e・6 smoke（done 6.3 秒）がすべて true。
+    live_ok=false は検査 5（N-1 の 0b8a2256 が schema 41 の DB を開けない `SchemaTooNew`）で、0037→0041 の migration を
+    含む release では予期どおり（ok には入らない）。
+  - staging log の slow api request（1 秒超）: 修正前 31 件・最大 13.8 秒（org・browser/waits・inbox・integrations）→
+    修正後は最大 1.56 秒（inbox 3 件、gui-e2e 中に並行で読まれる tasks/{id} 244 件が 1.0〜1.45 秒）。org・browser/waits・
+    integrations・notifications は 1 秒を超えなかった。tasks/{id} の 1 秒台は未解決として残す。
+  - 本番の `~/.local/celeris/releases/8e42a33ca126` は作っていない。昇格の前に、人が host で
+    `scripts/selfdeploy/release.sh 8e42a33c` → `scripts/selfdeploy/verify.sh 8e42a33ca126` を実行する。
+
+## main (aed80844) 取り込みと衝突解消（work unit `sync-main`）— 2026-10-03
+
+完了日 2026-10-03。前回 review 差し戻し時点の main `33aca5a3`（HEAD の祖先）から main `aed80844`
+（本番 admission ADR 番号振り直し 41366893・web release packaging 修正 aed80844 を含む）まで進んでいたため、
+`git merge main --no-ff` で取り込んだ。衝突は想定どおり 2 file:
+
+- `docs/PROGRESS.md`: HEAD 側（ADR-0129 sccache 撤去・reflink target の節）と main 側（launcher の
+  SCM_CREDENTIALS 対応・web release 依存欠落の事故記録・ADR-0135/ADR-0138）の両方を、見出しの前後関係を
+  保ったまま残した（衝突マーカーを除去するだけで内容の削除・改変はしていない）。
+- `scripts/selfdeploy/install-units.sh`: main が足した `celeris-web-lan.socket`/`celeris-web-lan.service`
+  と ADR-0135 D3 のコメントを採用しつつ、本ブランチの撤去（`celeris-sccache.service`・
+  `celeris-scratch-cache.service` を `for unit in ...` に含めない）を保った。結果の行は
+  `for unit in celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service; do`。
+
+`docs/architecture-map.md` は auto-merge のみ（2 行削除、main 側の反映）で衝突なし。他に壊れた file はない。
+
+### 証拠コマンドと結果
+
+- `git merge-base --is-ancestor main HEAD` → exit 0。
+- `git merge-tree --write-tree main HEAD` → exit 0（衝突なしの tree を出力）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-worker scratch` → exit 0、33 passed、0 failed。
+- `cargo test -p task-dispatch --lib scratch` → exit 0、10 passed、0 failed。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。全 12 本 ok
+  （`install-units.sh` を直接叩く試験は無いが、`promote_web_follows_release.sh`・`web_follow_health_gate.sh`
+  が web-lan 経路を通す。いずれも ok）。
+- `cargo test --workspace` → exit 0。3408 passed、0 failed（`database is locked` は出ず、`instance_handoff`・
+  browser launcher 系の既知 flaky も今回は発現しなかった）。
+
+### 未解決事項
+
+- 本番 host（`~/.cargo/config.toml`・sccache user unit・`/local` への scratch 移行、
+  `celeris-web-lan.*` の install）は引き続き人が `docs/ops/host-sccache-reflink-targets.md` と
+  「人が実行する手順」節の手順で行う。本 work unit は本番 host には触れていない。
+
+main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`、別ブランチ）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。
+
+## main (0b8a2256) 再取り込み（work unit `sync-main` 再実行）— 2026-10-03
+
+完了日 2026-10-03。前回 review 差し戻し後、main が `aed80844` からさらに `merge-latest` 工程の統合
+commit `0b8a2256`（launcher の browser_isolation・credentiald injection_ipc・prod_admission 試験の追加）
+まで進み、HEAD（`afa5bddf`/`6ef858f6`、main `aed80844` 時点）の祖先ではなくなっていたため、再度
+`git merge main --no-ff` で取り込んだ。衝突は `docs/PROGRESS.md` のみ（上の 2 節が別ブランチ由来の
+重複する記録だったため、両方をそのまま残して解消。内容の削除・改変はしていない）。
+`scripts/selfdeploy/install-units.sh` は main 側の新規コミットが同ファイルを変更していなかったため
+自動 merge で衝突なく、web-lan unit を含み sccache/scratch-cache unit は含まない形のまま残った。
+他の file（`docs/architecture-map.md` 含む）に衝突・壊れはない。
+
+### 証拠コマンドと結果
+
+- `git merge-base --is-ancestor main HEAD` → exit 0。
+- `git merge-tree --write-tree main HEAD` → exit 0（衝突なしの tree を出力）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-worker scratch` → exit 0、33 passed、0 failed。
+- `cargo test -p task-dispatch --lib scratch` → exit 0、10 passed、0 failed。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t"; done` → 全 12 本 exit 0
+  （`promote_web_follows_release.sh`・`web_follow_health_gate.sh` が web-lan 経路を通す）。
+
+### 未解決事項
+
+- 本番 host の手順は変わらず `docs/ops/host-sccache-reflink-targets.md` を参照。本 work unit は
+  本番 host には触れていない。
+
+## ADR-0136 /local 配置整合と main (3527c8e3) 取り込み（work unit `merge-main`）— 2026-10-03
+
+完了日 2026-10-03。final review 差し戻し 3 点（ADR-0136 の `/local/celeris/data/scratch` への整合、
+ADR-0129 §3 の mount 不在時の記述、ADR-0129 frontmatter の位置）は前段 `align-docs` 工程で直し済み。
+本 work unit は最新 main `3527c8e3`（受信箱/通知フィード統合 `inbox-and-notifications` 一式、
+ADR-0133 を含む）を `git merge main --no-ff` で取り込んだ。
+
+ADR-0136 整合 3 点（merge 後も残存を確認済み）:
+
+1. `docs/adr/0129-host-sccache-reflink-targets.md` §3・`docs/ops/host-sccache-reflink-targets.md` の
+   scratch path を `/local/celeris/data/scratch` に統一し、両文書から
+   [ADR-0136](adr/0136-local-hot-data-layout.md) へリンク。`crates/task-worker/src/scratch/tests.rs:1054`
+   付近の試験 path も同じ値に揃えた。旧 path `/local/celeris/scratch` は残っていない。
+2. ADR-0129 §3 の mount 不在時の記述を実装（`config/scratch.rs` の `apply_mount_check`）に合わせ、
+   「mount 指定があり満たされないときは従来の既定 scratch dir へ戻り、理由をログに出す。`/local` 上に
+   同名ディレクトリは作らない」とした。
+3. ADR-0129 frontmatter（`---` / `tasks: [01M3YD2Z585N1YCBZK4AH8QXR0]` / `---`）をファイル 1〜3 行目に移動。
+
+main 取り込みは衝突 2 file（事前の `git merge-tree` 見積もりでは無衝突想定だったが、実際の merge では
+`docs/PROGRESS.md`・`scripts/selfdeploy/install-units.sh` 以外の crate 側ファイルは ort の自動 merge で
+解消、衝突マーカーが残った file はゼロ）:
+
+- `docs/PROGRESS.md`: 両ブランチの節をそのまま両方残した（本節もその後ろに追記）。
+- `scripts/selfdeploy/install-units.sh`: main 側に本 merge による変更はなく、web-lan unit を含み
+  sccache/scratch-cache unit を含まない既存の形のまま。
+
+### 証拠コマンドと結果
+
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `3527c8e3` は HEAD の祖先）。
+- `git diff --quiet HEAD && git ls-files -u` → 差分なし・unmerged パスなし。
+- `grep -n '/local/celeris/scratch' docs/adr/0129-host-sccache-reflink-targets.md docs/ops/host-sccache-reflink-targets.md crates/task-worker/src/scratch/tests.rs` → 該当なし（exit 1）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-worker scratch` → exit 0、33 passed、0 failed。
+- `cargo test -p task-dispatch --lib scratch` → exit 0、10 passed、0 failed。
+
+### 未解決事項
+
+- 本番 host の手順（`/local` への scratch 移行・sccache 設定）は変わらず
+  `docs/ops/host-sccache-reflink-targets.md` を参照。本 work unit は本番 host には触れていない。
+
+## ADR-0129 seed の build 前 probe と既定 false（work unit `seed-probe`）— 2026-10-03
+
+完了日 2026-10-03。現行本番の ext4 `/var/lib/celeris/scratch` で seed を全 repo 分 build しても target に共有できず、ディスクを二重に使う欠陥を修正した。
+`[scratch] seed_reflink` の既定を false にし、明示的に有効にした場合も pool 内で `cp -a --reflink=auto` と FIEMAP shared の probe を build 前に 1 回行う。共有不可なら理由をログと更新結果に残し、seed ディレクトリも cargo build も作らない。task・WU の target は従来どおり空から始まる。
+[ADR-0129](adr/0129-host-sccache-reflink-targets.md) と [人向け切替手順](ops/host-sccache-reflink-targets.md) §3 に既定値と `/local` 移行時の明示的な有効化を記録した。本番 host の設定やサービスは変更していない。
+
+証拠（いずれも exit 0）:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test -p task-worker scratch` — 34 passed。`seed_skipped_when_pool_cannot_share` を含む。
+- `cargo test -p task-dispatch --lib scratch` — 11 passed。2 repo の更新バッチでも probe 1 回、seed ディレクトリと cargo build は無し。
+- `cargo test -p task-dispatch --lib seed_housekeeping_runs_on_its_interval_and_retires_stale_generations` — 1 passed。
+- `cargo test -p celeris scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off` — 1 passed。
+- `git merge-base --is-ancestor main HEAD` — main `3527c8e3` は本変更前の HEAD `9d326b05` の祖先であり、追加 merge は不要。
+
+## 通知フィード退行修正の main 取り込みと再検証（2026-10-03）
+
+- merged-main: `d8e4c76290a7ec7c09738ee32a854fd39127616f`。
+  final review の取り込み不可を解消するため、task branch に main を merge した。
+  衝突は本ファイルのみ。通知フィード修正・release/verify と main 側 ADR-0129 の記録を両方全文残した。
+  通知フィード修正のコード・回帰試験・ADR は merge 前と同一で、その他のコードは main と同一。
+- merge 後の指定ゲート
+  `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test -p task-ops && cargo test -p task-api`
+  は exit 0（task-ops 431 passed、task-api 432 passed）。通常 sandbox での初回は既存の
+  `browser_h3_injection::production_h3_injects_once_without_exposure` が `unshare: Operation not permitted`
+  で停止したが、`require_escalated` で指定ゲート全体を再実行して通過。試験の除外・変更はしていない。
+- `cargo test -p task-dispatch --lib tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events`
+  も exit 0（1 passed）。ログは run artifacts の `attempt3-gate.log` と `attempt3-tick.log`。
+- release/verify の検証済み SHA は前節の `8e42a33ca126`（verify ok=true、smoke done 6.3 秒）。
+  今回は main 取り込み後の指定ゲートと tick 回帰試験を再検証したもので、統合後 SHA の release/verify は再実行していない。
+  本番への昇格・設定変更は行っていない。

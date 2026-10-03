@@ -265,18 +265,22 @@ final review が挙げた 3 件の未達（P3-C の run loop 配線、P3-A/P4-A 
 
 追跡表 `phase-browser-acceptance.md` と合わせ、P4-A/B/C は一部達成、別 host UID 実証と本番機密能力解放は名前付き後続 task とする。本番 admission は `Attested` 必須であり、この host の SameUid は引き続き拒否する。P4-A/B/C の行別判定と制約は上記追跡表を正とする。
 
-## 本番 admission の機密能力解放（2026-10-01、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）
+## 本番 admission の機密能力解放（2026-10-01 起票、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）
 
-[ADR-0138](../adr/0138-browser-prod-admission-confidential-release.md) は提案に戻した。中間成果として、本番 `Attested` admission の共通条件に user namespace owner の実測を追加した。`task-core::browser_isolation::verify_isolation` は owner 不明（`OwnerUnknown`）と daemon 所有（`UsernsOwnedByDaemon`）を拒否し、この点で main の `Attested` より厳しい。credentiald の `Admission` と task-worker の `RestoreAdmission` には境界試験があるが、launcher 経由の実 process ptrace 拒否は未実証である。**解放は未**: その実証が完了するまで `CredentialInjection`・`IdentityRestore` を許す本番 session は無い。`SameUidHarness` は試験専用で、本番 `Attested` の条件を緩めない。
+2026-10-01 時点の経緯: 本番 `Attested` admission の共通条件に user namespace owner の実測を追加した。`task-core::browser_isolation::verify_isolation` は owner 不明（`OwnerUnknown`）と daemon 所有（`UsernsOwnedByDaemon`）を main の `Attested` より厳しく拒否する。credentiald の `Admission` と task-worker の `RestoreAdmission` に境界試験を追加したが、当時は launcher 経由の実 process ptrace 拒否が未実証で、ADR-0138 は提案のままだった。
 
-- 本番 admission の境界試験: `cargo test -p celeris-credentiald --test prod_admission` → exit 0、6 passed / 0 failed（別 UID + owner 非 daemon の許可、SameUid・daemon owner・owner 不明・namespace 欠落・終了 runtime の拒否）。
-- 復元 admission の境界試験: `cargo test -p task-worker --test browser_prod_admission` → exit 0、9 passed / 0 failed（別 UID + owner 非 daemon の許可、SameUid・daemon owner・owner 不明・他隔離違反・namespace 欠落・書込み可能 root の拒否、既定 admission が Attested）。
-- workspace gate（verify-cargo）: `cargo test --workspace` → exit 0（3055 passed / 0 failed / 11 ignored、114 test binary）、`cargo clippy --workspace -- -D warnings` → exit 0（警告 0）。
+2026-10-03 更新（子 task 01M3WV4BFJ71J9ZWJ020MP2Z4K、unit launcher-gated-release）: 下記「本番 Attested に launcher 証明と実 process ptrace 拒否を必須化（closeout）」節のとおり、launcher session 証明（`verify_launcher_session`）を両 admission に必須化し、sandbox・host 実 process の双方で daemon UID からの ptrace 拒否を実証した。launcher 証明つきの別 UID 隔離 session だけが `CredentialInjection`・`IdentityRestore` を許可され、`SameUid`・非隔離・証明なし・検証失敗の runtime は拒否される。H3・H4・H5・ADR-0080 H2（`approve_once`・短い lease）はいずれも弱めていない。`SameUidHarness` は引き続き試験専用で、本番 `Attested` の条件を緩めない。
+
+- 本番 admission の境界試験: `cargo test -p celeris-credentiald --test prod_admission` → exit 0、6 passed（別 UID + owner 非 daemon の許可、SameUid・daemon owner・owner 不明・namespace 欠落・終了 runtime の拒否）。
+- 復元 admission の境界試験: `cargo test -p task-worker --test browser_prod_admission` → exit 0、9 passed。
+- launcher 証明・ptrace 拒否の実証: `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（詳細は下記 closeout 節、成果物 `prod-admission-release-evidence.md`）。
+- workspace gate: `cargo test --workspace` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0。
 - H3: 認証区間と identity 使用中の LLM 入力・event・artifact・Live View 遮断を維持し、admission 成功で観測を再開しない。
 - H4: task/run/session ACL、期限・失効時の再判定、および H3 区間中の本人 Live View 遮断を維持する。
 - H5: 人が確認した需要、project + exact HTTPS origin 束縛、期限・失効・削除を維持する。
 - H2（ADR-0080）: `approve_once` と既定 60 秒・最大 300 秒、1 回使用の lease を維持し、隔離成功で承認を代替しない。
-- 未解決: この実行環境は subuid の親 user namespace map 外による EPERM を解消しておらず、launcher 配置および実 process での ptrace 拒否（A13 を含む）は未検証。owner 検査は中間実装であり、機密能力の解放も本番有効化も示さない。本番昇格は ptrace 拒否の証拠を人が承認した後、人が行う。
+- 未確認: `CELERIS_LAUNCHER_TESTS=require` での host の SIGSTOP stutter 3 回、merge 後 HEAD の host 再取得（手順は下記 closeout 節）。
+- **本番昇格は未実施**。実証証拠に対する人の承認後、人が selfdeploy 手順（kb `projects/agent-platform/selfdeploy-release-verify-procedure.md`）で行う。
 
 # ADR-0115 権限分離 launcher（run 01M3X8SRB3X08AXW8WK5PY7P9N、2026-10-02）
 

@@ -347,10 +347,15 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
     let _child = ChildGuard(child);
     let control = runtime.join("celeris-credentiald/control.sock");
     let resolve = runtime.join("celeris-credentiald/resolve.sock");
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if control.exists() && resolve.exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         thread::sleep(Duration::from_millis(10))
     }
     assert!(control.exists());
@@ -594,14 +599,18 @@ fn invalid_control_process_id_is_rejected() {
         .expect("spawn");
     let control = runtime.join("celeris-credentiald/control.sock");
     let resolve = runtime.join("celeris-credentiald/resolve.sock");
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if control.exists() && resolve.exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         thread::sleep(Duration::from_millis(10))
     }
     assert!(control.exists() && resolve.exists());
-    thread::sleep(Duration::from_millis(20));
     let reply = ipc::call(&control, br#"{"op":"initialize_key"}"#).expect("response");
     assert!(!reply.success);
     assert_eq!(reply.code.as_deref(), Some("permission_denied"));

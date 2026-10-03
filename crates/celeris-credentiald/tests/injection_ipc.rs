@@ -157,10 +157,15 @@ impl Fx {
             provider,
             runtime: Vec::new(),
         };
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
             if fx.sock("injection.sock").exists() && fx.sock("control.sock").exists() {
                 break;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for fixture readiness"
+            );
             thread::sleep(Duration::from_millis(10));
         }
         fx
@@ -215,15 +220,18 @@ impl Fx {
         let c = Command::new("sleep").arg("30").spawn().expect("sleep");
         let pid = c.id();
         self.runtime.push(c);
-        let mut start = None;
-        for _ in 0..100 {
-            start = process_start(pid);
-            if start.is_some() {
-                break;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let start = loop {
+            if let Some(start) = process_start(pid) {
+                break start;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for fixture readiness"
+            );
             thread::sleep(Duration::from_millis(5));
-        }
-        (pid, start.expect("start"))
+        };
+        (pid, start)
     }
     fn control(&self, v: serde_json::Value) -> Option<String> {
         let reply = ipc::call(&self.sock("control.sock"), v.to_string().as_bytes()).expect("ctl");
@@ -559,7 +567,7 @@ fn credential_injection_sameuid_rejected_in_production() {
 
 #[test]
 fn credential_injection_requires_a_verified_launcher_proof_in_production() {
-    // ADR-0116 D-L: launcher UID を設定した本番 Attested でも、証明なし・検証失敗（SameUid の
+    // ADR-0138 D-L: launcher UID を設定した本番 Attested でも、証明なし・検証失敗（SameUid の
     // 子 process に結び付いた証明）はどちらも拒否し、provider を呼ばず lease を消費しない。
     let mut fx = Fx::attested(unsafe { libc::geteuid() } + 500);
     let lease = fx.grant("sess-1", "k1", 60);

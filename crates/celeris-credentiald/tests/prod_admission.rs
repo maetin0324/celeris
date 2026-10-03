@@ -1,4 +1,4 @@
-//! 本番 Attested 判定の境界（ADR-0116 条件 1〜5・D-L）。試験用 SameUidHarness は使わない。
+//! 本番 Attested 判定の境界（ADR-0138 条件 1〜5・D-L）。試験用 SameUidHarness は使わない。
 //! 隔離条件と owner 検査に通っても、launcher の session 証明が無い・検証に失敗した runtime は拒否する。
 
 use celeris_credentiald::injection_ipc::{

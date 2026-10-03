@@ -38,8 +38,6 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
-                    // ADR-0075 G3-fix1: 外す env は run ごとに dispatcher が `with_env_removed` で足す。
-                    env_remove: Vec::new(),
                     container: None,
                 }))
             }
@@ -61,7 +59,6 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
-                    env_remove: Vec::new(),
                     container: None,
                     // ADR-0054 D1（Phase 67）: `[adapters.codex] resume_mode`（既定 `exec_resume`）。
                     resume_mode: base.resolved_resume_mode(),
@@ -84,7 +81,6 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
-                    env_remove: Vec::new(),
                     container: None,
                 }))
             }
@@ -110,7 +106,6 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     startup_timeout: Duration::from_secs(base.startup_timeout_secs),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
-                    env_remove: Vec::new(),
                     container: None,
                 }));
                 if p.adapter == BrowserSpecialistAdapter::ID {
@@ -339,6 +334,8 @@ pub fn provider_lives(config: &Config) -> Vec<ProviderLive> {
             let mut env_keys: Vec<String> = p.env.keys().cloned().collect();
             env_keys.sort();
             ProviderLive {
+                kind: config.provider_kind(&p.id).unwrap_or_default(),
+                llm_source: config.provider_llm_source(&p.id),
                 credential_refs: task_core::model_routing::credential_refs(&p.env_from_secrets),
                 tier_models: p.tier_models.clone(),
                 account_id: p.account_id.clone(),

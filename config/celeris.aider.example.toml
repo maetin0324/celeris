@@ -25,6 +25,7 @@ auto_accept = false
 
 [[providers]]
 id = "aider-anthropic"
+kind = "adapter"
 adapter = "aider"
 tiers = ["standard", "cheap"]
 concurrency = 1

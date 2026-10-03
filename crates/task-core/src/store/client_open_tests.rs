@@ -19,6 +19,14 @@ fn table_count(path: &Path) -> i64 {
     .unwrap()
 }
 
+/// `SCHEMA_VERSION` の 1 つ前の実在する版数（`RESERVED_VERSIONS` は飛ばす。ADR-0133 D3.2）。
+fn previous_version() -> u32 {
+    (1..SCHEMA_VERSION)
+        .rev()
+        .find(|v| !migrations::RESERVED_VERSIONS.contains(v))
+        .unwrap()
+}
+
 fn task() -> Task {
     let mut t = super::tests::sample_task(Status::Draft);
     t.title = "client open".to_string();
@@ -49,12 +57,12 @@ fn db_at_version(dir: &Path, version: u32) -> PathBuf {
 #[test]
 fn open_client_refuses_an_older_db_and_does_not_migrate_it() {
     let dir = tempfile::tempdir().unwrap();
-    let path = db_at_version(dir.path(), SCHEMA_VERSION - 1);
+    let path = db_at_version(dir.path(), previous_version());
     let tables_before = table_count(&path);
     let result = SqliteStore::open_client(&path);
     match result {
         Err(StoreError::SchemaTooOld { found, required }) => {
-            assert_eq!(found, SCHEMA_VERSION - 1);
+            assert_eq!(found, previous_version());
             assert_eq!(required, SCHEMA_VERSION);
         }
         Err(other) => panic!("expected SchemaTooOld, got {other}"),
@@ -69,7 +77,7 @@ fn open_client_refuses_an_older_db_and_does_not_migrate_it() {
     assert!(msg.contains("daemon"), "{msg}");
     assert_eq!(
         version_of(&path),
-        SCHEMA_VERSION - 1,
+        previous_version(),
         "no migration applied"
     );
     assert_eq!(table_count(&path), tables_before);

@@ -862,10 +862,10 @@ async fn agent_message_chunks_are_coalesced_into_few_progress_lines() {
 
 /// `model` を指定すると `session/set_config_option` が送られ、値がそのまま渡る。
 #[tokio::test]
-async fn model_option_is_set_when_configured_and_offered() {
+async fn provider_kind_acp_sends_proxy_cheap_model_to_stub() {
     let dir = tempfile::tempdir().unwrap();
     let config = AcpConfig {
-        model: Some("qwen-local/qwen3.8-27b".to_string()),
+        model: Some("celeris/cheap".to_string()),
         ..stub_acp(
             dir.path(),
             r#"
@@ -894,7 +894,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
     assert!(received.contains("session/set_config_option"), "{received}");
-    assert!(received.contains("qwen-local/qwen3.8-27b"), "{received}");
+    assert!(received.contains("celeris/cheap"), "{received}");
     assert!(received.contains("\"configId\":\"model\""), "{received}");
 }
 

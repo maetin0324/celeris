@@ -1,15 +1,13 @@
 #!/bin/sh
-# ADR-0115 / ADR-0116 D-L: launcher の実 session で ptrace 拒否と本番 admission の許可/拒否表を
-# daemon UID の host shell（run sandbox の外）で走らせ、出力全体を <out-file> に残す。
-# 前提: root が protocol v4 の launcher を設置・socket/service を再起動済みで、
-# celeris-browser の subuid/subgid が有効。run sandbox 内の UID では SO_PEERCRED の許可に通らない。
+# ADR-0115 / ADR-0138 D-L: launcher の実 session で ptrace 拒否と本番 admission の許可/拒否表を
+# host shell（daemon UID・run sandbox の外）で測り、出力全体を <out-file> に残す。
 #
 #   sh crates/task-worker/scripts/launcher-admission-evidence.sh <out-file>
 #
 # <out-file> には `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test
 # browser_launcher_ptrace -- --nocapture` の stdout/stderr をそのまま書き、最後に
-# `EXIT: <code>` を 1 行足す。終了コードは cargo のもの。host の前提（v4 launcher・
-# celeris-browser の SCM_CREDENTIALS・subuid）が欠ければ require なので失敗する。
+# `EXIT: <code>` を 1 行足す。終了コードは cargo のもの。host の前提（v3 launcher・
+# launcher の応答の SCM_CREDENTIALS が celeris-browser・subuid）が欠ければ require なので失敗する。
 set -u
 
 if [ "$#" -ne 1 ] || [ -z "$1" ]; then

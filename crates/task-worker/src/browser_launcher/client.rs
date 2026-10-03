@@ -3,8 +3,14 @@
 //! 1 接続 = 1 daemon 側の利用者。session は開いた接続に結びつくので、session を使い終わるまで
 //! 同じ [`LauncherClient`] を持ち続ける（drop = 切断 = launcher が回収）。どの失敗も呼び出し側は
 //! `isolated_runtime_unavailable` として fail closed に扱う。
+//!
+//! launcher の身元は `SO_PEERCRED` では確かめない（ADR-0116 付記 D-P）。socket 起動
+//! （`celeris-browser-launcher.socket`）では listen socket を作ったのが systemd（root）なので、
+//! `SO_PEERCRED` は uid 0 を返す。代わりに接続に `SO_PASSCRED` を立て、応答のたびに kernel が
+//! 付ける `SCM_CREDENTIALS`（実際にその応答を書いた process の pid/uid/gid。送り手は偽れない）を
+//! 読み、全応答で同じ送り手であることを確かめる。
 
-use std::io::Read;
+use nix::libc;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -12,9 +18,8 @@ use std::time::Duration;
 
 use super::protocol::{
     ActionArgs, DEFAULT_MAX_FRAME, ErrorCode, FrameError, Observation, Receipt, Request, Response,
-    SessionFacts, SessionPolicy, SessionState, Verb, write_message,
+    SessionFacts, SessionPolicy, SessionState, Verb, read_frame, write_message,
 };
-use nix::libc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -26,94 +31,6 @@ pub enum ClientError {
     Protocol,
     #[error("launcher refused: {0}")]
     Remote(ErrorCode),
-}
-
-#[cfg(test)]
-mod credential_tests {
-    use super::*;
-    use std::os::unix::net::UnixListener;
-
-    fn forked_response(with_credentials: bool) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let socket = dir.path().join("launcher.sock");
-        // Socket activation: the listener is created by the parent, then accepted by a child.
-        let listener = UnixListener::bind(&socket).expect("bind");
-        // SAFETY: the child only accepts, writes one response and exits without returning to
-        // the test harness. The parent reaps it before the test finishes.
-        let pid = unsafe { libc::fork() };
-        assert!(pid >= 0, "fork failed");
-        if pid == 0 {
-            let code = match listener.accept() {
-                Ok((mut stream, _)) => {
-                    if super::super::protocol::read_frame(&mut stream, DEFAULT_MAX_FRAME).is_err() {
-                        unsafe { libc::_exit(1) };
-                    }
-                    let response = Response::Observed {
-                        state: SessionState::Running,
-                        facts: SessionFacts::default(),
-                    };
-                    let result = if with_credentials {
-                        super::super::server::write_credentialed_response(
-                            &mut stream,
-                            &response,
-                            DEFAULT_MAX_FRAME,
-                        )
-                    } else {
-                        write_message(&mut stream, &response, DEFAULT_MAX_FRAME)
-                    };
-                    if result.is_ok() { 0 } else { 1 }
-                }
-                Err(_) => 1,
-            };
-            unsafe { libc::_exit(code) };
-        }
-        let mut client = LauncherClient::connect(&socket, Duration::from_secs(5)).expect("connect");
-        let socket_peer = super::super::server::peer_cred(&client.stream).expect("SO_PEERCRED");
-        assert_eq!(socket_peer.0, unsafe { libc::getpid() });
-        if !with_credentials {
-            // Linux can synthesize SCM_CREDENTIALS for plain writes when SO_PASSCRED is on.
-            // Disable it here to exercise the missing-control-message fail-closed path.
-            let disabled: libc::c_int = 0;
-            let rc = unsafe {
-                libc::setsockopt(
-                    client.stream.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_PASSCRED,
-                    (&disabled as *const libc::c_int).cast(),
-                    std::mem::size_of_val(&disabled) as libc::socklen_t,
-                )
-            };
-            assert_eq!(rc, 0);
-        }
-        assert_eq!(client.peer_uid(), None);
-        let response = client.request(&Request::Observe {
-            session_id: "session".into(),
-            lease_id: "lease".into(),
-        });
-        assert!(
-            matches!(response, Ok(Response::Observed { .. })),
-            "{response:?}"
-        );
-        if with_credentials {
-            assert_eq!(client.response_cred.map(|c| c.pid), Some(pid));
-            assert_eq!(client.peer_uid(), Some(unsafe { libc::getuid() }));
-        } else {
-            assert_eq!(client.peer_uid(), None);
-        }
-        let mut status = 0;
-        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
-        assert_eq!(status, 0);
-    }
-
-    #[test]
-    fn response_credentials_identify_accepting_child() {
-        forked_response(true);
-    }
-
-    #[test]
-    fn response_without_credentials_has_no_launcher_uid() {
-        forked_response(false);
-    }
 }
 
 impl From<FrameError> for ClientError {
@@ -131,7 +48,26 @@ impl From<FrameError> for ClientError {
 pub struct LauncherClient {
     stream: UnixStream,
     max_frame: usize,
-    response_cred: Option<libc::ucred>,
+    responder: Responder,
+}
+
+/// 応答の送り手（`SCM_CREDENTIALS`）の記録。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Responder {
+    /// まだ応答を受けていない。
+    Unseen,
+    /// 全応答が同じ送り手だった。
+    Seen(SenderCred),
+    /// 資格情報が採れない応答、または送り手の違う応答があった（以後ずっと `None` を返す）。
+    Inconsistent,
+}
+
+/// kernel が付けた送り手の資格情報（受け手の pid/user namespace で見た値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SenderCred {
+    pub pid: i32,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 /// `start_session` の結果。
@@ -148,100 +84,56 @@ impl LauncherClient {
         let stream = UnixStream::connect(path)?;
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
-        let enabled: libc::c_int = 1;
-        // SAFETY: enabled points to a valid c_int with the stated length.
-        if unsafe {
-            libc::setsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_PASSCRED,
-                (&enabled as *const libc::c_int).cast(),
-                std::mem::size_of_val(&enabled) as libc::socklen_t,
-            )
-        } != 0
-        {
-            return Err(ClientError::Io(std::io::Error::last_os_error()));
-        }
+        // launcher は要求を受けてから書くので、connect 後に立てても最初の応答から資格情報が付く。
+        set_passcred(&stream)?;
         Ok(Self {
             stream,
             max_frame: DEFAULT_MAX_FRAME,
-            response_cred: None,
+            responder: Responder::Unseen,
         })
     }
 
-    /// 最後の応答に付いた `SCM_CREDENTIALS` の UID。応答前・資格情報なしなら `None`。
-    pub fn peer_uid(&self) -> Option<u32> {
-        self.response_cred.map(|cred| cred.uid)
+    /// 応答を書いた launcher process の資格情報（kernel が付けた `SCM_CREDENTIALS`）。
+    /// 応答をまだ受けていない・資格情報の無い応答があった・送り手が応答ごとに違った場合は `None`。
+    pub fn responder(&self) -> Option<SenderCred> {
+        match self.responder {
+            Responder::Seen(c) => Some(c),
+            Responder::Unseen | Responder::Inconsistent => None,
+        }
+    }
+
+    /// 応答を書いた launcher の UID（[`Self::responder`] の uid）。
+    pub fn responder_uid(&self) -> Option<u32> {
+        self.responder().map(|c| c.uid)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stream_for_test(&self) -> &UnixStream {
+        &self.stream
+    }
+
+    fn note_responder(&mut self, seen: Option<SenderCred>) {
+        self.responder = match (self.responder, seen) {
+            (Responder::Unseen, Some(c)) => Responder::Seen(c),
+            (Responder::Seen(prev), Some(c)) if prev == c => Responder::Seen(c),
+            _ => Responder::Inconsistent,
+        };
     }
 
     /// 要求を 1 個送り、応答を 1 個受ける。`error` 応答は `Remote` にする。
     pub fn request(&mut self, req: &Request) -> Result<Response, ClientError> {
-        self.response_cred = None;
         write_message(&mut self.stream, req, self.max_frame)?;
-        let body = self
-            .read_response()
-            .inspect_err(|_| self.response_cred = None)?;
-        let resp: Response = serde_json::from_slice(&body).map_err(|_| {
-            self.response_cred = None;
-            ClientError::Protocol
-        })?;
+        // 応答の先頭を覗いて送り手を記録してから frame を読む（覗くだけなので frame は崩れない）。
+        match peek_sender(&self.stream)? {
+            Peeked::Closed => return Err(ClientError::Closed),
+            Peeked::Data(seen) => self.note_responder(seen),
+        }
+        let body = read_frame(&mut self.stream, self.max_frame)?;
+        let resp: Response = serde_json::from_slice(&body).map_err(|_| ClientError::Protocol)?;
         match resp {
-            Response::Error { code } => {
-                self.response_cred = None;
-                Err(ClientError::Remote(code))
-            }
+            Response::Error { code } => Err(ClientError::Remote(code)),
             other => Ok(other),
         }
-    }
-
-    fn read_response(&mut self) -> Result<Vec<u8>, ClientError> {
-        let mut header = [0u8; 4];
-        let mut iov = libc::iovec {
-            iov_base: header.as_mut_ptr().cast(),
-            iov_len: 1,
-        };
-        let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<libc::ucred>() as u32) } as usize;
-        let mut control = vec![0usize; space.div_ceil(std::mem::size_of::<usize>())];
-        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = control.as_mut_ptr().cast();
-        msg.msg_controllen = space;
-        // SAFETY: iov and control point to live writable buffers for this call.
-        let n = unsafe { libc::recvmsg(self.stream.as_raw_fd(), &mut msg, 0) };
-        if n < 0 {
-            return Err(ClientError::Io(std::io::Error::last_os_error()));
-        }
-        if n == 0 {
-            return Err(ClientError::Closed);
-        }
-        if msg.msg_flags & libc::MSG_CTRUNC != 0 {
-            return Err(ClientError::Protocol);
-        }
-        // SAFETY: recvmsg initialized msg and the control buffer; the bounds are checked.
-        unsafe {
-            let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
-            while !cmsg.is_null() {
-                if (*cmsg).cmsg_level == libc::SOL_SOCKET
-                    && (*cmsg).cmsg_type == libc::SCM_CREDENTIALS
-                    && (*cmsg).cmsg_len
-                        >= libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) as usize
-                {
-                    self.response_cred = Some(std::ptr::read_unaligned(
-                        libc::CMSG_DATA(cmsg).cast::<libc::ucred>(),
-                    ));
-                }
-                cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
-            }
-        }
-        self.stream.read_exact(&mut header[1..])?;
-        let len = u32::from_be_bytes(header) as usize;
-        if len > self.max_frame {
-            return Err(ClientError::Protocol);
-        }
-        let mut body = vec![0u8; len];
-        self.stream.read_exact(&mut body)?;
-        Ok(body)
     }
 
     pub fn start_session(
@@ -314,4 +206,86 @@ impl LauncherClient {
             _ => Err(ClientError::Protocol),
         }
     }
+}
+
+fn set_passcred(stream: &UnixStream) -> std::io::Result<()> {
+    let on: libc::c_int = 1;
+    // SAFETY: on は c_int、長さはその大きさ。
+    let rc = unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PASSCRED,
+            (&raw const on).cast(),
+            std::mem::size_of_val(&on) as libc::socklen_t,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+enum Peeked {
+    Closed,
+    /// 受信待ちの先頭の skb の送り手（付いていなければ `None`）。
+    Data(Option<SenderCred>),
+}
+
+/// `MSG_PEEK` で 1 byte と `SCM_CREDENTIALS` を覗く。AF_UNIX stream は送り手の資格情報が違う
+/// skb を 1 回の読みにまとめないので、先頭 skb の資格情報はその応答を書いた process のもの。
+fn peek_sender(stream: &UnixStream) -> std::io::Result<Peeked> {
+    let mut byte = [0u8; 1];
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: byte.len(),
+    };
+    // CMSG_SPACE(sizeof(ucred)) = 32。cmsghdr の整列のため u64 で取る。
+    let mut control = [0u64; 8];
+    // SAFETY: msghdr は全 field 0 で有効。
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.as_mut_ptr().cast();
+    msg.msg_controllen = std::mem::size_of_val(&control) as _;
+    let n = loop {
+        // SAFETY: msg は有効な buffer を指す。MSG_PEEK なので受信 queue は変わらない。
+        let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_PEEK) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        break n;
+    };
+    if n == 0 {
+        return Ok(Peeked::Closed);
+    }
+    if msg.msg_flags & libc::MSG_CTRUNC != 0 {
+        return Ok(Peeked::Data(None));
+    }
+    let mut cred = None;
+    // SAFETY: recvmsg が埋めた control buffer を CMSG_* で辿る。
+    unsafe {
+        let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
+        while !cmsg.is_null() {
+            if (*cmsg).cmsg_level == libc::SOL_SOCKET
+                && (*cmsg).cmsg_type == libc::SCM_CREDENTIALS
+                && (*cmsg).cmsg_len as usize
+                    >= libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) as usize
+            {
+                let u = std::ptr::read_unaligned(libc::CMSG_DATA(cmsg).cast::<libc::ucred>());
+                cred = Some(SenderCred {
+                    pid: u.pid,
+                    uid: u.uid,
+                    gid: u.gid,
+                });
+            }
+            cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+        }
+    }
+    Ok(Peeked::Data(cred))
 }

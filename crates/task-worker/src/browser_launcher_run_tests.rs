@@ -433,7 +433,7 @@ fn default_runtime_is_the_daemon_path_and_launcher_skips_local_binaries() {
     assert!(super::super::isolated_runtime_ready(Some(&launcher)).is_ok());
 }
 
-// ---- ADR-0116 D-L: daemon 側で照合した launcher session 証明 ----
+// ---- ADR-0138 D-L: daemon 側で照合した launcher session 証明 ----
 
 /// 独自の process group の `sleep`（runtime の leader の代わり）。
 fn leader() -> (std::process::Child, i32, u64) {
@@ -556,7 +556,7 @@ fn launcher_proof_is_not_built_without_peer_uid_binding_or_isolation() {
     let (child, pid, st) = leader();
     let good = started(pid, st, Some(LAUNCHER_UID));
     assert!(launcher_session_proof(&good, Some(LAUNCHER_UID), &daemon).is_some());
-    // SO_PEERCRED が採れない。
+    // 応答の送り手（SCM_CREDENTIALS）が採れない。
     assert_eq!(launcher_session_proof(&good, None, &daemon), None);
     // v1 の launcher（束縛の無い receipt）。
     let mut v1 = good.clone();
@@ -620,7 +620,7 @@ fn launcher_runtime_carries_the_launcher_binding_into_the_proof() {
     assert_eq!(proof.session_id, runtime.session_id);
     assert_eq!(proof.instance_id, "inst-test");
     assert_eq!(proof.ns_owner_uid, Some(LAUNCHER_UID));
-    // 偽 launcher は試験 process 自身なので SO_PEERCRED は daemon の UID。
+    // 偽 launcher は試験 process 自身なので応答の送り手（SCM_CREDENTIALS）は daemon の UID。
     let daemon = DaemonIds::current();
     assert_eq!(proof.launcher_uid, daemon.uid);
     assert!(crate::browser_runtime::same_process_alive(

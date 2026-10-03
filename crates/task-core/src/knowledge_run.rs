@@ -64,8 +64,10 @@ pub struct KnowledgeRunSummary {
     /// 落とした候補の `path` と理由（実機 2026-09-20: 件数だけでは、なぜ捨てられたかを後から追えなかった）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discarded_reasons: Vec<String>,
-    /// ADR-0052 D2（Phase 64）: どの経路で抽出したか。`"langmem"`（Qwen）か `"fallback:<adapter>"`
-    /// （Qwen に届かず tier cheap の汎用ハーネスに倒した）。`knowledge_runs.via` と同じ値。
+    /// ADR-0052 D2（Phase 64）: どの経路で抽出したか。`"langmem"`（`[knowledge.langmem]` の接続先、
+    /// 通常は proxy の `celeris/cheap`。その先が Qwen か Claude / GPT の cheap かは proxy が選ぶ。
+    /// ADR-0132 D4）か `"fallback:<adapter>"`（接続先に届かず tier cheap の汎用ハーネスに倒した）。
+    /// `knowledge_runs.via` と同じ値。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
 }

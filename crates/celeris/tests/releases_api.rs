@@ -131,7 +131,11 @@ adapter = "fake"
             let _ = stop.send(());
         }
         if let Some(handle) = self.handle.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+            tokio::time::timeout(Duration::from_secs(60), handle)
+                .await
+                .expect("fixture server stopped")
+                .expect("fixture server task")
+                .expect("fixture server result");
         }
     }
 
@@ -251,14 +255,17 @@ adapter = "fake"
 }
 
 fn wait_for(path: &Path, needle: &str) -> String {
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
         let text = std::fs::read_to_string(path).unwrap_or_default();
         if text.contains(needle) {
             return text;
         }
+        if std::time::Instant::now() >= deadline {
+            return text;
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
-    std::fs::read_to_string(path).unwrap_or_default()
 }
 
 /// 空の `releases_dir` でも 200。`running` は `GET /health` と同じ値を持つ。

@@ -8,7 +8,7 @@ fn listener() -> TcpListener {
 }
 
 #[test]
-fn a_200_from_a_local_fake_server_is_reachable() {
+fn provider_kind_proxy_is_reachable_without_a_qwen_model() {
     let server = listener();
     let addr = server.local_addr().expect("addr");
     let (tx, rx) = mpsc::channel::<String>();
@@ -25,6 +25,7 @@ fn a_200_from_a_local_fake_server_is_reachable() {
     assert_eq!(probe_models(&base, PROBE_TIMEOUT, None), Reachability::Ok);
     let request = rx.recv().expect("request");
     assert!(request.starts_with("GET /v1/models HTTP/1.1"), "{request}");
+    assert!(!request.to_ascii_lowercase().contains("qwen"), "{request}");
     handle.join().expect("join");
 }
 
@@ -44,7 +45,7 @@ fn a_non_2xx_answer_is_unreachable() {
     handle.join().expect("join");
 }
 
-/// ADR-0052 D1: 接続不可（トンネルが落ちている＝誰も listen していないポート）。
+/// ADR-0132 D4: 接続不可（proxy が listen していないポート）。
 #[test]
 fn a_refused_connection_is_unreachable() {
     let server = listener();

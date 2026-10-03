@@ -61,7 +61,7 @@ fn run() -> Result<(), Error> {
             let provider = ManualProvider::open(config.join("keys"), data.join("vault"))?;
             let broker = Arc::new(Broker::new(provider, data.join("audit"))?);
             let mut allowed = Vec::new();
-            // ADR-0116 D-L: the launcher UID that production `Attested` admission checks
+            // ADR-0138 D-L: the launcher UID that production `Attested` admission checks
             // proofs against. Without it no session is admitted for injection.
             let mut launcher_uid = None;
             for arg in args {

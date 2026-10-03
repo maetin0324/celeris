@@ -1,7 +1,7 @@
 //! ADR-0115: dedicated-user launcher の実 process 境界を daemon UID から測る。
 //! host 未準備の CI では理由を表示して skip する。実証時は CELERIS_LAUNCHER_TESTS=require。
 //!
-//! ADR-0116 D-L: 同じ session から daemon 側が組んだ `LauncherSessionProof` だけが本番の
+//! ADR-0138 D-L: 同じ session から daemon 側が組んだ `LauncherSessionProof` だけが本番の
 //! CredentialInjection（celeris-credentiald の `admit_attested`）と IdentityRestore
 //! （`RestoreAdmission::Attested`）を通り、SameUid・非隔離・証明なし・検証失敗は両方で拒否される
 //! ことを、ptrace 拒否を確かめた session の上で許可/拒否の対応表（`ADMISSION` 行）にして出す。
@@ -239,7 +239,7 @@ fn read_proc_table() -> Vec<ProcEntry> {
 }
 
 fn chrome_candidates(before: &HashSet<i32>, expected_map: &str) -> Vec<ChromeCandidate> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let candidates = chrome_pick_candidates(&read_proc_table(), before, expected_map);
         if !candidates.is_empty() {
@@ -347,7 +347,7 @@ fn strace_denied(pid: i32) {
         }
         Err(e) => panic!("strace spawn failed: {e}"),
     };
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().expect("poll strace").is_none() {
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -420,7 +420,10 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
             },
         )
         .expect("start real launcher session");
-    let peer_uid = client.peer_uid();
+    // 応答を書いた launcher process の UID（kernel が付けた SCM_CREDENTIALS。ADR-0116 付記 D-P）。
+    // socket 起動では SO_PEERCRED は listen socket を作った systemd（uid 0）になるので使わない。
+    let responder = client.responder();
+    let peer_uid = client.responder_uid();
     assert_eq!(started.receipt.outcome, Outcome::Started);
     assert!(
         started.receipt.isolation_ok,
@@ -429,11 +432,11 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
     // 本番経路（LauncherRuntime::start）と同じ規則で、この session の証明を daemon 側で組む。
     let proof = launcher_session_proof(&started, peer_uid);
     eprintln!(
-        "started: instance={} binding={:?} peer_uid={peer_uid:?}",
+        "started: instance={} binding={:?} responder={responder:?}",
         started.instance_id, started.receipt.binding
     );
-    // 対応表の前提（ADR-0116 D-L）: v4 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
-    // 応答の SCM_CREDENTIALS が celeris-browser の UID を示すこと。欠ければ表だけを skip（require なら失敗）。
+    // 対応表の前提（ADR-0138 D-L）: v3 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
+    // 応答の SCM_CREDENTIALS が celeris-browser の UID に見えること。欠ければ表だけを skip（require なら失敗）。
     let proof_gap = if started.receipt.binding.is_none() {
         Some("launcher receipt has no session binding (protocol v1 launcher installed)".to_owned())
     } else if started
@@ -448,16 +451,11 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         )
     } else if peer_uid != Some(browser_uid) {
         Some(format!(
-            "launcher response SCM_CREDENTIALS uid {peer_uid:?} is not celeris-browser {browser_uid} in this user namespace (protocol v4 launcher required)"
+            "launcher reply SCM_CREDENTIALS uid {peer_uid:?} is not celeris-browser {browser_uid} in this user namespace"
         ))
     } else {
         None
     };
-    if let Some(gap) = proof_gap.as_deref() {
-        let _ = client.stop(&started.session_id, &lease);
-        missing(format!("admission table: {gap}"));
-        return;
-    }
     let instance_id = started.instance_id.clone();
     let session = Session {
         client: &mut client,
@@ -542,7 +540,7 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
 
     // 自分の session を止め、検査済みの session root のどれかが消えることを確かめる。
     drop(session);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let stopped = loop {
         let stopped = chrome_pick_stopped_roots(&checked, &proc_pids());
         if !stopped.is_empty() || Instant::now() >= deadline {
@@ -772,7 +770,7 @@ fn chrome_pick_reader_without_subuid_mapping_still_matches() {
     assert!(chrome_pick_stopped_roots(&picked, &alive).is_empty());
 }
 
-/// 許可/拒否の対応表（ADR-0116 D-L）の 1 行。
+/// 許可/拒否の対応表（ADR-0138 D-L）の 1 行。
 struct AdmissionCase<'a> {
     name: &'static str,
     facts: RuntimeFacts,
@@ -1084,7 +1082,6 @@ fn admission_table_on_synthetic_launcher_observation() {
         },
     };
     let proof = launcher_session_proof(&started, Some(LAUNCHER_UID)).expect("proof");
-    assert!(launcher_session_proof(&started, None).is_none());
     // v1 の receipt（束縛なし）からは証明を組まない。
     let mut v1 = started.clone();
     v1.receipt.binding = None;

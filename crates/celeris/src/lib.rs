@@ -3,7 +3,6 @@
 //! エラーと終了条件の型・再公開）で、配線の本体は `daemon` の下にある（module map は `daemon.rs`）。
 
 mod accounts_admin;
-pub mod cache_server;
 mod cluster_admin;
 pub mod config;
 pub mod control_path;

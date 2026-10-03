@@ -193,8 +193,8 @@ pub struct AuthSectionRegistration {
     pub cdp_target_id: String,
 }
 
-/// ADR-0116 D-L: daemon が launcher から受け取った session 証明を、稼働中 session に結び付ける。
-/// `peer_uid` は daemon が launcher socket の `SO_PEERCRED` で得た UID（採れなければ `None`）、
+/// ADR-0138 D-L: daemon が launcher から受け取った session 証明を、稼働中 session に結び付ける。
+/// `peer_uid` は daemon が launcher の応答の `SCM_CREDENTIALS` で得た送り手の UID（採れなければ `None`、ADR-0116 付記 D-P）、
 /// `instance_id` は daemon が接続した launcher の instance。broker は証明をそのまま信じず、
 /// 本番 [`Admission::Attested`] の度に [`verify_launcher_session`] で実 process と照合する。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,7 +335,7 @@ impl LiveRegistry {
 pub enum Admission {
     /// daemon UID で読める `/proc/<runtime_pid>/{status,mountinfo,stat}` を採り直し、読めない
     /// namespace・userns owner は launcher の束縛（protocol v3）から採って
-    /// `verify_launcher_session` の attestation を要求する（ADR-0116 D-L）。証明が無い・検証に
+    /// `verify_launcher_session` の attestation を要求する（ADR-0138 D-L）。証明が無い・検証に
     /// 失敗した・設定上の launcher UID が無い session は、owner 検査に通っても拒否する。
     Attested,
     /// 試験専用（ADR-0109 D6）: 同一 UID の fixture runtime を通す。attestation は作らない。
@@ -415,7 +415,7 @@ impl Admission {
     }
 }
 
-/// 本番 admission の純粋な判定（ADR-0116 条件 1〜5）。owner を含むすべての隔離条件と launcher の
+/// 本番 admission の純粋な判定（ADR-0138 条件 1〜5）。owner を含むすべての隔離条件と launcher の
 /// session 証明の検証が通ったときだけ attestation を返す。証明なし・検証失敗は fail closed。
 pub fn admit_attested(
     facts: &RuntimeFacts,
@@ -659,7 +659,7 @@ impl InjectionService {
         }
     }
 
-    /// 本番 `Attested` が照合する設定上の launcher UID（ADR-0116 D-L）。設定しなければ
+    /// 本番 `Attested` が照合する設定上の launcher UID（ADR-0138 D-L）。設定しなければ
     /// `Attested` はどの session も許さない。
     pub fn with_launcher_uid(mut self, launcher_uid: Option<u32>) -> Self {
         self.launcher_uid = launcher_uid;

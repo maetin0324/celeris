@@ -321,6 +321,47 @@ fn planned_pages(root: &Path, plan: &ValidatedPlan) -> Result<PageChanges, Strin
     Ok(changes)
 }
 
+/// Worker が返した unified diff の KB path 集合を、検証済み計画の変更 path 集合と照合する。
+/// `inputs/kb/` は worker の入力コピーを指す接頭辞なので比較前に取り除く。
+pub fn check_diff_matches(validated: &ValidatedPlan, worker_diff: &str) -> Result<(), String> {
+    let expected: BTreeSet<String> = validated
+        .kb
+        .iter()
+        .flat_map(|item| std::iter::once(item.path.as_str()).chain(item.target.as_deref()))
+        .map(str::to_owned)
+        .collect();
+    let mut actual = BTreeSet::new();
+    for line in worker_diff.lines() {
+        let header = line
+            .strip_prefix("--- ")
+            .or_else(|| line.strip_prefix("+++ "));
+        let Some(header) = header else { continue };
+        // Unified diff の timestamp は path の後ろに TAB 区切りで付く。
+        let raw_path = header.split_once('\t').map_or(header, |(path, _)| path);
+        if raw_path == "/dev/null" {
+            continue;
+        }
+        let path = raw_path
+            .strip_prefix("a/")
+            .or_else(|| raw_path.strip_prefix("b/"))
+            .unwrap_or(raw_path);
+        let path = path.strip_prefix("inputs/kb/").unwrap_or(path);
+        if !path.is_empty() {
+            actual.insert(path.to_owned());
+        }
+    }
+    if actual == expected {
+        return Ok(());
+    }
+    let missing: Vec<_> = expected.difference(&actual).cloned().collect();
+    let extra: Vec<_> = actual.difference(&expected).cloned().collect();
+    Err(format!(
+        "curation.diff の path が計画と一致しません (不足: [{}]; 余分: [{}])",
+        missing.join(", "),
+        extra.join(", ")
+    ))
+}
+
 fn unified(path: &str, before: Option<&str>, after: Option<&str>) -> String {
     let old = before.unwrap_or_default();
     let new = after.unwrap_or_default();

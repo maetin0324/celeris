@@ -6,22 +6,22 @@ updated: 2026-10-03
 ---
 # cron-jobs gate — main 再取り込みの要否と close の検査
 
-## main の取り込み
+## main の取り込み（attempt 2、2026-10-03）
 
-- 手元の `main` = `af71d4e9d0e2705e692d644564bcd676b83f0e3e`。`sync-main.md` の最後の `merged-main:` 行と同じなので、
-  再取り込みはしていない（新しい `merged-main` 行も足していない）。
-- `git merge-base --is-ancestor main HEAD` → exit 0（HEAD `93abbd39` は main を祖先に含む）。
+- 前回の範囲 check が exit 1。原因は `scripts/dev/check-doc-links.sh`（範囲外）への `FOREIGN_DOCS` 1 行追加。
+  `crates/task-api/src/cron_jobs.rs` 先頭の doc comment が実在しない `docs/celeris-api-v1.md` を指していたのが元なので、
+  参照を実在の `docs/api/cron-jobs.md` に直し、script は merged-main の版へ戻した（`check-doc-links.sh` exit 0）。
+- main が `af71d4e9` から `f8a89553a1ad738b3832138a6e62b7eedebb0b2c` に進んでいたので `git merge --no-ff main` で取り込んだ
+  （衝突なし）。`sync-main.md` の末尾に `merged-main: f8a89553…` を足した。
+- `git merge-base --is-ancestor main HEAD` → exit 0。
+- migration: main は `0041_feed_notices` まで、cron は `0046_cron_jobs` のまま後ろ（`git diff --name-status main HEAD -- crates/task-core/migrations` は A 0046 の 1 件だけ）。
 
-## 差分の範囲（基点 merged-main `af71d4e9`）
+## 差分の範囲（基点 merged-main `f8a89553`）
 
-- `git diff --name-only af71d4e9 HEAD` の上位ディレクトリ: crates 45、gui 11、agent-docs 5、docs 4、scripts 2、
-  config 1、tests 1、Cargo.lock 1。
-- `git diff --stat af71d4e9 HEAD -- web/` → 空（web/ は main と同一）。
-- scripts/ の 2 件は `scripts/dev/check-adr-numbers.sh` と `scripts/dev/check-doc-links.sh`。後者は objective の
-  範囲の列挙に無いが、docs-move 葉（`34d5edcc`）が `FOREIGN_DOCS` に `crates/task-api/src/cron_jobs.rs` を 1 行足した
-  だけ（利用側リポジトリの API 文書参照を live link と誤認しないため。docs-move.md 参照）。
-- main 側の変更の取りこぼし: `git diff --name-status af71d4e9 HEAD` で D（削除）は 0 件。変更（M）は cron 機能の追加と、
-  sync-main.md に記録した衝突解決（config・migration 版数・`knowledge_maint` から cron への移し替え）に限られる。
+- 計画の範囲 check（web/ 同一 + 許可 path 以外なし）→ exit 0。
+- `git diff --name-only f8a89553 HEAD` の上位ディレクトリ: crates 45、gui 11、agent-docs 6、docs 4、config 1、tests 1、
+  Cargo.lock 1、scripts 1（`scripts/dev/check-adr-numbers.sh`）。web/ の差分は空。
+- main 側の変更の取りこぼし: `git diff --name-status f8a89553 HEAD` で D（削除）は 0 件。
 
 ## 検査（exit code と試験数）
 
@@ -51,7 +51,7 @@ updated: 2026-10-03
 | `python3 scripts/dev/check-architecture-map.py` | 0 | — |
 | `sh scripts/dev/progress-index.sh --check` | 0 | — |
 
-修正は不要だった（この葉でのコード変更なし）。
+修正は doc comment の参照 1 行だけ（上記）。検査は取り込み後の HEAD で全部回し直した。
 
 ## 未解決事項
 

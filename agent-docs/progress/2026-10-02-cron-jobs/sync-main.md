@@ -40,3 +40,4 @@ final review の不合格（main を祖先に含まない・merge-tree で衝突
 - `docs/ops/cron-jobs.md` の migration 名・版数を 0046 / 46 に。
 - schema: `cargo test -p task-api` が通ったので `UPDATE_SCHEMA=1` の再生成は不要（gui/web の生成物は main の版のまま）。
 - ADR-0131 本文の `0039_cron_jobs.sql` の記述と ADR の `agent-docs/adr` への移動は docs-move 葉の仕事なので触れていない。
+merged-main: f8a89553a1ad738b3832138a6e62b7eedebb0b2c

@@ -1112,7 +1112,7 @@ async fn relay_stream_passes_through() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn celeris_tier_prefers_the_reachable_relay_when_prefer_free() {
+async fn cheap_only_celeris_cheap_prefers_the_reachable_relay_when_prefer_free() {
     let (relay_addr, _h1) = spawn(relay_router()).await;
     let (anthropic_addr, _h2) = spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
     let accounts_tmp = tempfile::tempdir().expect("tmp");
@@ -1164,7 +1164,7 @@ async fn celeris_tier_prefers_the_reachable_relay_when_prefer_free() {
 }
 
 #[tokio::test]
-async fn celeris_tier_falls_back_to_the_account_pool_when_no_relay_is_reachable() {
+async fn cheap_only_celeris_cheap_falls_back_when_relay_connection_is_refused() {
     let (anthropic_addr, _h2) = spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
     let accounts_tmp = tempfile::tempdir().expect("tmp");
     write_claude_credentials(
@@ -1212,6 +1212,210 @@ async fn celeris_tier_falls_back_to_the_account_pool_when_no_relay_is_reachable(
             .get("x-celeris-source")
             .and_then(|v| v.to_str().ok()),
         Some("claude-oauth")
+    );
+}
+
+#[tokio::test]
+async fn cheap_only_legacy_mappings_never_route_frontier_or_standard_to_qwen() {
+    let (relay_addr, _relay) = spawn(relay_router()).await;
+    let (anthropic_addr, _claude) =
+        spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
+    let accounts = tempfile::tempdir().expect("tmp");
+    write_claude_credentials(
+        accounts.path(),
+        "acct-a",
+        "fake-access-a",
+        "fake-refresh-a",
+        far_future_ms(),
+    );
+    let mut config = LlmProxyConfig {
+        prefer_free: true,
+        ..LlmProxyConfig::default()
+    };
+    config.sources.claude_oauth = Some(claude_source(anthropic_addr, accounts.path().into()));
+    config
+        .sources
+        .openai_compatible
+        .push(OpenAiCompatibleConfig {
+            id: "qwen".into(),
+            base_url: format!("http://{relay_addr}/v1"),
+            api_key: None,
+            enabled: true,
+        });
+    // Even a caller that constructs the config directly must not bypass the tier boundary.
+    config
+        .models
+        .qwen
+        .insert(task_core::Tier::Frontier, "legacy-frontier".into());
+    config
+        .models
+        .qwen
+        .insert(task_core::Tier::Standard, "legacy-standard".into());
+    let state = ProxyState::new(
+        config,
+        reqwest::Client::new(),
+        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
+        None,
+        None,
+        SharedRole::default(),
+        None,
+        std::time::Duration::from_secs(5),
+    );
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let view = state.sources_view(now).await;
+    for tier in ["frontier", "standard"] {
+        assert_eq!(
+            view.celeris_tiers
+                .iter()
+                .find(|v| v.tier == tier)
+                .unwrap()
+                .resolves_to
+                .as_deref(),
+            Some("claude-oauth")
+        );
+    }
+    assert_eq!(
+        view.celeris_tiers
+            .iter()
+            .find(|v| v.tier == "cheap")
+            .unwrap()
+            .resolves_to
+            .as_deref(),
+        Some("openai-compatible:qwen")
+    );
+
+    let (addr, _proxy) = spawn(router(state)).await;
+    let client = reqwest::Client::new();
+    for tier in ["frontier", "standard", "cheap"] {
+        let resp = post_chat(
+            &client,
+            addr,
+            &chat_request(&format!("celeris/{tier}"), false),
+            None,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let expected = if tier == "cheap" {
+            "openai-compatible:qwen"
+        } else {
+            "claude-oauth"
+        };
+        assert_eq!(resp.headers().get("x-celeris-source").unwrap(), expected);
+    }
+    for tier in ["frontier", "standard"] {
+        let resp = post_chat(
+            &client,
+            addr,
+            &chat_request(&format!("qwen/{tier}"), false),
+            None,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
+
+#[tokio::test]
+async fn cheap_only_relay_send_failure_falls_back_to_claude_cheap() {
+    let broken_relay = Router::new().route("/v1/models", get(relay_models)).route(
+        "/v1/chat/completions",
+        post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+    );
+    let (relay_addr, _relay) = spawn(broken_relay).await;
+    let (anthropic_addr, _claude) =
+        spawn(anthropic_router(Arc::new(AnthropicFake::default()))).await;
+    let accounts = tempfile::tempdir().expect("tmp");
+    write_claude_credentials(
+        accounts.path(),
+        "acct-a",
+        "fake-access-a",
+        "fake-refresh-a",
+        far_future_ms(),
+    );
+    let mut config = LlmProxyConfig {
+        prefer_free: true,
+        ..LlmProxyConfig::default()
+    };
+    config.sources.claude_oauth = Some(claude_source(anthropic_addr, accounts.path().into()));
+    config
+        .sources
+        .openai_compatible
+        .push(OpenAiCompatibleConfig {
+            id: "qwen".into(),
+            base_url: format!("http://{relay_addr}/v1"),
+            api_key: None,
+            enabled: true,
+        });
+    let state = ProxyState::new(
+        config,
+        reqwest::Client::new(),
+        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
+        None,
+        None,
+        SharedRole::default(),
+        None,
+        std::time::Duration::from_secs(5),
+    );
+    let (addr, _proxy) = spawn(router(state)).await;
+    let resp = post_chat(
+        &reqwest::Client::new(),
+        addr,
+        &chat_request("celeris/cheap", false),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("x-celeris-source").unwrap(),
+        "claude-oauth"
+    );
+}
+
+#[tokio::test]
+async fn cheap_only_unreachable_qwen_falls_back_to_gpt_cheap() {
+    let (codex_addr, _codex) = spawn(codex_router(Arc::new(CodexFake::default()))).await;
+    let accounts = tempfile::tempdir().expect("tmp");
+    write_codex_credentials(
+        accounts.path(),
+        "acct-g",
+        "fake-gpt-access",
+        "fake-gpt-refresh",
+    );
+    let mut config = LlmProxyConfig {
+        prefer_free: true,
+        ..LlmProxyConfig::default()
+    };
+    config.sources.codex_oauth = Some(codex_source(codex_addr, accounts.path().into()));
+    config
+        .sources
+        .openai_compatible
+        .push(OpenAiCompatibleConfig {
+            id: "qwen".into(),
+            base_url: "http://127.0.0.1:1/v1".into(),
+            api_key: None,
+            enabled: true,
+        });
+    let state = ProxyState::new(
+        config,
+        reqwest::Client::new(),
+        None,
+        Some(Arc::new(StdMutex::new(AccountBook::new_in_memory()))),
+        None,
+        SharedRole::default(),
+        None,
+        std::time::Duration::from_secs(5),
+    );
+    let (addr, _proxy) = spawn(router(state)).await;
+    let resp = post_chat(
+        &reqwest::Client::new(),
+        addr,
+        &chat_request("celeris/cheap", false),
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("x-celeris-source").unwrap(),
+        "codex-oauth"
     );
 }
 
@@ -1272,7 +1476,7 @@ async fn embeddings_are_not_implemented() {
 }
 
 #[tokio::test]
-async fn models_lists_only_the_configured_sources() {
+async fn cheap_only_models_lists_only_the_configured_sources() {
     let mut config = base_config();
     config
         .sources
@@ -1305,7 +1509,9 @@ async fn models_lists_only_the_configured_sources() {
         .map(|m| m["id"].as_str().unwrap_or_default().to_string())
         .collect();
     assert!(ids.contains(&"celeris/cheap".to_string()));
-    assert!(ids.contains(&"qwen/standard".to_string()));
+    assert!(ids.contains(&"qwen/cheap".to_string()));
+    assert!(!ids.contains(&"qwen/standard".to_string()));
+    assert!(!ids.contains(&"qwen/frontier".to_string()));
     assert!(!ids.iter().any(|id| id.starts_with("claude/")));
     assert!(!ids.iter().any(|id| id.starts_with("gpt/")));
 }

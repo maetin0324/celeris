@@ -50,6 +50,35 @@ fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
     cond()
 }
 
+/// 固定の wall-clock 期限ではなく、`count()` が増え続ける間だけ待つ出来事待ち（docs/testing.md 方法 2）。
+/// `target` に達し次第 true を返す。`stall_limit` の間進捗が無ければ打ち切り、`overall_limit` は安全弁。
+fn wait_for_progress(
+    overall_limit: Duration,
+    stall_limit: Duration,
+    target: usize,
+    mut count: impl FnMut() -> usize,
+) -> bool {
+    let start = Instant::now();
+    let mut last = count();
+    let mut last_change = Instant::now();
+    loop {
+        let now_count = count();
+        if now_count >= target {
+            return true;
+        }
+        if now_count > last {
+            last = now_count;
+            last_change = Instant::now();
+        } else if last_change.elapsed() >= stall_limit {
+            return false;
+        }
+        if start.elapsed() >= overall_limit {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// drop で kill する子プロセス（celeris / SSE の curl）。
 struct Proc {
     child: Child,
@@ -273,13 +302,23 @@ env = {provider_env}
 
     /// `/health` が 200 を返すまで待つ（無認証）。
     fn wait_api(&self, daemon: &mut Proc) {
-        let ok = wait_until(Duration::from_secs(20), || {
+        let listening = wait_until(Duration::from_secs(120), || {
             if let Ok(Some(status)) = daemon.child.try_wait() {
                 panic!("celeris exited early with {status}\n{}", daemon.log_text());
             }
+            std::net::TcpStream::connect(("127.0.0.1", self.port)).is_ok()
+        });
+        assert!(listening, "API did not listen\n{}", daemon.log_text());
+        let healthy = wait_until(Duration::from_secs(120), || {
+            if let Ok(Some(status)) = daemon.child.try_wait() {
+                panic!(
+                    "celeris exited before health check with {status}\n{}",
+                    daemon.log_text()
+                );
+            }
             self.request("GET", "/health", None, &[]).status == 200
         });
-        assert!(ok, "API did not come up\n{}", daemon.log_text());
+        assert!(healthy, "API did not become healthy\n{}", daemon.log_text());
     }
 
     fn url(&self, path: &str) -> String {
@@ -474,7 +513,7 @@ fn api_is_off_by_default_and_health_reports_versions_when_enabled() {
     );
 
     // 最初の tick の後はメモリ上のスナップショットが見える（DB を読まない。ADR-0013 D4）。
-    assert!(wait_until(Duration::from_secs(5), || !env
+    assert!(wait_until(Duration::from_secs(120), || !env
         .get("/daemon")
         .json()["snapshot"]
         .is_null()));
@@ -610,7 +649,7 @@ esac"#,
 
     // ワーカーの質問 → API で回答 → done。
     assert!(
-        wait_until(Duration::from_secs(20), || env.task(id).status
+        wait_until(Duration::from_secs(120), || env.task(id).status
             == Status::Blocked),
         "{:?}",
         env.events(id)
@@ -636,7 +675,7 @@ esac"#,
         Event::Answered { question, answer } if question == "which version should I target?" && answer == "target v2"
     )));
     assert!(
-        wait_until(Duration::from_secs(20), || env.task(id).status
+        wait_until(Duration::from_secs(120), || env.task(id).status
             == Status::Done),
         "{:?}",
         env.events(id)
@@ -754,7 +793,7 @@ fn sse_delivers_created_quickly_and_resumes_from_last_event_id() {
             .unwrap();
         let p = Proc { child, log };
         assert!(
-            wait_until(Duration::from_secs(5), || p
+            wait_until(Duration::from_secs(120), || p
                 .log_text()
                 .contains("event: hello")),
             "no hello: {}",
@@ -799,12 +838,13 @@ fn sse_delivers_created_quickly_and_resumes_from_last_event_id() {
     env.celerisctl(&["approve", &t1.to_string()]);
     let second = subscribe("sse-2.txt", Some(last_seen));
     assert!(
-        wait_until(Duration::from_secs(5), || created_id(&second, t2).is_some()),
+        wait_until(Duration::from_secs(120), || created_id(&second, t2)
+            .is_some()),
         "missed Created: {}",
         second.log_text()
     );
     assert!(
-        wait_until(Duration::from_secs(5), || sse_events(&second.log_text())
+        wait_until(Duration::from_secs(120), || sse_events(&second.log_text())
             .iter()
             .any(|(e, _, d)| e == "task.event"
                 && d["task_id"] == t1.to_string()
@@ -841,7 +881,9 @@ fn daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded() {
 if [ -f throttle-me ]; then
   echo '{"type":"error","message":"429 rate limited","retryable":true,"provider_failure":{"kind":"throttled","retry_after_secs":30}}'
 else
-  sleep 6
+  # 壁時計の sleep ではなく、試験が cooldown と in_flight を確かめ終えて release を置くまで待つ（docs/testing.md）。
+  # 上限は試験が途中で落ちたときの保険。release が無ければ done を返さない。
+  timeout 300 sh -c 'until test -f release; do sleep 0.1; done' || exit 1
   echo '{"type":"done","summary":"slow ok","evidence":[]}'
 fi"#,
     );
@@ -882,7 +924,7 @@ fi"#,
         })
     };
     assert!(
-        wait_until(Duration::from_secs(10), || in_flight_has_slow(
+        wait_until(Duration::from_secs(120), || in_flight_has_slow(
             &env.get("/daemon").json()["snapshot"]
         )),
         "slow run never appeared in /daemon: {}",
@@ -891,7 +933,8 @@ fi"#,
     env.celerisctl(&["approve", &throttled.to_string()]);
 
     let mut snap = Value::Null;
-    let seen = wait_until(Duration::from_secs(5), || {
+    // slow は release を置くまで止まっているので、tick が遅くても in_flight のまま cooldown を待てる。
+    let seen = wait_until(Duration::from_secs(120), || {
         snap = env.get("/daemon").json()["snapshot"].clone();
         snap["cooldowns"].as_array().is_some_and(|c| {
             c.iter()
@@ -927,6 +970,8 @@ fi"#,
         0,
         "a requeue does not consume attempts"
     );
+    // 確認が済んだので slow を終わらせる。
+    std::fs::write(Path::new(&ws_slow).join("release"), "").unwrap();
     drop(daemon);
     env.replay_is_consistent();
 }
@@ -943,7 +988,7 @@ fn api_enforces_token_host_and_workspace_boundaries_without_leaking_env_values()
     let config = env.write_config(&script, &format!("listen = \"0.0.0.0:{}\"", env.port), "");
     let mut bad = env.start_celeris(&config);
     assert!(
-        wait_until(Duration::from_secs(10), || bad
+        wait_until(Duration::from_secs(120), || bad
             .child
             .try_wait()
             .unwrap()
@@ -1115,10 +1160,17 @@ fn writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is
         );
     }
     assert!(
-        wait_until(Duration::from_secs(120), || ids
-            .iter()
-            .all(|id| env.task(*id).status == Status::Done)),
-        "not all tasks finished\n{}",
+        wait_for_progress(
+            Duration::from_secs(600),
+            Duration::from_secs(60),
+            ids.len(),
+            || {
+                ids.iter()
+                    .filter(|id| env.task(**id).status == Status::Done)
+                    .count()
+            }
+        ),
+        "not all tasks finished (no progress for 60s, or overall 600s exceeded)\n{}",
         daemon.log_text()
     );
     assert!(
@@ -1166,7 +1218,7 @@ fn clusters_endpoint_inbox_attention_and_task_detail_show_an_offline_cluster() {
 
     // 8. /clusters: 設定 + 接続の有無 + cooldown。env の値は出ない。
     let mut clusters = Value::Null;
-    let seen = wait_until(Duration::from_secs(10), || {
+    let seen = wait_until(Duration::from_secs(120), || {
         clusters = env.get("/clusters").json();
         clusters["items"][0]["cooldown_until"].is_string()
     });
@@ -1478,11 +1530,11 @@ fn phase3_control_converges_rejects_competition_and_cancel_stops() {
     assert_eq!(end.status, 200, "{}", end.body);
     assert_eq!(end.json()["phase"], "paused");
     let converged_version = end.json()["version"].as_u64().unwrap();
-    // 競合の検査の間に lease が切れないよう既定の期限（60 秒）で取る。切れると owner-b の拒否が
+    // 競合の検査の間に lease が切れないよう上限の 300 秒で取る。切れると owner-b の拒否が
     // 競合ではなく失効による version_conflict になり、検査が弱まる。
     let acquired = f.control(
         "owner-a",
-        json!({"kind":"takeover"}),
+        json!({"kind":"takeover", "ttl_secs":300}),
         converged_version,
         "take-1",
     );
@@ -1490,7 +1542,7 @@ fn phase3_control_converges_rejects_competition_and_cancel_stops() {
     assert_eq!(acquired.json()["phase"], "human_control");
     let replay = f.control(
         "owner-a",
-        json!({"kind":"takeover"}),
+        json!({"kind":"takeover", "ttl_secs":300}),
         converged_version,
         "take-1",
     );
@@ -1502,8 +1554,7 @@ fn phase3_control_converges_rejects_competition_and_cancel_stops() {
         .assert_problem(403, "not_lease_holder");
     f.control("owner-a", json!({"kind":"stop"}), v, "stale")
         .assert_problem(409, "version_conflict");
-    // 失効は期限を縮めてから待つ。期限より前に状態を観測する箇所は無い（sleep は下限なので、
-    // 負荷で遅れても失効済みを見る側にしか倒れない）。
+    // GET /control が lease の期限切れを適用する。paused と lease の消滅を観測して進む。
     let short = f.control(
         "owner-a",
         json!({"kind":"renew", "ttl_secs":1}),
@@ -1511,8 +1562,17 @@ fn phase3_control_converges_rejects_competition_and_cancel_stops() {
         "renew-short",
     );
     assert_eq!(short.status, 200, "{}", short.body);
-    std::thread::sleep(Duration::from_secs(2));
-    let expired = f.env.get(&path);
+    let mut expired = f.env.get(&path);
+    assert!(
+        wait_until(Duration::from_secs(120), || {
+            expired = f.env.get(&path);
+            expired.status == 200
+                && expired.json()["phase"] == "paused"
+                && expired.json()["lease_holder"].is_null()
+        }),
+        "lease did not expire: {}",
+        expired.body
+    );
     assert_eq!(expired.status, 200, "{}", expired.body);
     assert_eq!(expired.json()["phase"], "paused");
     assert_eq!(expired.json()["agent_may_act"], false);

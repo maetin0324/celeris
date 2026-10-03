@@ -2,17 +2,23 @@ import { describe, expect, it } from "vitest";
 import type { LlmSourceView } from "~/celeris/types";
 import {
   allAccountsCoolingDown,
+  CLAUDE_ALL_COOLDOWN_FALLBACK_NOTE,
   cooldownRemainingLabel,
   cooldownUntilTitle,
   formatRemaining,
   forwardStatusWord,
   isAccountCoolingDown,
+  llmSourceOriginLabel,
+  providerLlmSourceDisplay,
+  sourceKindLabel,
   sourceLabel,
   sourceStatusWord,
+  sourceTierScopeNote,
   tierLabel,
   tierResolutionLabel,
   tierResolutionReason,
   tierResolutionReasonLabel,
+  tiersResolvingTo,
 } from "~/lib/llm-sources";
 
 describe("sourceLabel", () => {
@@ -191,28 +197,124 @@ describe("tierResolutionReason", () => {
   };
 
   it("says there is no candidate when nothing resolved", () => {
-    expect(tierResolutionReason(null, [], 1_000)).toBe("no-source");
-    expect(tierResolutionReason(undefined, [claudeNoCooldown], 1_000)).toBe("no-source");
+    expect(tierResolutionReason("cheap", null, [], 1_000)).toBe("no-source");
+    expect(tierResolutionReason("cheap", undefined, [claudeNoCooldown], 1_000)).toBe("no-source");
   });
 
   it("is free-first when the resolved source is the free relay (ADR-0053 D1(a))", () => {
-    expect(tierResolutionReason("openai-compatible:qwen", [qwenReachable, claudeNoCooldown], 1_000)).toBe("free-first");
+    expect(tierResolutionReason("cheap", "openai-compatible:qwen", [qwenReachable, claudeNoCooldown], 1_000)).toBe(
+      "free-first",
+    );
   });
 
   it("is unreachable when an oauth pool won only because the free relay is down", () => {
-    expect(tierResolutionReason("claude-oauth", [qwenUnreachable, claudeNoCooldown], 1_000)).toBe("unreachable");
+    expect(tierResolutionReason("cheap", "claude-oauth", [qwenUnreachable, claudeNoCooldown], 1_000)).toBe(
+      "unreachable",
+    );
   });
 
   it("is cooldown when the pool has a cooling account and no unreachable free relay explains it", () => {
-    expect(tierResolutionReason("claude-oauth", [claudeCooling], 1_000)).toBe("cooldown");
+    expect(tierResolutionReason("cheap", "claude-oauth", [claudeCooling], 1_000)).toBe("cooldown");
   });
 
   it("is unknown for a plain oauth resolution (no free relay, no cooldown)", () => {
-    expect(tierResolutionReason("claude-oauth", [claudeNoCooldown], 1_000)).toBe("unknown");
+    expect(tierResolutionReason("cheap", "claude-oauth", [claudeNoCooldown], 1_000)).toBe("unknown");
   });
 
   it("is unknown when the resolved id is not among the known sources", () => {
-    expect(tierResolutionReason("codex-oauth", [claudeNoCooldown], 1_000)).toBe("unknown");
+    expect(tierResolutionReason("cheap", "codex-oauth", [claudeNoCooldown], 1_000)).toBe("unknown");
+  });
+});
+
+/** ADR-0132 D3: Qwen を優先・倒れ先の理由にするのは cheap だけ。frontier / standard は Qwen を候補にしない。 */
+describe("tierResolutionReason (cheap-only Qwen, ADR-0132)", () => {
+  type Src = Pick<LlmSourceView, "id" | "kind" | "enabled" | "reachable" | "accounts">;
+  const qwenDown: Src = {
+    id: "openai-compatible:qwen",
+    kind: "openai-compatible",
+    enabled: true,
+    reachable: false,
+    accounts: [],
+  };
+  const qwenUp: Src = { ...qwenDown, reachable: true };
+  const claude: Src = { id: "claude-oauth", kind: "claude-oauth", enabled: true, accounts: [] };
+
+  it("never explains frontier / standard by the Qwen relay", () => {
+    for (const tier of ["frontier", "standard"]) {
+      expect(tierResolutionReason(tier, "claude-oauth", [qwenDown, claude], 1_000)).toBe("unknown");
+      expect(tierResolutionReason(tier, "openai-compatible:qwen", [qwenUp, claude], 1_000)).toBe("unknown");
+    }
+  });
+
+  it("explains cheap by Qwen first, and by the Claude / GPT fallback when Qwen is down", () => {
+    expect(tierResolutionReason("cheap", "openai-compatible:qwen", [qwenUp, claude], 1_000)).toBe("free-first");
+    expect(tierResolutionReason("cheap", "claude-oauth", [qwenDown, claude], 1_000)).toBe("unreachable");
+  });
+
+  it("scopes the Qwen labels to cheap", () => {
+    expect(tierResolutionReasonLabel("free-first")).toContain("cheap");
+    expect(tierResolutionReasonLabel("unreachable")).toContain("cheap");
+    expect(tierResolutionReasonLabel("free-first")).not.toBe("無料の Qwen が使えるため優先しています");
+  });
+
+  it("says only celeris/cheap falls back to Qwen when every Claude account cools down", () => {
+    expect(CLAUDE_ALL_COOLDOWN_FALLBACK_NOTE).toContain("Qwen を使うのは celeris/cheap だけ");
+    expect(CLAUDE_ALL_COOLDOWN_FALLBACK_NOTE).toContain(
+      "celeris/frontier と celeris/standard は Codex の GPT に倒れます",
+    );
+  });
+});
+
+describe("providerLlmSourceDisplay (ADR-0132 D6)", () => {
+  it("shows celeris as a runtime choice by the proxy, not a fixed Qwen", () => {
+    const d = providerLlmSourceDisplay({ source: "celeris", origin: "derived" });
+    expect(d.label).toBe("celeris/<tier>（proxy）");
+    expect(d.label).not.toContain("Qwen");
+    expect(d.note).toContain("実行時に proxy");
+    expect(d.note).toContain("cheap だけ");
+    expect(d.sourceId).toBeNull();
+    expect(llmSourceOriginLabel(d.origin)).toBe("旧設定から推定");
+  });
+
+  it("maps the oauth pools and an openai-compatible relay to /llm/sources ids", () => {
+    expect(providerLlmSourceDisplay({ source: "claude_oauth", origin: "explicit" })).toMatchObject({
+      label: "Claude OAuth",
+      sourceId: "claude-oauth",
+      origin: "explicit",
+    });
+    expect(providerLlmSourceDisplay({ source: "codex_oauth", origin: "derived" }).sourceId).toBe("codex-oauth");
+    const qwen = providerLlmSourceDisplay({ source: "openai_compatible:qwen", origin: "derived" });
+    expect(qwen.label).toBe("OpenAI 互換: qwen");
+    expect(qwen.sourceId).toBe("openai-compatible:qwen");
+    expect(qwen.note).toContain("cheap だけ");
+  });
+
+  it("does not guess Qwen for unknown or missing references", () => {
+    expect(providerLlmSourceDisplay({ source: "unknown", origin: "derived" }).label).toBe("不明");
+    expect(providerLlmSourceDisplay(null).label).toBe("不明");
+    expect(providerLlmSourceDisplay(undefined).origin).toBeNull();
+    expect(providerLlmSourceDisplay({ source: "none", origin: "explicit" }).label).toBe("なし");
+  });
+});
+
+describe("source section helpers (ADR-0132 D6)", () => {
+  it("labels kinds and scopes OpenAI-compatible sources to cheap", () => {
+    expect(sourceKindLabel("claude-oauth")).toBe("Claude OAuth");
+    expect(sourceKindLabel("openai-compatible")).toBe("OpenAI 互換");
+    expect(sourceKindLabel("other")).toBe("other");
+    expect(sourceTierScopeNote("openai-compatible")).toContain("celeris/cheap にだけ");
+    expect(sourceTierScopeNote("claude-oauth")).toBeNull();
+  });
+
+  it("lists the tiers currently resolving to a source", () => {
+    const tiers = [
+      { tier: "frontier", resolves_to: "claude-oauth" },
+      { tier: "standard", resolves_to: "claude-oauth" },
+      { tier: "cheap", resolves_to: "openai-compatible:qwen" },
+    ];
+    expect(tiersResolvingTo("claude-oauth", tiers)).toEqual(["frontier", "standard"]);
+    expect(tiersResolvingTo("openai-compatible:qwen", tiers)).toEqual(["cheap"]);
+    expect(tiersResolvingTo("codex-oauth", undefined)).toEqual([]);
   });
 });
 

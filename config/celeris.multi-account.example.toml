@@ -45,6 +45,8 @@ tier = "standard"
 
 [[providers]]
 id = "claude-a"
+kind = "adapter"
+llm_source = "claude_oauth"
 adapter = "claude-code"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 2
@@ -53,6 +55,8 @@ env = { CLAUDE_CONFIG_DIR = "/home/USER/.claude-accounts/a" }
 
 [[providers]]
 id = "claude-b"
+kind = "adapter"
+llm_source = "claude_oauth"
 adapter = "claude-code"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 2
@@ -61,6 +65,8 @@ env = { CLAUDE_CONFIG_DIR = "/home/USER/.claude-accounts/b" }
 
 [[providers]]
 id = "codex-a"
+kind = "adapter"
+llm_source = "codex_oauth"
 adapter = "codex"
 tiers = ["standard", "cheap"]
 concurrency = 1

@@ -217,6 +217,52 @@ fn host_config_read_only_skips_missing_paths() {
     );
 }
 
+/// ADR-0136: 本番 config を使わず、解決済みの hot mount と releases を直接注入する。
+/// 旧 home の保護対象は設定済み path が増えても残す。
+#[test]
+fn worker_db_guard_protected_set_includes_configured_hot_paths_and_legacy_home() {
+    let f = fixture();
+    let home = f._tmp.path().join("home");
+    for rel in HOST_CONFIG_DIRS {
+        std::fs::create_dir_all(home.join(rel)).unwrap();
+    }
+    let hot = f._tmp.path().join("local");
+    let releases = hot.join("celeris/state/releases");
+    std::fs::create_dir_all(&releases).unwrap();
+    let alias = f._tmp.path().join("releases-alias");
+    std::os::unix::fs::symlink(&releases, &alias).unwrap();
+    let guard = guard(&f)
+        .with_home(Some(home.clone()))
+        .with_hot_mount(Some(hot.clone()))
+        .with_releases_dir(alias);
+
+    let protected = guard.host_config_read_only_paths().unwrap();
+    for rel in HOST_CONFIG_DIRS {
+        assert!(protected.contains(&std::fs::canonicalize(home.join(rel)).unwrap()));
+    }
+    assert!(protected.contains(&std::fs::canonicalize(hot).unwrap()));
+    assert!(protected.contains(&std::fs::canonicalize(releases).unwrap()));
+    assert_eq!(protected.len(), HOST_CONFIG_DIRS.len() + 2);
+}
+
+#[test]
+fn worker_db_guard_refuses_missing_configured_releases() {
+    let f = fixture();
+    let releases_guard = guard(&f).with_releases_dir(f._tmp.path().join("missing-releases"));
+    assert_eq!(
+        releases_guard
+            .host_config_read_only_paths()
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
+    let guard = guard(&f).with_hot_mount(Some(f._tmp.path().join("missing-hot-mount")));
+    assert_eq!(
+        guard.host_config_read_only_paths().unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
 /// 付記 D-a の 3 / D5: 存在を確かめられない（EACCES）なら spawn の準備が失敗する（保護なしで起動しない）。
 #[test]
 fn host_config_read_only_failure_refuses_the_spawn() {

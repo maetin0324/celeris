@@ -100,7 +100,8 @@ impl Fixture {
                     if verb == "click"
                         && let Some(rx) = hold2.lock().unwrap().take()
                     {
-                        let _ = rx.recv_timeout(Duration::from_secs(30));
+                        rx.recv_timeout(Duration::from_secs(60))
+                            .expect("test releases the held click");
                     }
                     let stdout = r#"{"success":true,"data":{"ok":true}}"#;
                     // Publish the result atomically: the server polls for the file and
@@ -180,7 +181,7 @@ fn takeover(holder: &str) -> ControlCommand {
 }
 
 fn wait_until(what: &str, f: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !f() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(10));

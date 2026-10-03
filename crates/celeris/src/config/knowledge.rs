@@ -62,13 +62,18 @@ impl Default for KnowledgeConfig {
 
 /// `[knowledge.langmem]`（ADR-0047 D4）: 知識整理 run のトリガと LLM の接続先。
 ///
+/// ADR-0132 D4: LangMem は Qwen 専用ではない普通の道具。接続先は celeris の llm-proxy、モデルは
+/// 抽象名 `celeris/cheap` を既定の書き方とする（Qwen が生きていれば proxy が Qwen を選び、落ちていれば
+/// Claude / GPT の cheap に倒す。ADR-0132 D3）。dispatch 前の到達性 probe（ADR-0052 D1）はこの
+/// `base_url`（proxy）を検査し、proxy 自体に届かないときだけ cheap の汎用ハーネスへ倒す（ADR-0052 D2）。
+///
 /// ```toml
 /// [knowledge.langmem]
 /// enabled = true
 /// provider = "openai-compatible"   # "openai-compatible" | "anthropic"
-/// base_url = "http://bnode150:18000/v1"
-/// model = "qwen3.8-27b"
-/// api_key_secret = "langmem-openai-key"   # [secrets] の下の id。無ければ渡さない
+/// base_url = "http://127.0.0.1:18100/v1"   # celeris の llm-proxy
+/// model = "celeris/cheap"
+/// api_key_secret = "llm-proxy-token"   # [secrets] の下の id。proxy は bearer を要求する
 /// max_related_pages = 10
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -168,5 +173,113 @@ impl KnowledgeConfig {
             )));
         }
         Ok(())
+    }
+}
+
+/// ADR-0139 D2: `base_url`（`http://host:port/...`）が同じ celeris の llm-proxy を指すか。
+/// `[llm_proxy]` が有効で、ポートが `listen` と同じ、かつ host が loopback か `listen` の IP のとき。
+fn targets_llm_proxy(base_url: &str, proxy: &llm_proxy::config::LlmProxyConfig) -> bool {
+    if !proxy.effective_enabled() {
+        return false;
+    }
+    let rest = base_url
+        .strip_prefix("http://")
+        .or_else(|| base_url.strip_prefix("https://"))
+        .unwrap_or(base_url);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return false;
+    };
+    let Ok(port) = port.parse::<u16>() else {
+        return false;
+    };
+    if port != proxy.listen.port() {
+        return false;
+    }
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback() || ip == proxy.listen.ip(),
+        Err(_) => false,
+    }
+}
+
+impl Config {
+    /// ADR-0139 D2: `[knowledge.langmem].base_url` が同じ celeris の llm-proxy を指すか。
+    pub fn langmem_targets_llm_proxy(&self) -> bool {
+        self.knowledge
+            .langmem
+            .base_url
+            .as_deref()
+            .is_some_and(|url| targets_llm_proxy(url, &self.llm_proxy))
+    }
+
+    /// ADR-0139 D2: langmem（とその dispatch 前 probe）に渡す鍵。proxy を指すなら proxy が照合する
+    /// `[api] token_file` の値（読めなければ `api_key_secret` に倒す）。それ以外は `api_key_secret` を
+    /// `[secrets] dir` から解決した値。**値はログに出さない**。
+    pub fn langmem_api_key(&self) -> Option<String> {
+        if self.langmem_targets_llm_proxy()
+            && let Ok(Some(token)) = self.api.read_token()
+        {
+            return Some(token);
+        }
+        self.langmem_secret_key()
+    }
+
+    fn langmem_secret_key(&self) -> Option<String> {
+        let id = self.knowledge.langmem.api_key_secret.as_deref()?;
+        crate::resolve_secret(self.secrets.as_ref().map(|s| s.dir.as_path()), id)
+    }
+
+    /// ADR-0139 D3: 知識整理 run が bearer を持たずに起きる・食い違う設定を、run を起こす前に知らせる
+    /// （`Config::load` が `warn!` で出す）。`[knowledge.langmem]` が無効なら空。値は含めない。
+    pub fn langmem_auth_warnings(&self) -> Vec<String> {
+        let lm = &self.knowledge.langmem;
+        if !lm.enabled {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if self.langmem_targets_llm_proxy() {
+            match self.api.read_token() {
+                Ok(Some(token)) => {
+                    if lm.api_key_secret.is_some()
+                        && self.langmem_secret_key().is_some_and(|key| key != token)
+                    {
+                        out.push(
+                            "[knowledge.langmem].api_key_secret differs from the [api] token that \
+                             llm-proxy checks; langmem uses the [api] token (ADR-0139 D2)"
+                                .to_string(),
+                        );
+                    }
+                }
+                Ok(None) | Err(_) => {
+                    if self.langmem_secret_key().is_none() {
+                        out.push(
+                            "[knowledge.langmem].base_url points at llm-proxy but neither [api] \
+                             token_file nor api_key_secret is readable; langmem runs will get 401 \
+                             (ADR-0139 D3)"
+                                .to_string(),
+                        );
+                    } else {
+                        out.push(
+                            "[knowledge.langmem].base_url points at llm-proxy but [api] token_file \
+                             is not readable; falling back to api_key_secret (ADR-0139 D3)"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        } else if let Some(id) = &lm.api_key_secret
+            && self.langmem_secret_key().is_none()
+        {
+            out.push(format!(
+                "[knowledge.langmem].api_key_secret {id:?} cannot be resolved from [secrets] dir; \
+                 langmem runs start without an API key (ADR-0139 D3)"
+            ));
+        }
+        out
     }
 }

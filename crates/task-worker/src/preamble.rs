@@ -718,11 +718,12 @@ pub struct RepoNote {
 /// `repos_note` の後ろに足す 1 行（ディスパッチャが `shared_build_cache` の設定を見て呼ぶかどうかを決める。
 /// ここは文面だけの純粋関数）。ADR-0075 D7（Phase G1）: target は Celeris が渡すローカルの scratch
 /// （owner ごと）になったので、文言を「自分で決めない・`/tmp` と worktree 直下に置かない」にした。
+/// ADR-0129 (1): sccache は Celeris から外し、compiler wrapper は host の cargo 設定に任せる。
 pub fn shared_build_cache_note() -> &'static str {
     "`target/` は Celeris が渡した `CARGO_TARGET_DIR`（ローカルの scratch）を使う。`CARGO_TARGET_DIR` を\
      自分で決めない。`/tmp` と worktree 直下に target を置かない。\n\
-     `RUSTC_WRAPPER`（sccache）・`SCCACHE_*`・`CARGO_INCREMENTAL`・`CARGO_PROFILE_DEV_DEBUG` も Celeris が渡した値のまま使い、\
-     上書き・unset しない（sccache の server は起こさない・止めない）。\n"
+     `RUSTC_WRAPPER` 等のコンパイラ wrapper は host の cargo 設定に任せる（Celeris は設定しない）。\
+     `CARGO_TARGET_DIR`・`CARGO_INCREMENTAL`・`CARGO_PROFILE_DEV_DEBUG` は渡された値のまま使う。\n"
 }
 
 /// ADR-0043 D2 / D8: タスクが複数のリポジトリを持つときの「作業場所」の本文（純粋関数）。
@@ -957,7 +958,8 @@ pub(crate) fn deliverables_placement_note() -> String {
 pub(crate) fn production_host_note() -> String {
     "## 本番 host の操作 (production host changes)\n\
      本番 host の操作は人が実行する手順として書く（`systemctl --user`・`systemd-run`・\
-     `~/.config/systemd`・`~/.local/celeris/releases`・`~/.config/celeris` の変更、daemon の\
+     `~/.config/systemd`・`~/.local/celeris/releases`・`/local`・`/local/celeris/state/releases`・\
+     `~/.config/celeris` の変更、daemon の\
      再起動・差し替え、本番 DB への書き込みはしない）。必要なら、人が実行する手順（コマンドと\
      確認方法）を成果物に書き、計画では人の決定（decisions）または人の check を置く（ADR-0095 \
      付記 D-d）。\n\n"

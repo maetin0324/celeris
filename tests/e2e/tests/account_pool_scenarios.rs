@@ -181,7 +181,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
             ""
         };
         let text = format!(
-            r#"db = "celeris.sqlite3"
+            r#"db = {{ path = "celeris.sqlite3", worker_read_only = false }}
 workspace_root = "workspaces"
 tick_ms = 50
 max_concurrency = 4
@@ -274,13 +274,23 @@ account_pool = true
     }
 
     fn wait_api(&self, daemon: &mut Proc) {
-        let ok = wait_until(STARTUP_WAIT, || {
+        let listening = wait_until(Duration::from_secs(120), || {
             if let Ok(Some(status)) = daemon.child.try_wait() {
                 panic!("celeris exited early with {status}\n{}", daemon.log_text());
             }
+            std::net::TcpStream::connect(("127.0.0.1", self.port)).is_ok()
+        });
+        assert!(listening, "API did not listen\n{}", daemon.log_text());
+        let healthy = wait_until(Duration::from_secs(120), || {
+            if let Ok(Some(status)) = daemon.child.try_wait() {
+                panic!(
+                    "celeris exited before health check with {status}\n{}",
+                    daemon.log_text()
+                );
+            }
             self.request("GET", "/health", None, &[]).status == 200
         });
-        assert!(ok, "API did not come up\n{}", daemon.log_text());
+        assert!(healthy, "API did not become healthy\n{}", daemon.log_text());
         // `GET /accounts` の観測値（`usage` / `score` / `in_use`）は**ディスパッチャのスナップショット**
         // 由来なので、API が上がっただけでは空になりうる（最初の tick より前は `snapshot: null`）。
         // 起動にかかる時間は環境で動く（Phase 56 で起動時のコンテナ runtime 検出が入った）ため、

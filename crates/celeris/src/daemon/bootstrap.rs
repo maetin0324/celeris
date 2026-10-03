@@ -235,7 +235,10 @@ pub(crate) fn enforce_worker_db_guard(
 
 /// ADR-0095 D5: namespace 付きのプロセスで DB が書けないことを確かめた guard を返す。
 fn probe_worker_db_guard(config: &Config) -> Result<DbGuard, DaemonError> {
-    let guard = DbGuard::new(&config.db.path).map_err(|e| DaemonError::DbGuard(e.to_string()))?;
+    let guard = DbGuard::new(&config.db.path)
+        .map_err(|e| DaemonError::DbGuard(e.to_string()))?
+        .with_releases_dir(config.selfdeploy.releases_dir.clone())
+        .with_hot_mount(config.storage.hot_mount.clone());
     task_worker::db_guard::probe(&guard).map_err(|e| {
         DaemonError::DbGuard(format!(
             "cannot make {} read-only for worker runs ({e}; ADR-0095). Worker runs must not be able to \

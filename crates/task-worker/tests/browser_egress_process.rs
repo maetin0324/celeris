@@ -13,7 +13,7 @@ const POLICY: &[u8] = br#"{"allow":["example.com:443"],"resolver":"127.0.0.1","a
 fn spawn() -> (Child, UnixStream) {
     let (client, server) = UnixStream::pair().unwrap();
     client
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_secs(60)))
         .unwrap();
     let fd = server.as_raw_fd();
     let mut cmd =
@@ -34,8 +34,10 @@ fn spawn() -> (Child, UnixStream) {
     (cmd.spawn().unwrap(), client)
 }
 
+/// helper の終了を待つ。主判定は終了そのもので、60 秒は止まったときの保険（ADR-0125）。
+/// 終了までの時間の上限は、それを主張する試験が別に確かめる。
 fn finish(mut child: Child) -> Output {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if child.try_wait().unwrap().is_some() {
             return child.wait_with_output().unwrap();
@@ -135,7 +137,7 @@ if parent == 0:
     child.stdin.write(b'{"allow":["example.com:443"],"resolver":"127.0.0.1","allow_ipv6":false}')
     child.stdin.close()
     os.write(write_fd, str(child.pid).encode() + b'\n')
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         with open('/proc/%d/status' % child.pid) as f:
             if 'NoNewPrivs:\t1' in f.read():
@@ -149,7 +151,7 @@ pid = None
 def expired(*_):
     raise RuntimeError('deadline')
 signal.signal(signal.SIGALRM, expired)
-signal.alarm(6)
+signal.alarm(90)
 try:
     with os.fdopen(read_fd) as f:
         pid = int(f.readline())

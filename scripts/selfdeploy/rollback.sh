@@ -33,8 +33,8 @@ done
 
 sd_require_json_tool
 TS="$(sd_stamp)"
-mkdir -p "$SD_BACKUPS"
-SD_LOG_FILE="$SD_BACKUPS/promote-$TS.log"
+mkdir -p "$SD_BACKUPS" "$SD_LOGS"
+SD_LOG_FILE="$SD_LOGS/promote-$TS.log"
 
 PREV="$(sd_previous_sha)"
 CUR="$(sd_current_sha)"

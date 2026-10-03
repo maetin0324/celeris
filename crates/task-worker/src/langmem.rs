@@ -81,7 +81,7 @@ pub fn extraction_instructions() -> &'static str {
 pub fn knowledge_fallback_instructions(candidates_rel: &str) -> String {
     let mut out = String::new();
     out.push_str(
-        "この run は**知識整理**（ADR-0047 D4）です。いつもの `langmem` の接続先（Qwen）に届かなかったので、\
+        "この run は**知識整理**（ADR-0047 D4）です。設定された `langmem` の接続先に届かなかったので、\
          あなたのハーネスで同じ抽出をします（ADR-0052 D2）。下の依頼文には、終わった仕事 1 件の\
          題名・目的・報告・コメント・関連する既存の知識ベースのページ・担当の手帳・既存の索引の題名が\
          すでに全部入っています。\n\n### 抽出の規則 (extraction rules)\n",
@@ -186,6 +186,18 @@ impl WorkerAdapter for LangMemAdapter {
     }
 }
 
+/// ADR-0139 D4: ランナーの起動 env に入れる鍵（`provider` に応じた 1 つの変数）。鍵が無ければ空。
+pub(crate) fn api_key_env(config: &LangMemConfig) -> Vec<(String, String)> {
+    let Some(key) = config.api_key.as_ref().filter(|k| !k.is_empty()) else {
+        return Vec::new();
+    };
+    let var = match config.provider {
+        LangMemProvider::OpenaiCompatible => "OPENAI_API_KEY",
+        LangMemProvider::Anthropic => "ANTHROPIC_API_KEY",
+    };
+    vec![(var.to_string(), key.clone())]
+}
+
 async fn run_langmem(
     config: &LangMemConfig,
     req: &RunRequest,
@@ -238,6 +250,9 @@ async fn run_langmem(
         .arg(&script_path)
         .arg(&input_path)
         .envs(config.env.iter().cloned())
+        // ADR-0139 D4: 鍵は env にも入れる。provider 行・`[adapters.langmem].env` の古い値より後に
+        // 置くので、それらが勝たない。
+        .envs(api_key_env(config))
         .current_dir(req.cwd())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

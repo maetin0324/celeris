@@ -107,7 +107,7 @@ fn dispatcher_with_test_clock(
 }
 
 /// `dispatcher_with_test_clock` と同じだが、provider `p1` のアダプタ id を選べる
-/// （ADR-0124: continuation の resume は `claude-code` だけが対象）。
+/// （ADR-0140: continuation の resume は `claude-code` だけが対象）。
 fn dispatcher_with_adapter_id(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
@@ -3102,7 +3102,7 @@ mod write_set_record;
 mod browser_fallback;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
 mod direct_route;
-/// ADR-0124 D1: WU の execute continuation の同一 session resume と checkpoint fallback
+/// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;
 /// ADR-0130 D5: review 前 sync の待ち行列の stale 優先（`src/dispatcher/tests/stale_priority.rs`）。

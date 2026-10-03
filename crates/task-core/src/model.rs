@@ -750,11 +750,11 @@ pub struct Usage {
     /// `task_core::pricing` の静的単価表から推定した USD（不明なモデル・トークン欠落は `None`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
-    /// ADR-0124 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
+    /// ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
     /// の 2 回目以降の回数）。tool_use を観測できない adapter は `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_reads: Option<u32>,
-    /// ADR-0124 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
+    /// ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
     /// 拒否されなかった）。session を扱わない adapter は `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_resumed: Option<bool>,

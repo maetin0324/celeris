@@ -3649,7 +3649,7 @@ fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
     }
 }
 
-/// ADR-0124 D4: stream-json の行を `handle_line` に通し、最後の `result` の usage に載る
+/// ADR-0140 D4: stream-json の行を `handle_line` に通し、最後の `result` の usage に載る
 /// `duplicate_reads` を返す。
 fn duplicate_reads_after(root: &Path, resumed: bool, lines: &[String]) -> Option<Usage> {
     let sink = RecordingSink::default();
@@ -3681,7 +3681,7 @@ fn result_line() -> String {
         .to_string()
 }
 
-/// ADR-0124 D4: 同じ path の 2 回目の `Read` は 1 件の重複（絶対 path と cwd 相対・`./`・`..` を
+/// ADR-0140 D4: 同じ path の 2 回目の `Read` は 1 件の重複（絶対 path と cwd 相対・`./`・`..` を
 /// 同じ正規化 path として数える）。
 #[test]
 fn duplicate_read_same_path_twice_counts_one() {
@@ -3703,7 +3703,7 @@ fn duplicate_read_same_path_twice_counts_one() {
     assert_eq!(usage.input_tokens, Some(1));
 }
 
-/// ADR-0124 D4: 別 path の `Read`、別 path の同じ pattern の `Grep`、`Glob`・他の道具は重複にしない。
+/// ADR-0140 D4: 別 path の `Read`、別 path の同じ pattern の `Grep`、`Glob`・他の道具は重複にしない。
 #[test]
 fn duplicate_read_distinct_paths_count_zero() {
     let root = Path::new("/work/repo");
@@ -3733,7 +3733,7 @@ fn duplicate_read_distinct_paths_count_zero() {
     assert_eq!(usage.duplicate_reads, Some(0));
 }
 
-/// ADR-0124 D4: `Grep`/`Glob` は pattern + path が同じなら重複（path の書き方の違いは正規化する）。
+/// ADR-0140 D4: `Grep`/`Glob` は pattern + path が同じなら重複（path の書き方の違いは正規化する）。
 #[test]
 fn duplicate_read_counts_repeated_grep_and_glob() {
     let root = Path::new("/work/repo");
@@ -3756,7 +3756,7 @@ fn duplicate_read_counts_repeated_grep_and_glob() {
     assert_eq!(usage.session_resumed, Some(true));
 }
 
-/// ADR-0124 D4: `--resume` で起動した run は終了結果の usage に `session_resumed = true` が載り、
+/// ADR-0140 D4: `--resume` で起動した run は終了結果の usage に `session_resumed = true` が載り、
 /// stream の再 Read も数えられる（スタブの claude。外部ネットワーク・実 claude は使わない）。
 #[tokio::test]
 async fn duplicate_read_and_resume_mark_reach_the_terminal_usage() {
@@ -3796,7 +3796,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
     }
 }
 
-/// ADR-0124 D4: resume を頼んでも拒否された run（`error_during_execution` + 拒否の文言）は
+/// ADR-0140 D4: resume を頼んでも拒否された run（`error_during_execution` + 拒否の文言）は
 /// `session_resumed = false`（resume した run に数えない）。
 #[tokio::test]
 async fn duplicate_read_rejected_resume_is_not_marked_resumed() {

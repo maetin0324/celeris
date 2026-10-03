@@ -260,9 +260,9 @@ pub fn summary_lines(history: &[(MessageRole, String)], limit: usize) -> Vec<Str
         .collect()
 }
 
-// ---- ADR-0124 D1: execute continuation の同一 session resume と checkpoint fallback ----
+// ---- ADR-0140 D1: execute continuation の同一 session resume と checkpoint fallback ----
 
-/// continuation の resume を対象にするアダプタ（ADR-0124 D1 #5。codex / acp は対象外）。
+/// continuation の resume を対象にするアダプタ（ADR-0140 D1 #5。codex / acp は対象外）。
 pub const CONTINUATION_ADAPTER: &str = "claude-code";
 
 /// [`decide_continuation`] に渡す run の役割。reviewer の run は dispatcher の別経路（`review_spawn.rs`）で
@@ -274,7 +274,7 @@ pub enum ContinuationRole {
     Reviewer,
 }
 
-/// continuation の run を新しい session で起こす理由（ADR-0124 D1 の「fallback 理由（記録値）」）。
+/// continuation の run を新しい session で起こす理由（ADR-0140 D1 の「fallback 理由（記録値）」）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContinuationFreshReason {
     RoleFresh,
@@ -291,7 +291,7 @@ pub enum ContinuationFreshReason {
 }
 
 impl ContinuationFreshReason {
-    /// 記録値（ADR-0124 D1 の表の 3 列目）。
+    /// 記録値（ADR-0140 D1 の表の 3 列目）。
     pub fn as_str(self) -> &'static str {
         match self {
             ContinuationFreshReason::RoleFresh => "role_fresh",
@@ -358,7 +358,7 @@ pub struct ContinuationFacts<'a> {
     pub rollover_tokens: u64,
 }
 
-/// ADR-0124 D1 の判断表を上から順に見る（純粋関数。LLM は使わない）。
+/// ADR-0140 D1 の判断表を上から順に見る（純粋関数。LLM は使わない）。
 pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
     use ContinuationFreshReason as R;
     let fresh = |reason: R| ContinuationDecision::Fresh {
@@ -413,7 +413,7 @@ pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
     if stored.adapter != f.adapter {
         return fresh(R::AdapterChanged);
     }
-    // #7: 別 account・別 provider の session は使わない（account isolation、ADR-0124 D3）。
+    // #7: 別 account・別 provider の session は使わない（account isolation、ADR-0140 D3）。
     if stored.account_id.as_deref() != f.account || stored.provider.as_deref() != f.provider {
         return fresh(R::AccountChanged);
     }

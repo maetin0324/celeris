@@ -234,7 +234,7 @@ impl BackgroundTasks {
     }
 }
 
-/// ADR-0124 D4: run 内の再探索の観測（`tool_use` の `name`/`input` から決定的に数える）。
+/// ADR-0140 D4: run 内の再探索の観測（`tool_use` の `name`/`input` から決定的に数える）。
 /// `Read` は正規化した path、`Grep`/`Glob` は pattern + path を key にし、同じ key の 2 回目以降を
 /// `duplicate_reads` とする。key（path・pattern）は数えるためだけに持ち、外へは件数しか出さない。
 #[derive(Debug, Default)]
@@ -806,7 +806,7 @@ async fn run_claude_code(
                     || crate::provider::looks_like_resume_rejection(result_text)
                 {
                     sink.session_resume_failed(&tail);
-                    // ADR-0124 D4: 拒否された resume は「resume した run」に数えない。
+                    // ADR-0140 D4: 拒否された resume は「resume した run」に数えない。
                     if let Some(usage) = terminal_usage_mut(&mut outcome.0) {
                         usage.session_resumed = Some(false);
                     }
@@ -986,7 +986,7 @@ fn handle_line(
                 duplicate_reads: None,
                 session_resumed: None,
             });
-            // ADR-0124 D4: 再探索の重複と resume の印は usage に同乗させる（usage の無い result には付けない）。
+            // ADR-0140 D4: 再探索の重複と resume の印は usage に同乗させる（usage の無い result には付けない）。
             if let Some(usage) = usage.as_mut() {
                 exploration.annotate(usage);
             }

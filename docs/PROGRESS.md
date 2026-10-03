@@ -43,6 +43,23 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
 
 ### verify-record: guard-fix 統合後の検証 — 2026-10-03
 
+#### main 取り込み後の検査（2026-10-03、gate-record）
+
+main `9fb850c6` 取り込み後の HEAD `261eb98a` で、指定コマンドを再実行した。コード変更はない。
+
+- `cargo test --workspace -- --skip a_wait_parks_the_task_polls_and_resumes_as_a_continuation` → **exit 101**。
+  `tests/e2e/tests/worker_db_read_only.rs` の `a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl` が失敗。
+  sandbox では非本番の一時 DB daemon の userns probe が `Operation not permitted` となり、worker が DB の read-only bind で再試行に入り、
+  期待する `probe.txt` が無くなった。`tests/e2e` は本 task の変更範囲外なので未修正。指定の flake は除外済み。
+- `cargo test -p task-dispatch --lib cluster_job_wait` → **exit 0、5 passed / 0 failed**。
+- `cargo test -p task-worker --test browser_launcher_ptrace` → **exit 101、5 passed / 1 failed**。
+  旧 `Protocol` エラーは解消し新 launcher session は起動したが、sandbox 内 `/proc` で想定 UID map の Chrome PID が20秒以内に見つからず失敗。
+  `task-worker` は範囲外のため未修正。main 取り込みにより launcher client の版ずれ自体は解消。
+- `cargo clippy --workspace -- -D warnings` → **exit 0**。
+
+この検査環境では acceptance 0 と browser_launcher_ptrace は未達。workspace の失敗原因は印なし一時 DB daemon の userns probe を sandbox が許可しない環境境界、
+browser の残る失敗は起動後の Chrome PID 可視性であり、いずれも本 task の指定変更範囲外として plan_issue 相当で記録する。
+
 ADR-0126 付記2（guard-fix-impl・repair-impl-1）統合後の HEAD（`e3d615d3`）で、指定の検査コマンドをすべて
 実行し直し、終了コードと件数を記録する。`crates/` は変更していない（本 WU は検証専用）。
 
@@ -61,10 +78,8 @@ ADR-0126 付記2（guard-fix-impl・repair-impl-1）統合後の HEAD（`e3d615d
   - `cargo test -p celeris --test instance_handoff` → exit 0、8 passed（うち `a_stale_heartbeat_promotes_the_standby` が約60秒）。
   - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
 - 受け入れ条件3（この節）: 証跡を本節に記載。
-- 個別確認（参考）: `cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace`
-  を単独実行すると FAILED（`start real launcher session: Protocol`、`crates/task-worker/tests/browser_launcher_ptrace.rs:405`）。
-  host の `/usr/local/libexec/celeris/celeris-browser-launcher`（タイムスタンプ 10/03 01:24、main の新 protocol）が
-  本 branch（main 未取り込み、`crates/task-worker` 差分なし＝上記前提確認）の launcher client と版ずれしている。
+- 当時の個別確認（参考）: main 取り込み前は `browser_launcher_ptrace` が `Protocol` で失敗していた。上記 main 取り込み後の検査では
+  protocol 版ずれは解消し、残る失敗は sandbox 内での Chrome PID 可視性だった。
 - 未解決事項（本 task 範囲外、skip した 2 本）:
   (a) `task-dispatch::cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation` は、
       workspace 並走時に `tick_until` の 60 秒保険で落ちる負荷依存の flake（単独実行では上記のとおり pass）。

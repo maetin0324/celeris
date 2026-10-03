@@ -16,7 +16,7 @@ updated: 2026-10-03
 
 ## やったこと
 
-- `celerisctl curation validate [PLAN] [KB] [--diff] [--inbox] [--no-diff] [--json]`
+- `celerisctl curation validate [PLAN] [KB] [--diff] [--inbox] [--snapshot] [--no-diff] [--json]`
   （`crates/celerisctl/src/commands/curation.rs`）。DB・ネットワークに触れず、daemon の `check_plan` と同じ順・同じ関数・
   同じ文言で検証する。引数省略時は cwd から上へ `artifacts/curation-plan.json` と `inputs/kb` を持つ作業場所を探す
   （検査コマンドの cwd は `repos/<name>`）。失敗は stderr `error: <理由>` と exit 1。
@@ -62,3 +62,33 @@ updated: 2026-10-03
 - 上限 40 を `apply` の実績（1 run の turn 数・拒否率）を見てから設定値にするかを決める（今は定数）。
 - `merge` の統合先を 1 計画で 1 回しか使えない制約は、同じ趣旨の候補が複数ある `_inbox` では毎回「1 merge + n delete」になる。
   候補をまとめて 1 件に統合する `sources` 形を D11 の形に足すかは別 task で検討する。
+
+## 再レビュー対応（attempt 2、2026-10-03）
+
+前回の実装は編集後の `inputs/kb`・`inputs/inbox.json` でも CLI の検証が通り、daemon が見る本番 KB・prepare 時の
+ID 集合との検証条件がずれていた。
+
+- daemon の prepare で KB 全ファイルのハッシュと inbox のハッシュ・ID 集合を記録した `inputs/curation-inputs.json`
+  を生成し、同じ snapshot を作業場所外の daemon 状態にも保存する。
+- CLI と daemon は共通の `verify_inputs` で入力と snapshot を照合する。KB の編集・追加・削除、symlink、
+  inbox の書き換え、snapshot の欠落を拒否する。daemon はさらに自身の prepare 記録と照合し、snapshot 差し替えも拒否する。
+- harness と cron 雛形の「写しを編集する」指示を削除し、変更後の本文は `content` に書く、入力から元のハッシュを取る、
+  差分生成には別の作業用コピーを使う、と明記した。ops 手順と ADR-0131 D12 に同じ契約を追記した。
+- CLI 試験は計9件。編集後ハッシュによる計画、ID の追加、入力の追加・削除・symlink、snapshot の欠落を拒否し、
+  元入力を保った `fix` と最小計画は通る。daemon 試験は状態との不一致、旧状態、snapshot 欠落も拒否し、承認を出さず KB を維持する。
+- オフライン CLI は本番 KB の同時変更を検出できないため、daemon の終了時・承認時の本番 KB 検証は維持する。
+  snapshot が無い旧 run は新しい run でやり直す。本番への昇格・設定更新は未実施。
+
+検査結果は同 run のログに保存（成果物ディレクトリの `*-attempt2*.log`）。初回の workspace 試験は新設試験の
+エラー文言期待で1件失敗したため、欠落した snapshot を明示するエラーへ修正した。
+
+
+再検査の最終結果:
+
+- `cargo test --workspace` → exit 0（3,622 passed / 0 failed / 13 ignored）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo fmt --all -- --check`、`git diff --check` → exit 0。
+- ADR 番号・文書リンク・文書配置・architecture-map の検査 → すべて exit 0。
+- 実バイナリ `celerisctl curation validate` → 旧 worker 形式は `unknown field task_id` で exit 1、
+  prepare 済み入力に対する最小計画は exit 0、KB 変更・inbox 変更は snapshot 不一致でそれぞれ exit 1。
+  原票は成果物ディレクトリの `curation-validation-smoke.json`。

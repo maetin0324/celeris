@@ -621,3 +621,82 @@ fn curation_diff_match_moves_the_worker_diff_and_writes_the_canonical_one() {
         "承認 hash は正本で取る"
     );
 }
+
+#[test]
+fn knowledge_curation_job_rejects_changed_inputs_and_replaced_snapshot() {
+    for change in [
+        "kb",
+        "inbox",
+        "snapshot",
+        "missing_snapshot",
+        "legacy_state",
+    ] {
+        let env = setup("apply");
+        let now = env.now(50);
+        let task = env.fire(now);
+        env.tick(now);
+        let inputs = env.dir(&task).join("inputs");
+        let mut plan = merge_plan(Vec::new());
+        match change {
+            "kb" => {
+                std::fs::write(inputs.join("kb/projects/b.md"), "changed").unwrap();
+                plan.kb[0].expected_hash = Some(curation::content_hash("changed"));
+            }
+            "inbox" => {
+                std::fs::write(
+                    inputs.join("inbox.json"),
+                    r#"{"candidates":[{"task_id":"forged"}]}"#,
+                )
+                .unwrap();
+                plan.inbox.push(InboxProposal {
+                    task_id: "forged".into(),
+                    proposal: "cancel".into(),
+                    reason: "古い".into(),
+                });
+            }
+            "snapshot" => {
+                // 写しと検証用 snapshot の両方を書き換えても、daemon の状態には一致しない。
+                std::fs::write(inputs.join("kb/projects/unrelated.md"), "added").unwrap();
+                let forged = curation::InputSnapshot::capture(
+                    &inputs.join("kb"),
+                    &inputs.join("inbox.json"),
+                )
+                .unwrap();
+                std::fs::write(
+                    inputs.join(curation::SNAPSHOT_FILE),
+                    serde_json::to_vec(&forged).unwrap(),
+                )
+                .unwrap();
+            }
+            "missing_snapshot" => {
+                std::fs::remove_file(inputs.join(curation::SNAPSHOT_FILE)).unwrap()
+            }
+            "legacy_state" => {
+                let state_file = env.state.path().join("state.json");
+                let mut state = load_state(&state_file);
+                state
+                    .tasks
+                    .get_mut(&task.id.to_string())
+                    .unwrap()
+                    .input_snapshot = None;
+                save_state(&state_file, &state).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = env.kb_snapshot();
+        env.worker_done(&task, &plan, None);
+        env.tick(now + time::Duration::hours(1));
+        assert_eq!(env.kb_snapshot(), before, "{change}");
+        assert!(env.approval(&task).is_none(), "{change}");
+        let reports = env.reports(&task);
+        assert_eq!(reports.len(), 1);
+        assert!(
+            reports[0].body.contains("検証できなかった"),
+            "{change}: {}",
+            reports[0].body
+        );
+        let state = load_state(&env.state.path().join("state.json"));
+        let detail = state.tasks[&task.id.to_string()].detail.as_deref().unwrap();
+        assert!(detail.contains("snapshot"), "{change}: {detail}");
+    }
+}

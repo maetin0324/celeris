@@ -126,12 +126,23 @@ daemon は task が `done` になると `artifacts/curation-plan.json` を
 `delete` の 2 件。`inbox` の `task_id` は `inputs/inbox.json` の `candidates[].task_id` / `attention[].task.id` に
 ある id だけ。`_inbox/` の候補は **1 run 40 件まで**（古い順。残りは計画に載せず次回へ。D12）。
 
+`inputs/` は読み取り用として扱い、編集・追加・削除しない。変更後の本文は計画の `content` に書き、
+`expected_hash` / `target_hash` は未変更の写しから取得する。差分作成で編集が必要なら別の作業用コピーを使う。
+daemon は prepare 時に `inputs/curation-inputs.json`（KB 全ファイルの hash、inbox の hash と ID 集合）を作る。
+CLI は snapshot と入力の同一性を検査し、KB の変更・追加・削除や inbox の ID 追加でも非 0 を返す。
+snapshot の生成・更新は daemon が行う。snapshot が無い旧 run は検証失敗になるため、新しい日次整理 run を発火する。
+`--snapshot <path>` で配置を明示できるが、worker が検証用 snapshot を作り直してはならない。
+
+snapshot の正本は worker が書けない daemon 状態にも保持し、daemon は提出された snapshot の差し替えを拒否する。
+オフライン CLI は本番 KB の実行中の変更までは検出しない。daemon は終了時・承認時に本番 KB の hash を再検証し、
+変わっていれば適用せず、新しい入力でやり直す。
+
 worker は出す前に、人は dry-run の成果物を読むときに、daemon と同じ検証を手元で走らせられる（DB・ネットワークに触れない）:
 
 ```bash
 # 作業場所の中（repos/<name> でもよい）: artifacts/curation-plan.json と inputs/kb を上へ探す
 celerisctl curation validate
-# path を明示する（KB の写しは inputs/kb。--diff / --inbox を省くと作業場所の既定を使う）
+# path を明示する（--inbox / --snapshot は KB の親、--diff は成果物 directory が既定）
 celerisctl curation validate <workspace>/artifacts/curation-plan.json <workspace>/inputs/kb --json
 # 失敗: stderr に daemon と同じ文言、exit 1
 #   error: curation-plan.json の形が違う: unknown field `task_id`, expected one of `version`, `kb`, `inbox`, `human_decisions` at line 2 column 11
@@ -162,7 +173,7 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" history daily-curation --limit 5
 3. 受信箱の片付け提案（D7 で外れなかった判断要項目）。
 4. 人への decision（`user/` 配下のページの扱いなど）。
 
-**この dry-run は本番 KB を書き換えない**（`mode=dry_run` は `inputs/kb/` の写しだけを編集し、
+**この dry-run は本番 KB を書き換えない**（`mode=dry_run` は入力の写しを読み、計画と差分を出し、
 `curation-plan.json` を本番へ適用しない）。差分が狙いどおりか人が確認する。
 
 GUI での確認: `/cron` に一覧（有効/停止・次回・最後の結果）、`/cron/daily-curation` に履歴と各 run の

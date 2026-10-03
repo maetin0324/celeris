@@ -10,6 +10,9 @@ use task_core::knowledge::front_matter;
 
 use crate::knowledge;
 
+mod inputs;
+pub use inputs::{InputSnapshot, SNAPSHOT_FILE, verify_inputs};
+
 /// 日次整理の harness id（`[[cron.seed.template]] harness`。cron 由来の task の `genre` になる）。
 pub const CURATION_HARNESS: &str = "knowledge-curation";
 

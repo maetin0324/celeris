@@ -91,6 +91,9 @@ pub struct Entry {
     /// `inputs/inbox.json` に載せた task id（計画の `inbox` 提案の宛先の検証に使う）。
     #[serde(default)]
     pub inbox_task_ids: BTreeSet<String>,
+    /// prepare 時の入力。worker の snapshot 差し替えも検出するため状態側に保持する。
+    #[serde(default)]
+    pub input_snapshot: Option<curation::InputSnapshot>,
     /// D7 の規則別の抑止件数（要約の固定節）。
     #[serde(default)]
     pub suppressed: BTreeMap<String, u32>,
@@ -245,6 +248,7 @@ pub fn tick(
                         job_id: job.id.to_string(),
                         run_id: run.id.to_string(),
                         inbox_task_ids: BTreeSet::new(),
+                        input_snapshot: None,
                         suppressed: BTreeMap::new(),
                         approval_hash: None,
                         detail: None,
@@ -431,12 +435,18 @@ fn prepare(
             "prepared_at": rfc3339(now),
         }),
     )?;
+    let input_snapshot = curation::InputSnapshot::capture(&kb_copy, &inputs.join("inbox.json"))?;
+    write_json(
+        &inputs.join(curation::SNAPSHOT_FILE),
+        &serde_json::to_value(&input_snapshot).map_err(|e| e.to_string())?,
+    )?;
     Ok(Entry {
         phase: Phase::Prepared,
         mode: mode.to_string(),
         job_id: job.id.to_string(),
         run_id: run.id.to_string(),
         inbox_task_ids,
+        input_snapshot: Some(input_snapshot),
         suppressed: inbox.suppressed,
         approval_hash: None,
         detail: None,
@@ -538,12 +548,25 @@ fn artifacts_dir(task: &Task, workspace_root: &Path) -> Option<PathBuf> {
 fn check_plan(
     knowledge_root: &Path,
     artifacts: &Path,
+    inputs: &Path,
     entry: &Entry,
     worker_diff: Option<&str>,
 ) -> Result<Checked, String> {
     let raw = std::fs::read_to_string(artifacts.join("curation-plan.json"))
         .map_err(|e| format!("curation-plan.json を読めない: {e}"))?;
     let plan: CurationPlan = curation::parse_plan(&raw)?;
+    let trusted = entry
+        .input_snapshot
+        .as_ref()
+        .ok_or("prepare 時の input snapshot がありません。新しい日次整理 run が必要です")?;
+    let snapshot = curation::verify_inputs(
+        &inputs.join("kb"),
+        &inputs.join("inbox.json"),
+        &inputs.join(curation::SNAPSHOT_FILE),
+    )?;
+    if &snapshot != trusted || snapshot.inbox_task_ids != entry.inbox_task_ids {
+        return Err("input snapshot が daemon の prepare 記録と一致しません".into());
+    }
     let known = (!entry.inbox_task_ids.is_empty()).then_some(&entry.inbox_task_ids);
     let validated = if known.is_some() {
         curation::validate_with_inbox(knowledge_root, &plan, known)?
@@ -611,7 +634,16 @@ fn finish(
     // worker の差分は照合にだけ使い、curation.worker.diff へ移す。curation.diff は daemon の正本だけ。
     let diff_path = artifacts.join("curation.diff");
     let worker_diff = std::fs::read_to_string(&diff_path).ok();
-    let checked = check_plan(knowledge_root, &artifacts, entry, worker_diff.as_deref());
+    let inputs = workspace_dir(task, workspace_root)
+        .ok_or("入力の作業場所がありません")?
+        .join("inputs");
+    let checked = check_plan(
+        knowledge_root,
+        &artifacts,
+        &inputs,
+        entry,
+        worker_diff.as_deref(),
+    );
     if worker_diff.is_some() {
         std::fs::rename(&diff_path, artifacts.join(WORKER_DIFF))
             .map_err(|e| format!("{WORKER_DIFF}: {e}"))?;
@@ -996,7 +1028,10 @@ fn check_approval(
     }
     let artifacts = artifacts_dir(task, workspace_root)
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
-    let checked = match check_plan(knowledge_root, &artifacts, entry, None) {
+    let inputs = workspace_dir(task, workspace_root)
+        .ok_or("入力の作業場所がありません")?
+        .join("inputs");
+    let checked = match check_plan(knowledge_root, &artifacts, &inputs, entry, None) {
         Ok(c) if c.hash == expected => c,
         Ok(c) => {
             entry.phase = Phase::Stale;

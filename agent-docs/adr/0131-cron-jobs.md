@@ -402,6 +402,20 @@ worker が 1 回で全件を扱える量ではない。この付記は D10 (4)�
 5. **変えないこと。** D10 (4)・D11 (1) の `CurationPlan` の形と `deny_unknown_fields`、daemon の検証順、
    「LLM 呼び出しを daemon・store に入れない」「本番 KB は worker が書かない」はそのまま。
 
+### D12 追記: 検証入力の固定（2026-10-03、再レビュー対応）
+
+- `inputs/kb` と `inputs/inbox.json` は編集しない。変更後の本文は計画の `content` に書く。
+  差分生成に編集が必要な場合は別の作業用コピーを使い、ハッシュは元の入力から取る。
+- prepare は KB 全ファイルの SHA-256 と inbox の SHA-256・ID 集合を `inputs/curation-inputs.json` に保存する。
+  CLI と daemon は同じ `verify_inputs` で、ファイルの変更・追加・削除、symlink、inbox の変更を拒否する。
+  `--no-diff` でも入力の照合は省略しない。snapshot が無い旧 run は成功にせず、新しい run が必要な理由を返す。
+- snapshot は daemon 状態（worker の作業場所外）にも保存する。daemon はその正本との一致も要求するため、
+  worker が写しと snapshot の両方を作り直しても採用しない。CLI はローカル snapshot の整合を検証する入口であり、
+  worker が生成した snapshot の真正性を保証する入口ではない。
+- 本番 KB は別の書き手により prepare 後も変わり得る。daemon は従来どおり終了時・承認時に本番 KB を再検証し、
+  変更されたページを上書きしない。この場合は CLI 成功後でも適用を拒否する。
+- 本番 KB の書き込み許可、LLM を daemon/store に入れない原則、40 件の上限と持ち越し規則は維持する。
+
 ## 付記（main 取り込み 2026-10-03）
 
 main の ADR-0128 D6 に合わせ、本文を `agent-docs/adr/0131-cron-jobs.md` へ移した。番号は維持する。

@@ -30,9 +30,12 @@ pub struct ValidateArgs {
     /// worker の `curation.diff`。省略時は作業場所の `artifacts/curation.diff` があれば使う。
     #[arg(long)]
     pub diff: Option<PathBuf>,
-    /// daemon が書いた `inbox.json`。省略時は作業場所の `inputs/inbox.json` があれば使う。
+    /// daemon が書いた `inbox.json`。省略時は KB の親の `inbox.json`。ファイルは必須。
     #[arg(long)]
     pub inbox: Option<PathBuf>,
+    /// daemon が prepare 時に書いた snapshot。省略時は KB の親の curation-inputs.json。
+    #[arg(long)]
+    pub snapshot: Option<PathBuf>,
     /// diff の照合をしない。
     #[arg(long)]
     pub no_diff: bool,
@@ -47,7 +50,8 @@ pub struct Resolved {
     pub plan: PathBuf,
     pub kb: PathBuf,
     pub diff: Option<PathBuf>,
-    pub inbox: Option<PathBuf>,
+    pub inbox: PathBuf,
+    pub snapshot: PathBuf,
 }
 
 /// 検証に通った計画の件数と、読んだ path。
@@ -110,16 +114,21 @@ pub fn resolve(args: &ValidateArgs, cwd: &Path) -> Result<Resolved, String> {
                 .filter(|p| p.is_file())
         })
     };
-    let inbox = args.inbox.clone().or_else(|| {
-        root.as_ref()
-            .map(|r| r.join("inputs/inbox.json"))
-            .filter(|p| p.is_file())
-    });
+    let inputs = kb.parent().ok_or("KB の親 directory がありません")?;
+    let inbox = args
+        .inbox
+        .clone()
+        .unwrap_or_else(|| inputs.join("inbox.json"));
+    let snapshot = args
+        .snapshot
+        .clone()
+        .unwrap_or_else(|| inputs.join(curation::SNAPSHOT_FILE));
     Ok(Resolved {
         plan,
         kb,
         diff,
         inbox,
+        snapshot,
     })
 }
 
@@ -128,14 +137,8 @@ pub fn validate_paths(resolved: &Resolved) -> Result<Summary, String> {
     let raw = std::fs::read_to_string(&resolved.plan)
         .map_err(|e| format!("curation-plan.json を読めない: {e}"))?;
     let plan = curation::parse_plan(&raw)?;
-    let known = match &resolved.inbox {
-        Some(path) => {
-            let raw =
-                std::fs::read_to_string(path).map_err(|e| format!("inbox.json を読めない: {e}"))?;
-            curation::known_task_ids_from_inbox_json(&raw)?
-        }
-        None => Default::default(),
-    };
+    let snapshot = curation::verify_inputs(&resolved.kb, &resolved.inbox, &resolved.snapshot)?;
+    let known = snapshot.inbox_task_ids;
     // daemon と同じく、入力の task id が 1 つも無いときに受信箱の提案があれば拒否する。
     let validated = if !known.is_empty() {
         curation::validate_with_inbox(&resolved.kb, &plan, Some(&known))?
@@ -160,7 +163,7 @@ pub fn validate_paths(resolved: &Resolved) -> Result<Summary, String> {
         plan_path: resolved.plan.display().to_string(),
         kb_path: resolved.kb.display().to_string(),
         diff_path: resolved.diff.as_ref().map(|p| p.display().to_string()),
-        inbox_path: resolved.inbox.as_ref().map(|p| p.display().to_string()),
+        inbox_path: Some(resolved.inbox.display().to_string()),
         ..Default::default()
     };
     for item in &validated.kb {

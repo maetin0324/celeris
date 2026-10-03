@@ -12,7 +12,24 @@ fn workspace(plan: &str) -> (tempfile::TempDir, PathBuf) {
     std::fs::write(root.join("inputs/kb/README.md"), "# KB\n").unwrap();
     std::fs::write(root.join("inputs/kb/projects/demo/a.md"), "# A\nold\n").unwrap();
     std::fs::write(root.join("artifacts/curation-plan.json"), plan).unwrap();
+    std::fs::write(
+        root.join("inputs/inbox.json"),
+        r#"{"attention":[],"candidates":[{"task_id":"A"}]}"#,
+    )
+    .unwrap();
+    prepare_snapshot(&root);
     (dir, root)
+}
+
+fn prepare_snapshot(root: &Path) {
+    let snapshot =
+        curation::InputSnapshot::capture(&root.join("inputs/kb"), &root.join("inputs/inbox.json"))
+            .unwrap();
+    std::fs::write(
+        root.join("inputs").join(curation::SNAPSHOT_FILE),
+        serde_json::to_vec(&snapshot).unwrap(),
+    )
+    .unwrap();
 }
 
 fn explicit(root: &Path) -> ValidateArgs {
@@ -84,13 +101,17 @@ fn discovers_workspace_root_from_repo_worktree_cwd() {
     assert_eq!(found.plan, root.join("artifacts/curation-plan.json"));
     assert_eq!(found.kb, root.join("inputs/kb"));
     assert_eq!(found.diff, None);
-    assert_eq!(found.inbox, None);
+    assert_eq!(found.inbox, root.join("inputs/inbox.json"));
+    assert_eq!(
+        found.snapshot,
+        root.join("inputs").join(curation::SNAPSHOT_FILE)
+    );
 
     std::fs::write(root.join("artifacts/curation.diff"), "").unwrap();
     std::fs::write(root.join("inputs/inbox.json"), "{}").unwrap();
     let found = resolve(&args, &cwd).unwrap();
     assert_eq!(found.diff, Some(root.join("artifacts/curation.diff")));
-    assert_eq!(found.inbox, Some(root.join("inputs/inbox.json")));
+    assert_eq!(found.inbox, root.join("inputs/inbox.json"));
     let no_diff = ValidateArgs {
         no_diff: true,
         ..Default::default()
@@ -113,7 +134,7 @@ fn inbox_proposal_for_unknown_task_is_rejected() {
     )
     .unwrap();
     let r = resolve(&ValidateArgs::default(), &root).unwrap();
-    assert!(r.inbox.is_some());
+    assert!(r.inbox.is_file());
     let err = validate_paths(&r).unwrap_err();
     assert!(err.contains("不正または重複した inbox 提案"), "{err}");
 }
@@ -185,9 +206,95 @@ fn more_than_max_inbox_candidates_is_rejected() {
             })
         })
         .collect();
+    prepare_snapshot(&root);
     assert_eq!(items.len(), 41);
     let plan = json!({"version": 1, "kb": items, "inbox": [], "human_decisions": []});
     std::fs::write(root.join("artifacts/curation-plan.json"), plan.to_string()).unwrap();
     let err = validate_paths(&resolved(&root)).unwrap_err();
     assert!(err.contains("上限 40"), "{err}");
+}
+
+#[test]
+fn edited_kb_with_rehashed_plan_is_rejected_but_content_only_edit_passes() {
+    let (_dir, root) = workspace(MINIMAL);
+    let mut plan = json!({"version":1,"kb":[{
+        "path":"projects/demo/a.md", "action":"fix", "reason":"更新",
+        "content":"# A\nnew\n", "expected_hash":content_hash("# A\nold\n")
+    }], "inbox":[], "human_decisions":[]});
+    let path = root.join("artifacts/curation-plan.json");
+    std::fs::write(&path, plan.to_string()).unwrap();
+    assert_eq!(validate_paths(&resolved(&root)).unwrap().fix, 1);
+    std::fs::write(root.join("inputs/kb/projects/demo/a.md"), "# A\nnew\n").unwrap();
+    plan["kb"][0]["expected_hash"] = json!(content_hash("# A\nnew\n"));
+    std::fs::write(&path, plan.to_string()).unwrap();
+    let err = validate_paths(&resolved(&root)).unwrap_err();
+    assert!(
+        err.contains("inputs/kb が prepare 時の snapshot と一致しません"),
+        "{err}"
+    );
+    assert_eq!(
+        run_validate(explicit(&root)),
+        format!("{:?}", ExitCode::from(1))
+    );
+}
+
+#[test]
+fn input_mutation_or_missing_snapshot_cannot_pass_even_for_minimal_plan() {
+    for change in [
+        "add",
+        "delete",
+        "inbox",
+        "missing_inbox",
+        "snapshot",
+        "missing_snapshot",
+        "symlink",
+    ] {
+        let (_dir, root) = workspace(MINIMAL);
+        match change {
+            "add" => std::fs::write(root.join("inputs/kb/projects/demo/new.md"), "new").unwrap(),
+            "delete" => std::fs::remove_file(root.join("inputs/kb/projects/demo/a.md")).unwrap(),
+            "inbox" => std::fs::write(
+                root.join("inputs/inbox.json"),
+                r#"{"candidates":[{"task_id":"B"}]}"#,
+            )
+            .unwrap(),
+            "missing_inbox" => std::fs::remove_file(root.join("inputs/inbox.json")).unwrap(),
+            "snapshot" => {
+                std::fs::write(root.join("inputs").join(curation::SNAPSHOT_FILE), "{}").unwrap()
+            }
+            "missing_snapshot" => {
+                std::fs::remove_file(root.join("inputs").join(curation::SNAPSHOT_FILE)).unwrap()
+            }
+            "symlink" => {
+                let page = root.join("inputs/kb/projects/demo/a.md");
+                let copy = root.join("a.md");
+                std::fs::rename(&page, &copy).unwrap();
+                std::os::unix::fs::symlink(copy, page).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(validate_paths(&resolved(&root)).is_err(), "{change}");
+        assert_eq!(
+            run_validate(explicit(&root)),
+            format!("{:?}", ExitCode::from(1)),
+            "{change}"
+        );
+    }
+}
+
+#[test]
+fn adding_inbox_id_does_not_authorize_a_proposal() {
+    let (_dir, root) = workspace(
+        r#"{"version":1,"kb":[],"inbox":[{"task_id":"B","proposal":"閉じる","reason":"古い"}],"human_decisions":[]}"#,
+    );
+    std::fs::write(
+        root.join("inputs/inbox.json"),
+        r#"{"candidates":[{"task_id":"A"},{"task_id":"B"}]}"#,
+    )
+    .unwrap();
+    let err = validate_paths(&resolved(&root)).unwrap_err();
+    assert!(
+        err.contains("inputs/inbox.json が prepare 時の snapshot と一致しません"),
+        "{err}"
+    );
 }

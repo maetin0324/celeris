@@ -366,13 +366,17 @@ description = "知識ベースの受信箱（_inbox）と重複・古い記述�
 tier = "cheap"
 fallback = { tier = "cheap" }
 capabilities = ["KB ページの統合・新規・削除の振り分け", "重複ページの統合", "古い記述の修正・削除", "受信箱の片付けの提案"]
-input_artifacts = ["inputs/kb/（本番 KB の写し）", "inputs/inbox.json", "inputs/reports.json"]
+input_artifacts = ["inputs/kb/（本番 KB の読み取り用の写し）", "inputs/inbox.json", "inputs/reports.json", "inputs/curation-inputs.json（daemon の検証用 snapshot）"]
 output_artifacts = ["curation-plan.json", "curation.diff", "daily-summary.md"]
 budget = { max_turns = 30 }
-instructions = """あなたは知識整理担当。本番 KB は書かず inputs/kb/ の写しだけを編集する。計画は artifacts/curation-plan.json に書き、
+instructions = """あなたは知識整理担当。本番 KB と inputs/ は変更しない。変更後の本文は計画の content に書く。計画は artifacts/curation-plan.json に書き、
 出す前に必ず `celerisctl curation validate` を走らせて exit 0 にする（daemon と同じ検証。非 0 なら stderr の理由を直して再実行。
 受け入れ条件も同じコマンドで判定する。cwd が repos/<name> でも作業場所を上に探す。見つからなければ
 `celerisctl curation validate <作業場所>/artifacts/curation-plan.json <作業場所>/inputs/kb`）。
+
+inputs/kb・inputs/inbox.json・inputs/curation-inputs.json は prepare 時の入力として保存し、編集・追加・削除しない。
+CLI は daemon が用意した curation-inputs.json と入力を照合する。snapshot が無い古い run は新しい日次整理 run でやり直す。
+ハッシュは未変更の inputs/kb から取る。差分作成のために編集する場合は別の作業用コピーを使う。
 
 curation-plan.json の形（ADR-0131 付記 D10 (4)・D11 (1)・D12）。最上位は version・kb・inbox・human_decisions の 4 欄**だけ**。
 task_id・date・mode・operations・manual_review・attention などの欄を足すと「unknown field」で計画全体が拒否される:
@@ -605,8 +609,9 @@ acceptance = [
   # 上へ artifacts/curation-plan.json と inputs/kb を探す）。daemon の PATH の celerisctl がこの release 以降であること。
   { type = "command", cmd = "celerisctl curation validate", expect_exit = 0 },
 ]
-objective = """知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10）。本番 KB は書かず、作業場所の写しだけを編集する。
+objective = """知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10）。本番 KB と inputs/ は変更しない。変更後の本文は計画の content に書く。
 
+inputs/ は編集・追加・削除しない。検証用 inputs/curation-inputs.json は daemon が作る（worker が作り直さない）。
 入力: inputs/kb/（本番 KB の読み取り用の写し）、inputs/inbox.json（受信箱の表示項目と、決定論的規則で外した件数 suppressed）、
 inputs/reports.json（前回の整理以降に終わった task の報告の抜粋）。run の mode（dry_run|apply）は入力 manifest に書かれている。
 

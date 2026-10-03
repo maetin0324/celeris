@@ -46,6 +46,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | run 途中のイベントの sink（worker/Reviewer） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/sinks.rs` | [ADR-0082](../agent-docs/adr/0082-dispatcher-module-split.md) |
 | scratch/disk guard の後片付け | task-dispatch | `crates/task-dispatch/src/{dispatcher/housekeeping.rs,scratch_gc.rs}` | [ADR-0075](../agent-docs/adr/0075-tiered-build-cache.md) |
 | 工程統合・途中報告 | task-dispatch | `crates/task-dispatch/src/{dispatcher/phase_integration.rs,checkpoint.rs,reports.rs}` | [ADR-0074](../agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| 並列取り込みの自動解消（記録・番号・生成物の分類と resolver、統合の依頼の型） | task-dispatch::auto_resolve | `crates/task-dispatch/src/auto_resolve.rs`（`auto_resolve/{classify,records,renumber,generated}.rs`）、段の統合は `crates/task-dispatch/src/integration.rs` | [2026-10-02 並列取り込みの自動解消](../agent-docs/adr/2026-10-02-parallel-integration-auto-resolve.md) |
 | 孤児run の回収・承認・policy | task-dispatch | `crates/task-dispatch/src/{orphan,approvals,policy,sessions,undeclared_artifacts}.rs` | [ADR-0005](../agent-docs/adr/0005-phase3-dispatch-and-worker.md) |
 
 ## task-worker — worker プロトコルと adapter（1 run = 1 プロセス起動）
@@ -97,6 +98,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | tick ループ・裏方処理 | celeris::daemon | `crates/celeris/src/daemon/tick_loop.rs` | [SPEC](SPEC.md), [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md) |
 | 設定（TOML → subsystem 別型・検証） | celeris::config | `crates/celeris/src/config/mod.rs`（module map はここの doc comment） | [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md) |
 | self-deploy（release/verify/handoff） | celeris | `crates/celeris/src/{instance.rs,releases.rs,config/selfdeploy.rs}` | [selfdeploy.md](ops/selfdeploy.md) |
+| 配送の main 追従と自動解消（`[delivery.auto_resolve]`、merge_base 失敗の前段） | celeris::delivery | `crates/celeris/src/delivery/auto_resolve.rs`、設定 `crates/celeris/src/config/delivery.rs` | [2026-10-02 並列取り込みの自動解消](../agent-docs/adr/2026-10-02-parallel-integration-auto-resolve.md) |
 | Knowledge GC・doc gardener | celeris | `crates/celeris/src/{knowledge_gc,knowledge_maint,doc_gardener}.rs` | [ADR-0068](../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
 | cluster/accounts 管理の裏方 | celeris | `crates/celeris/src/{cluster_admin,accounts_admin}.rs` | [ADR-0017](../agent-docs/adr/0017-account-management-from-gui.md), [ADR-0018](../agent-docs/adr/0018-remote-clusters-over-ssh.md) |
 

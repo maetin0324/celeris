@@ -1541,6 +1541,7 @@ export interface ApiV1Schema {
   decision_list: DecisionList;
   decision_outcome: DecisionOutcome;
   decision_withdraw: DecisionWithdrawBody;
+  delivery_list: DeliveryList;
   doc_page: DocPage;
   doc_page_put: DocPagePutBody;
   doc_page_result: DocPageResult;
@@ -1611,6 +1612,7 @@ export interface ApiV1Schema {
   provider_config: ProviderConfigView1;
   providers: Providers;
   release_promote: ReleasePromoteAccepted;
+  release_promotion_preview: ReleasePromotionPreview;
   releases: Releases;
   reload: ReloadResult;
   reopen: ReopenBody;
@@ -4043,6 +4045,38 @@ export interface DecisionOutcome {
  */
 export interface DecisionWithdrawBody {
   reason?: string | null;
+}
+/**
+ * `GET /deliveries` の応答（配送記録の読み取り。`release.sh` が notes の task 判別に使う）。
+ */
+export interface DeliveryList {
+  items: DeliveryHead[];
+}
+/**
+ * `DeliveryList.items[]` の 1 件（`task_core::Delivery` の、commit と task を結ぶ欄だけ）。
+ */
+export interface DeliveryHead {
+  /**
+   * 配送したときの取り込み先の先端（この task の区間はここで終わる）。
+   */
+  base?: string | null;
+  branch: string;
+  /**
+   * 配送した branch の先端。
+   */
+  head: string;
+  merge_candidate_sha?: string | null;
+  /**
+   * 配送が作った release の sha12。
+   */
+  release?: string | null;
+  repo: string;
+  reviewed_sha?: string | null;
+  /**
+   * `DeliveryState` の code。
+   */
+  state: string;
+  task_id: string;
 }
 /**
  * `GET /projects/{id}/docs/page`。
@@ -8158,6 +8192,171 @@ export interface ReleasePromoteAccepted {
   started_at: string;
 }
 /**
+ * 昇格の要約: `current` から対象リリースまでに入る**全リリース**の説明を 1 つにまとめたもの
+ * （`GET /releases/{sha12}/promotion-preview` と `GET /releases` の `items[].promotion`）。
+ */
+export interface ReleasePromotionPreview {
+  adrs: ReleaseNoteFile[];
+  /**
+   * `current` から対象までを notes で辿り切れた（偽なら一覧は対象側の notes にある分だけ）。
+   */
+  complete: boolean;
+  /**
+   * 含まれるリリースの `config_example` の変更（新しい順）。
+   */
+  config_examples: ReleaseNoteConfig[];
+  direct_commits: ReleaseNoteCommit[];
+  /**
+   * いまの `current`（無ければ `null`）。
+   */
+  from?: string | null;
+  /**
+   * 対象リリースの gate で飛ばした段。
+   */
+  gate_skips: ReleaseNoteGateSkip[];
+  migrations: ReleaseNoteFile[];
+  /**
+   * `"live"`（対象の `verify.json` の `live_ok` が真）/ `"stop-start"`（偽）/ `null`（未検証）。
+   */
+  mode?: string | null;
+  /**
+   * 辿り切れなかった理由など（無ければ `null`）。
+   */
+  problem?: string | null;
+  /**
+   * 含まれるリリース（新しい順。対象が先頭）。
+   */
+  releases: ReleasePromotionRelease[];
+  schema: ReleaseNoteSchema;
+  /**
+   * 同じ task は 1 回（新しい順）。
+   */
+  tasks: ReleaseNoteTask[];
+  /**
+   * 対象リリースの sha12。
+   */
+  to: string;
+}
+/**
+ * 範囲で足された・変わったファイル（migration・ADR）。
+ */
+export interface ReleaseNoteFile {
+  /**
+   * 範囲の中でこのファイルに最後に触れた first-parent の commit（昇格の要約の切り出しに使う）。
+   */
+  commit?: string | null;
+  path: string;
+  /**
+   * `"added"` / `"modified"` / `"deleted"`（`git diff --name-status` の A / M / D。R は added 扱い）。
+   */
+  status: string;
+  /**
+   * ADR の 1 行目の `# ` 題（migration では `null`）。
+   */
+  title?: string | null;
+}
+/**
+ * `config/celeris.example.toml` の変更。
+ */
+export interface ReleaseNoteConfig {
+  /**
+   * 足された（コメントでも空でもない）行。人が本番 config に足すかを判断する材料（最大 40 行）。
+   */
+  added_lines?: string[];
+  /**
+   * 足された節見出し（`[section]`）。
+   */
+  added_sections?: string[];
+  commit?: string | null;
+  /**
+   * `added_lines` が 1 行以上ある（人が本番 config を見直す必要がある）。
+   */
+  needs_review: boolean;
+  path: string;
+  status: string;
+}
+/**
+ * commit の 1 件（完全な sha と題）。
+ */
+export interface ReleaseNoteCommit {
+  sha: string;
+  subject: string;
+}
+/**
+ * gate で飛ばした段。
+ */
+export interface ReleaseNoteGateSkip {
+  reason: string;
+  step: string;
+}
+/**
+ * `ReleasePromotionPreview.releases[]` の 1 件。
+ */
+export interface ReleasePromotionRelease {
+  built_at?: string | null;
+  sha12: string;
+  /**
+   * この昇格で入る task の数（この release の notes にあったもののうち、`current` に入っていないもの）。
+   */
+  task_count: number;
+}
+/**
+ * schema_version の変化。
+ */
+export interface ReleaseNoteSchema {
+  /**
+   * `from != to`（DB の移行が入る。旧 daemon が新 schema を読めなければ停止→起動になる）。
+   * どちらかが分からなければ `null`。
+   */
+  changed?: boolean | null;
+  /**
+   * 起点（`current`）の schema_version。分からなければ `null`。
+   */
+  from?: number | null;
+  /**
+   * このリリースの schema_version。
+   */
+  to?: number | null;
+}
+/**
+ * `ReleaseNotes.tasks[]` の 1 件。
+ */
+export interface ReleaseNoteTask {
+  /**
+   * 同じリリースに入った子 task（親がこの一覧に居るものは親の下にまとめる）。
+   */
+  children?: ReleaseNoteChild[];
+  /**
+   * この task に属する commit（新しい順。first-parent に無い配送 head は 1 件だけ）。
+   */
+  commits?: ReleaseNoteCommit[];
+  /**
+   * どこから task だと分かったか: `"delivery"`（配送記録の head）/ `"branch"`（`celeris/<id>` の
+   * branch 名・merge commit の題）。
+   */
+  source: string;
+  /**
+   * task の status（取れたときだけ）。
+   */
+  status?: string | null;
+  /**
+   * 最後に `done` で終わった worker run の `outcome_text`（完了時の要約。最大 600 文字）。
+   */
+  summary?: string | null;
+  task_id: string;
+  /**
+   * `GET /tasks/{id}` の題。取れなければ `null`（GUI は commit 題を出す）。
+   */
+  title?: string | null;
+}
+/**
+ * `ReleaseNoteTask.children[]` の 1 件。
+ */
+export interface ReleaseNoteChild {
+  task_id: string;
+  title?: string | null;
+}
+/**
  * Phase 48（ADR-0040 D6）: リリース。`GET /releases` と `POST /releases/{sha12}/promote` の応答。
  */
 export interface Releases {
@@ -8220,6 +8419,11 @@ export interface ReleaseItem {
   is_current: boolean;
   is_previous: boolean;
   /**
+   * ADR 2026-10-04-release-notes: `notes.json`（このリリースに何が入ったか。task 単位）。
+   * この仕組みより前のリリースには無いので `null`。
+   */
+  notes?: ReleaseNotes | null;
+  /**
    * ADR-0041 D3: この sha が `[selfdeploy] repo` の `main` の**祖先**か
    * （`git merge-base --is-ancestor <sha> main`）。`false` なら本番のコードが `main` に
    * 戻っていない。リポジトリが無い・git が動かない・その sha を知らないときは `null`。
@@ -8258,6 +8462,11 @@ export interface ReleaseItem {
    * `promote.lock` に書かれた pid がまだ生きている（昇格が走っている最中）。
    */
   promoting: boolean;
+  /**
+   * ADR 2026-10-04-release-notes: いまの `current` からこのリリースへ昇格したら入るもの
+   * （`GET /releases/{sha12}/promotion-preview` と同じ）。`current` 自身・notes の無いリリースは `null`。
+   */
+  promotion?: ReleasePromotionPreview1 | null;
   /**
    * `manifest.json` の `ref`（`release.sh` に渡した git ref）。読めなければ `null`。
    */
@@ -8344,6 +8553,87 @@ export interface ReleaseGateStep {
   step: string;
 }
 /**
+ * `<release>/notes.json`（`release.sh` が `celerisctl release notes` で書く）。`base..sha` の
+ * first-parent の範囲を Celeris の task 単位にまとめた「このリリースに何が入ったか」。
+ * **決定的**に作る（git と配送記録と `GET /tasks/{id}` だけ。LLM は使わない）。
+ */
+export interface ReleaseNotes {
+  /**
+   * `agent-docs/adr/` と `docs/adr/` で足された・変わった ADR。
+   */
+  adrs?: ReleaseNoteFile[];
+  /**
+   * 範囲の起点（ビルド時の `current` の完全な sha）。`current` が無い・repo が知らないときは `null`
+   * （そのときは `sha` だけを見た空の説明になる）。
+   */
+  base?: string | null;
+  /**
+   * `config/celeris.example.toml` の変更（変わっていなければ `null`）。
+   */
+  config_example?: ReleaseNoteConfig | null;
+  /**
+   * task の配送記録（`GET /deliveries`）を読めたか。偽なら task の判別は branch 名だけ。
+   */
+  deliveries_known?: boolean;
+  /**
+   * どの task にも属さない first-parent の commit（新しい順）。
+   */
+  direct_commits?: ReleaseNoteCommit[];
+  /**
+   * `base..sha` の first-parent の sha（新しい順、最大 [`RELEASE_NOTES_FIRST_PARENT_LIMIT`] 件）。
+   * 昇格の要約が「`current` より後ろの部分」だけを切り出すのに使う。
+   */
+  first_parent?: string[];
+  /**
+   * gate で飛ばした段（`gate.json` の `skipped: true`）。
+   */
+  gate_skips?: ReleaseNoteGateSkip[];
+  /**
+   * RFC 3339。
+   */
+  generated_at: string;
+  /**
+   * `crates/task-core/migrations/` に足された（または変わった）ファイル。
+   */
+  migrations?: ReleaseNoteFile[];
+  schema: ReleaseNoteSchema1;
+  /**
+   * このリリースの完全な sha。
+   */
+  sha: string;
+  sha12: string;
+  /**
+   * task 単位の一覧（新しい順）。同じ task は 1 回。
+   */
+  tasks?: ReleaseNoteTask[];
+  /**
+   * `first_parent` を上限で切った。
+   */
+  truncated?: boolean;
+  /**
+   * 形式の版（いまは 1）。
+   */
+  version: number;
+}
+/**
+ * schema_version の変化。
+ */
+export interface ReleaseNoteSchema1 {
+  /**
+   * `from != to`（DB の移行が入る。旧 daemon が新 schema を読めなければ停止→起動になる）。
+   * どちらかが分からなければ `null`。
+   */
+  changed?: boolean | null;
+  /**
+   * 起点（`current`）の schema_version。分からなければ `null`。
+   */
+  from?: number | null;
+  /**
+   * このリリースの schema_version。
+   */
+  to?: number | null;
+}
+/**
  * `<release>/promote_failed.json` の中身（`promote.sh` が非 0 で終わったときだけ書く）。
  */
 export interface ReleasePromoteFailure {
@@ -8355,6 +8645,52 @@ export interface ReleasePromoteFailure {
    * RFC 3339。
    */
   failed_at: string;
+}
+/**
+ * 昇格の要約: `current` から対象リリースまでに入る**全リリース**の説明を 1 つにまとめたもの
+ * （`GET /releases/{sha12}/promotion-preview` と `GET /releases` の `items[].promotion`）。
+ */
+export interface ReleasePromotionPreview1 {
+  adrs: ReleaseNoteFile[];
+  /**
+   * `current` から対象までを notes で辿り切れた（偽なら一覧は対象側の notes にある分だけ）。
+   */
+  complete: boolean;
+  /**
+   * 含まれるリリースの `config_example` の変更（新しい順）。
+   */
+  config_examples: ReleaseNoteConfig[];
+  direct_commits: ReleaseNoteCommit[];
+  /**
+   * いまの `current`（無ければ `null`）。
+   */
+  from?: string | null;
+  /**
+   * 対象リリースの gate で飛ばした段。
+   */
+  gate_skips: ReleaseNoteGateSkip[];
+  migrations: ReleaseNoteFile[];
+  /**
+   * `"live"`（対象の `verify.json` の `live_ok` が真）/ `"stop-start"`（偽）/ `null`（未検証）。
+   */
+  mode?: string | null;
+  /**
+   * 辿り切れなかった理由など（無ければ `null`）。
+   */
+  problem?: string | null;
+  /**
+   * 含まれるリリース（新しい順。対象が先頭）。
+   */
+  releases: ReleasePromotionRelease[];
+  schema: ReleaseNoteSchema;
+  /**
+   * 同じ task は 1 回（新しい順）。
+   */
+  tasks: ReleaseNoteTask[];
+  /**
+   * 対象リリースの sha12。
+   */
+  to: string;
 }
 /**
  * `verify.json` の要約（ADR-0040 D3）。

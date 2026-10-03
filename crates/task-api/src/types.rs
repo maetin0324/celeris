@@ -1157,6 +1157,14 @@ pub struct ReleaseItem {
     /// ADR-0041 D4: いま動いている版からこのリリースへ**何が変わるか**（`changes.json`）。
     /// Phase 48 以前に作られたリリースには無いので `null`。
     pub changes: Option<ReleaseChanges>,
+    /// ADR 2026-10-04-release-notes: `notes.json`（このリリースに何が入ったか。task 単位）。
+    /// この仕組みより前のリリースには無いので `null`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<ReleaseNotes>,
+    /// ADR 2026-10-04-release-notes: いまの `current` からこのリリースへ昇格したら入るもの
+    /// （`GET /releases/{sha12}/promotion-preview` と同じ）。`current` 自身・notes の無いリリースは `null`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion: Option<ReleasePromotionPreview>,
     pub is_current: bool,
     pub is_previous: bool,
     /// `promote.lock` に書かれた pid がまだ生きている（昇格が走っている最中）。
@@ -1271,6 +1279,213 @@ pub struct ReleaseCommit {
     /// 完全な sha（GUI は先頭 7 桁を出す）。
     pub sha: String,
     pub subject: String,
+}
+
+// ---- ADR 2026-10-04-release-notes: リリースの説明（notes.json）と昇格の要約 ----
+
+/// `<release>/notes.json`（`release.sh` が `celerisctl release notes` で書く）。`base..sha` の
+/// first-parent の範囲を Celeris の task 単位にまとめた「このリリースに何が入ったか」。
+/// **決定的**に作る（git と配送記録と `GET /tasks/{id}` だけ。LLM は使わない）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNotes {
+    /// 形式の版（いまは 1）。
+    pub version: u32,
+    /// このリリースの完全な sha。
+    pub sha: String,
+    pub sha12: String,
+    /// 範囲の起点（ビルド時の `current` の完全な sha）。`current` が無い・repo が知らないときは `null`
+    /// （そのときは `sha` だけを見た空の説明になる）。
+    pub base: Option<String>,
+    /// RFC 3339。
+    pub generated_at: String,
+    /// `base..sha` の first-parent の sha（新しい順、最大 [`RELEASE_NOTES_FIRST_PARENT_LIMIT`] 件）。
+    /// 昇格の要約が「`current` より後ろの部分」だけを切り出すのに使う。
+    #[serde(default)]
+    pub first_parent: Vec<String>,
+    /// `first_parent` を上限で切った。
+    #[serde(default)]
+    pub truncated: bool,
+    /// task の配送記録（`GET /deliveries`）を読めたか。偽なら task の判別は branch 名だけ。
+    #[serde(default)]
+    pub deliveries_known: bool,
+    /// task 単位の一覧（新しい順）。同じ task は 1 回。
+    #[serde(default)]
+    pub tasks: Vec<ReleaseNoteTask>,
+    /// どの task にも属さない first-parent の commit（新しい順）。
+    #[serde(default)]
+    pub direct_commits: Vec<ReleaseNoteCommit>,
+    /// `crates/task-core/migrations/` に足された（または変わった）ファイル。
+    #[serde(default)]
+    pub migrations: Vec<ReleaseNoteFile>,
+    pub schema: ReleaseNoteSchema,
+    /// `agent-docs/adr/` と `docs/adr/` で足された・変わった ADR。
+    #[serde(default)]
+    pub adrs: Vec<ReleaseNoteFile>,
+    /// `config/celeris.example.toml` の変更（変わっていなければ `null`）。
+    #[serde(default)]
+    pub config_example: Option<ReleaseNoteConfig>,
+    /// gate で飛ばした段（`gate.json` の `skipped: true`）。
+    #[serde(default)]
+    pub gate_skips: Vec<ReleaseNoteGateSkip>,
+}
+
+/// `ReleaseNotes.first_parent` の上限。
+pub const RELEASE_NOTES_FIRST_PARENT_LIMIT: usize = 2000;
+
+/// `ReleaseNotes.tasks[]` の 1 件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNoteTask {
+    pub task_id: String,
+    /// `GET /tasks/{id}` の題。取れなければ `null`（GUI は commit 題を出す）。
+    #[serde(default)]
+    pub title: Option<String>,
+    /// 最後に `done` で終わった worker run の `outcome_text`（完了時の要約。最大 600 文字）。
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// task の status（取れたときだけ）。
+    #[serde(default)]
+    pub status: Option<String>,
+    /// どこから task だと分かったか: `"delivery"`（配送記録の head）/ `"branch"`（`celeris/<id>` の
+    /// branch 名・merge commit の題）。
+    pub source: String,
+    /// この task に属する commit（新しい順。first-parent に無い配送 head は 1 件だけ）。
+    #[serde(default)]
+    pub commits: Vec<ReleaseNoteCommit>,
+    /// 同じリリースに入った子 task（親がこの一覧に居るものは親の下にまとめる）。
+    #[serde(default)]
+    pub children: Vec<ReleaseNoteChild>,
+}
+
+/// `ReleaseNoteTask.children[]` の 1 件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNoteChild {
+    pub task_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// commit の 1 件（完全な sha と題）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNoteCommit {
+    pub sha: String,
+    pub subject: String,
+}
+
+/// 範囲で足された・変わったファイル（migration・ADR）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNoteFile {
+    pub path: String,
+    /// `"added"` / `"modified"` / `"deleted"`（`git diff --name-status` の A / M / D。R は added 扱い）。
+    pub status: String,
+    /// 範囲の中でこのファイルに最後に触れた first-parent の commit（昇格の要約の切り出しに使う）。
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// ADR の 1 行目の `# ` 題（migration では `null`）。
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// schema_version の変化。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNoteSchema {
+    /// 起点（`current`）の schema_version。分からなければ `null`。
+    pub from: Option<u32>,
+    /// このリリースの schema_version。
+    pub to: Option<u32>,
+    /// `from != to`（DB の移行が入る。旧 daemon が新 schema を読めなければ停止→起動になる）。
+    /// どちらかが分からなければ `null`。
+    pub changed: Option<bool>,
+}
+
+/// `config/celeris.example.toml` の変更。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNoteConfig {
+    pub path: String,
+    pub status: String,
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// 足された（コメントでも空でもない）行。人が本番 config に足すかを判断する材料（最大 40 行）。
+    #[serde(default)]
+    pub added_lines: Vec<String>,
+    /// 足された節見出し（`[section]`）。
+    #[serde(default)]
+    pub added_sections: Vec<String>,
+    /// `added_lines` が 1 行以上ある（人が本番 config を見直す必要がある）。
+    pub needs_review: bool,
+}
+
+/// gate で飛ばした段。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleaseNoteGateSkip {
+    pub step: String,
+    pub reason: String,
+}
+
+/// 昇格の要約: `current` から対象リリースまでに入る**全リリース**の説明を 1 つにまとめたもの
+/// （`GET /releases/{sha12}/promotion-preview` と `GET /releases` の `items[].promotion`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleasePromotionPreview {
+    /// いまの `current`（無ければ `null`）。
+    pub from: Option<String>,
+    /// 対象リリースの sha12。
+    pub to: String,
+    /// `current` から対象までを notes で辿り切れた（偽なら一覧は対象側の notes にある分だけ）。
+    pub complete: bool,
+    /// 辿り切れなかった理由など（無ければ `null`）。
+    #[serde(default)]
+    pub problem: Option<String>,
+    /// 含まれるリリース（新しい順。対象が先頭）。
+    pub releases: Vec<ReleasePromotionRelease>,
+    /// 同じ task は 1 回（新しい順）。
+    pub tasks: Vec<ReleaseNoteTask>,
+    pub direct_commits: Vec<ReleaseNoteCommit>,
+    pub migrations: Vec<ReleaseNoteFile>,
+    /// `from` は `current` の、`to` は対象の schema_version。
+    pub schema: ReleaseNoteSchema,
+    /// `"live"`（対象の `verify.json` の `live_ok` が真）/ `"stop-start"`（偽）/ `null`（未検証）。
+    pub mode: Option<String>,
+    pub adrs: Vec<ReleaseNoteFile>,
+    /// 含まれるリリースの `config_example` の変更（新しい順）。
+    pub config_examples: Vec<ReleaseNoteConfig>,
+    /// 対象リリースの gate で飛ばした段。
+    pub gate_skips: Vec<ReleaseNoteGateSkip>,
+}
+
+/// `ReleasePromotionPreview.releases[]` の 1 件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReleasePromotionRelease {
+    pub sha12: String,
+    pub built_at: Option<String>,
+    /// この昇格で入る task の数（この release の notes にあったもののうち、`current` に入っていないもの）。
+    pub task_count: usize,
+}
+
+/// `GET /deliveries` の応答（配送記録の読み取り。`release.sh` が notes の task 判別に使う）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DeliveryList {
+    pub items: Vec<DeliveryHead>,
+}
+
+/// `DeliveryList.items[]` の 1 件（`task_core::Delivery` の、commit と task を結ぶ欄だけ）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DeliveryHead {
+    pub task_id: String,
+    pub repo: String,
+    pub branch: String,
+    /// 配送したときの取り込み先の先端（この task の区間はここで終わる）。
+    #[serde(default)]
+    pub base: Option<String>,
+    /// 配送した branch の先端。
+    pub head: String,
+    #[serde(default)]
+    pub reviewed_sha: Option<String>,
+    #[serde(default)]
+    pub merge_candidate_sha: Option<String>,
+    /// `DeliveryState` の code。
+    pub state: String,
+    /// 配送が作った release の sha12。
+    #[serde(default)]
+    pub release: Option<String>,
 }
 
 /// `POST /releases/{sha12}/promote` → 202 の応答。**昇格そのものはこの API の外**

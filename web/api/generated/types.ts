@@ -1308,6 +1308,22 @@ export type Delivery = {
   "worker_run": string;
 };
 
+export type DeliveryHead = {
+  "base"?: string | null;
+  "branch": string;
+  "head": string;
+  "merge_candidate_sha"?: string | null;
+  "release"?: string | null;
+  "repo": string;
+  "reviewed_sha"?: string | null;
+  "state": string;
+  "task_id": string;
+};
+
+export type DeliveryList = {
+  "items": Array<DeliveryHead>;
+};
+
 export type DeliverySkipReason = "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
@@ -3354,6 +3370,7 @@ export type ReleaseItem = {
   "gate_ok": boolean;
   "is_current": boolean;
   "is_previous": boolean;
+  "notes"?: ReleaseNotes | null;
   "on_main"?: boolean | null;
   "problem"?: string | null;
   "promote_failed"?: ReleasePromoteFailure | null;
@@ -3361,10 +3378,76 @@ export type ReleaseItem = {
   "promote_stale"?: boolean;
   "promoted_at"?: string | null;
   "promoting": boolean;
+  "promotion"?: ReleasePromotionPreview | null;
   "ref"?: string | null;
   "schema_version"?: number | null;
   "sha12": string;
   "verify"?: ReleaseVerify | null;
+};
+
+export type ReleaseNoteChild = {
+  "task_id": string;
+  "title"?: string | null;
+};
+
+export type ReleaseNoteCommit = {
+  "sha": string;
+  "subject": string;
+};
+
+export type ReleaseNoteConfig = {
+  "added_lines"?: Array<string>;
+  "added_sections"?: Array<string>;
+  "commit"?: string | null;
+  "needs_review": boolean;
+  "path": string;
+  "status": string;
+};
+
+export type ReleaseNoteFile = {
+  "commit"?: string | null;
+  "path": string;
+  "status": string;
+  "title"?: string | null;
+};
+
+export type ReleaseNoteGateSkip = {
+  "reason": string;
+  "step": string;
+};
+
+export type ReleaseNoteSchema = {
+  "changed"?: boolean | null;
+  "from"?: number | null;
+  "to"?: number | null;
+};
+
+export type ReleaseNoteTask = {
+  "children"?: Array<ReleaseNoteChild>;
+  "commits"?: Array<ReleaseNoteCommit>;
+  "source": string;
+  "status"?: string | null;
+  "summary"?: string | null;
+  "task_id": string;
+  "title"?: string | null;
+};
+
+export type ReleaseNotes = {
+  "adrs"?: Array<ReleaseNoteFile>;
+  "base"?: string | null;
+  "config_example"?: ReleaseNoteConfig | null;
+  "deliveries_known"?: boolean;
+  "direct_commits"?: Array<ReleaseNoteCommit>;
+  "first_parent"?: Array<string>;
+  "gate_skips"?: Array<ReleaseNoteGateSkip>;
+  "generated_at": string;
+  "migrations"?: Array<ReleaseNoteFile>;
+  "schema": ReleaseNoteSchema;
+  "sha": string;
+  "sha12": string;
+  "tasks"?: Array<ReleaseNoteTask>;
+  "truncated"?: boolean;
+  "version": number;
 };
 
 export type ReleasePromoteAccepted = {
@@ -3377,6 +3460,28 @@ export type ReleasePromoteAccepted = {
 export type ReleasePromoteFailure = {
   "error": string;
   "failed_at": string;
+};
+
+export type ReleasePromotionPreview = {
+  "adrs": Array<ReleaseNoteFile>;
+  "complete": boolean;
+  "config_examples": Array<ReleaseNoteConfig>;
+  "direct_commits": Array<ReleaseNoteCommit>;
+  "from"?: string | null;
+  "gate_skips": Array<ReleaseNoteGateSkip>;
+  "migrations": Array<ReleaseNoteFile>;
+  "mode"?: string | null;
+  "problem"?: string | null;
+  "releases": Array<ReleasePromotionRelease>;
+  "schema": ReleaseNoteSchema;
+  "tasks": Array<ReleaseNoteTask>;
+  "to": string;
+};
+
+export type ReleasePromotionRelease = {
+  "built_at"?: string | null;
+  "sha12": string;
+  "task_count": number;
 };
 
 export type ReleaseRunning = {

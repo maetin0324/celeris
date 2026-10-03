@@ -6449,6 +6449,81 @@
       ],
       "type": "object"
     },
+    "DeliveryHead": {
+      "description": "`DeliveryList.items[]` の 1 件（`task_core::Delivery` の、commit と task を結ぶ欄だけ）。",
+      "properties": {
+        "base": {
+          "default": null,
+          "description": "配送したときの取り込み先の先端（この task の区間はここで終わる）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": "string"
+        },
+        "head": {
+          "description": "配送した branch の先端。",
+          "type": "string"
+        },
+        "merge_candidate_sha": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release": {
+          "default": null,
+          "description": "配送が作った release の sha12。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "type": "string"
+        },
+        "reviewed_sha": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`DeliveryState` の code。",
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "repo",
+        "branch",
+        "head",
+        "state"
+      ],
+      "type": "object"
+    },
+    "DeliveryList": {
+      "description": "`GET /deliveries` の応答（配送記録の読み取り。`release.sh` が notes の task 判別に使う）。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DeliveryHead"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
     "DeliverySkipReason": {
       "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
       "enum": [
@@ -17035,6 +17110,17 @@
         "is_previous": {
           "type": "boolean"
         },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseNotes"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-04-release-notes: `notes.json`（このリリースに何が入ったか。task 単位）。\nこの仕組みより前のリリースには無いので `null`。"
+        },
         "on_main": {
           "description": "ADR-0041 D3: この sha が `[selfdeploy] repo` の `main` の**祖先**か\n（`git merge-base --is-ancestor <sha> main`）。`false` なら本番のコードが `main` に\n戻っていない。リポジトリが無い・git が動かない・その sha を知らないときは `null`。",
           "type": [
@@ -17083,6 +17169,17 @@
           "description": "`promote.lock` に書かれた pid がまだ生きている（昇格が走っている最中）。",
           "type": "boolean"
         },
+        "promotion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleasePromotionPreview"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-04-release-notes: いまの `current` からこのリリースへ昇格したら入るもの\n（`GET /releases/{sha12}/promotion-preview` と同じ）。`current` 自身・notes の無いリリースは `null`。"
+        },
         "ref": {
           "description": "`manifest.json` の `ref`（`release.sh` に渡した git ref）。読めなければ `null`。",
           "type": [
@@ -17121,6 +17218,332 @@
         "is_current",
         "is_previous",
         "promoting"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteChild": {
+      "description": "`ReleaseNoteTask.children[]` の 1 件。",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteCommit": {
+      "description": "commit の 1 件（完全な sha と題）。",
+      "properties": {
+        "sha": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteConfig": {
+      "description": "`config/celeris.example.toml` の変更。",
+      "properties": {
+        "added_lines": {
+          "default": [],
+          "description": "足された（コメントでも空でもない）行。人が本番 config に足すかを判断する材料（最大 40 行）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "added_sections": {
+          "default": [],
+          "description": "足された節見出し（`[section]`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "commit": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "needs_review": {
+          "description": "`added_lines` が 1 行以上ある（人が本番 config を見直す必要がある）。",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "needs_review"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteFile": {
+      "description": "範囲で足された・変わったファイル（migration・ADR）。",
+      "properties": {
+        "commit": {
+          "default": null,
+          "description": "範囲の中でこのファイルに最後に触れた first-parent の commit（昇格の要約の切り出しに使う）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "description": "`\"added\"` / `\"modified\"` / `\"deleted\"`（`git diff --name-status` の A / M / D。R は added 扱い）。",
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "description": "ADR の 1 行目の `# ` 題（migration では `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteGateSkip": {
+      "description": "gate で飛ばした段。",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteSchema": {
+      "description": "schema_version の変化。",
+      "properties": {
+        "changed": {
+          "description": "`from != to`（DB の移行が入る。旧 daemon が新 schema を読めなければ停止→起動になる）。\nどちらかが分からなければ `null`。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "from": {
+          "description": "起点（`current`）の schema_version。分からなければ `null`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "このリリースの schema_version。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReleaseNoteTask": {
+      "description": "`ReleaseNotes.tasks[]` の 1 件。",
+      "properties": {
+        "children": {
+          "default": [],
+          "description": "同じリリースに入った子 task（親がこの一覧に居るものは親の下にまとめる）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteChild"
+          },
+          "type": "array"
+        },
+        "commits": {
+          "default": [],
+          "description": "この task に属する commit（新しい順。first-parent に無い配送 head は 1 件だけ）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteCommit"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "どこから task だと分かったか: `\"delivery\"`（配送記録の head）/ `\"branch\"`（`celeris/<id>` の\nbranch 名・merge commit の題）。",
+          "type": "string"
+        },
+        "status": {
+          "default": null,
+          "description": "task の status（取れたときだけ）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "default": null,
+          "description": "最後に `done` で終わった worker run の `outcome_text`（完了時の要約。最大 600 文字）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "description": "`GET /tasks/{id}` の題。取れなければ `null`（GUI は commit 題を出す）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ReleaseNotes": {
+      "description": "`<release>/notes.json`（`release.sh` が `celerisctl release notes` で書く）。`base..sha` の\nfirst-parent の範囲を Celeris の task 単位にまとめた「このリリースに何が入ったか」。\n**決定的**に作る（git と配送記録と `GET /tasks/{id}` だけ。LLM は使わない）。",
+      "properties": {
+        "adrs": {
+          "default": [],
+          "description": "`agent-docs/adr/` と `docs/adr/` で足された・変わった ADR。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "base": {
+          "description": "範囲の起点（ビルド時の `current` の完全な sha）。`current` が無い・repo が知らないときは `null`\n（そのときは `sha` だけを見た空の説明になる）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config_example": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseNoteConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`config/celeris.example.toml` の変更（変わっていなければ `null`）。"
+        },
+        "deliveries_known": {
+          "default": false,
+          "description": "task の配送記録（`GET /deliveries`）を読めたか。偽なら task の判別は branch 名だけ。",
+          "type": "boolean"
+        },
+        "direct_commits": {
+          "default": [],
+          "description": "どの task にも属さない first-parent の commit（新しい順）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteCommit"
+          },
+          "type": "array"
+        },
+        "first_parent": {
+          "default": [],
+          "description": "`base..sha` の first-parent の sha（新しい順、最大 [`RELEASE_NOTES_FIRST_PARENT_LIMIT`] 件）。\n昇格の要約が「`current` より後ろの部分」だけを切り出すのに使う。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gate_skips": {
+          "default": [],
+          "description": "gate で飛ばした段（`gate.json` の `skipped: true`）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteGateSkip"
+          },
+          "type": "array"
+        },
+        "generated_at": {
+          "description": "RFC 3339。",
+          "type": "string"
+        },
+        "migrations": {
+          "default": [],
+          "description": "`crates/task-core/migrations/` に足された（または変わった）ファイル。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "$ref": "#/$defs/ReleaseNoteSchema"
+        },
+        "sha": {
+          "description": "このリリースの完全な sha。",
+          "type": "string"
+        },
+        "sha12": {
+          "type": "string"
+        },
+        "tasks": {
+          "default": [],
+          "description": "task 単位の一覧（新しい順）。同じ task は 1 回。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteTask"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "description": "`first_parent` を上限で切った。",
+          "type": "boolean"
+        },
+        "version": {
+          "description": "形式の版（いまは 1）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "sha",
+        "sha12",
+        "generated_at",
+        "schema"
       ],
       "type": "object"
     },
@@ -17166,6 +17589,129 @@
       "required": [
         "failed_at",
         "error"
+      ],
+      "type": "object"
+    },
+    "ReleasePromotionPreview": {
+      "description": "昇格の要約: `current` から対象リリースまでに入る**全リリース**の説明を 1 つにまとめたもの\n（`GET /releases/{sha12}/promotion-preview` と `GET /releases` の `items[].promotion`）。",
+      "properties": {
+        "adrs": {
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "complete": {
+          "description": "`current` から対象までを notes で辿り切れた（偽なら一覧は対象側の notes にある分だけ）。",
+          "type": "boolean"
+        },
+        "config_examples": {
+          "description": "含まれるリリースの `config_example` の変更（新しい順）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteConfig"
+          },
+          "type": "array"
+        },
+        "direct_commits": {
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteCommit"
+          },
+          "type": "array"
+        },
+        "from": {
+          "description": "いまの `current`（無ければ `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate_skips": {
+          "description": "対象リリースの gate で飛ばした段。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteGateSkip"
+          },
+          "type": "array"
+        },
+        "migrations": {
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "description": "`\"live\"`（対象の `verify.json` の `live_ok` が真）/ `\"stop-start\"`（偽）/ `null`（未検証）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "problem": {
+          "default": null,
+          "description": "辿り切れなかった理由など（無ければ `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "releases": {
+          "description": "含まれるリリース（新しい順。対象が先頭）。",
+          "items": {
+            "$ref": "#/$defs/ReleasePromotionRelease"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "$ref": "#/$defs/ReleaseNoteSchema",
+          "description": "`from` は `current` の、`to` は対象の schema_version。"
+        },
+        "tasks": {
+          "description": "同じ task は 1 回（新しい順）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteTask"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "対象リリースの sha12。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "to",
+        "complete",
+        "releases",
+        "tasks",
+        "direct_commits",
+        "migrations",
+        "schema",
+        "adrs",
+        "config_examples",
+        "gate_skips"
+      ],
+      "type": "object"
+    },
+    "ReleasePromotionRelease": {
+      "description": "`ReleasePromotionPreview.releases[]` の 1 件。",
+      "properties": {
+        "built_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha12": {
+          "type": "string"
+        },
+        "task_count": {
+          "description": "この昇格で入る task の数（この release の notes にあったもののうち、`current` に入っていないもの）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sha12",
+        "task_count"
       ],
       "type": "object"
     },
@@ -23553,6 +24099,9 @@
     "decision_withdraw": {
       "$ref": "#/$defs/DecisionWithdrawBody"
     },
+    "delivery_list": {
+      "$ref": "#/$defs/DeliveryList"
+    },
     "doc_page": {
       "$ref": "#/$defs/DocPage"
     },
@@ -23783,6 +24332,10 @@
     "release_promote": {
       "$ref": "#/$defs/ReleasePromoteAccepted"
     },
+    "release_promotion_preview": {
+      "$ref": "#/$defs/ReleasePromotionPreview",
+      "description": "ADR 2026-10-04-release-notes: `GET /releases/{sha12}/promotion-preview` と `GET /deliveries`。"
+    },
     "releases": {
       "$ref": "#/$defs/Releases",
       "description": "Phase 48（ADR-0040 D6）: リリース。`GET /releases` と `POST /releases/{sha12}/promote` の応答。"
@@ -24010,6 +24563,8 @@
     "notify_test",
     "releases",
     "release_promote",
+    "release_promotion_preview",
+    "delivery_list",
     "repo_list",
     "repo_create",
     "repo_patch",

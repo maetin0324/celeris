@@ -637,3 +637,122 @@ async fn get_releases_carries_promoted_at_on_main_and_changes() {
     assert_eq!(body["items"][0]["changes"]["stale"], true, "{body}");
     api.shutdown().await;
 }
+
+/// `notes.json`（ADR 2026-10-04-release-notes）の最小の JSON。
+fn notes_json(sha12: &str, base: &str, fp: &[&str], tasks: &[(&str, &str, &str)]) -> String {
+    let tasks: Vec<serde_json::Value> = tasks
+        .iter()
+        .map(|(id, title, commit)| {
+            serde_json::json!({
+                "task_id": id, "title": title, "source": "delivery",
+                "commits": [{"sha": commit, "subject": format!("integrate {title}")}],
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "version": 1, "sha": sha12, "sha12": sha12, "base": base,
+        "generated_at": "2026-10-04T00:00:00Z", "first_parent": fp,
+        "deliveries_known": true, "tasks": tasks,
+        "schema": {"from": 10, "to": 11, "changed": true},
+    })
+    .to_string()
+}
+
+fn put_notes(dir: &Path, body: &str) {
+    std::fs::write(dir.join("notes.json"), body).unwrap_or_else(|e| panic!("write: {e}"));
+}
+
+/// ADR 2026-10-04-release-notes: `GET /releases/{sha12}/promotion-preview` は current から対象までの
+/// 全リリースの要約（同じ task は 1 回）。知らない sha12 は 404。`GET /releases` の各件に `notes` と
+/// `promotion` が載る（current 自身の `promotion` は `null`）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn promotion_preview_merges_releases_between_current_and_target() {
+    const T1: &str = "01JAAAAAAAAAAAAAAAAAAAAAA1";
+    const T2: &str = "01JAAAAAAAAAAAAAAAAAAAAAA2";
+    let api = Api::start().await;
+    let man = |built: &str| format!(r#"{{"ref":"main","built_at":"{built}","schema_version":11}}"#);
+    api.release(
+        "cccccccccccc",
+        Some(r#"{"ref":"main","built_at":"2026-10-01T00:00:00Z","schema_version":10}"#),
+        Some(r#"{"ok":true}"#),
+        Some(r#"{"ok":true,"live_ok":true}"#),
+    );
+    let a = api.release(
+        "aaaaaaaaaaaa",
+        Some(&man("2026-10-02T00:00:00Z")),
+        Some(r#"{"ok":true}"#),
+        Some(r#"{"ok":true,"live_ok":true}"#),
+    );
+    put_notes(
+        &a,
+        &notes_json("aaaaaaaaaaaa", "cccccccccccc", &["aaaaaaaaaaaa"], &[(T1, "one", "aaaaaaaaaaaa")]),
+    );
+    let b = api.release(
+        "bbbbbbbbbbbb",
+        Some(&man("2026-10-03T00:00:00Z")),
+        Some(r#"{"ok":true}"#),
+        Some(r#"{"ok":true,"live_ok":false}"#),
+    );
+    put_notes(
+        &b,
+        &notes_json(
+            "bbbbbbbbbbbb",
+            "aaaaaaaaaaaa",
+            &["bbbbbbbbbbbb"],
+            &[(T2, "two", "bbbbbbbbbbbb")],
+        ),
+    );
+    api.link("current", "cccccccccccc");
+
+    let (status, body) = api.get("/releases/bbbbbbbbbbbb/promotion-preview").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["from"], "cccccccccccc", "{body}");
+    assert_eq!(body["to"], "bbbbbbbbbbbb", "{body}");
+    assert_eq!(body["complete"], true, "{body}");
+    assert_eq!(body["mode"], "stop-start", "{body}");
+    assert_eq!(body["schema"]["changed"], true, "{body}");
+    let ids: Vec<&str> = body["tasks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tasks: {body}"))
+        .iter()
+        .filter_map(|t| t["task_id"].as_str())
+        .collect();
+    assert_eq!(ids, [T2, T1], "{body}");
+    let rel: Vec<&str> = body["releases"]
+        .as_array()
+        .unwrap_or_else(|| panic!("releases: {body}"))
+        .iter()
+        .filter_map(|r| r["sha12"].as_str())
+        .collect();
+    assert_eq!(rel, ["bbbbbbbbbbbb", "aaaaaaaaaaaa"], "{body}");
+
+    let (status, body) = api.get("/releases/ffffffffffff/promotion-preview").await;
+    assert_eq!(status, 404, "{body}");
+
+    let (status, body) = api.get("/releases").await;
+    assert_eq!(status, 200, "{body}");
+    let items = body["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("items: {body}"));
+    let item = |sha: &str| {
+        items
+            .iter()
+            .find(|i| i["sha12"] == sha)
+            .unwrap_or_else(|| panic!("no {sha}: {body}"))
+    };
+    assert_eq!(item("bbbbbbbbbbbb")["notes"]["tasks"][0]["task_id"], T2, "{body}");
+    assert_eq!(item("bbbbbbbbbbbb")["promotion"]["tasks"].as_array().map(Vec::len), Some(2));
+    assert!(item("cccccccccccc")["notes"].is_null(), "{body}");
+    assert!(item("cccccccccccc")["promotion"].is_null(), "{body}");
+    api.shutdown().await;
+}
+
+/// `GET /deliveries` は 200 で `items` を返す（配送が無ければ空）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_deliveries_is_200_with_items() {
+    let api = Api::start().await;
+    let (status, body) = api.get("/deliveries").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["items"].as_array().map(Vec::len), Some(0), "{body}");
+    api.shutdown().await;
+}

@@ -25,6 +25,10 @@
 #   - 梱包の `pnpm install --prod --frozen-lockfile` は lockfile ごとに 1 度だけ
 #     `releases/.pnpm-prod-cache/<key>/` で行い、リリースの `gui/node_modules` はそこへの相対 symlink にする。
 #
+# ADR 2026-10-04-release-notes: gate.json を書いた後、梱包した `bin/celerisctl release notes` で
+# `<release>/notes.json` と `notes.md`（`current` からこの sha までの task・migration・schema・ADR・config 例・
+# gate の飛ばした段）を作る。失敗は警告だけでリリースは作る。`SD_RELEASE_NOTES_BIN` / `SD_RELEASE_NOTES_API` で差し替え。
+#
 # 本番には一切触れない（プロセスも DB も config も）。人でもワーカーでも実行してよい（D5）。
 # ADR-0126 B4: userns の要る試験は既定 skip だが、この gate は既定で `CELERIS_USERNS_TESTS=1` を立てて走らせる。
 set -euo pipefail
@@ -756,6 +760,26 @@ done
 
 BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"gui_prod_deps_secs\": $GUI_DEPS_SECS, \"gui_prod_deps_reused\": $GUI_DEPS_REUSED, \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"
 write_gate_json "$STAGE/gate.json"
+
+# ADR 2026-10-04-release-notes: リリースの説明（notes.json / notes.md）。gate.json の飛ばした段を拾うので
+# gate.json の後に作る。**失敗は警告だけ**（説明が無くてもリリースは作る）。
+# SD_RELEASE_NOTES_BIN: 呼ぶ celerisctl（既定は今作った $STAGE/bin/celerisctl。試験が差し替える）。
+# SD_RELEASE_NOTES_API: task の題と配送記録を引く API（既定は $SD_PROD_API。届かなくても警告も出さず続ける）。
+NOTES_BIN="${SD_RELEASE_NOTES_BIN:-$STAGE/bin/celerisctl}"
+NOTES_SCHEMA_FROM=""
+if [ -n "$CUR" ]; then
+  NOTES_SCHEMA_FROM="$(sd_json_get "$(sd_release_dir "$CUR")/manifest.json" schema_version 2>/dev/null || true)"
+fi
+set -- release notes --repo "$SD_REPO" --sha "$SHA_FULL" --base "$(base_ref_of_current)" \
+  --schema-to "$SCHEMA_VERSION" --gate-json "$STAGE/gate.json" \
+  --api "${SD_RELEASE_NOTES_API:-$SD_PROD_API}" --token-file "$SD_API_TOKEN_FILE" --out-dir "$STAGE"
+if [ -n "$NOTES_SCHEMA_FROM" ]; then set -- "$@" --schema-from "$NOTES_SCHEMA_FROM"; fi
+if [ -x "$NOTES_BIN" ] && "$NOTES_BIN" "$@" >&2; then
+  sd_log "release notes written: $STAGE/notes.json"
+else
+  sd_log "warning: could not write release notes with $NOTES_BIN (continuing without notes.json)"
+fi
+
 # gate のログも残す（失敗の再現に要る）。
 mkdir -p "$STAGE/gate-logs"
 for log in "$BUILD"/.gate-*.log; do

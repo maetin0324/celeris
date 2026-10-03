@@ -98,6 +98,22 @@ WANT_SCHEMA="$(sd_json_get "$REL/manifest.json" schema_version)"
 OLD="$(sd_current_sha)"
 sd_log "release=$SHA12 schema_version=$WANT_SCHEMA verify.live_ok=$LIVE_OK current=${OLD:-<none>}"
 
+# ---- 昇格の要約（ADR 2026-10-04-release-notes）------------------------------
+#
+# `current` から $SHA12 までに入る task・migration・schema を、**`current` を切り替える前に**ログへ出す。
+# 道具が無い・失敗したら警告だけで続ける（昇格を止めない）。JSON は promoted.json の `included` に使う。
+PREVIEW_JSON="$(mktemp "${TMPDIR:-/tmp}/promote-preview.XXXXXX")" || PREVIEW_JSON=""
+PREVIEW_OK=false
+PREVIEW_TXT=""
+if [ -x "$REL/bin/celerisctl" ] && [ -n "$PREVIEW_JSON" ] \
+  && PREVIEW_TXT="$("$REL/bin/celerisctl" release preview "$SHA12" --releases-dir "$SD_RELEASES" 2>/dev/null)" \
+  && "$REL/bin/celerisctl" release preview "$SHA12" --releases-dir "$SD_RELEASES" --json >"$PREVIEW_JSON" 2>/dev/null; then
+  PREVIEW_OK=true
+  printf '%s\n' "$PREVIEW_TXT" | while IFS= read -r line; do sd_log "preview: $line"; done
+else
+  sd_log "warning: promotion preview is not available (celerisctl release preview failed or is missing); continuing"
+fi
+
 # ---- systemd の unit があるか ----------------------------------------------
 
 systemctl --user cat celeris@.service >/dev/null 2>&1 \
@@ -422,17 +438,32 @@ fi
 # `GET /releases` の `promoted_at` はこれを読むだけ（Phase 48 の逸脱 2「どこにも書かれていない」の解消）。
 # **git リポジトリには触れない**（人のチェックアウトを機械が fast-forward しない。ADR-0041 D3）。
 # `main` に反映されているかは `GET /releases` の `on_main` が読み取りで見せる。
+# preview の JSON から `{"releases": [...], "tasks": [{task_id,title}], "complete": bool}`。無ければ null。
+promoted_included_json() {
+  if [ "$PREVIEW_OK" != true ] || ! command -v python3 >/dev/null 2>&1; then printf 'null'; return 0; fi
+  python3 - "$PREVIEW_JSON" <<'PY' 2>/dev/null || printf 'null'
+import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+print(json.dumps({
+    "releases": [r["sha12"] for r in p.get("releases", [])],
+    "tasks": [{"task_id": t["task_id"], "title": t.get("title")} for t in p.get("tasks", [])],
+    "complete": bool(p.get("complete")),
+}, ensure_ascii=False))
+PY
+}
 {
   printf '{\n'
   printf '  "promoted_at": %s,\n' "$(sd_json_str "$(sd_ts)")"
   printf '  "mode": %s,\n' "$(sd_json_str "$MODE")"
   if [ -n "$OLD" ]; then
-    printf '  "from": %s\n' "$(sd_json_str "$OLD")"
+    printf '  "from": %s,\n' "$(sd_json_str "$OLD")"
   else
-    printf '  "from": null\n'
+    printf '  "from": null,\n'
   fi
+  printf '  "included": %s\n' "$(promoted_included_json)"
   printf '}\n'
 } >"$REL/promoted.json"
+rm -f "$PREVIEW_JSON" 2>/dev/null || true
 sd_log "promoted.json: $REL/promoted.json (mode=$MODE from=${OLD:-<none>})"
 
 sd_log "promoted $SHA12 (mode=$MODE). backup: $BACKUP"

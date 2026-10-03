@@ -79,6 +79,13 @@ impl ReleaseSource for FsReleases {
         scan(&self.root, None)
     }
 
+    fn promotion_preview(&self, sha12: &str) -> Option<task_api::types::ReleasePromotionPreview> {
+        if !valid_sha12(sha12) {
+            return None;
+        }
+        crate::release_notes::preview_from_dir(&self.root, sha12)
+    }
+
     fn promote(&self, sha12: &str) -> Result<ReleasePromoteAccepted, ReleasePromoteError> {
         start_promote(&self.root, sha12, &self.detach)
     }
@@ -177,6 +184,8 @@ pub fn scan(root: &Path, repo: Option<&Path>) -> ReleasesFs {
     // ADR-0041 D3: `main` が引けるリポジトリのときだけ `on_main` を出す。1 回で見切りをつけて、
     // リリースごとに `git` を起こす無駄（と、リポジトリが無いときの毎回の失敗）を避ける。
     let git_repo = repo.filter(|r| git_has_main(r));
+    // ADR 2026-10-04-release-notes: notes.json と昇格の要約（全リリースを 1 度だけ読む）。
+    let metas = crate::release_notes::read_all_meta(root);
 
     let mut items = Vec::new();
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -198,13 +207,22 @@ pub fn scan(root: &Path, repo: Option<&Path>) -> ReleasesFs {
         if !entry.path().is_dir() {
             continue;
         }
-        items.push(read_release(
+        let mut item = read_release(
             &entry.path(),
             &name,
             current.as_deref(),
             previous.as_deref(),
             git_repo,
-        ));
+        );
+        item.notes = metas
+            .iter()
+            .find(|m| m.sha12 == name)
+            .and_then(|m| m.notes.clone());
+        if !item.is_current && item.notes.is_some() {
+            item.promotion =
+                crate::release_notes::preview_among(&metas, current.as_deref(), &name);
+        }
+        items.push(item);
     }
     // 新しい順。`built_at` が読めなかったものは最後（同値は sha12 昇順で安定させる）。
     items.sort_by(|a, b| {
@@ -445,6 +463,8 @@ fn read_release(
         promoted_at: as_string(field(&promoted, "promoted_at")),
         on_main: repo.and_then(|r| on_main(r, &full_sha)),
         changes: read_changes(dir, current),
+        notes: None,
+        promotion: None,
         is_current: current == Some(sha12),
         is_previous: previous == Some(sha12),
         promoting: promoting_pid(dir).is_some(),

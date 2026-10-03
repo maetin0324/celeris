@@ -184,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_0037_reads_existing_0036_delivery_and_saves_candidate_atomically() {
+    fn migration_0042_reads_existing_0036_delivery_and_saves_candidate_atomically() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("delivery.sqlite3");
         let mut conn = Connection::open(&path).unwrap();
@@ -251,8 +251,48 @@ mod tests {
         assert!(!store.delivery_save(Some(&old), &next).unwrap());
     }
 
+    /// review sync: main の schema 41 の DB（1〜37 と 41 が当たり、38〜40 は予約で飛び、0042 は未知）を開くと
+    /// 飛んだ 38〜40 と振り直した 0042 が当たり、deliveries に検査対象の列ができる。
     #[test]
-    fn migration_0037_creates_columns_in_new_database() {
+    fn migration_0042_fills_gaps_in_main_schema_41_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main41.sqlite3");
+        let mut conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+        )
+        .unwrap();
+        for version in (1..=37).chain([41]) {
+            SqliteStore::apply_migration_version(&mut conn, version).unwrap();
+        }
+        drop(conn);
+
+        let store = SqliteStore::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
+        assert_eq!(crate::SCHEMA_VERSION, 42);
+        let conn = Connection::open(&path).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .unwrap();
+        let versions: Vec<u32> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(versions, (1..=42).collect::<Vec<u32>>());
+        let mut stmt = conn.prepare("PRAGMA table_info(deliveries)").unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for name in ["target_sha", "reviewed_sha", "merge_candidate_sha"] {
+            assert!(names.iter().any(|column| column == name), "{name}");
+        }
+    }
+
+    #[test]
+    fn migration_0042_creates_columns_in_new_database() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("new.sqlite3");
         let store = SqliteStore::open(&path).unwrap();

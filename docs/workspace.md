@@ -201,7 +201,7 @@ env = { CARGO_TARGET_DIR = "/w/.cargo-target" }
 | タスクのディレクトリ | `<workspace_root>/<task_id>` を**同じパス**で読み書き可 | worktree・`artifacts/`・`runs/` が前置きに書いたパスのまま見える |
 | `dir` のリポジトリ | シンボリックリンクの**実体**を同じパスで読み書き可 | リンクはコンテナの中では辿れないため |
 | 認証情報 | `CLAUDE_CONFIG_DIR` / `CLAUDE_SECURESTORAGE_CONFIG_DIR` / `CODEX_HOME` / `OPENCODE_CONFIG` の指す場所を**同じパスで読み取り専用** | アダプタが env に書いた場所だけを、書けない形で渡す（ADR-0024 のアカウントプールが選んだものだけ） |
-| ネットワーク | `--network host` | LLM の API と、手元の Qwen のポート（`bnode150:18000` の中継など）に届く必要がある |
+| ネットワーク | `--network host` | 設定された LLM source の API（celeris proxy を使う場合はその listen アドレス）に届く必要がある |
 | cwd | `-w <repos[0] の作業ツリー>` | ホスト実行と同じ場所 |
 | 環境変数 | `HOME=<task_dir>` → アダプタの env → `[container] env`（後勝ち） | ホームは**マウントしない**ので、書ける HOME をタスクのディレクトリに置く |
 | 目印 | `--label celeris.task=<task_id>` | 取り残したコンテナをラベルで消せるように |

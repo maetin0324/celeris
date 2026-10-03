@@ -60,7 +60,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | Browser capability（policy/credential 越境） | task-worker::browser | `crates/task-worker/src/browser{,_credential,_policy}.rs` | [ADR-0078](adr/0078-browser-execution-capability.md), [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
 | Browser 隔離 runtime・supervisor・egress | task-worker::browser_runtime | `crates/task-worker/src/{browser_runtime,browser_supervisor,browser_egress}.rs` | [ADR-0102](adr/0102-browser-phase4-isolation-injection-routing.md), [ADR-0105](adr/0105-browser-p4a-same-uid-bwrap-runtime.md), [ADR-0108](adr/0108-browser-p4a-relay-supervisor-launch-restore.md) |
 | Browser CDP 注入・共有・操作 gate | task-worker | `crates/task-worker/src/{browser_cdp_sink,browser_shared_cdp,browser_action}.rs` | [ADR-0109](adr/0109-browser-p4b-injection-ipc-cdp-sink.md), [ADR-0110](adr/0110-browser-p4b-h3-shared-cdp-trusted-selector.md), [ADR-0113](adr/0113-browser-p3c-control-gate-action-server.md) |
-| Browser 権限分離 launcher（userns owner 分離・固定 IPC） | task-worker::browser_launcher | `crates/task-worker/src/browser_launcher.rs`、`crates/task-worker/src/bin/celeris-browser-launcher.rs`（実装予定） | [ADR-0115](adr/0115-browser-ptrace-owner-ns-launcher.md), [ADR-0116](adr/0116-browser-launcher-implementation.md) |
+| Browser 権限分離 launcher（userns owner 分離・固定 IPC） | task-worker::browser_launcher | `crates/task-worker/src/browser_launcher.rs`、`crates/task-worker/src/bin/celeris-browser-launcher.rs`（実装予定） | [ADR-0115](adr/0115-browser-ptrace-owner-ns-launcher.md), [ADR-0116](adr/0116-browser-launcher-implementation.md), [ADR-0138](adr/0138-browser-prod-admission-confidential-release.md)（本番 admission） |
 | scratch/build cache（GC は別責務） | task-worker | `crates/task-worker/src/{scratch.rs,scratch/gc.rs,build_cache.rs,tiered.rs}` | [ADR-0075](adr/0075-tiered-build-cache.md) |
 | ワークスペース/worktree 準備 | task-worker | `crates/task-worker/src/{workspace.rs,local_worktree.rs}` | [ADR-0043](adr/0043-workspaces.md) |
 | worker の run から DB を読み取り専用（namespace・`launch`） | task-worker::db_guard | `crates/task-worker/src/db_guard.rs` | [ADR-0095](adr/0095-worker-runs-see-the-db-read-only.md) |
@@ -76,6 +76,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | 再帰task木の操作（adopt/plan/view） | task-ops::tree | `crates/task-ops/src/tree{,_adopt,_plan,_view}.rs` | [ADR-0079](adr/0079-recursive-task-decomposition.md) |
 | worker の run が宣言した後続 task（案件・repos の継承、`followups.json`） | task-ops::followup | `crates/task-ops/src/followup.rs`, `crates/task-dispatch/src/dispatcher/followups.rs` | [ADR-0098](adr/0098-worker-created-tasks-inherit-the-origin-project.md) |
 | git 差分・変更取り込み判定 | task-ops::changes | `crates/task-ops/src/changes.rs` | [ADR-0043](adr/0043-workspaces.md) |
+| 受信箱（人の判断）と通知（知らせ）の 2 系統・Discord 送り出し | task-ops::inbox, task-core::notify, celeris::notify | `crates/task-ops/src/inbox.rs`, `crates/task-core/src/notify.rs`, `crates/celeris/src/notify.rs` | [ADR-0133](adr/0133-inbox-and-notifications.md), [ADR-0037](adr/0037-discord-notifications.md) |
 | ドキュメント整備の自動化 | task-ops::docs_maintenance | `crates/task-ops/src/docs_maintenance.rs` | [ADR-0068](adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
 
 ## task-api — HTTP API（`/api/v1`）
@@ -105,7 +106,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | `celerisctl`（CLI。migration をしない `open_client`） | celerisctl::main | `crates/celerisctl/src/main.rs` | [DESIGN §5.9](DESIGN.md#59-cli-taskctl), [ADR-0095](adr/0095-worker-runs-see-the-db-read-only.md) |
-| `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](adr/0053-llm-source-proxy.md) |
+| `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](adr/0053-llm-source-proxy.md), [ADR-0132](adr/0132-provider-llm-source-split-and-cheap-qwen.md) |
 | `celeris-mcp`（外部エージェント向け MCP） | celeris-mcp::rpc | `crates/celeris-mcp/src/rpc.rs` | [ADR-0056](adr/0056-mcp-server.md) |
 | `celeris-credentiald`（credential broker） | celeris-credentiald::lib | `crates/celeris-credentiald/src/lib.rs` | [ADR-0080](adr/0080-browser-phase2-policy-broker-approval.md) |
 | `scratch-cache`（build cache L2 サーバー本体） | scratch-cache::server | `crates/scratch-cache/src/server.rs` | [ADR-0075](adr/0075-tiered-build-cache.md) |

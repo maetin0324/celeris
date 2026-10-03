@@ -11,6 +11,8 @@ celeris は `[llm_proxy]` を有効にすると、`127.0.0.1:18100`（既定）�
 
 ## 1. モデル名
 
+ACP の Qwen 直指定モデル、`llm_source = "openai_compatible:qwen"`、Qwen 固定の `OPENCODE_CONFIG` を使う行は cheap だけで dispatch する。proxy の `celeris/<tier>` を使う ACP 行は全 tier を使える。
+
 - `celeris/<tier>`（`frontier` / `standard` / `cheap`）: 供給元をプロキシが決定的に選ぶ。
 - `claude/<tier>` / `gpt/<tier>` / `qwen/<tier>`: 供給元を明示的に固定する。
 - `<source>:<具体モデル名>`（例 `claude:claude-sonnet-5`）: 素通り。tier 写像を経由しない。
@@ -21,7 +23,7 @@ ID（ADR-0069 Phase 118 D2。`docs/adr/0069-routing-four-layers.md` Phase 118 �
 claude は frontier=`claude-fable-5-1` / standard=`claude-opus-5-5` / cheap=`claude-sonnet-5`、
 gpt は frontier=`gpt-6-astra` / standard=`gpt-6-sol` / cheap=`gpt-6-luna`。運用側の実際のプラン・
 契約で使えるモデルが違えば `[llm_proxy.models]` で上書きすること。
-Qwen は tier に関わらず `qwen3.8-27b`（ADR-0053 D1 で明記）。
+Qwen は cheap にだけ `qwen3.8-27b` を割り当てる（ADR-0132 D3）。
 
 ### 単価表
 

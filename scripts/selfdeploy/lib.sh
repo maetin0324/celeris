@@ -340,6 +340,75 @@ sd_wait_http_200() {
   return 1
 }
 
+# celeris-web@.service の Environment= と EnvironmentFile= に対応する値を読む。
+# web.env は KEY=VALUE のみを受け付け、シェルとして実行しない。
+sd_web_load_env() {
+  local file="${CELERIS_CONFIG_DIR}/web.env" line key value
+  export NODE_ENV=production
+  export CELERIS_WEB_BIND=127.0.0.1:7720
+  export CELERIS_API_URL=http://127.0.0.1:7710
+  export CELERIS_API_TOKEN_FILE="${CELERIS_CONFIG_DIR}/api.token"
+  export CELERIS_WEB_SESSION_SECRET_FILE="${CELERIS_CONFIG_DIR}/web.session-secret"
+  export CELERIS_WEB_PASSWORD_FILE="${CELERIS_CONFIG_DIR}/web.password"
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in ''|\#*|\;*) continue ;; esac
+    key="${line%%=*}"
+    [ "$key" != "$line" ] || continue
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z_0-9]*$ ]] || continue
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done <"$file"
+}
+
+# /healthz は status と release の両方を見る。短い間隔で出来事を待ち、期限を越えたら失敗。
+sd_web_health_wait() {
+  local url="$1" sha="$2" timeout="${3:-30}" deadline code body
+  deadline=$((SECONDS + timeout))
+  while :; do
+    body="$(curl --noproxy '*' -sS --connect-timeout 1 --max-time 2 -o /dev/stdout -w '\n%{http_code}' "$url/healthz" 2>/dev/null)" || body=''
+    code="${body##*$'\n'}"
+    body="${body%$'\n'*}"
+    if [ "$code" = 200 ] && [ "$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("release", ""))' 2>/dev/null)" = "$sha" ]; then
+      return 0
+    fi
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.2
+  done
+}
+
+# `sd_web_app_probe <app_dir> <port> <sha12>` — 一時起動して応答を確認する。
+# subshell の EXIT trap が成功・失敗・割込みのいずれでも起動した node を止める。
+sd_web_app_probe() (
+  local app_dir="$1" port="$2" sha="$3" pid='' log
+  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+  [ -f "$app_dir/server/index.js" ] && [ -d "$app_dir/node_modules" ] || return 1
+  # 使用中の port の既存応答を誤って成功と判定しない。
+  python3 - "$port" <<'PY' || return 1
+import socket, sys
+with socket.socket() as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('127.0.0.1', int(sys.argv[1])))
+PY
+  log="$(mktemp)" || return 1
+  trap 'if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; fi; rm -f "$log"' EXIT
+  trap 'exit 1' INT TERM HUP
+  sd_web_load_env
+  export CELERIS_WEB_BIND="127.0.0.1:$port" CELERIS_WEB_RELEASE="$sha"
+  cd "$app_dir" || return 1
+  "${SD_WEB_NODE:-node}" server/index.js >"$log" 2>&1 &
+  pid=$!
+  if sd_web_health_wait "http://127.0.0.1:$port" "$sha" "${SD_WEB_PROBE_TIMEOUT:-30}"; then return 0; fi
+  sd_log "warning: web app probe failed for $sha: $(tail -n 5 "$log" | tr '\n' ' ')"
+  return 1
+)
+
 # ---- ポート ----------------------------------------------------------------
 
 # 誰かが LISTEN していれば 1（塞がっている）。

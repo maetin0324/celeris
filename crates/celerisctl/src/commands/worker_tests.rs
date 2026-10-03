@@ -329,6 +329,8 @@ fn args_fixture(account: Option<&str>) -> WorkerRunArgs {
 fn pool_provider_config(accounts_dir: &Path, max_runs_per_account: usize) -> Config {
     let mut config = cluster_config(vec![]);
     config.providers = vec![celeris::config::ProviderConfig {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "pool".into(),
@@ -373,6 +375,8 @@ fn resolve_account_non_pool_provider_ignores_missing_account_and_rejects_explici
 fn resolve_account_ignores_or_rejects_account_flag_for_acp_provider() {
     let mut config = cluster_config(vec![]);
     config.providers = vec![celeris::config::ProviderConfig {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "opencode-qwen".into(),
@@ -405,6 +409,8 @@ fn resolve_account_ignores_or_rejects_account_flag_for_acp_provider() {
 fn build_adapters_resolves_an_instance_for_an_acp_provider_selected_by_worker_run() {
     let mut config = cluster_config(vec![]);
     config.providers = vec![celeris::config::ProviderConfig {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "opencode-qwen".into(),
@@ -430,6 +436,8 @@ fn build_adapters_resolves_an_instance_for_an_acp_provider_selected_by_worker_ru
 fn resolve_account_pool_provider_without_accounts_section_errors() {
     let mut config = cluster_config(vec![]);
     config.providers = vec![celeris::config::ProviderConfig {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "pool".into(),
@@ -525,6 +533,8 @@ fn resolve_account_codex_pool_provider_uses_codex_dir_and_auth_json_marker() {
     std::fs::write(tmp.path().join("c").join("auth.json"), "{}").unwrap();
     let mut config = cluster_config(vec![]);
     config.providers = vec![celeris::config::ProviderConfig {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "pool".into(),

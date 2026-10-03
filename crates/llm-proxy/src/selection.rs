@@ -1,8 +1,9 @@
 //! 決定的な選択（ADR-0053 D1 / ADR-0049 の規則の再利用）。
 //!
-//! `celeris/<tier>`: (a) `prefer_free` なら到達可能な `openai-compatible` を最優先、(b) 無ければ
-//! アカウントプール（Claude / Codex を跨いで残量スコアを比較。同点は設定順＝ claude を先に見る）。
-//! `claude/<tier>` / `gpt/<tier>` はそのプールだけ、`qwen/<tier>` は `openai-compatible` だけを見る。
+//! `celeris/cheap`: `prefer_free` なら到達可能な `openai-compatible` を最優先、失敗時は
+//! Claude / Codex の cheap に倒す。frontier / standard は Claude / Codex のみを選ぶ。
+//! アカウントプールでは両者を跨いで残量スコアを比較する（同点は claude が先）。
+//! `claude/<tier>` / `gpt/<tier>` はそのプールだけ、`qwen/cheap` は `openai-compatible` だけを見る。
 //!
 //! 429/401 を受けて次の候補へやり直せるよう（ADR-0053 D1）、選択は**順位付きの列**を返す
 //! （1 位が failed candidate/account_book 更新を受けても、この列は要求の最初に決めたまま進む。
@@ -12,8 +13,10 @@
 //! （テストしやすくするため。DESIGN 原則「判断は 1 か所」をこのクレート内でも守る）。
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use task_core::Tier;
 use task_dispatch::accounts::{AccountBook, AccountCandidate, AccountDir, evaluate};
 
 use crate::config::OpenAiCompatibleConfig;
@@ -165,6 +168,13 @@ pub fn pick_relay(
     reachable: impl Fn(&str) -> bool,
 ) -> Option<&OpenAiCompatibleConfig> {
     rank_relays(sources, reachable).into_iter().next()
+}
+
+/// 旧設定に frontier / standard の Qwen 写像が残っていても使わない（ADR-0132 D3）。
+pub fn qwen_tier_model(models: &HashMap<Tier, String>, tier: Tier) -> Option<&str> {
+    (tier == Tier::Cheap)
+        .then(|| models.get(&Tier::Cheap).map(String::as_str))
+        .flatten()
 }
 
 #[cfg(test)]

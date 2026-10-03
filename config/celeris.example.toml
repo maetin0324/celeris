@@ -152,22 +152,20 @@ dir = "../memory"
 # celeris 本体（tick・ディスパッチャ・ストア）はいつ起こすか・どう適用するかを決定的に決めるだけ。
 #
 #   enabled            — true にすると tick が知識整理 run を起こすようになる。
-#   provider            — "openai-compatible"（既定。ローカルの Qwen OpenAI 互換エンドポイントもこちら）
+#   provider            — "openai-compatible"（既定。celeris proxy もこちら）
 #                          | "anthropic"。
-#   base_url            — "openai-compatible" のときの接続先（例: 本番の Qwen トンネル
-#                          "http://127.0.0.1:18000/v1"）。
-#   model               — 例 "qwen3.8-27b"。
-#   api_key_secret      — `[secrets] dir` の下の id。省略すると渡さない（ローカルの OpenAI 互換
-#                          エンドポイントは鍵を確認しないことが多い）。
+#   base_url            — "openai-compatible" のときの接続先（例: celeris proxy
+#                          "http://127.0.0.1:18100/v1"）。
+#   model               — 例 "celeris/cheap"。
+#   api_key_secret      — `[secrets] dir` の下の id。proxy では `[api] token_file` と同じ秘密を指定する。
 #   max_related_pages   — 依頼文に入れる関連ページの上限（既定 10）。
 #
 # ADR-0052 D1（Phase 64）: 知識整理タスクを起こす直前に `GET <base_url>/models` を 3 秒で当て、届かなければ
 # 下の `[[harnesses]] id = "knowledge"` の `fallback` に従って tier cheap の汎用ハーネスに倒す（60 秒キャッシュ）。
 [knowledge.langmem]
 # enabled = false
-# ADR-0053 D2（Phase 65）: [llm_proxy] を有効にしたら、直接 Qwen を指すのではなくプロキシに向ける
-# （Qwen が落ちていれば celeris/cheap が自動で Claude/GPT のアカウントプールに倒れる。ADR-0052 の
-# フォールバックはプロキシの中に吸収される）。
+# ADR-0132 D4: 接続先は proxy とし、モデルは celeris/cheap にする。
+# cheap では利用可能な Qwen を優先し、到達不能なら Claude/GPT に倒れる。
 # provider = "openai-compatible"
 # base_url = "http://127.0.0.1:18100/v1"
 # model = "celeris/cheap"
@@ -181,13 +179,13 @@ dir = "../memory"
 # config/celeris.multi-account.example.toml を参照）を使って、opencode・PaperQA・Local Deep
 # Research・LangMem のような「adapter を選ばない」ハーネスから Claude / GPT / Qwen を
 # OpenAI 互換 API 越しに使えるようにする。ハーネス側は `celeris/<tier>`（供給元はプロキシが選ぶ）、
-# `claude/<tier>` / `gpt/<tier>` / `qwen/<tier>`（供給元を固定）、または `<source>:<具体モデル名>`
+# `claude/<tier>` / `gpt/<tier>` / `qwen/cheap`（供給元を固定。Qwen は cheap のみ）、または `<source>:<具体モデル名>`
 # （素通り。例 `claude:claude-sonnet-5`）のどれかをモデル名に書く。
 # ---------------------------------------------------------------------------
 [llm_proxy]
 # enabled = true                 # 省略時は「どれかの source が設定されていれば有効」
 # listen = "127.0.0.1:18100"     # 既定。loopback のみ。認証は [api] の token_file と同じ
-# prefer_free = true             # celeris/<tier> は到達可能な無料の openai_compatible を最優先
+# prefer_free = true             # celeris/cheap は到達可能な無料の openai_compatible を最優先
 # max_concurrent_per_account = 4
 # cooldown_fallback_secs = 300
 
@@ -218,9 +216,7 @@ dir = "../memory"
 # standard = "gpt-5.6-terra"
 # cheap = "gpt-5.5"
 # [llm_proxy.models.qwen]
-# frontier = "qwen3.8-27b"
-# standard = "qwen3.8-27b"
-# cheap = "qwen3.8-27b"
+# cheap = "qwen3.8-27b"       # Qwen は cheap だけ
 
 # ---------------------------------------------------------------------------
 # ADR-0054 D1（Phase 67）: ノードごとの継続セッション（`node_sessions`）。CoS の対話は全体で 1 本、
@@ -289,9 +285,9 @@ instructions = """あなたは人の Chief of Staff。案件を受け取り、�
 担当（誰がやるか）は celeris が決めるので、あなたが名指しで人を選ぶ必要はない。"""
 
 # ADR-0052 D2（Phase 64）: 知識整理（ADR-0047 D4）。組み込みのままで動くので普段は書かなくてよい。
-# `fallback` は「専用アダプタ（`langmem` = Qwen）に届かないとき、どの tier の汎用ハーネスに倒すか」。
+# `fallback` は「専用アダプタ（`langmem` の接続先）に届かないとき、どの tier の汎用ハーネスに倒すか」。
 # 組み込みの既定は `{ tier = "cheap" }`。ここで書き換えられ、`fallback = false` で倒さなくなる
-# （＝ Qwen が落ちている間の知識整理 run は Phase 63 までと同じく失敗する）。
+# （＝ 接続先に届かない間の知識整理 run は失敗する）。
 # [[harnesses]]
 # id = "knowledge"
 # adapter = "langmem"
@@ -488,7 +484,9 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # プロバイダ表。上から順に優先（StaticPolicy）。Phase 3 では adapter = "fake" のみ使える。
 [[providers]]
 id = "fake-local"
+kind = "adapter"
 adapter = "fake"
+llm_source = "none"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 2
 model = "fake"
@@ -497,7 +495,9 @@ model = "fake"
 # `[knowledge.langmem]` を有効にしたうえで、このコメントを外す。
 # [[providers]]
 # id = "langmem-main"
+# kind = "adapter"
 # adapter = "langmem"
+# llm_source = "celeris"
 # tiers = ["cheap"]
 # concurrency = 1
 

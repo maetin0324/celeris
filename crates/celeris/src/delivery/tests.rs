@@ -892,3 +892,170 @@ fn pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair() {
     assert!(target_advanced_events(&store, &d).is_empty());
     assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Done);
 }
+
+/// ADR-0120 付記（fallback の解除）: IntegrationRepair を打ち切った fallback（未同期 HEAD の review、
+/// merge candidate なし）から、[merge-base] 局所修復が main を取り込み、再 review の同期で merge candidate を
+/// 記録して配送まで進む。途中で自動の再レビュー上限（[needs-human]）に達せず、review の試行回数も使わない。
+///
+/// review は dispatcher（review_spawn の `task_ops::delivery::begin` と同期・review_verdict の判定記録）が行う。
+/// ここではその delivery 行への書き込みを同じ形で再現し、同期するかは fallback の解除規則（打ち切り時の
+/// HEAD から動いた、または target が HEAD の祖先）で決める。配送側（check_candidate・make_repair・
+/// validate_candidate・merge）は本物を通す。
+#[test]
+fn integration_repair_fallback_delivers() {
+    use task_core::{DeliveryStore, Trigger};
+    let (store, dir, d) = merge_queued_delivery();
+    let p = dir.path();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(p, &tmp.path().join("releases"));
+    let attempts = store.get(d.task_id).unwrap().unwrap().attempts;
+    // main が同じ行を変えて分岐し、review 前同期の衝突を IntegrationRepair が直せずに打ち切った。
+    fs::write(p.join("feature"), "main side").unwrap();
+    git_text(p, &["add", "feature"]).unwrap();
+    git_text(p, &["commit", "-m", "main diverged"]).unwrap();
+    let diverged = sha(p, "main").unwrap();
+    store
+        .append_event(
+            d.task_id,
+            &Event::IntegrationRepairExhausted {
+                work_unit_id: Some("integration-repair-1".into()),
+                repo_id: d.repo_id,
+                target_sha: diverged.clone(),
+                before_sha: d.head.clone(),
+                attempt: task_ops::delivery::MAX_INTEGRATION_REPAIRS,
+                reason: task_core::IntegrationRepairExhaustReason::PlanIssue,
+                rollback_to_sha: None,
+                fallback: true,
+            },
+        )
+        .unwrap();
+    // dispatcher の review: begin が行を作り直し、fallback が解けていれば同期の結果を候補に記録し、
+    // reviewer の合格で MergeQueued にする。
+    let review_pass = |old: &Delivery| -> (Delivery, bool) {
+        let main = sha(p, "main").unwrap();
+        let head = sha(p, "feature").unwrap();
+        let released =
+            head != d.head || git_text(p, &["merge-base", "--is-ancestor", &main, &head]).is_ok();
+        let mut next = old.clone();
+        next.state = State::MergeQueued;
+        next.decision = Some(true);
+        next.base = main.clone();
+        next.head = head.clone();
+        next.notification = None;
+        (next.target_sha, next.reviewed_sha, next.merge_candidate_sha) = if released {
+            (Some(main), Some(head.clone()), Some(head))
+        } else {
+            (None, None, None)
+        };
+        assert!(store.delivery_save(Some(old), &next).unwrap());
+        store
+            .apply_transition(d.task_id, Trigger::ReviewPass, None)
+            .unwrap();
+        (next, released)
+    };
+    let current = store.delivery_get(d.task_id).unwrap().unwrap();
+    store
+        .apply_transition(d.task_id, Trigger::Rereview, None)
+        .unwrap();
+    let (fallback, released) = review_pass(&current);
+    assert!(!released);
+    assert_eq!(fallback.merge_candidate_sha, None);
+
+    // 候補なし・target が HEAD の祖先でない: 再レビューに戻さず [merge-base] へ。
+    advance(&store, &cfg, &fallback, OffsetDateTime::now_utc()).unwrap();
+    let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(blocked.state, State::Blocked);
+    assert!(
+        blocked.detail.starts_with(MERGE_BASE_FAILURE),
+        "{}",
+        blocked.detail
+    );
+    assert!(target_advanced_events(&store, &d).is_empty());
+    assert_eq!(sha(p, "main").unwrap(), diverged);
+    // 局所修復（make_repair）を起こす。
+    advance(&store, &cfg, &blocked, OffsetDateTime::now_utc()).unwrap();
+    let units = store.work_units_for(d.task_id).unwrap();
+    let repair = units
+        .iter()
+        .find(|u| u.kind == WorkUnitKind::Repair)
+        .unwrap()
+        .clone();
+    assert!(repair.spec.title.starts_with("repair (merge_base):"));
+    assert_eq!(repair.status, WorkUnitStatus::Ready);
+    assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Ready);
+
+    // 修復 worker が main を merge して衝突を解く（作業ツリーの未追跡物は無い）。
+    git_text(p, &["checkout", "feature"]).unwrap();
+    assert!(git_text(p, &["merge", "--no-edit", "main"]).is_err());
+    fs::write(p.join("feature"), "implemented on main side").unwrap();
+    git_text(p, &["add", "feature"]).unwrap();
+    git_text(p, &["commit", "--no-edit"]).unwrap();
+    let repaired = sha(p, "feature").unwrap();
+    git_text(p, &["checkout", "main"]).unwrap();
+    let mut done = repair.clone();
+    done.status = WorkUnitStatus::Done;
+    store
+        .work_unit_transition(
+            d.task_id,
+            done,
+            Event::WorkUnitTransitioned {
+                work_unit_id: repair.id.clone(),
+                key: repair.key.clone(),
+                from: WorkUnitStatus::Ready,
+                to: WorkUnitStatus::Done,
+                reason: "test_repair_completed".into(),
+                run_id: None,
+            },
+        )
+        .unwrap();
+    for trigger in [Trigger::Dispatch, Trigger::WorkerDone] {
+        store.apply_transition(d.task_id, trigger, None).unwrap();
+    }
+    // 修復後の review: HEAD が打ち切り時から動き、main を祖先に含むので fallback が解けて候補が記録される。
+    let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
+    let (synced, released) = review_pass(&blocked);
+    assert!(released);
+    assert_eq!(
+        synced.merge_candidate_sha.as_deref(),
+        Some(repaired.as_str())
+    );
+    assert_eq!(synced.target_sha.as_deref(), Some(diverged.as_str()));
+    assert!(validate_candidate(p, &synced).is_ok());
+    assert_eq!(
+        check_candidate(p, &synced).unwrap(),
+        Candidate::Fresh,
+        "the repaired, synced candidate must not ask for another re-review"
+    );
+    let script = cfg
+        .selfdeploy
+        .releases_dir
+        .parent()
+        .unwrap()
+        .join("current/scripts/prepare.sh");
+    fs::create_dir_all(script.parent().unwrap()).unwrap();
+    fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    advance(&store, &cfg, &synced, OffsetDateTime::now_utc()).unwrap();
+    let delivered = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(delivered.state, State::Preparing, "{}", delivered.detail);
+    assert_eq!(sha(p, "main").unwrap(), repaired);
+    assert_eq!(delivered.release.as_deref(), Some(&repaired[..12]));
+    // 自動の再レビューの上限に触れず、review の不合格も試行回数の消費も無い。
+    assert!(
+        (target_advanced_events(&store, &d).len() as u32) < task_ops::delivery::MAX_TARGET_RESYNCS
+    );
+    assert!(!delivered.detail.starts_with("[needs-human]"));
+    let events: Vec<Event> = store
+        .events_for(d.task_id)
+        .unwrap()
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Transitioned { reason, .. } if reason == "review_fail"))
+    );
+    let task = store.get(d.task_id).unwrap().unwrap();
+    assert_eq!(task.status, Status::Done);
+    assert_eq!(task.attempts, attempts);
+}

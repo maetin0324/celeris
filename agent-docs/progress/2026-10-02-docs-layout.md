@@ -215,3 +215,17 @@ ADR-0125 の状態待ち（`run_until_state`、`STATE_WAIT_GUARD` 60 秒、`crat
 | `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | `check-doc-layout: ok` |
 | `sh scripts/dev/check-adr-numbers.sh` | 0 | `check-adr-numbers: ok (122 files)` |
 | `sh scripts/dev/progress-index.sh --check` | 0 | `progress-index --check: ok` |
+
+## sync-main-2 settle
+
+2026-10-03。人の決定 `sync-path = parent-sync` に従った。親 branch `celeris/01M3YBGM64RYPEY9NZANF79A0M` は `8d101fdd5a48` を指し、main の `40189604` を含む。`git merge --no-ff celeris/01M3YBGM64RYPEY9NZANF79A0M` は exit 0（`Already up to date.`）で、取り込む追加 commit や衝突はなかった。親とこの branch は作業開始時に同じ `8d101fdd5a48` で、以下の進捗記録だけを追加した。
+
+| 確認 | command | exit |
+|---|---|---:|
+| 親の main 追従 | `git merge-base --is-ancestor 40189604 celeris/01M3YBGM64RYPEY9NZANF79A0M` | 0 |
+| 条件 0 | `git merge-base --is-ancestor 5d6df9f3 HEAD && test -z "$(git ls-files -u)" && test ! -e docs/PROGRESS.md && test ! -e docs/DESIGN.md && ! git grep -n '^<<<<<<< ' -- agent-docs docs` | 0 |
+| 条件 1 | `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` | 0 |
+| 条件 2 | `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings` | 0 |
+| 条件 3 | `test -z "$(git diff --name-only $(git merge-base HEAD celeris/01M3YBGM64RYPEY9NZANF79A0M) -- . ':!agent-docs' ':!crates/task-dispatch/src/dispatcher/tests')"` | 0 |
+
+元の `cargo test --workspace` の結果と単体再実行は上の gate 節に記録済み。この settle ではコードを変更していない。

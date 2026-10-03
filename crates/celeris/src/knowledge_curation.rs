@@ -543,8 +543,7 @@ fn check_plan(
 ) -> Result<Checked, String> {
     let raw = std::fs::read_to_string(artifacts.join("curation-plan.json"))
         .map_err(|e| format!("curation-plan.json を読めない: {e}"))?;
-    let plan: CurationPlan =
-        serde_json::from_str(&raw).map_err(|e| format!("curation-plan.json の形が違う: {e}"))?;
+    let plan: CurationPlan = curation::parse_plan(&raw)?;
     let known = (!entry.inbox_task_ids.is_empty()).then_some(&entry.inbox_task_ids);
     let validated = if known.is_some() {
         curation::validate_with_inbox(knowledge_root, &plan, known)?

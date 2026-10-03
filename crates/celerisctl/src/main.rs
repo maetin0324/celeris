@@ -18,6 +18,7 @@ use commands::build_cache::{self, BuildCacheCommand};
 use commands::cancel::{self, CancelArgs};
 use commands::config::{self as config_cmd, ConfigCommand};
 use commands::cron::{self as cron_cmd, CronCommand};
+use commands::curation::{self as curation_cmd, CurationCommand};
 use commands::db::{self as db_cmd, DbCommand};
 use commands::execution::{self as execution_cmd, ExecutionCommand, TreeCommand};
 use commands::gate::{self, AnswerArgs, ApproveArgs, RejectArgs};
@@ -133,6 +134,12 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// ADR-0131 付記 D12: 日次知識整理の `curation-plan.json` を daemon と同じ規則で点検する
+    /// （`curation validate`）。DB を開かず、ネットワークも使わない。
+    Curation {
+        #[command(subcommand)]
+        command: CurationCommand,
+    },
     /// ADR-0069 Phase 118 D3: `routing show`。tier → 実行モデル/effort の表。DB には触らない。
     Routing {
         #[command(subcommand)]
@@ -227,6 +234,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
     match command {
         Command::DocsMaintenance { .. } => unreachable!("handled before store open"),
         Command::Cron { .. } => unreachable!("handled before store open"),
+        Command::Curation { .. } => unreachable!("handled before store open"),
         Command::BuildCache { .. } => unreachable!("handled before store open"),
         Command::Browser { .. } => unreachable!("handled before store open"),
         Command::Scratch { .. } => unreachable!("handled before store open"),
@@ -314,6 +322,16 @@ fn main() -> ExitCode {
     }
     if let Command::Cron { command, config } = cli.command {
         return match cron_cmd::run(config, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    // ADR-0131 付記 D12: `curation validate` はファイルだけを読む（DB を開かない）。
+    if let Command::Curation { command } = cli.command {
+        return match curation_cmd::run(command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {}", error::render(&e));

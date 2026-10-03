@@ -13,6 +13,9 @@ use crate::knowledge;
 /// 日次整理の harness id（`[[cron.seed.template]] harness`。cron 由来の task の `genre` になる）。
 pub const CURATION_HARNESS: &str = "knowledge-curation";
 
+/// ADR-0131 付記 D12: 1 回の日次整理 run が扱う `_inbox/` 候補の上限。残りは次回へ持ち越す。
+pub const MAX_INBOX_CANDIDATES_PER_RUN: usize = 40;
+
 /// cron が作った日次整理 task か（ADR-0131 付記 D10 (6): この task の報告は daemon が 1 件だけ作り、
 /// 報告のまとめにも入れない）。
 pub fn is_curation_task(task: &task_core::Task) -> bool {
@@ -167,6 +170,35 @@ fn major_rewrite(before: &str, after: &str) -> bool {
     old.iter().filter(|line| !new.contains(**line)).count() * 2 > old.len()
 }
 
+/// ADR-0131 付記 D12: `curation-plan.json` の原文を読む。daemon（`check_plan`）と
+/// `celerisctl curation validate` が同じ文言で拒否するよう、ここに 1 つだけ置く。
+pub fn parse_plan(raw: &str) -> Result<CurationPlan, String> {
+    serde_json::from_str(raw).map_err(|e| format!("curation-plan.json の形が違う: {e}"))
+}
+
+/// ADR-0131 付記 D12: daemon が書いた `inputs/inbox.json` から、受信箱の提案先として正しい task id
+/// （`candidates[].task_id` と `attention[].task.id`）を集める。配列が無ければ空集合。
+pub fn known_task_ids_from_inbox_json(raw: &str) -> Result<BTreeSet<String>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("inbox.json を読めない: {e}"))?;
+    let mut ids = BTreeSet::new();
+    if let Some(items) = value.get("candidates").and_then(|v| v.as_array()) {
+        for item in items {
+            if let Some(id) = item.get("task_id").and_then(|v| v.as_str()) {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    if let Some(items) = value.get("attention").and_then(|v| v.as_array()) {
+        for item in items {
+            if let Some(id) = item.pointer("/task/id").and_then(|v| v.as_str()) {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    Ok(ids)
+}
+
 /// 全操作を事前に検証する。保護ページの操作は返値の human_decisions に移す。
 pub fn validate(root: &Path, plan: &CurationPlan) -> Result<ValidatedPlan, String> {
     validate_with_inbox(root, plan, None)
@@ -280,6 +312,17 @@ pub fn validate_with_inbox(
         } else {
             kb.push(item.clone());
         }
+    }
+    // ADR-0131 付記 D12: 1 回の run で扱う `_inbox/` 候補は上限まで。残りは次回へ回す。
+    let inbox_candidates = plan
+        .kb
+        .iter()
+        .filter(|item| item.path.starts_with("_inbox/"))
+        .count();
+    if inbox_candidates > MAX_INBOX_CANDIDATES_PER_RUN {
+        return Err(format!(
+            "_inbox の候補が 1 回の上限 {MAX_INBOX_CANDIDATES_PER_RUN} 件を超えています: {inbox_candidates} 件（ADR-0131 付記 D12: 古い順に上限まで扱い、残りは次回へ回す）"
+        ));
     }
     let mut task_ids = BTreeSet::new();
     for item in &plan.inbox {

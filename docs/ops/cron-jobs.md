@@ -66,9 +66,10 @@ cat > /tmp/daily-curation-template.json <<'JSON'
   "acceptance": [
     {"type": "artifact_exists", "name": "curation-plan.json"},
     {"type": "artifact_exists", "name": "curation.diff"},
-    {"type": "artifact_exists", "name": "daily-summary.md"}
+    {"type": "artifact_exists", "name": "daily-summary.md"},
+    {"type": "command", "cmd": "celerisctl curation validate", "expect_exit": 0}
   ],
-  "objective": "知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10）。本番 KB は書かず、作業場所の写しだけを編集する。"
+  "objective": "知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10・D12）。本番 KB は書かず、作業場所の写しだけを編集する。_inbox の候補は古い順に 40 件まで扱い、残りは次回へ回す。出す前に celerisctl curation validate を走らせ exit 0 にする。"
 }
 JSON
 sed -i "s/__PROJECT__/${PROJECT}/" /tmp/daily-curation-template.json
@@ -85,10 +86,56 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" create \
 
 - `schedule` / `timezone` は環境に合わせて変える（本番の運用で都合のよい時刻にする）。
 - `--enabled false` で作る（本番で有効にするのは §4 の確認後）。
+- `acceptance` の 4 件目（`command`）は **計画の形の決定的な検査**（ADR-0131 付記 D12）。`artifact_exists` だけだと
+  2026-10-03 の初回 dry-run のように、daemon の検証に通らない形の計画が reviewer を通ってしまう。検査は作業場所の
+  `repos/<name>` を cwd に走り、上へ `artifacts/curation-plan.json` と `inputs/kb` を探す。daemon の PATH
+  （`~/.local/bin` 等）の `celerisctl` に `curation` サブコマンドがある release（付記 D12 以降）を昇格してから使う。
+  `objective` は `config/celeris.example.toml` の `[[cron.seed]]` の全文を貼るとよい（上の 1 行は最小形）。
 - `mode = "dry_run"` のまま作る（本番 KB には書き込まない）。`mode` は `CronTaskTemplate` の `extra`
   〈`#[serde(flatten)]`〉で持つ欄だが、JSON の上では `title`/`harness` 等と同じ階層に書く
   （`{"extra": {"mode": ...}}` ではない）。`422` が出た場合は雛形の
   `acceptance` / `harness` / `project` のどれかを見直す（エラーメッセージに理由が出る）。
+
+### 2.1 `curation-plan.json` の形と事前検証（ADR-0131 付記 D10 (4)・D11 (1)・D12）
+
+daemon は task が `done` になると `artifacts/curation-plan.json` を
+`task_ops::knowledge_curation::CurationPlan`（`deny_unknown_fields`）で読む。最上位は次の **4 欄だけ**で、
+`task_id`・`date`・`mode`・`operations`・`manual_review` のような欄があると `unknown field` で計画全体が捨てられる:
+
+```json
+{
+  "version": 1,
+  "kb": [
+    {"path": "_inbox/20261003T123737Z-candidate.md", "action": "merge",
+     "target": "projects/agent-platform/replan-add-leaf-stage-mechanics.md", "reason": "同じ規則の追記",
+     "content": "<統合先の完成した本文>",
+     "expected_hash": "<sha256sum inputs/kb/_inbox/20261003T123737Z-candidate.md>",
+     "target_hash": "<sha256sum inputs/kb/projects/agent-platform/replan-add-leaf-stage-mechanics.md>"},
+    {"path": "_inbox/20261003T131027Z-candidate.md", "action": "delete", "target": null,
+     "reason": "上と同内容。統合先に反映済み", "content": null, "expected_hash": "<sha256>", "target_hash": null}
+  ],
+  "inbox": [{"task_id": "<inputs/inbox.json にある id>", "proposal": "cancel", "reason": "同題の重複 task"}],
+  "human_decisions": [{"subject": "user/preferences.md", "proposal": "fix", "reason": "人のページ。文言の更新を提案"}]
+}
+```
+
+何も変えない最小の計画は `{"version":1,"kb":[],"inbox":[],"human_decisions":[]}`。`kb` 各件は 7 欄
+`{path, action, target, reason, content, expected_hash, target_hash}`（不要な欄は `null`）、`action` は
+`merge|new|delete|keep|fix`。`merge` の `target` は 1 計画で 1 回しか使えないので、同じ統合先の候補が複数あれば
+1 件を `merge`、残りを `delete`（理由に統合先）にする。候補を新規ページにするときは `new`（新 path）と候補の
+`delete` の 2 件。`inbox` の `task_id` は `inputs/inbox.json` の `candidates[].task_id` / `attention[].task.id` に
+ある id だけ。`_inbox/` の候補は **1 run 40 件まで**（古い順。残りは計画に載せず次回へ。D12）。
+
+worker は出す前に、人は dry-run の成果物を読むときに、daemon と同じ検証を手元で走らせられる（DB・ネットワークに触れない）:
+
+```bash
+# 作業場所の中（repos/<name> でもよい）: artifacts/curation-plan.json と inputs/kb を上へ探す
+celerisctl curation validate
+# path を明示する（KB の写しは inputs/kb。--diff / --inbox を省くと作業場所の既定を使う）
+celerisctl curation validate <workspace>/artifacts/curation-plan.json <workspace>/inputs/kb --json
+# 失敗: stderr に daemon と同じ文言、exit 1
+#   error: curation-plan.json の形が違う: unknown field `task_id`, expected one of `version`, `kb`, `inbox`, `human_decisions` at line 2 column 11
+```
 
 ## 3. 作った job を確認する
 
@@ -107,9 +154,10 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" history daily-curation --limit 5
 ```
 
 `outcome = created` と `task_id` が返ったら、その task を GUI（`/tasks/<task_id>`）か
-`celerisctl task show <task_id>` で追い、終端になったら報告の `daily-summary.md` を読む。見るもの:
+`celerisctl task show <task_id>` で追い、終端になったら報告の `daily-summary.md` を読む。報告が
+「計画を検証できなかった」なら、作業場所で `celerisctl curation validate`（§2.1）を走らせると理由が出る。見るもの:
 
-1. `_inbox` の処理件数・重複統合・古い記述の削除件数（ADR-0131 D8 の固定節）。
+1. `_inbox` の処理件数（1 run 40 件まで。残り件数も出る）・重複統合・古い記述の削除件数（ADR-0131 D8 の固定節）。
 2. 削除したページの一覧と理由（`curation.diff` で実差分も確認できる）。
 3. 受信箱の片付け提案（D7 で外れなかった判断要項目）。
 4. 人への decision（`user/` 配下のページの扱いなど）。

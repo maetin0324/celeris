@@ -224,6 +224,27 @@ fn cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness() {
         );
     }
 
+    // ADR-0131 付記 D12: 雛形の acceptance に計画の形の決定的な検査（celerisctl curation validate）がある。
+    let validate_checks: Vec<&serde_json::Value> = seed
+        .template
+        .acceptance
+        .iter()
+        .filter(|c| {
+            c.get("type").and_then(|t| t.as_str()) == Some("command")
+                && c.get("cmd")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|cmd| cmd.contains("celerisctl curation validate"))
+        })
+        .collect();
+    assert_eq!(validate_checks.len(), 1, "{:?}", seed.template.acceptance);
+    assert_eq!(validate_checks[0].get("expect_exit"), Some(&0.into()));
+    for word in ["40", "curation validate", "version"] {
+        assert!(
+            seed.template.objective.contains(word),
+            "objective に {word} が無い"
+        );
+    }
+
     let harness = cfg
         .harnesses
         .iter()
@@ -232,6 +253,20 @@ fn cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness() {
     assert_eq!(harness.tier, Some(Tier::Cheap));
     assert_eq!(harness.adapter, None, "coding 系の汎用 adapter");
     assert!(harness.fallback.is_some());
+    // ADR-0131 付記 D12: instructions に計画全体の形・最小の例・事前検証・_inbox の上限がある。
+    let instructions = harness.instructions.as_deref().unwrap_or_default();
+    for word in [
+        "\"version\": 1",
+        "\"kb\"",
+        "\"inbox\"",
+        "\"human_decisions\"",
+        "{\"version\":1,\"kb\":[],\"inbox\":[],\"human_decisions\":[]}",
+        "celerisctl curation validate",
+        "40 件",
+        "unknown field",
+    ] {
+        assert!(instructions.contains(word), "instructions に {word} が無い");
+    }
 
     let dir = tempfile::tempdir().unwrap();
     let store = SqliteStore::open(&dir.path().join("t.sqlite3")).unwrap();

@@ -369,7 +369,36 @@ capabilities = ["KB ページの統合・新規・削除の振り分け", "重�
 input_artifacts = ["inputs/kb/（本番 KB の写し）", "inputs/inbox.json", "inputs/reports.json"]
 output_artifacts = ["curation-plan.json", "curation.diff", "daily-summary.md"]
 budget = { max_turns = 30 }
-instructions = "あなたは知識整理担当。本番 KB は書かず inputs/kb/ の写しだけを編集する。計画の kb 各件は {path, action, target, reason, content, expected_hash, target_hash}。content は new/fix/merge の完成本文、それ以外は null。expected_hash は inputs/kb/<path> の変更前生バイト SHA-256（16進小文字）、new は null。target_hash は merge の統合先の変更前ハッシュだけ。他は null。curation.diff は計画が変える path だけを含める。人への候補は human_decisions にまとめる。"
+instructions = """あなたは知識整理担当。本番 KB は書かず inputs/kb/ の写しだけを編集する。計画は artifacts/curation-plan.json に書き、
+出す前に必ず `celerisctl curation validate` を走らせて exit 0 にする（daemon と同じ検証。非 0 なら stderr の理由を直して再実行。
+受け入れ条件も同じコマンドで判定する。cwd が repos/<name> でも作業場所を上に探す。見つからなければ
+`celerisctl curation validate <作業場所>/artifacts/curation-plan.json <作業場所>/inputs/kb`）。
+
+curation-plan.json の形（ADR-0131 付記 D10 (4)・D11 (1)・D12）。最上位は version・kb・inbox・human_decisions の 4 欄**だけ**。
+task_id・date・mode・operations・manual_review・attention などの欄を足すと「unknown field」で計画全体が拒否される:
+{"version": 1,
+ "kb": [{"path": "_inbox/20261003T123737Z-candidate.md", "action": "merge",
+         "target": "projects/agent-platform/replan-add-leaf-stage-mechanics.md", "reason": "同じ規則の追記",
+         "content": "<統合先の完成した本文>", "expected_hash": "<sha256sum inputs/kb/_inbox/...candidate.md>",
+         "target_hash": "<sha256sum inputs/kb/projects/agent-platform/replan-add-leaf-stage-mechanics.md>"},
+        {"path": "_inbox/20261003T131027Z-candidate.md", "action": "delete", "target": null,
+         "reason": "上と同内容。統合先 projects/agent-platform/replan-add-leaf-stage-mechanics.md に反映済み",
+         "content": null, "expected_hash": "<sha256>", "target_hash": null}],
+ "inbox": [{"task_id": "<inputs/inbox.json の candidates[].task_id か attention[].task.id>", "proposal": "cancel", "reason": "同題の重複 task"}],
+ "human_decisions": [{"subject": "user/preferences.md", "proposal": "fix", "reason": "人のページ。文言の更新を提案"}]}
+何も変えないときの最小の計画: {"version":1,"kb":[],"inbox":[],"human_decisions":[]}
+
+kb 各件は 7 欄 {path, action, target, reason, content, expected_hash, target_hash} をすべて書く（不要な欄は null）。
+action は merge|new|delete|keep|fix。path は inputs/kb/ からの相対で .md、_inbox/ の候補も 1 件 1 操作。
+content は new/fix は path の新しい本文、merge は target の完成した本文、delete/keep は null。
+expected_hash は inputs/kb/<path> の変更前の生バイトの SHA-256 16 進小文字（sha256sum）、new だけ null。
+target_hash は merge の inputs/kb/<target> の変更前ハッシュ、他は null。
+merge の target は 1 計画で 1 回しか使えない。同じ統合先に複数の候補があれば 1 件を merge にし、残りは delete にして理由に統合先を書く。
+候補を新規ページにするときは new（新 path、content あり）と、候補の delete の 2 件に分ける。
+inbox の task_id は inputs/inbox.json にある id だけ（無い id は拒否）。inbox.json に候補が無ければ inbox は []。
+_inbox/ の候補は 1 回の run で 40 件まで（ADR-0131 付記 D12。keep も数える）。`ls inputs/kb/_inbox | sort | head -n 40` の古い順に
+扱い、残りは計画に載せず触らない（次回へ回す）。daily-summary.md に処理件数と残り件数を書く。
+curation.diff は計画が変える path だけを含める。人への候補は human_decisions にまとめる。"""
 
 # 旧い形（Phase 58 まで）。`[[harnesses]]` を書くならこちらは**消すこと**（両方あると `[[harnesses]]` が勝つ）。
 # 互換のためだけに残してあり、`[[harnesses]]` が 1 つも無いときだけ読まれる（起動時に warn が 1 行出る）。
@@ -572,6 +601,9 @@ acceptance = [
   { type = "artifact_exists", name = "curation-plan.json" },
   { type = "artifact_exists", name = "curation.diff" },
   { type = "artifact_exists", name = "daily-summary.md" },
+  # ADR-0131 付記 D12: 計画の形を daemon と同じ検証で決定的に判定する（cwd は作業場所の repos/<name>。
+  # 上へ artifacts/curation-plan.json と inputs/kb を探す）。daemon の PATH の celerisctl がこの release 以降であること。
+  { type = "command", cmd = "celerisctl curation validate", expect_exit = 0 },
 ]
 objective = """知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10）。本番 KB は書かず、作業場所の写しだけを編集する。
 
@@ -579,7 +611,8 @@ objective = """知識ベースと受信箱の日次整理（ADR-0131 D6・付記
 inputs/reports.json（前回の整理以降に終わった task の報告の抜粋）。run の mode（dry_run|apply）は入力 manifest に書かれている。
 
 作業:
-1. inputs/kb/_inbox/ の各件を、既存ページへの統合（merge）・新規ページ（new）・削除（delete）に振り分け、_inbox を空にする。
+1. inputs/kb/_inbox/ の候補を古い順（`ls inputs/kb/_inbox | sort`）に **40 件まで**取り、既存ページへの統合（merge）・新規ページ（new）・
+   削除（delete）に振り分ける（ADR-0131 付記 D12）。残りは計画に載せず触らない（次回へ回す）。
 2. 同じ趣旨の重複ページを 1 本に寄せる（統合先を残し、他は削除）。
 3. 古い記述・誤った記述を直す（fix）か消す（delete）。archive はしない。消したものは計画に path と理由を残す。
 4. index.json と README の整合は daemon が反映後に再生成するので、手で揃えなくてよい。
@@ -587,11 +620,14 @@ inputs/reports.json（前回の整理以降に終わった task の報告の抜�
 6. 受信箱で判断が要る項目（古い報告を閉じてよいか、規則に当たらない failed を諦めてよいか）は inbox 節に提案と理由を書く。状態は変えない。
 
 出力（artifacts/ に 3 ファイル）:
-- curation-plan.json: version 1。kb の各件は {path, action: merge|new|delete|keep|fix, target, reason, content, expected_hash, target_hash}。
+- curation-plan.json: 最上位は {version: 1, kb: [], inbox: [], human_decisions: []} の 4 欄だけ（他の欄は unknown field で拒否）。
+  kb の各件は {path, action: merge|new|delete|keep|fix, target, reason, content, expected_hash, target_hash} の 7 欄。
   content は new/fix/merge の完成本文、delete/keep は null。expected_hash は inputs/kb/<path> の変更前の生バイトの SHA-256 16 進小文字
   （例: sha256sum inputs/kb/<path>）、new は null。target_hash は merge の統合先 inputs/kb/<target> の変更前ハッシュだけで、他は null。
   inbox は {task_id, proposal, reason}、human_decisions は {subject, proposal, reason}。人に聞く項目は human_decisions にまとめ、1 件の decision として人に提示する。
 - curation.diff: 写しの before/after の unified diff。計画で変更する path だけを含め、計画に無い path の差分を出さない。
-- daily-summary.md: 見出し「日次整理 YYYY-MM-DD（mode）」、KB の件数（統合・新規・削除・保留）、削除したページ、受信箱、人に決めてほしいこと。
-  1 節 10 行まで。人が数十秒で読める量にする。
+- daily-summary.md: 見出し「日次整理 YYYY-MM-DD（mode）」、KB の件数（統合・新規・削除・保留と _inbox の処理 n / 残り m）、削除したページ、
+  受信箱、人に決めてほしいこと。1 節 10 行まで。人が数十秒で読める量にする。
+
+出す前に `celerisctl curation validate` を走らせ exit 0 にする（daemon と同じ検証・同じ文言。受け入れ条件も同じコマンド）。
 """

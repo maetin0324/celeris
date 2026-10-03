@@ -321,3 +321,65 @@ fn rejects_symlink_escape() {
     )]);
     assert!(validate(&root, &bad).is_err());
 }
+
+#[test]
+fn parse_plan_rejects_worker_shape_of_2026_10_03() {
+    let err = parse_plan(include_str!("fixtures/worker-plan-2026-10-03.json")).unwrap_err();
+    assert!(err.contains("curation-plan.json の形が違う"), "{err}");
+    assert!(err.contains("unknown field"), "{err}");
+    assert!(err.contains("task_id"), "{err}");
+}
+
+#[test]
+fn parse_plan_accepts_minimal_plan() {
+    let (_dir, root) = fixture();
+    let plan = parse_plan(r#"{"version":1,"kb":[],"inbox":[],"human_decisions":[]}"#).unwrap();
+    let validated = validate(&root, &plan).unwrap();
+    assert!(validated.kb.is_empty());
+    assert!(validated.inbox.is_empty());
+    assert!(validated.human_decisions.is_empty());
+}
+
+#[test]
+fn validate_rejects_more_than_max_inbox_candidates() {
+    let (_dir, root) = fixture();
+    std::fs::create_dir_all(root.join("_inbox")).unwrap();
+    for i in 0..=MAX_INBOX_CANDIDATES_PER_RUN {
+        std::fs::write(root.join(format!("_inbox/c{i:03}.md")), format!("# C{i}\n")).unwrap();
+    }
+    let items: Vec<KbAction> = (0..=MAX_INBOX_CANDIDATES_PER_RUN)
+        .map(|i| {
+            item(
+                &root,
+                &format!("_inbox/c{i:03}.md"),
+                Action::Delete,
+                None,
+                None,
+            )
+        })
+        .collect();
+    assert_eq!(items.len(), 41);
+    let err = validate(&root, &plan(items.clone())).unwrap_err();
+    assert!(err.contains("上限 40"), "{err}");
+    let ok = validate(&root, &plan(items[..40].to_vec())).unwrap();
+    assert_eq!(ok.kb.len(), 40);
+}
+
+#[test]
+fn known_task_ids_from_inbox_json_collects_candidates_and_attention() {
+    let raw = r#"{
+        "generated_at": "2026-10-03T00:00:00Z",
+        "attention": [{"task": {"id": "T-ATTN"}, "reason": "x"}],
+        "suppressed": [],
+        "candidates": [{"task_id": "T-CAND", "kind": "old_report"}]
+    }"#;
+    let ids = known_task_ids_from_inbox_json(raw).unwrap();
+    let expected: BTreeSet<String> = ["T-ATTN", "T-CAND"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(ids, expected);
+    assert!(known_task_ids_from_inbox_json("{}").unwrap().is_empty());
+    assert!(
+        known_task_ids_from_inbox_json("not json")
+            .unwrap_err()
+            .contains("inbox.json を読めない")
+    );
+}

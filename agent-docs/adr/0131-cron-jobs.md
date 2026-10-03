@@ -362,6 +362,46 @@ D1〜D10 の本文は変更しない。
    `curation.diff` を上書きする。`curation-apply` の承認 hash はこの正本の差分から計算する。
    worker の `curation.diff` が無ければ照合を省略し、daemon が正本の差分を生成する。
 
+## 付記 D12（2026-10-03）計画の形の事前検証と `_inbox` の 1 回あたりの上限
+
+2026-10-03 の本番初回 dry-run（task `01M410C9X7TGMRBJ6NYXDSW07P`）で、worker は `curation-plan.json` を独自の形
+（最上位に `task_id`・`date`・`mode`・`operations`・`manual_review` …）で出し、reviewer も通したが、daemon の
+`task_ops::knowledge_curation::CurationPlan`（`deny_unknown_fields`）は `unknown field task_id` で計画全体を
+拒否し、何も使われなかった。原因は (1) harness の instructions が `kb` 1 件の欄しか示さず計画全体の形と例を
+与えていない、(2) worker が出す前に daemon と同じ検証を走らせる手段が無い、(3) acceptance が
+`artifact_exists` だけで形を見ない、の 3 点。また `_inbox` には候補が 283 件あり、`max_turns = 30` の cheap
+worker が 1 回で全件を扱える量ではない。この付記は D10 (4)・D11 (1) の計画の形は変えず、次を決める。
+
+1. **検証の入口を worker に渡す。** `celerisctl curation validate [PLAN] [KB] [--diff] [--inbox] [--no-diff] [--json]`
+   を追加する（`crates/celerisctl/src/commands/curation.rs`）。DB を開かず、ネットワークにも出ず、ファイルだけを
+   読む。検証は daemon の `check_plan` と同じ順・同じ関数（`parse_plan` → `validate_with_inbox`（`inputs/inbox.json`
+   の `candidates[].task_id` と `attention[].task.id` を既知の id とする）→ `check_diff_matches`）で、拒否の文言も
+   同じにする（`parse_plan` は `task_ops::knowledge_curation` に 1 つだけ置き、daemon もそれを呼ぶ）。引数を
+   省略したときは cwd から上へ `artifacts/curation-plan.json` と `inputs/kb` を持つ作業場所を探す（検査コマンドの
+   cwd は作業場所の `repos/<name>` なので、`celerisctl curation validate` だけで動く）。成功は exit 0 と件数 1 行、
+   失敗は stderr に `error: <理由>` と exit 1。
+2. **形は instructions と ops 手順に書き、acceptance で決定的に判定する。** harness `knowledge-curation` の
+   `instructions` と `[[cron.seed]]` の `objective`（`config/celeris.example.toml`）、`docs/ops/cron-jobs.md` に、
+   最上位 4 欄（`version`・`kb`・`inbox`・`human_decisions`）だけという規則・最小の計画
+   `{"version":1,"kb":[],"inbox":[],"human_decisions":[]}`・`_inbox` 候補の merge/delete の例・出す前に
+   `celerisctl curation validate` を走らせることを書く。cron の雛形の `acceptance` に
+   `{ type = "command", cmd = "celerisctl curation validate", expect_exit = 0 }` を足し、形の判定は reviewer の
+   自己申告ではなくこの検査が決める。この検査は daemon の PATH の `celerisctl` がこの付記以降の release である
+   ことを前提にする（古い release の `celerisctl` には `curation` が無く、検査は非 0 になる）。
+3. **`_inbox` 候補は 1 回の run で 40 件まで。** `task_ops::knowledge_curation::MAX_INBOX_CANDIDATES_PER_RUN = 40`。
+   計画の `kb` のうち `path` が `_inbox/` で始まる件数がこれを超えたら、daemon と `celerisctl curation validate` は
+   計画全体を拒否する（`keep` も数える。`_inbox/` 以外の重複統合・古い記述の修正は数えない）。40 の根拠は
+   `max_turns = 30` の cheap worker が候補ごとに本文を読み、統合先の完成本文と変更前 hash を計画に書く
+   作業量と、`content` を含む計画 JSON の大きさ。
+4. **残りは次回へ回す（持ち越しの規則）。** worker は `inputs/kb/_inbox` をファイル名の昇順（`YYYYMMDDTHHMMSSZ-` の
+   時刻接頭辞なので古い順）に並べ、先頭 40 件だけを扱う。扱わなかった候補は計画に載せず、写しも触らない。
+   `apply` では扱った候補が本番 `_inbox` から消えるので、次の run は自然に次の 40 件を見る。`dry_run` のあいだは
+   本番 `_inbox` が減らないため毎回同じ先頭 40 件が対象になる（dry-run の差分を人が確かめる用途ではそれでよい。
+   283 件は `apply` 後の約 7 run で消化する）。`daily-summary.md` の KB 節に「処理 n / 残り m」を書く。
+   上限の引き上げは、`apply` の実績で 1 run の所要 turn と拒否率を見てから設定値にするかを決める（今は定数）。
+5. **変えないこと。** D10 (4)・D11 (1) の `CurationPlan` の形と `deny_unknown_fields`、daemon の検証順、
+   「LLM 呼び出しを daemon・store に入れない」「本番 KB は worker が書かない」はそのまま。
+
 ## 付記（main 取り込み 2026-10-03）
 
 main の ADR-0128 D6 に合わせ、本文を `agent-docs/adr/0131-cron-jobs.md` へ移した。番号は維持する。

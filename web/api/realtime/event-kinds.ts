@@ -60,6 +60,8 @@ export const EVENT_KINDS = [
   "plan_approval_requested",
   "stall_detected",
   "delivery_skipped",
+  "integration_requested",
+  "integration_answered",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

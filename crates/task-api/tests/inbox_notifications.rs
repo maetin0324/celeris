@@ -6,6 +6,7 @@ use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
+use task_core::integration_request::IntegrationRequest;
 use task_core::report::{Report, ReportId, ReportKind, ReportStore};
 use task_core::{Event, NoticeEvent, NoticeKind, NoticeStore, Status, TaskKind, TaskStore};
 use time::OffsetDateTime;
@@ -62,6 +63,132 @@ async fn judgment_is_only_in_inbox_and_answer_removes_it() {
     assert_eq!(old.status, 200);
     assert_eq!(old.header("deprecation"), Some("true"));
     assert!(old.json()["questions"].is_array());
+}
+
+#[tokio::test]
+async fn integration_request_answer_appends_event_and_removes_only_its_inbox_item() {
+    let env = admin_env();
+    let task = new_task(TaskKind::Execute, Status::Running);
+    env.seed(&task);
+    let request = IntegrationRequest {
+        target_branch: "main".into(),
+        target_sha: "target-head".into(),
+        source_branch: "feature".into(),
+        source_sha: "source-head".into(),
+        merge_base: None,
+        conflict_files: vec!["src/lib.rs".into()],
+        intent: vec![],
+        reason: "conflict".into(),
+        recommendation: "resolve both sides".into(),
+        actions: vec![],
+        candidate_sha: None,
+    };
+    let request_id = request.id_for(task.id);
+    assert!(
+        env.store
+            .integration_request_record(task.id, &request, "test")
+            .unwrap()
+    );
+    let app = env.router();
+    let inbox = send(
+        &app,
+        get_admin("/api/v1/inbox/items?kind=integration_request"),
+    )
+    .await;
+    assert_eq!(inbox.status, 200, "{}", inbox.text());
+    let items = inbox.json()["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1, "{items:?}");
+    let id = items[0]["id"].as_str().unwrap();
+    task_ops::notify_feed::sync_notifications(&env.store, OffsetDateTime::now_utc()).unwrap();
+    let notices = send(&app, get_admin("/api/v1/notifications")).await;
+    assert_eq!(notices.status, 200, "{}", notices.text());
+    assert!(
+        notices.json()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["target"]["kind"] != "integration_request")
+    );
+
+    let answer = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/inbox/items/{id}/answer"),
+            &json!({"option":"integrated","note":"merged locally"}),
+        ),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.json()["removed"], true);
+    assert_eq!(answer.json()["result"]["request_id"], request_id);
+    assert!(env.store.events_for(task.id).unwrap().iter().any(|row| matches!(&row.1,
+        Event::IntegrationAnswered { request_id: id, answer, note }
+            if id.as_str() == request_id.as_str() && answer == "integrated" && note.as_deref() == Some("merged locally"))));
+    let after = send(
+        &app,
+        get_admin("/api/v1/inbox/items?kind=integration_request"),
+    )
+    .await;
+    assert_eq!(after.json()["counts"]["total"], 0);
+    assert_eq!(
+        send(
+            &app,
+            post_admin(
+                &format!("/api/v1/inbox/items/{id}/answer"),
+                &json!({"option":"retry"})
+            )
+        )
+        .await
+        .status,
+        404
+    );
+    assert_eq!(
+        send(
+            &app,
+            post_admin(
+                "/api/v1/inbox/items/integration_request-unknown/answer",
+                &json!({"option":"retry"})
+            )
+        )
+        .await
+        .status,
+        404
+    );
+    for option in ["declined", "retry"] {
+        let mut next = request.clone();
+        next.source_sha = format!("source-{option}");
+        let next_id = next.id_for(task.id);
+        assert!(
+            env.store
+                .integration_request_record(task.id, &next, "test")
+                .unwrap()
+        );
+        let inbox = send(
+            &app,
+            get_admin("/api/v1/inbox/items?kind=integration_request"),
+        )
+        .await;
+        let item_id = inbox.json()["items"][0]["id"].as_str().unwrap().to_owned();
+        let answer = send(
+            &app,
+            post_admin(
+                &format!("/api/v1/inbox/items/{item_id}/answer"),
+                &json!({"option":option}),
+            ),
+        )
+        .await;
+        assert_eq!(answer.status, 200, "{}", answer.text());
+        assert_eq!(answer.json()["removed"], true);
+        assert!(
+            env.store
+                .events_for(task.id)
+                .unwrap()
+                .iter()
+                .any(|row| matches!(&row.1,
+            Event::IntegrationAnswered { request_id, answer, note }
+                if request_id == &next_id && answer == option && note.is_none()))
+        );
+    }
 }
 
 #[tokio::test]

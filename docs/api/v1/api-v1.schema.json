@@ -1411,6 +1411,35 @@
             "at"
           ],
           "type": "object"
+        },
+        {
+          "description": "ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/IntegrationRequest"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "integration_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "request_id",
+            "request",
+            "at"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -9919,7 +9948,7 @@
       "type": "object"
     },
     "InboxKind": {
-      "description": "D2: 受信箱の種類（D1 の 14 種）。宣言順が D2 の並びの固定順。",
+      "description": "D2: 受信箱の種類。宣言順が D2 の並びの固定順。",
       "enum": [
         "decision",
         "plan_gate",
@@ -9934,6 +9963,7 @@
         "unroutable",
         "cluster_login",
         "delivery_skipped",
+        "integration_request",
         "knowledge_review"
       ],
       "type": "string"

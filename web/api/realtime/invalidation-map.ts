@@ -141,6 +141,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   plan_approval_requested: { sets: ["T", "L", "N", "E"] },
   stall_detected: { sets: ["T", "R", "L"] },
   delivery_skipped: { sets: ["T", "L", "N"] },
+  integration_requested: { sets: ["L"] },
+  integration_answered: { sets: ["L"] },
 };
 
 function runScoped(taskId: string, event: EventRow["event"]): QueryKey[] {

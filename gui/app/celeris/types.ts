@@ -747,6 +747,17 @@ export type Event =
       type: "delivery_skipped";
     }
   | {
+      origin: string;
+      request: IntegrationRequest;
+      type: "integration_requested";
+    }
+  | {
+      answer: string;
+      note?: string | null;
+      request_id: string;
+      type: "integration_answered";
+    }
+  | {
       detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
@@ -985,6 +996,7 @@ export type DeliverySkipReason =
   | "branch_name_mismatch"
   | "refs_unresolvable"
   | "department_unresolved";
+export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
 /**
  * D5: `execution_plans.status`。
  */
@@ -1081,7 +1093,33 @@ export type AttentionItem =
       summary: string;
       task: TaskRef;
       type: "delivery_skipped";
+    }
+  | {
+      at: string;
+      request: IntegrationRequest;
+      request_id: string;
+      task: TaskRef;
+      type: "integration_request";
     };
+/**
+ * D2: 受信箱の種類。宣言順が D2 の並びの固定順。
+ */
+export type InboxKind =
+  | "decision"
+  | "plan_gate"
+  | "phase_gate"
+  | "authorization"
+  | "browser_wait"
+  | "question"
+  | "acceptance_check"
+  | "draft_accept"
+  | "project_plan"
+  | "failed"
+  | "unroutable"
+  | "cluster_login"
+  | "delivery_skipped"
+  | "integration_request"
+  | "knowledge_review";
 /**
  * ADR-0047 D1 / D4。
  */
@@ -1143,9 +1181,28 @@ export type TaskMode = "prototype" | "production" | "research";
  */
 export type PriorityInput = ("P0" | "P1" | "P2" | "P3") | number;
 /**
+ * 通知（束）の id（ULID）。
+ */
+export type NoticeId = string;
+/**
+ * 通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。
+ */
+export type NoticeKind =
+  | "task_done"
+  | "report"
+  | "bad_news"
+  | "secretary_reply"
+  | "delivery"
+  | "release"
+  | "cron_run"
+  | "auto_recovered"
+  | "requeue_limit_near";
+/**
  * 判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。
  */
 export type NotificationKind =
+  | "inbox_new"
+  | "digest"
   | "milestone_ready"
   | "approval_pending"
   | "question_blocked"
@@ -1381,6 +1438,10 @@ export interface ApiV1Schema {
   graph: Graph;
   health: Health;
   inbox: Inbox;
+  inbox_answer: InboxAnswerBody;
+  inbox_answer_result: InboxAnswerResult;
+  inbox_item: InboxItem;
+  inbox_items: HumanInboxView;
   integrate: IntegrateBody;
   integrate_result: IntegrateResult;
   knowledge_accept: KnowledgeAcceptBody;
@@ -1405,6 +1466,11 @@ export interface ApiV1Schema {
   milestone_patch: MilestonePatchBody;
   new_plan: NewPlanSpec;
   new_task: NewTaskSpec;
+  notification_read: NoticeReadResult;
+  notifications: NotificationsView;
+  notifications_read_all: NoticeReadAllResult;
+  notifications_read_all_body: ReadAllBody;
+  notifications_unread_count: UnreadCountView;
   notify: NotifyView;
   notify_test: NotifyTestResult;
   org_create: OrgCreateBody;
@@ -3251,7 +3317,8 @@ export interface ReportsLive {
  */
 export interface ScratchStatus {
   /**
-   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
+   * 廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の
+   * ため残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -3299,7 +3366,8 @@ export interface ScratchStatus {
    */
   pressure: string;
   /**
-   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
+   * 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
+   * 互換のため残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -3314,7 +3382,8 @@ export interface ScratchStatus {
   total_max_bytes: number;
 }
 /**
- * 廃止（ADR-0129）: Celeris の階層 cache server。型だけ残す（値は常に `null`）。
+ * 廃止（ADR-0129）: Celeris の階層 cache server（sccache の webdav backend 向け）は撤去した。
+ * `ScratchStatus.cache` が旧 client 向けの schema 互換のため型だけ残す（値は常に `None`）。
  */
 export interface ScratchCacheView {
   /**
@@ -3340,7 +3409,7 @@ export interface ScratchCacheView {
   stats?: ScratchCacheStats | null;
 }
 /**
- * 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `null`）。
+ * 廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。
  */
 export interface ScratchCacheStats {
   /**
@@ -3523,7 +3592,8 @@ export interface ScratchOwnerView {
   work_unit_key?: string | null;
 }
 /**
- * 廃止（ADR-0129）: sccache L1。型だけ残す（値は常に `null`）。
+ * 廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client
+ * 向けの schema 互換のため型だけ残す（値は常に `None`）。
  */
 export interface ScratchSccacheView {
   /**
@@ -3557,7 +3627,7 @@ export interface ScratchSccacheView {
   stats?: ScratchSccacheStats | null;
 }
 /**
- * 廃止（ADR-0129）: sccache stats。型だけ残す（値は常に `null`）。
+ * 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `None`）。
  */
 export interface ScratchSccacheStats {
   /**
@@ -4759,7 +4829,7 @@ export interface QuotaWindowUse {
   after?: number | null;
   before?: number | null;
   /**
-   * **ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
+   * **ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
    * D4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により
    * 決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。
    * `Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。
@@ -4939,6 +5009,44 @@ export interface ProjectPlanSpec {
   milestones: MilestoneSpec[];
   rationale: string;
   schema: string;
+}
+export interface IntegrationRequest {
+  actions: ResolutionAction[];
+  candidate_sha?: string | null;
+  conflict_files: string[];
+  intent: FileIntent[];
+  merge_base?: string | null;
+  reason: string;
+  recommendation: string;
+  source_branch: string;
+  source_sha: string;
+  target_branch: string;
+  target_sha: string;
+}
+export interface ResolutionAction {
+  detail: string;
+  kind: ConflictKind;
+  path: string;
+}
+export interface FileIntent {
+  path: string;
+  source: SideIntent;
+  target: SideIntent;
+}
+export interface SideIntent {
+  branch: string;
+  commits: CommitIntent[];
+  diffstat?: FileDiffStat | null;
+  path: string;
+  unavailable?: string | null;
+}
+export interface CommitIntent {
+  sha: string;
+  subject: string;
+}
+export interface FileDiffStat {
+  added: number;
+  deleted: number;
 }
 /**
  * ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。
@@ -5393,6 +5501,12 @@ export interface Inbox {
   decisions: DecisionInboxItem[];
   drafts: DraftGroup[];
   questions: QuestionItem[];
+  /**
+   * ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。
+   */
+  suppressed: {
+    [k: string]: number;
+  };
 }
 export interface ApprovalItem {
   approval: TaskRef;
@@ -5685,6 +5799,116 @@ export interface QuestionItem {
 export interface AnswerNote {
   answer: string;
   question: string;
+}
+export interface InboxAnswerBody {
+  note?: string | null;
+  option: string;
+  payload?: {
+    [k: string]: unknown;
+  };
+}
+export interface InboxAnswerResult {
+  item_id: string;
+  removed: boolean;
+  result: unknown;
+}
+/**
+ * ADR-0133 D2: 受信箱項目の共通形。
+ */
+export interface InboxItem {
+  age_secs: number;
+  answer: InboxAnswer;
+  blocked_by: string[];
+  blocking: InboxBlocking;
+  created_at: string;
+  detail?: string | null;
+  due_at?: string | null;
+  /**
+   * 決定的な id `<kind>-<元の id>`（URL にそのまま使える文字だけ）。
+   */
+  id: string;
+  kind: InboxKind;
+  links: InboxLink[];
+  options: InboxOption[];
+  project_id?: string | null;
+  recommended?: string | null;
+  task?: TaskRef | null;
+  /**
+   * 何を決めるか（1 行）。
+   */
+  title: string;
+}
+/**
+ * D2 `answer`: 答え方の操作（新 API の answer と委ね先）。
+ */
+export interface InboxAnswer {
+  body_schema: {
+    [k: string]: string;
+  };
+  method: string;
+  native?: InboxNativeOp | null;
+  path: string;
+}
+/**
+ * D2 `answer.native`: 委ね先の既存 endpoint。
+ */
+export interface InboxNativeOp {
+  method: string;
+  path: string;
+}
+/**
+ * D2 `blocking`: 止めている範囲。
+ */
+export interface InboxBlocking {
+  root?: TaskRef | null;
+  summary: string;
+  tasks: TaskRef[];
+  units: string[];
+}
+/**
+ * D2 `links[]`: 判断材料への API path。
+ */
+export interface InboxLink {
+  href: string;
+  label: string;
+}
+/**
+ * D2 `options[]`: 選択肢 1 件。
+ */
+export interface InboxOption {
+  /**
+   * 選んだら何が起きるかの 1 行。
+   */
+  effect: string;
+  key: string;
+  label: string;
+  /**
+   * `true` なら note 必須（replan・質問への回答など）。
+   */
+  needs_note: boolean;
+}
+/**
+ * ADR-0133 D5: human decisions and informational notices.
+ */
+export interface HumanInboxView {
+  counts: HumanInboxCounts;
+  items: InboxItem[];
+  /**
+   * ADR-0133 D4: attention items auto-closed by the ADR-0131 inbox-rules
+   * (`task_ops::inbox::attention_suppression`), counted per rule. Not narrowed by `project`/`kind`.
+   */
+  suppressed: {
+    [k: string]: number;
+  };
+}
+/**
+ * D5 `GET /inbox/items` の `counts`。
+ */
+export interface HumanInboxCounts {
+  by_kind: {
+    [k: string]: number;
+  };
+  total: number;
 }
 /**
  * `POST /tasks/{id}/changes/{repo}/integrate` の要求本文（**管理系。人だけ**。ADR-0043 D5）。
@@ -6100,7 +6324,8 @@ export interface MessagePostBody {
  */
 export interface ScratchStatus1 {
   /**
-   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
+   * 廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の
+   * ため残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -6148,7 +6373,8 @@ export interface ScratchStatus1 {
    */
   pressure: string;
   /**
-   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
+   * 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
+   * 互換のため残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -6396,6 +6622,75 @@ export interface NewTaskSpec {
    */
   workspace_mode?: WorkspaceMode | null;
 }
+export interface NoticeReadResult {
+  id: string;
+  read_at: string;
+}
+export interface NotificationsView {
+  items: Notice[];
+  next_before?: string | null;
+  unread: number;
+}
+/**
+ * 通知の束（`feed_notices` の 1 行）。
+ */
+export interface Notice {
+  /**
+   * 束ねた出来事の件数。
+   */
+  count: number;
+  first_at: string;
+  /**
+   * 束ね key（`<kind>:<範囲>`。ADR-0133 D3.3）。
+   */
+  group_key: string;
+  id: NoticeId;
+  kind: NoticeKind;
+  last_at: string;
+  links?: NoticeLink[];
+  project_id?: string | null;
+  read_at?: string | null;
+  /**
+   * 最新の 1 件の要約（`count > 1` なら末尾に「ほか n−1 件」）。
+   */
+  summary: string;
+  target?: NoticeTarget | null;
+  task_id?: string | null;
+  /**
+   * 最新の 1 件の題名。
+   */
+  title: string;
+}
+/**
+ * 通知に付けるリンク（GUI / web が開く先）。
+ */
+export interface NoticeLink {
+  href: string;
+  label: string;
+}
+/**
+ * 通知の対象（最新の 1 件）。`kind` は `task` / `report` / `release` / `delivery` / `cron_job` 等の
+ * 短い名前で、`id` はその領域の id（文字列のまま。領域の型には依存しない）。
+ */
+export interface NoticeTarget {
+  id: string;
+  kind: string;
+}
+export interface NoticeReadAllResult {
+  marked: number;
+}
+export interface ReadAllBody {
+  before?: string | null;
+  kind?: NoticeKind | null;
+  project?: string | null;
+}
+export interface UnreadCountView {
+  by_kind: {
+    [k: string]: number;
+  };
+  events: number;
+  unread: number;
+}
 /**
  * Phase 39（ADR-0037 D4）: 通知（Discord）。`GET /notify` と `POST /notify/test` の応答。
  */
@@ -6404,6 +6699,9 @@ export interface NotifyView {
    * webhook の秘密が登録されていて、送れる状態か。
    */
   configured: boolean;
+  digest_interval_secs: number;
+  digest_last_sent_at?: string | null;
+  digest_max_lines: number;
   /**
    * 登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。
    */
@@ -6412,6 +6710,15 @@ export interface NotifyView {
    * `[notify] gui_base_url`（文面のリンクの根）。
    */
   gui_base_url?: string | null;
+  /**
+   * `[notify]` outbound route configuration (ADR-0133 D6).
+   */
+  inbox_batch_secs: number;
+  /**
+   * Last successful send for each outbound route; absent history is `null`.
+   */
+  inbox_new_last_sent_at?: string | null;
+  inbox_reminder_secs: number;
   /**
    * 直近の送信（新しい順、最大 10 件）。
    */

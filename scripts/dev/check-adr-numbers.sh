@@ -26,6 +26,7 @@ LAST_NUMBERED=0128
 # ADR-0128 の取り込み前に main へ入っていた 0128 超えの番号（振り直さない。ADR-0128 D5 付記）。完全なファイル名で書く。
 ALLOWED_OVER_LAST="
 0129-host-sccache-reflink-targets.md
+0130-write-set-parallelism-and-behind.md
 0132-provider-llm-source-split-and-cheap-qwen.md
 0133-inbox-and-notifications.md
 0134-blocked-repair-replan-loop.md
@@ -33,6 +34,7 @@ ALLOWED_OVER_LAST="
 0136-local-hot-data-layout.md
 0138-browser-prod-admission-confidential-release.md
 0139-langmem-proxy-bearer-and-verify-proxy-bind.md
+0140-claude-session-resume.md
 "
 
 NAMESPACES="main gui web"

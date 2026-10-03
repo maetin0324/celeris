@@ -823,7 +823,6 @@ struct CheckingEntry {
 #[derive(Debug, Clone, Default)]
 struct IntegrationRun {
     merged: Vec<crate::integration::Merged>,
-    actions: Vec<crate::auto_resolve::ResolutionAction>,
     head: String,
     conflict: Option<crate::integration::Conflict>,
     /// `(cmd, pass, summary)`。

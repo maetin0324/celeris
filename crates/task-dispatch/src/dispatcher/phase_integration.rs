@@ -24,6 +24,9 @@ fn repair_scope_from_units<'a>(
     }
 }
 
+/// `PhaseIntegrated.checks[].cmd` of an auto-resolve action (`summary` is the action as JSON).
+pub(super) const AUTO_RESOLVE_CHECK: &str = "auto_resolve";
+
 impl Dispatcher {
     /// Record one notice per fixed pair of merge heads. A retry with the same heads is idempotent.
     fn record_integration_request(
@@ -452,7 +455,13 @@ impl Dispatcher {
                 let mut run = IntegrationRun::default();
                 for (i, dir) in repos_for_merge.iter().enumerate() {
                     let out = crate::integration::integrate(dir, &items, &phase_for_merge)?;
-                    run.actions.extend(out.actions);
+                    // ADR-0137: 自動解消の手順は `PhaseIntegrated.checks` に `auto_resolve` の行として残す
+                    // （event の形は変えない）。
+                    run.checks.extend(out.actions.iter().map(|action| {
+                        let summary = serde_json::to_string(action)
+                            .unwrap_or_else(|_| format!("{action:?}"));
+                        (AUTO_RESOLVE_CHECK.to_string(), true, summary)
+                    }));
                     if i == 0 {
                         run.merged = out.merged.clone();
                         run.head = out.head.clone();
@@ -495,11 +504,12 @@ impl Dispatcher {
                     }
                     .with_cargo_env(check_env);
                     let results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
-                    run.checks = checks
-                        .iter()
-                        .zip(results)
-                        .map(|(c, (pass, reason))| (c.cmd.clone(), pass, reason))
-                        .collect();
+                    run.checks.extend(
+                        checks
+                            .iter()
+                            .zip(results)
+                            .map(|(c, (pass, reason))| (c.cmd.clone(), pass, reason)),
+                    );
                     Ok(run)
                 }
                 other => other,
@@ -1021,11 +1031,6 @@ impl Dispatcher {
                     commit: m.commit.clone(),
                     skipped: m.skipped,
                 })
-                .collect(),
-            actions: run
-                .actions
-                .iter()
-                .filter_map(|action| serde_json::to_value(action).ok())
                 .collect(),
             head: run.head.clone(),
             checks: run

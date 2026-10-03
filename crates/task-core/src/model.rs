@@ -1310,8 +1310,6 @@ pub enum Event {
         phase: String,
         work_unit_id: String,
         merged: Vec<PhaseMerged>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        actions: Vec<serde_json::Value>,
         /// 統合後の Task ブランチの HEAD（WU の worktree を持たない並列 1 の工程では空文字列）。
         head: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

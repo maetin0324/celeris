@@ -1499,6 +1499,54 @@ async fn auto_resolve_code_conflict_creates_integration_notice() {
     assert!(notice.summary.contains("README.md"), "{}", notice.summary);
 }
 
+/// ADR-0137: 衝突しない merge でも migration の同番号を振り直し、手順を `PhaseIntegrated` の
+/// `auto_resolve` の行に残す。
+#[tokio::test]
+async fn auto_resolve_migration_renumber_is_recorded_in_phase_integrated() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("a", "build", &[]), v2_wu("b", "build", &[])],
+    );
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(50))
+            .with_action("a", |cwd| {
+                let dir = cwd.join("crates/task-core/migrations");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("0042_alpha.sql"), "-- a\n").unwrap();
+            })
+            .with_action("b", |cwd| {
+                let dir = cwd.join("crates/task-core/migrations");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("0042_beta.sql"), "-- b\n").unwrap();
+            }),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let events = store.events_for(task.id).unwrap();
+    let checks: Vec<&task_core::PhaseCheckResult> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::PhaseIntegrated { checks, .. } => Some(checks),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(
+        checks
+            .iter()
+            .any(|c| c.cmd == "auto_resolve" && c.pass && c.summary.contains("_beta.sql")),
+        "{checks:?}"
+    );
+}
+
 /// ADR-0074 §6 F2 (f): 統合後の検査の失敗が、分類に当たれば repair（Task の worktree）、当たらな
 /// ければ replan になる。
 #[tokio::test]

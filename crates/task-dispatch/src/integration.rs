@@ -381,30 +381,33 @@ pub fn integrate(
                 return Err(error);
             }
         };
-        if let crate::auto_resolve::Resolution::Resolved { actions: resolved } = &resolution {
-            let unresolved = git_ok(task_tree, &["diff", "--name-only", "--diff-filter=U"])?;
-            if !unresolved.stdout.trim().is_empty() {
-                git_ok(task_tree, &["merge", "--abort"])?;
-                return Err("auto resolver left unmerged paths".into());
-            }
-            if out.ok {
-                if !resolved.is_empty() {
-                    git_ok(
-                        task_tree,
-                        &["commit", "--amend", "--no-edit", "--no-verify"],
-                    )?;
+        let request = match resolution {
+            crate::auto_resolve::Resolution::NeedsHuman { request } => request,
+            crate::auto_resolve::Resolution::Resolved { actions: resolved } => {
+                let unresolved = git_ok(task_tree, &["diff", "--name-only", "--diff-filter=U"])?;
+                if !unresolved.stdout.trim().is_empty() {
+                    git_ok(task_tree, &["merge", "--abort"])?;
+                    return Err("auto resolver left unmerged paths".into());
                 }
-            } else {
-                git_ok(task_tree, &["commit", "--no-edit", "--no-verify"])?;
+                if out.ok {
+                    if !resolved.is_empty() {
+                        git_ok(
+                            task_tree,
+                            &["commit", "--amend", "--no-edit", "--no-verify"],
+                        )?;
+                    }
+                } else {
+                    git_ok(task_tree, &["commit", "--no-edit", "--no-verify"])?;
+                }
+                actions.extend(resolved);
+                merged.push(Merged {
+                    key: item.key.clone(),
+                    commit,
+                    skipped: false,
+                });
+                continue;
             }
-            actions.extend(resolved.iter().cloned());
-            merged.push(Merged {
-                key: item.key.clone(),
-                commit,
-                skipped: false,
-            });
-            continue;
-        }
+        };
         let files = git(task_tree, &["diff", "--name-only", "--diff-filter=U"])
             .map(|o| {
                 o.stdout
@@ -415,10 +418,6 @@ pub fn integrate(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let request = match resolution {
-            crate::auto_resolve::Resolution::NeedsHuman { request } => Some(request),
-            _ => unreachable!(),
-        };
         if out.ok {
             git_ok(task_tree, &["reset", "--hard", &target_sha])?;
         } else {
@@ -434,7 +433,7 @@ pub fn integrate(
                 key: item.key.clone(),
                 branch: item.branch.clone(),
                 files,
-                request,
+                request: Some(request),
             }),
         });
     }

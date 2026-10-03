@@ -1149,6 +1149,8 @@ main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-late
 
 main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。
 
+main ea2d9d32 取り込み、selfdeploy 試験全 pass（work unit `sync-ea2d`）。
+
 ## 通知フィード同期の退行修正（release 3527c8e39ee2 の verify 失敗、2026-10-03）
 
 - 原因: 29d0ffc5 が tick ごとに `sync_notifications`（5982b3cb）を呼ぶ。その同期は events を全部読むまで回り、1 行ごとに

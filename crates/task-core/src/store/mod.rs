@@ -417,6 +417,34 @@ pub struct SqliteStore {
     conn: Mutex<Connection>,
     /// ADR-0064 D4: ファイル DB のときだけ `Some`（インメモリでは接続間の状態共有ができないため）。
     read_pool: Option<ReadPool>,
+    /// ADR-0133 付記: 書き込み接続と読み取り接続を取った回数（回帰試験が処理件数で固定する）。
+    counters: LockCounters,
+}
+
+/// ADR-0133 付記: `SqliteStore` が接続を取った回数。試験は時計ではなくこの差分で
+/// 「tick・API が書き込み接続を何回取るか」を固定する。
+#[derive(Debug, Default)]
+struct LockCounters {
+    writer: std::sync::atomic::AtomicU64,
+    reader: std::sync::atomic::AtomicU64,
+}
+
+/// `SqliteStore::lock_counts` の値。`writer` は書き込み接続（`Mutex`）を取った回数、
+/// `reader` は読み取り接続（プール、無ければ書き込み接続へのフォールバック）を使った回数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LockCounts {
+    pub writer: u64,
+    pub reader: u64,
+}
+
+impl LockCounts {
+    /// `earlier` からの増分。
+    pub fn since(self, earlier: LockCounts) -> LockCounts {
+        LockCounts {
+            writer: self.writer.saturating_sub(earlier.writer),
+            reader: self.reader.saturating_sub(earlier.reader),
+        }
+    }
 }
 
 /// ADR-0064 D4: 読み取り専用（`query_only=ON`）の小さな接続プール。書き込み接続（`conn`）の
@@ -697,6 +725,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             read_pool,
+            counters: LockCounters::default(),
         })
     }
 
@@ -732,6 +761,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             read_pool,
+            counters: LockCounters::default(),
         })
     }
 
@@ -764,6 +794,9 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        self.counters
+            .reader
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match &self.read_pool {
             Some(pool) => {
                 let conn = pool.checkout()?;
@@ -772,7 +805,7 @@ impl SqliteStore {
                 result
             }
             None => {
-                let conn = self.lock()?;
+                let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
                 f(&conn)
             }
         }
@@ -852,7 +885,24 @@ impl SqliteStore {
     /// ADR-0033 D3/D5: `report.rs`・`approval.rs`（`reports`・`approvals`・`standing_rules` 表の SQL）
     /// も同じ接続を使うので crate 内に公開する。
     pub(crate) fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StoreError> {
+        self.counters
+            .writer
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.conn.lock().map_err(|_| StoreError::Poisoned)
+    }
+
+    /// ADR-0133 付記: これまでに書き込み接続・読み取り接続を取った回数（試験用の観測値）。
+    pub fn lock_counts(&self) -> LockCounts {
+        LockCounts {
+            writer: self
+                .counters
+                .writer
+                .load(std::sync::atomic::Ordering::Relaxed),
+            reader: self
+                .counters
+                .reader
+                .load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     /// 非終端（`done` / `failed` / `cancelled` 以外）の task を選ぶ SQL 断片（領域ファイル共通）。

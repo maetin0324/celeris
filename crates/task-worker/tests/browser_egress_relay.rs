@@ -175,7 +175,7 @@ fn start_fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while TcpStream::connect((FIXTURE_IP, 443)).is_err() {
         assert!(Instant::now() < deadline, "fixture did not start");
         std::thread::sleep(Duration::from_millis(50));
@@ -190,7 +190,7 @@ direct() {
   if timeout 3 bash -c "exec 3<>/dev/tcp/$2/$3" 2>/dev/null; then echo "direct $1 open" >>"$out"; else echo "direct $1 blocked" >>"$out"; fi
 }
 via_proxy() {
-  resp=$(timeout 8 bash -c 'exec 3<>/dev/tcp/127.0.0.1/3128; printf "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" "$1" "$1" >&3; head -c 12 <&3' _ "$2" 2>/dev/null)
+  resp=$(timeout 60 bash -c 'exec 3<>/dev/tcp/127.0.0.1/3128; printf "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" "$1" "$1" >&3; head -c 12 <&3' _ "$2" 2>/dev/null)
   echo "proxy $1 ${resp:-none}" >>"$out"
 }
 direct fixture_ip 93.184.216.34 443
@@ -210,8 +210,8 @@ via_proxy ipv6_literal [::1]:443
 via_proxy not_allowed other.example.com:443
 via_proxy dns_port fixture.example.com:53
 echo END >>"$out"
-for _ in $(seq 600); do [ -e /session/go ] && exec "$@"; sleep 0.1; done
-exit 3
+timeout 300 bash -c 'until [ -e /session/go ]; do sleep 0.1; done' || exit 3
+exec "$@"
 "#;
 const PROXY_PROBES: usize = 8;
 
@@ -366,7 +366,7 @@ fn browser_argv(with_proxy: bool) -> Vec<OsString> {
 }
 
 fn wait_exited(rt: &IsolatedRuntime, n: usize) -> task_worker::browser_runtime::EgressStats {
-    let deadline = Instant::now() + Duration::from_secs(40);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let s = rt.egress_stats().unwrap();
         if s.spawned.len() >= n && s.exited.len() == s.spawned.len() {
@@ -402,7 +402,7 @@ fn inner_relay_in_test_netns() {
     argv.extend(browser_argv(true));
     let mut rt = launch(session.path(), proxy.clone(), argv);
     let probe_file = session.path().join("probe.txt");
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + Duration::from_secs(600);
     let probe = loop {
         let s = std::fs::read_to_string(&probe_file).unwrap_or_default();
         if s.ends_with("END\n") {

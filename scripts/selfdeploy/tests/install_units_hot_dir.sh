@@ -2,7 +2,7 @@
 # scripts/selfdeploy/tests/install_units_hot_dir.sh — ADR-0136「path の契約」:
 #
 #   install-units.sh が hot の根（CELERIS_STATE_DIR、または ~/.config/celeris/paths.env）を指定されると、
-#   celeris@・celeris-gui@・celeris-credentiald@・celeris-sccache・celeris-scratch-cache の unit に
+#   celeris@・celeris-gui@・celeris-credentiald@ の unit に
 #   `%h/.local/celeris` を残さず根の絶対 path から読むこと、`~/.config/celeris` の参照は home のまま、
 #   celeris-web@ はテンプレートのまま、未指定なら従来と同一（テンプレートと byte 一致）であることを確かめる。
 #
@@ -41,8 +41,8 @@ run_install() {
     bash "$SD/install-units.sh" >"$WORK/$name/out.log" 2>&1
 }
 
-TEMPLATED="celeris@.service celeris-gui@.service celeris-web@.service celeris-sccache.service celeris-scratch-cache.service"
-HOT_UNITS="celeris@.service celeris-gui@.service celeris-credentiald@.service celeris-sccache.service celeris-scratch-cache.service"
+TEMPLATED="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
+HOT_UNITS="celeris@.service celeris-gui@.service celeris-credentiald@.service"
 
 # ---- 1. 未指定: 従来と同一 ---------------------------------------------------
 if run_install default; then ok "default: install-units.sh exit 0"; else ng "default: exit non-zero: $(cat "$WORK/default/out.log")"; fi
@@ -50,6 +50,9 @@ for u in $TEMPLATED; do
   if cmp -s "$SRC/$u" "$WORK/default/units/$u"; then ok "default: $u identical to the template"; else ng "default: $u differs from the template"; fi
 done
 if [ -e "$WORK/default/units/celeris-credentiald@.service" ]; then ng "default: credentiald unit installed (was not before)"; else ok "default: install set unchanged"; fi
+for u in celeris-sccache.service celeris-scratch-cache.service; do
+  if [ -e "$WORK/default/units/$u" ]; then ng "default: obsolete $u installed"; else ok "default: obsolete $u absent"; fi
+done
 if grep -q "daemon-reload" "$WORK/default/systemctl.log"; then ok "default: daemon-reload via the stub"; else ng "default: no daemon-reload"; fi
 
 # 根が従来の場所そのものなら、指定なしと同じ。

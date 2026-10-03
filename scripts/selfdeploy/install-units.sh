@@ -3,8 +3,7 @@
 # テンプレート unit を ~/.config/systemd/user/ に置いて `systemctl --user daemon-reload` する
 # （ADR-0040 D4、ADR-0045 D3）。
 #
-# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない
-# （celeris-sccache.service / celeris-scratch-cache.service も置くだけで、有効化しない。ADR-0075 D4 / D5）。
+# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない。
 # linger は既に有効（`loginctl enable-linger rmaeda`）である前提。
 #
 #   --remove-old  改名前のテンプレート unit も消す。**移行のときだけ**使う。消す対象の名前は
@@ -112,12 +111,10 @@ render_unit() {
     }' >"$out"
 }
 
-# ADR-0075 D4（Phase G2）: celeris-sccache.service（sccache の server）も置くだけ。有効化は人
-# （`systemctl --user enable --now celeris-sccache.service`、手順は docs/ops/sccache-l1.md）。
-# ADR-0075 D5 (b)（Phase G3）: celeris-scratch-cache.service（L1 / L2 の cache server）も置くだけ。有効化は人
-# （`systemctl --user enable --now celeris-scratch-cache.service` の後に celeris-sccache.service を再起動）。
+# ADR-0129 (1): sccache/cache-server units are no longer deployed. Existing host units
+# are stopped and removed by a human following docs/ops/sccache-l1.md.
 # web ADR-W3 D1（P6-02）: celeris-web@.service（web/ の gateway、gui/ と並行）も置くだけ。有効化は人（docs/web/parallel-operation.md）。
-UNITS="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service celeris-sccache.service celeris-scratch-cache.service"
+UNITS="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
 if [ -n "$HOT_ROOT" ]; then
   UNITS="$UNITS celeris-credentiald@.service"
   sd_log "hot root: $HOT_ROOT (units read releases and state from there; ~/.config/celeris stays in home)"

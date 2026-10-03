@@ -132,6 +132,11 @@
 }
 
 @layer base {
+  /* shell の menu 等の重なりを root 内に閉じ、body 直下の Radix Portal を覆わせない。 */
+  #root {
+    isolation: isolate;
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);

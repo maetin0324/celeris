@@ -1,7 +1,7 @@
 # PROGRESS — Web GUI（ADR-0081、`web/`）
 
 ---
-tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D, 01M3WCAQ762PKQ75CR6K03236M]
+tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D, 01M3WCAQ762PKQ75CR6K03236M, 01M41RYPGEQQKT2KBPH1WYH0A6]
 ---
 
 計画の正本: [implementation plan](../web/implementation-plan.md)、[feature parity matrix](../web/feature-parity.md)、[ADR-0081](../adr/0081-web-spa-frontend.md)。Phase 0 の記録は [PROGRESS.md](../PROGRESS.md#web-gui-phase-02026-09-29設計移行計画) に残す。
@@ -239,3 +239,18 @@ install・build 後も `git status --porcelain` は空（node_modules・dist・b
 | 今回 | `cargo clippy --workspace -- -D warnings` | 0 | warning 0 |
 
 この run では Rust test gate を完了できなかった。namespace を許可する sandbox 外 execution harness が必要。crates/ は変更していない。
+
+## latency 2 spec の測り方の修正（2026-10-03、task 01M41RYPGEQQKT2KBPH1WYH0A6 WU spec-ready）
+
+- 前回 qa（01M40B3GWG2XFJHC6HTRZH0RBG、tip `e7be8e16`）を `479ecf5c` で取り込んだ。
+- 人の決定 b: `web/e2e/latency/transition.spec.ts` と `web/e2e/parity/latency-gate.spec.ts` が click の前に起動の完了を出来事で待つ（`web/e2e/latency/boot-idle.mjs`、commit `f2859a35`）。予算 300 ms・10 s−0 s 差 100 ms・retries 0・測り方は不変。features・components・設定は変えていない。詳細は [p5-01-latency.md の付記](../web/gates/p5-01-latency.md)。
+- 変更前・変更後（CDP CPU throttle、各 30 計測、click→h1 の最大 / 300 ms 超の件数）:
+
+| CPU | 変更前 | 変更後 |
+|---|---|---|
+| 1x | 103 / 0/30 | 71 / 0/30 |
+| 4x | 235 / 0/30 | 110 / 0/30 |
+| 6x | 363 / 3/30 | 109 / 0/30 |
+
+- 証拠: 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。`pnpm typecheck`・`pnpm lint`（既存の warning 4 件のみ）・`pnpm check:boundaries` は exit 0。
+- 未解決: 起動そのものの費用（features/console の `useKeyboardOffset`、home の描画）は残る。試験は遷移だけを測るようになったので、起動の重さは別の指標で見る必要がある。

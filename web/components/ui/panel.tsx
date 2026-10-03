@@ -44,7 +44,7 @@ export function Section({ title, level = 2, description, actions, className, chi
     >
       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
-          <Heading id={headingId} className={cn("break-words text-foreground", headingClass[level])}>
+          <Heading id={headingId} className={`break-words text-foreground ${headingClass[level]}`}>
             {title}
           </Heading>
           {description ? (

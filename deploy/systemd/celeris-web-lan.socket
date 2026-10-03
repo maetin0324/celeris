@@ -1,0 +1,14 @@
+# ADR-0135 D3: web gateway の LAN 入口。192.168.1.103 は現行 host の address。
+# 別の host に置く人は、設置前に ListenStream をその host の LAN address に変更する。
+# web の再起動中も listen を保つ。短時間の連続接続で socket が failed に落ちないよう
+# trigger limit を無効にする（service 側の start limit も無効）。
+[Unit]
+Description=Celeris web LAN forwarding socket
+
+[Socket]
+ListenStream=192.168.1.103:7721
+Accept=no
+TriggerLimitIntervalSec=0
+
+[Install]
+WantedBy=sockets.target

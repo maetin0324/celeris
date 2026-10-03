@@ -62,6 +62,29 @@ inline test の外出しと責務分割を完了した（worktree、main 未 mer
 - [Browser capability Phase 4](progress/phase-browser-4.md) — WorkUnit attacks-merge（2026-09-30）。h3-prod merge commit `717c7733` 取り込み後、`crates/task-worker/tests/browser_injection_attacks.rs` の `CredentialPolicy` fixture 初期化に `login_url`/`password_selector`/`submit_selector` が無く `cargo test --workspace` が E0063（exit 101）で失敗していたのを修正（fixture の login URL・selector を追加、攻撃試験の期待値・A8 所見は不変）。`browser_credential.rs` の未使用 `use_credential`/`top_level_origin`/`Segment::origin`（旧 bridge 経路、H3 では不要）を削除。`cargo test -p task-worker --test browser_injection_attacks --test browser_injection_wire --test browser_cdp_sink --test browser_h3_wire --test browser_shared_cdp` → 全 5 バイナリ各 2 passed / 0 failed。`cargo test --workspace` → exit 0（3043 passed / 0 failed）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all --check` → exit 0。本番コード・ADR は変更していない。
 - [Browser capability Phase 4](progress/phase-browser-4.md) — WorkUnit unlock（2026-09-30、ADR-0112）。P4-B 判定: attacks A0〜A17（22 印、A8 は redisplay で合格）・h3-prod e2e・負の対照が全て通過したため、適合記録 `ConformanceResult.evidence`（試験名・結果）を追加し、`injection_attack_suite`/`auth_section_observation_stop` は要る試験が全て `passed` の証拠があるときだけ通る。記録は `scripts/browser-conformance.py --p4b-evidence` が実試験から作り、静的登録は無し。解放後も記録の無い backend・非隔離 runtime は拒否（新規試験 3 件）。`cargo test --workspace --no-fail-fast` exit 0（3047 passed / 0 failed / 11 ignored、初回 fail-fast は無関係の `instance_handoff` 3 件が負荷で失敗し再実行で通過）、`cargo clippy --workspace -- -D warnings` exit 0。本番 admission は `Attested` 必須で同一 UID host では拒否のまま（ADR-0110、変更なし）。未解決: A1 競合未再現・A4 OOPIF 未再現・A13 別 UID 実 process 未試験・P4-A 件の証拠化・実 ledger への runner 実行。本番未昇格。
 - [Browser capability Phase 3/4](progress/phase-browser-4.md)（2026-09-30、task 01M3SM0WN346ABGF42QV02RZTP、WorkUnit record）。final review が挙げた 3 件の未達を実装した WorkUnit（control-gate・deliver-state・attacks-a1a4）を統合したブランチで検査: `cargo test --workspace` exit 0（**3055 passed / 0 failed / 11 ignored**）、`cargo clippy --workspace -- -D warnings` exit 0。P3-C control gate の run loop 配線（ADR-0113、`browser_control_gate_wire` 5 passed）、P3-A/P4-A の deliver_state（試験 admission の成功経路を実 bwrap + 実 chrome-headless-shell で実証、本番 `Attested` の `SameUid` 拒否は維持、`browser_restore_deliver` 3 passed）、P4-B の A1 target_changed・A4 OOPIF target_mismatch（実再現、`browser_injection_attacks` に `ATTACK-A1-TARGET-CHANGED-OK`・`ATTACK-A4-OOPIF-OK`）を解消。A13（別 UID 実 process）と本番 admission（`Attested`、同一 UID host では拒否）は未解決のまま残す。コード変更なし（検査と文書更新のみ）。本番未昇格。
+
+## 本番 admission の機密能力解放（2026-10-01、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）
+
+[ADR-0138](adr/0138-browser-prod-admission-confidential-release.md) は提案であり、本番解放の決定ではない。中間成果として `verify_isolation` に user namespace owner 検査を追加し、owner 不明・daemon owner（`OwnerUnknown` / `UsernsOwnedByDaemon`）を拒否する。これは main の `Attested` より厳しい。境界試験は `prod_admission.rs`（6 passed）と `browser_prod_admission.rs`（9 passed）、全体 gate は `cargo test --workspace`（3055 passed / 0 failed / 11 ignored）と `cargo clippy --workspace -- -D warnings`（exit 0）。ただし launcher 経由の実 process ptrace 拒否は未実証で、**解放は未**。実証されるまで `CredentialInjection`・`IdentityRestore` を許す本番 session は無い。
+
+- H3: 認証区間の LLM 観測停止を維持。
+- H4: task ACL・期限・失効時の再判定と認証区間中の Live View 停止を維持。
+- H5: project + exact origin の束縛と期限・失効・削除を維持。
+- H2（ADR-0080）: `approve_once`・短い一回限り lease を維持。
+- 証拠コマンド: `cargo test -p celeris-credentiald --test prod_admission`; `cargo test -p task-worker --test browser_prod_admission`; `cargo test --workspace`; `cargo clippy --workspace -- -D warnings`。
+- 未解決: subuid の親 user namespace map 外による EPERM、launcher 実装、実 process での ptrace 拒否/A13 は未解決。本番昇格は実証証拠に対する人の承認後に人が行い、この task では実施していない。
+
+### 本番 Attested に launcher 証明と実 process ptrace 拒否を必須化（2026-10-02、子 task 01M3WV4BFJ71J9ZWJ020MP2Z4K、unit launcher-gated-release）
+
+launcher（ADR-0115）実装と host 準備の完了を受け、owner 検査だけでなく launcher session 証明（`task_core::browser_isolation::LauncherSessionProof` / `verify_launcher_session`）を両 admission に必須化した（fail-closed）。証明が無い・検証失敗・`SameUid`・非隔離の runtime は owner 検査に通っても拒否する。
+
+- 必須化の箇所: `celeris-credentiald::injection_ipc::Admission::Attested.admit`（CredentialInjection）、`task-worker::browser_runtime::RestoreAdmission::Attested`（IdentityRestore）。両方とも `task_core::browser_isolation` の共通条件に依る。
+- ptrace 拒否は launcher 経由の別 UID runtime への daemon UID からの実 process 攻撃で**実証済み**（sandbox・host 双方）: `PTRACE_ATTACH errno=Some(1)`（EPERM）、`strace -p` は `Operation not permitted`、`/proc/<pid>/{environ,mem}` はいずれも `errno=Some(13)`（EACCES）。同 UID の positive control（`PTRACE_ATTACH=0`）で検査手段自体の有効性も確認済み。
+- prod-facts の結論: 本番 Attested は別 UID の launcher runtime の `/proc/<pid>/ns` を daemon UID から直接読むと `EACCES` になるため、daemon が読めない namespace・userns owner は launcher の束縛（protocol v3 `SessionBinding.ns_inodes` / `ns_owner_uid`）から採り、daemon 自身が読める `/proc/<pid>/status` 等はそのまま daemon が読んで組み合わせる（`collect_launched_runtime_facts`）。読み取りエラーは安全値で埋めず `Err` のまま返す。
+- 許可/拒否の対応表: synthetic（構造体を直接組んだ模擬観測、5 通り）は単体・結合試験で実証済み（`task-core browser_isolation` 31 passed、`celeris-credentiald` 58 passed、`task-worker --lib browser_launcher` 18 passed）。**実 session の表 `ADMISSION[real-session]`（launcher の実観測を本番入口に通した表）は未実証**: host で protocol v3 launcher に入れ替えて実行したが、systemd の socket activation 下で launcher への接続の `SO_PEERCRED` が `celeris-browser`（995）ではなく `systemd`（uid 0）に見え、前提チェックで失敗した（`launcher-admission-evidence.sh` 実行結果 `EXIT: 101`、6 本中 5 passed・1 failed）。後続 task で、launcher が accept 後に自分の pid/uid を伝える仕組みを ADR-0116 に追記して直す。
+- 検査: `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` exit 0（sandbox、6 passed、許可/拒否表は前提欠落で `SKIP:`）。`cargo clippy --workspace -- -D warnings` exit 0。
+- 証跡: 親 task 01M3VFQZ2TX3W0KTDQHKCAVJR6 の成果物 `prod-admission-release-evidence.md`（試験コマンド・exit code・ptrace 拒否の実出力・対応表・host log 要点）と `launcher-host-run.log`。
+- **本番昇格は未実施**。昇格は人が selfdeploy 手順（kb `projects/agent-platform/selfdeploy-release-verify-procedure.md`、証跡の `prod-admission-release-evidence.md` §6 参照）で行う。この run は本番 daemon を再起動・昇格していない。
 - [Browser capability Phase 1〜4 受け入れ行の追跡表](progress/phase-browser-acceptance.md)（2026-09-30、task 01M3SPF94RDWTPWHNDEQD68VB9）— **現在の判定の正本**。P1-1〜9・P2-1〜13・P3-B・P3-C は全行合格。P3-A は P3-A-8（本番 identity 復元の成功）、P4-A は P4-A-7（別 host UID 実証）が後続 `01M3SPN8H05EJ3DHPVEGEYTMEH`、P4-B は P4-B-6（本番機密能力の解放）が後続 `01M3SPN8HPHPWZ32F0AG986TWS`・A13 が後続 `01M3SPN8HE6A1TZ54GBZGHMZYJ`、P4-C は P4-C-6 が後続 `01M3SPN8HPHPWZ32F0AG986TWS`（決定 sep-uid=a）。H4/H5/H7・ADR-0080 H1/H2/H3/H6 の決定適合節を含む。検査は `bash scripts/check-browser-acceptance.sh`（表の判定・引用テストの実在・file:line・引用 cmd の実行）: 2026-09-30 exit 0（76 行、引用テスト 141 件、file:line 30 件、22 群の cargo test が全部 ok）。判定を 1 行空にすると exit 1（`FAIL: P2-2: 判定が '合格' でも '後続' でもない（''）`）、合格行を task id 無しの後続にすると exit 1（`FAIL: A5: 後続行に ULID の task id がない`）を手で確認し、文書は戻した。同じ branch で `cargo test --workspace --no-fail-fast` exit 0（3055 passed / 0 failed / 11 ignored）、`cargo clippy --workspace -- -D warnings` exit 0。phase-browser-3.md・phase-browser-4.md の状態行と行ごとの判定は追跡表に合わせた。（再 run 2026-09-30: 統合後 check で `browser_shared_cdp::real_shared_cdp_and_auth_section` が高負荷時に 10 秒待ちで偽 Timeout（`sandbox TCP to controller relay failed`）→ sandbox 内 probe と test の待ちを 60 秒の期限式に、TLS fixture 待ちを 30 秒にした。検査スクリプトは `... ok` 判定を stdout だけで行うようにし、test の stderr 割り込みによる偽の不合格を防いだ。再実行: `cargo test --workspace` exit 0（3055 passed）、`cargo clippy --workspace -- -D warnings` exit 0、`bash scripts/check-browser-acceptance.sh` exit 0（22 群・141 件 ok）、P2-2 の判定を空にすると exit 1 を再確認して戻した。）（再 run 2 2026-09-30: 統合後 check で `cluster_login::tests::totp_needs_code_reports_the_exact_prompt` が高負荷時に 30 秒待ちでも Timeout → 偽 ssh が直前に書かれた askpass を exec して ETXTBSY で黙って失敗しうるため、4 つの偽 ssh で askpass を `sh` 経由で読ませた。再実行: `cargo test --workspace` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`bash scripts/check-browser-acceptance.sh` exit 0（22 群・141 件 ok）、P2-2 の判定を空にすると exit 1（`FAIL: P2-2: 判定が '合格' でも '後続' でもない（''）`）を再確認して戻した。）これより上の Phase 3/4 の行の「満たす／未達／一部」は記録時点の判定。本番未昇格。
 - [Browser capability H3 追跡表同期](progress/phase-browser-acceptance.md)（2026-09-30、task 01M3SPF94RDWTPWHNDEQD68VB9、WorkUnit h3-doc-sync）。並行 WorkUnit restore-obs-stop（commit `fa801f18`）が `restore_in_session`（`crates/task-api/src/browser_identity.rs:307`）に、controller への投入前に `observation_stopped` を記録し session 終了まで解除しない結線を実装したのを受け、決定適合 H3 節の「矛盾（後続）」「復元経路は後続」を削除し、新テスト `restore_enters_observation_stop_until_session_end`（task-api）・`restored_session_refuses_agent_observation`（task-worker）を cmd 付きで追加、判定を「適合」に更新。`docs/progress/browser-followups.md` の `01M3SRZ4X8NHRE0BB1QXMBTPKJ` を解決済みと記録し、celerisctl で cancel 済みであることを確認（既に Cancelled）。検査: `bash scripts/check-browser-acceptance.sh` exit 0（23 群、引用テスト 143 件、全部 ok）。`cargo test --workspace` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。
 
@@ -678,6 +701,7 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
 - `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
+
 ## ADR-0129 (1) sccache 撤去: 統合後の全体検証（work unit `verify`）
 
 完了日 2026-10-02。HEAD `273bf5f36153`（統合段 consumers → core → schema-docs がすべて終わった後）で
@@ -898,3 +922,160 @@ Run #2 で main がさらに進んだ `33aca5a3`（アカウント/プロバイ�
 #### 提案
 
 - `docs/PROGRESS.md` の末尾追記方式（複数 work unit が同時に EOF へ `##`/`###` を足す）は、今回のように無関係な既存節（main 側の `land-main3`/`pick-chrome`）が別 work unit の新設 `##` 節の下に紛れ込む merge 結果を生みやすい。長期分岐タスクでは「新しい `##` 節は必ず対象の h2 の直後に挿入する」運用、または merge 後に見出しの親子関係をざっと確認する一手順を `docs/testing.md` か ADR に足すとよい。
+
+## launcher の身元確認を SCM_CREDENTIALS に（socket 起動対応）— 2026-10-03
+
+- 完了日: 2026-10-03（task 01M3ZFJ2DZ5TZPAFKACX45JNF4）。Attested task branch（celeris/01M3WV4BFJ71J9ZWJ020MP2Z4K）を取り込んだ上で修正。
+- 原因: launcher は systemd の socket 起動で、listen socket を作ったのが systemd（root）。`SO_PEERCRED` は listen 時の資格情報を返すので daemon からは uid 0 に見え、`ADMISSION[real-session]` の前提が成り立たなかった。
+- 方法: `LauncherClient` が `SO_PASSCRED` を立て、各応答に kernel が付ける `SCM_CREDENTIALS`（応答を書いた process の pid/uid/gid）を `MSG_PEEK` で読む。全応答で一致しなければ `None`（fail closed）。`LauncherRuntime::start` と `browser_launcher_ptrace.rs` はこの値を使う。launcher binary・protocol は不変。根拠は ADR-0116（launcher 実装）付記 D-P。
+- 試験: `client_identifies_the_responding_process_not_the_listener_creator`（listen した process と応答する子 process を分け、`SO_PEERCRED` は前者・responder は後者を指す）、`client_records_a_consistent_responder_across_requests`。
+- 証拠: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test -p task-worker --lib browser_launcher` 20 passed、`--lib launcher_run` 16 passed、`--test browser_launcher_ptrace --test browser_prod_admission` 6 + 18 passed（sandbox）。
+- ついで: 取り込みで呼び出しを失って未使用になった `browser_injection_wire.rs` の `wait_cdp_ready` を削除（clippy の dead_code）。
+- ADR 番号: 取り込んだ本番 admission の ADR（旧 `0116-browser-prod-admission-confidential-release.md`）は main の ADR-0116（launcher 実装）と重なるため [ADR-0138](adr/0138-browser-prod-admission-confidential-release.md) に振り直した（main と全 celeris/* ブランチの最大は 0137）。コード・試験・台本・unit の「ADR-0116 D-L」「ADR-0116 条件 1〜5」を ADR-0138 に、D2〜D7・付記 D-P は ADR-0116 のまま。条件 5(a) と未実証節の `SO_PEERCRED` の記述も D-P に合わせた。
+- 未解決: host での `ADMISSION[real-session]` の再取得は人が `docs/ops/browser-launcher-admission-evidence-run.md` の手順で行う（入れ替え → 台本 → main の版へ戻す）。
+
+## web release の依存欠落と web-follow の起動確認の修正（work unit `record`、HEAD `ab687209cb05`）
+
+### 事故の要約
+
+2026-10-02 17:19 UTC、release `ae780a918695` を live で昇格したところ、`promote.sh` の web-follow が `celeris-web@95ac16442f92` から `celeris-web@ae780a918695` に切り替えた。新 unit の `node server/index.js` が `ERR_MODULE_NOT_FOUND` で起動できず、Web UI（`127.0.0.1:7720` と LAN `192.168.1.103:7721`）が止まった。運用者が `celeris-web@95ac16442f92` に戻して復旧した。`ae780a918695` の `web/app` には `server/`・`dist/` はあるが `node_modules` が無く、tarball は `.pnpm-store` だけで `node_modules` を含んでいなかった。`gate.json` の `web` は `ok=true`・`blocking=false` のままで、web-follow の切替条件（`web.ok=true` かつ `server/index.js` の有無だけ）を満たしてしまっていた。加えて、web unit の再起動のたびに LAN 中継 `celeris-web-lan.service` が `start-limit-hit` で止まり、人が `reset-failed` と socket 再起動を手で行っていた。
+
+方式の決定は [docs/adr/0135-web-follow-health-gate.md](adr/0135-web-follow-health-gate.md)。実装は本案件の先行 work unit（`release-deps`・`follow-health`・`lan-units`・`verify-web`）で完了済み（下記 D1〜D4 はいずれも `done`）:
+
+- D1（`release.sh` の `bundle_web`）: offline install 後に `node_modules` の実在と `server/` import の解決を確かめ、どちらかが失敗したら `WEB_OK=false`・`WEB_FAILED_STEP=web-bundle` にして理由を `.gate-web-bundle.log` に残す（`scripts/selfdeploy/release.sh:614-645`）。
+- D2（`web-follow.sh`）: 切替前に `node_modules` の存在と `sd_web_app_probe` による一時起動確認を行い、失敗したら旧 unit に触れず warning で exit 0。切替後も本番 bind の `/healthz` が `release=<NEW>` で 200 を返すか確かめ、失敗したら新を stop・disable、旧を start・enable し直す（`scripts/selfdeploy/web-follow.sh`）。
+- D3（LAN 中継）: `deploy/systemd/celeris-web-lan.{socket,service}` をリポジトリに追加。socket に `TriggerLimitIntervalSec=0`、service に `StartLimitIntervalSec=0` を設定し、`web-follow.sh` の終わりに `reset-failed` と `start celeris-web-lan.socket` を実行する（unit を触った経路のみ、`trap … EXIT` 経由）。
+- D4（`verify.sh`）: release の `gate.json` の `web.ok=true` のとき、staging の空き port で `sd_web_app_probe` を実行し、非 blocking で `record 4d web-app-start` に残す（`scripts/selfdeploy/verify.sh:876-886`）。
+
+### 各葉の証拠コマンドと結果
+
+全 12 本の selfdeploy 試験を順に実行した。
+
+```
+$ for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || { echo "FAILED: $t"; exit 1; }; done
+```
+
+→ exit 0（`real 1m21s`）。各試験の最後の行:
+
+| 試験 | 結果 |
+| --- | --- |
+| `pid_resolution_test.sh` | `pid_resolution_test.sh: all ok` |
+| `prepare_timeout_test.sh` | exit 0（出力なし） |
+| `promote_authorization_marker.sh` | `promote_authorization_marker: all ok` |
+| `promote_web_follows_release.sh` | `promote_web_follows_release: all ok`（内部で `web_follow_health_gate: all ok` も実行） |
+| `release_gui_skip_and_shared_tree.sh` | `release_gui_skip_and_shared_tree: ok` |
+| `release_parallel_test_gate.sh` | `release_parallel_test_gate: ok` |
+| `release_uses_scratch_lease.sh` | `release_uses_scratch_lease: ok` |
+| `release_web_bundle_requires_deps.sh` | `release_web_bundle_requires_deps: ok`（D1: node_modules が無い/import が解決できない offline install を偽 pnpm で再現し `web.ok=false` を確認） |
+| `release_web_stage_nonblocking.sh` | `release_web_stage_nonblocking: ok` |
+| `verify_durations_and_parallel.sh` | `verify_durations_and_parallel: ok` |
+| `verify_web_app_start.sh` | `verify_web_app_start: ok`（D4: `verify.sh` の非 blocking 起動確認） |
+| `web_follow_health_gate.sh` | `web_follow_health_gate: all ok`（D2: node_modules 無しでは切り替えない／probe 失敗で旧を残す／切替後確認失敗で旧へ戻す、の3条件を含む） |
+
+個別の実行時間（参考、`/usr/bin/time`）: `pid_resolution_test.sh` 0.06s、`prepare_timeout_test.sh` 0.03s、`promote_authorization_marker.sh` 4.47s、`promote_web_follows_release.sh` 5.13s、`release_gui_skip_and_shared_tree.sh` 13.00s、`release_parallel_test_gate.sh` 6.78s、`release_uses_scratch_lease.sh` 1.16s、`release_web_bundle_requires_deps.sh` 4.70s、`release_web_stage_nonblocking.sh` 9.66s、`verify_durations_and_parallel.sh` 10.39s、`verify_web_app_start.sh` 18.16s、`web_follow_health_gate.sh` 7.82s。合計約 81 秒で、2 分のタイムアウトに収まる（短い `timeout` で打ち切ると偽の失敗になるので注意）。
+
+実装の変更はしていない（このWU の objective は試験の実行と記録のみ）。
+
+### 人が実行する手順
+
+#### 1. 新しい release の作成
+
+```
+$ scripts/selfdeploy/release.sh
+```
+
+`gate.json` の `web.ok` を確認する。`false` の場合は `.gate-web-bundle.log`（release の build 木、`$BUILD/.gate-web-bundle.log`）に理由が残る（D1 により、`node_modules` が無い・`server/` の import が解決できない release は自動的に `web.ok=false` になり web-follow の対象から外れる）。
+
+#### 2. `deploy/systemd/celeris-web-lan.*` の install と有効化（初回のみ、D3）
+
+```
+$ mkdir -p ~/.config/systemd/user
+$ cp deploy/systemd/celeris-web-lan.socket deploy/systemd/celeris-web-lan.service ~/.config/systemd/user/
+```
+
+`celeris-web-lan.socket` の `ListenStream=192.168.1.103:7721` が実際の LAN address と違う場合はコピー後に書き換える。
+
+```
+$ systemctl --user daemon-reload
+$ systemctl --user enable --now celeris-web-lan.socket
+```
+
+人がすでに手で置いた既存の unit がある場合は、上記の `StartLimitIntervalSec=0`／`TriggerLimitIntervalSec=0` が入っているか diff で確認し、入っていなければ置き換えて `daemon-reload` する。
+
+#### 3. 昇格後の確認
+
+```
+$ systemctl --user status celeris-web@<new_sha12> --no-pager
+$ journalctl --user -u celeris-web@<new_sha12> -n 50 --no-pager
+$ journalctl --user -u celeris-web-lan.service -n 20 --no-pager
+```
+
+`web-follow.sh` のログ（`sd_log` の出力。`promote.sh` の標準出力、または `~/.local/celeris/releases/<sha12>/promote.log` 相当）に `web follows the release: celeris-web@<new_sha12>` が出ていれば成功。`warning: new web is not healthy; restoring celeris-web@<old_sha12>` や `warning: web app probe failed; keeping celeris-web@<old_sha12>` が出ていれば、旧 web のまま維持されている（昇格自体は exit 0 のまま失敗しない）。
+
+`/healthz` の release を直接確認する:
+
+```
+$ curl -s http://127.0.0.1:7720/healthz
+$ curl -s http://192.168.1.103:7721/healthz   # LAN 側。celeris-web-lan.socket 経由
+```
+
+応答 JSON の `release` が期待する sha12 と一致するか確認する。
+
+#### 4. 失敗時に旧 web へ戻す手順（web-follow の自動復旧で足りない場合）
+
+通常は D2 により web-follow 自身が失敗を検知して旧 unit を start・enable し直す。それでも旧に戻っていない場合は人が以下を実行する:
+
+```
+$ systemctl --user stop celeris-web@<new_sha12>
+$ systemctl --user disable celeris-web@<new_sha12>
+$ systemctl --user start celeris-web@<old_sha12>
+$ systemctl --user enable celeris-web@<old_sha12>
+$ systemctl --user reset-failed celeris-web-lan.service celeris-web-lan.socket
+$ systemctl --user start celeris-web-lan.socket
+$ curl -s http://127.0.0.1:7720/healthz   # release が <old_sha12> に戻ったことを確認
+```
+
+### 未解決事項
+
+- D1 の根因（事故時の release 木で offline install が exit 0 のまま `node_modules` を作らなかった経路の確定）は ADR-0135 に記載のとおり未確定。D1 の検査（node_modules と import 解決の必須化）はどの根因でも壊れた release を通さないため、根因の確定は release の修正を妨げない。
+- `deploy/systemd/celeris-web-lan.*` の実機への install・`daemon-reload`・既存 unit との置き換えは本番 host の操作であり、このWUでは実行していない（上記「人が実行する手順」参照）。
+
+### main 取り込みと SD_GATE_SKIP_WEB の扱い（work unit `merge-main`、final review 差し戻し対応）
+
+final review で、このタスクの branch が main の `f1904ecd`（release.sh の web 段を既定で skip にする変更、`SD_GATE_SKIP_WEB` の既定を 1 に）を含んでおらず、merge すると新設の `release_web_bundle_requires_deps.sh` だけが「web steps: skipped — SD_GATE_SKIP_WEB=1」で落ちる、という技術的欠陥を指摘された。対応は以下のとおり。
+
+- `git merge main`（`f1904ecd` と `5d6df9f3` を含む main）を実行。`git merge-tree --write-tree HEAD main` で事前に衝突なしを確認済みで、実merge も `docs/PROGRESS.md` と `scripts/selfdeploy/release.sh` を auto-merge し、衝突なしで完了した（merge commit 本文に経緯を記載）。
+- `scripts/selfdeploy/tests/release_web_bundle_requires_deps.sh` の `run_release()` に `SD_GATE_SKIP_WEB=0` を明示して追加した（`release_web_stage_nonblocking.sh` の既存の書き方と同じ）。他の selfdeploy 試験で `release.sh` を呼び web 段の実行を前提にしているのはこの 2 本だけで、他は変更不要だった。
+- `release.sh` の `SD_GATE_SKIP_WEB` 既定を 1 にしたコメント（f1904ecd 由来）を書き直した。この task（release-deps / follow-health / lan-units / verify-web）で node_modules の有無・`server/` の import 解決の検査（`bundle_web`、web.ok=false 化）と web-follow の起動確認（ADR-0135）が実装済みであることを明記した。ただし **NFS 上での web/app 展開（offline の prod install 含む）に 40〜60 分かかる問題は未対応のまま残っている**ため、既定を 0（web 段を走らせる）に戻すかどうかは人の判断とし、**既定値 `${SD_GATE_SKIP_WEB:-1}` はこの task では変更していない**。
+- `scripts/selfdeploy/release.sh` の `${SD_GATE_SKIP_WEB:-1}` という既定値自体のコード（条件式）は変更していない。変わったのはテストの呼び出し側の明示指定とコメントの文面のみ。
+
+#### 証拠コマンドと結果
+
+```
+$ git merge-base --is-ancestor f1904ecd HEAD && echo ok
+ok
+$ git merge-base --is-ancestor 5d6df9f3 HEAD && echo ok
+ok
+$ for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || { echo "FAILED: $t"; exit 1; }; done
+...
+pid_resolution_test.sh: all ok
+promote_authorization_marker: all ok
+web_follow_health_gate: all ok
+promote_web_follows_release: all ok
+release_gui_skip_and_shared_tree: ok
+release_parallel_test_gate: ok
+release_uses_scratch_lease: ok
+release_web_bundle_requires_deps: ok
+release_web_stage_nonblocking: ok
+verify_durations_and_parallel: ok
+verify_web_app_start: ok
+web_follow_health_gate: all ok
+```
+
+exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度で、合算の遅さは同一 run 内での繰り返し実行による負荷。詳細な単体実行時間は前節「record」参照）。全 12 本すべて ok。
+
+### 未解決事項（追加）
+
+- NFS 上の web/app 展開が 40〜60 分かかる問題は本 task のスコープ外のまま。`SD_GATE_SKIP_WEB` の既定を 0 に戻すのは、この問題が解決してから人が判断する。
+
+main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-latest`）。

@@ -14,8 +14,9 @@ pub mod delivery;
 pub mod doc_gardener;
 /// ADR-0040 D4（Phase 47）: インスタンスの役割（active / standby / draining / verify）とライブ引き継ぎ。
 pub mod instance;
-pub mod knowledge_gc;
 /// ADR-0047 D4（Phase 62）: 知識の自動メンテナンス（決定的なトリガと適用。LLM は `langmem` アダプタの中）。
+pub mod knowledge_curation;
+pub mod knowledge_gc;
 pub mod knowledge_maint;
 /// ADR-0037（Phase 39）: 人の判断が要るときだけ Discord に知らせる（判定は決定的、送信は spawn）。
 pub mod notify;

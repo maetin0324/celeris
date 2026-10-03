@@ -438,3 +438,39 @@ fn disabled_job_is_not_fired_and_starts_without_next_time() {
     assert!(tick(&store, "2026-10-09T03:00:00Z").is_empty());
     assert!(store.cron_job_runs(job.id, None).expect("runs").is_empty());
 }
+
+/// ADR-0131 付記 D10 (3): 雛形の `mode` は発火時に task のラベルへ写り、後の job の変更で変わらない。
+#[test]
+fn knowledge_curation_job_mode_is_snapshotted_at_fire_time() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let mut new = new_job(CronOverlap::Skip, CronCatchUp::Latest);
+    new.template
+        .extra
+        .insert("mode".to_string(), serde_json::json!("apply"));
+    let job = create_job(
+        &store,
+        &CronFireContext::default(),
+        new,
+        t("2026-10-01T00:00:00Z"),
+    )
+    .expect("create job");
+    let created = tick(&store, "2026-10-01T03:00:04Z");
+    assert_eq!(created.len(), 1);
+
+    // 発火後に job を dry_run へ戻しても、作った task の mode は apply のまま。
+    let mut changed = store.cron_job_get(job.id).expect("get").expect("job");
+    changed
+        .template
+        .extra
+        .insert("mode".to_string(), serde_json::json!("dry_run"));
+    assert!(store.cron_job_update(&changed).expect("update"));
+
+    let task = store.get(created[0]).expect("get").expect("task");
+    assert!(task.labels.contains(&MODE_APPLY_LABEL.to_string()));
+    assert_eq!(task_mode(&task), "apply");
+
+    finish(&store, created[0]);
+    let next = tick(&store, "2026-10-02T03:00:04Z");
+    let task = store.get(next[0]).expect("get").expect("task");
+    assert_eq!(task_mode(&task), "dry_run");
+}

@@ -657,9 +657,11 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     );
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
-    let notifications = store.notification_recent(10).unwrap();
-    assert_eq!(notifications.len(), 1, "{notifications:?}");
-    assert!(notifications[0].body.contains("ディスク不足 (infra)"));
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.total, 1, "{:?}", notices.items);
+    assert!(notices.items[0].title.contains("ディスク不足 (infra)"));
     // 空きが戻れば自動で解除して dispatch する。
     d.config.min_free_disk_mb = 0;
     assert_eq!(d.tick().unwrap().dispatched, 1);
@@ -676,13 +678,15 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     d.config.min_free_disk_mb = u64::MAX;
     d.tick().unwrap();
     assert!(settings.pool().target_dir(&live).exists());
-    let notifications = store.notification_recent(10).unwrap();
-    assert_eq!(notifications.len(), 1);
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.total, 1);
     assert!(
-        notifications[0].body.contains("scratch pool: pinned")
-            && notifications[0].body.contains("agent-live"),
+        notices.items[0].title.contains("scratch pool: pinned")
+            && notices.items[0].title.contains("agent-live"),
         "{}",
-        notifications[0].body
+        notices.items[0].title
     );
 }
 

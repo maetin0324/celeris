@@ -35,9 +35,11 @@ fn expect_err() -> Expected {
 /// そのまま再現した期待値を返す。
 fn expected_simple(kind: TaskKind, status: Status, trigger: &Trigger) -> Expected {
     match trigger {
-        // ADR-0010 D1: 非終端からのみ。
+        // ADR-0131 D7: Cancel は failed からも許す。
         Trigger::Cancel | Trigger::DependencyFailed => {
-            if status.is_terminal() {
+            if status.is_terminal()
+                && !(matches!(trigger, Trigger::Cancel) && status == Status::Failed)
+            {
                 expect_err()
             } else {
                 expect_ok(Status::Cancelled)
@@ -293,8 +295,13 @@ fn table_simple_triggers_full_cross_product() {
                             outcome.attempts, 0,
                             "attempts should be unchanged: kind={kind:?} status={status:?} trigger={trigger:?}"
                         );
-                        // ADR-0044 D2: `Interrupt` だけ reason が name と違う（`"comment"`）。
-                        assert_eq!(outcome.reason, trigger.reason());
+                        // ADR-0131 D7: failed の cancel は諦めた操作として区別する。
+                        let reason = if status == Status::Failed && *trigger == Trigger::Cancel {
+                            "cancel_failed"
+                        } else {
+                            trigger.reason()
+                        };
+                        assert_eq!(outcome.reason, reason);
                     }
                     None => {
                         let err = got.unwrap_err();
@@ -690,7 +697,7 @@ fn worker_error_retry_then_fail_example_from_spec() {
     assert_eq!(o1.attempts, 2);
 }
 
-/// ADR-0010 D1（P-4 / P-9 / P-21）: Cancel と DependencyFailed は非終端からのみ成功し attempts を保つ。
+/// ADR-0131 D7: Cancel は failed からも成功し、attempts を保つ。
 /// Requeue は running からのみ ready へ戻り attempts を保つ（max_retries に達していても failed にしない）。
 #[test]
 fn cancel_dependency_failed_and_requeue_keep_attempts() {
@@ -706,15 +713,24 @@ fn cancel_dependency_failed_and_requeue_keep_attempts() {
                 match transition(&s, &trigger) {
                     Ok(outcome) => {
                         assert!(
-                            !status.is_terminal(),
+                            !status.is_terminal()
+                                || (trigger == Trigger::Cancel && status == Status::Failed),
                             "{trigger:?} from terminal {status:?} must be invalid"
                         );
                         assert_eq!(outcome.next, Status::Cancelled);
                         assert_eq!(outcome.attempts, 5);
-                        assert_eq!(outcome.reason, trigger.name());
+                        assert_eq!(
+                            outcome.reason,
+                            if status == Status::Failed {
+                                "cancel_failed"
+                            } else {
+                                trigger.name()
+                            }
+                        );
                     }
                     Err(_) => assert!(
-                        status.is_terminal(),
+                        status.is_terminal()
+                            && !(trigger == Trigger::Cancel && status == Status::Failed),
                         "{trigger:?} from {status:?} must be valid"
                     ),
                 }

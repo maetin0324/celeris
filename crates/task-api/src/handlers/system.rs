@@ -83,7 +83,10 @@ pub(super) async fn inbox(State(state): State<ApiState>, RawQuery(raw): RawQuery
             Ok(inbox)
         })
         .await?;
-    Ok(json_response(StatusCode::OK, &inbox))
+    Ok(crate::inbox_notifications::deprecated(
+        json_response(StatusCode::OK, &inbox),
+        "</api/v1/inbox/items>; rel=\"successor-version\"",
+    ))
 }
 
 // ---- 17. POST /plans ----

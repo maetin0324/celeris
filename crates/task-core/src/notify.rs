@@ -65,6 +65,10 @@ impl std::str::FromStr for NotificationId {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationKind {
+    /// ADR-0133 D6: new human decisions, batched into one webhook message.
+    InboxNew,
+    /// ADR-0133 D6: periodic summary of non-actionable notices.
+    Digest,
     /// 途中目標に属する仕事がすべて終端になった（達成の判定と次の Go を人に求める）。`key` = 途中目標 id。
     MilestoneReady,
     /// 未決の認可の要求。`key` = 認可 id。
@@ -101,6 +105,8 @@ pub enum NotificationKind {
 impl NotificationKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            NotificationKind::InboxNew => "inbox_new",
+            NotificationKind::Digest => "digest",
             NotificationKind::MilestoneReady => "milestone_ready",
             NotificationKind::ApprovalPending => "approval_pending",
             NotificationKind::QuestionBlocked => "question_blocked",
@@ -117,6 +123,8 @@ impl NotificationKind {
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "inbox_new" => Some(NotificationKind::InboxNew),
+            "digest" => Some(NotificationKind::Digest),
             "milestone_ready" => Some(NotificationKind::MilestoneReady),
             "approval_pending" => Some(NotificationKind::ApprovalPending),
             "question_blocked" => Some(NotificationKind::QuestionBlocked),
@@ -133,7 +141,9 @@ impl NotificationKind {
     }
 
     /// 判定の順（GUI と再送の順を決定的にするため）。
-    pub const ALL: [NotificationKind; 11] = [
+    pub const ALL: [NotificationKind; 13] = [
+        NotificationKind::InboxNew,
+        NotificationKind::Digest,
         NotificationKind::MilestoneReady,
         NotificationKind::ApprovalPending,
         NotificationKind::QuestionBlocked,
@@ -235,6 +245,12 @@ pub trait NotificationStore: Send + Sync {
 
     /// 新しい順（`created_at` 降順、同値は id 降順）に最大 `limit` 件（GUI の「直近の送信」）。
     fn notification_recent(&self, limit: usize) -> Result<Vec<Notification>, StoreError>;
+
+    /// Latest successful outbound send for a kind (`ok = 1` and a non-null `sent_at`).
+    fn notification_last_sent_at(
+        &self,
+        kind: NotificationKind,
+    ) -> Result<Option<OffsetDateTime>, StoreError>;
 
     /// まだ決着していない行（`ok IS NULL`）を古い順に返す（次に送る対象）。
     fn notification_pending(&self) -> Result<Vec<Notification>, StoreError>;
@@ -384,6 +400,18 @@ impl NotificationStore for SqliteStore {
             out.push(row??);
         }
         Ok(out)
+    }
+
+    fn notification_last_sent_at(
+        &self,
+        kind: NotificationKind,
+    ) -> Result<Option<OffsetDateTime>, StoreError> {
+        let conn = self.lock()?;
+        let raw: Option<String> = conn.query_row(
+            "SELECT sent_at FROM notifications WHERE kind = ?1 AND ok = 1 AND sent_at IS NOT NULL ORDER BY julianday(sent_at) DESC, id DESC LIMIT 1",
+            [kind.as_str()], |row| row.get(0),
+        ).optional()?;
+        raw.map(|value| parse_rfc3339(&value)).transpose()
     }
 
     fn notification_pending(&self) -> Result<Vec<Notification>, StoreError> {

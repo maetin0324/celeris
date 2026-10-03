@@ -1,12 +1,12 @@
-# ADR-0129: sccache を host の Cargo 設定へ移し、btrfs の seed から target を作る
-
 ---
 tasks: [01M3YD2Z585N1YCBZK4AH8QXR0]
 ---
 
+# ADR-0129: sccache を host の Cargo 設定へ移し、btrfs の seed から target を作る
+
 - 日付: 2026-10-02
 - 状態: Accepted（実装と host への適用は後続工程）
-- 関連: [ADR-0075](0075-tiered-build-cache.md) D1–D6、R7-7、R7-8
+- 関連: [ADR-0075](0075-tiered-build-cache.md) D1–D6、R7-7、R7-8、[ADR-0136](0136-local-hot-data-layout.md)
 - 実測: [target コピー後の Cargo fresh 判定実験](../progress/reflink-target-experiment.md)
 
 ## 1. Celeris からの sccache 撤去と互換
@@ -25,7 +25,9 @@ server は Celeris の unit と依存関係を持たない user unit とし、`S
 
 ## 3. scratch の `/local` への移行
 
-`[scratch] dir` を設定可能なままにし、`/local` の btrfs mount と書き込み権限を人が確認した後に `/local/celeris/scratch` などへ切り替える。`/local` がない環境の既定値は現行の scratch path のままとする。マウントが失われた場合に root filesystem 上へ同名ディレクトリを作らないよう、切替後は mount point と filesystem を起動時に検査し、満たさなければ scratch を無効化して理由を表示する。移行は daemon 停止中に既存の lease と target を保存して行い、切替後の owner path・lease・空き容量を確認してから再開する。Proxmox host の LVM-thin volume の作成、btrfs format、container への bind mount は人の作業であり、Celeris は実行しない。
+`[scratch] dir` を設定可能なままにし、`/local` の btrfs mount と書き込み権限を人が確認した後に [ADR-0136](0136-local-hot-data-layout.md) の定める `/local/celeris/data/scratch` へ切り替える。`/local` がない環境の既定値は現行の scratch path のままとする。マウントが失われた場合に root filesystem 上へ同名ディレクトリを作らないよう、切替後は mount point と filesystem を起動時に検査する。`mount` 指定があり満たされないときは `dir` を従来の既定 scratch dir へ戻し、理由をログに出す（`/local` 上に同名ディレクトリは作らない）。移行は daemon 停止中に既存の lease と target を保存して行い、切替後の owner path・lease・空き容量を確認してから再開する。Proxmox host の LVM-thin volume の作成、btrfs format、container への bind mount は人の作業であり、Celeris は実行しない。
+
+host 管理の sccache cache（`/local/sccache`、§2）は ADR-0136 が定める Celeris 管理 tree `/local/celeris/{data,state}` の外にあり、Celeris の GC・バックアップの対象ではない。unit の `SCCACHE_CACHE_SIZE` は ADR-0136 が切替直前に要求する `/local` の 30GiB 以上の空きに収まるよう人が設定する。
 
 ## 4. seed と task・WU の target
 

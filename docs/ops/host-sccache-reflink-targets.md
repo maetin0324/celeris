@@ -4,7 +4,7 @@
 tasks: [01M3YD2Z585N1YCBZK4AH8QXR0]
 ---
 
-この手順は本番 host の管理者が実行する。Celeris の run は Proxmox、container の mount、user unit、本番 config、daemon を変更しない。設計は [ADR-0129](../adr/0129-host-sccache-reflink-targets.md)、Cargo の実測は [実験記録](../progress/reflink-target-experiment.md)、リリースの切り替えは [selfdeploy](../selfdeploy.md) を参照する。以下の `CTID`、`pve/data`、容量、host の mount path は実機に合わせて置き換える。
+この手順は本番 host の管理者が実行する。Celeris の run は Proxmox、container の mount、user unit、本番 config、daemon を変更しない。設計は [ADR-0129](../adr/0129-host-sccache-reflink-targets.md)、scratch の置き場は [ADR-0136](../adr/0136-local-hot-data-layout.md)、Cargo の実測は [実験記録](../progress/reflink-target-experiment.md)、リリースの切り替えは [selfdeploy](../selfdeploy.md) を参照する。以下の `CTID`、`pve/data`、容量、host の mount path は実機に合わせて置き換える。
 
 ## 1. Proxmox の btrfs volume を `/local` に見せる
 
@@ -47,14 +47,14 @@ rm -rf -- "$probe"
 install -d -m 755 "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.cargo"
 install -m 755 scripts/host-sccache/rustc-wrapper.sh "$HOME/.local/bin/rustc-wrapper.sh"
 install -m 644 scripts/host-sccache/sccache.service "$HOME/.config/systemd/user/sccache.service"
-mkdir -p /local/sccache
+mkdir -p /local/sccache  # ADR-0136 の Celeris 管理 tree（/local/celeris/{data,state}）の外の host 管理 cache
 test -w /local/sccache
 systemctl --user daemon-reload
 systemctl --user enable --now sccache.service
 systemctl --user is-active sccache.service
 ```
 
-unit の `ExecStart=%h/.local/bin/sccache` に合わせ、`command -v sccache` が別の path なら unit の `ExecStart` を実際の絶対 path に直してから `daemon-reload` する。unit の `SCCACHE_DIR=/local/sccache` と容量上限 `SCCACHE_CACHE_SIZE=20G` も実機に合わせる。`systemctl --user status sccache.service` と `sccache --show-stats` で起動を確認する。
+unit の `ExecStart=%h/.local/bin/sccache` に合わせ、`command -v sccache` が別の path なら unit の `ExecStart` を実際の絶対 path に直してから `daemon-reload` する。unit の `SCCACHE_DIR=/local/sccache`（ADR-0136 の Celeris 管理 tree の外）と容量上限 `SCCACHE_CACHE_SIZE=20G` も実機に合わせる。`SCCACHE_CACHE_SIZE` は ADR-0136 が切替直前に要求する `/local` の 30GiB 以上の空きを侵さない値にする。`systemctl --user status sccache.service` と `sccache --show-stats` で起動を確認する。
 
 既存の `~/.cargo/config.toml` をバックアップして `[build]` に次を追加する。既存の `[build]` があれば同じ節にキーを足し、重複節は作らない。`~` は展開されないため、**実際の絶対 path** を書く。[設定例](../../scripts/host-sccache/cargo-config.toml.example) も参照する。
 
@@ -67,20 +67,22 @@ rustc-wrapper = "/home/<user>/.local/bin/rustc-wrapper.sh"
 
 ## 3. Celeris の scratch と旧 cache を切り替える
 
+scratch の正本の置き場は [ADR-0136](../adr/0136-local-hot-data-layout.md) が `/local/celeris/data/scratch` と定める。
+
 最初に [selfdeploy の release と verify](../selfdeploy.md) を済ませ、新版を昇格できる状態にする。停止する前に進行中の run と release build がないこと、`~/.local/celeris/current/bin/celerisctl scratch status --json`、`du -sh /var/lib/celeris/scratch/{targets,cache-l1} 2>/dev/null`、`df -h /local` を記録する。既存の scratch 全体と config は戻すときまで保存する。
 
-daemon を停止し、`/local` が mount されたことを再確認して `/local/celeris/scratch` を作る。新 config の `[scratch]` は次のようにする。`mount` を指定すると `/local` が無い起動では従来の既定 scratch dir（本番では `/var/lib/celeris/scratch`）へ戻る。`mount` を省略して `dir` だけを指定するとこの保護は働かない。
+daemon を停止し、`/local` が mount されたことを再確認して `/local/celeris/data/scratch` を作る。新 config の `[scratch]` は次のようにする。`mount` を指定すると `/local` が無い起動では従来の既定 scratch dir（本番では `/var/lib/celeris/scratch`）へ戻り、理由をログに出す（`/local` 上に同名ディレクトリは作らない）。`mount` を省略して `dir` だけを指定するとこの保護は働かない。
 
 ```toml
 [scratch]
-dir = "/local/celeris/scratch"
+dir = "/local/celeris/data/scratch"
 mount = "/local"
 seed_reflink = true
 ```
 
-既存 target はどちらかを選ぶ。**捨てる場合**は旧 `/var/lib/celeris/scratch/targets` をしばらく保存し、新 pool にはコピーしない。新しい owner は seed ができるまで空から build される。**移す場合**は daemon と release build を止めた状態で、`rsync -a /var/lib/celeris/scratch/targets/ /local/celeris/scratch/targets/` とし、`lease.json` の mtime と owner の `target/` まで含めて移す。`rsync -a --dry-run --checksum /var/lib/celeris/scratch/targets/ /local/celeris/scratch/targets/` の出力が空であることを確認する。異なる filesystem 間なのでこの移行コピー自体は reflink ではない。旧 scratch はすぐ消さず、戻し先として残す。seed は `targets/` の外にあり、旧 target を手で seed として流用しない。
+既存 target はどちらかを選ぶ。**捨てる場合**は旧 `/var/lib/celeris/scratch/targets` をしばらく保存し、新 pool にはコピーしない。新しい owner は seed ができるまで空から build される。**移す場合**は daemon と release build を止めた状態で、`rsync -a /var/lib/celeris/scratch/targets/ /local/celeris/data/scratch/targets/` とし、`lease.json` の mtime と owner の `target/` まで含めて移す。`rsync -a --dry-run --checksum /var/lib/celeris/scratch/targets/ /local/celeris/data/scratch/targets/` の出力が空であることを確認する。異なる filesystem 間なのでこの移行コピー自体は reflink ではない。旧 scratch はすぐ消さず、戻し先として残す。seed は `targets/` の外にあり、旧 target を手で seed として流用しない。
 
-新版の [selfdeploy 昇格手順](../selfdeploy.md) に従い daemon を差し替え、`celerisctl scratch status --json` と `findmnt -no FSTYPE,TARGET /local` で pool の使用と空き容量を確かめる。登録済みの local Cargo repo の seed は起動直後の housekeeping が main の commit から自動で初回作成する。`/local/celeris/scratch/seeds/<repo-key>/current/manifest.json` と `current/target/`、daemon の `scratch: seed switched` ログを確認する。main が進むか rustc・`[scratch.cargo]` が変わると更新され、容量不足なら旧 seed を保持して保留する。新しい task/WU の `targets/<owner>/target-origin.json` と `filefrag -v` で seed 由来と extent 共有を確認する。旧 owner は上書きされない。
+新版の [selfdeploy 昇格手順](../selfdeploy.md) に従い daemon を差し替え、`celerisctl scratch status --json` と `findmnt -no FSTYPE,TARGET /local` で pool の使用と空き容量を確かめる。登録済みの local Cargo repo の seed は起動直後の housekeeping が main の commit から自動で初回作成する。`/local/celeris/data/scratch/seeds/<repo-key>/current/manifest.json` と `current/target/`、daemon の `scratch: seed switched` ログを確認する。main が進むか rustc・`[scratch.cargo]` が変わると更新され、容量不足なら旧 seed を保持して保留する。新しい task/WU の `targets/<owner>/target-origin.json` と `filefrag -v` で seed 由来と extent 共有を確認する。旧 owner は上書きされない。
 
 新版への昇格と scratch の切り替えを確認後、旧サービスを止めて無効化する:
 

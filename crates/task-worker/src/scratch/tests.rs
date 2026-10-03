@@ -1051,10 +1051,10 @@ fn reflink_btrfs_seed_copy_shares_extents() {
 #[test]
 fn scratch_mount_check_falls_back_to_previous_dir() {
     let fallback = Path::new("/var/lib/celeris/scratch");
-    let mut s = ScratchSettings::with_dir("/local/celeris/scratch");
+    let mut s = ScratchSettings::with_dir("/local/celeris/data/scratch");
     s.mount = Some(PathBuf::from("/local"));
     let ok = apply_mount_check(s.clone(), fallback, |_| Ok(true));
-    assert_eq!(ok.dir, PathBuf::from("/local/celeris/scratch"));
+    assert_eq!(ok.dir, PathBuf::from("/local/celeris/data/scratch"));
     assert!(ok.dir_fallback_reason.is_none());
     let gone = apply_mount_check(s.clone(), fallback, |_| Ok(false));
     assert_eq!(gone.dir, fallback);

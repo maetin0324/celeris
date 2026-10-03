@@ -1135,8 +1135,10 @@ commit `0b8a2256`（launcher の browser_isolation・credentiald injection_ipc�
 - `git merge-tree --write-tree main HEAD` → exit 0（衝突なしの tree を出力）。
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
-- `cargo test -p task-worker scratch` → exit 0。
+- `cargo test -p task-worker scratch` → exit 0、33 passed、0 failed。
 - `cargo test -p task-dispatch --lib scratch` → exit 0、10 passed、0 failed。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t"; done` → 全 12 本 exit 0
+  （`promote_web_follows_release.sh`・`web_follow_health_gate.sh` が web-lan 経路を通す）。
 
 ### 未解決事項
 

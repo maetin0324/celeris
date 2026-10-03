@@ -327,6 +327,7 @@ pub fn check_diff_matches(validated: &ValidatedPlan, worker_diff: &str) -> Resul
     let expected: BTreeSet<String> = validated
         .kb
         .iter()
+        .filter(|item| item.action != Action::Keep)
         .flat_map(|item| std::iter::once(item.path.as_str()).chain(item.target.as_deref()))
         .map(str::to_owned)
         .collect();

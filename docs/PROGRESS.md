@@ -118,16 +118,15 @@ inline test の外出しと責務分割を完了した（worktree、main 未 mer
 - [Browser capability Phase 4](progress/phase-browser-4.md) — WorkUnit unlock（2026-09-30、ADR-0112）。P4-B 判定: attacks A0〜A17（22 印、A8 は redisplay で合格）・h3-prod e2e・負の対照が全て通過したため、適合記録 `ConformanceResult.evidence`（試験名・結果）を追加し、`injection_attack_suite`/`auth_section_observation_stop` は要る試験が全て `passed` の証拠があるときだけ通る。記録は `scripts/browser-conformance.py --p4b-evidence` が実試験から作り、静的登録は無し。解放後も記録の無い backend・非隔離 runtime は拒否（新規試験 3 件）。`cargo test --workspace --no-fail-fast` exit 0（3047 passed / 0 failed / 11 ignored、初回 fail-fast は無関係の `instance_handoff` 3 件が負荷で失敗し再実行で通過）、`cargo clippy --workspace -- -D warnings` exit 0。本番 admission は `Attested` 必須で同一 UID host では拒否のまま（ADR-0110、変更なし）。未解決: A1 競合未再現・A4 OOPIF 未再現・A13 別 UID 実 process 未試験・P4-A 件の証拠化・実 ledger への runner 実行。本番未昇格。
 - [Browser capability Phase 3/4](progress/phase-browser-4.md)（2026-09-30、task 01M3SM0WN346ABGF42QV02RZTP、WorkUnit record）。final review が挙げた 3 件の未達を実装した WorkUnit（control-gate・deliver-state・attacks-a1a4）を統合したブランチで検査: `cargo test --workspace` exit 0（**3055 passed / 0 failed / 11 ignored**）、`cargo clippy --workspace -- -D warnings` exit 0。P3-C control gate の run loop 配線（ADR-0113、`browser_control_gate_wire` 5 passed）、P3-A/P4-A の deliver_state（試験 admission の成功経路を実 bwrap + 実 chrome-headless-shell で実証、本番 `Attested` の `SameUid` 拒否は維持、`browser_restore_deliver` 3 passed）、P4-B の A1 target_changed・A4 OOPIF target_mismatch（実再現、`browser_injection_attacks` に `ATTACK-A1-TARGET-CHANGED-OK`・`ATTACK-A4-OOPIF-OK`）を解消。A13（別 UID 実 process）と本番 admission（`Attested`、同一 UID host では拒否）は未解決のまま残す。コード変更なし（検査と文書更新のみ）。本番未昇格。
 
-## 本番 admission の機密能力解放（2026-10-01、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）
+## 本番 admission の機密能力解放（2026-10-01 起票、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）
 
-[ADR-0138](adr/0138-browser-prod-admission-confidential-release.md) は提案であり、本番解放の決定ではない。中間成果として `verify_isolation` に user namespace owner 検査を追加し、owner 不明・daemon owner（`OwnerUnknown` / `UsernsOwnedByDaemon`）を拒否する。これは main の `Attested` より厳しい。境界試験は `prod_admission.rs`（6 passed）と `browser_prod_admission.rs`（9 passed）、全体 gate は `cargo test --workspace`（3055 passed / 0 failed / 11 ignored）と `cargo clippy --workspace -- -D warnings`（exit 0）。ただし launcher 経由の実 process ptrace 拒否は未実証で、**解放は未**。実証されるまで `CredentialInjection`・`IdentityRestore` を許す本番 session は無い。
+2026-10-01 時点の経緯: 中間成果として `verify_isolation` に user namespace owner 検査を追加し、owner 不明・daemon owner（`OwnerUnknown` / `UsernsOwnedByDaemon`）を main の `Attested` より厳しく拒否した。境界試験は `prod_admission.rs`（6 passed）・`browser_prod_admission.rs`（9 passed）。当時は launcher 経由の実 process ptrace 拒否が未実証で、ADR-0138 は提案のままだった。
 
-- H3: 認証区間の LLM 観測停止を維持。
-- H4: task ACL・期限・失効時の再判定と認証区間中の Live View 停止を維持。
-- H5: project + exact origin の束縛と期限・失効・削除を維持。
-- H2（ADR-0080）: `approve_once`・短い一回限り lease を維持。
-- 証拠コマンド: `cargo test -p celeris-credentiald --test prod_admission`; `cargo test -p task-worker --test browser_prod_admission`; `cargo test --workspace`; `cargo clippy --workspace -- -D warnings`。
-- 未解決: subuid の親 user namespace map 外による EPERM、launcher 実装、実 process での ptrace 拒否/A13 は未解決。本番昇格は実証証拠に対する人の承認後に人が行い、この task では実施していない。
+2026-10-03 更新（子 task 01M3WV4BFJ71J9ZWJ020MP2Z4K、unit launcher-gated-release）: launcher session 証明（`verify_launcher_session`）を両 admission（credentiald `Admission::Attested`・task-worker `RestoreAdmission::Attested`）に必須化し、sandbox・host 実 process の双方で daemon UID からの ptrace 拒否を実証した。launcher 証明つきの別 UID 隔離 session だけが `CredentialInjection`・`IdentityRestore` を許可され、`SameUid`・非隔離・証明なし・検証失敗の runtime は拒否される。H3（認証区間の LLM 観測停止）・H4（ACL・期限・Live View 停止）・H5（origin 束縛・失効）・ADR-0080 H2（`approve_once`・短い lease）はいずれも弱めていない。詳細・試験・host log は下記「本番 Attested に launcher 証明と実 process ptrace 拒否を必須化」節と成果物 `prod-admission-release-evidence.md` を参照。
+
+- 証拠コマンド: `cargo test -p celeris-credentiald --test prod_admission`; `cargo test -p task-worker --test browser_prod_admission`; `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture`; `cargo test --workspace`; `cargo clippy --workspace -- -D warnings`。
+- 未確認: `CELERIS_LAUNCHER_TESTS=require` での host の SIGSTOP stutter 3 回、merge 後 HEAD の host 再取得（手順は下記節）。
+- **本番昇格は未実施**。実証証拠に対する人の承認後、人が selfdeploy 手順（kb `projects/agent-platform/selfdeploy-release-verify-procedure.md`）で行う。
 
 ### 本番 Attested に launcher 証明と実 process ptrace 拒否を必須化（2026-10-02、子 task 01M3WV4BFJ71J9ZWJ020MP2Z4K、unit launcher-gated-release）
 

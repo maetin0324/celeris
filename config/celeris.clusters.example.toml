@@ -45,6 +45,8 @@ permission_mode = "bypassPermissions"
 
 [[providers]]
 id = "claude-default"
+kind = "adapter"
+llm_source = "claude_oauth"
 adapter = "claude-code"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 2

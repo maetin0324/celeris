@@ -9,10 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use nix::libc;
 use task_core::browser_isolation::{IsolationViolation, LiveIsolation, Namespace};
 use task_worker::browser_runtime::{
     IsolatedRuntime, LiveSession, RuntimeSpec, listening_tcp, process_starttime, reap_recorded,
-    record, same_process_alive,
+    record, same_process_alive, test_hook,
 };
 
 fn skip() -> bool {
@@ -55,6 +56,7 @@ fn browser() -> PathBuf {
 
 fn spec(session: &Path, id: &str, ro: Vec<PathBuf>, argv: &[&str], cdp: bool) -> RuntimeSpec {
     RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: bwrap(),
         session_id: id.into(),
         session_dir: session.to_path_buf(),
@@ -109,7 +111,7 @@ fn process_liveness_counts_running_but_not_unreaped_zombie() {
     let mut zombie = Command::new("/bin/true").spawn().unwrap();
     let zombie_pid = zombie.id() as i32;
     let zombie_starttime = process_starttime(zombie_pid).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while same_process_alive(zombie_pid, zombie_starttime) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -174,7 +176,7 @@ echo END
         false,
     ))
     .unwrap();
-    let out = wait_file(&session.path().join("probe.txt"), Duration::from_secs(20));
+    let out = wait_file(&session.path().join("probe.txt"), Duration::from_secs(60));
     eprintln!("{out}");
     for (k, v) in [
         ("broker", "no"),
@@ -253,7 +255,7 @@ fn real_browser_in_runtime_facts_and_restore_refused_on_same_uid() {
         let _ = tx.send(buf);
     });
     let resp = rx
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(Duration::from_secs(60))
         .expect("CDP reply over pipe");
     let resp = String::from_utf8_lossy(&resp);
     assert!(
@@ -289,8 +291,15 @@ fn real_browser_in_runtime_facts_and_restore_refused_on_same_uid() {
         0,
         "CDP must not listen on TCP"
     );
-    // 検査は弱めない: 違反は SameUid だけで、attestation は出ない。
-    assert_eq!(rt.attest().unwrap_err(), vec![IsolationViolation::SameUid]);
+    // 検査は弱めない: 同一 UID と daemon 所有 userns に attestation は出ない。
+    assert_eq!(
+        rt.attest().unwrap_err(),
+        vec![
+            IsolationViolation::SameUid,
+            IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
+        ]
+    );
     let live = LiveSession(std::sync::Mutex::new(rt));
     assert!(live.current_attestation().is_err());
     // 停止後も出ない
@@ -301,30 +310,214 @@ fn real_browser_in_runtime_facts_and_restore_refused_on_same_uid() {
     );
 }
 
+/// 壊れたときに止まるための保険（ADR-0125: 成立条件ではなく異常時の上限）。
+const GUARD: Duration = Duration::from_secs(60);
+
+fn signal(pid: i32, sig: libc::c_int) {
+    // SAFETY: 試験が起こした process（helper・runtime）にだけ送る。
+    unsafe { libc::kill(pid, sig) };
+}
+
+fn proc_state(pid: i32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().next().map(str::to_owned)
+}
+
+fn proc_ppid(pid: i32) -> Option<i32> {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("PPid:")?.trim().parse().ok())
+}
+
+fn restore_sigchld_reaping() {
+    // The invoking shell may have ignored or blocked SIGCHLD. In that case Linux
+    // auto-reaps children, so neither waitpid nor the stopped-reaper proof works.
+    // SAFETY: SIGCHLD disposition and mask belong to this test/helper process.
+    unsafe {
+        assert_ne!(libc::signal(libc::SIGCHLD, libc::SIG_DFL), libc::SIG_ERR);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        assert_eq!(libc::sigemptyset(&raw mut set), 0);
+        assert_eq!(libc::sigaddset(&raw mut set, libc::SIGCHLD), 0);
+        assert_eq!(
+            libc::sigprocmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
+            0
+        );
+    }
+}
+
+#[test]
+fn ignored_sigchld_still_keeps_unreaped_child_after_reset() {
+    let status = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "trap '' CHLD; exec \"$1\" --exact helper_sigchld_probe --ignored --nocapture",
+            "sh",
+        ])
+        .arg(std::env::current_exe().unwrap())
+        .env("CELERIS_SIGCHLD_PROBE", "1")
+        .status()
+        .unwrap();
+    assert!(status.success(), "SIGCHLD reset probe: {status}");
+}
+
+#[test]
+#[ignore = "helper process for ignored_sigchld_still_keeps_unreaped_child_after_reset"]
+fn helper_sigchld_probe() {
+    if std::env::var_os("CELERIS_SIGCHLD_PROBE").is_none() {
+        return;
+    }
+    restore_sigchld_reaping();
+    let mut child = Command::new("/bin/true").spawn().unwrap();
+    let pid = child.id() as i32;
+    let deadline = Instant::now() + GUARD;
+    while proc_state(pid).as_deref() != Some("Z") {
+        assert!(
+            Instant::now() < deadline,
+            "child was auto-reaped: {}",
+            process_diagnostics(pid)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(proc_ppid(pid), Some(std::process::id() as i32));
+    assert!(child.wait().unwrap().success());
+}
+
+/// `p` が `END` で閉じるまで待つ。helper（`watch`）が先に終われば、その旨で失敗する。
+fn wait_marker(p: &Path, watch: &mut std::process::Child) -> String {
+    let deadline = Instant::now() + GUARD;
+    loop {
+        if let Ok(s) = std::fs::read_to_string(p)
+            && s.ends_with("END\n")
+        {
+            return s;
+        }
+        if let Some(status) = watch.try_wait().unwrap() {
+            panic!("helper exited ({status}) before {p:?} appeared");
+        }
+        assert!(Instant::now() < deadline, "timeout waiting for {p:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn first_pid(s: &str) -> i32 {
+    s.lines().next().and_then(|l| l.parse().ok()).expect("pid")
+}
+
+/// 失敗した時も止めた process を再開し、残った試験の process を回収する。
+struct Cleanup {
+    reaper: std::process::Child,
+    identities: Vec<(i32, u64)>,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for &(pid, starttime) in &self.identities {
+            if same_process_alive(pid, starttime) {
+                signal(pid, libc::SIGCONT);
+                signal(pid, libc::SIGKILL);
+            }
+        }
+        signal(self.reaper.id() as i32, libc::SIGCONT);
+        let _ = self.reaper.kill();
+        let _ = self.reaper.wait();
+    }
+}
+
 /// controller が SIGKILL されたら bwrap と sandbox 内 process が残らない（実 process）。
+///
+/// ADR-0125 §5: 負荷に依らず競合点を固定する。(1) launch の試験フックが bwrap の
+/// `--info-fd` 報告直後に init を SIGSTOP する（init が親死亡シグナルを設定する前）。
+/// launch がその init の ready を待たずに戻れば、controller を殺してから init を再開し、
+/// 実行中の init が残ることを検出する。(2) controller の親は subreaper（helper_reaper）で、
+/// controller を殺す間それを SIGSTOP する。孤児は reap されない zombie になるので、
+/// zombie を残存と数えないこと（実行中の本人は数えること）を毎回通る。
+/// 待ちは controller の終了・runtime の終了・reaper の終了という出来事で判定し、
+/// 60 秒は壊れたときの保険。
 #[test]
 fn controller_kill_leaves_no_runtime_processes() {
     if skip() {
         return;
     }
+    restore_sigchld_reaping();
     let dir = tempfile::tempdir().unwrap();
-    let mut ctl = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "helper_controller", "--ignored", "--nocapture"])
+    let reaper = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "helper_reaper", "--ignored", "--nocapture"])
         .env("CELERIS_RT_HELPER_DIR", dir.path())
+        .env(test_hook::LAUNCH_HOOK_DIR_ENV, dir.path())
         .spawn()
         .unwrap();
-    let pids = wait_file(&dir.path().join("pids"), Duration::from_secs(20));
+    let mut cleanup = Cleanup {
+        reaper,
+        identities: Vec::new(),
+    };
+    let reaper_pid = cleanup.reaper.id() as i32;
+
+    // (1) launch の競合点: init は info-fd 報告の直後に止まっている。
+    let init = first_pid(&wait_marker(
+        &dir.path().join("launch-info"),
+        &mut cleanup.reaper,
+    ));
+    let init_starttime = process_starttime(init).expect("init starttime");
+    cleanup.identities.push((init, init_starttime));
+    let ctl = first_pid(&wait_marker(&dir.path().join("ctl"), &mut cleanup.reaper));
+    let ctl_starttime = process_starttime(ctl).expect("controller starttime");
+    cleanup.identities.push((ctl, ctl_starttime));
+    // launch が ready 待ちに入る（launch-waiting）か、待たずに戻って PID を出す（pids）か。
+    let deadline = Instant::now() + GUARD;
+    let launch_waited = loop {
+        if std::fs::read_to_string(dir.path().join("pids")).is_ok_and(|s| s.ends_with("END\n")) {
+            break false;
+        }
+        if std::fs::read_to_string(dir.path().join("launch-waiting"))
+            .is_ok_and(|s| s.ends_with("END\n"))
+        {
+            break true;
+        }
+        if let Some(status) = cleanup.reaper.try_wait().unwrap() {
+            panic!("helper exited ({status}) during launch");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "launch neither waited nor returned"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if launch_waited {
+        signal(init, libc::SIGCONT);
+    }
+    let pids = wait_marker(&dir.path().join("pids"), &mut cleanup.reaper);
     let pids: Vec<i32> = pids.lines().filter_map(|l| l.parse().ok()).collect();
     assert_eq!(pids.len(), 2);
-    assert!(pids.iter().all(|p| alive(*p)));
+    assert_eq!(pids[1], init, "launch reports the init it stopped");
     let identities: Vec<(i32, u64)> = pids
         .iter()
         .map(|&pid| (pid, process_starttime(pid).expect("runtime starttime")))
         .collect();
-    ctl.kill().unwrap();
-    ctl.wait().unwrap();
+    cleanup.identities.extend(identities.iter().copied());
+
+    // (2) subreaper を止めた状態で controller を殺す。
+    signal(reaper_pid, libc::SIGSTOP);
+    let deadline = Instant::now() + GUARD;
+    while !matches!(proc_state(reaper_pid).as_deref(), Some("T" | "t")) {
+        assert!(
+            Instant::now() < deadline,
+            "subreaper did not stop: {}",
+            process_diagnostics(reaper_pid)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    signal(ctl, libc::SIGKILL);
+    let deadline = Instant::now() + GUARD;
+    while same_process_alive(ctl, ctl_starttime) {
+        assert!(Instant::now() < deadline, "controller did not die");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // launch が待たずに戻っていた場合、ここで初めて init が親死亡シグナルの準備を再開する。
+    signal(init, libc::SIGCONT);
     // PID 再利用や unreaped zombie は残存扱いしない。実行中の本人は引き続き失敗にする。
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + GUARD;
     while identities
         .iter()
         .any(|&(pid, starttime)| same_process_alive(pid, starttime))
@@ -344,8 +537,75 @@ fn controller_kill_leaves_no_runtime_processes() {
         .collect();
     assert!(
         survivors.is_empty(),
-        "running runtime survived controller kill: {survivors:#?}"
+        "running runtime survived controller kill (launch waited for init: {launch_waited}): {survivors:#?}"
     );
+    // stutter が効いている証拠: 止めた subreaper の下で bwrap は reap されない zombie のまま。
+    assert_eq!(
+        proc_state(pids[0]).as_deref(),
+        Some("Z"),
+        "bwrap must be an unreaped zombie under the stopped subreaper: {}",
+        process_diagnostics(pids[0])
+    );
+    assert_eq!(
+        proc_ppid(pids[0]),
+        Some(reaper_pid),
+        "unreaped bwrap must belong to the stopped subreaper: {}",
+        process_diagnostics(pids[0])
+    );
+
+    // subreaper を再開すると孤児を全て reap して終わる（出来事: reaper の終了）。
+    signal(reaper_pid, libc::SIGCONT);
+    let deadline = Instant::now() + GUARD;
+    let status = loop {
+        if let Some(status) = cleanup.reaper.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "subreaper did not finish reaping"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success(), "helper_reaper: {status}");
+    for &(pid, starttime) in &identities {
+        assert!(
+            process_starttime(pid) != Some(starttime),
+            "pid {pid} not reaped"
+        );
+    }
+}
+
+/// controller の親になる subreaper。孤児（controller・bwrap・init）を全て reap したら終わる。
+#[test]
+#[ignore = "helper process for controller_kill_leaves_no_runtime_processes"]
+fn helper_reaper() {
+    let Ok(dir) = std::env::var("CELERIS_RT_HELPER_DIR") else {
+        return;
+    };
+    restore_sigchld_reaping();
+    // SAFETY: 自 process の属性を変えるだけ。
+    assert_eq!(
+        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) },
+        0,
+        "PR_SET_CHILD_SUBREAPER"
+    );
+    let ctl = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "helper_controller", "--ignored", "--nocapture"])
+        .env("CELERIS_RT_HELPER_DIR", &dir)
+        .spawn()
+        .unwrap();
+    let dir = PathBuf::from(dir);
+    std::fs::write(dir.join(".ctl.tmp"), format!("{}\nEND\n", ctl.id())).unwrap();
+    std::fs::rename(dir.join(".ctl.tmp"), dir.join("ctl")).unwrap();
+    std::mem::forget(ctl);
+    loop {
+        match nix::sys::wait::waitpid(None, None) {
+            Ok(_) => {}
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(nix::errno::Errno::ECHILD) => break,
+            Err(e) => panic!("waitpid: {e}"),
+        }
+    }
 }
 
 #[test]
@@ -365,10 +625,11 @@ fn helper_controller() {
     ))
     .unwrap();
     std::fs::write(
-        dir.join("pids"),
+        dir.join(".pids.tmp"),
         format!("{}\n{}\nEND\n", rt.bwrap_pid(), rt.inner_pid()),
     )
     .unwrap();
+    std::fs::rename(dir.join(".pids.tmp"), dir.join("pids")).unwrap();
     std::thread::sleep(Duration::from_secs(600));
     drop(rt);
 }
@@ -401,7 +662,7 @@ fn restart_reaps_recorded_runtime_and_ignores_stale_records() {
     std::mem::forget(rt);
     let killed = reap_recorded(dir.path()).unwrap();
     assert_eq!(killed, vec![outer]);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while (alive(outer) || alive(inner)) && Instant::now() < deadline {
         // bwrap は自分の子（zombie）なので刈り取る
         let _ = nix::sys::wait::waitpid(

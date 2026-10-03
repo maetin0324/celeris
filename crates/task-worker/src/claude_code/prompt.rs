@@ -1688,11 +1688,15 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      - For a unit or task changing only `web/` or `docs/`, replace mandatory `cargo test --workspace` with a \
      check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \
      leave Cargo checks to the daemon's workspace check.\n\
-     - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\n";
+     - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\
+     - Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or \
+     acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, \
+     SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).\n\n";
 /// ADR-0095 付記 D-d: 本番 host の操作は人が実行する手順として書く（planner 指示。worker 前置きの
 /// `production_host_note` と対になる — 計画段階でも最初から試みさせない）。
 pub const PRODUCTION_HOST_PLANNER_GUIDANCE: &str = "### 本番 host の操作 (production host changes)\n\
      本番 host の操作は人が実行する手順として書く: `systemctl --user` / `systemd-run` / `~/.config/systemd` / \
-     `~/.local/celeris/releases` / `~/.config/celeris` を変更する WorkUnit を計画しない。本番の daemon の \
+     `~/.local/celeris/releases` / `/local` / `/local/celeris/state/releases` / `~/.config/celeris` を変更する \
+     WorkUnit を計画しない。本番の daemon の \
      再起動・差し替えが要るときは、人が実行する手順（コマンドと確認方法）を成果物に書く WorkUnit を置き、\
      実行そのものは `decisions` か `needs_decisions` の人の check に回す（ADR-0095 付記 D-d）。\n\n";

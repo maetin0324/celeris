@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 54] = [
+pub(crate) const EVENT_TYPES: [&str; 55] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -226,6 +226,8 @@ pub(crate) const EVENT_TYPES: [&str; 54] = [
     "decision_withdrawn",
     "plan_approval_requested",
     "stall_detected",
+    // ADR-0121 D3: root の取り込みを開始できなかった理由。
+    "delivery_skipped",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -289,6 +291,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::DecisionWithdrawn { .. } => "decision_withdrawn",
         Event::PlanApprovalRequested { .. } => "plan_approval_requested",
         Event::StallDetected { .. } => "stall_detected",
+        Event::DeliverySkipped { .. } => "delivery_skipped",
     }
 }
 

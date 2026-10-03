@@ -13,7 +13,12 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use task_core::browser_isolation::{IsolationViolation, RuntimeFacts, verify_isolation};
+#[cfg(feature = "same-uid-harness")]
+use task_core::browser_isolation::verify_isolation;
+use task_core::browser_isolation::{
+    IsolationViolation, LauncherAttestation, LauncherObservation, LauncherSessionProof,
+    RuntimeFacts, verify_launcher_session,
+};
 use zeroize::Zeroize;
 
 pub use crate::injection::PeerRole;
@@ -188,9 +193,23 @@ pub struct AuthSectionRegistration {
     pub cdp_target_id: String,
 }
 
+/// ADR-0138 D-L: daemon が launcher から受け取った session 証明を、稼働中 session に結び付ける。
+/// `peer_uid` は daemon が launcher の応答の `SCM_CREDENTIALS` で得た送り手の UID（採れなければ `None`、ADR-0116 付記 D-P）、
+/// `instance_id` は daemon が接続した launcher の instance。broker は証明をそのまま信じず、
+/// 本番 [`Admission::Attested`] の度に [`verify_launcher_session`] で実 process と照合する。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LauncherProofRegistration {
+    pub session_id: String,
+    pub instance_id: String,
+    pub peer_uid: Option<u32>,
+    pub proof: LauncherSessionProof,
+}
+
 struct LiveEntry {
     session: LiveSessionRegistration,
     section: Option<AuthSectionRegistration>,
+    launcher: Option<LauncherProofRegistration>,
 }
 
 #[derive(Default)]
@@ -215,6 +234,7 @@ impl LiveRegistry {
             LiveEntry {
                 session: s,
                 section: None,
+                launcher: None,
             },
         );
         Ok(())
@@ -227,6 +247,22 @@ impl LiveRegistry {
         m.remove(session_id)
             .map(|_| ())
             .ok_or(InjectCode::SessionNotLive)
+    }
+    /// 稼働中 session に launcher の証明を 1 度だけ結び付ける。上書き・別 session の証明は拒否する。
+    pub fn attach_launcher_proof(&self, l: LauncherProofRegistration) -> Result<(), InjectCode> {
+        if !valid_id(&l.session_id) || l.proof.session_id != l.session_id {
+            return Err(InjectCode::InvalidRequest);
+        }
+        let mut m = self
+            .sessions
+            .lock()
+            .map_err(|_| InjectCode::InvalidRequest)?;
+        let entry = m.get_mut(&l.session_id).ok_or(InjectCode::SessionNotLive)?;
+        if entry.launcher.is_some() {
+            return Err(InjectCode::InvalidRequest);
+        }
+        entry.launcher = Some(l);
+        Ok(())
     }
     pub fn open_section(&self, a: AuthSectionRegistration) -> Result<(), InjectCode> {
         if !valid_id(&a.auth_section_id)
@@ -261,13 +297,18 @@ impl LiveRegistry {
             _ => Err(InjectCode::AuthSectionRequired),
         }
     }
+    #[allow(clippy::type_complexity)]
     fn snapshot(
         &self,
         session_id: &str,
-    ) -> Option<(LiveSessionRegistration, Option<AuthSectionRegistration>)> {
+    ) -> Option<(
+        LiveSessionRegistration,
+        Option<AuthSectionRegistration>,
+        Option<LauncherProofRegistration>,
+    )> {
         let m = self.sessions.lock().ok()?;
         m.get(session_id)
-            .map(|e| (e.session.clone(), e.section.clone()))
+            .map(|e| (e.session.clone(), e.section.clone(), e.launcher.clone()))
     }
     fn controllers_and_runtimes(&self) -> Vec<(u32, u64, u32)> {
         self.sessions
@@ -292,9 +333,12 @@ impl LiveRegistry {
 /// 稼働中 session の隔離を broker 自身が確かめる方法。production は [`Admission::Attested`] だけ。
 #[derive(Clone, Copy)]
 pub enum Admission {
-    /// `/proc/<runtime_pid>` から事実を採り直し、`verify_isolation` の attestation を要求する。
+    /// daemon UID で読める `/proc/<runtime_pid>/{status,mountinfo,stat}` を採り直し、読めない
+    /// namespace・userns owner は launcher の束縛（protocol v3）から採って
+    /// `verify_launcher_session` の attestation を要求する（ADR-0138 D-L）。証明が無い・検証に
+    /// 失敗した・設定上の launcher UID が無い session は、owner 検査に通っても拒否する。
     Attested,
-    /// 試験専用（ADR-0109 D6）: 違反が `SameUid` だけの runtime を通す。attestation は作らない。
+    /// 試験専用（ADR-0109 D6）: 同一 UID の fixture runtime を通す。attestation は作らない。
     #[cfg(feature = "same-uid-harness")]
     SameUidHarness,
     /// 試験専用: `SameUidHarness` の判定に、試験が与えた事実を使う（fake の事実は D5 の証拠にしない）。
@@ -310,19 +354,59 @@ impl Admission {
             Self::SameUidHarness | Self::SameUidHarnessFacts(_) => "same_uid_harness",
         }
     }
-    fn admit(self, session_id: &str, runtime_pid: i32) -> Result<(), InjectCode> {
-        let facts = || -> Result<RuntimeFacts, InjectCode> {
+    /// Broker が稼働中 runtime を再検査する。`Attested` は試験用の例外を通らない。
+    /// `launcher` は session に結び付いた launcher 証明、`launcher_uid` は broker の設定上の
+    /// launcher UID。試験 harness はどちらも見ない（証明を作らない）。
+    pub fn admit(
+        self,
+        session_id: &str,
+        runtime_pid: i32,
+        launcher: Option<&LauncherProofRegistration>,
+        launcher_uid: Option<u32>,
+    ) -> Result<(), InjectCode> {
+        let live_pgid = || -> Result<i32, InjectCode> {
+            if runtime_pid <= 1 {
+                return Err(InjectCode::SessionNotLive);
+            }
             let pgid = unsafe { libc::getpgid(runtime_pid) };
             if pgid <= 0 {
                 return Err(InjectCode::SessionNotLive);
             }
+            Ok(pgid)
+        };
+        #[cfg(feature = "same-uid-harness")]
+        let facts = || -> Result<RuntimeFacts, InjectCode> {
+            let pgid = live_pgid()?;
             task_core::browser_isolation::collect_runtime_facts(session_id, runtime_pid, pgid)
                 .map_err(|_| InjectCode::IsolationRequired)
         };
         match self {
-            Self::Attested => verify_isolation(&facts()?)
-                .map(|_| ())
-                .map_err(|_| InjectCode::IsolationRequired),
+            Self::Attested => {
+                let pgid = live_pgid()?;
+                // 証明が無ければ照合先が無い（daemon UID は別 UID の runtime の namespace を
+                // 読めないので、namespace・owner は launcher の束縛からしか採れない）。
+                let proof = launcher
+                    .map(|l| &l.proof)
+                    .ok_or(InjectCode::IsolationRequired)?;
+                // 設定上の launcher UID が無ければ照合先が無い。証明があっても許さない。
+                let configured_launcher_uid = launcher_uid.ok_or(InjectCode::IsolationRequired)?;
+                let facts = task_core::browser_isolation::collect_launched_runtime_facts(
+                    session_id,
+                    runtime_pid,
+                    pgid,
+                    proof,
+                )
+                .map_err(|_| InjectCode::IsolationRequired)?;
+                let seen = LauncherObservation {
+                    session_id: session_id.into(),
+                    instance_id: launcher.map(|l| l.instance_id.clone()).unwrap_or_default(),
+                    peer_uid: launcher.and_then(|l| l.peer_uid),
+                    configured_launcher_uid,
+                    runtime_pid,
+                    runtime_starttime: u32::try_from(runtime_pid).ok().and_then(process_start),
+                };
+                admit_attested(&facts, launcher.map(|l| &l.proof), &seen).map(|_| ())
+            }
             #[cfg(feature = "same-uid-harness")]
             Self::SameUidHarness => same_uid_only(&facts()?),
             #[cfg(feature = "same-uid-harness")]
@@ -331,16 +415,39 @@ impl Admission {
     }
 }
 
+/// 本番 admission の純粋な判定（ADR-0138 条件 1〜5）。owner を含むすべての隔離条件と launcher の
+/// session 証明の検証が通ったときだけ attestation を返す。証明なし・検証失敗は fail closed。
+pub fn admit_attested(
+    facts: &RuntimeFacts,
+    proof: Option<&LauncherSessionProof>,
+    seen: &LauncherObservation,
+) -> Result<LauncherAttestation, InjectCode> {
+    verify_launcher_session(facts, proof, seen).map_err(|_| InjectCode::IsolationRequired)
+}
+
 #[cfg(feature = "same-uid-harness")]
 fn same_uid_only(facts: &RuntimeFacts) -> Result<(), InjectCode> {
     match verify_isolation(facts) {
         Ok(_) => Ok(()),
-        Err(v) if v == [IsolationViolation::SameUid] => Ok(()),
+        Err(v)
+            if v == [IsolationViolation::SameUid]
+                || v == [
+                    IsolationViolation::SameUid,
+                    IsolationViolation::UsernsOwnedByDaemon,
+                ] =>
+        {
+            Ok(())
+        }
         // Some CI workers run the entire nested user namespace as host root.
         // This exception exists only in the test feature; Attested is unchanged.
         Err(v)
             if unsafe { libc::geteuid() } == 0
-                && v == [IsolationViolation::RootUid, IsolationViolation::SameUid] =>
+                && (v == [IsolationViolation::RootUid, IsolationViolation::SameUid]
+                    || v == [
+                        IsolationViolation::RootUid,
+                        IsolationViolation::SameUid,
+                        IsolationViolation::UsernsOwnedByDaemon,
+                    ]) =>
         {
             Ok(())
         }
@@ -538,6 +645,7 @@ pub struct InjectionService {
     registry: Arc<LiveRegistry>,
     admission: Admission,
     broker_uid: u32,
+    launcher_uid: Option<u32>,
 }
 
 impl InjectionService {
@@ -547,7 +655,15 @@ impl InjectionService {
             registry,
             admission,
             broker_uid: unsafe { libc::geteuid() },
+            launcher_uid: None,
         }
+    }
+
+    /// 本番 `Attested` が照合する設定上の launcher UID（ADR-0138 D-L）。設定しなければ
+    /// `Attested` はどの session も許さない。
+    pub fn with_launcher_uid(mut self, launcher_uid: Option<u32>) -> Self {
+        self.launcher_uid = launcher_uid;
+        self
     }
 
     /// peer の役割（D2）。`session` はその要求の session の登録。
@@ -598,7 +714,7 @@ impl InjectionService {
         let role = self
             .registry
             .snapshot(&req.session_id)
-            .map(|(s, _)| self.role(peer, Some(&s)))
+            .map(|(s, _, _)| self.role(peer, Some(&s)))
             .unwrap_or_else(|| self.role(peer, None));
         self.audit(peer, Some(&req), code, Some(role));
         match result {
@@ -648,7 +764,7 @@ impl InjectionService {
         if peer.uid != self.broker_uid {
             return Err(InjectCode::PeerUidMismatch);
         }
-        let Some((session, section)) = self.registry.snapshot(&req.session_id) else {
+        let Some((session, section, launcher)) = self.registry.snapshot(&req.session_id) else {
             // その session の controller は存在しない。別 session の controller なら session 側の
             // 失敗として、それ以外（worker・agent）は役割の失敗として返す。
             return Err(if self.is_any_controller(peer) {
@@ -664,8 +780,12 @@ impl InjectionService {
         if process_start(session.runtime_pid) != Some(session.runtime_start) {
             return Err(InjectCode::SessionNotLive);
         }
-        self.admission
-            .admit(&session.session_id, session.runtime_pid as i32)?;
+        self.admission.admit(
+            &session.session_id,
+            session.runtime_pid as i32,
+            launcher.as_ref(),
+            self.launcher_uid,
+        )?;
         // 3. CDP 対象と origin（区間が無ければ対象の照合先も無い）
         let Some(section) = section else {
             return Err(InjectCode::AuthSectionRequired);
@@ -942,4 +1062,121 @@ pub fn call(
 
 pub fn injection_socket(runtime: &std::path::Path) -> std::path::PathBuf {
     runtime.join("celeris-credentiald/injection.sock")
+}
+
+#[cfg(test)]
+mod attested_tests {
+    //! prod-facts: 本番 `Attested` は別 UID の runtime の `/proc/<pid>/ns/*` を daemon UID で開かない
+    //! （実 launcher の Chrome で EACCES）。namespace・owner は launcher の束縛から採り、
+    //! 欠けたら拒否する。
+    use super::*;
+    use task_core::browser_isolation::{Namespace, REQUIRED_NAMESPACES, collect_ns_inodes};
+
+    const LAUNCHER_UID: u32 = 4_000_000;
+
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn sleeper() -> (Child, i32) {
+        use std::os::unix::process::CommandExt;
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+        (Child(child), pid)
+    }
+
+    fn registration(
+        pid: i32,
+        ns_inodes: std::collections::BTreeMap<Namespace, u64>,
+    ) -> LauncherProofRegistration {
+        let starttime = process_start(pid as u32).expect("starttime");
+        LauncherProofRegistration {
+            session_id: "sess-1".into(),
+            instance_id: "inst-1".into(),
+            peer_uid: Some(LAUNCHER_UID),
+            proof: LauncherSessionProof {
+                session_id: "sess-1".into(),
+                instance_id: "inst-1".into(),
+                pid,
+                starttime,
+                ns_owner_uid: Some(LAUNCHER_UID),
+                launcher_uid: LAUNCHER_UID,
+                isolation_ok: true,
+                ns_inodes,
+            },
+        }
+    }
+
+    #[test]
+    fn attested_without_launcher_proof_or_config_is_rejected() {
+        let (_c, pid) = sleeper();
+        assert_eq!(
+            Admission::Attested.admit("sess-1", pid, None, Some(LAUNCHER_UID)),
+            Err(InjectCode::IsolationRequired)
+        );
+        let l = registration(pid, collect_ns_inodes("self").expect("ns"));
+        assert_eq!(
+            Admission::Attested.admit("sess-1", pid, Some(&l), None),
+            Err(InjectCode::IsolationRequired)
+        );
+        assert_eq!(
+            Admission::Attested.admit("sess-1", 1, Some(&l), Some(LAUNCHER_UID)),
+            Err(InjectCode::SessionNotLive)
+        );
+    }
+
+    #[test]
+    fn attested_builds_facts_from_binding_and_rejects_missing_namespaces() {
+        // 同じ UID の子（隔離なし）に、束縛の inode を偽って渡しても通らない。daemon が読んだ
+        // status（SameUid・特権）・mountinfo（root 書込み可）の違反は束縛で消えない。
+        let (_c, pid) = sleeper();
+        let pgid = unsafe { libc::getpgid(pid) };
+        let fake: std::collections::BTreeMap<_, u64> =
+            REQUIRED_NAMESPACES.into_iter().zip(1u64..).collect();
+        let l = registration(pid, fake);
+        let facts = task_core::browser_isolation::collect_launched_runtime_facts(
+            "sess-1", pid, pgid, &l.proof,
+        )
+        .expect("daemon-readable facts of own child");
+        // 束縛の inode が daemon と違うので namespace は「別」と数えられる（launcher の申告）。
+        assert_eq!(facts.namespaces.len(), 6);
+        assert_eq!(facts.userns_owner_uid, Some(LAUNCHER_UID));
+        let v = verify_launcher_session(
+            &facts,
+            Some(&l.proof),
+            &LauncherObservation {
+                session_id: "sess-1".into(),
+                instance_id: "inst-1".into(),
+                peer_uid: Some(LAUNCHER_UID),
+                configured_launcher_uid: LAUNCHER_UID,
+                runtime_pid: pid,
+                runtime_starttime: process_start(pid as u32),
+            },
+        )
+        .expect_err("same-uid child must not be attested");
+        assert!(v.contains(&IsolationViolation::SameUid), "{v:?}");
+        assert_eq!(
+            Admission::Attested.admit("sess-1", pid, Some(&l), Some(LAUNCHER_UID)),
+            Err(InjectCode::IsolationRequired)
+        );
+        // v2 の束縛（inode 無し）は namespace が 1 つも揃わない。
+        let v2 = registration(pid, Default::default());
+        let facts = task_core::browser_isolation::collect_launched_runtime_facts(
+            "sess-1", pid, pgid, &v2.proof,
+        )
+        .expect("facts");
+        assert!(facts.namespaces.is_empty());
+        assert_eq!(
+            Admission::Attested.admit("sess-1", pid, Some(&v2), Some(LAUNCHER_UID)),
+            Err(InjectCode::IsolationRequired)
+        );
+    }
 }

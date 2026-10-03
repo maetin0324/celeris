@@ -306,6 +306,10 @@ pub struct ProviderCheckResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderView {
     #[serde(default)]
+    pub kind: task_core::ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_source: Option<task_core::ResolvedLlmSource>,
+    #[serde(default)]
     pub credential_refs: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub tier_models: task_core::model_routing::TierModels,
@@ -445,6 +449,10 @@ pub struct ReviewerConfigView {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderConfigView {
+    #[serde(default)]
+    pub kind: task_core::ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_source: Option<task_core::ResolvedLlmSource>,
     #[serde(default)]
     pub credential_refs: std::collections::HashMap<String, String>,
     #[serde(default)]

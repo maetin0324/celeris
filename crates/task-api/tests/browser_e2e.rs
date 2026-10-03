@@ -99,10 +99,15 @@ fn world(site: Value) -> World {
     let control = runtime.join("celeris-credentiald/control.sock");
     let serve_runtime = runtime.clone();
     std::thread::spawn(move || ipc::serve(broker, &serve_runtime, vec![std::process::id()]));
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if control.exists() && control.with_file_name("resolve.sock").exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(control.exists());

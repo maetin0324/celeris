@@ -223,9 +223,12 @@ pub(crate) fn reload_providers(
     config.notify = new_config.notify;
     config.conversation = new_config.conversation;
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
+    config.selfdeploy.delivery_default_departments =
+        new_config.selfdeploy.delivery_default_departments;
     dispatcher.set_delivery_policy(task_ops::delivery::DeliveryPolicy {
         projects: config.selfdeploy.delivery_projects.clone(),
         repo: config.selfdeploy.repo.clone(),
+        default_departments: config.selfdeploy.delivery_default_departments.clone(),
     });
     Ok(())
 }

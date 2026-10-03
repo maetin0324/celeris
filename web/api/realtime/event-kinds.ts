@@ -65,6 +65,7 @@ export const EVENT_KINDS = [
   "integration_repair_scheduled",
   "integration_repair_resolved",
   "integration_repair_exhausted",
+  "delivery_skipped",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

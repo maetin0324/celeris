@@ -288,6 +288,14 @@ export type AttentionItem = {
   "summary": string;
   "task": TaskRef;
   "type": "plan_approval";
+} | {
+  "at": string;
+  "detail": string;
+  "head"?: string | null;
+  "reason": DeliverySkipReason;
+  "summary": string;
+  "task": TaskRef;
+  "type": "delivery_skipped";
 };
 
 export type AttestationClaims = {
@@ -1202,6 +1210,8 @@ export type Delivery = {
   "worker_run": string;
 };
 
+export type DeliverySkipReason = "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
+
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
 export type DiffStat = {
@@ -1652,6 +1662,11 @@ export type Event = {
   "plan_id": string;
   "reasons": Array<string>;
   "type": "plan_approval_requested";
+} | {
+  "detail": string;
+  "head"?: string | null;
+  "reason": DeliverySkipReason;
+  "type": "delivery_skipped";
 } | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
@@ -2173,6 +2188,8 @@ export type LlmSourceAccountView = {
   "remaining_long"?: number | null;
   "remaining_short"?: number | null;
 };
+
+export type LlmSourceRef = string;
 
 export type LlmSourceView = {
   "accounts": Array<LlmSourceAccountView>;
@@ -2902,6 +2919,8 @@ export type ProviderConfigView = {
 };
   "env_keys": Array<string>;
   "id": string;
+  "kind"?: ProviderKind;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "tier_models"?: {
   "cheap"?: ModelBinding;
@@ -2910,6 +2929,8 @@ export type ProviderConfigView = {
 };
   "tiers": Array<Tier>;
 };
+
+export type ProviderKind = "adapter";
 
 export type ProviderLive = {
   "account_id"?: string | null;
@@ -2923,7 +2944,9 @@ export type ProviderLive = {
   "id": string;
   "in_use": number;
   "in_use_cos"?: number;
+  "kind"?: ProviderKind;
   "last_check"?: ProviderCheckView | null;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "tier_models"?: {
   "cheap"?: ModelBinding;
@@ -2958,7 +2981,9 @@ export type ProviderView = {
   "id": string;
   "in_use"?: number | null;
   "in_use_cos"?: number | null;
+  "kind"?: ProviderKind;
   "last_check"?: ProviderCheckView | null;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "stats": ProviderStats;
   "tier_models"?: {
@@ -3250,6 +3275,11 @@ export type ReportsReadResult = {
   "updated": number;
 };
 
+export type ResolvedLlmSource = {
+  "origin": SourceOrigin;
+  "source": LlmSourceRef;
+};
+
 export type RetryBody = {
   "accept"?: boolean;
   "execution"?: ExecutionMode | null;
@@ -3434,6 +3464,7 @@ export type RunSummary = {
   "work_unit"?: string | null;
 };
 
+/** 廃止（ADR-0129）: cache server stats。型は互換のため残す。 */
 export type ScratchCacheStats = {
   "flush_dropped": number;
   "flush_last_at"?: string | null;
@@ -3476,9 +3507,11 @@ export type ScratchCacheStats = {
   "started_at": string;
 };
 
+/** 廃止（ADR-0129）: Celeris cache server。常に null、型は互換のため残す。 */
 export type ScratchCacheView = {
   "endpoint": string;
   "reason"?: string | null;
+  /** 廃止。常に null（ADR-0129）。 */
   "sccache_mode"?: string | null;
   "state": string;
   "stats"?: ScratchCacheStats | null;
@@ -3522,6 +3555,7 @@ export type ScratchOwnerView = {
   "work_unit_key"?: string | null;
 };
 
+/** 廃止（ADR-0129）: sccache stats。型は互換のため残す。 */
 export type ScratchSccacheStats = {
   "cache_size_bytes"?: number | null;
   "compile_requests": number;
@@ -3531,6 +3565,7 @@ export type ScratchSccacheStats = {
   "rust_misses": number;
 };
 
+/** 廃止（ADR-0129）: sccache。常に null、型は互換のため残す。 */
 export type ScratchSccacheView = {
   "binary": string;
   "dir": string;
@@ -3628,6 +3663,8 @@ export type SkillSummaryView = {
   "name": string;
   "updated"?: string | null;
 };
+
+export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {
   "scope"?: string;

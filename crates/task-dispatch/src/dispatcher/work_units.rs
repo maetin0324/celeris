@@ -513,7 +513,7 @@ impl Dispatcher {
                     return Ok(WuDispatchGate::Skip);
                 };
                 let mode = self.parallel_mode(&task)?;
-                let ids = task_core::runnable_work_units(&units, 0, mode.limit);
+                let ids = crate::execution_scheduler::runnable_in_phase(&units, 0, mode.limit);
                 Ok(ids
                     .first()
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))
@@ -1340,9 +1340,17 @@ impl Dispatcher {
             }
             _ => Vec::new(),
         };
+        let events = self.store.events_for(task_id)?;
+        // ADR-0074 付記（2026-10-02）: 前の段の途中確認で人が continue に付けたメモ（同じ「人の決定」節。tree に依らない）。
+        let mut human_decisions = human_decisions;
+        human_decisions.extend(task_ops::phase_gate::continue_note_lines(
+            &events,
+            units,
+            &wu.plan_id,
+            wu.phase.as_deref(),
+        ));
         // ADR-0079 付記 R7-5 D3: 直前の run が done を返したのに checks が落ちていれば、その記録を次の run に渡す。
-        let previous_check_failures =
-            previous_check_failure_lines(&self.store.events_for(task_id)?, &wu.id, run_id);
+        let previous_check_failures = previous_check_failure_lines(&events, &wu.id, run_id);
         Ok(task_worker::protocol::WorkUnitPromptContext {
             key: wu.key.clone(),
             title: wu.spec.title.clone(),
@@ -1608,7 +1616,8 @@ impl Dispatcher {
                             && u.kind != task_core::WorkUnitKind::Integrate
                     })
                     .count();
-                let ids = task_core::runnable_work_units(&units, in_flight, mode.limit);
+                let ids =
+                    crate::execution_scheduler::runnable_in_phase(&units, in_flight, mode.limit);
                 let Some(wu) = ids
                     .first()
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))

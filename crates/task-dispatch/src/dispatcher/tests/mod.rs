@@ -3066,6 +3066,10 @@ mod work_units;
 /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。
 mod orphan_takeover;
 
+/// 持ち主の居ない `running` の `runs` 行（lease を持たない reviewer run 等）の取り残しと照合
+/// （`src/dispatcher/tests/ownerless_runs.rs`）。
+mod ownerless_runs;
+
 /// Phase F5-fix7: 依存 WU のブランチが無いときの基点と、準備の失敗で黙って止まらないこと
 /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。
 mod work_unit_dependency_base;

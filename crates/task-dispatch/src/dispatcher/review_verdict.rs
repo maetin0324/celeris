@@ -19,6 +19,31 @@ impl Dispatcher {
         mut outcome: ReviewOutcome,
     ) -> Result<(), DispatchError> {
         let entry = self.reviewing.remove(&task_id);
+        // 用意した Reviewer run（`spawn_review` が `WorkerStarted{role: reviewer}`・`runs` 行・quota を
+        // 起こした）を、決定的な検査が落ちた等で起動しなかった。ここで閉じないと `runs` 行は Task が
+        // 終端になるまで `running` のまま残る（Reviewer run は lease を持たない）。判定の扱いは変えない。
+        if let Some(e) = entry.as_ref()
+            && let Some(provisioned) = e.review_run_id.clone()
+            && outcome.reviewer_run.as_ref().map(|r| r.run_id.as_str())
+                != Some(provisioned.as_str())
+        {
+            if let Some(provider) = e.provider.clone() {
+                let (account, account_adapter) = (e.account.clone(), e.account_adapter);
+                self.release_quota_if_tracked(
+                    &provisioned,
+                    account.as_deref(),
+                    account_adapter,
+                    &provider,
+                    task_id,
+                );
+            }
+            self.close_aborted_run(
+                task_id,
+                &provisioned,
+                Some(RunRole::Reviewer),
+                "reviewer run not started (the review ended before launching it)",
+            );
+        }
         // ADR-0014 D1: Reviewer run の終わりを WorkerFinished{role: reviewer} として残す（判定の適用・延期・破棄のどれでも）。
         let completed_review_run = outcome.reviewer_run.as_ref().map(|r| r.run_id.clone());
         // ADR-0061（Phase 104）: `retries` は Reviewer run には無い概念（対象タスクの `attempts` とは別軸）

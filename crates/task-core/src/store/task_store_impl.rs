@@ -791,6 +791,10 @@ impl TaskStore for SqliteStore {
         self.close_runs_of_terminal_tasks_impl()
     }
 
+    fn runs_running(&self) -> Result<Vec<RunRow>, StoreError> {
+        self.runs_running_impl()
+    }
+
     fn runs_for_work_unit(&self, work_unit_id: &str) -> Result<Vec<RunRow>, StoreError> {
         self.runs_for_work_unit_impl(work_unit_id)
     }

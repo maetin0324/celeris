@@ -737,6 +737,9 @@ pub trait TaskStore:
     /// 終端への遷移は同じトランザクションで閉じるので、ここで見つかるのは R6-1 より前に残った行だけ。閉じた
     /// `(task, run_id)` を返す（dispatcher の起動時と定期の照合が 1 行ずつログに残す）。
     fn close_runs_of_terminal_tasks(&self) -> Result<Vec<(TaskId, String)>, StoreError>;
+    /// `runs` 索引で `status = 'running'` の行すべて（`started_at` 昇順。読むだけ）。dispatcher の
+    /// 持ち主の居ない run の照合（lease を持たない reviewer run 等の取り残し）が使う。
+    fn runs_running(&self) -> Result<Vec<RunRow>, StoreError>;
 
     /// `updated_at >= since` のタスク別実行集計を派生索引から 1 回の SQL で読む。
     ///

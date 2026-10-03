@@ -78,7 +78,7 @@ test process のみを `SIGSTOP` 300 ms / `SIGCONT` で 2〜3 回止め、再開
 
 API 系 fixture の `db.worker_read_only = false` は、この run の user namespace 制約で daemon 起動を可能にするための設定。DB guard の専用結合試験は別にあり、API 試験の状態機械・ロック・イベントの判定は残している。
 
-追加の CDP 2 試験は `cargo test -p task-worker --features attack-test-hooks --test browser_cdp_sink --no-run` と同 `browser_h3_wire` が exit 0。実行は sandbox の `unshare: Operation not permitted` で browser 起動前に失敗したため、この 2 試験の SIGSTOP stutter 成功は未確認。
+追加の CDP 2 試験は `cargo test -p task-worker --features attack-test-hooks --test browser_cdp_sink --no-run` と同 `browser_h3_wire` が exit 0。通常の sandbox では `unshare: Operation not permitted` で browser 起動前に失敗した。権限付き実行では両方の実 browser 試験が exit 0。さらに各 test process を `SIGSTOP` 300 ms / `SIGCONT` で止める stutter を各 3 回実施し、`browser_cdp_sink` 3/3、`browser_h3_wire` 3/3 が exit 0。CPU 負荷は生成していない。
 
 ## 重複の扱い
 

@@ -637,4 +637,4 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 
 ## ADR-0125: e2e・結合試験の時間依存待ち（task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
 
-`docs/testing/time-dependent-waits.md` に候補 45 ファイルと判定を記録した。`api_scenarios` の 4 件は状態・ファイル・listen 完了を待ち、60 秒以上の保険を置いた。SIGSTOP stutter は対象 4 試験を各 3 回実行して 12/12 pass。CDP の追加 2 件も `Browser.getVersion` の ready 応答を待つようにし、試験専用 CDP 応答上限を 30 秒、ready 上限を 60 秒にした。2 件とも compile は pass したが、実行はこの run の sandbox が `unshare` を拒否して browser 起動前に失敗した。詳細は一覧を参照。
+`docs/testing/time-dependent-waits.md` に候補 45 ファイルと判定を記録した。`api_scenarios` の 4 件は状態・ファイル・listen 完了を待ち、60 秒以上の保険を置いた。SIGSTOP stutter は対象 4 試験を各 3 回実行して 12/12 pass。CDP の追加 2 件も `Browser.getVersion` の ready 応答を待つようにし、試験専用 CDP 応答上限を 30 秒、ready 上限を 60 秒にした。通常 sandbox は `unshare` を拒否したが、権限付き実行では両方 pass。追加 2 件の SIGSTOP stutter も各 3 回で 6/6 pass。詳細は一覧を参照。

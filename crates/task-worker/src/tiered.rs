@@ -69,14 +69,6 @@ impl WorkerAdapter for TieredAdapter {
             credential_error: self.credential_error.clone(),
         }))
     }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(Self {
-            base: self.base.with_env_removed(keys)?,
-            models: self.models.clone(),
-            account_id: self.account_id.clone(),
-            credential_error: self.credential_error.clone(),
-        }))
-    }
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         Some(Arc::new(Self {
             base: self.base.with_container(plan)?,

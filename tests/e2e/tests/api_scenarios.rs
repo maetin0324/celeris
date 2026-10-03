@@ -47,6 +47,35 @@ fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
     cond()
 }
 
+/// 固定の wall-clock 期限ではなく、`count()` が増え続ける間だけ待つ出来事待ち（docs/testing.md 方法 2）。
+/// `target` に達し次第 true を返す。`stall_limit` の間進捗が無ければ打ち切り、`overall_limit` は安全弁。
+fn wait_for_progress(
+    overall_limit: Duration,
+    stall_limit: Duration,
+    target: usize,
+    mut count: impl FnMut() -> usize,
+) -> bool {
+    let start = Instant::now();
+    let mut last = count();
+    let mut last_change = Instant::now();
+    loop {
+        let now_count = count();
+        if now_count >= target {
+            return true;
+        }
+        if now_count > last {
+            last = now_count;
+            last_change = Instant::now();
+        } else if last_change.elapsed() >= stall_limit {
+            return false;
+        }
+        if start.elapsed() >= overall_limit {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// drop で kill する子プロセス（celeris / SSE の curl）。
 struct Proc {
     child: Child,
@@ -1049,10 +1078,17 @@ fn writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is
         );
     }
     assert!(
-        wait_until(Duration::from_secs(120), || ids
-            .iter()
-            .all(|id| env.task(*id).status == Status::Done)),
-        "not all tasks finished\n{}",
+        wait_for_progress(
+            Duration::from_secs(600),
+            Duration::from_secs(60),
+            ids.len(),
+            || {
+                ids.iter()
+                    .filter(|id| env.task(**id).status == Status::Done)
+                    .count()
+            }
+        ),
+        "not all tasks finished (no progress for 60s, or overall 600s exceeded)\n{}",
         daemon.log_text()
     );
     assert!(

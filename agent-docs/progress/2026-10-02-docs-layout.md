@@ -177,3 +177,41 @@ ADR-0125 の状態待ち（`run_until_state`、`STATE_WAIT_GUARD` 60 秒、`crat
 | `sh scripts/dev/progress-index.sh --check` | 0 | `progress-index --check: ok` |
 
 未解決: Task の受け入れ条件 3（`celeris/01M3YBGM…` との merge-base からの差分が agent-docs と dispatcher/tests だけ）は、merge-latest で main を取り込んだ時点で 269 file の差分があり成り立たない（本 WU の前から）。条件の基点の見直しが要る。
+
+## sync-main-2 gate: 検証
+
+2026-10-03（WorkUnit gate-run、HEAD `09d2ddd4`）。指定 gate を foreground で実行した。
+
+| コマンド | exit | 結果 |
+|---|---:|---|
+| `cargo fmt --all -- --check` | 0 | 差分なし |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 | 警告なし |
+| `timeout 3000s cargo test --workspace --no-fail-fast` | 101 | 20 targets failed。task-worker lib は 722 passed / 12 failed / 4 ignored、task-core 653 passed、task-dispatch 516 passed、task-ops 436 passed。失敗対象・件数: e2e cluster_scenarios 2/6、delegation_scenarios 5/5、multi_account_scenarios 3/3、phase7_scenarios 5/5、plan_scenarios 2/2、scenarios 4/4、worker_db_read_only 1/1; task-api browser_h3_injection 1/3、browser_restore_deliver 1/1、browser_restore_live_session 1/1; task-worker lib 12/734、browser_cdp_sink 1/2、browser_egress_relay 1/2、browser_h3_wire 1/2、browser_injection_attacks 1/2、browser_injection_wire 1/3、browser_launcher_ptrace 1/6、browser_restore_deliver 4/4、browser_runtime_isolated 4/9、browser_runtime_supervisor 1/4。失敗名は直下の「失敗の詳細」を参照 |
+| `timeout 300s cargo test -p e2e --test cluster_scenarios -- --nocapture` | 101 | 4 passed / 2 failed。`unknown_cluster_is_unroutable` と `missing_control_master_records_cluster_unavailable_and_does_not_block_idle` は daemon 起動時の db_guard user namespace probe が `Operation not permitted` |
+| `timeout 300s cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace -- --exact --nocapture` | 101 | 0 passed / 1 failed。`launcher_chrome_denies_daemon_uid_ptrace`: launcher は起動し isolation は確認できたが、20 秒間 Chrome PID が `/proc` に現れず。workspace run の失敗と同じ |
+
+失敗の詳細（workspace run）:
+
+- `e2e/cluster_scenarios`: `unknown_cluster_is_unroutable`, `missing_control_master_records_cluster_unavailable_and_does_not_block_idle`。
+- `e2e/delegation_scenarios`: `when_the_parent_cannot_retry_it_asks_a_human_instead_of_failing`, `non_aggregate_lead_completes_after_children_without_another_run`, `a_failed_child_makes_the_parent_retry_instead_of_inheriting_the_failure`, `lead_delegates_children_waits_for_them_and_aggregates_once`, `on_child_failure_ignore_keeps_the_old_behaviour`。
+- `e2e/multi_account_scenarios`: `task_without_a_matching_provider_does_not_block_until_idle`, `second_account_runs_the_overflow_when_the_first_is_at_capacity`, `throttled_account_falls_back_to_the_next_account`。
+- `e2e/phase7_scenarios`: `human_check_asks_again_after_a_retry_and_orphaned_approvals_are_cancelled`, `answer_is_delivered_in_context_answers_and_cli_checks_complete_the_task`, `persistent_provider_failure_stops_after_max_requeues`, `provider_failure_requeues_without_consuming_attempts`, `cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents`。
+- `e2e/plan_scenarios`: `celerisctl_plan_generates_children_that_complete_after_human_approval`, `invalid_plan_is_retried_once_with_prior_review`。
+- `e2e/scenarios`: `command_check_fails_once_then_passes_after_retry`, `three_tasks_with_dependency_all_done_at_concurrency_two`, `worker_crash_without_terminal_message_fails_after_retries`, `expired_lease_is_reclaimed_and_task_completes`。
+- `e2e/worker_db_read_only`: `a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl`。
+- `task-api/browser_h3_injection`: `production_h3_injects_once_without_exposure`; `browser_restore_deliver`: `restore_enters_observation_stop_until_session_end`; `browser_restore_live_session`: `restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal`。
+- `task-worker` lib: browser の実 runtime 7 件（`production_action_path_reaches_fixture_through_real_browser_and_egress`, `launch_uses_generated_policy_and_binds_its_hash_to_the_run`, `opencode_and_claude_share_supervised_browser_lifecycle_artifacts_and_cleanup`, `actions_and_domains_outside_task_policy_are_stopped_before_the_substrate`, `specialist_wraps_existing_harness_and_runs_same_browser_task`, `execution_fallback_uses_fresh_session_and_refuses_without_conformance`, `cleanup_failure_marks_browser_failed_instead_of_reporting_completion`）と db_guard 5 件（`ssh_config_includes_still_parse_inside_the_namespace`, `a_nested_user_namespace_cannot_undo_the_read_only_mount`, `the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable`, `probe_confirms_the_db_is_not_writable_inside`, `the_guarded_process_has_no_capabilities_and_keeps_its_uid`）。
+- `task-worker/browser_cdp_sink`: `real_browser_injection_receipt_and_origin_guards`; `browser_egress_relay`: `fixture_reachable_only_through_per_connection_egress_proxy`; `browser_h3_wire`: `real_broker_browser_injection_receipt_and_origin_guards`; `browser_injection_attacks`: `real_browser_injection_attack_matrix`; `browser_injection_wire`: `real_broker_browser_injection_receipt_and_origin_guards`。
+- `task-worker/browser_launcher_ptrace`: `launcher_chrome_denies_daemon_uid_ptrace`（単体再実行も失敗。Chrome PID の `/proc` 可視性）。`browser_restore_deliver`: `live_session_delivers_restored_state_over_its_own_cdp_pipe`, `restored_session_refuses_agent_observation`, `supervisor_entry_delivers_restored_state_to_controller_cdp_under_harness_admission`, `identity_restore_sameuid_rejected_in_production`。
+- `task-worker/browser_runtime_isolated`: `probe_inside_runtime_cannot_reach_host_sockets_or_network`, `restart_reaps_recorded_runtime_and_ignores_stale_records`, `real_browser_in_runtime_facts_and_restore_refused_on_same_uid`, `controller_kill_leaves_no_runtime_processes`; `browser_runtime_supervisor`: `runtime_processes_do_not_survive_controller_kill_restart_or_stop`。
+
+失敗ログは `unshare`/bwrap の `Operation not permitted` または `isolated_runtime_unavailable`、e2e では daemon の db_guard userns probe が同じく `Operation not permitted`。従って失敗は当該 task の文書変更と無関係な sandbox 制約として記録する。対象失敗ファイル群について `git diff --stat $(git merge-base HEAD main) HEAD -- <paths>` は `crates/task-worker/tests/browser_runtime_isolated.rs | 2 +-, 1 file changed` のみ（この task の既存1行差分）で、上記 e2e/browser/db_guard 失敗対象ファイルには差分がない。
+
+記録後の文書検査は下記 4 本を再実行し、全て exit 0。
+
+| コマンド | exit | 結果 |
+|---|---:|---|
+| `sh scripts/dev/check-doc-links.sh` | 0 | `check-doc-links: ok` |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | `check-doc-layout: ok` |
+| `sh scripts/dev/check-adr-numbers.sh` | 0 | `check-adr-numbers: ok (122 files)` |
+| `sh scripts/dev/progress-index.sh --check` | 0 | `progress-index --check: ok` |

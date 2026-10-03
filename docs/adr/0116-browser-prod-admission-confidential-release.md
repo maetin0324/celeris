@@ -7,6 +7,7 @@ tasks: [01M3VFQZ2TX3W0KTDQHKCAVJR6, 01M3WV4BFJ71J9ZWJ020MP2Z4K]
 - 日付: 2026-10-01
 - 日付（更新）: 2026-10-02（launcher session 証明を必須条件に追加）
 - 日付（更新）: 2026-10-02（子 task 01M3WV4BFJ71J9ZWJ020MP2Z4K で証明の必須化を実装し ptrace 拒否を実 process で実証。事実採取の経路を D-L 付記のとおり直した）
+- 日付（更新）: 2026-10-03（socket activation 下の発行者証明を SCM_CREDENTIALS に決定）
 - 状態: owner 検査と launcher session 証明の検証・両 admission への必須化（fail-closed）は実装済み。launcher 経由の別 UID runtime への daemon UID からの ptrace 拒否は**実 process で実証済み**（sandbox・host 双方、証跡 `prod-admission-release-evidence.md` §2）。許可/拒否の対応表のうち synthetic（構造体を直接組んだ模擬観測）は単体・結合試験で実証済みだが、**実 session の表（`ADMISSION[real-session]`、launcher の実観測を本番入口に通した表）は未実証**（systemd socket activation 下で launcher の `SO_PEERCRED` が想定どおりに見えないため、§ D-L 付記参照。後続 task で直す）。本番昇格は人が行う（未実施）
 - 関連: [ADR-0080](0080-browser-phase2-policy-broker-approval.md)、[ADR-0102](0102-browser-phase4-isolation-injection-routing.md)、[ADR-0109](0109-browser-p4b-injection-ipc-cdp-sink.md)、[ADR-0112](0112-browser-p4b-conformance-evidence-unlock.md)、[ADR-0115](0115-browser-ptrace-owner-ns-launcher.md)、[後続 task](../progress/browser-followups.md)
 
@@ -48,6 +49,17 @@ tasks: [01M3VFQZ2TX3W0KTDQHKCAVJR6, 01M3WV4BFJ71J9ZWJ020MP2Z4K]
 ### D-L 既知の未実証（実 session の許可/拒否表）
 
 synthetic（構造体を直接組んだ模擬観測）での 5 通り（launcher-proof=allow、same-uid/non-isolated/no-proof/proof-invalid=deny）は単体・結合試験で実証済みだが、**launcher の実観測を本番入口（両 `Attested`）に通した `ADMISSION[real-session]` の表は未実証**。host で protocol v3 launcher に入れ替えて試験台本（`launcher-admission-evidence.sh`）を実行すると、表を作る直前の前提チェック（launcher 接続の `SO_PEERCRED` が設定上の launcher UID であること）で失敗する。原因は launcher が systemd の socket activation（`Accept=no`）で動き、listen socket を最初に作るのが systemd（root）であるため、接続の `SO_PEERCRED` が `celeris-browser` ではなく `systemd` に見えること。sandbox でも同様の理由（userns 越し）で前提が成立しない。後続 task で、launcher が accept 後に自分の pid/uid を `SCM_CREDENTIALS` 等で client に伝える、または `systemctl show` の `MainPID` と突き合わせる仕組みを実装し、host で `ADMISSION[real-session]` を再取得する必要がある。それまでは D-L の owner 検査・証明必須化は synthetic と単体試験の間接証跡、ptrace 拒否そのものは実 process で確認済みという状態にとどまる。
+
+### D-L 付記（2026-10-03、socket activation 下の launcher 発行者証明）
+
+上の D-L で `SO_PEERCRED` を launcher の UID として扱う規則、および「`SCM_CREDENTIALS` 等または `MainPID`」という未決の選択肢は、この付記で置き換える。本番の `celeris-browser-launcher.socket` は systemd（root）が `listen()` した socket を launcher に渡す。host の実行記録 `launcher-host-run.log` では launcher の実 session が `peer_uid=Some(0)` と観測され、`celeris-browser` UID 995 との不一致で `ADMISSION[real-session]` に達する前に終了した（`EXIT: 101`）。従来の `LauncherObservation.peer_uid` を `SO_PEERCRED` から組み立てると、本番 `Attested` は常に `LauncherUidMismatch` で拒否される。これは実 session の許可を示した結果ではない。
+
+- **発行者の証明**: launcher は応答フレームごとに、少なくとも `start_session` の `Response::Started` に、自身の pid/uid/gid を `SCM_CREDENTIALS` として付けて送る。daemon は受信 socket に `SO_PASSCRED` を設定し、その応答フレームに付随して kernel が渡した credentials の UID を `LauncherObservation.peer_uid` に使う。接続時の `SO_PEERCRED` を launcher の UID として代用しない。kernel は送信者 credentials を検証し、host user namespace で `CAP_SETUID` を持たない `celeris-browser` は別 UID を偽れない。
+- **fail-closed**: 必要な応答フレームで credentials が受け取れない、credentials の pid が 0、または UID が root（0）か daemon UID なら launcher 発行者の証明なしとして両 `Attested` を拒否する。設定上の launcher UID と異なる場合も従来どおり拒否する。PID/starttime、session、owner、隔離の照合も D-L のまま必須とする。`SO_PEERCRED` は launcher が client の `allowed_uids` を検査する用途にだけ残す。
+- **互換性**: protocol を v3 から v4 に上げる。旧 launcher の応答は発行者証明なしとして拒否し、v3 の `SO_PEERCRED` 値による代替を許さない。
+- **決定的な検証**: 試験では listener を作った process と応答を書く process を分け、親が `listen()` した fd を `fork()` した子に渡す。同じ接続で `SO_PEERCRED` の pid が親、応答に付いた `SCM_CREDENTIALS` の pid が子になることを確かめる。UID の出所も受信した ancillary data で検証し、credentials の欠落・pid 0・root/daemon UID・旧版を拒否する。本番 host で実 session の ptrace 拒否と両 admission の許可/拒否表を再取得するまで、実 session の許可は未実証のままとする。
+
+この変更は **H3**（認証区間の LLM 観測停止）、**H4**（Live View の task ACL）、**H5**（project+origin の期限付き identity）、**ADR-0080 H2**（人の `approve_once` と短い lease）を一切弱めない。以下の「維持する承認と観測の境界」をそのまま適用する。
 
 ## 維持する承認と観測の境界
 

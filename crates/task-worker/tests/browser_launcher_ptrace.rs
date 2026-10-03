@@ -407,7 +407,6 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
     let before = proc_pids();
     let mut client = LauncherClient::connect(&socket, Duration::from_secs(150))
         .expect("connect launcher socket");
-    let peer_uid = client.peer_uid();
     let lease = task_worker::browser_launcher::random_id().expect("random lease");
     let started = client
         .start_session(
@@ -421,6 +420,7 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
             },
         )
         .expect("start real launcher session");
+    let peer_uid = client.peer_uid();
     assert_eq!(started.receipt.outcome, Outcome::Started);
     assert!(
         started.receipt.isolation_ok,
@@ -432,8 +432,8 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         "started: instance={} binding={:?} peer_uid={peer_uid:?}",
         started.instance_id, started.receipt.binding
     );
-    // 対応表の前提（ADR-0116 D-L）: v3 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
-    // SO_PEERCRED が celeris-browser の UID に見えること。欠ければ表だけを skip（require なら失敗）。
+    // 対応表の前提（ADR-0116 D-L）: v4 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
+    // 応答の SCM_CREDENTIALS が celeris-browser の UID を示すこと。欠ければ表だけを skip（require なら失敗）。
     let proof_gap = if started.receipt.binding.is_none() {
         Some("launcher receipt has no session binding (protocol v1 launcher installed)".to_owned())
     } else if started
@@ -448,11 +448,16 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         )
     } else if peer_uid != Some(browser_uid) {
         Some(format!(
-            "launcher SO_PEERCRED uid {peer_uid:?} is not celeris-browser {browser_uid} in this user namespace"
+            "launcher response SCM_CREDENTIALS uid {peer_uid:?} is not celeris-browser {browser_uid} in this user namespace (protocol v4 launcher required)"
         ))
     } else {
         None
     };
+    if let Some(gap) = proof_gap.as_deref() {
+        let _ = client.stop(&started.session_id, &lease);
+        missing(format!("admission table: {gap}"));
+        return;
+    }
     let instance_id = started.instance_id.clone();
     let session = Session {
         client: &mut client,
@@ -1079,6 +1084,7 @@ fn admission_table_on_synthetic_launcher_observation() {
         },
     };
     let proof = launcher_session_proof(&started, Some(LAUNCHER_UID)).expect("proof");
+    assert!(launcher_session_proof(&started, None).is_none());
     // v1 の receipt（束縛なし）からは証明を組まない。
     let mut v1 = started.clone();
     v1.receipt.binding = None;

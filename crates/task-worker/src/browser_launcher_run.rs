@@ -180,13 +180,13 @@ fn live_starttime(pid: i32) -> Option<u64> {
 /// [`LauncherSessionProof`] を組む（ADR-0116 D-L、fail closed）。次のどれかなら `None`:
 /// receipt に束縛が無い（v1 の launcher）・束縛に 6 つの namespace の inode が揃っていない
 /// （v2 の launcher）・receipt と応答の session / instance が食い違う・
-/// launcher の `isolation_ok` が偽・`SO_PEERCRED` を採れない・pid の process が無い（zombie を含む）・
+/// launcher の `isolation_ok` が偽・応答の `SCM_CREDENTIALS` を採れない・pid の process が無い（zombie を含む）・
 /// `/proc/<pid>/stat` の starttime が束縛と違う・owner UID が不明か daemon の UID。
 /// 欠けた値を安全そうな値で埋めることはしない。launcher UID の設定値との照合は admission 側
 /// （`verify_launcher_session`）が行う。
 pub(crate) fn launcher_session_proof(
     started: &StartedSession,
-    peer_uid: Option<u32>,
+    launcher_uid: Option<u32>,
     daemon: &DaemonIds,
 ) -> Option<LauncherSessionProof> {
     let r = &started.receipt;
@@ -206,7 +206,7 @@ pub(crate) fn launcher_session_proof(
     {
         return None;
     }
-    let launcher_uid = peer_uid?;
+    let launcher_uid = launcher_uid?;
     let owner = binding.ns_owner_uid?;
     if owner == daemon.uid {
         return None;

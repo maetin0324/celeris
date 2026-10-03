@@ -177,7 +177,7 @@ impl Env {
     }
 
     fn approval(&self, task: &Task) -> Option<task_core::DecisionRow> {
-        open_or_answered(&self.store, task).expect("decisions")
+        open_or_answered(&self.store, task, APPROVAL_KEY).expect("decisions")
     }
 
     fn answer(&self, task: &Task, option: &str) {
@@ -447,5 +447,177 @@ fn knowledge_curation_job_rejects_inbox_proposals_outside_the_inputs() {
         reports[0].body.contains("検証できなかった"),
         "{}",
         reports[0].body
+    );
+}
+
+fn decisions(env: &Env, task: &Task, key: &str) -> Vec<task_core::DecisionRow> {
+    env.store
+        .decisions_list(Some(task.id))
+        .expect("decisions")
+        .into_iter()
+        .filter(|d| d.request.key == key)
+        .collect()
+}
+
+fn human_items(n: usize) -> Vec<task_ops::knowledge_curation::HumanDecision> {
+    (0..n)
+        .map(|i| task_ops::knowledge_curation::HumanDecision {
+            subject: format!("user/page-{i:02}.md"),
+            proposal: format!("提案 {i:02}"),
+            reason: "人が書いたページ".into(),
+        })
+        .collect()
+}
+
+#[test]
+fn curation_human_decision_dry_run_raises_exactly_one_decision() {
+    let env = setup("dry_run");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let before = env.kb_snapshot();
+    let mut plan = merge_plan(Vec::new());
+    plan.human_decisions = human_items(12);
+    env.worker_done(&task, &plan, None);
+    env.tick(now + time::Duration::hours(1));
+    env.tick(now + time::Duration::hours(2));
+    assert_eq!(env.kb_snapshot(), before, "dry_run は KB を変えない");
+    let rows = decisions(&env, &task, HUMAN_KEY);
+    assert_eq!(rows.len(), 1, "人への候補は 1 件の decision に束ねる");
+    let q = &rows[0].request.question;
+    assert!(q.contains("user/page-00.md: 提案 00"), "{q}");
+    assert!(q.contains("user/page-09.md"), "{q}");
+    assert!(!q.contains("user/page-10.md"), "最大 10 件: {q}");
+    assert!(q.contains("ほか 2 件"), "{q}");
+    let options: Vec<_> = rows[0]
+        .request
+        .options
+        .iter()
+        .map(|o| o.key.as_str())
+        .collect();
+    assert_eq!(options, vec![HUMAN_HOLD_OPTION, HUMAN_MANUAL_OPTION]);
+    assert!(
+        decisions(&env, &task, APPROVAL_KEY).is_empty(),
+        "dry_run は承認を求めない"
+    );
+
+    // 回答しても KB は変えず、決定も重ねない。
+    env.store
+        .append_event(
+            task.id,
+            &Event::DecisionAnswered {
+                id: rows[0].id.clone(),
+                option: HUMAN_MANUAL_OPTION.into(),
+                note: None,
+                by: "human".into(),
+            },
+        )
+        .expect("answer");
+    env.tick(now + time::Duration::hours(3));
+    assert_eq!(env.kb_snapshot(), before);
+    assert_eq!(decisions(&env, &task, HUMAN_KEY).len(), 1);
+}
+
+#[test]
+fn curation_human_decision_is_not_raised_without_candidates() {
+    let env = setup("dry_run");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    env.worker_done(&task, &merge_plan(Vec::new()), None);
+    env.tick(now + time::Duration::hours(1));
+    assert!(decisions(&env, &task, HUMAN_KEY).is_empty());
+    assert_eq!(env.reports(&task).len(), 1);
+}
+
+#[test]
+fn curation_human_decision_apply_is_separate_from_the_approval() {
+    let env = setup("apply");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let mut plan = merge_plan(Vec::new());
+    plan.human_decisions = human_items(1);
+    env.worker_done(&task, &plan, None);
+    env.tick(now + time::Duration::hours(1));
+    assert_eq!(decisions(&env, &task, HUMAN_KEY).len(), 1);
+    assert_eq!(decisions(&env, &task, APPROVAL_KEY).len(), 1);
+}
+
+#[test]
+fn curation_diff_mismatch_rejects_the_plan_without_approval() {
+    let env = setup("apply");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let before = env.kb_snapshot();
+    let mut plan = merge_plan(Vec::new());
+    plan.human_decisions = human_items(1);
+    // 計画は b→a の統合だが、worker の差分は別のページを指す。
+    let worker_diff = "--- a/inputs/kb/projects/other.md\n+++ /dev/null\n@@ -1 +0,0 @@\n";
+    std::fs::write(env.artifacts(&task).join("curation.diff"), worker_diff).expect("diff");
+    env.worker_done(&task, &plan, None);
+    env.tick(now + time::Duration::hours(1));
+    assert_eq!(env.kb_snapshot(), before);
+    assert!(
+        decisions(&env, &task, APPROVAL_KEY).is_empty(),
+        "不一致なら承認を求めない"
+    );
+    assert!(
+        decisions(&env, &task, HUMAN_KEY).is_empty(),
+        "拒否した計画の候補は出さない"
+    );
+    let state = load_state(&env.state.path().join("state.json"));
+    let entry = &state.tasks[&task.id.to_string()];
+    assert_eq!(entry.phase, Phase::Reported);
+    assert!(entry.approval_hash.is_none());
+    let detail = entry.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("一致しません") && detail.contains("projects/other.md"),
+        "{detail}"
+    );
+    let artifacts = env.artifacts(&task);
+    assert_eq!(
+        std::fs::read_to_string(artifacts.join(WORKER_DIFF)).expect("worker diff"),
+        worker_diff
+    );
+    assert!(
+        !artifacts.join("curation.diff").exists(),
+        "拒否した計画の正本は書かない"
+    );
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1);
+    assert!(
+        reports[0].body.contains("検証できなかった"),
+        "{}",
+        reports[0].body
+    );
+}
+
+#[test]
+fn curation_diff_match_moves_the_worker_diff_and_writes_the_canonical_one() {
+    let env = setup("apply");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let plan = merge_plan(Vec::new());
+    let worker_diff = "--- a/inputs/kb/projects/b.md\n+++ /dev/null\n@@ -1 +0,0 @@\n--- a/inputs/kb/projects/a.md\n+++ b/inputs/kb/projects/a.md\n@@ -1 +1 @@\n";
+    std::fs::write(env.artifacts(&task).join("curation.diff"), worker_diff).expect("diff");
+    env.worker_done(&task, &plan, None);
+    env.tick(now + time::Duration::hours(1));
+    let artifacts = env.artifacts(&task);
+    assert_eq!(
+        std::fs::read_to_string(artifacts.join(WORKER_DIFF)).expect("worker diff"),
+        worker_diff
+    );
+    let canonical = curation::dry_run(env.kb.path(), &plan).expect("dry_run");
+    let written = std::fs::read_to_string(artifacts.join("curation.diff")).expect("diff");
+    assert_eq!(written, canonical, "curation.diff は daemon の正本");
+    let raw = std::fs::read_to_string(artifacts.join("curation-plan.json")).expect("plan");
+    let row = env.approval(&task).expect("approval");
+    let approve = format!("{APPROVE_PREFIX}{}", approval_hash(&raw, &canonical));
+    assert!(
+        row.request.options.iter().any(|o| o.key == approve),
+        "承認 hash は正本で取る"
     );
 }

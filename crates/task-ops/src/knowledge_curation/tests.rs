@@ -46,6 +46,80 @@ fn plan(kb: Vec<KbAction>) -> CurationPlan {
 }
 
 #[test]
+fn curation_diff_match_accepts_normalized_plan_paths() {
+    let (_dir, root) = fixture();
+    let validated = validate(
+        &root,
+        &plan(vec![
+            item(
+                &root,
+                "projects/demo/a.md",
+                Action::Merge,
+                Some("projects/demo/b.md"),
+                Some("# B\nmerged\n"),
+            ),
+            item(
+                &root,
+                "projects/demo/new.md",
+                Action::New,
+                None,
+                Some("# New\n"),
+            ),
+        ]),
+    )
+    .unwrap();
+    let diff = "--- a/inputs/kb/projects/demo/a.md\n+++ /dev/null\n@@ -1 +0,0 @@\n--- a/inputs/kb/projects/demo/b.md\n+++ b/inputs/kb/projects/demo/b.md\n@@ -1 +1 @@\n--- /dev/null\n+++ b/inputs/kb/projects/demo/new.md\n@@ -0,0 +1 @@\n";
+    assert_eq!(check_diff_matches(&validated, diff), Ok(()));
+}
+
+#[test]
+fn curation_diff_match_reports_extra_paths() {
+    let (_dir, root) = fixture();
+    let validated = validate(
+        &root,
+        &plan(vec![item(
+            &root,
+            "projects/demo/a.md",
+            Action::Fix,
+            None,
+            Some("# A\nupdated\n"),
+        )]),
+    )
+    .unwrap();
+    let err = check_diff_matches(
+        &validated,
+        "--- a/projects/demo/a.md\n+++ b/projects/demo/a.md\n--- /dev/null\n+++ b/projects/demo/extra.md\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("余分: [projects/demo/extra.md]"));
+}
+
+#[test]
+fn curation_diff_match_reports_missing_paths() {
+    let (_dir, root) = fixture();
+    let validated = validate(
+        &root,
+        &plan(vec![
+            item(
+                &root,
+                "projects/demo/a.md",
+                Action::Merge,
+                Some("projects/demo/b.md"),
+                Some("# B\nmerged\n"),
+            ),
+            item(&root, "projects/demo/c.md", Action::Delete, None, None),
+        ]),
+    )
+    .unwrap();
+    let err = check_diff_matches(
+        &validated,
+        "--- a/projects/demo/a.md\n+++ /dev/null\n--- a/projects/demo/b.md\n+++ b/projects/demo/b.md\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("不足: [projects/demo/c.md]"));
+}
+
+#[test]
 fn dry_run_never_changes_the_kb_and_apply_handles_each_action() {
     let (_dir, root) = fixture();
     let plan = plan(vec![

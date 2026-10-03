@@ -327,3 +327,37 @@ UNIQUE が防ぐ範囲に留める。
    `harness = "knowledge-curation"`、`lane = "cheap"`、`overlap = "skip"`、
    `enabled = false`、`mode = "dry_run"` を初期値とする。試験は注入した時計と偽 worker を使い、
    外部ネットワークへ出ない。
+
+## 付記 D11（2026-10-03）日次整理の review 指摘への対応
+
+この付記は D10 (3)〜(5) の計画項目、mode 検証、差分照合、人の decision に関する矛盾箇所を上書きする。
+D1〜D10 の本文は変更しない。
+
+1. **KB 操作の本文と変更前 hash を計画に含める。** `curation-plan.json` の `kb` の各件は
+   `{path, action, target, reason, content, expected_hash, target_hash}` の 7 項目とする。
+   `content` は `new` / `fix` では新しいページの本文、`merge` では統合先の完成した本文であり、
+   `delete` / `keep` では `null`。`expected_hash` は `path` の変更前 SHA-256 を 16 進小文字で表し、
+   `new` だけは `null` とする。`target_hash` は `merge` の統合先の変更前 SHA-256 であり、
+   それ以外では `null`。変更前 hash は `inputs/kb/` に置いた写しのページの生バイトから求め、
+   文字列の正規化や frontmatter の再生成はしない。欠けた hash や hash 不一致は計画全体を拒否する。
+   型は `crates/task-ops/src/knowledge_curation.rs` の `KbAction`、hash 算出は同じ module の
+   `content_hash` を正とする。
+2. **人への候補を独立した decision に束ねる。** 検証後の `human_decisions` が 1 件以上なら、
+   `dry_run` / `apply` のいずれでも日次整理 task に key `curation-human` の
+   `DecisionRequested` を 1 件だけ出す。質問文には各候補の `subject` と `proposal` を並べ、
+   選択肢は「次回の整理まで保留」「人が手で対応する」等とする。回答は判断の記録にとどめ、
+   daemon はそれを根拠に KB を変更しない。`apply` 用の承認（key `curation-apply`）とは別件であり、
+   `curation-apply` の承認対象には `human_decisions` を含めない。D8 の要約には人に残る判断件数を
+   示すが、要約の記述だけで decision の発行を代用しない。
+3. **mode は登録・更新時に検証する。** `[[cron.seed]]` の読み込みと、
+   `task_ops::cron_jobs::validate_job` を通る cron 作成・PATCH の双方で、
+   `CronTaskTemplate.extra["mode"]` は文字列 `dry_run` または `apply` だけを受ける。
+   文字列以外の値やその他の文字列は `Validation` エラーとし、API と celerisctl の
+   作成・更新にも同じ規則を適用する。省略した場合は `dry_run` とする。
+4. **worker の差分を計画と照合し、正本を生成する。** worker が `curation.diff` を出した場合、
+   unified diff の `---` / `+++` 見出しから触れた KB path の集合を取り、検証済み計画が変更する
+   path の集合（`merge` の統合元と統合先を含み、`keep` や人の判断に移した操作を除く）と
+   `task_ops::knowledge_curation` で照合する。不一致なら計画全体を拒否する。worker の差分は
+   `curation.worker.diff` に移し、daemon が検証済み計画から生成した差分で正本の
+   `curation.diff` を上書きする。`curation-apply` の承認 hash はこの正本の差分から計算する。
+   worker の `curation.diff` が無ければ照合を省略し、daemon が正本の差分を生成する。

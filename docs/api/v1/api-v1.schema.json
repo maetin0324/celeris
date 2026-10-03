@@ -17498,7 +17498,7 @@
       "type": "object"
     },
     "ScratchCacheStats": {
-      "description": "ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の\n累計、容量は byte、時刻は RFC 3339。",
+      "description": "廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。",
       "properties": {
         "flush_dropped": {
           "description": "待ち行列の上限で「L2 に書かない」で落とした数。",
@@ -17751,7 +17751,7 @@
       "type": "object"
     },
     "ScratchCacheView": {
-      "description": "ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。",
+      "description": "廃止（ADR-0129）: Celeris の階層 cache server（sccache の webdav backend 向け）は撤去した。\n`ScratchStatus.cache` が旧 client 向けの schema 互換のため型だけ残す（値は常に `None`）。",
       "properties": {
         "endpoint": {
           "description": "`http://127.0.0.1:<port>`（`SCCACHE_WEBDAV_ENDPOINT`）。",
@@ -17975,7 +17975,7 @@
       "type": "object"
     },
     "ScratchSccacheStats": {
-      "description": "`sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。",
+      "description": "廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `None`）。",
       "properties": {
         "cache_size_bytes": {
           "description": "L1 の使用量（byte。読めなければ `None`）。",
@@ -18023,7 +18023,7 @@
       "type": "object"
     },
     "ScratchSccacheView": {
-      "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。",
+      "description": "廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client\n向けの schema 互換のため型だけ残す（値は常に `None`）。",
       "properties": {
         "binary": {
           "description": "本物の sccache（`[scratch.sccache] binary`）。",
@@ -18091,7 +18091,7 @@
             }
           ],
           "default": null,
-          "description": "ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の\nスナップショットには無い。"
+          "description": "廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の\nため残す。"
         },
         "dir": {
           "description": "`[scratch] dir`。",
@@ -18187,7 +18187,7 @@
             }
           ],
           "default": null,
-          "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。"
+          "description": "廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との\n互換のため残す。"
         },
         "schema": {
           "description": "常に `celeris.scratch-status/1`。",

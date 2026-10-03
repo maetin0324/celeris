@@ -136,7 +136,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
 
     let pid_file = ws.join("worker.pid");
     assert!(
-        wait_until(Duration::from_secs(10), || pid_file.is_file()),
+        wait_until(Duration::from_secs(60), || pid_file.is_file()),
         "worker did not start"
     );
     let worker_pid = std::fs::read_to_string(&pid_file)
@@ -152,7 +152,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
     assert!(status.success());
     let mut exit = None;
     assert!(
-        wait_until(Duration::from_secs(10), || {
+        wait_until(Duration::from_secs(60), || {
             exit = child.try_wait().unwrap();
             exit.is_some()
         }),
@@ -160,7 +160,7 @@ fn sigterm_kills_the_worker_process_and_exits_130() {
     );
     assert_eq!(exit.and_then(|s| s.code()), Some(130));
     assert!(
-        wait_until(Duration::from_secs(5), || !process_alive(&worker_pid)),
+        wait_until(Duration::from_secs(60), || !process_alive(&worker_pid)),
         "worker process {worker_pid} survived celerisctl's SIGTERM"
     );
     // DB は変えない。

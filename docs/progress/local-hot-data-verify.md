@@ -1,4 +1,4 @@
-merged-main: 3527c8e39ee2c51b646e8aa6ddb61e63c55587c7
+merged-main: ea2d9d3252816d01030143f631d3676d9f2d4c2c
 
 # /local hot data verification
 

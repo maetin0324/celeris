@@ -275,6 +275,23 @@ if mig "$C" rollback --restore-db-from-new; then ok "rollback --restore-db-from-
 db_dump "$C/var-lib-celeris/celeris.sqlite3" | grep -q "after-switch" && ok "write made after switch is kept in the old db" || ng "new write lost"
 grep -q "path = \"$C/var-lib-celeris/celeris.sqlite3\"" "$C/home/.config/celeris/config.toml" && ok "config points back at the old db" || ng "config not restored"
 
+# ---- 5. drop-in directories survive switch → rollback ----------------------------
+
+D="$WORK/d"
+setup "$D"
+DROPIN="$D/home/.config/systemd/user/celeris-web@$SHA.service.d"
+mkdir -p "$DROPIN"
+printf '[Service]\nEnvironment=CELERIS_WEB_TEST=before\n' >"$DROPIN/override.conf"
+cp -a "$DROPIN" "$WORK/dropin.before"
+if mig "$D" presync && mig "$D" stop && mig "$D" delta && mig "$D" switch; then
+  ok "drop-in switch exits 0"
+else
+  ng "drop-in switch failed"
+  tail -n 30 "$D/run.log" >&2
+fi
+if mig "$D" rollback; then ok "drop-in rollback exits 0"; else ng "drop-in rollback failed"; tail -n 30 "$D/run.log" >&2; fi
+if diff -r "$WORK/dropin.before" "$DROPIN"; then ok "drop-in directory and contents restored"; else ng "drop-in differs after rollback"; fi
+
 if [ "$FAIL" -ne 0 ]; then
   echo "migrate_to_local_test: FAILED" >&2
   exit 1

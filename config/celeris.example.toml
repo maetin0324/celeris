@@ -76,6 +76,10 @@ dir = "../memory"
 # shared_build_cache = true
 # build_cache_dir = "~/.local/celeris/build-cache"
 
+# ADR-0129: seed は既定で無効。/local の btrfs へ移行し、共有 probe を確認してから有効にする。
+# [scratch]
+# seed_reflink = false
+
 # ADR-0066 D2（Phase 110b）: 終端（done/failed/cancelled）になってからこの秒数経った作業場所から、
 # ビルド生成物（`target/`、`node_modules/` 等）だけを刈る（ソースツリーと `artifacts/` は残す）。
 # `0` で無効。既定 86400（24 時間）。`celerisctl workspace prune [--dry-run] [--older-than <secs>]` で

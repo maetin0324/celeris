@@ -5,7 +5,7 @@ tasks: [01M3Z08A0T81ZQ60XVR62XJMPD]
 ---
 
 作成: 2026-10-03。実行者: **人**（systemd・`~/.config/celeris`・`~/.local/celeris`・本番 DB の操作が要るため。ADR-0095 付記 D-d）。
-正本の決定は [ADR-0136](adr/0136-local-hot-data-layout.md)（分類表・path の契約・btrfs 上の SQLite）。scratch・target・sccache の seed/reflink 配置は [ADR-0129](adr/0129-host-sccache-reflink-targets.md) が正で、この手順書では重複して決めない。
+正本の決定は [ADR-0136](../adr/0136-local-hot-data-layout.md)（分類表・path の契約・btrfs 上の SQLite）。scratch・target・sccache の seed/reflink 配置は [ADR-0129](../adr/0129-host-sccache-reflink-targets.md) が正で、この手順書では重複して決めない。
 台本は `scripts/selfdeploy/migrate-to-local.sh <stage> [--dry-run]`。全段とも `--dry-run` を先に走らせ、ログ（`$HOME/.local/celeris/migrate-to-local/logs/`）と計画を見てから本実行する。
 
 ## 0. 前提確認

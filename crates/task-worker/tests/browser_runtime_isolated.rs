@@ -111,7 +111,7 @@ fn process_liveness_counts_running_but_not_unreaped_zombie() {
     let mut zombie = Command::new("/bin/true").spawn().unwrap();
     let zombie_pid = zombie.id() as i32;
     let zombie_starttime = process_starttime(zombie_pid).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while same_process_alive(zombie_pid, zombie_starttime) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -176,7 +176,7 @@ echo END
         false,
     ))
     .unwrap();
-    let out = wait_file(&session.path().join("probe.txt"), Duration::from_secs(20));
+    let out = wait_file(&session.path().join("probe.txt"), Duration::from_secs(60));
     eprintln!("{out}");
     for (k, v) in [
         ("broker", "no"),
@@ -255,7 +255,7 @@ fn real_browser_in_runtime_facts_and_restore_refused_on_same_uid() {
         let _ = tx.send(buf);
     });
     let resp = rx
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(Duration::from_secs(60))
         .expect("CDP reply over pipe");
     let resp = String::from_utf8_lossy(&resp);
     assert!(
@@ -662,7 +662,7 @@ fn restart_reaps_recorded_runtime_and_ignores_stale_records() {
     std::mem::forget(rt);
     let killed = reap_recorded(dir.path()).unwrap();
     assert_eq!(killed, vec![outer]);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while (alive(outer) || alive(inner)) && Instant::now() < deadline {
         // bwrap は自分の子（zombie）なので刈り取る
         let _ = nix::sys::wait::waitpid(

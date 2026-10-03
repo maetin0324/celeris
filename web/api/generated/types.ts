@@ -3305,6 +3305,7 @@ export type RunSummary = {
   "work_unit"?: string | null;
 };
 
+/** 廃止（ADR-0129）: cache server stats。型は互換のため残す。 */
 export type ScratchCacheStats = {
   "flush_dropped": number;
   "flush_last_at"?: string | null;
@@ -3347,9 +3348,11 @@ export type ScratchCacheStats = {
   "started_at": string;
 };
 
+/** 廃止（ADR-0129）: Celeris cache server。常に null、型は互換のため残す。 */
 export type ScratchCacheView = {
   "endpoint": string;
   "reason"?: string | null;
+  /** 廃止。常に null（ADR-0129）。 */
   "sccache_mode"?: string | null;
   "state": string;
   "stats"?: ScratchCacheStats | null;
@@ -3393,6 +3396,7 @@ export type ScratchOwnerView = {
   "work_unit_key"?: string | null;
 };
 
+/** 廃止（ADR-0129）: sccache stats。型は互換のため残す。 */
 export type ScratchSccacheStats = {
   "cache_size_bytes"?: number | null;
   "compile_requests": number;
@@ -3402,6 +3406,7 @@ export type ScratchSccacheStats = {
   "rust_misses": number;
 };
 
+/** 廃止（ADR-0129）: sccache。常に null、型は互換のため残す。 */
 export type ScratchSccacheView = {
   "binary": string;
   "dir": string;

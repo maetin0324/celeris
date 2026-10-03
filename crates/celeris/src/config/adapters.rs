@@ -146,7 +146,7 @@ pub struct CodexAdapterConfig {
     /// ADR-0054 D1（Phase 67）: このインストールの `codex` が `exec resume <id>` サブコマンドを
     /// 受け付けるかの**決定的な**判定（`"exec_resume"` | `"experimental_resume"`。実機のバージョンを
     /// 毎回 probe するのではなく設定で固定する。既定 `"exec_resume"`。`codex exec resume --help` が
-    /// 無い古い版では `"experimental_resume"` に変えること。運用手順は `docs/PROGRESS.md` Phase 67）。
+    /// 無い古い版では `"experimental_resume"` に変えること。運用手順は `docs/SPEC.md）。
     #[serde(default = "default_codex_resume_mode")]
     pub resume_mode: String,
     /// ADR-0054 Phase 112 D1: `exec resume` で `-c key=value` に翻訳しきれない `extra_args` が残った

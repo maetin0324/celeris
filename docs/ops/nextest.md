@@ -1,6 +1,6 @@
 # cargo-nextest の導入と版の固定（Phase SD-2、ADR-0041 §8）
 
-release.sh の gate の `cargo-test` 段は、2026-09-28 から `scripts/dev/test-parallel.sh` でテストバイナリを**並列に**回す
+release.sh の gate の `cargo-test` 段は `scripts/dev/test-parallel.sh` でテストバイナリを**並列に**回す
 （`cargo nextest run --workspace` + `cargo test --doc --workspace`）。そのために release.sh を動かすホストに
 `cargo-nextest` が要る。**版は `tools/nextest/VERSION`（1 行）で固定**し、違う版が入っていると test-parallel.sh は止まる。
 
@@ -10,15 +10,15 @@ release.sh の gate の `cargo-test` 段は、2026-09-28 から `scripts/dev/tes
 ## 入れる（人・エージェントが 1 回だけ。ネットワークに出る）
 
 ```sh
-# 版は tools/nextest/VERSION と同じにする（2026-09-28 時点 0.9.146）
+# 版は tools/nextest/VERSION と同じにする
 cargo install cargo-nextest --locked --version "$(cat tools/nextest/VERSION)"
 # → ~/.cargo/bin/cargo-nextest（cargo のサブコマンドとして `cargo nextest` で呼ばれる）
 cargo nextest --version    # → cargo-nextest 0.9.146 (...)
 ```
 
-- 2026-09-28 のこのホストでは約 50 分かかった（crates.io からの取得が遅い。1 回目は `timeout 1200` で切れ、取得済みの分を使って 2 回目で入った）。`/tmp` で cargo を回さない規則に合わせ、
-  `--target-dir` と `TMPDIR` を scratch に向けてよい:
-  `TMPDIR=/var/lib/celeris/scratch/targets/<owner>/tmp cargo install cargo-nextest --locked --version 0.9.146 --target-dir /var/lib/celeris/scratch/targets/<owner>/install-target`
+- crates.io からの取得が遅く数十分かかることがある（途中で切れたら、取得済みの分を使ってもう一度回せば入る）。
+  `/tmp` で cargo を回さない規則に合わせ、`--target-dir` と `TMPDIR` を scratch に向けてよい:
+  `TMPDIR=/var/lib/celeris/scratch/targets/<owner>/tmp cargo install cargo-nextest --locked --version "$(cat tools/nextest/VERSION)" --target-dir /var/lib/celeris/scratch/targets/<owner>/install-target`
   （終わったら `<owner>` ごと消す）。
 - バイナリをリポジトリに置かない（vendor しない）。GitHub の配布バイナリも使わない（照合する sha256 を持たない）。
 - `cargo test` の一部ではない（ネットワークに出る。ADR-0009 P-34）。
@@ -34,7 +34,7 @@ cargo nextest --version    # → cargo-nextest 0.9.146 (...)
 ## 無いとき・壊れたとき
 
 - release.sh は作業ツリーを作る前に `cargo nextest --version` を確かめ、無ければ
-  `cargo-nextest is not installed; install once: cargo install cargo-nextest --locked --version 0.9.146 ...` で落ちる（exit 1）。
+  `cargo-nextest is not installed; install once: cargo install cargo-nextest --locked --version <VERSION> (docs/ops/nextest.md), or set SD_GATE_TEST_RUNNER=cargo-test` で落ちる（exit 1）。
 - 版が違う: test-parallel.sh が `cargo-nextest X is installed but tools/nextest/VERSION pins Y` で落ちる（gate の `cargo-test` 段）。
   一時的に許すなら `CELERIS_NEXTEST_ANY_VERSION=1`。
 - 非常用: `SD_GATE_TEST_RUNNER=cargo-test scripts/selfdeploy/release.sh <ref>` で従来の直列の `cargo test --workspace` に戻る
@@ -48,5 +48,5 @@ worker）が同居するので、nproc いっぱいにはしない。時間に�
 ## 直列が要るテスト
 
 `.config/nextest.toml` の `[test-groups]` と `[[profile.default.overrides]]` で縛る（テストを消さない）。
-何をなぜ縛ったかは ADR-0041 §8。nextest はテストごとに別プロセスで回すので、同じバイナリの中の `static Mutex` による直列化は
+何をなぜ縛ったかは [ADR-0041](../../agent-docs/adr/0041-self-improvement-loop-hardening.md) §8。nextest はテストごとに別プロセスで回すので、同じバイナリの中の `static Mutex` による直列化は
 nextest の下では効かない（その代わりプロセスが別なので、プロセス全体の状態〈env・waitpid(-1)・シグナル〉は互いに干渉しない）。

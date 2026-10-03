@@ -1,7 +1,7 @@
 // gui/app/lib/run-log.ts から移植（P3-12、R26）。harness ごとの adapter はこのファイルに閉じる。
 /**
  * `stdout.jsonl`（各 run のワーカー標準出力）を、人が読む会話形式の表示のためのイベント列に変える純粋関数
- * （docs/adr/0013-run-log-conversation-view.md D1）。harness ごとの違いはこのファイルの adapter に閉じ込め、
+ * （gui/docs/adr/0013-run-log-conversation-view.md D1）。harness ごとの違いはこのファイルの adapter に閉じ込め、
  * 表示部品（`~/components/RunLog.tsx`）は harness を知らない。
  *
  * - claude-code: `--output-format stream-json`（`assistant` / `user` の tool_result / `system` / `result` …）

@@ -163,7 +163,7 @@ async fn run_and_report(config: Config, opts: RunOptions) -> u8 {
         Err(e) => {
             tracing::error!(error = %e, "celeris failed");
             eprintln!("error: {e}");
-            // docs/gui/api.md §1.5: 知らない新しいスキーマ版数の DB は、設定エラーと同じく起動時の exit 2。
+            // docs/api/v1/gui-api.md §1.5: 知らない新しいスキーマ版数の DB は、設定エラーと同じく起動時の exit 2。
             if matches!(
                 e,
                 celeris::DaemonError::Store(task_core::StoreError::SchemaTooNew { .. })

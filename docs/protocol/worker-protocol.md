@@ -1,78 +1,33 @@
-# celeris ワーカープロトコル v1/v2
+# celeris ワーカープロトコル
 
-- 状態: Draft（Phase 0 初版、Phase 10 で v2 に拡張）。規範は `docs/DESIGN.md` §5.3 と [ADR-0003](../adr/0003-worker-protocol.md)、
-  v2 の追加分は [ADR-0016](../adr/0016-roles-and-delegation.md)（役割と委譲、実装メモ M3/M4/M8/M9）
-- JSON Schema: 正は隣の `worker-protocol.schema.json`（Phase 3 で `task-worker::protocol` の Rust 型から `schemars` で生成。`task-worker` のテスト `committed_schema_matches_generated` が一致を検証し、`UPDATE_SCHEMA=1 cargo test -p task-worker` で再生成する）。本文書 §7 の手書きスキーマは説明用の抜粋
-- **Phase 60a（ADR-0048 D2）**: `progress` 行に `kind` / `tool` / `summary` / `detail` / `truncated` /
-  `error` を追加（§4.1）。`Event::WorkerProgress` にも同じ 6 つが載る。**追加のみ**なので
-  `PROTOCOL_VERSION` は **4 のまま**（従来の `{"type":"progress","msg":…}` だけのワーカーはそのまま動き、
-  同じ run の中で混在してよい）。Console（ADR-0048 D1）はこの形だけを見て、アダプタの差を知らない
-- **Phase 53（ADR-0044 D2）**: ワーカー → celeris に `comment` メッセージ（§4.7）、`run.context` に
-  `comments` / `interrupt` / `comments_enabled`（§3.1）を追加。**どちらも追加のみ**なので
-  `PROTOCOL_VERSION` は **4 のまま**（この行を出さない・このフィールドを読まないワーカーはそのまま動く。
-  版数を上げるのは「既存の形を変える」ときだけ、という Phase 28 以降の運用に揃える）
-- §9 は Phase 4（ADR-0006）で確定した CLI エージェント系アダプタ（`claude-code` 等）専用の規約。§1〜§8 の
-  JSON Lines プロトコルとは別物で、DESIGN §5.4 の表への反映は `docs/PROGRESS.md` の提案 P-24 として持ち越し中
-- **v2（ADR-0016 M9, Phase 10）**: `run.protocol` を `2` に上げた。追加は `delegate` メッセージ（§4.x）、
-  `context.role` / `context.children`（§3.1）、`task.role` / `task.aggregate`。全て**追加のみ**で、`protocol`
-  フィールドの値は検査していないため v1 のワーカー（この節を実装しないもの）はそのまま動く
-- **v3（ADR-0027 D1, Phase 16）**: `context.available_genres`、`task.genre`、`delegate` の `tasks[].genre`
-- **v4（ADR-0033 D4/D6, Phase 24）**: `context.node` / `context.memory` / `context.conversation` /
-  `context.standing_rules` / `context.organization`（§3.1）、`delegate` の `tasks[].assignee`、
-  結果ファイルの `memory`（§9）。全て**追加のみ**で、v1〜v3 のワーカーはそのまま動く
-- **Phase 28（ADR-0033 D4 追記）**: `context.conversation_addressee`（§3.1）を追加。対話用タスクの run
-  にだけ `"secretary"` / `"other"` が入り、返事だけをする指示の前置き（§3.1 末尾）を出す。対話 run は
-  `delegate` を受け付けず、`question` も出さない（そのまま `done` の返事になる）
-- **Phase 30（ADR-0033 D4 追記）**: `context.work_genre`（§3.1）を追加。対話は**ノードの `genre` に関係なく
-  常に対話用分野**（`task.genre`。設定 `[conversation] genre`、既定 `secretary`）で走る（実機の事故:
-  関連研究調査課＝検索ハーネス（`genre = web-research`）に話しかけたら検索ハーネスが会話しようとして
-  失敗した。検索ハーネスや PaperQA は会話できない）。`context.work_genre` は、担当ノードが自分の仕事の
-  分野（`node.genre`）を持つときだけ渡り、その人が自分の得意分野を知って答えられるようにする
-  （前置きに 1 行）
-- **Phase 33（ADR-0033 D4 追記）**: `context.recent_work`（§3.1）を追加。実機で対話 run の担当が自分の
-  直近の失敗（`web search returned nothing` ×2, `idle timeout` ×1, レビュー不合格 ×1）を知らずに
-  「対象タスク ID / run / エラーメッセージが必要です」と聞き返した事故の再発防止。対話 run にだけ、
-  担当の直近の仕事（最大 10 件、更新の新しい順、対話が案件を選んでいればその案件のものを先に）を渡す
-- **Phase 41（ADR-0038 D1）**: `context.milestone_review`（§3.1）と、結果ファイルの `milestone_proposal`（§9）を
-  追加。途中目標の仕事が止まったときの**レビューの対話 run**（秘書の裏方タスク。`support = "milestone_review"`）
-  にだけ、その途中目標とそこまでの仕事の成果（title / status / 終端の要約 / `answer.md`・`report.md` の
-  先頭 4,000 字）が渡り、前置きに「(a) 得られた結果 (b) 達成と言えるか (c) 次の途中目標の提案
-  (d) 判断を仰ぎたい点」を書く指示が足される。次の途中目標は結果ファイルの `milestone_proposal` にも書く
-  （celeris はそこだけを決定的に読み、`status = proposed` の途中目標を 1 件作る）。**追加のみ**なので
-  `protocol` は `4` のまま
-- **Phase 35（ADR-0036 D1/D5）**: `run.artifacts_dir`（§3.1）を追加。**成果物と結果ファイルの置き場は
-  `request.artifacts_dir`**。workspace を自分で所有するタスクは従来と同じ `<workspace>/artifacts`、
-  **workspace を親から継いだタスク（plan / delegate の子）は `<workspace>/.taskd/artifacts/<task_id>`**。
-  実機の事故（2026-09-18）: 計画 run が作った兄弟 2 件（PaperQA2 と LDR）が親の workspace を共有し、
-  両方が `<workspace>/artifacts/` に書いたため `sources.json` が上書きされ、レビュアーが相手の成果物を
-  読んで判定した。`artifact` メッセージの `path` は従来どおり workspace 相対。**追加のみ**なので
-  `protocol` は `4` のまま（この欄を読まないワーカーも単独タスクではそのまま動く）
-- **Phase 43（ADR-0039 D2/D3）**: `context.workspace_note`（§3.1）と、`delegate` の `tasks[].workspace` /
-  `plan.json` の `tasks[].workspace`（§4.6 / §10.1）を追加。**案件（`projects`）が作業場所を持てる**ように
-  なり、分解・委譲した子はそれを継ぐ（明示 > 案件 > 親）。実機の事故（2026-09-18）: 空のローカル
-  workspace に置かれた子タスクが、objective の文面からリポジトリの場所を知って自分で `ssh` し、人の
-  リポジトリへ直接書いた。**追加のみ**なので `protocol` は `4` のまま
-- **Phase 49（ADR-0041 D1）**: `run.work_dir`（§3.1）と `context.children[].branch`（§3.1）を追加。
-  ローカルの作業場所が git リポジトリで案件の `workspace.mode` が `"worktree"`（既定）なら、celeris は
-  **タスクごとに `git worktree` を切り**、`work_dir` にその作業ツリー（`<workspace>/tree`）を渡す。
-  このとき `workspace` は**作業ツリーの親**（`runs/` `inputs/` `artifacts/` の置き場）であって cwd ではない
-  （作業ツリーの中に `runs/` を作ると `git status --porcelain` が常に汚れ、終端で worktree を消せなくなる）。
-  `work_dir` が無ければ従来どおり `workspace` が cwd。**追加のみ**なので `protocol` は `4` のまま
-- **Phase 52（ADR-0043 D2 / D4 / D8）**: `run.task.repos`（`Task` の新しい任意フィールド。
-  `[{"repo_id":"01J…","name":"benchfs"}]`。空なら出ない）と、`plan.json` の `tasks[].repos`
-  （名前の配列。§10.1）を追加。**案件は「リポジトリ」を複数持ち**（`project_repos`）、タスクはその一部を
-  使う（明示 > 親 > 案件の primary）。タスクの作業場所は
-  `<workspace_root>/<task_id>/repos/<name>/`（git は worktree、`dir` は実体へのシンボリックリンク）で、
-  `work_dir` は **`repos[0]`**（`workspace` は従来どおりその親 = `runs/` `inputs/` `artifacts/` の置き場）。
-  `context.workspace_note` の中身が「作業ツリー 1 つ」から**リポジトリの一覧**（名前 / ブランチ / base /
-  `workspace.toml` の `description` と `check`、成果物と文書の置き場）に変わった。
-  ブランチ接頭辞の既定は `celeris/` → **`celeris/`**（ADR-0042 D3）。**追加のみ**なので `protocol` は `4` のまま
+- 正本: 型は `crates/task-worker/src/protocol.rs`（`RunRequest` / `RunContext` / `WorkerMessage`）、JSON Schema は
+  隣の `worker-protocol.schema.json`（その型から `schemars` で生成。`task-worker` のテスト
+  `committed_schema_matches_generated` が一致を検証し、`UPDATE_SCHEMA=1 cargo test -p task-worker` で再生成する）。
+  本文書と食い違うときは型と schema が正
+- 版: `PROTOCOL_VERSION = 4`（`run.protocol` に載る）。欄・メッセージの**追加のみ**では上げない（受信側は未知の
+  欄を無視し、新しい欄を出さない・読まないワーカーはそのまま動く）。上げるのは既存の形を変えるときだけ。
+  ワーカーはこの値を検査しなくてよい
+- 経緯（どの Phase で何を足したか）は各 ADR を参照: 基本形 [ADR-0003](../../agent-docs/adr/0003-worker-protocol.md)、
+  CLI 系アダプタの結果ファイル [ADR-0006](../../agent-docs/adr/0006-phase4-claude-code-adapter.md)、kind 別出力
+  [ADR-0007](../../agent-docs/adr/0007-phase5-planner-and-reviewer.md)、役割と委譲（v2）
+  [ADR-0016](../../agent-docs/adr/0016-roles-and-delegation.md)、分野（v3）
+  [ADR-0027](../../agent-docs/adr/0027-task-genres-and-research-harness.md)、組織・記憶・対話（v4）
+  [ADR-0033](../../agent-docs/adr/0033-organization-projects-and-reports.md)、成果物の置き場
+  [ADR-0036](../../agent-docs/adr/0036-per-task-artifacts.md)、作業場所・worktree・リポジトリ
+  [ADR-0039](../../agent-docs/adr/0039-project-workspace.md) / [ADR-0041](../../agent-docs/adr/0041-self-improvement-loop-hardening.md) /
+  [ADR-0043](../../agent-docs/adr/0043-workspaces.md)、コメント [ADR-0044](../../agent-docs/adr/0044-task-management.md)、
+  構造化 progress [ADR-0048](../../agent-docs/adr/0048-console.md)、yield・予算・checkpoint・WorkUnit
+  [ADR-0072](../../agent-docs/adr/0072-task-execution-decomposition.md)、クラスタ job の wait
+  [ADR-0090](../../agent-docs/adr/0090-durable-wait-for-cluster-jobs.md)
+- §1〜§8 は JSON Lines を stdin/stdout で直接話すワーカー（`fake` 等）の規約。§9 は CLI エージェント系アダプタ
+  （`claude-code` / `codex` / `acp` / `aider`）が使う結果ファイル（`result.json`）の規約、§10 は kind 別の出力ファイル
 
 ## 1. 概要
 
 オーケストレータ（celeris）はワーカーを **サブプロセス** として起動し、stdin に `run` を 1 行書いて閉じる。
-ワーカーは stdout に JSON Lines で `progress` / `artifact` / `comment` / `delegate` を任意回、最後に `done` / `error` / `question` のいずれか 1 つを書いて exit する。
-全アダプタ（fake / claude-code / codex / dsh / openai-compat）はこの形に正規化する。
+ワーカーは stdout に JSON Lines で `progress` / `artifact` / `comment` / `delegate` を任意回、最後に終端メッセージ
+（`done` / `error` / `question` / `yielded` / `budget_exhausted` / `wait`）のいずれか 1 つを書いて exit する。
+全アダプタ（`fake` / `claude-code` / `codex` / `acp` / `aider` / `paperqa` / `local-deep-research` など）の結果はこの形に正規化される。
 
 ```
 celeris ──stdin──▶ {"type":"run", ...}\n  (EOF)
@@ -80,6 +35,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
                  {"type":"artifact", ...}\n
                  ...
                  {"type":"done", ...}\n   | {"type":"error", ...}\n | {"type":"question", ...}\n
+                 | {"type":"yielded", ...}\n | {"type":"budget_exhausted", ...}\n | {"type":"wait", ...}\n
        ◀─exit──
 ```
 
@@ -90,10 +46,10 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | 形式 | 1 行 1 JSON オブジェクト。UTF-8、`\n` 終端。行内に改行を含めない（文字列内は `\n` エスケープ） |
 | 識別 | 全メッセージに `type`（文字列）が必須 |
 | 未知フィールド | 受信側は無視する（前方互換） |
-| 未知 `type` | run を `error{retryable:false}` 相当で打ち切る |
-| 非 JSON 行 | 破棄し警告ログ（ワーカーの stderr は別途 `runs/<run_id>/stderr.log` へ） |
-| 行長 | 1 MiB 以下。超過はプロトコル違反 |
-| バージョン | `run.protocol = 1`。非互換変更で上げる |
+| 未知 `type` | JSON として妥当だが `WorkerMessage` に読めない行（未知の `type`・必須欄の欠落・型違い）はプロトコル違反。run を `error{retryable:false, message:"protocol violation: …"}` で打ち切り、プロセスグループを止める |
+| 非 JSON 行・空行 | 破棄し警告ログ（ワーカーの stderr は別途 `runs/<run_id>/stderr.log` へ） |
+| 行長 | 1 MiB 以下。超過はプロトコル違反（`error{retryable:false}`） |
+| バージョン | `run.protocol = 4`（`PROTOCOL_VERSION`）。既存の形を変えるときだけ上げる（追加のみでは上げない） |
 
 ## 3. celeris → ワーカー
 
@@ -101,7 +57,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 
 ```json
 {"type":"run",
- "protocol":2,
+ "protocol":4,
  "task":{ "...": "task-core::Task を serde でそのまま直列化したもの（role・aggregate を含む）" },
  "workspace":"/abs/path/to/workspace/<task_id>",
  "work_dir":"/abs/path/to/workspace/<task_id>/tree",
@@ -119,11 +75,12 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
-| `protocol` | integer | ✓ | `1`〜`4`（現在は `4`。v2 = ADR-0016 M9、v3 = ADR-0027 D1、v4 = ADR-0033 D4/D6）。ワーカーはこの値を検査する必要はない |
+| `protocol` | integer | ✓ | `PROTOCOL_VERSION`（現在 `4`）。ワーカーはこの値を検査する必要はない |
 | `task` | object | ✓ | `Task`（id, kind, title, objective, acceptance[], inputs[], depends_on[], status, priority, worker_hint, workspace, budget, attempts, `role`, `aggregate`, …）。`task.role`（`Option<string>`）はタスクの役割名、`task.aggregate`（`bool`。既定 false）は集約 run の親かどうか（ADR-0016 D1/D3） |
 | `workspace` | string | ✓ | 絶対パス。`artifact.path` の基準で、`runs/` `inputs/` `artifacts/` の親。`work_dir` が無ければワーカーの cwd でもある |
 | `work_dir` | string | –（省略可。Phase 49, ADR-0041 D1） | 絶対パス。ワーカーの cwd。タスクごとの `git worktree`（`<workspace>/tree`。ブランチ `celeris/<task_id>`）を切った run にだけ載る。このとき成果物は作業ツリーの**外**にあるので、前置きの成果物のパスは絶対パスになる |
 | `artifacts_dir` | string | ✓（Phase 35, ADR-0036 D1） | 絶対パス。**この run の成果物と結果ファイル（`result.json` / `delegate.json` / `plan.json` / `review.json` / `summary.md`）の置き場**。workspace を自分で所有するタスクは `<workspace>/artifacts`、**workspace を親から継いだタスク（plan / delegate の子）は `<workspace>/.taskd/artifacts/<task_id>`**。決めるのは celeris（ディスパッチャ）で、ワーカーはここに書く。`artifact` メッセージの `path` は従来どおり **workspace 相対**（`.taskd/artifacts/<task_id>/report.md` の形）|
+| `cargo_target_dir` | string | –（省略可） | この run に daemon が与えた `CARGO_TARGET_DIR` の監査用の写し（環境変数は別に渡る）。ワーカーは読まなくてよい |
 | `context.prior_review` | array | ✓（空可） | 直前のレビュー結果。`{criterion: usize, pass: bool, reason: string}` |
 | `context.inputs` | array | ✓（空可） | 依存成果物の `ArtifactRef`。`prepare()` で `workspace/inputs/` に配置済み |
 | `context.answers` | array | –（省略可、空なら省略） | `celerisctl answer` で記録された `question` → 人間の回答の履歴（時系列、`{question: string, answer: string}`）。ADR-0010 D3, P-10。前方互換のため未知のワーカーは無視してよい |
@@ -131,9 +88,9 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.children` | array | –（省略可。空なら省略。v2, ADR-0016 D3/M4） | 集約 run（`task.aggregate == true` の親の、子が全て終端になった後の run）でのみ非空。`ChildSummary`: `{id, title, role?, status, outcome?, artifacts: ArtifactRef[], workspace?, branch?}`。`branch` はその子が worktree で作業したときのブランチ（`celeris/<child_id>`。Phase 49, ADR-0041 D1）で、親はこれを merge して子の成果を統合する |
 | `context.node` | object | –（省略可。v4, ADR-0033 D4） | `task.assignee` の組織ノード（担当が決まっている run だけ）。`{id, name, brief?}`。プロンプトの一番前に「あなたは誰で、何の担当か」として置かれる |
 | `context.memory` | object | –（省略可。v4, ADR-0033 D6） | `[memory]` を設定し、担当が決まっている run だけ。`{notes?: string, project?: string}`（`<memory_dir>/<node_id>/notes.md` と `projects/<project_id>.md` の中身。それぞれ 8,000 字で切る） |
-| `context.conversation` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | その案件でのこのノードと人の**直近のやり取り**（既定 20 件、古い順）。`{role: "user"|"node", text: string}` |
-| `context.standing_rules` | array | –（省略可。空なら省略。v4, ADR-0033 D5） | 「今後ずっと」の認可。**Phase 26 が埋める。今は常に空** |
-| `context.organization` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | 分解・委譲できる run（`context.available_genres` を渡す run と同じ条件）に渡す組織図。`{id, name, kind, parent_id?, brief?, genre?}`。「どの課に何を振るか」を `assignee` で決めさせる |
+| `context.conversation` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | その案件でのこのノードと人の**直近のやり取り**（既定 20 件、古い順）。`{role: "user"\|"node", text: string}` |
+| `context.standing_rules` | array | –（省略可。空なら省略。v4, ADR-0033 D5） | 「今後ずっと」の認可（担当宛て + 全員向け。ADR-0033 D5）。前置きの「永続の認可」節になる |
+| `context.organization` | array | –（省略可。空なら省略。v4, ADR-0033 D4） | 分解・委譲できる run（`context.available_genres` を渡す run と同じ条件）に渡す組織図。`{id, name, kind, parent_id?, brief?, genre?, skills?, harnesses?, tools?}`。「どの課に何を振るか」を `assignee` で決めさせる |
 | `context.workspace_note` | string | –（省略可。Phase 43, ADR-0039 D3） | **案件が作業場所を決めている run** にだけ載る 1 行（そのコードがどこにあるか）。前置きに `## 作業場所` として出て、「編集は手元の作業ディレクトリで、別のホストの作業ツリーへ `ssh` で直接書くな」が続く。作業場所を決めていない案件・案件に属さないタスク・対話 run では省略（プロンプトは Phase 42 までとバイト単位で同じ） |
 | `context.conversation_addressee` | string | –（省略可。Phase 28, ADR-0033 D4 追記） | 対話用タスクの run だけ `"secretary"` / `"other"`。委譲・`Question` は使えない（`delegate` は子を作らず理由を `progress` で返し、`Question` はそのまま `done` の返事になる） |
 | `context.work_genre` | object | –（省略可。Phase 30, ADR-0033 D4 追記） | 対話 run で、担当ノードが自分の仕事の分野（`node.genre`）を持つときだけ。`GenreContext`（`context.available_genres[]` と同じ形）。対話そのものは常にこの分野ではなく対話用分野（`task.genre`）で走る。前置きに「仕事で使う道具」として 1 行渡すためだけの情報 |
@@ -142,6 +99,22 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.interrupt` | string | –（省略可。Phase 53, ADR-0044 D2） | **直前の run を人のコメントで止めた**とき、そのコメントの本文。前置きのいちばん先に「**人からの割り込み**: …」として出る。割り込みの直後の run にだけ載る（その run が終わったら消える） |
 | `context.comments_enabled` | bool | –（省略可。既定 false。Phase 53, ADR-0044 D2） | この run は `comment` を書ける。true のときだけ前置きに「短い進捗や判断の記録はコメントに書け」が出る。**仕事の run は true、対話 run（Phase 28 の「返事だけをする」run）とレビュー run は false** |
 | `context.recent_work` | array | –（省略可。空なら省略。Phase 33, ADR-0033 D4 追記） | 対話 run にだけ、担当の直近の仕事（最大 10 件、更新の新しい順。案件を選んでいればその案件のものを先に。対話・まとめ・承認・レビューは除く）。`RecentWork`: `{task_id, title, project_title?, status, finished_at?, outcome?, artifacts: string[]}`。`outcome` は終端の要約（`done` なら summary の 1 行目、`failed` なら理由、`blocked` なら質問）で、ストアのタスクとイベントから決定的に組む（LLM は使わない） |
+| `context.review` | object | –（省略可） | Review run だけ。`ReviewRequest`: `{summary, evidence, criteria, decisions?, answers?, checks?}`（§10.2） |
+| `context.available_genres` | array | –（省略可。空なら省略。v3） | 分解・委譲できる run に渡す分野の一覧。`GenreContext`: `{id, description, capabilities?, input_artifacts?, output_artifacts?, roles?, harness?}` |
+| `context.subject_genre` | object | –（省略可） | レビュー対象の仕事の分野（`GenreContext`） |
+| `context.clusters` | array | –（省略可。空なら省略） | 使えるクラスタ。`{id, connected, work_dir?}` |
+| `context.profile` | object | –（省略可） | 担当の実効 profile（`task_core::EffectiveProfile`） |
+| `context.mode` | string | –（省略可） | タスクの mode（`task_core::TaskMode`） |
+| `context.knowledge` | object | –（省略可） | 読める知識のマウントと索引。`{mounts?, index?}` |
+| `context.active_projects` | array | –（省略可。空なら省略） | 進行中の案件。`{id, title, status, repos?, milestones?: [{id, title, status}]}` |
+| `context.session` | object | –（省略可） | 継続セッションの手がかり。`{adapter, session_id, resume}`。`adapter` が自分と違えば無視する |
+| `context.session_diff` | array | –（省略可。空なら省略） | 継続セッションの前回からの差分（文字列の配列） |
+| `context.skills` | array | –（省略可。空なら省略） | mount された skill。`{name, path, description?}`（`path` は `SKILL.md` を含むディレクトリの絶対パス） |
+| `context.continuation` | object | –（省略可） | 続きの run（yield・予算切れ・wait の後）だけ。`{run_seq, previous_end, checkpoint, prior_runs?, cluster_jobs?}` |
+| `context.work_unit` | object | –（省略可） | WorkUnit の run だけ。`{key, title, objective, done_when?, task_objective_excerpt, dependency_summaries?, plan_overview?, branch?, parallel_siblings?, human_decisions?, previous_check_failures?}` |
+| `context.execution_planner` | object | –（省略可） | 実行計画を書く planner run だけ。上限・gate の結果・replan の情報（`ExecutionPlannerContext`。欄は schema を参照） |
+| `context.decision_requests` | bool | –（省略可。既定 false） | true なら結果ファイルに人への決定の要求（`decisions`）を書ける |
+| `context.browser` / `context.browser_policy` | object | –（省略可） | browser capability を使う run だけ（`crate::browser::BrowserContext` / `task_core::BrowserTaskPolicy`） |
 
 `context.answers` は、このタスクの `Event::Answered` を時系列に並べたもの（`question` は直前の
 `WorkerFinished.outcome` の `"question: "` 接頭辞から取ったもの、無ければ空文字列）。`claude-code`/`codex`
@@ -172,6 +145,22 @@ Phase 53（ADR-0044 D2）: `context.comments` か `context.interrupt` がある�
 役割の文面で濁さないため）。
 
 ## 4. ワーカー → celeris
+
+`WorkerMessage` の variant は次の 10 種（`#[serde(tag = "type", rename_all = "snake_case")]`）。非終端は何度出してもよく、
+終端は run につき 1 つ（§5）。
+
+| `type` | 終端 | 例 |
+|---|---|---|
+| `progress` | – | `{"type":"progress","msg":"running cargo test"}` |
+| `comment` | – | `{"type":"comment","body":"ベンチは 12% 速くなった"}` |
+| `delegate` | – | `{"type":"delegate","tasks":[{"title":"…","objective":"…","acceptance":[…]}]}` |
+| `artifact` | – | `{"type":"artifact","name":"bench.json","path":"artifacts/bench.json","kind":"json"}` |
+| `question` | ✓ | `{"type":"question","text":"Which Python version?"}` |
+| `done` | ✓ | `{"type":"done","summary":"…","evidence":[]}` |
+| `error` | ✓ | `{"type":"error","message":"…","retryable":true}` |
+| `yielded` | ✓ | `{"type":"yielded","checkpoint":{"remaining":["…"]}}` |
+| `budget_exhausted` | ✓ | `{"type":"budget_exhausted","kind":"turns","message":"error_max_turns"}` |
+| `wait` | ✓ | `{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634"]}` |
 
 ### 4.1 `progress`（任意回）
 
@@ -233,7 +222,7 @@ Phase 53（ADR-0044 D2）: `context.comments` か `context.interrupt` がある�
 |---|---|---|
 | `text` | string | ✓ |
 
-タスクは `blocked` になる。ワーカーはこの行を書いたら exit する。人間の回答は `celerisctl answer` で記録され、次回の `run` に渡す（§9 P-10 参照。DESIGN 未反映）。
+タスクは `blocked` になる。ワーカーはこの行を書いたら exit する。人間の回答は `celerisctl answer` で記録され、次回の `run` の `context.answers` に渡る（§3.1・§9）。
 
 ### 4.4 `done`（終端）
 
@@ -258,7 +247,7 @@ Phase 53（ADR-0044 D2）: `context.comments` か `context.interrupt` がある�
 | `evidence[].stdout_tail` | string | – | 出力末尾（同上）。4 KiB を目安に切り詰める |
 | `usage` | object | – | `input_tokens`, `output_tokens`（integer）。取れないアダプタは省略 |
 
-`done` は完了ではない。タスクは `reviewing` に入り、Reviewer が `Command` を再実行し `ArtifactExists` を検査する（DESIGN 原則 4）。
+`done` は完了ではない。タスクは `reviewing` に入り、Reviewer が `Command` を再実行し `ArtifactExists` を検査する（完了はレビュアーか決定的な検査が決める。`docs/SPEC.md`）。
 
 ### 4.5 `error`（終端）
 
@@ -412,23 +401,47 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 
 - **run は止まらない**（非終端）。状態機械も動かない。
 - **人を起こさない**（通知は ADR-0037 の 5 種のまま）。人が書いたコメントだけが
-  `POST /tasks/{id}/comments` 経由で担当を起こす（`docs/gui/api.md` §3.70 の表）。
+  `POST /tasks/{id}/comments` 経由で担当を起こす（[gui-api.md](../api/v1/gui-api.md) の `POST /tasks/{id}/comments`）。
 - 空白だけの本文・20,000 文字超は捨てる（警告だけ。run は続く）。
 - 前置きには「短い進捗や判断の記録はコメントに書け」と書いてある（`context.comments_enabled`）。
   長い成果は成果物（`artifact`）に書くこと。
 - **追加のみ**なので `PROTOCOL_VERSION` は 4 のまま。この行を出さない既存のワーカーは何も変わらない。
 
+### 4.8 `wait`（終端。ADR-0090 D1）
+
+```json
+{"type":"wait","kind":"cluster_job","cluster":"sirius","scheduler":"pbs","jobs":["42634","42635"],
+ "poll_secs":300,"timeout_secs":86400,
+ "checkpoint":{"completed":["job を投入した"],"next_action":"結果を集計する"},
+ "summary":"IOR を 2 本投入した"}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|---|---|---|---|
+| `kind` | string | ✓ | 常に `"cluster_job"`（それ以外は不正） |
+| `cluster` | string | – | `[[clusters]] id` |
+| `scheduler` | string | – | `pbs` \| `slurm`。省略時は `pbs` |
+| `jobs` | array | ✓ | 待つ job id（文字列） |
+| `poll_secs` / `timeout_secs` | integer | – | 確かめる間隔と待つ上限 |
+| `checkpoint` | object | – | `yielded` と同じ checkpoint の意味の欄 |
+| `summary` | string | – | 待つ前の run の要約 |
+| `usage` | object | – | `done` と同じ形 |
+
+クラスタ job の終了を待って続きを走らせる。検証は `result.json` の wait と同じ
+（`task_core::cluster_job::parse_wait_request`）で、不正なら `error{retryable:true}` になる。daemon が job を
+見て、終わったら（または `timeout_secs`・cancel で）次の run を始め、`context.continuation.cluster_jobs` に
+job の最終状態を渡す。`yielded` と違い、continuation の回数・進捗なしの窓・attempts には数えない。
+
 ## 5. 終了規則
 
-1. 終端メッセージ（`done` / `error` / `question`）は run につき 1 つ。終端後の行は捨てる。
+1. 終端メッセージ（`done` / `error` / `question` / `yielded` / `budget_exhausted` / `wait`）は run につき 1 つ。最初の終端で読むのをやめ、後の行は捨てる。
 2. 終端メッセージ無しで exit した場合、exit code に関わらず `error{retryable:true, message:"worker exited without terminal message (exit=N)"}` と等価に扱う。
 3. exit code は `WorkerFinished{run_id, outcome, usage}` に記録するが、状態遷移には使わない。
-4. **アダプタ自身が打ち切る場合**（wall-clock 超過・無出力タイムアウト・プロトコル違反）は
-   SIGTERM → 猶予（`kill_grace_secs`、既定 10 s）→ SIGKILL を**プロセスグループごと**送る。
-   **celeris 側から打ち切る場合**（`cancel`、ADR-0044 D2 の**人のコメントによる割り込み**）は
-   ディスパッチャが run の `JoinHandle` を `abort()` し、tokio の `kill_on_drop` が**子プロセスにだけ
-   SIGKILL** を送る（猶予は無く、孫プロセスは残る。cancel も Phase 3 からこの形。統一は
-   `docs/PROGRESS.md` の提案 P-53a）。割り込みで止めた run は
+4. 打ち切りはどの経路でも **SIGTERM → 猶予（`kill_grace_secs`、既定 10 s）→ SIGKILL を
+   プロセスグループごと**送る（孫プロセスまで届く。コンテナ実行の run はコンテナにも同じ 2 段を送る）。
+   アダプタ自身が打ち切る場合（wall-clock 超過・無出力タイムアウト・プロトコル違反）も、
+   celeris 側から打ち切る場合（`cancel`、人のコメントによる割り込み、リース喪失、drain タイムアウト。
+   `task_dispatch` の `stop_run`）も同じ。割り込みで止めた run は
    `WorkerFinished{outcome: "interrupted: comment"}` として記録し、**失敗には数えない**
    （報告も `error_cooldown` も作らない）。worktree はそのまま残すので、次の run が続きから直せる。
 
@@ -437,13 +450,13 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 | 上限 | 出所 | 既定 | 超過時 |
 |---|---|---|---|
 | wall-clock | `task.budget.max_wall_secs` | タスクごと | `error{retryable:true,"wall clock exceeded"}` |
-| 無出力 | アダプタ設定 `idle_timeout_secs` | 300 | `error{retryable:true,"idle timeout"}` |
+| 無出力 | 設定 `idle_timeout_secs`（アダプタごとに上書き可） | 300 | `error{retryable:true,"idle timeout"}` |
 
 `progress` / `artifact` / `comment` / `delegate` の受信で無出力カウンタをリセットする（stdout の 1 行ごと）。
 
 ### 6.1 heartbeat（リースの延長。プロトコルのメッセージではない）
 
-`heartbeat` は本文書が定義する JSON Lines メッセージ（`progress`/`artifact`/`done`/`error`/`question`）の
+`heartbeat` は本文書が定義する JSON Lines メッセージ（§4 の `WorkerMessage`）の
 1 つではない。ワーカーの stdout から **1 行読むたび**（`progress`/`artifact` 等の既知メッセージだけでなく、
 破棄される非 JSON 行や行長超過も含む）に、アダプタ内部で `EventSink::heartbeat()` を呼ぶだけの生存通知
 である（ADR-0010 D7, P-7）。ワーカー自身がこれを送出するのではなく、アダプタが「まだ子プロセスが出力して
@@ -458,162 +471,19 @@ celeris 側の扱い（ADR-0016 D2, 実装メモ M2/M6/M7）:
 分だけ遅れて処理されることを含めて `kill_grace + tick_ms < lease_grace / 2` のときに成り立つ。`celeris` は設定検証でこれを要求する
 （ADR-0010 D7）。
 
-## 7. JSON Schema（説明用の手書き抜粋。正は `worker-protocol.schema.json`）
+## 7. JSON Schema
 
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://celeris.local/protocol/worker-protocol-v1.json",
-  "title": "celeris worker protocol v1",
-  "$defs": {
-    "ArtifactRef": {
-      "type": "object",
-      "required": ["name", "path", "sha256", "kind"],
-      "properties": {
-        "name": {"type": "string"},
-        "path": {"type": "string"},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "kind": {"type": "string"}
-      }
-    },
-    "PriorReview": {
-      "type": "object",
-      "required": ["criterion", "pass", "reason"],
-      "properties": {
-        "criterion": {"type": "integer", "minimum": 0},
-        "pass": {"type": "boolean"},
-        "reason": {"type": "string"}
-      }
-    },
-    "Evidence": {
-      "type": "object",
-      "required": ["criterion"],
-      "properties": {
-        "criterion": {"type": "integer", "minimum": 0},
-        "command": {"type": "string"},
-        "exit": {"type": "integer"},
-        "stdout_tail": {"type": "string"}
-      }
-    },
-    "Usage": {
-      "type": "object",
-      "properties": {
-        "input_tokens": {"type": "integer", "minimum": 0},
-        "output_tokens": {"type": "integer", "minimum": 0}
-      }
-    },
-    "RoleContext": {
-      "description": "v2, ADR-0016 D1/M3. Short excerpt only; the authoritative shape is worker-protocol.schema.json.",
-      "type": "object",
-      "required": ["id"],
-      "properties": {
-        "id": {"type": "string"},
-        "instructions": {"type": "string"}
-      }
-    },
-    "ChildSummary": {
-      "description": "v2, ADR-0016 D3/M4. Short excerpt only; the authoritative shape is worker-protocol.schema.json.",
-      "type": "object",
-      "required": ["id", "title", "status"],
-      "properties": {
-        "id": {"type": "string"},
-        "title": {"type": "string"},
-        "role": {"type": "string"},
-        "status": {"type": "string"},
-        "outcome": {"type": "string"},
-        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/ArtifactRef"}},
-        "workspace": {"type": "string"},
-        "branch": {"type": "string"}
-      }
-    },
-    "DelegateTask": {
-      "description": "v2, ADR-0016 D2/M7. Short excerpt only; the authoritative shape is worker-protocol.schema.json.",
-      "type": "object",
-      "required": ["title", "objective", "acceptance"],
-      "properties": {
-        "title": {"type": "string"},
-        "objective": {"type": "string"},
-        "acceptance": {"type": "array", "description": "task-core::Criterion[]"},
-        "role": {"type": "string"},
-        "depends_on": {"type": "array", "description": "each item is an integer index into this tasks array, or a string task id"},
-        "tier": {"type": "string"}
-      }
-    },
-    "RunRequest": {
-      "type": "object",
-      "required": ["type", "protocol", "task", "workspace", "context"],
-      "properties": {
-        "type": {"const": "run"},
-        "protocol": {"const": 1},
-        "task": {"type": "object", "description": "task-core::Task (schema generated in Phase 1)"},
-        "workspace": {"type": "string"},
-        "context": {
-          "type": "object",
-          "required": ["prior_review", "inputs"],
-          "properties": {
-            "prior_review": {"type": "array", "items": {"$ref": "#/$defs/PriorReview"}},
-            "inputs": {"type": "array", "items": {"$ref": "#/$defs/ArtifactRef"}}
-          }
-        }
-      }
-    },
-    "WorkerMessage": {
-      "oneOf": [
-        {
-          "type": "object", "required": ["type", "msg"],
-          "properties": {
-            "type": {"const": "progress"}, "msg": {"type": "string"},
-            "kind": {"enum": ["tool_use", "tool_result", "text", "thinking", "status"]},
-            "tool": {"type": "string"}, "summary": {"type": "string"},
-            "detail": {"type": "string"}, "truncated": {"type": "boolean"}, "error": {"type": "boolean"}
-          }
-        },
-        {
-          "type": "object", "required": ["type", "body"],
-          "properties": {"type": {"const": "comment"}, "body": {"type": "string"}}
-        },
-        {
-          "type": "object", "required": ["type", "name", "path"],
-          "properties": {
-            "type": {"const": "artifact"},
-            "name": {"type": "string"},
-            "path": {"type": "string"},
-            "kind": {"type": "string"}
-          }
-        },
-        {
-          "type": "object", "required": ["type", "text"],
-          "properties": {"type": {"const": "question"}, "text": {"type": "string"}}
-        },
-        {
-          "type": "object", "required": ["type", "summary", "evidence"],
-          "properties": {
-            "type": {"const": "done"},
-            "summary": {"type": "string"},
-            "evidence": {"type": "array", "items": {"$ref": "#/$defs/Evidence"}},
-            "usage": {"$ref": "#/$defs/Usage"}
-          }
-        },
-        {
-          "type": "object", "required": ["type", "message", "retryable"],
-          "properties": {
-            "type": {"const": "error"},
-            "message": {"type": "string"},
-            "retryable": {"type": "boolean"}
-          }
-        }
-      ]
-    }
-  }
-}
-```
+正は隣の [`worker-protocol.schema.json`](worker-protocol.schema.json)（`task_worker::protocol::schema_value()` が
+`ProtocolSchema{run, message, review_output}` から生成する）。本文書には手書きの抜粋を置かない。
+checkpoint は [`checkpoint.schema.json`](checkpoint.schema.json)、計画は [`plan-output.schema.json`](plan-output.schema.json) /
+[`execution-plan.schema.json`](execution-plan.schema.json) が正。
 
 ## 8. 例: fake ワーカーの 1 run
 
 stdin:
 
 ```json
-{"type":"run","protocol":2,"task":{"id":"01J8…","kind":"execute","title":"add README example","acceptance":[{"text":"cargo test exits 0","check":{"command":{"cmd":"cargo test","expect_exit":0}}}],"budget":{"max_turns":20,"max_wall_secs":600,"max_retries":1},"attempts":0},"workspace":"/srv/ws/01J8…","context":{"prior_review":[],"inputs":[]}}
+{"type":"run","protocol":4,"task":{"id":"01J8…","kind":"execute","title":"add README example","acceptance":[{"text":"cargo test exits 0","check":{"type":"command","cmd":"cargo test","expect_exit":0}}}],"budget":{"max_turns":20,"max_wall_secs":600,"max_retries":1},"attempts":0},"workspace":"/srv/ws/01J8…","artifacts_dir":"/srv/ws/01J8…/artifacts","context":{"prior_review":[],"inputs":[]}}
 ```
 
 stdout:
@@ -631,7 +501,7 @@ stdout:
 
 ## 9. CLI エージェント系アダプタの結果ファイル規約（Phase 4、ADR-0006 で確定）
 
-`claude-code`・`codex`（および将来の `dsh`）は本文書 §1〜§8 の JSON Lines プロトコルを**話さない**。
+`claude-code`・`codex`・`acp`・`aider` は本文書 §1〜§8 の JSON Lines プロトコルを**話さない**。
 `claude` CLI は独自の `stream-json` イベント（`system`/`assistant`/`user`/`result`）を吐くだけであり、
 celeris はこれを直接パースできない。そこでこれらのアダプタはプロンプトでワーカー（Claude Code 自身）に
 次を指示し、アダプタが成果物ディレクトリ（`request.artifacts_dir`。以下この節では `artifacts/` と書くが、
@@ -659,7 +529,11 @@ celeris はこれを直接パースできない。そこでこれらのアダプ
 `yield` の中身は `<artifacts_dir>/checkpoint.json`（§4.5d）と同じ意味の欄（省略した欄は
 `checkpoint.json` の最後の内容、または mechanical な事実で埋める。優先順位は `yield` >
 `checkpoint.json` > mechanical。ADR-0072 D9）。`ResultFile` は寛容に読むが、celeris が見るのは
-`question` > `summary` > `yield` の優先順（3 つとも書かれていたら `question` が勝つ）。
+`question` > `wait` > `summary` > `yield` の優先順（複数書かれていたら `question` が勝つ）。
+
+**`wait`（ADR-0090 D1）**: クラスタ job の終了を待つときは §4.8 と同じ欄を、最上位
+（`{"type":"wait","kind":"cluster_job","jobs":[…],…}`）か入れ子（`{"summary":"…","wait":{"kind":"cluster_job","jobs":[…]}}`）
+で書く。不正な wait は `error{retryable:true}` になる。
 
 **置き場は必ず成果物ディレクトリの絶対パス（Phase 115、ADR-0006 追記）**: プロンプトの結果ファイル
 指示（`result_json_instructions`）は `RunRequest::artifacts_rel()` を使うので、`work_dir`（§3.1）が
@@ -707,7 +581,7 @@ run 終了時にそのファイルへフォールバックし、正しい置き�
 ```
 
 - `kind` は `"result"` / `"proposal"` / `"bad_news"` / `"question"`。celeris は**固定表で写すだけ**で、
-  判断はしない（DESIGN 原則 1）: `"proposal"` → 報告の `kind = proposal`、**それ以外・未知の値・欠落は
+  判断はしない（協調判断に LLM を使わない。`docs/SPEC.md`）: `"proposal"` → 報告の `kind = proposal`、**それ以外・未知の値・欠落は
   `result`**。`bad_news` / `question` の報告は従来どおりタスクの終端遷移から作られる（ADR-0034 D2）ので、
   `done` を返しながら `"bad_news"` を名乗っても悪い知らせにはならない。
 - 効くのは「レビューを通って `Status::Done` になった」ときの報告 1 件だけ。`assignee` の無いタスク・
@@ -812,7 +686,7 @@ Reviewer（決定的コード。LLM 呼び出しはここには書かない）�
 
 検証規則の要約（`task-core::plan::validate`、全て決定的）:
 
-- `tasks` は 1〜20 件（既定。DESIGN §6 の「3〜6 個」は受け入れ条件であって上限規則ではない）
+- `tasks` は 1〜20 件（既定の上限）
 - 各 `title`/`objective` は空でない。`acceptance` は 1 件以上、各 `text` も空でない
 - `check` は `command` / `artifact_exists` / `reviewer` / `human` のいずれか（`task-core::Check` の 4 種）
 - `depends_on` は同じ `tasks` 配列内のインデックスで、範囲内・自己参照無し・DAG（閉路無し）
@@ -834,8 +708,7 @@ Reviewer（決定的コード。LLM 呼び出しはここには書かない）�
 検証に失敗した場合、`Plan` タスクの `reviewing` は `ReviewFail` になり（`criterion_idx =
 task.acceptance.len()`。`celerisctl plan` が作る Plan は `acceptance = []` なので常に `criterion 0`）、
 次回の `context.prior_review[criterion_idx].reason` に検証エラー文言（例:
-`tasks[2].depends_on[0] = 7 is out of range (0..3)`）が載ってリトライされる（`max_retries` 内。DESIGN
-§5.6「不正なら1回だけ再試行」）。全 pass なら子タスクの挿入と親のトランザクションが原子的に行われる
+`tasks[2].depends_on[0] = 7 is out of range (0..3)`）が載ってリトライされる（`max_retries` 内）。全 pass なら子タスクの挿入と親のトランザクションが原子的に行われる
 （`TaskStore::complete_plan`。ADR-0007 D3）。
 
 ### 10.2 `Review` run — `artifacts/review.json`
@@ -843,8 +716,9 @@ task.acceptance.len()`。`celerisctl plan` が作る Plan は `acceptance = []` 
 `Check::Reviewer` 条件を判定する際、ディスパッチャは対象タスクとは別の run を起動する。
 `RunRequest.task` は永続化されない合成タスク（`kind = "review"`、`title = "Review: <対象 title>"`、
 `objective`/`acceptance`/`workspace`/`budget` は対象タスクと同じ）。`RunRequest.context.review` に
-`ReviewRequest{summary, evidence, criteria}` が入る（`criteria` は判定すべき `task.acceptance` の
-インデックス一覧、`summary`/`evidence` は対象 run の `done` の内容）。`context.inputs` には対象 run の
+`ReviewRequest{summary, evidence, criteria, decisions?, answers?, checks?}` が入る（`criteria` は判定すべき `task.acceptance` の
+インデックス一覧、`summary`/`evidence` は対象 run の `done` の内容、`decisions` / `answers` は人の決定と回答、
+`checks` は daemon が走らせた決定的な検査の結果）。`context.inputs` には対象 run の
 `ArtifactProduced` が入る。run は対象タスクと同じ作業ディレクトリで実行される（成果物を直接読めるように
 するため。ワーカーには読み取り専用で振る舞うよう指示するが強制はしない。既知の制約）。
 
@@ -854,6 +728,9 @@ task.acceptance.len()`。`celerisctl plan` が作る Plan は `acceptance = []` 
 ```json
 {"verdicts":[{"criterion":0,"pass":true,"reason":"cargo test passes and README was updated"}]}
 ```
+
+不合格の verdict には局所修復のヒント `repair: {scope, class, hint?}` を任意で添えられる（`scope = "local"`
+だけが認識され、`class` は `format` / `lint` / `test` / `doc` / `other`。ADR-0072 D16）。
 
 `criteria` に列挙された各インデックスについて `verdicts` に必ず 1 件対応するエントリが必要。次はすべて
 該当する `Reviewer` 条件を `pass=false`（理由に原因を記録）として扱う: run の終端が `done` 以外

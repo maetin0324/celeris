@@ -1,4 +1,4 @@
-//! SSE `GET /stream`（`docs/gui/api.md` §4）。
+//! SSE `GET /stream`（`docs/api/v1/gui-api.md` §4）。
 //!
 //! 接続ごとに購読ループを 1 つ動かす（購読者が 0 ならポーリングも無い）。ループは `events_since(cursor, 1000)` を
 //! `poll_interval` ごとに呼んで `task.event` を送り、`watch` の変化で `daemon`、`heartbeat_interval` ごとに `heartbeat` を送る。

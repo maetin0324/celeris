@@ -1,7 +1,7 @@
 //! プロンプトの前置きを 1 か所で組む（ADR-0033 D4 / D6 / D5、Phase 24 / 26）。
 //!
 //! 「人」らしさは**注入される記憶と brief** で作る（ADR-0033 D6）。ハーネスのプロセスは相変わらず
-//! ステートレスで、状態はファイルと DB にある（DESIGN 原則 2）。ここは純粋関数だけで、I/O も LLM も無い。
+//! ステートレスで、状態はファイルと DB にある（ADR-0001 D2 原則 2）。ここは純粋関数だけで、I/O も LLM も無い。
 //!
 //! 並び（ADR-0033 D4 / Phase 24 の指示。Phase 30 で 1 の直後に「仕事で使う道具」を追加。
 //! Phase 33 で 3 の直後に「あなたの直近の仕事」を追加。Phase 53 / ADR-0044 D2 で**先頭に**
@@ -1089,8 +1089,8 @@ fn actions_instructions() -> String {
      追跡ファイルには置きません（ADR-0067）。\n\
      `web/` や `docs/` だけを変える task の acceptance では `cargo test --workspace` を必須にせず、\
      `crates/` に差分が無いことの検査に置き換えてください（Cargo の workspace check は daemon 側で行います）。\
-     acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録（`docs/PROGRESS.md`、\
-     `docs/progress/`）の置き場所を最初から含めてください（ADR-0079 R7-10）。\
+     acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録（`agent-docs/adr/`、\
+     `agent-docs/progress/`）の置き場所を最初から含めてください（ADR-0079 R7-10。置き場所は ADR-0128）。\
      調査系（`literature` / `web-research`）の `create_task` を書くときは、`objective` の 1 行目を \
      **`対象: <対象1> / <対象2> / …（観点: <観点1>、<観点2>、…）`** の明示形にしてください \
      （例: `対象: CHFS / FINCHFS / GekkoFS / UnifyFS / BeeOND（観点: server/client 配置、\

@@ -218,6 +218,31 @@ pub(super) async fn run_until_idle(d: &mut Dispatcher, max_ticks: usize) -> Tick
     last
 }
 
+pub(super) async fn run_until_task_terminal(
+    d: &mut Dispatcher,
+    store: &Arc<dyn TaskStore>,
+    task_id: TaskId,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut last = TickReport::default();
+    loop {
+        let task = store.get(task_id).unwrap().expect("task exists");
+        if task.status.is_terminal() {
+            assert_eq!(task.status, Status::Done, "{task:?}");
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let runs = store.runs_for_task(task_id).unwrap();
+            panic!(
+                "task did not reach Done before 30s: status={:?}, runs={runs:?}, last_tick={last:?}",
+                task.status
+            );
+        }
+        last = d.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// ADR-0036: 自分の `artifacts_dir` に結果ファイルと成果物を書き、少し待ってから読み直して
 /// 「兄弟に上書きされていない」ことを確かめるアダプタ（実機の事故の再現条件を作る）。
 struct SiblingAdapter {
@@ -2987,8 +3012,7 @@ async fn run_scratch_env() -> (
     );
     scratch_on(&mut d, scratch_dir.path());
     let settings = d.config.scratch.clone();
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     let owner = task_worker::scratch::Owner::task(task.id.to_string());

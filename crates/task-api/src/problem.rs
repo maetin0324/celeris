@@ -1,4 +1,4 @@
-//! エラー応答（`application/problem+json`、`docs/gui/api.md` §1.5）と、`OpsError` / `StoreError` からの写像。
+//! エラー応答（`application/problem+json`、`docs/api/v1/gui-api.md` §1.5）と、`OpsError` / `StoreError` からの写像。
 //!
 //! ハンドラは `ApiProblem` を返すだけで、本体（`instance` = `X-Request-Id` を含む）は共通の middleware が
 //! 描画する（応答の拡張に `PendingProblem` を載せて渡す）。

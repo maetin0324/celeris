@@ -4,7 +4,7 @@ import { celerisErrorResponse } from "~/celeris/errors";
 import type { Route } from "./+types/console.stream";
 
 /**
- * `/console/stream`（SSE 中継、ADR-0048 D1、docs/gui/api.md §3.99）。resource route（コンポーネントを持たない）。
+ * `/console/stream`（SSE 中継、ADR-0048 D1、docs/api/v1/gui-api.md §3.99）。resource route（コンポーネントを持たない）。
  * celeris の `GET /console/stream` をそのまま中継する（`~/routes/events.ts` の `relayEvents` と同じ作り: バイト列は
  * 一切加工しない、非 2xx はそのまま同じ status で返す。docs/adr/0004 D6）。
  */

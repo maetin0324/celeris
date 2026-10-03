@@ -1,4 +1,4 @@
-//! DAG（`docs/gui/api.md` §3.16 / §6.2）。`depends_on` を辺にし、親子は `parent_id` で表す。
+//! DAG（`docs/api/v1/gui-api.md` §3.16 / §6.2）。`depends_on` を辺にし、親子は `parent_id` で表す。
 
 use std::collections::{HashMap, HashSet};
 

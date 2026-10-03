@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Browser capability Phase 1〜4 受け入れ行の追跡表（docs/progress/phase-browser-acceptance.md）を検査する。
+# Browser capability Phase 1〜4 受け入れ行の追跡表（agent-docs/progress/phase-browser-acceptance.md）を検査する。
 #
 # 1. 表の各行（`| P…` と `| A…`）の判定が `合格`・`後続`・`未達`。合格行は `cmd:` と `test:`、後続行は ULID の task id、未達行は `理由:` と `後続:` を持つ。A1〜A17 が全部ある。
 # 2. 文書中の `test: \`<名前>\`` の各名前が crates/ 配下に `fn <名前>` として実在する。
@@ -11,7 +11,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 2
-DOC="docs/progress/phase-browser-acceptance.md"
+DOC="agent-docs/progress/phase-browser-acceptance.md"
 
 fail=0
 err() {

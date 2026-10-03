@@ -1115,3 +1115,30 @@ main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-late
 - 本番 host（`~/.cargo/config.toml`・sccache user unit・`/local` への scratch 移行、
   `celeris-web-lan.*` の install）は引き続き人が `docs/ops/host-sccache-reflink-targets.md` と
   「人が実行する手順」節の手順で行う。本 work unit は本番 host には触れていない。
+
+main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`、別ブランチ）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。
+
+## main (0b8a2256) 再取り込み（work unit `sync-main` 再実行）— 2026-10-03
+
+完了日 2026-10-03。前回 review 差し戻し後、main が `aed80844` からさらに `merge-latest` 工程の統合
+commit `0b8a2256`（launcher の browser_isolation・credentiald injection_ipc・prod_admission 試験の追加）
+まで進み、HEAD（`afa5bddf`/`6ef858f6`、main `aed80844` 時点）の祖先ではなくなっていたため、再度
+`git merge main --no-ff` で取り込んだ。衝突は `docs/PROGRESS.md` のみ（上の 2 節が別ブランチ由来の
+重複する記録だったため、両方をそのまま残して解消。内容の削除・改変はしていない）。
+`scripts/selfdeploy/install-units.sh` は main 側の新規コミットが同ファイルを変更していなかったため
+自動 merge で衝突なく、web-lan unit を含み sccache/scratch-cache unit は含まない形のまま残った。
+他の file（`docs/architecture-map.md` 含む）に衝突・壊れはない。
+
+### 証拠コマンドと結果
+
+- `git merge-base --is-ancestor main HEAD` → exit 0。
+- `git merge-tree --write-tree main HEAD` → exit 0（衝突なしの tree を出力）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-worker scratch` → exit 0。
+- `cargo test -p task-dispatch --lib scratch` → exit 0、10 passed、0 failed。
+
+### 未解決事項
+
+- 本番 host の手順は変わらず `docs/ops/host-sccache-reflink-targets.md` を参照。本 work unit は
+  本番 host には触れていない。
